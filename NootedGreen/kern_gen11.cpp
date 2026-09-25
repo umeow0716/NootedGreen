@@ -85,6 +85,8 @@ constexpr uint32_t kVf2PfHandshakeOpcode = 0x01;
 constexpr uint32_t kVf2PfUpdateGGTTOpcode = 0x02;
 constexpr uint32_t kGucKlvGGTTStart = 0x0001;
 constexpr uint32_t kGucKlvGGTTSize = 0x0002;
+constexpr uint32_t kGucVfLatestMajor = 1;
+constexpr uint32_t kGucVfLatestMinor = 1;
 
 IOLock *gVfGucLock = nullptr;
 uint64_t *gVfGGTTShadow = nullptr;
@@ -182,16 +184,26 @@ bool vfBootstrapBinder()
 		return false;
 	}
 
-	// Current i915-sriov-dkms ABI: GuC VF 1.1 and VF/PF 1.0.
+	// Ask for the i915-supported GuC VF ABI 1.1.  GuC is allowed to return a
+	// newer minor revision (the host firmware currently reports 1.17.0); Linux
+	// i915 deliberately rejects only a newer major revision here.
 	request[0] = kGucActionMatchVersion;
-	request[1] = (1U << 16) | (1U << 8);
-	if (!vfGucSendMMIO(request, 2, response) ||
-	    ((response[1] >> 16) & 0xFFU) != 1 ||
-	    ((response[1] >> 8) & 0xFFU) != 1) {
-		SYSLOG("ngreen", "V217: GuC VF ABI 1.1 handshake failed (reply=0x%08x)",
-		       response[1]);
+	request[1] = (kGucVfLatestMajor << 16) | (kGucVfLatestMinor << 8);
+	if (!vfGucSendMMIO(request, 2, response)) {
+		SYSLOG("ngreen", "V218: GuC VF ABI handshake transport failed");
 		return false;
 	}
+	const uint32_t gucBranch = (response[1] >> 24) & 0xFFU;
+	const uint32_t gucMajor = (response[1] >> 16) & 0xFFU;
+	const uint32_t gucMinor = (response[1] >> 8) & 0xFFU;
+	const uint32_t gucPatch = response[1] & 0xFFU;
+	if ((response[0] & 0x0FFFFFFFU) != 0 || gucMajor > kGucVfLatestMajor) {
+		SYSLOG("ngreen", "V218: unsupported GuC VF ABI %u.%u.%u.%u (header=0x%08x)",
+		       gucBranch, gucMajor, gucMinor, gucPatch, response[0]);
+		return false;
+	}
+	SYSLOG("ngreen", "V218: negotiated GuC VF ABI %u.%u.%u.%u",
+	       gucBranch, gucMajor, gucMinor, gucPatch);
 
 	if (!vfQueryKLV64(kGucKlvGGTTStart, gVfGGTTBase) ||
 	    !vfQueryKLV64(kGucKlvGGTTSize, gVfGGTTSize) ||
