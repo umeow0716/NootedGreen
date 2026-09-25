@@ -61,11 +61,12 @@ static KernelPatcher::KextInfo kextG11HWTA {"com.apple.driver.AppleIntelTGLGraph
 Gen11 *Gen11::callback = nullptr;
 
 namespace {
-// V217 follows the i915-sriov Wa_22018453856 path used by MEDIA_VER_FULL 13.0
-// VFs.  Such VFs have an 8 MiB BAR0 and no CPU-visible GGTT/aperture.  PTEs
-// must be sent to the PF through the GuC MMIO relay service.
+// V217/V219 mirror i915's two VF GGTT transports.  Media 13.0 VFs expose an
+// 8 MiB BAR0 and require the GuC relay workaround; this machine's ADL-P media
+// 12 VF exposes the normal 16 MiB BAR0 and uses direct GGTT PTE writes.
 constexpr uint32_t kVfGGTTPteBase = 0x800000;
 constexpr uint32_t kVfGGTTPteBytes = 0x800000;
+constexpr uint32_t kVfDirectBar0Bytes = kVfGGTTPteBase + kVfGGTTPteBytes;
 constexpr uint32_t kGen11SoftScratch0 = 0x190240;
 constexpr uint32_t kGen11GucHostInterrupt = 0x1901f0;
 constexpr uint32_t kGucSendTrigger = 1;
@@ -93,6 +94,8 @@ uint64_t *gVfGGTTShadow = nullptr;
 uint64_t gVfGGTTBase = 0;
 uint64_t gVfGGTTSize = 0;
 void *gVfGlobalPageTable = nullptr;
+bool gVfGGTTReady = false;
+bool gVfDirectGGTT = false;
 bool gVfBinderReady = false;
 uint32_t gVfRelayFailureLogs = 0;
 
@@ -174,7 +177,7 @@ bool vfQueryKLV64(uint32_t key, uint64_t &value)
 
 bool vfBootstrapBinder()
 {
-	if (gVfBinderReady)
+	if (gVfGGTTReady)
 		return true;
 
 	uint32_t request[4] = {kGucActionVfReset, 0, 0, 0};
@@ -215,6 +218,25 @@ bool vfBootstrapBinder()
 		return false;
 	}
 
+	// ADL-P/RPL-P VFs backed by media version 12 expose the normal 16 MiB
+	// GTTMMADR BAR: registers in the lower 8 MiB and the GGTT PTE window in the
+	// upper 8 MiB.  Linux uses direct PTE writes on this hardware and reserves
+	// the GuC relay workaround for media version 13.0 only.  BAR length is the
+	// guest-visible discriminator, so do not ask an ADL-P PF for unsupported
+	// relay updates merely because the PCI ID is marketed as Raptor Lake.
+	auto *cb = NGreen::callback;
+	cb->setRMMIOIfNecessary();
+	const uint64_t bar0Length = cb->getRMMIOLength();
+	if (cb->getRMMIOAddress() && bar0Length >= kVfDirectBar0Bytes) {
+		gVfDirectGGTT = true;
+		gVfGGTTReady = true;
+		SYSLOG("ngreen", "V219: direct VF GGTT selected, BAR0=%llu MiB range=[0x%llx,+0x%llx]",
+		       static_cast<unsigned long long>(bar0Length >> 20),
+		       static_cast<unsigned long long>(gVfGGTTBase),
+		       static_cast<unsigned long long>(gVfGGTTSize));
+		return true;
+	}
+
 	request[0] = (0xFU << 24) | (kVf2PfHandshakeOpcode << 16) |
 	             kGucActionMmioRelay;
 	request[1] = 1U << 16;
@@ -236,6 +258,7 @@ bool vfBootstrapBinder()
 	}
 
 	gVfBinderReady = true;
+	gVfGGTTReady = true;
 	SYSLOG("ngreen", "V217: GuC VF GGTT binder ready, range=[0x%llx,+0x%llx] shadow=%p",
 	       static_cast<unsigned long long>(gVfGGTTBase),
 	       static_cast<unsigned long long>(gVfGGTTSize), gVfGGTTShadow);
@@ -1949,7 +1972,7 @@ bool Gen11::IGMemoryManagerInitSegments(void *that)
 	if (!original || NGreen::callback->isRealTGL)
 		return original;
 	if (!vfBootstrapBinder()) {
-		SYSLOG("ngreen", "V217: aborting VF memory-manager init without GuC GGTT binder");
+		SYSLOG("ngreen", "V219: aborting VF memory-manager init without GGTT transport");
 		return false;
 	}
 
@@ -1998,6 +2021,34 @@ bool Gen11::IGHardwareGlobalPageTableInitWithOptions(void *that,
 		                                                                         options);
 	if (!vfBootstrapBinder())
 		return false;
+
+	if (gVfDirectGGTT) {
+		auto *cb = NGreen::callback;
+		cb->setRMMIOIfNecessary();
+		if (!cb->getRMMIOAddress() || cb->getRMMIOLength() < kVfDirectBar0Bytes) {
+			SYSLOG("ngreen", "V219: full BAR0 mapping unavailable for direct GGTT");
+			return false;
+		}
+
+		// Apple's accelerator-created mapping covered only the lower MMIO pages in
+		// V216, so initWithOptions faulted when it reached BAR0+8 MiB.  Reuse the
+		// complete IOPCIDevice BAR0 mapping owned by NootedGreen; this is the same
+		// direct GGTT transport selected by Linux for this media-version-12 VF.
+		void *fullBar0 = const_cast<UInt32 *>(cb->getRMMIOAddress());
+		const bool result = FunctionCast(IGHardwareGlobalPageTableInitWithOptions,
+		                                 callback->oIGHardwareGlobalPageTableInitWithOptions)(that,
+		                                                                                      accelerator,
+		                                                                                      range,
+		                                                                                      fullBar0,
+		                                                                                      dummyPage,
+		                                                                                      options);
+		SYSLOG("ngreen", "V219: direct global GGTT init ret=%d AppleMMIO=%p fullBAR0=%p len=0x%llx range=[0x%llx,+0x%llx]",
+		       result, mmioBase, fullBar0,
+		       static_cast<unsigned long long>(cb->getRMMIOLength()),
+		       static_cast<unsigned long long>(range.start),
+		       static_cast<unsigned long long>(range.length));
+		return result;
+	}
 
 	// Preserve Apple's base-class/object setup while making both of its direct
 	// PTE-clearing loops empty.  Linux intentionally installs nop_clear_range

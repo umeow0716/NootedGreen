@@ -194,6 +194,12 @@ class NGreen {
 	
 	// Returns true when MMIO mapping is live and safe to access.
 	bool mmioValid() const { return rmmio != nullptr && rmmioPtr != nullptr; }
+
+	public:
+	uint64_t getRMMIOLength() const { return rmmio ? rmmio->getLength() : 0; }
+	volatile UInt32 *getRMMIOAddress() const { return rmmioPtr; }
+
+	private:
 	
 	void whitelist_reg_ext(uint32_t reg, uint32_t flags)
 	{
