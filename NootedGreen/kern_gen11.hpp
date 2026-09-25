@@ -1389,6 +1389,15 @@ private:
 	static void *vfCtbMappedBufferWithOptions(void *accelTask, unsigned long size,
 	                                          unsigned int type, unsigned int flags);
 	mach_vm_address_t oVfCtbMappedBufferWithOptions {};
+	static bool vfAttachContextDesc(void *that, const uint32_t *descriptor);
+	mach_vm_address_t oVfAttachContextDesc {};
+	static void vfDetachContextDesc(void *that, const uint32_t *descriptor);
+	mach_vm_address_t oVfDetachContextDesc {};
+	static bool vfSubmitWorkItem(void *that, unsigned int legacyContextId,
+	                             const uint32_t *descriptor, IGHwCsType hwCsType,
+	                             unsigned int ringTail, unsigned int fenceId,
+	                             unsigned int stamp);
+	mach_vm_address_t oVfSubmitWorkItem {};
 	
 	static int wrapPmNotifyWrapper(unsigned int a0, unsigned int a1, unsigned long long *a2, unsigned int *freq);  // GPU freq change notification
 	mach_vm_address_t orgPmNotifyWrapper {};

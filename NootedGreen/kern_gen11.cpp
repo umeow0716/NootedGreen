@@ -84,6 +84,13 @@ constexpr uint32_t kGucActionQuerySingleKlv = 0x5509;
 constexpr uint32_t kGucActionMmioRelay = 0x5005;
 constexpr uint32_t kGucActionHost2GucSelfCfg = 0x0508;
 constexpr uint32_t kGucActionHost2GucControlCtb = 0x4509;
+constexpr uint32_t kGucActionRegisterContext = 0x4502;
+constexpr uint32_t kGucActionDeregisterContext = 0x4503;
+constexpr uint32_t kGucActionDeregisterContextDone = 0x4600;
+constexpr uint32_t kGucActionScheduleContext = 0x1000;
+constexpr uint32_t kGucActionScheduleContextModeSet = 0x1001;
+constexpr uint32_t kGucActionScheduleContextModeDone = 0x1002;
+constexpr uint32_t kGucActionUpdateContextPolicies = 0x100B;
 constexpr uint32_t kGucSelfCfgH2GCtbAddr = 0x0902;
 constexpr uint32_t kGucSelfCfgH2GCtbDescAddr = 0x0903;
 constexpr uint32_t kGucSelfCfgH2GCtbSize = 0x0904;
@@ -125,6 +132,203 @@ bool gVfGGTTReady = false;
 bool gVfDirectGGTT = false;
 bool gVfBinderReady = false;
 uint32_t gVfRelayFailureLogs = 0;
+uint32_t gVfCtbGpuBase = 0;
+
+// Modern GuC submission (v70+) assigns one GuC ID to one logical ring
+// context.  Tahoe's TGL binary predates that ABI and instead assigns a GuC ID
+// to a process-wide proxy work queue whose items contain changing LRCAs.  A VF
+// cannot use that legacy proxy: the PF-owned GuC accepts REGISTER_CONTEXT and
+// schedules the registered LRCA directly.  Keep a small software lifecycle
+// record keyed by the context image GGTT page and use the array index as the
+// local GuC ID.  The VF quota is a local namespace, so IDs start at zero.
+enum VfGucContextState : uint8_t {
+	kVfGucContextEmpty = 0,
+	kVfGucContextTombstone,
+	kVfGucContextRegistering,
+	kVfGucContextRegistered,
+	kVfGucContextPendingEnable,
+	kVfGucContextEnabled,
+	kVfGucContextPendingDisable,
+	kVfGucContextDisabled,
+	kVfGucContextPendingDeregister,
+};
+
+struct VfGucContext {
+	uint32_t lrcaPage;
+	uint32_t descriptorLo;
+	uint16_t refCount;
+	uint8_t engineClass;
+	uint8_t engineInstance;
+	VfGucContextState state;
+};
+
+IOSimpleLock *gVfContextLock = nullptr;
+VfGucContext *gVfContexts = nullptr;
+uint32_t gVfContextCapacity = 0;
+mach_vm_address_t gVfHostToGucAction = 0;
+uint32_t gVfContextLifecycleLogs = 0;
+
+using VfHostToGucAction = bool (*)(void *, const uint32_t *, unsigned int,
+                                   int, uint32_t *);
+
+constexpr uint32_t kVfContextResponseTimeout = 1000;
+constexpr uint32_t kVfContextEventTimeoutUs = 1000000;
+constexpr uint32_t kGucContextRegistrationFlagKmd = 1;
+constexpr uint32_t kGucContextDisable = 0;
+constexpr uint32_t kGucContextEnable = 1;
+constexpr uint32_t kGucClientPriorityKmdNormal = 2;
+constexpr uint32_t kGucPolicyExecutionQuantum = 0x2001;
+constexpr uint32_t kGucPolicyPreemptionTimeout = 0x2002;
+constexpr uint32_t kGucPolicySchedulingPriority = 0x2003;
+constexpr uint32_t kGucPolicySlpmFrequency = 0x2005;
+
+uint32_t vfContextHash(uint32_t lrcaPage)
+{
+	return (lrcaPage >> 12) * 2654435761U;
+}
+
+int32_t vfFindContextLocked(uint32_t lrcaPage)
+{
+	if (!gVfContexts || !gVfContextCapacity)
+		return -1;
+
+	const uint32_t start = vfContextHash(lrcaPage) % gVfContextCapacity;
+	for (uint32_t probe = 0; probe < gVfContextCapacity; probe++) {
+		const uint32_t slot = (start + probe) % gVfContextCapacity;
+		const auto &entry = gVfContexts[slot];
+		if (entry.state == kVfGucContextEmpty)
+			return -1;
+		if (entry.state != kVfGucContextTombstone &&
+		    entry.lrcaPage == lrcaPage)
+			return static_cast<int32_t>(slot);
+	}
+	return -1;
+}
+
+int32_t vfReserveContextLocked(uint32_t lrcaPage)
+{
+	if (!gVfContexts || !gVfContextCapacity)
+		return -1;
+
+	const uint32_t start = vfContextHash(lrcaPage) % gVfContextCapacity;
+	int32_t tombstone = -1;
+	for (uint32_t probe = 0; probe < gVfContextCapacity; probe++) {
+		const uint32_t slot = (start + probe) % gVfContextCapacity;
+		const auto state = gVfContexts[slot].state;
+		if (state == kVfGucContextTombstone && tombstone < 0)
+			tombstone = static_cast<int32_t>(slot);
+		if (state == kVfGucContextEmpty)
+			return tombstone >= 0 ? tombstone : static_cast<int32_t>(slot);
+	}
+	return tombstone;
+}
+
+bool vfInitContextBridge()
+{
+	if (gVfContexts && gVfContextLock && gVfContextCapacity)
+		return true;
+	if (!gVfContextCount || gVfContextCount > 65535U)
+		return false;
+
+	auto *lock = IOSimpleLockAlloc();
+	auto *contexts = static_cast<VfGucContext *>(
+		IOMallocZero(static_cast<size_t>(gVfContextCount) * sizeof(VfGucContext)));
+	if (!lock || !contexts) {
+		if (lock)
+			IOSimpleLockFree(lock);
+		if (contexts)
+			IOFree(contexts,
+			       static_cast<size_t>(gVfContextCount) * sizeof(VfGucContext));
+		return false;
+	}
+
+	gVfContextLock = lock;
+	gVfContexts = contexts;
+	gVfContextCapacity = gVfContextCount;
+	SYSLOG("ngreen", "V230: initialized direct GuC context namespace with %u IDs",
+	       gVfContextCapacity);
+	return true;
+}
+
+bool vfSendCtbAction(void *guc, const uint32_t *request,
+	                 uint32_t requestLength, uint32_t &response)
+{
+	if (!guc || !request || requestLength == 0 || requestLength > 31 ||
+	    !gVfHostToGucAction || !gVfCtbGpuBase)
+		return false;
+
+	auto send = reinterpret_cast<VfHostToGucAction>(gVfHostToGucAction);
+	for (uint32_t retry = 0; retry < 4; retry++) {
+		response = 0;
+		const bool ok = send(guc, request, requestLength,
+		                     kVfContextResponseTimeout, &response);
+		const uint32_t type = response & kGucTypeMask;
+		if (ok && (response & kGucOriginGuc) != 0 &&
+		    type == kGucTypeSuccess)
+			return true;
+		if (type != kGucTypeBusy && type != kGucTypeRetry)
+			break;
+		IODelay(50U << retry);
+	}
+	return false;
+}
+
+bool vfSetContextPolicy(void *guc, uint16_t gucId, uint8_t engineClass,
+	                    uint32_t &response)
+{
+	// Match i915's v70 defaults: normal KMD priority, a 1 ms execution
+	// quantum, and the platform's longer render/compute preemption timeout.
+	const uint32_t preemptionTimeout =
+		(engineClass == 0 || engineClass == 4) ? 7500000U : 640000U;
+	const uint32_t request[] = {
+		kGucActionUpdateContextPolicies,
+		gucId,
+		(kGucPolicySchedulingPriority << 16) | 1U,
+		kGucClientPriorityKmdNormal,
+		(kGucPolicyExecutionQuantum << 16) | 1U,
+		1000U,
+		(kGucPolicyPreemptionTimeout << 16) | 1U,
+		preemptionTimeout,
+		(kGucPolicySlpmFrequency << 16) | 1U,
+		0U,
+	};
+	return vfSendCtbAction(guc, request, arrsize(request), response);
+}
+
+bool vfWaitForContextState(uint16_t gucId, VfGucContextState wanted)
+{
+	if (!gVfContextLock || !gVfContexts || gucId >= gVfContextCapacity)
+		return false;
+	for (uint32_t waited = 0; waited < kVfContextEventTimeoutUs; waited += 50) {
+		const IOInterruptState interruptState =
+			IOSimpleLockLockDisableInterrupt(gVfContextLock);
+		const auto state = gVfContexts[gucId].state;
+		IOSimpleLockUnlockEnableInterrupt(gVfContextLock, interruptState);
+		if (state == wanted)
+			return true;
+		IODelay(50);
+	}
+	return false;
+}
+
+bool vfWaitForContextTransition(uint16_t gucId, uint32_t lrcaPage,
+	                            VfGucContextState previous)
+{
+	if (!gVfContextLock || !gVfContexts || gucId >= gVfContextCapacity)
+		return false;
+	for (uint32_t waited = 0; waited < kVfContextEventTimeoutUs; waited += 50) {
+		const IOInterruptState interruptState =
+			IOSimpleLockLockDisableInterrupt(gVfContextLock);
+		const auto &entry = gVfContexts[gucId];
+		const bool changed = entry.lrcaPage != lrcaPage ||
+		                     entry.state != previous;
+		IOSimpleLockUnlockEnableInterrupt(gVfContextLock, interruptState);
+		if (changed)
+			return true;
+		IODelay(50);
+	}
+	return false;
+}
 
 // V223 CTB layout.  Apple's legacy reference scheduler packs two 1 KiB rings
 // into a single 4 KiB mapping.  GuC VF self-config requires page-sized rings,
@@ -143,7 +347,6 @@ constexpr uint32_t kVfCtbG2HBufferOffset = 0x3000;
 constexpr uint32_t kVfCtbG2HBufferBytes = 0x4000;
 constexpr uint32_t kVfCtbUsedBytes = kVfCtbG2HBufferOffset + kVfCtbG2HBufferBytes;
 bool gVfCtbAllocationPending = false;
-uint32_t gVfCtbGpuBase = 0;
 
 bool vfGucSendMMIO(const uint32_t request[4], uint32_t requestLength,
                    uint32_t response[4])
@@ -355,6 +558,10 @@ bool vfBootstrapBinder()
 	}
 	SYSLOG("ngreen", "V226: GuC VF submission quotas contexts=%u doorbells=%u",
 	       gVfContextCount, gVfDoorbellCount);
+	if (!vfInitContextBridge()) {
+		SYSLOG("ngreen", "V230: failed to allocate direct GuC context namespace");
+		return false;
+	}
 
 	// ADL-P/RPL-P VFs backed by media version 12 expose the normal 16 MiB
 	// GTTMMADR BAR: registers in the lower 8 MiB and the GGTT PTE window in the
@@ -1469,6 +1676,9 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		{
 			SolveRequestPlus solveRequests[] = {
 				{"__ZN23IGHardwareBlit3DContext17ExtendedCtxParamsE", this->Blit3DExtendedCtxParams},
+				// V230: direct v70 context submission reuses Apple's already
+				// synchronized CTB sender after V224 converts its framing to HXG.
+				{"__ZN13IGHardwareGuC15hostToGuCActionEPKjjiPj", gVfHostToGucAction},
 				// V216: The TGL driver assigns the old value returned by
 				// OSAddAtomic64 to IGAccelTask+0x258.  Failed accelerator start
 				// candidates consume value 0 without restoring this global, so a
@@ -1478,7 +1688,7 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				{"__ZN11IGAccelTask12fTaskCounterE", this->igAccelTaskCounter},
 			};
 			SYSLOG_COND(!SolveRequestPlus::solveAll(patcher, index, solveRequests, address, size), "ngreen",
-			            "V216: Failed to resolve TGL accelerator bootstrap symbols");
+			            "V230: failed to resolve TGL accelerator bootstrap/GuC symbols");
 		}
 
 		// V229: apply this byte patch before routing readDoorbellSQIDIConfig.
@@ -1705,6 +1915,14 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				 vfCtbGucToHostAction, this->oVfCtbGucToHostAction},
 				{"__ZN20IGSharedMappedBuffer11withOptionsEP11IGAccelTaskmjj",
 				 vfCtbMappedBufferWithOptions, this->oVfCtbMappedBufferWithOptions},
+				// V230: translate Tahoe's legacy process-wide proxy submission
+				// into the one-GuC-ID-per-LRCA lifecycle required by v70 and VFs.
+				{"__ZN13IGHardwareGuC29AttachContextDescToGucContextERK21SGfxContextDescriptor",
+				 vfAttachContextDesc, this->oVfAttachContextDesc},
+				{"__ZN13IGHardwareGuC31DetachContextDescFromGucContextERK21SGfxContextDescriptor",
+				 vfDetachContextDesc, this->oVfDetachContextDesc},
+				{"__ZN13IGHardwareGuC14submitWorkItemEjRK21SGfxContextDescriptor10IGHwCsTypejjj",
+				 vfSubmitWorkItem, this->oVfSubmitWorkItem},
 			};
 			PANIC_COND(!RouteRequestPlus::routeAll(patcher, index, firmwareRoute, address, size), "ngreen", "Failed to route VF GuC firmware transport");
 		}
@@ -8046,6 +8264,347 @@ void Gen11::vfInitDoorbells(void *that) {
 	       kGen12DoorbellCount);
 }
 
+bool Gen11::vfAttachContextDesc(void *that, const uint32_t *descriptor) {
+	if (!gVfGGTTReady || NGreen::callback->isRealTGL) {
+		return FunctionCast(vfAttachContextDesc,
+		                    callback->oVfAttachContextDesc)(that, descriptor);
+	}
+	if (!descriptor)
+		return false;
+
+	const bool attached = FunctionCast(vfAttachContextDesc,
+	                                   callback->oVfAttachContextDesc)(that,
+	                                                                    descriptor);
+	if (!attached)
+		return false;
+	if (!vfInitContextBridge()) {
+		FunctionCast(vfDetachContextDesc,
+		             callback->oVfDetachContextDesc)(that, descriptor);
+		return false;
+	}
+
+	const uint32_t descriptorLo = descriptor[0];
+	const uint32_t descriptorHi = descriptor[1];
+	const uint32_t lrcaPage = descriptorLo & 0xFFFFF000U;
+	const uint32_t rawClass = descriptorHi >> 29;
+	const uint32_t engineInstance = (descriptorHi >> 16) & 0x3FU;
+	static constexpr uint8_t engineClassMap[] = {0, 1, 2, 3, 5, 4};
+	if (lrcaPage < gVfGGTTBase ||
+	    static_cast<uint64_t>(lrcaPage) + PAGE_SIZE >
+		gVfGGTTBase + gVfGGTTSize ||
+	    rawClass >= arrsize(engineClassMap) || engineInstance >= 32) {
+		SYSLOG("ngreen", "V230: rejected LRCA descriptor %08x:%08x VF=[0x%llx,+0x%llx]",
+		       descriptorHi, descriptorLo,
+		       static_cast<unsigned long long>(gVfGGTTBase),
+		       static_cast<unsigned long long>(gVfGGTTSize));
+		FunctionCast(vfDetachContextDesc,
+		             callback->oVfDetachContextDesc)(that, descriptor);
+		return false;
+	}
+
+	int32_t slot = -1;
+	IOInterruptState interruptState;
+	for (;;) {
+		bool waitForTransition = false;
+		VfGucContextState previousState = kVfGucContextEmpty;
+		interruptState = IOSimpleLockLockDisableInterrupt(gVfContextLock);
+		slot = vfFindContextLocked(lrcaPage);
+		if (slot >= 0) {
+			auto &entry = gVfContexts[slot];
+			previousState = entry.state;
+			if (entry.state == kVfGucContextRegistered ||
+			    entry.state == kVfGucContextPendingEnable ||
+			    entry.state == kVfGucContextEnabled) {
+				if (entry.refCount != 0xFFFFU)
+					entry.refCount++;
+				IOSimpleLockUnlockEnableInterrupt(gVfContextLock,
+				                                      interruptState);
+				return true;
+			}
+			// Registration and teardown own the slot.  Never attach a new
+			// reference to an ID that GuC may still associate with its old LRCA.
+			waitForTransition = true;
+		} else {
+			slot = vfReserveContextLocked(lrcaPage);
+			if (slot >= 0) {
+				auto &entry = gVfContexts[slot];
+				entry.lrcaPage = lrcaPage;
+				entry.descriptorLo = descriptorLo;
+				entry.refCount = 1;
+				entry.engineClass = engineClassMap[rawClass];
+				entry.engineInstance = static_cast<uint8_t>(engineInstance);
+				entry.state = kVfGucContextRegistering;
+			}
+		}
+		IOSimpleLockUnlockEnableInterrupt(gVfContextLock, interruptState);
+
+		if (!waitForTransition)
+			break;
+		if (!vfWaitForContextTransition(static_cast<uint16_t>(slot),
+		                                lrcaPage, previousState)) {
+			SYSLOG("ngreen", "V230: timed out waiting to reuse LRCA 0x%08x id=%u state=%u",
+			       lrcaPage, static_cast<unsigned int>(slot),
+			       static_cast<unsigned int>(previousState));
+			FunctionCast(vfDetachContextDesc,
+			             callback->oVfDetachContextDesc)(that, descriptor);
+			return false;
+		}
+	}
+	if (slot < 0) {
+		SYSLOG("ngreen", "V230: exhausted %u direct GuC context IDs",
+		       gVfContextCapacity);
+		FunctionCast(vfDetachContextDesc,
+		             callback->oVfDetachContextDesc)(that, descriptor);
+		return false;
+	}
+
+	const uint16_t gucId = static_cast<uint16_t>(slot);
+	const uint8_t engineClass = engineClassMap[rawClass];
+	const uint32_t request[] = {
+		kGucActionRegisterContext,
+		kGucContextRegistrationFlagKmd,
+		gucId,
+		engineClass,
+		1U << engineInstance,
+		0, 0, // no work-queue descriptor for a single-LRC context
+		0, 0, // no work queue
+		0,
+		descriptorLo,
+		0,    // Gen12 LRCA is a 32-bit GGTT descriptor
+	};
+	uint32_t response = 0;
+	const bool registered =
+		vfSendCtbAction(that, request, arrsize(request), response);
+	const bool policySet = registered &&
+		vfSetContextPolicy(that, gucId, engineClass, response);
+
+	interruptState = IOSimpleLockLockDisableInterrupt(gVfContextLock);
+	auto &entry = gVfContexts[gucId];
+	if (registered && policySet && entry.state == kVfGucContextRegistering)
+		entry.state = kVfGucContextRegistered;
+	else if (!registered)
+		entry.state = kVfGucContextTombstone;
+	else
+		entry.state = kVfGucContextPendingDeregister;
+	IOSimpleLockUnlockEnableInterrupt(gVfContextLock, interruptState);
+
+	if (!registered || !policySet) {
+		SYSLOG("ngreen", "V230: context register/policy failed id=%u LRCA=0x%08x class=%u instance=%u reply=0x%08x",
+		       gucId, descriptorLo, engineClass, engineInstance, response);
+		if (registered) {
+			const uint32_t deregister[] = {
+				kGucActionDeregisterContext, gucId,
+			};
+			(void)vfSendCtbAction(that, deregister, arrsize(deregister), response);
+			(void)vfWaitForContextState(gucId, kVfGucContextTombstone);
+		}
+		FunctionCast(vfDetachContextDesc,
+		             callback->oVfDetachContextDesc)(that, descriptor);
+		return false;
+	}
+
+	if (gVfContextLifecycleLogs++ < 64) {
+		SYSLOG("ngreen", "V230: registered GuC context id=%u LRCA=%08x:%08x class=%u instance=%u",
+		       gucId, descriptorHi, descriptorLo, engineClass, engineInstance);
+	}
+	return true;
+}
+
+void Gen11::vfDetachContextDesc(void *that, const uint32_t *descriptor) {
+	if (!gVfGGTTReady || NGreen::callback->isRealTGL || !descriptor ||
+	    !gVfContextLock || !gVfContexts) {
+		FunctionCast(vfDetachContextDesc,
+		             callback->oVfDetachContextDesc)(that, descriptor);
+		return;
+	}
+
+	const uint32_t lrcaPage = descriptor[0] & 0xFFFFF000U;
+	int32_t slot = -1;
+	VfGucContextState state = kVfGucContextEmpty;
+	bool issueDisable = false;
+	bool issueDeregister = false;
+	IOInterruptState interruptState =
+		IOSimpleLockLockDisableInterrupt(gVfContextLock);
+	slot = vfFindContextLocked(lrcaPage);
+	if (slot >= 0) {
+		auto &entry = gVfContexts[slot];
+		if (entry.refCount > 1) {
+			entry.refCount--;
+			IOSimpleLockUnlockEnableInterrupt(gVfContextLock, interruptState);
+			FunctionCast(vfDetachContextDesc,
+			             callback->oVfDetachContextDesc)(that, descriptor);
+			return;
+		}
+		state = entry.state;
+		if (state == kVfGucContextEnabled) {
+			entry.state = kVfGucContextPendingDisable;
+			issueDisable = true;
+		} else if (state == kVfGucContextRegistered ||
+		           state == kVfGucContextDisabled) {
+			entry.state = kVfGucContextPendingDeregister;
+			issueDeregister = true;
+		}
+	}
+	IOSimpleLockUnlockEnableInterrupt(gVfContextLock, interruptState);
+
+	if (slot < 0) {
+		SYSLOG("ngreen", "V230: detach could not find LRCA 0x%08x", lrcaPage);
+		FunctionCast(vfDetachContextDesc,
+		             callback->oVfDetachContextDesc)(that, descriptor);
+		return;
+	}
+
+	const uint16_t gucId = static_cast<uint16_t>(slot);
+	uint32_t response = 0;
+
+	// A concurrent first submit owns the enable transition.  Wait for its
+	// MODE_DONE before issuing disable; otherwise its late enable event could be
+	// mistaken for our disable completion and the LRCA could be freed too early.
+	if (state == kVfGucContextPendingEnable) {
+		if (vfWaitForContextState(gucId, kVfGucContextEnabled)) {
+			interruptState =
+				IOSimpleLockLockDisableInterrupt(gVfContextLock);
+			if (gVfContexts[gucId].state == kVfGucContextEnabled) {
+				gVfContexts[gucId].state = kVfGucContextPendingDisable;
+				issueDisable = true;
+			}
+			IOSimpleLockUnlockEnableInterrupt(gVfContextLock, interruptState);
+		}
+	}
+
+	bool disabled = state == kVfGucContextRegistered ||
+	                state == kVfGucContextDisabled ||
+	                state == kVfGucContextPendingDeregister ||
+	                state == kVfGucContextTombstone;
+	if (issueDisable) {
+		const uint32_t disable[] = {
+			kGucActionScheduleContextModeSet, gucId, kGucContextDisable,
+		};
+		disabled = vfSendCtbAction(that, disable, arrsize(disable), response) &&
+		           vfWaitForContextState(gucId, kVfGucContextDisabled);
+	} else if (state == kVfGucContextPendingDisable) {
+		disabled = vfWaitForContextState(gucId, kVfGucContextDisabled);
+	}
+
+	bool deregistered = state == kVfGucContextTombstone;
+	if (disabled) {
+		interruptState = IOSimpleLockLockDisableInterrupt(gVfContextLock);
+		if (gVfContexts[gucId].state == kVfGucContextDisabled) {
+			gVfContexts[gucId].state = kVfGucContextPendingDeregister;
+			issueDeregister = true;
+		} else if (gVfContexts[gucId].state == kVfGucContextTombstone) {
+			deregistered = true;
+		}
+		IOSimpleLockUnlockEnableInterrupt(gVfContextLock, interruptState);
+	}
+	if (issueDeregister) {
+		const uint32_t deregister[] = {
+			kGucActionDeregisterContext, gucId,
+		};
+		deregistered =
+			vfSendCtbAction(that, deregister, arrsize(deregister), response) &&
+			vfWaitForContextState(gucId, kVfGucContextTombstone);
+	} else if (disabled && !deregistered) {
+		deregistered =
+			vfWaitForContextState(gucId, kVfGucContextTombstone);
+	}
+
+	if (!disabled || !deregistered) {
+		SYSLOG("ngreen", "V230: context teardown incomplete id=%u disabled=%d deregistered=%d reply=0x%08x",
+		       gucId, disabled, deregistered, response);
+	} else if (gVfContextLifecycleLogs++ < 64) {
+		SYSLOG("ngreen", "V230: deregistered GuC context id=%u LRCA=0x%08x",
+		       gucId, lrcaPage);
+	}
+
+	FunctionCast(vfDetachContextDesc,
+	             callback->oVfDetachContextDesc)(that, descriptor);
+}
+
+bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
+	                         const uint32_t *descriptor, IGHwCsType hwCsType,
+	                         unsigned int ringTail, unsigned int fenceId,
+	                         unsigned int stamp) {
+	if (!gVfGGTTReady || NGreen::callback->isRealTGL) {
+		return FunctionCast(vfSubmitWorkItem,
+		                    callback->oVfSubmitWorkItem)(that, legacyContextId,
+		                                                 descriptor, hwCsType,
+		                                                 ringTail, fenceId, stamp);
+	}
+	if (!descriptor || !gVfContextLock || !gVfContexts)
+		return false;
+
+	const uint32_t lrcaPage = descriptor[0] & 0xFFFFF000U;
+	int32_t slot = -1;
+	bool enable = false;
+	bool waitForEnable = false;
+	VfGucContextState previousState = kVfGucContextEmpty;
+	IOInterruptState interruptState =
+		IOSimpleLockLockDisableInterrupt(gVfContextLock);
+	slot = vfFindContextLocked(lrcaPage);
+	if (slot >= 0) {
+		auto &entry = gVfContexts[slot];
+		if (entry.state == kVfGucContextRegistered ||
+		    entry.state == kVfGucContextDisabled) {
+			previousState = entry.state;
+			entry.state = kVfGucContextPendingEnable;
+			enable = true;
+		} else if (entry.state == kVfGucContextPendingEnable) {
+			waitForEnable = true;
+		} else if (entry.state != kVfGucContextEnabled) {
+			slot = -1;
+		}
+	}
+	IOSimpleLockUnlockEnableInterrupt(gVfContextLock, interruptState);
+	if (slot < 0) {
+		SYSLOG("ngreen", "V230: submit has no schedulable context LRCA=0x%08x legacy=%u",
+		       lrcaPage, legacyContextId);
+		return false;
+	}
+
+	const uint16_t gucId = static_cast<uint16_t>(slot);
+	if (waitForEnable &&
+	    !vfWaitForContextState(gucId, kVfGucContextEnabled)) {
+		SYSLOG("ngreen", "V230: timed out waiting for concurrent enable id=%u LRCA=0x%08x",
+		       gucId, lrcaPage);
+		return false;
+	}
+	const uint32_t enableRequest[] = {
+		kGucActionScheduleContextModeSet, gucId, kGucContextEnable,
+	};
+	const uint32_t scheduleRequest[] = {
+		kGucActionScheduleContext, gucId,
+	};
+	uint32_t response = 0;
+	bool submitted = enable ?
+		vfSendCtbAction(that, enableRequest, arrsize(enableRequest), response) :
+		vfSendCtbAction(that, scheduleRequest, arrsize(scheduleRequest), response);
+
+	if (enable) {
+		if (submitted) {
+			// MODE_SET success only acknowledges the request.  The LRCA is not
+			// schedulable until the asynchronous MODE_DONE event arrives.
+			submitted =
+				vfWaitForContextState(gucId, kVfGucContextEnabled);
+		} else {
+			interruptState =
+				IOSimpleLockLockDisableInterrupt(gVfContextLock);
+			auto &entry = gVfContexts[gucId];
+			if (entry.state == kVfGucContextPendingEnable)
+				entry.state = previousState;
+			IOSimpleLockUnlockEnableInterrupt(gVfContextLock, interruptState);
+		}
+	}
+
+	static uint32_t submitLogs = 0;
+	if (submitLogs++ < 64 || !submitted) {
+		SYSLOG("ngreen", "V230: direct submit id=%u LRCA=0x%08x type=%u tail=0x%x enable=%d ret=%d reply=0x%08x",
+		       gucId, descriptor[0], static_cast<unsigned int>(hwCsType),
+		       ringTail, enable, submitted, response);
+	}
+	return submitted;
+}
+
 bool Gen11::vfCtbInitWithAccelerator(void *that, void *accelerator) {
 	if (!gVfGGTTReady) {
 		return FunctionCast(vfCtbInitWithAccelerator,
@@ -8130,6 +8689,49 @@ bool Gen11::vfCtbGucToHostAction(void *that, uint32_t *message) {
 	const bool response = (hxg & kGucOriginGuc) != 0 &&
 	                      (type == kGucTypeBusy || type == kGucTypeRetry ||
 	                       type == kGucTypeFailure || type == kGucTypeSuccess);
+
+	// MODE_SET and DEREGISTER complete asynchronously.  Consume their v70
+	// lifecycle payload before handing the event to Apple's legacy interrupt
+	// parser, which has no knowledge of either action.  This is the point that
+	// makes ID reuse safe: a slot remains unavailable until GuC confirms that it
+	// no longer references the old LRCA.
+	const uint32_t action = hxg & 0xFFFFU;
+	if (!response && (hxg & kGucOriginGuc) != 0 && gVfContextLock &&
+	    gVfContexts &&
+	    ((action == kGucActionScheduleContextModeDone && length >= 3) ||
+	     (action == kGucActionDeregisterContextDone && length >= 2))) {
+		const uint32_t gucId = message[2];
+		bool handled = false;
+		VfGucContextState newState = kVfGucContextEmpty;
+		if (gucId < gVfContextCapacity) {
+			const IOInterruptState interruptState =
+				IOSimpleLockLockDisableInterrupt(gVfContextLock);
+			auto &entry = gVfContexts[gucId];
+			if (action == kGucActionScheduleContextModeDone) {
+				if (entry.state == kVfGucContextPendingEnable) {
+					entry.state = kVfGucContextEnabled;
+					handled = true;
+				} else if (entry.state == kVfGucContextPendingDisable) {
+					entry.state = kVfGucContextDisabled;
+					handled = true;
+				}
+			} else if (entry.state == kVfGucContextPendingDeregister) {
+				entry.lrcaPage = 0;
+				entry.descriptorLo = 0;
+				entry.refCount = 0;
+				entry.engineClass = 0;
+				entry.engineInstance = 0;
+				entry.state = kVfGucContextTombstone;
+				handled = true;
+			}
+			newState = entry.state;
+			IOSimpleLockUnlockEnableInterrupt(gVfContextLock, interruptState);
+		}
+		if (handled && gVfContextLifecycleLogs++ < 64) {
+			SYSLOG("ngreen", "V230: GuC lifecycle event action=0x%04x id=%u state=%u",
+			       action, gucId, static_cast<unsigned int>(newState));
+		}
+	}
 
 	static uint32_t logCount = 0;
 	if (logCount++ < 32) {
