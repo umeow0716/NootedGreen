@@ -1481,6 +1481,33 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			            "V216: Failed to resolve TGL accelerator bootstrap symbols");
 		}
 
+		// V229: apply this byte patch before routing readDoorbellSQIDIConfig.
+		// routeFunction overwrites the function entry and therefore overlaps the
+		// exact sequence below (which starts at entry + 4).  Patching afterwards
+		// made V228 panic before the driver could start.  Calls emitted as local
+		// rel32 targets now remain safe even when they bypass the routed entry.
+		// 0x001f00ff encodes SQIDI mask 0xff and 32 doorbells per SQIDI.
+		if (!NGreen::callback->isRealTGL) {
+			static const uint8_t vfDoorbellTopologyFind[] = {
+				0x48, 0x8b, 0x47, 0x38,
+				0x48, 0x8b, 0x80, 0x40, 0x12, 0x00, 0x00,
+				0x8b, 0x80, 0x08, 0x0d, 0x00, 0x00,
+				0xc6, 0x87, 0xe2, 0x09, 0x00, 0x00, 0x00,
+			};
+			static const uint8_t vfDoorbellTopologyReplace[] = {
+				0x48, 0x8b, 0x47, 0x38,
+				0x48, 0x8b, 0x80, 0x40, 0x12, 0x00, 0x00,
+				0xb8, 0xff, 0x00, 0x1f, 0x00, 0x90,
+				0xc6, 0x87, 0xe2, 0x09, 0x00, 0x00, 0x00,
+			};
+			LookupPatchPlus const vfDoorbellTopologyPatch {
+				activeKext, vfDoorbellTopologyFind, vfDoorbellTopologyReplace, 1,
+			};
+			PANIC_COND(!vfDoorbellTopologyPatch.apply(patcher, address, size),
+			           "ngreen", "Failed to replace VF DISTRDB read");
+			SYSLOG("ngreen", "V229: replaced physical DISTRDB read before GuC routing");
+		}
+
 		const bool wegCoexist = isWEGCoexistMode();
 		const bool forceFullMTL = shouldForceFullMetalPath();
 
@@ -1680,31 +1707,6 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				 vfCtbMappedBufferWithOptions, this->oVfCtbMappedBufferWithOptions},
 			};
 			PANIC_COND(!RouteRequestPlus::routeAll(patcher, index, firmwareRoute, address, size), "ngreen", "Failed to route VF GuC firmware transport");
-		}
-
-		// V228: calls between functions in this Tahoe kext use a local rel32 target.
-		// Keep a binary-level fallback in readDoorbellSQIDIConfig so the physical
-		// DISTRDB read can never escape either of the higher-level routes above.
-		// 0x001f00ff encodes SQIDI mask 0xff and 32 doorbells per SQIDI.
-		if (!NGreen::callback->isRealTGL) {
-			static const uint8_t vfDoorbellTopologyFind[] = {
-				0x48, 0x8b, 0x47, 0x38,
-				0x48, 0x8b, 0x80, 0x40, 0x12, 0x00, 0x00,
-				0x8b, 0x80, 0x08, 0x0d, 0x00, 0x00,
-				0xc6, 0x87, 0xe2, 0x09, 0x00, 0x00, 0x00,
-			};
-			static const uint8_t vfDoorbellTopologyReplace[] = {
-				0x48, 0x8b, 0x47, 0x38,
-				0x48, 0x8b, 0x80, 0x40, 0x12, 0x00, 0x00,
-				0xb8, 0xff, 0x00, 0x1f, 0x00, 0x90,
-				0xc6, 0x87, 0xe2, 0x09, 0x00, 0x00, 0x00,
-			};
-			LookupPatchPlus const vfDoorbellTopologyPatch {
-				activeKext, vfDoorbellTopologyFind, vfDoorbellTopologyReplace, 1,
-			};
-			PANIC_COND(!vfDoorbellTopologyPatch.apply(patcher, address, size),
-			           "ngreen", "Failed to replace VF DISTRDB read");
-			SYSLOG("ngreen", "V228: replaced physical DISTRDB read with 8 x 32 VF topology");
 		}
 
 		// V222: IGHardwareGuCCTBuffer::initWithAccelerator invalidates the
