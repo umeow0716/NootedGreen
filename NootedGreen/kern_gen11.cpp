@@ -165,14 +165,10 @@ struct VfGucContext {
 IOSimpleLock *gVfContextLock = nullptr;
 VfGucContext *gVfContexts = nullptr;
 uint32_t gVfContextCapacity = 0;
-mach_vm_address_t gVfHostToGucAction = 0;
 uint32_t gVfContextLifecycleLogs = 0;
 
-using VfHostToGucAction = bool (*)(void *, const uint32_t *, unsigned int,
-                                   int, uint32_t *);
-
-constexpr uint32_t kVfContextResponseTimeout = 1000;
 constexpr uint32_t kVfContextEventTimeoutUs = 1000000;
+constexpr uint32_t kGucTypeFastRequest = 0x20000000U;
 constexpr uint32_t kGucContextRegistrationFlagKmd = 1;
 constexpr uint32_t kGucContextDisable = 0;
 constexpr uint32_t kGucContextEnable = 1;
@@ -250,31 +246,75 @@ bool vfInitContextBridge()
 	return true;
 }
 
-bool vfSendCtbAction(void *guc, const uint32_t *request,
-	                 uint32_t requestLength, uint32_t &response)
+bool vfSendCtbFastAction(void *guc, const uint32_t *request,
+	                     uint32_t requestLength, uint32_t &transportFence)
 {
 	if (!guc || !request || requestLength == 0 || requestLength > 31 ||
-	    !gVfHostToGucAction || !gVfCtbGpuBase)
+	    !gVfCtbGpuBase)
 		return false;
 
-	auto send = reinterpret_cast<VfHostToGucAction>(gVfHostToGucAction);
-	for (uint32_t retry = 0; retry < 4; retry++) {
-		response = 0;
-		const bool ok = send(guc, request, requestLength,
-		                     kVfContextResponseTimeout, &response);
-		const uint32_t type = response & kGucTypeMask;
-		if (ok && (response & kGucOriginGuc) != 0 &&
-		    type == kGucTypeSuccess)
+	// Tahoe's legacy sender sleeps for a full timeout tick even when the G2H
+	// response is already present and treats a successful non-zero HXG payload
+	// as failure.  Modern i915 submits all context lifecycle actions as FAST
+	// requests and relies on MODE_DONE/DEREGISTER_DONE for the operations that
+	// complete asynchronously.  Write that native framing directly while using
+	// Apple's H2G lock and fence counter so its remaining traffic stays ordered.
+	auto *ctb = getMember<void *>(guc, 0xA10);
+	if (!ctb)
+		return false;
+	auto *lock = getMember<IOLock *>(ctb, 0x18);
+	auto *descriptor = getMember<uint32_t *>(ctb, 0x48);
+	auto *buffer = getMember<uint32_t *>(ctb, 0x50);
+	if (!lock || !descriptor || !buffer)
+		return false;
+
+	transportFence = 0;
+	for (uint32_t retry = 0; retry < 8; retry++) {
+		IOLockLock(lock);
+		const uint32_t size = descriptor[3] / sizeof(uint32_t);
+		const uint32_t head = descriptor[4];
+		uint32_t tail = descriptor[5];
+		const uint32_t status = descriptor[6];
+		const uint32_t needed = requestLength + 1U;
+		const bool valid = status == 0 && size > needed &&
+		                   head < size && tail < size;
+		const uint32_t used = valid ?
+			(tail >= head ? tail - head : size - head + tail) : size;
+		if (valid && needed < size - used) {
+			const uint32_t fence = static_cast<uint32_t>(OSIncrementAtomic(
+				reinterpret_cast<volatile SInt32 *>(
+					reinterpret_cast<uint8_t *>(ctb) + 0x3C))) & 0xFFFFU;
+			buffer[tail] = (fence << 16) | requestLength;
+			tail = (tail + 1U) % size;
+			buffer[tail] = kGucTypeFastRequest |
+			               (request[0] & 0x0FFFFFFFU);
+			tail = (tail + 1U) % size;
+			for (uint32_t i = 1; i < requestLength; i++) {
+				buffer[tail] = request[i];
+				tail = (tail + 1U) % size;
+			}
+			OSSynchronizeIO();
+			descriptor[5] = tail;
+			OSSynchronizeIO();
+			NGreen::callback->writeReg32(kGen11GucHostInterrupt,
+			                              kGucSendTrigger);
+			IOLockUnlock(lock);
+			transportFence = fence;
 			return true;
-		if (type != kGucTypeBusy && type != kGucTypeRetry)
-			break;
+		}
+		IOLockUnlock(lock);
+		if (!valid) {
+			SYSLOG("ngreen", "V231: invalid H2G CTB size=%u head=%u tail=%u status=0x%x",
+			       size, head, tail, status);
+			return false;
+		}
 		IODelay(50U << retry);
 	}
 	return false;
 }
 
 bool vfSetContextPolicy(void *guc, uint16_t gucId, uint8_t engineClass,
-	                    uint32_t &response)
+	                    uint32_t &transportFence)
 {
 	// Match i915's v70 defaults: normal KMD priority, a 1 ms execution
 	// quantum, and the platform's longer render/compute preemption timeout.
@@ -292,7 +332,7 @@ bool vfSetContextPolicy(void *guc, uint16_t gucId, uint8_t engineClass,
 		(kGucPolicySlpmFrequency << 16) | 1U,
 		0U,
 	};
-	return vfSendCtbAction(guc, request, arrsize(request), response);
+	return vfSendCtbFastAction(guc, request, arrsize(request), transportFence);
 }
 
 bool vfWaitForContextState(uint16_t gucId, VfGucContextState wanted)
@@ -1676,9 +1716,6 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		{
 			SolveRequestPlus solveRequests[] = {
 				{"__ZN23IGHardwareBlit3DContext17ExtendedCtxParamsE", this->Blit3DExtendedCtxParams},
-				// V230: direct v70 context submission reuses Apple's already
-				// synchronized CTB sender after V224 converts its framing to HXG.
-				{"__ZN13IGHardwareGuC15hostToGuCActionEPKjjiPj", gVfHostToGucAction},
 				// V216: The TGL driver assigns the old value returned by
 				// OSAddAtomic64 to IGAccelTask+0x258.  Failed accelerator start
 				// candidates consume value 0 without restoring this global, so a
@@ -1688,7 +1725,7 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				{"__ZN11IGAccelTask12fTaskCounterE", this->igAccelTaskCounter},
 			};
 			SYSLOG_COND(!SolveRequestPlus::solveAll(patcher, index, solveRequests, address, size), "ngreen",
-			            "V230: failed to resolve TGL accelerator bootstrap/GuC symbols");
+			            "V231: failed to resolve TGL accelerator bootstrap symbols");
 		}
 
 		// V229: apply this byte patch before routing readDoorbellSQIDIConfig.
@@ -8372,11 +8409,11 @@ bool Gen11::vfAttachContextDesc(void *that, const uint32_t *descriptor) {
 		descriptorLo,
 		0,    // Gen12 LRCA is a 32-bit GGTT descriptor
 	};
-	uint32_t response = 0;
+	uint32_t transportFence = 0;
 	const bool registered =
-		vfSendCtbAction(that, request, arrsize(request), response);
+		vfSendCtbFastAction(that, request, arrsize(request), transportFence);
 	const bool policySet = registered &&
-		vfSetContextPolicy(that, gucId, engineClass, response);
+		vfSetContextPolicy(that, gucId, engineClass, transportFence);
 
 	interruptState = IOSimpleLockLockDisableInterrupt(gVfContextLock);
 	auto &entry = gVfContexts[gucId];
@@ -8389,13 +8426,13 @@ bool Gen11::vfAttachContextDesc(void *that, const uint32_t *descriptor) {
 	IOSimpleLockUnlockEnableInterrupt(gVfContextLock, interruptState);
 
 	if (!registered || !policySet) {
-		SYSLOG("ngreen", "V230: context register/policy failed id=%u LRCA=0x%08x class=%u instance=%u reply=0x%08x",
-		       gucId, descriptorLo, engineClass, engineInstance, response);
+		SYSLOG("ngreen", "V231: context register/policy enqueue failed id=%u LRCA=0x%08x class=%u instance=%u fence=%u",
+		       gucId, descriptorLo, engineClass, engineInstance, transportFence);
 		if (registered) {
 			const uint32_t deregister[] = {
 				kGucActionDeregisterContext, gucId,
 			};
-			(void)vfSendCtbAction(that, deregister, arrsize(deregister), response);
+			(void)vfSendCtbFastAction(that, deregister, arrsize(deregister), transportFence);
 			(void)vfWaitForContextState(gucId, kVfGucContextTombstone);
 		}
 		FunctionCast(vfDetachContextDesc,
@@ -8455,7 +8492,7 @@ void Gen11::vfDetachContextDesc(void *that, const uint32_t *descriptor) {
 	}
 
 	const uint16_t gucId = static_cast<uint16_t>(slot);
-	uint32_t response = 0;
+	uint32_t transportFence = 0;
 
 	// A concurrent first submit owns the enable transition.  Wait for its
 	// MODE_DONE before issuing disable; otherwise its late enable event could be
@@ -8480,7 +8517,7 @@ void Gen11::vfDetachContextDesc(void *that, const uint32_t *descriptor) {
 		const uint32_t disable[] = {
 			kGucActionScheduleContextModeSet, gucId, kGucContextDisable,
 		};
-		disabled = vfSendCtbAction(that, disable, arrsize(disable), response) &&
+		disabled = vfSendCtbFastAction(that, disable, arrsize(disable), transportFence) &&
 		           vfWaitForContextState(gucId, kVfGucContextDisabled);
 	} else if (state == kVfGucContextPendingDisable) {
 		disabled = vfWaitForContextState(gucId, kVfGucContextDisabled);
@@ -8502,7 +8539,7 @@ void Gen11::vfDetachContextDesc(void *that, const uint32_t *descriptor) {
 			kGucActionDeregisterContext, gucId,
 		};
 		deregistered =
-			vfSendCtbAction(that, deregister, arrsize(deregister), response) &&
+			vfSendCtbFastAction(that, deregister, arrsize(deregister), transportFence) &&
 			vfWaitForContextState(gucId, kVfGucContextTombstone);
 	} else if (disabled && !deregistered) {
 		deregistered =
@@ -8510,8 +8547,8 @@ void Gen11::vfDetachContextDesc(void *that, const uint32_t *descriptor) {
 	}
 
 	if (!disabled || !deregistered) {
-		SYSLOG("ngreen", "V230: context teardown incomplete id=%u disabled=%d deregistered=%d reply=0x%08x",
-		       gucId, disabled, deregistered, response);
+		SYSLOG("ngreen", "V231: context teardown incomplete id=%u disabled=%d deregistered=%d fence=%u",
+		       gucId, disabled, deregistered, transportFence);
 	} else if (gVfContextLifecycleLogs++ < 64) {
 		SYSLOG("ngreen", "V230: deregistered GuC context id=%u LRCA=0x%08x",
 		       gucId, lrcaPage);
@@ -8575,10 +8612,10 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 	const uint32_t scheduleRequest[] = {
 		kGucActionScheduleContext, gucId,
 	};
-	uint32_t response = 0;
+	uint32_t transportFence = 0;
 	bool submitted = enable ?
-		vfSendCtbAction(that, enableRequest, arrsize(enableRequest), response) :
-		vfSendCtbAction(that, scheduleRequest, arrsize(scheduleRequest), response);
+		vfSendCtbFastAction(that, enableRequest, arrsize(enableRequest), transportFence) :
+		vfSendCtbFastAction(that, scheduleRequest, arrsize(scheduleRequest), transportFence);
 
 	if (enable) {
 		if (submitted) {
@@ -8598,9 +8635,9 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 
 	static uint32_t submitLogs = 0;
 	if (submitLogs++ < 64 || !submitted) {
-		SYSLOG("ngreen", "V230: direct submit id=%u LRCA=0x%08x type=%u tail=0x%x enable=%d ret=%d reply=0x%08x",
+		SYSLOG("ngreen", "V231: direct submit id=%u LRCA=0x%08x type=%u tail=0x%x enable=%d ret=%d fence=%u",
 		       gucId, descriptor[0], static_cast<unsigned int>(hwCsType),
-		       ringTail, enable, submitted, response);
+		       ringTail, enable, submitted, transportFence);
 	}
 	return submitted;
 }
