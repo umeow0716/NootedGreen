@@ -1372,6 +1372,10 @@ private:
 	static bool wrapInitSchedControl(void *that);    // scheduler control init
 	static void *wrapIgBufferWithOptions(void *accelTask, void* size, unsigned int type, unsigned int flags);
 	static UInt64 wrapIgBufferGetGpuVirtualAddress(void *that);
+	static bool vfMmioHostToGuCAction(void *that, const uint32_t *request,
+	                                  unsigned int requestLength, int timeout,
+	                                  uint32_t *response);
+	mach_vm_address_t oVfMmioHostToGuCAction {};
 	
 	static int wrapPmNotifyWrapper(unsigned int a0, unsigned int a1, unsigned long long *a2, unsigned int *freq);  // GPU freq change notification
 	mach_vm_address_t orgPmNotifyWrapper {};
