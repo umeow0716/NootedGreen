@@ -1,4 +1,4 @@
-name: Build NootedGreen kext
+name: Build Tahoe SR-IOV kexts
 
 on:
   workflow_dispatch:
@@ -34,14 +34,35 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             build
 
+      - name: Build HookCase dependency
+        run: |
+          xcodebuild \
+            -project HookCase-master/HookCase.xcodeproj \
+            -scheme HookCase \
+            -configuration Release \
+            -derivedDataPath "$RUNNER_TEMP/HookCaseDerivedData" \
+            ARCHS=x86_64 \
+            ONLY_ACTIVE_ARCH=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
       - name: Stage artifact
         run: |
           KEXT_PATH="$(find "$RUNNER_TEMP/DerivedData/Build/Products/Release" -maxdepth 1 -name NootedGreen.kext -type d -print -quit)"
+          HOOKCASE_PATH="$(find "$RUNNER_TEMP/HookCaseDerivedData/Build/Products/Release" -maxdepth 1 -name HookCase.kext -type d -print -quit)"
           test -n "$KEXT_PATH"
+          test -n "$HOOKCASE_PATH"
           ditto -c -k --sequesterRsrc --keepParent "$KEXT_PATH" "$RUNNER_TEMP/NootedGreen-Tahoe-x86_64.zip"
+          ditto -c -k --sequesterRsrc --keepParent "$HOOKCASE_PATH" "$RUNNER_TEMP/HookCase-Tahoe-x86_64.zip"
 
       - uses: actions/upload-artifact@v4
         with:
           name: NootedGreen-Tahoe-x86_64
           path: ${{ runner.temp }}/NootedGreen-Tahoe-x86_64.zip
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: HookCase-Tahoe-x86_64
+          path: ${{ runner.temp }}/HookCase-Tahoe-x86_64.zip
           if-no-files-found: error
