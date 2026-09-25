@@ -6904,7 +6904,6 @@ unsigned long Gen11::stopGraphicsEngine(void *that)
 	static int   v63ResetCount            = 0;
 	static uint32_t v155SavedRcsCtl       = 0;
 	static int   v164GdrstCount           = 0;
-	static int   v505Count                = 0;
 
 	if (!NGreen::callback->isRealTGL) {
 		v63ResetCount++;
@@ -6933,25 +6932,6 @@ unsigned long Gen11::stopGraphicsEngine(void *that)
 			NGreen::callback->readReg32(0x2090),
 			NGreen::callback->readReg32(GEN8_CS_CHICKEN1),
 			NGreen::callback->readReg32(GEN7_FF_SLICE_CS_CHICKEN1));
-
-		// V505: dump ring preamble contents — ring still running at this point
-		if (v505Count < 3 && rcsStart) {
-			uint32_t ringPage = rcsStart >> 12;
-			uint32_t rpteHi   = NGreen::callback->readReg32(GGTT_PTE_HI(ringPage));
-			uint32_t rpteLo   = NGreen::callback->readReg32(GGTT_PTE_LO(ringPage));
-			if (rpteLo & 1) {
-				v505Count++;
-				uint64_t physBase = ((uint64_t)rpteHi << 32) | (rpteLo & 0xFFFFF000u);
-				SYSLOG("ngreen", "V505[%d]: ring phys=0x%llx HEAD=0x%x TAIL=0x%x — 32 dwords:",
-					   v505Count, (unsigned long long)physBase, rcsHead, rcsTail);
-				for (int i = 0; i < 32; i++) {
-					uint32_t dw = IOMappedRead32(physBase + (uint64_t)(i * 4));
-					SYSLOG("ngreen", "V505[%d]:  [%02d] +0x%02x = 0x%08x", v505Count, i, i * 4, dw);
-				}
-			} else {
-				SYSLOG("ngreen", "V505: PTE invalid rpteHi=0x%x rpteLo=0x%x", rpteHi, rpteLo);
-			}
-		}
 
 		// V164: fire GDRST if ghost context detected (EXEC active, ring empty)
 		{

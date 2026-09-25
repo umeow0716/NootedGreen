@@ -2026,7 +2026,7 @@ private:
 
 	static void applyPreStartEngineWorkarounds(int callCount); // only error/EMR clear — safe before ring init
 	static void applyPreStopEngineWorkarounds(int callCount);  // full GT WAs + BCS drain — before stop only
-	static unsigned long stopGraphicsEngine(void *that);    // V505: dump ring preamble before ring is stopped
+	static unsigned long stopGraphicsEngine(void *that);
 	mach_vm_address_t ostopGraphicsEngine {};
 
 	static unsigned long startGraphicsEngine(void *that);  // V163: clear PERCTX_PREEMPT_CTRL before first context snapshot
