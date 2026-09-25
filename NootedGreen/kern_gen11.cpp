@@ -1244,13 +1244,14 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		// NumSubSlices override (verified @ 0x28654 in LE binary)
 		// Original: mov ebx,[rbp-0x30]; popcnt esi,ebx; add esi,esi; mov [r15+0x1158],esi
 		//           → NumSubSlices = popcount(subsliceMask) * 2  (hardware-detected)
-		// Patch:    hardcodes NumSubSlices=12 for RPL 96EU (6 DSS × 2 SS/DSS = 12 SS).
-		//           Linux i915: subslice total=6 mask=0x3f, so 6 DSS doubled to 12 SS.
+		// Patch:    hardcodes NumSubSlices=8 for the target i7-13620H UHD 64EU
+		//           (4 enabled DSS × 2 SS/DSS = 8 traditional SS).
+		//           The host i915 topology query reports 1 slice, 4 DSS and 64 EUs.
 		static const uint8_t f3bbb[] = {//NumSubSlices
 			0x8b, 0x5d, 0xd0, 0xf3, 0x0f, 0xb8, 0xf3, 0x01, 0xf6, 0x41, 0x89, 0xb7, 0x58, 0x11, 0x00, 0x00
 		};
 		static const uint8_t r3bbb[] = {
-			0x8b, 0x5d, 0xd0, 0xbe, 0x0c, 0x00, 0x00, 0x00, 0x90, 0x41, 0x89, 0xb7, 0x58, 0x11, 0x00, 0x00
+			0x8b, 0x5d, 0xd0, 0xbe, 0x08, 0x00, 0x00, 0x00, 0x90, 0x41, 0x89, 0xb7, 0x58, 0x11, 0x00, 0x00
 		};
 		
 		// GPU caps override (disabled) – would change MaxSlices 6→5, SARation 2→1, MaxEU/SS 6→5.
@@ -4947,10 +4948,11 @@ void Gen11::getGPUInfo(void *that)
 	
 	FunctionCast(getGPUInfo, callback->ogetGPUInfo)(that);
 
-	// --- GPU topology override for RPL i7-13700H (verified from Linux i915 syslog) ---
-	// Linux i915 reports: 1 slice, 6 DSS (mask=0x3f), 16 EU/DSS, 96 EU total.
+	// --- GPU topology override for the target RPL i7-13620H UHD SR-IOV VF ---
+	// A DRM_I915_QUERY_TOPOLOGY_INFO query on the PF reports:
+	// 1 slice, 4 enabled DSS, 16 EU/DSS, 64 EU total.
 	// TGL binary uses traditional sub-slices (SS), not dual sub-slices (DSS):
-	//   6 DSS × 2 SS/DSS = 12 SS,  16 EU/DSS / 2 = 8 EU/SS, 12 × 8 = 96 EU.
+	//   4 DSS × 2 SS/DSS = 8 SS, 16 EU/DSS / 2 = 8 EU/SS, 8 × 8 = 64 EU.
 	// Object layout (byte offsets from `this`, verified via disassembly):
 	//   0x115c = NumSlices          0x0dd8 = NumSlices mirror
 	//   0x1158 = NumSubSlices       0x0ddc = NumSubSlices mirror
@@ -4959,9 +4961,9 @@ void Gen11::getGPUInfo(void *that)
 	//   0x1150 = Frequency pair (low32=fMaxMHz, high32=fMinMHz)
 	//   0x1164 = L3BankCount
 	unsigned int numSlices        = 1;
-	unsigned int numSubSlices     = 12;  // 6 DSS × 2 = 12 traditional SS
+	unsigned int numSubSlices     = 8;   // 4 DSS × 2 = 8 traditional SS
 	unsigned int maxEUPerSubSlice = 8;   // 16 EU/DSS ÷ 2 SS/DSS = 8 EU/SS
-	unsigned int totalEU          = maxEUPerSubSlice * numSubSlices; // = 96
+	unsigned int totalEU          = maxEUPerSubSlice * numSubSlices; // = 64
 	
 	getMember<UInt32>(that, 0x115c) = numSlices;
 	getMember<UInt32>(that, 0x1158) = numSubSlices;
@@ -4971,8 +4973,8 @@ void Gen11::getGPUInfo(void *that)
 	getMember<UInt32>(that, 0x0ddc) = numSubSlices;
 	getMember<UInt32>(that, 0x1164) = 8;  // L3BankCount (confirmed from InsanelyMac TGL logs)
 	
-	// Frequency: fMaxFrequencyInMhz=1000, fMinFrequencyInMhz=450 (TGL defaults)
-	getMember<uint64_t>(that, 0x1150) = 0x1C2000003E8ULL;
+	// Target PF sysfs reports RP0=1500 MHz and RPn=100 MHz.
+	getMember<uint64_t>(that, 0x1150) = 0x064000005DCULL;
 	
 	SYSLOG("ngreen", "getGPUInfo: overridden topology → slices=%u subslices=%u maxEU/SS=%u totalEU=%u L3Banks=8",
 		   numSlices, numSubSlices, maxEUPerSubSlice, totalEU);

@@ -10,6 +10,15 @@ Patches Apple's Tiger Lake (Gen12) graphics drivers to work with newer Intel iGP
 
 **Work in progress.** Framebuffer controller starts, combo PHY calibration is patched, accelerator ring initialises, and host-based scheduler (type 5) runs on RPL with sustained RCS activity. Login is reachable on current test setups, but stability is still under active tuning for full-Metal paths. DYLD patches hook `_cs_validate_page` early (before DeviceInfo) so CoreDisplay is patched before WindowServer starts. Metal remains enabled by default. V50 still patches `gpu_bundle_find_trusted()` in libsystem_sandbox.dylib to redirect GPU bundle search from `/Library/GPUBundles` to `/Library/Extensions/` where the TGL driver bundle is installed. ICL Metal driver device-ID bypass uses mask-based matching for build portability. V52 adds CPUID-based cross-platform detection (`isRealTGL`) so RPL-only patches are skipped on genuine Tiger Lake hardware.
 
+### `codex/tahoe-sriov-vf` target override
+
+This experimental branch is hardware-specific to an i7-13620H (`8086:a7a8`)
+SR-IOV VF. A host `DRM_I915_QUERY_TOPOLOGY_INFO` query reports 1 slice, 4
+enabled dual subslices, 16 EUs per DSS, and 64 EUs total. The RPL topology
+patches therefore advertise 8 traditional subslices × 8 EUs instead of the
+upstream i7-13700H 96-EU constants, and use the measured 100–1500 MHz range.
+Do not use this branch unchanged on a 32-, 80-, or 96-EU SKU.
+
 ### Important (Current Test State)
 
 - **CRITICAL FIX (V75):** Removed post-`awaitPublishing` property override that was causing cursor corruption (TV static). Display now stable.
