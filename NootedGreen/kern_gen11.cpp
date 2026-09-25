@@ -94,13 +94,25 @@ constexpr uint32_t kVf2PfHandshakeOpcode = 0x01;
 constexpr uint32_t kVf2PfUpdateGGTTOpcode = 0x02;
 constexpr uint32_t kGucKlvGGTTStart = 0x0001;
 constexpr uint32_t kGucKlvGGTTSize = 0x0002;
+constexpr uint32_t kGucKlvNumContexts = 0x0004;
+constexpr uint32_t kGucKlvNumDoorbells = 0x0006;
 constexpr uint32_t kGucVfLatestMajor = 1;
 constexpr uint32_t kGucVfLatestMinor = 1;
+
+// Gen12 has 256 doorbells arranged as eight 32-doorbell SQIDI groups.  The
+// physical DISTRDB register (0xd08) is intentionally not visible to a VF, but
+// Apple's TGL scheduler still uses that topology to index its fixed 256-entry
+// bookkeeping arrays.
+constexpr uint32_t kGen12DoorbellCount = 256;
+constexpr uint16_t kGen12DoorbellsPerSQIDI = 32;
+constexpr uint8_t kGen12SQIDICount = 8;
 
 IOLock *gVfGucLock = nullptr;
 uint64_t *gVfGGTTShadow = nullptr;
 uint64_t gVfGGTTBase = 0;
 uint64_t gVfGGTTSize = 0;
+uint32_t gVfContextCount = 0;
+uint32_t gVfDoorbellCount = 0;
 void *gVfGlobalPageTable = nullptr;
 bool gVfGGTTReady = false;
 bool gVfDirectGGTT = false;
@@ -271,6 +283,16 @@ bool vfQueryKLV64(uint32_t key, uint64_t &value)
 	return true;
 }
 
+bool vfQueryKLV32(uint32_t key, uint32_t &value)
+{
+	uint32_t request[4] = {kGucActionQuerySingleKlv, key, 0, 0};
+	uint32_t response[4] = {};
+	if (!vfGucSendMMIO(request, 2, response) || (response[0] & 0xFFFFU) != 1)
+		return false;
+	value = response[1];
+	return true;
+}
+
 bool vfBootstrapBinder()
 {
 	if (gVfGGTTReady)
@@ -313,6 +335,19 @@ bool vfBootstrapBinder()
 		       static_cast<unsigned long long>(gVfGGTTSize));
 		return false;
 	}
+
+	// Match i915's VF query contract: GuC exposes the local context and
+	// doorbell quotas, while the PF-owned global range bases stay private.
+	if (!vfQueryKLV32(kGucKlvNumContexts, gVfContextCount) ||
+	    !vfQueryKLV32(kGucKlvNumDoorbells, gVfDoorbellCount) ||
+	    gVfContextCount == 0 || gVfDoorbellCount == 0 ||
+	    gVfDoorbellCount > kGen12DoorbellCount) {
+		SYSLOG("ngreen", "V226: invalid GuC VF submission quotas contexts=%u doorbells=%u",
+		       gVfContextCount, gVfDoorbellCount);
+		return false;
+	}
+	SYSLOG("ngreen", "V226: GuC VF submission quotas contexts=%u doorbells=%u",
+	       gVfContextCount, gVfDoorbellCount);
 
 	// ADL-P/RPL-P VFs backed by media version 12 expose the normal 16 MiB
 	// GTTMMADR BAR: registers in the lower 8 MiB and the GGTT PTE window in the
@@ -1616,6 +1651,11 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				// is provisioned only for the Gen11 0x190240/0x1901f0 mailbox.
 				{"__ZN13IGHardwareGuC19mmioHostToGuCActionEPKjjiPj",
 				 vfMmioHostToGuCAction, this->oVfMmioHostToGuCAction},
+				// V226: DISTRDB (0xd08) is outside a VF's MMIO allowlist and
+				// reads as all ones.  Feed Apple's allocator the real Gen12
+				// eight-by-32 topology after validating the VF's GuC KLV quota.
+				{"__ZN13IGHardwareGuC23readDoorbellSQIDIConfigEv",
+				 vfReadDoorbellSQIDIConfig, this->oVfReadDoorbellSQIDIConfig},
 				// V223: enlarge and re-layout Apple's legacy 1 KiB CTB rings before
 				// translating their registration to the modern VF KLV ABI.
 				{"__ZN21IGHardwareGuCCTBuffer19initWithAcceleratorEP22IOGraphicsAccelerator2",
@@ -7900,6 +7940,37 @@ bool Gen11::vfMmioHostToGuCAction(void *that, const uint32_t *request,
 		       request[0], requestLength, ok, reply[0]);
 	}
 	return ok;
+}
+
+bool Gen11::vfReadDoorbellSQIDIConfig(void *that) {
+	if (!gVfGGTTReady) {
+		return FunctionCast(vfReadDoorbellSQIDIConfig,
+		                    callback->oVfReadDoorbellSQIDIConfig)(that);
+	}
+
+	// Apple's Gen11 scheduler owns a fixed 256-entry ID-to-context table and
+	// cannot represent a partial quota without translating every legacy
+	// doorbell operation.  This host provisions its sole VF with all 256 IDs,
+	// so its local ID space is exactly the native 8 x 32 topology.
+	if (gVfDoorbellCount != kGen12DoorbellCount) {
+		SYSLOG("ngreen", "V226: unsupported partial VF doorbell quota %u",
+		       gVfDoorbellCount);
+		return false;
+	}
+
+	getMember<uint16_t>(that, 0x9E0) = kGen12DoorbellsPerSQIDI;
+	getMember<uint8_t>(that, 0x9E2) = kGen12SQIDICount;
+	getMember<uint8_t>(that, 0x9E3) = kGen12SQIDICount;
+
+	static bool logged = false;
+	if (!logged) {
+		logged = true;
+		SYSLOG("ngreen", "V226: synthesized VF doorbell topology %u SQIDIs x %u = %u",
+		       static_cast<unsigned int>(kGen12SQIDICount),
+		       static_cast<unsigned int>(kGen12DoorbellsPerSQIDI),
+		       kGen12DoorbellCount);
+	}
+	return true;
 }
 
 bool Gen11::vfCtbInitWithAccelerator(void *that, void *accelerator) {
