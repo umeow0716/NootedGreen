@@ -1395,9 +1395,10 @@ private:
 	mach_vm_address_t oVfDetachContextDesc {};
 	static bool vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 	                             const uint32_t *descriptor, IGHwCsType hwCsType,
-	                             unsigned int ringTail, unsigned int fenceId,
-	                             unsigned int stamp);
+	                             unsigned int channelId, unsigned int ringSequence,
+	                             unsigned int ringTail);
 	mach_vm_address_t oVfSubmitWorkItem {};
+	mach_vm_address_t vfSharedMappedBufferGetVirtualAddress {};
 	
 	static int wrapPmNotifyWrapper(unsigned int a0, unsigned int a1, unsigned long long *a2, unsigned int *freq);  // GPU freq change notification
 	mach_vm_address_t orgPmNotifyWrapper {};

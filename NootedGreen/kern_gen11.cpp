@@ -1716,6 +1716,12 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		{
 			SolveRequestPlus solveRequests[] = {
 				{"__ZN23IGHardwareBlit3DContext17ExtendedCtxParamsE", this->Blit3DExtendedCtxParams},
+				// V233: single-LRC GuC submission must publish the new tail in
+				// the context image before scheduling it.  Resolve the accessor
+				// used by IGHardwareContext::updateRingTail so the bridge can do
+				// the same update without touching physical memory.
+				{"__ZNK20IGSharedMappedBuffer17getVirtualAddressEv",
+				 this->vfSharedMappedBufferGetVirtualAddress},
 				// V216: The TGL driver assigns the old value returned by
 				// OSAddAtomic64 to IGAccelTask+0x258.  Failed accelerator start
 				// candidates consume value 0 without restoring this global, so a
@@ -8540,16 +8546,67 @@ void Gen11::vfDetachContextDesc(void *that, const uint32_t *descriptor) {
 
 bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 	                         const uint32_t *descriptor, IGHwCsType hwCsType,
-	                         unsigned int ringTail, unsigned int fenceId,
-	                         unsigned int stamp) {
+	                         unsigned int channelId, unsigned int ringSequence,
+	                         unsigned int ringTail) {
 	if (!gVfGGTTReady || NGreen::callback->isRealTGL) {
 		return FunctionCast(vfSubmitWorkItem,
 		                    callback->oVfSubmitWorkItem)(that, legacyContextId,
 		                                                 descriptor, hwCsType,
-		                                                 ringTail, fenceId, stamp);
+		                                                 channelId, ringSequence,
+		                                                 ringTail);
 	}
-	if (!descriptor || !gVfContextLock || !gVfContexts)
+	if (!descriptor || !gVfContextLock || !gVfContexts ||
+	    !callback->vfSharedMappedBufferGetVirtualAddress)
 		return false;
+
+	// Tahoe's legacy WQ encoder proves that the final argument is the byte
+	// ring tail: it stores (arg >> 3) in WQ_RING_TAIL[28:18].  The previous
+	// bridge mislabeled the first integer after hwCsType as ringTail and never
+	// published the real value.  Modern single-LRC GuC submission has no WQ
+	// item; i915 therefore writes CTX_RING_TAIL in the LRCA immediately before
+	// MODE_SET/SCHED_CONTEXT (guc_set_lrc_tail()).
+	//
+	// descriptor is the packed member at IGHardwareContext+0x89.  Its context
+	// image buffer is at +0x98, and Apple itself writes the tail at image+0x101c
+	// in IGHardwareContext::updateRingTail.  Repeating that write here closes
+	// the ordering gap between Apple's legacy producer and our direct CTB
+	// notification while avoiding GGTT remaps or physical-address reads.
+	constexpr size_t kContextDescriptorOffset = 0x89;
+	constexpr size_t kContextImageBufferOffset = 0x98;
+	constexpr size_t kContextRingTailOffset = 0x101C;
+	constexpr size_t kContextRingControlOffset = 0x102C;
+	constexpr uint32_t kRingControlPagesMask = 0x001FF000U;
+	constexpr uint32_t kRingControlValid = 1U;
+	auto *hardwareContext = const_cast<uint8_t *>(
+		reinterpret_cast<const uint8_t *>(descriptor) - kContextDescriptorOffset);
+	auto *contextImageBuffer =
+		getMember<void *>(hardwareContext, kContextImageBufferOffset);
+	using GetVirtualAddress = void *(*)(void *);
+	auto getVirtualAddress = reinterpret_cast<GetVirtualAddress>(
+		callback->vfSharedMappedBufferGetVirtualAddress);
+	auto *contextImage = contextImageBuffer ?
+		reinterpret_cast<uint8_t *>(getVirtualAddress(contextImageBuffer)) : nullptr;
+	if (!contextImage) {
+		SYSLOG("ngreen", "V233: submit has no CPU context image LRCA=0x%08x legacy=%u",
+		       descriptor[0], legacyContextId);
+		return false;
+	}
+
+	auto *ringTailField = reinterpret_cast<volatile uint32_t *>(
+		contextImage + kContextRingTailOffset);
+	const uint32_t ringControl = *reinterpret_cast<volatile uint32_t *>(
+		contextImage + kContextRingControlOffset);
+	const uint32_t ringSize =
+		(ringControl & kRingControlPagesMask) + PAGE_SIZE;
+	if ((ringControl & kRingControlValid) == 0 ||
+	    (ringTail & (sizeof(uint64_t) - 1U)) != 0 || ringTail >= ringSize) {
+		SYSLOG("ngreen", "V233: rejected ring tail=0x%x ctl=0x%08x size=0x%x LRCA=0x%08x",
+		       ringTail, ringControl, ringSize, descriptor[0]);
+		return false;
+	}
+	const uint32_t previousRingTail = *ringTailField;
+	*ringTailField = ringTail;
+	OSSynchronizeIO();
 
 	const uint32_t lrcaPage = descriptor[0] & 0xFFFFF000U;
 	int32_t slot = -1;
@@ -8615,9 +8672,10 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 
 	static uint32_t submitLogs = 0;
 	if (submitLogs++ < 64 || !submitted) {
-		SYSLOG("ngreen", "V231: direct submit id=%u LRCA=0x%08x type=%u tail=0x%x enable=%d ret=%d fence=%u",
+		SYSLOG("ngreen", "V233: direct submit id=%u LRCA=0x%08x type=%u tail=0x%x old=0x%x channel=%u seq=%u enable=%d ret=%d fence=%u",
 		       gucId, descriptor[0], static_cast<unsigned int>(hwCsType),
-		       ringTail, enable, submitted, transportFence);
+		       ringTail, previousRingTail, channelId, ringSequence, enable,
+		       submitted, transportFence);
 	}
 	return submitted;
 }
