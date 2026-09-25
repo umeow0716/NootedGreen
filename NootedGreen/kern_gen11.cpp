@@ -1607,6 +1607,10 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			// Without this hook, no GuC binary loads at all in coexist mode → ring dead.
 			RouteRequestPlus firmwareRoute[] = {
 				{"__ZN13IGHardwareGuC13loadGuCBinaryEv", loadGuCBinary, this->oloadGuCBinary},
+				// V224: the PF owns the running firmware, but Apple still needs its
+				// context pool, log buffers and ADS initialized before createUkContext.
+				{"__ZN13IGHardwareGuC16initSchedControlEv",
+				 wrapInitSchedControl, this->orgInitSchedControl},
 				// V222: scheduler 4 uses the Gen11 reference GuC transport, but its
 				// stock MMIO helper writes the legacy 0xc180 scratch registers.  A VF
 				// is provisioned only for the Gen11 0x190240/0x1901f0 mailbox.
@@ -1618,6 +1622,8 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				 vfCtbInitWithAccelerator, this->oVfCtbInitWithAccelerator},
 				{"__ZN21IGHardwareGuCCTBuffer13ctChannelInitEv",
 				 vfCtbChannelInit, this->oVfCtbChannelInit},
+				{"__ZN21IGHardwareGuCCTBuffer15gucToHostActionEPj",
+				 vfCtbGucToHostAction, this->oVfCtbGucToHostAction},
 				{"__ZN20IGSharedMappedBuffer11withOptionsEP11IGAccelTaskmjj",
 				 vfCtbMappedBufferWithOptions, this->oVfCtbMappedBufferWithOptions},
 			};
@@ -1716,6 +1722,64 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			                                      address, size),
 			           "ngreen", "V223: failed to convert VF CTB head/tail units");
 			SYSLOG("ngreen", "V223: converted VF CTB head/tail units to dwords");
+
+			// V224: Apple places the legacy action in CT header bits 31:16 and
+			// the request fence in dw1.  Modern CTB/HXG uses exactly the same
+			// message length, but places fence in CT header bits 31:16 and the
+			// action in the HXG header at dw1.  Keep Apple's locking, waiting and
+			// ring accounting intact while swapping only those two encodings.
+			static const uint8_t vfCtbHxgHeaderFind[] = {
+				0xc1, 0xe2, 0x10, 0x09, 0xf2,
+				0x8d, 0x94, 0x17, 0x00, 0x01, 0x00, 0x00
+			};
+			static const uint8_t vfCtbHxgHeaderReplace[] = {
+				0x44, 0x89, 0xe2,             // mov edx, r12d (fence)
+				0xc1, 0xe2, 0x10,             // shl edx, 16
+				0x09, 0xf2,                   // or edx, esi (HXG length)
+				0x8b, 0x39,                   // mov edi, [rcx] (action)
+				0x90, 0x90
+			};
+			static const uint8_t vfCtbHxgActionFind[] = {
+				0x42, 0x89, 0x14, 0xb3, 0x31, 0xd2, 0x41, 0xf7, 0xf5,
+				0x44, 0x89, 0x24, 0x93, 0x8d, 0x42, 0x01
+			};
+			static const uint8_t vfCtbHxgActionReplace[] = {
+				0x42, 0x89, 0x14, 0xb3, 0x31, 0xd2, 0x41, 0xf7, 0xf5,
+				0x89, 0x3c, 0x93, 0x90, 0x8d, 0x42, 0x01
+			};
+			// Modern responses always arrive through G2H.  Force Apple's caller
+			// to use its pending-request path for every action, including 0x10;
+			// the legacy descriptor response slots are not part of the modern ABI.
+			static const uint8_t vfCtbWaitModeFind[] = {
+				0x48, 0x85, 0xff, 0x74, 0x09, 0x45, 0x31, 0xc9,
+				0x5d, 0xe9, 0xd4, 0xdd, 0xff, 0xff
+			};
+			static const uint8_t vfCtbWaitModeReplace[] = {
+				0x48, 0x85, 0xff, 0x74, 0x09, 0x41, 0xb1, 0x01,
+				0x5d, 0xe9, 0xd4, 0xdd, 0xff, 0xff
+			};
+			static const uint8_t vfCtbAllocateWaitFind[] = {
+				0x83, 0xfa, 0x10, 0x41, 0x0f, 0x95, 0xc1,
+				0x44, 0x22, 0x4d, 0xcc
+			};
+			static const uint8_t vfCtbAllocateWaitReplace[] = {
+				0x83, 0xfa, 0xff, 0x41, 0x0f, 0x95, 0xc1,
+				0x44, 0x22, 0x4d, 0xcc
+			};
+			LookupPatchPlus const vfCtbHxgPatches[] = {
+				{activeKext, vfCtbHxgHeaderFind, vfCtbHxgHeaderReplace,
+				 sizeof(vfCtbHxgHeaderFind), 1},
+				{activeKext, vfCtbHxgActionFind, vfCtbHxgActionReplace,
+				 sizeof(vfCtbHxgActionFind), 1},
+				{activeKext, vfCtbWaitModeFind, vfCtbWaitModeReplace,
+				 sizeof(vfCtbWaitModeFind), 1},
+				{activeKext, vfCtbAllocateWaitFind, vfCtbAllocateWaitReplace,
+				 sizeof(vfCtbAllocateWaitFind), 1},
+			};
+			PANIC_COND(!LookupPatchPlus::applyAll(patcher, vfCtbHxgPatches,
+			                                      address, size),
+			           "ngreen", "V224: failed to encode VF CTB messages as HXG");
+			SYSLOG("ngreen", "V224: converted VF CTB request framing to HXG");
 		}
 
 		if (!NGreen::callback->isRealTGL) {
@@ -7694,8 +7758,15 @@ unsigned long Gen11::loadGuCBinary(void *that) {
 	// available so Apple's GuC scheduler initializes its submission transport,
 	// but never try to replace the PF-owned image or WOPCM configuration.
 	if (gVfGGTTReady) {
-		SYSLOG("ngreen", "V220: VF GuC firmware is PF-owned; skipping binary load");
-		return 1;
+		// The stock load routine initializes all scheduler-side allocations
+		// before touching WOPCM and uploading firmware.  Skipping it outright
+		// left contextCount at zero, so the very first createUkContext returned
+		// the 0x400 invalid-context sentinel and tore the GuC object down.
+		const bool initialized = FunctionCast(wrapInitSchedControl,
+		                                      callback->orgInitSchedControl)(that);
+		SYSLOG("ngreen", "V224: VF GuC firmware is PF-owned; scheduler data init=%d",
+		       initialized);
+		return initialized;
 	}
 
 	// V52: Real TGL can authenticate and load GuC firmware natively.
@@ -7738,6 +7809,31 @@ bool Gen11::vfMmioHostToGuCAction(void *that, const uint32_t *request,
 		const bool ok = vfConfigureModernCtb(request[3] == 1U, request[1]);
 		if (response)
 			*response = 0;
+		return ok;
+	}
+
+	// Legacy teardown deregisters H2G and G2H separately with 0x4506.  The
+	// modern VF ABI owns both channels under one 0x4509 control bit, so disable
+	// once on Apple's first (type 0) request and acknowledge the second locally.
+	if (request[0] == 0x4506U) {
+		if (requestLength != 3 || request[2] > 1U) {
+			SYSLOG("ngreen", "V224: rejected malformed legacy CTB deregistration len=%u",
+			       requestLength);
+			return false;
+		}
+		bool ok = true;
+		if (request[2] == 0U) {
+			uint32_t disable[4] = {kGucActionHost2GucControlCtb, 0, 0, 0};
+			uint32_t reply[4] = {};
+			ok = vfGucSendMMIO(disable, 2, reply) &&
+			     (reply[0] & 0x0FFFFFFFU) == 0;
+			SYSLOG("ngreen", "V224: disabled VF CTB transport ret=%d reply=0x%08x",
+			       ok, reply[0]);
+		}
+		if (response)
+			*response = 0;
+		if (request[2] == 1U)
+			gVfCtbGpuBase = 0;
 		return ok;
 	}
 
@@ -7818,6 +7914,44 @@ void Gen11::vfCtbChannelInit(void *that) {
 	SYSLOG("ngreen", "V223: laid out VF CTB base=0x%08x H2G=0x%x G2H=0x%x backing=0x%x",
 	       gVfCtbGpuBase, kVfCtbH2GBufferBytes, kVfCtbG2HBufferBytes,
 	       kVfCtbBackingBytes);
+}
+
+bool Gen11::vfCtbGucToHostAction(void *that, uint32_t *message) {
+	const bool received = FunctionCast(vfCtbGucToHostAction,
+	                                   callback->oVfCtbGucToHostAction)(that,
+	                                                                          message);
+	if (!received || !gVfGGTTReady || !message)
+		return received;
+
+	// Stock gucToHostAction has already consumed one message and returned it as
+	// [modern CT header, HXG header, payload...].  Reframe just that CPU copy so
+	// Apple's unchanged pending-request matcher sees its historical
+	// [legacy header, fence, status] representation.
+	const uint32_t transport = message[0];
+	const uint32_t hxg = message[1];
+	const uint32_t length = transport & 0xFFU;
+	const uint32_t type = hxg & kGucTypeMask;
+	const bool response = (hxg & kGucOriginGuc) != 0 &&
+	                      (type == kGucTypeBusy || type == kGucTypeRetry ||
+	                       type == kGucTypeFailure || type == kGucTypeSuccess);
+
+	static uint32_t logCount = 0;
+	if (logCount++ < 32) {
+		SYSLOG("ngreen", "V224: VF G2H fence=%u len=%u hxg=0x%08x response=%d",
+		       transport >> 16, length, hxg, response);
+	}
+
+	if (response) {
+		message[0] = 0x102U; // legacy response flag plus fence/status payload
+		message[1] = transport >> 16;
+		message[2] = hxg;
+	} else {
+		// Unsolicited HXG events carry their legacy action in the low 16 bits.
+		// A small header with bit 8 clear makes Apple's handler return message[1].
+		message[0] = length & 0x1FU;
+		message[1] = hxg;
+	}
+	return true;
 }
 
 UInt8 Gen11::wrapLoadGuCBinary(void *that) {
