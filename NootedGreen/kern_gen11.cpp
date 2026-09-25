@@ -1071,6 +1071,12 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			 // as the kernel task so it synchronizes from Global GTT; once +0x150 is
 			 // populated, preserve Apple's classification for every later task.
 			 {"__ZNK11IGAccelTask15isKernelGPUTaskEv", IGAccelTaskIsKernelGPUTask, this->oIGAccelTaskIsKernelGPUTask},
+			 // V215: Failed bootstrap attempts increment IGAccelTask::fTaskCounter even
+			 // though IntelAccelerator+0x150 remains null.  initStampAndScratchPages
+			 // interprets that non-zero counter as a user task and clones through the
+			 // null kernel-task pointer.  Restore the real first task's identity so
+			 // Apple's allocation branch creates its own stamp and scratch buffers.
+			 {"__ZN11IGAccelTask24initStampAndScratchPagesEv", IGAccelTaskInitStampAndScratchPages, this->oIGAccelTaskInitStampAndScratchPages},
 
 			 // V36: Hook readAndClearInterrupts to initialize Gen11 multi-engine GT interrupts.
 			 // Without this, RCS/BCS user interrupts and context-switch notifications may not
@@ -1682,6 +1688,25 @@ bool Gen11::IGAccelTaskIsKernelGPUTask(const void *that)
 	}
 
 	return original;
+}
+
+bool Gen11::IGAccelTaskInitStampAndScratchPages(void *that)
+{
+	if (!NGreen::callback->isRealTGL && that != nullptr) {
+		void *accelerator = getMember<void *>(that, 0x10);
+		if (accelerator != nullptr && getMember<void *>(accelerator, 0x150) == nullptr) {
+			uint64_t &taskCounter = getMember<uint64_t>(that, 0x258);
+			if (taskCounter != 0) {
+				SYSLOG("ngreen",
+				       "V215: resetting bootstrap VF task counter from %llu to 0",
+				       static_cast<unsigned long long>(taskCounter));
+				taskCounter = 0;
+			}
+		}
+	}
+
+	return FunctionCast(IGAccelTaskInitStampAndScratchPages,
+	                    callback->oIGAccelTaskInitStampAndScratchPages)(that);
 }
 
 void *ccont;
