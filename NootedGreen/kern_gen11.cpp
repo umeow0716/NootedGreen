@@ -1025,6 +1025,14 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		const bool forceFullMTL = shouldForceFullMetalPath();
 
 		RouteRequestPlus requests[] = {
+			// V213: A VF has no native stolen-memory size, so initSegments leaves its
+			// first GGTT range at {0, 0}.  Apple's inclusive end calculation then
+			// underflows to UINT64_MAX and writes beyond the 16 MiB BAR0 mapping.
+			// Clamp only the spoofed RPL path to the 4 GiB aperture represented by
+			// the 8 MiB GGTT window at BAR0+8 MiB (1M 64-bit PTEs).
+			{"__ZN25IGHardwareGlobalPageTable15initWithOptionsEP16IntelAcceleratorRK14IGAddressRangePvyj",
+			 IGHardwareGlobalPageTableInitWithOptions,
+			 this->oIGHardwareGlobalPageTableInitWithOptions},
 			
 			 {"__ZN16IntelAccelerator20_PAVPCommandCallbackEP8OSObject22PAVPSessionCommandID_tjPj", wrapPavpSessionCallback, this->orgPavpSessionCallback},
 			
@@ -1607,12 +1615,46 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 
 		SYSLOG("ngreen", "Loaded AppleIntelTGLGraphics! %s",
 			   NGreen::callback->isRealTGL ? "Real TGL — native topology" :
-			   "RPL spoofed — slices=1 subslices=12(6DSS) maxEU/SS=8 totalEU=96 L3=8");
+			   "RPL spoofed — slices=1 subslices=8(4DSS) maxEU/SS=8 totalEU=64 L3=8");
 
 		return true;
 	}
 
     return false;
+}
+
+bool Gen11::IGHardwareGlobalPageTableInitWithOptions(void *that,
+                                                     void *accelerator,
+                                                     const NGIGAddressRange &range,
+                                                     void *mmioBase,
+                                                     uint64_t dummyPage,
+                                                     uint32_t options)
+{
+	constexpr uint64_t vfGGTTBytes = 0x100000000ULL;
+	NGIGAddressRange corrected = range;
+
+	if (!NGreen::callback->isRealTGL) {
+		const bool invalidStart = corrected.start >= vfGGTTBytes;
+		const bool invalidLength = corrected.length == 0 ||
+		                           (!invalidStart && corrected.length > vfGGTTBytes - corrected.start);
+		if (invalidStart || invalidLength) {
+			SYSLOG("ngreen",
+			       "V213: clamping VF GGTT range [%llx, +%llx] to [0, +%llx]",
+			       static_cast<unsigned long long>(range.start),
+			       static_cast<unsigned long long>(range.length),
+			       static_cast<unsigned long long>(vfGGTTBytes));
+			corrected.start = 0;
+			corrected.length = vfGGTTBytes;
+		}
+	}
+
+	return FunctionCast(IGHardwareGlobalPageTableInitWithOptions,
+	                    callback->oIGHardwareGlobalPageTableInitWithOptions)(that,
+	                                                                         accelerator,
+	                                                                         corrected,
+	                                                                         mmioBase,
+	                                                                         dummyPage,
+	                                                                         options);
 }
 
 void *ccont;

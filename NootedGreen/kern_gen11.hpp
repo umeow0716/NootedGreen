@@ -57,6 +57,14 @@ struct PACKED PlatformInfo {
 	uint32_t fsubslices;
 };
 
+// AppleIntelTGLGraphics' two-qword virtual-address range.  The SR-IOV VF does
+// not expose the stolen-memory sizing field used by the native TGL path, so
+// IGMemoryManager can hand the global page-table constructor a zero length.
+struct NGIGAddressRange {
+	uint64_t start;
+	uint64_t length;
+};
+
 // Framebuffer flags (fInfoFlags / boot flags) used in platform info patching
 enum FramebufferFlags2 : uint32_t {
 	FB_FLAG_AVOID_FAST_LINK_TRAINING     = 0x1,
@@ -1782,6 +1790,14 @@ private:
 	
 
 	// ── Display buffer & memory management ──
+	static bool IGHardwareGlobalPageTableInitWithOptions(void *that,
+	                                                    void *accelerator,
+	                                                    const NGIGAddressRange &range,
+	                                                    void *mmioBase,
+	                                                    uint64_t dummyPage,
+	                                                    uint32_t options);
+	mach_vm_address_t oIGHardwareGlobalPageTableInitWithOptions {};
+
 	static void setupPlanarSurfaceDBUF();  // DBUF allocation for planar (NV12/P010) surfaces
 	mach_vm_address_t osetupPlanarSurfaceDBUF {};
 	
