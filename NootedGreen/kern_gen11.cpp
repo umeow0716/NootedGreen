@@ -1723,6 +1723,58 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			           "ngreen", "V223: failed to convert VF CTB head/tail units");
 			SYSLOG("ngreen", "V223: converted VF CTB head/tail units to dwords");
 
+			// V225: 0xCEE8 is the physical-GT GFX TLB invalidate register.  A VF
+			// may issue the write, but reads outside its runtime allowlist return
+			// all ones, so every stock posting-read loop is infinite.  The CTB
+			// initializer above has a contextual patch; cover all remaining
+			// register-allocation, teardown and context attach/detach variants.
+			static const uint8_t vfTlbPollEcxFind[] = {
+				0x8b, 0x88, 0xe8, 0xce, 0x00, 0x00,
+				0xf6, 0xc1, 0x01, 0x75, 0xf5
+			};
+			static const uint8_t vfTlbPollEcxReplace[] = {
+				0x8b, 0x88, 0xe8, 0xce, 0x00, 0x00,
+				0xf6, 0xc1, 0x01, 0x90, 0x90
+			};
+			static const uint8_t vfTlbPollEdxFind[] = {
+				0x8b, 0x90, 0xe8, 0xce, 0x00, 0x00,
+				0xf6, 0xc2, 0x01, 0x75, 0xf5
+			};
+			static const uint8_t vfTlbPollEdxReplace[] = {
+				0x8b, 0x90, 0xe8, 0xce, 0x00, 0x00,
+				0xf6, 0xc2, 0x01, 0x90, 0x90
+			};
+			static const uint8_t vfTlbPollEsiFind[] = {
+				0x8b, 0xb0, 0xe8, 0xce, 0x00, 0x00,
+				0x40, 0xf6, 0xc6, 0x01, 0x75, 0xf4
+			};
+			static const uint8_t vfTlbPollEsiReplace[] = {
+				0x8b, 0xb0, 0xe8, 0xce, 0x00, 0x00,
+				0x40, 0xf6, 0xc6, 0x01, 0x90, 0x90
+			};
+			static const uint8_t vfTlbPollMemoryFind[] = {
+				0xf7, 0x80, 0xe8, 0xce, 0x00, 0x00,
+				0x01, 0x00, 0x00, 0x00, 0x75, 0xf4
+			};
+			static const uint8_t vfTlbPollMemoryReplace[] = {
+				0xf7, 0x80, 0xe8, 0xce, 0x00, 0x00,
+				0x01, 0x00, 0x00, 0x00, 0x90, 0x90
+			};
+			LookupPatchPlus const vfTlbPollPatches[] = {
+				{activeKext, vfTlbPollEcxFind, vfTlbPollEcxReplace,
+				 sizeof(vfTlbPollEcxFind), 8},
+				{activeKext, vfTlbPollEdxFind, vfTlbPollEdxReplace,
+				 sizeof(vfTlbPollEdxFind), 1},
+				{activeKext, vfTlbPollEsiFind, vfTlbPollEsiReplace,
+				 sizeof(vfTlbPollEsiFind), 1},
+				{activeKext, vfTlbPollMemoryFind, vfTlbPollMemoryReplace,
+				 sizeof(vfTlbPollMemoryFind), 1},
+			};
+			PANIC_COND(!LookupPatchPlus::applyAll(patcher, vfTlbPollPatches,
+			                                      address, size),
+			           "ngreen", "V225: failed to bypass VF physical TLB polls");
+			SYSLOG("ngreen", "V225: bypassed all remaining VF physical TLB polls");
+
 			// V224: Apple places the legacy action in CT header bits 31:16 and
 			// the request fence in dw1.  Modern CTB/HXG uses exactly the same
 			// message length, but places fence in CT header bits 31:16 and the
