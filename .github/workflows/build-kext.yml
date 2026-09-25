@@ -10,6 +10,7 @@ on:
       - "NootedGreen.xcodeproj/**"
       - "Lilu.kext/**"
       - "MacKernelSDK/**"
+      - "tools/metal_smoke/**"
       - ".github/workflows/build-kext.yml"
 
 permissions:
@@ -46,6 +47,17 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             build
 
+      - name: Build x86_64 Metal smoke test
+        run: |
+          xcrun clang \
+            -arch x86_64 \
+            -mmacosx-version-min=13.0 \
+            -fobjc-arc \
+            tools/metal_smoke/main.m \
+            -framework Foundation \
+            -framework Metal \
+            -o "$RUNNER_TEMP/metal-smoke"
+
       - name: Stage artifact
         run: |
           KEXT_PATH="$(find "$RUNNER_TEMP/DerivedData/Build/Products/Release" -maxdepth 1 -name NootedGreen.kext -type d -print -quit)"
@@ -65,4 +77,10 @@ jobs:
         with:
           name: HookCase-Tahoe-x86_64
           path: ${{ runner.temp }}/HookCase-Tahoe-x86_64.zip
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MetalSmoke-Tahoe-x86_64
+          path: ${{ runner.temp }}/metal-smoke
           if-no-files-found: error
