@@ -1065,6 +1065,12 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			 // V132: Hook task producers so submitBlit never sees a null IGAccelTask on spoofed RPL.
 			 {"__ZN16IntelAccelerator17createUserGPUTaskEv", createUserGPUTask, this->ocreateUserGPUTask},
 			 {"__ZN11IGAccelTask11withOptionsEP16IntelAccelerator", igAccelTaskWithOptions, this->oigAccelTaskWithOptions},
+			 // V214: During IOAccel bootstrap IntelAccelerator+0x150 is still null.  The
+			 // TGL driver otherwise takes the non-kernel branch in newPageTableForTask
+			 // and dereferences that null task at +0x260.  Treat only this first VF task
+			 // as the kernel task so it synchronizes from Global GTT; once +0x150 is
+			 // populated, preserve Apple's classification for every later task.
+			 {"__ZNK11IGAccelTask15isKernelGPUTaskEv", IGAccelTaskIsKernelGPUTask, this->oIGAccelTaskIsKernelGPUTask},
 
 			 // V36: Hook readAndClearInterrupts to initialize Gen11 multi-engine GT interrupts.
 			 // Without this, RCS/BCS user interrupts and context-switch notifications may not
@@ -1655,6 +1661,27 @@ bool Gen11::IGHardwareGlobalPageTableInitWithOptions(void *that,
 	                                                                         mmioBase,
 	                                                                         dummyPage,
 	                                                                         options);
+}
+
+bool Gen11::IGAccelTaskIsKernelGPUTask(const void *that)
+{
+	const bool original = FunctionCast(IGAccelTaskIsKernelGPUTask,
+	                                   callback->oIGAccelTaskIsKernelGPUTask)(that);
+	if (original || NGreen::callback->isRealTGL || that == nullptr)
+		return original;
+
+	void *task = const_cast<void *>(that);
+	void *accelerator = getMember<void *>(task, 0x10);
+	if (accelerator == nullptr)
+		return original;
+
+	void *kernelTask = getMember<void *>(accelerator, 0x150);
+	if (kernelTask == nullptr) {
+		SYSLOG("ngreen", "V214: bootstrapping first VF task from Global GTT");
+		return true;
+	}
+
+	return original;
 }
 
 void *ccont;

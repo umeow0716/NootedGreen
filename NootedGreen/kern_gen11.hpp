@@ -1395,6 +1395,9 @@ private:
 
 	static void *igAccelTaskWithOptions(void *that);  // V132: cache successful task allocations for null-task fallback
 	mach_vm_address_t oigAccelTaskWithOptions {};
+
+	static bool IGAccelTaskIsKernelGPUTask(const void *that);  // V214: bootstrap the first VF task from Global GTT
+	mach_vm_address_t oIGAccelTaskIsKernelGPUTask {};
 	
 	static unsigned long submitBlit(void *that, void *param_1, void *param_2, void *param_3, bool param_4);
 	mach_vm_address_t osubmitBlit {};
