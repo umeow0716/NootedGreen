@@ -1016,9 +1016,16 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		{
 			SolveRequestPlus solveRequests[] = {
 				{"__ZN23IGHardwareBlit3DContext17ExtendedCtxParamsE", this->Blit3DExtendedCtxParams},
+				// V216: The TGL driver assigns the old value returned by
+				// OSAddAtomic64 to IGAccelTask+0x258.  Failed accelerator start
+				// candidates consume value 0 without restoring this global, so a
+				// later real kernel task is misclassified as a user task throughout
+				// initWithOptions.  Resolve the counter so it can be repaired before
+				// the next bootstrap allocation starts.
+				{"__ZN11IGAccelTask12fTaskCounterE", this->igAccelTaskCounter},
 			};
 			SYSLOG_COND(!SolveRequestPlus::solveAll(patcher, index, solveRequests, address, size), "ngreen",
-			            "V144: Failed to resolve Blit3DExtendedCtxParams");
+			            "V216: Failed to resolve TGL accelerator bootstrap symbols");
 		}
 
 		const bool wegCoexist = isWEGCoexistMode();
@@ -1062,7 +1069,9 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			{"__ZN16IntelAccelerator25populateResetRegisterListEv", populateResetRegisterList, this->opopulateResetRegisterList},
 
 
-			 // V132: Hook task producers so submitBlit never sees a null IGAccelTask on spoofed RPL.
+			 // V132/V216: Hook task producers so a failed user-task allocation can
+			 // fall back only to the kernel task currently owned by this accelerator.
+			 // Never reuse an unretained historical task across stop/start.
 			 {"__ZN16IntelAccelerator17createUserGPUTaskEv", createUserGPUTask, this->ocreateUserGPUTask},
 			 {"__ZN11IGAccelTask11withOptionsEP16IntelAccelerator", igAccelTaskWithOptions, this->oigAccelTaskWithOptions},
 			 // V214: During IOAccel bootstrap IntelAccelerator+0x150 is still null.  The
@@ -1071,13 +1080,6 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			 // as the kernel task so it synchronizes from Global GTT; once +0x150 is
 			 // populated, preserve Apple's classification for every later task.
 			 {"__ZNK11IGAccelTask15isKernelGPUTaskEv", IGAccelTaskIsKernelGPUTask, this->oIGAccelTaskIsKernelGPUTask},
-			 // V215: Failed bootstrap attempts increment IGAccelTask::fTaskCounter even
-			 // though IntelAccelerator+0x150 remains null.  initStampAndScratchPages
-			 // interprets that non-zero counter as a user task and clones through the
-			 // null kernel-task pointer.  Restore the real first task's identity so
-			 // Apple's allocation branch creates its own stamp and scratch buffers.
-			 {"__ZN11IGAccelTask24initStampAndScratchPagesEv", IGAccelTaskInitStampAndScratchPages, this->oIGAccelTaskInitStampAndScratchPages},
-
 			 // V36: Hook readAndClearInterrupts to initialize Gen11 multi-engine GT interrupts.
 			 // Without this, RCS/BCS user interrupts and context-switch notifications may not
 			 // be properly enabled, preventing IOAccelF2 from seeing stamp completions.
@@ -1688,25 +1690,6 @@ bool Gen11::IGAccelTaskIsKernelGPUTask(const void *that)
 	}
 
 	return original;
-}
-
-bool Gen11::IGAccelTaskInitStampAndScratchPages(void *that)
-{
-	if (!NGreen::callback->isRealTGL && that != nullptr) {
-		void *accelerator = getMember<void *>(that, 0x10);
-		if (accelerator != nullptr && getMember<void *>(accelerator, 0x150) == nullptr) {
-			uint64_t &taskCounter = getMember<uint64_t>(that, 0x258);
-			if (taskCounter != 0) {
-				SYSLOG("ngreen",
-				       "V215: resetting bootstrap VF task counter from %llu to 0",
-				       static_cast<unsigned long long>(taskCounter));
-				taskCounter = 0;
-			}
-		}
-	}
-
-	return FunctionCast(IGAccelTaskInitStampAndScratchPages,
-	                    callback->oIGAccelTaskInitStampAndScratchPages)(that);
 }
 
 void *ccont;
@@ -5264,9 +5247,9 @@ void *Gen11::createUserGPUTask(void *that)
 			void *kernelTask = getMember<void *>(that, 0x150);
 			void *kernelTaskVtable = kernelTask ? getMember<void *>(kernelTask, 0x0) : nullptr;
 			void *kernelTaskCtx = kernelTask ? getMember<void *>(kernelTask, 0xb8) : nullptr;
-			SYSLOG("ngreen", "V137.createUserGPUTask[%d]: acc=%p task=%p vtbl=%p ctx=%p ktask=%p kvtbl=%p kctx=%p cached=%p",
+			SYSLOG("ngreen", "V137.createUserGPUTask[%d]: acc=%p task=%p vtbl=%p ctx=%p ktask=%p kvtbl=%p kctx=%p",
 				   v137CreateTaskCount, that, task, taskVtable, taskCtx,
-				   kernelTask, kernelTaskVtable, kernelTaskCtx, callback->v132CachedTask);
+				   kernelTask, kernelTaskVtable, kernelTaskCtx);
 		}
 	}
 	if (NGreen::callback->isRealTGL || task) {
@@ -5277,24 +5260,59 @@ void *Gen11::createUserGPUTask(void *that)
 
 	void *kernelTask = getMember<void *>(that, 0x150);
 	if (kernelTask) {
-		callback->v132CachedTask = kernelTask;
 		ensureTaskContext(kernelTask, "createUserGPUTask-kernel");
 		SYSLOG("ngreen", "V132: createUserGPUTask returned null, using kernel task fallback=%p", kernelTask);
 		return kernelTask;
 	}
 
-	if (callback->v132CachedTask) {
-		ensureTaskContext(callback->v132CachedTask, "createUserGPUTask-cached");
-		SYSLOG("ngreen", "V132: createUserGPUTask returned null, using cached task=%p", callback->v132CachedTask);
-		return callback->v132CachedTask;
-	}
-
-	SYSLOG("ngreen", "V132: createUserGPUTask returned null, no fallback task available");
+	SYSLOG("ngreen", "V216: createUserGPUTask returned null before a current kernel task was available");
 	return nullptr;
 }
 
 void *Gen11::igAccelTaskWithOptions(void *that)
 {
+	// V216: IOGraphicsAccelerator2 stores IntelAccelerator+0x150 only after
+	// IGAccelTask::withOptions returns.  The first task therefore has to receive
+	// counter value 0; that value controls its address-mode flags, managed page
+	// table list, Global-GTT synchronization, and stamp/scratch allocation.
+	//
+	// Earlier failed start candidates increment Apple's process-wide counter but
+	// IGAccelTask::free never decrements it (only IGAccelTask::stop resets it).
+	// Reset the stale value before the next unassigned accelerator constructs its
+	// kernel task.  Changing the per-object identity later in initialization is
+	// unsafe because address mode and page-table state have already been chosen.
+	if (!NGreen::callback->isRealTGL && that != nullptr &&
+	    getMember<void *>(that, 0x150) == nullptr) {
+		if (callback->igAccelTaskCounter == 0) {
+			SYSLOG("ngreen", "V216: bootstrap task counter symbol is unavailable; refusing unsafe allocation");
+			return nullptr;
+		}
+
+		auto *counter = reinterpret_cast<volatile UInt64 *>(callback->igAccelTaskCounter);
+		UInt64 stale = *counter;
+		if (stale != 0) {
+			bool repaired = false;
+			for (unsigned attempt = 0; attempt < 8 && stale != 0; attempt++) {
+				if (OSCompareAndSwap64(stale, 0, counter)) {
+					repaired = true;
+					break;
+				}
+				stale = *counter;
+			}
+
+			if (repaired) {
+				SYSLOG("ngreen",
+				       "V216: reset stale VF bootstrap task counter from %llu before allocation",
+				       static_cast<unsigned long long>(stale));
+			} else if (*counter != 0) {
+				SYSLOG("ngreen",
+				       "V216: could not stabilize VF bootstrap task counter (current=%llu); refusing unsafe allocation",
+				       static_cast<unsigned long long>(*counter));
+				return nullptr;
+			}
+		}
+	}
+
 	auto ensureTaskContext = [&](void *task, const char *origin) -> void * {
 		if (!task || NGreen::callback->isRealTGL)
 			return task ? getMember<void *>(task, 0xb8) : nullptr;
@@ -5333,26 +5351,22 @@ void *Gen11::igAccelTaskWithOptions(void *that)
 			v137WithOptionsCount++;
 			void *taskVtable = task ? getMember<void *>(task, 0x0) : nullptr;
 			void *taskCtx = task ? getMember<void *>(task, 0xb8) : nullptr;
-			SYSLOG("ngreen", "V137.withOptions[%d]: acc=%p task=%p vtbl=%p ctx=%p cached=%p",
-				   v137WithOptionsCount, that, task, taskVtable, taskCtx, callback->v132CachedTask);
+			SYSLOG("ngreen", "V137.withOptions[%d]: acc=%p task=%p vtbl=%p ctx=%p",
+				   v137WithOptionsCount, that, task, taskVtable, taskCtx);
 		}
 	}
 	if (NGreen::callback->isRealTGL)
 		return task;
 
 	if (task) {
-		callback->v132CachedTask = task;
 		ensureTaskContext(task, "withOptions");
 		DBGLOG("ngreen", "V132: IGAccelTask::withOptions created task=%p", task);
 		return task;
 	}
 
-	if (callback->v132CachedTask) {
-		ensureTaskContext(callback->v132CachedTask, "withOptions-cached");
-		SYSLOG("ngreen", "V132: IGAccelTask::withOptions returned null, reusing cached task=%p", callback->v132CachedTask);
-		return callback->v132CachedTask;
-	}
-
+	// V216: withOptions does not retain any previously returned object.  If the
+	// current allocation fails, propagate null so IOGraphicsAccelerator2 can
+	// unwind; returning an old task here would install a freed object at +0x150.
 	return nullptr;
 }
 
@@ -6354,10 +6368,10 @@ unsigned long Gen11::submitBlit(void *that, void *param_1, void *param_2, void *
 			v137SubmitEntryCount++;
 			void *entryVtable = param_3 ? getMember<void *>(param_3, 0x0) : nullptr;
 			void *entryCtx = param_3 ? getMember<void *>(param_3, 0x298) : nullptr;
-			SYSLOG("ngreen", "V149.submitBlit.entry[%d]: acc=%p p1=%p p2=%p task=%p vtbl=%p ctx@298=%p b=%u c3D=%p c2D=%p cTask=%p",
+			SYSLOG("ngreen", "V149.submitBlit.entry[%d]: acc=%p p1=%p p2=%p task=%p vtbl=%p ctx@298=%p b=%u c3D=%p c2D=%p",
 				   v137SubmitEntryCount, that, param_1, param_2, param_3, entryVtable, entryCtx,
 				   static_cast<unsigned>(param_4), callback->v131CachedBlit3DCtx,
-				   callback->v131CachedBlit2DCtx, callback->v132CachedTask);
+				   callback->v131CachedBlit2DCtx);
 		}
 	}
 	if (!invalidTask) {
@@ -6377,19 +6391,23 @@ unsigned long Gen11::submitBlit(void *that, void *param_1, void *param_2, void *
 		}
 	}
 
-	if (invalidTask && callback->v132CachedTask && callback->v132CachedTask != param_3) {
-		void *cachedCtx = ensureTaskContext(callback->v132CachedTask, "submitBlit-cached");
-		void *cachedVtable = getMember<void *>(callback->v132CachedTask, 0x0);
-		if (cachedVtable && cachedCtx) {
+	// V216: only the object still installed at accelerator+0x150 has a lifetime
+	// owned by the accelerator.  The former global cache could outlive that
+	// object and turn this fallback into a use-after-free after stop/restart.
+	void *kernelTask = that ? getMember<void *>(that, 0x150) : nullptr;
+	if (invalidTask && kernelTask && kernelTask != param_3) {
+		void *kernelCtx = ensureTaskContext(kernelTask, "submitBlit-kernel");
+		void *kernelVtable = getMember<void *>(kernelTask, 0x0);
+		if (kernelVtable && kernelCtx) {
 			if (isExperimentalMonitorEnabled()) {
 				static int v138SwapCount = 0;
 				if (v138SwapCount < 24) {
 					v138SwapCount++;
-					SYSLOG("ngreen", "V138.swap[%d]: replacing task=%p with cached=%p ctx=%p",
-						   v138SwapCount, param_3, callback->v132CachedTask, cachedCtx);
+					SYSLOG("ngreen", "V216.swap[%d]: replacing task=%p with current kernel=%p ctx=%p",
+						   v138SwapCount, param_3, kernelTask, kernelCtx);
 				}
 			}
-			param_3 = callback->v132CachedTask;
+			param_3 = kernelTask;
 			invalidTask = false;
 		}
 	}
@@ -6431,8 +6449,8 @@ unsigned long Gen11::submitBlit(void *that, void *param_1, void *param_2, void *
 			static int v137SubmitInvalidCount = 0;
 			if (v137SubmitInvalidCount < 40) {
 				v137SubmitInvalidCount++;
-				SYSLOG("ngreen", "V137.submitBlit.invalid[%d]: task=%p cTask=%p c3D=%p c2D=%p mode=%d",
-					   v137SubmitInvalidCount, param_3, callback->v132CachedTask,
+				SYSLOG("ngreen", "V137.submitBlit.invalid[%d]: task=%p kernelTask=%p c3D=%p c2D=%p mode=%d",
+					   v137SubmitInvalidCount, param_3, kernelTask,
 					   callback->v131CachedBlit3DCtx, callback->v131CachedBlit2DCtx, v120Mode);
 			}
 		}

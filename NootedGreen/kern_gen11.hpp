@@ -1393,15 +1393,13 @@ private:
 	static void *createUserGPUTask(void *that);  // V132: fallback when per-user task creation returns null on spoofed RPL
 	mach_vm_address_t ocreateUserGPUTask {};
 
-	static void *igAccelTaskWithOptions(void *that);  // V132: cache successful task allocations for null-task fallback
+	static void *igAccelTaskWithOptions(void *that);  // V216: repair VF bootstrap identity and propagate allocation failures
 	mach_vm_address_t oigAccelTaskWithOptions {};
+	mach_vm_address_t igAccelTaskCounter {};  // V216: IGAccelTask::fTaskCounter, repaired before VF kernel-task construction
 
 	static bool IGAccelTaskIsKernelGPUTask(const void *that);  // V214: bootstrap the first VF task from Global GTT
 	mach_vm_address_t oIGAccelTaskIsKernelGPUTask {};
 
-	static bool IGAccelTaskInitStampAndScratchPages(void *that);  // V215: repair bootstrap task counter after retries
-	mach_vm_address_t oIGAccelTaskInitStampAndScratchPages {};
-	
 	static unsigned long submitBlit(void *that, void *param_1, void *param_2, void *param_3, bool param_4);
 	mach_vm_address_t osubmitBlit {};
 	
@@ -1503,7 +1501,6 @@ private:
 	// V131: Cached fallback contexts for spoofed RPL path to prevent NULL task submission
 	void *v131CachedBlit3DCtx {nullptr};  // Fallback 3D context when creation fails
 	void *v131CachedBlit2DCtx {nullptr};  // Fallback 2D context when creation fails
-	void *v132CachedTask {nullptr};       // Fallback IGAccelTask when per-user task creation fails
 
 	static void hwConfigureCustomAUX(AppleIntel::AppleIntelBaseController *that, bool param_1);
 	mach_vm_address_t ohwConfigureCustomAUX {};
