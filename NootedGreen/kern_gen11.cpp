@@ -82,6 +82,14 @@ constexpr uint32_t kGucActionMatchVersion = 0x5500;
 constexpr uint32_t kGucActionVfReset = 0x5507;
 constexpr uint32_t kGucActionQuerySingleKlv = 0x5509;
 constexpr uint32_t kGucActionMmioRelay = 0x5005;
+constexpr uint32_t kGucActionHost2GucSelfCfg = 0x0508;
+constexpr uint32_t kGucActionHost2GucControlCtb = 0x4509;
+constexpr uint32_t kGucSelfCfgH2GCtbAddr = 0x0902;
+constexpr uint32_t kGucSelfCfgH2GCtbDescAddr = 0x0903;
+constexpr uint32_t kGucSelfCfgH2GCtbSize = 0x0904;
+constexpr uint32_t kGucSelfCfgG2HCtbAddr = 0x0905;
+constexpr uint32_t kGucSelfCfgG2HCtbDescAddr = 0x0906;
+constexpr uint32_t kGucSelfCfgG2HCtbSize = 0x0907;
 constexpr uint32_t kVf2PfHandshakeOpcode = 0x01;
 constexpr uint32_t kVf2PfUpdateGGTTOpcode = 0x02;
 constexpr uint32_t kGucKlvGGTTStart = 0x0001;
@@ -98,6 +106,25 @@ bool gVfGGTTReady = false;
 bool gVfDirectGGTT = false;
 bool gVfBinderReady = false;
 uint32_t gVfRelayFailureLogs = 0;
+
+// V223 CTB layout.  Apple's legacy reference scheduler packs two 1 KiB rings
+// into a single 4 KiB mapping.  GuC VF self-config requires page-sized rings,
+// and i915 uses a larger receive ring to avoid event starvation.  Keep Apple's
+// 64-byte legacy descriptors as software bookkeeping, while presenting the
+// modern descriptor at legacy+0x10 where Apple's head/tail fields already live.
+constexpr uint32_t kVfCtbBackingBytes = 0x8000;
+// Bias each Apple descriptor by 0x10 so its head/tail/status window begins on
+// the same 2 KiB boundaries used by i915's modern descriptors.
+constexpr uint32_t kVfCtbH2GDescOffset = 0x07f0;
+constexpr uint32_t kVfCtbG2HDescOffset = 0x0ff0;
+constexpr uint32_t kVfCtbModernDescOffset = 0x0010;
+constexpr uint32_t kVfCtbH2GBufferOffset = 0x2000;
+constexpr uint32_t kVfCtbH2GBufferBytes = 0x1000;
+constexpr uint32_t kVfCtbG2HBufferOffset = 0x3000;
+constexpr uint32_t kVfCtbG2HBufferBytes = 0x4000;
+constexpr uint32_t kVfCtbUsedBytes = kVfCtbG2HBufferOffset + kVfCtbG2HBufferBytes;
+bool gVfCtbAllocationPending = false;
+uint32_t gVfCtbGpuBase = 0;
 
 bool vfGucSendMMIO(const uint32_t request[4], uint32_t requestLength,
                    uint32_t response[4])
@@ -162,6 +189,75 @@ bool vfGucSendMMIO(const uint32_t request[4], uint32_t requestLength,
 	}
 	IOLockUnlock(gVfGucLock);
 	return success;
+}
+
+bool vfGucSelfConfig(uint16_t key, uint16_t length, uint64_t value)
+{
+	uint32_t request[4] = {
+		kGucActionHost2GucSelfCfg,
+		(static_cast<uint32_t>(key) << 16) | length,
+		static_cast<uint32_t>(value),
+		static_cast<uint32_t>(value >> 32),
+	};
+	uint32_t response[4] = {};
+	if (!vfGucSendMMIO(request, 4, response) ||
+	    (response[0] & 0x0FFFFFFFU) != 1) {
+		SYSLOG("ngreen", "V223: GuC self-config key=0x%04x value=0x%llx failed reply=0x%08x",
+		       key, static_cast<unsigned long long>(value), response[0]);
+		return false;
+	}
+	return true;
+}
+
+bool vfConfigureModernCtb(bool g2h, uint32_t appleDescriptorAddress)
+{
+	// registerCommandTransportBuffers sends G2H first at base+PAGE_SIZE/4,
+	// followed by H2G at base.  The re-layout hook below intentionally keeps
+	// those legacy request addresses stable so the allocation base is recoverable.
+	const uint32_t base = g2h ? appleDescriptorAddress - 0x400U :
+	                           appleDescriptorAddress;
+	if (base != gVfCtbGpuBase || base < gVfGGTTBase ||
+	    static_cast<uint64_t>(base) + kVfCtbUsedBytes > gVfGGTTBase + gVfGGTTSize) {
+		SYSLOG("ngreen", "V223: rejected CTB base=0x%08x expected=0x%08x VF=[0x%llx,+0x%llx]",
+		       base, gVfCtbGpuBase,
+		       static_cast<unsigned long long>(gVfGGTTBase),
+		       static_cast<unsigned long long>(gVfGGTTSize));
+		return false;
+	}
+
+	const uint64_t descriptor = base + (g2h ? kVfCtbG2HDescOffset :
+	                                           kVfCtbH2GDescOffset) +
+	                            kVfCtbModernDescOffset;
+	const uint64_t buffer = base + (g2h ? kVfCtbG2HBufferOffset :
+	                                       kVfCtbH2GBufferOffset);
+	const uint32_t bytes = g2h ? kVfCtbG2HBufferBytes : kVfCtbH2GBufferBytes;
+	const uint16_t descriptorKey = g2h ? kGucSelfCfgG2HCtbDescAddr :
+	                                         kGucSelfCfgH2GCtbDescAddr;
+	const uint16_t bufferKey = g2h ? kGucSelfCfgG2HCtbAddr :
+	                                     kGucSelfCfgH2GCtbAddr;
+	const uint16_t sizeKey = g2h ? kGucSelfCfgG2HCtbSize :
+	                                   kGucSelfCfgH2GCtbSize;
+
+	if (!vfGucSelfConfig(descriptorKey, 2, descriptor) ||
+	    !vfGucSelfConfig(bufferKey, 2, buffer) ||
+	    !vfGucSelfConfig(sizeKey, 1, bytes))
+		return false;
+
+	if (!g2h) {
+		uint32_t request[4] = {kGucActionHost2GucControlCtb, 1, 0, 0};
+		uint32_t response[4] = {};
+		if (!vfGucSendMMIO(request, 2, response) ||
+		    (response[0] & 0x0FFFFFFFU) != 0) {
+			SYSLOG("ngreen", "V223: GuC CTB enable failed reply=0x%08x", response[0]);
+			return false;
+		}
+	}
+
+	SYSLOG("ngreen", "V223: configured %s CTB desc=0x%llx buffer=0x%llx bytes=0x%x",
+	       g2h ? "G2H" : "H2G",
+	       static_cast<unsigned long long>(descriptor),
+	       static_cast<unsigned long long>(buffer), bytes);
+	return true;
 }
 
 bool vfQueryKLV64(uint32_t key, uint64_t &value)
@@ -1516,6 +1612,14 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				// is provisioned only for the Gen11 0x190240/0x1901f0 mailbox.
 				{"__ZN13IGHardwareGuC19mmioHostToGuCActionEPKjjiPj",
 				 vfMmioHostToGuCAction, this->oVfMmioHostToGuCAction},
+				// V223: enlarge and re-layout Apple's legacy 1 KiB CTB rings before
+				// translating their registration to the modern VF KLV ABI.
+				{"__ZN21IGHardwareGuCCTBuffer19initWithAcceleratorEP22IOGraphicsAccelerator2",
+				 vfCtbInitWithAccelerator, this->oVfCtbInitWithAccelerator},
+				{"__ZN21IGHardwareGuCCTBuffer13ctChannelInitEv",
+				 vfCtbChannelInit, this->oVfCtbChannelInit},
+				{"__ZN20IGSharedMappedBuffer11withOptionsEP11IGAccelTaskmjj",
+				 vfCtbMappedBufferWithOptions, this->oVfCtbMappedBufferWithOptions},
 			};
 			PANIC_COND(!RouteRequestPlus::routeAll(patcher, index, firmwareRoute, address, size), "ngreen", "Failed to route VF GuC firmware transport");
 		}
@@ -1543,6 +1647,75 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			PANIC_COND(!vfCtbTlbPollPatch.apply(patcher, address, size), "ngreen",
 			           "V222: failed to bypass VF CTB TLB poll");
 			SYSLOG("ngreen", "V222: bypassed physical TLB poll in VF CTB initialization");
+
+			// V223: modern GuC descriptors count head/tail in dwords.  Apple's
+			// legacy CTB implementation stores the same fields in bytes.  Remove
+			// only those conversions; the ring-size field remains byte-sized and
+			// retains its /4 conversion in both send and receive paths.
+			static const uint8_t vfCtbSendReadFind[] = {
+				0x44, 0x8b, 0x69, 0x0c,
+				0x44, 0x8b, 0x71, 0x10, 0x41, 0xc1, 0xee, 0x02,
+				0x48, 0x89, 0x4d, 0xb0,
+				0x8b, 0x59, 0x14, 0x48, 0xc1, 0xeb, 0x02,
+				0x41, 0xc1, 0xed, 0x02
+			};
+			static const uint8_t vfCtbSendReadReplace[] = {
+				0x44, 0x8b, 0x69, 0x0c,
+				0x44, 0x8b, 0x71, 0x10, 0x90, 0x90, 0x90, 0x90,
+				0x48, 0x89, 0x4d, 0xb0,
+				0x8b, 0x59, 0x14, 0x90, 0x90, 0x90, 0x90,
+				0x41, 0xc1, 0xed, 0x02
+			};
+			static const uint8_t vfCtbSendStoreWaitFind[] = {
+				0x48, 0x89, 0x0c, 0xf0, 0x41, 0xc1, 0xe6, 0x02,
+				0x44, 0x89, 0x73, 0x14, 0x49, 0x8b, 0x45, 0x10
+			};
+			static const uint8_t vfCtbSendStoreWaitReplace[] = {
+				0x48, 0x89, 0x0c, 0xf0, 0x90, 0x90, 0x90, 0x90,
+				0x44, 0x89, 0x73, 0x14, 0x49, 0x8b, 0x45, 0x10
+			};
+			static const uint8_t vfCtbSendStoreNoWaitFind[] = {
+				0x00, 0x41, 0xc1, 0xe6, 0x02, 0x4c, 0x89, 0xd3,
+				0x45, 0x89, 0x72, 0x14, 0x4d, 0x89, 0xc5
+			};
+			static const uint8_t vfCtbSendStoreNoWaitReplace[] = {
+				0x00, 0x90, 0x90, 0x90, 0x90, 0x4c, 0x89, 0xd3,
+				0x45, 0x89, 0x72, 0x14, 0x4d, 0x89, 0xc5
+			};
+			static const uint8_t vfCtbRecvReadFind[] = {
+				0x4d, 0x8b, 0x46, 0x58,
+				0x41, 0x8b, 0x40, 0x10, 0x48, 0xc1, 0xe8, 0x02,
+				0x41, 0x8b, 0x48, 0x14, 0xc1, 0xe9, 0x02
+			};
+			static const uint8_t vfCtbRecvReadReplace[] = {
+				0x4d, 0x8b, 0x46, 0x58,
+				0x41, 0x8b, 0x40, 0x10, 0x90, 0x90, 0x90, 0x90,
+				0x41, 0x8b, 0x48, 0x14, 0x90, 0x90, 0x90
+			};
+			static const uint8_t vfCtbRecvStoreFind[] = {
+				0x48, 0x39, 0xd9, 0x75, 0xe6, 0xc1, 0xe2, 0x02,
+				0x41, 0x89, 0x50, 0x10
+			};
+			static const uint8_t vfCtbRecvStoreReplace[] = {
+				0x48, 0x39, 0xd9, 0x75, 0xe6, 0x90, 0x90, 0x90,
+				0x41, 0x89, 0x50, 0x10
+			};
+			LookupPatchPlus const vfCtbUnitPatches[] = {
+				{activeKext, vfCtbSendReadFind, vfCtbSendReadReplace,
+				 sizeof(vfCtbSendReadFind), 1},
+				{activeKext, vfCtbSendStoreWaitFind, vfCtbSendStoreWaitReplace,
+				 sizeof(vfCtbSendStoreWaitFind), 1},
+				{activeKext, vfCtbSendStoreNoWaitFind, vfCtbSendStoreNoWaitReplace,
+				 sizeof(vfCtbSendStoreNoWaitFind), 1},
+				{activeKext, vfCtbRecvReadFind, vfCtbRecvReadReplace,
+				 sizeof(vfCtbRecvReadFind), 1},
+				{activeKext, vfCtbRecvStoreFind, vfCtbRecvStoreReplace,
+				 sizeof(vfCtbRecvStoreFind), 1},
+			};
+			PANIC_COND(!LookupPatchPlus::applyAll(patcher, vfCtbUnitPatches,
+			                                      address, size),
+			           "ngreen", "V223: failed to convert VF CTB head/tail units");
+			SYSLOG("ngreen", "V223: converted VF CTB head/tail units to dwords");
 		}
 
 		if (!NGreen::callback->isRealTGL) {
@@ -7550,6 +7723,24 @@ bool Gen11::vfMmioHostToGuCAction(void *that, const uint32_t *request,
 		return false;
 	}
 
+	// Apple's reference scheduler registers legacy CTBs with action 0x4505.
+	// GuC VF firmware deliberately rejects that MMIO action: a VF must publish
+	// the descriptor, buffer and size through six self-config KLVs, then enable
+	// CTB transport with 0x4509.  Preserve Apple's call contract while translating
+	// only this registration action; subsequent non-registration MMIO actions use
+	// the normal VF mailbox below.
+	if (request[0] == 0x4505U) {
+		if (requestLength != 4 || request[2] != 0x40U || request[3] > 1U) {
+			SYSLOG("ngreen", "V223: rejected malformed legacy CTB registration len=%u args=%08x/%08x/%08x",
+			       requestLength, request[1], request[2], request[3]);
+			return false;
+		}
+		const bool ok = vfConfigureModernCtb(request[3] == 1U, request[1]);
+		if (response)
+			*response = 0;
+		return ok;
+	}
+
 	uint32_t reply[4] = {};
 	const bool ok = vfGucSendMMIO(request, requestLength, reply);
 	if (response)
@@ -7561,6 +7752,72 @@ bool Gen11::vfMmioHostToGuCAction(void *that, const uint32_t *request,
 		       request[0], requestLength, ok, reply[0]);
 	}
 	return ok;
+}
+
+bool Gen11::vfCtbInitWithAccelerator(void *that, void *accelerator) {
+	if (!gVfGGTTReady) {
+		return FunctionCast(vfCtbInitWithAccelerator,
+		                    callback->oVfCtbInitWithAccelerator)(that, accelerator);
+	}
+
+	gVfCtbAllocationPending = true;
+	const bool result = FunctionCast(vfCtbInitWithAccelerator,
+	                                 callback->oVfCtbInitWithAccelerator)(that,
+	                                                                        accelerator);
+	gVfCtbAllocationPending = false;
+	if (!result)
+		SYSLOG("ngreen", "V223: enlarged VF CTB initialization failed");
+	return result;
+}
+
+void *Gen11::vfCtbMappedBufferWithOptions(void *accelTask, unsigned long size,
+	                                      unsigned int type, unsigned int flags) {
+	if (gVfCtbAllocationPending && gVfGGTTReady && size == PAGE_SIZE) {
+		SYSLOG("ngreen", "V223: expanding VF CTB backing from 0x%lx to 0x%x bytes",
+		       size, kVfCtbBackingBytes);
+		size = kVfCtbBackingBytes;
+	}
+	return FunctionCast(vfCtbMappedBufferWithOptions,
+	                    callback->oVfCtbMappedBufferWithOptions)(accelTask, size,
+	                                                              type, flags);
+}
+
+void Gen11::vfCtbChannelInit(void *that) {
+	FunctionCast(vfCtbChannelInit, callback->oVfCtbChannelInit)(that);
+	if (!gVfGGTTReady || !gVfCtbAllocationPending)
+		return;
+
+	// The original routine exposes its channel-0 CPU descriptor at +0x48.
+	// Its first dword contains baseGPU+PAGE_SIZE/2, allowing the GGTT base to
+	// be recovered without relying on private IGMappedBuffer method layouts.
+	auto *baseCpu = getMember<uint8_t *>(that, 0x48);
+	if (!baseCpu) {
+		SYSLOG("ngreen", "V223: VF CTB channel initialization has no CPU mapping");
+		return;
+	}
+	const uint32_t oldH2GBuffer = *reinterpret_cast<uint32_t *>(baseCpu);
+	if (oldH2GBuffer < PAGE_SIZE / 2) {
+		SYSLOG("ngreen", "V223: invalid legacy CTB GPU address 0x%08x", oldH2GBuffer);
+		return;
+	}
+	gVfCtbGpuBase = oldH2GBuffer - PAGE_SIZE / 2;
+
+	bzero(baseCpu, kVfCtbUsedBytes);
+	auto *h2gDesc = reinterpret_cast<uint32_t *>(baseCpu + kVfCtbH2GDescOffset);
+	auto *g2hDesc = reinterpret_cast<uint32_t *>(baseCpu + kVfCtbG2HDescOffset);
+	h2gDesc[0] = gVfCtbGpuBase + kVfCtbH2GBufferOffset;
+	h2gDesc[3] = kVfCtbH2GBufferBytes;
+	g2hDesc[0] = gVfCtbGpuBase + kVfCtbG2HBufferOffset;
+	g2hDesc[3] = kVfCtbG2HBufferBytes;
+
+	getMember<uint8_t *>(that, 0x48) = reinterpret_cast<uint8_t *>(h2gDesc);
+	getMember<uint8_t *>(that, 0x50) = baseCpu + kVfCtbH2GBufferOffset;
+	getMember<uint8_t *>(that, 0x58) = reinterpret_cast<uint8_t *>(g2hDesc);
+	getMember<uint8_t *>(that, 0x60) = baseCpu + kVfCtbG2HBufferOffset;
+
+	SYSLOG("ngreen", "V223: laid out VF CTB base=0x%08x H2G=0x%x G2H=0x%x backing=0x%x",
+	       gVfCtbGpuBase, kVfCtbH2GBufferBytes, kVfCtbG2HBufferBytes,
+	       kVfCtbBackingBytes);
 }
 
 UInt8 Gen11::wrapLoadGuCBinary(void *that) {

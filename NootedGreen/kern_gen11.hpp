@@ -1376,6 +1376,13 @@ private:
 	                                  unsigned int requestLength, int timeout,
 	                                  uint32_t *response);
 	mach_vm_address_t oVfMmioHostToGuCAction {};
+	static bool vfCtbInitWithAccelerator(void *that, void *accelerator);
+	mach_vm_address_t oVfCtbInitWithAccelerator {};
+	static void vfCtbChannelInit(void *that);
+	mach_vm_address_t oVfCtbChannelInit {};
+	static void *vfCtbMappedBufferWithOptions(void *accelTask, unsigned long size,
+	                                          unsigned int type, unsigned int flags);
+	mach_vm_address_t oVfCtbMappedBufferWithOptions {};
 	
 	static int wrapPmNotifyWrapper(unsigned int a0, unsigned int a1, unsigned long long *a2, unsigned int *freq);  // GPU freq change notification
 	mach_vm_address_t orgPmNotifyWrapper {};
