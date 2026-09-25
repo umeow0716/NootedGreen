@@ -1,0 +1,47 @@
+name: Build NootedGreen kext
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - codex/tahoe-sriov-vf
+    paths:
+      - "NootedGreen/**"
+      - "NootedGreen.xcodeproj/**"
+      - "Lilu.kext/**"
+      - "MacKernelSDK/**"
+      - ".github/workflows/build-kext.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build x86_64 release kext
+        run: |
+          xcodebuild \
+            -project NootedGreen.xcodeproj \
+            -scheme NootedGreen \
+            -configuration Release \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            ARCHS=x86_64 \
+            ONLY_ACTIVE_ARCH=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+      - name: Stage artifact
+        run: |
+          KEXT_PATH="$(find "$RUNNER_TEMP/DerivedData/Build/Products/Release" -maxdepth 1 -name NootedGreen.kext -type d -print -quit)"
+          test -n "$KEXT_PATH"
+          ditto -c -k --sequesterRsrc --keepParent "$KEXT_PATH" "$RUNNER_TEMP/NootedGreen-Tahoe-x86_64.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: NootedGreen-Tahoe-x86_64
+          path: ${{ runner.temp }}/NootedGreen-Tahoe-x86_64.zip
+          if-no-files-found: error

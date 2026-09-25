@@ -21,7 +21,10 @@ PluginConfiguration ADDPR(config) {
 	nullptr,
 	0,
 	KernelVersion::Ventura,
-	KernelVersion::Sequoia,
+	// Tahoe is intentionally enabled for experimental VM bring-up.  The
+	// TGL driver payloads are still the known Sonoma binaries, so this only
+	// relaxes Lilu's host-kernel gate; binary patches remain signature gated.
+	KernelVersion::Tahoe,
 	[]() { nb.init(); },
 };
 
