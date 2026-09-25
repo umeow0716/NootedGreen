@@ -4460,6 +4460,13 @@ static void v45ScheduleDelayedCheck(void *accelInstance, unsigned delayMs);
 
 unsigned long Gen11::start(void *that,void  *param_1)
 {
+	// V220: An SR-IOV VF has no guest-owned force-wake domains or legacy
+	// execlist engine MMIO. Bootstrap the GuC VF transport before choosing the
+	// scheduler so this path can be kept separate from physical RPL hardware.
+	const bool vfActive = !NGreen::callback->isRealTGL && vfBootstrapBinder();
+	if (vfActive)
+		SYSLOG("ngreen", "V220: SR-IOV VF start path active; selecting GuC scheduler");
+
 	// V44: Configurable scheduler type.
 	// populateAccelConfig reads "GraphicsSchedulerSelect" from the IORegistry.
 	// Types: 3=IGGuC (firmware), 4=IGScheduler4, 5=IGScheduler5 (host preemptive).
@@ -4467,7 +4474,7 @@ unsigned long Gen11::start(void *that,void  *param_1)
 	// V52: Default depends on platform — real TGL uses GuC (3), RPL uses Host (5).
 	auto *service = static_cast<IOService *>(that);
 	{
-		int schedType = NGreen::callback->isRealTGL ? 3 : 5;
+		int schedType = (NGreen::callback->isRealTGL || vfActive) ? 3 : 5;
 		
 		// 1. Check boot-arg first (highest priority)
 		int bootArgSched = 0;
@@ -4535,6 +4542,11 @@ unsigned long Gen11::start(void *that,void  *param_1)
 		SYSLOG("ngreen", "V52: Real TGL — skipping MultiForceWakeSelect override");
 	}
 
+	// Linux deliberately leaves force-wake disabled for an SR-IOV VF and uses
+	// GuC submission instead of programming the legacy rings. The following
+	// workarounds are for a physical RPL GPU only; issuing them from a VF reads
+	// 0xffffffff and can make the PF attempt DMA through an invalid ring.
+	if (!vfActive) {
 	// ── V29: Apply GT workarounds + GGTT PTE diagnostics ──
 	SYSLOG("ngreen", "Pre-start: acquiring ForceWake for GT workarounds");
 	NGreen::callback->writeReg32(FORCEWAKE_RENDER_GEN9, (1 << 16) | 1);
@@ -4748,12 +4760,24 @@ unsigned long Gen11::start(void *that,void  *param_1)
 				   oldHi, oldLo, pteHi, pteLo, (unsigned long long)v116DummyPhys);
 		}
 	}
+	} else {
+		SYSLOG("ngreen", "V220: skipped physical-GT force-wake/ring setup for SR-IOV VF");
+	}
 
 	auto ret= FunctionCast(start, callback->ostart)(that,param_1);
 
 	// V221: Signal waitForStamp hook that the GFX interrupt handler is now installed.
 	Gen11::gGfxAccelStartDone = true;
 	SYSLOG("ngreen", "V221: GFX start() complete — gGfxAccelStartDone=true ret=%lu", ret);
+
+	// Do not run the legacy ring, interrupt, error-register, or delayed watchdog
+	// code below on a VF. GuC and the PF own those resources. The original Apple
+	// start routine has already published the GuC-backed accelerator.
+	if (vfActive) {
+		service->registerService(kIOServiceAsynchronous);
+		SYSLOG("ngreen", "V220: GuC VF accelerator start ret=%lu; legacy MMIO diagnostics skipped", ret);
+		return ret;
+	}
 
 	// V65: IMMEDIATELY after original start() returns, re-enable RCS0 interrupts.
 	// Apple's init code may have overwritten our pre-start settings.
@@ -7450,6 +7474,14 @@ IOReturn Gen11::wrapFBClientDoAttribute(void *fbclient, uint32_t attribute, unsi
 }
 
 unsigned long Gen11::loadGuCBinary(void *that) {
+	// The PF already owns and runs GuC for an SR-IOV VF. Report firmware as
+	// available so Apple's GuC scheduler initializes its submission transport,
+	// but never try to replace the PF-owned image or WOPCM configuration.
+	if (gVfGGTTReady) {
+		SYSLOG("ngreen", "V220: VF GuC firmware is PF-owned; skipping binary load");
+		return 1;
+	}
+
 	// V52: Real TGL can authenticate and load GuC firmware natively.
 	// RPL cannot — stub to return 1 and use host scheduling instead.
 	if (NGreen::callback->isRealTGL) {
@@ -9094,6 +9126,18 @@ void Gen11::wrapSafeForceWake(void *that, bool set, uint32_t dom) {
 }
 
 void Gen11::forceWake(void *that, bool set, uint32_t dom, uint8_t ctx) {
+	// i915 does not create force-wake domains for a VF. Runtime engine power is
+	// owned by the PF/GuC and these registers are intentionally inaccessible in
+	// BAR0, so a successful no-op is the only valid guest-side behavior.
+	if (gVfGGTTReady) {
+		static bool loggedVfNoop = false;
+		if (!loggedVfNoop) {
+			loggedVfNoop = true;
+			SYSLOG("ngreen", "V220: VF force-wake is PF-owned; using no-op path");
+		}
+		return;
+	}
+
 	// V61: silenced per-call logging — was flooding Lilu circular buffer (384+ entries/boot)
 	// preventing V60M health monitor and delayed child check entries from surviving
 	
@@ -9912,6 +9956,7 @@ void Gen11::injectAcceleratorPersonality(bool useTglNames)
 	auto *mc  = OSString::withCString("IOAccelerator");
 	auto *pv  = OSString::withCString("IOPCIDevice");
 	auto *pcm = OSString::withCString("0x03000000&0xff000000");
+	auto *pm  = OSString::withCString("0x9a498086");
 	auto *ps  = OSNumber::withNumber(static_cast<unsigned long long>(1000), 32);
 
 	dict->setObject("CFBundleIdentifier", bi);
@@ -9919,6 +9964,7 @@ void Gen11::injectAcceleratorPersonality(bool useTglNames)
 	dict->setObject("IOMatchCategory", mc);
 	dict->setObject("IOProviderClass", pv);
 	dict->setObject("IOPCIClassMatch", pcm);
+	dict->setObject("IOPCIPrimaryMatch", pm);
 	dict->setObject("IOProbeScore", ps);
 
 	OSSafeReleaseNULL(bi);
@@ -9926,6 +9972,7 @@ void Gen11::injectAcceleratorPersonality(bool useTglNames)
 	OSSafeReleaseNULL(mc);
 	OSSafeReleaseNULL(pv);
 	OSSafeReleaseNULL(pcm);
+	OSSafeReleaseNULL(pm);
 	OSSafeReleaseNULL(ps);
 
 	// V44: GPU driver bundle names — required by IOAcceleratorFamily2 and WindowServer
