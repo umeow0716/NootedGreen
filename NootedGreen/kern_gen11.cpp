@@ -9,6 +9,7 @@
 #include <IOKit/IOBufferMemoryDescriptor.h>
 #include <IOKit/IOCatalogue.h>
 #include <IOKit/IOLib.h>
+#include <IOKit/IOLocks.h>
 #include <kern/thread_call.h>
 
 // ==== 6 kextInfos: ICL fallback + dual TGL identities (com.xxxxx and com.apple) from /Library/Extensions ====
@@ -58,6 +59,285 @@ static KernelPatcher::KextInfo kextG11HWTA {"com.apple.driver.AppleIntelTGLGraph
 // No separate kextIOAF2 registration needed here.
 
 Gen11 *Gen11::callback = nullptr;
+
+namespace {
+// V217 follows the i915-sriov Wa_22018453856 path used by MEDIA_VER_FULL 13.0
+// VFs.  Such VFs have an 8 MiB BAR0 and no CPU-visible GGTT/aperture.  PTEs
+// must be sent to the PF through the GuC MMIO relay service.
+constexpr uint32_t kVfGGTTPteBase = 0x800000;
+constexpr uint32_t kVfGGTTPteBytes = 0x800000;
+constexpr uint32_t kGen11SoftScratch0 = 0x190240;
+constexpr uint32_t kGen11GucHostInterrupt = 0x1901f0;
+constexpr uint32_t kGucSendTrigger = 1;
+
+constexpr uint32_t kGucOriginGuc = 0x80000000U;
+constexpr uint32_t kGucTypeMask = 0x70000000U;
+constexpr uint32_t kGucTypeBusy = 0x30000000U;
+constexpr uint32_t kGucTypeRetry = 0x50000000U;
+constexpr uint32_t kGucTypeFailure = 0x60000000U;
+constexpr uint32_t kGucTypeSuccess = 0x70000000U;
+
+constexpr uint32_t kGucActionMatchVersion = 0x5500;
+constexpr uint32_t kGucActionVfReset = 0x5507;
+constexpr uint32_t kGucActionQuerySingleKlv = 0x5509;
+constexpr uint32_t kGucActionMmioRelay = 0x5005;
+constexpr uint32_t kVf2PfHandshakeOpcode = 0x01;
+constexpr uint32_t kVf2PfUpdateGGTTOpcode = 0x02;
+constexpr uint32_t kGucKlvGGTTStart = 0x0001;
+constexpr uint32_t kGucKlvGGTTSize = 0x0002;
+
+IOLock *gVfGucLock = nullptr;
+uint64_t *gVfGGTTShadow = nullptr;
+uint64_t gVfGGTTBase = 0;
+uint64_t gVfGGTTSize = 0;
+void *gVfGlobalPageTable = nullptr;
+bool gVfBinderReady = false;
+uint32_t gVfRelayFailureLogs = 0;
+
+bool vfGucSendMMIO(const uint32_t request[4], uint32_t requestLength,
+                   uint32_t response[4])
+{
+	auto *cb = NGreen::callback;
+	if (!cb || requestLength == 0 || requestLength > 4)
+		return false;
+	cb->setRMMIOIfNecessary();
+
+	if (!gVfGucLock)
+		gVfGucLock = IOLockAlloc();
+	if (!gVfGucLock)
+		return false;
+
+	IOLockLock(gVfGucLock);
+	bool success = false;
+	for (uint32_t retry = 0; retry < 4 && !success; retry++) {
+		for (uint32_t i = 0; i < requestLength; i++)
+			cb->writeReg32(kGen11SoftScratch0 + i * 4, request[i]);
+
+		// Match intel_guc_send_mmio(): posting read, notify, then wait first for
+		// GuC ownership and finally for a non-BUSY response.
+		(void)cb->readReg32(kGen11SoftScratch0 + (requestLength - 1) * 4);
+		cb->writeReg32(kGen11GucHostInterrupt, kGucSendTrigger);
+
+		uint32_t header = 0;
+		for (uint32_t i = 0; i < 1000; i++) {
+			header = cb->readReg32(kGen11SoftScratch0);
+			if ((header & kGucOriginGuc) != 0)
+				break;
+			IODelay(10);
+		}
+		if ((header & kGucOriginGuc) == 0)
+			continue;
+
+		if ((header & kGucTypeMask) == kGucTypeBusy) {
+			for (uint32_t i = 0; i < 2000; i++) {
+				header = cb->readReg32(kGen11SoftScratch0);
+				if ((header & kGucOriginGuc) == 0 ||
+				    (header & kGucTypeMask) != kGucTypeBusy)
+					break;
+				IODelay(10);
+			}
+		}
+
+		if ((header & kGucOriginGuc) == 0)
+			continue;
+		if ((header & kGucTypeMask) == kGucTypeRetry)
+			continue;
+		if ((header & kGucTypeMask) == kGucTypeFailure) {
+			if (gVfRelayFailureLogs++ < 16)
+				SYSLOG("ngreen", "V217: GuC MMIO request 0x%08x failed: 0x%08x",
+				       request[0], header);
+			break;
+		}
+		if ((header & kGucTypeMask) != kGucTypeSuccess)
+			break;
+
+		for (uint32_t i = 0; i < 4; i++)
+			response[i] = cb->readReg32(kGen11SoftScratch0 + i * 4);
+		success = true;
+	}
+	IOLockUnlock(gVfGucLock);
+	return success;
+}
+
+bool vfQueryKLV64(uint32_t key, uint64_t &value)
+{
+	uint32_t request[4] = {kGucActionQuerySingleKlv, key, 0, 0};
+	uint32_t response[4] = {};
+	if (!vfGucSendMMIO(request, 2, response) || (response[0] & 0xFFFFU) != 2)
+		return false;
+	value = static_cast<uint64_t>(response[1]) |
+	        (static_cast<uint64_t>(response[2]) << 32);
+	return true;
+}
+
+bool vfBootstrapBinder()
+{
+	if (gVfBinderReady)
+		return true;
+
+	uint32_t request[4] = {kGucActionVfReset, 0, 0, 0};
+	uint32_t response[4] = {};
+	if (!vfGucSendMMIO(request, 1, response)) {
+		SYSLOG("ngreen", "V217: GuC VF reset failed");
+		return false;
+	}
+
+	// Current i915-sriov-dkms ABI: GuC VF 1.1 and VF/PF 1.0.
+	request[0] = kGucActionMatchVersion;
+	request[1] = (1U << 16) | (1U << 8);
+	if (!vfGucSendMMIO(request, 2, response) ||
+	    ((response[1] >> 16) & 0xFFU) != 1 ||
+	    ((response[1] >> 8) & 0xFFU) != 1) {
+		SYSLOG("ngreen", "V217: GuC VF ABI 1.1 handshake failed (reply=0x%08x)",
+		       response[1]);
+		return false;
+	}
+
+	if (!vfQueryKLV64(kGucKlvGGTTStart, gVfGGTTBase) ||
+	    !vfQueryKLV64(kGucKlvGGTTSize, gVfGGTTSize) ||
+	    gVfGGTTSize == 0 || gVfGGTTBase >= 0x100000000ULL ||
+	    gVfGGTTSize > 0x100000000ULL - gVfGGTTBase) {
+		SYSLOG("ngreen", "V217: invalid GuC VF GGTT assignment base=0x%llx size=0x%llx",
+		       static_cast<unsigned long long>(gVfGGTTBase),
+		       static_cast<unsigned long long>(gVfGGTTSize));
+		return false;
+	}
+
+	request[0] = (0xFU << 24) | (kVf2PfHandshakeOpcode << 16) |
+	             kGucActionMmioRelay;
+	request[1] = 1U << 16;
+	request[2] = 0;
+	request[3] = 0;
+	if (!vfGucSendMMIO(request, 4, response) ||
+	    ((response[0] >> 24) & 0xFU) != 0xFU || response[1] != (1U << 16)) {
+		SYSLOG("ngreen", "V217: VF/PF MMIO ABI 1.0 handshake failed (0x%08x 0x%08x)",
+		       response[0], response[1]);
+		return false;
+	}
+
+	if (!gVfGGTTShadow) {
+		gVfGGTTShadow = static_cast<uint64_t *>(IOMallocZero(kVfGGTTPteBytes));
+		if (!gVfGGTTShadow) {
+			SYSLOG("ngreen", "V217: failed to allocate 8 MiB VF GGTT shadow");
+			return false;
+		}
+	}
+
+	gVfBinderReady = true;
+	SYSLOG("ngreen", "V217: GuC VF GGTT binder ready, range=[0x%llx,+0x%llx] shadow=%p",
+	       static_cast<unsigned long long>(gVfGGTTBase),
+	       static_cast<unsigned long long>(gVfGGTTSize), gVfGGTTShadow);
+	return true;
+}
+
+bool vfRelayPTEs(uint32_t offset, uint32_t mode, uint32_t copies, uint64_t pte)
+{
+	if (!gVfBinderReady || copies > 1023)
+		return false;
+	uint32_t request[4] = {
+		(0xFU << 24) | (kVf2PfUpdateGGTTOpcode << 16) | kGucActionMmioRelay,
+		(offset << 12) | ((mode & 3U) << 10) | copies,
+		static_cast<uint32_t>(pte),
+		static_cast<uint32_t>(pte >> 32),
+	};
+	uint32_t response[4] = {};
+	if (!vfGucSendMMIO(request, 4, response) ||
+	    ((response[0] >> 24) & 0xFU) != 0xFU ||
+	    (response[0] & 0xFFFFFFU) != copies + 1) {
+		if (gVfRelayFailureLogs++ < 16)
+			SYSLOG("ngreen", "V217: GGTT relay failed off=0x%x mode=%u copies=%u reply=0x%08x",
+			       offset, mode, copies, response[0]);
+		return false;
+	}
+	return true;
+}
+
+bool vfSyncShadowRange(const NGIGAddressRange &range)
+{
+	if (!gVfBinderReady || !gVfGGTTShadow || range.length == 0)
+		return range.length == 0;
+	if ((range.start & 0xFFFULL) != 0 || (range.length & 0xFFFULL) != 0 ||
+	    range.start < gVfGGTTBase || range.length > gVfGGTTSize ||
+	    range.start - gVfGGTTBase > gVfGGTTSize - range.length) {
+		if (gVfRelayFailureLogs++ < 16)
+			SYSLOG("ngreen", "V217: refusing GGTT range outside VF assignment [0x%llx,+0x%llx]",
+			       static_cast<unsigned long long>(range.start),
+			       static_cast<unsigned long long>(range.length));
+		return false;
+	}
+
+	uint32_t globalPage = static_cast<uint32_t>(range.start >> 12);
+	uint32_t relativePage = static_cast<uint32_t>((range.start - gVfGGTTBase) >> 12);
+	uint32_t remaining = static_cast<uint32_t>(range.length >> 12);
+	while (remaining) {
+		const uint64_t first = gVfGGTTShadow[globalPage];
+		uint32_t run = 1;
+		uint32_t mode = 0; // duplicate
+		if (remaining > 1) {
+			const uint64_t next = gVfGGTTShadow[globalPage + 1];
+			const uint64_t addressMask = 0x00007FFFFFF000ULL;
+			if ((next & ~addressMask) == (first & ~addressMask) &&
+			    (next & addressMask) == (first & addressMask) + 0x1000ULL)
+				mode = 1; // replicate consecutive physical pages
+		}
+		while (run < remaining && run < 1024) {
+			const uint64_t candidate = gVfGGTTShadow[globalPage + run];
+			if (mode == 0) {
+				if (candidate != first) break;
+			} else {
+				const uint64_t addressMask = 0x00007FFFFFF000ULL;
+				if ((candidate & ~addressMask) != (first & ~addressMask) ||
+				    (candidate & addressMask) != (first & addressMask) + 0x1000ULL * run)
+					break;
+			}
+			run++;
+		}
+		if (!vfRelayPTEs(relativePage, mode, run - 1, first))
+			return false;
+		globalPage += run;
+		relativePage += run;
+		remaining -= run;
+	}
+	return true;
+}
+} // namespace
+
+bool ngVfGGTTBinderActive()
+{
+	return gVfBinderReady;
+}
+
+bool ngVfGGTTRead32(unsigned long reg, UInt32 &value)
+{
+	if (!gVfBinderReady || !gVfGGTTShadow || reg < kVfGGTTPteBase ||
+	    reg >= kVfGGTTPteBase + kVfGGTTPteBytes)
+		return false;
+	const uint32_t byteOffset = static_cast<uint32_t>(reg - kVfGGTTPteBase);
+	const uint64_t pte = gVfGGTTShadow[byteOffset >> 3];
+	value = (byteOffset & 4U) ? static_cast<uint32_t>(pte >> 32) :
+	                           static_cast<uint32_t>(pte);
+	return true;
+}
+
+bool ngVfGGTTWrite32(unsigned long reg, UInt32 value)
+{
+	if (!gVfBinderReady || !gVfGGTTShadow || reg < kVfGGTTPteBase ||
+	    reg >= kVfGGTTPteBase + kVfGGTTPteBytes)
+		return false;
+	const uint32_t byteOffset = static_cast<uint32_t>(reg - kVfGGTTPteBase);
+	const uint32_t globalPage = byteOffset >> 3;
+	uint64_t &pte = gVfGGTTShadow[globalPage];
+	if (byteOffset & 4U) {
+		pte = (pte & 0xFFFFFFFFULL) | (static_cast<uint64_t>(value) << 32);
+		const uint64_t address = static_cast<uint64_t>(globalPage) << 12;
+		if (address >= gVfGGTTBase && address - gVfGGTTBase < gVfGGTTSize)
+			(void)vfRelayPTEs(static_cast<uint32_t>((address - gVfGGTTBase) >> 12),
+			                  0, 0, pte);
+	} else {
+		pte = (pte & 0xFFFFFFFF00000000ULL) | value;
+	}
+	return true;
+}
 
 void Gen11::init() {
 	callback = this;
@@ -1032,14 +1312,27 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		const bool forceFullMTL = shouldForceFullMetalPath();
 
 		RouteRequestPlus requests[] = {
-			// V213: A VF has no native stolen-memory size, so initSegments leaves its
-			// first GGTT range at {0, 0}.  Apple's inclusive end calculation then
-			// underflows to UINT64_MAX and writes beyond the 16 MiB BAR0 mapping.
-			// Clamp only the spoofed RPL path to the 4 GiB aperture represented by
-			// the 8 MiB GGTT window at BAR0+8 MiB (1M 64-bit PTEs).
+			// V217: Raptor Lake VFs use Wa_22018453856.  Query the PF-provisioned
+			// GGTT range, replace Apple's zero/stolen-derived allocator ranges, keep
+			// a software PTE shadow, and relay mutations to the PF through GuC.
+			{"__ZN15IGMemoryManager12initSegmentsEv",
+			 IGMemoryManagerInitSegments,
+			 this->oIGMemoryManagerInitSegments},
 			{"__ZN25IGHardwareGlobalPageTable15initWithOptionsEP16IntelAcceleratorRK14IGAddressRangePvyj",
 			 IGHardwareGlobalPageTableInitWithOptions,
 			 this->oIGHardwareGlobalPageTableInitWithOptions},
+			{"__ZN25IGHardwareGlobalPageTable8mapRangeERK14IGAddressRangeyy",
+			 IGHardwareGlobalPageTableMapRange,
+			 this->oIGHardwareGlobalPageTableMapRange},
+			{"__ZN25IGHardwareGlobalPageTable15mapRangeRotatedER33IGAddressRangeRotatedPageIteratorR25IGPhysicalSegmentIteratory",
+			 IGHardwareGlobalPageTableMapRangeRotated,
+			 this->oIGHardwareGlobalPageTableMapRangeRotated},
+			{"__ZN25IGHardwareGlobalPageTable10unmapRangeERK14IGAddressRange",
+			 IGHardwareGlobalPageTableUnmapRange,
+			 this->oIGHardwareGlobalPageTableUnmapRange},
+			{"__ZN25IGHardwareGlobalPageTable13mapRangeDummyERK14IGAddressRangey",
+			 IGHardwareGlobalPageTableMapRangeDummy,
+			 this->oIGHardwareGlobalPageTableMapRangeDummy},
 			
 			 {"__ZN16IntelAccelerator20_PAVPCommandCallbackEP8OSObject22PAVPSessionCommandID_tjPj", wrapPavpSessionCallback, this->orgPavpSessionCallback},
 			
@@ -1637,6 +1930,45 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
     return false;
 }
 
+bool Gen11::IGMemoryManagerInitSegments(void *that)
+{
+	const bool original = FunctionCast(IGMemoryManagerInitSegments,
+	                                   callback->oIGMemoryManagerInitSegments)(that);
+	if (!original || NGreen::callback->isRealTGL)
+		return original;
+	if (!vfBootstrapBinder()) {
+		SYSLOG("ngreen", "V217: aborting VF memory-manager init without GuC GGTT binder");
+		return false;
+	}
+
+	// Tahoe TGL initSegments derives the first two 32-bit ranges from stolen
+	// memory and BAR2.  A VF has neither.  Linux solves the same mismatch by
+	// ballooning everything outside the PF-assigned interval; express that
+	// interval directly in Apple's range fields.
+	getMember<uint64_t>(that, 0xA0) = gVfGGTTBase;
+	getMember<uint64_t>(that, 0xA8) = gVfGGTTSize;
+	getMember<uint64_t>(that, 0xB0) = gVfGGTTBase;
+	getMember<uint64_t>(that, 0xB8) = gVfGGTTSize;
+
+	// Keep the driver's traditional 1 GiB lower guard for its unified 32-bit
+	// allocator, but intersect the upper end with the VF allocation.
+	const uint64_t vfEnd = gVfGGTTBase + gVfGGTTSize;
+	const uint64_t unifiedStart = gVfGGTTBase > 0x40000000ULL ?
+	                              gVfGGTTBase : 0x40000000ULL;
+	const uint64_t unifiedEnd = vfEnd < 0xFE000000ULL ? vfEnd : 0xFE000000ULL;
+	if (unifiedEnd > unifiedStart) {
+		getMember<uint64_t>(that, 0xC0) = unifiedStart;
+		getMember<uint64_t>(that, 0xC8) = unifiedEnd - unifiedStart;
+	}
+
+	SYSLOG("ngreen", "V217: patched IGMemoryManager GGTT ranges global=[0x%llx,+0x%llx] unified=[0x%llx,+0x%llx]",
+	       static_cast<unsigned long long>(gVfGGTTBase),
+	       static_cast<unsigned long long>(gVfGGTTSize),
+	       static_cast<unsigned long long>(getMember<uint64_t>(that, 0xC0)),
+	       static_cast<unsigned long long>(getMember<uint64_t>(that, 0xC8)));
+	return true;
+}
+
 bool Gen11::IGHardwareGlobalPageTableInitWithOptions(void *that,
                                                      void *accelerator,
                                                      const NGIGAddressRange &range,
@@ -1644,31 +1976,99 @@ bool Gen11::IGHardwareGlobalPageTableInitWithOptions(void *that,
                                                      uint64_t dummyPage,
                                                      uint32_t options)
 {
-	constexpr uint64_t vfGGTTBytes = 0x100000000ULL;
-	NGIGAddressRange corrected = range;
+	if (NGreen::callback->isRealTGL)
+		return FunctionCast(IGHardwareGlobalPageTableInitWithOptions,
+		                    callback->oIGHardwareGlobalPageTableInitWithOptions)(that,
+		                                                                         accelerator,
+		                                                                         range,
+		                                                                         mmioBase,
+		                                                                         dummyPage,
+		                                                                         options);
+	if (!vfBootstrapBinder())
+		return false;
 
-	if (!NGreen::callback->isRealTGL) {
-		const bool invalidStart = corrected.start >= vfGGTTBytes;
-		const bool invalidLength = corrected.length == 0 ||
-		                           (!invalidStart && corrected.length > vfGGTTBytes - corrected.start);
-		if (invalidStart || invalidLength) {
-			SYSLOG("ngreen",
-			       "V213: clamping VF GGTT range [%llx, +%llx] to [0, +%llx]",
-			       static_cast<unsigned long long>(range.start),
-			       static_cast<unsigned long long>(range.length),
-			       static_cast<unsigned long long>(vfGGTTBytes));
-			corrected.start = 0;
-			corrected.length = vfGGTTBytes;
-		}
+	// Preserve Apple's base-class/object setup while making both of its direct
+	// PTE-clearing loops empty.  Linux intentionally installs nop_clear_range
+	// for this VF: the PF owns clearing and the upper BAR0 PTE window is absent.
+	const NGIGAddressRange noDirectClear {UINT64_MAX, 0x100000000ULL};
+	const bool result = FunctionCast(IGHardwareGlobalPageTableInitWithOptions,
+	                                 callback->oIGHardwareGlobalPageTableInitWithOptions)(that,
+	                                                                                      accelerator,
+	                                                                                      noDirectClear,
+	                                                                                      mmioBase,
+	                                                                                      dummyPage,
+	                                                                                      options);
+	if (!result)
+		return false;
+
+	getMember<uint64_t *>(that, 0x28) = gVfGGTTShadow;
+	gVfGlobalPageTable = that;
+	SYSLOG("ngreen", "V217: global GGTT shadow installed; Apple range=[0x%llx,+0x%llx] PF=[0x%llx,+0x%llx]",
+	       static_cast<unsigned long long>(range.start),
+	       static_cast<unsigned long long>(range.length),
+	       static_cast<unsigned long long>(gVfGGTTBase),
+	       static_cast<unsigned long long>(gVfGGTTSize));
+	return true;
+}
+
+bool Gen11::IGHardwareGlobalPageTableMapRange(void *that,
+                                              const NGIGAddressRange &range,
+                                              uint64_t physical,
+                                              uint64_t flags)
+{
+	const bool result = FunctionCast(IGHardwareGlobalPageTableMapRange,
+	                                 callback->oIGHardwareGlobalPageTableMapRange)(that,
+	                                                                                range,
+	                                                                                physical,
+	                                                                                flags);
+	if (!result || NGreen::callback->isRealTGL || that != gVfGlobalPageTable)
+		return result;
+	return vfSyncShadowRange(range);
+}
+
+bool Gen11::IGHardwareGlobalPageTableMapRangeRotated(void *that,
+                                                     void *rangeIterator,
+                                                     void *physicalIterator,
+                                                     uint64_t flags)
+{
+	NGIGAddressRange affected {};
+	if (rangeIterator) {
+		auto *range = getMember<NGIGAddressRange *>(rangeIterator, 0);
+		if (range) affected = *range;
 	}
+	const bool result = FunctionCast(IGHardwareGlobalPageTableMapRangeRotated,
+	                                 callback->oIGHardwareGlobalPageTableMapRangeRotated)(that,
+	                                                                                       rangeIterator,
+	                                                                                       physicalIterator,
+	                                                                                       flags);
+	if (!result || NGreen::callback->isRealTGL || that != gVfGlobalPageTable)
+		return result;
+	return affected.length != 0 && vfSyncShadowRange(affected);
+}
 
-	return FunctionCast(IGHardwareGlobalPageTableInitWithOptions,
-	                    callback->oIGHardwareGlobalPageTableInitWithOptions)(that,
-	                                                                         accelerator,
-	                                                                         corrected,
-	                                                                         mmioBase,
-	                                                                         dummyPage,
-	                                                                         options);
+void Gen11::IGHardwareGlobalPageTableUnmapRange(void *that,
+                                                const NGIGAddressRange &range)
+{
+	FunctionCast(IGHardwareGlobalPageTableUnmapRange,
+	             callback->oIGHardwareGlobalPageTableUnmapRange)(that, range);
+	if (!NGreen::callback->isRealTGL && that == gVfGlobalPageTable &&
+	    !vfSyncShadowRange(range) && gVfRelayFailureLogs++ < 16)
+		SYSLOG("ngreen", "V217: unmap relay failed [0x%llx,+0x%llx]",
+		       static_cast<unsigned long long>(range.start),
+		       static_cast<unsigned long long>(range.length));
+}
+
+bool Gen11::IGHardwareGlobalPageTableMapRangeDummy(void *that,
+                                                   const NGIGAddressRange &range,
+                                                   uint64_t flags)
+{
+	const bool result = FunctionCast(IGHardwareGlobalPageTableMapRangeDummy,
+	                                 callback->oIGHardwareGlobalPageTableMapRangeDummy)(that,
+	                                                                                     range,
+	                                                                                     flags);
+	if (!result || NGreen::callback->isRealTGL || that != gVfGlobalPageTable)
+		return result;
+	return vfSyncShadowRange(range);
 }
 
 bool Gen11::IGAccelTaskIsKernelGPUTask(const void *that)
@@ -4254,7 +4654,7 @@ unsigned long Gen11::start(void *that,void  *param_1)
 	// (ring buffer at addr 0, PLANE_SURF=0, etc.) reads stolen mem → LLC UCE → MCE.
 	// Fix: redirect GGTT[0] to a wired zero-page so stray VA-0 reads are harmless.
 	// Real TGL keeps native GGTT mapping; spoof path needs this MCE guard.
-	if (!NGreen::callback->isRealTGL) {
+	if (!NGreen::callback->isRealTGL && !ngVfGGTTBinderActive()) {
 		if (!v116DummyBuf) {
 			v116DummyBuf = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(
 				kernel_task,
@@ -5161,7 +5561,7 @@ void Gen11::populateResetRegisterList(void *that)
 	// so the slot gets wiped by stopGraphicsEngine and never repaired by V508.
 	auto *cb = NGreen::callback;
 	void *ctx = cb->lastRCSCtx;
-	if (!cb->isRealTGL && ctx) {
+	if (!cb->isRealTGL && !ngVfGGTTBinderActive() && ctx) {
 		uint32_t lrcaGpuVa = getMember<uint32_t>(ctx, 0x89) & 0xFFFFF000;
 		if (lrcaGpuVa) {
 			uint32_t ctxPage1Idx = (lrcaGpuVa >> 12) + 1;
@@ -5898,6 +6298,10 @@ uint64_t Gen11::IGHardwareContextinitWithOptions(void *that, void *task, const v
 	                             callback->oIGHardwareContextinitWithOptions)(that, task, params, arg);
 	auto *cb = NGreen::callback;
 	if (cb->isRealTGL || !ret) return ret;
+	// Linux exposes no GMADR aperture on SR-IOV VFs.  The legacy V509 repair
+	// temporarily remaps GGTT[0] and accesses BAR2, so it is invalid on the GuC
+	// binder path and must never run there.
+	if (ngVfGGTTBinderActive()) return ret;
 
 	uint8_t engType = getMember<uint8_t>(that, 0x6c);
 	if (engType != 0) return ret;  // only repair RCS (case 0)
@@ -5987,6 +6391,7 @@ void *Gen11::IGHardwareContextwithOptions(void *task, const void *params, uint8_
 	                         callback->oIGHardwareContextwithOptions)(task, params, arg);
 	auto *cb = NGreen::callback;
 	if (cb->isRealTGL || !ctx) return ctx;
+	if (ngVfGGTTBinderActive()) return ctx;
 
 	uint8_t engType = getMember<uint8_t>(ctx, 0x6c);
 
@@ -8337,7 +8742,7 @@ void Gen11::v71EmrEnforcer(thread_call_param_t param0, thread_call_param_t param
 	// the whole package. We restore GGTT[0] to a wired zero-page (allocated at start) on
 	// every enforcer tick so the stolen-mem mapping can never persist.
 	// PTE flags: bits[11:0]=0x9 → present | global (TGL/ICL GTT format, no cache attrs).
-	if (v116DummyPhys) {
+	if (v116DummyPhys && !ngVfGGTTBinderActive()) {
 		uint32_t wantLo = (uint32_t)(v116DummyPhys & 0xFFFFF000ULL) | 0x9;
 		uint32_t cur0Lo = NGreen::callback->readReg32(GGTT_PTE_LO(0));
 		if (cur0Lo != wantLo) {

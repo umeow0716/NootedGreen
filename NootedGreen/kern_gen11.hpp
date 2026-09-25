@@ -1801,6 +1801,29 @@ private:
 	                                                    uint32_t options);
 	mach_vm_address_t oIGHardwareGlobalPageTableInitWithOptions {};
 
+	// V217: Gen12 VF GGTT binder bridge.  Apple keeps its normal Gen11 page-table
+	// algorithms, but writes into a software shadow; completed ranges are then
+	// committed through the GuC VF2PF MMIO relay required by Raptor Lake VFs.
+	static bool IGMemoryManagerInitSegments(void *that);
+	mach_vm_address_t oIGMemoryManagerInitSegments {};
+	static bool IGHardwareGlobalPageTableMapRange(void *that,
+	                                              const NGIGAddressRange &range,
+	                                              uint64_t physical,
+	                                              uint64_t flags);
+	mach_vm_address_t oIGHardwareGlobalPageTableMapRange {};
+	static bool IGHardwareGlobalPageTableMapRangeRotated(void *that,
+	                                                     void *rangeIterator,
+	                                                     void *physicalIterator,
+	                                                     uint64_t flags);
+	mach_vm_address_t oIGHardwareGlobalPageTableMapRangeRotated {};
+	static void IGHardwareGlobalPageTableUnmapRange(void *that,
+	                                                const NGIGAddressRange &range);
+	mach_vm_address_t oIGHardwareGlobalPageTableUnmapRange {};
+	static bool IGHardwareGlobalPageTableMapRangeDummy(void *that,
+	                                                   const NGIGAddressRange &range,
+	                                                   uint64_t flags);
+	mach_vm_address_t oIGHardwareGlobalPageTableMapRangeDummy {};
+
 	static void setupPlanarSurfaceDBUF();  // DBUF allocation for planar (NV12/P010) surfaces
 	mach_vm_address_t osetupPlanarSurfaceDBUF {};
 	

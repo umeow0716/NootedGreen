@@ -29,6 +29,14 @@ struct intel_ip_version {
 	UInt8 step;
 };
 
+// Gen12 SR-IOV VFs using the GuC GGTT binder do not expose the GGTT PTE
+// window in BAR0.  Gen11 owns the VF shadow/relay implementation, while these
+// two small shims let the shared MMIO helpers redirect legacy diagnostic and
+// repair accesses away from the inaccessible BAR0+8 MiB window.
+bool ngVfGGTTRead32(unsigned long reg, UInt32 &value);
+bool ngVfGGTTWrite32(unsigned long reg, UInt32 value);
+bool ngVfGGTTBinderActive();
+
 constexpr UInt32 mmPCIE_INDEX2 = 0xE;
 constexpr UInt32 mmPCIE_DATA2 = 0xF;
 /*
@@ -78,6 +86,8 @@ class NGreen {
 	// Public MMIO register access (used by display link training, display merge, etc.)
 	UInt32 readReg32(unsigned long reg) {
 		if (!rmmio || !rmmioPtr) return 0;
+		UInt32 vfValue = 0;
+		if (!isRealTGL && ngVfGGTTRead32(reg, vfValue)) return vfValue;
 		if (reg + sizeof(uint32_t) <= this->rmmio->getLength()) {
 			return this->rmmioPtr[reg >> 2];
 		} else {
@@ -89,6 +99,7 @@ class NGreen {
 	// reg = byte offset (i915 convention). rmmioPtr is uint32_t* so divide by 4.
 	void writeReg32(unsigned long reg, UInt32 val) {
 		if (!rmmio || !rmmioPtr) return;
+		if (!isRealTGL && ngVfGGTTWrite32(reg, val)) return;
 		static int v93MmioLogCount = 0;
 
 		// Safety guard: prevent enabled display planes from being armed with SURF=0.
@@ -349,4 +360,3 @@ struct DPCDCap16 { // 16 bytes
 	// Detailed information can be found in the specification
 	uint8_t others[12] {};
 };
-
