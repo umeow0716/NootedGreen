@@ -107,6 +107,13 @@ constexpr uint32_t kGen12DoorbellCount = 256;
 constexpr uint16_t kGen12DoorbellsPerSQIDI = 32;
 constexpr uint8_t kGen12SQIDICount = 8;
 
+// Tahoe's IGHardwareGuC layout.  The two 8 x 256-bit allocator maps occupy
+// [0xdc, 0x1dc), followed by the steal cursor and the fixed 256-entry owner
+// table.  Keep these bounds explicit: initDoorbells() trusts DISTRDB and will
+// otherwise clear far beyond the 0xa58-byte object when a VF reads 0xffffffff.
+constexpr size_t kGucDoorbellAllocatorOffset = 0xDC;
+constexpr size_t kGucDoorbellTopologyOffset = 0x9E0;
+
 IOLock *gVfGucLock = nullptr;
 uint64_t *gVfGGTTShadow = nullptr;
 uint64_t gVfGGTTBase = 0;
@@ -1651,6 +1658,11 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				// is provisioned only for the Gen11 0x190240/0x1901f0 mailbox.
 				{"__ZN13IGHardwareGuC19mmioHostToGuCActionEPKjjiPj",
 				 vfMmioHostToGuCAction, this->oVfMmioHostToGuCAction},
+				// V227: initDoorbells consumes DISTRDB before any submission.
+				// Bypass the stock routine for a VF so an all-ones MMIO read
+				// cannot turn into a 16 x 256 topology and corrupt the object.
+				{"__ZN13IGHardwareGuC13initDoorbellsEv",
+				 vfInitDoorbells, this->oVfInitDoorbells},
 				// V226: DISTRDB (0xd08) is outside a VF's MMIO allowlist and
 				// reads as all ones.  Feed Apple's allocator the real Gen12
 				// eight-by-32 topology after validating the VF's GuC KLV quota.
@@ -7971,6 +7983,40 @@ bool Gen11::vfReadDoorbellSQIDIConfig(void *that) {
 		       kGen12DoorbellCount);
 	}
 	return true;
+}
+
+void Gen11::vfInitDoorbells(void *that) {
+	if (NGreen::callback->isRealTGL) {
+		FunctionCast(vfInitDoorbells, callback->oVfInitDoorbells)(that);
+		return;
+	}
+
+	// IntelAccelerator::start normally completed this before constructing the
+	// scheduler.  Retrying here makes the ordering requirement explicit and
+	// prevents a transiently-unready VF from falling through to DISTRDB.
+	if (!gVfGGTTReady && !vfBootstrapBinder()) {
+		SYSLOG("ngreen", "V227: refusing physical doorbell discovery without VF bootstrap");
+		return;
+	}
+	if (gVfDoorbellCount != kGen12DoorbellCount) {
+		SYSLOG("ngreen", "V227: unsupported VF doorbell quota %u during allocator init",
+		       gVfDoorbellCount);
+		return;
+	}
+
+	// OSObject allocations start zeroed, but make the complete allocator state
+	// deterministic in case the scheduler object is ever reinitialized.  The
+	// upper bound deliberately stops before the topology fields at +0x9e0.
+	bzero(reinterpret_cast<uint8_t *>(that) + kGucDoorbellAllocatorOffset,
+	      kGucDoorbellTopologyOffset - kGucDoorbellAllocatorOffset);
+	getMember<uint16_t>(that, 0x9E0) = kGen12DoorbellsPerSQIDI;
+	getMember<uint8_t>(that, 0x9E2) = kGen12SQIDICount;
+	getMember<uint8_t>(that, 0x9E3) = kGen12SQIDICount;
+
+	SYSLOG("ngreen", "V227: initialized VF doorbell allocator %u SQIDIs x %u = %u",
+	       static_cast<unsigned int>(kGen12SQIDICount),
+	       static_cast<unsigned int>(kGen12DoorbellsPerSQIDI),
+	       kGen12DoorbellCount);
 }
 
 bool Gen11::vfCtbInitWithAccelerator(void *that, void *accelerator) {
