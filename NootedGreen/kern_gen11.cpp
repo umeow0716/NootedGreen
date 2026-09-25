@@ -1511,7 +1511,7 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			// Without this hook, no GuC binary loads at all in coexist mode → ring dead.
 			RouteRequestPlus firmwareRoute[] = {
 				{"__ZN13IGHardwareGuC13loadGuCBinaryEv", loadGuCBinary, this->oloadGuCBinary},
-				// V221: scheduler 4 uses the Gen11 reference GuC transport, but its
+				// V222: scheduler 4 uses the Gen11 reference GuC transport, but its
 				// stock MMIO helper writes the legacy 0xc180 scratch registers.  A VF
 				// is provisioned only for the Gen11 0x190240/0x1901f0 mailbox.
 				{"__ZN13IGHardwareGuC19mmioHostToGuCActionEPKjjiPj",
@@ -1520,7 +1520,7 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			PANIC_COND(!RouteRequestPlus::routeAll(patcher, index, firmwareRoute, address, size), "ngreen", "Failed to route VF GuC firmware transport");
 		}
 
-		// V221: IGHardwareGuCCTBuffer::initWithAccelerator invalidates the
+		// V222: IGHardwareGuCCTBuffer::initWithAccelerator invalidates the
 		// physical-GT TLB through 0xcee8 and polls that register with no timeout.
 		// VF reads outside its runtime allowlist return all ones, so the stock loop
 		// can never terminate.  Preserve the invalidate write and first posting read,
@@ -1541,8 +1541,8 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				sizeof(vfCtbTlbPollFind), 1
 			};
 			PANIC_COND(!vfCtbTlbPollPatch.apply(patcher, address, size), "ngreen",
-			           "V221: failed to bypass VF CTB TLB poll");
-			SYSLOG("ngreen", "V221: bypassed physical TLB poll in VF CTB initialization");
+			           "V222: failed to bypass VF CTB TLB poll");
+			SYSLOG("ngreen", "V222: bypassed physical TLB poll in VF CTB initialization");
 		}
 
 		if (!NGreen::callback->isRealTGL) {
@@ -4490,12 +4490,12 @@ static void v45ScheduleDelayedCheck(void *accelInstance, unsigned delayMs);
 
 unsigned long Gen11::start(void *that,void  *param_1)
 {
-	// V220/V221: An SR-IOV VF has no guest-owned force-wake domains or legacy
+	// V220/V222: An SR-IOV VF has no guest-owned force-wake domains or legacy
 	// execlist engine MMIO. Bootstrap the GuC VF transport before choosing the
 	// scheduler so this path can be kept separate from physical RPL hardware.
 	const bool vfActive = !NGreen::callback->isRealTGL && vfBootstrapBinder();
 	if (vfActive)
-		SYSLOG("ngreen", "V221: SR-IOV VF start path active; selecting reference GuC scheduler");
+		SYSLOG("ngreen", "V222: SR-IOV VF start path active; selecting reference GuC scheduler");
 
 	// V44: Configurable scheduler type.
 	// populateAccelConfig reads "GraphicsSchedulerSelect" from the IORegistry.
@@ -4545,7 +4545,7 @@ unsigned long Gen11::start(void *that,void  *param_1)
 				service->setProperty("SchedPmNotifyEnable", zero);
 				service->setProperty("SchedulerFallbackOnFirmwareFail", zero);
 				zero->release();
-				SYSLOG("ngreen", "V221: disabled VF PM notifications and host-scheduler fallback");
+				SYSLOG("ngreen", "V222: disabled VF PM notifications and host-scheduler fallback");
 			}
 		}
 	}
@@ -7545,7 +7545,7 @@ bool Gen11::vfMmioHostToGuCAction(void *that, const uint32_t *request,
 	}
 
 	if (!request || requestLength == 0 || requestLength > 4) {
-		SYSLOG("ngreen", "V221: rejected malformed VF GuC MMIO request len=%u",
+		SYSLOG("ngreen", "V222: rejected malformed VF GuC MMIO request len=%u",
 		       requestLength);
 		return false;
 	}
@@ -7557,7 +7557,7 @@ bool Gen11::vfMmioHostToGuCAction(void *that, const uint32_t *request,
 
 	static uint32_t logCount = 0;
 	if (logCount++ < 24 || !ok) {
-		SYSLOG("ngreen", "V221: VF GuC MMIO action=0x%08x len=%u ret=%d reply=0x%08x",
+		SYSLOG("ngreen", "V222: VF GuC MMIO action=0x%08x len=%u ret=%d reply=0x%08x",
 		       request[0], requestLength, ok, reply[0]);
 	}
 	return ok;
