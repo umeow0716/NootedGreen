@@ -8,6 +8,8 @@
 #include "kern_vf_irq_gate.hpp"
 #include "kern_vf_context_shutdown.hpp"
 #include "kern_vf_submission_gate.hpp"
+#include "kern_vf_runtime.hpp"
+#include "kern_vf_runtime_patch.hpp"
 #include "kern_context_pool.hpp"
 #include "kern_context_descriptor.hpp"
 #include "kern_workqueue_unwind.hpp"
@@ -128,6 +130,9 @@ uint32_t gVfDoorbellCount = 0;
 void *gVfGlobalPageTable = nullptr;
 void *gVfHardwareGuc = nullptr;
 bool gVfGGTTReady = false;
+NGVfRuntime::Registers gVfRuntimeRegisters = {};
+NGVfRuntime::Topology gVfTopology = {};
+volatile UInt32 gVfRuntimeReady = 0;
 enum class VfIdentity : uint8_t { Unknown, Physical, Virtual, Invalid };
 VfIdentity gVfIdentity = VfIdentity::Unknown;
 
@@ -1284,6 +1289,79 @@ bool vfGucSendMMIO(const uint32_t request[4], uint32_t requestLength,
 	return success;
 }
 
+bool vfGucRelay(const NGVfRuntime::RelayRequest &request, uint32_t response[4])
+{
+	return vfGucSendMMIO(request.words, 4, response) &&
+	       NGVfRuntime::validRelayResponse(response, request.magic);
+}
+
+bool vfQueryPfRuntime()
+{
+	if (gVfRuntimeReady)
+		return true;
+
+	uint32_t response[4] = {};
+	const auto handshake = NGVfRuntime::makeRelayRequest(
+		NGVfRuntime::opcodeHandshake,
+		(static_cast<uint32_t>(NGVfRuntime::iovMajor) << 16U) |
+		 NGVfRuntime::iovMinor,
+		0, 0);
+	if (!vfGucRelay(handshake, response) ||
+	    response[1] != ((static_cast<uint32_t>(NGVfRuntime::iovMajor) << 16U) |
+	                    NGVfRuntime::iovMinor) ||
+	    response[2] != 0 || response[3] != 0) {
+		SYSLOG("ngreen", "V244: PF MMIO-relay ABI 1.0 handshake failed reply=[0x%08x,0x%08x,0x%08x,0x%08x]",
+		       response[0], response[1], response[2], response[3]);
+		return false;
+	}
+
+	NGVfRuntime::Registers registers = {};
+	const auto coreFuses = NGVfRuntime::makeRelayRequest(
+		NGVfRuntime::opcodeGetRuntime, NGVfRuntime::rpmConfig0,
+		NGVfRuntime::mirrorFuse3, NGVfRuntime::euDisable);
+	if (!vfGucRelay(coreFuses, response))
+		return false;
+	registers.rpmConfig0 = response[1];
+	registers.mirrorFuse3 = response[2];
+	registers.euDisable = response[3];
+
+	const auto topologyFuses = NGVfRuntime::makeRelayRequest(
+		NGVfRuntime::opcodeGetRuntime, NGVfRuntime::sliceEnable,
+		NGVfRuntime::geometryDssEnable, NGVfRuntime::veboxVdboxDisable);
+	if (!vfGucRelay(topologyFuses, response))
+		return false;
+	registers.sliceEnable = response[1];
+	registers.geometryDssEnable = response[2];
+	registers.veboxVdboxDisable = response[3];
+
+	const auto timingAndFirmware = NGVfRuntime::makeRelayRequest(
+		NGVfRuntime::opcodeGetRuntime, NGVfRuntime::ctcMode,
+		NGVfRuntime::hucKernelLoadInfo, 0);
+	if (!vfGucRelay(timingAndFirmware, response) || response[3] != 0)
+		return false;
+	registers.ctcMode = response[1];
+	registers.hucKernelLoadInfo = response[2];
+
+	NGVfRuntime::Topology topology = {};
+	if (!NGVfRuntime::deriveTopology(registers, topology)) {
+		SYSLOG("ngreen", "V244: rejected PF runtime fuses rpm=0x%08x l3=0x%08x eu=0x%08x slice=0x%08x dss=0x%08x media=0x%08x",
+		       registers.rpmConfig0, registers.mirrorFuse3,
+		       registers.euDisable, registers.sliceEnable,
+		       registers.geometryDssEnable, registers.veboxVdboxDisable);
+		return false;
+	}
+
+	gVfRuntimeRegisters = registers;
+	gVfTopology = topology;
+	OSSynchronizeIO();
+	OSCompareAndSwap(0, 1, &gVfRuntimeReady);
+	SYSLOG("ngreen", "V244: PF runtime topology slices=%u DSS=%u SS=%u EU/SS=%u EUs=%u L3=%u media=0x%05x",
+	       topology.sliceCount, topology.traditionalSubsliceCount / 2U,
+	       topology.traditionalSubsliceCount, topology.maxEusPerSubslice,
+	       topology.euCount, topology.l3BankCount, topology.enabledMediaMask);
+	return true;
+}
+
 bool vfGucSelfConfig(uint16_t key, uint16_t length, uint64_t value)
 {
 	uint32_t request[4] = {
@@ -1470,6 +1548,13 @@ bool vfBootstrapDirectGgtt()
 	}
 	SYSLOG("ngreen", "V218: negotiated GuC VF ABI %u.%u.%u.%u",
 	       gucBranch, gucMajor, gucMinor, gucPatch);
+	// Before CTB exists, use Intel's official GuC-proxied MMIO relay to obtain
+	// PF-owned fuses.  A VF cannot safely infer these values from 0xffffffff
+	// direct reads, PCI IDs, or host CPU topology.
+	if (!vfQueryPfRuntime()) {
+		vfMarkProtocolFault("PF runtime-register query failed");
+		return false;
+	}
 
 	if (!vfQueryKLV64(kGucKlvGGTTStart, gVfGGTTBase) ||
 	    !vfQueryKLV64(kGucKlvGGTTSize, gVfGGTTSize) ||
@@ -1686,6 +1771,11 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		const bool vfActive = identity == VfIdentity::Virtual;
 		const bool tglGeneration = NGGpuCapabilities::isTigerLake(
 			NGreen::callback->getOriginalDeviceId());
+		// The payload is patched before its personality is published. Complete the
+		// one-shot VF bootstrap here so every embedded fuse immediate comes from
+		// the same PF snapshot that owns this VF's GuC/GGTT assignment.
+		PANIC_COND(vfActive && !vfBootstrapDirectGgtt(), "ngreen",
+			"Cannot bootstrap VF runtime/GGTT before accelerator publication");
 		SYSLOG("ngreen", "V165: setRMMIO done, starting symbol resolve");
 
 		if (vfActive) {
@@ -2231,39 +2321,31 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		static const uint8_t r3[] = {
 			0x8b, 0x3e, 0x81, 0xff, 0xee, 0xbe, 0xaf, 0xde, 0x90, 0x90, 0x81, 0xff, 0x86, 0x80, 0x40, 0x9a, 0xeb, 0x2d
 		};
-		// L3BankCount bypass (verified @ 0x28776 in LE binary)
-		// Original: topology-gated conditionals (cmp slices/eu/threads) → only set L3BankCount=8 for a specific config.
-		// Patch:    NOP all conditional branches → always store L3BankCount=8 @ IGAccelDevice+0x1164.
-		static const uint8_t f3b[] = {// jmp L3BankCount
-			0x74, 0x23, 0x83, 0xf9, 0x02, 0x0f, 0x85, 0x89, 0x01, 0x00, 0x00, 0x83, 0xfe, 0x01, 0x75, 0x59, 0x83, 0xfa, 0x0c, 0x75, 0x54, 0x41, 0xc7, 0x87, 0x64, 0x11, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00
+		// Apple reads these PF-owned runtime registers through raw BAR0 loads in
+		// getGPUInfo(). They are not VF-visible. Replace only those five loads with
+		// the values returned by Intel's early MMIO relay, then leave Apple's native
+		// population-count and timestamp calculations intact.
+		uint8_t vfSliceFuseReplace[] = {
+			0x41, 0xbc, 0, 0, 0, 0, 0x90
 		};
-		static const uint8_t r3b[] = {
+		uint8_t vfDssFuseReplace[] = {
+			0xb9, 0, 0, 0, 0, 0x89, 0x4d, 0xd0, 0x90
+		};
+		uint8_t vfEuFuseReplace[] = {
+			0xb9, 0, 0, 0, 0, 0x89, 0x4d, 0xcc, 0x90
+		};
+		uint8_t vfMediaFuseReplace[] = {
+			0x41, 0xbe, 0, 0, 0, 0, 0x90
+		};
+		uint8_t vfRpmConfigReplace[] = {
+			0xb8, 0, 0, 0, 0, 0x90
+		};
+
+		// L3BankCount is selected by branches tied to Apple's original SKU table.
+		// Force the single store, but populate its immediate from MIRROR_FUSE3
+		// instead of assuming the target machine always has eight banks.
+		uint8_t r3b[] = {
 			0x90, 0x90, 0x83, 0xf9, 0x02, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x83, 0xfe, 0x01, 0x90, 0x90, 0x83, 0xfa, 0x0c, 0x90, 0x90, 0x41, 0xc7, 0x87, 0x64, 0x11, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00
-		};
-		
-		// MaxEUPerSubSlice override (verified @ 0x28692 in LE binary)
-		// Original: MaxEUPerSubSlice = 8 - popcount(EUDisableFuse)  → stores result at IGAccelDevice+0x116c
-		// Patch:    hardcodes MaxEUPerSubSlice=8 for RPL 96EU (8 EU per traditional sub-slice).
-		//           TGL binary counts sub-slices (SS), not dual sub-slices (DSS).
-		//           Linux shows 16 EU/DSS = 8 EU/SS since each DSS has 2 SS.
-		static const uint8_t f3bb[] = {//MaxEUPerSubSlice
-			0xbe, 0x08, 0x00, 0x00, 0x00, 0x29, 0xde, 0x41, 0x89, 0xb7, 0x6c, 0x11, 0x00, 0x00, 0x41, 0x8b, 0x8f, 0x58, 0x11, 0x00, 0x00
-		};
-		static const uint8_t r3bb[] = {
-			0xbe, 0x08, 0x00, 0x00, 0x00, 0x90, 0x90, 0x41, 0x89, 0xb7, 0x6c, 0x11, 0x00, 0x00, 0x41, 0x8b, 0x8f, 0x58, 0x11, 0x00, 0x00
-		};
-		
-		// NumSubSlices override (verified @ 0x28654 in LE binary)
-		// Original: mov ebx,[rbp-0x30]; popcnt esi,ebx; add esi,esi; mov [r15+0x1158],esi
-		//           → NumSubSlices = popcount(subsliceMask) * 2  (hardware-detected)
-		// Patch:    hardcodes NumSubSlices=8 for the target i7-13620H UHD 64EU
-		//           (4 enabled DSS × 2 SS/DSS = 8 traditional SS).
-		//           The host i915 topology query reports 1 slice, 4 DSS and 64 EUs.
-		static const uint8_t f3bbb[] = {//NumSubSlices
-			0x8b, 0x5d, 0xd0, 0xf3, 0x0f, 0xb8, 0xf3, 0x01, 0xf6, 0x41, 0x89, 0xb7, 0x58, 0x11, 0x00, 0x00
-		};
-		static const uint8_t r3bbb[] = {
-			0x8b, 0x5d, 0xd0, 0xbe, 0x08, 0x00, 0x00, 0x00, 0x90, 0x41, 0x89, 0xb7, 0x58, 0x11, 0x00, 0x00
 		};
 		
 		// V139: RPL-only mitigation for GP faults inside blit3d_submit_rectlist.
@@ -2317,18 +2399,53 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			};
 			PANIC_COND(!LookupPatchPlus::applyAll(patcher, patchesAlways, address, size), "ngreen",
 				"kextG11HWT Failed to apply base patches!");
-			
-			if (!tglGeneration) {
-				// Legacy topology overrides; native BCS readiness remains mandatory.
-				LookupPatchPlus const patchesRPL[] = {
-					{activeKext, f3b, r3b, arrsize(f3b),	1},      // L3BankCount=8
-					{activeKext, f3bb, r3bb, arrsize(f3bb),	1},    // MaxEU/SS=8
-					{activeKext, f3bbb, r3bbb, arrsize(f3bbb),	1},// NumSubSlices=8
+
+			if (vfActive) {
+				PANIC_COND(!gVfRuntimeReady, "ngreen",
+					"VF runtime fuses were not published before getGPUInfo patching");
+				NGVfRuntime::writeImmediate32(vfSliceFuseReplace + 2,
+					gVfRuntimeRegisters.sliceEnable & 0xFFU);
+				NGVfRuntime::writeImmediate32(vfDssFuseReplace + 1,
+					gVfTopology.geometryDssMask);
+				NGVfRuntime::writeImmediate32(vfEuFuseReplace + 1,
+					gVfRuntimeRegisters.euDisable & 0xFFU);
+				NGVfRuntime::writeImmediate32(vfMediaFuseReplace + 2,
+					gVfRuntimeRegisters.veboxVdboxDisable);
+				NGVfRuntime::writeImmediate32(vfRpmConfigReplace + 1,
+					gVfRuntimeRegisters.rpmConfig0);
+				NGVfRuntime::writeImmediate32(r3b + 28,
+					gVfTopology.l3BankCount);
+
+				mach_vm_address_t gpuInfoStart = 0, gpuInfoEnd = 0;
+				SolveRequestPlus gpuInfoBounds[] = {
+					{"__ZN16IntelAccelerator10getGPUInfoEv", gpuInfoStart},
+					{"__ZN16IntelAccelerator14teardownDeviceEP11IOPCIDevice", gpuInfoEnd},
 				};
-				PANIC_COND(!LookupPatchPlus::applyAll(patcher, patchesRPL, address, size), "ngreen",
-					"kextG11HWT Failed to apply RPL-specific patches!");
+				PANIC_COND(!SolveRequestPlus::solveAll(patcher, index, gpuInfoBounds,
+				                                      address, size) ||
+				           gpuInfoEnd <= gpuInfoStart || gpuInfoEnd - gpuInfoStart > 0x1000,
+				           "ngreen", "Invalid getGPUInfo runtime-patch bounds");
+				LookupPatchPlus const vfRuntimePatches[] = {
+					{activeKext, NGVfRuntimePatch::sliceFuseFind, vfSliceFuseReplace,
+					 arrsize(NGVfRuntimePatch::sliceFuseFind), 1},
+					{activeKext, NGVfRuntimePatch::dssFuseFind, vfDssFuseReplace,
+					 arrsize(NGVfRuntimePatch::dssFuseFind), 1},
+					{activeKext, NGVfRuntimePatch::euFuseFind, vfEuFuseReplace,
+					 arrsize(NGVfRuntimePatch::euFuseFind), 1},
+					{activeKext, NGVfRuntimePatch::mediaFuseFind, vfMediaFuseReplace,
+					 arrsize(NGVfRuntimePatch::mediaFuseFind), 1},
+					{activeKext, NGVfRuntimePatch::rpmConfigFind, vfRpmConfigReplace,
+					 arrsize(NGVfRuntimePatch::rpmConfigFind), 1},
+					{activeKext, NGVfRuntimePatch::l3BranchFind, r3b,
+					 arrsize(NGVfRuntimePatch::l3BranchFind), 1},
+				};
+				PANIC_COND(!LookupPatchPlus::applyAll(
+					patcher, vfRuntimePatches, gpuInfoStart, gpuInfoEnd - gpuInfoStart),
+					"ngreen", "Failed to inject PF runtime fuses into VF getGPUInfo");
+				SYSLOG("ngreen", "V244: injected relayed VF runtime fuses into pinned getGPUInfo");
+			}
 
-
+			if (!tglGeneration) {
 				// Every matching store in the pinned blit3d_submit_rectlist body is
 				// converted as one mandatory group. A single count patches all matches
 				// against the original image; sequential skip-based patches changed the
@@ -2352,9 +2469,9 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				           "ngreen", "Failed to apply complete unaligned-store patch set");
 				SYSLOG("ngreen", "V243: converted all 14 pinned blit3d aligned-store sites");
 
-				SYSLOG("ngreen", "V52: Applied RPL-specific topology and unaligned-store patches");
+				SYSLOG("ngreen", "V52: applied later-gen unaligned-store compatibility patches");
 			} else {
-				SYSLOG("ngreen", "V52: TGL generation — skipping later-gen compatibility patches");
+				SYSLOG("ngreen", "V52: TGL generation — skipping later-gen unaligned-store patches");
 			}
 		}
 

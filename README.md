@@ -30,10 +30,11 @@ PCI identity and PF ownership; guest CPUID is diagnostic only.
 
 This experimental branch is hardware-specific to an i7-13620H (`8086:a7a8`)
 SR-IOV VF. A host `DRM_I915_QUERY_TOPOLOGY_INFO` query reports 1 slice, 4
-enabled dual subslices, 16 EUs per DSS, and 64 EUs total. The RPL topology
-patches therefore advertise 8 traditional subslices × 8 EUs instead of the
-upstream i7-13700H 96-EU constants, and use the measured 100–1500 MHz range.
-Do not use this branch unchanged on a 32-, 80-, or 96-EU SKU.
+enabled dual subslices, 16 EUs per DSS, and 64 EUs total. The VF no longer
+embeds those numbers: during its one-shot GuC bootstrap it negotiates Intel's
+VF/PF MMIO-relay ABI 1.0 and asks the PF for the allow-listed topology, media
+engine and timestamp-clock fuses. Invalid or internally inconsistent replies
+fail admission before Apple's accelerator personality is published.
 
 The Tahoe `25G229` VF bootstrap fixes on this branch are deliberately narrow:
 
@@ -67,6 +68,10 @@ inherit runtime claims from the older Sonoma/Raptor Lake display experiments.
 - VF scheduler selection, PM/fallback disablement, bootstrap symbols and
   accelerator start/stop routes are mandatory. Missing private ABI state fails
   admission instead of falling back to physical MMIO.
+- Apple's pinned `getGPUInfo()` receives the PF-relayed slice, DSS, EU, media
+  engine and timestamp-clock values at its five raw-register load sites. L3
+  bank count is derived from the relayed mirror fuse; no PCI-ID topology table
+  or target-specific 64-EU constant remains.
 - Native blit and barrier producers run only when GGTT, CTB, memory IRQ and
   shutdown gates are all ready. Their real native result is propagated.
 - Physical engine start/stop/reset-list handling is native. The former GDRST,

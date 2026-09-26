@@ -1954,3 +1954,34 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   `com.apple` bundle-identifier strings; executable bytes are identical.
   The complete syntax, analyzer, strict-ABI, sanitizer, protocol and on-disk
   payload suite passes in `/tmp/ngreen-static.hpt32k`. The VM remained off.
+
+### Replace target topology constants with PF runtime discovery
+
+- Re-disassembled the complete UUID-pinned `IntelAccelerator::getGPUInfo` body.
+  A VF cannot directly read its five consumed PF-owned registers: slice enable
+  `0x9138`, geometry DSS enable `0x913c`, EU disable `0x9134`, VDBOX/VEBOX
+  disable `0x9140`, and timestamp crystal-clock configuration `0x0d00`.
+  The prior fixed EU/DSS/L3 patches therefore hid only part of the invalid-VF-
+  read problem and left media-engine enumeration and timestamp math exposed.
+- Implemented the current i915 early MMIO transport exactly at its protocol
+  boundary: GuC action `0x5005`, four-dword messages, ABI handshake opcode
+  `0x01` at version 1.0, runtime opcode `0x10`, CRC32-derived four-bit magic,
+  GuC-success/origin and echoed-magic validation, DATA0 MBZ enforcement, and
+  three offsets per request. The query requests the complete eight-register
+  TGL/ADL early allow-list used by the PF, after VF RESET and GuC version
+  negotiation but before CTB creation.
+- A pure decoder derives one media-12 slice, DSS/SS and EU counts, L3 bank pairs
+  and enabled media mask. Zero/all-ones/reserved clock encodings, missing media
+  engines, empty topology and values beyond media-12 limits fail admission.
+  No device ID or CPU model is used as topology evidence.
+- The validated snapshot is injected only into a verified VF and only at six
+  exact anchors inside the solved `getGPUInfo` symbol boundary. Apple retains
+  its native popcount and timestamp calculations; only raw inaccessible loads
+  become immediates. L3's SKU branches are collapsed to one store whose value
+  comes from `MIRROR_FUSE3`. PFs keep all native register reads, and the prior
+  fixed `8 SS × 8 EU` overrides are removed.
+- Both on-disk accelerator variants contain every anchor exactly once and in
+  the same function order. Protocol/topology invalid-state tests, the binary
+  anchor test, syntax, analyzer, strict ABI and all existing sanitizer models
+  pass in `/tmp/ngreen-static.ynqe08`. The VM remained off; the relay exchange
+  and resulting Metal/media behavior still require controlled runtime proof.

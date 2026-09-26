@@ -151,4 +151,20 @@ if "$compiler" -std=c++14 -O1 -g -fsanitize=address,undefined \
 else
     failed=1
 fi
+if "$compiler" -std=c++14 -O1 -g -fsanitize=address,undefined \
+    tools/vf_runtime_test.cpp -o "$task_output/vf-runtime-test" && \
+    "$task_output/vf-runtime-test"; then
+    printf 'PASS offline VF runtime-relay/topology tests\n'
+else
+    failed=1
+fi
+if "$compiler" -std=c++14 -O1 -g -fsanitize=address,undefined \
+    tools/vf_runtime_patch_test.cpp -o "$task_output/vf-runtime-patch-test" && \
+    "$task_output/vf-runtime-patch-test" \
+        sle_Internal/le/AppleIntelTGLGraphics.kext/Contents/MacOS/AppleIntelTGLGraphics \
+        sle_Internal/sle/AppleIntelTGLGraphics.kext/Contents/MacOS/AppleIntelTGLGraphics; then
+    printf 'PASS offline VF runtime-patch anchor tests\n'
+else
+    failed=1
+fi
 exit "$failed"
