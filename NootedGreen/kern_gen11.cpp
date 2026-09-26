@@ -3260,30 +3260,20 @@ bool Gen11::IGHardwareGlobalPageTableMapRangeRotated(void *that,
                                                      void *physicalIterator,
                                                      uint64_t flags)
 {
-	NGIGAddressRange affected {};
-	bool hasRange = false;
-	if (rangeIterator) {
-		auto *range = getMember<NGIGAddressRange *>(rangeIterator, 0);
-		if (range) {
-			affected = *range;
-			hasRange = true;
-		}
-	}
-	if (gVfIdentity != VfIdentity::Physical &&
-	    (gVfIdentity != VfIdentity::Virtual || !gVfGGTTReady || gVfProtocolFault ||
-	     !that || !hasRange || !physicalIterator ||
-	     !NGGgtt::contains(gVfGGTTBase, gVfGGTTSize, affected.start, affected.length))) {
-		vfMarkProtocolFault("invalid VF rotated GGTT range or transport state");
+	// The declared interval alone does not bound native stores: native uses
+	// iterator+0x18 before checking it, divides by iterator+0x0c AFTER a store,
+	// and clamps subsequent cursors to the exclusive end while continuing over
+	// physical segments. Until both iterators have a validated replacement,
+	// reject non-physical use before touching private objects or any PTE.
+	if (gVfIdentity != VfIdentity::Physical) {
+		vfMarkProtocolFault("VF rotated GGTT mapping is not safely implemented");
 		return false;
 	}
-	const bool result = FunctionCast(IGHardwareGlobalPageTableMapRangeRotated,
+	return FunctionCast(IGHardwareGlobalPageTableMapRangeRotated,
 	                                 callback->oIGHardwareGlobalPageTableMapRangeRotated)(that,
 	                                                                                       rangeIterator,
 	                                                                                       physicalIterator,
 	                                                                                       flags);
-	if (!result || NGreen::callback->isRealTGL || that != gVfGlobalPageTable)
-		return result;
-	return affected.length != 0 && vfSyncShadowRange(affected);
 }
 
 void Gen11::IGHardwareGlobalPageTableUnmapRange(void *that,

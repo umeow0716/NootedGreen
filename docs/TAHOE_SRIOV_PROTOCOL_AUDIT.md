@@ -923,3 +923,19 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   hidden; it does not implement BCS or establish readiness of other engines.
 - Final full offline suite passes in /tmp/ngreen-static.RAACIo. VM remains
   shut off; no guest binary was replaced.
+
+### Rotated GGTT iterator is not bounded by its declared interval
+
+- Re-read complete native 0x103a0..0x10612. Initial destination is read from
+  iterator+0x18 at 0x10535 and written at 0x1055c/0x10561 without a range
+  check. Division by iterator+0x0c occurs only afterward at 0x10575.
+  Later arithmetic clamps to the EXCLUSIVE end at 0x1058c; the physical
+  segment loop can continue and write at that end. Physical addresses also
+  pass through the same 39-bit mask without prevalidation of every segment.
+- Therefore the previous declared-range check did not contain these writes.
+  Non-physical rotated mapping now fails and faults before dereferencing
+  either private iterator. Physical native behavior is preserved. This is
+  explicit unsupported-path containment, not a functional rotated mapper;
+  implementing validated iteration and caller failure/quiescence handling
+  remains necessary before accelerated display/VM tests.
+- Full offline suite passes in /tmp/ngreen-static.L605pe; no dynamic test.
