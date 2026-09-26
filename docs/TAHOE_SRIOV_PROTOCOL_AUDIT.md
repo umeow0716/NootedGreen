@@ -624,3 +624,30 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   opaque; byte integrity is not a firmware-internal source review.
 - Full offline suite passes in /tmp/ngreen-static.3OKBXc. DVMT checkpoint
   a580586 CI run 36219197807 succeeded. No dynamic test performed.
+
+### Legacy proxy context allocator wrap and exhaustion
+
+- Rechecked the pinned TGL payload's createUkContext (0x204c4), allocator
+  (0x21066), release (0x2117c), pool setup (0x20b34), and both allocator
+  call sites (0x21162 and 0x21ea7). Both callers hold GuC+0x40; replacement
+  must not recursively lock it. Owner is unused in this native allocator.
+- Native next-ID scanning wraps the numerical index at 0x2110d but leaves
+  the flag pointer advancing beyond count*0x5b00 at 0x21119/0x2111c. Full
+  allocation also sets next=0x400; release decrements used without restoring
+  next, so subsequent allocation refuses even after a slot is freed.
+- VF allocContextId now validates count<=1024 and actual mapped-buffer length,
+  uses bounded record-index arithmetic on every iteration, and preserves the
+  used/next/flag bookkeeping and optional record clearing. Full pools return
+  the native invalid-ID sentinel; invalid input/occupancy faults the protocol.
+  PF keeps its native allocator. Negative UK priorities and null receivers
+  are rejected before calling native createUkContext.
+- Tests exercise 8,192 exhaustive small-pool occupancy/start/clear combinations,
+  all bytes of changed and unchanged records plus canaries, complete 1024-ID
+  exhaustion, reuse after release with the legacy sentinel, and malformed
+  inputs with no writes. ASan/UBSan and full syntax suites pass in
+  /tmp/ngreen-static.2nsDqH. DMC checkpoint 9c15e9f CI 36219426423 succeeded.
+- This is NOT a complete createUkContext rewrite: its work-queue OOM null
+  dereference at 0x20628, reserved-ID leak after buffer allocation failure,
+  earlier native attach pool scan, teardown exclusion, payload ABI validation,
+  and release-path bounds still need work. The new allocator cannot certify
+  callers' entire lifetime. No VM boot, installation or hardware submission.

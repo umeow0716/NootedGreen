@@ -1382,6 +1382,8 @@ private:
 	mach_vm_address_t oVfLegacyHostToGuCAction {};
 	static uint32_t vfCreateUkContext(void *that, uint64_t owner, int priority);
 	mach_vm_address_t oVfCreateUkContext {};
+	static uint32_t vfAllocContextId(void *that, uint64_t owner, bool clear);
+	mach_vm_address_t oVfAllocContextId {};
 	static uint16_t vfAcquireDoorbell(void *that, void *descriptor, bool pin);
 	mach_vm_address_t oVfAcquireDoorbell {};
 	static void vfReleaseDoorbell(void *that, void *descriptor);

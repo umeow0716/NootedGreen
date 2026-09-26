@@ -4,6 +4,7 @@
 #include "kern_guc_ring.hpp"
 #include "kern_gpu_capabilities.hpp"
 #include "kern_ggtt_bounds.hpp"
+#include "kern_context_pool.hpp"
 #include "AppleIntelParams.hpp"
 #include <Headers/kern_api.hpp>
 #include "kern_genx.hpp"
@@ -2413,6 +2414,8 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				 vfLegacyHostToGuCAction, this->oVfLegacyHostToGuCAction},
 				{"__ZN13IGHardwareGuC15createUkContextEy25UK_GEN11_CONTEXT_PRIORITY",
 				 vfCreateUkContext, this->oVfCreateUkContext},
+				{"__ZN13IGHardwareGuC14allocContextIdEyb",
+				 vfAllocContextId, this->oVfAllocContextId},
 				// These routines touch raw physical doorbell registers BEFORE
 				// calling hostToGuCAction; guarding the sender alone is too late.
 				{"__ZN13IGHardwareGuC15acquireDoorbellEP35UK_GEN11_GUC_CONTEXT_DESCRIPTOR_RECb",
@@ -8773,6 +8776,8 @@ unsigned long Gen11::loadGuCBinary(void *that) {
 }
 
 uint32_t Gen11::vfCreateUkContext(void *that, uint64_t owner, int priority) {
+	if (!that || priority < 0 || priority > 3)
+		return NGContextPool::invalidId;
 	if (gVfIdentity != VfIdentity::Physical &&
 	    (!gVfCtbEnabled || gVfCtbStopped || gVfProtocolFault)) {
 		// Apple's initWithOptions releases a failed CTB and continues toward
@@ -8783,6 +8788,33 @@ uint32_t Gen11::vfCreateUkContext(void *that, uint64_t owner, int priority) {
 	}
 	return FunctionCast(vfCreateUkContext, callback->oVfCreateUkContext)(
 		that, owner, priority);
+}
+
+uint32_t Gen11::vfAllocContextId(void *that, uint64_t owner, bool clear) {
+	if (gVfIdentity == VfIdentity::Physical)
+		return FunctionCast(vfAllocContextId, callback->oVfAllocContextId)(that, owner, clear);
+	if (!that || gVfIdentity != VfIdentity::Virtual || !gVfCtbEnabled ||
+	    gVfCtbStopped || gVfProtocolFault ||
+	    !callback->vfSharedMappedBufferGetVirtualAddress)
+		return NGContextPool::invalidId;
+	// Both native callers (allocContext and attachContextDesc) already own
+	// GuC+0x40. Do not recursively acquire this non-recursive pool lock.
+	auto *backing = getMember<void *>(that, 0x68);
+	if (!backing || !getMember<void *>(that, 0x50)) {
+		vfMarkProtocolFault("missing legacy proxy context pool");
+		return NGContextPool::invalidId;
+	}
+	using Getter = void *(*)(void *);
+	auto *pool = static_cast<uint8_t *>(reinterpret_cast<Getter>(
+		callback->vfSharedMappedBufferGetVirtualAddress)(backing));
+	uint32_t id = NGContextPool::invalidId;
+	const auto result = NGContextPool::allocate(pool,
+		getMember<uint64_t>(backing, kVfMappedBufferLengthOffset),
+		getMember<uint32_t>(that, 0x80), getMember<uint32_t>(that, 0x84),
+		getMember<uint32_t>(that, 0x88), clear, id);
+	if (result == NGContextPool::Result::Invalid)
+		vfMarkProtocolFault("invalid legacy proxy context pool bounds or occupancy");
+	return id;
 }
 
 uint16_t Gen11::vfAcquireDoorbell(void *that, void *descriptor, bool pin) {
