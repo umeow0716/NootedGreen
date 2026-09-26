@@ -75,11 +75,10 @@ Gen11 *Gen11::callback = nullptr;
 
 namespace {
 // Current admission covers known media-12 direct VF GGTT platforms only.
-// Legacy relay helpers below remain inactive until per-GT IP/ABI discovery
-// and lifetime handling are implemented; BAR size is not the discriminator.
+// Media-13 requires its own per-GT IP/ABI discovery; BAR size alone is not an
+// admission discriminator and no speculative relay fallback is retained.
 constexpr uint32_t kVfGGTTPteBase = 0x800000;
-constexpr uint32_t kVfGGTTPteBytes = 0x800000;
-constexpr uint32_t kVfDirectBar0Bytes = kVfGGTTPteBase + kVfGGTTPteBytes;
+constexpr uint32_t kVfDirectBar0Bytes = kVfGGTTPteBase * 2;
 constexpr uint32_t kGen11SoftScratch0 = 0x190240;
 constexpr uint32_t kGen11GucHostInterrupt = 0x1901f0;
 constexpr uint32_t kGucSendTrigger = 1;
@@ -96,7 +95,6 @@ constexpr uint32_t kGucTypeSuccess = 0x70000000U;
 constexpr uint32_t kGucActionMatchVersion = 0x5500;
 constexpr uint32_t kGucActionVfReset = 0x5507;
 constexpr uint32_t kGucActionQuerySingleKlv = 0x5509;
-constexpr uint32_t kGucActionMmioRelay = 0x5005;
 constexpr uint32_t kGucActionHost2GucSelfCfg = 0x0508;
 constexpr uint32_t kGucActionHost2GucControlCtb = 0x4509;
 constexpr uint32_t kGucActionRegisterContext = 0x4502;
@@ -118,7 +116,6 @@ constexpr uint32_t kGucSelfCfgH2GCtbSize = 0x0904;
 constexpr uint32_t kGucSelfCfgG2HCtbAddr = 0x0905;
 constexpr uint32_t kGucSelfCfgG2HCtbDescAddr = 0x0906;
 constexpr uint32_t kGucSelfCfgG2HCtbSize = 0x0907;
-constexpr uint32_t kVf2PfUpdateGGTTOpcode = 0x02;
 constexpr uint32_t kGucKlvGGTTStart = 0x0001;
 constexpr uint32_t kGucKlvGGTTSize = 0x0002;
 constexpr uint32_t kGucKlvNumContexts = 0x0004;
@@ -142,7 +139,6 @@ constexpr size_t kGucDoorbellAllocatorOffset = 0xDC;
 constexpr size_t kGucDoorbellTopologyOffset = 0x9E0;
 
 IOLock *gVfGucLock = nullptr;
-uint64_t *gVfGGTTShadow = nullptr;
 uint64_t gVfGGTTBase = 0;
 uint64_t gVfGGTTSize = 0;
 uint32_t gVfContextCount = 0;
@@ -186,9 +182,7 @@ VfIdentity vfIdentifyDevice()
 	       static_cast<unsigned int>(gVfIdentity));
 	return gVfIdentity;
 }
-bool gVfDirectGGTT = false;
-bool gVfBinderReady = false;
-uint32_t gVfRelayFailureLogs = 0;
+uint32_t gVfMmioFailureLogs = 0;
 uint32_t gVfCtbGpuBase = 0;
 uint8_t *gVfCtbCpuBase = nullptr;
 OSObject *gVfCtbBacking = nullptr;
@@ -1288,7 +1282,7 @@ bool vfGucSendMMIO(const uint32_t request[4], uint32_t requestLength,
 				vfMarkProtocolFault("VF migrated during MMIO request");
 				gVfMmioPoisoned = true;
 			}
-			if (gVfRelayFailureLogs++ < 16)
+			if (gVfMmioFailureLogs++ < 16)
 				SYSLOG("ngreen", "V217: GuC MMIO request 0x%08x failed: 0x%08x",
 				       request[0], header);
 			break;
@@ -1443,7 +1437,7 @@ bool vfQueryKLV32(uint32_t key, uint32_t &value)
 	return true;
 }
 
-bool vfBootstrapBinder()
+bool vfBootstrapDirectGgtt()
 {
 	if (vfIdentifyDevice() != VfIdentity::Virtual || gVfProtocolFault)
 		return false;
@@ -1525,13 +1519,12 @@ bool vfBootstrapBinder()
 
 	// The original PCI ID establishes a known direct-GGTT media-12 platform.
 	// BAR length only proves that the mapped PTE window is accessible; a short
-	// mapping is a failure, not permission to try another generation's relay.
+	// mapping is a failure, not permission to infer another generation's ABI.
 	auto *cb = NGreen::callback;
 	if (!cb || !cb->setRMMIOIfNecessary())
 		return false;
 	const uint64_t bar0Length = cb->getRMMIOLength();
 	if (cb->getRMMIOAddress() && bar0Length >= kVfDirectBar0Bytes) {
-		gVfDirectGGTT = true;
 		gVfGGTTReady = true;
 		SYSLOG("ngreen", "V219: direct VF GGTT selected, BAR0=%llu MiB range=[0x%llx,+0x%llx]",
 		       static_cast<unsigned long long>(bar0Length >> 20),
@@ -1543,84 +1536,7 @@ bool vfBootstrapBinder()
 	vfMarkProtocolFault("direct VF GGTT requires a complete BAR0 PTE mapping");
 	return false;
 }
-
-bool vfRelayPTEs(uint32_t offset, uint32_t mode, uint32_t copies, uint64_t pte)
-{
-	if (!gVfBinderReady || copies > 1023)
-		return false;
-	uint32_t request[4] = {
-		(0xFU << 24) | (kVf2PfUpdateGGTTOpcode << 16) | kGucActionMmioRelay,
-		(offset << 12) | ((mode & 3U) << 10) | copies,
-		static_cast<uint32_t>(pte),
-		static_cast<uint32_t>(pte >> 32),
-	};
-	uint32_t response[4] = {};
-	if (!vfGucSendMMIO(request, 4, response) ||
-	    ((response[0] >> 24) & 0xFU) != 0xFU ||
-	    (response[0] & 0xFFFFFFU) != copies + 1) {
-		if (gVfRelayFailureLogs++ < 16)
-			SYSLOG("ngreen", "V217: GGTT relay failed off=0x%x mode=%u copies=%u reply=0x%08x",
-			       offset, mode, copies, response[0]);
-		return false;
-	}
-	return true;
-}
-
-bool vfSyncShadowRange(const NGIGAddressRange &range)
-{
-	if (!gVfBinderReady || !gVfGGTTShadow || range.length == 0)
-		return range.length == 0;
-	if (!NGGgtt::contains(gVfGGTTBase, gVfGGTTSize, range.start, range.length)) {
-		if (gVfRelayFailureLogs++ < 16)
-			SYSLOG("ngreen", "V217: refusing GGTT range outside VF assignment [0x%llx,+0x%llx]",
-			       static_cast<unsigned long long>(range.start),
-			       static_cast<unsigned long long>(range.length));
-		return false;
-	}
-
-	uint32_t globalPage = static_cast<uint32_t>(range.start >> 12);
-	uint32_t relativePage = static_cast<uint32_t>((range.start - gVfGGTTBase) >> 12);
-	uint32_t remaining = static_cast<uint32_t>(range.length >> 12);
-	while (remaining) {
-		const uint64_t first = gVfGGTTShadow[globalPage];
-		uint32_t run = 1;
-		uint32_t mode = 0; // duplicate
-		if (remaining > 1) {
-			const uint64_t next = gVfGGTTShadow[globalPage + 1];
-			const uint64_t addressMask = 0x00007FFFFFF000ULL;
-			if ((next & ~addressMask) == (first & ~addressMask) &&
-			    (next & addressMask) == (first & addressMask) + 0x1000ULL)
-				mode = 1; // replicate consecutive physical pages
-		}
-		while (run < remaining && run < 1024) {
-			const uint64_t candidate = gVfGGTTShadow[globalPage + run];
-			if (mode == 0) {
-				if (candidate != first) break;
-			} else {
-				const uint64_t addressMask = 0x00007FFFFFF000ULL;
-				if ((candidate & ~addressMask) != (first & ~addressMask) ||
-				    (candidate & addressMask) != (first & addressMask) + 0x1000ULL * run)
-					break;
-			}
-			run++;
-		}
-		if (!vfRelayPTEs(relativePage, mode, run - 1, first))
-			return false;
-		globalPage += run;
-		relativePage += run;
-		remaining -= run;
-	}
-	return true;
-}
 } // namespace
-
-bool ngVfGGTTBinderActive()
-{
-	// Historical name retained for the shared Gen11 interface.  Callers use
-	// this as the "do not touch physical GGTT/GMADR" predicate, which applies
-	// to both the direct-PTE and GuC-relay VF transports.
-	return gVfIdentity == VfIdentity::Virtual || gVfGGTTReady;
-}
 
 bool ngPhysicalGpuAccessAllowed()
 {
@@ -1639,38 +1555,6 @@ bool ngGpuRegisterAccessAllowed(unsigned long reg)
 	if (!allowed)
 		vfMarkProtocolFault("direct VF access outside the fixed MMIO allowlist");
 	return allowed;
-}
-
-bool ngVfGGTTRead32(unsigned long reg, UInt32 &value)
-{
-	if (!gVfBinderReady || !gVfGGTTShadow || reg < kVfGGTTPteBase ||
-	    reg >= kVfGGTTPteBase + kVfGGTTPteBytes)
-		return false;
-	const uint32_t byteOffset = static_cast<uint32_t>(reg - kVfGGTTPteBase);
-	const uint64_t pte = gVfGGTTShadow[byteOffset >> 3];
-	value = (byteOffset & 4U) ? static_cast<uint32_t>(pte >> 32) :
-	                           static_cast<uint32_t>(pte);
-	return true;
-}
-
-bool ngVfGGTTWrite32(unsigned long reg, UInt32 value)
-{
-	if (!gVfBinderReady || !gVfGGTTShadow || reg < kVfGGTTPteBase ||
-	    reg >= kVfGGTTPteBase + kVfGGTTPteBytes)
-		return false;
-	const uint32_t byteOffset = static_cast<uint32_t>(reg - kVfGGTTPteBase);
-	const uint32_t globalPage = byteOffset >> 3;
-	uint64_t &pte = gVfGGTTShadow[globalPage];
-	if (byteOffset & 4U) {
-		pte = (pte & 0xFFFFFFFFULL) | (static_cast<uint64_t>(value) << 32);
-		const uint64_t address = static_cast<uint64_t>(globalPage) << 12;
-		if (address >= gVfGGTTBase && address - gVfGGTTBase < gVfGGTTSize)
-			(void)vfRelayPTEs(static_cast<uint32_t>((address - gVfGGTTBase) >> 12),
-			                  0, 0, pte);
-	} else {
-		pte = (pte & 0xFFFFFFFF00000000ULL) | value;
-	}
-	return true;
 }
 
 void Gen11::init() {
@@ -2542,9 +2426,9 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 
 		const bool wegCoexist = isWEGCoexistMode();
 		RouteRequestPlus requests[] = {
-			// V217: Raptor Lake VFs use Wa_22018453856.  Query the PF-provisioned
-			// GGTT range, replace Apple's zero/stolen-derived allocator ranges, keep
-			// a software PTE shadow, and relay mutations to the PF through GuC.
+			// V217: Query the media-12 PF-provisioned GGTT range, replace Apple's
+			// zero/stolen-derived allocator ranges, and validate direct BAR0 PTE
+			// mappings plus their required GuC TLB invalidation lifecycle.
 			{"__ZN15IGMemoryManager12initSegmentsEv",
 			 IGMemoryManagerInitSegments,
 			 this->oIGMemoryManagerInitSegments},
@@ -3129,7 +3013,7 @@ bool Gen11::IGMemoryManagerInitSegments(void *that)
 	if (identity == VfIdentity::Physical)
 		return FunctionCast(IGMemoryManagerInitSegments,
 		                    callback->oIGMemoryManagerInitSegments)(that);
-	if (identity != VfIdentity::Virtual || !that || !vfBootstrapBinder())
+	if (identity != VfIdentity::Virtual || !that || !vfBootstrapDirectGgtt())
 		return false;
 
 	// The pinned native body only writes four IGAddressRange fields, but obtains
@@ -3189,67 +3073,44 @@ bool Gen11::IGHardwareGlobalPageTableInitWithOptions(void *that,
 		vfMarkProtocolFault("invalid VF GGTT receiver or truncated dummy DMA address");
 		return false;
 	}
-	if (!vfBootstrapBinder())
+	if (!vfBootstrapDirectGgtt())
 		return false;
 
 	// Native init's second loop clears from range.end to range.start + 4 GiB,
 	// not to 4 GiB. A nonzero VF base would index beyond the 8 MiB PTE window.
-	// Suppress both native loops for every VF transport (i915 nop_clear_range).
+	// Suppress both native loops for the admitted direct VF transport
+	// (i915 nop_clear_range).
 	// In this inspected payload the first loop is skipped by unsigned wrap,
 	// and length == 4 GiB skips the second. No fabricated range is published.
 	const NGIGAddressRange noDirectClear {UINT64_MAX, 0x100000000ULL};
-	if (gVfDirectGGTT) {
-		auto *cb = NGreen::callback;
-		if (!cb || !cb->setRMMIOIfNecessary())
-			return false;
-		if (!cb->getRMMIOAddress() || cb->getRMMIOLength() < kVfDirectBar0Bytes) {
-			SYSLOG("ngreen", "V219: full BAR0 mapping unavailable for direct GGTT");
-			return false;
-		}
-
-		// Apple's accelerator-created mapping covered only the lower MMIO pages in
-		// V216, so initWithOptions faulted when it reached BAR0+8 MiB.  Reuse the
-		// complete IOPCIDevice BAR0 mapping owned by NootedGreen; this is the same
-		// direct GGTT transport selected by Linux for this media-version-12 VF.
-		void *fullBar0 = const_cast<UInt32 *>(cb->getRMMIOAddress());
-		const bool result = FunctionCast(IGHardwareGlobalPageTableInitWithOptions,
-		                                 callback->oIGHardwareGlobalPageTableInitWithOptions)(that,
-		                                                                                      accelerator,
-		                                                                                      noDirectClear,
-		                                                                                      fullBar0,
-		                                                                                      dummyPage,
-		                                                                                      options);
-		if (result)
-			gVfGlobalPageTable = that;
-		SYSLOG("ngreen", "V219: direct global GGTT init ret=%d AppleMMIO=%p fullBAR0=%p len=0x%llx range=[0x%llx,+0x%llx]",
-		       result, mmioBase, fullBar0,
-		       static_cast<unsigned long long>(cb->getRMMIOLength()),
-		       static_cast<unsigned long long>(range.start),
-		       static_cast<unsigned long long>(range.length));
-		return result;
+	auto *cb = NGreen::callback;
+	if (!cb || !cb->setRMMIOIfNecessary())
+		return false;
+	if (!cb->getRMMIOAddress() || cb->getRMMIOLength() < kVfDirectBar0Bytes) {
+		SYSLOG("ngreen", "V219: full BAR0 mapping unavailable for direct GGTT");
+		return false;
 	}
 
-	// Preserve Apple's base-class/object setup while making both of its direct
-	// PTE-clearing loops empty.  Linux intentionally installs nop_clear_range
-	// for this VF: the PF owns clearing and the upper BAR0 PTE window is absent.
+	// Apple's accelerator-created mapping covered only the lower MMIO pages in
+	// V216, so initWithOptions faulted when it reached BAR0+8 MiB. Reuse the
+	// complete IOPCIDevice BAR0 mapping owned by NootedGreen; this is the direct
+	// GGTT transport selected by Linux for this media-version-12 VF.
+	void *fullBar0 = const_cast<UInt32 *>(cb->getRMMIOAddress());
 	const bool result = FunctionCast(IGHardwareGlobalPageTableInitWithOptions,
 	                                 callback->oIGHardwareGlobalPageTableInitWithOptions)(that,
 	                                                                                      accelerator,
 	                                                                                      noDirectClear,
-	                                                                                      mmioBase,
+	                                                                                      fullBar0,
 	                                                                                      dummyPage,
 	                                                                                      options);
-	if (!result)
-		return false;
-
-	getMember<uint64_t *>(that, 0x28) = gVfGGTTShadow;
-	gVfGlobalPageTable = that;
-	SYSLOG("ngreen", "V217: global GGTT shadow installed; Apple range=[0x%llx,+0x%llx] PF=[0x%llx,+0x%llx]",
+	if (result)
+		gVfGlobalPageTable = that;
+	SYSLOG("ngreen", "V219: direct global GGTT init ret=%d AppleMMIO=%p fullBAR0=%p len=0x%llx range=[0x%llx,+0x%llx]",
+	       result, mmioBase, fullBar0,
+	       static_cast<unsigned long long>(cb->getRMMIOLength()),
 	       static_cast<unsigned long long>(range.start),
-	       static_cast<unsigned long long>(range.length),
-	       static_cast<unsigned long long>(gVfGGTTBase),
-	       static_cast<unsigned long long>(gVfGGTTSize));
-	return true;
+	       static_cast<unsigned long long>(range.length));
+	return result;
 }
 
 bool Gen11::IGHardwareGlobalPageTableMapRange(void *that,
@@ -3257,8 +3118,8 @@ bool Gen11::IGHardwareGlobalPageTableMapRange(void *that,
                                               uint64_t physical,
                                               uint64_t flags)
 {
-	// Native writes PTEs before returning. Validating only in the subsequent
-	// relay sync is too late to protect either the shadow or the MMIO aperture.
+	// Native writes directly to BAR0 PTEs. Validate the complete destination and
+	// physical range before it can touch the aperture.
 	if (gVfIdentity != VfIdentity::Physical &&
 	    (gVfIdentity != VfIdentity::Virtual || !gVfGGTTReady ||
 	     gVfSubmissionStopped || gVfProtocolFault ||
@@ -3268,15 +3129,11 @@ bool Gen11::IGHardwareGlobalPageTableMapRange(void *that,
 		vfMarkProtocolFault("invalid VF GGTT map range or transport state");
 		return false;
 	}
-	const bool result = FunctionCast(IGHardwareGlobalPageTableMapRange,
-	                                 callback->oIGHardwareGlobalPageTableMapRange)(that,
-	                                                                                range,
-	                                                                                physical,
-	                                                                                flags);
-	if (!result || gVfIdentity != VfIdentity::Virtual ||
-	    that != gVfGlobalPageTable || gVfDirectGGTT)
-		return result;
-	return vfSyncShadowRange(range);
+	return FunctionCast(IGHardwareGlobalPageTableMapRange,
+	                    callback->oIGHardwareGlobalPageTableMapRange)(that,
+	                                                                   range,
+	                                                                   physical,
+	                                                                   flags);
 }
 
 bool Gen11::IGHardwareGlobalPageTableMapRangeRotated(void *that,
@@ -3349,20 +3206,14 @@ bool Gen11::IGHardwareGlobalPageTableMapRangeRotated(void *that,
 	}
 
 	auto *pteBase = getMember<volatile uint64_t *>(that, 0x28);
-	if (!pteBase || (!gVfDirectGGTT && pteBase != gVfGGTTShadow)) {
+	auto *cb = NGreen::callback;
+	if (!pteBase || !cb || !cb->getRMMIOAddress() ||
+	    cb->getRMMIOLength() < kVfDirectBar0Bytes ||
+	    pteBase != reinterpret_cast<volatile uint64_t *>(
+	        const_cast<UInt32 *>(cb->getRMMIOAddress()) +
+	        kVfGGTTPteBase / sizeof(UInt32))) {
 		vfMarkProtocolFault("VF rotated GGTT PTE aperture mismatch");
 		return false;
-	}
-	if (gVfDirectGGTT) {
-		auto *cb = NGreen::callback;
-		if (!cb || !cb->getRMMIOAddress() ||
-		    cb->getRMMIOLength() < kVfDirectBar0Bytes ||
-		    pteBase != reinterpret_cast<volatile uint64_t *>(
-		        const_cast<UInt32 *>(cb->getRMMIOAddress()) +
-		        kVfGGTTPteBase / sizeof(UInt32))) {
-			vfMarkProtocolFault("VF rotated GGTT direct aperture mismatch");
-			return false;
-		}
 	}
 
 	// Preflight the entire descriptor before the first PTE write. The retained,
@@ -3447,10 +3298,6 @@ bool Gen11::IGHardwareGlobalPageTableMapRangeRotated(void *that,
 	__asm__ volatile("sfence" ::: "memory");
 	segments->memory->release();
 
-	if (!gVfDirectGGTT && !vfSyncShadowRange(*rotated->range)) {
-		vfMarkProtocolFault("failed to publish VF rotated GGTT shadow range");
-		return false;
-	}
 	return true;
 }
 
@@ -3479,12 +3326,10 @@ void Gen11::IGHardwareGlobalPageTableUnmapRange(void *that,
 		return;
 
 	// Apple releaseRange calls this virtual method, sets only a deferred flush
-	// bit and can then return to a caller that releases the DMA mapping. Relay
-	// (when needed) and a completed heavy GuC invalidation are therefore part of
-	// the unmap transaction, not optional diagnostics. The sfence matches the
-	// stock physical invalidator and drains direct BAR0 PTE stores first.
-	PANIC_COND(!gVfDirectGGTT && !vfSyncShadowRange(range),
-		"ngreen", "VF GGTT unmap relay failed before DMA release");
+	// bit and can then return to a caller that releases the DMA mapping. A
+	// completed heavy GuC invalidation is therefore part of the unmap
+	// transaction, not an optional diagnostic. The sfence matches the stock
+	// physical invalidator and drains direct BAR0 PTE stores first.
 	__asm__ volatile("sfence" ::: "memory");
 	if (invalidation == NGGgtt::TlbInvalidation::NotRequired)
 		return;
@@ -3504,14 +3349,10 @@ bool Gen11::IGHardwareGlobalPageTableMapRangeDummy(void *that,
 		vfMarkProtocolFault("invalid VF dummy GGTT range or transport state");
 		return false;
 	}
-	const bool result = FunctionCast(IGHardwareGlobalPageTableMapRangeDummy,
-	                                 callback->oIGHardwareGlobalPageTableMapRangeDummy)(that,
-	                                                                                     range,
-	                                                                                     flags);
-	if (!result || gVfIdentity != VfIdentity::Virtual ||
-	    that != gVfGlobalPageTable || gVfDirectGGTT)
-		return result;
-	return vfSyncShadowRange(range);
+	return FunctionCast(IGHardwareGlobalPageTableMapRangeDummy,
+	                    callback->oIGHardwareGlobalPageTableMapRangeDummy)(that,
+	                                                                        range,
+	                                                                        flags);
 }
 
 bool Gen11::IGAccelTaskIsKernelGPUTask(const void *that)
@@ -5733,7 +5574,7 @@ unsigned long Gen11::start(void *that, void *provider)
 		return 0;
 	}
 	const bool vfActive = identity == VfIdentity::Virtual;
-	if (vfActive && !vfBootstrapBinder()) {
+	if (vfActive && !vfBootstrapDirectGgtt()) {
 		vfMarkProtocolFault("VF bootstrap failed before native accelerator start");
 		return 0;
 	}
@@ -6781,7 +6622,7 @@ void Gen11::vfInitDoorbells(void *that) {
 	// IntelAccelerator::start normally completed this before constructing the
 	// scheduler.  Retrying here makes the ordering requirement explicit and
 	// prevents a transiently-unready VF from falling through to DISTRDB.
-	if (!gVfGGTTReady && !vfBootstrapBinder()) {
+	if (!gVfGGTTReady && !vfBootstrapDirectGgtt()) {
 		SYSLOG("ngreen", "V227: refusing physical doorbell discovery without VF bootstrap");
 		return;
 	}

@@ -1773,3 +1773,23 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   unwind. A sampled 169-case model compares the plan to 128-bit arithmetic.
   The complete syntax, analyzer, strict-ABI and sanitizer suite passes in
   `/tmp/ngreen-static.kKR87B`; no VM or hardware action was taken.
+
+### Removal of unreachable GGTT relay/shadow transport
+
+- The VF admission path accepts only device IDs classified as known
+  media-version-12 direct-GGTT platforms and requires the complete 16-MiB
+  BAR0 mapping before RESET. Its successful endpoint always selected direct
+  PTE writes. No code allocated `gVfGGTTShadow`, and no bootstrap transition
+  ever set `gVfBinderReady`; the nominal relay could therefore never publish
+  a PTE in any admitted state.
+- Removed that unreachable VF2PF relay opcode, shadow store, generic GGTT MMIO
+  shims and all post-map synchronization forks. Global-GTT init now has one
+  admitted VF endpoint: Apple's object initialization receives NootedGreen's
+  complete BAR0 mapping with both native clearing loops deliberately empty,
+  and map/dummy/rotated/unmap routes retain their assignment, receiver, DMA,
+  ordering and completed GuC TLB-invalidation checks.
+- This deletion is not a media-13 implementation. MTL/ARL remain rejected
+  before RESET until per-GT GMD/IP discovery and their documented GGTT update
+  transport can be implemented and tested as a separate protocol. The full
+  syntax, analyzer, strict-ABI and sanitizer suite passes in
+  `/tmp/ngreen-static.UDoTVY`; no VM or hardware access occurred.

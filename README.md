@@ -56,6 +56,10 @@ inherit runtime claims from the older Sonoma/Raptor Lake display experiments.
 
 - An identified SR-IOV VF rejects the physical framebuffer driver and uses the
   PF-owned GuC transport, memory-IRQ page and assigned GGTT range.
+- The admitted media-12 VF path writes the separately validated BAR0 PTE
+  aperture directly. The former uninitialized software-shadow/VF2PF-relay
+  fallback has been removed; media-13 remains fail-closed until its per-GT
+  discovery and GGTT update ABI are implemented.
 - VF scheduler selection, PM/fallback disablement, bootstrap symbols and
   accelerator start/stop routes are mandatory. Missing private ABI state fails
   admission instead of falling back to physical MMIO.

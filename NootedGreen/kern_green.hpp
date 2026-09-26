@@ -28,12 +28,6 @@ struct intel_ip_version {
 	UInt8 step;
 };
 
-// Gen12 SR-IOV VFs do not expose a guest-owned GMADR aperture.  Gen11 owns the
-// direct/relay GGTT transports, while these shims keep legacy physical-GPU
-// diagnostics and repair paths away from VF resources.
-bool ngVfGGTTRead32(unsigned long reg, UInt32 &value);
-bool ngVfGGTTWrite32(unsigned long reg, UInt32 value);
-bool ngVfGGTTBinderActive();
 // Fail closed for VF or unclassified identity before physical display access.
 bool ngPhysicalGpuAccessAllowed();
 // PFs may use their complete BAR; VFs may use only i915's fixed MMIO allowlist.
@@ -73,8 +67,6 @@ class NGreen {
 	// Public MMIO register access (used by display link training, display merge, etc.)
 	UInt32 readReg32(unsigned long reg) {
 		if (!rmmio || !rmmioPtr || (reg & 3U)) return 0xFFFFFFFFU;
-		UInt32 vfValue = 0;
-		if (ngVfGGTTRead32(reg, vfValue)) return vfValue;
 		if (!ngGpuRegisterAccessAllowed(reg)) return 0xFFFFFFFFU;
 		const auto bytes = this->rmmio->getLength();
 		if (bytes >= sizeof(uint32_t) && reg <= bytes - sizeof(uint32_t)) {
@@ -88,7 +80,6 @@ class NGreen {
 	// reg = byte offset (i915 convention). rmmioPtr is uint32_t* so divide by 4.
 	void writeReg32(unsigned long reg, UInt32 val) {
 		if (!rmmio || !rmmioPtr || (reg & 3U)) return;
-		if (ngVfGGTTWrite32(reg, val)) return;
 		if (!ngGpuRegisterAccessAllowed(reg)) return;
 		const auto bytes = this->rmmio->getLength();
 		if (bytes < sizeof(uint32_t) || reg > bytes - sizeof(uint32_t)) return;

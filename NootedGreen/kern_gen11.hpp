@@ -1690,9 +1690,9 @@ private:
 	                                                    uint32_t options);
 	mach_vm_address_t oIGHardwareGlobalPageTableInitWithOptions {};
 
-	// V217: Gen12 VF GGTT binder bridge.  Apple keeps its normal Gen11 page-table
-	// algorithms, but writes into a software shadow; completed ranges are then
-	// committed through the GuC VF2PF MMIO relay required by Raptor Lake VFs.
+	// V217: Gen12 VF direct-GGTT bridge. Apple keeps its normal Gen11 page-table
+	// algorithms, but all ranges and DMA addresses are checked against the
+	// PF-provisioned assignment before the BAR0 PTE aperture can be written.
 	static bool IGMemoryManagerInitSegments(void *that);
 	mach_vm_address_t oIGMemoryManagerInitSegments {};
 	static bool IGHardwareGlobalPageTableMapRange(void *that,

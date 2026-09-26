@@ -47,7 +47,7 @@ inline bool useNativeTigerLakePath(uint32_t device, bool physicalFunction) {
 }
 
 // Fixed VF BAR0 allowlist from i915 intel_uncore.c:vf_accessible_regs.
-// GGTT PTEs use a separate aperture/shadow transport and are not MMIO regs.
+// GGTT PTEs use the separately validated direct aperture and are not MMIO regs.
 inline bool isVfMmioRegister(uint32_t offset) {
     struct Range { uint32_t first, last; };
     static constexpr Range ranges[] = {
@@ -71,8 +71,8 @@ inline bool isVfMmioRegister(uint32_t offset) {
 }
 
 // Fixed media-12 platforms with native VF GGTT writes. Newer platforms must
-// negotiate/query per-GT IP before choosing their binder workaround; BAR size
-// is a mapping bound, not a hardware-generation discriminator.
+// negotiate/query per-GT IP before choosing their GGTT update transport; BAR
+// size is a mapping bound, not a hardware-generation discriminator.
 inline bool hasKnownDirectVfGgtt(uint32_t device) {
     if (isTigerLake(device))
         return true;
