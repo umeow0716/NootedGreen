@@ -6,6 +6,23 @@
 
 using namespace NGContextPool;
 int main() {
+    // Synthetic addresses are inspected only as integers, never dereferenced.
+    // Include a pool whose last byte fits but exclusive end wraps to zero.
+    for (uint32_t count : {1U, 2U, invalidId}) {
+        const uintptr_t required = static_cast<uintptr_t>(count) * stride;
+        auto *boundary = reinterpret_cast<uint8_t *>(UINTPTR_MAX - required);
+        assert(validStorage(boundary, required, count));
+        assert(!validStorage(boundary, required - 1, count));
+        for (uintptr_t excess : {uintptr_t(1), required / 2, required}) {
+            auto *wrapped = reinterpret_cast<uint8_t *>(UINTPTR_MAX - required + excess);
+            uint32_t used = 0, next = 0, id = 0x12345678;
+            assert(allocate(wrapped, UINT64_MAX, count, used, next, true, id) == Result::Invalid);
+            assert(used == 0 && next == 0 && id == 0x12345678);
+            used = 1;
+            assert(!NGContextPool::release(wrapped, UINT64_MAX, count, used, 0));
+            assert(used == 1);
+        }
+    }
     size_t cases = 0;
     for (uint32_t count = 1; count <= 8; ++count) {
         const size_t bytes = count * stride;

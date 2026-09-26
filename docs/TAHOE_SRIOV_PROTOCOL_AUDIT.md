@@ -1124,3 +1124,22 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   retirement call; malformed IDs/engine slots can fault there. Therefore this
   bounds check does not validate its entire caller. createUkContext rollback
   and all concurrent hash/object lifetime obligations remain unfinished.
+
+### CPU interval representability for proxy pool bookkeeping
+
+- Both allocation and retirement now validate the complete CPU address interval
+  before record pointer arithmetic, in addition to backing length and count.
+  A non-null address near UINTPTR_MAX could previously wrap despite sufficient
+  claimed byte capacity. The exclusive end must remain representable.
+- Added synthetic-address regressions at counts 1, 2 and 1024; invalid calls
+  preserve counters/cursors/output IDs without dereferencing these addresses.
+  This does not establish mapping residency, provenance or concurrent lifetime.
+  Full static/sanitizer suite passes /tmp/ngreen-static.kYN96n.
+- 4a9c093 is confirmed on the remote branch; CI 36223149074 passed. VM remains
+  off, and no new driver has been deployed.
+- Further review found isRealTGL is still derived from guest CPUID model in
+  kern_green.cpp, while many GPU topology/display/task hooks consume it.
+  CPU model is not GPU identity; virtual CPU spoofing can select the wrong
+  branch. Firmware admission already uses PCI identity separately. Global
+  replacement is pending review of these heterogeneous consumers, not treated
+  as a verified fix or evidence of successful PF/VF support.
