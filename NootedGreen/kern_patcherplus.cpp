@@ -2,6 +2,7 @@
 //! See LICENSE for details.
 
 #include "kern_patcherplus.hpp"
+#include "kern_pattern_match.hpp"
 
 bool SolveRequestPlus::solve(KernelPatcher &patcher, size_t id, mach_vm_address_t address, size_t maxSize) {
 	if(!this->address) return false;
@@ -17,9 +18,9 @@ bool SolveRequestPlus::solve(KernelPatcher &patcher, size_t id, mach_vm_address_
 	}
 
 	size_t offset = 0;
-	if (!KernelPatcher::findPattern(this->pattern, this->mask, this->patternSize,
-			reinterpret_cast<const void *>(address), maxSize, &offset) ||
-		!offset) {
+	if (!address || maxSize > UINT64_MAX - address ||
+		!NGPattern::findUnique(reinterpret_cast<const uint8_t *>(address), maxSize,
+			this->pattern, this->mask, this->patternSize, offset)) {
 		DBGLOG("Patcher+", "Failed to solve %s using pattern", safeString(this->symbol));
 		return false;
 	}
@@ -38,6 +39,10 @@ bool SolveRequestPlus::solveAll(KernelPatcher &patcher, size_t id, SolveRequestP
 
 bool RouteRequestPlus::route(KernelPatcher &patcher, size_t id, mach_vm_address_t address, size_t maxSize) {
 	if (patcher.routeMultiple(id, this, 1, address, maxSize)) { return true; }
+	// Lilu populates from before attempting the route, and clears its own
+	// error on failure. A resolved symbol means routing itself failed, possibly
+	// after writes: do not attempt another route on a partially modified body.
+	if (this->from) return false;
 	patcher.clearError();
 
 	if (!this->pattern || !this->patternSize) {
@@ -46,9 +51,9 @@ bool RouteRequestPlus::route(KernelPatcher &patcher, size_t id, mach_vm_address_
 	}
 
 	size_t offset = 0;
-	if (!KernelPatcher::findPattern(this->pattern, this->mask, this->patternSize,
-			reinterpret_cast<const void *>(address), maxSize, &offset) ||
-		!offset) {
+	if (!address || maxSize > UINT64_MAX - address ||
+		!NGPattern::findUnique(reinterpret_cast<const uint8_t *>(address), maxSize,
+			this->pattern, this->mask, this->patternSize, offset)) {
 		DBGLOG("Patcher+", "Failed to route %s using pattern", safeString(this->symbol));
 		return false;
 	}

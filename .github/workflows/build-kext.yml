@@ -15,6 +15,7 @@ on:
       - "tools/gpu_capabilities_test.cpp"
       - "tools/ggtt_init_bounds_test.cpp"
       - "tools/phy_translation_test.cpp"
+      - "tools/pattern_match_test.cpp"
       - "tools/check-static.sh"
       - ".github/workflows/build-kext.yml"
 
@@ -42,6 +43,9 @@ jobs:
           xcrun clang++ -std=c++14 -O1 -g -fsanitize=address,undefined \
             tools/phy_translation_test.cpp -o "$RUNNER_TEMP/phy-translation-test"
           "$RUNNER_TEMP/phy-translation-test"
+          xcrun clang++ -std=c++14 -O1 -g -fsanitize=address,undefined \
+            tools/pattern_match_test.cpp -o "$RUNNER_TEMP/pattern-match-test"
+          "$RUNNER_TEMP/pattern-match-test"
 
       - name: Build x86_64 release kext
         run: |

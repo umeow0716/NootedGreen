@@ -515,3 +515,29 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   still excluded), plus all offline sanitizer suites. Guest audio is a
   separate unfinished requirement; this cleanup does not implement it.
 - DYLD checkpoint 9c13c7e CI run 36218296554 succeeded.
+
+### Patcher fallback location review
+
+- Read kern_start.cpp and kern_patcherplus.cpp/.hpp. Replaced first-match
+  fallback routing/symbol lookup with bounded unique-pattern preflight:
+  accept offset zero, reject missing/ambiguous (including overlapping)
+  matches, null/empty ranges, all-wildcard signatures and address overflow.
+  Symbol-based routing is unchanged when it succeeds.
+- Downloaded upstream acidanthera/Lilu into /tmp/ngreen-lilu.BEuBI9 and
+  inspected tag 1.7.2, commit e4748cc081bf060302c7d3c44a643ce1d11b7e1d,
+  matching the vendored bundle's declared version. Upstream HEAD at download
+  was 0515f40b7f2a096adc85e832a4c6104fbd07f936. No dependency was replaced.
+- Lilu findPattern compares `(data & mask) == pattern`, requiring premasked
+  patterns. The new matcher preserves that semantics (does not broaden
+  matching by masking the pattern). Offline tests cover 173,740 cases plus
+  partial-bit masks, non-premasked rejection, first/last byte and null inputs.
+- Lilu routeMultipleInternal clears errors on failure, but populates `from`
+  before attempting the route. If a symbol resolved and routing then failed,
+  no pattern retry is allowed: the first attempt may already have modified
+  code. This is containment, not rollback of partial writes.
+- Further finding: Lilu masked replacement reports any positive replacement
+  count as success, even if the requested count was not reached. Its plain
+  lookup path excludes the final eligible offset. LookupPatchPlus still
+  needs count/bounds preflight and failure-atomicity review.
+- PHY checkpoint f536b68 CI 36218492866 and retired-HDMI checkpoint ce7898f
+  CI 36218582458 both succeeded. Still no installation or VM startup.

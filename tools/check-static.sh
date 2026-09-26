@@ -52,4 +52,11 @@ if "$compiler" -std=c++14 -O1 -g -fsanitize=address,undefined \
 else
     failed=1
 fi
+if "$compiler" -std=c++14 -O1 -g -fsanitize=address,undefined \
+    tools/pattern_match_test.cpp -o "$task_output/pattern-match-test" && \
+    "$task_output/pattern-match-test"; then
+    printf 'PASS offline pattern matching tests\n'
+else
+    failed=1
+fi
 exit "$failed"
