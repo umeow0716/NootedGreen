@@ -1793,3 +1793,22 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   transport can be implemented and tested as a separate protocol. The full
   syntax, analyzer, strict-ABI and sanitizer suite passes in
   `/tmp/ngreen-static.UDoTVY`; no VM or hardware access occurred.
+
+### Removal of physical scanout causation experiments
+
+- The TGL framebuffer route table still installed eight Sonoma-era panel
+  experiments described as diagnostics. They were not read-only: together
+  they cleared undocumented controller bytes, overwrote CRTC seam/scaler
+  fields, forced plane tiling and stride, changed full-reprogram decisions and
+  permanently cleared a framebuffer color-pipeline flag. The selected
+  `configurePlane` branch also contradicted its route comment: it compiled an
+  X-tiled value while claiming to force linear scanout.
+- Removed V400--V408 and their route/original slots as one coupled experiment.
+  Apple's native scaler, DSC, CRTC, watermark, color-pipeline and plane builders
+  are authoritative again. Also removed the V201 `hwSetupMemory` probe, which
+  sampled BAR2 scanout pixels and direct GGTT PTEs only for logging.
+- These routes were already unreachable for an SR-IOV VF because physical
+  framebuffer probe/start is rejected before the TGL framebuffer patch set.
+  Their removal instead narrows and stabilizes the shared physical-GPU code
+  surface. `/tmp/ngreen-static.2hbOxj` passes the full offline suite; no VM or
+  hardware action occurred.

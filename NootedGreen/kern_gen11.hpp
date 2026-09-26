@@ -1567,73 +1567,6 @@ private:
 	static void programPipeScaler(AppleIntel::AppleIntelScaler *that, AppleIntel::AppleIntelDisplayPath *displayPath);
 	mach_vm_address_t oprogramPipeScaler {};
 
-	// V400: AppleIntelScaler::setupPipeScaler(AppleIntelDisplayPath *, CRTCParams *)
-	// Read-only logging hook — dumps pipe scaler fields after Apple computes them
-	// (PIPE_SRCSZ vs PS_PS_WIN_SZ tells us whether downscaling is happening).
-	// AppleIntelScaler::setupPipeScaler(AppleIntelDisplayPath*, CRTCParams*)
-	static void setupPipeScaler(AppleIntel::AppleIntelScaler *that, AppleIntel::AppleIntelDisplayPath *path,
-	                            AppleIntel::CRTCParams *params);
-	mach_vm_address_t osetupPipeScaler {};
-
-	// V401: AppleIntelBaseController::paramsSurfCompare(CRTCParams *, CRTCParams *, PLANEPARAMS *, PLANEPARAMS *)
-	// Read-only diagnostic. Fires on every flip — Apple uses this to decide whether
-	// plane registers need reprogramming. Logs PLANE_CTL tiling bits, STRIDE, SURF.
-	// AppleIntelBaseController::paramsSurfCompare(CRTCParams*, CRTCParams*, PLANEPARAMS*, PLANEPARAMS*)
-	static bool paramsSurfCompare(AppleIntel::AppleIntelBaseController *that,
-	                              AppleIntel::CRTCParams *p1, AppleIntel::CRTCParams *p2,
-	                              AppleIntel::PLANEPARAMS *pl1, AppleIntel::PLANEPARAMS *pl2);
-	mach_vm_address_t oparamsSurfCompare {};
-
-	// V402: AppleIntelBaseController::setupDSCEngineParams(AppleIntelFramebuffer *, CRTCParams *, AppleIntelDisplayPath *, IODetailedTimingInformationV2 *)
-	// Read-only diagnostic. Linux confirms DSC=off on our panel; this hook lets us
-	// see if Apple still configures DSC despite Info.plist DSCSupport=0.
-	// AppleIntelBaseController::setupDSCEngineParams(AppleIntelFramebuffer*, CRTCParams*, AppleIntelDisplayPath*, IODetailedTimingInformationV2*)
-	static void setupDSCEngineParams(AppleIntel::AppleIntelBaseController *that,
-	                                 AppleIntel::AppleIntelFramebuffer *fb,
-	                                 AppleIntel::CRTCParams *params,
-	                                 AppleIntel::AppleIntelDisplayPath *path,
-	                                 IODetailedTimingInformationV2 *timing);
-	mach_vm_address_t osetupDSCEngineParams {};
-
-	// V403: AppleIntelBaseController::SetupParams(AppleIntelFramebuffer *, AppleIntelDisplayPath *, CRTCParams *, IODetailedTimingInformationV2 const *)
-	// The MASTER CRTCParams builder — runs once per modeset before any consumer.
-	// After this returns CRTCParams is fully populated. Read-only logger: snapshot
-	// every key field so we can see the source-of-truth values BEFORE setupPipeScaler /
-	// setupDSCEngineParams / hwRegsNeedUpdate / hwSetMode consume them.
-	// AppleIntelBaseController::SetupParams(AppleIntelFramebuffer*, AppleIntelDisplayPath*, CRTCParams*, const IODetailedTimingInformationV2*)
-	static void setupParams(AppleIntel::AppleIntelBaseController *that,
-	                        AppleIntel::AppleIntelFramebuffer *fb,
-	                        AppleIntel::AppleIntelDisplayPath *path,
-	                        AppleIntel::CRTCParams *params,
-	                        const IODetailedTimingInformationV2 *timing);
-	mach_vm_address_t osetupParams {};
-
-	// V404: AppleIntelBaseController::setupPipeWatermarks(AppleIntelFramebuffer *, AppleIntelDisplayPath *, CRTCParams *)
-	// Called from inside SetupParams BEFORE setupPipeScaler. Per-pipe DBUF/watermark
-	// allocator. Prime suspect for setting PIPE_SEAM_EXCESS=0x1 since seam-joining
-	// affects DBUF distribution. Read-only logger: pre/post PIPE_SEAM_EXCESS.
-	// AppleIntelBaseController::setupPipeWatermarks(AppleIntelFramebuffer*, AppleIntelDisplayPath*, CRTCParams*)
-	static void setupPipeWatermarks(AppleIntel::AppleIntelBaseController *that,
-	                                AppleIntel::AppleIntelFramebuffer *fb,
-	                                AppleIntel::AppleIntelDisplayPath *path,
-	                                AppleIntel::CRTCParams *params);
-	mach_vm_address_t osetupPipeWatermarks {};
-
-	// V405: AppleIntelPlane::configureColorPipeLine(FlipTransactionArgs*, bool)
-	// Dispatches 8/10/12/12SEG gamma pipeline from a BPC selector in FlipTransactionArgs.
-	// Logs GAMMA_MODE (0x4A480) and PIPE_MISC (0x70030) pre/post to confirm correct
-	// Display 13 values on ADL-P.  Gated on !isRealTGL.
-	static void configureColorPipeLine(AppleIntel::AppleIntelPlane *that, AppleIntel::FlipTransactionArgs *flipArgs, bool param_2);
-	mach_vm_address_t oConfigureColorPipeLine {};
-
-	// V406: AppleIntelPlane::configurePlane(FlipTransactionArgs*)
-	// Origin-level linear tiling fix: patch FlipTransactionArgs+0x3c tiling enum to 2
-	// (neither X-tiled=0 nor Y-tiled=1) so Apple computes PLANE_CTL bits[12:10]=000
-	// (linear) and PLANE_STRIDE = pitch_bytes/512 = 0x14. Physical pages are CPU-written
-	// linearly; forcing this here ensures the display engine fetches scanlines correctly.
-	static void configurePlane(AppleIntel::AppleIntelPlane *that, AppleIntel::FlipTransactionArgs *flipArgs);
-	mach_vm_address_t oConfigurePlane {};
-
 	// V182: hwSetPowerWellStatePGE — enables PW_1/PW_2 (display power gates).
 	// Previously no-op'd via releaseDoorbell; now callthrough with 0x78=ccont
 	// fixup (same pattern as DDI/Aux). Linux confirms PW_1+PW_2 must be up
@@ -1754,12 +1687,6 @@ private:
 	// FB controller start — wraps original, adds registerService() for accelerator matching
 	static bool AppleIntelBaseControllerstart(AppleIntel::AppleIntelBaseController *that, IOService *param_1);
 	mach_vm_address_t oAppleIntelBaseControllerstart {};
-
-	// V201 diagnostic: read first bytes of the scanout buffer right after hwSetupMemory
-	// returns. Tells us whether something filled the buffer (wallpaper) or it's still
-	// zeros from the IOBufferMemoryDescriptor allocation.
-	static int wrapHwSetupMemory(AppleIntel::AppleIntelBaseController *that, AppleIntel::AppleIntelFramebuffer *fb, AppleIntel::AppleIntelDisplayPath *displayPath, AppleIntel::CRTCParams *params, bool isAperture);
-	mach_vm_address_t ohwSetupMemory {};
 
 	// IntelAccelerator personality registration in IOCatalogue. Lives in the HW-kext
 	// path (ICL or TGL Graphics, not Framebuffer) — must run before the FBController's
