@@ -2328,3 +2328,26 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   suite passes in `/tmp/ngreen-static.eQEAkK`; the VM remained shut off. This
   establishes static reachability and host ownership, not runtime firmware
   registration success.
+
+### Validate every GuC MMIO success payload
+
+- Compared the direct bootstrap callers with current i915
+  `intel_iov_query.c`, xe `xe_gt_sriov_vf.c`, and their shared GuC ABI
+  headers. GuC origin and RESPONSE_SUCCESS type are transport properties, but
+  each action also defines a DATA0 contract that must be checked before later
+  scratch dwords are trusted.
+- VF_RESET requires DATA0 to be zero. The bridge previously accepted any
+  success payload and continued into MATCH_VERSION, so a protocol-invalid
+  positive result could be mistaken for a completed reset. MATCH_VERSION and
+  both CONTROL_CTB paths already required zero and now use the same named
+  predicate; SELF_CFG likewise uses the exact parsed-KLV count of one.
+- QUERY_SINGLE_KLV encodes returned length in DATA0[15:0] and requires
+  DATA0[27:16] to be zero. The old 32/64-bit helpers compared only the low
+  length and would consume response words despite nonzero reserved bits. Both
+  now require the exact length and all reserved bits clear before reading a
+  value.
+- A freestanding sanitizer model checks zero/self-config single-bit mutations,
+  every 16-bit query length for expected lengths 0..4, and every reserved bit:
+  327,769 payload contracts. The complete local gate passes in
+  `/tmp/ngreen-static.M3UvCc`; the VM remained shut off. Transport timing and
+  actual firmware responses remain runtime evidence.

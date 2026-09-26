@@ -81,6 +81,10 @@ inherit runtime claims from the older Sonoma/Raptor Lake display experiments.
 - The direct CTB producer admits only the six GuC v70 FAST request shapes this
   VF bridge implements. Exact request bodies determine retirement permission
   and G2H credit reservations before anything is written to the transport.
+- MMIO bootstrap responses also follow their exact action contracts: reset,
+  version and CTB-control DATA0 must be zero; self-config must report one
+  parsed KLV; query replies reject reserved bits and require the exact value
+  length before any returned dword is consumed.
 - Direct-LRCA attach validates every persistent Tahoe descriptor field before
   native pool access. GuC registration materializes the first-submit
   `FORCE_RESTORE` bit that Apple's legacy execlist adds only to a stack copy;

@@ -11,6 +11,7 @@
 #include "kern_vf_submission_gate.hpp"
 #include "kern_vf_runtime.hpp"
 #include "kern_vf_runtime_patch.hpp"
+#include "kern_vf_mmio_response.hpp"
 #include "kern_vf_tlb_patch.hpp"
 #include "kern_unaligned_patch.hpp"
 #include "kern_framebuffer_patch.hpp"
@@ -1429,7 +1430,7 @@ bool vfGucSelfConfig(uint16_t key, uint16_t length, uint64_t value)
 	};
 	uint32_t response[4] = {};
 	if (!vfGucSendMMIO(request, 4, response) ||
-	    (response[0] & 0x0FFFFFFFU) != 1) {
+	    !NGVfMmioResponse::selfConfigAccepted(response[0])) {
 		SYSLOG("ngreen", "V223: GuC self-config key=0x%04x value=0x%llx failed reply=0x%08x",
 		       key, static_cast<unsigned long long>(value), response[0]);
 		return false;
@@ -1513,7 +1514,7 @@ bool vfConfigureModernCtb(bool g2h, uint32_t appleDescriptorAddress)
 		uint32_t request[4] = {kGucActionHost2GucControlCtb, 1, 0, 0};
 		uint32_t response[4] = {};
 		if (!vfGucSendMMIO(request, 2, response) ||
-		    (response[0] & 0x0FFFFFFFU) != 0) {
+		    !NGVfMmioResponse::noData(response[0])) {
 			SYSLOG("ngreen", "V223: GuC CTB enable failed reply=0x%08x", response[0]);
 			return false;
 		}
@@ -1537,7 +1538,8 @@ bool vfQueryKLV64(uint32_t key, uint64_t &value)
 {
 	uint32_t request[4] = {kGucActionQuerySingleKlv, key, 0, 0};
 	uint32_t response[4] = {};
-	if (!vfGucSendMMIO(request, 2, response) || (response[0] & 0xFFFFU) != 2)
+	if (!vfGucSendMMIO(request, 2, response) ||
+	    !NGVfMmioResponse::queryKlvLength(response[0], 2U))
 		return false;
 	value = static_cast<uint64_t>(response[1]) |
 	        (static_cast<uint64_t>(response[2]) << 32);
@@ -1548,7 +1550,8 @@ bool vfQueryKLV32(uint32_t key, uint32_t &value)
 {
 	uint32_t request[4] = {kGucActionQuerySingleKlv, key, 0, 0};
 	uint32_t response[4] = {};
-	if (!vfGucSendMMIO(request, 2, response) || (response[0] & 0xFFFFU) != 1)
+	if (!vfGucSendMMIO(request, 2, response) ||
+	    !NGVfMmioResponse::queryKlvLength(response[0], 1U))
 		return false;
 	value = response[1];
 	return true;
@@ -1580,7 +1583,8 @@ bool vfBootstrapDirectGgtt()
 
 	uint32_t request[4] = {kGucActionVfReset, 0, 0, 0};
 	uint32_t response[4] = {};
-	if (!vfGucSendMMIO(request, 1, response)) {
+	if (!vfGucSendMMIO(request, 1, response) ||
+	    !NGVfMmioResponse::noData(response[0])) {
 		SYSLOG("ngreen", "V217: GuC VF reset failed");
 		return false;
 	}
@@ -1598,7 +1602,8 @@ bool vfBootstrapDirectGgtt()
 	const uint32_t gucMajor = (response[1] >> 16) & 0xFFU;
 	const uint32_t gucMinor = (response[1] >> 8) & 0xFFU;
 	const uint32_t gucPatch = response[1] & 0xFFU;
-	if ((response[0] & 0x0FFFFFFFU) != 0 || gucMajor > kGucVfLatestMajor) {
+	if (!NGVfMmioResponse::noData(response[0]) ||
+	    gucMajor > kGucVfLatestMajor) {
 		SYSLOG("ngreen", "V218: unsupported GuC VF ABI %u.%u.%u.%u (header=0x%08x)",
 		       gucBranch, gucMajor, gucMinor, gucPatch, response[0]);
 		return false;
@@ -3611,7 +3616,7 @@ bool Gen11::vfMmioHostToGuCAction(void *that, const uint32_t *request,
 			uint32_t reply[4] = {};
 			const bool disabled = producersStopped &&
 				vfGucSendMMIO(disable, 2, reply) &&
-				(reply[0] & 0x0FFFFFFFU) == 0;
+				NGVfMmioResponse::noData(reply[0]);
 			gVfCtbDisableConfirmed = disabled;
 			ok = producersStopped && irqDrained && disabled;
 			SYSLOG("ngreen", "V224: disabled VF CTB transport ret=%d dma=%d producers=%d irqDrained=%d reply=0x%08x",

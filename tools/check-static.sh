@@ -166,6 +166,13 @@ else
     failed=1
 fi
 if "$compiler" -std=c++14 -O1 -g -fsanitize=address,undefined \
+    tools/vf_mmio_response_test.cpp -o "$task_output/vf-mmio-response-test" && \
+    "$task_output/vf-mmio-response-test"; then
+    printf 'PASS offline VF MMIO-response contract tests\n'
+else
+    failed=1
+fi
+if "$compiler" -std=c++14 -O1 -g -fsanitize=address,undefined \
     tools/vf_runtime_patch_test.cpp -o "$task_output/vf-runtime-patch-test" && \
     "$task_output/vf-runtime-patch-test" \
         sle_Internal/le/AppleIntelTGLGraphics.kext/Contents/MacOS/AppleIntelTGLGraphics \
