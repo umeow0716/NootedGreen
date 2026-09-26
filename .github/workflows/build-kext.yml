@@ -19,6 +19,7 @@ on:
       - "tools/dvmt_patch_test.cpp"
       - "tools/context_pool_test.cpp"
       - "tools/binary_identity_test.cpp"
+      - "tools/pci_identity_test.cpp"
       - "tools/check-static.sh"
       - ".github/workflows/build-kext.yml"
 
@@ -58,6 +59,9 @@ jobs:
           xcrun clang++ -std=c++14 -O1 -g -fsanitize=address,undefined \
             tools/binary_identity_test.cpp -o "$RUNNER_TEMP/binary-identity-test"
           "$RUNNER_TEMP/binary-identity-test"
+          xcrun clang++ -std=c++14 -O1 -g -fsanitize=address,undefined \
+            tools/pci_identity_test.cpp -o "$RUNNER_TEMP/pci-identity-test"
+          "$RUNNER_TEMP/pci-identity-test"
 
       - name: Build x86_64 release kext
         run: |

@@ -732,3 +732,27 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   VF payloads fail closed, not silently use guessed offsets. This does not
   certify the known payload's unresolved lifecycle/OOM defects.
 - Framebuffer admission checkpoint 6d50aa2 CI 36220035067 succeeded.
+
+### Main device initialization and PCI identity reads
+
+- Read all of kern_green.cpp. The optional legacy saved-config seeding
+  passed a zero-length array to setProperty with length 0xea in two places,
+  copying beyond the object into an IORegistry property. Both arrays now
+  actually contain 234 zero bytes, and copy lengths use sizeof.
+- configRead32 treated both offset 0 and offset 2 like vendor/device reads:
+  offset 2 instead contains device ID low and command register high. The
+  replacement now preserves the correct other half for each offset. Both
+  config-read wrappers reject >16-bit spoof IDs and restrict substitution to
+  the actual selected IOPCIDevice, not any name beginning with IGPU.
+- The shared pure helper passes 16,777,216 device/offset combinations against
+  an independent byte reconstruction plus invalid-ID passthrough. This tests
+  returned values, not physical PCI writes (none are performed by the helper).
+- First syntax pass caught legacy SDK setProperty(void*) rejecting const
+  arrays; corrected the buffer declaration and reran the complete suite.
+  Successful full run: /tmp/ngreen-static.5bgmHz. UUID checkpoint 83178e2
+  CI 36220151307 succeeded.
+- Remaining kern_green review findings: null BAR0 map handling, CPU-based GPU
+  classification, unverified DVMT fallback, unconditional PCI bus-master
+  enabling, global IOAccelFamily capability bypass/mode stripping, dormant
+  false-success wrapper, panel-data allocation ownership and partial property
+  allocation failure. Reading a file is not closing its review findings.

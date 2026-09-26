@@ -7,6 +7,7 @@
 #include "kern_model.hpp"
 #include "DYLDPatches.hpp"
 #include "kern_patcherplus.hpp"
+#include "kern_pci_identity.hpp"
 #include <Headers/kern_api.hpp>
 #include <Headers/kern_devinfo.hpp>
 
@@ -104,8 +105,8 @@ static bool seedIGPUPropertiesOnEntry(IORegistryEntry *entry) {
 	}
 
 	if (!entry->getProperty("saved-config")) {
-		static uint8_t sconf[] = {};
-		entry->setProperty("saved-config", sconf, 0xea);
+		static uint8_t sconf[0xEA] = {};
+		entry->setProperty("saved-config", sconf, sizeof(sconf));
 		changed = true;
 	}
 
@@ -209,7 +210,7 @@ void NGreen::processPatcher(KernelPatcher &patcher) {
 			seedIGPUPropertiesOnEntry(this->iGPU);
 		}
 		
-		static uint8_t sconf[] = {};
+		static uint8_t sconf[0xEA] = {};
 		
 		static uint8_t panel[] = {0x01, 0x00, 0x00, 0x00};
 		/*static uint8_t panel1[] = {0x19, 0x01, 0x00, 0x00};
@@ -233,7 +234,7 @@ void NGreen::processPatcher(KernelPatcher &patcher) {
 			this->iGPU->setProperty("model", const_cast<char *>("Intel Iris Xe Graphics"), 23);
 
 			auto *prop = OSDynamicCast(OSData, this->iGPU->getProperty("saved-config"));
-			if (!prop) this->iGPU->setProperty("saved-config", sconf, 0xea);
+			if (!prop) this->iGPU->setProperty("saved-config", sconf, sizeof(sconf));
 		}
 			
 		//auto x = OSDynamicCast(OSData, this->iGPU->getProperty("AAPL,ig-platform-id"));
@@ -498,14 +499,10 @@ bool NGreen::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t
 uint16_t NGreen::configRead16(IORegistryEntry *service, uint32_t space, uint8_t offset) {
 	if (callback && callback->orgConfigRead16) {
 		auto result = callback->orgConfigRead16(service, space, offset);
-		if (offset == WIOKit::kIOPCIConfigDeviceID && service != nullptr) {
-			auto name = service->getName();
-			if (name && name[0] == 'I' && name[1] == 'G' && name[2] == 'P' && name[3] == 'U') {
-				uint32_t device;
-				if (WIOKit::getOSDataValue(service, "device-id", device) && device != result) {
-					return device;
-				}
-			}
+		if (service && service == callback->iGPU && offset == WIOKit::kIOPCIConfigDeviceID) {
+			uint32_t device;
+			if (WIOKit::getOSDataValue(service, "device-id", device) && device <= 0xFFFFU)
+				return static_cast<uint16_t>(device);
 		}
 
 		return result;
@@ -518,15 +515,11 @@ uint32_t NGreen::configRead32(IORegistryEntry *service, uint32_t space, uint8_t 
 	if (callback && callback->orgConfigRead32) {
 		auto result = callback->orgConfigRead32(service, space, offset);
 		// According to lvs unaligned reads may happen
-		if ((offset == WIOKit::kIOPCIConfigDeviceID || offset == WIOKit::kIOPCIConfigVendorID) && service != nullptr) {
-			auto name = service->getName();
-			if (name && name[0] == 'I' && name[1] == 'G' && name[2] == 'P' && name[3] == 'U') {
-				uint32_t device;
-				if (WIOKit::getOSDataValue(service, "device-id", device) && device != (result & 0xFFFF)) {
-					device = (result & 0xFFFF) | (device << 16);
-					return device;
-				}
-			}
+		if (service && service == callback->iGPU &&
+		    (offset == WIOKit::kIOPCIConfigDeviceID || offset == WIOKit::kIOPCIConfigVendorID)) {
+			uint32_t device;
+			if (WIOKit::getOSDataValue(service, "device-id", device))
+				return NGPciIdentity::replaceDeviceId32(result, offset, device);
 		}
 
 		return result;
