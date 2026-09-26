@@ -400,10 +400,7 @@ void vfReleaseRetiredContextBacking(uint16_t gucId)
 	if (!gVfProtocolFault && entry.state == kVfGucContextTombstone &&
 	    entry.refCount == 0) {
 		backing = entry.contextBacking;
-		entry.contextBacking = nullptr;
-		entry.lrcaPage = 0;
-		entry.descriptorLo = 0;
-		entry.descriptorHi = 0;
+		NGVfContextEvent::clearReleasedIdentity(entry);
 	}
 	IOSimpleLockUnlockEnableInterrupt(gVfContextLock, interruptState);
 	if (backing)
@@ -4681,16 +4678,11 @@ bool Gen11::vfCtbGucToHostAction(void *that, uint32_t *message) {
 					entry.disablePending = completion.disablePending;
 					handled = true;
 				}
-			} else if (entry.state == kVfGucContextPendingDeregister) {
+			} else if (NGVfContextEvent::deregisterDone(entry)) {
 				// Leave LRCA/backing associated until the retirement owner has
 				// also finished every native detach; attach must still wait. Normal
 				// final detach already set refCount to zero, while the device-wide
 				// shutdown sweep deliberately preserves outstanding native owners.
-				entry.engineClass = 0;
-				entry.engineInstance = 0;
-				entry.enablePending = false;
-				entry.disablePending = false;
-				entry.state = kVfGucContextTombstone;
 				handled = true;
 			}
 			newState = entry.state;

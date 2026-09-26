@@ -73,4 +73,51 @@ int main() {
     assert(NGVfContextShutdown::action(state) == Action::Wait);
     state = kVfGucContextTombstone;
     assert(NGVfContextShutdown::action(state) == Action::Complete);
+
+    struct Context {
+        uint32_t lrcaPage;
+        uint32_t descriptorLo;
+        uint32_t descriptorHi;
+        uint16_t refCount;
+        uint8_t engineClass;
+        uint8_t engineInstance;
+        VfGucContextState state;
+        bool enablePending;
+        bool disablePending;
+        void *contextBacking;
+    };
+    int backing = 0;
+    for (const auto initialState : {
+             kVfGucContextEmpty, kVfGucContextTombstone,
+             kVfGucContextRegistering, kVfGucContextRegistered,
+             kVfGucContextPendingEnable, kVfGucContextEnabled,
+             kVfGucContextPendingDisable, kVfGucContextDisabled,
+             kVfGucContextPendingDeregister}) {
+        Context context {0x12345000U, 0x12345309U, 0xA5A20020U, 7,
+                         4, 2, initialState, true, true, &backing};
+        const bool handled = NGVfContextEvent::deregisterDone(context);
+        assert(handled ==
+               (initialState == kVfGucContextPendingDeregister));
+        assert(context.state == (handled ? kVfGucContextTombstone :
+                                           initialState));
+        // Firmware completion must not erase identity needed by late detach.
+        assert(context.lrcaPage == 0x12345000U);
+        assert(context.descriptorLo == 0x12345309U);
+        assert(context.descriptorHi == 0xA5A20020U);
+        assert(context.engineClass == 4);
+        assert(context.engineInstance == 2);
+        assert(context.contextBacking == &backing);
+        assert(context.refCount == 7);
+        assert(context.enablePending == !handled);
+        assert(context.disablePending == !handled);
+    }
+
+    Context released {0x12345000U, 0x12345309U, 0xA5A20020U, 0,
+                      4, 2, kVfGucContextTombstone, false, false, &backing};
+    NGVfContextEvent::clearReleasedIdentity(released);
+    assert(released.lrcaPage == 0 && released.descriptorLo == 0 &&
+           released.descriptorHi == 0 && released.engineClass == 0 &&
+           released.engineInstance == 0 && released.contextBacking == nullptr);
+    assert(released.refCount == 0 &&
+           released.state == kVfGucContextTombstone);
 }

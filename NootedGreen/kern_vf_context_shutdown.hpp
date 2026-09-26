@@ -85,4 +85,30 @@ inline ScheduleDone scheduleDone(VfGucContextState state, bool enablePending,
 	return result;
 }
 
+// DEREGISTER_DONE ends firmware ownership, but native Apple context objects can
+// still hold references during device-wide shutdown. Preserve the complete
+// descriptor/engine/backing identity until the final late detach releases it.
+template <typename Context>
+inline bool deregisterDone(Context &context) {
+	if (context.state != kVfGucContextPendingDeregister)
+		return false;
+	context.enablePending = false;
+	context.disablePending = false;
+	context.state = kVfGucContextTombstone;
+	return true;
+}
+
+// Called only after firmware deregistration and the last native owner. Keeping
+// identity clearing in this boundary prevents a tombstone from becoming
+// unmatchable while a late detach still needs its class/instance.
+template <typename Context>
+inline void clearReleasedIdentity(Context &context) {
+	context.lrcaPage = 0;
+	context.descriptorLo = 0;
+	context.descriptorHi = 0;
+	context.engineClass = 0;
+	context.engineInstance = 0;
+	context.contextBacking = nullptr;
+}
+
 } // namespace NGVfContextEvent
