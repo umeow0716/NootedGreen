@@ -4932,6 +4932,13 @@ int Gen11::handleLinkIntegrityCheck()
 
 void Gen11::hwInitializeCState(AppleIntel::AppleIntelBaseController *that)
 {
+	if (!that || !ngPhysicalGpuAccessAllowed()) {
+		// Display DMC and physical power wells are not owned by a VF. The
+		// original fallback also performs physical initialization: do not call
+		// it merely because a DMC boot argument was absent.
+		vfMarkProtocolFault("physical DMC initialization on VF/unknown device or null controller");
+		return;
+	}
 	SYSLOG("ngreen", "NB-BUILD-V50-ALLOW-METAL");
 
 	int origB48 = getMember<int>(that, 0xB48);
@@ -5022,7 +5029,7 @@ void Gen11::hwInitializeCState(AppleIntel::AppleIntelBaseController *that)
 		// ── ADL-P DMC ──
 		SYSLOG("ngreen", "hwInitCState: ngreen-dmc=adlp, loading ADL-P DMC v2.16 (%u dwords)", adlp_dmc_ver2_16_bin_s / 4);
 		// adlp_dmc_ver2_16_bin is the raw firmware payload extracted from the v3 blob
-		// (adlp_dmc_ver2_16.bin: CSS+package header stripped, pipe-A payload at file offset 0x310).
+		// (adlp_dmc_ver2_16.bin: CSS+package/v3 headers stripped, main payload at file offset 0x310).
 		// Write directly to SRAM starting at 0x80000.
 		for (unsigned long off = 0; off < adlp_dmc_ver2_16_bin_s; off += 4)
 			FastWriteRegister32(reinterpret_cast<AppleIntel::AppleIntelBaseController *>(ccont), off + 0x80000,

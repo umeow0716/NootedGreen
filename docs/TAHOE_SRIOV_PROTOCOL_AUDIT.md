@@ -594,3 +594,33 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   physical display/clock/PM behavior are not certified. Other unused legacy
   wrappers and commented patch experiments still need removal/review.
 - Lookup preflight checkpoint 261ca1a CI run 36218855810 succeeded.
+
+### Embedded DMC payload boundaries and VF admission
+
+- Firmware.cpp/FirmwareADLP.cpp contain literal firmware data plus sizeof
+  declarations, not host-side algorithms. Compared every payload byte to
+  installed linux-firmware containers, then fetched the matching upstream
+  GitLab linux-firmware/main/i915 files and verified identical SHA256 hashes:
+  TGL 3c013ef0ad96ba73aee8e5bd04a8e27cc9b1c6e9183b1a83ce124485f325afca;
+  ADLP 2da482ea46a40e54c9ca3b54185959177f393eff98ece21acdac7eb6cacb0fcb.
+- Both main payloads start at file offset 0x310, following v3 headers at
+  0x210. TGL declares fw_size=0x116c dwords (17,840 bytes), while the old
+  embedded array had 18,976 bytes: it incorrectly included the next 256-byte
+  header at 0x48c0 and its 880-byte payload, destined for SRAM 0x90000.
+  Removed that 1,136-byte tail from the main array. Git retains the old data.
+- ADLP main fw_size=0x1833 dwords (24,780 bytes) was already correct. Fixed
+  its loader comment: this is the main image, not pipe-A. Added compile-time
+  payload-size assertions and tools/check-dmc-blobs.sh for repeatable byte
+  comparison against pinned source containers. The script is read-only.
+- hwInitializeCState now rejects VF/unknown identity before private-object
+  reads, DMC writes, power-well programming OR the native fallback. The void
+  callback faults admission rather than pretending this is a VF display
+  implementation. Complete framebuffer startup still needs separate work.
+- Remaining physical-path defects: omitted per-pipe payload handling,
+  boot-argument rather than stepping/IP-based selection, hardcoded timing
+  and power-well values, mixing native ICL firmware with newer context
+  registers, and global controller pointer ownership. These are not made
+  safe by correcting payload length. Firmware instruction semantics remain
+  opaque; byte integrity is not a firmware-internal source review.
+- Full offline suite passes in /tmp/ngreen-static.3OKBXc. DVMT checkpoint
+  a580586 CI run 36219197807 succeeded. No dynamic test performed.

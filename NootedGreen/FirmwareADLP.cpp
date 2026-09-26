@@ -778,4 +778,6 @@ const uint32_t adlp_dmc_ver2_16_bin[] =
 0x02010000, 0x5F7C5F64, 0x04010004, 0xBFFFFFFF, 0x00045504, 0x01010000, 0x00000000, 0x0008F03C, 
 0x01010000, 0x00000000, 0x0008F00C};
 
+static_assert(sizeof(adlp_dmc_ver2_16_bin) == 0x1833 * sizeof(uint32_t),
+              "ADL-P main DMC payload boundary changed");
 const UInt32 adlp_dmc_ver2_16_bin_s = sizeof(adlp_dmc_ver2_16_bin);
