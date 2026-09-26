@@ -1401,7 +1401,30 @@ static int getV77KillDelayIterations() {
 	return 60;
 }
 
+static void *vfRejectPhysicalFramebufferProbe(void *, void *, int *) {
+	return nullptr;
+}
+
+static bool vfRejectPhysicalFramebufferStart(void *, void *) {
+	return false;
+}
+
 bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t address, size_t size) {
+	const bool physicalFramebuffer = index == kextG11FB.loadIndex ||
+		index == kextG11FBT.loadIndex || index == kextG11FBTA.loadIndex;
+	if (physicalFramebuffer && !ngPhysicalGpuAccessAllowed()) {
+		// A VF has no physical display controller. Refusing only DMC or MMIO
+		// helpers is too late: native probe/start have their own raw accesses.
+		// This is admission rejection, not a virtual framebuffer implementation.
+		RouteRequestPlus reject[] = {
+			{"__ZN24AppleIntelBaseController5probeEP9IOServicePi", vfRejectPhysicalFramebufferProbe},
+			{"__ZN31AppleIntelFramebufferController5startEP9IOService", vfRejectPhysicalFramebufferStart},
+		};
+		PANIC_COND(!RouteRequestPlus::routeAll(patcher, index, reject, address, size),
+			"ngreen", "Cannot contain physical framebuffer on VF/unknown device");
+		SYSLOG("ngreen", "Physical framebuffer probe/start rejected for VF/unknown device");
+		return true;
+	}
 	if (kextG11FB.loadIndex == index) {
 		if (this->tglFBLoaded) {
 			DBGLOG("ngreen", "Skipping ICL FB — TGL FB already loaded");
@@ -5408,6 +5431,8 @@ void Gen11::prepareToExitSleep(AppleIntel::AppleIntelFramebuffer *that)
 
 bool Gen11::AppleIntelBaseControllerstart(AppleIntel::AppleIntelBaseController *that, IOService *param_1)
 {
+	if (!that || !ngPhysicalGpuAccessAllowed())
+		return false;
 	// V25: Display workarounds BEFORE start (no ForceWake needed for display regs 0x4xxxx+).
 	// GT workarounds moved AFTER start (ForceWake must be held for GT regs 0x0-0x7FFF).
 	

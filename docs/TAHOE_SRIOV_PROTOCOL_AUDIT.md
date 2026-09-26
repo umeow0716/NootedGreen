@@ -687,3 +687,26 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   mapping failure contracts are an outstanding blocker, not fixed by this.
 - Full offline suite passed in /tmp/ngreen-static.N3QM5d. Proxy allocator
   checkpoint e2b205d CI 36219798073 succeeded. VM remains off.
+
+### Main physical framebuffer admission on VFs
+
+- AppleIntelBaseControllerstart wrote DC_STATE_EN, PCH clock gating/reset
+  handshake and display chicken registers before native start. The previous
+  DMC guard was too late to contain this path. Added an immediate non-physical
+  rejection before any of these writes.
+- For all three main ICL/TGL framebuffer identities, processKext now routes
+  base probe and derived controller start to rejection for VF/unknown devices,
+  before physical patch installation and before the old ICL-skipped-if-TGL
+  branch. Mandatory route failure remains fatal. The separate renamed ICL
+  path already has equivalent admission handling in Genx.
+- Verified these TGL symbols in local framebuffer payload SHA256
+  285ee7a9c3d6c9a9647013f44fb40f312b1cb42879974ef0542544cf049442b5:
+  base probe 0x60ac2, derived controller start 0xdd828, base start 0x5a8a0.
+  This is service-admission containment, NOT proof of all constructor/free
+  behavior or support for every other binary variant.
+- This deliberately prevents physical display startup on a VF. A real
+  headless accelerator/virtual-display integration is still required;
+  Sunshine/Moonlight is not implemented by this rejection. Physical devices
+  retain the existing display path, which still needs generation-wide review.
+- Full offline suite passes in /tmp/ngreen-static.fk4vFW. CI a0d46bb
+  (36219866509) and 4a22593 (36219932023) succeeded. No deployment or boot.
