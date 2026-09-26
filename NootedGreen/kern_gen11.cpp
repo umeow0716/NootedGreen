@@ -168,12 +168,15 @@ uint32_t gVfRelayFailureLogs = 0;
 uint32_t gVfCtbGpuBase = 0;
 uint8_t *gVfCtbCpuBase = nullptr;
 OSObject *gVfCtbBacking = nullptr;
+OSObject *gVfCtbObject = nullptr;
 bool gVfCtbDisableConfirmed = false;
 volatile UInt32 gVfCtbStopped = 0;
+volatile UInt32 gVfCtbEnabled = 0;
 bool gVfMemIrqConfigured = false;
 volatile UInt32 gVfMemIrqRequested = 0;
 volatile UInt32 gVfProtocolFault = 0;
 bool gVfMmioPoisoned = false; // protected by gVfGucLock
+volatile UInt32 gVfBootstrapStarted = 0;
 volatile UInt32 gVfTlbNextSeqno = 0;
 volatile UInt32 gVfTlbWaitActive = 0;
 volatile UInt32 gVfTlbWaitSeqno = 0;
@@ -337,7 +340,7 @@ bool vfSendCtbFastAction(void *guc, const uint32_t *request,
 {
 	transportFence = 0;
 	if (!guc || !request || requestLength == 0 || requestLength > 31 ||
-	    !gVfCtbGpuBase || gVfProtocolFault || gVfCtbStopped ||
+	    !gVfCtbGpuBase || !gVfCtbEnabled || gVfProtocolFault || gVfCtbStopped ||
 	    (request[0] & (kGucOriginGuc | kGucTypeMask)))
 		return false;
 
@@ -362,7 +365,7 @@ bool vfSendCtbFastAction(void *guc, const uint32_t *request,
 	for (uint32_t retry = 0; retry < 8; retry++) {
 		IOLockLock(lock);
 		OSSynchronizeIO();
-		if (gVfCtbStopped || gVfProtocolFault) {
+		if (!gVfCtbEnabled || gVfCtbStopped || gVfProtocolFault) {
 			IOLockUnlock(lock);
 			return false;
 		}
@@ -515,6 +518,9 @@ static_assert(kVfMemIrqOffset == kVfCtbUsedBytes,
 static_assert(kVfMemIrqOffset + kVfMemIrqBytes == kVfCtbBackingBytes,
               "memory IRQ page must fit the CTB allocation");
 bool gVfCtbAllocationPending = false;
+void *gVfCtbInitOwner = nullptr;
+IOThread gVfCtbAllocationThread = nullptr;
+OSObject *gVfCtbAllocatedBacking = nullptr; // borrowed during init only
 
 bool vfValidH2GMapping(const volatile uint32_t *descriptor,
                        const volatile uint32_t *buffer)
@@ -577,7 +583,10 @@ uint64_t vfConsumeMemoryInterrupts()
 		pending |= 1ULL << 45;
 		if (gucStatus[0]) {
 			gucStatus[0] = 0;
-			pending |= 1ULL << 36;
+			// Modern VF SW_INT_0 signals migration, not Apple's legacy GuC
+			// software callback. Rebinding/restoring migrated state is not yet
+			// implemented; stop submission rather than dispatching the wrong ABI.
+			vfMarkProtocolFault("VF migration notification requires state reinitialization");
 		}
 	}
 	OSSynchronizeIO();
@@ -730,6 +739,8 @@ bool vfGucSelfConfig(uint16_t key, uint16_t length, uint64_t value)
 
 bool vfConfigureMemIrq()
 {
+	if (gVfCtbStopped || gVfProtocolFault)
+		return false;
 	if (gVfMemIrqConfigured)
 		return true;
 	if (!gVfCtbGpuBase || !gVfCtbCpuBase)
@@ -761,7 +772,7 @@ bool vfConfigureMemIrq()
 
 bool vfConfigureModernCtb(bool g2h, uint32_t appleDescriptorAddress)
 {
-	if (gVfProtocolFault || !gVfCtbBacking || !gVfCtbCpuBase ||
+	if (gVfProtocolFault || gVfCtbStopped || !gVfCtbBacking || !gVfCtbCpuBase ||
 	    (g2h && appleDescriptorAddress < 0x400U))
 		return false;
 	// registerCommandTransportBuffers sends G2H first at base+PAGE_SIZE/4,
@@ -805,6 +816,9 @@ bool vfConfigureModernCtb(bool g2h, uint32_t appleDescriptorAddress)
 			SYSLOG("ngreen", "V223: GuC CTB enable failed reply=0x%08x", response[0]);
 			return false;
 		}
+		// Mappings and KLV registration alone do not establish a usable CTB.
+		// Admit submissions only after firmware acknowledges transport enable.
+		OSCompareAndSwap(0, 1, &gVfCtbEnabled);
 	}
 
 	SYSLOG("ngreen", "V223: configured %s CTB desc=0x%llx buffer=0x%llx bytes=0x%x",
@@ -841,6 +855,12 @@ bool vfBootstrapBinder()
 		return false;
 	if (gVfGGTTReady)
 		return true;
+	// RESET is not an idempotent query. A concurrent caller or retry after a
+	// partial bootstrap must not reset firmware beneath already pinned state.
+	if (!OSCompareAndSwap(0, 1, &gVfBootstrapStarted)) {
+		vfMarkProtocolFault("concurrent or repeated incomplete VF bootstrap");
+		return false;
+	}
 
 	uint32_t request[4] = {kGucActionVfReset, 0, 0, 0};
 	uint32_t response[4] = {};
@@ -2283,6 +2303,8 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				 vfMmioHostToGuCAction, this->oVfMmioHostToGuCAction},
 				{"__ZN13IGHardwareGuC15hostToGuCActionEPKjjiPj",
 				 vfLegacyHostToGuCAction, this->oVfLegacyHostToGuCAction},
+				{"__ZN13IGHardwareGuC15createUkContextEy25UK_GEN11_CONTEXT_PRIORITY",
+				 vfCreateUkContext, this->oVfCreateUkContext},
 				// V227: initDoorbells consumes DISTRDB before any submission.
 				// Bypass the stock routine for a VF so an all-ones MMIO read
 				// cannot turn into a 16 x 256 topology and corrupt the object.
@@ -4279,6 +4301,8 @@ void Gen11::raWriteRegister32b(void *that,void *param_1,unsigned long param_2, U
 
 void Gen11::raWriteRegister32(void *that,unsigned long param_1, UInt32 param_2)
 {
+	if (!callback || !NGreen::callback)
+		return;
 	// V93: optional plane SURF zero-write guard.
 	// Disabled by default due black-screen regressions; enable only with -ngreenv93.
 	struct V93PlaneSurfState {
@@ -8581,7 +8605,11 @@ unsigned long Gen11::loadGuCBinary(void *that) {
 	// The PF already owns and runs GuC for an SR-IOV VF. Report firmware as
 	// available so Apple's GuC scheduler initializes its submission transport,
 	// but never try to replace the PF-owned image or WOPCM configuration.
-	if (gVfGGTTReady) {
+	// This hook is also installed on ICL, whose private layout is different.
+	// The VF scheduler-data path is only implemented for the TGL payload.
+	if (callback->tglHWLoaded && gVfIdentity != VfIdentity::Physical) {
+		if (!gVfGGTTReady || gVfProtocolFault)
+			return 0;
 		// The stock load routine initializes all scheduler-side allocations
 		// before touching WOPCM and uploading firmware.  Skipping it outright
 		// left contextCount at zero, so the very first createUkContext returned
@@ -8601,6 +8629,19 @@ unsigned long Gen11::loadGuCBinary(void *that) {
 	}
 	SYSLOG("ngreen", "loadGuCBinary: RPL — stubbed to return 1 (host scheduling)");
 	return 1;
+}
+
+uint32_t Gen11::vfCreateUkContext(void *that, uint64_t owner, int priority) {
+	if (gVfIdentity != VfIdentity::Physical &&
+	    (!gVfCtbEnabled || gVfCtbStopped || gVfProtocolFault)) {
+		// Apple's initWithOptions releases a failed CTB and continues toward
+		// legacy MMIO context creation. Its createUkContext failure sentinel
+		// is 0x400, which makes that initialization path return failure.
+		vfMarkProtocolFault("legacy context creation without acknowledged VF transport");
+		return 0x400U;
+	}
+	return FunctionCast(vfCreateUkContext, callback->oVfCreateUkContext)(
+		that, owner, priority);
 }
 
 bool Gen11::vfLegacyHostToGuCAction(void *that, const uint32_t *request,
@@ -8677,6 +8718,7 @@ bool Gen11::vfMmioHostToGuCAction(void *that, const uint32_t *request,
 			// the H2G lock. Every direct sender rechecks this flag under that
 			// same lock. Legacy senders are rejected by their routed entry.
 			OSCompareAndSwap(0, 1, &gVfCtbStopped);
+			OSCompareAndSwap(1, 0, &gVfCtbEnabled);
 			auto *ctb = that ? getMember<void *>(that, 0xA10) : nullptr;
 			auto *sendLock = ctb ? getMember<IOLock *>(ctb, 0x18) : nullptr;
 			if (sendLock) {
@@ -9157,8 +9199,8 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 		       descriptor[0], legacyContextId);
 		return false;
 	}
-	// Gen12 SR-IOV VFs do not expose the physical GT interrupt hierarchy.
-	// Match i915's init_vf_irq_reg_state(): consume the reserved LRCA slots to
+	// This VF uses memory-based IRQ reporting, as in i915's VF path.
+	// Match init_vf_irq_reg_state(): consume the reserved LRCA slots to
 	// load the interrupt mask from memory and point the engine's status/source
 	// reporting at the shared memory-IRQ page.  Register addresses are relative
 	// to the selected engine because MI_LRI_LRM_CS_MMIO is set in both commands.
@@ -9294,17 +9336,23 @@ bool Gen11::vfCtbInitWithAccelerator(void *that, void *accelerator) {
 	if (!gVfGGTTReady || gVfProtocolFault)
 		return false;
 
-	if (gVfCtbBacking) {
+	if (!that || gVfCtbBacking ||
+	    !OSCompareAndSwapPtr(nullptr, that, &gVfCtbInitOwner)) {
 		vfMarkProtocolFault("CTB reinitialization while old backing is quarantined");
 		return false;
 	}
 
 	gVfCtbDisableConfirmed = false;
+	gVfCtbAllocatedBacking = nullptr;
+	gVfCtbAllocationThread = IOThreadSelf();
 	gVfCtbAllocationPending = true;
 	const bool result = FunctionCast(vfCtbInitWithAccelerator,
 	                                 callback->oVfCtbInitWithAccelerator)(that,
 	                                                                        accelerator);
 	gVfCtbAllocationPending = false;
+	gVfCtbAllocationThread = nullptr;
+	gVfCtbAllocatedBacking = nullptr;
+	OSCompareAndSwapPtr(that, nullptr, &gVfCtbInitOwner);
 	if (!result) {
 		SYSLOG("ngreen", "V223: enlarged VF CTB initialization failed");
 		return false;
@@ -9319,20 +9367,42 @@ bool Gen11::vfCtbInitWithAccelerator(void *that, void *accelerator) {
 
 void *Gen11::vfCtbMappedBufferWithOptions(void *accelTask, unsigned long size,
 	                                      unsigned int type, unsigned int flags) {
-	if (gVfCtbAllocationPending && gVfGGTTReady && size == PAGE_SIZE) {
+	const bool ctbAllocation = gVfCtbAllocationPending && gVfGGTTReady &&
+	    gVfCtbAllocationThread == IOThreadSelf() && gVfCtbInitOwner &&
+	    size == PAGE_SIZE && type == 0 && flags == 0;
+	if (ctbAllocation) {
+		if (gVfCtbAllocatedBacking) {
+			vfMarkProtocolFault("multiple backing allocations during CTB initialization");
+			return nullptr;
+		}
 		SYSLOG("ngreen", "V223: expanding VF CTB backing from 0x%lx to 0x%x bytes",
 		       size, kVfCtbBackingBytes);
 		size = kVfCtbBackingBytes;
 	}
-	return FunctionCast(vfCtbMappedBufferWithOptions,
+	auto *result = FunctionCast(vfCtbMappedBufferWithOptions,
 	                    callback->oVfCtbMappedBufferWithOptions)(accelTask, size,
 	                                                              type, flags);
+	if (ctbAllocation)
+		gVfCtbAllocatedBacking = static_cast<OSObject *>(result);
+	return result;
 }
 
 void Gen11::vfCtbChannelInit(void *that) {
-	FunctionCast(vfCtbChannelInit, callback->oVfCtbChannelInit)(that);
-	if (!gVfGGTTReady || !gVfCtbAllocationPending)
+	if (gVfIdentity == VfIdentity::Physical) {
+		FunctionCast(vfCtbChannelInit, callback->oVfCtbChannelInit)(that);
 		return;
+	}
+	// Validate the exact enlarged allocation before the native initializer or
+	// our layout writes. A process-global "pending" flag alone could match an
+	// unrelated thread's allocation or allow reinitializing a live ring.
+	if (!that || !gVfGGTTReady || !gVfCtbAllocationPending ||
+	    gVfCtbInitOwner != that || gVfCtbAllocationThread != IOThreadSelf() ||
+	    !gVfCtbAllocatedBacking ||
+	    getMember<OSObject *>(that, 0x40) != gVfCtbAllocatedBacking || gVfCtbBacking) {
+		vfMarkProtocolFault("CTB channel initialization without its enlarged allocation");
+		return;
+	}
+	FunctionCast(vfCtbChannelInit, callback->oVfCtbChannelInit)(that);
 
 	// The original routine exposes its channel-0 CPU descriptor at +0x48.
 	// Its first dword contains baseGPU+PAGE_SIZE/2, allowing the GGTT base to
@@ -9359,10 +9429,16 @@ void Gen11::vfCtbChannelInit(void *that) {
 	}
 	// Pin before publishing addresses, including failure paths inside Apple's
 	// initWithAccelerator. Its later free() releases the original reference.
+	// Also pin the CTB object: a sender can have captured its queue lock just
+	// before shutdown. Backing retention alone does not keep that lock alive.
+	// withOptions/init-failure and IGHardwareGuC::free both use release(), so
+	// this prevents their CTB free/transferOwnership path during quarantine.
+	auto *ctbObject = static_cast<OSObject *>(that);
+	ctbObject->retain();
+	gVfCtbObject = ctbObject;
 	backing->retain();
 	gVfCtbBacking = backing;
 	gVfCtbGpuBase = static_cast<uint32_t>(base);
-	gVfCtbCpuBase = baseCpu;
 	gVfMemIrqConfigured = false;
 
 	bzero(baseCpu, kVfCtbBackingBytes);
@@ -9377,6 +9453,10 @@ void Gen11::vfCtbChannelInit(void *that) {
 	getMember<uint8_t *>(that, 0x50) = baseCpu + kVfCtbH2GBufferOffset;
 	getMember<uint8_t *>(that, 0x58) = reinterpret_cast<uint8_t *>(g2hDesc);
 	getMember<uint8_t *>(that, 0x60) = baseCpu + kVfCtbG2HBufferOffset;
+	// The filter may already be installed. Publish its CPU pointer only after
+	// every descriptor and object channel pointer is fully initialized.
+	OSSynchronizeIO();
+	gVfCtbCpuBase = baseCpu;
 
 	SYSLOG("ngreen", "V223: laid out VF CTB base=0x%08x H2G=0x%x G2H=0x%x backing=0x%x",
 	       gVfCtbGpuBase, kVfCtbH2GBufferBytes, kVfCtbG2HBufferBytes,
@@ -9479,19 +9559,11 @@ bool Gen11::vfCtbGucToHostAction(void *that, uint32_t *message) {
 		IOLockUnlock(lock);
 		return false;
 	}
-	const uint32_t frame = buffer[head];
-	const uint32_t payloadDwords = frame & 0xFFU;
-	if (!NGGuCRing::validFrame(frame, ringDwords, head, tail, 32)) {
+	if (!NGGuCRing::readFrame(buffer, ringDwords, head, tail, message, 32)) {
 		IOLockUnlock(lock);
 		vfMarkProtocolFault("invalid or oversized G2H CTB frame");
 		return false;
 	}
-	message[0] = frame;
-	for (uint32_t i = 1; i <= payloadDwords; i++) {
-		head = (head + 1) % ringDwords;
-		message[i] = buffer[head];
-	}
-	head = (head + 1) % ringDwords;
 	OSSynchronizeIO();
 	descriptor[4] = head;
 	OSSynchronizeIO();
@@ -9639,7 +9711,9 @@ bool Gen11::vfInterruptFilterHandler(void *that, void *eventSource) {
 	// A PCI VF receives a dedicated MSI whose state lives entirely in the
 	// PF-provisioned memory-IRQ page.  Never enter Tahoe's stock filter here: it
 	// acquires physical force-wake and masks/unmasks GFX_MSTR_IRQ around every
-	// interrupt, both of which are PF-owned resources.
+	// interrupt. i915's memory-IRQ VF path does neither. GFX_MSTR_IRQ is in
+	// the VF-accessible MMIO list; accessibility alone does not select the
+	// correct interrupt protocol for this device.
 	uint64_t pending = vfConsumeMemoryInterrupts();
 	uint32_t g2hHead = 0;
 	if (!pending && vfG2HCtbPending(g2hHead))

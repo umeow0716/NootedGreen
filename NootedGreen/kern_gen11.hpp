@@ -1380,6 +1380,8 @@ private:
 	                                  unsigned int requestLength, int timeout,
 	                                  uint32_t *response);
 	mach_vm_address_t oVfLegacyHostToGuCAction {};
+	static uint32_t vfCreateUkContext(void *that, uint64_t owner, int priority);
+	mach_vm_address_t oVfCreateUkContext {};
 	static void vfInitDoorbells(void *that);
 	mach_vm_address_t oVfInitDoorbells {};
 	static bool vfReadDoorbellSQIDIConfig(void *that);

@@ -3,6 +3,8 @@
 Updated: 2026-09-26. Source baseline: `1dd2f4b` on
 `codex/tahoe-sriov-vf`. This safety-audit checkpoint is untested on hardware
 and is NOT a boot-test candidate or successful driver baseline.
+Checkpoint `4a0b838` passed native macOS build/link and sanitizer CI:
+https://github.com/umeow0716/NootedGreen/actions/runs/36215000826 .
 The reported whole-host freeze has NOT been assigned a proven cause.
 Keep `macos-tahoe-sriov` shut off during this review.
 
@@ -124,10 +126,16 @@ VF-only, symbol-bounded patches remove these four instructions while preserving
 event-source operations and callback registration. Offline checks found exactly
 one mask and one unmask instruction in each function. The adjacent
 `enableInterrupts` (`0x4a42e`) and `disableInterrupts` (`0x4a778`) also write
-physical GT enable/mask/selector/identity registers; routed VF replacements now
+GT enable/mask/selector/identity registers; routed VF replacements now
 use the memory-IRQ enable vector, matching `intel_iov_memirq_postinstall/reset`.
 PF routes retain the originals. Both non-multithreaded force-wake entry points
 are routed to the VF no-op only for an identified VF.
+
+Correction after inspecting `intel_uncore.c:vf_accessible_regs`: `0x190010`
+and the GT IRQ register ranges ARE listed as VF-accessible. They must not be
+described categorically as PF-only or as evidence of the host freeze. The
+replacement rationale is the `HAS_MEMORY_IRQ_STATUS` branch in `i915_irq.c`,
+whose VF handler/reset/postinstall use memory IRQs without those MMIO accesses.
 
 Enable intent is recorded if requested before memory-IRQ allocation. This mask
 does not stop GuC DMA or synchronize callbacks. Enable/configure/teardown races
@@ -166,3 +174,40 @@ binary, but virtual/external reachability has not been ruled out.
 `transferOwnership` (`0x2a318`) issues extended PCI configuration accesses at
 `0xf8/0xfc` for each backing page when accelerator flag `0x20` is set; its VF
 reachability and semantics need checking before retention can be called safe.
+
+## Follow-up after the first CI checkpoint
+
+- CTB allocation is tied to the initializing object and current thread, checks
+  the native size/type/flags, and records the exact enlarged backing. Channel
+  initialization rejects mismatches and live-ring reinitialization before any
+  native layout writes. CPU mapping publication now follows descriptor setup.
+- Quarantine now retains the CTB object as well as its backing: a preempted
+  sender may hold a captured queue-lock pointer, so retaining backing alone
+  cannot prevent a freed-lock access. Native `withOptions` failure and GuC free
+  release the CTB object, so retention also defers its free/ownership-transfer
+  path. This intentionally retains additional objects and accelerator state;
+  it is NOT optimized teardown or support for restart/unload.
+- CTB submission admission requires the firmware's enable acknowledgement;
+  published mappings or partially registered KLVs are insufficient.
+- The `createUkContext` route returns the native `0x400` failure sentinel if VF
+  transport initialization failed, preventing the initialization fallback from
+  creating legacy MMIO contexts. Native `initWithOptions` checks this sentinel
+  at `0x1ff61`. Zero-context-count and other initialization exits still need review.
+- Bootstrap RESET is one-shot: a concurrent caller or retry after incomplete
+  initialization cannot reset firmware beneath partially initialized state.
+- Removed the generic out-of-BAR INDEX2/DATA2 fallback from common MMIO access.
+  Reads/writes now check alignment and subtraction-based bounds. Removed unused
+  `readReg64/writeReg64` methods, which indexed a 32-bit pointer and truncated
+  64-bit writes. No project call sites existed; prior code remains in git.
+- The actual bounded ring copy now shares the tested helper. Added 1,277,856
+  copy cases checking payload, head advancement, unchanged output on rejection
+  and output canaries under ASan/UBSan, alongside 9,621,504 framing cases.
+- Modern GuC memory-IRQ SW_INT_0 is a VF migration notification according to
+  `intel_iov_memirq.c`, not Apple's legacy software interrupt bit 36. Migration
+  currently faults/quarantines submission rather than dispatching the wrong
+  handler. Migration recovery is not implemented.
+- Clang static analyzer ran over all 11 built C++ units, logs in
+  `/tmp/ngreen-analysis.PD6Iu7`. It reports possible null MMIO callbacks,
+  DisplayMergeNub dictionary-copy leaks and dead stores. This is automated
+  analysis, NOT completion of the requested full source/reachability review.
+  The reported null callback path in `raWriteRegister32` now has an entry guard.

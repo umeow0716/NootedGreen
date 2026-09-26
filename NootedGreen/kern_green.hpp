@@ -36,8 +36,6 @@ bool ngVfGGTTRead32(unsigned long reg, UInt32 &value);
 bool ngVfGGTTWrite32(unsigned long reg, UInt32 value);
 bool ngVfGGTTBinderActive();
 
-constexpr UInt32 mmPCIE_INDEX2 = 0xE;
-constexpr UInt32 mmPCIE_DATA2 = 0xF;
 /*
 class EXPORT PRODUCT_NAME : public IOService {
 	OSDeclareDefaultStructors(PRODUCT_NAME);
@@ -84,21 +82,24 @@ class NGreen {
 	
 	// Public MMIO register access (used by display link training, display merge, etc.)
 	UInt32 readReg32(unsigned long reg) {
-		if (!rmmio || !rmmioPtr) return 0;
+		if (!rmmio || !rmmioPtr || (reg & 3U)) return 0xFFFFFFFFU;
 		UInt32 vfValue = 0;
-		if (!isRealTGL && ngVfGGTTRead32(reg, vfValue)) return vfValue;
-		if (reg + sizeof(uint32_t) <= this->rmmio->getLength()) {
+		if (ngVfGGTTRead32(reg, vfValue)) return vfValue;
+		const auto bytes = this->rmmio->getLength();
+		if (bytes >= sizeof(uint32_t) && reg <= bytes - sizeof(uint32_t)) {
 			return this->rmmioPtr[reg >> 2];
-		} else {
-			this->rmmioPtr[mmPCIE_INDEX2] = reg;
-			return this->rmmioPtr[mmPCIE_DATA2];
 		}
+		// Intel BAR0 has no generic INDEX2/DATA2 fallback. Never turn an
+		// out-of-range read into writes to unrelated offsets 0x38/0x3c.
+		return 0xFFFFFFFFU;
 	}
 
 	// reg = byte offset (i915 convention). rmmioPtr is uint32_t* so divide by 4.
 	void writeReg32(unsigned long reg, UInt32 val) {
-		if (!rmmio || !rmmioPtr) return;
-		if (!isRealTGL && ngVfGGTTWrite32(reg, val)) return;
+		if (!rmmio || !rmmioPtr || (reg & 3U)) return;
+		if (ngVfGGTTWrite32(reg, val)) return;
+		const auto bytes = this->rmmio->getLength();
+		if (bytes < sizeof(uint32_t) || reg > bytes - sizeof(uint32_t)) return;
 		static int v93MmioLogCount = 0;
 
 		// Safety guard: prevent enabled display planes from being armed with SURF=0.
@@ -129,56 +130,7 @@ class NGreen {
 			}
 		}
 
-		if (reg + sizeof(uint32_t) <= this->rmmio->getLength()) {
-			this->rmmioPtr[reg >> 2] = val;
-		} else {
-			this->rmmioPtr[mmPCIE_INDEX2] = reg;
-			this->rmmioPtr[mmPCIE_DATA2] = val;
-		}
-	}
-	
-	UInt64 readReg64(unsigned long reg) {
-		if (!rmmio || !rmmioPtr) return 0;
-		if (reg * sizeof(uint64_t) < this->rmmio->getLength()) {
-			return this->rmmioPtr[reg];
-		} else {
-			this->rmmioPtr[mmPCIE_INDEX2] = reg;
-			return this->rmmioPtr[mmPCIE_DATA2];
-		}
-	}
-
-	void writeReg64(unsigned long reg, UInt64 val) {
-		if (!rmmio || !rmmioPtr) return;
-		static int v93Mmio64LogCount = 0;
-		const bool looksLikePlaneSurf =
-			(reg >= 0x60000 && reg <= 0xBFFFF) &&
-			((reg & 0xFFF) == 0x19C);
-		if (looksLikePlaneSurf && val == 0) {
-			const uint32_t ctlReg = static_cast<uint32_t>(reg - 0x1C);
-			const uint32_t planCtl = readReg32(ctlReg);
-			if (planCtl & 0x80000000U) {
-				const uint32_t currentSurf = readReg32(reg);
-				if (currentSurf != 0) {
-					if (v93Mmio64LogCount < 24) {
-						SYSLOG("ngreen", "V93M64: blocked zero SURF@0x%lx in writeReg64; keeping current 0x%x", reg, currentSurf);
-						v93Mmio64LogCount++;
-					}
-					val = currentSurf;
-				} else {
-					if (v93Mmio64LogCount < 24) {
-						SYSLOG("ngreen", "V93M64: forcing plane disable before zero SURF@0x%lx in writeReg64", reg);
-						v93Mmio64LogCount++;
-					}
-					writeReg32(ctlReg, planCtl & ~0x80000000U);
-				}
-			}
-		}
-		if ((reg * sizeof(uint64_t)) < this->rmmio->getLength()) {
-			this->rmmioPtr[reg] = val;
-		} else {
-			this->rmmioPtr[mmPCIE_INDEX2] = reg;
-			this->rmmioPtr[mmPCIE_DATA2] = val;
-		}
+		this->rmmioPtr[reg >> 2] = val;
 	}
 	
 	uint32_t intel_de_rmw(uint32_t reg, uint32_t clear, uint32_t set) {
