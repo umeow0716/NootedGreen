@@ -1376,6 +1376,10 @@ private:
 	                                  unsigned int requestLength, int timeout,
 	                                  uint32_t *response);
 	mach_vm_address_t oVfMmioHostToGuCAction {};
+	static bool vfLegacyHostToGuCAction(void *that, const uint32_t *request,
+	                                  unsigned int requestLength, int timeout,
+	                                  uint32_t *response);
+	mach_vm_address_t oVfLegacyHostToGuCAction {};
 	static void vfInitDoorbells(void *that);
 	mach_vm_address_t oVfInitDoorbells {};
 	static bool vfReadDoorbellSQIDIConfig(void *that);
@@ -1386,8 +1390,20 @@ private:
 	mach_vm_address_t oVfCtbChannelInit {};
 	static bool vfCtbGucToHostAction(void *that, uint32_t *message);
 	mach_vm_address_t oVfCtbGucToHostAction {};
+	static void vfSoftwareGuCInterrupt(void *that, IOInterruptEventSource *source, int count);
+	mach_vm_address_t oVfSoftwareGuCInterrupt {};
+	mach_vm_address_t vfCtbSoftwareInterrupt {};
+	static void vfInvalidateTLB(void *that);
+	mach_vm_address_t oVfInvalidateTLB {};
+	static bool vfInterruptFilterHandler(void *that, void *eventSource);
+	mach_vm_address_t oVfInterruptFilterHandler {};
+	mach_vm_address_t vfServiceInterrupts {};
 	static void vfReadAndClearInterrupts(void *that, void *interrupts);
 	mach_vm_address_t oVfReadAndClearInterrupts {};
+	static void vfEnableInterrupts(void *that);
+	static void vfDisableInterrupts(void *that);
+	mach_vm_address_t oVfEnableInterrupts {};
+	mach_vm_address_t oVfDisableInterrupts {};
 	static void *vfCtbMappedBufferWithOptions(void *accelTask, unsigned long size,
 	                                          unsigned int type, unsigned int flags);
 	mach_vm_address_t oVfCtbMappedBufferWithOptions {};
@@ -1439,9 +1455,6 @@ private:
 	mach_vm_address_t oSafeForceWake {};
 	static bool pollRegister(uint32_t reg, uint32_t val, uint32_t mask, uint32_t timeout);
 	static bool forceWakeWaitAckFallback(uint32_t reqReg, uint32_t ackReg, uint32_t val, uint32_t mask);
-	
-	static void * serviceInterrupts(void *param_1);  // GT interrupt handler
-	mach_vm_address_t oserviceInterrupts {};
 	
 	static int isConflictRegister();   // stub: returns 0 (no conflict)
 	

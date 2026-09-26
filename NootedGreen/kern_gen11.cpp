@@ -1,6 +1,7 @@
 //  Copyright © 2026 Stezza @ inc. Licensed under the Thou Shalt Not Profit License version 1.0. See LICENSE for
 //  details.
 #include "kern_gen11.hpp"
+#include "kern_guc_ring.hpp"
 #include "AppleIntelParams.hpp"
 #include <Headers/kern_api.hpp>
 #include "kern_genx.hpp"
@@ -10,6 +11,7 @@
 #include <IOKit/IOCatalogue.h>
 #include <IOKit/IOLib.h>
 #include <IOKit/IOLocks.h>
+#include <IOKit/IOWorkLoop.h>
 #include <kern/thread_call.h>
 
 // ==== 6 kextInfos: ICL fallback + dual TGL identities (com.xxxxx and com.apple) from /Library/Extensions ====
@@ -93,6 +95,8 @@ constexpr uint32_t kGucActionScheduleContextModeDone = 0x1002;
 constexpr uint32_t kGucActionContextResetNotification = 0x1008;
 constexpr uint32_t kGucActionEngineFailureNotification = 0x1009;
 constexpr uint32_t kGucActionUpdateContextPolicies = 0x100B;
+constexpr uint32_t kGucActionTlbInvalidation = 0x7000;
+constexpr uint32_t kGucActionTlbInvalidationDone = 0x7001;
 constexpr uint32_t kGucSelfCfgMemIrqStatusAddr = 0x0900;
 constexpr uint32_t kGucSelfCfgMemIrqSourceAddr = 0x0901;
 constexpr uint32_t kGucSelfCfgH2GCtbAddr = 0x0902;
@@ -133,12 +137,53 @@ uint32_t gVfContextCount = 0;
 uint32_t gVfDoorbellCount = 0;
 void *gVfGlobalPageTable = nullptr;
 bool gVfGGTTReady = false;
+enum class VfIdentity : uint8_t { Unknown, Physical, Virtual, Invalid };
+VfIdentity gVfIdentity = VfIdentity::Unknown;
+
+VfIdentity vfIdentifyDevice()
+{
+	if (gVfIdentity != VfIdentity::Unknown)
+		return gVfIdentity;
+	auto *cb = NGreen::callback;
+	if (!cb)
+		return VfIdentity::Invalid;
+	cb->setRMMIOIfNecessary();
+	constexpr uint32_t vfCap = 0x1901f8;
+	if (!cb->getRMMIOAddress() || cb->getRMMIOLength() < vfCap + sizeof(uint32_t))
+		return VfIdentity::Invalid;
+	// Match i915 gen12_pci_capability_is_vf. Invalid BAR reads are neither
+	// proof of a VF nor permission to run physical engine initialization.
+	const uint32_t value = cb->getRMMIOAddress()[vfCap / sizeof(uint32_t)];
+	if (value & ~1U)
+		gVfIdentity = VfIdentity::Invalid;
+	else
+		gVfIdentity = value ? VfIdentity::Virtual : VfIdentity::Physical;
+	SYSLOG("ngreen", "V239: VF_CAP=0x%08x identity=%u", value,
+	       static_cast<unsigned int>(gVfIdentity));
+	return gVfIdentity;
+}
 bool gVfDirectGGTT = false;
 bool gVfBinderReady = false;
 uint32_t gVfRelayFailureLogs = 0;
 uint32_t gVfCtbGpuBase = 0;
 uint8_t *gVfCtbCpuBase = nullptr;
+OSObject *gVfCtbBacking = nullptr;
+bool gVfCtbDisableConfirmed = false;
+volatile UInt32 gVfCtbStopped = 0;
 bool gVfMemIrqConfigured = false;
+volatile UInt32 gVfMemIrqRequested = 0;
+volatile UInt32 gVfProtocolFault = 0;
+bool gVfMmioPoisoned = false; // protected by gVfGucLock
+volatile UInt32 gVfTlbNextSeqno = 0;
+volatile UInt32 gVfTlbWaitActive = 0;
+volatile UInt32 gVfTlbWaitSeqno = 0;
+volatile UInt32 gVfTlbDoneSeqno = 0;
+
+void vfMarkProtocolFault(const char *reason)
+{
+	if (OSCompareAndSwap(0, 1, &gVfProtocolFault))
+		SYSLOG("ngreen", "V237: VF protocol halted after %s", reason);
+}
 
 // Modern GuC submission (v70+) assigns one GuC ID to one logical ring
 // context.  Tahoe's TGL binary predates that ABI and instead assigns a GuC ID
@@ -166,6 +211,9 @@ struct VfGucContext {
 	uint8_t engineClass;
 	uint8_t engineInstance;
 	VfGucContextState state;
+	bool enablePending;
+	bool disablePending;
+	OSObject *contextBacking;
 };
 
 IOSimpleLock *gVfContextLock = nullptr;
@@ -173,7 +221,9 @@ VfGucContext *gVfContexts = nullptr;
 uint32_t gVfContextCapacity = 0;
 uint32_t gVfContextLifecycleLogs = 0;
 
-constexpr uint32_t kVfContextEventTimeoutUs = 1000000;
+constexpr uint32_t kVfContextEventTimeoutMs = 1000;
+constexpr size_t kVfContextDescriptorOffset = 0x89;
+constexpr size_t kVfContextImageBufferOffset = 0x98;
 constexpr uint32_t kGucTypeFastRequest = 0x20000000U;
 constexpr uint32_t kGucContextRegistrationFlagKmd = 1;
 constexpr uint32_t kGucContextDisable = 0;
@@ -217,7 +267,8 @@ int32_t vfReserveContextLocked(uint32_t lrcaPage)
 	for (uint32_t probe = 0; probe < gVfContextCapacity; probe++) {
 		const uint32_t slot = (start + probe) % gVfContextCapacity;
 		const auto state = gVfContexts[slot].state;
-		if (state == kVfGucContextTombstone && tombstone < 0)
+		if (state == kVfGucContextTombstone &&
+		    !gVfContexts[slot].contextBacking && tombstone < 0)
 			tombstone = static_cast<int32_t>(slot);
 		if (state == kVfGucContextEmpty)
 			return tombstone >= 0 ? tombstone : static_cast<int32_t>(slot);
@@ -225,12 +276,39 @@ int32_t vfReserveContextLocked(uint32_t lrcaPage)
 	return tombstone;
 }
 
+void vfReleaseRetiredContextBacking(uint16_t gucId)
+{
+	if (!gVfContextLock || !gVfContexts || gucId >= gVfContextCapacity)
+		return;
+
+	OSObject *backing = nullptr;
+	const IOInterruptState interruptState =
+		IOSimpleLockLockDisableInterrupt(gVfContextLock);
+	auto &entry = gVfContexts[gucId];
+	if (entry.state == kVfGucContextTombstone) {
+		backing = entry.contextBacking;
+		entry.contextBacking = nullptr;
+	}
+	IOSimpleLockUnlockEnableInterrupt(gVfContextLock, interruptState);
+	if (backing)
+		backing->release();
+}
+
+bool vfEnsureGucLock();
+bool vfValidH2GMapping(const volatile uint32_t *descriptor,
+                       const volatile uint32_t *buffer);
+
 bool vfInitContextBridge()
 {
-	if (gVfContexts && gVfContextLock && gVfContextCapacity)
-		return true;
 	if (!gVfContextCount || gVfContextCount > 65535U)
 		return false;
+	if (!vfEnsureGucLock())
+		return false;
+	IOLockLock(gVfGucLock);
+	if (gVfContexts && gVfContextLock && gVfContextCapacity) {
+		IOLockUnlock(gVfGucLock);
+		return true;
+	}
 
 	auto *lock = IOSimpleLockAlloc();
 	auto *contexts = static_cast<VfGucContext *>(
@@ -241,12 +319,14 @@ bool vfInitContextBridge()
 		if (contexts)
 			IOFree(contexts,
 			       static_cast<size_t>(gVfContextCount) * sizeof(VfGucContext));
+		IOLockUnlock(gVfGucLock);
 		return false;
 	}
 
 	gVfContextLock = lock;
 	gVfContexts = contexts;
 	gVfContextCapacity = gVfContextCount;
+	IOLockUnlock(gVfGucLock);
 	SYSLOG("ngreen", "V230: initialized direct GuC context namespace with %u IDs",
 	       gVfContextCapacity);
 	return true;
@@ -255,8 +335,10 @@ bool vfInitContextBridge()
 bool vfSendCtbFastAction(void *guc, const uint32_t *request,
 	                     uint32_t requestLength, uint32_t &transportFence)
 {
+	transportFence = 0;
 	if (!guc || !request || requestLength == 0 || requestLength > 31 ||
-	    !gVfCtbGpuBase)
+	    !gVfCtbGpuBase || gVfProtocolFault || gVfCtbStopped ||
+	    (request[0] & (kGucOriginGuc | kGucTypeMask)))
 		return false;
 
 	// Tahoe's legacy sender sleeps for a full timeout tick even when the G2H
@@ -269,21 +351,31 @@ bool vfSendCtbFastAction(void *guc, const uint32_t *request,
 	if (!ctb)
 		return false;
 	auto *lock = getMember<IOLock *>(ctb, 0x18);
-	auto *descriptor = getMember<uint32_t *>(ctb, 0x48);
-	auto *buffer = getMember<uint32_t *>(ctb, 0x50);
-	if (!lock || !descriptor || !buffer)
+	auto *descriptor = getMember<volatile uint32_t *>(ctb, 0x48);
+	auto *buffer = getMember<volatile uint32_t *>(ctb, 0x50);
+	if (!lock || !vfValidH2GMapping(descriptor, buffer)) {
+		vfMarkProtocolFault("H2G CTB mapping mismatch");
 		return false;
+	}
 
 	transportFence = 0;
 	for (uint32_t retry = 0; retry < 8; retry++) {
 		IOLockLock(lock);
+		OSSynchronizeIO();
+		if (gVfCtbStopped || gVfProtocolFault) {
+			IOLockUnlock(lock);
+			return false;
+		}
 		const uint32_t size = descriptor[3] / sizeof(uint32_t);
 		const uint32_t head = descriptor[4];
 		uint32_t tail = descriptor[5];
 		const uint32_t status = descriptor[6];
 		const uint32_t needed = requestLength + 1U;
-		const bool valid = status == 0 && size > needed &&
-		                   head < size && tail < size;
+		// The allocated H2G ring is exactly 4 KiB. Never let a corrupted
+		// descriptor enlarge the bounds used for CPU writes.
+		const bool valid = NGGuCRing::validDescriptor(descriptor[3], PAGE_SIZE,
+		                                               head, tail, status) &&
+		                   size > needed;
 		const uint32_t used = valid ?
 			(tail >= head ? tail - head : size - head + tail) : size;
 		if (valid && needed < size - used) {
@@ -312,6 +404,7 @@ bool vfSendCtbFastAction(void *guc, const uint32_t *request,
 		if (!valid) {
 			SYSLOG("ngreen", "V231: invalid H2G CTB size=%u head=%u tail=%u status=0x%x",
 			       size, head, tail, status);
+			vfMarkProtocolFault("invalid H2G CTB descriptor");
 			return false;
 		}
 		IODelay(50U << retry);
@@ -341,28 +434,42 @@ bool vfSetContextPolicy(void *guc, uint16_t gucId, uint8_t engineClass,
 	return vfSendCtbFastAction(guc, request, arrsize(request), transportFence);
 }
 
-bool vfWaitForContextState(uint16_t gucId, VfGucContextState wanted)
+bool vfCanWaitForGuc(void *guc)
+{
+	// initWithOptions creates this independent workloop. Sleeping while its
+	// gate is held prevents the software G2H event source from completing us.
+	auto *loop = guc ? getMember<IOWorkLoop *>(guc, 0xA00) : nullptr;
+	if (!loop || loop->onThread() || loop->inGate()) {
+		vfMarkProtocolFault("synchronous GuC wait would block its completion workloop");
+		return false;
+	}
+	return true;
+}
+
+bool vfWaitForContextState(void *guc, uint16_t gucId, VfGucContextState wanted)
 {
 	if (!gVfContextLock || !gVfContexts || gucId >= gVfContextCapacity)
 		return false;
-	for (uint32_t waited = 0; waited < kVfContextEventTimeoutUs; waited += 50) {
+	for (uint32_t waited = 0; waited < kVfContextEventTimeoutMs; waited++) {
 		const IOInterruptState interruptState =
 			IOSimpleLockLockDisableInterrupt(gVfContextLock);
 		const auto state = gVfContexts[gucId].state;
 		IOSimpleLockUnlockEnableInterrupt(gVfContextLock, interruptState);
 		if (state == wanted)
 			return true;
-		IODelay(50);
+		if (!vfCanWaitForGuc(guc))
+			return false;
+		IOSleep(1);
 	}
 	return false;
 }
 
-bool vfWaitForContextTransition(uint16_t gucId, uint32_t lrcaPage,
+bool vfWaitForContextTransition(void *guc, uint16_t gucId, uint32_t lrcaPage,
 	                            VfGucContextState previous)
 {
 	if (!gVfContextLock || !gVfContexts || gucId >= gVfContextCapacity)
 		return false;
-	for (uint32_t waited = 0; waited < kVfContextEventTimeoutUs; waited += 50) {
+	for (uint32_t waited = 0; waited < kVfContextEventTimeoutMs; waited++) {
 		const IOInterruptState interruptState =
 			IOSimpleLockLockDisableInterrupt(gVfContextLock);
 		const auto &entry = gVfContexts[gucId];
@@ -371,7 +478,9 @@ bool vfWaitForContextTransition(uint16_t gucId, uint32_t lrcaPage,
 		IOSimpleLockUnlockEnableInterrupt(gVfContextLock, interruptState);
 		if (changed)
 			return true;
-		IODelay(50);
+		if (!vfCanWaitForGuc(guc))
+			return false;
+		IOSleep(1);
 	}
 	return false;
 }
@@ -407,20 +516,140 @@ static_assert(kVfMemIrqOffset + kVfMemIrqBytes == kVfCtbBackingBytes,
               "memory IRQ page must fit the CTB allocation");
 bool gVfCtbAllocationPending = false;
 
+bool vfValidH2GMapping(const volatile uint32_t *descriptor,
+                       const volatile uint32_t *buffer)
+{
+	auto *base = gVfCtbCpuBase;
+	return base && descriptor == reinterpret_cast<volatile uint32_t *>(
+	                                  base + kVfCtbH2GDescOffset) &&
+	       buffer == reinterpret_cast<volatile uint32_t *>(
+	                     base + kVfCtbH2GBufferOffset);
+}
+
+uint64_t vfConsumeMemoryInterrupts()
+{
+	auto *base = gVfCtbCpuBase;
+	if (!gVfMemIrqConfigured || !base || gVfCtbStopped)
+		return 0;
+
+	auto *page = reinterpret_cast<volatile uint8_t *>(
+		base + kVfMemIrqOffset);
+	auto *statusBase = page + kVfMemIrqStatusOffset;
+	auto *sourceBase = page + kVfMemIrqSourceOffset;
+	OSSynchronizeIO();
+
+	uint64_t pending = 0;
+	uint64_t sourceSnapshot = 0;
+	for (uint32_t i = 0; i < 64; i++) {
+		if (sourceBase[i])
+			sourceSnapshot |= 1ULL << i;
+	}
+
+	// Match intel_iov_memirq_handler(): an engine source means that its user
+	// interrupt is pending.  The status byte is diagnostic, not a second gate,
+	// and Gen12 VF memory IRQs do not synthesize context-switch/error events.
+	const auto consumeEngine = [&](uint32_t irqOffset, uint32_t userBit) {
+		const uint8_t source = sourceBase[irqOffset];
+		if (!source)
+			return;
+		sourceBase[irqOffset] = 0;
+		auto *status = statusBase + irqOffset * 16U;
+		status[0] = 0;
+		pending |= 1ULL << userBit;
+	};
+
+	// irq_offset values are the Gen11+ logical engine interrupt offsets used by
+	// i915.  The IGBitSet positions are Tahoe's corresponding user callbacks.
+	consumeEngine(0, 0);   // RCS0
+	consumeEngine(4, 1);   // CCS0
+	consumeEngine(15, 2);  // BCS0
+	consumeEngine(32, 3);  // VCS0
+	consumeEngine(33, 4);  // VCS1 / Tahoe's second VCS callback
+	consumeEngine(63, 5);  // VECS0
+
+	const uint8_t gucSource = sourceBase[kVfGucIrqOffset];
+	if (gucSource) {
+		sourceBase[kVfGucIrqOffset] = 0;
+		auto *gucStatus = statusBase + kVfGucIrqOffset * 16U;
+		// Linux dispatches G2H whenever the GuC source byte is asserted and
+		// treats status[15] as a programming-note assertion only.
+		gucStatus[15] = 0;
+		pending |= 1ULL << 45;
+		if (gucStatus[0]) {
+			gucStatus[0] = 0;
+			pending |= 1ULL << 36;
+		}
+	}
+	OSSynchronizeIO();
+
+	static uint32_t irqLogs = 0;
+	if ((sourceSnapshot || pending) && irqLogs++ < 128) {
+		SYSLOG("ngreen", "V236: VF memory IRQ source=0x%016llx pending=0x%016llx",
+		       static_cast<unsigned long long>(sourceSnapshot),
+		       static_cast<unsigned long long>(pending));
+	}
+	return pending;
+}
+
+bool vfG2HCtbPending(uint32_t &head)
+{
+	head = 0;
+	auto *base = gVfCtbCpuBase;
+	if (!base || gVfCtbStopped)
+		return false;
+
+	// Apple's +0x58 channel pointer is biased 0x10 bytes before the modern
+	// descriptor.  Its legacy size/head/tail fields therefore alias the modern
+	// descriptor window used by the runtime byte patches.
+	auto *descriptor = reinterpret_cast<volatile uint32_t *>(
+		base + kVfCtbG2HDescOffset);
+	OSSynchronizeIO();
+	const uint32_t bytes = descriptor[3];
+	head = descriptor[4];
+	const uint32_t tail = descriptor[5];
+	const uint32_t status = descriptor[6];
+	if (!NGGuCRing::validDescriptor(bytes, kVfCtbG2HBufferBytes, head, tail, status)) {
+		vfMarkProtocolFault("invalid G2H descriptor while checking pending interrupts");
+		return false;
+	}
+	return head != tail;
+}
+
+bool vfEnsureGucLock()
+{
+	if (gVfGucLock)
+		return true;
+	auto *candidate = IOLockAlloc();
+	if (!candidate)
+		return false;
+	// Publish one lifetime-long mailbox lock. Losing concurrent allocators
+	// must use the published lock, not serialize on different instances.
+	if (!OSCompareAndSwapPtr(nullptr, candidate, &gVfGucLock))
+		IOLockFree(candidate);
+	return true;
+}
+
 bool vfGucSendMMIO(const uint32_t request[4], uint32_t requestLength,
                    uint32_t response[4])
 {
 	auto *cb = NGreen::callback;
-	if (!cb || requestLength == 0 || requestLength > 4)
+	if (!cb || !request || !response || requestLength == 0 || requestLength > 4 ||
+	    (request[0] & (kGucOriginGuc | kGucTypeMask)) != 0)
 		return false;
+	bzero(response, 4 * sizeof(*response));
 	cb->setRMMIOIfNecessary();
+	if (!cb->getRMMIOAddress() ||
+	    cb->getRMMIOLength() < kGen11SoftScratch0 + 4 * sizeof(uint32_t))
+		return false;
 
-	if (!gVfGucLock)
-		gVfGucLock = IOLockAlloc();
-	if (!gVfGucLock)
+	if (!vfEnsureGucLock())
 		return false;
 
 	IOLockLock(gVfGucLock);
+	if (gVfMmioPoisoned) {
+		IOLockUnlock(gVfGucLock);
+		return false;
+	}
 	bool success = false;
 	for (uint32_t retry = 0; retry < 4 && !success; retry++) {
 		for (uint32_t i = 0; i < requestLength; i++)
@@ -438,8 +667,13 @@ bool vfGucSendMMIO(const uint32_t request[4], uint32_t requestLength,
 				break;
 			IODelay(10);
 		}
-		if ((header & kGucOriginGuc) == 0)
-			continue;
+		if ((header & kGucOriginGuc) == 0) {
+			// A timeout does not transfer mailbox ownership back to the host.
+			// Replaying RESET/configuration here could overwrite a live request.
+			vfMarkProtocolFault("GuC MMIO ownership timeout");
+			gVfMmioPoisoned = true;
+			break;
+		}
 
 		if ((header & kGucTypeMask) == kGucTypeBusy) {
 			for (uint32_t i = 0; i < 2000; i++) {
@@ -451,8 +685,12 @@ bool vfGucSendMMIO(const uint32_t request[4], uint32_t requestLength,
 			}
 		}
 
-		if ((header & kGucOriginGuc) == 0)
-			continue;
+		if ((header & kGucOriginGuc) == 0 ||
+		    (header & kGucTypeMask) == kGucTypeBusy) {
+			vfMarkProtocolFault("GuC MMIO busy timeout or invalid ownership");
+			gVfMmioPoisoned = true;
+			break;
+		}
 		if ((header & kGucTypeMask) == kGucTypeRetry)
 			continue;
 		if ((header & kGucTypeMask) == kGucTypeFailure) {
@@ -511,7 +749,7 @@ bool vfConfigureMemIrq()
 	// same ABI value; the LRCA loads it into GEN12_RING_INT_MASK on restore.
 	auto *enable = reinterpret_cast<volatile uint32_t *>(
 		gVfCtbCpuBase + kVfMemIrqOffset + kVfMemIrqEnableOffset);
-	*enable = 0xFFFFU;
+	*enable = gVfMemIrqRequested ? 0xFFFFU : 0;
 	OSSynchronizeIO();
 	gVfMemIrqConfigured = true;
 	SYSLOG("ngreen", "V234: configured VF memory IRQ page=0x%llx GuC status=0x%llx source=0x%llx",
@@ -523,13 +761,16 @@ bool vfConfigureMemIrq()
 
 bool vfConfigureModernCtb(bool g2h, uint32_t appleDescriptorAddress)
 {
+	if (gVfProtocolFault || !gVfCtbBacking || !gVfCtbCpuBase ||
+	    (g2h && appleDescriptorAddress < 0x400U))
+		return false;
 	// registerCommandTransportBuffers sends G2H first at base+PAGE_SIZE/4,
 	// followed by H2G at base.  The re-layout hook below intentionally keeps
 	// those legacy request addresses stable so the allocation base is recoverable.
 	const uint32_t base = g2h ? appleDescriptorAddress - 0x400U :
 	                           appleDescriptorAddress;
 	if (base != gVfCtbGpuBase || base < gVfGGTTBase ||
-	    static_cast<uint64_t>(base) + kVfCtbUsedBytes > gVfGGTTBase + gVfGGTTSize) {
+	    static_cast<uint64_t>(base) + kVfCtbBackingBytes > gVfGGTTBase + gVfGGTTSize) {
 		SYSLOG("ngreen", "V223: rejected CTB base=0x%08x expected=0x%08x VF=[0x%llx,+0x%llx]",
 		       base, gVfCtbGpuBase,
 		       static_cast<unsigned long long>(gVfGGTTBase),
@@ -596,6 +837,8 @@ bool vfQueryKLV32(uint32_t key, uint32_t &value)
 
 bool vfBootstrapBinder()
 {
+	if (vfIdentifyDevice() != VfIdentity::Virtual || gVfProtocolFault)
+		return false;
 	if (gVfGGTTReady)
 		return true;
 
@@ -630,6 +873,7 @@ bool vfBootstrapBinder()
 	if (!vfQueryKLV64(kGucKlvGGTTStart, gVfGGTTBase) ||
 	    !vfQueryKLV64(kGucKlvGGTTSize, gVfGGTTSize) ||
 	    gVfGGTTSize == 0 || gVfGGTTBase >= 0x100000000ULL ||
+	    ((gVfGGTTBase | gVfGGTTSize) & (PAGE_SIZE - 1U)) != 0 ||
 	    gVfGGTTSize > 0x100000000ULL - gVfGGTTBase) {
 		SYSLOG("ngreen", "V217: invalid GuC VF GGTT assignment base=0x%llx size=0x%llx",
 		       static_cast<unsigned long long>(gVfGGTTBase),
@@ -775,7 +1019,10 @@ bool vfSyncShadowRange(const NGIGAddressRange &range)
 
 bool ngVfGGTTBinderActive()
 {
-	return gVfBinderReady;
+	// Historical name retained for the shared Gen11 interface.  Callers use
+	// this as the "do not touch physical GGTT/GMADR" predicate, which applies
+	// to both the direct-PTE and GuC-relay VF transports.
+	return gVfIdentity == VfIdentity::Virtual || gVfGGTTReady;
 }
 
 bool ngVfGGTTRead32(unsigned long reg, UInt32 &value)
@@ -1767,12 +2014,19 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		{
 			SolveRequestPlus solveRequests[] = {
 				{"__ZN23IGHardwareBlit3DContext17ExtendedCtxParamsE", this->Blit3DExtendedCtxParams},
+				{"__ZN21IGHardwareGuCCTBuffer32handleSoftwareGuCToHostInterruptEv",
+				 this->vfCtbSoftwareInterrupt},
 				// V233: single-LRC GuC submission must publish the new tail in
 				// the context image before scheduling it.  Resolve the accessor
 				// used by IGHardwareContext::updateRingTail so the bridge can do
 				// the same update without touching physical memory.
 				{"__ZNK20IGSharedMappedBuffer17getVirtualAddressEv",
 				 this->vfSharedMappedBufferGetVirtualAddress},
+				// V236: a VF has a dedicated MSI backed by the memory-IRQ page.
+				// Resolve the callback dispatcher so the replacement filter never
+				// has to enter Apple's physical GT interrupt hierarchy.
+				{"__ZN17IGInterruptBridge17serviceInterruptsERK8IGBitSetILm46EE",
+				 this->vfServiceInterrupts},
 				// V216: The TGL driver assigns the old value returned by
 				// OSAddAtomic64 to IGAccelTask+0x258.  Failed accelerator start
 				// candidates consume value 0 without restoring this global, so a
@@ -1791,7 +2045,45 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		// made V228 panic before the driver could start.  Calls emitted as local
 		// rel32 targets now remain safe even when they bypass the routed entry.
 		// 0x001f00ff encodes SQIDI mask 0xff and 32 doorbells per SQIDI.
-		if (!NGreen::callback->isRealTGL) {
+		if (vfIdentifyDevice() == VfIdentity::Virtual) {
+			// Preserve Apple's event-source and callback lifecycle but remove the
+			// direct GFX_MSTR_IRQ accesses surrounding enable/disableInterrupts.
+			// Bound each patch by adjacent symbols, never by the entire image.
+			mach_vm_address_t irqEnable = 0, irqEnableRegs = 0;
+			mach_vm_address_t irqDisable = 0, irqDisableRegs = 0;
+			SolveRequestPlus irqBounds[] = {
+				{"__ZN17IGInterruptBridge6enableEv", irqEnable},
+				{"__ZN17IGInterruptBridge16enableInterruptsEv", irqEnableRegs},
+				{"__ZN17IGInterruptBridge7disableEv", irqDisable},
+				{"__ZN17IGInterruptBridge17disableInterruptsEv", irqDisableRegs},
+			};
+			PANIC_COND(!SolveRequestPlus::solveAll(patcher, index, irqBounds, address, size) ||
+			           irqEnableRegs <= irqEnable || irqDisableRegs <= irqDisable ||
+			           irqEnableRegs - irqEnable > 0x400 || irqDisableRegs - irqDisable > 0x400,
+			           "ngreen", "Invalid VF IRQ lifecycle patch bounds");
+			static const uint8_t masterDisable[] = {
+				0x81, 0xa0, 0x10, 0x00, 0x19, 0x00, 0xff, 0xff, 0xff, 0x7f};
+			static const uint8_t masterEnable[] = {
+				0x81, 0x88, 0x10, 0x00, 0x19, 0x00, 0x00, 0x00, 0x00, 0x80};
+			static const uint8_t noMasterAccess[] = {
+				0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90};
+			LookupPatchPlus const masterPatches[] = {
+				{activeKext, masterDisable, noMasterAccess, 1},
+				{activeKext, masterEnable, noMasterAccess, 1},
+			};
+			PANIC_COND(!LookupPatchPlus::applyAll(patcher, masterPatches, irqEnable,
+			                                      irqEnableRegs - irqEnable) ||
+			           !LookupPatchPlus::applyAll(patcher, masterPatches, irqDisable,
+			                                      irqDisableRegs - irqDisable),
+			           "ngreen", "Failed to isolate VF IRQ lifecycle from GFX_MSTR_IRQ");
+			// These entry points can call framebuffer force-wake instead of the
+			// multithreaded accelerator route. A VF has no guest-owned domains.
+			RouteRequestPlus vfWakeRoutes[] = {
+				{"__ZN16IntelAccelerator13SafeForceWakeEbj", wrapSafeForceWake},
+				{"__ZN16IntelAccelerator22SafeForceWakeInterruptEbj", wrapSafeForceWake},
+			};
+			PANIC_COND(!RouteRequestPlus::routeAll(patcher, index, vfWakeRoutes, address, size),
+			           "ngreen", "Failed to isolate VF force-wake entry points");
 			static const uint8_t vfDoorbellTopologyFind[] = {
 				0x48, 0x8b, 0x47, 0x38,
 				0x48, 0x8b, 0x80, 0x40, 0x12, 0x00, 0x00,
@@ -1989,6 +2281,8 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				// is provisioned only for the Gen11 0x190240/0x1901f0 mailbox.
 				{"__ZN13IGHardwareGuC19mmioHostToGuCActionEPKjjiPj",
 				 vfMmioHostToGuCAction, this->oVfMmioHostToGuCAction},
+				{"__ZN13IGHardwareGuC15hostToGuCActionEPKjjiPj",
+				 vfLegacyHostToGuCAction, this->oVfLegacyHostToGuCAction},
 				// V227: initDoorbells consumes DISTRDB before any submission.
 				// Bypass the stock routine for a VF so an all-ones MMIO read
 				// cannot turn into a 16 x 256 topology and corrupt the object.
@@ -2007,11 +2301,26 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				 vfCtbChannelInit, this->oVfCtbChannelInit},
 				{"__ZN21IGHardwareGuCCTBuffer15gucToHostActionEPj",
 				 vfCtbGucToHostAction, this->oVfCtbGucToHostAction},
-				// V234: Gen12 VFs report engine and GuC interrupts through a
-				// GGTT memory page.  Translate that page to Tahoe's existing
-				// IGBitSet<46> callback IDs instead of reading PF-only GT_INTR/IIR.
+				{"__ZN13IGHardwareGuC32handleSoftwareGuCToHostInterruptEP22IOInterruptEventSourcei",
+				 vfSoftwareGuCInterrupt, this->oVfSoftwareGuCInterrupt},
+				// V237: 0xCEE8 is PF-owned.  A VF invalidates GuC translations
+				// through the asynchronous v70 CT action instead.
+				{"__ZN13IGHardwareGuC13invalidateTLBEv",
+				 vfInvalidateTLB, this->oVfInvalidateTLB},
+				// V236: replace the complete filter on a VF.  The stock filter
+				// masks GFX_MSTR_IRQ, acquires physical force-wake and only then
+				// calls readAndClearInterrupts; wrapping the latter alone cannot
+				// make a VF interrupt safe.
+				{"__ZN17IGInterruptBridge22interruptFilterHandlerEP28IOFilterInterruptEventSource",
+				 vfInterruptFilterHandler, this->oVfInterruptFilterHandler},
+				// processInterrupts() can also call readAndClearInterrupts outside
+				// the hardware filter.  Keep that entry point VF-safe as well.
 				{"__ZN17IGInterruptBridge22readAndClearInterruptsER8IGBitSetILm46EE",
 				 vfReadAndClearInterrupts, this->oVfReadAndClearInterrupts},
+				{"__ZN17IGInterruptBridge16enableInterruptsEv",
+				 vfEnableInterrupts, this->oVfEnableInterrupts},
+				{"__ZN17IGInterruptBridge17disableInterruptsEv",
+				 vfDisableInterrupts, this->oVfDisableInterrupts},
 				{"__ZN20IGSharedMappedBuffer11withOptionsEP11IGAccelTaskmjj",
 				 vfCtbMappedBufferWithOptions, this->oVfCtbMappedBufferWithOptions},
 				// V230: translate Tahoe's legacy process-wide proxy submission
@@ -2026,20 +2335,18 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			PANIC_COND(!RouteRequestPlus::routeAll(patcher, index, firmwareRoute, address, size), "ngreen", "Failed to route VF GuC firmware transport");
 		}
 
-		// V222: IGHardwareGuCCTBuffer::initWithAccelerator invalidates the
-		// physical-GT TLB through 0xcee8 and polls that register with no timeout.
-		// VF reads outside its runtime allowlist return all ones, so the stock loop
-		// can never terminate.  Preserve the invalidate write and first posting read,
-		// but skip only the poll loop on non-TGL (the VF candidate) hardware.
-		if (!NGreen::callback->isRealTGL) {
+		// V237: IGHardwareGuCCTBuffer::initWithAccelerator directly accesses the
+		// PF-owned 0xCEE8 register.  Remove the complete write/read/poll sequence
+		// only on a verified VF. Physical hardware retains its native CT ABI.
+		if (vfIdentifyDevice() == VfIdentity::Virtual) {
 			static const uint8_t vfCtbTlbPollFind[] = {
 				0xc7, 0x80, 0xe8, 0xce, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
 				0x8b, 0x88, 0xe8, 0xce, 0x00, 0x00, 0xf6, 0xc1, 0x01, 0x75, 0xf5,
 				0x49, 0x8b, 0x7e, 0x20
 			};
 			static const uint8_t vfCtbTlbPollReplace[] = {
-				0xc7, 0x80, 0xe8, 0xce, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
-				0x8b, 0x88, 0xe8, 0xce, 0x00, 0x00, 0xf6, 0xc1, 0x01, 0x90, 0x90,
+				0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
+				0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
 				0x49, 0x8b, 0x7e, 0x20
 			};
 			LookupPatchPlus const vfCtbTlbPollPatch {
@@ -2048,7 +2355,7 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			};
 			PANIC_COND(!vfCtbTlbPollPatch.apply(patcher, address, size), "ngreen",
 			           "V222: failed to bypass VF CTB TLB poll");
-			SYSLOG("ngreen", "V222: bypassed physical TLB poll in VF CTB initialization");
+			SYSLOG("ngreen", "V237: removed physical TLB access from VF CTB initialization");
 
 			// V223: modern GuC descriptors count head/tail in dwords.  Apple's
 			// legacy CTB implementation stores the same fields in bytes.  Remove
@@ -2119,42 +2426,40 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			           "ngreen", "V223: failed to convert VF CTB head/tail units");
 			SYSLOG("ngreen", "V223: converted VF CTB head/tail units to dwords");
 
-			// V225: 0xCEE8 is the physical-GT GFX TLB invalidate register.  A VF
-			// may issue the write, but reads outside its runtime allowlist return
-			// all ones, so every stock posting-read loop is infinite.  The CTB
-			// initializer above has a contextual patch; cover all remaining
-			// register-allocation, teardown and context attach/detach variants.
+			// V237: cover every remaining 0xCEE8 posting-read loop.  Zero the
+			// destination register and remove the test/branch, so these legacy
+			// routines perform no physical read at all.
 			static const uint8_t vfTlbPollEcxFind[] = {
 				0x8b, 0x88, 0xe8, 0xce, 0x00, 0x00,
 				0xf6, 0xc1, 0x01, 0x75, 0xf5
 			};
 			static const uint8_t vfTlbPollEcxReplace[] = {
-				0x8b, 0x88, 0xe8, 0xce, 0x00, 0x00,
-				0xf6, 0xc1, 0x01, 0x90, 0x90
+				0x31, 0xc9, 0x90, 0x90, 0x90, 0x90,
+				0x90, 0x90, 0x90, 0x90, 0x90
 			};
 			static const uint8_t vfTlbPollEdxFind[] = {
 				0x8b, 0x90, 0xe8, 0xce, 0x00, 0x00,
 				0xf6, 0xc2, 0x01, 0x75, 0xf5
 			};
 			static const uint8_t vfTlbPollEdxReplace[] = {
-				0x8b, 0x90, 0xe8, 0xce, 0x00, 0x00,
-				0xf6, 0xc2, 0x01, 0x90, 0x90
+				0x31, 0xd2, 0x90, 0x90, 0x90, 0x90,
+				0x90, 0x90, 0x90, 0x90, 0x90
 			};
 			static const uint8_t vfTlbPollEsiFind[] = {
 				0x8b, 0xb0, 0xe8, 0xce, 0x00, 0x00,
 				0x40, 0xf6, 0xc6, 0x01, 0x75, 0xf4
 			};
 			static const uint8_t vfTlbPollEsiReplace[] = {
-				0x8b, 0xb0, 0xe8, 0xce, 0x00, 0x00,
-				0x40, 0xf6, 0xc6, 0x01, 0x90, 0x90
+				0x31, 0xf6, 0x90, 0x90, 0x90, 0x90,
+				0x90, 0x90, 0x90, 0x90, 0x90, 0x90
 			};
 			static const uint8_t vfTlbPollMemoryFind[] = {
 				0xf7, 0x80, 0xe8, 0xce, 0x00, 0x00,
 				0x01, 0x00, 0x00, 0x00, 0x75, 0xf4
 			};
 			static const uint8_t vfTlbPollMemoryReplace[] = {
-				0xf7, 0x80, 0xe8, 0xce, 0x00, 0x00,
-				0x01, 0x00, 0x00, 0x00, 0x90, 0x90
+				0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
+				0x90, 0x90, 0x90, 0x90, 0x90, 0x90
 			};
 			LookupPatchPlus const vfTlbPollPatches[] = {
 				{activeKext, vfTlbPollEcxFind, vfTlbPollEcxReplace,
@@ -2168,8 +2473,41 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			};
 			PANIC_COND(!LookupPatchPlus::applyAll(patcher, vfTlbPollPatches,
 			                                      address, size),
-			           "ngreen", "V225: failed to bypass VF physical TLB polls");
-			SYSLOG("ngreen", "V225: bypassed all remaining VF physical TLB polls");
+			           "ngreen", "V237: failed to remove VF physical TLB reads");
+
+			// Remove the corresponding writes as a separate exhaustive set.  The
+			// immediate form appears ten times in the unmodified Tahoe binary; the
+			// CTB occurrence was consumed by the contextual patch above, leaving nine.
+			static const uint8_t vfTlbWriteImmFind[] = {
+				0xc7, 0x80, 0xe8, 0xce, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00
+			};
+			static const uint8_t vfTlbWriteImmReplace[] = {
+				0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90
+			};
+			static const uint8_t vfTlbWriteEcxFind[] = {
+				0x89, 0x88, 0xe8, 0xce, 0x00, 0x00
+			};
+			static const uint8_t vfTlbWriteEcxReplace[] = {
+				0x90, 0x90, 0x90, 0x90, 0x90, 0x90
+			};
+			static const uint8_t vfTlbWriteR8Find[] = {
+				0x44, 0x89, 0x80, 0xe8, 0xce, 0x00, 0x00
+			};
+			static const uint8_t vfTlbWriteR8Replace[] = {
+				0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90
+			};
+			LookupPatchPlus const vfTlbWritePatches[] = {
+				{activeKext, vfTlbWriteImmFind, vfTlbWriteImmReplace,
+				 sizeof(vfTlbWriteImmFind), 9},
+				{activeKext, vfTlbWriteEcxFind, vfTlbWriteEcxReplace,
+				 sizeof(vfTlbWriteEcxFind), 1},
+				{activeKext, vfTlbWriteR8Find, vfTlbWriteR8Replace,
+				 sizeof(vfTlbWriteR8Find), 1},
+			};
+			PANIC_COND(!LookupPatchPlus::applyAll(patcher, vfTlbWritePatches,
+			                                      address, size),
+			           "ngreen", "V237: failed to remove VF physical TLB writes");
+			SYSLOG("ngreen", "V237: removed all legacy 0xCEE8 reads and writes");
 
 			// V224: Apple places the legacy action in CT header bits 31:16 and
 			// the request fence in dw1.  Modern CTB/HXG uses exactly the same
@@ -2245,7 +2583,7 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			}
 		}
 
-		if (!wegCoexist || forceFullMTL) {
+		if (!wegCoexist || forceFullMTL || gVfIdentity == VfIdentity::Virtual) {
 			RouteRequestPlus coexistOffRoutes[] = {
 				// ForceWake: replace Apple's SafeForceWakeMultithreaded with i915-ported version.
 				// Apple's code uses 90ms timeouts and no fallback; ours uses 50ms + reserve-bit fallback.
@@ -2682,9 +3020,13 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 
 bool Gen11::IGMemoryManagerInitSegments(void *that)
 {
+	const auto identity = vfIdentifyDevice();
+	if (identity == VfIdentity::Invalid ||
+	    (identity == VfIdentity::Virtual && !vfBootstrapBinder()))
+		return false;
 	const bool original = FunctionCast(IGMemoryManagerInitSegments,
 	                                   callback->oIGMemoryManagerInitSegments)(that);
-	if (!original || NGreen::callback->isRealTGL)
+	if (!original || identity == VfIdentity::Physical)
 		return original;
 	if (!vfBootstrapBinder()) {
 		SYSLOG("ngreen", "V219: aborting VF memory-manager init without GGTT transport");
@@ -2709,6 +3051,13 @@ bool Gen11::IGMemoryManagerInitSegments(void *that)
 	if (unifiedEnd > unifiedStart) {
 		getMember<uint64_t>(that, 0xC0) = unifiedStart;
 		getMember<uint64_t>(that, 0xC8) = unifiedEnd - unifiedStart;
+	} else {
+		// Leaving Apple's old range here would expose addresses outside the
+		// PF-provisioned VF interval. This allocator requires a usable range.
+		getMember<uint64_t>(that, 0xC0) = 0;
+		getMember<uint64_t>(that, 0xC8) = 0;
+		SYSLOG("ngreen", "V239: VF assignment cannot satisfy unified GGTT allocator");
+		return false;
 	}
 
 	SYSLOG("ngreen", "V217: patched IGMemoryManager GGTT ranges global=[0x%llx,+0x%llx] unified=[0x%llx,+0x%llx]",
@@ -2726,7 +3075,7 @@ bool Gen11::IGHardwareGlobalPageTableInitWithOptions(void *that,
                                                      uint64_t dummyPage,
                                                      uint32_t options)
 {
-	if (NGreen::callback->isRealTGL)
+	if (vfIdentifyDevice() == VfIdentity::Physical)
 		return FunctionCast(IGHardwareGlobalPageTableInitWithOptions,
 		                    callback->oIGHardwareGlobalPageTableInitWithOptions)(that,
 		                                                                         accelerator,
@@ -5178,7 +5527,16 @@ unsigned long Gen11::start(void *that,void  *param_1)
 	// V220/V222: An SR-IOV VF has no guest-owned force-wake domains or legacy
 	// execlist engine MMIO. Bootstrap the GuC VF transport before choosing the
 	// scheduler so this path can be kept separate from physical RPL hardware.
-	const bool vfActive = !NGreen::callback->isRealTGL && vfBootstrapBinder();
+	const auto identity = vfIdentifyDevice();
+	if (identity == VfIdentity::Invalid) {
+		SYSLOG("ngreen", "V239: refusing accelerator start with invalid VF identity");
+		return 0;
+	}
+	const bool vfActive = identity == VfIdentity::Virtual;
+	if (vfActive && !vfBootstrapBinder()) {
+		SYSLOG("ngreen", "V239: VF bootstrap failed; refusing physical scheduler fallback");
+		return 0;
+	}
 	if (vfActive)
 		SYSLOG("ngreen", "V222: SR-IOV VF start path active; selecting reference GuC scheduler");
 
@@ -5214,6 +5572,13 @@ unsigned long Gen11::start(void *that,void  *param_1)
 			}
 		}
 		
+		// User preferences cannot select a physical execlist scheduler on a
+		// provisioned VF. Only the translated reference GuC path is supported.
+		if (vfActive && schedType != 4) {
+			SYSLOG("ngreen", "V238: rejecting scheduler %d on VF; requiring GuC scheduler 4",
+			       schedType);
+			schedType = 4;
+		}
 		auto *schedNum = OSNumber::withNumber(static_cast<unsigned long long>(schedType), 32);
 		if (schedNum) {
 			service->setProperty("GraphicsSchedulerSelect", schedNum);
@@ -5239,35 +5604,37 @@ unsigned long Gen11::start(void *that,void  *param_1)
 	// This tells the accelerator to use SafeForceWakeMultithreaded (which we hook)
 	// instead of the framebuffer's SafeForceWake (which fails on RPL-P with ACK=0).
 	// V52: Only needed on RPL — real TGL's native ForceWake works fine.
-	if (!NGreen::callback->isRealTGL) {
-	auto *devDict = OSDynamicCast(OSDictionary, service->getProperty("Development"));
-	if (devDict) {
-		auto *newDevDict = OSDictionary::withDictionary(devDict);
-		if (newDevDict) {
-			auto *num = OSNumber::withNumber(1ULL, 32);
-			if (num) {
-				newDevDict->setObject("MultiForceWakeSelect", num);
-				num->release();
+	if (!NGreen::callback->isRealTGL && !vfActive) {
+		auto *devDict = OSDynamicCast(OSDictionary, service->getProperty("Development"));
+		if (devDict) {
+			auto *newDevDict = OSDictionary::withDictionary(devDict);
+			if (newDevDict) {
+				auto *num = OSNumber::withNumber(1ULL, 32);
+				if (num) {
+					newDevDict->setObject("MultiForceWakeSelect", num);
+					num->release();
+				}
+				service->setProperty("Development", newDevDict);
+				newDevDict->release();
+				SYSLOG("ngreen", "Injected MultiForceWakeSelect=1 into Development dict");
 			}
-			service->setProperty("Development", newDevDict);
-			newDevDict->release();
-			SYSLOG("ngreen", "Injected MultiForceWakeSelect=1 into Development dict");
-		}
-	} else {
-		SYSLOG("ngreen", "No Development dict found, creating one with MultiForceWakeSelect=1");
-		auto *newDevDict = OSDictionary::withCapacity(4);
-		if (newDevDict) {
-			auto *num = OSNumber::withNumber(1ULL, 32);
-			if (num) {
-				newDevDict->setObject("MultiForceWakeSelect", num);
-				num->release();
+		} else {
+			SYSLOG("ngreen", "No Development dict found, creating one with MultiForceWakeSelect=1");
+			auto *newDevDict = OSDictionary::withCapacity(4);
+			if (newDevDict) {
+				auto *num = OSNumber::withNumber(1ULL, 32);
+				if (num) {
+					newDevDict->setObject("MultiForceWakeSelect", num);
+					num->release();
+				}
+				service->setProperty("Development", newDevDict);
+				newDevDict->release();
 			}
-			service->setProperty("Development", newDevDict);
-			newDevDict->release();
 		}
-	}
-	} else {
+	} else if (NGreen::callback->isRealTGL) {
 		SYSLOG("ngreen", "V52: Real TGL — skipping MultiForceWakeSelect override");
+	} else {
+		SYSLOG("ngreen", "V236: VF force-wake is PF-owned; skipping MultiForceWakeSelect override");
 	}
 
 	// Linux deliberately leaves force-wake disabled for an SR-IOV VF and uses
@@ -6169,7 +6536,7 @@ uint8_t Gen11::deviceStart(void *that)
 	// returned false, preventing CoreDisplay from seeing a null accelerator device.
 	auto ret = FunctionCast(deviceStart, callback->odeviceStart)(that);
 	const bool isRealTGL = NGreen::callback && NGreen::callback->isRealTGL;
-	if (!isRealTGL && !ret) {
+	if (!isRealTGL && !gVfGGTTReady && !ret) {
 		SYSLOG("ngreen", "V111: IGAccelDevice::deviceStart returned false on RPL — forcing true");
 		return true;
 	}
@@ -6285,6 +6652,14 @@ void Gen11::getGPUInfo(void *that)
 // making the replay batch write 0x0000 to 0x20E0 on every context switch instead.
 void Gen11::populateResetRegisterList(void *that)
 {
+	if (ngVfGGTTBinderActive()) {
+		static bool loggedVfSkip = false;
+		if (!loggedVfSkip) {
+			loggedVfSkip = true;
+			SYSLOG("ngreen", "V236: skipped PF-owned reset-register programming on VF");
+		}
+		return;
+	}
 	if (!NGreen::callback->isRealTGL) {
 		// Masked clear: mask=bit14, value=0 → 0x40000000
 		NGreen::callback->writeReg32(GEN7_FF_SLICE_CS_CHICKEN1,
@@ -6610,7 +6985,7 @@ void * Gen11::getBlit3DContext(void *that,bool param_1)
 	// Tier-1 interrupt: ring init disables RENDER_COPY_INTR_ENABLE. Ensure it's set before
 	// each call so the GPU context-creation completion interrupt can fire.
 	uint32_t rcIntrPre = 0;
-	if (!NGreen::callback->isRealTGL) {
+	if (!NGreen::callback->isRealTGL && !gVfGGTTReady) {
 		rcIntrPre = NGreen::callback->readReg32(GEN11_RENDER_COPY_INTR_ENABLE);
 		uint32_t wantBits = getV65Tier1WantBits(false);
 		if (!(rcIntrPre & wantBits)) {
@@ -6643,11 +7018,22 @@ void * Gen11::getBlit3DContext(void *that,bool param_1)
 			}
 			return ctx;
 		}
-		uint32_t errReg     = NGreen::callback->readReg32(ERROR_GEN6);
-		uint32_t rcIntrPost = NGreen::callback->readReg32(GEN11_RENDER_COPY_INTR_ENABLE);
-		SYSLOG("ngreen", "V148: getBlit3DContext original returned invalid ctx=%p ctx+0xb8=%p "
-			   "tier1_pre=0x%x tier1_post=0x%x ERROR_GEN6=0x%x param_1=%d cached298_pre=%p",
-			   ctx, b8, rcIntrPre, rcIntrPost, errReg, (int)param_1, cached298);
+		if (!gVfGGTTReady) {
+			const uint32_t errReg = NGreen::callback->readReg32(ERROR_GEN6);
+			const uint32_t rcIntrPost =
+				NGreen::callback->readReg32(GEN11_RENDER_COPY_INTR_ENABLE);
+			SYSLOG("ngreen", "V148: getBlit3DContext original returned invalid ctx=%p ctx+0xb8=%p "
+			       "tier1_pre=0x%x tier1_post=0x%x ERROR_GEN6=0x%x param_1=%d cached298_pre=%p",
+			       ctx, b8, rcIntrPre, rcIntrPost, errReg, (int)param_1,
+			       cached298);
+		} else {
+			// A VF has no ownership of RENDER_COPY_INTR_ENABLE or ERROR_GEN6.
+			// Reading either can be rejected by the PF and, on affected hosts,
+			// wedge the complete GT while a context is being brought up.
+			SYSLOG("ngreen", "V238: VF getBlit3DContext returned invalid ctx=%p ctx+0xb8=%p "
+			       "param_1=%d cached298_pre=%p (physical diagnostics suppressed)",
+			       ctx, b8, (int)param_1, cached298);
+		}
 
 	}
 
@@ -6867,6 +7253,11 @@ void Gen11::IGHardwareBlit3DContextinitialize(void *that)
 // is ever submitted, so the DMA buffer snapshot captures 0x0000 instead of 0x4000.
 unsigned long Gen11::startGraphicsEngine(void *that)
 {
+	if (gVfGGTTReady) {
+		SYSLOG("ngreen", "V236: VF engine start is PF/GuC-owned; bypassing legacy ring start");
+		return kIOReturnSuccess;
+	}
+
 	static int startCount = 0;
 
 	if (!NGreen::callback->isRealTGL) {
@@ -6963,6 +7354,11 @@ void Gen11::applyPreStopEngineWorkarounds(int callCount)
 // V71 POST CSB drain. GT workarounds are in applyPreStopEngineWorkarounds() above.
 unsigned long Gen11::stopGraphicsEngine(void *that)
 {
+	if (gVfGGTTReady) {
+		SYSLOG("ngreen", "V236: VF engine stop is PF/GuC-owned; bypassing legacy ring stop");
+		return kIOReturnSuccess;
+	}
+
 	static int   v63ResetCount            = 0;
 	static uint32_t v155SavedRcsCtl       = 0;
 	static int   v164GdrstCount           = 0;
@@ -8207,13 +8603,39 @@ unsigned long Gen11::loadGuCBinary(void *that) {
 	return 1;
 }
 
+bool Gen11::vfLegacyHostToGuCAction(void *that, const uint32_t *request,
+                                  unsigned int requestLength, int timeout,
+                                  uint32_t *response) {
+	if (gVfIdentity == VfIdentity::Physical)
+		return FunctionCast(vfLegacyHostToGuCAction,
+		                    callback->oVfLegacyHostToGuCAction)(
+			that, request, requestLength, timeout, response);
+	// Audited direct callers issue legacy doorbell 0x10/0x20, log 0x30,
+	// or sampling 0x3005 actions. None belongs to our direct-LRCA VF path.
+	// Never allow the native sender to bypass framing/shutdown checks or to
+	// fall back to a mailbox when CTB initialization has failed.
+	if (response)
+		*response = 1;
+	SYSLOG("ngreen", "V239: rejected untranslated legacy GuC action=0x%08x len=%u",
+	       request && requestLength ? request[0] : 0, requestLength);
+	vfMarkProtocolFault("untranslated legacy GuC request on VF");
+	return false;
+}
+
 bool Gen11::vfMmioHostToGuCAction(void *that, const uint32_t *request,
 	                              unsigned int requestLength, int timeout,
 	                              uint32_t *response) {
-	if (!gVfGGTTReady) {
+	if (gVfIdentity == VfIdentity::Physical) {
 		return FunctionCast(vfMmioHostToGuCAction,
 		                    callback->oVfMmioHostToGuCAction)(
 			that, request, requestLength, timeout, response);
+	}
+	// Readiness is not device identity. A failed VF bootstrap must never
+	// fall through to Apple's physical scratch/doorbell implementation.
+	if (!gVfGGTTReady) {
+		if (response)
+			*response = 1;
+		return false;
 	}
 
 	if (!request || requestLength == 0 || requestLength > 4) {
@@ -8226,8 +8648,8 @@ bool Gen11::vfMmioHostToGuCAction(void *that, const uint32_t *request,
 	// GuC VF firmware deliberately rejects that MMIO action: a VF must publish
 	// the descriptor, buffer and size through six self-config KLVs, then enable
 	// CTB transport with 0x4509.  Preserve Apple's call contract while translating
-	// only this registration action; subsequent non-registration MMIO actions use
-	// the normal VF mailbox below.
+	// only the registration/teardown actions. Modern VF mailbox operations
+	// use vfGucSendMMIO directly; arbitrary legacy requests are not forwarded.
 	if (request[0] == 0x4505U) {
 		if (requestLength != 4 || request[2] != 0x40U || request[3] > 1U) {
 			SYSLOG("ngreen", "V223: rejected malformed legacy CTB registration len=%u args=%08x/%08x/%08x",
@@ -8251,41 +8673,61 @@ bool Gen11::vfMmioHostToGuCAction(void *that, const uint32_t *request,
 		}
 		bool ok = true;
 		if (request[2] == 0U) {
+			// Close admission first, then wait out any writer already holding
+			// the H2G lock. Every direct sender rechecks this flag under that
+			// same lock. Legacy senders are rejected by their routed entry.
+			OSCompareAndSwap(0, 1, &gVfCtbStopped);
+			auto *ctb = that ? getMember<void *>(that, 0xA10) : nullptr;
+			auto *sendLock = ctb ? getMember<IOLock *>(ctb, 0x18) : nullptr;
+			if (sendLock) {
+				IOLockLock(sendLock);
+				IOLockUnlock(sendLock);
+			}
+			gVfCtbDisableConfirmed = false;
 			uint32_t disable[4] = {kGucActionHost2GucControlCtb, 0, 0, 0};
 			uint32_t reply[4] = {};
 			ok = vfGucSendMMIO(disable, 2, reply) &&
 			     (reply[0] & 0x0FFFFFFFU) == 0;
+			gVfCtbDisableConfirmed = ok;
 			SYSLOG("ngreen", "V224: disabled VF CTB transport ret=%d reply=0x%08x",
 			       ok, reply[0]);
+			if (!ok)
+				vfMarkProtocolFault("GuC CTB transport disable failure");
+		} else {
+			// The legacy ABI issues one request per channel, while 0x4509
+			// disables both at once.  Do not acknowledge the second legacy
+			// request unless that modern disable was confirmed.
+			ok = gVfCtbDisableConfirmed;
+			if (!ok)
+				vfMarkProtocolFault("GuC CTB teardown without confirmed disable");
 		}
 		if (response)
-			*response = 0;
-		if (request[2] == 1U) {
-			gVfCtbGpuBase = 0;
-			gVfCtbCpuBase = nullptr;
+			*response = ok ? 0 : 1;
+		if (request[2] == 1U && ok) {
+			// Keep quarantined addresses immutable: a handler admitted before
+			// shutdown may still hold or inspect them. Stopped is the admission
+			// boundary; clearing a pointer is not interrupt synchronization.
 			gVfMemIrqConfigured = false;
+			gVfCtbDisableConfirmed = false;
+			// CTB disable does not prove memory-IRQ DMA is quiescent: both
+			// allocations currently share this backing. Keep our reference even
+			// on success until IRQ synchronization and complete VF shutdown have
+			// a verified implementation. Reinitialization is rejected below.
+			vfMarkProtocolFault("CTB stopped; shared memory-IRQ backing quarantined");
 		}
 		return ok;
 	}
 
-	uint32_t reply[4] = {};
-	const bool ok = vfGucSendMMIO(request, requestLength, reply);
-	if (response)
-		*response = reply[0];
-
-	static uint32_t logCount = 0;
-	if (logCount++ < 24 || !ok) {
-		SYSLOG("ngreen", "V222: VF GuC MMIO action=0x%08x len=%u ret=%d reply=0x%08x",
-		       request[0], requestLength, ok, reply[0]);
-	}
-	return ok;
+	return vfLegacyHostToGuCAction(that, request, requestLength, timeout, response);
 }
 
 bool Gen11::vfReadDoorbellSQIDIConfig(void *that) {
-	if (!gVfGGTTReady) {
+	if (gVfIdentity == VfIdentity::Physical) {
 		return FunctionCast(vfReadDoorbellSQIDIConfig,
 		                    callback->oVfReadDoorbellSQIDIConfig)(that);
 	}
+	if (!gVfGGTTReady)
+		return false;
 
 	// Apple's Gen11 scheduler owns a fixed 256-entry ID-to-context table and
 	// cannot represent a partial quota without translating every legacy
@@ -8313,7 +8755,7 @@ bool Gen11::vfReadDoorbellSQIDIConfig(void *that) {
 }
 
 void Gen11::vfInitDoorbells(void *that) {
-	if (NGreen::callback->isRealTGL) {
+	if (vfIdentifyDevice() == VfIdentity::Physical) {
 		FunctionCast(vfInitDoorbells, callback->oVfInitDoorbells)(that);
 		return;
 	}
@@ -8347,11 +8789,11 @@ void Gen11::vfInitDoorbells(void *that) {
 }
 
 bool Gen11::vfAttachContextDesc(void *that, const uint32_t *descriptor) {
-	if (!gVfGGTTReady || NGreen::callback->isRealTGL) {
+	if (gVfIdentity == VfIdentity::Physical) {
 		return FunctionCast(vfAttachContextDesc,
 		                    callback->oVfAttachContextDesc)(that, descriptor);
 	}
-	if (!descriptor)
+	if (!gVfGGTTReady || gVfProtocolFault || !descriptor)
 		return false;
 
 	const bool attached = FunctionCast(vfAttachContextDesc,
@@ -8370,11 +8812,17 @@ bool Gen11::vfAttachContextDesc(void *that, const uint32_t *descriptor) {
 	const uint32_t lrcaPage = descriptorLo & 0xFFFFF000U;
 	const uint32_t rawClass = descriptorHi >> 29;
 	const uint32_t engineInstance = (descriptorHi >> 16) & 0x3FU;
+	auto *hardwareContext = const_cast<uint8_t *>(
+		reinterpret_cast<const uint8_t *>(descriptor) -
+		kVfContextDescriptorOffset);
+	auto *contextBacking = reinterpret_cast<OSObject *>(
+		getMember<void *>(hardwareContext, kVfContextImageBufferOffset));
 	static constexpr uint8_t engineClassMap[] = {0, 1, 2, 3, 5, 4};
 	if (lrcaPage < gVfGGTTBase ||
 	    static_cast<uint64_t>(lrcaPage) + PAGE_SIZE >
 		gVfGGTTBase + gVfGGTTSize ||
-	    rawClass >= arrsize(engineClassMap) || engineInstance >= 32) {
+	    rawClass >= arrsize(engineClassMap) || engineInstance >= 32 ||
+	    !contextBacking) {
 		SYSLOG("ngreen", "V230: rejected LRCA descriptor %08x:%08x VF=[0x%llx,+0x%llx]",
 		       descriptorHi, descriptorLo,
 		       static_cast<unsigned long long>(gVfGGTTBase),
@@ -8415,6 +8863,10 @@ bool Gen11::vfAttachContextDesc(void *that, const uint32_t *descriptor) {
 				entry.refCount = 1;
 				entry.engineClass = engineClassMap[rawClass];
 				entry.engineInstance = static_cast<uint8_t>(engineInstance);
+				entry.enablePending = false;
+				entry.disablePending = false;
+				contextBacking->retain();
+				entry.contextBacking = contextBacking;
 				entry.state = kVfGucContextRegistering;
 			}
 		}
@@ -8422,11 +8874,12 @@ bool Gen11::vfAttachContextDesc(void *that, const uint32_t *descriptor) {
 
 		if (!waitForTransition)
 			break;
-		if (!vfWaitForContextTransition(static_cast<uint16_t>(slot),
+		if (!vfWaitForContextTransition(that, static_cast<uint16_t>(slot),
 		                                lrcaPage, previousState)) {
 			SYSLOG("ngreen", "V230: timed out waiting to reuse LRCA 0x%08x id=%u state=%u",
 			       lrcaPage, static_cast<unsigned int>(slot),
 			       static_cast<unsigned int>(previousState));
+			vfMarkProtocolFault("GuC context-ID reuse timeout");
 			FunctionCast(vfDetachContextDesc,
 			             callback->oVfDetachContextDesc)(that, descriptor);
 			return false;
@@ -8478,8 +8931,9 @@ bool Gen11::vfAttachContextDesc(void *that, const uint32_t *descriptor) {
 				kGucActionDeregisterContext, gucId,
 			};
 			(void)vfSendCtbFastAction(that, deregister, arrsize(deregister), transportFence);
-			(void)vfWaitForContextState(gucId, kVfGucContextTombstone);
+			(void)vfWaitForContextState(that, gucId, kVfGucContextTombstone);
 		}
+		vfReleaseRetiredContextBacking(gucId);
 		FunctionCast(vfDetachContextDesc,
 		             callback->oVfDetachContextDesc)(that, descriptor);
 		return false;
@@ -8520,6 +8974,7 @@ void Gen11::vfDetachContextDesc(void *that, const uint32_t *descriptor) {
 		state = entry.state;
 		if (state == kVfGucContextEnabled) {
 			entry.state = kVfGucContextPendingDisable;
+			entry.disablePending = true;
 			issueDisable = true;
 		} else if (state == kVfGucContextRegistered ||
 		           state == kVfGucContextDisabled) {
@@ -8543,11 +8998,12 @@ void Gen11::vfDetachContextDesc(void *that, const uint32_t *descriptor) {
 	// MODE_DONE before issuing disable; otherwise its late enable event could be
 	// mistaken for our disable completion and the LRCA could be freed too early.
 	if (state == kVfGucContextPendingEnable) {
-		if (vfWaitForContextState(gucId, kVfGucContextEnabled)) {
+		if (vfWaitForContextState(that, gucId, kVfGucContextEnabled)) {
 			interruptState =
 				IOSimpleLockLockDisableInterrupt(gVfContextLock);
 			if (gVfContexts[gucId].state == kVfGucContextEnabled) {
 				gVfContexts[gucId].state = kVfGucContextPendingDisable;
+				gVfContexts[gucId].disablePending = true;
 				issueDisable = true;
 			}
 			IOSimpleLockUnlockEnableInterrupt(gVfContextLock, interruptState);
@@ -8562,10 +9018,22 @@ void Gen11::vfDetachContextDesc(void *that, const uint32_t *descriptor) {
 		const uint32_t disable[] = {
 			kGucActionScheduleContextModeSet, gucId, kGucContextDisable,
 		};
-		disabled = vfSendCtbFastAction(that, disable, arrsize(disable), transportFence) &&
-		           vfWaitForContextState(gucId, kVfGucContextDisabled);
+		const bool disableSent =
+			vfSendCtbFastAction(that, disable, arrsize(disable), transportFence);
+		disabled = disableSent &&
+		           vfWaitForContextState(that, gucId, kVfGucContextDisabled);
+		if (!disableSent) {
+			interruptState =
+				IOSimpleLockLockDisableInterrupt(gVfContextLock);
+			auto &entry = gVfContexts[gucId];
+			if (entry.state == kVfGucContextPendingDisable) {
+				entry.state = kVfGucContextEnabled;
+				entry.disablePending = false;
+			}
+			IOSimpleLockUnlockEnableInterrupt(gVfContextLock, interruptState);
+		}
 	} else if (state == kVfGucContextPendingDisable) {
-		disabled = vfWaitForContextState(gucId, kVfGucContextDisabled);
+		disabled = vfWaitForContextState(that, gucId, kVfGucContextDisabled);
 	}
 
 	bool deregistered = state == kVfGucContextTombstone;
@@ -8585,20 +9053,26 @@ void Gen11::vfDetachContextDesc(void *that, const uint32_t *descriptor) {
 		};
 		deregistered =
 			vfSendCtbFastAction(that, deregister, arrsize(deregister), transportFence) &&
-			vfWaitForContextState(gucId, kVfGucContextTombstone);
+			vfWaitForContextState(that, gucId, kVfGucContextTombstone);
 	} else if (disabled && !deregistered) {
 		deregistered =
-			vfWaitForContextState(gucId, kVfGucContextTombstone);
+			vfWaitForContextState(that, gucId, kVfGucContextTombstone);
 	}
 
 	if (!disabled || !deregistered) {
 		SYSLOG("ngreen", "V231: context teardown incomplete id=%u disabled=%d deregistered=%d fence=%u",
 		       gucId, disabled, deregistered, transportFence);
+		vfMarkProtocolFault("GuC context teardown timeout");
 	} else if (gVfContextLifecycleLogs++ < 64) {
 		SYSLOG("ngreen", "V230: deregistered GuC context id=%u LRCA=0x%08x",
 		       gucId, lrcaPage);
 	}
+	if (deregistered)
+		vfReleaseRetiredContextBacking(gucId);
 
+	// The retained IGMappedBuffer reference above is the safety boundary: if
+	// GuC teardown timed out, Apple's bookkeeping may be detached but the LRCA
+	// pages and GGTT mapping remain pinned and this GuC ID is quarantined.
 	FunctionCast(vfDetachContextDesc,
 	             callback->oVfDetachContextDesc)(that, descriptor);
 }
@@ -8607,16 +9081,36 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 	                         const uint32_t *descriptor, IGHwCsType hwCsType,
 	                         unsigned int channelId, unsigned int ringSequence,
 	                         unsigned int ringTail) {
-	if (!gVfGGTTReady || NGreen::callback->isRealTGL) {
+	if (gVfIdentity == VfIdentity::Physical) {
 		return FunctionCast(vfSubmitWorkItem,
 		                    callback->oVfSubmitWorkItem)(that, legacyContextId,
 		                                                 descriptor, hwCsType,
 		                                                 channelId, ringSequence,
 		                                                 ringTail);
 	}
-	if (!descriptor || !gVfContextLock || !gVfContexts ||
+	if (!gVfGGTTReady || !descriptor || !gVfContextLock || !gVfContexts ||
 	    !callback->vfSharedMappedBufferGetVirtualAddress)
 		return false;
+	if (gVfProtocolFault) {
+		static uint32_t haltedSubmitLogs = 0;
+		if (haltedSubmitLogs++ < 16)
+			SYSLOG("ngreen", "V237: rejected VF submit after protocol fault");
+		return false;
+	}
+
+	const bool memIrqReady = gVfMemIrqConfigured && gVfCtbCpuBase;
+	if (!memIrqReady) {
+		// A bootstrap stamp can precede CTB registration.  It cannot be safely
+		// submitted because MODE_DONE and completion interrupts would be
+		// unobservable.  Acknowledge only this software request; V221's bounded
+		// first-stamp handling will retire it after transport becomes available.
+		static uint32_t bootstrapLogs = 0;
+		if (bootstrapLogs++ < 16) {
+			SYSLOG("ngreen", "V237: suppressed pre-memory-IRQ VF bootstrap submit LRCA=0x%08x",
+			       descriptor[0]);
+		}
+		return true;
+	}
 
 	// Tahoe's legacy WQ encoder proves that the final argument is the byte
 	// ring tail: it stores (arg >> 3) in WQ_RING_TAIL[28:18].  The previous
@@ -8630,8 +9124,6 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 	// in IGHardwareContext::updateRingTail.  Repeating that write here closes
 	// the ordering gap between Apple's legacy producer and our direct CTB
 	// notification while avoiding GGTT remaps or physical-address reads.
-	constexpr size_t kContextDescriptorOffset = 0x89;
-	constexpr size_t kContextImageBufferOffset = 0x98;
 	constexpr size_t kContextRegisterStateOffset = 0x1000;
 	constexpr size_t kContextRingTailOffset = 0x101C;
 	constexpr size_t kContextRingControlOffset = 0x102C;
@@ -8651,9 +9143,10 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 	constexpr uint32_t kRingControlPagesMask = 0x001FF000U;
 	constexpr uint32_t kRingControlValid = 1U;
 	auto *hardwareContext = const_cast<uint8_t *>(
-		reinterpret_cast<const uint8_t *>(descriptor) - kContextDescriptorOffset);
+		reinterpret_cast<const uint8_t *>(descriptor) -
+		kVfContextDescriptorOffset);
 	auto *contextImageBuffer =
-		getMember<void *>(hardwareContext, kContextImageBufferOffset);
+		getMember<void *>(hardwareContext, kVfContextImageBufferOffset);
 	using GetVirtualAddress = void *(*)(void *);
 	auto getVirtualAddress = reinterpret_cast<GetVirtualAddress>(
 		callback->vfSharedMappedBufferGetVirtualAddress);
@@ -8664,20 +9157,6 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 		       descriptor[0], legacyContextId);
 		return false;
 	}
-	const bool memIrqReady = gVfMemIrqConfigured && gVfCtbCpuBase;
-	if (!memIrqReady) {
-		// IntelAccelerator::start submits one bootstrap stamp before GuC CTB
-		// registration reaches vfConfigureMemIrq().  V233 deliberately lets
-		// that request use the legacy path and V221 tolerates its first missing
-		// completion.  Rejecting it here makes submitToRing panic immediately,
-		// so defer only the LRCA memory-IRQ patch until self-config is complete.
-		static uint32_t bootstrapLogs = 0;
-		if (bootstrapLogs++ < 16) {
-			SYSLOG("ngreen", "V235: deferring VF memory IRQ for bootstrap LRCA=0x%08x",
-			       descriptor[0]);
-		}
-	}
-
 	// Gen12 SR-IOV VFs do not expose the physical GT interrupt hierarchy.
 	// Match i915's init_vf_irq_reg_state(): consume the reserved LRCA slots to
 	// load the interrupt mask from memory and point the engine's status/source
@@ -8685,24 +9164,22 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 	// to the selected engine because MI_LRI_LRM_CS_MMIO is set in both commands.
 	auto *registerState = reinterpret_cast<volatile uint32_t *>(
 		contextImage + kContextRegisterStateOffset);
-	if (memIrqReady) {
-		const uint32_t memIrqPage = gVfCtbGpuBase + kVfMemIrqOffset;
-		registerState[kCtxMemIrqLrmHeaderIndex] =
-			kMiLoadRegisterMemGlobalCsMmio;
-		registerState[kCtxMemIrqMaskRegisterIndex] = kGen12RingIntMask;
-		registerState[kCtxMemIrqMaskPointerIndex] =
-			memIrqPage + kVfMemIrqEnableOffset;
-		registerState[kCtxMemIrqMaskPointerIndex + 1] = 0;
-		registerState[kCtxMemIrqLriHeaderIndex] =
-			kMiLoadRegisterImm2PostedCsMmio;
-		registerState[kCtxMemIrqStatusRegisterIndex] = kGen12RingIntStatus;
-		registerState[kCtxMemIrqStatusPointerIndex] =
-			memIrqPage + kVfMemIrqStatusOffset;
-		registerState[kCtxMemIrqSourceRegisterIndex] = kGen12RingIntSource;
-		registerState[kCtxMemIrqSourcePointerIndex] =
-			memIrqPage + kVfMemIrqSourceOffset;
-		OSSynchronizeIO();
-	}
+	const uint32_t memIrqPage = gVfCtbGpuBase + kVfMemIrqOffset;
+	registerState[kCtxMemIrqLrmHeaderIndex] =
+		kMiLoadRegisterMemGlobalCsMmio;
+	registerState[kCtxMemIrqMaskRegisterIndex] = kGen12RingIntMask;
+	registerState[kCtxMemIrqMaskPointerIndex] =
+		memIrqPage + kVfMemIrqEnableOffset;
+	registerState[kCtxMemIrqMaskPointerIndex + 1] = 0;
+	registerState[kCtxMemIrqLriHeaderIndex] =
+		kMiLoadRegisterImm2PostedCsMmio;
+	registerState[kCtxMemIrqStatusRegisterIndex] = kGen12RingIntStatus;
+	registerState[kCtxMemIrqStatusPointerIndex] =
+		memIrqPage + kVfMemIrqStatusOffset;
+	registerState[kCtxMemIrqSourceRegisterIndex] = kGen12RingIntSource;
+	registerState[kCtxMemIrqSourcePointerIndex] =
+		memIrqPage + kVfMemIrqSourceOffset;
+	OSSynchronizeIO();
 
 	auto *ringTailField = reinterpret_cast<volatile uint32_t *>(
 		contextImage + kContextRingTailOffset);
@@ -8727,23 +9204,20 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 		SYSLOG("ngreen", "V234: LRCA image desc=%08x:%08x ctrl=%08x head=%08x tail=%08x start=%08x ctl=%08x",
 		       descriptor[1], descriptor[0], state[3], state[5], state[7],
 		       state[9], state[11]);
-		if (memIrqReady) {
-			SYSLOG("ngreen", "V234: LRCA memirq lrm=%08x mask=%08x@%08x lri=%08x status=%08x@%08x source=%08x@%08x",
-			       state[kCtxMemIrqLrmHeaderIndex],
-			       state[kCtxMemIrqMaskRegisterIndex],
-			       state[kCtxMemIrqMaskPointerIndex],
-			       state[kCtxMemIrqLriHeaderIndex],
-			       state[kCtxMemIrqStatusRegisterIndex],
-			       state[kCtxMemIrqStatusPointerIndex],
-			       state[kCtxMemIrqSourceRegisterIndex],
-			       state[kCtxMemIrqSourcePointerIndex]);
-		}
+		SYSLOG("ngreen", "V234: LRCA memirq lrm=%08x mask=%08x@%08x lri=%08x status=%08x@%08x source=%08x@%08x",
+		       state[kCtxMemIrqLrmHeaderIndex],
+		       state[kCtxMemIrqMaskRegisterIndex],
+		       state[kCtxMemIrqMaskPointerIndex],
+		       state[kCtxMemIrqLriHeaderIndex],
+		       state[kCtxMemIrqStatusRegisterIndex],
+		       state[kCtxMemIrqStatusPointerIndex],
+		       state[kCtxMemIrqSourceRegisterIndex],
+		       state[kCtxMemIrqSourcePointerIndex]);
 	}
 
 	const uint32_t lrcaPage = descriptor[0] & 0xFFFFF000U;
 	int32_t slot = -1;
 	bool enable = false;
-	bool waitForEnable = false;
 	VfGucContextState previousState = kVfGucContextEmpty;
 	IOInterruptState interruptState =
 		IOSimpleLockLockDisableInterrupt(gVfContextLock);
@@ -8754,9 +9228,8 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 		    entry.state == kVfGucContextDisabled) {
 			previousState = entry.state;
 			entry.state = kVfGucContextPendingEnable;
+			entry.enablePending = true;
 			enable = true;
-		} else if (entry.state == kVfGucContextPendingEnable) {
-			waitForEnable = true;
 		} else if (entry.state != kVfGucContextEnabled) {
 			slot = -1;
 		}
@@ -8769,12 +9242,6 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 	}
 
 	const uint16_t gucId = static_cast<uint16_t>(slot);
-	if (waitForEnable &&
-	    !vfWaitForContextState(gucId, kVfGucContextEnabled)) {
-		SYSLOG("ngreen", "V230: timed out waiting for concurrent enable id=%u LRCA=0x%08x",
-		       gucId, lrcaPage);
-		return false;
-	}
 	const uint32_t enableRequest[] = {
 		kGucActionScheduleContextModeSet, gucId, kGucContextEnable,
 	};
@@ -8788,16 +9255,23 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 
 	if (enable) {
 		if (submitted) {
-			// MODE_SET success only acknowledges the request.  The LRCA is not
-			// schedulable until the asynchronous MODE_DONE event arrives.
-			submitted =
-				vfWaitForContextState(gucId, kVfGucContextEnabled);
-		} else {
+			// Match i915: once MODE_SET is queued, single-LRC submission is
+			// considered enabled immediately because KMD already published the
+			// LRCA tail.  MODE_DONE only retires the pending G2H reference.
 			interruptState =
 				IOSimpleLockLockDisableInterrupt(gVfContextLock);
 			auto &entry = gVfContexts[gucId];
 			if (entry.state == kVfGucContextPendingEnable)
+				entry.state = kVfGucContextEnabled;
+			IOSimpleLockUnlockEnableInterrupt(gVfContextLock, interruptState);
+		} else {
+			interruptState =
+				IOSimpleLockLockDisableInterrupt(gVfContextLock);
+			auto &entry = gVfContexts[gucId];
+			if (entry.state == kVfGucContextPendingEnable) {
 				entry.state = previousState;
+				entry.enablePending = false;
+			}
 			IOSimpleLockUnlockEnableInterrupt(gVfContextLock, interruptState);
 		}
 	}
@@ -8813,18 +9287,33 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 }
 
 bool Gen11::vfCtbInitWithAccelerator(void *that, void *accelerator) {
-	if (!gVfGGTTReady) {
+	if (gVfIdentity == VfIdentity::Physical) {
 		return FunctionCast(vfCtbInitWithAccelerator,
 		                    callback->oVfCtbInitWithAccelerator)(that, accelerator);
 	}
+	if (!gVfGGTTReady || gVfProtocolFault)
+		return false;
 
+	if (gVfCtbBacking) {
+		vfMarkProtocolFault("CTB reinitialization while old backing is quarantined");
+		return false;
+	}
+
+	gVfCtbDisableConfirmed = false;
 	gVfCtbAllocationPending = true;
 	const bool result = FunctionCast(vfCtbInitWithAccelerator,
 	                                 callback->oVfCtbInitWithAccelerator)(that,
 	                                                                        accelerator);
 	gVfCtbAllocationPending = false;
-	if (!result)
+	if (!result) {
 		SYSLOG("ngreen", "V223: enlarged VF CTB initialization failed");
+		return false;
+	}
+
+	if (!gVfCtbBacking || !gVfCtbCpuBase || gVfProtocolFault) {
+		vfMarkProtocolFault("CTB initialized without a validated pinned layout");
+		return false;
+	}
 	return result;
 }
 
@@ -8851,14 +9340,28 @@ void Gen11::vfCtbChannelInit(void *that) {
 	auto *baseCpu = getMember<uint8_t *>(that, 0x48);
 	if (!baseCpu) {
 		SYSLOG("ngreen", "V223: VF CTB channel initialization has no CPU mapping");
+		vfMarkProtocolFault("CTB has no CPU mapping");
 		return;
 	}
 	const uint32_t oldH2GBuffer = *reinterpret_cast<uint32_t *>(baseCpu);
 	if (oldH2GBuffer < PAGE_SIZE / 2) {
 		SYSLOG("ngreen", "V223: invalid legacy CTB GPU address 0x%08x", oldH2GBuffer);
+		vfMarkProtocolFault("invalid CTB GPU address");
 		return;
 	}
-	gVfCtbGpuBase = oldH2GBuffer - PAGE_SIZE / 2;
+	const uint64_t base = oldH2GBuffer - PAGE_SIZE / 2;
+	auto *backing = getMember<OSObject *>(that, 0x40);
+	if (!backing || gVfCtbBacking || (base & (PAGE_SIZE - 1U)) ||
+	    base < gVfGGTTBase || base >= gVfGGTTBase + gVfGGTTSize ||
+	    kVfCtbBackingBytes > gVfGGTTBase + gVfGGTTSize - base) {
+		vfMarkProtocolFault("invalid or duplicate CTB backing range");
+		return;
+	}
+	// Pin before publishing addresses, including failure paths inside Apple's
+	// initWithAccelerator. Its later free() releases the original reference.
+	backing->retain();
+	gVfCtbBacking = backing;
+	gVfCtbGpuBase = static_cast<uint32_t>(base);
 	gVfCtbCpuBase = baseCpu;
 	gVfMemIrqConfigured = false;
 
@@ -8880,15 +9383,122 @@ void Gen11::vfCtbChannelInit(void *that) {
 	       kVfCtbBackingBytes);
 }
 
-bool Gen11::vfCtbGucToHostAction(void *that, uint32_t *message) {
-	const bool received = FunctionCast(vfCtbGucToHostAction,
-	                                   callback->oVfCtbGucToHostAction)(that,
-	                                                                          message);
-	if (!received || !gVfGGTTReady || !message)
-		return received;
+void Gen11::vfInvalidateTLB(void *that) {
+	if (gVfIdentity == VfIdentity::Physical) {
+		FunctionCast(vfInvalidateTLB, callback->oVfInvalidateTLB)(that);
+		return;
+	}
 
-	// Stock gucToHostAction has already consumed one message and returned it as
-	// [modern CT header, HXG header, payload...].  Reframe just that CPU copy so
+	// GEN12_GUC_TLB_INV_CR (0xCEE8) belongs to the physical GT and is not in
+	// a VF's runtime MMIO allowlist.  i915's gen12vf_ggtt_invalidate() sends a
+	// GuC-internal, heavy invalidation with cache flush and waits for its G2H
+	// sequence completion.  Serialize requests so a single bounded waiter is
+	// sufficient and never fall back to the physical register on failure.
+	if (!gVfGGTTReady || gVfProtocolFault || !gVfMemIrqConfigured || !gVfCtbGpuBase) {
+		vfMarkProtocolFault("TLB invalidation before VF CTB/memory IRQ readiness");
+		return;
+	}
+	if (!vfCanWaitForGuc(that))
+		return;
+	if (!vfEnsureGucLock()) {
+		vfMarkProtocolFault("TLB invalidation lock allocation failure");
+		return;
+	}
+
+	IOLockLock(gVfGucLock);
+	const uint32_t seqno = static_cast<uint32_t>(OSIncrementAtomic(
+		reinterpret_cast<volatile SInt32 *>(&gVfTlbNextSeqno)));
+	gVfTlbDoneSeqno = seqno - 1U;
+	gVfTlbWaitSeqno = seqno;
+	gVfTlbWaitActive = 1;
+	OSSynchronizeIO();
+
+	const uint32_t request[] = {
+		kGucActionTlbInvalidation,
+		seqno,
+		0x80000003U, // FLUSH_CACHE | HEAVY | GUC internal translations
+	};
+	uint32_t transportFence = 0;
+	const bool sent = vfSendCtbFastAction(that, request, arrsize(request),
+	                                      transportFence);
+	bool completed = false;
+	if (sent) {
+		for (uint32_t waited = 0; waited < kVfContextEventTimeoutMs; waited++) {
+			OSSynchronizeIO();
+			if (gVfTlbDoneSeqno == seqno) {
+				completed = true;
+				break;
+			}
+			IOSleep(1);
+		}
+	}
+	gVfTlbWaitActive = 0;
+	OSSynchronizeIO();
+	IOLockUnlock(gVfGucLock);
+
+	if (!sent || !completed) {
+		SYSLOG("ngreen", "V237: VF GuC TLB invalidate failed seq=%u sent=%d fence=%u",
+		       seqno, sent, transportFence);
+		vfMarkProtocolFault(sent ? "GuC TLB invalidation timeout" :
+		                         "GuC TLB invalidation enqueue failure");
+	}
+}
+
+bool Gen11::vfCtbGucToHostAction(void *that, uint32_t *message) {
+	if (gVfIdentity == VfIdentity::Physical)
+		return FunctionCast(vfCtbGucToHostAction,
+		                    callback->oVfCtbGucToHostAction)(that, message);
+	if (!that || !message || !gVfGGTTReady || !gVfCtbCpuBase || gVfCtbStopped)
+		return false;
+
+	// Apple's consumer masks length to five bits and trusts descriptor size.
+	// Its software-interrupt caller supplies only 32 dwords of stack space.
+	// Validate the modern frame before copying, with a fixed allocation bound.
+	auto *lock = getMember<IOLock *>(that, 0x20);
+	auto *descriptor = getMember<volatile uint32_t *>(that, 0x58);
+	auto *buffer = getMember<volatile uint32_t *>(that, 0x60);
+	if (!lock || descriptor != reinterpret_cast<volatile uint32_t *>(
+	        gVfCtbCpuBase + kVfCtbG2HDescOffset) ||
+	    buffer != reinterpret_cast<volatile uint32_t *>(
+	        gVfCtbCpuBase + kVfCtbG2HBufferOffset)) {
+		vfMarkProtocolFault("G2H CTB mapping mismatch");
+		return false;
+	}
+	IOLockLock(lock);
+	OSSynchronizeIO();
+	constexpr uint32_t ringDwords = kVfCtbG2HBufferBytes / sizeof(uint32_t);
+	uint32_t head = descriptor[4];
+	const uint32_t tail = descriptor[5];
+	if (!NGGuCRing::validDescriptor(descriptor[3], kVfCtbG2HBufferBytes,
+	                                head, tail, descriptor[6])) {
+		IOLockUnlock(lock);
+		vfMarkProtocolFault("invalid G2H CTB descriptor");
+		return false;
+	}
+	if (head == tail) {
+		IOLockUnlock(lock);
+		return false;
+	}
+	const uint32_t frame = buffer[head];
+	const uint32_t payloadDwords = frame & 0xFFU;
+	if (!NGGuCRing::validFrame(frame, ringDwords, head, tail, 32)) {
+		IOLockUnlock(lock);
+		vfMarkProtocolFault("invalid or oversized G2H CTB frame");
+		return false;
+	}
+	message[0] = frame;
+	for (uint32_t i = 1; i <= payloadDwords; i++) {
+		head = (head + 1) % ringDwords;
+		message[i] = buffer[head];
+	}
+	head = (head + 1) % ringDwords;
+	OSSynchronizeIO();
+	descriptor[4] = head;
+	OSSynchronizeIO();
+	IOLockUnlock(lock);
+
+	// The bounded reader returns [modern CT header, HXG header, payload...].
+	// Reframe just that CPU copy so
 	// Apple's unchanged pending-request matcher sees its historical
 	// [legacy header, fence, status] representation.
 	const uint32_t transport = message[0];
@@ -8896,8 +9506,14 @@ bool Gen11::vfCtbGucToHostAction(void *that, uint32_t *message) {
 	const uint32_t length = transport & 0xFFU;
 	const uint32_t type = hxg & kGucTypeMask;
 	const bool response = (hxg & kGucOriginGuc) != 0 &&
-	                      (type == kGucTypeBusy || type == kGucTypeRetry ||
+	                      (type == kGucTypeRetry ||
 	                       type == kGucTypeFailure || type == kGucTypeSuccess);
+	// BUSY is a mailbox ownership transition, not a terminal CT response.
+	// Match intel_guc_ct.c:ct_handle_hxg; never retire an Apple fence on BUSY.
+	if (!(hxg & kGucOriginGuc) || (!response && type != 0x10000000U)) {
+		vfMarkProtocolFault("invalid G2H HXG origin or message type");
+		return false;
+	}
 
 	// MODE_SET and DEREGISTER complete asynchronously.  Consume their v70
 	// lifecycle payload before handing the event to Apple's legacy interrupt
@@ -8906,6 +9522,28 @@ bool Gen11::vfCtbGucToHostAction(void *that, uint32_t *message) {
 	// no longer references the old LRCA.
 	const uint32_t action = hxg & 0xFFFFU;
 	if (!response && (hxg & kGucOriginGuc) != 0 &&
+	    ((action == kGucActionTlbInvalidationDone && length < 2) ||
+	     (action == kGucActionScheduleContextModeDone && length < 3) ||
+	     (action == kGucActionDeregisterContextDone && length < 2))) {
+		SYSLOG("ngreen", "V238: malformed GuC completion action=0x%04x len=%u",
+		       action, length);
+		vfMarkProtocolFault("malformed GuC lifecycle completion");
+	}
+	if (!response && (hxg & kGucOriginGuc) != 0 &&
+	    action == kGucActionTlbInvalidationDone && length >= 2) {
+		const uint32_t seqno = message[2];
+		if (gVfTlbWaitActive && seqno == gVfTlbWaitSeqno) {
+			gVfTlbDoneSeqno = seqno;
+			OSSynchronizeIO();
+		} else {
+			static uint32_t staleTlbLogs = 0;
+			if (staleTlbLogs++ < 16) {
+				SYSLOG("ngreen", "V237: stale VF TLB completion seq=%u waiting=%u active=%u",
+				       seqno, gVfTlbWaitSeqno, gVfTlbWaitActive);
+			}
+		}
+	}
+	if (!response && (hxg & kGucOriginGuc) != 0 &&
 	    (action == kGucActionContextResetNotification ||
 	     action == kGucActionEngineFailureNotification)) {
 		const uint32_t payload0 = length >= 2 ? message[2] : 0;
@@ -8913,6 +9551,9 @@ bool Gen11::vfCtbGucToHostAction(void *that, uint32_t *message) {
 		const uint32_t payload2 = length >= 4 ? message[4] : 0;
 		SYSLOG("ngreen", "V234: GuC failure event action=0x%04x len=%u payload=%08x:%08x:%08x",
 		       action, length, payload0, payload1, payload2);
+		vfMarkProtocolFault(action == kGucActionContextResetNotification ?
+		                         "GuC context reset notification" :
+		                         "GuC engine failure notification");
 	}
 	if (!response && (hxg & kGucOriginGuc) != 0 && gVfContextLock &&
 	    gVfContexts &&
@@ -8926,10 +9567,17 @@ bool Gen11::vfCtbGucToHostAction(void *that, uint32_t *message) {
 				IOSimpleLockLockDisableInterrupt(gVfContextLock);
 			auto &entry = gVfContexts[gucId];
 			if (action == kGucActionScheduleContextModeDone) {
-				if (entry.state == kVfGucContextPendingEnable) {
-					entry.state = kVfGucContextEnabled;
+				// MODE_SET completions are ordered.  An enable can already be
+				// followed by a disable when teardown races the first submission;
+				// retire the enable token first instead of mistaking its MODE_DONE
+				// for completion of the later disable.
+				if (entry.enablePending) {
+					entry.enablePending = false;
+					if (entry.state == kVfGucContextPendingEnable)
+						entry.state = kVfGucContextEnabled;
 					handled = true;
-				} else if (entry.state == kVfGucContextPendingDisable) {
+				} else if (entry.disablePending) {
+					entry.disablePending = false;
 					entry.state = kVfGucContextDisabled;
 					handled = true;
 				}
@@ -8939,6 +9587,8 @@ bool Gen11::vfCtbGucToHostAction(void *that, uint32_t *message) {
 				entry.refCount = 0;
 				entry.engineClass = 0;
 				entry.engineInstance = 0;
+				entry.enablePending = false;
+				entry.disablePending = false;
 				entry.state = kVfGucContextTombstone;
 				handled = true;
 			}
@@ -8948,6 +9598,11 @@ bool Gen11::vfCtbGucToHostAction(void *that, uint32_t *message) {
 		if (handled && gVfContextLifecycleLogs++ < 64) {
 			SYSLOG("ngreen", "V230: GuC lifecycle event action=0x%04x id=%u state=%u",
 			       action, gucId, static_cast<unsigned int>(newState));
+		}
+		if (!handled) {
+			SYSLOG("ngreen", "V237: unexpected GuC lifecycle event action=0x%04x id=%u state=%u",
+			       action, gucId, static_cast<unsigned int>(newState));
+			vfMarkProtocolFault("unexpected GuC context lifecycle event");
 		}
 	}
 
@@ -8970,88 +9625,131 @@ bool Gen11::vfCtbGucToHostAction(void *that, uint32_t *message) {
 	return true;
 }
 
+bool Gen11::vfInterruptFilterHandler(void *that, void *eventSource) {
+	if (gVfIdentity == VfIdentity::Physical) {
+		return FunctionCast(vfInterruptFilterHandler,
+		                    callback->oVfInterruptFilterHandler)(that,
+		                                                          eventSource);
+	}
+	// Identity is established before enabling interrupts. Never probe/map BARs
+	// from a filter, or interpret an unready VF as a physical device.
+	if (!gVfGGTTReady)
+		return false;
+
+	// A PCI VF receives a dedicated MSI whose state lives entirely in the
+	// PF-provisioned memory-IRQ page.  Never enter Tahoe's stock filter here: it
+	// acquires physical force-wake and masks/unmasks GFX_MSTR_IRQ around every
+	// interrupt, both of which are PF-owned resources.
+	uint64_t pending = vfConsumeMemoryInterrupts();
+	uint32_t g2hHead = 0;
+	if (!pending && vfG2HCtbPending(g2hHead))
+		pending = 1ULL << 45;
+	if (!pending)
+		return false;
+	if (!callback->vfServiceInterrupts) {
+		vfMarkProtocolFault("missing VF interrupt dispatcher");
+		return false;
+	}
+
+	using ServiceInterrupts = void (*)(void *, const uint64_t *);
+	auto service = reinterpret_cast<ServiceInterrupts>(
+		callback->vfServiceInterrupts);
+	service(that, &pending);
+
+	// Hardware callbacks only signal their software event sources. CTB draining
+	// belongs to vfSoftwareGuCInterrupt, never to this hard-interrupt filter.
+	return false;
+}
+
+void Gen11::vfSoftwareGuCInterrupt(void *that, IOInterruptEventSource *source, int count) {
+	if (gVfIdentity == VfIdentity::Physical) {
+		FunctionCast(vfSoftwareGuCInterrupt, callback->oVfSoftwareGuCInterrupt)(
+			that, source, count);
+		return;
+	}
+	if (!that || !gVfGGTTReady || !gVfCtbCpuBase || gVfCtbStopped)
+		return;
+	auto *ctb = getMember<void *>(that, 0xA10);
+	if (!ctb || !callback->vfCtbSoftwareInterrupt) {
+		vfMarkProtocolFault("missing VF software CTB dispatcher");
+		return;
+	}
+	using CtbInterrupt = uint32_t (*)(void *);
+	const auto consume = reinterpret_cast<CtbInterrupt>(callback->vfCtbSoftwareInterrupt);
+	for (uint32_t drained = 0; drained < 256; drained++) {
+		uint32_t before = 0;
+		if (!vfG2HCtbPending(before))
+			return;
+		// Preserve Apple's fence waiter matching, but do not interpret the
+		// returned modern HXG action as legacy log-flush status bits.
+		(void)consume(ctb);
+		uint32_t after = 0;
+		if (vfG2HCtbPending(after) && after == before) {
+			static uint32_t stalledLogs = 0;
+			if (stalledLogs++ < 16) {
+				SYSLOG("ngreen", "V236: stopped stalled VF G2H drain at head=%u",
+				       after);
+			}
+			vfMarkProtocolFault("stalled GuC G2H descriptor");
+			return;
+		}
+	}
+	uint32_t head = 0;
+	if (vfG2HCtbPending(head)) {
+		if (source)
+			source->interruptOccurred(nullptr, nullptr, 0);
+		else
+			vfMarkProtocolFault("G2H drain needs a software event source");
+	}
+}
+
+void Gen11::vfEnableInterrupts(void *that) {
+	if (gVfIdentity == VfIdentity::Physical) {
+		FunctionCast(vfEnableInterrupts, callback->oVfEnableInterrupts)(that);
+		return;
+	}
+	if (gVfIdentity != VfIdentity::Virtual || gVfProtocolFault || gVfCtbStopped)
+		return;
+	gVfMemIrqRequested = 1;
+	OSSynchronizeIO();
+	auto *base = gVfCtbCpuBase;
+	if (gVfMemIrqConfigured && base) {
+		*reinterpret_cast<volatile uint32_t *>(base + kVfMemIrqOffset +
+		                                      kVfMemIrqEnableOffset) = 0xFFFFU;
+		OSSynchronizeIO();
+	}
+}
+
+void Gen11::vfDisableInterrupts(void *that) {
+	if (gVfIdentity == VfIdentity::Physical) {
+		FunctionCast(vfDisableInterrupts, callback->oVfDisableInterrupts)(that);
+		return;
+	}
+	gVfMemIrqRequested = 0;
+	OSSynchronizeIO();
+	auto *base = gVfCtbCpuBase;
+	if (base) {
+		// Mirrors intel_iov_memirq_reset. This mask update is not a DMA
+		// quiescence acknowledgement and does not permit freeing the page.
+		*reinterpret_cast<volatile uint32_t *>(base + kVfMemIrqOffset +
+		                                      kVfMemIrqEnableOffset) = 0;
+		OSSynchronizeIO();
+	}
+}
+
 void Gen11::vfReadAndClearInterrupts(void *that, void *interrupts) {
 	if (!interrupts)
 		return;
-
-	// Preserve Tahoe's native IIR path even after memory interrupts are live.
-	// The VF already delivers the GuC G2H lifecycle interrupt through that path
-	// during bootstrap; replacing it loses MODE_DONE and makes submitToRing
-	// report a work-queue failure.  Memory IRQ is an additional Gen12 transport,
-	// so merge its events into the same IGBitSet instead of replacing native
-	// results.  This also keeps the physical-GT path intact for a real TGL/PF.
-	FunctionCast(vfReadAndClearInterrupts,
-	             callback->oVfReadAndClearInterrupts)(that, interrupts);
-	if (!gVfGGTTReady || !gVfMemIrqConfigured || !gVfCtbCpuBase ||
-	    NGreen::callback->isRealTGL)
+	if (gVfIdentity == VfIdentity::Physical) {
+		FunctionCast(vfReadAndClearInterrupts,
+		             callback->oVfReadAndClearInterrupts)(that, interrupts);
 		return;
-
-	auto *pending = reinterpret_cast<uint64_t *>(interrupts);
-	const uint64_t nativePending = *pending;
-	auto *page = reinterpret_cast<volatile uint8_t *>(
-		gVfCtbCpuBase + kVfMemIrqOffset);
-	auto *statusBase = page + kVfMemIrqStatusOffset;
-	auto *sourceBase = page + kVfMemIrqSourceOffset;
-	OSSynchronizeIO();
-
-	uint64_t sourceSnapshot = 0;
-	for (uint32_t i = 0; i < 64; i++) {
-		if (sourceBase[i])
-			sourceSnapshot |= 1ULL << i;
 	}
 
-	const auto consumeEngine = [&](uint32_t irqOffset, uint32_t userBit,
-	                               uint32_t contextBit, uint32_t errorBit) {
-		const uint8_t source = sourceBase[irqOffset];
-		if (!source)
-			return;
-		sourceBase[irqOffset] = 0;
-		auto *status = statusBase + irqOffset * 16U;
-		if (status[0]) {
-			*pending |= 1ULL << userBit;
-			status[0] = 0;
-		}
-		if (status[4]) {
-			*pending |= 1ULL << contextBit;
-			status[4] = 0;
-		}
-		if (status[8]) {
-			*pending |= 1ULL << errorBit;
-			status[8] = 0;
-		}
-	};
-
-	// Bit positions are the exact IGBitSet<46> mapping used by Tahoe's
-	// IGInterruptBridge::readAndClear{RCS,CCS,BCS,VCS,VECS}Interrupts.
-	consumeEngine(0, 0, 12, 6);    // RCS0
-	consumeEngine(4, 1, 13, 7);    // CCS0
-	consumeEngine(15, 2, 14, 8);   // BCS0
-	consumeEngine(32, 3, 15, 9);   // VCS0
-	consumeEngine(33, 4, 16, 10);  // VCS1 / Apple's VCS2 slot
-	consumeEngine(63, 5, 17, 11);  // VECS0
-
-	const uint8_t gucSource = sourceBase[kVfGucIrqOffset];
-	if (gucSource) {
-		sourceBase[kVfGucIrqOffset] = 0;
-		auto *gucStatus = statusBase + kVfGucIrqOffset * 16U;
-		if (gucStatus[15]) {
-			*pending |= 1ULL << 45; // GUC_INTR_GUC2HOST
-			gucStatus[15] = 0;
-		}
-		if (gucStatus[0]) {
-			*pending |= 1ULL << 36; // GUC_INTR_SW_INT_0
-			gucStatus[0] = 0;
-		}
-	}
-	OSSynchronizeIO();
-
-	static uint32_t irqLogs = 0;
-	if ((sourceSnapshot || *pending) && irqLogs++ < 128) {
-		SYSLOG("ngreen", "V235: VF memory IRQ source=0x%016llx native=0x%016llx pending=0x%016llx",
-		       static_cast<unsigned long long>(sourceSnapshot),
-		       static_cast<unsigned long long>(nativePending),
-		       static_cast<unsigned long long>(*pending));
-	}
+	// processInterrupts() reaches this entry without the hardware filter.  A VF
+	// must still remain memory-only and must never fall back to physical IIRs,
+	// including during the CTB bootstrap interval.
+	*reinterpret_cast<uint64_t *>(interrupts) = vfConsumeMemoryInterrupts();
 }
 
 UInt8 Gen11::wrapLoadGuCBinary(void *that) {
@@ -10691,7 +11389,7 @@ void Gen11::forceWake(void *that, bool set, uint32_t dom, uint8_t ctx) {
 	// i915 does not create force-wake domains for a VF. Runtime engine power is
 	// owned by the PF/GuC and these registers are intentionally inaccessible in
 	// BAR0, so a successful no-op is the only valid guest-side behavior.
-	if (gVfGGTTReady) {
+	if (ngVfGGTTBinderActive()) {
 		static bool loggedVfNoop = false;
 		if (!loggedVfNoop) {
 			loggedVfNoop = true;
@@ -11195,12 +11893,6 @@ void  Gen11::readAndClearInterrupts(AppleIntel::AppleIntelBaseController *that, 
 	
 	
 	FunctionCast(readAndClearInterrupts, callback->oreadAndClearInterrupts)(that,param_1);
-}
-
-void * Gen11::serviceInterrupts(void *param_1)
-{
-	return FunctionCast(serviceInterrupts, callback->oserviceInterrupts)(param_1);
-	
 }
 
 void * Gen11::wprobe(void *that,void *param_1,int *param_2)
@@ -11909,6 +12601,12 @@ void Gen11::IGScheduler5resume(void *that) {
 // → startGraphicsEngine retry loop. startGraphicsEngine itself SUCCEEDS (return value is non-zero
 // = success path); the reset is triggered entirely by this watchdog query.
 bool Gen11::wrapIGScheduler5IsGpuIdle(const void *that) {
+	if (gVfGGTTReady) {
+		// The PF owns engine reset and hang detection.  A VF has no safe
+		// physical INSTDONE query and must not let Apple's watchdog initiate a
+		// legacy ring reset based on an all-ones MMIO read.
+		return true;
+	}
 	bool idle = FunctionCast(wrapIGScheduler5IsGpuIdle, callback->oIGScheduler5IsGpuIdle)(that);
 	if (!idle) {
 		uint32_t instdone = NGreen::callback->readReg32(RING_INSTDONE(RENDER_RING_BASE));
@@ -11921,6 +12619,8 @@ bool Gen11::wrapIGScheduler5IsGpuIdle(const void *that) {
 }
 
 bool Gen11::wrapIGScheduler4IsGpuIdle(const void *that) {
+	if (gVfGGTTReady)
+		return true;
 	bool idle = FunctionCast(wrapIGScheduler4IsGpuIdle, callback->oIGScheduler4IsGpuIdle)(that);
 	if (!idle) {
 		uint32_t instdone = NGreen::callback->readReg32(RING_INSTDONE(RENDER_RING_BASE));

@@ -29,10 +29,9 @@ struct intel_ip_version {
 	UInt8 step;
 };
 
-// Gen12 SR-IOV VFs using the GuC GGTT binder do not expose the GGTT PTE
-// window in BAR0.  Gen11 owns the VF shadow/relay implementation, while these
-// two small shims let the shared MMIO helpers redirect legacy diagnostic and
-// repair accesses away from the inaccessible BAR0+8 MiB window.
+// Gen12 SR-IOV VFs do not expose a guest-owned GMADR aperture.  Gen11 owns the
+// direct/relay GGTT transports, while these shims keep legacy physical-GPU
+// diagnostics and repair paths away from VF resources.
 bool ngVfGGTTRead32(unsigned long reg, UInt32 &value);
 bool ngVfGGTTWrite32(unsigned long reg, UInt32 value);
 bool ngVfGGTTBinderActive();
