@@ -2354,3 +2354,58 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   327,769 payload contracts. The complete local gate passes in
   `/tmp/ngreen-static.M3UvCc`; the VM remained shut off. Transport timing and
   actual firmware responses remain runtime evidence.
+
+### Validate the complete legacy CTB translation request
+
+- Re-disassembled Tahoe `registerCommandTransportBuffers` at `0x203e6` and
+  `deregisterCommandTransportBuffers` at `0x208b0`. Registration supplies the
+  exact backing GPU address (G2H at base+0x400, H2G at base), descriptor size
+  0x40 and channel. Deregistration does not carry that address: it carries the
+  CTBuffer object's registration token at `+0x38` for both channels.
+- A shared pure contract now verifies exact action, length, address/token,
+  descriptor size and channel before translating 0x4505/0x4506 to the modern
+  VF self-config/control ABI. It also requires the GuC object's `+0xa10` CTB to
+  be the retained CTB object; arbitrary internal storage cannot trigger the
+  shutdown sequence.
+- All rejected calls publish a failure response. The old short-registration
+  diagnostic read request dwords 1..3 even when the validated length was below
+  four; it now logs only the bounded length and cannot overread the request.
+- A structurally valid registration whose modern self-configuration fails now
+  also publishes a nonzero failure response.  It formerly returned `false`
+  while writing response zero, an internally contradictory ABI that could let
+  a future non-null caller continue with an unconfigured channel.
+- The 57-case sanitizer contract and complete static suite pass in
+  `/tmp/ngreen-static.XBmX89`; GitHub CI run `36279158723` also passes. The VM
+  remained shut off.
+
+### Preserve context engine identity until the final native detach
+
+- `DEREGISTER_DONE` previously retained LRCA, descriptor and backing for a
+  device-shutdown late detach, but cleared the record's GuC engine class and
+  instance immediately. `matchesRecord` correctly includes both fields, so
+  every non-RCS0 CCS/BCS/VCS/VECS context would later fail identity validation
+  and panic despite successful firmware retirement.
+- The completion transition now changes only pending flags and lifecycle state.
+  Full descriptor, engine and backing identity remains on the tombstone while
+  native owners exist. The single final backing-release boundary clears all
+  identity fields together.
+- The pure lifecycle model tests DEREGISTER_DONE from all nine states, proves
+  every identity field and reference count are preserved, and proves final
+  release clears only the intended identity. The complete local suite passes in
+  `/tmp/ngreen-static.8xCSQH`; the VM remained shut off pending CI and further
+  lifecycle/source review.
+### Reject stale or duplicate TLB completions immediately
+
+- The G2H parser returned reserved receive credits before interpreting a
+  structurally valid `TLB_INVALIDATION_DONE`, as required for transport drain,
+  but a sequence mismatch only produced a capped log.  Such an event could
+  consume the credits reserved for a different request and leave the current
+  waiter alive until its one-second timeout.
+- Completion admission now requires an active waiter, exact event/wait
+  sequence identity and the exact previous done sequence.  The final atomic
+  predecessor-to-current transition remains the publication point; any stale,
+  duplicate or racing completion immediately marks the VF protocol fault.
+- The pure model covers inactive, wrong-waiter, wrong-event, duplicate,
+  skipped-predecessor and 32-bit wraparound cases.  This is a fail-closed
+  transport correction; real GuC completion delivery still requires the
+  controlled runtime phase.

@@ -12,6 +12,11 @@ constexpr uint32_t deregisterAction = 0x4506U;
 constexpr uint32_t legacyDescriptorBytes = 0x40U;
 constexpr uint32_t legacyG2HDescriptorOffset = 0x400U;
 
+inline uint32_t responseStatus(bool success)
+{
+	return success ? 0U : 1U;
+}
+
 inline bool registration(const uint32_t *request, size_t length,
                          uint32_t backingBase)
 {

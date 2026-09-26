@@ -53,7 +53,10 @@ int main()
 	}
 	assert(!deregistration(nullptr, 3, token));
 	++cases;
+	assert(responseStatus(true) == 0U);
+	assert(responseStatus(false) != 0U);
+	cases += 2;
 
-	std::printf("PASS: %llu legacy CTB request contracts\n",
+	std::printf("PASS: %llu legacy CTB request/response contracts\n",
 	            static_cast<unsigned long long>(cases));
 }

@@ -3571,7 +3571,7 @@ bool Gen11::vfMmioHostToGuCAction(void *that, const uint32_t *request,
 		}
 		const bool ok = vfConfigureModernCtb(request[3] == 1U, request[1]);
 		if (response)
-			*response = 0;
+			*response = NGVfLegacyCtb::responseStatus(ok);
 		return ok;
 	}
 
@@ -3647,7 +3647,7 @@ bool Gen11::vfMmioHostToGuCAction(void *that, const uint32_t *request,
 				vfMarkProtocolFault("GuC CTB teardown without sealed producers/disable/IRQ drain");
 		}
 		if (response)
-			*response = ok ? 0 : 1;
+			*response = NGVfLegacyCtb::responseStatus(ok);
 		if (request[2] == 1U && ok) {
 			// CPU interrupt callbacks are drained, but CTB disable alone does not
 			// prove engine or GuC memory-IRQ DMA is quiescent. Both users share
@@ -4636,7 +4636,10 @@ bool Gen11::vfCtbGucToHostAction(void *that, uint32_t *message) {
 		return false;
 	if (event.kind == NGVfGuCEvent::Kind::TlbInvalidationDone) {
 		const uint32_t seqno = message[2];
-		if (gVfTlbWaitActive && seqno == gVfTlbWaitSeqno &&
+		OSSynchronizeIO();
+		if (NGVfGuCEvent::expectedTlbCompletion(
+		        gVfTlbWaitActive != 0, gVfTlbWaitSeqno,
+		        gVfTlbDoneSeqno, seqno) &&
 		    OSCompareAndSwap(seqno - 1U, seqno, &gVfTlbDoneSeqno)) {
 			OSSynchronizeIO();
 		} else {
@@ -4645,6 +4648,8 @@ bool Gen11::vfCtbGucToHostAction(void *that, uint32_t *message) {
 				SYSLOG("ngreen", "V237: stale VF TLB completion seq=%u waiting=%u active=%u",
 				       seqno, gVfTlbWaitSeqno, gVfTlbWaitActive);
 			}
+			vfMarkProtocolFault("stale or duplicate GuC TLB completion");
+			return false;
 		}
 	}
 	if (event.fatal()) {

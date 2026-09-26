@@ -35,6 +35,16 @@ struct Attributes {
 	}
 };
 
+// A TLB_DONE retires exactly one outstanding sequence.  Sequence zero is
+// valid after the 32-bit counter wraps, so compare the predecessor modulo
+// 2^32 rather than treating zero as a sentinel.
+inline bool expectedTlbCompletion(bool waitActive, uint32_t waitSeqno,
+                                  uint32_t doneSeqno, uint32_t eventSeqno)
+{
+	return waitActive && eventSeqno == waitSeqno &&
+	       doneSeqno == eventSeqno - 1U;
+}
+
 inline Attributes inspect(uint32_t hxg, uint32_t length)
 {
 	Attributes result = {Kind::Invalid, 0};

@@ -58,6 +58,17 @@ int main()
 	}
 	assert(!inspect(originGuc | typeEvent | 0x1234U, 2).valid());
 
-	std::printf("PASS: %llu GuC G2H action/length/header classifications\n",
+	// Only the single active predecessor -> requested sequence transition is
+	// admissible.  Exercise inactive, stale, duplicate and counter-wrap cases.
+	assert(expectedTlbCompletion(true, 7U, 6U, 7U));
+	assert(!expectedTlbCompletion(false, 7U, 6U, 7U));
+	assert(!expectedTlbCompletion(true, 8U, 6U, 7U));
+	assert(!expectedTlbCompletion(true, 7U, 7U, 7U));
+	assert(!expectedTlbCompletion(true, 7U, 5U, 7U));
+	assert(!expectedTlbCompletion(true, 7U, 6U, 8U));
+	assert(expectedTlbCompletion(true, 0U, UINT32_MAX, 0U));
+	assert(!expectedTlbCompletion(true, 0U, 0U, 0U));
+
+	std::printf("PASS: %llu GuC G2H action/length/header classifications and TLB completion identity\n",
 	            static_cast<unsigned long long>(cases));
 }
