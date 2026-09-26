@@ -40,6 +40,30 @@ inline bool isTigerLake(uint32_t device) {
     }
 }
 
+// Fixed media-12 platforms with native VF GGTT writes. Newer platforms must
+// negotiate/query per-GT IP before choosing their binder workaround; BAR size
+// is a mapping bound, not a hardware-generation discriminator.
+inline bool hasKnownDirectVfGgtt(uint32_t device) {
+    if (isTigerLake(device))
+        return true;
+    switch (device) {
+        case 0x4680: case 0x4682: case 0x4688: case 0x468A: case 0x468B:
+        case 0x4690: case 0x4692: case 0x4693:
+        case 0x46A0: case 0x46A1: case 0x46A2: case 0x46A3: case 0x46A6:
+        case 0x46A8: case 0x46AA: case 0x462A: case 0x4626: case 0x4628:
+        case 0x46B0: case 0x46B1: case 0x46B2: case 0x46B3:
+        case 0x46C0: case 0x46C1: case 0x46C2: case 0x46C3:
+        case 0x46D0: case 0x46D1: case 0x46D2: case 0x46D3: case 0x46D4:
+        case 0xA780: case 0xA781: case 0xA782: case 0xA783:
+        case 0xA788: case 0xA789: case 0xA78A: case 0xA78B:
+        case 0xA721: case 0xA7A1: case 0xA7A9: case 0xA7AC: case 0xA7AD:
+        case 0xA720: case 0xA7A0: case 0xA7A8: case 0xA7AA: case 0xA7AB:
+            return true;
+        default:
+            return false;
+    }
+}
+
 // Source: i915-sriov-dkms-2026.03.05.7 pciids.h plus i915_pci.c has_sriov.
 // Exact IDs intentionally avoid broad family masks, CPU model and BAR size.
 inline Sriov sriov(uint32_t device) {

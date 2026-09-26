@@ -851,3 +851,23 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   No runtime scheduling fault injection was performed. Full syntax/offline
   suite passed in /tmp/ngreen-static.qgjHzV; final kext linking remains CI's
   check. c312229 CI 36220723406 and d6b483e CI 36220850119 succeeded.
+
+### Remove BAR-only GGTT transport inference
+
+- Rechecked i915 intel_gtt.c i915_ggtt_require_binder: selection depends on
+  direct-stolen access and MEDIA_VER_FULL==13.0, not BAR size. VF probe also
+  explicitly has no GMADR aperture and uses nop_clear_range for both modes.
+- Current bootstrap now requires one of 60 exact known media-12 PCI IDs
+  (TGL/ADL/RPL) and a complete direct PTE window BEFORE RESET. The full
+  65,536-ID classifier was compared against primary-source macro expansion.
+- Removed fallback that sent an ABI-1.0 relay handshake merely because the
+  direct BAR mapping was short. A short media-12 mapping fails; MTL/ARL are
+  rejected before RESET until per-GT GMD/IP query and correct relay ABI are
+  implemented. The user's 0xa7a8 remains in the direct transport set.
+- Inactive relay helpers/shadow paths remain staged code, not supported
+  admission: no bootstrap sets gVfBinderReady or allocates its shadow now.
+  Their review/removal/reimplementation and media-13 support are unfinished.
+  This corrects unsafe inference rather than delivering Gen11+ support.
+- Full suite passes in /tmp/ngreen-static.M05QXM (classifier additionally
+  source-compared in /tmp/ngreen-static.wBl01g). af82759 CI 36220976605
+  succeeded, including kext link with the exported preemption check.

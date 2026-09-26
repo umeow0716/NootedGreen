@@ -69,9 +69,9 @@ static KernelPatcher::KextInfo kextG11HWTA {"com.apple.driver.AppleIntelTGLGraph
 Gen11 *Gen11::callback = nullptr;
 
 namespace {
-// V217/V219 mirror i915's two VF GGTT transports.  Media 13.0 VFs expose an
-// 8 MiB BAR0 and require the GuC relay workaround; this machine's ADL-P media
-// 12 VF exposes the normal 16 MiB BAR0 and uses direct GGTT PTE writes.
+// Current admission covers known media-12 direct VF GGTT platforms only.
+// Legacy relay helpers below remain inactive until per-GT IP/ABI discovery
+// and lifetime handling are implemented; BAR size is not the discriminator.
 constexpr uint32_t kVfGGTTPteBase = 0x800000;
 constexpr uint32_t kVfGGTTPteBytes = 0x800000;
 constexpr uint32_t kVfDirectBar0Bytes = kVfGGTTPteBase + kVfGGTTPteBytes;
@@ -113,7 +113,6 @@ constexpr uint32_t kGucSelfCfgH2GCtbSize = 0x0904;
 constexpr uint32_t kGucSelfCfgG2HCtbAddr = 0x0905;
 constexpr uint32_t kGucSelfCfgG2HCtbDescAddr = 0x0906;
 constexpr uint32_t kGucSelfCfgG2HCtbSize = 0x0907;
-constexpr uint32_t kVf2PfHandshakeOpcode = 0x01;
 constexpr uint32_t kVf2PfUpdateGGTTOpcode = 0x02;
 constexpr uint32_t kGucKlvGGTTStart = 0x0001;
 constexpr uint32_t kGucKlvGGTTSize = 0x0002;
@@ -959,6 +958,17 @@ bool vfBootstrapBinder()
 {
 	if (vfIdentifyDevice() != VfIdentity::Virtual || gVfProtocolFault)
 		return false;
+	if (!NGGpuCapabilities::hasKnownDirectVfGgtt(NGreen::callback->getOriginalDeviceId())) {
+		// MTL/ARL require per-GT IP discovery and media-13 binder handling.
+		// Do not RESET or infer direct writes from a coincidental BAR size.
+		vfMarkProtocolFault("VF generation requires unimplemented per-GT GGTT discovery");
+		return false;
+	}
+	if (!NGreen::callback->getRMMIOAddress() ||
+	    NGreen::callback->getRMMIOLength() < kVfDirectBar0Bytes) {
+		vfMarkProtocolFault("incomplete direct GGTT mapping before VF reset");
+		return false;
+	}
 	if (gVfGGTTReady)
 		return true;
 	// RESET is not an idempotent query. A concurrent caller or retry after a
@@ -1024,12 +1034,9 @@ bool vfBootstrapBinder()
 		return false;
 	}
 
-	// ADL-P/RPL-P VFs backed by media version 12 expose the normal 16 MiB
-	// GTTMMADR BAR: registers in the lower 8 MiB and the GGTT PTE window in the
-	// upper 8 MiB.  Linux uses direct PTE writes on this hardware and reserves
-	// the GuC relay workaround for media version 13.0 only.  BAR length is the
-	// guest-visible discriminator, so do not ask an ADL-P PF for unsupported
-	// relay updates merely because the PCI ID is marketed as Raptor Lake.
+	// The original PCI ID establishes a known direct-GGTT media-12 platform.
+	// BAR length only proves that the mapped PTE window is accessible; a short
+	// mapping is a failure, not permission to try another generation's relay.
 	auto *cb = NGreen::callback;
 	if (!cb || !cb->setRMMIOIfNecessary())
 		return false;
@@ -1044,32 +1051,8 @@ bool vfBootstrapBinder()
 		return true;
 	}
 
-	request[0] = (0xFU << 24) | (kVf2PfHandshakeOpcode << 16) |
-	             kGucActionMmioRelay;
-	request[1] = 1U << 16;
-	request[2] = 0;
-	request[3] = 0;
-	if (!vfGucSendMMIO(request, 4, response) ||
-	    ((response[0] >> 24) & 0xFU) != 0xFU || response[1] != (1U << 16)) {
-		SYSLOG("ngreen", "V217: VF/PF MMIO ABI 1.0 handshake failed (0x%08x 0x%08x)",
-		       response[0], response[1]);
-		return false;
-	}
-
-	if (!gVfGGTTShadow) {
-		gVfGGTTShadow = static_cast<uint64_t *>(IOMallocZero(kVfGGTTPteBytes));
-		if (!gVfGGTTShadow) {
-			SYSLOG("ngreen", "V217: failed to allocate 8 MiB VF GGTT shadow");
-			return false;
-		}
-	}
-
-	gVfBinderReady = true;
-	gVfGGTTReady = true;
-	SYSLOG("ngreen", "V217: GuC VF GGTT binder ready, range=[0x%llx,+0x%llx] shadow=%p",
-	       static_cast<unsigned long long>(gVfGGTTBase),
-	       static_cast<unsigned long long>(gVfGGTTSize), gVfGGTTShadow);
-	return true;
+	vfMarkProtocolFault("direct VF GGTT requires a complete BAR0 PTE mapping");
+	return false;
 }
 
 bool vfRelayPTEs(uint32_t offset, uint32_t mode, uint32_t copies, uint64_t pte)
