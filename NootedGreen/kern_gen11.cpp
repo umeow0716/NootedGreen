@@ -1320,8 +1320,9 @@ static int getV142SubmitBlitMode() {
 	// V170: RPL (and any non-TGL spoof) cannot execute the TGL-format 3D blit commands that
 	// the original IGAccelBlit::submitBlit generates — the RCS EU stalls indefinitely
 	// (INSTDONE=0xfffffffe, bit-0 stuck) causing an infinite hangcheck→reset→retry loop
-	// that kills WindowServer within 120 s. Default to mode 1 (return 0 = success, no-op)
-	// so the compositor initialises without hanging. Real TGL hardware still uses mode 3.
+	// that kills WindowServer within 120 s (historical diagnosis, not re-proven).
+	// Default to mode 1: reject without submission. Native returns bool, so zero
+	// is FAILURE, not IOReturn success. No bypass mode may report completion.
 	// Override with -ngreenV142orig or ngreenV142=3 to restore original blit submission.
 	return 1;
 }
@@ -7990,7 +7991,10 @@ void  Gen11::initBlitUsage(void *that)
 	FunctionCast(initBlitUsage, callback->oinitBlitUsage)(that);
 }
 
-unsigned long Gen11::submitBlit(void *that, void *param_1, void *param_2, void *param_3, bool param_4) {
+bool Gen11::submitBlit(void *that, void *param_1, void *param_2, void *param_3, bool param_4) {
+	// Native returns a boolean in AL, not an IOReturn. Every rejected/no-op
+	// path below returns false; success is propagated only from actual native work.
+	// Caller paths that ignore this result still need separate failure handling.
 	// V186: For spoofed non-TGL, if V142 is configured to bypass submitBlit,
 	// return before any task/context touching logic. The V149/V171 path writes
 	// task+0x298 and can poison task lifetime on some boots, later crashing in
@@ -7999,7 +8003,7 @@ unsigned long Gen11::submitBlit(void *that, void *param_1, void *param_2, void *
 		static int v186Mode = -1;
 		if (v186Mode < 0) {
 			v186Mode = getV142SubmitBlitMode();
-			SYSLOG("ngreen", "V186: early submitBlit spoof mode=%d (0=unsupported,1=ret0,2=ret1,3=orig)", v186Mode);
+			SYSLOG("ngreen", "V186: early submitBlit spoof mode=%d (0/1/2=rejected,3=orig)", v186Mode);
 		}
 
 		if (v186Mode != 3) {
@@ -8018,11 +8022,7 @@ unsigned long Gen11::submitBlit(void *that, void *param_1, void *param_2, void *
 						   v186DiagCount, v186Mode, routeSel, (int)has3DFlags, param_3);
 				}
 			}
-			if (v186Mode == 2)
-				return 1;
-			if (v186Mode == 1)
-				return 0;
-			return static_cast<uint32_t>(kIOReturnUnsupported);
+			return false;
 		}
 	}
 
@@ -8114,9 +8114,9 @@ unsigned long Gen11::submitBlit(void *that, void *param_1, void *param_2, void *
 			int parsed = 0;
 			if (!NGreen::callback->isRealTGL) {
 				// V120 modes for spoofed path:
-				//   ngreenV120=0 or -ngreenV120ok   -> return success (legacy behavior)
-				//   ngreenV120=1 or -ngreenV120fail -> return unsupported (default)
-				//   ngreenV120=2 or -ngreenV120pass -> return 1
+				//   ngreenV120=0 or -ngreenV120ok   -> reject invalid task
+				//   ngreenV120=1 or -ngreenV120fail -> reject invalid task (default)
+				//   ngreenV120=2 or -ngreenV120pass -> reject invalid task
 				if (PE_parse_boot_argn("ngreenV120", &parsed, sizeof(parsed))) {
 					v120Mode = parsed;
 				} else if (checkKernelArgument("-ngreenV120pass")) {
@@ -8131,7 +8131,7 @@ unsigned long Gen11::submitBlit(void *that, void *param_1, void *param_2, void *
 			} else {
 				v120Mode = 0;
 			}
-			SYSLOG("ngreen", "V120: submitBlit NULL-task mode=%d (0=ret0,1=unsupported,2=ret1)", v120Mode);
+			SYSLOG("ngreen", "V120: submitBlit NULL-task mode=%d (all modes reject invalid task)", v120Mode);
 		}
 
 		static int v120NullCount = 0;
@@ -8151,11 +8151,7 @@ unsigned long Gen11::submitBlit(void *that, void *param_1, void *param_2, void *
 			}
 		}
 
-		if (v120Mode == 2)
-			return 1;
-		if (v120Mode == 1)
-			return static_cast<uint32_t>(kIOReturnUnsupported);
-		return 0;
+		return false;
 	}
 
 	if (!NGreen::callback->isRealTGL) {
@@ -8166,7 +8162,7 @@ unsigned long Gen11::submitBlit(void *that, void *param_1, void *param_2, void *
 		static int v142Mode = -1;
 		if (v142Mode < 0) {
 			v142Mode = getV142SubmitBlitMode();
-			SYSLOG("ngreen", "V142: submitBlit spoof mode=%d (0=hard-unsupported,1=ret0,2=ret1,3=orig)", v142Mode);
+			SYSLOG("ngreen", "V142: submitBlit spoof mode=%d (0/1/2=rejected,3=orig)", v142Mode);
 		}
 
 		if (v142Mode != 3) {
@@ -8177,12 +8173,8 @@ unsigned long Gen11::submitBlit(void *that, void *param_1, void *param_2, void *
 					   v142Count, that, param_1, param_2, param_3, static_cast<unsigned>(param_4), v142Mode);
 			}
 
-			if (v142Mode == 2)
-				return 1;
-			if (v142Mode == 1)
-				return 0;
-			// Mode 0 is intentionally harsh and should only be used for explicit diagnostics.
-			return static_cast<uint32_t>(kIOReturnUnsupported);
+			// No diagnostic mode may fabricate a successful submission.
+			return false;
 		}
 	}
 
@@ -8202,7 +8194,7 @@ unsigned long Gen11::submitBlit(void *that, void *param_1, void *param_2, void *
 				v193Count++;
 				SYSLOG("ngreen", "V193[%d]: blocked routeSel=3 on RPL (TGL EU shader → RCS hang)", v193Count);
 			}
-			return 1;
+			return false;
 		}
 	}
 
@@ -8213,9 +8205,7 @@ unsigned long Gen11::submitBlit(void *that, void *param_1, void *param_2, void *
 			v134Logged = true;
 			SYSLOG("ngreen", "V134: osubmitBlit is null, preventing call-through crash");
 		}
-		if (!NGreen::callback->isRealTGL)
-			return 0;
-		return static_cast<unsigned long>(kIOReturnUnsupported);
+		return false;
 	}
 
 	return FunctionCast(submitBlit, callback->osubmitBlit)(that, param_1, param_2, param_3, param_4);

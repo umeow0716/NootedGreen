@@ -939,3 +939,26 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   implementing validated iteration and caller failure/quiescence handling
   remains necessary before accelerated display/VM tests.
 - Full offline suite passes in /tmp/ngreen-static.L605pe; no dynamic test.
+
+### submitBlit return ABI and false-success rejection
+
+- Complete native submitBlit at 0x2bc8e returns a boolean in AL: disabled
+  capability clears r15d at 0x2bca8; an empty rectangle list reaches true at
+  0x2bded; both completed native submission branches return r15b=1. Upper
+  bits are not a valid unsigned-long status (r15 previously held a task).
+- Corrected hook declaration/definition from unsigned long to bool. Every
+  rejection/no-submission branch now returns false, including old mode 2,
+  routeSel=3, invalid task and missing original. Removed IOReturn error-code
+  returns: kIOReturnUnsupported ends in 0xc7 and is not boolean failure.
+- Correction to historical comments: default mode 1 returned zero, which
+  is boolean FAILURE, not fabricated IOReturn success. Mode 2/routeSel=3
+  returned true without work; unsupported-code paths returned invalid bool.
+- This is NOT sufficient end-to-end failure propagation. Direct callers
+  at 0x6e38 (blitCopy), 0x55b04 (MSAA resolve), 0x820dd (copyBufferDMA),
+  0x82a65 (submitSwapFlush) and 0x8351e (submitCopyForward) ignore the result.
+  submitSwapCopy at 0x2d0a6 preserves it. All caller/event/stamp paths and
+  task+0x298/global cached context ownership remain open review blockers.
+- Full suite before redundant-branch cleanup passed in
+  /tmp/ngreen-static.j5pPjI. c6f3442 CI 36221767518 and ea1ff8e CI
+  36221834707 succeeded; no guest deployment or VM boot.
+- Final cleanup suite passes in /tmp/ngreen-static.WaL4Cq.

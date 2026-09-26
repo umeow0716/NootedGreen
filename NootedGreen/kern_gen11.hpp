@@ -1459,7 +1459,7 @@ private:
 	static bool IGAccelTaskIsKernelGPUTask(const void *that);  // V214: bootstrap the first VF task from Global GTT
 	mach_vm_address_t oIGAccelTaskIsKernelGPUTask {};
 
-	static unsigned long submitBlit(void *that, void *param_1, void *param_2, void *param_3, bool param_4);
+	static bool submitBlit(void *that, void *param_1, void *param_2, void *param_3, bool param_4);
 	mach_vm_address_t osubmitBlit {};
 	
 	static bool patchRCSCheck(mach_vm_address_t& start);  // bypass RCS engine check
