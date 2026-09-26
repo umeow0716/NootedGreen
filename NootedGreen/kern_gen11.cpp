@@ -2097,10 +2097,6 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				// target TGL MMIO offsets. Hardware is RPL-P (adlp/raptorlake) — using TGL workarounds
 				// on RPL MMIO could corrupt the command streamer. Let the ICL original run unmodified.
 				//last	 {"__ZN11IGScheduler15canLoadFirmwareEP16IntelAccelerator", canLoadFirmware, this->ocanLoadFirmware},
-				 // V36: Hook readAndClearInterrupts to initialize Gen11 multi-engine GT interrupts.
-				 // Same implementation as TGL path — Gen11 IRQ registers are identical for ICL/TGL.
-				 // V37: DISABLED — caused boot hang on TGL path; disabling ICL too for safety.
-				 // {"__ZN16IntelAccelerator23readAndClearInterruptsEPv", readAndClearInterrupts, this->oreadAndClearInterrupts},
 			};
 
 			PANIC_COND(!RouteRequestPlus::routeAll(patcher, index, requests, address, size), "ngreen","Failed to route dp symbols");
@@ -2375,13 +2371,6 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			 // as the kernel task so it synchronizes from Global GTT; once +0x150 is
 			 // populated, preserve Apple's classification for every later task.
 			 {"__ZNK11IGAccelTask15isKernelGPUTaskEv", IGAccelTaskIsKernelGPUTask, this->oIGAccelTaskIsKernelGPUTask},
-			 // V36: Hook readAndClearInterrupts to initialize Gen11 multi-engine GT interrupts.
-			 // Without this, RCS/BCS user interrupts and context-switch notifications may not
-			 // be properly enabled, preventing IOAccelF2 from seeing stamp completions.
-			 // V37: DISABLED — caused boot hang (symbol may not exist in TGL kext, or
-			 // interrupt reprogramming too early causes deadlock/panic).
-			 // {"__ZN16IntelAccelerator23readAndClearInterruptsEPv", readAndClearInterrupts, this->oreadAndClearInterrupts},
-
 			// V119: Route getBlit3DContext so our guard checks context+0xb8 before storing.
 			 // Without this, Apple's original runs, stores a context with +0xb8=NULL to
 			 // that+0x298 (when init path leaves +0xb8 unset), and submitBlit+0x28e crashes.
@@ -4467,7 +4456,8 @@ void Gen11::raWriteRegister32b(void *that,void *param_1,unsigned long param_2, U
 
 void Gen11::raWriteRegister32(void *that,unsigned long param_1, UInt32 param_2)
 {
-	if (!callback || !NGreen::callback)
+	auto *green = NGreen::callback;
+	if (!callback || !green)
 		return;
 	// V93: optional plane SURF zero-write guard.
 	// Disabled by default due black-screen regressions; enable only with -ngreenv93.
@@ -4815,8 +4805,8 @@ void Gen11::raWriteRegister32(void *that,unsigned long param_1, UInt32 param_2)
 		}*/
 	}
 
-	if (reinterpret_cast<volatile uint64_t*>(that)==nullptr) return NGreen::callback->writeReg32(param_1,param_2);
-	if (!callback->oraWriteRegister32) return NGreen::callback->writeReg32(param_1,param_2);
+	if (reinterpret_cast<volatile uint64_t*>(that)==nullptr) return green->writeReg32(param_1,param_2);
+	if (!callback->oraWriteRegister32) return green->writeReg32(param_1,param_2);
 	FunctionCast(raWriteRegister32, callback->oraWriteRegister32)( that,param_1,param_2);
 };
 
@@ -5522,21 +5512,17 @@ void Gen11::sanitizeCDClockFrequency(AppleIntel::AppleIntelBaseController *that)
 	//auto referenceFrequency = callback->wrapReadRegister32(that, SKL_DSSM) & ICL_DSSM_CDCLK_PLL_REFCLK_MASK;
 	auto referenceFrequency =NGreen::callback->readReg32(ICL_REG_DSSM)>> 29;
 	//auto referenceFrequency = callback->wrapReadRegister32(that, ICL_REG_DSSM) >> 29;
-	uint32_t newCdclkFrequency = 0;
 	uint32_t newPLLFrequency = 0;
 	switch (referenceFrequency) {
 		case ICL_REF_CLOCK_FREQ_19_2:
-			newCdclkFrequency = ICL_CDCLK_FREQ_652_8;
 			newPLLFrequency = ICL_CDCLK_PLL_FREQ_REF_19_2;
 			break;
 			
 		case ICL_REF_CLOCK_FREQ_24_0:
-			newCdclkFrequency = ICL_CDCLK_FREQ_648_0;
 			newPLLFrequency = ICL_CDCLK_PLL_FREQ_REF_24_0;
 			break;
 			
 		case ICL_REF_CLOCK_FREQ_38_4:
-			newCdclkFrequency = ICL_CDCLK_FREQ_652_8;
 			newPLLFrequency = ICL_CDCLK_PLL_FREQ_REF_38_4;
 			break;
 			
@@ -5544,7 +5530,7 @@ void Gen11::sanitizeCDClockFrequency(AppleIntel::AppleIntelBaseController *that)
 			return;
 	}
 
-	DBGLOG("ngreen", "sanitizeCDClockFrequency: ref=%u targetCdclk=0x%x targetPll=0x%x", referenceFrequency, newCdclkFrequency, newPLLFrequency);
+	DBGLOG("ngreen", "sanitizeCDClockFrequency: ref=%u targetPll=0x%x", referenceFrequency, newPLLFrequency);
 
 	// Use solved original directly so sanitize remains safe even when disableCDClock route is toggled off.
 	if (callback->orgDisableCDClock) {
@@ -10350,31 +10336,41 @@ void Gen11::vfReadAndClearInterrupts(void *that, void *interrupts) {
 
 
 uint32_t Gen11::wrapReadRegister32(void *controller, uint32_t address) {
+	auto *green = NGreen::callback;
+	if (!green)
+		return 0xFFFFFFFFU;
 	if (controller == nullptr)
-		return NGreen::callback->readReg32(address);  // readReg32 now takes byte offsets
+		return green->readReg32(address);  // readReg32 now takes byte offsets
 
 	// Mirror Apple bounds logic, but keep a fallback path for the 2D-only dropped window.
 	auto partInfo = getMember<uint8_t *>(controller, 0xCF8);
 	auto mmioBase = getMember<uint8_t *>(controller, 0x9B8);
-	auto mmioSize = static_cast<uint32_t>(getMember<int>(controller, 0xC38));
+	const int signedMmioSize = getMember<int>(controller, 0xC38);
 
 	bool twoDOnlyPart = partInfo && ((partInfo[0xB2] & 0x1) != 0);
 	bool dropped2DWindow = (address >= 0x2000U && address <= 0x23FFFFU);
 
 	if (twoDOnlyPart && dropped2DWindow) {
-		return NGreen::callback->readReg32(address);  // readReg32 now takes byte offsets
+		return green->readReg32(address);  // readReg32 now takes byte offsets
 	}
 
-	if (mmioBase && mmioSize >= 4U && address < (mmioSize - 4U)) {
+	if (mmioBase && signedMmioSize >= 4 &&
+	    address <= static_cast<uint32_t>(signedMmioSize) - 4U) {
 		return *reinterpret_cast<volatile uint32_t *>(mmioBase + address);
 	}
 
-	return FunctionCast(wrapReadRegister32, callback->owrapReadRegister32)(controller, address);
+	if (callback && callback->owrapReadRegister32)
+		return FunctionCast(wrapReadRegister32,
+		                    callback->owrapReadRegister32)(controller, address);
+	return green->readReg32(address);
 }
 
 void Gen11::wrapWriteRegister32(void *controller, uint32_t address, uint32_t value) {
+	auto *green = NGreen::callback;
+	if (!green)
+		return;
 	if (controller == nullptr) {
-		NGreen::callback->writeReg32(address, value);
+		green->writeReg32(address, value);
 		return;
 	}
 
@@ -10387,13 +10383,12 @@ void Gen11::wrapWriteRegister32(void *controller, uint32_t address, uint32_t val
 	// actually wants and what the ADL-P DMC table actually contains. If vsync stalls
 	// re-emerge, fix should come from a correct DMC table or proper power-well init,
 	// not bit OR-in.
-	if (address == 0x45400 && NGreen::callback && !NGreen::callback->isRealTGL
-	    && NGreen::callback->uefiCtl1 != 0) {
+	if (address == 0x45400 && !green->isRealTGL && green->uefiCtl1 != 0) {
 		static int v195WpCount = 0;
 		if (v195WpCount < 6) {
 			++v195WpCount;
 			SYSLOG("ngreen", "V195Wp[%d]: CTL1 0x%x passthrough uefiCtl1=0x%x (V195W hack removed)",
-			       v195WpCount, value, NGreen::callback->uefiCtl1);
+			       v195WpCount, value, green->uefiCtl1);
 		}
 	}
 
@@ -10413,7 +10408,7 @@ void Gen11::wrapWriteRegister32(void *controller, uint32_t address, uint32_t val
 	// ── V63: Broad RCS register write intercept (diagnostic only, no modification) ──
 	// Catches ANY write to RCS control range: ELSP, EXECLIST, CTX_CTRL, CCID, TAIL, etc.
 	// Rate-limited to first 100 writes to avoid flooding Lilu buffer.
-	if (!NGreen::callback->isRealTGL) {
+	if (!green->isRealTGL) {
 		static int v63WriteCount = 0;
 		// RCS engine MMIO range: 0x2000-0x2FFF covers all ring control registers
 		if (address >= 0x2000 && address <= 0x2FFF) {
@@ -10427,7 +10422,11 @@ void Gen11::wrapWriteRegister32(void *controller, uint32_t address, uint32_t val
 		}
 	}
 
-	FunctionCast(wrapWriteRegister32, callback->owrapWriteRegister32)(controller,address,value);
+	if (callback && callback->owrapWriteRegister32)
+		FunctionCast(wrapWriteRegister32,
+		             callback->owrapWriteRegister32)(controller, address, value);
+	else
+		green->writeReg32(address, value);
 }
 
 // V45: Delayed child check callback — runs on a kernel thread after a configurable delay.
@@ -12257,83 +12256,6 @@ bool Gen11::forceWakeWaitAckFallback(uint32_t reqReg, uint32_t ackReg, uint32_t 
 
 void Gen11::releaseDoorbell()
 {}
-
-int iniin=1;
-void  Gen11::readAndClearInterrupts(AppleIntel::AppleIntelBaseController *that, void *param_1)
-{
-	
-	if (iniin){
-		iniin=0;
-		SYSLOG("ngreen", "readAndClearInterrupts: first call — initializing Gen11 GT interrupts");
-		
-		wrapWriteRegister32(callback->framecont, GEN11_GFX_MSTR_IRQ, 0);
-		wrapWriteRegister32(callback->framecont,GEN11_DISPLAY_INT_CTL, 0);
-		uint32_t master_ctl=wrapReadRegister32(callback->framecont,GEN11_GFX_MSTR_IRQ);
-		
-		//Disable RCS, BCS, VCS and VECS class engines.
-		wrapWriteRegister32(callback->framecont, GEN11_RENDER_COPY_INTR_ENABLE, 0);
-		wrapWriteRegister32(callback->framecont, GEN11_VCS_VECS_INTR_ENABLE,	  0);
-		
-		// Restore masks irqs on RCS, BCS, VCS and VECS engines.
-		wrapWriteRegister32(callback->framecont, GEN11_RCS0_RSVD_INTR_MASK,	~0);
-		wrapWriteRegister32(callback->framecont, GEN11_BCS_RSVD_INTR_MASK,	~0);
-		wrapWriteRegister32(callback->framecont, GEN11_VCS0_VCS1_INTR_MASK,	~0);
-		wrapWriteRegister32(callback->framecont, GEN11_VCS2_VCS3_INTR_MASK,	~0);
-		wrapWriteRegister32(callback->framecont, GEN11_VECS0_VECS1_INTR_MASK,	~0);
-		
-		wrapWriteRegister32(callback->framecont, GEN11_GPM_WGBOXPERF_INTR_ENABLE, 0);
-		wrapWriteRegister32(callback->framecont, GEN11_GPM_WGBOXPERF_INTR_MASK,  ~0);
-		wrapWriteRegister32(callback->framecont, GEN11_GUC_SG_INTR_ENABLE, 0);
-		wrapWriteRegister32(callback->framecont, GEN11_GUC_SG_INTR_MASK,  ~0);
-		
-		
-		
-		uint32_t irqs = GT_RENDER_USER_INTERRUPT;
-		uint32_t guc_mask = /*intel_uc_wants_guc(&gt->uc) ? GUC_INTR_GUC2HOST :*/ 0;
-		uint32_t gsc_mask = 0;
-		uint32_t heci_mask = 0;
-		uint32_t dmask;
-		uint32_t smask;
-		
-		irqs |= GT_CS_MASTER_ERROR_INTERRUPT |
-		GT_CONTEXT_SWITCH_INTERRUPT |
-		GT_WAIT_SEMAPHORE_INTERRUPT;
-		
-		dmask = irqs << 16 | irqs;
-		smask = irqs << 16;
-		
-		
-		/* Enable RCS, BCS, VCS and VECS class interrupts. */
-		wrapWriteRegister32(callback->framecont, GEN11_RENDER_COPY_INTR_ENABLE, dmask);
-		wrapWriteRegister32(callback->framecont, GEN11_VCS_VECS_INTR_ENABLE, dmask);
-		
-		/* Unmask irqs on RCS, BCS, VCS and VECS engines. */
-		wrapWriteRegister32(callback->framecont, GEN11_RCS0_RSVD_INTR_MASK, ~smask);
-		wrapWriteRegister32(callback->framecont, GEN11_BCS_RSVD_INTR_MASK, ~smask);
-		wrapWriteRegister32(callback->framecont, GEN11_VCS0_VCS1_INTR_MASK, ~dmask);
-		wrapWriteRegister32(callback->framecont, GEN11_VCS2_VCS3_INTR_MASK, ~dmask);
-		wrapWriteRegister32(callback->framecont, GEN11_VECS0_VECS1_INTR_MASK, ~dmask);
-		
-		/*
-		 * RPS interrupts will get enabled/disabled on demand when RPS itself
-		 * is enabled/disabled.
-		 */
-		
-		
-		wrapWriteRegister32(callback->framecont, GEN11_GPM_WGBOXPERF_INTR_ENABLE, 0);
-		wrapWriteRegister32(callback->framecont, GEN11_GPM_WGBOXPERF_INTR_MASK,  ~0);
-		
-		/* Same thing for GuC interrupts */
-		wrapWriteRegister32(callback->framecont, GEN11_GUC_SG_INTR_ENABLE, 0);
-		wrapWriteRegister32(callback->framecont, GEN11_GUC_SG_INTR_MASK,  ~0);
-		
-		wrapWriteRegister32(callback->framecont,GEN11_DISPLAY_INT_CTL, GEN11_DISPLAY_IRQ_ENABLE);
-		wrapWriteRegister32(callback->framecont, GEN11_GFX_MSTR_IRQ, GEN11_MASTER_IRQ);
-	}
-	
-	
-	FunctionCast(readAndClearInterrupts, callback->oreadAndClearInterrupts)(that,param_1);
-}
 
 uint32_t Gen11::probePortMode()
 {

@@ -132,8 +132,6 @@ bool Genx::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t a
 			//{"__ZN21AppleIntelFramebuffer19getPixelInformationEiiiP18IOPixelInformation",hwSaveNVRAM},
 			
 			
-			//{"__ZN24AppleIntelBaseController34isGPUSubSamplingSupportedForTimingEPK29IODetailedTimingInformationV2",isGPUSubSamplingSupportedForTiming,	this->oisGPUSubSamplingSupportedForTiming},
-			
 			//{"__ZN14AppleIntelPort7readAUXEjPvj",wrapICLReadAUX,	this->orgICLReadAUX},
 			
 			//{"__ZN24AppleIntelBaseController12CallBackAGDCE31kAGDCRegisterLinkControlEvent_tmj",CallBackAGDC,	this->oCallBackAGDC},
@@ -467,12 +465,6 @@ uint32_t Genx::CallBackAGDC(void *that,uint32_t param_1,unsigned long param_2, u
 }
 
 
-uint8_t Genx::isGPUSubSamplingSupportedForTiming(void *that,void *param_1)
-{
-	auto ret=FunctionCast(isGPUSubSamplingSupportedForTiming, callback->oisGPUSubSamplingSupportedForTiming)(that ,param_1);
-	return 1;
-}
-
 unsigned long Genx::fastLinkTraining()
 {
 	
@@ -497,21 +489,17 @@ void Genx::sanitizeCDClockFrequency(void *that) {
 
 	//auto referenceFrequency = callback->wrapReadRegister32(that, SKL_DSSM) & ICL_DSSM_CDCLK_PLL_REFCLK_MASK;
 	auto referenceFrequency = callback->wrapReadRegister32(that, ICL_REG_DSSM) >> 29;
-	uint32_t newCdclkFrequency = 0;
 	uint32_t newPLLFrequency = 0;
 	switch (referenceFrequency) {
 		case ICL_REF_CLOCK_FREQ_19_2:
-			newCdclkFrequency = ICL_CDCLK_FREQ_652_8;
 			newPLLFrequency = ICL_CDCLK_PLL_FREQ_REF_19_2;
 			break;
 			
 		case ICL_REF_CLOCK_FREQ_24_0:
-			newCdclkFrequency = ICL_CDCLK_FREQ_648_0;
 			newPLLFrequency = ICL_CDCLK_PLL_FREQ_REF_24_0;
 			break;
 			
 		case ICL_REF_CLOCK_FREQ_38_4:
-			newCdclkFrequency = ICL_CDCLK_FREQ_652_8;
 			newPLLFrequency = ICL_CDCLK_PLL_FREQ_REF_38_4;
 			break;
 			

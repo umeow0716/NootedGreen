@@ -1761,9 +1761,6 @@ private:
 	static void sanitizeCDClockFrequency(AppleIntel::AppleIntelBaseController *that);
 	static uint32_t wrapProbeCDClockFrequency(AppleIntel::AppleIntelBaseController *that);
 	
-	static void  readAndClearInterrupts(AppleIntel::AppleIntelBaseController *that, void *param_1);
-	mach_vm_address_t oreadAndClearInterrupts {};
-	
 	static void initCDClock(AppleIntel::AppleIntelBaseController *that);
 	mach_vm_address_t oinitCDClock {};
 	

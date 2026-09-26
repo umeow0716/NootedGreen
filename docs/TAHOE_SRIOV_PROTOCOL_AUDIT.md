@@ -1301,3 +1301,24 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
 - VF framebuffer probe/start is still rejected before any of these physical
   routes are installed. The PF repair is compile/static evidence only and must
   not be treated as physical display validation.
+
+### Static-analyzer follow-up and disabled IRQ rewrite removal
+
+- Re-ran Clang's path-sensitive analyzer over every built C++ unit. The only
+  actionable pointer report was the physical register wrapper repeatedly
+  loading the global NGreen singleton after a null check; it now captures and
+  validates one local pointer before use.
+- Removed the Gen11 engine-IRQ reprogramming function whose two routes had long
+  been disabled after causing a boot hang, plus a disabled Genx function that
+  called native subsampling detection and then discarded it to force true.
+  These are distinct from the active VF memory-IRQ bridge.
+- Removed diagnostic-only CDCLK-encoding locals that compile out with DBGLOG;
+  the selected PLL-frequency argument and active CDCLK behavior are unchanged.
+  The first fresh analyzer pass reduced the built-source findings from ten to
+  one and exposed the same global-singleton pattern in the controller accessor.
+- Both controller read/write accessors now capture and check their singleton and
+  original route once. Missing originals use the bounded common helper. MMIO
+  size is validated while still signed, and a final aligned dword at
+  `size - 4` is accepted rather than incorrectly falling through. The final
+  analyzer pass reports zero findings across all ten built C++ units in
+  `/tmp/ngreen-analysis.afkusT`; this is not a concurrency or hardware proof.

@@ -32,9 +32,6 @@ private:
 	static void sanitizeCDClockFrequency(void *that);
 	static uint32_t wrapProbeCDClockFrequency(void *that);
 	
-	static void  readAndClearInterrupts(void *that,void *param_1);
-	mach_vm_address_t oreadAndClearInterrupts {};
-	
 	uint32_t (*orgProbeCDClockFrequency)(void *) {nullptr};
 	void (*orgDisableCDClock)(void *) {nullptr};
 	void (*orgSetCDClockFrequency)(void *, unsigned long long) {nullptr};
@@ -83,9 +80,6 @@ private:
 	
 	static uint32_t CallBackAGDC(void *that,uint32_t param_1,unsigned long param_2, uint param_3);
 	mach_vm_address_t oCallBackAGDC {};
-	
-	static uint8_t isGPUSubSamplingSupportedForTiming(void *that,void *param_1);
-	mach_vm_address_t oisGPUSubSamplingSupportedForTiming {};
 	
 	static unsigned long fastLinkTraining();
 	mach_vm_address_t ofastLinkTraining {};
