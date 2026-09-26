@@ -1386,6 +1386,8 @@ private:
 	mach_vm_address_t oVfCtbChannelInit {};
 	static bool vfCtbGucToHostAction(void *that, uint32_t *message);
 	mach_vm_address_t oVfCtbGucToHostAction {};
+	static void vfReadAndClearInterrupts(void *that, void *interrupts);
+	mach_vm_address_t oVfReadAndClearInterrupts {};
 	static void *vfCtbMappedBufferWithOptions(void *accelTask, unsigned long size,
 	                                          unsigned int type, unsigned int flags);
 	mach_vm_address_t oVfCtbMappedBufferWithOptions {};

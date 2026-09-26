@@ -90,7 +90,11 @@ constexpr uint32_t kGucActionDeregisterContextDone = 0x4600;
 constexpr uint32_t kGucActionScheduleContext = 0x1000;
 constexpr uint32_t kGucActionScheduleContextModeSet = 0x1001;
 constexpr uint32_t kGucActionScheduleContextModeDone = 0x1002;
+constexpr uint32_t kGucActionContextResetNotification = 0x1008;
+constexpr uint32_t kGucActionEngineFailureNotification = 0x1009;
 constexpr uint32_t kGucActionUpdateContextPolicies = 0x100B;
+constexpr uint32_t kGucSelfCfgMemIrqStatusAddr = 0x0900;
+constexpr uint32_t kGucSelfCfgMemIrqSourceAddr = 0x0901;
 constexpr uint32_t kGucSelfCfgH2GCtbAddr = 0x0902;
 constexpr uint32_t kGucSelfCfgH2GCtbDescAddr = 0x0903;
 constexpr uint32_t kGucSelfCfgH2GCtbSize = 0x0904;
@@ -133,6 +137,8 @@ bool gVfDirectGGTT = false;
 bool gVfBinderReady = false;
 uint32_t gVfRelayFailureLogs = 0;
 uint32_t gVfCtbGpuBase = 0;
+uint8_t *gVfCtbCpuBase = nullptr;
+bool gVfMemIrqConfigured = false;
 
 // Modern GuC submission (v70+) assigns one GuC ID to one logical ring
 // context.  Tahoe's TGL binary predates that ABI and instead assigns a GuC ID
@@ -386,6 +392,19 @@ constexpr uint32_t kVfCtbH2GBufferBytes = 0x1000;
 constexpr uint32_t kVfCtbG2HBufferOffset = 0x3000;
 constexpr uint32_t kVfCtbG2HBufferBytes = 0x4000;
 constexpr uint32_t kVfCtbUsedBytes = kVfCtbG2HBufferOffset + kVfCtbG2HBufferBytes;
+// Intel's VF ABI requires a memory-interrupt page in GGTT.  Reuse the final,
+// page-aligned 4 KiB of the enlarged CTB allocation so CT transport and IRQ
+// state share one mapping and no extra IGMappedBuffer allocation is needed.
+constexpr uint32_t kVfMemIrqOffset = 0x7000;
+constexpr uint32_t kVfMemIrqBytes = 0x1000;
+constexpr uint32_t kVfMemIrqStatusOffset = 0x000;
+constexpr uint32_t kVfMemIrqSourceOffset = 0x400;
+constexpr uint32_t kVfMemIrqEnableOffset = 0x440;
+constexpr uint32_t kVfGucIrqOffset = 25;
+static_assert(kVfMemIrqOffset == kVfCtbUsedBytes,
+              "memory IRQ page must follow the CTB payload");
+static_assert(kVfMemIrqOffset + kVfMemIrqBytes == kVfCtbBackingBytes,
+              "memory IRQ page must fit the CTB allocation");
 bool gVfCtbAllocationPending = false;
 
 bool vfGucSendMMIO(const uint32_t request[4], uint32_t requestLength,
@@ -471,6 +490,37 @@ bool vfGucSelfConfig(uint16_t key, uint16_t length, uint64_t value)
 	return true;
 }
 
+bool vfConfigureMemIrq()
+{
+	if (gVfMemIrqConfigured)
+		return true;
+	if (!gVfCtbGpuBase || !gVfCtbCpuBase)
+		return false;
+
+	const uint64_t page = static_cast<uint64_t>(gVfCtbGpuBase) +
+	                      kVfMemIrqOffset;
+	const uint64_t gucStatus = page + kVfMemIrqStatusOffset +
+	                           kVfGucIrqOffset * 16U;
+	const uint64_t gucSource = page + kVfMemIrqSourceOffset +
+	                           kVfGucIrqOffset;
+	if (!vfGucSelfConfig(kGucSelfCfgMemIrqSourceAddr, 2, gucSource) ||
+	    !vfGucSelfConfig(kGucSelfCfgMemIrqStatusAddr, 2, gucStatus))
+		return false;
+
+	// i915 enables the low 16 engine-interrupt bits at install time.  Keep the
+	// same ABI value; the LRCA loads it into GEN12_RING_INT_MASK on restore.
+	auto *enable = reinterpret_cast<volatile uint32_t *>(
+		gVfCtbCpuBase + kVfMemIrqOffset + kVfMemIrqEnableOffset);
+	*enable = 0xFFFFU;
+	OSSynchronizeIO();
+	gVfMemIrqConfigured = true;
+	SYSLOG("ngreen", "V234: configured VF memory IRQ page=0x%llx GuC status=0x%llx source=0x%llx",
+	       static_cast<unsigned long long>(page),
+	       static_cast<unsigned long long>(gucStatus),
+	       static_cast<unsigned long long>(gucSource));
+	return true;
+}
+
 bool vfConfigureModernCtb(bool g2h, uint32_t appleDescriptorAddress)
 {
 	// registerCommandTransportBuffers sends G2H first at base+PAGE_SIZE/4,
@@ -500,7 +550,8 @@ bool vfConfigureModernCtb(bool g2h, uint32_t appleDescriptorAddress)
 	const uint16_t sizeKey = g2h ? kGucSelfCfgG2HCtbSize :
 	                                   kGucSelfCfgH2GCtbSize;
 
-	if (!vfGucSelfConfig(descriptorKey, 2, descriptor) ||
+	if ((g2h && !vfConfigureMemIrq()) ||
+	    !vfGucSelfConfig(descriptorKey, 2, descriptor) ||
 	    !vfGucSelfConfig(bufferKey, 2, buffer) ||
 	    !vfGucSelfConfig(sizeKey, 1, bytes))
 		return false;
@@ -1956,6 +2007,11 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				 vfCtbChannelInit, this->oVfCtbChannelInit},
 				{"__ZN21IGHardwareGuCCTBuffer15gucToHostActionEPj",
 				 vfCtbGucToHostAction, this->oVfCtbGucToHostAction},
+				// V234: Gen12 VFs report engine and GuC interrupts through a
+				// GGTT memory page.  Translate that page to Tahoe's existing
+				// IGBitSet<46> callback IDs instead of reading PF-only GT_INTR/IIR.
+				{"__ZN17IGInterruptBridge22readAndClearInterruptsER8IGBitSetILm46EE",
+				 vfReadAndClearInterrupts, this->oVfReadAndClearInterrupts},
 				{"__ZN20IGSharedMappedBuffer11withOptionsEP11IGAccelTaskmjj",
 				 vfCtbMappedBufferWithOptions, this->oVfCtbMappedBufferWithOptions},
 				// V230: translate Tahoe's legacy process-wide proxy submission
@@ -8204,8 +8260,11 @@ bool Gen11::vfMmioHostToGuCAction(void *that, const uint32_t *request,
 		}
 		if (response)
 			*response = 0;
-		if (request[2] == 1U)
+		if (request[2] == 1U) {
 			gVfCtbGpuBase = 0;
+			gVfCtbCpuBase = nullptr;
+			gVfMemIrqConfigured = false;
+		}
 		return ok;
 	}
 
@@ -8573,8 +8632,22 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 	// notification while avoiding GGTT remaps or physical-address reads.
 	constexpr size_t kContextDescriptorOffset = 0x89;
 	constexpr size_t kContextImageBufferOffset = 0x98;
+	constexpr size_t kContextRegisterStateOffset = 0x1000;
 	constexpr size_t kContextRingTailOffset = 0x101C;
 	constexpr size_t kContextRingControlOffset = 0x102C;
+	constexpr uint32_t kCtxMemIrqLrmHeaderIndex = 0x50;
+	constexpr uint32_t kCtxMemIrqMaskRegisterIndex = 0x51;
+	constexpr uint32_t kCtxMemIrqMaskPointerIndex = 0x52;
+	constexpr uint32_t kCtxMemIrqLriHeaderIndex = 0x55;
+	constexpr uint32_t kCtxMemIrqStatusRegisterIndex = 0x56;
+	constexpr uint32_t kCtxMemIrqStatusPointerIndex = 0x57;
+	constexpr uint32_t kCtxMemIrqSourceRegisterIndex = 0x58;
+	constexpr uint32_t kCtxMemIrqSourcePointerIndex = 0x59;
+	constexpr uint32_t kMiLoadRegisterMemGlobalCsMmio = 0x14C80002U;
+	constexpr uint32_t kMiLoadRegisterImm2PostedCsMmio = 0x11081003U;
+	constexpr uint32_t kGen12RingIntSource = 0x00A4U;
+	constexpr uint32_t kGen12RingIntMask = 0x00A8U;
+	constexpr uint32_t kGen12RingIntStatus = 0x00ACU;
 	constexpr uint32_t kRingControlPagesMask = 0x001FF000U;
 	constexpr uint32_t kRingControlValid = 1U;
 	auto *hardwareContext = const_cast<uint8_t *>(
@@ -8591,6 +8664,35 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 		       descriptor[0], legacyContextId);
 		return false;
 	}
+	if (!gVfMemIrqConfigured || !gVfCtbCpuBase) {
+		SYSLOG("ngreen", "V234: submit before VF memory IRQ configuration LRCA=0x%08x",
+		       descriptor[0]);
+		return false;
+	}
+
+	// Gen12 SR-IOV VFs do not expose the physical GT interrupt hierarchy.
+	// Match i915's init_vf_irq_reg_state(): consume the reserved LRCA slots to
+	// load the interrupt mask from memory and point the engine's status/source
+	// reporting at the shared memory-IRQ page.  Register addresses are relative
+	// to the selected engine because MI_LRI_LRM_CS_MMIO is set in both commands.
+	auto *registerState = reinterpret_cast<volatile uint32_t *>(
+		contextImage + kContextRegisterStateOffset);
+	const uint32_t memIrqPage = gVfCtbGpuBase + kVfMemIrqOffset;
+	registerState[kCtxMemIrqLrmHeaderIndex] =
+		kMiLoadRegisterMemGlobalCsMmio;
+	registerState[kCtxMemIrqMaskRegisterIndex] = kGen12RingIntMask;
+	registerState[kCtxMemIrqMaskPointerIndex] =
+		memIrqPage + kVfMemIrqEnableOffset;
+	registerState[kCtxMemIrqMaskPointerIndex + 1] = 0;
+	registerState[kCtxMemIrqLriHeaderIndex] =
+		kMiLoadRegisterImm2PostedCsMmio;
+	registerState[kCtxMemIrqStatusRegisterIndex] = kGen12RingIntStatus;
+	registerState[kCtxMemIrqStatusPointerIndex] =
+		memIrqPage + kVfMemIrqStatusOffset;
+	registerState[kCtxMemIrqSourceRegisterIndex] = kGen12RingIntSource;
+	registerState[kCtxMemIrqSourcePointerIndex] =
+		memIrqPage + kVfMemIrqSourceOffset;
+	OSSynchronizeIO();
 
 	auto *ringTailField = reinterpret_cast<volatile uint32_t *>(
 		contextImage + kContextRingTailOffset);
@@ -8607,6 +8709,24 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 	const uint32_t previousRingTail = *ringTailField;
 	*ringTailField = ringTail;
 	OSSynchronizeIO();
+
+	static uint32_t contextImageLogs = 0;
+	if (contextImageLogs++ < 16) {
+		const auto *state = reinterpret_cast<volatile uint32_t *>(
+			contextImage + kContextRegisterStateOffset);
+		SYSLOG("ngreen", "V234: LRCA image desc=%08x:%08x ctrl=%08x head=%08x tail=%08x start=%08x ctl=%08x",
+		       descriptor[1], descriptor[0], state[3], state[5], state[7],
+		       state[9], state[11]);
+		SYSLOG("ngreen", "V234: LRCA memirq lrm=%08x mask=%08x@%08x lri=%08x status=%08x@%08x source=%08x@%08x",
+		       state[kCtxMemIrqLrmHeaderIndex],
+		       state[kCtxMemIrqMaskRegisterIndex],
+		       state[kCtxMemIrqMaskPointerIndex],
+		       state[kCtxMemIrqLriHeaderIndex],
+		       state[kCtxMemIrqStatusRegisterIndex],
+		       state[kCtxMemIrqStatusPointerIndex],
+		       state[kCtxMemIrqSourceRegisterIndex],
+		       state[kCtxMemIrqSourcePointerIndex]);
+	}
 
 	const uint32_t lrcaPage = descriptor[0] & 0xFFFFF000U;
 	int32_t slot = -1;
@@ -8727,8 +8847,10 @@ void Gen11::vfCtbChannelInit(void *that) {
 		return;
 	}
 	gVfCtbGpuBase = oldH2GBuffer - PAGE_SIZE / 2;
+	gVfCtbCpuBase = baseCpu;
+	gVfMemIrqConfigured = false;
 
-	bzero(baseCpu, kVfCtbUsedBytes);
+	bzero(baseCpu, kVfCtbBackingBytes);
 	auto *h2gDesc = reinterpret_cast<uint32_t *>(baseCpu + kVfCtbH2GDescOffset);
 	auto *g2hDesc = reinterpret_cast<uint32_t *>(baseCpu + kVfCtbG2HDescOffset);
 	h2gDesc[0] = gVfCtbGpuBase + kVfCtbH2GBufferOffset;
@@ -8771,6 +8893,15 @@ bool Gen11::vfCtbGucToHostAction(void *that, uint32_t *message) {
 	// makes ID reuse safe: a slot remains unavailable until GuC confirms that it
 	// no longer references the old LRCA.
 	const uint32_t action = hxg & 0xFFFFU;
+	if (!response && (hxg & kGucOriginGuc) != 0 &&
+	    (action == kGucActionContextResetNotification ||
+	     action == kGucActionEngineFailureNotification)) {
+		const uint32_t payload0 = length >= 2 ? message[2] : 0;
+		const uint32_t payload1 = length >= 3 ? message[3] : 0;
+		const uint32_t payload2 = length >= 4 ? message[4] : 0;
+		SYSLOG("ngreen", "V234: GuC failure event action=0x%04x len=%u payload=%08x:%08x:%08x",
+		       action, length, payload0, payload1, payload2);
+	}
 	if (!response && (hxg & kGucOriginGuc) != 0 && gVfContextLock &&
 	    gVfContexts &&
 	    ((action == kGucActionScheduleContextModeDone && length >= 3) ||
@@ -8825,6 +8956,85 @@ bool Gen11::vfCtbGucToHostAction(void *that, uint32_t *message) {
 		message[1] = hxg;
 	}
 	return true;
+}
+
+void Gen11::vfReadAndClearInterrupts(void *that, void *interrupts) {
+	if (!gVfGGTTReady || NGreen::callback->isRealTGL) {
+		FunctionCast(vfReadAndClearInterrupts,
+		             callback->oVfReadAndClearInterrupts)(that, interrupts);
+		return;
+	}
+	if (!interrupts)
+		return;
+
+	auto *pending = reinterpret_cast<uint64_t *>(interrupts);
+	*pending = 0;
+	if (!gVfMemIrqConfigured || !gVfCtbCpuBase)
+		return;
+
+	auto *page = reinterpret_cast<volatile uint8_t *>(
+		gVfCtbCpuBase + kVfMemIrqOffset);
+	auto *statusBase = page + kVfMemIrqStatusOffset;
+	auto *sourceBase = page + kVfMemIrqSourceOffset;
+	OSSynchronizeIO();
+
+	uint64_t sourceSnapshot = 0;
+	for (uint32_t i = 0; i < 64; i++) {
+		if (sourceBase[i])
+			sourceSnapshot |= 1ULL << i;
+	}
+
+	const auto consumeEngine = [&](uint32_t irqOffset, uint32_t userBit,
+	                               uint32_t contextBit, uint32_t errorBit) {
+		const uint8_t source = sourceBase[irqOffset];
+		if (!source)
+			return;
+		sourceBase[irqOffset] = 0;
+		auto *status = statusBase + irqOffset * 16U;
+		if (status[0]) {
+			*pending |= 1ULL << userBit;
+			status[0] = 0;
+		}
+		if (status[4]) {
+			*pending |= 1ULL << contextBit;
+			status[4] = 0;
+		}
+		if (status[8]) {
+			*pending |= 1ULL << errorBit;
+			status[8] = 0;
+		}
+	};
+
+	// Bit positions are the exact IGBitSet<46> mapping used by Tahoe's
+	// IGInterruptBridge::readAndClear{RCS,CCS,BCS,VCS,VECS}Interrupts.
+	consumeEngine(0, 0, 12, 6);    // RCS0
+	consumeEngine(4, 1, 13, 7);    // CCS0
+	consumeEngine(15, 2, 14, 8);   // BCS0
+	consumeEngine(32, 3, 15, 9);   // VCS0
+	consumeEngine(33, 4, 16, 10);  // VCS1 / Apple's VCS2 slot
+	consumeEngine(63, 5, 17, 11);  // VECS0
+
+	const uint8_t gucSource = sourceBase[kVfGucIrqOffset];
+	if (gucSource) {
+		sourceBase[kVfGucIrqOffset] = 0;
+		auto *gucStatus = statusBase + kVfGucIrqOffset * 16U;
+		if (gucStatus[15]) {
+			*pending |= 1ULL << 45; // GUC_INTR_GUC2HOST
+			gucStatus[15] = 0;
+		}
+		if (gucStatus[0]) {
+			*pending |= 1ULL << 36; // GUC_INTR_SW_INT_0
+			gucStatus[0] = 0;
+		}
+	}
+	OSSynchronizeIO();
+
+	static uint32_t irqLogs = 0;
+	if ((sourceSnapshot || *pending) && irqLogs++ < 128) {
+		SYSLOG("ngreen", "V234: VF memory IRQ source=0x%016llx pending=0x%016llx",
+		       static_cast<unsigned long long>(sourceSnapshot),
+		       static_cast<unsigned long long>(*pending));
+	}
 }
 
 UInt8 Gen11::wrapLoadGuCBinary(void *that) {
