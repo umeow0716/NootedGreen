@@ -34,45 +34,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Check CTB framing with sanitizers
+      - name: Check all sources and protocol models
         run: |
-          xcrun clang++ --target=x86_64-apple-macos13 -std=c++14 \
-            -fsyntax-only -ffreestanding -fno-builtin \
-            -Werror=format -Werror=cast-align -Werror=reorder-init-list \
-            -DKERNEL=1 -DKERNEL_PRIVATE=1 -DMODULE_VERSION=100 \
-            -DPRODUCT_NAME=NootedGreen -D__MAC_OS_X_VERSION_MIN_REQUIRED=130000 \
-            -I. -ILilu.kext/Contents/Resources -IMacKernelSDK/Headers \
-            NootedGreen/kern_gen11.cpp
-          xcrun clang++ -std=c++14 -O1 -g -fsanitize=address,undefined \
-            tools/guc_ring_test.cpp -o "$RUNNER_TEMP/guc-ring-test"
-          "$RUNNER_TEMP/guc-ring-test"
-          xcrun clang++ -std=c++14 -O1 -g -fsanitize=address,undefined \
-            tools/gpu_capabilities_test.cpp -o "$RUNNER_TEMP/gpu-capabilities-test"
-          "$RUNNER_TEMP/gpu-capabilities-test"
-          xcrun clang++ -std=c++14 -O1 -g -fsanitize=address,undefined \
-            tools/ggtt_init_bounds_test.cpp -o "$RUNNER_TEMP/ggtt-init-bounds-test"
-          "$RUNNER_TEMP/ggtt-init-bounds-test"
-          xcrun clang++ -std=c++14 -O1 -g -fsanitize=address,undefined \
-            tools/phy_translation_test.cpp -o "$RUNNER_TEMP/phy-translation-test"
-          "$RUNNER_TEMP/phy-translation-test"
-          xcrun clang++ -std=c++14 -O1 -g -fsanitize=address,undefined \
-            tools/pattern_match_test.cpp -o "$RUNNER_TEMP/pattern-match-test"
-          "$RUNNER_TEMP/pattern-match-test"
-          xcrun clang++ -std=c++14 -O1 -g -fsanitize=address,undefined \
-            tools/dvmt_patch_test.cpp -o "$RUNNER_TEMP/dvmt-patch-test"
-          "$RUNNER_TEMP/dvmt-patch-test"
-          xcrun clang++ -std=c++14 -O1 -g -fsanitize=address,undefined \
-            tools/context_pool_test.cpp -o "$RUNNER_TEMP/context-pool-test"
-          "$RUNNER_TEMP/context-pool-test"
-          xcrun clang++ -std=c++14 -O1 -g -fsanitize=address,undefined \
-            tools/binary_identity_test.cpp -o "$RUNNER_TEMP/binary-identity-test"
-          "$RUNNER_TEMP/binary-identity-test"
-          xcrun clang++ -std=c++14 -O1 -g -fsanitize=address,undefined \
-            tools/pci_identity_test.cpp -o "$RUNNER_TEMP/pci-identity-test"
-          "$RUNNER_TEMP/pci-identity-test"
-          xcrun clang++ -std=c++14 -O1 -g -fsanitize=address,undefined \
-            tools/workqueue_unwind_test.cpp -o "$RUNNER_TEMP/workqueue-unwind-test"
-          "$RUNNER_TEMP/workqueue-unwind-test"
+          CXX="$(xcrun -f clang++)" bash tools/check-static.sh
 
       - name: Build x86_64 release kext
         run: |

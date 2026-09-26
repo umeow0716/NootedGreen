@@ -1322,3 +1322,7 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   `size - 4` is accepted rather than incorrectly falling through. The final
   analyzer pass reports zero findings across all ten built C++ units in
   `/tmp/ngreen-analysis.afkusT`; this is not a concurrency or hardware proof.
+- The same analyzer pass is now a mandatory part of `tools/check-static.sh`,
+  and CI calls that single complete gate instead of maintaining a shorter,
+  drifting copy of its tests. Any analyzer warning or nonzero analyzer exit
+  fails the gate; native Xcode build/link remains a separate subsequent job.

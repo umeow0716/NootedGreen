@@ -18,6 +18,24 @@ for source in NootedGreen/*.cpp; do
         failed=1
     fi
 done
+for source in NootedGreen/*.cpp; do
+    log="$task_output/${source##*/}.analyzer.log"
+    if ! "$compiler" --target=x86_64-apple-macos13 -std=c++14 \
+        --analyze -Xanalyzer -analyzer-output=text \
+        -ffreestanding -fno-builtin \
+        -DKERNEL=1 -DKERNEL_PRIVATE=1 -DMODULE_VERSION=100 \
+        -DPRODUCT_NAME=NootedGreen -D__MAC_OS_X_VERSION_MIN_REQUIRED=130000 \
+        -I. -ILilu.kext/Contents/Resources -IMacKernelSDK/Headers \
+        "$source" > "$log" 2>&1; then
+        printf 'FAIL analyzer: %s (see diagnostic directory)\n' "$source"
+        failed=1
+    elif awk '/warning:/{found=1} END{exit !found}' "$log"; then
+        printf 'FAIL analyzer finding: %s (see diagnostic directory)\n' "$source"
+        failed=1
+    else
+        printf 'PASS analyzer: %s\n' "$source"
+    fi
+done
 # The pinned TGL bridge contains private packed ABI and MMIO structures. Keep
 # regressions in format ABIs, alignment and aggregate layout as hard failures.
 if ! "$compiler" --target=x86_64-apple-macos13 -std=c++14 \
