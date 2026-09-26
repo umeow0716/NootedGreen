@@ -1400,3 +1400,39 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   This is not a device-DMA-stop acknowledgement. In-flight GGTT operation
   synchronization and a verified VF reset/device-quiescence boundary remain
   blockers before any VM boot test.
+
+### Context retirement and final VF DMA boundary
+
+- Re-disassembly of Tahoe's `IntelAccelerator::stop` shows that it first calls
+  `finishAllStamps`, later invokes `stopGraphicsEngine`, and only afterward
+  releases scheduler/GuC and interrupt objects. The new accelerator-stop route
+  records final-stop intent without blocking the stamp drain. At the later
+  engine-stop boundary, it closes a counted attach/detach/submit gate and waits
+  for all already-admitted operations before taking a stable context snapshot.
+- Every direct-LRCA context state now has one explicit shutdown action. Enabled
+  contexts receive MODE_DISABLE and wait for MODE_DONE; registered/disabled
+  contexts receive DEREGISTER and wait for DEREGISTER_DONE; already-pending
+  transitions must finish before classification is repeated. Tombstones keep
+  their backing pinned until the last native reference is detached. A pure
+  model exhaustively checks all nine states and the full
+  enabled-to-tombstone sequence.
+- After all contexts are deregistered, the driver issues the existing heavy
+  GuC TLB invalidation and waits for its exact sequence completion. Only then
+  does it publish the final DMA-quiesced boundary. Later teardown unmaps can
+  skip per-range invalidation because new submission/mapping is closed and no
+  GuC context remains capable of consuming a translation. The GGTT lifecycle
+  model now checks all 32 transport/fault/quiescence combinations.
+- CTB deregistration also invokes this sequence as an idempotent partial-init
+  fallback before sealing H2G, masking memory IRQs and draining callbacks. The
+  CTB object and shared memory-IRQ backing remain deliberately retained: the
+  context/TLB proof does not establish that firmware can never write transport
+  bookkeeping after its disable acknowledgement.
+- Tahoe's native engine-start/stop success convention is nonzero; the prior VF
+  bypass returned `kIOReturnSuccess` (zero), which is failure under that ABI.
+  Both VF bypasses now return one. Physical-device engine bodies are unchanged.
+- Full syntax, zero-finding Clang analyzer, strict ABI warnings and all
+  sanitizer protocol suites pass in `/tmp/ngreen-static.H6UvwS`. This closes
+  the identified graceful context/GGTT teardown ordering gap, but remains
+  static evidence. Native rotated mappings, the remaining all-source review,
+  CI/Xcode linkage and a controlled boot are still required before dynamic
+  hardware claims.

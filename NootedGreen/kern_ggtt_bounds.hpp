@@ -15,7 +15,13 @@ enum class TlbInvalidation : uint8_t {
 // the transport is still active. A stopped/faulted transport cannot prove DMA
 // quiescence and must not permit the caller to release backing pages.
 inline TlbInvalidation unmapInvalidation(bool everEnabled, bool enabled,
-                                         bool stopped, bool faulted) {
+                                         bool stopped, bool faulted,
+                                         bool deviceQuiesced = false) {
+    // A completed shutdown invalidation is a stronger lifetime boundary than
+    // the later CTB stopped/fault bookkeeping: no context remains registered
+    // and no new GPU request can consume a translation.
+    if (deviceQuiesced)
+        return TlbInvalidation::NotRequired;
     if (!everEnabled)
         return TlbInvalidation::NotRequired;
     if (enabled && !stopped && !faulted)

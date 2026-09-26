@@ -42,7 +42,8 @@ files (1,305 under this snapshot's scope); this does not close older coverage.
 | IntelDPLinkTraining.cpp/.hpp | Read and tables compared with i915; corrected PHY layout, physical-only guards; full platform/stepping/link-training integration remains open |
 | kern_start.cpp | Read; lifecycle integration still depends on the unfinished driver |
 | Firmware.cpp, FirmwareADLP.cpp | All payload bytes compared to pinned upstream containers; bounds fixed; NOT a firmware-instruction semantic review |
-| kern_gpu_capabilities.hpp, kern_guc_ring.hpp, kern_ggtt_bounds.hpp, kern_pattern_match.hpp, kern_dvmt_patch.hpp, kern_context_pool.hpp, kern_binary_identity.hpp, kern_pci_identity.hpp | Implementations read and offline-tested; GPU/PF identity now gates native TGL branches instead of CPUID, and all GGTT unmap/CTB lifecycle states are checked. Tests cover pure helpers, not all caller lifetime/hardware contracts or shutdown quiescence. |
+| kern_gpu_capabilities.hpp, kern_guc_ring.hpp, kern_ggtt_bounds.hpp, kern_pattern_match.hpp, kern_dvmt_patch.hpp, kern_context_pool.hpp, kern_binary_identity.hpp, kern_pci_identity.hpp | Implementations read and offline-tested; GPU/PF identity now gates native TGL branches instead of CPUID, and all GGTT unmap/CTB lifecycle states are checked. Tests cover pure helpers, not all caller lifetime/hardware contracts. |
+| kern_vf_irq_gate.hpp, kern_vf_context_shutdown.hpp | Read and exhaustively checked as pure state machines. The callback/operation admission gates and all nine direct-LRCA shutdown classifications are covered; actual firmware completion and DMA behavior still require controlled hardware validation. |
 | kern_context_descriptor.hpp | Read; packed native descriptor now decoded without alignment assumptions; object lifetime/readability remains a caller contract |
 | kern_unaligned.hpp | Read; little-endian 32/64-bit reads and writes tested over offsets 0..15 with canaries; callers retain mapping/lifetime obligations |
 | kern_model.hpp | Read; cosmetic branding lookup only, not a capability/support table; marketing labels not independently certified |
@@ -60,7 +61,7 @@ files (1,305 under this snapshot's scope); this does not close older coverage.
 - The pinned TGL binary was inspected by function, not exhaustively. UUID
   admission limits private-layout use but is neither integrity verification
   nor evidence that the known layout is fully safe.
-- No Metal/media baseline, DMA-quiescence proof, complete PF/VF driver,
+- No Metal/media baseline, dynamic DMA-quiescence proof, complete PF/VF driver,
   virtual-display/Sunshine integration or all-source approval exists yet.
 - Preserve the original user baseline in the parent `WORK_BASELINE.md` and
   append checkpoints; do not replace it with a narrower task.

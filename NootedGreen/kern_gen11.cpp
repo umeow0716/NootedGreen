@@ -5,6 +5,7 @@
 #include "kern_gpu_capabilities.hpp"
 #include "kern_ggtt_bounds.hpp"
 #include "kern_vf_irq_gate.hpp"
+#include "kern_vf_context_shutdown.hpp"
 #include "kern_context_pool.hpp"
 #include "kern_context_descriptor.hpp"
 #include "kern_workqueue_unwind.hpp"
@@ -197,6 +198,11 @@ volatile UInt32 gVfCtbEnabled = 0;
 volatile UInt32 gVfCtbEverEnabled = 0;
 volatile UInt32 gVfSubmissionStopped = 0;
 volatile UInt32 gVfIrqCallbackGate = 0;
+volatile UInt32 gVfContextOperationGate = 0;
+volatile UInt32 gVfContextShutdownStarted = 0;
+volatile UInt32 gVfContextShutdownComplete = 0;
+volatile UInt32 gVfDmaQuiesced = 0;
+volatile UInt32 gVfDeviceStopping = 0;
 bool gVfMemIrqConfigured = false;
 volatile UInt32 gVfMemIrqRequested = 0;
 volatile UInt32 gVfProtocolFault = 0;
@@ -254,25 +260,11 @@ void vfReleaseG2HCredits(uint32_t count)
 	}
 }
 
-// Modern GuC submission (v70+) assigns one GuC ID to one logical ring
-// context.  Tahoe's TGL binary predates that ABI and instead assigns a GuC ID
-// to a process-wide proxy work queue whose items contain changing LRCAs.  A VF
-// cannot use that legacy proxy: the PF-owned GuC accepts REGISTER_CONTEXT and
-// schedules the registered LRCA directly.  Keep a small software lifecycle
-// record keyed by the context image GGTT page and use the array index as the
-// local GuC ID.  The VF quota is a local namespace, so IDs start at zero.
-enum VfGucContextState : uint8_t {
-	kVfGucContextEmpty = 0,
-	kVfGucContextTombstone,
-	kVfGucContextRegistering,
-	kVfGucContextRegistered,
-	kVfGucContextPendingEnable,
-	kVfGucContextEnabled,
-	kVfGucContextPendingDisable,
-	kVfGucContextDisabled,
-	kVfGucContextPendingDeregister,
-};
-
+// Tahoe's TGL binary assigns a GuC ID to a process-wide proxy work queue whose
+// items contain changing LRCAs. A VF cannot use that legacy proxy: the PF-owned
+// GuC accepts REGISTER_CONTEXT and schedules the registered LRCA directly.
+// Keep a small lifecycle record keyed by context-image GGTT page and use the
+// array index as the local GuC ID. The VF quota is a local zero-based namespace.
 struct VfGucContext {
 	uint32_t lrcaPage;
 	uint32_t descriptorLo;
@@ -383,7 +375,8 @@ void vfReleaseRetiredContextBacking(uint16_t gucId)
 	const IOInterruptState interruptState =
 		IOSimpleLockLockDisableInterrupt(gVfContextLock);
 	auto &entry = gVfContexts[gucId];
-	if (!gVfProtocolFault && entry.state == kVfGucContextTombstone) {
+	if (!gVfProtocolFault && entry.state == kVfGucContextTombstone &&
+	    entry.refCount == 0) {
 		backing = entry.contextBacking;
 		entry.contextBacking = nullptr;
 		entry.lrcaPage = 0;
@@ -398,6 +391,7 @@ bool vfEnsureGucLock();
 bool vfValidH2GMapping(const volatile uint32_t *descriptor,
                        const volatile uint32_t *buffer);
 bool vfInvalidateTLBSync(void *guc);
+bool vfQuiesceDeviceForShutdown(void *guc);
 
 bool vfCaptureHardwareGuc(void *guc)
 {
@@ -657,6 +651,94 @@ bool vfCloseIrqCallbackGateAndWait(void *guc)
 	return false;
 }
 
+bool vfEnterContextOperation()
+{
+	for (;;) {
+		OSSynchronizeIO();
+		const UInt32 state = gVfContextOperationGate;
+		UInt32 next = 0;
+		if (!NGVfIrqGate::enter(state, next))
+			return false;
+		if (OSCompareAndSwap(state, next, &gVfContextOperationGate)) {
+			OSSynchronizeIO();
+			return true;
+		}
+	}
+}
+
+void vfLeaveContextOperation()
+{
+	for (;;) {
+		OSSynchronizeIO();
+		const UInt32 state = gVfContextOperationGate;
+		UInt32 next = 0;
+		if (!NGVfIrqGate::leave(state, next)) {
+			vfMarkProtocolFault("VF context-operation gate underflow");
+			return;
+		}
+		if (OSCompareAndSwap(state, next, &gVfContextOperationGate)) {
+			OSSynchronizeIO();
+			return;
+		}
+	}
+}
+
+class VfContextOperationGuard {
+public:
+	VfContextOperationGuard() : admitted(vfEnterContextOperation()) {}
+	~VfContextOperationGuard() {
+		if (admitted)
+			vfLeaveContextOperation();
+	}
+	VfContextOperationGuard(const VfContextOperationGuard &) = delete;
+	VfContextOperationGuard &operator=(const VfContextOperationGuard &) = delete;
+	explicit operator bool() const { return admitted; }
+
+private:
+	bool admitted;
+};
+
+bool vfCloseContextOperationGateAndWait(void *guc)
+{
+	if (guc ? !vfCanWaitForGuc(guc) : !vfCanUseSleepingLock())
+		return false;
+	for (;;) {
+		OSSynchronizeIO();
+		const UInt32 state = gVfContextOperationGate;
+		const UInt32 next = NGVfIrqGate::close(state);
+		if (next == state ||
+		    OSCompareAndSwap(state, next, &gVfContextOperationGate))
+			break;
+	}
+	OSSynchronizeIO();
+
+	for (uint32_t waited = 0; waited < kVfContextEventTimeoutMs; waited++) {
+		OSSynchronizeIO();
+		if (NGVfIrqGate::drained(gVfContextOperationGate))
+			return true;
+		IOSleep(1);
+	}
+	vfMarkProtocolFault("timed out draining VF context operations");
+	return false;
+}
+
+bool vfWaitForContextShutdown(void *guc)
+{
+	OSSynchronizeIO();
+	if (gVfContextShutdownComplete)
+		return true;
+	if (guc ? !vfCanWaitForGuc(guc) : !vfCanUseSleepingLock())
+		return false;
+	for (uint32_t waited = 0; waited < kVfContextEventTimeoutMs; waited++) {
+		OSSynchronizeIO();
+		if (gVfContextShutdownComplete)
+			return true;
+		IOSleep(1);
+	}
+	vfMarkProtocolFault("timed out waiting for VF context shutdown");
+	return false;
+}
+
 bool vfInvalidateTLBSync(void *guc)
 {
 	// GEN12_GUC_TLB_INV_CR (0xCEE8) belongs to the physical GT and is not in
@@ -855,6 +937,129 @@ bool vfStopSubmissionAndSealCtb(void *guc)
 
 	vfMarkProtocolFault("timed out draining VF H2G producers/completions");
 	return false;
+}
+
+bool vfRetireContextForShutdown(void *guc, uint16_t gucId)
+{
+	if (!gVfContextLock || !gVfContexts || gucId >= gVfContextCapacity)
+		return false;
+
+	// A slot needs at most MODE_DISABLE followed by DEREGISTER. Pending states
+	// can add one wait-only pass when an operation admitted before gate closure
+	// published its request immediately before shutdown.
+	for (uint32_t pass = 0; pass < 6; pass++) {
+		bool sendDisable = false;
+		bool sendDeregister = false;
+		bool waitOnly = false;
+		uint32_t lrcaPage = 0;
+		VfGucContextState state = kVfGucContextEmpty;
+
+		const IOInterruptState interruptState =
+			IOSimpleLockLockDisableInterrupt(gVfContextLock);
+		auto &entry = gVfContexts[gucId];
+		state = entry.state;
+		lrcaPage = entry.lrcaPage;
+		switch (NGVfContextShutdown::action(state)) {
+			case NGVfContextShutdown::Action::Complete:
+				break;
+			case NGVfContextShutdown::Action::Deregister:
+				entry.state = kVfGucContextPendingDeregister;
+				sendDeregister = true;
+				break;
+			case NGVfContextShutdown::Action::Disable:
+				entry.state = kVfGucContextPendingDisable;
+				entry.disablePending = true;
+				sendDisable = true;
+				break;
+			case NGVfContextShutdown::Action::Wait:
+				waitOnly = true;
+				break;
+		}
+		IOSimpleLockUnlockEnableInterrupt(gVfContextLock, interruptState);
+
+		if (state == kVfGucContextEmpty)
+			return true;
+		if (state == kVfGucContextTombstone) {
+			vfReleaseRetiredContextBacking(gucId);
+			return true;
+		}
+
+		uint32_t transportFence = 0;
+		if (sendDisable) {
+			const uint32_t disable[] = {
+				kGucActionScheduleContextModeSet, gucId, kGucContextDisable,
+			};
+			if (!vfSendCtbFastAction(guc, disable, arrsize(disable),
+			                         transportFence) ||
+			    !vfWaitForContextState(guc, gucId,
+			                           kVfGucContextDisabled)) {
+				vfMarkProtocolFault("VF shutdown context-disable failure");
+				return false;
+			}
+			continue;
+		}
+		if (sendDeregister) {
+			const uint32_t deregister[] = {
+				kGucActionDeregisterContext, gucId,
+			};
+			if (!vfSendCtbFastAction(guc, deregister,
+			                         arrsize(deregister), transportFence) ||
+			    !vfWaitForContextState(guc, gucId,
+			                           kVfGucContextTombstone)) {
+				vfMarkProtocolFault("VF shutdown context-deregister failure");
+				return false;
+			}
+			continue;
+		}
+		if (waitOnly) {
+			if (!vfWaitForContextTransition(guc, gucId, lrcaPage, state)) {
+				vfMarkProtocolFault("VF shutdown context-transition timeout");
+				return false;
+			}
+			continue;
+		}
+	}
+
+	vfMarkProtocolFault("VF shutdown exceeded context transition bound");
+	return false;
+}
+
+bool vfQuiesceDeviceForShutdown(void *guc)
+{
+	OSSynchronizeIO();
+	if (gVfContextShutdownComplete)
+		return gVfDmaQuiesced != 0;
+	if (!OSCompareAndSwap(0, 1, &gVfContextShutdownStarted))
+		return vfWaitForContextShutdown(guc) && gVfDmaQuiesced;
+
+	// Stop new Apple-facing producers, then close and drain the counted
+	// attach/detach/submit gate. This makes the following context-table sweep a
+	// complete snapshot rather than a best-effort scan of moving ownership.
+	OSCompareAndSwap(0, 1, &gVfSubmissionStopped);
+	OSSynchronizeIO();
+	if (!vfCloseContextOperationGateAndWait(guc))
+		return false;
+	if (gVfProtocolFault)
+		return false;
+
+	for (uint32_t id = 0; id < gVfContextCapacity; id++) {
+		if (!vfRetireContextForShutdown(guc, static_cast<uint16_t>(id)))
+			return false;
+	}
+
+	// Once CTB has run, finish with the same heavy GuC invalidation used for a
+	// live unmap. All contexts are now deregistered and the operation gate is
+	// closed, so completion is a device-wide DMA/translation boundary for every
+	// later teardown unmap. Before CTB enable there cannot have been GPU work.
+	if (gVfCtbEverEnabled && !vfInvalidateTLBSync(guc))
+		return false;
+
+	OSCompareAndSwap(0, 1, &gVfDmaQuiesced);
+	OSSynchronizeIO();
+	OSCompareAndSwap(0, 1, &gVfContextShutdownComplete);
+	OSSynchronizeIO();
+	SYSLOG("ngreen", "V242: VF contexts retired and DMA quiesced before CTB shutdown");
+	return true;
 }
 
 uint64_t vfConsumeMemoryInterrupts()
@@ -2677,13 +2882,15 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		{
 			RouteRequestPlus startRoute[] = {
 				{"__ZN16IntelAccelerator5startEP9IOService", start, this->ostart},
+				{"__ZN16IntelAccelerator4stopEP9IOService", acceleratorStop,
+				 this->oAcceleratorStop},
 			};
 			if (RouteRequestPlus::routeAll(patcher, index, startRoute, address, size)) {
-				SYSLOG("ngreen", "V44: Hooked IntelAccelerator::start");
+				SYSLOG("ngreen", "V242: Hooked IntelAccelerator start/stop lifecycle");
 			} else {
 				PANIC_COND(gVfIdentity != VfIdentity::Physical, "ngreen",
-				           "Cannot admit VF driver without accelerator-start safety route");
-				SYSLOG("ngreen", "V44: IntelAccelerator::start symbol not found; Gen11::start logs unavailable on this build");
+				           "Cannot admit VF driver without accelerator lifecycle routes");
+				SYSLOG("ngreen", "V242: IntelAccelerator lifecycle symbols unavailable on physical path");
 			}
 		}
 
@@ -3519,7 +3726,8 @@ bool Gen11::IGHardwareGlobalPageTableMapRange(void *that,
 	// Native writes PTEs before returning. Validating only in the subsequent
 	// relay sync is too late to protect either the shadow or the MMIO aperture.
 	if (gVfIdentity != VfIdentity::Physical &&
-	    (gVfIdentity != VfIdentity::Virtual || !gVfGGTTReady || gVfProtocolFault ||
+	    (gVfIdentity != VfIdentity::Virtual || !gVfGGTTReady ||
+	     gVfSubmissionStopped || gVfProtocolFault ||
 	     !that || that != gVfGlobalPageTable ||
 	     !NGGgtt::contains(gVfGGTTBase, gVfGGTTSize, range.start, range.length) ||
 	     !NGGgtt::nativePhysicalRange(physical, range.length))) {
@@ -3565,13 +3773,15 @@ void Gen11::IGHardwareGlobalPageTableUnmapRange(void *that,
 	// Refuse to continue teardown on invalid input or a faulted VF; silently
 	// returning would turn a skipped PTE write into a use-after-free risk.
 	PANIC_COND(gVfIdentity != VfIdentity::Physical &&
-		(gVfIdentity != VfIdentity::Virtual || !gVfGGTTReady || gVfProtocolFault ||
+		(gVfIdentity != VfIdentity::Virtual || !gVfGGTTReady ||
+		 (gVfProtocolFault && !gVfDmaQuiesced) ||
 		 !that || that != gVfGlobalPageTable ||
 		 !NGGgtt::contains(gVfGGTTBase, gVfGGTTSize, range.start, range.length)),
 		"ngreen", "Cannot safely complete VF GGTT unmap; refusing DMA backing release");
 	const auto invalidation = NGGgtt::unmapInvalidation(
 		gVfCtbEverEnabled != 0, gVfCtbEnabled != 0,
-		gVfCtbStopped != 0, gVfProtocolFault != 0);
+		gVfCtbStopped != 0, gVfProtocolFault != 0,
+		gVfDmaQuiesced != 0);
 	PANIC_COND(gVfIdentity == VfIdentity::Virtual &&
 	           invalidation == NGGgtt::TlbInvalidation::Unsafe,
 		"ngreen", "VF GGTT unmap started without a usable TLB transport");
@@ -3599,7 +3809,8 @@ bool Gen11::IGHardwareGlobalPageTableMapRangeDummy(void *that,
                                                    uint64_t flags)
 {
 	if (gVfIdentity != VfIdentity::Physical &&
-	    (gVfIdentity != VfIdentity::Virtual || !gVfGGTTReady || gVfProtocolFault ||
+	    (gVfIdentity != VfIdentity::Virtual || !gVfGGTTReady ||
+	     gVfSubmissionStopped || gVfProtocolFault ||
 	     !that || that != gVfGlobalPageTable ||
 	     !NGGgtt::contains(gVfGGTTBase, gVfGGTTSize, range.start, range.length))) {
 		vfMarkProtocolFault("invalid VF dummy GGTT range or transport state");
@@ -6963,6 +7174,20 @@ unsigned long Gen11::start(void *that,void  *param_1)
 	return ret;
 }
 
+void Gen11::acceleratorStop(void *that, void *provider)
+{
+	// Mark final service teardown before Apple's stop sequence. Its initial
+	// finishAllStamps call remains free to submit/drain work; stopGraphicsEngine
+	// is the later boundary where the VF operation gate is closed and every GuC
+	// context is retired while CTB and memory IRQ delivery are still available.
+	if (gVfIdentity == VfIdentity::Virtual) {
+		OSCompareAndSwap(0, 1, &gVfDeviceStopping);
+		OSSynchronizeIO();
+		SYSLOG("ngreen", "V242: VF accelerator stop requested; deferring quiescence until post-stamp engine stop");
+	}
+	FunctionCast(acceleratorStop, callback->oAcceleratorStop)(that, provider);
+}
+
 IOReturn Gen11::wrapPavpSessionCallback( void *intelAccelerator, int32_t sessionCommand, uint32_t sessionAppId, uint32_t *a4, bool flag) {
 
 	//void* pPavpContext = *getMember<void**>(intelAccelerator, 0x1278);
@@ -7676,7 +7901,7 @@ unsigned long Gen11::startGraphicsEngine(void *that)
 {
 	if (gVfGGTTReady) {
 		SYSLOG("ngreen", "V236: VF engine start is PF/GuC-owned; bypassing legacy ring start");
-		return kIOReturnSuccess;
+		return 1;
 	}
 
 	static int startCount = 0;
@@ -7776,8 +8001,14 @@ void Gen11::applyPreStopEngineWorkarounds(int callCount)
 unsigned long Gen11::stopGraphicsEngine(void *that)
 {
 	if (gVfGGTTReady) {
-		SYSLOG("ngreen", "V236: VF engine stop is PF/GuC-owned; bypassing legacy ring stop");
-		return kIOReturnSuccess;
+		if (gVfDeviceStopping) {
+			PANIC_COND(!vfQuiesceDeviceForShutdown(gVfHardwareGuc), "ngreen",
+				"Cannot stop VF accelerator before every GuC context and DMA mapping is quiesced");
+			SYSLOG("ngreen", "V242: VF final engine stop completed through GuC context retirement");
+		} else {
+			SYSLOG("ngreen", "V236: VF runtime engine stop is PF/GuC-owned; bypassing legacy ring stop");
+		}
+		return 1;
 	}
 
 	static int   v63ResetCount            = 0;
@@ -9333,11 +9564,16 @@ bool Gen11::vfMmioHostToGuCAction(void *that, const uint32_t *request,
 		}
 		bool ok = true;
 		if (request[2] == 0U) {
+			// GuC free can be reached through partial-init unwind without the
+			// accelerator stop wrapper. Establish the context/DMA boundary here as
+			// an idempotent last chance, while CTB and IRQ consumers are still live.
+			const bool dmaQuiesced = vfQuiesceDeviceForShutdown(that);
 			// Stop ordinary producers first, but keep G2H/IRQ consumers alive long
 			// enough to retire already-published MODE_DONE/DEREGISTER_DONE/TLB_DONE
 			// replies. The final H2G lock check seals the transport only after the
 			// ring is empty and all reserved reply credits have returned.
-			const bool producersStopped = vfStopSubmissionAndSealCtb(that);
+			const bool producersStopped = dmaQuiesced &&
+				vfStopSubmissionAndSealCtb(that);
 
 			// Once no reply is still required, mask future engine memory IRQs.
 			// This is still not proof that GuC/device DMA has stopped touching the
@@ -9367,8 +9603,8 @@ bool Gen11::vfMmioHostToGuCAction(void *that, const uint32_t *request,
 				(reply[0] & 0x0FFFFFFFU) == 0;
 			gVfCtbDisableConfirmed = disabled;
 			ok = producersStopped && irqDrained && disabled;
-			SYSLOG("ngreen", "V224: disabled VF CTB transport ret=%d producers=%d irqDrained=%d reply=0x%08x",
-			       disabled, producersStopped, irqDrained, reply[0]);
+			SYSLOG("ngreen", "V224: disabled VF CTB transport ret=%d dma=%d producers=%d irqDrained=%d reply=0x%08x",
+			       disabled, dmaQuiesced, producersStopped, irqDrained, reply[0]);
 			if (!disabled)
 				vfMarkProtocolFault("GuC CTB transport disable failure");
 		} else {
@@ -9392,7 +9628,9 @@ bool Gen11::vfMmioHostToGuCAction(void *that, const uint32_t *request,
 			// device-side shutdown has a verified completion boundary.
 			gVfMemIrqConfigured = false;
 			gVfCtbDisableConfirmed = false;
-			vfMarkProtocolFault("CTB stopped; device DMA quiescence unproven; backing quarantined");
+			PANIC_COND(!gVfDmaQuiesced, "ngreen",
+				"CTB stopped without a completed VF DMA-quiescence boundary");
+			SYSLOG("ngreen", "V242: CTB stopped after context/DMA quiescence; shared memory-IRQ backing remains quarantined");
 		}
 		return ok;
 	}
@@ -9500,7 +9738,7 @@ private:
 // restore; subsequent GPU saves recreate it. Never rewrite it on each submit.
 static bool vfPrepareContextMemoryIrq(OSObject *backing, mach_vm_address_t getter) {
 	if (!backing || !getter || !gVfMemIrqConfigured || !gVfCtbEnabled ||
-	    gVfCtbStopped || gVfProtocolFault ||
+	    gVfSubmissionStopped || gVfCtbStopped || gVfProtocolFault ||
 	    getMember<uint64_t>(backing, kVfMappedBufferLengthOffset) <
 	        kVfContextMinimumImageBytes)
 		return false;
@@ -9529,6 +9767,9 @@ bool Gen11::vfAttachContextDesc(void *that, const uint32_t *descriptor) {
 		return FunctionCast(vfAttachContextDesc,
 		                    callback->oVfAttachContextDesc)(that, descriptor);
 	}
+	VfContextOperationGuard operationGuard;
+	if (!operationGuard)
+		return false;
 	if (gVfIdentity != VfIdentity::Virtual || !gVfGGTTReady ||
 	    gVfSubmissionStopped || gVfProtocolFault || !that || !descriptor ||
 	    !callback->vfSharedMappedBufferGetVirtualAddress)
@@ -9689,6 +9930,10 @@ bool Gen11::vfAttachContextDesc(void *that, const uint32_t *descriptor) {
 			(void)vfSendCtbFastAction(that, deregister, arrsize(deregister), transportFence);
 			(void)vfWaitForContextState(that, gucId, kVfGucContextTombstone);
 		}
+		interruptState = IOSimpleLockLockDisableInterrupt(gVfContextLock);
+		if (gVfContexts[gucId].state == kVfGucContextTombstone)
+			gVfContexts[gucId].refCount = 0;
+		IOSimpleLockUnlockEnableInterrupt(gVfContextLock, interruptState);
 		FunctionCast(vfDetachContextDesc,
 		             callback->oVfDetachContextDesc)(that, descriptor);
 		vfReleaseRetiredContextBacking(gucId);
@@ -9708,10 +9953,14 @@ void Gen11::vfDetachContextDesc(void *that, const uint32_t *descriptor) {
 		             callback->oVfDetachContextDesc)(that, descriptor);
 		return;
 	}
+	VfContextOperationGuard operationGuard;
+	const bool postShutdown = !operationGuard;
 	if (!that || !descriptor || !gVfGGTTReady || !gVfContextLock || !gVfContexts) {
 		vfMarkProtocolFault("VF detach without valid context bookkeeping");
 		return;
 	}
+	PANIC_COND(postShutdown && !vfWaitForContextShutdown(that), "ngreen",
+		"VF context detach raced an incomplete device shutdown");
 	// Native detach indexes its private pool before its releaseContextId call.
 	// A void teardown cannot safely skip that bookkeeping and let DMA backing
 	// disappear, so fail-stop instead of returning on a corrupted pool snapshot.
@@ -9722,6 +9971,36 @@ void Gen11::vfDetachContextDesc(void *that, const uint32_t *descriptor) {
 	const auto descriptorValue = NGContextDescriptor::read(descriptor);
 	const uint32_t descriptorLo = descriptorValue.low;
 	const uint32_t lrcaPage = descriptorLo & 0xFFFFF000U;
+	if (postShutdown) {
+		// Firmware ownership was retired by the shutdown sweep before CTB was
+		// sealed. Late Apple object destruction therefore performs only native
+		// proxy bookkeeping and releases our pin on the final native reference;
+		// it must never attempt another H2G request through a stopped transport.
+		int32_t shutdownSlot = -1;
+		bool finalReference = false;
+		bool invalidShutdownRecord = false;
+		const IOInterruptState shutdownState =
+			IOSimpleLockLockDisableInterrupt(gVfContextLock);
+		shutdownSlot = vfFindContextLocked(lrcaPage);
+		if (shutdownSlot >= 0) {
+			auto &entry = gVfContexts[shutdownSlot];
+			invalidShutdownRecord =
+				entry.state != kVfGucContextTombstone || entry.refCount == 0;
+			if (!invalidShutdownRecord) {
+				entry.refCount--;
+				finalReference = entry.refCount == 0;
+			}
+		}
+		IOSimpleLockUnlockEnableInterrupt(gVfContextLock, shutdownState);
+		PANIC_COND(shutdownSlot < 0 || invalidShutdownRecord, "ngreen",
+			"Late VF detach has no safely quiesced context record");
+		FunctionCast(vfDetachContextDesc,
+		             callback->oVfDetachContextDesc)(that, descriptor);
+		if (finalReference)
+			vfReleaseRetiredContextBacking(
+				static_cast<uint16_t>(shutdownSlot));
+		return;
+	}
 	int32_t slot = -1;
 	VfGucContextState state = kVfGucContextEmpty;
 	bool issueDisable = false;
@@ -9871,6 +10150,9 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 		                                                 channelId, ringSequence,
 		                                                 ringTail);
 	}
+	VfContextOperationGuard operationGuard;
+	if (!operationGuard)
+		return false;
 	if (!that || !gVfGGTTReady || !descriptor || !gVfContextLock || !gVfContexts ||
 	    !callback->vfSharedMappedBufferGetVirtualAddress)
 		return false;
@@ -10384,8 +10666,9 @@ bool Gen11::vfCtbGucToHostAction(void *that, uint32_t *message) {
 				}
 			} else if (entry.state == kVfGucContextPendingDeregister) {
 				// Leave LRCA/backing associated until the retirement owner has
-				// also finished the native detach; attach must still wait.
-				entry.refCount = 0;
+				// also finished every native detach; attach must still wait. Normal
+				// final detach already set refCount to zero, while the device-wide
+				// shutdown sweep deliberately preserves outstanding native owners.
 				entry.engineClass = 0;
 				entry.engineInstance = 0;
 				entry.enablePending = false;

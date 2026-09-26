@@ -23,10 +23,12 @@ int main() {
     for (unsigned ever = 0; ever < 2; ++ever)
     for (unsigned enabled = 0; enabled < 2; ++enabled)
     for (unsigned stopped = 0; stopped < 2; ++stopped)
-    for (unsigned faulted = 0; faulted < 2; ++faulted) {
+    for (unsigned faulted = 0; faulted < 2; ++faulted)
+    for (unsigned quiesced = 0; quiesced < 2; ++quiesced) {
         const auto actual = NGGgtt::unmapInvalidation(
-            ever != 0, enabled != 0, stopped != 0, faulted != 0);
-        const auto expected = !ever ? Invalidation::NotRequired :
+            ever != 0, enabled != 0, stopped != 0, faulted != 0,
+            quiesced != 0);
+        const auto expected = (quiesced || !ever) ? Invalidation::NotRequired :
             (enabled && !stopped && !faulted ? Invalidation::Required :
                                                Invalidation::Unsafe);
         assert(actual == expected);

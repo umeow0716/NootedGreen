@@ -1452,6 +1452,7 @@ private:
 	
 	// ── Accelerator start & forcewake ──
 	static unsigned long start(void *that,void  *param_1);   // IntelAccelerator::start wrapper
+	static void acceleratorStop(void *that, void *provider); // final VF DMA-quiescence intent
 	static void v54IrqWatchdog(thread_call_param_t, thread_call_param_t);  // V54: IRQ watchdog
 	static void v60GpuHealthMonitor(thread_call_param_t, thread_call_param_t);  // V60: active ERROR_GEN6 suppression + monitor
 	static void v71EmrEnforcer(thread_call_param_t, thread_call_param_t);  // V71: high-freq EMR mask + ERROR clear (50ms)
@@ -1460,6 +1461,7 @@ private:
 	static IOBufferMemoryDescriptor *v116DummyBuf;  // V116: safe dummy page for GGTT[0] remap
 	static uint64_t v116DummyPhys;                  // V116: physical address of dummy page
 	mach_vm_address_t ostart {};
+	mach_vm_address_t oAcceleratorStop {};
 
 
 	static void *createUserGPUTask(void *that);  // V132: fallback when per-user task creation returns null on spoofed RPL

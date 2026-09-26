@@ -80,6 +80,13 @@ else
     failed=1
 fi
 if "$compiler" -std=c++14 -O1 -g -fsanitize=address,undefined \
+    tools/vf_context_shutdown_test.cpp -o "$task_output/vf-context-shutdown-test" && \
+    "$task_output/vf-context-shutdown-test"; then
+    printf 'PASS offline VF context shutdown model\n'
+else
+    failed=1
+fi
+if "$compiler" -std=c++14 -O1 -g -fsanitize=address,undefined \
     tools/phy_translation_test.cpp -o "$task_output/phy-translation-test" && \
     "$task_output/phy-translation-test"; then
     printf 'PASS offline PHY translation tests\n'
