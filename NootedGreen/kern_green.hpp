@@ -50,7 +50,6 @@ class EXPORT PRODUCT_NAME : public IOService {
 
 class NGreen {
     friend class Gen11;
-	friend class Genx;
 	friend class DYLDPatches;
 
     public:

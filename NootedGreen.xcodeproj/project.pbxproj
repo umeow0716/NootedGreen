@@ -12,8 +12,6 @@
 		2E1CC3E32BA5DBD9004EC8F6 /* DisplayMergeNub.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 2E1CC3E12BA5DBD9004EC8F6 /* DisplayMergeNub.cpp */; };
 		2E315A612BC6EA4D008411AA /* DYLDPatches.hpp in Headers */ = {isa = PBXBuildFile; fileRef = 2E315A5F2BC6EA4D008411AA /* DYLDPatches.hpp */; };
 		2E315A622BC6EA4D008411AA /* DYLDPatches.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 2E315A602BC6EA4D008411AA /* DYLDPatches.cpp */; };
-		2EA343FE2C93C07700160F43 /* kern_genx.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 2EA343FC2C93C07700160F43 /* kern_genx.cpp */; };
-		2EA343FF2C93C07700160F43 /* kern_genx.hpp in Headers */ = {isa = PBXBuildFile; fileRef = 2EA343FD2C93C07700160F43 /* kern_genx.hpp */; };
 		2EE18C1A2CE558A300E96D38 /* Firmware.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 2EE18C182CE558A300E96D38 /* Firmware.cpp */; };
 		2EF1AD002CE558A400000001 /* FirmwareADLP.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 2EF1AD012CE558A400000001 /* FirmwareADLP.cpp */; };
 		2EE18C1B2CE558A300E96D38 /* Firmware.hpp in Headers */ = {isa = PBXBuildFile; fileRef = 2EE18C192CE558A300E96D38 /* Firmware.hpp */; };			A1B2C3D4E5F601020304A001 /* IntelDPLinkTraining.cpp in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F601020304B001 /* IntelDPLinkTraining.cpp */; };
@@ -48,8 +46,6 @@
 		2E1CC3E12BA5DBD9004EC8F6 /* DisplayMergeNub.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = DisplayMergeNub.cpp; sourceTree = "<group>"; };
 		2E315A5F2BC6EA4D008411AA /* DYLDPatches.hpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.h; path = DYLDPatches.hpp; sourceTree = "<group>"; };
 		2E315A602BC6EA4D008411AA /* DYLDPatches.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = DYLDPatches.cpp; sourceTree = "<group>"; };
-		2EA343FC2C93C07700160F43 /* kern_genx.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = kern_genx.cpp; sourceTree = "<group>"; };
-		2EA343FD2C93C07700160F43 /* kern_genx.hpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.h; path = kern_genx.hpp; sourceTree = "<group>"; };
 		2EE18C182CE558A300E96D38 /* Firmware.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = Firmware.cpp; sourceTree = "<group>"; };
 		2EF1AD012CE558A400000001 /* FirmwareADLP.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = FirmwareADLP.cpp; sourceTree = "<group>"; };
 		2EE18C192CE558A300E96D38 /* Firmware.hpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.h; path = Firmware.hpp; sourceTree = "<group>"; };			A1B2C3D4E5F601020304B001 /* IntelDPLinkTraining.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = IntelDPLinkTraining.cpp; sourceTree = "<group>"; };
@@ -121,8 +117,6 @@
 				2E1CC3E02BA5DBD9004EC8F6 /* DisplayMergeNub.h */,
 				F0AF08B92A0F373F00B63C2B /* kern_gen11.cpp */,
 				F0AF08BA2A0F373F00B63C2B /* kern_gen11.hpp */,
-				2EA343FC2C93C07700160F43 /* kern_genx.cpp */,
-				2EA343FD2C93C07700160F43 /* kern_genx.hpp */,
 				F0A4BE572A1996E40031D569 /* kern_model.hpp */,
 				F009B7A229E4EEBA00786AFF /* kern_green.cpp */,
 				F067C20329D82E57004BB52E /* kern_green.hpp */,
@@ -190,7 +184,6 @@
 				2E315A612BC6EA4D008411AA /* DYLDPatches.hpp in Headers */,
 				2E1CC3E22BA5DBD9004EC8F6 /* DisplayMergeNub.h in Headers */,
 				F0A4BE592A1996E40031D569 /* kern_model.hpp in Headers */,
-				2EA343FF2C93C07700160F43 /* kern_genx.hpp in Headers */,
 				F0BB9E562A57A0340081F5FA /* kern_patcherplus.hpp in Headers */,
 				2EE18C1B2CE558A300E96D38 /* Firmware.hpp in Headers */,					A1B2C3D4E5F601020304A002 /* IntelDPLinkTraining.hpp in Headers */,			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -295,7 +288,6 @@
 				F009B7A129E4EE3C00786AFF /* kern_start.cpp in Sources */,
 				F009B7A329E4EEBA00786AFF /* kern_green.cpp in Sources */,
 				F0BB9E552A57A0340081F5FA /* kern_patcherplus.cpp in Sources */,
-				2EA343FE2C93C07700160F43 /* kern_genx.cpp in Sources */,
 				F0AF08BB2A0F373F00B63C2B /* kern_gen11.cpp in Sources */,
 				CE405ED91E4A080700AA0B3D /* plugin_start.cpp in Sources */,
 				2E1CC3E32BA5DBD9004EC8F6 /* DisplayMergeNub.cpp in Sources */,

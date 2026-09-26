@@ -13,7 +13,6 @@
 #include "kern_binary_identity.hpp"
 #include "AppleIntelParams.hpp"
 #include <Headers/kern_api.hpp>
-#include "kern_genx.hpp"
 #include "kern_green.hpp"
 #include "IntelDPLinkTraining.hpp"
 #include <IOKit/IOBufferMemoryDescriptor.h>
@@ -12986,36 +12985,6 @@ void Gen11::logStateInRegistry(void *that,uint param_1)
 int Gen11::getPlatformID()
 {
  return FunctionCast(getPlatformID, callback->ogetPlatformID)( );
-}
-
-uint32_t Gen11::tprobePortMode(void * that)
-{
- return Genx::callback->tprobePortMode(that );
-}
-
-void  Gen11::AppleIntelPlanec1(AppleIntel::AppleIntelPlane *that)
-{
-	Genx::callback->AppleIntelPlanec1(that );
-}
-
-void  Gen11::AppleIntelScalerc1(AppleIntel::AppleIntelScaler *that)
-{
-	Genx::callback->AppleIntelScalerc1(that );
-}
-
-void * Gen11::AppleIntelScalernew(unsigned long param_1)
-{
-	return Genx::callback->AppleIntelScalernew(param_1 );
-}
-
-void * Gen11::AppleIntelPlanenew(unsigned long param_1)
-{
-	return Genx::callback->AppleIntelPlanenew(param_1 );
-}
-
-void Gen11::uupdateDBUF(void *that,uint param_1,uint param_2,bool param_3)
-{
-	Genx::callback->uupdateDBUF(that,param_1,param_2 );
 }
 
 bool inpwell=false;

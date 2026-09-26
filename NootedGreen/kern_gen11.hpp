@@ -1330,7 +1330,6 @@ enum intel_pch {
 //   static method = our wrapper, mach_vm_address_t = saved original pointer.
 // ═══════════════════════════════════════════════════════════════════════════
 class Gen11 {
-	friend class Genx;
 
 private:
 
@@ -1928,12 +1927,6 @@ private:
 	static void * getBlit3DContext(void *that,bool param_1);
 	mach_vm_address_t ogetBlit3DContext {};
 	
-	static void  AppleIntelPlanec1(AppleIntel::AppleIntelPlane *that);
-	static void  AppleIntelScalerc1(AppleIntel::AppleIntelScaler *that);
-	
-	static void * AppleIntelScalernew(unsigned long param_1);
-	mach_vm_address_t oAppleIntelScalernew {};
-	
 	// FB controller start — wraps original, adds registerService() for accelerator matching
 	static bool AppleIntelBaseControllerstart(AppleIntel::AppleIntelBaseController *that, IOService *param_1);
 	mach_vm_address_t oAppleIntelBaseControllerstart {};
@@ -1976,11 +1969,6 @@ private:
 	bool acceleratorPersonalityInjected {false};
 	
 	
-	static void * AppleIntelPlanenew(unsigned long param_1);
-	mach_vm_address_t oAppleIntelPlanenew {};
-	
-	static void uupdateDBUF(void *that,uint param_1,uint param_2,bool param_3);
-		
 	static long getPortByDDI(uint param_1);
 	mach_vm_address_t ogetPortByDDI {};
 
@@ -2071,8 +2059,6 @@ public:
 	static unsigned long long tReadRegister64(void volatile* a, unsigned long b);
 	static uint64_t tgetPMTNow();              // read GT timestamp
 	static bool thwSetupDSBMemory();           // DSB = Display State Buffer
-	static uint32_t tprobePortMode(void * that);
-	
 };
 
 #endif /* kern_gen8_hpp */

@@ -1536,3 +1536,31 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
 - The complete syntax gate, zero-finding analyzer, strict Gen11 ABI warnings
   and all sanitizer protocol models pass in `/tmp/ngreen-static.dZrW0I`. No
   kext was installed and the VM remained off.
+
+### Retired duplicate renamed-ICL handler
+
+- Read `kern_genx.cpp/.hpp` end-to-end and traced every symbol/reference. This
+  handler matched only a custom `/Library/Extensions` binary with bundle ID
+  `com.xxxxx.driver.AppleIntelICLLPGraphicsFramebuffer`; it duplicated the
+  maintained `Gen11` ICL implementation for Apple's real bundle ID. Nothing
+  outside six unreachable Gen11 proxy wrappers depended on its implementation.
+- The path had been present since the initial import and still actively
+  replaced `hwSaveNVRAM()` with a constant-zero stub, suppressed client
+  attribute `0x923` without a documented ABI, routed `ReadRegister32` through
+  a behavior-free trampoline, and applied three old control-flow/platform-ID
+  byte patches without UUID/build admission. Its hundreds of commented
+  experiments and unsolved original pointers were not a defensible alternate
+  PF driver.
+- Removed the registration, dispatch, both sources, Xcode entries and the dead
+  Gen11 proxy wrappers. The Apple-ID ICL and TGL handlers in `kern_gen11` remain
+  available; VF framebuffer probe/start rejection there is unchanged. The
+  obsolete runtime instruction rewriter used only by Genx was removed from
+  `kern_dvmt_patch.hpp`; the exact Linux-derived GMS decoder and its exhaustive
+  256-value oracle test remain active.
+- This deliberately drops compatibility with that unversioned third-party
+  renamed bundle. The code is recoverable from Git history; reintroduction
+  would require an exact binary identity, a documented need for each patch and
+  native sleep/wake validation rather than restoring the unsafe stubs.
+- The complete syntax gate, zero-finding analyzer, strict Gen11 ABI warnings
+  and all sanitizer protocol models pass in `/tmp/ngreen-static.gYkH6h`. No
+  kext was installed and the VM remained off.

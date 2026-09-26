@@ -7,11 +7,11 @@ audit's runtime blockers are open.
 
 ## Scope
 
-At c312229, the tracked source/build/metadata inventory contains 1,305 files:
+At c312229, the tracked source/build/metadata inventory contained 1,305 files:
 
 | Area | Files | Current review boundary |
 | --- | ---: | --- |
-| NootedGreen | 33 | Mixed; details below, not all findings closed |
+| NootedGreen | 31 | Mixed; details below, not all findings closed |
 | tools | 23 | Offline tests/build checks read; older extraction/mapper tools pending |
 | MacKernelSDK | 1,163 | Selected API declarations only; full review pending |
 | Lilu.kext | 39 | Selected headers/upstream patching code; full dependency review pending |
@@ -27,7 +27,8 @@ reduces this snapshot to 1,303. These are inventory counts, not completion
 percentages. Binary libraries, kext executables, firmware instructions and
 external reference trees are not magically reviewed by counting source files.
 The subsequent workqueue-unwind helper and its test add two reviewed source
-files (1,305 under this snapshot's scope); this does not close older coverage.
+files (1,305 under this snapshot's scope). Removing the two obsolete Genx
+sources returns the current count to 1,303; this does not close older coverage.
 
 ## Main project coverage
 
@@ -35,7 +36,7 @@ files (1,305 under this snapshot's scope); this does not close older coverage.
 | --- | --- |
 | kern_gen11.cpp/.hpp | Partial, protocol-focused review plus targeted native disassembly; large physical display/accelerator sections and declarations remain open |
 | kern_green.cpp/.hpp | Read end-to-end; PCI identity/overread, exact GMS decoding, mandatory config-hook admission, BAR0/BAR2 publication, property-result reporting and dead-path cleanup completed; device-removal/power-transition lifetime and hardware-specific property semantics remain open |
-| kern_genx.cpp/.hpp | Read; VF admission/DVMT/PM fixes made; physical behavior and legacy stubs not fully validated |
+| kern_genx.cpp/.hpp (removed) | Read end-to-end; isolated duplicate `com.xxxxx` renamed-ICL handler from the initial import. It contained an active NVRAM-save stub, unversioned control-flow/ID rewrites, a no-op register trampoline and many unreachable wrappers; the maintained Gen11 ICL handler remains |
 | kern_patcherplus.cpp/.hpp | Read and compared with upstream Lilu routing/replacement behavior; every grouped lookup is now preflighted before its first write; low-level write/route rollback and protection restoration remain open |
 | DYLDPatches.cpp/.hpp | Read end-to-end; removed unadmitted CoreDisplay control-flow patches, unreachable CoreLSKD/ICL fallbacks and stale bundle redirection. Remaining mutations are shared-cache composite media-model strings; their necessity and dynamic media behavior remain open |
 | DisplayMergeNub.cpp/.h | Read end-to-end; validates inputs, bounds recursion, copies introduced nested dictionaries and stages the complete provider table before one publication. Actual IOKit behavior and races with unrelated external registry writers remain open |

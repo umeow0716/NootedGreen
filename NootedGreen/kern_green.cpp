@@ -3,7 +3,6 @@
 
 #include "kern_green.hpp"
 #include "kern_gen11.hpp"
-#include "kern_genx.hpp"
 #include "kern_model.hpp"
 #include "DYLDPatches.hpp"
 #include "kern_patcherplus.hpp"
@@ -27,7 +26,6 @@ static KernelPatcher::KextInfo kextIOAcceleratorFamily2 { "com.apple.iokit.IOAcc
 
 NGreen *NGreen::callback = nullptr;
 
-static Genx genx;
 static Gen11 gen11;
 static DYLDPatches dyldpatches;
 
@@ -134,7 +132,6 @@ void NGreen::init() {
 	lilu.onKextLoadForce(&kextAGDP);
 	lilu.onKextLoadForce(&kextIOAcceleratorFamily2);
 	
-	genx.init();
 	gen11.init();
 	dyldpatches.init();
 	
@@ -299,8 +296,6 @@ bool NGreen::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t
 	} else if (kextAGDP.loadIndex == index) {
 		const LookupPatchPlus patch {&kextAGDP, kAGDPBoardIDKeyOriginal, kAGDPBoardIDKeyPatched, 1};
 		SYSLOG_COND(!patch.apply(patcher, address, size), "NGreen", "Failed to apply AGDP board-id patch");
-	} else if (genx.processKext(patcher, index, address, size)) {
-		DBGLOG("ngreen", "Processed Generation x configuration");
 	} else if (gen11.processKext(patcher, index, address, size)) {
 		DBGLOG("ngreen", "Processed Generation 11 configuration");
 	}
