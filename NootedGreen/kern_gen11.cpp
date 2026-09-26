@@ -2468,12 +2468,14 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		return true;
 
 	} else if (kextG11HWT.loadIndex == index || kextG11HWTA.loadIndex == index) {
-		if (!ngPhysicalGpuAccessAllowed()) {
-			PANIC_COND(!NGBinaryIdentity::matchesKextUuid(
-				reinterpret_cast<const uint8_t *>(address), size,
-				NGBinaryIdentity::tglVfPayloadUuid), "ngreen",
-				"Unsupported TGL VF payload ABI; refusing private-layout routes");
-		}
+		// Every route below depends on private Tahoe object offsets, symbol ABIs or
+		// exact instruction sequences. PF ownership does not make an unknown
+		// payload layout safe, so use the same fail-closed identity gate for both
+		// physical and virtual devices.
+		PANIC_COND(!NGBinaryIdentity::matchesKextUuid(
+			reinterpret_cast<const uint8_t *>(address), size,
+			NGBinaryIdentity::tglVfPayloadUuid), "ngreen",
+			"Unsupported TGL accelerator payload ABI; refusing private-layout routes");
 		this->tglHWLoaded = true;
 		auto *activeKext = (kextG11HWTA.loadIndex == index) ? &kextG11HWTA : &kextG11HWT;
 		SYSLOG("ngreen", "init AppleIntelTGLGraphics (HW accelerator)");
@@ -3111,15 +3113,6 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		static const uint8_t r3[] = {
 			0x8b, 0x3e, 0x81, 0xff, 0xee, 0xbe, 0xaf, 0xde, 0x90, 0x90, 0x81, 0xff, 0x86, 0x80, 0x40, 0x9a, 0xeb, 0x2d
 		};
-		// GT tier override: stores GT1 (0x1) instead of GT2 (0x2) at IGAccelDevice+0x1120.
-		// Disabled – 0x9A49 is GT2 so the default path (which writes 0x2) is correct.
-		static const uint8_t f3a[] = {//gt1
-			0x41, 0xc7, 0x86, 0x20, 0x11, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0xe9, 0xda, 0xfc, 0xff, 0xff
-		};
-		static const uint8_t r3a[] = {
-			0x41, 0xc7, 0x86, 0x20, 0x11, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0xe9, 0xda, 0xfc, 0xff, 0xff
-		};
-		
 		// L3BankCount bypass (verified @ 0x28776 in LE binary)
 		// Original: topology-gated conditionals (cmp slices/eu/threads) → only set L3BankCount=8 for a specific config.
 		// Patch:    NOP all conditional branches → always store L3BankCount=8 @ IGAccelDevice+0x1164.
@@ -3155,16 +3148,6 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			0x8b, 0x5d, 0xd0, 0xbe, 0x08, 0x00, 0x00, 0x00, 0x90, 0x41, 0x89, 0xb7, 0x58, 0x11, 0x00, 0x00
 		};
 		
-		// GPU caps override (disabled) – would change MaxSlices 6→5, SARation 2→1, MaxEU/SS 6→5.
-		// Leave disabled unless acceleration shows wrong Metal tier/feature set.
-		static const uint8_t f4[] = {// CAPS
-			0xc7, 0x83, 0x48, 0x11, 0x00, 0x00, 0x06, 0x00, 0x00, 0x00, 0x8b, 0x83, 0x58, 0x11, 0x00, 0x00, 0xd1, 0xe8, 0xba, 0x02, 0x00, 0x00, 0x00, 0xbe, 0x06, 0x00, 0x00, 0x00
-		};
-		static const uint8_t r4[] = {
-			0xc7, 0x83, 0x48, 0x11, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00, 0x8b, 0x83, 0x58, 0x11, 0x00, 0x00, 0x90, 0x90, 0xba, 0x01, 0x00, 0x00, 0x00, 0xbe, 0x05, 0x00, 0x00, 0x00
-		};
-
-
 		// V139: RPL-only mitigation for GP faults inside blit3d_submit_rectlist.
 		// Some command-buffer pointers on spoofed paths are 8-byte aligned; Apple emits
 		// aligned SSE stores (movaps [r9+...], xmmN), which faults on unaligned targets.
@@ -3205,44 +3188,6 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		static const uint8_t r_v139_movaps_40[] = {
 			0x41, 0x0f, 0x11, 0x59, 0x40
 		};
-		static const uint8_t f_v141_movapd_00[] = {
-			0x66, 0x41, 0x0f, 0x29, 0x09
-		};
-		static const uint8_t r_v141_movapd_00[] = {
-			0x66, 0x41, 0x0f, 0x11, 0x09
-		};
-
-		// V140: Cover the switch cases that use contextual aligned stores at [r9] / [r9+20].
-		// These are the remaining sites after V139's generic signatures.
-		static const uint8_t f_v140_default_store00[] = {
-			0x0f, 0x28, 0xcb, 0x66, 0x0f, 0x15, 0xcc, 0x41, 0x0f, 0x29, 0x09,
-			0x0f, 0x28, 0xcb, 0x0f, 0xc6, 0xcc, 0xcc
-		};
-		static const uint8_t r_v140_default_store00[] = {
-			0x0f, 0x28, 0xcb, 0x66, 0x0f, 0x15, 0xcc, 0x41, 0x0f, 0x11, 0x09,
-			0x0f, 0x28, 0xcb, 0x0f, 0xc6, 0xcc, 0xcc
-		};
-		static const uint8_t f_v140_default_store20[] = {
-			0x0f, 0xc6, 0xcc, 0xcc, 0x41, 0x0f, 0x29, 0x49, 0x20, 0x0f, 0x16, 0xdc
-		};
-		static const uint8_t r_v140_default_store20[] = {
-			0x0f, 0xc6, 0xcc, 0xcc, 0x41, 0x0f, 0x11, 0x49, 0x20, 0x0f, 0x16, 0xdc
-		};
-		static const uint8_t f_v140_case4_store00[] = {
-			0x0f, 0x28, 0xcc, 0xf2, 0x0f, 0x12, 0xcb, 0x66, 0x41, 0x0f, 0x29, 0x09,
-			0x0f, 0x28, 0xcb, 0x0f, 0xc6, 0xcc, 0xc6
-		};
-		static const uint8_t r_v140_case4_store00[] = {
-			0x0f, 0x28, 0xcc, 0xf2, 0x0f, 0x12, 0xcb, 0x66, 0x41, 0x0f, 0x11, 0x09,
-			0x0f, 0x28, 0xcb, 0x0f, 0xc6, 0xcc, 0xc6
-		};
-		static const uint8_t f_v140_case4_store20[] = {
-			0x0f, 0xc6, 0xcc, 0xc6, 0x41, 0x0f, 0x29, 0x49, 0x20, 0x0f, 0xc6, 0xdc, 0x4e
-		};
-		static const uint8_t r_v140_case4_store20[] = {
-			0x0f, 0xc6, 0xcc, 0xc6, 0x41, 0x0f, 0x11, 0x49, 0x20, 0x0f, 0xc6, 0xdc, 0x4e
-		};
-
 		{
 			// V52: Split patches into always-apply and RPL-only groups.
 			// Real TGL reads topology from fuses correctly; RPL must hardcode
@@ -3259,183 +3204,38 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				LookupPatchPlus const patchesRPL[] = {
 					{activeKext, f3b, r3b, arrsize(f3b),	1},      // L3BankCount=8
 					{activeKext, f3bb, r3bb, arrsize(f3bb),	1},    // MaxEU/SS=8
-					{activeKext, f3bbb, r3bbb, arrsize(f3bbb),	1},// NumSubSlices=12
+					{activeKext, f3bbb, r3bbb, arrsize(f3bbb),	1},// NumSubSlices=8
 				};
 				PANIC_COND(!LookupPatchPlus::applyAll(patcher, patchesRPL, address, size), "ngreen",
 					"kextG11HWT Failed to apply RPL-specific patches!");
 
 
-				// Optional SSE unaligned-store mitigation for blit3d_submit_rectlist.
-				LookupPatchPlus const patchV139Store10 {
-					activeKext,
-					f_v139_movaps_10,
-					r_v139_movaps_10,
-					arrsize(f_v139_movaps_10),
-					1
+				// Every matching store in the pinned blit3d_submit_rectlist body is
+				// converted as one mandatory group. A single count patches all matches
+				// against the original image; sequential skip-based patches changed the
+				// match set after every write and therefore targeted the wrong sites.
+				LookupPatchPlus const unalignedStorePatches[] = {
+					{activeKext, f_v139_movaps_10, r_v139_movaps_10,
+					 arrsize(f_v139_movaps_10), 1},
+					{activeKext, f_v139_movaps_30, r_v139_movaps_30,
+					 arrsize(f_v139_movaps_30), 1},
+					{activeKext, f_v139_movaps_50, r_v139_movaps_50,
+					 arrsize(f_v139_movaps_50), 1},
+					{activeKext, f_v139_movaps_00, r_v139_movaps_00,
+					 arrsize(f_v139_movaps_00), 6},
+					{activeKext, f_v139_movaps_20, r_v139_movaps_20,
+					 arrsize(f_v139_movaps_20), 4},
+					{activeKext, f_v139_movaps_40, r_v139_movaps_40,
+					 arrsize(f_v139_movaps_40), 1},
 				};
-				LookupPatchPlus const patchV139Store30 {
-					activeKext,
-					f_v139_movaps_30,
-					r_v139_movaps_30,
-					arrsize(f_v139_movaps_30),
-					1
-				};
-				LookupPatchPlus const patchV139Store50 {
-					activeKext,
-					f_v139_movaps_50,
-					r_v139_movaps_50,
-					arrsize(f_v139_movaps_50),
-					1
-				};
-				LookupPatchPlus const patchV139Store00 {
-					activeKext,
-					f_v139_movaps_00,
-					r_v139_movaps_00,
-					arrsize(f_v139_movaps_00),
-					1
-				};
-				LookupPatchPlus const patchV139Store00Skip1 {
-					activeKext,
-					f_v139_movaps_00,
-					r_v139_movaps_00,
-					arrsize(f_v139_movaps_00),
-					1,
-					1
-				};
-				LookupPatchPlus const patchV139Store00Skip2 {
-					activeKext,
-					f_v139_movaps_00,
-					r_v139_movaps_00,
-					arrsize(f_v139_movaps_00),
-					1,
-					2
-				};
-				LookupPatchPlus const patchV139Store00Skip3 {
-					activeKext,
-					f_v139_movaps_00,
-					r_v139_movaps_00,
-					arrsize(f_v139_movaps_00),
-					1,
-					3
-				};
-				LookupPatchPlus const patchV139Store00Skip4 {
-					activeKext,
-					f_v139_movaps_00,
-					r_v139_movaps_00,
-					arrsize(f_v139_movaps_00),
-					1,
-					4
-				};
-				LookupPatchPlus const patchV139Store00Skip5 {
-					activeKext,
-					f_v139_movaps_00,
-					r_v139_movaps_00,
-					arrsize(f_v139_movaps_00),
-					1,
-					5
-				};
-				LookupPatchPlus const patchV139Store20 {
-					activeKext,
-					f_v139_movaps_20,
-					r_v139_movaps_20,
-					arrsize(f_v139_movaps_20),
-					1
-				};
-				LookupPatchPlus const patchV139Store20Skip1 {
-					activeKext,
-					f_v139_movaps_20,
-					r_v139_movaps_20,
-					arrsize(f_v139_movaps_20),
-					1,
-					1
-				};
-				LookupPatchPlus const patchV139Store20Skip2 {
-					activeKext,
-					f_v139_movaps_20,
-					r_v139_movaps_20,
-					arrsize(f_v139_movaps_20),
-					1,
-					2
-				};
-				LookupPatchPlus const patchV139Store20Skip3 {
-					activeKext,
-					f_v139_movaps_20,
-					r_v139_movaps_20,
-					arrsize(f_v139_movaps_20),
-					1,
-					3
-				};
-				LookupPatchPlus const patchV139Store40 {
-					activeKext,
-					f_v139_movaps_40,
-					r_v139_movaps_40,
-					arrsize(f_v139_movaps_40),
-					1
-				};
-				LookupPatchPlus const patchV141StoreMovapd00 {
-					activeKext,
-					f_v141_movapd_00,
-					r_v141_movapd_00,
-					arrsize(f_v141_movapd_00),
-					1
-				};
-				LookupPatchPlus const patchV140DefaultStore00 {
-					activeKext,
-					f_v140_default_store00,
-					r_v140_default_store00,
-					arrsize(f_v140_default_store00),
-					1
-				};
-				LookupPatchPlus const patchV140DefaultStore20 {
-					activeKext,
-					f_v140_default_store20,
-					r_v140_default_store20,
-					arrsize(f_v140_default_store20),
-					1
-				};
-				LookupPatchPlus const patchV140Case4Store00 {
-					activeKext,
-					f_v140_case4_store00,
-					r_v140_case4_store00,
-					arrsize(f_v140_case4_store00),
-					1
-				};
-				LookupPatchPlus const patchV140Case4Store20 {
-					activeKext,
-					f_v140_case4_store20,
-					r_v140_case4_store20,
-					arrsize(f_v140_case4_store20),
-					1
-				};
-				int v139Applied = 0;
-				v139Applied += patchV139Store10.apply(patcher, address, size) ? 1 : 0;
-				v139Applied += patchV139Store30.apply(patcher, address, size) ? 1 : 0;
-				v139Applied += patchV139Store50.apply(patcher, address, size) ? 1 : 0;
-				v139Applied += patchV139Store00.apply(patcher, address, size) ? 1 : 0;
-				v139Applied += patchV139Store00Skip1.apply(patcher, address, size) ? 1 : 0;
-				v139Applied += patchV139Store00Skip2.apply(patcher, address, size) ? 1 : 0;
-				v139Applied += patchV139Store00Skip3.apply(patcher, address, size) ? 1 : 0;
-				v139Applied += patchV139Store00Skip4.apply(patcher, address, size) ? 1 : 0;
-				v139Applied += patchV139Store00Skip5.apply(patcher, address, size) ? 1 : 0;
-				v139Applied += patchV139Store20.apply(patcher, address, size) ? 1 : 0;
-				v139Applied += patchV139Store20Skip1.apply(patcher, address, size) ? 1 : 0;
-				v139Applied += patchV139Store20Skip2.apply(patcher, address, size) ? 1 : 0;
-				v139Applied += patchV139Store20Skip3.apply(patcher, address, size) ? 1 : 0;
-				v139Applied += patchV139Store40.apply(patcher, address, size) ? 1 : 0;
-				SYSLOG("ngreen", "V139: blit3d unaligned-store mitigation applied %d/12 signatures", v139Applied);
-				int v141Applied = 0;
-				v141Applied += patchV141StoreMovapd00.apply(patcher, address, size) ? 1 : 0;
-				SYSLOG("ngreen", "V141: blit3d movapd mitigation applied %d/1 signatures", v141Applied);
-				int v140Applied = 0;
-				v140Applied += patchV140DefaultStore00.apply(patcher, address, size) ? 1 : 0;
-				v140Applied += patchV140DefaultStore20.apply(patcher, address, size) ? 1 : 0;
-				v140Applied += patchV140Case4Store00.apply(patcher, address, size) ? 1 : 0;
-				v140Applied += patchV140Case4Store20.apply(patcher, address, size) ? 1 : 0;
-				SYSLOG("ngreen", "V140: contextual blit3d store mitigation applied %d/4 signatures", v140Applied);
+				PANIC_COND(!LookupPatchPlus::applyAll(patcher, unalignedStorePatches,
+				                                      address, size),
+				           "ngreen", "Failed to apply complete unaligned-store patch set");
+				SYSLOG("ngreen", "V243: converted all 14 pinned blit3d aligned-store sites");
 
-				SYSLOG("ngreen", "V52: Applied RPL-specific patches (topology hardcode + BCS bypass)");
+				SYSLOG("ngreen", "V52: Applied RPL-specific topology and unaligned-store patches");
 			} else {
-				SYSLOG("ngreen", "V52: Real TGL — skipping topology hardcodes and BCS bypass");
+				SYSLOG("ngreen", "V52: Real TGL — skipping RPL compatibility patches");
 			}
 		}
 
@@ -11916,7 +11716,9 @@ void Gen11::forceWake(void *that, bool set, uint32_t dom, uint8_t ctx) {
 	static bool hangcheckDumped = false;
 	fwCallCount++;
 	
-	if (!hangcheckDumped && fwCallCount == 15) {
+	// The legacy dump temporarily remaps GGTT[0] and is invasive. Never run it
+	// in the production path merely because a fixed call count was reached.
+	if (isExperimentalMonitorEnabled() && !hangcheckDumped && fwCallCount == 15) {
 		hangcheckDumped = true;
 		SYSLOG("ngreen", "=== HANGCHECK: GPU state dump (fwCall=%d) ===", fwCallCount);
 		

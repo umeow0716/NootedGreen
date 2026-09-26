@@ -1653,3 +1653,31 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   to the pinned payload UUID; dynamic allocation, GuC completion and renderer
   behavior remain to be validated. The VM remains off until the remaining
   active-route semantic review is cleared.
+
+### Accelerator payload identity and aligned-store patch determinism
+
+- The TGL accelerator branch installs private-object routes and exact byte
+  patches regardless of PF/VF ownership. Previously only a VF required the
+  pinned Tahoe payload UUID; a physical GPU could apply the same offsets and
+  instruction rewrites to an unknown binary. PF and VF now share the same
+  fail-closed UUID admission. Supporting another OS payload requires adding
+  independently verified ABI evidence, not relaxing this gate.
+- Direct search of the pinned Mach-O found all aligned stores under review
+  inside `blit3d_submit_rectlist` (`0x334b0..0x35960`): three contextual sites,
+  six `[r9]`, four `[r9+0x20]`, and one `[r9+0x40]`, for 14 total. The former
+  code applied one match, mutated the image, then used increasing skip counts
+  against the shrinking match set. It therefore selected non-consecutive
+  sites; overlapping V140/V141 patterns could no longer match after the generic
+  opcode had changed, while their optional failures were only logged.
+- The six non-overlapping signatures are now preflighted together against the
+  original image with exact counts `1/1/1/6/4/1`, then applied as one mandatory
+  group. Missing/version-mismatched sites stop payload admission. Redundant
+  contextual/movapd declarations and inactive GT1/capability experiments were
+  removed. This preserves the intended aligned-to-unaligned SSE store semantic;
+  it is not proof that generated GPU commands execute correctly.
+- The physical force-wake wrapper's legacy call-15 dump can temporarily remap
+  `GGTT[0]` while collecting diagnostics. It is now unreachable in the default
+  production path and requires the explicit experimental monitor opt-in. Full
+  removal or a non-invasive snapshot remains part of the continuing PF audit.
+- Full syntax, zero-finding analyzer, strict ABI warnings and all sanitizer
+  models pass in `/tmp/ngreen-static.zeJcpr`. No VM or hardware test was run.
