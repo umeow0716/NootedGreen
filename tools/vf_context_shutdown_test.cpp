@@ -23,6 +23,37 @@ int main() {
                    static_cast<VfGucContextState>(state)) == expected[state]);
     }
 
+    // Exhaust every lifecycle state, pending-token combination, and the two
+    // defined runnable payloads plus an invalid value.  Enable completions have
+    // ordering priority when both tokens exist; a disable cannot overtake one.
+    for (unsigned rawState = 0; rawState < expected.size(); ++rawState) {
+        for (unsigned enable = 0; enable <= 1; ++enable) {
+            for (unsigned disable = 0; disable <= 1; ++disable) {
+                for (uint32_t runnable : {0U, 1U, 2U}) {
+                    const auto state =
+                        static_cast<VfGucContextState>(rawState);
+                    const auto result = NGVfContextEvent::scheduleDone(
+                        state, enable != 0, disable != 0, runnable);
+                    const bool enableDone = enable && runnable == 1U;
+                    const bool disableDone = !enable && disable &&
+                                             runnable == 0U;
+                    assert(result.handled == (enableDone || disableDone));
+                    assert(result.enablePending ==
+                           ((enable != 0) && !enableDone));
+                    assert(result.disablePending ==
+                           ((disable != 0) && !disableDone));
+
+                    auto wantedState = state;
+                    if (enableDone && state == kVfGucContextPendingEnable)
+                        wantedState = kVfGucContextEnabled;
+                    else if (disableDone)
+                        wantedState = kVfGucContextDisabled;
+                    assert(result.state == wantedState);
+                }
+            }
+        }
+    }
+
     // Model the only active shutdown chain: Enabled -> PendingDisable ->
     // Disabled -> PendingDeregister -> Tombstone. Pending states are completed
     // only by their matching GuC event and are never skipped by the sweeper.

@@ -2279,3 +2279,23 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   identity and null backing in addition to the existing exhaustive descriptor
   flag/engine suite. The full local gate passes in
   `/tmp/ngreen-static.eQvzbn`; the VM remained shut off.
+
+### Validate MODE_DONE runnable state before lifecycle advance
+
+- Current xe `handle_sched_done` interprets the third MODE_DONE dword as the
+  resulting `runnable_state`: `1` completes enable and `0` completes disable.
+  The direct bridge already required the exact three-dword event shape but
+  discarded this payload and retired whichever local pending token was oldest.
+  A corrupt or out-of-order `1` could therefore complete a local disable and
+  permit DEREGISTER while firmware still reported the context runnable.
+- MODE_DONE lifecycle handling is now one pure transition. A pending enable
+  accepts only runnable `1`; otherwise a pending disable accepts only `0`.
+  Enable retains ordering priority when teardown has queued both tokens, so a
+  disable acknowledgement cannot overtake the earlier enable acknowledgement.
+  Undefined runnable values, reversed order and events with no pending token
+  leave state unchanged and enter the existing protocol-fault quarantine.
+- The sanitizer model exhausts all nine lifecycle states, four pending-token
+  combinations and runnable values `0`, `1` and an invalid `2` (108 cases).
+  The complete syntax/analyzer/strict-ABI/sanitizer/pinned-payload suite passes
+  in `/tmp/ngreen-static.MKF0tK`; the VM remained shut off. This proves host
+  transition logic, not firmware ordering or execution.

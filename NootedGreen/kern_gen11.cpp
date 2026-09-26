@@ -4710,18 +4710,13 @@ bool Gen11::vfCtbGucToHostAction(void *that, uint32_t *message) {
 				IOSimpleLockLockDisableInterrupt(gVfContextLock);
 			auto &entry = gVfContexts[gucId];
 			if (event.kind == NGVfGuCEvent::Kind::ScheduleContextModeDone) {
-				// MODE_SET completions are ordered.  An enable can already be
-				// followed by a disable when teardown races the first submission;
-				// retire the enable token first instead of mistaking its MODE_DONE
-				// for completion of the later disable.
-				if (entry.enablePending) {
-					entry.enablePending = false;
-					if (entry.state == kVfGucContextPendingEnable)
-						entry.state = kVfGucContextEnabled;
-					handled = true;
-				} else if (entry.disablePending) {
-					entry.disablePending = false;
-					entry.state = kVfGucContextDisabled;
+				const auto completion = NGVfContextEvent::scheduleDone(
+					entry.state, entry.enablePending, entry.disablePending,
+					message[3]);
+				if (completion.handled) {
+					entry.state = completion.state;
+					entry.enablePending = completion.enablePending;
+					entry.disablePending = completion.disablePending;
 					handled = true;
 				}
 			} else if (entry.state == kVfGucContextPendingDeregister) {

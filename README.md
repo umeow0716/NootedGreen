@@ -273,6 +273,11 @@ closed instead of being silently dropped by Tahoe's legacy dispatcher. Offline
 sanitizer coverage checks every 16-bit event action and lengths 0..32. This is
 static containment evidence, not a hardware-acceleration result.
 
+MODE_DONE also has payload semantics: runnable state `1` can retire only an
+enable, while `0` can retire only a disable. When both are pending, ordered CTB
+delivery must retire enable first; a mismatched or out-of-order payload faults
+the protocol instead of advancing teardown while firmware reports runnable.
+
 G2H callbacks additionally require the complete live transport and are blocked
 after protocol quarantine, preventing partial-init locks from being reused.
 Shutdown serializes H2G then G2H and will seal only when both descriptors are

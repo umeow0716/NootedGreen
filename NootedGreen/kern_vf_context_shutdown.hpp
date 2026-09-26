@@ -48,3 +48,38 @@ inline Action action(VfGucContextState state) {
 }
 
 } // namespace NGVfContextShutdown
+
+namespace NGVfContextEvent {
+
+struct ScheduleDone {
+	bool handled;
+	VfGucContextState state;
+	bool enablePending;
+	bool disablePending;
+};
+
+// MODE_DONE carries the firmware's resulting runnable state.  A queued enable
+// completion must retire before a later disable completion; accepting only the
+// matching payload prevents an out-of-order or corrupt event from advancing
+// teardown while the GuC still reports the context runnable.
+inline ScheduleDone scheduleDone(VfGucContextState state, bool enablePending,
+	                              bool disablePending, uint32_t runnableState) {
+	ScheduleDone result {false, state, enablePending, disablePending};
+	if (enablePending) {
+		if (runnableState != 1U)
+			return result;
+		result.enablePending = false;
+		if (state == kVfGucContextPendingEnable)
+			result.state = kVfGucContextEnabled;
+		result.handled = true;
+	} else if (disablePending) {
+		if (runnableState != 0U)
+			return result;
+		result.disablePending = false;
+		result.state = kVfGucContextDisabled;
+		result.handled = true;
+	}
+	return result;
+}
+
+} // namespace NGVfContextEvent
