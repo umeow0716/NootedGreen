@@ -6,7 +6,6 @@
 #include "kern_genx.hpp"
 #include "kern_model.hpp"
 #include "DYLDPatches.hpp"
-#include "HDMI.hpp"
 #include "kern_patcherplus.hpp"
 #include <Headers/kern_api.hpp>
 #include <Headers/kern_devinfo.hpp>
@@ -35,7 +34,6 @@ NGreen *NGreen::callback = nullptr;
 static Genx genx;
 static Gen11 gen11;
 static DYLDPatches dyldpatches;
-static HDMI agfxhda;
 
 static uint8_t builtin2[] = {0x00, 0x00, 0x49, 0x9A};
 static uint8_t builtin3[] = {0x49, 0x9A, 0x00, 0x00};
@@ -155,7 +153,6 @@ void NGreen::init() {
 	
 	genx.init();
 	gen11.init();
-	//agfxhda.init();
 	dyldpatches.init();
 	
     lilu.onPatcherLoadForce(
@@ -492,9 +489,7 @@ bool NGreen::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t
 	DBGLOG("ngreen", "Processed Generation x configuration");
 } else if (gen11.processKext(patcher, index, address, size)) {
         DBGLOG("ngreen", "Processed Generation 11 configuration");
-    } /*else if (agfxhda.processKext(patcher, index, address, size)) {
-		DBGLOG("ngreen", "Processed AppleGFXHDA");
-	}*/
+    }
     return true;
 }
 

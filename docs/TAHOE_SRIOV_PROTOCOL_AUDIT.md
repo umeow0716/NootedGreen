@@ -504,3 +504,14 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
 - Added offline struct-offset/register-value/table-range/bit-mask tests,
   all 65,536 swing/pre pairs, and all input lanes/counts; CI includes them.
   These tests do not exercise physical links or prove PF display support.
+
+### Retired HDMI module removal
+
+- Removed HDMI.cpp/.hpp, the unused agfxhda object/include, commented call
+  sites, and all eight Xcode project references after the reachability review
+  above. Its entry point unconditionally returned false and registration was
+  disabled; no functioning audio path was removed. Git retains the old code.
+- Local checks now compile 10 active C++ units (retired kern_netdbg.cpp is
+  still excluded), plus all offline sanitizer suites. Guest audio is a
+  separate unfinished requirement; this cleanup does not implement it.
+- DYLD checkpoint 9c13c7e CI run 36218296554 succeeded.

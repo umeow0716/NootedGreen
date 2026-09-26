@@ -12,8 +12,6 @@
 		2E1CC3E32BA5DBD9004EC8F6 /* DisplayMergeNub.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 2E1CC3E12BA5DBD9004EC8F6 /* DisplayMergeNub.cpp */; };
 		2E315A612BC6EA4D008411AA /* DYLDPatches.hpp in Headers */ = {isa = PBXBuildFile; fileRef = 2E315A5F2BC6EA4D008411AA /* DYLDPatches.hpp */; };
 		2E315A622BC6EA4D008411AA /* DYLDPatches.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 2E315A602BC6EA4D008411AA /* DYLDPatches.cpp */; };
-		2E5BF5832BCC212F0095BDCF /* HDMI.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 2E5BF5812BCC212F0095BDCF /* HDMI.cpp */; };
-		2E5BF5842BCC212F0095BDCF /* HDMI.hpp in Headers */ = {isa = PBXBuildFile; fileRef = 2E5BF5822BCC212F0095BDCF /* HDMI.hpp */; };
 		2E7C04D72C8A51F000B07113 /* IGGucBinary.h in Headers */ = {isa = PBXBuildFile; fileRef = 2E7C04D52C8A51F000B07113 /* IGGucBinary.h */; };
 		2E7C04D82C8A51F000B07113 /* IGHucBinary.h in Headers */ = {isa = PBXBuildFile; fileRef = 2E7C04D62C8A51F000B07113 /* IGHucBinary.h */; };
 		2EA343FE2C93C07700160F43 /* kern_genx.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 2EA343FC2C93C07700160F43 /* kern_genx.cpp */; };
@@ -55,8 +53,6 @@
 		2E1CC3E12BA5DBD9004EC8F6 /* DisplayMergeNub.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = DisplayMergeNub.cpp; sourceTree = "<group>"; };
 		2E315A5F2BC6EA4D008411AA /* DYLDPatches.hpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.h; path = DYLDPatches.hpp; sourceTree = "<group>"; };
 		2E315A602BC6EA4D008411AA /* DYLDPatches.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = DYLDPatches.cpp; sourceTree = "<group>"; };
-		2E5BF5812BCC212F0095BDCF /* HDMI.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = HDMI.cpp; sourceTree = "<group>"; };
-		2E5BF5822BCC212F0095BDCF /* HDMI.hpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.h; path = HDMI.hpp; sourceTree = "<group>"; };
 		2E7C04D52C8A51F000B07113 /* IGGucBinary.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = IGGucBinary.h; sourceTree = "<group>"; };
 		2E7C04D62C8A51F000B07113 /* IGHucBinary.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = IGHucBinary.h; sourceTree = "<group>"; };
 		2EA343FC2C93C07700160F43 /* kern_genx.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = kern_genx.cpp; sourceTree = "<group>"; };
@@ -127,8 +123,6 @@
 				2EE18C192CE558A300E96D38 /* Firmware.hpp */,					A1B2C3D4E5F601020304B001 /* IntelDPLinkTraining.cpp */,
 					A1B2C3D4E5F601020304B002 /* IntelDPLinkTraining.hpp */,				2E7C04D52C8A51F000B07113 /* IGGucBinary.h */,
 				2E7C04D62C8A51F000B07113 /* IGHucBinary.h */,
-				2E5BF5812BCC212F0095BDCF /* HDMI.cpp */,
-				2E5BF5822BCC212F0095BDCF /* HDMI.hpp */,
 				2E315A602BC6EA4D008411AA /* DYLDPatches.cpp */,
 				2E315A5F2BC6EA4D008411AA /* DYLDPatches.hpp */,
 				2E1CC3E12BA5DBD9004EC8F6 /* DisplayMergeNub.cpp */,
@@ -205,7 +199,6 @@
 				2E1CC3E22BA5DBD9004EC8F6 /* DisplayMergeNub.h in Headers */,
 				2E7C04D82C8A51F000B07113 /* IGHucBinary.h in Headers */,
 				2E7C04D72C8A51F000B07113 /* IGGucBinary.h in Headers */,
-				2E5BF5842BCC212F0095BDCF /* HDMI.hpp in Headers */,
 				F0A4BE592A1996E40031D569 /* kern_model.hpp in Headers */,
 				2EA343FF2C93C07700160F43 /* kern_genx.hpp in Headers */,
 				F0B49E9529D93A600067BE5B /* (null) in Headers */,
@@ -314,7 +307,6 @@
 				F067C22629D84710004BB52E /* (null) in Sources */,
 				F009B7A329E4EEBA00786AFF /* kern_green.cpp in Sources */,
 				F0BB9E552A57A0340081F5FA /* kern_patcherplus.cpp in Sources */,
-				2E5BF5832BCC212F0095BDCF /* HDMI.cpp in Sources */,
 				F0B49E9629D93A600067BE5B /* (null) in Sources */,
 				2EA343FE2C93C07700160F43 /* kern_genx.cpp in Sources */,
 				F0AF08BB2A0F373F00B63C2B /* kern_gen11.cpp in Sources */,
