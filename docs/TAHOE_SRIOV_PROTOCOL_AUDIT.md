@@ -710,3 +710,25 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   retain the existing display path, which still needs generation-wide review.
 - Full offline suite passes in /tmp/ngreen-static.fk4vFW. CI a0d46bb
   (36219866509) and 4a22593 (36219932023) succeeded. No deployment or boot.
+
+### VF private-layout payload UUID admission
+
+- TGL VF hardware routes now require the reference payload's LC_UUID
+  BA3AA1C0-FE6B-33B3-9D85-73F848394E3D before personality injection, symbol
+  routing or private-layout use. The reference SHA256 remains
+  1b2f5aa3131f9b909fe984877e41d5ebcdb2837572b45e1e901a72a6271515a2.
+- New bytewise Mach-O parser checks x86_64 KEXT_BUNDLE, available command
+  extent, command count/size/alignment, exact command consumption, unique UUID
+  and exact match. It accepts unaligned input without struct dereferences.
+  Lilu processKextLoadCallbacks passes the kext base and updated image size;
+  MachInfo::getRunningAddresses treats that same base as the Mach header.
+- Tested every truncation of a valid fixture, 4096 UUID byte mutations,
+  malformed sizes/counts, missing/duplicate UUID, unaligned start and 50,000
+  deterministic mutated fixtures under ASan/UBSan. Also parsed the actual
+  pinned on-disk payload successfully. Full suite: /tmp/ngreen-static.FQUamG.
+- UUID is an ABI version gate, not cryptographic authenticity or proof that
+  code was not modified while retaining its UUID. Runtime-patched opcodes,
+  loaded-KC layout validation and other payloads still need review. Unknown
+  VF payloads fail closed, not silently use guessed offsets. This does not
+  certify the known payload's unresolved lifecycle/OOM defects.
+- Framebuffer admission checkpoint 6d50aa2 CI 36220035067 succeeded.

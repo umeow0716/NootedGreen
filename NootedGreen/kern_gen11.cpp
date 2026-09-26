@@ -5,6 +5,7 @@
 #include "kern_gpu_capabilities.hpp"
 #include "kern_ggtt_bounds.hpp"
 #include "kern_context_pool.hpp"
+#include "kern_binary_identity.hpp"
 #include "AppleIntelParams.hpp"
 #include <Headers/kern_api.hpp>
 #include "kern_genx.hpp"
@@ -2148,6 +2149,12 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		return true;
 
 	} else if (kextG11HWT.loadIndex == index || kextG11HWTA.loadIndex == index) {
+		if (!ngPhysicalGpuAccessAllowed()) {
+			PANIC_COND(!NGBinaryIdentity::matchesKextUuid(
+				reinterpret_cast<const uint8_t *>(address), size,
+				NGBinaryIdentity::tglVfPayloadUuid), "ngreen",
+				"Unsupported TGL VF payload ABI; refusing private-layout routes");
+		}
 		this->tglHWLoaded = true;
 		auto *activeKext = (kextG11HWTA.loadIndex == index) ? &kextG11HWTA : &kextG11HWT;
 		SYSLOG("ngreen", "init AppleIntelTGLGraphics (HW accelerator)");

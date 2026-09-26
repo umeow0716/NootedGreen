@@ -18,6 +18,7 @@ on:
       - "tools/pattern_match_test.cpp"
       - "tools/dvmt_patch_test.cpp"
       - "tools/context_pool_test.cpp"
+      - "tools/binary_identity_test.cpp"
       - "tools/check-static.sh"
       - ".github/workflows/build-kext.yml"
 
@@ -54,6 +55,9 @@ jobs:
           xcrun clang++ -std=c++14 -O1 -g -fsanitize=address,undefined \
             tools/context_pool_test.cpp -o "$RUNNER_TEMP/context-pool-test"
           "$RUNNER_TEMP/context-pool-test"
+          xcrun clang++ -std=c++14 -O1 -g -fsanitize=address,undefined \
+            tools/binary_identity_test.cpp -o "$RUNNER_TEMP/binary-identity-test"
+          "$RUNNER_TEMP/binary-identity-test"
 
       - name: Build x86_64 release kext
         run: |

@@ -73,4 +73,11 @@ if "$compiler" -std=c++14 -O1 -g -fsanitize=address,undefined \
 else
     failed=1
 fi
+if "$compiler" -std=c++14 -O1 -g -fsanitize=address,undefined \
+    tools/binary_identity_test.cpp -o "$task_output/binary-identity-test" && \
+    "$task_output/binary-identity-test"; then
+    printf 'PASS offline binary identity tests\n'
+else
+    failed=1
+fi
 exit "$failed"
