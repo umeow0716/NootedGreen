@@ -772,3 +772,24 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   and need individual control-flow review. Exact TGL membership also does
   not establish stepping-specific firmware compatibility or loaded-payload
   correctness on all physical devices. These remain open.
+
+### Preserve global IOAcceleratorFamily validation
+
+- Removed the active global two-match masked branch bypass in
+  IOAcceleratorFamily2 and the set_id_mode hook that cleared 0xff8073c0 for
+  every surface whenever the CPU was not TGL. Neither was scoped to the
+  selected PCI device/VF, and the former's comment referenced Sonoma rather
+  than the target Tahoe binary without a payload/function allowlist.
+- The surface mode API is documented in Apple's IOAccelSurfaceConnect.h:
+  https://raw.githubusercontent.com/apple-oss-distributions/IOGraphics/main/IOGraphicsFamily/IOKit/graphics/IOAccelSurfaceConnect.h
+  It contains surface color-depth/window/stereo/synchronization flags; the
+  code's claim that masked bits were TGL-only GuC scheduling/preemption bits
+  was unsupported. The vendored SDK also labels 0x4000 Surface2, included
+  in the old destructive mask. Native mode/capability rejection is retained.
+- Removed the dormant deviceStart failure-to-success wrapper, its unresolved
+  original slot and commented obsolete f1/lock-route block. Git preserves all
+  removed material. This does not prove native Tahoe accepts the driver yet:
+  unsupported modes must be handled using correct caller/capability contracts,
+  not by globally modifying unrelated GPU user clients.
+- Full suite passes in /tmp/ngreen-static.vIOg5y. CI dccbe67 (36220356972)
+  and f339637 (36220434223) succeeded. No VM or hardware access for tests.

@@ -315,15 +315,6 @@ OSMetaClassBase *NGreen::wrapSafeMetaCast(const OSMetaClassBase *anObject, const
 	return ret;
 }
 
-bool NGreen::wrapIGAccelDeviceStart(void *that) {
-	auto ret = FunctionCast(wrapIGAccelDeviceStart, callback->orgIGAccelDeviceStart)(that);
-	if (!callback->isRealTGL && !ret) {
-		SYSLOG("NGreen", "IOAccelF2: forcing IGAccelDevice::deviceStart success on spoofed TGL path");
-		return true;
-	}
-	DBGLOG("NGreen", "IOAccelF2: IGAccelDevice::deviceStart returned %d", ret);
-	return ret;
-}
 
 void NGreen::setRMMIOIfNecessary() {
 	if (UNLIKELY(!this->rmmio || !this->rmmio->getLength())) {
@@ -345,110 +336,13 @@ void NGreen::setApertureIfNecessary() {
 	}
 }
 
-// V500: IOAccelLegacySurface::set_id_mode(uint32_t id, uint32_t mode) active fix.
-// Hardware rejects mode bits covered by 0xff8073c0 with kIOReturnUnsupported.
-// On non-TGL (RPL-P spoofed as TGL), strip those bits before the call so the
-// GPU task gets a valid scheduling mode instead of silently failing.
-static mach_vm_address_t orgSetIdMode = 0;
-static IOReturn wrapSetIdMode(void *that, uint32_t id, uint32_t mode) {
-    uint32_t patchedMode = mode;
-    if (NGreen::callback && !NGreen::callback->getIsRealTGL())
-        patchedMode = mode & ~0xff8073c0u;  // strip TGL-only preemption/mode bits
-
-    IOReturn ret = FunctionCast(wrapSetIdMode, orgSetIdMode)(that, id, patchedMode);
-
-    static int v500Count = 0;
-    if (v500Count < 32) {
-        ++v500Count;
-        if (patchedMode != mode)
-            SYSLOG("ngreen", "V500[%d]: set_id_mode stripped 0x%x→0x%x id=0x%x ret=0x%x",
-                   v500Count, mode, patchedMode, id, ret);
-        else if (ret != kIOReturnSuccess)
-            SYSLOG("ngreen", "V500[%d]: set_id_mode FAILED ret=0x%x id=0x%x mode=0x%x",
-                   v500Count, ret, id, mode);
-    }
-    return ret;
-}
 
 bool NGreen::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t address, size_t size) {
 	if (kextIOAcceleratorFamily2.loadIndex == index) {
-		SYSLOG("NGreen", "IOAccelF2: TEXT 0x%llx size 0x%lx", address, size);
-		
-		// ── V40: f2 FIXED based on V39 diagnostics ──
-		// V39 revealed: Sonoma uses push r12; push rbx; push rax (41 54 53 50)
-		// as function prologue instead of sub rsp,imm8 (48 83 ec).
-		// Two matching test edx,imm32; je found at +0x38b0 and +0x102e6.
-		// Patching both (count=2) to bypass capability checks.
-		static const uint8_t f2_f[]  = {0x41, 0x54, 0x53, 0x50, 0xf7, 0xc2, 0x00, 0x00, 0x00, 0x00, 0x74, 0x00};
-		static const uint8_t f2_m[]  = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00, 0xFF, 0x00};
-		static const uint8_t f2_r[]  = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xEB, 0x00};
-		static const uint8_t f2_rm[] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF, 0x00};
-		const LookupPatchPlus p2 {&kextIOAcceleratorFamily2, f2_f, f2_m, f2_r, f2_rm, 2};
-		
-		// necessary : without it hang on boot
-		bool f2ok = p2.apply(patcher, address, size);
-		patcher.clearError();
-		SYSLOG("NGreen", "IOAccelF2 f2 (fixed): %s", f2ok ? "OK" : "FAILED");
-		
-		// ── V41: f1 FIXED based on V40 diagnostics ──
-		// V40 revealed: Sonoma has jne (0x75) at -16 from mov r9d,[r15+0x284],
-		// NOT je (0x74) at -2 as the original pattern assumed.
-		// Code structure: cmp eax,ebx; jne +0x39; <device-specific setup>; mov r9d,[r15+0x284]
-		// This is a device-ID capability check: vtable call returns ID, compared with expected.
-		// NOP the jne (75 XX → 90 90) so our device 0x9A49 always falls through.
-		// Pattern: jne XX; mov rax,[r15+disp32]; mov r8,[rax+disp32]; mov r9d,[r15+disp32]
-		static const uint8_t f1_f[]  = {0x75, 0x00, 0x49, 0x8b, 0x87, 0x00, 0x00, 0x00, 0x00, 0x4c, 0x8b, 0x80, 0x00, 0x00, 0x00, 0x00, 0x45, 0x8b, 0x8f};
-		static const uint8_t f1_m[]  = {0xFF, 0x00, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF};
-		static const uint8_t f1_r[]  = {0x90, 0x90, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
-		static const uint8_t f1_rm[] = {0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
-		const LookupPatchPlus p1 {&kextIOAcceleratorFamily2, f1_f, f1_m, f1_r, f1_rm, 1};
-		// V206: disabled IOAccelF2 f1 patch + IGAccelDevice::deviceStart hook + V181 lock
-		// resolves to match Visual Ehrmanntraut's working config. Restore if regression.
-		/*bool f1ok = p1.apply(patcher, address, size);
-		patcher.clearError();
-		SYSLOG("NGreen", "IOAccelF2 f1 (fixed): %s", f1ok ? "OK" : "FAILED");
-
-		RouteRequestPlus routes[] = {
-			{"__ZN13IGAccelDevice11deviceStartEv", wrapIGAccelDeviceStart, this->orgIGAccelDeviceStart},
-		};
-		if (RouteRequestPlus::routeAll(patcher, index, routes, address, size)) {
-			SYSLOG("NGreen", "IOAccelF2: hooked IGAccelDevice::deviceStart");
-		} else {
-			patcher.clearError();
-			SYSLOG("NGreen", "IOAccelF2: IGAccelDevice::deviceStart symbol not found");
-		}
-
-		// V181: resolve lockForCPUAccess / unlockForCPUAccess for Gen11 blit3d scratch init
-		if (Gen11::callback) {
-			SolveRequestPlus ioaf2Solve[] = {
-				{"__ZN16IOAccelSysMemory16lockForCPUAccessEP4taskj", Gen11::callback->oIOAF2_lockForCPUAccess},
-				{"__ZN16IOAccelSysMemory18unlockForCPUAccessEP4task", Gen11::callback->oIOAF2_unlockForCPUAccess},
-			};
-			if (SolveRequestPlus::solveAll(patcher, index, ioaf2Solve, address, size)) {
-				SYSLOG("ngreen", "V181: IOAF2 lock/unlock resolved lock=%p unlock=%p",
-				       reinterpret_cast<void *>(Gen11::callback->oIOAF2_lockForCPUAccess),
-				       reinterpret_cast<void *>(Gen11::callback->oIOAF2_unlockForCPUAccess));
-			} else {
-				patcher.clearError();
-				SYSLOG("ngreen", "V181: IOAF2 lock/unlock resolve failed");
-			}
-		}*/
-
-		// Keep native waitForStamp completion semantics. A timeout is not proof
-		// of GPU completion; never synthesize a successful stamp for CoreDisplay.
-
-		// V500: IOAccelLegacySurface::set_id_mode — diagnostic logger.
-		RouteRequestPlus simRequest[] = {
-			{"__ZN20IOAccelLegacySurface11set_id_modeEjj", wrapSetIdMode, orgSetIdMode},
-		};
-		if (RouteRequestPlus::routeAll(patcher, index, simRequest, address, size)) {
-			SYSLOG("ngreen", "V500: hooked IOAccelLegacySurface::set_id_mode");
-		} else {
-			patcher.clearError();
-			SYSLOG("ngreen", "V500: set_id_mode hook FAILED — symbol not found");
-		}
-
-	}  else if (kextIOGraphics.loadIndex == index) {
+		// Preserve native surface-mode validation and capability checks. These
+		// are global user-client interfaces, not per-VF GuC scheduling bits.
+		SYSLOG("ngreen", "IOAccelFamily2: preserving native capability and surface-mode validation");
+	} else if (kextIOGraphics.loadIndex == index) {
 		/*
 		KernelPatcher::RouteRequest requests[] = {
 				{"__ZN13IOFramebuffer25extValidateDetailedTimingEP8OSObjectPvP25IOExternalMethodArguments", wrapValidateDetailedTiming},

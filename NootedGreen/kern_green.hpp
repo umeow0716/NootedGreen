@@ -73,8 +73,6 @@ class NGreen {
 	
 	static size_t wrapFunctionReturnZero();
 
-	static bool wrapIGAccelDeviceStart(void *that);
-	mach_vm_address_t orgIGAccelDeviceStart {0};
 	
 	mach_vm_address_t orgApplePanelSetDisplay {0};
 	static bool wrapApplePanelSetDisplay(IOService *that, IODisplay *display);
