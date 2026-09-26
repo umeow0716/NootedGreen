@@ -1504,3 +1504,35 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
 - The complete syntax gate, zero-finding analyzer, strict Gen11 ABI warnings
   and all sanitizer models pass in `/tmp/ngreen-static.BByji8`. This is static
   evidence only; no new kext was installed and the VM remained off.
+
+### Display-merge publication and DYLD surface reduction
+
+- Re-read `DisplayMergeNub.cpp/.h` end-to-end. The recursive merge now operates
+  on a full provider property-table snapshot and publishes that table only
+  after every local allocation, iterator and recursive operation succeeds.
+  Newly introduced source dictionaries are copied and recursively bounded too,
+  so mutable source dictionaries are not attached directly to the provider.
+  The unused `start()` override, which returned success without calling
+  `IOService::start`, was removed. This closes locally generated partial
+  publication; it cannot serialize unrelated concurrent registry writers, and
+  the legacy deliberate metaclass keep-loaded reference remains unchanged.
+- Re-read `DYLDPatches.cpp/.hpp` end-to-end and removed every hardcoded Sonoma
+  14.7.1 CoreDisplay prologue/control-flow patch. Those patches had no exact
+  shared-cache UUID/build admission, were inactive on Tahoe, and included
+  stubs that could falsify Metal success. The unreachable CoreLSKD branch,
+  commented-out V50 bundle redirect, broad ICL Metal ID bypass and obsolete
+  DYLD boot arguments were removed rather than silently enabled.
+- The `_cs_validate_page` route now leaves ordinary executables and GPU bundle
+  pages untouched. It retains only exact composite media-model string
+  substitutions on shared-cache pages plus atomically gated bundle-discovery
+  logs. Route state and inputs are checked, property-publication failure is
+  reported, and patch helpers reject null/empty operands. These string patches
+  still require controlled Tahoe media validation; they do not demonstrate
+  Metal, decode or encode acceleration.
+- README deployment/status text was corrected to stop advertising retired
+  user-space hooks or CPUID as GPU identity. The current `isRealTGL`
+  compatibility field is selected from original TGL PCI identity plus physical
+  PF ownership; a VF never takes the native physical-TGL path.
+- The complete syntax gate, zero-finding analyzer, strict Gen11 ABI warnings
+  and all sanitizer protocol models pass in `/tmp/ngreen-static.dZrW0I`. No
+  kext was installed and the VM remained off.

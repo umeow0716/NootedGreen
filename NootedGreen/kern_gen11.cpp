@@ -7016,17 +7016,10 @@ unsigned long Gen11::start(void *that,void  *param_1)
 			}
 		}
 		
-		// V78: For spoofed (non-TGL) hardware, always force DisplayPipeSupported=0.
-		// AccessComplete (V187) is stubbed to return 0 on spoofed hw to prevent a
-		// crash at +1928 (null MTL device hash-table lookup). That stub silences the
-		// crash but prevents the "FB Ready" surface-flip signal from ever being sent.
-		// With DisplayPipeSupported=1 (GPU display pipe), WindowServer waits for
-		// that signal indefinitely → watchdogd kills it twice → KP.
-		// With DisplayPipeSupported=0, WindowServer uses CPU compositing via the
-		// linear framebuffer aperture — bypassing the GPU pipe entirely — so the
-		// FB Ready wait is never entered and WindowServer initialises successfully.
-		// Real TGL hardware uses the native value (never enters this branch).
-		// Explicit -ngreendp1 boot-arg restores native behavior for experimentation.
+		// V78: Explicit diagnostic fallback to CPU composition. The former
+		// CoreDisplay AccessComplete stub has been retired; this capability override
+		// is now controlled only by -ngreendp0 and is not a hidden compensation for
+		// a userspace control-flow patch.
 		if (isDisplayPipeForceDisabled()) {
 			auto *dpCaps = OSDictionary::withCapacity(2);
 			if (dpCaps) {
@@ -11145,11 +11138,9 @@ static void v45DelayedChildCheck(thread_call_param_t p0, thread_call_param_t p1)
 						
 						if (childState == 0) {
 							if (strcmp(childName, "IOAccelDisplayPipeUserClient2") == 0) {
-								// Never call registerService on IOAccelDisplayPipeUserClient2.
-								// Starting it triggers stamp-9 timeouts every ~5.4s:
-								// AccessComplete is stubbed → stamp never advances →
-								// GPURestartSignaled → WS compositor interrupted per cycle.
-								// This applies in all modes, not just dp0.
+								// A user client is created/opened by its owning framework; a
+								// delayed diagnostic must not force-register a state-zero client.
+								// Historical forced registration produced stamp timeout loops.
 								SYSLOG("ngreen", "V55: %s at state=0x0 — skip registerService (prevent stamp-9 timeout loop)", childName);
 							} else {
 								SYSLOG("ngreen", "V55: %s at state=0x0 — calling registerService()", childName);

@@ -151,10 +151,10 @@ void NGreen::init() {
 
 
 void NGreen::processPatcher(KernelPatcher &patcher) {
-	// Hook _cs_validate_page FIRST — before DeviceInfo which blocks
-	// for >60s polling PEGP (NVIDIA dGPU) disable via processSwitchOff.
-	// Without this, WindowServer starts before the hook is established
-	// and CoreDisplay loads unpatched from the shared cache.
+	// Hook _cs_validate_page before DeviceInfo, which may spend over 60 seconds
+	// polling PEGP disable via processSwitchOff. This preserves the opportunity
+	// to apply the optional shared-cache media model strings before consumers
+	// map their pages; no CoreDisplay control-flow patch is installed.
 	if (!checkKernelArgument("-nbdyldoff")) {
 		dyldpatches.processPatcher(patcher);
 	} else {

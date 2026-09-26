@@ -32,16 +32,6 @@ OSDefineMetaClassAndStructors(DisplayMergeNub, IOService)
 
 static volatile UInt32 haveCreatedRef = 0;
 
-bool
-DisplayMergeNub::start(IOService *provider)
-{
-    //IOLog("%s\n", (const char *)DisplayMergeNubVersionString);
-   // IOLog("Version %f\n", DisplayMergeNubVersionNumber);
-    IOLog("Copyright © 2013-2014 AnV Software\n");
-
-    return (true);
-}
-
 //================================================================================================
 //
 //  probe()
@@ -96,12 +86,8 @@ DisplayMergeNub::probe(IOService *provider, SInt32 *score)
 bool
 DisplayMergeNub::MergeDictionaryIntoProvider(IOService * provider, OSDictionary * dictionaryToMerge)
 {
-    const OSSymbol * 		dictionaryEntry = NULL;
-    OSCollectionIterator * 	iter = NULL;
-    bool			result = false;
-
-    if (!provider || !dictionaryToMerge)
-        return (false);
+	if (!provider || !dictionaryToMerge)
+		return false;
 
 	//
 	// rdar://4041566 -- Trick the C++ run-time into keeping us loaded.
@@ -111,93 +97,18 @@ DisplayMergeNub::MergeDictionaryIntoProvider(IOService * provider, OSDictionary 
 		getMetaClass()->instanceConstructed();
 	}
 	
-    // Get the dictionary whose entries we need to merge into our provider and get
-    // an iterator to it.
-    //
-    iter = OSCollectionIterator::withCollection((OSDictionary *)dictionaryToMerge);
-    if ( iter != NULL )
-    {
-        result = true;
-        // Iterate through the dictionary until we run out of entries
-        //
-        while ( NULL != (dictionaryEntry = (const OSSymbol *)iter->getNextObject()) )
-        {
-            OSDictionary *	sourceDictionary = NULL;
-            OSDictionary *	providerDictionary = NULL;
-            OSObject *		providerProperty = NULL;
-
-            // Get the symbol name for debugging
-            //
-
-            // Check to see if our destination already has the same entry.  If it does
-            // we assume that it is a dictionary.  Perhaps we should check that
-            //
-            providerProperty = provider->getProperty(dictionaryEntry);
-            if ( providerProperty )
-            {
-                providerDictionary = OSDynamicCast(OSDictionary, providerProperty);
-            }
-
-            // See if our source entry is also a dictionary
-            //
-            sourceDictionary = OSDynamicCast(OSDictionary, dictionaryToMerge->getObject(dictionaryEntry));
-
-            if ( providerDictionary &&  sourceDictionary )
-            {
-                // Need to merge our entry into the provider's dictionary.  However, we don't have a copy of our dictionary, just
-                // a reference to it.  So, we need to make a copy of our provider's dictionary
-                //
-                OSDictionary *		localCopyOfProvidersDictionary;
-
-                localCopyOfProvidersDictionary = OSDictionary::withDictionary( providerDictionary, 0);
-                if ( localCopyOfProvidersDictionary == NULL )
-                {
-                    result = false;
-                    break;
-                }
-
-                // Get the size of our provider's dictionary so that we can check later whether it changed
-                //
-
-                // Note that our providerDictionary *might* change
-                // between the time we copied it and when we write it out again.  If so, we will obviously overwrite anychanges
-                //
-                result = MergeDictionaryIntoDictionary(  sourceDictionary, localCopyOfProvidersDictionary);
-
-                if ( result )
-                {
-                    // Get the size of our provider's dictionary so to see if it's changed  (Yes, the size could remain the same but the contents
-                    // could have changed, but this gives us a first approximation.  We're not doing anything with this result, although we could
-                    // remerge
-                    //
-
-                    result = provider->setProperty( dictionaryEntry, localCopyOfProvidersDictionary );
-                    localCopyOfProvidersDictionary->release();
-                    if ( !result )
-                    {
-                        break;
-                    }
-                }
-                else
-                {
-                    localCopyOfProvidersDictionary->release();
-                    // If we got an error merging dictionaries, then just bail out without doing anything
-                    //
-                    break;
-                }
-           }
-            else
-            {
-                result = provider->setProperty(dictionaryEntry, dictionaryToMerge->getObject(dictionaryEntry));
-                if ( !result )
-                {
-                    break;
-                }
-            }
-        }
-        iter->release();
-    }
-    return (result);
+	// Build the complete result away from the live registry entry. A failed
+	// iterator/allocation/recursive merge releases this staging table and leaves
+	// every provider property unchanged. setPropertyTable performs one retained
+	// table replacement after the merge has become infallible.
+	auto *staged = provider->dictionaryWithProperties();
+	if (!staged)
+		return false;
+	const bool result = MergeDictionaryIntoDictionary(dictionaryToMerge, staged);
+	if (result)
+		provider->setPropertyTable(staged);
+	staged->release();
+	return result;
 }
 
 
@@ -255,52 +166,25 @@ DisplayMergeNub::mergeDictionaryAtDepth(OSDictionary *parentSourceDictionary, OS
         //
         childSourceDictionary = OSDynamicCast(OSDictionary, parentSourceDictionary->getObject(keyObject));
 
-        if ( childTargetDictionary && childSourceDictionary)
-        {
-            // Our target dictionary already has the entry for this same object AND our
-            // source is also a dictionary, so we need to recursively add it.
-            //
-			// Need to merge our entry into the provider's dictionary.  However, we don't have a copy of our dictionary, just
-			// a reference to it.  So, we need to make a copy of our target's dictionary
-			//
-			OSDictionary *		localCopyOfTargetDictionary;
-			
-			localCopyOfTargetDictionary = OSDictionary::withDictionary( childTargetDictionary, 0);
-			if ( localCopyOfTargetDictionary == NULL )
-			{
-                result = false;
+	        if (childSourceDictionary)
+	        {
+			// Copy both existing target dictionaries and newly introduced source
+			// dictionaries. This keeps mutable source dictionaries out of the live
+			// provider table and subjects every nested dictionary to the depth bound.
+			auto *localCopy = childTargetDictionary ?
+				OSDictionary::withDictionary(childTargetDictionary, 0) :
+				OSDictionary::withCapacity(childSourceDictionary->getCount());
+			if (!localCopy) {
+				result = false;
 				break;
 			}
-			
-			// Get the size of our provider's dictionary so that we can check later whether it changed
-			//
-			
-			// Note that our targetDictionary *might* change
-			// between the time we copied it and when we write it out again.  If so, we will obviously overwrite anychanges
-			//
-            result = mergeDictionaryAtDepth(childSourceDictionary, localCopyOfTargetDictionary, depth + 1);
-			if ( result )
-			{
-				// Get the size of our provider's dictionary so to see if it's changed  (Yes, the size could remain the same but the contents
-				// could have changed, but this gives us a first approximation.  We're not doing anything with this result, although we could
-				// remerge
-				//
-				
-				result = parentTargetDictionary->setObject(keyObject, localCopyOfTargetDictionary);
-                localCopyOfTargetDictionary->release();
-				if ( !result )
-				{
-					break;
-				}
-			}
-			else
-			{
-                localCopyOfTargetDictionary->release();
-				// If we got an error merging dictionaries, then just bail out without doing anything
-				//
+			result = mergeDictionaryAtDepth(childSourceDictionary, localCopy, depth + 1);
+			if (result)
+				result = parentTargetDictionary->setObject(keyObject, localCopy);
+			localCopy->release();
+			if (!result)
 				break;
-			}
-        }
+	        }
         else
         {
             // We have a property that we need to merge into our parent dictionary.

@@ -37,8 +37,8 @@ files (1,305 under this snapshot's scope); this does not close older coverage.
 | kern_green.cpp/.hpp | Read end-to-end; PCI identity/overread, exact GMS decoding, mandatory config-hook admission, BAR0/BAR2 publication, property-result reporting and dead-path cleanup completed; device-removal/power-transition lifetime and hardware-specific property semantics remain open |
 | kern_genx.cpp/.hpp | Read; VF admission/DVMT/PM fixes made; physical behavior and legacy stubs not fully validated |
 | kern_patcherplus.cpp/.hpp | Read and compared with upstream Lilu routing/replacement behavior; every grouped lookup is now preflighted before its first write; low-level write/route rollback and protection restoration remain open |
-| DYLDPatches.cpp/.hpp | Read; removed unused AMD tables and isolated Sonoma patches; user-space shared-cache and per-binary scoping remain open |
-| DisplayMergeNub.cpp/.h | Read; input/refcount/recursion fixes; property update atomicity and failure recovery remain open |
+| DYLDPatches.cpp/.hpp | Read end-to-end; removed unadmitted CoreDisplay control-flow patches, unreachable CoreLSKD/ICL fallbacks and stale bundle redirection. Remaining mutations are shared-cache composite media-model strings; their necessity and dynamic media behavior remain open |
+| DisplayMergeNub.cpp/.h | Read end-to-end; validates inputs, bounds recursion, copies introduced nested dictionaries and stages the complete provider table before one publication. Actual IOKit behavior and races with unrelated external registry writers remain open |
 | IntelDPLinkTraining.cpp/.hpp | Read and tables compared with i915; corrected PHY layout, physical-only guards; full platform/stepping/link-training integration remains open |
 | kern_start.cpp | Read; lifecycle integration still depends on the unfinished driver |
 | Firmware.cpp, FirmwareADLP.cpp | All payload bytes compared to pinned upstream containers; bounds fixed; NOT a firmware-instruction semantic review |

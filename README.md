@@ -1,6 +1,7 @@
 # NootedGreen
 
-Lilu plugin for Intel iGPU acceleration on macOS — Haswell through Raptor Lake, via Tiger Lake driver spoofing.
+Experimental Lilu plugin for Intel Gen11 and newer iGPU bring-up on macOS,
+using Apple's Ice Lake or Tiger Lake driver families where applicable.
 
 ## What it does
 
@@ -8,7 +9,18 @@ Patches Apple's Tiger Lake (Gen12) graphics drivers to work with newer Intel iGP
 
 ## Status
 
-**Work in progress.** Framebuffer controller starts, combo PHY calibration is patched, accelerator ring initialises, and host-based scheduler (type 5) runs on RPL with sustained RCS activity. Login is reachable on current test setups, but stability is still under active tuning for full-Metal paths. DYLD patches hook `_cs_validate_page` early (before DeviceInfo) so CoreDisplay is patched before WindowServer starts. Metal remains enabled by default. V50 still patches `gpu_bundle_find_trusted()` in libsystem_sandbox.dylib to redirect GPU bundle search from `/Library/GPUBundles` to `/Library/Extensions/` where the TGL driver bundle is installed. ICL Metal driver device-ID bypass uses mask-based matching for build portability. V52 adds CPUID-based cross-platform detection (`isRealTGL`) so RPL-only patches are skipped on genuine Tiger Lake hardware.
+**Work in progress.** Historical physical-RPL testing reached the login screen
+and exercised the accelerator, but those Sonoma results do not validate the
+current Tahoe SR-IOV VF path. This branch has passed its offline protocol,
+sanitizer, analyzer and remote build gates; controlled VF boot validation is
+still intentionally blocked by the incomplete source/lifetime audit.
+
+The remaining DYLD hook only applies composite media-model strings in signed
+shared-cache pages and logs discovery of the TGL userspace bundles. The former
+unversioned CoreDisplay control-flow stubs, CoreLSKD path, ICL Metal ID bypass
+and GPU-bundle path redirect have been retired. `isRealTGL` is a compatibility
+name for a native Tiger Lake **physical GPU** path, selected from the original
+PCI identity and PF ownership; guest CPUID is diagnostic only.
 
 ### `codex/tahoe-sriov-vf` target override
 
@@ -41,7 +53,9 @@ The Tahoe `25G229` VF bootstrap fixes on this branch are deliberately narrow:
 - Early IGPU identity detection is confirmed working: Lilu reads `AAPL,ig-platform-id` (`9A490000`) via OpenCore DeviceProperties during `DeviceInfo` scan.
 - Platform-ID and device-ID injection now handled cleanly by config.plist only — NootedGreen no longer interferes mid-initialization.
 - System boots to login screen reliably with no visual corruption or kernel panics.
-- CoreDisplay DYLD path keeps assertion bypass always-on for Ventura+/Sonoma. Stage-3 safety stubs (RunFullDisplayPipe NULL guard, GetMTLTexture NULL stub, GetMTLCommandQueue NULL stub) are now applied only on non-real TGL unless full-MTL mode is forced.
+- Unversioned CoreDisplay DYLD assertion/control-flow patches are no longer
+  installed. Any surviving full-Metal policy is kernel-side and must pass its
+  own binary/route admission.
 - Blit3D init policy on spoofed paths is now conservative by default: Apple's original `IGHardwareBlit3DContext::initialize()` is **disabled unless explicitly opted in** with `-ngreenV69AllowOriginal`.
 - `-ngreenV69AllowOriginal` is **diagnostic only**. It can still panic at `IGHardwareBlit3DContext::initialize + 0x4c` (`SecurityAgent`/IOAccel submit path) on unsupported setups.
 - `DisplayPipeSupported` native path is now the default. Use `-ngreendp0` only for forced fallback testing.
@@ -91,7 +105,10 @@ The Tahoe `25G229` VF bootstrap fixes on this branch are deliberately narrow:
 - **V154:** RPL-only circuit-breaker — after 3 consecutive quiescent `ret=1025` coercions by V153, skip calling the original `resetGraphicsEngine` entirely. Prevents the health monitor (V60M, 2 s tick × 60 = 120 s budget) from burning the full watchdog window on redundant resets.
 - **V153:** Coerce `resetGraphicsEngine ret=1025 → 0` when RCS ring is quiescent (`rcsHead == rcsTail`, `ERROR_GEN6 == 0`) on non-real TGL. Increments consecutive-quiescent counter for V154 arming.
 - **V152:** BCS ring drain — force `RING_TAIL ← RING_HEAD` before BCS reset to stop repeated "ring not empty" resets on RPL where the BCS engine cannot execute under the TGL driver.
-- **DYLD compact baseline:** Assertion bypass remains baseline on Ventura+/Sonoma. Stage-3 safety stubs are conditional (non-real TGL default), with full-MTL override available via `-ngreenfullmtl`.
+- **DYLD safety cleanup:** Removed the unadmitted CoreDisplay control-flow
+  patches and unreachable CoreLSKD/ICL fallbacks. DYLD now limits mutation to
+  media model composite strings in shared-cache pages; TGL bundle handling is
+  diagnostic only.
 - **DisplayPipe defaults updated:** Native `DisplayPipeSupported` is default. `-ngreendp0` is explicit fallback.
 - **V77 default policy updated:** kill delay default is full monitor window (no automatic client termination unless explicitly requested).
 - **V96 connector state update:** `getOnlineInfo` forces online + changed for stronger hotplug/state propagation.
@@ -133,7 +150,8 @@ V88 visual fill remains opt-in only (`-ngreenv88`). Default boots preserve norma
 ## Requirements
 
 - [Lilu](https://github.com/acidanthera/Lilu) 1.7.2+
-- macOS Sonoma 14.x (Gen11/Gen12 targets) or macOS 10.12–14.x (legacy NootedBlue targets)
+- macOS Tahoe 26.x for the current SR-IOV work; older targets are historical
+  and require their own validation
 - Supported Intel iGPU (see **Compatibility** below)
 - Discrete GPU disabled via SSDT (recommended) or `disable-gpu` DeviceProperty on its PCI path
 
@@ -157,12 +175,12 @@ Boot args advised for testing (Hookcase in `/Library/Extensions/` too):
 
 FB-only:
 ```
--v keepsyms=1 debug=0x100 IGLogLevel=8 -ngreentglfb -NGreenDebug liludump=250 msgbuf=725288 liludbuf=725288 ngreen-dmc=adlp -ngreenv189
+-v keepsyms=1 debug=0x100 IGLogLevel=8 -ngreentglfb -NGreenDebug liludump=250 msgbuf=725288 liludbuf=725288 ngreen-dmc=adlp
 ```
 
 FB+GFX:
 ```
--v keepsyms=1 debug=0x100 IGLogLevel=8 -ngreentglwithgfx -NGreenDebug liludump=250 msgbuf=725288 liludbuf=725288 ngreen-dmc=adlp -ngreenv189 -allow3d -disablegfxfirmware -ngreenfullmtlcore
+-v keepsyms=1 debug=0x100 IGLogLevel=8 -ngreentglwithgfx -NGreenDebug liludump=250 msgbuf=725288 liludbuf=725288 ngreen-dmc=adlp -allow3d -disablegfxfirmware -ngreenfullmtlcore
 ```
 
 Where:
@@ -176,7 +194,8 @@ Where:
 
 > **Note:** `-ngreentglwithgfx` is required on Gen11/TGL hardware to load BOTH the TGL framebuffer AND the TGL HW (accelerator) kext. FB-only mode (`-ngreentglfb`) does not allocate per-plane DBUF on Gen11+ — the watermark/DBUF programming pipeline lives in the HW kext (`AppleIntelTGLGraphics.kext`), so without it the display engine fetches from a zero-block DBUF range and produces duplicated/fragmented output. `-ngreendp0 -ngreenv88` are diagnostic flags for the dp0/CPU-compositor investigation path. Remove them for normal operation.
 
-- **Note:** GPU bundles goes to  /Library/GPUBundles
+- **Note:** NootedGreen does not redirect userspace GPU-bundle lookup paths.
+  Bundle deployment and trust must be handled explicitly for the target OS.
 
 | Arg | Purpose |
 |---|---|
@@ -190,7 +209,7 @@ Where:
 | `ngreenSched=N` | Select GPU scheduler type: `3` = GuC firmware, `4` = IGScheduler4, `5` = host preemptive (default: `3` on real TGL, `5` on RPL/ADL) |
 | `ngreen-dmc=skip|tgl|adlp` | DMC policy: skip CSR load, or force TGL/ADL-P DMC path for diagnostics. |
 | `-allow3d` | Force 3D acceleration |
-| `-nbdyldoff` | **Disable ALL DYLD patches** (CoreDisplay, OpenGL, Metal, SkyLight) — debug only |
+| `-nbdyldoff` | Disable the optional shared-cache media-model patches and TGL userspace-bundle discovery logs. |
 | `-ngreenexp` / `ngreenexp=1` | Enable experimental runtime monitor/timer paths (V60 monitor and extra diagnostics) |
 | `-ngreenv60` / `ngreenv60=1` | Force-enable V60 monitor. |
 | `-ngreenv60off` / `ngreenv60off=1` | Force-disable V60 monitor. |
@@ -200,9 +219,8 @@ Where:
 | `ngreenV77DelayKill=N` | Delay V77 display-pipe client termination by `N` monitor iterations (`0..60`, default `60` = effectively disabled) |
 | `-ngreenv88` / `ngreenv88=1` | Enable V88 scanout fill + plane toggle diagnostics (draws test bars/colors; off by default) |
 | `-ngreenv93` / `ngreenv93=1` | Enable V93 plane guard diagnostics (disabled by default). |
-| `-ngreenfullmtl` / `ngreenfullmtl=1` | Force full CoreDisplay Metal path on Ventura+/Sonoma by skipping Stage-3 NULL safety stubs (GetMTLTexture/GetMTLCommandQueue/RunFullDisplayPipe guard). This **does not** auto-enable Apple's original Blit3D initializer. |
-| `-ngreenfullmtldyld` / `ngreenfullmtldyld=1` | DYLD-side full-MTL override only. |
-| `-ngreenfullmtlcore` / `ngreenfullmtlcore=1` | Kernel-side full-MTL override only — forces `shouldForceFullMetalPath()` true. Accepts unified `-ngreenfullmtl` as fallback. Use together with `-ngreenfullmtldyld` for full override. |
+| `-ngreenfullmtl` / `ngreenfullmtl=1` | Kernel-side full-Metal policy override. It does not enable a DYLD control-flow patch and does not auto-enable Apple's original Blit3D initializer. |
+| `-ngreenfullmtlcore` / `ngreenfullmtlcore=1` | Equivalent kernel-side-only full-Metal policy override; the unified `-ngreenfullmtl` remains a fallback. |
 | `ngreenV142=0|1|2|3` / `-ngreenV142hardunsupported` / `-ngreenV142ok` / `-ngreenV142pass` / `-ngreenV142orig` | Select spoof-path `submitBlit` behavior on non-real TGL. `0`=return unsupported, `1`=bypass return 0 (**default/recommended**), `2`=bypass return 1, `3`=call Apple original (high-risk diagnostic). V186 applies this mode early before task/context mutation to reduce `IGAccelTask::release` lifetime crashes. |
 | `-ngreenbcsirq` | Enable BCS bit in tier-1 interrupt want mask on spoof path (advanced diagnostic). |
 | `ngreenV120=0|1|2` / `-ngreenV120ok` / `-ngreenV120fail` / `-ngreenV120pass` | Fallback return mode used when submitBlit sees invalid/null task on spoof path. |
@@ -215,8 +233,6 @@ Where:
 | `-ngreenv80l` / `ngreenv80l=1` | Run V80L plane-linearization writes continuously (every 50ms) instead of the default first-3-ticks-only behavior. **Testing only** — causes WS crash-loop + watchdog KP on normal boots. |
 | `ngreen-buf=N` | GGTT multi-buffer slots for the dp0 SURF-redirect path: `1`=single, `2`=double (default), `3`=triple. Each slot occupies 4000 GGTT pages (0xFA0000 bytes). Slot 0 → `SURF=0x0`, slot 1 → `SURF=0xFA0000`, slot 2 → `SURF=0x1F40000`. Apple's non-aperture IOSurface pages are remapped into their assigned slot on every flip; SURF is rewritten to the matching aperture address. Single-buffer collapses all flips to slot 0 (original behaviour). Double/triple allow the display engine to scan independent physical pages per IOSurface without cross-contamination. |
 | `-ngreenforceprops` / `ngreenforceprops=1` | Enable legacy forced IGPU property injection (`AAPL,ig-platform-id`, `model`, `saved-config`, etc.). Disabled by default in compatibility-first mode. |
-| `-ngreenV188htfind` | Enable narrow DYLD hash-find guard variant (V188) for AccessComplete crash diagnostics. |
-| `netdbg=<ip:port>` | Enable network debug logger destination for kernel-side NETDBG output. |
 | `IGLogLevel=8` | Maximum Intel GPU driver logging |
 | `-liludbg` | Enable Lilu debug logging |
 | `liludump=N` | Dump Lilu logs after `N` seconds (example: 125 or 200). |
@@ -226,14 +242,6 @@ Recommended debug order for `ngreenV142` on spoofed RPL/ADL:
 1. `ngreenV142=1` (stable bypass baseline)
 2. `ngreenV142=2` (alternate bypass semantics)
 3. `ngreenV142=3` only for controlled repro (Apple original path)
-
-Sonoma 14.7.1 note: when WindowServer crashes with `EXC_BAD_ACCESS` at `0x80` in
-`CoreDisplay::DisplaySurface::AccessComplete()` / `std::__hash_table::find`, NootedGreen
-now applies a non-real-TGL-only DYLD guard (V188) that stubs the crashing
-`MTLRenderPipelineState` hash-table `find` specialization so CoreDisplay can take its
-fallback path. Real TGL behavior is unchanged.
-
-`-ngreenV188htfind` enables the optional narrow V188 hash-find debug path. Keep it off for normal testing.
 
 ## Hookcase
 
@@ -326,21 +334,16 @@ The Intel TGL graphics driver supports three scheduler types, selectable at boot
 
 Type 5 bypasses `IGScheduler::initFirmware()` entirely, avoiding GuC/HuC binary loading which fails on spoofed devices. The RCS ring is initialized directly by the host driver.
 
-## Cross-Platform Detection (V52)
+## Native Tiger Lake path selection
 
-NootedGreen uses inline CPUID (`EAX=1`) at load time to read the real CPU model — no config.plist or device-ID spoofing can fake this. The result sets `isRealTGL`:
+The compatibility field `isRealTGL` is true only when the original PCI device
+ID is a known Tiger Lake ID **and** physical-function ownership has been
+established. It is false for every VF, including a Tiger Lake VF. CPUID is
+logged for diagnostics and never selects GPU register layouts or PF/VF policy.
 
-| CPU | Model | `isRealTGL` |
-|-----|-------|-------------|
-| Tiger Lake-U (i7-1165G7, etc.) | `0x8C` | `true` |
-| Tiger Lake-H (i7-11800H, etc.) | `0x8D` | `true` |
-| Raptor Lake-P (i7-13700H, etc.) | `0xBA` | `false` |
-| Raptor Lake-S | `0xBF` | `false` |
-| Raptor Lake-HX | `0xB7` | `false` |
-| Alder Lake-P | `0x9A` | `false` |
-| Alder Lake-S | `0x97` | `false` |
-
-When `isRealTGL = false` (RPL/ADL), the following RPL-specific patches are applied:
+When `isRealTGL = false`, generation- and VF-specific paths may be considered,
+but each invasive path must still pass its own PCI, VF capability, binary UUID
+and runtime-state admission as appropriate. Historical examples include:
 
 - **Topology overrides** — L3 bank count, max EU count, subslice count hardcoded for 96EU RPL config
 - **BCS engine bypass** — skip blitter engine init in `hwDevStart` (RPL BCS is dead under TGL driver)
@@ -348,7 +351,8 @@ When `isRealTGL = false` (RPL/ADL), the following RPL-specific patches are appli
 - **MultiForceWakeSelect=1** — redirect ForceWake to hooked `SafeForceWakeMultithreaded` (RPL ACK=0 on native path)
 - **BCS engine reset** — stop+clear dead BCS ring after `start()` (V51)
 
-When `isRealTGL = true`, all of the above are skipped — the driver uses Apple's native topology, GuC firmware, ForceWake, and BCS engine as-is.
+When `isRealTGL = true`, spoof-path overrides are skipped and the Apple Tiger
+Lake driver remains on its native physical-GPU path.
 
 ### Required GPU driver bundles
 
@@ -380,7 +384,8 @@ Runtime guards enforce this behavior:
 - If TGL framebuffer loads, ICL framebuffer processing is skipped.
 - If TGL accelerator loads, ICL accelerator processing is skipped.
 
-For Metal bundle discovery, DYLD patching still prioritizes `/Library/Extensions` first (via `gpu_bundle_find_trusted` path rewrite), with `/System/Library/Extensions` retained as fallback.
+NootedGreen no longer rewrites `gpu_bundle_find_trusted`; the operating system's
+normal bundle search and trust policy determines whether these bundles load.
 
 ## Compatibility
 
@@ -394,11 +399,11 @@ NootedGreen (Gen11/Gen12 — TGL driver spoofing):
 
 | Platform | Status | Est. | Notes |
 |----------|--------|------|-------|
-| **Tiger Lake** | ~90% | V52 | RPL-specific patches auto-skipped via CPUID. GuC, topology, ForceWake, BCS all use native Apple paths. Remaining risk: SKU bypass hook + DYLD patches still in the path. No real TGL hardware tested yet. |
+| **Tiger Lake** | Experimental | — | Native path requires a known TGL PCI identity and PF ownership. No real TGL hardware validation is claimed. |
 | **Raptor Lake-P** | ~70% | V80L | Primary dev platform (i7-13700H). System boots to login on macOS 14.7.1 (`23H222`). GPU reset storm tamed: V153/V154 circuit-breaker confirmed working. `userspace watchdog timeout` KP root cause identified and fixed: V80L plane-linearization in `v71EmrEnforcer` was fighting WindowServer over plane registers every 50ms — now limited to first 3 ticks. Brief display flash at boot preserved. Active work: V158 execlist/CSB drain. |
 | **Alder Lake** | ~35% | — | Same Gen12 arch as RPL, should behave similarly. Untested. |
 | **Rocket Lake** | ~25% | — | Gen12 LP but different display engine. Untested. |
-| **Ice Lake** | ~50% | V52 | Dedicated ICL path exists (ICL FB + ICL HW kextInfos, ICL-specific object offsets in `getGPUInfoICL`, SKU gate×3, platform remap, PAVP hook, DYLD ICL Metal device-ID bypass). Topology hardcoded to ICL GT2 LP (1×8×8=64EU). IRQ init disabled (V37 boot hang). ICL path only activates when TGL kexts are absent. Untested on real ICL hardware. |
+| **Ice Lake** | Experimental | — | Dedicated ICL kernel paths exist, but the former unversioned userspace Metal ID bypass was removed. Untested on real ICL hardware. |
 
 ## Building
 

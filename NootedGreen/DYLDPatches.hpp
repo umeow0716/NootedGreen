@@ -36,12 +36,15 @@ class DYLDPatch {
     DYLDPatch(const T (&find)[N], const T (&findMask)[N], const T (&replace)[N], const char *comment)
         : DYLDPatch(find, findMask, replace, N * sizeof(T), comment) {}
 
-    inline void apply(void *data, size_t size) const {
-        if (UNLIKELY(KernelPatcher::findAndReplaceWithMask(data, size, this->find, this->size, this->findMask,
-                this->findMask ? this->size : 0, this->replace, this->size, this->replaceMask,
-                this->replaceMask ? this->size : 0))) {
-            DBGLOG("DYLD", "Applied '%s' patch", this->comment);
-        }
+	inline bool apply(void *data, size_t size) const {
+		if (!data || !size || !this->find || !this->replace || !this->size)
+			return false;
+		const bool applied = KernelPatcher::findAndReplaceWithMask(data, size, this->find, this->size,
+			this->findMask, this->findMask ? this->size : 0, this->replace, this->size,
+			this->replaceMask, this->replaceMask ? this->size : 0);
+		if (UNLIKELY(applied))
+			DBGLOG("DYLD", "Applied '%s' patch", this->comment);
+		return applied;
     }
 
     static inline void applyAll(const DYLDPatch *patches, size_t count, void *data, size_t size) {
@@ -62,8 +65,6 @@ class DYLDPatches {
     void processPatcher(KernelPatcher &patcher);
 
     private:
-    static void apply(char *path, void *data, size_t size);
-
     mach_vm_address_t orgCsValidatePage {0};
     static void wrapCsValidatePage(vnode *vp, memory_object_t pager, memory_object_offset_t page_offset,
         const void *data, int *validated_p, int *tainted_p, int *nx_p);
@@ -77,12 +78,6 @@ static const char kHwGvaId[] = "Mac-7BA5B2D9E42DDD94";
 //! AppleGVA model check
 static const char kAGVABoardIdOriginal[] = "board-id\0hw.model";
 static const char kAGVABoardIdPatched[] = "hwgva-id\0hw.model";
-
-static const char kCoreLSKDMSEPath[] = "/System/Library/PrivateFrameworks/CoreLSKDMSE.framework/Versions/A/CoreLSKDMSE";
-static const char kCoreLSKDPath[] = "/System/Library/PrivateFrameworks/CoreLSKD.framework/Versions/A/CoreLSKD";
-
-static const UInt8 kCoreLSKDOriginal[] = {0xC7, 0xC0, 0x01, 0x00, 0x00, 0x00, 0x0F, 0xA2};
-static const UInt8 kCoreLSKDPatched[] = {0xC7, 0xC0, 0xC3, 0x06, 0x03, 0x00, 0x66, 0x90};
 
 //! AppleGVAHEVCEncoder model check
 static const char kHEVCEncBoardIdOriginal[] = "vendor8bit\0IOService\0board-id";
