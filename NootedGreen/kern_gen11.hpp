@@ -1379,6 +1379,9 @@ private:
 	static uint32_t vfCreateUkContext(void *that, uint64_t owner, int priority);
 	static bool vfWorkQueueInit(void *that, void *accelerator, uint32_t id, void *process);
 	mach_vm_address_t oVfWorkQueueInit {};
+	static void vfWorkQueueFree(void *that);
+	mach_vm_address_t oVfWorkQueueFree {};
+	mach_vm_address_t vfOSObjectFree {};
 	mach_vm_address_t oVfCreateUkContext {};
 	static uint32_t vfAllocContextId(void *that, uint64_t owner, bool clear);
 	mach_vm_address_t oVfAllocContextId {};

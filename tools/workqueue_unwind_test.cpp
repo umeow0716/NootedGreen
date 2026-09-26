@@ -52,5 +52,23 @@ int main() {
             assert(ops.events == expected); // no duplicate unlock/free/release
         }
     }
-    std::puts("PASS workqueue init failure states, cleanup ordering and repeat cleanup");
+    for (unsigned resources = 0; resources < 8; ++resources) {
+        const void *accelerator = resources & 1 ? &acceleratorObject : nullptr;
+        const void *lock = resources & 2 ? &lockObject : nullptr;
+        const void *buffer = resources & 4 ? &bufferObject : nullptr;
+        for (void *initial : {static_cast<void *>(nullptr), static_cast<void *>(&bufferObject),
+                              NGWorkQueue::failedInitMarker()}) {
+            void *process = initial;
+            const bool marked = NGWorkQueue::markFailedInit(accelerator, lock, buffer, process);
+            assert(marked == (resources == 0 && initial == nullptr));
+            assert(process == (marked ? NGWorkQueue::failedInitMarker() : initial));
+            process = initial;
+            const bool consumed = NGWorkQueue::consumeFailedInit(accelerator, lock, buffer, process);
+            assert(consumed == (resources == 0 && initial == NGWorkQueue::failedInitMarker()));
+            assert(process == (consumed ? nullptr : initial));
+            if (consumed)
+                assert(!NGWorkQueue::consumeFailedInit(nullptr, nullptr, nullptr, process));
+        }
+    }
+    std::puts("PASS workqueue failure unwind, ordering, repeat cleanup and 24 destruction-marker states");
 }

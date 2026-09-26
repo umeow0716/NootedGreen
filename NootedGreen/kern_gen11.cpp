@@ -2190,9 +2190,15 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		// rel32 targets now remain safe even when they bypass the routed entry.
 		// 0x001f00ff encodes SQIDI mask 0xff and 32 doorbells per SQIDI.
 		if (vfIdentifyDevice() == VfIdentity::Virtual) {
+			this->vfOSObjectFree = patcher.solveSymbol(KernelPatcher::KernelID,
+				"__ZN8OSObject4freeEv");
+			PANIC_COND(!this->vfOSObjectFree, "ngreen",
+			           "Cannot resolve base destructor for failed VF workqueues");
 			RouteRequestPlus workQueueInitRoute[] = {
 				{"__ZN22IGHardwareGuCWorkQueue19initWithAcceleratorEP22IOGraphicsAccelerator2jP37UK_GEN11_SCHED_PROCESS_DESCRIPTOR_REC",
 				 vfWorkQueueInit, this->oVfWorkQueueInit},
+				{"__ZN22IGHardwareGuCWorkQueue4freeEv",
+				 vfWorkQueueFree, this->oVfWorkQueueFree},
 			};
 			PANIC_COND(!RouteRequestPlus::routeAll(patcher, index, workQueueInitRoute, address, size),
 			           "ngreen", "Failed to install VF workqueue allocation unwind");
@@ -8720,11 +8726,21 @@ unsigned long Gen11::loadGuCBinary(void *that) {
 	return 0;
 }
 
+// A failed, unpublished object has no process pointer. Use this otherwise
+// invalid pointer value only to hand its proven cleanup state to virtual free;
+// never dereference it or publish this object to the native caller.
 bool Gen11::vfWorkQueueInit(void *that, void *accelerator, uint32_t id, void *process) {
 	// Installed only for the UUID-pinned VF payload. withOptions owns this
 	// fresh object exclusively until init returns; successful queues unchanged.
-	if (!that || !accelerator || !process || !vfCanUseSleepingLock())
+	if (!that)
 		return false;
+	PANIC_COND(getMember<void *>(that, 0x10) || getMember<void *>(that, 0x20) ||
+		getMember<void *>(that, 0x30) || getMember<void *>(that, 0x38), "ngreen",
+		"Refusing reinitialization of a nonempty VF workqueue");
+	if (!accelerator || !process || id >= NGContextPool::invalidId || !vfCanUseSleepingLock()) {
+		getMember<void *>(that, 0x38) = NGWorkQueue::failedInitMarker();
+		return false;
+	}
 	const bool result = FunctionCast(vfWorkQueueInit, callback->oVfWorkQueueInit)(
 		that, accelerator, id, process);
 	if (result)
@@ -8737,10 +8753,28 @@ bool Gen11::vfWorkQueueInit(void *that, void *accelerator, uint32_t id, void *pr
 	PANIC_COND(!NGWorkQueue::unwindFailedInit(getMember<void *>(that, 0x10),
 		getMember<void *>(that, 0x20), getMember<void *>(that, 0x30), operations),
 		"ngreen", "Unexpected failed VF workqueue state; cannot safely unwind");
-	// Native withOptions will still release the failed object. Its missing
-	// OSObject::free call and createUkContext's unchecked null remain separate
-	// blockers; do not interpret this local unwind as safe end-to-end creation.
+	PANIC_COND(!NGWorkQueue::markFailedInit(getMember<void *>(that, 0x10),
+		getMember<void *>(that, 0x20), getMember<void *>(that, 0x30),
+		getMember<void *>(that, 0x38)), "ngreen",
+		"Failed VF workqueue unexpectedly retains resources or process");
+	// Native withOptions releases this object next. Only the marked, fully
+	// unwound object is eligible for the base-free route below.
 	return false;
+}
+
+void Gen11::vfWorkQueueFree(void *that) {
+	PANIC_COND(!that, "ngreen", "Null VF workqueue in free");
+	if (getMember<void *>(that, 0x38) == NGWorkQueue::failedInitMarker()) {
+		PANIC_COND(!callback->vfOSObjectFree || !NGWorkQueue::consumeFailedInit(
+			getMember<void *>(that, 0x10), getMember<void *>(that, 0x20),
+			getMember<void *>(that, 0x30), getMember<void *>(that, 0x38)),
+			"ngreen", "Cannot destroy incompletely unwound VF workqueue");
+		using BaseFree = void (*)(void *);
+		reinterpret_cast<BaseFree>(callback->vfOSObjectFree)(that);
+		return; // object is deleted, no further access
+	}
+	// Published queue teardown still requires separate DMA-quiescence work.
+	FunctionCast(vfWorkQueueFree, callback->oVfWorkQueueFree)(that);
 }
 
 uint32_t Gen11::vfCreateUkContext(void *that, uint64_t owner, int priority) {

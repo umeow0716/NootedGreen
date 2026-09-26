@@ -1013,3 +1013,24 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   delete. This patch fixes failed-init retained resources only: failed object
   destruction, successful queue teardown, createUkContext's unchecked null
   and reserved-ID rollback remain OPEN. VM is not ready for dynamic testing.
+
+### Destroy only explicitly marked failed workqueue objects
+
+- Resolved exported __ZN8OSObject4freeEv from KernelID (XNU Libkern.exports
+  line 388), without guessing a private vtable slot or fake subclass cast.
+  The pinned queue derives directly from OSObject; its deleting destructor
+  at 0x1e268 calls OSObjectD2 and operator delete with size 0x48. XNU's
+  allocation path uses Z_WAITOK_ZERO, matching the inspected fresh fields.
+- VF init now rejects nonempty reinitialization. Early argument failures and
+  successfully unwound native failures mark the unused process slot with an
+  invalid pointer sentinel. The VF virtual-free hook recognizes ONLY that
+  marker, requires accelerator/lock/buffer all null, consumes the marker,
+  and calls OSObject::free exactly once without further object access.
+  Normal queues still take native free; their DMA teardown is NOT fixed.
+- Added all 24 resource-presence/process-marker combinations and repeated
+  consumption tests. An initial test compilation exposed mixed nullptr/void*
+  initializer-list deduction; corrected to explicit void*. Final complete
+  suite passes /tmp/ngreen-static.B313NQ. 53c8b8b CI 36222252110 succeeded.
+- Failed fresh queue resources/object now have a statically checked unwind;
+  caller createUkContext still dereferences the factory's null result and
+  leaks its reserved ID on other failures. No guest deployment or VM boot.

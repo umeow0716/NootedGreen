@@ -1,6 +1,24 @@
 #pragma once
 
 namespace NGWorkQueue {
+inline void *failedInitMarker() { return reinterpret_cast<void *>(1); }
+
+inline bool markFailedInit(const void *accelerator, const void *lock,
+                           const void *buffer, void *&process) {
+    if (accelerator || lock || buffer || process)
+        return false;
+    process = failedInitMarker();
+    return true;
+}
+
+inline bool consumeFailedInit(const void *accelerator, const void *lock,
+                              const void *buffer, void *&process) {
+    if (accelerator || lock || buffer || process != failedInitMarker())
+        return false;
+    process = nullptr;
+    return true;
+}
+
 // Only for a fresh, unpublished pinned-TGL workqueue whose native init returned
 // false. That function has exactly two failure exits: lock allocation failed,
 // or buffer allocation failed with its new lock still held by this thread.
