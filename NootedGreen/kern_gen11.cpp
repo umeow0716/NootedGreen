@@ -1645,16 +1645,12 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			{"__ZN19AppleIntelPowerWell21hwSetPowerWellStatePGEbj.cold.11",releaseDoorbell},
 			{"__ZN19AppleIntelPowerWell21hwSetPowerWellStatePGEbj.cold.12",releaseDoorbell},
 			{"__ZN19AppleIntelPowerWell22hwSetPowerWellStateAuxEbj.cold.1",releaseDoorbell},*/
-			// V204: re-enable AppleIntelScaler/Plane init constructors so ccont is set
-			// once at object construction. Friend's working version routes only these and
-			// keeps the per-method patches commented; we keep both as belt-and-suspenders.
+			// V204: keep the native constructor results, then install the controller's
+			// captured register accessor only when that accessor is non-null.
 			{"__ZN16AppleIntelScaler4initE10IGScalerID", AppleIntelScalerinit, this->oAppleIntelScalerinit},
 			{"__ZN15AppleIntelPlane4initE9IGPlaneID",     AppleIntelPlaneinit,  this->oAppleIntelPlaneinit},
-			// AppleIntelPlaneinit/Scalerinit hooks are disabled in kern_genx.cpp, so fields
-			// 0x90 (plane RAM) and 0x28/0x10 (scaler RAM) are never set at object-init time.
-			// Every entry point into Plane/Scaler that calls ReadRegister32 will crash with
-			// this=NULL unless we patch ccont in here.  These hooks must stay until the init
-			// hooks are re-enabled (see kern_genx.cpp lines 75-76).
+			// Later entry points repeat the non-null accessor repair in case construction
+			// preceded framebuffer/controller publication.
 			{"__ZN16AppleIntelScaler13disableScalerEb",disableScaler, this->odisableScaler},
 			{"__ZN15AppleIntelPlane11enablePlaneEb",enablePlane, this->oenablePlane},
 			{"__ZN16AppleIntelScaler17programPipeScalerEP21AppleIntelDisplayPath",programPipeScaler, this->oprogramPipeScaler},
@@ -3406,42 +3402,48 @@ bool Gen11::IGAccelTaskIsKernelGPUTask(const void *that)
 }
 
 void *ccont;
-void *ccont2;  // AppleIntelBaseController pointer (captured in FBMemMgr_Init)
+void *ccont2;
 
 //FB Hooks
 
 uint64_t Gen11::AppleIntelScalerinit(AppleIntel::AppleIntelScaler *that, uint32_t pipeIndex)
 {
 	auto ret = FunctionCast(AppleIntelScalerinit, callback->oAppleIntelScalerinit)(that, pipeIndex);
-	that->fWriteAccessor = ccont;
-	that->fController    = reinterpret_cast<AppleIntel::AppleIntelBaseController *>(ccont2);
+	if (ccont)
+		that->fWriteAccessor = ccont;
+	if (ccont2)
+		that->fController = reinterpret_cast<AppleIntel::AppleIntelBaseController *>(ccont2);
 	return ret;
 }
 
 uint64_t Gen11::AppleIntelPlaneinit(AppleIntel::AppleIntelPlane *that, uint32_t pipeIndex)
 {
 	auto ret = FunctionCast(AppleIntelPlaneinit, callback->oAppleIntelPlaneinit)(that, pipeIndex);
-	getMember<void *>(that, 0x90) = ccont; // fWriteAccessor — ccont must NOT go to real fRegCache at +0x88
+	if (ccont)
+		getMember<void *>(that, 0x90) = ccont; // fWriteAccessor — ccont must NOT go to real fRegCache at +0x88
 
 	return ret;
 }
 
 void Gen11::disableScaler(AppleIntel::AppleIntelScaler *that, bool disable)
 {
-	that->fWriteAccessor = ccont;
+	if (ccont)
+		that->fWriteAccessor = ccont;
 	FunctionCast(disableScaler, callback->odisableScaler)(that, disable);
 }
 
 void Gen11::enablePlane(AppleIntel::AppleIntelPlane *that, bool enable)
 {
-	getMember<void *>(that, 0x90) = ccont; // fWriteAccessor — ccont must NOT go to real fRegCache at +0x88
+	if (ccont)
+		getMember<void *>(that, 0x90) = ccont; // fWriteAccessor — ccont must NOT go to real fRegCache at +0x88
 	FunctionCast(enablePlane, callback->oenablePlane)(that, enable);
 
 }
 
 void Gen11::programPipeScaler(AppleIntel::AppleIntelScaler *that, AppleIntel::AppleIntelDisplayPath *displayPath)
 {
-	that->fWriteAccessor = ccont;
+	if (ccont)
+		that->fWriteAccessor = ccont;
 	FunctionCast(programPipeScaler, callback->oprogramPipeScaler)(that, displayPath);
 }
 
@@ -4822,13 +4824,24 @@ uint32_t Gen11::AppleIntelFramebufferinit(AppleIntel::AppleIntelFramebuffer *fra
                                           AppleIntel::AppleIntelBaseController *cont,
                                           uint32_t pipeIndex)
 {
+	if (cont) {
+		callback->framecont = cont;
+		ccont2 = cont;
+		auto *accessor = getMember<void *>(cont, 0xC40);
+		if (accessor)
+			ccont = accessor;
+	}
 	// Offsets into the full IOFramebuffer subclass hierarchy (much larger than the
 	// tail fields captured in AppleIntelParams::AppleIntelFramebuffer).
-	getMember<void *>(frame, 0x4a40) = ccont;
-	getMember<void *>(frame, 0xc40)  = ccont;
+	if (ccont) {
+		getMember<void *>(frame, 0x4a40) = ccont;
+		getMember<void *>(frame, 0xc40) = ccont;
+	}
 	auto ret = FunctionCast(AppleIntelFramebufferinit, callback->oAppleIntelFramebufferinit)(frame, cont, pipeIndex);
-	getMember<void *>(frame, 0x4a40) = ccont;
-	getMember<void *>(frame, 0xc40)  = ccont;
+	if (ccont) {
+		getMember<void *>(frame, 0x4a40) = ccont;
+		getMember<void *>(frame, 0xc40) = ccont;
+	}
 	return ret;
 }
 
@@ -5422,6 +5435,10 @@ bool Gen11::AppleIntelBaseControllerstart(AppleIntel::AppleIntelBaseController *
 {
 	if (!that || !ngPhysicalGpuAccessAllowed())
 		return false;
+	callback->framecont = that;
+	ccont2 = that;
+	if (auto *accessor = getMember<void *>(that, 0xC40))
+		ccont = accessor;
 	// V25: Display workarounds BEFORE start (no ForceWake needed for display regs 0x4xxxx+).
 	// GT workarounds moved AFTER start (ForceWake must be held for GT regs 0x0-0x7FFF).
 	
@@ -11766,48 +11783,6 @@ int Gen11::wrapPmNotifyWrapper(unsigned int a0, unsigned int a1, unsigned long l
 	return 0;
 }
 
-bool Gen11::patchRCSCheck(mach_vm_address_t& start) {
-	constexpr unsigned ninsts_max {256};
-	
-	hde64s dis;
-	
-	bool found_cmp = false;
-	bool found_jmp = false;
-
-	for (size_t i = 0; i < ninsts_max; i++) {
-		auto sz = Disassembler::hdeDisasm(start, &dis);
-
-		if (dis.flags & F_ERROR) {
-			break;
-		}
-
-		/* cmp byte ptr [rcx], 0 */
-		if (!found_cmp && dis.opcode == 0x80 && dis.modrm_reg == 7 && dis.modrm_rm == 1)
-			found_cmp = true;
-		/* jnz rel32 */
-		if (found_cmp && dis.opcode == 0x0f && dis.opcode2 == 0x85) {
-			found_jmp = true;
-			break;
-		}
-
-		start += sz;
-	}
-	
-	if (found_jmp) {
-		auto status = MachInfo::setKernelWriting(true, KernelPatcher::kernelWriteLock);
-		if (status == KERN_SUCCESS) {
-			constexpr uint8_t nop6[] {0x90, 0x90, 0x90, 0x90, 0x90, 0x90};
-			lilu_os_memcpy(reinterpret_cast<void*>(start), nop6, arrsize(nop6));
-			MachInfo::setKernelWriting(false, KernelPatcher::kernelWriteLock);
-			return true;
-		} else {
-			return false;
-		}
-	} else {
-		return false;
-	}
-}
-
 /**
  * Port of i915 force wake for Gen12 (TGL/ADL/RPL).
  * Replaces IntelAccelerator::SafeForceWakeMultithreaded.
@@ -12360,37 +12335,12 @@ void  Gen11::readAndClearInterrupts(AppleIntel::AppleIntelBaseController *that, 
 	FunctionCast(readAndClearInterrupts, callback->oreadAndClearInterrupts)(that,param_1);
 }
 
-void Gen11::FBMemMgr_Init(void *that)
-{
-	ccont  = getMember<void *>(that, 0xc40);  // MMIO register access manager
-	ccont2 = that;                             // AppleIntelBaseController itself
-
-	FunctionCast(FBMemMgr_Init, callback->oFBMemMgr_Init)(that);
-	
-	
-
-	/*IODeviceMemory * m= NGreen::callback->iGPU->getDeviceMemoryWithIndex(0);
-	IODeviceMemory *dm;
-	m->withSubRange(dm,0x4180000,0x12000);//fDSBBufferBytes = 73728, fDSBBufferBaseOffset = 68681728
-	IOMemoryMap *dsb=dm->map();
-	
-	IODeviceMemory *dm2;
-	m->withSubRange(dm2,0x4192000,0x3000);//fConnectionStatusBytes = 12288, fConnectionStatusOffset = 68755456
-	IOMemoryMap *dsb2=dm2->map();*/
-	
-}
-
 uint32_t Gen11::probePortMode()
 {
 	auto ret=FunctionCast(probePortMode, callback->oprobePortMode)();
 	return ret;
 };
 
-
-uint32_t Gen11::wdepthFromAttribute(void *that,uint param_1)
-{
-	return 0x1e;
-};
 
 uint32_t Gen11::raReadRegister32(void *that,unsigned long param_1)
 {
@@ -12409,71 +12359,6 @@ unsigned long Gen11::raReadRegister32b(void *that,void *param_1,unsigned long pa
 	//if (reinterpret_cast<volatile uint64_t*>(that)==nullptr) return 0;
 	//if (reinterpret_cast<volatile uint64_t*>(param_1)==nullptr) return 0;
 	return  raReadRegister32(that,reinterpret_cast<uint64_t>(param_1) + param_2);
-};
-
-uint64_t Gen11::raReadRegister64(void *that,unsigned long param_1)
-{
-	//if (reinterpret_cast<volatile uint64_t*>(that)==nullptr) return 0;
-	
-	return FunctionCast(raReadRegister64, callback->oraReadRegister64)(that,param_1);
-};
-uint64_t Gen11::raReadRegister64b(void *that,void *param_1,unsigned long param_2)
-{
-	//if (reinterpret_cast<volatile uint64_t*>(that)==nullptr) return 0;
-	return  raReadRegister64(that,reinterpret_cast<uint64_t>(param_1) + param_2);
-};
-
-void Gen11::radWriteRegister32(void *that,unsigned long param_1, UInt32 param_2)
-{
-	radWriteRegister32f( that,param_1,param_2);
-};
-
-void Gen11::radWriteRegister32f(void *that,unsigned long param_1, UInt32 param_2)
-{
-	//FunctionCast(radWriteRegister32f, callback->oradWriteRegister32f)( that,param_1,param_2);
-};
-
-void Gen11::raWriteRegister64(void *that,unsigned long param_1,UInt64 param_2)
-{
-	//if (reinterpret_cast<volatile uint64_t*>(that)==nullptr) return;
-
-	if (NGreen::callback) {
-		const uint32_t reg = static_cast<uint32_t>(param_1 & 0xFFFFF);
-		const bool looksLikePlaneSurf =
-			(reg >= 0x60000 && reg <= 0xBFFFF) &&
-			((reg & 0xFFF) == 0x19C);
-
-		if (looksLikePlaneSurf && param_2 == 0) {
-			const uint32_t ctlReg = reg - 0x1C;
-			const uint32_t planCtl = NGreen::callback->readReg32(ctlReg);
-			if (planCtl & 0x80000000U) {
-				const uint32_t currentSurf = NGreen::callback->readReg32(reg);
-				if (currentSurf != 0) {
-					param_2 = static_cast<UInt64>(currentSurf);
-				} else {
-					NGreen::callback->writeReg32(ctlReg, planCtl & ~0x80000000U);
-				}
-			}
-		}
-	}
-
-	FunctionCast(raWriteRegister64, callback->oraWriteRegister64)(that, param_1, param_2);
-};
-
-void Gen11::raWriteRegister64b(void *that,void *param_1,unsigned long param_2,UInt64 param_3)
-{
-	//if (reinterpret_cast<volatile uint64_t*>(that)==nullptr) return;
-	raWriteRegister64( that,reinterpret_cast<uint64_t>(param_1) + param_2,param_3);
-};
-
-void Gen11::setupPlanarSurfaceDBUF()
-{
-	//FunctionCast(setupPlanarSurfaceDBUF, callback->osetupPlanarSurfaceDBUF)();
-};
-
-void Gen11::updateDBUF(void *that,uint param_1,uint param_2,bool param_3)
-{
-	//setupPlanarSurfaceDBUF();
 };
 
 int Gen11::LightUpEDP(void *that,void *param_1, void *param_2,void *param_3)
@@ -12760,12 +12645,6 @@ void Gen11::hwConfigureCustomAUX(AppleIntel::AppleIntelBaseController *that, boo
 		FunctionCast(hwConfigureCustomAUX, callback->ohwConfigureCustomAUX)(that, param_1);
 }
 
-int Gen11::hasExternalDispla()
-{
-
-	return 1;
-}
-
 long blti=0;
 
 uint8_t Gen11::isPanelPowerOn()
@@ -12818,11 +12697,6 @@ void Gen11::setupDisplayTiming (void *that,void *param_1,
 
 unsigned long Gen11::getPixelInformation (void *that, uint param_1,int param_2,int param_3, void *param_4){
 	return FunctionCast(getPixelInformation, callback->ogetPixelInformation)(that,param_1,param_2, param_3, param_4);
-}
-
-int Gen11::blit3d_supported(void *param_1,void *param_2)
-{
-	return 0;
 }
 
 uint8_t Gen11::isPanelPowerOn(void *that)

@@ -1284,3 +1284,20 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   blit capability routing and native firmware paths are unchanged. This is
   dead-code removal, not a claim that the corresponding hardware facilities
   are fully reviewed or implemented.
+
+### Removed dormant register-access shims and repaired PF accessor capture
+
+- A second reachability pass removed the unused instruction-scanning RCS
+  bypass, forced depth/external-display/blit-success functions, no-op DBUF
+  handlers, and unrouted 64-bit/register-access forwarding shims. Several had
+  unresolved original slots or fabricated success values, although no active
+  route reached them.
+- The old `FBMemMgr_Init` body was also unrouted, so globals used by active PF
+  plane/scaler hooks were never initialized there. Those hooks nevertheless
+  overwrote native object fields with the null globals. Physical framebuffer
+  controller/framebuffer entry points now capture the controller and its
+  existing register accessor directly; plane/scaler repairs only write a
+  non-null captured value and otherwise preserve native initialization.
+- VF framebuffer probe/start is still rejected before any of these physical
+  routes are installed. The PF repair is compile/static evidence only and must
+  not be treated as physical display validation.

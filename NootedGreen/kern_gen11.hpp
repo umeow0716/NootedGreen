@@ -1475,7 +1475,6 @@ private:
 	static bool submitBlit(void *that, void *param_1, void *param_2, void *param_3, bool param_4);
 	mach_vm_address_t osubmitBlit {};
 	
-	static bool patchRCSCheck(mach_vm_address_t& start);  // bypass RCS engine check
 	static void forceWake(void *that, bool set, uint32_t dom, uint8_t ctx);  // custom forcewake
 	mach_vm_address_t oforceWake {};
 	static void wrapSafeForceWake(void *that, bool set, uint32_t dom);       // SafeForceWake wrapper
@@ -1747,8 +1746,6 @@ private:
 	static void AppleIntelPowerWellinit(AppleIntel::AppleIntelPowerWell *that, AppleIntel::AppleIntelBaseController *param_1);
 	mach_vm_address_t oAppleIntelPowerWellinit {};
 	
-	static int hasExternalDispla();
-	
 	static void enableDisplayEngine(AppleIntel::AppleIntelBaseController *that);
 	mach_vm_address_t oenableDisplayEngine {};
 	
@@ -1806,24 +1803,12 @@ private:
 	static uint32_t probePortMode();  // detect DDI port signaling mode (DP/HDMI/eDP)
 	mach_vm_address_t oprobePortMode {};
 	
-	static uint32_t wdepthFromAttribute(void *that,uint param_1);
-	
 	// ── Register access (ra = register access) ──
 	static uint32_t raReadRegister32(void *that,unsigned long param_1);
 	mach_vm_address_t oraReadRegister32 {};
 	
 	static unsigned long raReadRegister32b(void *that,void *param_1,unsigned long param_2);
 	mach_vm_address_t oraReadRegister32b {};
-	
-	static uint64_t raReadRegister64(void *that,unsigned long param_1);
-	mach_vm_address_t oraReadRegister64 {};
-	
-	static uint64_t raReadRegister64b(void *that,void *param_1,unsigned long param_2);
-	
-	static void radWriteRegister32(void *that,unsigned long param_1, UInt32 param_2);
-	mach_vm_address_t oradWriteRegister32 {};
-	static void radWriteRegister32f(void *that,unsigned long param_1, UInt32 param_2);
-	mach_vm_address_t oradWriteRegister32f {};
 	
 	static void raWriteRegister32(void *that,unsigned long param_1, UInt32 param_2);
 	mach_vm_address_t oraWriteRegister32 {};
@@ -1833,12 +1818,6 @@ private:
 	static void raWriteRegister32f(void *that,unsigned long param_1, UInt32 param_2);
 	mach_vm_address_t oraWriteRegister32f {};
 	
-	static void raWriteRegister64(void *that,unsigned long param_1,UInt64 param_2);
-	mach_vm_address_t oraWriteRegister64 {};
-	
-	static void raWriteRegister64b(void *that,void *param_1,unsigned long param_2,UInt64 param_3);
-	
-
 	// ── Display buffer & memory management ──
 	static bool IGHardwareGlobalPageTableInitWithOptions(void *that,
 	                                                    void *accelerator,
@@ -1871,17 +1850,6 @@ private:
 	                                                   uint64_t flags);
 	mach_vm_address_t oIGHardwareGlobalPageTableMapRangeDummy {};
 
-	static void setupPlanarSurfaceDBUF();  // DBUF allocation for planar (NV12/P010) surfaces
-	mach_vm_address_t osetupPlanarSurfaceDBUF {};
-	
-	static void updateDBUF(void *that,uint param_1,uint param_2,bool param_3);
-	
-	static void FBMemMgr_Init(void *that);
-	mach_vm_address_t oFBMemMgr_Init {};
-	
-	static int blit3d_supported(void *param_1,void *param_2);
-	mach_vm_address_t oblit3d_supported {};
-	
 	static int LightUpEDP(void *that,void *param_1, void *param_2,void *param_3);  // eDP panel power-on
 	mach_vm_address_t oLightUpEDP {};
 	
