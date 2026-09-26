@@ -1812,3 +1812,25 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   Their removal instead narrows and stabilizes the shared physical-GPU code
   surface. `/tmp/ngreen-static.2hbOxj` passes the full offline suite; no VM or
   hardware action occurred.
+
+### Removal of framebuffer policy and register-diagnostic interception
+
+- Removed three physical-framebuffer routes that replaced policy rather than
+  implementing a documented hardware requirement. They forced aperture memory,
+  rewrote WindowServer's `wsrv` state from 1 to 3, and repeatedly disabled PSR
+  while sampling raw display registers. The associated `getOnlineInfo` hook was
+  a logging-only native trampoline. Native framebuffer/WindowServer policy is
+  authoritative again; a VF never reaches this framebuffer patch set.
+- Removed the V93 opt-in parser and the stale multi-buffer option left after
+  their scanout-redirection implementations were retired. The separate generic
+  zero-SURF safety guard remains under review because it is a fail-safe against
+  an enabled plane fetching GGTT page zero, not a display-mode policy.
+- `FastWriteRegister32` and its original-function slot were logging-only after
+  prior experiments had been disabled. DMC SRAM writes now use the common
+  aligned, allowlisted and BAR-length-checked accessor. `raWriteRegister32`
+  retains only its required null-accessor fallback and native call-through.
+- The force-wake register helpers were never routed to Apple functions, so their
+  original pointers could never be populated. They now use the common bounded
+  BAR0 accessor and no longer decode unverified private controller offsets or
+  emit broad RCS/power-well passthrough logs. `/tmp/ngreen-static.cyj2sZ`
+  passes the complete static suite; no VM or hardware access occurred.

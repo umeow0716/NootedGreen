@@ -124,6 +124,18 @@ sources returns the current count to 1,303; this does not close older coverage.
   retired. The full static suite passes in `/tmp/ngreen-static.aikyPk`; the VM
   remained off and hardware behavior is not inferred from that result.
 
+### Physical framebuffer policy cleanup
+
+- Removed the remaining V400--V408 physical scanout experiment group and its
+  BAR2/GGTT diagnostic probe. Native plane, scaler, CRTC, watermark, DSC and
+  color-pipeline builders are no longer cross-mutated by that group.
+- Removed forced aperture-memory and WindowServer-active policy, continuous PSR
+  writes, the logging-only online-state/FastWrite hooks, and stale boot options.
+  The internal force-wake MMIO helper now uses the common checked BAR mapping
+  instead of unverified controller-object offsets. This completes review of
+  those routes only; AUX, lane selection, power-well, DMC and remaining byte
+  patches are still open. `/tmp/ngreen-static.cyj2sZ` passes the full suite.
+
 ### Boot-policy cleanup
 
 - The old `ngreenfullmtl*` switch did not enable Metal. Its only remaining

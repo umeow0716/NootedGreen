@@ -1469,10 +1469,8 @@ private:
 	
 	// ── MMIO register access wrappers (can intercept/log/redirect) ──
 	static void wrapWriteRegister32(void *controller, uint32_t address, uint32_t value);
-	mach_vm_address_t owrapWriteRegister32 {};
 	
 	static uint32_t wrapReadRegister32(void *controller, uint32_t address);
-	mach_vm_address_t owrapReadRegister32 {};
 	
 	static void hwInitializeCState(AppleIntel::AppleIntelBaseController *that);
 	mach_vm_address_t ohwInitializeCState {};
@@ -1484,9 +1482,6 @@ private:
 	// V131: Cached fallback contexts for spoofed RPL path to prevent NULL task submission
 	static void hwConfigureCustomAUX(AppleIntel::AppleIntelBaseController *that, bool param_1);
 	mach_vm_address_t ohwConfigureCustomAUX {};
-	
-	static void FastWriteRegister32(AppleIntel::AppleIntelBaseController *that, unsigned long param_1, uint32_t param_2);
-	mach_vm_address_t oFastWriteRegister32 {};
 	
 	mach_vm_address_t gPlatformInformationList {};
 
@@ -1515,26 +1510,6 @@ private:
 	static void setupOptimalLaneCount(AppleIntel::AppleIntelBaseController *that, const IODetailedTimingInformationV2 *timing, unsigned int bpp);
 	mach_vm_address_t osetupOptimalLaneCount {};
 
-	// V96: Force display online — WEG's force-online (FOD) hooks getDisplayStatus which
-	// does NOT exist in the TGL framebuffer kext, so it fails with "err 2" at boot.
-	// The TGL FB uses getOnlineInfo instead; hook it here to unconditionally report online.
-	static void getOnlineInfo(AppleIntel::AppleIntelFramebuffer *that, AppleIntel::AppleIntelDisplayPath *displayPath, unsigned char *online, unsigned char *changed);
-	mach_vm_address_t ogetOnlineInfo {};
-
-	// Path B: Force AppleIntelFramebuffer::isApertureMemoryRequired() to return true under
-	// dp0 mode so setupScanoutMemory never migrates from aperture to non-aperture memory
-	// when WindowServer transitions fWSAAState 0→3.  Returns the original value otherwise.
-	static bool wrapIsApertureMemoryRequired(AppleIntel::AppleIntelFramebuffer *that);
-	mach_vm_address_t oIsApertureMemoryRequired {};
-
-	// Path C: Hook AppleIntelFramebuffer::setAttribute(IOSelect, uintptr_t).
-	// On dp0 + !isRealTGL: when WindowServer writes kIOWindowServerActiveAttribute
-	// ('wsrv' = 0x77737276) with value 0x1 (degrade), coerce to 0x3 (stay-active) before
-	// calling original — preserves kernel-tracked fWSAAState so the driver keeps treating
-	// WS as fully active.  All other attribute writes pass through unchanged.
-	static IOReturn wrapSetAttribute(void *that, uint32_t attr, uintptr_t value);
-	mach_vm_address_t oSetAttribute {};
-	
 	static void blit3d_submit_rectlist(void *param_1,void *param_2,void *param_3);
 	mach_vm_address_t oblit3d_submit_rectlist {};
 	
@@ -1610,9 +1585,6 @@ private:
 	mach_vm_address_t oraWriteRegister32 {};
 	
 	static void raWriteRegister32b(void *that,void *param_1,unsigned long param_2, UInt32 param_3);
-	
-	static void raWriteRegister32f(void *that,unsigned long param_1, UInt32 param_2);
-	mach_vm_address_t oraWriteRegister32f {};
 	
 	// ── Display buffer & memory management ──
 	static bool IGHardwareGlobalPageTableInitWithOptions(void *that,

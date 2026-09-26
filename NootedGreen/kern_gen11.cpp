@@ -1630,15 +1630,6 @@ static bool isDisplayPipeForceDisabled() {
 	return false;
 }
 
-static bool isV93PlaneGuardEnabled() {
-	int enabled = 0;
-	if (PE_parse_boot_argn("ngreenv93", &enabled, sizeof(enabled))) {
-		return enabled != 0;
-	}
-
-	return checkKernelArgument("-ngreenv93");
-}
-
 static uint32_t getV65Tier1WantBits() {
 	// Every admitted native producer may use both render and blitter contexts.
 	// Keeping BCS masked while calling native submitBlit/barrierSubmission loses
@@ -1825,22 +1816,11 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			{"__ZN14AppleIntelPort21setupOptimalLaneCountEPK29IODetailedTimingInformationV2j",setupOptimalLaneCount, this->osetupOptimalLaneCount},
 			// V97: Log AUX transactions to diagnose eDP link training failures on RPL
 			{"__ZN14AppleIntelPort7readAUXEjPvj", wrapICLReadAUX, this->orgICLReadAUX},
-			// V96: Force display online — WEG's getDisplayStatus hook (FOD) fails with
-			// "err 2" on TGL kext because that symbol doesn't exist. TGL uses getOnlineInfo.
-			{"__ZN21AppleIntelFramebuffer13getOnlineInfoEP21AppleIntelDisplayPathPhS2_", getOnlineInfo, this->ogetOnlineInfo},
-			// Path B: Force aperture memory under dp0 mode to prevent WS=0x3 migration to
-			// non-aperture, which leaves the display scanning empty pages and triggers
-			// the 0x3→0x1 WS degradation.
-			{"__ZN21AppleIntelFramebuffer24isApertureMemoryRequiredEv", wrapIsApertureMemoryRequired, this->oIsApertureMemoryRequired},
-			// Path C: Coerce kIOWindowServerActiveAttribute=0x1 (WS degrade) to 0x3 (stay-active)
-			// under dp0 mode so kernel-tracked fWSAAState never drops below 3 once WS goes active.
-			{"__ZN21AppleIntelFramebuffer12setAttributeEjm", wrapSetAttribute, this->oSetAttribute},
 			// V183: write-only ADL-P power well handler; no callthrough (TGL poll loop hangs on RPL).
 			// Real TGL falls through to original via ohwSetPowerWellStatePGE.
 			{"__ZN19AppleIntelPowerWell21hwSetPowerWellStatePGEbj", hwSetPowerWellStatePGE, this->ohwSetPowerWellStatePGE},
 			{"__ZN19AppleIntelPowerWell22hwSetPowerWellStateAuxEbj",hwSetPowerWellStateAux, this->ohwSetPowerWellStateAux},
 			{"__ZN19AppleIntelPowerWell22hwSetPowerWellStateDDIEbj",hwSetPowerWellStateDDI, this->ohwSetPowerWellStateDDI},
-			{"__ZN31AppleIntelRegisterAccessManager19FastWriteRegister32Emj",FastWriteRegister32, this->oFastWriteRegister32},
 			// V60: ReadRegister32 hooks DISABLED — V59 proved they cause 0-children regression
 			// (display driver loops in forceWake power-well cycling, never completes init)
 			{"__ZN31AppleIntelRegisterAccessManager15WriteRegister32Emj",raWriteRegister32, this->oraWriteRegister32},
@@ -3571,146 +3551,6 @@ IOReturn Gen11::wrapICLReadAUX(void *that, uint32_t address, void *buffer, uint3
 	return retVal;
 }
 
-void Gen11::getOnlineInfo(AppleIntel::AppleIntelFramebuffer *that, AppleIntel::AppleIntelDisplayPath *displayPath, unsigned char *online, unsigned char *changed) {
-	// V96 removed (was: force *online=1 for fbId==0). Confirmed no-op on this hardware:
-	// baseline log shows Apple's getOnlineInfo natively reports orig=1 for FB0, so the
-	// V96 forcing was already redundant. Keeping the wrapper as a logging shell so we
-	// can observe original online behavior across boots — if any orig!=1 case shows up
-	// we'll know V96 was masking a real status bug, not just being redundant.
-	FunctionCast(getOnlineInfo, callback->ogetOnlineInfo)(that, displayPath, online, changed);
-	uint32_t fbId = getMember<uint32_t>(that, 0x1DC);
-	unsigned char origOnline = online ? *online : 0xFF;
-	static int v96PassLogs = 0;
-	if (v96PassLogs < 12) {
-		v96PassLogs++;
-		SYSLOG("ngreen", "V96p: fb%u getOnlineInfo: orig=%d passthrough (V96 hack removed)",
-			   fbId, origOnline);
-	}
-}
-
-// Path B: hook AppleIntelFramebuffer::isApertureMemoryRequired().
-// On real TGL: pass-through (preserve native behavior).
-// On RPL/ADL with -ngreendp0: force return true so setupScanoutMemory never migrates
-// from aperture → non-aperture. setupScanoutMemory's logic is:
-//   if (isApertureMemoryRequired() && nonAperSurf!=0) → migrate-TO-aperture
-//   else if (!isApertureMemoryRequired() && nonAperSurf==0) → migrate-FROM-aperture (the bad path)
-//   else → no migration; if nonAperSurf==0 → "Using aperture memory"
-// Forcing true with nonAperSurf==0 (the boot state) keeps us on the aperture path forever,
-// matching what V99S+V99G already do at the hardware level — but cleanly, at the driver level,
-// so WS sees a coherent fWSAAState→memory mapping and shouldn't degrade 0x3→0x1.
-bool Gen11::wrapIsApertureMemoryRequired(AppleIntel::AppleIntelFramebuffer *that) {
-	bool orig = FunctionCast(wrapIsApertureMemoryRequired, callback->oIsApertureMemoryRequired)(that);
-	const bool isRealTGL = NGreen::callback && NGreen::callback->isRealTGL;
-
-	// V205 freeze probe + continuous PSR1 disable. PSR1 at 0x60800 was found re-enabled
-	// post-V105 (V105 was writing wrong register 0x64800). Even with the V105 fix, Apple
-	// or DMC may re-arm PSR1 later — keep stomping it on every call.
-	if (NGreen::callback) {
-		static uint32_t v205Calls = 0;
-		v205Calls++;
-
-		// V99Z dirty-rect test removed: wipe ran but visually no change because WS
-		// rewrites the whole buffer every frame. The "frozen images" symptom is
-		// actually the X-tile-as-linear scanout artifact appearing more pronounced
-		// on low-frequency content (text, solid blocks) than high-frequency content
-		// (wallpaper texture). Single root cause = scanout-vs-buffer tile mismatch.
-		// (Wipe proved BAR2 writes reach scanout in earlier magenta test, but WS's
-		// per-frame rewriting makes the wipe invisible.)
-
-		// Continuous PSR1+PSR2 disable — every call. PSR enabled = panel refreshes from
-		// its own cache and ignores new SURF arms → frozen frame even while pipe vsyncs.
-		uint32_t psr1Now = NGreen::callback->readReg32(0x60800);
-		if (psr1Now & 1) {
-			NGreen::callback->writeReg32(0x60800, 0);
-			static uint32_t v205PSR1Resets = 0;
-			if (v205PSR1Resets < 8) {
-				v205PSR1Resets++;
-				SYSLOG("ngreen", "V205PSR1[%u]: re-disabled PSR1 (was 0x%x) at call=%u",
-					   v205PSR1Resets, psr1Now, v205Calls);
-			}
-		}
-		uint32_t psr2Now = NGreen::callback->readReg32(0x60A10);
-		if (psr2Now & 1) {
-			NGreen::callback->writeReg32(0x60A10, 0);
-			static uint32_t v205PSR2Resets = 0;
-			if (v205PSR2Resets < 8) {
-				v205PSR2Resets++;
-				SYSLOG("ngreen", "V205PSR2[%u]: re-disabled PSR2 (was 0x%x) at call=%u",
-					   v205PSR2Resets, psr2Now, v205Calls);
-			}
-		}
-
-		// Periodic state snapshot for freeze diagnosis. Reduced thresholds since
-		// wrapIsApertureMemoryRequired only fires ~44 times per boot in FB-only mode.
-		const bool sample = (v205Calls == 1  || v205Calls == 2  || v205Calls == 5  ||
-							 v205Calls == 10 || v205Calls == 20 || v205Calls == 30 ||
-							 v205Calls == 40 || v205Calls == 44);
-		if (sample) {
-			uint32_t frm   = NGreen::callback->readReg32(0x70040);
-			uint32_t pstat = NGreen::callback->readReg32(0x70024);
-			uint32_t pcfg  = NGreen::callback->readReg32(0x70008);
-			uint32_t dcst  = NGreen::callback->readReg32(0x45504);
-			// V211: also probe Plane 2 (overlay) and Plane 3 (sprite) on Pipe A.
-			// The visible "frozen overlay over animating background" symptom suggests
-			// these planes hold stale content because WS's dp0 path only writes Plane 1.
-			uint32_t p1ctl = NGreen::callback->readReg32(0x70180);
-			uint32_t p1surf = NGreen::callback->readReg32(0x7019C);
-			uint32_t p1liv = NGreen::callback->readReg32(0x701AC);
-			uint32_t p2ctl = NGreen::callback->readReg32(0x71180);
-			uint32_t p2surf = NGreen::callback->readReg32(0x7119C);
-			uint32_t p2liv = NGreen::callback->readReg32(0x711AC);
-			uint32_t p3ctl = NGreen::callback->readReg32(0x72180);
-			uint32_t p3surf = NGreen::callback->readReg32(0x7219C);
-			uint32_t p3liv = NGreen::callback->readReg32(0x721AC);
-			uint32_t curctl = NGreen::callback->readReg32(0x70080);
-			uint32_t curbase = NGreen::callback->readReg32(0x70084);
-			uint32_t curpos = NGreen::callback->readReg32(0x70088);
-			SYSLOG("ngreen", "V205[c=%u]: FRM=%u STAT=%08x CONF=%08x DC=%08x | P1 CTL=%08x SURF=%08x LIVE=%08x | P2 CTL=%08x SURF=%08x LIVE=%08x | P3 CTL=%08x SURF=%08x LIVE=%08x | CUR CTL=%08x BASE=%08x POS=%08x | PSR1=%08x PSR2=%08x",
-				   v205Calls, frm, pstat, pcfg, dcst,
-				   p1ctl, p1surf, p1liv,
-				   p2ctl, p2surf, p2liv,
-				   p3ctl, p3surf, p3liv,
-				   curctl, curbase, curpos,
-				   NGreen::callback->readReg32(0x60800), NGreen::callback->readReg32(0x60A10));
-		}
-	}
-
-	if (isRealTGL || !isDisplayPipeForceDisabled()) {
-		return orig;
-	}
-	static int logCount = 0;
-	if (logCount < 8 && orig != true) {
-		logCount++;
-		SYSLOG("ngreen", "PathB: isApertureMemoryRequired forced true (orig=%d) fb=%p", orig, that);
-	}
-	return true;
-}
-
-// Path C: hook AppleIntelFramebuffer::setAttribute(IOSelect, uintptr_t).
-// We intercept exactly one path: kIOWindowServerActiveAttribute ('wsrv' = 0x77737276).
-// When WindowServer writes 0x1 (degrade-from-active), coerce the value to 0x3 before
-// calling the original — keeping the driver's fWSAAState pinned at the active value so
-// it never takes the hwDeferFeatures / degraded path.  Real TGL is unaffected.
-IOReturn Gen11::wrapSetAttribute(void *that, uint32_t attr, uintptr_t value) {
-	const bool isRealTGL = NGreen::callback && NGreen::callback->isRealTGL;
-	if (attr == 0x77737276u /* 'wsrv' */ && !isRealTGL && isDisplayPipeForceDisabled()) {
-		static int logCount = 0;
-		uintptr_t newValue = value;
-		bool coerced = false;
-		if ((value & 0xFFu) == 0x1u) {
-			newValue = (value & ~uintptr_t(0xFF)) | 0x3u;
-			coerced = true;
-		}
-		if (logCount < 16) {
-			logCount++;
-			SYSLOG("ngreen", "PathC: wsrv setAttribute fb=%p value=0x%llx%s",
-				   that, (unsigned long long)value, coerced ? " → coerced 0x3" : "");
-		}
-		return FunctionCast(wrapSetAttribute, callback->oSetAttribute)(that, attr, newValue);
-	}
-	return FunctionCast(wrapSetAttribute, callback->oSetAttribute)(that, attr, value);
-}
-
 // V183: ADL-P/RPL write-only power well handler.
 // HSW_PWR_WELL_CTL1 (0x45400): REQ bits = odd bits (mask 0xAA: bits 1,3,5,7,...);
 //                               STATE bits = even bits (mask 0x55: bits 0,2,4,6,...).
@@ -3755,461 +3595,22 @@ void Gen11::hwSetPowerWellStateDDI(AppleIntel::AppleIntelBaseController *that, b
 	FunctionCast(hwSetPowerWellStateDDI, callback->ohwSetPowerWellStateDDI)(that,param_1,param_2);
 }
 
-void Gen11::FastWriteRegister32(AppleIntel::AppleIntelBaseController *that, unsigned long param_1, uint32_t param_2)
-{
-	// V99D: Diagnose — log all FastWrite calls near display engine range on first boot
-	// to understand what addresses/values flow through this path.
-	{
-		static int v99DCount = 0;
-		if (v99DCount < 30) {
-			v99DCount++;
-			SYSLOG("ngreen", "V99D[%d]: FastWrite addr=0x%lx val=0x%x",
-				   v99DCount, param_1, param_2);
-		}
-	}
-
-	// V72F removed (was: force RCS/BCS RING_EMR FastWrite path to 0xFFFFFFFF — same
-	// blanket-mask hack as V72R/V72W, on the FastWriteRegister32 entry). Last of the
-	// "raWriteRegister32-side" EMR mask trio. The V74 50ms enforcer still re-forces
-	// EMR via direct writeReg32 from a polling thread, so this passthrough alone is
-	// not yet a full "no blanket EMR mask" test — V74's EMR portion is stripped
-	// separately in v71EmrEnforcer.
-	if (param_1 == 0x20b4 || param_1 == 0x220b4) {
-		static int v72FPassCount = 0;
-		if (v72FPassCount < 6) {
-			++v72FPassCount;
-			SYSLOG("ngreen", "V72Fp[%d]: EMR @ 0x%lx val=0x%x passthrough (V72F hack removed)",
-				   v72FPassCount, param_1, param_2);
-		}
-	}
-
-	// V99F[S] removed (was: PLANE_STRIDE *= 8 — same X-tile-units → 64B-cacheline-units
-	// rewrite as V99R[S], on the FastWriteRegister32 entry). Pair-mate to V99R[Sp].
-	// V99S downstream still re-forces STRIDE=0xa0 at SURF arm via direct MMIO, so
-	// this passthrough does not affect what scans out.
-	if ((param_1 & 0xFFFFF) == 0x70188) {
-		static int v99FSpCount = 0;
-		if (v99FSpCount < 3) {
-			++v99FSpCount;
-			SYSLOG("ngreen", "V99F[Sp%d]: PLANE_STRIDE 0x%x passthrough (V99F[S] hack removed)",
-				   v99FSpCount, param_2);
-		}
-	}
-	// V99F[C] removed (was: PLANE_CTL X-tiled (001) → Y-tiled-legacy (100) rewrite,
-	// FastWriteRegister32 twin of V99R[C]). V99S at SURF arm still re-forces CTL
-	// downstream, so this is a no-op for actually-displayed values.
-	if ((param_1 & 0xFFFFF) == 0x70180) {
-		static int v99FCpCount = 0;
-		if (v99FCpCount < 3) {
-			++v99FCpCount;
-			uint32_t tiling = (param_2 >> 10) & 0x7;
-			SYSLOG("ngreen", "V99F[Cp%d]: PLANE_CTL 0x%x passthrough tiling=%d (V99F[C] hack removed)",
-				   v99FCpCount, param_2, tiling);
-		}
-	}
-	// V103F removed (was: FastWriteRegister32 twin of V103 — block DC_STATE_EN
-	// non-zero writes). Pair-mate to V103/V103P; all three sites now passthrough.
-	if ((param_1 & 0xFFFFF) == 0x45504 && NGreen::callback && NGreen::callback->dmcIsAdlp) {
-		static int v103FpCount = 0;
-		if (v103FpCount < 6) {
-			++v103FpCount;
-			SYSLOG("ngreen", "V103Fp[%d]: DC_STATE_EN FastWrite 0x%x passthrough (V103F hack removed)",
-				   v103FpCount, param_2);
-		}
-	}
-
-	// V195F removed (FastWriteRegister32 site of V195 — same hack pile).
-	if ((param_1 & 0xFFFFF) == 0x45400 && NGreen::callback && !NGreen::callback->isRealTGL
-		&& NGreen::callback->uefiCtl1 != 0) {
-		static int v195FpCount = 0;
-		if (v195FpCount < 6) {
-			++v195FpCount;
-			SYSLOG("ngreen", "V195Fp[%d]: CTL1 FastWrite 0x%x passthrough (V195F hack removed)",
-				   v195FpCount, param_2);
-		}
-	}
-
-	// V99F[SURF] removed (was: at SURF arm via FastWriteRegister32, force PLANE_STRIDE=0xa0
-	// — FastWrite-path twin of V99S non-dp0 STRIDE=0xa0 force in raWriteRegister32). The
-	// raWriteRegister32 V99S still re-forces STRIDE at SURF arm via direct MMIO, so this
-	// passthrough doesn't change what scans out.
-	if ((param_1 & 0xFFFFF) == 0x7019C && NGreen::callback) {
-		uint32_t hwStride = NGreen::callback->readReg32(0x70188);
-		static int v99FSurfPassCount = 0;
-		if (v99FSurfPassCount < 3) {
-			++v99FSurfPassCount;
-			SYSLOG("ngreen", "V99F[SURFp%d]: SURF arm 0x%x STRIDE=0x%x passthrough (V99F[SURF] hack removed)",
-				   v99FSurfPassCount, param_2, hwStride);
-		}
-	}
-
-	return FunctionCast(FastWriteRegister32, callback->oFastWriteRegister32)(that,param_1,param_2 );
-}
-
 void Gen11::raWriteRegister32b(void *that,void *param_1,unsigned long param_2, UInt32 param_3)
 {
-	//if (reinterpret_cast<volatile uint64_t*>(that)==nullptr) return;
-	//if (reinterpret_cast<volatile uint64_t*>(param_1)==nullptr) return;
 	raWriteRegister32(that, reinterpret_cast<uint64_t>(param_1) + param_2,param_3);
-};
+}
 
-void Gen11::raWriteRegister32(void *that,unsigned long param_1, UInt32 param_2)
+void Gen11::raWriteRegister32(void *that, unsigned long reg, UInt32 value)
 {
 	auto *green = NGreen::callback;
-	if (!callback || !green)
+	if (!green)
 		return;
-	// V93: optional plane SURF zero-write guard.
-	// Disabled by default due black-screen regressions; enable only with -ngreenv93.
-	struct V93PlaneSurfState {
-		uint32_t surfReg;
-		uint32_t lastNonZeroSurf;
-	};
-	static V93PlaneSurfState v93States[8] {};
-	static int v93LogCount = 0;
-
-	auto getV93State = [](uint32_t surfReg) -> V93PlaneSurfState * {
-		for (auto &state : v93States) {
-			if (state.surfReg == surfReg)
-				return &state;
-		}
-		for (auto &state : v93States) {
-			if (state.surfReg == 0) {
-				state.surfReg = surfReg;
-				state.lastNonZeroSurf = 0;
-				return &state;
-			}
-		}
-		return nullptr;
-	};
-
-	if (NGreen::callback && isV93PlaneGuardEnabled()) {
-		const uint32_t reg = static_cast<uint32_t>(param_1 & 0xFFFFF);
-		const bool looksLikePlaneSurf =
-			(reg >= 0x60000 && reg <= 0xBFFFF) &&
-			((reg & 0xFFF) == 0x19C);
-
-		if (looksLikePlaneSurf) {
-			auto *state = getV93State(reg);
-			if (param_2 != 0) {
-				if (state)
-					state->lastNonZeroSurf = param_2;
-			} else {
-				const uint32_t ctlReg = reg - 0x1C; // PLANE_CTL is SURF - 0x1C on Gen11 paths.
-				uint32_t planCtl = NGreen::callback->readReg32(ctlReg);
-				if (planCtl & 0x80000000u) {
-					if (state && state->lastNonZeroSurf != 0) {
-						if (v93LogCount < 32) {
-							SYSLOG("ngreen", "V93: blocked zero SURF@0x%x while enabled; keeping last 0x%x", reg, state->lastNonZeroSurf);
-							v93LogCount++;
-						}
-						param_2 = state->lastNonZeroSurf;
-					} else {
-						uint32_t currentSurf = NGreen::callback->readReg32(reg);
-						if (currentSurf != 0) {
-							if (state)
-								state->lastNonZeroSurf = currentSurf;
-							if (v93LogCount < 32) {
-								SYSLOG("ngreen", "V93: blocked zero SURF@0x%x while enabled; keeping current 0x%x", reg, currentSurf);
-								v93LogCount++;
-							}
-							param_2 = currentSurf;
-						} else {
-							// Last resort: disable plane before allowing SURF=0 write.
-							NGreen::callback->writeReg32(ctlReg, planCtl & ~0x80000000u);
-							if (v93LogCount < 32) {
-								SYSLOG("ngreen", "V93: forced plane disable for SURF@0x%x before zero write", reg);
-								v93LogCount++;
-							}
-						}
-					}
-				}
-			}
-		}
+	if (!callback || !that || !callback->oraWriteRegister32) {
+		green->writeReg32(reg, value);
+		return;
 	}
-
-	// V72R removed (was: force RING_EMR (0x20b4 / 0x220b4) writes to 0xFFFFFFFF —
-	// blanket-mask-all-GT-engine-errors). Hack that hides root cause; Linux i915
-	// doesn't do blanket EMR masking. Remove and observe what real engine errors
-	// emerge so the actual cause can be fixed.
-	// NOTE: V72W (in wrapWriteRegister32 helper) and V72F (in FastWriteRegister32)
-	// and V74 50ms permanent enforcer still mask RING_EMR. To fully test "no EMR
-	// blanket mask" they need to be disabled in subsequent steps.
-
-	// V99R[S] removed (was: PLANE_STRIDE *= 8 — convert X-tiled tile-units 0x14 to
-	// Y-tiled/linear cacheline-units 0xa0). Hack guessing the right scanout stride
-	// without knowing the actual buffer layout. Linux i915 picks stride based on
-	// the IOSurface/buffer's documented tiling, not by rewriting Apple's value.
-	// Removing this lets Apple's natural PLANE_STRIDE (0x14) reach hardware. If
-	// scanout shows X-tiled bytes correctly → buffer was X-tiled. If garbled →
-	// real layer is buffer/renderer side, not register-write.
-	// NOTE: V99S (SURF arm) and V99f (fast-write variant) and V99F (FastWrite) still
-	// have their own PLANE_STRIDE rewrites — to fully test, those need removal too.
-	// For now keep the address-match shell so future legitimate intercepts can use it.
-	if ((param_1 & 0xFFFFF) == 0x70188) { // PLANE_STRIDE Pipe A Plane 1
-		static int v99SPassCount = 0;
-		if (v99SPassCount < 3) {
-			++v99SPassCount;
-			SYSLOG("ngreen", "V99R[Sp%d]: PLANE_STRIDE 0x%x passthrough (V99R hack removed)", v99SPassCount, param_2);
-		}
-	}
-	// V99R[C] / V99R[Cdp] removed (was: PLANE_CTL tiling rewrites — X-tiled (001) →
-	// Y-tiled legacy (100) on default path, force linear under -ngreendp0). Same
-	// "guess the tiling" antipattern as V99R[S]; pairs with the stride-rewrite hack
-	// just removed. Linux i915 picks PLANE_CTL tiling bits from the IOSurface/buffer's
-	// declared tiling, never rewrites Apple's value. With V99R[S] passthrough, leaving
-	// the corresponding CTL field rewritten is contradictory: STRIDE is now 0x14
-	// (X-tiled tile-units) but CTL would still be forced to Y-tiled or linear, which
-	// is guaranteed-wrong scanout. Removing both lets Apple's natural CTL reach HW so
-	// we can observe what tiling Apple's allocator actually chose.
-	if ((param_1 & 0xFFFFF) == 0x70180) { // PLANE_CTL Pipe A Plane 1
-		static int v99CPassCount = 0;
-		if (v99CPassCount < 3) {
-			++v99CPassCount;
-			uint32_t tiling = (param_2 >> 10) & 0x7;
-			SYSLOG("ngreen", "V99R[Cp%d]: PLANE_CTL 0x%x passthrough tiling=%d (V99R hack removed)",
-				   v99CPassCount, param_2, tiling);
-		}
-	}
-
-	// V97 removed (was: clear bit[16] PORT_SYNC_MODE_MASTER_SELECT[0] from
-	// TRANS_DDI_FUNC_CTL_A on !isRealTGL — Apple's SetupParams sets it but UEFI GOP
-	// doesn't, allegedly disrupting trained eDP link → "InterLane Alignment is lost"
-	// ~10s later). Symptom-hiding hack: real fix should match Linux i915's Display 13
-	// transcoder programming, not strip a bit Apple's stack expects to set. Removing
-	// reveals whether the InterLane loss still happens; if yes, look at Linux's
-	// TRANS_DDI_FUNC_CTL field layout for ADL-P (Display 13) since PORT_SYNC fields
-	// changed across display generations.
-	if ((param_1 & 0xFFFFF) == 0x60400 && NGreen::callback && !NGreen::callback->isRealTGL) {
-		static int v97RpCount = 0;
-		if (v97RpCount < 6) {
-			++v97RpCount;
-			SYSLOG("ngreen", "V97Rp[%d]: TRANS_DDI_FUNC_CTL_A 0x%x passthrough bit16=%d (V97 hack removed)",
-				   v97RpCount, param_2, !!(param_2 & (1u << 16)));
-		}
-	}
-
-	// V103 removed (was: block all non-zero DC_STATE_EN writes when ADL-P DMC is
-	// loaded — keeps the DMC from entering DC3/DC5/DC6 because Apple's ICL-targeted
-	// driver has no ADL-P DC exit recovery, all eDP lanes drop ~70s after a write).
-	// Symptom-hiding hack: Linux i915 has proper DC enter/exit for Display 13 via
-	// the DMC. Permanently disabling DC states masks Apple's broken DC exit instead
-	// of providing one. Removing reveals when DC_STATE_EN gets written and what
-	// value Apple wants set; the fix is to ensure DC exit is properly handled (or
-	// to align with what Linux ADL-P DMC expects).
-	if ((param_1 & 0xFFFFF) == 0x45504 && NGreen::callback && NGreen::callback->dmcIsAdlp) {
-		static int v103PassCount = 0;
-		if (v103PassCount < 10) {
-			++v103PassCount;
-			SYSLOG("ngreen", "V103p[%d]: DC_STATE_EN 0x%x passthrough (V103 hack removed)",
-				   v103PassCount, param_2);
-		}
-	}
-
-	// V195 removed (was: same OR-in bits 14,12 hack as V195W, on raWriteRegister32).
-	if ((param_1 & 0xFFFFF) == 0x45400 && NGreen::callback && !NGreen::callback->isRealTGL
-		&& NGreen::callback->uefiCtl1 != 0) {
-		static int v195pCount = 0;
-		if (v195pCount < 6) {
-			++v195pCount;
-			SYSLOG("ngreen", "V195p[%d]: CTL1 ra 0x%x passthrough (V195 hack removed)",
-				   v195pCount, param_2);
-		}
-	}
-
-	// V99S: PLANE_SURF arm — force correct STRIDE/CTL immediately before latching.
-	// raWriteRegister32/WriteRegister32 is a CACHE-ONLY update; hardware MMIO for
-	// double-buffered PLANE_STRIDE is written via a volatile* path not caught by
-	// FastWriteRegister32. Forcing writeReg32 here ensures the hardware shadow is
-	// correct right before SURF arms the double-buffer flip.
-	//
-	// dp0 path: redirect non-aperture SURF to 0x0 AND remap GGTT[0..] to the same
-	// physical pages (V99G).  setupScanoutMemory migrates SURF from aperture to
-	// ≥0x10000000 (non-aperture stolen RAM, phys ~0x7f…) when WindowServer sets
-	// kIOWindowServerActiveAttribute=3. After migration WS writes to the non-aperture
-	// physical pages; PLANE_SURF must also scan them. V99G copies the GGTT PTEs from the
-	// non-aperture range down to GGTT[0..3999] so SURF=0x0 scans the same pages.
-	if ((param_1 & 0xFFFFF) == 0x7019C && NGreen::callback) {
-		uint32_t hwStride = NGreen::callback->readReg32(0x70188);
-		uint32_t hwCtl    = NGreen::callback->readReg32(0x70180);
-		static int v99SCount = 0;
-		if (v99SCount < 8) {
-			++v99SCount;
-			// V201B: read TOP-LEFT (gray border) AND CENTER (Apple logo / loading bar
-			// area) of the buffer. Linear byte offset of pixel (x,y) = y*10240 + x*4.
-			// Sample points (BGRA, 2560×1600):
-			//  - (0,0)         offset 0          → top-left, gray bg
-			//  - (1280,800)    offset 0x7D2800   → screen center, Apple logo
-			//  - (1280,1000)   offset 0x9C7800   → loading-bar row
-			//  - (640,800)     offset 0x7D1A00   → mid-left of logo area
-			volatile uint32_t *aperture = nullptr;
-			uint64_t apertureLen = 0;
-			uint32_t tlCtr = 0xDEADBEEF, ctr = 0xDEADBEEF, bar = 0xDEADBEEF, mid = 0xDEADBEEF;
-			if (NGreen::callback->getAperture(aperture, apertureLen) && apertureLen >= 0xA00000) {
-				volatile uint32_t *fb32 = aperture;
-				tlCtr = fb32[0];             // top-left
-				ctr   = fb32[0x7D2800 / 4];  // center (Apple logo)
-				bar   = fb32[0x9C7800 / 4];  // loading bar row
-				mid   = fb32[0x7D1A00 / 4];  // mid-left of logo area
-			}
-			SYSLOG("ngreen", "V99S[%d]: SURF arm 0x%x STRIDE=0x%x CTL=0x%x | tl=%08x ctr(1280,800)=%08x bar(1280,1000)=%08x mid(640,800)=%08x",
-				   v99SCount, (uint32_t)param_2, hwStride, hwCtl, tlCtr, ctr, bar, mid);
-
-			// V203: on the LAST sampled SURF arm, dump every pipe/transcoder/DSC/scaler
-			// register relevant to the duplicated-content symptom. We're hunting an
-			// off-by-2 in stride / src-vs-active / DSC bpp / pipe-bpc / M-N.
-			if (v99SCount == 8) {
-				#define R(addr) NGreen::callback->readReg32(addr)
-				SYSLOG("ngreen", "V203: --- SCANOUT REGISTER DUMP ---");
-				// Plane A
-				SYSLOG("ngreen", "V203 PLANE_A: CTL=%08x STRIDE=%08x POS=%08x SIZE=%08x OFFSET=%08x SURF=%08x SURFLIVE=%08x AUX_DIST=%08x AUX_OFFSET=%08x KEYVAL=%08x KEYMSK=%08x KEYMAX=%08x COLOR_CTL=%08x",
-					   R(0x70180), R(0x70188), R(0x7018C), R(0x70190), R(0x701A4),
-					   R(0x7019C), R(0x701AC), R(0x701C0), R(0x701C4),
-					   R(0x70194), R(0x70198), R(0x701A0), R(0x701CC));
-				// Pipe A general
-				SYSLOG("ngreen", "V203 PIPE_A: SRCSZ=%08x CONF=%08x MISC=%08x MISC2=%08x STAT=%08x",
-					   R(0x6001C), R(0x70008), R(0x70030), R(0x7002C), R(0x70024));
-				// Transcoder A timings
-				SYSLOG("ngreen", "V203 TRANS_A: HTOTAL=%08x HBLANK=%08x HSYNC=%08x VTOTAL=%08x VBLANK=%08x VSYNC=%08x VSYNCSHIFT=%08x",
-					   R(0x60000), R(0x60004), R(0x60008), R(0x6000C),
-					   R(0x60010), R(0x60014), R(0x60028));
-				// DDI function control + MSA
-				SYSLOG("ngreen", "V203 TRANS_A_DDI: DDI_FUNC_CTL=%08x DDI_FUNC_CTL2=%08x MSA_MISC=%08x CONF=%08x CLK_SEL=%08x",
-					   R(0x60400), R(0x60404), R(0x60410), R(0x70008), R(0x46140));
-				// DP M/N values for Pipe A
-				SYSLOG("ngreen", "V203 TRANS_A_DPMN: DATAM1=%08x DATAN1=%08x DATAM2=%08x DATAN2=%08x LINKM1=%08x LINKN1=%08x LINKM2=%08x LINKN2=%08x",
-					   R(0x60030), R(0x60034), R(0x60038), R(0x6003C),
-					   R(0x60040), R(0x60044), R(0x60048), R(0x6004C));
-				// Pipe A scaler 1
-				SYSLOG("ngreen", "V203 PIPE_A_PS1: CTRL=%08x WIN_POS=%08x WIN_SZ=%08x VPHASE=%08x HPHASE=%08x",
-					   R(0x68180), R(0x68170), R(0x68174), R(0x68188), R(0x68194));
-				// DSC slice control / PPS for Pipe A (DSC_BASE_A around 0x6B200; varies by gen)
-				SYSLOG("ngreen", "V203 DSC_A: PIC_RC=%08x PPS0=%08x PPS1=%08x PPS2=%08x PPS3=%08x PPS4=%08x",
-					   R(0x6B200), R(0x6B210), R(0x6B214), R(0x6B218), R(0x6B21C), R(0x6B220));
-				// DDI buf / port
-				SYSLOG("ngreen", "V203 DDI_BUF: A_CTL=%08x B_CTL=%08x | DP_TP_CTL_A=%08x DP_TP_STATUS_A=%08x",
-					   R(0x64000), R(0x64100), R(0x64040), R(0x64044));
-				// Display Buffer programming
-				SYSLOG("ngreen", "V203 DBUF: CTL_S0=%08x CTL_S1=%08x DBUF_BUF_CFG_A_PA=%08x A_PB=%08x",
-					   R(0x44300), R(0x44304), R(0x70B80), R(0x70B84));
-				#undef R
-			}
-		}
-		/*.  ------ MAN IN THE MIDDLE CHIP HACK -------
-		// V99R[P] + V99G + linear CTL/STRIDE forces — CORE scanout coherence (!isRealTGL).
-		// Confirmed load-bearing for visible scanout on spoofed RPL/ADL-P in dp0, dp1, AND
-		// without any -ngreendp* boot arg. Real TGL hardware programs these correctly via
-		// Apple's native code path — gating the entire triad on !isRealTGL.
-		//
-		// Friend's architectural feedback (Visual Ehrmanntraut, NootedBlue lineage):
-		// the right long-term fix is intercepting CRTCParams / PLANEPARAMS / SCALERPARAMS
-		// at hwSetupMemory / paramsSurfCompare / hwRegsNeedUpdate (already partial via
-		// V97P / V97C) instead of hooking MMIO writes after-the-fact. "Hacking regs only
-		// won't work — leave WS alone, problem is in apple code."
-		//
-		//   1. SURF redirect: non-aperture writes (>=0x10000000) → 0, so the display engine
-		//      always scans from the same GGTT page range (GGTT[0..3999]) no matter where
-		//      Apple's setupScanoutMemory chose to migrate the surface.
-		//   2. V99G: per-flip GGTT remap — copies the PTEs at the migrated surface pages
-		//      down to GGTT[0..3999] so SURF=0 fetches the same physical memory WS's CPU
-		//      compositor is writing into. Re-runs whenever Apple's SURF address changes
-		//      (handles double/triple buffering — WS rotates between 2-3 IOSurfaces per flip).
-		//   3. Linear CTL/STRIDE forces (tiling→0, STRIDE=0xa0): required for visible
-		//      output. Removing them produces a black screen with no scanout activity,
-		//      confirmed empirically. Side effect: produces the fragmented/repeated
-		//      pattern when Apple's allocator stores buffer in non-linear physical layout
-		//      — known cost of this path, removable only by struct-level fix.
-		if (NGreen::callback && !NGreen::callback->isRealTGL && param_2 >= 0x10000000u) {
-			static int v99PCount = 0;
-			if (v99PCount < 8)
-				SYSLOG("ngreen", "V99R[P%d]: SURF 0x%x->aperture (non-aperture redirect)",
-					   ++v99PCount, (uint32_t)param_2);
-
-			// ngreen-buf=N: 1=single, 2=double (default), 3=triple buffering.
-			// Each buffer slot occupies 4000 GGTT pages = 0xFA0000 bytes of aperture:
-			//   slot 0 → GGTT[0..3999],      SURF=0x0
-			//   slot 1 → GGTT[4000..7999],   SURF=0xFA0000
-			//   slot 2 → GGTT[8000..11999],  SURF=0x1F40000
-			// Each unique non-aperture srcPage Apple presents is assigned a fixed slot.
-			// The GGTT PTEs for that slot are remapped to point at the IOSurface's
-			// physical pages. SURF is rewritten to the matching aperture slot address
-			// so the display engine scans the correct physical memory.
-			// With single buffering all flips always land on slot 0 (SURF=0x0).
-			static int  bufCount       = -1;
-			static uint32_t slotPages[3] = {0, 0, 0}; // srcPage assigned to each slot
-			static int  slotCount      = 0;
-			static int  v99GCount      = 0;
-
-			if (bufCount < 0) {
-				int val = 2;
-				PE_parse_boot_argn("ngreen-buf", &val, sizeof(val));
-				bufCount = (val >= 1 && val <= 3) ? val : 2;
-				SYSLOG("ngreen", "V99G: ngreen-buf=%d (buffering slots)", bufCount);
-			}
-
-			uint32_t srcPage = (uint32_t)param_2 >> 12;
-
-			// Find existing slot or assign a new one.
-			int slot = -1;
-			for (int s = 0; s < slotCount; s++) {
-				if (slotPages[s] == srcPage) { slot = s; break; }
-			}
-			if (slot < 0) {
-				if (slotCount < bufCount) {
-					slot = slotCount++;
-				} else {
-					// All slots occupied — evict oldest (slot 0), shift down.
-					for (int s = 0; s < bufCount - 1; s++) slotPages[s] = slotPages[s + 1];
-					slot = bufCount - 1;
-				}
-				slotPages[slot] = srcPage;
-			}
-
-			// Remap GGTT[slot*4000 .. slot*4000+3999] from srcPage..srcPage+3999.
-			{
-				int base = slot * 4000;
-				int remapped = 0, remapSkipped = 0;
-				for (int i = 0; i < 4000; i++) {
-					uint32_t lo = NGreen::callback->readReg32(GGTT_PTE_LO(srcPage + i));
-					uint32_t hi = NGreen::callback->readReg32(GGTT_PTE_HI(srcPage + i));
-					if (!(lo & 1)) { remapSkipped++; continue; }
-					NGreen::callback->writeReg32(GGTT_PTE_LO(base + i), lo);
-					NGreen::callback->writeReg32(GGTT_PTE_HI(base + i), hi);
-					remapped++;
-				}
-				NGreen::callback->writeReg32(0x101008, 0x1); // flush GGTT TLB
-				if (++v99GCount <= 8 || (v99GCount & 0x3F) == 0)
-					SYSLOG("ngreen", "V99G[%d]: GGTT[%d..%d] <- srcPage=0x%x slot=%d remapped=%d skip=%d",
-						   v99GCount, base, base + 3999, srcPage, slot, remapped, remapSkipped);
-			}
-
-			// Redirect SURF to the aperture address of the assigned slot.
-			// slot 0 → 0x0, slot 1 → 0xFA0000, slot 2 → 0x1F40000.
-			param_2 = (uint32_t)slot * 0xFA0000u;
-		}
-		// CTL/STRIDE forces — MATCH APPLE'S NATURAL INTENT.
-		// V401 paramsSurfCompare logs prove Apple wants: CTL bits[12:10]=001 (X-tiled),
-		// STRIDE=0x14 (20 X-tile units = 10240B/row = 2560*4bpp). Apple's IOSurface
-		// allocator produces X-tiled physical buffers — Y-tile and linear forces both
-		// scan wrong bytes from an X-tile buffer. Match Apple = same tile mode as the
-		// buffer = correct scanout, IF the SURF address reaches the right pages
-		// (V99R[P]+V99G handle the SURF redirect / GGTT remap unconditionally).
-		//
-		// Gated on !isRealTGL. Real TGL programs natively.
-		if (NGreen::callback && !NGreen::callback->isRealTGL) {
-			// force CTL linear and STRIDE=0xa0 (CPU compositor writes linearly via BAR2).
-			uint32_t hwTiling = (hwCtl >> 10) & 0x7;
-			if (hwTiling != 0)
-				NGreen::callback->writeReg32(0x70180, hwCtl & ~(0x7u << 10));
-			if (hwStride != 0xa0)
-				NGreen::callback->writeReg32(0x70188, 0xa0);
-		}*/
-	}
-
-	if (reinterpret_cast<volatile uint64_t*>(that)==nullptr) return green->writeReg32(param_1,param_2);
-	if (!callback->oraWriteRegister32) return green->writeReg32(param_1,param_2);
-	FunctionCast(raWriteRegister32, callback->oraWriteRegister32)( that,param_1,param_2);
-};
-
+	FunctionCast(raWriteRegister32, callback->oraWriteRegister32)(that, reg, value);
+}
 uint32_t Gen11::AppleIntelFramebufferinit(AppleIntel::AppleIntelFramebuffer *frame,
                                           AppleIntel::AppleIntelBaseController *cont,
                                           uint32_t pipeIndex)
@@ -4370,8 +3771,8 @@ void Gen11::hwInitializeCState(AppleIntel::AppleIntelBaseController *that)
 		SYSLOG("ngreen", "hwInitCState: ngreen-dmc=tgl, loading TGL DMC v2.12 (%u dwords)", tgl_dmc_ver2_12_bin_s / 4);
 		// Write TGL DMC blob to MMIO 0x80000+
 		for (unsigned long off = 0; off < tgl_dmc_ver2_12_bin_s; off += 4)
-			FastWriteRegister32(reinterpret_cast<AppleIntel::AppleIntelBaseController *>(ccont), off + 0x80000,
-				tgl_dmc_ver2_12_bin[off / sizeof(uint32_t)]);
+				NGreen::callback->writeReg32(off + 0x80000,
+					tgl_dmc_ver2_12_bin[off / sizeof(uint32_t)]);
 
 		// Disable DC states before touching display engine registers (same as ADL-P path).
 		// DC_STATE_EN = 0x45504
@@ -4442,8 +3843,8 @@ void Gen11::hwInitializeCState(AppleIntel::AppleIntelBaseController *that)
 		// (adlp_dmc_ver2_16.bin: CSS+package/v3 headers stripped, main payload at file offset 0x310).
 		// Write directly to SRAM starting at 0x80000.
 		for (unsigned long off = 0; off < adlp_dmc_ver2_16_bin_s; off += 4)
-			FastWriteRegister32(reinterpret_cast<AppleIntel::AppleIntelBaseController *>(ccont), off + 0x80000,
-				adlp_dmc_ver2_16_bin[off / sizeof(uint32_t)]);
+				NGreen::callback->writeReg32(off + 0x80000,
+					adlp_dmc_ver2_16_bin[off / sizeof(uint32_t)]);
 
 		// Disable DC states before touching display engine registers.
 		// If DC5/DC6 is active when we write, the clock-gated blocks won't latch the writes.
@@ -7158,97 +6559,19 @@ void Gen11::vfReadAndClearInterrupts(void *that, void *interrupts) {
 
 
 uint32_t Gen11::wrapReadRegister32(void *controller, uint32_t address) {
+	(void) controller;
 	auto *green = NGreen::callback;
 	if (!green)
 		return 0xFFFFFFFFU;
-	if (controller == nullptr)
-		return green->readReg32(address);  // readReg32 now takes byte offsets
-
-	// Mirror Apple bounds logic, but keep a fallback path for the 2D-only dropped window.
-	auto partInfo = getMember<uint8_t *>(controller, 0xCF8);
-	auto mmioBase = getMember<uint8_t *>(controller, 0x9B8);
-	const int signedMmioSize = getMember<int>(controller, 0xC38);
-
-	bool twoDOnlyPart = partInfo && ((partInfo[0xB2] & 0x1) != 0);
-	bool dropped2DWindow = (address >= 0x2000U && address <= 0x23FFFFU);
-
-	if (twoDOnlyPart && dropped2DWindow) {
-		return green->readReg32(address);  // readReg32 now takes byte offsets
-	}
-
-	if (mmioBase && signedMmioSize >= 4 &&
-	    address <= static_cast<uint32_t>(signedMmioSize) - 4U) {
-		return *reinterpret_cast<volatile uint32_t *>(mmioBase + address);
-	}
-
-	if (callback && callback->owrapReadRegister32)
-		return FunctionCast(wrapReadRegister32,
-		                    callback->owrapReadRegister32)(controller, address);
 	return green->readReg32(address);
 }
 
 void Gen11::wrapWriteRegister32(void *controller, uint32_t address, uint32_t value) {
+	(void) controller;
 	auto *green = NGreen::callback;
 	if (!green)
 		return;
-	if (controller == nullptr) {
-		green->writeReg32(address, value);
-		return;
-	}
-
-	// V195W removed (was: OR-in bits 14,12 from UEFI's HSW_PWR_WELL_CTL1 onto every
-	// 0x45400 write because the ICL DMC save/restore table allegedly clears them
-	// periodically, supposedly stalling WindowServer's vsync). Pair-mate to V195 in
-	// raWriteRegister32 + V195F in FastWriteRegister32 — all three sites stripped
-	// together. The DMC save/restore behavior on Display 13 (ADL-P) differs from
-	// Display 11 (ICL); enforcing UEFI's specific bits hides what Apple's stack
-	// actually wants and what the ADL-P DMC table actually contains. If vsync stalls
-	// re-emerge, fix should come from a correct DMC table or proper power-well init,
-	// not bit OR-in.
-	if (address == 0x45400 && !green->isRealTGL && green->uefiCtl1 != 0) {
-		static int v195WpCount = 0;
-		if (v195WpCount < 6) {
-			++v195WpCount;
-			SYSLOG("ngreen", "V195Wp[%d]: CTL1 0x%x passthrough uefiCtl1=0x%x (V195W hack removed)",
-			       v195WpCount, value, green->uefiCtl1);
-		}
-	}
-
-	// V72W removed (was: force RCS/BCS RING_EMR writes to 0xFFFFFFFF — same blanket
-	// error-mask hack as V72R, on the wrapWriteRegister32 helper path). Pair-mate to
-	// the V72R passthrough already in place. Keeping the address-match shell so a
-	// future legitimate intercept can use this hook point.
-	if (address == 0x20b4 || address == 0x220b4) {
-		static int v72WPassCount = 0;
-		if (v72WPassCount < 6) {
-			++v72WPassCount;
-			SYSLOG("ngreen", "V72Wp[%d]: EMR @ 0x%x val=0x%x passthrough (V72W hack removed)",
-			       v72WPassCount, address, value);
-		}
-	}
-
-	// ── V63: Broad RCS register write intercept (diagnostic only, no modification) ──
-	// Catches ANY write to RCS control range: ELSP, EXECLIST, CTX_CTRL, CCID, TAIL, etc.
-	// Rate-limited to first 100 writes to avoid flooding Lilu buffer.
-	if (!green->isRealTGL) {
-		static int v63WriteCount = 0;
-		// RCS engine MMIO range: 0x2000-0x2FFF covers all ring control registers
-		if (address >= 0x2000 && address <= 0x2FFF) {
-			if (v63WriteCount < 100) {
-				v63WriteCount++;
-				SYSLOG("ngreen", "V63W[%d]: RCS reg 0x%x = 0x%x", v63WriteCount, address, value);
-			} else if (v63WriteCount == 100) {
-				v63WriteCount++;
-				SYSLOG("ngreen", "V63W: rate limit reached (100 RCS writes logged)");
-			}
-		}
-	}
-
-	if (callback && callback->owrapWriteRegister32)
-		FunctionCast(wrapWriteRegister32,
-		             callback->owrapWriteRegister32)(controller, address, value);
-	else
-		green->writeReg32(address, value);
+	green->writeReg32(address, value);
 }
 
 /**

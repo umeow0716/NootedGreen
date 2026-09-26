@@ -141,8 +141,6 @@ Where:
 | `-nbdyldoff` | Disable the optional shared-cache media-model patches and TGL userspace-bundle discovery logs. |
 | `-ngreendp0` / `ngreendp0=1` | Force fallback mode: set `DisplayPipeSupported=0` in accelerator capabilities |
 | `-ngreendp1` / `ngreendp1=1` | Explicitly keep native `DisplayPipeSupported` path (default behavior) |
-| `-ngreenv93` / `ngreenv93=1` | Enable V93 plane guard diagnostics (disabled by default). |
-| `ngreen-buf=N` | GGTT multi-buffer slots for the dp0 SURF-redirect path: `1`=single, `2`=double (default), `3`=triple. Each slot occupies 4000 GGTT pages (0xFA0000 bytes). Slot 0 → `SURF=0x0`, slot 1 → `SURF=0xFA0000`, slot 2 → `SURF=0x1F40000`. Apple's non-aperture IOSurface pages are remapped into their assigned slot on every flip; SURF is rewritten to the matching aperture address. Single-buffer collapses all flips to slot 0 (original behaviour). Double/triple allow the display engine to scan independent physical pages per IOSurface without cross-contamination. |
 | `-ngreenforceprops` / `ngreenforceprops=1` | Enable legacy forced IGPU property injection (`AAPL,ig-platform-id`, `model`, `saved-config`, etc.). Disabled by default in compatibility-first mode. |
 | `IGLogLevel=8` | Maximum Intel GPU driver logging |
 | `-liludbg` | Enable Lilu debug logging |
