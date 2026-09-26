@@ -895,3 +895,31 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   flags, and call-chain invalidation are still open. No runtime verification.
 - Full suite passes in /tmp/ngreen-static.BeFUWU. Transport admission
   checkpoint 070cffa CI 36221130028 succeeded.
+
+### Retired stubs and deeper context-allocation failure paths
+
+- Removed unreferenced Gen11 wprobe, tgstart, initializeLogging and
+  isConflictRegister stubs and their unused original slots/state, plus the
+  unused shouldForceRPLBringupPlatform helper. Genx's active probe is retained.
+- Removed the redundant native-result-preserving deviceStart hook, its slot
+  and stale force-success messages. Native startup failure remains native;
+  removing this hook is not evidence that other startup patches are safe.
+- Further native workqueue inspection found init at 0x1e3da acquires its lock
+  at 0x1e419, then a failed shared-buffer allocation branches from 0x1e43e
+  to failure without the success-path unlock at 0x1e4ab. withOptions releases
+  failed initialization, and free at 0x1e4e0 reaches IOLockFree. Together with
+  createUkContext's unchecked withOptions result at 0x20628, this remains an
+  OPEN allocation/unwind blocker; no partial null-check fix is claimed.
+- getMemory at 0x13e8e returns IGAccelSysMemory, not IOMemoryDescriptor;
+  getMemoryDescriptor at 0x13e9c performs the additional dereference. Any
+  replacement must respect the inspected private type and calling convention.
+- Stub-removal offline suite passed in /tmp/ngreen-static.FeplV2; the final
+  deviceStart hook removal requires a fresh suite. No deployment or VM boot.
+- Follow-up found the short-JE BCS readiness bypass still ACTIVE in
+  patchesRPL, independently of the earlier removed force-success wrapper.
+  Removed that patch and both short/long pattern sets and commented fallback.
+  Earlier removal of fabricated return values did NOT restore this binary
+  gate. Keeping the native branch can expose startup failures previously
+  hidden; it does not implement BCS or establish readiness of other engines.
+- Final full offline suite passes in /tmp/ngreen-static.RAACIo. VM remains
+  shut off; no guest binary was replaced.

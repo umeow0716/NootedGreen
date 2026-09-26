@@ -1448,8 +1448,6 @@ private:
 	static uint64_t v116DummyPhys;                  // V116: physical address of dummy page
 	mach_vm_address_t ostart {};
 
-	static uint8_t deviceStart(void *that);   // V111: force IGAccelDevice::deviceStart true on RPL
-	mach_vm_address_t odeviceStart {};
 
 	static void *createUserGPUTask(void *that);  // V132: fallback when per-user task creation returns null on spoofed RPL
 	mach_vm_address_t ocreateUserGPUTask {};
@@ -1472,7 +1470,6 @@ private:
 	static bool pollRegister(uint32_t reg, uint32_t val, uint32_t mask, uint32_t timeout);
 	static bool forceWakeWaitAckFallback(uint32_t reqReg, uint32_t ackReg, uint32_t val, uint32_t mask);
 	
-	static int isConflictRegister();   // stub: returns 0 (no conflict)
 	
 	static void releaseDoorbell();     // stub: GuC doorbell release
 	
@@ -1751,8 +1748,6 @@ private:
 	static uint8_t enableController(AppleIntel::AppleIntelFramebuffer *that);
 	mach_vm_address_t oenableController {};
 	
-	static void initializeLogging(AppleIntel::AppleIntelBaseController *that);
-	mach_vm_address_t oinitializeLogging {};
 	
 	// ── CDCLK management ──
 	static void sanitizeCDClockFrequency(AppleIntel::AppleIntelBaseController *that);
@@ -1774,11 +1769,6 @@ private:
 	void (*orgDisableCDClock)(void *) {nullptr};
 	void (*orgSetCDClockFrequency)(void *, unsigned long long) {nullptr};
 	
-	static void * wprobe(void *that,void *param_1,int *param_2);  // IOService::probe wrapper
-	mach_vm_address_t owprobe {};
-	
-	static bool  tgstart(void *that,void *param_1);  // TGL-specific start
-	mach_vm_address_t otgstart {};
 	
 	static int hwSetMode
 			  (AppleIntel::AppleIntelBaseController *that,

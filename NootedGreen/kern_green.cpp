@@ -41,17 +41,6 @@ static DYLDPatches dyldpatches;
 static uint8_t builtin2[] = {0x00, 0x00, 0x49, 0x9A};
 static uint8_t builtin3[] = {0x49, 0x9A, 0x00, 0x00};
 
-static bool shouldForceRPLBringupPlatform(IORegistryEntry *entry) {
-	auto *prop = OSDynamicCast(OSData, entry ? entry->getProperty("AAPL,ig-platform-id") : nullptr);
-	if (!prop || prop->getLength() < sizeof(uint32_t)) {
-		return true;
-	}
-
-	uint32_t platformId = *reinterpret_cast<const uint32_t *>(prop->getBytesNoCopy());
-	// 0x8A5C0002 is undefined for the currently used TGL framebuffer path on this setup.
-	return platformId == 0x8A5C0002U;
-}
-
 static bool isLegacyIGPUPropSeedingEnabled() {
 	int enabled = 0;
 	if (PE_parse_boot_argn("ngreenforceprops", &enabled, sizeof(enabled))) {

@@ -2728,20 +2728,7 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			SYSLOG("ngreen", "V224: converted VF CTB request framing to HXG");
 		}
 
-		if (!NGreen::callback->isRealTGL) {
-			// V111: Hook IGAccelDevice::deviceStart to force success on RPL.
-			// Binary pattern (f_devstart) may not match every Sonoma build variant.
-			// This symbol-based hook guarantees deviceStart returns true regardless of
-			// BCS ring state, so the accelerator device is always registered with IOKit.
-			RouteRequestPlus devStartRoute[] = {
-				{"__ZN13IGAccelDevice11deviceStartEv", deviceStart, this->odeviceStart},
-			};
-			if (RouteRequestPlus::routeAll(patcher, index, devStartRoute, address, size)) {
-				SYSLOG("ngreen", "V111: Hooked IGAccelDevice::deviceStart for RPL force-success");
-			} else {
-				SYSLOG("ngreen", "V111: IGAccelDevice::deviceStart symbol not found — relying on binary patch");
-			}
-		}
+		// Keep IGAccelDevice::deviceStart native, including failure propagation.
 
 		if (!wegCoexist || forceFullMTL || gVfIdentity == VfIdentity::Virtual) {
 			RouteRequestPlus coexistOffRoutes[] = {
@@ -2826,57 +2813,6 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			0xc7, 0x83, 0x48, 0x11, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00, 0x8b, 0x83, 0x58, 0x11, 0x00, 0x00, 0x90, 0x90, 0xba, 0x01, 0x00, 0x00, 0x00, 0xbe, 0x05, 0x00, 0x00, 0x00
 		};
 
-		// V46: IGAccelDevice::deviceStart bypass — NOP the BCS failure gate
-		// IGAccelDevice::deviceStart() makes one vtable check (at vtable+0x970); if it
-		// returns 0, the whole device start aborts → IOServiceOpen fails → MTLDevice=nil.
-		// Root cause: IGHardwareCommandStreamer5::init for BCS fails (BCS CTL=0x0, ring
-		// not running), sets encodeFailureStack[1]=1, and the readiness check reads that.
-		// The RCS ring IS operational (CTL=0x7000, HWS_PGA valid, 5 CSB events confirmed).
-		// NOPing the je lets deviceStart always take the success path so IOServiceOpen
-		// succeeds, MTLDevice is non-nil, and WindowServer stops hanging.
-		//
-		// Pattern (masked, Sonoma-variant tolerant):
-		//   ff 90 70 09 00 00  callq *0x970(%rax)   ← readiness vtable call
-		//   84 c0              testb %al,%al
-		//   74 xx              je failure_path       ← PATCH: 74 xx → 90 90
-		//   48 8d xx           lea ...               ← allow minor compiler/reg variance
-		static const uint8_t f_devstart[] = {
-			0xff, 0x90, 0x70, 0x09, 0x00, 0x00,
-			0x84, 0xc0, 0x74, 0x00, 0x48, 0x8d, 0x00
-		};
-		static const uint8_t m_devstart[] = {
-			0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-			0xff, 0xff, 0xff, 0x00, 0xff, 0xff, 0x00
-		};
-		static const uint8_t r_devstart[] = {
-			0xff, 0x90, 0x70, 0x09, 0x00, 0x00,
-			0x84, 0xc0, 0x90, 0x90, 0x48, 0x8d, 0x00
-		};
-		static const uint8_t rm_devstart[] = {
-			0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-			0x00, 0x00, 0xff, 0xff, 0x00, 0x00, 0x00
-		};
-
-		// Some Sonoma builds encode the same readiness failure jump as long form:
-		//   ff 90 70 09 00 00; 84 c0; 0f 84 xx xx xx xx
-		// Patch 0f 84 rel32 -> 6x NOP to force success path.
-		// Keep this optional (non-fatal) to avoid boot regressions when pattern differs.
-		static const uint8_t f_devstart_long[] = {
-			0xff, 0x90, 0x70, 0x09, 0x00, 0x00,
-			0x84, 0xc0, 0x0f, 0x84, 0x00, 0x00, 0x00, 0x00
-		};
-		static const uint8_t m_devstart_long[] = {
-			0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-			0xff, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00
-		};
-		static const uint8_t r_devstart_long[] = {
-			0xff, 0x90, 0x70, 0x09, 0x00, 0x00,
-			0x84, 0xc0, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90
-		};
-		static const uint8_t rm_devstart_long[] = {
-			0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-			0x00, 0x00, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff
-		};
 
 		// V139: RPL-only mitigation for GP faults inside blit3d_submit_rectlist.
 		// Some command-buffer pointers on spoofed paths are 8-byte aligned; Apple emits
@@ -2968,31 +2904,15 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				"kextG11HWT Failed to apply base patches!");
 			
 			if (!NGreen::callback->isRealTGL) {
-				// RPL-only: hardcode topology and bypass BCS readiness check
+				// Legacy topology overrides; native BCS readiness remains mandatory.
 				LookupPatchPlus const patchesRPL[] = {
 					{activeKext, f3b, r3b, arrsize(f3b),	1},      // L3BankCount=8
 					{activeKext, f3bb, r3bb, arrsize(f3bb),	1},    // MaxEU/SS=8
 					{activeKext, f3bbb, r3bbb, arrsize(f3bbb),	1},// NumSubSlices=12
-					{activeKext, f_devstart, m_devstart, r_devstart, rm_devstart, arrsize(f_devstart), 1}, // BCS bypass
 				};
 				PANIC_COND(!LookupPatchPlus::applyAll(patcher, patchesRPL, address, size), "ngreen",
 					"kextG11HWT Failed to apply RPL-specific patches!");
 
-				// Optional secondary signature for Sonoma variants with long JE encoding.
-				/*LookupPatchPlus const patchRPLDevstartLong {
-					activeKext,
-					f_devstart_long,
-					m_devstart_long,
-					r_devstart_long,
-					rm_devstart_long,
-					arrsize(f_devstart_long),
-					1
-				};
-				if (patchRPLDevstartLong.apply(patcher, address, size)) {
-					SYSLOG("ngreen", "V52: Applied optional long-form deviceStart readiness bypass");
-				} else {
-					SYSLOG("ngreen", "V52: Optional long-form deviceStart bypass not found on this build");
-				}*/
 
 				// Optional SSE unaligned-store mitigation for blit3d_submit_rectlist.
 				LookupPatchPlus const patchV139Store10 {
@@ -6731,15 +6651,6 @@ unsigned long Gen11::start(void *that,void  *param_1)
 	NGreen::callback->writeReg32(FORCEWAKE_RENDER_GEN9, (1 << 16) | 0);
 	NGreen::callback->writeReg32(FORCEWAKE_BLITTER_GEN9, (1 << 16) | 0);
 	
-	return ret;
-}
-
-uint8_t Gen11::deviceStart(void *that)
-{
-	// An uninitialized accelerator must not be published as a working device.
-	// In particular, failed VF bootstrap is not a reason to fabricate success.
-	auto ret = FunctionCast(deviceStart, callback->odeviceStart)(that);
-	DBGLOG("ngreen", "V111: IGAccelDevice::deviceStart returned %d", ret);
 	return ret;
 }
 
@@ -12256,24 +12167,6 @@ void  Gen11::readAndClearInterrupts(AppleIntel::AppleIntelBaseController *that, 
 	FunctionCast(readAndClearInterrupts, callback->oreadAndClearInterrupts)(that,param_1);
 }
 
-void * Gen11::wprobe(void *that,void *param_1,int *param_2)
-{
-	//FunctionCast(wprobe, callback->owprobe)(that, param_1,param_2);
-	//logStateInRegistry(that,0x56);
-	initializeLogging(reinterpret_cast<AppleIntel::AppleIntelBaseController *>(that));
-	return that;
-	
-}
-
-void *contr;
-bool  Gen11::tgstart(void *that,void *param_1)
-{
-	contr=that;
-	FunctionCast(tgstart, callback->otgstart)(that, param_1);
-	return true;
-	
-}
-
 void Gen11::FBMemMgr_Init(void *that)
 {
 	ccont  = getMember<void *>(that, 0xc40);  // MMIO register access manager
@@ -12426,11 +12319,6 @@ void Gen11::logStateInRegistry(void *that,uint param_1)
  FunctionCast(logStateInRegistry, callback->ologStateInRegistry)(that,param_1 );
 }
 
-void Gen11::initializeLogging(AppleIntel::AppleIntelBaseController *that)
-{
-	FunctionCast(initializeLogging, callback->oinitializeLogging)(that );
-}
-
 int Gen11::getPlatformID()
 {
  return FunctionCast(getPlatformID, callback->ogetPlatformID)( );
@@ -12486,14 +12374,6 @@ uint8_t  Gen11::setPortMode(void *that,uint32_t param_1)
  auto ret= FunctionCast(setPortMode, callback->osetPortMode)(that,param_1 );
 	
  return ret;
-}
-
-int smo=0;
-
-int Gen11::isConflictRegister()
-{
-	return -1;
-
 }
 
 int Gen11::wrapGetFreeJoinablePathCount(void *that)
