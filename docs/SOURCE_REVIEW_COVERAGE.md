@@ -94,3 +94,32 @@ sources returns the current count to 1,303; this does not close older coverage.
   stayed off. Review of the remaining physical start path found contradictory
   legacy reset/error-mask timer experiments; they are the next open safety
   block and are not certified by this checkpoint.
+
+### Accelerator lifecycle and legacy experiment removal
+
+- Replaced the roughly thousand-line accelerator `start` wrapper with the
+  admitted lifecycle contract: classify PCI identity, bootstrap a VF, publish
+  scheduler selection, disable PF-owned VF PM/fallback paths, call native start
+  and publish only after success. Mandatory VF property failures now mark a
+  protocol fault. Physical start no longer writes ring/IRQ/error/GGTT state.
+- Removed recurring IRQ, health, EMR and bundle/child timers together with
+  their retained service state. Removed pre/post-start GDRST, blanket EMR/error
+  masking, BCS stop/head-tail rewrite, manual CSB draining, fixed GGTT page-zero
+  remaps and forced child registration. These paths had no symmetric stop
+  ownership and included comments documenting that the same reset killed the
+  ring.
+- `startGraphicsEngine`, `stopGraphicsEngine` and
+  `populateResetRegisterList` now isolate PF-owned state on a VF and otherwise
+  preserve the physical native implementation. Final VF stop retains the
+  mandatory GuC context/DMA quiescence boundary.
+- Removed physical-only LRCA repair hooks which used global cache flush plus
+  temporary `GGTT[0]` remaps and hard-coded a submission slot. Also removed the
+  partial Blit3D initializer, incompatible resolve-context substitution,
+  unretained context caches and three wrappers that skipped native usage/DTrace
+  work while reporting completion. The four context getters now only enforce
+  complete VF admission and return their own native object type.
+- `kern_gen11.cpp` now contains no `GDRST`, `wbinvd`, blanket `RING_EMR`
+  mutation, `GGTT_PTE_LO(0)` remap or `thread_call_allocate`. README runtime
+  claims and boot arguments for the removed Sonoma-era experiments were
+  retired. The full static suite passes in `/tmp/ngreen-static.aikyPk`; the VM
+  remained off and hardware behavior is not inferred from that result.

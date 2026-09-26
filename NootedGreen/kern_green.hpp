@@ -259,7 +259,6 @@ private:
 
 	// Last RCS context object seen by IGHardwareContext::withOptions.
 	// V507 uses this to re-run the LRCA slot repair on each populateResetRegisterList call.
-	void *lastRCSCtx {nullptr};
 
 };
 

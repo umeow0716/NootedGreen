@@ -1427,13 +1427,6 @@ private:
 	// ── Accelerator start & forcewake ──
 	static unsigned long start(void *that,void  *param_1);   // IntelAccelerator::start wrapper
 	static void acceleratorStop(void *that, void *provider); // final VF DMA-quiescence intent
-	static void v54IrqWatchdog(thread_call_param_t, thread_call_param_t);  // V54: IRQ watchdog
-	static void v60GpuHealthMonitor(thread_call_param_t, thread_call_param_t);  // V60: active ERROR_GEN6 suppression + monitor
-	static void v71EmrEnforcer(thread_call_param_t, thread_call_param_t);  // V71: high-freq EMR mask + ERROR clear (50ms)
-	static IOMemoryMap *v85PersistMap;   // V85: persistent FB page 0 mapping for 50ms fill
-	static uint32_t v85SurfAddr;         // V85: cached PLANE_SURF address
-	static IOBufferMemoryDescriptor *v116DummyBuf;  // V116: safe dummy page for GGTT[0] remap
-	static uint64_t v116DummyPhys;                  // V116: physical address of dummy page
 	mach_vm_address_t ostart {};
 	mach_vm_address_t oAcceleratorStop {};
 
@@ -1457,7 +1450,6 @@ private:
 	
 	
 	void *framecont;  // cached framebuffer controller pointer
-	void *accelInstance {nullptr};  // V42: saved IntelAccelerator instance for child enumeration
 	
 	// Saved original function pointers for accelerator
 	mach_vm_address_t orgSubmitExecList {};    // ExecList submission (command dispatch)
@@ -1490,9 +1482,6 @@ private:
 	bool tglHWLoaded {false};  // true when TGL HW processed — skip ICL HW if set
 
 	// V131: Cached fallback contexts for spoofed RPL path to prevent NULL task submission
-	void *v131CachedBlit3DCtx {nullptr};  // Fallback 3D context when creation fails
-	void *v131CachedBlit2DCtx {nullptr};  // Fallback 2D context when creation fails
-
 	static void hwConfigureCustomAUX(AppleIntel::AppleIntelBaseController *that, bool param_1);
 	mach_vm_address_t ohwConfigureCustomAUX {};
 	
@@ -1731,30 +1720,14 @@ private:
 	mach_vm_address_t AppleIntelPort {};  // port object
 
 	// ── 3D Blit engine (GPU-accelerated blitting via 3D pipeline) ──
-	static void IGHardwareBlit3DContextinitialize(void *that);
-	mach_vm_address_t oIGHardwareBlit3DContextinitialize {};
-	
 	mach_vm_address_t oIGMappedBuffergetMemory {};
-	
-	
-	static uint64_t blit3d_init_ctx(void *that);
-	mach_vm_address_t oblit3d_init_ctx {};
-	
-	static void blit3d_initialize_scratch_space(void *that);
-	mach_vm_address_t oblit3d_initialize_scratch_space {};
 
 	// V508: Base class IGHardwareContext::withOptions hook — logs ctx+0xb8 and dumps LRCA page1
 	// immediately after initWithOptions runs (wbinvd flushes LLC→DRAM for accurate aperture read).
-	static void *IGHardwareContextwithOptions(void *task, const void *params, uint8_t arg);
-	mach_vm_address_t oIGHardwareContextwithOptions {};
-
 	// V509: Base class IGHardwareContext::initWithOptions hook — CPU-side LRCA page1 repair.
 	// restoreFromSafeImage returns true on RPL (skips g_cInitGfxRingContextRCS memcpy), leaving
 	// DW1 (MI_LRI header) as 0x00ffffff.  We write the minimal Gen12 ring context LRI block so
 	// hardware can restore ring state on ExecList context-restore.
-	static uint64_t IGHardwareContextinitWithOptions(void *that, void *task, const void *params, uint8_t arg);
-	mach_vm_address_t oIGHardwareContextinitWithOptions {};
-
 	// Pointers to extended context parameter tables (per-context-type)
 	mach_vm_address_t ExtendedCtxParams {};
 	mach_vm_address_t Blit2DExtendedCtxParams {};
@@ -1801,15 +1774,13 @@ private:
 	static void AppleIntelPlaneupdateRegisterCache(AppleIntel::AppleIntelPlane *that);
 	mach_vm_address_t oAppleIntelPlaneupdateRegisterCache {};
 
-	static void applyPreStartEngineWorkarounds(int callCount); // only error/EMR clear — safe before ring init
-	static void applyPreStopEngineWorkarounds(int callCount);  // full GT WAs + BCS drain — before stop only
 	static unsigned long stopGraphicsEngine(void *that);
 	mach_vm_address_t ostopGraphicsEngine {};
 
-	static unsigned long startGraphicsEngine(void *that);  // V163: clear PERCTX_PREEMPT_CTRL before first context snapshot
+	static unsigned long startGraphicsEngine(void *that);  // contain PF-owned ring lifecycle on a VF
 	mach_vm_address_t ostartGraphicsEngine {};
 
-	static void populateResetRegisterList(void *that);  // V164: clear bit 14 before snapshot into replay list
+	static void populateResetRegisterList(void *that);  // contain PF-owned reset-register state on a VF
 	mach_vm_address_t opopulateResetRegisterList {};
 
 	// V212: Hook isGpuIdle (watchdog query) — GPU watchdog calls this post-startup.
@@ -1821,27 +1792,15 @@ private:
 	mach_vm_address_t oIGScheduler4IsGpuIdle {};
 
 
-	static uint32_t beginCoalescedSegment(void *that);  // V124: guard [member+0xb8] null deref
-	mach_vm_address_t obeginCoalescedSegment {};
-
 	static uint8_t barrierSubmission(void *queue, void *accelerator, void *cmdDesc,
 	                                void *event, uint16_t count, const uint16_t *list);
 	mach_vm_address_t obarrierSubmission {};
 	
-	static void  markBlitUsage(void *that);
-	mach_vm_address_t omarkBlitUsage {};
-	
-	static void  initBlitUsage(void *that);
-	mach_vm_address_t oinitBlitUsage {};
-
 	mach_vm_address_t kIGHwCsDesc {};  // pointer to engine descriptor table
 
 public:
 
 	// Resolved from IOAcceleratorFamily2 by NGreen::processKext — needed by blit3d scratch init.
-	mach_vm_address_t oIOAF2_lockForCPUAccess {};
-	mach_vm_address_t oIOAF2_unlockForCPUAccess {};
-
 	void init();  // register kextInfos with Lilu
 	static Gen11 *callback;  // singleton for Lilu static callbacks
 	bool processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t address, size_t size);

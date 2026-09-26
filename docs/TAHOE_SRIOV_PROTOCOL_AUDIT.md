@@ -1697,3 +1697,23 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
 - `/tmp/ngreen-static.FYOPcq` passes the complete static suite. The VM remains
   off because the physical start path still contains contradictory legacy
   GDRST, permanent EMR-mask and recurring IRQ-timer experiments.
+
+### Removal of unaudited physical reset and partial-context protocols
+
+- The remaining physical `start`/engine lifecycle was not a coherent hardware
+  protocol: it could issue GDRST despite a later comment recording that GDRST
+  permanently killed the ring, mask every error every 50 ms, rewrite BCS and
+  CSB ownership behind the native scheduler, temporarily remap `GGTT[0]`, and
+  retain recurring callbacks without a stop-side cancellation owner. Those
+  experiments and their timers are removed.
+- Physical engine lifecycle is native. VF engine lifecycle remains a contained
+  success only because ring/reset ownership belongs to PF/GuC; final stop still
+  fails closed unless every direct-LRCA context and DMA mapping is quiesced.
+- Removed the hard-coded physical LRCA slot repair and partial Blit3D object
+  construction. Native task context slots are no longer cross-substituted or
+  cached without ownership. VF submit/barrier admission continues to require
+  its complete native contexts and propagates native results.
+- Static source search now finds no GDRST, global cache flush, blanket EMR
+  mutation, GGTT page-zero remap or recurring thread-call allocation in the
+  Gen11 implementation. `/tmp/ngreen-static.aikyPk` passes all checks. This
+  clears that static blocker only; controlled Tahoe VF runtime remains pending.
