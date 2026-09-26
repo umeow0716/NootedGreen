@@ -211,3 +211,50 @@ reachability and semantics need checking before retention can be called safe.
   DisplayMergeNub dictionary-copy leaks and dead stores. This is automated
   analysis, NOT completion of the requested full source/reachability review.
   The reported null callback path in `raWriteRegister32` now has an entry guard.
+
+## Context submission/retirement audit (VM still stopped)
+
+CI run 36215583625 for `aaf14a4` passed the macOS build and offline tests.
+This is build evidence, not a successful acceleration baseline.
+
+- Native `IGMappedBuffer::initWithOptions` stores the requested byte count at
+  object offset `0x20` (`0x13b7d` saves the argument, `0x13c48` publishes it);
+  `fillIfRequested` uses it as the fill bound. CTB initialization now checks
+  that field against the enlarged backing before native channel writes.
+  Context attach/submit similarly check the largest accessed register-image
+  offset. These checks do not prove mapping ownership or concurrent unmapping.
+- `IGHardwareContext::initWithOptions`, `0x7bfcd..0x7bfec`, derives descriptor
+  LRCA directly from the image's GPU VA, without adding a page. Its register
+  image is at CPU backing + `0x1000`. Attach now bounds the whole requested
+  image length inside the VF GGTT window instead of checking only its first
+  page. Actual page-table contents/ownership still need verification.
+- i915 `intel_lrc.c:init_vf_irq_reg_state` is called by `__lrc_init_regs` for
+  initial restore; the accompanying comment says later GPU saves recreate
+  this state. Memory-IRQ command initialization has moved from every submit
+  to the new-slot owner before REGISTER_CONTEXT. Repeated attach does not
+  rewrite an active context image. Full per-engine layout validation remains.
+- The old submit-state-check / CTB-enqueue gap allowed final detach to enqueue
+  disable/deregister first. Submission now owns the pinned native H2G lock
+  across admission, backing identity validation, tail write and enqueue.
+  Final detach acquires the same lock before claiming retirement. Lock order
+  is H2G -> context spinlock. Neither completion waits nor original detach
+  run while holding H2G. The FAST sender accepts that exact already-held lock
+  to avoid recursive acquisition. G2H lifecycle handling only takes the context
+  spinlock and does not acquire H2G while holding it. Broader native-caller
+  lock ordering, retry/backpressure and externally updated ring tails remain
+  audit items; this is not a complete concurrency proof.
+- Final detach claims the last reference exactly once. Attach rejects reference
+  overflow or mismatched backing/descriptor/engine identity. Submission checks
+  a live reference before image access. Native duplicate attach creates proxy
+  bookkeeping, so successful duplicate attach/detach calls remain balanced.
+- IRQ-context or interrupts-disabled callers cannot enter the new queue guard,
+  FAST sender or synchronous GuC wait. Other mutex users and preemption-disabled
+  call paths still require review. The VA getter at `0x10b60` simply reads
+  backing + `0x38`; it does not acquire another lock.
+- Pre-memory-IRQ submission now returns failure instead of reporting success
+  without submitting. The old first-stamp workaround and caller failure paths
+  must be reconciled before dynamic testing; this may deliberately expose an
+  initialization failure previously hidden by fabricated progress.
+
+The host-freeze cause remains unproven. VM boot, EFI installation, GPU work and
+Sunshine configuration have not been attempted during this static audit.

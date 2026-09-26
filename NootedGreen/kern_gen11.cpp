@@ -13,6 +13,7 @@
 #include <IOKit/IOLocks.h>
 #include <IOKit/IOWorkLoop.h>
 #include <kern/thread_call.h>
+#include <i386/machine_routines.h>
 
 // ==== 6 kextInfos: ICL fallback + dual TGL identities (com.xxxxx and com.apple) from /Library/Extensions ====
 //trivial
@@ -188,6 +189,15 @@ void vfMarkProtocolFault(const char *reason)
 		SYSLOG("ngreen", "V237: VF protocol halted after %s", reason);
 }
 
+bool vfCanUseSleepingLock()
+{
+	if (ml_at_interrupt_context() || !ml_get_interrupts_enabled()) {
+		vfMarkProtocolFault("blocking VF operation from interrupt context");
+		return false;
+	}
+	return true;
+}
+
 // Modern GuC submission (v70+) assigns one GuC ID to one logical ring
 // context.  Tahoe's TGL binary predates that ABI and instead assigns a GuC ID
 // to a process-wide proxy work queue whose items contain changing LRCAs.  A VF
@@ -227,6 +237,10 @@ uint32_t gVfContextLifecycleLogs = 0;
 constexpr uint32_t kVfContextEventTimeoutMs = 1000;
 constexpr size_t kVfContextDescriptorOffset = 0x89;
 constexpr size_t kVfContextImageBufferOffset = 0x98;
+// Tahoe IGMappedBuffer::initWithOptions stores the requested byte length at
+// +0x20 (0x13c48); fillIfRequested consumes the same field as a byte bound.
+constexpr size_t kVfMappedBufferLengthOffset = 0x20;
+constexpr uint64_t kVfContextMinimumImageBytes = 0x1000 + 0x5A * sizeof(uint32_t);
 constexpr uint32_t kGucTypeFastRequest = 0x20000000U;
 constexpr uint32_t kGucContextRegistrationFlagKmd = 1;
 constexpr uint32_t kGucContextDisable = 0;
@@ -336,9 +350,12 @@ bool vfInitContextBridge()
 }
 
 bool vfSendCtbFastAction(void *guc, const uint32_t *request,
-	                     uint32_t requestLength, uint32_t &transportFence)
+	                     uint32_t requestLength, uint32_t &transportFence,
+	                     IOLock *alreadyHeldQueue = nullptr)
 {
 	transportFence = 0;
+	if (!vfCanUseSleepingLock())
+		return false;
 	if (!guc || !request || requestLength == 0 || requestLength > 31 ||
 	    !gVfCtbGpuBase || !gVfCtbEnabled || gVfProtocolFault || gVfCtbStopped ||
 	    (request[0] & (kGucOriginGuc | kGucTypeMask)))
@@ -356,17 +373,20 @@ bool vfSendCtbFastAction(void *guc, const uint32_t *request,
 	auto *lock = getMember<IOLock *>(ctb, 0x18);
 	auto *descriptor = getMember<volatile uint32_t *>(ctb, 0x48);
 	auto *buffer = getMember<volatile uint32_t *>(ctb, 0x50);
-	if (!lock || !vfValidH2GMapping(descriptor, buffer)) {
+	if (!lock || (alreadyHeldQueue && alreadyHeldQueue != lock) ||
+	    !vfValidH2GMapping(descriptor, buffer)) {
 		vfMarkProtocolFault("H2G CTB mapping mismatch");
 		return false;
 	}
 
 	transportFence = 0;
 	for (uint32_t retry = 0; retry < 8; retry++) {
-		IOLockLock(lock);
+		if (!alreadyHeldQueue)
+			IOLockLock(lock);
 		OSSynchronizeIO();
 		if (!gVfCtbEnabled || gVfCtbStopped || gVfProtocolFault) {
-			IOLockUnlock(lock);
+			if (!alreadyHeldQueue)
+				IOLockUnlock(lock);
 			return false;
 		}
 		const uint32_t size = descriptor[3] / sizeof(uint32_t);
@@ -399,11 +419,13 @@ bool vfSendCtbFastAction(void *guc, const uint32_t *request,
 			OSSynchronizeIO();
 			NGreen::callback->writeReg32(kGen11GucHostInterrupt,
 			                              kGucSendTrigger);
-			IOLockUnlock(lock);
+			if (!alreadyHeldQueue)
+				IOLockUnlock(lock);
 			transportFence = fence;
 			return true;
 		}
-		IOLockUnlock(lock);
+		if (!alreadyHeldQueue)
+			IOLockUnlock(lock);
 		if (!valid) {
 			SYSLOG("ngreen", "V231: invalid H2G CTB size=%u head=%u tail=%u status=0x%x",
 			       size, head, tail, status);
@@ -439,6 +461,8 @@ bool vfSetContextPolicy(void *guc, uint16_t gucId, uint8_t engineClass,
 
 bool vfCanWaitForGuc(void *guc)
 {
+	if (!vfCanUseSleepingLock())
+		return false;
 	// initWithOptions creates this independent workloop. Sleeping while its
 	// gate is held prevents the software G2H event source from completing us.
 	auto *loop = guc ? getMember<IOWorkLoop *>(guc, 0xA00) : nullptr;
@@ -8830,6 +8854,63 @@ void Gen11::vfInitDoorbells(void *that) {
 	       kGen12DoorbellCount);
 }
 
+// Submission and final retirement share the native H2G queue lock. Lock order
+// is H2G -> context spinlock, never the reverse. No firmware-completion wait or
+// original attach/detach call is allowed while this guard owns the queue.
+class VfContextQueueGuard {
+public:
+	explicit VfContextQueueGuard(void *guc) {
+		if (!vfCanUseSleepingLock())
+			return;
+		auto *ctb = guc ? getMember<void *>(guc, 0xA10) : nullptr;
+		if (ctb && ctb == gVfCtbObject)
+			lock = getMember<IOLock *>(ctb, 0x18);
+		if (lock)
+			IOLockLock(lock);
+	}
+	~VfContextQueueGuard() { unlock(); }
+	VfContextQueueGuard(const VfContextQueueGuard &) = delete;
+	VfContextQueueGuard &operator=(const VfContextQueueGuard &) = delete;
+	IOLock *get() const { return lock; }
+	void unlock() {
+		if (lock) {
+			IOLockUnlock(lock);
+			lock = nullptr;
+		}
+	}
+private:
+	IOLock *lock = nullptr;
+};
+
+// Called only by the owner of a newly reserved, unregistered context slot.
+// i915 __lrc_init_regs/init_vf_irq_reg_state initializes this batch for its first
+// restore; subsequent GPU saves recreate it. Never rewrite it on each submit.
+static bool vfPrepareContextMemoryIrq(OSObject *backing, mach_vm_address_t getter) {
+	if (!backing || !getter || !gVfMemIrqConfigured || !gVfCtbEnabled ||
+	    gVfCtbStopped || gVfProtocolFault ||
+	    getMember<uint64_t>(backing, kVfMappedBufferLengthOffset) <
+	        kVfContextMinimumImageBytes)
+		return false;
+	using GetVirtualAddress = void *(*)(void *);
+	auto *image = static_cast<uint8_t *>(
+		reinterpret_cast<GetVirtualAddress>(getter)(backing));
+	if (!image)
+		return false;
+	auto *regs = reinterpret_cast<volatile uint32_t *>(image + 0x1000);
+	const uint32_t page = gVfCtbGpuBase + kVfMemIrqOffset;
+	regs[0x50] = 0x14C80002U; // MI_LRM, global GGTT, engine-relative MMIO
+	regs[0x51] = 0xA8;       // GEN12_RING_INT_MASK
+	regs[0x52] = page + kVfMemIrqEnableOffset;
+	regs[0x53] = 0;
+	regs[0x55] = 0x11081003U; // MI_LRI(2), posted, engine-relative MMIO
+	regs[0x56] = 0xAC;       // GEN12_RING_INT_STATUS
+	regs[0x57] = page + kVfMemIrqStatusOffset;
+	regs[0x58] = 0xA4;       // GEN12_RING_INT_SRC
+	regs[0x59] = page + kVfMemIrqSourceOffset;
+	OSSynchronizeIO();
+	return true;
+}
+
 bool Gen11::vfAttachContextDesc(void *that, const uint32_t *descriptor) {
 	if (gVfIdentity == VfIdentity::Physical) {
 		return FunctionCast(vfAttachContextDesc,
@@ -8859,12 +8940,14 @@ bool Gen11::vfAttachContextDesc(void *that, const uint32_t *descriptor) {
 		kVfContextDescriptorOffset);
 	auto *contextBacking = reinterpret_cast<OSObject *>(
 		getMember<void *>(hardwareContext, kVfContextImageBufferOffset));
+	const uint64_t contextBytes = contextBacking ?
+		getMember<uint64_t>(contextBacking, kVfMappedBufferLengthOffset) : 0;
 	static constexpr uint8_t engineClassMap[] = {0, 1, 2, 3, 5, 4};
 	if (lrcaPage < gVfGGTTBase ||
-	    static_cast<uint64_t>(lrcaPage) + PAGE_SIZE >
-		gVfGGTTBase + gVfGGTTSize ||
+	    lrcaPage >= gVfGGTTBase + gVfGGTTSize ||
+	    contextBytes > gVfGGTTBase + gVfGGTTSize - lrcaPage ||
 	    rawClass >= arrsize(engineClassMap) || engineInstance >= 32 ||
-	    !contextBacking) {
+	    contextBytes < kVfContextMinimumImageBytes) {
 		SYSLOG("ngreen", "V230: rejected LRCA descriptor %08x:%08x VF=[0x%llx,+0x%llx]",
 		       descriptorHi, descriptorLo,
 		       static_cast<unsigned long long>(gVfGGTTBase),
@@ -8884,11 +8967,20 @@ bool Gen11::vfAttachContextDesc(void *that, const uint32_t *descriptor) {
 		if (slot >= 0) {
 			auto &entry = gVfContexts[slot];
 			previousState = entry.state;
-			if (entry.state == kVfGucContextRegistered ||
+			if (entry.refCount && (entry.state == kVfGucContextRegistered ||
 			    entry.state == kVfGucContextPendingEnable ||
-			    entry.state == kVfGucContextEnabled) {
-				if (entry.refCount != 0xFFFFU)
-					entry.refCount++;
+			    entry.state == kVfGucContextEnabled)) {
+				if (entry.refCount == 0xFFFFU || entry.contextBacking != contextBacking ||
+				    entry.descriptorLo != descriptorLo ||
+				    entry.engineClass != engineClassMap[rawClass] ||
+				    entry.engineInstance != engineInstance) {
+					IOSimpleLockUnlockEnableInterrupt(gVfContextLock, interruptState);
+					vfMarkProtocolFault("context reference overflow or LRCA identity mismatch");
+					FunctionCast(vfDetachContextDesc, callback->oVfDetachContextDesc)(
+						that, descriptor);
+					return false;
+				}
+				entry.refCount++;
 				IOSimpleLockUnlockEnableInterrupt(gVfContextLock,
 				                                      interruptState);
 				return true;
@@ -8951,6 +9043,8 @@ bool Gen11::vfAttachContextDesc(void *that, const uint32_t *descriptor) {
 	};
 	uint32_t transportFence = 0;
 	const bool registered =
+		vfPrepareContextMemoryIrq(contextBacking,
+		                          callback->vfSharedMappedBufferGetVirtualAddress) &&
 		vfSendCtbFastAction(that, request, arrsize(request), transportFence);
 	const bool policySet = registered &&
 		vfSetContextPolicy(that, gucId, engineClass, transportFence);
@@ -8989,10 +9083,13 @@ bool Gen11::vfAttachContextDesc(void *that, const uint32_t *descriptor) {
 }
 
 void Gen11::vfDetachContextDesc(void *that, const uint32_t *descriptor) {
-	if (!gVfGGTTReady || NGreen::callback->isRealTGL || !descriptor ||
-	    !gVfContextLock || !gVfContexts) {
+	if (gVfIdentity == VfIdentity::Physical) {
 		FunctionCast(vfDetachContextDesc,
 		             callback->oVfDetachContextDesc)(that, descriptor);
+		return;
+	}
+	if (!that || !descriptor || !gVfGGTTReady || !gVfContextLock || !gVfContexts) {
+		vfMarkProtocolFault("VF detach without valid context bookkeeping");
 		return;
 	}
 
@@ -9001,18 +9098,32 @@ void Gen11::vfDetachContextDesc(void *that, const uint32_t *descriptor) {
 	VfGucContextState state = kVfGucContextEmpty;
 	bool issueDisable = false;
 	bool issueDeregister = false;
+	VfContextQueueGuard queue(that);
+	if (!queue.get()) {
+		vfMarkProtocolFault("context retirement without pinned H2G queue");
+		return;
+	}
 	IOInterruptState interruptState =
 		IOSimpleLockLockDisableInterrupt(gVfContextLock);
 	slot = vfFindContextLocked(lrcaPage);
 	if (slot >= 0) {
 		auto &entry = gVfContexts[slot];
+		if (!entry.refCount) {
+			IOSimpleLockUnlockEnableInterrupt(gVfContextLock, interruptState);
+			vfMarkProtocolFault("duplicate final context detach");
+			return;
+		}
 		if (entry.refCount > 1) {
 			entry.refCount--;
 			IOSimpleLockUnlockEnableInterrupt(gVfContextLock, interruptState);
+			queue.unlock();
 			FunctionCast(vfDetachContextDesc,
 			             callback->oVfDetachContextDesc)(that, descriptor);
 			return;
 		}
+		// One thread owns final retirement. Do not admit a new reference or
+		// a second waiter while this owner releases locks to await firmware.
+		entry.refCount = 0;
 		state = entry.state;
 		if (state == kVfGucContextEnabled) {
 			entry.state = kVfGucContextPendingDisable;
@@ -9025,6 +9136,7 @@ void Gen11::vfDetachContextDesc(void *that, const uint32_t *descriptor) {
 		}
 	}
 	IOSimpleLockUnlockEnableInterrupt(gVfContextLock, interruptState);
+	queue.unlock();
 
 	if (slot < 0) {
 		SYSLOG("ngreen", "V230: detach could not find LRCA 0x%08x", lrcaPage);
@@ -9130,7 +9242,7 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 		                                                 channelId, ringSequence,
 		                                                 ringTail);
 	}
-	if (!gVfGGTTReady || !descriptor || !gVfContextLock || !gVfContexts ||
+	if (!that || !gVfGGTTReady || !descriptor || !gVfContextLock || !gVfContexts ||
 	    !callback->vfSharedMappedBufferGetVirtualAddress)
 		return false;
 	if (gVfProtocolFault) {
@@ -9144,15 +9256,34 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 	if (!memIrqReady) {
 		// A bootstrap stamp can precede CTB registration.  It cannot be safely
 		// submitted because MODE_DONE and completion interrupts would be
-		// unobservable.  Acknowledge only this software request; V221's bounded
-		// first-stamp handling will retire it after transport becomes available.
+		// unobservable. No command was submitted, so reporting success here
+		// would fabricate progress and leave a completion stamp outstanding.
 		static uint32_t bootstrapLogs = 0;
 		if (bootstrapLogs++ < 16) {
 			SYSLOG("ngreen", "V237: suppressed pre-memory-IRQ VF bootstrap submit LRCA=0x%08x",
 			       descriptor[0]);
 		}
-		return true;
+		return false;
 	}
+
+	VfContextQueueGuard queue(that);
+	if (!queue.get() || !gVfCtbEnabled || gVfCtbStopped || gVfProtocolFault)
+		return false;
+	// Check admission before touching the context image. A final detach must
+	// acquire this queue before clearing refCount, so it cannot deregister or
+	// release backing between this check, the tail write and CTB publication.
+	const uint32_t lrcaPage = descriptor[0] & 0xFFFFF000U;
+	IOInterruptState admissionState = IOSimpleLockLockDisableInterrupt(gVfContextLock);
+	const int32_t admittedSlot = vfFindContextLocked(lrcaPage);
+	const bool admitted = admittedSlot >= 0 && gVfContexts[admittedSlot].refCount &&
+		gVfContexts[admittedSlot].descriptorLo == descriptor[0] &&
+		(gVfContexts[admittedSlot].state == kVfGucContextRegistered ||
+		 gVfContexts[admittedSlot].state == kVfGucContextDisabled ||
+		 gVfContexts[admittedSlot].state == kVfGucContextEnabled);
+	OSObject *admittedBacking = admitted ? gVfContexts[admittedSlot].contextBacking : nullptr;
+	IOSimpleLockUnlockEnableInterrupt(gVfContextLock, admissionState);
+	if (!admitted)
+		return false;
 
 	// Tahoe's legacy WQ encoder proves that the final argument is the byte
 	// ring tail: it stores (arg >> 3) in WQ_RING_TAIL[28:18].  The previous
@@ -9169,19 +9300,6 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 	constexpr size_t kContextRegisterStateOffset = 0x1000;
 	constexpr size_t kContextRingTailOffset = 0x101C;
 	constexpr size_t kContextRingControlOffset = 0x102C;
-	constexpr uint32_t kCtxMemIrqLrmHeaderIndex = 0x50;
-	constexpr uint32_t kCtxMemIrqMaskRegisterIndex = 0x51;
-	constexpr uint32_t kCtxMemIrqMaskPointerIndex = 0x52;
-	constexpr uint32_t kCtxMemIrqLriHeaderIndex = 0x55;
-	constexpr uint32_t kCtxMemIrqStatusRegisterIndex = 0x56;
-	constexpr uint32_t kCtxMemIrqStatusPointerIndex = 0x57;
-	constexpr uint32_t kCtxMemIrqSourceRegisterIndex = 0x58;
-	constexpr uint32_t kCtxMemIrqSourcePointerIndex = 0x59;
-	constexpr uint32_t kMiLoadRegisterMemGlobalCsMmio = 0x14C80002U;
-	constexpr uint32_t kMiLoadRegisterImm2PostedCsMmio = 0x11081003U;
-	constexpr uint32_t kGen12RingIntSource = 0x00A4U;
-	constexpr uint32_t kGen12RingIntMask = 0x00A8U;
-	constexpr uint32_t kGen12RingIntStatus = 0x00ACU;
 	constexpr uint32_t kRingControlPagesMask = 0x001FF000U;
 	constexpr uint32_t kRingControlValid = 1U;
 	auto *hardwareContext = const_cast<uint8_t *>(
@@ -9189,40 +9307,22 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 		kVfContextDescriptorOffset);
 	auto *contextImageBuffer =
 		getMember<void *>(hardwareContext, kVfContextImageBufferOffset);
+	if (contextImageBuffer != admittedBacking) {
+		vfMarkProtocolFault("submit context backing identity mismatch");
+		return false;
+	}
 	using GetVirtualAddress = void *(*)(void *);
 	auto getVirtualAddress = reinterpret_cast<GetVirtualAddress>(
 		callback->vfSharedMappedBufferGetVirtualAddress);
 	auto *contextImage = contextImageBuffer ?
 		reinterpret_cast<uint8_t *>(getVirtualAddress(contextImageBuffer)) : nullptr;
-	if (!contextImage) {
+	if (!contextImage ||
+	    getMember<uint64_t>(contextImageBuffer, kVfMappedBufferLengthOffset) <
+	        kVfContextMinimumImageBytes) {
 		SYSLOG("ngreen", "V233: submit has no CPU context image LRCA=0x%08x legacy=%u",
 		       descriptor[0], legacyContextId);
 		return false;
 	}
-	// This VF uses memory-based IRQ reporting, as in i915's VF path.
-	// Match init_vf_irq_reg_state(): consume the reserved LRCA slots to
-	// load the interrupt mask from memory and point the engine's status/source
-	// reporting at the shared memory-IRQ page.  Register addresses are relative
-	// to the selected engine because MI_LRI_LRM_CS_MMIO is set in both commands.
-	auto *registerState = reinterpret_cast<volatile uint32_t *>(
-		contextImage + kContextRegisterStateOffset);
-	const uint32_t memIrqPage = gVfCtbGpuBase + kVfMemIrqOffset;
-	registerState[kCtxMemIrqLrmHeaderIndex] =
-		kMiLoadRegisterMemGlobalCsMmio;
-	registerState[kCtxMemIrqMaskRegisterIndex] = kGen12RingIntMask;
-	registerState[kCtxMemIrqMaskPointerIndex] =
-		memIrqPage + kVfMemIrqEnableOffset;
-	registerState[kCtxMemIrqMaskPointerIndex + 1] = 0;
-	registerState[kCtxMemIrqLriHeaderIndex] =
-		kMiLoadRegisterImm2PostedCsMmio;
-	registerState[kCtxMemIrqStatusRegisterIndex] = kGen12RingIntStatus;
-	registerState[kCtxMemIrqStatusPointerIndex] =
-		memIrqPage + kVfMemIrqStatusOffset;
-	registerState[kCtxMemIrqSourceRegisterIndex] = kGen12RingIntSource;
-	registerState[kCtxMemIrqSourcePointerIndex] =
-		memIrqPage + kVfMemIrqSourceOffset;
-	OSSynchronizeIO();
-
 	auto *ringTailField = reinterpret_cast<volatile uint32_t *>(
 		contextImage + kContextRingTailOffset);
 	const uint32_t ringControl = *reinterpret_cast<volatile uint32_t *>(
@@ -9246,18 +9346,8 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 		SYSLOG("ngreen", "V234: LRCA image desc=%08x:%08x ctrl=%08x head=%08x tail=%08x start=%08x ctl=%08x",
 		       descriptor[1], descriptor[0], state[3], state[5], state[7],
 		       state[9], state[11]);
-		SYSLOG("ngreen", "V234: LRCA memirq lrm=%08x mask=%08x@%08x lri=%08x status=%08x@%08x source=%08x@%08x",
-		       state[kCtxMemIrqLrmHeaderIndex],
-		       state[kCtxMemIrqMaskRegisterIndex],
-		       state[kCtxMemIrqMaskPointerIndex],
-		       state[kCtxMemIrqLriHeaderIndex],
-		       state[kCtxMemIrqStatusRegisterIndex],
-		       state[kCtxMemIrqStatusPointerIndex],
-		       state[kCtxMemIrqSourceRegisterIndex],
-		       state[kCtxMemIrqSourcePointerIndex]);
 	}
 
-	const uint32_t lrcaPage = descriptor[0] & 0xFFFFF000U;
 	int32_t slot = -1;
 	bool enable = false;
 	VfGucContextState previousState = kVfGucContextEmpty;
@@ -9292,8 +9382,8 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 	};
 	uint32_t transportFence = 0;
 	bool submitted = enable ?
-		vfSendCtbFastAction(that, enableRequest, arrsize(enableRequest), transportFence) :
-		vfSendCtbFastAction(that, scheduleRequest, arrsize(scheduleRequest), transportFence);
+		vfSendCtbFastAction(that, enableRequest, arrsize(enableRequest), transportFence, queue.get()) :
+		vfSendCtbFastAction(that, scheduleRequest, arrsize(scheduleRequest), transportFence, queue.get());
 
 	if (enable) {
 		if (submitted) {
@@ -9318,6 +9408,7 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 		}
 	}
 
+	queue.unlock();
 	static uint32_t submitLogs = 0;
 	if (submitLogs++ < 64 || !submitted) {
 		SYSLOG("ngreen", "V233: direct submit id=%u LRCA=0x%08x type=%u tail=0x%x old=0x%x channel=%u seq=%u enable=%d ret=%d fence=%u",
@@ -9398,6 +9489,8 @@ void Gen11::vfCtbChannelInit(void *that) {
 	if (!that || !gVfGGTTReady || !gVfCtbAllocationPending ||
 	    gVfCtbInitOwner != that || gVfCtbAllocationThread != IOThreadSelf() ||
 	    !gVfCtbAllocatedBacking ||
+	    getMember<uint64_t>(gVfCtbAllocatedBacking, kVfMappedBufferLengthOffset) <
+	        kVfCtbBackingBytes ||
 	    getMember<OSObject *>(that, 0x40) != gVfCtbAllocatedBacking || gVfCtbBacking) {
 		vfMarkProtocolFault("CTB channel initialization without its enlarged allocation");
 		return;
