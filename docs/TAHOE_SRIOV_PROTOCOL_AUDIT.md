@@ -836,3 +836,18 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   at c312229 was 1305 source/build/metadata files; deletion leaves 1303.
   Full SDK/HookCase/Lilu/all-source review is explicitly still incomplete.
 - Full offline suite passed in /tmp/ngreen-static.fixHJH. No VM boot.
+
+### Preemption-disabled blocking contexts
+
+- Checked XNU 12377.121.6 osfmk/kern/sched_prim.c: preemption_enabled()
+  requires BOTH zero preemption level and enabled interrupts. Mach.exports
+  exports _preemption_enabled, and the vendored kern/sched_prim.h declares it.
+  This avoids unexported x86 get_preemption_level or guessed per-CPU offsets.
+- vfCanUseSleepingLock and initial BAR0 mapping now reject non-preemptible
+  contexts even when interrupts are enabled, retaining the interrupt-context
+  check too. GuC synchronous waits also keep their workloop/gate checks.
+- This closes the previously recorded missing entry check, not all possible
+  lock-order/deadlock paths or a transition into atomic context inside callees.
+  No runtime scheduling fault injection was performed. Full syntax/offline
+  suite passed in /tmp/ngreen-static.qgjHzV; final kext linking remains CI's
+  check. c312229 CI 36220723406 and d6b483e CI 36220850119 succeeded.

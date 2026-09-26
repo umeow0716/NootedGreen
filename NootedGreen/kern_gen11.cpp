@@ -17,6 +17,7 @@
 #include <IOKit/IOLocks.h>
 #include <IOKit/IOWorkLoop.h>
 #include <kern/thread_call.h>
+#include <kern/sched_prim.h>
 #include <i386/machine_routines.h>
 
 // ==== 6 kextInfos: ICL fallback + dual TGL identities (com.xxxxx and com.apple) from /Library/Extensions ====
@@ -212,8 +213,8 @@ void vfMarkProtocolFault(const char *reason)
 
 bool vfCanUseSleepingLock()
 {
-	if (ml_at_interrupt_context() || !ml_get_interrupts_enabled()) {
-		vfMarkProtocolFault("blocking VF operation from interrupt context");
+	if (ml_at_interrupt_context() || !preemption_enabled()) {
+		vfMarkProtocolFault("blocking VF operation from non-preemptible context");
 		return false;
 	}
 	return true;

@@ -11,6 +11,7 @@
 #include <Headers/kern_api.hpp>
 #include <Headers/kern_devinfo.hpp>
 #include <i386/machine_routines.h>
+#include <kern/sched_prim.h>
 
 
 static const char *pathIOAcceleratorFamily2= "/System/Library/Extensions/IOAcceleratorFamily2.kext/Contents/MacOS/IOAcceleratorFamily2";
@@ -319,7 +320,7 @@ OSMetaClassBase *NGreen::wrapSafeMetaCast(const OSMetaClassBase *anObject, const
 bool NGreen::setRMMIOIfNecessary() {
 	auto *mapping = this->rmmio;
 	if (!mapping) {
-		if (!this->iGPU || ml_at_interrupt_context() || !ml_get_interrupts_enabled())
+		if (!this->iGPU || ml_at_interrupt_context() || !preemption_enabled())
 			return false;
 		mapping = this->iGPU->mapDeviceMemoryWithRegister(kIOPCIConfigBaseAddress0);
 		if (!mapping)
