@@ -1,4 +1,5 @@
 #include "../NootedGreen/kern_context_pool.hpp"
+#include "../NootedGreen/kern_context_descriptor.hpp"
 #include <assert.h>
 #include <stdio.h>
 #include <vector>
@@ -6,6 +7,19 @@
 
 using namespace NGContextPool;
 int main() {
+    for (unsigned offset = 0; offset < 16; ++offset) {
+        std::vector<uint8_t> packed(offset + 8, 0xA5);
+        for (unsigned bit = 0; bit < 64; ++bit) {
+            std::fill(packed.begin() + offset, packed.end(), 0);
+            packed[offset + bit / 8] = 1U << (bit % 8);
+            const auto before = packed;
+            const auto value = NGContextDescriptor::read(packed.data() + offset);
+            assert(value.low == (bit < 32 ? uint32_t(1) << bit : 0));
+            assert(value.high == (bit >= 32 ? uint32_t(1) << (bit - 32) : 0));
+            assert(packed == before);
+        }
+    }
+    puts("PASS 1024 packed descriptor alignment/bit cases");
     // Synthetic addresses are inspected only as integers, never dereferenced.
     // Include a pool whose last byte fits but exclusive end wraps to zero.
     for (uint32_t count : {1U, 2U, invalidId}) {

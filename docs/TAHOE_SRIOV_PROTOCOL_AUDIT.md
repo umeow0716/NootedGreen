@@ -1143,3 +1143,18 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   branch. Firmware admission already uses PCI identity separately. Global
   replacement is pending review of these heterogeneous consumers, not treated
   as a verified fix or evidence of successful PF/VF support.
+
+### Packed context descriptor reads
+
+- The pinned native binary places SGfxContextDescriptor at
+  IGHardwareContext+0x89. Existing VF attach, detach, idle and submission code
+  accepted that address as const uint32_t* and directly used descriptor[0/1].
+  The address is intrinsically unaligned, so those C++ lvalue accesses had
+  undefined behavior even though x86 movl tolerates unaligned memory.
+- All local consumers now decode the two little-endian words through byte
+  loads. Native PF calls retain their original ABI and pointer. Added 1,024
+  bit-position/alignment cases (offsets 0..15) with input-preservation checks;
+  full sanitizer/static suite passes /tmp/ngreen-static.lGyQyH.
+- This removes the alignment assumption only. The native object's eight-byte
+  readability, lifetime and immutability while the caller owns it remain ABI
+  preconditions; byte loads do not provide an atomic snapshot.

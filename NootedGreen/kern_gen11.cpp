@@ -5,6 +5,7 @@
 #include "kern_gpu_capabilities.hpp"
 #include "kern_ggtt_bounds.hpp"
 #include "kern_context_pool.hpp"
+#include "kern_context_descriptor.hpp"
 #include "kern_workqueue_unwind.hpp"
 #include "kern_binary_identity.hpp"
 #include "AppleIntelParams.hpp"
@@ -8920,8 +8921,9 @@ static bool vfKnownIdleSnapshot(const uint32_t *descriptor = nullptr) {
 	const IOInterruptState saved = IOSimpleLockLockDisableInterrupt(gVfContextLock);
 	bool idle = true;
 	if (descriptor) {
-		const int32_t slot = vfFindContextLocked(descriptor[0] & 0xFFFFF000U);
-		idle = slot >= 0 && gVfContexts[slot].descriptorLo == descriptor[0] &&
+		const auto value = NGContextDescriptor::read(descriptor);
+		const int32_t slot = vfFindContextLocked(value.low & 0xFFFFF000U);
+		idle = slot >= 0 && gVfContexts[slot].descriptorLo == value.low &&
 		       vfContextKnownIdle(gVfContexts[slot]);
 	} else {
 		for (uint32_t i = 0; i < gVfContextCapacity; ++i) {
@@ -9230,8 +9232,9 @@ bool Gen11::vfAttachContextDesc(void *that, const uint32_t *descriptor) {
 		return false;
 	}
 
-	const uint32_t descriptorLo = descriptor[0];
-	const uint32_t descriptorHi = descriptor[1];
+	const auto descriptorValue = NGContextDescriptor::read(descriptor);
+	const uint32_t descriptorLo = descriptorValue.low;
+	const uint32_t descriptorHi = descriptorValue.high;
 	const uint32_t lrcaPage = descriptorLo & 0xFFFFF000U;
 	const uint32_t rawClass = descriptorHi >> 29;
 	const uint32_t engineInstance = (descriptorHi >> 16) & 0x3FU;
@@ -9394,7 +9397,9 @@ void Gen11::vfDetachContextDesc(void *that, const uint32_t *descriptor) {
 		return;
 	}
 
-	const uint32_t lrcaPage = descriptor[0] & 0xFFFFF000U;
+	const auto descriptorValue = NGContextDescriptor::read(descriptor);
+	const uint32_t descriptorLo = descriptorValue.low;
+	const uint32_t lrcaPage = descriptorLo & 0xFFFFF000U;
 	int32_t slot = -1;
 	VfGucContextState state = kVfGucContextEmpty;
 	bool issueDisable = false;
@@ -9553,6 +9558,9 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 			SYSLOG("ngreen", "V237: rejected VF submit after protocol fault");
 		return false;
 	}
+	const auto descriptorValue = NGContextDescriptor::read(descriptor);
+	const uint32_t descriptorLo = descriptorValue.low;
+	const uint32_t descriptorHi = descriptorValue.high;
 
 	const bool memIrqReady = gVfMemIrqConfigured && gVfCtbCpuBase;
 	if (!memIrqReady) {
@@ -9563,7 +9571,7 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 		static uint32_t bootstrapLogs = 0;
 		if (bootstrapLogs++ < 16) {
 			SYSLOG("ngreen", "V237: suppressed pre-memory-IRQ VF bootstrap submit LRCA=0x%08x",
-			       descriptor[0]);
+			       descriptorLo);
 		}
 		return false;
 	}
@@ -9574,11 +9582,11 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 	// Check admission before touching the context image. A final detach must
 	// acquire this queue before clearing refCount, so it cannot deregister or
 	// release backing between this check, the tail write and CTB publication.
-	const uint32_t lrcaPage = descriptor[0] & 0xFFFFF000U;
+	const uint32_t lrcaPage = descriptorLo & 0xFFFFF000U;
 	IOInterruptState admissionState = IOSimpleLockLockDisableInterrupt(gVfContextLock);
 	const int32_t admittedSlot = vfFindContextLocked(lrcaPage);
 	const bool admitted = admittedSlot >= 0 && gVfContexts[admittedSlot].refCount &&
-		gVfContexts[admittedSlot].descriptorLo == descriptor[0] &&
+		gVfContexts[admittedSlot].descriptorLo == descriptorLo &&
 		(gVfContexts[admittedSlot].state == kVfGucContextRegistered ||
 		 gVfContexts[admittedSlot].state == kVfGucContextDisabled ||
 		 gVfContexts[admittedSlot].state == kVfGucContextEnabled);
@@ -9622,7 +9630,7 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 	    getMember<uint64_t>(contextImageBuffer, kVfMappedBufferLengthOffset) <
 	        kVfContextMinimumImageBytes) {
 		SYSLOG("ngreen", "V233: submit has no CPU context image LRCA=0x%08x legacy=%u",
-		       descriptor[0], legacyContextId);
+		       descriptorLo, legacyContextId);
 		return false;
 	}
 	auto *ringTailField = reinterpret_cast<volatile uint32_t *>(
@@ -9634,7 +9642,7 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 	if ((ringControl & kRingControlValid) == 0 ||
 	    (ringTail & (sizeof(uint64_t) - 1U)) != 0 || ringTail >= ringSize) {
 		SYSLOG("ngreen", "V233: rejected ring tail=0x%x ctl=0x%08x size=0x%x LRCA=0x%08x",
-		       ringTail, ringControl, ringSize, descriptor[0]);
+		       ringTail, ringControl, ringSize, descriptorLo);
 		return false;
 	}
 	const uint32_t previousRingTail = *ringTailField;
@@ -9646,7 +9654,7 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 		const auto *state = reinterpret_cast<volatile uint32_t *>(
 			contextImage + kContextRegisterStateOffset);
 		SYSLOG("ngreen", "V234: LRCA image desc=%08x:%08x ctrl=%08x head=%08x tail=%08x start=%08x ctl=%08x",
-		       descriptor[1], descriptor[0], state[3], state[5], state[7],
+		       descriptorHi, descriptorLo, state[3], state[5], state[7],
 		       state[9], state[11]);
 	}
 
@@ -9714,7 +9722,7 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 	static uint32_t submitLogs = 0;
 	if (submitLogs++ < 64 || !submitted) {
 		SYSLOG("ngreen", "V233: direct submit id=%u LRCA=0x%08x type=%u tail=0x%x old=0x%x channel=%u seq=%u enable=%d ret=%d fence=%u",
-		       gucId, descriptor[0], static_cast<unsigned int>(hwCsType),
+		       gucId, descriptorLo, static_cast<unsigned int>(hwCsType),
 		       ringTail, previousRingTail, channelId, ringSequence, enable,
 		       submitted, transportFence);
 	}
