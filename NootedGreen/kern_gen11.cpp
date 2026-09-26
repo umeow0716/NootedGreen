@@ -12,7 +12,6 @@
 #include "kern_context_descriptor.hpp"
 #include "kern_workqueue_unwind.hpp"
 #include "kern_binary_identity.hpp"
-#include "AppleIntelParams.hpp"
 #include <Headers/kern_api.hpp>
 #include "kern_green.hpp"
 #include <IOKit/IOBufferMemoryDescriptor.h>
@@ -1701,356 +1700,42 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		
 		
 	}	else if (kextG11FBT.loadIndex == index || kextG11FBTA.loadIndex == index) {
+		const auto *image = reinterpret_cast<const uint8_t *>(address);
+		const bool isprod = NGBinaryIdentity::matchesKextUuid(
+			image, size, NGBinaryIdentity::tglFramebufferProductionUuid);
+		const bool isdebug = NGBinaryIdentity::matchesKextUuid(
+			image, size, NGBinaryIdentity::tglFramebufferDebugUuid);
+		PANIC_COND(!isprod && !isdebug, "ngreen",
+			"Unsupported TGL framebuffer payload ABI; refusing private-layout routes");
 		this->tglFBLoaded = true;
 		auto *activeKext = (kextG11FBTA.loadIndex == index) ? &kextG11FBTA : &kextG11FBT;
 		PANIC_COND(!NGreen::callback->setRMMIOIfNecessary(), "ngreen", "Cannot map TGL framebuffer BAR0");
 		SYSLOG("ngreen", "init AppleIntelTGLGraphicsFramebuffer");
 		
-		bool isprod=false;
-		auto prod=patcher.solveSymbol(index, "__ZN24AppleIntelBaseController5startEP9IOService", address, size);
-		if (!prod) isprod=true;
-		
-		if (isprod) {
-			
-			SolveRequestPlus solveRequests[] = {
-				{"_gPlatformInformationList", this->gPlatformInformationList},
-			};
-			PANIC_COND(!SolveRequestPlus::solveAll(patcher, index, solveRequests, address, size), "ngreen",	"Failed to resolve symbols");
-		}
-		else
-		{
-			SolveRequestPlus solveRequests[] = {
-				{"_gPlatformInformationList", this->gPlatformInformationList},
-			};
-			PANIC_COND(!SolveRequestPlus::solveAll(patcher, index, solveRequests, address, size), "ngreen",	"Failed to resolve symbols");
-			
-		}
-
-		RouteRequestPlus requests[] = {
-			// ...existing routes...
-			//{"__ZN24AppleIntelBaseController17registerWithAICPMEPv", alwaysReturnSuccess, this->oalwaysReturnSuccess},
-			// ...existing routes...
-			// V204: keep the native constructor results, then install the controller's
-			// captured register accessor only when that accessor is non-null.
-			{"__ZN16AppleIntelScaler4initE10IGScalerID", AppleIntelScalerinit, this->oAppleIntelScalerinit},
-			{"__ZN15AppleIntelPlane4initE9IGPlaneID",     AppleIntelPlaneinit,  this->oAppleIntelPlaneinit},
-			// Later entry points repeat the non-null accessor repair in case construction
-			// preceded framebuffer/controller publication.
-				{"__ZN16AppleIntelScaler13disableScalerEb",disableScaler, this->odisableScaler},
-				{"__ZN15AppleIntelPlane11enablePlaneEb",enablePlane, this->oenablePlane},
-				{"__ZN16AppleIntelScaler17programPipeScalerEP21AppleIntelDisplayPath",programPipeScaler, this->oprogramPipeScaler},
-				{"__ZN15AppleIntelPlane19updateRegisterCacheEv",AppleIntelPlaneupdateRegisterCache, this->oAppleIntelPlaneupdateRegisterCache},
-			{"__ZN16AppleIntelScaler19updateRegisterCacheEv",AppleIntelScalerupdateRegisterCache, this->oAppleIntelScalerupdateRegisterCache},
-			// V60: ReadRegister32 hooks DISABLED — V59 proved they cause 0-children regression
-			// (display driver loops in forceWake power-well cycling, never completes init)
-			{"__ZN31AppleIntelRegisterAccessManager15WriteRegister32Emj",raWriteRegister32, this->oraWriteRegister32},
-			{"__ZN31AppleIntelRegisterAccessManager15WriteRegister32EPVvmj",raWriteRegister32b},
+		// Both admitted variants checked a 64-bit read against length-4.
+		// Require the full eight-byte operand before dereferencing it.
+		static const uint8_t productionFind[] = {
+			0x83, 0xc0, 0xfc, 0x48, 0x39, 0xf0, 0x76, 0x11, 0x48, 0x8b,
+			0x47, 0x50, 0x48, 0xff, 0x05, 0x84, 0x40, 0x08, 0x00
 		};
-		PANIC_COND(!RouteRequestPlus::routeAll(patcher, index, requests, address, size), "ngreen","Failed to route dp symbols");
-		
-		if (isprod) {
-			RouteRequestPlus requests[] = {
-				{"__ZN21AppleIntelFramebuffer4initEP31AppleIntelFramebufferControllerj",AppleIntelFramebufferinit, this->oAppleIntelFramebufferinit},
-				{"__ZN31AppleIntelFramebufferController23initPlatformWorkaroundsEv", initPlatformWorkarounds, this->oinitPlatformWorkarounds},
-				{"__ZN31AppleIntelFramebufferController16getOSInformationEv", getOSInformation, this->ogetOSInformation},
-				{"__ZN31AppleIntelFramebufferController5startEP9IOService",AppleIntelBaseControllerstart, this->oAppleIntelBaseControllerstart},
-			};
-			PANIC_COND(!RouteRequestPlus::routeAll(patcher, index, requests, address, size), "ngreen","Failed to route p symbols");
-			
-		} else
-		{
-			RouteRequestPlus requests[] = {
-				{"__ZN21AppleIntelFramebuffer4initEP24AppleIntelBaseControllerj",AppleIntelFramebufferinit, this->oAppleIntelFramebufferinit},
-				{"__ZN24AppleIntelBaseController23initPlatformWorkaroundsEv", initPlatformWorkarounds, this->oinitPlatformWorkarounds},
-				{"__ZN24AppleIntelBaseController16getOSInformationEv", getOSInformation, this->ogetOSInformation},
-				{"__ZN24AppleIntelBaseController5startEP9IOService",AppleIntelBaseControllerstart, this->oAppleIntelBaseControllerstart},
-			};
-			PANIC_COND(!RouteRequestPlus::routeAll(patcher, index, requests, address, size), "ngreen","Failed to route d symbols");
-			
-		}
-		
-		//powerwell
-		static const uint8_t f1[]= {0xe8, 0x99, 0x9f, 0xfd, 0xff, 0x89, 0x45, 0xc8, 0x3d, 0xff, 0xff, 0x00, 0x00, 0x74, 0x78};
-		static const uint8_t r1[]= {0xe8, 0x99, 0x9f, 0xfd, 0xff, 0x89, 0x45, 0xc8, 0x3d, 0xff, 0xff, 0x00, 0x00, 0xeb, 0x78};
-		
-		static const uint8_t f1p[]= {0xe8, 0x66, 0xb0, 0xfe, 0xff, 0x89, 0x45, 0xc8, 0x3d, 0xff, 0xff, 0x00, 0x00, 0x74, 0x45};
-		static const uint8_t r1p[]= {0xe8, 0x66, 0xb0, 0xfe, 0xff, 0x89, 0x45, 0xc8, 0x3d, 0xff, 0xff, 0x00, 0x00, 0xeb, 0x45};
-		
-		//osinfo
-		/*fInfoHasLid                  : 1
-		fInfoPipeCount               : 3
-		fInfoPortCount               : 3
-		fInfoFramebufferCount        : 3*/
+		static const uint8_t productionReplace[] = {
+			0x83, 0xc0, 0xf8, 0x48, 0x39, 0xf0, 0x76, 0x11, 0x48, 0x8b,
+			0x47, 0x50, 0x48, 0xff, 0x05, 0x84, 0x40, 0x08, 0x00
+		};
+		static const uint8_t debugFind[] = {
+			0x83, 0xc0, 0xfc, 0x48, 0x39, 0xf0, 0x76, 0x11, 0x48, 0x8b,
+			0x47, 0x50, 0x48, 0xff, 0x05, 0xca, 0xf5, 0x0c, 0x00
+		};
+		static const uint8_t debugReplace[] = {
+			0x83, 0xc0, 0xf8, 0x48, 0x39, 0xf0, 0x76, 0x11, 0x48, 0x8b,
+			0x47, 0x50, 0x48, 0xff, 0x05, 0xca, 0xf5, 0x0c, 0x00
+		};
+		LookupPatchPlus const read64Bounds = isprod ?
+			LookupPatchPlus {activeKext, productionFind, productionReplace, arrsize(productionFind), 1} :
+			LookupPatchPlus {activeKext, debugFind, debugReplace, arrsize(debugFind), 1};
+		PANIC_COND(!read64Bounds.apply(patcher, address, size), "ngreen",
+			"Failed to apply UUID-pinned ReadRegister64 bounds patch");
 
-		static const uint8_t f2[]= {0xc7, 0x05, 0x07, 0x81, 0x10, 0x00, 0x01, 0x03, 0x09, 0x03, 0xb8, 0x00, 0x00, 0x00, 0x04};
-		static const uint8_t r2[]= {0xc7, 0x05, 0x07, 0x81, 0x10, 0x00, 0x01, 0x04, 0x03, 0x02, 0xb8, 0x00, 0x00, 0x00, 0x04};
-
-		static const uint8_t f2p[]= {0xc7, 0x05, 0x57, 0xe5, 0x0b, 0x00, 0x01, 0x03, 0x09, 0x03};
-		static const uint8_t r2p[]= {0xc7, 0x05, 0x57, 0xe5, 0x0b, 0x00, 0x01, 0x04, 0x03, 0x02};
-		
-		static const uint8_t f2b[]= {0x49, 0xbe, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x4c, 0x89, 0x35, 0x17, 0x81, 0x10, 0x00, 0xb8, 0x08, 0x00, 0x00, 0x00};
-		static const uint8_t r2b[]= {0x49, 0xbe, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x4c, 0x89, 0x35, 0x17, 0x81, 0x10, 0x00, 0xb8, 0x08, 0x00, 0x00, 0x00};
-		
-		static const uint8_t f2c[]= {0x48, 0x89, 0x1d, 0xc0, 0x81, 0x10, 0x00, 0x4c, 0x89, 0x35, 0xc1, 0x81, 0x10, 0x00, 0x48, 0xb8, 0x08, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00};
-		static const uint8_t r2c[]= {0x48, 0x89, 0x1d, 0xc0, 0x81, 0x10, 0x00, 0x4c, 0x89, 0x35, 0xc1, 0x81, 0x10, 0x00, 0x48, 0xb8, 0x05, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00};
-		
-		//mem
-		static const uint8_t f2d[]= {0x0f, 0x94, 0xc0, 0xb9, 0x00, 0x00, 0x10, 0x00, 0xba, 0x00, 0x00, 0x80, 0x00};
-		static const uint8_t r2d[]= {0x0f, 0x94, 0xc0, 0xb9, 0x00, 0x00, 0x10, 0x00, 0xba, 0x00, 0x00, 0x40, 0x00};
-		
-		//mem
-		static const uint8_t f2dp[]= {0xb8, 0x00, 0x00, 0x10, 0x00, 0xba, 0x00, 0x00, 0x80, 0x00, 0x0f, 0x44, 0xd0, 0x0f, 0x94, 0xc1, 0x48, 0x01, 0x0d, 0xa2, 0xd0, 0x09, 0x00};
-		static const uint8_t r2dp[]= {0xb8, 0x00, 0x00, 0x10, 0x00, 0xba, 0x00, 0x00, 0x40, 0x00, 0x0f, 0x44, 0xd0, 0x0f, 0x94, 0xc1, 0x48, 0x01, 0x0d, 0xa2, 0xd0, 0x09, 0x00};
-		
-		//cdclock
-		static const uint8_t f2e[]= {0x48, 0xc7, 0x83, 0x60, 0x43, 0x00, 0x00, 0x00, 0x2d, 0x31, 0x01, 0x48, 0xc7, 0x83, 0x68, 0x43, 0x00, 0x00, 0x00, 0x54, 0xea, 0x2a, 0xc6, 0x83, 0xb4, 0x45, 0x00, 0x00, 0x00};
-		static const uint8_t r2e[]= {0x48, 0xc7, 0x83, 0x60, 0x4a, 0x00, 0x00, 0x00, 0xa3, 0x02, 0x00, 0x48, 0xc7, 0x83, 0x68, 0x4a, 0x00, 0x00, 0x00, 0xf6, 0x09, 0x00, 0xc6, 0x83, 0xb4, 0x45, 0x00, 0x00, 0x00};
-		
-
-
-		//conn
-		static const uint8_t f3[]= {
-			0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x18, 0x00, 0x00, 0x00,
-			0x01, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x01, 0x02, 0x00, 0x00,
-			0x02, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x01, 0x02, 0x00, 0x00,
-			0x03, 0x00, 0x00, 0x00, 0x09, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x01, 0x02, 0x00, 0x00,
-			0x04, 0x00, 0x00, 0x00, 0x0a, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x01, 0x02, 0x00, 0x00,
-			0x05, 0x00, 0x00, 0x00, 0x0b, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x01, 0x02, 0x00, 0x00,
-			0x06, 0x00, 0x00, 0x00, 0x0c, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x01, 0x02, 0x00, 0x00,
-			0x07, 0x00, 0x00, 0x00, 0x0d, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x01, 0x02, 0x00, 0x00,
-			0x08, 0x00, 0x00, 0x00, 0x0e, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x01, 0x02, 0x00, 0x00};
-		
-		static const uint8_t r3[]= {
-			0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x18, 0x00, 0x00, 0x00,
-			0x01, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x01, 0x02, 0x00, 0x00,
-			0x02, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x01, 0x02, 0x00, 0x00,
-			0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-			0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-			0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-			0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-			0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-			0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
-		
-		
-		//lcd power reg
-		static const uint8_t f4[]= {0x00, 0x72, 0x0c, 0x00};
-		static const uint8_t r4[]= {0x00, 0x12, 0x06, 0x00};
-		
-		static const uint8_t f4a[]= {0x04, 0x72, 0x0c, 0x00};
-		static const uint8_t r4a[]= {0x04, 0x12, 0x06, 0x00};
-		
-		static const uint8_t f4b[]= {0x08, 0x72, 0x0c, 0x00};
-		static const uint8_t r4b[]= {0x08, 0x12, 0x06, 0x00};
-		
-		static const uint8_t f4c[]= {0x0c, 0x72, 0x0c, 0x00};
-		static const uint8_t r4c[]= {0x0c, 0x12, 0x06, 0x00};
-		
-		
-		//jalavoui
-		static const uint8_t f6a[]= { 0xbe, 0x04, 0x00, 0x00, 0x00, 0x48, 0x89, 0xda, 0x31, 0xc9, 0xe8, 0x8c, 0xac, 0x04, 0x00};
-		static const uint8_t r6a[]= { 0xbe, 0x04, 0x00, 0x00, 0x00, 0x48, 0x89, 0xda, 0x31, 0xc9, 0x90, 0x90, 0x90, 0x90, 0x90};
-		
-		//ReadRegister64
-		static const uint8_t f7[]= {0x83, 0xc0, 0xfc, 0x48, 0x39, 0xf0, 0x76, 0x11, 0x48, 0x8b, 0x47, 0x50, 0x48, 0xff, 0x05, 0xca, 0xf5, 0x0c, 0x00};
-		static const uint8_t r7[]= {0x83, 0xc0, 0xf8, 0x48, 0x39, 0xf0, 0x76, 0x11, 0x48, 0x8b, 0x47, 0x50, 0x48, 0xff, 0x05, 0xca, 0xf5, 0x0c, 0x00};
-		
-		static const uint8_t f7p[]= {0x83, 0xc0, 0xfc, 0x48, 0x39, 0xf0, 0x76, 0x11, 0x48, 0x8b, 0x47, 0x50, 0x48, 0xff, 0x05, 0x84, 0x40, 0x08, 0x00};
-		static const uint8_t r7p[]= {0x83, 0xc0, 0xf8, 0x48, 0x39, 0xf0, 0x76, 0x11, 0x48, 0x8b, 0x47, 0x50, 0x48, 0xff, 0x05, 0x84, 0x40, 0x08, 0x00};
-
-		
-		//hwreg
-		static const uint8_t f10[]= {0xe8, 0xaf, 0xe2, 0xff, 0xff, 0x84, 0xc0, 0x74, 0x5b};
-		static const uint8_t r10[]= {0xe8, 0xaf, 0xe2, 0xff, 0xff, 0x84, 0xc0, 0xeb, 0x5b};
-		
-		static const uint8_t f10p[]= {0xe8, 0x9e, 0xf3, 0xff, 0xff, 0x84, 0xc0, 0x74, 0x3d};
-		static const uint8_t r10p[]= {0xe8, 0x9e, 0xf3, 0xff, 0xff, 0x84, 0xc0, 0xeb, 0x3d};
-		
-		//probeportmode
-		static const uint8_t f13b[]= {0xff, 0x90, 0x90, 0x01, 0x00, 0x00, 0x49, 0x8b, 0x0e, 0x4c, 0x89, 0xf7, 0x89, 0xc6, 0xff, 0x91, 0x38, 0x01, 0x00, 0x00};
-		static const uint8_t r13b[]= {0xc7, 0xc0, 0x01, 0x00, 0x00, 0x00, 0x49, 0x8b, 0x0e, 0x4c, 0x89, 0xf7, 0x89, 0xc6, 0xff, 0x91, 0x38, 0x01, 0x00, 0x00};
-
-		static const uint8_t f13[]= {0xff, 0x91, 0x90, 0x01, 0x00, 0x00, 0x83, 0xf8, 0x02, 0x0f, 0x84, 0xec, 0x00, 0x00, 0x00};
-		static const uint8_t r13[]= {0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90};
-		
-		static const uint8_t f13p[]= {0xff, 0x91, 0x78, 0x01, 0x00, 0x00, 0x83, 0xf8, 0x02, 0x74, 0x64};
-		static const uint8_t r13p[]= {0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90};
-		
-		static const uint8_t f13pb[]= {0xff, 0x90, 0x78, 0x01, 0x00, 0x00, 0x49, 0x8b, 0x0e, 0x4c, 0x89, 0xf7, 0x89, 0xc6, 0xff, 0x91, 0x38, 0x01, 0x00, 0x00};
-		static const uint8_t r13pb[]= {0xc7, 0xc0, 0x01, 0x00, 0x00, 0x00, 0x49, 0x8b, 0x0e, 0x4c, 0x89, 0xf7, 0x89, 0xc6, 0xff, 0x91, 0x38, 0x01, 0x00, 0x00};
-
-		
-		//getPathByPipe logs
-		static const uint8_t f15[]= {0x74, 0x36, 0x48, 0xff, 0x05, 0x7e, 0x51, 0x08, 0x00, 0x44, 0x89, 0x3c, 0x24, 0x48, 0x8d, 0x15, 0x4d, 0x88, 0x03, 0x00, 0x4c, 0x8d, 0x05, 0x28, 0x8a, 0x03, 0x00};
-		static const uint8_t r15[]= {0xeb, 0x36, 0x48, 0xff, 0x05, 0x7e, 0x51, 0x08, 0x00, 0x44, 0x89, 0x3c, 0x24, 0x48, 0x8d, 0x15, 0x4d, 0x88, 0x03, 0x00, 0x4c, 0x8d, 0x05, 0x28, 0x8a, 0x03, 0x00};
-		
-		//getBuiltInPor
-		static const uint8_t f16[]= {0x48, 0x89, 0x05, 0xfc, 0x39, 0x12, 0x00, 0x48, 0x8b, 0x83, 0x48, 0x05, 0x00, 0x00, 0xf6, 0x40, 0x14, 0x08, 0x75, 0x0d};
-		static const uint8_t r16[]= {0x48, 0x89, 0x05, 0xfc, 0x39, 0x12, 0x00, 0x48, 0x8b, 0x83, 0x48, 0x05, 0x00, 0x00, 0xf6, 0x40, 0x14, 0x08, 0x90, 0x90};
-		
-		static const uint8_t f16p[]= {0x48, 0x8b, 0x80, 0x48, 0x05, 0x00, 0x00, 0xf6, 0x40, 0x14, 0x08, 0x75, 0x0a};
-		static const uint8_t r16p[]= {0x48, 0x8b, 0x80, 0x48, 0x05, 0x00, 0x00, 0xf6, 0x40, 0x14, 0x08, 0x90, 0x90};
-
-		//getHPDState
-		static const uint8_t f19[]= {0xbe, 0x70, 0x44, 0x04, 0x00};
-		static const uint8_t r19[]= {0xbe, 0xa0, 0x38, 0x16, 0x00};
-		
-		//savenvram
-		static const uint8_t f20[]= {0xff, 0x90, 0xf8, 0x09, 0x00, 0x00, 0x41, 0x89, 0xc6, 0x48, 0x85, 0xdb, 0x74, 0x17};
-		static const uint8_t r20[]= {0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x48, 0x85, 0xdb, 0x74, 0x17};
-		
-		static const uint8_t f20p[]= {0xff, 0x90, 0xf8, 0x09, 0x00, 0x00, 0x41, 0x89, 0xc6, 0x48, 0x85, 0xdb, 0x74, 0x17};
-		static const uint8_t r20p[]= {0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x48, 0x85, 0xdb, 0x74, 0x17};
-		
-		//SafeForceWake
-		static const uint8_t f21[]= {0x0f, 0x84, 0x96, 0x00, 0x00, 0x00, 0x48, 0xff, 0x05, 0xbc, 0x05, 0x0f, 0x00, 0xbe, 0x44, 0x00, 0x13, 0x00, 0x4c, 0x89, 0xf7};
-		static const uint8_t r21[]= {0x48, 0xe9, 0x96, 0x00, 0x00, 0x00, 0x48, 0xff, 0x05, 0xbc, 0x05, 0x0f, 0x00, 0xbe, 0x44, 0x00, 0x13, 0x00, 0x4c, 0x89, 0xf7};
-		
-		static const uint8_t f21p[]= {0x74, 0x3c, 0x48, 0xff, 0x05, 0x7a, 0x73, 0x09, 0x00, 0xbe, 0x44, 0x00, 0x13, 0x00, 0x4c, 0x89, 0xf7, 0xe8, 0x97, 0x80, 0x01, 0x00};
-		static const uint8_t r21p[]= {0xeb, 0x3c, 0x48, 0xff, 0x05, 0x7a, 0x73, 0x09, 0x00, 0xbe, 0x44, 0x00, 0x13, 0x00, 0x4c, 0x89, 0xf7, 0xe8, 0x97, 0x80, 0x01, 0x00};
-        
-        //pixel hwcrt
-        static const uint8_t f22[]= {0x48, 0x69, 0xc2, 0x50, 0xc3, 0x00, 0x00, 0x49, 0x89, 0x47, 0x28, 0xbf, 0x08, 0x00, 0x00, 0x00, 0xbe, 0x06, 0x00, 0x00, 0x00, 0xe8, 0x9e, 0x81, 0x01, 0x00, 0x84, 0xc0, 0x74, 0x3a};
-        
-        static const uint8_t r22[]= {0x48, 0xc7, 0xc0, 0xc0, 0x40, 0xd0, 0x2e, 0x49, 0x89, 0x47, 0x28, 0xbf, 0x08, 0x00, 0x00, 0x00, 0xbe, 0x06, 0x00, 0x00, 0x00, 0xe8, 0x9e, 0x81, 0x01, 0x00, 0x84, 0xc0, 0x90, 0x90};
-		
-
-		// force eDP panel detection regardless of pipe number (from NootedBlue)
-		// NOPs two JE and one JNE that would skip eDP init when pipe != 1.
-		// Required because our pinfo sets eDP on pipe=0, not pipe=1.
-		static const uint8_t f6nb[]= {0x74, 0x2a, 0x83, 0xf8, 0x01, 0x74, 0x43, 0x85, 0xc0, 0x75, 0x60};
-		static const uint8_t r6nb[]= {0x90, 0x90, 0x83, 0xf8, 0x01, 0x90, 0x90, 0x85, 0xc0, 0x90, 0x90};
-
-		// fix register addresses if pipe=0 (jne→jmp to always use pipe-0 register offsets)
-		static const uint8_t f24bp[]= {0x83, 0x78, 0x08, 0x00, 0x75, 0x0c};
-		static const uint8_t r24bp[]= {0x83, 0x78, 0x08, 0x00, 0xeb, 0x0c};
-		static const uint8_t f24cp[]= {0x00, 0x4c, 0x89, 0xea, 0x75, 0x12};
-		static const uint8_t r24cp[]= {0x00, 0x4c, 0x89, 0xea, 0xeb, 0x12};
-		static const uint8_t f24dp[]= {0x83, 0x78, 0x08, 0x00, 0x75, 0x0d};
-		static const uint8_t r24dp[]= {0x83, 0x78, 0x08, 0x00, 0xeb, 0x0d};
-		static const uint8_t f24b[]= {0x83, 0x78, 0x08, 0x00, 0x75, 0x0c};
-		static const uint8_t r24b[]= {0x83, 0x78, 0x08, 0x00, 0xeb, 0x0c};
-		static const uint8_t f24c[]= {0x48, 0x8b, 0x55, 0xd0, 0x75, 0x13};
-		static const uint8_t r24c[]= {0x48, 0x8b, 0x55, 0xd0, 0xeb, 0x13};
-		static const uint8_t f24d[]= {0x83, 0x78, 0x08, 0x00, 0x75, 0x0d};
-		static const uint8_t r24d[]= {0x83, 0x78, 0x08, 0x00, 0xeb, 0x0d};
-		// link training speed constant fix
-		static const uint8_t f25[]= {0x77, 0x77, 0x00, 0x00};
-		static const uint8_t r25[]= {0x33, 0x00, 0x00, 0x00};
-
-		// Path E (TCON ID): guarded by -ngreentglwithgfx boot-arg (requires GFX kext present).
-		// Rewrites CamelliaTcon2/BanksiaTcon DPCD ID comparisons so they match this panel's
-		// DPCD bytes [14 1e c4 c1] → 0xc1c41e14. Also sets cameliav=2 in getOSInformation.
-		// DO NOT enable on FB-only boot (no GFX): calls into AGDC services → hang.
-		static const uint8_t f_tcon_camellia[]= {0x3d, 0x11, 0x0a, 0x84, 0x41};
-		static const uint8_t r_tcon_camellia[]= {0x3d, 0x14, 0x1e, 0xc4, 0xc1};
-		static const uint8_t f_tcon_banksia[] = {0x3d, 0x12, 0x14, 0xc4, 0x41};
-		static const uint8_t r_tcon_banksia[] = {0x3d, 0x14, 0x1e, 0xc4, 0xc1};
-		const bool enableTcon = checkKernelArgument("-ngreentglwithgfx");
-
-		if (isprod){
-			LookupPatchPlus const patchesp[] = {// tgl production kext
-
-				// f1p (powerwell JZ→JMP) commented out — not present in NootedBlue's
-				// working TGL FBT prod patch list. Was an extra NootedGreen accumulated.
-				//{activeKext, f1p, r1p, arrsize(f1p),	1},
-				{activeKext, f2p, r2p, arrsize(f2p),	1},
-				{activeKext, f2dp, r2dp, arrsize(f2dp),	1},
-				// f3 (connector data table rewrite) commented out — not in NootedBlue.
-				//{activeKext, f3, r3, arrsize(f3),	1},
-				// f4 family ("lcd power reg" 0x72→0x12, 4 variants ~27 binary mods) commented out
-				// — NOT present in NootedBlue's working TGL FBT prod patch list. These rewrite
-				// what appears to be LCD power register access patterns; on Display 13 hardware
-				// the original Apple code paths may be correct without the rewrite.
-				//{activeKext, f4, r4, arrsize(f4),	11},
-				//{activeKext, f4a, r4a, arrsize(f4a),	11},
-				//{activeKext, f4b, r4b, arrsize(f4b),	2},
-				//{activeKext, f4c, r4c, arrsize(f4c),	2},
-				{activeKext, f7p, r7p, arrsize(f7p),	1},
-				// f10p ("hwreg" CALL+JZ→JMP bypass) commented out — NOT in NootedBlue.
-				//{activeKext, f10p, r10p, arrsize(f10p),	1},
-				// Keep native probe-port mode flow for compatibility.
-				//{activeKext, f13p, r13p, arrsize(f13p),	1},
-				//{activeKext, f13pb, r13pb, arrsize(f13pb),	1},
-				//{activeKext, f16p, r16p, arrsize(f16p),	1},
-				{activeKext, f6nb, r6nb, arrsize(f6nb),	1},
-				{activeKext, f13p, r13p, arrsize(f13p),	1},
-				{activeKext, f13pb, r13pb, arrsize(f13pb),	1},
-				{activeKext, f19, r19, arrsize(f19),	1},
-				{activeKext, f20p, r20p, arrsize(f20p),	1},
-				{activeKext, f24bp, r24bp, arrsize(f24bp),	14},
-				{activeKext, f24cp, r24cp, arrsize(f24cp),	1},
-				{activeKext, f24dp, r24dp, arrsize(f24dp),	4},
-				{activeKext, f25,  r25,  arrsize(f25),	6},
-			};
-
-			PANIC_COND(!LookupPatchPlus::applyAll(patcher, patchesp , address, size), "ngreen", "kextG11FBT Failed to apply production patches!");
-			if (enableTcon) {
-				LookupPatchPlus const tconPatches[] = {
-					{activeKext, f_tcon_camellia, r_tcon_camellia, arrsize(f_tcon_camellia), 1},
-					{activeKext, f_tcon_banksia,  r_tcon_banksia,  arrsize(f_tcon_banksia),  1},
-				};
-				PANIC_COND(!LookupPatchPlus::applyAll(patcher, tconPatches, address, size),
-					"ngreen", "Failed to apply production TCON patches");
-				SYSLOG("ngreen", "Path E: TCON ID patches applied (prod)");
-			}
-		}
-		else {
-			LookupPatchPlus const patches[] = {// tgl debug kext
-				// f1 (powerwell JZ→JMP) commented out — not present in NootedBlue's
-				// working TGL FBT debug patch list. Was an extra NootedGreen accumulated.
-				//{activeKext, f1, r1, arrsize(f1),	1},
-				// f2/f2d: osinfo pipe/port/fb counts now set via getOSInformation hook — no binary patch needed.
-				// f3 (connector data table rewrite) commented out — not in NootedBlue.
-				//{activeKext, f3, r3, arrsize(f3),	1},
-				// f4 family ("lcd power reg" 0x72→0x12, 4 variants ~27 binary mods) commented out
-				// — NOT in NootedBlue's working TGL FBT debug patch list. Suspected contributor
-				// to the fragmentation/repetition symptom: rewriting LCD power register access
-				// patterns may corrupt panel-side state on Display 13 (ADL-P) hardware.
-				//{activeKext, f4, r4, arrsize(f4),	12},
-				//{activeKext, f4a, r4a, arrsize(f4a),	11},
-				//{activeKext, f4b, r4b, arrsize(f4b),	2},
-				//{activeKext, f4c, r4c, arrsize(f4c),	2},
-		//		{activeKext, f6a, r6a, arrsize(f6a),	1},
-		//		{activeKext, f7, r7, arrsize(f7),	1},
-				// f10 ("hwreg" CALL+JZ→JMP bypass) commented out — NOT in NootedBlue.
-				{activeKext, f10, r10, arrsize(f10),	1},
-				// f13: mandatory. Without this port-probe bypass the spoofed TGL path freezes during boot.
-				{activeKext, f13, r13, arrsize(f13),	1},
-				// f13b: mandatory. Without this bypass AppleIntelPort::probePortStateEv hits
-				// a pure-virtual call and panics in WindowServer during enableController.
-		//		{activeKext, f13b, r13b, arrsize(f13b),	1},
-				// f15: suppress getPathByPipe log flood at IGLogLevel=8.
-				// On platform 0x9a490000 all paths are on pipe 0; every scan cycle logs
-				// "pipe = 0" many times per second, flooding the log unreadably.
-				// The je→jmp makes the branch unconditionally skip the IGFB log emit.
-				// Purely cosmetic: no behavioral change, no display-pipe impact.
-				{activeKext, f15, r15, arrsize(f15),	1},
-				//{activeKext, f16, r16, arrsize(f16),	1},
-				{activeKext, f19, r19, arrsize(f19),	1},
-		//		{activeKext, f20, r20, arrsize(f20),	1},
-				//{activeKext, f21, r21, arrsize(f21),	1},
-				//{activeKext, f22, r22, arrsize(f22),    1},
-		//		{activeKext, f6nb, r6nb, arrsize(f6nb),	1},
-		//		{activeKext, f19, r19, arrsize(f19),	1},
-		//		{activeKext, f20, r20, arrsize(f20),	1},
-				{activeKext, f24b, r24b, arrsize(f24b),	11},
-		//		{activeKext, f24c, r24c, arrsize(f24c),	1},
-		//		{activeKext, f24d, r24d, arrsize(f24d),	6},
-		//		{activeKext, f25,  r25,  arrsize(f25),	6},
-				};
-
-			PANIC_COND(!LookupPatchPlus::applyAll(patcher, patches , address, size), "ngreen", "kextG11FBT Failed to apply dbg patches!");
-			if (enableTcon) {
-				LookupPatchPlus const tconPatches[] = {
-					{activeKext, f_tcon_camellia, r_tcon_camellia, arrsize(f_tcon_camellia), 1},
-					{activeKext, f_tcon_banksia,  r_tcon_banksia,  arrsize(f_tcon_banksia),  1},
-				};
-				PANIC_COND(!LookupPatchPlus::applyAll(patcher, tconPatches, address, size),
-					"ngreen", "Failed to apply debug TCON patches");
-				SYSLOG("ngreen", "Path E: TCON ID patches applied (dbg)");
-			}
-		}
-		
 		return true;
 		
 	}else if (kextG11HW.loadIndex == index) {
@@ -3234,266 +2919,6 @@ bool Gen11::IGAccelTaskIsKernelGPUTask(const void *that)
 	}
 
 	return original;
-}
-
-void *ccont;
-void *ccont2;
-
-//FB Hooks
-
-uint64_t Gen11::AppleIntelScalerinit(AppleIntel::AppleIntelScaler *that, uint32_t pipeIndex)
-{
-	auto ret = FunctionCast(AppleIntelScalerinit, callback->oAppleIntelScalerinit)(that, pipeIndex);
-	if (ccont)
-		that->fWriteAccessor = ccont;
-	if (ccont2)
-		that->fController = reinterpret_cast<AppleIntel::AppleIntelBaseController *>(ccont2);
-	return ret;
-}
-
-uint64_t Gen11::AppleIntelPlaneinit(AppleIntel::AppleIntelPlane *that, uint32_t pipeIndex)
-{
-	auto ret = FunctionCast(AppleIntelPlaneinit, callback->oAppleIntelPlaneinit)(that, pipeIndex);
-	if (ccont)
-		getMember<void *>(that, 0x90) = ccont; // fWriteAccessor — ccont must NOT go to real fRegCache at +0x88
-
-	return ret;
-}
-
-void Gen11::disableScaler(AppleIntel::AppleIntelScaler *that, bool disable)
-{
-	if (ccont)
-		that->fWriteAccessor = ccont;
-	FunctionCast(disableScaler, callback->odisableScaler)(that, disable);
-}
-
-void Gen11::enablePlane(AppleIntel::AppleIntelPlane *that, bool enable)
-{
-	if (ccont)
-		getMember<void *>(that, 0x90) = ccont; // fWriteAccessor — ccont must NOT go to real fRegCache at +0x88
-	FunctionCast(enablePlane, callback->oenablePlane)(that, enable);
-
-}
-
-void Gen11::programPipeScaler(AppleIntel::AppleIntelScaler *that, AppleIntel::AppleIntelDisplayPath *displayPath)
-{
-	if (ccont)
-		that->fWriteAccessor = ccont;
-	FunctionCast(programPipeScaler, callback->oprogramPipeScaler)(that, displayPath);
-}
-
-void Gen11::AppleIntelPlaneupdateRegisterCache(AppleIntel::AppleIntelPlane *that)
-{
-	getMember<void *>(that, 0x90) = ccont; // fWriteAccessor — ccont must NOT go to real fRegCache at +0x88
-	FunctionCast(AppleIntelPlaneupdateRegisterCache, callback->oAppleIntelPlaneupdateRegisterCache)(that);
-}
-
-void Gen11::AppleIntelScalerupdateRegisterCache(AppleIntel::AppleIntelScaler *that)
-{
-	that->fWriteAccessor = ccont;
-	FunctionCast(AppleIntelScalerupdateRegisterCache, callback->oAppleIntelScalerupdateRegisterCache)(that);
-}
-
-void Gen11::raWriteRegister32b(void *that,void *param_1,unsigned long param_2, UInt32 param_3)
-{
-	raWriteRegister32(that, reinterpret_cast<uint64_t>(param_1) + param_2,param_3);
-}
-
-void Gen11::raWriteRegister32(void *that, unsigned long reg, UInt32 value)
-{
-	auto *green = NGreen::callback;
-	if (!green)
-		return;
-	if (!callback || !that || !callback->oraWriteRegister32) {
-		green->writeReg32(reg, value);
-		return;
-	}
-	FunctionCast(raWriteRegister32, callback->oraWriteRegister32)(that, reg, value);
-}
-uint32_t Gen11::AppleIntelFramebufferinit(AppleIntel::AppleIntelFramebuffer *frame,
-                                          AppleIntel::AppleIntelBaseController *cont,
-                                          uint32_t pipeIndex)
-{
-	if (cont) {
-		callback->framecont = cont;
-		ccont2 = cont;
-		auto *accessor = getMember<void *>(cont, 0xC40);
-		if (accessor)
-			ccont = accessor;
-	}
-	// Offsets into the full IOFramebuffer subclass hierarchy (much larger than the
-	// tail fields captured in AppleIntelParams::AppleIntelFramebuffer).
-	if (ccont) {
-		getMember<void *>(frame, 0x4a40) = ccont;
-		getMember<void *>(frame, 0xc40) = ccont;
-	}
-	auto ret = FunctionCast(AppleIntelFramebufferinit, callback->oAppleIntelFramebufferinit)(frame, cont, pipeIndex);
-	if (ccont) {
-		getMember<void *>(frame, 0x4a40) = ccont;
-		getMember<void *>(frame, 0xc40) = ccont;
-	}
-	return ret;
-}
-
-
-
-void Gen11::initPlatformWorkarounds(AppleIntel::AppleIntelBaseController *that)
-{
-	// Platform workaround flags for ADL-P (RPL-P) running under TGL driver.
-	// flags_ig (+0xC58): boot info flags — checked by PowerWell::init to set fAlwaysOn.
-	//   Must be set BEFORE PowerWell::init runs if we want Apple's native fAlwaysOn path.
-	//   We also force fAlwaysOn=1 in our PowerWell::init hook as belt-and-suspenders.
-	// fInfoFlags2 (+0xC5C): display feature flags.
-	//   ADL-P uses PCH PWM for backlight (cnp_setup_backlight confirmed in Linux syslog).
-	//   Do NOT set FB_FLAG_ENABLE_BACKLIGHT_REG_CONTROL (that forces CPU-register backlight).
-	that->flags_ig    = FB_FLAG_BOOST_PIXEL_FREQUENCY_LIMIT;
-	that->fInfoFlags2 =
-		FB_FLAG_ALTERNATE_PWM_INCREMENT1 |
-		FB_FLAG_ALTERNATE_PWM_INCREMENT2 |
-		FB_FLAG_ENABLE_SLICE_FEATURES    |
-		FB_FLAG_FORCE_POWER_ALWAYS_CONNECTED |
-		FB_FLAG_AVOID_FAST_LINK_TRAINING;
-
-	FunctionCast(initPlatformWorkarounds, callback->oinitPlatformWorkarounds)(that);
-
-	// V212: ADL-P (Display 13) specific display workarounds, ported from Linux i915.
-	// Apple's TGL kext targets Display 12 and doesn't apply these chicken bits / clock-
-	// gating / error masks on the spoofed setup. Linux marks them as REQUIRED for
-	// Display 13+; their absence can manifest as display engine misbehavior
-	// (timing/underrun/error-recovery loops). Gated by !isRealTGL so genuine TGL HW
-	// (Display 12) is unaffected.
-	if (NGreen::callback && !NGreen::callback->isRealTGL) {
-		// Wa_22011091694:adlp — DPCE_GATING_DIS = REG_BIT(17) in GEN9_CLKGATE_DIS_5 (0x46540)
-		NGreen::callback->intel_de_rmw(0x46540, 0, 1u << 17);
-
-		// Bspec/49189 ADL-P init — CLEAR DDI_CLOCK_REG_ACCESS = REG_BIT(7) in GEN8_CHICKEN_DCPR_1 (0x46430)
-		NGreen::callback->intel_de_rmw(0x46430, 1u << 7, 0);
-
-		// PIPE_CHICKEN Pipe A (0x70038):
-		//   bit 30 = UNDERRUN_RECOVERY_DISABLE_ADLP — required on Display 13+
-		//   bit 7  = PER_PIXEL_ALPHA_BYPASS_EN     — Display WA #1153
-		//   bit 15 = PIXEL_ROUNDING_TRUNC_FB_PASSTHRU — Display WA #1605353570
-		NGreen::callback->intel_de_rmw(0x70038, 0, (1u << 30) | (1u << 15) | (1u << 7));
-
-		// XELPD_DISPLAY_ERR_FATAL_MASK (0x4421C) ← mask all fatal display errors on
-		// Display 13 (per icl_display_core_init in Linux i915). Without this, fatal
-		// error events can trigger pipeline restart loops.
-		NGreen::callback->writeReg32(0x4421C, 0xFFFFFFFFu);
-
-		uint32_t pipeChicken    = NGreen::callback->readReg32(0x70038);
-		uint32_t clkGateDis5    = NGreen::callback->readReg32(0x46540);
-		uint32_t chickenDcpr1   = NGreen::callback->readReg32(0x46430);
-		uint32_t errFatalMask   = NGreen::callback->readReg32(0x4421C);
-		SYSLOG("ngreen", "V212: ADL-P Display 13+ workarounds applied — PIPE_CHICKEN(A)=0x%x CLKGATE_DIS_5=0x%x CHICKEN_DCPR_1=0x%x ERR_FATAL_MASK=0x%x",
-			   pipeChicken, clkGateDis5, chickenDcpr1, errFatalMask);
-	}
-}
-
-uint64_t Gen11::getOSInformation(AppleIntel::AppleIntelBaseController *that)
-{
-	auto *pinfo = reinterpret_cast<PlatformInfo *>(callback->gPlatformInformationList);
-	if (pinfo) {
-		// Index 1 = the mobile TGL/ADL-P platform entry (0x9A490000 and variants).
-		pinfo[1].fInfoFlags =
-			FB_FLAG_DISABLE_PIPE_SCRAMBLE      |
-			FB_FLAG_FRAMEBUFFER_COMPRESSION    |
-			FB_FLAG_ALLOW_CONNECTOR_RECOVER    |
-			FB_FLAG_FORCE_POWER_ALWAYS_CONNECTED |
-			FB_FLAG_AVOID_FAST_LINK_TRAINING;
-
-		// cameliav=2 (CamelliaTcon2) requires GFX kext present — gate on -ngreentglwithgfx.
-		pinfo[1].cameliav = checkKernelArgument("-ngreentglwithgfx") ? 2 : 0;
-		pinfo[1].fMobile  = 1;
-		// 3/3/3 baseline restored. Multi-pipe reduction is whack-a-mole — every count
-		// reduction reveals new cross-pipe NULL-deref sites in TGL FB internals
-		// (enableController +0x1356, getFreeJoinablePathCount +0xa7, etc).
-		// Best known config: 3/3/3 + -ngreendp0 → reaches login with banded display.
-		pinfo[1].fPipeCount            = 3;
-		pinfo[1].fInfoPortCount        = 3;
-		pinfo[1].fInfoFramebufferCount = 3;
-		pinfo[1].fSliceCount  = 1;
-		pinfo[1].fmaxEuCount  = 8;
-		pinfo[1].fsubslices   = 10;
-
-		// Connector 0: built-in eDP (LVDS), DDI-A, pipe 0
-		pinfo[1].connectors[0].index = 0;
-		pinfo[1].connectors[0].busId = 0;
-		pinfo[1].connectors[0].pipe  = 0;
-		pinfo[1].connectors[0].pad   = 0;
-		pinfo[1].connectors[0].type  = ConnectorLVDS;
-		pinfo[1].connectors[0].flags = 0x8 | 0x10;
-
-		// Connector 1: external USB-C/Thunderbolt DP (TC1/DDI-D), pipe 2
-		pinfo[1].connectors[1].index = 1;
-		pinfo[1].connectors[1].busId = 1;
-		pinfo[1].connectors[1].pipe  = 2;
-		pinfo[1].connectors[1].pad   = 0;
-		pinfo[1].connectors[1].type  = ConnectorDP;
-		pinfo[1].connectors[1].flags = 0x1 | 0x400;
-
-		// Connectors 2-3: Dummy
-		pinfo[1].connectors[2] = { 2, 2, 2, 0, ConnectorDummy, 0 };
-		pinfo[1].connectors[3] = { 3, 3, 3, 0, ConnectorDummy, 0 };
-
-		SYSLOG("ngreen", "getOSInformation: patched pinfo[1] for ADL-P (LVDS+HDMI, mobile)");
-	}
-	return FunctionCast(getOSInformation, callback->ogetOSInformation)(that);
-}
-
-bool Gen11::AppleIntelBaseControllerstart(AppleIntel::AppleIntelBaseController *that, IOService *param_1)
-{
-	if (!that || !ngPhysicalGpuAccessAllowed())
-		return false;
-	callback->framecont = that;
-	ccont2 = that;
-	if (auto *accessor = getMember<void *>(that, 0xC40))
-		ccont = accessor;
-	// V25: Display workarounds BEFORE start (no ForceWake needed for display regs 0x4xxxx+).
-	// GT workarounds moved AFTER start (ForceWake must be held for GT regs 0x0-0x7FFF).
-	
-	SYSLOG("ngreen", "AppleIntelBaseControllerstart: applying display workarounds");
-
-	// Disable DC states during init to prevent power domain conflicts
-	NGreen::callback->writeReg32(DC_STATE_EN, 0);
-	
-	/* Wa_14011294188:ehl,jsl,tgl,rkl,adl-s */
-	NGreen::callback->intel_de_rmw(SOUTH_DSPCLK_GATE_D, 0,
-				PCH_DPMGUNIT_CLOCK_GATE_DISABLE);
-	
-	// PCH reset handshake
-	NGreen::callback->intel_de_rmw(HSW_NDE_RSTWRN_OPT, RESET_PCH_HANDSHAKE_ENABLE,
-				RESET_PCH_HANDSHAKE_ENABLE);
-	
-	/* Wa_14011508470:tgl,dg1,rkl,adl-s,adl-p,dg2 */
-	NGreen::callback->intel_de_rmw(GEN11_CHICKEN_DCPR_2, 0,
-				DCPR_CLEAR_MEMSTAT_DIS | DCPR_SEND_RESP_IMM |
-				DCPR_MASK_LPMODE | DCPR_MASK_MAXLATENCY_MEMUP_CLR);
-	
-	/* Display WA #1185 WaDisableDARBFClkGating:glk,icl,ehl,tgl (Wa_14010480278) */
-	NGreen::callback->intel_de_rmw(GEN9_CLKGATE_DIS_0, 0, DARBF_GATING_DIS);
-	
-	/* Wa_14013723622 */
-	NGreen::callback->intel_de_rmw(CLKREQ_POLICY, CLKREQ_POLICY_MEM_UP_OVRD, 0);
-	
-	SYSLOG("ngreen", "AppleIntelBaseControllerstart: display workarounds applied");
-
-	SYSLOG("ngreen", "FBController::start() entering...");
-	auto ret=FunctionCast(AppleIntelBaseControllerstart, callback->oAppleIntelBaseControllerstart)(that,param_1 );
-	SYSLOG("ngreen", "FBController::start() returned %d", ret);
-	
-	if (ret) {
-		// The personality dict itself was registered in IOCatalogue from the HW-kext
-		// processKext branch (see Gen11::injectAcceleratorPersonality). All this wrapper
-		// does — and all an FB-tier route should do — is poke the FBController service
-		// so IOKit re-runs matching now that the personality is present.
-		auto *service = OSDynamicCast(IOService, reinterpret_cast<OSObject *>(that));
-		if (service) {
-			SYSLOG("ngreen", "FBController: calling registerService() to trigger accelerator matching");
-			service->registerService();
-		}
-	}
-
-	return ret;
 }
 
 unsigned long Gen11::start(void *that, void *provider)
@@ -5810,7 +5235,7 @@ void Gen11::forceWake(void *that, bool set, uint32_t dom, uint8_t ctx) {
 		if (d == DOM_MEDIA) {
 			// Gen12+: Media uses per-engine ForceWake (VDBOX + VEBOX), NOT Gen9 single register
 			for (const auto &eng : fwMediaEngines) {
-				wrapWriteRegister32(callback->framecont, eng.req, wr);
+				wrapWriteRegister32(nullptr, eng.req, wr);
 				IOPause(100);
 				if (!pollRegister(eng.ack, ack_exp, mask, FORCEWAKE_ACK_TIMEOUT_MS) &&
 					!forceWakeWaitAckFallback(eng.req, eng.ack, ack_exp, mask) &&
@@ -5820,14 +5245,14 @@ void Gen11::forceWake(void *that, bool set, uint32_t dom, uint8_t ctx) {
 					DBGLOG("ngreen", "ForceWake OK %s set=%d", eng.name, set);
 			}
 		} else {
-			wrapWriteRegister32(callback->framecont, fwReqReg(d), wr);
+			wrapWriteRegister32(nullptr, fwReqReg(d), wr);
 			IOPause(100);
 			if (!pollRegister(fwAckReg(d), ack_exp, mask, FORCEWAKE_ACK_TIMEOUT_MS) &&
 				!forceWakeWaitAckFallback(fwReqReg(d), fwAckReg(d), ack_exp, mask) &&
 				!pollRegister(fwAckReg(d), ack_exp, mask, FORCEWAKE_ACK_TIMEOUT_MS))
 				SYSLOG("ngreen", "ForceWake timeout for domain %s (dom=0x%x), expected 0x%x", strForDom(d), dom, ack_exp);
 			else
-				DBGLOG("ngreen", "ForceWake OK domain=%s set=%d ack=0x%x", strForDom(d), set, wrapReadRegister32(callback->framecont, fwAckReg(d)));
+				DBGLOG("ngreen", "ForceWake OK domain=%s set=%d ack=0x%x", strForDom(d), set, wrapReadRegister32(nullptr, fwAckReg(d)));
 		}
 	}
 	// V61: silenced — see above
@@ -5837,7 +5262,7 @@ bool Gen11::pollRegister(uint32_t reg, uint32_t val, uint32_t mask, uint32_t tim
     uint64_t now = 0, deadline = 0;
     clock_interval_to_deadline(timeout, kMillisecondScale, &deadline);
     for (clock_get_uptime(&now); now < deadline; clock_get_uptime(&now)) {
-        auto rd = wrapReadRegister32(callback->framecont, reg);
+        auto rd = wrapReadRegister32(nullptr, reg);
         if ((rd & mask) == val)
             return true;
     }
@@ -5847,18 +5272,16 @@ bool Gen11::pollRegister(uint32_t reg, uint32_t val, uint32_t mask, uint32_t tim
 bool Gen11::forceWakeWaitAckFallback(uint32_t reqReg, uint32_t ackReg, uint32_t val, uint32_t mask) {
 	unsigned pass = 1;
 	bool ack = false;
-	auto controller = callback->framecont;
-	
 	do {
 		pollRegister(ackReg, 0, FORCEWAKE_KERNEL_FALLBACK, FORCEWAKE_ACK_TIMEOUT_MS);
-		wrapWriteRegister32(controller, reqReg, fw_set(FORCEWAKE_KERNEL_FALLBACK));
+		wrapWriteRegister32(nullptr, reqReg, fw_set(FORCEWAKE_KERNEL_FALLBACK));
 		
 		IODelay(10 * pass);
 		pollRegister(ackReg, FORCEWAKE_KERNEL_FALLBACK, FORCEWAKE_KERNEL_FALLBACK, FORCEWAKE_ACK_TIMEOUT_MS);
 
-		ack = (wrapReadRegister32(controller, ackReg) & mask) == val;
+		ack = (wrapReadRegister32(nullptr, ackReg) & mask) == val;
 
-		wrapWriteRegister32(controller, reqReg, fw_clear(FORCEWAKE_KERNEL_FALLBACK));
+		wrapWriteRegister32(nullptr, reqReg, fw_clear(FORCEWAKE_KERNEL_FALLBACK));
 	} while (!ack && pass++ < 10);
 	
 	return ack;

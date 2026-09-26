@@ -46,6 +46,19 @@ int main(int argc, char **argv) {
     // Unaligned starts are parsed bytewise, without casting to Mach structs.
     auto unaligned = good; unaligned.insert(unaligned.begin(), 0);
     assert(matchesKextUuid(unaligned.data() + 1, good.size(), tglVfPayloadUuid));
+    auto framebuffer = good;
+    for (size_t i = 0; i < 16; ++i)
+        framebuffer[48 + i] = tglFramebufferProductionUuid[i];
+    assert(matchesKextUuid(framebuffer.data(), framebuffer.size(),
+                           tglFramebufferProductionUuid));
+    assert(!matchesKextUuid(framebuffer.data(), framebuffer.size(),
+                            tglFramebufferDebugUuid));
+    for (size_t i = 0; i < 16; ++i)
+        framebuffer[48 + i] = tglFramebufferDebugUuid[i];
+    assert(matchesKextUuid(framebuffer.data(), framebuffer.size(),
+                           tglFramebufferDebugUuid));
+    assert(!matchesKextUuid(framebuffer.data(), framebuffer.size(),
+                            tglFramebufferProductionUuid));
     // Deterministic malformed command/header fuzz, sanitizer bounds checking.
     uint32_t seed = 0x8E0291;
     for (size_t n = 0; n < 50000; ++n) {

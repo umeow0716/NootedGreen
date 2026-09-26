@@ -1876,3 +1876,33 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   PCU verification result. Clock selection and error handling are native again.
   `/tmp/ngreen-static.ZxzxZm` passes the complete static suite. The Linux host,
   VF and VM were not touched; release-link/Xcode metadata remains gated by CI.
+
+### Pin and minimize the TGL framebuffer ABI
+
+- Recovered both local Tahoe 16.0.32 framebuffer payload identities instead of
+  inferring a variant from whether one C++ symbol happened to exist. The
+  production payload is UUID `B6078743-F795-3202-A55E-EA690FA40949`, SHA-256
+  `a562cff08e08bda3eab6f4f550368f46d50155f2c6341af460377be6b2444f56`;
+  the debug payload is UUID `B96A8448-9D17-3F78-B76D-15A0B359A9A0`, SHA-256
+  `285ee7a9c3d6c9a9647013f44fb40f312b1cb42879974ef0542544cf049442b5`.
+  Unknown payloads now fail admission before any private-layout operation.
+- Every active framebuffer byte sequence was located in both admitted binaries
+  and mapped back to its containing symbol. The old set altered power-well,
+  topology, mode-setting, HPD/NVRAM, link-training, TCON and infoframe control
+  flow rather than adapting one documented generation boundary. All were
+  removed except the exact-one `ReadRegister64` correction: its original
+  bounds arithmetic admitted four bytes before an eight-byte load, and the
+  replacement requires all eight bytes. Each UUID has its own complete
+  sequence so a near match or count drift fails atomically.
+- Removed the global framebuffer-controller/accessor cache and all Plane/Scaler
+  init/update/write interception. A null native accessor is no longer replaced
+  from a different object's private offset, and failed or incomplete native
+  initialization is not converted into apparent success. Also removed the
+  platform-table, controller-start, OS-information and workaround hooks, their
+  stale DMC/platform structures and the now-unreferenced generated
+  `AppleIntelParams.hpp` runtime header.
+- An SR-IOV VF still rejects the physical framebuffer before this branch. The
+  remaining pinned correction is therefore for the shared physical-GPU path,
+  not a virtual-display implementation or a VF acceleration result. The full
+  syntax/analyzer/strict-ABI/sanitizer and protocol suite passes in
+  `/tmp/ngreen-static.tsNTId`; the VM remained off.

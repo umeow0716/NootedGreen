@@ -68,6 +68,11 @@ inherit runtime claims from the older Sonoma/Raptor Lake display experiments.
 - Physical engine start/stop/reset-list handling is native. The former GDRST,
   blanket EMR masking, ring rewrites, GGTT[0] diagnostic remaps and recurring
   health-monitor timers have been removed.
+- The optional physical TGL framebuffer path admits only the two audited Tahoe
+  16.0.32 UUIDs. Its former platform/topology/power/link-training control-flow
+  patches and cross-object accessor repairs are removed; only an exact-count
+  `ReadRegister64` eight-byte bounds correction remains. A VF rejects this
+  framebuffer path and does not acquire a display engine from it.
 - Static analyzers and exhaustive host-side protocol models pass. This is not a
   Metal, media, DMA-quiescence or display validation result.
 - The Tahoe VM remains off until the active route and byte-patch audit has no

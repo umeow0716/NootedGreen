@@ -6,55 +6,8 @@
 #define kern_gen11_hpp
 #include "kern_green.hpp"
 #include "kern_patcherplus.hpp"
-#include "AppleIntelParams.hpp"
 #include <Headers/kern_util.hpp>
 #include <IOKit/IOBufferMemoryDescriptor.h>
-
-// ─── Platform info / connector structures (from NootedBlue reference) ────────
-// Note: ConnectorType enum is defined later in this file (below line 1100).
-
-struct PACKED VoltageConfig {
-	uint64_t pad;
-	uint8_t *voltageData;
-};
-
-struct PACKED ConnectorEntry {
-	uint32_t index;
-	uint32_t busId;
-	uint32_t pipe;
-	uint32_t pad;
-	uint32_t type;
-	uint32_t flags;
-};
-
-struct PACKED PlatformInfo {
-	uint32_t fInfoPlatformID;
-	uint32_t fPchType;
-	uint64_t *fModelNameAddr;
-	uint8_t  fMobile;
-	uint8_t  fPipeCount;
-	uint8_t  fInfoPortCount;
-	uint8_t  fInfoFramebufferCount;
-	uint32_t fInfoFramebufferMemorySize;
-	uint32_t fInfoFBCompressionMemorySize;
-	uint32_t fUnifiedMemorySize;
-	struct ConnectorEntry connectors[0x9];
-	uint32_t fInfoFlags;
-	uint32_t pad0;
-	struct VoltageConfig voltages[0x9];
-	uint32_t cameliav;
-	uint32_t MCLK;
-	uint32_t VCLK;
-	uint32_t TCONfbindex;
-	uint32_t BeaconLoc;
-	uint32_t MinFrmTim;
-	uint32_t MaxFrmTim;
-	uint32_t fInfoDynamicFBCThreshold;
-	uint32_t fVideoTurboFreq;
-	uint32_t fSliceCount;
-	uint32_t fmaxEuCount;
-	uint32_t fsubslices;
-};
 
 // AppleIntelTGLGraphics' two-qword virtual-address range.  The SR-IOV VF does
 // not expose the stolen-memory sizing field used by the native TGL path, so
@@ -65,113 +18,6 @@ struct NGIGAddressRange {
 };
 
 // Framebuffer flags (fInfoFlags / boot flags) used in platform info patching
-enum FramebufferFlags2 : uint32_t {
-	FB_FLAG_AVOID_FAST_LINK_TRAINING     = 0x1,
-	FB_FLAG_ENABLE_BACKLIGHT_REG_CONTROL = 0x2,
-	FB_FLAG_FRAMEBUFFER_COMPRESSION      = 0x4,
-	FB_FLAG_ENABLE_SLICE_FEATURES        = 0x8,
-	FB_FLAG_DYNAMIC_FBC_ENABLE           = 0x10,
-	FB_FLAG_USE_VIDEO_TURBO              = 0x20,
-	FB_FLAG_FORCE_POWER_ALWAYS_CONNECTED = 0x40,
-	FB_FLAG_DISABLE_HIGH_BITRATE_MODE2   = 0x80,
-	FB_FLAG_BOOST_PIXEL_FREQUENCY_LIMIT  = 0x100,
-	FB_FLAG_LIMIT_4K_SOURCE_SIZE         = 0x200,
-	FB_FLAG_ALTERNATE_PWM_INCREMENT1     = 0x400,
-	FB_FLAG_ALTERNATE_PWM_INCREMENT2     = 0x800,
-	FB_FLAG_DISABLE_FEATURE_IPS          = 0x1000,
-	FB_FLAG_ENABLE_DITHERING             = 0x2000,
-	FB_FLAG_ALLOW_CONNECTOR_RECOVER      = 0x4000,
-	FB_FLAG_DISABLE_PIPE_SCRAMBLE        = 0x8000,
-	FB_FLAG_disable3d                    = 0x10000,
-	FB_FLAG_ENABLE_HDMI_AUDIO            = 0x20000,
-	FB_FLAG_DISABLE_GFMP_PFM             = 0x40000,
-	FB_FLAG_ENABLE_PSR                   = 0x80000,
-	FB_FLAG_ENABLE_PSR2                  = 0x100000,
-	FB_FLAG_ENABLE_DYNAMIC_CDCLK         = 0x200000,
-	FB_FLAG_SUPPORT_4K_60HZ              = 0x400000,
-	FB_FLAG_SUPPORT_5K_SOURCE_SIZE       = 0x800000,
-};
-
-// ─── DMC (Display Microcontroller) firmware structures ──────────────────────
-// Used to parse Intel DMC firmware blobs for display power management
-#define DMC_DEFAULT_FW_OFFSET		0xFFFFFFFF
-#define PACKAGE_MAX_FW_INFO_ENTRIES	20
-#define PACKAGE_V2_MAX_FW_INFO_ENTRIES	32
-#define DMC_V1_MAX_MMIO_COUNT		8
-#define DMC_V3_MAX_MMIO_COUNT		20
-#define DMC_V1_MMIO_START_RANGE		0x80000
-
-// CSS = Code Signing Structure — firmware blob header for signature verification
-struct PACKED intel_css_header
-{
-	uint32_t module_type;
-	uint32_t header_len;
-	uint32_t header_ver;
-	uint32_t module_id;
-	uint32_t module_vendor;
-	uint32_t date;
-	uint32_t size;
-	uint32_t key_size;
-	uint32_t modulus_size;
-	uint32_t exponent_size;
-	uint32_t reserved1[0xc];
-	uint32_t version;
-	uint32_t reserved2[0x8];
-	uint32_t kernel_header_info;
-};
-
-// Wrapper header for multiple DMC firmware entries (multi-pipe support)
-struct PACKED intel_package_header
-{
-	uint8_t header_len;
-	uint8_t header_ver;
-	uint8_t reserved[0xa];
-	uint32_t num_entries;
-};
-
-// Per-pipe firmware descriptor: stepping/substepping + offset into binary
-struct PACKED intel_fw_info
-{
-	uint8_t reserved1;
-	uint8_t dmc_id;
-	char stepping;
-	char substepping;
-	uint32_t offset;
-	uint32_t reserved2;
-};
-
-// Base DMC header — common fields for v1 and v3 variants
-struct PACKED intel_dmc_header_base {
-	uint32_t signature;
-	uint8_t header_len;
-	uint8_t header_ver;
-	uint16_t dmcc_ver;
-	uint32_t project;
-	uint32_t fw_size;
-	uint32_t fw_version;
-};
-
-// DMC v1: ICL/TGL — fixed MMIO save/restore slots (up to 8)
-struct PACKED intel_dmc_header_v1 {
-	struct intel_dmc_header_base base;
-	uint32_t mmio_count;
-	uint32_t mmioaddr[DMC_V1_MAX_MMIO_COUNT];
-	uint32_t mmiodata[DMC_V1_MAX_MMIO_COUNT];
-	char dfile[32];
-	uint32_t reserved1[2];
-};
-
-// DMC v3: ADL+ — range-based MMIO + up to 20 save/restore slots
-struct PACKED intel_dmc_header_v3 {
-	struct intel_dmc_header_base base;
-	uint32_t start_mmioaddr;
-	uint32_t reserved[9];
-	char dfile[32];
-	uint32_t mmio_count;
-	uint32_t mmioaddr[DMC_V3_MAX_MMIO_COUNT];
-	uint32_t mmiodata[DMC_V3_MAX_MMIO_COUNT];
-};
-
 // ─── Workaround registers (WA) ──────────────────────────────────────────────
 // Hardware workaround register offsets and bits, mostly from i915 Linux driver.
 // PSR = Panel Self Refresh interrupt mask/status
@@ -1448,8 +1294,6 @@ private:
 	static bool forceWakeWaitAckFallback(uint32_t reqReg, uint32_t ackReg, uint32_t val, uint32_t mask);
 	
 	
-	void *framecont;  // cached framebuffer controller pointer
-	
 	// Saved original function pointers for accelerator
 	mach_vm_address_t orgSubmitExecList {};    // ExecList submission (command dispatch)
 	mach_vm_address_t orgInitSchedControl {};  // scheduler init original
@@ -1471,49 +1315,9 @@ private:
 	bool tglFBLoaded {false};  // true when TGL FB processed — skip ICL FB if set
 	bool tglHWLoaded {false};  // true when TGL HW processed — skip ICL HW if set
 
-	mach_vm_address_t gPlatformInformationList {};
-
-	static void     initPlatformWorkarounds(AppleIntel::AppleIntelBaseController *that);
-	mach_vm_address_t oinitPlatformWorkarounds {};
-
-	static uint64_t getOSInformation(AppleIntel::AppleIntelBaseController *that);
-	mach_vm_address_t ogetOSInformation {};
-	
 	static void blit3d_submit_rectlist(void *param_1,void *param_2,void *param_3);
 	mach_vm_address_t oblit3d_submit_rectlist {};
-	
-	// AppleIntelFramebuffer::init(AppleIntelBaseController*, uint pipeIndex)
-	static uint32_t AppleIntelFramebufferinit(AppleIntel::AppleIntelFramebuffer *frame,
-	                                          AppleIntel::AppleIntelBaseController *cont,
-	                                          uint32_t pipeIndex);
-	mach_vm_address_t oAppleIntelFramebufferinit {};
 
-	// AppleIntelPlane::init(IGPlaneID pipeIndex)
-	static uint64_t AppleIntelPlaneinit(AppleIntel::AppleIntelPlane *that, uint32_t pipeIndex);
-	mach_vm_address_t oAppleIntelPlaneinit {};
-
-	// AppleIntelScaler::init(IGScalerID pipeIndex)
-	static uint64_t AppleIntelScalerinit(AppleIntel::AppleIntelScaler *that, uint32_t pipeIndex);
-	mach_vm_address_t oAppleIntelScalerinit {};
-
-	// AppleIntelScaler::disableScaler(bool)
-	static void  disableScaler(AppleIntel::AppleIntelScaler *that, bool disable);
-	mach_vm_address_t odisableScaler {};
-
-	// AppleIntelPlane::enablePlane(bool)
-	static void  enablePlane(AppleIntel::AppleIntelPlane *that, bool enable);
-	mach_vm_address_t oenablePlane {};
-
-	// AppleIntelScaler::programPipeScaler(AppleIntelDisplayPath*)
-	static void programPipeScaler(AppleIntel::AppleIntelScaler *that, AppleIntel::AppleIntelDisplayPath *displayPath);
-	mach_vm_address_t oprogramPipeScaler {};
-
-	// ── Register access (ra = register access) ──
-	static void raWriteRegister32(void *that,unsigned long param_1, UInt32 param_2);
-	mach_vm_address_t oraWriteRegister32 {};
-	
-	static void raWriteRegister32b(void *that,void *param_1,unsigned long param_2, UInt32 param_3);
-	
 	// ── Display buffer & memory management ──
 	static bool IGHardwareGlobalPageTableInitWithOptions(void *that,
 	                                                    void *accelerator,
@@ -1546,12 +1350,6 @@ private:
 	                                                   uint64_t flags);
 	mach_vm_address_t oIGHardwareGlobalPageTableMapRangeDummy {};
 
-	// Saved vtable/class pointers for display subsystem objects
-	mach_vm_address_t PowerWell {};       // AppleIntelPowerWell class
-	mach_vm_address_t PortHAL {};         // port hardware abstraction layer
-	mach_vm_address_t PortHALDiags {};    // port diagnostics
-	mach_vm_address_t AppleIntelPort {};  // port object
-
 	// ── 3D Blit engine (GPU-accelerated blitting via 3D pipeline) ──
 	mach_vm_address_t oIGMappedBuffergetMemory {};
 
@@ -1566,12 +1364,6 @@ private:
 	mach_vm_address_t Blit2DExtendedCtxParams {};
 	mach_vm_address_t Blit3DExtendedCtxParams {};
 	
-	// Mangled C++ symbol addresses for Plane/Scaler constructors and metaclasses
-	mach_vm_address_t ZN15AppleIntelPlaneC1Ev {};          // AppleIntelPlane::AppleIntelPlane()
-	mach_vm_address_t ZN16AppleIntelScalerC1Ev {};         // AppleIntelScaler::AppleIntelScaler()
-	mach_vm_address_t ZN16AppleIntelScaler10gMetaClassE {}; // AppleIntelScaler::gMetaClass
-	mach_vm_address_t ZN15AppleIntelPlane10gMetaClassE {};  // AppleIntelPlane::gMetaClass
-	
 	static void * getBlit2DContext(void *that,bool param_1);
 	mach_vm_address_t ogetBlit2DContext {};
 
@@ -1584,23 +1376,12 @@ private:
 	static void * getBlit3DContext(void *that,bool param_1);
 	mach_vm_address_t ogetBlit3DContext {};
 	
-	// FB controller start — wraps original, adds registerService() for accelerator matching
-	static bool AppleIntelBaseControllerstart(AppleIntel::AppleIntelBaseController *that, IOService *param_1);
-	mach_vm_address_t oAppleIntelBaseControllerstart {};
-
 	// IntelAccelerator personality registration in IOCatalogue. Lives in the HW-kext
 	// path (ICL or TGL Graphics, not Framebuffer) — must run before the FBController's
 	// registerService() so IOKit can match IntelAccelerator. Idempotent.
 	void injectAcceleratorPersonality(bool useTglNames);
 	bool acceleratorPersonalityInjected {false};
 	
-	
-	static void AppleIntelScalerupdateRegisterCache(AppleIntel::AppleIntelScaler *that);
-	mach_vm_address_t oAppleIntelScalerupdateRegisterCache {};
-
-	static void AppleIntelPlaneupdateRegisterCache(AppleIntel::AppleIntelPlane *that);
-	mach_vm_address_t oAppleIntelPlaneupdateRegisterCache {};
-
 	static unsigned long stopGraphicsEngine(void *that);
 	mach_vm_address_t ostopGraphicsEngine {};
 
