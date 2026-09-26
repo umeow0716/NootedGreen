@@ -20,6 +20,7 @@ on:
       - "tools/context_pool_test.cpp"
       - "tools/binary_identity_test.cpp"
       - "tools/pci_identity_test.cpp"
+      - "tools/workqueue_unwind_test.cpp"
       - "tools/check-static.sh"
       - ".github/workflows/build-kext.yml"
 
@@ -62,6 +63,9 @@ jobs:
           xcrun clang++ -std=c++14 -O1 -g -fsanitize=address,undefined \
             tools/pci_identity_test.cpp -o "$RUNNER_TEMP/pci-identity-test"
           "$RUNNER_TEMP/pci-identity-test"
+          xcrun clang++ -std=c++14 -O1 -g -fsanitize=address,undefined \
+            tools/workqueue_unwind_test.cpp -o "$RUNNER_TEMP/workqueue-unwind-test"
+          "$RUNNER_TEMP/workqueue-unwind-test"
 
       - name: Build x86_64 release kext
         run: |

@@ -990,3 +990,26 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   a virtual-display implementation. Main product/bundle build settings match
   the personality placeholders. Runtime dependency/version and display
   behavior remain unvalidated; metadata retained rather than guessed away.
+
+### Workqueue failed-init lock and accelerator-reference unwind
+
+- Rechecked complete pinned workqueue init (0x1e3da..0x1e4c3) and factory
+  (0x1e37e..0x1e3d9). Exactly two false exits exist: failed IOLockAlloc,
+  or failed buffer allocation while owning the new IOLock. Accelerator+0x10
+  was retained before either failure. A successful init releases its lock.
+- Added a mandatory VF-only init route behind the existing payload UUID
+  check. On false, require buffer+0x30 null; unlock/free/null the fresh lock
+  and null/release the retained accelerator before native factory release.
+  Unexpected failed state with a buffer is fail-stop, not guessed teardown.
+  Successful initialization and physical GPU entry points are unchanged.
+- Shared helper tested with all eight accelerator/lock/buffer presence
+  combinations, expected callback ordering, untouched rejected state and
+  repeated cleanup (no double unlock/free/release), under ASan/UBSan.
+  Full syntax/offline suite passed in /tmp/ngreen-static.HggG00; CI includes
+  the new test. These are model/compile checks, not live OOM fault injection.
+- Confirmed superClass relocation at 0xd04a8 is OSObject, constructors use
+  OSObjectC2 and native queue free returns without superclass free or an
+  accelerator release. XNU OSObject::free performs instanceDestructed and
+  delete. This patch fixes failed-init retained resources only: failed object
+  destruction, successful queue teardown, createUkContext's unchecked null
+  and reserved-ID rollback remain OPEN. VM is not ready for dynamic testing.

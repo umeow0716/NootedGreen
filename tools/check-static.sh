@@ -82,4 +82,11 @@ if "$compiler" -std=c++14 -O1 -g -fsanitize=address,undefined \
 else
     failed=1
 fi
+if "$compiler" -std=c++14 -O1 -g -fsanitize=address,undefined \
+    tools/workqueue_unwind_test.cpp -o "$task_output/workqueue-unwind-test" && \
+    "$task_output/workqueue-unwind-test"; then
+    printf 'PASS offline workqueue unwind tests\n'
+else
+    failed=1
+fi
 exit "$failed"

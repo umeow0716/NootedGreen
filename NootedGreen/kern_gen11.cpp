@@ -5,6 +5,7 @@
 #include "kern_gpu_capabilities.hpp"
 #include "kern_ggtt_bounds.hpp"
 #include "kern_context_pool.hpp"
+#include "kern_workqueue_unwind.hpp"
 #include "kern_binary_identity.hpp"
 #include "AppleIntelParams.hpp"
 #include <Headers/kern_api.hpp>
@@ -2189,6 +2190,12 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		// rel32 targets now remain safe even when they bypass the routed entry.
 		// 0x001f00ff encodes SQIDI mask 0xff and 32 doorbells per SQIDI.
 		if (vfIdentifyDevice() == VfIdentity::Virtual) {
+			RouteRequestPlus workQueueInitRoute[] = {
+				{"__ZN22IGHardwareGuCWorkQueue19initWithAcceleratorEP22IOGraphicsAccelerator2jP37UK_GEN11_SCHED_PROCESS_DESCRIPTOR_REC",
+				 vfWorkQueueInit, this->oVfWorkQueueInit},
+			};
+			PANIC_COND(!RouteRequestPlus::routeAll(patcher, index, workQueueInitRoute, address, size),
+			           "ngreen", "Failed to install VF workqueue allocation unwind");
 			// Preserve Apple's event-source and callback lifecycle but remove the
 			// direct GFX_MSTR_IRQ accesses surrounding enable/disableInterrupts.
 			// Bound each patch by adjacent symbols, never by the entire image.
@@ -8711,6 +8718,29 @@ unsigned long Gen11::loadGuCBinary(void *that) {
 	}
 	SYSLOG("ngreen", "loadGuCBinary: unsupported physical firmware path; refusing success");
 	return 0;
+}
+
+bool Gen11::vfWorkQueueInit(void *that, void *accelerator, uint32_t id, void *process) {
+	// Installed only for the UUID-pinned VF payload. withOptions owns this
+	// fresh object exclusively until init returns; successful queues unchanged.
+	if (!that || !accelerator || !process || !vfCanUseSleepingLock())
+		return false;
+	const bool result = FunctionCast(vfWorkQueueInit, callback->oVfWorkQueueInit)(
+		that, accelerator, id, process);
+	if (result)
+		return true;
+	struct Operations {
+		void unlock(void *lock) { IOLockUnlock(static_cast<IOLock *>(lock)); }
+		void freeLock(void *lock) { IOLockFree(static_cast<IOLock *>(lock)); }
+		void release(void *object) { static_cast<OSObject *>(object)->release(); }
+	} operations;
+	PANIC_COND(!NGWorkQueue::unwindFailedInit(getMember<void *>(that, 0x10),
+		getMember<void *>(that, 0x20), getMember<void *>(that, 0x30), operations),
+		"ngreen", "Unexpected failed VF workqueue state; cannot safely unwind");
+	// Native withOptions will still release the failed object. Its missing
+	// OSObject::free call and createUkContext's unchecked null remain separate
+	// blockers; do not interpret this local unwind as safe end-to-end creation.
+	return false;
 }
 
 uint32_t Gen11::vfCreateUkContext(void *that, uint64_t owner, int priority) {

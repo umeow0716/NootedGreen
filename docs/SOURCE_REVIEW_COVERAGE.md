@@ -26,6 +26,8 @@ workspace metadata. Subsequent deletion of the two retired logger sources
 reduces this snapshot to 1,303. These are inventory counts, not completion
 percentages. Binary libraries, kext executables, firmware instructions and
 external reference trees are not magically reviewed by counting source files.
+The subsequent workqueue-unwind helper and its test add two reviewed source
+files (1,305 under this snapshot's scope); this does not close older coverage.
 
 ## Main project coverage
 
@@ -44,6 +46,7 @@ external reference trees are not magically reviewed by counting source files.
 | kern_model.hpp | Read; cosmetic branding lookup only, not a capability/support table; marketing labels not independently certified |
 | kern_netdbg.cpp/.hpp (removed) | Read completely; unbuilt/unreferenced retired logger with overread, port-shadowing and error/locking defects; recoverable in Git |
 | Firmware.hpp | Read; external DMC declarations only; payload and loader limitations remain in the protocol audit |
+| kern_workqueue_unwind.hpp, tools/workqueue_unwind_test.cpp | Read; failed-init resource ordering tested offline; native object destruction and caller failure propagation remain incomplete |
 | AppleIntelParams.hpp | Read all 624 lines; compiler layout dump confirms unasserted controller/framebuffer tail offsets drift from comments. No direct callers of the checked mismatched fields found; generator and pinned-binary verification remain incomplete |
 | Info.plist | Read all 124 lines; main personality/build identifiers and SchedulerType consumer inspected; profile metadata has no main-source/tools consumer found, display injection remains hardware-specific; not a supported-device matrix |
 | IGGucBinary.h, IGHucBinary.h | Full review/verification not yet recorded; do not infer coverage from inclusion or successful compilation |
