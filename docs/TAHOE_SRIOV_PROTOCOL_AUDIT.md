@@ -2473,3 +2473,24 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
 - The CI path filter now covers all of `tools/**`. Previously several protocol
   tests executed by `check-static.sh` could be changed without triggering the
   workflow because only an obsolete hand-maintained subset was listed.
+
+### Preserve native standalone startup without the physical-FB delay
+
+- Disassembly of `IntelAccelerator::registerWithFramebufferController` shows a
+  fixed 30-second `IOService::waitForMatchingService` call before its native
+  standalone path. An accelerator-only VF intentionally rejects and omits the
+  physical framebuffer, so every start paid that full delay before setting the
+  standalone callback state.
+- Current XNU proves a zero timeout still performs the existing-service lookup,
+  installs/removes the one-shot notification safely and returns immediately if
+  no framebuffer is present. A VF-only, UUID-admitted patch therefore changes
+  only the 30-second immediate to zero. Apple's exact no-framebuffer branch,
+  `initLocalCallbackSupport`, failure propagation and PF behavior remain intact.
+- The instruction is bounded to
+  `registerWithFramebufferController`..`initHardwareWorkarounds`; an offline
+  inventory proves its one exact offset in both admitted payloads and proves
+  the replacement does not already occur on disk.
+- `NootedGreenDriverProfileDefault` and `NootedGreenDriverProfiles` were also
+  removed from the plugin plist. No source, build tool or runtime path consumed
+  them, and their advertised ICL fallback contradicted the UUID-pinned TGL-only
+  implementation.

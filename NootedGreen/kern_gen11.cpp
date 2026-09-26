@@ -14,6 +14,7 @@
 #include "kern_vf_mmio_response.hpp"
 #include "kern_vf_legacy_ctb.hpp"
 #include "kern_vf_tlb_patch.hpp"
+#include "kern_vf_standalone_patch.hpp"
 #include "kern_unaligned_patch.hpp"
 #include "kern_framebuffer_patch.hpp"
 #include "kern_vf_guc_event.hpp"
@@ -1894,6 +1895,30 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			};
 			PANIC_COND(!RouteRequestPlus::routeAll(patcher, index, vfWakeRoutes, address, size),
 			           "ngreen", "Failed to isolate VF force-wake entry points");
+
+			// The VF has no physical framebuffer by design. Keep Apple's complete
+			// standalone fallback, but make its waitForMatchingService lookup
+			// nonblocking instead of stalling accelerator start for 30 seconds.
+			mach_vm_address_t fbRegistration = 0, fbRegistrationEnd = 0;
+			SolveRequestPlus fbRegistrationBounds[] = {
+				{"__ZN16IntelAccelerator33registerWithFramebufferControllerEv",
+				 fbRegistration},
+				{"__ZN16IntelAccelerator23initHardwareWorkaroundsEv",
+				 fbRegistrationEnd},
+			};
+			PANIC_COND(!SolveRequestPlus::solveAll(
+			               patcher, index, fbRegistrationBounds, address, size) ||
+			           fbRegistrationEnd <= fbRegistration ||
+			           fbRegistrationEnd - fbRegistration > 0x300,
+			           "ngreen", "Invalid VF framebuffer-registration patch bounds");
+			LookupPatchPlus const vfFramebufferWait {
+				activeKext, NGVfStandalonePatch::waitFind,
+				NGVfStandalonePatch::waitReplace, 1,
+			};
+			PANIC_COND(!vfFramebufferWait.apply(
+			               patcher, fbRegistration,
+			               fbRegistrationEnd - fbRegistration), "ngreen",
+			           "Failed to remove VF physical-framebuffer wait");
 			static const uint8_t vfDoorbellTopologyFind[] = {
 				0x48, 0x8b, 0x47, 0x38,
 				0x48, 0x8b, 0x80, 0x40, 0x12, 0x00, 0x00,
