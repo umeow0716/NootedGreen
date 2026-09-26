@@ -6,7 +6,10 @@ intercepted.
 
 ## What it does
 
-Patches Apple's Tiger Lake (Gen12) graphics drivers to work with newer Intel iGPUs. Handles device-id spoofing, MMIO addressing, ForceWake, GPU topology, display controller init, combo PHY calibration, and GT workarounds.
+Adapts an admitted Apple Tiger Lake graphics payload to newer Intel iGPUs.
+Physical hardware retains Apple's native engine, firmware, force-wake and display
+lifecycle. An identified SR-IOV VF instead uses its PF-provisioned GGTT, GuC,
+memory interrupt and direct-LRCA transport.
 
 ## Status
 
@@ -113,7 +116,7 @@ FB-only:
 
 FB+GFX:
 ```
--v keepsyms=1 debug=0x100 IGLogLevel=8 -ngreentglwithgfx -NGreenDebug liludump=250 msgbuf=725288 liludbuf=725288 -allow3d -disablegfxfirmware
+-v keepsyms=1 debug=0x100 IGLogLevel=8 -ngreentglwithgfx -NGreenDebug liludump=250 msgbuf=725288 liludbuf=725288 -disablegfxfirmware
 ```
 
 > **Note:** `-ngreentglwithgfx` loads both the physical TGL framebuffer and
@@ -130,9 +133,7 @@ FB+GFX:
 | `-ngreentglwithgfx` | Load both the TGL framebuffer AND the TGL HW accelerator kext. **Recommended for normal operation on TGL/RPL hardware.** Pairs the FB driver with `AppleIntelTGLGraphics.kext` so the watermark/DBUF programming pipeline runs at mode-set time. |
 | `-ngreentglgfx` | Load only the TGL HW kext, no FB. Diagnostic — hardware will not display anything without an FB driver. |
 | `-disablegfxfirmware` | Physical-path diagnostic only. A VF uses the PF-owned GuC image and must not upload firmware. |
-| `-ngwegcoex` / `ngwegcoex=1` | Enable WEG coexistence mode. |
 | `ngreenSched=N` | Select GPU scheduler type: `3` = GuC firmware, `4` = IGScheduler4, `5` = host preemptive (default: `3` on real TGL, `5` on RPL/ADL) |
-| `-allow3d` | Force 3D acceleration |
 | `-nbdyldoff` | Disable the optional shared-cache media-model patches and TGL userspace-bundle discovery logs. |
 | `-ngreendp0` / `ngreendp0=1` | Force fallback mode: set `DisplayPipeSupported=0` in accelerator capabilities |
 | `-ngreendp1` / `ngreendp1=1` | Explicitly keep native `DisplayPipeSupported` path (default behavior) |
@@ -222,35 +223,23 @@ The Intel TGL graphics driver supports three scheduler types, selectable at boot
 |------|------|-------------|
 | 3 | **GuC firmware** | Default Apple scheduler — loads GuC binary firmware. Requires matching firmware blobs. |
 | 4 | **IGScheduler4** | Intermediate scheduler. |
-| 5 | **Host preemptive** | Host-based scheduler — no firmware required. Ring command streamer managed by the driver. **Recommended for unsupported hardware.** |
+| 5 | **Host preemptive** | Physical host-managed scheduler. It is never valid for an SR-IOV VF. |
 
 **Selection priority:**
 
-1. Boot argument `ngreenSched=N` (highest priority)
-2. `SchedulerType` key in Info.plist (NootedGreen personality)
-3. Default: `3` (GuC firmware) on real TGL, `5` (host preemptive) on RPL/ADL
-
-Type 5 bypasses `IGScheduler::initFirmware()` entirely, avoiding GuC/HuC binary loading which fails on spoofed devices. The RCS ring is initialized directly by the host driver.
+1. A classified VF always selects type 4; no boot/property override can enter a physical scheduler
+2. Boot argument `ngreenSched=N` for a physical GPU
+3. `SchedulerType` key in Info.plist for a physical GPU
+4. Default: `3` on a native TGL PF, `5` on a later-generation PF
 
 ## Native Tiger Lake path selection
 
 The compatibility field `isRealTGL` is true only when the original PCI device
 ID is a known Tiger Lake ID **and** physical-function ownership has been
-established. It is false for every VF, including a Tiger Lake VF. CPUID is
-logged for diagnostics and never selects GPU register layouts or PF/VF policy.
-
-When `isRealTGL = false`, generation- and VF-specific paths may be considered,
-but each invasive path must still pass its own PCI, VF capability, binary UUID
-and runtime-state admission as appropriate. Historical examples include:
-
-- **Topology overrides** — L3 bank count, max EU count, subslice count hardcoded for 96EU RPL config
-- **BCS engine bypass** — skip blitter engine init in `hwDevStart` (RPL BCS is dead under TGL driver)
-- **GuC binary stub** — `loadGuCBinary` returns 1 instead of loading firmware (wrong microarch)
-- **MultiForceWakeSelect=1** — redirect ForceWake to hooked `SafeForceWakeMultithreaded` (RPL ACK=0 on native path)
-- **BCS engine reset** — stop+clear dead BCS ring after `start()` (V51)
-
-When `isRealTGL = true`, spoof-path overrides are skipped and the Apple Tiger
-Lake driver remains on its native physical-GPU path.
+established. It is false for every VF, including a Tiger Lake VF. Code that
+selects an instruction or topology layout therefore checks the original GPU
+generation separately; code that selects ownership checks PF/VF identity.
+CPUID is diagnostic only.
 
 ### Required GPU driver bundles
 

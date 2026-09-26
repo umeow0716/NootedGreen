@@ -123,7 +123,9 @@ else
 fi
 if "$compiler" -std=c++14 -O1 -g -fsanitize=address,undefined \
     tools/binary_identity_test.cpp -o "$task_output/binary-identity-test" && \
-    "$task_output/binary-identity-test"; then
+    "$task_output/binary-identity-test" \
+        sle_Internal/le/AppleIntelTGLGraphics.kext/Contents/MacOS/AppleIntelTGLGraphics \
+        sle_Internal/sle/AppleIntelTGLGraphics.kext/Contents/MacOS/AppleIntelTGLGraphics; then
     printf 'PASS offline binary identity tests\n'
 else
     failed=1

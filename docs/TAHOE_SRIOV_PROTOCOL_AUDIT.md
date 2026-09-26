@@ -1923,3 +1923,34 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   future payload families require their own identity, disassembly and protocol
   admission. `/tmp/ngreen-static.hYAh0w` passes the complete offline suite and
   no VM or hardware access occurred.
+
+### Isolate the accelerator VF protocol from the physical path
+
+- The pinned TGL accelerator branch now classifies PCI ownership once after
+  BAR0 admission. GGTT replacement, GuC/CTB translation, direct-LRCA context
+  handling, memory interrupts, legacy-doorbell rejection, reset/ring
+  containment and their byte patches are installed only for a verified VF.
+  A PF keeps Apple's native implementations for all of those entry points.
+- Removed the hand-ported physical force-wake implementation and its duplicate
+  domain/range tables. It was installed from a policy flag rather than a
+  proved generation ABI and could poll/write the wrong power domain. The three
+  force-wake entry points are now VF-only no-ops, matching i915's rule that a
+  VF creates no guest-owned force-wake domains.
+- Once a route is VF-only, its physical fallback is unreachable. Removed those
+  branches and every original-function slot that existed only to support them.
+  Originals are still retained where the validated VF bridge deliberately
+  executes native allocation, mapping, detach or submission side effects.
+  Removed the duplicate physical `getGPUInfo` wrapper and the now-meaningless
+  `ngwegcoex` policy; physical topology is no longer overwritten after native
+  discovery.
+- TGL-generation selection is now independent of PF/VF ownership. A TGL VF no
+  longer receives the later-generation topology or unaligned-store patches
+  merely because `isRealTGL` correctly excludes VFs. The remaining RPL
+  topology constants are still target-specific and remain an open portability
+  item before any general support claim.
+- Both 1,825,024-byte accelerator payload variants pass the pinned
+  `BA3AA1C0-FE6B-33B3-9D85-73F848394E3D` UUID parser. A sanitizer test now
+  proves their only ten differing bytes are the two `com.xxxxx` versus
+  `com.apple` bundle-identifier strings; executable bytes are identical.
+  The complete syntax, analyzer, strict-ABI, sanitizer, protocol and on-disk
+  payload suite passes in `/tmp/ngreen-static.hpt32k`. The VM remained off.

@@ -9,6 +9,11 @@ using namespace NGBinaryIdentity;
 static void put(std::vector<uint8_t> &v, size_t at, uint32_t value) {
     for (unsigned i = 0; i < 4; ++i) v[at + i] = value >> (8 * i);
 }
+static std::vector<uint8_t> readFile(const char *path) {
+    std::ifstream file(path, std::ios::binary);
+    assert(file.good());
+    return std::vector<uint8_t>((std::istreambuf_iterator<char>(file)), {});
+}
 int main(int argc, char **argv) {
     std::vector<uint8_t> good(72, 0);
     put(good, 0, 0xFEEDFACF); put(good, 4, 0x01000007); put(good, 12, 0xB);
@@ -69,12 +74,33 @@ int main(int argc, char **argv) {
         }
         (void)matches(v);
     }
-    if (argc == 2) {
-        std::ifstream file(argv[1], std::ios::binary);
-        assert(file.good());
-        std::vector<uint8_t> payload((std::istreambuf_iterator<char>(file)), {});
+    if (argc >= 2) {
+        const auto payload = readFile(argv[1]);
         assert(matches(payload));
         puts("PASS pinned on-disk TGL payload UUID");
+    }
+    if (argc == 3) {
+        const auto production = readFile(argv[1]);
+        const auto signedSystem = readFile(argv[2]);
+        assert(matches(production));
+        assert(matches(signedSystem));
+        assert(production.size() == signedSystem.size());
+        const size_t bundleOffsets[] = {
+            1805640, 1805641, 1805642, 1805643, 1805644,
+            1819931, 1819932, 1819933, 1819934, 1819935,
+        };
+        size_t next = 0;
+        for (size_t i = 0; i < production.size(); ++i) {
+            if (production[i] == signedSystem[i])
+                continue;
+            assert(next < sizeof(bundleOffsets) / sizeof(bundleOffsets[0]));
+            assert(i == bundleOffsets[next]);
+            assert(production[i] == static_cast<uint8_t>('x'));
+            assert(signedSystem[i] == static_cast<uint8_t>("apple"[next % 5]));
+            ++next;
+        }
+        assert(next == sizeof(bundleOffsets) / sizeof(bundleOffsets[0]));
+        puts("PASS TGL payload variants differ only in two bundle identifiers");
     }
     puts("PASS Mach-O truncation, UUID mutations, malformed commands and 50000 fuzz inputs");
 }

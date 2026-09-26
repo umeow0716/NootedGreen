@@ -388,31 +388,6 @@ constexpr uint32_t GEN6_RP_STATE_CAP = MCHBAR_MIRROR_BASE_SNB + 0x5998;
 constexpr uint32_t GEN9_FREQUENCY_SHIFT = 23;
 constexpr uint32_t GEN9_FREQ_SCALER  = 3;
 
-// ─── Forcewake ──────────────────────────────────────────────────────────────
-// Forcewake keeps GT power domains awake for MMIO access.
-// Without it, reads return 0xFFFFFFFF from sleeping domains.
-constexpr uint32_t FORCEWAKE_KERNEL_FALLBACK = 1 << 15;
-constexpr uint32_t FORCEWAKE_ACK_TIMEOUT_MS = 50;
-
-// Request registers — write here to wake a domain
-constexpr uint32_t FORCEWAKE_MEDIA_GEN9 = 0xa270;
-constexpr uint32_t FORCEWAKE_RENDER_GEN9 = 0xa278;
-constexpr uint32_t FORCEWAKE_BLITTER_GEN9 = 0xa188;
-
-// Acknowledge registers — poll these to confirm domain is awake
-constexpr uint32_t FORCEWAKE_ACK_MEDIA_GEN9 = 0x0D88;
-constexpr uint32_t FORCEWAKE_ACK_RENDER_GEN9 = 0x0D84;
-constexpr uint32_t FORCEWAKE_ACK_BLITTER_GEN9 = 0x130044;
-
-#define FORCEWAKE_MEDIA_VDBOX_GEN11(n)		(0xa540 + (n) * 4)
-#define FORCEWAKE_MEDIA_VEBOX_GEN11(n)		(0xa560 + (n) * 4)
-#define FORCEWAKE_ACK_MEDIA_VDBOX_GEN11(n)	(0xd50 + (n) * 4)
-#define FORCEWAKE_ACK_MEDIA_VEBOX_GEN11(n)	(0xd70 + (n) * 4)
-#define FORCEWAKE_GT_GEN9			(0xa188)
-#define FORCEWAKE_ACK_GT_GEN9			(0x130044)
-#define FORCEWAKE_REQ_GSC			(0xa618)
-#define FORCEWAKE_ACK_GSC			(0xdf8)
-
 static inline unsigned long find_first_bit(const unsigned long *addr, unsigned long size) {
 	unsigned long val = *addr;
 	if (!val || size == 0) return size;
@@ -515,76 +490,7 @@ static const struct buddy_page_mask tgl_buddy_page_masks[] = {
 #define REG_GENMASK(__high, __low)	GENMASK(__high, __low)
 
 
-// Legacy 3-bit forcewake domain bitmask (Gen9 style — before per-engine domains)
-enum FORCEWAKE_DOM_BITS : unsigned {
-	DOM_RENDER = 0b001,
-	DOM_MEDIA = 0b010,
-	DOM_BLITTER = 0b100,
-	DOM_LAST = DOM_BLITTER,
-	DOM_FIRST = DOM_RENDER
-};
-/*
-enum forcewake_domain_id {
-	FW_DOMAIN_ID_RENDER = 0,
-	FW_DOMAIN_ID_BLITTER,
-	FW_DOMAIN_ID_MEDIA,
-	FW_DOMAIN_ID_MEDIA_VDBOX0,
-	FW_DOMAIN_ID_MEDIA_VDBOX1,
-	FW_DOMAIN_ID_MEDIA_VDBOX2,
-	FW_DOMAIN_ID_MEDIA_VDBOX3,
-	FW_DOMAIN_ID_MEDIA_VEBOX0,
-	FW_DOMAIN_ID_MEDIA_VEBOX1,
-
-	FW_DOMAIN_ID_COUNT
-};*/
-
-// Gen11+ forcewake domain IDs — separate domain per media engine instance
-enum forcewake_domain_id {
-	FW_DOMAIN_ID_RENDER = 0,
-	FW_DOMAIN_ID_GT,        /* also includes blitter engine */
-	FW_DOMAIN_ID_MEDIA,
-	FW_DOMAIN_ID_MEDIA_VDBOX0,
-	FW_DOMAIN_ID_MEDIA_VDBOX1,
-	FW_DOMAIN_ID_MEDIA_VDBOX2,
-	FW_DOMAIN_ID_MEDIA_VDBOX3,
-	FW_DOMAIN_ID_MEDIA_VDBOX4,
-	FW_DOMAIN_ID_MEDIA_VDBOX5,
-	FW_DOMAIN_ID_MEDIA_VDBOX6,
-	FW_DOMAIN_ID_MEDIA_VDBOX7,
-	FW_DOMAIN_ID_MEDIA_VEBOX0,
-	FW_DOMAIN_ID_MEDIA_VEBOX1,
-	FW_DOMAIN_ID_MEDIA_VEBOX2,
-	FW_DOMAIN_ID_MEDIA_VEBOX3,
-	FW_DOMAIN_ID_GSC,
-
-	FW_DOMAIN_ID_COUNT
-};
 #define BIT(n) (1U << (n))
-enum forcewake_domains {
-	FORCEWAKE_RENDER	= BIT(FW_DOMAIN_ID_RENDER),
-	FORCEWAKE_GT		= BIT(FW_DOMAIN_ID_GT),
-	FORCEWAKE_MEDIA		= BIT(FW_DOMAIN_ID_MEDIA),
-	FORCEWAKE_MEDIA_VDBOX0	= BIT(FW_DOMAIN_ID_MEDIA_VDBOX0),
-	FORCEWAKE_MEDIA_VDBOX1	= BIT(FW_DOMAIN_ID_MEDIA_VDBOX1),
-	FORCEWAKE_MEDIA_VDBOX2	= BIT(FW_DOMAIN_ID_MEDIA_VDBOX2),
-	FORCEWAKE_MEDIA_VDBOX3	= BIT(FW_DOMAIN_ID_MEDIA_VDBOX3),
-	FORCEWAKE_MEDIA_VDBOX4	= BIT(FW_DOMAIN_ID_MEDIA_VDBOX4),
-	FORCEWAKE_MEDIA_VDBOX5	= BIT(FW_DOMAIN_ID_MEDIA_VDBOX5),
-	FORCEWAKE_MEDIA_VDBOX6	= BIT(FW_DOMAIN_ID_MEDIA_VDBOX6),
-	FORCEWAKE_MEDIA_VDBOX7	= BIT(FW_DOMAIN_ID_MEDIA_VDBOX7),
-	FORCEWAKE_MEDIA_VEBOX0	= BIT(FW_DOMAIN_ID_MEDIA_VEBOX0),
-	FORCEWAKE_MEDIA_VEBOX1	= BIT(FW_DOMAIN_ID_MEDIA_VEBOX1),
-	FORCEWAKE_MEDIA_VEBOX2	= BIT(FW_DOMAIN_ID_MEDIA_VEBOX2),
-	FORCEWAKE_MEDIA_VEBOX3	= BIT(FW_DOMAIN_ID_MEDIA_VEBOX3),
-	FORCEWAKE_GSC		= BIT(FW_DOMAIN_ID_GSC),
-
-	FORCEWAKE_ALL = BIT(FW_DOMAIN_ID_COUNT) - 1,
-};
-
-
-
-
-
 
 // Engine instance IDs (i915 convention)
 enum intel_engine_id {
@@ -623,15 +529,6 @@ enum intel_engine_id {
 #define INVALID_ENGINE ((enum intel_engine_id)-1)
 };
 #define __HAS_ENGINE(engine_mask, id) ((engine_mask) & BIT(id))
-
-// Registers below 0x40000 or above 0x116000 need forcewake to be held
-#define NEEDS_FORCE_WAKE(reg) ({ \
-	u32 __reg = (reg); \
-	__reg < 0x40000 || __reg >= 0x116000; \
-})
-
-#define GEN_FW_RANGE(s, e, d) \
-	{ .start = (s), .end = (e), .domains = (d) }
 
 // ─── GT workaround registers ────────────────────────────────────────────────
 #define GEN11_GACB_PERF_CTRL			(0x4b80)
@@ -674,59 +571,6 @@ enum intel_engine_id {
 // macros that could evaluate a side-effecting argument twice.
 #define GEN9_GAMT_ECO_REG_RW_IA (0x4ab0)
 #define   GAMT_ECO_ENABLE_IN_PLACE_DECOMPRESS	(1 << 18)
-
-
-struct intel_forcewake_range {
-	uint32_t start;
-	uint32_t end;
-
-	enum forcewake_domains domains;
-};
-
-// Gen11 forcewake range table — maps MMIO ranges to their required power domain
-const struct intel_forcewake_range __gen11_fw_ranges[] = {
-	//GEN_FW_RANGE(0x0, 0x1fff, 0), /* uncore range */
-	GEN_FW_RANGE(0x2000, 0x26ff, FORCEWAKE_RENDER),
-	GEN_FW_RANGE(0x2700, 0x2fff, FORCEWAKE_GT),
-	GEN_FW_RANGE(0x3000, 0x3fff, FORCEWAKE_RENDER),
-	GEN_FW_RANGE(0x4000, 0x51ff, FORCEWAKE_GT),
-	GEN_FW_RANGE(0x5200, 0x7fff, FORCEWAKE_RENDER),
-	GEN_FW_RANGE(0x8000, 0x813f, FORCEWAKE_GT),
-	GEN_FW_RANGE(0x8140, 0x815f, FORCEWAKE_RENDER),
-	GEN_FW_RANGE(0x8160, 0x82ff, FORCEWAKE_GT),
-	GEN_FW_RANGE(0x8300, 0x84ff, FORCEWAKE_RENDER),
-	GEN_FW_RANGE(0x8500, 0x87ff, FORCEWAKE_GT),
-	//GEN_FW_RANGE(0x8800, 0x8bff, 0),
-	GEN_FW_RANGE(0x8c00, 0x8cff, FORCEWAKE_RENDER),
-	GEN_FW_RANGE(0x8d00, 0x94cf, FORCEWAKE_GT),
-	GEN_FW_RANGE(0x94d0, 0x955f, FORCEWAKE_RENDER),
-	//GEN_FW_RANGE(0x9560, 0x95ff, 0),
-	GEN_FW_RANGE(0x9600, 0xafff, FORCEWAKE_GT),
-	GEN_FW_RANGE(0xb000, 0xb47f, FORCEWAKE_RENDER),
-	GEN_FW_RANGE(0xb480, 0xdeff, FORCEWAKE_GT),
-	GEN_FW_RANGE(0xdf00, 0xe8ff, FORCEWAKE_RENDER),
-	GEN_FW_RANGE(0xe900, 0x16dff, FORCEWAKE_GT),
-	GEN_FW_RANGE(0x16e00, 0x19fff, FORCEWAKE_RENDER),
-	GEN_FW_RANGE(0x1a000, 0x23fff, FORCEWAKE_GT),
-	//GEN_FW_RANGE(0x24000, 0x2407f, 0),
-	GEN_FW_RANGE(0x24080, 0x2417f, FORCEWAKE_GT),
-	GEN_FW_RANGE(0x24180, 0x242ff, FORCEWAKE_RENDER),
-	GEN_FW_RANGE(0x24300, 0x243ff, FORCEWAKE_GT),
-	GEN_FW_RANGE(0x24400, 0x24fff, FORCEWAKE_RENDER),
-	GEN_FW_RANGE(0x25000, 0x3ffff, FORCEWAKE_GT),
-	//GEN_FW_RANGE(0x40000, 0x1bffff, 0),
-	GEN_FW_RANGE(0x1c0000, 0x1c3fff, FORCEWAKE_MEDIA_VDBOX0),
-	//GEN_FW_RANGE(0x1c4000, 0x1c7fff, 0),
-	GEN_FW_RANGE(0x1c8000, 0x1cffff, FORCEWAKE_MEDIA_VEBOX0),
-	GEN_FW_RANGE(0x1d0000, 0x1d3fff, FORCEWAKE_MEDIA_VDBOX2),
-	//GEN_FW_RANGE(0x1d4000, 0x1dbfff, 0)
-};
-// eDRAM capability register (Haswell/Broadwell, not present on ICL+)
-#define  HSW_EDRAM_CAP				(0x120010)
-#define    EDRAM_NUM_BANKS(cap)			(((cap) >> 1) & 0xf)
-#define    EDRAM_WAYS_IDX(cap)			(((cap) >> 5) & 0x7)
-#define    EDRAM_SETS_IDX(cap)			(((cap) >> 8) & 0x3)
-#define   FORCEWAKE_KERNEL			BIT(0)
 
 
 // ─── GT interrupt registers ─────────────────────────────────────────────────
@@ -836,113 +680,6 @@ struct intel_rps_freq_caps {
 	uint8_t rp1_freq;   // RP1 — efficient/nominal frequency
 	uint8_t min_freq;   // RPn — minimum frequency
 };
-
-// Map forcewake domain bitmask → MMIO request register
-constexpr uint32_t regForDom(unsigned d) {
-	
-	
-	if (d == FORCEWAKE_GT)
-		return FORCEWAKE_GT_GEN9;
-	if (d == FORCEWAKE_RENDER)
-		return FORCEWAKE_RENDER_GEN9;
-	
-		
-	if (d == FORCEWAKE_MEDIA_VDBOX0)
-			return FORCEWAKE_MEDIA_VDBOX_GEN11(0);
-	if (d == FORCEWAKE_MEDIA_VDBOX1)
-			return FORCEWAKE_MEDIA_VDBOX_GEN11(1);
-	if (d == FORCEWAKE_MEDIA_VDBOX2)
-			return FORCEWAKE_MEDIA_VDBOX_GEN11(2);
-	if (d == FORCEWAKE_MEDIA_VDBOX3)
-			return FORCEWAKE_MEDIA_VDBOX_GEN11(3);
-	if (d == FORCEWAKE_MEDIA_VDBOX4)
-			return FORCEWAKE_MEDIA_VDBOX_GEN11(4);
-	if (d == FORCEWAKE_MEDIA_VDBOX5)
-			return FORCEWAKE_MEDIA_VDBOX_GEN11(5);
-	if (d == FORCEWAKE_MEDIA_VDBOX6)
-			return FORCEWAKE_MEDIA_VDBOX_GEN11(6);
-	if (d == FORCEWAKE_MEDIA_VDBOX7)
-			return FORCEWAKE_MEDIA_VDBOX_GEN11(7);
-
-
-	if (d == FORCEWAKE_MEDIA_VEBOX0)
-			return FORCEWAKE_MEDIA_VEBOX_GEN11(0);
-	if (d == FORCEWAKE_MEDIA_VEBOX1)
-			return FORCEWAKE_MEDIA_VEBOX_GEN11(1);
-	if (d == FORCEWAKE_MEDIA_VEBOX2)
-			return FORCEWAKE_MEDIA_VEBOX_GEN11(2);
-	if (d == FORCEWAKE_MEDIA_VEBOX3)
-			return FORCEWAKE_MEDIA_VEBOX_GEN11(3);
-	
-	if (d == FORCEWAKE_GSC)
-		return FORCEWAKE_REQ_GSC;
-
-	assertf(false, "Unknown force wake domain %d", d);
-	return 0;
-}
-
-// Map forcewake domain bitmask → MMIO acknowledge register
-constexpr uint32_t ackForDom(unsigned d) {
-	if (d == FORCEWAKE_GT)
-		return FORCEWAKE_ACK_GT_GEN9;
-	if (d == FORCEWAKE_RENDER)
-		return FORCEWAKE_ACK_RENDER_GEN9;
-	
-	if (d == FORCEWAKE_MEDIA_VDBOX0)
-			return FORCEWAKE_ACK_MEDIA_VDBOX_GEN11(0);
-	if (d == FORCEWAKE_MEDIA_VDBOX1)
-			return FORCEWAKE_ACK_MEDIA_VDBOX_GEN11(1);
-	if (d == FORCEWAKE_MEDIA_VDBOX2)
-			return FORCEWAKE_ACK_MEDIA_VDBOX_GEN11(2);
-	if (d == FORCEWAKE_MEDIA_VDBOX3)
-			return FORCEWAKE_ACK_MEDIA_VDBOX_GEN11(3);
-	if (d == FORCEWAKE_MEDIA_VDBOX4)
-			return FORCEWAKE_ACK_MEDIA_VDBOX_GEN11(4);
-	if (d == FORCEWAKE_MEDIA_VDBOX5)
-			return FORCEWAKE_ACK_MEDIA_VDBOX_GEN11(5);
-	if (d == FORCEWAKE_MEDIA_VDBOX6)
-			return FORCEWAKE_ACK_MEDIA_VDBOX_GEN11(6);
-	if (d == FORCEWAKE_MEDIA_VDBOX7)
-			return FORCEWAKE_ACK_MEDIA_VDBOX_GEN11(7);
-
-
-	if (d == FORCEWAKE_MEDIA_VEBOX0)
-			return FORCEWAKE_ACK_MEDIA_VEBOX_GEN11(0);
-	if (d == FORCEWAKE_MEDIA_VEBOX1)
-			return FORCEWAKE_ACK_MEDIA_VEBOX_GEN11(1);
-	if (d == FORCEWAKE_MEDIA_VEBOX2)
-			return FORCEWAKE_ACK_MEDIA_VEBOX_GEN11(2);
-	if (d == FORCEWAKE_MEDIA_VEBOX3)
-			return FORCEWAKE_ACK_MEDIA_VEBOX_GEN11(3);
-	
-	if (d == FORCEWAKE_GSC)
-		return FORCEWAKE_ACK_GSC;
-	
-	assertf(false, "Unknown force wake domain %d", d);
-	return 0;
-}
-
-constexpr const char *strForDom(unsigned d) {
-	if (d == DOM_RENDER)
-		return "Render";
-	if (d == DOM_MEDIA)
-		return "Media";
-	if (d == DOM_BLITTER)
-		return "Blitter";
-	return "(unk)";
-}
-
-// Forcewake set/clear helpers using masked register write convention
-constexpr uint32_t masked_field(uint32_t mask, uint32_t value) {
-	return (mask << 16) | value;
-}
-constexpr uint32_t fw_set(uint32_t v) {
-	return masked_field(v, v);
-}
-constexpr uint32_t fw_clear(uint32_t v) {
-	return masked_field(v, 0);
-}
-
 
 enum ConnectorType : uint32_t {
 	ConnectorZero       = 0x0,
@@ -1170,7 +907,7 @@ enum intel_pch {
 
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Gen11 — Lilu route/patch class for ICL/TGL framebuffer + accelerator kexts.
+// Gen11 — Lilu route/patch class for the admitted TGL framebuffer and accelerator kexts.
 // Each "static ... / mach_vm_address_t o..." pair is a Lilu function route:
 //   static method = our wrapper, mach_vm_address_t = saved original pointer.
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1180,20 +917,14 @@ private:
 
 	// ── GuC (Graphics micro-Controller) firmware ──
 	static unsigned long loadGuCBinary(void *that);  // route: intercept GuC FW load
-	mach_vm_address_t oloadGuCBinary {};
-
-	static IOReturn wrapConnectionProbe();  // display hot-plug connection probe
-	mach_vm_address_t orgConnectionProbe {};
 
 	// ── Accelerator firmware & scheduler ──
 	static bool vfMmioHostToGuCAction(void *that, const uint32_t *request,
 	                                  unsigned int requestLength, int timeout,
 	                                  uint32_t *response);
-	mach_vm_address_t oVfMmioHostToGuCAction {};
 	static bool vfLegacyHostToGuCAction(void *that, const uint32_t *request,
 	                                  unsigned int requestLength, int timeout,
 	                                  uint32_t *response);
-	mach_vm_address_t oVfLegacyHostToGuCAction {};
 	static uint32_t vfCreateUkContext(void *that, uint64_t owner, int priority);
 	mach_vm_address_t vfAllocContext {};
 	mach_vm_address_t vfReleaseContext {};
@@ -1206,51 +937,30 @@ private:
 	mach_vm_address_t vfOSObjectFree {};
 	static void vfCtbFree(void *that);
 	mach_vm_address_t oVfCtbFree {};
-	mach_vm_address_t oVfCreateUkContext {};
 	static uint32_t vfAllocContextId(void *that, uint64_t owner, bool clear);
-	mach_vm_address_t oVfAllocContextId {};
 	static void vfReleaseContextId(void *that, uint32_t id);
-	mach_vm_address_t oVfReleaseContextId {};
 	static uint16_t vfAcquireDoorbell(void *that, void *descriptor, bool pin);
-	mach_vm_address_t oVfAcquireDoorbell {};
 	static void vfReleaseDoorbell(void *that, void *descriptor);
-	mach_vm_address_t oVfReleaseDoorbell {};
 	static bool vfAllocUkDoorbell(void *that, uint32_t contextId, bool pin);
-	mach_vm_address_t oVfAllocUkDoorbell {};
 	static uint16_t vfReacquireDoorbell(void *that, uint32_t contextId);
-	mach_vm_address_t oVfReacquireDoorbell {};
 	static bool vfIsGuCIdle(void *that);
-	mach_vm_address_t oVfIsGuCIdle {};
 	static bool vfIsContextIdle(void *that, uint32_t contextId);
-	mach_vm_address_t oVfIsContextIdle {};
 	static bool vfIsKmdContextIdle(void *that, const uint32_t *descriptor);
-	mach_vm_address_t oVfIsKmdContextIdle {};
 	static void vfTransferOwnership(void *that, const void *backing, int owner);
-	mach_vm_address_t oVfTransferOwnership {};
 	static void vfInitDoorbells(void *that);
-	mach_vm_address_t oVfInitDoorbells {};
 	static bool vfReadDoorbellSQIDIConfig(void *that);
-	mach_vm_address_t oVfReadDoorbellSQIDIConfig {};
 	static bool vfCtbInitWithAccelerator(void *that, void *accelerator);
 	mach_vm_address_t oVfCtbInitWithAccelerator {};
 	static void vfCtbChannelInit(void *that);
-	mach_vm_address_t oVfCtbChannelInit {};
 	static bool vfCtbGucToHostAction(void *that, uint32_t *message);
-	mach_vm_address_t oVfCtbGucToHostAction {};
 	static void vfSoftwareGuCInterrupt(void *that, IOInterruptEventSource *source, int count);
-	mach_vm_address_t oVfSoftwareGuCInterrupt {};
 	mach_vm_address_t vfCtbSoftwareInterrupt {};
 	static void vfInvalidateTLB(void *that);
-	mach_vm_address_t oVfInvalidateTLB {};
 	static bool vfInterruptFilterHandler(void *that, void *eventSource);
-	mach_vm_address_t oVfInterruptFilterHandler {};
 	mach_vm_address_t vfServiceInterrupts {};
 	static void vfReadAndClearInterrupts(void *that, void *interrupts);
-	mach_vm_address_t oVfReadAndClearInterrupts {};
 	static void vfEnableInterrupts(void *that);
 	static void vfDisableInterrupts(void *that);
-	mach_vm_address_t oVfEnableInterrupts {};
-	mach_vm_address_t oVfDisableInterrupts {};
 	static void *vfCtbMappedBufferWithOptions(void *accelTask, unsigned long size,
 	                                          unsigned int type, unsigned int flags);
 	mach_vm_address_t oVfCtbMappedBufferWithOptions {};
@@ -1283,31 +993,13 @@ private:
 	static bool submitBlit(void *that, void *param_1, void *param_2, void *param_3, bool param_4);
 	mach_vm_address_t osubmitBlit {};
 	
-	static void forceWake(void *that, bool set, uint32_t dom, uint8_t ctx);  // custom forcewake
-	mach_vm_address_t oforceWake {};
-	static void wrapSafeForceWake(void *that, bool set, uint32_t dom);       // SafeForceWake wrapper
-	mach_vm_address_t oSafeForceWake {};
-	static bool pollRegister(uint32_t reg, uint32_t val, uint32_t mask, uint32_t timeout);
-	static bool forceWakeWaitAckFallback(uint32_t reqReg, uint32_t ackReg, uint32_t val, uint32_t mask);
+	static void forceWake(void *that, bool set, uint32_t dom, uint8_t ctx);
+	static void wrapSafeForceWake(void *that, bool set, uint32_t dom);
 	
 	
 	// Saved original function pointers for accelerator
-	mach_vm_address_t orgSubmitExecList {};    // ExecList submission (command dispatch)
 	mach_vm_address_t orgInitSchedControl {};  // scheduler init original
 	
-	mach_vm_address_t _gSysctlVariables {};
-	
-	static void  getGPUInfo(void *that);     // patches topology for TGL HW (TGL offsets); void per Ghidra
-	mach_vm_address_t ogetGPUInfo {};
-
-	// ── MMIO register access wrappers (can intercept/log/redirect) ──
-	static void wrapWriteRegister32(void *controller, uint32_t address, uint32_t value);
-	
-	static uint32_t wrapReadRegister32(void *controller, uint32_t address);
-	
-	static void blit3d_submit_rectlist(void *param_1,void *param_2,void *param_3);
-	mach_vm_address_t oblit3d_submit_rectlist {};
-
 	// ── Display buffer & memory management ──
 	static bool IGHardwareGlobalPageTableInitWithOptions(void *that,
 	                                                    void *accelerator,
@@ -1321,7 +1013,6 @@ private:
 	// algorithms, but all ranges and DMA addresses are checked against the
 	// PF-provisioned assignment before the BAR0 PTE aperture can be written.
 	static bool IGMemoryManagerInitSegments(void *that);
-	mach_vm_address_t oIGMemoryManagerInitSegments {};
 	static bool IGHardwareGlobalPageTableMapRange(void *that,
 	                                              const NGIGAddressRange &range,
 	                                              uint64_t physical,
@@ -1331,7 +1022,6 @@ private:
 	                                                     void *rangeIterator,
 	                                                     void *physicalIterator,
 	                                                     uint64_t flags);
-	mach_vm_address_t oIGHardwareGlobalPageTableMapRangeRotated {};
 	static void IGHardwareGlobalPageTableUnmapRange(void *that,
 	                                                const NGIGAddressRange &range);
 	mach_vm_address_t oIGHardwareGlobalPageTableUnmapRange {};
@@ -1343,17 +1033,6 @@ private:
 	// ── 3D Blit engine (GPU-accelerated blitting via 3D pipeline) ──
 	mach_vm_address_t oIGMappedBuffergetMemory {};
 
-	// V508: Base class IGHardwareContext::withOptions hook — logs ctx+0xb8 and dumps LRCA page1
-	// immediately after initWithOptions runs (wbinvd flushes LLC→DRAM for accurate aperture read).
-	// V509: Base class IGHardwareContext::initWithOptions hook — CPU-side LRCA page1 repair.
-	// restoreFromSafeImage returns true on RPL (skips g_cInitGfxRingContextRCS memcpy), leaving
-	// DW1 (MI_LRI header) as 0x00ffffff.  We write the minimal Gen12 ring context LRI block so
-	// hardware can restore ring state on ExecList context-restore.
-	// Pointers to extended context parameter tables (per-context-type)
-	mach_vm_address_t ExtendedCtxParams {};
-	mach_vm_address_t Blit2DExtendedCtxParams {};
-	mach_vm_address_t Blit3DExtendedCtxParams {};
-	
 	static void * getBlit2DContext(void *that,bool param_1);
 	mach_vm_address_t ogetBlit2DContext {};
 
@@ -1366,36 +1045,28 @@ private:
 	static void * getBlit3DContext(void *that,bool param_1);
 	mach_vm_address_t ogetBlit3DContext {};
 	
-	// IntelAccelerator personality registration in IOCatalogue. Lives in the HW-kext
-	// path (ICL or TGL Graphics, not Framebuffer) — must run before the FBController's
+	// IntelAccelerator personality registration in IOCatalogue. Lives in the TGL
+	// HW-kext path, not Framebuffer — must run before the FBController's
 	// registerService() so IOKit can match IntelAccelerator. Idempotent.
 	void injectAcceleratorPersonality();
 	bool acceleratorPersonalityInjected {false};
 	
 	static unsigned long stopGraphicsEngine(void *that);
-	mach_vm_address_t ostopGraphicsEngine {};
 
 	static unsigned long startGraphicsEngine(void *that);  // contain PF-owned ring lifecycle on a VF
-	mach_vm_address_t ostartGraphicsEngine {};
 
 	static void populateResetRegisterList(void *that);  // contain PF-owned reset-register state on a VF
-	mach_vm_address_t opopulateResetRegisterList {};
 
-	// V212: Hook isGpuIdle (watchdog query) — GPU watchdog calls this post-startup.
-	// If INSTDONE bit0 stuck (0xfffffffe), it returns false → watchdog declares hang →
-	// GPU reset → startGraphicsEngine retry loop. Fix: return true for RPL-P stuck pattern.
+	// A VF has no guest-owned INSTDONE state. Report idle only from the tracked
+	// direct-LRCA lifecycle; physical schedulers keep their native implementations.
 	static bool wrapIGScheduler5IsGpuIdle(const void *that);
-	mach_vm_address_t oIGScheduler5IsGpuIdle {};
 	static bool wrapIGScheduler4IsGpuIdle(const void *that);
-	mach_vm_address_t oIGScheduler4IsGpuIdle {};
 
 
 	static uint8_t barrierSubmission(void *queue, void *accelerator, void *cmdDesc,
 	                                void *event, uint16_t count, const uint16_t *list);
 	mach_vm_address_t obarrierSubmission {};
 	
-	mach_vm_address_t kIGHwCsDesc {};  // pointer to engine descriptor table
-
 public:
 
 	// Resolved from IOAcceleratorFamily2 by NGreen::processKext — needed by blit3d scratch init.
