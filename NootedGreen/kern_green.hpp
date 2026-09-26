@@ -251,6 +251,8 @@ class NGreen {
     bool isRealTGL = false;  // true if CPU is genuine TGL (model 0x8C/0x8D), false if spoofed (RPL/ADL)
 public:
     bool getIsRealTGL() const { return isRealTGL; }
+    // Captured from PCI configuration before installing our ID spoof hooks.
+    uint32_t getOriginalDeviceId() const { return deviceId; }
 private:
     bool dmcIsAdlp = false;    // true when ADL-P DMC blob was loaded in hwInitializeCState
     void adlpDcExit(const char *caller);

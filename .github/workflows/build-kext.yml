@@ -12,6 +12,7 @@ on:
       - "MacKernelSDK/**"
       - "tools/metal_smoke/**"
       - "tools/guc_ring_test.cpp"
+      - "tools/gpu_capabilities_test.cpp"
       - "tools/check-static.sh"
       - ".github/workflows/build-kext.yml"
 
@@ -30,6 +31,9 @@ jobs:
           xcrun clang++ -std=c++14 -O1 -g -fsanitize=address,undefined \
             tools/guc_ring_test.cpp -o "$RUNNER_TEMP/guc-ring-test"
           "$RUNNER_TEMP/guc-ring-test"
+          xcrun clang++ -std=c++14 -O1 -g -fsanitize=address,undefined \
+            tools/gpu_capabilities_test.cpp -o "$RUNNER_TEMP/gpu-capabilities-test"
+          "$RUNNER_TEMP/gpu-capabilities-test"
 
       - name: Build x86_64 release kext
         run: |

@@ -2,6 +2,7 @@
 //  details.
 #include "kern_gen11.hpp"
 #include "kern_guc_ring.hpp"
+#include "kern_gpu_capabilities.hpp"
 #include "AppleIntelParams.hpp"
 #include <Headers/kern_api.hpp>
 #include "kern_genx.hpp"
@@ -148,6 +149,16 @@ VfIdentity vfIdentifyDevice()
 	auto *cb = NGreen::callback;
 	if (!cb)
 		return VfIdentity::Invalid;
+	const auto capability = NGGpuCapabilities::sriov(cb->getOriginalDeviceId());
+	if (capability == NGGpuCapabilities::Sriov::Absent) {
+		gVfIdentity = VfIdentity::Physical;
+		return gVfIdentity;
+	}
+	if (capability == NGGpuCapabilities::Sriov::Unknown) {
+		// A not-yet-captured/unknown PCI ID is not evidence of a physical GPU.
+		// Do not cache this, allowing identification after PCI discovery.
+		return VfIdentity::Invalid;
+	}
 	cb->setRMMIOIfNecessary();
 	constexpr uint32_t vfCap = 0x1901f8;
 	if (!cb->getRMMIOAddress() || cb->getRMMIOLength() < vfCap + sizeof(uint32_t))

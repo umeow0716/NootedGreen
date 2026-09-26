@@ -48,7 +48,7 @@ Keep `macos-tahoe-sriov` shut off during this review.
 1. Complete the device-identity audit. VF_CAP identification is now independent
    of bootstrap; start, MMIO, interrupt and TLB routes fail closed rather than
    treating failed VF initialization as a PF. Remaining readiness/CPU-based
-   branches and platform capability gating still require review.
+   branches still require review. PCI capability gating was added below.
 2. Prove complete teardown ordering: prevent new senders, synchronize running
    interrupt handlers, stop engine and GuC memory-IRQ writes, then release
    mappings and backing. Retaining an OSObject alone is not proof that explicit
@@ -258,3 +258,28 @@ This is build evidence, not a successful acceleration baseline.
 
 The host-freeze cause remains unproven. VM boot, EFI installation, GPU work and
 Sunshine configuration have not been attempted during this static audit.
+
+## PCI capability gate and next transport finding
+
+`9c705c2` passed macOS CI run 36216348082, including native kext link after
+adding interrupt-context checks. No artifact from that revision was installed.
+
+`kern_gpu_capabilities.hpp` records exact PCI IDs and `has_sriov` membership
+from the local i915 tree's `include/drm/intel/pciids.h` and `i915_pci.c`.
+Identification reads VF_CAP only for a known capable platform; known non-SR-IOV
+platforms do not touch that Gen12 register; unknown/uninitialized IDs reject
+identification without a speculative MMIO read. Device ID is captured at
+`kern_green.cpp` PCI discovery before this project's configRead16/32 hooks.
+The test compared all 65,536 IDs against independently expanded primary-source
+macros (70 capable / 65 known non-capable). This does NOT establish acceleration
+support for all those GPUs, nor remove the remaining CPU-model topology hacks.
+
+Additional blocker found in `intel_guc_ct.c`: H2G availability is not sufficient
+flow control. `ct_send_nb` also reserves G2H credits for asynchronous lifecycle
+and TLB replies, leaving one quarter of G2H storage for unsolicited events.
+The bridge currently bounds each copy and the H2G queue, but does not reserve
+future G2H response space. This must be addressed before boot testing.
+Completion lengths and enable-before-disable token ordering were compared with
+`intel_guc_sched_done_process_msg` / `intel_guc_deregister_done_process_msg`:
+Linux likewise requires at least two/one payload dwords and consumes pending
+enable first; it does not interpret the second scheduling payload as status.

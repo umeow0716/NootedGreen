@@ -31,4 +31,11 @@ else
     failed=1
 fi
 git diff --check || failed=1
+if "$compiler" -std=c++14 -O1 -g -fsanitize=address,undefined \
+    tools/gpu_capabilities_test.cpp -o "$task_output/gpu-capabilities-test" && \
+    "$task_output/gpu-capabilities-test"; then
+    printf 'PASS offline GPU capability tests\n'
+else
+    failed=1
+fi
 exit "$failed"
