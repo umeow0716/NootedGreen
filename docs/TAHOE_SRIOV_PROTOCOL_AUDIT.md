@@ -1220,3 +1220,21 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   and allocator/factory lifetimes. If a future path publishes the legacy WQ to
   GuC, separate firmware deregistration and DMA-quiescence proof is mandatory.
   No dynamic hardware result is inferred; VM remains shut off.
+
+### Native Tiger Lake admission uses GPU/PF identity
+
+- `isRealTGL` selected more than one hundred native topology, display, task and
+  submission branches from guest CPUID model 0x8c/0x8d. A hypervisor CPU model
+  neither identifies the passed-through GPU nor distinguishes a PF from a VF;
+  CPU spoofing could therefore send a TGL VF through physical-only code or make
+  a physical TGL use later-generation compatibility repairs.
+- The compatibility field now becomes true only when the original PCI device
+  ID is in the explicit Tiger Lake table and the fail-closed VF capability
+  probe classifies it as a physical function. CPUID remains diagnostic only.
+  Non-TGL devices short-circuit before the BAR-backed identity probe.
+- Exhaustive tests cover both PF/VF arguments for every 16-bit PCI ID; native
+  admission is exactly `physicalFunction && isTigerLake(id)`. Full suite passes
+  `/tmp/ngreen-static.N78vyX`, including strict Gen11 warnings and sanitizers.
+- This fixes the global selector, not the semantics of every branch that reads
+  it. Those heterogeneous consumers remain in the all-source review ledger.
+  No driver was deployed and the VM remains shut off.

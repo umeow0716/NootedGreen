@@ -8,6 +8,7 @@
 #include "DYLDPatches.hpp"
 #include "kern_patcherplus.hpp"
 #include "kern_pci_identity.hpp"
+#include "kern_gpu_capabilities.hpp"
 #include <Headers/kern_api.hpp>
 #include <Headers/kern_devinfo.hpp>
 #include <i386/machine_routines.h>
@@ -236,10 +237,8 @@ void NGreen::processPatcher(KernelPatcher &patcher) {
         this->deviceId = WIOKit::readPCIConfigValue(this->iGPU, WIOKit::kIOPCIConfigDeviceID);
         this->pciRevision = WIOKit::readPCIConfigValue(NGreen::callback->iGPU, WIOKit::kIOPCIConfigRevisionID);
 
-        // V52: Detect real TGL vs spoofed RPL/ADL by CPU model
-        // TGL-U: model 0x8C, TGL-H: model 0x8D
-        // RPL-P: model 0xBA, RPL-S: model 0xBF, RPL-HX: model 0xB7
-        // ADL-P: model 0x9A, ADL-S: model 0x97
+        // CPUID is diagnostic only. A hypervisor may expose any CPU model; it
+        // cannot identify the passed-through GPU or distinguish its PF/VF role.
         {
             uint32_t eax = 0, ebx = 0, ecx = 0, edx = 0;
             asm volatile("cpuid" : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx) : "a"(1));
@@ -249,9 +248,12 @@ void NGreen::processPatcher(KernelPatcher &patcher) {
             uint32_t stepping = eax & 0xF;
             if (family == 0x6) model |= (extModel << 4);
             this->cpuModel = model;
-            this->isRealTGL = (model == 0x8C || model == 0x8D);
-            SYSLOG("ngreen", "V52: CPU family=0x%x model=0x%x stepping=%u isRealTGL=%d",
-                   family, model, stepping, this->isRealTGL);
+            const bool physicalTgl = NGGpuCapabilities::isTigerLake(this->deviceId) &&
+                ngPhysicalGpuAccessAllowed();
+            this->isRealTGL = NGGpuCapabilities::useNativeTigerLakePath(
+                this->deviceId, physicalTgl);
+            SYSLOG("ngreen", "V242: CPU family=0x%x model=0x%x stepping=%u GPU=%04x nativeTglPf=%d",
+                   family, model, stepping, this->deviceId, this->isRealTGL);
         }
 		
 		auto gms = WIOKit::readPCIConfigValue(devInfo->videoBuiltin, WIOKit::kIOPCIConfigGraphicsControl, 0, 16) >> 8;

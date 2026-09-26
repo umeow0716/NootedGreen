@@ -247,7 +247,7 @@ class NGreen {
     bool isJslDerivative = false;
     bool isGen9LPDerivative = false;
     bool isGen8LPDerivative = false;
-    bool isRealTGL = false;  // true if CPU is genuine TGL (model 0x8C/0x8D), false if spoofed (RPL/ADL)
+    bool isRealTGL = false;  // compatibility name: true only for a physical TGL GPU
 public:
     bool getIsRealTGL() const { return isRealTGL; }
     // Captured from PCI configuration before installing our ID spoof hooks.
@@ -256,7 +256,7 @@ private:
     bool dmcIsAdlp = false;    // true when ADL-P DMC blob was loaded in hwInitializeCState
     void adlpDcExit(const char *caller);
     uint32_t uefiCtl1 {0};    // UEFI-read PWR_WELL CTL1 value saved in hwInitializeCState
-    uint32_t cpuModel {0};  // full display model (family_model)
+    uint32_t cpuModel {0};  // diagnostic CPUID display model; never a GPU capability
     uint32_t deviceId {0};
     uint16_t revision {0};
     uint32_t pciRevision {0};

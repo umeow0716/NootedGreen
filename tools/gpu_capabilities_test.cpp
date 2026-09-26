@@ -18,6 +18,9 @@ int main() {
     assert(sriov(0xA7FF) == Sriov::Unknown); // no broad family-mask guesses
 
     assert(!isTigerLake(0x19A49U));
+    assert(useNativeTigerLakePath(0x9A49, true));
+    assert(!useNativeTigerLakePath(0x9A49, false));
+    assert(!useNativeTigerLakePath(0xA7A8, true));
     assert(!hasKnownDirectVfGgtt(0x1A7A8U));
     unsigned present = 0, absent = 0, tigerLake = 0, directGgtt = 0;
 #ifdef NGREEN_REFERENCE_PCIIDS
@@ -46,6 +49,8 @@ int main() {
         absent += actual == Sriov::Absent;
         tigerLake += isTigerLake(id);
         directGgtt += hasKnownDirectVfGgtt(id);
+        assert(useNativeTigerLakePath(id, false) == false);
+        assert(useNativeTigerLakePath(id, true) == isTigerLake(id));
 #ifdef NGREEN_REFERENCE_PCIIDS
         bool expectedDirect = false;
         for (auto known : directGgttIds) expectedDirect |= known == id;

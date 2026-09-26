@@ -40,6 +40,12 @@ inline bool isTigerLake(uint32_t device) {
     }
 }
 
+// Native TGL private paths require BOTH a TGL GPU identity and PF ownership.
+// Guest/host CPUID is deliberately irrelevant, and a TGL VF is not a PF.
+inline bool useNativeTigerLakePath(uint32_t device, bool physicalFunction) {
+    return physicalFunction && isTigerLake(device);
+}
+
 // Fixed media-12 platforms with native VF GGTT writes. Newer platforms must
 // negotiate/query per-GT IP before choosing their binder workaround; BAR size
 // is a mapping bound, not a hardware-generation discriminator.
