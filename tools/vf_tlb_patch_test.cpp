@@ -38,8 +38,8 @@ static void verify(const char *path)
 	using namespace NGVfTlbPatch;
 
 	// This is the complete 0xCEE8 inventory in both admitted accelerator
-	// payloads. Seven native bodies remain callable and are bounded-patched;
-	// five other bodies are isolated at their public entry routes.
+	// payloads. Five native bodies remain callable and are bounded-patched;
+	// seven other bodies are isolated at their public entry routes.
 	expect(offsets(image, writeImmediateFind), {
 		0x193e2, 0x1e483, 0x1e529, 0x1f43c, 0x1f5b9,
 		0x20b1c, 0x213de, 0x219cf, 0x21afe, 0x22230,

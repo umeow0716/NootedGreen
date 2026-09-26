@@ -290,6 +290,13 @@ mismatched retirement record quarantines the backing/bookkeeping for the rest
 of the boot instead of using an inconsistent LRCA key or permitting DMA to
 outlive released pages.
 
+On a VF, descriptor attach/detach no longer enters Tahoe's legacy proxy-slot
+and LRCA-hash implementation. Routed direct submit and idle queries do not
+consume that state, and the native hash insertion silently ignores allocation
+failure. The single direct context table is therefore the only descriptor
+lifecycle authority, avoiding duplicate IDs, hash nodes and physical-TLB patch
+sites.
+
 ### Required GPU driver bundles
 
 For GPU acceleration, the following userspace driver bundles must be installed in `/Library/Extensions/`:

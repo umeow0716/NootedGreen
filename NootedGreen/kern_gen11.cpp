@@ -2138,9 +2138,9 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				// V230: translate Tahoe's legacy process-wide proxy submission
 				// into the one-GuC-ID-per-LRCA lifecycle required by v70 and VFs.
 				{"__ZN13IGHardwareGuC29AttachContextDescToGucContextERK21SGfxContextDescriptor",
-				 vfAttachContextDesc, this->oVfAttachContextDesc},
+				 vfAttachContextDesc},
 				{"__ZN13IGHardwareGuC31DetachContextDescFromGucContextERK21SGfxContextDescriptor",
-				 vfDetachContextDesc, this->oVfDetachContextDesc},
+				 vfDetachContextDesc},
 				{"__ZN13IGHardwareGuC14submitWorkItemEjRK21SGfxContextDescriptor10IGHwCsTypejjj",
 				 vfSubmitWorkItem, this->oVfSubmitWorkItem},
 			};
@@ -2160,8 +2160,6 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			mach_vm_address_t ctbInit = 0, ctbInitEnd = 0;
 			mach_vm_address_t ctbFree = 0, ctbFreeEnd = 0;
 			mach_vm_address_t releaseUkContext = 0, releaseUkContextEnd = 0;
-			mach_vm_address_t attachContext = 0, attachContextEnd = 0;
-			mach_vm_address_t detachContext = 0, detachContextEnd = 0;
 			SolveRequestPlus tlbPatchBounds[] = {
 				{"__ZN22IGHardwareGuCWorkQueue19initWithAcceleratorEP22IOGraphicsAccelerator2jP37UK_GEN11_SCHED_PROCESS_DESCRIPTOR_REC",
 				 workQueueInit},
@@ -2176,14 +2174,6 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				{"__ZN21IGHardwareGuCCTBuffer15hostToGuCActionEPKjjiPjb", ctbFreeEnd},
 				{"__ZN13IGHardwareGuC16releaseUkContextEj", releaseUkContext},
 				{"__ZN13IGHardwareGuC13isContextIdleEj", releaseUkContextEnd},
-				{"__ZN13IGHardwareGuC29AttachContextDescToGucContextERK21SGfxContextDescriptor",
-				 attachContext},
-				{"__ZN13IGHardwareGuC31DetachContextDescFromGucContextERK21SGfxContextDescriptor",
-				 attachContextEnd},
-				{"__ZN13IGHardwareGuC31DetachContextDescFromGucContextERK21SGfxContextDescriptor",
-				 detachContext},
-				{"__ZN13IGHardwareGuC13inSubmitQueueE10IGHwCsTypePV36SCHED_CONTEXT_ENGINE_PRESENCE_STRUCT",
-				 detachContextEnd},
 			};
 			PANIC_COND(!SolveRequestPlus::solveAll(patcher, index, tlbPatchBounds,
 			                                      address, size) ||
@@ -2194,11 +2184,7 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			           ctbInitEnd <= ctbInit || ctbInitEnd - ctbInit > 0x200 ||
 			           ctbFreeEnd <= ctbFree || ctbFreeEnd - ctbFree > 0x100 ||
 			           releaseUkContextEnd <= releaseUkContext ||
-			           releaseUkContextEnd - releaseUkContext > 0x200 ||
-			           attachContextEnd <= attachContext ||
-			           attachContextEnd - attachContext > 0x400 ||
-			           detachContextEnd <= detachContext ||
-			           detachContextEnd - detachContext > 0x400,
+			           releaseUkContextEnd - releaseUkContext > 0x200,
 			           "ngreen", "Invalid VF physical-TLB patch bounds");
 			LookupPatchPlus const vfCtbTlbPollPatch {
 				activeKext, NGVfTlbPatch::ctbInitFind,
@@ -2211,7 +2197,7 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			SYSLOG("ngreen", "V237: removed physical TLB access from VF CTB initialization");
 
 			// Remove 0xCEE8 only from native bodies that are still executed. The
-			// five fully routed routines retain their untouched original bytes and
+			// seven fully routed routines retain their untouched original bytes and
 			// cannot be reached through their public entries on a VF.
 			LookupPatchPlus const immediateEcxPatches[] = {
 				{activeKext, NGVfTlbPatch::writeImmediateFind,
@@ -2225,12 +2211,6 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				{activeKext, NGVfTlbPatch::pollMemoryFind,
 				 NGVfTlbPatch::pollMemoryReplace, 1},
 			};
-			LookupPatchPlus const r8EcxPatches[] = {
-				{activeKext, NGVfTlbPatch::writeR8Find,
-				 NGVfTlbPatch::writeR8Replace, 1},
-				{activeKext, NGVfTlbPatch::pollEcxFind,
-				 NGVfTlbPatch::pollEcxReplace, 1},
-			};
 			PANIC_COND(
 				!LookupPatchPlus::applyAll(patcher, immediateEcxPatches,
 				 workQueueInit, workQueueInitEnd - workQueueInit) ||
@@ -2239,11 +2219,7 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				!LookupPatchPlus::applyAll(patcher, immediateMemoryPatches,
 				 ctbFree, ctbFreeEnd - ctbFree) ||
 				!LookupPatchPlus::applyAll(patcher, immediateEcxPatches,
-				 releaseUkContext, releaseUkContextEnd - releaseUkContext) ||
-				!LookupPatchPlus::applyAll(patcher, r8EcxPatches,
-				 attachContext, attachContextEnd - attachContext) ||
-				!LookupPatchPlus::applyAll(patcher, immediateEcxPatches,
-				 detachContext, detachContextEnd - detachContext),
+				 releaseUkContext, releaseUkContextEnd - releaseUkContext),
 				"ngreen", "V237: failed to isolate a live VF physical-TLB caller");
 			SYSLOG("ngreen", "V237: isolated all live native 0xCEE8 callers");
 
@@ -3791,9 +3767,10 @@ bool Gen11::vfAttachContextDesc(void *that, const uint32_t *descriptor) {
 	    !callback->vfSharedMappedBufferGetVirtualAddress)
 		return false;
 
-	// Native attach touches the legacy pool, LRCA record and descriptor before
-	// it returns. Validate every interval it will index before giving it control;
-	// post-call rejection would be too late to prevent an invalid kernel access.
+	// The VF route owns the complete direct-LRCA lifecycle. Tahoe's native attach
+	// allocates a legacy proxy slot and then inserts an LRCA hash node, but its
+	// void hash add silently ignores allocation failure. None of that storage is
+	// consumed by the routed submit/idle/detach paths, so do not enter it.
 	const auto descriptorValue = NGContextDescriptor::read(descriptor);
 	const uint32_t descriptorLo = descriptorValue.low;
 	const uint32_t descriptorHi = descriptorValue.high;
@@ -3807,30 +3784,19 @@ bool Gen11::vfAttachContextDesc(void *that, const uint32_t *descriptor) {
 		getMember<void *>(hardwareContext, kVfContextImageBufferOffset));
 	const uint64_t contextBytes = contextBacking ?
 		getMember<uint64_t>(contextBacking, kVfMappedBufferLengthOffset) : 0;
-	uint32_t poolUsed = 0, poolCount = 0;
-	const bool poolValid = vfLegacyProxyPoolValid(
-		that, callback->vfSharedMappedBufferGetVirtualAddress, &poolUsed, &poolCount);
-	if (!descriptorAttributes.valid || !poolValid || !contextBacking ||
+	if (!descriptorAttributes.valid || !contextBacking ||
 	    !NGGgtt::contains(gVfGGTTBase, gVfGGTTSize, lrcaPage, contextBytes) ||
 	    lrcaPage >= kGucGgttTop || contextBytes > kGucGgttTop - lrcaPage ||
 	    contextBytes < kVfContextMinimumImageBytes) {
-		SYSLOG("ngreen", "V241: rejected pre-native LRCA %08x:%08x bytes=0x%llx pool=%u/%u",
+		SYSLOG("ngreen", "V241: rejected direct LRCA %08x:%08x bytes=0x%llx",
 		       descriptorHi, descriptorLo,
-		       static_cast<unsigned long long>(contextBytes), poolUsed, poolCount);
-		vfMarkProtocolFault("invalid VF context descriptor or native proxy pool before attach");
+		       static_cast<unsigned long long>(contextBytes));
+		vfMarkProtocolFault("invalid VF direct context descriptor before attach");
 		return false;
 	}
 
-	const bool attached = FunctionCast(vfAttachContextDesc,
-	                                   callback->oVfAttachContextDesc)(that,
-	                                                                    descriptor);
-	if (!attached)
+	if (!vfInitContextBridge())
 		return false;
-	if (!vfInitContextBridge()) {
-		FunctionCast(vfDetachContextDesc,
-		             callback->oVfDetachContextDesc)(that, descriptor);
-		return false;
-	}
 
 	int32_t slot = -1;
 	IOInterruptState interruptState;
@@ -3852,8 +3818,6 @@ bool Gen11::vfAttachContextDesc(void *that, const uint32_t *descriptor) {
 				        entry.engineInstance, entry.contextBacking)) {
 					IOSimpleLockUnlockEnableInterrupt(gVfContextLock, interruptState);
 					vfMarkProtocolFault("context reference overflow or LRCA identity mismatch");
-					FunctionCast(vfDetachContextDesc, callback->oVfDetachContextDesc)(
-						that, descriptor);
 					return false;
 				}
 				entry.refCount++;
@@ -3891,16 +3855,12 @@ bool Gen11::vfAttachContextDesc(void *that, const uint32_t *descriptor) {
 			       lrcaPage, static_cast<unsigned int>(slot),
 			       static_cast<unsigned int>(previousState));
 			vfMarkProtocolFault("GuC context-ID reuse timeout");
-			FunctionCast(vfDetachContextDesc,
-			             callback->oVfDetachContextDesc)(that, descriptor);
 			return false;
 		}
 	}
 	if (slot < 0) {
 		SYSLOG("ngreen", "V230: exhausted %u direct GuC context IDs",
 		       gVfContextCapacity);
-		FunctionCast(vfDetachContextDesc,
-		             callback->oVfDetachContextDesc)(that, descriptor);
 		return false;
 	}
 
@@ -3951,8 +3911,6 @@ bool Gen11::vfAttachContextDesc(void *that, const uint32_t *descriptor) {
 		if (gVfContexts[gucId].state == kVfGucContextTombstone)
 			gVfContexts[gucId].refCount = 0;
 		IOSimpleLockUnlockEnableInterrupt(gVfContextLock, interruptState);
-		FunctionCast(vfDetachContextDesc,
-		             callback->oVfDetachContextDesc)(that, descriptor);
 		vfReleaseRetiredContextBacking(gucId);
 		return false;
 	}
@@ -3973,12 +3931,6 @@ void Gen11::vfDetachContextDesc(void *that, const uint32_t *descriptor) {
 	}
 	PANIC_COND(postShutdown && !vfWaitForContextShutdown(that), "ngreen",
 		"VF context detach raced an incomplete device shutdown");
-	// Native detach indexes its private pool before its releaseContextId call.
-	// A void teardown cannot safely skip that bookkeeping and let DMA backing
-	// disappear, so fail-stop instead of returning on a corrupted pool snapshot.
-	PANIC_COND(!vfLegacyProxyPoolValid(
-		that, callback->vfSharedMappedBufferGetVirtualAddress), "ngreen",
-		"Cannot safely retire VF context through invalid native proxy pool");
 
 	const auto descriptorValue = NGContextDescriptor::read(descriptor);
 	const auto descriptorAttributes = NGContextDescriptor::inspect(descriptorValue);
@@ -4001,9 +3953,9 @@ void Gen11::vfDetachContextDesc(void *that, const uint32_t *descriptor) {
 	}
 	if (postShutdown) {
 		// Firmware ownership was retired by the shutdown sweep before CTB was
-		// sealed. Late Apple object destruction therefore performs only native
-		// proxy bookkeeping and releases our pin on the final native reference;
-		// it must never attempt another H2G request through a stopped transport.
+		// sealed. Late Apple object destruction only releases our direct record's
+		// final reference; it must never attempt another H2G request through a
+		// stopped transport or enter Tahoe's unused legacy proxy/hash path.
 		int32_t shutdownSlot = -1;
 		bool finalReference = false;
 		bool invalidShutdownRecord = false;
@@ -4026,8 +3978,6 @@ void Gen11::vfDetachContextDesc(void *that, const uint32_t *descriptor) {
 		IOSimpleLockUnlockEnableInterrupt(gVfContextLock, shutdownState);
 		PANIC_COND(shutdownSlot < 0 || invalidShutdownRecord, "ngreen",
 			"Late VF detach has no safely quiesced context record");
-		FunctionCast(vfDetachContextDesc,
-		             callback->oVfDetachContextDesc)(that, descriptor);
 		if (finalReference)
 			vfReleaseRetiredContextBacking(
 				static_cast<uint16_t>(shutdownSlot));
@@ -4054,8 +4004,8 @@ void Gen11::vfDetachContextDesc(void *that, const uint32_t *descriptor) {
 			entry.engineInstance, entry.contextBacking);
 		if (identityMismatch) {
 			// Leave the known GuC record and its retained backing untouched. The
-			// supplied page may belong to another object, so native LRCA-keyed
-			// bookkeeping must also remain quarantined rather than remove that entry.
+			// supplied page may belong to another object, so it cannot identify the
+			// direct record that is safe to retire.
 		} else if (!entry.refCount) {
 			IOSimpleLockUnlockEnableInterrupt(gVfContextLock, interruptState);
 			vfMarkProtocolFault("duplicate final context detach");
@@ -4064,8 +4014,6 @@ void Gen11::vfDetachContextDesc(void *that, const uint32_t *descriptor) {
 			entry.refCount--;
 			IOSimpleLockUnlockEnableInterrupt(gVfContextLock, interruptState);
 			queue.unlock();
-			FunctionCast(vfDetachContextDesc,
-			             callback->oVfDetachContextDesc)(that, descriptor);
 			return;
 		}
 		if (!identityMismatch) {
@@ -4092,15 +4040,13 @@ void Gen11::vfDetachContextDesc(void *that, const uint32_t *descriptor) {
 	}
 
 	if (slot < 0) {
-		// Native detach only probes its LRCA-keyed proxy hash and returns when
-		// absent; it cannot prove that the direct GuC registration disappeared.
-		// Pin this backing for the rest of the boot before caller destruction.
+		// No fallback bookkeeping can prove that an untracked direct GuC
+		// registration disappeared. Pin this backing for the rest of the boot
+		// before caller destruction.
 		contextBacking->retain();
 		SYSLOG("ngreen", "V237: quarantined untracked detach LRCA=%08x:%08x backing=%p",
 		       descriptorHi, descriptorLo, contextBacking);
 		vfMarkProtocolFault("VF detach has no direct GuC context record");
-		// Do not call the LRCA-keyed native detach: an inconsistent key could
-		// remove another object's proxy record. Both layers remain quarantined.
 		return;
 	}
 
@@ -4181,12 +4127,9 @@ void Gen11::vfDetachContextDesc(void *that, const uint32_t *descriptor) {
 		       gucId, lrcaPage);
 	}
 	// The retained IGMappedBuffer reference above is the safety boundary: if
-	// GuC teardown timed out, Apple's bookkeeping may be detached but the LRCA
-	// pages and GGTT mapping remain pinned and this GuC ID is quarantined.
-	FunctionCast(vfDetachContextDesc,
-	             callback->oVfDetachContextDesc)(that, descriptor);
-	// Keep the tombstone's LRCA/backing visible to attach waiters until the
-	// native proxy bookkeeping is retired, not merely until firmware replies.
+	// GuC teardown timed out, the LRCA pages and GGTT mapping remain pinned and
+	// this GuC ID is quarantined. A completed deregistration is sufficient to
+	// retire the direct record because no VF legacy proxy/hash entry exists.
 	if (deregistered)
 		vfReleaseRetiredContextBacking(gucId);
 }

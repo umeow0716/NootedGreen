@@ -965,9 +965,7 @@ private:
 	                                          unsigned int type, unsigned int flags);
 	mach_vm_address_t oVfCtbMappedBufferWithOptions {};
 	static bool vfAttachContextDesc(void *that, const uint32_t *descriptor);
-	mach_vm_address_t oVfAttachContextDesc {};
 	static void vfDetachContextDesc(void *that, const uint32_t *descriptor);
-	mach_vm_address_t oVfDetachContextDesc {};
 	static bool vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 	                             const uint32_t *descriptor, IGHwCsType hwCsType,
 	                             unsigned int channelId, unsigned int ringSequence,

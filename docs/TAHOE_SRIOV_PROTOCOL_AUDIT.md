@@ -2299,3 +2299,32 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   The complete syntax/analyzer/strict-ABI/sanitizer/pinned-payload suite passes
   in `/tmp/ngreen-static.MKF0tK`; the VM remained shut off. This proves host
   transition logic, not firmware ordering or execution.
+
+### Remove the redundant VF descriptor proxy and LRCA hash
+
+- Re-disassembled Tahoe's descriptor attach at `0x21e12`, hash add at
+  `0x2200a`, original submit at `0x21baa`, detach at `0x22102`, and KMD-idle
+  query at `0x223cc`, then enumerated every call to the hash lookup routines.
+  Descriptor attach allocates a legacy proxy ID and engine slot, calls a
+  void-returning hash add, ignores both its earlier `contains` result and the
+  add allocation result, then always returns true. A 24-byte node allocation
+  failure therefore leaves mutated proxy storage with no detachable LRCA key.
+- The only LRCA-hash consumers are native attach, original legacy submit,
+  native detach and the native KMD-idle query. Their VF entries are all fully
+  routed: direct submit uses its retained context table, direct idle uses the
+  same lifecycle snapshot, and direct detach owns firmware retirement. No
+  routed VF path consumes the proxy descriptor or hash value.
+- VF descriptor attach/detach now bypass those native bodies entirely. The
+  direct table is allocated and registered transactionally, duplicate attach
+  changes only its checked reference count, and final detach releases the pin
+  only after exact GuC deregistration. Original-function slots, proxy-pool
+  validation at descriptor attach/detach, and their two bounded `0xCEE8`
+  instruction patches were removed. The separate scheduler process context
+  remains bounded by its existing transactional allocator and is not confused
+  with a direct LRCA descriptor.
+- The on-disk TLB inventory still pins every physical-register instruction in
+  both admitted payloads; its reachability model now records five callable,
+  bounded-patched bodies and seven entry-isolated bodies. The complete local
+  suite passes in `/tmp/ngreen-static.eQEAkK`; the VM remained shut off. This
+  establishes static reachability and host ownership, not runtime firmware
+  registration success.
