@@ -409,3 +409,28 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   native unmap and only logs a PF relay failure. Because the API returns void,
   merely faulting later cannot prove the caller retains the underlying pages.
   This is an unresolved DMA-lifetime blocker, not evidence of safe teardown.
+
+### Direct GGTT initializer aperture overflow (static binary evidence)
+
+- Payload inspected: v213 AppleIntelTGLGraphics, SHA256
+  `1b2f5aa3131f9b909fe984877e41d5ebcdb2837572b45e1e901a72a6271515a2`.
+- initWithOptions at 0x101b4 stores the BAR base/PTE pointer/dummy page, but
+  does not store its range argument. The first PTE loop uses start through
+  start+length-1 (0x10227..0x1029a). Unless length is exactly 4 GiB, the second
+  loop writes dummy PTEs from start+length through start+4 GiB, exclusive
+  (0x102c0..0x1030f). A nonzero VF base therefore makes this second loop reach
+  beyond the full 8 MiB PTE aperture. A zero length is not a safe suppression.
+- Applied the existing relay-path no-loop arguments to direct VFs too:
+  `{UINT64_MAX, 4 GiB}`. Unsigned wrap skips the first loop; the exact length
+  skips the second. This is specific to the inspected native implementation.
+  The real allocator interval is unchanged and PF initialization is unchanged.
+- i915 intel_ggtt.c gen12vf_ggtt_probe installs nop_clear_range for BOTH
+  direct and relay VF transports. This supports avoiding physical-style
+  initialization, but does not prove all later native PTE flags are suitable.
+- New ASan/UBSan offline arithmetic model checks 3,839 nonzero base examples
+  and suppressed-loop bounds; added to local checks and CI. Full local suites
+  pass in /tmp/ngreen-static.iN8AqF. The model is not execution of the binary.
+- This is a definite unsafe argument/loop combination, not proof that the
+  prior host freeze executed these exact bounds. Direct map/unmap bounds,
+  native TLB invalidation, and DMA ownership are still boot blockers.
+- Display merge checkpoint 77e218e CI run 36217922452 succeeded.

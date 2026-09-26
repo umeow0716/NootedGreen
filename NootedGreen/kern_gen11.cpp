@@ -3226,6 +3226,12 @@ bool Gen11::IGHardwareGlobalPageTableInitWithOptions(void *that,
 	if (!vfBootstrapBinder())
 		return false;
 
+	// Native init's second loop clears from range.end to range.start + 4 GiB,
+	// not to 4 GiB. A nonzero VF base would index beyond the 8 MiB PTE window.
+	// Suppress both native loops for every VF transport (i915 nop_clear_range).
+	// In this inspected payload the first loop is skipped by unsigned wrap,
+	// and length == 4 GiB skips the second. No fabricated range is published.
+	const NGIGAddressRange noDirectClear {UINT64_MAX, 0x100000000ULL};
 	if (gVfDirectGGTT) {
 		auto *cb = NGreen::callback;
 		cb->setRMMIOIfNecessary();
@@ -3242,7 +3248,7 @@ bool Gen11::IGHardwareGlobalPageTableInitWithOptions(void *that,
 		const bool result = FunctionCast(IGHardwareGlobalPageTableInitWithOptions,
 		                                 callback->oIGHardwareGlobalPageTableInitWithOptions)(that,
 		                                                                                      accelerator,
-		                                                                                      range,
+		                                                                                      noDirectClear,
 		                                                                                      fullBar0,
 		                                                                                      dummyPage,
 		                                                                                      options);
@@ -3257,7 +3263,6 @@ bool Gen11::IGHardwareGlobalPageTableInitWithOptions(void *that,
 	// Preserve Apple's base-class/object setup while making both of its direct
 	// PTE-clearing loops empty.  Linux intentionally installs nop_clear_range
 	// for this VF: the PF owns clearing and the upper BAR0 PTE window is absent.
-	const NGIGAddressRange noDirectClear {UINT64_MAX, 0x100000000ULL};
 	const bool result = FunctionCast(IGHardwareGlobalPageTableInitWithOptions,
 	                                 callback->oIGHardwareGlobalPageTableInitWithOptions)(that,
 	                                                                                      accelerator,
