@@ -455,3 +455,28 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   0x1066d/0x10672), unlike i915 gen8_set_pte writeq. A bound check alone does
   not prove safety while a GPU can observe an existing valid PTE.
 - Initializer checkpoint 55b092c CI run 36218034448 succeeded. No deployment.
+
+### DYLD/header and HDMI reachability review
+
+- Read DYLDPatches.cpp/.hpp and HDMI.cpp/.hpp completely. Removed 217 lines
+  of unused AMD VA/VCN pattern tables from DYLDPatches.hpp after repository
+  reference searches found no users; recoverable from Git history.
+- Restricted the Sonoma-derived CoreDisplay patch block to Sonoma rather
+  than every OS >= Ventura. Tahoe must not accidentally receive legacy
+  AccessComplete stubs/completion jumps on a coincidental signature match.
+  Exact build/UUID validation is still missing inside the Sonoma branch.
+- Remaining DYLD issues: non-shared-cache CoreLSKD path filter uses OR of
+  two nonmatches, making that branch unreachable; do not silently enable an
+  unverified patch by changing it to AND. Shared-cache ICL Metal ID bypass
+  still has broad page scope, CPU-based full-Metal mode remains unreliable,
+  and one-shot logging flags are unsynchronized. No actual Metal completion
+  or hardware video encoding has been demonstrated by these patches.
+- HDMI::processKext immediately returns false; registrations and call sites
+  in kern_green.cpp are commented out. Its AMD-derived HDA patch body is
+  unreachable and does not supply guest audio. No HDMI behavior changed.
+- Generation transport investigation: i915 intel_gtt.c selects binder on
+  media IP 13.0, not BAR length. intel_device_info.c forbids direct GMD_ID
+  reads by a VF; intel_iov_query.c uses per-GT KLV 0x3000 with VF ABI >=1.2.
+  The current BAR-only transport selection lacks this discovery and remains
+  a blocker for claiming MTL/ARL or general Gen11+ support.
+- Map-admission checkpoint f43f222 CI run 36218171344 succeeded.

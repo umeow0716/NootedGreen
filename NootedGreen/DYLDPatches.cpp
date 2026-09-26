@@ -291,7 +291,11 @@ void DYLDPatches::wrapCsValidatePage(vnode *vp, memory_object_t pager, memory_ob
 		0x90,0x90,0x90,0x90,0x90,0x90,0x90,0x90,0x90,0x90,0x90
 	};
 
-	if (getKernelVersion() >= KernelVersion::Ventura) {
+	// These signatures and completion-path jumps were derived from Sonoma
+	// 14.7.1, not Ventura or Tahoe. Never apply them to a different OS family
+	// just because a page happens to contain the same byte sequence. Exact
+	// shared-cache build/UUID validation is still required within Sonoma.
+	if (getKernelVersion() == KernelVersion::Sonoma) {
 		const bool isRealTGL = NGreen::callback && NGreen::callback->isRealTGL;
 		const bool forceFullMTL = shouldForceFullMetalPath();
 		//const bool applyCoreDisplaySafety = isRealTGL || forceFullMTL || !isRealTGL;
