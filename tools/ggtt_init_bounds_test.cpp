@@ -50,6 +50,34 @@ int main() {
         ++rangeCases;
     }
     std::printf("PASS: %u GGTT range cases against 128-bit arithmetic oracle\n", rangeCases);
+
+    unsigned segmentCases = 0;
+    for (auto base : values) for (auto size : values) {
+        using Wide = unsigned __int128;
+        const bool assigned = ((base | size) & 0xFFF) == 0 && size > 0 &&
+            base < (Wide(1) << 32) && Wide(base) + size <= (Wide(1) << 32);
+        const Wide end = Wide(base) + size;
+        const Wide lower = base > UINT64_C(0x40000000) ?
+                           base : UINT64_C(0x40000000);
+        const Wide upper = end < UINT64_C(0xFE000000) ?
+                           end : UINT64_C(0xFE000000);
+        const bool expectedValid = assigned && upper > lower;
+        const auto plan = NGGgtt::vfSegmentPlan(base, size);
+        assert(plan.valid == expectedValid);
+        if (expectedValid) {
+            assert(plan.globalStart == base);
+            assert(plan.globalLength == size);
+            assert(plan.unified32Start == lower);
+            assert(plan.unified32Length == upper - lower);
+            assert(NGGgtt::contains(base, size, plan.unified32Start,
+                                    plan.unified32Length));
+        } else {
+            assert(plan.globalStart == 0 && plan.globalLength == 0);
+            assert(plan.unified32Start == 0 && plan.unified32Length == 0);
+        }
+        ++segmentCases;
+    }
+    std::printf("PASS: %u VF segment-plan cases against 128-bit oracle\n", segmentCases);
     const uint64_t dmaValues[] = {0, 1, 0xFFF, 0x1000, 0x2000,
         (UINT64_C(1) << 39) - 0x1000, (UINT64_C(1) << 39) - 1,
         UINT64_C(1) << 39, (UINT64_C(1) << 39) + 0x1000,

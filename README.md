@@ -36,9 +36,10 @@ The Tahoe `25G229` VF bootstrap fixes on this branch are deliberately narrow:
 - V213 converts the VF's missing stolen-memory GGTT range into the 4 GiB
   aperture represented by its 8 MiB GGTT BAR0 window. It does not falsify the
   memory manager's stolen-memory range.
-- V214 treats a task as the bootstrap kernel task only while
-  `IntelAccelerator+0x150` is unassigned, avoiding the null kernel-task clone
-  path in `newPageTableForTask`.
+- V214 treats a task as the bootstrap kernel task only for a VF proven by
+  VF_CAP and only while `IntelAccelerator+0x150` is unassigned, avoiding the
+  null kernel-task clone path in `newPageTableForTask`. A later-generation PF
+  always keeps Apple's native classification.
 - V216 resets a stale `IGAccelTask::fTaskCounter` immediately before that
   unassigned bootstrap allocation. This keeps address mode, PPGTT, managed
   page tables, and stamp/scratch setup on one consistent kernel-task path.

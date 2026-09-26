@@ -1739,3 +1739,37 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   syntax/analyzer/strict-ABI/sanitizer gate passes in
   `/tmp/ngreen-static.T5Wvol`. This proves CPU arithmetic and the bounded-wait
   decision only, not GuC forward progress.
+
+### VF-only bootstrap task classification
+
+- Re-review found that the V214 `isKernelGPUTask` wrapper used `isRealTGL` as
+  its exclusion test. That flag distinguishes native Tiger Lake from a newer
+  compatibility device; it does not distinguish an SR-IOV VF from its PF.
+  Consequently a later-generation physical GPU with an unassigned
+  `IntelAccelerator+0x150` could be given the VF-only synthetic kernel-task
+  classification.
+- The override now requires a VF identity proven from VF_CAP. Native Apple
+  classification is authoritative for physical and invalid/unknown devices.
+  A 32-state pure model confirms there is exactly one non-native admission:
+  a present task and accelerator on a verified VF before its kernel task is
+  assigned. This is a static identity boundary, not runtime task validation.
+
+### VF memory-manager segment construction
+
+- The pinned `IGMemoryManager::initSegments` body was re-disassembled. It only
+  writes four `IGAddressRange` pairs at `+0xa0..+0xd8`, but derives the first
+  two from physical stolen memory and BAR2. More importantly, its caller
+  `IGMemoryManager::init` does not test the returned boolean before continuing
+  into dummy-page and global-GTT initialization.
+- The VF wrapper no longer executes those physical reads and then overwrites
+  their result. It constructs global and allocator ranges solely from the
+  PF-provisioned, page-aligned, below-4-GiB GGTT assignment; the 32-bit unified
+  allocator is the intersection with Apple's `[1 GiB, 0xfe000000)` policy.
+  The native 48-bit canonical PPGTT range remains unchanged because that is
+  virtual address space, not the VF GGTT aperture. PF executes the original.
+- An unusable VF segment plan is zeroed and records a protocol fault. This is
+  required because a plain false return is ignored; the fault makes the later
+  routed global-page-table initializer fail and causes native memory-manager
+  unwind. A sampled 169-case model compares the plan to 128-bit arithmetic.
+  The complete syntax, analyzer, strict-ABI and sanitizer suite passes in
+  `/tmp/ngreen-static.kKR87B`; no VM or hardware action was taken.

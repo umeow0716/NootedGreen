@@ -3126,50 +3126,47 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 bool Gen11::IGMemoryManagerInitSegments(void *that)
 {
 	const auto identity = vfIdentifyDevice();
-	if (identity == VfIdentity::Invalid ||
-	    (identity == VfIdentity::Virtual && !vfBootstrapBinder()))
+	if (identity == VfIdentity::Physical)
+		return FunctionCast(IGMemoryManagerInitSegments,
+		                    callback->oIGMemoryManagerInitSegments)(that);
+	if (identity != VfIdentity::Virtual || !that || !vfBootstrapBinder())
 		return false;
-	const bool original = FunctionCast(IGMemoryManagerInitSegments,
-	                                   callback->oIGMemoryManagerInitSegments)(that);
-	if (!original || identity == VfIdentity::Physical)
-		return original;
-	if (!vfBootstrapBinder()) {
-		SYSLOG("ngreen", "V219: aborting VF memory-manager init without GGTT transport");
-		return false;
-	}
 
-	// Tahoe TGL initSegments derives the first two 32-bit ranges from stolen
-	// memory and BAR2.  A VF has neither.  Linux solves the same mismatch by
-	// ballooning everything outside the PF-assigned interval; express that
-	// interval directly in Apple's range fields.
-	getMember<uint64_t>(that, 0xA0) = gVfGGTTBase;
-	getMember<uint64_t>(that, 0xA8) = gVfGGTTSize;
-	getMember<uint64_t>(that, 0xB0) = gVfGGTTBase;
-	getMember<uint64_t>(that, 0xB8) = gVfGGTTSize;
-
-	// Keep the driver's traditional 1 GiB lower guard for its unified 32-bit
-	// allocator, but intersect the upper end with the VF allocation.
-	const uint64_t vfEnd = gVfGGTTBase + gVfGGTTSize;
-	const uint64_t unifiedStart = gVfGGTTBase > 0x40000000ULL ?
-	                              gVfGGTTBase : 0x40000000ULL;
-	const uint64_t unifiedEnd = vfEnd < 0xFE000000ULL ? vfEnd : 0xFE000000ULL;
-	if (unifiedEnd > unifiedStart) {
-		getMember<uint64_t>(that, 0xC0) = unifiedStart;
-		getMember<uint64_t>(that, 0xC8) = unifiedEnd - unifiedStart;
-	} else {
-		// Leaving Apple's old range here would expose addresses outside the
-		// PF-provisioned VF interval. This allocator requires a usable range.
+	// The pinned native body only writes four IGAddressRange fields, but obtains
+	// the first two from physical stolen memory and BAR2. A VF owns neither.
+	// IGMemoryManager::init also ignores this method's return value, so an
+	// unusable plan must fault the protocol and force the later global-page-table
+	// initializer to fail instead of merely returning false here.
+	const auto plan = NGGgtt::vfSegmentPlan(gVfGGTTBase, gVfGGTTSize);
+	if (!plan.valid) {
+		getMember<uint64_t>(that, 0xA0) = 0;
+		getMember<uint64_t>(that, 0xA8) = 0;
+		getMember<uint64_t>(that, 0xB0) = 0;
+		getMember<uint64_t>(that, 0xB8) = 0;
 		getMember<uint64_t>(that, 0xC0) = 0;
 		getMember<uint64_t>(that, 0xC8) = 0;
-		SYSLOG("ngreen", "V239: VF assignment cannot satisfy unified GGTT allocator");
+		getMember<uint64_t>(that, 0xD0) = 0;
+		getMember<uint64_t>(that, 0xD8) = 0;
+		vfMarkProtocolFault("VF assignment cannot satisfy memory-manager segments");
 		return false;
 	}
 
+	getMember<uint64_t>(that, 0xA0) = plan.globalStart;
+	getMember<uint64_t>(that, 0xA8) = plan.globalLength;
+	getMember<uint64_t>(that, 0xB0) = plan.globalStart;
+	getMember<uint64_t>(that, 0xB8) = plan.globalLength;
+	getMember<uint64_t>(that, 0xC0) = plan.unified32Start;
+	getMember<uint64_t>(that, 0xC8) = plan.unified32Length;
+	// This is the native 48-bit canonical PPGTT range. It is virtual address
+	// space and must not be clipped to the VF's GGTT aperture.
+	getMember<uint64_t>(that, 0xD0) = 0x40000000ULL;
+	getMember<uint64_t>(that, 0xD8) = 0xFFFFFFFFC0000000ULL;
+
 	SYSLOG("ngreen", "V217: patched IGMemoryManager GGTT ranges global=[0x%llx,+0x%llx] unified=[0x%llx,+0x%llx]",
-	       static_cast<unsigned long long>(gVfGGTTBase),
-	       static_cast<unsigned long long>(gVfGGTTSize),
-	       static_cast<unsigned long long>(getMember<uint64_t>(that, 0xC0)),
-	       static_cast<unsigned long long>(getMember<uint64_t>(that, 0xC8)));
+	       static_cast<unsigned long long>(plan.globalStart),
+	       static_cast<unsigned long long>(plan.globalLength),
+	       static_cast<unsigned long long>(plan.unified32Start),
+	       static_cast<unsigned long long>(plan.unified32Length));
 	return true;
 }
 
@@ -3521,7 +3518,8 @@ bool Gen11::IGAccelTaskIsKernelGPUTask(const void *that)
 {
 	const bool original = FunctionCast(IGAccelTaskIsKernelGPUTask,
 	                                   callback->oIGAccelTaskIsKernelGPUTask)(that);
-	if (original || NGreen::callback->isRealTGL || that == nullptr)
+	const bool virtualDevice = vfIdentifyDevice() == VfIdentity::Virtual;
+	if (original || !virtualDevice || that == nullptr)
 		return original;
 
 	void *task = const_cast<void *>(that);
@@ -3530,7 +3528,8 @@ bool Gen11::IGAccelTaskIsKernelGPUTask(const void *that)
 		return original;
 
 	void *kernelTask = getMember<void *>(accelerator, 0x150);
-	if (kernelTask == nullptr) {
+	if (NGVfSubmission::bootstrapKernelTask(original, virtualDevice, true, true,
+	                                       kernelTask != nullptr)) {
 		SYSLOG("ngreen", "V214: bootstrapping first VF task from Global GTT");
 		return true;
 	}

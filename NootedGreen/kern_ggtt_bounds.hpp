@@ -9,6 +9,14 @@ enum class TlbInvalidation : uint8_t {
     Unsafe,
 };
 
+struct VfSegmentPlan {
+    uint64_t globalStart;
+    uint64_t globalLength;
+    uint64_t unified32Start;
+    uint64_t unified32Length;
+    bool valid;
+};
+
 // Before the VF command transport has ever run, no GPU request can retain a
 // translation and initialization rollback needs no TLB rendezvous. Once the
 // transport has run, every unmap must complete a heavy GuC invalidation while
@@ -45,6 +53,29 @@ inline bool contains(uint64_t base, uint64_t size, uint64_t start, uint64_t leng
         length > size)
         return false;
     return start - base <= size - length;
+}
+
+// Tahoe's native initSegments reads physical stolen/BAR2 state, which a VF
+// does not own. Build the three VF-visible ranges only from the PF-provisioned
+// GGTT assignment. The 48-bit canonical PPGTT range is independent and stays
+// at Apple's fixed [1 GiB, wrap-to-zero) representation.
+inline VfSegmentPlan vfSegmentPlan(uint64_t base, uint64_t size) {
+    VfSegmentPlan plan {0, 0, 0, 0, false};
+    if (!contains(base, size, base, size))
+        return plan;
+    const uint64_t end = base + size;
+    const uint64_t unifiedStart = base > UINT64_C(0x40000000) ?
+                                  base : UINT64_C(0x40000000);
+    const uint64_t unifiedEnd = end < UINT64_C(0xFE000000) ?
+                                end : UINT64_C(0xFE000000);
+    if (unifiedEnd <= unifiedStart)
+        return plan;
+    plan.globalStart = base;
+    plan.globalLength = size;
+    plan.unified32Start = unifiedStart;
+    plan.unified32Length = unifiedEnd - unifiedStart;
+    plan.valid = true;
+    return plan;
 }
 
 // Validate BOTH address spaces before touching an unpublished mapped buffer.
