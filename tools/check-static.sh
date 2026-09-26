@@ -176,4 +176,22 @@ if "$compiler" -std=c++14 -O1 -g -fsanitize=address,undefined \
 else
     failed=1
 fi
+if "$compiler" -std=c++14 -O1 -g -fsanitize=address,undefined \
+    tools/unaligned_patch_test.cpp -o "$task_output/unaligned-patch-test" && \
+    "$task_output/unaligned-patch-test" \
+        sle_Internal/le/AppleIntelTGLGraphics.kext/Contents/MacOS/AppleIntelTGLGraphics \
+        sle_Internal/sle/AppleIntelTGLGraphics.kext/Contents/MacOS/AppleIntelTGLGraphics; then
+    printf 'PASS offline bounded unaligned-store inventory tests\n'
+else
+    failed=1
+fi
+if "$compiler" -std=c++14 -O1 -g -fsanitize=address,undefined \
+    tools/framebuffer_patch_test.cpp -o "$task_output/framebuffer-patch-test" && \
+    "$task_output/framebuffer-patch-test" \
+        sle_Internal/lep/AppleIntelTGLGraphicsFramebuffer.kext/Contents/MacOS/AppleIntelTGLGraphicsFramebuffer \
+        sle_Internal/le/AppleIntelTGLGraphicsFramebuffer.kext/Contents/MacOS/AppleIntelTGLGraphicsFramebuffer; then
+    printf 'PASS offline framebuffer bounds-patch anchor tests\n'
+else
+    failed=1
+fi
 exit "$failed"

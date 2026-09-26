@@ -302,6 +302,11 @@ inventory test pins every physical-TLB access in both admitted Tahoe payloads.
 This strengthens the static isolation boundary; it is not yet a runtime
 hardware-acceleration claim.
 
+Every remaining accelerator/framebuffer instruction patch is likewise limited
+to a solved owning-function range and checked against the admitted on-disk
+payload. Whole-image searches remain only for non-instruction metadata such as
+the AGDP board-id key.
+
 ## Building
 
 Open `NootedGreen.xcodeproj` and select the **NootedGreen** scheme to build the Gen11/Gen12 plugin, or one of the original NootedBlue schemes for legacy hardware. Build with Xcode.

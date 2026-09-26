@@ -2034,3 +2034,31 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   i915 source. The complete local static/analyzer/strict-ABI/sanitizer and
   pinned-payload suite passes in `/tmp/ngreen-static.D8Vh7O`. The VM remained
   shut off; this is static evidence only.
+
+### Bound every remaining instruction patch to its owning function
+
+- Rechecked every active `LookupPatchPlus` instruction mutation in the Gen11
+  implementation. The doorbell `DISTRDB` replacement is now confined to
+  `IGHardwareGuC::readDoorbellSQIDIConfig`; the SKU and six relayed-fuse
+  anchors share the solved `IntelAccelerator::getGPUInfo` body; and all fourteen
+  aligned-store opcode changes are confined to `blit3d_submit_rectlist`.
+- Extracted the rect-list anchors into a shared header and added an on-disk
+  inventory test. Both admitted accelerator payloads have the same fourteen
+  sites at the pinned offsets. This includes the short opcode match inside one
+  `movapd`, which intentionally converts it to the corresponding unaligned
+  form along with the thirteen `movaps` stores.
+- The sole physical-framebuffer instruction fix is now bounded by the two
+  `AppleIntelRegisterAccessManager::ReadRegister64` overload symbols. A new
+  test checks the production and debug UUID independently, proves that only
+  its matching RIP-relative anchor exists, and pins that anchor inside the
+  disassembled function range.
+- `IGGuC::invalidateTLB` now also recognizes the proven final shutdown state.
+  Before CTB enable it follows i915's initialization no-op; during active DMA
+  it still requires a synchronous GuC completion; after all contexts are
+  deregistered and the final heavy invalidation publishes `gVfDmaQuiesced`,
+  later native object destruction does not attempt to use an already sealed
+  CTB or manufacture a protocol fault.
+- No instruction byte patch in `kern_gen11.cpp` now searches or mutates the
+  complete image. The full syntax/analyzer/strict-ABI/sanitizer and all four
+  pinned-payload anchor suites pass in `/tmp/ngreen-static.oHyihM`. The VM
+  remained shut off.

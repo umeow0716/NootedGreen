@@ -11,6 +11,8 @@
 #include "kern_vf_runtime.hpp"
 #include "kern_vf_runtime_patch.hpp"
 #include "kern_vf_tlb_patch.hpp"
+#include "kern_unaligned_patch.hpp"
+#include "kern_framebuffer_patch.hpp"
 #include "kern_context_pool.hpp"
 #include "kern_context_descriptor.hpp"
 #include "kern_workqueue_unwind.hpp"
@@ -1730,26 +1732,24 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		
 		// Both admitted variants checked a 64-bit read against length-4.
 		// Require the full eight-byte operand before dereferencing it.
-		static const uint8_t productionFind[] = {
-			0x83, 0xc0, 0xfc, 0x48, 0x39, 0xf0, 0x76, 0x11, 0x48, 0x8b,
-			0x47, 0x50, 0x48, 0xff, 0x05, 0x84, 0x40, 0x08, 0x00
+		mach_vm_address_t read64Start = 0, read64End = 0;
+		SolveRequestPlus read64SymbolBounds[] = {
+			{"__ZN31AppleIntelRegisterAccessManager14ReadRegister64Em",
+			 read64Start},
+			{"__ZN31AppleIntelRegisterAccessManager14ReadRegister64EPVvm",
+			 read64End},
 		};
-		static const uint8_t productionReplace[] = {
-			0x83, 0xc0, 0xf8, 0x48, 0x39, 0xf0, 0x76, 0x11, 0x48, 0x8b,
-			0x47, 0x50, 0x48, 0xff, 0x05, 0x84, 0x40, 0x08, 0x00
-		};
-		static const uint8_t debugFind[] = {
-			0x83, 0xc0, 0xfc, 0x48, 0x39, 0xf0, 0x76, 0x11, 0x48, 0x8b,
-			0x47, 0x50, 0x48, 0xff, 0x05, 0xca, 0xf5, 0x0c, 0x00
-		};
-		static const uint8_t debugReplace[] = {
-			0x83, 0xc0, 0xf8, 0x48, 0x39, 0xf0, 0x76, 0x11, 0x48, 0x8b,
-			0x47, 0x50, 0x48, 0xff, 0x05, 0xca, 0xf5, 0x0c, 0x00
-		};
+		PANIC_COND(!SolveRequestPlus::solveAll(
+		               patcher, index, read64SymbolBounds, address, size) ||
+		           read64End <= read64Start || read64End - read64Start > 0x100,
+		           "ngreen", "Invalid ReadRegister64 patch bounds");
 		LookupPatchPlus const read64Bounds = isprod ?
-			LookupPatchPlus {activeKext, productionFind, productionReplace, arrsize(productionFind), 1} :
-			LookupPatchPlus {activeKext, debugFind, debugReplace, arrsize(debugFind), 1};
-		PANIC_COND(!read64Bounds.apply(patcher, address, size), "ngreen",
+			LookupPatchPlus {activeKext, NGFramebufferPatch::productionFind,
+			 NGFramebufferPatch::productionReplace, 1} :
+			LookupPatchPlus {activeKext, NGFramebufferPatch::debugFind,
+			 NGFramebufferPatch::debugReplace, 1};
+		PANIC_COND(!read64Bounds.apply(
+		               patcher, read64Start, read64End - read64Start), "ngreen",
 			"Failed to apply UUID-pinned ReadRegister64 bounds patch");
 
 		return true;
@@ -1897,10 +1897,24 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				0xb8, 0xff, 0x00, 0x1f, 0x00, 0x90,
 				0xc6, 0x87, 0xe2, 0x09, 0x00, 0x00, 0x00,
 			};
+			mach_vm_address_t doorbellReadStart = 0, doorbellReadEnd = 0;
+			SolveRequestPlus doorbellReadBounds[] = {
+				{"__ZN13IGHardwareGuC23readDoorbellSQIDIConfigEv",
+				 doorbellReadStart},
+				{"__ZN13IGHardwareGuC15acquireDoorbellEP35UK_GEN11_GUC_CONTEXT_DESCRIPTOR_RECb",
+				 doorbellReadEnd},
+			};
+			PANIC_COND(!SolveRequestPlus::solveAll(
+			               patcher, index, doorbellReadBounds, address, size) ||
+			           doorbellReadEnd <= doorbellReadStart ||
+			           doorbellReadEnd - doorbellReadStart > 0x100,
+			           "ngreen", "Invalid VF DISTRDB patch bounds");
 			LookupPatchPlus const vfDoorbellTopologyPatch {
 				activeKext, vfDoorbellTopologyFind, vfDoorbellTopologyReplace, 1,
 			};
-			PANIC_COND(!vfDoorbellTopologyPatch.apply(patcher, address, size),
+			PANIC_COND(!vfDoorbellTopologyPatch.apply(
+			               patcher, doorbellReadStart,
+			               doorbellReadEnd - doorbellReadStart),
 			           "ngreen", "Failed to replace VF DISTRDB read");
 			SYSLOG("ngreen", "V229: replaced physical DISTRDB read before GuC routing");
 		}
@@ -2225,52 +2239,28 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		// Some command-buffer pointers on spoofed paths are 8-byte aligned; Apple emits
 		// aligned SSE stores (movaps [r9+...], xmmN), which faults on unaligned targets.
 		// Convert the hot-path stores to movups to tolerate unaligned command pointers.
-		static const uint8_t f_v139_movaps_10[] = {
-			0x41, 0x0f, 0x29, 0x51, 0x10, 0x0f, 0x28, 0xd4
-		};
-		static const uint8_t r_v139_movaps_10[] = {
-			0x41, 0x0f, 0x11, 0x51, 0x10, 0x0f, 0x28, 0xd4
-		};
-		static const uint8_t f_v139_movaps_30[] = {
-			0x66, 0x0f, 0x3a, 0x21, 0xd4, 0x23, 0x41, 0x0f, 0x29, 0x51, 0x30
-		};
-		static const uint8_t r_v139_movaps_30[] = {
-			0x66, 0x0f, 0x3a, 0x21, 0xd4, 0x23, 0x41, 0x0f, 0x11, 0x51, 0x30
-		};
-		static const uint8_t f_v139_movaps_50[] = {
-			0x0f, 0x57, 0xd2, 0x0f, 0x16, 0xd4, 0x41, 0x0f, 0x29, 0x51, 0x50
-		};
-		static const uint8_t r_v139_movaps_50[] = {
-			0x0f, 0x57, 0xd2, 0x0f, 0x16, 0xd4, 0x41, 0x0f, 0x11, 0x51, 0x50
-		};
-		static const uint8_t f_v139_movaps_00[] = {
-			0x41, 0x0f, 0x29, 0x09
-		};
-		static const uint8_t r_v139_movaps_00[] = {
-			0x41, 0x0f, 0x11, 0x09
-		};
-		static const uint8_t f_v139_movaps_20[] = {
-			0x41, 0x0f, 0x29, 0x49, 0x20
-		};
-		static const uint8_t r_v139_movaps_20[] = {
-			0x41, 0x0f, 0x11, 0x49, 0x20
-		};
-		static const uint8_t f_v139_movaps_40[] = {
-			0x41, 0x0f, 0x29, 0x59, 0x40
-		};
-		static const uint8_t r_v139_movaps_40[] = {
-			0x41, 0x0f, 0x11, 0x59, 0x40
-		};
 		{
 			// V52: Split patches into always-apply and RPL-only groups.
 			// TGL reads its native fuse layout correctly on either PF or VF;
 			// the current later-generation compatibility path must hardcode
 			// because fuse layout differs and BCS ring doesn't start.
+			mach_vm_address_t gpuInfoStart = 0, gpuInfoEnd = 0;
+			SolveRequestPlus gpuInfoBounds[] = {
+				{"__ZN16IntelAccelerator10getGPUInfoEv", gpuInfoStart},
+				{"__ZN16IntelAccelerator14teardownDeviceEP11IOPCIDevice", gpuInfoEnd},
+			};
+			PANIC_COND(!SolveRequestPlus::solveAll(patcher, index, gpuInfoBounds,
+			                                      address, size) ||
+			           gpuInfoEnd <= gpuInfoStart ||
+			           gpuInfoEnd - gpuInfoStart > 0x1000,
+			           "ngreen", "Invalid getGPUInfo patch bounds");
 			LookupPatchPlus const patchesAlways[] = {
 				{activeKext, NGVfRuntimePatch::spoofedSkuFind, r3,
 				 arrsize(NGVfRuntimePatch::spoofedSkuFind), 1},
 			};
-			PANIC_COND(!LookupPatchPlus::applyAll(patcher, patchesAlways, address, size), "ngreen",
+			PANIC_COND(!LookupPatchPlus::applyAll(
+			               patcher, patchesAlways, gpuInfoStart,
+			               gpuInfoEnd - gpuInfoStart), "ngreen",
 				"kextG11HWT Failed to apply base patches!");
 
 			if (vfActive) {
@@ -2289,15 +2279,6 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				NGVfRuntime::writeImmediate32(r3b + 28,
 					gVfTopology.l3BankCount);
 
-				mach_vm_address_t gpuInfoStart = 0, gpuInfoEnd = 0;
-				SolveRequestPlus gpuInfoBounds[] = {
-					{"__ZN16IntelAccelerator10getGPUInfoEv", gpuInfoStart},
-					{"__ZN16IntelAccelerator14teardownDeviceEP11IOPCIDevice", gpuInfoEnd},
-				};
-				PANIC_COND(!SolveRequestPlus::solveAll(patcher, index, gpuInfoBounds,
-				                                      address, size) ||
-				           gpuInfoEnd <= gpuInfoStart || gpuInfoEnd - gpuInfoStart > 0x1000,
-				           "ngreen", "Invalid getGPUInfo runtime-patch bounds");
 				LookupPatchPlus const vfRuntimePatches[] = {
 					{activeKext, NGVfRuntimePatch::sliceFuseFind, vfSliceFuseReplace,
 					 arrsize(NGVfRuntimePatch::sliceFuseFind), 1},
@@ -2319,26 +2300,38 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			}
 
 			if (!tglGeneration) {
+				mach_vm_address_t rectListStart = 0, rectListEnd = 0;
+				SolveRequestPlus rectListBounds[] = {
+					{"__ZL22blit3d_submit_rectlistP23IGHardwareBlit3DContextP15blit3d_params_tPK8IGVectorI11rect_pair_t25IGIOMallocAllocatorPolicyE",
+					 rectListStart},
+					{"__ZL19IsSurfaceCompressedj", rectListEnd},
+				};
+				PANIC_COND(!SolveRequestPlus::solveAll(
+				               patcher, index, rectListBounds, address, size) ||
+				           rectListEnd <= rectListStart ||
+				           rectListEnd - rectListStart > 0x3000,
+				           "ngreen", "Invalid blit3d rect-list patch bounds");
 				// Every matching store in the pinned blit3d_submit_rectlist body is
 				// converted as one mandatory group. A single count patches all matches
 				// against the original image; sequential skip-based patches changed the
 				// match set after every write and therefore targeted the wrong sites.
 				LookupPatchPlus const unalignedStorePatches[] = {
-					{activeKext, f_v139_movaps_10, r_v139_movaps_10,
-					 arrsize(f_v139_movaps_10), 1},
-					{activeKext, f_v139_movaps_30, r_v139_movaps_30,
-					 arrsize(f_v139_movaps_30), 1},
-					{activeKext, f_v139_movaps_50, r_v139_movaps_50,
-					 arrsize(f_v139_movaps_50), 1},
-					{activeKext, f_v139_movaps_00, r_v139_movaps_00,
-					 arrsize(f_v139_movaps_00), 6},
-					{activeKext, f_v139_movaps_20, r_v139_movaps_20,
-					 arrsize(f_v139_movaps_20), 4},
-					{activeKext, f_v139_movaps_40, r_v139_movaps_40,
-					 arrsize(f_v139_movaps_40), 1},
+					{activeKext, NGUnalignedPatch::movaps10Find,
+					 NGUnalignedPatch::movups10Replace, 1},
+					{activeKext, NGUnalignedPatch::movaps30Find,
+					 NGUnalignedPatch::movups30Replace, 1},
+					{activeKext, NGUnalignedPatch::movaps50Find,
+					 NGUnalignedPatch::movups50Replace, 1},
+					{activeKext, NGUnalignedPatch::movaps00Find,
+					 NGUnalignedPatch::movups00Replace, 6},
+					{activeKext, NGUnalignedPatch::movaps20Find,
+					 NGUnalignedPatch::movups20Replace, 4},
+					{activeKext, NGUnalignedPatch::movaps40Find,
+					 NGUnalignedPatch::movups40Replace, 1},
 				};
-				PANIC_COND(!LookupPatchPlus::applyAll(patcher, unalignedStorePatches,
-				                                      address, size),
+				PANIC_COND(!LookupPatchPlus::applyAll(
+				               patcher, unalignedStorePatches, rectListStart,
+				               rectListEnd - rectListStart),
 				           "ngreen", "Failed to apply complete unaligned-store patch set");
 				SYSLOG("ngreen", "V243: converted all 14 pinned blit3d aligned-store sites");
 
@@ -4426,8 +4419,14 @@ void Gen11::vfBaseInvalidateTLB(const void *that) {
 	(void)that;
 	OSSynchronizeIO();
 	// i915's gen12vf_ggtt_invalidate skips the request until GuC is ready.
-	// CTB-ever-enabled is our corresponding irreversible readiness point.
+	// CTB-ever-enabled is our corresponding irreversible readiness point. Once
+	// the shutdown sweep has deregistered every context and completed its final
+	// heavy invalidation, later native object destruction may still free GGTT
+	// bookkeeping. No device can consume those PTEs, and the CTB may already be
+	// sealed, so a second request would manufacture a teardown protocol fault.
 	if (!gVfCtbEverEnabled)
+		return;
+	if (gVfDmaQuiesced)
 		return;
 	if (!gVfHardwareGuc || !vfInvalidateTLBSync(gVfHardwareGuc))
 		vfMarkProtocolFault("IGGuC GGTT invalidation did not complete");
