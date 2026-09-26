@@ -9,6 +9,7 @@
 #include "kern_patcherplus.hpp"
 #include "kern_pci_identity.hpp"
 #include "kern_gpu_capabilities.hpp"
+#include "kern_dvmt_patch.hpp"
 #include <Headers/kern_api.hpp>
 #include <Headers/kern_devinfo.hpp>
 #include <i386/machine_routines.h>
@@ -18,18 +19,9 @@
 static const char *pathIOAcceleratorFamily2= "/System/Library/Extensions/IOAcceleratorFamily2.kext/Contents/MacOS/IOAcceleratorFamily2";
 static const char *pathAGDP = "/System/Library/Extensions/AppleGraphicsControl.kext/Contents/PlugIns/"
 							  "AppleGraphicsDevicePolicy.kext/Contents/MacOS/AppleGraphicsDevicePolicy";
-static const char *pathBacklight = "/System/Library/Extensions/AppleBacklight.kext/Contents/MacOS/AppleBacklight";
-static const char *pathMCCSControl = "/System/Library/Extensions/AppleMCCSControl.kext/Contents/MacOS/AppleMCCSControl";
-static const char *pathIOGraphics= "/System/Library/Extensions/IOGraphicsFamily.kext/IOGraphicsFamily";
 
 static KernelPatcher::KextInfo kextAGDP {"com.apple.driver.AppleGraphicsDevicePolicy", &pathAGDP, 1, {true}, {},
 	KernelPatcher::KextInfo::Unloaded};
-static KernelPatcher::KextInfo kextBacklight {"com.apple.driver.AppleBacklight", &pathBacklight, 1, {true}, {},
-	KernelPatcher::KextInfo::Unloaded};
-static KernelPatcher::KextInfo kextMCCSControl {"com.apple.driver.AppleMCCSControl", &pathMCCSControl, 1, {true}, {},
-	KernelPatcher::KextInfo::Unloaded};
-static KernelPatcher::KextInfo kextIOGraphics { "com.apple.iokit.IOGraphicsFamily", &pathIOGraphics, 1, {true}, {},
-	KernelPatcher::KextInfo::Unloaded };
 static KernelPatcher::KextInfo kextIOAcceleratorFamily2 { "com.apple.iokit.IOAcceleratorFamily2", &pathIOAcceleratorFamily2, 1, {true}, {},
 	KernelPatcher::KextInfo::Unloaded };
 
@@ -51,55 +43,53 @@ static bool isLegacyIGPUPropSeedingEnabled() {
 	return checkKernelArgument("-ngreenforceprops");
 }
 
-static bool seedIGPUPropertiesOnEntry(IORegistryEntry *entry) {
+static bool seedIGPUPropertiesOnEntry(IORegistryEntry *entry, bool &failed) {
+	failed = false;
 	if (!entry) {
+		failed = true;
 		return false;
 	}
 
 	bool changed = false;
+	auto record = [&](bool result) {
+		changed |= result;
+		failed |= !result;
+	};
 
 	// Default fallback platform-id for RPL/TGL spoof bring-up. Only inject when missing.
 	if (!entry->getProperty("AAPL,ig-platform-id")) {
-		entry->setProperty("AAPL,ig-platform-id", builtin2, arrsize(builtin2));
-		changed = true;
+		record(entry->setProperty("AAPL,ig-platform-id", builtin2, arrsize(builtin2)));
 	}
 
 	if (!entry->getProperty("device-id")) {
-		entry->setProperty("device-id", builtin3, arrsize(builtin3));
-		changed = true;
+		record(entry->setProperty("device-id", builtin3, arrsize(builtin3)));
 	}
 
 	if (!entry->getProperty("built-in")) {
 		static uint8_t builtin[] = {0x00};
-		entry->setProperty("built-in", builtin, arrsize(builtin));
-		changed = true;
+		record(entry->setProperty("built-in", builtin, arrsize(builtin)));
 	}
 
 	if (!entry->getProperty("AAPL,slot-name")) {
-		entry->setProperty("AAPL,slot-name", const_cast<char *>("built-in"), 9);
-		changed = true;
+		record(entry->setProperty("AAPL,slot-name", const_cast<char *>("built-in"), 9));
 	}
 
 	if (!entry->getProperty("hda-gfx")) {
-		entry->setProperty("hda-gfx", const_cast<char *>("onboard-1"), 10);
-		changed = true;
+		record(entry->setProperty("hda-gfx", const_cast<char *>("onboard-1"), 10));
 	}
 
 	if (!entry->getProperty("model")) {
-		entry->setProperty("model", const_cast<char *>("Intel Iris Xe Graphics"), 23);
-		changed = true;
+		record(entry->setProperty("model", const_cast<char *>("Intel Iris Xe Graphics"), 23));
 	}
 
 	if (!entry->getProperty("framebuffer-unifiedmem")) {
 		static uint8_t unifiedMem[] = {0x00, 0x00, 0x00, 0x60}; // 1536 MB
-		entry->setProperty("framebuffer-unifiedmem", unifiedMem, arrsize(unifiedMem));
-		changed = true;
+		record(entry->setProperty("framebuffer-unifiedmem", unifiedMem, arrsize(unifiedMem)));
 	}
 
 	if (!entry->getProperty("saved-config")) {
 		static uint8_t sconf[0xEA] = {};
-		entry->setProperty("saved-config", sconf, sizeof(sconf));
-		changed = true;
+		record(entry->setProperty("saved-config", sconf, sizeof(sconf)));
 	}
 
 	return changed;
@@ -116,20 +106,23 @@ static void seedIGPUPropertiesEarly() {
 
 	bool found = false;
 	bool changed = false;
+	bool failed = false;
 	for (auto path : paths) {
 		auto *entry = IORegistryEntry::fromPath(path, gIOServicePlane);
 		if (!entry) {
 			continue;
 		}
 		found = true;
-		if (seedIGPUPropertiesOnEntry(entry)) {
+		bool entryFailed = false;
+		if (seedIGPUPropertiesOnEntry(entry, entryFailed)) {
 			changed = true;
 		}
+		failed |= entryFailed;
 		entry->release();
 	}
 
 	if (found) {
-		SYSLOG("ngreen", "Early IGPU pre-seed via IOService path: changed=%d", changed);
+		SYSLOG("ngreen", "Early IGPU pre-seed via IOService path: changed=%d failed=%d", changed, failed);
 	} else {
 		SYSLOG("ngreen", "Early IGPU pre-seed skipped: no IGPU path resolved before DeviceInfo");
 	}
@@ -139,9 +132,6 @@ void NGreen::init() {
     callback = this;
 	
 	lilu.onKextLoadForce(&kextAGDP);
-	/*lilu.onKextLoadForce(&kextBacklight);
-	lilu.onKextLoadForce(&kextMCCSControl);
-	lilu.onKextLoadForce(&kextIOGraphics);*/
 	lilu.onKextLoadForce(&kextIOAcceleratorFamily2);
 	
 	genx.init();
@@ -178,133 +168,66 @@ void NGreen::processPatcher(KernelPatcher &patcher) {
 		SYSLOG("ngreen", "compat mode: legacy IGPU property seeding disabled (use -ngreenforceprops to enable)");
 	}
 
-    auto *devInfo = DeviceInfo::create();
-    if (devInfo) {
-        devInfo->processSwitchOff();
-		
-		
+	auto *devInfo = DeviceInfo::create();
+	PANIC_COND(!devInfo, "ngreen", "Failed to create DeviceInfo");
+	devInfo->processSwitchOff();
 
-        this->iGPU = OSDynamicCast(IOPCIDevice, devInfo->videoBuiltin);
-        PANIC_COND(!this->iGPU, "ngreen", "videoBuiltin is not IOPCIDevice");
-		
-		// necessary without : igpu stall hang on boot
-		this->iGPU->enablePCIPowerManagement(kPCIPMCSPowerStateD0);
-		this->iGPU->setBusMasterEnable(true);
-		this->iGPU->setMemoryEnable(true);
-		
+	this->iGPU = OSDynamicCast(IOPCIDevice, devInfo->videoBuiltin);
+	PANIC_COND(!this->iGPU, "ngreen", "videoBuiltin is not IOPCIDevice");
 
-		static uint8_t builtin[] = {0x00};
+	// The GPU must be in D0 with memory and DMA decoding enabled before its
+	// BARs or VF capability register are accessed.
+	this->iGPU->enablePCIPowerManagement(kPCIPMCSPowerStateD0);
+	this->iGPU->setBusMasterEnable(true);
+	this->iGPU->setMemoryEnable(true);
 
-		WIOKit::renameDevice(this->iGPU, "IGPU");
-		WIOKit::awaitPublishing(this->iGPU);
-
-		if (isLegacyIGPUPropSeedingEnabled()) {
-			seedIGPUPropertiesOnEntry(this->iGPU);
-		}
-		
-		static uint8_t sconf[0xEA] = {};
-		
-		static uint8_t panel[] = {0x01, 0x00, 0x00, 0x00};
-		/*static uint8_t panel1[] = {0x19, 0x01, 0x00, 0x00};
-		static uint8_t panel2[] = {0x3c, 0x00, 0x00, 0x00};
-		static uint8_t panel3[] = {0x11, 0x00, 0x00, 0x00};
-		static uint8_t panel4[] = {0xfa, 0x00, 0x00, 0x00};
-
-		this->iGPU->setProperty("AAPL00,PanelPowerUp", panel, arrsize(panel));
-		this->iGPU->setProperty("AAPL00,PanelPowerOn", panel1, arrsize(panel1));
-		this->iGPU->setProperty("AAPL00,PanelPowerDown", panel2, arrsize(panel2));
-		this->iGPU->setProperty("AAPL00,PanelPowerOff", panel3, arrsize(panel3));
-		this->iGPU->setProperty("AAPL00,PanelCycleDelay", panel4, arrsize(panel4));*/
-		
-
-		//this->iGPU->setProperty("@0,display-dither-support", panel, arrsize(panel));
-		
-		if (isLegacyIGPUPropSeedingEnabled()) {
-			this->iGPU->setProperty("built-in", builtin, arrsize(builtin));
-			this->iGPU->setProperty("AAPL,slot-name", const_cast<char *>("built-in"), 9);
-			this->iGPU->setProperty("hda-gfx", const_cast<char *>("onboard-1"), 10);
-			this->iGPU->setProperty("model", const_cast<char *>("Intel Iris Xe Graphics"), 23);
-
-			auto *prop = OSDynamicCast(OSData, this->iGPU->getProperty("saved-config"));
-			if (!prop) this->iGPU->setProperty("saved-config", sconf, sizeof(sconf));
-		}
-			
-		//auto x = OSDynamicCast(OSData, this->iGPU->getProperty("AAPL,ig-platform-id"));
-		//framebufferId = *(uint32_t*)x->getBytesNoCopy();
-		
-		//setRMMIOIfNecessary();
-
-        this->deviceId = WIOKit::readPCIConfigValue(this->iGPU, WIOKit::kIOPCIConfigDeviceID);
-        this->pciRevision = WIOKit::readPCIConfigValue(NGreen::callback->iGPU, WIOKit::kIOPCIConfigRevisionID);
-
-        // CPUID is diagnostic only. A hypervisor may expose any CPU model; it
-        // cannot identify the passed-through GPU or distinguish its PF/VF role.
-        {
-            uint32_t eax = 0, ebx = 0, ecx = 0, edx = 0;
-            asm volatile("cpuid" : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx) : "a"(1));
-            uint32_t family = (eax >> 8) & 0xF;
-            uint32_t model = (eax >> 4) & 0xF;
-            uint32_t extModel = (eax >> 16) & 0xF;
-            uint32_t stepping = eax & 0xF;
-            if (family == 0x6) model |= (extModel << 4);
-            this->cpuModel = model;
-            const bool physicalTgl = NGGpuCapabilities::isTigerLake(this->deviceId) &&
-                ngPhysicalGpuAccessAllowed();
-            this->isRealTGL = NGGpuCapabilities::useNativeTigerLakePath(
-                this->deviceId, physicalTgl);
-            SYSLOG("ngreen", "V242: CPU family=0x%x model=0x%x stepping=%u GPU=%04x nativeTglPf=%d",
-                   family, model, stepping, this->deviceId, this->isRealTGL);
-        }
-		
-		auto gms = WIOKit::readPCIConfigValue(devInfo->videoBuiltin, WIOKit::kIOPCIConfigGraphicsControl, 0, 16) >> 8;
-		
-		if (gms < 0x10) {
-			stolen_size = gms * 32;
-		} else if (gms == 0x20 || gms == 0x30 || gms == 0x40) {
-			stolen_size = gms * 32;
-		} else if (gms >= 0xF0 && gms <= 0xFE) {
-			stolen_size = ((gms & 0x0F) + 1) * 4;
-		} else {
-			SYSLOG( "ngreen", "PANIC stolen_size=0 check DVMT in bios");
-		}
-		if (stolen_size<128) stolen_size=128;
-		stolen_size *= (1024 * 1024);
-		SYSLOG("ngreen", "stolen_size 0x%x",stolen_size);
-		
-		if (isLegacyIGPUPropSeedingEnabled()) {
-			static uint8_t unifiedMem[] = {0x00, 0x00, 0x00, 0x60};
-			this->iGPU->setProperty("framebuffer-unifiedmem", unifiedMem, arrsize(unifiedMem));
-		}
-		
-		KernelPatcher::routeVirtual(this->iGPU, WIOKit::PCIConfigOffset::ConfigRead16, configRead16, &orgConfigRead16);
-		KernelPatcher::routeVirtual(this->iGPU, WIOKit::PCIConfigOffset::ConfigRead32, configRead32, &orgConfigRead32);
-
-        DeviceInfo::deleter(devInfo);
-		
-
-		
-    } else {
-        SYSLOG("ngreen", "Failed to create DeviceInfo");
-    }
-	
-	/*KernelPatcher::RouteRequest request {"__ZN15OSMetaClassBase12safeMetaCastEPKS_PK11OSMetaClass", wrapSafeMetaCast,
-		this->orgSafeMetaCast};
-	PANIC_COND(!patcher.routeMultipleLong(KernelPatcher::KernelID, &request, 1), "ngreen",
-		"Failed to route kernel symbols");*/
-}
-
-OSMetaClassBase *NGreen::wrapSafeMetaCast(const OSMetaClassBase *anObject, const OSMetaClass *toMeta) {
-	auto ret = FunctionCast(wrapSafeMetaCast, callback->orgSafeMetaCast)(anObject, toMeta);
-	if (UNLIKELY(!ret)) {
-		for (const auto &ent : callback->metaClassMap) {
-			if (LIKELY(ent[0] == toMeta)) {
-				return FunctionCast(wrapSafeMetaCast, callback->orgSafeMetaCast)(anObject, ent[1]);
-			} else if (UNLIKELY(ent[1] == toMeta)) {
-				return FunctionCast(wrapSafeMetaCast, callback->orgSafeMetaCast)(anObject, ent[0]);
-			}
-		}
+	WIOKit::renameDevice(this->iGPU, "IGPU");
+	WIOKit::awaitPublishing(this->iGPU);
+	if (isLegacyIGPUPropSeedingEnabled()) {
+		bool failed = false;
+		const bool changed = seedIGPUPropertiesOnEntry(this->iGPU, failed);
+		SYSLOG("ngreen", "IGPU compatibility properties: changed=%d failed=%d", changed, failed);
 	}
-	return ret;
+
+	this->deviceId = WIOKit::readPCIConfigValue(this->iGPU, WIOKit::kIOPCIConfigDeviceID);
+
+	// CPUID is diagnostic only. A hypervisor may expose any CPU model; it
+	// cannot identify the passed-through GPU or distinguish its PF/VF role.
+	{
+		uint32_t eax = 0, ebx = 0, ecx = 0, edx = 0;
+		asm volatile("cpuid" : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx) : "a"(1));
+		uint32_t family = (eax >> 8) & 0xF;
+		uint32_t model = (eax >> 4) & 0xF;
+		const uint32_t extModel = (eax >> 16) & 0xF;
+		const uint32_t stepping = eax & 0xF;
+		if (family == 0x6)
+			model |= extModel << 4;
+		const bool physicalTgl = NGGpuCapabilities::isTigerLake(this->deviceId) &&
+			ngPhysicalGpuAccessAllowed();
+		this->isRealTGL = NGGpuCapabilities::useNativeTigerLakePath(this->deviceId, physicalTgl);
+		SYSLOG("ngreen", "V242: CPU family=0x%x model=0x%x stepping=%u GPU=%04x nativeTglPf=%d",
+			family, model, stepping, this->deviceId, this->isRealTGL);
+	}
+
+	const auto gms = WIOKit::readPCIConfigValue(this->iGPU,
+		WIOKit::kIOPCIConfigGraphicsControl, 0, 16) >> 8;
+	uint32_t decodedStolen = 0;
+	if (!NGDvmt::decodeGen9Gms(static_cast<uint8_t>(gms), decodedStolen)) {
+		SYSLOG("ngreen", "GMS 0x%x is reserved or exceeds the 32-bit framebuffer ABI; using 128 MiB floor",
+			gms);
+		decodedStolen = 128U * 1024 * 1024;
+	}
+	stolen_size = decodedStolen < 128U * 1024 * 1024 ? 128U * 1024 * 1024 : decodedStolen;
+	SYSLOG("ngreen", "stolen_size 0x%x (GMS=0x%x)", stolen_size, gms);
+
+	const bool routedRead16 = KernelPatcher::routeVirtual(this->iGPU,
+		WIOKit::PCIConfigOffset::ConfigRead16, configRead16, &orgConfigRead16);
+	const bool routedRead32 = KernelPatcher::routeVirtual(this->iGPU,
+		WIOKit::PCIConfigOffset::ConfigRead32, configRead32, &orgConfigRead32);
+	PANIC_COND(!routedRead16 || !routedRead32 || !orgConfigRead16 || !orgConfigRead32,
+		"ngreen", "Failed to route PCI configuration readers");
+
+	DeviceInfo::deleter(devInfo);
 }
 
 
@@ -331,19 +254,40 @@ bool NGreen::setRMMIOIfNecessary() {
 	return true;
 }
 
-void NGreen::setApertureIfNecessary() {
+bool NGreen::getAperture(volatile UInt32 *&address, uint64_t &length) {
+	address = nullptr;
+	length = 0;
 	if (!this->iGPU || !ngPhysicalGpuAccessAllowed())
-		return;
-	if (UNLIKELY(!this->aperture || !this->aperture->getLength())) {
-		this->aperture = this->iGPU->mapDeviceMemoryWithRegister(kIOPCIConfigBaseAddress2);
-		if (this->aperture) {
-			this->aperturePtr = reinterpret_cast<volatile uint32_t *>(this->aperture->getVirtualAddress());
-			this->apertureLen = this->aperture->getLength();
-			SYSLOG("ngreen", "V201: BAR2 aperture mapped, len=0x%llx", this->apertureLen);
-		} else {
+		return false;
+	auto *mapping = this->aperture;
+	if (!mapping) {
+		if (ml_at_interrupt_context() || !preemption_enabled())
+			return false;
+		mapping = this->iGPU->mapDeviceMemoryWithRegister(kIOPCIConfigBaseAddress2);
+		if (!mapping) {
 			SYSLOG("ngreen", "V201: BAR2 aperture map FAILED");
+			return false;
 		}
+		const auto candidateAddress = mapping->getVirtualAddress();
+		if (!candidateAddress || (candidateAddress & 3U) || mapping->getLength() < sizeof(uint32_t)) {
+			mapping->release();
+			SYSLOG("ngreen", "V201: BAR2 aperture map invalid");
+			return false;
+		}
+		if (!OSCompareAndSwapPtr(nullptr, mapping, &this->aperture)) {
+			mapping->release();
+		} else {
+			SYSLOG("ngreen", "V201: BAR2 aperture mapped, len=0x%llx", mapping->getLength());
+		}
+		mapping = this->aperture;
 	}
+	const auto mappingLength = mapping->getLength();
+	const auto mappingAddress = mapping->getVirtualAddress();
+	if (!mappingAddress || (mappingAddress & 3U) || mappingLength < sizeof(uint32_t))
+		return false;
+	address = reinterpret_cast<volatile UInt32 *>(mappingAddress);
+	length = mappingLength;
+	return true;
 }
 
 
@@ -352,50 +296,15 @@ bool NGreen::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t
 		// Preserve native surface-mode validation and capability checks. These
 		// are global user-client interfaces, not per-VF GuC scheduling bits.
 		SYSLOG("ngreen", "IOAccelFamily2: preserving native capability and surface-mode validation");
-	} else if (kextIOGraphics.loadIndex == index) {
-		/*
-		KernelPatcher::RouteRequest requests[] = {
-				{"__ZN13IOFramebuffer25extValidateDetailedTimingEP8OSObjectPvP25IOExternalMethodArguments", wrapValidateDetailedTiming},
-			};
-			patcher.routeMultiple(index, requests, address, size);
-			patcher.clearError();*/
-		
-	}  else if (kextAGDP.loadIndex == index) {
+	} else if (kextAGDP.loadIndex == index) {
 		const LookupPatchPlus patch {&kextAGDP, kAGDPBoardIDKeyOriginal, kAGDPBoardIDKeyPatched, 1};
 		SYSLOG_COND(!patch.apply(patcher, address, size), "NGreen", "Failed to apply AGDP board-id patch");
-
-		/*if (getKernelVersion() == KernelVersion::Ventura) {
-			const LookupPatchPlus patch {&kextAGDP, kAGDPFBCountCheckVenturaOriginal, kAGDPFBCountCheckVenturaPatched,
-				1};
-			SYSLOG_COND(!patch.apply(patcher, address, size), "NGreen", "Failed to apply AGDP fb count check patch");
-		} else {
-			const LookupPatchPlus patch {&kextAGDP, kAGDPFBCountCheckOriginal, kAGDPFBCountCheckPatched, 1};
-			SYSLOG_COND(!patch.apply(patcher, address, size), "NGreen", "Failed to apply AGDP fb count check patch");
-		}*/
-	}  else if (kextBacklight.loadIndex == index) {
-		// V204b: re-enable AppleIntelPanel::setDisplay route + backlight string patch.
-		// Friend's working version has these enabled. Sets up panel data for backlight ramp.
-		KernelPatcher::RouteRequest request {"__ZN15AppleIntelPanel10setDisplayEP9IODisplay", wrapApplePanelSetDisplay,
-			orgApplePanelSetDisplay};
-		if (patcher.routeMultiple(kextBacklight.loadIndex, &request, 1, address, size)) {
-			const UInt8 find[] = {"F%uT%04x"};
-			const UInt8 replace[] = {"F%uTxxxx"};
-			const LookupPatchPlus patch {&kextBacklight, find, replace, 1};
-			SYSLOG_COND(!patch.apply(patcher, address, size), "NGreen", "Failed to apply backlight patch");
-		}
-} else if (kextMCCSControl.loadIndex == index) {
-		/*KernelPatcher::RouteRequest requests[] = {
-				{"__ZN25AppleMCCSControlGibraltar5probeEP9IOServicePi", wrapFunctionReturnZero},
-				{"__ZN21AppleMCCSControlCello5probeEP9IOServicePi", wrapFunctionReturnZero},
-			};
-			patcher.routeMultiple(index, requests, address, size);
-			patcher.clearError();*/
-} else if (genx.processKext(patcher, index, address, size)) {
-	DBGLOG("ngreen", "Processed Generation x configuration");
-} else if (gen11.processKext(patcher, index, address, size)) {
-        DBGLOG("ngreen", "Processed Generation 11 configuration");
-    }
-    return true;
+	} else if (genx.processKext(patcher, index, address, size)) {
+		DBGLOG("ngreen", "Processed Generation x configuration");
+	} else if (gen11.processKext(patcher, index, address, size)) {
+		DBGLOG("ngreen", "Processed Generation 11 configuration");
+	}
+	return true;
 }
 
 
@@ -412,7 +321,7 @@ uint16_t NGreen::configRead16(IORegistryEntry *service, uint32_t space, uint8_t 
 		return result;
 	}
 
-	return 0;
+	return UINT16_MAX;
 }
 
 uint32_t NGreen::configRead32(IORegistryEntry *service, uint32_t space, uint8_t offset) {
@@ -429,66 +338,5 @@ uint32_t NGreen::configRead32(IORegistryEntry *service, uint32_t space, uint8_t 
 		return result;
 	}
 
-	return 0;
-}
-
-size_t NGreen::wrapFunctionReturnZero() { return 0; }
-
-struct ApplePanelData {
-	const char *deviceName;
-	UInt8 deviceData[36];
-};
-
-static ApplePanelData appleBacklightData[] = {
-	{"F14Txxxx", {0x00, 0x11, 0x00, 0x00, 0x00, 0x34, 0x00, 0x52, 0x00, 0x73, 0x00, 0x94, 0x00, 0xBE, 0x00, 0xFA, 0x01,
-					 0x36, 0x01, 0x72, 0x01, 0xC5, 0x02, 0x2F, 0x02, 0xB9, 0x03, 0x60, 0x04, 0x1A, 0x05, 0x0A, 0x06,
-					 0x0E, 0x07, 0x10}},
-	{"F15Txxxx", {0x00, 0x11, 0x00, 0x00, 0x00, 0x36, 0x00, 0x54, 0x00, 0x7D, 0x00, 0xB2, 0x00, 0xF5, 0x01, 0x49, 0x01,
-					 0xB1, 0x02, 0x2B, 0x02, 0xB8, 0x03, 0x59, 0x04, 0x13, 0x04, 0xEC, 0x05, 0xF3, 0x07, 0x34, 0x08,
-					 0xAF, 0x0A, 0xD9}},
-	{"F16Txxxx", {0x00, 0x11, 0x00, 0x00, 0x00, 0x18, 0x00, 0x27, 0x00, 0x3A, 0x00, 0x52, 0x00, 0x71, 0x00, 0x96, 0x00,
-					 0xC4, 0x00, 0xFC, 0x01, 0x40, 0x01, 0x93, 0x01, 0xF6, 0x02, 0x6E, 0x02, 0xFE, 0x03, 0xAA, 0x04,
-					 0x78, 0x05, 0x6C}},
-	{"F17Txxxx", {0x00, 0x11, 0x00, 0x00, 0x00, 0x1F, 0x00, 0x34, 0x00, 0x4F, 0x00, 0x71, 0x00, 0x9B, 0x00, 0xCF, 0x01,
-					 0x0E, 0x01, 0x5D, 0x01, 0xBB, 0x02, 0x2F, 0x02, 0xB9, 0x03, 0x60, 0x04, 0x29, 0x05, 0x1E, 0x06,
-					 0x44, 0x07, 0xA1}},
-	{"F18Txxxx", {0x00, 0x11, 0x00, 0x00, 0x00, 0x53, 0x00, 0x8C, 0x00, 0xD5, 0x01, 0x31, 0x01, 0xA2, 0x02, 0x2E, 0x02,
-					 0xD8, 0x03, 0xAE, 0x04, 0xAC, 0x05, 0xE5, 0x07, 0x59, 0x09, 0x1C, 0x0B, 0x3B, 0x0D, 0xD0, 0x10,
-					 0xEA, 0x14, 0x99}},
-	{"F19Txxxx", {0x00, 0x11, 0x00, 0x00, 0x02, 0x8F, 0x03, 0x53, 0x04, 0x5A, 0x05, 0xA1, 0x07, 0xAE, 0x0A, 0x3D, 0x0E,
-					 0x14, 0x13, 0x74, 0x1A, 0x5E, 0x24, 0x18, 0x31, 0xA9, 0x44, 0x59, 0x5E, 0x76, 0x83, 0x11, 0xB6,
-					 0xC7, 0xFF, 0x7B}},
-	{"F24Txxxx", {0x00, 0x11, 0x00, 0x01, 0x00, 0x34, 0x00, 0x52, 0x00, 0x73, 0x00, 0x94, 0x00, 0xBE, 0x00, 0xFA, 0x01,
-					 0x36, 0x01, 0x72, 0x01, 0xC5, 0x02, 0x2F, 0x02, 0xB9, 0x03, 0x60, 0x04, 0x1A, 0x05, 0x0A, 0x06,
-					 0x0E, 0x07, 0x10}},
-};
-
-bool NGreen::wrapApplePanelSetDisplay(IOService *that, IODisplay *display) {
-	static bool once = false;
-	if (!once) {
-		once = true;
-		auto *panels = OSDynamicCast(OSDictionary, that->getProperty("ApplePanels"));
-		if (panels) {
-			auto *rawPanels = panels->copyCollection();
-			panels = OSDynamicCast(OSDictionary, rawPanels);
-
-			if (panels) {
-				for (auto &entry : appleBacklightData) {
-					auto pd = OSData::withBytes(entry.deviceData, sizeof(entry.deviceData));
-					if (pd) {
-						panels->setObject(entry.deviceName, pd);
-						//! No release required by current AppleBacklight implementation.
-					} else {
-					}
-				}
-				that->setProperty("ApplePanels", panels);
-			}
-
-			OSSafeReleaseNULL(rawPanels);
-		} else {
-		}
-	}
-
-	bool ret = FunctionCast(wrapApplePanelSetDisplay, callback->orgApplePanelSetDisplay)(that, display);
-	return ret;
+	return UINT32_MAX;
 }

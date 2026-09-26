@@ -76,12 +76,10 @@ bool RouteRequestPlus::routeAll(KernelPatcher &patcher, size_t id, RouteRequestP
 	return true;
 }
 
-bool LookupPatchPlus::apply(KernelPatcher &patcher, mach_vm_address_t address, size_t maxSize) const {
-	(void)patcher;
+bool LookupPatchPlus::preflight(mach_vm_address_t address, size_t maxSize) const {
 	// Both routes use explicit caller-supplied image bounds. Lilu 1.7.2's
 	// plain lookup misses the last eligible offset; its masked route reports
-	// success for a partial count. Preflight the whole requested count, then
-	// use the inclusive masked implementation for masked AND plain patches.
+	// success for a partial count. Preflight the whole requested count.
 	const size_t wanted = this->count ? this->count : 1;
 	if (!address || maxSize > UINT64_MAX - address || !this->replace ||
 		(this->kext && this->kext->loadIndex == KernelPatcher::KextInfo::Unloaded) ||
@@ -91,15 +89,36 @@ bool LookupPatchPlus::apply(KernelPatcher &patcher, mach_vm_address_t address, s
 		DBGLOG("Patcher+", "Lookup preflight rejected range/signature/count before writes");
 		return false;
 	}
+	return true;
+}
+
+bool LookupPatchPlus::applyPrepared(mach_vm_address_t address, size_t maxSize) const {
 	return KernelPatcher::findAndReplaceWithMask(reinterpret_cast<UInt8 *>(address), maxSize, this->find, this->size,
 		this->findMask, this->findMask ? this->size : 0, this->replace, this->size, this->replaceMask,
 		this->replaceMask ? this->size : 0, this->count, this->skip);
 }
 
+bool LookupPatchPlus::apply(KernelPatcher &patcher, mach_vm_address_t address, size_t maxSize) const {
+	(void)patcher;
+	return preflight(address, maxSize) && applyPrepared(address, maxSize);
+}
+
 bool LookupPatchPlus::applyAll(KernelPatcher &patcher, const LookupPatchPlus *patches, size_t count,
 	mach_vm_address_t address, size_t maxSize) {
+	(void)patcher;
+	if (!patches && count)
+		return false;
+	// Validate every signature/count before the first write. This cannot roll
+	// back a low-level protection/write failure, but it prevents the common
+	// partial group caused by a later absent or version-mismatched signature.
 	for (size_t i = 0; i < count; i++) {
-		if (patches[i].apply(patcher, address, maxSize)) {
+		if (!patches[i].preflight(address, maxSize)) {
+			DBGLOG("Patcher+", "Failed to preflight patches[%zu]", i);
+			return false;
+		}
+	}
+	for (size_t i = 0; i < count; i++) {
+		if (patches[i].applyPrepared(address, maxSize)) {
 			DBGLOG("Patcher+", "Applied patches[%zu]", i);
 		} else {
 			DBGLOG("Patcher+", "Failed to apply patches[%zu]", i);

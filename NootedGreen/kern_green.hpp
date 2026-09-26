@@ -8,8 +8,8 @@
 #include <IOKit/graphics/IOFramebuffer.h>
 #include <IOKit/acpi/IOACPIPlatformExpert.h>
 
-#define BIT(n) (1<< n)
-#define REG_BIT(n) (1<< n)
+#define BIT(n) (1U << (n))
+#define REG_BIT(n) (1U << (n))
 #define   RING_FORCE_TO_NONPRIV_ACCESS_RW	(0 << 28)
 #define __MASKED_FIELD(mask, value) ((mask) << 16 | (value))
 #define _MASKED_FIELD(mask, value) ({ __MASKED_FIELD(mask, value); })
@@ -59,27 +59,17 @@ class NGreen {
     void processPatcher(KernelPatcher &patcher);
     bool processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t address, size_t size);
 	bool setRMMIOIfNecessary();
-	// V201 diagnostic: BAR2 graphics aperture mapping. Lets us read scanout buffer
-	// bytes through the GTT-translated CPU mapping (safe — no MCE risk like raw PA).
-	void setApertureIfNecessary();
+	// V201 diagnostic: return one immutable BAR2 mapping snapshot.  Callers use
+	// local pointer/length values so concurrent lazy initialization cannot expose
+	// a pointer from one mapping with the length from another.
+	bool getAperture(volatile UInt32 *&address, uint64_t &length);
 	
 	static uint16_t configRead16(IORegistryEntry *service, uint32_t space, uint8_t offset);
 	static uint32_t configRead32(IORegistryEntry *service, uint32_t space, uint8_t offset);
 	WIOKit::t_PCIConfigRead16 orgConfigRead16 {nullptr};
 	WIOKit::t_PCIConfigRead32 orgConfigRead32 {nullptr};
 	
-	OSMetaClass *metaClassMap[4][2] = {{nullptr}};
-	mach_vm_address_t orgSafeMetaCast {0};
-	static OSMetaClassBase *wrapSafeMetaCast(const OSMetaClassBase *anObject, const OSMetaClass *toMeta);
-	
-	static size_t wrapFunctionReturnZero();
-
-	
-	mach_vm_address_t orgApplePanelSetDisplay {0};
-	static bool wrapApplePanelSetDisplay(IOService *that, IODisplay *display);
-	
 	UInt32 stolen_size;
-	uint32_t framebufferId {0};
 	
 	// Public MMIO register access (used by display link training, display merge, etc.)
 	UInt32 readReg32(unsigned long reg) {
@@ -260,32 +250,19 @@ private:
     bool dmcIsAdlp = false;    // true when ADL-P DMC blob was loaded in hwInitializeCState
     void adlpDcExit(const char *caller);
     uint32_t uefiCtl1 {0};    // UEFI-read PWR_WELL CTL1 value saved in hwInitializeCState
-    uint32_t cpuModel {0};  // diagnostic CPUID display model; never a GPU capability
     uint32_t deviceId {0};
-    uint16_t revision {0};
-    uint32_t pciRevision {0};
     IOPCIDevice *iGPU {nullptr};
 	
 	IOMemoryMap *rmmio {nullptr};
 	volatile UInt32 *rmmioPtr {nullptr};
 
 	IOMemoryMap *aperture {nullptr};
-	volatile UInt32 *aperturePtr {nullptr};
-	uint64_t apertureLen {0};
 
 	// Last RCS context object seen by IGHardwareContext::withOptions.
 	// V507 uses this to re-run the LRCA slot repair on each populateResetRegisterList call.
 	void *lastRCSCtx {nullptr};
 
 };
-
-//! Change frame-buffer count >= 2 check to >= 1.
-static const UInt8 kAGDPFBCountCheckOriginal[] = {0x02, 0x00, 0x00, 0x83, 0xF8, 0x02};
-static const UInt8 kAGDPFBCountCheckPatched[] = {0x02, 0x00, 0x00, 0x83, 0xF8, 0x01};
-
-//! Ditto
-static const UInt8 kAGDPFBCountCheckVenturaOriginal[] = {0x41, 0x83, 0xBE, 0x14, 0x02, 0x00, 0x00, 0x02};
-static const UInt8 kAGDPFBCountCheckVenturaPatched[] = {0x41, 0x83, 0xBE, 0x14, 0x02, 0x00, 0x00, 0x01};
 
 //! Neutralise access to AGDP configuration by board identifier.
 static const UInt8 kAGDPBoardIDKeyOriginal[] = "board-id";

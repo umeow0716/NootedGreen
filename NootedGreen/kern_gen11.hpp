@@ -714,7 +714,7 @@ enum forcewake_domain_id {
 
 	FW_DOMAIN_ID_COUNT
 };
-#define BIT(n) (1<< n)
+#define BIT(n) (1U << (n))
 enum forcewake_domains {
 	FORCEWAKE_RENDER	= BIT(FW_DOMAIN_ID_RENDER),
 	FORCEWAKE_GT		= BIT(FW_DOMAIN_ID_GT),

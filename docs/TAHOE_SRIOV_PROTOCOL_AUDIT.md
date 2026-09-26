@@ -1462,3 +1462,45 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   store bounds, not dynamic IOMMU coherency or successful rendering. The full
   syntax/analyzer/strict-ABI/sanitizer gate passes in
   `/tmp/ngreen-static.xUExOx`; macOS Xcode linkage remains the remote CI gate.
+
+### Main-device admission, GMS sizing and patch-group preflight
+
+- Read `kern_green.cpp/.hpp` again against Lilu's actual `routeVirtual`
+  contract and Linux `fddfc3ec3179` (2026-09-26)
+  `arch/x86/kernel/early-quirks.c` Gen9 stolen-memory decoder. Device discovery
+  is mandatory for every later callback, so a
+  failed `DeviceInfo::create()` now fails closed instead of leaving a null
+  global GPU. Both PCI config virtual routes and their captured originals are
+  also mandatory; their former ignored return values could admit a partially
+  spoofed device. The impossible wrapper fallback now returns PCI all-ones,
+  not a fabricated zero-valued configuration word.
+- The old GMS decoder handled only `0x00..0x0f`, `0x20`, `0x30`, `0x40` and
+  `0xf0..0xfe`. Intel's Gen9+ encoding defines every `0x00..0xef` value in
+  32-MiB units, so legal values such as `0x10` (512 MiB) were silently reduced
+  to the 128-MiB compatibility floor. The new pure decoder implements the
+  complete primary-source formula and rejects reserved `0xff` or a byte count
+  that cannot fit the private 32-bit immediate instead of wrapping. All 256
+  encodings are compared to an independent 64-bit oracle; the existing
+  instruction/corruption suite still covers every target register.
+- BAR2 no longer publishes separately mutable pointer and length fields.
+  Concurrent initializers atomically publish one immutable `IOMemoryMap`, and
+  each caller derives a matched local address/length snapshot after validating
+  address alignment and minimum size. A scanout probe's `surfAddr + size`
+  check was widened to 64 bits as part of converting every caller. Interrupt
+  or preemption-disabled contexts never initiate a potentially sleeping map.
+- Removed Backlight, MCCS and IOGraphics branches that had never been
+  registered since the repository's initial import, along with their dead
+  wrappers, stale panel-data ownership bug, unused meta-class bridge and
+  unused PCI/CPU fields. Legacy opt-in property seeding no longer repeats the
+  same writes and now reports allocation/property failures instead of claiming
+  a change unconditionally. `BIT`/`REG_BIT` use unsigned shifts.
+- `LookupPatchPlus::applyAll` now validates every member's image bounds,
+  signature and required count before the first mutation. This prevents the
+  normal partial-group case in which a later Tahoe-version signature is
+  missing. It cannot roll back a lower-level write/protection failure or a
+  previously installed function trampoline; mandatory callers still fail
+  closed. The optional TCON groups now check the result and never log success
+  after a partial/failed group.
+- The complete syntax gate, zero-finding analyzer, strict Gen11 ABI warnings
+  and all sanitizer models pass in `/tmp/ngreen-static.BByji8`. This is static
+  evidence only; no new kext was installed and the VM remained off.

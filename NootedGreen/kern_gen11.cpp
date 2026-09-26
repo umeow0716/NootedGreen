@@ -2434,7 +2434,8 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 					{activeKext, f_tcon_camellia, r_tcon_camellia, arrsize(f_tcon_camellia), 1},
 					{activeKext, f_tcon_banksia,  r_tcon_banksia,  arrsize(f_tcon_banksia),  1},
 				};
-				LookupPatchPlus::applyAll(patcher, tconPatches, address, size);
+				PANIC_COND(!LookupPatchPlus::applyAll(patcher, tconPatches, address, size),
+					"ngreen", "Failed to apply production TCON patches");
 				SYSLOG("ngreen", "Path E: TCON ID patches applied (prod)");
 			}
 		}
@@ -2489,7 +2490,8 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 					{activeKext, f_tcon_camellia, r_tcon_camellia, arrsize(f_tcon_camellia), 1},
 					{activeKext, f_tcon_banksia,  r_tcon_banksia,  arrsize(f_tcon_banksia),  1},
 				};
-				LookupPatchPlus::applyAll(patcher, tconPatches, address, size);
+				PANIC_COND(!LookupPatchPlus::applyAll(patcher, tconPatches, address, size),
+					"ngreen", "Failed to apply debug TCON patches");
 				SYSLOG("ngreen", "Path E: TCON ID patches applied (dbg)");
 			}
 		}
@@ -5254,10 +5256,11 @@ void Gen11::raWriteRegister32(void *that,unsigned long param_1, UInt32 param_2)
 			//  - (1280,800)    offset 0x7D2800   → screen center, Apple logo
 			//  - (1280,1000)   offset 0x9C7800   → loading-bar row
 			//  - (640,800)     offset 0x7D1A00   → mid-left of logo area
-			NGreen::callback->setApertureIfNecessary();
+			volatile uint32_t *aperture = nullptr;
+			uint64_t apertureLen = 0;
 			uint32_t tlCtr = 0xDEADBEEF, ctr = 0xDEADBEEF, bar = 0xDEADBEEF, mid = 0xDEADBEEF;
-			if (NGreen::callback->aperturePtr && NGreen::callback->apertureLen >= 0xA00000) {
-				volatile uint32_t *fb32 = NGreen::callback->aperturePtr;
+			if (NGreen::callback->getAperture(aperture, apertureLen) && apertureLen >= 0xA00000) {
+				volatile uint32_t *fb32 = aperture;
 				tlCtr = fb32[0];             // top-left
 				ctr   = fb32[0x7D2800 / 4];  // center (Apple logo)
 				bar   = fb32[0x9C7800 / 4];  // loading bar row
@@ -6296,11 +6299,13 @@ int Gen11::wrapHwSetupMemory(AppleIntel::AppleIntelBaseController *that, AppleIn
 		uint8_t  fbIdx    = getMember<uint8_t>(fb,  0x4288);
 		uint8_t  yTileFlg = getMember<uint8_t>(fb,  0x4A18);
 
-		NGreen::callback->setApertureIfNecessary();
+		volatile uint32_t *aperture = nullptr;
+		uint64_t apertureLen = 0;
 		// Sample top-left and screen-center for 2560×1600 BGRA layout.
 		uint32_t tlCtr = 0xDEADBEEF, ctr = 0xDEADBEEF, bar = 0xDEADBEEF, mid = 0xDEADBEEF;
-		if (NGreen::callback->aperturePtr && surfAddr + 0xA00000 <= NGreen::callback->apertureLen) {
-			volatile uint32_t *fb32 = NGreen::callback->aperturePtr + (surfAddr / sizeof(uint32_t));
+		if (NGreen::callback->getAperture(aperture, apertureLen) &&
+			uint64_t(surfAddr) + 0xA00000 <= apertureLen) {
+			volatile uint32_t *fb32 = aperture + (surfAddr / sizeof(uint32_t));
 			tlCtr = fb32[0];
 			ctr   = fb32[0x7D2800 / 4];  // (1280,800) Apple logo center
 			bar   = fb32[0x9C7800 / 4];  // (1280,1000) loading-bar row
@@ -7556,15 +7561,15 @@ void Gen11::populateResetRegisterList(void *that)
 		uint32_t lrcaGpuVa = NGContextDescriptor::read(descriptor).low & 0xFFFFF000U;
 		if (lrcaGpuVa) {
 			uint32_t ctxPage1Idx = (lrcaGpuVa >> 12) + 1;
-			cb->setApertureIfNecessary();
-			if (cb->aperturePtr && cb->apertureLen >= 0x1000) {
+			volatile uint32_t *ap = nullptr;
+			uint64_t apertureLen = 0;
+			if (cb->getAperture(ap, apertureLen) && apertureLen >= 0x1000) {
 				uint32_t slotLo = cb->readReg32(GGTT_PTE_LO(0x19));
 				uint32_t slotHi = cb->readReg32(GGTT_PTE_HI(0x19));
 				uint32_t ctxLo  = cb->readReg32(GGTT_PTE_LO(ctxPage1Idx));
 				uint32_t ctxHi  = cb->readReg32(GGTT_PTE_HI(ctxPage1Idx));
 				if ((slotLo & 1) && (ctxLo & 1)) {
 					asm volatile("wbinvd" ::: "memory");
-					volatile uint32_t *ap = cb->aperturePtr;
 					uint32_t saveLo = cb->readReg32(GGTT_PTE_LO(0));
 					uint32_t saveHi = cb->readReg32(GGTT_PTE_HI(0));
 
@@ -8317,15 +8322,15 @@ uint64_t Gen11::IGHardwareContextinitWithOptions(void *that, void *task, const v
 
 	// Flush CPU caches so aperture (UC) sees true DRAM content written by initWithOptions.
 	asm volatile("wbinvd" ::: "memory");
-	cb->setApertureIfNecessary();
+	volatile uint32_t *ap = nullptr;
+	uint64_t apertureLen = 0;
 	uint32_t p1Lo = cb->readReg32(GGTT_PTE_LO(page1Idx));
 	uint32_t p1Hi = cb->readReg32(GGTT_PTE_HI(page1Idx));
-	if (!(p1Lo & 1) || !cb->aperturePtr || cb->apertureLen < 0x1000) {
+	if (!(p1Lo & 1) || !cb->getAperture(ap, apertureLen) || apertureLen < 0x1000) {
 		SYSLOG("ngreen", "V509: LRCA page1 PTE not present (idx=%u lo=%08x), skipping", page1Idx, p1Lo);
 		return ret;
 	}
 
-	volatile uint32_t *ap = cb->aperturePtr;
 	uint32_t saveLo = cb->readReg32(GGTT_PTE_LO(0));
 	uint32_t saveHi = cb->readReg32(GGTT_PTE_HI(0));
 	cb->writeReg32(GGTT_PTE_LO(0), p1Lo);
@@ -8434,8 +8439,9 @@ void *Gen11::IGHardwareContextwithOptions(void *task, const void *params, uint8_
 	if (!lrcaGpuVa) { SYSLOG("ngreen", "V509: LRCA GPU VA zero"); return ctx; }
 	uint32_t ctxPage1Idx = (lrcaGpuVa >> 12) + 1;
 
-	cb->setApertureIfNecessary();
-	if (!cb->aperturePtr || cb->apertureLen < 0x1000) return ctx;
+	volatile uint32_t *ap = nullptr;
+	uint64_t apertureLen = 0;
+	if (!cb->getAperture(ap, apertureLen) || apertureLen < 0x1000) return ctx;
 
 	uint32_t slotLo = cb->readReg32(GGTT_PTE_LO(0x19));
 	uint32_t slotHi = cb->readReg32(GGTT_PTE_HI(0x19));
@@ -8445,7 +8451,6 @@ void *Gen11::IGHardwareContextwithOptions(void *task, const void *params, uint8_
 
 	asm volatile("wbinvd" ::: "memory");
 
-	volatile uint32_t *ap = cb->aperturePtr;
 	uint32_t saveLo = cb->readReg32(GGTT_PTE_LO(0));
 	uint32_t saveHi = cb->readReg32(GGTT_PTE_HI(0));
 
@@ -12615,9 +12620,9 @@ void Gen11::forceWake(void *that, bool set, uint32_t dom, uint8_t ctx) {
 						rPg, rPHi, rPLo, rPLo & 1, (rPLo >> 3) & 1);
 					// Dump the preamble ring: HEAD bytes already executed — these are the
 					// exact commands Apple submitted. IPEHR=last command pipelined.
-					NGreen::callback->setApertureIfNecessary();
-					if (NGreen::callback->aperturePtr && NGreen::callback->apertureLen >= 0x2000 && (rPLo & 1)) {
-						volatile uint32_t *ap = NGreen::callback->aperturePtr;
+					volatile uint32_t *ap = nullptr;
+					uint64_t apertureLen = 0;
+					if (NGreen::callback->getAperture(ap, apertureLen) && apertureLen >= 0x2000 && (rPLo & 1)) {
 						uint32_t saveLo = NGreen::callback->readReg32(GGTT_PTE_LO(0));
 						uint32_t saveHi = NGreen::callback->readReg32(GGTT_PTE_HI(0));
 						NGreen::callback->writeReg32(GGTT_PTE_LO(0), rPLo);
@@ -12650,11 +12655,11 @@ void Gen11::forceWake(void *that, bool set, uint32_t dom, uint8_t ctx) {
 				uint32_t p1Hi = NGreen::callback->readReg32(GGTT_PTE_HI(lPg1));
 				SYSLOG("ngreen", "HANGCHECK V205: LRCA ggtt=0x%x pg0 PTE=%08x:%08x present=%d | pg1 PTE=%08x:%08x present=%d",
 					lrcaGgtt, p0Hi, p0Lo, p0Lo & 1, p1Hi, p1Lo, p1Lo & 1);
-				NGreen::callback->setApertureIfNecessary();
-				if (NGreen::callback->aperturePtr && NGreen::callback->apertureLen >= 0x2000 &&
+				volatile uint32_t *ap = nullptr;
+				uint64_t apertureLen = 0;
+				if (NGreen::callback->getAperture(ap, apertureLen) && apertureLen >= 0x2000 &&
 				    (p0Lo & 1) && (p1Lo & 1))
 				{
-					volatile uint32_t *ap = NGreen::callback->aperturePtr;
 					uint32_t saveLo = NGreen::callback->readReg32(GGTT_PTE_LO(0));
 					uint32_t saveHi = NGreen::callback->readReg32(GGTT_PTE_HI(0));
 					// Remap GGTT[0] → LRCA page0 (PPHWSP)
@@ -12679,8 +12684,7 @@ void Gen11::forceWake(void *that, bool set, uint32_t dom, uint8_t ctx) {
 					NGreen::callback->writeReg32(0x101008, 0x1);
 				} else {
 					SYSLOG("ngreen", "HANGCHECK V205: remap skipped aper=%s len=0x%llx p0=%d p1=%d",
-						NGreen::callback->aperturePtr ? "ok" : "null",
-						(unsigned long long)NGreen::callback->apertureLen,
+						ap ? "ok" : "null", (unsigned long long)apertureLen,
 						p0Lo & 1, p1Lo & 1);
 				}
 			}
@@ -12691,10 +12695,10 @@ void Gen11::forceWake(void *that, bool set, uint32_t dom, uint8_t ctx) {
 		// If either PTE is invalid the PIPE_CONTROL write silently drops and
 		// fwWaitForHardwareRegisterValue polls forever.
 		{
-			NGreen::callback->setApertureIfNecessary();
 			auto *apcb = NGreen::callback;
-			if (apcb->aperturePtr && apcb->apertureLen >= 0x1000) {
-				volatile uint32_t *ap = apcb->aperturePtr;
+			volatile uint32_t *ap = nullptr;
+			uint64_t apertureLen = 0;
+			if (apcb->getAperture(ap, apertureLen) && apertureLen >= 0x1000) {
 				uint32_t saveLo = apcb->readReg32(GGTT_PTE_LO(0));
 				uint32_t saveHi = apcb->readReg32(GGTT_PTE_HI(0));
 

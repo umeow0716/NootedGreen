@@ -122,4 +122,8 @@ struct LookupPatchPlus : KernelPatcher::LookupPatch {
 		size_t maxSize) {
 		return applyAll(patcher, patches, N, address, maxSize);
 	}
+
+private:
+	bool preflight(mach_vm_address_t address, size_t maxSize) const;
+	bool applyPrepared(mach_vm_address_t address, size_t maxSize) const;
 };

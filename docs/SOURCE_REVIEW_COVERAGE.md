@@ -34,15 +34,15 @@ files (1,305 under this snapshot's scope); this does not close older coverage.
 | Files/area | Evidence and remaining boundary |
 | --- | --- |
 | kern_gen11.cpp/.hpp | Partial, protocol-focused review plus targeted native disassembly; large physical display/accelerator sections and declarations remain open |
-| kern_green.cpp/.hpp | Read end-to-end; PCI identity/overread/BAR publication fixes made; DVMT, device lifecycle, property failures, per-GPU gates and other findings remain open |
+| kern_green.cpp/.hpp | Read end-to-end; PCI identity/overread, exact GMS decoding, mandatory config-hook admission, BAR0/BAR2 publication, property-result reporting and dead-path cleanup completed; device-removal/power-transition lifetime and hardware-specific property semantics remain open |
 | kern_genx.cpp/.hpp | Read; VF admission/DVMT/PM fixes made; physical behavior and legacy stubs not fully validated |
-| kern_patcherplus.cpp/.hpp | Read and compared with upstream Lilu routing/replacement behavior; transaction/rollback and protection restoration concerns remain |
+| kern_patcherplus.cpp/.hpp | Read and compared with upstream Lilu routing/replacement behavior; every grouped lookup is now preflighted before its first write; low-level write/route rollback and protection restoration remain open |
 | DYLDPatches.cpp/.hpp | Read; removed unused AMD tables and isolated Sonoma patches; user-space shared-cache and per-binary scoping remain open |
 | DisplayMergeNub.cpp/.h | Read; input/refcount/recursion fixes; property update atomicity and failure recovery remain open |
 | IntelDPLinkTraining.cpp/.hpp | Read and tables compared with i915; corrected PHY layout, physical-only guards; full platform/stepping/link-training integration remains open |
 | kern_start.cpp | Read; lifecycle integration still depends on the unfinished driver |
 | Firmware.cpp, FirmwareADLP.cpp | All payload bytes compared to pinned upstream containers; bounds fixed; NOT a firmware-instruction semantic review |
-| kern_gpu_capabilities.hpp, kern_guc_ring.hpp, kern_ggtt_bounds.hpp, kern_ggtt_rotation.hpp, kern_pattern_match.hpp, kern_dvmt_patch.hpp, kern_context_pool.hpp, kern_binary_identity.hpp, kern_pci_identity.hpp | Implementations read and offline-tested; GPU/PF identity now gates native TGL branches instead of CPUID, all GGTT unmap/CTB lifecycle states are checked, and 4,096 rotation matrices are verified as bounded permutations. Tests cover pure helpers, not all caller lifetime/hardware contracts. |
+| kern_gpu_capabilities.hpp, kern_guc_ring.hpp, kern_ggtt_bounds.hpp, kern_ggtt_rotation.hpp, kern_pattern_match.hpp, kern_dvmt_patch.hpp, kern_context_pool.hpp, kern_binary_identity.hpp, kern_pci_identity.hpp | Implementations read and offline-tested; GPU/PF identity now gates native TGL branches instead of CPUID, all GGTT unmap/CTB lifecycle states are checked, 4,096 rotation matrices are verified as bounded permutations, and every 8-bit Gen9+ GMS encoding is checked for exact 32-bit representability. Tests cover pure helpers, not all caller lifetime/hardware contracts. |
 | kern_vf_irq_gate.hpp, kern_vf_context_shutdown.hpp | Read and exhaustively checked as pure state machines. The callback/operation admission gates and all nine direct-LRCA shutdown classifications are covered; actual firmware completion and DMA behavior still require controlled hardware validation. |
 | kern_context_descriptor.hpp | Read; packed native descriptor now decoded without alignment assumptions; object lifetime/readability remains a caller contract |
 | kern_unaligned.hpp | Read; little-endian 32/64-bit reads and writes tested over offsets 0..15 with canaries; callers retain mapping/lifetime obligations |

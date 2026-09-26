@@ -4,6 +4,22 @@
 #include <stdint.h>
 
 namespace NGDvmt {
+// Intel gen9+ Graphics Mode Select encoding, matching Linux
+// arch/x86/kernel/early-quirks.c:gen9_stolen_size().  The binary patch below
+// materialises the result as a 32-bit immediate, so reject encodings whose
+// byte count cannot be represented instead of silently wrapping them.
+inline bool decodeGen9Gms(uint8_t gms, uint32_t &bytes) {
+    if (gms == 0xFF)
+        return false;
+    const uint64_t mib = gms < 0xF0 ? uint64_t(gms) * 32 :
+        uint64_t(gms - 0xF0) * 4 + 4;
+    const uint64_t decoded = mib * UINT64_C(1024) * UINT64_C(1024);
+    if (decoded > UINT32_MAX)
+        return false;
+    bytes = static_cast<uint32_t>(decoded);
+    return true;
+}
+
 // Accept only adjacent 32-bit SHL reg,17; AND same-reg,0xFE000000.
 // MOV alone would lose AND's flags: emit MOV; TEST; padding instead.
 // No output is touched on rejection. Caller must establish image boundaries.
