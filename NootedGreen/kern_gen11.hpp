@@ -1181,9 +1181,6 @@ private:
 	// ── GuC (Graphics micro-Controller) firmware ──
 	static unsigned long loadGuCBinary(void *that);  // route: intercept GuC FW load
 	mach_vm_address_t oloadGuCBinary {};
-	static unsigned long loadIclGuCBinary(void *that);
-	mach_vm_address_t oLoadIclGuCBinary {};
-
 
 	static IOReturn wrapConnectionProbe();  // display hot-plug connection probe
 	mach_vm_address_t orgConnectionProbe {};
@@ -1303,18 +1300,11 @@ private:
 	static void  getGPUInfo(void *that);     // patches topology for TGL HW (TGL offsets); void per Ghidra
 	mach_vm_address_t ogetGPUInfo {};
 
-	static void  getGPUInfoICL(void *that);  // patches topology for ICL HW (ICL offsets); void per Ghidra
-	mach_vm_address_t ogetGPUInfoICL {};
-	
 	// ── MMIO register access wrappers (can intercept/log/redirect) ──
 	static void wrapWriteRegister32(void *controller, uint32_t address, uint32_t value);
 	
 	static uint32_t wrapReadRegister32(void *controller, uint32_t address);
 	
-	bool isICLFB {false};   // true when loaded under AppleIntelICLLPGraphicsFramebuffer
-	bool tglFBLoaded {false};  // true when TGL FB processed — skip ICL FB if set
-	bool tglHWLoaded {false};  // true when TGL HW processed — skip ICL HW if set
-
 	static void blit3d_submit_rectlist(void *param_1,void *param_2,void *param_3);
 	mach_vm_address_t oblit3d_submit_rectlist {};
 
@@ -1379,7 +1369,7 @@ private:
 	// IntelAccelerator personality registration in IOCatalogue. Lives in the HW-kext
 	// path (ICL or TGL Graphics, not Framebuffer) — must run before the FBController's
 	// registerService() so IOKit can match IntelAccelerator. Idempotent.
-	void injectAcceleratorPersonality(bool useTglNames);
+	void injectAcceleratorPersonality();
 	bool acceleratorPersonalityInjected {false};
 	
 	static unsigned long stopGraphicsEngine(void *that);

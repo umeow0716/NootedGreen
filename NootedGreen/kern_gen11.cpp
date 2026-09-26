@@ -23,22 +23,6 @@
 #include <kern/sched_prim.h>
 #include <i386/machine_routines.h>
 
-// ==== 6 kextInfos: ICL fallback + dual TGL identities (com.xxxxx and com.apple) from /Library/Extensions ====
-//trivial
-// ICL FB — com.apple (fallback path)
-static const char *pathsICLFB[] = {
-    "/System/Library/Extensions/AppleIntelICLLPGraphicsFramebuffer.kext/Contents/MacOS/AppleIntelICLLPGraphicsFramebuffer",
-};
-static KernelPatcher::KextInfo kextG11FB {"com.apple.driver.AppleIntelICLLPGraphicsFramebuffer", pathsICLFB, 1, {}, {},
-    KernelPatcher::KextInfo::Unloaded};
-
-// ICL HW — com.apple (fallback path)
-static const char *pathsICLHW[] = {
-    "/System/Library/Extensions/AppleIntelICLGraphics.kext/Contents/MacOS/AppleIntelICLGraphics",
-};
-static KernelPatcher::KextInfo kextG11HW {"com.apple.driver.AppleIntelICLGraphics", pathsICLHW, 1, {}, {},
-    KernelPatcher::KextInfo::Unloaded};
-
 // TGL FB — com.xxxxx (loaded from /Library/Extensions/)
 static const char *pathsTGLFB[] = {
     "/Library/Extensions/AppleIntelTGLGraphicsFramebuffer.kext/Contents/MacOS/AppleIntelTGLGraphicsFramebuffer",
@@ -1559,23 +1543,18 @@ void Gen11::init() {
 	callback = this;
 
 	if (checkKernelArgument("-ngreentglfb") || checkKernelArgument("-ngreentglwithgfx")) {
-		SYSLOG("ngreen", "Gen11::init: FB tier → TGL (ICL FB skipped)");
+		SYSLOG("ngreen", "Gen11::init: FB tier → TGL");
 		lilu.onKextLoadForce(&kextG11FBT);
 		lilu.onKextLoadForce(&kextG11FBTA);
 		if (checkKernelArgument("-ngreentglwithgfx")) {
-			SYSLOG("ngreen", "Gen11::init: HW tier → TGL (ICL HW skipped)");
+			SYSLOG("ngreen", "Gen11::init: HW tier → TGL");
 			lilu.onKextLoadForce(&kextG11HWT);
 			lilu.onKextLoadForce(&kextG11HWTA);
 		}
 	} else if (checkKernelArgument("-ngreentglgfx")) {
-		SYSLOG("ngreen", "Gen11::init: HW tier → TGL (ICL HW skipped)");
+		SYSLOG("ngreen", "Gen11::init: HW tier → TGL");
 		lilu.onKextLoadForce(&kextG11HWT);
 		lilu.onKextLoadForce(&kextG11HWTA);
-	} else if (checkKernelArgument("-ngreenicl")) {
-		SYSLOG("ngreen", "Gen11::init: FB tier → ICL fallback");
-		lilu.onKextLoadForce(&kextG11FB);
-		SYSLOG("ngreen", "Gen11::init: HW tier → ICL fallback");
-		lilu.onKextLoadForce(&kextG11HW);
 	}
 }
 
@@ -1645,8 +1624,8 @@ static bool vfRejectPhysicalFramebufferStart(void *, void *) {
 }
 
 bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t address, size_t size) {
-	const bool physicalFramebuffer = index == kextG11FB.loadIndex ||
-		index == kextG11FBT.loadIndex || index == kextG11FBTA.loadIndex;
+	const bool physicalFramebuffer = index == kextG11FBT.loadIndex ||
+		index == kextG11FBTA.loadIndex;
 	if (physicalFramebuffer && !ngPhysicalGpuAccessAllowed()) {
 		// A VF has no physical display controller. Refusing only DMC or MMIO
 		// helpers is too late: native probe/start have their own raw accesses.
@@ -1660,46 +1639,7 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		SYSLOG("ngreen", "Physical framebuffer probe/start rejected for VF/unknown device");
 		return true;
 	}
-	if (kextG11FB.loadIndex == index) {
-		if (this->tglFBLoaded) {
-			DBGLOG("ngreen", "Skipping ICL FB — TGL FB already loaded");
-			return true;
-		}
-		auto *activeKext = &kextG11FB;
-		DBGLOG("ngreen", "init AppleIntelICLLPGraphicsFramebuffer!");
-		//NGreen::callback->igfxGen = iGFXGen::Gen11;
-		PANIC_COND(!NGreen::callback->setRMMIOIfNecessary(), "ngreen", "Cannot map ICL framebuffer BAR0");
-		
-		//static const uint8_t f15[]= {0x00,0x02, 0x00, 0x5c, 0x8a};
-		//static const uint8_t r15[]= {0x00,0x00, 0x00, 0x49, 0x9a};
-		
-		
-		// Variant-consistent remap for constructor entries:
-		// B8 xx 00 5C 8A -> B8 xx 00 49 9A and exact C7 05 ... 02 00 5C 8A site.
-		static const uint8_t kPatchPlatformRemapMovEaxFind0[] = {0xB8, 0x00, 0x00, 0x5C, 0x8A};
-		static const uint8_t kPatchPlatformRemapMovEaxReplace0[] = {0xB8, 0x00, 0x00, 0x49, 0x9A};
-		static const uint8_t kPatchPlatformRemapMovEaxFind1[] = {0xB8, 0x01, 0x00, 0x5C, 0x8A};
-		static const uint8_t kPatchPlatformRemapMovEaxReplace1[] = {0xB8, 0x01, 0x00, 0x49, 0x9A};
-		static const uint8_t kPatchPlatformRemapMovEaxFind2[] = {0xB8, 0x02, 0x00, 0x5C, 0x8A};
-		static const uint8_t kPatchPlatformRemapMovEaxReplace2[] = {0xB8, 0x02, 0x00, 0x49, 0x9A};
-		static const uint8_t kPatchPlatformRemapC705Find2[] = {0xC7, 0x05, 0xE9, 0x9B, 0x05, 0x00, 0x02, 0x00, 0x5C, 0x8A};
-		static const uint8_t kPatchPlatformRemapC705Replace2[] = {0xC7, 0x05, 0xE9, 0x9B, 0x05, 0x00, 0x02, 0x00, 0x49, 0x9A};
-
-		LookupPatchPlus const minPatches[] = {
-			{&kextG11FB, kPatchPlatformRemapMovEaxFind0, kPatchPlatformRemapMovEaxReplace0, arrsize(kPatchPlatformRemapMovEaxFind0), 1},
-			{&kextG11FB, kPatchPlatformRemapMovEaxFind1, kPatchPlatformRemapMovEaxReplace1, arrsize(kPatchPlatformRemapMovEaxFind1), 1},
-			{&kextG11FB, kPatchPlatformRemapMovEaxFind2, kPatchPlatformRemapMovEaxReplace2, arrsize(kPatchPlatformRemapMovEaxFind2), 1},
-			{&kextG11FB, kPatchPlatformRemapC705Find2, kPatchPlatformRemapC705Replace2, arrsize(kPatchPlatformRemapC705Find2), 1},
-		};
-		
-		PANIC_COND(!LookupPatchPlus::applyAll(patcher, minPatches , address, size), "ngreen", "kextG11FB Failed to apply patches!");
-		//PANIC_COND
-		
-		DBGLOG("ngreen", "Loaded AppleIntelICLLPGraphicsFramebuffer!");
-		return true;
-		
-		
-	}	else if (kextG11FBT.loadIndex == index || kextG11FBTA.loadIndex == index) {
+	if (kextG11FBT.loadIndex == index || kextG11FBTA.loadIndex == index) {
 		const auto *image = reinterpret_cast<const uint8_t *>(address);
 		const bool isprod = NGBinaryIdentity::matchesKextUuid(
 			image, size, NGBinaryIdentity::tglFramebufferProductionUuid);
@@ -1707,7 +1647,6 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			image, size, NGBinaryIdentity::tglFramebufferDebugUuid);
 		PANIC_COND(!isprod && !isdebug, "ngreen",
 			"Unsupported TGL framebuffer payload ABI; refusing private-layout routes");
-		this->tglFBLoaded = true;
 		auto *activeKext = (kextG11FBTA.loadIndex == index) ? &kextG11FBTA : &kextG11FBT;
 		PANIC_COND(!NGreen::callback->setRMMIOIfNecessary(), "ngreen", "Cannot map TGL framebuffer BAR0");
 		SYSLOG("ngreen", "init AppleIntelTGLGraphicsFramebuffer");
@@ -1738,90 +1677,6 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 
 		return true;
 		
-	}else if (kextG11HW.loadIndex == index) {
-		if (this->tglHWLoaded) {
-			DBGLOG("ngreen", "Skipping ICL HW — TGL HW already loaded");
-			return true;
-		}
-		auto *activeKext = &kextG11HW;
-		DBGLOG("ngreen", "init AppleIntelICLGraphics!");
-		PANIC_COND(!NGreen::callback->setRMMIOIfNecessary(), "ngreen", "Cannot map ICL accelerator BAR0");
-		const bool wegCoexist = isWEGCoexistMode();
-
-		{
-			// loadGuCBinary: always route — WEG's firmware path is Mojave-gated and dead on Sonoma.
-			// Without this hook, no GuC binary loads at all in coexist mode → ring dead.
-			RouteRequestPlus firmwareRoute[] = {
-				{"__ZN13IGHardwareGuC13loadGuCBinaryEv", loadIclGuCBinary, this->oLoadIclGuCBinary},
-			};
-			PANIC_COND(!RouteRequestPlus::routeAll(patcher, index, firmwareRoute, address, size), "ngreen", "Failed to route loadGuCBinary (ICL)");
-		}
-
-		if (!wegCoexist) {
-			RouteRequestPlus gpuInfoRoute[] = {
-				// getGPUInfo: override topology at ICL object offsets (different from TGL offsets)
-				{"__ZN16IntelAccelerator10getGPUInfoEv", getGPUInfoICL, this->ogetGPUInfoICL},
-			};
-			PANIC_COND(!RouteRequestPlus::routeAll(patcher, index, gpuInfoRoute, address, size), "ngreen", "Failed to route getGPUInfoICL");
-		}
-		
-		// SKU gate 1+2: NOP JNZ/JA + XOR eax,eax (Sonoma AppleIntelICLGraphics, verified in KC)
-		static const uint8_t fSKUGates12[] = {
-			0x83, 0xF9, 0x01,
-			0x0F, 0x85, 0x0B, 0x01, 0x00, 0x00,
-			0xFF, 0xC8,
-			0x83, 0xF8, 0x07,
-			0x0F, 0x87, 0x00, 0x01, 0x00, 0x00,
-			0x48, 0x8D, 0x0D, 0x77, 0x02, 0x00, 0x00, 0x48
-		};
-		static const uint8_t rSKUGates12[] = {
-			0x83, 0xF9, 0x01,
-			0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
-			0x31, 0xC0,
-			0x83, 0xF8, 0x07,
-			0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
-			0x48, 0x8D, 0x0D, 0x77, 0x02, 0x00, 0x00, 0x48
-		};
-
-		// SKU gate 3: NOP JNZ (Sonoma AppleIntelICLGraphics, verified in KC)
-		static const uint8_t fSKUGate3[] = {
-			0x83, 0xF8, 0x08, 0x0F, 0x85, 0xC2, 0x00, 0x00, 0x00, 0xC7
-		};
-		static const uint8_t rSKUGate3[] = {
-			0x83, 0xF8, 0x08, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0xC7
-		};
-
-		// SKU bypass: TEST rax,rax; JZ->JMP (Sonoma, f2Long verified in KC at 0x14152bcd)
-		static const uint8_t fSkuBypassLong[] = {
-			0x48, 0x85, 0xC0, 0x74, 0x72, 0x48, 0x0F, 0xBC, 0xC0, 0x48, 0xFF, 0xC0, 0x48,
-			0x8D, 0x15, 0x00, 0xCD, 0x0F, 0x00, 0x48, 0x8D, 0x48, 0xFF, 0x48, 0xF7, 0xC1,
-			0xFD, 0xFF, 0xFF, 0xFF, 0x74, 0x27, 0x48, 0x6B, 0xC9, 0x79
-		};
-		static const uint8_t rSkuBypassLong[] = {
-			0x48, 0x85, 0xC0, 0xEB, 0x72, 0x48, 0x0F, 0xBC, 0xC0, 0x48, 0xFF, 0xC0, 0x48,
-			0x8D, 0x15, 0x00, 0xCD, 0x0F, 0x00, 0x48, 0x8D, 0x48, 0xFF, 0x48, 0xF7, 0xC1,
-			0xFD, 0xFF, 0xFF, 0xFF, 0x74, 0x27, 0x48, 0x6B, 0xC9, 0x79
-		};
-
-		LookupPatchPlus const patches[] = {
-			{&kextG11HW, fSKUGates12,    rSKUGates12,    arrsize(fSKUGates12),    1},
-			{&kextG11HW, fSKUGate3,      rSKUGate3,      arrsize(fSKUGate3),      1},
-			{&kextG11HW, fSkuBypassLong, rSkuBypassLong, arrsize(fSkuBypassLong), 1},
-		};
-		
-		/*auto catalina = getKernelVersion() == KernelVersion::Catalina;
-		if (catalina)
-			PANIC_COND(!LookupPatchPlus::applyAll(patcher, patchesc , address, size), "ngreen", "cata Failed to apply patches!");
-		else*/
-		for (size_t i = 0; i < sizeof(patches)/sizeof(patches[0]); ++i) {
-			//IOSleep(delay);
-			PANIC_COND(!patches[i].apply(patcher, address, size), "ngreen", "kextG11HW Failed to apply patch %zu", i);
-		}
-		DBGLOG("ngreen", "Loaded AppleIntelICLGraphics!");
-		injectAcceleratorPersonality(false);
-
-		return true;
-
 	} else if (kextG11HWT.loadIndex == index || kextG11HWTA.loadIndex == index) {
 		// Every route below depends on private Tahoe object offsets, symbol ABIs or
 		// exact instruction sequences. PF ownership does not make an unknown
@@ -1831,7 +1686,6 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			reinterpret_cast<const uint8_t *>(address), size,
 			NGBinaryIdentity::tglVfPayloadUuid), "ngreen",
 			"Unsupported TGL accelerator payload ABI; refusing private-layout routes");
-		this->tglHWLoaded = true;
 		auto *activeKext = (kextG11HWTA.loadIndex == index) ? &kextG11HWTA : &kextG11HWT;
 		SYSLOG("ngreen", "init AppleIntelTGLGraphics (HW accelerator)");
 		PANIC_COND(!NGreen::callback->setRMMIOIfNecessary(), "ngreen", "Cannot map TGL accelerator BAR0");
@@ -2542,7 +2396,7 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			   "RPL spoofed — slices=1 subslices=8(4DSS) maxEU/SS=8 totalEU=64 L3=8");
 		// Adding a personality can start matching immediately. Publish only
 		// after this payload's required routes and patches have been installed.
-		injectAcceleratorPersonality(true);
+		injectAcceleratorPersonality();
 
 		return true;
 	}
@@ -3029,37 +2883,6 @@ void Gen11::acceleratorStop(void *that, void *provider)
 	FunctionCast(acceleratorStop, callback->oAcceleratorStop)(that, provider);
 }
 
-void Gen11::getGPUInfoICL(void *that)
-{
-	FunctionCast(getGPUInfoICL, callback->ogetGPUInfoICL)(that);
-	
-	// --- GPU topology override for ICL HW binary ---
-	// ICL object layout (verified from AppleIntelICLGraphics.sonoma.bin disassembly):
-	//   0x1190 = NumSlices          0x12cc = NumSlices mirror
-	//   0x1188 = NumSubSlices       0x12d0 = NumSubSlices mirror
-	//   0x11a0 = MaxEUPerSubSlice
-	//   0x1154 = ExecutionUnitCount (= MaxEUPerSubSlice × NumSubSlices)
-	//   0x1198 = L3BankCount
-	//   0x1150 = GPU Sku
-	// ICL counts traditional sub-slices (same as TGL binary).
-	// Use ICL GT2 LP config (1×8×8 = 64 EU) to stay within ICL-valid topology.
-	unsigned int numSlices        = 1;
-	unsigned int numSubSlices     = 8;   // ICL GT2 LP max (8 SS)
-	unsigned int maxEUPerSubSlice = 8;
-	unsigned int totalEU          = maxEUPerSubSlice * numSubSlices; // = 64
-	
-	getMember<UInt32>(that, 0x1190) = numSlices;
-	getMember<UInt32>(that, 0x1188) = numSubSlices;
-	getMember<UInt32>(that, 0x11a0) = maxEUPerSubSlice;
-	getMember<UInt32>(that, 0x1154) = totalEU;
-	getMember<UInt32>(that, 0x12cc) = numSlices;     // NumSlices mirror
-	getMember<UInt32>(that, 0x12d0) = numSubSlices;  // NumSubSlices mirror
-	getMember<UInt32>(that, 0x1198) = 8;             // L3BankCount
-	
-	SYSLOG("ngreen", "getGPUInfoICL: overridden topology → slices=%u subslices=%u maxEU/SS=%u totalEU=%u L3Banks=8",
-		   numSlices, numSubSlices, maxEUPerSubSlice, totalEU);
-}
-
 void Gen11::getGPUInfo(void *that)
 {
 
@@ -3358,16 +3181,6 @@ void *Gen11::getColorResolveContext(void *that, bool create)
 		return nullptr;
 	return FunctionCast(getColorResolveContext,
 	                    callback->ogetColorResolveContext)(that, create);
-}
-
-unsigned long Gen11::loadIclGuCBinary(void *that) {
-	// ICL and TGL may both be loaded. Never share their original-function
-	// slot or interpret an ICL object using TGL's private scheduler layout.
-	if (!that || vfIdentifyDevice() != VfIdentity::Physical) {
-		vfMarkProtocolFault("ICL GuC firmware path is unavailable to a VF");
-		return 0;
-	}
-	return FunctionCast(loadIclGuCBinary, callback->oLoadIclGuCBinary)(that);
 }
 
 unsigned long Gen11::loadGuCBinary(void *that) {
@@ -5287,23 +5100,22 @@ bool Gen11::forceWakeWaitAckFallback(uint32_t reqReg, uint32_t ackReg, uint32_t 
 	return ack;
 }
 
-void Gen11::injectAcceleratorPersonality(bool useTglNames)
+void Gen11::injectAcceleratorPersonality()
 {
 	if (this->acceleratorPersonalityInjected) {
 		DBGLOG("ngreen", "injectAcceleratorPersonality: already injected, skipping");
 		return;
 	}
 
-	SYSLOG("ngreen", "injectAcceleratorPersonality: registering IntelAccelerator (%s) into IOCatalogue",
-	       useTglNames ? "TGL" : "ICL");
+	SYSLOG("ngreen", "injectAcceleratorPersonality: registering TGL IntelAccelerator into IOCatalogue");
 
 	auto *dict = OSDictionary::withCapacity(24);
 	if (!dict) return;
 
-	const char *bundleId = useTglNames ? "com.xxxxx.driver.AppleIntelTGLGraphics" : "com.apple.driver.AppleIntelICLGraphics";
-	const char *mtlName  = useTglNames ? "AppleIntelTGLGraphicsMTLDriver"        : "AppleIntelICLGraphicsMTLDriver";
-	const char *glName   = useTglNames ? "AppleIntelTGLGraphicsGLDriver"         : "AppleIntelICLGraphicsGLDriver";
-	const char *vaName   = useTglNames ? "AppleIntelTGLGraphicsVADriver"         : "AppleIntelICLGraphicsVADriver";
+	const char *bundleId = "com.xxxxx.driver.AppleIntelTGLGraphics";
+	const char *mtlName  = "AppleIntelTGLGraphicsMTLDriver";
+	const char *glName   = "AppleIntelTGLGraphicsGLDriver";
+	const char *vaName   = "AppleIntelTGLGraphicsVADriver";
 
 	// Basic matching properties
 	auto *bi  = OSString::withCString(bundleId);

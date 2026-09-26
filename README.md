@@ -1,7 +1,8 @@
 # NootedGreen
 
-Experimental Lilu plugin for Intel Gen11 and newer iGPU bring-up on macOS,
-using Apple's Ice Lake or Tiger Lake driver families where applicable.
+Experimental Lilu plugin for newer Intel iGPU bring-up on macOS using an
+explicitly admitted Tiger Lake driver payload. Native Ice Lake drivers are not
+intercepted.
 
 ## What it does
 
@@ -128,7 +129,6 @@ FB+GFX:
 | `-ngreentglfb` | Load only the TGL framebuffer kext (FB-only mode). On Gen11+, this is generally NOT enough for a coherent display because per-plane DBUF allocation is HW-kext side. Diagnostic / FB-driver-isolation use only. |
 | `-ngreentglwithgfx` | Load both the TGL framebuffer AND the TGL HW accelerator kext. **Recommended for normal operation on TGL/RPL hardware.** Pairs the FB driver with `AppleIntelTGLGraphics.kext` so the watermark/DBUF programming pipeline runs at mode-set time. |
 | `-ngreentglgfx` | Load only the TGL HW kext, no FB. Diagnostic — hardware will not display anything without an FB driver. |
-| `-ngreenicl` | Load the legacy ICL framebuffer + HW kexts instead of TGL. For older Gen11 hardware where TGL spoof isn't suitable. |
 | `-disablegfxfirmware` | Physical-path diagnostic only. A VF uses the PF-owned GuC image and must not upload firmware. |
 | `-ngwegcoex` / `ngwegcoex=1` | Enable WEG coexistence mode. |
 | `ngreenSched=N` | Select GPU scheduler type: `3` = GuC firmware, `4` = IGScheduler4, `5` = host preemptive (default: `3` on real TGL, `5` on RPL/ADL) |
@@ -180,7 +180,7 @@ No more IOPCIPrimaryMatch, we work on IOResource so just put your kexts (+ bundl
 
 https://github.com/sgiammori/NootedGreen
 
-IOResources solving now is done like this for TGL kexts or IcL ketxts : first look at LE kexts and if any kexts is found than fallback to find in SLE kexts : * framebuffer for fb * + * graphics for gpu * + * bundle for metal *
+The maintained Gen11+ path loads the audited TGL kexts and userspace bundles from `/Library/Extensions`.
 
 => they need permissions fix (also Hookcase) so before move to /L/E do in some random folder, check below
 => IOPCIPrimarymatch must be set in both *TGLGraphics* kexts in /Library/Extensiona
@@ -266,21 +266,17 @@ For GPU acceleration, the following userspace driver bundles must be installed i
 
 These bundles are loaded by name (via `MetalPluginName`, `IOGLBundleName`, etc.), not by `CFBundleIdentifier`. They are not shipped with NootedGreen and must be sourced separately.
 
-### Driver path resolution and fallback order
+### Driver path resolution
 
-NootedGreen keeps a strict load-path policy for Gen11/Gen12 bring-up:
+NootedGreen keeps a strict load-path policy for the reviewed bring-up path:
 
-- **Primary (preferred): TGL from `/Library/Extensions`**
+- **TGL from `/Library/Extensions`**
 	- `AppleIntelTGLGraphicsFramebuffer.kext`
 	- `AppleIntelTGLGraphics.kext`
-- **Fallback: ICL from `/System/Library/Extensions`**
-	- `AppleIntelICLLPGraphicsFramebuffer.kext`
-	- `AppleIntelICLGraphics.kext`
 
-Runtime guards enforce this behavior:
-
-- If TGL framebuffer loads, ICL framebuffer processing is skipped.
-- If TGL accelerator loads, ICL accelerator processing is skipped.
+The former `-ngreenicl` branch applied Sonoma byte sequences, fixed topology
+and private firmware hooks to an unversioned payload and has been removed.
+Actual Ice Lake hardware remains on Apple's native, unmodified driver path.
 
 NootedGreen no longer rewrites `gpu_bundle_find_trusted`; the operating system's
 normal bundle search and trust policy determines whether these bundles load.
@@ -302,7 +298,7 @@ binary identity, not by an estimated completion percentage:
 | **Raptor Lake SR-IOV VF (8086:a7a8)** | Static protocol target for the pinned Tahoe TGL payload. Controlled VM acceleration testing has not started. |
 | **Raptor/Alder/Rocket Lake PF** | Not claimed supported; unsafe legacy reset and partial-context workarounds were removed. |
 | **Meteor/Arrow Lake VF** | Explicitly rejected until per-GT/media-13 GGTT discovery is implemented. |
-| **Ice Lake PF** | Dedicated ICL path exists but has not completed this Tahoe review. |
+| **Ice Lake PF** | Natively supported by Apple; NootedGreen does not intercept its framebuffer or accelerator. |
 
 ## Building
 

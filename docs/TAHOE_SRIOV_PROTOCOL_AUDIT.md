@@ -1906,3 +1906,20 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   not a virtual-display implementation or a VF acceleration result. The full
   syntax/analyzer/strict-ABI/sanitizer and protocol suite passes in
   `/tmp/ngreen-static.tsNTId`; the VM remained off.
+
+### Remove the unversioned ICL fallback
+
+- No Tahoe `AppleIntelICLLPGraphicsFramebuffer` or `AppleIntelICLGraphics`
+  payload exists in the workspace from which to establish an exact UUID,
+  instruction count or object ABI. Nevertheless the `-ngreenicl` branch
+  applied four platform-ID rewrites, three Sonoma kernel-cache SKU/control-flow
+  patches, fixed 1x8x8 topology at private offsets and a GuC firmware route.
+- Removed both ICL kext registrations, their process branches, boot argument,
+  topology and firmware wrappers/original slots. Also collapsed accelerator
+  personality publication to its only admitted TGL identity. Actual Ice Lake
+  hardware already has an Apple-native driver and is now left untouched.
+- This intentionally narrows claims rather than treating an unverified fallback
+  as Gen11 support. The RPL VF continues to use the UUID-pinned TGL accelerator;
+  future payload families require their own identity, disassembly and protocol
+  admission. `/tmp/ngreen-static.hYAh0w` passes the complete offline suite and
+  no VM or hardware access occurred.
