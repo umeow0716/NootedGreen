@@ -434,3 +434,24 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   prior host freeze executed these exact bounds. Direct map/unmap bounds,
   native TLB invalidation, and DMA ownership are still boot blockers.
 - Display merge checkpoint 77e218e CI run 36217922452 succeeded.
+
+### GGTT map admission bounds (not a full mapping-lifetime fix)
+
+- Native mapRange, mapRangeDummy, and mapRangeRotated write PTEs before the
+  existing relay-range validation. Added VF identity/readiness/fault and
+  page-aligned assignment bounds checks before these native calls. Physical
+  device calls retain their existing behavior. Rotated mapping also requires
+  non-null source iterator, range descriptor, and physical iterator.
+- Shared pure range predicate additionally bounds absolute PTE indices to
+  the 4 GiB address aperture. Tested 28,561 combinations against a 128-bit
+  arithmetic oracle, including overflow, end-of-window empty ranges, malformed
+  alignment, and near-UINT64_MAX inputs. Local sanitizer/syntax suites pass.
+- This only validates the rotated iterator's enclosing range. Internal cursor,
+  dimensions, divide-by-zero and complete permutation bounds still require
+  reconstruction; therefore this path is NOT certified safe for execution.
+- Native unmap's void API, partial map/relay rollback, direct PTE store
+  atomicity, dummy-page ownership and GuC invalidation ordering remain open.
+  Native map/unmap stores high/low halves separately (0x10384/0x10389 and
+  0x1066d/0x10672), unlike i915 gen8_set_pte writeq. A bound check alone does
+  not prove safety while a GPU can observe an existing valid PTE.
+- Initializer checkpoint 55b092c CI run 36218034448 succeeded. No deployment.

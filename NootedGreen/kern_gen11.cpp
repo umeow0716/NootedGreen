@@ -3,6 +3,7 @@
 #include "kern_gen11.hpp"
 #include "kern_guc_ring.hpp"
 #include "kern_gpu_capabilities.hpp"
+#include "kern_ggtt_bounds.hpp"
 #include "AppleIntelParams.hpp"
 #include <Headers/kern_api.hpp>
 #include "kern_genx.hpp"
@@ -1091,9 +1092,7 @@ bool vfSyncShadowRange(const NGIGAddressRange &range)
 {
 	if (!gVfBinderReady || !gVfGGTTShadow || range.length == 0)
 		return range.length == 0;
-	if ((range.start & 0xFFFULL) != 0 || (range.length & 0xFFFULL) != 0 ||
-	    range.start < gVfGGTTBase || range.length > gVfGGTTSize ||
-	    range.start - gVfGGTTBase > gVfGGTTSize - range.length) {
+	if (!NGGgtt::contains(gVfGGTTBase, gVfGGTTSize, range.start, range.length)) {
 		if (gVfRelayFailureLogs++ < 16)
 			SYSLOG("ngreen", "V217: refusing GGTT range outside VF assignment [0x%llx,+0x%llx]",
 			       static_cast<unsigned long long>(range.start),
@@ -3288,6 +3287,14 @@ bool Gen11::IGHardwareGlobalPageTableMapRange(void *that,
                                               uint64_t physical,
                                               uint64_t flags)
 {
+	// Native writes PTEs before returning. Validating only in the subsequent
+	// relay sync is too late to protect either the shadow or the MMIO aperture.
+	if (gVfIdentity != VfIdentity::Physical &&
+	    (gVfIdentity != VfIdentity::Virtual || !gVfGGTTReady || gVfProtocolFault ||
+	     !NGGgtt::contains(gVfGGTTBase, gVfGGTTSize, range.start, range.length))) {
+		vfMarkProtocolFault("invalid VF GGTT map range or transport state");
+		return false;
+	}
 	const bool result = FunctionCast(IGHardwareGlobalPageTableMapRange,
 	                                 callback->oIGHardwareGlobalPageTableMapRange)(that,
 	                                                                                range,
@@ -3304,9 +3311,20 @@ bool Gen11::IGHardwareGlobalPageTableMapRangeRotated(void *that,
                                                      uint64_t flags)
 {
 	NGIGAddressRange affected {};
+	bool hasRange = false;
 	if (rangeIterator) {
 		auto *range = getMember<NGIGAddressRange *>(rangeIterator, 0);
-		if (range) affected = *range;
+		if (range) {
+			affected = *range;
+			hasRange = true;
+		}
+	}
+	if (gVfIdentity != VfIdentity::Physical &&
+	    (gVfIdentity != VfIdentity::Virtual || !gVfGGTTReady || gVfProtocolFault ||
+	     !hasRange || !physicalIterator ||
+	     !NGGgtt::contains(gVfGGTTBase, gVfGGTTSize, affected.start, affected.length))) {
+		vfMarkProtocolFault("invalid VF rotated GGTT range or transport state");
+		return false;
 	}
 	const bool result = FunctionCast(IGHardwareGlobalPageTableMapRangeRotated,
 	                                 callback->oIGHardwareGlobalPageTableMapRangeRotated)(that,
@@ -3334,6 +3352,12 @@ bool Gen11::IGHardwareGlobalPageTableMapRangeDummy(void *that,
                                                    const NGIGAddressRange &range,
                                                    uint64_t flags)
 {
+	if (gVfIdentity != VfIdentity::Physical &&
+	    (gVfIdentity != VfIdentity::Virtual || !gVfGGTTReady || gVfProtocolFault ||
+	     !NGGgtt::contains(gVfGGTTBase, gVfGGTTSize, range.start, range.length))) {
+		vfMarkProtocolFault("invalid VF dummy GGTT range or transport state");
+		return false;
+	}
 	const bool result = FunctionCast(IGHardwareGlobalPageTableMapRangeDummy,
 	                                 callback->oIGHardwareGlobalPageTableMapRangeDummy)(that,
 	                                                                                     range,

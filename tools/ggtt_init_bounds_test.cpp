@@ -3,6 +3,7 @@
 #include <cassert>
 #include <cstdint>
 #include <cstdio>
+#include "../NootedGreen/kern_ggtt_bounds.hpp"
 
 struct Bounds {
     uint64_t firstBegin, firstEnd;
@@ -17,6 +18,20 @@ static Bounds nativeBounds(uint64_t start, uint64_t length) {
 }
 
 int main() {
+    const uint64_t values[] = {0, 1, 0xFFF, 0x1000, 0x2000, 0x100000,
+        0x40000000, 0xFEE00000, 0xFFFFF000, UINT64_C(0x100000000),
+        UINT64_C(0x100001000), UINT64_MAX - 0xFFF, UINT64_MAX};
+    unsigned rangeCases = 0;
+    for (auto base : values) for (auto size : values)
+    for (auto start : values) for (auto length : values) {
+        using Wide = unsigned __int128;
+        const bool expected = ((base | size | start | length) & 0xFFF) == 0 &&
+            size > 0 && Wide(base) + size <= (Wide(1) << 32) &&
+            start >= base && Wide(start) + length <= Wide(base) + size;
+        assert(NGGgtt::contains(base, size, start, length) == expected);
+        ++rangeCases;
+    }
+    std::printf("PASS: %u GGTT range cases against 128-bit arithmetic oracle\n", rangeCases);
     const auto suppressed = nativeBounds(UINT64_MAX, UINT64_C(0x100000000));
     assert(suppressed.firstBegin > suppressed.firstEnd);
     assert(!suppressed.secondRuns);
