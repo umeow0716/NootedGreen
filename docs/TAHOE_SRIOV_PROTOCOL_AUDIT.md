@@ -318,3 +318,34 @@ enable first; it does not interpret the second scheduling payload as status.
 
 PCI-gate checkpoint `839de9d` passed native macOS CI run 36216611987. This later
 credit/completion batch is still an offline safety change, not a boot candidate.
+
+## Native doorbells and idle-query reachability
+
+`9c09653` passed macOS CI run 36216977521. VM remains shut off, autostart
+disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
+
+- `acquireDoorbell` (`0x212da`) can write/poll `0xcee8`, then touch `0x2030`
+  before its old `0x10` request. `releaseDoorbell` (`0x21626`) accesses `0xfd4`,
+  `0x1000/0x1004` register banks and `0xc530` before its `0x20` request.
+  `allocUkDoorbell` (`0x21992`) has a separate direct `0xcee8` loop, and
+  `reacquireDoorbell` (`0x218da`) retries acquisition. All four VF entry points
+  now reject before these native bodies; PF keeps its original implementation.
+  Failure is explicit (native invalid ID `0x100` / false), not fake allocation.
+- `createUkContext` (`0x204c4`) only creates legacy software proxy storage/work
+  queues, but has unchecked allocation paths: the WorkQueue result is read at
+  `0x20628` without a null check, and conditional transferOwnership remains
+  reachable at `0x20698`. Its failure cleanup and ownership call remain blockers.
+- Original scheduler-4 `isGpuIdle` (`0x1da82`) calls GuC `isGuCIdle` (`0x22382`),
+  which reads legacy WorkQueue/proxy fields through `isContextIdle` (`0x21b2c`).
+  `isKmdContextIdle` (`0x223cc`) likewise reads an old proxy slot. Direct-LRCA
+  submission never updates those fields, so they cannot establish modern idle.
+  These three GuC methods and the scheduler idle wrappers now use conservative
+  modern lifecycle snapshots: enabled/pending contexts are not declared idle;
+  only known non-executing states qualify. Missing state/fault rejects idle.
+  An idle snapshot is NOT a submission barrier or device-DMA-stop proof.
+- Native `waitForGpuIdle` (`0x1da94`) has a bounded polling loop but a void
+  return. Its callers may proceed after timeout. Enabled-context completion,
+  watchdog policy, sleep/resume and actual teardown must still be reconciled
+  before boot testing; conservative queries alone cannot make these safe.
+- Force-wake now requires confirmed physical identity, including failure and
+  pre-identification cases, instead of relying on VF transport readiness.

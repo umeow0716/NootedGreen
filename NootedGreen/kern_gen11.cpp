@@ -2383,6 +2383,20 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				 vfLegacyHostToGuCAction, this->oVfLegacyHostToGuCAction},
 				{"__ZN13IGHardwareGuC15createUkContextEy25UK_GEN11_CONTEXT_PRIORITY",
 				 vfCreateUkContext, this->oVfCreateUkContext},
+				// These routines touch raw physical doorbell registers BEFORE
+				// calling hostToGuCAction; guarding the sender alone is too late.
+				{"__ZN13IGHardwareGuC15acquireDoorbellEP35UK_GEN11_GUC_CONTEXT_DESCRIPTOR_RECb",
+				 vfAcquireDoorbell, this->oVfAcquireDoorbell},
+				{"__ZN13IGHardwareGuC15releaseDoorbellEP35UK_GEN11_GUC_CONTEXT_DESCRIPTOR_REC",
+				 vfReleaseDoorbell, this->oVfReleaseDoorbell},
+				{"__ZN13IGHardwareGuC15allocUkDoorbellEjb",
+				 vfAllocUkDoorbell, this->oVfAllocUkDoorbell},
+				{"__ZN13IGHardwareGuC17reacquireDoorbellEj",
+				 vfReacquireDoorbell, this->oVfReacquireDoorbell},
+				{"__ZN13IGHardwareGuC9isGuCIdleEv", vfIsGuCIdle, this->oVfIsGuCIdle},
+				{"__ZN13IGHardwareGuC13isContextIdleEj", vfIsContextIdle, this->oVfIsContextIdle},
+				{"__ZN13IGHardwareGuC16isKmdContextIdleERK21SGfxContextDescriptor",
+				 vfIsKmdContextIdle, this->oVfIsKmdContextIdle},
 				// V227: initDoorbells consumes DISTRDB before any submission.
 				// Bypass the stock routine for a VF so an all-ones MMIO read
 				// cannot turn into a 16 x 256 topology and corrupt the object.
@@ -8718,6 +8732,90 @@ uint32_t Gen11::vfCreateUkContext(void *that, uint64_t owner, int priority) {
 		that, owner, priority);
 }
 
+uint16_t Gen11::vfAcquireDoorbell(void *that, void *descriptor, bool pin) {
+	if (gVfIdentity == VfIdentity::Physical)
+		return FunctionCast(vfAcquireDoorbell, callback->oVfAcquireDoorbell)(that, descriptor, pin);
+	vfMarkProtocolFault("legacy doorbell acquisition on direct-LRCA VF");
+	return 0x100U; // native invalid-doorbell sentinel, not an allocated ID
+}
+
+void Gen11::vfReleaseDoorbell(void *that, void *descriptor) {
+	if (gVfIdentity == VfIdentity::Physical) {
+		FunctionCast(vfReleaseDoorbell, callback->oVfReleaseDoorbell)(that, descriptor);
+		return;
+	}
+	// No legacy doorbell can have been acquired through the VF entry points.
+	// Do not clear 0xfd4/0x1000 register banks or pretend hardware was released.
+	vfMarkProtocolFault("legacy doorbell release on direct-LRCA VF");
+}
+
+bool Gen11::vfAllocUkDoorbell(void *that, uint32_t contextId, bool pin) {
+	if (gVfIdentity == VfIdentity::Physical)
+		return FunctionCast(vfAllocUkDoorbell, callback->oVfAllocUkDoorbell)(that, contextId, pin);
+	vfMarkProtocolFault("legacy UK doorbell allocation on direct-LRCA VF");
+	return false;
+}
+
+uint16_t Gen11::vfReacquireDoorbell(void *that, uint32_t contextId) {
+	if (gVfIdentity == VfIdentity::Physical)
+		return FunctionCast(vfReacquireDoorbell, callback->oVfReacquireDoorbell)(that, contextId);
+	// Reject before the original's acquire/sleep/retry loop.
+	vfMarkProtocolFault("legacy doorbell retry on direct-LRCA VF");
+	return 0x100U;
+}
+
+// Modern contexts never update Apple's legacy proxy work-queue idle fields.
+// Only states that cannot currently execute provide an idle snapshot. Enabled
+// contexts remain conservatively busy until a real completion/idle mechanism
+// is implemented. This is NOT a submission barrier or device-DMA-stop proof.
+static bool vfContextKnownIdle(const VfGucContext &entry) {
+	return !entry.enablePending && !entry.disablePending &&
+		(entry.state == kVfGucContextEmpty || entry.state == kVfGucContextTombstone ||
+		 entry.state == kVfGucContextRegistered || entry.state == kVfGucContextDisabled);
+}
+
+static bool vfKnownIdleSnapshot(const uint32_t *descriptor = nullptr) {
+	if (gVfIdentity != VfIdentity::Virtual || !gVfCtbEnabled || gVfCtbStopped ||
+	    gVfProtocolFault || !gVfContextLock || !gVfContexts)
+		return false;
+	const IOInterruptState saved = IOSimpleLockLockDisableInterrupt(gVfContextLock);
+	bool idle = true;
+	if (descriptor) {
+		const int32_t slot = vfFindContextLocked(descriptor[0] & 0xFFFFF000U);
+		idle = slot >= 0 && gVfContexts[slot].descriptorLo == descriptor[0] &&
+		       vfContextKnownIdle(gVfContexts[slot]);
+	} else {
+		for (uint32_t i = 0; i < gVfContextCapacity; ++i) {
+			if (!vfContextKnownIdle(gVfContexts[i])) {
+				idle = false;
+				break;
+			}
+		}
+	}
+	IOSimpleLockUnlockEnableInterrupt(gVfContextLock, saved);
+	return idle;
+}
+
+bool Gen11::vfIsGuCIdle(void *that) {
+	if (gVfIdentity == VfIdentity::Physical)
+		return FunctionCast(vfIsGuCIdle, callback->oVfIsGuCIdle)(that);
+	return vfKnownIdleSnapshot();
+}
+
+bool Gen11::vfIsContextIdle(void *that, uint32_t contextId) {
+	if (gVfIdentity == VfIdentity::Physical)
+		return FunctionCast(vfIsContextIdle, callback->oVfIsContextIdle)(that, contextId);
+	// Legacy proxy ID cannot identify a single modern LRCA. All-idle is a
+	// conservative sufficient condition; never inspect unused proxy counters.
+	return vfKnownIdleSnapshot();
+}
+
+bool Gen11::vfIsKmdContextIdle(void *that, const uint32_t *descriptor) {
+	if (gVfIdentity == VfIdentity::Physical)
+		return FunctionCast(vfIsKmdContextIdle, callback->oVfIsKmdContextIdle)(that, descriptor);
+	return descriptor && vfKnownIdleSnapshot(descriptor);
+}
+
 bool Gen11::vfLegacyHostToGuCAction(void *that, const uint32_t *request,
                                   unsigned int requestLength, int timeout,
                                   uint32_t *response) {
@@ -11609,11 +11707,13 @@ void Gen11::forceWake(void *that, bool set, uint32_t dom, uint8_t ctx) {
 	// i915 does not create force-wake domains for a VF. Runtime engine power is
 	// owned by the PF/GuC and these registers are intentionally inaccessible in
 	// BAR0, so a successful no-op is the only valid guest-side behavior.
-	if (ngVfGGTTBinderActive()) {
+	if (gVfIdentity != VfIdentity::Physical) {
+		// An unclassified/failed VF must not fall through to PF MMIO either.
 		static bool loggedVfNoop = false;
 		if (!loggedVfNoop) {
 			loggedVfNoop = true;
-			SYSLOG("ngreen", "V220: VF force-wake is PF-owned; using no-op path");
+			SYSLOG("ngreen", "V240: force-wake denied without physical GPU identity=%u",
+			       static_cast<unsigned int>(gVfIdentity));
 		}
 		return;
 	}
@@ -12821,11 +12921,8 @@ void Gen11::IGScheduler5resume(void *that) {
 // → startGraphicsEngine retry loop. startGraphicsEngine itself SUCCEEDS (return value is non-zero
 // = success path); the reset is triggered entirely by this watchdog query.
 bool Gen11::wrapIGScheduler5IsGpuIdle(const void *that) {
-	if (gVfGGTTReady) {
-		// The PF owns engine reset and hang detection.  A VF has no safe
-		// physical INSTDONE query and must not let Apple's watchdog initiate a
-		// legacy ring reset based on an all-ones MMIO read.
-		return true;
+	if (gVfIdentity != VfIdentity::Physical) {
+		return vfKnownIdleSnapshot();
 	}
 	bool idle = FunctionCast(wrapIGScheduler5IsGpuIdle, callback->oIGScheduler5IsGpuIdle)(that);
 	if (!idle) {
@@ -12839,8 +12936,8 @@ bool Gen11::wrapIGScheduler5IsGpuIdle(const void *that) {
 }
 
 bool Gen11::wrapIGScheduler4IsGpuIdle(const void *that) {
-	if (gVfGGTTReady)
-		return true;
+	if (gVfIdentity != VfIdentity::Physical)
+		return vfKnownIdleSnapshot();
 	bool idle = FunctionCast(wrapIGScheduler4IsGpuIdle, callback->oIGScheduler4IsGpuIdle)(that);
 	if (!idle) {
 		uint32_t instdone = NGreen::callback->readReg32(RING_INSTDONE(RENDER_RING_BASE));
