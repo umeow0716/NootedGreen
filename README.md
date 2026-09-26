@@ -86,6 +86,10 @@ inherit runtime claims from the older Sonoma/Raptor Lake display experiments.
   `FORCE_RESTORE` bit that Apple's legacy execlist adds only to a stack copy;
   reserved bits, unsupported classes/instances and malformed priorities fail
   before transport publication.
+- VF memory interrupts use the media-12 engine table verified against both
+  Tahoe's interrupt bridge and current i915. In particular, Tahoe's second
+  video callback is VCS2 at source offset 34; the absent VCS1 offset 33 is not
+  consumed. The context-image LRM/LRI batch and all six routes are host-tested.
 - Physical engine start/stop/reset-list handling is native. The former GDRST,
   blanket EMR masking, ring rewrites, GGTT[0] diagnostic remaps and recurring
   health-monitor timers have been removed.

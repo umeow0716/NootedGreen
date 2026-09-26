@@ -169,7 +169,6 @@ struct NGIGAddressRange {
 #define   GEN11_GT_VEBOX_DISABLE_MASK		(0x0f << GEN11_GT_VEBOX_DISABLE_SHIFT)
 
 #define   I915_ERROR_INSTRUCTION			(1 << 0)
-#define ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]) + 1)
 // ─── Ring buffer MMIO (per-engine, offset from ring base) ───────────────────
 #define RING_START(base)			((base) + 0x38)
 #define RING_CTL(base)				((base) + 0x3c)

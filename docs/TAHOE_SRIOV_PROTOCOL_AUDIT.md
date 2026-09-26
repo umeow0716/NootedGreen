@@ -2142,3 +2142,30 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   The complete syntax, analyzer, strict-ABI, sanitizer and pinned-payload suite
   passes in `/tmp/ngreen-static.YyW8hV`. The VM remained shut off; firmware
   execution and completion are still controlled-runtime obligations.
+
+### Correct and centralize media-12 VF memory interrupts
+
+- Disassembled Tahoe's complete `IGInterruptBridge::readAndClearInterrupts`,
+  its engine readers and callback dispatcher. The VCS reader tests media master
+  bits 0 and 2, selects interrupt identities 1 and 4, and its constant callback
+  table maps their user interrupts to `IGBitSet<46>` bits 3 and 4. These are
+  VCS0 and VCS2; no VCS1 callback is admitted by the pinned payload.
+- Current i915 independently assigns TGL/ADL media-12 the engine mask
+  `RCS0|BCS0|VECS0|VCS0|VCS2`. Its engine table maps VCS0 to memory-IRQ source
+  byte 32 and VCS2 to byte 34. The bridge incorrectly consumed byte 33, so a
+  VCS2 completion could remain uncleared and its Tahoe callback could be lost.
+- A shared pure table now defines all six engine routes: RCS0 `0->0`, CCS0
+  `4->1`, BCS0 `15->2`, VCS0 `32->3`, VCS2 `34->4`, and VECS0 `63->5`.
+  Runtime consumption uses that table rather than independent literals. GuC
+  source 25 and the 16-byte status stride remain identical to i915.
+- The Gen12 context-image LRM/LRI sequence is now emitted by the same reviewed
+  helper. It validates the register-image span and aligned nonzero GGTT page,
+  then writes only dwords `0x50..0x53` and `0x55..0x59` with the i915/Tahoe
+  ring mask, status and source addresses. The stale unused off-by-one
+  `ARRAY_SIZE` macro was removed.
+- Sanitizer coverage checks all 64 source offsets, all 64 combinations of the
+  six admitted engines, explicitly rejects 33 and admits 34, verifies every
+  context dword/canary and all invalid span/page cases. The complete local
+  syntax/analyzer/strict-ABI/sanitizer/pinned-payload suite passes in
+  `/tmp/ngreen-static.LuWFhe`. The VM remained shut off; actual interrupt and
+  media completion behavior is still a controlled-runtime obligation.

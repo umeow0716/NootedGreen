@@ -15,6 +15,7 @@
 #include "kern_unaligned_patch.hpp"
 #include "kern_framebuffer_patch.hpp"
 #include "kern_vf_guc_request.hpp"
+#include "kern_vf_memirq.hpp"
 #include "kern_context_pool.hpp"
 #include "kern_context_descriptor.hpp"
 #include "kern_workqueue_unwind.hpp"
@@ -883,10 +884,10 @@ constexpr uint32_t kVfCtbUsedBytes = kVfCtbG2HBufferOffset + kVfCtbG2HBufferByte
 // state share one mapping and no extra IGMappedBuffer allocation is needed.
 constexpr uint32_t kVfMemIrqOffset = 0x7000;
 constexpr uint32_t kVfMemIrqBytes = 0x1000;
-constexpr uint32_t kVfMemIrqStatusOffset = 0x000;
-constexpr uint32_t kVfMemIrqSourceOffset = 0x400;
-constexpr uint32_t kVfMemIrqEnableOffset = 0x440;
-constexpr uint32_t kVfGucIrqOffset = 25;
+constexpr uint32_t kVfMemIrqStatusOffset = NGVfMemIrq::statusOffset;
+constexpr uint32_t kVfMemIrqSourceOffset = NGVfMemIrq::sourceOffset;
+constexpr uint32_t kVfMemIrqEnableOffset = NGVfMemIrq::enableOffset;
+constexpr uint32_t kVfGucIrqOffset = NGVfMemIrq::gucIrqOffset;
 static_assert(kVfMemIrqOffset == kVfCtbUsedBytes,
               "memory IRQ page must follow the CTB payload");
 static_assert(kVfMemIrqOffset + kVfMemIrqBytes == kVfCtbBackingBytes,
@@ -1105,29 +1106,27 @@ uint64_t vfConsumeMemoryInterrupts()
 	// Match intel_iov_memirq_handler(): an engine source means that its user
 	// interrupt is pending.  The status byte is diagnostic, not a second gate,
 	// and Gen12 VF memory IRQs do not synthesize context-switch/error events.
-	const auto consumeEngine = [&](uint32_t irqOffset, uint32_t userBit) {
+	const auto consumeEngine = [&](const NGVfMemIrq::EngineRoute &route) {
+		const uint32_t irqOffset = route.irqOffset;
 		const uint8_t source = sourceBase[irqOffset];
 		if (!source)
 			return;
 		sourceBase[irqOffset] = 0;
-		auto *status = statusBase + irqOffset * 16U;
+		auto *status = statusBase + irqOffset * NGVfMemIrq::statusStride;
 		status[0] = 0;
-		pending |= 1ULL << userBit;
+		pending |= 1ULL << route.callbackBit;
 	};
 
 	// irq_offset values are the Gen11+ logical engine interrupt offsets used by
-	// i915.  The IGBitSet positions are Tahoe's corresponding user callbacks.
-	consumeEngine(0, 0);   // RCS0
-	consumeEngine(4, 1);   // CCS0
-	consumeEngine(15, 2);  // BCS0
-	consumeEngine(32, 3);  // VCS0
-	consumeEngine(33, 4);  // VCS1 / Tahoe's second VCS callback
-	consumeEngine(63, 5);  // VECS0
+	// i915. The shared table binds them to Tahoe's corresponding callbacks.
+	for (size_t i = 0; i < NGVfMemIrq::engineRouteCount; ++i)
+		consumeEngine(NGVfMemIrq::engineRoutes[i]);
 
 	const uint8_t gucSource = sourceBase[kVfGucIrqOffset];
 	if (gucSource) {
 		sourceBase[kVfGucIrqOffset] = 0;
-		auto *gucStatus = statusBase + kVfGucIrqOffset * 16U;
+		auto *gucStatus = statusBase +
+			kVfGucIrqOffset * NGVfMemIrq::statusStride;
 		// Linux dispatches G2H whenever the GuC source byte is asserted and
 		// treats status[15] as a programming-note assertion only.
 		gucStatus[15] = 0;
@@ -3724,15 +3723,9 @@ static bool vfPrepareContextMemoryIrq(OSObject *backing, mach_vm_address_t gette
 		return false;
 	auto *regs = reinterpret_cast<volatile uint32_t *>(image + 0x1000);
 	const uint32_t page = gVfCtbGpuBase + kVfMemIrqOffset;
-	regs[0x50] = 0x14C80002U; // MI_LRM, global GGTT, engine-relative MMIO
-	regs[0x51] = 0xA8;       // GEN12_RING_INT_MASK
-	regs[0x52] = page + kVfMemIrqEnableOffset;
-	regs[0x53] = 0;
-	regs[0x55] = 0x11081003U; // MI_LRI(2), posted, engine-relative MMIO
-	regs[0x56] = 0xAC;       // GEN12_RING_INT_STATUS
-	regs[0x57] = page + kVfMemIrqStatusOffset;
-	regs[0x58] = 0xA4;       // GEN12_RING_INT_SRC
-	regs[0x59] = page + kVfMemIrqSourceOffset;
+	if (!NGVfMemIrq::prepareContextRegisters(
+	        regs, NGVfMemIrq::contextRegisterDwords, page))
+		return false;
 	OSSynchronizeIO();
 	return true;
 }
