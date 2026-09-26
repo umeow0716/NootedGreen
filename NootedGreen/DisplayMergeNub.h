@@ -13,6 +13,8 @@ public:
     virtual bool 		MergeDictionaryIntoProvider(IOService *  provider, OSDictionary *  mergeDict);
     virtual bool		MergeDictionaryIntoDictionary(OSDictionary *  sourceDictionary,  OSDictionary *  targetDictionary);
 
+private:
+    bool mergeDictionaryAtDepth(OSDictionary *source, OSDictionary *target, unsigned depth);
 };
     
 #endif

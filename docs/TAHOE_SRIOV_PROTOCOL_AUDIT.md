@@ -385,3 +385,27 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
 - Removed V111's deviceStart false-to-true override. Failed initialization
   remains failure on both PF and VF; an unready VF previously met its fallback
   condition because that condition tested readiness, not hardware identity.
+
+### Display property merge review (static, no VM test)
+
+- Reviewed DisplayMergeNub.cpp and its header in full. Probe now validates
+  provider and property types before dereferencing them. Removed the shallow
+  property-table merge that overwrote nested provider dictionaries before the
+  intended recursive merge; writes now use setProperty. Rename occurs only
+  after successful merge.
+- Released temporary dictionary copies on both merge success and failure;
+  checked recursive iterator allocation; allocation failure cannot inherit a
+  previous successful result. Empty dictionaries are successful no-ops.
+- Bounded recursive merge to 16 levels, including cyclic dictionary inputs;
+  atomically claimed the existing deliberate metaclass lifetime reference.
+  This preserves that legacy keep-loaded policy, not a proof it is necessary.
+- Syntax checks and offline ASan/UBSan ring/capability suites pass in
+  /tmp/ngreen-static.dgSJeZ. Clang static analysis of DisplayMergeNub.cpp now
+  reports no warnings. These tests do not execute IOKit property merging;
+  concurrent property updates and partial top-level merge remain limitations.
+- Commit 9848bc0 built successfully in GitHub Actions run 36217644463.
+  No artifact installed and VM remains unstarted.
+- Next teardown issue: IGHardwareGlobalPageTableUnmapRange currently calls
+  native unmap and only logs a PF relay failure. Because the API returns void,
+  merely faulting later cannot prove the caller retains the underlying pages.
+  This is an unresolved DMA-lifetime blocker, not evidence of safe teardown.
