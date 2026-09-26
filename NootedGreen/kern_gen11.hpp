@@ -1675,12 +1675,6 @@ private:
 	static void sanitizeCDClockFrequency(AppleIntel::AppleIntelBaseController *that);
 	static uint32_t wrapProbeCDClockFrequency(AppleIntel::AppleIntelBaseController *that);
 	
-	static void initCDClock(AppleIntel::AppleIntelBaseController *that);
-	mach_vm_address_t oinitCDClock {};
-	
-	static void setCDClockFrequencyOnHotplug(AppleIntel::AppleIntelBaseController *that);
-	mach_vm_address_t osetCDClockFrequencyOnHotplug {};
-	
 	static void disableCDClock(AppleIntel::AppleIntelBaseController *that);
 	mach_vm_address_t odisableCDClock {};
 	
@@ -1740,11 +1734,7 @@ private:
 	static void IGHardwareBlit3DContextinitialize(void *that);
 	mach_vm_address_t oIGHardwareBlit3DContextinitialize {};
 	
-	static void * IGMappedBuffergetMemory(void *that);
 	mach_vm_address_t oIGMappedBuffergetMemory {};
-	
-	static void *  IGHardwareBlit3DContextoperatornew(unsigned long size);
-	mach_vm_address_t oIGHardwareBlit3DContextoperatornew {};
 	
 	
 	static uint64_t blit3d_init_ctx(void *that);
@@ -1765,12 +1755,6 @@ private:
 	static uint64_t IGHardwareContextinitWithOptions(void *that, void *task, const void *params, uint8_t arg);
 	mach_vm_address_t oIGHardwareContextinitWithOptions {};
 
-	// Extended GPU context init — sets up additional context state (PPGTT, aux tables)
-	static uint64_t IGHardwareExtendedContextinitWithOptions
-			  (void *that,void *param_1,
-			   void *param_2);
-	mach_vm_address_t oIGHardwareExtendedContextinitWithOptions {};
-	
 	// Pointers to extended context parameter tables (per-context-type)
 	mach_vm_address_t ExtendedCtxParams {};
 	mach_vm_address_t Blit2DExtendedCtxParams {};
@@ -1836,8 +1820,6 @@ private:
 	static bool wrapIGScheduler4IsGpuIdle(const void *that);
 	mach_vm_address_t oIGScheduler4IsGpuIdle {};
 
-	static uint32_t  IGAccelSegmentResourceListprepare(void *that);  // GPU memory segment setup
-	mach_vm_address_t oIGAccelSegmentResourceListprepare {};
 
 	static uint32_t beginCoalescedSegment(void *that);  // V124: guard [member+0xb8] null deref
 	mach_vm_address_t obeginCoalescedSegment {};

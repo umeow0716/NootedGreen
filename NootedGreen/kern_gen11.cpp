@@ -1890,7 +1890,6 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		} else {
 			RouteRequestPlus requests[] = {
 				{"__ZN31AppleIntelFramebufferController18hwInitializeCStateEv",hwInitializeCState, this->ohwInitializeCState},
-				{"__ZN31AppleIntelFramebufferController11initCDClockEv",initCDClock,this->oinitCDClock}
 			};
 			PANIC_COND(!RouteRequestPlus::routeAll(patcher, index, requests, address, size), "nblue","Failed to route symbols");
 		}
@@ -2069,8 +2068,6 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				{"__ZN19AppleIntelPowerWell4initEP31AppleIntelFramebufferController",AppleIntelPowerWellinit, this->oAppleIntelPowerWellinit},
 				{"__ZN31AppleIntelFramebufferController5startEP9IOService",AppleIntelBaseControllerstart, this->oAppleIntelBaseControllerstart},
 				{"__ZN31AppleIntelFramebufferController21probeCDClockFrequencyEv",wrapProbeCDClockFrequency,	this->orgProbeCDClockFrequency},
-				{"__ZN31AppleIntelFramebufferController11initCDClockEv",initCDClock, this->oinitCDClock},
-				{"__ZN31AppleIntelFramebufferController28setCDClockFrequencyOnHotplugEv",setCDClockFrequencyOnHotplug, this->osetCDClockFrequencyOnHotplug},
 				{"__ZN31AppleIntelFramebufferController14disableCDClockEv",disableCDClock,this->odisableCDClock},
 				{"__ZN31AppleIntelFramebufferController16hwRegsNeedUpdateEP21AppleIntelFramebufferP21AppleIntelDisplayPathP10CRTCParamsPK29IODetailedTimingInformationV2PN16AppleIntelScaler12SCALERPARAMSE",hwRegsNeedUpdate, this->ohwRegsNeedUpdate},
 			};
@@ -2087,8 +2084,6 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				{"__ZN19AppleIntelPowerWell4initEP24AppleIntelBaseController",AppleIntelPowerWellinit, this->oAppleIntelPowerWellinit},
 				{"__ZN24AppleIntelBaseController5startEP9IOService",AppleIntelBaseControllerstart, this->oAppleIntelBaseControllerstart},
 				{"__ZN24AppleIntelBaseController21probeCDClockFrequencyEv",wrapProbeCDClockFrequency,	this->orgProbeCDClockFrequency},
-				{"__ZN24AppleIntelBaseController11initCDClockEv",initCDClock, this->oinitCDClock},
-				{"__ZN24AppleIntelBaseController28setCDClockFrequencyOnHotplugEv",setCDClockFrequencyOnHotplug, this->osetCDClockFrequencyOnHotplug},
 				{"__ZN24AppleIntelBaseController14disableCDClockEv",disableCDClock,this->odisableCDClock},
 				{"__ZN24AppleIntelBaseController16hwRegsNeedUpdateEP21AppleIntelFramebufferP21AppleIntelDisplayPathP10CRTCParamsPK29IODetailedTimingInformationV2PN16AppleIntelScaler12SCALERPARAMSE",hwRegsNeedUpdate, this->ohwRegsNeedUpdate},
 				// V201 diagnostic: read scanout buffer right after hwSetupMemory returns to
@@ -2511,8 +2506,8 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				// the next bootstrap allocation starts.
 				{"__ZN11IGAccelTask12fTaskCounterE", this->igAccelTaskCounter},
 			};
-			SYSLOG_COND(!SolveRequestPlus::solveAll(patcher, index, solveRequests, address, size), "ngreen",
-			            "V231: failed to resolve TGL accelerator bootstrap symbols");
+			PANIC_COND(!SolveRequestPlus::solveAll(patcher, index, solveRequests, address, size), "ngreen",
+			           "Failed to resolve mandatory TGL accelerator bootstrap symbols");
 		}
 
 		// V229: apply this byte patch before routing readDoorbellSQIDIConfig.
@@ -2527,6 +2522,8 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				 this->vfSharedMappedBufferGetVirtualAddress},
 				{"__ZNK14IGMappedBuffer20getGPUVirtualAddressEv",
 				 this->vfMappedBufferGetGPUVirtualAddress},
+				{"__ZNK14IGMappedBuffer9getMemoryEv",
+				 this->oIGMappedBuffergetMemory},
 				{"__ZN13IGHardwareGuC12allocContextEyb",
 				 this->vfAllocContext},
 				{"__ZN13IGHardwareGuC14releaseContextEj",
@@ -2683,11 +2680,6 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			 // at VA 0xfffffff034136000 (page 0xD of context buffer). Our replacement skips the
 			 // dangerous memcpy and logs diagnostic info about the mapping.
 			 {"__ZN23IGHardwareBlit3DContext10initializeEv", IGHardwareBlit3DContextinitialize, this->oIGHardwareBlit3DContextinitialize},
-			 // V143: Register operator new for IGHardwareBlit3DContext so getBlit3DContext can
-			 // actually allocate the context object. Without this, oIGHardwareBlit3DContextoperatornew
-			 // is always null → alloc always returns nullptr → ctx=0 forever → NULL-task submitBlit
-			 // flood → BCS ring WAIT_ON_SCANLINE stall.
-			 {"__ZN23IGHardwareBlit3DContextnwEm", IGHardwareBlit3DContextoperatornew, this->oIGHardwareBlit3DContextoperatornew},
 			 // V508: Hook base-class IGHardwareContext::withOptions to inspect ctx+0xb8 (FIFO
 			 // channel / ring buffer allocation) and dump LRCA page1 via wbinvd+aperture right
 			 // after initWithOptions writes it — determines if RING_START=0 is real or LLC artifact.
@@ -2697,12 +2689,6 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			 // Writes Gen12 ring context MI_LRI block so ExecList context-restore works on RPL.
 			 {"__ZN17IGHardwareContext15initWithOptionsEP11IGAccelTaskRK23IGHardwareContextParamsh", IGHardwareContextinitWithOptions, this->oIGHardwareContextinitWithOptions},
 
-			 // V144: Hook IGHardwareExtendedContext::initWithOptions so it actually runs with
-			 // the resolved Blit3DExtendedCtxParams. Without this, oIGHardwareExtendedContextinitWithOptions
-			 // is null → init returns 0 → ctx+0xb8 stays NULL → submitBlit+0x28e crash.
-			 {"__ZN25IGHardwareExtendedContext15initWithOptionsEP11IGAccelTaskRK31IGHardwareExtendedContextParams", IGHardwareExtendedContextinitWithOptions, this->oIGHardwareExtendedContextinitWithOptions},
-			 {"__ZNK14IGMappedBuffer9getMemoryEv", IGMappedBuffergetMemory, this->oIGMappedBuffergetMemory},
-			 
 			 // Preserve native submit work, but validate the borrowed task and every
 			 // context object before the pinned Tahoe body dereferences its FIFO.
 			 {"__ZN16IntelAccelerator10submitBlitEP15blit3d_params_tRK8IGVectorI11rect_pair_t25IGIOMallocAllocatorPolicyEP11IGAccelTaskb", submitBlit, this->osubmitBlit},
@@ -2716,10 +2702,6 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			 // V122: markBlitUsage+0x17 has the identical [ctx+0xb8] dereference and is called
 			 // from prepare+0x2a immediately after initBlitUsage. Must be guarded too.
 			 {"__ZN26IGAccelSegmentResourceList13markBlitUsageEv", markBlitUsage, this->omarkBlitUsage},
-
-			 // V123b: Register the prepare hook — the implementation (returning 0 early) existed
-			 // but was never routed, so Apple's original kept calling initBlitUsage/markBlitUsage.
-			 {"__ZN26IGAccelSegmentResourceList7prepareEv", IGAccelSegmentResourceListprepare, this->oIGAccelSegmentResourceListprepare},
 
 			 // V124: IGAccelCommandQueue::beginCoalescedSegment+0x2f dereferences [member+0xb8]
 			 // (same null as all previous crashes — context never initialized on RPL).
@@ -2753,13 +2735,9 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				{"__ZN16IntelAccelerator4stopEP9IOService", acceleratorStop,
 				 this->oAcceleratorStop},
 			};
-			if (RouteRequestPlus::routeAll(patcher, index, startRoute, address, size)) {
-				SYSLOG("ngreen", "V242: Hooked IntelAccelerator start/stop lifecycle");
-			} else {
-				PANIC_COND(gVfIdentity != VfIdentity::Physical, "ngreen",
-				           "Cannot admit VF driver without accelerator lifecycle routes");
-				SYSLOG("ngreen", "V242: IntelAccelerator lifecycle symbols unavailable on physical path");
-			}
+			PANIC_COND(!RouteRequestPlus::routeAll(patcher, index, startRoute, address, size),
+			           "ngreen", "Cannot admit pinned accelerator without lifecycle routes");
+			SYSLOG("ngreen", "V242: Hooked IntelAccelerator start/stop lifecycle");
 		}
 
 		{
@@ -5728,51 +5706,6 @@ void Gen11::sanitizeCDClockFrequency(AppleIntel::AppleIntelBaseController *that)
 
 }
 
-/*
-void Gen11::initCDClock(void *that)
-{
-	// Mirrors AppleIntelFramebufferController::initCDClock decompiled flow.
-	// DSSM bits [31:29] encode the reference clock frequency (0=24MHz, 1=19.2MHz, 2=38.4MHz).
-	// The check < 0x60000000 ensures bits[31:29] < 3 (i.e. a valid reference).
-	auto dssm = NGreen::callback->readReg32(ICL_REG_DSSM);
-	if (dssm >= 0x60000000) {
-		// Invalid / unsupported reference clock — fall back to original which will panic/reset.
-		return FunctionCast(initCDClock, callback->oinitCDClock)(that);
-	}
-
-	uint32_t refFreqIdx = dssm >> 0x1d;                       // bits [31:29]
-	getMember<uint32_t>(that, 0xe98) = refFreqIdx;
-
-	// Call through our safe wrapper so BXT_DE_PLL_ENABLE / CDCLK sanity checks are applied.
-	auto probedFreq = static_cast<uint64_t>(wrapProbeCDClockFrequency(that));
-	getMember<uint64_t>(that, 0xe88) = probedFreq;
-
-	if (probedFreq == 0) {
-		// Fallback table — mirrors DAT_00081140[refFreqIdx * 0x24], first uint32 per entry.
-		static const uint32_t kDefaultCDClkFreq[] = {
-			ICL_CDCLK_FREQ_648_0,   // index 0: 24.0 MHz ref → 648 MHz
-			ICL_CDCLK_FREQ_652_8,   // index 1: 19.2 MHz ref → 652.8 MHz
-			ICL_CDCLK_FREQ_652_8,   // index 2: 38.4 MHz ref → 652.8 MHz
-		};
-		probedFreq = (refFreqIdx < arrsize(kDefaultCDClkFreq))
-			? kDefaultCDClkFreq[refFreqIdx]
-			: ICL_CDCLK_FREQ_648_0;
-	}
-
-	getMember<uint64_t>(that, 0xe90) = probedFreq;
-}
-*/
-void Gen11::initCDClock(AppleIntel::AppleIntelBaseController *that)
-{
-	return FunctionCast(initCDClock, callback->oinitCDClock)(that);
-}
-
-void Gen11::setCDClockFrequencyOnHotplug(AppleIntel::AppleIntelBaseController *that)
-{
-	return FunctionCast(setCDClockFrequencyOnHotplug, callback->osetCDClockFrequencyOnHotplug)(that );
-}
-
-
 void Gen11::disableCDClock(AppleIntel::AppleIntelBaseController *that)
 {
 	FunctionCast(disableCDClock, callback->odisableCDClock)(that );
@@ -7714,24 +7647,6 @@ unsigned long Gen11::stopGraphicsEngine(void *that)
 	return ret;
 }
 
-void *  Gen11::IGHardwareBlit3DContextoperatornew(unsigned long size)
-{
-	if (!callback->oIGHardwareBlit3DContextoperatornew) {
-		// V143: symbol was never registered — this is the root-cause of context alloc always
-		// returning null, leading to the perpetual NULL-task submitBlit flood and BCS stall.
-		if (isExperimentalMonitorEnabled()) {
-			static bool v143NewNullLogged = false;
-			if (!v143NewNullLogged) {
-				v143NewNullLogged = true;
-				SYSLOG("ngreen", "V143: oIGHardwareBlit3DContextoperatornew is null (RouteRequest missing?)");
-			}
-		}
-		return nullptr;
-	}
-	auto ret = FunctionCast(IGHardwareBlit3DContextoperatornew, callback->oIGHardwareBlit3DContextoperatornew)(size);
-	return ret;
-}
-
 // V509: Hook IGHardwareContext::initWithOptions (base class) — CPU-side LRCA page1 repair.
 // Apple's initWithOptions calls restoreFromSafeImage() before copying g_cInitGfxRingContextRCS.
 // On RPL that call returns true (skips the memcpy), leaving MI_LRI headers at DW1/DW8 as
@@ -7943,202 +7858,6 @@ void *Gen11::IGHardwareContextwithOptions(void *task, const void *params, uint8_
 	return ctx;
 }
 
-uint64_t Gen11::IGHardwareExtendedContextinitWithOptions(void *that,void *param_1,void *param_2)
-{
-	if (!callback->oIGHardwareExtendedContextinitWithOptions) {
-		static bool v136ExtInitLogged = false;
-		if (!v136ExtInitLogged) {
-			v136ExtInitLogged = true;
-			SYSLOG("ngreen", "V136: oIGHardwareExtendedContextinitWithOptions is null");
-		}
-		return 0;
-	}
-	void *b8pre = getMember<void *>(that, 0xb8);
-	// V502: log ExtendedCtxParams+0x10 (buffer size) and +0x18 (scheduler flag).
-	// From Ghidra: if param_2+0x18==0 → simple buffer alloc path (no GPU cmd).
-	// If param_2+0x18!=0 → GPU command submission via vtable+0x118 (hang source on RPL).
-	uint64_t p2f10 = param_2 ? getMember<uint64_t>(param_2, 0x10) : 0;
-	uint64_t p2f18 = param_2 ? getMember<uint64_t>(param_2, 0x18) : 0;
-	static bool v502iwoLogged = false;
-	if (!v502iwoLogged) {
-		v502iwoLogged = true;
-		SYSLOG("ngreen", "V502: initWithOptions ExtCtxParams=%p +0x10=0x%llx +0x18=0x%llx (0=simple,!=0=GPU-cmd)",
-			   param_2, (unsigned long long)p2f10, (unsigned long long)p2f18);
-	}
-	uint64_t ret = FunctionCast(IGHardwareExtendedContextinitWithOptions, callback->oIGHardwareExtendedContextinitWithOptions)(that,param_1,param_2);
-	void *b8post = getMember<void *>(that, 0xb8);
-	// V115 REMOVED: V115 suppressed initWithOptions to prevent MCE from GGTT[0]→stolen mem.
-	// V116 now remaps GGTT[0] to a safe dummy page, so the MCE can't happen.
-	// V115 was causing Apple's (un-hooked) getBlit3DContext to return nullptr, which then
-	// made submitBlit+0x28e dereference nullptr+0xb8 → page fault. Pass through real result.
-	static int v501Count = 0;
-	if (v501Count < 8) {
-		v501Count++;
-		SYSLOG("ngreen", "V501[%d]: initWithOptions(%p) ret=%llu b8_pre=%p b8_post=%p p1=%p p2=%p",
-			   v501Count, that, (unsigned long long)ret, b8pre, b8post, param_1, param_2);
-	}
-	return ret;
-	
-	uint8_t ctx=getMember<uint8_t>(that, 0x6c);
-	
-	//intel_engine_init_workarounds(engine);
-		//engine_fake_wa_init
-		/*if (engine->class == COMPUTE_CLASS)
-		ccs_engine_wa_init(engine, wal);
-		 else if (engine->class == RENDER_CLASS)
-		rcs_engine_wa_init(engine, wal);
-		 else
-		xcs_engine_wa_init(engine, wal);*/
-	
-	//intel_engine_init_whitelist(engine);
-	//intel_engine_init_ctx_wa(engine);
-	
-	if (ctx==0)// RCS
-	{
-		
-		//engine_fake_wa_init
-		uint8_t mocs= 3;
-		NGreen::callback->wa_masked_field_set(
-					RING_CMD_CCTL(RENDER_RING_BASE),
-					CMD_CCTL_MOCS_MASK,
-					CMD_CCTL_MOCS_OVERRIDE(mocs, mocs));
-		
-		
-		
-		
-		//	rcs_engine_wa_init(engine, wal);
-		//rcs_engine_wa_init
-		//Wa_1606700617:tgl,dg1,adl-p
-		NGreen::callback->wa_masked_en(
-				 GEN9_CS_DEBUG_MODE1,
-				 FF_DOP_CLOCK_GATE_DISABLE);
-		
-		
-		// Wa_1606931601:tgl,rkl,dg1,adl-s,adl-p
-		NGreen::callback->wa_mcr_masked_en( GEN8_ROW_CHICKEN2, GEN12_DISABLE_EARLY_READ);
-
-
-		 // Wa_1407928979:tgl A
-		NGreen::callback->wa_write_or( GEN7_FF_THREAD_MODE,
-				GEN12_FF_TESSELATION_DOP_GATE_DISABLE);
-
-		//general_render_compute_wa_init
-		// Wa_1406941453:tgl,rkl,dg1,adl-s,adl-p
-		NGreen::callback->wa_mcr_masked_en(
-				 GEN10_SAMPLER_MODE,
-				 ENABLE_SMALLPL);
-		
-		
-		// Wa_1409804808
-		NGreen::callback->wa_mcr_masked_en( GEN8_ROW_CHICKEN2,
-				 GEN12_PUSH_CONST_DEREF_HOLD_DIS);
-
-		// Wa_14010229206 /
-		NGreen::callback->wa_mcr_masked_en( GEN9_ROW_CHICKEN4, GEN12_DISABLE_TDL_PUSH);
-		
-		// Wa_1607297627
-		NGreen::callback->wa_masked_en(
-				RING_PSMI_CTL(RENDER_RING_BASE),
-				GEN12_WAIT_FOR_EVENT_POWER_DOWN_DISABLE |
-				GEN8_RC_SEMA_IDLE_MSG_DISABLE);
-		
-		
-		//if (GRAPHICS_VER(i915) >= 9)
-		NGreen::callback->wa_masked_en(
-				 GEN7_FF_SLICE_CS_CHICKEN1,
-				 GEN9_FFSC_PERCTX_PREEMPT_CTRL);
-		
-		
-		
-		//tgl_whitelist_build
-		//WaAllowPMDepthAndInvocationCountAccessFromUMD
-		NGreen::callback->whitelist_reg_ext( PS_INVOCATION_COUNT,
-				  RING_FORCE_TO_NONPRIV_ACCESS_RD |
-				  RING_FORCE_TO_NONPRIV_RANGE_4);
-
-		
-		 // Wa_1808121037:tgl
-
-		NGreen::callback->whitelist_reg( GEN7_COMMON_SLICE_CHICKEN1);
-
-		// Wa_1806527549:tgl
-		NGreen::callback->whitelist_reg( HIZ_CHICKEN);
-
-		// Required by recommended tuning setting (not a workaround)
-		NGreen::callback->whitelist_reg( GEN11_COMMON_SLICE_CHICKEN3);
-		
-		
-		
-		//intel_engine_init_ctx_wa
-		//gen12_ctx_workarounds_init
-		// * Wa_1409142259:tgl,dg1,adl-p
-		
-		NGreen::callback->wa_masked_en( GEN11_COMMON_SLICE_CHICKEN3,
-									  GEN12_DISABLE_CPS_AWARE_COLOR_PIPE);
-		
-		/* WaDisableGPGPUMidThreadPreemption:gen12 */
-		NGreen::callback->wa_masked_field_set( GEN8_CS_CHICKEN1,
-											 GEN9_PREEMPT_GPGPU_LEVEL_MASK,
-											 GEN9_PREEMPT_GPGPU_THREAD_GROUP_LEVEL);
-		
-		//* Wa_16011163337 - GS_TIMER
-		NGreen::callback->wa_add(
-								GEN12_FF_MODE2,
-								~0,
-								FF_MODE2_TDS_TIMER_128 | FF_MODE2_GS_TIMER_224,
-								0, false);
-		
-						
-	}
-	
-	if (ctx==1)//CCS
-	{
-		//return 0;
-		//engine_fake_wa_init
-		uint8_t mocs= 3;
-		NGreen::callback->wa_masked_field_set(
-					RING_CMD_CCTL(GEN12_COMPUTE0_RING_BASE),
-					CMD_CCTL_MOCS_MASK,
-					CMD_CCTL_MOCS_OVERRIDE(mocs, mocs));
-		
-		//panic("x");
-	}
-	
-	if (ctx==2)//BCS
-	{
-
-		//gen12_ctx_gt_mocs_init
-		/*table->size  = ARRAY_SIZE(tgl_mocs_table);
-		table->table = tgl_mocs_table;
-		table->n_entries = GEN9_NUM_MOCS_ENTRIES;
-		table->uc_index = 3;*/
-		uint8_t mocs;
-		//if (engine->class == COPY_ENGINE_CLASS) {
-			mocs = 3;
-			NGreen::callback->wa_write_clr_set(
-					 BLIT_CCTL(BLT_RING_BASE),//engine->mmio_base
-					 BLIT_CCTL_MASK,
-					 BLIT_CCTL_MOCS(mocs, mocs));
-		
-	}
-	
-	if (ctx==3)//VCS
-	{
-	}
-	
-	if (ctx==4)//VCS2
-	{
-	}
-	
-	if (ctx==5)//VECS
-	{
-	}
-	
-	
-	
-	return FunctionCast(IGHardwareExtendedContextinitWithOptions, callback->oIGHardwareExtendedContextinitWithOptions)(that,param_1,param_2);
-}
-
 void  Gen11::initBlitUsage(void *that)
 {
 	// V121: initBlitUsage reads [ctx+0xb8]+0x178 without null checks.
@@ -8211,22 +7930,6 @@ void  Gen11::markBlitUsage(void *that)
 		}
 	}
 	FunctionCast(markBlitUsage, callback->omarkBlitUsage)(that);
-}
-
-// still to order..
-
-void * Gen11::IGMappedBuffergetMemory(void *that)
-{
-	auto ret=FunctionCast(IGMappedBuffergetMemory, callback->oIGMappedBuffergetMemory)(that);
-	return ret;
-}
-
-uint32_t  Gen11::IGAccelSegmentResourceListprepare(void *that)
-{
-	// V123c: keep original prepare flow. initBlitUsage/markBlitUsage are already
-	// individually guarded for !isRealTGL, so short-circuiting prepare is no longer needed
-	// and can leave command-queue state incomplete, leading to stalls.
-	return FunctionCast(IGAccelSegmentResourceListprepare, callback->oIGAccelSegmentResourceListprepare)(that);
 }
 
 uint32_t Gen11::beginCoalescedSegment(void *that) {

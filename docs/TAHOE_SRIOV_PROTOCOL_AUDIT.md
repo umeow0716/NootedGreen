@@ -1681,3 +1681,19 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   removal or a non-invasive snapshot remains part of the continuing PF audit.
 - Full syntax, zero-finding analyzer, strict ABI warnings and all sanitizer
   models pass in `/tmp/ngreen-static.zeJcpr`. No VM or hardware test was run.
+
+### Active-route and mandatory-lifecycle cleanup
+
+- Removed three zero-effect accelerator routes and the unreachable
+  post-return workaround tail in the extended-context wrapper. The VF context
+  bridge now solves `IGMappedBuffer::getMemory` directly instead of routing a
+  pass-through wrapper.
+- Removed the ICL/TGL `initCDClock` and TGL hotplug-frequency pass-through
+  routes. Native dispatch remains authoritative; the separate probe/sanitize
+  mutation still requires its own review.
+- Bootstrap symbols and accelerator start/stop lifecycle routes are mandatory
+  for the UUID-pinned Tahoe payload on PF and VF. A partially solved private
+  ABI can no longer continue to service publication or teardown.
+- `/tmp/ngreen-static.FYOPcq` passes the complete static suite. The VM remains
+  off because the physical start path still contains contradictory legacy
+  GDRST, permanent EMR-mask and recurring IRQ-timer experiments.

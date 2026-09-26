@@ -66,3 +66,31 @@ sources returns the current count to 1,303; this does not close older coverage.
   virtual-display/Sunshine integration or all-source approval exists yet.
 - Preserve the original user baseline in the parent `WORK_BASELINE.md` and
   append checkpoints; do not replace it with a narrower task.
+
+### Active-route and mandatory-lifecycle cleanup
+
+- Removed the active `IGHardwareBlit3DContext::operator new`,
+  `IGHardwareExtendedContext::initWithOptions` and
+  `IGAccelSegmentResourceList::prepare` wrappers because they only called the
+  captured native function. The extended-context wrapper also contained about
+  180 lines after an unconditional return: an unreachable second native call
+  plus obsolete MOCS, whitelist and workaround writes. Native allocation,
+  initialization and resource preparation remain installed by Apple.
+- `IGMappedBuffer::getMemory` remains a required native dependency of the VF
+  context bridge, but no longer has a pass-through route. The pinned symbol is
+  solved directly with the other VF buffer accessors, preserving the exact
+  native entry address without modifying call dispatch.
+- Removed the active ICL/TGL `initCDClock` and TGL
+  `setCDClockFrequencyOnHotplug` hooks because both were zero-effect native
+  trampolines. The separate CDCLK probe/sanitize path and its captured native
+  disable entry remain under review.
+- The UUID-pinned TGL accelerator's bootstrap symbols and start/stop lifecycle
+  are now mandatory. Missing CTB dispatch, mapped-buffer, task-counter or
+  lifecycle symbols fail payload admission for PF and VF instead of logging and
+  continuing on a partially routed private ABI. This is static admission
+  hardening, not runtime proof that GuC teardown completes.
+- The full syntax gate, zero-finding analyzer, strict Gen11 warnings and every
+  offline sanitizer/protocol model pass in `/tmp/ngreen-static.FYOPcq`. The VM
+  stayed off. Review of the remaining physical start path found contradictory
+  legacy reset/error-mask timer experiments; they are the next open safety
+  block and are not certified by this checkpoint.
