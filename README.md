@@ -281,6 +281,8 @@ MODE_DONE also has payload semantics: runnable state `1` can retire only an
 enable, while `0` can retire only a disable. When both are pending, ordered CTB
 delivery must retire enable first; a mismatched or out-of-order payload faults
 the protocol instead of advancing teardown while firmware reports runnable.
+The pending token must also agree with an admissible lifecycle state; corrupted
+flag/state combinations cannot be normalized by a completion.
 
 G2H callbacks additionally require the complete live transport and are blocked
 after protocol quarantine, preventing partial-init locks from being reused.

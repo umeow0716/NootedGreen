@@ -34,9 +34,15 @@ int main() {
                         static_cast<VfGucContextState>(rawState);
                     const auto result = NGVfContextEvent::scheduleDone(
                         state, enable != 0, disable != 0, runnable);
-                    const bool enableDone = enable && runnable == 1U;
+                    const bool enableState =
+                        state == kVfGucContextPendingEnable ||
+                        state == kVfGucContextEnabled ||
+                        state == kVfGucContextPendingDisable;
+                    const bool enableDone = enable && runnable == 1U &&
+                                            enableState;
                     const bool disableDone = !enable && disable &&
-                                             runnable == 0U;
+                                             runnable == 0U &&
+                                             state == kVfGucContextPendingDisable;
                     assert(result.handled == (enableDone || disableDone));
                     assert(result.enablePending ==
                            ((enable != 0) && !enableDone));

@@ -2292,12 +2292,15 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   accepts only runnable `1`; otherwise a pending disable accepts only `0`.
   Enable retains ordering priority when teardown has queued both tokens, so a
   disable acknowledgement cannot overtake the earlier enable acknowledgement.
-  Undefined runnable values, reversed order and events with no pending token
-  leave state unchanged and enter the existing protocol-fault quarantine.
+  Enable completion is admissible only from PendingEnable, Enabled or the
+  ordered dual-pending PendingDisable state; disable completion additionally
+  requires PendingDisable. Undefined runnable values, reversed order,
+  impossible flag/state pairs and events with no pending token leave state
+  unchanged and enter the existing protocol-fault quarantine.
 - The sanitizer model exhausts all nine lifecycle states, four pending-token
   combinations and runnable values `0`, `1` and an invalid `2` (108 cases).
   The complete syntax/analyzer/strict-ABI/sanitizer/pinned-payload suite passes
-  in `/tmp/ngreen-static.MKF0tK`; the VM remained shut off. This proves host
+  in `/tmp/ngreen-static.EXgXQm`; the VM remained shut off. This proves host
   transition logic, not firmware ordering or execution.
 
 ### Remove the redundant VF descriptor proxy and LRCA hash

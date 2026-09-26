@@ -66,14 +66,17 @@ inline ScheduleDone scheduleDone(VfGucContextState state, bool enablePending,
 	                              bool disablePending, uint32_t runnableState) {
 	ScheduleDone result {false, state, enablePending, disablePending};
 	if (enablePending) {
-		if (runnableState != 1U)
+		const bool enableState = state == kVfGucContextPendingEnable ||
+		                         state == kVfGucContextEnabled ||
+		                         state == kVfGucContextPendingDisable;
+		if (runnableState != 1U || !enableState)
 			return result;
 		result.enablePending = false;
 		if (state == kVfGucContextPendingEnable)
 			result.state = kVfGucContextEnabled;
 		result.handled = true;
 	} else if (disablePending) {
-		if (runnableState != 0U)
+		if (runnableState != 0U || state != kVfGucContextPendingDisable)
 			return result;
 		result.disablePending = false;
 		result.state = kVfGucContextDisabled;
