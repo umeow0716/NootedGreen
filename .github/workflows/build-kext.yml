@@ -36,7 +36,9 @@ jobs:
 
       - name: Check all sources and protocol models
         run: |
-          CXX="$(xcrun -f clang++)" bash tools/check-static.sh
+          SDKROOT="$(xcrun --sdk macosx --show-sdk-path)" \
+            CXX="$(xcrun --sdk macosx -f clang++)" \
+            bash tools/check-static.sh
 
       - name: Build x86_64 release kext
         run: |
