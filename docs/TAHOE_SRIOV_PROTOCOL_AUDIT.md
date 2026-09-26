@@ -1189,3 +1189,34 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   hash allocation/corruption and full object-provenance proof remain open.
 - Full static/sanitizer suite passes /tmp/ngreen-static.pHlcvS. 0e27f5c CI
   36223942541 passed. VM remains off and no kext was deployed.
+
+### Transactional VF legacy proxy context creation
+
+- Pinned createUkContext 0x204c4 reserves an ID before allocating its shared
+  process backing. A backing OOM jumps straight to failure without releasing
+  the ID. It also dereferences the workqueue factory result at 0x20628 before
+  checking it; getMemory at 0x205b3 has the same unchecked result problem.
+- The VF route no longer enters that function. Physical devices remain native.
+  It resolves and reuses native allocContext/releaseContext and the two object
+  factories, but owns the transaction: reserve ID; allocate one-page shared
+  backing; validate full CPU/GPU mapping; obtain and validate the complete
+  physical segment through the UUID-pinned vtable slot; allocate/validate the
+  8-KiB workqueue; only then publish the record and four metadata pointers.
+- Every post-reservation failure releases queue, process backing and context ID
+  in that order. OOM returns 0x400 without poisoning transport; malformed
+  ownership/mapping marks a protocol fault before rollback. Packed process+4
+  and record+0x1c fields use explicit little-endian byte stores, not unaligned
+  C++ lvalues. Added read/write canaries across offsets 0..15.
+- Native successful WorkQueue::free releases its mapped buffer and lock but not
+  the retained accelerator or OSObject base allocation. On VF the legacy queue
+  is never sent to GuC (direct-LRCA CTB submission is separate), so the wrapper
+  verifies native cleared buffer/lock, consumes and releases the accelerator
+  retain, clears the borrowed process pointer and invokes OSObject::free.
+  Failed-init marker cleanup remains a separate state machine.
+- Offline coverage now includes 176 unaligned read/write cases and 32 published
+  workqueue destruction states in addition to failed-init/CTB unwind. Full
+  suite passes /tmp/ngreen-static.1si7P1; 25d20b2 CI 36224136022 passed.
+- This transaction still relies on the pinned Tahoe private object/vtable ABI
+  and allocator/factory lifetimes. If a future path publishes the legacy WQ to
+  GuC, separate firmware deregistration and DMA-quiescence proof is mandatory.
+  No dynamic hardware result is inferred; VM remains shut off.

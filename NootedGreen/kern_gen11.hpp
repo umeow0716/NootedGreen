@@ -1376,6 +1376,10 @@ private:
 	                                  uint32_t *response);
 	mach_vm_address_t oVfLegacyHostToGuCAction {};
 	static uint32_t vfCreateUkContext(void *that, uint64_t owner, int priority);
+	mach_vm_address_t vfAllocContext {};
+	mach_vm_address_t vfReleaseContext {};
+	mach_vm_address_t vfSharedMappedBufferWithOptions {};
+	mach_vm_address_t vfWorkQueueWithOptions {};
 	static bool vfWorkQueueInit(void *that, void *accelerator, uint32_t id, void *process);
 	mach_vm_address_t oVfWorkQueueInit {};
 	static void vfWorkQueueFree(void *that);

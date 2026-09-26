@@ -302,6 +302,31 @@ constexpr uint32_t kGucPolicyPreemptionTimeout = 0x2002;
 constexpr uint32_t kGucPolicySchedulingPriority = 0x2003;
 constexpr uint32_t kGucPolicySlpmFrequency = 0x2005;
 
+static bool vfLegacyProxyPoolValid(void *that, mach_vm_address_t getter,
+	                               uint32_t *usedOut = nullptr,
+	                               uint32_t *countOut = nullptr) {
+	if (!that || !getter ||
+	    !getMember<IOLock *>(that, 0x40) || !getMember<void *>(that, 0x50))
+		return false;
+	auto *backing = getMember<void *>(that, 0x68);
+	if (!backing)
+		return false;
+	using Getter = uint8_t *(*)(void *);
+	auto *pool = reinterpret_cast<Getter>(getter)(backing);
+	const uint32_t count = getMember<uint32_t>(that, 0x80);
+	const uint32_t used = getMember<uint32_t>(that, 0x84);
+	const uint32_t next = getMember<uint32_t>(that, 0x88);
+	if (!NGContextPool::validStorage(pool,
+	        getMember<uint64_t>(backing, kVfMappedBufferLengthOffset), count) ||
+	    used > count || (next >= count && next != NGContextPool::invalidId))
+		return false;
+	if (usedOut)
+		*usedOut = used;
+	if (countOut)
+		*countOut = count;
+	return true;
+}
+
 uint32_t vfContextHash(uint32_t lrcaPage)
 {
 	return (lrcaPage >> 12) * 2654435761U;
@@ -2196,9 +2221,17 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				 this->vfSharedMappedBufferGetVirtualAddress},
 				{"__ZNK14IGMappedBuffer20getGPUVirtualAddressEv",
 				 this->vfMappedBufferGetGPUVirtualAddress},
+				{"__ZN13IGHardwareGuC12allocContextEyb",
+				 this->vfAllocContext},
+				{"__ZN13IGHardwareGuC14releaseContextEj",
+				 this->vfReleaseContext},
+				{"__ZN20IGSharedMappedBuffer11withOptionsEP11IGAccelTaskmjj",
+				 this->vfSharedMappedBufferWithOptions},
+				{"__ZN22IGHardwareGuCWorkQueue11withOptionsEP22IOGraphicsAccelerator2jP37UK_GEN11_SCHED_PROCESS_DESCRIPTOR_REC",
+				 this->vfWorkQueueWithOptions},
 			};
 			PANIC_COND(!SolveRequestPlus::solveAll(patcher, index, bufferAccessors, address, size),
-			           "ngreen", "Cannot resolve full-width VF CTB buffer accessors");
+			           "ngreen", "Cannot resolve VF buffer accessors or proxy-context lifecycle");
 			this->vfOSObjectFree = patcher.solveSymbol(KernelPatcher::KernelID,
 				"__ZN8OSObject4freeEv");
 			PANIC_COND(!this->vfOSObjectFree, "ngreen",
@@ -8769,7 +8802,11 @@ bool Gen11::vfWorkQueueInit(void *that, void *accelerator, uint32_t id, void *pr
 	PANIC_COND(getMember<void *>(that, 0x10) || getMember<void *>(that, 0x20) ||
 		getMember<void *>(that, 0x30) || getMember<void *>(that, 0x38), "ngreen",
 		"Refusing reinitialization of a nonempty VF workqueue");
-	if (!accelerator || !process || id >= NGContextPool::invalidId || !vfCanUseSleepingLock()) {
+	if (!accelerator || !process || id >= NGContextPool::invalidId ||
+	    !vfCanUseSleepingLock() ||
+	    (accelerator && (getMember<uint8_t>(accelerator, 0x1190) & 0x20U))) {
+		if (accelerator && (getMember<uint8_t>(accelerator, 0x1190) & 0x20U))
+			vfMarkProtocolFault("legacy page ownership requested for VF workqueue");
 		getMember<void *>(that, 0x38) = NGWorkQueue::failedInitMarker();
 		return false;
 	}
@@ -8805,24 +8842,170 @@ void Gen11::vfWorkQueueFree(void *that) {
 		reinterpret_cast<BaseFree>(callback->vfOSObjectFree)(that);
 		return; // object is deleted, no further access
 	}
-	// Published queue teardown still requires separate DMA-quiescence work.
+	// Direct-LRCA VF submission never publishes this legacy work queue to GuC.
+	// Native free releases its mapped buffer and lock but omits the accelerator
+	// retain and OSObject base destruction; complete those proven obligations.
+	auto *accelerator = getMember<void *>(that, 0x10);
+	PANIC_COND(!accelerator || !getMember<void *>(that, 0x20) ||
+		!getMember<void *>(that, 0x30) || !getMember<void *>(that, 0x38) ||
+		!callback->vfOSObjectFree, "ngreen",
+		"Refusing incomplete published VF workqueue teardown");
 	FunctionCast(vfWorkQueueFree, callback->oVfWorkQueueFree)(that);
+	void *ownedAccelerator = nullptr;
+	PANIC_COND(!NGWorkQueue::consumePublishedAfterNativeFree(
+		getMember<void *>(that, 0x10), getMember<void *>(that, 0x20),
+		getMember<void *>(that, 0x30), getMember<void *>(that, 0x38),
+		ownedAccelerator), "ngreen",
+		"Native VF workqueue teardown retained resources or lost ownership");
+	static_cast<OSObject *>(ownedAccelerator)->release();
+	using BaseFree = void (*)(void *);
+	reinterpret_cast<BaseFree>(callback->vfOSObjectFree)(that);
 }
 
 uint32_t Gen11::vfCreateUkContext(void *that, uint64_t owner, int priority) {
 	if (!that || priority < 0 || priority > 3)
 		return NGContextPool::invalidId;
-	if (gVfIdentity != VfIdentity::Physical &&
-	    (gVfIdentity != VfIdentity::Virtual || !gVfCtbEnabled || gVfCtbStopped ||
-	     gVfProtocolFault || !getMember<IOLock *>(that, 0x40) || !vfCanUseSleepingLock())) {
+	if (gVfIdentity == VfIdentity::Physical)
+		return FunctionCast(vfCreateUkContext, callback->oVfCreateUkContext)(
+			that, owner, priority);
+	if (gVfIdentity != VfIdentity::Virtual || !gVfCtbEnabled || gVfCtbStopped ||
+	    gVfProtocolFault || !vfCanUseSleepingLock() ||
+	    !vfLegacyProxyPoolValid(that,
+		callback->vfSharedMappedBufferGetVirtualAddress) ||
+	    !callback->vfAllocContext || !callback->vfReleaseContext ||
+	    !callback->vfSharedMappedBufferWithOptions ||
+	    !callback->vfWorkQueueWithOptions ||
+	    !callback->vfMappedBufferGetGPUVirtualAddress ||
+	    !callback->oIGMappedBuffergetMemory) {
 		// Apple's initWithOptions releases a failed CTB and continues toward
 		// legacy MMIO context creation. Its createUkContext failure sentinel
 		// is 0x400, which makes that initialization path return failure.
 		vfMarkProtocolFault("legacy context creation without safe VF transport or pool lock");
-		return 0x400U;
+		return NGContextPool::invalidId;
 	}
-	return FunctionCast(vfCreateUkContext, callback->oVfCreateUkContext)(
-		that, owner, priority);
+
+	using AllocContext = uint32_t (*)(void *, uint64_t, bool);
+	using ReleaseContext = void (*)(void *, uint32_t);
+	using SharedFactory = OSObject *(*)(void *, uint64_t, uint32_t, uint32_t);
+	using WorkQueueFactory = OSObject *(*)(void *, uint32_t, void *);
+	using GetVirtualAddress = uint8_t *(*)(void *);
+	using GetGpuAddress = uint64_t (*)(void *);
+	using GetMemory = void *(*)(void *);
+	using GetPhysicalSegment = uint64_t (*)(void *, uint64_t, uint64_t *);
+	auto *accelerator = getMember<void *>(that, 0x38);
+	auto *task = accelerator ? getMember<void *>(accelerator, 0x150) : nullptr;
+	if (!accelerator || !task) {
+		vfMarkProtocolFault("VF proxy context has no accelerator task owner");
+		return NGContextPool::invalidId;
+	}
+	if (getMember<uint8_t>(accelerator, 0x1190) & 0x20U) {
+		vfMarkProtocolFault("legacy page ownership requested for VF proxy context");
+		return NGContextPool::invalidId;
+	}
+
+	auto releaseContext = reinterpret_cast<ReleaseContext>(callback->vfReleaseContext);
+	auto rollback = [&](uint32_t id, OSObject *queue, OSObject *backing) {
+		if (queue)
+			queue->release();
+		if (backing)
+			backing->release();
+		releaseContext(that, id);
+	};
+	const uint32_t id = reinterpret_cast<AllocContext>(callback->vfAllocContext)(
+		that, owner, true);
+	if (id == NGContextPool::invalidId)
+		return id;
+
+	uint32_t poolCount = 0;
+	PANIC_COND(!vfLegacyProxyPoolValid(that,
+		callback->vfSharedMappedBufferGetVirtualAddress, nullptr, &poolCount) ||
+		id >= poolCount, "ngreen",
+		"New VF proxy context escaped its validated pool");
+	auto getVirtual = reinterpret_cast<GetVirtualAddress>(
+		callback->vfSharedMappedBufferGetVirtualAddress);
+	auto getGpu = reinterpret_cast<GetGpuAddress>(
+		callback->vfMappedBufferGetGPUVirtualAddress);
+
+	auto *backing = reinterpret_cast<SharedFactory>(
+		callback->vfSharedMappedBufferWithOptions)(task, PAGE_SIZE, 2, 0);
+	if (!backing) {
+		rollback(id, nullptr, nullptr);
+		return NGContextPool::invalidId;
+	}
+	const uint64_t backingCpu = reinterpret_cast<uint64_t>(getVirtual(backing));
+	const uint64_t backingGpu = getGpu(backing);
+	const uint64_t backingBytes = getMember<uint64_t>(
+		backing, kVfMappedBufferLengthOffset);
+	if (!NGGgtt::mappedBacking(backingCpu, backingBytes, PAGE_SIZE, backingGpu,
+	                          gVfGGTTBase, gVfGGTTSize, kGucGgttTop)) {
+		vfMarkProtocolFault("invalid VF proxy process backing mapping");
+		rollback(id, nullptr, backing);
+		return NGContextPool::invalidId;
+	}
+	auto *memory = reinterpret_cast<GetMemory>(callback->oIGMappedBuffergetMemory)(backing);
+	auto **vtable = memory ? *reinterpret_cast<void ***>(memory) : nullptr;
+	auto segment = vtable ? reinterpret_cast<GetPhysicalSegment>(
+		vtable[0x158 / sizeof(void *)]) : nullptr;
+	uint64_t segmentBytes = 0;
+	const uint64_t physical = segment ? segment(memory, 0, &segmentBytes) : 0;
+	if (!physical || segmentBytes < PAGE_SIZE ||
+	    !NGGgtt::nativePhysicalRange(physical, PAGE_SIZE)) {
+		vfMarkProtocolFault("invalid VF proxy process physical segment");
+		rollback(id, nullptr, backing);
+		return NGContextPool::invalidId;
+	}
+
+	auto *process = reinterpret_cast<void *>(backingCpu + PAGE_SIZE / 2);
+	const uint64_t processGpu = backingGpu + PAGE_SIZE / 2;
+	auto *queue = reinterpret_cast<WorkQueueFactory>(
+		callback->vfWorkQueueWithOptions)(accelerator, id, process);
+	if (!queue) {
+		rollback(id, nullptr, backing);
+		return NGContextPool::invalidId;
+	}
+	auto *queueBacking = getMember<void *>(queue, 0x30);
+	const uint64_t queueCpu = queueBacking ?
+		reinterpret_cast<uint64_t>(getVirtual(queueBacking)) : 0;
+	const uint64_t queueGpu = queueBacking ? getGpu(queueBacking) : 0;
+	const uint64_t queueBytes = queueBacking ?
+		getMember<uint64_t>(queueBacking, kVfMappedBufferLengthOffset) : 0;
+	if (gVfProtocolFault || getMember<void *>(queue, 0x10) != accelerator ||
+	    getMember<void *>(queue, 0x38) != process ||
+	    getMember<uint64_t>(process, 0x20) != UINT64_C(0x100002000) ||
+	    !NGGgtt::mappedBacking(queueCpu, queueBytes, 0x2000, queueGpu,
+	                          gVfGGTTBase, gVfGGTTSize, kGucGgttTop)) {
+		vfMarkProtocolFault("incomplete VF proxy workqueue mapping or ownership");
+		rollback(id, queue, backing);
+		return NGContextPool::invalidId;
+	}
+
+	auto *poolBacking = getMember<void *>(that, 0x68);
+	auto *pool = getVirtual(poolBacking);
+	auto *record = pool + static_cast<size_t>(id) * NGContextPool::stride;
+	auto *metadata = getMember<uint8_t *>(that, 0x50) +
+		static_cast<size_t>(id) * 0x20;
+	PANIC_COND(!(record[NGContextPool::flagsOffset] & 1U), "ngreen",
+		"New VF proxy context lost its allocation reservation");
+	getMember<uint32_t>(record, 0x5A70) = static_cast<uint32_t>(priority);
+	getMember<uint32_t>(record, 0x08) = id;
+	getMember<uint32_t>(record, 0x24) = 0x100;
+	getMember<uint32_t>(record, NGContextPool::flagsOffset) =
+		(getMember<uint32_t>(record, NGContextPool::flagsOffset) & ~0x1EU) | 0xAU;
+	getMember<uint32_t>(record, 0x18) = static_cast<uint32_t>(backingGpu);
+	NGUnaligned::writeLe64(record + 0x1C, physical);
+	getMember<uint32_t>(record, 0x5A7C) = static_cast<uint32_t>(processGpu);
+	getMember<uint32_t>(record, 0x5A80) = static_cast<uint32_t>(queueGpu);
+	getMember<uint32_t>(record, 0x5A84) = 0x2000;
+	getMember<void *>(metadata, 0x00) = queue;
+	getMember<void *>(metadata, 0x08) = backing;
+	getMember<void *>(metadata, 0x10) = reinterpret_cast<void *>(backingCpu);
+	getMember<void *>(metadata, 0x18) = process;
+	NGUnaligned::writeLe32(process, id);
+	NGUnaligned::writeLe64(static_cast<uint8_t *>(process) + 0x04, backingCpu);
+	NGUnaligned::writeLe32(static_cast<uint8_t *>(process) + 0x28,
+		static_cast<uint32_t>(priority));
+	OSSynchronizeIO();
+	return id;
 }
 
 uint32_t Gen11::vfAllocContextId(void *that, uint64_t owner, bool clear) {
@@ -9216,31 +9399,6 @@ static bool vfPrepareContextMemoryIrq(OSObject *backing, mach_vm_address_t gette
 	regs[0x58] = 0xA4;       // GEN12_RING_INT_SRC
 	regs[0x59] = page + kVfMemIrqSourceOffset;
 	OSSynchronizeIO();
-	return true;
-}
-
-static bool vfLegacyProxyPoolValid(void *that, mach_vm_address_t getter,
-	                               uint32_t *usedOut = nullptr,
-	                               uint32_t *countOut = nullptr) {
-	if (!that || !getter ||
-	    !getMember<IOLock *>(that, 0x40) || !getMember<void *>(that, 0x50))
-		return false;
-	auto *backing = getMember<void *>(that, 0x68);
-	if (!backing)
-		return false;
-	using Getter = uint8_t *(*)(void *);
-	auto *pool = reinterpret_cast<Getter>(getter)(backing);
-	const uint32_t count = getMember<uint32_t>(that, 0x80);
-	const uint32_t used = getMember<uint32_t>(that, 0x84);
-	const uint32_t next = getMember<uint32_t>(that, 0x88);
-	if (!NGContextPool::validStorage(pool,
-	        getMember<uint64_t>(backing, kVfMappedBufferLengthOffset), count) ||
-	    used > count || (next >= count && next != NGContextPool::invalidId))
-		return false;
-	if (usedOut)
-		*usedOut = used;
-	if (countOut)
-		*countOut = count;
 	return true;
 }
 

@@ -8,14 +8,29 @@
 using namespace NGContextPool;
 int main() {
     for (unsigned offset = 0; offset < 16; ++offset) {
-        uint8_t bytes[20] = {};
+        uint8_t bytes[25] = {};
         for (uint32_t value : {0U, 1U, 0x80000000U, 0x89ABCDEFU, UINT32_MAX}) {
             for (unsigned i = 0; i < 4; ++i)
                 bytes[offset + i] = static_cast<uint8_t>(value >> (8 * i));
             assert(NGUnaligned::readLe32(bytes + offset) == value);
         }
+		for (uint64_t value : {UINT64_C(0), UINT64_C(1),
+		                       UINT64_C(0x8000000000000000),
+		                       UINT64_C(0x0123456789ABCDEF), UINT64_MAX}) {
+			std::fill(bytes, bytes + sizeof(bytes), 0xA5);
+			NGUnaligned::writeLe64(bytes + offset, value);
+			assert(NGUnaligned::readLe64(bytes + offset) == value);
+			for (unsigned i = 0; i < offset; ++i) assert(bytes[i] == 0xA5);
+			for (unsigned i = offset + 8; i < sizeof(bytes); ++i) assert(bytes[i] == 0xA5);
+		}
+		uint32_t value32 = 0x89ABCDEFU;
+		std::fill(bytes, bytes + sizeof(bytes), 0xA5);
+		NGUnaligned::writeLe32(bytes + offset, value32);
+		assert(NGUnaligned::readLe32(bytes + offset) == value32);
+		for (unsigned i = 0; i < offset; ++i) assert(bytes[i] == 0xA5);
+		for (unsigned i = offset + 4; i < sizeof(bytes); ++i) assert(bytes[i] == 0xA5);
     }
-    puts("PASS 80 unaligned little-endian word cases");
+    puts("PASS 176 unaligned little-endian read/write cases with canaries");
     for (unsigned offset = 0; offset < 16; ++offset) {
         std::vector<uint8_t> packed(offset + 8, 0xA5);
         for (unsigned bit = 0; bit < 64; ++bit) {

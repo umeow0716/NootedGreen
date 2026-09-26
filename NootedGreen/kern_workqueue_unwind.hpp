@@ -19,6 +19,20 @@ inline bool consumeFailedInit(const void *accelerator, const void *lock,
     return true;
 }
 
+// Native published-queue free has already released/nullified its lock and
+// mapped buffer. Transfer the still-owned accelerator retain to the caller and
+// clear the non-owned process pointer before OSObject base destruction.
+inline bool consumePublishedAfterNativeFree(void *&accelerator, const void *lock,
+                                            const void *buffer, void *&process,
+                                            void *&ownedAccelerator) {
+    if (!accelerator || lock || buffer || !process || ownedAccelerator)
+        return false;
+    ownedAccelerator = accelerator;
+    accelerator = nullptr;
+    process = nullptr;
+    return true;
+}
+
 // Only for a fresh, unpublished pinned-TGL workqueue whose native init returned
 // false. That function has exactly two failure exits: lock allocation failed,
 // or buffer allocation failed with its new lock still held by this thread.

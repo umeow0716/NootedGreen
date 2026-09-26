@@ -68,7 +68,7 @@ struct CtbOperations {
 };
 
 int main() {
-    int acceleratorObject, lockObject, bufferObject;
+    int acceleratorObject, lockObject, secondLockObject, bufferObject;
     for (unsigned mask = 0; mask < 8; ++mask) {
         void *accelerator = mask & 1 ? &acceleratorObject : nullptr;
         void *lock = mask & 2 ? &lockObject : nullptr;
@@ -107,7 +107,31 @@ int main() {
                 assert(!NGWorkQueue::consumeFailedInit(nullptr, nullptr, nullptr, process));
         }
     }
-    int secondLockObject;
+    size_t publishedCases = 0;
+    for (unsigned resources = 0; resources < 16; ++resources) {
+        void *accelerator = resources & 1 ? &acceleratorObject : nullptr;
+        void *lock = resources & 2 ? &lockObject : nullptr;
+        void *buffer = resources & 4 ? &bufferObject : nullptr;
+        void *process = resources & 8 ? &secondLockObject : nullptr;
+        for (void *initialOwned : {static_cast<void *>(nullptr),
+                                   static_cast<void *>(&bufferObject)}) {
+            void *owned = initialOwned;
+            void *savedAccelerator = accelerator, *savedProcess = process;
+            const bool valid = accelerator && !lock && !buffer && process && !owned;
+            assert(NGWorkQueue::consumePublishedAfterNativeFree(
+                accelerator, lock, buffer, process, owned) == valid);
+            assert(accelerator == (valid ? nullptr : savedAccelerator));
+            assert(process == (valid ? nullptr : savedProcess));
+            assert(owned == (valid ? savedAccelerator : initialOwned));
+            if (valid) {
+                assert(!NGWorkQueue::consumePublishedAfterNativeFree(
+                    accelerator, lock, buffer, process, owned));
+            }
+            accelerator = savedAccelerator;
+            process = savedProcess;
+            ++publishedCases;
+        }
+    }
     for (unsigned mask = 0; mask < 16; ++mask) {
         void *accelerator = mask & 1 ? &acceleratorObject : nullptr;
         void *h2g = mask & 2 ? &lockObject : nullptr;
@@ -132,7 +156,8 @@ int main() {
             assert(ops.events == expected);
         }
     }
-    std::puts("PASS workqueue unwind, 24 destruction-marker states and 16 CTB failure states");
+    std::printf("PASS workqueue unwind, 24 marker, %zu published and 16 CTB states\n",
+                publishedCases);
     // An impossible duplicate-lock state must never unlock/free one lock twice.
     void *accelerator = &acceleratorObject, *h2g = &lockObject, *g2h = &lockObject;
     CtbOperations ops {&accelerator, &h2g, &g2h, accelerator, h2g, g2h, true, true, false};
