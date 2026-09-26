@@ -251,43 +251,6 @@ bool NGreen::setRMMIOIfNecessary() {
 	return true;
 }
 
-bool NGreen::getAperture(volatile UInt32 *&address, uint64_t &length) {
-	address = nullptr;
-	length = 0;
-	if (!this->iGPU || !ngPhysicalGpuAccessAllowed())
-		return false;
-	auto *mapping = this->aperture;
-	if (!mapping) {
-		if (ml_at_interrupt_context() || !preemption_enabled())
-			return false;
-		mapping = this->iGPU->mapDeviceMemoryWithRegister(kIOPCIConfigBaseAddress2);
-		if (!mapping) {
-			SYSLOG("ngreen", "V201: BAR2 aperture map FAILED");
-			return false;
-		}
-		const auto candidateAddress = mapping->getVirtualAddress();
-		if (!candidateAddress || (candidateAddress & 3U) || mapping->getLength() < sizeof(uint32_t)) {
-			mapping->release();
-			SYSLOG("ngreen", "V201: BAR2 aperture map invalid");
-			return false;
-		}
-		if (!OSCompareAndSwapPtr(nullptr, mapping, &this->aperture)) {
-			mapping->release();
-		} else {
-			SYSLOG("ngreen", "V201: BAR2 aperture mapped, len=0x%llx", mapping->getLength());
-		}
-		mapping = this->aperture;
-	}
-	const auto mappingLength = mapping->getLength();
-	const auto mappingAddress = mapping->getVirtualAddress();
-	if (!mappingAddress || (mappingAddress & 3U) || mappingLength < sizeof(uint32_t))
-		return false;
-	address = reinterpret_cast<volatile UInt32 *>(mappingAddress);
-	length = mappingLength;
-	return true;
-}
-
-
 bool NGreen::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t address, size_t size) {
 	if (kextIOAcceleratorFamily2.loadIndex == index) {
 		// Preserve native surface-mode validation and capability checks. These

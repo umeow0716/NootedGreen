@@ -2409,3 +2409,27 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   skipped-predecessor and 32-bit wraparound cases.  This is a fail-closed
   transport correction; real GuC completion delivery still requires the
   controlled runtime phase.
+
+### Remove the unintegrated physical link-training writer
+
+- `IntelDPLinkTraining.cpp/.hpp` had no product caller or route; the only
+  consumer was an offline translation-table test.  The file nevertheless
+  compiled raw combo-PHY MMIO writes into the kext while explicitly leaving
+  the C--F DKL PHY implementation absent.
+- A physical device already retains Apple's native link-training lifecycle in
+  the UUID-pinned framebuffer.  A VF is rejected by that framebuffer before
+  any physical display access.  There is therefore no valid ownership point at
+  which this disconnected writer could run.
+- The implementation, header, table-only test and every Xcode reference were
+  removed together.  This reduces unreviewed physical MMIO surface without
+  changing an active PF or VF path; the sources remain recoverable from Git.
+- The same reachability pass found no caller for the old BAR2 mapper, any of
+  the WA/whitelist register helpers, four pre-Gen11 derivative flags or the
+  obsolete LRCA-repair note in `kern_green.hpp`.  They were removed rather
+  than retained as unaudited alternate register paths.  `BIT`/`REG_BIT` remain
+  because the existing Gen11 constant declarations still consume them.
+- Removing the link-training writer also made the generic register RMW helper,
+  physical plane-SURF intervention, unused ACPI/Framebuffer declarations and
+  compatibility getter unreachable.  The only remaining `readReg32`/
+  `writeReg32` consumers are the admitted VF GuC mailbox and notification
+  registers, all constrained by the fixed VF MMIO allowlist.

@@ -8,6 +8,8 @@
 #include "kern_patcherplus.hpp"
 #include <Headers/kern_util.hpp>
 #include <IOKit/IOBufferMemoryDescriptor.h>
+#include <IOKit/IOInterruptEventSource.h>
+#include <IOKit/graphics/IOGraphicsTypes.h>
 
 // AppleIntelTGLGraphics' two-qword virtual-address range.  The SR-IOV VF does
 // not expose the stolen-memory sizing field used by the native TGL path, so

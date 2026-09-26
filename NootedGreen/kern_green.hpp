@@ -5,28 +5,9 @@
 #include <Headers/kern_patcher.hpp>
 #include <Headers/kern_iokit.hpp>
 #include <IOKit/pci/IOPCIDevice.h>
-#include <IOKit/graphics/IOFramebuffer.h>
-#include <IOKit/acpi/IOACPIPlatformExpert.h>
 
 #define BIT(n) (1U << (n))
 #define REG_BIT(n) (1U << (n))
-#define   RING_FORCE_TO_NONPRIV_ACCESS_RW	(0 << 28)
-#define __MASKED_FIELD(mask, value) ((mask) << 16 | (value))
-#define _MASKED_FIELD(mask, value) ({ __MASKED_FIELD(mask, value); })
-#define _MASKED_BIT_ENABLE(a)	({ __typeof(a) _a = (a); _MASKED_FIELD(_a, _a); })
-#define _MASKED_BIT_DISABLE(a)	(_MASKED_FIELD((a), 0))
-
-
-//! Hack
-class AppleACPIPlatformExpert : IOACPIPlatformExpert {
-	friend class NGreen;
-};
-
-struct intel_ip_version {
-	UInt8 ver;
-	UInt8 rel;
-	UInt8 step;
-};
 
 // Fail closed for VF or unclassified identity before physical display access.
 bool ngPhysicalGpuAccessAllowed();
@@ -50,12 +31,8 @@ class NGreen {
     static NGreen *callback;
     void init();
     void processPatcher(KernelPatcher &patcher);
-    bool processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t address, size_t size);
+	bool processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t address, size_t size);
 	bool setRMMIOIfNecessary();
-	// V201 diagnostic: return one immutable BAR2 mapping snapshot.  Callers use
-	// local pointer/length values so concurrent lazy initialization cannot expose
-	// a pointer from one mapping with the length from another.
-	bool getAperture(volatile UInt32 *&address, uint64_t &length);
 	
 	static uint16_t configRead16(IORegistryEntry *service, uint32_t space, uint8_t offset);
 	static uint32_t configRead32(IORegistryEntry *service, uint32_t space, uint8_t offset);
@@ -64,7 +41,7 @@ class NGreen {
 	
 	UInt32 stolen_size;
 	
-	// Public MMIO register access (used by display link training, display merge, etc.)
+	// Checked BAR0 register access used by the VF GuC mailbox/doorbell path.
 	UInt32 readReg32(unsigned long reg) {
 		if (!rmmio || !rmmioPtr || (reg & 3U)) return 0xFFFFFFFFU;
 		if (!ngGpuRegisterAccessAllowed(reg)) return 0xFFFFFFFFU;
@@ -83,157 +60,16 @@ class NGreen {
 		if (!ngGpuRegisterAccessAllowed(reg)) return;
 		const auto bytes = this->rmmio->getLength();
 		if (bytes < sizeof(uint32_t) || reg > bytes - sizeof(uint32_t)) return;
-		static int v93MmioLogCount = 0;
-
-		// Safety guard: prevent enabled display planes from being armed with SURF=0.
-		// On Gen11/TGL-class paths, SURF=0 may make HW fetch GGTT[0] (stolen base),
-		// which can trigger package-wide MCE on some systems.
-		const bool looksLikePlaneSurf =
-			(reg >= 0x60000 && reg <= 0xBFFFF) &&
-			((reg & 0xFFF) == 0x19C);
-		if (looksLikePlaneSurf && val == 0) {
-			const uint32_t ctlReg = static_cast<uint32_t>(reg - 0x1C);
-			const uint32_t planCtl = readReg32(ctlReg);
-			if (planCtl & 0x80000000U) {
-				const uint32_t currentSurf = readReg32(reg);
-				if (currentSurf != 0) {
-					if (v93MmioLogCount < 24) {
-						SYSLOG("ngreen", "V93M: blocked zero SURF@0x%lx in writeReg32; keeping current 0x%x", reg, currentSurf);
-						v93MmioLogCount++;
-					}
-					val = currentSurf;
-				} else {
-					// Last resort: disable plane before allowing zero surface address.
-					if (v93MmioLogCount < 24) {
-						SYSLOG("ngreen", "V93M: forcing plane disable before zero SURF@0x%lx in writeReg32", reg);
-						v93MmioLogCount++;
-					}
-					writeReg32(ctlReg, planCtl & ~0x80000000U);
-				}
-			}
-		}
-
 		this->rmmioPtr[reg >> 2] = val;
 	}
-	
-	uint32_t intel_de_rmw(uint32_t reg, uint32_t clear, uint32_t set) {
-		uint32_t old, val;
-		old = readReg32(reg);
-		val = (old & ~clear) | set;
-		writeReg32(reg, val);
-		return old;
-	}
-
-    private:
-	
-	// Returns true when MMIO mapping is live and safe to access.
-	bool mmioValid() const { return rmmio != nullptr && rmmioPtr != nullptr; }
 
 	public:
 	uint64_t getRMMIOLength() const { return rmmio ? rmmio->getLength() : 0; }
 	volatile UInt32 *getRMMIOAddress() const { return rmmioPtr; }
 
 	private:
-	
-	void whitelist_reg_ext(uint32_t reg, uint32_t flags)
-	{
-		uint32_t old;
-		old = readReg32(reg);
-		old = old | flags;
-		writeReg32(reg, old);
-	}
-	
-	void
-	whitelist_reg(uint32_t reg)
-	{
-		whitelist_reg_ext( reg, RING_FORCE_TO_NONPRIV_ACCESS_RW);
-	}
-
-	void wa_add(uint32_t reg, uint32_t clear, uint32_t set, uint32_t read_mask, bool masked_reg)
-	{
-		uint32_t old, val;
-		
-		if (masked_reg) {
-			/* Keep the enable mask, reset the actual target bits */
-			set &= ~(set >> 16);
-		}
-
-		old = readReg32(reg);
-		val = (old & ~clear) | set;
-		val |= read_mask;
-		writeReg32(reg, val);
-	}
-	
-	void wa_masked_en(uint32_t reg, uint32_t val)
-	{
-		wa_add( reg, 0, _MASKED_BIT_ENABLE(val), val, true);
-	}
-
-	void wa_masked_field_set(uint32_t reg, uint32_t mask, uint32_t val)
-	{
-		wa_add(reg, 0, _MASKED_FIELD(mask, val), mask, true);
-	}
-
-	void wa_write_clr_set( uint32_t reg, uint32_t clear, uint32_t set)
-	{
-		wa_add( reg, clear, set, clear | set, false);
-	}
-
-	void wa_mcr_add(uint32_t reg,
-						   uint32_t clear, uint32_t set, uint32_t read_mask, bool masked_reg)
-	{
-		wa_add(reg, clear,set,read_mask,masked_reg );
-	}
-	
-	void
-	wa_mcr_masked_en(uint32_t reg, uint32_t val)
-	{
-		wa_mcr_add( reg, 0, _MASKED_BIT_ENABLE(val), val, true);
-	}
-
-	void
-	wa_mcr_write_clr_set(uint32_t reg, uint32_t clear, uint32_t set)
-	{
-		wa_mcr_add( reg, clear, set, clear | set, false);
-	}
-
-	void
-	wa_write(uint32_t reg, uint32_t set)
-	{
-		wa_write_clr_set( reg, ~0, set);
-	}
-
-	void
-	wa_write_or(uint32_t reg, uint32_t set)
-	{
-		wa_write_clr_set( reg, set, set);
-	}
-
-	void
-	wa_mcr_write_or(uint32_t reg, uint32_t set)
-	{
-		wa_mcr_write_clr_set( reg, set, set);
-	}
-
-	void
-	wa_write_clr(uint32_t reg, uint32_t clr)
-	{
-		wa_write_clr_set( reg, clr, 0);
-	}
-
-	void
-	wa_mcr_write_clr(uint32_t reg, uint32_t clr)
-	{
-		wa_mcr_write_clr_set( reg, clr, 0);
-	}
-	
-    bool isCflDerivative = false;
-    bool isJslDerivative = false;
-    bool isGen9LPDerivative = false;
-    bool isGen8LPDerivative = false;
     bool isRealTGL = false;  // compatibility name: true only for a physical TGL GPU
 public:
-    bool getIsRealTGL() const { return isRealTGL; }
     // Captured from PCI configuration before installing our ID spoof hooks.
     uint32_t getOriginalDeviceId() const { return deviceId; }
 private:
@@ -242,11 +78,6 @@ private:
 	
 	IOMemoryMap *rmmio {nullptr};
 	volatile UInt32 *rmmioPtr {nullptr};
-
-	IOMemoryMap *aperture {nullptr};
-
-	// Last RCS context object seen by IGHardwareContext::withOptions.
-	// V507 uses this to re-run the LRCA slot repair on each populateResetRegisterList call.
 
 };
 

@@ -12,8 +12,6 @@
 		2E1CC3E32BA5DBD9004EC8F6 /* DisplayMergeNub.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 2E1CC3E12BA5DBD9004EC8F6 /* DisplayMergeNub.cpp */; };
 		2E315A612BC6EA4D008411AA /* DYLDPatches.hpp in Headers */ = {isa = PBXBuildFile; fileRef = 2E315A5F2BC6EA4D008411AA /* DYLDPatches.hpp */; };
 		2E315A622BC6EA4D008411AA /* DYLDPatches.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 2E315A602BC6EA4D008411AA /* DYLDPatches.cpp */; };
-		A1B2C3D4E5F601020304A001 /* IntelDPLinkTraining.cpp in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F601020304B001 /* IntelDPLinkTraining.cpp */; };
-		A1B2C3D4E5F601020304A002 /* IntelDPLinkTraining.hpp in Headers */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F601020304B002 /* IntelDPLinkTraining.hpp */; };
 		CE405ED91E4A080700AA0B3D /* plugin_start.cpp in Sources */ = {isa = PBXBuildFile; fileRef = CE405ED81E4A080700AA0B3D /* plugin_start.cpp */; };
 		F009B7A129E4EE3C00786AFF /* kern_start.cpp in Sources */ = {isa = PBXBuildFile; fileRef = F009B7A029E4EE3C00786AFF /* kern_start.cpp */; };
 		F009B7A329E4EEBA00786AFF /* kern_green.cpp in Sources */ = {isa = PBXBuildFile; fileRef = F009B7A229E4EEBA00786AFF /* kern_green.cpp */; };
@@ -45,8 +43,6 @@
 		2E1CC3E12BA5DBD9004EC8F6 /* DisplayMergeNub.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = DisplayMergeNub.cpp; sourceTree = "<group>"; };
 		2E315A5F2BC6EA4D008411AA /* DYLDPatches.hpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.h; path = DYLDPatches.hpp; sourceTree = "<group>"; };
 		2E315A602BC6EA4D008411AA /* DYLDPatches.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = DYLDPatches.cpp; sourceTree = "<group>"; };
-		A1B2C3D4E5F601020304B001 /* IntelDPLinkTraining.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = IntelDPLinkTraining.cpp; sourceTree = "<group>"; };
-		A1B2C3D4E5F601020304B002 /* IntelDPLinkTraining.hpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.h; path = IntelDPLinkTraining.hpp; sourceTree = "<group>"; };
 		CE405EBA1E49DD7100AA0B3D /* kern_compression.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = kern_compression.hpp; sourceTree = "<group>"; };
 		CE405EBB1E49DD7100AA0B3D /* kern_disasm.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = kern_disasm.hpp; sourceTree = "<group>"; };
 		CE405EBC1E49DD7100AA0B3D /* kern_file.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = kern_file.hpp; sourceTree = "<group>"; };
@@ -105,8 +101,6 @@
 			isa = PBXGroup;
 			children = (
 				1C748C2E1C21952C0024EED2 /* Info.plist */,
-				A1B2C3D4E5F601020304B001 /* IntelDPLinkTraining.cpp */,
-				A1B2C3D4E5F601020304B002 /* IntelDPLinkTraining.hpp */,
 				2E315A602BC6EA4D008411AA /* DYLDPatches.cpp */,
 				2E315A5F2BC6EA4D008411AA /* DYLDPatches.hpp */,
 				2E1CC3E12BA5DBD9004EC8F6 /* DisplayMergeNub.cpp */,
@@ -181,7 +175,6 @@
 				2E1CC3E22BA5DBD9004EC8F6 /* DisplayMergeNub.h in Headers */,
 				F0A4BE592A1996E40031D569 /* kern_model.hpp in Headers */,
 				F0BB9E562A57A0340081F5FA /* kern_patcherplus.hpp in Headers */,
-				A1B2C3D4E5F601020304A002 /* IntelDPLinkTraining.hpp in Headers */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -288,7 +281,6 @@
 				F0AF08BB2A0F373F00B63C2B /* kern_gen11.cpp in Sources */,
 				CE405ED91E4A080700AA0B3D /* plugin_start.cpp in Sources */,
 				2E1CC3E32BA5DBD9004EC8F6 /* DisplayMergeNub.cpp in Sources */,
-				A1B2C3D4E5F601020304A001 /* IntelDPLinkTraining.cpp in Sources */,
 				2E315A622BC6EA4D008411AA /* DYLDPatches.cpp in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
