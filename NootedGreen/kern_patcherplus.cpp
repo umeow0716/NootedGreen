@@ -77,9 +77,19 @@ bool RouteRequestPlus::routeAll(KernelPatcher &patcher, size_t id, RouteRequestP
 }
 
 bool LookupPatchPlus::apply(KernelPatcher &patcher, mach_vm_address_t address, size_t maxSize) const {
-	if (!this->findMask && !this->replaceMask && !this->skip) {
-		patcher.applyLookupPatch(this, reinterpret_cast<UInt8 *>(address), maxSize);
-		return patcher.getError() == KernelPatcher::Error::NoError;
+	(void)patcher;
+	// Both routes use explicit caller-supplied image bounds. Lilu 1.7.2's
+	// plain lookup misses the last eligible offset; its masked route reports
+	// success for a partial count. Preflight the whole requested count, then
+	// use the inclusive masked implementation for masked AND plain patches.
+	const size_t wanted = this->count ? this->count : 1;
+	if (!address || maxSize > UINT64_MAX - address || !this->replace ||
+		(this->kext && this->kext->loadIndex == KernelPatcher::KextInfo::Unloaded) ||
+		this->skip > SIZE_MAX - wanted ||
+		!NGPattern::hasAtLeast(reinterpret_cast<const uint8_t *>(address), maxSize,
+			this->find, this->findMask, this->size, this->skip + wanted)) {
+		DBGLOG("Patcher+", "Lookup preflight rejected range/signature/count before writes");
+		return false;
 	}
 	return KernelPatcher::findAndReplaceWithMask(reinterpret_cast<UInt8 *>(address), maxSize, this->find, this->size,
 		this->findMask, this->findMask ? this->size : 0, this->replace, this->size, this->replaceMask,

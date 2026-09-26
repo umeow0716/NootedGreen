@@ -541,3 +541,24 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   needs count/bounds preflight and failure-atomicity review.
 - PHY checkpoint f536b68 CI 36218492866 and retired-HDMI checkpoint ce7898f
   CI 36218582458 both succeeded. Still no installation or VM startup.
+
+### Lookup replacement preflight
+
+- LookupPatchPlus now requires valid explicit image bounds, non-null
+  replacement, a loaded kext if specified, and enough non-overlapping
+  candidates for skip + requested count before any replacement starts.
+  count=0 still means all remaining matches, requiring at least one.
+  Overflow in the requested count/range is rejected.
+- Plain and masked patterns now share Lilu's inclusive masked replacement
+  implementation; this avoids the plain implementation's final-offset bug
+  and keeps kernel-write protection handling inside Lilu. Examined all local
+  LookupPatchPlus call sites: they supply image or symbol-bounded ranges.
+- The same 173,740 generated inputs now additionally compare six required
+  match counts against an independent non-overlapping oracle, plus null and
+  end-of-image tests. Local checks pass in /tmp/ngreen-static.QkxLvy.
+- This is NOT a transactional patch system: other patchers can mutate memory
+  between preflight and writes; applyAll can partially apply before a later
+  patch fails; upstream logs a failure to restore write protection without
+  returning failure. Those remain review items. No VM test is authorized by
+  a successful preflight alone.
+- Fallback checkpoint aa1babd CI run 36218749302 succeeded.

@@ -38,6 +38,17 @@ int main() {
             pattern.data(), mask.data(), width, result);
         assert(found == (matches == 1));
         assert(result == (found ? expected : 999));
+        unsigned nonoverlapping = 0;
+        if (maskBits) for (size_t offset = 0; offset + width <= length;) {
+            bool equal = true;
+            for (size_t i = 0; i < width; ++i)
+                if ((data[offset + i] & mask[i]) != pattern[i]) equal = false;
+            if (equal) { ++nonoverlapping; offset += width; }
+            else ++offset;
+        }
+        for (unsigned required = 0; required <= 5; ++required)
+            assert(NGPattern::hasAtLeast(data.data(), data.size(), pattern.data(),
+                mask.data(), width, required) == (required && nonoverlapping >= required));
         ++cases;
     }
     const uint8_t data[] = {0xA1, 0xB2, 0xC3};
@@ -46,5 +57,9 @@ int main() {
     const uint8_t unmaskedPattern[] = {0xAF, 0xB9};
     assert(!NGPattern::findUnique(data, 3, unmaskedPattern, mask, 2, result));
     assert(NGPattern::findUnique(data, 3, data + 2, nullptr, 1, result) && result == 2);
+    assert(NGPattern::hasAtLeast(data, 3, data + 2, nullptr, 1, 1));
+    assert(!NGPattern::hasAtLeast(data, 3, data + 2, nullptr, 1, 2));
+    assert(!NGPattern::hasAtLeast(nullptr, 3, data, nullptr, 1, 1));
+    assert(!NGPattern::hasAtLeast(data, 3, nullptr, nullptr, 1, 1));
     std::printf("PASS: %u unique/missing/ambiguous masked-pattern cases\n", cases);
 }
