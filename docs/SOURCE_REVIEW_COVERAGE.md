@@ -17,7 +17,7 @@ At c312229, the tracked source/build/metadata inventory contains 1,305 files:
 | Lilu.kext | 39 | Selected headers/upstream patching code; full dependency review pending |
 | HookCase-master | 7 | Build checked, full source/assembly review pending |
 | sle_Internal | 35 | Metadata only in this count; embedded binaries are a separate review obligation |
-| NootedGreen.xcodeproj | 4 | Selected build references/settings, full review pending |
+| NootedGreen.xcodeproj | 4 | Build references inspected; unreferenced firmware headers and null build entries removed, settings/full project review pending |
 | .github | 1 | Build/test workflow read; no deployment step |
 
 The earlier 1,256-file count omitted assembly and some build metadata. The
@@ -51,7 +51,7 @@ files (1,305 under this snapshot's scope); this does not close older coverage.
 | kern_workqueue_unwind.hpp, tools/workqueue_unwind_test.cpp | Read; failed-init resource ordering tested offline; native object destruction and caller failure propagation remain incomplete |
 | AppleIntelParams.hpp | Read all 624 lines; compiler layout dump confirms unasserted controller/framebuffer tail offsets drift from comments. No direct callers of the checked mismatched fields found; generator and pinned-binary verification remain incomplete |
 | Info.plist | Read all 124 lines; main personality/build identifiers and SchedulerType consumer inspected; profile metadata has no main-source/tools consumer found, display injection remains hardware-specific; not a supported-device matrix |
-| IGGucBinary.h, IGHucBinary.h | Full review/verification not yet recorded; do not infer coverage from inclusion or successful compilation |
+| IGGucBinary.h, IGHucBinary.h (removed) | Read as opaque 2017 Apple firmware arrays; no include or symbol consumer existed. Removed their 244-KiB source payload and product-header entries; recoverable in Git. Runtime firmware continues to come from the separately verified DMC sources/native driver paths. |
 
 ## Evidence rules
 

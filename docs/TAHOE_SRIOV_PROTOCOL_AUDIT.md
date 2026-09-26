@@ -1238,3 +1238,17 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
 - This fixes the global selector, not the semantics of every branch that reads
   it. Those heterogeneous consumers remain in the all-source review ledger.
   No driver was deployed and the VM remains shut off.
+
+### Retired unreferenced 2017 firmware headers and null build entries
+
+- `IGGucBinary.h` and `IGHucBinary.h` contained roughly 244 KiB of opaque 2017
+  Apple GuC/HuC arrays. Repository-wide symbol/include inspection found no
+  consumer; Xcode only listed them in its Headers phase, so they could not
+  participate in firmware selection, VF transport or runtime execution.
+- Removed both headers and their file/build/product-header references. Also
+  removed three PBXBuildFile records whose file references were already null.
+  All deletions remain recoverable from Git. The active DMC blobs and native
+  GuC firmware ownership are unchanged.
+- This reduces obsolete review/package surface but is not firmware semantic
+  verification or a hardware test. Native macOS project parsing/build remains
+  the CI gate; VM stays shut off.
