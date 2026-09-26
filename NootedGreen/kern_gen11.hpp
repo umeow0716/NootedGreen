@@ -1338,6 +1338,8 @@ private:
 	// ── GuC (Graphics micro-Controller) firmware ──
 	static unsigned long loadGuCBinary(void *that);  // route: intercept GuC FW load
 	mach_vm_address_t oloadGuCBinary {};
+	static unsigned long loadIclGuCBinary(void *that);
+	mach_vm_address_t oLoadIclGuCBinary {};
 
 
 	static IOReturn wrapConnectionProbe();  // display hot-plug connection probe

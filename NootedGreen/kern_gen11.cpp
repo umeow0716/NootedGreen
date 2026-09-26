@@ -2033,7 +2033,7 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			// loadGuCBinary: always route — WEG's firmware path is Mojave-gated and dead on Sonoma.
 			// Without this hook, no GuC binary loads at all in coexist mode → ring dead.
 			RouteRequestPlus firmwareRoute[] = {
-				{"__ZN13IGHardwareGuC13loadGuCBinaryEv", loadGuCBinary, this->oloadGuCBinary},
+				{"__ZN13IGHardwareGuC13loadGuCBinaryEv", loadIclGuCBinary, this->oLoadIclGuCBinary},
 			};
 			PANIC_COND(!RouteRequestPlus::routeAll(patcher, index, firmwareRoute, address, size), "ngreen", "Failed to route loadGuCBinary (ICL)");
 		}
@@ -8742,14 +8742,24 @@ IOReturn Gen11::wrapFBClientDoAttribute(void *fbclient, uint32_t attribute, unsi
 	return FunctionCast(wrapFBClientDoAttribute, callback->orgFBClientDoAttribute)(fbclient, attribute, unk1, unk2, unk3, unk4,  externalMethodArguments);
 }
 
+unsigned long Gen11::loadIclGuCBinary(void *that) {
+	// ICL and TGL may both be loaded. Never share their original-function
+	// slot or interpret an ICL object using TGL's private scheduler layout.
+	if (!that || vfIdentifyDevice() != VfIdentity::Physical) {
+		vfMarkProtocolFault("ICL GuC firmware path is unavailable to a VF");
+		return 0;
+	}
+	return FunctionCast(loadIclGuCBinary, callback->oLoadIclGuCBinary)(that);
+}
+
 unsigned long Gen11::loadGuCBinary(void *that) {
 	// The PF already owns and runs GuC for an SR-IOV VF. Report firmware as
 	// available so Apple's GuC scheduler initializes its submission transport,
 	// but never try to replace the PF-owned image or WOPCM configuration.
 	// This hook is also installed on ICL, whose private layout is different.
 	// The VF scheduler-data path is only implemented for the TGL payload.
-	if (callback->tglHWLoaded && gVfIdentity != VfIdentity::Physical) {
-		if (!gVfGGTTReady || gVfProtocolFault)
+	if (vfIdentifyDevice() != VfIdentity::Physical) {
+		if (gVfIdentity != VfIdentity::Virtual || !gVfGGTTReady || gVfProtocolFault)
 			return 0;
 		// The stock load routine initializes all scheduler-side allocations
 		// before touching WOPCM and uploading firmware.  Skipping it outright
@@ -8764,17 +8774,18 @@ unsigned long Gen11::loadGuCBinary(void *that) {
 			callback->orgInitSchedControl)(that);
 		SYSLOG("ngreen", "V224: VF GuC firmware is PF-owned; scheduler data init=%d",
 		       initialized);
-		return initialized;
+		return initialized && !gVfProtocolFault;
 	}
 
-	// V52: Real TGL can authenticate and load GuC firmware natively.
-	// RPL cannot — stub to return 1 and use host scheduling instead.
-	if (NGreen::callback->isRealTGL) {
+	// Physical firmware loading is still limited by the existing platform
+	// gate. Unsupported platforms must not pretend firmware is running.
+	// TODO: replace the CPU-based gate with verified GPU-IP/payload support.
+	if (that && NGreen::callback->isRealTGL) {
 		SYSLOG("ngreen", "loadGuCBinary: real TGL — calling original for GuC firmware load");
 		return FunctionCast(loadGuCBinary, callback->oloadGuCBinary)(that);
 	}
-	SYSLOG("ngreen", "loadGuCBinary: RPL — stubbed to return 1 (host scheduling)");
-	return 1;
+	SYSLOG("ngreen", "loadGuCBinary: unsupported physical firmware path; refusing success");
+	return 0;
 }
 
 uint32_t Gen11::vfCreateUkContext(void *that, uint64_t owner, int priority) {

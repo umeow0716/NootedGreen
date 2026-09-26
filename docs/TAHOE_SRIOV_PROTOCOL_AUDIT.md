@@ -669,3 +669,21 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
 - Full syntax and ASan/UBSan suites passed in /tmp/ngreen-static.6ZBcDm.
   Actual PF firmware support, VF allocation OOM handling, and PM lifecycle
   remain separate unresolved tasks; no runtime behavior has been certified.
+
+### Separate ICL/TGL firmware entry ownership
+
+- Both hardware payloads routed loadGuCBinary through the same saved original
+  slot and selected layout using global tglHWLoaded. If both loaded, an ICL
+  receiver could enter TGL scheduler code or the wrong original trampoline.
+  Added an ICL-only wrapper and original slot; ICL rejects non-physical
+  identity, while TGL independently selects its verified VF identity path.
+- Removed the physical non-TGL fallback that returned firmware-load success
+  without loading firmware. It now returns failure. This is NOT new PF
+  support; the remaining physical TGL CPU-based gate needs GPU-IP/payload
+  replacement. Other shared original slots still need individual review.
+- VF scheduler initialization cannot return success after a protocol fault.
+  Native initSchedControl still ignores setupLogBuffers and ADS return values
+  (0x20af1, 0x20af9, then unconditional AL=1); its internal allocation and
+  mapping failure contracts are an outstanding blocker, not fixed by this.
+- Full offline suite passed in /tmp/ngreen-static.N3QM5d. Proxy allocator
+  checkpoint e2b205d CI 36219798073 succeeded. VM remains off.
