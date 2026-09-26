@@ -20,13 +20,13 @@ namespace AppleIntel {
 
 // struct CRTCParams -- 0xF0 bytes, 33 components
 // Verified offset sources:
-//   +0x00..+0x2C  friend's Ghidra screenshot + V97P/V97C usage
+//   +0x00..+0x2C  friend's Ghidra screenshot
 //   +0x48..+0x54  setupPipeScaler disasm (IntelLog format strings)
 //   +0x88..+0xB4  setupDSCEngineParams PPS_* writes
 //   +0xE8/+0xEC   setupDSCEngineParams DSC engine + joiner writes
 struct CRTCParams {
     uint32_t       TRANS_CLK_SEL;        // +0x0
-    uint32_t       TRANS_DDI_FUNC_CTL;   // +0x4   (V97P clears bit16)
+    uint32_t       TRANS_DDI_FUNC_CTL;   // +0x4
     uint32_t       TRANS_DDI_FUNC_CTL2;  // +0x8
     uint32_t       TRANS_MSA_MISC;       // +0xC
     uint32_t       TRANS_HTOTAL;         // +0x10
@@ -36,7 +36,7 @@ struct CRTCParams {
     uint32_t       TRANS_VBLANK;         // +0x20
     uint32_t       TRANS_VSYNC;          // +0x24
     uint32_t       PIPE_SRCSZ;           // +0x28
-    uint32_t       TRANS_CONF;           // +0x2C  (V97C aligns to live HW)
+    uint32_t       TRANS_CONF;           // +0x2C
     uint8_t        _pad_0030[24];        // +0x30..+0x47  TBD
     uint32_t       PS_PS_WIN_POS;        // +0x48  pipe scaler window position
     uint32_t       PS_PS_WIN_SZ;         // +0x4C  pipe scaler window size — DOWNSCALE SUSPECT

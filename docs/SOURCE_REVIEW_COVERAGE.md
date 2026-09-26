@@ -136,6 +136,12 @@ sources returns the current count to 1,303; this does not close older coverage.
   those routes only; AUX, lane selection, power-well, DMC and remaining byte
   patches are still open. `/tmp/ngreen-static.cyj2sZ` passes the full suite.
 
+- Follow-up review removed the AUX payload mutation, GOP-state lane override,
+  private port-field write and pending-CRTC/live-register substitution. Native
+  DPCD, link-status recovery and modeset comparison are authoritative again on
+  ICL/TGL physical framebuffer paths. Power-well, DMC/CDCLK and remaining byte
+  patches are still open. `/tmp/ngreen-static.dZ50PB` passes the full suite.
+
 ### Boot-policy cleanup
 
 - The old `ngreenfullmtl*` switch did not enable Metal. Its only remaining

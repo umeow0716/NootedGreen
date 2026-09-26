@@ -1834,3 +1834,22 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   BAR0 accessor and no longer decode unverified private controller offsets or
   emit broad RCS/power-well passthrough logs. `/tmp/ngreen-static.cyj2sZ`
   passes the complete static suite; no VM or hardware access occurred.
+
+### Restore native DisplayPort negotiation and modeset comparison
+
+- Removed the physical TGL framebuffer's AUX-read wrapper. It logged arbitrary
+  sink data, hid `LINK_STATUS_UPDATED` from Apple's recovery path, and changed
+  the maximum link rate for a malformed/obsolete revision test after a
+  successful native read. DPCD bytes now reach the native driver unchanged.
+- Removed both lane-count routes. They treated the already-programmed
+  `DDI_BUF_CTL` width left by GOP as a capability and overwrote Apple's
+  DPCD/timing result, including a private `AppleIntelPort+0x148` field. A stale
+  link state can no longer force extra, unnegotiated lanes into a new modeset.
+- Removed the TGL `hwRegsNeedUpdate` wrapper and the ICL byte patch which forced
+  the opposite decision. The wrapper rewrote pending transcoder parameters to
+  their live values and explicitly depended on the removed four-lane override;
+  both physical paths now preserve Apple's native compare/reprogram decision.
+- The now-unused hand-written DPCD view and stale CRTC usage annotations were
+  removed. `/tmp/ngreen-static.dZ50PB` passes syntax, analyzer, strict ABI and
+  every offline protocol/sanitizer model. A VF does not load this framebuffer
+  patch set, and no hardware or VM action occurred.

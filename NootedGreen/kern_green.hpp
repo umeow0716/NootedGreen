@@ -256,35 +256,3 @@ private:
 //! Neutralise access to AGDP configuration by board identifier.
 static const UInt8 kAGDPBoardIDKeyOriginal[] = "board-id";
 static const UInt8 kAGDPBoardIDKeyPatched[] =  "applehax";
-
-
-struct DPCDCap16 { // 16 bytes
-	// DPCD Revision (DP Config Version)
-	// Value: 0x10, 0x11, 0x12, 0x13, 0x14
-	uint8_t revision {};
-
-	// Maximum Link Rate
-	// Value: 0x1E (HBR3) 8.1 Gbps
-	//        0x14 (HBR2) 5.4 Gbps
-	//        0x0C (3_24) 3.24 Gbps
-	//        0x0A (HBR)  2.7 Gbps
-	//        0x06 (RBR)  1.62 Gbps
-	// Reference: 0x0C is used by Apple internally.
-	uint8_t maxLinkRate {};
-
-	// Maximum Number of Lanes
-	// Value: 0x1 (HBR2)
-	//        0x2 (HBR)
-	//        0x4 (RBR)
-	// Side Notes:
-	// (1) Bit 7 is used to indicate whether the link is capable of enhanced framing.
-	// (2) Bit 6 is used to indicate whether TPS3 is supported.
-	uint8_t maxLaneCount {};
-
-	// Maximum Downspread
-	uint8_t maxDownspread {};
-
-	// Other fields omitted in this struct
-	// Detailed information can be found in the specification
-	uint8_t others[12] {};
-};

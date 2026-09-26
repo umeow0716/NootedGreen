@@ -1491,30 +1491,8 @@ private:
 	static uint64_t getOSInformation(AppleIntel::AppleIntelBaseController *that);
 	mach_vm_address_t ogetOSInformation {};
 	
-	static uint8_t hwRegsNeedUpdate
-			  (AppleIntel::AppleIntelBaseController *that,
-			   AppleIntel::AppleIntelFramebuffer *param_1,
-			   AppleIntel::AppleIntelDisplayPath *param_2,
-			   AppleIntel::CRTCParams *param_3,
-			   const IODetailedTimingInformationV2 *param_4,
-			   AppleIntel::SCALERPARAMS *param_5);
-	mach_vm_address_t ohwRegsNeedUpdate {};
-
-	// Force eDP lane count to match the HW-trained count from DDI_BUF_CTL_A.
-	static void computeLaneCount(AppleIntel::AppleIntelBaseController *that, const IODetailedTimingInformationV2 *timing, unsigned int linkRate, unsigned int bpp, unsigned int *laneCount);
-	mach_vm_address_t ocomputeLaneCount {};
-
-	// setupOptimalLaneCount caps computeLaneCount's result to DPCD MAX_LANE_COUNT.
-	// On RPL the panel reports MAX_LANE_COUNT=2 but UEFI trained 4 lanes, so we
-	// override the cached optimal to match DDI_BUF_CTL_A instead.
-	static void setupOptimalLaneCount(AppleIntel::AppleIntelBaseController *that, const IODetailedTimingInformationV2 *timing, unsigned int bpp);
-	mach_vm_address_t osetupOptimalLaneCount {};
-
 	static void blit3d_submit_rectlist(void *param_1,void *param_2,void *param_3);
 	mach_vm_address_t oblit3d_submit_rectlist {};
-	
-	static IOReturn wrapICLReadAUX(void *that, uint32_t address, void *buffer, uint32_t length);
-	mach_vm_address_t orgICLReadAUX {};
 	
 	// AppleIntelFramebuffer::init(AppleIntelBaseController*, uint pipeIndex)
 	static uint32_t AppleIntelFramebufferinit(AppleIntel::AppleIntelFramebuffer *frame,

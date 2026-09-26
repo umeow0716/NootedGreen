@@ -1706,35 +1706,6 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		//static const uint8_t r15[]= {0x00,0x00, 0x00, 0x49, 0x9a};
 		
 		
-		// AppleIntelFramebufferController::hwSetMode skip hwRegsNeedUpdate
-		static const uint8_t f2[] = {0xE8, 0x31, 0xE5, 0xFF, 0xFF, 0x84, 0xC0, 0x74, 0x3D};
-		static const uint8_t r2[] = {0xE8, 0x31, 0xE5, 0xFF, 0xFF, 0x84, 0xC0, 0xEB, 0x3D};
-		
-		//sonoma
-		static const uint8_t f2b[] = {0xE8, 0x54, 0xEA, 0xFF, 0xFF, 0x84, 0xC0, 0x74, 0x5C};
-		static const uint8_t r2b[] = {0xE8, 0x54, 0xEA, 0xFF, 0xFF, 0x84, 0xC0, 0xeb, 0x5C};
-		
-		//sequoia
-		static const uint8_t f2c[] = {0xE8, 0x74, 0xEA, 0xFF, 0xFF, 0x84, 0xC0, 0x74, 0x5C};
-		static const uint8_t r2c[] = {0xE8, 0x74, 0xEA, 0xFF, 0xFF, 0x84, 0xC0, 0xeb, 0x5C};
-		
-		/*if (getKernelVersion() <= KernelVersion::Ventura) {
-			KernelPatcher::LookupPatch patch { &kextG11FB, f2, r2, sizeof(f2), 1 };
-			patcher.applyLookupPatch(&patch);
-		}
-		
-		if (getKernelVersion() == KernelVersion::Sonoma) {
-			KernelPatcher::LookupPatch patchb { &kextG11FB, f2b, r2b, sizeof(f2b), 1 };
-			patcher.applyLookupPatch(&patchb);
-		}
-		
-		if (getKernelVersion() >= KernelVersion::Sequoia) {
-			KernelPatcher::LookupPatch patchc { &kextG11FB, f2c, r2c, sizeof(f2c), 1 };
-			patcher.applyLookupPatch(&patchc);
-		}*/
-		
-		
-
 		// Variant-consistent remap for constructor entries:
 		// B8 xx 00 5C 8A -> B8 xx 00 49 9A and exact C7 05 ... 02 00 5C 8A site.
 		static const uint8_t kPatchPlatformRemapMovEaxFind0[] = {0xB8, 0x00, 0x00, 0x5C, 0x8A};
@@ -1746,17 +1717,11 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		static const uint8_t kPatchPlatformRemapC705Find2[] = {0xC7, 0x05, 0xE9, 0x9B, 0x05, 0x00, 0x02, 0x00, 0x5C, 0x8A};
 		static const uint8_t kPatchPlatformRemapC705Replace2[] = {0xC7, 0x05, 0xE9, 0x9B, 0x05, 0x00, 0x02, 0x00, 0x49, 0x9A};
 
-		// hwSetMode: bypass hwRegsNeedUpdate result (CALL hwRegsNeedUpdate; TEST AL,AL: JE+0x62 → JMP+0x62)
-		// Verified unique (1 match at 0x94055) in ICL LP le binary. Forces register reprogram unconditionally. [ICL-LP]
-		static const uint8_t kPatchHwRegsNeedUpdateBypassFind[] = {0xe8, 0xe2, 0xcc, 0xff, 0xff, 0x84, 0xc0, 0x74, 0x62};
-		static const uint8_t kPatchHwRegsNeedUpdateBypassReplace[] = {0xe8, 0xe2, 0xcc, 0xff, 0xff, 0x84, 0xc0, 0xeb, 0x62};
-
 		LookupPatchPlus const minPatches[] = {
 			{&kextG11FB, kPatchPlatformRemapMovEaxFind0, kPatchPlatformRemapMovEaxReplace0, arrsize(kPatchPlatformRemapMovEaxFind0), 1},
 			{&kextG11FB, kPatchPlatformRemapMovEaxFind1, kPatchPlatformRemapMovEaxReplace1, arrsize(kPatchPlatformRemapMovEaxFind1), 1},
 			{&kextG11FB, kPatchPlatformRemapMovEaxFind2, kPatchPlatformRemapMovEaxReplace2, arrsize(kPatchPlatformRemapMovEaxFind2), 1},
 			{&kextG11FB, kPatchPlatformRemapC705Find2, kPatchPlatformRemapC705Replace2, arrsize(kPatchPlatformRemapC705Find2), 1},
-			{&kextG11FB, kPatchHwRegsNeedUpdateBypassFind, kPatchHwRegsNeedUpdateBypassReplace, arrsize(kPatchHwRegsNeedUpdateBypassFind), 1},  // hwSetMode always reprogram [ICL-LP]
 		};
 		
 		PANIC_COND(!LookupPatchPlus::applyAll(patcher, minPatches , address, size), "ngreen", "kextG11FB Failed to apply patches!");
@@ -1812,10 +1777,6 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			{"__ZN19AppleIntelPowerWell20disableDisplayEngineEv",disableDisplayEngine, this->odisableDisplayEngine},
 			{"__ZN19AppleIntelPowerWell19enableDisplayEngineEv",enableDisplayEngine, this->oenableDisplayEngine},
 			// V35: Removed ComboPhyEv hook — causes MCE on RPL/ADL. Firmware calibration sufficient.
-			{"__ZN14AppleIntelPort16computeLaneCountEPK29IODetailedTimingInformationV2jjPj",computeLaneCount, this->ocomputeLaneCount},
-			{"__ZN14AppleIntelPort21setupOptimalLaneCountEPK29IODetailedTimingInformationV2j",setupOptimalLaneCount, this->osetupOptimalLaneCount},
-			// V97: Log AUX transactions to diagnose eDP link training failures on RPL
-			{"__ZN14AppleIntelPort7readAUXEjPvj", wrapICLReadAUX, this->orgICLReadAUX},
 			// V183: write-only ADL-P power well handler; no callthrough (TGL poll loop hangs on RPL).
 			// Real TGL falls through to original via ohwSetPowerWellStatePGE.
 			{"__ZN19AppleIntelPowerWell21hwSetPowerWellStatePGEbj", hwSetPowerWellStatePGE, this->ohwSetPowerWellStatePGE},
@@ -1839,7 +1800,6 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				{"__ZN31AppleIntelFramebufferController5startEP9IOService",AppleIntelBaseControllerstart, this->oAppleIntelBaseControllerstart},
 				{"__ZN31AppleIntelFramebufferController21probeCDClockFrequencyEv",wrapProbeCDClockFrequency,	this->orgProbeCDClockFrequency},
 				{"__ZN31AppleIntelFramebufferController14disableCDClockEv",disableCDClock,this->odisableCDClock},
-				{"__ZN31AppleIntelFramebufferController16hwRegsNeedUpdateEP21AppleIntelFramebufferP21AppleIntelDisplayPathP10CRTCParamsPK29IODetailedTimingInformationV2PN16AppleIntelScaler12SCALERPARAMSE",hwRegsNeedUpdate, this->ohwRegsNeedUpdate},
 			};
 			PANIC_COND(!RouteRequestPlus::routeAll(patcher, index, requests, address, size), "ngreen","Failed to route p symbols");
 			
@@ -1855,7 +1815,6 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				{"__ZN24AppleIntelBaseController5startEP9IOService",AppleIntelBaseControllerstart, this->oAppleIntelBaseControllerstart},
 				{"__ZN24AppleIntelBaseController21probeCDClockFrequencyEv",wrapProbeCDClockFrequency,	this->orgProbeCDClockFrequency},
 				{"__ZN24AppleIntelBaseController14disableCDClockEv",disableCDClock,this->odisableCDClock},
-					{"__ZN24AppleIntelBaseController16hwRegsNeedUpdateEP21AppleIntelFramebufferP21AppleIntelDisplayPathP10CRTCParamsPK29IODetailedTimingInformationV2PN16AppleIntelScaler12SCALERPARAMSE",hwRegsNeedUpdate, this->ohwRegsNeedUpdate},
 			};
 			PANIC_COND(!RouteRequestPlus::routeAll(patcher, index, requests, address, size), "ngreen","Failed to route d symbols");
 			
@@ -3398,159 +3357,6 @@ void Gen11::enableDisplayEngine(AppleIntel::AppleIntelBaseController *that)
 	FunctionCast(enableDisplayEngine, callback->oenableDisplayEngine)(that );
 }
 
-void Gen11::computeLaneCount(AppleIntel::AppleIntelBaseController *that, const IODetailedTimingInformationV2 *timing, unsigned int linkRate, unsigned int bpp, unsigned int *laneCount) {
-	if (!laneCount) return;
-
-	// Call original first — handles all standard DP rates on both real TGL and spoofed paths.
-	FunctionCast(computeLaneCount, callback->ocomputeLaneCount)(that, timing, linkRate, bpp, laneCount);
-
-	// Real TGL: preserve Apple's result unchanged.
-	if (NGreen::callback->isRealTGL)
-		return;
-
-	// For !isRealTGL (RPL spoofed): Apple's DPCD-based result (MAX_LANE_COUNT) reflects
-	// the panel's capability, but UEFI/GOP may have trained the link at a different lane
-	// count.  Read DDI_BUF_CTL_A to discover the actual HW-trained lane count and
-	// override Apple's result if UEFI trained more lanes than Apple computed.
-	//
-	// DDI_BUF_CTL PORT_WIDTH field bits[3:1]:
-	//   000 = x1 (1 lane),  001 = x2 (2 lanes),  011 = x4 (4 lanes)
-	const uint32_t ddiA    = NGreen::callback->readReg32(0x64000);  // DDI_BUF_CTL_A
-	const unsigned int width   = (ddiA >> 1) & 0x7u;
-	const unsigned int hwLanes = (width >= 3) ? 4u : (width >= 1) ? 2u : 1u;
-
-	static int v90L4Logs = 0;
-	if (v90L4Logs < 10) {
-		v90L4Logs++;
-		SYSLOG("ngreen", "V90L4[%d]: linkRate=%u bpp=%u appleLC=%u DDI_BUF_CTL_A=0x%x hwLanes=%u",
-			   v90L4Logs, linkRate, bpp, *laneCount, ddiA, hwLanes);
-	}
-
-	if (hwLanes > *laneCount)
-		*laneCount = hwLanes;
-}
-
-// setupOptimalLaneCount is called by hwSetMode to pick the lane count that gets
-// stored in the port's cached LinkConfig (and ultimately into TRANS_DDI_FUNC_CTL).
-// Apple's implementation runs: optimal = computeLaneCount(...); then caps it to
-// port->maxLaneCount (from DPCD MAX_LANE_COUNT, which is 2 on this panel).
-// On !isRealTGL we instead snap the cached count to match DDI_BUF_CTL_A so that
-// SetupParams builds TRANS_DDI_FUNC_CTL with the correct HW-trained lane field.
-void Gen11::setupOptimalLaneCount(AppleIntel::AppleIntelBaseController *that, const IODetailedTimingInformationV2 *timing, unsigned int bpp) {
-	// Always run Apple's original first to populate all other LinkConfig fields.
-	FunctionCast(setupOptimalLaneCount, callback->osetupOptimalLaneCount)(that, timing, bpp);
-
-	if (NGreen::callback->isRealTGL)
-		return;
-
-	// Read HW-trained lane count from DDI_BUF_CTL_A bits[3:1].
-	// PORT_WIDTH: 0=x1, 1=x2, 3=x4.
-	const uint32_t ddiA    = NGreen::callback->readReg32(0x64000);
-	const unsigned int width   = (ddiA >> 1) & 0x7u;
-	const unsigned int hwLanes = (width >= 3) ? 4u : (width >= 1) ? 2u : 1u;
-
-	// The port object stores the cached optimal lane count at a known offset.
-	// AppleIntelPort::setupOptimalLaneCount writes fOptimalLaneCount (confirmed
-	// by IDA: str result into [x0 + offset] before returning).
-	// We patch it post-call so the cap-to-DPCD logic is overridden.
-	// Offset 0x148 is fOptimalLaneCount in AppleIntelPort on this kext version.
-	unsigned int &cached = getMember<unsigned int>(that, 0x148);
-
-	static int v90L5Logs = 0;
-	if (v90L5Logs < 10) {
-		v90L5Logs++;
-		SYSLOG("ngreen", "V90L5[%d]: setupOptimalLC: was=%u DDI_BUF_CTL_A=0x%x hwLanes=%u",
-			   v90L5Logs, cached, ddiA, hwLanes);
-	}
-
-	if (hwLanes > cached)
-		cached = hwLanes;
-}
-
-IOReturn Gen11::wrapICLReadAUX(void *that, uint32_t address, void *buffer, uint32_t length) {
-
-	IOReturn retVal = FunctionCast(wrapICLReadAUX, callback->orgICLReadAUX)(that, address, buffer, length);
-
-	// V97AUX: log first ~40 AUX reads to diagnose eDP link training failures.
-	static int auxLogCount = 0;
-	if (auxLogCount < 40) {
-		auxLogCount++;
-		uint8_t *b = reinterpret_cast<uint8_t *>(buffer);
-		if (length >= 2)
-			SYSLOG("ngreen", "V97AUX[%d]: addr=0x%04x len=%u ret=0x%x [0]=0x%02x [1]=0x%02x",
-				   auxLogCount, address, length, retVal, b ? b[0] : 0xFF, (b && length >= 2) ? b[1] : 0xFF);
-		else
-			SYSLOG("ngreen", "V97AUX[%d]: addr=0x%04x len=%u ret=0x%x",
-				   auxLogCount, address, length, retVal);
-	}
-
-	// V98T removed: do NOT clamp DPCD[0x0100-0x0101] (LINK_BW_SET / LANE_COUNT_SET).
-	// Capping these to HBR2/2-lanes caused Apple to train the link at HBR2×2 lanes.
-	// V97P then wrote a 4-lane DDI_FUNC_CTL value to a 2-lane trained link → black screen.
-	// UEFI already trained the link at HBR3×4 lanes; we must let Apple see those values
-	// so it (re-)trains consistently and V97P's bit16-only correction stays coherent.
-	if (NGreen::callback && !NGreen::callback->isRealTGL && address == 0x0100 && buffer && length >= 1) {
-		auto *raw = reinterpret_cast<uint8_t *>(buffer);
-		static int v98tLogs = 0;
-		if (v98tLogs < 5) {
-			v98tLogs++;
-			if (length >= 2)
-				SYSLOG("ngreen", "V98T[%d]: DPCD 0x0100 passthrough bw=0x%02x lanes=0x%02x",
-					   v98tLogs, raw[0], raw[1]);
-			else
-				SYSLOG("ngreen", "V98T[%d]: DPCD 0x0100 passthrough bw=0x%02x (len=1)",
-					   v98tLogs, raw[0]);
-		}
-	}
-
-	// V99: Suppress spurious LINK_STATUS_UPDATED (DPCD[0x204] bit7) on RPL-P.
-	// HDCP probing reads DPCD 0x6921d, which causes the eDP panel to assert IRQ_HPD,
-	// setting LINK_STATUS_UPDATED=1. Apple's checkLinkStatus then sees
-	// INTERLANE_ALIGN_DONE=0 and tears down the display (~10s after boot).
-	// The physical link is healthy; only the IRQ flag is spurious.
-	// Clearing bit7 of DPCD[0x204] prevents the driver from acting on the IRQ.
-	if (NGreen::callback && !NGreen::callback->isRealTGL && address == 0x0202 && buffer && length >= 3) {
-		auto *raw = reinterpret_cast<uint8_t *>(buffer);
-		if (raw[2] & 0x80) {
-			static int v99Logs = 0;
-			if (v99Logs < 10) {
-				v99Logs++;
-				SYSLOG("ngreen", "V99[%d]: suppressed DPCD 0x204 LINK_STATUS_UPDATED "
-					   "(was 0x%02x, lanes=[0x%02x 0x%02x])",
-					   v99Logs, raw[2], raw[0], raw[1]);
-			}
-			raw[2] &= ~0x80u; // clear LINK_STATUS_UPDATED
-		}
-	}
-
-	if (address != 0x0000 && address != 0x2200) return retVal;
-
-	if (length < sizeof(DPCDCap16) || buffer == nullptr)
-		return retVal;
-
-	auto caps = reinterpret_cast<DPCDCap16 *>(buffer);
-
-	if (NGreen::callback && !NGreen::callback->isRealTGL) {
-		// V98: Do NOT cap maxLaneCount or maxLinkRate.
-		// Previous versions capped maxLaneCount to 2, which caused Apple to train at
-		// 2 lanes while V97P subsequently wrote a 4-lane DDI_FUNC_CTL value → black screen.
-		// The hardware is trained at HBR3×4 lanes by UEFI; let Apple see those real caps
-		// so its LightUpEDP (re-)trains consistently at HBR3×4 lanes.
-		static int v98Logs = 0;
-		if (v98Logs < 5) {
-			v98Logs++;
-			SYSLOG("ngreen", "V98[%d]: DPCD caps @0x%04x maxLinkRate=0x%02x maxLane=0x%02x (passthrough)",
-				   v98Logs, address, caps->maxLinkRate, caps->maxLaneCount);
-		}
-	}
-
-	if (caps->revision < 0x03) {
-		caps->maxLinkRate = 0;
-	}
-
-	return retVal;
-}
-
 // V183: ADL-P/RPL write-only power well handler.
 // HSW_PWR_WELL_CTL1 (0x45400): REQ bits = odd bits (mask 0xAA: bits 1,3,5,7,...);
 //                               STATE bits = even bits (mask 0x55: bits 0,2,4,6,...).
@@ -4254,81 +4060,6 @@ void Gen11::sanitizeCDClockFrequency(AppleIntel::AppleIntelBaseController *that)
 void Gen11::disableCDClock(AppleIntel::AppleIntelBaseController *that)
 {
 	FunctionCast(disableCDClock, callback->odisableCDClock)(that );
-}
-
-uint8_t Gen11::hwRegsNeedUpdate
-		  (AppleIntel::AppleIntelBaseController *that,
-		   AppleIntel::AppleIntelFramebuffer *param_1,
-		   AppleIntel::AppleIntelDisplayPath *param_2,
-		   AppleIntel::CRTCParams *param_3,
-		   const IODetailedTimingInformationV2 *param_4,
-		   AppleIntel::SCALERPARAMS *param_5)
-{
-	// ADL-P DC exit: restore power wells and context before Apple writes registers.
-	if (NGreen::callback->dmcIsAdlp)
-		NGreen::callback->adlpDcExit("hwRNU");
-
-	// param_3 is the pending CRTCParams built by SetupParams.
-	if (!NGreen::callback->isRealTGL && param_3) {
-		auto *params = param_3;
-
-		// V97P: clear bit[16] in TRANS_DDI_FUNC_CTL.
-		// Apple's SetupParams sets bit16 as a port-type flag; UEFI/HW never sets it.
-		// Without this the DDI FUNC_CTL compare fires and triggers a full modeset
-		// that disrupts the already-trained 4-lane eDP link → black screen.
-		if (params->TRANS_DDI_FUNC_CTL & (1u << 16)) {
-			static int v97PCount = 0;
-			if (v97PCount < 12) {
-				v97PCount++;
-				SYSLOG("ngreen", "V97P[%d]: CRTCParams TRANS_DDI_FUNC_CTL 0x%x -> 0x%x",
-					   v97PCount, params->TRANS_DDI_FUNC_CTL,
-					   params->TRANS_DDI_FUNC_CTL & ~(1u << 16));
-			}
-			params->TRANS_DDI_FUNC_CTL &= ~(1u << 16);
-		}
-
-		// V97C: align pending TRANS_CONF with the live HW value.
-		// paramsFbCompare logs "TRANS_CONF 0xc0000000->0xc0000024": HW has bits[5,2]
-		// clear (UEFI default), Apple wants to set them (interlace/depth config).
-		// Writing those bits to an active pipe causes a transient signal disruption
-		// that sets the panel's DPCD InterLane Alignment Lost bit (0x202=0x80),
-		// which checkLinkStatus detects ~10 s later and tears down the display.
-		// Fix: replace the pending TRANS_CONF with the current HW register value so
-		// paramsFbCompare sees no change and the partial pipe update is suppressed.
-		// PIPE_CONF_A (= TRANS_CONF in ICL+) = 0x70008.
-		// NOTE: 0x60008 is TRANS_HSYNC_A (horizontal sync timing) — do NOT use that.
-		const uint32_t hwTransConf = NGreen::callback->readReg32(0x70008);
-		if (params->TRANS_CONF != hwTransConf) {
-			static int v97CCount = 0;
-			if (v97CCount < 12) {
-				v97CCount++;
-				SYSLOG("ngreen", "V97C[%d]: CRTCParams TRANS_CONF 0x%x -> HW 0x%x (suppressed pipe update)",
-					   v97CCount, params->TRANS_CONF, hwTransConf);
-			}
-			params->TRANS_CONF = hwTransConf;
-		}
-
-		// V300 REVERTED — was a memory-write hack zeroing CRTCParams[+0xE8]/[+0xEC] to
-		// kill DSC engine select bits. Per jalavoui's feedback ("stop hacking memory
-		// writes, fix the origin not the destination"), DSC should be controlled at
-		// getDPCDInfo / Info.plist FeatureControl level, not patched after-the-fact in
-		// the CRTCParams struct. Our Info.plist already sets DSCSupport=0/DSCCapReporting=0
-		// (confirmed by fb.log "DSC supported: 0" / "DSC Caps Reporting enabled: 0"),
-		// so if Apple still calls setupDSCEngineParams the path is somewhere downstream
-		// that ignores FeatureControl — needs investigation at the origin function, not
-		// here. Linux on this hardware: VBT Port A DSC:0, link runs "DSC off" → DSC was
-		// likely a wrong hypothesis for the fragmentation symptom in the first place.
-	}
-
-	static int CCount = 0;
-	CCount++;
-	SYSLOG("ngreen", "V97C[%d]: hwRegsNeedUpdate called", CCount);
-	// Return the original result so that register reprogramming proceeds normally.
-	// The lane count mismatch (4→2) that previously broke the display is now fixed
-	// by the computeLaneCount hook forcing 4 lanes.  Without register updates, the
-	// plane surface address and stride never get written, leaving the stale BIOS
-	// framebuffer on screen (grey/black vertical bars with only cursor visible).
-	return FunctionCast(hwRegsNeedUpdate, callback->ohwRegsNeedUpdate)(that, param_1, param_2, param_3, param_4, param_5);
 }
 
 unsigned long Gen11::start(void *that, void *provider)
