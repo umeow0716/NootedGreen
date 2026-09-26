@@ -123,3 +123,18 @@ sources returns the current count to 1,303; this does not close older coverage.
   claims and boot arguments for the removed Sonoma-era experiments were
   retired. The full static suite passes in `/tmp/ngreen-static.aikyPk`; the VM
   remained off and hardware behavior is not inferred from that result.
+
+### Boot-policy cleanup
+
+- The old `ngreenfullmtl*` switch did not enable Metal. Its only remaining
+  effect was to override WEG coexistence and install the physical force-wake
+  replacement; a VF already selects its required no-op isolation route. The
+  misleading switch and its dead helper were removed, together with the dead
+  `ngreenexp` parser left after recurring monitors were deleted.
+- The workspace OpenCore generator no longer gives the VF physical-display
+  DMC selection, obsolete version/3D switches, firmware-disable policy or the
+  removed full-Metal switch. The VF profile now explicitly requests scheduler
+  4 and otherwise keeps only debug, compatibility and security-policy inputs.
+  The complete syntax/analyzer/protocol suite passes in
+  `/tmp/ngreen-static.zuSxRI`. This is configuration hygiene, not a Metal
+  result.

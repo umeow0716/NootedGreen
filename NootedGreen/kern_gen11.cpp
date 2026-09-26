@@ -1689,15 +1689,6 @@ static bool isWEGCoexistMode() {
 	return checkKernelArgument("-ngwegcoex");
 }
 
-static bool isExperimentalMonitorEnabled() {
-	int enabled = 0;
-	if (PE_parse_boot_argn("ngreenexp", &enabled, sizeof(enabled))) {
-		return enabled != 0;
-	}
-
-	return checkKernelArgument("-ngreenexp");
-}
-
 static bool isDisplayPipeForceDisabled() {
 	// NOTE: isLegacyOwnershipModeEnabled() (V80 plane-linearization) is intentionally
 	// NOT checked here. V80 writes are self-limiting to the first 3 ticks (≤150ms) and
@@ -1745,21 +1736,6 @@ static bool isV93PlaneGuardEnabled() {
 	}
 
 	return checkKernelArgument("-ngreenv93");
-}
-
-static bool shouldForceFullMetalPath() {
-	int enabled = 0;
-	if (PE_parse_boot_argn("ngreenfullmtlcore", &enabled, sizeof(enabled))) {
-		return enabled != 0;
-	}
-	if (checkKernelArgument("-ngreenfullmtlcore")) {
-		return true;
-	}
-	// Legacy: unified arg still accepted as fallback.
-	if (PE_parse_boot_argn("ngreenfullmtl", &enabled, sizeof(enabled))) {
-		return enabled != 0;
-	}
-	return checkKernelArgument("-ngreenfullmtl");
 }
 
 static uint32_t getV65Tier1WantBits() {
@@ -2548,8 +2524,6 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		}
 
 		const bool wegCoexist = isWEGCoexistMode();
-		const bool forceFullMTL = shouldForceFullMetalPath();
-
 		RouteRequestPlus requests[] = {
 			// V217: Raptor Lake VFs use Wa_22018453856.  Query the PF-provisioned
 			// GGTT range, replace Apple's zero/stolen-derived allocator ranges, keep
@@ -2966,7 +2940,7 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 
 		// Keep IGAccelDevice::deviceStart native, including failure propagation.
 
-		if (!wegCoexist || forceFullMTL || gVfIdentity == VfIdentity::Virtual) {
+		if (!wegCoexist || gVfIdentity == VfIdentity::Virtual) {
 			RouteRequestPlus coexistOffRoutes[] = {
 				// ForceWake: replace Apple's SafeForceWakeMultithreaded with i915-ported version.
 				// Apple's code uses 90ms timeouts and no fallback; ours uses 50ms + reserve-bit fallback.
@@ -2974,9 +2948,6 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				{"__ZN16IntelAccelerator26SafeForceWakeMultithreadedEbjj", forceWake, this->oforceWake},
 			};
 			PANIC_COND(!RouteRequestPlus::routeAll(patcher, index, coexistOffRoutes, address, size), "ngreen", "Failed to route coexist-off symbols");
-			if (forceFullMTL && wegCoexist) {
-				SYSLOG("ngreen", "FULL_MTL: forcing SafeForceWakeMultithreaded route despite coexist mode");
-			}
 		}
 
 		if (!wegCoexist) {

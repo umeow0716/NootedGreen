@@ -102,7 +102,7 @@ FB-only:
 
 FB+GFX:
 ```
--v keepsyms=1 debug=0x100 IGLogLevel=8 -ngreentglwithgfx -NGreenDebug liludump=250 msgbuf=725288 liludbuf=725288 ngreen-dmc=adlp -allow3d -disablegfxfirmware -ngreenfullmtlcore
+-v keepsyms=1 debug=0x100 IGLogLevel=8 -ngreentglwithgfx -NGreenDebug liludump=250 msgbuf=725288 liludbuf=725288 ngreen-dmc=adlp -allow3d -disablegfxfirmware
 ```
 
 Where:
@@ -134,12 +134,9 @@ Where:
 | `ngreen-dmc=skip|tgl|adlp` | DMC policy: skip CSR load, or force TGL/ADL-P DMC path for diagnostics. |
 | `-allow3d` | Force 3D acceleration |
 | `-nbdyldoff` | Disable the optional shared-cache media-model patches and TGL userspace-bundle discovery logs. |
-| `-ngreenexp` / `ngreenexp=1` | Enable bounded extra diagnostics. It no longer starts recurring MMIO monitor timers. |
 | `-ngreendp0` / `ngreendp0=1` | Force fallback mode: set `DisplayPipeSupported=0` in accelerator capabilities |
 | `-ngreendp1` / `ngreendp1=1` | Explicitly keep native `DisplayPipeSupported` path (default behavior) |
 | `-ngreenv93` / `ngreenv93=1` | Enable V93 plane guard diagnostics (disabled by default). |
-| `-ngreenfullmtl` / `ngreenfullmtl=1` | Kernel-side full-Metal policy override. It does not enable a DYLD control-flow patch and does not auto-enable Apple's original Blit3D initializer. |
-| `-ngreenfullmtlcore` / `ngreenfullmtlcore=1` | Equivalent kernel-side-only full-Metal policy override; the unified `-ngreenfullmtl` remains a fallback. |
 | `ngreen-buf=N` | GGTT multi-buffer slots for the dp0 SURF-redirect path: `1`=single, `2`=double (default), `3`=triple. Each slot occupies 4000 GGTT pages (0xFA0000 bytes). Slot 0 → `SURF=0x0`, slot 1 → `SURF=0xFA0000`, slot 2 → `SURF=0x1F40000`. Apple's non-aperture IOSurface pages are remapped into their assigned slot on every flip; SURF is rewritten to the matching aperture address. Single-buffer collapses all flips to slot 0 (original behaviour). Double/triple allow the display engine to scan independent physical pages per IOSurface without cross-contamination. |
 | `-ngreenforceprops` / `ngreenforceprops=1` | Enable legacy forced IGPU property injection (`AAPL,ig-platform-id`, `model`, `saved-config`, etc.). Disabled by default in compatibility-first mode. |
 | `IGLogLevel=8` | Maximum Intel GPU driver logging |
@@ -213,7 +210,7 @@ sudo kextcache -i /
 Recent changes switch NootedGreen to safer defaults for cross-machine portability:
 
 - Legacy hardcoded IGPU property seeding is now **opt-in**, not default.
-- Experimental watchdog/monitor logic is still **opt-in** via `-ngreenexp`.
+- Recurring watchdog/monitor experiments are not part of the maintained driver.
 - Native display-pipe path is now default; forced fallback mode is opt-in via `-ngreendp0`.
 - Coexistence paths avoid forcing DVMT/framebuffer processing when the DVMT module is not enabled.
 
