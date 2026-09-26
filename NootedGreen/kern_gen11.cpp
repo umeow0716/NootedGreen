@@ -2139,6 +2139,7 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		{
 			SolveRequestPlus solveRequests[] = {
 				{"__ZN23IGHardwareBlit3DContext17ExtendedCtxParamsE", this->Blit3DExtendedCtxParams},
+				{"__ZN13IGHardwareGuC16initSchedControlEv", this->orgInitSchedControl},
 				{"__ZN21IGHardwareGuCCTBuffer32handleSoftwareGuCToHostInterruptEv",
 				 this->vfCtbSoftwareInterrupt},
 				// V233: single-LRC GuC submission must publish the new tail in
@@ -2401,10 +2402,6 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				{"__ZN13IGHardwareGuC13loadGuCBinaryEv", loadGuCBinary, this->oloadGuCBinary},
 				{"__ZN16IntelAccelerator17transferOwnershipEPK20IGSharedMappedBufferi",
 				 vfTransferOwnership, this->oVfTransferOwnership},
-				// V224: the PF owns the running firmware, but Apple still needs its
-				// context pool, log buffers and ADS initialized before createUkContext.
-				{"__ZN13IGHardwareGuC16initSchedControlEv",
-				 wrapInitSchedControl, this->orgInitSchedControl},
 				// V222: scheduler 4 uses the Gen11 reference GuC transport, but its
 				// stock MMIO helper writes the legacy 0xc180 scratch registers.  A VF
 				// is provisioned only for the Gen11 0x190240/0x1901f0 mailbox.
@@ -8758,8 +8755,13 @@ unsigned long Gen11::loadGuCBinary(void *that) {
 		// before touching WOPCM and uploading firmware.  Skipping it outright
 		// left contextCount at zero, so the very first createUkContext returned
 		// the 0x400 invalid-context sentinel and tore the GuC object down.
-		const bool initialized = FunctionCast(wrapInitSchedControl,
-		                                      callback->orgInitSchedControl)(that);
+		if (!that || !callback->orgInitSchedControl) {
+			vfMarkProtocolFault("missing native VF scheduler initializer");
+			return 0;
+		}
+		using InitSchedControl = bool (*)(void *);
+		const bool initialized = reinterpret_cast<InitSchedControl>(
+			callback->orgInitSchedControl)(that);
 		SYSLOG("ngreen", "V224: VF GuC firmware is PF-owned; scheduler data init=%d",
 		       initialized);
 		return initialized;
@@ -10174,112 +10176,6 @@ void Gen11::vfReadAndClearInterrupts(void *that, void *interrupts) {
 	*reinterpret_cast<uint64_t *>(interrupts) = vfConsumeMemoryInterrupts();
 }
 
-UInt8 Gen11::wrapLoadGuCBinary(void *that) {
-
-	if (callback->firmwareSizePointer)
-		callback->performingFirmwareLoad = true;
-
-	auto r = FunctionCast(wrapLoadGuCBinary, callback->orgLoadGuCBinary)(that);
-	DBGLOG("ngreen", "loadGuCBinary returned %d", r);
-
-	callback->performingFirmwareLoad = false;
-
-	return r;
-}
-
-bool Gen11::wrapLoadFirmware(void *that) {
-
-	//(*reinterpret_cast<uintptr_t **>(that))[35] = reinterpret_cast<uintptr_t>(wrapSystemWillSleep);
-	//(*reinterpret_cast<uintptr_t **>(that))[36] = reinterpret_cast<uintptr_t>(wrapSystemDidWake);
-	return FunctionCast(wrapLoadFirmware, callback->orgLoadFirmware)(that);
-}
-
-void Gen11::wrapSystemWillSleep(void *that) {
-	DBGLOG("ngreen", "systemWillSleep GuC callback");
-}
-
-void Gen11::wrapSystemDidWake(void *that) {
-	DBGLOG("ngreen", "systemDidWake GuC callback");
-
-	// This is IGHardwareGuC class instance.
-	auto &GuC = (reinterpret_cast<OSObject **>(that))[76];
-
-	if (GuC)
-	if (GuC->metaCast("IGHardwareGuC")) {
-		DBGLOG("igfx", "reloading firmware on wake; discovered IGHardwareGuC - releasing");
-		GuC->release();
-		GuC = nullptr;
-	}
-
-	FunctionCast(wrapLoadFirmware, callback->orgLoadFirmware)(that);
-}
-
-bool Gen11::wrapInitSchedControl(void *that) {
-	DBGLOG("ngreen", "attempting to init sched control with load %d", callback->performingFirmwareLoad);
-	bool perfLoad = callback->performingFirmwareLoad;
-	callback->performingFirmwareLoad = false;
-	bool r = FunctionCast(wrapInitSchedControl, callback->orgInitSchedControl)(that);
-
-	callback->performingFirmwareLoad = perfLoad;
-	return r;
-}
-
-void *Gen11::wrapIgBufferWithOptions(void *accelTask, void* size, unsigned int type, unsigned int flags) {
-	void *r = nullptr;
-
-	if (callback->performingFirmwareLoad) {
-		callback->dummyFirmwareBuffer = Buffer::create<uint8_t>(*(unsigned long*)size);
-
-		const void *fw = nullptr;
-		const void *fwsig = nullptr;
-		size_t fwsize = 0;
-		size_t fwsigsize = 0;
-
-
-		/*fw = GuCFirmwareKBL;
-		fwsig = GuCFirmwareKBLSignature;
-		fwsize = GuCFirmwareKBLSize;
-		fwsigsize = GuCFirmwareSignatureSize;*/
-
-		unsigned long newsize = fwsize > *(unsigned long*)size ? ((fwsize + 0xFFFF) & (~0xFFFF)) : *(unsigned long*)size;
-		r = FunctionCast(wrapIgBufferWithOptions, callback->orgIgBufferWithOptions)(accelTask, (void*)newsize,type,flags);
-		if (r && callback->dummyFirmwareBuffer) {
-			auto status = MachInfo::setKernelWriting(true, KernelPatcher::kernelWriteLock);
-			if (status == KERN_SUCCESS) {
-				callback->realFirmwareBuffer = static_cast<uint8_t **>(r)[7];
-				static_cast<uint8_t **>(r)[7] = callback->dummyFirmwareBuffer;
-				lilu_os_memcpy(callback->realFirmwareBuffer, fw, fwsize);
-				lilu_os_memcpy(callback->signaturePointer, fwsig, fwsigsize);
-				callback->realBinarySize = static_cast<uint32_t>(fwsize);
-				*callback->firmwareSizePointer = static_cast<uint32_t>(fwsize);
-				MachInfo::setKernelWriting(false, KernelPatcher::kernelWriteLock);
-			} else {
-				//SYSLOG("igfx", "ig buffer protection upgrade failure %d", status);
-			}
-		} else if (callback->dummyFirmwareBuffer) {
-			//SYSLOG("igfx", "ig shared buffer allocation failure");
-			Buffer::deleter(callback->dummyFirmwareBuffer);
-			callback->dummyFirmwareBuffer = nullptr;
-		} else {
-			//SYSLOG("igfx", "dummy buffer allocation failure");
-		}
-	} else {
-		r = FunctionCast(wrapIgBufferWithOptions, callback->orgIgBufferWithOptions)(accelTask, size,type,flags);
-	}
-
-	return r;
-}
-
-UInt64 Gen11::wrapIgBufferGetGpuVirtualAddress(void *that) {
-	if (callback->performingFirmwareLoad && callback->realFirmwareBuffer) {
-		static_cast<uint8_t **>(that)[7] = callback->realFirmwareBuffer;
-		callback->realFirmwareBuffer = nullptr;
-		Buffer::deleter(callback->dummyFirmwareBuffer);
-		callback->dummyFirmwareBuffer = nullptr;
-	}
-
-	return FunctionCast(wrapIgBufferGetGpuVirtualAddress, callback->orgIgBufferGetGpuVirtualAddress)(that);
-}
 
 
 uint32_t Gen11::wrapReadRegister32(void *controller, uint32_t address) {

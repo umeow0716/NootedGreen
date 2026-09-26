@@ -651,3 +651,21 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   earlier native attach pool scan, teardown exclusion, payload ABI validation,
   and release-path bounds still need work. The new allocator cannot certify
   callers' entire lifetime. No VM boot, installation or hardware submission.
+
+### Unreachable legacy GuC firmware swapping removed
+
+- Whole-repository reference checks found no routes/callers for the old
+  wrapLoadGuCBinary, wrapLoadFirmware, firmware-buffer swapping and sleep/wake
+  wrappers. Their function pointers were never resolved. Removed those six
+  dead wrappers and their private state (recoverable through Git).
+- They contained a scalar-size/pointer mismatch, null firmware/signature
+  placeholders, private buffer pointer replacement, unverified release on
+  wake, and unchecked write-protection restoration. These were dormant bugs,
+  not evidence that they caused the observed freeze.
+- The active wrapInitSchedControl hook existed only to toggle that unreachable
+  firmware-swap state. Removed this no-op detour and resolve the native symbol
+  directly for VF scheduler allocation instead. A missing symbol fails closed
+  before use. Native PF scheduler calls are no longer needlessly detoured.
+- Full syntax and ASan/UBSan suites passed in /tmp/ngreen-static.6ZBcDm.
+  Actual PF firmware support, VF allocation OOM handling, and PM lifecycle
+  remain separate unresolved tasks; no runtime behavior has been certified.

@@ -1339,8 +1339,6 @@ private:
 	static unsigned long loadGuCBinary(void *that);  // route: intercept GuC FW load
 	mach_vm_address_t oloadGuCBinary {};
 
-	static UInt8 wrapLoadGuCBinary(void *that);  // hooks GuC binary loading into accel
-	mach_vm_address_t orgLoadGuCBinary {};
 
 	static IOReturn wrapConnectionProbe();  // display hot-plug connection probe
 	mach_vm_address_t orgConnectionProbe {};
@@ -1368,10 +1366,6 @@ private:
 	mach_vm_address_t omaxSupportedDepths{};
 	
 	// ── Accelerator firmware & scheduler ──
-	static bool wrapLoadFirmware(void *that);       // GuC/HuC firmware load wrapper
-	static bool wrapInitSchedControl(void *that);    // scheduler control init
-	static void *wrapIgBufferWithOptions(void *accelTask, void* size, unsigned int type, unsigned int flags);
-	static UInt64 wrapIgBufferGetGpuVirtualAddress(void *that);
 	static bool vfMmioHostToGuCAction(void *that, const uint32_t *request,
 	                                  unsigned int requestLength, int timeout,
 	                                  uint32_t *response);
@@ -1485,33 +1479,21 @@ private:
 	
 	// Saved original function pointers for accelerator
 	mach_vm_address_t orgSubmitExecList {};    // ExecList submission (command dispatch)
-	mach_vm_address_t orgLoadFirmware {};      // FW load original
 	mach_vm_address_t orgInitSchedControl {};  // scheduler init original
-	mach_vm_address_t orgIgBufferWithOptions {};
-	mach_vm_address_t orgIgBufferGetGpuVirtualAddress {};
 	
 	mach_vm_address_t _gSysctlVariables {};
 	
 	// ── GuC firmware patching state ──
 	uint32_t freq_max {0};                      // max GPU frequency (from RP_STATE_CAP)
-	uint8_t *gKmGen9GuCBinary {nullptr};        // pointer to GuC binary in kext __DATA
-	uint8_t *signaturePointer {nullptr};        // CSS header signature location
-	uint32_t *firmwareSizePointer {nullptr};    // pointer to FW size field
-	uint8_t *dummyFirmwareBuffer {nullptr};     // dummy FW for initial load
-	uint8_t *realFirmwareBuffer {nullptr};      // real patched FW buffer
-	uint32_t realBinarySize {};                 // actual binary size
 	
 	static uint8_t validateModeDepth(void *that,void *param_1,uint param_2);
 	mach_vm_address_t ovalidateModeDepth {};
 	
 	
-	bool performingFirmwareLoad {false};  // guards re-entrant FW load
 	
 	static int handleLinkIntegrityCheck();  // stub: returns 0 (link OK)
 	
 	// ── Power management ──
-	static void wrapSystemWillSleep(void *that);
-	static void wrapSystemDidWake(void *that);
 	
 
 	static void setPanelPowerState(void *that,bool param_1);
