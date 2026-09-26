@@ -1170,3 +1170,22 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   regressions locally and in CI. Added 80 unaligned little-endian word cases;
   full suite passes /tmp/ngreen-static.t5KKSp. These compiler properties do
   not establish MMIO protocol correctness or safe dynamic execution.
+
+### Pre-native context attach admission
+
+- Native AttachContextDesc indexes the shared proxy pool, an engine-group
+  bitmap and an LRCA record before returning. The former wrapper called it
+  first and validated the descriptor afterwards, so rejection could not
+  protect those accesses.
+- VF attach now requires Virtual identity, initialized transport/accessor,
+  pool lock and metadata, mapped pool storage covering count*0x5b00, bounded
+  used/next counters, a context backing object, complete assigned-GGTT/GuC
+  interval, supported class and engine instance, and the minimum LRCA image
+  length before invoking native code. Failed admission makes no native call.
+- VF detach revalidates the immutable proxy-pool snapshot before the native
+  private detach indexes it. Because this is void teardown whose caller may
+  release DMA pages, corrupt state is fail-stop rather than a silent return.
+  The native hash entry itself is still private and not independently decoded;
+  hash allocation/corruption and full object-provenance proof remain open.
+- Full static/sanitizer suite passes /tmp/ngreen-static.pHlcvS. 0e27f5c CI
+  36223942541 passed. VM remains off and no kext was deployed.

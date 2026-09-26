@@ -9219,31 +9219,51 @@ static bool vfPrepareContextMemoryIrq(OSObject *backing, mach_vm_address_t gette
 	return true;
 }
 
+static bool vfLegacyProxyPoolValid(void *that, mach_vm_address_t getter,
+	                               uint32_t *usedOut = nullptr,
+	                               uint32_t *countOut = nullptr) {
+	if (!that || !getter ||
+	    !getMember<IOLock *>(that, 0x40) || !getMember<void *>(that, 0x50))
+		return false;
+	auto *backing = getMember<void *>(that, 0x68);
+	if (!backing)
+		return false;
+	using Getter = uint8_t *(*)(void *);
+	auto *pool = reinterpret_cast<Getter>(getter)(backing);
+	const uint32_t count = getMember<uint32_t>(that, 0x80);
+	const uint32_t used = getMember<uint32_t>(that, 0x84);
+	const uint32_t next = getMember<uint32_t>(that, 0x88);
+	if (!NGContextPool::validStorage(pool,
+	        getMember<uint64_t>(backing, kVfMappedBufferLengthOffset), count) ||
+	    used > count || (next >= count && next != NGContextPool::invalidId))
+		return false;
+	if (usedOut)
+		*usedOut = used;
+	if (countOut)
+		*countOut = count;
+	return true;
+}
+
 bool Gen11::vfAttachContextDesc(void *that, const uint32_t *descriptor) {
 	if (gVfIdentity == VfIdentity::Physical) {
 		return FunctionCast(vfAttachContextDesc,
 		                    callback->oVfAttachContextDesc)(that, descriptor);
 	}
-	if (!gVfGGTTReady || gVfProtocolFault || !descriptor)
+	if (gVfIdentity != VfIdentity::Virtual || !gVfGGTTReady ||
+	    gVfProtocolFault || !that || !descriptor ||
+	    !callback->vfSharedMappedBufferGetVirtualAddress)
 		return false;
 
-	const bool attached = FunctionCast(vfAttachContextDesc,
-	                                   callback->oVfAttachContextDesc)(that,
-	                                                                    descriptor);
-	if (!attached)
-		return false;
-	if (!vfInitContextBridge()) {
-		FunctionCast(vfDetachContextDesc,
-		             callback->oVfDetachContextDesc)(that, descriptor);
-		return false;
-	}
-
+	// Native attach touches the legacy pool, LRCA record and descriptor before
+	// it returns. Validate every interval it will index before giving it control;
+	// post-call rejection would be too late to prevent an invalid kernel access.
 	const auto descriptorValue = NGContextDescriptor::read(descriptor);
 	const uint32_t descriptorLo = descriptorValue.low;
 	const uint32_t descriptorHi = descriptorValue.high;
 	const uint32_t lrcaPage = descriptorLo & 0xFFFFF000U;
 	const uint32_t rawClass = descriptorHi >> 29;
 	const uint32_t engineInstance = (descriptorHi >> 16) & 0x3FU;
+	static constexpr uint8_t engineClassMap[] = {0, 1, 2, 3, 5, 4};
 	auto *hardwareContext = const_cast<uint8_t *>(
 		reinterpret_cast<const uint8_t *>(descriptor) -
 		kVfContextDescriptorOffset);
@@ -9251,17 +9271,27 @@ bool Gen11::vfAttachContextDesc(void *that, const uint32_t *descriptor) {
 		getMember<void *>(hardwareContext, kVfContextImageBufferOffset));
 	const uint64_t contextBytes = contextBacking ?
 		getMember<uint64_t>(contextBacking, kVfMappedBufferLengthOffset) : 0;
-	static constexpr uint8_t engineClassMap[] = {0, 1, 2, 3, 5, 4};
-	if (lrcaPage < gVfGGTTBase ||
-	    lrcaPage >= gVfGGTTBase + gVfGGTTSize ||
-	    contextBytes > gVfGGTTBase + gVfGGTTSize - lrcaPage ||
+	uint32_t poolUsed = 0, poolCount = 0;
+	const bool poolValid = vfLegacyProxyPoolValid(
+		that, callback->vfSharedMappedBufferGetVirtualAddress, &poolUsed, &poolCount);
+	if (!poolValid || !contextBacking ||
+	    !NGGgtt::contains(gVfGGTTBase, gVfGGTTSize, lrcaPage, contextBytes) ||
 	    lrcaPage >= kGucGgttTop || contextBytes > kGucGgttTop - lrcaPage ||
 	    rawClass >= arrsize(engineClassMap) || engineInstance >= 32 ||
 	    contextBytes < kVfContextMinimumImageBytes) {
-		SYSLOG("ngreen", "V230: rejected LRCA descriptor %08x:%08x VF=[0x%llx,+0x%llx]",
+		SYSLOG("ngreen", "V241: rejected pre-native LRCA %08x:%08x bytes=0x%llx pool=%u/%u",
 		       descriptorHi, descriptorLo,
-		       static_cast<unsigned long long>(gVfGGTTBase),
-		       static_cast<unsigned long long>(gVfGGTTSize));
+		       static_cast<unsigned long long>(contextBytes), poolUsed, poolCount);
+		vfMarkProtocolFault("invalid VF context descriptor or native proxy pool before attach");
+		return false;
+	}
+
+	const bool attached = FunctionCast(vfAttachContextDesc,
+	                                   callback->oVfAttachContextDesc)(that,
+	                                                                    descriptor);
+	if (!attached)
+		return false;
+	if (!vfInitContextBridge()) {
 		FunctionCast(vfDetachContextDesc,
 		             callback->oVfDetachContextDesc)(that, descriptor);
 		return false;
@@ -9402,6 +9432,12 @@ void Gen11::vfDetachContextDesc(void *that, const uint32_t *descriptor) {
 		vfMarkProtocolFault("VF detach without valid context bookkeeping");
 		return;
 	}
+	// Native detach indexes its private pool before its releaseContextId call.
+	// A void teardown cannot safely skip that bookkeeping and let DMA backing
+	// disappear, so fail-stop instead of returning on a corrupted pool snapshot.
+	PANIC_COND(!vfLegacyProxyPoolValid(
+		that, callback->vfSharedMappedBufferGetVirtualAddress), "ngreen",
+		"Cannot safely retire VF context through invalid native proxy pool");
 
 	const auto descriptorValue = NGContextDescriptor::read(descriptor);
 	const uint32_t descriptorLo = descriptorValue.low;
