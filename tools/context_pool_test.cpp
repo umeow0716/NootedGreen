@@ -109,6 +109,36 @@ int main() {
 	assert(!NGContextDescriptor::validGucHwlrca(baseDescriptor.low, 0));
 	assert(!NGContextDescriptor::validGucHwlrca(gucDescriptor, 1));
 
+	int backingA = 0, backingB = 0;
+	const auto baseAttributes = NGContextDescriptor::inspect(baseDescriptor);
+	assert(NGContextDescriptor::matchesRecord(
+		baseDescriptor, baseAttributes, &backingA, baseDescriptor,
+		baseAttributes.gucClass, baseAttributes.engineInstance, &backingA));
+	auto changedIdentity = baseDescriptor;
+	changedIdentity.low ^= NGContextDescriptor::coherent;
+	assert(!NGContextDescriptor::matchesRecord(
+		changedIdentity, NGContextDescriptor::inspect(changedIdentity), &backingA,
+		baseDescriptor, baseAttributes.gucClass, baseAttributes.engineInstance,
+		&backingA));
+	changedIdentity = baseDescriptor;
+	changedIdentity.high ^= 1U << 5; // SW ID is part of the persistent identity.
+	assert(!NGContextDescriptor::matchesRecord(
+		changedIdentity, NGContextDescriptor::inspect(changedIdentity), &backingA,
+		baseDescriptor, baseAttributes.gucClass, baseAttributes.engineInstance,
+		&backingA));
+	assert(!NGContextDescriptor::matchesRecord(
+		baseDescriptor, baseAttributes, &backingB, baseDescriptor,
+		baseAttributes.gucClass, baseAttributes.engineInstance, &backingA));
+	assert(!NGContextDescriptor::matchesRecord(
+		baseDescriptor, baseAttributes, &backingA, baseDescriptor,
+		baseAttributes.gucClass ^ 1U, baseAttributes.engineInstance, &backingA));
+	assert(!NGContextDescriptor::matchesRecord(
+		baseDescriptor, baseAttributes, &backingA, baseDescriptor,
+		baseAttributes.gucClass, baseAttributes.engineInstance ^ 1U, &backingA));
+	assert(!NGContextDescriptor::matchesRecord(
+		baseDescriptor, baseAttributes, nullptr, baseDescriptor,
+		baseAttributes.gucClass, baseAttributes.engineInstance, nullptr));
+
 	for (uint32_t gucClass = 0; gucClass < 8; ++gucClass) {
 		for (uint32_t instance = 0; instance < 32; ++instance) {
 			const uint32_t mask = 1U << instance;

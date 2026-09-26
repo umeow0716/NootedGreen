@@ -127,6 +127,20 @@ inline Attributes inspect(Value descriptor)
     return result;
 }
 
+inline bool matchesRecord(Value descriptor, const Attributes &attributes,
+                          const void *backing, Value recordedDescriptor,
+                          uint8_t recordedGucClass,
+                          uint8_t recordedEngineInstance,
+                          const void *recordedBacking)
+{
+    return attributes.valid && backing &&
+        descriptor.low == recordedDescriptor.low &&
+        descriptor.high == recordedDescriptor.high &&
+        attributes.gucClass == recordedGucClass &&
+        attributes.engineInstance == recordedEngineInstance &&
+        backing == recordedBacking;
+}
+
 inline uint32_t gucHwlrca(Value descriptor)
 {
     // GuC v70 keeps the LRCA from registration and later schedule actions do

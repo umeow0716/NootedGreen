@@ -286,6 +286,7 @@ void vfReleaseG2HCredits(uint32_t count)
 struct VfGucContext {
 	uint32_t lrcaPage;
 	uint32_t descriptorLo;
+	uint32_t descriptorHi;
 	uint16_t refCount;
 	uint8_t engineClass;
 	uint8_t engineInstance;
@@ -400,6 +401,7 @@ void vfReleaseRetiredContextBacking(uint16_t gucId)
 		entry.contextBacking = nullptr;
 		entry.lrcaPage = 0;
 		entry.descriptorLo = 0;
+		entry.descriptorHi = 0;
 	}
 	IOSimpleLockUnlockEnableInterrupt(gVfContextLock, interruptState);
 	if (backing)
@@ -3843,10 +3845,11 @@ bool Gen11::vfAttachContextDesc(void *that, const uint32_t *descriptor) {
 			if (entry.refCount && (entry.state == kVfGucContextRegistered ||
 			    entry.state == kVfGucContextPendingEnable ||
 			    entry.state == kVfGucContextEnabled)) {
-				if (entry.refCount == 0xFFFFU || entry.contextBacking != contextBacking ||
-				    entry.descriptorLo != descriptorLo ||
-				    entry.engineClass != descriptorAttributes.gucClass ||
-				    entry.engineInstance != engineInstance) {
+				if (entry.refCount == 0xFFFFU ||
+				    !NGContextDescriptor::matchesRecord(descriptorValue,
+				        descriptorAttributes, contextBacking,
+				        {entry.descriptorLo, entry.descriptorHi}, entry.engineClass,
+				        entry.engineInstance, entry.contextBacking)) {
 					IOSimpleLockUnlockEnableInterrupt(gVfContextLock, interruptState);
 					vfMarkProtocolFault("context reference overflow or LRCA identity mismatch");
 					FunctionCast(vfDetachContextDesc, callback->oVfDetachContextDesc)(
@@ -3867,6 +3870,7 @@ bool Gen11::vfAttachContextDesc(void *that, const uint32_t *descriptor) {
 				auto &entry = gVfContexts[slot];
 				entry.lrcaPage = lrcaPage;
 				entry.descriptorLo = descriptorLo;
+				entry.descriptorHi = descriptorHi;
 				entry.refCount = 1;
 				entry.engineClass = descriptorAttributes.gucClass;
 				entry.engineInstance = static_cast<uint8_t>(engineInstance);
@@ -3977,8 +3981,24 @@ void Gen11::vfDetachContextDesc(void *that, const uint32_t *descriptor) {
 		"Cannot safely retire VF context through invalid native proxy pool");
 
 	const auto descriptorValue = NGContextDescriptor::read(descriptor);
+	const auto descriptorAttributes = NGContextDescriptor::inspect(descriptorValue);
 	const uint32_t descriptorLo = descriptorValue.low;
-	const uint32_t lrcaPage = descriptorLo & 0xFFFFF000U;
+	const uint32_t descriptorHi = descriptorValue.high;
+	const uint32_t lrcaPage = descriptorAttributes.lrcaPage;
+	auto *hardwareContext = const_cast<uint8_t *>(
+		reinterpret_cast<const uint8_t *>(descriptor) -
+		kVfContextDescriptorOffset);
+	auto *contextBacking = reinterpret_cast<OSObject *>(
+		getMember<void *>(hardwareContext, kVfContextImageBufferOffset));
+	const uint64_t contextBytes = contextBacking ?
+		getMember<uint64_t>(contextBacking, kVfMappedBufferLengthOffset) : 0;
+	if (!descriptorAttributes.valid || !contextBacking ||
+	    contextBytes < kVfContextMinimumImageBytes ||
+	    !NGGgtt::contains(gVfGGTTBase, gVfGGTTSize, lrcaPage, contextBytes) ||
+	    lrcaPage >= kGucGgttTop || contextBytes > kGucGgttTop - lrcaPage) {
+		vfMarkProtocolFault("invalid VF context identity before detach");
+		return;
+	}
 	if (postShutdown) {
 		// Firmware ownership was retired by the shutdown sweep before CTB was
 		// sealed. Late Apple object destruction therefore performs only native
@@ -3993,7 +4013,11 @@ void Gen11::vfDetachContextDesc(void *that, const uint32_t *descriptor) {
 		if (shutdownSlot >= 0) {
 			auto &entry = gVfContexts[shutdownSlot];
 			invalidShutdownRecord =
-				entry.state != kVfGucContextTombstone || entry.refCount == 0;
+				entry.state != kVfGucContextTombstone || entry.refCount == 0 ||
+				!NGContextDescriptor::matchesRecord(descriptorValue,
+				    descriptorAttributes, contextBacking,
+				    {entry.descriptorLo, entry.descriptorHi}, entry.engineClass,
+				    entry.engineInstance, entry.contextBacking);
 			if (!invalidShutdownRecord) {
 				entry.refCount--;
 				finalReference = entry.refCount == 0;
@@ -4013,6 +4037,7 @@ void Gen11::vfDetachContextDesc(void *that, const uint32_t *descriptor) {
 	VfGucContextState state = kVfGucContextEmpty;
 	bool issueDisable = false;
 	bool issueDeregister = false;
+	bool identityMismatch = false;
 	VfContextQueueGuard queue(that);
 	if (!queue.get()) {
 		vfMarkProtocolFault("context retirement without pinned H2G queue");
@@ -4023,12 +4048,19 @@ void Gen11::vfDetachContextDesc(void *that, const uint32_t *descriptor) {
 	slot = vfFindContextLocked(lrcaPage);
 	if (slot >= 0) {
 		auto &entry = gVfContexts[slot];
-		if (!entry.refCount) {
+		identityMismatch = !NGContextDescriptor::matchesRecord(descriptorValue,
+			descriptorAttributes, contextBacking,
+			{entry.descriptorLo, entry.descriptorHi}, entry.engineClass,
+			entry.engineInstance, entry.contextBacking);
+		if (identityMismatch) {
+			// Leave the known GuC record and its retained backing untouched. The
+			// supplied page may belong to another object, so native LRCA-keyed
+			// bookkeeping must also remain quarantined rather than remove that entry.
+		} else if (!entry.refCount) {
 			IOSimpleLockUnlockEnableInterrupt(gVfContextLock, interruptState);
 			vfMarkProtocolFault("duplicate final context detach");
 			return;
-		}
-		if (entry.refCount > 1) {
+		} else if (entry.refCount > 1) {
 			entry.refCount--;
 			IOSimpleLockUnlockEnableInterrupt(gVfContextLock, interruptState);
 			queue.unlock();
@@ -4036,27 +4068,39 @@ void Gen11::vfDetachContextDesc(void *that, const uint32_t *descriptor) {
 			             callback->oVfDetachContextDesc)(that, descriptor);
 			return;
 		}
-		// One thread owns final retirement. Do not admit a new reference or
-		// a second waiter while this owner releases locks to await firmware.
-		entry.refCount = 0;
-		state = entry.state;
-		if (state == kVfGucContextEnabled) {
-			entry.state = kVfGucContextPendingDisable;
-			entry.disablePending = true;
-			issueDisable = true;
-		} else if (state == kVfGucContextRegistered ||
-		           state == kVfGucContextDisabled) {
-			entry.state = kVfGucContextPendingDeregister;
-			issueDeregister = true;
+		if (!identityMismatch) {
+			// One thread owns final retirement. Do not admit a new reference or
+			// a second waiter while this owner releases locks to await firmware.
+			entry.refCount = 0;
+			state = entry.state;
+			if (state == kVfGucContextEnabled) {
+				entry.state = kVfGucContextPendingDisable;
+				entry.disablePending = true;
+				issueDisable = true;
+			} else if (state == kVfGucContextRegistered ||
+			           state == kVfGucContextDisabled) {
+				entry.state = kVfGucContextPendingDeregister;
+				issueDeregister = true;
+			}
 		}
 	}
 	IOSimpleLockUnlockEnableInterrupt(gVfContextLock, interruptState);
 	queue.unlock();
+	if (identityMismatch) {
+		vfMarkProtocolFault("VF detach descriptor/backing identity mismatch");
+		return;
+	}
 
 	if (slot < 0) {
-		SYSLOG("ngreen", "V230: detach could not find LRCA 0x%08x", lrcaPage);
-		FunctionCast(vfDetachContextDesc,
-		             callback->oVfDetachContextDesc)(that, descriptor);
+		// Native detach only probes its LRCA-keyed proxy hash and returns when
+		// absent; it cannot prove that the direct GuC registration disappeared.
+		// Pin this backing for the rest of the boot before caller destruction.
+		contextBacking->retain();
+		SYSLOG("ngreen", "V237: quarantined untracked detach LRCA=%08x:%08x backing=%p",
+		       descriptorHi, descriptorLo, contextBacking);
+		vfMarkProtocolFault("VF detach has no direct GuC context record");
+		// Do not call the LRCA-keyed native detach: an inconsistent key could
+		// remove another object's proxy record. Both layers remain quarantined.
 		return;
 	}
 
@@ -4199,9 +4243,14 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 	IOInterruptState admissionState = IOSimpleLockLockDisableInterrupt(gVfContextLock);
 	const int32_t admittedSlot = vfFindContextLocked(lrcaPage);
 	const bool admitted = admittedSlot >= 0 && gVfContexts[admittedSlot].refCount &&
-		gVfContexts[admittedSlot].descriptorLo == descriptorLo &&
-		gVfContexts[admittedSlot].engineClass == descriptorAttributes.gucClass &&
-		gVfContexts[admittedSlot].engineInstance == descriptorAttributes.engineInstance &&
+		NGContextDescriptor::matchesRecord(descriptorValue,
+			descriptorAttributes,
+			gVfContexts[admittedSlot].contextBacking,
+			{gVfContexts[admittedSlot].descriptorLo,
+			 gVfContexts[admittedSlot].descriptorHi},
+			gVfContexts[admittedSlot].engineClass,
+			gVfContexts[admittedSlot].engineInstance,
+			gVfContexts[admittedSlot].contextBacking) &&
 		(gVfContexts[admittedSlot].state == kVfGucContextRegistered ||
 		 gVfContexts[admittedSlot].state == kVfGucContextDisabled ||
 		 gVfContexts[admittedSlot].state == kVfGucContextEnabled);

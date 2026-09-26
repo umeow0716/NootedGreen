@@ -2250,3 +2250,32 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
 - The full syntax/analyzer/strict-ABI/sanitizer/pinned-payload suite passes in
   `/tmp/ngreen-static.PrRSBU`; the VM remained shut off. Hardware interrupt
   ordering and GuC disable acknowledgement remain controlled-runtime evidence.
+
+### Preserve complete direct-context identity through detach
+
+- Disassembled Tahoe `IGHardwareGuC::AttachContextDescToGucContext`
+  (`0x21e12`) and `DetachContextDescFromGucContext` (`0x22102`). Native detach
+  first keys its hash with only descriptor-low LRCA page; if that page is not
+  present it returns without clearing a proxy slot. If present, it decodes the
+  descriptor stored by the earlier native attach, clears that slot, optionally
+  releases its legacy ID, and removes the hash node.
+- The direct bridge previously stored only descriptor low/class/instance and
+  final detach searched only by LRCA page. If its direct record was missing it
+  still invoked the native function, which can be a no-op and provides no proof
+  that PF GuC stopped using the caller's soon-to-be-released backing. A mutated
+  page can also name another native hash record.
+- Direct records now retain both packed dwords, including the Gen11 SW-ID, plus
+  class, instance and the exact mapped-buffer object. Duplicate attach, submit,
+  ordinary detach and post-shutdown detach use one shared complete-identity
+  predicate. Retired records clear both dwords only when their retained backing
+  is actually released.
+- A valid detach with no direct record takes an extra reboot-lifetime retain on
+  its verified full-size GGTT backing, faults submission, and leaves both direct
+  and native bookkeeping quarantined. An identity mismatch likewise leaves the
+  known retained record and native LRCA hash untouched; it does not risk using
+  the inconsistent key to remove another context. This deliberately leaks on a
+  corrupt path to prevent DMA-after-free or cross-context teardown.
+- Tests mutate descriptor low, high/SW-ID, GuC class, engine instance, backing
+  identity and null backing in addition to the existing exhaustive descriptor
+  flag/engine suite. The full local gate passes in
+  `/tmp/ngreen-static.eQvzbn`; the VM remained shut off.

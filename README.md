@@ -279,6 +279,12 @@ Shutdown serializes H2G then G2H and will seal only when both descriptors are
 valid and both rings are empty; submission may be stopped while consumers stay
 open long enough to receive retirement completions.
 
+Direct contexts preserve the complete packed descriptor (including SW-ID),
+engine and backing identity through attach, submit and detach. A missing or
+mismatched retirement record quarantines the backing/bookkeeping for the rest
+of the boot instead of using an inconsistent LRCA key or permitting DMA to
+outlive released pages.
+
 ### Required GPU driver bundles
 
 For GPU acceleration, the following userspace driver bundles must be installed in `/Library/Extensions/`:
