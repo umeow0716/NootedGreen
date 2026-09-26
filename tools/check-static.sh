@@ -73,6 +73,13 @@ else
     failed=1
 fi
 if "$compiler" -std=c++14 -O1 -g -fsanitize=address,undefined \
+    tools/vf_irq_gate_test.cpp -o "$task_output/vf-irq-gate-test" && \
+    "$task_output/vf-irq-gate-test"; then
+    printf 'PASS offline VF IRQ gate model\n'
+else
+    failed=1
+fi
+if "$compiler" -std=c++14 -O1 -g -fsanitize=address,undefined \
     tools/phy_translation_test.cpp -o "$task_output/phy-translation-test" && \
     "$task_output/phy-translation-test"; then
     printf 'PASS offline PHY translation tests\n'

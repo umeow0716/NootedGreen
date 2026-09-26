@@ -4,6 +4,7 @@
 #include "kern_guc_ring.hpp"
 #include "kern_gpu_capabilities.hpp"
 #include "kern_ggtt_bounds.hpp"
+#include "kern_vf_irq_gate.hpp"
 #include "kern_context_pool.hpp"
 #include "kern_context_descriptor.hpp"
 #include "kern_workqueue_unwind.hpp"
@@ -194,6 +195,7 @@ bool gVfCtbDisableConfirmed = false;
 volatile UInt32 gVfCtbStopped = 0;
 volatile UInt32 gVfCtbEnabled = 0;
 volatile UInt32 gVfCtbEverEnabled = 0;
+volatile UInt32 gVfIrqCallbackGate = 0;
 bool gVfMemIrqConfigured = false;
 volatile UInt32 gVfMemIrqRequested = 0;
 volatile UInt32 gVfProtocolFault = 0;
@@ -573,6 +575,77 @@ bool vfCanWaitForGuc(void *guc)
 		return false;
 	}
 	return true;
+}
+
+bool vfEnterIrqCallback()
+{
+	for (;;) {
+		OSSynchronizeIO();
+		const UInt32 state = gVfIrqCallbackGate;
+		UInt32 next = 0;
+		if (!NGVfIrqGate::enter(state, next))
+			return false;
+		if (OSCompareAndSwap(state, next, &gVfIrqCallbackGate)) {
+			OSSynchronizeIO();
+			return true;
+		}
+	}
+}
+
+void vfLeaveIrqCallback()
+{
+	for (;;) {
+		OSSynchronizeIO();
+		const UInt32 state = gVfIrqCallbackGate;
+		UInt32 next = 0;
+		if (!NGVfIrqGate::leave(state, next)) {
+			OSCompareAndSwap(0, 1, &gVfProtocolFault);
+			OSSynchronizeIO();
+			return;
+		}
+		if (OSCompareAndSwap(state, next, &gVfIrqCallbackGate)) {
+			OSSynchronizeIO();
+			return;
+		}
+	}
+}
+
+class VfIrqCallbackGuard {
+public:
+	VfIrqCallbackGuard() : admitted(vfEnterIrqCallback()) {}
+	~VfIrqCallbackGuard() {
+		if (admitted)
+			vfLeaveIrqCallback();
+	}
+	VfIrqCallbackGuard(const VfIrqCallbackGuard &) = delete;
+	VfIrqCallbackGuard &operator=(const VfIrqCallbackGuard &) = delete;
+	explicit operator bool() const { return admitted; }
+
+private:
+	bool admitted;
+};
+
+bool vfCloseIrqCallbackGateAndWait(void *guc)
+{
+	for (;;) {
+		OSSynchronizeIO();
+		const UInt32 state = gVfIrqCallbackGate;
+		const UInt32 next = NGVfIrqGate::close(state);
+		if (next == state || OSCompareAndSwap(state, next, &gVfIrqCallbackGate))
+			break;
+	}
+	OSSynchronizeIO();
+
+	if (!vfCanWaitForGuc(guc))
+		return false;
+	for (uint32_t waited = 0; waited < kVfContextEventTimeoutMs; waited++) {
+		OSSynchronizeIO();
+		if (NGVfIrqGate::drained(gVfIrqCallbackGate))
+			return true;
+		IOSleep(1);
+	}
+	vfMarkProtocolFault("timed out draining VF IRQ callbacks");
+	return false;
 }
 
 bool vfInvalidateTLBSync(void *guc)
@@ -9195,11 +9268,13 @@ bool Gen11::vfMmioHostToGuCAction(void *that, const uint32_t *request,
 		}
 		bool ok = true;
 		if (request[2] == 0U) {
-			// Close admission first, then wait out any writer already holding
-			// the H2G lock. Every direct sender rechecks this flag under that
-			// same lock. Legacy senders are rejected by their routed entry.
+			// Close submission and interrupt admission first. The IRQ gate is
+			// linearizable: callbacks admitted before closure are counted and
+			// drained, while later callbacks return without touching the shared
+			// CTB/memory-IRQ backing.
 			OSCompareAndSwap(0, 1, &gVfCtbStopped);
 			OSCompareAndSwap(1, 0, &gVfCtbEnabled);
+			const bool irqDrained = vfCloseIrqCallbackGateAndWait(that);
 			auto *ctb = that ? getMember<void *>(that, 0xA10) : nullptr;
 			auto *sendLock = ctb ? getMember<IOLock *>(ctb, 0x18) : nullptr;
 			if (sendLock) {
@@ -9209,34 +9284,34 @@ bool Gen11::vfMmioHostToGuCAction(void *that, const uint32_t *request,
 			gVfCtbDisableConfirmed = false;
 			uint32_t disable[4] = {kGucActionHost2GucControlCtb, 0, 0, 0};
 			uint32_t reply[4] = {};
-			ok = vfGucSendMMIO(disable, 2, reply) &&
-			     (reply[0] & 0x0FFFFFFFU) == 0;
-			gVfCtbDisableConfirmed = ok;
-			SYSLOG("ngreen", "V224: disabled VF CTB transport ret=%d reply=0x%08x",
-			       ok, reply[0]);
-			if (!ok)
+			const bool disabled = vfGucSendMMIO(disable, 2, reply) &&
+			                      (reply[0] & 0x0FFFFFFFU) == 0;
+			gVfCtbDisableConfirmed = disabled;
+			ok = irqDrained && disabled;
+			SYSLOG("ngreen", "V224: disabled VF CTB transport ret=%d irqDrained=%d reply=0x%08x",
+			       disabled, irqDrained, reply[0]);
+			if (!disabled)
 				vfMarkProtocolFault("GuC CTB transport disable failure");
 		} else {
 			// The legacy ABI issues one request per channel, while 0x4509
-			// disables both at once.  Do not acknowledge the second legacy
-			// request unless that modern disable was confirmed.
-			ok = gVfCtbDisableConfirmed;
+			// disables both at once. Do not acknowledge the second legacy
+			// request unless firmware disable and callback drain are confirmed.
+			OSSynchronizeIO();
+			ok = gVfCtbDisableConfirmed &&
+			     NGVfIrqGate::drained(gVfIrqCallbackGate);
 			if (!ok)
-				vfMarkProtocolFault("GuC CTB teardown without confirmed disable");
+				vfMarkProtocolFault("GuC CTB teardown without confirmed disable/IRQ drain");
 		}
 		if (response)
 			*response = ok ? 0 : 1;
 		if (request[2] == 1U && ok) {
-			// Keep quarantined addresses immutable: a handler admitted before
-			// shutdown may still hold or inspect them. Stopped is the admission
-			// boundary; clearing a pointer is not interrupt synchronization.
+			// CPU interrupt callbacks are drained, but CTB disable alone does not
+			// prove engine or GuC memory-IRQ DMA is quiescent. Both users share
+			// this backing, so keep our references and mappings quarantined until
+			// device-side shutdown has a verified completion boundary.
 			gVfMemIrqConfigured = false;
 			gVfCtbDisableConfirmed = false;
-			// CTB disable does not prove memory-IRQ DMA is quiescent: both
-			// allocations currently share this backing. Keep our reference even
-			// on success until IRQ synchronization and complete VF shutdown have
-			// a verified implementation. Reinitialization is rejected below.
-			vfMarkProtocolFault("CTB stopped; shared memory-IRQ backing quarantined");
+			vfMarkProtocolFault("CTB stopped; device DMA quiescence unproven; backing quarantined");
 		}
 		return ok;
 	}
@@ -10275,6 +10350,9 @@ bool Gen11::vfInterruptFilterHandler(void *that, void *eventSource) {
 	// from a filter, or interpret an unready VF as a physical device.
 	if (!gVfGGTTReady)
 		return false;
+	VfIrqCallbackGuard irqGuard;
+	if (!irqGuard)
+		return false;
 
 	// A PCI VF receives a dedicated MSI whose state lives entirely in the
 	// PF-provisioned memory-IRQ page.  Never enter Tahoe's stock filter here: it
@@ -10309,7 +10387,10 @@ void Gen11::vfSoftwareGuCInterrupt(void *that, IOInterruptEventSource *source, i
 			that, source, count);
 		return;
 	}
-	if (!that || !gVfGGTTReady || !gVfCtbCpuBase || gVfCtbStopped)
+	if (!that || !gVfGGTTReady)
+		return;
+	VfIrqCallbackGuard irqGuard;
+	if (!irqGuard || !gVfCtbCpuBase || gVfCtbStopped)
 		return;
 	auto *ctb = getMember<void *>(that, 0xA10);
 	if (!ctb || !callback->vfCtbSoftwareInterrupt) {
@@ -10388,10 +10469,16 @@ void Gen11::vfReadAndClearInterrupts(void *that, void *interrupts) {
 		return;
 	}
 
-	// processInterrupts() reaches this entry without the hardware filter.  A VF
-	// must still remain memory-only and must never fall back to physical IIRs,
-	// including during the CTB bootstrap interval.
-	*reinterpret_cast<uint64_t *>(interrupts) = vfConsumeMemoryInterrupts();
+	// processInterrupts() reaches this entry without the hardware filter. A VF
+	// must still remain memory-only and must never fall back to physical IIRs.
+	// Clear the caller-visible snapshot before admission so a closed gate cannot
+	// expose stale interrupt bits.
+	auto *snapshot = reinterpret_cast<uint64_t *>(interrupts);
+	*snapshot = 0;
+	VfIrqCallbackGuard irqGuard;
+	if (!irqGuard)
+		return;
+	*snapshot = vfConsumeMemoryInterrupts();
 }
 
 

@@ -1368,3 +1368,20 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   an attempted GGTT release deliberately panics rather than authorizing DMA
   reuse. The VM therefore remains off pending that teardown proof and the
   remaining all-source review.
+
+### VF interrupt callback drain barrier
+
+- CTB teardown now closes a single atomic callback-admission gate before
+  firmware transport disable. Hardware filter, software GuC event handling and
+  the direct readAndClearInterrupts path all acquire a counted token before
+  touching the shared CTB/memory-IRQ backing.
+- Gate closure preserves callbacks already admitted and rejects every later
+  entry. Teardown waits for the admitted count to reach zero before accepting
+  the first legacy CTB deregistration. The second legacy channel
+  acknowledgement requires both firmware disable confirmation and a drained
+  callback gate.
+- The pure state machine exercises 8,194 open/closed/count combinations plus
+  saturation, underflow and close-with-two-active-callback transitions under
+  ASan/UBSan. This proves the CPU callback lifetime barrier only. It does NOT
+  prove engine stop or that GuC has stopped writing the memory-IRQ page, so the
+  CTB/memory-IRQ backing remains quarantined and VM startup remains blocked.
