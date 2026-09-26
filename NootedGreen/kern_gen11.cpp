@@ -2190,6 +2190,14 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		// rel32 targets now remain safe even when they bypass the routed entry.
 		// 0x001f00ff encodes SQIDI mask 0xff and 32 doorbells per SQIDI.
 		if (vfIdentifyDevice() == VfIdentity::Virtual) {
+			SolveRequestPlus bufferAccessors[] = {
+				{"__ZNK20IGSharedMappedBuffer17getVirtualAddressEv",
+				 this->vfSharedMappedBufferGetVirtualAddress},
+				{"__ZNK14IGMappedBuffer20getGPUVirtualAddressEv",
+				 this->vfMappedBufferGetGPUVirtualAddress},
+			};
+			PANIC_COND(!SolveRequestPlus::solveAll(patcher, index, bufferAccessors, address, size),
+			           "ngreen", "Cannot resolve full-width VF CTB buffer accessors");
 			this->vfOSObjectFree = patcher.solveSymbol(KernelPatcher::KernelID,
 				"__ZN8OSObject4freeEv");
 			PANIC_COND(!this->vfOSObjectFree, "ngreen",
@@ -9738,6 +9746,11 @@ bool Gen11::vfCtbInitWithAccelerator(void *that, void *accelerator) {
 
 	if (!gVfCtbBacking || !gVfCtbCpuBase || gVfProtocolFault) {
 		vfMarkProtocolFault("CTB initialized without a validated pinned layout");
+		// Native init succeeded, so its locks are released but backing exists.
+		// Do not run legacy free/transfer/unmap after a layout/protocol fault.
+		// If channel init already pinned the object, no second retain is needed.
+		if (gVfCtbObject != that)
+			static_cast<OSObject *>(that)->retain(); // quarantine until guest reset
 		return false;
 	}
 	return result;
@@ -9798,29 +9811,25 @@ void Gen11::vfCtbChannelInit(void *that) {
 		vfMarkProtocolFault("CTB channel initialization without its enlarged allocation");
 		return;
 	}
-	FunctionCast(vfCtbChannelInit, callback->oVfCtbChannelInit)(that);
-
-	// The original routine exposes its channel-0 CPU descriptor at +0x48.
-	// Its first dword contains baseGPU+PAGE_SIZE/2, allowing the GGTT base to
-	// be recovered without relying on private IGMappedBuffer method layouts.
-	auto *baseCpu = getMember<uint8_t *>(that, 0x48);
-	if (!baseCpu) {
-		SYSLOG("ngreen", "V223: VF CTB channel initialization has no CPU mapping");
-		vfMarkProtocolFault("CTB has no CPU mapping");
-		return;
-	}
-	const uint32_t oldH2GBuffer = *reinterpret_cast<uint32_t *>(baseCpu);
-	if (oldH2GBuffer < PAGE_SIZE / 2) {
-		SYSLOG("ngreen", "V223: invalid legacy CTB GPU address 0x%08x", oldH2GBuffer);
-		vfMarkProtocolFault("invalid CTB GPU address");
-		return;
-	}
-	const uint64_t base = oldH2GBuffer - PAGE_SIZE / 2;
 	auto *backing = getMember<OSObject *>(that, 0x40);
-	if (!backing || gVfCtbBacking || (base & (PAGE_SIZE - 1U)) ||
-	    base < gVfGGTTBase || base >= gVfGGTTBase + gVfGGTTSize ||
-	    kVfCtbBackingBytes > gVfGGTTBase + gVfGGTTSize - base ||
-	    base >= kGucGgttTop || kVfCtbBackingBytes > kGucGgttTop - base) {
+	// Native ctChannelInit writes through its CPU mapping before checking it,
+	// and truncates GPU addresses to 32 bits. Do not call it to discover either
+	// address; use inspected accessors and validate before the first byte write.
+	if (!callback->vfSharedMappedBufferGetVirtualAddress ||
+	    !callback->vfMappedBufferGetGPUVirtualAddress ||
+	    !getMember<void *>(backing, 0x30)) {
+		vfMarkProtocolFault("CTB missing CPU/GPU mapping accessor or mapping object");
+		return;
+	}
+	using CpuAddress = uint8_t *(*)(void *);
+	using GpuAddress = uint64_t (*)(void *);
+	auto *baseCpu = reinterpret_cast<CpuAddress>(
+		callback->vfSharedMappedBufferGetVirtualAddress)(backing);
+	const uint64_t base = reinterpret_cast<GpuAddress>(
+		callback->vfMappedBufferGetGPUVirtualAddress)(backing);
+	if (!NGGgtt::mappedBacking(reinterpret_cast<uintptr_t>(baseCpu),
+		getMember<uint64_t>(backing, kVfMappedBufferLengthOffset), kVfCtbBackingBytes,
+		base, gVfGGTTBase, gVfGGTTSize, kGucGgttTop)) {
 		vfMarkProtocolFault("invalid or duplicate CTB backing range");
 		return;
 	}
@@ -9850,6 +9859,13 @@ void Gen11::vfCtbChannelInit(void *that) {
 	getMember<uint8_t *>(that, 0x50) = baseCpu + kVfCtbH2GBufferOffset;
 	getMember<uint8_t *>(that, 0x58) = reinterpret_cast<uint8_t *>(g2hDesc);
 	getMember<uint8_t *>(that, 0x60) = baseCpu + kVfCtbG2HBufferOffset;
+	// Only modern H2G/G2H are supported; never leave native aliases for the
+	// unused channels pointing into the freshly repurposed backing.
+	getMember<void *>(that, 0x68) = nullptr;
+	getMember<void *>(that, 0x70) = nullptr;
+	getMember<void *>(that, 0x78) = nullptr;
+	getMember<void *>(that, 0x80) = nullptr;
+	getMember<uint32_t>(that, 0x88) = getMember<uint32_t>(that, 0x38);
 	// The filter may already be installed. Publish its CPU pointer only after
 	// every descriptor and object channel pointer is fully initialized.
 	OSSynchronizeIO();

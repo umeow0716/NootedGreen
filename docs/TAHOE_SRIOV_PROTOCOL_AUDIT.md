@@ -1080,3 +1080,27 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
 - Channel-init pre-write address checks and post-channel protocol-failure
   teardown still need follow-up; these changes do not prove CTB lifecycle
   safe in all states or close the pending context-creation blockers.
+
+### CTB addresses validated before any backing write
+
+- Native ctChannelInit at 0x1f488 calls getVirtualAddress then memset through
+  that pointer before the old wrapper checks it. Its descriptor writes also
+  truncate GPU virtual addresses to 32 bits, so recovering a base from the
+  descriptor could conceal a high-address alias. Re-read its complete body.
+- VF channel setup now obtains CPU and full-width GPU addresses directly
+  from resolved, inspected accessors (0x10b60 and 0x13e7c). Requires backing
+  identity/length and the GPU mapping object before invoking accessors;
+  validates CPU page alignment/overflow, allocated length, full assigned
+  GGTT interval and exclusive GuC top BEFORE clearing/writing backing.
+  Native channel init is preserved for PF only, not called by VF anymore.
+- Recreates the native +0x88 state copy, initializes modern channels 0/1,
+  and explicitly nulls unused channel aliases 2/3. Publication still follows
+  complete layout initialization and retained CTB/backing ownership.
+- A native init that succeeds but then fails layout validation is retained
+  once if channel setup did not already pin it. This deliberate quarantine
+  prevents legacy free/unmap after fault, not a memory-reclamation solution.
+- Added 257,049 CPU/GPU interval cases checked against 128-bit arithmetic,
+  plus valid 32-KiB mapping and same-low-32-bits/high-GPU-address regression.
+  Full suite passes /tmp/ngreen-static.efNv3E. 413a577 CI 36222819921 passed.
+  Physical mapping provenance, DMA coherency/quiescence and real allocation
+  fault injection remain unverified. VM off; no deployment.

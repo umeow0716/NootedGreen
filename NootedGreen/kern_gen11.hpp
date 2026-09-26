@@ -1440,6 +1440,7 @@ private:
 	                             unsigned int ringTail);
 	mach_vm_address_t oVfSubmitWorkItem {};
 	mach_vm_address_t vfSharedMappedBufferGetVirtualAddress {};
+	mach_vm_address_t vfMappedBufferGetGPUVirtualAddress {};
 	
 	static int wrapPmNotifyWrapper(unsigned int a0, unsigned int a1, unsigned long long *a2, unsigned int *freq);  // GPU freq change notification
 	mach_vm_address_t orgPmNotifyWrapper {};

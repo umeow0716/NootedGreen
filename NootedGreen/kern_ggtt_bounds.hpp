@@ -20,5 +20,15 @@ inline bool contains(uint64_t base, uint64_t size, uint64_t start, uint64_t leng
         return false;
     return start - base <= size - length;
 }
+
+// Validate BOTH address spaces before touching an unpublished mapped buffer.
+// gpuTop is exclusive. No narrowing to native 32-bit descriptor fields yet.
+inline bool mappedBacking(uint64_t cpu, uint64_t allocated, uint64_t required,
+                          uint64_t gpu, uint64_t base, uint64_t size,
+                          uint64_t gpuTop) {
+    return cpu && !(cpu & 0xFFF) && required && allocated >= required &&
+           required <= UINT64_MAX - cpu && gpu && gpu < gpuTop &&
+           required <= gpuTop - gpu && contains(base, size, gpu, required);
+}
 }
 #endif
