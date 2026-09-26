@@ -956,6 +956,7 @@ private:
 	static void vfSoftwareGuCInterrupt(void *that, IOInterruptEventSource *source, int count);
 	mach_vm_address_t vfCtbSoftwareInterrupt {};
 	static void vfInvalidateTLB(void *that);
+	static void vfBaseInvalidateTLB(const void *that);
 	static bool vfInterruptFilterHandler(void *that, void *eventSource);
 	mach_vm_address_t vfServiceInterrupts {};
 	static void vfReadAndClearInterrupts(void *that, void *interrupts);

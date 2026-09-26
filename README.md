@@ -294,6 +294,14 @@ binary identity, not by an estimated completion percentage:
 | **Meteor/Arrow Lake VF** | Explicitly rejected until per-GT/media-13 GGTT discovery is implemented. |
 | **Ice Lake PF** | Natively supported by Apple; NootedGreen does not intercept its framebuffer or accelerator. |
 
+The VF physical-TLB bridge no longer sweeps all `0xCEE8` instructions in the
+accelerator image. Live native callers are patched inside solved symbol bounds,
+fully replaced callers remain untouched, and the base `IGGuC` invalidator is
+routed to the synchronous GuC v70 request after CTB readiness. The on-disk
+inventory test pins every physical-TLB access in both admitted Tahoe payloads.
+This strengthens the static isolation boundary; it is not yet a runtime
+hardware-acceleration claim.
+
 ## Building
 
 Open `NootedGreen.xcodeproj` and select the **NootedGreen** scheme to build the Gen11/Gen12 plugin, or one of the original NootedBlue schemes for legacy hardware. Build with Xcode.

@@ -1997,3 +1997,40 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   `0x9a48` comparison, failure call and both conditional branches remain byte
   for byte native. The exact anchor occurs once in each admitted payload and
   is covered by the on-disk patch test.
+
+### Bound physical-TLB isolation to live VF call paths
+
+- Re-inventoried every instruction that accesses the PF-owned
+  `GEN12_GUC_TLB_INV_CR` (`0xCEE8`) in both admitted accelerator payloads:
+  ten immediate writes, one ECX write, one R8 write, and their twelve posting
+  reads. A sanitizer-backed on-disk test pins every file offset and proves the
+  production and debug executable bytes have the same inventory.
+- The old patch changed all matches over the complete Mach-O image. The VF now
+  solves seven still-executed native bodies and their adjacent symbol bounds,
+  then applies one exact write/read anchor inside each body. Five routines whose
+  public entries are completely replaced are deliberately left byte-for-byte
+  intact. This makes the entry route, rather than an unbounded byte sweep, the
+  isolation boundary.
+- `IGGuC::invalidateTLB() const` was one of those fully routed routines but did
+  not have a VF replacement. Its four static call sites were disassembled:
+  GuC load/control initialization occurs before CTB readiness and follows
+  i915's pre-ready no-op rule; runtime GGTT bind/free uses the captured
+  `IGHardwareGuC` and the existing synchronous GuC v70 invalidation, guarded
+  against IRQ, non-preemptible and completion-workloop contexts.
+- Removed the obsolete V223 byte/dword conversion and V224 legacy-HXG patches.
+  Their only original CTB send/receive bodies are unreachable on a VF because
+  both public entries are replaced by the bounded modern producer/consumer.
+  Keeping mutations in dead native implementations added version coupling
+  without changing the active protocol.
+- G2H reply-space credits are now returned immediately after a structurally
+  valid `MODE_DONE`, `DEREGISTER_DONE`, or `TLB_INVALIDATION_DONE` frame leaves
+  the ring, before lifecycle interpretation. This matches
+  `intel_guc_ct.c:ct_handle_event`; a stale completion can no longer leak
+  reserved space and deadlock CT drain, while state mismatch and accounting
+  underflow still fail the protocol closed.
+- The v70 registration request, KMD flag, single-LRC zero work-queue fields,
+  engine mask, LRCA descriptor, context image offset, VF memory-IRQ register
+  state, completion lengths, and credit sizes were rechecked against current
+  i915 source. The complete local static/analyzer/strict-ABI/sanitizer and
+  pinned-payload suite passes in `/tmp/ngreen-static.D8Vh7O`. The VM remained
+  shut off; this is static evidence only.

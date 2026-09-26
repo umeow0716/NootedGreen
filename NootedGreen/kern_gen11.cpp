@@ -10,6 +10,7 @@
 #include "kern_vf_submission_gate.hpp"
 #include "kern_vf_runtime.hpp"
 #include "kern_vf_runtime_patch.hpp"
+#include "kern_vf_tlb_patch.hpp"
 #include "kern_context_pool.hpp"
 #include "kern_context_descriptor.hpp"
 #include "kern_workqueue_unwind.hpp"
@@ -2048,6 +2049,11 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				// through the asynchronous v70 CT action instead.
 				{"__ZN13IGHardwareGuC13invalidateTLBEv",
 				 vfInvalidateTLB},
+				// IGGuC owns context-private GGTT updates and has no CTB pointer.
+				// Route its invalidator separately: use the captured hardware GuC once
+				// transport is ready, and match i915's pre-ready no-op behavior.
+				{"__ZNK5IGGuC13invalidateTLBEv",
+				 vfBaseInvalidateTLB},
 				// V236: replace the complete filter on a VF.  The stock filter
 				// masks GFX_MSTR_IRQ, acquires physical force-wake and only then
 				// calls readAndClearInterrupts; wrapping the latter alone cannot
@@ -2080,233 +2086,102 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		// PF-owned 0xCEE8 register.  Remove the complete write/read/poll sequence
 		// only on a verified VF. Physical hardware retains its native CT ABI.
 		if (vfActive) {
-			static const uint8_t vfCtbTlbPollFind[] = {
-				0xc7, 0x80, 0xe8, 0xce, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
-				0x8b, 0x88, 0xe8, 0xce, 0x00, 0x00, 0xf6, 0xc1, 0x01, 0x75, 0xf5,
-				0x49, 0x8b, 0x7e, 0x20
+			// Resolve every native body that a VF still enters, including bodies
+			// captured as originals by a wrapper. Fully replaced routines are not
+			// mutated: their entry routes are the isolation boundary. Each live
+			// patch below is confined by adjacent symbols and has one pinned anchor.
+			mach_vm_address_t workQueueInit = 0, workQueueInitEnd = 0;
+			mach_vm_address_t workQueueFree = 0, workQueueFreeEnd = 0;
+			mach_vm_address_t ctbInit = 0, ctbInitEnd = 0;
+			mach_vm_address_t ctbFree = 0, ctbFreeEnd = 0;
+			mach_vm_address_t releaseUkContext = 0, releaseUkContextEnd = 0;
+			mach_vm_address_t attachContext = 0, attachContextEnd = 0;
+			mach_vm_address_t detachContext = 0, detachContextEnd = 0;
+			SolveRequestPlus tlbPatchBounds[] = {
+				{"__ZN22IGHardwareGuCWorkQueue19initWithAcceleratorEP22IOGraphicsAccelerator2jP37UK_GEN11_SCHED_PROCESS_DESCRIPTOR_REC",
+				 workQueueInit},
+				{"__ZN22IGHardwareGuCWorkQueue9lockQueueEv", workQueueInitEnd},
+				{"__ZN22IGHardwareGuCWorkQueue4freeEv", workQueueFree},
+				{"__ZN22IGHardwareGuCWorkQueue18calculateFreeSpaceEv", workQueueFreeEnd},
+				{"__ZN21IGHardwareGuCCTBuffer19initWithAcceleratorEP22IOGraphicsAccelerator2",
+				 ctbInit},
+				{"__ZN21IGHardwareGuCCTBuffer9lockQueueE34UK_GEN11_CMD_TRANSPORT_BUFFER_TYPE",
+				 ctbInitEnd},
+				{"__ZN21IGHardwareGuCCTBuffer4freeEv", ctbFree},
+				{"__ZN21IGHardwareGuCCTBuffer15hostToGuCActionEPKjjiPjb", ctbFreeEnd},
+				{"__ZN13IGHardwareGuC16releaseUkContextEj", releaseUkContext},
+				{"__ZN13IGHardwareGuC13isContextIdleEj", releaseUkContextEnd},
+				{"__ZN13IGHardwareGuC29AttachContextDescToGucContextERK21SGfxContextDescriptor",
+				 attachContext},
+				{"__ZN13IGHardwareGuC31DetachContextDescFromGucContextERK21SGfxContextDescriptor",
+				 attachContextEnd},
+				{"__ZN13IGHardwareGuC31DetachContextDescFromGucContextERK21SGfxContextDescriptor",
+				 detachContext},
+				{"__ZN13IGHardwareGuC13inSubmitQueueE10IGHwCsTypePV36SCHED_CONTEXT_ENGINE_PRESENCE_STRUCT",
+				 detachContextEnd},
 			};
-			static const uint8_t vfCtbTlbPollReplace[] = {
-				0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
-				0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
-				0x49, 0x8b, 0x7e, 0x20
-			};
+			PANIC_COND(!SolveRequestPlus::solveAll(patcher, index, tlbPatchBounds,
+			                                      address, size) ||
+			           workQueueInitEnd <= workQueueInit ||
+			           workQueueInitEnd - workQueueInit > 0x200 ||
+			           workQueueFreeEnd <= workQueueFree ||
+			           workQueueFreeEnd - workQueueFree > 0x100 ||
+			           ctbInitEnd <= ctbInit || ctbInitEnd - ctbInit > 0x200 ||
+			           ctbFreeEnd <= ctbFree || ctbFreeEnd - ctbFree > 0x100 ||
+			           releaseUkContextEnd <= releaseUkContext ||
+			           releaseUkContextEnd - releaseUkContext > 0x200 ||
+			           attachContextEnd <= attachContext ||
+			           attachContextEnd - attachContext > 0x400 ||
+			           detachContextEnd <= detachContext ||
+			           detachContextEnd - detachContext > 0x400,
+			           "ngreen", "Invalid VF physical-TLB patch bounds");
 			LookupPatchPlus const vfCtbTlbPollPatch {
-				activeKext, vfCtbTlbPollFind, vfCtbTlbPollReplace,
-				sizeof(vfCtbTlbPollFind), 1
+				activeKext, NGVfTlbPatch::ctbInitFind,
+				NGVfTlbPatch::ctbInitReplace,
+				sizeof(NGVfTlbPatch::ctbInitFind), 1
 			};
-			PANIC_COND(!vfCtbTlbPollPatch.apply(patcher, address, size), "ngreen",
+			PANIC_COND(!vfCtbTlbPollPatch.apply(
+			               patcher, ctbInit, ctbInitEnd - ctbInit), "ngreen",
 			           "V222: failed to bypass VF CTB TLB poll");
 			SYSLOG("ngreen", "V237: removed physical TLB access from VF CTB initialization");
 
-			// V223: modern GuC descriptors count head/tail in dwords.  Apple's
-			// legacy CTB implementation stores the same fields in bytes.  Remove
-			// only those conversions; the ring-size field remains byte-sized and
-			// retains its /4 conversion in both send and receive paths.
-			static const uint8_t vfCtbSendReadFind[] = {
-				0x44, 0x8b, 0x69, 0x0c,
-				0x44, 0x8b, 0x71, 0x10, 0x41, 0xc1, 0xee, 0x02,
-				0x48, 0x89, 0x4d, 0xb0,
-				0x8b, 0x59, 0x14, 0x48, 0xc1, 0xeb, 0x02,
-				0x41, 0xc1, 0xed, 0x02
+			// Remove 0xCEE8 only from native bodies that are still executed. The
+			// five fully routed routines retain their untouched original bytes and
+			// cannot be reached through their public entries on a VF.
+			LookupPatchPlus const immediateEcxPatches[] = {
+				{activeKext, NGVfTlbPatch::writeImmediateFind,
+				 NGVfTlbPatch::writeImmediateReplace, 1},
+				{activeKext, NGVfTlbPatch::pollEcxFind,
+				 NGVfTlbPatch::pollEcxReplace, 1},
 			};
-			static const uint8_t vfCtbSendReadReplace[] = {
-				0x44, 0x8b, 0x69, 0x0c,
-				0x44, 0x8b, 0x71, 0x10, 0x90, 0x90, 0x90, 0x90,
-				0x48, 0x89, 0x4d, 0xb0,
-				0x8b, 0x59, 0x14, 0x90, 0x90, 0x90, 0x90,
-				0x41, 0xc1, 0xed, 0x02
+			LookupPatchPlus const immediateMemoryPatches[] = {
+				{activeKext, NGVfTlbPatch::writeImmediateFind,
+				 NGVfTlbPatch::writeImmediateReplace, 1},
+				{activeKext, NGVfTlbPatch::pollMemoryFind,
+				 NGVfTlbPatch::pollMemoryReplace, 1},
 			};
-			static const uint8_t vfCtbSendStoreWaitFind[] = {
-				0x48, 0x89, 0x0c, 0xf0, 0x41, 0xc1, 0xe6, 0x02,
-				0x44, 0x89, 0x73, 0x14, 0x49, 0x8b, 0x45, 0x10
+			LookupPatchPlus const r8EcxPatches[] = {
+				{activeKext, NGVfTlbPatch::writeR8Find,
+				 NGVfTlbPatch::writeR8Replace, 1},
+				{activeKext, NGVfTlbPatch::pollEcxFind,
+				 NGVfTlbPatch::pollEcxReplace, 1},
 			};
-			static const uint8_t vfCtbSendStoreWaitReplace[] = {
-				0x48, 0x89, 0x0c, 0xf0, 0x90, 0x90, 0x90, 0x90,
-				0x44, 0x89, 0x73, 0x14, 0x49, 0x8b, 0x45, 0x10
-			};
-			static const uint8_t vfCtbSendStoreNoWaitFind[] = {
-				0x00, 0x41, 0xc1, 0xe6, 0x02, 0x4c, 0x89, 0xd3,
-				0x45, 0x89, 0x72, 0x14, 0x4d, 0x89, 0xc5
-			};
-			static const uint8_t vfCtbSendStoreNoWaitReplace[] = {
-				0x00, 0x90, 0x90, 0x90, 0x90, 0x4c, 0x89, 0xd3,
-				0x45, 0x89, 0x72, 0x14, 0x4d, 0x89, 0xc5
-			};
-			static const uint8_t vfCtbRecvReadFind[] = {
-				0x4d, 0x8b, 0x46, 0x58,
-				0x41, 0x8b, 0x40, 0x10, 0x48, 0xc1, 0xe8, 0x02,
-				0x41, 0x8b, 0x48, 0x14, 0xc1, 0xe9, 0x02
-			};
-			static const uint8_t vfCtbRecvReadReplace[] = {
-				0x4d, 0x8b, 0x46, 0x58,
-				0x41, 0x8b, 0x40, 0x10, 0x90, 0x90, 0x90, 0x90,
-				0x41, 0x8b, 0x48, 0x14, 0x90, 0x90, 0x90
-			};
-			static const uint8_t vfCtbRecvStoreFind[] = {
-				0x48, 0x39, 0xd9, 0x75, 0xe6, 0xc1, 0xe2, 0x02,
-				0x41, 0x89, 0x50, 0x10
-			};
-			static const uint8_t vfCtbRecvStoreReplace[] = {
-				0x48, 0x39, 0xd9, 0x75, 0xe6, 0x90, 0x90, 0x90,
-				0x41, 0x89, 0x50, 0x10
-			};
-			LookupPatchPlus const vfCtbUnitPatches[] = {
-				{activeKext, vfCtbSendReadFind, vfCtbSendReadReplace,
-				 sizeof(vfCtbSendReadFind), 1},
-				{activeKext, vfCtbSendStoreWaitFind, vfCtbSendStoreWaitReplace,
-				 sizeof(vfCtbSendStoreWaitFind), 1},
-				{activeKext, vfCtbSendStoreNoWaitFind, vfCtbSendStoreNoWaitReplace,
-				 sizeof(vfCtbSendStoreNoWaitFind), 1},
-				{activeKext, vfCtbRecvReadFind, vfCtbRecvReadReplace,
-				 sizeof(vfCtbRecvReadFind), 1},
-				{activeKext, vfCtbRecvStoreFind, vfCtbRecvStoreReplace,
-				 sizeof(vfCtbRecvStoreFind), 1},
-			};
-			PANIC_COND(!LookupPatchPlus::applyAll(patcher, vfCtbUnitPatches,
-			                                      address, size),
-			           "ngreen", "V223: failed to convert VF CTB head/tail units");
-			SYSLOG("ngreen", "V223: converted VF CTB head/tail units to dwords");
+			PANIC_COND(
+				!LookupPatchPlus::applyAll(patcher, immediateEcxPatches,
+				 workQueueInit, workQueueInitEnd - workQueueInit) ||
+				!LookupPatchPlus::applyAll(patcher, immediateEcxPatches,
+				 workQueueFree, workQueueFreeEnd - workQueueFree) ||
+				!LookupPatchPlus::applyAll(patcher, immediateMemoryPatches,
+				 ctbFree, ctbFreeEnd - ctbFree) ||
+				!LookupPatchPlus::applyAll(patcher, immediateEcxPatches,
+				 releaseUkContext, releaseUkContextEnd - releaseUkContext) ||
+				!LookupPatchPlus::applyAll(patcher, r8EcxPatches,
+				 attachContext, attachContextEnd - attachContext) ||
+				!LookupPatchPlus::applyAll(patcher, immediateEcxPatches,
+				 detachContext, detachContextEnd - detachContext),
+				"ngreen", "V237: failed to isolate a live VF physical-TLB caller");
+			SYSLOG("ngreen", "V237: isolated all live native 0xCEE8 callers");
 
-			// V237: cover every remaining 0xCEE8 posting-read loop.  Zero the
-			// destination register and remove the test/branch, so these legacy
-			// routines perform no physical read at all.
-			static const uint8_t vfTlbPollEcxFind[] = {
-				0x8b, 0x88, 0xe8, 0xce, 0x00, 0x00,
-				0xf6, 0xc1, 0x01, 0x75, 0xf5
-			};
-			static const uint8_t vfTlbPollEcxReplace[] = {
-				0x31, 0xc9, 0x90, 0x90, 0x90, 0x90,
-				0x90, 0x90, 0x90, 0x90, 0x90
-			};
-			static const uint8_t vfTlbPollEdxFind[] = {
-				0x8b, 0x90, 0xe8, 0xce, 0x00, 0x00,
-				0xf6, 0xc2, 0x01, 0x75, 0xf5
-			};
-			static const uint8_t vfTlbPollEdxReplace[] = {
-				0x31, 0xd2, 0x90, 0x90, 0x90, 0x90,
-				0x90, 0x90, 0x90, 0x90, 0x90
-			};
-			static const uint8_t vfTlbPollEsiFind[] = {
-				0x8b, 0xb0, 0xe8, 0xce, 0x00, 0x00,
-				0x40, 0xf6, 0xc6, 0x01, 0x75, 0xf4
-			};
-			static const uint8_t vfTlbPollEsiReplace[] = {
-				0x31, 0xf6, 0x90, 0x90, 0x90, 0x90,
-				0x90, 0x90, 0x90, 0x90, 0x90, 0x90
-			};
-			static const uint8_t vfTlbPollMemoryFind[] = {
-				0xf7, 0x80, 0xe8, 0xce, 0x00, 0x00,
-				0x01, 0x00, 0x00, 0x00, 0x75, 0xf4
-			};
-			static const uint8_t vfTlbPollMemoryReplace[] = {
-				0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
-				0x90, 0x90, 0x90, 0x90, 0x90, 0x90
-			};
-			LookupPatchPlus const vfTlbPollPatches[] = {
-				{activeKext, vfTlbPollEcxFind, vfTlbPollEcxReplace,
-				 sizeof(vfTlbPollEcxFind), 8},
-				{activeKext, vfTlbPollEdxFind, vfTlbPollEdxReplace,
-				 sizeof(vfTlbPollEdxFind), 1},
-				{activeKext, vfTlbPollEsiFind, vfTlbPollEsiReplace,
-				 sizeof(vfTlbPollEsiFind), 1},
-				{activeKext, vfTlbPollMemoryFind, vfTlbPollMemoryReplace,
-				 sizeof(vfTlbPollMemoryFind), 1},
-			};
-			PANIC_COND(!LookupPatchPlus::applyAll(patcher, vfTlbPollPatches,
-			                                      address, size),
-			           "ngreen", "V237: failed to remove VF physical TLB reads");
-
-			// Remove the corresponding writes as a separate exhaustive set.  The
-			// immediate form appears ten times in the unmodified Tahoe binary; the
-			// CTB occurrence was consumed by the contextual patch above, leaving nine.
-			static const uint8_t vfTlbWriteImmFind[] = {
-				0xc7, 0x80, 0xe8, 0xce, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00
-			};
-			static const uint8_t vfTlbWriteImmReplace[] = {
-				0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90
-			};
-			static const uint8_t vfTlbWriteEcxFind[] = {
-				0x89, 0x88, 0xe8, 0xce, 0x00, 0x00
-			};
-			static const uint8_t vfTlbWriteEcxReplace[] = {
-				0x90, 0x90, 0x90, 0x90, 0x90, 0x90
-			};
-			static const uint8_t vfTlbWriteR8Find[] = {
-				0x44, 0x89, 0x80, 0xe8, 0xce, 0x00, 0x00
-			};
-			static const uint8_t vfTlbWriteR8Replace[] = {
-				0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90
-			};
-			LookupPatchPlus const vfTlbWritePatches[] = {
-				{activeKext, vfTlbWriteImmFind, vfTlbWriteImmReplace,
-				 sizeof(vfTlbWriteImmFind), 9},
-				{activeKext, vfTlbWriteEcxFind, vfTlbWriteEcxReplace,
-				 sizeof(vfTlbWriteEcxFind), 1},
-				{activeKext, vfTlbWriteR8Find, vfTlbWriteR8Replace,
-				 sizeof(vfTlbWriteR8Find), 1},
-			};
-			PANIC_COND(!LookupPatchPlus::applyAll(patcher, vfTlbWritePatches,
-			                                      address, size),
-			           "ngreen", "V237: failed to remove VF physical TLB writes");
-			SYSLOG("ngreen", "V237: removed all legacy 0xCEE8 reads and writes");
-
-			// V224: Apple places the legacy action in CT header bits 31:16 and
-			// the request fence in dw1.  Modern CTB/HXG uses exactly the same
-			// message length, but places fence in CT header bits 31:16 and the
-			// action in the HXG header at dw1.  Keep Apple's locking, waiting and
-			// ring accounting intact while swapping only those two encodings.
-			static const uint8_t vfCtbHxgHeaderFind[] = {
-				0xc1, 0xe2, 0x10, 0x09, 0xf2,
-				0x8d, 0x94, 0x17, 0x00, 0x01, 0x00, 0x00
-			};
-			static const uint8_t vfCtbHxgHeaderReplace[] = {
-				0x44, 0x89, 0xe2,             // mov edx, r12d (fence)
-				0xc1, 0xe2, 0x10,             // shl edx, 16
-				0x09, 0xf2,                   // or edx, esi (HXG length)
-				0x8b, 0x39,                   // mov edi, [rcx] (action)
-				0x90, 0x90
-			};
-			static const uint8_t vfCtbHxgActionFind[] = {
-				0x42, 0x89, 0x14, 0xb3, 0x31, 0xd2, 0x41, 0xf7, 0xf5,
-				0x44, 0x89, 0x24, 0x93, 0x8d, 0x42, 0x01
-			};
-			static const uint8_t vfCtbHxgActionReplace[] = {
-				0x42, 0x89, 0x14, 0xb3, 0x31, 0xd2, 0x41, 0xf7, 0xf5,
-				0x89, 0x3c, 0x93, 0x90, 0x8d, 0x42, 0x01
-			};
-			// Modern responses always arrive through G2H.  Force Apple's caller
-			// to use its pending-request path for every action, including 0x10;
-			// the legacy descriptor response slots are not part of the modern ABI.
-			static const uint8_t vfCtbWaitModeFind[] = {
-				0x48, 0x85, 0xff, 0x74, 0x09, 0x45, 0x31, 0xc9,
-				0x5d, 0xe9, 0xd4, 0xdd, 0xff, 0xff
-			};
-			static const uint8_t vfCtbWaitModeReplace[] = {
-				0x48, 0x85, 0xff, 0x74, 0x09, 0x41, 0xb1, 0x01,
-				0x5d, 0xe9, 0xd4, 0xdd, 0xff, 0xff
-			};
-			static const uint8_t vfCtbAllocateWaitFind[] = {
-				0x83, 0xfa, 0x10, 0x41, 0x0f, 0x95, 0xc1,
-				0x44, 0x22, 0x4d, 0xcc
-			};
-			static const uint8_t vfCtbAllocateWaitReplace[] = {
-				0x83, 0xfa, 0xff, 0x41, 0x0f, 0x95, 0xc1,
-				0x44, 0x22, 0x4d, 0xcc
-			};
-			LookupPatchPlus const vfCtbHxgPatches[] = {
-				{activeKext, vfCtbHxgHeaderFind, vfCtbHxgHeaderReplace,
-				 sizeof(vfCtbHxgHeaderFind), 1},
-				{activeKext, vfCtbHxgActionFind, vfCtbHxgActionReplace,
-				 sizeof(vfCtbHxgActionFind), 1},
-				{activeKext, vfCtbWaitModeFind, vfCtbWaitModeReplace,
-				 sizeof(vfCtbWaitModeFind), 1},
-				{activeKext, vfCtbAllocateWaitFind, vfCtbAllocateWaitReplace,
-				 sizeof(vfCtbAllocateWaitFind), 1},
-			};
-			PANIC_COND(!LookupPatchPlus::applyAll(patcher, vfCtbHxgPatches,
-			                                      address, size),
-			           "ngreen", "V224: failed to encode VF CTB messages as HXG");
-			SYSLOG("ngreen", "V224: converted VF CTB request framing to HXG");
 		}
 
 		// Keep IGAccelDevice::deviceStart native, including failure propagation.
@@ -4547,6 +4422,17 @@ void Gen11::vfInvalidateTLB(void *that) {
 	(void)vfInvalidateTLBSync(that);
 }
 
+void Gen11::vfBaseInvalidateTLB(const void *that) {
+	(void)that;
+	OSSynchronizeIO();
+	// i915's gen12vf_ggtt_invalidate skips the request until GuC is ready.
+	// CTB-ever-enabled is our corresponding irreversible readiness point.
+	if (!gVfCtbEverEnabled)
+		return;
+	if (!gVfHardwareGuc || !vfInvalidateTLBSync(gVfHardwareGuc))
+		vfMarkProtocolFault("IGGuC GGTT invalidation did not complete");
+}
+
 bool Gen11::vfCtbGucToHostAction(void *that, uint32_t *message) {
 	if (!that || !message || !gVfGGTTReady || !gVfCtbCpuBase || gVfCtbStopped)
 		return false;
@@ -4630,12 +4516,20 @@ bool Gen11::vfCtbGucToHostAction(void *that, uint32_t *message) {
 		vfMarkProtocolFault("malformed GuC lifecycle completion");
 		return false;
 	}
+	// Match intel_guc_ct.c:ct_handle_event: return reserved receive space as
+	// soon as a structurally valid completion leaves G2H, before interpreting
+	// its lifecycle payload. A late/stale event must not leak credits and block
+	// transport drain forever; an unsolicited event still trips the accounting
+	// underflow guard and is then rejected by the state checks below.
+	if (action == kGucActionTlbInvalidationDone ||
+	    action == kGucActionScheduleContextModeDone ||
+	    action == kGucActionDeregisterContextDone)
+		vfReleaseG2HCredits(length + 1U); // include the CT transport header
 	if (!response && (hxg & kGucOriginGuc) != 0 &&
 	    action == kGucActionTlbInvalidationDone && length >= 2) {
 		const uint32_t seqno = message[2];
 		if (gVfTlbWaitActive && seqno == gVfTlbWaitSeqno &&
 		    OSCompareAndSwap(seqno - 1U, seqno, &gVfTlbDoneSeqno)) {
-			vfReleaseG2HCredits(3);
 			OSSynchronizeIO();
 		} else {
 			static uint32_t staleTlbLogs = 0;
@@ -4698,8 +4592,6 @@ bool Gen11::vfCtbGucToHostAction(void *that, uint32_t *message) {
 			newState = entry.state;
 			IOSimpleLockUnlockEnableInterrupt(gVfContextLock, interruptState);
 		}
-		if (handled)
-			vfReleaseG2HCredits(action == kGucActionScheduleContextModeDone ? 4U : 3U);
 		if (handled && gVfContextLifecycleLogs++ < 64) {
 			SYSLOG("ngreen", "V230: GuC lifecycle event action=0x%04x id=%u state=%u",
 			       action, gucId, static_cast<unsigned int>(newState));
