@@ -2223,3 +2223,30 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   event DATA0 variants, both origins and every type. The full local suite passes
   in `/tmp/ngreen-static.43sH6y`; the VM remained shut off. This is parser and
   state-containment evidence, not firmware-delivery or acceleration evidence.
+
+### Seal both CTB directions only after G2H is empty
+
+- Re-audited the CTB partial-init and shutdown paths against the two native
+  queue locks. A channel initializer can publish the retained shared backing
+  before a later native init failure unwinds the object's locks. The hardware
+  filter and software event entry previously checked only broad GGTT/backing
+  state, so a later interrupt could still enter quarantined native storage.
+- G2H consumer admission now requires the complete classified VF transport:
+  GGTT, memory IRQ, CPU/GPU CTB mapping and firmware enable must all be live,
+  while sealed or protocol-fault states are rejected. `submissionStopped` is
+  deliberately not a rejection because expected disable/deregister/TLB
+  completions must remain drainable during orderly teardown. All 512 state
+  combinations are checked by the shared offline admission model.
+- `vfStopSubmissionAndSealCtb` formerly serialized only H2G and considered the
+  transport settled when H2G, reply credits and the TLB waiter were empty. A
+  G2H frame already written by GuC but not yet handled could therefore be made
+  invisible by the subsequent stopped bit.
+- Sealing now validates the exact H2G and G2H mappings, requires distinct native
+  locks, and acquires them in the single H2G-to-G2H order. Both descriptors must
+  be valid and both rings empty, with no reserved reply credits or active TLB
+  waiter, before the stopped bit is published. The consumer releases G2H before
+  lifecycle handling and no reverse two-lock edge exists. A lost callback now
+  reaches the bounded shutdown timeout instead of silently discarding a frame.
+- The full syntax/analyzer/strict-ABI/sanitizer/pinned-payload suite passes in
+  `/tmp/ngreen-static.PrRSBU`; the VM remained shut off. Hardware interrupt
+  ordering and GuC disable acknowledgement remain controlled-runtime evidence.

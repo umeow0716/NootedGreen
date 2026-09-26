@@ -6,6 +6,7 @@
 int main()
 {
 	unsigned admitted = 0;
+	unsigned consumers = 0;
 	for (unsigned bits = 0; bits < (1U << 9); ++bits) {
 		const NGVfSubmission::State state {
 			(bits & (1U << 0)) != 0,
@@ -22,8 +23,13 @@ int main()
 			(bits & 0x1C0U) == 0;
 		assert(NGVfSubmission::ready(state) == expected);
 		admitted += expected;
+		const bool consumerExpected = (bits & 0x3FU) == 0x3FU &&
+			(bits & ((1U << 6) | (1U << 8))) == 0;
+		assert(NGVfSubmission::consumerReady(state) == consumerExpected);
+		consumers += consumerExpected;
 	}
 	assert(admitted == 1);
+	assert(consumers == 2); // ordinary operation and submission-stopped teardown
 
 	unsigned syntheticBootstrap = 0;
 	for (unsigned bits = 0; bits < (1U << 5); ++bits) {
@@ -41,5 +47,5 @@ int main()
 			++syntheticBootstrap;
 	}
 	assert(syntheticBootstrap == 1);
-	std::printf("PASS: 512 VF producer and 32 bootstrap-task admission states\n");
+	std::printf("PASS: 512 VF producer/consumer and 32 bootstrap-task admission states\n");
 }

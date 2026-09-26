@@ -219,6 +219,22 @@ static bool vfNativeGpuWorkReady()
 	});
 }
 
+static bool vfCtbConsumerReady()
+{
+	OSSynchronizeIO();
+	return NGVfSubmission::consumerReady({
+		gVfIdentity == VfIdentity::Virtual,
+		gVfGGTTReady,
+		gVfMemIrqConfigured,
+		gVfCtbCpuBase != nullptr,
+		gVfCtbGpuBase != 0,
+		gVfCtbEnabled != 0,
+		gVfCtbStopped != 0,
+		gVfSubmissionStopped != 0,
+		gVfProtocolFault != 0,
+	});
+}
+
 void vfMarkProtocolFault(const char *reason)
 {
 	if (OSCompareAndSwap(0, 1, &gVfProtocolFault))
@@ -392,6 +408,8 @@ void vfReleaseRetiredContextBacking(uint16_t gucId)
 
 bool vfEnsureGucLock();
 bool vfValidH2GMapping(const volatile uint32_t *descriptor,
+                       const volatile uint32_t *buffer);
+bool vfValidG2HMapping(const volatile uint32_t *descriptor,
                        const volatile uint32_t *buffer);
 bool vfInvalidateTLBSync(void *guc);
 bool vfQuiesceDeviceForShutdown(void *guc);
@@ -912,16 +930,31 @@ bool vfValidH2GMapping(const volatile uint32_t *descriptor,
 	                     base + kVfCtbH2GBufferOffset);
 }
 
+bool vfValidG2HMapping(const volatile uint32_t *descriptor,
+                       const volatile uint32_t *buffer)
+{
+	auto *base = gVfCtbCpuBase;
+	return base && descriptor == reinterpret_cast<volatile uint32_t *>(
+	                                  base + kVfCtbG2HDescOffset) &&
+	       buffer == reinterpret_cast<volatile uint32_t *>(
+	                     base + kVfCtbG2HBufferOffset);
+}
+
 bool vfStopSubmissionAndSealCtb(void *guc)
 {
 	if (!vfCanWaitForGuc(guc))
 		return false;
 	auto *ctb = guc ? getMember<void *>(guc, 0xA10) : nullptr;
-	auto *lock = ctb ? getMember<IOLock *>(ctb, 0x18) : nullptr;
-	auto *descriptor = ctb ? getMember<volatile uint32_t *>(ctb, 0x48) : nullptr;
-	auto *buffer = ctb ? getMember<volatile uint32_t *>(ctb, 0x50) : nullptr;
-	if (!lock || !vfValidH2GMapping(descriptor, buffer)) {
-		vfMarkProtocolFault("cannot stop VF submission without pinned H2G transport");
+	auto *h2gLock = ctb ? getMember<IOLock *>(ctb, 0x18) : nullptr;
+	auto *g2hLock = ctb ? getMember<IOLock *>(ctb, 0x20) : nullptr;
+	auto *h2gDescriptor = ctb ? getMember<volatile uint32_t *>(ctb, 0x48) : nullptr;
+	auto *h2gBuffer = ctb ? getMember<volatile uint32_t *>(ctb, 0x50) : nullptr;
+	auto *g2hDescriptor = ctb ? getMember<volatile uint32_t *>(ctb, 0x58) : nullptr;
+	auto *g2hBuffer = ctb ? getMember<volatile uint32_t *>(ctb, 0x60) : nullptr;
+	if (!h2gLock || !g2hLock || h2gLock == g2hLock ||
+	    !vfValidH2GMapping(h2gDescriptor, h2gBuffer) ||
+	    !vfValidG2HMapping(g2hDescriptor, g2hBuffer)) {
+		vfMarkProtocolFault("cannot stop VF submission without both pinned CTB channels");
 		return false;
 	}
 
@@ -932,29 +965,41 @@ bool vfStopSubmissionAndSealCtb(void *guc)
 	OSSynchronizeIO();
 
 	for (uint32_t waited = 0; waited < kVfContextEventTimeoutMs; waited++) {
-		IOLockLock(lock);
+		// Fixed H2G -> G2H order. The sender owns only H2G and the consumer
+		// releases G2H before lifecycle handling, so no reverse edge exists.
+		IOLockLock(h2gLock);
+		IOLockLock(g2hLock);
 		OSSynchronizeIO();
-		const uint32_t bytes = descriptor[3];
-		const uint32_t head = descriptor[4];
-		const uint32_t tail = descriptor[5];
-		const uint32_t status = descriptor[6];
-		const bool valid = NGGuCRing::validDescriptor(
-			bytes, kVfCtbH2GBufferBytes, head, tail, status);
-		const bool settled = valid && head == tail &&
+		const uint32_t h2gBytes = h2gDescriptor[3];
+		const uint32_t h2gHead = h2gDescriptor[4];
+		const uint32_t h2gTail = h2gDescriptor[5];
+		const uint32_t h2gStatus = h2gDescriptor[6];
+		const uint32_t g2hBytes = g2hDescriptor[3];
+		const uint32_t g2hHead = g2hDescriptor[4];
+		const uint32_t g2hTail = g2hDescriptor[5];
+		const uint32_t g2hStatus = g2hDescriptor[6];
+		const bool h2gValid = NGGuCRing::validDescriptor(
+			h2gBytes, kVfCtbH2GBufferBytes, h2gHead, h2gTail, h2gStatus);
+		const bool g2hValid = NGGuCRing::validDescriptor(
+			g2hBytes, kVfCtbG2HBufferBytes, g2hHead, g2hTail, g2hStatus);
+		const bool settled = h2gValid && g2hValid && h2gHead == h2gTail &&
+			g2hHead == g2hTail &&
 			gVfG2HCreditsUsed == 0 && gVfTlbWaitActive == 0;
 		if (settled) {
-			// This lock is the linearization point shared by every H2G sender.
-			// Once stopped becomes visible, no later sender can publish a frame.
+			// Both native queue locks form the host-side linearization point:
+			// no sender can publish and no already-queued G2H event can be hidden.
 			OSCompareAndSwap(0, 1, &gVfCtbStopped);
 			OSCompareAndSwap(1, 0, &gVfCtbEnabled);
 			OSSynchronizeIO();
-			IOLockUnlock(lock);
+			IOLockUnlock(g2hLock);
+			IOLockUnlock(h2gLock);
 			return true;
 		}
-		IOLockUnlock(lock);
+		IOLockUnlock(g2hLock);
+		IOLockUnlock(h2gLock);
 
-		if (!valid) {
-			vfMarkProtocolFault("invalid H2G descriptor while draining VF transport");
+		if (!h2gValid || !g2hValid) {
+			vfMarkProtocolFault("invalid CTB descriptor while draining VF transport");
 			return false;
 		}
 		if (gVfProtocolFault)
@@ -1092,7 +1137,7 @@ bool vfQuiesceDeviceForShutdown(void *guc)
 uint64_t vfConsumeMemoryInterrupts()
 {
 	auto *base = gVfCtbCpuBase;
-	if (!gVfMemIrqConfigured || !base || gVfCtbStopped)
+	if (!gVfMemIrqConfigured || !base || gVfCtbStopped || gVfProtocolFault)
 		return 0;
 
 	auto *page = reinterpret_cast<volatile uint8_t *>(
@@ -1159,7 +1204,7 @@ bool vfG2HCtbPending(uint32_t &head)
 {
 	head = 0;
 	auto *base = gVfCtbCpuBase;
-	if (!base || gVfCtbStopped)
+	if (!base || gVfCtbStopped || gVfProtocolFault)
 		return false;
 
 	// Apple's +0x58 channel pointer is biased 0x10 bytes before the modern
@@ -4495,7 +4540,7 @@ void Gen11::vfBaseInvalidateTLB(const void *that) {
 }
 
 bool Gen11::vfCtbGucToHostAction(void *that, uint32_t *message) {
-	if (!that || !message || !gVfGGTTReady || !gVfCtbCpuBase || gVfCtbStopped)
+	if (!that || !message || !vfCtbConsumerReady())
 		return false;
 	if (!vfCanUseSleepingLock())
 		return false;
@@ -4506,10 +4551,7 @@ bool Gen11::vfCtbGucToHostAction(void *that, uint32_t *message) {
 	auto *lock = getMember<IOLock *>(that, 0x20);
 	auto *descriptor = getMember<volatile uint32_t *>(that, 0x58);
 	auto *buffer = getMember<volatile uint32_t *>(that, 0x60);
-	if (!lock || descriptor != reinterpret_cast<volatile uint32_t *>(
-	        gVfCtbCpuBase + kVfCtbG2HDescOffset) ||
-	    buffer != reinterpret_cast<volatile uint32_t *>(
-	        gVfCtbCpuBase + kVfCtbG2HBufferOffset)) {
+	if (!lock || !vfValidG2HMapping(descriptor, buffer)) {
 		vfMarkProtocolFault("G2H CTB mapping mismatch");
 		return false;
 	}
@@ -4677,7 +4719,7 @@ bool Gen11::vfInterruptFilterHandler(void *that, void *eventSource) {
 	(void)eventSource;
 	// Identity is established before enabling interrupts. Never probe/map BARs
 	// from a filter, or interpret an unready VF as a physical device.
-	if (!gVfGGTTReady)
+	if (!vfCtbConsumerReady())
 		return false;
 	VfIrqCallbackGuard irqGuard;
 	if (!irqGuard)
@@ -4712,7 +4754,7 @@ bool Gen11::vfInterruptFilterHandler(void *that, void *eventSource) {
 
 void Gen11::vfSoftwareGuCInterrupt(void *that, IOInterruptEventSource *source, int count) {
 	(void)count;
-	if (!that || !gVfGGTTReady)
+	if (!that || !vfCtbConsumerReady())
 		return;
 	VfIrqCallbackGuard irqGuard;
 	if (!irqGuard || !gVfCtbCpuBase || gVfCtbStopped)

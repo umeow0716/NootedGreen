@@ -273,6 +273,12 @@ closed instead of being silently dropped by Tahoe's legacy dispatcher. Offline
 sanitizer coverage checks every 16-bit event action and lengths 0..32. This is
 static containment evidence, not a hardware-acceleration result.
 
+G2H callbacks additionally require the complete live transport and are blocked
+after protocol quarantine, preventing partial-init locks from being reused.
+Shutdown serializes H2G then G2H and will seal only when both descriptors are
+valid and both rings are empty; submission may be stopped while consumers stay
+open long enough to receive retirement completions.
+
 ### Required GPU driver bundles
 
 For GPU acceleration, the following userspace driver bundles must be installed in `/Library/Extensions/`:
