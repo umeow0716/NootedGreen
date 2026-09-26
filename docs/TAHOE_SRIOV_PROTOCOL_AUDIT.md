@@ -2169,3 +2169,30 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   syntax/analyzer/strict-ABI/sanitizer/pinned-payload suite passes in
   `/tmp/ngreen-static.LuWFhe`. The VM remained shut off; actual interrupt and
   media completion behavior is still a controlled-runtime obligation.
+
+### Admit exact media-12 context engines and publish LRCA tails atomically
+
+- Re-disassembled Tahoe `IGHardwareContext::initWithOptions` including its
+  complete six-way `IGHwCsType` jump table and descriptor construction. The
+  only target pairs are RCS `(class 0, instance 0)`, CCS `(5,0)`, BCS `(3,0)`,
+  VCS0 `(1,0)`, VCS2 `(1,2)`, and VECS `(2,0)`. Current i915 identifies the
+  same hardware classes/instances and GuC classes `{0,4,3,1,1,2}`.
+- Descriptor admission formerly allowed OTHER class and every instance below
+  32 merely because they fit GuC's one-hot engine mask. It now accepts exactly
+  the six real media-12 engines. REGISTER_CONTEXT validation uses the same
+  table, so an unsupported class/mask pair cannot reach H2G through another
+  internal caller.
+- Submission now revalidates the packed high and low descriptor, requires its
+  decoded engine to equal the native `IGHwCsType` argument, and compares class
+  plus instance with the retained attach record before touching the context
+  image. This closes the former low-dword-only identity check.
+- The LRCA ring tail formerly changed before final state admission and could
+  remain advanced when H2G backpressure or publication failed. Tail publication
+  now occurs inside the serialized sender only after ring space and G2H credits
+  are reserved, immediately before the CT frame and descriptor tail are made
+  visible. Every false return leaves the context tail untouched.
+- Offline tests exhaust all 1,536 raw class/instance/SW-ID tuples, every
+  one-hot GuC class/mask candidate, unsupported masks, all persistent/reserved
+  bits, and cross-check context types with memory-IRQ callback routes. The full
+  syntax/analyzer/strict-ABI/sanitizer/pinned-payload suite, including the
+  sender publication refactor, passes in `/tmp/ngreen-static.WbgPac`.

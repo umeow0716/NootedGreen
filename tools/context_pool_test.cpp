@@ -1,5 +1,6 @@
 #include "../NootedGreen/kern_context_pool.hpp"
 #include "../NootedGreen/kern_context_descriptor.hpp"
+#include "../NootedGreen/kern_vf_memirq.hpp"
 #include <assert.h>
 #include <stdio.h>
 #include <vector>
@@ -65,21 +66,33 @@ int main() {
 		assert(NGContextDescriptor::mapEngineClass(rawClass) ==
 			(rawClass < 6 ? expectedClassMap[rawClass] : 0xFFU));
 		for (uint32_t instance = 0; instance < 64; ++instance) {
+			uint8_t expectedHwCsType = NGContextDescriptor::invalidHwCsType;
+			uint8_t expectedGucClass = 0xFFU;
+			for (const auto &engine : NGContextDescriptor::media12Engines) {
+				if (engine.rawClass == rawClass && engine.instance == instance) {
+					expectedHwCsType = engine.hwCsType;
+					expectedGucClass = engine.gucClass;
+				}
+			}
 			for (uint32_t swId : {0U, 1U, 0x7FFU}) {
 				const NGContextDescriptor::Value descriptor = {
 					descriptorAddress | 0x309U,
 					(rawClass << 29) | (instance << 16) | (swId << 5),
 				};
 				const auto attributes = NGContextDescriptor::inspect(descriptor);
-				assert(attributes.valid == (rawClass < 6 && instance < 32));
+				assert(attributes.valid ==
+					(expectedHwCsType != NGContextDescriptor::invalidHwCsType));
 				assert(attributes.lrcaPage == descriptorAddress);
 				assert(attributes.rawClass == rawClass);
 				assert(attributes.engineInstance == instance);
+				assert(attributes.hwCsType == expectedHwCsType);
+				if (attributes.valid)
+					assert(attributes.gucClass == expectedGucClass);
 			}
 		}
 	}
 	const NGContextDescriptor::Value baseDescriptor = {
-		descriptorAddress | 0x309U, (3U << 29) | (7U << 16) | (23U << 5),
+		descriptorAddress | 0x309U, (3U << 29) | (23U << 5),
 	};
 	assert(NGContextDescriptor::inspect(baseDescriptor).valid);
 	for (uint32_t bit = 0; bit < 32; ++bit) {
@@ -95,7 +108,25 @@ int main() {
 	assert(NGContextDescriptor::validGucHwlrca(gucDescriptor, 0));
 	assert(!NGContextDescriptor::validGucHwlrca(baseDescriptor.low, 0));
 	assert(!NGContextDescriptor::validGucHwlrca(gucDescriptor, 1));
-	puts("PASS 4096 Tahoe descriptor flags, 1536 engine tuples, reserved bits and GuC normalization");
+
+	for (uint32_t gucClass = 0; gucClass < 8; ++gucClass) {
+		for (uint32_t instance = 0; instance < 32; ++instance) {
+			const uint32_t mask = 1U << instance;
+			bool expected = false;
+			for (const auto &engine : NGContextDescriptor::media12Engines)
+				expected |= engine.gucClass == gucClass &&
+				            engine.instance == instance;
+			assert(NGContextDescriptor::validMedia12GucEngine(
+				gucClass, mask) == expected);
+		}
+		assert(!NGContextDescriptor::validMedia12GucEngine(gucClass, 0));
+		assert(!NGContextDescriptor::validMedia12GucEngine(gucClass, 3));
+	}
+	for (size_t i = 0; i < NGContextDescriptor::media12EngineCount; ++i) {
+		assert(NGContextDescriptor::media12Engines[i].hwCsType ==
+		       NGVfMemIrq::engineRoutes[i].callbackBit);
+	}
+	puts("PASS 4096 Tahoe descriptor flags, 1536 engine tuples, exact media-12 routes and GuC normalization");
 
     // Synthetic addresses are inspected only as integers, never dereferenced.
     // Include a pool whose last byte fits but exclusive end wraps to zero.

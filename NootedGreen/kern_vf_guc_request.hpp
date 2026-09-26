@@ -38,8 +38,9 @@ inline Attributes inspect(const uint32_t *request, size_t length)
 			// REGISTER_CONTEXT v70: KMD, one logical engine, no parent WQ,
 			// and a 32-bit GGTT LRCA descriptor.
 			result.valid = length == 12 && request[1] == 1U &&
-				validContextId(request[2]) && request[3] <= 5U &&
-				request[4] && !(request[4] & (request[4] - 1U)) &&
+				validContextId(request[2]) &&
+				NGContextDescriptor::validMedia12GucEngine(
+					request[3], request[4]) &&
 				request[5] == 0 && request[6] == 0 && request[7] == 0 &&
 				request[8] == 0 && request[9] == 0 &&
 				NGContextDescriptor::validGucHwlrca(request[10], request[11]);

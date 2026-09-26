@@ -1,4 +1,5 @@
 #pragma once
+#include <stddef.h>
 #include <stdint.h>
 #include "kern_unaligned.hpp"
 
@@ -40,7 +41,30 @@ struct Attributes {
     uint32_t rawClass;
     uint32_t engineInstance;
     uint8_t gucClass;
+    uint8_t hwCsType;
 };
+
+struct Media12Engine {
+    uint8_t rawClass;
+    uint8_t instance;
+    uint8_t gucClass;
+    uint8_t hwCsType;
+};
+
+// Tahoe's six IGHwCsType jump-table entries and the corresponding Gen11
+// descriptor fields. The admitted VF platform has VCS0 and VCS2, not VCS1;
+// OTHER class and arbitrary 32-bit engine-mask instances are not real engines.
+constexpr Media12Engine media12Engines[] = {
+    {0, 0, 0, 0}, // RCS0
+    {5, 0, 4, 1}, // CCS0
+    {3, 0, 3, 2}, // BCS0
+    {1, 0, 1, 3}, // VCS0
+    {1, 2, 1, 4}, // VCS2
+    {2, 0, 2, 5}, // VECS0
+};
+constexpr size_t media12EngineCount =
+    sizeof(media12Engines) / sizeof(media12Engines[0]);
+constexpr uint8_t invalidHwCsType = 0xFFU;
 
 // The pinned native descriptor is a packed member at context+0x89.
 // Caller guarantees eight live readable bytes and stable descriptor ownership.
@@ -68,6 +92,26 @@ inline uint8_t mapEngineClass(uint32_t rawClass)
     return rawClass < sizeof(map) ? map[rawClass] : 0xFFU;
 }
 
+inline uint8_t media12HwCsType(uint32_t rawClass, uint32_t instance)
+{
+    for (size_t i = 0; i < media12EngineCount; ++i) {
+        if (media12Engines[i].rawClass == rawClass &&
+            media12Engines[i].instance == instance)
+            return media12Engines[i].hwCsType;
+    }
+    return invalidHwCsType;
+}
+
+inline bool validMedia12GucEngine(uint32_t gucClass, uint32_t engineMask)
+{
+    for (size_t i = 0; i < media12EngineCount; ++i) {
+        if (media12Engines[i].gucClass == gucClass &&
+            engineMask == (1U << media12Engines[i].instance))
+            return true;
+    }
+    return false;
+}
+
 inline Attributes inspect(Value descriptor)
 {
     Attributes result = {};
@@ -75,9 +119,11 @@ inline Attributes inspect(Value descriptor)
     result.rawClass = descriptor.high >> 29;
     result.engineInstance = (descriptor.high >> 16) & 0x3FU;
     result.gucClass = mapEngineClass(result.rawClass);
+    result.hwCsType = media12HwCsType(result.rawClass, result.engineInstance);
     result.valid = validPersistentLow(descriptor.low) &&
         (descriptor.high & ~persistentHighMask) == 0 &&
-        result.gucClass != 0xFFU && result.engineInstance < 32;
+        result.gucClass != 0xFFU && result.engineInstance < 32 &&
+        result.hwCsType != invalidHwCsType;
     return result;
 }
 

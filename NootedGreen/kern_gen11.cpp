@@ -454,7 +454,9 @@ bool vfInitContextBridge()
 
 bool vfSendCtbFastAction(void *guc, const uint32_t *request,
 	                     uint32_t requestLength, uint32_t &transportFence,
-	                     IOLock *alreadyHeldQueue = nullptr)
+	                     IOLock *alreadyHeldQueue = nullptr,
+	                     volatile uint32_t *contextTailField = nullptr,
+	                     uint32_t contextTail = 0)
 {
 	transportFence = 0;
 	if (!guc || !request || requestLength == 0 || requestLength > 31 ||
@@ -518,6 +520,13 @@ bool vfSendCtbFastAction(void *guc, const uint32_t *request,
 		const bool ringSpace = valid &&
 			NGGuCRing::producerHasSpace(size, head, tail, needed);
 		if (ringSpace && vfReserveG2HCredits(responseCredits)) {
+			// A single-LRC tail must become visible in the context image at the
+			// same publication point as its MODE_SET/SCHEDULE notification. Do not
+			// expose it while waiting for ring space or on any failed enqueue.
+			if (contextTailField) {
+				*contextTailField = contextTail;
+				OSSynchronizeIO();
+			}
 			const uint32_t fence = static_cast<uint32_t>(OSIncrementAtomic(
 				reinterpret_cast<volatile SInt32 *>(
 					reinterpret_cast<uint8_t *>(ctb) + 0x3C))) & 0xFFFFU;
@@ -4116,6 +4125,13 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 	const auto descriptorValue = NGContextDescriptor::read(descriptor);
 	const uint32_t descriptorLo = descriptorValue.low;
 	const uint32_t descriptorHi = descriptorValue.high;
+	const auto descriptorAttributes =
+		NGContextDescriptor::inspect(descriptorValue);
+	if (!descriptorAttributes.valid ||
+	    static_cast<uint32_t>(hwCsType) != descriptorAttributes.hwCsType) {
+		vfMarkProtocolFault("submit descriptor/command-streamer identity mismatch");
+		return false;
+	}
 
 	const bool memIrqReady = gVfMemIrqConfigured && gVfCtbCpuBase;
 	if (!memIrqReady) {
@@ -4143,6 +4159,8 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 	const int32_t admittedSlot = vfFindContextLocked(lrcaPage);
 	const bool admitted = admittedSlot >= 0 && gVfContexts[admittedSlot].refCount &&
 		gVfContexts[admittedSlot].descriptorLo == descriptorLo &&
+		gVfContexts[admittedSlot].engineClass == descriptorAttributes.gucClass &&
+		gVfContexts[admittedSlot].engineInstance == descriptorAttributes.engineInstance &&
 		(gVfContexts[admittedSlot].state == kVfGucContextRegistered ||
 		 gVfContexts[admittedSlot].state == kVfGucContextDisabled ||
 		 gVfContexts[admittedSlot].state == kVfGucContextEnabled);
@@ -4202,17 +4220,6 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 		return false;
 	}
 	const uint32_t previousRingTail = *ringTailField;
-	*ringTailField = ringTail;
-	OSSynchronizeIO();
-
-	static uint32_t contextImageLogs = 0;
-	if (contextImageLogs++ < 16) {
-		const auto *state = reinterpret_cast<volatile uint32_t *>(
-			contextImage + kContextRegisterStateOffset);
-		SYSLOG("ngreen", "V234: LRCA image desc=%08x:%08x ctrl=%08x head=%08x tail=%08x start=%08x ctl=%08x",
-		       descriptorHi, descriptorLo, state[3], state[5], state[7],
-		       state[9], state[11]);
-	}
 
 	int32_t slot = -1;
 	bool enable = false;
@@ -4248,8 +4255,10 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 	};
 	uint32_t transportFence = 0;
 	bool submitted = enable ?
-		vfSendCtbFastAction(that, enableRequest, arrsize(enableRequest), transportFence, queue.get()) :
-		vfSendCtbFastAction(that, scheduleRequest, arrsize(scheduleRequest), transportFence, queue.get());
+		vfSendCtbFastAction(that, enableRequest, arrsize(enableRequest),
+		                    transportFence, queue.get(), ringTailField, ringTail) :
+		vfSendCtbFastAction(that, scheduleRequest, arrsize(scheduleRequest),
+		                    transportFence, queue.get(), ringTailField, ringTail);
 
 	if (enable) {
 		if (submitted) {
@@ -4272,6 +4281,14 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 			}
 			IOSimpleLockUnlockEnableInterrupt(gVfContextLock, interruptState);
 		}
+	}
+	static uint32_t contextImageLogs = 0;
+	if (submitted && contextImageLogs++ < 16) {
+		const auto *state = reinterpret_cast<volatile uint32_t *>(
+			contextImage + kContextRegisterStateOffset);
+		SYSLOG("ngreen", "V234: LRCA image desc=%08x:%08x ctrl=%08x head=%08x tail=%08x start=%08x ctl=%08x",
+		       descriptorHi, descriptorLo, state[3], state[5], state[7],
+		       state[9], state[11]);
 	}
 
 	queue.unlock();

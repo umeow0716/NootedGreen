@@ -84,8 +84,9 @@ inherit runtime claims from the older Sonoma/Raptor Lake display experiments.
 - Direct-LRCA attach validates every persistent Tahoe descriptor field before
   native pool access. GuC registration materializes the first-submit
   `FORCE_RESTORE` bit that Apple's legacy execlist adds only to a stack copy;
-  reserved bits, unsupported classes/instances and malformed priorities fail
-  before transport publication.
+  reserved bits, malformed priorities, non-media-12 class/instance pairs and
+  submit-time `IGHwCsType` mismatches fail before transport publication. The
+  LRCA ring tail is written only inside the successful H2G publication point.
 - VF memory interrupts use the media-12 engine table verified against both
   Tahoe's interrupt bridge and current i915. In particular, Tahoe's second
   video callback is VCS2 at source offset 34; the absent VCS1 offset 33 is not
