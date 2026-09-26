@@ -8664,10 +8664,18 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 		       descriptor[0], legacyContextId);
 		return false;
 	}
-	if (!gVfMemIrqConfigured || !gVfCtbCpuBase) {
-		SYSLOG("ngreen", "V234: submit before VF memory IRQ configuration LRCA=0x%08x",
-		       descriptor[0]);
-		return false;
+	const bool memIrqReady = gVfMemIrqConfigured && gVfCtbCpuBase;
+	if (!memIrqReady) {
+		// IntelAccelerator::start submits one bootstrap stamp before GuC CTB
+		// registration reaches vfConfigureMemIrq().  V233 deliberately lets
+		// that request use the legacy path and V221 tolerates its first missing
+		// completion.  Rejecting it here makes submitToRing panic immediately,
+		// so defer only the LRCA memory-IRQ patch until self-config is complete.
+		static uint32_t bootstrapLogs = 0;
+		if (bootstrapLogs++ < 16) {
+			SYSLOG("ngreen", "V235: deferring VF memory IRQ for bootstrap LRCA=0x%08x",
+			       descriptor[0]);
+		}
 	}
 
 	// Gen12 SR-IOV VFs do not expose the physical GT interrupt hierarchy.
@@ -8677,22 +8685,24 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 	// to the selected engine because MI_LRI_LRM_CS_MMIO is set in both commands.
 	auto *registerState = reinterpret_cast<volatile uint32_t *>(
 		contextImage + kContextRegisterStateOffset);
-	const uint32_t memIrqPage = gVfCtbGpuBase + kVfMemIrqOffset;
-	registerState[kCtxMemIrqLrmHeaderIndex] =
-		kMiLoadRegisterMemGlobalCsMmio;
-	registerState[kCtxMemIrqMaskRegisterIndex] = kGen12RingIntMask;
-	registerState[kCtxMemIrqMaskPointerIndex] =
-		memIrqPage + kVfMemIrqEnableOffset;
-	registerState[kCtxMemIrqMaskPointerIndex + 1] = 0;
-	registerState[kCtxMemIrqLriHeaderIndex] =
-		kMiLoadRegisterImm2PostedCsMmio;
-	registerState[kCtxMemIrqStatusRegisterIndex] = kGen12RingIntStatus;
-	registerState[kCtxMemIrqStatusPointerIndex] =
-		memIrqPage + kVfMemIrqStatusOffset;
-	registerState[kCtxMemIrqSourceRegisterIndex] = kGen12RingIntSource;
-	registerState[kCtxMemIrqSourcePointerIndex] =
-		memIrqPage + kVfMemIrqSourceOffset;
-	OSSynchronizeIO();
+	if (memIrqReady) {
+		const uint32_t memIrqPage = gVfCtbGpuBase + kVfMemIrqOffset;
+		registerState[kCtxMemIrqLrmHeaderIndex] =
+			kMiLoadRegisterMemGlobalCsMmio;
+		registerState[kCtxMemIrqMaskRegisterIndex] = kGen12RingIntMask;
+		registerState[kCtxMemIrqMaskPointerIndex] =
+			memIrqPage + kVfMemIrqEnableOffset;
+		registerState[kCtxMemIrqMaskPointerIndex + 1] = 0;
+		registerState[kCtxMemIrqLriHeaderIndex] =
+			kMiLoadRegisterImm2PostedCsMmio;
+		registerState[kCtxMemIrqStatusRegisterIndex] = kGen12RingIntStatus;
+		registerState[kCtxMemIrqStatusPointerIndex] =
+			memIrqPage + kVfMemIrqStatusOffset;
+		registerState[kCtxMemIrqSourceRegisterIndex] = kGen12RingIntSource;
+		registerState[kCtxMemIrqSourcePointerIndex] =
+			memIrqPage + kVfMemIrqSourceOffset;
+		OSSynchronizeIO();
+	}
 
 	auto *ringTailField = reinterpret_cast<volatile uint32_t *>(
 		contextImage + kContextRingTailOffset);
@@ -8717,15 +8727,17 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 		SYSLOG("ngreen", "V234: LRCA image desc=%08x:%08x ctrl=%08x head=%08x tail=%08x start=%08x ctl=%08x",
 		       descriptor[1], descriptor[0], state[3], state[5], state[7],
 		       state[9], state[11]);
-		SYSLOG("ngreen", "V234: LRCA memirq lrm=%08x mask=%08x@%08x lri=%08x status=%08x@%08x source=%08x@%08x",
-		       state[kCtxMemIrqLrmHeaderIndex],
-		       state[kCtxMemIrqMaskRegisterIndex],
-		       state[kCtxMemIrqMaskPointerIndex],
-		       state[kCtxMemIrqLriHeaderIndex],
-		       state[kCtxMemIrqStatusRegisterIndex],
-		       state[kCtxMemIrqStatusPointerIndex],
-		       state[kCtxMemIrqSourceRegisterIndex],
-		       state[kCtxMemIrqSourcePointerIndex]);
+		if (memIrqReady) {
+			SYSLOG("ngreen", "V234: LRCA memirq lrm=%08x mask=%08x@%08x lri=%08x status=%08x@%08x source=%08x@%08x",
+			       state[kCtxMemIrqLrmHeaderIndex],
+			       state[kCtxMemIrqMaskRegisterIndex],
+			       state[kCtxMemIrqMaskPointerIndex],
+			       state[kCtxMemIrqLriHeaderIndex],
+			       state[kCtxMemIrqStatusRegisterIndex],
+			       state[kCtxMemIrqStatusPointerIndex],
+			       state[kCtxMemIrqSourceRegisterIndex],
+			       state[kCtxMemIrqSourcePointerIndex]);
+		}
 	}
 
 	const uint32_t lrcaPage = descriptor[0] & 0xFFFFF000U;
@@ -8959,23 +8971,23 @@ bool Gen11::vfCtbGucToHostAction(void *that, uint32_t *message) {
 }
 
 void Gen11::vfReadAndClearInterrupts(void *that, void *interrupts) {
-	// The bridge is live before GuC CTB setup reaches vfConfigureMemIrq().
-	// Preserve Tahoe's original interrupt path throughout that bootstrap
-	// window; returning an empty bitset here starves the driver's synchronous
-	// bring-up waits and leaves IntelAccelerator::start spinning before CTB
-	// registration.  Switch transport only after both the CPU mapping and the
-	// GuC self-config writes are complete.
-	if (!gVfGGTTReady || !gVfMemIrqConfigured || !gVfCtbCpuBase ||
-	    NGreen::callback->isRealTGL) {
-		FunctionCast(vfReadAndClearInterrupts,
-		             callback->oVfReadAndClearInterrupts)(that, interrupts);
-		return;
-	}
 	if (!interrupts)
 		return;
 
+	// Preserve Tahoe's native IIR path even after memory interrupts are live.
+	// The VF already delivers the GuC G2H lifecycle interrupt through that path
+	// during bootstrap; replacing it loses MODE_DONE and makes submitToRing
+	// report a work-queue failure.  Memory IRQ is an additional Gen12 transport,
+	// so merge its events into the same IGBitSet instead of replacing native
+	// results.  This also keeps the physical-GT path intact for a real TGL/PF.
+	FunctionCast(vfReadAndClearInterrupts,
+	             callback->oVfReadAndClearInterrupts)(that, interrupts);
+	if (!gVfGGTTReady || !gVfMemIrqConfigured || !gVfCtbCpuBase ||
+	    NGreen::callback->isRealTGL)
+		return;
+
 	auto *pending = reinterpret_cast<uint64_t *>(interrupts);
-	*pending = 0;
+	const uint64_t nativePending = *pending;
 	auto *page = reinterpret_cast<volatile uint8_t *>(
 		gVfCtbCpuBase + kVfMemIrqOffset);
 	auto *statusBase = page + kVfMemIrqStatusOffset;
@@ -9035,8 +9047,9 @@ void Gen11::vfReadAndClearInterrupts(void *that, void *interrupts) {
 
 	static uint32_t irqLogs = 0;
 	if ((sourceSnapshot || *pending) && irqLogs++ < 128) {
-		SYSLOG("ngreen", "V234: VF memory IRQ source=0x%016llx pending=0x%016llx",
+		SYSLOG("ngreen", "V235: VF memory IRQ source=0x%016llx native=0x%016llx pending=0x%016llx",
 		       static_cast<unsigned long long>(sourceSnapshot),
+		       static_cast<unsigned long long>(nativePending),
 		       static_cast<unsigned long long>(*pending));
 	}
 }
