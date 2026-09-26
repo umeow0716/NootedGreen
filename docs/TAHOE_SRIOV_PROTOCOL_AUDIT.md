@@ -871,3 +871,27 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
 - Full suite passes in /tmp/ngreen-static.M05QXM (classifier additionally
   source-compared in /tmp/ngreen-static.wBl01g). af82759 CI 36220976605
   succeeded, including kext link with the exported preemption check.
+
+### Native GGTT DMA truncation and void-unmap admission
+
+- Rechecked native mapRange 0x10324, unmapRange 0x10626 and mapRangeDummy
+  0x10680: DMA address bits are masked with 0x7ffffff000. A wider/unaligned
+  address was silently changed into a different DMA mapping. VF mapRange
+  now validates the entire physical interval against that inspected 39-bit
+  encoder; VF init similarly validates the dummy page. This is an encoder
+  limitation, not a claim that modern Intel hardware only supports 39 bits.
+- Added null receiver checks to VF map variants. New pure bounds checks pass
+  121 high-address/alignment/overflow cases against 128-bit arithmetic, in
+  addition to the existing GPU-range checks. These are not PTE flag/PAT or
+  cache-coherency validation, nor a proof of the original mapping's ownership.
+- VF void unmap now checks identity, transport/fault state and assigned GPU
+  interval BEFORE native writes. Invalid/faulted unmap deliberately panics:
+  silently skipping it would let callers free/reuse potentially live DMA
+  backing. This is fail-stop containment, NOT graceful recovery/quiescence.
+  Valid-range unmap still needs proven GPU idle, TLB invalidation and lifetime
+  exclusion; the VM boot blocker therefore remains.
+- Direct native PTE writes are still split high/low 32-bit stores. Rotated
+  iterator arithmetic and physical iterator length, full object provenance,
+  flags, and call-chain invalidation are still open. No runtime verification.
+- Full suite passes in /tmp/ngreen-static.BeFUWU. Transport admission
+  checkpoint 070cffa CI 36221130028 succeeded.

@@ -32,6 +32,19 @@ int main() {
         ++rangeCases;
     }
     std::printf("PASS: %u GGTT range cases against 128-bit arithmetic oracle\n", rangeCases);
+    const uint64_t dmaValues[] = {0, 1, 0xFFF, 0x1000, 0x2000,
+        (UINT64_C(1) << 39) - 0x1000, (UINT64_C(1) << 39) - 1,
+        UINT64_C(1) << 39, (UINT64_C(1) << 39) + 0x1000,
+        UINT64_MAX - 0xFFF, UINT64_MAX};
+    unsigned dmaCases = 0;
+    for (auto physical : dmaValues) for (auto length : dmaValues) {
+        using Wide = unsigned __int128;
+        const bool expected = ((physical | length) & 0xFFF) == 0 &&
+            Wide(physical) + length <= (Wide(1) << 39);
+        assert(NGGgtt::nativePhysicalRange(physical, length) == expected);
+        ++dmaCases;
+    }
+    std::printf("PASS: %u native DMA address truncation/bounds cases\n", dmaCases);
     const auto suppressed = nativeBounds(UINT64_MAX, UINT64_C(0x100000000));
     assert(suppressed.firstBegin > suppressed.firstEnd);
     assert(!suppressed.secondRuns);

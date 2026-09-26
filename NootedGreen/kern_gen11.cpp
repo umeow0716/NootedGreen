@@ -3246,6 +3246,10 @@ bool Gen11::IGHardwareGlobalPageTableInitWithOptions(void *that,
 		                                                                         mmioBase,
 		                                                                         dummyPage,
 		                                                                         options);
+	if (!that || !accelerator || !NGGgtt::nativePhysicalRange(dummyPage, 0x1000)) {
+		vfMarkProtocolFault("invalid VF GGTT receiver or truncated dummy DMA address");
+		return false;
+	}
 	if (!vfBootstrapBinder())
 		return false;
 
@@ -3316,7 +3320,8 @@ bool Gen11::IGHardwareGlobalPageTableMapRange(void *that,
 	// relay sync is too late to protect either the shadow or the MMIO aperture.
 	if (gVfIdentity != VfIdentity::Physical &&
 	    (gVfIdentity != VfIdentity::Virtual || !gVfGGTTReady || gVfProtocolFault ||
-	     !NGGgtt::contains(gVfGGTTBase, gVfGGTTSize, range.start, range.length))) {
+	     !that || !NGGgtt::contains(gVfGGTTBase, gVfGGTTSize, range.start, range.length) ||
+	     !NGGgtt::nativePhysicalRange(physical, range.length))) {
 		vfMarkProtocolFault("invalid VF GGTT map range or transport state");
 		return false;
 	}
@@ -3346,7 +3351,7 @@ bool Gen11::IGHardwareGlobalPageTableMapRangeRotated(void *that,
 	}
 	if (gVfIdentity != VfIdentity::Physical &&
 	    (gVfIdentity != VfIdentity::Virtual || !gVfGGTTReady || gVfProtocolFault ||
-	     !hasRange || !physicalIterator ||
+	     !that || !hasRange || !physicalIterator ||
 	     !NGGgtt::contains(gVfGGTTBase, gVfGGTTSize, affected.start, affected.length))) {
 		vfMarkProtocolFault("invalid VF rotated GGTT range or transport state");
 		return false;
@@ -3364,6 +3369,13 @@ bool Gen11::IGHardwareGlobalPageTableMapRangeRotated(void *that,
 void Gen11::IGHardwareGlobalPageTableUnmapRange(void *that,
                                                 const NGIGAddressRange &range)
 {
+	// A void unmap cannot tell its caller not to free/reuse DMA backing.
+	// Refuse to continue teardown on invalid input or a faulted VF; silently
+	// returning would turn a skipped PTE write into a use-after-free risk.
+	PANIC_COND(gVfIdentity != VfIdentity::Physical &&
+		(gVfIdentity != VfIdentity::Virtual || !gVfGGTTReady || gVfProtocolFault ||
+		 !that || !NGGgtt::contains(gVfGGTTBase, gVfGGTTSize, range.start, range.length)),
+		"ngreen", "Cannot safely complete VF GGTT unmap; refusing DMA backing release");
 	FunctionCast(IGHardwareGlobalPageTableUnmapRange,
 	             callback->oIGHardwareGlobalPageTableUnmapRange)(that, range);
 	if (!NGreen::callback->isRealTGL && that == gVfGlobalPageTable &&
@@ -3379,7 +3391,7 @@ bool Gen11::IGHardwareGlobalPageTableMapRangeDummy(void *that,
 {
 	if (gVfIdentity != VfIdentity::Physical &&
 	    (gVfIdentity != VfIdentity::Virtual || !gVfGGTTReady || gVfProtocolFault ||
-	     !NGGgtt::contains(gVfGGTTBase, gVfGGTTSize, range.start, range.length))) {
+	     !that || !NGGgtt::contains(gVfGGTTBase, gVfGGTTSize, range.start, range.length))) {
 		vfMarkProtocolFault("invalid VF dummy GGTT range or transport state");
 		return false;
 	}
