@@ -1853,3 +1853,26 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   removed. `/tmp/ngreen-static.dZ50PB` passes syntax, analyzer, strict ABI and
   every offline protocol/sanitizer model. A VF does not load this framebuffer
   patch set, and no hardware or VM action occurred.
+
+### Retire manual display firmware, power-well and CDCLK ownership
+
+- The opt-in DMC wrapper was not a bounded firmware loader. In addition to
+  copying a TGL or ADL-P payload to SRAM, it wrote fixed power-well, DDI/PHY,
+  transcoder timing, link M/N, panel, PSR and display-context values captured
+  from one machine, then invoked a different native ICL initialization and
+  replayed selected values afterward. Its DC-exit helper could repeat another
+  fixed subset whenever a hooked display comparison observed a low-power state.
+- Removed that wrapper, the extra AUX invocation, the replay state and the
+  `ngreen-dmc` policy. The embedded TGL/ADL-P payload sources, declarations,
+  Xcode entries and byte-comparison script had no remaining consumer and were
+  removed. This does not claim firmware compatibility; it makes the admitted
+  native physical driver the sole DMC owner and preserves the existing rule
+  that an SR-IOV VF owns no display firmware.
+- Removed the physical power-well replacement that wrote request bits and
+  returned without observing hardware acknowledgement, plus DDI/AUX/display
+  wrappers that only stamped a private pointer. Removed the PowerWell initializer
+  that forced `fAlwaysOn` and substituted `fMMIO` after native initialization.
+- Removed unconditional CDCLK disable/reprogram and the route used to bypass a
+  PCU verification result. Clock selection and error handling are native again.
+  `/tmp/ngreen-static.ZxzxZm` passes the complete static suite. The Linux host,
+  VF and VM were not touched; release-link/Xcode metadata remains gated by CI.

@@ -15,7 +15,6 @@
 #include "AppleIntelParams.hpp"
 #include <Headers/kern_api.hpp>
 #include "kern_green.hpp"
-#include "IntelDPLinkTraining.hpp"
 #include <IOKit/IOBufferMemoryDescriptor.h>
 #include <IOKit/IOCatalogue.h>
 #include <IOKit/IOLib.h>
@@ -1672,36 +1671,6 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		//NGreen::callback->igfxGen = iGFXGen::Gen11;
 		PANIC_COND(!NGreen::callback->setRMMIOIfNecessary(), "ngreen", "Cannot map ICL framebuffer BAR0");
 		
-		const bool wegCoexist = isWEGCoexistMode();
-		if (wegCoexist) {
-			SYSLOG("nblue", "WEG coexist mode enabled: skipping NootedBlue CDCLK route overlap");
-		}
-
-		if (wegCoexist) {
-			SolveRequestPlus solveRequests[] = {
-		 		{"__ZN31AppleIntelFramebufferController20hwConfigureCustomAUXEb", this->ohwConfigureCustomAUX},
-			};
-			PANIC_COND(!SolveRequestPlus::solveAll(patcher, index, solveRequests, address, size), "nblue",	"Failed to resolve symbols");
-		} else {
-			SolveRequestPlus solveRequests[] = {
-		 		{"__ZN31AppleIntelFramebufferController20hwConfigureCustomAUXEb", this->ohwConfigureCustomAUX},
-				{"__ZN31AppleIntelFramebufferController21probeCDClockFrequencyEv", this->orgProbeCDClockFrequency},
-			};
-			PANIC_COND(!SolveRequestPlus::solveAll(patcher, index, solveRequests, address, size), "nblue",	"Failed to resolve symbols");
-		}
-		
-		if (wegCoexist) {
-			RouteRequestPlus requests[] = {
-				{"__ZN31AppleIntelFramebufferController18hwInitializeCStateEv",hwInitializeCState, this->ohwInitializeCState},
-			};
-			PANIC_COND(!RouteRequestPlus::routeAll(patcher, index, requests, address, size), "nblue","Failed to route symbols");
-		} else {
-			RouteRequestPlus requests[] = {
-				{"__ZN31AppleIntelFramebufferController18hwInitializeCStateEv",hwInitializeCState, this->ohwInitializeCState},
-			};
-			PANIC_COND(!RouteRequestPlus::routeAll(patcher, index, requests, address, size), "nblue","Failed to route symbols");
-		}
-
 		//static const uint8_t f15[]= {0x00,0x02, 0x00, 0x5c, 0x8a};
 		//static const uint8_t r15[]= {0x00,0x00, 0x00, 0x49, 0x9a};
 		
@@ -1744,7 +1713,6 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		if (isprod) {
 			
 			SolveRequestPlus solveRequests[] = {
-				{"__ZN31AppleIntelFramebufferController19setCDClockFrequencyEy", this->orgSetCDClockFrequency},
 				{"_gPlatformInformationList", this->gPlatformInformationList},
 			};
 			PANIC_COND(!SolveRequestPlus::solveAll(patcher, index, solveRequests, address, size), "ngreen",	"Failed to resolve symbols");
@@ -1752,7 +1720,6 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		else
 		{
 			SolveRequestPlus solveRequests[] = {
-				{"__ZN24AppleIntelBaseController19setCDClockFrequencyEy", this->orgSetCDClockFrequency},
 				{"_gPlatformInformationList", this->gPlatformInformationList},
 			};
 			PANIC_COND(!SolveRequestPlus::solveAll(patcher, index, solveRequests, address, size), "ngreen",	"Failed to resolve symbols");
@@ -1774,14 +1741,6 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				{"__ZN16AppleIntelScaler17programPipeScalerEP21AppleIntelDisplayPath",programPipeScaler, this->oprogramPipeScaler},
 				{"__ZN15AppleIntelPlane19updateRegisterCacheEv",AppleIntelPlaneupdateRegisterCache, this->oAppleIntelPlaneupdateRegisterCache},
 			{"__ZN16AppleIntelScaler19updateRegisterCacheEv",AppleIntelScalerupdateRegisterCache, this->oAppleIntelScalerupdateRegisterCache},
-			{"__ZN19AppleIntelPowerWell20disableDisplayEngineEv",disableDisplayEngine, this->odisableDisplayEngine},
-			{"__ZN19AppleIntelPowerWell19enableDisplayEngineEv",enableDisplayEngine, this->oenableDisplayEngine},
-			// V35: Removed ComboPhyEv hook — causes MCE on RPL/ADL. Firmware calibration sufficient.
-			// V183: write-only ADL-P power well handler; no callthrough (TGL poll loop hangs on RPL).
-			// Real TGL falls through to original via ohwSetPowerWellStatePGE.
-			{"__ZN19AppleIntelPowerWell21hwSetPowerWellStatePGEbj", hwSetPowerWellStatePGE, this->ohwSetPowerWellStatePGE},
-			{"__ZN19AppleIntelPowerWell22hwSetPowerWellStateAuxEbj",hwSetPowerWellStateAux, this->ohwSetPowerWellStateAux},
-			{"__ZN19AppleIntelPowerWell22hwSetPowerWellStateDDIEbj",hwSetPowerWellStateDDI, this->ohwSetPowerWellStateDDI},
 			// V60: ReadRegister32 hooks DISABLED — V59 proved they cause 0-children regression
 			// (display driver loops in forceWake power-well cycling, never completes init)
 			{"__ZN31AppleIntelRegisterAccessManager15WriteRegister32Emj",raWriteRegister32, this->oraWriteRegister32},
@@ -1794,12 +1753,7 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				{"__ZN21AppleIntelFramebuffer4initEP31AppleIntelFramebufferControllerj",AppleIntelFramebufferinit, this->oAppleIntelFramebufferinit},
 				{"__ZN31AppleIntelFramebufferController23initPlatformWorkaroundsEv", initPlatformWorkarounds, this->oinitPlatformWorkarounds},
 				{"__ZN31AppleIntelFramebufferController16getOSInformationEv", getOSInformation, this->ogetOSInformation},
-				{"__ZN31AppleIntelFramebufferController18hwInitializeCStateEv",hwInitializeCState, this->ohwInitializeCState},
-				{"__ZN31AppleIntelFramebufferController20hwConfigureCustomAUXEb",hwConfigureCustomAUX, this->ohwConfigureCustomAUX},
-				{"__ZN19AppleIntelPowerWell4initEP31AppleIntelFramebufferController",AppleIntelPowerWellinit, this->oAppleIntelPowerWellinit},
 				{"__ZN31AppleIntelFramebufferController5startEP9IOService",AppleIntelBaseControllerstart, this->oAppleIntelBaseControllerstart},
-				{"__ZN31AppleIntelFramebufferController21probeCDClockFrequencyEv",wrapProbeCDClockFrequency,	this->orgProbeCDClockFrequency},
-				{"__ZN31AppleIntelFramebufferController14disableCDClockEv",disableCDClock,this->odisableCDClock},
 			};
 			PANIC_COND(!RouteRequestPlus::routeAll(patcher, index, requests, address, size), "ngreen","Failed to route p symbols");
 			
@@ -1809,12 +1763,7 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				{"__ZN21AppleIntelFramebuffer4initEP24AppleIntelBaseControllerj",AppleIntelFramebufferinit, this->oAppleIntelFramebufferinit},
 				{"__ZN24AppleIntelBaseController23initPlatformWorkaroundsEv", initPlatformWorkarounds, this->oinitPlatformWorkarounds},
 				{"__ZN24AppleIntelBaseController16getOSInformationEv", getOSInformation, this->ogetOSInformation},
-				{"__ZN24AppleIntelBaseController18hwInitializeCStateEv",hwInitializeCState, this->ohwInitializeCState},
-				{"__ZN24AppleIntelBaseController20hwConfigureCustomAUXEb",hwConfigureCustomAUX, this->ohwConfigureCustomAUX},
-				{"__ZN19AppleIntelPowerWell4initEP24AppleIntelBaseController",AppleIntelPowerWellinit, this->oAppleIntelPowerWellinit},
 				{"__ZN24AppleIntelBaseController5startEP9IOService",AppleIntelBaseControllerstart, this->oAppleIntelBaseControllerstart},
-				{"__ZN24AppleIntelBaseController21probeCDClockFrequencyEv",wrapProbeCDClockFrequency,	this->orgProbeCDClockFrequency},
-				{"__ZN24AppleIntelBaseController14disableCDClockEv",disableCDClock,this->odisableCDClock},
 			};
 			PANIC_COND(!RouteRequestPlus::routeAll(patcher, index, requests, address, size), "ngreen","Failed to route d symbols");
 			
@@ -3345,62 +3294,6 @@ void Gen11::AppleIntelScalerupdateRegisterCache(AppleIntel::AppleIntelScaler *th
 	FunctionCast(AppleIntelScalerupdateRegisterCache, callback->oAppleIntelScalerupdateRegisterCache)(that);
 }
 
-void Gen11::disableDisplayEngine(AppleIntel::AppleIntelBaseController *that)
-{
-	getMember<void *>(that, 0x78) = ccont;
-	FunctionCast(disableDisplayEngine, callback->odisableDisplayEngine)(that );
-}
-
-void Gen11::enableDisplayEngine(AppleIntel::AppleIntelBaseController *that)
-{
-	getMember<void *>(that, 0x78) = ccont;
-	FunctionCast(enableDisplayEngine, callback->oenableDisplayEngine)(that );
-}
-
-// V183: ADL-P/RPL write-only power well handler.
-// HSW_PWR_WELL_CTL1 (0x45400): REQ bits = odd bits (mask 0xAA: bits 1,3,5,7,...);
-//                               STATE bits = even bits (mask 0x55: bits 0,2,4,6,...).
-// TGL original polls STATE bits after writing REQ — on ADL-P those ACKs
-// never arrive within the 20-iteration timeout, spinning the CPU.
-// Fix: write REQ bits directly to CTL1, skip polling entirely.
-// Previously this wrote to CTL2 (0x45404) — wrong register. CTL2 controls DDI/AUX
-// wells; PG display wells (PG1/PG2) are in CTL1. Writing to CTL2 left CTL1 at the
-// DMC-reset value (0x405, no REQ bits) → hardware never enabled display power domains
-// → vsync interrupts never delivered → GPU ring idle → framebuffer stayed black.
-void Gen11::hwSetPowerWellStatePGE(AppleIntel::AppleIntelBaseController *that, bool param_1, uint param_2)
-{
-	if (!NGreen::callback->isRealTGL) {
-		uint32_t ctl1 = NGreen::callback->readReg32(0x45400);
-		uint32_t newVal;
-		if (param_1) {
-			// Enable: clear all REQ bits then set the requested ones.
-			newVal = (ctl1 & 0xFFFFFF55U) | (param_2 & 0xAAU);
-		} else {
-			// Disable: clear the requested REQ bits.
-			newVal = ctl1 & ~(param_2 & 0xAAU);
-		}
-		SYSLOG("ngreen", "V183.PGE: en=%u mask=0x%x ctl1: 0x%x->0x%x",
-			   (unsigned)param_1, param_2, ctl1, newVal);
-		NGreen::callback->writeReg32(0x45400, newVal);
-		return;
-	}
-	// Real TGL: use original with ccont fixup.
-	getMember<void *>(that, 0x78) = ccont;
-	FunctionCast(hwSetPowerWellStatePGE, callback->ohwSetPowerWellStatePGE)(that, param_1, param_2);
-}
-
-void Gen11::hwSetPowerWellStateAux(AppleIntel::AppleIntelBaseController *that, bool param_1, uint param_2)
-{
-	getMember<void *>(that, 0x78) = ccont;
-	FunctionCast(hwSetPowerWellStateAux, callback->ohwSetPowerWellStateAux)(that,param_1,param_2);
-}
-
-void Gen11::hwSetPowerWellStateDDI(AppleIntel::AppleIntelBaseController *that, bool param_1, uint param_2)
-{
-	getMember<void *>(that, 0x78) = ccont;
-	FunctionCast(hwSetPowerWellStateDDI, callback->ohwSetPowerWellStateDDI)(that,param_1,param_2);
-}
-
 void Gen11::raWriteRegister32b(void *that,void *param_1,unsigned long param_2, UInt32 param_3)
 {
 	raWriteRegister32(that, reinterpret_cast<uint64_t>(param_1) + param_2,param_3);
@@ -3547,394 +3440,6 @@ uint64_t Gen11::getOSInformation(AppleIntel::AppleIntelBaseController *that)
 	return FunctionCast(getOSInformation, callback->ogetOSInformation)(that);
 }
 
-void Gen11::hwInitializeCState(AppleIntel::AppleIntelBaseController *that)
-{
-	if (!that || !ngPhysicalGpuAccessAllowed()) {
-		// Display DMC and physical power wells are not owned by a VF. The
-		// original fallback also performs physical initialization: do not call
-		// it merely because a DMC boot argument was absent.
-		vfMarkProtocolFault("physical DMC initialization on VF/unknown device or null controller");
-		return;
-	}
-	SYSLOG("ngreen", "NB-BUILD-V50-ALLOW-METAL");
-
-	int origB48 = getMember<int>(that, 0xB48);
-	int origCE4 = getMember<int>(that, 0xCE4);
-	SYSLOG("ngreen", "hwInitCState B48=%d CE4=%d", origB48, origCE4);
-
-	// Boot-arg "ngreen-dmc":
-	//   not set or "skip" → safe fallback: passthrough original + AUX only (proven working)
-	//   "tgl"             → load TGL DMC v2.12 blob + TGL display engine registers
-	//                       + ICL/TGL combo PHY signal levels (PHY_A eDP, PHY_B DP)
-	//   "adlp"            → load ADL-P DMC v2.16 blob + ADL-P display engine registers
-	//                       + combo PHY signal levels (PHY_A eDP)
-	//   "icl"             → passthrough original ICL DMC load + ICL combo PHY signal levels
-	char dmcArg[16] = {};
-	PE_parse_boot_argn("ngreen-dmc", dmcArg, sizeof(dmcArg));
-
-	if (dmcArg[0] == 't' || dmcArg[0] == 'T') {
-		// ── TGL DMC ──
-		SYSLOG("ngreen", "hwInitCState: ngreen-dmc=tgl, loading TGL DMC v2.12 (%u dwords)", tgl_dmc_ver2_12_bin_s / 4);
-		// Write TGL DMC blob to MMIO 0x80000+
-		for (unsigned long off = 0; off < tgl_dmc_ver2_12_bin_s; off += 4)
-				NGreen::callback->writeReg32(off + 0x80000,
-					tgl_dmc_ver2_12_bin[off / sizeof(uint32_t)]);
-
-		// Disable DC states before touching display engine registers (same as ADL-P path).
-		// DC_STATE_EN = 0x45504
-		NGreen::callback->writeReg32(DC_STATE_EN, 0);
-
-		// Use UEFI CTL1 as base (same pattern as ADL-P path).
-		uint32_t tglUefiCtl1 = NGreen::callback->readReg32(0x45400);
-		{
-			uint32_t newCtl1 = tglUefiCtl1 | 0x00000401u;
-			NGreen::callback->writeReg32(0x45400, newCtl1); // HSW_PWR_WELL_CTL1
-			NGreen::callback->writeReg32(0x45404, 0x00000C03); // HSW_PWR_WELL_CTL2
-			SYSLOG("ngreen", "V101T: PWR_WELL CTL1 uefi=0x%x->0x%x CTL2=0xc03", tglUefiCtl1, newCtl1);
-		}
-		NGreen::callback->writeReg32(0x45408, 0x40000000); // HSW_PWR_WELL_CTL3
-		NGreen::callback->writeReg32(0x4540C, 0x00000401); // HSW_PWR_WELL_CTL4
-		NGreen::callback->writeReg32(0x45440, 0x00000003); // ICL_PWR_WELL_CTL_AUX1 — AUX A
-		NGreen::callback->writeReg32(0x45444, 0x00000003); // ICL_PWR_WELL_CTL_AUX2 — AUX B
-		NGreen::callback->writeReg32(0x45450, 0x00000003); // ICL_PWR_WELL_CTL_DDI1 — DDI A
-		NGreen::callback->writeReg32(0x45454, 0x00000003); // ICL_PWR_WELL_CTL_DDI2 — DDI B
-
-		// TGL display engine registers (DMC trigger/context regs in 0x8Fxxx range)
-		// Values from IDA of original hwInitializeCState (TGL-native values)
-		NGreen::callback->writeReg32(0x8F074, 0x00006FC0);
-		NGreen::callback->writeReg32(0x8F004, 0x00A40088);
-		NGreen::callback->writeReg32(0x8F034, 0xC003B400);
-
-		// Enable DMC — DC_STATE_DEBUG (0x45520) = 2
-		NGreen::callback->writeReg32(0x45520, 2); // DC_STATE_DEBUG
-		NGreen::callback->dmcIsAdlp = true;        // reuse flag: also protects TGL path via V103/V104P
-		NGreen::callback->uefiCtl1  = tglUefiCtl1;
-		SYSLOG("ngreen", "hwInitCState: TGL DMC loaded");
-		// setSignalLevels block REMOVED for the same reason as the ADL-P branch:
-		// Linux i915 (per /Volumes/EFI/syslog.txt drm trace) only calls setSignalLevels
-		// during DP link training, where swing=0/0/0/0 is the negotiation STARTING point
-		// before DPRX adjust-request bumps it to vswing=1/1/1/1. Calling it once at
-		// hwInitCState with all-zero levels freezes the combo PHY at the lowest drive
-		// strength forever → DP receivers read garbage bitRates, link silently fails.
-		// {
-		// 	uint8_t swing[4]   = {0, 0, 0, 0};
-		// 	uint8_t preEmph[4] = {0, 0, 0, 0};
-		// 	IntelDPLinkTraining::setSignalLevels(/*phy=*/0, /*lanes=*/4, /*isHBR2=*/false, /*isDP=*/true, swing, preEmph);
-		// 	IntelDPLinkTraining::setSignalLevels(/*phy=*/1, /*lanes=*/4, /*isHBR2=*/false, /*isDP=*/true, swing, preEmph);
-		// }
-		// Let original run with B48=1 (ICL CSR blob loads to SRAM).
-		// Same rationale as ADL-P: the TGL DMC firmware also causes lane drops because its
-		// DC state management runs on ADL-P hardware; the ICL DMC is safer on this silicon.
-		// TGL context regs (8Fxxx) are re-applied after so the display engine sees TGL values.
-		FunctionCast(hwInitializeCState, callback->ohwInitializeCState)(that);
-		// Re-apply TGL context regs overwritten by original's ICL blob load.
-		NGreen::callback->writeReg32(0x8F074, 0x00006FC0);
-		NGreen::callback->writeReg32(0x8F004, 0x00A40088);
-		NGreen::callback->writeReg32(0x8F034, 0xC003B400);
-		SYSLOG("ngreen", "V104T: TGL context regs re-applied after ICL blob load");
-		// V102T: restore CTL1 after original (ICL DMC save/restore table may write 0x401).
-		{
-			uint32_t postCtl1 = NGreen::callback->readReg32(0x45400);
-			uint32_t fixCtl1  = tglUefiCtl1 | 0x00000401u;
-			if (postCtl1 != fixCtl1) {
-				NGreen::callback->writeReg32(0x45400, fixCtl1);
-				SYSLOG("ngreen", "V102T: restore PWR_WELL CTL1 0x%x->0x%x", postCtl1, fixCtl1);
-			}
-		}
-
-	} else if (dmcArg[0] == 'a' || dmcArg[0] == 'A') {
-		// ── ADL-P DMC ──
-		SYSLOG("ngreen", "hwInitCState: ngreen-dmc=adlp, loading ADL-P DMC v2.16 (%u dwords)", adlp_dmc_ver2_16_bin_s / 4);
-		// adlp_dmc_ver2_16_bin is the raw firmware payload extracted from the v3 blob
-		// (adlp_dmc_ver2_16.bin: CSS+package/v3 headers stripped, main payload at file offset 0x310).
-		// Write directly to SRAM starting at 0x80000.
-		for (unsigned long off = 0; off < adlp_dmc_ver2_16_bin_s; off += 4)
-				NGreen::callback->writeReg32(off + 0x80000,
-					adlp_dmc_ver2_16_bin[off / sizeof(uint32_t)]);
-
-		// Disable DC states before touching display engine registers.
-		// If DC5/DC6 is active when we write, the clock-gated blocks won't latch the writes.
-		// DC_STATE_EN = 0x45504 (confirmed: Archive HIGH, linux display/intel_display_regs.h)
-		NGreen::callback->writeReg32(DC_STATE_EN, 0);
-
-		// Power wells — Gen12 ICL-style DDI + AUX power well enable.
-		// HSW_PWR_WELL_CTL1/2 (0x45400/45404): PG1/PG2 enable+state — values read from
-		// Linux intel_reg dump on same hardware (reg_dump.txt):
-		//   CTL1=0x00000401 (PG1 req+enabled), CTL2=0x00000C03 (PG1+PG2 req+enabled)
-		//   CTL3=0x40000000 (PG3 state only), CTL4=0x00000401
-		// V100: preserve UEFI CTL1 state bits (bits 12,14 = display power wells enabled).
-		// Writing the hardcoded 0x401 clears those bits, breaking vsync interrupt delivery
-		// → WindowServer crash at ~60s ("Display not ready").
-		// Fix: read UEFI CTL1 and OR in our minimum bits; keep CTL2 hardcoded at 0x0C03.
-		// DO NOT OR CTL2 with UEFI: UEFI leaves 0xfc00 (TC port "state" bits) set in CTL2.
-		// Asserting TC bits without IOM handshake disrupts the display domain during mode
-		// change, preventing the WSA un-blank (stays at 0x1, no cursor, no desktop).
-		uint32_t uefiCtl1 = NGreen::callback->readReg32(0x45400);
-		{
-			uint32_t newCtl1  = uefiCtl1 | 0x00000401u;  // ensure PG1 req+state bits set
-			NGreen::callback->writeReg32(0x45400, newCtl1); // HSW_PWR_WELL_CTL1
-			NGreen::callback->writeReg32(0x45404, 0x00000C03); // HSW_PWR_WELL_CTL2 — hardcoded, no TC bits
-			SYSLOG("ngreen", "V101: PWR_WELL CTL1 uefi=0x%x->0x%x CTL2=0xc03",
-				   uefiCtl1, newCtl1);
-		}
-		NGreen::callback->writeReg32(0x45408, 0x40000000); // HSW_PWR_WELL_CTL3
-		NGreen::callback->writeReg32(0x4540C, 0x00000401); // HSW_PWR_WELL_CTL4
-		// ICL_PWR_WELL_CTL_AUX1/2 (0x45440/45444): enable AUX power wells A+B
-		// bit1=req, bit0=enabled per ICL DDI power well HW spec (intel_display_regs.h)
-		NGreen::callback->writeReg32(0x45440, 0x00000003); // ICL_PWR_WELL_CTL_AUX1 — AUX A enabled
-		NGreen::callback->writeReg32(0x45444, 0x00000003); // ICL_PWR_WELL_CTL_AUX2 — AUX B enabled
-		// ICL_PWR_WELL_CTL_DDI1/2 (0x45450/45454): enable DDI power wells A+B
-		NGreen::callback->writeReg32(0x45450, 0x00000003); // ICL_PWR_WELL_CTL_DDI1 — DDI A enabled
-		NGreen::callback->writeReg32(0x45454, 0x00000003); // ICL_PWR_WELL_CTL_DDI2 — DDI B enabled
-
-		// ADL-P / RPL-P display engine registers — exact MMIO init pairs from v3 blob header
-		// (adlp_dmc_ver2_16.bin header @ 0x0210, MMIO[0..6], stepping='A' variant)
-		NGreen::callback->writeReg32(0x8F074, 0x00086FC0);
-		NGreen::callback->writeReg32(0x8F034, 0xC003B400);
-		NGreen::callback->writeReg32(0x8F004, 0x01240108);
-		NGreen::callback->writeReg32(0x8F038, 0xC003B200); // was missing
-		NGreen::callback->writeReg32(0x8F008, 0x4FE44F98); // corrected from 0x512050D4
-		NGreen::callback->writeReg32(0x8F03C, 0xC003B300);
-		NGreen::callback->writeReg32(0x8F00C, 0x571056C0); // corrected from 0x584C57FC
-		// DDI C-F (ADL-P TC port registers — DKL PHY, 0x5Fxxx range)
-		NGreen::callback->writeReg32(0x5F074, 0x00096FC0);
-		NGreen::callback->writeReg32(0x5F034, 0xC003DF00);
-		NGreen::callback->writeReg32(0x5F004, 0x214C2114);
-		NGreen::callback->writeReg32(0x5F038, 0xC003E000);
-		NGreen::callback->writeReg32(0x5F008, 0x22402208);
-		NGreen::callback->writeReg32(0x5F03C, 0xC0032C00);
-		NGreen::callback->writeReg32(0x5F00C, 0x241422FC);
-		NGreen::callback->writeReg32(0x5F040, 0xC0033100);
-		NGreen::callback->writeReg32(0x5F010, 0x26F826CC);
-		NGreen::callback->writeReg32(0x5F474, 0x0009EFC0);
-		NGreen::callback->writeReg32(0x5F434, 0xC003DF00);
-		NGreen::callback->writeReg32(0x5F404, 0xA968A930);
-		NGreen::callback->writeReg32(0x5F438, 0xC003E000);
-		NGreen::callback->writeReg32(0x5F408, 0xAA5CAA24);
-		NGreen::callback->writeReg32(0x5F43C, 0xC0032C00);
-		NGreen::callback->writeReg32(0x5F40C, 0xAC30AB18);
-		NGreen::callback->writeReg32(0x5F440, 0xC0033100);
-		NGreen::callback->writeReg32(0x5F410, 0xAF14AEE8);
-		NGreen::callback->writeReg32(0x5F874, 0x00053FC0);
-		NGreen::callback->writeReg32(0x5F83C, 0xC0032C00);
-		NGreen::callback->writeReg32(0x5F80C, 0x25202408);
-		NGreen::callback->writeReg32(0x5F840, 0xC0033100);
-		NGreen::callback->writeReg32(0x5F810, 0x280427D8);
-		NGreen::callback->writeReg32(0x5FC3C, 0xC0032C00);
-		NGreen::callback->writeReg32(0x5FC0C, 0x95209408);
-		NGreen::callback->writeReg32(0x5FC40, 0xC0033100);
-		NGreen::callback->writeReg32(0x5FC10, 0x980497D8);
-
-		// Transcoder A DDI function + timing registers (re-imported from EFI reference for safety).
-		// Values from Linux intel_reg dump on this hardware (reg_dump.txt).
-		//   0x60400 = TRANS_DDI_FUNC_CTL_A  — DDI A enabled, DP SST, 8bpc, 2 lanes
-		//   0x60000 = TRANS_HTOTAL_A        — 2560 active, 2720 total
-		//   0x60004 = TRANS_HBLANK_A        — same as HTOTAL on eDP
-		//   0x60008 = TRANS_HSYNC_A         — sync positions
-		//   0x6000C = TRANS_VTOTAL_A        — 1600 active, 1750 total
-		//   0x60010 = TRANS_VBLANK_A
-		//   0x60014 = TRANS_VSYNC_A
-		//   0x60028 = TRANS_VSYNCSHIFT_A
-		//   0x60030/34 TRANS_DATA_M1/N1_A   — DP M/N values (TU 64, link rate)
-		//   0x60040/44 TRANS_LINK_M1/N1_A
-		// 0x8A000106: bit31=enable, [27:24]=DDI_A, [19:16]=2lanes, [3:1]=DP_SST(0x01)
-		// Pre-matches Apple's target so paramsFbCompare sees no lane-count change; changing
-		// lane count in TRANS_DDI_FUNC_CTL while transcoder is live resets the DDI buffer
-		// and drops the trained link.
-		NGreen::callback->writeReg32(0x60400, 0x8A000106); // TRANS_DDI_FUNC_CTL_A
-		NGreen::callback->writeReg32(0x60000, 0x0A9F09FF); // TRANS_HTOTAL_A
-		NGreen::callback->writeReg32(0x60004, 0x0A9F09FF); // TRANS_HBLANK_A
-		NGreen::callback->writeReg32(0x60008, 0x0A4F0A2F); // TRANS_HSYNC_A
-		NGreen::callback->writeReg32(0x6000C, 0x06D5063F); // TRANS_VTOTAL_A
-		NGreen::callback->writeReg32(0x60010, 0x06D50000); // TRANS_VBLANK_A
-		NGreen::callback->writeReg32(0x60014, 0x06480642); // TRANS_VSYNC_A
-		NGreen::callback->writeReg32(0x60028, 0x00000000); // TRANS_VSYNCSHIFT_A
-		NGreen::callback->writeReg32(0x60030, 0x7E5D159E); // TRANS_DATA_M1_A  (TU 64, M=0x5d159e)
-		NGreen::callback->writeReg32(0x60034, 0x00800000); // TRANS_DATA_N1_A  (N=0x800000)
-		NGreen::callback->writeReg32(0x60040, 0x0007C1CD); // TRANS_LINK_M1_A  (M=0x7c1cd)
-		NGreen::callback->writeReg32(0x60044, 0x00080000); // TRANS_LINK_N1_A  (N=0x80000)
-
-		// Panel power sequencer (re-imported from EFI reference).
-		// TGL/ADL-P both have PCH_SPLIT (ICP/TGP PCH) → intel_pps_setup sets
-		// mmio_base = PCH_PPS_BASE = 0xC7200 (not 0x61200 which is BXT/APL).
-		// Values from Linux intel_reg dump on this hardware:
-		//   0xC7204 (PP_CONTROL)   = 0x00000067 (panel on, VDD on, power-on target)
-		//   0xC7208 (PP_ON_DELAYS) = 0x07D00001 (T1=1, T3=2000ms power-on delays)
-		NGreen::callback->writeReg32(0xC7204, 0x00000067); // PP_CONTROL
-		NGreen::callback->writeReg32(0xC7208, 0x07D00001); // PP_ON_DELAYS
-
-		// PIPE_CLK_SEL_A (0x46140 = 0x10000000) REMOVED after the EFI re-import caused
-		// "CD Clock PLL is locked" line to disappear from the FB log and link bitRates to
-		// turn into garbage (27/40/63 instead of 179/204/206). Empirical: writing this
-		// value to 0x46140 here either selects a clock source that prevents CD PLL lock,
-		// or 0x46140 isn't actually PIPE_CLK_SEL on Display 13 (ADL-P) — Linux i915
-		// names it differently for ADL-P. Leave for Apple's later mode-setup to program.
-		// NGreen::callback->writeReg32(0x46140, 0x10000000); // PIPE_CLK_SEL_A
-
-		// Enable DMC — DC_STATE_DEBUG (0x45520) = 2
-		NGreen::callback->writeReg32(0x45520, 2); // DC_STATE_DEBUG
-		NGreen::callback->dmcIsAdlp = true;
-		NGreen::callback->uefiCtl1  = uefiCtl1;  // save for V60 re-enforcement
-		SYSLOG("ngreen", "hwInitCState: ADL-P DMC loaded");
-		// setSignalLevelsADLP block REMOVED after the EFI re-import caused link bitRates
-		// to turn into garbage (27/40/63 instead of 179/204/206). Likely cause: calling
-		// it with swing[]=preEmph[]={0,0,0,0} BEFORE Apple's link training overwrites
-		// the UEFI-trained combo PHY DW2/4/5/7 with zero levels → DP link reads back
-		// nonsense bitrates. The setSignalLevels function should only be invoked DURING
-		// link training when swing/preEmph are properly populated, not as init scaffolding.
-		// Left as a comment so we can re-enable surgically once real swing values are known.
-		// {
-		// 	uint8_t swing[4]   = {0, 0, 0, 0};
-		// 	uint8_t preEmph[4] = {0, 0, 0, 0};
-		// 	IntelDPLinkTraining::setSignalLevelsADLP(/*phy=*/0, /*lanes=*/4, /*isHBR2=*/false, /*isEDP=*/true,  swing, preEmph);
-		// 	IntelDPLinkTraining::setSignalLevelsADLP(/*phy=*/1, /*lanes=*/4, /*isHBR2=*/false, /*isEDP=*/false, swing, preEmph);
-		// }
-		// Let original run with B48=1 so the ICL CSR blob is loaded to SRAM.
-		// The ADL-P DMC firmware (even correct binary) autonomously drops all eDP lanes
-		// at ~10s because its DC state management code runs on ADL-P hardware and performs
-		// link maintenance that the ICL driver can't recover from. The ICL DMC running on
-		// ADL-P hardware does NOT cause lane drops (it doesn't know ADL-P DC3CO/PSR2).
-		// Our ADL-P display engine context regs (8Fxxx) are re-applied after the original
-		// so the display engine still sees ADL-P-correct values despite ICL SRAM content.
-		FunctionCast(hwInitializeCState, callback->ohwInitializeCState)(that);
-		// Re-apply ADL-P context regs overwritten by original's ICL blob load.
-		NGreen::callback->writeReg32(0x8F074, 0x00086FC0);
-		NGreen::callback->writeReg32(0x8F034, 0xC003B400);
-		NGreen::callback->writeReg32(0x8F004, 0x01240108);
-		NGreen::callback->writeReg32(0x8F038, 0xC003B200);
-		NGreen::callback->writeReg32(0x8F008, 0x4FE44F98);
-		NGreen::callback->writeReg32(0x8F03C, 0xC003B300);
-		NGreen::callback->writeReg32(0x8F00C, 0x571056C0);
-		SYSLOG("ngreen", "V104: ADL-P context regs re-applied after ICL blob load");
-		// V102: CTL1 restore — ICL DMC save/restore table writes CTL1=0x401, clearing
-		{
-			uint32_t postCtl1 = NGreen::callback->readReg32(0x45400);
-			uint32_t fixCtl1  = uefiCtl1 | 0x00000401u;
-			if (postCtl1 != fixCtl1) {
-				NGreen::callback->writeReg32(0x45400, fixCtl1);
-				SYSLOG("ngreen", "V102: restore PWR_WELL CTL1 0x%x->0x%x", postCtl1, fixCtl1);
-			}
-		}
-		// V105: disable PSR1+PSR2 — the ICL DMC initializer (original hwInitializeCState)
-		// enables PSR2 (EDP_PSR2_CTL bit 0 = 1) for the eDP panel. On ADL-P hardware with
-		// the ICL driver the PSR2 selective-update path is non-functional: the panel locks
-		// into self-refresh showing the initial black frame; only the cursor plane (separate
-		// SU path) updates. Clearing both registers before the first frame is displayed
-		// restores normal scanout. Confirmed root cause via V76: PSR2_CTL=0x4811, V88
-		// direct physical writes to SURF invisible despite valid GGTT PTEs.
-		{
-			// V105 ADDRESS FIX: PSR1 control on TGL is at 0x60800 (transcoder EDP space),
-			// NOT 0x64800 (older Gen ICL/SKL layout). Pre-fix V105 was writing to a wrong
-			// register; PSR1 stayed enabled at 0x60800 = 0x00100001, panel kept refreshing
-			// from its own cache, screen frozen on first frame even while PIPE_FRMCOUNT
-			// kept advancing. Probe V205 caught this. Now writes to both addresses for
-			// safety (0x60800 = TGL, 0x64800 = legacy/ICL — covers both spoof paths).
-			uint32_t psr2ctl     = NGreen::callback->readReg32(0x60A10);  // EDP_PSR2_CTL TGL
-			uint32_t psr1ctlTgl  = NGreen::callback->readReg32(0x60800);  // EDP_PSR_CTL  TGL
-			uint32_t psr1ctlIcl  = NGreen::callback->readReg32(0x64800);  // EDP_PSR_CTL  ICL
-			uint32_t psr2ctlIcl  = NGreen::callback->readReg32(0x60900);  // EDP_PSR2_CTL ICL
-			NGreen::callback->writeReg32(0x60A10, 0);  // PSR2 TGL
-			NGreen::callback->writeReg32(0x60800, 0);  // PSR1 TGL  ← THE ACTUAL FIX
-			NGreen::callback->writeReg32(0x60900, 0);  // PSR2 legacy
-			NGreen::callback->writeReg32(0x64800, 0);  // PSR1 legacy
-			SYSLOG("ngreen", "V105: PSR disabled — TGL(PSR1=0x%x PSR2=0x%x) legacy(PSR1=0x%x PSR2=0x%x)",
-				   psr1ctlTgl, psr2ctl, psr1ctlIcl, psr2ctlIcl);
-		}
-
-	} else if (dmcArg[0] == 'i' || dmcArg[0] == 'I') {
-		// ── ICL ──
-		// ICL is the native target. PHY levels belong to actual link training;
-		// identical register layout does not make TGL electrical tables valid
-		// for ICL or justify forcing two unnegotiated four-lane HBR links here.
-		SYSLOG("ngreen", "hwInitCState: ngreen-dmc=icl, native passthrough");
-		FunctionCast(hwInitializeCState, callback->ohwInitializeCState)(that);
-		SYSLOG("ngreen", "hwInitCState: ICL done");
-
-	} else {
-		// ── skip (default, safe fallback) ──
-		// Proven working: just let original run + configure AUX.
-		// No DMC blob, no display engine register writes.
-		SYSLOG("ngreen", "hwInitCState: skip (safe fallback), passthrough original");
-		FunctionCast(hwInitializeCState, callback->ohwInitializeCState)(that);
-	}
-
-	hwConfigureCustomAUX(that, true);
-	SYSLOG("ngreen", "hwInitCState: done");
-}
-
-void NGreen::adlpDcExit(const char *caller) {
-	if (!dmcIsAdlp) return;
-	const uint32_t dcState = readReg32(0x45504); // DC_STATE_EN
-	if (dcState == 0) return;
-	static int adlpDcExitCount = 0;
-	if (adlpDcExitCount < 48) {
-		adlpDcExitCount++;
-		SYSLOG("ngreen", "adlpDcExit[%s/%d]: DC_STATE_EN=0x%x — restoring ADL-P display state", caller, adlpDcExitCount, dcState);
-	}
-	// 1. Disable DC states so clock-gated blocks latch the writes below.
-	writeReg32(0x45504, 0);
-	// 2. Restore power wells (request enable on CTL1/2/3/4 + AUX A/B + DDI A/B).
-	writeReg32(0x45400, uefiCtl1 | 0x401u);  // PWR_WELL_CTL1
-	writeReg32(0x45404, 0x0C03u);             // PWR_WELL_CTL2
-	writeReg32(0x45408, 0x40000000u);         // PWR_WELL_CTL3
-	writeReg32(0x4540C, 0x401u);              // PWR_WELL_CTL4
-	writeReg32(0x45440, 0x3u);               // ICL_PWR_WELL_CTL_AUX1 — AUX A
-	writeReg32(0x45444, 0x3u);               // ICL_PWR_WELL_CTL_AUX2 — AUX B
-	writeReg32(0x45450, 0x3u);               // ICL_PWR_WELL_CTL_DDI1 — DDI A
-	writeReg32(0x45454, 0x3u);               // ICL_PWR_WELL_CTL_DDI2 — DDI B
-	// 3. Restore ADL-P display engine context registers (saved by DMC on DC entry).
-	writeReg32(0x8F074, 0x00086FC0u);
-	writeReg32(0x8F034, 0xC003B400u);
-	writeReg32(0x8F004, 0x01240108u);
-	writeReg32(0x8F038, 0xC003B200u);
-	writeReg32(0x8F008, 0x4FE44F98u);
-	writeReg32(0x8F03C, 0xC003B300u);
-	writeReg32(0x8F00C, 0x571056C0u);
-	// 4. Restore panel power sequencer.
-	writeReg32(0xC7204, 0x67u);  // PP_CONTROL
-	// 5. Disable PSR — DMC may have re-enabled it on DC exit.
-	writeReg32(0x60800, 0u);   // EDP_PSR_CTL (TGL)
-	writeReg32(0x60A10, 0u);   // EDP_PSR2_CTL (TGL)
-	if (adlpDcExitCount <= 48) {
-		SYSLOG("ngreen", "adlpDcExit[%s]: restore complete", caller);
-	}
-}
-
-void Gen11::AppleIntelPowerWellinit(AppleIntel::AppleIntelPowerWell *that, AppleIntel::AppleIntelBaseController *param_1)
-{
-	ccont = param_1->fRegCachePool;
-
-	FunctionCast(AppleIntelPowerWellinit, callback->oAppleIntelPowerWellinit)(that, param_1);
-
-	// After callthrough the south display domain is clocked; direct BAR read is safe.
-	uint32_t pg  = NGreen::callback->readReg32(0x45404);
-	uint32_t ddi = NGreen::callback->readReg32(0x45454);
-	uint32_t aux = NGreen::callback->readReg32(0x45444);
-	SYSLOG("ngreen", "PowerWell::init UEFI state — PG=0x%08x DDI=0x%08x AUX=0x%08x", pg, ddi, aux);
-
-	// Apple's PowerWell::init checks fController->flags_ig & FB_FLAG_BOOST_PIXEL_FREQUENCY_LIMIT
-	// (+0xC58) before setting fAlwaysOn=1. On RPL/ADL that flag isn't set when the kext first
-	// calls PowerWell::init (initPlatformWorkarounds runs later), so fAlwaysOn stays 0 and
-	// Apple can gate power wells off. We force fAlwaysOn=1 unconditionally on non-real-TGL.
-	// Also stamp fMMIO in case Apple's TGL-path init skipped it on ADL-P hardware.
-	SYSLOG("ngreen", "PowerWell::init — flags_ig=0x%x fAlwaysOn(before)=%u fMMIO=%p",
-		   param_1->flags_ig, that->fAlwaysOn, that->fMMIO);
-	if (!NGreen::callback->isRealTGL) {
-		that->fAlwaysOn = 1;
-		if (!that->fMMIO) that->fMMIO = reinterpret_cast<AppleIntel::AppleIntelMMIO *>(ccont);
-		SYSLOG("ngreen", "PowerWell::init forced fAlwaysOn=1, fMMIO=%p fMMIOBase=%p",
-			   that->fMMIO, that->fMMIO ? that->fMMIO->fMMIOBase : nullptr);
-	}
-	SYSLOG("ngreen", "PowerWell::init done — fAlwaysOn=%u fPGBase=%u PG1=%u PG2=%u PG3=%u PG4=%u",
-		   that->fAlwaysOn, that->fPGBase, that->fPG1, that->fPG2, that->fPG3, that->fPG4);
-	SYSLOG("ngreen", "PowerWell::init DDI — [0]=%u [1]=%u [2]=%u [3]=%u [4]=%u [5]=%u [6]=%u [7]=%u [8]=%u",
-		   that->fDDI[0], that->fDDI[1], that->fDDI[2], that->fDDI[3], that->fDDI[4],
-		   that->fDDI[5], that->fDDI[6], that->fDDI[7], that->fDDI[8]);
-	SYSLOG("ngreen", "PowerWell::init AUX — [0]=%u [1]=%u [2]=%u [3]=%u [4]=%u [5]=%u [6]=%u [7]=%u [8]=%u",
-		   that->fAUX[0], that->fAUX[1], that->fAUX[2], that->fAUX[3], that->fAUX[4],
-		   that->fAUX[5], that->fAUX[6], that->fAUX[7], that->fAUX[8]);
-}
-
 bool Gen11::AppleIntelBaseControllerstart(AppleIntel::AppleIntelBaseController *that, IOService *param_1)
 {
 	if (!that || !ngPhysicalGpuAccessAllowed())
@@ -3989,77 +3494,6 @@ bool Gen11::AppleIntelBaseControllerstart(AppleIntel::AppleIntelBaseController *
 	}
 
 	return ret;
-}
-
-uint32_t Gen11::wrapProbeCDClockFrequency(AppleIntel::AppleIntelBaseController *that) {
-
-	// Sonoma probeCDClockFrequency checks reg 0x46070 (BXT_DE_PLL_ENABLE) bit 31 first.
-	// If bit 31 is CLEAR it panics immediately: "Wrong CD clock frequency set by EFI".
-	// EFI on Hackintosh may leave this clear, so we ensure it is set before calling the original.
-	auto squash = NGreen::callback->readReg32(BXT_DE_PLL_ENABLE);  // byte addr OK — readReg32 divides internally
-	if (!(squash & BXT_DE_PLL_PLL_ENABLE)) {
-		DBGLOG("ngreen", "wrapProbeCDClockFrequency: BXT_DE_PLL_PLL_ENABLE (0x46070 bit31) was clear (0x%x), setting it", squash);
-		NGreen::callback->writeReg32(BXT_DE_PLL_ENABLE, squash | BXT_DE_PLL_PLL_ENABLE);
-	}
-
-	// Always sanitize (disable + reprogram PLL) regardless of current CDCLK value.
-	//
-	// When BIOS leaves CDCLK already at >= 648 MHz (threshold), skipping sanitize causes
-	// orgProbeCDClockFrequency to take the "cdclk already at target" path, which reads PCU
-	// mailbox command 0x6 (PCODE_CDCLK_CONFIG verify). On ADL-P this returns 0x9b9b9b9b
-	// (PCU not responding / command not supported), causing initCDClock to return an error.
-	// start() then skips port allocation and boot display setup entirely — no hwUpdateCursorMemory,
-	// no cursor GGTT entries → full black screen even when the display link is trained.
-	//
-	// Always calling sanitize takes the "frequency changed" success path in initCDClock,
-	// which writes mailbox(7,2) ACK and skips the failing PCU 0x6 verify read.
-	auto cdclk = NGreen::callback->readReg32(ICL_REG_CDCLK_CTL) & CDCLK_FREQ_DECIMAL_MASK;  // byte addr OK
-	SYSLOG("ngreen", "wrapProbeCDClockFrequency: cdclk=0x%x, force-sanitizing to bypass PCU mailbox failure", cdclk);
-	sanitizeCDClockFrequency(that);
-
-	auto retVal = callback->orgProbeCDClockFrequency(that);
-	return retVal;
-}
-
-void Gen11::sanitizeCDClockFrequency(AppleIntel::AppleIntelBaseController *that) {
-
-	//auto referenceFrequency = callback->wrapReadRegister32(that, SKL_DSSM) & ICL_DSSM_CDCLK_PLL_REFCLK_MASK;
-	auto referenceFrequency =NGreen::callback->readReg32(ICL_REG_DSSM)>> 29;
-	//auto referenceFrequency = callback->wrapReadRegister32(that, ICL_REG_DSSM) >> 29;
-	uint32_t newPLLFrequency = 0;
-	switch (referenceFrequency) {
-		case ICL_REF_CLOCK_FREQ_19_2:
-			newPLLFrequency = ICL_CDCLK_PLL_FREQ_REF_19_2;
-			break;
-			
-		case ICL_REF_CLOCK_FREQ_24_0:
-			newPLLFrequency = ICL_CDCLK_PLL_FREQ_REF_24_0;
-			break;
-			
-		case ICL_REF_CLOCK_FREQ_38_4:
-			newPLLFrequency = ICL_CDCLK_PLL_FREQ_REF_38_4;
-			break;
-			
-		default:
-			return;
-	}
-
-	DBGLOG("ngreen", "sanitizeCDClockFrequency: ref=%u targetPll=0x%x", referenceFrequency, newPLLFrequency);
-
-	// Use solved original directly so sanitize remains safe even when disableCDClock route is toggled off.
-	if (callback->orgDisableCDClock) {
-		callback->orgDisableCDClock(that);
-	} else {
-		disableCDClock(that);
-	}
-
-	callback->orgSetCDClockFrequency(that, newPLLFrequency);
-
-}
-
-void Gen11::disableCDClock(AppleIntel::AppleIntelBaseController *that)
-{
-	FunctionCast(disableCDClock, callback->odisableCDClock)(that );
 }
 
 unsigned long Gen11::start(void *that, void *provider)
@@ -6539,18 +5973,6 @@ void Gen11::injectAcceleratorPersonality(bool useTglNames)
 		array->release();
 	}
 	dict->release();
-}
-
-void Gen11::hwConfigureCustomAUX(AppleIntel::AppleIntelBaseController *that, bool param_1)
-{
-	SYSLOG("ngreen", "hwAUX p1=%d CE4=%d",
-		(int)param_1, getMember<int>(that, 0xCE4));
-
-	// Pure passthrough — V12 showed that the native "Custom AUX enable" logic works
-	// correctly on ADL-P hardware. The 0x863xx PHY writes added in V12 broke EDID
-	// (56283 µs failure). Native-only: EDID succeeded in 3663 µs on same hardware.
-	if (callback->ohwConfigureCustomAUX)
-		FunctionCast(hwConfigureCustomAUX, callback->ohwConfigureCustomAUX)(that, param_1);
 }
 
 // V212: The GPU watchdog calls isGpuIdle() after engine init to decide if the GPU is healthy.

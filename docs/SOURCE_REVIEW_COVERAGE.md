@@ -42,18 +42,18 @@ sources returns the current count to 1,303; this does not close older coverage.
 | DisplayMergeNub.cpp/.h | Read end-to-end; validates inputs, bounds recursion, copies introduced nested dictionaries and stages the complete provider table before one publication. Actual IOKit behavior and races with unrelated external registry writers remain open |
 | IntelDPLinkTraining.cpp/.hpp | Read and tables compared with i915; corrected PHY layout, physical-only guards; full platform/stepping/link-training integration remains open |
 | kern_start.cpp | Read; lifecycle integration still depends on the unfinished driver |
-| Firmware.cpp, FirmwareADLP.cpp | All payload bytes compared to pinned upstream containers; bounds fixed; NOT a firmware-instruction semantic review |
+| Firmware.cpp, FirmwareADLP.cpp (removed) | Payload bytes were compared to pinned upstream containers before removal. Their only consumer was the retired manual DMC/MMIO loader; native physical drivers now own DMC lifecycle, and a VF owns none of it |
 | kern_gpu_capabilities.hpp, kern_guc_ring.hpp, kern_ggtt_bounds.hpp, kern_ggtt_rotation.hpp, kern_pattern_match.hpp, kern_dvmt_patch.hpp, kern_context_pool.hpp, kern_binary_identity.hpp, kern_pci_identity.hpp | Implementations read and offline-tested; GPU/PF identity now gates native TGL branches instead of CPUID, all GGTT unmap/CTB lifecycle states are checked, 4,096 rotation matrices are verified as bounded permutations, and every 8-bit Gen9+ GMS encoding is checked for exact 32-bit representability. Tests cover pure helpers, not all caller lifetime/hardware contracts. |
 | kern_vf_irq_gate.hpp, kern_vf_context_shutdown.hpp, kern_vf_submission_gate.hpp | Read and exhaustively checked as pure state machines. The callback/operation admission gates, all nine direct-LRCA shutdown classifications and all 512 native-producer admission combinations are covered; actual firmware completion and DMA behavior still require controlled hardware validation. |
 | kern_context_descriptor.hpp | Read; packed native descriptor now decoded without alignment assumptions; object lifetime/readability remains a caller contract |
 | kern_unaligned.hpp | Read; little-endian 32/64-bit reads and writes tested over offsets 0..15 with canaries; callers retain mapping/lifetime obligations |
 | kern_model.hpp | Read; cosmetic branding lookup only, not a capability/support table; marketing labels not independently certified |
 | kern_netdbg.cpp/.hpp (removed) | Read completely; unbuilt/unreferenced retired logger with overread, port-shadowing and error/locking defects; recoverable in Git |
-| Firmware.hpp | Read; external DMC declarations only; payload and loader limitations remain in the protocol audit |
+| Firmware.hpp, tools/check-dmc-blobs.sh (removed) | Read; declarations and byte-comparison helper became unreferenced with the manual DMC loader and were removed |
 | kern_workqueue_unwind.hpp, tools/workqueue_unwind_test.cpp | Read; failed-init resource ordering tested offline; native object destruction and caller failure propagation remain incomplete |
 | AppleIntelParams.hpp | Read all 624 lines; compiler layout dump confirms unasserted controller/framebuffer tail offsets drift from comments. No direct callers of the checked mismatched fields found; generator and pinned-binary verification remain incomplete |
 | Info.plist | Read all 124 lines; main personality/build identifiers and SchedulerType consumer inspected; profile metadata has no main-source/tools consumer found, display injection remains hardware-specific; not a supported-device matrix |
-| IGGucBinary.h, IGHucBinary.h (removed) | Read as opaque 2017 Apple firmware arrays; no include or symbol consumer existed. Removed their 244-KiB source payload and product-header entries; recoverable in Git. Runtime firmware continues to come from the separately verified DMC sources/native driver paths. |
+| IGGucBinary.h, IGHucBinary.h (removed) | Read as opaque 2017 Apple firmware arrays; no include or symbol consumer existed. Removed their 244-KiB source payload and product-header entries; recoverable in Git. Runtime firmware remains owned by admitted native/PF driver paths. |
 
 ## Evidence rules
 
@@ -141,6 +141,15 @@ sources returns the current count to 1,303; this does not close older coverage.
   DPCD, link-status recovery and modeset comparison are authoritative again on
   ICL/TGL physical framebuffer paths. Power-well, DMC/CDCLK and remaining byte
   patches are still open. `/tmp/ngreen-static.dZ50PB` passes the full suite.
+
+- Manual DMC SRAM upload and DC-exit replay, fixed transcoder/link/panel values,
+  no-ACK power-well replacement, forced `fAlwaysOn` and unconditional CDCLK
+  disable/reprogram were removed. Native physical firmware, power and clock
+  lifecycle is authoritative; VF admission already rejects the framebuffer.
+  The two now-unreferenced firmware payload sources and their comparison tool
+  were removed from source/build metadata. Remaining framebuffer byte patches
+  and accessor-repair routes are still open. `/tmp/ngreen-static.ZxzxZm`
+  passes the full suite; macOS project/build validation remains a CI gate.
 
 ### Boot-policy cleanup
 

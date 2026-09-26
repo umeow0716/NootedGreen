@@ -237,9 +237,6 @@ public:
     // Captured from PCI configuration before installing our ID spoof hooks.
     uint32_t getOriginalDeviceId() const { return deviceId; }
 private:
-    bool dmcIsAdlp = false;    // true when ADL-P DMC blob was loaded in hwInitializeCState
-    void adlpDcExit(const char *caller);
-    uint32_t uefiCtl1 {0};    // UEFI-read PWR_WELL CTL1 value saved in hwInitializeCState
     uint32_t deviceId {0};
     IOPCIDevice *iGPU {nullptr};
 	

@@ -102,22 +102,13 @@ Boot args advised for testing (Hookcase in `/Library/Extensions/` too):
 
 FB-only:
 ```
--v keepsyms=1 debug=0x100 IGLogLevel=8 -ngreentglfb -NGreenDebug liludump=250 msgbuf=725288 liludbuf=725288 ngreen-dmc=adlp
+-v keepsyms=1 debug=0x100 IGLogLevel=8 -ngreentglfb -NGreenDebug liludump=250 msgbuf=725288 liludbuf=725288
 ```
 
 FB+GFX:
 ```
--v keepsyms=1 debug=0x100 IGLogLevel=8 -ngreentglwithgfx -NGreenDebug liludump=250 msgbuf=725288 liludbuf=725288 ngreen-dmc=adlp -allow3d -disablegfxfirmware
+-v keepsyms=1 debug=0x100 IGLogLevel=8 -ngreentglwithgfx -NGreenDebug liludump=250 msgbuf=725288 liludbuf=725288 -allow3d -disablegfxfirmware
 ```
-
-Where:
-// Boot-arg "ngreen-dmc":
-//   not set or "skip" → safe fallback: passthrough original + AUX only (proven working)
-//   "tgl"             → load TGL DMC v2.12 blob + TGL display engine registers
-//                       + ICL/TGL combo PHY signal levels (PHY_A eDP, PHY_B DP)
-//   "adlp"            → load ADL-P DMC v2.16 blob + ADL-P display engine registers
-//                       + combo PHY signal levels (PHY_A eDP)
-//   "icl"             → passthrough original ICL DMC load + ICL combo PHY signal levels
 
 > **Note:** `-ngreentglwithgfx` loads both the physical TGL framebuffer and
 > accelerator and is not the VF topology. An SR-IOV VF is accelerator-only and
@@ -136,7 +127,6 @@ Where:
 | `-disablegfxfirmware` | Physical-path diagnostic only. A VF uses the PF-owned GuC image and must not upload firmware. |
 | `-ngwegcoex` / `ngwegcoex=1` | Enable WEG coexistence mode. |
 | `ngreenSched=N` | Select GPU scheduler type: `3` = GuC firmware, `4` = IGScheduler4, `5` = host preemptive (default: `3` on real TGL, `5` on RPL/ADL) |
-| `ngreen-dmc=skip|tgl|adlp` | DMC policy: skip CSR load, or force TGL/ADL-P DMC path for diagnostics. |
 | `-allow3d` | Force 3D acceleration |
 | `-nbdyldoff` | Disable the optional shared-cache media-model patches and TGL userspace-bundle discovery logs. |
 | `-ngreendp0` / `ngreendp0=1` | Force fallback mode: set `DisplayPipeSupported=0` in accelerator capabilities |

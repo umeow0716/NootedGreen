@@ -5,7 +5,6 @@
 #ifndef kern_gen11_hpp
 #define kern_gen11_hpp
 #include "kern_green.hpp"
-#include "Firmware.hpp"
 #include "kern_patcherplus.hpp"
 #include "AppleIntelParams.hpp"
 #include <Headers/kern_util.hpp>
@@ -1463,26 +1462,15 @@ private:
 	static void  getGPUInfoICL(void *that);  // patches topology for ICL HW (ICL offsets); void per Ghidra
 	mach_vm_address_t ogetGPUInfoICL {};
 	
-	// CSR = DMC firmware patch data pointers (stepping-specific)
-	const uint8_t *_CSR_PATCH_B0plus;  // B0+ stepping
-	const uint8_t *_CSR_PATCH_AX;      // AX stepping
-	
 	// ── MMIO register access wrappers (can intercept/log/redirect) ──
 	static void wrapWriteRegister32(void *controller, uint32_t address, uint32_t value);
 	
 	static uint32_t wrapReadRegister32(void *controller, uint32_t address);
 	
-	static void hwInitializeCState(AppleIntel::AppleIntelBaseController *that);
-	mach_vm_address_t ohwInitializeCState {};
-
 	bool isICLFB {false};   // true when loaded under AppleIntelICLLPGraphicsFramebuffer
 	bool tglFBLoaded {false};  // true when TGL FB processed — skip ICL FB if set
 	bool tglHWLoaded {false};  // true when TGL HW processed — skip ICL HW if set
 
-	// V131: Cached fallback contexts for spoofed RPL path to prevent NULL task submission
-	static void hwConfigureCustomAUX(AppleIntel::AppleIntelBaseController *that, bool param_1);
-	mach_vm_address_t ohwConfigureCustomAUX {};
-	
 	mach_vm_address_t gPlatformInformationList {};
 
 	static void     initPlatformWorkarounds(AppleIntel::AppleIntelBaseController *that);
@@ -1520,44 +1508,6 @@ private:
 	static void programPipeScaler(AppleIntel::AppleIntelScaler *that, AppleIntel::AppleIntelDisplayPath *displayPath);
 	mach_vm_address_t oprogramPipeScaler {};
 
-	// V182: hwSetPowerWellStatePGE — enables PW_1/PW_2 (display power gates).
-	// Previously no-op'd via releaseDoorbell; now callthrough with 0x78=ccont
-	// fixup (same pattern as DDI/Aux). Linux confirms PW_1+PW_2 must be up
-	// before eDP AUX/PHY-A can be initialized. cold.1-.12 remain no-op to
-	// silence Apple's assert-on-timeout cold paths.
-	static void hwSetPowerWellStatePGE(AppleIntel::AppleIntelBaseController *that, bool param_1, uint param_2);
-	mach_vm_address_t ohwSetPowerWellStatePGE {};
-	
-	static void hwSetPowerWellStateDDI(AppleIntel::AppleIntelBaseController *that, bool param_1, uint param_2);
-	mach_vm_address_t ohwSetPowerWellStateDDI {};
-	
-	static void hwSetPowerWellStateAux(AppleIntel::AppleIntelBaseController *that, bool param_1, uint param_2);
-	mach_vm_address_t ohwSetPowerWellStateAux {};
-	
-	
-	
-	static void AppleIntelPowerWellinit(AppleIntel::AppleIntelPowerWell *that, AppleIntel::AppleIntelBaseController *param_1);
-	mach_vm_address_t oAppleIntelPowerWellinit {};
-	
-	static void enableDisplayEngine(AppleIntel::AppleIntelBaseController *that);
-	mach_vm_address_t oenableDisplayEngine {};
-	
-	static void disableDisplayEngine(AppleIntel::AppleIntelBaseController *that);
-	mach_vm_address_t odisableDisplayEngine {};
-	
-
-	// ── CDCLK management ──
-	static void sanitizeCDClockFrequency(AppleIntel::AppleIntelBaseController *that);
-	static uint32_t wrapProbeCDClockFrequency(AppleIntel::AppleIntelBaseController *that);
-	
-	static void disableCDClock(AppleIntel::AppleIntelBaseController *that);
-	mach_vm_address_t odisableCDClock {};
-	
-	uint32_t (*orgProbeCDClockFrequency)(void *) {nullptr};
-	void (*orgDisableCDClock)(void *) {nullptr};
-	void (*orgSetCDClockFrequency)(void *, unsigned long long) {nullptr};
-	
-	
 	// ── Register access (ra = register access) ──
 	static void raWriteRegister32(void *that,unsigned long param_1, UInt32 param_2);
 	mach_vm_address_t oraWriteRegister32 {};
