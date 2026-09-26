@@ -74,6 +74,8 @@ constexpr uint32_t kVfDirectBar0Bytes = kVfGGTTPteBase + kVfGGTTPteBytes;
 constexpr uint32_t kGen11SoftScratch0 = 0x190240;
 constexpr uint32_t kGen11GucHostInterrupt = 0x1901f0;
 constexpr uint32_t kGucSendTrigger = 1;
+// intel_guc.h: addresses at/above this limit bypass GGTT translation.
+constexpr uint64_t kGucGgttTop = 0xFEE00000ULL;
 
 constexpr uint32_t kGucOriginGuc = 0x80000000U;
 constexpr uint32_t kGucTypeMask = 0x70000000U;
@@ -714,6 +716,29 @@ bool vfEnsureGucLock()
 	return true;
 }
 
+static bool vfWaitMmioHeader(NGreen *cb, bool busyPhase, uint32_t &header)
+{
+	// intel_guc_send_mmio allows 10 ms for ownership, then up to 20 s BUSY
+	// on a VF. Spin only for the fast-response window; yield for longer waits.
+	uint64_t deadline = 0, now = 0;
+	clock_interval_to_deadline(busyPhase ? 20000 : 10, kMillisecondScale, &deadline);
+	uint32_t spins = 0;
+	for (;;) {
+		header = cb->readReg32(kGen11SoftScratch0);
+		if (busyPhase ? ((header & kGucOriginGuc) == 0 ||
+		                 (header & kGucTypeMask) != kGucTypeBusy) :
+		                ((header & kGucOriginGuc) != 0))
+			return true;
+		clock_get_uptime(&now);
+		if (now >= deadline)
+			return false;
+		if (spins++ < 10)
+			IODelay(1);
+		else
+			IOSleep(1);
+	}
+}
+
 bool vfGucSendMMIO(const uint32_t request[4], uint32_t requestLength,
                    uint32_t response[4])
 {
@@ -748,13 +773,7 @@ bool vfGucSendMMIO(const uint32_t request[4], uint32_t requestLength,
 		cb->writeReg32(kGen11GucHostInterrupt, kGucSendTrigger);
 
 		uint32_t header = 0;
-		for (uint32_t i = 0; i < 1000; i++) {
-			header = cb->readReg32(kGen11SoftScratch0);
-			if ((header & kGucOriginGuc) != 0)
-				break;
-			IODelay(10);
-		}
-		if ((header & kGucOriginGuc) == 0) {
+		if (!vfWaitMmioHeader(cb, false, header)) {
 			// A timeout does not transfer mailbox ownership back to the host.
 			// Replaying RESET/configuration here could overwrite a live request.
 			vfMarkProtocolFault("GuC MMIO ownership timeout");
@@ -762,15 +781,8 @@ bool vfGucSendMMIO(const uint32_t request[4], uint32_t requestLength,
 			break;
 		}
 
-		if ((header & kGucTypeMask) == kGucTypeBusy) {
-			for (uint32_t i = 0; i < 2000; i++) {
-				header = cb->readReg32(kGen11SoftScratch0);
-				if ((header & kGucOriginGuc) == 0 ||
-				    (header & kGucTypeMask) != kGucTypeBusy)
-					break;
-				IODelay(10);
-			}
-		}
+		if ((header & kGucTypeMask) == kGucTypeBusy)
+			(void)vfWaitMmioHeader(cb, true, header);
 
 		if ((header & kGucOriginGuc) == 0 ||
 		    (header & kGucTypeMask) == kGucTypeBusy) {
@@ -781,15 +793,25 @@ bool vfGucSendMMIO(const uint32_t request[4], uint32_t requestLength,
 		if ((header & kGucTypeMask) == kGucTypeRetry)
 			continue;
 		if ((header & kGucTypeMask) == kGucTypeFailure) {
+			if ((header & 0xFFFFU) == 0x107U) {
+				// INTEL_GUC_RESPONSE_VF_MIGRATED. Migration recovery is not
+				// implemented; the old client configuration cannot be reused.
+				vfMarkProtocolFault("VF migrated during MMIO request");
+				gVfMmioPoisoned = true;
+			}
 			if (gVfRelayFailureLogs++ < 16)
 				SYSLOG("ngreen", "V217: GuC MMIO request 0x%08x failed: 0x%08x",
 				       request[0], header);
 			break;
 		}
-		if ((header & kGucTypeMask) != kGucTypeSuccess)
+		if ((header & kGucTypeMask) != kGucTypeSuccess) {
+			vfMarkProtocolFault("unexpected GuC MMIO response type");
+			gVfMmioPoisoned = true;
 			break;
+		}
 
-		for (uint32_t i = 0; i < 4; i++)
+		response[0] = header;
+		for (uint32_t i = 1; i < 4; i++)
 			response[i] = cb->readReg32(kGen11SoftScratch0 + i * 4);
 		success = true;
 	}
@@ -2361,6 +2383,8 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			if (RouteRequestPlus::routeAll(patcher, index, startRoute, address, size)) {
 				SYSLOG("ngreen", "V44: Hooked IntelAccelerator::start");
 			} else {
+				PANIC_COND(gVfIdentity != VfIdentity::Physical, "ngreen",
+				           "Cannot admit VF driver without accelerator-start safety route");
 				SYSLOG("ngreen", "V44: IntelAccelerator::start symbol not found; Gen11::start logs unavailable on this build");
 			}
 		}
@@ -2370,6 +2394,8 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			// Without this hook, no GuC binary loads at all in coexist mode → ring dead.
 			RouteRequestPlus firmwareRoute[] = {
 				{"__ZN13IGHardwareGuC13loadGuCBinaryEv", loadGuCBinary, this->oloadGuCBinary},
+				{"__ZN16IntelAccelerator17transferOwnershipEPK20IGSharedMappedBufferi",
+				 vfTransferOwnership, this->oVfTransferOwnership},
 				// V224: the PF owns the running firmware, but Apple still needs its
 				// context pool, log buffers and ADS initialized before createUkContext.
 				{"__ZN13IGHardwareGuC16initSchedControlEv",
@@ -6641,17 +6667,9 @@ unsigned long Gen11::start(void *that,void  *param_1)
 
 uint8_t Gen11::deviceStart(void *that)
 {
-	// V111: Force IGAccelDevice::deviceStart to succeed on spoofed RPL platform.
-	// The original checks encodeFailureStack[1] which is set when BCS ring fails to
-	// start. On RPL hardware with TGL driver, BCS init fails (RPL uses different
-	// ring programming). We allow the original to run and then force success if it
-	// returned false, preventing CoreDisplay from seeing a null accelerator device.
+	// An uninitialized accelerator must not be published as a working device.
+	// In particular, failed VF bootstrap is not a reason to fabricate success.
 	auto ret = FunctionCast(deviceStart, callback->odeviceStart)(that);
-	const bool isRealTGL = NGreen::callback && NGreen::callback->isRealTGL;
-	if (!isRealTGL && !gVfGGTTReady && !ret) {
-		SYSLOG("ngreen", "V111: IGAccelDevice::deviceStart returned false on RPL — forcing true");
-		return true;
-	}
 	DBGLOG("ngreen", "V111: IGAccelDevice::deviceStart returned %d", ret);
 	return ret;
 }
@@ -8816,6 +8834,19 @@ bool Gen11::vfIsKmdContextIdle(void *that, const uint32_t *descriptor) {
 	return descriptor && vfKnownIdleSnapshot(descriptor);
 }
 
+void Gen11::vfTransferOwnership(void *that, const void *backing, int owner) {
+	if (gVfIdentity == VfIdentity::Physical) {
+		FunctionCast(vfTransferOwnership, callback->oVfTransferOwnership)(that, backing, owner);
+		return;
+	}
+	// Native transferOwnership is itself a no-op without flag 0x20. With it,
+	// it sends per-page commands through PCI config 0xf8/0xfc, not the Intel
+	// SR-IOV protocol. Never let a legacy ownership mechanism act on VF pages.
+	if (!that || gVfIdentity != VfIdentity::Virtual ||
+	    (getMember<uint8_t>(that, 0x1190) & 0x20U))
+		vfMarkProtocolFault("unsupported legacy VF page-ownership transfer");
+}
+
 bool Gen11::vfLegacyHostToGuCAction(void *that, const uint32_t *request,
                                   unsigned int requestLength, int timeout,
                                   uint32_t *response) {
@@ -9094,6 +9125,7 @@ bool Gen11::vfAttachContextDesc(void *that, const uint32_t *descriptor) {
 	if (lrcaPage < gVfGGTTBase ||
 	    lrcaPage >= gVfGGTTBase + gVfGGTTSize ||
 	    contextBytes > gVfGGTTBase + gVfGGTTSize - lrcaPage ||
+	    lrcaPage >= kGucGgttTop || contextBytes > kGucGgttTop - lrcaPage ||
 	    rawClass >= arrsize(engineClassMap) || engineInstance >= 32 ||
 	    contextBytes < kVfContextMinimumImageBytes) {
 		SYSLOG("ngreen", "V230: rejected LRCA descriptor %08x:%08x VF=[0x%llx,+0x%llx]",
@@ -9665,7 +9697,8 @@ void Gen11::vfCtbChannelInit(void *that) {
 	auto *backing = getMember<OSObject *>(that, 0x40);
 	if (!backing || gVfCtbBacking || (base & (PAGE_SIZE - 1U)) ||
 	    base < gVfGGTTBase || base >= gVfGGTTBase + gVfGGTTSize ||
-	    kVfCtbBackingBytes > gVfGGTTBase + gVfGGTTSize - base) {
+	    kVfCtbBackingBytes > gVfGGTTBase + gVfGGTTSize - base ||
+	    base >= kGucGgttTop || kVfCtbBackingBytes > kGucGgttTop - base) {
 		vfMarkProtocolFault("invalid or duplicate CTB backing range");
 		return;
 	}

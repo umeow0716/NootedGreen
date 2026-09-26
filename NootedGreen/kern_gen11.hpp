@@ -1396,6 +1396,8 @@ private:
 	mach_vm_address_t oVfIsContextIdle {};
 	static bool vfIsKmdContextIdle(void *that, const uint32_t *descriptor);
 	mach_vm_address_t oVfIsKmdContextIdle {};
+	static void vfTransferOwnership(void *that, const void *backing, int owner);
+	mach_vm_address_t oVfTransferOwnership {};
 	static void vfInitDoorbells(void *that);
 	mach_vm_address_t oVfInitDoorbells {};
 	static bool vfReadDoorbellSQIDIConfig(void *that);

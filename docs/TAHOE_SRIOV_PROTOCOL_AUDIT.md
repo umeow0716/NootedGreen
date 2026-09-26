@@ -349,3 +349,39 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   before boot testing; conservative queries alone cannot make these safe.
 - Force-wake now requires confirmed physical identity, including failure and
   pre-identification cases, instead of relying on VF transport readiness.
+
+## Mailbox deadline and GuC address-window follow-up
+
+`78501e8` passed macOS CI run 36217266991; no VM boot or installation.
+
+- `intel_guc_send_mmio` allows 10 ms to obtain a GuC-origin reply, then 20
+  one-second BUSY intervals for a VF. The bridge's previous 20 ms BUSY budget
+  was too short. It now uses absolute clock deadlines, briefly spins for the
+  fast response and sleeps 1 ms between later reads, retaining mailbox ownership
+  throughout. Timeout still poisons the mailbox; only explicit RETRY permits
+  replay, with the existing four-attempt limit. This avoids 20 seconds of CPU
+  busy-waiting. Preemption-disabled callers and wider lock ordering remain open.
+- MMIO failure error `0x107` is VF_MIGRATED (`guc_errors_abi.h`), not an ordinary
+  retryable operation error. It now faults/quarantines the mailbox because
+  migration recovery is unimplemented. Unknown response types also poison it.
+  Success preserves the already-validated header, matching Linux's response
+  copy rather than rereading scratch[0].
+- `intel_guc.h` defines `GUC_GGTT_TOP = 0xFEE00000`; higher addresses bypass
+  GGTT translation even if the VF's assigned window otherwise contains them.
+  CTB/shared-memory-IRQ and context backing must now fit below that boundary.
+  Lower WOPCM/pin-bias restrictions and allocator ballooning still need audit.
+- PF provisioning evidence: `intel_iov_provisioning.c:pf_provision_ggtt`
+  allocates VF regions between the PF GGTT pin bias and GUC_GGTT_TOP. VF KLV
+  base/size therefore inherit that lower bound from this trusted host driver;
+  the guest must still stay inside the reported interval. This does not prove
+  every native allocator respects the interval or that mappings are pinned.
+- Routed native `transferOwnership` on the TGL payload: physical devices keep
+  the original; a VF preserves its native no-op when flag `0x20` is absent,
+  and faults before any PCI-config ownership command if that unsupported flag
+  is present. This contains the identified explicit ownership-transfer path,
+  not all possible unmap paths. CTB init already checks protocol fault on exit.
+- The accelerator-start route is mandatory for VF/unknown identity rather
+  than merely logging a failed hook and letting native startup proceed.
+- Removed V111's deviceStart false-to-true override. Failed initialization
+  remains failure on both PF and VF; an unready VF previously met its fallback
+  condition because that condition tested readiness, not hardware identity.
