@@ -1055,3 +1055,28 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   accelerator+0x10, making pre-native rejection on a fresh object unsafe.
   These are newly identified blockers, not fixed by the workqueue-specific
   unwind. No live allocation failure tests or VM boot were attempted.
+
+### CTB-specific failed-init unwind (not the workqueue contract)
+
+- Rechecked CTB init 0x1f386..0x1f474 and free 0x1f564..0x1f600, including
+  external lock relocations. If the second lock fails, 0x1f467 frees first
+  lock but leaves +0x18 dangling. If backing allocation fails at 0x1f404,
+  both locks remain held. Free iterates four lock slots and unconditionally
+  releases accelerator+0x10; it omits superclass free as well.
+- Added separate helper: second-lock failure clears the ALREADY freed first
+  pointer without another free; backing failure unlocks in reverse order,
+  frees/nulls both locks, then releases/nulls the accelerator. Impossible
+  missing/aliased lock or non-null backing states are not guessed away.
+- Fresh pre-native rejection and successfully unwound failures mark +0x90.
+  VF-only CTB free accepts that marker only with no active/pinned CTB identity
+  or retained resources, consumes it, and calls OSObject::free. Superclass
+  relocation 0xd0be0 names OSObject; deleting destructor 0x1f240 invokes
+  class destructor (including its vector) and operator delete for size 0xa8.
+  Initialized/unmarked CTBs retain their old path and quarantine policy.
+- All 16 accelerator/H2G/G2H/backing combinations plus duplicate-lock
+  rejection tested under sanitizers; callback sequence and repeated cleanup
+  checked. Full suite /tmp/ngreen-static.0GQQlN passes. 0aecf94 CI
+  36222628968 passed. VM remains off; no live OOM injection/deployment.
+- Channel-init pre-write address checks and post-channel protocol-failure
+  teardown still need follow-up; these changes do not prove CTB lifecycle
+  safe in all states or close the pending context-creation blockers.

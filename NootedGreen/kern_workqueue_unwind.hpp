@@ -42,4 +42,31 @@ bool unwindFailedInit(void *&accelerator, void *&lock, const void *buffer,
     }
     return true;
 }
+
+// CTB has DIFFERENT native failure exits from WorkQueue. If its second lock
+// allocation failed, native already freed the first lock but left its pointer.
+// If both locks exist and buffer allocation failed, both are still held.
+template <class Operations>
+bool unwindFailedCtbInit(void *&accelerator, void *&h2g, void *&g2h,
+                         const void *buffer, Operations &operations) {
+    if (buffer || (g2h && (!h2g || g2h == h2g)))
+        return false;
+    if (g2h) {
+        void *ownedH2g = h2g, *ownedG2h = g2h;
+        operations.unlock(ownedG2h);
+        operations.unlock(ownedH2g);
+        h2g = nullptr;
+        g2h = nullptr;
+        operations.freeLock(ownedG2h);
+        operations.freeLock(ownedH2g);
+    } else {
+        h2g = nullptr; // already freed by native, NEVER free it twice
+    }
+    if (accelerator) {
+        void *ownedAccelerator = accelerator;
+        accelerator = nullptr;
+        operations.release(ownedAccelerator);
+    }
+    return true;
+}
 }

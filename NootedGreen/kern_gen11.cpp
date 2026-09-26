@@ -2199,6 +2199,8 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				 vfWorkQueueInit, this->oVfWorkQueueInit},
 				{"__ZN22IGHardwareGuCWorkQueue4freeEv",
 				 vfWorkQueueFree, this->oVfWorkQueueFree},
+				{"__ZN21IGHardwareGuCCTBuffer4freeEv",
+				 vfCtbFree, this->oVfCtbFree},
 			};
 			PANIC_COND(!RouteRequestPlus::routeAll(patcher, index, workQueueInitRoute, address, size),
 			           "ngreen", "Failed to install VF workqueue allocation unwind");
@@ -9688,12 +9690,22 @@ bool Gen11::vfCtbInitWithAccelerator(void *that, void *accelerator) {
 		return FunctionCast(vfCtbInitWithAccelerator,
 		                    callback->oVfCtbInitWithAccelerator)(that, accelerator);
 	}
-	if (!gVfGGTTReady || gVfProtocolFault)
+	if (!that)
 		return false;
+	PANIC_COND(getMember<void *>(that, 0x10) || getMember<void *>(that, 0x18) ||
+		getMember<void *>(that, 0x20) || getMember<void *>(that, 0x28) ||
+		getMember<void *>(that, 0x30) || getMember<void *>(that, 0x40) ||
+		getMember<void *>(that, 0x90), "ngreen", "Refusing nonempty VF CTB reinitialization");
+	if (gVfIdentity != VfIdentity::Virtual || !accelerator || !gVfGGTTReady ||
+	    gVfProtocolFault || !vfCanUseSleepingLock()) {
+		getMember<void *>(that, 0x90) = NGWorkQueue::failedInitMarker();
+		return false;
+	}
 
-	if (!that || gVfCtbBacking ||
+	if (gVfCtbBacking ||
 	    !OSCompareAndSwapPtr(nullptr, that, &gVfCtbInitOwner)) {
 		vfMarkProtocolFault("CTB reinitialization while old backing is quarantined");
+		getMember<void *>(that, 0x90) = NGWorkQueue::failedInitMarker();
 		return false;
 	}
 
@@ -9709,6 +9721,17 @@ bool Gen11::vfCtbInitWithAccelerator(void *that, void *accelerator) {
 	gVfCtbAllocatedBacking = nullptr;
 	OSCompareAndSwapPtr(that, nullptr, &gVfCtbInitOwner);
 	if (!result) {
+		struct Operations {
+			void unlock(void *lock) { IOLockUnlock(static_cast<IOLock *>(lock)); }
+			void freeLock(void *lock) { IOLockFree(static_cast<IOLock *>(lock)); }
+			void release(void *object) { static_cast<OSObject *>(object)->release(); }
+		} operations;
+		PANIC_COND(!NGWorkQueue::unwindFailedCtbInit(getMember<void *>(that, 0x10),
+			getMember<void *>(that, 0x18), getMember<void *>(that, 0x20),
+			getMember<void *>(that, 0x40), operations) ||
+			!NGWorkQueue::markFailedInit(getMember<void *>(that, 0x10),
+			getMember<void *>(that, 0x18), getMember<void *>(that, 0x20),
+			getMember<void *>(that, 0x90)), "ngreen", "Cannot unwind failed VF CTB init");
 		SYSLOG("ngreen", "V223: enlarged VF CTB initialization failed");
 		return false;
 	}
@@ -9718,6 +9741,22 @@ bool Gen11::vfCtbInitWithAccelerator(void *that, void *accelerator) {
 		return false;
 	}
 	return result;
+}
+
+void Gen11::vfCtbFree(void *that) {
+	PANIC_COND(!that, "ngreen", "Null VF CTB in free");
+	if (getMember<void *>(that, 0x90) == NGWorkQueue::failedInitMarker()) {
+		PANIC_COND(that == gVfCtbObject || !callback->vfOSObjectFree ||
+			getMember<void *>(that, 0x28) || getMember<void *>(that, 0x30) ||
+			getMember<void *>(that, 0x40) || !NGWorkQueue::consumeFailedInit(
+			getMember<void *>(that, 0x10), getMember<void *>(that, 0x18),
+			getMember<void *>(that, 0x20), getMember<void *>(that, 0x90)),
+			"ngreen", "Refusing destruction of active or incompletely unwound VF CTB");
+		using BaseFree = void (*)(void *);
+		reinterpret_cast<BaseFree>(callback->vfOSObjectFree)(that);
+		return;
+	}
+	FunctionCast(vfCtbFree, callback->oVfCtbFree)(that);
 }
 
 void *Gen11::vfCtbMappedBufferWithOptions(void *accelTask, unsigned long size,

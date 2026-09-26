@@ -1382,6 +1382,8 @@ private:
 	static void vfWorkQueueFree(void *that);
 	mach_vm_address_t oVfWorkQueueFree {};
 	mach_vm_address_t vfOSObjectFree {};
+	static void vfCtbFree(void *that);
+	mach_vm_address_t oVfCtbFree {};
 	mach_vm_address_t oVfCreateUkContext {};
 	static uint32_t vfAllocContextId(void *that, uint64_t owner, bool clear);
 	mach_vm_address_t oVfAllocContextId {};
