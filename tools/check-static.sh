@@ -65,6 +65,13 @@ if "$compiler" -std=c++14 -O1 -g -fsanitize=address,undefined \
 else
     failed=1
 fi
+if python3 tools/personality_contract_test.py \
+    sle_Internal/le/AppleIntelTGLGraphics.kext/Contents/Info.plist \
+    sle_Internal/sle/AppleIntelTGLGraphics.kext/Contents/Info.plist; then
+    printf 'PASS offline native personality contract tests\n'
+else
+    failed=1
+fi
 if "$compiler" -std=c++14 -O1 -g -fsanitize=address,undefined \
     tools/ggtt_init_bounds_test.cpp -o "$task_output/ggtt-init-bounds-test" && \
     "$task_output/ggtt-init-bounds-test"; then

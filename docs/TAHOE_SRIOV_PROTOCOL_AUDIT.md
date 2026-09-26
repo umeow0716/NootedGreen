@@ -2450,3 +2450,26 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   framebuffer structs, bit walkers and six undefined direct-MMIO declarations
   were removed. The fully replaced VF submit route also no longer captures an
   unused original implementation.
+
+### Publish the complete native accelerator personality
+
+- The former manual personality did not merely override PCI matching. It
+  reconstructed only a subset of the bundled entry and omitted `Development`,
+  `Debug`, `IOGVAHEVCDecodeCapabilities` and
+  `IOGVAHEVCEncodeCapabilities`. That made scheduler/media behavior depend on
+  which personality happened to bind and undermined VideoToolbox validation.
+- Publication now finds exactly one IOCatalogue entry for the actually loaded
+  custom or Apple bundle identifier, shallow-clones its complete dictionary and
+  changes only `IOPCIPrimaryMatch` to the admitted 0x9a49 compatibility
+  identity. Missing catalogue state, duplicate candidates, missing required
+  nested dictionaries, allocation failure or `addDrivers` failure all prevent
+  personality publication.
+- Current XNU `IOCatalogue::findDrivers(OSDictionary *)` proves the returned
+  ordered set retains matching catalogue dictionaries while holding the
+  catalogue read lock; `OSDictionary::withDictionary` retains all nested
+  values, so releasing the result does not invalidate the clone. An offline
+  plist contract test checks both bundled variants for the complete display,
+  development, debug and HEVC media properties.
+- The CI path filter now covers all of `tools/**`. Previously several protocol
+  tests executed by `check-static.sh` could be changed without triggering the
+  workflow because only an obsolete hand-maintained subset was listed.

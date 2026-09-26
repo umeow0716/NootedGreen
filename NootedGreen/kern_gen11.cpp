@@ -2329,7 +2329,11 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			   "later-gen compatibility topology");
 		// Adding a personality can start matching immediately. Publish only
 		// after this payload's required routes and patches have been installed.
-		injectAcceleratorPersonality();
+		const char *bundleId = activeKext == &kextG11HWTA ?
+			"com.apple.driver.AppleIntelTGLGraphics" :
+			"com.xxxxx.driver.AppleIntelTGLGraphics";
+		PANIC_COND(!injectAcceleratorPersonality(bundleId), "ngreen",
+			"Cannot publish complete TGL accelerator personality");
 
 		return true;
 	}
@@ -4820,112 +4824,81 @@ void Gen11::forceWake(void *that, bool set, uint32_t dom, uint8_t ctx)
 		SYSLOG("ngreen", "V240: guest force-wake suppressed for SR-IOV VF");
 	}
 }
-void Gen11::injectAcceleratorPersonality()
+bool Gen11::injectAcceleratorPersonality(const char *bundleId)
 {
 	if (this->acceleratorPersonalityInjected) {
 		DBGLOG("ngreen", "injectAcceleratorPersonality: already injected, skipping");
-		return;
+		return true;
 	}
 
-	SYSLOG("ngreen", "injectAcceleratorPersonality: registering TGL IntelAccelerator into IOCatalogue");
+	if (!bundleId || !gIOCatalogue)
+		return false;
 
-	auto *dict = OSDictionary::withCapacity(24);
-	if (!dict) return;
-
-	const char *bundleId = "com.xxxxx.driver.AppleIntelTGLGraphics";
-	const char *mtlName  = "AppleIntelTGLGraphicsMTLDriver";
-	const char *glName   = "AppleIntelTGLGraphicsGLDriver";
-	const char *vaName   = "AppleIntelTGLGraphicsVADriver";
-
-	// Basic matching properties
-	auto *bi  = OSString::withCString(bundleId);
-	auto *cls = OSString::withCString("IntelAccelerator");
-	auto *mc  = OSString::withCString("IOAccelerator");
-	auto *pv  = OSString::withCString("IOPCIDevice");
-	auto *pcm = OSString::withCString("0x03000000&0xff000000");
-	auto *pm  = OSString::withCString("0x9a498086");
-	auto *ps  = OSNumber::withNumber(static_cast<unsigned long long>(1000), 32);
-
-	dict->setObject("CFBundleIdentifier", bi);
-	dict->setObject("IOClass", cls);
-	dict->setObject("IOMatchCategory", mc);
-	dict->setObject("IOProviderClass", pv);
-	dict->setObject("IOPCIClassMatch", pcm);
-	dict->setObject("IOPCIPrimaryMatch", pm);
-	dict->setObject("IOProbeScore", ps);
-
-	OSSafeReleaseNULL(bi);
-	OSSafeReleaseNULL(cls);
-	OSSafeReleaseNULL(mc);
-	OSSafeReleaseNULL(pv);
-	OSSafeReleaseNULL(pcm);
-	OSSafeReleaseNULL(pm);
-	OSSafeReleaseNULL(ps);
-
-	// V44: GPU driver bundle names — required by IOAcceleratorFamily2 and WindowServer
-	auto *mtl = OSString::withCString(mtlName);
-	auto *gl  = OSString::withCString(glName);
-	auto *dvd = OSString::withCString(vaName);
-	auto *src = OSString::withCString("0.0.0.0.0");
-	auto *vaCodec  = OSString::withCString("Gen10");
-	auto *vaScaler = OSString::withCString("Gen10");
-	auto *vaBGRA   = OSString::withCString("Gen10");
-	auto *vaRendID = OSNumber::withNumber(static_cast<unsigned long long>(17301568), 32); // 0x1084000
-
-	dict->setObject("MetalPluginName", mtl);
-	dict->setObject("IOGLBundleName", gl);
-	dict->setObject("IODVDBundleName", dvd);
-	dict->setObject("IOSourceVersion", src);
-	dict->setObject("IOGVACodec", vaCodec);
-	dict->setObject("IOGVAScaler", vaScaler);
-	dict->setObject("IOGVABGRAEnc", vaBGRA);
-	dict->setObject("IOVARendererID", vaRendID);
-
-	OSSafeReleaseNULL(mtl);
-	OSSafeReleaseNULL(gl);
-	OSSafeReleaseNULL(dvd);
-	OSSafeReleaseNULL(src);
-	OSSafeReleaseNULL(vaCodec);
-	OSSafeReleaseNULL(vaScaler);
-	OSSafeReleaseNULL(vaBGRA);
-	OSSafeReleaseNULL(vaRendID);
-
-	// IOAccelerator2D plugin type (required for 2D acceleration matching)
-	auto *pluginDict = OSDictionary::withCapacity(1);
-	if (pluginDict) {
-		auto *pluginName = OSString::withCString("IOAccelerator2D.plugin");
-		pluginDict->setObject("ACCF0000-0000-0000-0000-000a2789904e", pluginName);
-		OSSafeReleaseNULL(pluginName);
-		dict->setObject("IOCFPlugInTypes", pluginDict);
-		pluginDict->release();
+	// Clone the complete personality already admitted with this exact payload.
+	// Reconstructing it by hand had silently dropped Development, Debug and both
+	// HEVC capability dictionaries, making display and media behaviour diverge
+	// from the bundled Tahoe driver.
+	auto *matching = OSDictionary::withCapacity(1);
+	auto *bundle = OSString::withCString(bundleId);
+	if (!matching || !bundle) {
+		OSSafeReleaseNULL(bundle);
+		OSSafeReleaseNULL(matching);
+		return false;
+	}
+	const bool matchingReady = matching->setObject("CFBundleIdentifier", bundle);
+	bundle->release();
+	if (!matchingReady) {
+		matching->release();
+		return false;
 	}
 
-	// Preserve the bundled TGL personality contract.  Advertising numeric zero here
-	// forced WindowServer onto a degraded composition path even though both admitted
-	// Tahoe TGL personalities advertise these capabilities as boolean true.
-	auto *dpCaps = OSDictionary::withCapacity(2);
-	if (dpCaps) {
-		dpCaps->setObject("DisplayPipeSupported", kOSBooleanTrue);
-		dpCaps->setObject("TransactionsSupported", kOSBooleanTrue);
-		dict->setObject("IOAccelDisplayPipeCapabilities", dpCaps);
-		dpCaps->release();
+	SInt32 generation = 0;
+	auto *drivers = gIOCatalogue->findDrivers(matching, &generation);
+	matching->release();
+	if (!drivers || drivers->getCount() != 1) {
+		SYSLOG("ngreen", "injectAcceleratorPersonality: expected one %s personality, found %u",
+			bundleId, drivers ? drivers->getCount() : 0);
+		OSSafeReleaseNULL(drivers);
+		return false;
 	}
 
-	SYSLOG("ngreen", "injectAcceleratorPersonality: personality has %u properties", dict->getCount());
+	auto *source = OSDynamicCast(OSDictionary, drivers->getObject(0));
+	const bool complete = source &&
+		OSDynamicCast(OSDictionary, source->getObject("Development")) &&
+		OSDynamicCast(OSDictionary, source->getObject("Debug")) &&
+		OSDynamicCast(OSDictionary, source->getObject("IOAccelDisplayPipeCapabilities")) &&
+		OSDynamicCast(OSDictionary, source->getObject("IOGVAHEVCDecodeCapabilities")) &&
+		OSDynamicCast(OSDictionary, source->getObject("IOGVAHEVCEncodeCapabilities"));
+	auto *dict = complete ? OSDictionary::withDictionary(source) : nullptr;
+	drivers->release();
+	if (!dict) {
+		SYSLOG("ngreen", "injectAcceleratorPersonality: native personality is incomplete");
+		return false;
+	}
+
+	auto *primaryMatch = OSString::withCString("0x9a498086");
+	const bool matchReady = primaryMatch &&
+		dict->setObject("IOPCIPrimaryMatch", primaryMatch);
+	OSSafeReleaseNULL(primaryMatch);
+	if (!matchReady) {
+		dict->release();
+		return false;
+	}
 
 	auto *array = OSArray::withCapacity(1);
-	if (array) {
-		array->setObject(dict);
-		if (gIOCatalogue) {
-			bool ok = gIOCatalogue->addDrivers(array, true);
-			SYSLOG("ngreen", "injectAcceleratorPersonality: addDrivers returned %d", ok);
-			this->acceleratorPersonalityInjected = ok;
-		} else {
-			SYSLOG("ngreen", "injectAcceleratorPersonality: gIOCatalogue is null!");
-		}
-		array->release();
-	}
+	const bool arrayReady = array && array->setObject(dict);
 	dict->release();
+	if (!arrayReady) {
+		OSSafeReleaseNULL(array);
+		return false;
+	}
+
+	SYSLOG("ngreen", "injectAcceleratorPersonality: publishing complete %s personality",
+		bundleId);
+	const bool ok = gIOCatalogue->addDrivers(array, true);
+	array->release();
+	this->acceleratorPersonalityInjected = ok;
+	return ok;
 }
 
 // The VF has no guest-owned INSTDONE register. Its watchdog query is true only

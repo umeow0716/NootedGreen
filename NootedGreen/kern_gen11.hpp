@@ -129,7 +129,7 @@ private:
 	static void *getBlit3DContext(void *that, bool create);
 	mach_vm_address_t ogetBlit3DContext {};
 
-	void injectAcceleratorPersonality();
+	bool injectAcceleratorPersonality(const char *bundleId);
 	bool acceleratorPersonalityInjected {false};
 	static unsigned long stopGraphicsEngine(void *that);
 	static unsigned long startGraphicsEngine(void *that);
