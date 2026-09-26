@@ -2,6 +2,7 @@
 //  details.
 #include "kern_genx.hpp"
 #include "kern_gen11.hpp"
+#include "kern_dvmt_patch.hpp"
 #include <Headers/kern_api.hpp>
 
 
@@ -25,6 +26,19 @@ void Genx::init() {
 bool Genx::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t address, size_t size) {
 
     if (kextG11FB0.loadIndex == index) {
+		if (!ngPhysicalGpuAccessAllowed()) {
+			// This legacy renamed framebuffer has no VF display implementation.
+			// Returning from the patch callback alone would still let its native
+			// probe/start program physical display clocks and registers.
+			RouteRequestPlus rejectPhysicalFramebuffer[] = {
+				{"__ZN24AppleIntelBaseController5probeEP9IOServicePi", wprobe},
+				{"__ZN31AppleIntelFramebufferController5startEP9IOService", start},
+			};
+			PANIC_COND(!RouteRequestPlus::routeAll(patcher, index, rejectPhysicalFramebuffer, address, size),
+				"ngreen", "Cannot contain legacy physical framebuffer on VF/unknown device");
+			SYSLOG("ngreen", "Legacy ICL framebuffer probe/start rejected for VF/unknown device");
+			return true;
+		}
 		NGreen::callback->setRMMIOIfNecessary();
 		
 		
@@ -95,11 +109,8 @@ bool Genx::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t a
 			
 			{"__ZN24AppleIntelBaseController11hwSaveNVRAMEv",hwSaveNVRAM},
 			
-			{"__ZN21AppleIntelFramebuffer18prepareToEnterWakeEv",prepareToEnterWake},
-			{"__ZN21AppleIntelFramebuffer17prepareToExitWakeEv",prepareToExitWake},
-			
-			{"__ZN21AppleIntelFramebuffer18prepareToExitSleepEv",prepareToExitSleep},
-			{"__ZN21AppleIntelFramebuffer19prepareToEnterSleepEv",prepareToEnterSleep},
+			// Preserve native sleep/wake transitions; empty stubs do not quiesce
+			// display hardware or provide a resumable power-management state.
 			
 			
 			//{"__ZN24AppleIntelBaseController19getTranscoderOffsetEP14AppleIntelPortj",hwSaveNVRAM},
@@ -266,80 +277,50 @@ bool Genx::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t a
 
 		PANIC_COND(!LookupPatchPlus::applyAll(patcher, patches , address, size), "ngreen", "kextG11FB0 Failed to apply patches!");
 
-			auto startAddress = patcher.solveSymbol(index, "__ZN24AppleIntelBaseController13FBMemMgr_InitEv", address, size);
-			if (startAddress){
-				hde64s handle;
-				uint64_t shllAddr = 0, andlAddr = 0;
-				uint32_t shllSize = 0, andlSize = 0;
-				uint32_t shllDstr = 0, andlDstr = 0;
-				
-				uint8_t movl[] = {0x41, 0xB8, 0x00, 0x00, 0x00, 0x00, 0x90};
-				uint8_t nops[] = {0x90, 0x90, 0x90, 0x90};
-				
-				for (auto index = 0; index < 64; index += 1) {
-					auto size = Disassembler::hdeDisasm(startAddress, &handle);
-					
-					if (handle.flags & F_ERROR) {
-						break;
+		const auto function = patcher.solveSymbol(index,
+			"__ZN24AppleIntelBaseController13FBMemMgr_InitEv", address, size);
+		if (function && address && size <= UINT64_MAX - address &&
+			function >= address && function - address < size) {
+			const auto imageEnd = address + size;
+			auto cursor = function;
+			mach_vm_address_t previous = 0;
+			size_t previousSize = 0;
+			for (unsigned instruction = 0; instruction < 64; ++instruction) {
+				// HDE may inspect up to the architectural 15-byte instruction limit.
+				if (cursor > imageEnd || imageEnd - cursor < 15) break;
+				hde64s decoded {};
+				// Decode a padded local window: malformed prefixes must not make
+				// the decoder inspect memory beyond the verified image range.
+				uint8_t decodeWindow[64] {};
+				lilu_os_memcpy(decodeWindow, reinterpret_cast<const void *>(cursor), 15);
+				const auto decodedSize = Disassembler::hdeDisasm(
+					reinterpret_cast<mach_vm_address_t>(decodeWindow), &decoded);
+				if ((decoded.flags & F_ERROR) || !decodedSize || decodedSize > 15) break;
+				uint8_t replacement[11] {};
+				if (previous && previous + previousSize == cursor &&
+					NGDvmt::build(reinterpret_cast<const uint8_t *>(previous), previousSize,
+						reinterpret_cast<const uint8_t *>(cursor), decodedSize,
+						NGreen::callback->stolen_size, replacement, sizeof(replacement))) {
+					if (MachInfo::setKernelWriting(true, KernelPatcher::kernelWriteLock) != KERN_SUCCESS) {
+						SYSLOG("ngreen", "DVMT patch rejected: cannot enable kernel writing");
+						return false;
 					}
-					
-					// Instruction: shll $0x11, %???
-					// 3 bytes long if DSTReg < %r8d, otherwise 4 bytes long
-					if (handle.opcode == 0xC1 && handle.imm.imm8 == 0x11) {
-						shllAddr = startAddress;
-						shllSize = handle.len;
-						shllDstr = (handle.rex_b << 3) | handle.modrm_rm;
-					}
-					
-					// Instruction: andl $0xFE000000, %???
-					// 5 bytes long if DSTReg is %eax; 6 bytes long if DSTReg < %r8d; otherwise 7 bytes long.
-					if ((handle.opcode == 0x25 || handle.opcode == 0x81) && handle.imm.imm32 == 0xFE000000) {
-						andlAddr = startAddress;
-						andlSize = handle.len;
-						andlDstr = (handle.rex_b << 3) | handle.modrm_rm;
-					}
-					
-					// Guard: Calculate and apply the binary patch if we have found both instructions
-					if (shllAddr && andlAddr) {
-						// Update the `movl` instruction with the actual amount of DVMT preallocated memory
-						*reinterpret_cast<uint32_t*>(movl + 2) = NGreen::callback->stolen_size;
-						SYSLOG("ngreen", "FBMemMgr_Init: patching stolen_size=0x%x", NGreen::callback->stolen_size);
-						
-						// Update the `movl` instruction with the actual destination register
-						// Find the actual starting point of the patch and the number of bytes to patch
-						uint8_t* patchStart;
-						uint32_t patchSize;
-						if (andlDstr >= 8) {
-							// %r8d, %r9d, ..., %r15d
-							movl[1] += (andlDstr - 8);
-							patchStart = movl;
-							patchSize = 7;
-						} else {
-							// %eax, %ecx, ..., %edi
-							movl[1] += andlDstr;
-							patchStart = (movl + 1);
-							patchSize = andlDstr == 0 ?  5 : 6;
-						}
-						
-						// Guard: Prepare to apply the binary patch
-						if (MachInfo::setKernelWriting(true, KernelPatcher::kernelWriteLock) != KERN_SUCCESS) {
-						}
-						
-						// Replace `shll` with `nop`s
-						// The number of nops is determined by the actual instruction length
-						lilu_os_memcpy(reinterpret_cast<void*>(shllAddr), nops, shllSize);
-						
-						// Replace `andl` with `movl`
-						// The patch contents and size are determined by the destination register of `andl`
-						lilu_os_memcpy(reinterpret_cast<void*>(andlAddr), patchStart, patchSize);
-						
-						// Finished applying the binary patch
-						MachInfo::setKernelWriting(false, KernelPatcher::kernelWriteLock);
-					}
-					
-					startAddress += size;
+					lilu_os_memcpy(reinterpret_cast<void *>(previous), replacement,
+						previousSize + decodedSize);
+					const auto restored = MachInfo::setKernelWriting(false, KernelPatcher::kernelWriteLock);
+					PANIC_COND(restored != KERN_SUCCESS, "ngreen", "DVMT patch: cannot restore write protection");
+					SYSLOG("ngreen", "FBMemMgr_Init: patched one verified DVMT pair size=0x%x",
+						NGreen::callback->stolen_size);
+					break; // Never decode/repatch the modified instruction stream.
 				}
+				if (decoded.opcode == 0xC3 || decoded.opcode == 0xC2 ||
+					decoded.opcode == 0xE9 || decoded.opcode == 0xEB ||
+					(decoded.opcode == 0xFF && decoded.modrm_reg == 4)) break;
+				previous = cursor;
+				previousSize = decodedSize;
+				cursor += decodedSize;
 			}
+		}
 		
 		
         DBGLOG("ngreen", "Loaded ApppeIntelICLLPGraphicsFramebuffer!");
@@ -354,6 +335,8 @@ bool Genx::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t a
 IOReturn Genx::wrapICLReadAUX(void *that, uint32_t address, void *buffer, uint32_t length) {
 
 	IOReturn retVal =	FunctionCast(wrapICLReadAUX, callback->orgICLReadAUX)(that,address, buffer, length );
+	if (retVal != kIOReturnSuccess || !buffer || length < sizeof(DPCDCap16))
+		return retVal;
 
 	if (address != 0x0000 && address != 0x2200)	return retVal;
 
@@ -379,7 +362,8 @@ bool Genx::start(void *that,void  *param_1)
 }
 void * Genx::wprobe(void *that,void *param_1,int *param_2)
 {
-	return that;
+	// Used only to deny an unsupported physical framebuffer on a VF.
+	return nullptr;
 }
 
 void Genx::dovoid()

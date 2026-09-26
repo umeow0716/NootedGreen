@@ -562,3 +562,35 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   returning failure. Those remain review items. No VM test is authorized by
   a successful preflight alone.
 - Fallback checkpoint aa1babd CI run 36218749302 succeeded.
+
+### Legacy renamed ICL framebuffer / DVMT review
+
+- Read kern_genx.cpp/.hpp. Its renamed ICL framebuffer path was independently
+  reachable and not VF-aware. For VF/unknown identity it now routes native
+  probe/start to rejection before installing legacy clock/DVMT/PM patches;
+  mandatory route failure is fatal rather than allowing physical startup.
+  This does not implement a virtual display or cover other framebuffer paths.
+- Removed four active empty sleep/wake hooks from the physical path; native
+  transitions are preserved. The unused AUX wrapper also checks read success,
+  non-null buffer and full DPCD capability length before inspecting fields.
+- The old DVMT scanner ignored write-enable failure, could copy more bytes
+  than its NOP buffer, did not verify register operands/width, and repeatedly
+  mutated its MOV opcode on every remaining loop iteration after a match.
+- Replaced it with bounded decoding of a padded local 15-byte window, checked
+  image bounds, a maximum of 64 instructions and return/tail-jump termination.
+  Only adjacent 32-bit SHL reg,17 + AND same-reg,0xFE000000 are accepted.
+  It writes once and stops; failed write permission aborts, failed protection
+  restoration is fatal. A missing pair leaves native code unchanged.
+- The replacement is MOV reg,stolen_size + TEST reg,reg + NOP padding:
+  unlike the previous MOV-only sequence it supplies the defined logical
+  condition flags (SF/ZF/PF, cleared CF/OF; AF is unspecified) for the new
+  result. Rejected encodings leave the output buffer untouched.
+- New offline tests cover 26,688 register/immediate/corruption combinations,
+  exact output guards, accumulator-specific AND and short/null buffers.
+  Full suites passed in /tmp/ngreen-static.qXt19o before the additional
+  framebuffer admission guard; subsequent full validation is required.
+- Remaining limitations: no exact payload UUID/function-length allowlist,
+  optional patch may not match, BIOS stolen-memory truth and generation-wide
+  physical display/clock/PM behavior are not certified. Other unused legacy
+  wrappers and commented patch experiments still need removal/review.
+- Lookup preflight checkpoint 261ca1a CI run 36218855810 succeeded.
