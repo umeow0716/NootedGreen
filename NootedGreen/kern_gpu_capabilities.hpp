@@ -30,6 +30,16 @@ namespace NGGpuCapabilities {
 // devices must not be probed using another generation's register layout.
 enum class Sriov : uint8_t { Unknown, Absent, Present };
 
+inline bool isTigerLake(uint32_t device) {
+    switch (device) {
+        case 0x9A60: case 0x9A68: case 0x9A70: case 0x9A40: case 0x9A49:
+        case 0x9A59: case 0x9A78: case 0x9AC0: case 0x9AC9: case 0x9AD9: case 0x9AF8:
+            return true;
+        default:
+            return false;
+    }
+}
+
 // Source: i915-sriov-dkms-2026.03.05.7 pciids.h plus i915_pci.c has_sriov.
 // Exact IDs intentionally avoid broad family masks, CPU model and BAR size.
 inline Sriov sriov(uint32_t device) {

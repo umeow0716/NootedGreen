@@ -756,3 +756,19 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   enabling, global IOAccelFamily capability bypass/mode stripping, dormant
   false-success wrapper, panel-data allocation ownership and partial property
   allocation failure. Reading a file is not closing its review findings.
+
+### Physical GuC firmware device classification
+
+- Replaced the physical TGL firmware entry's CPU-model gate with exact
+  pre-spoof GPU PCI ID membership from i915 INTEL_TGL_IDS (11 IDs). A guest
+  CPUID model is not the GPU generation. VF admission remains a separate
+  identity decision and does not enter this physical firmware branch.
+- Extended the 65,536-ID test to check the TGL classification against the
+  actual primary-source macro expansion; it passes along with all previous
+  capability classifications and the complete suite in
+  /tmp/ngreen-static.B4lUv5.
+- The many other isRealTGL gates are deliberately NOT mechanically rewritten:
+  several currently conflate platform workarounds and physical/VF behavior,
+  and need individual control-flow review. Exact TGL membership also does
+  not establish stepping-specific firmware compatibility or loaded-payload
+  correctness on all physical devices. These remain open.

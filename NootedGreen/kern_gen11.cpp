@@ -8809,10 +8809,10 @@ unsigned long Gen11::loadGuCBinary(void *that) {
 		return initialized && !gVfProtocolFault;
 	}
 
-	// Physical firmware loading is still limited by the existing platform
-	// gate. Unsupported platforms must not pretend firmware is running.
-	// TODO: replace the CPU-based gate with verified GPU-IP/payload support.
-	if (that && NGreen::callback->isRealTGL) {
+	// Firmware belongs to the actual GPU, not the host/guest CPUID model or
+	// the spoofed device-id property. Other physical generations need their
+	// own validated firmware path, not a successful return without a load.
+	if (that && NGGpuCapabilities::isTigerLake(NGreen::callback->getOriginalDeviceId())) {
 		SYSLOG("ngreen", "loadGuCBinary: real TGL — calling original for GuC firmware load");
 		return FunctionCast(loadGuCBinary, callback->oloadGuCBinary)(that);
 	}

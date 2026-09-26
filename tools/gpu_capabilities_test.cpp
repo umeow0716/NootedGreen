@@ -17,11 +17,13 @@ int main() {
     assert(sriov(0x1A7A8U) == Sriov::Unknown);
     assert(sriov(0xA7FF) == Sriov::Unknown); // no broad family-mask guesses
 
-    unsigned present = 0, absent = 0;
+    assert(!isTigerLake(0x19A49U));
+    unsigned present = 0, absent = 0, tigerLake = 0;
 #ifdef NGREEN_REFERENCE_PCIIDS
     // Expand the primary-source ID macros, independently of our switch.
     // Membership follows has_sriov in i915_pci.c from the same source tree.
 #define ID(value, ...) value
+    const uint32_t tglIds[] = { INTEL_TGL_IDS(ID) };
     const uint32_t withSriov[] = {
         INTEL_TGL_IDS(ID), INTEL_ADLS_IDS(ID), INTEL_ADLP_IDS(ID),
         INTEL_ADLN_IDS(ID), INTEL_RPLS_IDS(ID), INTEL_RPLU_IDS(ID),
@@ -37,7 +39,11 @@ int main() {
         const auto actual = sriov(id);
         present += actual == Sriov::Present;
         absent += actual == Sriov::Absent;
+        tigerLake += isTigerLake(id);
 #ifdef NGREEN_REFERENCE_PCIIDS
+        bool expectedTgl = false;
+        for (auto known : tglIds) expectedTgl |= known == id;
+        assert(isTigerLake(id) == expectedTgl);
         Sriov expected = Sriov::Unknown;
         for (auto known : withSriov)
             if (known == id) { assert(expected == Sriov::Unknown); expected = Sriov::Present; }
@@ -46,7 +52,7 @@ int main() {
         assert(actual == expected);
 #endif
     }
-    assert(present == 70 && absent == 65);
+    assert(present == 70 && absent == 65 && tigerLake == 11);
     std::printf("PASS: 65536 PCI IDs (%u VF_CAP-capable, %u without SR-IOV)%s\n",
                 present, absent,
 #ifdef NGREEN_REFERENCE_PCIIDS
