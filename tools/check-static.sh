@@ -208,4 +208,11 @@ if "$compiler" -std=c++14 -O1 -g -fsanitize=address,undefined \
 else
     failed=1
 fi
+if "$compiler" -std=c++14 -O1 -g -fsanitize=address,undefined \
+    tools/vf_guc_event_test.cpp -o "$task_output/vf-guc-event-test" && \
+    "$task_output/vf-guc-event-test"; then
+    printf 'PASS offline GuC G2H-event contract tests\n'
+else
+    failed=1
+fi
 exit "$failed"

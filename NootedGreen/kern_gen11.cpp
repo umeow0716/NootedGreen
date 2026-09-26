@@ -14,6 +14,7 @@
 #include "kern_vf_tlb_patch.hpp"
 #include "kern_unaligned_patch.hpp"
 #include "kern_framebuffer_patch.hpp"
+#include "kern_vf_guc_event.hpp"
 #include "kern_vf_guc_request.hpp"
 #include "kern_vf_memirq.hpp"
 #include "kern_context_pool.hpp"
@@ -89,17 +90,12 @@ constexpr uint32_t kGucActionHost2GucSelfCfg = 0x0508;
 constexpr uint32_t kGucActionHost2GucControlCtb = 0x4509;
 constexpr uint32_t kGucActionRegisterContext = NGVfGuCRequest::registerContext;
 constexpr uint32_t kGucActionDeregisterContext = NGVfGuCRequest::deregisterContext;
-constexpr uint32_t kGucActionDeregisterContextDone = 0x4600;
 constexpr uint32_t kGucActionScheduleContext = NGVfGuCRequest::scheduleContext;
 constexpr uint32_t kGucActionScheduleContextModeSet =
 	NGVfGuCRequest::scheduleContextModeSet;
-constexpr uint32_t kGucActionScheduleContextModeDone = 0x1002;
-constexpr uint32_t kGucActionContextResetNotification = 0x1008;
-constexpr uint32_t kGucActionEngineFailureNotification = 0x1009;
 constexpr uint32_t kGucActionUpdateContextPolicies =
 	NGVfGuCRequest::updateContextPolicies;
 constexpr uint32_t kGucActionTlbInvalidation = NGVfGuCRequest::tlbInvalidation;
-constexpr uint32_t kGucActionTlbInvalidationDone = 0x7001;
 constexpr uint32_t kGucSelfCfgMemIrqStatusAddr = 0x0900;
 constexpr uint32_t kGucSelfCfgMemIrqSourceAddr = 0x0901;
 constexpr uint32_t kGucSelfCfgH2GCtbAddr = 0x0902;
@@ -4566,19 +4562,17 @@ bool Gen11::vfCtbGucToHostAction(void *that, uint32_t *message) {
 		return false;
 	}
 
-	// MODE_SET and DEREGISTER complete asynchronously.  Consume their v70
-	// lifecycle payload before handing the event to Apple's legacy interrupt
-	// parser, which has no knowledge of either action.  This is the point that
-	// makes ID reuse safe: a slot remains unavailable until GuC confirms that it
-	// no longer references the old LRCA.
+	// The FAST-only bridge implements exactly three asynchronous completions.
+	// It cannot service relay, log, capture or other GuC events, so accepting
+	// and dropping one would desynchronize firmware state. Match i915's
+	// unsupported-event failure policy instead of forwarding it to Tahoe's
+	// legacy dispatcher, which has no modern-v70 event implementation.
+	const auto event = NGVfGuCEvent::inspect(hxg, length);
 	const uint32_t action = hxg & 0xFFFFU;
-	if (!response && (hxg & kGucOriginGuc) != 0 &&
-	    ((action == kGucActionTlbInvalidationDone && length != 2) ||
-	     (action == kGucActionScheduleContextModeDone && length != 3) ||
-	     (action == kGucActionDeregisterContextDone && length != 2))) {
-		SYSLOG("ngreen", "V238: malformed GuC completion action=0x%04x len=%u",
-		       action, length);
-		vfMarkProtocolFault("malformed GuC lifecycle completion");
+	if (!event.valid()) {
+		SYSLOG("ngreen", "V238: unsupported or malformed GuC event action=0x%04x len=%u hxg=0x%08x",
+		       action, length, hxg);
+		vfMarkProtocolFault("unsupported or malformed GuC G2H event");
 		return false;
 	}
 	// Match intel_guc_ct.c:ct_handle_event: return reserved receive space as
@@ -4586,12 +4580,11 @@ bool Gen11::vfCtbGucToHostAction(void *that, uint32_t *message) {
 	// its lifecycle payload. A late/stale event must not leak credits and block
 	// transport drain forever; an unsolicited event still trips the accounting
 	// underflow guard and is then rejected by the state checks below.
-	if (action == kGucActionTlbInvalidationDone ||
-	    action == kGucActionScheduleContextModeDone ||
-	    action == kGucActionDeregisterContextDone)
-		vfReleaseG2HCredits(length + 1U); // include the CT transport header
-	if (!response && (hxg & kGucOriginGuc) != 0 &&
-	    action == kGucActionTlbInvalidationDone && length >= 2) {
+	if (event.responseCredits)
+		vfReleaseG2HCredits(event.responseCredits);
+	if (gVfProtocolFault)
+		return false;
+	if (event.kind == NGVfGuCEvent::Kind::TlbInvalidationDone) {
 		const uint32_t seqno = message[2];
 		if (gVfTlbWaitActive && seqno == gVfTlbWaitSeqno &&
 		    OSCompareAndSwap(seqno - 1U, seqno, &gVfTlbDoneSeqno)) {
@@ -4604,22 +4597,20 @@ bool Gen11::vfCtbGucToHostAction(void *that, uint32_t *message) {
 			}
 		}
 	}
-	if (!response && (hxg & kGucOriginGuc) != 0 &&
-	    (action == kGucActionContextResetNotification ||
-	     action == kGucActionEngineFailureNotification)) {
-		const uint32_t payload0 = length >= 2 ? message[2] : 0;
+	if (event.fatal()) {
+		const uint32_t payload0 = message[2];
 		const uint32_t payload1 = length >= 3 ? message[3] : 0;
 		const uint32_t payload2 = length >= 4 ? message[4] : 0;
 		SYSLOG("ngreen", "V234: GuC failure event action=0x%04x len=%u payload=%08x:%08x:%08x",
 		       action, length, payload0, payload1, payload2);
-		vfMarkProtocolFault(action == kGucActionContextResetNotification ?
+		vfMarkProtocolFault(event.kind == NGVfGuCEvent::Kind::ContextReset ?
 		                         "GuC context reset notification" :
 		                         "GuC engine failure notification");
+		return false;
 	}
-	if (!response && (hxg & kGucOriginGuc) != 0 && gVfContextLock &&
-	    gVfContexts &&
-	    ((action == kGucActionScheduleContextModeDone && length >= 3) ||
-	     (action == kGucActionDeregisterContextDone && length >= 2))) {
+	if (gVfContextLock && gVfContexts &&
+	    (event.kind == NGVfGuCEvent::Kind::ScheduleContextModeDone ||
+	     event.kind == NGVfGuCEvent::Kind::DeregisterContextDone)) {
 		const uint32_t gucId = message[2];
 		bool handled = false;
 		VfGucContextState newState = kVfGucContextEmpty;
@@ -4627,7 +4618,7 @@ bool Gen11::vfCtbGucToHostAction(void *that, uint32_t *message) {
 			const IOInterruptState interruptState =
 				IOSimpleLockLockDisableInterrupt(gVfContextLock);
 			auto &entry = gVfContexts[gucId];
-			if (action == kGucActionScheduleContextModeDone) {
+			if (event.kind == NGVfGuCEvent::Kind::ScheduleContextModeDone) {
 				// MODE_SET completions are ordered.  An enable can already be
 				// followed by a disable when teardown races the first submission;
 				// retire the enable token first instead of mistaking its MODE_DONE
@@ -4665,6 +4656,7 @@ bool Gen11::vfCtbGucToHostAction(void *that, uint32_t *message) {
 			SYSLOG("ngreen", "V237: unexpected GuC lifecycle event action=0x%04x id=%u state=%u",
 			       action, gucId, static_cast<unsigned int>(newState));
 			vfMarkProtocolFault("unexpected GuC context lifecycle event");
+			return false;
 		}
 	}
 
@@ -4739,6 +4731,11 @@ void Gen11::vfSoftwareGuCInterrupt(void *that, IOInterruptEventSource *source, i
 		// Retain the native consumer call boundary, but do not interpret the
 		// returned modern HXG action as legacy log-flush status bits.
 		(void)consume(ctb);
+		// The routed parser consumes a malformed/fatal frame before setting the
+		// quarantine flag. Stop immediately; never feed later frames through a
+		// transport whose firmware/host state is already unknown.
+		if (gVfProtocolFault)
+			return;
 		uint32_t after = 0;
 		if (vfG2HCtbPending(after) && after == before) {
 			static uint32_t stalledLogs = 0;
