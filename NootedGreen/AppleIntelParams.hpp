@@ -554,14 +554,21 @@ static_assert(__builtin_offsetof(IntelAccelerator, fResetRegCount)      == 0x12C
 static_assert(__builtin_offsetof(IntelAccelerator, fResetRegCapacity)   == 0x12C8, "IntelAccelerator.fResetRegCapacity");
 static_assert(__builtin_offsetof(IntelAccelerator, fResetRegData)       == 0x12D0, "IntelAccelerator.fResetRegData");
 
-// IGAccelTask — fContext confirmed from IGAccelTask::getBlit3DContext disasm
-// (task+0x298 used throughout kern_gen11.cpp).
+// IGAccelTask context slots confirmed from the Tahoe TGL getters at
+// 0x80ae/0x8114/0x817a/0x81f6. initWithOptions clears all four and release
+// independently notifies/releases them; they are distinct owned objects.
 struct IGAccelTask {
-    uint8_t        _pad_0000[0x298];       // +0x0
-    void          *fContext;               // +0x298  IGHardwareExtendedContext*
+    uint8_t        _pad_0000[0x290];       // +0x0
+    void          *fBlit2DContext;         // +0x290  IGHardwareBlit2DContext*
+    void          *fBlit3DContext;         // +0x298  IGHardwareBlit3DContext*
+    void          *fDepthResolveContext;   // +0x2A0  IGHardwareResolveContext*
+    void          *fColorResolveContext;   // +0x2A8  IGHardwareResolveContext*
 };
 // NOTE: total size is a lower bound.
-static_assert(__builtin_offsetof(IGAccelTask, fContext) == 0x298, "IGAccelTask.fContext");
+static_assert(__builtin_offsetof(IGAccelTask, fBlit2DContext)       == 0x290, "IGAccelTask.fBlit2DContext");
+static_assert(__builtin_offsetof(IGAccelTask, fBlit3DContext)       == 0x298, "IGAccelTask.fBlit3DContext");
+static_assert(__builtin_offsetof(IGAccelTask, fDepthResolveContext) == 0x2A0, "IGAccelTask.fDepthResolveContext");
+static_assert(__builtin_offsetof(IGAccelTask, fColorResolveContext) == 0x2A8, "IGAccelTask.fColorResolveContext");
 
 // IGHardwareBlit3DContext — vtable confirmed; unk_0112 from blit3d_init_ctx disasm
 // (movb $0x0, 0x112(%rdi) — byte, NOT uint32_t; total struct size = 0x118 from MetaClass).

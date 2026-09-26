@@ -1616,3 +1616,40 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
 - The complete syntax gate, zero-finding analyzer, strict Gen11 ABI warnings
   and all sanitizer protocol models pass in `/tmp/ngreen-static.ki6tdp`. No
   kext was installed and `macos-tahoe-sriov` remained off.
+
+### Native blit producer admission and task ownership
+
+- Re-disassembled the UUID-pinned Tahoe TGL `IGAccelTask` lifecycle. Its four
+  independently owned context slots are Blit2D `+0x290`, Blit3D `+0x298`,
+  depth resolve `+0x2a0` and color resolve `+0x2a8`; `initWithOptions` clears
+  all four and `release` separately notifies/releases them. The prior wrappers
+  copied Blit3D `task+0x298` into unrelated base-class `task+0xb8` storage and
+  could return the accelerator's borrowed kernel task after user-task factory
+  failure. Both behaviors violated the inspected layout/ownership and are gone.
+- VF `submitBlit`, `barrierSubmission` and their context getters now admit
+  native CPU command production only when identity, GGTT, memory IRQ, both CTB
+  mappings and enabled transport are live, while stopped/fault states are all
+  absent. The pure gate exhaustively tests all 512 combinations and admits
+  exactly the one complete state. No wrapper reports successful work without
+  calling the native producer.
+- The pinned `submitBlit` returns true for an empty vector before touching its
+  parameter/task objects; real work selects a native 2D or 3D context and then
+  dereferences that context's FIFO at `+0xb8`. The wrapper preserves the empty
+  operation, validates real-work inputs, primes both possible native contexts
+  without editing private task slots, and propagates the native boolean.
+  Later-generation physical GPUs still explicitly reject the historically
+  hanging route-selector 3 until generation-specific EU payloads exist; VF is
+  allowed to validate it through the GuC/direct-LRCA bridge.
+- The complete Tahoe `barrierSubmission` body gets Blit2D, Blit3D and depth
+  contexts unconditionally and may get color, then performs real event/FIFO
+  barriers. Both PF compatibility and VF paths now require those objects/FIFOs
+  and call the original; the former V130 constant-success and warm-up modes are
+  deleted. V120/V142 task substitution and return-mode boot arguments, plus the
+  conditional physical BCS interrupt switch, are also deleted. Every admitted
+  physical native producer now enables both RCS and BCS completion bits; VF
+  continues to use only its isolated memory-IRQ bridge.
+- `AppleIntelParams.hpp` now records all four verified task context slots
+  instead of calling only `+0x298` a generic context. This evidence is confined
+  to the pinned payload UUID; dynamic allocation, GuC completion and renderer
+  behavior remain to be validated. The VM remains off until the remaining
+  active-route semantic review is cleared.

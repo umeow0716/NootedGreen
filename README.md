@@ -221,12 +221,6 @@ Where:
 | `-ngreenv93` / `ngreenv93=1` | Enable V93 plane guard diagnostics (disabled by default). |
 | `-ngreenfullmtl` / `ngreenfullmtl=1` | Kernel-side full-Metal policy override. It does not enable a DYLD control-flow patch and does not auto-enable Apple's original Blit3D initializer. |
 | `-ngreenfullmtlcore` / `ngreenfullmtlcore=1` | Equivalent kernel-side-only full-Metal policy override; the unified `-ngreenfullmtl` remains a fallback. |
-| `ngreenV142=0|1|2|3` / `-ngreenV142hardunsupported` / `-ngreenV142ok` / `-ngreenV142pass` / `-ngreenV142orig` | Select spoof-path `submitBlit` behavior on non-real TGL. `0`=return unsupported, `1`=bypass return 0 (**default/recommended**), `2`=bypass return 1, `3`=call Apple original (high-risk diagnostic). V186 applies this mode early before task/context mutation to reduce `IGAccelTask::release` lifetime crashes. |
-| `-ngreenbcsirq` | Enable BCS bit in tier-1 interrupt want mask on spoof path (advanced diagnostic). |
-| `ngreenV120=0|1|2` / `-ngreenV120ok` / `-ngreenV120fail` / `-ngreenV120pass` | Fallback return mode used when submitBlit sees invalid/null task on spoof path. |
-| `ngreenV130=0|1|2|3` / `-ngreenV130fail` / `-ngreenV130pass` / `-ngreenV130orig` / `-ngreenV130hybrid` | `barrierSubmission` spoof policy on non-real TGL. |
-| `ngreenV130warmup=N` | Hybrid warmup window for `ngreenV130=3` (`0..200`, default 12 calls). |
-| `-ngreenV130forceorig` | Allow unsafe original barrier path when mode requests it. |
 | `-ngreenV69AllowOriginal` | Opt in to Apple's original Blit3D initialize on non-real TGL when safety preconditions are met. **High risk / diagnostic only**; can panic on unsupported setups. |
 | `-ngreenV69SkipOriginal` | Hard-disable Apple's original Blit3D initialize on non-real TGL, even if `-ngreenV69AllowOriginal` is present. |
 | `-ngreenV69ForceOriginalUnsafe` | Override safety rejection and force original Blit3D init on spoofed RPL/ADL (crash-debug only). |
@@ -236,12 +230,6 @@ Where:
 | `IGLogLevel=8` | Maximum Intel GPU driver logging |
 | `-liludbg` | Enable Lilu debug logging |
 | `liludump=N` | Dump Lilu logs after `N` seconds (example: 125 or 200). |
-
-Recommended debug order for `ngreenV142` on spoofed RPL/ADL:
-
-1. `ngreenV142=1` (stable bypass baseline)
-2. `ngreenV142=2` (alternate bypass semantics)
-3. `ngreenV142=3` only for controlled repro (Apple original path)
 
 ## Hookcase
 

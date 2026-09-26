@@ -1438,9 +1438,6 @@ private:
 	mach_vm_address_t oAcceleratorStop {};
 
 
-	static void *createUserGPUTask(void *that);  // V132: fallback when per-user task creation returns null on spoofed RPL
-	mach_vm_address_t ocreateUserGPUTask {};
-
 	static void *igAccelTaskWithOptions(void *that);  // V216: repair VF bootstrap identity and propagate allocation failures
 	mach_vm_address_t oigAccelTaskWithOptions {};
 	mach_vm_address_t igAccelTaskCounter {};  // V216: IGAccelTask::fTaskCounter, repaired before VF kernel-task construction
