@@ -8959,7 +8959,14 @@ bool Gen11::vfCtbGucToHostAction(void *that, uint32_t *message) {
 }
 
 void Gen11::vfReadAndClearInterrupts(void *that, void *interrupts) {
-	if (!gVfGGTTReady || NGreen::callback->isRealTGL) {
+	// The bridge is live before GuC CTB setup reaches vfConfigureMemIrq().
+	// Preserve Tahoe's original interrupt path throughout that bootstrap
+	// window; returning an empty bitset here starves the driver's synchronous
+	// bring-up waits and leaves IntelAccelerator::start spinning before CTB
+	// registration.  Switch transport only after both the CPU mapping and the
+	// GuC self-config writes are complete.
+	if (!gVfGGTTReady || !gVfMemIrqConfigured || !gVfCtbCpuBase ||
+	    NGreen::callback->isRealTGL) {
 		FunctionCast(vfReadAndClearInterrupts,
 		             callback->oVfReadAndClearInterrupts)(that, interrupts);
 		return;
@@ -8969,9 +8976,6 @@ void Gen11::vfReadAndClearInterrupts(void *that, void *interrupts) {
 
 	auto *pending = reinterpret_cast<uint64_t *>(interrupts);
 	*pending = 0;
-	if (!gVfMemIrqConfigured || !gVfCtbCpuBase)
-		return;
-
 	auto *page = reinterpret_cast<volatile uint8_t *>(
 		gVfCtbCpuBase + kVfMemIrqOffset);
 	auto *statusBase = page + kVfMemIrqStatusOffset;
