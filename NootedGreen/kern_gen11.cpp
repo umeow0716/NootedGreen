@@ -13,6 +13,7 @@
 #include "kern_vf_tlb_patch.hpp"
 #include "kern_unaligned_patch.hpp"
 #include "kern_framebuffer_patch.hpp"
+#include "kern_vf_guc_request.hpp"
 #include "kern_context_pool.hpp"
 #include "kern_context_descriptor.hpp"
 #include "kern_workqueue_unwind.hpp"
@@ -84,16 +85,18 @@ constexpr uint32_t kGucActionVfReset = 0x5507;
 constexpr uint32_t kGucActionQuerySingleKlv = 0x5509;
 constexpr uint32_t kGucActionHost2GucSelfCfg = 0x0508;
 constexpr uint32_t kGucActionHost2GucControlCtb = 0x4509;
-constexpr uint32_t kGucActionRegisterContext = 0x4502;
-constexpr uint32_t kGucActionDeregisterContext = 0x4503;
+constexpr uint32_t kGucActionRegisterContext = NGVfGuCRequest::registerContext;
+constexpr uint32_t kGucActionDeregisterContext = NGVfGuCRequest::deregisterContext;
 constexpr uint32_t kGucActionDeregisterContextDone = 0x4600;
-constexpr uint32_t kGucActionScheduleContext = 0x1000;
-constexpr uint32_t kGucActionScheduleContextModeSet = 0x1001;
+constexpr uint32_t kGucActionScheduleContext = NGVfGuCRequest::scheduleContext;
+constexpr uint32_t kGucActionScheduleContextModeSet =
+	NGVfGuCRequest::scheduleContextModeSet;
 constexpr uint32_t kGucActionScheduleContextModeDone = 0x1002;
 constexpr uint32_t kGucActionContextResetNotification = 0x1008;
 constexpr uint32_t kGucActionEngineFailureNotification = 0x1009;
-constexpr uint32_t kGucActionUpdateContextPolicies = 0x100B;
-constexpr uint32_t kGucActionTlbInvalidation = 0x7000;
+constexpr uint32_t kGucActionUpdateContextPolicies =
+	NGVfGuCRequest::updateContextPolicies;
+constexpr uint32_t kGucActionTlbInvalidation = NGVfGuCRequest::tlbInvalidation;
 constexpr uint32_t kGucActionTlbInvalidationDone = 0x7001;
 constexpr uint32_t kGucSelfCfgMemIrqStatusAddr = 0x0900;
 constexpr uint32_t kGucSelfCfgMemIrqSourceAddr = 0x0901;
@@ -452,17 +455,17 @@ bool vfSendCtbFastAction(void *guc, const uint32_t *request,
 	                     IOLock *alreadyHeldQueue = nullptr)
 {
 	transportFence = 0;
-	if (!vfCanUseSleepingLock())
-		return false;
 	if (!guc || !request || requestLength == 0 || requestLength > 31 ||
 	    (request[0] & (kGucOriginGuc | kGucTypeMask)))
 		return false;
-	const uint32_t action = request[0] & 0xFFFFU;
-	const bool retirementAction =
-		(action == kGucActionDeregisterContext) ||
-		(action == kGucActionTlbInvalidation) ||
-		(action == kGucActionScheduleContextModeSet &&
-		 requestLength >= 3 && request[2] == kGucContextDisable);
+	const auto attributes = NGVfGuCRequest::inspect(request, requestLength);
+	if (!attributes.valid) {
+		vfMarkProtocolFault("malformed or unsupported VF GuC FAST request");
+		return false;
+	}
+	if (!vfCanUseSleepingLock())
+		return false;
+	const bool retirementAction = attributes.retirement;
 	if (!gVfCtbGpuBase || !gVfCtbEnabled || gVfProtocolFault || gVfCtbStopped ||
 	    (gVfSubmissionStopped && !retirementAction))
 		return false;
@@ -486,8 +489,7 @@ bool vfSendCtbFastAction(void *guc, const uint32_t *request,
 	}
 
 	transportFence = 0;
-	const uint32_t responseCredits = action == kGucActionScheduleContextModeSet ? 4U :
-		(action == kGucActionDeregisterContext || action == kGucActionTlbInvalidation ? 3U : 0U);
+	const uint32_t responseCredits = attributes.responseCredits;
 	uint64_t deadline = 0;
 	clock_interval_to_deadline(kVfCtbBackpressureTimeoutMs,
 	                           kMillisecondScale, &deadline);

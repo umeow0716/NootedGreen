@@ -74,6 +74,9 @@ inherit runtime claims from the older Sonoma/Raptor Lake display experiments.
   or target-specific 64-EU constant remains.
 - Native blit and barrier producers run only when GGTT, CTB, memory IRQ and
   shutdown gates are all ready. Their real native result is propagated.
+- The direct CTB producer admits only the six GuC v70 FAST request shapes this
+  VF bridge implements. Exact request bodies determine retirement permission
+  and G2H credit reservations before anything is written to the transport.
 - Physical engine start/stop/reset-list handling is native. The former GDRST,
   blanket EMR masking, ring rewrites, GGTT[0] diagnostic remaps and recurring
   health-monitor timers have been removed.

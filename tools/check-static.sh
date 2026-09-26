@@ -194,4 +194,11 @@ if "$compiler" -std=c++14 -O1 -g -fsanitize=address,undefined \
 else
     failed=1
 fi
+if "$compiler" -std=c++14 -O1 -g -fsanitize=address,undefined \
+    tools/vf_guc_request_test.cpp -o "$task_output/vf-guc-request-test" && \
+    "$task_output/vf-guc-request-test"; then
+    printf 'PASS offline GuC FAST-request contract tests\n'
+else
+    failed=1
+fi
 exit "$failed"

@@ -2062,3 +2062,25 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   complete image. The full syntax/analyzer/strict-ABI/sanitizer and all four
   pinned-payload anchor suites pass in `/tmp/ngreen-static.oHyihM`. The VM
   remained shut off.
+
+### Admit only the six implemented GuC v70 FAST requests
+
+- The VF CTB producer previously accepted any host-origin request up to 31
+  dwords and inferred reply-space reservations from only the action number.
+  A malformed internal caller could therefore publish an unsupported action or
+  reserve credits for a request whose body did not match the expected reply.
+- A pure pre-publication validator now admits only the six requests constructed
+  by this bridge: single-LRC register, context-policy update, schedule,
+  schedule-mode, deregister and full GuC TLB invalidation. It checks exact
+  lengths, context-ID bounds, KMD/single-engine registration fields, zero
+  work-queue fields, engine class/mask, 32-bit LRCA form, exact KLV order and
+  bounded values, mode, and heavy/full/flush invalidation flags.
+- Retirement admission and G2H credit reservations are returned by that same
+  validation result. The sender no longer carries a second action-only model
+  that can drift from the accepted body. Unsupported or malformed bodies fault
+  the VF before acquiring the queue lock or writing the H2G ring.
+- A sanitizer test accepts both i915 timeout profiles and every valid emitted
+  request, rejects every alternate length through 13 dwords, and mutates each
+  constrained field plus IDs, modes, invalidation flags and unknown actions.
+  The complete local suite passes in `/tmp/ngreen-static.weYYxH`; the VM stayed
+  off. This validates host-side request construction, not GuC execution.
