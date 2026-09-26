@@ -12,6 +12,7 @@
 #include "kern_vf_runtime.hpp"
 #include "kern_vf_runtime_patch.hpp"
 #include "kern_vf_mmio_response.hpp"
+#include "kern_vf_legacy_ctb.hpp"
 #include "kern_vf_tlb_patch.hpp"
 #include "kern_unaligned_patch.hpp"
 #include "kern_framebuffer_patch.hpp"
@@ -3532,6 +3533,11 @@ bool Gen11::vfLegacyHostToGuCAction(void *that, const uint32_t *request,
 bool Gen11::vfMmioHostToGuCAction(void *that, const uint32_t *request,
 	                              unsigned int requestLength, int timeout,
 	                              uint32_t *response) {
+	// All rejected requests leave an explicit failure result. Apple's audited
+	// registration/deregistration callers pass null here, but the routed ABI
+	// must not expose an uninitialized success value to any future caller.
+	if (response)
+		*response = 1;
 	// Readiness is not device identity. A failed VF bootstrap must never
 	// fall through to Apple's physical scratch/doorbell implementation.
 	if (!gVfGGTTReady) {
@@ -3558,9 +3564,12 @@ bool Gen11::vfMmioHostToGuCAction(void *that, const uint32_t *request,
 	// only the registration/teardown actions. Modern VF mailbox operations
 	// use vfGucSendMMIO directly; arbitrary legacy requests are not forwarded.
 	if (request[0] == 0x4505U) {
-		if (requestLength != 4 || request[2] != 0x40U || request[3] > 1U) {
-			SYSLOG("ngreen", "V223: rejected malformed legacy CTB registration len=%u args=%08x/%08x/%08x",
-			       requestLength, request[1], request[2], request[3]);
+		if (!NGVfLegacyCtb::registration(request, requestLength,
+		                                  gVfCtbGpuBase)) {
+			// requestLength is attacker-controlled protocol input. Do not inspect
+			// absent arguments merely to report a malformed request.
+			SYSLOG("ngreen", "V223: rejected malformed legacy CTB registration len=%u",
+			       requestLength);
 			return false;
 		}
 		const bool ok = vfConfigureModernCtb(request[3] == 1U, request[1]);
@@ -3573,7 +3582,12 @@ bool Gen11::vfMmioHostToGuCAction(void *that, const uint32_t *request,
 	// modern VF ABI owns both channels under one 0x4509 control bit, so disable
 	// once on Apple's first (type 0) request and acknowledge the second locally.
 	if (request[0] == 0x4506U) {
-		if (requestLength != 3 || request[2] > 1U) {
+		auto *ctb = getMember<void *>(that, 0xA10);
+		const bool ownedCtb = ctb && ctb == gVfCtbObject;
+		const uint32_t registrationToken = ownedCtb ?
+			getMember<uint32_t>(ctb, 0x38) : 0U;
+		if (!ownedCtb || !NGVfLegacyCtb::deregistration(
+				request, requestLength, registrationToken)) {
 			SYSLOG("ngreen", "V224: rejected malformed legacy CTB deregistration len=%u",
 			       requestLength);
 			return false;

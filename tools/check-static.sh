@@ -173,6 +173,13 @@ else
     failed=1
 fi
 if "$compiler" -std=c++14 -O1 -g -fsanitize=address,undefined \
+    tools/vf_legacy_ctb_test.cpp -o "$task_output/vf-legacy-ctb-test" && \
+    "$task_output/vf-legacy-ctb-test"; then
+    printf 'PASS offline VF legacy-CTB request contract tests\n'
+else
+    failed=1
+fi
+if "$compiler" -std=c++14 -O1 -g -fsanitize=address,undefined \
     tools/vf_runtime_patch_test.cpp -o "$task_output/vf-runtime-patch-test" && \
     "$task_output/vf-runtime-patch-test" \
         sle_Internal/le/AppleIntelTGLGraphics.kext/Contents/MacOS/AppleIntelTGLGraphics \

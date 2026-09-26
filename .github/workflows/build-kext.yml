@@ -18,6 +18,7 @@ on:
       - "tools/vf_irq_gate_test.cpp"
       - "tools/vf_context_shutdown_test.cpp"
       - "tools/vf_mmio_response_test.cpp"
+      - "tools/vf_legacy_ctb_test.cpp"
       - "tools/phy_translation_test.cpp"
       - "tools/pattern_match_test.cpp"
       - "tools/dvmt_patch_test.cpp"
