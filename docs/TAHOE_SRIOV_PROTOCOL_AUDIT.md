@@ -2433,3 +2433,20 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   compatibility getter unreachable.  The only remaining `readReg32`/
   `writeReg32` consumers are the admitted VF GuC mailbox and notification
   registers, all constrained by the fixed VF MMIO allowlist.
+
+### Restore the native display-pipe contract and remove the dead ABI catalogue
+
+- Both bundled TGL accelerator personalities declare `DisplayPipeSupported`
+  and `TransactionsSupported` as boolean true. The manual injected personality
+  instead hardcoded numeric zero, while the documented `ngreendp0`/`ngreendp1`
+  selector had no caller. That mismatch could force WindowServer onto a
+  degraded software-composition path.
+- The injected dictionary now preserves the native boolean-true contract. The
+  dead selector and its README switches were removed. This closes a static
+  personality mismatch; it is not yet runtime evidence of accelerated display.
+- `kern_gen11.hpp` had grown to 1,083 lines even though the product consumed
+  only the address-range type, six engine values and the active route class.
+  Old workaround/ring/reset/display macros, topology tables, connector and
+  framebuffer structs, bit walkers and six undefined direct-MMIO declarations
+  were removed. The fully replaced VF submit route also no longer captures an
+  unused original implementation.

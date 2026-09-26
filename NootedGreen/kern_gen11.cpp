@@ -1703,54 +1703,6 @@ void Gen11::init() {
 	}
 }
 
-static bool isDisplayPipeForceDisabled() {
-	// NOTE: isLegacyOwnershipModeEnabled() (V80 plane-linearization) is intentionally
-	// NOT checked here. V80 writes are self-limiting to the first 3 ticks (≤150ms) and
-	// must not prevent WindowServer from opening the display pipe after that window.
-	// Coupling these two features caused DisplayPipeSupported=0 → black screen forever.
-
-	// Stage-3 baseline now has DYLD-side NULL guards for DisplayPipe path.
-	// Keep native DisplayPipe ON by default and use ngreendp0 only as an explicit
-	// fallback switch when troubleshooting.
-	int nativeDisplayPipe = 0;
-	if (PE_parse_boot_argn("ngreendp1", &nativeDisplayPipe, sizeof(nativeDisplayPipe))) {
-		SYSLOG("ngreen", "V78A: parsed ngreendp1=%d", nativeDisplayPipe);
-		if (nativeDisplayPipe != 0)
-			return false;
-	}
-
-	if (checkKernelArgument("-ngreendp1")) {
-		SYSLOG("ngreen", "V78A: detected -ngreendp1");
-		return false;
-	}
-
-	int enabled = 0;
-	if (PE_parse_boot_argn("ngreendp0", &enabled, sizeof(enabled))) {
-		SYSLOG("ngreen", "V78A: parsed ngreendp0=%d", enabled);
-		return enabled != 0;
-	}
-
-	if (checkKernelArgument("-ngreendp0")) {
-		SYSLOG("ngreen", "V78A: detected -ngreendp0");
-		return true;
-	}
-
-	static bool v78aLogged = false;
-	if (!v78aLogged) {
-		v78aLogged = true;
-		SYSLOG("ngreen", "V78A (capped): default native DisplayPipeSupported ON");
-	}
-	return false;
-}
-
-static uint32_t getV65Tier1WantBits() {
-	// Every admitted native producer may use both render and blitter contexts.
-	// Keeping BCS masked while calling native submitBlit/barrierSubmission loses
-	// completions and can deadlock dependent work. VF interrupts use the separate
-	// memory-IRQ bridge and never reach this physical-register policy.
-	return (1u << GEN11_RCS0) | (1u << GEN11_BCS);
-}
-
 static void *vfRejectPhysicalFramebufferProbe(void *, void *, int *) {
 	return nullptr;
 }
@@ -2145,7 +2097,7 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				{"__ZN13IGHardwareGuC31DetachContextDescFromGucContextERK21SGfxContextDescriptor",
 				 vfDetachContextDesc},
 				{"__ZN13IGHardwareGuC14submitWorkItemEjRK21SGfxContextDescriptor10IGHwCsTypejjj",
-				 vfSubmitWorkItem, this->oVfSubmitWorkItem},
+				 vfSubmitWorkItem},
 			};
 			PANIC_COND(!RouteRequestPlus::routeAll(patcher, index, firmwareRoute, address, size), "ngreen", "Failed to route VF GuC firmware transport");
 		}
@@ -4948,15 +4900,13 @@ void Gen11::injectAcceleratorPersonality()
 		pluginDict->release();
 	}
 
-	// V77: Display pipe capabilities forced to 0 to prevent WS GPU compositing crash.
+	// Preserve the bundled TGL personality contract.  Advertising numeric zero here
+	// forced WindowServer onto a degraded composition path even though both admitted
+	// Tahoe TGL personalities advertise these capabilities as boolean true.
 	auto *dpCaps = OSDictionary::withCapacity(2);
 	if (dpCaps) {
-		auto *dpSupp = OSNumber::withNumber(static_cast<unsigned long long>(0), 32);
-		auto *trSupp = OSNumber::withNumber(static_cast<unsigned long long>(0), 32);
-		dpCaps->setObject("DisplayPipeSupported", dpSupp);
-		dpCaps->setObject("TransactionsSupported", trSupp);
-		OSSafeReleaseNULL(dpSupp);
-		OSSafeReleaseNULL(trSupp);
+		dpCaps->setObject("DisplayPipeSupported", kOSBooleanTrue);
+		dpCaps->setObject("TransactionsSupported", kOSBooleanTrue);
 		dict->setObject("IOAccelDisplayPipeCapabilities", dpCaps);
 		dpCaps->release();
 	}

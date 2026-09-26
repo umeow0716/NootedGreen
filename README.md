@@ -161,8 +161,6 @@ FB+GFX:
 | `-disablegfxfirmware` | Physical-path diagnostic only. A VF uses the PF-owned GuC image and must not upload firmware. |
 | `ngreenSched=N` | Select GPU scheduler type: `3` = GuC firmware, `4` = IGScheduler4, `5` = host preemptive (default: `3` on real TGL, `5` on RPL/ADL) |
 | `-nbdyldoff` | Disable the optional shared-cache media-model patches and TGL userspace-bundle discovery logs. |
-| `-ngreendp0` / `ngreendp0=1` | Force fallback mode: set `DisplayPipeSupported=0` in accelerator capabilities |
-| `-ngreendp1` / `ngreendp1=1` | Explicitly keep native `DisplayPipeSupported` path (default behavior) |
 | `-ngreenforceprops` / `ngreenforceprops=1` | Enable legacy forced IGPU property injection (`AAPL,ig-platform-id`, `model`, `saved-config`, etc.). Disabled by default in compatibility-first mode. |
 | `IGLogLevel=8` | Maximum Intel GPU driver logging |
 | `-liludbg` | Enable Lilu debug logging |
@@ -236,7 +234,7 @@ Recent changes switch NootedGreen to safer defaults for cross-machine portabilit
 
 - Legacy hardcoded IGPU property seeding is now **opt-in**, not default.
 - Recurring watchdog/monitor experiments are not part of the maintained driver.
-- Native display-pipe path is now default; forced fallback mode is opt-in via `-ngreendp0`.
+- The injected accelerator personality preserves the bundled TGL display-pipe and transaction capabilities.
 - Coexistence paths avoid forcing DVMT/framebuffer processing when the DVMT module is not enabled.
 
 This reduces machine-specific assumptions in default boots and keeps aggressive behavior available only when explicitly requested for debugging.
