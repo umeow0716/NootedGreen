@@ -6,11 +6,6 @@ task_output="$(mktemp -d /tmp/ngreen-static.XXXXXX)"
 printf 'Diagnostic directory: %s\n' "$task_output"
 failed=0
 for source in NootedGreen/*.cpp; do
-    # Retired TCP logger is not part of the Xcode Sources build phase.
-    if [[ "$source" == NootedGreen/kern_netdbg.cpp ]]; then
-        printf 'EXCLUDED (not built): %s\n' "$source"
-        continue
-    fi
     if "$compiler" --target=x86_64-apple-macos13 -std=c++14 \
         -fsyntax-only -ffreestanding -fno-builtin \
         -DKERNEL=1 -DKERNEL_PRIVATE=1 -DMODULE_VERSION=100 \

@@ -818,3 +818,21 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   checkpoint e662427 CI 36220510624 succeeded. No runtime map fault injection
   or VM startup; preemption-disabled (but interrupts-enabled) mapping contexts
   and mapping lifetime across device removal remain open.
+
+### Retired network logger and review coverage ledger
+
+- Read kern_netdbg.cpp/.hpp completely. They were absent from Xcode Sources,
+  had no live includes/callers, and were excluded by the offline syntax loop.
+  Removed both, their two commented references and the syntax exclusion.
+  All ten remaining top-level C++ units are now checked with no exclusion.
+- Dormant logger defects included vsnprintf's would-have-written length used
+  as the socket-send length beyond the 2048-byte allocation, shadowing the
+  static port with a local variable, positive errno handling as if only -1
+  were failure, repeated connects, unchecked/racy lock allocation and blocking
+  network operations while holding a shared lock. No runtime logger path was
+  removed; Git preserves it. These defects do not establish a freeze cause.
+- Added SOURCE_REVIEW_COVERAGE.md to separate inventory, complete file reads,
+  partial reviews, fixes and remaining open obligations. Expanded inventory
+  at c312229 was 1305 source/build/metadata files; deletion leaves 1303.
+  Full SDK/HookCase/Lilu/all-source review is explicitly still incomplete.
+- Full offline suite passed in /tmp/ngreen-static.fixHJH. No VM boot.

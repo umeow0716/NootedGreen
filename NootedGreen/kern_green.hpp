@@ -2,7 +2,6 @@
 //  details.
 
 #pragma once
-//#include "kern_netdbg.hpp"
 #include <Headers/kern_patcher.hpp>
 #include <Headers/kern_iokit.hpp>
 #include <IOKit/pci/IOPCIDevice.h>

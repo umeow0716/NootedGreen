@@ -241,7 +241,6 @@ void NGreen::processPatcher(KernelPatcher &patcher) {
 		//auto x = OSDynamicCast(OSData, this->iGPU->getProperty("AAPL,ig-platform-id"));
 		//framebufferId = *(uint32_t*)x->getBytesNoCopy();
 		
-		//NETLOG("gen11", "framebufferId: = %x", framebufferId);
 		//setRMMIOIfNecessary();
 
         this->deviceId = WIOKit::readPCIConfigValue(this->iGPU, WIOKit::kIOPCIConfigDeviceID);
