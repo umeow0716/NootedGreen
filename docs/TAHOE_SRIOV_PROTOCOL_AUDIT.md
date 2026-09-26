@@ -962,3 +962,23 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   /tmp/ngreen-static.j5pPjI. c6f3442 CI 36221767518 and ea1ff8e CI
   36221834707 succeeded; no guest deployment or VM boot.
 - Final cleanup suite passes in /tmp/ngreen-static.WaL4Cq.
+
+### Typed parameter header: completed read, incomplete ABI verification
+
+- Read all 624 lines of AppleIntelParams.hpp. Assertions cover selected
+  early fields, not every generated tail. Clang record-layout dump shows:
+  controller unk_0F0D actually 3856 (0xf10), unk_13CF 5076 (0x13d4),
+  unk_14B2 5304 (0x14b8), unk_1541 5452 (0x154c), unk_1B17 6948 (0x1b24);
+  framebuffer unk_4289 actually 17036 (0x428c), unk_44DE 17636 (0x44e4),
+  unk_4B8C 19348 (0x4b94). Natural scalar alignment shifts subsequent fields.
+- Whole main-source search found no direct references to these named fields
+  outside their declarations. This does not validate raw-offset accesses or
+  prove that every other field matches the payload. Do not add packed to
+  guess widths: several fields may really be bytes, as prior fixes indicate.
+- Generator extract_apple_params.py is only partially reviewed; its old
+  AppleIntelPlaneRegCache register mapping at 0x100/0x104/0x154 conflicts
+  with the current header's warning that those are inline plane members.
+  Regeneration must NOT overwrite the reviewed header without reconciliation.
+- Header blit3d_params_t.unk_00B8 is uint32_t, while inspected submitBlit
+  reads/writes a byte at 0xb8. Exact full layout, generated provenance and
+  all private object lifetimes remain open. No unproven packing/type rewrite.
