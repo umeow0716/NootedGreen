@@ -7,6 +7,47 @@
 
 int main() {
     using namespace NGGuCRing;
+    unsigned long creditChecks = 0;
+    for (uint32_t capacity = 0; capacity <= 64; ++capacity) {
+        for (uint32_t used = 0; used <= capacity + 2; ++used) {
+            for (uint32_t count = 0; count <= capacity + 2; ++count) {
+                uint32_t next = 0xDEADBEEFU;
+                const bool reserve = static_cast<uint64_t>(used) + count <= capacity;
+                assert(reserveCredits(used, capacity, count, next) == reserve);
+                assert(next == (reserve ? used + count : 0xDEADBEEFU));
+                next = 0xDEADBEEFU;
+                const bool release = used <= capacity && count <= used;
+                assert(releaseCredits(used, capacity, count, next) == release);
+                assert(next == (release ? used - count : 0xDEADBEEFU));
+                ++creditChecks;
+            }
+        }
+    }
+    uint32_t usedCredits = 0, nextCredits = 0;
+    constexpr uint32_t creditCapacity = 3071;
+    // Fill with scheduling replies; a deregister/TLB reply fits the final
+    // three dwords. No more requests may be admitted before consumption.
+    for (unsigned i = 0; i < 767; ++i) {
+        assert(reserveCredits(usedCredits, creditCapacity, 4, nextCredits));
+        usedCredits = nextCredits;
+    }
+    assert(reserveCredits(usedCredits, creditCapacity, 3, nextCredits));
+    usedCredits = nextCredits;
+    assert(!reserveCredits(usedCredits, creditCapacity, 1, nextCredits));
+    assert(releaseCredits(usedCredits, creditCapacity, 3, nextCredits));
+    usedCredits = nextCredits;
+    for (unsigned i = 0; i < 767; ++i) {
+        assert(releaseCredits(usedCredits, creditCapacity, 4, nextCredits));
+        usedCredits = nextCredits;
+    }
+    assert(usedCredits == 0);
+    assert(!releaseCredits(usedCredits, creditCapacity, 3, nextCredits));
+    assert(!reserveCredits(UINT32_MAX, UINT32_MAX, 1, nextCredits));
+    assert(!reserveCredits(1, UINT32_MAX, UINT32_MAX, nextCredits));
+    assert(reserveCredits(0, UINT32_MAX, UINT32_MAX, nextCredits));
+    assert(nextCredits == UINT32_MAX);
+    std::printf("PASS: %lu credit-accounting cases plus exhaustion/overflow checks\n", creditChecks);
+
     // An independently walked ring supplies the expected available length.
     // Exhaust all positions, all ABI lengths and several destination bounds.
     unsigned long checks = 0;

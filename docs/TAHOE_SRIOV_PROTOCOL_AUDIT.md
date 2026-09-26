@@ -283,3 +283,38 @@ Completion lengths and enable-before-disable token ordering were compared with
 `intel_guc_sched_done_process_msg` / `intel_guc_deregister_done_process_msg`:
 Linux likewise requires at least two/one payload dwords and consumes pending
 enable first; it does not interpret the second scheduling payload as status.
+
+## G2H accounting and truthful completion follow-up
+
+- Added atomic G2H reply-credit reservation before H2G publication: 4 dwords
+  for MODE_DONE, 3 for DEREGISTER_DONE/TLB_DONE, matching i915's payload counts
+  plus CT/HXG headers. Capacity is 3071 dwords, retaining the 4 KiB unsolicited
+  reserve and empty/full sentinel in a 16 KiB receive ring. Timed-out operations
+  keep their reservation; only matched completions return it. Duplicate TLB
+  replies cannot refund twice. The supported fixed completion sizes are now
+  exact, since larger unnegotiated replies invalidate the credit contract.
+- Pure accounting tests exhaust 102,505 small-capacity combinations, check
+  full production capacity, rejected over-refunds and UINT32 overflow under
+  ASan/UBSan. These do not test real interrupts, firmware or DMA ordering.
+  Credit release still occurs on the software workloop rather than Linux's
+  receive tasklet; broader call-context/backpressure behavior remains under
+  review. Send retries are bounded, not indefinite completion waits.
+- Native CTB `hostToGuCAction` (`0x1f600`) has one direct caller, the GuC wrapper
+  tail call at `0x21827`, already rejected by the VF route. This bridge sends
+  FAST requests only. Response-type messages now halt instead of being fed to
+  a nonexistent legacy waiter, particularly preventing FAST failure responses
+  from leaving a context falsely treated as operational. Indirect reachability
+  remains part of the full binary review.
+- DEREGISTER_DONE keeps the LRCA associated with its retained tombstone until
+  the retirement owner finishes native detach. Attach waits during that gap;
+  only then can the ID/backing be reclaimed. Any protocol fault keeps backing
+  quarantined even if a later event says deregistration completed.
+- Removed the global V221 waitForStamp override and its startup flag. It used
+  to change **any** pre-start wait error into success and fabricate outStamp,
+  including for IOAccelerator clients other than the selected GPU. Native
+  completion results now remain intact. This can expose the original startup
+  sequencing failure; that failure must be fixed, not hidden. The VF startup
+  wrapper also no longer registerService()s an accelerator whose start failed.
+
+PCI-gate checkpoint `839de9d` passed native macOS CI run 36216611987. This later
+credit/completion batch is still an offline safety change, not a boot candidate.

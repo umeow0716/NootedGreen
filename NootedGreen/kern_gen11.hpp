@@ -2102,7 +2102,6 @@ private:
 	
 public:
 
-	static volatile bool gGfxAccelStartDone;  // V221: set true after IntelAccelerator::start() returns
 	// Resolved from IOAcceleratorFamily2 by NGreen::processKext — needed by blit3d scratch init.
 	mach_vm_address_t oIOAF2_lockForCPUAccess {};
 	mach_vm_address_t oIOAF2_unlockForCPUAccess {};

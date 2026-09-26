@@ -193,6 +193,10 @@ volatile UInt32 gVfTlbNextSeqno = 0;
 volatile UInt32 gVfTlbWaitActive = 0;
 volatile UInt32 gVfTlbWaitSeqno = 0;
 volatile UInt32 gVfTlbDoneSeqno = 0;
+// Match i915: keep 1/4 of the 16 KiB receive ring for unsolicited events,
+// plus its empty/full sentinel. Counts include both CT and HXG headers.
+constexpr uint32_t kVfG2HCreditCapacity = (0x4000 - 0x1000) / 4 - 1;
+volatile UInt32 gVfG2HCreditsUsed = 0;
 
 void vfMarkProtocolFault(const char *reason)
 {
@@ -207,6 +211,34 @@ bool vfCanUseSleepingLock()
 		return false;
 	}
 	return true;
+}
+
+bool vfReserveG2HCredits(uint32_t count)
+{
+	if (!count)
+		return true;
+	for (;;) {
+		const UInt32 used = gVfG2HCreditsUsed;
+		uint32_t next = 0;
+		if (!NGGuCRing::reserveCredits(used, kVfG2HCreditCapacity, count, next))
+			return false;
+		if (OSCompareAndSwap(used, next, &gVfG2HCreditsUsed))
+			return true;
+	}
+}
+
+void vfReleaseG2HCredits(uint32_t count)
+{
+	for (;;) {
+		const UInt32 used = gVfG2HCreditsUsed;
+		uint32_t next = 0;
+		if (!NGGuCRing::releaseCredits(used, kVfG2HCreditCapacity, count, next)) {
+			vfMarkProtocolFault("unexpected G2H credit return");
+			return;
+		}
+		if (OSCompareAndSwap(used, next, &gVfG2HCreditsUsed))
+			return;
+	}
 }
 
 // Modern GuC submission (v70+) assigns one GuC ID to one logical ring
@@ -278,7 +310,7 @@ int32_t vfFindContextLocked(uint32_t lrcaPage)
 		const auto &entry = gVfContexts[slot];
 		if (entry.state == kVfGucContextEmpty)
 			return -1;
-		if (entry.state != kVfGucContextTombstone &&
+		if ((entry.state != kVfGucContextTombstone || entry.contextBacking) &&
 		    entry.lrcaPage == lrcaPage)
 			return static_cast<int32_t>(slot);
 	}
@@ -313,9 +345,11 @@ void vfReleaseRetiredContextBacking(uint16_t gucId)
 	const IOInterruptState interruptState =
 		IOSimpleLockLockDisableInterrupt(gVfContextLock);
 	auto &entry = gVfContexts[gucId];
-	if (entry.state == kVfGucContextTombstone) {
+	if (!gVfProtocolFault && entry.state == kVfGucContextTombstone) {
 		backing = entry.contextBacking;
 		entry.contextBacking = nullptr;
+		entry.lrcaPage = 0;
+		entry.descriptorLo = 0;
 	}
 	IOSimpleLockUnlockEnableInterrupt(gVfContextLock, interruptState);
 	if (backing)
@@ -391,6 +425,9 @@ bool vfSendCtbFastAction(void *guc, const uint32_t *request,
 	}
 
 	transportFence = 0;
+	const uint32_t action = request[0] & 0xFFFFU;
+	const uint32_t responseCredits = action == kGucActionScheduleContextModeSet ? 4U :
+		(action == kGucActionDeregisterContext || action == kGucActionTlbInvalidation ? 3U : 0U);
 	for (uint32_t retry = 0; retry < 8; retry++) {
 		if (!alreadyHeldQueue)
 			IOLockLock(lock);
@@ -412,7 +449,7 @@ bool vfSendCtbFastAction(void *guc, const uint32_t *request,
 		                   size > needed;
 		const uint32_t used = valid ?
 			(tail >= head ? tail - head : size - head + tail) : size;
-		if (valid && needed < size - used) {
+		if (valid && needed < size - used && vfReserveG2HCredits(responseCredits)) {
 			const uint32_t fence = static_cast<uint32_t>(OSIncrementAtomic(
 				reinterpret_cast<volatile SInt32 *>(
 					reinterpret_cast<uint8_t *>(ctb) + 0x3C))) & 0xFFFFU;
@@ -538,6 +575,8 @@ constexpr uint32_t kVfCtbH2GBufferOffset = 0x2000;
 constexpr uint32_t kVfCtbH2GBufferBytes = 0x1000;
 constexpr uint32_t kVfCtbG2HBufferOffset = 0x3000;
 constexpr uint32_t kVfCtbG2HBufferBytes = 0x4000;
+static_assert(kVfG2HCreditCapacity == (kVfCtbG2HBufferBytes * 3 / 4) / 4 - 1,
+              "G2H reply credits must retain unsolicited-event headroom");
 constexpr uint32_t kVfCtbUsedBytes = kVfCtbG2HBufferOffset + kVfCtbG2HBufferBytes;
 // Intel's VF ABI requires a memory-interrupt page in GGTT.  Reuse the final,
 // page-aligned 4 KiB of the enlarged CTB allocation so CT transport and IRQ
@@ -661,6 +700,8 @@ bool vfG2HCtbPending(uint32_t &head)
 
 bool vfEnsureGucLock()
 {
+	if (!vfCanUseSleepingLock())
+		return false;
 	if (gVfGucLock)
 		return true;
 	auto *candidate = IOLockAlloc();
@@ -681,6 +722,8 @@ bool vfGucSendMMIO(const uint32_t request[4], uint32_t requestLength,
 	    (request[0] & (kGucOriginGuc | kGucTypeMask)) != 0)
 		return false;
 	bzero(response, 4 * sizeof(*response));
+	if (!vfCanUseSleepingLock())
+		return false;
 	cb->setRMMIOIfNecessary();
 	if (!cb->getRMMIOAddress() ||
 	    cb->getRMMIOLength() < kGen11SoftScratch0 + 4 * sizeof(uint32_t))
@@ -5920,15 +5963,12 @@ unsigned long Gen11::start(void *that,void  *param_1)
 
 	auto ret= FunctionCast(start, callback->ostart)(that,param_1);
 
-	// V221: Signal waitForStamp hook that the GFX interrupt handler is now installed.
-	Gen11::gGfxAccelStartDone = true;
-	SYSLOG("ngreen", "V221: GFX start() complete — gGfxAccelStartDone=true ret=%lu", ret);
-
 	// Do not run the legacy ring, interrupt, error-register, or delayed watchdog
 	// code below on a VF. GuC and the PF own those resources. The original Apple
 	// start routine has already published the GuC-backed accelerator.
 	if (vfActive) {
-		service->registerService(kIOServiceAsynchronous);
+		if (ret)
+			service->registerService(kIOServiceAsynchronous);
 		SYSLOG("ngreen", "V220: GuC VF accelerator start ret=%lu; legacy MMIO diagnostics skipped", ret);
 		return ret;
 	}
@@ -6146,9 +6186,8 @@ unsigned long Gen11::start(void *that,void  *param_1)
 		NGreen::callback->readReg32(GEN11_RCS0_RSVD_INTR_MASK),
 		NGreen::callback->readReg32(GEN11_BCS_RSVD_INTR_MASK));
 	
-	// V42: Log pending GT interrupts — do NOT clear (W1C would discard the tier-2 IIR
-	// user-interrupt for the stamp(8,3) that V221 faked; the now-installed handler needs
-	// to service it naturally so the cpu-side stamp counter is actually bumped).
+	// Log pending GT interrupts without discarding the completion interrupts
+	// that the native handler must consume to advance its stamp counters.
 	uint32_t gt0 = NGreen::callback->readReg32(0x190018);
 	if (gt0) {
 		SYSLOG("ngreen", "V42: GT_INTR_DW0 pending=0x%x (leaving for handler)", gt0);
@@ -9080,9 +9119,9 @@ bool Gen11::vfAttachContextDesc(void *that, const uint32_t *descriptor) {
 			(void)vfSendCtbFastAction(that, deregister, arrsize(deregister), transportFence);
 			(void)vfWaitForContextState(that, gucId, kVfGucContextTombstone);
 		}
-		vfReleaseRetiredContextBacking(gucId);
 		FunctionCast(vfDetachContextDesc,
 		             callback->oVfDetachContextDesc)(that, descriptor);
+		vfReleaseRetiredContextBacking(gucId);
 		return false;
 	}
 
@@ -9232,14 +9271,15 @@ void Gen11::vfDetachContextDesc(void *that, const uint32_t *descriptor) {
 		SYSLOG("ngreen", "V230: deregistered GuC context id=%u LRCA=0x%08x",
 		       gucId, lrcaPage);
 	}
-	if (deregistered)
-		vfReleaseRetiredContextBacking(gucId);
-
 	// The retained IGMappedBuffer reference above is the safety boundary: if
 	// GuC teardown timed out, Apple's bookkeeping may be detached but the LRCA
 	// pages and GGTT mapping remain pinned and this GuC ID is quarantined.
 	FunctionCast(vfDetachContextDesc,
 	             callback->oVfDetachContextDesc)(that, descriptor);
+	// Keep the tombstone's LRCA/backing visible to attach waiters until the
+	// native proxy bookkeeping is retired, not merely until firmware replies.
+	if (deregistered)
+		vfReleaseRetiredContextBacking(gucId);
 }
 
 bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
@@ -9634,6 +9674,8 @@ bool Gen11::vfCtbGucToHostAction(void *that, uint32_t *message) {
 		                    callback->oVfCtbGucToHostAction)(that, message);
 	if (!that || !message || !gVfGGTTReady || !gVfCtbCpuBase || gVfCtbStopped)
 		return false;
+	if (!vfCanUseSleepingLock())
+		return false;
 
 	// Apple's consumer masks length to five bits and trusts descriptor size.
 	// Its software-interrupt caller supplies only 32 dwords of stack space.
@@ -9674,9 +9716,7 @@ bool Gen11::vfCtbGucToHostAction(void *that, uint32_t *message) {
 	IOLockUnlock(lock);
 
 	// The bounded reader returns [modern CT header, HXG header, payload...].
-	// Reframe just that CPU copy so
-	// Apple's unchanged pending-request matcher sees its historical
-	// [legacy header, fence, status] representation.
+	// Only event frames are admitted on this FAST-only VF transport.
 	const uint32_t transport = message[0];
 	const uint32_t hxg = message[1];
 	const uint32_t length = transport & 0xFFU;
@@ -9690,6 +9730,14 @@ bool Gen11::vfCtbGucToHostAction(void *that, uint32_t *message) {
 		vfMarkProtocolFault("invalid G2H HXG origin or message type");
 		return false;
 	}
+	// This VF bridge sends FAST requests only. The sole direct native CTB
+	// sender caller is hostToGuCAction, which our VF route rejects. A response
+	// therefore cannot satisfy a legacy waiter; in particular a FAST failure
+	// must not leave a context appearing successfully registered/scheduled.
+	if (response) {
+		vfMarkProtocolFault("unexpected response on FAST-only VF transport");
+		return false;
+	}
 
 	// MODE_SET and DEREGISTER complete asynchronously.  Consume their v70
 	// lifecycle payload before handing the event to Apple's legacy interrupt
@@ -9698,18 +9746,20 @@ bool Gen11::vfCtbGucToHostAction(void *that, uint32_t *message) {
 	// no longer references the old LRCA.
 	const uint32_t action = hxg & 0xFFFFU;
 	if (!response && (hxg & kGucOriginGuc) != 0 &&
-	    ((action == kGucActionTlbInvalidationDone && length < 2) ||
-	     (action == kGucActionScheduleContextModeDone && length < 3) ||
-	     (action == kGucActionDeregisterContextDone && length < 2))) {
+	    ((action == kGucActionTlbInvalidationDone && length != 2) ||
+	     (action == kGucActionScheduleContextModeDone && length != 3) ||
+	     (action == kGucActionDeregisterContextDone && length != 2))) {
 		SYSLOG("ngreen", "V238: malformed GuC completion action=0x%04x len=%u",
 		       action, length);
 		vfMarkProtocolFault("malformed GuC lifecycle completion");
+		return false;
 	}
 	if (!response && (hxg & kGucOriginGuc) != 0 &&
 	    action == kGucActionTlbInvalidationDone && length >= 2) {
 		const uint32_t seqno = message[2];
-		if (gVfTlbWaitActive && seqno == gVfTlbWaitSeqno) {
-			gVfTlbDoneSeqno = seqno;
+		if (gVfTlbWaitActive && seqno == gVfTlbWaitSeqno &&
+		    OSCompareAndSwap(seqno - 1U, seqno, &gVfTlbDoneSeqno)) {
+			vfReleaseG2HCredits(3);
 			OSSynchronizeIO();
 		} else {
 			static uint32_t staleTlbLogs = 0;
@@ -9758,8 +9808,8 @@ bool Gen11::vfCtbGucToHostAction(void *that, uint32_t *message) {
 					handled = true;
 				}
 			} else if (entry.state == kVfGucContextPendingDeregister) {
-				entry.lrcaPage = 0;
-				entry.descriptorLo = 0;
+				// Leave LRCA/backing associated until the retirement owner has
+				// also finished the native detach; attach must still wait.
 				entry.refCount = 0;
 				entry.engineClass = 0;
 				entry.engineInstance = 0;
@@ -9771,6 +9821,8 @@ bool Gen11::vfCtbGucToHostAction(void *that, uint32_t *message) {
 			newState = entry.state;
 			IOSimpleLockUnlockEnableInterrupt(gVfContextLock, interruptState);
 		}
+		if (handled)
+			vfReleaseG2HCredits(action == kGucActionScheduleContextModeDone ? 4U : 3U);
 		if (handled && gVfContextLifecycleLogs++ < 64) {
 			SYSLOG("ngreen", "V230: GuC lifecycle event action=0x%04x id=%u state=%u",
 			       action, gucId, static_cast<unsigned int>(newState));
@@ -9788,16 +9840,10 @@ bool Gen11::vfCtbGucToHostAction(void *that, uint32_t *message) {
 		       transport >> 16, length, hxg, response);
 	}
 
-	if (response) {
-		message[0] = 0x102U; // legacy response flag plus fence/status payload
-		message[1] = transport >> 16;
-		message[2] = hxg;
-	} else {
-		// Unsolicited HXG events carry their legacy action in the low 16 bits.
-		// A small header with bit 8 clear makes Apple's handler return message[1].
-		message[0] = length & 0x1FU;
-		message[1] = hxg;
-	}
+	// A small header with bit 8 clear makes Apple's handler return message[1].
+	// The VF software dispatcher ignores that legacy action return value.
+	message[0] = length & 0x1FU;
+	message[1] = hxg;
 	return true;
 }
 
@@ -9858,7 +9904,7 @@ void Gen11::vfSoftwareGuCInterrupt(void *that, IOInterruptEventSource *source, i
 		uint32_t before = 0;
 		if (!vfG2HCtbPending(before))
 			return;
-		// Preserve Apple's fence waiter matching, but do not interpret the
+		// Retain the native consumer call boundary, but do not interpret the
 		// returned modern HXG action as legacy log-flush status bits.
 		(void)consume(ctb);
 		uint32_t after = 0;
@@ -11319,10 +11365,6 @@ uint32_t Gen11::v85SurfAddr = 0;
 // V116: Safe dummy page for GGTT[0] remap (prevents stolen-mem MCE on GPU VA 0 access)
 IOBufferMemoryDescriptor *Gen11::v116DummyBuf = nullptr;
 uint64_t Gen11::v116DummyPhys = 0;
-
-// V221: Becomes true when IntelAccelerator::start() returns. Used by wrapWaitForStamp
-// to block CoreDisplay's stamp-3 wait until the GFX interrupt handler is installed.
-volatile bool Gen11::gGfxAccelStartDone = false;
 
 // V54: IRQ watchdog — re-enables Master IRQ if the driver disables it during init.
 // Fires every 2s, up to 5 times (10s total), then stops.

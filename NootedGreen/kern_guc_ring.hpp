@@ -4,6 +4,23 @@
 // Pure CTB framing checks shared by the kernel bridge and offline tests.
 // Caller serializes the consumer and supplies a tail acquired from GuC.
 namespace NGGuCRing {
+// Pure accounting only; callers atomically publish the returned value.
+inline bool reserveCredits(uint32_t used, uint32_t capacity, uint32_t count,
+                           uint32_t &next) {
+    if (used > capacity || count > capacity - used)
+        return false;
+    next = used + count;
+    return true;
+}
+
+inline bool releaseCredits(uint32_t used, uint32_t capacity, uint32_t count,
+                           uint32_t &next) {
+    if (used > capacity || count > used)
+        return false;
+    next = used - count;
+    return true;
+}
+
 inline bool validDescriptor(uint32_t bytes, uint32_t expectedBytes,
                             uint32_t head, uint32_t tail, uint32_t status) {
     return expectedBytes >= 8 && !(expectedBytes & 3U) &&
