@@ -653,14 +653,14 @@ enum intel_dram_type {
 } ;
 
 static const struct buddy_page_mask tgl_buddy_page_masks[] = {
-	{ .num_channels = 1, .type = INTEL_DRAM_DDR4,   .page_mask = 0xF },
-	{ .num_channels = 1, .type = INTEL_DRAM_DDR5,	.page_mask = 0xF },
-	{ .num_channels = 2, .type = INTEL_DRAM_LPDDR4, .page_mask = 0x1C },
-	{ .num_channels = 2, .type = INTEL_DRAM_LPDDR5, .page_mask = 0x1C },
-	{ .num_channels = 2, .type = INTEL_DRAM_DDR4,   .page_mask = 0x1F },
-	{ .num_channels = 2, .type = INTEL_DRAM_DDR5,   .page_mask = 0x1E },
-	{ .num_channels = 4, .type = INTEL_DRAM_LPDDR4, .page_mask = 0x38 },
-	{ .num_channels = 4, .type = INTEL_DRAM_LPDDR5, .page_mask = 0x38 },
+	{0xF,  INTEL_DRAM_DDR4,   1},
+	{0xF,  INTEL_DRAM_DDR5,   1},
+	{0x1C, INTEL_DRAM_LPDDR4, 2},
+	{0x1C, INTEL_DRAM_LPDDR5, 2},
+	{0x1F, INTEL_DRAM_DDR4,   2},
+	{0x1E, INTEL_DRAM_DDR5,   2},
+	{0x38, INTEL_DRAM_LPDDR4, 4},
+	{0x38, INTEL_DRAM_LPDDR5, 4},
 	{}
 };
 
@@ -824,10 +824,9 @@ enum intel_engine_id {
 #define  MTL_RESET_PICA_HANDSHAKE_EN	BIT(6)
 #define  RESET_PCH_HANDSHAKE_ENABLE	BIT(4)
 
-// Masked register write helpers — upper 16 bits = mask, lower 16 bits = value
-#define _MASKED_FIELD(mask, value) ((mask) << 16 | (value))
-#define _MASKED_BIT_ENABLE(a)	(_MASKED_FIELD((a), a))
-#define _MASKED_BIT_DISABLE(a)	(_MASKED_FIELD((a), 0))
+// Masked register write helpers come from kern_green.hpp. Keep the single-
+// evaluation definitions there instead of replacing them with duplicate
+// macros that could evaluate a side-effecting argument twice.
 #define GEN9_GAMT_ECO_REG_RW_IA (0x4ab0)
 #define   GAMT_ECO_ENABLE_IN_PLACE_DECOMPRESS	(1 << 18)
 
@@ -1078,7 +1077,7 @@ constexpr uint32_t ackForDom(unsigned d) {
 	return 0;
 }
 
-constexpr const char* const strForDom(unsigned d) {
+constexpr const char *strForDom(unsigned d) {
 	if (d == DOM_RENDER)
 		return "Render";
 	if (d == DOM_MEDIA)

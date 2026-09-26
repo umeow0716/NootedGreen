@@ -3564,7 +3564,7 @@ bool Gen11::paramsSurfCompare(AppleIntel::AppleIntelBaseController *that,
 		   v401Count, ret,
 		   old_ctl, old_tile, old_stride, old_surf, old_src,
 		   new_ctl, new_tile, new_stride, new_surf, new_src,
-		   nat_tile_pl1, nat_tile_pl2, nat_stride_pl1, nat_surf_pl1,
+		   nat_tile_pl1, nat_stride_pl1, nat_surf_pl1,
 		   nat_tile_pl2, nat_stride_pl2, nat_surf_pl2);
 
 	return ret;
@@ -3711,7 +3711,7 @@ void Gen11::configureColorPipeLine(AppleIntel::AppleIntelPlane *that, AppleIntel
 		pre_gamma = NGreen::callback->readReg32(0x4A480);  // GAMMA_MODE Pipe A
 		pre_misc  = NGreen::callback->readReg32(0x70030);  // PIPE_MISC  Pipe A
 		if (flipArgs != nullptr)
-			sel = static_cast<uint8_t>(*reinterpret_cast<const uint32_t *>(&flipArgs->flt_001C) >> 24);
+			sel = static_cast<uint8_t>(NGUnaligned::readLe32(&flipArgs->flt_001C) >> 24);
 
 		// DIAG: log the color pipeline bitmask (FB+0x4248) to identify which bit drives PIPE_MISC bit 23.
 		// The bitmask at FB+0x4248 (FB = *(that+0x68)) selects which sub-functions run inside
@@ -4930,7 +4930,7 @@ void Gen11::hwInitializeCState(AppleIntel::AppleIntelBaseController *that)
 		// Write TGL DMC blob to MMIO 0x80000+
 		for (unsigned long off = 0; off < tgl_dmc_ver2_12_bin_s; off += 4)
 			FastWriteRegister32(reinterpret_cast<AppleIntel::AppleIntelBaseController *>(ccont), off + 0x80000,
-				*(const uint32_t *)((const char *)tgl_dmc_ver2_12_bin + off));
+				tgl_dmc_ver2_12_bin[off / sizeof(uint32_t)]);
 
 		// Disable DC states before touching display engine registers (same as ADL-P path).
 		// DC_STATE_EN = 0x45504
@@ -5002,7 +5002,7 @@ void Gen11::hwInitializeCState(AppleIntel::AppleIntelBaseController *that)
 		// Write directly to SRAM starting at 0x80000.
 		for (unsigned long off = 0; off < adlp_dmc_ver2_16_bin_s; off += 4)
 			FastWriteRegister32(reinterpret_cast<AppleIntel::AppleIntelBaseController *>(ccont), off + 0x80000,
-				*(const uint32_t *)((const char *)adlp_dmc_ver2_16_bin + off));
+				adlp_dmc_ver2_16_bin[off / sizeof(uint32_t)]);
 
 		// Disable DC states before touching display engine registers.
 		// If DC5/DC6 is active when we write, the clock-gated blocks won't latch the writes.
@@ -6058,7 +6058,7 @@ unsigned long Gen11::start(void *that,void  *param_1)
 	NGreen::callback->writeReg32(FORCEWAKE_BLITTER_GEN9, (1 << 16) | 1);
 	IODelay(1000);
 	
-	SYSLOG("ngreen", "start() returned %d", ret);
+	SYSLOG("ngreen", "start() returned %lu", ret);
 	
 	// V43: Scheduler type diagnostic — read field_1190 bits 23-25
 	{
@@ -6469,7 +6469,7 @@ unsigned long Gen11::start(void *that,void  *param_1)
 		NGreen::callback->readReg32(BLT_RING_BASE + 0x358));
 	
 	// ── V50: Log Metal-readiness summary ──
-	SYSLOG("ngreen", "V50: start() ret=%d — policy: TGL from /Library/Extensions, fallback ICL from /System/Library/Extensions", ret);
+		SYSLOG("ngreen", "V50: start() ret=%lu — policy: TGL from /Library/Extensions, fallback ICL from /System/Library/Extensions", ret);
 	SYSLOG("ngreen", "V50: Metal ON. ICL f2 mask-based (fallback). Use -ngreenNoMetal for display-only.");
 	SYSLOG("ngreen", "V50: active GPU plugin track = %s (TGL and ICL both supported)",
 	       (callback && callback->tglHWLoaded) ? "TGL" : "ICL");
@@ -6879,7 +6879,9 @@ void Gen11::populateResetRegisterList(void *that)
 	auto *cb = NGreen::callback;
 	void *ctx = cb->lastRCSCtx;
 	if (!cb->isRealTGL && !ngVfGGTTBinderActive() && ctx) {
-		uint32_t lrcaGpuVa = getMember<uint32_t>(ctx, 0x89) & 0xFFFFF000;
+		const auto *descriptor = reinterpret_cast<const uint8_t *>(ctx) +
+			kVfContextDescriptorOffset;
+		uint32_t lrcaGpuVa = NGContextDescriptor::read(descriptor).low & 0xFFFFF000U;
 		if (lrcaGpuVa) {
 			uint32_t ctxPage1Idx = (lrcaGpuVa >> 12) + 1;
 			cb->setApertureIfNecessary();
@@ -7626,7 +7628,9 @@ uint64_t Gen11::IGHardwareContextinitWithOptions(void *that, void *task, const v
 
 	// LRCA GPU VA is stored at this+0x89 (4-byte field, written by initWithOptions success path).
 	// Bits [31:12] = 4K-aligned GPU physical address of LRCA page0.  Page1 = page0 + 0x1000.
-	uint32_t lrcaGpuVa = getMember<uint32_t>(that, 0x89) & 0xFFFFF000;
+	const auto *descriptor = reinterpret_cast<const uint8_t *>(that) +
+		kVfContextDescriptorOffset;
+	uint32_t lrcaGpuVa = NGContextDescriptor::read(descriptor).low & 0xFFFFF000U;
 	if (!lrcaGpuVa) {
 		SYSLOG("ngreen", "V509: LRCA GPU VA zero, skipping repair");
 		return ret;
@@ -7746,7 +7750,9 @@ void *Gen11::IGHardwareContextwithOptions(void *task, const void *params, uint8_
 	if (engType != 0) return ctx;
 	cb->lastRCSCtx = ctx;
 
-	uint32_t lrcaGpuVa = getMember<uint32_t>(ctx, 0x89) & 0xFFFFF000;
+	const auto *descriptor = reinterpret_cast<const uint8_t *>(ctx) +
+		kVfContextDescriptorOffset;
+	uint32_t lrcaGpuVa = NGContextDescriptor::read(descriptor).low & 0xFFFFF000U;
 	if (!lrcaGpuVa) { SYSLOG("ngreen", "V509: LRCA GPU VA zero"); return ctx; }
 	uint32_t ctxPage1Idx = (lrcaGpuVa >> 12) + 1;
 
@@ -12878,7 +12884,8 @@ unsigned long  Gen11::allocateDisplayResources(void *that)
 		// XE_LPD_FEATURES (Linux intel_display_device.c): .abox_mask = GENMASK(1, 0)
 		// = ABOX0 (0x45038) + ABOX1 (0x45048)
 		unsigned long abox_mask = GENMASK(1, 0);//DISPLAY_INFO(dev_priv)->abox_mask;
-		int config, i;
+		size_t config;
+		unsigned long i;
 
 		unsigned long abox_regs=abox_mask;
 		uint32_t mask = MBUS_ABOX_BT_CREDIT_POOL1_MASK |
@@ -12890,7 +12897,7 @@ unsigned long  Gen11::allocateDisplayResources(void *that)
 			MBUS_ABOX_B_CREDIT(1) |
 			MBUS_ABOX_BW_CREDIT(1);
 
-		for_each_set_bit(i, &abox_regs, sizeof(abox_regs))
+		for_each_set_bit(i, &abox_regs, sizeof(abox_regs) * 8)
 		NGreen::callback->intel_de_rmw( MBUS_ABOX_CTL(i), mask, val);
 
 
@@ -12907,7 +12914,7 @@ unsigned long  Gen11::allocateDisplayResources(void *that)
 				table[config].type == type)
 				break;
 
-		for_each_set_bit(i, &abox_mask, sizeof(abox_mask)) {
+		for_each_set_bit(i, &abox_mask, sizeof(abox_mask) * 8) {
 			NGreen::callback->writeReg32( BW_BUDDY_PAGE_MASK(i),
 						   table[config].page_mask);
 

@@ -1,5 +1,6 @@
 #pragma once
 #include <stdint.h>
+#include "kern_unaligned.hpp"
 
 namespace NGContextDescriptor {
 struct Value {
@@ -13,11 +14,6 @@ struct Value {
 // This is not an atomic snapshot or an object-provenance check.
 inline Value read(const void *descriptor) {
     const auto *bytes = static_cast<const uint8_t *>(descriptor);
-    Value value {0, 0};
-    for (unsigned i = 0; i < 4; ++i) {
-        value.low |= static_cast<uint32_t>(bytes[i]) << (8 * i);
-        value.high |= static_cast<uint32_t>(bytes[i + 4]) << (8 * i);
-    }
-    return value;
+    return {NGUnaligned::readLe32(bytes), NGUnaligned::readLe32(bytes + 4)};
 }
 }

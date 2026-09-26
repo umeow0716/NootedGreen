@@ -18,6 +18,20 @@ for source in NootedGreen/*.cpp; do
         failed=1
     fi
 done
+# The pinned TGL bridge contains private packed ABI and MMIO structures. Keep
+# regressions in format ABIs, alignment and aggregate layout as hard failures.
+if ! "$compiler" --target=x86_64-apple-macos13 -std=c++14 \
+    -fsyntax-only -ffreestanding -fno-builtin \
+    -Werror=format -Werror=cast-align -Werror=reorder-init-list \
+    -DKERNEL=1 -DKERNEL_PRIVATE=1 -DMODULE_VERSION=100 \
+    -DPRODUCT_NAME=NootedGreen -D__MAC_OS_X_VERSION_MIN_REQUIRED=130000 \
+    -I. -ILilu.kext/Contents/Resources -IMacKernelSDK/Headers \
+    NootedGreen/kern_gen11.cpp > "$task_output/kern_gen11.strict.log" 2>&1; then
+    printf 'FAIL strict Gen11 ABI warnings (see diagnostic directory)\n'
+    failed=1
+else
+    printf 'PASS strict Gen11 format/alignment/layout warnings\n'
+fi
 if "$compiler" -std=c++14 -O1 -g -fsanitize=address,undefined \
     tools/guc_ring_test.cpp -o "$task_output/guc-ring-test" && \
     "$task_output/guc-ring-test"; then

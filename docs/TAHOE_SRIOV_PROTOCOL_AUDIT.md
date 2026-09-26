@@ -1158,3 +1158,15 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
 - This removes the alignment assumption only. The native object's eight-byte
   readability, lifetime and immutability while the caller owns it remain ABI
   preconditions; byte loads do not provide an atomic snapshot.
+- The same decoder now covers three legacy PF/RPL repair paths that read the
+  descriptor directly at object+0x89. A separate four-byte helper removes a
+  strict-aliasing assumption from the color selector diagnostic. DMC arrays
+  are indexed in their declared uint32_t type instead of char-pointer recasts.
+- Fixed a seven-argument/six-conversion surface diagnostic and unsigned-long
+  start return formats, removed duplicate masked-write macros that weakened
+  single evaluation, and made the buddy table standard C++14 aggregate data.
+  The bit iterator now receives bits rather than bytes.
+- Static checks now fail on Gen11 format, alignment or aggregate-order
+  regressions locally and in CI. Added 80 unaligned little-endian word cases;
+  full suite passes /tmp/ngreen-static.t5KKSp. These compiler properties do
+  not establish MMIO protocol correctness or safe dynamic execution.

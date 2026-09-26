@@ -36,6 +36,13 @@ jobs:
 
       - name: Check CTB framing with sanitizers
         run: |
+          xcrun clang++ --target=x86_64-apple-macos13 -std=c++14 \
+            -fsyntax-only -ffreestanding -fno-builtin \
+            -Werror=format -Werror=cast-align -Werror=reorder-init-list \
+            -DKERNEL=1 -DKERNEL_PRIVATE=1 -DMODULE_VERSION=100 \
+            -DPRODUCT_NAME=NootedGreen -D__MAC_OS_X_VERSION_MIN_REQUIRED=130000 \
+            -I. -ILilu.kext/Contents/Resources -IMacKernelSDK/Headers \
+            NootedGreen/kern_gen11.cpp
           xcrun clang++ -std=c++14 -O1 -g -fsanitize=address,undefined \
             tools/guc_ring_test.cpp -o "$RUNNER_TEMP/guc-ring-test"
           "$RUNNER_TEMP/guc-ring-test"

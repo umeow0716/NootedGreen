@@ -8,6 +8,15 @@
 using namespace NGContextPool;
 int main() {
     for (unsigned offset = 0; offset < 16; ++offset) {
+        uint8_t bytes[20] = {};
+        for (uint32_t value : {0U, 1U, 0x80000000U, 0x89ABCDEFU, UINT32_MAX}) {
+            for (unsigned i = 0; i < 4; ++i)
+                bytes[offset + i] = static_cast<uint8_t>(value >> (8 * i));
+            assert(NGUnaligned::readLe32(bytes + offset) == value);
+        }
+    }
+    puts("PASS 80 unaligned little-endian word cases");
+    for (unsigned offset = 0; offset < 16; ++offset) {
         std::vector<uint8_t> packed(offset + 8, 0xA5);
         for (unsigned bit = 0; bit < 64; ++bit) {
             std::fill(packed.begin() + offset, packed.end(), 0);

@@ -44,6 +44,7 @@ files (1,305 under this snapshot's scope); this does not close older coverage.
 | Firmware.cpp, FirmwareADLP.cpp | All payload bytes compared to pinned upstream containers; bounds fixed; NOT a firmware-instruction semantic review |
 | kern_gpu_capabilities.hpp, kern_guc_ring.hpp, kern_ggtt_bounds.hpp, kern_pattern_match.hpp, kern_dvmt_patch.hpp, kern_context_pool.hpp, kern_binary_identity.hpp, kern_pci_identity.hpp | Implementations read and offline-tested; tests cover the helpers, not all caller lifetime/hardware contracts |
 | kern_context_descriptor.hpp | Read; packed native descriptor now decoded without alignment assumptions; object lifetime/readability remains a caller contract |
+| kern_unaligned.hpp | Read; little-endian 32-bit assembly tested over offsets 0..15; callers retain mapping/lifetime obligations |
 | kern_model.hpp | Read; cosmetic branding lookup only, not a capability/support table; marketing labels not independently certified |
 | kern_netdbg.cpp/.hpp (removed) | Read completely; unbuilt/unreferenced retired logger with overread, port-shadowing and error/locking defects; recoverable in Git |
 | Firmware.hpp | Read; external DMC declarations only; payload and loader limitations remain in the protocol audit |
