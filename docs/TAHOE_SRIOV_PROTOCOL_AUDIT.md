@@ -1104,3 +1104,23 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   Full suite passes /tmp/ngreen-static.efNv3E. 413a577 CI 36222819921 passed.
   Physical mapping provenance, DMA coherency/quiescence and real allocation
   fault injection remain unverified. VM off; no deployment.
+
+### Bounded legacy proxy ID retirement
+
+- Native releaseContextId 0x2117c indexes pool/metadata without validating ID,
+  reservation bit or used count, then decrements unconditionally. New VF route
+  checks complete pool byte capacity, count<=1024, ID<count, nonzero bounded
+  occupancy and allocated bit before mutation. Invalid/duplicate retirement
+  is fail-stop; physical calls remain native. Valid retirement clears only
+  bit 0, decrements once and clears the same two metadata pointer slots.
+- Verified both direct callers already hold GuC+0x40: releaseContext locks
+  at 0x211db; DetachContextDesc locks at 0x221aa before call 0x2221d. No new
+  recursive locking. setupContextPool 0x20bef allocates count*0x20 metadata.
+  This is proxy bookkeeping only, not GuC deregistration or DMA release.
+- Added 4,096 exhaustive retirement cases, double-release attempts, all
+  invalid-input branches, byte canaries and preservation of unrelated flags.
+  Full suite /tmp/ngreen-static.vaG9Uj passes; 0919cd3 CI 36222972562 passed.
+- Native detach still decodes/indexes its packed hash value BEFORE this
+  retirement call; malformed IDs/engine slots can fault there. Therefore this
+  bounds check does not validate its entire caller. createUkContext rollback
+  and all concurrent hash/object lifetime obligations remain unfinished.

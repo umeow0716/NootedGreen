@@ -1387,6 +1387,8 @@ private:
 	mach_vm_address_t oVfCreateUkContext {};
 	static uint32_t vfAllocContextId(void *that, uint64_t owner, bool clear);
 	mach_vm_address_t oVfAllocContextId {};
+	static void vfReleaseContextId(void *that, uint32_t id);
+	mach_vm_address_t oVfReleaseContextId {};
 	static uint16_t vfAcquireDoorbell(void *that, void *descriptor, bool pin);
 	mach_vm_address_t oVfAcquireDoorbell {};
 	static void vfReleaseDoorbell(void *that, void *descriptor);

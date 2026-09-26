@@ -10,6 +10,21 @@ constexpr size_t stride = 0x5B00;
 constexpr size_t flagsOffset = 0x5A6C;
 enum class Result { Allocated, Full, Invalid };
 
+// Caller owns the same native pool lock as allocate(). This retires ONLY the
+// legacy proxy reservation, not its DMA backing or modern GuC context ID.
+inline bool release(uint8_t *pool, uint64_t bytes, uint32_t count,
+                    uint32_t &used, uint32_t id) {
+    if (!pool || !count || count > invalidId || !used || used > count ||
+        id >= count || bytes < static_cast<uint64_t>(count) * stride)
+        return false;
+    auto &flags = pool[static_cast<size_t>(id) * stride + flagsOffset];
+    if (!(flags & 1U))
+        return false;
+    flags &= ~1U;
+    --used;
+    return true;
+}
+
 inline Result allocate(uint8_t *pool, uint64_t bytes, uint32_t count,
                        uint32_t &used, uint32_t &next, bool clear,
                        uint32_t &result) {

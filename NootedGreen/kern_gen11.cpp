@@ -2453,6 +2453,8 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				 vfCreateUkContext, this->oVfCreateUkContext},
 				{"__ZN13IGHardwareGuC14allocContextIdEyb",
 				 vfAllocContextId, this->oVfAllocContextId},
+				{"__ZN13IGHardwareGuC16releaseContextIdEj",
+				 vfReleaseContextId, this->oVfReleaseContextId},
 				// These routines touch raw physical doorbell registers BEFORE
 				// calling hostToGuCAction; guarding the sender alone is too late.
 				{"__ZN13IGHardwareGuC15acquireDoorbellEP35UK_GEN11_GUC_CONTEXT_DESCRIPTOR_RECb",
@@ -8841,6 +8843,32 @@ uint32_t Gen11::vfAllocContextId(void *that, uint64_t owner, bool clear) {
 	if (result == NGContextPool::Result::Invalid)
 		vfMarkProtocolFault("invalid legacy proxy context pool bounds or occupancy");
 	return id;
+}
+
+void Gen11::vfReleaseContextId(void *that, uint32_t id) {
+	if (gVfIdentity == VfIdentity::Physical) {
+		FunctionCast(vfReleaseContextId, callback->oVfReleaseContextId)(that, id);
+		return;
+	}
+	// Both native callers already own GuC+0x40. Cleanup may follow CTB
+	// shutdown/fault; do not require enabled transport or release DMA here.
+	PANIC_COND(!that || gVfIdentity != VfIdentity::Virtual ||
+		!callback->vfSharedMappedBufferGetVirtualAddress, "ngreen",
+		"Cannot validate VF proxy context retirement");
+	auto *backing = getMember<void *>(that, 0x68);
+	auto *metadata = getMember<uint8_t *>(that, 0x50);
+	PANIC_COND(!backing || !metadata, "ngreen", "Missing VF proxy context pool");
+	using Getter = uint8_t *(*)(void *);
+	auto *pool = reinterpret_cast<Getter>(callback->vfSharedMappedBufferGetVirtualAddress)(backing);
+	PANIC_COND(!NGContextPool::release(pool,
+		getMember<uint64_t>(backing, kVfMappedBufferLengthOffset),
+		getMember<uint32_t>(that, 0x80), getMember<uint32_t>(that, 0x84), id),
+		"ngreen", "Invalid or duplicate VF proxy context retirement");
+	// setupContextPool allocates exactly count * 0x20 metadata bytes. Match
+	// native retirement of the two owned-pointer slots; no object release here.
+	auto *entry = metadata + static_cast<size_t>(id) * 0x20;
+	getMember<void *>(entry, 0) = nullptr;
+	getMember<void *>(entry, 8) = nullptr;
 }
 
 uint16_t Gen11::vfAcquireDoorbell(void *that, void *descriptor, bool pin) {

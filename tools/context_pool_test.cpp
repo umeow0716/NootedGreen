@@ -79,5 +79,41 @@ int main() {
                         used, next, true, id) == Result::Invalid);
         assert(small == before && used == oldUsed && next == oldNext && id == 0x12345678);
     }
-    printf("PASS %zu exhaustive proxy allocations; 1024-entry reuse and invalid-input checks\n", cases);
+    size_t releaseCases = 0;
+    for (uint32_t count = 1; count <= 8; ++count) {
+        std::vector<uint8_t> storage(count * stride + 2, 0xA4);
+        auto *pool = storage.data() + 1;
+        for (uint32_t mask = 0; mask < (1U << count); ++mask)
+        for (uint32_t candidate = 0; candidate <= count; ++candidate) {
+            std::fill(storage.begin(), storage.end(), 0xA4);
+            uint32_t used = 0;
+            for (uint32_t index = 0; index < count; ++index) {
+                pool[index * stride + flagsOffset] |= (mask >> index) & 1;
+                used += (mask >> index) & 1;
+            }
+            auto expected = storage;
+            const uint32_t oldUsed = used;
+            const bool allocated = candidate < count && ((mask >> candidate) & 1U);
+            if (allocated) expected[1 + candidate * stride + flagsOffset] &= ~1U;
+            assert(NGContextPool::release(pool, count * stride, count, used, candidate) == allocated);
+            assert(storage == expected && used == oldUsed - (allocated ? 1 : 0));
+            if (allocated) {
+                assert(!NGContextPool::release(pool, count * stride, count, used, candidate));
+                assert(storage == expected && used == oldUsed - 1);
+            }
+            ++releaseCases;
+        }
+    }
+    for (unsigned variant = 0; variant < 8; ++variant) {
+        std::fill(small.begin(), small.end(), 0xA5);
+        const auto before = small;
+        uint32_t used = variant == 2 ? 0 : variant == 3 ? 2 : 1;
+        const auto oldUsed = used;
+        assert(!NGContextPool::release(variant == 0 ? nullptr : small.data(),
+            variant == 1 ? stride - 1 : stride,
+            variant == 4 ? 0 : variant == 5 ? invalidId + 1 : 1, used,
+            variant == 6 ? invalidId : variant == 7 ? UINT32_MAX : 0));
+        assert(small == before && used == oldUsed);
+    }
+    printf("PASS %zu proxy allocations and %zu releases; exhaustion/reuse/invalid-input checks\n", cases, releaseCases);
 }
