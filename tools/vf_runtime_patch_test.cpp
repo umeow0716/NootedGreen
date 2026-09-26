@@ -24,6 +24,7 @@ static void verify(const char *path)
 	assert(stream);
 	std::vector<uint8_t> image((std::istreambuf_iterator<char>(stream)), {});
 	using namespace NGVfRuntimePatch;
+	const size_t sku = uniqueOffset(image, spoofedSkuFind);
 	const size_t slice = uniqueOffset(image, sliceFuseFind);
 	const size_t dss = uniqueOffset(image, dssFuseFind);
 	const size_t eu = uniqueOffset(image, euFuseFind);
@@ -32,6 +33,7 @@ static void verify(const char *path)
 	const size_t l3 = uniqueOffset(image, l3BranchFind);
 	// All anchors belong to the single 0x48c-byte getGPUInfo body and must
 	// preserve the instruction order established by the pinned UUID.
+	assert(sku < slice);
 	assert(slice < dss && dss < eu && eu < media && media < rpm && rpm < l3);
 	assert(l3 - slice < 0x48cU);
 	std::printf("PASS: unique getGPUInfo runtime anchors in %s (0x%zx..0x%zx)\n",

@@ -2311,15 +2311,13 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 
 		// Keep IGAccelDevice::deviceStart native, including failure propagation.
 
-		// SKU/device-ID panic bypass (verified @ 0x23c1d in LE binary)
-		// Original: mov edi,[rsi]; cmp edi,0xDEAFBEEE; jg sentinel; cmp edi,0x9A408086; je ok; cmp edi,0x9A488086; je ok; call panic
-		// Patch:    nop the sentinel-jg + change last "je ok" → "jmp ok" → always jumps to GT2 init path.
-		// Necessary: our spoofed 0x9A498086 is not in the whitelist (0x9A408086 / 0x9A488086).
-		static const uint8_t f3[] = {
-			0x8b, 0x3e, 0x81, 0xff, 0xee, 0xbe, 0xaf, 0xde, 0x7f, 0x15, 0x81, 0xff, 0x86, 0x80, 0x40, 0x9a, 0x74, 0x2d
-		};
+		// Admit exactly the 0x9a49 compatibility identity. The old patch removed
+		// two branches and made every ID reach GT2 initialization; changing the
+		// existing 0x9a40 compare immediate preserves Apple's sentinel and failure
+		// paths while accepting the one device ID published by our PCI hook.
 		static const uint8_t r3[] = {
-			0x8b, 0x3e, 0x81, 0xff, 0xee, 0xbe, 0xaf, 0xde, 0x90, 0x90, 0x81, 0xff, 0x86, 0x80, 0x40, 0x9a, 0xeb, 0x2d
+			0x8b, 0x3e, 0x81, 0xff, 0xee, 0xbe, 0xaf, 0xde, 0x7f, 0x15,
+			0x81, 0xff, 0x86, 0x80, 0x49, 0x9a, 0x74, 0x2d,
 		};
 		// Apple reads these PF-owned runtime registers through raw BAR0 loads in
 		// getGPUInfo(). They are not VF-visible. Replace only those five loads with
@@ -2394,8 +2392,8 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			// the current later-generation compatibility path must hardcode
 			// because fuse layout differs and BCS ring doesn't start.
 			LookupPatchPlus const patchesAlways[] = {
-				// SKU/device-ID bypass — needed for both (0x9A49 not in whitelist)
-				{activeKext, f3, r3, arrsize(f3),	1},
+				{activeKext, NGVfRuntimePatch::spoofedSkuFind, r3,
+				 arrsize(NGVfRuntimePatch::spoofedSkuFind), 1},
 			};
 			PANIC_COND(!LookupPatchPlus::applyAll(patcher, patchesAlways, address, size), "ngreen",
 				"kextG11HWT Failed to apply base patches!");

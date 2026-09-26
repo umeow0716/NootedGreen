@@ -1985,3 +1985,15 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   anchor test, syntax, analyzer, strict ABI and all existing sanitizer models
   pass in `/tmp/ngreen-static.ynqe08`. The VM remained off; the relay exchange
   and resulting Metal/media behavior still require controlled runtime proof.
+
+### Narrow the accelerator SKU admission patch
+
+- The remaining accelerator SKU patch did more than admit the published
+  `0x9a49:0x8086` compatibility identity: it removed the original sentinel
+  branch and changed a conditional acceptance jump into an unconditional one.
+  Any value reaching the pinned body could therefore enter GT2 initialization.
+- The replacement now changes only the immediate in Apple's existing
+  `0x9a40:0x8086` comparison to `0x9a49:0x8086`. The sentinel, second native
+  `0x9a48` comparison, failure call and both conditional branches remain byte
+  for byte native. The exact anchor occurs once in each admitted payload and
+  is covered by the on-disk patch test.
