@@ -1433,6 +1433,32 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
 - Full syntax, zero-finding Clang analyzer, strict ABI warnings and all
   sanitizer protocol suites pass in `/tmp/ngreen-static.H6UvwS`. This closes
   the identified graceful context/GGTT teardown ordering gap, but remains
-  static evidence. Native rotated mappings, the remaining all-source review,
-  CI/Xcode linkage and a controlled boot are still required before dynamic
-  hardware claims.
+  static evidence. The remaining all-source review, CI/Xcode linkage and a
+  controlled boot are still required before dynamic hardware claims.
+
+### Validated VF rotated GGTT mapper
+
+- Reconstructed the complete private call contract from Tahoe
+  `IGHardwarePageTable::commitRange` (`0x14090`) and
+  `IGHardwareGlobalPageTable::mapRangeRotated` (`0x103a0`). The range iterator
+  is 0x20 bytes with source counter/width/height and destination cursor at
+  `+0x18`; the physical iterator supplies a prepared `IOMemoryDescriptor`, its
+  page-rounded length and segment options.
+- VF mapping now requires an exact `width * height` page matrix, a zero initial
+  source counter, the expected initial rotated cursor, equal GPU/physical
+  lengths, a range fully inside the PF assignment, and a stable global-page-
+  table/PTE-aperture receiver. Every physical segment is preflighted for
+  progress, page alignment, overflow and the pinned native 39-bit encoding
+  before any store.
+- The replacement writes one aligned 64-bit PTE per source page using the
+  recovered permutation `column * height + (height - 1 - row)`. This removes
+  the native split high/low exposure and the prior exclusive-end write. A
+  second validated descriptor walk performs the mapping; an unexpected
+  second-pass failure rewrites every already-touched destination to the pinned
+  dummy page before returning failure. PF calls remain entirely native.
+- The pure model verifies 4,096 width/height matrices and 4,326,400 pages as a
+  one-to-one, in-range permutation, plus malformed assignment, geometry,
+  cursor, length and overflow cases. This establishes iterator arithmetic and
+  store bounds, not dynamic IOMMU coherency or successful rendering. The full
+  syntax/analyzer/strict-ABI/sanitizer gate passes in
+  `/tmp/ngreen-static.xUExOx`; macOS Xcode linkage remains the remote CI gate.

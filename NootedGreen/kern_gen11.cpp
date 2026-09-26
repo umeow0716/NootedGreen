@@ -4,6 +4,7 @@
 #include "kern_guc_ring.hpp"
 #include "kern_gpu_capabilities.hpp"
 #include "kern_ggtt_bounds.hpp"
+#include "kern_ggtt_rotation.hpp"
 #include "kern_vf_irq_gate.hpp"
 #include "kern_vf_context_shutdown.hpp"
 #include "kern_context_pool.hpp"
@@ -3750,20 +3751,174 @@ bool Gen11::IGHardwareGlobalPageTableMapRangeRotated(void *that,
                                                      void *physicalIterator,
                                                      uint64_t flags)
 {
-	// The declared interval alone does not bound native stores: native uses
-	// iterator+0x18 before checking it, divides by iterator+0x0c AFTER a store,
-	// and clamps subsequent cursors to the exclusive end while continuing over
-	// physical segments. Until both iterators have a validated replacement,
-	// reject non-physical use before touching private objects or any PTE.
-	if (gVfIdentity != VfIdentity::Physical) {
-		vfMarkProtocolFault("VF rotated GGTT mapping is not safely implemented");
+	if (gVfIdentity == VfIdentity::Physical)
+		return FunctionCast(IGHardwareGlobalPageTableMapRangeRotated,
+		                                 callback->oIGHardwareGlobalPageTableMapRangeRotated)(that,
+		                                                                                       rangeIterator,
+		                                                                                       physicalIterator,
+		                                                                                       flags);
+
+	// Reconstructed from Tahoe's commitRange (0x14090) and global
+	// mapRangeRotated (0x103a0). Native performs its first PTE store before
+	// validating divisor/cursor bounds and can store at the exclusive end. Keep
+	// the private ABI local and replace only the VF implementation.
+	struct RotatedRangeIterator {
+		const NGIGAddressRange *range;
+		uint32_t sourcePage;
+		uint32_t widthPages;
+		uint32_t heightPages;
+		uint32_t reserved;
+		uint64_t cursor;
+	};
+	struct PhysicalSegmentIterator {
+		IOMemoryDescriptor *memory;
+		uint64_t length;
+		uint32_t options;
+		uint32_t reserved;
+	};
+	static_assert(sizeof(RotatedRangeIterator) == 0x20,
+	              "Tahoe rotated-range iterator ABI drift");
+	static_assert(offsetof(RotatedRangeIterator, cursor) == 0x18,
+	              "Tahoe rotated-range cursor ABI drift");
+	static_assert(offsetof(PhysicalSegmentIterator, options) == 0x10,
+	              "Tahoe physical iterator ABI drift");
+
+	if (gVfIdentity != VfIdentity::Virtual || !gVfGGTTReady ||
+	    gVfSubmissionStopped || gVfProtocolFault || !that ||
+	    that != gVfGlobalPageTable || !rangeIterator || !physicalIterator) {
+		vfMarkProtocolFault("invalid VF rotated GGTT mapping state");
 		return false;
 	}
-	return FunctionCast(IGHardwareGlobalPageTableMapRangeRotated,
-	                                 callback->oIGHardwareGlobalPageTableMapRangeRotated)(that,
-	                                                                                       rangeIterator,
-	                                                                                       physicalIterator,
-	                                                                                       flags);
+	auto *rotated = static_cast<RotatedRangeIterator *>(rangeIterator);
+	auto *segments = static_cast<PhysicalSegmentIterator *>(physicalIterator);
+	if (!rotated->range || !segments->memory) {
+		vfMarkProtocolFault("missing VF rotated GGTT iterator backing");
+		return false;
+	}
+
+	const uint64_t descriptorLength = segments->memory->getLength();
+	if (!descriptorLength || descriptorLength > UINT64_MAX - 0xFFFULL) {
+		vfMarkProtocolFault("invalid VF rotated physical descriptor length");
+		return false;
+	}
+	const uint64_t alignedDescriptorLength =
+		(descriptorLength + 0xFFFULL) & ~0xFFFULL;
+	const NGGgttRotation::Spec spec {
+		gVfGGTTBase, gVfGGTTSize,
+		rotated->range->start, rotated->range->length,
+		segments->length, rotated->cursor, rotated->sourcePage,
+		rotated->widthPages, rotated->heightPages,
+	};
+	if (segments->length != alignedDescriptorLength ||
+	    !NGGgttRotation::valid(spec)) {
+		vfMarkProtocolFault("malformed VF rotated GGTT iterator geometry");
+		return false;
+	}
+
+	auto *pteBase = getMember<volatile uint64_t *>(that, 0x28);
+	if (!pteBase || (!gVfDirectGGTT && pteBase != gVfGGTTShadow)) {
+		vfMarkProtocolFault("VF rotated GGTT PTE aperture mismatch");
+		return false;
+	}
+	if (gVfDirectGGTT) {
+		auto *cb = NGreen::callback;
+		if (!cb || !cb->getRMMIOAddress() ||
+		    cb->getRMMIOLength() < kVfDirectBar0Bytes ||
+		    pteBase != reinterpret_cast<volatile uint64_t *>(
+		        const_cast<UInt32 *>(cb->getRMMIOAddress()) +
+		        kVfGGTTPteBase / sizeof(UInt32))) {
+			vfMarkProtocolFault("VF rotated GGTT direct aperture mismatch");
+			return false;
+		}
+	}
+
+	// Preflight the entire descriptor before the first PTE write. The retained,
+	// prepared descriptor is walked again for mapping; every segment is still
+	// revalidated, and a rare second-pass failure rolls all written destinations
+	// back to the pinned dummy page before returning failure.
+	segments->memory->retain();
+	bool validSegments = true;
+	uint64_t offset = 0;
+	while (offset < segments->length) {
+		IOByteCount rawLength = 0;
+		const uint64_t physical = segments->memory->getPhysicalSegment(
+			offset, &rawLength, segments->options);
+		if (!rawLength || rawLength > UINT64_MAX - 0xFFFULL) {
+			validSegments = false;
+			break;
+		}
+		const uint64_t length = (rawLength + 0xFFFULL) & ~0xFFFULL;
+		if (length > segments->length - offset ||
+		    !NGGgtt::nativePhysicalRange(physical, length)) {
+			validSegments = false;
+			break;
+		}
+		offset += length;
+	}
+	if (!validSegments || offset != segments->length) {
+		segments->memory->release();
+		vfMarkProtocolFault("invalid VF rotated physical segment sequence");
+		return false;
+	}
+
+	const uint64_t pteFlags = flags & UINT64_C(0xFFFFFF8000000FFE);
+	uint64_t mappedPages = 0;
+	offset = 0;
+	while (offset < segments->length && validSegments) {
+		IOByteCount rawLength = 0;
+		uint64_t physical = segments->memory->getPhysicalSegment(
+			offset, &rawLength, segments->options);
+		if (!rawLength || rawLength > UINT64_MAX - 0xFFFULL) {
+			validSegments = false;
+			break;
+		}
+		const uint64_t length = (rawLength + 0xFFFULL) & ~0xFFFULL;
+		if (length > segments->length - offset ||
+		    !NGGgtt::nativePhysicalRange(physical, length)) {
+			validSegments = false;
+			break;
+		}
+		for (uint64_t consumed = 0; consumed < length; consumed += 0x1000ULL) {
+			uint64_t destination = 0;
+			if (!NGGgttRotation::destination(spec, mappedPages, destination)) {
+				validSegments = false;
+				break;
+			}
+			pteBase[destination >> 12] =
+				(physical & UINT64_C(0x7FFFFFF000)) | pteFlags | 1U;
+			physical += 0x1000ULL;
+			mappedPages++;
+		}
+		offset += length;
+	}
+
+	const uint64_t totalPages = spec.rangeLength >> 12;
+	if (!validSegments || offset != segments->length || mappedPages != totalPages) {
+		const uint64_t dummyPte =
+			(getMember<uint64_t>(that, 0x38) & UINT64_C(0x7FFFFFF000)) | 1U;
+		for (uint64_t source = 0; source < mappedPages; source++) {
+			uint64_t destination = 0;
+			if (NGGgttRotation::destination(spec, source, destination))
+				pteBase[destination >> 12] = dummyPte;
+		}
+		OSSynchronizeIO();
+		__asm__ volatile("sfence" ::: "memory");
+		segments->memory->release();
+		vfMarkProtocolFault("VF rotated physical segment changed during mapping");
+		return false;
+	}
+
+	rotated->sourcePage = static_cast<uint32_t>(totalPages);
+	rotated->cursor = spec.rangeStart + spec.rangeLength;
+	OSSynchronizeIO();
+	__asm__ volatile("sfence" ::: "memory");
+	segments->memory->release();
+
+	if (!gVfDirectGGTT && !vfSyncShadowRange(*rotated->range)) {
+		vfMarkProtocolFault("failed to publish VF rotated GGTT shadow range");
+		return false;
+	}
+	return true;
 }
 
 void Gen11::IGHardwareGlobalPageTableUnmapRange(void *that,
