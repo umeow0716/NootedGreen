@@ -57,7 +57,7 @@ class NGreen {
     void init();
     void processPatcher(KernelPatcher &patcher);
     bool processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t address, size_t size);
-	void setRMMIOIfNecessary();
+	bool setRMMIOIfNecessary();
 	// V201 diagnostic: BAR2 graphics aperture mapping. Lets us read scanout buffer
 	// bytes through the GTT-translated CPU mapping (safe — no MCE risk like raw PA).
 	void setApertureIfNecessary();

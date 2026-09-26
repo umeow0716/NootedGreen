@@ -39,7 +39,7 @@ bool Genx::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t a
 			SYSLOG("ngreen", "Legacy ICL framebuffer probe/start rejected for VF/unknown device");
 			return true;
 		}
-		NGreen::callback->setRMMIOIfNecessary();
+		PANIC_COND(!NGreen::callback->setRMMIOIfNecessary(), "ngreen", "Cannot map legacy ICL framebuffer BAR0");
 		
 		
 		SolveRequestPlus solveRequests[] = {

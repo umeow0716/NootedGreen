@@ -793,3 +793,28 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   not by globally modifying unrelated GPU user clients.
 - Full suite passes in /tmp/ngreen-static.vIOg5y. CI dccbe67 (36220356972)
   and f339637 (36220434223) succeeded. No VM or hardware access for tests.
+
+### BAR mapping failure and publication
+
+- setRMMIOIfNecessary now returns failure for missing PCI provider, mapping
+  failure, zero/unaligned virtual address or a mapping shorter than a dword,
+  rather than dereferencing a null map. An unpublished invalid map is released.
+  It does not initiate a new map from interrupt context/disabled interrupts.
+- Concurrent bootstrap callers atomically publish one lifetime-long map and
+  its derived MMIO pointer; losing callers release only their unused mapping.
+  No valid live mapping is replaced or freed. VF identification/mailbox/GGTT
+  callers propagate failure. Required physical kext setup fails closed with
+  a deliberate panic rather than continuing into unguarded native hardware
+  routines. That is containment, not graceful device recovery.
+- BAR2 diagnostic mapping now independently requires physical identity,
+  even if a caller forgot its VF guard. Existing call sites still require
+  aperture pointer/length checks; BAR2's own allocation concurrency and other
+  direct/raw mapping paths are not certified by this change.
+- Moved dynamic accelerator personality publication to the end of each
+  hardware payload patch branch. addDrivers may trigger matching; it must
+  not publish our new personality before required routes/patches are ready.
+  Stock personality/start ordering and allocation failure still need review.
+- Complete suite passes in /tmp/ngreen-static.RpztYc. IOAccel validation
+  checkpoint e662427 CI 36220510624 succeeded. No runtime map fault injection
+  or VM startup; preemption-disabled (but interrupts-enabled) mapping contexts
+  and mapping lifetime across device removal remain open.

@@ -10,6 +10,7 @@
 #include "kern_pci_identity.hpp"
 #include <Headers/kern_api.hpp>
 #include <Headers/kern_devinfo.hpp>
+#include <i386/machine_routines.h>
 
 
 static const char *pathIOAcceleratorFamily2= "/System/Library/Extensions/IOAcceleratorFamily2.kext/Contents/MacOS/IOAcceleratorFamily2";
@@ -316,14 +317,32 @@ OSMetaClassBase *NGreen::wrapSafeMetaCast(const OSMetaClassBase *anObject, const
 }
 
 
-void NGreen::setRMMIOIfNecessary() {
-	if (UNLIKELY(!this->rmmio || !this->rmmio->getLength())) {
-		this->rmmio = this->iGPU->mapDeviceMemoryWithRegister(kIOPCIConfigBaseAddress0);
-		this->rmmioPtr = reinterpret_cast<volatile uint32_t *>(this->rmmio->getVirtualAddress());
+bool NGreen::setRMMIOIfNecessary() {
+	auto *mapping = this->rmmio;
+	if (!mapping) {
+		if (!this->iGPU || ml_at_interrupt_context() || !ml_get_interrupts_enabled())
+			return false;
+		mapping = this->iGPU->mapDeviceMemoryWithRegister(kIOPCIConfigBaseAddress0);
+		if (!mapping)
+			return false;
+		const auto address = mapping->getVirtualAddress();
+		if (!address || (address & 3U) || mapping->getLength() < sizeof(uint32_t)) {
+			mapping->release();
+			return false;
+		}
+		// Publish one immutable lifetime-long mapping. A losing initializer
+		// drops only its own unused mapping and uses the published winner.
+		if (!OSCompareAndSwapPtr(nullptr, mapping, &this->rmmio))
+			mapping->release();
+		mapping = this->rmmio;
 	}
+	OSCompareAndSwapPtr(nullptr, reinterpret_cast<void *>(mapping->getVirtualAddress()), &this->rmmioPtr);
+	return true;
 }
 
 void NGreen::setApertureIfNecessary() {
+	if (!this->iGPU || !ngPhysicalGpuAccessAllowed())
+		return;
 	if (UNLIKELY(!this->aperture || !this->aperture->getLength())) {
 		this->aperture = this->iGPU->mapDeviceMemoryWithRegister(kIOPCIConfigBaseAddress2);
 		if (this->aperture) {

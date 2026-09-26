@@ -164,7 +164,8 @@ VfIdentity vfIdentifyDevice()
 		// Do not cache this, allowing identification after PCI discovery.
 		return VfIdentity::Invalid;
 	}
-	cb->setRMMIOIfNecessary();
+	if (!cb->setRMMIOIfNecessary())
+		return VfIdentity::Invalid;
 	constexpr uint32_t vfCap = 0x1901f8;
 	if (!cb->getRMMIOAddress() || cb->getRMMIOLength() < vfCap + sizeof(uint32_t))
 		return VfIdentity::Invalid;
@@ -752,7 +753,8 @@ bool vfGucSendMMIO(const uint32_t request[4], uint32_t requestLength,
 	bzero(response, 4 * sizeof(*response));
 	if (!vfCanUseSleepingLock())
 		return false;
-	cb->setRMMIOIfNecessary();
+	if (!cb->setRMMIOIfNecessary())
+		return false;
 	if (!cb->getRMMIOAddress() ||
 	    cb->getRMMIOLength() < kGen11SoftScratch0 + 4 * sizeof(uint32_t))
 		return false;
@@ -1028,7 +1030,8 @@ bool vfBootstrapBinder()
 	// guest-visible discriminator, so do not ask an ADL-P PF for unsupported
 	// relay updates merely because the PCI ID is marketed as Raptor Lake.
 	auto *cb = NGreen::callback;
-	cb->setRMMIOIfNecessary();
+	if (!cb || !cb->setRMMIOIfNecessary())
+		return false;
 	const uint64_t bar0Length = cb->getRMMIOLength();
 	if (cb->getRMMIOAddress() && bar0Length >= kVfDirectBar0Bytes) {
 		gVfDirectGGTT = true;
@@ -1434,7 +1437,7 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		auto *activeKext = &kextG11FB;
 		DBGLOG("ngreen", "init AppleIntelICLLPGraphicsFramebuffer!");
 		//NGreen::callback->igfxGen = iGFXGen::Gen11;
-		NGreen::callback->setRMMIOIfNecessary();
+		PANIC_COND(!NGreen::callback->setRMMIOIfNecessary(), "ngreen", "Cannot map ICL framebuffer BAR0");
 		
 		const bool wegCoexist = isWEGCoexistMode();
 		if (wegCoexist) {
@@ -1574,7 +1577,7 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 	}	else if (kextG11FBT.loadIndex == index || kextG11FBTA.loadIndex == index) {
 		this->tglFBLoaded = true;
 		auto *activeKext = (kextG11FBTA.loadIndex == index) ? &kextG11FBTA : &kextG11FBT;
-		NGreen::callback->setRMMIOIfNecessary();
+		PANIC_COND(!NGreen::callback->setRMMIOIfNecessary(), "ngreen", "Cannot map TGL framebuffer BAR0");
 		SYSLOG("ngreen", "init AppleIntelTGLGraphicsFramebuffer");
 		
 		bool isprod=false;
@@ -2049,8 +2052,7 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		}
 		auto *activeKext = &kextG11HW;
 		DBGLOG("ngreen", "init AppleIntelICLGraphics!");
-		injectAcceleratorPersonality(false);
-		NGreen::callback->setRMMIOIfNecessary();
+		PANIC_COND(!NGreen::callback->setRMMIOIfNecessary(), "ngreen", "Cannot map ICL accelerator BAR0");
 		const bool wegCoexist = isWEGCoexistMode();
 
 		{
@@ -2145,6 +2147,7 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			PANIC_COND(!patches[i].apply(patcher, address, size), "ngreen", "kextG11HW Failed to apply patch %zu", i);
 		}
 		DBGLOG("ngreen", "Loaded AppleIntelICLGraphics!");
+		injectAcceleratorPersonality(false);
 
 		return true;
 
@@ -2158,8 +2161,7 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		this->tglHWLoaded = true;
 		auto *activeKext = (kextG11HWTA.loadIndex == index) ? &kextG11HWTA : &kextG11HWT;
 		SYSLOG("ngreen", "init AppleIntelTGLGraphics (HW accelerator)");
-		injectAcceleratorPersonality(true);
-		NGreen::callback->setRMMIOIfNecessary();
+		PANIC_COND(!NGreen::callback->setRMMIOIfNecessary(), "ngreen", "Cannot map TGL accelerator BAR0");
 		SYSLOG("ngreen", "V165: setRMMIO done, starting symbol resolve");
 
 		// V144: Resolve the Blit3D context params struct and the ExtendedContext initWithOptions.
@@ -3185,6 +3187,9 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		SYSLOG("ngreen", "Loaded AppleIntelTGLGraphics! %s",
 			   NGreen::callback->isRealTGL ? "Real TGL — native topology" :
 			   "RPL spoofed — slices=1 subslices=8(4DSS) maxEU/SS=8 totalEU=64 L3=8");
+		// Adding a personality can start matching immediately. Publish only
+		// after this payload's required routes and patches have been installed.
+		injectAcceleratorPersonality(true);
 
 		return true;
 	}
@@ -3268,7 +3273,8 @@ bool Gen11::IGHardwareGlobalPageTableInitWithOptions(void *that,
 	const NGIGAddressRange noDirectClear {UINT64_MAX, 0x100000000ULL};
 	if (gVfDirectGGTT) {
 		auto *cb = NGreen::callback;
-		cb->setRMMIOIfNecessary();
+		if (!cb || !cb->setRMMIOIfNecessary())
+			return false;
 		if (!cb->getRMMIOAddress() || cb->getRMMIOLength() < kVfDirectBar0Bytes) {
 			SYSLOG("ngreen", "V219: full BAR0 mapping unavailable for direct GGTT");
 			return false;
