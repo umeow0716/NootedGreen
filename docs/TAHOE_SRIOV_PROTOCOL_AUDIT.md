@@ -480,3 +480,27 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   The current BAR-only transport selection lacks this discovery and remains
   a blocker for claiming MTL/ARL or general Gen11+ support.
 - Map-admission checkpoint f43f222 CI run 36218171344 succeeded.
+
+### Physical PHY translation layout review
+
+- Reviewed IntelDPLinkTraining.cpp/.hpp and compared Linux
+  intel_ddi_buf_trans.h/.c, intel_combo_phy_regs.h and intel_ddi.c signal-level
+  routines. All 50 local table rows exactly match the five numeric fields
+  in the installed i915 source, but the local STRUCT ORDER was wrong:
+  a nonexistent iboost displaced swing/N-scalar/cursor fields. Corrected to
+  swing, N-scalar, cursor, post2, post1 and consume both post fields.
+- Masked SWING_SEL_UPPER to its single bit, so even malformed inputs cannot
+  spill into neighboring fields. Validate lane count 1/2/4, non-null arrays
+  and all four lanes' legal swing/pre-emphasis combinations before MMIO.
+- Both public entry points now require confirmed physical identity; VF or
+  unknown identity cannot program display PHYs. Limit this implementation
+  to PHY A/B and DP/eDP; its tables do not implement HDMI training.
+- ADL-P eDP HBR2 no longer selects the DP/HBR3 table. The boolean-rate API
+  cannot represent HBR3; complete negotiated-rate/table selection, panel
+  high-output-swing policy and eDP override sequencing remain unfinished.
+- Removed the active ICL hwInitializeCState calls that forced two four-lane
+  HBR links using TGL electrical tables outside actual link training. Native
+  ICL initialization remains. No new signal-level call sites were enabled.
+- Added offline struct-offset/register-value/table-range/bit-mask tests,
+  all 65,536 swing/pre pairs, and all input lanes/counts; CI includes them.
+  These tests do not exercise physical links or prove PF display support.

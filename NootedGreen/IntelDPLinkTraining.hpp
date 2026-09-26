@@ -62,7 +62,7 @@ static inline uint32_t _ICL_COMBOPHY(uint8_t phy) {
 #define ICL_PORT_TX_DW2_GRP(phy)            _ICL_PORT_TX_DW_GRP(2, phy)
 #define ICL_PORT_TX_DW2_LN(ln,phy)          _ICL_PORT_TX_DW_LN(2, ln, phy)
 #define   SWING_SEL_UPPER_MASK              (1u  << 15)
-#define   SWING_SEL_UPPER(x)                (((x) >> 3) << 15)
+#define   SWING_SEL_UPPER(x)                ((((x) >> 3) & 1u) << 15)
 #define   SWING_SEL_LOWER_MASK              (0x7u << 11)
 #define   SWING_SEL_LOWER(x)                (((x) & 0x7u) << 11)
 #define   RCOMP_SCALAR_MASK                 (0xFFu)
@@ -137,15 +137,24 @@ static inline uint32_t _ICL_COMBOPHY(uint8_t phy) {
 
 // ─── TGL DDI buffer translation entry (icl union layout) ─────────────────────
 // Matches: union intel_ddi_buf_trans_entry .icl member in Linux
-// Fields:  [0] iboost  [1] dw2_swing_sel  [2] dw7_n_scalar
-//          [3] dw4_post_cursor_1          [4] dw4_cursor_coeff (also used as n_scalar high)
+// Exact order of Linux struct icl_ddi_buf_trans. There is NO iboost field.
 struct TGLComboBufTransEntry {
-    uint8_t iboost;             // unused in this impl (hw iboost controlled separately)
     uint8_t dw2_swing_sel;      // → SWING_SEL_UPPER/LOWER in DW2
     uint8_t dw7_n_scalar;       // → N_SCALAR in DW7
-    uint8_t dw4_post_cursor_1;  // → POST_CURSOR_1 in DW4
     uint8_t dw4_cursor_coeff;   // → CURSOR_COEFF in DW4
+    uint8_t dw4_post_cursor_2;  // → POST_CURSOR_2 in DW4
+    uint8_t dw4_post_cursor_1;  // → POST_CURSOR_1 in DW4
 };
+
+static inline bool tgl_combo_phy_inputs_valid(uint8_t laneCount, const uint8_t *swing, const uint8_t *pre) {
+    if (!swing || !pre || (laneCount != 1 && laneCount != 2 && laneCount != 4))
+        return false;
+    // The register sequence programs all four lanes, including unused lanes.
+    for (unsigned lane = 0; lane < 4; ++lane)
+        if (swing[lane] > 3 || pre[lane] > 3 || swing[lane] + pre[lane] > 3)
+            return false;
+    return true;
+}
 
 // Level index from (voltageSwing, preEmphasis) — DP spec table, same ordering Linux uses
 // swing 0..3, pre 0..3 (only valid combos per spec: pre <= 3-swing)
@@ -169,7 +178,7 @@ static inline int tgl_combo_phy_trans_index(uint8_t swing, uint8_t pre) {
 // ─── Actual translation tables from Linux intel_ddi_buf_trans.c ──────────────
 // tgl_combo_phy_trans_dp_hbr  (RBR / HBR — ≤2.7 Gbps)
 static const TGLComboBufTransEntry tgl_combo_phy_trans_dp_hbr[10] = {
-    // iboost dw2_swing dw7_n  dw4_pc1 dw4_cc
+    // swing N-scalar cursor post2 post1 (Linux icl_ddi_buf_trans order)
     { 0xA, 0x32, 0x3F, 0x00, 0x00 }, // L0: 350/350  0.0 dB
     { 0xA, 0x4F, 0x37, 0x00, 0x08 }, // L1: 350/500  3.1 dB
     { 0xC, 0x71, 0x2F, 0x00, 0x10 }, // L2: 350/700  6.0 dB
@@ -203,7 +212,7 @@ static const TGLComboBufTransEntry tgl_combo_phy_trans_dp_hbr2[10] = {
 
 // adlp_combo_phy_trans_dp_hbr  (RBR / HBR — ≤2.7 Gbps)
 static const TGLComboBufTransEntry adlp_combo_phy_trans_dp_hbr[10] = {
-    // iboost dw2_swing dw7_n  dw4_pc1 dw4_cc
+    // swing N-scalar cursor post2 post1 (Linux icl_ddi_buf_trans order)
     { 0xA, 0x35, 0x3F, 0x00, 0x00 }, // L0: 350/350  0.0 dB
     { 0xA, 0x4F, 0x37, 0x00, 0x08 }, // L1: 350/500  3.1 dB
     { 0xC, 0x71, 0x31, 0x00, 0x0E }, // L2: 350/700  6.0 dB

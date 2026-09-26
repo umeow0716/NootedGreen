@@ -14,6 +14,7 @@ on:
       - "tools/guc_ring_test.cpp"
       - "tools/gpu_capabilities_test.cpp"
       - "tools/ggtt_init_bounds_test.cpp"
+      - "tools/phy_translation_test.cpp"
       - "tools/check-static.sh"
       - ".github/workflows/build-kext.yml"
 
@@ -38,6 +39,9 @@ jobs:
           xcrun clang++ -std=c++14 -O1 -g -fsanitize=address,undefined \
             tools/ggtt_init_bounds_test.cpp -o "$RUNNER_TEMP/ggtt-init-bounds-test"
           "$RUNNER_TEMP/ggtt-init-bounds-test"
+          xcrun clang++ -std=c++14 -O1 -g -fsanitize=address,undefined \
+            tools/phy_translation_test.cpp -o "$RUNNER_TEMP/phy-translation-test"
+          "$RUNNER_TEMP/phy-translation-test"
 
       - name: Build x86_64 release kext
         run: |

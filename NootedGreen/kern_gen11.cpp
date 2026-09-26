@@ -1144,6 +1144,11 @@ bool ngVfGGTTBinderActive()
 	return gVfIdentity == VfIdentity::Virtual || gVfGGTTReady;
 }
 
+bool ngPhysicalGpuAccessAllowed()
+{
+	return vfIdentifyDevice() == VfIdentity::Physical;
+}
+
 bool ngVfGGTTRead32(unsigned long reg, UInt32 &value)
 {
 	if (!gVfBinderReady || !gVfGGTTShadow || reg < kVfGGTTPteBase ||
@@ -5214,17 +5219,11 @@ void Gen11::hwInitializeCState(AppleIntel::AppleIntelBaseController *that)
 
 	} else if (dmcArg[0] == 'i' || dmcArg[0] == 'I') {
 		// ── ICL ──
-		// ICL is the native target: let original hwInitializeCState load the ICL DMC blob,
-		// then program ICL combo PHY signal levels (same DW2/4/5/7 layout as TGL).
-		SYSLOG("ngreen", "hwInitCState: ngreen-dmc=icl, passthrough + ICL combo PHY signal levels");
+		// ICL is the native target. PHY levels belong to actual link training;
+		// identical register layout does not make TGL electrical tables valid
+		// for ICL or justify forcing two unnegotiated four-lane HBR links here.
+		SYSLOG("ngreen", "hwInitCState: ngreen-dmc=icl, native passthrough");
 		FunctionCast(hwInitializeCState, callback->ohwInitializeCState)(that);
-		// Program combo PHY signal levels — PHY_A (eDP, 4 lanes, HBR) + PHY_B (DP-B, 4 lanes, HBR)
-		{
-			uint8_t swing[4]   = {0, 0, 0, 0};
-			uint8_t preEmph[4] = {0, 0, 0, 0};
-			IntelDPLinkTraining::setSignalLevels(/*phy=*/0, /*lanes=*/4, /*isHBR2=*/false, /*isDP=*/true, swing, preEmph);
-			IntelDPLinkTraining::setSignalLevels(/*phy=*/1, /*lanes=*/4, /*isHBR2=*/false, /*isDP=*/true, swing, preEmph);
-		}
 		SYSLOG("ngreen", "hwInitCState: ICL done");
 
 	} else {

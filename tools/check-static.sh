@@ -45,4 +45,11 @@ if "$compiler" -std=c++14 -O1 -g -fsanitize=address,undefined \
 else
     failed=1
 fi
+if "$compiler" -std=c++14 -O1 -g -fsanitize=address,undefined \
+    tools/phy_translation_test.cpp -o "$task_output/phy-translation-test" && \
+    "$task_output/phy-translation-test"; then
+    printf 'PASS offline PHY translation tests\n'
+else
+    failed=1
+fi
 exit "$failed"

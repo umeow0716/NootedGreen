@@ -35,6 +35,8 @@ struct intel_ip_version {
 bool ngVfGGTTRead32(unsigned long reg, UInt32 &value);
 bool ngVfGGTTWrite32(unsigned long reg, UInt32 value);
 bool ngVfGGTTBinderActive();
+// Fail closed for VF or unclassified identity before physical display access.
+bool ngPhysicalGpuAccessAllowed();
 
 /*
 class EXPORT PRODUCT_NAME : public IOService {

@@ -78,12 +78,11 @@ static void combo_vswing_program(
                SWING_SEL_LOWER(e->dw2_swing_sel) |
                RCOMP_SCALAR_VAL);
 
-        // DW4: cursor coefficients (note: post_cursor_1=0 for all TGL entries,
-        // but we still use the struct field so the code is table-driven)
+        // DW4: use the source table's actual cursor coefficient fields.
         ng_rmw(ICL_PORT_TX_DW4_LN(ln, phy),
                POST_CURSOR_1_MASK | POST_CURSOR_2_MASK | CURSOR_COEFF_MASK,
                POST_CURSOR_1(e->dw4_post_cursor_1) |
-               POST_CURSOR_2(0u) |            // TGL entries have dw4_post_cursor_2=0
+               POST_CURSOR_2(e->dw4_post_cursor_2) |
                CURSOR_COEFF(e->dw4_cursor_coeff));
 
         // DW7: N scalar
@@ -107,8 +106,9 @@ void IntelDPLinkTraining::setSignalLevels(
         SYSLOG("ngreen", "IntelDPLinkTraining: callback is null");
         return;
     }
-    if (phy > 4) {
-        SYSLOG("ngreen", "IntelDPLinkTraining: PHY %u out of range (0=A,1=B,2=C,3=D,4=E)", phy);
+    if (!ngPhysicalGpuAccessAllowed() || phy > 1 || !isDP ||
+        !tgl_combo_phy_inputs_valid(laneCount, voltageSwing, preEmphasis)) {
+        SYSLOG("ngreen", "IntelDPLinkTraining: unsupported device/PHY/protocol or invalid training inputs");
         return;
     }
 
@@ -179,22 +179,21 @@ void IntelDPLinkTraining::setSignalLevelsADLP(
         return;
     }
     // ADL-P combo PHY: only ports A (0) and B (1) — TC ports C-F are DKL PHY
-    if (phy > 1) {
-        SYSLOG("ngreen", "IntelDPLinkTraining ADLP: PHY %u is not a combo PHY on ADL-P", phy);
+    if (!ngPhysicalGpuAccessAllowed() || phy > 1 ||
+        !tgl_combo_phy_inputs_valid(laneCount, voltageSwing, preEmphasis)) {
+        SYSLOG("ngreen", "IntelDPLinkTraining ADLP: unsupported device/PHY or invalid training inputs");
         return;
     }
 
     const TGLComboBufTransEntry *table;
     if (isEDP) {
         // eDP: always use the eDP-specific low-swing table (≤HBR2).
-        // Linux uses adlp_combo_phy_trans_edp_hbr3 for HBR3 eDP, which shares the
-        // dp_hbr2 data — handled by the else branch below for simplicity.
-        table = isHBR2 ? adlp_combo_phy_trans_dp_hbr2 : adlp_combo_phy_trans_edp_hbr2;
+        // This API has no HBR3 rate; HBR2 must not select a DP/HBR3 table.
+        table = adlp_combo_phy_trans_edp_hbr2;
     } else {
         table = isHBR2 ? adlp_combo_phy_trans_dp_hbr2 : adlp_combo_phy_trans_dp_hbr;
     }
 
-    bool isDP    = true;  // combo PHY on ADL-P is always DP or eDP
     bool isHBR3  = false;
 
     // Step 1: COMMON_KEEPER_EN in PCS_DW1
