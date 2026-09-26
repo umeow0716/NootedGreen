@@ -45,7 +45,8 @@ external reference trees are not magically reviewed by counting source files.
 | kern_netdbg.cpp/.hpp (removed) | Read completely; unbuilt/unreferenced retired logger with overread, port-shadowing and error/locking defects; recoverable in Git |
 | Firmware.hpp | Read; external DMC declarations only; payload and loader limitations remain in the protocol audit |
 | AppleIntelParams.hpp | Read all 624 lines; compiler layout dump confirms unasserted controller/framebuffer tail offsets drift from comments. No direct callers of the checked mismatched fields found; generator and pinned-binary verification remain incomplete |
-| IGGucBinary.h, IGHucBinary.h, Info.plist | Full review/verification not yet recorded; do not infer coverage from inclusion or successful compilation |
+| Info.plist | Read all 124 lines; main personality/build identifiers and SchedulerType consumer inspected; profile metadata has no main-source/tools consumer found, display injection remains hardware-specific; not a supported-device matrix |
+| IGGucBinary.h, IGHucBinary.h | Full review/verification not yet recorded; do not infer coverage from inclusion or successful compilation |
 
 ## Evidence rules
 

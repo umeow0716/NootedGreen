@@ -982,3 +982,11 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
 - Header blit3d_params_t.unk_00B8 is uint32_t, while inspected submitBlit
   reads/writes a byte at 0xb8. Exact full layout, generated provenance and
   all private object lifetimes remain open. No unproven packing/type rewrite.
+- Info.plist read completely (124 lines). Its NootedGreenDriverProfiles,
+  NootedGreenDriverProfileDefault and PreferredOrder have no consumer found
+  in main source/tools; these metadata declarations do not implement profile
+  selection or broad GPU support. SchedulerType does have a source consumer.
+  Display injection is restricted by its vendor/product pair in probe, not
+  a virtual-display implementation. Main product/bundle build settings match
+  the personality placeholders. Runtime dependency/version and display
+  behavior remain unvalidated; metadata retained rather than guessed away.
