@@ -4,6 +4,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include "kern_context_descriptor.hpp"
 
 namespace NGVfGuCRequest {
 
@@ -41,7 +42,7 @@ inline Attributes inspect(const uint32_t *request, size_t length)
 				request[4] && !(request[4] & (request[4] - 1U)) &&
 				request[5] == 0 && request[6] == 0 && request[7] == 0 &&
 				request[8] == 0 && request[9] == 0 &&
-				(request[10] & 0xFFFFF000U) != 0 && request[11] == 0;
+				NGContextDescriptor::validGucHwlrca(request[10], request[11]);
 			break;
 		case updateContextPolicies:
 			// The four one-dword KLVs emitted by vfSetContextPolicy, in the

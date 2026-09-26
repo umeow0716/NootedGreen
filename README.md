@@ -81,6 +81,11 @@ inherit runtime claims from the older Sonoma/Raptor Lake display experiments.
 - The direct CTB producer admits only the six GuC v70 FAST request shapes this
   VF bridge implements. Exact request bodies determine retirement permission
   and G2H credit reservations before anything is written to the transport.
+- Direct-LRCA attach validates every persistent Tahoe descriptor field before
+  native pool access. GuC registration materializes the first-submit
+  `FORCE_RESTORE` bit that Apple's legacy execlist adds only to a stack copy;
+  reserved bits, unsupported classes/instances and malformed priorities fail
+  before transport publication.
 - Physical engine start/stop/reset-list handling is native. The former GDRST,
   blanket EMR masking, ring rewrites, GGTT[0] diagnostic remaps and recurring
   health-monitor timers have been removed.

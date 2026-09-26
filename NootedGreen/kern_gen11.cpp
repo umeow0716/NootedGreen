@@ -3752,10 +3752,9 @@ bool Gen11::vfAttachContextDesc(void *that, const uint32_t *descriptor) {
 	const auto descriptorValue = NGContextDescriptor::read(descriptor);
 	const uint32_t descriptorLo = descriptorValue.low;
 	const uint32_t descriptorHi = descriptorValue.high;
-	const uint32_t lrcaPage = descriptorLo & 0xFFFFF000U;
-	const uint32_t rawClass = descriptorHi >> 29;
-	const uint32_t engineInstance = (descriptorHi >> 16) & 0x3FU;
-	static constexpr uint8_t engineClassMap[] = {0, 1, 2, 3, 5, 4};
+	const auto descriptorAttributes = NGContextDescriptor::inspect(descriptorValue);
+	const uint32_t lrcaPage = descriptorAttributes.lrcaPage;
+	const uint32_t engineInstance = descriptorAttributes.engineInstance;
 	auto *hardwareContext = const_cast<uint8_t *>(
 		reinterpret_cast<const uint8_t *>(descriptor) -
 		kVfContextDescriptorOffset);
@@ -3766,10 +3765,9 @@ bool Gen11::vfAttachContextDesc(void *that, const uint32_t *descriptor) {
 	uint32_t poolUsed = 0, poolCount = 0;
 	const bool poolValid = vfLegacyProxyPoolValid(
 		that, callback->vfSharedMappedBufferGetVirtualAddress, &poolUsed, &poolCount);
-	if (!poolValid || !contextBacking ||
+	if (!descriptorAttributes.valid || !poolValid || !contextBacking ||
 	    !NGGgtt::contains(gVfGGTTBase, gVfGGTTSize, lrcaPage, contextBytes) ||
 	    lrcaPage >= kGucGgttTop || contextBytes > kGucGgttTop - lrcaPage ||
-	    rawClass >= arrsize(engineClassMap) || engineInstance >= 32 ||
 	    contextBytes < kVfContextMinimumImageBytes) {
 		SYSLOG("ngreen", "V241: rejected pre-native LRCA %08x:%08x bytes=0x%llx pool=%u/%u",
 		       descriptorHi, descriptorLo,
@@ -3804,7 +3802,7 @@ bool Gen11::vfAttachContextDesc(void *that, const uint32_t *descriptor) {
 			    entry.state == kVfGucContextEnabled)) {
 				if (entry.refCount == 0xFFFFU || entry.contextBacking != contextBacking ||
 				    entry.descriptorLo != descriptorLo ||
-				    entry.engineClass != engineClassMap[rawClass] ||
+				    entry.engineClass != descriptorAttributes.gucClass ||
 				    entry.engineInstance != engineInstance) {
 					IOSimpleLockUnlockEnableInterrupt(gVfContextLock, interruptState);
 					vfMarkProtocolFault("context reference overflow or LRCA identity mismatch");
@@ -3827,7 +3825,7 @@ bool Gen11::vfAttachContextDesc(void *that, const uint32_t *descriptor) {
 				entry.lrcaPage = lrcaPage;
 				entry.descriptorLo = descriptorLo;
 				entry.refCount = 1;
-				entry.engineClass = engineClassMap[rawClass];
+				entry.engineClass = descriptorAttributes.gucClass;
 				entry.engineInstance = static_cast<uint8_t>(engineInstance);
 				entry.enablePending = false;
 				entry.disablePending = false;
@@ -3860,7 +3858,8 @@ bool Gen11::vfAttachContextDesc(void *that, const uint32_t *descriptor) {
 	}
 
 	const uint16_t gucId = static_cast<uint16_t>(slot);
-	const uint8_t engineClass = engineClassMap[rawClass];
+	const uint8_t engineClass = descriptorAttributes.gucClass;
+	const uint32_t gucDescriptorLo = NGContextDescriptor::gucHwlrca(descriptorValue);
 	const uint32_t request[] = {
 		kGucActionRegisterContext,
 		kGucContextRegistrationFlagKmd,
@@ -3870,7 +3869,7 @@ bool Gen11::vfAttachContextDesc(void *that, const uint32_t *descriptor) {
 		0, 0, // no work-queue descriptor for a single-LRC context
 		0, 0, // no work queue
 		0,
-		descriptorLo,
+		gucDescriptorLo,
 		0,    // Gen12 LRCA is a 32-bit GGTT descriptor
 	};
 	uint32_t transportFence = 0;

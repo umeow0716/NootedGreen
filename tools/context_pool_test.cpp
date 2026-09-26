@@ -44,6 +44,59 @@ int main() {
         }
     }
     puts("PASS 1024 packed descriptor alignment/bit cases");
+
+	// Tahoe's persistent descriptor accepts only the fields proven at
+	// IGHardwareContext::initWithOptions.  Exercise every low flag combination,
+	// including both restore bits and every reserved bit.
+	constexpr uint32_t descriptorAddress = 0x12345000U;
+	for (uint32_t flags = 0; flags < 0x1000U; ++flags) {
+		const bool expected =
+			(flags & ~NGContextDescriptor::persistentFlagMask) == 0 &&
+			(flags & NGContextDescriptor::valid) != 0 &&
+			(flags & NGContextDescriptor::priorityMask) ==
+				NGContextDescriptor::normalPriority;
+		assert(NGContextDescriptor::validPersistentLow(
+			descriptorAddress | flags) == expected);
+	}
+	assert(!NGContextDescriptor::validPersistentLow(0x309U));
+
+	const uint8_t expectedClassMap[] = {0, 1, 2, 3, 5, 4};
+	for (uint32_t rawClass = 0; rawClass < 8; ++rawClass) {
+		assert(NGContextDescriptor::mapEngineClass(rawClass) ==
+			(rawClass < 6 ? expectedClassMap[rawClass] : 0xFFU));
+		for (uint32_t instance = 0; instance < 64; ++instance) {
+			for (uint32_t swId : {0U, 1U, 0x7FFU}) {
+				const NGContextDescriptor::Value descriptor = {
+					descriptorAddress | 0x309U,
+					(rawClass << 29) | (instance << 16) | (swId << 5),
+				};
+				const auto attributes = NGContextDescriptor::inspect(descriptor);
+				assert(attributes.valid == (rawClass < 6 && instance < 32));
+				assert(attributes.lrcaPage == descriptorAddress);
+				assert(attributes.rawClass == rawClass);
+				assert(attributes.engineInstance == instance);
+			}
+		}
+	}
+	const NGContextDescriptor::Value baseDescriptor = {
+		descriptorAddress | 0x309U, (3U << 29) | (7U << 16) | (23U << 5),
+	};
+	assert(NGContextDescriptor::inspect(baseDescriptor).valid);
+	for (uint32_t bit = 0; bit < 32; ++bit) {
+		const uint32_t mask = 1U << bit;
+		if (mask & NGContextDescriptor::persistentHighMask)
+			continue;
+		auto invalid = baseDescriptor;
+		invalid.high |= mask;
+		assert(!NGContextDescriptor::inspect(invalid).valid);
+	}
+	const uint32_t gucDescriptor = NGContextDescriptor::gucHwlrca(baseDescriptor);
+	assert(gucDescriptor == (baseDescriptor.low | NGContextDescriptor::forceRestore));
+	assert(NGContextDescriptor::validGucHwlrca(gucDescriptor, 0));
+	assert(!NGContextDescriptor::validGucHwlrca(baseDescriptor.low, 0));
+	assert(!NGContextDescriptor::validGucHwlrca(gucDescriptor, 1));
+	puts("PASS 4096 Tahoe descriptor flags, 1536 engine tuples, reserved bits and GuC normalization");
+
     // Synthetic addresses are inspected only as integers, never dereferenced.
     // Include a pool whose last byte fits but exclusive end wraps to zero.
     for (uint32_t count : {1U, 2U, invalidId}) {

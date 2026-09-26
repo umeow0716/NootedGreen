@@ -25,7 +25,7 @@ static void valid(const uint32_t (&request)[N], bool retirement,
 int main()
 {
 	const uint32_t registration[] = {
-		0x4502, 1, 12, 4, 1U << 3, 0, 0, 0, 0, 0, 0x1234500d, 0,
+		0x4502, 1, 12, 4, 1U << 3, 0, 0, 0, 0, 0, 0x1234530d, 0,
 	};
 	const uint32_t policy[] = {
 		0x100B, 12,
@@ -48,7 +48,7 @@ int main()
 	valid(invalidate, true, 3);
 
 	auto badRegistration = std::array<uint32_t, 12>({
-		0x4502, 1, 12, 4, 8, 0, 0, 0, 0, 0, 0x1234500d, 0,
+		0x4502, 1, 12, 4, 8, 0, 0, 0, 0, 0, 0x1234530d, 0,
 	});
 	for (size_t field : {size_t(1), size_t(5), size_t(6), size_t(7),
 	                     size_t(8), size_t(9), size_t(11)}) {
@@ -65,7 +65,11 @@ int main()
 	badRegistration[4] = 3;
 	assert(!inspect(badRegistration.data(), badRegistration.size()).valid);
 	badRegistration[4] = 8;
-	badRegistration[10] = 0xd;
+	badRegistration[10] = 0x30d;
+	assert(!inspect(badRegistration.data(), badRegistration.size()).valid);
+	badRegistration[10] = 0x12345309;
+	assert(!inspect(badRegistration.data(), badRegistration.size()).valid);
+	badRegistration[10] = 0x1234530f;
 	assert(!inspect(badRegistration.data(), badRegistration.size()).valid);
 
 	auto badPolicy = std::array<uint32_t, 10>({

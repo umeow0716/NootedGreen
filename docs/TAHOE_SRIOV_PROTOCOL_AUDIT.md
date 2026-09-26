@@ -2113,3 +2113,32 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   proves emitted PTEs contain no LM/VFID. The complete syntax, analyzer,
   strict-ABI, sanitizer and payload suite passes in
   `/tmp/ngreen-static.mOqJrE`. This remains static evidence; VM stayed off.
+
+### Validate the complete Tahoe direct-LRCA descriptor
+
+- Re-disassembled every direct reference to the packed descriptor at
+  `IGHardwareContext+0x89/+0x8d`. `initWithOptions` zeroes it, seeds low dword
+  `0x309`, replaces address-mode bits 4:3, inserts the page-aligned GGTT LRCA,
+  constructs SW-ID/engine-instance/engine-class in the Gen11 upper layout and
+  conditionally toggles only coherent bit 5 and privilege bit 8. No persistent
+  restore bit or SW-counter/reserved bit is created.
+- `IGHardwareCommandStreamer5::submitExecList` copies that descriptor to its
+  stack and conditionally adds bit 2 `FORCE_RESTORE` to the copy. It never
+  writes the object. Current i915 independently defines the same flag and its
+  Gen12 `lrc_update_regs` places it in `ce->lrc.lrca`; GuC v70 registration
+  then sends that LRCA because later schedule actions carry only the GuC ID.
+- VF attach now rejects malformed descriptors before Apple's native attach can
+  index its private proxy pool. It requires a nonzero page-aligned LRCA field,
+  valid plus normal priority, only the proven address-mode/coherent/privilege
+  flags, zero upper reserved/MBZ/SW-counter fields, raw engine class 0..5 and
+  an instance representable by the 32-bit GuC engine mask. The native Tahoe
+  `{0,1,2,3,5,4}` Intel-to-GuC class table matches current i915 exactly.
+- Registration preserves Apple's persistent fields and explicitly adds
+  `FORCE_RESTORE`; the FAST-request validator requires that normalized form
+  and still requires a zero high LRCA dword. This closes the former gap where
+  direct GuC scheduling never received Apple's first-submit stack flag.
+- Sanitizer tests exhaust all 4,096 low flag combinations, 1,536 class,
+  instance and SW-ID tuples, each upper reserved bit and GuC normalization.
+  The complete syntax, analyzer, strict-ABI, sanitizer and pinned-payload suite
+  passes in `/tmp/ngreen-static.YyW8hV`. The VM remained shut off; firmware
+  execution and completion are still controlled-runtime obligations.
