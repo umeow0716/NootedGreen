@@ -34,7 +34,7 @@ sources returns the current count to 1,303; this does not close older coverage.
 
 | Files/area | Evidence and remaining boundary |
 | --- | --- |
-| kern_gen11.cpp/.hpp | Partial, protocol-focused review plus targeted native disassembly; large physical display/accelerator sections and declarations remain open |
+| kern_gen11.cpp/.hpp | Partial, protocol-focused review plus targeted native disassembly; Mach-O relocation audit removed 39 unreachable private wrappers/stubs and their original slots. Remaining reachable physical display/accelerator code still requires semantic review |
 | kern_green.cpp/.hpp | Read end-to-end; PCI identity/overread, exact GMS decoding, mandatory config-hook admission, BAR0/BAR2 publication, property-result reporting and dead-path cleanup completed; device-removal/power-transition lifetime and hardware-specific property semantics remain open |
 | kern_genx.cpp/.hpp (removed) | Read end-to-end; isolated duplicate `com.xxxxx` renamed-ICL handler from the initial import. It contained an active NVRAM-save stub, unversioned control-flow/ID rewrites, a no-op register trampoline and many unreachable wrappers; the maintained Gen11 ICL handler remains |
 | kern_patcherplus.cpp/.hpp | Read and compared with upstream Lilu routing/replacement behavior; every grouped lookup is now preflighted before its first write; low-level write/route rollback and protection restoration remain open |

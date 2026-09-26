@@ -1343,28 +1343,6 @@ private:
 	static IOReturn wrapConnectionProbe();  // display hot-plug connection probe
 	mach_vm_address_t orgConnectionProbe {};
 
-	// ── Display timing / mode validation ──
-	static uint8_t SetupDPSSTTimings(void *that,void *param_1,void *param_2,void *param_3);
-	mach_vm_address_t oSetupDPSSTTimings {};
-
-	static uint32_t validateDetailedTiming(void *that,void *param_1,unsigned long param_2);
-	mach_vm_address_t ovalidateDetailedTiming{};
-
-	static void SetupTimings(void *that, void *param_1, void *param_2, void *param_3, void *param_4);
-	mach_vm_address_t oSetupTimings{};
-
-	static uint8_t validateDisplayMode(void *that, int param_1, void *param_2, void *param_3);
-	mach_vm_address_t ovalidateDisplayMode{};
-
-	static void setupDisplayTiming(void *that, void *param_1, void *param_2);
-	mach_vm_address_t osetupDisplayTiming{};
-
-	static unsigned long getPixelInformation(void *that, unsigned int param_1, int param_2, int param_3, void *param_4);
-	mach_vm_address_t ogetPixelInformation{};
-
-	static uint8_t maxSupportedDepths(void *param_1);
-	mach_vm_address_t omaxSupportedDepths{};
-	
 	// ── Accelerator firmware & scheduler ──
 	static bool vfMmioHostToGuCAction(void *that, const uint32_t *request,
 	                                  unsigned int requestLength, int timeout,
@@ -1446,9 +1424,6 @@ private:
 	mach_vm_address_t vfSharedMappedBufferGetVirtualAddress {};
 	mach_vm_address_t vfMappedBufferGetGPUVirtualAddress {};
 	
-	static int wrapPmNotifyWrapper(unsigned int a0, unsigned int a1, unsigned long long *a2, unsigned int *freq);  // GPU freq change notification
-	mach_vm_address_t orgPmNotifyWrapper {};
-	
 	// ── Accelerator start & forcewake ──
 	static unsigned long start(void *that,void  *param_1);   // IntelAccelerator::start wrapper
 	static void acceleratorStop(void *that, void *provider); // final VF DMA-quiescence intent
@@ -1495,34 +1470,13 @@ private:
 	
 	mach_vm_address_t _gSysctlVariables {};
 	
-	// ── GuC firmware patching state ──
-	uint32_t freq_max {0};                      // max GPU frequency (from RP_STATE_CAP)
-	
-	static uint8_t validateModeDepth(void *that,void *param_1,uint param_2);
-	mach_vm_address_t ovalidateModeDepth {};
-	
-	
-	
 	static int handleLinkIntegrityCheck();  // stub: returns 0 (link OK)
-	
-	// ── Power management ──
-	
-
-	static void setPanelPowerState(void *that,bool param_1);
-	mach_vm_address_t osetPanelPowerState {};
 	
 	static void  getGPUInfo(void *that);     // patches topology for TGL HW (TGL offsets); void per Ghidra
 	mach_vm_address_t ogetGPUInfo {};
 
 	static void  getGPUInfoICL(void *that);  // patches topology for ICL HW (ICL offsets); void per Ghidra
 	mach_vm_address_t ogetGPUInfoICL {};
-	
-	static unsigned long fastLinkTraining();
-	mach_vm_address_t ofastLinkTraining {};
-	
-	// FB client attribute handler — IOAccel/display property dispatch
-	static IOReturn wrapFBClientDoAttribute(void *fbclient, uint32_t attribute, unsigned long *unk1, unsigned long unk2, unsigned long *unk3, unsigned long *unk4, void *externalMethodArguments);
-	mach_vm_address_t orgFBClientDoAttribute {};
 	
 	// PAVP = Protected Audio Video Path (DRM session management)
 	static IOReturn wrapPavpSessionCallback(void *intelAccelerator, int32_t sessionCommand, uint32_t sessionAppId, uint32_t *a4, bool flag);
@@ -1572,9 +1526,6 @@ private:
 	static uint64_t getOSInformation(AppleIntel::AppleIntelBaseController *that);
 	mach_vm_address_t ogetOSInformation {};
 	
-	static uint8_t setDisplayMode(AppleIntel::AppleIntelFramebuffer *that, int param_1, int param_2);
-	mach_vm_address_t osetDisplayMode {};
-	
 	static uint8_t hwRegsNeedUpdate
 			  (AppleIntel::AppleIntelBaseController *that,
 			   AppleIntel::AppleIntelFramebuffer *param_1,
@@ -1619,12 +1570,6 @@ private:
 	
 	static IOReturn wrapICLReadAUX(void *that, uint32_t address, void *buffer, uint32_t length);
 	mach_vm_address_t orgICLReadAUX {};
-	
-	static int getPlatformID();
-	mach_vm_address_t ogetPlatformID {};
-	
-	static void logStateInRegistry(void *that,uint param_1);
-	mach_vm_address_t ologStateInRegistry {};
 	
 	// AppleIntelFramebuffer::init(AppleIntelBaseController*, uint pipeIndex)
 	static uint32_t AppleIntelFramebufferinit(AppleIntel::AppleIntelFramebuffer *frame,
@@ -1719,15 +1664,6 @@ private:
 	static void configurePlane(AppleIntel::AppleIntelPlane *that, AppleIntel::FlipTransactionArgs *flipArgs);
 	mach_vm_address_t oConfigurePlane {};
 
-	static void  disablePowerWellPG(AppleIntel::AppleIntelBaseController *that, uint param_1);
-	mach_vm_address_t odisablePowerWellPG {};
-
-	static void  enablePowerWellPG(AppleIntel::AppleIntelBaseController *that, uint param_1);
-	mach_vm_address_t oenablePowerWellPG {};
-	
-	static void hwSetPowerWellStatePG(AppleIntel::AppleIntelBaseController *that, bool param_1, uint param_2);
-	mach_vm_address_t ohwSetPowerWellStatePG {};
-
 	// V182: hwSetPowerWellStatePGE — enables PW_1/PW_2 (display power gates).
 	// Previously no-op'd via releaseDoorbell; now callthrough with 0x78=ccont
 	// fixup (same pattern as DDI/Aux). Linux confirms PW_1+PW_2 must be up
@@ -1754,10 +1690,6 @@ private:
 	mach_vm_address_t odisableDisplayEngine {};
 	
 
-	static uint8_t enableController(AppleIntel::AppleIntelFramebuffer *that);
-	mach_vm_address_t oenableController {};
-	
-	
 	// ── CDCLK management ──
 	static void sanitizeCDClockFrequency(AppleIntel::AppleIntelBaseController *that);
 	static uint32_t wrapProbeCDClockFrequency(AppleIntel::AppleIntelBaseController *that);
@@ -1776,38 +1708,7 @@ private:
 	void (*orgSetCDClockFrequency)(void *, unsigned long long) {nullptr};
 	
 	
-	static int hwSetMode
-			  (AppleIntel::AppleIntelBaseController *that,
-			   AppleIntel::AppleIntelFramebuffer *param_1,
-			   AppleIntel::AppleIntelDisplayPath *param_2,
-			   AppleIntel::CRTCParams *param_3);
-	mach_vm_address_t ohwSetMode {};
-	
-	static void enablePipe
-			  (AppleIntel::AppleIntelBaseController *that,
-			   AppleIntel::AppleIntelFramebuffer *param_1,
-			   AppleIntel::AppleIntelDisplayPath *param_2,
-			   AppleIntel::CRTCParams *param_3);
-	mach_vm_address_t oenablePipe {};
-	
-	static uint8_t beginReset(void *that);
-    mach_vm_address_t obeginReset {};
-												
-	static void endReset(void *that);
-	mach_vm_address_t oendReset {};
-	
-	mach_vm_address_t IntelFBClientControl11doAttribut {};
-
-	static uint32_t probePortMode();  // detect DDI port signaling mode (DP/HDMI/eDP)
-	mach_vm_address_t oprobePortMode {};
-	
 	// ── Register access (ra = register access) ──
-	static uint32_t raReadRegister32(void *that,unsigned long param_1);
-	mach_vm_address_t oraReadRegister32 {};
-	
-	static unsigned long raReadRegister32b(void *that,void *param_1,unsigned long param_2);
-	mach_vm_address_t oraReadRegister32b {};
-	
 	static void raWriteRegister32(void *that,unsigned long param_1, UInt32 param_2);
 	mach_vm_address_t oraWriteRegister32 {};
 	
@@ -1848,9 +1749,6 @@ private:
 	                                                   uint64_t flags);
 	mach_vm_address_t oIGHardwareGlobalPageTableMapRangeDummy {};
 
-	static int LightUpEDP(void *that,void *param_1, void *param_2,void *param_3);  // eDP panel power-on
-	mach_vm_address_t oLightUpEDP {};
-	
 	// Saved vtable/class pointers for display subsystem objects
 	mach_vm_address_t PowerWell {};       // AppleIntelPowerWell class
 	mach_vm_address_t PortHAL {};         // port hardware abstraction layer
@@ -1897,8 +1795,6 @@ private:
 	mach_vm_address_t Blit2DExtendedCtxParams {};
 	mach_vm_address_t Blit3DExtendedCtxParams {};
 	
-	static uint8_t isPanelPowerOn();
-	
 	static uint8_t setupAdditionalDataStructs();
 	mach_vm_address_t osetupAdditionalDataStructs {};
 	
@@ -1908,10 +1804,6 @@ private:
 	mach_vm_address_t ZN16AppleIntelScaler10gMetaClassE {}; // AppleIntelScaler::gMetaClass
 	mach_vm_address_t ZN15AppleIntelPlane10gMetaClassE {};  // AppleIntelPlane::gMetaClass
 	
-	static unsigned long  allocateDisplayResources(void *that);
-	mach_vm_address_t oallocateDisplayResources {};
-	
-	
 	static void * getBlit2DContext(void *that,bool param_1);
 	mach_vm_address_t ogetBlit2DContext {};
 
@@ -1920,9 +1812,6 @@ private:
 
 	static void * getColorResolveContext(void *that,bool param_1);
 	mach_vm_address_t ogetColorResolveContext {};
-	
-	static void * ExtendedContextWithOptions(void *param_1);
-	mach_vm_address_t oExtendedContextWithOptions {};
 	
 	static void * getBlit3DContext(void *that,bool param_1);
 	mach_vm_address_t ogetBlit3DContext {};
@@ -1937,31 +1826,6 @@ private:
 	static int wrapHwSetupMemory(AppleIntel::AppleIntelBaseController *that, AppleIntel::AppleIntelFramebuffer *fb, AppleIntel::AppleIntelDisplayPath *displayPath, AppleIntel::CRTCParams *params, bool isAperture);
 	mach_vm_address_t ohwSetupMemory {};
 
-	// V208: AppleIntelFramebuffer::start() override that refuses fbId != 0. Hides
-	// phantom FB1/FB2 (path-not-assigned) from IOFramebufferShared so CoreDisplay's
-	// CreateDisplayForCGXDisplayDevice doesn't enumerate them and assert. Apple's
-	// internal pipe/port/FB counts stay 3/3/3 (kept in pinfo) — only the IOService
-	// registration is blocked. fbId is at +0x1DC (we already use this offset in V96).
-	static bool wrapAppleIntelFramebufferStart(void *that, void *provider);
-	mach_vm_address_t oAppleIntelFramebufferStart {};
-
-	// V209: AppleIntelFramebuffer::enableController() short-circuit for fbId != 0.
-	// Pairs with V208 — without this, fb1/fb2 still get tracked by IGAccelDisplayPipe
-	// (in HW kext) and a later displayModeDidChange iteration crashes in
-	// IOFramebuffer::getAttributeExt + 0x25 NULL deref. Returning kIOReturnUnsupported
-	// for non-FB0 marks them as "not enabled" so IGAccelDisplayPipe skips them.
-	static int wrapEnableController(void *that);
-	mach_vm_address_t oEnableController {};
-
-	// V210: AppleIntelDisplayPath::getFreeJoinablePathCount() unconditionally returns 0.
-	// Original calls getPathByPipe(1) and getPathByPipe(2) and dereferences [+0x3644]
-	// on the result — but with single-pipe (1/1/1) pinfo config those return NULL →
-	// crash during setupBootDisplay → allocateBootDisplayResources →
-	// commitResourceConfigurationSet → allocateDisplayResources. With 1/1/1 we want
-	// "no joinable paths available" = return 0. Enables 1/1/1 to actually boot.
-	static int wrapGetFreeJoinablePathCount(void *that);
-	mach_vm_address_t oGetFreeJoinablePathCount {};
-
 	// IntelAccelerator personality registration in IOCatalogue. Lives in the HW-kext
 	// path (ICL or TGL Graphics, not Framebuffer) — must run before the FBController's
 	// registerService() so IOKit can match IntelAccelerator. Idempotent.
@@ -1969,26 +1833,11 @@ private:
 	bool acceleratorPersonalityInjected {false};
 	
 	
-	static long getPortByDDI(uint param_1);
-	mach_vm_address_t ogetPortByDDI {};
-
 	static void AppleIntelScalerupdateRegisterCache(AppleIntel::AppleIntelScaler *that);
 	mach_vm_address_t oAppleIntelScalerupdateRegisterCache {};
 
 	static void AppleIntelPlaneupdateRegisterCache(AppleIntel::AppleIntelPlane *that);
 	mach_vm_address_t oAppleIntelPlaneupdateRegisterCache {};
-
-	static void PowerWellinit(void *that,void *param_1);
-	mach_vm_address_t oPowerWellinit {};
-	
-	static uint8_t  setPortMode(void *that,uint32_t param_1);
-	mach_vm_address_t osetPortMode {};
-
-		static uint32_t
-	IntelFBClientControldoAttribute
-			  (void *that,uint param_1,unsigned long *param_2,unsigned long param_3,unsigned long *param_4,
-			   unsigned long *param_5,void *param_6);
-	mach_vm_address_t oIntelFBClientControldoAttribute {};
 
 	static void applyPreStartEngineWorkarounds(int callCount); // only error/EMR clear — safe before ring init
 	static void applyPreStopEngineWorkarounds(int callCount);  // full GT WAs + BCS drain — before stop only
@@ -2001,9 +1850,6 @@ private:
 	static void populateResetRegisterList(void *that);  // V164: clear bit 14 before snapshot into replay list
 	mach_vm_address_t opopulateResetRegisterList {};
 
-	static void  IGScheduler5resume(void *that);  // GPU command scheduler resume
-	mach_vm_address_t oIGScheduler5resume {};
-
 	// V212: Hook isGpuIdle (watchdog query) — GPU watchdog calls this post-startup.
 	// If INSTDONE bit0 stuck (0xfffffffe), it returns false → watchdog declares hang →
 	// GPU reset → startGraphicsEngine retry loop. Fix: return true for RPL-P stuck pattern.
@@ -2011,12 +1857,6 @@ private:
 	mach_vm_address_t oIGScheduler5IsGpuIdle {};
 	static bool wrapIGScheduler4IsGpuIdle(const void *that);
 	mach_vm_address_t oIGScheduler4IsGpuIdle {};
-
-	static uint8_t connectionChanged(void *that);
-	mach_vm_address_t oconnectionChanged {};
-
-	static uint8_t isPanelPowerOn(void *that);
-	mach_vm_address_t oisPanelPowerOn {};
 
 	static uint32_t  IGAccelSegmentResourceListprepare(void *that);  // GPU memory segment setup
 	mach_vm_address_t oIGAccelSegmentResourceListprepare {};
@@ -2035,9 +1875,6 @@ private:
 	mach_vm_address_t oinitBlitUsage {};
 
 	mach_vm_address_t kIGHwCsDesc {};  // pointer to engine descriptor table
-
-	static uint8_t disableVDDForAux(void *that);
-	mach_vm_address_t odisableVDDForAux {};
 
 	static void prepareToEnterWake(AppleIntel::AppleIntelFramebuffer *that);
 	mach_vm_address_t oprepareToEnterWake {};

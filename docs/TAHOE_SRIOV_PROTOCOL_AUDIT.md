@@ -1564,3 +1564,30 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
 - The complete syntax gate, zero-finding analyzer, strict Gen11 ABI warnings
   and all sanitizer protocol models pass in `/tmp/ngreen-static.gYkH6h`. No
   kext was installed and the VM remained off.
+
+### Gen11 relocation-reachability cleanup
+
+- Compiled `kern_gen11.cpp` as an unoptimised Mach-O object with function/data
+  subsections, then compared every defined `Gen11` method against its call and
+  function-pointer relocations. Public `init()` and `processKext()` are expected
+  cross-object roots; private methods with no relocation were then checked
+  against the header and every route/solve table before removal.
+- Removed 39 unreachable private methods plus their captured-original slots and
+  stale route comments. They included constant-success panel/timing wrappers,
+  forced 785.4-MHz timing mutation, manual IRQ reset programming, raw DBUF/MBUS
+  programming with hardcoded four-channel LPDDR assumptions, a resume-time ring
+  reinitializer, phantom-framebuffer stubs, an undocumented AGDC structure
+  rewrite and another `0x923` client-attribute bypass. None had an installed
+  route or live caller in the built object.
+- Repeated the relocation pass after removal. Only the two cross-object public
+  roots remained without an internal relocation; a newly exposed no-op
+  `raReadRegister32` trampoline was removed in the second pass. The one live
+  call to an always-true `isPanelPowerOn` helper was made explicit as the
+  existing property publication, eliminating the misleading fake probe without
+  changing that wake-stage behavior.
+- This establishes source-level reachability, not semantic safety of the
+  remaining active routes. In particular, active display, power, wake and
+  accelerator hooks still require line-by-line contract review before boot.
+- The complete syntax gate, zero-finding analyzer, strict Gen11 ABI warnings
+  and all sanitizer protocol models pass in `/tmp/ngreen-static.TuPYo9`. No
+  kext was installed and the VM remained off.

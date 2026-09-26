@@ -1900,21 +1900,11 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 
 		if (wegCoexist) {
 			SolveRequestPlus solveRequests[] = {
-			//		{"__ZN31AppleIntelFramebufferController14disableCDClockEv", this->orgDisableCDClock},
-			//		{"__ZN31AppleIntelFramebufferController19setCDClockFrequencyEy", this->orgSetCDClockFrequency},
-			//		{"__ZN20IntelFBClientControl11doAttributeEjPmmS0_S0_P25IOExternalMethodArguments", this->orgFBClientDoAttribute},
-			//		{"__ZN31AppleIntelFramebufferController5startEP9IOService",	this->ostart},
-			//		{"__ZN31AppleIntelFramebufferController14ReadRegister32Em",	this->oreadRegister32},
 		 		{"__ZN31AppleIntelFramebufferController20hwConfigureCustomAUXEb", this->ohwConfigureCustomAUX},
 			};
 			PANIC_COND(!SolveRequestPlus::solveAll(patcher, index, solveRequests, address, size), "nblue",	"Failed to resolve symbols");
 		} else {
 			SolveRequestPlus solveRequests[] = {
-			//		{"__ZN31AppleIntelFramebufferController14disableCDClockEv", this->orgDisableCDClock},
-			//		{"__ZN31AppleIntelFramebufferController19setCDClockFrequencyEy", this->orgSetCDClockFrequency},
-			//		{"__ZN20IntelFBClientControl11doAttributeEjPmmS0_S0_P25IOExternalMethodArguments", this->orgFBClientDoAttribute},
-			//		{"__ZN31AppleIntelFramebufferController5startEP9IOService",	this->ostart},
-			//		{"__ZN31AppleIntelFramebufferController14ReadRegister32Em",	this->oreadRegister32},
 		 		{"__ZN31AppleIntelFramebufferController20hwConfigureCustomAUXEb", this->ohwConfigureCustomAUX},
 				{"__ZN31AppleIntelFramebufferController21probeCDClockFrequencyEv", this->orgProbeCDClockFrequency},
 			};
@@ -1923,42 +1913,12 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		
 		if (wegCoexist) {
 			RouteRequestPlus requests[] = {
-			// Keep stock ReadRegister32 while stabilizing display pipeline behavior.
-			//		{"__ZN31AppleIntelFramebufferController14ReadRegister32Em",wrapReadRegister32,	this->owrapReadRegister32},
-			//		{"__ZN21AppleIntelFramebuffer13SaveNVRAMModeEv",handleLinkIntegrityCheck},
-			// Keep stock wake/sleep lifecycle handlers to avoid broken restore paths.
-			//{"__ZN21AppleIntelFramebuffer18prepareToEnterWakeEv",dovoid},
-			//{"__ZN21AppleIntelFramebuffer17prepareToExitWakeEv",dovoid},
-			//{"__ZN21AppleIntelFramebuffer18prepareToExitSleepEv",dovoid},
-			//{"__ZN21AppleIntelFramebuffer19prepareToEnterSleepEv",dovoid},
-			// Keep stock doAttribute while chasing UI stalls / high WindowServer CPU.
-			//		{"__ZN20IntelFBClientControl11doAttributeEjPmmS0_S0_P25IOExternalMethodArguments",wrapFBClientDoAttribute,	this->orgFBClientDoAttribute},
-			//ADDED
-			//{"__ZN21AppleIntelFramebuffer4initEP31AppleIntelFramebufferControllerj",AppleIntelFramebufferinit, this->oAppleIntelFramebufferinit},
-			//		{"__ZN31AppleIntelFramebufferController10hwShutdownEP21AppleIntelFramebuffer",handleLinkIntegrityCheck},
 				{"__ZN31AppleIntelFramebufferController18hwInitializeCStateEv",hwInitializeCState, this->ohwInitializeCState},
-			//		{"__ZN31AppleIntelFramebufferController20hwConfigureCustomAUXEb",hwConfigureCustomAUX, this->ohwConfigureCustomAUX},
-			//	{"__ZN31AppleIntelFramebufferController21probeCDClockFrequencyEv",wrapProbeCDClockFrequency,	this->orgProbeCDClockFrequency},
 			};
 			PANIC_COND(!RouteRequestPlus::routeAll(patcher, index, requests, address, size), "nblue","Failed to route symbols");
 		} else {
 			RouteRequestPlus requests[] = {
-			// Keep stock ReadRegister32 while stabilizing display pipeline behavior.
-			//		{"__ZN31AppleIntelFramebufferController14ReadRegister32Em",wrapReadRegister32,	this->owrapReadRegister32},
-			//		{"__ZN21AppleIntelFramebuffer13SaveNVRAMModeEv",handleLinkIntegrityCheck},
-			// Keep stock wake/sleep lifecycle handlers to avoid broken restore paths.
-			//{"__ZN21AppleIntelFramebuffer18prepareToEnterWakeEv",dovoid},
-			//{"__ZN21AppleIntelFramebuffer17prepareToExitWakeEv",dovoid},
-			//{"__ZN21AppleIntelFramebuffer18prepareToExitSleepEv",dovoid},
-			//{"__ZN21AppleIntelFramebuffer19prepareToEnterSleepEv",dovoid},
-			// Keep stock doAttribute while chasing UI stalls / high WindowServer CPU.
-			//		{"__ZN20IntelFBClientControl11doAttributeEjPmmS0_S0_P25IOExternalMethodArguments",wrapFBClientDoAttribute,	this->orgFBClientDoAttribute},
-			//ADDED
-			//{"__ZN21AppleIntelFramebuffer4initEP31AppleIntelFramebufferControllerj",AppleIntelFramebufferinit, this->oAppleIntelFramebufferinit},
-			//		{"__ZN31AppleIntelFramebufferController10hwShutdownEP21AppleIntelFramebuffer",handleLinkIntegrityCheck},
 				{"__ZN31AppleIntelFramebufferController18hwInitializeCStateEv",hwInitializeCState, this->ohwInitializeCState},
-			//		{"__ZN31AppleIntelFramebufferController20hwConfigureCustomAUXEb",hwConfigureCustomAUX, this->ohwConfigureCustomAUX},
-			//	{"__ZN31AppleIntelFramebufferController21probeCDClockFrequencyEv",wrapProbeCDClockFrequency,	this->orgProbeCDClockFrequency},
 				{"__ZN31AppleIntelFramebufferController11initCDClockEv",initCDClock,this->oinitCDClock}
 			};
 			PANIC_COND(!RouteRequestPlus::routeAll(patcher, index, requests, address, size), "nblue","Failed to route symbols");
@@ -2121,13 +2081,6 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			// V96: Force display online — WEG's getDisplayStatus hook (FOD) fails with
 			// "err 2" on TGL kext because that symbol doesn't exist. TGL uses getOnlineInfo.
 			{"__ZN21AppleIntelFramebuffer13getOnlineInfoEP21AppleIntelDisplayPathPhS2_", getOnlineInfo, this->ogetOnlineInfo},
-			// V208/V209/V210 routes DISABLED at 3/3/3 baseline. They actively cause
-			// the IOFramebuffer::getAttributeExt+0x25 NULL deref when fb1/fb2 start()
-			// is refused but IGAccelDisplayPipe still tracks them. Re-enable only
-			// alongside pinfo 1/1/1 if pursuing FB-count-reduction direction.
-			//{"__ZN21AppleIntelFramebuffer5startEP9IOService", wrapAppleIntelFramebufferStart, this->oAppleIntelFramebufferStart},
-			//{"__ZN21AppleIntelFramebuffer16enableControllerEv", wrapEnableController, this->oEnableController},
-			//{"__ZN21AppleIntelDisplayPath24getFreeJoinablePathCountEv", wrapGetFreeJoinablePathCount, this->oGetFreeJoinablePathCount},
 			// Path B: Force aperture memory under dp0 mode to prevent WS=0x3 migration to
 			// non-aperture, which leaves the display scanning empty pages and triggers
 			// the 0x3→0x1 WS degradation.
@@ -2143,8 +2096,6 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			{"__ZN31AppleIntelRegisterAccessManager19FastWriteRegister32Emj",FastWriteRegister32, this->oFastWriteRegister32},
 			// V60: ReadRegister32 hooks DISABLED — V59 proved they cause 0-children regression
 			// (display driver loops in forceWake power-well cycling, never completes init)
-			/*{"__ZN31AppleIntelRegisterAccessManager14ReadRegister32Em",raReadRegister32, this->oraReadRegister32},
-			{"__ZN31AppleIntelRegisterAccessManager14ReadRegister32EPVvm",raReadRegister32b},*/
 			{"__ZN31AppleIntelRegisterAccessManager15WriteRegister32Emj",raWriteRegister32, this->oraWriteRegister32},
 			{"__ZN31AppleIntelRegisterAccessManager15WriteRegister32EPVvmj",raWriteRegister32b},
 			// V410: hook sleep/wake transition methods to intercept panel state tracking.
@@ -2154,20 +2105,6 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			{"__ZN21AppleIntelFramebuffer18prepareToExitSleepEv",  prepareToExitSleep,  this->oprepareToExitSleep},
 			{"__ZN21AppleIntelFramebuffer19prepareToEnterSleepEv", prepareToEnterSleep, this->oprepareToEnterSleep},
 			{"__ZN24AppleIntelBaseController15enableVDDForAuxEP14AppleIntelPort", releaseDoorbell},
-			// Keep native SST timing setup; forcing custom clocks can break CoreDisplay validation.
-			//{"__ZN24AppleIntelBaseController17SetupDPSSTTimingsEP21AppleIntelFramebufferP21AppleIntelDisplayPathP10CRTCParams", SetupDPSSTTimings, this->oSetupDPSSTTimings},
-			//{"__ZN24AppleIntelBaseController12SetupTimingsEP21AppleIntelFramebufferP21AppleIntelDisplayPathPK29IODetailedTimingInformationV2P10CRTCParams", SetupTimings, this->oSetupTimings},
-			// Keep native detailed timing validation; avoid overriding pixel clock fields.
-			//{"__ZN21AppleIntelFramebuffer22validateDetailedTimingEPvy", validateDetailedTiming, this->ovalidateDetailedTiming},
-			//{"__ZN21AppleIntelFramebuffer19validateDisplayModeEiPPKNS_15ModeDescriptionEPPK29IODetailedTimingInformationV2", validateDisplayMode, this->ovalidateDisplayMode},
-	   		//{"__ZN21AppleIntelFramebuffer18setupDisplayTimingEPK29IODetailedTimingInformationV2PS0_", setupDisplayTiming, this->osetupDisplayTiming},
-			//{"__ZN21AppleIntelFramebuffer18maxSupportedDepthsEPK29IODetailedTimingInformationV2", maxSupportedDepths, this->omaxSupportedDepths},
-			//{"__ZN21AppleIntelFramebuffer17validateModeDepthEPK29IODetailedTimingInformationV2j", validateModeDepth, this->ovalidateModeDepth},
-			//*****
-			//{"__ZN21AppleIntelFramebuffer19getPixelInformationEiiiP18IOPixelInformation", getPixelInformation, this->ogetPixelInformation},
-			//{"__ZN20IntelFBClientControl11doAttributeEjPmmS0_S0_P25IOExternalMethodArguments",wrapFBClientDoAttribute, this->orgFBClientDoAttribute},
-			//{"__ZN20IntelFBClientControl24vendor_doDeviceAttributeEjPmmS0_S0_P25IOExternalMethodArguments", releaseDoorbell},
-			//{"__ZN21AppleIntelFramebuffer16enableControllerEv", isPanelPowerOn},
 		};
 		PANIC_COND(!RouteRequestPlus::routeAll(patcher, index, requests, address, size), "ngreen","Failed to route dp symbols");
 		
@@ -2520,9 +2457,6 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			RouteRequestPlus requests[] = {
 				// PAVP/DRM: intercept session command callback (ICL hardware path, shared hook with TGL)
 				{"__ZN16IntelAccelerator19PAVPCommandCallbackE22PAVPSessionCommandID_tjPjb", wrapPavpSessionCallback, this->orgPavpSessionCallback},
-				// IGScheduler5resume NOT routed: kIGHwCsDesc is only resolved for kextG11HWT.
-				// With -disablegfxfirmware, Host Preemptive scheduler is selected (not IGScheduler5).
-				//last	 {"__ZN12IGScheduler56resumeEv", IGScheduler5resume, this->oIGScheduler5resume},
 				// resetGraphicsEngine NOT routed: NBlue wrapper applies TGL GT workarounds which
 				// target TGL MMIO offsets. Hardware is RPL-P (adlp/raptorlake) — using TGL workarounds
 				// on RPL MMIO could corrupt the command streamer. Let the ICL original run unmodified.
@@ -5976,10 +5910,7 @@ static void logFBCtrlState(const char *tag, AppleIntel::AppleIntelFramebuffer *t
 void Gen11::prepareToEnterWake(AppleIntel::AppleIntelFramebuffer *that)
 {
 	logFBCtrlState("prepareToEnterWake>>", that);
-	bool panelOn = isPanelPowerOn(getMember<void *>(that, 0x1d0));
-	if (panelOn) {
-		reinterpret_cast<IORegistryEntry *>(that)->setProperty("AAPL,LCD-PowerState-ON", true);
-	}
+	reinterpret_cast<IORegistryEntry *>(that)->setProperty("AAPL,LCD-PowerState-ON", true);
 	FunctionCast(prepareToEnterWake, callback->oprepareToEnterWake)(that);
 	uint32_t state_after = getMember<uint32_t>(that, 0x49e0);
 	if (state_after != 4) {
@@ -9206,13 +9137,6 @@ void * Gen11::getColorResolveContext(void *that,bool param_1)
 	return ctx;
 }
 
-IOReturn Gen11::wrapFBClientDoAttribute(void *fbclient, uint32_t attribute, unsigned long *unk1, unsigned long unk2, unsigned long *unk3, unsigned long *unk4,  void *externalMethodArguments) {
-	if (attribute == 0x923) {
-		return kIOReturnUnsupported;
-	}
-	return FunctionCast(wrapFBClientDoAttribute, callback->orgFBClientDoAttribute)(fbclient, attribute, unk1, unk2, unk3, unk4,  externalMethodArguments);
-}
-
 unsigned long Gen11::loadIclGuCBinary(void *that) {
 	// ICL and TGL may both be loaded. Never share their original-function
 	// slot or interpret an ICL object using TGL's private scheduler layout.
@@ -12419,33 +12343,6 @@ static void v44ScheduleBundleLog(void *accelInstance, unsigned delayMs) {
     }
 }
 
-int Gen11::wrapPmNotifyWrapper(unsigned int a0, unsigned int a1, unsigned long long *a2, unsigned int *freq) {
-	
-	/*struct intel_rps_freq_caps *caps;
-	
-	caps->rp0_freq *= GEN9_FREQ_SCALER;
-	caps->rp1_freq *= GEN9_FREQ_SCALER;
-	caps->min_freq *= GEN9_FREQ_SCALER;
-	
-	uint32_t mult=GEN9_FREQ_SCALER;
-	uint32_t ddcc_status = 0;
-	
-	*freq =caps->rp1_freq;
-	return 0;*/
-	
-	uint32_t cfreq = 0;
-
-	FunctionCast(wrapPmNotifyWrapper, callback->orgPmNotifyWrapper)(a0, a1, a2, &cfreq);
-	
-	if (!callback->freq_max) {
-		callback->freq_max = wrapReadRegister32(callback->framecont, GEN6_RP_STATE_CAP) & 0xFF;
-
-	}
-	
-	*freq = (GEN9_FREQ_SCALER << GEN9_FREQUENCY_SHIFT) * callback->freq_max;
-	return 0;
-}
-
 /**
  * Port of i915 force wake for Gen12 (TGL/ADL/RPL).
  * Replaces IntelAccelerator::SafeForceWakeMultithreaded.
@@ -12920,146 +12817,6 @@ bool Gen11::forceWakeWaitAckFallback(uint32_t reqReg, uint32_t ackReg, uint32_t 
 void Gen11::releaseDoorbell()
 {}
 
-uint32_t Gen11::probePortMode()
-{
-	auto ret=FunctionCast(probePortMode, callback->oprobePortMode)();
-	return ret;
-};
-
-
-uint32_t Gen11::raReadRegister32(void *that,unsigned long param_1)
-{
-	if (reinterpret_cast<volatile uint64_t*>(that)==nullptr) return NGreen::callback->readReg32(param_1);
-	
-	// V60: ReadRegister32 intercept REMOVED — V59 proved hooking all register reads
-	// causes display driver to loop in power-well cycling, producing 0 children.
-	// Error suppression done via timer-based R/W clear (V57 approach).
-	
-	auto ret=FunctionCast(raReadRegister32, callback->oraReadRegister32)(that,param_1);
-	return ret;
-};
-
-unsigned long Gen11::raReadRegister32b(void *that,void *param_1,unsigned long param_2)
-{
-	//if (reinterpret_cast<volatile uint64_t*>(that)==nullptr) return 0;
-	//if (reinterpret_cast<volatile uint64_t*>(param_1)==nullptr) return 0;
-	return  raReadRegister32(that,reinterpret_cast<uint64_t>(param_1) + param_2);
-};
-
-int Gen11::LightUpEDP(void *that,void *param_1, void *param_2,void *param_3)
-{
-	FunctionCast(LightUpEDP, callback->oLightUpEDP)(that,param_1,param_2,param_3);
-	return 0;
-};
-
-uint8_t Gen11::disableVDDForAux(void *that)
-{
-	uint32_t iVar3 = raReadRegister32(ccont,0xc7200);
-	if (-1 < iVar3) {
-		IORegistryEntry *r= (IORegistryEntry *)getMember<long *>(that, 0xd60);
-		r->setProperty("AAPL,LCD-PowerState-ON", false);
-	}
-	return FunctionCast(disableVDDForAux, callback->odisableVDDForAux)(that);
-};
-
-void Gen11::setPanelPowerState(void *that,bool param_1)
-{
-	FunctionCast(setPanelPowerState, callback->osetPanelPowerState)(that,param_1);
-	
-	IORegistryEntry *r= (IORegistryEntry *)getMember<long *>(that, 0xd60);
-	r->setProperty("AAPL,LCD-PowerState-ON", param_1);
-};
-
-unsigned long Gen11::fastLinkTraining()
-{
-	
-	FunctionCast(fastLinkTraining, callback->ofastLinkTraining)();
-	return 1;
-};
-
-void Gen11::logStateInRegistry(void *that,uint param_1)
-{
- FunctionCast(logStateInRegistry, callback->ologStateInRegistry)(that,param_1 );
-}
-
-int Gen11::getPlatformID()
-{
- return FunctionCast(getPlatformID, callback->ogetPlatformID)( );
-}
-
-bool inpwell=false;
-void Gen11::PowerWellinit(void *that,void *param_1)
-{
-	inpwell=true;
-  FunctionCast(PowerWellinit, callback->oPowerWellinit)(that,param_1 );
-	inpwell=false;
-}
-
-long Gen11::getPortByDDI(uint param_1)
-{
- auto ret= FunctionCast(getPortByDDI, callback->ogetPortByDDI)(param_1 );
-	if (inpwell) setPortMode((void*)ret,1);
- return ret;
-}
-
-uint8_t  Gen11::setPortMode(void *that,uint32_t param_1)
-{
- auto ret= FunctionCast(setPortMode, callback->osetPortMode)(that,param_1 );
-	
- return ret;
-}
-
-int Gen11::wrapGetFreeJoinablePathCount(void *that)
-{
-	// Always return 0 — with 1/1/1 pinfo config, only pipe 0 has a path. Original
-	// would call getPathByPipe(1) and (2), get NULL back, dereference [+0x3644] →
-	// kernel panic at setupBootDisplay->allocateBootDisplayResources chain.
-	// Returning 0 means "no joinable paths" which is correct for single-pipe.
-	static int v210Count = 0;
-	if (v210Count < 4) {
-		v210Count++;
-		SYSLOG("ngreen", "V210[%d]: getFreeJoinablePathCount → 0 (1/1/1 single-pipe safe)", v210Count);
-	}
-	return 0;
-}
-
-int Gen11::wrapEnableController(void *that)
-{
-	uint32_t fbId = getMember<uint32_t>(that, 0x1DC);
-	if (fbId != 0) {
-		// Short-circuit for phantom FB1/FB2: don't call original, return success
-		// without doing the per-fb setup (gController ref-count bumps,
-		// AppleIntelBaseController::enableController, AAPL0n,IgnoreConnection
-		// property lookup, etc). Without this, the per-fb setup chain leaves
-		// fb1/fb2 partially-initialized → IGAccelDisplayPipe iterates them in
-		// displayModeDidChange → IOFramebuffer::getAttributeExt+0x25 NULL deref.
-		// Returning 0 (kIOReturnSuccess) so callers don't error-handle.
-		SYSLOG("ngreen", "V209: enableController short-circuited for fb=%u", fbId);
-		return 0;
-	}
-	int ret = FunctionCast(wrapEnableController, callback->oEnableController)(that);
-	SYSLOG("ngreen", "V209: enableController fb=0 ret=0x%x", ret);
-	return ret;
-}
-
-bool Gen11::wrapAppleIntelFramebufferStart(void *that, void *provider)
-{
-	uint32_t fbId = getMember<uint32_t>(that, 0x1DC);
-	if (fbId != 0) {
-		// Refuse to start phantom FB1/FB2 — they have no display path assigned and
-		// trip CoreDisplay_CreateDisplayForCGXDisplayDevice's __assert_rtn during WS init.
-		// Returning false from start() means IOService::registerService is never called,
-		// so CoreDisplay never sees this FB. Apple's controller still has 3 FBs internally
-		// (per pinfo counts) — we just block IOFramebufferShared registration for !FB0.
-		SYSLOG("ngreen", "V208: AppleIntelFramebuffer::start refused for fb=%u (only FB0 starts)",
-		       fbId);
-		return false;
-	}
-	bool ret = FunctionCast(wrapAppleIntelFramebufferStart, callback->oAppleIntelFramebufferStart)(that, provider);
-	SYSLOG("ngreen", "V208: AppleIntelFramebuffer::start fb=0 ret=%d", ret);
-	return ret;
-}
-
 void Gen11::injectAcceleratorPersonality(bool useTglNames)
 {
 	if (this->acceleratorPersonalityInjected) {
@@ -13171,23 +12928,6 @@ void Gen11::injectAcceleratorPersonality(bool useTglNames)
 	dict->release();
 }
 
-void  Gen11::disablePowerWellPG(AppleIntel::AppleIntelBaseController *that, uint param_1)
-{
-	getMember<void *>(that, 0x78) = ccont;
-	FunctionCast(disablePowerWellPG, callback->odisablePowerWellPG)(that, param_1);
-}
-void  Gen11::enablePowerWellPG(AppleIntel::AppleIntelBaseController *that, uint param_1)
-{
-	getMember<void *>(that, 0x78) = ccont;
-	FunctionCast(enablePowerWellPG, callback->oenablePowerWellPG)(that, param_1);
-}
-
-void Gen11::hwSetPowerWellStatePG(AppleIntel::AppleIntelBaseController *that, bool param_1, uint param_2)
-{
-	getMember<void *>(that, 0x78) = ccont;
-	FunctionCast(hwSetPowerWellStatePG, callback->ohwSetPowerWellStatePG)(that,param_1,param_2);
-}
-
 void Gen11::hwConfigureCustomAUX(AppleIntel::AppleIntelBaseController *that, bool param_1)
 {
 	SYSLOG("ngreen", "hwAUX p1=%d CE4=%d",
@@ -13198,266 +12938,6 @@ void Gen11::hwConfigureCustomAUX(AppleIntel::AppleIntelBaseController *that, boo
 	// (56283 µs failure). Native-only: EDID succeeded in 3663 µs on same hardware.
 	if (callback->ohwConfigureCustomAUX)
 		FunctionCast(hwConfigureCustomAUX, callback->ohwConfigureCustomAUX)(that, param_1);
-}
-
-long blti=0;
-
-uint8_t Gen11::isPanelPowerOn()
-{
-	return 1;
-}
-
-uint8_t Gen11::SetupDPSSTTimings(void *that,void *param_1,void *param_2,void *param_3){
-	return FunctionCast(SetupDPSSTTimings, callback->oSetupDPSSTTimings)(that,param_1,param_2,param_3);
-}
-
-uint32_t Gen11::validateDetailedTiming(void *that,void *param_1,unsigned long param_2) {
-	return FunctionCast(validateDetailedTiming, callback->ovalidateDetailedTiming)(that,param_1,param_2);
-}
-
-uint8_t Gen11::maxSupportedDepths(void *param_1) {
-    auto displayTimingInfo = const_cast<IODetailedTimingInformationV2 *>(reinterpret_cast<const IODetailedTimingInformationV2 *>(param_1));
-    if (displayTimingInfo!=nullptr) displayTimingInfo->pixelClock = 785400000;
-    auto ret= FunctionCast(maxSupportedDepths, callback->omaxSupportedDepths)(param_1);
-	return ret;
-}
-
-uint8_t Gen11::validateModeDepth(void *that,void *param_1,uint param_2)
-{
-    auto displayTimingInfo = const_cast<IODetailedTimingInformationV2 *>(reinterpret_cast<const IODetailedTimingInformationV2 *>(param_1));
-    if (displayTimingInfo!=nullptr) displayTimingInfo->pixelClock = 785400000;
-	auto ret= FunctionCast(validateModeDepth, callback->ovalidateModeDepth)(that, param_1, param_2);
-	return ret;
-}
-
-void Gen11::SetupTimings(void *that, void *param_1, void *param_2, void *param_3, void *param_4){
-	FunctionCast(SetupTimings, callback->oSetupTimings)(that,param_1,param_2, param_3, param_4);
-}
-
-uint8_t Gen11::validateDisplayMode(void *that, int param_1,void *param_2, void *param_3){
-	auto displayTimingInfo = const_cast<IODetailedTimingInformationV2 *>(reinterpret_cast<const IODetailedTimingInformationV2 *>(param_3));
-	if (displayTimingInfo!=nullptr) displayTimingInfo->pixelClock = 785400000;
-	auto ret= FunctionCast(validateDisplayMode, callback->ovalidateDisplayMode)(that,param_1,param_2,param_3);
-	return ret;
-}
-
-void Gen11::setupDisplayTiming (void *that,void *param_1,
-                         void *param_2){
-    auto displayTimingInfo = const_cast<IODetailedTimingInformationV2 *>(reinterpret_cast<const IODetailedTimingInformationV2 *>(param_2));
-    if (displayTimingInfo!=nullptr) displayTimingInfo->pixelClock = 785400000;
-	FunctionCast(setupDisplayTiming, callback->osetupDisplayTiming)(that,param_1,param_2);
-    //auto ret= FunctionCast(setupDisplayTiming, callback->osetupDisplayTiming)(that,param_1,param_2);
-    //return ret;
-}
-
-unsigned long Gen11::getPixelInformation (void *that, uint param_1,int param_2,int param_3, void *param_4){
-	return FunctionCast(getPixelInformation, callback->ogetPixelInformation)(that,param_1,param_2, param_3, param_4);
-}
-
-uint8_t Gen11::isPanelPowerOn(void *that)
-{
-	return 1;//FunctionCast(isPanelPowerOn, callback->oisPanelPowerOn)(that);
-}
-
-void * Gen11::ExtendedContextWithOptions(void *param_1)
-{
-	return FunctionCast(ExtendedContextWithOptions, callback->oExtendedContextWithOptions)(param_1);
-}
-
-uint8_t Gen11::enableController(AppleIntel::AppleIntelFramebuffer *that)
-{
-	if (getMember<uint32_t>(that, 0x1dc)==0) getMember<uint8_t>(that, 0x1e0)=1;
-	auto ret= FunctionCast(enableController, callback->oenableController)(that);
-	return ret;
-}
-
-
-uint8_t Gen11::setDisplayMode(AppleIntel::AppleIntelFramebuffer *that, int param_1, int param_2)
-{
-	if (getMember<uint32_t>(that, 0x1dc)==0) getMember<uint8_t>(that, 0x1e0)=1;
-	return FunctionCast(setDisplayMode, callback->osetDisplayMode)(that,param_1,param_2 );
-
-}
-
-uint8_t Gen11::connectionChanged(void *that)
-{
-	
-	auto ret= FunctionCast(connectionChanged, callback->oconnectionChanged)(that);
-	//getMember<uint8_t>(that, 0x1e0)=1;
-	return ret;
-}
-
-unsigned long  Gen11::allocateDisplayResources(void *that)
-{
-	auto ret=FunctionCast(allocateDisplayResources, callback->oallocateDisplayResources)(that);
-
-	if (!NGreen::callback->isRealTGL) {
-		// ADL-P / RPL-P / RPL-U (XE_LPD, Display v13).
-		// ADL-P IS XE_LPD — same display engine, same register layout.
-		// Apple's TGL driver (AppleIntelTGLGraphicsFramebuffer) does not program this
-		// hardware correctly when spoofed, so we replicate icl_display_core_init here.
-
-		//icl_display_core_init
-		NGreen::callback->writeReg32(DC_STATE_EN,0);
-
-		/* Wa_14011294188:ehl,jsl,tgl,rkl,adl-s */
-		NGreen::callback->intel_de_rmw( SOUTH_DSPCLK_GATE_D, 0,
-					 PCH_DPMGUNIT_CLOCK_GATE_DISABLE);
-
-		uint32_t reg,reset_bits;
-		reg = HSW_NDE_RSTWRN_OPT;
-		reset_bits = RESET_PCH_HANDSHAKE_ENABLE;
-		NGreen::callback->intel_de_rmw( reg, reset_bits, reset_bits);
-
-		//intel_cdclk_init_hw(dev_priv);
-		//gen12_dbuf_slices_config — XE_LPD: 4 slices (Linux syslog: dbuf slices=0xf)
-		NGreen::callback->intel_de_rmw(_DBUF_CTL_S0,
-					 DBUF_TRACKER_STATE_SERVICE_MASK,
-					 DBUF_TRACKER_STATE_SERVICE(8));
-		NGreen::callback->intel_de_rmw(_DBUF_CTL_S1,
-					 DBUF_TRACKER_STATE_SERVICE_MASK,
-					 DBUF_TRACKER_STATE_SERVICE(8));
-		NGreen::callback->intel_de_rmw(_DBUF_CTL_S2,
-					 DBUF_TRACKER_STATE_SERVICE_MASK,
-					 DBUF_TRACKER_STATE_SERVICE(8));
-		NGreen::callback->intel_de_rmw(_DBUF_CTL_S3,
-					 DBUF_TRACKER_STATE_SERVICE_MASK,
-					 DBUF_TRACKER_STATE_SERVICE(8));
-
-		//gen9_dbuf_enable(dev_priv); — enable all 4 slices
-		reg = _DBUF_CTL_S0;
-		NGreen::callback->intel_de_rmw(reg, DBUF_POWER_REQUEST,
-				  DBUF_POWER_REQUEST);
-		NGreen::callback->readReg32(reg);
-		IODelay(10);
-		reg = _DBUF_CTL_S1;
-		NGreen::callback->intel_de_rmw(reg, DBUF_POWER_REQUEST,
-				  DBUF_POWER_REQUEST);
-		NGreen::callback->readReg32(reg);
-		IODelay(10);
-		reg = _DBUF_CTL_S2;
-		NGreen::callback->intel_de_rmw(reg, DBUF_POWER_REQUEST,
-				  DBUF_POWER_REQUEST);
-		NGreen::callback->readReg32(reg);
-		IODelay(10);
-		reg = _DBUF_CTL_S3;
-		NGreen::callback->intel_de_rmw(reg, DBUF_POWER_REQUEST,
-				  DBUF_POWER_REQUEST);
-		NGreen::callback->readReg32(reg);
-		IODelay(10);
-
-
-		//icl_mbus_init
-		// XE_LPD_FEATURES (Linux intel_display_device.c): .abox_mask = GENMASK(1, 0)
-		// = ABOX0 (0x45038) + ABOX1 (0x45048)
-		unsigned long abox_mask = GENMASK(1, 0);//DISPLAY_INFO(dev_priv)->abox_mask;
-		size_t config;
-		unsigned long i;
-
-		unsigned long abox_regs=abox_mask;
-		uint32_t mask = MBUS_ABOX_BT_CREDIT_POOL1_MASK |
-			MBUS_ABOX_BT_CREDIT_POOL2_MASK |
-			MBUS_ABOX_B_CREDIT_MASK |
-			MBUS_ABOX_BW_CREDIT_MASK;
-		uint32_t val = MBUS_ABOX_BT_CREDIT_POOL1(16) |
-			MBUS_ABOX_BT_CREDIT_POOL2(16) |
-			MBUS_ABOX_B_CREDIT(1) |
-			MBUS_ABOX_BW_CREDIT(1);
-
-		for_each_set_bit(i, &abox_regs, sizeof(abox_regs) * 8)
-		NGreen::callback->intel_de_rmw( MBUS_ABOX_CTL(i), mask, val);
-
-
-		//tgl_bw_buddy_init
-		// Linux syslog: DRAM channels=4, memory type 0x23=LPDDR5
-		// tgl_buddy_page_masks: {4ch, LPDDR4, 0x38} and {4ch, LPDDR5, 0x38} — same page_mask
-		// Use LPDDR4 bucket (LPDDR5 maps identically in the table)
-		enum intel_dram_type type = INTEL_DRAM_LPDDR4;
-		uint8_t num_channels = 4; //4ch LPDDR — tgl_buddy_page_masks → page_mask=0x38
-		const struct buddy_page_mask *table=tgl_buddy_page_masks;
-
-		for (config = 0; table[config].page_mask != 0; config++)
-			if (table[config].num_channels == num_channels &&
-				table[config].type == type)
-				break;
-
-		for_each_set_bit(i, &abox_mask, sizeof(abox_mask) * 8) {
-			NGreen::callback->writeReg32( BW_BUDDY_PAGE_MASK(i),
-						   table[config].page_mask);
-
-			/* Wa_22010178259:tgl,dg1,rkl,adl-s */
-			NGreen::callback->intel_de_rmw( BW_BUDDY_CTL(i),
-							 BW_BUDDY_TLB_REQ_TIMER_MASK,
-							 BW_BUDDY_TLB_REQ_TIMER(0x8));
-		}
-
-		/* Wa_14011508470:tgl,dg1,rkl,adl-s,adl-p,dg2 */
-		//if (IS_DISPLAY_VER_FULL(dev_priv, IP_VER(12, 0), IP_VER(13, 0)))
-		/*NGreen::callback->intel_de_rmw( GEN11_CHICKEN_DCPR_2, 0,
-					 DCPR_CLEAR_MEMSTAT_DIS | DCPR_SEND_RESP_IMM |
-					 DCPR_MASK_LPMODE | DCPR_MASK_MAXLATENCY_MEMUP_CLR);*/
-
-		/* * Display WA #1185 WaDisableDARBFClkGating:glk,icl,ehl,tgl
-		 * Also known as Wa_14010480278.
-		 */
-		//if (IS_DISPLAY_VER(i915, 10, 12))
-		//NGreen::callback->intel_de_rmw( GEN9_CLKGATE_DIS_0, 0, DARBF_GATING_DIS);
-
-		/* Wa_14013723622 */
-		NGreen::callback->intel_de_rmw( CLKREQ_POLICY, CLKREQ_POLICY_MEM_UP_OVRD, 0);
-
-	}
-	// isRealTGL: Apple's AppleIntelTGLGraphicsFramebuffer handles all of the above
-	// natively (2 DBUF slices, XE_D abox_mask=GENMASK(2,1), correct DRAM config).
-	// No additional writes needed.
-
-	return ret;
-}
-	
-void Gen11::IGScheduler5resume(void *that) {
-		
-		void *accelerator = getMember<void *>(that, 0x10);
-		struct IGHwCsDesc *descArray = (struct IGHwCsDesc *)callback->kIGHwCsDesc;
-		uint32_t mode = _MASKED_BIT_ENABLE(GEN11_GFX_DISABLE_LEGACY_MODE);
-
-		for (int i = 0; i < 6; i++) {
-			struct IGHwCsDesc *desc = &descArray[i];
-
-			// --- FILTER: ONLY RCS AND BCS ---
-			if (desc->type == kIGHwCsTypeRCS) {
-				//FunctionCast(SafeForceWake, callback->oSafeForceWake)(accelerator, true, 0);
-			} else if (desc->type == kIGHwCsTypeBCS) {
-				//FunctionCast(SafeForceWake, callback->oSafeForceWake)(accelerator, true, 1);
-			} else {
-				continue;
-			}
-
-					uint32_t ringBase = desc->mmioExecListControl - 0x3c;
-					
-					// USE THE CORRECT STRUCT MEMBER FOR HWS
-					// The dump proves mmioGlobalStatusPage holds the offset 0x2080
-					uint32_t hwsRegisterOffset = desc->mmioGlobalStatusPage;
-					
-					// READ SHADOW REGISTER
-					// We use the offset from the struct (0x2080) to index the shadow map
-					uint32_t hwsAddr = getMember<uint32_t>(accelerator, 0x1240 + hwsRegisterOffset);
-					
-					// WRITE TO HARDWARE
-					NGreen::callback->writeReg32(hwsRegisterOffset, hwsAddr);
-					NGreen::callback->readReg32(hwsRegisterOffset);
-
-					// REST OF INIT (Using explicit offsets from struct where possible)
-					NGreen::callback->writeReg32(ringBase + 0x98, ~0u); // HWSTAM
-					NGreen::callback->writeReg32(desc->mmioGfxMode, mode); // GFX Mode
-					NGreen::callback->writeReg32(ringBase + 0x9c, _MASKED_BIT_DISABLE(STOP_RING)); // MI Mode
-					
-					NGreen::callback->writeReg32(desc->mmioErrorIdentity, ~0u); // EMR
-					NGreen::callback->writeReg32(desc->mmioErrorMask, ~0u);    // EIR
-					NGreen::callback->writeReg32(desc->mmioErrorIdentity, ~0x1); // I915_ERROR_INSTRUCTION
-		}
-	
-	FunctionCast(IGScheduler5resume, callback->oIGScheduler5resume)(that);
-
 }
 
 // V212: The GPU watchdog calls isGpuIdle() after engine init to decide if the GPU is healthy.
@@ -13491,184 +12971,6 @@ bool Gen11::wrapIGScheduler4IsGpuIdle(const void *that) {
 		}
 	}
 	return idle;
-}
-
-typedef enum AGDCVendorClass {
-	kAGDCVendorClassReserved,
-	kAGDCVendorClassIntegratedGPU,
-	kAGDCVendorClassDiscreteGPU,
-	kAGDCVendorClassOtherHW,
-	kAGDCVendorClassOtherSW,
-	kAGDCVendorClassAppleGPUPolicyManager,
-	kAGDCVendorClassAppleGPUPowerManager,
-	kAGDCVendorClassGPURoot,
-	kAGDCVendorClassAppleGPUWrangler,
-	kAGDCVendorClassAppleMuxControl,
-} AGDCVendorClass_t;
-
-typedef struct AGDCVendorInfo {
-	union {
-		struct {
-			UInt16 Minor;
-			UInt16 Major;
-		};
-		UInt32 Raw;
-	} Version;
-	char VendorString[32];
-	UInt32 VendorID;
-	AGDCVendorClass_t VendorClass;
-} AGDCVendorInfo_t;
-
-uint32_t
-Gen11::IntelFBClientControldoAttribute
-		  (void *that,uint param_1,unsigned long *param_2,unsigned long param_3,unsigned long *param_4,
-		   unsigned long *param_5,void *param_6)
-{
-
-	/*if (param_1 == 0x923) {
-		return kIOReturnUnsupported;
-	}*/
-	
-	auto ret=FunctionCast(IntelFBClientControldoAttribute, callback->oIntelFBClientControldoAttribute)(that,param_1,param_2,param_3,param_4,param_5,param_6);
-	
-	if (param_1 == 1)//0x2001)
-	if (param_5 != (unsigned long *)0x0)
-		if (0x2b < *param_5) {
-			//memset(param_4,0,0x2c);
-			AGDCVendorInfo *v=(AGDCVendorInfo*)param_4;
-			v->Version.Raw=0;
-			v->Version.Major=0;
-			v->Version.Minor=0;
-			v->VendorID=0x8086;
-			*v->VendorString=*(char*)"INTEL";
-			v->VendorClass=kAGDCVendorClassIntegratedGPU;
-			//*(mach_vm_address_t*)v=callback->IntelFBClientControl11doAttribut;
-		return 0;
-	}
-	return ret;
-}
-
-int hw=1;
-int Gen11::hwSetMode
-		  (AppleIntel::AppleIntelBaseController *that,
-		   AppleIntel::AppleIntelFramebuffer *param_1,
-		   AppleIntel::AppleIntelDisplayPath *param_2,
-		   AppleIntel::CRTCParams *param_3)
-{
-	// On RPL-P (spoofed TGL), setPortMode ran just before us and restored TRANS_DDI_FUNC_CTL_A
-	// to 0x8A000106 (4-lane eDP, matching UEFI DDI_BUF_CTL_A). paramsFbCompare inside the
-	// original hwSetMode reads TRANS_DDI_FUNC_CTL_A and compares it with the target 0x8A010102
-	// (2-lane DP SST). Write the correct value NOW so paramsFbCompare sees no lane-count change
-	// needed and leaves DDI_BUF_CTL_A alone — preserving the UEFI-trained 4-lane eDP link.
-	if (!NGreen::callback->isRealTGL) {
-		NGreen::callback->writeReg32(0x60400, 0x8A000106);  // TRANS_DDI_FUNC_CTL_A
-		DBGLOG("ngreen", "hwSetMode: pre-write TRANS_DDI_FUNC_CTL_A=0x8A000106 to prevent paramsFbCompare lane reprog");
-	}
-	auto ret= FunctionCast(hwSetMode, callback->ohwSetMode)(that, param_1, param_2, param_3);
-	if (hw)
-		enablePipe(that, param_1, param_2, param_3);
-	hw=0;
-	return ret;
-}
-
-void Gen11::enablePipe
-		  (AppleIntel::AppleIntelBaseController *that,
-		   AppleIntel::AppleIntelFramebuffer *param_1,
-		   AppleIntel::AppleIntelDisplayPath *param_2,
-		   AppleIntel::CRTCParams *param_3)
-{
-	return FunctionCast(enablePipe, callback->oenablePipe)(that, param_1, param_2, param_3);
-}
-
-uint8_t Gen11::beginReset(void *that)
-{
-	auto ret= FunctionCast(beginReset, callback->obeginReset)(that);
-	
-	/*static const struct intel_device_info tgl_info = {
-		GEN12_FEATURES,
-		PLATFORM(INTEL_TIGERLAKE),
-		.platform_engine_mask =
-			BIT(RCS0) | BIT(BCS0) | BIT(VECS0) | BIT(VCS0) | BIT(VCS2),
-	};*/
-	
-	
-	
-	/*if (GRAPHICS_VER_FULL(dev_priv) >= IP_VER(12, 10))
-		dg1_irq_reset(dev_priv);
-	else if (GRAPHICS_VER(dev_priv) >= 11)
-		gen11_irq_reset(dev_priv);*/
-	
-	//dg1_irq_reset(struct drm_i915_private *dev_priv)
-	NGreen::callback->writeReg32( DG1_MSTR_TILE_INTR, 0);
-	
-	//gen11_irq_reset
-	
-	NGreen::callback->writeReg32( GEN11_GFX_MSTR_IRQ, 0);
-	
-	//gen11_gt_irq_reset(gt);
-	// Disable RCS, BCS, VCS and VECS class engines.
-	NGreen::callback->writeReg32( GEN11_RENDER_COPY_INTR_ENABLE, 0);
-	NGreen::callback->writeReg32( GEN11_VCS_VECS_INTR_ENABLE,	  0);
-
-	// Restore masks irqs on RCS, BCS, VCS and VECS engines.
-	NGreen::callback->writeReg32( GEN11_RCS0_RSVD_INTR_MASK,	~0);
-	NGreen::callback->writeReg32( GEN11_BCS_RSVD_INTR_MASK,	~0);
-	
-	NGreen::callback->writeReg32( GEN11_VCS0_VCS1_INTR_MASK,	~0);
-	NGreen::callback->writeReg32( GEN11_VCS2_VCS3_INTR_MASK,	~0);
-	
-	//if (HAS_ENGINE(gt, VECS2) || HAS_ENGINE(gt, VECS3))
-	NGreen::callback->writeReg32( GEN12_VECS2_VECS3_INTR_MASK, ~0);
-	
-	NGreen::callback->writeReg32( GEN11_GPM_WGBOXPERF_INTR_ENABLE, 0);
-	NGreen::callback->writeReg32( GEN11_GPM_WGBOXPERF_INTR_MASK,  ~0);
-	NGreen::callback->writeReg32( GEN11_GUC_SG_INTR_ENABLE, 0);
-	NGreen::callback->writeReg32( GEN11_GUC_SG_INTR_MASK,  ~0);
-
-	NGreen::callback->writeReg32( GEN11_CRYPTO_RSVD_INTR_ENABLE, 0);
-	NGreen::callback->writeReg32( GEN11_CRYPTO_RSVD_INTR_MASK,  ~0);
-	
-	//gen11_display_irq_reset(dev_priv);
-	
-	NGreen::callback->writeReg32( GEN11_GFX_MSTR_IRQ, ~0);
-
-	return ret;
-}
-											
-void Gen11::endReset(void *that)
-{
-	FunctionCast(endReset, callback->oendReset)(that);
-	
-	//void gen11_gt_irq_postinstall(struct intel_gt *gt)
-	uint32_t irqs = GT_RENDER_USER_INTERRUPT;
-	uint32_t dmask,smask;
-	
-	dmask = irqs << 16 | irqs;
-	smask = irqs << 16;
-	
-	
-	
-	// Enable RCS, BCS, VCS and VECS class interrupts.
-	NGreen::callback->writeReg32( GEN11_RENDER_COPY_INTR_ENABLE, dmask);
-	NGreen::callback->writeReg32( GEN11_VCS_VECS_INTR_ENABLE, dmask);
-
-		// Unmask irqs on RCS, BCS, VCS and VECS engines.
-	NGreen::callback->writeReg32( GEN11_RCS0_RSVD_INTR_MASK, ~smask);
-	NGreen::callback->writeReg32( GEN11_BCS_RSVD_INTR_MASK, ~smask);
-
-	NGreen::callback->writeReg32( GEN11_VCS0_VCS1_INTR_MASK, ~dmask);
-	NGreen::callback->writeReg32( GEN11_VCS2_VCS3_INTR_MASK, ~dmask);
-	
-	NGreen::callback->writeReg32( GEN11_VECS0_VECS1_INTR_MASK, ~dmask);
-	
-		//if (HAS_ENGINE(gt, VECS2) || HAS_ENGINE(gt, VECS3))
-	NGreen::callback->writeReg32( GEN12_VECS2_VECS3_INTR_MASK, ~dmask);
-	
-	
-	//gen11_de_irq_postinstall(dev_priv);
-	NGreen::callback->writeReg32( GEN11_GFX_MSTR_IRQ, GEN11_MASTER_IRQ);
-	
-	NGreen::callback->writeReg32( DG1_MSTR_TILE_INTR, DG1_MSTR_IRQ);
 }
 
 //SIGNATURES GFX
