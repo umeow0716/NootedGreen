@@ -145,6 +145,7 @@ uint64_t gVfGGTTSize = 0;
 uint32_t gVfContextCount = 0;
 uint32_t gVfDoorbellCount = 0;
 void *gVfGlobalPageTable = nullptr;
+void *gVfHardwareGuc = nullptr;
 bool gVfGGTTReady = false;
 enum class VfIdentity : uint8_t { Unknown, Physical, Virtual, Invalid };
 VfIdentity gVfIdentity = VfIdentity::Unknown;
@@ -192,6 +193,7 @@ OSObject *gVfCtbObject = nullptr;
 bool gVfCtbDisableConfirmed = false;
 volatile UInt32 gVfCtbStopped = 0;
 volatile UInt32 gVfCtbEnabled = 0;
+volatile UInt32 gVfCtbEverEnabled = 0;
 bool gVfMemIrqConfigured = false;
 volatile UInt32 gVfMemIrqRequested = 0;
 volatile UInt32 gVfProtocolFault = 0;
@@ -392,6 +394,25 @@ void vfReleaseRetiredContextBacking(uint16_t gucId)
 bool vfEnsureGucLock();
 bool vfValidH2GMapping(const volatile uint32_t *descriptor,
                        const volatile uint32_t *buffer);
+bool vfInvalidateTLBSync(void *guc);
+
+bool vfCaptureHardwareGuc(void *guc)
+{
+	if (!guc) {
+		vfMarkProtocolFault("missing VF GuC object");
+		return false;
+	}
+	if (!gVfHardwareGuc &&
+	    !OSCompareAndSwapPtr(nullptr, guc, &gVfHardwareGuc)) {
+		// Another caller published the object. Validate it below.
+		OSSynchronizeIO();
+	}
+	if (gVfHardwareGuc != guc) {
+		vfMarkProtocolFault("inconsistent VF GuC object identity");
+		return false;
+	}
+	return true;
+}
 
 bool vfInitContextBridge()
 {
@@ -552,6 +573,67 @@ bool vfCanWaitForGuc(void *guc)
 		return false;
 	}
 	return true;
+}
+
+bool vfInvalidateTLBSync(void *guc)
+{
+	// GEN12_GUC_TLB_INV_CR (0xCEE8) belongs to the physical GT and is not in
+	// a VF's runtime MMIO allowlist. i915's gen12vf_ggtt_invalidate() sends a
+	// GuC-internal, heavy invalidation with cache flush and waits for its G2H
+	// sequence completion. Serialize requests so a single bounded waiter is
+	// sufficient and never fall back to the physical register on failure.
+	if (!vfCaptureHardwareGuc(guc))
+		return false;
+	if (!gVfGGTTReady || gVfProtocolFault || !gVfMemIrqConfigured ||
+	    !gVfCtbGpuBase || !gVfCtbEnabled || gVfCtbStopped) {
+		vfMarkProtocolFault("TLB invalidation before VF CTB/memory IRQ readiness");
+		return false;
+	}
+	if (!vfCanWaitForGuc(guc))
+		return false;
+	if (!vfEnsureGucLock()) {
+		vfMarkProtocolFault("TLB invalidation lock allocation failure");
+		return false;
+	}
+
+	IOLockLock(gVfGucLock);
+	const uint32_t seqno = static_cast<uint32_t>(OSIncrementAtomic(
+		reinterpret_cast<volatile SInt32 *>(&gVfTlbNextSeqno)));
+	gVfTlbDoneSeqno = seqno - 1U;
+	gVfTlbWaitSeqno = seqno;
+	gVfTlbWaitActive = 1;
+	OSSynchronizeIO();
+
+	const uint32_t request[] = {
+		kGucActionTlbInvalidation,
+		seqno,
+		0x80000003U, // FLUSH_CACHE | HEAVY | GUC internal translations
+	};
+	uint32_t transportFence = 0;
+	const bool sent = vfSendCtbFastAction(guc, request, arrsize(request),
+	                                      transportFence);
+	bool completed = false;
+	if (sent) {
+		for (uint32_t waited = 0; waited < kVfContextEventTimeoutMs; waited++) {
+			OSSynchronizeIO();
+			if (gVfTlbDoneSeqno == seqno) {
+				completed = true;
+				break;
+			}
+			IOSleep(1);
+		}
+	}
+	gVfTlbWaitActive = 0;
+	OSSynchronizeIO();
+	IOLockUnlock(gVfGucLock);
+
+	if (!sent || !completed) {
+		SYSLOG("ngreen", "V237: VF GuC TLB invalidate failed seq=%u sent=%d fence=%u",
+		       seqno, sent, transportFence);
+		vfMarkProtocolFault(sent ? "GuC TLB invalidation timeout" :
+		                         "GuC TLB invalidation enqueue failure");
+	}
+	return sent && completed;
 }
 
 bool vfWaitForContextState(void *guc, uint16_t gucId, VfGucContextState wanted)
@@ -949,7 +1031,11 @@ bool vfConfigureModernCtb(bool g2h, uint32_t appleDescriptorAddress)
 			return false;
 		}
 		// Mappings and KLV registration alone do not establish a usable CTB.
-		// Admit submissions only after firmware acknowledges transport enable.
+		// Publish the irreversible lifecycle bit before opening submission. An
+		// unmap racing this boundary must not mistake a once-active VF for a
+		// pre-GPU initialization rollback.
+		OSCompareAndSwap(0, 1, &gVfCtbEverEnabled);
+		OSSynchronizeIO();
 		OSCompareAndSwap(0, 1, &gVfCtbEnabled);
 	}
 
@@ -3255,6 +3341,8 @@ bool Gen11::IGHardwareGlobalPageTableInitWithOptions(void *that,
 		                                                                                      fullBar0,
 		                                                                                      dummyPage,
 		                                                                                      options);
+		if (result)
+			gVfGlobalPageTable = that;
 		SYSLOG("ngreen", "V219: direct global GGTT init ret=%d AppleMMIO=%p fullBAR0=%p len=0x%llx range=[0x%llx,+0x%llx]",
 		       result, mmioBase, fullBar0,
 		       static_cast<unsigned long long>(cb->getRMMIOLength()),
@@ -3295,7 +3383,8 @@ bool Gen11::IGHardwareGlobalPageTableMapRange(void *that,
 	// relay sync is too late to protect either the shadow or the MMIO aperture.
 	if (gVfIdentity != VfIdentity::Physical &&
 	    (gVfIdentity != VfIdentity::Virtual || !gVfGGTTReady || gVfProtocolFault ||
-	     !that || !NGGgtt::contains(gVfGGTTBase, gVfGGTTSize, range.start, range.length) ||
+	     !that || that != gVfGlobalPageTable ||
+	     !NGGgtt::contains(gVfGGTTBase, gVfGGTTSize, range.start, range.length) ||
 	     !NGGgtt::nativePhysicalRange(physical, range.length))) {
 		vfMarkProtocolFault("invalid VF GGTT map range or transport state");
 		return false;
@@ -3305,7 +3394,8 @@ bool Gen11::IGHardwareGlobalPageTableMapRange(void *that,
 	                                                                                range,
 	                                                                                physical,
 	                                                                                flags);
-	if (!result || NGreen::callback->isRealTGL || that != gVfGlobalPageTable)
+	if (!result || gVfIdentity != VfIdentity::Virtual ||
+	    that != gVfGlobalPageTable || gVfDirectGGTT)
 		return result;
 	return vfSyncShadowRange(range);
 }
@@ -3339,15 +3429,32 @@ void Gen11::IGHardwareGlobalPageTableUnmapRange(void *that,
 	// returning would turn a skipped PTE write into a use-after-free risk.
 	PANIC_COND(gVfIdentity != VfIdentity::Physical &&
 		(gVfIdentity != VfIdentity::Virtual || !gVfGGTTReady || gVfProtocolFault ||
-		 !that || !NGGgtt::contains(gVfGGTTBase, gVfGGTTSize, range.start, range.length)),
+		 !that || that != gVfGlobalPageTable ||
+		 !NGGgtt::contains(gVfGGTTBase, gVfGGTTSize, range.start, range.length)),
 		"ngreen", "Cannot safely complete VF GGTT unmap; refusing DMA backing release");
+	const auto invalidation = NGGgtt::unmapInvalidation(
+		gVfCtbEverEnabled != 0, gVfCtbEnabled != 0,
+		gVfCtbStopped != 0, gVfProtocolFault != 0);
+	PANIC_COND(gVfIdentity == VfIdentity::Virtual &&
+	           invalidation == NGGgtt::TlbInvalidation::Unsafe,
+		"ngreen", "VF GGTT unmap started without a usable TLB transport");
 	FunctionCast(IGHardwareGlobalPageTableUnmapRange,
 	             callback->oIGHardwareGlobalPageTableUnmapRange)(that, range);
-	if (!NGreen::callback->isRealTGL && that == gVfGlobalPageTable &&
-	    !vfSyncShadowRange(range) && gVfRelayFailureLogs++ < 16)
-		SYSLOG("ngreen", "V217: unmap relay failed [0x%llx,+0x%llx]",
-		       static_cast<unsigned long long>(range.start),
-		       static_cast<unsigned long long>(range.length));
+	if (gVfIdentity != VfIdentity::Virtual)
+		return;
+
+	// Apple releaseRange calls this virtual method, sets only a deferred flush
+	// bit and can then return to a caller that releases the DMA mapping. Relay
+	// (when needed) and a completed heavy GuC invalidation are therefore part of
+	// the unmap transaction, not optional diagnostics. The sfence matches the
+	// stock physical invalidator and drains direct BAR0 PTE stores first.
+	PANIC_COND(!gVfDirectGGTT && !vfSyncShadowRange(range),
+		"ngreen", "VF GGTT unmap relay failed before DMA release");
+	__asm__ volatile("sfence" ::: "memory");
+	if (invalidation == NGGgtt::TlbInvalidation::NotRequired)
+		return;
+	PANIC_COND(!vfInvalidateTLBSync(gVfHardwareGuc),
+		"ngreen", "VF GGTT unmap could not quiesce translations before DMA release");
 }
 
 bool Gen11::IGHardwareGlobalPageTableMapRangeDummy(void *that,
@@ -3356,7 +3463,8 @@ bool Gen11::IGHardwareGlobalPageTableMapRangeDummy(void *that,
 {
 	if (gVfIdentity != VfIdentity::Physical &&
 	    (gVfIdentity != VfIdentity::Virtual || !gVfGGTTReady || gVfProtocolFault ||
-	     !that || !NGGgtt::contains(gVfGGTTBase, gVfGGTTSize, range.start, range.length))) {
+	     !that || that != gVfGlobalPageTable ||
+	     !NGGgtt::contains(gVfGGTTBase, gVfGGTTSize, range.start, range.length))) {
 		vfMarkProtocolFault("invalid VF dummy GGTT range or transport state");
 		return false;
 	}
@@ -3364,7 +3472,8 @@ bool Gen11::IGHardwareGlobalPageTableMapRangeDummy(void *that,
 	                                 callback->oIGHardwareGlobalPageTableMapRangeDummy)(that,
 	                                                                                     range,
 	                                                                                     flags);
-	if (!result || NGreen::callback->isRealTGL || that != gVfGlobalPageTable)
+	if (!result || gVfIdentity != VfIdentity::Virtual ||
+	    that != gVfGlobalPageTable || gVfDirectGGTT)
 		return result;
 	return vfSyncShadowRange(range);
 }
@@ -9045,6 +9154,11 @@ bool Gen11::vfMmioHostToGuCAction(void *that, const uint32_t *request,
 			*response = 1;
 		return false;
 	}
+	if (!vfCaptureHardwareGuc(that)) {
+		if (response)
+			*response = 1;
+		return false;
+	}
 
 	if (!request || requestLength == 0 || requestLength > 4) {
 		SYSLOG("ngreen", "V222: rejected malformed VF GuC MMIO request len=%u",
@@ -9969,60 +10083,7 @@ void Gen11::vfInvalidateTLB(void *that) {
 		FunctionCast(vfInvalidateTLB, callback->oVfInvalidateTLB)(that);
 		return;
 	}
-
-	// GEN12_GUC_TLB_INV_CR (0xCEE8) belongs to the physical GT and is not in
-	// a VF's runtime MMIO allowlist.  i915's gen12vf_ggtt_invalidate() sends a
-	// GuC-internal, heavy invalidation with cache flush and waits for its G2H
-	// sequence completion.  Serialize requests so a single bounded waiter is
-	// sufficient and never fall back to the physical register on failure.
-	if (!gVfGGTTReady || gVfProtocolFault || !gVfMemIrqConfigured || !gVfCtbGpuBase) {
-		vfMarkProtocolFault("TLB invalidation before VF CTB/memory IRQ readiness");
-		return;
-	}
-	if (!vfCanWaitForGuc(that))
-		return;
-	if (!vfEnsureGucLock()) {
-		vfMarkProtocolFault("TLB invalidation lock allocation failure");
-		return;
-	}
-
-	IOLockLock(gVfGucLock);
-	const uint32_t seqno = static_cast<uint32_t>(OSIncrementAtomic(
-		reinterpret_cast<volatile SInt32 *>(&gVfTlbNextSeqno)));
-	gVfTlbDoneSeqno = seqno - 1U;
-	gVfTlbWaitSeqno = seqno;
-	gVfTlbWaitActive = 1;
-	OSSynchronizeIO();
-
-	const uint32_t request[] = {
-		kGucActionTlbInvalidation,
-		seqno,
-		0x80000003U, // FLUSH_CACHE | HEAVY | GUC internal translations
-	};
-	uint32_t transportFence = 0;
-	const bool sent = vfSendCtbFastAction(that, request, arrsize(request),
-	                                      transportFence);
-	bool completed = false;
-	if (sent) {
-		for (uint32_t waited = 0; waited < kVfContextEventTimeoutMs; waited++) {
-			OSSynchronizeIO();
-			if (gVfTlbDoneSeqno == seqno) {
-				completed = true;
-				break;
-			}
-			IOSleep(1);
-		}
-	}
-	gVfTlbWaitActive = 0;
-	OSSynchronizeIO();
-	IOLockUnlock(gVfGucLock);
-
-	if (!sent || !completed) {
-		SYSLOG("ngreen", "V237: VF GuC TLB invalidate failed seq=%u sent=%d fence=%u",
-		       seqno, sent, transportFence);
-		vfMarkProtocolFault(sent ? "GuC TLB invalidation timeout" :
-		                         "GuC TLB invalidation enqueue failure");
-	}
+	(void)vfInvalidateTLBSync(that);
 }
 
 bool Gen11::vfCtbGucToHostAction(void *that, uint32_t *message) {

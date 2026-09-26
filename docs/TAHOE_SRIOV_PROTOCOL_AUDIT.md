@@ -1326,3 +1326,45 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   and CI calls that single complete gate instead of maintaining a shorter,
   drifting copy of its tests. Any analyzer warning or nonzero analyzer exit
   fails the gate; native Xcode build/link remains a separate subsequent job.
+
+### Synchronous GGTT unmap invalidation
+
+- Re-disassembled the pinned Tahoe TGL binary.
+  `IGHardwareGlobalPageTable::unmapRange` at `0x10626` only replaces PTEs with
+  the dummy entry. The caller
+  `IGHardwarePageTable::releaseRange` at `0x144ac` invokes that virtual method
+  and then `IntelAccelerator::flushHardwareAfterGttUpdate` at `0x2d1d8`.
+  The latter only ORs a pending bit at accelerator offset `0x1340`; it is not
+  a synchronous invalidation or a DMA-completion boundary. The release chain
+  continues through `IGMemoryManager::releaseFromPageTableForTask` at `0xf6aa`
+  and `IGAccelMemoryMap::releaseFromGPUPageTable` at `0x11304`.
+- Compared this with the pinned i915 `gen12vf_ggtt_invalidate`: a ready VF uses
+  `intel_guc_invalidate_tlb_guc`, action `0x7000`, target type 3, heavy mode and
+  `FLUSH_CACHE`, then waits for matching `0x7001`. Heavy mode guarantees that
+  in-flight transactions are globally observed before completion. The exact
+  request word is `0x80000003`; physical `GEN12_GUC_TLB_INV_CR` remains outside
+  the admitted VF path.
+- The routed GuC object is now captured from the UUID-pinned
+  `hostToGuCAction` receiver and its identity must remain stable. Direct GGTT
+  initialization publishes its global-page-table receiver too; map, dummy-map
+  and unmap reject every other receiver before native code can index it.
+- After a valid VF unmap, shadow relay (when applicable) is mandatory, direct
+  PTE stores are drained with the same x86 `sfence` used by Apple's physical
+  invalidator, and a serialized heavy GuC invalidation must receive its exact
+  sequence completion before the void call may return. Failed enqueue,
+  timeout, unsafe wait context, stopped transport or prior protocol fault are
+  fail-stop: releasing backing without proof of quiescence would risk stale
+  DMA and another host-wide freeze.
+- Initialization rollback before CTB has ever been enabled is the only
+  no-invalidation case. The irreversible `ever enabled` bit is published
+  before submission admission, so a concurrent unmap cannot mistake an active
+  or formerly active transport for early rollback. All 16 lifecycle-state
+  combinations are exercised by the pure helper test. The full static gate
+  passed in `/tmp/ngreen-static.AxDbow`, including zero analyzer findings,
+  28,561 GGTT interval cases and the existing sanitizer suites.
+- This closes the valid active-transport unmap ordering hole; it does not make
+  device shutdown graceful. CTB/memory-IRQ callback synchronization, engine
+  stop and release of quarantined backing remain open. Once CTB is stopped,
+  an attempted GGTT release deliberately panics rather than authorizing DMA
+  reuse. The VM therefore remains off pending that teardown proof and the
+  remaining all-source review.

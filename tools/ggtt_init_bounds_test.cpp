@@ -18,6 +18,22 @@ static Bounds nativeBounds(uint64_t start, uint64_t length) {
 }
 
 int main() {
+    using Invalidation = NGGgtt::TlbInvalidation;
+    unsigned lifecycleCases = 0;
+    for (unsigned ever = 0; ever < 2; ++ever)
+    for (unsigned enabled = 0; enabled < 2; ++enabled)
+    for (unsigned stopped = 0; stopped < 2; ++stopped)
+    for (unsigned faulted = 0; faulted < 2; ++faulted) {
+        const auto actual = NGGgtt::unmapInvalidation(
+            ever != 0, enabled != 0, stopped != 0, faulted != 0);
+        const auto expected = !ever ? Invalidation::NotRequired :
+            (enabled && !stopped && !faulted ? Invalidation::Required :
+                                               Invalidation::Unsafe);
+        assert(actual == expected);
+        ++lifecycleCases;
+    }
+    std::printf("PASS: %u GGTT unmap/transport lifecycle cases\n", lifecycleCases);
+
     const uint64_t values[] = {0, 1, 0xFFF, 0x1000, 0x2000, 0x100000,
         0x40000000, 0xFEE00000, 0xFFFFF000, UINT64_C(0x100000000),
         UINT64_C(0x100001000), UINT64_MAX - 0xFFF, UINT64_MAX};

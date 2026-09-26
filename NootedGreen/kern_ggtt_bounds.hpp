@@ -3,6 +3,26 @@
 #include <stdint.h>
 
 namespace NGGgtt {
+enum class TlbInvalidation : uint8_t {
+    NotRequired,
+    Required,
+    Unsafe,
+};
+
+// Before the VF command transport has ever run, no GPU request can retain a
+// translation and initialization rollback needs no TLB rendezvous. Once the
+// transport has run, every unmap must complete a heavy GuC invalidation while
+// the transport is still active. A stopped/faulted transport cannot prove DMA
+// quiescence and must not permit the caller to release backing pages.
+inline TlbInvalidation unmapInvalidation(bool everEnabled, bool enabled,
+                                         bool stopped, bool faulted) {
+    if (!everEnabled)
+        return TlbInvalidation::NotRequired;
+    if (enabled && !stopped && !faulted)
+        return TlbInvalidation::Required;
+    return TlbInvalidation::Unsafe;
+}
+
 // The inspected Apple mapper masks DMA addresses to bits 38:12. Until that
 // encoder is replaced/validated, reject inputs it would silently truncate.
 inline bool nativePhysicalRange(uint64_t physical, uint64_t length) {
