@@ -2094,16 +2094,12 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			RouteRequestPlus requests[] = {
 				// PAVP/DRM: intercept session command callback (ICL hardware path, shared hook with TGL)
 				{"__ZN16IntelAccelerator19PAVPCommandCallbackE22PAVPSessionCommandID_tjPjb", wrapPavpSessionCallback, this->orgPavpSessionCallback},
-				// initHardwareCaps NOT routed: NBlue's wrapper reads TGL offset 0x1120 for SKU,
-				// but ICL stores SKU at 0x1150. Let the original ICL code run — SKU gates are patched.
 				// IGScheduler5resume NOT routed: kIGHwCsDesc is only resolved for kextG11HWT.
 				// With -disablegfxfirmware, Host Preemptive scheduler is selected (not IGScheduler5).
 				//last	 {"__ZN12IGScheduler56resumeEv", IGScheduler5resume, this->oIGScheduler5resume},
 				// resetGraphicsEngine NOT routed: NBlue wrapper applies TGL GT workarounds which
 				// target TGL MMIO offsets. Hardware is RPL-P (adlp/raptorlake) — using TGL workarounds
 				// on RPL MMIO could corrupt the command streamer. Let the ICL original run unmodified.
-			//symbol absent in kext	{"__ZN20IGHardwareRingBuffer19resetGraphicsEngineEP17IGHardwareContext", resetGraphicsEngine, this->oresetGraphicsEngine},
-				//last	 {"__ZN13IGHardwareGuC18checkWOPCMSettingsEmR14IOVirtualRange", checkWOPCMSettings, this->ocheckWOPCMSettings},
 				//last	 {"__ZN11IGScheduler15canLoadFirmwareEP16IntelAccelerator", canLoadFirmware, this->ocanLoadFirmware},
 				 // V36: Hook readAndClearInterrupts to initialize Gen11 multi-engine GT interrupts.
 				 // Same implementation as TGL path — Gen11 IRQ registers are identical for ICL/TGL.
@@ -8578,167 +8574,6 @@ void * Gen11::getColorResolveContext(void *that,bool param_1)
 	return ctx;
 }
 
-int Gen11::blit3d_supported()
-{
-	return 0;
-}
-
-void  Gen11::setAsyncSliceCount(void *that,uint32_t configRaw)
-{
-		uint32_t sliceCount     = (configRaw >> 0) & 0xFF;
-		uint32_t subsliceCount  = (configRaw >> 8) & 0xFF;
-		uint32_t euCount        = (configRaw >> 16) & 0xFF;
-
-	uint32_t sliceField = 0;
-		switch (sliceCount) {
-			case 1: sliceField = 1; break;
-			case 2: sliceField = 2; break;
-			default:
-				panic("IGPU: setAsyncSliceCount - Invalid slice count: %u\n", sliceCount);
-				break;
-		}
-		
-		uint32_t subsliceField = 0;
-		switch (subsliceCount) {
-			case 2: subsliceField = 0x20; break;
-			case 4: subsliceField = 0x40; break;
-			case 5: subsliceField = 0x50; break;
-			case 6: subsliceField = 0x60; break;
-			case 8: subsliceField = 0x80; break;
-			default:
-						panic("IGPU: setAsyncSliceCount - Invalid subsliceCount: %u\n", subsliceCount);
-						break;
-		}
-
-		uint32_t euField = 0;
-		switch (euCount) {
-			case 1: euField = 0x100; break;
-			case 2: euField = 0x200; break;
-			case 3: euField = 0x300; break;
-			case 4: euField = 0x400; break;
-			case 5: euField = 0x500; break;
-			case 6: euField = 0x600; break;
-			case 8: euField = 0x800; break;
-			default:
-						panic("IGPU: setAsyncSliceCount - Invalid EU count/power mode: %u\n", euCount);
-						break;
-		}
-
-		uint32_t hwRegisterValue = sliceField | subsliceField | euField;
-
-		getMember<uint32_t>(that, 0x12a0) = configRaw;
-
-
-		//SafeForceWake(that,true, 4);
-		volatile uint32_t* mmioBase = getMember<volatile uint32_t*>(that, 0x1240);
-		mmioBase[0xa204 / 4] = hwRegisterValue;
-		//SafeForceWake(that,false, 4);
-	
-}
-
-static const uint8_t DAT_000b0bb0[] = {
-	0x00, 0x36, 0x6e, 0x01, 0x00, 0xf8, 0x24, 0x01,
-	0x00, 0xf0, 0x49, 0x02, 0x40, 0x78, 0x7d, 0x01
-};
-
-bool Gen11::initHardwareCaps(void *this_ptr) {
-		uint32_t gpuSku = getMember<uint32_t>(this_ptr, 0x1120);
-		bool result = false;
-		
-		uint32_t uVar1;
-		int iVar2;
-		int iVar3;
-		int iVar4;
-
-		if (gpuSku == 2) {
-			// --- SKU 2 (TGLLP) - Original TGL values for 6 Dual SubSlices (12 SubSlices) ---
-					
-					// Buffer sizes for 12 SubSlices (6 DSS × 2 SS/DSS)
-					// 0xc0 (192) = 16 bytes × 12 SS
-					getMember<uint64_t>(this_ptr, 0x112c) = 0x222000000c0ULL;
-					
-					// 0x150 (336) = 28 bytes × 12 SS
-					getMember<uint64_t>(this_ptr, 0x1134) = 0x22200000150ULL;
-					getMember<uint32_t>(this_ptr, 0x113c) = 0x150;
-					
-					getMember<uint64_t>(this_ptr, 0x1174) = 0x200000007ULL;
-					getMember<uint64_t>(this_ptr, 0x117c) = 0x1000000080ULL;
-					
-					getMember<uint32_t>(this_ptr, 0x1160) = 0xf00;
-					
-					// Max Dual SubSlices = 6 (matches hardware: 6 DSS)
-					getMember<uint32_t>(this_ptr, 0x1148) = 0x6;
-					
-					// Calculate actual Dual SubSlices (SubSlices / 2)
-					uVar1 = getMember<uint32_t>(this_ptr, 0x1158) >> 1;
-					iVar3 = 2;
-					
-					// Reference Dual SubSlices count = 6 (must match max to avoid underflow)
-					iVar4 = 0x6;
-					iVar2 = 0x80;
-		}
-		else {
-			if (gpuSku != 1) {
-				result = false;
-				return result;
-			}
-			
-			// --- SKU 1 (TGLHP) - Modified for 5 DSS ---
-			
-			// Sizes for 10 SubSlices
-			getMember<uint64_t>(this_ptr, 0x112c) = 0x2d800000140ULL;
-			getMember<uint64_t>(this_ptr, 0x1134) = 0x27000000168ULL;
-			getMember<uint32_t>(this_ptr, 0x113c) = 0x168;
-			
-			getMember<uint64_t>(this_ptr, 0x1174) = 0x100000007ULL;
-			getMember<uint64_t>(this_ptr, 0x117c) = 0x1000000040ULL;
-			
-			getMember<uint32_t>(this_ptr, 0x1160) = 0x800;
-			
-			// Max SubSlices set to 10
-			getMember<uint32_t>(this_ptr, 0x1148) = 0xA;
-			
-			uVar1 = getMember<uint32_t>(this_ptr, 0x1158);
-			iVar3 = 1;
-			
-			// Reference count set to 10
-			iVar4 = 0xA;
-			iVar2 = 0x40;
-		}
-
-		// Final calculations
-		getMember<uint32_t>(this_ptr, 0x114c) = uVar1;
-		
-		uint8_t &byteRef = getMember<uint8_t>(this_ptr, 0x1184);
-		byteRef = byteRef & 0xFB;
-		
-		getMember<uint32_t>(this_ptr, 0x1128) = iVar3 * uVar1;
-		getMember<uint32_t>(this_ptr, 0x1144) = (iVar4 - uVar1) * iVar3;
-		getMember<uint32_t>(this_ptr, 0x1140) = iVar2 * uVar1;
-		
-		getMember<uint32_t>(this_ptr, 0x1168) = getMember<uint32_t>(this_ptr, 0x115c) << 4;
-		
-		result = true;
-		return result;
-}
-
-void Gen11::checkWOPCMSettings(void *that,unsigned long param_1,void *param_2)
-{
-	const uint32_t GUC_WOPCM_OFFSET = 1 * 1024 * 1024;
-	const uint32_t GUC_WOPCM_SIZE = 1 * 1024 * 1024;
-	
-	typedef struct {
-		uint64_t address;
-		uint64_t length;
-	} IOVirtualRange;
-	
-	IOVirtualRange *wopcm_range = (IOVirtualRange *)param_2;
-		
-	wopcm_range->address = GUC_WOPCM_OFFSET;
-	wopcm_range->length = GUC_WOPCM_SIZE;
-	
-}
-
 IOReturn Gen11::wrapFBClientDoAttribute(void *fbclient, uint32_t attribute, unsigned long *unk1, unsigned long unk2, unsigned long *unk3, unsigned long *unk4,  void *externalMethodArguments) {
 	if (attribute == 0x923) {
 		return kIOReturnUnsupported;
@@ -12447,11 +12282,6 @@ bool Gen11::forceWakeWaitAckFallback(uint32_t reqReg, uint32_t ackReg, uint32_t 
 
 void Gen11::releaseDoorbell()
 {}
-
-bool Gen11::dotrue()
-{
-	return true;
-}
 
 int iniin=1;
 void  Gen11::readAndClearInterrupts(AppleIntel::AppleIntelBaseController *that, void *param_1)

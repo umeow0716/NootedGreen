@@ -1620,8 +1620,6 @@ private:
 	static IOReturn wrapICLReadAUX(void *that, uint32_t address, void *buffer, uint32_t length);
 	mach_vm_address_t orgICLReadAUX {};
 	
-	static int blit3d_supported();
-	
 	static int getPlatformID();
 	mach_vm_address_t ogetPlatformID {};
 	
@@ -1897,9 +1895,6 @@ private:
 	static void IGHardwareBlit3DContextinitialize(void *that);
 	mach_vm_address_t oIGHardwareBlit3DContextinitialize {};
 	
-	static bool  initHardwareCaps(void *this_ptr);  // query HW capabilities
-	mach_vm_address_t oinitHardwareCaps {};
-	
 	static void * IGMappedBuffergetMemory(void *that);
 	mach_vm_address_t oIGMappedBuffergetMemory {};
 	
@@ -2034,18 +2029,11 @@ private:
 	static uint8_t  setPortMode(void *that,uint32_t param_1);
 	mach_vm_address_t osetPortMode {};
 
-	// ── Additional accelerator hooks ──
-	static void  setAsyncSliceCount(void *that,uint32_t configRaw);  // GPU slice power gating
-	mach_vm_address_t osetAsyncSliceCount {};
-
 		static uint32_t
 	IntelFBClientControldoAttribute
 			  (void *that,uint param_1,unsigned long *param_2,unsigned long param_3,unsigned long *param_4,
 			   unsigned long *param_5,void *param_6);
 	mach_vm_address_t oIntelFBClientControldoAttribute {};
-
-	static unsigned long resetGraphicsEngine(void *that,void *param_1);  // GT engine reset
-	mach_vm_address_t oresetGraphicsEngine {};
 
 	static void applyPreStartEngineWorkarounds(int callCount); // only error/EMR clear — safe before ring init
 	static void applyPreStopEngineWorkarounds(int callCount);  // full GT WAs + BCS drain — before stop only
@@ -2092,12 +2080,6 @@ private:
 	mach_vm_address_t oinitBlitUsage {};
 
 	mach_vm_address_t kIGHwCsDesc {};  // pointer to engine descriptor table
-
-	// WOPCM = Write-Once Protected Content Memory — GuC/HuC FW region config
-	static void checkWOPCMSettings(void *that,unsigned long param_1,void *param_2);
-	mach_vm_address_t ocheckWOPCMSettings {};
-
-	static bool dotrue();  // stub: always returns true
 
 	static uint8_t disableVDDForAux(void *that);
 	mach_vm_address_t odisableVDDForAux {};

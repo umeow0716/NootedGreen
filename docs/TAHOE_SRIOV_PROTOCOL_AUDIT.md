@@ -1271,3 +1271,16 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   GGTT-offset rejection. This protects only calls using the common helpers;
   native binary accesses still depend on routed/byte patches and remain under
   review. VM remains shut off pending the complete static gate.
+
+### Removed additional unrouted accelerator experiments
+
+- Repository-wide reference review found no route or call site for the old
+  `setAsyncSliceCount`, `initHardwareCaps`, WOPCM-range override and no-argument
+  blit-support functions. One of them performed a raw private-pointer MMIO write
+  and the others rewrote guessed TGL object offsets; none could affect the built
+  driver because their original-function slots were never resolved.
+- Removed those bodies, slots, their unused data table, the declaration-only
+  reset hook and an unreferenced always-true stub. Active, signature-distinct
+  blit capability routing and native firmware paths are unchanged. This is
+  dead-code removal, not a claim that the corresponding hardware facilities
+  are fully reviewed or implemented.
