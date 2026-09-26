@@ -37,8 +37,9 @@ inline TlbInvalidation unmapInvalidation(bool everEnabled, bool enabled,
     return TlbInvalidation::Unsafe;
 }
 
-// The inspected Apple mapper masks DMA addresses to bits 38:12. Until that
-// encoder is replaced/validated, reject inputs it would silently truncate.
+// The pinned Tahoe mapping contract supplies bits 38:12. The direct VF encoder
+// is now explicit, but wider DMA/IOMMU addresses remain fail-closed until that
+// private caller contract is independently established.
 inline bool nativePhysicalRange(uint64_t physical, uint64_t length) {
     constexpr uint64_t limit = UINT64_C(1) << 39;
     return ((physical | length) & 0xFFF) == 0 && physical <= limit &&

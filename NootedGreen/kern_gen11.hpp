@@ -1018,18 +1018,15 @@ private:
 	                                              const NGIGAddressRange &range,
 	                                              uint64_t physical,
 	                                              uint64_t flags);
-	mach_vm_address_t oIGHardwareGlobalPageTableMapRange {};
 	static bool IGHardwareGlobalPageTableMapRangeRotated(void *that,
 	                                                     void *rangeIterator,
 	                                                     void *physicalIterator,
 	                                                     uint64_t flags);
 	static void IGHardwareGlobalPageTableUnmapRange(void *that,
 	                                                const NGIGAddressRange &range);
-	mach_vm_address_t oIGHardwareGlobalPageTableUnmapRange {};
 	static bool IGHardwareGlobalPageTableMapRangeDummy(void *that,
 	                                                   const NGIGAddressRange &range,
 	                                                   uint64_t flags);
-	mach_vm_address_t oIGHardwareGlobalPageTableMapRangeDummy {};
 
 	// ── 3D Blit engine (GPU-accelerated blitting via 3D pipeline) ──
 	mach_vm_address_t oIGMappedBuffergetMemory {};

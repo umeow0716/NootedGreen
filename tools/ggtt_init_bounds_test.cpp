@@ -3,7 +3,9 @@
 #include <cassert>
 #include <cstdint>
 #include <cstdio>
+#include <initializer_list>
 #include "../NootedGreen/kern_ggtt_bounds.hpp"
+#include "../NootedGreen/kern_vf_ggtt_pte.hpp"
 
 struct Bounds {
     uint64_t firstBegin, firstEnd;
@@ -18,6 +20,25 @@ static Bounds nativeBounds(uint64_t start, uint64_t length) {
 }
 
 int main() {
+	unsigned attributeCases = 0;
+	for (uint64_t flags = 0; flags < 0x200; ++flags) {
+		const bool expected = (flags & ~UINT64_C(0x9A)) == 0;
+		assert(NGVfGgttPte::validAppleAttributes(flags) == expected);
+		++attributeCases;
+	}
+	for (uint64_t bit = 9; bit < 64; ++bit)
+		assert(!NGVfGgttPte::validAppleAttributes(UINT64_C(1) << bit));
+	for (uint64_t physical : {UINT64_C(0), UINT64_C(0x1000),
+	                          UINT64_C(0x12345000),
+	                          (UINT64_C(1) << 39) - 0x1000}) {
+		const uint64_t pte = NGVfGgttPte::encodeSystemMemory(physical);
+		assert(pte == (physical | 1U));
+		assert((pte & UINT64_C(0x1E)) == 0); // no LM or PF-owned VFID
+		assert((pte & ~UINT64_C(0x7FFFFFF001)) == 0);
+	}
+	std::printf("PASS: %u Apple GGTT attribute masks and direct-VF PTE encoding\n",
+	            attributeCases);
+
     using Invalidation = NGGgtt::TlbInvalidation;
     unsigned lifecycleCases = 0;
     for (unsigned ever = 0; ever < 2; ++ever)

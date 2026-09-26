@@ -2084,3 +2084,32 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   constrained field plus IDs, modes, invalidation flags and unknown actions.
   The complete local suite passes in `/tmp/ngreen-static.weYYxH`; the VM stayed
   off. This validates host-side request construction, not GuC execution.
+
+### Replace physical GGTT PTE encoding with the media-12 VF contract
+
+- Re-disassembled Tahoe `IGHardwarePageTable::attributeBits`, `commitRange`,
+  `updateRange`, and all four concrete global-page-table mutations. Apple can
+  pass only flag bits 1, 3, 4 and 7 (`0x9a`), and its mapper retains those bits
+  while writing the PTE high and low dwords separately.
+- Current i915 identifies Gen12 GGTT bits 4:2 as the PF-owned VFID and bit 1 as
+  local memory. Its direct media-12 VF uses `gen8_ggtt_pte_encode`, which writes
+  system-memory address plus present and does not insert a VFID. The target
+  integrated GPU has no local-memory address space. Passing Apple's physical
+  cache attributes through was therefore not a valid VF encoding.
+- Normal, rotated, dummy and unmap paths now validate the exact Apple attribute
+  mask and write only the admitted 39-bit system DMA address plus present.
+  They share exact BAR0/PTE-base and pinned-dummy validation. The three native
+  originals formerly retained only for PTE stores are no longer callable.
+- Every PTE is written through an aligned volatile `uint64_t`. An optimized
+  x86_64 Mach-O object was disassembled locally and each loop contains one
+  eight-byte `movq`, eliminating the native transient address produced by its
+  high-then-low stores. Write barriers drain the aperture before return.
+- Before CTB has ever run, setup mappings need no invalidation because no GPU
+  request can have cached them. Afterwards, each successful map/dummy/rotated
+  mutation requires the same synchronous heavy GuC invalidation already used
+  by unmap; unsafe wait contexts or unavailable transport fail before writes.
+  Rotated rollback also invalidates its restored dummy mappings before faulting.
+- The pure model exhausts the low nine flag bits, rejects every high bit, and
+  proves emitted PTEs contain no LM/VFID. The complete syntax, analyzer,
+  strict-ABI, sanitizer and payload suite passes in
+  `/tmp/ngreen-static.mOqJrE`. This remains static evidence; VM stayed off.

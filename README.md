@@ -65,6 +65,10 @@ inherit runtime claims from the older Sonoma/Raptor Lake display experiments.
   aperture directly. The former uninitialized software-shadow/VF2PF-relay
   fallback has been removed; media-13 remains fail-closed until its per-GT
   discovery and GGTT update ABI are implemented.
+- All direct-VF map, rotated-map, dummy-map and unmap PTE writes use one aligned
+  64-bit store. Physical-driver cache attributes are validated but omitted:
+  on media-12 GGTT those positions select PF-owned VFID/local-memory state.
+  Once CTB has run, every mapping mutation waits for a heavy GuC invalidation.
 - VF scheduler selection, PM/fallback disablement, bootstrap symbols and
   accelerator start/stop routes are mandatory. Missing private ABI state fails
   admission instead of falling back to physical MMIO.

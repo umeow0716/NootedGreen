@@ -5,6 +5,7 @@
 #include "kern_gpu_capabilities.hpp"
 #include "kern_ggtt_bounds.hpp"
 #include "kern_ggtt_rotation.hpp"
+#include "kern_vf_ggtt_pte.hpp"
 #include "kern_vf_irq_gate.hpp"
 #include "kern_vf_context_shutdown.hpp"
 #include "kern_vf_submission_gate.hpp"
@@ -1932,16 +1933,13 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			 IGHardwareGlobalPageTableInitWithOptions,
 			 this->oIGHardwareGlobalPageTableInitWithOptions},
 			{"__ZN25IGHardwareGlobalPageTable8mapRangeERK14IGAddressRangeyy",
-			 IGHardwareGlobalPageTableMapRange,
-			 this->oIGHardwareGlobalPageTableMapRange},
+			 IGHardwareGlobalPageTableMapRange},
 			{"__ZN25IGHardwareGlobalPageTable15mapRangeRotatedER33IGAddressRangeRotatedPageIteratorR25IGPhysicalSegmentIteratory",
 			 IGHardwareGlobalPageTableMapRangeRotated},
 			{"__ZN25IGHardwareGlobalPageTable10unmapRangeERK14IGAddressRange",
-			 IGHardwareGlobalPageTableUnmapRange,
-			 this->oIGHardwareGlobalPageTableUnmapRange},
+			 IGHardwareGlobalPageTableUnmapRange},
 			{"__ZN25IGHardwareGlobalPageTable13mapRangeDummyERK14IGAddressRangey",
-			 IGHardwareGlobalPageTableMapRangeDummy,
-			 this->oIGHardwareGlobalPageTableMapRangeDummy},
+			 IGHardwareGlobalPageTableMapRangeDummy},
 			
 			// A VF owns neither engine power/reset nor legacy execlist rings. Keep
 			// Apple's lifecycle calls away from PF-owned registers; final stop still
@@ -2452,26 +2450,74 @@ bool Gen11::IGHardwareGlobalPageTableInitWithOptions(void *that,
 	return result;
 }
 
+static volatile uint64_t *vfDirectPteBase(void *that)
+{
+	auto *pteBase = that ? getMember<volatile uint64_t *>(that, 0x28) : nullptr;
+	auto *cb = NGreen::callback;
+	if (!pteBase || !cb || !cb->getRMMIOAddress() ||
+	    cb->getRMMIOLength() < kVfDirectBar0Bytes ||
+	    pteBase != reinterpret_cast<volatile uint64_t *>(
+	        const_cast<UInt32 *>(cb->getRMMIOAddress()) +
+	        kVfGGTTPteBase / sizeof(UInt32)))
+		return nullptr;
+	return pteBase;
+}
+
+static bool vfCanCompleteGgttUpdate()
+{
+	OSSynchronizeIO();
+	if (!gVfCtbEverEnabled)
+		return true;
+	if (!gVfHardwareGuc || !gVfCtbEnabled || gVfCtbStopped ||
+	    gVfProtocolFault || !vfCanWaitForGuc(gVfHardwareGuc)) {
+		vfMarkProtocolFault("VF GGTT update has no synchronous TLB transport");
+		return false;
+	}
+	return true;
+}
+
+static bool vfCompleteGgttUpdate()
+{
+	// An aligned volatile 64-bit store replaces Apple's split high/low PTE
+	// writes. Drain the WC/MMIO aperture before publishing or invalidating it.
+	OSSynchronizeIO();
+	__asm__ volatile("sfence" ::: "memory");
+	OSSynchronizeIO();
+	if (!gVfCtbEverEnabled)
+		return true;
+	if (!gVfHardwareGuc || !vfInvalidateTLBSync(gVfHardwareGuc)) {
+		vfMarkProtocolFault("VF GGTT update did not complete TLB invalidation");
+		return false;
+	}
+	return true;
+}
+
 bool Gen11::IGHardwareGlobalPageTableMapRange(void *that,
                                               const NGIGAddressRange &range,
                                               uint64_t physical,
                                               uint64_t flags)
 {
-	// Native writes directly to BAR0 PTEs. Validate the complete destination and
-	// physical range before it can touch the aperture.
+	// Validate the complete operation before touching the direct PTE aperture.
+	// Do not pass Apple's physical-driver cache attributes through: on Gen12
+	// bits 4:2 are PF-owned VFID and bit 1 is local memory, neither of which a
+	// media-12 integrated direct VF may encode.
+	auto *pteBase = vfDirectPteBase(that);
 	if (gVfIdentity != VfIdentity::Virtual || !gVfGGTTReady ||
 	    gVfSubmissionStopped || gVfProtocolFault ||
 	    !that || that != gVfGlobalPageTable ||
 	    !NGGgtt::contains(gVfGGTTBase, gVfGGTTSize, range.start, range.length) ||
-	    !NGGgtt::nativePhysicalRange(physical, range.length)) {
+	    !NGGgtt::nativePhysicalRange(physical, range.length) || !pteBase ||
+	    !NGVfGgttPte::validAppleAttributes(flags) ||
+	    !vfCanCompleteGgttUpdate()) {
 		vfMarkProtocolFault("invalid VF GGTT map range or transport state");
 		return false;
 	}
-	return FunctionCast(IGHardwareGlobalPageTableMapRange,
-	                    callback->oIGHardwareGlobalPageTableMapRange)(that,
-	                                                                   range,
-	                                                                   physical,
-	                                                                   flags);
+	const uint64_t end = range.start + range.length;
+	for (uint64_t gpu = range.start; gpu < end; gpu += 0x1000ULL) {
+		pteBase[gpu >> 12] = NGVfGgttPte::encodeSystemMemory(physical);
+		physical += 0x1000ULL;
+	}
+	return vfCompleteGgttUpdate();
 }
 
 bool Gen11::IGHardwareGlobalPageTableMapRangeRotated(void *that,
@@ -2506,7 +2552,9 @@ bool Gen11::IGHardwareGlobalPageTableMapRangeRotated(void *that,
 
 	if (gVfIdentity != VfIdentity::Virtual || !gVfGGTTReady ||
 	    gVfSubmissionStopped || gVfProtocolFault || !that ||
-	    that != gVfGlobalPageTable || !rangeIterator || !physicalIterator) {
+	    that != gVfGlobalPageTable || !rangeIterator || !physicalIterator ||
+	    !NGVfGgttPte::validAppleAttributes(flags) ||
+	    !vfCanCompleteGgttUpdate()) {
 		vfMarkProtocolFault("invalid VF rotated GGTT mapping state");
 		return false;
 	}
@@ -2536,13 +2584,9 @@ bool Gen11::IGHardwareGlobalPageTableMapRangeRotated(void *that,
 		return false;
 	}
 
-	auto *pteBase = getMember<volatile uint64_t *>(that, 0x28);
-	auto *cb = NGreen::callback;
-	if (!pteBase || !cb || !cb->getRMMIOAddress() ||
-	    cb->getRMMIOLength() < kVfDirectBar0Bytes ||
-	    pteBase != reinterpret_cast<volatile uint64_t *>(
-	        const_cast<UInt32 *>(cb->getRMMIOAddress()) +
-	        kVfGGTTPteBase / sizeof(UInt32))) {
+	auto *pteBase = vfDirectPteBase(that);
+	const uint64_t dummyPage = getMember<uint64_t>(that, 0x38);
+	if (!pteBase || !NGGgtt::nativePhysicalRange(dummyPage, 0x1000)) {
 		vfMarkProtocolFault("VF rotated GGTT PTE aperture mismatch");
 		return false;
 	}
@@ -2576,7 +2620,6 @@ bool Gen11::IGHardwareGlobalPageTableMapRangeRotated(void *that,
 		return false;
 	}
 
-	const uint64_t pteFlags = flags & UINT64_C(0xFFFFFF8000000FFE);
 	uint64_t mappedPages = 0;
 	offset = 0;
 	while (offset < segments->length && validSegments) {
@@ -2600,7 +2643,7 @@ bool Gen11::IGHardwareGlobalPageTableMapRangeRotated(void *that,
 				break;
 			}
 			pteBase[destination >> 12] =
-				(physical & UINT64_C(0x7FFFFFF000)) | pteFlags | 1U;
+				NGVfGgttPte::encodeSystemMemory(physical);
 			physical += 0x1000ULL;
 			mappedPages++;
 		}
@@ -2609,15 +2652,13 @@ bool Gen11::IGHardwareGlobalPageTableMapRangeRotated(void *that,
 
 	const uint64_t totalPages = spec.rangeLength >> 12;
 	if (!validSegments || offset != segments->length || mappedPages != totalPages) {
-		const uint64_t dummyPte =
-			(getMember<uint64_t>(that, 0x38) & UINT64_C(0x7FFFFFF000)) | 1U;
+		const uint64_t dummyPte = NGVfGgttPte::encodeSystemMemory(dummyPage);
 		for (uint64_t source = 0; source < mappedPages; source++) {
 			uint64_t destination = 0;
 			if (NGGgttRotation::destination(spec, source, destination))
 				pteBase[destination >> 12] = dummyPte;
 		}
-		OSSynchronizeIO();
-		__asm__ volatile("sfence" ::: "memory");
+		(void)vfCompleteGgttUpdate();
 		segments->memory->release();
 		vfMarkProtocolFault("VF rotated physical segment changed during mapping");
 		return false;
@@ -2625,11 +2666,10 @@ bool Gen11::IGHardwareGlobalPageTableMapRangeRotated(void *that,
 
 	rotated->sourcePage = static_cast<uint32_t>(totalPages);
 	rotated->cursor = spec.rangeStart + spec.rangeLength;
-	OSSynchronizeIO();
-	__asm__ volatile("sfence" ::: "memory");
+	const bool completed = vfCompleteGgttUpdate();
 	segments->memory->release();
 
-	return true;
+	return completed;
 }
 
 void Gen11::IGHardwareGlobalPageTableUnmapRange(void *that,
@@ -2647,10 +2687,16 @@ void Gen11::IGHardwareGlobalPageTableUnmapRange(void *that,
 		gVfCtbEverEnabled != 0, gVfCtbEnabled != 0,
 		gVfCtbStopped != 0, gVfProtocolFault != 0,
 		gVfDmaQuiesced != 0);
+	auto *pteBase = vfDirectPteBase(that);
+	const uint64_t dummyPage = getMember<uint64_t>(that, 0x38);
 	PANIC_COND(invalidation == NGGgtt::TlbInvalidation::Unsafe,
 		"ngreen", "VF GGTT unmap started without a usable TLB transport");
-	FunctionCast(IGHardwareGlobalPageTableUnmapRange,
-	             callback->oIGHardwareGlobalPageTableUnmapRange)(that, range);
+	PANIC_COND(!pteBase || !NGGgtt::nativePhysicalRange(dummyPage, 0x1000),
+		"ngreen", "VF GGTT unmap has no valid direct PTE or dummy page");
+	const uint64_t dummyPte = NGVfGgttPte::encodeSystemMemory(dummyPage);
+	const uint64_t end = range.start + range.length;
+	for (uint64_t gpu = range.start; gpu < end; gpu += 0x1000ULL)
+		pteBase[gpu >> 12] = dummyPte;
 
 	// Apple releaseRange calls this virtual method, sets only a deferred flush
 	// bit and can then return to a caller that releases the DMA mapping. A
@@ -2671,14 +2717,23 @@ bool Gen11::IGHardwareGlobalPageTableMapRangeDummy(void *that,
 	if (gVfIdentity != VfIdentity::Virtual || !gVfGGTTReady ||
 	    gVfSubmissionStopped || gVfProtocolFault ||
 	    !that || that != gVfGlobalPageTable ||
-	    !NGGgtt::contains(gVfGGTTBase, gVfGGTTSize, range.start, range.length)) {
+	    !NGGgtt::contains(gVfGGTTBase, gVfGGTTSize, range.start, range.length) ||
+	    !NGVfGgttPte::validAppleAttributes(flags) ||
+	    !vfCanCompleteGgttUpdate()) {
 		vfMarkProtocolFault("invalid VF dummy GGTT range or transport state");
 		return false;
 	}
-	return FunctionCast(IGHardwareGlobalPageTableMapRangeDummy,
-	                    callback->oIGHardwareGlobalPageTableMapRangeDummy)(that,
-	                                                                        range,
-	                                                                        flags);
+	auto *pteBase = vfDirectPteBase(that);
+	const uint64_t dummyPage = getMember<uint64_t>(that, 0x38);
+	if (!pteBase || !NGGgtt::nativePhysicalRange(dummyPage, 0x1000)) {
+		vfMarkProtocolFault("invalid VF dummy GGTT PTE aperture or DMA address");
+		return false;
+	}
+	const uint64_t dummyPte = NGVfGgttPte::encodeSystemMemory(dummyPage);
+	const uint64_t end = range.start + range.length;
+	for (uint64_t gpu = range.start; gpu < end; gpu += 0x1000ULL)
+		pteBase[gpu >> 12] = dummyPte;
+	return vfCompleteGgttUpdate();
 }
 
 bool Gen11::IGAccelTaskIsKernelGPUTask(const void *that)
