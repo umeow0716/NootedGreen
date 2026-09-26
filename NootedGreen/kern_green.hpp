@@ -36,6 +36,8 @@ bool ngVfGGTTWrite32(unsigned long reg, UInt32 value);
 bool ngVfGGTTBinderActive();
 // Fail closed for VF or unclassified identity before physical display access.
 bool ngPhysicalGpuAccessAllowed();
+// PFs may use their complete BAR; VFs may use only i915's fixed MMIO allowlist.
+bool ngGpuRegisterAccessAllowed(unsigned long reg);
 
 /*
 class EXPORT PRODUCT_NAME : public IOService {
@@ -84,6 +86,7 @@ class NGreen {
 		if (!rmmio || !rmmioPtr || (reg & 3U)) return 0xFFFFFFFFU;
 		UInt32 vfValue = 0;
 		if (ngVfGGTTRead32(reg, vfValue)) return vfValue;
+		if (!ngGpuRegisterAccessAllowed(reg)) return 0xFFFFFFFFU;
 		const auto bytes = this->rmmio->getLength();
 		if (bytes >= sizeof(uint32_t) && reg <= bytes - sizeof(uint32_t)) {
 			return this->rmmioPtr[reg >> 2];
@@ -97,6 +100,7 @@ class NGreen {
 	void writeReg32(unsigned long reg, UInt32 val) {
 		if (!rmmio || !rmmioPtr || (reg & 3U)) return;
 		if (ngVfGGTTWrite32(reg, val)) return;
+		if (!ngGpuRegisterAccessAllowed(reg)) return;
 		const auto bytes = this->rmmio->getLength();
 		if (bytes < sizeof(uint32_t) || reg > bytes - sizeof(uint32_t)) return;
 		static int v93MmioLogCount = 0;

@@ -21,6 +21,15 @@ int main() {
     assert(useNativeTigerLakePath(0x9A49, true));
     assert(!useNativeTigerLakePath(0x9A49, false));
     assert(!useNativeTigerLakePath(0xA7A8, true));
+    assert(isVfMmioRegister(0x190010));
+    assert(isVfMmioRegister(0x190240));
+    assert(isVfMmioRegister(0x19024C));
+    assert(isVfMmioRegister(0x19031C));
+    assert(!isVfMmioRegister(0x190014));
+    assert(!isVfMmioRegister(0x190241));
+    assert(!isVfMmioRegister(0x190250));
+    assert(!isVfMmioRegister(0xCEE8));
+    assert(!isVfMmioRegister(0x800000));
     assert(!hasKnownDirectVfGgtt(0x1A7A8U));
     unsigned present = 0, absent = 0, tigerLake = 0, directGgtt = 0;
 #ifdef NGREEN_REFERENCE_PCIIDS
@@ -66,6 +75,10 @@ int main() {
         assert(actual == expected);
 #endif
     }
+    unsigned vfRegisters = 0;
+    for (uint32_t offset = 0; offset <= 0x1A0000; offset += 4)
+        vfRegisters += isVfMmioRegister(offset);
+    assert(vfRegisters == 40);
     assert(present == 70 && absent == 65 && tigerLake == 11 && directGgtt == 60);
     std::printf("PASS: 65536 PCI IDs (%u VF_CAP-capable, %u without SR-IOV)%s\n",
                 present, absent,

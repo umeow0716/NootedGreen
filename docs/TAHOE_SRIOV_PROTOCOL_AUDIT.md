@@ -1252,3 +1252,22 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
 - This reduces obsolete review/package surface but is not firmware semantic
   verification or a hardware test. Native macOS project parsing/build remains
   the CI gate; VM stays shut off.
+
+### Central VF MMIO admission boundary
+
+- Per-call-site guards cannot contain a forgotten physical-register diagnostic:
+  the common `readReg32`/`writeReg32` helpers previously allowed every aligned
+  BAR0 offset present in the VF's 16-MiB mapping. That recreated the same class
+  of risk the individual force-wake, engine and display guards are meant to
+  prevent.
+- Added the exact fixed Gen12 VF register ranges from the pinned i915
+  `intel_uncore.c:vf_accessible_regs`. Common helpers now serve GGTT through the
+  existing shadow transport first, then permit a direct VF access only inside
+  that allowlist. A denied VF access faults the transport instead of silently
+  continuing after a missing physical MMIO side effect. PF access is unchanged;
+  an unknown identity remains fail-closed.
+- Tests enumerate all aligned offsets through 0x1a0000 and require exactly the
+  40 allowed dwords, with explicit holes, unaligned values, physical TLB and
+  GGTT-offset rejection. This protects only calls using the common helpers;
+  native binary accesses still depend on routed/byte patches and remain under
+  review. VM remains shut off pending the complete static gate.

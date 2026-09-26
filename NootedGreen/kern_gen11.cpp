@@ -1165,6 +1165,20 @@ bool ngPhysicalGpuAccessAllowed()
 	return vfIdentifyDevice() == VfIdentity::Physical;
 }
 
+bool ngGpuRegisterAccessAllowed(unsigned long reg)
+{
+	const auto identity = vfIdentifyDevice();
+	if (identity == VfIdentity::Physical)
+		return true;
+	if (identity != VfIdentity::Virtual)
+		return false;
+	const bool allowed = reg <= 0xFFFFFFFFUL &&
+		NGGpuCapabilities::isVfMmioRegister(static_cast<uint32_t>(reg));
+	if (!allowed)
+		vfMarkProtocolFault("direct VF access outside the fixed MMIO allowlist");
+	return allowed;
+}
+
 bool ngVfGGTTRead32(unsigned long reg, UInt32 &value)
 {
 	if (!gVfBinderReady || !gVfGGTTShadow || reg < kVfGGTTPteBase ||
