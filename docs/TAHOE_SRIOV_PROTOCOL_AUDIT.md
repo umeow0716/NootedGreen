@@ -1034,3 +1034,24 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
 - Failed fresh queue resources/object now have a statically checked unwind;
   caller createUkContext still dereferences the factory's null result and
   leaks its reserved ID on other failures. No guest deployment or VM boot.
+
+### Scheduler prerequisites and discarded allocation failures
+
+- Native GuC init only allocates +0x40/+0xa08 locks when initInterrupts
+  succeeds, and does not validate both lock-allocation results before loading
+  scheduler storage. VF load now requires a non-null owner, both locks and
+  a sleepable context before calling initSchedControl. VF create also requires
+  confirmed Virtual identity and a pool lock before native allocContext locks it.
+- initSchedControl at 0x20a9c checks setupContextPool but ignores boolean
+  failures of setupLogBuffers (0x20af1) and setupAdditionalDataStructs
+  (0x20af9), then unconditionally sets true at 0x20afe. Added postconditions
+  for metadata, pool, log backing/descriptor/mapping and additional backing.
+  This detects partial allocation, not complete mapping validity or graceful
+  recovery. Faulted teardown may still deliberately fail-stop at GGTT unmap.
+- Full suite passes /tmp/ngreen-static.echAXc. aed6ef4 CI 36222441174 passed.
+- Further CTB init inspection found distinct unresolved OOM defects: failure
+  of its second lock frees the first without clearing the pointer; buffer
+  failure returns with BOTH locks held. CTB free also unconditionally releases
+  accelerator+0x10, making pre-native rejection on a fresh object unsafe.
+  These are newly identified blockers, not fixed by the workqueue-specific
+  unwind. No live allocation failure tests or VM boot were attempted.

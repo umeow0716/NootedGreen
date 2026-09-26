@@ -8694,8 +8694,8 @@ unsigned long Gen11::loadGuCBinary(void *that) {
 	// The PF already owns and runs GuC for an SR-IOV VF. Report firmware as
 	// available so Apple's GuC scheduler initializes its submission transport,
 	// but never try to replace the PF-owned image or WOPCM configuration.
-	// This hook is also installed on ICL, whose private layout is different.
-	// The VF scheduler-data path is only implemented for the TGL payload.
+	// ICL has a separate hook/original slot. The VF scheduler-data path is
+	// implemented only for the UUID-pinned TGL payload.
 	if (vfIdentifyDevice() != VfIdentity::Physical) {
 		if (gVfIdentity != VfIdentity::Virtual || !gVfGGTTReady || gVfProtocolFault)
 			return 0;
@@ -8703,13 +8703,26 @@ unsigned long Gen11::loadGuCBinary(void *that) {
 		// before touching WOPCM and uploading firmware.  Skipping it outright
 		// left contextCount at zero, so the very first createUkContext returned
 		// the 0x400 invalid-context sentinel and tore the GuC object down.
-		if (!that || !callback->orgInitSchedControl) {
-			vfMarkProtocolFault("missing native VF scheduler initializer");
+		if (!that || !callback->orgInitSchedControl || !vfCanUseSleepingLock() ||
+		    !getMember<void *>(that, 0x38) || !getMember<IOLock *>(that, 0x40) ||
+		    !getMember<IOLock *>(that, 0xA08)) {
+			vfMarkProtocolFault("missing VF scheduler initializer, owner or locks");
 			return 0;
 		}
 		using InitSchedControl = bool (*)(void *);
 		const bool initialized = reinterpret_cast<InitSchedControl>(
 			callback->orgInitSchedControl)(that);
+		// Native initSchedControl checks setupContextPool but discards failures
+		// from setupLogBuffers and setupAdditionalDataStructs before returning
+		// true. Do not admit partially constructed scheduler storage.
+		const bool storageReady = initialized && getMember<void *>(that, 0x50) &&
+			getMember<void *>(that, 0x68) && getMember<void *>(that, 0x60) &&
+			getMember<void *>(that, 0x70) && getMember<void *>(that, 0x78) &&
+			getMember<void *>(that, 0x9E8);
+		if (!storageReady) {
+			vfMarkProtocolFault("incomplete native VF scheduler storage allocation");
+			return 0;
+		}
 		SYSLOG("ngreen", "V224: VF GuC firmware is PF-owned; scheduler data init=%d",
 		       initialized);
 		return initialized && !gVfProtocolFault;
@@ -8781,11 +8794,12 @@ uint32_t Gen11::vfCreateUkContext(void *that, uint64_t owner, int priority) {
 	if (!that || priority < 0 || priority > 3)
 		return NGContextPool::invalidId;
 	if (gVfIdentity != VfIdentity::Physical &&
-	    (!gVfCtbEnabled || gVfCtbStopped || gVfProtocolFault)) {
+	    (gVfIdentity != VfIdentity::Virtual || !gVfCtbEnabled || gVfCtbStopped ||
+	     gVfProtocolFault || !getMember<IOLock *>(that, 0x40) || !vfCanUseSleepingLock())) {
 		// Apple's initWithOptions releases a failed CTB and continues toward
 		// legacy MMIO context creation. Its createUkContext failure sentinel
 		// is 0x400, which makes that initialization path return failure.
-		vfMarkProtocolFault("legacy context creation without acknowledged VF transport");
+		vfMarkProtocolFault("legacy context creation without safe VF transport or pool lock");
 		return 0x400U;
 	}
 	return FunctionCast(vfCreateUkContext, callback->oVfCreateUkContext)(
