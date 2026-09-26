@@ -1459,8 +1459,6 @@ private:
 	static bool forceWakeWaitAckFallback(uint32_t reqReg, uint32_t ackReg, uint32_t val, uint32_t mask);
 	
 	
-	static void releaseDoorbell();     // stub: GuC doorbell release
-	
 	void *framecont;  // cached framebuffer controller pointer
 	void *accelInstance {nullptr};  // V42: saved IntelAccelerator instance for child enumeration
 	
@@ -1470,17 +1468,11 @@ private:
 	
 	mach_vm_address_t _gSysctlVariables {};
 	
-	static int handleLinkIntegrityCheck();  // stub: returns 0 (link OK)
-	
 	static void  getGPUInfo(void *that);     // patches topology for TGL HW (TGL offsets); void per Ghidra
 	mach_vm_address_t ogetGPUInfo {};
 
 	static void  getGPUInfoICL(void *that);  // patches topology for ICL HW (ICL offsets); void per Ghidra
 	mach_vm_address_t ogetGPUInfoICL {};
-	
-	// PAVP = Protected Audio Video Path (DRM session management)
-	static IOReturn wrapPavpSessionCallback(void *intelAccelerator, int32_t sessionCommand, uint32_t sessionAppId, uint32_t *a4, bool flag);
-	mach_vm_address_t orgPavpSessionCallback {};
 	
 	// CSR = DMC firmware patch data pointers (stepping-specific)
 	const uint8_t *_CSR_PATCH_B0plus;  // B0+ stepping
@@ -1492,14 +1484,6 @@ private:
 	
 	static uint32_t wrapReadRegister32(void *controller, uint32_t address);
 	mach_vm_address_t owrapReadRegister32 {};
-	
-	// Sleep/wake transition hooks
-	static void prepareToExitWake(AppleIntel::AppleIntelFramebuffer *that);
-	mach_vm_address_t oprepareToExitWake {};
-	static void prepareToExitSleep(AppleIntel::AppleIntelFramebuffer *that);
-	mach_vm_address_t oprepareToExitSleep {};
-	static void prepareToEnterSleep(AppleIntel::AppleIntelFramebuffer *that);
-	mach_vm_address_t oprepareToEnterSleep {};
 	
 	static void hwInitializeCState(AppleIntel::AppleIntelBaseController *that);
 	mach_vm_address_t ohwInitializeCState {};
@@ -1795,9 +1779,6 @@ private:
 	mach_vm_address_t Blit2DExtendedCtxParams {};
 	mach_vm_address_t Blit3DExtendedCtxParams {};
 	
-	static uint8_t setupAdditionalDataStructs();
-	mach_vm_address_t osetupAdditionalDataStructs {};
-	
 	// Mangled C++ symbol addresses for Plane/Scaler constructors and metaclasses
 	mach_vm_address_t ZN15AppleIntelPlaneC1Ev {};          // AppleIntelPlane::AppleIntelPlane()
 	mach_vm_address_t ZN16AppleIntelScalerC1Ev {};         // AppleIntelScaler::AppleIntelScaler()
@@ -1876,9 +1857,6 @@ private:
 
 	mach_vm_address_t kIGHwCsDesc {};  // pointer to engine descriptor table
 
-	static void prepareToEnterWake(AppleIntel::AppleIntelFramebuffer *that);
-	mach_vm_address_t oprepareToEnterWake {};
-	
 public:
 
 	// Resolved from IOAcceleratorFamily2 by NGreen::processKext — needed by blit3d scratch init.

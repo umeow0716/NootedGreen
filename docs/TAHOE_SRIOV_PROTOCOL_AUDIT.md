@@ -1591,3 +1591,28 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
 - The complete syntax gate, zero-finding analyzer, strict Gen11 ABI warnings
   and all sanitizer protocol models pass in `/tmp/ngreen-static.TuPYo9`. No
   kext was installed and the VM remained off.
+
+### Native lifecycle and protected-media restoration
+
+- Removed the active `enableVDDForAux` route to an empty function and both
+  production/non-production `hwShutdown` routes to a constant-zero function.
+  Those replacements skipped native panel-power and shutdown work while
+  falsely reporting success. The corresponding dead declarations and stale
+  commented cold-function routes were removed as well.
+- Removed four framebuffer sleep/wake routes which called through and then
+  forced the unadmitted private field at `this+0x49e0` to `4` while publishing
+  synthetic LCD power properties. The physical framebuffer binary is not
+  protected by the accelerator UUID admission gate, so this layout write was
+  not justified on Tahoe. Identified VFs are rejected before framebuffer
+  routing; preserving the native PF lifecycle does not remove a VF feature.
+- Removed the ICL and TGL PAVP callback routes which returned success for
+  command `4` without performing the protected-media operation. Native PAVP
+  handling now remains authoritative; acceleration readiness must not be
+  inferred from a fabricated DRM result.
+- Repeated the unoptimised Mach-O relocation audit after cleanup. All 130
+  defined `Gen11` symbols except the expected cross-object roots `init()` and
+  `processKext()` have an internal call or function-pointer relocation in
+  `/tmp/ngreen-reach.fozKMQ`.
+- The complete syntax gate, zero-finding analyzer, strict Gen11 ABI warnings
+  and all sanitizer protocol models pass in `/tmp/ngreen-static.ki6tdp`. No
+  kext was installed and `macos-tahoe-sriov` remained off.

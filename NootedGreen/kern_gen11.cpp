@@ -2020,19 +2020,6 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			// ...existing routes...
 			//{"__ZN24AppleIntelBaseController17registerWithAICPMEPv", alwaysReturnSuccess, this->oalwaysReturnSuccess},
 			// ...existing routes...
-			/*{"__ZN19AppleIntelPowerWell21hwSetPowerWellStatePGEbj.cold.1",releaseDoorbell},
-			{"__ZN19AppleIntelPowerWell21hwSetPowerWellStatePGEbj.cold.2",releaseDoorbell},
-			{"__ZN19AppleIntelPowerWell21hwSetPowerWellStatePGEbj.cold.3",releaseDoorbell},
-			{"__ZN19AppleIntelPowerWell21hwSetPowerWellStatePGEbj.cold.4",releaseDoorbell},
-			{"__ZN19AppleIntelPowerWell21hwSetPowerWellStatePGEbj.cold.5",releaseDoorbell},
-			{"__ZN19AppleIntelPowerWell21hwSetPowerWellStatePGEbj.cold.6",releaseDoorbell},
-			{"__ZN19AppleIntelPowerWell21hwSetPowerWellStatePGEbj.cold.7",releaseDoorbell},
-			{"__ZN19AppleIntelPowerWell21hwSetPowerWellStatePGEbj.cold.8",releaseDoorbell},
-			{"__ZN19AppleIntelPowerWell21hwSetPowerWellStatePGEbj.cold.9",releaseDoorbell},
-			{"__ZN19AppleIntelPowerWell21hwSetPowerWellStatePGEbj.cold.10",releaseDoorbell},
-			{"__ZN19AppleIntelPowerWell21hwSetPowerWellStatePGEbj.cold.11",releaseDoorbell},
-			{"__ZN19AppleIntelPowerWell21hwSetPowerWellStatePGEbj.cold.12",releaseDoorbell},
-			{"__ZN19AppleIntelPowerWell22hwSetPowerWellStateAuxEbj.cold.1",releaseDoorbell},*/
 			// V204: keep the native constructor results, then install the controller's
 			// captured register accessor only when that accessor is non-null.
 			{"__ZN16AppleIntelScaler4initE10IGScalerID", AppleIntelScalerinit, this->oAppleIntelScalerinit},
@@ -2098,13 +2085,6 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			// (display driver loops in forceWake power-well cycling, never completes init)
 			{"__ZN31AppleIntelRegisterAccessManager15WriteRegister32Emj",raWriteRegister32, this->oraWriteRegister32},
 			{"__ZN31AppleIntelRegisterAccessManager15WriteRegister32EPVvmj",raWriteRegister32b},
-			// V410: hook sleep/wake transition methods to intercept panel state tracking.
-			// Apple's implementations are known to corrupt WS state on RPL/ADL on resume.
-			{"__ZN21AppleIntelFramebuffer17prepareToExitWakeEv",   prepareToExitWake,   this->oprepareToExitWake},
-			{"__ZN21AppleIntelFramebuffer18prepareToEnterWakeEv",  prepareToEnterWake,  this->oprepareToEnterWake},
-			{"__ZN21AppleIntelFramebuffer18prepareToExitSleepEv",  prepareToExitSleep,  this->oprepareToExitSleep},
-			{"__ZN21AppleIntelFramebuffer19prepareToEnterSleepEv", prepareToEnterSleep, this->oprepareToEnterSleep},
-			{"__ZN24AppleIntelBaseController15enableVDDForAuxEP14AppleIntelPort", releaseDoorbell},
 		};
 		PANIC_COND(!RouteRequestPlus::routeAll(patcher, index, requests, address, size), "ngreen","Failed to route dp symbols");
 		
@@ -2113,7 +2093,6 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				{"__ZN21AppleIntelFramebuffer4initEP31AppleIntelFramebufferControllerj",AppleIntelFramebufferinit, this->oAppleIntelFramebufferinit},
 				{"__ZN31AppleIntelFramebufferController23initPlatformWorkaroundsEv", initPlatformWorkarounds, this->oinitPlatformWorkarounds},
 				{"__ZN31AppleIntelFramebufferController16getOSInformationEv", getOSInformation, this->ogetOSInformation},
-				{"__ZN31AppleIntelFramebufferController10hwShutdownEP21AppleIntelFramebuffer",handleLinkIntegrityCheck},
 				{"__ZN31AppleIntelFramebufferController18hwInitializeCStateEv",hwInitializeCState, this->ohwInitializeCState},
 				{"__ZN31AppleIntelFramebufferController20hwConfigureCustomAUXEb",hwConfigureCustomAUX, this->ohwConfigureCustomAUX},
 				{"__ZN19AppleIntelPowerWell4initEP31AppleIntelFramebufferController",AppleIntelPowerWellinit, this->oAppleIntelPowerWellinit},
@@ -2132,7 +2111,6 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				{"__ZN21AppleIntelFramebuffer4initEP24AppleIntelBaseControllerj",AppleIntelFramebufferinit, this->oAppleIntelFramebufferinit},
 				{"__ZN24AppleIntelBaseController23initPlatformWorkaroundsEv", initPlatformWorkarounds, this->oinitPlatformWorkarounds},
 				{"__ZN24AppleIntelBaseController16getOSInformationEv", getOSInformation, this->ogetOSInformation},
-				{"__ZN24AppleIntelBaseController10hwShutdownEP21AppleIntelFramebuffer",handleLinkIntegrityCheck},
 				{"__ZN24AppleIntelBaseController18hwInitializeCStateEv",hwInitializeCState, this->ohwInitializeCState},
 				{"__ZN24AppleIntelBaseController20hwConfigureCustomAUXEb",hwConfigureCustomAUX, this->ohwConfigureCustomAUX},
 				{"__ZN19AppleIntelPowerWell4initEP24AppleIntelBaseController",AppleIntelPowerWellinit, this->oAppleIntelPowerWellinit},
@@ -2454,17 +2432,6 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		}
 
 		if (!wegCoexist) {
-			RouteRequestPlus requests[] = {
-				// PAVP/DRM: intercept session command callback (ICL hardware path, shared hook with TGL)
-				{"__ZN16IntelAccelerator19PAVPCommandCallbackE22PAVPSessionCommandID_tjPjb", wrapPavpSessionCallback, this->orgPavpSessionCallback},
-				// resetGraphicsEngine NOT routed: NBlue wrapper applies TGL GT workarounds which
-				// target TGL MMIO offsets. Hardware is RPL-P (adlp/raptorlake) — using TGL workarounds
-				// on RPL MMIO could corrupt the command streamer. Let the ICL original run unmodified.
-				//last	 {"__ZN11IGScheduler15canLoadFirmwareEP16IntelAccelerator", canLoadFirmware, this->ocanLoadFirmware},
-			};
-
-			PANIC_COND(!RouteRequestPlus::routeAll(patcher, index, requests, address, size), "ngreen","Failed to route dp symbols");
-
 			RouteRequestPlus gpuInfoRoute[] = {
 				// getGPUInfo: override topology at ICL object offsets (different from TGL offsets)
 				{"__ZN16IntelAccelerator10getGPUInfoEv", getGPUInfoICL, this->ogetGPUInfoICL},
@@ -2695,8 +2662,6 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			{"__ZN25IGHardwareGlobalPageTable13mapRangeDummyERK14IGAddressRangey",
 			 IGHardwareGlobalPageTableMapRangeDummy,
 			 this->oIGHardwareGlobalPageTableMapRangeDummy},
-			
-			 {"__ZN16IntelAccelerator20_PAVPCommandCallbackEP8OSObject22PAVPSessionCommandID_tjPj", wrapPavpSessionCallback, this->orgPavpSessionCallback},
 			
 			// V163: Hook startGraphicsEngine to clear PERCTX_PREEMPT_CTRL (FF_SLICE_CS_CHICKEN1 bit 14)
 			// immediately after the TGL kext enables it. The TGL kext writes 0x40004000 to reg 0x20E0
@@ -5488,11 +5453,6 @@ uint64_t Gen11::getOSInformation(AppleIntel::AppleIntelBaseController *that)
 	return FunctionCast(getOSInformation, callback->ogetOSInformation)(that);
 }
 
-int Gen11::handleLinkIntegrityCheck()
-{
-	return 0;
-};
-
 void Gen11::hwInitializeCState(AppleIntel::AppleIntelBaseController *that)
 {
 	if (!that || !ngPhysicalGpuAccessAllowed()) {
@@ -5879,91 +5839,6 @@ void Gen11::AppleIntelPowerWellinit(AppleIntel::AppleIntelPowerWell *that, Apple
 	SYSLOG("ngreen", "PowerWell::init AUX — [0]=%u [1]=%u [2]=%u [3]=%u [4]=%u [5]=%u [6]=%u [7]=%u [8]=%u",
 		   that->fAUX[0], that->fAUX[1], that->fAUX[2], that->fAUX[3], that->fAUX[4],
 		   that->fAUX[5], that->fAUX[6], that->fAUX[7], that->fAUX[8]);
-}
-
-// ─── Sleep/wake lifecycle hooks ──────────────────────────────────────────────
-// All four Apple implementations set this+0x49e0=4 as their final operation.
-// If Apple's code exits early (null Camellia ptr, lock contention, etc.) that
-// write never happens and the FB state machine is stuck.  We callthrough and
-// then enforce state=4 regardless, plus track panel power for IOKit properties.
-//
-// Lifecycle order:
-//   Sleep: prepareToEnterSleep → prepareToExitWake
-//   Wake:  prepareToExitSleep  → prepareToEnterWake
-
-static void logFBCtrlState(const char *tag, AppleIntel::AppleIntelFramebuffer *that)
-{
-	auto *ctrl = that->fController;
-	uint32_t fbState = getMember<uint32_t>(that, 0x49e0);
-	if (ctrl) {
-		SYSLOG("ngreen", "%s fb=%p fbState=%u flags_ig=0x%x fInfoFlags2=0x%x fGPUIsAwake=%u pipe=%u",
-			   tag, that, fbState,
-			   ctrl->flags_ig, ctrl->fInfoFlags2, getMember<uint32_t>(ctrl, 0x1A00),
-			   that->fPipeIndex);
-	} else {
-		SYSLOG("ngreen", "%s fb=%p fbState=%u ctrl=NULL pipe=%u", tag, that, fbState, that->fPipeIndex);
-	}
-}
-
-// Wake stage 2: confirm panel is on, log state.
-// Apple does: panel-power property, some vtable dispatch, then state=4.
-void Gen11::prepareToEnterWake(AppleIntel::AppleIntelFramebuffer *that)
-{
-	logFBCtrlState("prepareToEnterWake>>", that);
-	reinterpret_cast<IORegistryEntry *>(that)->setProperty("AAPL,LCD-PowerState-ON", true);
-	FunctionCast(prepareToEnterWake, callback->oprepareToEnterWake)(that);
-	uint32_t state_after = getMember<uint32_t>(that, 0x49e0);
-	if (state_after != 4) {
-		SYSLOG("ngreen", "prepareToEnterWake: state=0x%x (expected 4), forcing", state_after);
-		getMember<uint32_t>(that, 0x49e0) = 4;
-	}
-	logFBCtrlState("prepareToEnterWake<<", that);
-}
-
-// Sleep stage 2: NVRAM save, Camellia backlight off, StopTransactions,
-// disableDisplay, hwSetPanelPower(0), two handleEvent calls, then state=4.
-void Gen11::prepareToExitWake(AppleIntel::AppleIntelFramebuffer *that)
-{
-	logFBCtrlState("prepareToExitWake>>", that);
-	reinterpret_cast<IORegistryEntry *>(that)->setProperty("AAPL,LCD-PowerState-ON", false);
-	FunctionCast(prepareToExitWake, callback->oprepareToExitWake)(that);
-	uint32_t state_after = getMember<uint32_t>(that, 0x49e0);
-	if (state_after != 4) {
-		SYSLOG("ngreen", "prepareToExitWake: state=0x%x (expected 4), forcing", state_after);
-		getMember<uint32_t>(that, 0x49e0) = 4;
-	}
-	logFBCtrlState("prepareToExitWake<<", that);
-}
-
-// Sleep stage 1: fSleeping=1, cancel timers, clientNotify(2,0), state=4,
-// handleEvent(sleep), hwSaveState, hwDisableInterrupts, fGPUIsAwake=0.
-void Gen11::prepareToEnterSleep(AppleIntel::AppleIntelFramebuffer *that)
-{
-	logFBCtrlState("prepareToEnterSleep>>", that);
-	reinterpret_cast<IORegistryEntry *>(that)->setProperty("AAPL,LCD-PowerState-ON", false);
-	FunctionCast(prepareToEnterSleep, callback->oprepareToEnterSleep)(that);
-	uint32_t state_after = getMember<uint32_t>(that, 0x49e0);
-	if (state_after != 4) {
-		SYSLOG("ngreen", "prepareToEnterSleep: state=0x%x (expected 4), forcing", state_after);
-		getMember<uint32_t>(that, 0x49e0) = 4;
-	}
-	logFBCtrlState("prepareToEnterSleep<<", that);
-}
-
-// Wake stage 1: restorePowerWellsState, hwEnableInterrupts, hwInitializeCState,
-// hwRestoreState, probePortState per port, gamma/reg-cache restore,
-// clientNotify(2,1), handleEvent(wake), fGPUIsAwake=1, setDPPowerState, state=4.
-void Gen11::prepareToExitSleep(AppleIntel::AppleIntelFramebuffer *that)
-{
-	logFBCtrlState("prepareToExitSleep>>", that);
-	FunctionCast(prepareToExitSleep, callback->oprepareToExitSleep)(that);
-	uint32_t state_after = getMember<uint32_t>(that, 0x49e0);
-	if (state_after != 4) {
-		SYSLOG("ngreen", "prepareToExitSleep: state=0x%x (expected 4), forcing", state_after);
-		getMember<uint32_t>(that, 0x49e0) = 4;
-	}
-	reinterpret_cast<IORegistryEntry *>(that)->setProperty("AAPL,LCD-PowerState-ON", true);
-	logFBCtrlState("prepareToExitSleep<<", that);
 }
 
 bool Gen11::AppleIntelBaseControllerstart(AppleIntel::AppleIntelBaseController *that, IOService *param_1)
@@ -7269,19 +7144,6 @@ void Gen11::acceleratorStop(void *that, void *provider)
 		SYSLOG("ngreen", "V242: VF accelerator stop requested; deferring quiescence until post-stamp engine stop");
 	}
 	FunctionCast(acceleratorStop, callback->oAcceleratorStop)(that, provider);
-}
-
-IOReturn Gen11::wrapPavpSessionCallback( void *intelAccelerator, int32_t sessionCommand, uint32_t sessionAppId, uint32_t *a4, bool flag) {
-
-	//void* pPavpContext = *getMember<void**>(intelAccelerator, 0x1278);
-	//void* pStampTrackingStruct = *(void**)getMember<char*>(pPavpContext, 0xb8);
-	
-	if (sessionCommand == 4) {
-		//return kIOReturnTimeout;
-		return kIOReturnSuccess;
-	}
-
-	return FunctionCast(wrapPavpSessionCallback, callback->orgPavpSessionCallback)(intelAccelerator, sessionCommand, sessionAppId, a4, flag);
 }
 
 void Gen11::getGPUInfoICL(void *that)
@@ -12813,9 +12675,6 @@ bool Gen11::forceWakeWaitAckFallback(uint32_t reqReg, uint32_t ackReg, uint32_t 
 	
 	return ack;
 }
-
-void Gen11::releaseDoorbell()
-{}
 
 void Gen11::injectAcceleratorPersonality(bool useTglNames)
 {
