@@ -1717,3 +1717,25 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   mutation, GGTT page-zero remap or recurring thread-call allocation in the
   Gen11 implementation. `/tmp/ngreen-static.aikyPk` passes all checks. This
   clears that static blocker only; controlled Tahoe VF runtime remains pending.
+
+### Tahoe submit backpressure contract
+
+- Re-disassembled the UUID-pinned Tahoe payload. `IGScheduler4::push` directly
+  returns `IGHardwareGuC::submitWorkItem`; its caller
+  `IGHardwareRingBuffer::submitToRing` branches to a cold panic when that value
+  is false. There is no equivalent of i915's stalled-request/tasklet retry.
+- The VF CTB producer previously retried only eight exponentially delayed
+  polls (about 12.75 ms total). Ordinary H2G ring pressure or outstanding G2H
+  credits could therefore be misreported as a fatal submission failure even
+  though the transport remained healthy.
+- Producer admission now sleeps for at most one second while GuC consumes H2G
+  and the independent G2H path returns credits. It never sleeps from an IRQ or
+  non-preemptible context. Invalid descriptors still fail immediately; a real
+  timeout records a protocol fault before returning failure, so the changed
+  LRCA tail cannot be ambiguously retried after a fatal transport boundary.
+- The circular-ring one-empty-slot rule is now a pure checked helper and is
+  exhaustively compared with an independent cursor-walk oracle. This proves
+  5,189,283 producer states in addition to the existing ring tests. The full
+  syntax/analyzer/strict-ABI/sanitizer gate passes in
+  `/tmp/ngreen-static.T5Wvol`. This proves CPU arithmetic and the bounded-wait
+  decision only, not GuC forward progress.

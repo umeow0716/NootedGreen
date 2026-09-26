@@ -83,6 +83,31 @@ int main() {
     assert(!validDescriptor(16388, 16384, 0, 0, 0));
     std::printf("PASS: %lu CTB boundary cases plus malformed descriptor cases\n", checks);
 
+    unsigned long producerChecks = 0;
+    for (uint32_t size = 0; size <= 65; ++size) {
+        for (uint32_t head = 0; head <= size + 1; ++head) {
+            for (uint32_t tail = 0; tail <= size + 1; ++tail) {
+                for (uint32_t needed = 0; needed <= size + 1; ++needed) {
+                    bool expected = false;
+                    if (size >= 2 && head < size && tail < size && needed < size) {
+                        uint32_t used = 0;
+                        for (uint32_t cursor = head; cursor != tail;
+                             cursor = cursor + 1 == size ? 0 : cursor + 1)
+                            ++used;
+                        expected = needed < size - used;
+                    }
+                    assert(producerHasSpace(size, head, tail, needed) == expected);
+                    ++producerChecks;
+                }
+            }
+        }
+    }
+    assert(producerHasSpace(1024, 0, 0, 1023));
+    assert(!producerHasSpace(1024, 0, 0, 1024));
+    assert(!producerHasSpace(1024, 1, 0, 1));
+    std::printf("PASS: %lu CTB producer-space states with one-slot invariant\n",
+                producerChecks);
+
     unsigned long copies = 0;
     constexpr uint32_t guard = 0xDEADBEEFU;
     for (uint32_t size = 2; size <= 33; ++size) {

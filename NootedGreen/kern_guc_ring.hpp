@@ -28,6 +28,20 @@ inline bool validDescriptor(uint32_t bytes, uint32_t expectedBytes,
            head < expectedBytes / 4 && tail < expectedBytes / 4;
 }
 
+// A circular producer must always leave one dword unused so head == tail
+// continues to mean empty rather than full. Descriptor validation remains a
+// separate caller obligation because the expected allocation size is not part
+// of this pure arithmetic check.
+inline bool producerHasSpace(uint32_t ringDwords, uint32_t head,
+                             uint32_t tail, uint32_t neededDwords) {
+    if (ringDwords < 2 || head >= ringDwords || tail >= ringDwords ||
+        neededDwords >= ringDwords)
+        return false;
+    const uint32_t used = tail >= head ? tail - head :
+                                           ringDwords - head + tail;
+    return neededDwords < ringDwords - used;
+}
+
 inline bool validFrame(uint32_t frame, uint32_t ringDwords, uint32_t head,
                       uint32_t tail, uint32_t outputDwords) {
     if (ringDwords < 2 || head >= ringDwords || tail >= ringDwords ||

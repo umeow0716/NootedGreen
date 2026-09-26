@@ -300,6 +300,7 @@ uint32_t gVfContextCapacity = 0;
 uint32_t gVfContextLifecycleLogs = 0;
 
 constexpr uint32_t kVfContextEventTimeoutMs = 1000;
+constexpr uint32_t kVfCtbBackpressureTimeoutMs = 1000;
 constexpr size_t kVfContextDescriptorOffset = 0x89;
 constexpr size_t kVfContextImageBufferOffset = 0x98;
 // Tahoe IGMappedBuffer::initWithOptions stores the requested byte length at
@@ -503,7 +504,10 @@ bool vfSendCtbFastAction(void *guc, const uint32_t *request,
 	transportFence = 0;
 	const uint32_t responseCredits = action == kGucActionScheduleContextModeSet ? 4U :
 		(action == kGucActionDeregisterContext || action == kGucActionTlbInvalidation ? 3U : 0U);
-	for (uint32_t retry = 0; retry < 8; retry++) {
+	uint64_t deadline = 0;
+	clock_interval_to_deadline(kVfCtbBackpressureTimeoutMs,
+	                           kMillisecondScale, &deadline);
+	for (;;) {
 		if (!alreadyHeldQueue)
 			IOLockLock(lock);
 		OSSynchronizeIO();
@@ -523,9 +527,9 @@ bool vfSendCtbFastAction(void *guc, const uint32_t *request,
 		const bool valid = NGGuCRing::validDescriptor(descriptor[3], PAGE_SIZE,
 		                                               head, tail, status) &&
 		                   size > needed;
-		const uint32_t used = valid ?
-			(tail >= head ? tail - head : size - head + tail) : size;
-		if (valid && needed < size - used && vfReserveG2HCredits(responseCredits)) {
+		const bool ringSpace = valid &&
+			NGGuCRing::producerHasSpace(size, head, tail, needed);
+		if (ringSpace && vfReserveG2HCredits(responseCredits)) {
 			const uint32_t fence = static_cast<uint32_t>(OSIncrementAtomic(
 				reinterpret_cast<volatile SInt32 *>(
 					reinterpret_cast<uint8_t *>(ctb) + 0x3C))) & 0xFFFFU;
@@ -556,9 +560,22 @@ bool vfSendCtbFastAction(void *guc, const uint32_t *request,
 			vfMarkProtocolFault("invalid H2G CTB descriptor");
 			return false;
 		}
-		IODelay(50U << retry);
+		uint64_t now = 0;
+		clock_get_uptime(&now);
+		if (now >= deadline) {
+			SYSLOG("ngreen", "V244: H2G backpressure timeout size=%u head=%u tail=%u needed=%u ringSpace=%d credits=%u/%u",
+			       size, head, tail, needed, ringSpace,
+			       static_cast<unsigned int>(gVfG2HCreditsUsed),
+			       kVfG2HCreditCapacity);
+			vfMarkProtocolFault("H2G CTB backpressure timeout");
+			return false;
+		}
+		// Tahoe's scheduler treats false as a fatal submit result. Unlike Linux
+		// it has no tasklet retry path, so wait here while GuC consumes H2G and
+		// the independent G2H callback returns reply credits. The entry guard
+		// already proved this context may sleep.
+		IOSleep(1);
 	}
-	return false;
 }
 
 bool vfSetContextPolicy(void *guc, uint16_t gucId, uint8_t engineClass,
