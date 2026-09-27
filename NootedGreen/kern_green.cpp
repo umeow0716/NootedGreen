@@ -20,103 +20,6 @@ NGreen *NGreen::callback = nullptr;
 
 static Gen11 gen11;
 
-static uint8_t builtin2[] = {0x00, 0x00, 0x49, 0x9A};
-static uint8_t builtin3[] = {0x49, 0x9A, 0x00, 0x00};
-
-static bool isLegacyIGPUPropSeedingEnabled() {
-	int enabled = 0;
-	if (PE_parse_boot_argn("ngreenforceprops", &enabled, sizeof(enabled))) {
-		return enabled != 0;
-	}
-
-	return checkKernelArgument("-ngreenforceprops");
-}
-
-static bool seedIGPUPropertiesOnEntry(IORegistryEntry *entry, bool &failed) {
-	failed = false;
-	if (!entry) {
-		failed = true;
-		return false;
-	}
-
-	bool changed = false;
-	auto record = [&](bool result) {
-		changed |= result;
-		failed |= !result;
-	};
-
-	// Default fallback platform-id for RPL/TGL spoof bring-up. Only inject when missing.
-	if (!entry->getProperty("AAPL,ig-platform-id")) {
-		record(entry->setProperty("AAPL,ig-platform-id", builtin2, arrsize(builtin2)));
-	}
-
-	if (!entry->getProperty("device-id")) {
-		record(entry->setProperty("device-id", builtin3, arrsize(builtin3)));
-	}
-
-	if (!entry->getProperty("built-in")) {
-		static uint8_t builtin[] = {0x00};
-		record(entry->setProperty("built-in", builtin, arrsize(builtin)));
-	}
-
-	if (!entry->getProperty("AAPL,slot-name")) {
-		record(entry->setProperty("AAPL,slot-name", const_cast<char *>("built-in"), 9));
-	}
-
-	if (!entry->getProperty("hda-gfx")) {
-		record(entry->setProperty("hda-gfx", const_cast<char *>("onboard-1"), 10));
-	}
-
-	if (!entry->getProperty("model")) {
-		record(entry->setProperty("model", const_cast<char *>("Intel Iris Xe Graphics"), 23));
-	}
-
-	if (!entry->getProperty("framebuffer-unifiedmem")) {
-		static uint8_t unifiedMem[] = {0x00, 0x00, 0x00, 0x60}; // 1536 MB
-		record(entry->setProperty("framebuffer-unifiedmem", unifiedMem, arrsize(unifiedMem)));
-	}
-
-	if (!entry->getProperty("saved-config")) {
-		static uint8_t sconf[0xEA] = {};
-		record(entry->setProperty("saved-config", sconf, sizeof(sconf)));
-	}
-
-	return changed;
-}
-
-static void seedIGPUPropertiesEarly() {
-	// Try common ACPI namespace variants used by laptop firmware before DeviceInfo scans.
-	const char *paths[] = {
-		"IOService:/AppleACPIPlatformExpert/PC00@0/IGPU@2",
-		"IOService:/AppleACPIPlatformExpert/PC00@0/GFX0@2",
-		"IOService:/AppleACPIPlatformExpert/PCI0@0/IGPU@2",
-		"IOService:/AppleACPIPlatformExpert/PCI0@0/GFX0@2"
-	};
-
-	bool found = false;
-	bool changed = false;
-	bool failed = false;
-	for (auto path : paths) {
-		auto *entry = IORegistryEntry::fromPath(path, gIOServicePlane);
-		if (!entry) {
-			continue;
-		}
-		found = true;
-		bool entryFailed = false;
-		if (seedIGPUPropertiesOnEntry(entry, entryFailed)) {
-			changed = true;
-		}
-		failed |= entryFailed;
-		entry->release();
-	}
-
-	if (found) {
-		SYSLOG("ngreen", "Early IGPU pre-seed via IOService path: changed=%d failed=%d", changed, failed);
-	} else {
-		SYSLOG("ngreen", "Early IGPU pre-seed skipped: no IGPU path resolved before DeviceInfo");
-	}
-}
-
 void NGreen::init() {
     callback = this;
 	
@@ -138,13 +41,6 @@ void NGreen::init() {
 void NGreen::processPatcher(KernelPatcher &patcher) {
 	(void)patcher;
 
-	// Compatibility-first default: do not force-inject IGPU properties unless explicitly requested.
-	if (isLegacyIGPUPropSeedingEnabled()) {
-		seedIGPUPropertiesEarly();
-	} else {
-		SYSLOG("ngreen", "compat mode: legacy IGPU property seeding disabled (use -ngreenforceprops to enable)");
-	}
-
 	auto *devInfo = DeviceInfo::create();
 	PANIC_COND(!devInfo, "ngreen", "Failed to create DeviceInfo");
 	devInfo->processSwitchOff();
@@ -160,12 +56,6 @@ void NGreen::processPatcher(KernelPatcher &patcher) {
 
 	WIOKit::renameDevice(this->iGPU, "IGPU");
 	WIOKit::awaitPublishing(this->iGPU);
-	if (isLegacyIGPUPropSeedingEnabled()) {
-		bool failed = false;
-		const bool changed = seedIGPUPropertiesOnEntry(this->iGPU, failed);
-		SYSLOG("ngreen", "IGPU compatibility properties: changed=%d failed=%d", changed, failed);
-	}
-
 	this->deviceId = WIOKit::readPCIConfigValue(this->iGPU, WIOKit::kIOPCIConfigDeviceID);
 
 	// CPUID is diagnostic only. A hypervisor may expose any CPU model; it

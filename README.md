@@ -160,7 +160,6 @@ FB+GFX:
 | `-ngreentglgfx` | Load only the TGL HW kext, no FB. Diagnostic — hardware will not display anything without an FB driver. |
 | `-disablegfxfirmware` | Physical-path diagnostic only. A VF uses the PF-owned GuC image and must not upload firmware. |
 | `ngreenSched=N` | Select GPU scheduler type: `3` = GuC firmware, `4` = IGScheduler4, `5` = host preemptive (default: `3` on real TGL, `5` on RPL/ADL) |
-| `-ngreenforceprops` / `ngreenforceprops=1` | Enable legacy forced IGPU property injection (`AAPL,ig-platform-id`, `model`, `saved-config`, etc.). Disabled by default in compatibility-first mode. |
 | `IGLogLevel=8` | Maximum Intel GPU driver logging |
 | `-liludbg` | Enable Lilu debug logging |
 | `liludump=N` | Dump Lilu logs after `N` seconds (example: 125 or 200). |
@@ -231,7 +230,7 @@ sudo kextcache -i /
 
 Recent changes switch NootedGreen to safer defaults for cross-machine portability:
 
-- Legacy hardcoded IGPU property seeding is now **opt-in**, not default.
+- GPU identity and compatibility properties must come from firmware/OpenCore; the driver does not seed guessed platform data.
 - Recurring watchdog/monitor experiments are not part of the maintained driver.
 - The injected accelerator personality preserves the bundled TGL display-pipe and transaction capabilities.
 - Coexistence paths avoid forcing DVMT/framebuffer processing when the DVMT module is not enabled.

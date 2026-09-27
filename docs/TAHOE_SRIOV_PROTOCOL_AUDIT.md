@@ -2541,3 +2541,18 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   accelerator personality is published, so a half-installed payload is never
   admitted to matching; this is the strongest boundary exposed by this Lilu
   API without maintaining a private patcher fork.
+
+### Remove guessed platform-property seeding
+
+- The `ngreenforceprops` compatibility path hardcoded a 0x9a49 platform/device
+  identity, 1.5-GiB unified-memory size, an all-zero 0xEA `saved-config`, laptop
+  ACPI paths and display/audio labels for every opted-in Gen11+ machine. None
+  of those values came from the selected PF/VF, GuC relay or Apple payload.
+- The target OpenCore profile already publishes its explicit compatibility
+  identity before the driver loads. `kern_green` captures the original PCI ID,
+  validates PF/VF capability and restricts config-read spoofing to the selected
+  iGPU; the guessed fallback was therefore redundant on the target and unsafe
+  as a general Gen11+ feature.
+- The parser, two-pass registry writer, boot argument and README option were
+  removed. Missing required platform properties must now fail matching or be
+  fixed in firmware/OpenCore, rather than being silently fabricated in-kernel.
