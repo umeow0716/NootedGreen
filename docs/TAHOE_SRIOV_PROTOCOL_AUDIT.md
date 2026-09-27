@@ -2684,3 +2684,19 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   panic during routing rather than reject the physical framebuffer cleanly.
   UUID validation now precedes containment, and each payload routes its own
   exact probe plus the common framebuffer-controller start entry.
+
+### Make failed context registration compensation observable
+
+- A direct VF context can reach `REGISTER_CONTEXT` and then fail while
+  publishing `UPDATE_CONTEXT_POLICIES`. The attach wrapper returned `false`
+  to Apple and attempted a compensating `DEREGISTER_CONTEXT`, but discarded
+  both the enqueue result and the wait for `DEREGISTER_DONE`. Its retained
+  backing prevented a use-after-free, yet the driver could continue with GuC
+  ownership unresolved and no explicit transport quarantine.
+- Failed attach is now considered locally retired only when registration never
+  reached GuC, or when the compensating deregistration was both sent and
+  observed at the tombstone state. Any other result marks a protocol fault and
+  deliberately keeps the context image pinned. All eight combinations of
+  register/send/completion are covered by the freestanding shutdown model.
+- The complete syntax, analyzer, strict-ABI and sanitizer/protocol suite passes
+  in `/tmp/ngreen-static.4YeXtu`; the VM remained off.

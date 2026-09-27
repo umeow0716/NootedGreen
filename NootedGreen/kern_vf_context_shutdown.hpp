@@ -47,6 +47,16 @@ inline Action action(VfGucContextState state) {
 	return Action::Wait;
 }
 
+// A failed attach is locally recoverable only when no REGISTER_CONTEXT reached
+// GuC, or when the compensating DEREGISTER_CONTEXT was both published and
+// observed complete. Returning false to Apple's caller is not enough after
+// firmware ownership began: the caller can destroy the context image next.
+inline bool registrationCleanupComplete(bool registered,
+	                                     bool deregisterSent,
+	                                     bool tombstoneReached) {
+	return !registered || (deregisterSent && tombstoneReached);
+}
+
 } // namespace NGVfContextShutdown
 
 namespace NGVfContextEvent {

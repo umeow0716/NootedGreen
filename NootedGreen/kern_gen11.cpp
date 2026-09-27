@@ -3896,13 +3896,20 @@ bool Gen11::vfAttachContextDesc(void *that, const uint32_t *descriptor) {
 	if (!registered || !policySet) {
 		SYSLOG("ngreen", "V231: context register/policy enqueue failed id=%u LRCA=0x%08x class=%u instance=%u fence=%u",
 		       gucId, descriptorLo, engineClass, engineInstance, transportFence);
+		bool deregisterSent = false;
+		bool tombstoneReached = false;
 		if (registered) {
 			const uint32_t deregister[] = {
 				kGucActionDeregisterContext, gucId,
 			};
-			(void)vfSendCtbFastAction(that, deregister, arrsize(deregister), transportFence);
-			(void)vfWaitForContextState(that, gucId, kVfGucContextTombstone);
+			deregisterSent = vfSendCtbFastAction(
+				that, deregister, arrsize(deregister), transportFence);
+			tombstoneReached = deregisterSent &&
+				vfWaitForContextState(that, gucId, kVfGucContextTombstone);
 		}
+		if (!NGVfContextShutdown::registrationCleanupComplete(
+		        registered, deregisterSent, tombstoneReached))
+			vfMarkProtocolFault("failed to retire partially registered GuC context");
 		interruptState = IOSimpleLockLockDisableInterrupt(gVfContextLock);
 		if (gVfContexts[gucId].state == kVfGucContextTombstone)
 			gVfContexts[gucId].refCount = 0;

@@ -23,6 +23,21 @@ int main() {
                    static_cast<VfGucContextState>(state)) == expected[state]);
     }
 
+    // Exhaust the failed-attach compensation boundary. Once registration was
+    // published, neither a failed send nor an unobserved DEREGISTER_DONE can be
+    // reported as a safely retired context.
+    for (unsigned registered = 0; registered <= 1; ++registered) {
+        for (unsigned sent = 0; sent <= 1; ++sent) {
+            for (unsigned tombstone = 0; tombstone <= 1; ++tombstone) {
+                const bool complete =
+                    NGVfContextShutdown::registrationCleanupComplete(
+                        registered != 0, sent != 0, tombstone != 0);
+                assert(complete ==
+                       (!registered || (sent && tombstone)));
+            }
+        }
+    }
+
     // Exhaust every lifecycle state, pending-token combination, and the two
     // defined runnable payloads plus an invalid value.  Enable completions have
     // ordering priority when both tokens exist; a disable cannot overtake one.
