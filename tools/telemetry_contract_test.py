@@ -15,8 +15,10 @@ def main() -> int:
     source_path, plist_path, binary_path = map(Path, sys.argv[1:])
     source = source_path.read_text(encoding="utf-8")
     with plist_path.open("rb") as stream:
-        libraries = plistlib.load(stream)["OSBundleLibraries"]
+        info = plistlib.load(stream)
+    libraries = info["OSBundleLibraries"]
 
+    assert info["OSBundleRequired"] == "Root"
     assert libraries["com.StezzaPilot.NootedGreen"] == "1.0.0"
     assert "org.smichaud.HookCase" not in libraries
 

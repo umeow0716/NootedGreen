@@ -289,6 +289,6 @@
 		<string>1.0.0</string>
 	</dict>
 	<key>OSBundleRequired</key>
-	<string>Safe Boot</string>
+	<string>Root</string>
 </dict>
 </plist>

@@ -2813,3 +2813,21 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   mutation was removed. A non-TGL PF is rejected before personality
   publication rather than retaining dead code that implied unimplemented PF
   compatibility.
+
+### Make the pinned kernel payloads members of the boot root set
+
+- The first controlled Tahoe boot with NootedGreen and the TGL accelerator in
+  dependency order loaded Lilu, WhateverGreen and NootedGreen but did not
+  register or start `com.xxxxx.driver.AppleIntelTGLGraphics`. The VF remained
+  on `IONDRVFramebuffer`, `system_profiler` reported `No Kext Loaded`, SSH came
+  up in 13 seconds and the host journal contained only the expected VF FLRs.
+- The accelerator metadata had no `OSBundleRequired` key. Consequently it was
+  not a member of the root set when supplied by OpenCore `Kernel/Add`; having a
+  correct `OSBundleLibraries` edge to NootedGreen did not itself make the
+  payload boot-required. Both reviewed TGL kernel payloads now declare
+  `OSBundleRequired=Root`. Their contract tests require that value together
+  with the exact NootedGreen dependency and reject the removed HookCase edge.
+- This is a boot-admission metadata repair, not evidence of acceleration. The
+  next controlled boot must still prove accelerator registration, native
+  start, transport admission and Metal execution before the dynamic gate is
+  considered passed.

@@ -98,7 +98,9 @@ def macho_external_relocations(path: Path):
 
 def validate_payload(plist_path: Path, binary_path: Path, expected: set[str]) -> None:
     with plist_path.open("rb") as stream:
-        libraries = plistlib.load(stream)["OSBundleLibraries"]
+        info = plistlib.load(stream)
+    libraries = info["OSBundleLibraries"]
+    assert info["OSBundleRequired"] == "Root"
     assert libraries["com.StezzaPilot.NootedGreen"] == "1.0.0"
     assert "org.smichaud.HookCase" not in libraries
 

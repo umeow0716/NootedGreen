@@ -16,7 +16,7 @@ At c312229, the tracked source/build/metadata inventory contained 1,305 files:
 | MacKernelSDK | 1,163 | Selected API declarations only; full review pending |
 | Lilu.kext | 39 | Selected headers/upstream patching code; full dependency review pending |
 | HookCase-master (removed) | 0 | All seven files were reviewed. The active service did not install its historical IDT/sysent/DYLD hook core, while its appended graphics providers used reversed/underflowing MMIO bounds, a guaranteed-null port callback, guessed object storage, unverified `| 7` GGTT PTE flags and wrong zero-argument GPU telemetry ABIs. The exact accelerator and pinned-TGL framebuffer imports are now provided by NootedGreen; the unrelated hooking project was removed and remains recoverable in Git. |
-| sle_Internal | 35 | Metadata only in this count; embedded binaries are a separate review obligation |
+| sle_Internal | 35 | Metadata read end-to-end. Both patched TGL kernel payloads now require the boot root set, depend on NootedGreen rather than HookCase, and are contract-tested against their exact imports. Embedded binary semantics remain a separate per-route review obligation. |
 | NootedGreen.xcodeproj | 4 | Read end-to-end. Product/source/configuration, scheme and workspace contracts are now tested; obsolete shell phases were removed. |
 | .github | 1 | Read end-to-end. The branch/path filters and x86_64 NootedGreen/Metal artifact stages are enforced by the project contract test; HookCase build/packaging was removed and no deployment step exists. |
 
