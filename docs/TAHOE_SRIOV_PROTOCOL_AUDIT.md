@@ -1555,8 +1555,9 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   Gen11 proxy wrappers. The Apple-ID ICL and TGL handlers in `kern_gen11` remain
   available; VF framebuffer probe/start rejection there is unchanged. The
   obsolete runtime instruction rewriter used only by Genx was removed from
-  `kern_dvmt_patch.hpp`; the exact Linux-derived GMS decoder and its exhaustive
-  256-value oracle test remain active.
+  `kern_dvmt_patch.hpp`; at that checkpoint the Linux-derived GMS decoder and
+  its 256-value oracle test remained active (they were later removed with their
+  last unconsumed caller, as recorded below).
 - This deliberately drops compatibility with that unversioned third-party
   renamed bundle. The code is recoverable from Git history; reintroduction
   would require an exact binary identity, a documented need for each patch and
@@ -2556,3 +2557,23 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
 - The parser, two-pass registry writer, boot argument and README option were
   removed. Missing required platform properties must now fail matching or be
   fixed in firmware/OpenCore, rather than being silently fabricated in-kernel.
+
+### Close core-device ownership and remove non-behavioural startup paths
+
+- Pinned Lilu 1.7.2 confirms `DeviceInfo::create()` stores borrowed registry
+  pointers and `DeviceInfo::deleter()` only deinitialises its external-GPU
+  vector before deleting the inventory. NootedGreen retained no independent
+  owner even though later kext callbacks lazily map BAR0 through `iGPU`.
+  `processPatcher` now retains the selected `IOPCIDevice` for the lifetime of
+  the non-unloadable routed plugin before deleting the temporary inventory.
+- The GMS value was decoded into `stolen_size`, but no production source read
+  that field. It neither configured Apple's memory manager nor the direct-VF
+  GGTT range. The early config-space read, field, helper and isolated oracle
+  test were removed instead of retaining a misleading pseudo-contract.
+- The IOAcceleratorFamily2 registration performed no solve, route or patch; it
+  only logged that native validation was preserved. Removing it eliminates an
+  unrelated forced callback without changing native IOAcceleratorFamily2.
+- Guest CPUID likewise only contributed log text and could not classify the
+  passed-through GPU. Native-TGL selection now records only the original PCI
+  identity plus independently proven PF ownership. The disabled custom
+  IOService/catalogue skeleton and unused local bit macros were also removed.

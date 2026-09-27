@@ -19,12 +19,11 @@ current Tahoe SR-IOV VF path. This branch has passed its offline protocol,
 sanitizer, analyzer and remote build gates; controlled VF boot validation is
 still intentionally blocked by the incomplete source/lifetime audit.
 
-The remaining DYLD hook only applies composite media-model strings in signed
-shared-cache pages and logs discovery of the TGL userspace bundles. The former
-unversioned CoreDisplay control-flow stubs, CoreLSKD path, ICL Metal ID bypass
-and GPU-bundle path redirect have been retired. `isRealTGL` is a compatibility
-name for a native Tiger Lake **physical GPU** path, selected from the original
-PCI identity and PF ownership; guest CPUID is diagnostic only.
+The former global DYLD/shared-cache mutation, unversioned CoreDisplay control-
+flow stubs, CoreLSKD path, ICL Metal ID bypass and GPU-bundle path redirect have
+been retired. `isRealTGL` is a compatibility name for a native Tiger Lake
+**physical GPU** path, selected only from the original PCI identity and PF
+ownership; guest CPUID is not part of GPU admission.
 
 ### `codex/tahoe-sriov-vf` target override
 
@@ -233,7 +232,7 @@ Recent changes switch NootedGreen to safer defaults for cross-machine portabilit
 - GPU identity and compatibility properties must come from firmware/OpenCore; the driver does not seed guessed platform data.
 - Recurring watchdog/monitor experiments are not part of the maintained driver.
 - The injected accelerator personality preserves the bundled TGL display-pipe and transaction capabilities.
-- Coexistence paths avoid forcing DVMT/framebuffer processing when the DVMT module is not enabled.
+- The plugin does not derive or fabricate a stolen-memory size; PF display memory remains native and a VF uses its PF-provisioned GGTT range.
 
 This reduces machine-specific assumptions in default boots and keeps aggressive behavior available only when explicitly requested for debugging.
 
@@ -261,7 +260,7 @@ ID is a known Tiger Lake ID **and** physical-function ownership has been
 established. It is false for every VF, including a Tiger Lake VF. Code that
 selects an instruction or topology layout therefore checks the original GPU
 generation separately; code that selects ownership checks PF/VF identity.
-CPUID is diagnostic only.
+CPUID is not consulted.
 
 ### Direct-VF GuC event boundary
 

@@ -61,10 +61,6 @@ static KernelPatcher::KextInfo kextG11HWTA {"com.apple.driver.AppleIntelTGLGraph
 	{false, false, false, true}, {},
 	KernelPatcher::KextInfo::Unloaded};
 
-// IOAcceleratorFamily2 symbols are resolved inside NGreen::processKext via
-// kextIOAcceleratorFamily2 (kern_green.cpp) which already has the valid path.
-// No separate kextIOAF2 registration needed here.
-
 Gen11 *Gen11::callback = nullptr;
 
 namespace {

@@ -6,22 +6,10 @@
 #include <Headers/kern_iokit.hpp>
 #include <IOKit/pci/IOPCIDevice.h>
 
-#define BIT(n) (1U << (n))
-#define REG_BIT(n) (1U << (n))
-
 // Fail closed for VF or unclassified identity before physical display access.
 bool ngPhysicalGpuAccessAllowed();
 // PFs may use their complete BAR; VFs may use only i915's fixed MMIO allowlist.
 bool ngGpuRegisterAccessAllowed(unsigned long reg);
-
-/*
-class EXPORT PRODUCT_NAME : public IOService {
-	OSDeclareDefaultStructors(PRODUCT_NAME);
-
-	public:
-	IOService *probe(IOService *provider, SInt32 *score) override;
-	bool start(IOService *provider) override;
-};*/
 
 class NGreen {
     friend class Gen11;
@@ -37,8 +25,6 @@ class NGreen {
 	static uint32_t configRead32(IORegistryEntry *service, uint32_t space, uint8_t offset);
 	WIOKit::t_PCIConfigRead16 orgConfigRead16 {nullptr};
 	WIOKit::t_PCIConfigRead32 orgConfigRead32 {nullptr};
-	
-	UInt32 stolen_size;
 	
 	// Checked BAR0 register access used by the VF GuC mailbox/doorbell path.
 	UInt32 readReg32(unsigned long reg) {
