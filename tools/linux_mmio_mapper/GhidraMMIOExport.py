@@ -25,7 +25,6 @@ import os
 
 from ghidra.app.decompiler import DecompileOptions, DecompInterface
 from ghidra.util.task import ConsoleTaskMonitor
-from ghidra.program.model.listing import CodeUnit
 from ghidra.program.model.scalar import Scalar
 
 # ---------------------------------------------------------------------------
@@ -59,7 +58,7 @@ def decompile_function(ifc, func, monitor):
 # ---------------------------------------------------------------------------
 # Instruction-level scan for MMIO immediates + nearby AND mask
 # ---------------------------------------------------------------------------
-def get_mask_near(listing, addr, window=6):
+def get_mask_near(listing, addr, function_body, window=6):
     """
     Look at up to 'window' instructions after addr for an AND with a small mask.
     Returns the mask as int if found, else None.
@@ -69,7 +68,7 @@ def get_mask_near(listing, addr, window=6):
         return None
     for _ in range(window):
         cu = listing.getCodeUnitAfter(cu.getAddress())
-        if cu is None:
+        if cu is None or not function_body.contains(cu.getAddress()):
             break
         mnem = cu.getMnemonicString().upper() if hasattr(cu, "getMnemonicString") else ""
         if mnem in ("AND", "TEST"):
@@ -111,14 +110,22 @@ def snippet_for_address(decomp_c, addr_hex, lines_around=3):
     return unique
 
 # ---------------------------------------------------------------------------
-# Classify read vs write from instruction mnemonic
+# Classify read vs write from the operand containing the MMIO scalar
 # ---------------------------------------------------------------------------
-def classify_access(mnemonic):
-    m = mnemonic.upper()
-    if m.startswith("MOV"):
-        return "write"   # simplified; could inspect operand order
-    if m in ("CMP", "TEST", "AND", "OR"):
-        return "read"
+def classify_access(instr, operand_index):
+    """Use Ghidra operand reference semantics; never guess every MOV is a write."""
+    try:
+        ref_type = instr.getOperandRefType(operand_index)
+        reads = ref_type.isRead()
+        writes = ref_type.isWrite()
+        if reads and writes:
+            return "read_write"
+        if writes:
+            return "write"
+        if reads:
+            return "read"
+    except Exception:
+        pass
     return "unknown"
 
 
@@ -135,7 +142,7 @@ def iter_operand_scalars(instr):
             objs = []
         for obj in objs:
             if isinstance(obj, Scalar):
-                yield obj
+                yield i, obj
 
 # ---------------------------------------------------------------------------
 # Main
@@ -166,14 +173,14 @@ def run():
         inst_iter = listing.getInstructions(addr_set, True)
         while inst_iter.hasNext():
             instr = inst_iter.next()
-            mnem = instr.getMnemonicString()
-            for scalar in iter_operand_scalars(instr):
+            for operand_index, scalar in iter_operand_scalars(instr):
                 v = scalar.getUnsignedValue()
                 if in_range(v):
                     addr_int = int(v)
                     addr_hex = "0x{:x}".format(addr_int)
-                    mask = get_mask_near(listing, instr.getAddress())
-                    access = classify_access(mnem)
+                    mask = get_mask_near(
+                        listing, instr.getAddress(), func.getBody())
+                    access = classify_access(instr, operand_index)
                     snippet = snippet_for_address(decomp_c, addr_hex)
 
                     if addr_int not in records:

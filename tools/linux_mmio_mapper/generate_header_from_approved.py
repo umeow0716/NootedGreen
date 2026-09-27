@@ -6,6 +6,16 @@ from pathlib import Path
 
 HEX_RE = re.compile(r"^0x[0-9a-fA-F]+$")
 SYMBOL_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
+PLATFORM_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
+REQUIRED_APPROVED = {
+    "address", "platform", "canonical_linux_symbol", "apple_aliases", "source"
+}
+REQUIRED_SOURCE = {"repo", "path", "line", "macro_text"}
+
+
+def comment_text(value):
+    """Return one safe C-comment line without changing identifier semantics."""
+    return str(value).replace("\r", " ").replace("\n", " ").replace("*/", "* /")
 
 
 def sanitize_aliases(aliases):
@@ -35,19 +45,29 @@ def load_approved(path):
 
     platform = doc.get("platform")
     approved = doc.get("approved")
+    approved_count = doc.get("approved_count")
 
-    if not isinstance(platform, str) or not platform.strip():
+    if not isinstance(platform, str) or not PLATFORM_RE.fullmatch(platform):
         raise ValueError("Missing or invalid platform")
     if not isinstance(approved, list):
         raise ValueError("Missing or invalid approved array")
+    if not isinstance(approved_count, int) or approved_count != len(approved):
+        raise ValueError("approved_count does not match approved array")
 
     filtered = []
+    seen_addresses = set()
+    seen_symbols = set()
     for i, r in enumerate(approved):
         if not isinstance(r, dict):
             raise ValueError(f"approved[{i}] must be an object")
+        if set(r) != REQUIRED_APPROVED:
+            raise ValueError(f"approved[{i}] has missing or unexpected keys")
 
         address = r.get("address")
         symbol = r.get("canonical_linux_symbol")
+        record_platform = r.get("platform")
+        aliases = r.get("apple_aliases")
+        source = r.get("source")
 
         if not isinstance(address, str) or not HEX_RE.match(address):
             raise ValueError(f"approved[{i}] has invalid address: {address}")
@@ -55,14 +75,38 @@ def load_approved(path):
             raise ValueError(
                 f"approved[{i}] has invalid canonical_linux_symbol: {symbol}"
             )
+        if record_platform != platform:
+            raise ValueError(f"approved[{i}] platform differs from top-level platform")
+        if not isinstance(aliases, list) or any(
+            not isinstance(alias, str) or not alias.strip() for alias in aliases
+        ):
+            raise ValueError(f"approved[{i}] has invalid apple_aliases")
+        if len(set(aliases)) != len(aliases):
+            raise ValueError(f"approved[{i}] has duplicate apple_aliases")
+        if not isinstance(source, dict) or set(source) != REQUIRED_SOURCE:
+            raise ValueError(f"approved[{i}] has invalid source object")
+        if any(not isinstance(source[key], str) for key in ("repo", "path", "macro_text")):
+            raise ValueError(f"approved[{i}] has non-string source provenance")
+        if not all(source[key].strip() for key in ("repo", "path", "macro_text")):
+            raise ValueError(f"approved[{i}] has incomplete source provenance")
+        if not isinstance(source["line"], int) or source["line"] < 1:
+            raise ValueError(f"approved[{i}] has invalid source line")
+
+        normalized_address = address.lower()
+        if normalized_address in seen_addresses:
+            raise ValueError(f"approved[{i}] duplicates address {address}")
+        if symbol in seen_symbols:
+            raise ValueError(f"approved[{i}] duplicates symbol {symbol}")
+        seen_addresses.add(normalized_address)
+        seen_symbols.add(symbol)
 
         filtered.append(
             {
-                "address": address.lower(),
+                "address": normalized_address,
                 "symbol": symbol,
-                "platform": r.get("platform", platform),
-                "aliases": sanitize_aliases(r.get("apple_aliases", [])),
-                "source": r.get("source", {}),
+                "platform": record_platform,
+                "aliases": sanitize_aliases(aliases),
+                "source": source,
             }
         )
 
@@ -92,8 +136,8 @@ def build_header(platform, records, in_name):
         symbol = r["symbol"]
         addr = r["address"]
 
-        aliases = ", ".join(r["aliases"]) if r["aliases"] else "none"
-        src_path = r.get("source", {}).get("path", "")
+        aliases = ", ".join(comment_text(alias) for alias in r["aliases"]) if r["aliases"] else "none"
+        src_path = comment_text(r.get("source", {}).get("path", ""))
         src_line = r.get("source", {}).get("line", "")
 
         note = f"/* addr {addr}; apple aliases: {aliases}"
@@ -101,16 +145,8 @@ def build_header(platform, records, in_name):
             note += f"; src {src_path}:{src_line}"
         note += " */"
 
-        if symbol in seen_symbol and seen_symbol[symbol] != addr:
-            lines.append(
-                f"/* CONFLICT: {symbol} already mapped to {seen_symbol[symbol]}, skipped {addr} */"
-            )
-            continue
-        if addr in seen_addr and seen_addr[addr] != symbol:
-            lines.append(
-                f"/* CONFLICT: {addr} already mapped to {seen_addr[addr]}, skipped {symbol} */"
-            )
-            continue
+        if symbol in seen_symbol or addr in seen_addr:
+            raise ValueError("duplicate symbol/address reached header generation")
 
         seen_symbol[symbol] = addr
         seen_addr[addr] = symbol

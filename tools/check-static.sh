@@ -58,6 +58,11 @@ else
     failed=1
 fi
 git diff --check || failed=1
+if python3 -B tools/linux_mmio_mapper_test.py; then
+    printf 'PASS offline MMIO mapper/tooling contracts\n'
+else
+    failed=1
+fi
 if "$compiler" -std=c++14 -O1 -g -fsanitize=address,undefined \
     tools/gpu_capabilities_test.cpp -o "$task_output/gpu-capabilities-test" && \
     "$task_output/gpu-capabilities-test"; then

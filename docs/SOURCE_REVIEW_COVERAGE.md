@@ -12,7 +12,7 @@ At c312229, the tracked source/build/metadata inventory contained 1,305 files:
 | Area | Files | Current review boundary |
 | --- | ---: | --- |
 | NootedGreen | 31 | Mixed; details below, not all findings closed |
-| tools | 24 | Offline tests/build checks read; older extraction/mapper tools pending |
+| tools | 24 | Historical snapshot count. All current executable host tools are now syntax-gated; the Linux MMIO mapper pipeline was read end-to-end and its policy/round-trip behavior is tested. The stale AppleIntelParams generator was removed. |
 | MacKernelSDK | 1,163 | Selected API declarations only; full review pending |
 | Lilu.kext | 39 | Selected headers/upstream patching code; full dependency review pending |
 | HookCase-master | 7 | Build checked, full source/assembly review pending |
@@ -59,6 +59,27 @@ sources returns the current count to 1,303; this does not close older coverage.
 | AppleIntelParams.hpp (removed) | Read all 624 lines and cross-referenced every declared type. After the speculative framebuffer plane/scaler/accessor routes were retired, the generated header had no runtime consumer; its known alignment/type contradictions could only misrepresent the supported ABI, so it and both main-source includes were removed. The Ghidra extraction tools remain offline research inputs and are not driver declarations. |
 | Info.plist | Read end-to-end; main personality/build identifiers and `SchedulerType` consumer inspected. The unconsumed Auto/ICL/TGL profile catalogue and impossible DisplayMergeNub personality were removed because runtime admission is code- and payload-identity-driven. The remaining plist is not a supported-device matrix. |
 | IGGucBinary.h, IGHucBinary.h (removed) | Read as opaque 2017 Apple firmware arrays; no include or symbol consumer existed. Removed their 244-KiB source payload and product-header entries; recoverable in Git. Runtime firmware remains owned by admitted native/PF driver paths. |
+
+## Host tooling coverage
+
+- `tools/check-static.sh`, every current C++/Python offline test and
+  `tools/metal_smoke/main.m` are part of the static or macOS CI path. The Metal
+  program creates the default device, queue and shared buffer, performs a blit,
+  waits for completion, checks command status/error and verifies all bytes; it
+  remains a dynamic guest proof, not evidence from CI hardware.
+- All six executable `linux_mmio_mapper` stages were read end-to-end. The
+  gate parses every tracked Python utility without importing Ghidra-only APIs,
+  round-trips the checked-in sample, rejects address/symbol conflicts and
+  incomplete provenance, tests source-confirmation promotion and escapes
+  generated C comments. Ghidra export now uses operand reference semantics
+  rather than classifying every MOV as a write, and never searches for a mask
+  beyond the current function body.
+- `extract_apple_params.py`, its C seed/parser output and two generated headers
+  were deleted after the runtime `AppleIntelParams.hpp` consumer had already
+  been removed. The generator's stale signature list and known field-width/
+  alignment contradictions could only recreate an unsupported private ABI.
+  `parsed.gdt` remains as inert archival reverse-engineering data and is never
+  loaded by the build, tests or driver.
 
 ## Evidence rules
 

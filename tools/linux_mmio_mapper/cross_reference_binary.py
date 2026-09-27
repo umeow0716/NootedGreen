@@ -17,7 +17,6 @@ Usage:
 
 import argparse
 import json
-import os
 import re
 import subprocess
 import sys
@@ -51,6 +50,7 @@ PLAIN_HEX_RE = re.compile(
 
 # Canonical symbol rule used by validator output
 VALID_SYMBOL_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
+VALID_PLATFORM_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 
 
 def normalize_symbol(sym: str) -> Optional[str]:
@@ -95,10 +95,6 @@ def parse_linux_headers(root: Path) -> dict[int, list[dict]]:
         except Exception:
             continue
 
-        rel = str(hpath.relative_to(root.parent.parent.parent.parent.parent)
-                  if root.parent.parent.parent.parent.parent.exists()
-                  else hpath)
-
         for pat in (MMIO_DEF_RE, PLAIN_HEX_RE):
             for m in pat.finditer(text):
                 sym = m.group(1)
@@ -114,7 +110,7 @@ def parse_linux_headers(root: Path) -> dict[int, list[dict]]:
                 line_no = text[: m.start()].count("\n") + 1
                 entry = {
                     "symbol": norm_sym,
-                    "path": str(hpath),
+                    "path": str(hpath.relative_to(root)),
                     "line": line_no,
                     "macro_text": m.group(0).strip(),
                 }
@@ -230,8 +226,10 @@ def build_mapping(
     binary_addrs: set[int],
     linux_db: dict[int, list[dict]],
     platform: str,
-    ghidra_db: dict = {},
+    ghidra_db: Optional[dict] = None,
 ) -> dict:
+    if ghidra_db is None:
+        ghidra_db = {}
     results = []
 
     FUNC_KW = ("aux", "ddi", "pwr", "power", "phy", "trans", "buf",
@@ -369,10 +367,19 @@ def build_mapping(
         scored.sort(key=lambda x: -x[0])
         best_score, best_notes, best = scored[0]
 
-        ambiguous = sum(1 for s, _, _ in scored if s >= best_score - 2) > 1
+        close_symbols = {
+            c["symbol"] for s, _, c in scored if s >= best_score - 2
+        }
+        ambiguous = len(close_symbols) > 1
         ambiguity_notes = ""
         if ambiguous:
-            alts = [c["symbol"] for _, _, c in scored[1:4]]
+            alts = []
+            for _, _, candidate in scored[1:]:
+                symbol = candidate["symbol"]
+                if symbol != best["symbol"] and symbol not in alts:
+                    alts.append(symbol)
+                if len(alts) == 3:
+                    break
             ambiguity_notes = "alternatives: " + ", ".join(alts)
 
         conf = confidence_from_score(best_score)
@@ -436,6 +443,11 @@ def main() -> int:
     binary = Path(args.binary)
     headers = Path(args.headers)
 
+    args.platform = args.platform.upper()
+    if not VALID_PLATFORM_RE.fullmatch(args.platform):
+        print(f"ERROR: invalid platform identifier: {args.platform}", file=sys.stderr)
+        return 1
+
     if not binary.exists():
         print(f"ERROR: binary not found: {binary}", file=sys.stderr)
         return 1
@@ -450,7 +462,11 @@ def main() -> int:
         if not ghidra_path.exists():
             print(f"ERROR: ghidra export not found: {ghidra_path}", file=sys.stderr)
             return 1
-        raw = json.loads(ghidra_path.read_text(encoding="utf-8"))
+        try:
+            raw = json.loads(ghidra_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            print(f"ERROR: invalid Ghidra export: {exc}", file=sys.stderr)
+            return 1
         for rec in raw.get("records", []):
             try:
                 addr = int(rec["address"], 16)

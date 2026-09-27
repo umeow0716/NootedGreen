@@ -28,7 +28,6 @@ Usage:
 
 import argparse
 import json
-import os
 import re
 import subprocess
 import sys
@@ -148,6 +147,10 @@ def main() -> int:
     ap.add_argument("--max-hits-per-symbol", type=int, default=80, help="Limit grep hits per symbol per root")
     args = ap.parse_args()
 
+    if args.max_hits_per_symbol <= 0:
+        print("ERROR: --max-hits-per-symbol must be positive", file=sys.stderr)
+        return 2
+
     in_path = Path(args.input)
     if not in_path.exists():
         print(f"ERROR: input not found: {in_path}", file=sys.stderr)
@@ -159,7 +162,11 @@ def main() -> int:
             print(f"ERROR: source root not found or not directory: {r}", file=sys.stderr)
             return 2
 
-    doc = json.loads(in_path.read_text(encoding="utf-8"))
+    try:
+        doc = json.loads(in_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"ERROR: invalid input JSON: {exc}", file=sys.stderr)
+        return 2
     if not isinstance(doc, dict) or "results" not in doc or "platform" not in doc:
         print("ERROR: input JSON missing required top-level keys", file=sys.stderr)
         return 2
@@ -196,9 +203,9 @@ def main() -> int:
         platform_hit_count = len(platform_hits)
 
         was_platform_match = bool(rec.get("evidence", {}).get("platform_match"))
-        now_platform_match = was_platform_match or platform_hit_count > 0
-
-        promote = now_platform_match and hit_count > 0
+        # A pre-existing boolean claim is not source confirmation. Promotion
+        # requires at least one hit whose own path or text is platform-relevant.
+        promote = platform_hit_count > 0
         if promote:
             rec["evidence"]["platform_match"] = True
             rec["status"] = "AUTO_RENAME"

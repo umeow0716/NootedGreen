@@ -17,6 +17,7 @@ directory as the binary.
 """
 
 import argparse
+import hashlib
 import json
 import re
 import subprocess
@@ -27,6 +28,12 @@ from typing import Dict, List, Optional
 
 def slugify(text: str) -> str:
     return re.sub(r"[^a-zA-Z0-9._-]+", "_", text).strip("_")
+
+
+def unique_run_tag(relative_binary: Path) -> str:
+    text = relative_binary.as_posix()
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
+    return f"{slugify(text)}__{digest}"
 
 
 def find_binaries(search_root: Path, require_ghidra: bool) -> List[Dict[str, Optional[Path]]]:
@@ -131,8 +138,7 @@ def main() -> int:
         binary = item["binary"]
         ghidra = item["ghidra"]
 
-        rel_parent = binary.parent.parent.parent.parent.relative_to(search_root)
-        run_tag = slugify(str(rel_parent) + "__" + binary.name)
+        run_tag = unique_run_tag(binary.relative_to(search_root))
 
         raw = out_dir / f"{run_tag}_raw_mapping.json"
         approved = out_dir / f"{run_tag}_approved_renames.json"

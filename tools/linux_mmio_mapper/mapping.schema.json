@@ -7,6 +7,7 @@
   "properties": {
     "platform": {
       "type": "string",
+      "pattern": "^[A-Z][A-Z0-9_]*$",
       "description": "GPU generation/platform, e.g., ICL, TGL, ADL"
     },
     "results": {
@@ -30,7 +31,8 @@
             "pattern": "^0x[0-9a-fA-F]+$"
           },
           "platform": {
-            "type": "string"
+            "type": "string",
+            "pattern": "^[A-Z][A-Z0-9_]*$"
           },
           "canonical_linux_symbol": {
             "type": "string",

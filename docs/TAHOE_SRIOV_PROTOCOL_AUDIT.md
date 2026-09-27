@@ -2700,3 +2700,25 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   register/send/completion are covered by the freestanding shutdown model.
 - The complete syntax, analyzer, strict-ABI and sanitizer/protocol suite passes
   in `/tmp/ngreen-static.4YeXtu`; the VM remained off.
+
+### Make offline reverse-engineering tools fail closed
+
+- The retired AppleIntelParams runtime header had no consumer, but its old
+  1,717-line Ghidra generator still advertised removed route signatures and
+  could recreate structures with already documented width/alignment conflicts.
+  The generator, C seed/parser output and two generated headers were removed;
+  the small `.gdt` database remains inert archival data only.
+- Read all current Linux MMIO mapper programs. Exact duplicate provenance for
+  one symbol no longer creates false ambiguity, while distinct near-score
+  symbols still require review. Linux-source promotion now requires a real
+  platform-relevant hit rather than trusting an input `platform_match` bit.
+  Approved input is revalidated for canonical platform, unique address/symbol,
+  complete provenance and safe comments before a header can be emitted.
+- Ghidra access classification now uses the reference type of the operand that
+  actually contains the MMIO scalar; every MOV is no longer guessed to be a
+  write. Nearby-mask discovery cannot cross the current function boundary.
+  Batch output tags include a digest, preventing sanitized relative paths from
+  silently overwriting one another.
+- A deterministic host test parses every current Python utility, round-trips
+  the sample mapping/header and exercises conflicts, source promotion,
+  ambiguity, provenance and comment injection. It runs from `check-static.sh`.

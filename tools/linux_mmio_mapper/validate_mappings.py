@@ -8,6 +8,7 @@ from pathlib import Path
 ADDRESS_RE = re.compile(r"^0x[0-9a-fA-F]+$")
 LINUX_SYMBOL_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 UNKNOWN_RE = re.compile(r"^UNKNOWN_0x[0-9a-fA-F]+$")
+PLATFORM_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 
 REQUIRED_TOP = {"platform", "results"}
 REQUIRED_RESULT = {
@@ -70,13 +71,19 @@ def validate_result(r: dict, idx: int, top_platform: str, errors: list, warnings
     if not isinstance(addr, str) or not ADDRESS_RE.match(addr):
         errors.append(f"{ctx}.address: invalid hex format")
 
-    if r["platform"] != top_platform:
-        warnings.append(f"{ctx}.platform differs from top-level platform")
+    if not isinstance(r["platform"], str) or not PLATFORM_RE.fullmatch(r["platform"]):
+        errors.append(f"{ctx}.platform: invalid platform identifier")
+    elif r["platform"] != top_platform:
+        errors.append(f"{ctx}.platform differs from top-level platform")
 
     sym = r["canonical_linux_symbol"]
     aliases = r["apple_aliases"]
     if not isinstance(aliases, list) or any(not isinstance(a, str) for a in aliases):
         errors.append(f"{ctx}.apple_aliases: must be array of strings")
+    elif any(not a.strip() or "\n" in a or "\r" in a or "*/" in a for a in aliases):
+        errors.append(f"{ctx}.apple_aliases: contains an unsafe or empty alias")
+    elif len(set(aliases)) != len(aliases):
+        errors.append(f"{ctx}.apple_aliases: contains duplicates")
 
     if not isinstance(sym, str) or not sym:
         errors.append(f"{ctx}.canonical_linux_symbol: must be non-empty string")
@@ -94,8 +101,20 @@ def validate_result(r: dict, idx: int, top_platform: str, errors: list, warnings
     else:
         check_required_keys(src, REQUIRED_SOURCE, f"{ctx}.canonical_source", errors)
         if all(k in src for k in REQUIRED_SOURCE):
+            for key in ("repo", "path", "macro_text"):
+                if not isinstance(src[key], str):
+                    errors.append(f"{ctx}.canonical_source.{key}: must be string")
             if not isinstance(src["line"], int) or src["line"] < 1:
                 errors.append(f"{ctx}.canonical_source.line: must be >= 1")
+            source_strings = all(
+                isinstance(src[key], str)
+                for key in ("repo", "path", "macro_text")
+            )
+            if r["status"] == "AUTO_RENAME" and (
+                not source_strings or not src["repo"].strip() or
+                not src["path"].strip() or not src["macro_text"].strip()
+            ):
+                errors.append(f"{ctx}.canonical_source: AUTO_RENAME requires complete provenance")
 
     ev = r["evidence"]
     if not isinstance(ev, dict):
@@ -159,8 +178,8 @@ def validate_document(doc: dict) -> tuple:
     platform = doc["platform"]
     results = doc["results"]
 
-    if not isinstance(platform, str) or not platform.strip():
-        errors.append("top.platform must be non-empty string")
+    if not isinstance(platform, str) or not PLATFORM_RE.fullmatch(platform):
+        errors.append("top.platform must be a canonical identifier")
 
     if not isinstance(results, list):
         errors.append("top.results must be array")
@@ -171,6 +190,28 @@ def validate_document(doc: dict) -> tuple:
             errors.append(f"results[{i}] must be object")
             continue
         validate_result(r, i, platform, errors, warnings)
+
+    seen_addresses = {}
+    seen_symbols = {}
+    for i, r in enumerate(results):
+        if not isinstance(r, dict):
+            continue
+        address = r.get("address")
+        symbol = r.get("canonical_linux_symbol")
+        if isinstance(address, str):
+            if address.lower() in seen_addresses:
+                errors.append(
+                    f"results[{i}].address duplicates results[{seen_addresses[address.lower()]}]"
+                )
+            else:
+                seen_addresses[address.lower()] = i
+        if isinstance(symbol, str) and LINUX_SYMBOL_RE.fullmatch(symbol):
+            if symbol in seen_symbols and results[seen_symbols[symbol]].get("address") != address:
+                errors.append(
+                    f"results[{i}].canonical_linux_symbol conflicts with results[{seen_symbols[symbol]}]"
+                )
+            else:
+                seen_symbols[symbol] = i
 
     return errors, warnings
 
