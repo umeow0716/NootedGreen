@@ -31,13 +31,17 @@ static void verify(const char *path)
 	const size_t media = uniqueOffset(image, mediaFuseFind);
 	const size_t rpm = uniqueOffset(image, rpmConfigFind);
 	const size_t l3 = uniqueOffset(image, l3BranchFind);
-	// All anchors belong to the single 0x48c-byte getGPUInfo body and must
-	// preserve the instruction order established by the pinned UUID.
+	// The SKU admission comparison belongs to IntelAccelerator::probe().  The
+	// remaining anchors belong to the single 0x48c-byte getGPUInfo body.  Keep
+	// the two groups observably separate; the Mach-O symbol contract verifies
+	// their exact owning functions.
 	assert(sku < slice);
+	assert(slice - sku > 0x4000U);
 	assert(slice < dss && dss < eu && eu < media && media < rpm && rpm < l3);
 	assert(l3 - slice < 0x48cU);
-	std::printf("PASS: unique getGPUInfo runtime anchors in %s (0x%zx..0x%zx)\n",
-	            path, slice, l3);
+	std::printf("PASS: unique probe/getGPUInfo runtime anchors in %s "
+	            "(probe 0x%zx, getGPUInfo 0x%zx..0x%zx)\n",
+	            path, sku, slice, l3);
 }
 
 int main(int argc, char **argv)

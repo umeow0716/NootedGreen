@@ -2227,11 +2227,30 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		// Admit exactly the 0x9a49 compatibility identity. The old patch removed
 		// two branches and made every ID reach GT2 initialization; changing the
 		// existing 0x9a40 compare immediate preserves Apple's sentinel and failure
-		// paths while accepting the one device ID published by our PCI hook.
+		// paths while accepting the one device ID published by our PCI hook. This
+		// comparison belongs to IntelAccelerator::probe(), not getGPUInfo(). Keep
+		// its patch bounded to the owning symbol so a valid anchor elsewhere can
+		// never conceal a wrong function-range assumption.
 		static const uint8_t r3[] = {
 			0x8b, 0x3e, 0x81, 0xff, 0xee, 0xbe, 0xaf, 0xde, 0x7f, 0x15,
 			0x81, 0xff, 0x86, 0x80, 0x49, 0x9a, 0x74, 0x2d,
 		};
+		mach_vm_address_t probeStart = 0, probeEnd = 0;
+		KernelPatcher::SolveRequest probeBounds[] = {
+			{"__ZN16IntelAccelerator5probeEP9IOServicePi", probeStart},
+			{"__ZN16IntelAccelerator18encodeFailureStackE15IGFailureReason", probeEnd},
+		};
+		PANIC_COND(!patcher.solveMultiple(index, probeBounds, address, size) ||
+		           probeEnd <= probeStart || probeEnd - probeStart > 0x800,
+		           "ngreen", "Invalid IntelAccelerator::probe patch bounds");
+		LookupPatchPlus const patchesAlways[] = {
+			{activeKext, NGVfRuntimePatch::spoofedSkuFind, r3,
+			 arrsize(NGVfRuntimePatch::spoofedSkuFind), 1},
+		};
+		PANIC_COND(!LookupPatchPlus::applyAll(
+		               patcher, patchesAlways, probeStart, probeEnd - probeStart),
+		           "ngreen", "Failed to patch pinned accelerator probe admission");
+
 		// Apple reads these PF-owned runtime registers through raw BAR0 loads in
 		// getGPUInfo(). They are not VF-visible. Replace only those five loads with
 		// the values returned by Intel's early MMIO relay, then leave Apple's native
@@ -2278,15 +2297,6 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			           gpuInfoEnd <= gpuInfoStart ||
 			           gpuInfoEnd - gpuInfoStart > 0x1000,
 			           "ngreen", "Invalid getGPUInfo patch bounds");
-			LookupPatchPlus const patchesAlways[] = {
-				{activeKext, NGVfRuntimePatch::spoofedSkuFind, r3,
-				 arrsize(NGVfRuntimePatch::spoofedSkuFind), 1},
-			};
-			PANIC_COND(!LookupPatchPlus::applyAll(
-			               patcher, patchesAlways, gpuInfoStart,
-			               gpuInfoEnd - gpuInfoStart), "ngreen",
-				"kextG11HWT Failed to apply base patches!");
-
 			if (vfActive) {
 				PANIC_COND(!gVfRuntimeReady, "ngreen",
 					"VF runtime fuses were not published before getGPUInfo patching");

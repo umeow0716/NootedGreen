@@ -2814,20 +2814,54 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   publication rather than retaining dead code that implied unimplemented PF
   compatibility.
 
-### Make the pinned kernel payloads members of the boot root set
+### Mark the pinned kernel payloads as root-required collection members
 
 - The first controlled Tahoe boot with NootedGreen and the TGL accelerator in
   dependency order loaded Lilu, WhateverGreen and NootedGreen but did not
   register or start `com.xxxxx.driver.AppleIntelTGLGraphics`. The VF remained
   on `IONDRVFramebuffer`, `system_profiler` reported `No Kext Loaded`, SSH came
   up in 13 seconds and the host journal contained only the expected VF FLRs.
-- The accelerator metadata had no `OSBundleRequired` key. Consequently it was
-  not a member of the root set when supplied by OpenCore `Kernel/Add`; having a
-  correct `OSBundleLibraries` edge to NootedGreen did not itself make the
-  payload boot-required. Both reviewed TGL kernel payloads now declare
-  `OSBundleRequired=Root`. Their contract tests require that value together
-  with the exact NootedGreen dependency and reject the removed HookCase edge.
-- This is a boot-admission metadata repair, not evidence of acceleration. The
-  next controlled boot must still prove accelerator registration, native
-  start, transport admission and Metal execution before the dynamic gate is
-  considered passed.
+- The accelerator metadata had no `OSBundleRequired` key. Both reviewed TGL
+  kernel payloads now declare `OSBundleRequired=Root`. Their contract tests
+  require that value together with the exact NootedGreen dependency and reject
+  the removed HookCase edge. Later collection-level testing established the
+  narrower meaning of this key: it admits the payload to a root-required KC;
+  it neither forces an executable to start nor makes a SystemKC-dependent kext
+  linkable in OpenCore's BootKC injection phase.
+- This is collection-admission metadata, not evidence of acceleration. The
+  controlled AuxKC work below supplies the required SystemKC link boundary and
+  separately proves that executable loading still needs an explicit,
+  patch-before-match trigger.
+
+### Prove the AuxKC boundary and correct the first runtime patch range
+
+- OpenCore 1.0.7's `TestKextInject` reproduced `Invalid Parameter` while
+  inserting the pinned accelerator into Tahoe's BootKC. The unresolved set is
+  made of IOAccelerator/IOGraphics symbols resident in the SystemKC. Tahoe
+  `kmutil create -n aux`, linked against the exact BootKC and SystemKC UUIDs,
+  successfully built the same payload instead. The controlled runtime AuxKC
+  contains only the five requested driver kexts plus the two pre-existing
+  HighPoint kexts; Lilu, VirtualSMC, NootedGreen and WhateverGreen all loaded
+  from it without an OpenCore kext graph.
+- `OSBundleRequired=Root` did not start the accelerator because its native
+  personality deliberately matches `0xff208086`. A controlled
+  `kmutil --load-style start-only` request therefore loaded the executable
+  without publishing the unpatched native personality. NootedGreen caught the
+  payload synchronously and failed closed before hardware start with
+  `kextG11HWT Failed to apply base patches!`; the host watchdog stopped only
+  the guest. The archived panic is SHA-256
+  `5be47bb58aad77798a16359bf81ca53b11a964bea54cb2ac6d047c9ec536a5a2`.
+- Direct Mach-O symbol/byte correlation found the defect: the exact-one SKU
+  admission anchor is at `0x23c1d` inside `IntelAccelerator::probe()`
+  (`0x238e2..0x23c94`), while the six fuse/runtime anchors begin at `0x284cc`
+  inside `getGPUInfo()` (`0x2847e..0x28910`). The old code searched for the
+  probe anchor inside the latter range, so its panic was deterministic even
+  though the unbounded anchor test passed.
+- The SKU change is now independently solved and bounded to `probe` through
+  `encodeFailureStack`; only the PF-relayed fuse group remains bounded to
+  `getGPUInfo` through `teardownDevice`. The Mach-O contract parses both pinned
+  binaries' symbol tables and segment mappings, requires every pattern to lie
+  in its real owner, and also verifies that production passes the matching
+  range to each transactional patch group. The complete offline suite passes
+  in `/tmp/ngreen-static.6wdP0t`. A new macOS build and the next controlled
+  start-only load remain required before accelerator start is claimed.

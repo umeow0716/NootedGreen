@@ -9,6 +9,7 @@ from pathlib import Path
 
 MH_MAGIC_64 = 0xFEEDFACF
 LC_SYMTAB = 0x2
+LC_SEGMENT_64 = 0x19
 NLIST_64_SIZE = 16
 
 
@@ -57,6 +58,120 @@ def macho_symbols(path: Path) -> dict[str, list[int]]:
         name = strings[string_index:end].decode("utf-8", errors="strict")
         result.setdefault(name, []).append(value)
     return result
+
+
+def macho_vmaddr_for_file_offset(path: Path, file_offset: int) -> int:
+    data = path.read_bytes()
+    if len(data) < 32 or struct.unpack_from("<I", data)[0] != MH_MAGIC_64:
+        raise AssertionError(f"{path}: not a little-endian Mach-O 64 payload")
+    ncmds, sizeofcmds = struct.unpack_from("<II", data, 16)
+    checked_slice(data, 32, sizeofcmds, f"{path}: load commands")
+    cursor = 32
+    for _ in range(ncmds):
+        command, command_size = struct.unpack_from("<II", data, cursor)
+        if command_size < 8 or command_size > 32 + sizeofcmds - cursor:
+            raise AssertionError(f"{path}: malformed load command")
+        if command == LC_SEGMENT_64:
+            if command_size < 72:
+                raise AssertionError(f"{path}: malformed LC_SEGMENT_64")
+            vmaddr, vmsize, segment_file_offset, file_size = struct.unpack_from(
+                "<QQQQ", data, cursor + 24
+            )
+            if (
+                segment_file_offset <= file_offset
+                and file_offset - segment_file_offset < file_size
+            ):
+                relative = file_offset - segment_file_offset
+                if relative >= vmsize:
+                    raise AssertionError(f"{path}: file offset escapes segment VM range")
+                return vmaddr + relative
+        cursor += command_size
+    raise AssertionError(f"{path}: file offset 0x{file_offset:x} is not in a segment")
+
+
+def cpp_byte_array(source: Path, name: str) -> bytes:
+    text = source.read_text(encoding="utf-8")
+    match = re.search(
+        rf"constexpr\s+uint8_t\s+{re.escape(name)}\[\]\s*=\s*\{{(.*?)\}};",
+        text,
+        flags=re.DOTALL,
+    )
+    if not match:
+        raise AssertionError(f"{source}: missing {name} byte array")
+    values = re.findall(r"0x([0-9a-fA-F]{1,2})", match.group(1))
+    if not values:
+        raise AssertionError(f"{source}: empty {name} byte array")
+    return bytes(int(value, 16) for value in values)
+
+
+def unique_pattern_vmaddr(path: Path, pattern: bytes, label: str) -> int:
+    data = path.read_bytes()
+    first = data.find(pattern)
+    if first < 0 or data.find(pattern, first + 1) >= 0:
+        raise AssertionError(f"{path}: {label} is absent or non-unique")
+    return macho_vmaddr_for_file_offset(path, first)
+
+
+def single_symbol(symbols: dict[str, list[int]], name: str, path: Path) -> int:
+    values = symbols.get(name, [])
+    if len(values) != 1:
+        raise AssertionError(f"{path}: {name} is absent or non-unique")
+    return values[0]
+
+
+def verify_runtime_patch_owners(source: Path, payload: Path, symbols: dict[str, list[int]]) -> None:
+    header = source.parent / "kern_vf_runtime_patch.hpp"
+    probe_start = single_symbol(
+        symbols, "__ZN16IntelAccelerator5probeEP9IOServicePi", payload
+    )
+    probe_end = single_symbol(
+        symbols,
+        "__ZN16IntelAccelerator18encodeFailureStackE15IGFailureReason",
+        payload,
+    )
+    gpu_info_start = single_symbol(
+        symbols, "__ZN16IntelAccelerator10getGPUInfoEv", payload
+    )
+    gpu_info_end = single_symbol(
+        symbols, "__ZN16IntelAccelerator14teardownDeviceEP11IOPCIDevice", payload
+    )
+
+    sku = unique_pattern_vmaddr(
+        payload, cpp_byte_array(header, "spoofedSkuFind"), "spoofed SKU anchor"
+    )
+    if not probe_start <= sku < probe_end:
+        raise AssertionError(
+            f"{payload}: spoofed SKU anchor 0x{sku:x} is outside probe "
+            f"[0x{probe_start:x}, 0x{probe_end:x})"
+        )
+
+    for name in (
+        "sliceFuseFind",
+        "dssFuseFind",
+        "euFuseFind",
+        "mediaFuseFind",
+        "rpmConfigFind",
+        "l3BranchFind",
+    ):
+        address = unique_pattern_vmaddr(payload, cpp_byte_array(header, name), name)
+        if not gpu_info_start <= address < gpu_info_end:
+            raise AssertionError(
+                f"{payload}: {name} 0x{address:x} is outside getGPUInfo "
+                f"[0x{gpu_info_start:x}, 0x{gpu_info_end:x})"
+            )
+
+    normalized_source = " ".join(source.read_text(encoding="utf-8").split())
+    required_source_fragments = (
+        '"__ZN16IntelAccelerator5probeEP9IOServicePi", probeStart',
+        '"__ZN16IntelAccelerator18encodeFailureStackE15IGFailureReason", probeEnd',
+        "patcher, patchesAlways, probeStart, probeEnd - probeStart",
+        '"__ZN16IntelAccelerator10getGPUInfoEv", gpuInfoStart',
+        '"__ZN16IntelAccelerator14teardownDeviceEP11IOPCIDevice", gpuInfoEnd',
+        "patcher, vfRuntimePatches, gpuInfoStart, gpuInfoEnd - gpuInfoStart",
+    )
+    for fragment in required_source_fragments:
+        if fragment not in normalized_source:
+            raise AssertionError(f"{source}: missing bounded patch contract: {fragment}")
 
 
 def routed_symbols(source: Path) -> set[str]:
@@ -114,6 +229,8 @@ def main() -> None:
         "__ZN24AppleIntelBaseController5probeEP9IOServicePi",
         "__ZN31AppleIntelFramebufferController5probeEP9IOServicePi",
     }
+    for path, symbols in zip(payload_paths[:2], accelerator):
+        verify_runtime_patch_owners(source, path, symbols)
     for route in sorted(routes):
         accel_values = [table.get(route, []) for table in accelerator]
         fb_values = [table.get(route, []) for table in framebuffer]
