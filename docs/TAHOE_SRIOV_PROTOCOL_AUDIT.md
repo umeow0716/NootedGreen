@@ -3257,3 +3257,51 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   restored to its original AuxKC before this static correction; a fresh CI-built
   artifact and watchdog-contained load are required before the first proxy
   context, workqueue or scheduler completion is claimed.
+
+### Reach first Metal direct submit and isolate the Blit3D scratch mapping fault
+
+- Commit `209be40` passed GitHub Actions run `36297398362`. Its x86_64 kext
+  UUID is `ECB4A45C-E787-3BA7-8C85-1B8127CCE299`, executable SHA-256 is
+  `54385c0679dcfe9c6adeb316e2ff66d980e4d4d8eb8abf5ff4438e1154506446`
+  and its correctly path-bound minimal AuxKC SHA-256 is
+  `9747ca779a8ce20f3345c029b62ef5436797c85dfcab0dd4f1c36ac558406b72`.
+  The complete procedure and raw evidence are retained under
+  `build/diagnostics/209be40-runtime1` in the VM workspace.
+- The proxy DMA repair passed its intended boundary. The first proxy context
+  acquired and validated its `IGAccelSysMemory` physical segment, allocated its
+  workqueue and completed scheduler firmware initialization. IOAccelerator was
+  enabled and published. The Metal smoke test created its device, queue,
+  resource, command buffer and blit encoder, encoded and committed the fill,
+  then entered its first completion wait.
+- During that real client path Tahoe registered render, video/compute and blit
+  GuC contexts. Direct submission of context `55223`, LRCA `0x419e7319`, class
+  `3`, tail `0x58` returned success with fence `75`; the subsequent lifecycle
+  message placed it in state `5`. This is runtime evidence of Metal client
+  admission, GuC context registration and direct submit, but not of completed
+  GPU work.
+- The saved panic `Kernel-2026-09-27-133649.panic`, SHA-256
+  `340807dd82b222f4d2e72ccf730cc378940a75f30de4139ec058fbf9da23d085`,
+  identifies `metal-smoke-209be40` as the panicked task. `_memcpy+0x7`, called
+  by `blit3d_initialize_scratch_space()` from
+  `IGHardwareBlit3DContext::initialize()+0x4c`, attempted a `0x44`-byte write
+  at CPU-map `base+0xd000`. The base in RBX was `0xffffff9020142000`; CR2 was
+  exactly `0xffffff902014f000`, proving the final page was absent rather than a
+  GuC wait or interrupt timeout.
+- Pinned disassembly makes the next compatibility boundary exact.
+  `blit3d_scratch_space_size` is `0xd240`; the extended-context factory passes
+  it to `IGSharedMappedBuffer::withOptions`, and the native scratch initializer
+  writes through offset `0xd20f`. The observed CPU mapping stopped at
+  `base+0xd000`. The removed V69/V73 experiment recorded the same address and
+  avoided it by skipping the entire native initializer; that partial-context
+  fabrication remains prohibited.
+- The next repair must compare Tahoe's last supported Intel implementation and
+  both admitted payloads at the complete shared-buffer allocation boundary,
+  independently validate logical length, backing IOMD length and CPU mapping
+  span, then provide a UUID-bounded page-rounded `0xe000` native allocation or
+  fail before the first write. It must preserve the real Blit3D initializer and
+  ownership rather than restore the old stub. An offline contract must prove
+  every scratch write fits before another runtime.
+- The host watchdog isolated only the guest. The tested candidate and kext are
+  archived in the guest; the active collection was restored to the original
+  SHA-256 `041a15e0415a2756a22e53f0c8e7dc348df01afd78cfc76424cb7488094b1fdb`.
+  The VM is running and reachable with no Lilu, NootedGreen or TGL image loaded.
