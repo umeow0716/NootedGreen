@@ -2768,6 +2768,10 @@ bool Gen11::IGAccelTaskIsKernelGPUTask(const void *that)
 
 bool Gen11::start(void *that, void *provider)
 {
+	if (!that || !provider || !callback || !callback->ostart) {
+		SYSLOG("ngreen", "V239: refusing accelerator start with incomplete IOService ABI");
+		return false;
+	}
 	// An SR-IOV VF owns neither force-wake nor legacy execlist MMIO. Establish
 	// the GuC VF ABI and its assigned GGTT range before native scheduler setup.
 	const auto identity = vfIdentifyDevice();
@@ -2994,75 +2998,45 @@ bool Gen11::submitBlit(void *that, void *param_1, void *param_2, void *param_3, 
 		return false;
 	}
 
-	// On a later-generation physical GPU, routeSel=3 executes TGL-compiled EU
-	// shader payloads which previously stalled RCS. The VF path deliberately
-	// exercises it through GuC for controlled validation; PF remains explicit
-	// unsupported containment until generation-specific payloads exist.
-	// routeSel=3 routes to blit3d_submit_commands which executes TGL-compiled EU shaders
-	if (!NGreen::callback->isRealTGL &&
-	    gVfIdentity != VfIdentity::Virtual) {
-		auto *blit193 = reinterpret_cast<uint8_t *>(param_1);
-		const uint32_t routeSel193 = (blit193[0xA2] >> 3U) & 0x3U;
-		if (routeSel193 == 3) {
-			return false;
-		}
-	}
-
 	return FunctionCast(submitBlit, callback->osubmitBlit)(that, param_1, param_2, param_3, param_4);
 }
 
-uint8_t Gen11::barrierSubmission(void *queue, void *accelerator, void *cmdDesc,
-								 void *event, uint16_t count, const uint16_t *list) {
+void Gen11::barrierSubmission(void *queue, void *accelerator, void *cmdDesc,
+								void *event, uint16_t count, const uint16_t *list) {
+	// Both direct callers in the pinned Tahoe payload ignore RAX, and the native
+	// body has return paths that do not establish a value: this is a void ABI.
+	// Therefore no wrapper rejection can be reported to the caller. Fail-stop
+	// before it continues without the mandatory barrier side effects.
+	PANIC_COND(!queue || !accelerator || !cmdDesc || !event ||
+		(count && !list) || !callback || !callback->obarrierSubmission,
+		"ngreen", "Invalid Tahoe barrier submission arguments or trampoline");
 	if (gVfIdentity == VfIdentity::Virtual) {
-		if (!vfNativeGpuWorkReady() || !queue || !accelerator || !cmdDesc ||
-		    !event || (count && !list) || !callback->obarrierSubmission)
-			return 0;
+		PANIC_COND(!vfNativeGpuWorkReady(), "ngreen",
+			"VF barrier reached without an admitted GPU transport");
 
 		// The Tahoe body unconditionally dereferences 2D, 3D and depth FIFO
-		// pointers and may dereference color as well. Prime every native context
-		// first so a failed VF allocation becomes a truthful barrier failure,
-		// never a kernel null dereference or fabricated completion.
+		// pointers and may dereference color as well. Prime every native context;
+		// if any allocation is missing, the void caller cannot recover or observe
+		// an error, so continuing would fabricate successful barrier progress.
 		void *task = getMember<void *>(cmdDesc, 0x8);
 		void *blit2D = task ? getBlit2DContext(task, true) : nullptr;
 		void *blit3D = task ? getBlit3DContext(task, true) : nullptr;
 		void *depth = task ? getDepthResolveContext(task, true) : nullptr;
 		void *color = task ? getColorResolveContext(task, true) : nullptr;
-		if (!blit2D || !blit3D || !depth || !color ||
+		const bool incomplete = !blit2D || !blit3D || !depth || !color ||
 		    !getMember<void *>(blit2D, 0xb8) ||
 		    !getMember<void *>(blit3D, 0xb8) ||
 		    !getMember<void *>(depth, 0xb8) ||
-		    !getMember<void *>(color, 0xb8)) {
+		    !getMember<void *>(color, 0xb8);
+		if (incomplete) {
 			SYSLOG("ngreen", "V243: rejected VF barrier with incomplete contexts task=%p 2D=%p 3D=%p depth=%p color=%p",
 			       task, blit2D, blit3D, depth, color);
-			return 0;
 		}
-		return FunctionCast(barrierSubmission, callback->obarrierSubmission)(
-			queue, accelerator, cmdDesc, event, count, list);
+		PANIC_COND(incomplete, "ngreen",
+			"VF barrier cannot continue with incomplete native contexts");
 	}
-
-	if (!queue || !accelerator || !cmdDesc || !event ||
-	    (count && !list) || !callback->obarrierSubmission)
-		return 0;
-
-	if (!NGreen::callback->isRealTGL) {
-		// The same UUID-pinned native body has unconditional context/FIFO
-		// dereferences on a later-generation PF. Reject incomplete allocation,
-		// but never replace the barrier with a constant-success response.
-		void *task = getMember<void *>(cmdDesc, 0x8);
-		void *blit2D = task ? getBlit2DContext(task, true) : nullptr;
-		void *blit3D = task ? getBlit3DContext(task, true) : nullptr;
-		void *depth = task ? getDepthResolveContext(task, true) : nullptr;
-		void *color = task ? getColorResolveContext(task, true) : nullptr;
-		if (!blit2D || !blit3D || !depth || !color ||
-		    !getMember<void *>(blit2D, 0xb8) ||
-		    !getMember<void *>(blit3D, 0xb8) ||
-		    !getMember<void *>(depth, 0xb8) ||
-		    !getMember<void *>(color, 0xb8))
-			return 0;
-	}
-	return FunctionCast(barrierSubmission, callback->obarrierSubmission)(queue, accelerator,
-																		 cmdDesc, event,
-																		 count, list);
+	FunctionCast(barrierSubmission, callback->obarrierSubmission)(
+		queue, accelerator, cmdDesc, event, count, list);
 }
 
 void *Gen11::getBlit2DContext(void *that, bool create)
@@ -3678,13 +3652,22 @@ void Gen11::vfInitDoorbells(void *that) {
 	// IntelAccelerator::start normally completed this before constructing the
 	// scheduler.  Retrying here makes the ordering requirement explicit and
 	// prevents a transiently-unready VF from falling through to DISTRDB.
+	if (!that) {
+		vfMarkProtocolFault("null VF doorbell allocator object");
+		return;
+	}
 	if (!gVfGGTTReady && !vfBootstrapDirectGgtt()) {
 		SYSLOG("ngreen", "V227: refusing physical doorbell discovery without VF bootstrap");
+		vfMarkProtocolFault("VF doorbell initialization before bootstrap");
 		return;
 	}
 	if (gVfDoorbellCount != kGen12DoorbellCount) {
 		SYSLOG("ngreen", "V227: unsupported VF doorbell quota %u during allocator init",
 		       gVfDoorbellCount);
+		// initDoorbells is void. Make the unsupported topology observable to the
+		// following loadGuCBinary admission check instead of continuing with a
+		// zeroed/partial allocator that cannot represent native Tahoe IDs.
+		vfMarkProtocolFault("unsupported partial VF doorbell allocator topology");
 		return;
 	}
 
@@ -3944,6 +3927,12 @@ void Gen11::vfDetachContextDesc(void *that, const uint32_t *descriptor) {
 	    contextBytes < kVfContextMinimumImageBytes ||
 	    !NGGgtt::contains(gVfGGTTBase, gVfGGTTSize, lrcaPage, contextBytes) ||
 	    lrcaPage >= kGucGgttTop || contextBytes > kGucGgttTop - lrcaPage) {
+		// Detach is void, so its caller cannot observe failure and will continue
+		// destroying the hardware context. If any backing object is still
+		// discoverable, quarantine it before returning: malformed identity must
+		// never turn into a DMA use-after-free.
+		if (contextBacking)
+			contextBacking->retain();
 		vfMarkProtocolFault("invalid VF context identity before detach");
 		return;
 	}
@@ -4031,6 +4020,11 @@ void Gen11::vfDetachContextDesc(void *that, const uint32_t *descriptor) {
 	IOSimpleLockUnlockEnableInterrupt(gVfContextLock, interruptState);
 	queue.unlock();
 	if (identityMismatch) {
+		// The known record keeps its own backing alive, but a mismatching caller
+		// may own a second object that native destruction will release next.
+		// Quarantine that supplied object as well because the void ABI cannot
+		// return a teardown failure to its owner.
+		contextBacking->retain();
 		vfMarkProtocolFault("VF detach descriptor/backing identity mismatch");
 		return;
 	}
@@ -4834,7 +4828,7 @@ void Gen11::wrapSafeForceWake(void *that, bool set, uint32_t dom)
 	forceWake(that, set, dom, 0);
 }
 
-void Gen11::forceWake(void *that, bool set, uint32_t dom, uint8_t ctx)
+void Gen11::forceWake(void *that, bool set, uint32_t dom, uint32_t ctx)
 {
 	(void)that;
 	(void)set;

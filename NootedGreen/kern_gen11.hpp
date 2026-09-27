@@ -100,7 +100,7 @@ private:
 	static bool submitBlit(void *that, void *params, void *rects, void *task,
 	                       bool synchronous);
 	mach_vm_address_t osubmitBlit {};
-	static void forceWake(void *that, bool set, uint32_t domain, uint8_t context);
+	static void forceWake(void *that, bool set, uint32_t domain, uint32_t context);
 	static void wrapSafeForceWake(void *that, bool set, uint32_t domain);
 	mach_vm_address_t orgInitSchedControl {};
 
@@ -136,9 +136,9 @@ private:
 	static void populateResetRegisterList(void *that);
 	static bool wrapIGScheduler5IsGpuIdle(const void *that);
 	static bool wrapIGScheduler4IsGpuIdle(const void *that);
-	static uint8_t barrierSubmission(void *queue, void *accelerator,
-	                                 void *commandDescriptor, void *event,
-	                                 uint16_t count, const uint16_t *list);
+	static void barrierSubmission(void *queue, void *accelerator,
+	                              void *commandDescriptor, void *event,
+	                              uint16_t count, const uint16_t *list);
 	mach_vm_address_t obarrierSubmission {};
 
 public:

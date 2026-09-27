@@ -2615,3 +2615,39 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   explicit `true`/`false` paths. This removes dependence on unspecified upper
   return-register bits and keeps each routed function's C++ ABI identical to
   its UUID-admitted target.
+
+### Preserve the complete multithreaded force-wake ABI
+
+- The routed symbol `SafeForceWakeMultithreaded(bool, unsigned int,
+  unsigned int)` encodes both numeric arguments as `j` in its C++ name, while
+  the VF no-op replacement declared the final context argument as `uint8_t`.
+  Although the value is intentionally ignored for a VF, calling through a
+  mismatched C++ function type is not a supported ABI contract.
+- The replacement now accepts the complete 32-bit context argument. It still
+  suppresses every force-wake operation only on the UUID-admitted VF path;
+  physical devices retain all three native force-wake entry points.
+
+### Do not fabricate a fallible barrier ABI
+
+- Both direct calls to `barrierSubmission` in the pinned Tahoe payload ignore
+  RAX, and the native body has return paths that do not establish any return
+  value. It is a `void` function. The previous wrapper declared `uint8_t` and
+  returned zero when transport or native contexts were incomplete, but neither
+  caller could observe that supposed failure and continued without the barrier.
+- The wrapper now has the exact `void` ABI. Invalid arguments, an unready VF
+  transport, or missing native FIFO contexts are fail-stop conditions because
+  silently returning would allow command execution to proceed without required
+  barrier/event side effects. An admitted request still enters the complete
+  native Tahoe body.
+
+### Make void lifecycle failures fail-closed
+
+- `initDoorbells()` cannot return the unsupported partial-quota condition to
+  its caller. It now records a protocol fault for a null object, failed
+  bootstrap or non-256 topology, so the immediately following firmware/scheduler
+  admission cannot continue with an uninitialized allocator.
+- `DetachContextDescFromGucContext()` is also void. When its descriptor or
+  backing identity is malformed, any discoverable caller-owned backing is now
+  retained for the rest of the boot before returning. The known table record
+  was already retained, but that alone did not protect a mismatching second
+  object from native destruction and possible late GuC DMA.
