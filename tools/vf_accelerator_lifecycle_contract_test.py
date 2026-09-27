@@ -190,17 +190,23 @@ def source_contract(path):
         raise AssertionError(f"{path}: IOPCIFamily symbol is incorrectly resolved from KernelID")
 
     start = function_body(source, "bool Gen11::startGraphicsEngine(void *that)")
+    bridge = start.index("callback->vfInterruptBridgeEnable)(")
     firmware = start.index("callback->vfSchedulerInitFirmware)(scheduler)")
     ready = start.index("if (!vfNativeGpuWorkReady())")
-    bridge = start.index("callback->vfInterruptBridgeEnable)(")
-    if not firmware < ready < bridge:
+    accelerator = start.index("callback->ioGraphicsEnableAccelerator)(that)")
+    if not bridge < firmware < ready < accelerator:
         raise AssertionError(
-            f"{path}: VF scheduler/transport/interrupt lifecycle order is reversed")
+            f"{path}: VF MSI/firmware/transport/accelerator lifecycle order is reversed")
+    failure = start.index("VF scheduler firmware initialization failed")
+    disable = start.index("callback->vfInterruptBridgeDisable)(", failure)
+    fault = start.index("VF scheduler firmware initialization failure", failure)
+    if not failure < disable < fault:
+        raise AssertionError(
+            f"{path}: firmware failure does not close the early VF MSI consumer")
     if "IGMemoryManager::initCache" not in start or "must omit it" not in start:
         raise AssertionError(
             f"{path}: physical VF cache initialization is not explicitly excluded")
-    if start.index("vfInterruptBridgeEnable") > start.index(
-            "ioGraphicsEnableAccelerator"):
+    if start.index("vfInterruptBridgeEnable") > accelerator:
         raise AssertionError(f"{path}: VF start lifecycle order is reversed")
     if start.count("initEvent(eventMachine") != 2:
         raise AssertionError(f"{path}: VF start does not initialize both native events")
@@ -220,12 +226,51 @@ def source_contract(path):
     quiesce = function_body(source, "bool vfQuiesceDeviceForShutdown(void *guc)")
     for token in (
             "if (!gVfCtbEverEnabled)",
-            "entry.state != kVfGucContextEmpty",
-            "entry.contextBacking",
+            "vfDirectContextTableUnowned()",
             "OSCompareAndSwap(0, 1, &gVfDmaQuiesced)",
             "OSCompareAndSwap(0, 1, &gVfContextShutdownComplete)"):
         if token not in quiesce:
             raise AssertionError(f"{path}: incomplete pre-CTB rollback proof: {token}")
+
+    unowned = function_body(source, "bool vfDirectContextTableUnowned()")
+    for token in (
+            "entry.state != kVfGucContextEmpty",
+            "entry.contextBacking",
+            "entry.refCount",
+            "entry.enablePending",
+            "entry.disablePending"):
+        if token not in unowned:
+            raise AssertionError(
+                f"{path}: incomplete direct-context ownership proof: {token}")
+
+    failed_bootstrap = function_body(
+        source, "bool vfRollbackFailedPostCtbBootstrap(void *guc)")
+    for token in (
+            "guc != gVfHardwareGuc",
+            "gVfCtbEverEnabled",
+            "gVfSchedulerFirmwareReady",
+            "gVfProtocolFault",
+            "gVfMmioPoisoned",
+            "vfCloseContextOperationGateAndWait(guc)",
+            "vfDirectContextTableUnowned()",
+            "vfCloseIrqCallbackGateAndWait(guc)",
+            "kGucActionHost2GucControlCtb, 0",
+            "NGVfMmioResponse::noData(reply[0])",
+            "OSCompareAndSwap(0, 1, &gVfDmaQuiesced)"):
+        if token not in failed_bootstrap:
+            raise AssertionError(
+                f"{path}: incomplete failed post-CTB rollback proof: {token}")
+
+    mmio_start = source.index(
+        "bool Gen11::vfMmioHostToGuCAction(void *that, const uint32_t *request,")
+    configured = source.index("vfConfigureModernCtb(", mmio_start)
+    consume = source.index("vfConsumeMemoryInterrupts()", configured)
+    drain = source.index(
+        "vfSoftwareGuCInterrupt(that, nullptr, 0)", consume)
+    response = source.index("NGVfLegacyCtb::responseStatus(ok)", drain)
+    if not configured < consume < drain < response:
+        raise AssertionError(
+            f"{path}: CTB enable-boundary drain is not ordered before success")
     print(f"PASS: VF wrapper preserves native bridge/IOAccel lifecycle in {path}")
 
 

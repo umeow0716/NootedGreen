@@ -53,6 +53,16 @@ disassembly now requires `IGScheduler::initFirmware()` before transport
 readiness and accelerator enable, while continuing to omit
 `IGMemoryManager::initCache()` because that method directly writes PF-owned
 force-wake, MOCS and L3 registers.
+The next contained runtime reached successful CTB and memory-IRQ setup, then
+failed in the first post-CTB proxy-context GGTT mapping because its synchronous
+`TLB_DONE` wait preceded interrupt-bridge admission. Pinned Tahoe disassembly
+and current i915 ordering now require the already VF-contained bridge before
+scheduler firmware initialization, followed by an explicit CT-enable boundary
+drain. Failed partial GuC construction can unwind only through the separately
+acknowledged MMIO CTB-disable boundary, and only while scheduler firmware is
+not ready and the drained complete direct-context table is proven unowned.
+This ordering and rollback are statically covered; successful runtime GuC work
+remains unclaimed until the next CI-built watchdog-contained load.
 
 | Files/area | Evidence and remaining boundary |
 | --- | --- |

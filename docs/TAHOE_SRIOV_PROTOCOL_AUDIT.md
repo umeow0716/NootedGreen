@@ -3092,3 +3092,52 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   strict ABI, Mach-O, protocol-model and sanitizer suite pass in
   `/tmp/ngreen-static.KnNcGb`. A fresh macOS build and watchdog-contained load
   remain required before GuC transport admission is claimed.
+
+### Admit VF completion delivery before post-CTB GGTT allocation
+
+- Commit `1b5736d` passed GitHub Actions run `36293818737`; its x86_64 kext
+  UUID is `74721B3A-3168-33A2-86ED-1E9D079F8E4F`. A watchdog-contained load
+  reached doorbell allocation, CTB backing/layout, scheduler data, memory-IRQ
+  setup and successful H2G/G2H registration. The next boot preserved
+  `Kernel-2026-09-27-122656.panic`, SHA-256
+  `9e15415eb86aa2bf8ce499e173692b4d42bf8a117c7be4c4ffeddf9d2cf64374`.
+  The fail-stop was intentional: partial `IGHardwareGuC::initWithOptions()`
+  unwind tried to release a GGTT mapping after its synchronous GuC TLB
+  invalidation had timed out, so NootedGreen refused to free backing without a
+  proven DMA boundary.
+- Complete pinned-payload disassembly locates the failure after CTB enable but
+  inside the first `createUkContext()` proxy allocation. Tahoe enabled the
+  interrupt bridge only after `IGScheduler::initFirmware()` returned, while
+  that method creates GGTT-backed proxy state and every such post-CTB mapping
+  waits for a `TLB_DONE` G2H message. This was a circular dependency: the
+  completion producer was live, but its MSI consumer was not yet admitted.
+- Current i915 establishes the same ordering explicitly: prepare VF memory
+  interrupts, enable CT, enable GuC interrupts and consume messages crossing
+  the enable boundary before later submission setup. The VF lifecycle now
+  enables Tahoe's already-contained bridge before scheduler firmware init.
+  The bridge retains native event-source ownership, while its force-wake,
+  master-IRQ and nested scheduler error-IRQ hardware paths remain routed to
+  VF-safe memory interrupts. Firmware failure closes the early bridge before
+  reporting failure.
+- CTB enable now clears the memory-IRQ source and synchronously drains G2H once
+  before publishing legacy registration success. This closes the edge race in
+  which an MSI can arrive between firmware enable and `gVfCtbEnabled`
+  publication. The normal callback and boundary drain share the same G2H lock.
+  Race-free one-shot diagnostics identify each stage of the first proxy
+  context without logging every scheduler allocation.
+- A narrowly bounded failed-bootstrap rollback preserves recoverability. It is
+  available only before scheduler firmware initialization completes, after a
+  protocol fault, with valid MMIO and the exact GuC owner. It closes and drains
+  the context-operation gate, proves every entry in the complete quota-sized
+  direct-context table is empty and unowned, masks and drains IRQ callbacks,
+  and requires an independent MMIO `CONTROL_CTB` disable acknowledgement before
+  publishing DMA quiescence. It is forbidden once scheduler initialization has
+  succeeded, where the normal context retirement, TLB and CTB shutdown proof
+  remains mandatory.
+- Source contracts enforce the early-MSI / firmware / readiness / IOAccel
+  order, firmware-failure bridge closure, complete ownership predicates, CTB
+  boundary drain and rollback guards. Full syntax, zero-finding analyzer,
+  strict ABI, Mach-O, exhaustive protocol and sanitizer checks pass in
+  `/tmp/ngreen-static.MaBknS`. A fresh CI-built macOS artifact and controlled
+  runtime are still required; this checkpoint does not claim a completed GuC
+  command or Metal acceleration.

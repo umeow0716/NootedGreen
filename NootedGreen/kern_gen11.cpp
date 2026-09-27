@@ -213,6 +213,7 @@ volatile UInt32 gVfContextShutdownStarted = 0;
 volatile UInt32 gVfContextShutdownComplete = 0;
 volatile UInt32 gVfDmaQuiesced = 0;
 volatile UInt32 gVfDeviceStopping = 0;
+volatile UInt32 gVfSchedulerFirmwareReady = 0;
 bool gVfMemIrqConfigured = false;
 volatile UInt32 gVfMemIrqRequested = 0;
 volatile UInt32 gVfProtocolFault = 0;
@@ -436,6 +437,8 @@ bool vfValidG2HMapping(const volatile uint32_t *descriptor,
                        const volatile uint32_t *buffer);
 bool vfInvalidateTLBSync(void *guc);
 bool vfQuiesceDeviceForShutdown(void *guc);
+bool vfGucSendMMIO(const uint32_t request[4], uint32_t requestLength,
+                   uint32_t response[4]);
 
 bool vfCaptureHardwareGuc(void *guc)
 {
@@ -1119,6 +1122,69 @@ bool vfRetireContextForShutdown(void *guc, uint16_t gucId)
 	return false;
 }
 
+bool vfDirectContextTableUnowned()
+{
+	if (!gVfContextLock || !gVfContexts || !gVfContextCapacity)
+		return false;
+	// Callers close and drain the operation gate first. No table writer remains,
+	// so avoid holding interrupts disabled across a quota-sized (57K here) scan.
+	OSSynchronizeIO();
+	for (uint32_t id = 0; id < gVfContextCapacity; id++) {
+		const auto &entry = gVfContexts[id];
+		if (entry.state != kVfGucContextEmpty || entry.contextBacking ||
+		    entry.refCount || entry.enablePending || entry.disablePending)
+			return false;
+	}
+	return true;
+}
+
+bool vfRollbackFailedPostCtbBootstrap(void *guc)
+{
+	// A software allocation or its first synchronous GGTT invalidation can fail
+	// after CTB enable but before any direct LRCA is registered with GuC. Once a
+	// protocol fault is recorded, the normal CTB drain deliberately refuses to
+	// trust ring state. The MMIO CONTROL_CTB acknowledgement is still an
+	// independent firmware boundary: if the operation gate is drained and the
+	// complete direct-context table is unowned, disabling CTB proves that the
+	// only firmware-visible allocation (CTB/memory-IRQ backing) has stopped DMA.
+	// Apple-created proxy/workqueue buffers were never registered with GuC.
+	OSSynchronizeIO();
+	if (!guc || guc != gVfHardwareGuc || !gVfCtbEverEnabled ||
+	    gVfSchedulerFirmwareReady ||
+	    !gVfProtocolFault || gVfDmaQuiesced || gVfMmioPoisoned)
+		return false;
+	OSCompareAndSwap(0, 1, &gVfSubmissionStopped);
+	OSSynchronizeIO();
+	if (!vfCloseContextOperationGateAndWait(guc) ||
+	    !vfDirectContextTableUnowned())
+		return false;
+
+	gVfMemIrqRequested = 0;
+	auto *base = gVfCtbCpuBase;
+	if (base) {
+		*reinterpret_cast<volatile uint32_t *>(
+			base + kVfMemIrqOffset + kVfMemIrqEnableOffset) = 0;
+	}
+	OSSynchronizeIO();
+	if (!vfCloseIrqCallbackGateAndWait(guc))
+		return false;
+
+	uint32_t disable[4] = {kGucActionHost2GucControlCtb, 0, 0, 0};
+	uint32_t reply[4] = {};
+	if (!vfGucSendMMIO(disable, 2, reply) ||
+	    !NGVfMmioResponse::noData(reply[0]))
+		return false;
+
+	gVfCtbDisableConfirmed = true;
+	OSCompareAndSwap(0, 1, &gVfCtbStopped);
+	OSCompareAndSwap(1, 0, &gVfCtbEnabled);
+	OSCompareAndSwap(0, 1, &gVfDmaQuiesced);
+	OSCompareAndSwap(0, 1, &gVfContextShutdownComplete);
+	OSSynchronizeIO();
+	SYSLOG("ngreen", "V248: safely disabled CTB after failed pre-submission VF bootstrap");
+	return true;
+}
+
 bool vfQuiesceDeviceForShutdown(void *guc)
 {
 	OSSynchronizeIO();
@@ -1147,20 +1213,9 @@ bool vfQuiesceDeviceForShutdown(void *guc)
 			vfMarkProtocolFault("pre-CTB rollback has no context ownership table");
 			return false;
 		}
-		// The operation gate is closed and drained above.  G2H is impossible
-		// before CTB enable, so no writer exists; do not hold interrupts disabled
-		// while scanning a quota-sized (potentially 57K-entry) table.
-		OSSynchronizeIO();
-		bool unowned = true;
-		for (uint32_t id = 0; id < gVfContextCapacity; id++) {
-			const auto &entry = gVfContexts[id];
-			if (entry.state != kVfGucContextEmpty || entry.contextBacking ||
-			    entry.refCount || entry.enablePending || entry.disablePending) {
-				unowned = false;
-				break;
-			}
-		}
-		if (!unowned) {
+		// The operation gate is closed and drained above. G2H is impossible
+		// before CTB enable, so the shared complete-table proof is sufficient.
+		if (!vfDirectContextTableUnowned()) {
 			vfMarkProtocolFault("pre-CTB rollback found live context ownership");
 			return false;
 		}
@@ -3107,6 +3162,7 @@ bool Gen11::startGraphicsEngine(void *that)
 	// leaves IOAccel resource creation asleep in acceleratorWaitEnabled().
 	if (!that || !callback || !callback->vfSchedulerInitFirmware ||
 	    !callback->vfInterruptBridgeEnable ||
+	    !callback->vfInterruptBridgeDisable ||
 	    !callback->ioGraphicsEnableAccelerator ||
 	    !callback->ioAccelEventMachineInitEvent) {
 		vfMarkProtocolFault("VF engine start before accelerator lifecycle is ready");
@@ -3126,15 +3182,37 @@ bool Gen11::startGraphicsEngine(void *that)
 		vfMarkProtocolFault("missing VF scheduler before firmware initialization");
 		return false;
 	}
+	auto *interruptBridge = getMember<void *>(that, 0x1248);
+	if (!interruptBridge) {
+		vfMarkProtocolFault("missing VF interrupt bridge during engine start");
+		return false;
+	}
+	using LifecycleMethod = void (*)(void *);
+	// A VF has to admit its MSI consumer before CTB enable. Unlike the physical
+	// Tahoe sequence, scheduler initialization allocates GGTT-backed proxy state
+	// after enabling CTB, and every post-CTB map requires a synchronous GuC TLB
+	// completion. Linux follows the same dependency: CT is enabled, interrupt
+	// delivery is enabled immediately, then messages crossing that boundary are
+	// consumed. The UUID-pinned bridge body retains the event-source lifecycle;
+	// its force-wake and GFX_MSTR_IRQ accesses are separately removed for a VF,
+	// and both nested interrupt-programming calls are routed to memory IRQs.
+	reinterpret_cast<LifecycleMethod>(callback->vfInterruptBridgeEnable)(
+		interruptBridge);
+	SYSLOG("ngreen", "V248: enabled VF MSI consumer before scheduler firmware initialization");
+
 	using InitFirmware = IOReturn (*)(void *);
 	const IOReturn firmwareResult =
 		reinterpret_cast<InitFirmware>(callback->vfSchedulerInitFirmware)(scheduler);
 	if (firmwareResult != kIOReturnSuccess) {
 		SYSLOG("ngreen", "V247: VF scheduler firmware initialization failed ret=0x%x",
 		       firmwareResult);
+		reinterpret_cast<LifecycleMethod>(callback->vfInterruptBridgeDisable)(
+			interruptBridge);
 		vfMarkProtocolFault("VF scheduler firmware initialization failure");
 		return false;
 	}
+	OSCompareAndSwap(0, 1, &gVfSchedulerFirmwareReady);
+	OSSynchronizeIO();
 	if (!vfNativeGpuWorkReady()) {
 		SYSLOG("ngreen",
 		       "V247: incomplete post-firmware state ggtt=%d memirq=%d ctbCpu=%d ctbGpu=0x%x enabled=%d stopped=%d submissionStopped=%d fault=%d",
@@ -3146,15 +3224,6 @@ bool Gen11::startGraphicsEngine(void *that)
 	}
 	SYSLOG("ngreen", "V247: VF scheduler firmware and GuC transport initialized before accelerator enable");
 
-	auto *interruptBridge = getMember<void *>(that, 0x1248);
-	if (!interruptBridge) {
-		vfMarkProtocolFault("missing VF interrupt bridge during engine start");
-		return false;
-	}
-
-	using LifecycleMethod = void (*)(void *);
-	reinterpret_cast<LifecycleMethod>(callback->vfInterruptBridgeEnable)(
-		interruptBridge);
 	reinterpret_cast<LifecycleMethod>(callback->ioGraphicsEnableAccelerator)(that);
 
 	// The next two calls in the UUID-pinned native tail attach the accelerator's
@@ -3432,6 +3501,11 @@ uint32_t Gen11::vfCreateUkContext(void *that, uint64_t owner, int priority) {
 		vfMarkProtocolFault("legacy context creation without safe VF transport or pool lock");
 		return NGContextPool::invalidId;
 	}
+	// initWithOptions creates these serially today, but keep the diagnostic
+	// one-shot race-free rather than relying on that private implementation.
+	static volatile UInt32 bootstrapContextTraced = 0;
+	const bool traceBootstrap =
+		OSCompareAndSwap(0, 1, &bootstrapContextTraced);
 
 	using AllocContext = uint32_t (*)(void *, uint64_t, bool);
 	using ReleaseContext = void (*)(void *, uint32_t);
@@ -3463,6 +3537,8 @@ uint32_t Gen11::vfCreateUkContext(void *that, uint64_t owner, int priority) {
 		that, owner, true);
 	if (id == NGContextPool::invalidId)
 		return id;
+	if (traceBootstrap)
+		SYSLOG("ngreen", "V248: allocated first VF proxy context id=%u", id);
 
 	uint32_t poolCount = 0;
 	PANIC_COND(!vfLegacyProxyPoolValid(that,
@@ -3490,6 +3566,9 @@ uint32_t Gen11::vfCreateUkContext(void *that, uint64_t owner, int priority) {
 		rollback(id, nullptr, backing);
 		return NGContextPool::invalidId;
 	}
+	if (traceBootstrap)
+		SYSLOG("ngreen", "V248: mapped first VF proxy process backing GGTT=0x%llx",
+		       static_cast<unsigned long long>(backingGpu));
 	auto *memory = reinterpret_cast<GetMemory>(
 		callback->oIGMappedBuffergetMemory)(backing);
 	IOByteCount segmentBytes = 0;
@@ -3506,6 +3585,9 @@ uint32_t Gen11::vfCreateUkContext(void *that, uint64_t owner, int priority) {
 		rollback(id, nullptr, backing);
 		return NGContextPool::invalidId;
 	}
+	if (traceBootstrap)
+		SYSLOG("ngreen", "V248: validated first VF proxy physical segment bytes=0x%llx",
+		       static_cast<unsigned long long>(segmentBytes));
 
 	auto *process = reinterpret_cast<void *>(backingCpu + PAGE_SIZE / 2);
 	const uint64_t processGpu = backingGpu + PAGE_SIZE / 2;
@@ -3515,6 +3597,8 @@ uint32_t Gen11::vfCreateUkContext(void *that, uint64_t owner, int priority) {
 		rollback(id, nullptr, backing);
 		return NGContextPool::invalidId;
 	}
+	if (traceBootstrap)
+		SYSLOG("ngreen", "V248: allocated first VF proxy work queue");
 	auto *queueBacking = getMember<void *>(queue, 0x30);
 	const uint64_t queueCpu = queueBacking ?
 		reinterpret_cast<uint64_t>(getVirtual(queueBacking)) : 0;
@@ -3557,6 +3641,8 @@ uint32_t Gen11::vfCreateUkContext(void *that, uint64_t owner, int priority) {
 	NGUnaligned::writeLe32(static_cast<uint8_t *>(process) + 0x28,
 		static_cast<uint32_t>(priority));
 	OSSynchronizeIO();
+	if (traceBootstrap)
+		SYSLOG("ngreen", "V248: completed first VF proxy context id=%u", id);
 	return id;
 }
 
@@ -3762,7 +3848,21 @@ bool Gen11::vfMmioHostToGuCAction(void *that, const uint32_t *request,
 			       requestLength);
 			return false;
 		}
-		const bool ok = vfConfigureModernCtb(request[3] == 1U, request[1]);
+		bool ok = vfConfigureModernCtb(request[3] == 1U, request[1]);
+		if (ok && request[3] == 0U) {
+			// Linux enables GuC interrupt delivery immediately around CT enable and
+			// explicitly consumes messages that arrived across that boundary. The VF
+			// bridge is already enabled by startGraphicsEngine before initFirmware,
+			// but an MSI can still race publication of gVfCtbEnabled. Clear its
+			// memory-IRQ source and synchronously drain the receive ring once so the
+			// first GGTT/TLB transaction cannot wait on a lost edge. The native
+			// consumer and this path serialize on the same G2H lock.
+			(void)vfConsumeMemoryInterrupts();
+			vfSoftwareGuCInterrupt(that, nullptr, 0);
+			ok = gVfProtocolFault == 0;
+			if (ok)
+				SYSLOG("ngreen", "V248: drained the VF CTB enable boundary before firmware allocations");
+		}
 		if (response)
 			*response = NGVfLegacyCtb::responseStatus(ok);
 		return ok;
@@ -3787,13 +3887,16 @@ bool Gen11::vfMmioHostToGuCAction(void *that, const uint32_t *request,
 			// GuC free can be reached through partial-init unwind without the
 			// accelerator stop wrapper. Establish the context/DMA boundary here as
 			// an idempotent last chance, while CTB and IRQ consumers are still live.
-			const bool dmaQuiesced = vfQuiesceDeviceForShutdown(that);
+			bool dmaQuiesced = vfQuiesceDeviceForShutdown(that);
+			const bool bootstrapRollback = !dmaQuiesced && gVfProtocolFault &&
+				vfRollbackFailedPostCtbBootstrap(that);
+			dmaQuiesced = dmaQuiesced || bootstrapRollback;
 			// Stop ordinary producers first, but keep G2H/IRQ consumers alive long
 			// enough to retire already-published MODE_DONE/DEREGISTER_DONE/TLB_DONE
 			// replies. The final H2G lock check seals the transport only after the
 			// ring is empty and all reserved reply credits have returned.
-			const bool producersStopped = dmaQuiesced &&
-				vfStopSubmissionAndSealCtb(that);
+			const bool producersStopped = bootstrapRollback ||
+				(dmaQuiesced && vfStopSubmissionAndSealCtb(that));
 
 			// Once no reply is still required, mask future engine memory IRQs.
 			// This is still not proof that GuC/device DMA has stopped touching the
@@ -3812,15 +3915,18 @@ bool Gen11::vfMmioHostToGuCAction(void *that, const uint32_t *request,
 			// Only now is it safe to close callback admission: expected G2H
 			// completions are already drained, and callbacks admitted before closure
 			// are counted until they leave the shared backing.
-			const bool irqDrained =
-				producersStopped && vfCloseIrqCallbackGateAndWait(that);
+			const bool irqDrained = bootstrapRollback ||
+				(producersStopped && vfCloseIrqCallbackGateAndWait(that));
 
-			gVfCtbDisableConfirmed = false;
-			uint32_t disable[4] = {kGucActionHost2GucControlCtb, 0, 0, 0};
 			uint32_t reply[4] = {};
-			const bool disabled = producersStopped &&
-				vfGucSendMMIO(disable, 2, reply) &&
-				NGVfMmioResponse::noData(reply[0]);
+			bool disabled = bootstrapRollback;
+			if (!bootstrapRollback) {
+				gVfCtbDisableConfirmed = false;
+				uint32_t disable[4] = {kGucActionHost2GucControlCtb, 0, 0, 0};
+				disabled = producersStopped &&
+					vfGucSendMMIO(disable, 2, reply) &&
+					NGVfMmioResponse::noData(reply[0]);
+			}
 			gVfCtbDisableConfirmed = disabled;
 			ok = producersStopped && irqDrained && disabled;
 			SYSLOG("ngreen", "V224: disabled VF CTB transport ret=%d dma=%d producers=%d irqDrained=%d reply=0x%08x",
