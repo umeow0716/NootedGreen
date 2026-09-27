@@ -59,7 +59,9 @@ accelerator payload. It is not a general support declaration and it does not
 inherit runtime claims from the older Sonoma/Raptor Lake display experiments.
 
 - An identified SR-IOV VF rejects the physical framebuffer driver and uses the
-  PF-owned GuC transport, memory-IRQ page and assigned GGTT range.
+  PF-owned GuC transport, assigned GGTT range, and an interrupt transport
+  selected from the audited i915 device table. TGL/ADL/RPL keep Tahoe's native
+  Gen11 virtual-MMIO IRQ bridge; only MTL/ARL use the memory-IRQ ABI.
 - The admitted media-12 VF path writes the separately validated BAR0 PTE
   aperture directly. The former uninitialized software-shadow/VF2PF-relay
   fallback has been removed; media-13 remains fail-closed until its per-GT
@@ -75,8 +77,9 @@ inherit runtime claims from the older Sonoma/Raptor Lake display experiments.
   engine and timestamp-clock values at its five raw-register load sites. L3
   bank count is derived from the relayed mirror fuse; no PCI-ID topology table
   or target-specific 64-EU constant remains.
-- Native blit and barrier producers run only when GGTT, CTB, memory IRQ and
-  shutdown gates are all ready. Their real native result is propagated.
+- Native blit and barrier producers run only when GGTT, CTB, the selected IRQ
+  transport and shutdown gates are all ready. Their real native result is
+  propagated.
 - The direct CTB producer admits only the six GuC v70 FAST request shapes this
   VF bridge implements. Exact request bodies determine retirement permission
   and G2H credit reservations before anything is written to the transport.

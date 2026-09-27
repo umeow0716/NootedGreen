@@ -7,6 +7,7 @@ int main()
 {
 	unsigned admitted = 0;
 	unsigned consumers = 0;
+	unsigned pollingConsumers = 0;
 	for (unsigned bits = 0; bits < (1U << 9); ++bits) {
 		const NGVfSubmission::State state {
 			(bits & (1U << 0)) != 0,
@@ -27,9 +28,14 @@ int main()
 			(bits & ((1U << 6) | (1U << 8))) == 0;
 		assert(NGVfSubmission::consumerReady(state) == consumerExpected);
 		consumers += consumerExpected;
+		const bool pollingExpected = (bits & 0x3BU) == 0x3BU &&
+			(bits & ((1U << 6) | (1U << 8))) == 0;
+		assert(NGVfSubmission::consumerReady(state, false) == pollingExpected);
+		pollingConsumers += pollingExpected;
 	}
 	assert(admitted == 1);
 	assert(consumers == 2); // ordinary operation and submission-stopped teardown
+	assert(pollingConsumers == 4); // IRQ-disabled variants remain synchronously drainable
 
 	unsigned syntheticBootstrap = 0;
 	for (unsigned bits = 0; bits < (1U << 5); ++bits) {

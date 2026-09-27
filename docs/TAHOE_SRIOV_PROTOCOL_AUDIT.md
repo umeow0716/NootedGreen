@@ -1,12 +1,58 @@
 # Tahoe SR-IOV protocol audit — in progress
 
-Updated: 2026-09-26. Source baseline: `1dd2f4b` on
-`codex/tahoe-sriov-vf`. This safety-audit checkpoint is untested on hardware
-and is NOT a boot-test candidate or successful driver baseline.
-Checkpoint `4a0b838` passed native macOS build/link and sanitizer CI:
-https://github.com/umeow0716/NootedGreen/actions/runs/36215000826 .
-The reported whole-host freeze has NOT been assigned a proven cause.
-Keep `macos-tahoe-sriov` shut off during this review.
+Updated: 2026-09-27. Runtime source baseline: `ce166c8` on
+`codex/tahoe-sriov-vf`; the interrupt-transport correction described below is
+the current uncommitted review state. This is NOT a boot-test candidate or a
+successful driver baseline. The `ce166c8` run produced repeatable host PF DMAR
+faults followed by i915 hangs and a host reboot. Keep `macOS-Tahoe` shut off
+until the corrected code passes offline review, native CI, and a separately
+approved containment plan.
+
+## V251 host incident: wrong interrupt ABI selected on Raptor Lake
+
+- The guest configured memory IRQ at `18:01:42.498967` (`page=0x402bc000`,
+  GuC status `0x402bc190`, source `0x402bc419`). The host's first PF
+  `00:02.0` DMAR write fault to address zero followed at `18:01:43.272503`.
+  The first direct LRCA submission did not occur until `18:02:22.813452`.
+  Therefore direct Metal/context submission cannot explain the first fault;
+  the failure starts immediately after the memory-IRQ KLVs and accelerator IRQ
+  enable. Guest evidence is in `../../build/diagnostics/ce166c8-runtime1`; host
+  evidence is in `../../build/diagnostics/ce166c8-host-pf-hang`. The captured host
+  kernel log SHA-256 is
+  `fa934f74c6080459f256d936fc1e75d36a79051e3b72a99aef2c36c5ca338a97`.
+- Installed i915 source `i915-sriov-dkms-2026.03.05.7` maps RPL-P device
+  `8086:a7a8` to `adl_p_info`. That table inherits `GEN12_FEATURES` but does
+  not set `has_iov_memirq`; only `mtl_info` sets both `has_iov_memirq` and
+  `has_memirq`. `HAS_MEMORY_IRQ_STATUS` additionally requires a VF. Thus
+  TGL/ADL/RPL VFs use `gen11_irq_handler` and the virtual `0x1900xx` register
+  block; only MTL/ARL select memory IRQ.
+- The old bridge unconditionally sent KLV `0x0901/0x0900`, rewrote LRCA image
+  dwords `0x50..0x59`, replaced the native filter/read/enable/disable methods,
+  and removed `GFX_MSTR_IRQ` access. Those operations implement
+  `intel_iov_memirq` correctly only after the missing capability gate. On this
+  RPL-P VF they selected an unsupported protocol and are the root-cause-level
+  match for the observed timing.
+- Pinned Tahoe disassembly shows that its native `IGInterruptBridge` implements
+  the Gen11 VF protocol directly: master `0x190010`, bank status
+  `0x190018/1c`, selectors `0x190070/74`, identities `0x190060/64`, and the
+  enable/mask ranges `0x190030..0x190100`. Every encountered address is in
+  i915's `vf_accessible_regs`. The only unsafe nested path is
+  `IGScheduler4::{enable,disable}ErrorInterrupts`, which iterates command
+  streamers and writes physical per-engine `RING_*` registers.
+- V251 classifies interrupt transport by exact PCI ID. TGL/ADL/RPL retain the
+  complete native bridge, including logical scheduler callback registration,
+  and route only the two physical error helpers to a no-op. MTL/ARL retain the
+  memory-backed routes. Memory-IRQ KLV configuration, page consumption and
+  LRCA mutation now all fail closed unless `hasIovMemoryIrq(device)` is true.
+  Submission readiness uses the selected transport rather than assuming
+  memory IRQ on every VF. Disabling either transport immediately closes new
+  GPU-producer admission, while bounded synchronous CTB polling remains
+  available long enough to drain teardown completions.
+- Offline contracts enumerate the native Tahoe bridge MMIO operands and reject
+  any address outside i915's VF allowlist. Capability tests exhaust all 65,536
+  PCI IDs and explicitly prove `a7a8` is virtual-MMIO while MTL/ARL are
+  memory-IRQ devices. No VM or VF dynamic operation is permitted in this
+  checkpoint.
 
 ## Evidence inspected
 

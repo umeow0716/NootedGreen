@@ -6,7 +6,7 @@ namespace NGVfSubmission {
 struct State {
 	bool virtualDevice;
 	bool ggttReady;
-	bool memoryIrqReady;
+	bool interruptReady;
 	bool ctbCpuMapped;
 	bool ctbGpuMapped;
 	bool ctbEnabled;
@@ -17,18 +17,20 @@ struct State {
 
 constexpr bool ready(const State &state)
 {
-	return state.virtualDevice && state.ggttReady && state.memoryIrqReady &&
+	return state.virtualDevice && state.ggttReady && state.interruptReady &&
 		state.ctbCpuMapped && state.ctbGpuMapped && state.ctbEnabled &&
 		!state.ctbStopped && !state.submissionStopped && !state.protocolFault;
 }
 
 // G2H consumers remain live after ordinary submission is stopped so teardown
-// completions can drain. They must never enter before the complete transport is
-// published, after it is sealed, or after a protocol fault quarantines native
-// CTB locks/backing.
-constexpr bool consumerReady(const State &state)
+// completions can drain. A synchronous poll may also finish after hardware IRQ
+// delivery is disabled; an interrupt callback may not. Neither may enter before
+// the complete CTB is published, after it is sealed, or after a protocol fault
+// quarantines native CTB locks/backing.
+constexpr bool consumerReady(const State &state, bool requireInterrupt = true)
 {
-	return state.virtualDevice && state.ggttReady && state.memoryIrqReady &&
+	return state.virtualDevice && state.ggttReady &&
+		(!requireInterrupt || state.interruptReady) &&
 		state.ctbCpuMapped && state.ctbGpuMapped && state.ctbEnabled &&
 		!state.ctbStopped && !state.protocolFault;
 }

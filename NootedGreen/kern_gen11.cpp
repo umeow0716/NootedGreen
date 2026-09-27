@@ -216,8 +216,10 @@ volatile UInt32 gVfContextShutdownComplete = 0;
 volatile UInt32 gVfDmaQuiesced = 0;
 volatile UInt32 gVfDeviceStopping = 0;
 volatile UInt32 gVfSchedulerFirmwareReady = 0;
+bool gVfUsesMemoryIrq = false;
 bool gVfMemIrqConfigured = false;
 volatile UInt32 gVfMemIrqRequested = 0;
+volatile UInt32 gVfMmioIrqReady = 0;
 volatile UInt32 gVfProtocolFault = 0;
 bool gVfMmioPoisoned = false; // protected by gVfGucLock
 volatile UInt32 gVfBootstrapStarted = 0;
@@ -230,13 +232,20 @@ volatile UInt32 gVfTlbDoneSeqno = 0;
 constexpr uint32_t kVfG2HCreditCapacity = (0x4000 - 0x1000) / 4 - 1;
 volatile UInt32 gVfG2HCreditsUsed = 0;
 
+static bool vfInterruptTransportReady()
+{
+	return gVfUsesMemoryIrq ?
+		gVfMemIrqConfigured && gVfMemIrqRequested != 0 :
+		gVfMmioIrqReady != 0;
+}
+
 static bool vfNativeGpuWorkReady()
 {
 	OSSynchronizeIO();
 	return NGVfSubmission::ready({
 		gVfIdentity == VfIdentity::Virtual,
 		gVfGGTTReady,
-		gVfMemIrqConfigured,
+		vfInterruptTransportReady(),
 		gVfCtbCpuBase != nullptr,
 		gVfCtbGpuBase != 0,
 		gVfCtbEnabled != 0,
@@ -246,20 +255,20 @@ static bool vfNativeGpuWorkReady()
 	});
 }
 
-static bool vfCtbConsumerReady()
+static bool vfCtbConsumerReady(bool requireInterrupt)
 {
 	OSSynchronizeIO();
 	return NGVfSubmission::consumerReady({
 		gVfIdentity == VfIdentity::Virtual,
 		gVfGGTTReady,
-		gVfMemIrqConfigured,
+		vfInterruptTransportReady(),
 		gVfCtbCpuBase != nullptr,
 		gVfCtbGpuBase != 0,
 		gVfCtbEnabled != 0,
 		gVfCtbStopped != 0,
 		gVfSubmissionStopped != 0,
 		gVfProtocolFault != 0,
-	});
+	}, requireInterrupt);
 }
 
 void vfMarkProtocolFault(const char *reason)
@@ -840,9 +849,9 @@ bool vfInvalidateTLBSync(void *guc)
 	// sufficient and never fall back to the physical register on failure.
 	if (!vfCaptureHardwareGuc(guc))
 		return false;
-	if (!gVfGGTTReady || gVfProtocolFault || !gVfMemIrqConfigured ||
+	if (!gVfGGTTReady || gVfProtocolFault || !vfInterruptTransportReady() ||
 	    !gVfCtbGpuBase || !gVfCtbEnabled || gVfCtbStopped) {
-		vfMarkProtocolFault("TLB invalidation before VF CTB/memory IRQ readiness");
+		vfMarkProtocolFault("TLB invalidation before VF CTB/interrupt readiness");
 		return false;
 	}
 	if (!vfCanWaitForGuc(guc))
@@ -955,9 +964,11 @@ constexpr uint32_t kVfCtbG2HBufferBytes = 0x4000;
 static_assert(kVfG2HCreditCapacity == (kVfCtbG2HBufferBytes * 3 / 4) / 4 - 1,
               "G2H reply credits must retain unsolicited-event headroom");
 constexpr uint32_t kVfCtbUsedBytes = kVfCtbG2HBufferOffset + kVfCtbG2HBufferBytes;
-// Intel's VF ABI requires a memory-interrupt page in GGTT.  Reuse the final,
+// MTL/ARL's VF ABI requires a memory-interrupt page in GGTT. Reuse the final,
 // page-aligned 4 KiB of the enlarged CTB allocation so CT transport and IRQ
 // state share one mapping and no extra IGMappedBuffer allocation is needed.
+// TGL/ADL/RPL use virtual interrupt MMIO and never publish or modify this page;
+// retaining one allocation shape keeps the private Tahoe CTB ABI deterministic.
 constexpr uint32_t kVfMemIrqOffset = 0x7000;
 constexpr uint32_t kVfMemIrqBytes = 0x1000;
 constexpr uint32_t kVfMemIrqStatusOffset = NGVfMemIrq::statusOffset;
@@ -1175,7 +1186,8 @@ bool vfRollbackFailedPostCtbBootstrap(void *guc)
 	// trust ring state. The MMIO CONTROL_CTB acknowledgement is still an
 	// independent firmware boundary: if the operation gate is drained and the
 	// complete direct-context table is unowned, disabling CTB proves that the
-	// only firmware-visible allocation (CTB/memory-IRQ backing) has stopped DMA.
+	// only firmware-visible allocation (CTB, plus memory IRQ where supported)
+	// has stopped DMA.
 	// Apple-created proxy/workqueue buffers were never registered with GuC.
 	OSSynchronizeIO();
 	if (!guc || guc != gVfHardwareGuc || !gVfCtbEverEnabled ||
@@ -1190,7 +1202,7 @@ bool vfRollbackFailedPostCtbBootstrap(void *guc)
 
 	gVfMemIrqRequested = 0;
 	auto *base = gVfCtbCpuBase;
-	if (base) {
+	if (gVfUsesMemoryIrq && base) {
 		*reinterpret_cast<volatile uint32_t *>(
 			base + kVfMemIrqOffset + kVfMemIrqEnableOffset) = 0;
 	}
@@ -1281,7 +1293,8 @@ bool vfQuiesceDeviceForShutdown(void *guc)
 uint64_t vfConsumeMemoryInterrupts()
 {
 	auto *base = gVfCtbCpuBase;
-	if (!gVfMemIrqConfigured || !base || gVfCtbStopped || gVfProtocolFault)
+	if (!gVfUsesMemoryIrq || !gVfMemIrqConfigured || !base ||
+	    gVfCtbStopped || gVfProtocolFault)
 		return 0;
 
 	auto *page = reinterpret_cast<volatile uint8_t *>(
@@ -1581,7 +1594,8 @@ bool vfGucSelfConfig(uint16_t key, uint16_t length, uint64_t value)
 
 bool vfConfigureMemIrq()
 {
-	if (gVfSubmissionStopped || gVfCtbStopped || gVfProtocolFault)
+	if (!gVfUsesMemoryIrq || gVfSubmissionStopped || gVfCtbStopped ||
+	    gVfProtocolFault)
 		return false;
 	if (gVfMemIrqConfigured)
 		return true;
@@ -1645,7 +1659,7 @@ bool vfConfigureModernCtb(bool g2h, uint32_t appleDescriptorAddress)
 	const uint16_t sizeKey = g2h ? kGucSelfCfgG2HCtbSize :
 	                                   kGucSelfCfgH2GCtbSize;
 
-	if ((g2h && !vfConfigureMemIrq()) ||
+	if ((g2h && gVfUsesMemoryIrq && !vfConfigureMemIrq()) ||
 	    !vfGucSelfConfig(descriptorKey, 2, descriptor) ||
 	    !vfGucSelfConfig(bufferKey, 2, buffer) ||
 	    !vfGucSelfConfig(sizeKey, 1, bytes))
@@ -1972,11 +1986,18 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		PANIC_COND(identity == VfIdentity::Invalid, "ngreen",
 			"Cannot classify TGL accelerator as a physical function or VF");
 		const bool vfActive = identity == VfIdentity::Virtual;
-		const bool tglGeneration = NGGpuCapabilities::isTigerLake(
-			NGreen::callback->getOriginalDeviceId());
+		const uint32_t gpuDevice = NGreen::callback->getOriginalDeviceId();
+		gVfUsesMemoryIrq = vfActive &&
+			NGGpuCapabilities::hasIovMemoryIrq(gpuDevice);
+		const bool tglGeneration = NGGpuCapabilities::isTigerLake(gpuDevice);
 		PANIC_COND(!NGGpuCapabilities::supportsPinnedTigerLakePayload(
-			NGreen::callback->getOriginalDeviceId(), vfActive), "ngreen",
+			gpuDevice, vfActive), "ngreen",
 			"Refusing TGL native accelerator payload on a non-TGL physical function");
+		if (vfActive) {
+			SYSLOG("ngreen", "V251: VF interrupt transport=%s device=%04x",
+			       gVfUsesMemoryIrq ? "memory" : "Gen11 virtual MMIO",
+			       gpuDevice);
+		}
 		// The payload is patched before its personality is published. Complete the
 		// one-shot VF bootstrap here so every embedded fuse immediate comes from
 		// the same PF snapshot that owns this VF's GuC/GGTT assignment.
@@ -1998,9 +2019,8 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				// the same update without touching physical memory.
 				{"__ZNK20IGSharedMappedBuffer17getVirtualAddressEv",
 				 this->vfSharedMappedBufferGetVirtualAddress},
-				// V236: a VF has a dedicated MSI backed by the memory-IRQ page.
-				// Resolve the callback dispatcher so the replacement filter never
-				// has to enter Apple's physical GT interrupt hierarchy.
+				// Resolve the callback dispatcher used by the MTL/ARL memory-IRQ
+				// replacement. TGL/ADL/RPL retain the native virtual-MMIO filter.
 				{"__ZN17IGInterruptBridge17serviceInterruptsERK8IGBitSetILm46EE",
 				 this->vfServiceInterrupts},
 				// V216: The TGL driver assigns the old value returned by
@@ -2109,38 +2129,47 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			};
 			PANIC_COND(!patcher.routeMultiple(index, workQueueInitRoute, address, size),
 			           "ngreen", "Failed to install VF workqueue allocation unwind");
-			// Preserve Apple's event-source and callback lifecycle but remove the
-			// direct GFX_MSTR_IRQ accesses surrounding enable/disableInterrupts.
-			// Bound each patch by adjacent symbols, never by the entire image.
-			mach_vm_address_t irqEnable = 0, irqEnableRegs = 0;
-			mach_vm_address_t irqDisable = 0, irqDisableRegs = 0;
-			KernelPatcher::SolveRequest irqBounds[] = {
+			// Preserve Apple's complete event-source and callback lifecycle.  Its
+			// Gen11 virtual-MMIO path is the native TGL/ADL/RPL VF protocol; only
+			// MTL/ARL memory-IRQ VFs must suppress the surrounding master accesses.
+			mach_vm_address_t irqEnable = 0, irqDisable = 0;
+			KernelPatcher::SolveRequest irqLifecycle[] = {
 				{"__ZN17IGInterruptBridge6enableEv", irqEnable},
-				{"__ZN17IGInterruptBridge16enableInterruptsEv", irqEnableRegs},
 				{"__ZN17IGInterruptBridge7disableEv", irqDisable},
-				{"__ZN17IGInterruptBridge17disableInterruptsEv", irqDisableRegs},
 			};
-			PANIC_COND(!patcher.solveMultiple(index, irqBounds, address, size) ||
-			           irqEnableRegs <= irqEnable || irqDisableRegs <= irqDisable ||
-			           irqEnableRegs - irqEnable > 0x400 || irqDisableRegs - irqDisable > 0x400,
-			           "ngreen", "Invalid VF IRQ lifecycle patch bounds");
+			PANIC_COND(!patcher.solveMultiple(index, irqLifecycle, address, size),
+			           "ngreen", "Cannot resolve VF IRQ lifecycle");
 			this->vfInterruptBridgeEnable = irqEnable;
 			this->vfInterruptBridgeDisable = irqDisable;
-			static const uint8_t masterDisable[] = {
-				0x81, 0xa0, 0x10, 0x00, 0x19, 0x00, 0xff, 0xff, 0xff, 0x7f};
-			static const uint8_t masterEnable[] = {
-				0x81, 0x88, 0x10, 0x00, 0x19, 0x00, 0x00, 0x00, 0x00, 0x80};
-			static const uint8_t noMasterAccess[] = {
-				0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90};
-			LookupPatchPlus const masterPatches[] = {
-				{activeKext, masterDisable, noMasterAccess, 1},
-				{activeKext, masterEnable, noMasterAccess, 1},
-			};
-			PANIC_COND(!LookupPatchPlus::applyAll(patcher, masterPatches, irqEnable,
-			                                      irqEnableRegs - irqEnable) ||
-			           !LookupPatchPlus::applyAll(patcher, masterPatches, irqDisable,
-			                                      irqDisableRegs - irqDisable),
-			           "ngreen", "Failed to isolate VF IRQ lifecycle from GFX_MSTR_IRQ");
+			if (gVfUsesMemoryIrq) {
+				mach_vm_address_t irqEnableRegs = 0, irqDisableRegs = 0;
+				KernelPatcher::SolveRequest irqBounds[] = {
+					{"__ZN17IGInterruptBridge16enableInterruptsEv", irqEnableRegs},
+					{"__ZN17IGInterruptBridge17disableInterruptsEv", irqDisableRegs},
+				};
+				PANIC_COND(!patcher.solveMultiple(index, irqBounds, address, size) ||
+				           irqEnableRegs <= irqEnable || irqDisableRegs <= irqDisable ||
+				           irqEnableRegs - irqEnable > 0x400 ||
+				           irqDisableRegs - irqDisable > 0x400,
+				           "ngreen", "Invalid memory-IRQ lifecycle patch bounds");
+				static const uint8_t masterDisable[] = {
+					0x81, 0xa0, 0x10, 0x00, 0x19, 0x00, 0xff, 0xff, 0xff, 0x7f};
+				static const uint8_t masterEnable[] = {
+					0x81, 0x88, 0x10, 0x00, 0x19, 0x00, 0x00, 0x00, 0x00, 0x80};
+				static const uint8_t noMasterAccess[] = {
+					0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90};
+				LookupPatchPlus const masterPatches[] = {
+					{activeKext, masterDisable, noMasterAccess, 1},
+					{activeKext, masterEnable, noMasterAccess, 1},
+				};
+				PANIC_COND(!LookupPatchPlus::applyAll(
+				               patcher, masterPatches, irqEnable,
+				               irqEnableRegs - irqEnable) ||
+				           !LookupPatchPlus::applyAll(
+				               patcher, masterPatches, irqDisable,
+				               irqDisableRegs - irqDisable),
+				           "ngreen", "Failed to isolate memory-IRQ lifecycle from GFX_MSTR_IRQ");
+			}
 			// These entry points can call framebuffer force-wake instead of the
 			// multithreaded accelerator route. A VF has no guest-owned domains.
 			KernelPatcher::RouteRequest vfWakeRoutes[] = {
@@ -2360,31 +2389,6 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				// transport is ready, and match i915's pre-ready no-op behavior.
 				{"__ZNK5IGGuC13invalidateTLBEv",
 				 vfBaseInvalidateTLB},
-				// V236: replace the complete filter on a VF.  The stock filter
-				// masks GFX_MSTR_IRQ, acquires physical force-wake and only then
-				// calls readAndClearInterrupts; wrapping the latter alone cannot
-				// make a VF interrupt safe.
-				{"__ZN17IGInterruptBridge22interruptFilterHandlerEP28IOFilterInterruptEventSource",
-				 vfInterruptFilterHandler},
-				// processInterrupts() can also call readAndClearInterrupts outside
-				// the hardware filter.  Keep that entry point VF-safe as well.
-				{"__ZN17IGInterruptBridge22readAndClearInterruptsER8IGBitSetILm46EE",
-				 vfReadAndClearInterrupts},
-				{"__ZN17IGInterruptBridge16enableInterruptsEv",
-				 vfEnableInterrupts},
-				{"__ZN17IGInterruptBridge17disableInterruptsEv",
-				 vfDisableInterrupts},
-				// IGInterruptBridge::enable/disable also dispatches through the
-				// scheduler vtable.  Tahoe's scheduler-4 implementations program
-				// every physical command-streamer error IRQ before returning to the
-				// bridge, so routing only the bridge methods still lets a VF touch
-				// PF-owned engine registers.  The bridge route already publishes the
-				// memory-IRQ mask; these idempotent routes preserve that ownership
-				// boundary for the nested scheduler calls as well.
-				{"__ZN12IGScheduler416enableInterruptsEv",
-				 vfEnableInterrupts},
-				{"__ZN12IGScheduler417disableInterruptsEv",
-				 vfDisableInterrupts},
 				{"__ZN20IGSharedMappedBuffer11withOptionsEP11IGAccelTaskmjj",
 				 vfCtbMappedBufferWithOptions, this->oVfCtbMappedBufferWithOptions},
 				// V230: translate Tahoe's legacy process-wide proxy submission
@@ -2397,6 +2401,43 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				 vfSubmitWorkItem},
 			};
 			PANIC_COND(!patcher.routeMultiple(index, firmwareRoute, address, size), "ngreen", "Failed to route VF GuC firmware transport");
+
+			if (gVfUsesMemoryIrq) {
+				// Only mtl_info-class VFs use the PF-provisioned memory-IRQ page.
+				// Their filter, reader and bridge/scheduler programming must stay
+				// entirely memory-backed.
+				KernelPatcher::RouteRequest memoryIrqRoutes[] = {
+					{"__ZN17IGInterruptBridge22interruptFilterHandlerEP28IOFilterInterruptEventSource",
+					 vfInterruptFilterHandler},
+					{"__ZN17IGInterruptBridge22readAndClearInterruptsER8IGBitSetILm46EE",
+					 vfReadAndClearInterrupts},
+					{"__ZN17IGInterruptBridge16enableInterruptsEv",
+					 vfEnableInterrupts},
+					{"__ZN17IGInterruptBridge17disableInterruptsEv",
+					 vfDisableInterrupts},
+					{"__ZN12IGScheduler416enableInterruptsEv",
+					 vfEnableInterrupts},
+					{"__ZN12IGScheduler417disableInterruptsEv",
+					 vfDisableInterrupts},
+				};
+				PANIC_COND(!patcher.routeMultiple(
+				               index, memoryIrqRoutes, address, size), "ngreen",
+				           "Failed to route VF memory-IRQ transport");
+			} else {
+				// TGL/ADL/RPL implement the same Gen11 virtual interrupt MMIO
+				// protocol consumed by Tahoe's native bridge. Keep its filter,
+				// read/clear, masks and logical scheduler callback intact. Only the
+				// nested per-engine error helpers touch physical RING_* registers.
+				KernelPatcher::RouteRequest virtualMmioIrqRoutes[] = {
+					{"__ZN12IGScheduler421enableErrorInterruptsEv",
+					 vfSuppressPhysicalErrorInterrupts},
+					{"__ZN12IGScheduler422disableErrorInterruptsEv",
+					 vfSuppressPhysicalErrorInterrupts},
+				};
+				PANIC_COND(!patcher.routeMultiple(
+				               index, virtualMmioIrqRoutes, address, size), "ngreen",
+				           "Failed to isolate VF physical engine error interrupts");
+			}
 		}
 
 		// V237: IGHardwareGuCCTBuffer::initWithAccelerator directly accesses the
@@ -3164,7 +3205,7 @@ void Gen11::acceleratorStop(void *that, void *provider)
 	// Mark final service teardown before Apple's stop sequence. Its initial
 	// finishAllStamps call remains free to submit/drain work; stopGraphicsEngine
 	// is the later boundary where the VF operation gate is closed and every GuC
-	// context is retired while CTB and memory IRQ delivery are still available.
+	// context is retired while CTB and the selected IRQ transport remain live.
 	if (gVfIdentity == VfIdentity::Virtual) {
 		OSCompareAndSwap(0, 1, &gVfDeviceStopping);
 		OSSynchronizeIO();
@@ -3262,11 +3303,10 @@ bool Gen11::startGraphicsEngine(void *that)
 	// In the pinned native routine this call follows IGMemoryManager::initCache.
 	// That cache method directly programs force-wake, MOCS, L3 and other
 	// PF-owned MMIO, so a VF must omit it. IGScheduler::initFirmware is the next
-	// independent named boundary: for scheduler 4 it constructs GuC, registers
-	// the translated modern CTB and establishes memory-IRQ delivery through the
-	// routes above. Requiring transport readiness before this call created an
-	// impossible circular precondition and made every otherwise-valid VF start
-	// return failure 0x214.
+	// independent named boundary: for scheduler 4 it constructs GuC and
+	// registers the translated modern CTB. Requiring complete transport readiness
+	// before this call created an impossible circular precondition and made every
+	// otherwise-valid VF start return failure 0x214.
 	auto *scheduler = getMember<void *>(that, 0x1250);
 	if (!scheduler) {
 		vfMarkProtocolFault("missing VF scheduler before firmware initialization");
@@ -3284,11 +3324,20 @@ bool Gen11::startGraphicsEngine(void *that)
 	// completion. Linux follows the same dependency: CT is enabled, interrupt
 	// delivery is enabled immediately, then messages crossing that boundary are
 	// consumed. The UUID-pinned bridge body retains the event-source lifecycle;
-	// its force-wake and GFX_MSTR_IRQ accesses are separately removed for a VF,
-	// and both nested interrupt-programming calls are routed to memory IRQs.
+	// force-wake is isolated. TGL/ADL/RPL retain its native Gen11 virtual-MMIO
+	// programming while MTL/ARL route the bridge to their memory-IRQ page.
 	reinterpret_cast<LifecycleMethod>(callback->vfInterruptBridgeEnable)(
 		interruptBridge);
-	SYSLOG("ngreen", "V248: enabled VF MSI consumer before scheduler firmware initialization");
+	if (getMember<uint8_t>(interruptBridge, 0x8A8) == 0) {
+		vfMarkProtocolFault("VF interrupt bridge did not enter enabled state");
+		return false;
+	}
+	if (!gVfUsesMemoryIrq) {
+		OSCompareAndSwap(0, 1, &gVfMmioIrqReady);
+		OSSynchronizeIO();
+	}
+	SYSLOG("ngreen", "V251: enabled VF %s MSI consumer before scheduler firmware initialization",
+	       gVfUsesMemoryIrq ? "memory-IRQ" : "virtual-MMIO");
 
 	using InitFirmware = IOReturn (*)(void *);
 	const IOReturn firmwareResult =
@@ -3298,6 +3347,8 @@ bool Gen11::startGraphicsEngine(void *that)
 		       firmwareResult);
 		reinterpret_cast<LifecycleMethod>(callback->vfInterruptBridgeDisable)(
 			interruptBridge);
+		OSCompareAndSwap(1, 0, &gVfMmioIrqReady);
+		OSSynchronizeIO();
 		vfMarkProtocolFault("VF scheduler firmware initialization failure");
 		return false;
 	}
@@ -3305,8 +3356,9 @@ bool Gen11::startGraphicsEngine(void *that)
 	OSSynchronizeIO();
 	if (!vfNativeGpuWorkReady()) {
 		SYSLOG("ngreen",
-		       "V247: incomplete post-firmware state ggtt=%d memirq=%d ctbCpu=%d ctbGpu=0x%x enabled=%d stopped=%d submissionStopped=%d fault=%d",
-		       gVfGGTTReady, gVfMemIrqConfigured, gVfCtbCpuBase != nullptr,
+		       "V251: incomplete post-firmware state ggtt=%d irq=%d mode=%s ctbCpu=%d ctbGpu=0x%x enabled=%d stopped=%d submissionStopped=%d fault=%d",
+		       gVfGGTTReady, vfInterruptTransportReady(),
+		       gVfUsesMemoryIrq ? "memory" : "MMIO", gVfCtbCpuBase != nullptr,
 		       gVfCtbGpuBase, gVfCtbEnabled != 0, gVfCtbStopped != 0,
 		       gVfSubmissionStopped != 0, gVfProtocolFault != 0);
 		vfMarkProtocolFault("VF transport incomplete after scheduler firmware initialization");
@@ -3354,11 +3406,13 @@ bool Gen11::stopGraphicsEngine(void *that)
 		return false;
 	}
 	using LifecycleMethod = void (*)(void *);
-	// Preserve the native order after any final VF DMA quiescence. The routed
-	// bridge methods retain event-source bookkeeping while their physical IRQ
-	// register operations are replaced by the VF memory-IRQ implementation.
+	// Preserve the native order after any final VF DMA quiescence.  On
+	// TGL/ADL/RPL this also disables the VF-owned virtual-MMIO interrupt block;
+	// on MTL/ARL the routed bridge masks the memory-IRQ page.
 	reinterpret_cast<LifecycleMethod>(callback->vfInterruptBridgeDisable)(
 		interruptBridge);
+	OSCompareAndSwap(1, 0, &gVfMmioIrqReady);
+	OSSynchronizeIO();
 	reinterpret_cast<LifecycleMethod>(callback->ioGraphicsDisableAccelerator)(that);
 	SYSLOG("ngreen", "V244: disabled VF interrupt bridge and IOAccelerator lifecycle");
 	return true;
@@ -3957,10 +4011,12 @@ bool Gen11::vfMmioHostToGuCAction(void *that, const uint32_t *request,
 			// explicitly consumes messages that arrived across that boundary. The VF
 			// bridge is already enabled by startGraphicsEngine before initFirmware,
 			// but an MSI can still race publication of gVfCtbEnabled. Clear its
-			// memory-IRQ source and synchronously drain the receive ring once so the
+				// interrupt source (for memory-IRQ devices) and synchronously drain the
+				// receive ring once so the
 			// first GGTT/TLB transaction cannot wait on a lost edge. The native
 			// consumer and this path serialize on the same G2H lock.
-			(void)vfConsumeMemoryInterrupts();
+				if (gVfUsesMemoryIrq)
+					(void)vfConsumeMemoryInterrupts();
 			ok = pollVfGuCToHost(that) && gVfProtocolFault == 0;
 			if (ok)
 				SYSLOG("ngreen", "V248: drained the VF CTB enable boundary before firmware allocations");
@@ -4000,10 +4056,10 @@ bool Gen11::vfMmioHostToGuCAction(void *that, const uint32_t *request,
 			const bool producersStopped = bootstrapRollback ||
 				(dmaQuiesced && vfStopSubmissionAndSealCtb(that));
 
-			// Once no reply is still required, mask future engine memory IRQs.
-			// This is still not proof that GuC/device DMA has stopped touching the
-			// page; it only prevents a later enable path from reopening interrupts.
-			if (producersStopped) {
+				// Once no reply is still required, mask future engine memory IRQs on
+				// devices that implement that ABI. This is not a DMA-quiescence
+				// acknowledgement; it only prevents a later enable path from reopening it.
+				if (producersStopped && gVfUsesMemoryIrq) {
 				gVfMemIrqRequested = 0;
 				OSSynchronizeIO();
 				auto *base = gVfCtbCpuBase;
@@ -4051,14 +4107,14 @@ bool Gen11::vfMmioHostToGuCAction(void *that, const uint32_t *request,
 			*response = NGVfLegacyCtb::responseStatus(ok);
 		if (request[2] == 1U && ok) {
 			// CPU interrupt callbacks are drained, but CTB disable alone does not
-			// prove engine or GuC memory-IRQ DMA is quiescent. Both users share
-			// this backing, so keep our references and mappings quarantined until
+				// prove engine or GuC DMA is quiescent. Keep our references and mappings
+				// quarantined until
 			// device-side shutdown has a verified completion boundary.
 			gVfMemIrqConfigured = false;
 			gVfCtbDisableConfirmed = false;
 			PANIC_COND(!gVfDmaQuiesced, "ngreen",
 				"CTB stopped without a completed VF DMA-quiescence boundary");
-			SYSLOG("ngreen", "V242: CTB stopped after context/DMA quiescence; shared memory-IRQ backing remains quarantined");
+				SYSLOG("ngreen", "V242: CTB stopped after context/DMA quiescence; shared backing remains quarantined");
 		}
 		return ok;
 	}
@@ -4165,7 +4221,8 @@ private:
 // i915 __lrc_init_regs/init_vf_irq_reg_state initializes this batch for its first
 // restore; subsequent GPU saves recreate it. Never rewrite it on each submit.
 static bool vfPrepareContextMemoryIrq(OSObject *backing, mach_vm_address_t getter) {
-	if (!backing || !getter || !gVfMemIrqConfigured || !gVfCtbEnabled ||
+	if (!gVfUsesMemoryIrq || !backing || !getter || !gVfMemIrqConfigured ||
+	    !gVfCtbEnabled ||
 	    gVfSubmissionStopped || gVfCtbStopped || gVfProtocolFault ||
 	    getMember<uint64_t>(backing, kVfMappedBufferLengthOffset) <
 	        kVfContextMinimumImageBytes)
@@ -4306,9 +4363,13 @@ bool Gen11::vfAttachContextDesc(void *that, const uint32_t *descriptor) {
 		0,    // Gen12 LRCA is a 32-bit GGTT descriptor
 	};
 	uint32_t transportFence = 0;
-	const bool registered =
+	// i915 runs init_vf_irq_reg_state only when HAS_MEMORY_IRQ_STATUS.  The
+	// legacy Gen11 virtual-MMIO VF path must retain Tahoe's native context image;
+	// writing memory-IRQ registers there corrupts an unsupported protocol.
+	const bool irqContextPrepared = !gVfUsesMemoryIrq ||
 		vfPrepareContextMemoryIrq(contextBacking,
-		                          callback->vfSharedMappedBufferGetVirtualAddress) &&
+		                          callback->vfSharedMappedBufferGetVirtualAddress);
+	const bool registered = irqContextPrepared &&
 		vfSendCtbFastAction(that, request, arrsize(request), transportFence);
 	const bool policySet = registered &&
 		vfSetContextPolicy(that, gucId, engineClass, transportFence);
@@ -4617,15 +4678,15 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 		return false;
 	}
 
-	const bool memIrqReady = gVfMemIrqConfigured && gVfCtbCpuBase;
-	if (!memIrqReady) {
+	const bool interruptReady = vfInterruptTransportReady() && gVfCtbCpuBase;
+	if (!interruptReady) {
 		// A bootstrap stamp can precede CTB registration.  It cannot be safely
 		// submitted because MODE_DONE and completion interrupts would be
 		// unobservable. No command was submitted, so reporting success here
 		// would fabricate progress and leave a completion stamp outstanding.
 		static uint32_t bootstrapLogs = 0;
 		if (bootstrapLogs++ < 16) {
-			SYSLOG("ngreen", "V237: suppressed pre-memory-IRQ VF bootstrap submit LRCA=0x%08x",
+				SYSLOG("ngreen", "V251: suppressed pre-interrupt VF bootstrap submit LRCA=0x%08x",
 			       descriptorLo);
 		}
 		return false;
@@ -4996,7 +5057,7 @@ void Gen11::vfBaseInvalidateTLB(const void *that) {
 }
 
 bool Gen11::vfCtbGucToHostAction(void *that, uint32_t *message) {
-	if (!that || !message || !vfCtbConsumerReady())
+	if (!that || !message || !vfCtbConsumerReady(false))
 		return false;
 	if (!vfCanUseSleepingLock())
 		return false;
@@ -5168,9 +5229,11 @@ bool Gen11::vfCtbGucToHostAction(void *that, uint32_t *message) {
 
 bool Gen11::vfInterruptFilterHandler(void *that, void *eventSource) {
 	(void)eventSource;
+	if (!gVfUsesMemoryIrq)
+		return false;
 	// Identity is established before enabling interrupts. Never probe/map BARs
 	// from a filter, or interpret an unready VF as a physical device.
-	if (!vfCtbConsumerReady())
+	if (!vfCtbConsumerReady(true))
 		return false;
 	VfIrqCallbackGuard irqGuard;
 	if (!irqGuard)
@@ -5234,7 +5297,7 @@ void Gen11::vfRequestEnableCallback(void *that, OSObject *requestor,
 
 bool Gen11::vfDrainGuCToHost(void *that, IOInterruptEventSource *source,
 	                         bool synchronousPoll) {
-	if (!that || !vfCtbConsumerReady())
+	if (!that || !vfCtbConsumerReady(!synchronousPoll))
 		return false;
 	VfIrqCallbackGuard irqGuard;
 	if (!irqGuard || !gVfCtbCpuBase || gVfCtbStopped)
@@ -5294,7 +5357,7 @@ void Gen11::vfSoftwareGuCInterrupt(void *that, IOInterruptEventSource *source, i
 
 void Gen11::vfEnableInterrupts(void *that) {
 	(void)that;
-	if (gVfIdentity != VfIdentity::Virtual || gVfProtocolFault ||
+	if (!gVfUsesMemoryIrq || gVfIdentity != VfIdentity::Virtual || gVfProtocolFault ||
 	    gVfSubmissionStopped || gVfCtbStopped)
 		return;
 	gVfMemIrqRequested = 1;
@@ -5309,6 +5372,8 @@ void Gen11::vfEnableInterrupts(void *that) {
 
 void Gen11::vfDisableInterrupts(void *that) {
 	(void)that;
+	if (!gVfUsesMemoryIrq)
+		return;
 	gVfMemIrqRequested = 0;
 	OSSynchronizeIO();
 	auto *base = gVfCtbCpuBase;
@@ -5332,10 +5397,20 @@ void Gen11::vfReadAndClearInterrupts(void *that, void *interrupts) {
 	// expose stale interrupt bits.
 	auto *snapshot = reinterpret_cast<uint64_t *>(interrupts);
 	*snapshot = 0;
+	if (!gVfUsesMemoryIrq)
+		return;
 	VfIrqCallbackGuard irqGuard;
 	if (!irqGuard)
 		return;
 	*snapshot = vfConsumeMemoryInterrupts();
+}
+
+void Gen11::vfSuppressPhysicalErrorInterrupts(void *that) {
+	(void)that;
+	// Scheduler 4's outer enable/disable methods still register the logical
+	// scheduler callback with IGInterruptBridge.  Only their tail-called error
+	// helpers are replaced: those iterate command streamers and write physical
+	// RING_* interrupt registers that no VF owns.
 }
 
 

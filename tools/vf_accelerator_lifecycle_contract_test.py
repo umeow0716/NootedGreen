@@ -12,6 +12,16 @@ START = "__ZN16IntelAccelerator19startGraphicsEngineEv"
 STOP = "__ZN16IntelAccelerator18stopGraphicsEngineEv"
 BRIDGE_ENABLE = "__ZN17IGInterruptBridge6enableEv"
 BRIDGE_DISABLE = "__ZN17IGInterruptBridge7disableEv"
+BRIDGE_FILTER = "__ZN17IGInterruptBridge22interruptFilterHandlerEP28IOFilterInterruptEventSource"
+BRIDGE_READ = "__ZN17IGInterruptBridge22readAndClearInterruptsER8IGBitSetILm46EE"
+BRIDGE_ENABLE_INTERRUPTS = "__ZN17IGInterruptBridge16enableInterruptsEv"
+BRIDGE_DISABLE_INTERRUPTS = "__ZN17IGInterruptBridge17disableInterruptsEv"
+BRIDGE_READ_RCS = "__ZN17IGInterruptBridge25readAndClearRCSInterruptsER8IGBitSetILm46EEj"
+BRIDGE_READ_CCS = "__ZN17IGInterruptBridge25readAndClearCCSInterruptsER8IGBitSetILm46EEj"
+BRIDGE_READ_BCS = "__ZN17IGInterruptBridge25readAndClearBCSInterruptsER8IGBitSetILm46EEj"
+BRIDGE_READ_GUC = "__ZN17IGInterruptBridge25readAndClearGuCInterruptsER8IGBitSetILm46EEj"
+BRIDGE_READ_VCS = "__ZN17IGInterruptBridge25readAndClearVCSInterruptsER8IGBitSetILm46EEj"
+BRIDGE_READ_VECS = "__ZN17IGInterruptBridge26readAndClearVECSInterruptsER8IGBitSetILm46EEj"
 EVENT_INIT = "__ZN24IOAccelEventMachineFast29initEventEP12IOAccelEvent"
 SCHEDULER_ENABLE = "__ZN12IGScheduler416enableInterruptsEv"
 SCHEDULER_DISABLE = "__ZN12IGScheduler417disableInterruptsEv"
@@ -170,6 +180,71 @@ def macho_inventory(path):
             raise AssertionError(
                 f"{path}: {scheduler_error} no longer owns the physical {streamer} call")
 
+    # TGL/ADL/RPL VFs use this native Gen11 virtual-interrupt register block.
+    # Treat every aligned 0x190000-range displacement in the live bridge bodies
+    # as MMIO and prove that it remains inside i915's VF allowlist.
+    vf_ranges = (
+        (0x190010, 0x190010), (0x190018, 0x19001C),
+        (0x190030, 0x190048), (0x190060, 0x190064),
+        (0x190070, 0x190074), (0x190090, 0x190090),
+        (0x1900A0, 0x1900A0), (0x1900A8, 0x1900AC),
+        (0x1900B0, 0x1900B4), (0x1900D0, 0x1900D4),
+        (0x1900E8, 0x1900EC), (0x1900F0, 0x1900F4),
+        (0x190100, 0x190100),
+    )
+
+    def mmio_offsets(name):
+        start = value(name)
+        body = image[start:next_symbol(start)]
+        offsets = set()
+        for cursor in range(len(body) - 3):
+            candidate = struct.unpack_from("<I", body, cursor)[0]
+            if 0x190000 <= candidate <= 0x190400 and candidate % 4 == 0:
+                offsets.add(candidate)
+        return offsets
+
+    reader_helpers = (
+        BRIDGE_READ_RCS, BRIDGE_READ_CCS, BRIDGE_READ_BCS,
+        BRIDGE_READ_GUC, BRIDGE_READ_VCS, BRIDGE_READ_VECS,
+    )
+    bridge_offsets = {}
+    for name in (BRIDGE_ENABLE, BRIDGE_DISABLE, BRIDGE_FILTER, BRIDGE_READ,
+                 BRIDGE_ENABLE_INTERRUPTS, BRIDGE_DISABLE_INTERRUPTS,
+                 *reader_helpers):
+        offsets = mmio_offsets(name)
+        bridge_offsets[name] = offsets
+        for offset in offsets:
+            if not any(first <= offset <= last for first, last in vf_ranges):
+                raise AssertionError(
+                    f"{path}: native VF interrupt body uses non-allowlisted MMIO {offset:#x}")
+    if bridge_offsets[BRIDGE_ENABLE] != {0x190010}:
+        raise AssertionError(f"{path}: bridge enable master-register contract changed")
+    if bridge_offsets[BRIDGE_DISABLE] != {0x190010}:
+        raise AssertionError(f"{path}: bridge disable master-register contract changed")
+    if bridge_offsets[BRIDGE_FILTER] != {0x190010}:
+        raise AssertionError(f"{path}: bridge filter master-register contract changed")
+    required_reader = {0x190010, 0x190018, 0x19001C}
+    if bridge_offsets[BRIDGE_READ] != required_reader:
+        raise AssertionError(f"{path}: native virtual-MMIO reader inventory changed")
+    for helper in reader_helpers:
+        if not direct_branches(BRIDGE_READ, helper):
+            raise AssertionError(f"{path}: native reader no longer calls {helper}")
+    for helper in reader_helpers[:4]:
+        if bridge_offsets[helper] != {0x190060, 0x190070}:
+            raise AssertionError(f"{path}: bank-0 reader inventory changed for {helper}")
+    for helper in reader_helpers[4:]:
+        if bridge_offsets[helper] != {0x190064, 0x190074}:
+            raise AssertionError(f"{path}: bank-1 reader inventory changed for {helper}")
+    required_enable = {
+        0x190030, 0x190034, 0x190038, 0x19003C, 0x190040, 0x190044,
+        0x190048, 0x190060, 0x190064, 0x190070, 0x190074,
+    }
+    if not required_enable <= bridge_offsets[BRIDGE_ENABLE_INTERRUPTS]:
+        raise AssertionError(f"{path}: native virtual-MMIO enable inventory changed")
+    required_disable = {0x190030, 0x190034, 0x190038, 0x19003C, 0x190040, 0x190044}
+    if not required_disable <= bridge_offsets[BRIDGE_DISABLE_INTERRUPTS]:
+        raise AssertionError(f"{path}: native virtual-MMIO disable inventory changed")
+
     # enable() tests +0x8a8 at entry and jumps past its callback-list walk when
     # it is already true. requestEnableCallback() merely appends to +0x8b8 and
     # does not compensate for that one-shot boundary. GuC init registers only
@@ -247,10 +322,24 @@ def source_contract(path):
         SCHEDULER_INIT_FIRMWARE,
         REQUEST_ENABLE_CALLBACK,
         SYS_MEMORY_PHYSICAL,
+        BRIDGE_FILTER,
+        BRIDGE_READ,
+        BRIDGE_ENABLE_INTERRUPTS,
+        BRIDGE_DISABLE_INTERRUPTS,
+        SCHEDULER_ERROR_ENABLE,
+        SCHEDULER_ERROR_DISABLE,
     )
     for token in required:
         if token not in source:
             raise AssertionError(f"{path}: missing lifecycle token {token}")
+
+    for token in (
+            "gVfUsesMemoryIrq = vfActive &&",
+            "NGGpuCapabilities::hasIovMemoryIrq(gpuDevice)",
+            "gVfMemIrqConfigured && gVfMemIrqRequested != 0",
+            "gVfMmioIrqReady != 0"):
+        if token not in source:
+            raise AssertionError(f"{path}: missing interrupt-transport capability gate {token}")
 
     pci_resolution = function_body(
         source,
@@ -261,6 +350,50 @@ def source_contract(path):
             pci_resolution.index("KernelPatcher::KernelID") <
             pci_resolution.index(PCI_CONFIGURE_INTERRUPTS)):
         raise AssertionError(f"{path}: IOPCIFamily symbol is incorrectly resolved from KernelID")
+
+    memory_routes_start = pci_resolution.index(
+        "KernelPatcher::RouteRequest memoryIrqRoutes[]")
+    virtual_routes_start = pci_resolution.index(
+        "KernelPatcher::RouteRequest virtualMmioIrqRoutes[]", memory_routes_start)
+    virtual_routes_end = pci_resolution.index(
+        '"Failed to isolate VF physical engine error interrupts"', virtual_routes_start)
+    memory_routes = pci_resolution[memory_routes_start:virtual_routes_start]
+    virtual_routes = pci_resolution[virtual_routes_start:virtual_routes_end]
+    for token in (BRIDGE_FILTER, BRIDGE_READ, BRIDGE_ENABLE_INTERRUPTS,
+                  BRIDGE_DISABLE_INTERRUPTS, SCHEDULER_ENABLE, SCHEDULER_DISABLE):
+        if token not in memory_routes:
+            raise AssertionError(f"{path}: memory-IRQ route set is missing {token}")
+        if token in virtual_routes:
+            raise AssertionError(f"{path}: virtual-MMIO route wrongly replaces {token}")
+    for token in (SCHEDULER_ERROR_ENABLE, SCHEDULER_ERROR_DISABLE,
+                  "vfSuppressPhysicalErrorInterrupts"):
+        if token not in virtual_routes:
+            raise AssertionError(f"{path}: virtual-MMIO isolation is missing {token}")
+
+    master_patch = pci_resolution.index("static const uint8_t masterDisable[]")
+    memory_gate = pci_resolution.rfind("if (gVfUsesMemoryIrq)", 0, master_patch)
+    if memory_gate < 0 or not memory_routes_start > master_patch > memory_gate:
+        raise AssertionError(f"{path}: GFX_MSTR_IRQ patch is not memory-IRQ-only")
+
+    configure_memirq = function_body(source, "bool vfConfigureMemIrq()")
+    if "!gVfUsesMemoryIrq" not in configure_memirq:
+        raise AssertionError(f"{path}: unsupported devices can configure memory IRQ")
+    consume_memirq = function_body(source, "uint64_t vfConsumeMemoryInterrupts()")
+    if "!gVfUsesMemoryIrq" not in consume_memirq:
+        raise AssertionError(f"{path}: unsupported devices can consume memory IRQ")
+    configure_ctb = function_body(
+        source, "bool vfConfigureModernCtb(bool g2h, uint32_t appleDescriptorAddress)")
+    if "g2h && gVfUsesMemoryIrq && !vfConfigureMemIrq()" not in configure_ctb:
+        raise AssertionError(f"{path}: CTB registration does not capability-gate memory IRQ")
+    attach = function_body(source, "bool Gen11::vfAttachContextDesc(void *that, const uint32_t *descriptor)")
+    if "!gVfUsesMemoryIrq ||" not in attach or "vfPrepareContextMemoryIrq(" not in attach:
+        raise AssertionError(f"{path}: LRCA memory-IRQ mutation is not capability-gated")
+
+    drain = function_body(
+        source, "bool Gen11::vfDrainGuCToHost(void *that, IOInterruptEventSource *source,")
+    if "vfCtbConsumerReady(!synchronousPoll)" not in drain:
+        raise AssertionError(
+            f"{path}: synchronous CTB teardown cannot outlive hardware IRQ disable")
 
     scratch_start = pci_resolution.index(
         "mach_vm_address_t blit3dBoundsStart")

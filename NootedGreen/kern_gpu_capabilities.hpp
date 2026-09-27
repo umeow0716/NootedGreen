@@ -103,6 +103,22 @@ inline bool hasKnownDirectVfGgtt(uint32_t device) {
     }
 }
 
+// i915 enables the VF memory-interrupt ABI only for the mtl_info device
+// table.  TGL/ADL/RPL VFs instead use the Gen11 virtual interrupt MMIO block
+// at 0x190000.  Keep this independent from generic SR-IOV support: sending the
+// memory-IRQ KLVs to an older VF asks the PF/GuC to DMA through an unsupported
+// address and can destabilize the host.
+inline bool hasIovMemoryIrq(uint32_t device) {
+    switch (device) {
+        // MTL and ARL both select mtl_info in the audited i915 PCI table.
+        case 0x7D40: case 0x7D45: case 0x7D55: case 0x7D60: case 0x7DD5:
+        case 0x7D51: case 0x7DD1: case 0x7D41: case 0x7D67: case 0xB640:
+            return true;
+        default:
+            return false;
+    }
+}
+
 // Source: i915-sriov-dkms-2026.03.05.7 pciids.h plus i915_pci.c has_sriov.
 // Exact IDs intentionally avoid broad family masks, CPU model and BAR size.
 inline Sriov sriov(uint32_t device) {

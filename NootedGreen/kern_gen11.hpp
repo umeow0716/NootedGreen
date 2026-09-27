@@ -78,6 +78,7 @@ private:
 	static void vfReadAndClearInterrupts(void *that, void *interrupts);
 	static void vfEnableInterrupts(void *that);
 	static void vfDisableInterrupts(void *that);
+	static void vfSuppressPhysicalErrorInterrupts(void *that);
 	static void *vfCtbMappedBufferWithOptions(void *accelTask,
 	                                          unsigned long size,
 	                                          unsigned int type,

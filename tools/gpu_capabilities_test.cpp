@@ -36,7 +36,13 @@ int main() {
     assert(!isVfMmioRegister(0xCEE8));
     assert(!isVfMmioRegister(0x800000));
     assert(!hasKnownDirectVfGgtt(0x1A7A8U));
-    unsigned present = 0, absent = 0, tigerLake = 0, directGgtt = 0;
+    assert(!hasIovMemoryIrq(0x9A49)); // TGL: Gen11 virtual interrupt MMIO
+    assert(!hasIovMemoryIrq(0x46A8)); // ADL-P: Gen11 virtual interrupt MMIO
+    assert(!hasIovMemoryIrq(0xA7A8)); // host RPL-P: Gen11 virtual interrupt MMIO
+    assert(hasIovMemoryIrq(0x7D55));  // MTL: i915 mtl_info memory IRQ
+    assert(hasIovMemoryIrq(0xB640));  // ARL selects the same mtl_info table
+    assert(!hasIovMemoryIrq(0x7E55)); // no broad family-mask guesses
+    unsigned present = 0, absent = 0, tigerLake = 0, directGgtt = 0, memoryIrq = 0;
 #ifdef NGREEN_REFERENCE_PCIIDS
     // Expand the primary-source ID macros, independently of our switch.
     // Membership follows has_sriov in i915_pci.c from the same source tree.
@@ -46,6 +52,7 @@ int main() {
         INTEL_TGL_IDS(ID), INTEL_ADLS_IDS(ID), INTEL_ADLP_IDS(ID), INTEL_ADLN_IDS(ID),
         INTEL_RPLS_IDS(ID), INTEL_RPLU_IDS(ID), INTEL_RPLP_IDS(ID),
     };
+    const uint32_t memoryIrqIds[] = { INTEL_MTL_IDS(ID), INTEL_ARL_IDS(ID) };
     const uint32_t withSriov[] = {
         INTEL_TGL_IDS(ID), INTEL_ADLS_IDS(ID), INTEL_ADLP_IDS(ID),
         INTEL_ADLN_IDS(ID), INTEL_RPLS_IDS(ID), INTEL_RPLU_IDS(ID),
@@ -63,6 +70,7 @@ int main() {
         absent += actual == Sriov::Absent;
         tigerLake += isTigerLake(id);
         directGgtt += hasKnownDirectVfGgtt(id);
+        memoryIrq += hasIovMemoryIrq(id);
         assert(useNativeTigerLakePath(id, false) == false);
         assert(useNativeTigerLakePath(id, true) == isTigerLake(id));
         assert(supportsPinnedTigerLakePayload(id, false) == isTigerLake(id));
@@ -71,6 +79,9 @@ int main() {
         bool expectedDirect = false;
         for (auto known : directGgttIds) expectedDirect |= known == id;
         assert(hasKnownDirectVfGgtt(id) == expectedDirect);
+        bool expectedMemoryIrq = false;
+        for (auto known : memoryIrqIds) expectedMemoryIrq |= known == id;
+        assert(hasIovMemoryIrq(id) == expectedMemoryIrq);
         bool expectedTgl = false;
         for (auto known : tglIds) expectedTgl |= known == id;
         assert(isTigerLake(id) == expectedTgl);
@@ -86,7 +97,8 @@ int main() {
     for (uint32_t offset = 0; offset <= 0x1A0000; offset += 4)
         vfRegisters += isVfMmioRegister(offset);
     assert(vfRegisters == 40);
-    assert(present == 70 && absent == 65 && tigerLake == 11 && directGgtt == 60);
+    assert(present == 70 && absent == 65 && tigerLake == 11 && directGgtt == 60 &&
+           memoryIrq == 10);
     std::printf("PASS: 65536 PCI IDs (%u VF_CAP-capable, %u without SR-IOV)%s\n",
                 present, absent,
 #ifdef NGREEN_REFERENCE_PCIIDS
