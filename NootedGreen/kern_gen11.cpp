@@ -2081,8 +2081,8 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			// exact UUID-pinned anchor, including its const-table RIP target.
 			mach_vm_address_t blit3dCtors = 0, blit3dDtor = 0;
 			KernelPatcher::SolveRequest blit3dScratchBounds[] = {
-				{"__GLOBAL__sub_I_IGHardwareContext.cpp", blit3dCtors},
-				{"__GLOBAL__D_a", blit3dDtor},
+				{"__ZN25IGHardwareExtendedContext9MetaClassD0Ev", blit3dCtors},
+				{"__ZN23IGHardwareBlit3DContext9MetaClassD0Ev", blit3dDtor},
 			};
 			PANIC_COND(!patcher.solveMultiple(
 			               index, blit3dScratchBounds, address, size) ||
