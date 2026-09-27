@@ -29,12 +29,17 @@ approved containment plan.
 - The lifecycle binary contract now proves the complete retained native
   bootstrap skeleton instead of checking only its top-level calls. Scheduler-4
   virtual slot `0x220` must remain `loadFirmware`; scheduler initialization must
-  construct command streamers; GuC initialization must retain work-history,
-  doorbell, CTB, interrupt, firmware-load, transport-registration and UK-context
-  descendants; and interrupt registration must still reach the native bridge.
-  Every hardware-facing descendant in that graph is also required to appear in
-  the VF route inventory. This prevents a future Tahoe payload or route edit
-  from silently exposing the original physical GuC/MMIO implementation.
+  enter the software-only base scheduler constructor and construct command
+  streamers; GuC initialization must retain work-history, doorbell, CTB,
+  interrupt, firmware-load, transport-registration and UK-context descendants;
+  and interrupt registration must still reach the native bridge. The contract
+  follows work-history allocation into the mapped-buffer factory, CTB allocation
+  through transfer-ownership, and the second-channel registration failure into
+  deregistration and its MMIO sender. Every hardware-facing endpoint in that
+  graph, including doorbell discovery and all GGTT map/unmap variants, is also
+  required to appear in the VF route inventory. This prevents a future Tahoe
+  payload or route edit from silently exposing the original physical GuC/MMIO
+  implementation.
 - Targeted source/Mach-O lifecycle checks pass for both pinned accelerator
   payloads. This is an offline proof only. No candidate was installed, no VF
   binding was changed, and the VM remained shut off after the host i915 crash.

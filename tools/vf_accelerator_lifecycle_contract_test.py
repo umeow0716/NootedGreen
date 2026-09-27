@@ -35,6 +35,7 @@ SCHEDULER_INIT_FIRMWARE = "__ZN11IGScheduler12initFirmwareEv"
 SCHEDULER4_VTABLE = "__ZTV12IGScheduler4"
 SCHEDULER4_INIT = "__ZN12IGScheduler419initWithAcceleratorEP22IOGraphicsAccelerator2"
 SCHEDULER4_LOAD_FIRMWARE = "__ZN12IGScheduler412loadFirmwareEv"
+SCHEDULER_BASE_INIT = "__ZN11IGScheduler15initWithOptionsEjyP22IOGraphicsAccelerator2"
 COMMAND_STREAMER_FACTORY = "__ZN26IGHardwareCommandStreamer423hardwareCommandStreamerEP22IOGraphicsAccelerator2P10IOWorkLoopP12IGScheduler410IGHwCsType"
 COMMAND_STREAMER_INIT = "__ZN26IGHardwareCommandStreamer44initEP22IOGraphicsAccelerator2P10IOWorkLoopP12IGScheduler410IGHwCsType"
 COMMAND_STREAMER_REGISTER = "__ZN26IGHardwareCommandStreamer421registerForInterruptsEv"
@@ -46,14 +47,23 @@ GUC_WITH_OPTIONS = "__ZN13IGHardwareGuC11withOptionsEP16IntelAccelerator"
 GUC_INIT_WITH_OPTIONS = "__ZN13IGHardwareGuC15initWithOptionsEP16IntelAccelerator"
 GUC_INIT_WORK_HISTORY = "__ZN13IGHardwareGuC19initWorkItemHistoryEj"
 GUC_INIT_DOORBELLS = "__ZN13IGHardwareGuC13initDoorbellsEv"
+GUC_READ_DOORBELLS = "__ZN13IGHardwareGuC23readDoorbellSQIDIConfigEv"
 CTB_WITH_OPTIONS = "__ZN21IGHardwareGuCCTBuffer11withOptionsEP22IOGraphicsAccelerator2"
 CTB_INIT = "__ZN21IGHardwareGuCCTBuffer19initWithAcceleratorEP22IOGraphicsAccelerator2"
 GUC_LOAD_BINARY = "__ZN13IGHardwareGuC13loadGuCBinaryEv"
 GUC_REGISTER_CTB = "__ZN13IGHardwareGuC31registerCommandTransportBuffersEv"
+GUC_DEREGISTER_CTB = "__ZN13IGHardwareGuC33deregisterCommandTransportBuffersEv"
 GUC_MMIO_ACTION = "__ZN13IGHardwareGuC19mmioHostToGuCActionEPKjjiPj"
 CREATE_UK_CONTEXT = "__ZN13IGHardwareGuC15createUkContextEy25UK_GEN11_CONTEXT_PRIORITY"
+MAPPED_WITH_OPTIONS = "__ZN20IGSharedMappedBuffer11withOptionsEP11IGAccelTaskmjj"
+MAPPED_INIT = "__ZN20IGSharedMappedBuffer15initWithOptionsEP11IGAccelTaskmjj"
 MAPPED_GET_MEMORY = "__ZNK14IGMappedBuffer9getMemoryEv"
 SYS_MEMORY_PHYSICAL = "__ZN16IGAccelSysMemory18getPhysicalSegmentEyPy"
+TRANSFER_OWNERSHIP = "__ZN16IntelAccelerator17transferOwnershipEPK20IGSharedMappedBufferi"
+GLOBAL_MAP_RANGE = "__ZN25IGHardwareGlobalPageTable8mapRangeERK14IGAddressRangeyy"
+GLOBAL_MAP_ROTATED = "__ZN25IGHardwareGlobalPageTable15mapRangeRotatedER33IGAddressRangeRotatedPageIteratorR25IGPhysicalSegmentIteratory"
+GLOBAL_UNMAP_RANGE = "__ZN25IGHardwareGlobalPageTable10unmapRangeERK14IGAddressRange"
+GLOBAL_MAP_DUMMY = "__ZN25IGHardwareGlobalPageTable13mapRangeDummyERK14IGAddressRangey"
 BLIT3D_BOUNDS_START = "__ZN23IGHardwareBlit2DContext10initializeEv"
 BLIT3D_BOUNDS_END = "__ZN21IGAccelDisplayMachine9MetaClassC1Ev"
 BLIT3D_GLOBAL_INIT = "__GLOBAL__sub_I_IGHardwareContext.cpp"
@@ -171,6 +181,7 @@ def macho_inventory(path):
             f"{path}: scheduler-4 firmware virtual slot changed")
 
     retained_edges = (
+        (SCHEDULER4_INIT, SCHEDULER_BASE_INIT),
         (SCHEDULER4_INIT, COMMAND_STREAMER_FACTORY),
         (COMMAND_STREAMER_FACTORY, COMMAND_STREAMER_INIT),
         (COMMAND_STREAMER_INIT, REQUEST_ENABLE_CALLBACK),
@@ -184,10 +195,17 @@ def macho_inventory(path):
         (GUC_INIT_WITH_OPTIONS, GUC_LOAD_BINARY),
         (GUC_INIT_WITH_OPTIONS, GUC_REGISTER_CTB),
         (GUC_INIT_WITH_OPTIONS, CREATE_UK_CONTEXT),
+        (GUC_INIT_WORK_HISTORY, MAPPED_WITH_OPTIONS),
+        (GUC_INIT_DOORBELLS, GUC_READ_DOORBELLS),
+        (MAPPED_WITH_OPTIONS, MAPPED_INIT),
         (CTB_WITH_OPTIONS, CTB_INIT),
+        (CTB_INIT, MAPPED_WITH_OPTIONS),
+        (CTB_INIT, TRANSFER_OWNERSHIP),
         (GUC_INIT_INTERRUPTS, REQUEST_ENABLE_CALLBACK),
         (GUC_REGISTER_INTERRUPTS, BRIDGE_REGISTER_TYPE),
         (GUC_REGISTER_CTB, GUC_MMIO_ACTION),
+        (GUC_REGISTER_CTB, GUC_DEREGISTER_CTB),
+        (GUC_DEREGISTER_CTB, GUC_MMIO_ACTION),
     )
     for owner, target in retained_edges:
         if not direct_branches(owner, target):
@@ -426,9 +444,16 @@ def source_contract(path):
             GUC_LOAD_BINARY,
             GUC_INIT_DOORBELLS,
             CTB_INIT,
+            GUC_READ_DOORBELLS,
             REQUEST_ENABLE_CALLBACK,
             CREATE_UK_CONTEXT,
-            GUC_MMIO_ACTION):
+            GUC_MMIO_ACTION,
+            MAPPED_WITH_OPTIONS,
+            TRANSFER_OWNERSHIP,
+            GLOBAL_MAP_RANGE,
+            GLOBAL_MAP_ROTATED,
+            GLOBAL_UNMAP_RANGE,
+            GLOBAL_MAP_DUMMY):
         if token not in pci_resolution:
             raise AssertionError(
                 f"{path}: retained native bootstrap descendant is not VF-routed: {token}")
