@@ -739,14 +739,16 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   passed a zero-length array to setProperty with length 0xea in two places,
   copying beyond the object into an IORegistry property. Both arrays now
   actually contain 234 zero bytes, and copy lengths use sizeof.
-- configRead32 treated both offset 0 and offset 2 like vendor/device reads:
-  offset 2 instead contains device ID low and command register high. The
-  replacement now preserves the correct other half for each offset. Both
-  config-read wrappers reject >16-bit spoof IDs and restrict substitution to
-  the actual selected IOPCIDevice, not any name beginning with IGPU.
-- The shared pure helper passes 16,777,216 device/offset combinations against
-  an independent byte reconstruction plus invalid-ID passthrough. This tests
-  returned values, not physical PCI writes (none are performed by the helper).
+- config-read wrappers reject >16-bit spoof IDs and restrict substitution to
+  the actual selected IOPCIDevice, not any name beginning with IGPU. The first
+  implementation incorrectly modeled a 32-bit read at offset 2 as a sliding
+  device/command window. PCI config reads are naturally aligned: bits 1:0 are
+  ignored for a DWORD and bit 0 for a word. It also failed to distinguish an
+  extended config page whose low offset happens to be 0..3.
+- The shared pure helper now models those alignment and extended-page rules for
+  both 16- and 32-bit reads. It passes all 65,536 device IDs, 16 pages and 256
+  low offsets plus invalid-ID passthrough. This tests returned values, not
+  physical PCI writes (none are performed by the helper).
 - First syntax pass caught legacy SDK setProperty(void*) rejecting const
   arrays; corrected the buffer declaration and reran the complete suite.
   Successful full run: /tmp/ngreen-static.5bgmHz. UUID checkpoint 83178e2
@@ -2885,3 +2887,34 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   contract rejects both the old call shape and a future ambiguous constructor.
   The complete suite passes in `/tmp/ngreen-static.iJN8VH`. A new macOS build
   and controlled load remain required before accelerator start is claimed.
+
+### Preserve naturally aligned PCI identity reads in native probe
+
+- Commit `c64b623` and macOS CI run `36288846991` produced NootedGreen UUID
+  `F9BE895C-5C79-33E9-AB60-ABEDD3968422`. The rebuilt seven-fileset AuxKC is
+  SHA-256 `74e3e030b29f81358ff717d5c2e8ed156f4bf7d2700881cf79a05b5a19c38137`.
+  A start-only load without `-allow3d` completed all 19 VF routes, the PF
+  runtime relay, TLB isolation and all fourteen unaligned-store conversions,
+  then stopped at Apple's explicit boot-argument gate. The archived dmesg is
+  SHA-256 `b027e9b2972e7c8f75d4f7aea2e0ef31c60babbef2cb7ce8fd5d6eb2b84cfbe3`.
+- With `-allow3d` present, native `IntelAccelerator::probe` reached its SKU
+  mapping and panicked on `0xa7a89a49`. The archived panic is SHA-256
+  `f6affc7c78ab215d24a8e80f178420bf8955e977b32fc7848f16b12483e1f4c1`.
+  The watchdog stopped only the guest and the host remained responsive.
+- Pinned-binary disassembly proves that probe calls
+  `IOPCIDevice::extendedConfigRead32(2)`, stores the complete return DWORD and
+  later compares it with packed device/vendor identities. Apple's open-source
+  IOPCIFamily 726.100.6 proves that extended reads set only the high extended
+  register nibble, preserve the raw low offset, and forward it to the bridge;
+  the public ABI specifies that DWORD bits 1:0 are ignored. Therefore offset 2
+  still returns the DWORD aligned at zero (`device << 16 | vendor`).
+- The old helper replaced the low half at offset 2, transforming physical
+  `0xa7a88086` into the observed `0xa7a89a49`. The corrected helper changes the
+  high half for every naturally aligned representation of the type-0 header,
+  handles the corresponding 16-bit rule, and refuses an extended page whose
+  low byte aliases the header. The exact panic regression requires
+  `0xa7a88086 -> 0x9a498086`.
+- The complete syntax, analyzer, strict-ABI, Mach-O and sanitizer suite passes
+  in `/tmp/ngreen-static.4JsX4j`, including 33,586,689 PCI identity cases. A
+  fresh macOS artifact and controlled AuxKC load remain required before native
+  accelerator start is claimed.

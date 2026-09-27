@@ -109,10 +109,11 @@ bool NGreen::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t
 uint16_t NGreen::configRead16(IORegistryEntry *service, uint32_t space, uint8_t offset) {
 	if (callback && callback->orgConfigRead16) {
 		auto result = callback->orgConfigRead16(service, space, offset);
-		if (service && service == callback->iGPU && offset == WIOKit::kIOPCIConfigDeviceID) {
+		if (service && service == callback->iGPU &&
+		    NGPciIdentity::readsDeviceId16(space, offset)) {
 			uint32_t device;
-			if (WIOKit::getOSDataValue(service, "device-id", device) && device <= 0xFFFFU)
-				return static_cast<uint16_t>(device);
+			if (WIOKit::getOSDataValue(service, "device-id", device))
+				return NGPciIdentity::replaceDeviceId16(result, space, offset, device);
 		}
 
 		return result;
@@ -124,12 +125,11 @@ uint16_t NGreen::configRead16(IORegistryEntry *service, uint32_t space, uint8_t 
 uint32_t NGreen::configRead32(IORegistryEntry *service, uint32_t space, uint8_t offset) {
 	if (callback && callback->orgConfigRead32) {
 		auto result = callback->orgConfigRead32(service, space, offset);
-		// According to lvs unaligned reads may happen
 		if (service && service == callback->iGPU &&
-		    (offset == WIOKit::kIOPCIConfigDeviceID || offset == WIOKit::kIOPCIConfigVendorID)) {
+		    NGPciIdentity::readsVendorDevice32(space, offset)) {
 			uint32_t device;
 			if (WIOKit::getOSDataValue(service, "device-id", device))
-				return NGPciIdentity::replaceDeviceId32(result, offset, device);
+				return NGPciIdentity::replaceDeviceId32(result, space, offset, device);
 		}
 
 		return result;
