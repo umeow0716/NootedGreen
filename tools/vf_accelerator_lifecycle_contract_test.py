@@ -26,6 +26,11 @@ GUC_INIT_INTERRUPTS = "__ZN13IGHardwareGuC14initInterruptsEv"
 CREATE_UK_CONTEXT = "__ZN13IGHardwareGuC15createUkContextEy25UK_GEN11_CONTEXT_PRIORITY"
 MAPPED_GET_MEMORY = "__ZNK14IGMappedBuffer9getMemoryEv"
 SYS_MEMORY_PHYSICAL = "__ZN16IGAccelSysMemory18getPhysicalSegmentEyPy"
+BLIT3D_BOUNDS_START = "__ZN23IGHardwareBlit2DContext10initializeEv"
+BLIT3D_BOUNDS_END = "__ZN21IGAccelDisplayMachine9MetaClassC1Ev"
+BLIT3D_GLOBAL_INIT = "__GLOBAL__sub_I_IGHardwareContext.cpp"
+BLIT3D_SCRATCH_ANCHOR = bytes.fromhex(
+    "48 8d 05 19 31 03 00 48 8b 00 48 89 05 df d6 0c 00")
 
 
 def macho_inventory(path):
@@ -106,6 +111,30 @@ def macho_inventory(path):
             if candidate + 5 + displacement == target_start:
                 calls.append(candidate)
         return calls
+
+    # The runtime patch must search across the private global constructor.
+    # Its production bounds deliberately use exported symbols because the
+    # binary contains many identically named __GLOBAL__D_a local symbols.
+    blit3d_start = value(BLIT3D_BOUNDS_START)
+    blit3d_end = value(BLIT3D_BOUNDS_END)
+    blit3d_global_init = value(BLIT3D_GLOBAL_INIT)
+    blit3d_anchors = []
+    cursor = 0
+    while True:
+        cursor = image.find(BLIT3D_SCRATCH_ANCHOR, cursor)
+        if cursor < 0:
+            break
+        blit3d_anchors.append(cursor)
+        cursor += 1
+    if len(blit3d_anchors) != 1:
+        raise AssertionError(
+            f"{path}: expected one Blit3D scratch constructor anchor")
+    blit3d_anchor = blit3d_anchors[0]
+    if not (blit3d_start < blit3d_global_init < blit3d_anchor < blit3d_end):
+        raise AssertionError(
+            f"{path}: exported Blit3D patch bounds do not enclose constructor anchor")
+    if blit3d_end - blit3d_start > 0x400:
+        raise AssertionError(f"{path}: Blit3D patch bounds exceed runtime limit")
 
     for lifecycle, owner, bridge in (
             (ENABLE, START, BRIDGE_ENABLE),
@@ -232,6 +261,28 @@ def source_contract(path):
             pci_resolution.index("KernelPatcher::KernelID") <
             pci_resolution.index(PCI_CONFIGURE_INTERRUPTS)):
         raise AssertionError(f"{path}: IOPCIFamily symbol is incorrectly resolved from KernelID")
+
+    scratch_start = pci_resolution.index(
+        "mach_vm_address_t blit3dBoundsStart")
+    scratch_end = pci_resolution.index(
+        'SYSLOG("ngreen", "V250:', scratch_start)
+    scratch_contract = pci_resolution[scratch_start:scratch_end]
+    normalized_scratch_contract = "".join(scratch_contract.split())
+    for token in (
+            '{"' + BLIT3D_BOUNDS_START + '",blit3dBoundsStart}',
+            '{"' + BLIT3D_BOUNDS_END + '",blit3dBoundsEnd}',
+            "blit3dBoundsEnd<=blit3dBoundsStart",
+            "blit3dBoundsEnd-blit3dBoundsStart>0x400",
+            "patcher,blit3dBoundsStart,blit3dBoundsEnd-blit3dBoundsStart"):
+        if token not in normalized_scratch_contract:
+            raise AssertionError(
+                f"{path}: incomplete production Blit3D patch-bound contract: {token}")
+    for forbidden in (
+            "__ZN25IGHardwareExtendedContext9MetaClassD0Ev",
+            "__ZN23IGHardwareBlit3DContext9MetaClassD0Ev"):
+        if forbidden in scratch_contract:
+            raise AssertionError(
+                f"{path}: Blit3D anchor is bounded by a symbol before its address")
 
     start = function_body(source, "bool Gen11::startGraphicsEngine(void *that)")
     bridge = start.index("callback->vfInterruptBridgeEnable)(")

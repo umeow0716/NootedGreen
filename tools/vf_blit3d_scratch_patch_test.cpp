@@ -41,11 +41,14 @@ static void verify(const char *path)
 	std::vector<uint8_t> image((std::istreambuf_iterator<char>(stream)), {});
 	using namespace NGVfBlit3dScratchPatch;
 
-	// UUID-pinned extended-context constructor symbols:
-	//   __GLOBAL__sub_I_IGHardwareContext.cpp [0x7d98a, 0x7db5c)
-	//   __GLOBAL__D_a                         0x7db5c
-	// The 17-byte load/store group is the only match inside that range and
-	// is unique across the whole image.
+	// UUID-pinned production bounds use stable exported symbols:
+	//   IGHardwareBlit2DContext::initialize()  0x7d912
+	//   IGAccelDisplayMachine::MetaClassC1()   0x7dbac
+	// The private global constructor is [0x7d98a, 0x7db5c). The 17-byte
+	// load/store group is the only match in either range and is unique across
+	// the whole image.
+	assert(offsetsInRange(image, scratchSizeFind, 0x7d912, 0x7dbac) ==
+	       std::vector<size_t> {0x7db20});
 	assert(offsetsInRange(image, scratchSizeFind, 0x7d98a, 0x7db5c) ==
 	       std::vector<size_t> {0x7db20});
 	assert(offsetsInRange(image, scratchSizeFind, 0, image.size()) ==
@@ -76,7 +79,12 @@ static void verify(const char *path)
 	       scratchSizeReplace[2] == 0x05);
 	assert(scratchSizeReplace[7] == 0x00 && scratchSizeReplace[8] == 0xe0 &&
 	       scratchSizeReplace[9] == 0x00 && scratchSizeReplace[10] == 0x00);
-	assert(storeTarget == 0x14b210);
+	const uint32_t replacementDisplacement = static_cast<uint32_t>(
+		scratchSizeReplace[3] | (scratchSizeReplace[4] << 8) |
+		(scratchSizeReplace[5] << 16) | (scratchSizeReplace[6] << 24));
+	const uint64_t replacementStoreTarget =
+		0x7db20 + 11 + static_cast<uint64_t>(replacementDisplacement);
+	assert(replacementStoreTarget == storeTarget);
 
 	// Padding must be exactly the removed two-instruction load pair length
 	// so the following constructor stores keep their addresses.

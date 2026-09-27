@@ -2077,24 +2077,26 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			// 0xd000. Keep the native initializer and publish a page-rounded
 			// allocation size instead; the private factory only reads the
 			// recorded length back from this same global. Bound the rewrite by
-			// the complete extended-context constructor symbols and require the
-			// exact UUID-pinned anchor, including its const-table RIP target.
-			mach_vm_address_t blit3dCtors = 0, blit3dDtor = 0;
+			// stable exported neighbours enclosing the private global constructor
+			// and require the exact UUID-pinned anchor, including its const-table
+			// RIP target.
+			mach_vm_address_t blit3dBoundsStart = 0, blit3dBoundsEnd = 0;
 			KernelPatcher::SolveRequest blit3dScratchBounds[] = {
-				{"__ZN25IGHardwareExtendedContext9MetaClassD0Ev", blit3dCtors},
-				{"__ZN23IGHardwareBlit3DContext9MetaClassD0Ev", blit3dDtor},
+				{"__ZN23IGHardwareBlit2DContext10initializeEv", blit3dBoundsStart},
+				{"__ZN21IGAccelDisplayMachine9MetaClassC1Ev", blit3dBoundsEnd},
 			};
 			PANIC_COND(!patcher.solveMultiple(
 			               index, blit3dScratchBounds, address, size) ||
-			           blit3dDtor <= blit3dCtors ||
-			           blit3dDtor - blit3dCtors > 0x400,
+			           blit3dBoundsEnd <= blit3dBoundsStart ||
+			           blit3dBoundsEnd - blit3dBoundsStart > 0x400,
 			           "ngreen", "Invalid Blit3D scratch patch bounds");
 			LookupPatchPlus const blit3dScratchPatch {
 				activeKext, NGVfBlit3dScratchPatch::scratchSizeFind,
 				NGVfBlit3dScratchPatch::scratchSizeReplace, 1,
 			};
 			PANIC_COND(!blit3dScratchPatch.apply(
-			               patcher, blit3dCtors, blit3dDtor - blit3dCtors), "ngreen",
+			               patcher, blit3dBoundsStart,
+			               blit3dBoundsEnd - blit3dBoundsStart), "ngreen",
 			           "Failed to enlarge Blit3D scratch allocation");
 			SYSLOG("ngreen", "V250: enlarged Blit3D scratch allocation 0xd240→0xe000");
 			KernelPatcher::RouteRequest workQueueInitRoute[] = {
