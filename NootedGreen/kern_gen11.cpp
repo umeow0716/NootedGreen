@@ -1719,11 +1719,11 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		// A VF has no physical display controller. Refusing only DMC or MMIO
 		// helpers is too late: native probe/start have their own raw accesses.
 		// This is admission rejection, not a virtual framebuffer implementation.
-		RouteRequestPlus reject[] = {
+		KernelPatcher::RouteRequest reject[] = {
 			{"__ZN24AppleIntelBaseController5probeEP9IOServicePi", vfRejectPhysicalFramebufferProbe},
 			{"__ZN31AppleIntelFramebufferController5startEP9IOService", vfRejectPhysicalFramebufferStart},
 		};
-		PANIC_COND(!RouteRequestPlus::routeAll(patcher, index, reject, address, size),
+		PANIC_COND(!patcher.routeMultiple(index, reject, address, size),
 			"ngreen", "Cannot contain physical framebuffer on VF/unknown device");
 		SYSLOG("ngreen", "Physical framebuffer probe/start rejected for VF/unknown device");
 		return true;
@@ -1743,14 +1743,14 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		// Both admitted variants checked a 64-bit read against length-4.
 		// Require the full eight-byte operand before dereferencing it.
 		mach_vm_address_t read64Start = 0, read64End = 0;
-		SolveRequestPlus read64SymbolBounds[] = {
+		KernelPatcher::SolveRequest read64SymbolBounds[] = {
 			{"__ZN31AppleIntelRegisterAccessManager14ReadRegister64Em",
 			 read64Start},
 			{"__ZN31AppleIntelRegisterAccessManager14ReadRegister64EPVvm",
 			 read64End},
 		};
-		PANIC_COND(!SolveRequestPlus::solveAll(
-		               patcher, index, read64SymbolBounds, address, size) ||
+		PANIC_COND(!patcher.solveMultiple(
+		               index, read64SymbolBounds, address, size) ||
 		           read64End <= read64Start || read64End - read64Start > 0x100,
 		           "ngreen", "Invalid ReadRegister64 patch bounds");
 		LookupPatchPlus const read64Bounds = isprod ?
@@ -1790,7 +1790,7 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		SYSLOG("ngreen", "V165: setRMMIO done, starting symbol resolve");
 
 		if (vfActive) {
-			SolveRequestPlus solveRequests[] = {
+			KernelPatcher::SolveRequest solveRequests[] = {
 				{"__ZN13IGHardwareGuC16initSchedControlEv", this->orgInitSchedControl},
 				{"__ZN21IGHardwareGuCCTBuffer32handleSoftwareGuCToHostInterruptEv",
 				 this->vfCtbSoftwareInterrupt},
@@ -1813,7 +1813,7 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				// the next bootstrap allocation starts.
 				{"__ZN11IGAccelTask12fTaskCounterE", this->igAccelTaskCounter},
 			};
-			PANIC_COND(!SolveRequestPlus::solveAll(patcher, index, solveRequests, address, size), "ngreen",
+			PANIC_COND(!patcher.solveMultiple(index, solveRequests, address, size), "ngreen",
 			           "Failed to resolve mandatory TGL accelerator bootstrap symbols");
 		}
 
@@ -1824,7 +1824,7 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		// rel32 targets now remain safe even when they bypass the routed entry.
 		// 0x001f00ff encodes SQIDI mask 0xff and 32 doorbells per SQIDI.
 		if (vfActive) {
-			SolveRequestPlus bufferAccessors[] = {
+			KernelPatcher::SolveRequest bufferAccessors[] = {
 				{"__ZNK20IGSharedMappedBuffer17getVirtualAddressEv",
 				 this->vfSharedMappedBufferGetVirtualAddress},
 				{"__ZNK14IGMappedBuffer20getGPUVirtualAddressEv",
@@ -1840,13 +1840,13 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				{"__ZN22IGHardwareGuCWorkQueue11withOptionsEP22IOGraphicsAccelerator2jP37UK_GEN11_SCHED_PROCESS_DESCRIPTOR_REC",
 				 this->vfWorkQueueWithOptions},
 			};
-			PANIC_COND(!SolveRequestPlus::solveAll(patcher, index, bufferAccessors, address, size),
+			PANIC_COND(!patcher.solveMultiple(index, bufferAccessors, address, size),
 			           "ngreen", "Cannot resolve VF buffer accessors or proxy-context lifecycle");
 			this->vfOSObjectFree = patcher.solveSymbol(KernelPatcher::KernelID,
 				"__ZN8OSObject4freeEv");
 			PANIC_COND(!this->vfOSObjectFree, "ngreen",
 			           "Cannot resolve base destructor for failed VF workqueues");
-			RouteRequestPlus workQueueInitRoute[] = {
+			KernelPatcher::RouteRequest workQueueInitRoute[] = {
 				{"__ZN22IGHardwareGuCWorkQueue19initWithAcceleratorEP22IOGraphicsAccelerator2jP37UK_GEN11_SCHED_PROCESS_DESCRIPTOR_REC",
 				 vfWorkQueueInit, this->oVfWorkQueueInit},
 				{"__ZN22IGHardwareGuCWorkQueue4freeEv",
@@ -1854,20 +1854,20 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				{"__ZN21IGHardwareGuCCTBuffer4freeEv",
 				 vfCtbFree, this->oVfCtbFree},
 			};
-			PANIC_COND(!RouteRequestPlus::routeAll(patcher, index, workQueueInitRoute, address, size),
+			PANIC_COND(!patcher.routeMultiple(index, workQueueInitRoute, address, size),
 			           "ngreen", "Failed to install VF workqueue allocation unwind");
 			// Preserve Apple's event-source and callback lifecycle but remove the
 			// direct GFX_MSTR_IRQ accesses surrounding enable/disableInterrupts.
 			// Bound each patch by adjacent symbols, never by the entire image.
 			mach_vm_address_t irqEnable = 0, irqEnableRegs = 0;
 			mach_vm_address_t irqDisable = 0, irqDisableRegs = 0;
-			SolveRequestPlus irqBounds[] = {
+			KernelPatcher::SolveRequest irqBounds[] = {
 				{"__ZN17IGInterruptBridge6enableEv", irqEnable},
 				{"__ZN17IGInterruptBridge16enableInterruptsEv", irqEnableRegs},
 				{"__ZN17IGInterruptBridge7disableEv", irqDisable},
 				{"__ZN17IGInterruptBridge17disableInterruptsEv", irqDisableRegs},
 			};
-			PANIC_COND(!SolveRequestPlus::solveAll(patcher, index, irqBounds, address, size) ||
+			PANIC_COND(!patcher.solveMultiple(index, irqBounds, address, size) ||
 			           irqEnableRegs <= irqEnable || irqDisableRegs <= irqDisable ||
 			           irqEnableRegs - irqEnable > 0x400 || irqDisableRegs - irqDisable > 0x400,
 			           "ngreen", "Invalid VF IRQ lifecycle patch bounds");
@@ -1888,26 +1888,26 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			           "ngreen", "Failed to isolate VF IRQ lifecycle from GFX_MSTR_IRQ");
 			// These entry points can call framebuffer force-wake instead of the
 			// multithreaded accelerator route. A VF has no guest-owned domains.
-			RouteRequestPlus vfWakeRoutes[] = {
+			KernelPatcher::RouteRequest vfWakeRoutes[] = {
 				{"__ZN16IntelAccelerator13SafeForceWakeEbj", wrapSafeForceWake},
 				{"__ZN16IntelAccelerator22SafeForceWakeInterruptEbj", wrapSafeForceWake},
 				{"__ZN16IntelAccelerator26SafeForceWakeMultithreadedEbjj", forceWake},
 			};
-			PANIC_COND(!RouteRequestPlus::routeAll(patcher, index, vfWakeRoutes, address, size),
+			PANIC_COND(!patcher.routeMultiple(index, vfWakeRoutes, address, size),
 			           "ngreen", "Failed to isolate VF force-wake entry points");
 
 			// The VF has no physical framebuffer by design. Keep Apple's complete
 			// standalone fallback, but make its waitForMatchingService lookup
 			// nonblocking instead of stalling accelerator start for 30 seconds.
 			mach_vm_address_t fbRegistration = 0, fbRegistrationEnd = 0;
-			SolveRequestPlus fbRegistrationBounds[] = {
+			KernelPatcher::SolveRequest fbRegistrationBounds[] = {
 				{"__ZN16IntelAccelerator33registerWithFramebufferControllerEv",
 				 fbRegistration},
 				{"__ZN16IntelAccelerator23initHardwareWorkaroundsEv",
 				 fbRegistrationEnd},
 			};
-			PANIC_COND(!SolveRequestPlus::solveAll(
-			               patcher, index, fbRegistrationBounds, address, size) ||
+			PANIC_COND(!patcher.solveMultiple(
+			               index, fbRegistrationBounds, address, size) ||
 			           fbRegistrationEnd <= fbRegistration ||
 			           fbRegistrationEnd - fbRegistration > 0x300,
 			           "ngreen", "Invalid VF framebuffer-registration patch bounds");
@@ -1932,14 +1932,14 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				0xc6, 0x87, 0xe2, 0x09, 0x00, 0x00, 0x00,
 			};
 			mach_vm_address_t doorbellReadStart = 0, doorbellReadEnd = 0;
-			SolveRequestPlus doorbellReadBounds[] = {
+			KernelPatcher::SolveRequest doorbellReadBounds[] = {
 				{"__ZN13IGHardwareGuC23readDoorbellSQIDIConfigEv",
 				 doorbellReadStart},
 				{"__ZN13IGHardwareGuC15acquireDoorbellEP35UK_GEN11_GUC_CONTEXT_DESCRIPTOR_RECb",
 				 doorbellReadEnd},
 			};
-			PANIC_COND(!SolveRequestPlus::solveAll(
-			               patcher, index, doorbellReadBounds, address, size) ||
+			PANIC_COND(!patcher.solveMultiple(
+			               index, doorbellReadBounds, address, size) ||
 			           doorbellReadEnd <= doorbellReadStart ||
 			           doorbellReadEnd - doorbellReadStart > 0x100,
 			           "ngreen", "Invalid VF DISTRDB patch bounds");
@@ -1954,7 +1954,7 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		}
 
 		if (vfActive) {
-			RouteRequestPlus requests[] = {
+			KernelPatcher::RouteRequest requests[] = {
 			// V217: Query the media-12 PF-provisioned GGTT range, replace Apple's
 			// zero/stolen-derived allocator ranges, and validate direct BAR0 PTE
 			// mappings plus their required GuC TLB invalidation lifecycle.
@@ -2020,18 +2020,18 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			 
 			};
 			SYSLOG("ngreen", "V165: routing %zu VF accelerator symbols", sizeof(requests)/sizeof(requests[0]));
-			PANIC_COND(!RouteRequestPlus::routeAll(patcher, index, requests, address, size),
+			PANIC_COND(!patcher.routeMultiple(index, requests, address, size),
 				"ngreen", "Failed to route VF accelerator symbols");
 			SYSLOG("ngreen", "V165: VF accelerator symbols routed OK");
 		}
 
 		{
-			RouteRequestPlus startRoute[] = {
+			KernelPatcher::RouteRequest startRoute[] = {
 				{"__ZN16IntelAccelerator5startEP9IOService", start, this->ostart},
 				{"__ZN16IntelAccelerator4stopEP9IOService", acceleratorStop,
 				 this->oAcceleratorStop},
 			};
-			PANIC_COND(!RouteRequestPlus::routeAll(patcher, index, startRoute, address, size),
+			PANIC_COND(!patcher.routeMultiple(index, startRoute, address, size),
 			           "ngreen", "Cannot admit pinned accelerator without lifecycle routes");
 			SYSLOG("ngreen", "V242: Hooked IntelAccelerator start/stop lifecycle");
 		}
@@ -2039,7 +2039,7 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		if (vfActive) {
 			// The PF already owns GuC firmware. Replace only the VF transport and
 			// lifecycle entry points; a physical GPU keeps Apple's native dispatch.
-			RouteRequestPlus firmwareRoute[] = {
+			KernelPatcher::RouteRequest firmwareRoute[] = {
 				{"__ZN13IGHardwareGuC13loadGuCBinaryEv", loadGuCBinary},
 				{"__ZN16IntelAccelerator17transferOwnershipEPK20IGSharedMappedBufferi",
 				 vfTransferOwnership},
@@ -2124,7 +2124,7 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				{"__ZN13IGHardwareGuC14submitWorkItemEjRK21SGfxContextDescriptor10IGHwCsTypejjj",
 				 vfSubmitWorkItem},
 			};
-			PANIC_COND(!RouteRequestPlus::routeAll(patcher, index, firmwareRoute, address, size), "ngreen", "Failed to route VF GuC firmware transport");
+			PANIC_COND(!patcher.routeMultiple(index, firmwareRoute, address, size), "ngreen", "Failed to route VF GuC firmware transport");
 		}
 
 		// V237: IGHardwareGuCCTBuffer::initWithAccelerator directly accesses the
@@ -2140,7 +2140,7 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			mach_vm_address_t ctbInit = 0, ctbInitEnd = 0;
 			mach_vm_address_t ctbFree = 0, ctbFreeEnd = 0;
 			mach_vm_address_t releaseUkContext = 0, releaseUkContextEnd = 0;
-			SolveRequestPlus tlbPatchBounds[] = {
+			KernelPatcher::SolveRequest tlbPatchBounds[] = {
 				{"__ZN22IGHardwareGuCWorkQueue19initWithAcceleratorEP22IOGraphicsAccelerator2jP37UK_GEN11_SCHED_PROCESS_DESCRIPTOR_REC",
 				 workQueueInit},
 				{"__ZN22IGHardwareGuCWorkQueue9lockQueueEv", workQueueInitEnd},
@@ -2155,7 +2155,7 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				{"__ZN13IGHardwareGuC16releaseUkContextEj", releaseUkContext},
 				{"__ZN13IGHardwareGuC13isContextIdleEj", releaseUkContextEnd},
 			};
-			PANIC_COND(!SolveRequestPlus::solveAll(patcher, index, tlbPatchBounds,
+			PANIC_COND(!patcher.solveMultiple(index, tlbPatchBounds,
 			                                      address, size) ||
 			           workQueueInitEnd <= workQueueInit ||
 			           workQueueInitEnd - workQueueInit > 0x200 ||
@@ -2252,11 +2252,11 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			// the current later-generation compatibility path must hardcode
 			// because fuse layout differs and BCS ring doesn't start.
 			mach_vm_address_t gpuInfoStart = 0, gpuInfoEnd = 0;
-			SolveRequestPlus gpuInfoBounds[] = {
+			KernelPatcher::SolveRequest gpuInfoBounds[] = {
 				{"__ZN16IntelAccelerator10getGPUInfoEv", gpuInfoStart},
 				{"__ZN16IntelAccelerator14teardownDeviceEP11IOPCIDevice", gpuInfoEnd},
 			};
-			PANIC_COND(!SolveRequestPlus::solveAll(patcher, index, gpuInfoBounds,
+			PANIC_COND(!patcher.solveMultiple(index, gpuInfoBounds,
 			                                      address, size) ||
 			           gpuInfoEnd <= gpuInfoStart ||
 			           gpuInfoEnd - gpuInfoStart > 0x1000,
@@ -2308,13 +2308,13 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 
 			if (!tglGeneration) {
 				mach_vm_address_t rectListStart = 0, rectListEnd = 0;
-				SolveRequestPlus rectListBounds[] = {
+				KernelPatcher::SolveRequest rectListBounds[] = {
 					{"__ZL22blit3d_submit_rectlistP23IGHardwareBlit3DContextP15blit3d_params_tPK8IGVectorI11rect_pair_t25IGIOMallocAllocatorPolicyE",
 					 rectListStart},
 					{"__ZL19IsSurfaceCompressedj", rectListEnd},
 				};
-				PANIC_COND(!SolveRequestPlus::solveAll(
-				               patcher, index, rectListBounds, address, size) ||
+				PANIC_COND(!patcher.solveMultiple(
+				               index, rectListBounds, address, size) ||
 				           rectListEnd <= rectListStart ||
 				           rectListEnd - rectListStart > 0x3000,
 				           "ngreen", "Invalid blit3d rect-list patch bounds");

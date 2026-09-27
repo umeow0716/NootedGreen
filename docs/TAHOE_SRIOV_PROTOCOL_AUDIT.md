@@ -2522,3 +2522,22 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   manufacturer-ID domain, and its only effect was to rename that impossible
   match to `AppleBacklightDisplay`. It had no VF, accelerator or virtual-display
   role; the metaclass, personality and Xcode entries were removed together.
+
+### Restore Lilu's batch route preflight
+
+- The local `RouteRequestPlus::routeAll` loop called Lilu `routeMultiple` once
+  per symbol. This defeated Lilu 1.7.2's first pass, which resolves every
+  symbol in a batch before installing the first trampoline; a missing late
+  GuC/IRQ symbol could therefore leave earlier routes installed before the
+  mandatory admission panic.
+- No product route or solve request used the wrapper's pattern fallback. All
+  route arrays now use `KernelPatcher::RouteRequest` and one native
+  `routeMultiple` call; all symbol arrays use `KernelPatcher::SolveRequest` and
+  `solveMultiple`. The dead derived request types, overloads and per-item loops
+  were removed.
+- The exact pinned Lilu source confirms batch symbol preflight but provides no
+  group rollback if trampoline allocation or memory-protection handling fails
+  after writes begin. Every caller remains mandatory and panics before the
+  accelerator personality is published, so a half-installed payload is never
+  admitted to matching; this is the strongest boundary exposed by this Lilu
+  API without maintaining a private patcher fork.
