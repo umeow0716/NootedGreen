@@ -154,6 +154,8 @@ def main() -> int:
     assert file_ref is not None and file_ref.attrib["location"] == "self:"
 
     workflow = WORKFLOW.read_text(encoding="utf-8")
+    assert "HookCase" not in workflow
+    assert not (ROOT / "HookCase-master").exists()
     for required in (
         "codex/tahoe-sriov-vf",
         '      - "NootedGreen/**"',

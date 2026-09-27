@@ -51,6 +51,7 @@ class NGreen {
 	public:
 	uint64_t getRMMIOLength() const { return rmmio ? rmmio->getLength() : 0; }
 	volatile UInt32 *getRMMIOAddress() const { return rmmioPtr; }
+	bool nativeTigerLakePath() const { return isRealTGL; }
 
 	private:
     bool isRealTGL = false;  // compatibility name: true only for a physical TGL GPU

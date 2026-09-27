@@ -2743,3 +2743,52 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   reachable, validates all three target configurations, scheme/workspace and
   CI filters/stages, and rejects shell build phases. It is part of the full
   static gate, which passes in `/tmp/ngreen-static.tyWTnd`; no VM boot occurred.
+
+### Replace and remove the HookCase compatibility boundary
+
+- Read all seven HookCase source/build files. Its historical IDT, sysent and
+  DYLD interposition engine is inside a disabled block; the active service only
+  calls its superclass. The appended graphics provider was nevertheless a
+  hard runtime dependency. It declared XNU's five-argument
+  `gpu_accumulate_time` and one-argument `gpu_describe` as zero-argument no-op
+  functions, reversed the 32-bit write bound, underflowed all small MMIO
+  lengths, excluded valid 64-bit tail accesses, dereferenced a callback whose
+  assignment was commented out, stored a descriptor at an unproven Apple
+  object offset and wrote all nine DSB chicken registers before display state
+  existed.
+- XNU `12377.121.6` proves both telemetry prototypes and implementations.
+  NootedGreen now exports those exact ABIs and resolves the originals strictly
+  from `KernelPatcher::KernelID`, preserving kernel tracing and per-thread GPU
+  accounting without granting the Apple payload `com.apple.kpi.private`.
+  Accelerator dependency metadata points to NootedGreen. The complete macOS
+  kext link/build passed in GitHub Actions run `36284302650`.
+- A deleted ICL framebuffer binary retained in Git history established the
+  original register/time/port behavior. Relocations in both admitted Tahoe TGL
+  binaries prove every missing 64-bit caller uses the GGTT pointer at controller
+  `+0xCA0`; the table length is `+0xCEC`, DSB GPU offset `+0xC50`, size
+  `+0xDCC`, and the port configuration pointer `+0x548`. Compatibility exports
+  are admitted only for a pinned framebuffer UUID on a native TGL PF. RPL PF,
+  VF and unknown identities route framebuffer probe/start to rejection.
+- Current i915 defines a Gen8+ GGTT PTE as address plus Present; bit 1 is Gen12
+  local memory and TGL bits 4:2 are the VFID. HookCase's `| 7` therefore wrote
+  unrelated LM/VFID state. The replacement accepts only the exact 72-KiB DSB
+  layout, allocates and zeros one contiguous buffer, validates its whole
+  physical range and GGTT window, saves every old PTE, writes address+Present,
+  verifies every readback and restores the entire range on failure. It owns the
+  descriptor outside the Apple object and never writes the guessed `+0xCD8`
+  field. Gen11+ uses an uncached GGTT mapping, so the former speculative
+  chicken-register loop was removed; Apple's DSB commit path owns those
+  state-dependent values.
+- Linux names `0x1638A0` as `PORT_TX_DFLEXDPSP(FIA1)`; HookCase's comment that
+  TGL should use HPD register `0x44470` was false. The replacement preserves
+  the ICL-derived per-port bit mapping while checking both the configuration
+  pointer and register sentinel. Register methods use the central checked BAR
+  mapping, `getPMTNow` preserves the clock conversion, and the bounded
+  `strnstr` plus three-entry DSB status object have their exact symbols.
+- The provider tests prove all 17 required accelerator/framebuffer C/C++
+  exports, both plists,
+  all sixteen 64-bit caller relocations and both setup calls. Pure tests cover
+  DSB boundaries, PTE address/flag rejection and every FIA port mode. The full
+  syntax/analyzer/strict-ABI/sanitizer suite passes in
+  `/tmp/ngreen-static.sFdng4`. HookCase build/artifact stages and all seven
+  files were removed; history remains the recovery path. The VM stayed off.

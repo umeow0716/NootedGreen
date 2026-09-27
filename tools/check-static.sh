@@ -75,6 +75,29 @@ if "$compiler" -std=c++14 -O1 -g -fsanitize=address,undefined \
 else
     failed=1
 fi
+if "$compiler" -std=c++14 -O1 -g -fsanitize=address,undefined \
+    tools/tgl_compat_test.cpp -o "$task_output/tgl-compat-test" && \
+    "$task_output/tgl-compat-test"; then
+    printf 'PASS offline TGL compatibility contracts\n'
+else
+    failed=1
+fi
+if "$compiler" --target=x86_64-apple-macos13 -std=c++14 -c \
+    -ffreestanding -fno-builtin -fvisibility=hidden \
+    -DKERNEL=1 -DKERNEL_PRIVATE=1 -DMODULE_VERSION=100 \
+    -DPRODUCT_NAME=NootedGreen -D__MAC_OS_X_VERSION_MIN_REQUIRED=130000 \
+    -I. -ILilu.kext/Contents/Resources -IMacKernelSDK/Headers \
+    NootedGreen/kern_tgl_compat.cpp -o "$task_output/kern-tgl-compat.o" && \
+    python3 -B tools/framebuffer_compat_contract_test.py \
+        "$task_output/kern-tgl-compat.o" NootedGreen/kern_tgl_compat.cpp \
+        sle_Internal/le/AppleIntelTGLGraphicsFramebuffer.kext/Contents/Info.plist \
+        sle_Internal/le/AppleIntelTGLGraphicsFramebuffer.kext/Contents/MacOS/AppleIntelTGLGraphicsFramebuffer \
+        sle_Internal/lep/AppleIntelTGLGraphicsFramebuffer.kext/Contents/Info.plist \
+        sle_Internal/lep/AppleIntelTGLGraphicsFramebuffer.kext/Contents/MacOS/AppleIntelTGLGraphicsFramebuffer; then
+    printf 'PASS offline TGL framebuffer provider contracts\n'
+else
+    failed=1
+fi
 if python3 tools/personality_contract_test.py \
     sle_Internal/le/AppleIntelTGLGraphics.kext/Contents/Info.plist \
     sle_Internal/sle/AppleIntelTGLGraphics.kext/Contents/Info.plist; then

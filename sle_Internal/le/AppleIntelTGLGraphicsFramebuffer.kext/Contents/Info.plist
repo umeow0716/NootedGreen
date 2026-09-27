@@ -285,8 +285,8 @@
 		<string>10.0.0</string>
 		<key>com.apple.kpi.unsupported</key>
 		<string>10.0.0</string>
-		<key>org.smichaud.HookCase</key>
-		<string>1.0</string>
+		<key>com.StezzaPilot.NootedGreen</key>
+		<string>1.0.0</string>
 	</dict>
 	<key>OSBundleRequired</key>
 	<string>Safe Boot</string>
