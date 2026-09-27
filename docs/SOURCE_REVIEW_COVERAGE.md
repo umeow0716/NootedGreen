@@ -17,8 +17,8 @@ At c312229, the tracked source/build/metadata inventory contained 1,305 files:
 | Lilu.kext | 39 | Selected headers/upstream patching code; full dependency review pending |
 | HookCase-master | 7 | Build checked, full source/assembly review pending |
 | sle_Internal | 35 | Metadata only in this count; embedded binaries are a separate review obligation |
-| NootedGreen.xcodeproj | 4 | Build references inspected; unreferenced firmware headers and null build entries removed, settings/full project review pending |
-| .github | 1 | Build/test workflow read; no deployment step |
+| NootedGreen.xcodeproj | 4 | Read end-to-end. Product/source/configuration, scheme and workspace contracts are now tested; obsolete shell phases were removed. |
+| .github | 1 | Read end-to-end. The branch/path filters and x86_64 kext, HookCase and Metal artifact stages are enforced by the project contract test; no deployment step exists. |
 
 The earlier 1,256-file count omitted assembly and some build metadata. The
 expanded scope above includes `.s`, `.S`, `.inc`, `.tool`, `.plist`, scheme and
@@ -80,6 +80,15 @@ sources returns the current count to 1,303; this does not close older coverage.
   alignment contradictions could only recreate an unsupported private ABI.
   `parsed.gdt` remains as inert archival reverse-engineering data and is never
   loaded by the build, tests or driver.
+- The complete Xcode project, shared scheme/workspace, `Info.plist` and GitHub
+  workflow are covered by `project_contract_test.py`. It proves all four
+  product `.cpp` files plus Lilu's `plugin_start.cpp` are compiled, all 29
+  product headers are transitively reachable, all three target configurations
+  retain the x86_64 kernel-extension settings, and plist version/personality/
+  Lilu dependency values agree. It also rejects shell phases: the old empty
+  always-run `kern_fw.cpp` producer and broad product-directory zip cleanup
+  were removed. Debug/Sanitize retain symbols without deployment stripping;
+  Debug re-enables null, divide-by-zero and dead-store analysis.
 
 ## Evidence rules
 

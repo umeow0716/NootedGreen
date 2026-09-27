@@ -2722,3 +2722,24 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
 - A deterministic host test parses every current Python utility, round-trips
   the sample mapping/header and exercises conflicts, source promotion,
   ambiguity, provenance and comment injection. It runs from `check-static.sh`.
+
+### Close the Xcode and CI product boundary
+
+- The project still contained an always-out-of-date shell phase whose script
+  was empty but claimed to generate the deleted `kern_fw.cpp`. A second phase
+  ran on every build, recursively removed every zip in the target product
+  directory, stripped the executable and rebuilt an archive even though CI has
+  an explicit, bounded staging step. Both stale phases were removed.
+- Debug explicitly disabled the null-dereference, divide-by-zero and dead-store
+  analyzers while asking Xcode to run its analyzer, disabled symbols and enabled
+  deployment post-processing. Debug now enables those analyzers and symbols
+  without stripping; Sanitize likewise retains symbols and avoids deployment
+  stripping. Release keeps its deliberate deployment processing.
+- `OSBundleRequired` now matches the root-load contract used by the local Lilu
+  and WhateverGreen kexts rather than advertising `Safe Boot`. The Lilu version
+  requirement remains within the bundled 1.7.2 compatible/current range.
+- A new deterministic project contract parses the plist and XML metadata,
+  checks all four product sources, proves all 29 headers are transitively
+  reachable, validates all three target configurations, scheme/workspace and
+  CI filters/stages, and rejects shell build phases. It is part of the full
+  static gate, which passes in `/tmp/ngreen-static.tyWTnd`; no VM boot occurred.

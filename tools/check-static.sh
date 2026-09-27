@@ -63,6 +63,11 @@ if python3 -B tools/linux_mmio_mapper_test.py; then
 else
     failed=1
 fi
+if python3 -B tools/project_contract_test.py; then
+    printf 'PASS offline Xcode/plist/scheme/CI contracts\n'
+else
+    failed=1
+fi
 if "$compiler" -std=c++14 -O1 -g -fsanitize=address,undefined \
     tools/gpu_capabilities_test.cpp -o "$task_output/gpu-capabilities-test" && \
     "$task_output/gpu-capabilities-test"; then
