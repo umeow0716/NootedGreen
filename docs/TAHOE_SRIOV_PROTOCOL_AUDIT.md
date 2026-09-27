@@ -2517,3 +2517,8 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   device-name table and `getBranding` function had no consumer. Capability
   admission remains in the tested `kern_gpu_capabilities.hpp` tables instead
   of a second stale supported-device-looking list.
+- `DisplayMergeNub` was likewise unreachable in the product. Its sole
+  personality required `DisplayVendorID=0x01053aff`, outside the 16-bit EDID
+  manufacturer-ID domain, and its only effect was to rename that impossible
+  match to `AppleBacklightDisplay`. It had no VF, accelerator or virtual-display
+  role; the metaclass, personality and Xcode entries were removed together.

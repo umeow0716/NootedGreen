@@ -22,24 +22,6 @@
 	<string>1.0.0</string>
 	<key>IOKitPersonalities</key>
 	<dict>
-		<key>DisplayAppleIDInjection</key>
-		<dict>
-			<key>CFBundleIdentifier</key>
-			<string>com.StezzaPilot.NootedGreen</string>
-			<key>DisplayProductID</key>
-			<integer>18841</integer>
-			<key>DisplayVendorID</key>
-			<integer>17119999</integer>
-			<key>IOClass</key>
-			<string>DisplayMergeNub</string>
-			<key>IOProviderClass</key>
-			<string>AppleDisplay</string>
-			<key>IOProviderMergeProperties</key>
-			<dict>
-				<key>IOClass</key>
-				<string>AppleBacklightDisplay</string>
-			</dict>
-		</dict>
 		<key>com.StezzaPilot.NootedGreen</key>
 		<dict>
 			<key>CFBundleIdentifier</key>
