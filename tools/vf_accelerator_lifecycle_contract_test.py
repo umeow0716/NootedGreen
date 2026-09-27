@@ -23,6 +23,9 @@ PCI_CONFIGURE_INTERRUPTS = "__ZN11IOPCIDevice19configureInterruptsEjjjj"
 SCHEDULER_INIT_FIRMWARE = "__ZN11IGScheduler12initFirmwareEv"
 REQUEST_ENABLE_CALLBACK = "__ZN17IGInterruptBridge21requestEnableCallbackEP8OSObjectPFvS1_zE"
 GUC_INIT_INTERRUPTS = "__ZN13IGHardwareGuC14initInterruptsEv"
+CREATE_UK_CONTEXT = "__ZN13IGHardwareGuC15createUkContextEy25UK_GEN11_CONTEXT_PRIORITY"
+MAPPED_GET_MEMORY = "__ZNK14IGMappedBuffer9getMemoryEv"
+SYS_MEMORY_PHYSICAL = "__ZN16IGAccelSysMemory18getPhysicalSegmentEyPy"
 
 
 def macho_inventory(path):
@@ -154,6 +157,28 @@ def macho_inventory(path):
     if not direct_branches(GUC_INIT_INTERRUPTS, REQUEST_ENABLE_CALLBACK):
         raise AssertionError(f"{path}: GuC init no longer registers through the bridge request")
 
+    # createUkContext gets the private IGAccelMemory owner and invokes its
+    # two-argument virtual getPhysicalSegment slot. The concrete system-memory
+    # method supplies MemoryManager+0x88 mapper options to the owned IOMD. This
+    # is not IOMemoryDescriptor's public three-argument virtual ABI.
+    if not direct_branches(CREATE_UK_CONTEXT, MAPPED_GET_MEMORY):
+        raise AssertionError(f"{path}: createUkContext no longer obtains IGAccelMemory")
+    create_start = value(CREATE_UK_CONTEXT)
+    create_body = image[create_start:next_symbol(create_start)]
+    if create_body.count(b"\xff\x91\x58\x01\x00\x00") != 1:
+        raise AssertionError(
+            f"{path}: createUkContext physical-segment virtual ABI changed")
+    physical_start = value(SYS_MEMORY_PHYSICAL)
+    physical_body = image[physical_start:next_symbol(physical_start)]
+    for sequence in (
+            b"\x48\x8b\x47\x28",              # accelerator at +0x28
+            b"\x48\x8b\xbf\xd0\x00\x00\x00",  # owned IOMD at +0xd0
+            b"\x8b\x88\x88\x00\x00\x00",      # mapper options at +0x88
+            b"\xff\x90\x38\x01\x00\x00"):       # IOMD segment method +0x138
+        if sequence not in physical_body:
+            raise AssertionError(
+                f"{path}: IGAccelSysMemory mapper-aware segment ABI changed")
+
     print(f"PASS: native bridge/IOAccel lifecycle order in {path}")
 
 
@@ -192,6 +217,7 @@ def source_contract(path):
         PCI_CONFIGURE_INTERRUPTS,
         SCHEDULER_INIT_FIRMWARE,
         REQUEST_ENABLE_CALLBACK,
+        SYS_MEMORY_PHYSICAL,
     )
     for token in required:
         if token not in source:
@@ -303,6 +329,39 @@ def source_contract(path):
             "bool vfWaitForContextTransition(void *guc, uint16_t gucId, uint32_t lrcaPage,"):
         if "pollVfGuCToHost(guc)" not in function_body(source, signature):
             raise AssertionError(f"{path}: synchronous GuC wait lacks bounded G2H polling: {signature}")
+
+    bootstrap_abort = function_body(
+        source, "static void vfAbortSchedulerBootstrap(const char *reason)")
+    if ("gVfSubmissionStopped" not in bootstrap_abort or
+            "vfMarkProtocolFault" in bootstrap_abort or
+            "gVfProtocolFault" in bootstrap_abort):
+        raise AssertionError(
+            f"{path}: local bootstrap abort poisons its required teardown transport")
+    create = function_body(
+        source, "uint32_t Gen11::vfCreateUkContext(void *that, uint64_t owner, int priority)")
+    for token in (
+            "using GetMemory = void *(*)(void *)",
+            "using GetPhysicalSegment = uint64_t (*)(void *, uint64_t, uint64_t *)",
+            'metaCast("IGAccelSysMemory")',
+            "callback->vfAccelSysMemoryGetPhysicalSegment",
+            "vfAbortSchedulerBootstrap(\"invalid VF proxy process physical segment\")"):
+        if token not in create:
+            raise AssertionError(f"{path}: missing exact proxy DMA ABI/rollback token {token}")
+    for forbidden in ("memory->getPhysicalSegment", "kIOMemoryMapperNone"):
+        if forbidden in create:
+            raise AssertionError(
+                f"{path}: proxy DMA lookup reintroduced wrong ABI {forbidden}")
+    workqueue = function_body(
+        source, "bool Gen11::vfWorkQueueInit(void *that, void *accelerator, uint32_t id, void *process)")
+    if workqueue.index("vfAbortSchedulerBootstrap(") > workqueue.index(
+            "NGWorkQueue::unwindFailedInit"):
+        raise AssertionError(
+            f"{path}: failed workqueue releases mappings before stopping producers")
+    unmap = function_body(
+        source, "void Gen11::IGHardwareGlobalPageTableUnmapRange(void *that,")
+    if "gVfCtbEverEnabled && gVfProtocolFault && !gVfDmaQuiesced" not in unmap:
+        raise AssertionError(
+            f"{path}: pre-CTB protocol failure cannot unwind DMA-free mappings")
     print(f"PASS: VF wrapper preserves native bridge/IOAccel lifecycle in {path}")
 
 

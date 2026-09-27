@@ -267,6 +267,23 @@ void vfMarkProtocolFault(const char *reason)
 		SYSLOG("ngreen", "V237: VF protocol halted after %s", reason);
 }
 
+// Allocation/shape rejection while IGHardwareGuC::initWithOptions is still
+// constructing scheduler-private state is not proof that CT transport is
+// corrupt.  Stop every new producer, but deliberately keep the retirement
+// transport usable: native init failure synchronously frees its unpublished
+// GGTT mappings before returning to startGraphicsEngine(), which records the
+// terminal protocol fault only after that teardown has completed.  Poisoning
+// transport first would make the following void unmap unable to prove its TLB
+// boundary and turn an ordinary bootstrap rejection into a guaranteed panic.
+static void vfAbortSchedulerBootstrap(const char *reason)
+{
+	const bool first = OSCompareAndSwap(0, 1, &gVfSubmissionStopped);
+	OSSynchronizeIO();
+	if (first)
+		SYSLOG("ngreen", "V250: stopped VF scheduler bootstrap before safe native unwind: %s",
+		       reason);
+}
+
 bool vfCanUseSleepingLock()
 {
 	if (ml_at_interrupt_context() || !preemption_enabled()) {
@@ -2011,6 +2028,11 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				 this->vfMappedBufferGetGPUVirtualAddress},
 				{"__ZNK14IGMappedBuffer9getMemoryEv",
 				 this->oIGMappedBuffergetMemory},
+				// getMemory() returns the private IGAccelMemory owner, not an
+				// IOMemoryDescriptor.  The exact system-memory subclass method
+				// applies the same IOMapper options as Tahoe's GGTT commit path.
+				{"__ZN16IGAccelSysMemory18getPhysicalSegmentEyPy",
+				 this->vfAccelSysMemoryGetPhysicalSegment},
 				{"__ZN13IGHardwareGuC12allocContextEyb",
 				 this->vfAllocContext},
 				{"__ZN13IGHardwareGuC14releaseContextEj",
@@ -2916,7 +2938,7 @@ void Gen11::IGHardwareGlobalPageTableUnmapRange(void *that,
 	// Refuse to continue teardown on invalid input or a faulted VF; silently
 	// returning would turn a skipped PTE write into a use-after-free risk.
 	PANIC_COND(gVfIdentity != VfIdentity::Virtual || !gVfGGTTReady ||
-		(gVfProtocolFault && !gVfDmaQuiesced) ||
+		(gVfCtbEverEnabled && gVfProtocolFault && !gVfDmaQuiesced) ||
 		!that || that != gVfGlobalPageTable ||
 		!NGGgtt::contains(gVfGGTTBase, gVfGGTTSize, range.start, range.length),
 		"ngreen", "Cannot safely complete VF GGTT unmap; refusing DMA backing release");
@@ -3429,7 +3451,7 @@ bool Gen11::loadGuCBinary(void *that) {
 	if (!that || !callback->orgInitSchedControl || !vfCanUseSleepingLock() ||
 	    !getMember<void *>(that, 0x38) || !getMember<IOLock *>(that, 0x40) ||
 	    !getMember<IOLock *>(that, 0xA08)) {
-		vfMarkProtocolFault("missing VF scheduler initializer, owner or locks");
+		vfAbortSchedulerBootstrap("missing VF scheduler initializer, owner or locks");
 		return false;
 	}
 	using InitSchedControl = bool (*)(void *);
@@ -3443,7 +3465,7 @@ bool Gen11::loadGuCBinary(void *that) {
 		getMember<void *>(that, 0x70) && getMember<void *>(that, 0x78) &&
 		getMember<void *>(that, 0x9E8);
 	if (!storageReady) {
-		vfMarkProtocolFault("incomplete native VF scheduler storage allocation");
+		vfAbortSchedulerBootstrap("incomplete native VF scheduler storage allocation");
 		return false;
 	}
 	SYSLOG("ngreen", "V224: VF GuC firmware is PF-owned; scheduler data init=%d",
@@ -3465,8 +3487,8 @@ bool Gen11::vfWorkQueueInit(void *that, void *accelerator, uint32_t id, void *pr
 	if (!accelerator || !process || id >= NGContextPool::invalidId ||
 	    !vfCanUseSleepingLock() ||
 	    (accelerator && (getMember<uint8_t>(accelerator, 0x1190) & 0x20U))) {
-		if (accelerator && (getMember<uint8_t>(accelerator, 0x1190) & 0x20U))
-			vfMarkProtocolFault("legacy page ownership requested for VF workqueue");
+		vfAbortSchedulerBootstrap(
+			"invalid owner, process, context ID or execution state for VF workqueue");
 		getMember<void *>(that, 0x38) = NGWorkQueue::failedInitMarker();
 		return false;
 	}
@@ -3474,6 +3496,7 @@ bool Gen11::vfWorkQueueInit(void *that, void *accelerator, uint32_t id, void *pr
 		that, accelerator, id, process);
 	if (result)
 		return true;
+	vfAbortSchedulerBootstrap("native VF workqueue initialization failure");
 	struct Operations {
 		void unlock(void *lock) { IOLockUnlock(static_cast<IOLock *>(lock)); }
 		void freeLock(void *lock) { IOLockFree(static_cast<IOLock *>(lock)); }
@@ -3534,11 +3557,12 @@ uint32_t Gen11::vfCreateUkContext(void *that, uint64_t owner, int priority) {
 	    !callback->vfSharedMappedBufferWithOptions ||
 	    !callback->vfWorkQueueWithOptions ||
 	    !callback->vfMappedBufferGetGPUVirtualAddress ||
-	    !callback->oIGMappedBuffergetMemory) {
+	    !callback->oIGMappedBuffergetMemory ||
+	    !callback->vfAccelSysMemoryGetPhysicalSegment) {
 		// Apple's initWithOptions releases a failed CTB and continues toward
 		// legacy MMIO context creation. Its createUkContext failure sentinel
 		// is 0x400, which makes that initialization path return failure.
-		vfMarkProtocolFault("legacy context creation without safe VF transport or pool lock");
+		vfAbortSchedulerBootstrap("legacy context creation without safe VF transport or pool lock");
 		return NGContextPool::invalidId;
 	}
 	// initWithOptions creates these serially today, but keep the diagnostic
@@ -3553,15 +3577,16 @@ uint32_t Gen11::vfCreateUkContext(void *that, uint64_t owner, int priority) {
 	using WorkQueueFactory = OSObject *(*)(void *, uint32_t, void *);
 	using GetVirtualAddress = uint8_t *(*)(void *);
 	using GetGpuAddress = uint64_t (*)(void *);
-	using GetMemory = IOMemoryDescriptor *(*)(void *);
+	using GetMemory = void *(*)(void *);
+	using GetPhysicalSegment = uint64_t (*)(void *, uint64_t, uint64_t *);
 	auto *accelerator = getMember<void *>(that, 0x38);
 	auto *task = accelerator ? getMember<void *>(accelerator, 0x150) : nullptr;
 	if (!accelerator || !task) {
-		vfMarkProtocolFault("VF proxy context has no accelerator task owner");
+		vfAbortSchedulerBootstrap("VF proxy context has no accelerator task owner");
 		return NGContextPool::invalidId;
 	}
 	if (getMember<uint8_t>(accelerator, 0x1190) & 0x20U) {
-		vfMarkProtocolFault("legacy page ownership requested for VF proxy context");
+		vfAbortSchedulerBootstrap("legacy page ownership requested for VF proxy context");
 		return NGContextPool::invalidId;
 	}
 
@@ -3575,8 +3600,10 @@ uint32_t Gen11::vfCreateUkContext(void *that, uint64_t owner, int priority) {
 	};
 	const uint32_t id = reinterpret_cast<AllocContext>(callback->vfAllocContext)(
 		that, owner, true);
-	if (id == NGContextPool::invalidId)
+	if (id == NGContextPool::invalidId) {
+		vfAbortSchedulerBootstrap("VF proxy context ID allocation failure");
 		return id;
+	}
 	if (traceBootstrap)
 		SYSLOG("ngreen", "V248: allocated first VF proxy context id=%u", id);
 
@@ -3593,6 +3620,7 @@ uint32_t Gen11::vfCreateUkContext(void *that, uint64_t owner, int priority) {
 	auto *backing = reinterpret_cast<SharedFactory>(
 		callback->vfSharedMappedBufferWithOptions)(task, PAGE_SIZE, 2, 0);
 	if (!backing) {
+		vfAbortSchedulerBootstrap("VF proxy process backing allocation failure");
 		rollback(id, nullptr, nullptr);
 		return NGContextPool::invalidId;
 	}
@@ -3602,7 +3630,7 @@ uint32_t Gen11::vfCreateUkContext(void *that, uint64_t owner, int priority) {
 		backing, kVfMappedBufferLengthOffset);
 	if (!NGGgtt::mappedBacking(backingCpu, backingBytes, PAGE_SIZE, backingGpu,
 	                          gVfGGTTBase, gVfGGTTSize, kGucGgttTop)) {
-		vfMarkProtocolFault("invalid VF proxy process backing mapping");
+		vfAbortSchedulerBootstrap("invalid VF proxy process backing mapping");
 		rollback(id, nullptr, backing);
 		return NGContextPool::invalidId;
 	}
@@ -3611,17 +3639,23 @@ uint32_t Gen11::vfCreateUkContext(void *that, uint64_t owner, int priority) {
 		       static_cast<unsigned long long>(backingGpu));
 	auto *memory = reinterpret_cast<GetMemory>(
 		callback->oIGMappedBuffergetMemory)(backing);
-	IOByteCount segmentBytes = 0;
-	// getMemory() returns an IOMemoryDescriptor. Use its declared virtual ABI
-	// and explicitly bypass an IOMapper so the process record receives the same
-	// native DMA address validated by the direct-GGTT encoder. The former raw
-	// vtable +0x158 call was neither covered by the TGL payload UUID nor supplied
-	// getPhysicalSegment's required options argument on x86_64.
-	const uint64_t physical = memory ? memory->getPhysicalSegment(
-		0, &segmentBytes, kIOMemoryMapperNone) : 0;
+	uint64_t segmentBytes = 0;
+	// Pinned Tahoe createUkContext calls IGAccelMemory's virtual +0x158 with
+	// exactly (offset, length).  Its concrete system-memory implementation is
+	// IGAccelSysMemory::getPhysicalSegment(unsigned long long, unsigned long
+	// long *), which in turn supplies MemoryManager+0x88 IOMapper options to the
+	// owned IOMemoryDescriptor.  Calling IOMemoryDescriptor directly is a
+	// different three-argument ABI and can also return the wrong (unmapped)
+	// physical address. Resolve and invoke the exact UUID-admitted symbol.
+	const bool systemMemory = memory &&
+		static_cast<OSMetaClassBase *>(memory)->metaCast("IGAccelSysMemory");
+	const uint64_t physical = systemMemory ?
+		reinterpret_cast<GetPhysicalSegment>(
+			callback->vfAccelSysMemoryGetPhysicalSegment)(
+				memory, 0, &segmentBytes) : 0;
 	if (!physical || segmentBytes < PAGE_SIZE ||
 	    !NGGgtt::nativePhysicalRange(physical, PAGE_SIZE)) {
-		vfMarkProtocolFault("invalid VF proxy process physical segment");
+		vfAbortSchedulerBootstrap("invalid VF proxy process physical segment");
 		rollback(id, nullptr, backing);
 		return NGContextPool::invalidId;
 	}
@@ -3634,6 +3668,7 @@ uint32_t Gen11::vfCreateUkContext(void *that, uint64_t owner, int priority) {
 	auto *queue = reinterpret_cast<WorkQueueFactory>(
 		callback->vfWorkQueueWithOptions)(accelerator, id, process);
 	if (!queue) {
+		vfAbortSchedulerBootstrap("VF proxy workqueue allocation failure");
 		rollback(id, nullptr, backing);
 		return NGContextPool::invalidId;
 	}
@@ -3650,7 +3685,7 @@ uint32_t Gen11::vfCreateUkContext(void *that, uint64_t owner, int priority) {
 	    getMember<uint64_t>(process, 0x20) != UINT64_C(0x100002000) ||
 	    !NGGgtt::mappedBacking(queueCpu, queueBytes, 0x2000, queueGpu,
 	                          gVfGGTTBase, gVfGGTTSize, kGucGgttTop)) {
-		vfMarkProtocolFault("incomplete VF proxy workqueue mapping or ownership");
+		vfAbortSchedulerBootstrap("incomplete VF proxy workqueue mapping or ownership");
 		rollback(id, queue, backing);
 		return NGContextPool::invalidId;
 	}

@@ -93,6 +93,7 @@ private:
 	                             unsigned int ringTail);
 	mach_vm_address_t vfSharedMappedBufferGetVirtualAddress {};
 	mach_vm_address_t vfMappedBufferGetGPUVirtualAddress {};
+	mach_vm_address_t vfAccelSysMemoryGetPhysicalSegment {};
 
 	static bool start(void *that, void *provider);
 	static void acceleratorStop(void *that, void *provider);

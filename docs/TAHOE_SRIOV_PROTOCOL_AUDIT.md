@@ -1202,8 +1202,9 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   It resolves and reuses native allocContext/releaseContext and the two object
   factories, but owns the transaction: reserve ID; allocate one-page shared
   backing; validate full CPU/GPU mapping; obtain and validate the complete
-  physical segment (the original checkpoint used a raw vtable slot; this was
-  later replaced by the declared XNU virtual API as recorded below); allocate/validate the
+  physical segment (the original checkpoint used a raw vtable slot; a later
+  public-XNU-ABI substitution was also wrong and is superseded by the exact
+  private-symbol correction recorded below); allocate/validate the
   8-KiB workqueue; only then publish the record and four metadata pointers.
 - Every post-reservation failure releases queue, process backing and context ID
   in that order. OOM returns 0x400 without poisoning transport; malformed
@@ -2581,9 +2582,13 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   identity plus independently proven PF ownership. The disabled custom
   IOService/catalogue skeleton and unused local bit macros were also removed.
 
-### Use the declared DMA-segment ABI
+### Superseded: public DMA-segment ABI substitution
 
-- `vfCreateUkContext` obtained the `IOMemoryDescriptor` backing from the
+- This checkpoint incorrectly treated the object returned by `getMemory()` as
+  an `IOMemoryDescriptor`. Earlier complete disassembly had already established
+  that it is an `IGAccelMemory` owner; the correction and runtime evidence are
+  recorded in the current section at the end of this audit.
+- `vfCreateUkContext` obtained what it assumed was an `IOMemoryDescriptor` backing from the
   UUID-admitted TGL payload, then invoked the kernel object through a hardcoded
   vtable byte offset `0x158`. The kernel object's vtable is an XNU ABI, not part
   of that payload UUID. More importantly, Tahoe's x86_64 declaration takes
@@ -2592,7 +2597,8 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
 - Current XNU and the pinned SDK both expose the three-argument virtual method.
   The bridge now calls `IOMemoryDescriptor::getPhysicalSegment` directly with
   `kIOMemoryMapperNone`, then applies the existing nonzero, length and native
-  DMA-address bounds checks before publishing any proxy record.
+  DMA-address bounds checks before publishing any proxy record. This change is
+  historical only and has been removed.
 
 ### Match the IOService start return ABI
 
@@ -3199,3 +3205,55 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   `/tmp/ngreen-static.n434NF`. This checkpoint still does not claim a completed
   `TLB_DONE`, GuC context lifecycle, submitted GPU command or Metal result;
   those require the next CI-built watchdog-contained runtime.
+
+### Correct proxy DMA ABI after the first completed VF TLB transaction
+
+- Commit `06d43ac` passed GitHub Actions run `36296255226`. Its x86_64 kext
+  UUID is `DE3EFC42-7B45-3F6B-8F7C-F2E91AF57B1C`, executable SHA-256 is
+  `878592ae44cff182927d76db07812dc760ebe294fe950b657bb30f92f2bb9e2a`
+  and the correctly path-bound candidate AuxKC SHA-256 is
+  `b21eca6f63ef3b83cb08353020b9c2fbbaf897213912576422cd6a659ecab56e`.
+  Its watchdog-contained runtime retained the immediate late-callback path,
+  enabled both CTB channels, configured the memory-IRQ page and consumed the
+  first sequence-zero two-dword `TLB_DONE` successfully. This is the first
+  direct evidence that a post-CTB GGTT map, H2G enqueue, PF/GuC execution and
+  G2H completion all crossed the VF transport. Evidence is retained under
+  `build/diagnostics/06d43ac-runtime1` in the VM workspace.
+- The next failure was deterministic rather than a lost interrupt. The guest
+  panic `Kernel-2026-09-27-131546.panic`, SHA-256
+  `8f840b3fca7c54ee4cc794c9302581009ad3522c1665af9d5619da03f7979764`,
+  shows `vfCreateUkContext` rejecting the newly mapped process backing and
+  releasing it through `IGMemoryManager::releaseFromPageTableForTask`. The old
+  rejection first set `gVfProtocolFault`; the void VF unmap then correctly
+  refused to release DMA backing without usable TLB transport and panicked.
+  Thus the crash exposed both the validation error and a provably reversed
+  local-failure rollback order.
+- Complete pinned disassembly corrects the validation ABI. `IGMappedBuffer::
+  getMemory()` returns the private `IGAccelMemory` owner at map offset `+0x18`;
+  it does not return the owned `IOMemoryDescriptor` at the additional `+0xd0`
+  dereference. Native `createUkContext` calls virtual slot `+0x158` with exactly
+  `(offset, length)`. The concrete symbol is
+  `IGAccelSysMemory::getPhysicalSegment(unsigned long long, unsigned long
+  long *)`; its body obtains MemoryManager mapper options at `+0x88` and passes
+  them to the owned IOMD's three-argument segment method. The former direct
+  `IOMemoryDescriptor(..., kIOMemoryMapperNone)` call therefore used the wrong
+  object type and bypassed the DMA/IOMapper address contract used by GGTT map.
+- The bridge now resolves that exact private symbol under the already-required
+  TGL payload UUID, verifies `metaCast("IGAccelSysMemory")`, calls its exact
+  two-argument ABI and retains the nonzero/length/39-bit encoder bounds before
+  publishing the proxy record. Both payload tests prove the native caller's
+  virtual call shape and the concrete method's accelerator, IOMD, mapper-option
+  and underlying segment-call offsets.
+- Local allocation, shape or ownership rejection during scheduler construction
+  now atomically stops new submission without poisoning CT retirement. Native
+  `IGHardwareGuC::initWithOptions` synchronously frees unpublished mappings
+  before returning its failure; only the outer engine-start wrapper records the
+  terminal fault after that unwind. Pre-CTB faults are also permitted to unmap
+  because no CT request or GPU translation could yet have consumed them.
+  Transport corruption still marks a protocol fault and retains the existing
+  fail-stop/quarantine behavior.
+- Full syntax, zero-finding Clang analyzer, strict ABI, Mach-O, exhaustive
+  protocol and sanitizer tests pass in `/tmp/ngreen-static.V60fJG`. The VM was
+  restored to its original AuxKC before this static correction; a fresh CI-built
+  artifact and watchdog-contained load are required before the first proxy
+  context, workqueue or scheduler completion is claimed.
