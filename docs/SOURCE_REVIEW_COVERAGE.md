@@ -38,8 +38,14 @@ historical row below. Complete nested-path disassembly showed that bridge
 enable/disable also dispatched into scheduler-4 physical command-streamer
 error-IRQ MMIO. VF-only scheduler routes now keep those calls on the memory-IRQ
 transport, while the two native IOAccel completion events are initialized in
-their original order. The watchdog-contained `640f087` rollback panic and the
-new transitive Mach-O contract are recorded in `TAHOE_SRIOV_PROTOCOL_AUDIT.md`.
+their original order. The watchdog-contained `102ec33` runtime then reached the
+headless local-filter path and proved that the legacy TGL driver had no
+published PCI interrupt source even though the VF exposes a valid one-vector
+MSI capability. The wrapper now requests that real MSI through Tahoe's exported
+`IOPCIDevice::configureInterrupts` ABI before native start. A pre-CTB failure
+rollback can publish DMA quiescence only after the drained, stable context table
+is proven completely unowned. Both runtime checkpoints and the expanded
+lifecycle contract are recorded in `TAHOE_SRIOV_PROTOCOL_AUDIT.md`.
 
 | Files/area | Evidence and remaining boundary |
 | --- | --- |

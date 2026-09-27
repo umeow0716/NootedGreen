@@ -31,6 +31,7 @@
 #include <IOKit/IOLib.h>
 #include <IOKit/IOLocks.h>
 #include <IOKit/IOWorkLoop.h>
+#include <IOKit/pci/IOPCIDevice.h>
 #include <kern/thread_call.h>
 #include <kern/sched_prim.h>
 #include <i386/machine_routines.h>
@@ -69,6 +70,18 @@ static const char *pathsIOAcceleratorFamily2[] = {
 };
 static KernelPatcher::KextInfo kextIOAcceleratorFamily2 {
 	"com.apple.iokit.IOAcceleratorFamily2", pathsIOAcceleratorFamily2, 1,
+	{true, false, false, false, true}, {},
+	KernelPatcher::KextInfo::Unloaded
+};
+
+// Resolve the Tahoe PCI interrupt allocator from its owning fileset.  Do not
+// search KernelPatcher::KernelID: IOPCIDevice lives in IOPCIFamily even when
+// both images are linked into the same BootKC container.
+static const char *pathsIOPCIFamily[] = {
+	"/System/Library/Extensions/IOPCIFamily.kext/Contents/MacOS/IOPCIFamily",
+};
+static KernelPatcher::KextInfo kextIOPCIFamily {
+	"com.apple.iokit.IOPCIFamily", pathsIOPCIFamily, 1,
 	{true, false, false, false, true}, {},
 	KernelPatcher::KextInfo::Unloaded
 };
@@ -1121,6 +1134,43 @@ bool vfQuiesceDeviceForShutdown(void *guc)
 	OSSynchronizeIO();
 	if (!vfCloseContextOperationGateAndWait(guc))
 		return false;
+
+	// A failed native start can call IntelAccelerator::stop before the GuC
+	// scheduler has ever enabled CTB transport.  No GPU request or context
+	// registration is admissible before that irreversible boundary, but prove
+	// the context table is still completely unowned before declaring DMA idle.
+	// This is the early-start rollback counterpart of the full disable /
+	// deregister / TLB-invalidate sequence below; treating a missing GuC object
+	// as an error here used to turn an ordinary start failure into a panic.
+	if (!gVfCtbEverEnabled) {
+		if (!gVfContextLock || !gVfContexts || !gVfContextCapacity) {
+			vfMarkProtocolFault("pre-CTB rollback has no context ownership table");
+			return false;
+		}
+		// The operation gate is closed and drained above.  G2H is impossible
+		// before CTB enable, so no writer exists; do not hold interrupts disabled
+		// while scanning a quota-sized (potentially 57K-entry) table.
+		OSSynchronizeIO();
+		bool unowned = true;
+		for (uint32_t id = 0; id < gVfContextCapacity; id++) {
+			const auto &entry = gVfContexts[id];
+			if (entry.state != kVfGucContextEmpty || entry.contextBacking ||
+			    entry.refCount || entry.enablePending || entry.disablePending) {
+				unowned = false;
+				break;
+			}
+		}
+		if (!unowned) {
+			vfMarkProtocolFault("pre-CTB rollback found live context ownership");
+			return false;
+		}
+		OSCompareAndSwap(0, 1, &gVfDmaQuiesced);
+		OSSynchronizeIO();
+		OSCompareAndSwap(0, 1, &gVfContextShutdownComplete);
+		OSSynchronizeIO();
+		SYSLOG("ngreen", "V246: quiesced early VF start rollback before CTB/GPU DMA admission");
+		return true;
+	}
 	if (gVfProtocolFault)
 		return false;
 
@@ -1698,8 +1748,10 @@ void Gen11::init() {
 	const bool tglRequested = checkKernelArgument("-ngreentglfb") ||
 		checkKernelArgument("-ngreentglwithgfx") ||
 		checkKernelArgument("-ngreentglgfx");
-	if (tglRequested)
+	if (tglRequested) {
 		lilu.onKextLoadForce(&kextIOAcceleratorFamily2);
+		lilu.onKextLoadForce(&kextIOPCIFamily);
+	}
 
 	if (checkKernelArgument("-ngreentglfb") || checkKernelArgument("-ngreentglwithgfx")) {
 		SYSLOG("ngreen", "Gen11::init: FB tier → TGL");
@@ -1726,6 +1778,16 @@ static bool vfRejectPhysicalFramebufferStart(void *, void *) {
 }
 
 bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t address, size_t size) {
+	if (index == kextIOPCIFamily.loadIndex) {
+		this->ioPciConfigureInterrupts = patcher.solveSymbol(
+			index, "__ZN11IOPCIDevice19configureInterruptsEjjjj",
+			address, size);
+		PANIC_COND(!this->ioPciConfigureInterrupts, "ngreen",
+			"Cannot resolve the exported Tahoe PCI MSI configurator");
+		SYSLOG("ngreen", "V246: resolved Tahoe IOPCIFamily PCI interrupt allocator");
+		return true;
+	}
+
 	if (index == kextIOAcceleratorFamily2.loadIndex) {
 		KernelPatcher::SolveRequest lifecycle[] = {
 			{"__ZN22IOGraphicsAccelerator217enableAcceleratorEv",
@@ -1839,6 +1901,8 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		SYSLOG("ngreen", "V165: setRMMIO done, starting symbol resolve");
 
 		if (vfActive) {
+			PANIC_COND(!this->ioPciConfigureInterrupts, "ngreen",
+				"Cannot resolve the exported Tahoe PCI MSI configurator");
 			KernelPatcher::SolveRequest solveRequests[] = {
 				{"__ZN13IGHardwareGuC16initSchedControlEv", this->orgInitSchedControl},
 				{"__ZN21IGHardwareGuCCTBuffer32handleSoftwareGuCToHostInterruptEv",
@@ -2853,6 +2917,37 @@ bool Gen11::start(void *that, void *provider)
 	if (vfActive && !vfBootstrapDirectGgtt()) {
 		vfMarkProtocolFault("VF bootstrap failed before native accelerator start");
 		return false;
+	}
+	if (vfActive) {
+		// The UUID-pinned TGL driver predates IOPCIDevice::configureInterrupts
+		// and asks getInterruptType() to lazily resolve a local filter source.
+		// Tahoe exposes the VF's one-vector, 64-bit MSI capability, but no legacy
+		// INTx route; explicitly allocate that MSI before the old driver creates
+		// its IOFilterInterruptEventSource.  This is a public IOPCIFamily ABI in
+		// Tahoe (and an exported symbol), not a fabricated interrupt property.
+		if (!callback->ioPciConfigureInterrupts) {
+			vfMarkProtocolFault("missing exported PCI MSI configurator");
+			return false;
+		}
+		auto *pciDevice = OSDynamicCast(
+			IOPCIDevice, reinterpret_cast<OSObject *>(provider));
+		if (!pciDevice) {
+			vfMarkProtocolFault("accelerator provider is not an IOPCIDevice");
+			return false;
+		}
+		using ConfigureInterrupts = IOReturn (*)(IOPCIDevice *, UInt32,
+			UInt32, UInt32, IOOptionBits);
+		const IOReturn interruptResult =
+			reinterpret_cast<ConfigureInterrupts>(
+				callback->ioPciConfigureInterrupts)(
+					pciDevice, kIOInterruptTypePCIMessaged, 1, 1, 0);
+		if (interruptResult != kIOReturnSuccess) {
+			SYSLOG("ngreen", "V246: VF MSI allocation failed ret=0x%x",
+			       interruptResult);
+			vfMarkProtocolFault("VF MSI allocation failed before native start");
+			return false;
+		}
+		SYSLOG("ngreen", "V246: allocated the VF PCI MSI before local interrupt-bridge creation");
 	}
 
 	auto *service = static_cast<IOService *>(that);

@@ -3003,3 +3003,56 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   `/tmp/ngreen-static.AI7UAt`. Dynamic validation remains watchdog-bounded; the
   native safe-context-image tail after event initialization still requires
   explicit runtime evidence before Metal success can be claimed.
+
+### Allocate the VF MSI before the legacy local-filter bridge
+
+- Commit `102ec33` passed GitHub Actions run `36291885180`; its NootedGreen
+  UUID is `4B5D949F-84E8-389F-95B3-FFD1C7ACA753`. The minimal three-fileset
+  AuxKC (Lilu, NootedGreen and AppleIntelTGLGraphics) is SHA-256
+  `e36f9f22337cce36e137f376a5771a884aa8f68dc85355f82f6998500a8de82c`.
+  Both the active collection and loaded NootedGreen UUID were verified before
+  a watchdog-bounded `start-only` request.
+- The new scheduler containment passed every earlier bootstrap boundary: GuC
+  ABI `0.1.17.0`, PF-relayed 64-EU topology, direct GGTT, context/doorbell
+  quotas and scheduler 4 were all admitted. The final live kernel log stopped
+  at `Failed to register with service. Using Local Filter Interrupt Source!`.
+  The watchdog isolated the guest; the next boot preserved panic SHA-256
+  `ac40712d2e1a2e2ac39fe3f9f1734b24128eda5fc0a3d30610c0d75a7da456f4`.
+  As in the prior attempt, native start entered its common failure rollback;
+  the final-stop guard then refused to release mappings without a quiescence
+  boundary. The log stream is retained under
+  `build/diagnostics/102ec33-runtime1` in the VM workspace.
+- Complete `IGInterruptBridge::initInterruptBridge()` disassembly explains the
+  boundary. A headless accelerator passes no framebuffer service, so Tahoe
+  deliberately calls `createFilterInterruptEventSource()` on its PCI provider.
+  The guest's VF publishes an MSI capability at config offset `0xac` with one
+  64-bit vector (`IOPCIMSIMessageControl=0x100`) and has no legacy INTx route,
+  but it has not yet published `IOInterruptSpecifiers` or
+  `IOInterruptControllers` when the legacy TGL driver reaches this path.
+- Apple IOPCIFamily 726.100.6 and the running 25G229 BootKC both export
+  `IOPCIDevice::configureInterrupts(unsigned, unsigned, unsigned, unsigned)`.
+  Its source allocates the requested MSI through the platform message
+  controller, publishes the real interrupt controller/specifier arrays and
+  initializes the device's MSI state. The VF start wrapper now calls that ABI
+  for exactly one required/requested `kIOInterruptTypePCIMessaged` vector
+  before entering native accelerator start. Failure is reported before the
+  old driver can construct a filter against a nonexistent source; no interrupt
+  property or vector number is fabricated.
+- Lilu symbol lookup is scoped to a registered Mach-O, not the outer BootKC
+  filename. NootedGreen therefore registers `com.apple.iokit.IOPCIFamily` and
+  resolves the allocator from that fileset's bounded running address range;
+  it deliberately does not ask `KernelPatcher::KernelID` for a PCI-family
+  method.
+- Early native-start rollback is now a separate, proven shutdown boundary.
+  After closing and draining the context-operation gate, a never-enabled CTB
+  may be declared DMA-quiescent only if every quota-sized context entry is
+  empty and owns no backing/reference/pending token. The stable table is
+  scanned without disabling interrupts. Any ownership still fails closed; a
+  genuinely pre-transport rollback can unwind instead of panicking solely
+  because its GuC object was never constructed.
+- The lifecycle contract requires the exact exported symbol, proves MSI
+  allocation precedes the original start, requires the exact one-vector
+  request and checks every early-quiescence predicate/publication. Full syntax,
+  zero-finding analyzer, strict ABI, Mach-O, exhaustive protocol and sanitizer
+  tests pass in `/tmp/ngreen-static.QwNnvP`. A macOS build and controlled load
+  remain required before the interrupt source or later engine tail is claimed.

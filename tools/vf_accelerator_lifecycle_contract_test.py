@@ -19,6 +19,7 @@ SCHEDULER_ERROR_ENABLE = "__ZN12IGScheduler421enableErrorInterruptsEv"
 SCHEDULER_ERROR_DISABLE = "__ZN12IGScheduler422disableErrorInterruptsEv"
 STREAMER_ERROR_ENABLE = "__ZN26IGHardwareCommandStreamer420enableErrorInterruptEv"
 STREAMER_ERROR_DISABLE = "__ZN26IGHardwareCommandStreamer421disableErrorInterruptEv"
+PCI_CONFIGURE_INTERRUPTS = "__ZN11IOPCIDevice19configureInterruptsEjjjj"
 
 
 def macho_inventory(path):
@@ -138,8 +139,15 @@ def macho_inventory(path):
 
 
 def function_body(source, signature):
-    start = source.index(signature)
-    opening = source.index("{", start)
+    cursor = 0
+    while True:
+        start = source.index(signature, cursor)
+        opening = start + len(signature)
+        while opening < len(source) and source[opening].isspace():
+            opening += 1
+        if opening < len(source) and source[opening] == "{":
+            break
+        cursor = opening
     depth = 0
     for index in range(opening, len(source)):
         if source[index] == "{":
@@ -155,6 +163,7 @@ def source_contract(path):
     source = pathlib.Path(path).read_text()
     required = (
         "com.apple.iokit.IOAcceleratorFamily2",
+        "com.apple.iokit.IOPCIFamily",
         ENABLE,
         DISABLE,
         EVENT_INIT,
@@ -162,10 +171,21 @@ def source_contract(path):
         "this->vfInterruptBridgeDisable = irqDisable",
         SCHEDULER_ENABLE,
         SCHEDULER_DISABLE,
+        PCI_CONFIGURE_INTERRUPTS,
     )
     for token in required:
         if token not in source:
             raise AssertionError(f"{path}: missing lifecycle token {token}")
+
+    pci_resolution = function_body(
+        source,
+        "bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t address, size_t size)")
+    if "index == kextIOPCIFamily.loadIndex" not in pci_resolution:
+        raise AssertionError(f"{path}: PCI allocator is not resolved from IOPCIFamily")
+    if ("KernelPatcher::KernelID" in pci_resolution and
+            pci_resolution.index("KernelPatcher::KernelID") <
+            pci_resolution.index(PCI_CONFIGURE_INTERRUPTS)):
+        raise AssertionError(f"{path}: IOPCIFamily symbol is incorrectly resolved from KernelID")
 
     start = function_body(source, "bool Gen11::startGraphicsEngine(void *that)")
     if start.index("vfInterruptBridgeEnable") > start.index(
@@ -177,6 +197,24 @@ def source_contract(path):
     if stop.index("vfInterruptBridgeDisable") > stop.index(
             "ioGraphicsDisableAccelerator"):
         raise AssertionError(f"{path}: VF stop lifecycle order is reversed")
+
+    accelerator_start = function_body(source, "bool Gen11::start(void *that, void *provider)")
+    configure = accelerator_start.index("callback->ioPciConfigureInterrupts)(")
+    native_start = accelerator_start.index("FunctionCast(start, callback->ostart)")
+    if configure > native_start:
+        raise AssertionError(f"{path}: VF MSI is configured after native start")
+    if "pciDevice, kIOInterruptTypePCIMessaged, 1, 1, 0" not in accelerator_start:
+        raise AssertionError(f"{path}: VF MSI request is not exactly one required vector")
+
+    quiesce = function_body(source, "bool vfQuiesceDeviceForShutdown(void *guc)")
+    for token in (
+            "if (!gVfCtbEverEnabled)",
+            "entry.state != kVfGucContextEmpty",
+            "entry.contextBacking",
+            "OSCompareAndSwap(0, 1, &gVfDmaQuiesced)",
+            "OSCompareAndSwap(0, 1, &gVfContextShutdownComplete)"):
+        if token not in quiesce:
+            raise AssertionError(f"{path}: incomplete pre-CTB rollback proof: {token}")
     print(f"PASS: VF wrapper preserves native bridge/IOAccel lifecycle in {path}")
 
 

@@ -92,6 +92,7 @@ private:
 	static void acceleratorStop(void *that, void *provider);
 	mach_vm_address_t ostart {};
 	mach_vm_address_t oAcceleratorStop {};
+	mach_vm_address_t ioPciConfigureInterrupts {};
 	static void *igAccelTaskWithOptions(void *that);
 	mach_vm_address_t oigAccelTaskWithOptions {};
 	mach_vm_address_t igAccelTaskCounter {};
