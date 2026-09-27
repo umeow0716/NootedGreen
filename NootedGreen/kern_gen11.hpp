@@ -131,6 +131,10 @@ private:
 
 	bool injectAcceleratorPersonality(const char *bundleId);
 	bool acceleratorPersonalityInjected {false};
+	mach_vm_address_t ioGraphicsEnableAccelerator {};
+	mach_vm_address_t ioGraphicsDisableAccelerator {};
+	mach_vm_address_t vfInterruptBridgeEnable {};
+	mach_vm_address_t vfInterruptBridgeDisable {};
 	static bool stopGraphicsEngine(void *that);
 	static bool startGraphicsEngine(void *that);
 	static void populateResetRegisterList(void *that);

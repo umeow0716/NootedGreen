@@ -61,6 +61,18 @@ static KernelPatcher::KextInfo kextG11HWTA {"com.apple.driver.AppleIntelTGLGraph
 	{false, false, false, true}, {},
 	KernelPatcher::KextInfo::Unloaded};
 
+// Resolve the native accelerator lifecycle API from the running Tahoe
+// IOAcceleratorFamily2 image.  The VF wrapper calls these named methods instead
+// of writing IOGraphicsAccelerator2 private state at hardcoded offsets.
+static const char *pathsIOAcceleratorFamily2[] = {
+	"/System/Library/Extensions/IOAcceleratorFamily2.kext/Contents/MacOS/IOAcceleratorFamily2",
+};
+static KernelPatcher::KextInfo kextIOAcceleratorFamily2 {
+	"com.apple.iokit.IOAcceleratorFamily2", pathsIOAcceleratorFamily2, 1,
+	{true, false, false, false, true}, {},
+	KernelPatcher::KextInfo::Unloaded
+};
+
 Gen11 *Gen11::callback = nullptr;
 
 namespace {
@@ -1683,6 +1695,11 @@ bool ngGpuRegisterAccessAllowed(unsigned long reg)
 
 void Gen11::init() {
 	callback = this;
+	const bool tglRequested = checkKernelArgument("-ngreentglfb") ||
+		checkKernelArgument("-ngreentglwithgfx") ||
+		checkKernelArgument("-ngreentglgfx");
+	if (tglRequested)
+		lilu.onKextLoadForce(&kextIOAcceleratorFamily2);
 
 	if (checkKernelArgument("-ngreentglfb") || checkKernelArgument("-ngreentglwithgfx")) {
 		SYSLOG("ngreen", "Gen11::init: FB tier → TGL");
@@ -1709,6 +1726,19 @@ static bool vfRejectPhysicalFramebufferStart(void *, void *) {
 }
 
 bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t address, size_t size) {
+	if (index == kextIOAcceleratorFamily2.loadIndex) {
+		KernelPatcher::SolveRequest lifecycle[] = {
+			{"__ZN22IOGraphicsAccelerator217enableAcceleratorEv",
+			 this->ioGraphicsEnableAccelerator},
+			{"__ZN22IOGraphicsAccelerator218disableAcceleratorEv",
+			 this->ioGraphicsDisableAccelerator},
+		};
+		PANIC_COND(!patcher.solveMultiple(index, lifecycle, address, size),
+			"ngreen", "Cannot resolve native IOAccelerator lifecycle API");
+		SYSLOG("ngreen", "V244: resolved native IOAccelerator enable/disable lifecycle");
+		return true;
+	}
+
 	const bool physicalFramebuffer = index == kextG11FBT.loadIndex ||
 		index == kextG11FBTA.loadIndex;
 	const auto *image = reinterpret_cast<const uint8_t *>(address);
@@ -1888,6 +1918,8 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			           irqEnableRegs <= irqEnable || irqDisableRegs <= irqDisable ||
 			           irqEnableRegs - irqEnable > 0x400 || irqDisableRegs - irqDisable > 0x400,
 			           "ngreen", "Invalid VF IRQ lifecycle patch bounds");
+			this->vfInterruptBridgeEnable = irqEnable;
+			this->vfInterruptBridgeDisable = irqDisable;
 			static const uint8_t masterDisable[] = {
 				0x81, 0xa0, 0x10, 0x00, 0x19, 0x00, 0xff, 0xff, 0xff, 0x7f};
 			static const uint8_t masterEnable[] = {
@@ -2957,23 +2989,59 @@ void *Gen11::getBlit3DContext(void *that, bool create)
 
 bool Gen11::startGraphicsEngine(void *that)
 {
-	(void)that;
 	// This replacement is installed only for a classified VF. Ring power,
-	// reset and legacy execlist state belong to the PF; the translated GuC
-	// scheduler brings VF contexts online independently.
+	// reset and legacy execlist state belong to the PF, but the native tail of
+	// IntelAccelerator::startGraphicsEngine also performs two software lifecycle
+	// transitions: IGInterruptBridge::enable() and
+	// IOGraphicsAccelerator2::enableAccelerator().  Omitting those transitions
+	// leaves IOAccel resource creation asleep in acceleratorWaitEnabled().
+	if (!that || !callback || !vfNativeGpuWorkReady() ||
+	    !callback->vfInterruptBridgeEnable ||
+	    !callback->ioGraphicsEnableAccelerator) {
+		vfMarkProtocolFault("VF engine start before accelerator lifecycle is ready");
+		return false;
+	}
+
+	auto *interruptBridge = getMember<void *>(that, 0x1248);
+	if (!interruptBridge) {
+		vfMarkProtocolFault("missing VF interrupt bridge during engine start");
+		return false;
+	}
+
+	using LifecycleMethod = void (*)(void *);
+	reinterpret_cast<LifecycleMethod>(callback->vfInterruptBridgeEnable)(
+		interruptBridge);
+	reinterpret_cast<LifecycleMethod>(callback->ioGraphicsEnableAccelerator)(that);
+	SYSLOG("ngreen", "V244: enabled VF interrupt bridge and IOAccelerator lifecycle");
 	return true;
 }
 
 bool Gen11::stopGraphicsEngine(void *that)
 {
-	(void)that;
+	if (!that || !callback || !callback->vfInterruptBridgeDisable ||
+	    !callback->ioGraphicsDisableAccelerator) {
+		vfMarkProtocolFault("VF engine stop without accelerator lifecycle API");
+		return false;
+	}
 	if (gVfDeviceStopping && gVfGGTTReady) {
 		PANIC_COND(!vfQuiesceDeviceForShutdown(gVfHardwareGuc), "ngreen",
 			"Cannot stop VF accelerator before every GuC context and DMA mapping is quiesced");
 		SYSLOG("ngreen", "V242: VF final engine stop completed through GuC context retirement");
 	}
-	// Runtime reset and final ring stop are both PF/GuC-owned. The final path
-	// above first closes every guest producer and waits for DMA.
+
+	auto *interruptBridge = getMember<void *>(that, 0x1248);
+	if (!interruptBridge) {
+		vfMarkProtocolFault("missing VF interrupt bridge during engine stop");
+		return false;
+	}
+	using LifecycleMethod = void (*)(void *);
+	// Preserve the native order after any final VF DMA quiescence. The routed
+	// bridge methods retain event-source bookkeeping while their physical IRQ
+	// register operations are replaced by the VF memory-IRQ implementation.
+	reinterpret_cast<LifecycleMethod>(callback->vfInterruptBridgeDisable)(
+		interruptBridge);
+	reinterpret_cast<LifecycleMethod>(callback->ioGraphicsDisableAccelerator)(that);
+	SYSLOG("ngreen", "V244: disabled VF interrupt bridge and IOAccelerator lifecycle");
 	return true;
 }
 

@@ -2918,3 +2918,47 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   in `/tmp/ngreen-static.4JsX4j`, including 33,586,689 PCI identity cases. A
   fresh macOS artifact and controlled AuxKC load remain required before native
   accelerator start is claimed.
+
+### Preserve the native IOAccelerator enable/disable lifecycle on a VF
+
+- Commit `cf8030d` passed GitHub Actions run `36289742462`; its NootedGreen
+  UUID is `70AEFDF1-599C-3719-B7A1-9922B69D3F15`. The seven-fileset AuxKC is
+  SHA-256 `6e4036598f3656ed78b24691590954717c43b67a0a2cdc4580b26307801e6b17`.
+  A watchdog-bounded start-only load reached a registered and active
+  `IntelAccelerator` without a panic. It negotiated GuC VF ABI 0.1.17.0,
+  obtained the PF-provisioned 64-EU topology and complete GGTT/context/
+  doorbell quotas, selected scheduler 4, configured memory IRQ and published
+  WindowServer IOAccel clients. The archived dmesg is SHA-256
+  `49ae32a4bab9346a7216d4903eeb65345fa67ebafd75aa308236124bf6398db6`.
+- That publication was not a Metal success. `MTLCreateSystemDefaultDevice()`
+  and `system_profiler SPDisplaysDataType` both blocked while the VM, SSH and
+  GUI remained responsive. The root spindump (SHA-256
+  `63c284d7f7d2ece22b1046d15316c211b85f710838804dc9f48b67690b3ec8e6`)
+  resolves the kernel path as `IOAccelSharedUserClient::new_resource` through
+  `IOGraphicsAccelerator2::acceleratorWaitEnabled()` and
+  `waiting_for_fEnabled`. The block occurs before a GuC submission or GPU
+  interrupt can be blamed.
+- Tahoe KDK disassembly proves `configIsHeadless()` is only
+  `displayMachine->getFramebufferCount() == 0`; there is no personality flag
+  that makes resource creation bypass `fEnabled`. `enableAccelerator()` starts
+  the hardware-progress timer when applicable and sets that state bit, while
+  `disableAccelerator()` clears it symmetrically.
+- Both admitted TGL payloads prove the missing owner. Their native
+  `IntelAccelerator::startGraphicsEngine()` calls `IGInterruptBridge::enable()`
+  and then `IOGraphicsAccelerator2::enableAccelerator()`; native stop calls the
+  corresponding bridge disable and IOAccelerator disable in the same order.
+  The VF replacement returned true without any of those four lifecycle calls,
+  so native start reported success while every first resource waited forever.
+- The VF replacement now retains its PF-owned engine/reset isolation but calls
+  the already VF-routed interrupt-bridge lifecycle and Tahoe's named
+  IOAccelerator enable/disable methods. The latter are resolved from the
+  running `com.apple.iokit.IOAcceleratorFamily2` image instead of writing its
+  private flags by offset. Start requires a complete GuC transport and both
+  lifecycle APIs; missing state fails closed. Final stop still quiesces every
+  context/DMA owner before disabling the bridge and accelerator.
+- A new Mach-O contract parses both payloads' external relocations, proves the
+  native bridge/IOAccelerator call order and checks the production wrapper for
+  the same ordering. The full syntax, analyzer, strict-ABI, Mach-O and
+  sanitizer suite passes in `/tmp/ngreen-static.5PbbMZ`. A fresh macOS build
+  and controlled runtime must still prove that Metal proceeds beyond resource
+  creation; this checkpoint does not claim completed GPU work.
