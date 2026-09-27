@@ -10,6 +10,7 @@ ENABLE = "__ZN22IOGraphicsAccelerator217enableAcceleratorEv"
 DISABLE = "__ZN22IOGraphicsAccelerator218disableAcceleratorEv"
 START = "__ZN16IntelAccelerator19startGraphicsEngineEv"
 STOP = "__ZN16IntelAccelerator18stopGraphicsEngineEv"
+ACCELERATOR_START = "__ZN16IntelAccelerator5startEP9IOService"
 BRIDGE_ENABLE = "__ZN17IGInterruptBridge6enableEv"
 BRIDGE_DISABLE = "__ZN17IGInterruptBridge7disableEv"
 BRIDGE_FILTER = "__ZN17IGInterruptBridge22interruptFilterHandlerEP28IOFilterInterruptEventSource"
@@ -31,8 +32,25 @@ STREAMER_ERROR_ENABLE = "__ZN26IGHardwareCommandStreamer420enableErrorInterruptE
 STREAMER_ERROR_DISABLE = "__ZN26IGHardwareCommandStreamer421disableErrorInterruptEv"
 PCI_CONFIGURE_INTERRUPTS = "__ZN11IOPCIDevice19configureInterruptsEjjjj"
 SCHEDULER_INIT_FIRMWARE = "__ZN11IGScheduler12initFirmwareEv"
+SCHEDULER4_VTABLE = "__ZTV12IGScheduler4"
+SCHEDULER4_INIT = "__ZN12IGScheduler419initWithAcceleratorEP22IOGraphicsAccelerator2"
+SCHEDULER4_LOAD_FIRMWARE = "__ZN12IGScheduler412loadFirmwareEv"
+COMMAND_STREAMER_FACTORY = "__ZN26IGHardwareCommandStreamer423hardwareCommandStreamerEP22IOGraphicsAccelerator2P10IOWorkLoopP12IGScheduler410IGHwCsType"
+COMMAND_STREAMER_INIT = "__ZN26IGHardwareCommandStreamer44initEP22IOGraphicsAccelerator2P10IOWorkLoopP12IGScheduler410IGHwCsType"
+COMMAND_STREAMER_REGISTER = "__ZN26IGHardwareCommandStreamer421registerForInterruptsEv"
 REQUEST_ENABLE_CALLBACK = "__ZN17IGInterruptBridge21requestEnableCallbackEP8OSObjectPFvS1_zE"
 GUC_INIT_INTERRUPTS = "__ZN13IGHardwareGuC14initInterruptsEv"
+GUC_REGISTER_INTERRUPTS = "__ZN13IGHardwareGuC21registerForInterruptsEv"
+BRIDGE_REGISTER_TYPE = "__ZN17IGInterruptBridge24registerForInterruptTypeEjPFvP8OSObjectPvES1_S2_PS2_"
+GUC_WITH_OPTIONS = "__ZN13IGHardwareGuC11withOptionsEP16IntelAccelerator"
+GUC_INIT_WITH_OPTIONS = "__ZN13IGHardwareGuC15initWithOptionsEP16IntelAccelerator"
+GUC_INIT_WORK_HISTORY = "__ZN13IGHardwareGuC19initWorkItemHistoryEj"
+GUC_INIT_DOORBELLS = "__ZN13IGHardwareGuC13initDoorbellsEv"
+CTB_WITH_OPTIONS = "__ZN21IGHardwareGuCCTBuffer11withOptionsEP22IOGraphicsAccelerator2"
+CTB_INIT = "__ZN21IGHardwareGuCCTBuffer19initWithAcceleratorEP22IOGraphicsAccelerator2"
+GUC_LOAD_BINARY = "__ZN13IGHardwareGuC13loadGuCBinaryEv"
+GUC_REGISTER_CTB = "__ZN13IGHardwareGuC31registerCommandTransportBuffersEv"
+GUC_MMIO_ACTION = "__ZN13IGHardwareGuC19mmioHostToGuCActionEPKjjiPj"
 CREATE_UK_CONTEXT = "__ZN13IGHardwareGuC15createUkContextEy25UK_GEN11_CONTEXT_PRIORITY"
 MAPPED_GET_MEMORY = "__ZNK14IGMappedBuffer9getMemoryEv"
 SYS_MEMORY_PHYSICAL = "__ZN16IGAccelSysMemory18getPhysicalSegmentEyPy"
@@ -41,6 +59,10 @@ BLIT3D_BOUNDS_END = "__ZN21IGAccelDisplayMachine9MetaClassC1Ev"
 BLIT3D_GLOBAL_INIT = "__GLOBAL__sub_I_IGHardwareContext.cpp"
 BLIT3D_SCRATCH_ANCHOR = bytes.fromhex(
     "48 8d 05 19 31 03 00 48 8b 00 48 89 05 df d6 0c 00")
+# Error 0x215 clears the native start result and jumps directly to the final
+# result/stack-check block, bypassing Tahoe's common virtual-stop cleanup.
+DPSM_START_FAILURE_ANCHOR = bytes.fromhex(
+    "be 15 02 00 00 45 31 f6 e9 41 ff ff ff")
 
 
 def macho_inventory(path):
@@ -121,6 +143,56 @@ def macho_inventory(path):
             if candidate + 5 + displacement == target_start:
                 calls.append(candidate)
         return calls
+
+    accelerator_start = value(ACCELERATOR_START)
+    accelerator_start_end = next_symbol(accelerator_start)
+    dpsm_failures = []
+    cursor = 0
+    while True:
+        cursor = image.find(DPSM_START_FAILURE_ANCHOR, cursor)
+        if cursor < 0:
+            break
+        dpsm_failures.append(cursor)
+        cursor += 1
+    if len(dpsm_failures) != 1 or not (
+            accelerator_start < dpsm_failures[0] < accelerator_start_end):
+        raise AssertionError(
+            f"{path}: native post-engine 0x215 failure edge changed")
+
+    # initFirmware reaches the Gen11 scheduler implementation through virtual
+    # slot 0x220.  Keep the complete retained native bootstrap chain explicit:
+    # every hardware-facing GuC descendant below must remain intercepted by the
+    # VF routes checked in source_contract().
+    scheduler4_vtable = value(SCHEDULER4_VTABLE)
+    load_firmware_slot = struct.unpack_from(
+        "<Q", image, scheduler4_vtable + 16 + 0x220)[0]
+    if load_firmware_slot != value(SCHEDULER4_LOAD_FIRMWARE):
+        raise AssertionError(
+            f"{path}: scheduler-4 firmware virtual slot changed")
+
+    retained_edges = (
+        (SCHEDULER4_INIT, COMMAND_STREAMER_FACTORY),
+        (COMMAND_STREAMER_FACTORY, COMMAND_STREAMER_INIT),
+        (COMMAND_STREAMER_INIT, REQUEST_ENABLE_CALLBACK),
+        (COMMAND_STREAMER_REGISTER, BRIDGE_REGISTER_TYPE),
+        (SCHEDULER4_LOAD_FIRMWARE, GUC_WITH_OPTIONS),
+        (GUC_WITH_OPTIONS, GUC_INIT_WITH_OPTIONS),
+        (GUC_INIT_WITH_OPTIONS, GUC_INIT_WORK_HISTORY),
+        (GUC_INIT_WITH_OPTIONS, GUC_INIT_DOORBELLS),
+        (GUC_INIT_WITH_OPTIONS, CTB_WITH_OPTIONS),
+        (GUC_INIT_WITH_OPTIONS, GUC_INIT_INTERRUPTS),
+        (GUC_INIT_WITH_OPTIONS, GUC_LOAD_BINARY),
+        (GUC_INIT_WITH_OPTIONS, GUC_REGISTER_CTB),
+        (GUC_INIT_WITH_OPTIONS, CREATE_UK_CONTEXT),
+        (CTB_WITH_OPTIONS, CTB_INIT),
+        (GUC_INIT_INTERRUPTS, REQUEST_ENABLE_CALLBACK),
+        (GUC_REGISTER_INTERRUPTS, BRIDGE_REGISTER_TYPE),
+        (GUC_REGISTER_CTB, GUC_MMIO_ACTION),
+    )
+    for owner, target in retained_edges:
+        if not direct_branches(owner, target):
+            raise AssertionError(
+                f"{path}: retained native bootstrap edge {owner} -> {target} changed")
 
     # The runtime patch must search across the private global constructor.
     # Its production bounds deliberately use exported symbols because the
@@ -350,6 +422,16 @@ def source_contract(path):
             pci_resolution.index("KernelPatcher::KernelID") <
             pci_resolution.index(PCI_CONFIGURE_INTERRUPTS)):
         raise AssertionError(f"{path}: IOPCIFamily symbol is incorrectly resolved from KernelID")
+    for token in (
+            GUC_LOAD_BINARY,
+            GUC_INIT_DOORBELLS,
+            CTB_INIT,
+            REQUEST_ENABLE_CALLBACK,
+            CREATE_UK_CONTEXT,
+            GUC_MMIO_ACTION):
+        if token not in pci_resolution:
+            raise AssertionError(
+                f"{path}: retained native bootstrap descendant is not VF-routed: {token}")
 
     memory_routes_start = pci_resolution.index(
         "KernelPatcher::RouteRequest memoryIrqRoutes[]")
@@ -450,6 +532,17 @@ def source_contract(path):
         raise AssertionError(f"{path}: VF MSI is configured after native start")
     if "pciDevice, kIOInterruptTypePCIMessaged, 1, 1, 0" not in accelerator_start:
         raise AssertionError(f"{path}: VF MSI request is not exactly one required vector")
+    native_result = accelerator_start.index(
+        "const auto result = FunctionCast(start, callback->ostart)(that, provider)")
+    firmware_live = accelerator_start.index(
+        "gVfSchedulerFirmwareReady && !gVfDeviceStopping", native_result)
+    rollback = accelerator_start.index("acceleratorStop(that, nullptr)", firmware_live)
+    quiesced = accelerator_start.index("!gVfDmaQuiesced", rollback)
+    start_fault = accelerator_start.index(
+        "native accelerator start failed after VF bootstrap", quiesced)
+    if not native_result < firmware_live < rollback < quiesced < start_fault:
+        raise AssertionError(
+            f"{path}: live post-engine native-start failure is not DMA-quiesced before fault")
 
     late_callback = function_body(
         source, "void Gen11::vfRequestEnableCallback(void *that, OSObject *requestor,")

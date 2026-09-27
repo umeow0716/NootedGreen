@@ -1,0 +1,72 @@
+# Host containment plan for VF runtime validation
+
+Updated: 2026-09-27. This document is a fail-closed plan, not authorization to
+run the VM. The `ce166c8` candidate caused PF `00:02.0` DMAR write faults, an
+i915 hang and a host reboot. A later reboot has also been reported by the user.
+Until every precondition below is independently satisfied, only offline source,
+binary, build and protocol validation is permitted.
+
+## Current hard hold
+
+- Libvirt domain `macos-tahoe-sriov` is shut off, persistent, has 16 vCPUs and
+  16 GiB RAM, and has autostart disabled. It has no managed-save image.
+- PF `0000:00:02.0` (`8086:a7a8`) is bound to i915. VF `0000:00:02.1` is bound
+  to vfio-pci. The PF and VF are in IOMMU groups 0 and 19 respectively, and the
+  PF currently exposes one of seven possible VFs.
+- The domain XML presently uses `<on_crash>preserve</on_crash>` and an emulated
+  iTCO watchdog with reset action. Neither protects the host from a wedged PF;
+  this configuration is not a runtime-test candidate.
+- Current-boot kernel health has not been proven. Unprivileged journal access
+  cannot read the kernel log and non-interactive sudo requires a password.
+  Therefore a preflight must fail closed until a user-authorized privileged
+  watcher can read the host kernel journal.
+- No candidate kext/AuxKC may be installed or loaded, no VM may be started, no
+  PCI driver may be rebound and no SR-IOV sysfs value may be written while this
+  hold remains in force.
+
+## Preconditions for a future controlled run
+
+1. Record the exact source commit, CI run, artifact zip SHA-256, kext executable
+   UUID/SHA-256, final-path-built AuxKC SHA-256 and guest EFI backup. Reject any
+   mismatch before the domain starts.
+2. Re-review all host-dangerous MMIO/DMA paths reachable from the candidate's
+   retained native bootstrap and stop lifecycles. The complete offline suite and
+   native macOS build/link must pass at that exact commit.
+3. Use a disposable libvirt XML checkpoint with autostart disabled, no managed
+   save, and crash policy changed from `preserve` to `destroy`. Confirm the
+   effective live XML before the run; restore the reviewed persistent XML after
+   evidence capture.
+4. Hold a host sleep inhibitor before VM start and through the full post-stop
+   cooldown. The previous incident entered suspend after the PF hang and then
+   logged VF pause timeout/ENOMEM, so suspend must not overlap a VF test.
+5. Start an independent privileged host watcher before QEMU. It must consume
+   new kernel messages from `journalctl -k -f -n0`, write them to a timestamped
+   evidence directory outside the guest, and remain alive if QEMU or the guest
+   fails.
+6. The watcher must treat any new PF `00:02.0` DMAR/IOMMU fault, `i915` GPU HANG,
+   engine reset timeout, fence timeout, GuC timeout or VF pause timeout as a
+   containment trigger. On the first trigger it must issue an explicit
+   `virsh -c qemu:///system destroy macos-tahoe-sriov`, then verify within a
+   bounded deadline that the domain is off. It must preserve all logs and must
+   not automatically start a second run.
+7. A separate monotonic deadline must destroy the domain even when no trigger
+   appears. Guest watchdog, SSH and serial output are evidence channels; none
+   replaces this host-side deadline.
+8. After every stop, verify there is no surviving QEMU process, the VF remains
+   bound to vfio-pci, the PF remains bound to i915, `sriov_numvfs` remains 1,
+   the PF answers read-only health queries, and no new DMAR/i915 fault appeared
+   during cooldown. If the PF does not recover, prohibit another run and perform
+   only a deliberate user-visible host recovery/reboot.
+
+The kill watcher and deadline must run independently of the Codex process and
+guest network. They may stop only the named libvirt domain; they must not rebind
+PCI devices, change `sriov_numvfs`, unload i915 or automatically reboot the host.
+Exact scripts and XML mutations require a separate review before execution.
+
+## Promotion boundary
+
+One clean boot is not a safety or acceleration baseline. Sunshine, Moonlight,
+virtual-display removal, unattended guest login and VM autostart stay disabled
+until repeated contained runs prove real Metal command completion and media
+workloads, clean shutdown/quiescence, and zero new PF DMAR/i915 faults. Only then
+may display and service integration be evaluated as a separate phase.

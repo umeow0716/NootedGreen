@@ -4,9 +4,42 @@ Updated: 2026-09-27. Runtime source baseline: `ce166c8` on
 `codex/tahoe-sriov-vf`; the interrupt-transport correction described below is
 commit `8c45437`. This is NOT a boot-test candidate or a
 successful driver baseline. The `ce166c8` run produced repeatable host PF DMAR
-faults followed by i915 hangs and a host reboot. Keep `macOS-Tahoe` shut off
+faults followed by i915 hangs and a host reboot. Keep `macos-tahoe-sriov` shut off
 until the corrected code passes offline review, native CI, and a separately
 approved containment plan.
+
+## V252 static rollback and retained-bootstrap reachability review
+
+- Both admitted Tahoe TGL accelerator payloads contain exactly one
+  post-engine error-`0x215` branch in `IntelAccelerator::start`. Its instruction
+  anchor clears the Boolean result and jumps directly to the final return block;
+  unlike the surrounding start failures, it does not enter the virtual
+  accelerator-stop cleanup after `startGraphicsEngine()` has already brought
+  the VF GuC, CTB, interrupt bridge and IOAccelerator lifecycle live.
+- The outer VF start wrapper now closes only that uncovered transactional edge.
+  If scheduler firmware is live and the ordinary stop route has not begun, it
+  invokes the captured `IntelAccelerator::stop` route with the same null
+  provider used by Tahoe's common start-failure cleanup. That wrapper first
+  publishes `gVfDeviceStopping`; native `finishAllStamps` remains intact, and
+  the routed `stopGraphicsEngine()` must retire every direct context, perform
+  the final heavy GuC TLB invalidation and establish `gVfDmaQuiesced` before
+  the original start failure is recorded as terminal. Failure to establish
+  both boundaries is fail-stop rather than a return into object teardown with
+  live DMA.
+- The lifecycle binary contract now proves the complete retained native
+  bootstrap skeleton instead of checking only its top-level calls. Scheduler-4
+  virtual slot `0x220` must remain `loadFirmware`; scheduler initialization must
+  construct command streamers; GuC initialization must retain work-history,
+  doorbell, CTB, interrupt, firmware-load, transport-registration and UK-context
+  descendants; and interrupt registration must still reach the native bridge.
+  Every hardware-facing descendant in that graph is also required to appear in
+  the VF route inventory. This prevents a future Tahoe payload or route edit
+  from silently exposing the original physical GuC/MMIO implementation.
+- Targeted source/Mach-O lifecycle checks pass for both pinned accelerator
+  payloads. This is an offline proof only. No candidate was installed, no VF
+  binding was changed, and the VM remained shut off after the host i915 crash.
+  Dynamic validation remains prohibited by the V251 hold and the independent
+  requirements in `HOST_CONTAINMENT_PLAN.md`.
 
 ## V251 host incident: wrong interrupt ABI selected on Raptor Lake
 

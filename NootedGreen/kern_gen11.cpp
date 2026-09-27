@@ -3189,8 +3189,26 @@ bool Gen11::start(void *that, void *provider)
 
 	const auto result = FunctionCast(start, callback->ostart)(that, provider);
 	if (!result) {
-		if (vfActive)
+		if (vfActive) {
+			// The pinned Tahoe start body normally routes failures after
+			// startGraphicsEngine() through its virtual stop entry.  Its 0x215
+			// DPSM-timer allocation failure is the exception: that edge returns
+			// false after the VF GuC/CTB and accelerator lifecycle are live, but
+			// never calls stop.  Close that exact transactional hole here while
+			// retirement transport is still trusted.  acceleratorStop() sets the
+			// device-stopping boundary before native finishAllStamps and reaches
+			// our stopGraphicsEngine() quiescence route; use a null provider just
+			// like Tahoe's other start-failure cleanup edge.
+			OSSynchronizeIO();
+			if (gVfSchedulerFirmwareReady && !gVfDeviceStopping) {
+				SYSLOG("ngreen", "V252: rolling back live VF engine after native accelerator start failure");
+				acceleratorStop(that, nullptr);
+				OSSynchronizeIO();
+				PANIC_COND(!gVfDeviceStopping || !gVfDmaQuiesced, "ngreen",
+					"Native VF start failure escaped without a DMA-quiesced stop");
+			}
 			vfMarkProtocolFault("native accelerator start failed after VF bootstrap");
+		}
 		return result;
 	}
 
