@@ -121,6 +121,7 @@ def single_symbol(symbols: dict[str, list[int]], name: str, path: Path) -> int:
 
 def verify_runtime_patch_owners(source: Path, payload: Path, symbols: dict[str, list[int]]) -> None:
     header = source.parent / "kern_vf_runtime_patch.hpp"
+    patcher_header = source.parent / "kern_patcherplus.hpp"
     probe_start = single_symbol(
         symbols, "__ZN16IntelAccelerator5probeEP9IOServicePi", payload
     )
@@ -168,10 +169,52 @@ def verify_runtime_patch_owners(source: Path, payload: Path, symbols: dict[str, 
         '"__ZN16IntelAccelerator10getGPUInfoEv", gpuInfoStart',
         '"__ZN16IntelAccelerator14teardownDeviceEP11IOPCIDevice", gpuInfoEnd',
         "patcher, vfRuntimePatches, gpuInfoStart, gpuInfoEnd - gpuInfoStart",
+        "NGVfRuntimePatch::sliceFuseFind, vfSliceFuseReplace, 1",
+        "NGVfRuntimePatch::dssFuseFind, vfDssFuseReplace, 1",
+        "NGVfRuntimePatch::euFuseFind, vfEuFuseReplace, 1",
+        "NGVfRuntimePatch::mediaFuseFind, vfMediaFuseReplace, 1",
+        "NGVfRuntimePatch::rpmConfigFind, vfRpmConfigReplace, 1",
+        "NGVfRuntimePatch::l3BranchFind, r3b, 1",
     )
     for fragment in required_source_fragments:
         if fragment not in normalized_source:
             raise AssertionError(f"{source}: missing bounded patch contract: {fragment}")
+
+    source_text = source.read_text(encoding="utf-8")
+    for name in (
+        "sliceFuseFind",
+        "dssFuseFind",
+        "euFuseFind",
+        "mediaFuseFind",
+        "rpmConfigFind",
+        "l3BranchFind",
+    ):
+        if re.search(
+            rf"NGVfRuntimePatch::{name}\s*,\s*\w+\s*,\s*"
+            rf"arrsize\s*\(\s*NGVfRuntimePatch::{name}\s*\)",
+            source_text,
+        ):
+            raise AssertionError(
+                f"{source}: {name} uses the ambiguous mutable-array size/count form"
+            )
+
+    patcher_header_text = patcher_header.read_text(encoding="utf-8")
+    normalized_patcher_header = " ".join(patcher_header_text.split())
+    if "size as count plus count as skip" not in normalized_patcher_header:
+        raise AssertionError(f"{patcher_header}: missing mutable-array overload guard")
+    array_constructors = re.findall(
+        r"template<size_t N>\s+LookupPatchPlus\((.*?)\)\s*:\s*LookupPatchPlus",
+        patcher_header_text,
+        flags=re.DOTALL,
+    )
+    if (
+        len(array_constructors) != 3
+        or any("size_t skip" in constructor for constructor in array_constructors)
+        or any("size_t count" not in constructor for constructor in array_constructors)
+    ):
+        raise AssertionError(
+            f"{patcher_header}: array constructors must not expose an ambiguous skip argument"
+        )
 
 
 def routed_symbols(source: Path) -> set[str]:

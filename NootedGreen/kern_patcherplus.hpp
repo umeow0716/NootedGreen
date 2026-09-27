@@ -21,20 +21,24 @@ struct LookupPatchPlus : KernelPatcher::LookupPatch {
 		: KernelPatcher::LookupPatch {kext, find, replace, size, count}, findMask {findMask}, replaceMask {replaceMask},
 		  skip {skip} {}
 
+	// Keep array overloads one argument shorter than their raw-pointer forms.
+	// Otherwise a mutable replacement array makes a five-argument
+	// (find, replace, size, count) call prefer this template and reinterpret
+	// size as count plus count as skip. Callers that intentionally need skip
+	// must use the explicit raw-pointer (size, count, skip) form.
 	template<size_t N>
-	LookupPatchPlus(KernelPatcher::KextInfo *kext, const UInt8 (&find)[N], const UInt8 (&replace)[N], size_t count,
-		size_t skip = 0)
-		: LookupPatchPlus {kext, find, replace, N, count, skip} {}
+	LookupPatchPlus(KernelPatcher::KextInfo *kext, const UInt8 (&find)[N], const UInt8 (&replace)[N], size_t count)
+		: LookupPatchPlus {kext, find, replace, N, count, 0} {}
 
 	template<size_t N>
 	LookupPatchPlus(KernelPatcher::KextInfo *kext, const UInt8 (&find)[N], const UInt8 (&findMask)[N],
-		const UInt8 (&replace)[N], size_t count, size_t skip = 0)
-		: LookupPatchPlus {kext, find, findMask, replace, N, count, skip} {}
+		const UInt8 (&replace)[N], size_t count)
+		: LookupPatchPlus {kext, find, findMask, replace, N, count, 0} {}
 
 	template<size_t N>
 	LookupPatchPlus(KernelPatcher::KextInfo *kext, const UInt8 (&find)[N], const UInt8 (&findMask)[N],
-		const UInt8 (&replace)[N], const UInt8 (&replaceMask)[N], size_t count, size_t skip = 0)
-		: LookupPatchPlus {kext, find, findMask, replace, replaceMask, N, count, skip} {}
+		const UInt8 (&replace)[N], const UInt8 (&replaceMask)[N], size_t count)
+		: LookupPatchPlus {kext, find, findMask, replace, replaceMask, N, count, 0} {}
 
 	bool apply(KernelPatcher &patcher, mach_vm_address_t address, size_t maxSize) const;
 

@@ -2314,18 +2314,12 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 					gVfTopology.l3BankCount);
 
 				LookupPatchPlus const vfRuntimePatches[] = {
-					{activeKext, NGVfRuntimePatch::sliceFuseFind, vfSliceFuseReplace,
-					 arrsize(NGVfRuntimePatch::sliceFuseFind), 1},
-					{activeKext, NGVfRuntimePatch::dssFuseFind, vfDssFuseReplace,
-					 arrsize(NGVfRuntimePatch::dssFuseFind), 1},
-					{activeKext, NGVfRuntimePatch::euFuseFind, vfEuFuseReplace,
-					 arrsize(NGVfRuntimePatch::euFuseFind), 1},
-					{activeKext, NGVfRuntimePatch::mediaFuseFind, vfMediaFuseReplace,
-					 arrsize(NGVfRuntimePatch::mediaFuseFind), 1},
-					{activeKext, NGVfRuntimePatch::rpmConfigFind, vfRpmConfigReplace,
-					 arrsize(NGVfRuntimePatch::rpmConfigFind), 1},
-					{activeKext, NGVfRuntimePatch::l3BranchFind, r3b,
-					 arrsize(NGVfRuntimePatch::l3BranchFind), 1},
+					{activeKext, NGVfRuntimePatch::sliceFuseFind, vfSliceFuseReplace, 1},
+					{activeKext, NGVfRuntimePatch::dssFuseFind, vfDssFuseReplace, 1},
+					{activeKext, NGVfRuntimePatch::euFuseFind, vfEuFuseReplace, 1},
+					{activeKext, NGVfRuntimePatch::mediaFuseFind, vfMediaFuseReplace, 1},
+					{activeKext, NGVfRuntimePatch::rpmConfigFind, vfRpmConfigReplace, 1},
+					{activeKext, NGVfRuntimePatch::l3BranchFind, r3b, 1},
 				};
 				PANIC_COND(!LookupPatchPlus::applyAll(
 					patcher, vfRuntimePatches, gpuInfoStart, gpuInfoEnd - gpuInfoStart),

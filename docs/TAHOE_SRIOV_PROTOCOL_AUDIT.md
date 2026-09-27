@@ -2862,6 +2862,26 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   `getGPUInfo` through `teardownDevice`. The Mach-O contract parses both pinned
   binaries' symbol tables and segment mappings, requires every pattern to lie
   in its real owner, and also verifies that production passes the matching
-  range to each transactional patch group. The complete offline suite passes
-  in `/tmp/ngreen-static.6wdP0t`. A new macOS build and the next controlled
-  start-only load remain required before accelerator start is claimed.
+  range to each transactional patch group. The complete offline suite passed
+  in `/tmp/ngreen-static.6wdP0t` and commit `8dcc104` passed macOS CI run
+  `36287846558`.
+- The rebuilt seven-fileset AuxKC is SHA-256
+  `a023edfb6a0c10f28b151651f077c89582f616eb7364016de373ff3a23e5f0b8`;
+  its NootedGreen UUID is `6C8234B2-04F0-3D81-B4F9-1915C96270E0` and was
+  verified as the loaded image before the second start-only request. That load
+  passed the corrected `probe` patch and reached the next fail-closed gate:
+  `Failed to inject PF runtime fuses into VF getGPUInfo`. The archived panic
+  is SHA-256
+  `d1c7eddbd9998f770d5f0028fb28f674b7bad270e506c1f5a1ac2a3aeb17dd37`.
+- Static overload reproduction identified the exact cause. The six runtime
+  replacements are mutable stack arrays. Their five-argument
+  `LookupPatchPlus(find, replace, arrsize(find), 1)` initializers preferred the
+  array-template constructor, which interpreted the pattern length as the
+  required match count and `1` as the skip count. The constant `probe`
+  replacement selected the raw-pointer overload instead, explaining why only
+  the second group failed. The six calls now use the unambiguous array form
+  with count one. Array constructors no longer expose `skip`; intentional skip
+  users must provide the raw `(size, count, skip)` form. The Mach-O/source
+  contract rejects both the old call shape and a future ambiguous constructor.
+  The complete suite passes in `/tmp/ngreen-static.iJN8VH`. A new macOS build
+  and controlled load remain required before accelerator start is claimed.
