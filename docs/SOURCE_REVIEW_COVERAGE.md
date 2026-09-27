@@ -46,6 +46,13 @@ MSI capability. The wrapper now requests that real MSI through Tahoe's exported
 rollback can publish DMA quiescence only after the drained, stable context table
 is proven completely unowned. Both runtime checkpoints and the expanded
 lifecycle contract are recorded in `TAHOE_SRIOV_PROTOCOL_AUDIT.md`.
+The first contained MSI runtime then proved that the VF wrapper reached its
+own impossible precondition: it demanded GuC/CTB readiness before invoking the
+native scheduler firmware boundary that creates GuC/CTB. Complete native-tail
+disassembly now requires `IGScheduler::initFirmware()` before transport
+readiness and accelerator enable, while continuing to omit
+`IGMemoryManager::initCache()` because that method directly writes PF-owned
+force-wake, MOCS and L3 registers.
 
 | Files/area | Evidence and remaining boundary |
 | --- | --- |

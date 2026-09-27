@@ -20,6 +20,7 @@ SCHEDULER_ERROR_DISABLE = "__ZN12IGScheduler422disableErrorInterruptsEv"
 STREAMER_ERROR_ENABLE = "__ZN26IGHardwareCommandStreamer420enableErrorInterruptEv"
 STREAMER_ERROR_DISABLE = "__ZN26IGHardwareCommandStreamer421disableErrorInterruptEv"
 PCI_CONFIGURE_INTERRUPTS = "__ZN11IOPCIDevice19configureInterruptsEjjjj"
+SCHEDULER_INIT_FIRMWARE = "__ZN11IGScheduler12initFirmwareEv"
 
 
 def macho_inventory(path):
@@ -172,6 +173,7 @@ def source_contract(path):
         SCHEDULER_ENABLE,
         SCHEDULER_DISABLE,
         PCI_CONFIGURE_INTERRUPTS,
+        SCHEDULER_INIT_FIRMWARE,
     )
     for token in required:
         if token not in source:
@@ -188,6 +190,15 @@ def source_contract(path):
         raise AssertionError(f"{path}: IOPCIFamily symbol is incorrectly resolved from KernelID")
 
     start = function_body(source, "bool Gen11::startGraphicsEngine(void *that)")
+    firmware = start.index("callback->vfSchedulerInitFirmware)(scheduler)")
+    ready = start.index("if (!vfNativeGpuWorkReady())")
+    bridge = start.index("callback->vfInterruptBridgeEnable)(")
+    if not firmware < ready < bridge:
+        raise AssertionError(
+            f"{path}: VF scheduler/transport/interrupt lifecycle order is reversed")
+    if "IGMemoryManager::initCache" not in start or "must omit it" not in start:
+        raise AssertionError(
+            f"{path}: physical VF cache initialization is not explicitly excluded")
     if start.index("vfInterruptBridgeEnable") > start.index(
             "ioGraphicsEnableAccelerator"):
         raise AssertionError(f"{path}: VF start lifecycle order is reversed")

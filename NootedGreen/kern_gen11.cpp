@@ -1905,6 +1905,7 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				"Cannot resolve the exported Tahoe PCI MSI configurator");
 			KernelPatcher::SolveRequest solveRequests[] = {
 				{"__ZN13IGHardwareGuC16initSchedControlEv", this->orgInitSchedControl},
+				{"__ZN11IGScheduler12initFirmwareEv", this->vfSchedulerInitFirmware},
 				{"__ZN21IGHardwareGuCCTBuffer32handleSoftwareGuCToHostInterruptEv",
 				 this->vfCtbSoftwareInterrupt},
 				// V233: single-LRC GuC submission must publish the new tail in
@@ -3099,17 +3100,51 @@ bool Gen11::startGraphicsEngine(void *that)
 {
 	// This replacement is installed only for a classified VF. Ring power,
 	// reset and legacy execlist state belong to the PF, but the native tail of
-	// IntelAccelerator::startGraphicsEngine also performs two software lifecycle
-	// transitions: IGInterruptBridge::enable() and
+	// IntelAccelerator::startGraphicsEngine first enters the scheduler firmware
+	// boundary and then performs two software lifecycle transitions:
+	// IGInterruptBridge::enable() and
 	// IOGraphicsAccelerator2::enableAccelerator().  Omitting those transitions
 	// leaves IOAccel resource creation asleep in acceleratorWaitEnabled().
-	if (!that || !callback || !vfNativeGpuWorkReady() ||
+	if (!that || !callback || !callback->vfSchedulerInitFirmware ||
 	    !callback->vfInterruptBridgeEnable ||
 	    !callback->ioGraphicsEnableAccelerator ||
 	    !callback->ioAccelEventMachineInitEvent) {
 		vfMarkProtocolFault("VF engine start before accelerator lifecycle is ready");
 		return false;
 	}
+
+	// In the pinned native routine this call follows IGMemoryManager::initCache.
+	// That cache method directly programs force-wake, MOCS, L3 and other
+	// PF-owned MMIO, so a VF must omit it. IGScheduler::initFirmware is the next
+	// independent named boundary: for scheduler 4 it constructs GuC, registers
+	// the translated modern CTB and establishes memory-IRQ delivery through the
+	// routes above. Requiring transport readiness before this call created an
+	// impossible circular precondition and made every otherwise-valid VF start
+	// return failure 0x214.
+	auto *scheduler = getMember<void *>(that, 0x1250);
+	if (!scheduler) {
+		vfMarkProtocolFault("missing VF scheduler before firmware initialization");
+		return false;
+	}
+	using InitFirmware = IOReturn (*)(void *);
+	const IOReturn firmwareResult =
+		reinterpret_cast<InitFirmware>(callback->vfSchedulerInitFirmware)(scheduler);
+	if (firmwareResult != kIOReturnSuccess) {
+		SYSLOG("ngreen", "V247: VF scheduler firmware initialization failed ret=0x%x",
+		       firmwareResult);
+		vfMarkProtocolFault("VF scheduler firmware initialization failure");
+		return false;
+	}
+	if (!vfNativeGpuWorkReady()) {
+		SYSLOG("ngreen",
+		       "V247: incomplete post-firmware state ggtt=%d memirq=%d ctbCpu=%d ctbGpu=0x%x enabled=%d stopped=%d submissionStopped=%d fault=%d",
+		       gVfGGTTReady, gVfMemIrqConfigured, gVfCtbCpuBase != nullptr,
+		       gVfCtbGpuBase, gVfCtbEnabled != 0, gVfCtbStopped != 0,
+		       gVfSubmissionStopped != 0, gVfProtocolFault != 0);
+		vfMarkProtocolFault("VF transport incomplete after scheduler firmware initialization");
+		return false;
+	}
+	SYSLOG("ngreen", "V247: VF scheduler firmware and GuC transport initialized before accelerator enable");
 
 	auto *interruptBridge = getMember<void *>(that, 0x1248);
 	if (!interruptBridge) {

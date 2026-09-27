@@ -3056,3 +3056,39 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   zero-finding analyzer, strict ABI, Mach-O, exhaustive protocol and sanitizer
   tests pass in `/tmp/ngreen-static.QwNnvP`. A macOS build and controlled load
   remain required before the interrupt source or later engine tail is claimed.
+
+### Restore the scheduler firmware boundary before accelerator enable
+
+- Commit `079d0da` passed GitHub Actions run `36293258176`. Its x86_64 kext
+  UUID is `6A412A9A-4175-30B8-BB58-CFEAEAC923B6`, executable SHA-256 is
+  `b668dccd2cb0b56afdee34e6bf8343eaf234f503c76568d198de869705852b33`
+  and minimal AuxKC SHA-256 is
+  `b4ebe4784de8c1fba2573547a6df1731578dbcc16e82bf357d1d3883594d1294`.
+- A 45-second watchdog-contained `start-only` load stayed responsive. Tahoe
+  allocated and published a real `IOPCIMessagedInterruptController` plus one
+  `IOInterruptSpecifiers` entry on the VF. Native start then reached the local
+  filter path, called the VF engine wrapper, returned failure `0x214`, and the
+  new pre-CTB proof safely quiesced and unwound every accelerator object. No
+  new panic was recorded. Evidence and hashes are retained under
+  `build/diagnostics/079d0da-runtime1` in the VM workspace.
+- Complete disassembly explains failure `0x214`. The pinned native
+  `IntelAccelerator::startGraphicsEngine()` runs physical force-wake, mode,
+  cache and workaround MMIO first, then calls
+  `IGScheduler::initFirmware()`, checks its `IOReturn`, enables the interrupt
+  bridge/IOAccelerator and initializes the two embedded completion events.
+  The VF replacement correctly omitted the physical prefix but incorrectly
+  required `vfNativeGpuWorkReady()` before calling the scheduler boundary that
+  creates GuC, translates legacy CTB registration into VF self-config KLVs and
+  enables memory IRQ delivery.
+- The replacement now resolves and calls the exact scheduler firmware method,
+  accepts only `kIOReturnSuccess`, proves the complete GGTT/memory-IRQ/CTB
+  transport state and only then admits the interrupt and IOAccel lifecycle.
+  The immediately preceding native virtual call was also identified exactly as
+  `IGMemoryManager::initCache()`: its body directly writes force-wake, MOCS, L3
+  and other physical registers, so it remains deliberately omitted for a VF.
+  A detailed post-firmware state log makes any later incomplete boundary
+  attributable without speculative hardware access.
+- The expanded lifecycle ordering contract and complete syntax/analyzer,
+  strict ABI, Mach-O, protocol-model and sanitizer suite pass in
+  `/tmp/ngreen-static.KnNcGb`. A fresh macOS build and watchdog-contained load
+  remain required before GuC transport admission is claimed.

@@ -139,6 +139,7 @@ private:
 	mach_vm_address_t vfInterruptBridgeDisable {};
 	static bool stopGraphicsEngine(void *that);
 	static bool startGraphicsEngine(void *that);
+	mach_vm_address_t vfSchedulerInitFirmware {};
 	static void populateResetRegisterList(void *that);
 	static bool wrapIGScheduler5IsGpuIdle(const void *that);
 	static bool wrapIGScheduler4IsGpuIdle(const void *that);
