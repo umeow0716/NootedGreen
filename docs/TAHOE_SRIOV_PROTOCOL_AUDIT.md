@@ -2,7 +2,7 @@
 
 Updated: 2026-09-27. Runtime source baseline: `ce166c8` on
 `codex/tahoe-sriov-vf`; the interrupt-transport correction described below is
-the current uncommitted review state. This is NOT a boot-test candidate or a
+commit `8c45437`. This is NOT a boot-test candidate or a
 successful driver baseline. The `ce166c8` run produced repeatable host PF DMAR
 faults followed by i915 hangs and a host reboot. Keep `macOS-Tahoe` shut off
 until the corrected code passes offline review, native CI, and a separately
@@ -53,6 +53,15 @@ approved containment plan.
   PCI IDs and explicitly prove `a7a8` is virtual-MMIO while MTL/ARL are
   memory-IRQ devices. No VM or VF dynamic operation is permitted in this
   checkpoint.
+- Correction commit `8c45437` passed GitHub Actions run `36328606392`, including
+  the complete static/analyzer/sanitizer suite and native x86_64 build/link. The
+  resulting kext UUID is `C238E026-440F-3340-98EB-9D954FC83D2D`; executable
+  SHA-256 is
+  `e15c29b099b54b18d9e45f81674634c8cf728f3e479b85b940f01dac755eeb25`
+  and artifact zip SHA-256 is
+  `a4ba9a56bce112a231026d8e315ff81f1fbabdd0ad6ad4d78267637ac85892d2`.
+  The artifact is archived under `../../build/artifacts/8c45437` only. It has
+  not been installed, added to an AuxKC, or loaded by the VM.
 
 ## Evidence inspected
 
