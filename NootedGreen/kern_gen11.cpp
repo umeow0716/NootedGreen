@@ -15,6 +15,7 @@
 #include "kern_vf_legacy_ctb.hpp"
 #include "kern_vf_tlb_patch.hpp"
 #include "kern_vf_standalone_patch.hpp"
+#include "kern_vf_guc_factory_patch.hpp"
 #include "kern_unaligned_patch.hpp"
 #include "kern_framebuffer_patch.hpp"
 #include "kern_vf_guc_event.hpp"
@@ -611,6 +612,8 @@ bool vfSendCtbFastAction(void *guc, const uint32_t *request,
 		// it has no tasklet retry path, so wait here while GuC consumes H2G and
 		// the independent G2H callback returns reply credits. The entry guard
 		// already proved this context may sleep.
+		if (!Gen11::pollVfGuCToHost(guc))
+			return false;
 		IOSleep(1);
 	}
 }
@@ -855,6 +858,8 @@ bool vfInvalidateTLBSync(void *guc)
 				completed = true;
 				break;
 			}
+			if (!Gen11::pollVfGuCToHost(guc))
+				break;
 			IOSleep(1);
 		}
 	}
@@ -884,6 +889,8 @@ bool vfWaitForContextState(void *guc, uint16_t gucId, VfGucContextState wanted)
 			return true;
 		if (!vfCanWaitForGuc(guc))
 			return false;
+		if (!Gen11::pollVfGuCToHost(guc))
+			return false;
 		IOSleep(1);
 	}
 	return false;
@@ -904,6 +911,8 @@ bool vfWaitForContextTransition(void *guc, uint16_t gucId, uint32_t lrcaPage,
 		if (changed)
 			return true;
 		if (!vfCanWaitForGuc(guc))
+			return false;
+		if (!Gen11::pollVfGuCToHost(guc))
 			return false;
 		IOSleep(1);
 	}
@@ -1029,6 +1038,8 @@ bool vfStopSubmissionAndSealCtb(void *guc)
 			return false;
 		}
 		if (gVfProtocolFault)
+			return false;
+		if (!Gen11::pollVfGuCToHost(guc))
 			return false;
 		IOSleep(1);
 	}
@@ -2015,6 +2026,29 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				"__ZN8OSObject4freeEv");
 			PANIC_COND(!this->vfOSObjectFree, "ngreen",
 			           "Cannot resolve base destructor for failed VF workqueues");
+
+			// Tahoe's GuC factory releases the object after initWithOptions()
+			// already called virtual free() on the same failure path. XNU's
+			// OSObject::free() deletes the instance, so the second virtual dispatch
+			// dereferences freed storage. Keep the native cleanup and null return,
+			// but remove only that second dispatch in the UUID-pinned factory.
+			mach_vm_address_t gucFactory = 0, gucInit = 0;
+			KernelPatcher::SolveRequest gucFactoryBounds[] = {
+				{"__ZN13IGHardwareGuC11withOptionsEP16IntelAccelerator",
+				 gucFactory},
+				{"__ZN13IGHardwareGuC15initWithOptionsEP16IntelAccelerator",
+				 gucInit},
+			};
+			PANIC_COND(!patcher.solveMultiple(index, gucFactoryBounds, address, size) ||
+			           gucInit <= gucFactory || gucInit - gucFactory > 0x100,
+			           "ngreen", "Invalid VF GuC factory patch bounds");
+			LookupPatchPlus const gucFactoryPatch {
+				activeKext, NGVfGuCFactoryPatch::releaseAfterFailedInitFind,
+				NGVfGuCFactoryPatch::releaseAfterFailedInitReplace, 1,
+			};
+			PANIC_COND(!gucFactoryPatch.apply(
+			               patcher, gucFactory, gucInit - gucFactory), "ngreen",
+			           "Failed to remove VF GuC factory double destruction");
 			KernelPatcher::RouteRequest workQueueInitRoute[] = {
 				{"__ZN22IGHardwareGuCWorkQueue19initWithAcceleratorEP22IOGraphicsAccelerator2jP37UK_GEN11_SCHED_PROCESS_DESCRIPTOR_REC",
 				 vfWorkQueueInit, this->oVfWorkQueueInit},
@@ -2261,6 +2295,12 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				 vfCtbGucToHostAction},
 				{"__ZN13IGHardwareGuC32handleSoftwareGuCToHostInterruptEP22IOInterruptEventSourcei",
 				 vfSoftwareGuCInterrupt},
+				// startGraphicsEngine enables the bridge before GuC construction so
+				// CTB-backed allocations can wait for completions. Tahoe's native
+				// request method only appends to a list that enable() services once;
+				// immediately run callbacks registered after that one-shot boundary.
+				{"__ZN17IGInterruptBridge21requestEnableCallbackEP8OSObjectPFvS1_zE",
+				 vfRequestEnableCallback, this->oVfRequestEnableCallback},
 				// V237: 0xCEE8 is PF-owned.  A VF invalidates GuC translations
 				// through the asynchronous v70 CT action instead.
 				{"__ZN13IGHardwareGuC13invalidateTLBEv",
@@ -3858,8 +3898,7 @@ bool Gen11::vfMmioHostToGuCAction(void *that, const uint32_t *request,
 			// first GGTT/TLB transaction cannot wait on a lost edge. The native
 			// consumer and this path serialize on the same G2H lock.
 			(void)vfConsumeMemoryInterrupts();
-			vfSoftwareGuCInterrupt(that, nullptr, 0);
-			ok = gVfProtocolFault == 0;
+			ok = pollVfGuCToHost(that) && gVfProtocolFault == 0;
 			if (ok)
 				SYSLOG("ngreen", "V248: drained the VF CTB enable boundary before firmware allocations");
 		}
@@ -5101,24 +5140,53 @@ bool Gen11::vfInterruptFilterHandler(void *that, void *eventSource) {
 	return false;
 }
 
-void Gen11::vfSoftwareGuCInterrupt(void *that, IOInterruptEventSource *source, int count) {
-	(void)count;
-	if (!that || !vfCtbConsumerReady())
+void Gen11::vfRequestEnableCallback(void *that, OSObject *requestor,
+	                                void (*action)(OSObject *, ...)) {
+	if (!that || !requestor || !action || !callback ||
+	    !callback->oVfRequestEnableCallback) {
+		vfMarkProtocolFault("invalid VF interrupt enable callback registration");
 		return;
+	}
+
+	// IGInterruptBridge::enable() sets +0x8a8 and services its callback list
+	// exactly once. The VF must enable the bridge before GuC construction so
+	// CTB-backed allocations can receive completions; initInterrupts() therefore
+	// registers the GuC callback after the native one-shot list was cleared. Run
+	// such late callbacks synchronously, matching the already-enabled state and
+	// avoiding an orphan list entry/retain. Before enable, preserve the native
+	// list ownership and ordering unchanged.
+	if (getMember<uint8_t>(that, 0x8A8) != 0) {
+		action(requestor);
+		static uint32_t immediateCallbackLogs = 0;
+		if (immediateCallbackLogs++ < 16)
+			SYSLOG("ngreen", "V249: registered late VF GuC interrupt callback immediately");
+		return;
+	}
+
+	using RequestEnableCallback = void (*)(
+		void *, OSObject *, void (*)(OSObject *, ...));
+	reinterpret_cast<RequestEnableCallback>(
+		callback->oVfRequestEnableCallback)(that, requestor, action);
+}
+
+bool Gen11::vfDrainGuCToHost(void *that, IOInterruptEventSource *source,
+	                         bool synchronousPoll) {
+	if (!that || !vfCtbConsumerReady())
+		return false;
 	VfIrqCallbackGuard irqGuard;
 	if (!irqGuard || !gVfCtbCpuBase || gVfCtbStopped)
-		return;
+		return false;
 	auto *ctb = getMember<void *>(that, 0xA10);
 	if (!ctb || !callback->vfCtbSoftwareInterrupt) {
 		vfMarkProtocolFault("missing VF software CTB dispatcher");
-		return;
+		return false;
 	}
 	using CtbInterrupt = uint32_t (*)(void *);
 	const auto consume = reinterpret_cast<CtbInterrupt>(callback->vfCtbSoftwareInterrupt);
 	for (uint32_t drained = 0; drained < 256; drained++) {
 		uint32_t before = 0;
 		if (!vfG2HCtbPending(before))
-			return;
+			return gVfProtocolFault == 0;
 		// Retain the native consumer call boundary, but do not interpret the
 		// returned modern HXG action as legacy log-flush status bits.
 		(void)consume(ctb);
@@ -5126,7 +5194,7 @@ void Gen11::vfSoftwareGuCInterrupt(void *that, IOInterruptEventSource *source, i
 		// quarantine flag. Stop immediately; never feed later frames through a
 		// transport whose firmware/host state is already unknown.
 		if (gVfProtocolFault)
-			return;
+			return false;
 		uint32_t after = 0;
 		if (vfG2HCtbPending(after) && after == before) {
 			static uint32_t stalledLogs = 0;
@@ -5135,16 +5203,30 @@ void Gen11::vfSoftwareGuCInterrupt(void *that, IOInterruptEventSource *source, i
 				       after);
 			}
 			vfMarkProtocolFault("stalled GuC G2H descriptor");
-			return;
+			return false;
 		}
 	}
 	uint32_t head = 0;
 	if (vfG2HCtbPending(head)) {
-		if (source)
+		if (source && !synchronousPoll)
 			source->interruptOccurred(nullptr, nullptr, 0);
-		else
+		else if (!synchronousPoll)
 			vfMarkProtocolFault("G2H drain needs a software event source");
 	}
+	return gVfProtocolFault == 0;
+}
+
+bool Gen11::pollVfGuCToHost(void *that) {
+	// Every synchronous waiter has already proved it is outside the GuC
+	// workloop. A bounded direct drain closes the MSI lost-edge window without
+	// spinning: if more than one slice remains, the caller sleeps and polls the
+	// next slice on its following bounded wait iteration.
+	return vfDrainGuCToHost(that, nullptr, true);
+}
+
+void Gen11::vfSoftwareGuCInterrupt(void *that, IOInterruptEventSource *source, int count) {
+	(void)count;
+	(void)vfDrainGuCToHost(that, source, false);
 }
 
 void Gen11::vfEnableInterrupts(void *that) {

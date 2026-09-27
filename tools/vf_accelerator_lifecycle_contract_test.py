@@ -21,6 +21,8 @@ STREAMER_ERROR_ENABLE = "__ZN26IGHardwareCommandStreamer420enableErrorInterruptE
 STREAMER_ERROR_DISABLE = "__ZN26IGHardwareCommandStreamer421disableErrorInterruptEv"
 PCI_CONFIGURE_INTERRUPTS = "__ZN11IOPCIDevice19configureInterruptsEjjjj"
 SCHEDULER_INIT_FIRMWARE = "__ZN11IGScheduler12initFirmwareEv"
+REQUEST_ENABLE_CALLBACK = "__ZN17IGInterruptBridge21requestEnableCallbackEP8OSObjectPFvS1_zE"
+GUC_INIT_INTERRUPTS = "__ZN13IGHardwareGuC14initInterruptsEv"
 
 
 def macho_inventory(path):
@@ -136,6 +138,22 @@ def macho_inventory(path):
             raise AssertionError(
                 f"{path}: {scheduler_error} no longer owns the physical {streamer} call")
 
+    # enable() tests +0x8a8 at entry and jumps past its callback-list walk when
+    # it is already true. requestEnableCallback() merely appends to +0x8b8 and
+    # does not compensate for that one-shot boundary. GuC init registers only
+    # after creating its software event source, proving the VF wrapper must run
+    # a post-enable registration immediately.
+    enable_start = value(BRIDGE_ENABLE)
+    enable_body = image[enable_start:next_symbol(enable_start)]
+    if not enable_body.startswith(b"\x55\x48\x89\xe5\x41\x56\x53\x80\xbf\xa8\x08\x00\x00\x00"):
+        raise AssertionError(f"{path}: bridge enabled-state entry guard changed")
+    request_start = value(REQUEST_ENABLE_CALLBACK)
+    request_body = image[request_start:next_symbol(request_start)]
+    if b"\x49\x89\x9f\xb8\x08\x00\x00" not in request_body:
+        raise AssertionError(f"{path}: callback request no longer appends to +0x8b8")
+    if not direct_branches(GUC_INIT_INTERRUPTS, REQUEST_ENABLE_CALLBACK):
+        raise AssertionError(f"{path}: GuC init no longer registers through the bridge request")
+
     print(f"PASS: native bridge/IOAccel lifecycle order in {path}")
 
 
@@ -143,12 +161,11 @@ def function_body(source, signature):
     cursor = 0
     while True:
         start = source.index(signature, cursor)
-        opening = start + len(signature)
-        while opening < len(source) and source[opening].isspace():
-            opening += 1
-        if opening < len(source) and source[opening] == "{":
+        opening = source.find("{", start + len(signature))
+        declaration = source.find(";", start + len(signature))
+        if opening >= 0 and (declaration < 0 or opening < declaration):
             break
-        cursor = opening
+        cursor = start + len(signature)
     depth = 0
     for index in range(opening, len(source)):
         if source[index] == "{":
@@ -174,6 +191,7 @@ def source_contract(path):
         SCHEDULER_DISABLE,
         PCI_CONFIGURE_INTERRUPTS,
         SCHEDULER_INIT_FIRMWARE,
+        REQUEST_ENABLE_CALLBACK,
     )
     for token in required:
         if token not in source:
@@ -223,6 +241,15 @@ def source_contract(path):
     if "pciDevice, kIOInterruptTypePCIMessaged, 1, 1, 0" not in accelerator_start:
         raise AssertionError(f"{path}: VF MSI request is not exactly one required vector")
 
+    late_callback = function_body(
+        source, "void Gen11::vfRequestEnableCallback(void *that, OSObject *requestor,")
+    enabled = late_callback.index("getMember<uint8_t>(that, 0x8A8)")
+    immediate = late_callback.index("action(requestor)")
+    original = late_callback.index("callback->oVfRequestEnableCallback)(")
+    if not enabled < immediate < original:
+        raise AssertionError(
+            f"{path}: post-enable callback is not serviced before native queue fallback")
+
     quiesce = function_body(source, "bool vfQuiesceDeviceForShutdown(void *guc)")
     for token in (
             "if (!gVfCtbEverEnabled)",
@@ -265,12 +292,17 @@ def source_contract(path):
         "bool Gen11::vfMmioHostToGuCAction(void *that, const uint32_t *request,")
     configured = source.index("vfConfigureModernCtb(", mmio_start)
     consume = source.index("vfConsumeMemoryInterrupts()", configured)
-    drain = source.index(
-        "vfSoftwareGuCInterrupt(that, nullptr, 0)", consume)
+    drain = source.index("pollVfGuCToHost(that)", consume)
     response = source.index("NGVfLegacyCtb::responseStatus(ok)", drain)
     if not configured < consume < drain < response:
         raise AssertionError(
             f"{path}: CTB enable-boundary drain is not ordered before success")
+    for signature in (
+            "bool vfInvalidateTLBSync(void *guc)",
+            "bool vfWaitForContextState(void *guc, uint16_t gucId, VfGucContextState wanted)",
+            "bool vfWaitForContextTransition(void *guc, uint16_t gucId, uint32_t lrcaPage,"):
+        if "pollVfGuCToHost(guc)" not in function_body(source, signature):
+            raise AssertionError(f"{path}: synchronous GuC wait lacks bounded G2H polling: {signature}")
     print(f"PASS: VF wrapper preserves native bridge/IOAccel lifecycle in {path}")
 
 

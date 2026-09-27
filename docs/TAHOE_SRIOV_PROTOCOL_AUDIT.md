@@ -3141,3 +3141,61 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   `/tmp/ngreen-static.MaBknS`. A fresh CI-built macOS artifact and controlled
   runtime are still required; this checkpoint does not claim a completed GuC
   command or Metal acceleration.
+
+### Service late GuC IRQ registration and poll synchronous completions
+
+- Commit `8bf2f49` passed GitHub Actions run `36294970584`; its x86_64 kext
+  UUID is `C3443889-1C07-30B9-B177-797666A04FA6`, executable SHA-256 is
+  `916707f7e8c48a85c5a2593047608307949071487a75797ae6f6f0a462a9daed`
+  and the correctly path-bound candidate AuxKC SHA-256 is
+  `227eed7bc9f53a4f927d30b4d26603a6f1e474b32b72872cf207b69c9768fce3`.
+  Building an earlier candidate from a temporary kext path caused Lilu to
+  return `TooLate` on manual load; rebuilding from its final
+  `/Library/Extensions/NootedGreen.kext` path restored early patch admission.
+  This is now a deployment invariant, not a driver workaround.
+- The watchdog-bounded corrected load reached CTB registration and the first
+  proxy-context GGTT mapping, then timed out its sequence-zero `TLB_DONE` wait.
+  No memory-IRQ or mapped-stage log preceded the timeout. The guest was
+  isolated by its watchdog. On the next boot the preserved panic
+  `Kernel-2026-09-27-125343.panic` has SHA-256
+  `63cb332f475c63722e9004510007f753890de2bbbc2e3ffa054363b1029eda80`;
+  it is a null-vtable call at `IGHardwareGuC::withOptions+0x3b` during the
+  partial-init failure path. Evidence is retained under
+  `build/diagnostics/8bf2f49-runtime2` in the VM workspace.
+- Complete bridge disassembly identifies the lost completion owner.
+  `IGInterruptBridge::enable()` tests byte `+0x8a8` at entry and returns
+  immediately when already enabled. Its first invocation walks and clears the
+  requestor list at `+0x8b8`. Later, `IGHardwareGuC::initInterrupts()` creates
+  the software event source and calls `requestEnableCallback()`, but that
+  method only retains and appends the GuC requestor to `+0x8b8`; it never
+  observes the already-enabled state. The early bridge ordering therefore
+  made the GuC hardware callback permanently unreachable.
+- A VF-only route now preserves native queuing before bridge enable and invokes
+  callbacks synchronously only when `+0x8a8` is already set. The native GuC
+  callback then executes its complete `registerForInterruptType()` path:
+  provider registration, source enable and service-handler publication are
+  retained. The wrapper does not add a list node or retain in the immediate
+  case, so no orphan requestor survives teardown. Pinned binary contracts prove
+  the native one-shot guard, list append and GuC call edge in both payloads.
+- MSI remains the normal asynchronous path. Every synchronous TLB/context
+  waiter, H2G backpressure loop and final CTB drain now also invokes the same
+  lock-serialized G2H consumer in bounded 256-frame slices before sleeping.
+  This matches the explicit current-i915 event-handler boundary and prevents a
+  coalesced/lost edge from stranding a synchronous firmware transaction. The
+  poll is forbidden on the GuC workloop by the existing wait admission check;
+  it neither spins nor bypasses message validation, reply-credit accounting or
+  protocol quarantine.
+- The panic exposed an independent native Tahoe cleanup defect. Every
+  `IGHardwareGuC::initWithOptions()` failure converges on a virtual `free()`;
+  XNU `OSObject::free()` deletes the object. `IGHardwareGuC::withOptions()` then
+  made a second virtual `release()` through that freed object before returning
+  null. A VF-only, UUID- and symbol-bounded nine-byte patch removes exactly the
+  second dispatch. Native cleanup and the following null return remain intact;
+  the success path is unchanged. Offline tests require the exact factory and
+  init failure anchors in both admitted binaries.
+- The route inventory is now 63 unique symbols (60 accelerator, three
+  framebuffer). Full syntax, zero-finding Clang analyzer, strict ABI, Mach-O,
+  exhaustive protocol and sanitizer tests pass in
+  `/tmp/ngreen-static.n434NF`. This checkpoint still does not claim a completed
+  `TLB_DONE`, GuC context lifecycle, submitted GPU command or Metal result;
+  those require the next CI-built watchdog-contained runtime.

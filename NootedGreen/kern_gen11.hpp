@@ -64,7 +64,13 @@ private:
 	static void vfSoftwareGuCInterrupt(void *that,
 	                                   IOInterruptEventSource *source,
 	                                   int count);
+	static bool vfDrainGuCToHost(void *that,
+	                            IOInterruptEventSource *source,
+	                            bool synchronousPoll);
 	mach_vm_address_t vfCtbSoftwareInterrupt {};
+	static void vfRequestEnableCallback(void *that, OSObject *requestor,
+	                                    void (*action)(OSObject *, ...));
+	mach_vm_address_t oVfRequestEnableCallback {};
 	static void vfInvalidateTLB(void *that);
 	static void vfBaseInvalidateTLB(const void *that);
 	static bool vfInterruptFilterHandler(void *that, void *eventSource);
@@ -151,6 +157,7 @@ private:
 public:
 	void init();
 	static Gen11 *callback;
+	static bool pollVfGuCToHost(void *that);
 	bool processKext(KernelPatcher &patcher, size_t index,
 	                 mach_vm_address_t address, size_t size);
 };
