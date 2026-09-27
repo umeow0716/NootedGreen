@@ -2792,3 +2792,24 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   syntax/analyzer/strict-ABI/sanitizer suite passes in
   `/tmp/ngreen-static.sFdng4`. HookCase build/artifact stages and all seven
   files were removed; history remains the recovery path. The VM stayed off.
+
+### Close physical-generation admission and DSB partial-map boundaries
+
+- The UUID-pinned TGL accelerator previously admitted every classified
+  physical function. A later-generation PF could therefore receive the RPL-VF
+  unaligned-store patch and then execute the remainder of Apple's TGL-native
+  register path. Admission now accepts only a native TGL PF or a VF using the
+  separately checked virtualization bridge. The full 65,536-ID capability
+  model proves that every VF remains eligible for the later transport gate,
+  while only exact TGL IDs are eligible as physical functions.
+- The TGL DSB provider formerly checked only the first physical page before
+  beginning 18 GGTT PTE writes. A physically contiguous allocation whose last
+  page exceeded the encoder mask could fail after a partial mapping. It now
+  validates the complete aligned interval and precomputes every PTE before the
+  first store; readback failure still restores every old entry before the
+  backing can be released. Boundary and overflow cases are part of the pure
+  provider test.
+- The now-unreachable later-generation physical `MultiForceWakeSelect`
+  mutation was removed. A non-TGL PF is rejected before personality
+  publication rather than retaining dead code that implied unimplemented PF
+  compatibility.

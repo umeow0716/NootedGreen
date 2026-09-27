@@ -27,6 +27,16 @@ int main()
 	assert((pte & 0x1E) == 0); // no LM/VFID bits from HookCase's former | 7
 	assert(!encodeGgttPte(0x12345001, pte));
 	assert(!encodeGgttPte(1ULL << 46U, pte));
+	assert(validGgttPhysicalRange(0x1000, dsbBytes));
+	assert(validGgttPhysicalRange(
+		gen12PteAddressMask - dsbBytes + pageBytes, dsbBytes));
+	assert(!validGgttPhysicalRange(0, 0));
+	assert(!validGgttPhysicalRange(1, dsbBytes));
+	assert(!validGgttPhysicalRange(0x1000, dsbBytes - 1));
+	assert(!validGgttPhysicalRange(
+		gen12PteAddressMask - dsbBytes + 2 * pageBytes, dsbBytes));
+	assert(!validGgttPhysicalRange(UINT64_MAX & ~(pageBytes - 1U),
+		dsbBytes));
 
 	assert(portMode(0, 0, false) == 1);
 	assert(portMode(1, 0, false) == 1);

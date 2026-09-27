@@ -142,39 +142,34 @@ IOReturn setupDsbMemory(void *owner)
 	IOByteCount segmentBytes = 0;
 	const uint64_t physical = buffer->getPhysicalSegment(
 		0, &segmentBytes, kIOMemoryMapperNone);
-	uint64_t firstPte = 0;
 	if (!physical || segmentBytes < size ||
-	    !NGTglCompat::encodeGgttPte(physical, firstPte)) {
+	    !NGTglCompat::validGgttPhysicalRange(physical, size)) {
 		releaseFailedDsbBuffer(buffer);
 		return kIOReturnNoSpace;
 	}
 
 	uint64_t oldPtes[kDsbPageCount] {};
+	uint64_t newPtes[kDsbPageCount] {};
 	volatile uint64_t *entries[kDsbPageCount] {};
 	for (size_t page = 0; page < kDsbPageCount; page++) {
 		const uint64_t pteOffset =
 			(gpuOffset + page * NGTglCompat::pageBytes) >> 9U;
 		entries[page] = reinterpret_cast<volatile uint64_t *>(gtt + pteOffset);
 		oldPtes[page] = *entries[page];
-	}
-
-	for (size_t page = 0; page < kDsbPageCount; page++) {
-		uint64_t pte = 0;
+		// The complete physical interval was admitted above. Precompute every
+		// value anyway so no GGTT store can precede an encoding failure.
 		if (!NGTglCompat::encodeGgttPte(
-			    physical + page * NGTglCompat::pageBytes, pte)) {
-			for (size_t restore = 0; restore < page; restore++)
-				*entries[restore] = oldPtes[restore];
+			    physical + page * NGTglCompat::pageBytes, newPtes[page])) {
 			releaseFailedDsbBuffer(buffer);
 			return kIOReturnNoSpace;
 		}
-		*entries[page] = pte;
 	}
+
+	for (size_t page = 0; page < kDsbPageCount; page++)
+		*entries[page] = newPtes[page];
 	__sync_synchronize();
 	for (size_t page = 0; page < kDsbPageCount; page++) {
-		uint64_t expected = 0;
-		(void)NGTglCompat::encodeGgttPte(
-			physical + page * NGTglCompat::pageBytes, expected);
-		if (*entries[page] != expected) {
+		if (*entries[page] != newPtes[page]) {
 			for (size_t restore = 0; restore < kDsbPageCount; restore++)
 				*entries[restore] = oldPtes[restore];
 			__sync_synchronize();

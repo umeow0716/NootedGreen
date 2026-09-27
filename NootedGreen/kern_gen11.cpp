@@ -1796,6 +1796,9 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		const bool vfActive = identity == VfIdentity::Virtual;
 		const bool tglGeneration = NGGpuCapabilities::isTigerLake(
 			NGreen::callback->getOriginalDeviceId());
+		PANIC_COND(!NGGpuCapabilities::supportsPinnedTigerLakePayload(
+			NGreen::callback->getOriginalDeviceId(), vfActive), "ngreen",
+			"Refusing TGL native accelerator payload on a non-TGL physical function");
 		// The payload is patched before its personality is published. Complete the
 		// one-shot VF bootstrap here so every embedded fuse immediate comes from
 		// the same PF snapshot that owns this VF's GuC/GGTT assignment.
@@ -2851,22 +2854,6 @@ bool Gen11::start(void *that, void *provider)
 			vfMarkProtocolFault("failed to disable PF-owned VF scheduler fallbacks");
 			return false;
 		}
-	} else if (!NGreen::callback->isRealTGL) {
-		// Later physical generations require the accelerator-local force-wake
-		// path. Keep this as a property selection; do not program GT registers
-		// before Apple's native start has established engine ownership.
-		auto *current =
-			OSDynamicCast(OSDictionary, service->getProperty("Development"));
-		auto *development = current ?
-			OSDictionary::withDictionary(current) :
-			OSDictionary::withCapacity(1);
-		auto *enabled = OSNumber::withNumber(1ULL, 32);
-		if (development && enabled) {
-			development->setObject("MultiForceWakeSelect", enabled);
-			service->setProperty("Development", development);
-		}
-		OSSafeReleaseNULL(enabled);
-		OSSafeReleaseNULL(development);
 	}
 
 	const auto result = FunctionCast(start, callback->ostart)(that, provider);

@@ -35,6 +35,16 @@ inline bool encodeGgttPte(uint64_t physical, uint64_t &pte)
 	return true;
 }
 
+inline bool validGgttPhysicalRange(uint64_t physical, uint64_t bytes)
+{
+	if (!bytes || (bytes & (pageBytes - 1U)) != 0 ||
+	    bytes - pageBytes > UINT64_MAX - physical)
+		return false;
+	uint64_t first = 0, last = 0;
+	return encodeGgttPte(physical, first) &&
+	       encodeGgttPte(physical + bytes - pageBytes, last);
+}
+
 inline uint32_t portMode(uint32_t portType, uint32_t flexDpsp,
                          bool registerValid)
 {

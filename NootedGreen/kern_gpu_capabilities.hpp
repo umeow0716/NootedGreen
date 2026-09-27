@@ -46,6 +46,15 @@ inline bool useNativeTigerLakePath(uint32_t device, bool physicalFunction) {
     return physicalFunction && isTigerLake(device);
 }
 
+// The UUID-pinned TGL accelerator payload may run natively only on a TGL PF.
+// A VF may use the separately admitted virtualization bridge because its
+// physical generation is represented by relayed PF capabilities instead of
+// direct access to generation-specific GT state. A later-generation PF must
+// never fall through the VF compatibility patches into TGL native MMIO.
+inline bool supportsPinnedTigerLakePayload(uint32_t device, bool virtualFunction) {
+    return virtualFunction || isTigerLake(device);
+}
+
 // Fixed VF BAR0 allowlist from i915 intel_uncore.c:vf_accessible_regs.
 // GGTT PTEs use the separately validated direct aperture and are not MMIO regs.
 inline bool isVfMmioRegister(uint32_t offset) {

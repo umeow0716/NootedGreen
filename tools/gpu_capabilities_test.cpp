@@ -21,6 +21,11 @@ int main() {
     assert(useNativeTigerLakePath(0x9A49, true));
     assert(!useNativeTigerLakePath(0x9A49, false));
     assert(!useNativeTigerLakePath(0xA7A8, true));
+    assert(supportsPinnedTigerLakePayload(0x9A49, false));
+    assert(supportsPinnedTigerLakePayload(0x9A49, true));
+    assert(!supportsPinnedTigerLakePayload(0xA7A8, false));
+    assert(supportsPinnedTigerLakePayload(0xA7A8, true));
+    assert(!supportsPinnedTigerLakePayload(0, false));
     assert(isVfMmioRegister(0x190010));
     assert(isVfMmioRegister(0x190240));
     assert(isVfMmioRegister(0x19024C));
@@ -60,6 +65,8 @@ int main() {
         directGgtt += hasKnownDirectVfGgtt(id);
         assert(useNativeTigerLakePath(id, false) == false);
         assert(useNativeTigerLakePath(id, true) == isTigerLake(id));
+        assert(supportsPinnedTigerLakePayload(id, false) == isTigerLake(id));
+        assert(supportsPinnedTigerLakePayload(id, true));
 #ifdef NGREEN_REFERENCE_PCIIDS
         bool expectedDirect = false;
         for (auto known : directGgttIds) expectedDirect |= known == id;
