@@ -45,6 +45,10 @@ GUC_REGISTER_INTERRUPTS = "__ZN13IGHardwareGuC21registerForInterruptsEv"
 BRIDGE_REGISTER_TYPE = "__ZN17IGInterruptBridge24registerForInterruptTypeEjPFvP8OSObjectPvES1_S2_PS2_"
 GUC_WITH_OPTIONS = "__ZN13IGHardwareGuC11withOptionsEP16IntelAccelerator"
 GUC_INIT_WITH_OPTIONS = "__ZN13IGHardwareGuC15initWithOptionsEP16IntelAccelerator"
+GUC_INIT_SCHED_CONTROL = "__ZN13IGHardwareGuC16initSchedControlEv"
+GUC_SETUP_CONTEXT_POOL = "__ZN13IGHardwareGuC16setupContextPoolEi"
+GUC_SETUP_LOG_BUFFERS = "__ZN13IGHardwareGuC15setupLogBuffersEjiii"
+GUC_SETUP_ADDITIONAL = "__ZN13IGHardwareGuC26setupAdditionalDataStructsEv"
 GUC_INIT_WORK_HISTORY = "__ZN13IGHardwareGuC19initWorkItemHistoryEj"
 GUC_INIT_DOORBELLS = "__ZN13IGHardwareGuC13initDoorbellsEv"
 GUC_READ_DOORBELLS = "__ZN13IGHardwareGuC23readDoorbellSQIDIConfigEv"
@@ -195,6 +199,15 @@ def macho_inventory(path):
         (GUC_INIT_WITH_OPTIONS, GUC_LOAD_BINARY),
         (GUC_INIT_WITH_OPTIONS, GUC_REGISTER_CTB),
         (GUC_INIT_WITH_OPTIONS, CREATE_UK_CONTEXT),
+        (GUC_INIT_SCHED_CONTROL, GUC_SETUP_CONTEXT_POOL),
+        (GUC_INIT_SCHED_CONTROL, GUC_SETUP_LOG_BUFFERS),
+        (GUC_INIT_SCHED_CONTROL, GUC_SETUP_ADDITIONAL),
+        (GUC_SETUP_CONTEXT_POOL, MAPPED_WITH_OPTIONS),
+        (GUC_SETUP_CONTEXT_POOL, TRANSFER_OWNERSHIP),
+        (GUC_SETUP_LOG_BUFFERS, MAPPED_WITH_OPTIONS),
+        (GUC_SETUP_LOG_BUFFERS, TRANSFER_OWNERSHIP),
+        (GUC_SETUP_ADDITIONAL, MAPPED_WITH_OPTIONS),
+        (GUC_SETUP_ADDITIONAL, TRANSFER_OWNERSHIP),
         (GUC_INIT_WORK_HISTORY, MAPPED_WITH_OPTIONS),
         (GUC_INIT_DOORBELLS, GUC_READ_DOORBELLS),
         (MAPPED_WITH_OPTIONS, MAPPED_INIT),
@@ -441,6 +454,7 @@ def source_contract(path):
             pci_resolution.index(PCI_CONFIGURE_INTERRUPTS)):
         raise AssertionError(f"{path}: IOPCIFamily symbol is incorrectly resolved from KernelID")
     for token in (
+            GUC_INIT_SCHED_CONTROL,
             GUC_LOAD_BINARY,
             GUC_INIT_DOORBELLS,
             CTB_INIT,
@@ -457,6 +471,19 @@ def source_contract(path):
         if token not in pci_resolution:
             raise AssertionError(
                 f"{path}: retained native bootstrap descendant is not VF-routed: {token}")
+
+    load_guc = function_body(source, "bool Gen11::loadGuCBinary(void *that)")
+    for token in (
+            "callback->orgInitSchedControl",
+            "getMember<void *>(that, 0x50)",
+            "getMember<void *>(that, 0x68)",
+            "getMember<void *>(that, 0x60)",
+            "getMember<void *>(that, 0x70)",
+            "getMember<void *>(that, 0x78)",
+            "getMember<void *>(that, 0x9E8)"):
+        if token not in load_guc:
+            raise AssertionError(
+                f"{path}: native VF scheduler storage contract is incomplete: {token}")
 
     memory_routes_start = pci_resolution.index(
         "KernelPatcher::RouteRequest memoryIrqRoutes[]")
