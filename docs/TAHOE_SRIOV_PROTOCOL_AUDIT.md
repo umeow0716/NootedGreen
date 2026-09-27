@@ -2651,3 +2651,36 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   retained for the rest of the boot before returning. The known table record
   was already retained, but that alone did not protect a mismatching second
   object from native destruction and possible late GuC DMA.
+
+### Complete void DMA and ownership failure boundaries
+
+- The same rule also applies before detach can acquire its H2G queue or even
+  reach valid context bookkeeping. Those early paths now recover and retain a
+  discoverable image backing before recording a protocol fault; a void native
+  caller can no longer release untracked pages immediately after the wrapper
+  returns.
+- Both `IGHardwareGuC::invalidateTLB()` and `IGGuC::invalidateTLB()` are void.
+  Their pinned native callers immediately continue updating or retiring shared
+  GPU data and never observe a result. Before CTB has ever run they retain
+  i915's pre-ready no-op, and after final device quiescence no second request is
+  needed. At every live post-CTB boundary, however, a failed heavy GuC
+  invalidation is now fail-stop instead of returning with stale translations.
+- `IntelAccelerator::transferOwnership()` is likewise void. Native is a no-op
+  when legacy ownership flag `0x20` is clear, which remains the admitted VF
+  behavior. If that flag is unexpectedly set, the replacement now fails before
+  one of its many callers can continue as if the unsupported PCI-config page
+  ownership exchange had succeeded.
+
+### Route the exact framebuffer ABI for each admitted UUID
+
+- Offline Mach-O symbol-table inventory found 60 unique installed private
+  routes: 57 accelerator symbols and three framebuffer symbols. Every symbol
+  must be unique in its applicable pinned payload, and both accelerator bundle
+  variants must agree on its address.
+- The production framebuffer UUID defines
+  `AppleIntelFramebufferController::probe(IOService*, int*)`; the debug UUID
+  instead exposes `AppleIntelBaseController::probe(IOService*, int*)`. The old
+  VF containment batch always requested the debug symbol, so production would
+  panic during routing rather than reject the physical framebuffer cleanly.
+  UUID validation now precedes containment, and each payload routes its own
+  exact probe plus the common framebuffer-controller start entry.

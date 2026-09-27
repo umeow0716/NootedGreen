@@ -1711,27 +1711,42 @@ static bool vfRejectPhysicalFramebufferStart(void *, void *) {
 bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t address, size_t size) {
 	const bool physicalFramebuffer = index == kextG11FBT.loadIndex ||
 		index == kextG11FBTA.loadIndex;
+	const auto *image = reinterpret_cast<const uint8_t *>(address);
+	const bool framebufferProduction = physicalFramebuffer &&
+		NGBinaryIdentity::matchesKextUuid(
+			image, size, NGBinaryIdentity::tglFramebufferProductionUuid);
+	const bool framebufferDebug = physicalFramebuffer &&
+		NGBinaryIdentity::matchesKextUuid(
+			image, size, NGBinaryIdentity::tglFramebufferDebugUuid);
+	PANIC_COND(physicalFramebuffer && !framebufferProduction && !framebufferDebug,
+		"ngreen", "Unsupported TGL framebuffer payload ABI; refusing private-layout routes");
 	if (physicalFramebuffer && !ngPhysicalGpuAccessAllowed()) {
 		// A VF has no physical display controller. Refusing only DMC or MMIO
-		// helpers is too late: native probe/start have their own raw accesses.
-		// This is admission rejection, not a virtual framebuffer implementation.
-		KernelPatcher::RouteRequest reject[] = {
-			{"__ZN24AppleIntelBaseController5probeEP9IOServicePi", vfRejectPhysicalFramebufferProbe},
-			{"__ZN31AppleIntelFramebufferController5startEP9IOService", vfRejectPhysicalFramebufferStart},
-		};
-		PANIC_COND(!patcher.routeMultiple(index, reject, address, size),
-			"ngreen", "Cannot contain physical framebuffer on VF/unknown device");
+		// helpers is too late: native probe/start have their own raw accesses. The
+		// production payload overrides probe in AppleIntelFramebufferController,
+		// while the debug payload inherits its AppleIntelBaseController override;
+		// install the UUID-specific entry instead of requiring a symbol absent from
+		// the production binary. This is admission rejection, not a virtual
+		// framebuffer implementation.
+		if (framebufferProduction) {
+			KernelPatcher::RouteRequest reject[] = {
+				{"__ZN31AppleIntelFramebufferController5probeEP9IOServicePi", vfRejectPhysicalFramebufferProbe},
+				{"__ZN31AppleIntelFramebufferController5startEP9IOService", vfRejectPhysicalFramebufferStart},
+			};
+			PANIC_COND(!patcher.routeMultiple(index, reject, address, size),
+				"ngreen", "Cannot contain production physical framebuffer on VF");
+		} else {
+			KernelPatcher::RouteRequest reject[] = {
+				{"__ZN24AppleIntelBaseController5probeEP9IOServicePi", vfRejectPhysicalFramebufferProbe},
+				{"__ZN31AppleIntelFramebufferController5startEP9IOService", vfRejectPhysicalFramebufferStart},
+			};
+			PANIC_COND(!patcher.routeMultiple(index, reject, address, size),
+				"ngreen", "Cannot contain debug physical framebuffer on VF");
+		}
 		SYSLOG("ngreen", "Physical framebuffer probe/start rejected for VF/unknown device");
 		return true;
 	}
 	if (kextG11FBT.loadIndex == index || kextG11FBTA.loadIndex == index) {
-		const auto *image = reinterpret_cast<const uint8_t *>(address);
-		const bool isprod = NGBinaryIdentity::matchesKextUuid(
-			image, size, NGBinaryIdentity::tglFramebufferProductionUuid);
-		const bool isdebug = NGBinaryIdentity::matchesKextUuid(
-			image, size, NGBinaryIdentity::tglFramebufferDebugUuid);
-		PANIC_COND(!isprod && !isdebug, "ngreen",
-			"Unsupported TGL framebuffer payload ABI; refusing private-layout routes");
 		auto *activeKext = (kextG11FBTA.loadIndex == index) ? &kextG11FBTA : &kextG11FBT;
 		PANIC_COND(!NGreen::callback->setRMMIOIfNecessary(), "ngreen", "Cannot map TGL framebuffer BAR0");
 		SYSLOG("ngreen", "init AppleIntelTGLGraphicsFramebuffer");
@@ -1749,7 +1764,7 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		               index, read64SymbolBounds, address, size) ||
 		           read64End <= read64Start || read64End - read64Start > 0x100,
 		           "ngreen", "Invalid ReadRegister64 patch bounds");
-		LookupPatchPlus const read64Bounds = isprod ?
+		LookupPatchPlus const read64Bounds = framebufferProduction ?
 			LookupPatchPlus {activeKext, NGFramebufferPatch::productionFind,
 			 NGFramebufferPatch::productionReplace, 1} :
 			LookupPatchPlus {activeKext, NGFramebufferPatch::debugFind,
@@ -3458,10 +3473,12 @@ void Gen11::vfTransferOwnership(void *that, const void *backing, int owner) {
 	(void)owner;
 	// Native transferOwnership is itself a no-op without flag 0x20. With it,
 	// it sends per-page commands through PCI config 0xf8/0xfc, not the Intel
-	// SR-IOV protocol. Never let a legacy ownership mechanism act on VF pages.
-	if (!that || gVfIdentity != VfIdentity::Virtual ||
-	    (getMember<uint8_t>(that, 0x1190) & 0x20U))
-		vfMarkProtocolFault("unsupported legacy VF page-ownership transfer");
+	// SR-IOV protocol. This ABI is void, so merely recording a fault would let
+	// its many native callers continue as if ownership had changed. Fail before
+	// any caller can publish or release pages under that false assumption.
+	PANIC_COND(!that || gVfIdentity != VfIdentity::Virtual ||
+		(getMember<uint8_t>(that, 0x1190) & 0x20U), "ngreen",
+		"Unsupported legacy page-ownership transfer on a VF");
 }
 
 bool Gen11::vfLegacyHostToGuCAction(void *that, const uint32_t *request,
@@ -3904,7 +3921,20 @@ bool Gen11::vfAttachContextDesc(void *that, const uint32_t *descriptor) {
 void Gen11::vfDetachContextDesc(void *that, const uint32_t *descriptor) {
 	VfContextOperationGuard operationGuard;
 	const bool postShutdown = !operationGuard;
+	OSObject *contextBacking = nullptr;
+	if (descriptor) {
+		auto *hardwareContext = const_cast<uint8_t *>(
+			reinterpret_cast<const uint8_t *>(descriptor) -
+			kVfContextDescriptorOffset);
+		contextBacking = reinterpret_cast<OSObject *>(
+			getMember<void *>(hardwareContext, kVfContextImageBufferOffset));
+	}
 	if (!that || !descriptor || !gVfGGTTReady || !gVfContextLock || !gVfContexts) {
+		// A void caller will proceed with hardware-context destruction. Even if
+		// bookkeeping itself is missing, retain any discoverable image before
+		// returning so late GuC DMA cannot target freed memory.
+		if (contextBacking)
+			contextBacking->retain();
 		vfMarkProtocolFault("VF detach without valid context bookkeeping");
 		return;
 	}
@@ -3916,11 +3946,6 @@ void Gen11::vfDetachContextDesc(void *that, const uint32_t *descriptor) {
 	const uint32_t descriptorLo = descriptorValue.low;
 	const uint32_t descriptorHi = descriptorValue.high;
 	const uint32_t lrcaPage = descriptorAttributes.lrcaPage;
-	auto *hardwareContext = const_cast<uint8_t *>(
-		reinterpret_cast<const uint8_t *>(descriptor) -
-		kVfContextDescriptorOffset);
-	auto *contextBacking = reinterpret_cast<OSObject *>(
-		getMember<void *>(hardwareContext, kVfContextImageBufferOffset));
 	const uint64_t contextBytes = contextBacking ?
 		getMember<uint64_t>(contextBacking, kVfMappedBufferLengthOffset) : 0;
 	if (!descriptorAttributes.valid || !contextBacking ||
@@ -3975,6 +4000,10 @@ void Gen11::vfDetachContextDesc(void *that, const uint32_t *descriptor) {
 	bool identityMismatch = false;
 	VfContextQueueGuard queue(that);
 	if (!queue.get()) {
+		// Without the queue lock no table lookup can prove that a retained record
+		// belongs to this descriptor. Quarantine the caller-visible image before
+		// the void native teardown releases it.
+		contextBacking->retain();
 		vfMarkProtocolFault("context retirement without pinned H2G queue");
 		return;
 	}
@@ -4501,7 +4530,15 @@ void Gen11::vfCtbChannelInit(void *that) {
 }
 
 void Gen11::vfInvalidateTLB(void *that) {
-	(void)vfInvalidateTLBSync(that);
+	OSSynchronizeIO();
+	if (!gVfCtbEverEnabled || gVfDmaQuiesced)
+		return;
+	// The native ABI is void and callers immediately continue updating or
+	// retiring shared GPU data. A failed synchronous invalidation cannot be
+	// reported, so returning would permit stale translations to outlive their
+	// backing.
+	PANIC_COND(!that || !vfInvalidateTLBSync(that), "ngreen",
+		"Required IGHardwareGuC VF TLB invalidation did not complete");
 }
 
 void Gen11::vfBaseInvalidateTLB(const void *that) {
@@ -4517,8 +4554,8 @@ void Gen11::vfBaseInvalidateTLB(const void *that) {
 		return;
 	if (gVfDmaQuiesced)
 		return;
-	if (!gVfHardwareGuc || !vfInvalidateTLBSync(gVfHardwareGuc))
-		vfMarkProtocolFault("IGGuC GGTT invalidation did not complete");
+	PANIC_COND(!gVfHardwareGuc || !vfInvalidateTLBSync(gVfHardwareGuc),
+		"ngreen", "Required IGGuC VF TLB invalidation did not complete");
 }
 
 bool Gen11::vfCtbGucToHostAction(void *that, uint32_t *message) {

@@ -72,6 +72,16 @@ if python3 tools/personality_contract_test.py \
 else
     failed=1
 fi
+if python3 tools/route_symbol_contract_test.py \
+    NootedGreen/kern_gen11.cpp \
+    sle_Internal/le/AppleIntelTGLGraphics.kext/Contents/MacOS/AppleIntelTGLGraphics \
+    sle_Internal/sle/AppleIntelTGLGraphics.kext/Contents/MacOS/AppleIntelTGLGraphics \
+    sle_Internal/lep/AppleIntelTGLGraphicsFramebuffer.kext/Contents/MacOS/AppleIntelTGLGraphicsFramebuffer \
+    sle_Internal/le/AppleIntelTGLGraphicsFramebuffer.kext/Contents/MacOS/AppleIntelTGLGraphicsFramebuffer; then
+    printf 'PASS offline routed-symbol contract tests\n'
+else
+    failed=1
+fi
 if "$compiler" -std=c++14 -O1 -g -fsanitize=address,undefined \
     tools/ggtt_init_bounds_test.cpp -o "$task_output/ggtt-init-bounds-test" && \
     "$task_output/ggtt-init-bounds-test"; then
