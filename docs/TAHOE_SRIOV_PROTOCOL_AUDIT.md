@@ -2494,3 +2494,26 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   removed from the plugin plist. No source, build tool or runtime path consumed
   them, and their advertised ICL fallback contradicted the UUID-pinned TGL-only
   implementation.
+
+### Remove unadmitted global media/model mutations
+
+- The remaining `DYLDPatches` path was not a GPU transport shim. By default it
+  routed the kernel-wide `_cs_validate_page`, published a fabricated Mac Pro
+  board ID and rewrote matching Tahoe shared-cache pages from `board-id` or
+  `hw.model` lookups to that property. It also rewrote a composite DRM model
+  string using the current SMBIOS bytes without shared-cache UUID/build
+  admission.
+- The target iMac20,2 identity already has Intel media support, and the cloned
+  TGL accelerator personality now preserves the exact HEVC decode/encode
+  capability dictionaries. Keeping a second unversioned model spoof would make
+  VideoToolbox results impossible to attribute and expand every process's
+  code-signing-page attack surface. The route, fake property, boot argument,
+  bundle logs, source files and Xcode entries were removed.
+- The AppleGraphicsDevicePolicy `board-id` to `applehax` whole-image string
+  patch had the same problem: no Tahoe binary identity, no VF ownership role
+  and no headless-accelerator requirement. Its kext registration and mutation
+  were removed too. Native AGDP policy is now authoritative.
+- `kern_model.hpp` was also deleted after confirming its entire cosmetic
+  device-name table and `getBranding` function had no consumer. Capability
+  admission remains in the tested `kern_gpu_capabilities.hpp` tables instead
+  of a second stale supported-device-looking list.

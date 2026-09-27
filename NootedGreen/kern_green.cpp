@@ -3,9 +3,6 @@
 
 #include "kern_green.hpp"
 #include "kern_gen11.hpp"
-#include "kern_model.hpp"
-#include "DYLDPatches.hpp"
-#include "kern_patcherplus.hpp"
 #include "kern_pci_identity.hpp"
 #include "kern_gpu_capabilities.hpp"
 #include "kern_dvmt_patch.hpp"
@@ -16,18 +13,12 @@
 
 
 static const char *pathIOAcceleratorFamily2= "/System/Library/Extensions/IOAcceleratorFamily2.kext/Contents/MacOS/IOAcceleratorFamily2";
-static const char *pathAGDP = "/System/Library/Extensions/AppleGraphicsControl.kext/Contents/PlugIns/"
-							  "AppleGraphicsDevicePolicy.kext/Contents/MacOS/AppleGraphicsDevicePolicy";
-
-static KernelPatcher::KextInfo kextAGDP {"com.apple.driver.AppleGraphicsDevicePolicy", &pathAGDP, 1, {true}, {},
-	KernelPatcher::KextInfo::Unloaded};
 static KernelPatcher::KextInfo kextIOAcceleratorFamily2 { "com.apple.iokit.IOAcceleratorFamily2", &pathIOAcceleratorFamily2, 1, {true}, {},
 	KernelPatcher::KextInfo::Unloaded };
 
 NGreen *NGreen::callback = nullptr;
 
 static Gen11 gen11;
-static DYLDPatches dyldpatches;
 
 static uint8_t builtin2[] = {0x00, 0x00, 0x49, 0x9A};
 static uint8_t builtin3[] = {0x49, 0x9A, 0x00, 0x00};
@@ -129,12 +120,9 @@ static void seedIGPUPropertiesEarly() {
 void NGreen::init() {
     callback = this;
 	
-	lilu.onKextLoadForce(&kextAGDP);
 	lilu.onKextLoadForce(&kextIOAcceleratorFamily2);
 	
 	gen11.init();
-	dyldpatches.init();
-	
     lilu.onPatcherLoadForce(
         [](void *user, KernelPatcher &patcher) { static_cast<NGreen *>(user)->processPatcher(patcher); }, this);
     lilu.onKextLoadForce(
@@ -148,15 +136,7 @@ void NGreen::init() {
 
 
 void NGreen::processPatcher(KernelPatcher &patcher) {
-	// Hook _cs_validate_page before DeviceInfo, which may spend over 60 seconds
-	// polling PEGP disable via processSwitchOff. This preserves the opportunity
-	// to apply the optional shared-cache media model strings before consumers
-	// map their pages; no CoreDisplay control-flow patch is installed.
-	if (!checkKernelArgument("-nbdyldoff")) {
-		dyldpatches.processPatcher(patcher);
-	} else {
-		DBGLOG("ngreen", "DYLD patches disabled by boot argument -nbdyldoff");
-	}
+	(void)patcher;
 
 	// Compatibility-first default: do not force-inject IGPU properties unless explicitly requested.
 	if (isLegacyIGPUPropSeedingEnabled()) {
@@ -256,9 +236,6 @@ bool NGreen::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t
 		// Preserve native surface-mode validation and capability checks. These
 		// are global user-client interfaces, not per-VF GuC scheduling bits.
 		SYSLOG("ngreen", "IOAccelFamily2: preserving native capability and surface-mode validation");
-	} else if (kextAGDP.loadIndex == index) {
-		const LookupPatchPlus patch {&kextAGDP, kAGDPBoardIDKeyOriginal, kAGDPBoardIDKeyPatched, 1};
-		SYSLOG_COND(!patch.apply(patcher, address, size), "NGreen", "Failed to apply AGDP board-id patch");
 	} else if (gen11.processKext(patcher, index, address, size)) {
 		DBGLOG("ngreen", "Processed Generation 11 configuration");
 	}

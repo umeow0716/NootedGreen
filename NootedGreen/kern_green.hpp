@@ -25,7 +25,6 @@ class EXPORT PRODUCT_NAME : public IOService {
 
 class NGreen {
     friend class Gen11;
-	friend class DYLDPatches;
 
     public:
     static NGreen *callback;
@@ -80,7 +79,3 @@ private:
 	volatile UInt32 *rmmioPtr {nullptr};
 
 };
-
-//! Neutralise access to AGDP configuration by board identifier.
-static const UInt8 kAGDPBoardIDKeyOriginal[] = "board-id";
-static const UInt8 kAGDPBoardIDKeyPatched[] =  "applehax";

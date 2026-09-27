@@ -160,7 +160,6 @@ FB+GFX:
 | `-ngreentglgfx` | Load only the TGL HW kext, no FB. Diagnostic — hardware will not display anything without an FB driver. |
 | `-disablegfxfirmware` | Physical-path diagnostic only. A VF uses the PF-owned GuC image and must not upload firmware. |
 | `ngreenSched=N` | Select GPU scheduler type: `3` = GuC firmware, `4` = IGScheduler4, `5` = host preemptive (default: `3` on real TGL, `5` on RPL/ADL) |
-| `-nbdyldoff` | Disable the optional shared-cache media-model patches and TGL userspace-bundle discovery logs. |
 | `-ngreenforceprops` / `ngreenforceprops=1` | Enable legacy forced IGPU property injection (`AAPL,ig-platform-id`, `model`, `saved-config`, etc.). Disabled by default in compatibility-first mode. |
 | `IGLogLevel=8` | Maximum Intel GPU driver logging |
 | `-liludbg` | Enable Lilu debug logging |
@@ -359,8 +358,8 @@ hardware-acceleration claim.
 
 Every remaining accelerator/framebuffer instruction patch is likewise limited
 to a solved owning-function range and checked against the admitted on-disk
-payload. Whole-image searches remain only for non-instruction metadata such as
-the AGDP board-id key.
+payload. The unversioned AGDP board-id mutation and global code-signing-page
+media-model hook are not part of the maintained path.
 
 ## Building
 
