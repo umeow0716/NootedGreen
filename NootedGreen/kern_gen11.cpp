@@ -2766,19 +2766,19 @@ bool Gen11::IGAccelTaskIsKernelGPUTask(const void *that)
 	return original;
 }
 
-unsigned long Gen11::start(void *that, void *provider)
+bool Gen11::start(void *that, void *provider)
 {
 	// An SR-IOV VF owns neither force-wake nor legacy execlist MMIO. Establish
 	// the GuC VF ABI and its assigned GGTT range before native scheduler setup.
 	const auto identity = vfIdentifyDevice();
 	if (identity == VfIdentity::Invalid) {
 		SYSLOG("ngreen", "V239: refusing accelerator start with invalid PCI identity");
-		return 0;
+		return false;
 	}
 	const bool vfActive = identity == VfIdentity::Virtual;
 	if (vfActive && !vfBootstrapDirectGgtt()) {
 		vfMarkProtocolFault("VF bootstrap failed before native accelerator start");
-		return 0;
+		return false;
 	}
 
 	auto *service = static_cast<IOService *>(that);
@@ -2813,7 +2813,7 @@ unsigned long Gen11::start(void *that, void *provider)
 	OSSafeReleaseNULL(schedulerNumber);
 	if (vfActive && !schedulerPublished) {
 		vfMarkProtocolFault("failed to publish mandatory VF scheduler selection");
-		return 0;
+		return false;
 	}
 	SYSLOG("ngreen", "Accelerator scheduler=%d path=%s", scheduler,
 	       vfActive ? "VF GuC" : "physical");
@@ -2827,7 +2827,7 @@ unsigned long Gen11::start(void *that, void *provider)
 		OSSafeReleaseNULL(zero);
 		if (!pmDisabled || !fallbackDisabled) {
 			vfMarkProtocolFault("failed to disable PF-owned VF scheduler fallbacks");
-			return 0;
+			return false;
 		}
 	} else if (!NGreen::callback->isRealTGL) {
 		// Later physical generations require the accelerator-local force-wake
@@ -2942,16 +2942,16 @@ void *Gen11::getBlit3DContext(void *that, bool create)
 	                    callback->ogetBlit3DContext)(that, create);
 }
 
-unsigned long Gen11::startGraphicsEngine(void *that)
+bool Gen11::startGraphicsEngine(void *that)
 {
 	(void)that;
 	// This replacement is installed only for a classified VF. Ring power,
 	// reset and legacy execlist state belong to the PF; the translated GuC
 	// scheduler brings VF contexts online independently.
-	return 1;
+	return true;
 }
 
-unsigned long Gen11::stopGraphicsEngine(void *that)
+bool Gen11::stopGraphicsEngine(void *that)
 {
 	(void)that;
 	if (gVfDeviceStopping && gVfGGTTReady) {
@@ -2961,7 +2961,7 @@ unsigned long Gen11::stopGraphicsEngine(void *that)
 	}
 	// Runtime reset and final ring stop are both PF/GuC-owned. The final path
 	// above first closes every guest producer and waits for DMA.
-	return 1;
+	return true;
 }
 
 bool Gen11::submitBlit(void *that, void *param_1, void *param_2, void *param_3, bool param_4) {
@@ -3095,13 +3095,13 @@ void *Gen11::getColorResolveContext(void *that, bool create)
 	                    callback->ogetColorResolveContext)(that, create);
 }
 
-unsigned long Gen11::loadGuCBinary(void *that) {
+bool Gen11::loadGuCBinary(void *that) {
 	// The PF already owns and runs GuC for an SR-IOV VF. Report firmware as
 	// available so Apple's GuC scheduler initializes its submission transport,
 	// but never try to replace the PF-owned image or WOPCM configuration.
 	// This route is installed only for the UUID-pinned VF payload.
 	if (gVfIdentity != VfIdentity::Virtual || !gVfGGTTReady || gVfProtocolFault)
-		return 0;
+		return false;
 	// The stock load routine initializes all scheduler-side allocations before
 	// touching WOPCM and uploading firmware. Skipping it outright left
 	// contextCount at zero, so the first createUkContext returned the 0x400
@@ -3110,7 +3110,7 @@ unsigned long Gen11::loadGuCBinary(void *that) {
 	    !getMember<void *>(that, 0x38) || !getMember<IOLock *>(that, 0x40) ||
 	    !getMember<IOLock *>(that, 0xA08)) {
 		vfMarkProtocolFault("missing VF scheduler initializer, owner or locks");
-		return 0;
+		return false;
 	}
 	using InitSchedControl = bool (*)(void *);
 	const bool initialized = reinterpret_cast<InitSchedControl>(
@@ -3124,7 +3124,7 @@ unsigned long Gen11::loadGuCBinary(void *that) {
 		getMember<void *>(that, 0x9E8);
 	if (!storageReady) {
 		vfMarkProtocolFault("incomplete native VF scheduler storage allocation");
-		return 0;
+		return false;
 	}
 	SYSLOG("ngreen", "V224: VF GuC firmware is PF-owned; scheduler data init=%d",
 	       initialized);
@@ -3228,8 +3228,7 @@ uint32_t Gen11::vfCreateUkContext(void *that, uint64_t owner, int priority) {
 	using WorkQueueFactory = OSObject *(*)(void *, uint32_t, void *);
 	using GetVirtualAddress = uint8_t *(*)(void *);
 	using GetGpuAddress = uint64_t (*)(void *);
-	using GetMemory = void *(*)(void *);
-	using GetPhysicalSegment = uint64_t (*)(void *, uint64_t, uint64_t *);
+	using GetMemory = IOMemoryDescriptor *(*)(void *);
 	auto *accelerator = getMember<void *>(that, 0x38);
 	auto *task = accelerator ? getMember<void *>(accelerator, 0x150) : nullptr;
 	if (!accelerator || !task) {
@@ -3280,12 +3279,16 @@ uint32_t Gen11::vfCreateUkContext(void *that, uint64_t owner, int priority) {
 		rollback(id, nullptr, backing);
 		return NGContextPool::invalidId;
 	}
-	auto *memory = reinterpret_cast<GetMemory>(callback->oIGMappedBuffergetMemory)(backing);
-	auto **vtable = memory ? *reinterpret_cast<void ***>(memory) : nullptr;
-	auto segment = vtable ? reinterpret_cast<GetPhysicalSegment>(
-		vtable[0x158 / sizeof(void *)]) : nullptr;
-	uint64_t segmentBytes = 0;
-	const uint64_t physical = segment ? segment(memory, 0, &segmentBytes) : 0;
+	auto *memory = reinterpret_cast<GetMemory>(
+		callback->oIGMappedBuffergetMemory)(backing);
+	IOByteCount segmentBytes = 0;
+	// getMemory() returns an IOMemoryDescriptor. Use its declared virtual ABI
+	// and explicitly bypass an IOMapper so the process record receives the same
+	// native DMA address validated by the direct-GGTT encoder. The former raw
+	// vtable +0x158 call was neither covered by the TGL payload UUID nor supplied
+	// getPhysicalSegment's required options argument on x86_64.
+	const uint64_t physical = memory ? memory->getPhysicalSegment(
+		0, &segmentBytes, kIOMemoryMapperNone) : 0;
 	if (!physical || segmentBytes < PAGE_SIZE ||
 	    !NGGgtt::nativePhysicalRange(physical, PAGE_SIZE)) {
 		vfMarkProtocolFault("invalid VF proxy process physical segment");
@@ -4933,18 +4936,3 @@ bool Gen11::wrapIGScheduler4IsGpuIdle(const void *that) {
 	(void)that;
 	return vfKnownIdleSnapshot();
 }
-
-//SIGNATURES GFX
-//ulong __thiscall IntelAccelerator::start(IntelAccelerator *this,IOService *param_1)
-//undefined8 __thiscall IGAccelDevice::deviceStart(IGAccelDevice *this)
-//void __thiscall IntelAccelerator::populateResetRegisterList(IntelAccelerator *this)
-//IGAccelTask * IGAccelTask::withOptions(IntelAccelerator *param_1)
-//IGHardwareExtendedContext * __thiscall IGAccelTask::getBlit3DContext(IGAccelTask *this,bool param_1)
-//undefined8 __thiscall IGHardwareExtendedContext::initWithOptions (IGHardwareExtendedContext *this,IGAccelTask *param_1, IGHardwareExtendedContextParams *param_2)
-//undefined8 blit3d_init_ctx(IGHardwareBlit3DContext *param_1)
-//void blit3d_initialize_scratch_space(IGAccelSysMemory *param_1)
-//void __thiscall IGHardwareBlit3DContext::initialize(IGHardwareBlit3DContext *this)
-//ulong __thiscall IntelAccelerator::startGraphicsEngine(IntelAccelerator *this)
-//undefined8 __thiscall IntelAccelerator::stopGraphicsEngine(IntelAccelerator *this)
-//void __thiscall IGAccelSegmentResourceList::initBlitUsage(IGAccelSegmentResourceList *this)
-//ulong IntelAccelerator::submitBlit (blit3d_params_t *param_1,IGVector *param_2,IGAccelTask *param_3,bool param_4)

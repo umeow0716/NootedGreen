@@ -1200,7 +1200,8 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   It resolves and reuses native allocContext/releaseContext and the two object
   factories, but owns the transaction: reserve ID; allocate one-page shared
   backing; validate full CPU/GPU mapping; obtain and validate the complete
-  physical segment through the UUID-pinned vtable slot; allocate/validate the
+  physical segment (the original checkpoint used a raw vtable slot; this was
+  later replaced by the declared XNU virtual API as recorded below); allocate/validate the
   8-KiB workqueue; only then publish the record and four metadata pointers.
 - Every post-reservation failure releases queue, process backing and context ID
   in that order. OOM returns 0x400 without poisoning transport; malformed
@@ -2577,3 +2578,40 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   passed-through GPU. Native-TGL selection now records only the original PCI
   identity plus independently proven PF ownership. The disabled custom
   IOService/catalogue skeleton and unused local bit macros were also removed.
+
+### Use the declared DMA-segment ABI
+
+- `vfCreateUkContext` obtained the `IOMemoryDescriptor` backing from the
+  UUID-admitted TGL payload, then invoked the kernel object through a hardcoded
+  vtable byte offset `0x158`. The kernel object's vtable is an XNU ABI, not part
+  of that payload UUID. More importantly, Tahoe's x86_64 declaration takes
+  `offset`, `length` and `options`; the raw function type omitted `options`, so
+  its value came from an unspecified argument register.
+- Current XNU and the pinned SDK both expose the three-argument virtual method.
+  The bridge now calls `IOMemoryDescriptor::getPhysicalSegment` directly with
+  `kIOMemoryMapperNone`, then applies the existing nonzero, length and native
+  DMA-address bounds checks before publishing any proxy record.
+
+### Match the IOService start return ABI
+
+- The routed `IntelAccelerator::start(IOService *)` is an `IOService::start`
+  override and therefore returns `bool`, but NootedGreen declared its wrapper
+  and trampoline cast as `unsigned long`. On x86_64 a boolean callee guarantees
+  AL, not a sanitized 64-bit RAX; reading the full register could convert a
+  native start failure into apparent success and publish a failed service.
+- The wrapper now has the exact boolean signature and all local failure paths
+  return `false`. Native failure remains unmodified and `registerService()` is
+  reached only after a true return from the UUID-admitted original body.
+
+### Match the firmware and engine return ABIs
+
+- The pinned Tahoe binary calls `IGHardwareGuC::loadGuCBinary()` and
+  `IntelAccelerator::startGraphicsEngine()` and immediately tests AL; their
+  native epilogues produce zero or one in EAX. The native
+  `stopGraphicsEngine()` epilogue likewise writes one only to AL. These are
+  boolean interfaces, but the three VF replacements were declared as
+  `unsigned long`.
+- All three replacement declarations and definitions now return `bool`, with
+  explicit `true`/`false` paths. This removes dependence on unspecified upper
+  return-register bits and keeps each routed function's C++ ABI identical to
+  its UUID-admitted target.

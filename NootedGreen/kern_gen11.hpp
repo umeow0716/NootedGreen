@@ -25,7 +25,7 @@ enum IGHwCsType {
 
 class Gen11 {
 private:
-	static unsigned long loadGuCBinary(void *that);
+	static bool loadGuCBinary(void *that);
 	static bool vfMmioHostToGuCAction(void *that, const uint32_t *request,
 	                                  unsigned int requestLength, int timeout,
 	                                  uint32_t *response);
@@ -88,7 +88,7 @@ private:
 	mach_vm_address_t vfSharedMappedBufferGetVirtualAddress {};
 	mach_vm_address_t vfMappedBufferGetGPUVirtualAddress {};
 
-	static unsigned long start(void *that, void *provider);
+	static bool start(void *that, void *provider);
 	static void acceleratorStop(void *that, void *provider);
 	mach_vm_address_t ostart {};
 	mach_vm_address_t oAcceleratorStop {};
@@ -131,8 +131,8 @@ private:
 
 	bool injectAcceleratorPersonality(const char *bundleId);
 	bool acceleratorPersonalityInjected {false};
-	static unsigned long stopGraphicsEngine(void *that);
-	static unsigned long startGraphicsEngine(void *that);
+	static bool stopGraphicsEngine(void *that);
+	static bool startGraphicsEngine(void *that);
 	static void populateResetRegisterList(void *that);
 	static bool wrapIGScheduler5IsGpuIdle(const void *that);
 	static bool wrapIGScheduler4IsGpuIdle(const void *that);
