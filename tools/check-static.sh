@@ -268,6 +268,15 @@ else
     failed=1
 fi
 if "$compiler" -std=c++14 -O1 -g -fsanitize=address,undefined \
+    tools/vf_blit3d_scratch_patch_test.cpp -o "$task_output/vf-blit3d-scratch-patch-test" && \
+    "$task_output/vf-blit3d-scratch-patch-test" \
+        sle_Internal/le/AppleIntelTGLGraphics.kext/Contents/MacOS/AppleIntelTGLGraphics \
+        sle_Internal/sle/AppleIntelTGLGraphics.kext/Contents/MacOS/AppleIntelTGLGraphics; then
+    printf 'PASS offline VF Blit3D scratch allocation anchor tests\n'
+else
+    failed=1
+fi
+if "$compiler" -std=c++14 -O1 -g -fsanitize=address,undefined \
     tools/unaligned_patch_test.cpp -o "$task_output/unaligned-patch-test" && \
     "$task_output/unaligned-patch-test" \
         sle_Internal/le/AppleIntelTGLGraphics.kext/Contents/MacOS/AppleIntelTGLGraphics \

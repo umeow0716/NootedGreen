@@ -16,6 +16,7 @@
 #include "kern_vf_tlb_patch.hpp"
 #include "kern_vf_standalone_patch.hpp"
 #include "kern_vf_guc_factory_patch.hpp"
+#include "kern_vf_blit3d_scratch_patch.hpp"
 #include "kern_unaligned_patch.hpp"
 #include "kern_framebuffer_patch.hpp"
 #include "kern_vf_guc_event.hpp"
@@ -2071,6 +2072,31 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			PANIC_COND(!gucFactoryPatch.apply(
 			               patcher, gucFactory, gucInit - gucFactory), "ngreen",
 			           "Failed to remove VF GuC factory double destruction");
+			// Metal's first Blit3D context fills scratch blend states through
+			// offset 0xd20f, but a VF-only shared-buffer mapping stops at
+			// 0xd000. Keep the native initializer and publish a page-rounded
+			// allocation size instead; the private factory only reads the
+			// recorded length back from this same global. Bound the rewrite by
+			// the complete extended-context constructor symbols and require the
+			// exact UUID-pinned anchor, including its const-table RIP target.
+			mach_vm_address_t blit3dCtors = 0, blit3dDtor = 0;
+			KernelPatcher::SolveRequest blit3dScratchBounds[] = {
+				{"__GLOBAL__sub_I_IGHardwareContext.cpp", blit3dCtors},
+				{"__GLOBAL__D_a", blit3dDtor},
+			};
+			PANIC_COND(!patcher.solveMultiple(
+			               index, blit3dScratchBounds, address, size) ||
+			           blit3dDtor <= blit3dCtors ||
+			           blit3dDtor - blit3dCtors > 0x400,
+			           "ngreen", "Invalid Blit3D scratch patch bounds");
+			LookupPatchPlus const blit3dScratchPatch {
+				activeKext, NGVfBlit3dScratchPatch::scratchSizeFind,
+				NGVfBlit3dScratchPatch::scratchSizeReplace, 1,
+			};
+			PANIC_COND(!blit3dScratchPatch.apply(
+			               patcher, blit3dCtors, blit3dDtor - blit3dCtors), "ngreen",
+			           "Failed to enlarge Blit3D scratch allocation");
+			SYSLOG("ngreen", "V250: enlarged Blit3D scratch allocation 0xd240→0xe000");
 			KernelPatcher::RouteRequest workQueueInitRoute[] = {
 				{"__ZN22IGHardwareGuCWorkQueue19initWithAcceleratorEP22IOGraphicsAccelerator2jP37UK_GEN11_SCHED_PROCESS_DESCRIPTOR_REC",
 				 vfWorkQueueInit, this->oVfWorkQueueInit},
