@@ -49,6 +49,16 @@ approved containment plan.
   binding was changed, and the VM remained shut off after the host i915 crash.
   Dynamic validation remains prohibited by the V251 hold and the independent
   requirements in `HOST_CONTAINMENT_PLAN.md`.
+- Driver correction `e3ef20d`, retained-descendant contract `d5a1786` and
+  scheduler-storage audit `0858b97` all passed GitHub Actions (runs
+  `36329893491`, `36330137491` and `36330311904`). The final run's release zip
+  SHA-256 is
+  `738fd0ae9f370c16f2b19b75807288ca136a353f70155ae4eb6433029716cc03`;
+  its kext executable UUID is `9773B4C9-FF71-36B0-8107-910C0F318EC5` and
+  SHA-256 is
+  `db61632051011783ebd96506d33c3dc51c16991a47dbe324ed0a089fde7c3d46`.
+  The artifacts are archived under `../../build/artifacts/0858b97` only. They
+  have not been installed, added to an AuxKC or loaded by the VM.
 
 ## V251 host incident: wrong interrupt ABI selected on Raptor Lake
 
