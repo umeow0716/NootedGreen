@@ -1732,6 +1732,8 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			 this->ioGraphicsEnableAccelerator},
 			{"__ZN22IOGraphicsAccelerator218disableAcceleratorEv",
 			 this->ioGraphicsDisableAccelerator},
+			{"__ZN24IOAccelEventMachineFast29initEventEP12IOAccelEvent",
+			 this->ioAccelEventMachineInitEvent},
 		};
 		PANIC_COND(!patcher.solveMultiple(index, lifecycle, address, size),
 			"ngreen", "Cannot resolve native IOAccelerator lifecycle API");
@@ -2161,6 +2163,17 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				{"__ZN17IGInterruptBridge16enableInterruptsEv",
 				 vfEnableInterrupts},
 				{"__ZN17IGInterruptBridge17disableInterruptsEv",
+				 vfDisableInterrupts},
+				// IGInterruptBridge::enable/disable also dispatches through the
+				// scheduler vtable.  Tahoe's scheduler-4 implementations program
+				// every physical command-streamer error IRQ before returning to the
+				// bridge, so routing only the bridge methods still lets a VF touch
+				// PF-owned engine registers.  The bridge route already publishes the
+				// memory-IRQ mask; these idempotent routes preserve that ownership
+				// boundary for the nested scheduler calls as well.
+				{"__ZN12IGScheduler416enableInterruptsEv",
+				 vfEnableInterrupts},
+				{"__ZN12IGScheduler417disableInterruptsEv",
 				 vfDisableInterrupts},
 				{"__ZN20IGSharedMappedBuffer11withOptionsEP11IGAccelTaskmjj",
 				 vfCtbMappedBufferWithOptions, this->oVfCtbMappedBufferWithOptions},
@@ -2997,7 +3010,8 @@ bool Gen11::startGraphicsEngine(void *that)
 	// leaves IOAccel resource creation asleep in acceleratorWaitEnabled().
 	if (!that || !callback || !vfNativeGpuWorkReady() ||
 	    !callback->vfInterruptBridgeEnable ||
-	    !callback->ioGraphicsEnableAccelerator) {
+	    !callback->ioGraphicsEnableAccelerator ||
+	    !callback->ioAccelEventMachineInitEvent) {
 		vfMarkProtocolFault("VF engine start before accelerator lifecycle is ready");
 		return false;
 	}
@@ -3012,7 +3026,23 @@ bool Gen11::startGraphicsEngine(void *that)
 	reinterpret_cast<LifecycleMethod>(callback->vfInterruptBridgeEnable)(
 		interruptBridge);
 	reinterpret_cast<LifecycleMethod>(callback->ioGraphicsEnableAccelerator)(that);
-	SYSLOG("ngreen", "V244: enabled VF interrupt bridge and IOAccelerator lifecycle");
+
+	// The next two calls in the UUID-pinned native tail attach the accelerator's
+	// embedded completion events to IOAccelEventMachineFast2.  They are software
+	// lifecycle, not engine programming, and omitting them leaves later stamp and
+	// teardown paths operating on events that were never admitted by the event
+	// machine.
+	auto *eventMachine = getMember<void *>(that, 0x380);
+	if (!eventMachine) {
+		vfMarkProtocolFault("missing VF event machine during engine start");
+		return false;
+	}
+	using InitEventMethod = void (*)(void *, void *);
+	auto initEvent = reinterpret_cast<InitEventMethod>(
+		callback->ioAccelEventMachineInitEvent);
+	initEvent(eventMachine, reinterpret_cast<uint8_t *>(that) + 0x11A8);
+	initEvent(eventMachine, reinterpret_cast<uint8_t *>(that) + 0x11E8);
+	SYSLOG("ngreen", "V245: enabled VF bridge/IOAccelerator and initialized completion events");
 	return true;
 }
 

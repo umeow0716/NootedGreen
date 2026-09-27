@@ -12,6 +12,13 @@ START = "__ZN16IntelAccelerator19startGraphicsEngineEv"
 STOP = "__ZN16IntelAccelerator18stopGraphicsEngineEv"
 BRIDGE_ENABLE = "__ZN17IGInterruptBridge6enableEv"
 BRIDGE_DISABLE = "__ZN17IGInterruptBridge7disableEv"
+EVENT_INIT = "__ZN24IOAccelEventMachineFast29initEventEP12IOAccelEvent"
+SCHEDULER_ENABLE = "__ZN12IGScheduler416enableInterruptsEv"
+SCHEDULER_DISABLE = "__ZN12IGScheduler417disableInterruptsEv"
+SCHEDULER_ERROR_ENABLE = "__ZN12IGScheduler421enableErrorInterruptsEv"
+SCHEDULER_ERROR_DISABLE = "__ZN12IGScheduler422disableErrorInterruptsEv"
+STREAMER_ERROR_ENABLE = "__ZN26IGHardwareCommandStreamer420enableErrorInterruptEv"
+STREAMER_ERROR_DISABLE = "__ZN26IGHardwareCommandStreamer421disableErrorInterruptEv"
 
 
 def macho_inventory(path):
@@ -80,6 +87,19 @@ def macho_inventory(path):
             raise AssertionError(f"{path}: no symbol after {address:#x}")
         return following[0]
 
+    def direct_branches(owner, target):
+        owner_start = value(owner)
+        owner_end = next_symbol(owner_start)
+        target_start = value(target)
+        calls = []
+        for candidate in range(owner_start, owner_end - 4):
+            if image[candidate] not in (0xE8, 0xE9):
+                continue
+            displacement = struct.unpack_from("<i", image, candidate + 1)[0]
+            if candidate + 5 + displacement == target_start:
+                calls.append(candidate)
+        return calls
+
     for lifecycle, owner, bridge in (
             (ENABLE, START, BRIDGE_ENABLE),
             (DISABLE, STOP, BRIDGE_DISABLE)):
@@ -104,6 +124,16 @@ def macho_inventory(path):
             raise AssertionError(
                 f"{path}: {bridge} does not precede {lifecycle}")
 
+    for scheduler, scheduler_error, streamer in (
+            (SCHEDULER_ENABLE, SCHEDULER_ERROR_ENABLE, STREAMER_ERROR_ENABLE),
+            (SCHEDULER_DISABLE, SCHEDULER_ERROR_DISABLE, STREAMER_ERROR_DISABLE)):
+        if not direct_branches(scheduler, scheduler_error):
+            raise AssertionError(
+                f"{path}: {scheduler} no longer dispatches {scheduler_error}")
+        if not direct_branches(scheduler_error, streamer):
+            raise AssertionError(
+                f"{path}: {scheduler_error} no longer owns the physical {streamer} call")
+
     print(f"PASS: native bridge/IOAccel lifecycle order in {path}")
 
 
@@ -127,8 +157,11 @@ def source_contract(path):
         "com.apple.iokit.IOAcceleratorFamily2",
         ENABLE,
         DISABLE,
+        EVENT_INIT,
         "this->vfInterruptBridgeEnable = irqEnable",
         "this->vfInterruptBridgeDisable = irqDisable",
+        SCHEDULER_ENABLE,
+        SCHEDULER_DISABLE,
     )
     for token in required:
         if token not in source:
@@ -138,6 +171,8 @@ def source_contract(path):
     if start.index("vfInterruptBridgeEnable") > start.index(
             "ioGraphicsEnableAccelerator"):
         raise AssertionError(f"{path}: VF start lifecycle order is reversed")
+    if start.count("initEvent(eventMachine") != 2:
+        raise AssertionError(f"{path}: VF start does not initialize both native events")
     stop = function_body(source, "bool Gen11::stopGraphicsEngine(void *that)")
     if stop.index("vfInterruptBridgeDisable") > stop.index(
             "ioGraphicsDisableAccelerator"):

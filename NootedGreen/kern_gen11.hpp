@@ -133,6 +133,7 @@ private:
 	bool acceleratorPersonalityInjected {false};
 	mach_vm_address_t ioGraphicsEnableAccelerator {};
 	mach_vm_address_t ioGraphicsDisableAccelerator {};
+	mach_vm_address_t ioAccelEventMachineInitEvent {};
 	mach_vm_address_t vfInterruptBridgeEnable {};
 	mach_vm_address_t vfInterruptBridgeDisable {};
 	static bool stopGraphicsEngine(void *that);

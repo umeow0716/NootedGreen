@@ -2962,3 +2962,44 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   sanitizer suite passes in `/tmp/ngreen-static.5PbbMZ`. A fresh macOS build
   and controlled runtime must still prove that Metal proceeds beyond resource
   creation; this checkpoint does not claim completed GPU work.
+
+### Contain the nested scheduler IRQ lifecycle and initialize IOAccel events
+
+- Commit `640f087` passed GitHub Actions run `36290864027`; its NootedGreen
+  UUID is `49D4E12B-82D4-3075-89FE-8734BBB5F04A`. The activated seven-fileset
+  AuxKC is SHA-256
+  `a2b03119761be8d49a761a682a3fa6f34048da8f3dff791a5d1df28c35bbed49`.
+  A watchdog-bounded start-only load did not merely lose networking: the next
+  boot saved `Kernel-2026-09-27-112300.panic`, SHA-256
+  `5687995b9a56641ed4f32dc42712d761b57e543b4a519fe65e10dce49eb0dac9`.
+  Native `IntelAccelerator::start()` had entered its failure rollback and the
+  routed final-quiescence guard deliberately panicked rather than let native
+  stop release possibly live VF DMA mappings.
+- Re-disassembly of the complete nested enable path exposed the missed owner.
+  `IGInterruptBridge::enable()` first reaches the already-routed bridge
+  `enableInterrupts()`, but later calls scheduler vtable slot `+0x1a0`.
+  For the forced VF scheduler 4 this is
+  `IGScheduler4::enableInterrupts()`, which calls
+  `enableErrorInterrupts()` and then invokes
+  `IGHardwareCommandStreamer4::enableErrorInterrupt()` for every engine. That
+  last routine directly writes the physical error-mask and error-enable MMIO
+  registers. The disable path is symmetric. Thus isolating only the bridge
+  entry points did not isolate the complete transitive IRQ protocol.
+- Both scheduler-4 enable/disable entries are now routed, on a classified VF
+  only, to the idempotent memory-IRQ mask handlers. The outer bridge still owns
+  event-source/requestor bookkeeping; the nested route prevents physical
+  command-streamer error-register access. PF execution remains native.
+- The native engine-start tail also calls
+  `IOAccelEventMachineFast2::initEvent()` for the two embedded events at
+  accelerator offsets `0x11a8` and `0x11e8`, immediately after enabling the
+  IOAccelerator. The VF replacement now resolves that named IOAcceleratorFamily2
+  API and preserves both calls and their exact order. These are software event
+  ownership transitions, not PF engine programming.
+- The Mach-O lifecycle test now proves, in both admitted payloads, the bridge /
+  IOAccelerator order and the transitive scheduler-to-command-streamer physical
+  error-IRQ calls that require containment. The route inventory is 62 unique
+  symbols (59 accelerator, three framebuffer). Full syntax, zero-finding Clang
+  analyzer, strict ABI, Mach-O, exhaustive protocol and sanitizer tests pass in
+  `/tmp/ngreen-static.AI7UAt`. Dynamic validation remains watchdog-bounded; the
+  native safe-context-image tail after event initialization still requires
+  explicit runtime evidence before Metal success can be claimed.
