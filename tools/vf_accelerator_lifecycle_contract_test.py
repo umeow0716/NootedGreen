@@ -11,6 +11,11 @@ DISABLE = "__ZN22IOGraphicsAccelerator218disableAcceleratorEv"
 START = "__ZN16IntelAccelerator19startGraphicsEngineEv"
 STOP = "__ZN16IntelAccelerator18stopGraphicsEngineEv"
 ACCELERATOR_START = "__ZN16IntelAccelerator5startEP9IOService"
+ACCELERATOR_STOP = "__ZN16IntelAccelerator4stopEP9IOService"
+EVENT_FINISH_ALL = "__ZN19IGAccelEventMachine15finishAllStampsEj"
+TRACE_DISABLE = "__ZN25IGAccelTraceStreamManager17disableCollectionE27TraceStreamCollectionChange"
+TRACE_SHUTDOWN = "__ZN25IGAccelTraceStreamManager8shutdownEv"
+UNREGISTER_SYSCTL = "__ZN16IntelAccelerator16unregisterSysctlEv"
 BRIDGE_ENABLE = "__ZN17IGInterruptBridge6enableEv"
 BRIDGE_DISABLE = "__ZN17IGInterruptBridge7disableEv"
 BRIDGE_FILTER = "__ZN17IGInterruptBridge22interruptFilterHandlerEP28IOFilterInterruptEventSource"
@@ -45,6 +50,7 @@ GUC_REGISTER_INTERRUPTS = "__ZN13IGHardwareGuC21registerForInterruptsEv"
 BRIDGE_REGISTER_TYPE = "__ZN17IGInterruptBridge24registerForInterruptTypeEjPFvP8OSObjectPvES1_S2_PS2_"
 GUC_WITH_OPTIONS = "__ZN13IGHardwareGuC11withOptionsEP16IntelAccelerator"
 GUC_INIT_WITH_OPTIONS = "__ZN13IGHardwareGuC15initWithOptionsEP16IntelAccelerator"
+GUC_FREE = "__ZN13IGHardwareGuC4freeEv"
 GUC_INIT_SCHED_CONTROL = "__ZN13IGHardwareGuC16initSchedControlEv"
 GUC_SETUP_CONTEXT_POOL = "__ZN13IGHardwareGuC16setupContextPoolEi"
 GUC_SETUP_LOG_BUFFERS = "__ZN13IGHardwareGuC15setupLogBuffersEjiii"
@@ -54,6 +60,7 @@ GUC_INIT_DOORBELLS = "__ZN13IGHardwareGuC13initDoorbellsEv"
 GUC_READ_DOORBELLS = "__ZN13IGHardwareGuC23readDoorbellSQIDIConfigEv"
 CTB_WITH_OPTIONS = "__ZN21IGHardwareGuCCTBuffer11withOptionsEP22IOGraphicsAccelerator2"
 CTB_INIT = "__ZN21IGHardwareGuCCTBuffer19initWithAcceleratorEP22IOGraphicsAccelerator2"
+CTB_FREE = "__ZN21IGHardwareGuCCTBuffer4freeEv"
 GUC_LOAD_BINARY = "__ZN13IGHardwareGuC13loadGuCBinaryEv"
 GUC_REGISTER_CTB = "__ZN13IGHardwareGuC31registerCommandTransportBuffersEv"
 GUC_DEREGISTER_CTB = "__ZN13IGHardwareGuC33deregisterCommandTransportBuffersEv"
@@ -219,11 +226,48 @@ def macho_inventory(path):
         (GUC_REGISTER_CTB, GUC_MMIO_ACTION),
         (GUC_REGISTER_CTB, GUC_DEREGISTER_CTB),
         (GUC_DEREGISTER_CTB, GUC_MMIO_ACTION),
+        (GUC_FREE, GUC_DEREGISTER_CTB),
+        (GUC_FREE, TRANSFER_OWNERSHIP),
+        (CTB_FREE, TRANSFER_OWNERSHIP),
     )
     for owner, target in retained_edges:
         if not direct_branches(owner, target):
             raise AssertionError(
                 f"{path}: retained native bootstrap edge {owner} -> {target} changed")
+
+    # The VF wrapper deliberately preserves native stop so Tahoe can finish its
+    # software event lifecycle and release every scheduler-owned object.  Its
+    # only engine boundary must remain the routed stopGraphicsEngine call, and
+    # all trace/sysctl teardown must follow that DMA-quiescing boundary.
+    finish_calls = direct_branches(ACCELERATOR_STOP, EVENT_FINISH_ALL)
+    trace_disable_calls = direct_branches(ACCELERATOR_STOP, TRACE_DISABLE)
+    engine_stop_calls = direct_branches(ACCELERATOR_STOP, STOP)
+    trace_shutdown_calls = direct_branches(ACCELERATOR_STOP, TRACE_SHUTDOWN)
+    unregister_calls = direct_branches(ACCELERATOR_STOP, UNREGISTER_SYSCTL)
+    if (len(finish_calls) != 1 or len(trace_disable_calls) != 1 or
+            len(engine_stop_calls) != 1 or len(trace_shutdown_calls) != 2 or
+            len(unregister_calls) != 1):
+        raise AssertionError(f"{path}: native accelerator-stop call inventory changed")
+    engine_stop = engine_stop_calls[0]
+    if not (finish_calls[0] < trace_disable_calls[0] < engine_stop and
+            all(engine_stop < call for call in trace_shutdown_calls) and
+            engine_stop < unregister_calls[0]):
+        raise AssertionError(
+            f"{path}: native accelerator stop no longer quiesces engine before teardown")
+    accelerator_stop_end = next_symbol(value(ACCELERATOR_STOP))
+    release_calls = []
+    for pattern in (bytes.fromhex("ff 50 28"),
+                    bytes.fromhex("ff 90 28 00 00 00")):
+        cursor = value(ACCELERATOR_STOP)
+        while True:
+            cursor = image.find(pattern, cursor, accelerator_stop_end)
+            if cursor < 0:
+                break
+            release_calls.append(cursor)
+            cursor += 1
+    if not release_calls or any(call < engine_stop for call in release_calls):
+        raise AssertionError(
+            f"{path}: native accelerator stop releases an object before VF DMA quiescence")
 
     # The runtime patch must search across the private global constructor.
     # Its production bounds deliberately use exported symbols because the
@@ -573,9 +617,24 @@ def source_contract(path):
     if start.count("initEvent(eventMachine") != 2:
         raise AssertionError(f"{path}: VF start does not initialize both native events")
     stop = function_body(source, "bool Gen11::stopGraphicsEngine(void *that)")
+    quiesce = stop.index("vfQuiesceDeviceForShutdown(gVfHardwareGuc)")
+    bridge_disable = stop.index("vfInterruptBridgeDisable", quiesce)
+    if not quiesce < bridge_disable:
+        raise AssertionError(
+            f"{path}: final VF DMA quiescence no longer precedes bridge disable")
     if stop.index("vfInterruptBridgeDisable") > stop.index(
             "ioGraphicsDisableAccelerator"):
         raise AssertionError(f"{path}: VF stop lifecycle order is reversed")
+
+    accelerator_stop = function_body(
+        source, "void Gen11::acceleratorStop(void *that, void *provider)")
+    stopping = accelerator_stop.index(
+        "OSCompareAndSwap(0, 1, &gVfDeviceStopping)")
+    original_stop = accelerator_stop.index(
+        "FunctionCast(acceleratorStop, callback->oAcceleratorStop)(that, provider)")
+    if not stopping < original_stop:
+        raise AssertionError(
+            f"{path}: native stop begins before the VF device-stopping boundary")
 
     accelerator_start = function_body(source, "bool Gen11::start(void *that, void *provider)")
     configure = accelerator_start.index("callback->ioPciConfigureInterrupts)(")

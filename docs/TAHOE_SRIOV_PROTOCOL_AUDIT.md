@@ -60,6 +60,33 @@ approved containment plan.
   The artifacts are archived under `../../build/artifacts/0858b97` only. They
   have not been installed, added to an AuxKC or loaded by the VM.
 
+## V253 native stop reachability review (offline)
+
+- The V252 rollback deliberately enters Tahoe's complete
+  `IntelAccelerator::stop`, so its ordering was audited rather than assuming
+  the routed `stopGraphicsEngine()` entry was the whole teardown. Before that
+  engine boundary the pinned body finishes software event stamps and disables
+  trace collection. The latter reaches `IGTelemetryManager::disableCollection`,
+  which only sets its local disabled field for the stop-time option; it does not
+  read GPU time registers or MMIO.
+- Both admitted payloads have exactly one direct `stopGraphicsEngine()` call in
+  native accelerator stop. The wrapper publishes `gVfDeviceStopping` before it
+  enters that body. The routed engine stop must complete direct-context
+  retirement and the heavy GuC TLB boundary before disabling the interrupt
+  bridge and IOAccelerator. Native trace shutdown, sysctl removal and every
+  canonical OSObject release in the stop body occur after this boundary.
+- The retained free chain was checked separately. `IGHardwareGuC::free()` may
+  deregister both CTB channels only through the routed MMIO sender, unregisters
+  software interrupt sources, and releases mapped storage only after the outer
+  stop has established DMA quiescence. Its conditional legacy ownership calls,
+  and the same call in `IGHardwareGuCCTBuffer::free()`, remain intercepted by
+  the VF ownership route. Existing UUID-bounded patches still remove the two
+  native CTB-free `0xCEE8` physical-TLB accesses.
+- These stop/free edges and their order are now executable Mach-O/source
+  contracts for both payloads. This is not proof that a wedged PF will respond
+  to shutdown; the host-side containment hold remains mandatory and no dynamic
+  operation was performed.
+
 ## V251 host incident: wrong interrupt ABI selected on Raptor Lake
 
 - The guest configured memory IRQ at `18:01:42.498967` (`page=0x402bc000`,
