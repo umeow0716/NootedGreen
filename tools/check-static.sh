@@ -82,6 +82,14 @@ if python3 tools/personality_contract_test.py \
 else
     failed=1
 fi
+if python3 -B tools/telemetry_contract_test.py \
+    NootedGreen/kern_telemetry.cpp \
+    sle_Internal/le/AppleIntelTGLGraphics.kext/Contents/Info.plist \
+    sle_Internal/le/AppleIntelTGLGraphics.kext/Contents/MacOS/AppleIntelTGLGraphics; then
+    printf 'PASS offline GPU telemetry provider contract tests\n'
+else
+    failed=1
+fi
 if python3 tools/route_symbol_contract_test.py \
     NootedGreen/kern_gen11.cpp \
     sle_Internal/le/AppleIntelTGLGraphics.kext/Contents/MacOS/AppleIntelTGLGraphics \

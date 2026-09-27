@@ -5,6 +5,7 @@
 #include "kern_gen11.hpp"
 #include "kern_pci_identity.hpp"
 #include "kern_gpu_capabilities.hpp"
+#include "kern_telemetry.hpp"
 #include <Headers/kern_api.hpp>
 #include <Headers/kern_devinfo.hpp>
 #include <i386/machine_routines.h>
@@ -31,7 +32,8 @@ void NGreen::init() {
 
 
 void NGreen::processPatcher(KernelPatcher &patcher) {
-	(void)patcher;
+	PANIC_COND(!ngResolveKernelTelemetry(patcher), "ngreen",
+		"Cannot resolve Tahoe kernel GPU telemetry ABI");
 
 	auto *devInfo = DeviceInfo::create();
 	PANIC_COND(!devInfo, "ngreen", "Failed to create DeviceInfo");

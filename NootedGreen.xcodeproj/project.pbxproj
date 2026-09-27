@@ -15,6 +15,7 @@
 		F0AF08BC2A0F373F00B63C2B /* kern_gen11.hpp in Headers */ = {isa = PBXBuildFile; fileRef = F0AF08BA2A0F373F00B63C2B /* kern_gen11.hpp */; };
 		F0BB9E552A57A0340081F5FA /* kern_patcherplus.cpp in Sources */ = {isa = PBXBuildFile; fileRef = F0BB9E532A57A0340081F5FA /* kern_patcherplus.cpp */; };
 		F0BB9E562A57A0340081F5FA /* kern_patcherplus.hpp in Headers */ = {isa = PBXBuildFile; fileRef = F0BB9E542A57A0340081F5FA /* kern_patcherplus.hpp */; };
+		A17E1E312DC0000100000001 /* kern_telemetry.cpp in Sources */ = {isa = PBXBuildFile; fileRef = A17E1E302DC0000100000001 /* kern_telemetry.cpp */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -54,6 +55,8 @@
 		F0AF08BA2A0F373F00B63C2B /* kern_gen11.hpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.h; path = kern_gen11.hpp; sourceTree = "<group>"; };
 		F0BB9E532A57A0340081F5FA /* kern_patcherplus.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = kern_patcherplus.cpp; sourceTree = "<group>"; };
 		F0BB9E542A57A0340081F5FA /* kern_patcherplus.hpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.h; path = kern_patcherplus.hpp; sourceTree = "<group>"; };
+		A17E1E302DC0000100000001 /* kern_telemetry.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = kern_telemetry.cpp; sourceTree = "<group>"; };
+		A17E1E322DC0000100000001 /* kern_telemetry.hpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.h; path = kern_telemetry.hpp; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -97,6 +100,8 @@
 				F067C20329D82E57004BB52E /* kern_green.hpp */,
 				F0BB9E532A57A0340081F5FA /* kern_patcherplus.cpp */,
 				F0BB9E542A57A0340081F5FA /* kern_patcherplus.hpp */,
+				A17E1E302DC0000100000001 /* kern_telemetry.cpp */,
+				A17E1E322DC0000100000001 /* kern_telemetry.hpp */,
 				F009B7A029E4EE3C00786AFF /* kern_start.cpp */,
 			);
 			path = NootedGreen;
@@ -221,6 +226,7 @@
 				F009B7A129E4EE3C00786AFF /* kern_start.cpp in Sources */,
 				F009B7A329E4EEBA00786AFF /* kern_green.cpp in Sources */,
 				F0BB9E552A57A0340081F5FA /* kern_patcherplus.cpp in Sources */,
+				A17E1E312DC0000100000001 /* kern_telemetry.cpp in Sources */,
 				F0AF08BB2A0F373F00B63C2B /* kern_gen11.cpp in Sources */,
 				CE405ED91E4A080700AA0B3D /* plugin_start.cpp in Sources */,
 			);

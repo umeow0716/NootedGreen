@@ -1720,8 +1720,11 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			image, size, NGBinaryIdentity::tglFramebufferDebugUuid);
 	PANIC_COND(physicalFramebuffer && !framebufferProduction && !framebufferDebug,
 		"ngreen", "Unsupported TGL framebuffer payload ABI; refusing private-layout routes");
-	if (physicalFramebuffer && !ngPhysicalGpuAccessAllowed()) {
-		// A VF has no physical display controller. Refusing only DMC or MMIO
+	if (physicalFramebuffer &&
+	    (!NGreen::callback || !NGreen::callback->isRealTGL)) {
+		// A VF has no physical display controller, and a later-generation PF is
+		// not permission to run a UUID-pinned TGL display ABI against different
+		// registers. Refusing only DMC or MMIO
 		// helpers is too late: native probe/start have their own raw accesses. The
 		// production payload overrides probe in AppleIntelFramebufferController,
 		// while the debug payload inherits its AppleIntelBaseController override;
@@ -1734,16 +1737,16 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				{"__ZN31AppleIntelFramebufferController5startEP9IOService", vfRejectPhysicalFramebufferStart},
 			};
 			PANIC_COND(!patcher.routeMultiple(index, reject, address, size),
-				"ngreen", "Cannot contain production physical framebuffer on VF");
+				"ngreen", "Cannot contain production TGL framebuffer on unsupported GPU");
 		} else {
 			KernelPatcher::RouteRequest reject[] = {
 				{"__ZN24AppleIntelBaseController5probeEP9IOServicePi", vfRejectPhysicalFramebufferProbe},
 				{"__ZN31AppleIntelFramebufferController5startEP9IOService", vfRejectPhysicalFramebufferStart},
 			};
 			PANIC_COND(!patcher.routeMultiple(index, reject, address, size),
-				"ngreen", "Cannot contain debug physical framebuffer on VF");
+				"ngreen", "Cannot contain debug TGL framebuffer on unsupported GPU");
 		}
-		SYSLOG("ngreen", "Physical framebuffer probe/start rejected for VF/unknown device");
+		SYSLOG("ngreen", "TGL framebuffer probe/start rejected for VF/non-TGL/unknown device");
 		return true;
 	}
 	if (kextG11FBT.loadIndex == index || kextG11FBTA.loadIndex == index) {
