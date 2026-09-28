@@ -260,8 +260,24 @@ def macho_inventory(path):
     # Accelerator feature +0x1190 bit 5 makes native start call this routine
     # before startGraphicsEngine. It writes raw MMIO 0xA204 under physical
     # force-wake, so source admission must reject that mode on a VF.
-    if len(direct_branches(ACCELERATOR_START, SET_ASYNC_SLICE_COUNT)) != 1:
+    async_calls = direct_branches(ACCELERATOR_START, SET_ASYNC_SLICE_COUNT)
+    if len(async_calls) != 1:
         raise AssertionError(f"{path}: native async-slice start edge changed")
+    async_call = async_calls[0]
+    predicates = []
+    cursor = accelerator_start
+    while True:
+        cursor = image.find(bytes.fromhex("41 f6 06 20 74"), cursor,
+                            async_call)
+        if cursor < 0:
+            break
+        skip = struct.unpack_from("<b", image, cursor + 5)[0]
+        if cursor + 6 + skip == async_call + 5:
+            predicates.append(cursor)
+        cursor += 1
+    if len(predicates) != 1:
+        raise AssertionError(
+            f"{path}: async-slice call is not gated by +0x1190 bit 5")
     async_start = value(SET_ASYNC_SLICE_COUNT)
     async_end = next_symbol(async_start)
     if image[async_start:async_end].count(ASYNC_SLICE_MMIO_ANCHOR) != 1:

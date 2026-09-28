@@ -37,6 +37,19 @@ enforced containment precondition.
   complete suite passes at `/tmp/ngreen-static.ckEaeN`. No kext was installed,
   no XML/PCI state changed and the VM remained shut off under the host hard
   hold.
+- Checkpoint `1620588` passed GitHub Actions run `36391019577`. Its archived
+  release zip SHA-256 is
+  `53501a4889da430bc9e1eaf00bd09af1aa3a81710e34474284b9e972d18afb3b`;
+  kext executable UUID is `0257DAE0-C610-3576-97BD-DA67E38E9C98` and SHA-256 is
+  `65e8d0384b3a2f1cf6ecb4216ace74de0b6891bcbf392eb996f5c0c370f12404`.
+  The Metal smoke SHA-256 remains
+  `b69ef075a8062de2f94bfa30a4e8242ba5b11f695c4dae04bd003a4efca294d5`.
+  These files are archived only under `../../build/artifacts/1620588`; none was
+  installed, added to an AuxKC or loaded by the VM.
+- The follow-up lifecycle contract also decodes the native `test $0x20` and
+  conditional branch around `setAsyncSliceCount`, proving that the rejected
+  feature bit is the exact pre-start trigger for that raw-MMIO path instead of
+  relying only on a nearby call edge.
 
 ## V254 fail-closed host containment gate (offline)
 
