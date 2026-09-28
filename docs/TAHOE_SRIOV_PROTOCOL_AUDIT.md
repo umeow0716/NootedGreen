@@ -1,12 +1,39 @@
 # Tahoe SR-IOV protocol audit — in progress
 
 Updated: 2026-09-28. The last dynamic source baseline is `ce166c8`; the latest
-offline-reviewed checkpoint before the V254 host gate is `d23f7a7` on
-`codex/tahoe-sriov-vf`. This is NOT a boot-test candidate or a successful driver
+offline-reviewed checkpoint is `f3ee630` on `codex/tahoe-sriov-vf`. This is NOT
+a boot-test candidate or a successful driver
 baseline. The `ce166c8` run produced repeatable host PF DMAR faults followed by
 i915 hangs and a host reboot. Keep `macos-tahoe-sriov` shut off until the
 corrected code passes the remaining offline review and every independently
 enforced containment precondition.
+
+## V258 legacy hardware-fence exclusion (offline)
+
+- Tahoe's tiled/aperture resource path can reach
+  `IGFenceAllocator::allocate()` independently of the already isolated engine
+  start. The allocator consumes a legacy fence slot and enters
+  `IGFence::initWithOptions()`; that constructor takes physical render
+  force-wake and writes both halves of the selected fence through accelerator
+  MMIO base `+0x1240` at `0x100000 + index*8`. `IGFence::free()` repeats the
+  same physical force-wake and register writes before returning the slot.
+- A classified VF now replaces the allocator boundary with an exact null
+  result. It does not consume the allocator bitmap, construct an object, claim
+  a fence, or fabricate success. The reachable `IGAccelResource::addToAperture`
+  caller already releases its aperture allocation and returns false on null;
+  the display-pipe caller has an equivalent cleanup path and is independently
+  unreachable because VF framebuffer probe/start is rejected. A physical
+  function retains the native fence allocator unchanged.
+- The lifecycle contract fixes the allocator-to-constructor edge, both direct
+  callers, both raw fence-register write bodies, all four force-wake calls and
+  the aperture caller's null-result branch in both admitted Tahoe payloads. It
+  also requires the VF route to be a hardware-free `nullptr` wrapper. Route
+  inventory is now 83 unique symbols (80 accelerator, three framebuffer).
+- This remains offline containment work. No candidate was installed, no AuxKC
+  was built, no VM or GPU test was started, and no PCI/SR-IOV state changed.
+  The complete syntax, zero-finding Clang analyzer, strict ABI, Mach-O,
+  exhaustive protocol and sanitizer suite passes at
+  `/tmp/ngreen-static.JVMZEy`.
 
 ## V256 physical-engine exclusion and headless callback review (offline)
 

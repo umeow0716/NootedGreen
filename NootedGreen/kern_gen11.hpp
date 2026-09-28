@@ -139,6 +139,9 @@ private:
 	                                      uint32_t stamp, uint32_t engine);
 	static void vfTelemetryUsageFrameCalc(void *that, void *accelerator,
 	                                      uint32_t frame);
+	static void *vfRejectPhysicalFence(void *that,
+	                                   const NGIGAddressRange &range,
+	                                   uint64_t pitch, uint32_t tileMode);
 	static void *igAccelTaskWithOptions(void *that);
 	mach_vm_address_t oigAccelTaskWithOptions {};
 	mach_vm_address_t igAccelTaskCounter {};

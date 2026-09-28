@@ -101,6 +101,11 @@ GLOBAL_MAP_RANGE = "__ZN25IGHardwareGlobalPageTable8mapRangeERK14IGAddressRangey
 GLOBAL_MAP_ROTATED = "__ZN25IGHardwareGlobalPageTable15mapRangeRotatedER33IGAddressRangeRotatedPageIteratorR25IGPhysicalSegmentIteratory"
 GLOBAL_UNMAP_RANGE = "__ZN25IGHardwareGlobalPageTable10unmapRangeERK14IGAddressRange"
 GLOBAL_MAP_DUMMY = "__ZN25IGHardwareGlobalPageTable13mapRangeDummyERK14IGAddressRangey"
+FENCE_ALLOCATE = "__ZN16IGFenceAllocator8allocateERK14IGAddressRangem19GFX3DSTATE_TILEMODE"
+FENCE_INIT = "__ZN7IGFence15initWithOptionsEP16IGFenceAllocatormRK14IGAddressRangem19GFX3DSTATE_TILEMODE"
+FENCE_FREE = "__ZN7IGFence4freeEv"
+RESOURCE_ADD_APERTURE = "__ZN15IGAccelResource13addToApertureEv"
+DISPLAY_ALLOC_SCANOUT = "__ZN18IGAccelDisplayPipe21allocateScanoutMemoryEP19IntelScaledModeDataj"
 BLIT3D_BOUNDS_START = "__ZN23IGHardwareBlit2DContext10initializeEv"
 BLIT3D_BOUNDS_END = "__ZN21IGAccelDisplayMachine9MetaClassC1Ev"
 BLIT3D_GLOBAL_INIT = "__GLOBAL__sub_I_IGHardwareContext.cpp"
@@ -116,6 +121,12 @@ HWS_ENGINE_MMIO_ANCHOR = bytes.fromhex(
     "49 8b 8e 40 12 00 00 42 89 04 21")
 HWS_GLOBAL_MMIO_ANCHOR = bytes.fromhex(
     "49 8b 8e 40 12 00 00 89 81 80 80 01 00")
+FENCE_INIT_MMIO_ANCHOR = bytes.fromhex(
+    "48 8b 8f 40 12 00 00 89 1c 01 48 8b 45 c8 44 89 2c 01")
+FENCE_FREE_MMIO_ANCHOR = bytes.fromhex(
+    "48 8b 8f 40 12 00 00 89 1c 01 46 89 2c 31")
+FENCE_RESOURCE_NULL_UNWIND = bytes.fromhex(
+    "49 89 86 28 02 00 00 48 85 c0 74 60")
 DPSM_SCHEDULER_IDLE_SLOT = bytes.fromhex(
     "48 8b 07 ff 90 60 01 00 00")
 DPSM_NOTIFY_SLOT = bytes.fromhex(
@@ -399,6 +410,30 @@ def macho_inventory(path):
             hws_register_body.count(HWS_GLOBAL_MMIO_ANCHOR) != 1:
         raise AssertionError(
             f"{path}: physical HWS-register MMIO inventory changed")
+
+    # Tiled/aperture resources reach the legacy fence allocator independently
+    # of engine start. Its constructor and destructor each take physical
+    # force-wake and write the 0x100000 fence-register bank through MMIO+0x1240.
+    # A null allocator result is a native fail-closed boundary: both resource
+    # and display callers check it and unwind without creating an IGFence whose
+    # later free method would repeat the physical writes.
+    if len(direct_branches(FENCE_ALLOCATE, FENCE_INIT)) != 1:
+        raise AssertionError(f"{path}: fence allocator/init edge changed")
+    if len(direct_branches(RESOURCE_ADD_APERTURE, FENCE_ALLOCATE)) != 1 or \
+            len(direct_branches(DISPLAY_ALLOC_SCANOUT, FENCE_ALLOCATE)) != 1:
+        raise AssertionError(f"{path}: legacy fence allocation callers changed")
+    for owner, anchor in ((FENCE_INIT, FENCE_INIT_MMIO_ANCHOR),
+                          (FENCE_FREE, FENCE_FREE_MMIO_ANCHOR)):
+        body = image[value(owner):next_symbol(value(owner))]
+        if body.count(anchor) != 1 or \
+                len(direct_branches(owner, SAFE_FORCE_WAKE)) != 2:
+            raise AssertionError(
+                f"{path}: physical fence-register protocol changed in {owner}")
+    resource_start = value(RESOURCE_ADD_APERTURE)
+    resource_body = image[resource_start:next_symbol(resource_start)]
+    if resource_body.count(FENCE_RESOURCE_NULL_UNWIND) != 1:
+        raise AssertionError(
+            f"{path}: aperture resource no longer unwinds a null fence")
     dpsm_refs = []
     for candidate in range(accelerator_start, accelerator_start_end - 6):
         if image[candidate:candidate + 3] != bytes.fromhex("48 8d 35"):
@@ -738,6 +773,19 @@ def source_contract(path):
         if token not in pci_resolution:
             raise AssertionError(
                 f"{path}: retained native bootstrap descendant is not VF-routed: {token}")
+    if FENCE_ALLOCATE not in pci_resolution:
+        raise AssertionError(f"{path}: physical fence allocator is not VF-routed")
+    if ('{"' + FENCE_ALLOCATE + '",vfRejectPhysicalFence},' not in
+            normalized_pci_resolution):
+        raise AssertionError(f"{path}: physical fence route mapping changed")
+    fence_reject = function_body(
+        source, "void *Gen11::vfRejectPhysicalFence(void *that,")
+    if "return nullptr;" not in fence_reject:
+        raise AssertionError(f"{path}: VF fence rejection no longer returns null")
+    for forbidden in ("FunctionCast", "callback->", "0x1240", "SafeForceWake"):
+        if forbidden in fence_reject:
+            raise AssertionError(
+                f"{path}: VF fence rejection re-enters hardware through {forbidden}")
 
     load_guc = function_body(source, "bool Gen11::loadGuCBinary(void *that)")
     for token in (

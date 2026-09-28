@@ -2306,6 +2306,14 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			 IGHardwareGlobalPageTableUnmapRange},
 			{"__ZN25IGHardwareGlobalPageTable13mapRangeDummyERK14IGAddressRangey",
 			 IGHardwareGlobalPageTableMapRangeDummy},
+
+			// Tahoe's aperture-resource path allocates a legacy hardware fence whose
+			// constructor and destructor both write the PF-owned 0x100000 fence
+			// register bank under physical force-wake. A VF owns no such registers.
+			// Reject at the allocation boundary before a fence object or slot exists;
+			// the native callers already unwind a null result transactionally.
+			{"__ZN16IGFenceAllocator8allocateERK14IGAddressRangem19GFX3DSTATE_TILEMODE",
+			 vfRejectPhysicalFence},
 			
 			// A VF owns neither engine power/reset nor legacy execlist rings. Keep
 			// Apple's lifecycle calls away from PF-owned registers; final stop still
@@ -3472,6 +3480,17 @@ void Gen11::vfTelemetryUsageFrameCalc(void *that, void *accelerator,
 	(void)that;
 	(void)accelerator;
 	(void)frame;
+}
+
+void *Gen11::vfRejectPhysicalFence(void *that,
+	                               const NGIGAddressRange &range,
+	                               uint64_t pitch, uint32_t tileMode)
+{
+	(void)that;
+	(void)range;
+	(void)pitch;
+	(void)tileMode;
+	return nullptr;
 }
 
 void Gen11::populateResetRegisterList(void *that)
