@@ -39,6 +39,19 @@ enforced containment precondition.
   certify the kernel journal and the inactive domain still has
   `on_reboot=restart`, `on_crash=preserve`, and watchdog `reset`. The controller
   was not armed, no XML was changed and no VM/hardware operation occurred.
+- Checkpoint `2f71f9d` passed GitHub Actions run `36389963833`. Its archived
+  release zip SHA-256 is
+  `b50b2f300cfe5e1a2a4a859be00f3cfe0b2d9fa5bbfc1fee4cfcf5ff47896473`;
+  kext executable UUID is `DB98A0FC-9002-3D29-9F70-DB37EB9F9DE8` and SHA-256 is
+  `0ef62570ca942dc56cba3c66bdffa54c57dbd06ef21a955785afb3f9e517875c`.
+  The Metal smoke SHA-256 remains
+  `b69ef075a8062de2f94bfa30a4e8242ba5b11f695c4dae04bd003a4efca294d5`.
+  Relative to `d23f7a7`, the kext differs in exactly 17 bytes: its 16-byte
+  `LC_UUID` and the final day byte of Lilu's `REL-100-2026-09-28` build string.
+  Zeroing those two identity fields gives the same normalized SHA-256
+  `23b7bb42cf3e15f5db6fd65c2d41c88692a4c2a0ccce4ba1668f48474fd971cf`
+  for both builds, so there is no runtime-code drift. The artifact is archived
+  only under `../../build/artifacts/2f71f9d`; it was not deployed or loaded.
 
 ## V252 static rollback and retained-bootstrap reachability review
 
