@@ -2054,11 +2054,19 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				 vfTelemetryUsageStopSample},
 				{"__ZN16IGTelemetryUsage16frameCalcGPUBusyEP16IntelAcceleratorj",
 				 vfTelemetryUsageFrameCalc},
+				// TelemetryDisable gates trace bodies, but native initSysctl has
+				// already registered 55 writable debug OIDs and published this
+				// accelerator to the global idvar control plane before checking it.
+				// Suppress registration and its paired teardown together on a VF.
+				{"__ZN16IntelAccelerator10initSysctlEv",
+				 vfDisableDebugSysctl},
+				{"__ZN16IntelAccelerator16unregisterSysctlEv",
+				 vfDisableDebugSysctl},
 			};
 			PANIC_COND(!patcher.routeMultiple(
 			               index, telemetryRoutes, address, size), "ngreen",
 			           "Failed to isolate VF telemetry and OA hardware paths");
-			SYSLOG("ngreen", "V257: disabled PF-owned telemetry/OA paths for VF");
+			SYSLOG("ngreen", "V260: disabled PF-owned telemetry/OA and debug-sysctl paths for VF");
 			KernelPatcher::SolveRequest solveRequests[] = {
 				{"__ZN13IGHardwareGuC16initSchedControlEv", this->orgInitSchedControl},
 				{"__ZN11IGScheduler12initFirmwareEv", this->vfSchedulerInitFirmware},
@@ -3487,6 +3495,11 @@ void Gen11::vfTelemetryUsageFrameCalc(void *that, void *accelerator,
 	(void)that;
 	(void)accelerator;
 	(void)frame;
+}
+
+void Gen11::vfDisableDebugSysctl(void *that)
+{
+	(void)that;
 }
 
 void *Gen11::vfRejectPhysicalFence(void *that,

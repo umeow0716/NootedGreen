@@ -1,12 +1,39 @@
 # Tahoe SR-IOV protocol audit — in progress
 
 Updated: 2026-09-29. The last dynamic source baseline is `ce166c8`; the latest
-completed offline-reviewed checkpoint is `1e83e56` on
+completed offline-reviewed checkpoint is `6cdcc55` on
 `codex/tahoe-sriov-vf`. This is NOT a boot-test candidate or a successful
 driver baseline. The `ce166c8` run produced repeatable host PF DMAR faults
 followed by i915 hangs and a host reboot. Keep `macos-tahoe-sriov` shut off until the
 corrected code passes the remaining offline review and every independently
 enforced containment precondition.
+
+## V260 VF debug-sysctl control-plane exclusion (offline)
+
+- The retained native start tail calls `IntelAccelerator::initSysctl()` after
+  engine, trace-manager and block-fence setup. Pinned disassembly shows that it
+  registers 55 debug OIDs before testing `TelemetryDisable`; all 52 leaf idvar
+  OIDs point at `intelLong_sysctl`, whose write path enters
+  `__idvarSetParamLocked`. The native initializer then publishes the
+  accelerator into the global `l_accelerators` array and can enter the OA
+  setup helper. This debug control plane is not required for Metal execution.
+- The idvar dispatcher has direct telemetry/OA and trace-state edges. The trace
+  turn-on path retains its own `TelemetryDisable` gate, but when that private
+  gate is clear its graph includes timestamp reads at raw MMIO `0x2358/0x235c` and the
+  `0x91bc` performance-counter write. Leaving a broad PF debug surface
+  registered in a VF is therefore an unnecessary and fragile dependency on
+  every private selector's individual gating.
+- A classified VF now replaces both `initSysctl()` and its one native stop-path
+  `unregisterSysctl()` with the same exact-ABI no-op. Pairing the two routes
+  prevents teardown from unregistering OIDs that the VF never installed. PF
+  start and stop remain native. The binary/source contract fixes start/stop
+  call edges, the 55-register/55-unregister topology, all 52 handler pointers,
+  global publication, idvar/trace/OA descendants, hardware anchors and the
+  hardware-free replacement. Route inventory is now 86 unique symbols (83
+  accelerator, three framebuffer).
+- This remains static containment work. No candidate was installed or loaded,
+  and the VM, PCI binding and SR-IOV state were not touched. The complete
+  static suite passes at `/tmp/ngreen-static.1PeApO`.
 
 ## V259 pre-engine eDRAM detection exclusion (offline)
 

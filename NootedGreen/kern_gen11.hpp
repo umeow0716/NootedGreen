@@ -139,6 +139,7 @@ private:
 	                                      uint32_t stamp, uint32_t engine);
 	static void vfTelemetryUsageFrameCalc(void *that, void *accelerator,
 	                                      uint32_t frame);
+	static void vfDisableDebugSysctl(void *that);
 	static void *vfRejectPhysicalFence(void *that,
 	                                   const NGIGAddressRange &range,
 	                                   uint64_t pitch, uint32_t tileMode);
