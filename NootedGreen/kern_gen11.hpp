@@ -101,6 +101,44 @@ private:
 	mach_vm_address_t ostart {};
 	mach_vm_address_t oAcceleratorStop {};
 	mach_vm_address_t ioPciConfigureInterrupts {};
+	static uint32_t vfTelemetryPrintDashboard(void *that, uint64_t options);
+	static int vfTelemetryInitWithAccelerator(void *that, void *accelerator,
+	                                         uint32_t options);
+	static void vfTelemetryRetain(void *that);
+	static void vfTelemetryRelease(void *that);
+	static uint64_t vfTelemetryCalcGlobalUsage(void *that, uint64_t timestamp);
+	static int64_t vfTelemetryOperation(void *that, uint64_t selector,
+	                                   int64_t value, void *operation,
+	                                   void *connection, void *task);
+	static void vfTelemetryPatchContextImage(void *that, void *contextImage);
+	static void vfTelemetryOnConnectionStop(void *that, void *connection,
+	                                        void *task);
+	static IOReturn vfTelemetryInitOaBuffer(void *that, void *connection,
+	                                       void *input, void *output,
+	                                       uint64_t inputSize,
+	                                       uint64_t *outputSize);
+	static IOReturn vfTelemetryReadOaBuffer(void *that, void *input,
+	                                       void *output, uint64_t *outputSize,
+	                                       void *connection);
+	static IOReturn vfTelemetryMapOaBufferMemory(void *that, void *input,
+	                                            void *output,
+	                                            uint64_t inputSize,
+	                                            uint64_t *outputSize,
+	                                            void *task);
+	static void vfTelemetryUsageAlloc(void *that);
+	static void vfTelemetryUsageLog(void *that, void *context,
+	                                uint64_t timestamp);
+	static void vfTelemetryUsageReportGlobal(void *that);
+	static bool vfTelemetryUsageStartSample(void *that, void *ring,
+	                                        uint32_t stamp, uint32_t engine,
+	                                        uint64_t commandId,
+	                                        uint64_t submitTime,
+	                                        uint64_t startTime,
+	                                        uint64_t endTime);
+	static void vfTelemetryUsageStopSample(void *that, void *ring,
+	                                      uint32_t stamp, uint32_t engine);
+	static void vfTelemetryUsageFrameCalc(void *that, void *accelerator,
+	                                      uint32_t frame);
 	static void *igAccelTaskWithOptions(void *that);
 	mach_vm_address_t oigAccelTaskWithOptions {};
 	mach_vm_address_t igAccelTaskCounter {};

@@ -2013,6 +2013,52 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		if (vfActive) {
 			PANIC_COND(!this->ioPciConfigureInterrupts, "ngreen",
 				"Cannot resolve the exported Tahoe PCI MSI configurator");
+			// Tahoe's telemetry manager and per-stamp usage objects are created
+			// before startGraphicsEngine(). TelemetryDisable only gates the trace
+			// stream and context-image patchers; native manager initialization,
+			// IOReport, sysctl and user-client OA paths still access PF-owned MMIO.
+			// Keep Apple's object/lifetime shape, but make every externally reachable
+			// hardware telemetry edge fail closed for a VF.
+			KernelPatcher::RouteRequest telemetryRoutes[] = {
+				{"__ZN18IGTelemetryManager14printDashboardEy",
+				 vfTelemetryPrintDashboard},
+				{"__ZN18IGTelemetryManager19initWithAcceleratorEP16IntelAcceleratorj",
+				 vfTelemetryInitWithAccelerator},
+				{"__ZN18IGTelemetryManager15telemetryRetainEv",
+				 vfTelemetryRetain},
+				{"__ZN18IGTelemetryManager16telemetryReleaseEv",
+				 vfTelemetryRelease},
+				{"__ZN18IGTelemetryManager15calcGlobalUsageEy",
+				 vfTelemetryCalcGlobalUsage},
+				{"__ZN18IGTelemetryManager9operationEyxP18TelemetryOperationP19TelemetryConnectionP4task",
+				 vfTelemetryOperation},
+				{"__ZN18IGTelemetryManager20patchContextImageRCSEP27SGfxHardwareContextImageRCS",
+				 vfTelemetryPatchContextImage},
+				{"__ZN18IGTelemetryManager16onConnectionStopER19TelemetryConnectionP4task",
+				 vfTelemetryOnConnectionStop},
+				{"__ZN18IGTelemetryManager21telemetryInitOaBufferER19TelemetryConnectionP19MDAPIInitOABufferOpS3_yPy",
+				 vfTelemetryInitOaBuffer},
+				{"__ZN18IGTelemetryManager21telemetryReadOaBufferEP21MDAPIReadOABufferOpInP22MDAPIReadOABufferOpOutPyR19TelemetryConnection",
+				 vfTelemetryReadOaBuffer},
+				{"__ZN18IGTelemetryManager26telemetryMapOaBufferMemoryEP27IntelDeviceMapStatsMemInOutS1_yPyP4task",
+				 vfTelemetryMapOaBufferMemory},
+				{"__ZN16IGTelemetryUsage13allocUsageMemEv",
+				 vfTelemetryUsageAlloc},
+				{"__ZN16IGTelemetryUsage8logUsageEP17IGHardwareContexty",
+				 vfTelemetryUsageLog},
+				{"__ZN16IGTelemetryUsage17reportGlobalUsageEv",
+				 vfTelemetryUsageReportGlobal},
+				{"__ZN16IGTelemetryUsage11startSampleEP20IGHardwareRingBufferjjyyyy",
+				 vfTelemetryUsageStartSample},
+				{"__ZN16IGTelemetryUsage10stopSampleEP20IGHardwareRingBufferjj",
+				 vfTelemetryUsageStopSample},
+				{"__ZN16IGTelemetryUsage16frameCalcGPUBusyEP16IntelAcceleratorj",
+				 vfTelemetryUsageFrameCalc},
+			};
+			PANIC_COND(!patcher.routeMultiple(
+			               index, telemetryRoutes, address, size), "ngreen",
+			           "Failed to isolate VF telemetry and OA hardware paths");
+			SYSLOG("ngreen", "V257: disabled PF-owned telemetry/OA paths for VF");
 			KernelPatcher::SolveRequest solveRequests[] = {
 				{"__ZN13IGHardwareGuC16initSchedControlEv", this->orgInitSchedControl},
 				{"__ZN11IGScheduler12initFirmwareEv", this->vfSchedulerInitFirmware},
@@ -3187,13 +3233,18 @@ bool Gen11::start(void *that, void *provider)
 
 	if (vfActive) {
 		auto *zero = OSNumber::withNumber(0ULL, 32);
+		auto *one = OSNumber::withNumber(1ULL, 32);
 		const bool pmDisabled =
 			zero && service->setProperty("SchedPmNotifyEnable", zero);
 		const bool fallbackDisabled =
 			zero && service->setProperty("SchedulerFallbackOnFirmwareFail", zero);
+		const bool telemetryDisabled =
+			one && service->setProperty("TelemetryDisable", one);
 		OSSafeReleaseNULL(zero);
-		if (!pmDisabled || !fallbackDisabled) {
-			vfMarkProtocolFault("failed to disable PF-owned VF scheduler fallbacks");
+		OSSafeReleaseNULL(one);
+		if (!pmDisabled || !fallbackDisabled || !telemetryDisabled) {
+			vfMarkProtocolFault(
+				"failed to disable PF-owned VF scheduler/telemetry paths");
 			return false;
 		}
 	}
@@ -3241,6 +3292,186 @@ void Gen11::acceleratorStop(void *that, void *provider)
 		SYSLOG("ngreen", "V242: VF accelerator stop requested; deferring quiescence until post-stamp engine stop");
 	}
 	FunctionCast(acceleratorStop, callback->oAcceleratorStop)(that, provider);
+}
+
+uint32_t Gen11::vfTelemetryPrintDashboard(void *that, uint64_t options)
+{
+	(void)that;
+	(void)options;
+	return 0;
+}
+
+int Gen11::vfTelemetryInitWithAccelerator(void *that, void *accelerator,
+	                                      uint32_t options)
+{
+	if (!that || !accelerator)
+		return static_cast<int>(kIOReturnUnsupported);
+
+	// Exact Tahoe IGTelemetryManager layout. telemetryCreateManager has already
+	// constructed the hash table and zeroed the embedded IGSupportMDAPI object.
+	// Publish only the software ownership fields consumed by teardown/statistics;
+	// leave both OA reference counters and all mapped-buffer pointers zero. The
+	// native destructor's finalizeOaBuffer() zero-counter fast path then performs
+	// no register access and no release of fabricated storage.
+	getMember<void *>(that, 0x258) = accelerator;
+	getMember<void *>(that, 0x2D8) = accelerator;
+	getMember<void *>(that, 0x228) = getMember<void *>(accelerator, 0xE00);
+	getMember<uint32_t>(that, 0x2A0) = 0;
+	getMember<uint32_t>(that, 0x10) = 1;
+	getMember<uint32_t>(that, 0x0C) = options;
+	getMember<uint64_t>(that, 0x230) = 1;
+	getMember<uint32_t>(that, 0x30C) = 0;
+	getMember<uint32_t>(that, 0x310) = 0;
+	return 0;
+}
+
+void Gen11::vfTelemetryRetain(void *that)
+{
+	(void)that;
+}
+
+void Gen11::vfTelemetryRelease(void *that)
+{
+	(void)that;
+}
+
+uint64_t Gen11::vfTelemetryCalcGlobalUsage(void *that, uint64_t timestamp)
+{
+	(void)that;
+	(void)timestamp;
+	return 0;
+}
+
+int64_t Gen11::vfTelemetryOperation(void *that, uint64_t selector,
+	                                int64_t value, void *operation,
+	                                void *connection, void *task)
+{
+	(void)that;
+	(void)selector;
+	(void)value;
+	(void)operation;
+	(void)connection;
+	(void)task;
+	return static_cast<int64_t>(static_cast<int32_t>(kIOReturnUnsupported));
+}
+
+void Gen11::vfTelemetryPatchContextImage(void *that, void *contextImage)
+{
+	(void)that;
+	(void)contextImage;
+}
+
+void Gen11::vfTelemetryOnConnectionStop(void *that, void *connection,
+	                                     void *task)
+{
+	(void)that;
+	(void)task;
+	if (!connection)
+		return;
+	auto *flags = static_cast<uint8_t *>(connection);
+	flags[0x08] = 0;
+	flags[0x09] = 0;
+	flags[0x0A] = 0;
+}
+
+IOReturn Gen11::vfTelemetryInitOaBuffer(void *that, void *connection,
+	                                    void *input, void *output,
+	                                    uint64_t inputSize,
+	                                    uint64_t *outputSize)
+{
+	(void)that;
+	(void)connection;
+	(void)input;
+	(void)output;
+	(void)inputSize;
+	(void)outputSize;
+	return kIOReturnUnsupported;
+}
+
+IOReturn Gen11::vfTelemetryReadOaBuffer(void *that, void *input,
+	                                    void *output, uint64_t *outputSize,
+	                                    void *connection)
+{
+	(void)that;
+	(void)input;
+	(void)output;
+	(void)outputSize;
+	(void)connection;
+	return kIOReturnUnsupported;
+}
+
+IOReturn Gen11::vfTelemetryMapOaBufferMemory(void *that, void *input,
+	                                         void *output, uint64_t inputSize,
+	                                         uint64_t *outputSize, void *task)
+{
+	(void)that;
+	(void)input;
+	(void)output;
+	(void)inputSize;
+	(void)outputSize;
+	(void)task;
+	return kIOReturnUnsupported;
+}
+
+void Gen11::vfTelemetryUsageAlloc(void *that)
+{
+	if (!that)
+		return;
+	// Preserve initWithAcceleratorAndStampIndex()'s supported allocation-failure
+	// state without paying for 64 per-stamp GPU and metadata buffers on a VF.
+	getMember<void *>(that, 0x68) = nullptr;
+	getMember<void *>(that, 0x70) = nullptr;
+	getMember<uint32_t>(that, 0x78) = 0;
+	getMember<uint64_t>(that, 0x80) = 0;
+	getMember<void *>(that, 0x88) = nullptr;
+	getMember<uint32_t>(that, 0x90) = 0;
+}
+
+void Gen11::vfTelemetryUsageLog(void *that, void *context, uint64_t timestamp)
+{
+	(void)that;
+	(void)context;
+	(void)timestamp;
+}
+
+void Gen11::vfTelemetryUsageReportGlobal(void *that)
+{
+	(void)that;
+}
+
+bool Gen11::vfTelemetryUsageStartSample(void *that, void *ring,
+	                                     uint32_t stamp, uint32_t engine,
+	                                     uint64_t commandId,
+	                                     uint64_t submitTime,
+	                                     uint64_t startTime,
+	                                     uint64_t endTime)
+{
+	(void)that;
+	(void)ring;
+	(void)stamp;
+	(void)engine;
+	(void)commandId;
+	(void)submitTime;
+	(void)startTime;
+	(void)endTime;
+	return false;
+}
+
+void Gen11::vfTelemetryUsageStopSample(void *that, void *ring,
+	                                   uint32_t stamp, uint32_t engine)
+{
+	(void)that;
+	(void)ring;
+	(void)stamp;
+	(void)engine;
+}
+
+void Gen11::vfTelemetryUsageFrameCalc(void *that, void *accelerator,
+	                                   uint32_t frame)
+{
+	(void)that;
+	(void)accelerator;
+	(void)frame;
 }
 
 void Gen11::populateResetRegisterList(void *that)
@@ -5514,6 +5745,24 @@ bool Gen11::injectAcceleratorPersonality(const char *bundleId)
 	drivers->release();
 	if (!dict) {
 		SYSLOG("ngreen", "injectAcceleratorPersonality: native personality is incomplete");
+		return false;
+	}
+
+	// OSDictionary::withDictionary is shallow. Clone Development separately so
+	// forcing the VF-only telemetry policy cannot mutate the admitted native PF
+	// personality retained by the catalogue.
+	auto *sourceDevelopment =
+		OSDynamicCast(OSDictionary, dict->getObject("Development"));
+	auto *development = sourceDevelopment ?
+		OSDictionary::withDictionary(sourceDevelopment) : nullptr;
+	auto *telemetryDisabled = OSNumber::withNumber(1ULL, 32);
+	const bool telemetryReady = development && telemetryDisabled &&
+		development->setObject("TelemetryDisable", telemetryDisabled) &&
+		dict->setObject("Development", development);
+	OSSafeReleaseNULL(telemetryDisabled);
+	OSSafeReleaseNULL(development);
+	if (!telemetryReady) {
+		dict->release();
 		return false;
 	}
 

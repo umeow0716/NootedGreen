@@ -141,6 +141,16 @@ if python3 -B tools/vf_accelerator_lifecycle_contract_test.py \
 else
     failed=1
 fi
+if python3 -B tools/vf_telemetry_isolation_contract_test.py \
+    NootedGreen/kern_gen11.cpp \
+    sle_Internal/le/AppleIntelTGLGraphics.kext/Contents/Info.plist \
+    sle_Internal/sle/AppleIntelTGLGraphics.kext/Contents/Info.plist \
+    sle_Internal/le/AppleIntelTGLGraphics.kext/Contents/MacOS/AppleIntelTGLGraphics \
+    sle_Internal/sle/AppleIntelTGLGraphics.kext/Contents/MacOS/AppleIntelTGLGraphics; then
+    printf 'PASS offline VF telemetry/OA isolation contracts\n'
+else
+    failed=1
+fi
 if "$compiler" -std=c++14 -O1 -g -fsanitize=address,undefined \
     tools/ggtt_init_bounds_test.cpp -o "$task_output/ggtt-init-bounds-test" && \
     "$task_output/ggtt-init-bounds-test"; then

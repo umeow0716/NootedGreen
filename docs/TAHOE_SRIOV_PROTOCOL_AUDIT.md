@@ -3562,3 +3562,44 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   archived in the guest; the active collection was restored to the original
   SHA-256 `041a15e0415a2756a22e53f0c8e7dc348df01afd78cfc76424cb7488094b1fdb`.
   The VM is running and reachable with no Lilu, NootedGreen or TGL image loaded.
+
+### Isolate pre-engine telemetry and OA hardware access on a VF
+
+- A new complete static pass over Tahoe's telemetry graph found another path
+  that runs before `startGraphicsEngine()`. `IntelAccelerator::start()` calls
+  `telemetryCreateManager(1)` before HWS allocation and engine start. Native
+  `IGTelemetryManager::initWithAccelerator()` then performs four force-wake
+  transitions, reads raw `MMIO+0x145998`, writes `MMIO+0x2360`, allocates an OA
+  buffer and enables OA collection. This is a PF-owned register path and is not
+  safe merely because the accelerator later replaces engine start.
+- The source `TelemetryDisable` property is insufficient containment. It gates
+  trace-stream startup and three context-image patchers, but it does not gate
+  manager construction, IOReport global usage, sysctl operations, user-client
+  OA init/read/map, dashboard access or per-stamp usage reporting. In
+  particular, `IGTelemetryUsage::reportGlobalUsage()` directly reads
+  `MMIO+0x145948`.
+- Seventeen exact symbols are now routed only for a classified VF. Manager init
+  preserves the native object and publishes only its exact software ownership
+  fields; manager operations, dashboard, global usage, context patches and OA
+  user calls either return unsupported or have no hardware side effect. The 64
+  native per-stamp objects are retained for ABI/lifetime compatibility, but
+  their GPU/metadata allocation hook leaves the documented allocation-failure
+  state and all sampling/reporting entry points are inert. PF execution keeps
+  all native methods.
+- Teardown is not guessed. Pinned constructor disassembly proves the manager's
+  performance-config pointer, OA fields and usage-pointer array begin zeroed.
+  Pinned destructor disassembly proves embedded OA finalization first checks
+  its two zero reference counters, while usage teardown subtracts zero sizes
+  and null-checks both buffers. No fabricated retain, backing or MMIO restore is
+  introduced. The complete direct graph from calc/operation/context patch/OA
+  APIs to every dangerous helper is fixed for both admitted payloads.
+- The injected VF personality separately clones the shallow `Development`
+  dictionary and forces `TelemetryDisable=1`; the two source PF personalities
+  remain at zero. Accelerator start independently requires the same root
+  property so a failed policy publication aborts before native start.
+- `tools/vf_telemetry_isolation_contract_test.py` pins the native call order,
+  every MMIO/OA anchor, all 17 route mappings, software object offsets,
+  zero-state teardown and PF plist policy. The complete route inventory is now
+  82 unique symbols (79 accelerator and three framebuffer). This checkpoint is
+  static only: the host i915/DMAR hard hold remains in force, the VM was not
+  started, and no candidate was installed or loaded.
