@@ -106,6 +106,12 @@ FENCE_INIT = "__ZN7IGFence15initWithOptionsEP16IGFenceAllocatormRK14IGAddressRan
 FENCE_FREE = "__ZN7IGFence4freeEv"
 RESOURCE_ADD_APERTURE = "__ZN15IGAccelResource13addToApertureEv"
 DISPLAY_ALLOC_SCANOUT = "__ZN18IGAccelDisplayPipe21allocateScanoutMemoryEP19IntelScaledModeDataj"
+ACCELERATOR_VTABLE = "__ZTV16IntelAccelerator"
+NEW_MEMORY_MANAGER = "__ZN16IntelAccelerator16newMemoryManagerEv"
+TGL_MEMORY_METACLASS = "__ZN21IntelTGLMemoryManager9metaClassE"
+TGL_MEMORY_VTABLE = "__ZTV21IntelTGLMemoryManager"
+MEMORY_MANAGER_INIT = "__ZN15IGMemoryManager4initEP16IntelAcceleratorRK18IntelSharedMemInfoRK14_stolenMemInfo"
+TGL_DETECT_EDRAM = "__ZN21IntelTGLMemoryManager11detectEDRAMEv"
 BLIT3D_BOUNDS_START = "__ZN23IGHardwareBlit2DContext10initializeEv"
 BLIT3D_BOUNDS_END = "__ZN21IGAccelDisplayMachine9MetaClassC1Ev"
 BLIT3D_GLOBAL_INIT = "__GLOBAL__sub_I_IGHardwareContext.cpp"
@@ -127,6 +133,14 @@ FENCE_FREE_MMIO_ANCHOR = bytes.fromhex(
     "48 8b 8f 40 12 00 00 89 1c 01 46 89 2c 31")
 FENCE_RESOURCE_NULL_UNWIND = bytes.fromhex(
     "49 89 86 28 02 00 00 48 85 c0 74 60")
+MEMORY_EDRAM_ZERO_STATE = bytes.fromhex("66 41 89 46 20")
+EDRAM_CAPABILITY_MMIO_READ = bytes.fromhex(
+    "49 8b 46 18 8b 98 10 00 12 00")
+EDRAM_CONTROL_MMIO_WRITES = bytes.fromhex(
+    "49 8b 46 18 bb 00 00 00 b0 89 98 28 81 13 00 "
+    "c7 80 24 81 13 00 12 10 59 80")
+EDRAM_CONFIRM_MMIO_READ = bytes.fromhex(
+    "49 8b 46 18 8b 80 10 59 14 00")
 DPSM_SCHEDULER_IDLE_SLOT = bytes.fromhex(
     "48 8b 07 ff 90 60 01 00 00")
 DPSM_NOTIFY_SLOT = bytes.fromhex(
@@ -434,6 +448,52 @@ def macho_inventory(path):
     if resource_body.count(FENCE_RESOURCE_NULL_UNWIND) != 1:
         raise AssertionError(
             f"{path}: aperture resource no longer unwinds a null fence")
+
+    # IntelAccelerator's factory slot constructs IntelTGLMemoryManager. Its
+    # base init zeroes the two eDRAM capability bytes and then unconditionally
+    # dispatches virtual slot 0x148 to the TGL detector. That detector accesses
+    # physical eDRAM capability/control registers before engine start, including
+    # a property-dependent programming branch. Force-wake suppression alone is
+    # not containment because every raw load/store remains reachable.
+    accelerator_vtable = value(ACCELERATOR_VTABLE)
+    if struct.unpack_from(
+            "<Q", image, accelerator_vtable + 16 + 0xAF0)[0] != value(
+                NEW_MEMORY_MANAGER):
+        raise AssertionError(
+            f"{path}: accelerator memory-manager factory slot changed")
+    memory_vtable = value(TGL_MEMORY_VTABLE)
+    if struct.unpack_from(
+            "<Q", image, memory_vtable + 16 + 0x148)[0] != value(
+                TGL_DETECT_EDRAM):
+        raise AssertionError(f"{path}: TGL eDRAM virtual slot changed")
+    factory_start = value(NEW_MEMORY_MANAGER)
+    factory_end = next_symbol(factory_start)
+    metaclass_refs = []
+    for candidate in range(factory_start, factory_end - 6):
+        if image[candidate:candidate + 3] != bytes.fromhex("48 8d 05"):
+            continue
+        displacement = struct.unpack_from("<i", image, candidate + 3)[0]
+        if candidate + 7 + displacement == value(TGL_MEMORY_METACLASS):
+            metaclass_refs.append(candidate)
+    if len(metaclass_refs) != 1:
+        raise AssertionError(
+            f"{path}: memory-manager factory no longer selects TGL metaclass")
+    memory_init_start = value(MEMORY_MANAGER_INIT)
+    memory_init_body = image[memory_init_start:next_symbol(memory_init_start)]
+    if memory_init_body.count(MEMORY_EDRAM_ZERO_STATE) != 1 or \
+            memory_init_body.count(bytes.fromhex("ff 90 48 01 00 00")) != 1:
+        raise AssertionError(
+            f"{path}: base memory-manager eDRAM init/dispatch changed")
+    edram_start = value(TGL_DETECT_EDRAM)
+    edram_body = image[edram_start:next_symbol(edram_start)]
+    for anchor in (EDRAM_CAPABILITY_MMIO_READ, EDRAM_CONTROL_MMIO_WRITES,
+                   EDRAM_CONFIRM_MMIO_READ):
+        if edram_body.count(anchor) != 1:
+            raise AssertionError(
+                f"{path}: TGL physical eDRAM MMIO inventory changed")
+    if len(direct_branches(TGL_DETECT_EDRAM, SAFE_FORCE_WAKE)) != 4:
+        raise AssertionError(
+            f"{path}: TGL eDRAM force-wake inventory changed")
     dpsm_refs = []
     for candidate in range(accelerator_start, accelerator_start_end - 6):
         if image[candidate:candidate + 3] != bytes.fromhex("48 8d 35"):
@@ -786,6 +846,21 @@ def source_contract(path):
         if forbidden in fence_reject:
             raise AssertionError(
                 f"{path}: VF fence rejection re-enters hardware through {forbidden}")
+    if ('{"' + TGL_DETECT_EDRAM + '",vfDisableEdramProbe},' not in
+            normalized_pci_resolution):
+        raise AssertionError(f"{path}: physical eDRAM detector is not VF-routed")
+    edram_disable = function_body(
+        source, "void Gen11::vfDisableEdramProbe(void *that)")
+    for token in (
+            "getMember<uint8_t>(that, 0x20) = 0",
+            "getMember<uint8_t>(that, 0x21) = 0"):
+        if token not in edram_disable:
+            raise AssertionError(
+                f"{path}: VF eDRAM capability state is not cleared: {token}")
+    for forbidden in ("FunctionCast", "callback->", "SafeForceWake", "MMIO"):
+        if forbidden in edram_disable:
+            raise AssertionError(
+                f"{path}: VF eDRAM route re-enters hardware through {forbidden}")
 
     load_guc = function_body(source, "bool Gen11::loadGuCBinary(void *that)")
     for token in (

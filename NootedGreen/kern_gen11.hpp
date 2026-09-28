@@ -142,6 +142,7 @@ private:
 	static void *vfRejectPhysicalFence(void *that,
 	                                   const NGIGAddressRange &range,
 	                                   uint64_t pitch, uint32_t tileMode);
+	static void vfDisableEdramProbe(void *that);
 	static void *igAccelTaskWithOptions(void *that);
 	mach_vm_address_t oigAccelTaskWithOptions {};
 	mach_vm_address_t igAccelTaskCounter {};

@@ -1,12 +1,38 @@
 # Tahoe SR-IOV protocol audit — in progress
 
-Updated: 2026-09-28. The last dynamic source baseline is `ce166c8`; the latest
-offline-reviewed checkpoint is `f3ee630` on `codex/tahoe-sriov-vf`. This is NOT
-a boot-test candidate or a successful driver
-baseline. The `ce166c8` run produced repeatable host PF DMAR faults followed by
-i915 hangs and a host reboot. Keep `macos-tahoe-sriov` shut off until the
+Updated: 2026-09-29. The last dynamic source baseline is `ce166c8`; the latest
+completed offline-reviewed checkpoint is `1e83e56` on
+`codex/tahoe-sriov-vf`. This is NOT a boot-test candidate or a successful
+driver baseline. The `ce166c8` run produced repeatable host PF DMAR faults
+followed by i915 hangs and a host reboot. Keep `macos-tahoe-sriov` shut off until the
 corrected code passes the remaining offline review and every independently
 enforced containment precondition.
+
+## V259 pre-engine eDRAM detection exclusion (offline)
+
+- The native memory-manager graph reaches physical registers before the routed
+  engine boundary. `IntelAccelerator` vtable slot `0xaf0` constructs an
+  `IntelTGLMemoryManager`; `IGMemoryManager::init()` clears capability bytes
+  `+0x20/+0x21`, completes its GGTT/fence/page-pool setup, then unconditionally
+  dispatches vtable slot `0x148` to
+  `IntelTGLMemoryManager::detectEDRAM()`.
+- Native detection takes physical render force-wake and raw-reads `0x120010`.
+  A property-dependent branch takes force-wake again, programs
+  `0x138128/0x138124`, waits, and reads `0x145910`. Suppressing the force-wake
+  calls does not prevent those loads/stores. None of these registers belongs to
+  a VF, and this all occurs before `startGraphicsEngine()`.
+- The classified-VF route now replaces only `detectEDRAM()` and explicitly
+  preserves the already initialized false/false capability state. It performs
+  no original call, force-wake or MMIO. A PF retains native detection. The
+  binary contract fixes the accelerator factory slot, exact TGL metaclass,
+  memory-manager virtual slot, initial software state, all three raw-MMIO
+  anchors and all four native force-wake calls in both pinned payloads. Route
+  inventory is now 84 unique symbols (81 accelerator, three framebuffer).
+- This is still static containment work; no candidate was installed or loaded,
+  and the VM/PCI/SR-IOV state was not touched.
+  The complete syntax, zero-finding Clang analyzer, strict ABI, Mach-O,
+  exhaustive protocol and sanitizer suite passes at
+  `/tmp/ngreen-static.hCgCPq`.
 
 ## V258 legacy hardware-fence exclusion (offline)
 

@@ -2314,6 +2314,13 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			// the native callers already unwind a null result transactionally.
 			{"__ZN16IGFenceAllocator8allocateERK14IGAddressRangem19GFX3DSTATE_TILEMODE",
 			 vfRejectPhysicalFence},
+
+			// IGMemoryManager::init invokes this TGL virtual before engine start.
+			// Native detection reads and may program physical eDRAM registers even
+			// after force-wake itself has been suppressed. A VF has no eDRAM aperture;
+			// retain the base initializer's false capability state without MMIO.
+			{"__ZN21IntelTGLMemoryManager11detectEDRAMEv",
+			 vfDisableEdramProbe},
 			
 			// A VF owns neither engine power/reset nor legacy execlist rings. Keep
 			// Apple's lifecycle calls away from PF-owned registers; final stop still
@@ -3491,6 +3498,14 @@ void *Gen11::vfRejectPhysicalFence(void *that,
 	(void)pitch;
 	(void)tileMode;
 	return nullptr;
+}
+
+void Gen11::vfDisableEdramProbe(void *that)
+{
+	if (!that)
+		return;
+	getMember<uint8_t>(that, 0x20) = 0;
+	getMember<uint8_t>(that, 0x21) = 0;
 }
 
 void Gen11::populateResetRegisterList(void *that)
