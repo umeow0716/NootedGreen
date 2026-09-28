@@ -16,6 +16,7 @@ EVENT_FINISH_ALL = "__ZN19IGAccelEventMachine15finishAllStampsEj"
 TRACE_DISABLE = "__ZN25IGAccelTraceStreamManager17disableCollectionE27TraceStreamCollectionChange"
 TRACE_SHUTDOWN = "__ZN25IGAccelTraceStreamManager8shutdownEv"
 UNREGISTER_SYSCTL = "__ZN16IntelAccelerator16unregisterSysctlEv"
+INIT_HARDWARE_STATUS_MEMORY = "__ZN16IntelAccelerator28initHardwareStatusPageMemoryEv"
 BRIDGE_ENABLE = "__ZN17IGInterruptBridge6enableEv"
 BRIDGE_DISABLE = "__ZN17IGInterruptBridge7disableEv"
 BRIDGE_FILTER = "__ZN17IGInterruptBridge22interruptFilterHandlerEP28IOFilterInterruptEventSource"
@@ -38,8 +39,11 @@ STREAMER_ERROR_DISABLE = "__ZN26IGHardwareCommandStreamer421disableErrorInterrup
 PCI_CONFIGURE_INTERRUPTS = "__ZN11IOPCIDevice19configureInterruptsEjjjj"
 SCHEDULER_INIT_FIRMWARE = "__ZN11IGScheduler12initFirmwareEv"
 SCHEDULER4_VTABLE = "__ZTV12IGScheduler4"
+SCHEDULER5_VTABLE = "__ZTV12IGScheduler5"
 SCHEDULER4_INIT = "__ZN12IGScheduler419initWithAcceleratorEP22IOGraphicsAccelerator2"
 SCHEDULER4_LOAD_FIRMWARE = "__ZN12IGScheduler412loadFirmwareEv"
+SCHEDULER4_IS_GPU_IDLE = "__ZNK12IGScheduler49isGpuIdleEv"
+SCHEDULER5_IS_GPU_IDLE = "__ZNK12IGScheduler59isGpuIdleEv"
 SCHEDULER_BASE_INIT = "__ZN11IGScheduler15initWithOptionsEjyP22IOGraphicsAccelerator2"
 COMMAND_STREAMER_FACTORY = "__ZN26IGHardwareCommandStreamer423hardwareCommandStreamerEP22IOGraphicsAccelerator2P10IOWorkLoopP12IGScheduler410IGHwCsType"
 COMMAND_STREAMER_INIT = "__ZN26IGHardwareCommandStreamer44initEP22IOGraphicsAccelerator2P10IOWorkLoopP12IGScheduler410IGHwCsType"
@@ -61,6 +65,11 @@ GUC_READ_DOORBELLS = "__ZN13IGHardwareGuC23readDoorbellSQIDIConfigEv"
 CTB_WITH_OPTIONS = "__ZN21IGHardwareGuCCTBuffer11withOptionsEP22IOGraphicsAccelerator2"
 CTB_INIT = "__ZN21IGHardwareGuCCTBuffer19initWithAcceleratorEP22IOGraphicsAccelerator2"
 CTB_FREE = "__ZN21IGHardwareGuCCTBuffer4freeEv"
+SET_ASYNC_SLICE_COUNT = "__ZN16IntelAccelerator18setAsyncSliceCountE13IGSliceConfig"
+DPSM_IDLE_TIMER = "__ZN16IntelAccelerator13dpsmIdleTimerEv"
+INIT_LOCAL_CALLBACKS = "__ZN16IntelAccelerator24initLocalCallbackSupportEv"
+ENABLE_COARSE_POWER_GATING = "__ZL24_enableCoarsePowerGatingv"
+DPSM_NOTIFY = "__ZL11_dpsmNotifyPj"
 GUC_LOAD_BINARY = "__ZN13IGHardwareGuC13loadGuCBinaryEv"
 GUC_REGISTER_CTB = "__ZN13IGHardwareGuC31registerCommandTransportBuffersEv"
 GUC_DEREGISTER_CTB = "__ZN13IGHardwareGuC33deregisterCommandTransportBuffersEv"
@@ -84,6 +93,16 @@ BLIT3D_SCRATCH_ANCHOR = bytes.fromhex(
 # result/stack-check block, bypassing Tahoe's common virtual-stop cleanup.
 DPSM_START_FAILURE_ANCHOR = bytes.fromhex(
     "be 15 02 00 00 45 31 f6 e9 41 ff ff ff")
+ASYNC_SLICE_MMIO_ANCHOR = bytes.fromhex(
+    "49 8b 86 40 12 00 00 89 98 04 a2 00 00")
+DPSM_SCHEDULER_IDLE_SLOT = bytes.fromhex(
+    "48 8b 07 ff 90 60 01 00 00")
+DPSM_NOTIFY_SLOT = bytes.fromhex(
+    "48 8b 83 e8 0d 00 00 ff 50 38")
+DPSM_COARSE_POWER_SLOT = bytes.fromhex(
+    "49 8b 85 e8 0d 00 00 ff 10")
+DPSM_NOTIFY_BODY = bytes.fromhex("55 48 89 e5 31 c0 5d c3")
+VOID_NOOP_BODY = bytes.fromhex("55 48 89 e5 5d c3")
 
 
 def macho_inventory(path):
@@ -190,6 +209,78 @@ def macho_inventory(path):
     if load_firmware_slot != value(SCHEDULER4_LOAD_FIRMWARE):
         raise AssertionError(
             f"{path}: scheduler-4 firmware virtual slot changed")
+
+    # Native start installs a DPSM software timer after engine admission. Its
+    # only scheduler decision must dispatch through the routed isGpuIdle slot;
+    # the local callback-table endpoint is an exact no-op, not hardware PM.
+    for vtable, idle in ((SCHEDULER4_VTABLE, SCHEDULER4_IS_GPU_IDLE),
+                         (SCHEDULER5_VTABLE, SCHEDULER5_IS_GPU_IDLE)):
+        idle_slot = struct.unpack_from(
+            "<Q", image, value(vtable) + 16 + 0x160)[0]
+        if idle_slot != value(idle):
+            raise AssertionError(f"{path}: {vtable} idle virtual slot changed")
+    dpsm_start = value(DPSM_IDLE_TIMER)
+    dpsm_end = next_symbol(dpsm_start)
+    if image[dpsm_start:dpsm_end].count(DPSM_SCHEDULER_IDLE_SLOT) != 1 or \
+            image[dpsm_start:dpsm_end].count(DPSM_NOTIFY_SLOT) != 1:
+        raise AssertionError(f"{path}: DPSM timer dispatch contract changed")
+    notify_start = value(DPSM_NOTIFY)
+    notify_end = next_symbol(notify_start)
+    if image[notify_start:notify_end] != DPSM_NOTIFY_BODY:
+        raise AssertionError(f"{path}: DPSM notification is no longer an exact no-op")
+    callback_start = value(INIT_LOCAL_CALLBACKS)
+    callback_end = next_symbol(callback_start)
+    callback_refs = []
+    for candidate in range(callback_start, callback_end - 10):
+        if image[candidate:candidate + 3] != bytes.fromhex("48 8d 0d") or \
+                image[candidate + 7:candidate + 11] != bytes.fromhex("48 89 48 38"):
+            continue
+        displacement = struct.unpack_from("<i", image, candidate + 3)[0]
+        if candidate + 7 + displacement == notify_start:
+            callback_refs.append(candidate)
+    if len(callback_refs) != 1:
+        raise AssertionError(f"{path}: local callback table no longer pins DPSM no-op")
+    coarse_start = value(ENABLE_COARSE_POWER_GATING)
+    coarse_end = next_symbol(coarse_start)
+    if image[coarse_start:coarse_end] != VOID_NOOP_BODY:
+        raise AssertionError(f"{path}: coarse-power callback is no longer an exact no-op")
+    coarse_refs = []
+    for candidate in range(callback_start, callback_end - 9):
+        if image[candidate:candidate + 3] != bytes.fromhex("48 8d 0d") or \
+                image[candidate + 7:candidate + 10] != bytes.fromhex("48 89 08"):
+            continue
+        displacement = struct.unpack_from("<i", image, candidate + 3)[0]
+        if candidate + 7 + displacement == coarse_start:
+            coarse_refs.append(candidate)
+    if len(coarse_refs) != 1 or \
+            image[accelerator_start:accelerator_start_end].count(
+                DPSM_COARSE_POWER_SLOT) != 1:
+        raise AssertionError(f"{path}: native start coarse-power no-op dispatch changed")
+
+    # Accelerator feature +0x1190 bit 5 makes native start call this routine
+    # before startGraphicsEngine. It writes raw MMIO 0xA204 under physical
+    # force-wake, so source admission must reject that mode on a VF.
+    if len(direct_branches(ACCELERATOR_START, SET_ASYNC_SLICE_COUNT)) != 1:
+        raise AssertionError(f"{path}: native async-slice start edge changed")
+    async_start = value(SET_ASYNC_SLICE_COUNT)
+    async_end = next_symbol(async_start)
+    if image[async_start:async_end].count(ASYNC_SLICE_MMIO_ANCHOR) != 1:
+        raise AssertionError(f"{path}: async-slice physical-MMIO anchor changed")
+    engine_start_calls = direct_branches(ACCELERATOR_START, START)
+    hws_init_calls = direct_branches(ACCELERATOR_START, INIT_HARDWARE_STATUS_MEMORY)
+    if len(engine_start_calls) != 1 or len(hws_init_calls) != 1 or \
+            len(direct_branches(INIT_HARDWARE_STATUS_MEMORY,
+                                MAPPED_WITH_OPTIONS)) != 2:
+        raise AssertionError(f"{path}: native start/HWS mapped-buffer graph changed")
+    dpsm_refs = []
+    for candidate in range(accelerator_start, accelerator_start_end - 6):
+        if image[candidate:candidate + 3] != bytes.fromhex("48 8d 35"):
+            continue
+        displacement = struct.unpack_from("<i", image, candidate + 3)[0]
+        if candidate + 7 + displacement == dpsm_start:
+            dpsm_refs.append(candidate)
+    if len(dpsm_refs) != 1 or not engine_start_calls[0] < dpsm_refs[0]:
+        raise AssertionError(f"{path}: DPSM timer is not the pinned post-engine callback")
 
     retained_edges = (
         (SCHEDULER4_INIT, SCHEDULER_BASE_INIT),
@@ -637,10 +728,13 @@ def source_contract(path):
             f"{path}: native stop begins before the VF device-stopping boundary")
 
     accelerator_start = function_body(source, "bool Gen11::start(void *that, void *provider)")
+    legacy_reject = accelerator_start.index("kVfLegacyPageOwnershipFlag")
+    ggtt_bootstrap = accelerator_start.index("vfBootstrapDirectGgtt()")
     configure = accelerator_start.index("callback->ioPciConfigureInterrupts)(")
     native_start = accelerator_start.index("FunctionCast(start, callback->ostart)")
-    if configure > native_start:
-        raise AssertionError(f"{path}: VF MSI is configured after native start")
+    if not legacy_reject < ggtt_bootstrap < configure < native_start:
+        raise AssertionError(
+            f"{path}: VF legacy-MMIO rejection/GGTT/MSI order changed before native start")
     if "pciDevice, kIOInterruptTypePCIMessaged, 1, 1, 0" not in accelerator_start:
         raise AssertionError(f"{path}: VF MSI request is not exactly one required vector")
     native_result = accelerator_start.index(
@@ -654,6 +748,12 @@ def source_contract(path):
     if not native_result < firmware_live < rollback < quiesced < start_fault:
         raise AssertionError(
             f"{path}: live post-engine native-start failure is not DMA-quiesced before fault")
+
+    for wrapper in ("bool Gen11::wrapIGScheduler5IsGpuIdle(const void *that)",
+                    "bool Gen11::wrapIGScheduler4IsGpuIdle(const void *that)"):
+        if "return vfKnownIdleSnapshot();" not in function_body(source, wrapper):
+            raise AssertionError(
+                f"{path}: DPSM idle route no longer uses VF context state")
 
     late_callback = function_body(
         source, "void Gen11::vfRequestEnableCallback(void *that, OSObject *requestor,")

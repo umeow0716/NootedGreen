@@ -361,6 +361,11 @@ constexpr size_t kVfContextImageBufferOffset = 0x98;
 // Tahoe IGMappedBuffer::initWithOptions stores the requested byte length at
 // +0x20 (0x13c48); fillIfRequested consumes the same field as a byte bound.
 constexpr size_t kVfMappedBufferLengthOffset = 0x20;
+// Accelerator feature byte +0x1190 bit 5 selects Tahoe's legacy page-
+// ownership and async-slice programming path. That path acquires physical
+// force-wake and writes MMIO register 0xA204; an SR-IOV VF must reject it
+// before native start rather than reaching a later ownership-route failure.
+constexpr uint8_t kVfLegacyPageOwnershipFlag = 0x20U;
 constexpr uint64_t kVfContextMinimumImageBytes = 0x1000 + 0x5A * sizeof(uint32_t);
 constexpr uint32_t kGucTypeFastRequest = 0x20000000U;
 constexpr uint32_t kGucContextRegistrationFlagKmd = 1;
@@ -3101,6 +3106,12 @@ bool Gen11::start(void *that, void *provider)
 		return false;
 	}
 	const bool vfActive = identity == VfIdentity::Virtual;
+	if (vfActive && (getMember<uint8_t>(that, 0x1190) &
+	                 kVfLegacyPageOwnershipFlag)) {
+		vfMarkProtocolFault(
+			"VF exposes unsupported legacy page-ownership/async-slice mode");
+		return false;
+	}
 	if (vfActive && !vfBootstrapDirectGgtt()) {
 		vfMarkProtocolFault("VF bootstrap failed before native accelerator start");
 		return false;
@@ -3586,7 +3597,8 @@ bool Gen11::vfWorkQueueInit(void *that, void *accelerator, uint32_t id, void *pr
 		"Refusing reinitialization of a nonempty VF workqueue");
 	if (!accelerator || !process || id >= NGContextPool::invalidId ||
 	    !vfCanUseSleepingLock() ||
-	    (accelerator && (getMember<uint8_t>(accelerator, 0x1190) & 0x20U))) {
+	    (accelerator && (getMember<uint8_t>(accelerator, 0x1190) &
+	                     kVfLegacyPageOwnershipFlag))) {
 		vfAbortSchedulerBootstrap(
 			"invalid owner, process, context ID or execution state for VF workqueue");
 		getMember<void *>(that, 0x38) = NGWorkQueue::failedInitMarker();
@@ -3685,7 +3697,8 @@ uint32_t Gen11::vfCreateUkContext(void *that, uint64_t owner, int priority) {
 		vfAbortSchedulerBootstrap("VF proxy context has no accelerator task owner");
 		return NGContextPool::invalidId;
 	}
-	if (getMember<uint8_t>(accelerator, 0x1190) & 0x20U) {
+	if (getMember<uint8_t>(accelerator, 0x1190) &
+	    kVfLegacyPageOwnershipFlag) {
 		vfAbortSchedulerBootstrap("legacy page ownership requested for VF proxy context");
 		return NGContextPool::invalidId;
 	}
@@ -3960,7 +3973,7 @@ void Gen11::vfTransferOwnership(void *that, const void *backing, int owner) {
 	// its many native callers continue as if ownership had changed. Fail before
 	// any caller can publish or release pages under that false assumption.
 	PANIC_COND(!that || gVfIdentity != VfIdentity::Virtual ||
-		(getMember<uint8_t>(that, 0x1190) & 0x20U), "ngreen",
+		(getMember<uint8_t>(that, 0x1190) & kVfLegacyPageOwnershipFlag), "ngreen",
 		"Unsupported legacy page-ownership transfer on a VF");
 }
 

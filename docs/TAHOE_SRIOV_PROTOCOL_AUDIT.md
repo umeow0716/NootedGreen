@@ -8,6 +8,36 @@ i915 hangs and a host reboot. Keep `macos-tahoe-sriov` shut off until the
 corrected code passes the remaining offline review and every independently
 enforced containment precondition.
 
+## V255 retained native-start success-path review (offline)
+
+- Complete pinned disassembly found a previously uncontracted pre-engine edge.
+  When accelerator feature byte `+0x1190` bit `0x20` is set, Tahoe's native
+  `IntelAccelerator::start` calls `setAsyncSliceCount`. That routine acquires
+  render force-wake, writes the encoded slice configuration directly through
+  accelerator MMIO base `+0x1240` to register `0xA204`, then releases
+  force-wake. This is PF-owned hardware state. The same feature selects legacy
+  page-ownership operations that the VF bridge already rejects, but those
+  checks occurred later, after the raw start-time write.
+- A classified VF now rejects this unsupported feature before direct-GGTT
+  bootstrap, PCI MSI allocation or native start. It does not clear the feature,
+  no-op the write or claim legacy ownership support. The exact native start
+  call and `MMIO+0xA204` store are machine-checked in both admitted payloads;
+  source ordering requires the rejection before every VF/device mutation.
+- The rest of the retained success tail was followed explicitly. Native start
+  allocates each hardware-status page through two
+  `IGSharedMappedBuffer::withOptions` call sites, which remain on the routed VF
+  GGTT path, then reaches exactly one routed `startGraphicsEngine`. Its later
+  DPSM timer takes scheduler vtable slot `0x160`; both scheduler-4 and
+  scheduler-5 slots are pinned to their `isGpuIdle` symbols, and the VF routes
+  derive the result only from the direct GuC context table. The local DPSM
+  callback at table `+0x38` is an exact `return 0` body. The post-engine
+  coarse-power callback at table `+0x00` is also an exact void no-op. These
+  software callbacks therefore do not introduce another physical MMIO edge.
+- The expanded source/Mach-O contract passes for both Tahoe payloads and the
+  complete suite passes at `/tmp/ngreen-static.ckEaeN`. No kext was installed,
+  no XML/PCI state changed and the VM remained shut off under the host hard
+  hold.
+
 ## V254 fail-closed host containment gate (offline)
 
 - The canonical root preflight is read-only and hard-codes the only admitted

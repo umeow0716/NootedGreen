@@ -90,6 +90,12 @@ Its Mach-O contract now fixes the retained scheduler-4/command-streamer/GuC/CTB
 bootstrap call graph and requires every hardware-facing descendant to remain in
 the VF route set. This is not runtime validation; `macos-tahoe-sriov` remains
 off under `docs/HOST_CONTAINMENT_PLAN.md`.
+The retained native-start success tail is now covered as well. Tahoe's
+feature-bit-gated `setAsyncSliceCount` performs a raw force-wake-protected
+`MMIO+0xA204` write, so a VF rejects that legacy page-ownership mode before
+GGTT/MSI/native start. HWS mapped-buffer descendants, the sole engine-start
+edge, DPSM timer placement, scheduler idle vtable slots and the exact no-op
+DPSM/coarse-power local callbacks are pinned for both payloads.
 
 | Files/area | Evidence and remaining boundary |
 | --- | --- |
