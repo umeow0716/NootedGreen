@@ -34,6 +34,13 @@ FIFO_DIAGNOSIS = "__ZN18IGAccelFIFOChannel26getHardwareDiagnosisReportEPj"
 RING_DUMP_STATUS = "__ZN20IGHardwareRingBuffer14dumpRingStatusEv"
 RING_DUMP_REGISTERS = "__ZN20IGHardwareRingBuffer13dumpRegistersEv"
 RING_DUMP_REGISTERS_RCS = "__ZN20IGHardwareRingBuffer16dumpRegistersRCSEv"
+RING_VTABLE = "__ZTV20IGHardwareRingBuffer"
+FIFO_VTABLE = "__ZTV18IGAccelFIFOChannel"
+RING_RESET_GRAPHICS = "__ZN20IGHardwareRingBuffer19resetGraphicsEngineEP17IGHardwareContext"
+FIFO_RESET_REPLAY = "__ZN18IGAccelFIFOChannel22resetHardwareAndReplayEv"
+FIFO_SUBMIT_STAMP = "__ZN18IGAccelFIFOChannel18submitStampCommandEv"
+RING_SLEEP_STAMP = "__ZN20IGHardwareRingBuffer13sleepForStampEPjjj"
+GET_DEFAULT_RESET = "__ZN16IntelAccelerator20getDefaultResetValueEj"
 TRACE_DISABLE = "__ZN25IGAccelTraceStreamManager17disableCollectionE27TraceStreamCollectionChange"
 TRACE_SHUTDOWN = "__ZN25IGAccelTraceStreamManager8shutdownEv"
 UNREGISTER_SYSCTL = "__ZN16IntelAccelerator16unregisterSysctlEv"
@@ -41,6 +48,7 @@ INIT_HARDWARE_STATUS_MEMORY = "__ZN16IntelAccelerator28initHardwareStatusPageMem
 INIT_HARDWARE_STATUS_REGISTERS = "__ZN16IntelAccelerator31initHardwareStatusPageRegistersEv"
 INIT_MODE_REGISTERS = "__ZN16IntelAccelerator17initModeRegistersEv"
 SAFE_FORCE_WAKE = "__ZN16IntelAccelerator13SafeForceWakeEbj"
+SAFE_FORCE_WAKE_BOOL = "__ZN16IntelAccelerator13SafeForceWakeEb"
 BRIDGE_ENABLE = "__ZN17IGInterruptBridge6enableEv"
 BRIDGE_DISABLE = "__ZN17IGInterruptBridge7disableEv"
 BRIDGE_FILTER = "__ZN17IGInterruptBridge22interruptFilterHandlerEP28IOFilterInterruptEventSource"
@@ -413,6 +421,56 @@ def macho_inventory(path):
     if rcs_dump_body.count(bytes.fromhex(
             "48 8b 43 50 44 8b 80 28 20 00 00")) != 1:
         raise AssertionError(f"{path}: raw RCS register-dump anchor changed")
+
+    # IOAccel's FIFO reset virtual is a second error-recovery root. It invokes
+    # the ring-buffer +0x168 reset virtual, resumes the scheduler and replays up
+    # to two stamps. The concrete physical reset takes five force-wake paths,
+    # writes engine-control registers, executes the 0x4A08/0x941C/0xCEC4 reset
+    # sequence and replays the accelerator reset list. Both the root and the
+    # lower primitive must remain behind classified-VF routes.
+    ring_vtable = value(RING_VTABLE)
+    fifo_vtable = value(FIFO_VTABLE)
+    if struct.unpack_from(
+            "<Q", image, ring_vtable + 16 + 0x168)[0] != value(
+                RING_RESET_GRAPHICS):
+        raise AssertionError(f"{path}: ring physical-reset virtual slot changed")
+    if struct.unpack_from(
+            "<Q", image, fifo_vtable + 16 + 0x200)[0] != value(
+                FIFO_RESET_REPLAY):
+        raise AssertionError(f"{path}: FIFO reset/replay virtual slot changed")
+    replay_start = value(FIFO_RESET_REPLAY)
+    replay_body = image[replay_start:next_symbol(replay_start)]
+    for dispatch, count, label in (
+            (bytes.fromhex("ff 90 68 01 00 00"), 1, "physical reset"),
+            (bytes.fromhex("ff 90 80 01 00 00"), 2, "scheduler resume"),
+            (bytes.fromhex("ff 90 d8 01 00 00"), 2, "stamp completion")):
+        if replay_body.count(dispatch) != count:
+            raise AssertionError(
+                f"{path}: FIFO reset/replay {label} inventory changed")
+    if len(direct_branches(FIFO_RESET_REPLAY, FIFO_SUBMIT_STAMP)) != 2 or \
+            len(direct_branches(FIFO_RESET_REPLAY, RING_SLEEP_STAMP)) != 2:
+        raise AssertionError(f"{path}: FIFO reset/replay submission graph changed")
+    reset_start = value(RING_RESET_GRAPHICS)
+    reset_body = image[reset_start:next_symbol(reset_start)]
+    if len(direct_branches(RING_RESET_GRAPHICS, SAFE_FORCE_WAKE)) != 4 or \
+            len(direct_branches(RING_RESET_GRAPHICS, SAFE_FORCE_WAKE_BOOL)) != 1 or \
+            len(direct_branches(RING_RESET_GRAPHICS, GET_DEFAULT_RESET)) != 1:
+        raise AssertionError(f"{path}: physical engine-reset call graph changed")
+    for anchor, count, label in (
+            (bytes.fromhex("48 8b 80 40 12 00 00"), 2, "raw MMIO base"),
+            (bytes.fromhex("c7 80 08 4a 00 00 04 00 04 00"), 1,
+             "engine reset assert"),
+            (bytes.fromhex("c7 80 08 4a 00 00 00 00 04 00"), 1,
+             "engine reset release"),
+            (bytes.fromhex("c7 80 00 41 00 00 b1 b1 f0 f0"), 1,
+             "fault register clear 0"),
+            (bytes.fromhex("c7 80 04 41 00 00 b2 b2 f0 f0"), 1,
+             "fault register clear 1"),
+            (bytes.fromhex("ff 90 90 01 00 00"), 1,
+             "scheduler reset completion")):
+        if reset_body.count(anchor) != count:
+            raise AssertionError(
+                f"{path}: physical engine-reset {label} inventory changed")
 
     dpsm_start = value(DPSM_IDLE_TIMER)
     dpsm_end = next_symbol(dpsm_start)
@@ -932,6 +990,8 @@ def source_contract(path):
         ENCODE_DEBUG,
         RING_DO_HANG,
         RING_DUMP_HANG,
+        FIFO_RESET_REPLAY,
+        RING_RESET_GRAPHICS,
     )
     for token in required:
         if token not in source:
@@ -976,7 +1036,9 @@ def source_contract(path):
             (SCHEDULER_RESUME, "vfSuppressTimeoutHardwareAction"),
             (ENCODE_DEBUG, "vfSuppressPhysicalDebugCapture"),
             (RING_DO_HANG, "vfSuppressHangAnalysis"),
-            (RING_DUMP_HANG, "vfSuppressHangDump")):
+            (RING_DUMP_HANG, "vfSuppressHangDump"),
+            (FIFO_RESET_REPLAY, "vfRejectHardwareResetReplay"),
+            (RING_RESET_GRAPHICS, "vfRejectPhysicalEngineReset")):
         if '{"' + symbol + '",' + wrapper + '},' not in timeout_routes:
             raise AssertionError(
                 f"{path}: missing VF timeout route {symbol} -> {wrapper}")
@@ -1000,6 +1062,26 @@ def source_contract(path):
             if forbidden in body:
                 raise AssertionError(
                     f"{path}: VF {label} replacement re-enters hardware through {forbidden}")
+
+    reset_replay = function_body(
+        source, "void Gen11::vfRejectHardwareResetReplay(")
+    engine_reset = function_body(
+        source, "bool Gen11::vfRejectPhysicalEngineReset(")
+    if "vfMarkProtocolFault(" not in reset_replay or \
+            "physical engine reset/replay requested on VF" not in reset_replay:
+        raise AssertionError(f"{path}: VF reset/replay root does not quarantine transport")
+    for token in ("(void)that;", "(void)context;", "vfMarkProtocolFault(",
+                  "physical engine reset requested on VF", "return false;"):
+        if token not in engine_reset:
+            raise AssertionError(
+                f"{path}: VF physical engine-reset rejection is incomplete: {token}")
+    for body, label in ((reset_replay, "reset/replay"),
+                        (engine_reset, "physical engine reset")):
+        for forbidden in ("FunctionCast", "callback->", "getMember", "0x1240",
+                          "SafeForceWake", "MMIO"):
+            if forbidden in body:
+                raise AssertionError(
+                    f"{path}: VF {label} rejection re-enters hardware through {forbidden}")
 
     for token in (
             GUC_INIT_SCHED_CONTROL,

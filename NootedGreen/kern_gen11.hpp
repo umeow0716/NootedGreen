@@ -198,6 +198,8 @@ private:
 	static void vfSuppressPhysicalDebugCapture(void *that, uint32_t reason);
 	static uint32_t vfSuppressHangAnalysis(void *that);
 	static void vfSuppressHangDump(void *that);
+	static void vfRejectHardwareResetReplay(void *that);
+	static bool vfRejectPhysicalEngineReset(void *that, void *context);
 	static void barrierSubmission(void *queue, void *accelerator,
 	                              void *commandDescriptor, void *event,
 	                              uint16_t count, const uint16_t *list);

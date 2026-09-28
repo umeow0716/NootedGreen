@@ -2357,6 +2357,15 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			 vfSuppressHangAnalysis},
 			{"__ZN20IGHardwareRingBuffer16dumpHangAnalysisEv",
 			 vfSuppressHangDump},
+			// FIFO recovery dispatches through a ring-buffer virtual that performs
+			// a complete physical engine reset, then replays the timed-out work.
+			// A VF can neither reset its PF-owned engine nor safely claim that the
+			// replay boundary succeeded. Quarantine the root request and make the
+			// lower physical primitive fail closed for every caller.
+			{"__ZN18IGAccelFIFOChannel22resetHardwareAndReplayEv",
+			 vfRejectHardwareResetReplay},
+			{"__ZN20IGHardwareRingBuffer19resetGraphicsEngineEP17IGHardwareContext",
+			 vfRejectPhysicalEngineReset},
 
 			// Legacy reset-register replay is physical-engine state and is not
 			// constructed for a direct-LRCA VF.
@@ -5891,4 +5900,16 @@ uint32_t Gen11::vfSuppressHangAnalysis(void *that) {
 
 void Gen11::vfSuppressHangDump(void *that) {
 	(void)that;
+}
+
+void Gen11::vfRejectHardwareResetReplay(void *that) {
+	(void)that;
+	vfMarkProtocolFault("physical engine reset/replay requested on VF");
+}
+
+bool Gen11::vfRejectPhysicalEngineReset(void *that, void *context) {
+	(void)that;
+	(void)context;
+	vfMarkProtocolFault("physical engine reset requested on VF");
+	return false;
 }

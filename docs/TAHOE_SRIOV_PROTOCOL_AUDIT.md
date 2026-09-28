@@ -1,12 +1,37 @@
 # Tahoe SR-IOV protocol audit — in progress
 
 Updated: 2026-09-29. The last dynamic source baseline is `ce166c8`; the latest
-completed offline-reviewed checkpoint is V261 timeout/hang isolation on
+completed offline-reviewed checkpoint is V262 reset/replay isolation on
 `codex/tahoe-sriov-vf`. This is NOT a boot-test candidate or a successful
 driver baseline. The `ce166c8` run produced repeatable host PF DMAR faults
 followed by i915 hangs and a host reboot. Keep `macos-tahoe-sriov` shut off until the
 corrected code passes the remaining offline review and every independently
 enforced containment precondition.
+
+## V262 VF physical reset/replay exclusion (offline)
+
+- The adjacent FIFO recovery graph is independent of the V261 diagnostic
+  routes. `IGAccelFIFOChannel` vtable slot `0x200` points to
+  `resetHardwareAndReplay()`. That routine dispatches ring-buffer slot `0x168`,
+  resumes the scheduler twice and can submit/wait for two replay stamps. The
+  ring slot is exactly `IGHardwareRingBuffer::resetGraphicsEngine()` in both
+  admitted Tahoe payloads.
+- The concrete reset body is physical engine ownership, not a GuC VF recovery
+  operation. It has four three-argument force-wake edges plus one one-argument
+  edge, writes engine controls through accelerator MMIO `+0x1240`, performs the
+  `0x4a08/0x941c/0xcec4` reset/fault-clear sequence, replays a native reset
+  register list and dispatches scheduler reset completion. A guest VF must not
+  execute or claim success for any part of that sequence.
+- A classified VF now quarantines the FIFO reset/replay root as a protocol
+  fault and returns without replay. The lower physical reset primitive is also
+  routed defensively, marks the fault and returns `false` for any independent
+  caller. Neither wrapper invokes an original trampoline, private object field,
+  force-wake or MMIO. PF reset/replay behavior remains native.
+- The expanded binary/source contract pins both vtable slots, the replay
+  virtual/direct call inventory, all five force-wake calls and representative
+  destructive reset writes in both payloads. Route inventory is now 93 unique
+  symbols (90 accelerator, three framebuffer). This is offline containment;
+  no candidate was installed or loaded and no VM/PCI/SR-IOV state changed.
 
 ## V261 VF timeout and hang-diagnosis hardware exclusion (offline)
 
