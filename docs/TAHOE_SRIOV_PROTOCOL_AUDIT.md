@@ -1,12 +1,52 @@
 # Tahoe SR-IOV protocol audit — in progress
 
 Updated: 2026-09-29. The last dynamic source baseline is `ce166c8`; the latest
-completed offline-reviewed checkpoint is `6cdcc55` on
+completed offline-reviewed checkpoint is V261 timeout/hang isolation on
 `codex/tahoe-sriov-vf`. This is NOT a boot-test candidate or a successful
 driver baseline. The `ce166c8` run produced repeatable host PF DMAR faults
 followed by i915 hangs and a host reboot. Keep `macos-tahoe-sriov` shut off until the
 corrected code passes the remaining offline review and every independently
 enforced containment precondition.
+
+## V261 VF timeout and hang-diagnosis hardware exclusion (offline)
+
+- `IGAccelEventMachine::eventTimeout()` was disassembled end-to-end in both
+  admitted Tahoe payloads. Its scheduler virtual calls are now pinned to the
+  exact Scheduler4 vtable slots: `checkForProgress()` returns constant true,
+  pause/resume reach exact GuC no-ops, active-context discovery zeros all three
+  outputs, and reset preparation is an exact no-op. The normal VF timeout path
+  therefore reaches `IntelAccelerator::encodeDebugInfo()` directly while the
+  state machine's software event handling remains useful.
+- Native debug capture is hardware-active. `encodeDebugInfo()` calls a GuC
+  collector that force-wakes and raw-reads `0xc184..0xc1a0`, then iterates
+  engine collectors. Those take five force-wake transitions and enter
+  `getInstDoneSlice()` four times. That helper reads, repeatedly programs and
+  restores the global `0xfdc` selector while reading `0x7100`, `0xe160` and
+  `0xe164`. It is therefore unsafe even if its captured values are never used.
+- The timeout state machine also contains one physical
+  `haltCommandStreamer()` and two `resumeCommandStreamer()` calls. Their native
+  bodies write `0x10001`/`0x10000` to the engine's physical `RING_MI_MODE`, poll
+  it up to 10,001 times and take force-wake on entry and exit. Scheduler4's
+  current constant-progress branch makes these calls normally unreachable on
+  this VF, but they are isolated defensively and their topology is contract
+  pinned rather than assumed.
+- IOAccel can request equivalent diagnostics outside `eventTimeout()` through
+  `IGHardwareRingBuffer::debugGraphicsEngine()` and
+  `IGAccelFIFOChannel::getHardwareDiagnosisReport()`. Both converge on
+  `doHangAnalysis()` and `dumpHangAnalysis()`; the dump path reaches raw ring
+  status and the broad RCS/BCS/VCS/VECS/system register dump through the ring
+  object's cached MMIO base. A classified VF now replaces both shared hang
+  boundaries, debug capture, and halt/resume with exact-ABI no-op/zero results.
+  PF behavior and Tahoe's surrounding software timeout/event unwind remain
+  native.
+- The binary/source contract fixes all five timeout virtual slots, exact native
+  no-op bodies, three debug-capture/one halt/two resume call sites, the complete
+  GuC/RING/INSTDONE destructive graph, hang-diagnosis roots and raw dump anchor.
+  Route inventory is now 91 unique symbols (88 accelerator, three framebuffer).
+  The complete syntax, zero-finding Clang analyzer, strict ABI, Mach-O,
+  exhaustive protocol and sanitizer suite passes at
+  `/tmp/ngreen-static.BvklAb`. No candidate was installed or loaded; VM, PCI
+  binding and SR-IOV state were not touched.
 
 ## V260 VF debug-sysctl control-plane exclusion (offline)
 

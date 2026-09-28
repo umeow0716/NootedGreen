@@ -2341,6 +2341,23 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			{"__ZNK12IGScheduler59isGpuIdleEv", wrapIGScheduler5IsGpuIdle},
 			{"__ZNK12IGScheduler49isGpuIdleEv", wrapIGScheduler4IsGpuIdle},
 
+			// Native timeout diagnostics bypass the virtual GuC transport: they
+			// halt/resume a physical RING_MI_MODE register, capture the legacy GuC
+			// scratch bank and write the physical INSTDONE selector. The ring-buffer
+			// diagnosis entry points additionally dump a broad PF-owned MMIO
+			// registers. Preserve Tahoe's software timeout/event unwind, but make
+			// every physical recovery and diagnostic boundary inert for a VF.
+			{"__ZN11IGScheduler19haltCommandStreamerE10IGHwCsType",
+			 vfSuppressTimeoutHardwareAction},
+			{"__ZN11IGScheduler21resumeCommandStreamerE10IGHwCsType",
+			 vfSuppressTimeoutHardwareAction},
+			{"__ZN16IntelAccelerator15encodeDebugInfoE15IGTimeoutReason",
+			 vfSuppressPhysicalDebugCapture},
+			{"__ZN20IGHardwareRingBuffer14doHangAnalysisEv",
+			 vfSuppressHangAnalysis},
+			{"__ZN20IGHardwareRingBuffer16dumpHangAnalysisEv",
+			 vfSuppressHangDump},
+
 			// Legacy reset-register replay is physical-engine state and is not
 			// constructed for a direct-LRCA VF.
 			{"__ZN16IntelAccelerator25populateResetRegisterListEv", populateResetRegisterList},
@@ -5848,4 +5865,30 @@ bool Gen11::wrapIGScheduler5IsGpuIdle(const void *that) {
 bool Gen11::wrapIGScheduler4IsGpuIdle(const void *that) {
 	(void)that;
 	return vfKnownIdleSnapshot();
+}
+
+// Tahoe's timeout recovery assumes ownership of physical engine stop/start
+// registers. The PF owns those registers for an SR-IOV VF, so retain only the
+// surrounding software event recovery performed by IGAccelEventMachine.
+void Gen11::vfSuppressTimeoutHardwareAction(void *that, uint32_t engine) {
+	(void)that;
+	(void)engine;
+}
+
+// Native debug capture is not observational on Gen11: it takes force-wake,
+// reads physical GuC/RING state and repeatedly writes the INSTDONE selector.
+void Gen11::vfSuppressPhysicalDebugCapture(void *that, uint32_t reason) {
+	(void)that;
+	(void)reason;
+}
+
+// A zero signature is the native no-diagnosis result consumed by
+// IGAccelFIFOChannel::getHardwareDiagnosisReport.
+uint32_t Gen11::vfSuppressHangAnalysis(void *that) {
+	(void)that;
+	return 0;
+}
+
+void Gen11::vfSuppressHangDump(void *that) {
+	(void)that;
 }

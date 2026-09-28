@@ -194,6 +194,10 @@ private:
 	static void populateResetRegisterList(void *that);
 	static bool wrapIGScheduler5IsGpuIdle(const void *that);
 	static bool wrapIGScheduler4IsGpuIdle(const void *that);
+	static void vfSuppressTimeoutHardwareAction(void *that, uint32_t engine);
+	static void vfSuppressPhysicalDebugCapture(void *that, uint32_t reason);
+	static uint32_t vfSuppressHangAnalysis(void *that);
+	static void vfSuppressHangDump(void *that);
 	static void barrierSubmission(void *queue, void *accelerator,
 	                              void *commandDescriptor, void *event,
 	                              uint16_t count, const uint16_t *list);

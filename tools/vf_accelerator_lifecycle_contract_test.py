@@ -13,6 +13,27 @@ STOP = "__ZN16IntelAccelerator18stopGraphicsEngineEv"
 ACCELERATOR_START = "__ZN16IntelAccelerator5startEP9IOService"
 ACCELERATOR_STOP = "__ZN16IntelAccelerator4stopEP9IOService"
 EVENT_FINISH_ALL = "__ZN19IGAccelEventMachine15finishAllStampsEj"
+EVENT_TIMEOUT = "__ZN19IGAccelEventMachine12eventTimeoutEi"
+SCHEDULER4_CHECK_PROGRESS = "__ZN12IGScheduler416checkForProgressE10IGHwCsType"
+SCHEDULER4_PAUSE = "__ZN12IGScheduler45pauseEv"
+SCHEDULER4_RESUME = "__ZN12IGScheduler46resumeEv"
+SCHEDULER4_PREPARE_RESET = "__ZN12IGScheduler415prepareGPUResetE10IGHwCsType"
+SCHEDULER4_GET_ACTIVE = "__ZN12IGScheduler417getActiveContextsE10IGHwCsTypePP17IGHardwareContextPyS3_"
+GUC_PAUSE = "__ZN13IGHardwareGuC14pauseSchedulerEv"
+GUC_RESUME = "__ZN13IGHardwareGuC15resumeSchedulerEv"
+SCHEDULER_HALT = "__ZN11IGScheduler19haltCommandStreamerE10IGHwCsType"
+SCHEDULER_RESUME = "__ZN11IGScheduler21resumeCommandStreamerE10IGHwCsType"
+ENCODE_DEBUG = "__ZN16IntelAccelerator15encodeDebugInfoE15IGTimeoutReason"
+GATHER_GUC = "__ZN16IntelAccelerator16gatherKeyGuCDataEv"
+GATHER_RING = "__ZN16IntelAccelerator17gatherKeyRingDataE10IGHwCsType"
+GET_INSTDONE = "__ZN16IntelAccelerator16getInstDoneSliceE10IGHwCsType"
+RING_DO_HANG = "__ZN20IGHardwareRingBuffer14doHangAnalysisEv"
+RING_DUMP_HANG = "__ZN20IGHardwareRingBuffer16dumpHangAnalysisEv"
+RING_DEBUG_ENGINE = "__ZN20IGHardwareRingBuffer19debugGraphicsEngineEv"
+FIFO_DIAGNOSIS = "__ZN18IGAccelFIFOChannel26getHardwareDiagnosisReportEPj"
+RING_DUMP_STATUS = "__ZN20IGHardwareRingBuffer14dumpRingStatusEv"
+RING_DUMP_REGISTERS = "__ZN20IGHardwareRingBuffer13dumpRegistersEv"
+RING_DUMP_REGISTERS_RCS = "__ZN20IGHardwareRingBuffer16dumpRegistersRCSEv"
 TRACE_DISABLE = "__ZN25IGAccelTraceStreamManager17disableCollectionE27TraceStreamCollectionChange"
 TRACE_SHUTDOWN = "__ZN25IGAccelTraceStreamManager8shutdownEv"
 UNREGISTER_SYSCTL = "__ZN16IntelAccelerator16unregisterSysctlEv"
@@ -275,6 +296,124 @@ def macho_inventory(path):
                 "<Q", image, scheduler4_vtable + 16 + slot)[0] != value(target):
             raise AssertionError(
                 f"{path}: scheduler-4 power-state slot {slot:#x} changed")
+
+    # Tahoe's stamp-timeout state machine keeps useful software recovery, but
+    # its non-virtual helpers assume ownership of physical engine registers.
+    # Prove every Scheduler4 virtual used by eventTimeout first: progress is a
+    # constant true result, pause/resume reach exact GuC no-ops, active-context
+    # discovery clears every output, and reset preparation is also a no-op.
+    # Consequently the classified VF normally reaches encodeDebugInfo directly;
+    # the halt/resume routes remain a defensive boundary if that topology ever
+    # changes without the pinned vtable and bytecode checks failing first.
+    for slot, target in (
+            (0x150, SCHEDULER4_CHECK_PROGRESS),
+            (0x178, SCHEDULER4_PAUSE),
+            (0x180, SCHEDULER4_RESUME),
+            (0x188, SCHEDULER4_PREPARE_RESET),
+            (0x198, SCHEDULER4_GET_ACTIVE)):
+        if struct.unpack_from(
+                "<Q", image, scheduler4_vtable + 16 + slot)[0] != value(target):
+            raise AssertionError(
+                f"{path}: timeout scheduler-4 slot {slot:#x} changed")
+    check_progress = image[value(SCHEDULER4_CHECK_PROGRESS):
+                           next_symbol(value(SCHEDULER4_CHECK_PROGRESS))]
+    if check_progress != bytes.fromhex("55 48 89 e5 b0 01 5d c3"):
+        raise AssertionError(f"{path}: scheduler-4 progress result changed")
+    if len(direct_branches(SCHEDULER4_PAUSE, GUC_PAUSE)) != 1 or \
+            len(direct_branches(SCHEDULER4_RESUME, GUC_RESUME)) != 1:
+        raise AssertionError(f"{path}: scheduler-4 pause/resume graph changed")
+    for target in (GUC_PAUSE, GUC_RESUME, SCHEDULER4_PREPARE_RESET):
+        start = value(target)
+        if image[start:next_symbol(start)] != VOID_NOOP_BODY:
+            raise AssertionError(f"{path}: native timeout no-op changed: {target}")
+    active_start = value(SCHEDULER4_GET_ACTIVE)
+    active_body = image[active_start:next_symbol(active_start)]
+    if active_body != bytes.fromhex(
+            "55 48 89 e5 31 c0 48 89 02 48 89 01 49 89 00 5d c3 90"):
+        raise AssertionError(
+            f"{path}: scheduler-4 active-context zero result changed")
+
+    timeout_start = value(EVENT_TIMEOUT)
+    timeout_body = image[timeout_start:next_symbol(timeout_start)]
+    for slot_bytes, count, label in (
+            (bytes.fromhex("ff 90 50 01 00 00"), 1, "checkForProgress"),
+            (bytes.fromhex("ff 90 78 01 00 00"), 1, "pause"),
+            (bytes.fromhex("ff 90 98 01 00 00"), 1, "getActiveContexts"),
+            (bytes.fromhex("ff 90 80 01 00 00"), 2, "resume"),
+            (bytes.fromhex("ff 90 88 01 00 00"), 1, "prepareGPUReset")):
+        if timeout_body.count(slot_bytes) != count:
+            raise AssertionError(
+                f"{path}: eventTimeout {label} dispatch inventory changed")
+    debug_calls = direct_branches(EVENT_TIMEOUT, ENCODE_DEBUG)
+    halt_calls = direct_branches(EVENT_TIMEOUT, SCHEDULER_HALT)
+    resume_calls = direct_branches(EVENT_TIMEOUT, SCHEDULER_RESUME)
+    if len(debug_calls) != 3 or len(halt_calls) != 1 or len(resume_calls) != 2 or \
+            not (debug_calls[0] < halt_calls[0] < resume_calls[0] <
+                 resume_calls[1] < debug_calls[1] < debug_calls[2]):
+        raise AssertionError(
+            f"{path}: eventTimeout physical-helper inventory/order changed")
+
+    # encodeDebugInfo is not a read-only formatter. It force-wakes and captures
+    # eight legacy GuC scratch registers, then gathers each active engine. Ring
+    # gathering calls getInstDoneSlice four times; that helper writes the global
+    # 0xFDC selector for six slices before restoring it. Pin the complete direct
+    # graph and the destructive register inventory behind the VF route.
+    if len(direct_branches(ENCODE_DEBUG, GATHER_GUC)) != 1 or \
+            len(direct_branches(ENCODE_DEBUG, GATHER_RING)) != 1:
+        raise AssertionError(f"{path}: debug-capture call graph changed")
+    gather_guc_start = value(GATHER_GUC)
+    gather_guc_body = image[gather_guc_start:next_symbol(gather_guc_start)]
+    if len(direct_branches(GATHER_GUC, SAFE_FORCE_WAKE)) != 2 or any(
+            gather_guc_body.count(struct.pack("<I", register)) != 1
+            for register in range(0xC184, 0xC1A1, 4)):
+        raise AssertionError(f"{path}: GuC scratch debug capture changed")
+    if len(direct_branches(GATHER_RING, SAFE_FORCE_WAKE)) != 5 or \
+            len(direct_branches(GATHER_RING, GET_INSTDONE)) != 4:
+        raise AssertionError(f"{path}: ring debug-capture graph changed")
+    instdone_start = value(GET_INSTDONE)
+    instdone_body = image[instdone_start:next_symbol(instdone_start)]
+    if instdone_body.count(struct.pack("<I", 0xFDC)) != 4 or any(
+            instdone_body.count(struct.pack("<I", register)) != 1
+            for register in (0x7100, 0xE160, 0xE164)) or \
+            instdone_body.count(bytes.fromhex("48 81 ff 00 00 00 06")) != 1:
+        raise AssertionError(
+            f"{path}: destructive INSTDONE selector protocol changed")
+
+    for owner, store in (
+            (SCHEDULER_HALT, bytes.fromhex("42 c7 04 20 01 00 01 00")),
+            (SCHEDULER_RESUME, bytes.fromhex("42 c7 04 20 00 00 01 00"))):
+        start = value(owner)
+        body = image[start:next_symbol(start)]
+        if len(direct_branches(owner, SAFE_FORCE_WAKE)) != 2 or \
+                body.count(bytes.fromhex("48 8b 87 40 12 00 00")) != 2 or \
+                body.count(store) != 1 or \
+                body.count(bytes.fromhex("bb 11 27 00 00")) != 1:
+            raise AssertionError(
+                f"{path}: physical timeout halt/resume protocol changed: {owner}")
+
+    # IOAccel can request the same physical capture independently of the event
+    # timeout. Both exported roots call doHangAnalysis and dumpHangAnalysis; the
+    # latter reaches raw ring-status and full RCS register dumps through the
+    # ring buffer's cached MMIO base at +0x50. Route both shared boundaries so a
+    # diagnostic request cannot become a PF register probe on a VF.
+    for owner in (RING_DEBUG_ENGINE, FIFO_DIAGNOSIS):
+        if len(direct_branches(owner, RING_DO_HANG)) != 1 or \
+                len(direct_branches(owner, RING_DUMP_HANG)) != 1:
+            raise AssertionError(
+                f"{path}: hardware-diagnosis root graph changed: {owner}")
+    if len(direct_branches(RING_DO_HANG, GATHER_RING)) != 1 or \
+            len(direct_branches(RING_DUMP_HANG, RING_DUMP_STATUS)) != 1 or \
+            len(direct_branches(RING_DUMP_HANG, RING_DUMP_REGISTERS)) != 1:
+        raise AssertionError(f"{path}: physical hang-diagnosis graph changed")
+    if len(direct_branches(RING_DUMP_STATUS, SAFE_FORCE_WAKE)) != 2 or \
+            len(direct_branches(RING_DUMP_REGISTERS, SAFE_FORCE_WAKE)) != 2:
+        raise AssertionError(f"{path}: hang dump force-wake inventory changed")
+    rcs_dump_start = value(RING_DUMP_REGISTERS_RCS)
+    rcs_dump_body = image[rcs_dump_start:next_symbol(rcs_dump_start)]
+    if rcs_dump_body.count(bytes.fromhex(
+            "48 8b 43 50 44 8b 80 28 20 00 00")) != 1:
+        raise AssertionError(f"{path}: raw RCS register-dump anchor changed")
+
     dpsm_start = value(DPSM_IDLE_TIMER)
     dpsm_end = next_symbol(dpsm_start)
     if image[dpsm_start:dpsm_end].count(DPSM_SCHEDULER_IDLE_SLOT) != 1 or \
@@ -788,6 +927,11 @@ def source_contract(path):
         BRIDGE_DISABLE_INTERRUPTS,
         SCHEDULER_ERROR_ENABLE,
         SCHEDULER_ERROR_DISABLE,
+        SCHEDULER_HALT,
+        SCHEDULER_RESUME,
+        ENCODE_DEBUG,
+        RING_DO_HANG,
+        RING_DUMP_HANG,
     )
     for token in required:
         if token not in source:
@@ -815,6 +959,48 @@ def source_contract(path):
             normalized_pci_resolution):
         raise AssertionError(
             f"{path}: VF no longer replaces the complete physical engine-start body")
+
+    timeout_routes_start = pci_resolution.rfind(
+        "KernelPatcher::RouteRequest requests[]", 0,
+        pci_resolution.index(FENCE_ALLOCATE))
+    if timeout_routes_start < 0:
+        raise AssertionError(f"{path}: missing VF accelerator route table")
+    timeout_routes_end = pci_resolution.index(
+        "Failed to route VF accelerator symbols", timeout_routes_start)
+    timeout_routes = "".join(
+        pci_resolution[timeout_routes_start:timeout_routes_end].split())
+    if pci_resolution.rfind("if (vfActive)", 0, timeout_routes_start) < 0:
+        raise AssertionError(f"{path}: timeout isolation routes are not VF-only")
+    for symbol, wrapper in (
+            (SCHEDULER_HALT, "vfSuppressTimeoutHardwareAction"),
+            (SCHEDULER_RESUME, "vfSuppressTimeoutHardwareAction"),
+            (ENCODE_DEBUG, "vfSuppressPhysicalDebugCapture"),
+            (RING_DO_HANG, "vfSuppressHangAnalysis"),
+            (RING_DUMP_HANG, "vfSuppressHangDump")):
+        if '{"' + symbol + '",' + wrapper + '},' not in timeout_routes:
+            raise AssertionError(
+                f"{path}: missing VF timeout route {symbol} -> {wrapper}")
+
+    timeout_noop = function_body(
+        source, "void Gen11::vfSuppressTimeoutHardwareAction(")
+    debug_noop = function_body(
+        source, "void Gen11::vfSuppressPhysicalDebugCapture(")
+    hang_analysis = function_body(
+        source, "uint32_t Gen11::vfSuppressHangAnalysis(")
+    hang_dump = function_body(source, "void Gen11::vfSuppressHangDump(")
+    for body, arguments, label in (
+            (timeout_noop, ("(void)that;", "(void)engine;"), "timeout action"),
+            (debug_noop, ("(void)that;", "(void)reason;"), "debug capture"),
+            (hang_analysis, ("(void)that;", "return 0;"), "hang analysis"),
+            (hang_dump, ("(void)that;",), "hang dump")):
+        if any(token not in body for token in arguments):
+            raise AssertionError(f"{path}: incomplete VF {label} replacement")
+        for forbidden in ("FunctionCast", "callback->", "getMember", "0x1240",
+                          "SafeForceWake", "MMIO"):
+            if forbidden in body:
+                raise AssertionError(
+                    f"{path}: VF {label} replacement re-enters hardware through {forbidden}")
+
     for token in (
             GUC_INIT_SCHED_CONTROL,
             GUC_LOAD_BINARY,
