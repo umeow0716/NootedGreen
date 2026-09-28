@@ -28,14 +28,22 @@ binary, build and protocol validation is permitted.
 
 1. Record the exact source commit, CI run, artifact zip SHA-256, kext executable
    UUID/SHA-256, final-path-built AuxKC SHA-256 and guest EFI backup. Reject any
-   mismatch before the domain starts.
+   mismatch before the domain starts. The runtime manifest format is pinned by
+   `HOST_RUNTIME_MANIFEST.example.tsv`; the controller verifies it once before
+   creating its transient service and again inside that service against a fresh
+   inactive XML snapshot. The Git worktree must also be clean at the recorded
+   commit.
 2. Re-review all host-dangerous MMIO/DMA paths reachable from the candidate's
    retained native bootstrap and stop lifecycles. The complete offline suite and
    native macOS build/link must pass at that exact commit.
 3. Use a disposable libvirt XML checkpoint with autostart disabled, no managed
-   save, and crash policy changed from `preserve` to `destroy`. Confirm the
-   effective live XML before the run; restore the reviewed persistent XML after
-   evidence capture.
+   save, and all three lifecycle policies set to one-shot behavior:
+   `<on_poweroff>destroy</on_poweroff>`, `<on_reboot>destroy</on_reboot>` and
+   `<on_crash>destroy</on_crash>`. The emulated watchdog action must also be
+   `destroy`, never `reset`; otherwise a guest reboot, panic or watchdog event
+   can silently exercise the VF for a second time. Confirm the effective live
+   XML before the run and restore the reviewed persistent XML after evidence
+   capture.
 4. Hold a host sleep inhibitor before VM start and through the full post-stop
    cooldown. The previous incident entered suspend after the PF hang and then
    logged VF pause timeout/ENOMEM, so suspend must not overlap a VF test.
@@ -62,6 +70,15 @@ The kill watcher and deadline must run independently of the Codex process and
 guest network. They may stop only the named libvirt domain; they must not rebind
 PCI devices, change `sriov_numvfs`, unload i915 or automatically reboot the host.
 Exact scripts and XML mutations require a separate review before execution.
+The canonical read-only gate is `../tools/host_vf_runtime_preflight.sh`; the
+workspace wrapper is `../../tools/vf-runtime-preflight.sh`. Both deliberately
+refuse to authorize or start a run. The separately reviewed controller is
+`../tools/host_vf_contained_run.sh`; it defaults to refusal and requires both an
+exact arm token and a complete immutable manifest. The gate must run as root
+immediately before any future test so its current-boot journal check is
+authoritative. A successful exit is only a necessary precondition; it is not
+permission to proceed without the independent watcher and monotonic deadline
+described above.
 
 ## Promotion boundary
 

@@ -128,6 +128,14 @@ off under `docs/HOST_CONTAINMENT_PLAN.md`.
   program creates the default device, queue and shared buffer, performs a blit,
   waits for completion, checks command status/error and verifies all bytes; it
   remains a dynamic guest proof, not evidence from CI hardware.
+- The host VF preflight, contained one-shot controller and immutable-manifest
+  verifier were read end-to-end and are now CI-gated. Their contract executes
+  the controller's default-refusal path, proves watcher then independent
+  deadline precede its sole exact-domain start, centralizes every stop in one
+  bounded exact-domain destroy helper and rejects PCI rebind, sysfs mutation,
+  i915 unload and host reboot primitives. The manifest tests cover clean Git
+  identity, file/zip SHA-256, Mach-O UUID and mutation/duplicate rejection. No
+  privileged or dynamic controller mode is exercised by CI.
 - All six executable `linux_mmio_mapper` stages were read end-to-end. The
   gate parses every tracked Python utility without importing Ghidra-only APIs,
   round-trips the checked-in sample, rejects address/symbol conflicts and

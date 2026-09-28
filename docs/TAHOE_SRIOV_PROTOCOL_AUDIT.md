@@ -1,12 +1,44 @@
 # Tahoe SR-IOV protocol audit — in progress
 
-Updated: 2026-09-27. Runtime source baseline: `ce166c8` on
-`codex/tahoe-sriov-vf`; the interrupt-transport correction described below is
-commit `8c45437`. This is NOT a boot-test candidate or a
-successful driver baseline. The `ce166c8` run produced repeatable host PF DMAR
-faults followed by i915 hangs and a host reboot. Keep `macos-tahoe-sriov` shut off
-until the corrected code passes offline review, native CI, and a separately
-approved containment plan.
+Updated: 2026-09-28. The last dynamic source baseline is `ce166c8`; the latest
+offline-reviewed checkpoint before the V254 host gate is `d23f7a7` on
+`codex/tahoe-sriov-vf`. This is NOT a boot-test candidate or a successful driver
+baseline. The `ce166c8` run produced repeatable host PF DMAR faults followed by
+i915 hangs and a host reboot. Keep `macos-tahoe-sriov` shut off until the
+corrected code passes the remaining offline review and every independently
+enforced containment precondition.
+
+## V254 fail-closed host containment gate (offline)
+
+- The canonical root preflight is read-only and hard-codes the only admitted
+  domain, PF and VF. It requires the domain off with no autostart/managed save,
+  all poweroff/reboot/crash actions and the guest watchdog set to `destroy`,
+  exact Intel `8086:a7a8` identities and i915/vfio-pci bindings, one VF,
+  distinct IOMMU groups, no surviving QEMU, authoritative current-boot kernel
+  journal access and zero configured PF DMAR/i915 triggers. Missing privilege or
+  unreadable evidence is a failure, never an implicit pass.
+- The one-shot controller defaults to exit 64 unless given its exact arm token
+  and a complete manifest. Even then, the same preflight runs before transient
+  service creation and again inside it. A kernel journal follower and a separate
+  systemd monotonic deadline must both be live before the controller's only
+  exact-domain `virsh start`. Trigger, deadline, start failure, watcher failure,
+  state loss or controller exit all converge on one locked, ten-second-bounded
+  exact-domain destroy helper. A sleep inhibitor spans the run and the 20-second
+  cooldown; postflight checks domain/QEMU state, PF/VF bindings, VF count, PF
+  readability and any new trigger. No path rebinds PCI, writes sysfs, unloads
+  i915 or reboots the host.
+- The immutable tab-separated manifest pins full Git commit, CI run, artifact
+  zip, extracted kext executable, Mach-O UUID, final AuxKC, EFI backup and the
+  exact inactive XML. The verifier rejects dirty worktrees, symlinks, hash/UUID
+  mismatches, malformed Mach-O commands, archive/extracted-executable mismatch
+  and duplicate/unknown/missing fields. It runs before and inside the transient
+  service so an intervening XML or input change cannot reach VM start.
+- Source-order/default-refusal and positive/mutation tests are part of
+  `check-static.sh`. The full suite passes at `/tmp/ngreen-static.bgvhzJ`.
+  The real preflight currently rejects this host because the account cannot
+  certify the kernel journal and the inactive domain still has
+  `on_reboot=restart`, `on_crash=preserve`, and watchdog `reset`. The controller
+  was not armed, no XML was changed and no VM/hardware operation occurred.
 
 ## V252 static rollback and retained-bootstrap reachability review
 
@@ -61,6 +93,17 @@ approved containment plan.
   have not been installed, added to an AuxKC or loaded by the VM.
 
 ## V253 native stop reachability review (offline)
+
+- Checkpoint `d23f7a7` passed GitHub Actions run `36330781623`. The archived
+  release zip SHA-256 is
+  `9698ddeb9e3c58f0565df71f2c4bc33286b2e495648c81225babecb172900ebc`;
+  its kext executable UUID is `9773B4C9-FF71-36B0-8107-910C0F318EC5` and
+  SHA-256 is
+  `db61632051011783ebd96506d33c3dc51c16991a47dbe324ed0a089fde7c3d46`.
+  The Metal smoke executable SHA-256 is
+  `b69ef075a8062de2f94bfa30a4e8242ba5b11f695c4dae04bd003a4efca294d5`.
+  These files are archived under `../../build/artifacts/d23f7a7` only; none was
+  installed, added to an AuxKC or loaded by the VM.
 
 - The V252 rollback deliberately enters Tahoe's complete
   `IntelAccelerator::stop`, so its ordering was audited rather than assuming

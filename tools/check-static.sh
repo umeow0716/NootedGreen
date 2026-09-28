@@ -58,6 +58,16 @@ else
     failed=1
 fi
 git diff --check || failed=1
+if python3 -B tools/host_vf_containment_contract_test.py; then
+    printf 'PASS offline host VF containment contracts\n'
+else
+    failed=1
+fi
+if python3 -B tools/host_vf_runtime_manifest_test.py; then
+    printf 'PASS offline host VF runtime-manifest contracts\n'
+else
+    failed=1
+fi
 if python3 -B tools/linux_mmio_mapper_test.py; then
     printf 'PASS offline MMIO mapper/tooling contracts\n'
 else
