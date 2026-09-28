@@ -8,6 +8,30 @@ i915 hangs and a host reboot. Keep `macos-tahoe-sriov` shut off until the
 corrected code passes the remaining offline review and every independently
 enforced containment precondition.
 
+## V256 physical-engine exclusion and headless callback review (offline)
+
+- The original `IntelAccelerator::startGraphicsEngine` is now treated as an
+  explicit physical-only boundary. Both admitted payloads directly enter
+  `SafeForceWake`, `initModeRegisters` and
+  `initHardwareStatusPageRegisters`; the last routine writes per-engine and
+  global HWS GPU addresses through accelerator MMIO base `+0x1240`. The VF
+  route must replace that complete symbol, and its replacement is rejected by
+  the source contract if it calls an original trampoline or names any of those
+  physical-state primitives.
+- Headless registration allocates a local 0x60-byte callback table. All eleven
+  initialized entries are now pinned to their exact payload symbols, offsets
+  and bodies. Coarse power, force-wake, protected-media notification, media
+  load/prepare, client notification and GuC completion callbacks are exact
+  void no-ops; DPSM and PM notification return zero; GuC pre-load returns the
+  fixed unsupported status. None contains MMIO or another call edge.
+- Guest sleep/wake dispatches through the same routed engine start/stop and
+  audited interrupt-bridge enable/disable boundaries. Scheduler-4 vtable slots
+  `0x118/0x120` remain its sleep/wake methods, and the retained scheduler
+  firmware initializer tests its loaded byte at `+0x20` before the `+0x220`
+  load-firmware call, setting that byte only after success. Repeated wake does
+  not reconstruct GuC/CTB. This is static reachability evidence; no guest power
+  transition or hardware test was run.
+
 ## V255 retained native-start success-path review (offline)
 
 - Complete pinned disassembly found a previously uncontracted pre-engine edge.

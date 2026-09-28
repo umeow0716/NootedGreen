@@ -96,6 +96,13 @@ feature-bit-gated `setAsyncSliceCount` performs a raw force-wake-protected
 GGTT/MSI/native start. HWS mapped-buffer descendants, the sole engine-start
 edge, DPSM timer placement, scheduler idle vtable slots and the exact no-op
 DPSM/coarse-power local callbacks are pinned for both payloads.
+The complete original engine-start body is now an explicit physical-only
+boundary: its force-wake/mode/HWS-register edges and raw HWS MMIO stores are
+machine-checked while the VF must replace the whole symbol without an original
+trampoline. All eleven initialized headless local-callback slots are pinned to
+their exact software-only bodies. The guest power-state graph must continue to
+reach the routed engine/bridge boundaries, and scheduler-4's loaded-byte guard
+must make repeated wake firmware initialization idempotent.
 
 | Files/area | Evidence and remaining boundary |
 | --- | --- |

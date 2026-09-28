@@ -17,6 +17,9 @@ TRACE_DISABLE = "__ZN25IGAccelTraceStreamManager17disableCollectionE27TraceStrea
 TRACE_SHUTDOWN = "__ZN25IGAccelTraceStreamManager8shutdownEv"
 UNREGISTER_SYSCTL = "__ZN16IntelAccelerator16unregisterSysctlEv"
 INIT_HARDWARE_STATUS_MEMORY = "__ZN16IntelAccelerator28initHardwareStatusPageMemoryEv"
+INIT_HARDWARE_STATUS_REGISTERS = "__ZN16IntelAccelerator31initHardwareStatusPageRegistersEv"
+INIT_MODE_REGISTERS = "__ZN16IntelAccelerator17initModeRegistersEv"
+SAFE_FORCE_WAKE = "__ZN16IntelAccelerator13SafeForceWakeEbj"
 BRIDGE_ENABLE = "__ZN17IGInterruptBridge6enableEv"
 BRIDGE_DISABLE = "__ZN17IGInterruptBridge7disableEv"
 BRIDGE_FILTER = "__ZN17IGInterruptBridge22interruptFilterHandlerEP28IOFilterInterruptEventSource"
@@ -38,6 +41,11 @@ STREAMER_ERROR_ENABLE = "__ZN26IGHardwareCommandStreamer420enableErrorInterruptE
 STREAMER_ERROR_DISABLE = "__ZN26IGHardwareCommandStreamer421disableErrorInterruptEv"
 PCI_CONFIGURE_INTERRUPTS = "__ZN11IOPCIDevice19configureInterruptsEjjjj"
 SCHEDULER_INIT_FIRMWARE = "__ZN11IGScheduler12initFirmwareEv"
+SCHEDULER4_SYSTEM_SLEEP = "__ZN12IGScheduler415systemWillSleepEv"
+SCHEDULER4_SYSTEM_WAKE = "__ZN12IGScheduler413systemDidWakeEv"
+BRIDGE_SYSTEM_SLEEP = "__ZN17IGInterruptBridge15systemWillSleepEv"
+BRIDGE_SYSTEM_WAKE = "__ZN17IGInterruptBridge13systemDidWakeEv"
+SET_POWER_STATE = "__ZN16IntelAccelerator13setPowerStateEmP9IOService"
 SCHEDULER4_VTABLE = "__ZTV12IGScheduler4"
 SCHEDULER5_VTABLE = "__ZTV12IGScheduler5"
 SCHEDULER4_INIT = "__ZN12IGScheduler419initWithAcceleratorEP22IOGraphicsAccelerator2"
@@ -70,6 +78,15 @@ DPSM_IDLE_TIMER = "__ZN16IntelAccelerator13dpsmIdleTimerEv"
 INIT_LOCAL_CALLBACKS = "__ZN16IntelAccelerator24initLocalCallbackSupportEv"
 ENABLE_COARSE_POWER_GATING = "__ZL24_enableCoarsePowerGatingv"
 DPSM_NOTIFY = "__ZL11_dpsmNotifyPj"
+LOCAL_SAFE_FORCE_WAKE = "__ZL14_SafeForceWakebj"
+LOCAL_PAVP_CONTROL = "__ZL19_PAVPSessionControl27PAVPSessionControlCommand_tPv"
+LOCAL_MEDIA_LOAD = "__ZL16_mediaKernelLoadb"
+LOCAL_MEDIA_PREPARE = "__ZL19_mediaPrepareEncodePv"
+LOCAL_CLIENT_NOTIFY = "__ZL13_clientNotify15IntelClientID_tb"
+LOCAL_PM_NOTIFY = "__ZL9_pmNotifyjjPyPj"
+LOCAL_GUC_WILL_LOAD = "__ZL17_accelWillLoadGuCyPv"
+LOCAL_GUC_FAILED = "__ZL21_accelFailedToLoadGuCv"
+LOCAL_GUC_DID_LOAD = "__ZL16_accelDidLoadGuCv"
 GUC_LOAD_BINARY = "__ZN13IGHardwareGuC13loadGuCBinaryEv"
 GUC_REGISTER_CTB = "__ZN13IGHardwareGuC31registerCommandTransportBuffersEv"
 GUC_DEREGISTER_CTB = "__ZN13IGHardwareGuC33deregisterCommandTransportBuffersEv"
@@ -95,6 +112,10 @@ DPSM_START_FAILURE_ANCHOR = bytes.fromhex(
     "be 15 02 00 00 45 31 f6 e9 41 ff ff ff")
 ASYNC_SLICE_MMIO_ANCHOR = bytes.fromhex(
     "49 8b 86 40 12 00 00 89 98 04 a2 00 00")
+HWS_ENGINE_MMIO_ANCHOR = bytes.fromhex(
+    "49 8b 8e 40 12 00 00 42 89 04 21")
+HWS_GLOBAL_MMIO_ANCHOR = bytes.fromhex(
+    "49 8b 8e 40 12 00 00 89 81 80 80 01 00")
 DPSM_SCHEDULER_IDLE_SLOT = bytes.fromhex(
     "48 8b 07 ff 90 60 01 00 00")
 DPSM_NOTIFY_SLOT = bytes.fromhex(
@@ -103,6 +124,9 @@ DPSM_COARSE_POWER_SLOT = bytes.fromhex(
     "49 8b 85 e8 0d 00 00 ff 10")
 DPSM_NOTIFY_BODY = bytes.fromhex("55 48 89 e5 31 c0 5d c3")
 VOID_NOOP_BODY = bytes.fromhex("55 48 89 e5 5d c3")
+ZERO_NOOP_BODY = bytes.fromhex("55 48 89 e5 31 c0 5d c3")
+UNSUPPORTED_NOOP_BODY = bytes.fromhex(
+    "55 48 89 e5 b8 c7 02 00 e0 5d c3")
 
 
 def macho_inventory(path):
@@ -219,6 +243,13 @@ def macho_inventory(path):
             "<Q", image, value(vtable) + 16 + 0x160)[0]
         if idle_slot != value(idle):
             raise AssertionError(f"{path}: {vtable} idle virtual slot changed")
+    scheduler4_vtable = value(SCHEDULER4_VTABLE)
+    for slot, target in ((0x118, SCHEDULER4_SYSTEM_SLEEP),
+                         (0x120, SCHEDULER4_SYSTEM_WAKE)):
+        if struct.unpack_from(
+                "<Q", image, scheduler4_vtable + 16 + slot)[0] != value(target):
+            raise AssertionError(
+                f"{path}: scheduler-4 power-state slot {slot:#x} changed")
     dpsm_start = value(DPSM_IDLE_TIMER)
     dpsm_end = next_symbol(dpsm_start)
     if image[dpsm_start:dpsm_end].count(DPSM_SCHEDULER_IDLE_SLOT) != 1 or \
@@ -257,6 +288,69 @@ def macho_inventory(path):
                 DPSM_COARSE_POWER_SLOT) != 1:
         raise AssertionError(f"{path}: native start coarse-power no-op dispatch changed")
 
+    # Headless registration installs a local 0x60-byte callback table instead
+    # of a framebuffer provider. Pin every initialized entry and its exact
+    # software-only body, not only the two callbacks reached during start.
+    local_callbacks = (
+        (0x00, ENABLE_COARSE_POWER_GATING, VOID_NOOP_BODY),
+        (0x08, LOCAL_SAFE_FORCE_WAKE, VOID_NOOP_BODY),
+        (0x10, LOCAL_PAVP_CONTROL, VOID_NOOP_BODY),
+        (0x20, LOCAL_MEDIA_LOAD, VOID_NOOP_BODY),
+        (0x28, LOCAL_MEDIA_PREPARE, VOID_NOOP_BODY),
+        (0x30, LOCAL_CLIENT_NOTIFY, VOID_NOOP_BODY),
+        (0x38, DPSM_NOTIFY, ZERO_NOOP_BODY),
+        (0x40, LOCAL_PM_NOTIFY, ZERO_NOOP_BODY),
+        (0x48, LOCAL_GUC_WILL_LOAD, UNSUPPORTED_NOOP_BODY),
+        (0x50, LOCAL_GUC_FAILED, VOID_NOOP_BODY),
+        (0x58, LOCAL_GUC_DID_LOAD, VOID_NOOP_BODY),
+    )
+    for slot, name, expected_body in local_callbacks:
+        target = value(name)
+        if image[target:next_symbol(target)].rstrip(b"\x90") != expected_body:
+            raise AssertionError(
+                f"{path}: local callback {name} is no longer software-only")
+        refs = []
+        for candidate in range(callback_start, callback_end - 10):
+            if image[candidate:candidate + 3] != bytes.fromhex("48 8d 0d"):
+                continue
+            displacement = struct.unpack_from("<i", image, candidate + 3)[0]
+            if candidate + 7 + displacement != target:
+                continue
+            store = image[candidate + 7:candidate + 11]
+            expected_store = (bytes.fromhex("48 89 08") if slot == 0 else
+                              bytes((0x48, 0x89, 0x48, slot)))
+            if store.startswith(expected_store):
+                refs.append(candidate)
+        if len(refs) != 1:
+            raise AssertionError(
+                f"{path}: local callback slot {slot:#x} no longer pins {name}")
+
+    # Guest sleep/wake reaches the same routed engine boundaries. Scheduler
+    # firmware initialization is explicitly idempotent: its +0x20 loaded byte
+    # bypasses the +0x220 loadFirmware virtual call on every wake after the
+    # first successful GuC/CTB construction. The bridge sleep/wake helpers
+    # continue to converge on the already audited disable/enable methods.
+    for target in (BRIDGE_SYSTEM_SLEEP, BRIDGE_SYSTEM_WAKE, START, STOP):
+        if len(direct_branches(SET_POWER_STATE, target)) != 1:
+            raise AssertionError(
+                f"{path}: accelerator power-state edge to {target} changed")
+    if len(direct_branches(BRIDGE_SYSTEM_SLEEP, BRIDGE_DISABLE)) != 1 or \
+            len(direct_branches(BRIDGE_SYSTEM_WAKE, BRIDGE_ENABLE)) != 1:
+        raise AssertionError(
+            f"{path}: interrupt-bridge sleep/wake lifecycle changed")
+    firmware_start = value(SCHEDULER_INIT_FIRMWARE)
+    firmware_body = image[firmware_start:next_symbol(firmware_start)]
+    firmware_steps = (
+        bytes.fromhex("f6 47 0c 01"),
+        bytes.fromhex("80 7f 20 00"),
+        bytes.fromhex("ff 90 20 02 00 00"),
+        bytes.fromhex("c6 43 20 01"),
+    )
+    positions = [firmware_body.find(step) for step in firmware_steps]
+    if any(position < 0 for position in positions) or positions != sorted(positions):
+        raise AssertionError(
+            f"{path}: scheduler firmware idempotence guard changed")
+
     # Accelerator feature +0x1190 bit 5 makes native start call this routine
     # before startGraphicsEngine. It writes raw MMIO 0xA204 under physical
     # force-wake, so source admission must reject that mode on a VF.
@@ -288,6 +382,23 @@ def macho_inventory(path):
             len(direct_branches(INIT_HARDWARE_STATUS_MEMORY,
                                 MAPPED_WITH_OPTIONS)) != 2:
         raise AssertionError(f"{path}: native start/HWS mapped-buffer graph changed")
+
+    # The original engine-start body is intentionally never entered on a VF.
+    # Pin representative physical descendants so that this safety boundary is
+    # explicit: it acquires force-wake, initializes mode registers and writes
+    # every engine/global HWS address through the accelerator's raw MMIO base.
+    for target in (SAFE_FORCE_WAKE, INIT_MODE_REGISTERS,
+                   INIT_HARDWARE_STATUS_REGISTERS):
+        if not direct_branches(START, target):
+            raise AssertionError(
+                f"{path}: physical engine-start edge {START} -> {target} changed")
+    hws_register_start = value(INIT_HARDWARE_STATUS_REGISTERS)
+    hws_register_body = image[
+        hws_register_start:next_symbol(hws_register_start)]
+    if hws_register_body.count(HWS_ENGINE_MMIO_ANCHOR) != 1 or \
+            hws_register_body.count(HWS_GLOBAL_MMIO_ANCHOR) != 1:
+        raise AssertionError(
+            f"{path}: physical HWS-register MMIO inventory changed")
     dpsm_refs = []
     for candidate in range(accelerator_start, accelerator_start_end - 6):
         if image[candidate:candidate + 3] != bytes.fromhex("48 8d 35"):
@@ -604,6 +715,11 @@ def source_contract(path):
             pci_resolution.index("KernelPatcher::KernelID") <
             pci_resolution.index(PCI_CONFIGURE_INTERRUPTS)):
         raise AssertionError(f"{path}: IOPCIFamily symbol is incorrectly resolved from KernelID")
+    normalized_pci_resolution = "".join(pci_resolution.split())
+    if ('{"' + START + '",startGraphicsEngine},' not in
+            normalized_pci_resolution):
+        raise AssertionError(
+            f"{path}: VF no longer replaces the complete physical engine-start body")
     for token in (
             GUC_INIT_SCHED_CONTROL,
             GUC_LOAD_BINARY,
@@ -703,6 +819,11 @@ def source_contract(path):
                 f"{path}: Blit3D anchor is bounded by a symbol before its address")
 
     start = function_body(source, "bool Gen11::startGraphicsEngine(void *that)")
+    for forbidden in ("FunctionCast", "0x1240", "SafeForceWake",
+                      "initModeRegisters", "initHardwareStatusPageRegisters"):
+        if forbidden in start:
+            raise AssertionError(
+                f"{path}: VF engine-start re-enters physical state through {forbidden}")
     bridge = start.index("callback->vfInterruptBridgeEnable)(")
     firmware = start.index("callback->vfSchedulerInitFirmware)(scheduler)")
     ready = start.index("if (!vfNativeGpuWorkReady())")
