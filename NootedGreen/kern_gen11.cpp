@@ -2378,6 +2378,8 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			{"__ZN16IntelAccelerator19startGraphicsEngineEv", startGraphicsEngine},
 			{"__ZN11IGScheduler6createEP16IntelAccelerator", vfCreateScheduler,
 			 this->originalSchedulerCreate},
+			{"__ZN11IGScheduler15initWithOptionsEjyP22IOGraphicsAccelerator2", vfInitScheduler,
+			 this->originalSchedulerInit},
 			{"__ZN16IntelAccelerator18stopGraphicsEngineEv",  stopGraphicsEngine},
 
 			// A VF has no guest-owned INSTDONE state. Derive the watchdog result
@@ -3683,6 +3685,35 @@ void *Gen11::getBlit3DContext(void *that, bool create)
 		return nullptr;
 	return FunctionCast(getBlit3DContext,
 	                    callback->ogetBlit3DContext)(that, create);
+}
+
+bool Gen11::vfInitScheduler(void *scheduler, uint32_t options,
+	                        uint64_t privateSize, void *accelerator)
+{
+	if (!scheduler || !accelerator || !callback || !callback->originalSchedulerInit)
+		return false;
+	if (!FunctionCast(vfInitScheduler, callback->originalSchedulerInit)(
+			scheduler, options, privateSize, accelerator))
+		return false;
+	// Native base init ignores addEventSource's result. The pinned default
+	// timer constructor and effective getter let us verify actual attachment.
+	auto *timer = getMember<IOTimerEventSource *>(scheduler, 0x448);
+	auto *expected = getMember<IOWorkLoop *>(accelerator, 0xf0);
+	if (!timer || !expected) {
+		vfMarkProtocolFault("VF native scheduler success has incomplete timer ownership");
+		PANIC("ngreen", "Cannot unwind incomplete VF scheduler timer ownership");
+	}
+	auto *attached = timer->getWorkLoop();
+	if (attached && attached != expected) {
+		vfMarkProtocolFault("VF scheduler timer bound to unexpected workloop");
+		PANIC("ngreen", "Cannot release VF scheduler with foreign timer binding");
+	}
+	if (attached != expected) {
+		vfMarkProtocolFault("VF scheduler timer failed workloop attachment");
+		return false;
+	}
+	// Do not manually free: the failed outer factory owns final cleanup.
+	return true;
 }
 
 void *Gen11::vfCreateScheduler(void *accelerator)

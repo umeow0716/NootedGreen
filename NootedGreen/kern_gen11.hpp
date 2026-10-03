@@ -193,6 +193,9 @@ private:
 	mach_vm_address_t vfSchedulerInitFirmware {};
 	mach_vm_address_t originalSchedulerCreate {};
 	static void *vfCreateScheduler(void *accelerator);
+	mach_vm_address_t originalSchedulerInit {};
+	static bool vfInitScheduler(void *scheduler, uint32_t options,
+	                            uint64_t privateSize, void *accelerator);
 	static void populateResetRegisterList(void *that);
 	static bool wrapIGScheduler5IsGpuIdle(const void *that);
 	static bool wrapIGScheduler4IsGpuIdle(const void *that);

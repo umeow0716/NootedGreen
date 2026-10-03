@@ -15,7 +15,7 @@ classified-VF-only replacement. It marks the protocol fault (closing native
 work admission) and fail-stops the guest before returning to inherited restart
 and wait retry. It does not call the original, free backing, fabricate stamp
 progress or issue hardware reset/MMIO. Ordinary debug capture remains a no-op;
-PF behavior remains native. The route inventory is now 95 (92 accelerator,
+PF behavior remains native. The route inventory is now 96 (93 accelerator,
 3 framebuffer admission symbols); both payloads pin the event-timeout virtual.
 
 This is a provisional error-containment boundary, not implemented GPU recovery,
@@ -26,6 +26,18 @@ and a real hardware-safe recovery design remain unfinished. Offline tests
 enforce fault-before-panic and prohibit native/helper/backing side effects.
 
 ## Mapping getter provenance follow-up (offline)
+
+VF scheduler startup binding guard: route the typed base initWithOptions
+entry only for VF. Preserve native failure; after native success require the
+timer at scheduler+0x448 to report accelerator+0xf0 through getWorkLoop.
+An unattached timer rejects initialization and leaves cleanup to the factory.
+Missing ownership fields or a foreign workloop fail-stop rather than releasing
+an owner potentially still registered elsewhere. This checks a binding snapshot,
+not chain membership, concurrent mutation, callback drain or DMA quiescence.
+The typed getter's emitted LLVM uses slot 45 (+0x168), matching the pinned
+Boot kernel ABI. Full offline suite passed at /tmp/ngreen-static.8lWs1f;
+only the existing SDK macro warnings remain. No deployment or VM operation.
+Checkpoint 54665b9 CI 37154429588 subsequently completed successfully.
 
 Timer binding getter follow-up: complete Boot IOEventSource::getWorkLoop
 0x10 body reviewed/pinned: returns source+0x30. Timer effective vtable +0x168

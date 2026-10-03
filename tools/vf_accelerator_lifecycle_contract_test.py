@@ -2112,6 +2112,20 @@ def source_contract(path):
         normalized_production.index("schedulerInitPatch.apply("), \
         "scheduler uniqueness admission must precede patch writes"
     accelerator_start = function_body(source, "bool Gen11::start(void *that, void *provider)")
+    init_guard = function_body(source, "bool Gen11::vfInitScheduler(void *scheduler, uint32_t options,")
+    native_init = init_guard.index("FunctionCast(vfInitScheduler, callback->originalSchedulerInit)")
+    timer_load = init_guard.index("getMember<IOTimerEventSource *>(scheduler, 0x448)")
+    expected_load = init_guard.index("getMember<IOWorkLoop *>(accelerator, 0xf0)")
+    attached = init_guard.index("timer->getWorkLoop()")
+    failed = init_guard.index('vfMarkProtocolFault("VF scheduler timer failed workloop attachment")')
+    assert native_init < timer_load < expected_load < attached < failed < init_guard.index("return true;"), \
+        "VF base scheduler init must validate attachment after native init before admission"
+    assert "if (!timer || !expected)" in init_guard and "if (attached && attached != expected)" in init_guard and \
+        'PANIC("ngreen", "Cannot release VF scheduler with foreign timer binding")' in init_guard and \
+        "->free(" not in init_guard and "->release(" not in init_guard, \
+        "VF init binding failure must leave factory cleanup ownership intact"
+    assert '{"__ZN11IGScheduler15initWithOptionsEjyP22IOGraphicsAccelerator2",vfInitScheduler,this->originalSchedulerInit}' in "".join(pci_resolution.split()), \
+        "missing typed base scheduler initialization route"
     create_guard = function_body(source, "void *Gen11::vfCreateScheduler(void *accelerator)")
     selection = create_guard.index("(getMember<uint32_t>(accelerator, 0x1190) >> 23) & 7U")
     reject = create_guard.index("if (schedulerType != 4U)", selection)
