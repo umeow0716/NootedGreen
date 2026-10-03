@@ -35,6 +35,8 @@ EVENT_DISABLE_STAMP_LOCKED = "__ZN20IOAccelEventMachine223disable_stamp_interrup
 EVENT_ENABLE_STAMP = "__ZN20IOAccelEventMachine220enableStampInterruptEi"
 EVENT_DISABLE_STAMP = "__ZN20IOAccelEventMachine221disableStampInterruptEi"
 EVENT_OWNER_BODIES = {
+    "__ZN22IOGraphicsAccelerator220createDMACommandPoolEv": (0x1d4, "a5b83a1786a350b2e88f404affde3ca5ce3ed042aa192f2782c9e4f7f59bffc8"),
+    "__ZN22IOGraphicsAccelerator221releaseDMACommandPoolEv": (0xf0, "d24040c0993ad5617b52e19f965a7cfa37579d527d09ed8dbea943cf381aca6e"),
     "__ZN22IOGraphicsAccelerator218createIODMACommandEv": (0x40, "0920711193b7b044fc0fb1f6a5a4573c0b700d29590e8c00a458b123b450e029"),
     "__ZN22IOGraphicsAccelerator213getDMACommandEv": (0xe0, "14a72d0e573be42b52cb1566b6d1bd91d37b1ef24c267d0e590049823f8a29c7"),
     "__ZN16IOAccelSysMemory6unwireEv": (0x1f8, "0bbd5ebb7b4eb2c05d75d4fda2724cc64fe4dafa62522bd70b1ed44cf34ab8f4"),
@@ -273,6 +275,7 @@ def check_boot_atomic(system, path):
     symbols[b"__ZN18IOTimerEventSource11setWorkLoopEP10IOWorkLoop"] = []
     symbols[b"__ZTV8OSObject"] = []
     for name in (b"__ZTV12IODMACommand", b"__ZTV25IOGeneralMemoryDescriptor",
+                 b"__ZN12IODMACommand12cloneCommandEPv",
                  b"__ZN12IODMACommand17withSpecificationEPFbPS_NS_9Segment64EPvjEhyNS_14MappingOptionsEyjP8IOMapperS2_",
                  b"__ZN12IODMACommand19setMemoryDescriptorEPK18IOMemoryDescriptorb",
                  b"__ZNK25IOGeneralMemoryDescriptor19dmaCommandOperationEjPvj",
@@ -321,6 +324,7 @@ def check_boot_atomic(system, path):
         return boot[matches[0]:matches[0] + length]
 
     for table, slot, method in (
+            (b"__ZTV12IODMACommand", 0x118, b"__ZN12IODMACommand12cloneCommandEPv"),
             (b"__ZTV12IODMACommand", 0x128, b"__ZN12IODMACommand19setMemoryDescriptorEPK18IOMemoryDescriptorb"),
             (b"__ZTV12IODMACommand", 0x130, b"__ZN12IODMACommand21clearMemoryDescriptorEb"),
             (b"__ZTV12IODMACommand", 0x148, b"__ZN12IODMACommand8completeEbb"),
@@ -825,6 +829,9 @@ def check(path, boot_path=None):
     assert stop_owner.count(bytes.fromhex("ff 90 48 01 00 00")) == 3, "changed base event stop source-removal inventory"
     print("PASS inherited event owner free/stop and per-event stamp-disable bodies (outer drain not proven)")
     lazy_setup = address_of("__ZN18IOAccelDisplayPipe14setup_workloopEv")
+    assert read(0x14ba0f35, 6) == bytes.fromhex("ff 90 b0 0a 00 00"), "changed accelerator DMA pool factory virtual"
+    assert read(0x14ba1034, 6) == bytes.fromhex("ff 90 18 01 00 00"), "changed accelerator DMA template clone virtual"
+    assert read(0x14ba22d3, 10) == bytes.fromhex("48 8b bb 10 0a 00 00 48 8b 07"), "changed DMA pool template final-release dereference"
     raw_unwire = struct.unpack("<Q", read(address_of("__ZTV16IOAccelSysMemory") + 0x1c8, 8))[0]
     assert raw_unwire >> 63 == 0 and (raw_unwire >> 30) & 3 == 1, "changed base sys-memory unwire encoding"
     assert raw_unwire & 0x3fffffff == address_of("__ZN16IOAccelSysMemory6unwireEv"), "changed base sys-memory unwire target"

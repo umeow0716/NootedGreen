@@ -402,6 +402,7 @@ def macho_inventory(path):
     }
     observed_stamp_irq_imports = {address: [] for address in stamp_irq_imports}
     event_stop_imports = {
+        0xd1b20: "__ZN22IOGraphicsAccelerator218createIODMACommandEv",
         0xc8140: "__ZTV16IOAccelSysMemory",
         0xcd778: "__ZN16IOAccelSysMemory4freeEv",
         0xc8130: "__ZTV16IOAccelMemoryMap",

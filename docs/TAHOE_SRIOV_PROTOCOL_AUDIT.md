@@ -5954,3 +5954,27 @@ null. Concrete Intel accelerator factory override, pool construction,
 allocation virtual and command receiver identity remain pending; these base
 bodies alone do not establish which receiver is used at runtime. Targeted
 paired-KC checks pass; no runtime/production mutation.
+# Intel inherited DMA factory and template-clone pool follow-up
+
+Both Intel accelerator vtables import base createIODMACommand at relocation
+`0xd1b20`, effective object slot +0xab0. Complete base createDMACommandPool
+(0x1d4) calls that slot after allocating lock +0xa18, stores the returned
+command at +0xa10, retains/inserts it into a validated circular list, sets
+count +0xda0 to 1, then clones further commands up to configured count +0xd1c.
+Clone failure skips that insertion rather than failing the whole creation.
+Thus +0xa10 is a template IODMACommand, not a separate IOCommandPool object;
+Boot base slot +0x118 resolves to cloneCommand(void*). Earlier generic “pool”
+wording denotes the overall accelerator pool, not this concrete receiver.
+Clone body and factory metaclass allocation remain pending.
+
+Complete releaseDMACommandPool (0xf0) validates/unlinks/releases list entries,
+zeros pooled count, directly dereferences/releases template +0xa10 and clears
+it, then frees/clears lock +0xa18. It has no template-null check in that branch
+and no local acquisition of the pool lock. Create failure paths can leave
+template null/lock allocated, and concurrency with get/return is not excluded
+by this body alone. Outer failed-start cleanup selection and shutdown caller
+serialization must be established before alleging an observed defect or
+adding a guard/lock. Locking after normal get/return admission remains open
+would not by itself close lifetime races. Hashes/clone identity/native factory
+import and explicit failure-cleanup dereference anchors are pinned; targeted
+native/paired-KC checks pass. No production/runtime changes.

@@ -850,3 +850,10 @@ Reviewed/pinned base accelerator create/getDMACommand, exact imported Boot
 withSpecification overload and cross-KC import resolution. Mapped-mode/64-bit
 factory arguments are resolved; loaded globals, metaclass/init implementation,
 effective Intel factory/pool construction and runtime receivers remain pending.
+# Latest DMA template-pool checkpoint
+
+Reviewed/pinned complete create/releaseDMACommandPool, Intel inherited factory
+import and Boot cloneCommand slot. +0xa10 is the template command, not a
+distinct pool object. Outer failure cleanup and concurrent get/return admission
+must protect release's unchecked template dereference/unlocked list cleanup.
+Clone/metaclass bodies and shutdown serialization remain pending.
