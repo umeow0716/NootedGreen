@@ -50,6 +50,14 @@ software state, not GPU completion. Resource/shared scrub callbacks, event
 wait callbacks, iterator lifetime and producer serialization remain unfinished;
 the KC test is local-only and does not run against KC content in remote CI.
 
+Scrub follow-up reviewed complete Shared2/Resource2/memory/Fast2 scrub bodies
+and four list iterator methods. Local contracts pin their identities, base
+virtual targets and the termination-counter bypass that clears outstanding
+event metadata without proving GPU completion. Iterator methods neither lock
+nor retain nodes. Concrete resource subclass overrides, upstream list locking,
+storage-resource and mapping lifetime remain open; no runtime safety or idle
+certification follows from the newly pinned local fixture.
+
 V267 closes the verified VF event-timeout return into inherited restart/retry
 by protocol-fault admission closure followed by guest fail-stop. This is not
 normal recovery or proof that already-published DMA stops. PF and normal debug

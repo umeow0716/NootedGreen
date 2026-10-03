@@ -175,6 +175,36 @@ remain open. No runtime coverage hook, completion predicate or driver behavior
 changed. The KC fixture stays local; CI only checks its Python syntax and the
 payload import identities, not the absent KC content.
 
+Scrub callback follow-up: archived Shared2 virtual `+0x128` resolves to its
+resource-list scrub; Resource2 virtual `+0x228` resolves to its scrub, which
+first visits a distinct storage resource if present, then scrubs optional
+`+0x90` event pairs, four events in backing `+0x38`, and events in optional
+memory objects `+0x80`/`+0x88`. Memory scrub walks its mapping list and invokes
+event-machine virtual `+0x270` on each mapping's event `+0x38`. Fast2 `+0x270`
+resolves to `scrubEvent`, not finish/wait. Complete symbol-bounded body hashes
+and these three effective base virtuals are now locally pinned. Concrete
+Intel Shared/Resource/EventMachine vtables also resolve these slots through
+the exact inherited imports in both payloads, now CI-pinned. Further resource
+subclass override and storage-resource lifetime coverage is still incomplete.
+
+Fast2 scrub iterates eight packed event entries. It clears an entry if the
+signed requested-minus-cached stamp is nonpositive, or if a mapped completed
+stamp read makes it nonpositive. **It also clears an outstanding entry when
+accelerator termination counter `+0xdc8` is nonzero, regardless of that read
+still being behind the requested stamp.** It can therefore return true with
+no hardware completion proof; only unresolved entries on a nonterminated
+accelerator make it return false. This additional software completion bypass
+is pinned explicitly and must be excluded from future idle/reclamation proofs.
+Scrub modifies event metadata/cache, not the GPU-completed dword directly.
+
+The two relevant list iterator constructors and next/previous methods were
+also read in full: they copy a head/tail pointer and advance through shared
+`+0x10` or resource `+0x50`. Their complete local byte contracts prove these
+methods do not acquire a lock or retain the returned object. Consequently the
+scrub iterator does not itself pin nodes against concurrent removal; upstream
+serialization remains required. No runtime hook, release policy, GPU test,
+VM configuration or host GPU state changed in this review.
+
 Inherited implementation found locally (2026-10-04): archived Tahoe 25G229
 `SystemKernelExtensions.kc`, SHA-256
 `5cb1be1dc530b4b953a33943567589101d3ac46bb8cf90728566ee7e5b1fa214`,

@@ -303,7 +303,10 @@ def macho_inventory(path):
                 "__ZN15IOAccelChannel219mergeEventExcludingEP12IOAccelEventS1_",
                 "__ZN15IOAccelChannel213setEventStampEP12IOAccelEvent",
                 "__ZN15IOAccelChannel214incrementStampEv",
-                "__ZN22IOGraphicsAccelerator211scrubEventsEv"):
+                "__ZN22IOGraphicsAccelerator211scrubEventsEv",
+                "__ZN14IOAccelShared211scrubEventsEv",
+                "__ZN16IOAccelResource211scrubEventsEv",
+                "__ZN24IOAccelEventMachineFast210scrubEventEP12IOAccelEvent"):
             if address in inherited_event_imports:
                 raise AssertionError(f"{path}: duplicate channel method relocation")
             inherited_event_imports[address] = (names[symbol_index], bits >> 24)
@@ -497,6 +500,14 @@ def macho_inventory(path):
     if struct.unpack_from("<Q", image, scrub_slot)[0] != 0 or \
             inherited_event_imports.get(scrub_slot) != ("__ZN22IOGraphicsAccelerator211scrubEventsEv", 0x0E):
         raise AssertionError(f"{path}: stamp rollover scrub virtual changed")
+    for table, slot, method in (
+            ("__ZTV13IGAccelShared", 0x128, "__ZN14IOAccelShared211scrubEventsEv"),
+            ("__ZTV15IGAccelResource", 0x228, "__ZN16IOAccelResource211scrubEventsEv"),
+            (EVENT_MACHINE_VTABLE, 0x270, "__ZN24IOAccelEventMachineFast210scrubEventEP12IOAccelEvent")):
+        address = value(table) + 16 + slot
+        if struct.unpack_from("<Q", image, address)[0] != 0 or \
+                inherited_event_imports.get(address) != (method, 0x0E):
+            raise AssertionError(f"{path}: concrete Intel scrub virtual changed: {table}")
     for anchor in ("44 8a 7b 48 45 84 ff", "c6 43 48 00",
                    "8b 53 64 8b 4b 68 45 31 c9", "45 0f b6 c7 ff 90 48 01 00 00"):
         if submit_body.count(bytes.fromhex(anchor)) != 1:

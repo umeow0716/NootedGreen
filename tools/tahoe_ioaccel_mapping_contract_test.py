@@ -21,7 +21,29 @@ EVENT_MERGE_EXCLUDING = "__ZN24IOAccelEventMachineFast219mergeEventExcludingEP12
 EVENT_SET_STAMP = "__ZN24IOAccelEventMachineFast213setEventStampEiP12IOAccelEvent"
 EVENT_INCREMENT = "__ZN24IOAccelEventMachineFast214incrementStampEi"
 EVENT_WRITE_STAMP = "__ZN24IOAccelEventMachineFast217writeStampCommandEiP17IOAccelEventQueueP17vendevtCommandRec"
+EVENT_SCRUB = "__ZN24IOAccelEventMachineFast210scrubEventEP12IOAccelEvent"
+SHARED_SCRUB = "__ZN14IOAccelShared211scrubEventsEv"
+RESOURCE_SCRUB = "__ZN16IOAccelResource211scrubEventsEv"
+SHARED_VTABLE = "__ZTV14IOAccelShared2"
+RESOURCE_VTABLE = "__ZTV16IOAccelResource2"
+# Symbol-bounded bodies reviewed locally. These identities do not certify
+# overridden resource methods, iterator locking, DMA completion or host safety.
+SCRUB_BODIES = {
+    SHARED_SCRUB: (0x54, "391e92190ff359bd4c4bede93538b83d0fc7f49677456f504528bc82ba331e00"),
+    RESOURCE_SCRUB: (0xc2, "4f0a89f94134348f87d80dc77e6e66c800a85e4c50d659c6303701f653cc700d"),
+    "__ZN13IOAccelMemory14scrubAllEventsEv":
+        (0x5a, "43bc8b5f00af74bdc67cbad08ff4994fd24ca075fe0d2c05a45a7604c71aa492"),
+    EVENT_SCRUB: (0x7e, "7b3a41f9948c644a06cb48c6e86f7a014e28b9f05aee296f5c813efc3c822833"),
+}
 CONTRACTS = {
+    "__ZN17IOAccelSharedList8IteratorC1ERS_":
+        bytes.fromhex("55 48 89 e5 48 8b 06 48 89 07 5d c3"),
+    "__ZN17IOAccelSharedList8Iterator13getNextSharedEv":
+        bytes.fromhex("48 8b 07 48 85 c0 74 0c 55 48 89 e5 48 8b 48 10 48 89 0f 5d c3 90"),
+    "__ZN19IOAccelResourceList15ReverseIteratorC1ERS_":
+        bytes.fromhex("55 48 89 e5 48 8b 46 08 48 89 07 5d c3 90"),
+    "__ZN19IOAccelResourceList15ReverseIterator15getPrevResourceEv":
+        bytes.fromhex("48 8b 07 48 85 c0 74 0c 55 48 89 e5 48 8b 48 50 48 89 0f 5d c3 90"),
     "__ZN22IOGraphicsAccelerator211scrubEventsEv":
         bytes.fromhex("55 48 89 e5 41 57 41 56 53 48 83 ec 28 48 89 fb "
                       "49 bf aa aa aa aa aa aa aa aa 4c 8d 75 e0 4d 89 3e "
@@ -173,7 +195,8 @@ def check(path, boot_path=None):
             symtab = struct.unpack_from("<6I", image, offset)[2:]
     assert symtab is not None, "missing embedded symbol table"
     symbol_offset, count, string_offset, string_size = symtab
-    matches = {name: [] for name in {*CONTRACTS, EVENT_VTABLE, EVENT_FINISH, EVENT_WAIT, EVENT_CLEAN, EVENT_SIGNAL, EVENT_RESTART,
+    matches = {name: [] for name in {*CONTRACTS, *SCRUB_BODIES, SHARED_VTABLE, RESOURCE_VTABLE,
+                                    EVENT_VTABLE, EVENT_FINISH, EVENT_WAIT, EVENT_CLEAN, EVENT_SIGNAL, EVENT_RESTART,
                                     EVENT_MERGE_EXCLUDING, EVENT_SET_STAMP}}
     for index in range(count):
         name_offset, _, _, _, address = struct.unpack_from("<IBBHQ", image, symbol_offset + index * 16)
@@ -197,6 +220,19 @@ def check(path, boot_path=None):
         address = address_of(name)
         assert read(address, len(expected)) == expected, f"changed {name}"
         print(f"PASS {name} at {address:#x}")
+    for name, (length, digest) in SCRUB_BODIES.items():
+        assert hashlib.sha256(read(address_of(name), length)).hexdigest() == digest, f"changed {name}"
+    for table, slot, name in ((SHARED_VTABLE, 0x128, SHARED_SCRUB),
+                              (RESOURCE_VTABLE, 0x228, RESOURCE_SCRUB),
+                              (EVENT_VTABLE, 0x270, EVENT_SCRUB)):
+        raw = struct.unpack("<Q", read(address_of(table) + 16 + slot, 8))[0]
+        assert (raw >> 30) & 3 == 1 and raw >> 63 == 0, "unexpected scrub cache level/auth"
+        assert raw & 0x3fffffff == address_of(name), f"changed scrub virtual {slot:#x}"
+    scrub = read(address_of(EVENT_SCRUB), 0x7e)
+    assert scrub[0x58:0x66] == bytes.fromhex(
+        "4c 8b 47 10 41 83 b8 c8 0d 00 00 00 74 0f"), "changed scrub termination bypass"
+    assert scrub[0x66:0x6a] == bytes.fromhex("48 89 14 ce"), "changed scrub event clearing"
+    print("PASS shared/resource/memory scrub graph and non-hardware termination bypass")
     # XNU EXTERNAL_HEADERS/mach-o/fixup-chains.h kernel-cache rebase:
     # target:30, cacheLevel:2, next:12, isAuth:1. This archived SystemKC
     # level-1 unslid base is zero; never apply this to a live slid pointer.
