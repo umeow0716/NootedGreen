@@ -27,6 +27,15 @@ enforce fault-before-panic and prohibit native/helper/backing side effects.
 
 ## Mapping getter provenance follow-up (offline)
 
+Control-gate command wrapper follow-up: complete Boot base IOCommandGate
+`runCommand` (0x30 bytes) and virtual `+0x1c0` are locally pinned. It shifts
+the four arguments, loads stored action `+0x20` and tail-delegates through
+virtual `+0x1c8`; it does not itself enter the workloop gate. The local XNU
+runAction method was read completely, including disabled-gate sleep/teardown
+abort and active-action accounting. That reference cannot certify the actual
+Boot runAction virtual or workloop removal action; these remain the next
+required edges for callback-drain analysis. No runtime hold change.
+
 Workloop gate follow-up: complete Boot base closeGate/openGate/removeEventSource
 bodies and effective base virtuals are locally pinned. CloseGate uses workloop
 `+0x10` recursive gate storage: same current-thread owner increments recursion;

@@ -7,6 +7,10 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 command wrapper follow-up: complete Boot runCommand and base virtual
+reviewed/pinned; complete reference XNU runAction read. Actual Boot virtual
++0x1c8, stored removal action and concrete control-gate type remain pending.
+
 2026-10-04 workloop gate follow-up: complete Boot base closeGate/openGate and
 removeEventSource reviewed and locally pinned with effective virtuals and
 mutex edges. Recursive ownership distinguished from callback-drain proof;

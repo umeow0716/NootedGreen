@@ -198,6 +198,7 @@ def check_boot_atomic(system, path):
                                    b"__ZN18IOTimerEventSource14setTimeoutFuncEv")}
     symbols[b"__ZN18IOTimerEventSource17timeoutAndReleaseEPvS0_"] = []
     for name in (b"__ZTV10IOWorkLoop", b"__ZN10IOWorkLoop8openGateEv",
+                 b"__ZTV13IOCommandGate", b"__ZN13IOCommandGate10runCommandEPvS0_S0_S0_",
                  b"__ZN10IOWorkLoop9closeGateEv",
                  b"__ZN10IOWorkLoop17removeEventSourceEP13IOEventSource"):
         symbols[name] = []
@@ -221,6 +222,9 @@ def check_boot_atomic(system, path):
     # These Boot KC vtable entries are canonical pointers, NOT System KC
     # chained cache-level targets. Do not silently apply the latter decoder.
     for table, slot, method, length, digest in (
+            (b"__ZTV13IOCommandGate", 0x1c0,
+             b"__ZN13IOCommandGate10runCommandEPvS0_S0_S0_", 0x30,
+             "e3e3a145d770ee11a0fe2424d9adda5df15c0be7c5fa458c3278a44d5ee7dd41"),
             (b"__ZTV10IOWorkLoop", 0x178, b"__ZN10IOWorkLoop8openGateEv", 0x70,
              "4474d3fed4f663608045d23044b0ab55df1259532e987df6ae9ee3c9c3ad9e8a"),
             (b"__ZTV10IOWorkLoop", 0x180, b"__ZN10IOWorkLoop9closeGateEv", 0x90,
@@ -309,6 +313,10 @@ def check_boot_atomic(system, path):
         assert instruction[0] == opcode and call + 5 + struct.unpack_from("<i", instruction, 1)[0] == symbols[target][0], \
             "changed workloop recursive gate mutex edge"
     print("PASS Boot KC recursive workloop gate and removal delegation bodies")
+    command = symbols[b"__ZN13IOCommandGate10runCommandEPvS0_S0_S0_"][0]
+    assert kernel_read(command + 0x13, 11) == bytes.fromhex("48 8b 77 20 48 8b 80 c8 01 00 00"), \
+        "changed command stored-action/runAction virtual dispatch"
+    print("PASS Boot KC command-gate removal wrapper preserves action delegation")
     assert system[0x10132:0x10138] == bytes.fromhex("ff 25 60 40 01 00"), "changed atomic import stub"
     raw = struct.unpack_from("<Q", system, 0x24198)[0]
     assert (raw >> 30) & 3 == 0 and raw >> 63 == 0, "unexpected atomic import cache level/auth"
