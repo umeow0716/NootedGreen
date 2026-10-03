@@ -84,6 +84,14 @@ boolean. Error signaling uses a distinct event-machine mutex and software
 request/event-source notification. Full wait locking, callback processing,
 mapping/event lifetime and actual DMA completion remain open.
 
+Full wait delta: base waitForStamp and timeout waiter cleanup were read fully
+and locally pinned, with BootKC sleep/deadline imports resolved. Waiter mutex
+is released during sleep; termination and a separate polling flag remain
+non-hardware completion/boundedness concerns. The base stamp-interrupt no-ops
+were read, but Intel overrides them. Their overload/virtual/helper graph is
+not fully reviewed and is now an explicit next gate. Base-method verification
+must not be substituted for the concrete Intel hardware-safety review.
+
 V267 closes the verified VF event-timeout return into inherited restart/retry
 by protocol-fault admission closure followed by guest fail-stop. This is not
 normal recovery or proof that already-published DMA stops. PF and normal debug

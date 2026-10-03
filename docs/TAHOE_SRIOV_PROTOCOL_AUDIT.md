@@ -282,6 +282,30 @@ locking/lifetime still require review. These findings preserve the V267 error
 fail-stop boundary; they do not implement normal completion, finite recovery
 or certify that a guest panic protects the PF. No runtime behavior changed.
 
+Full wait follow-up: base `waitForStamp` (`0x314` bytes) and its timeout
+`disable_stamp_interrupt` cleanup (`0x48` bytes) were read completely and
+locally hash-pinned. Event-machine mutex `+0x50` protects waiter array `+0x48`
+increments/decrements and first/last-waiter virtuals `+0x240`/`+0x248`; it is
+released before sleeping. Paired BootKC identities now resolve the sleep path
+to `clock_interval_to_deadline`, `assert_wait_deadline`, and `thread_block`.
+The stamp is reread after wait registration before blocking, and after wakeup;
+signed requested-minus-completed determines progress. Device restart state
+`event+0x94` yields SDK `kIOReturnDeviceError` (`0xe00002e9`). Timeout cleanup
+decrements the waiter under the mutex and returns SDK `kIOReturnTimeout`.
+Termination still permits zero return before any stamp read or during the loop.
+Accelerator byte `+0xc9c` bit 0 additionally selects a direct polling branch
+without the sleep/deadline path; its flag policy remains unreviewed.
+
+Base Fast2 virtuals `+0x240`/`+0x248` resolve to six-byte no-op methods, now
+locally pinned. This must NOT be generalized to the retained Intel driver:
+its IGAccelEventMachine overrides both at `0x16176`/`0x16238`, tail-calling
+overloads at `0x16182`/`0x16244`. Preliminary disassembly shows software
+waiter/mask accounting and paths into scheduler virtuals/event-source/helper
+operations. Their complete graph and hardware safety remain an explicit next
+review gate, not silently certified by the inherited no-ops. Mapped stamp
+pointer lifetime across sleep, native producer locking and actual completion
+remain unfinished. No VM, VF state or driver runtime behavior changed.
+
 Inherited implementation found locally (2026-10-04): archived Tahoe 25G229
 `SystemKernelExtensions.kc`, SHA-256
 `5cb1be1dc530b4b953a33943567589101d3ac46bb8cf90728566ee7e5b1fa214`,

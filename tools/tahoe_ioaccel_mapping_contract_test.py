@@ -31,6 +31,9 @@ EVENT_FINISH_UNLOCKED = "__ZN24IOAccelEventMachineFast219finishEventUnlockedEP12
 EVENT_HARDWARE_ERROR = "__ZN20IOAccelEventMachine219signalHardwareErrorE15eRestartRequesti"
 EVENT_INIT = "__ZN24IOAccelEventMachineFast29initEventEP12IOAccelEvent"
 EVENT_COPY = "__ZN24IOAccelEventMachineFast29copyEventEP12IOAccelEventS1_"
+EVENT_DISABLE_STAMP_LOCKED = "__ZN20IOAccelEventMachine223disable_stamp_interruptEi"
+EVENT_ENABLE_STAMP = "__ZN20IOAccelEventMachine220enableStampInterruptEi"
+EVENT_DISABLE_STAMP = "__ZN20IOAccelEventMachine221disableStampInterruptEi"
 # Symbol-bounded bodies reviewed locally. These identities do not certify
 # overridden resource methods, iterator locking, DMA completion or host safety.
 SCRUB_BODIES = {
@@ -56,6 +59,8 @@ LOCK_COPIES = {
     },
 }
 CONTRACTS = {
+    EVENT_ENABLE_STAMP: bytes.fromhex("55 48 89 e5 5d c3"),
+    EVENT_DISABLE_STAMP: bytes.fromhex("55 48 89 e5 5d c3"),
     "__ZNK22IOGraphicsAccelerator223isLockedByCurrentThreadEv":
         bytes.fromhex("55 48 89 e5 b0 01 5d c3"),
     "__ZN22IOGraphicsAccelerator29lock_busyEv":
@@ -179,7 +184,8 @@ def check_boot_atomic(system, path):
     assert len(kernel) == len(bases) == 1, "missing/ambiguous kernel/base"
     symbols = {name: [] for name in (b"_OSIncrementAtomic", b"_OSDecrementAtomic", b"_thread_wakeup_prim",
                                    b"__ZN15IORegistryEntry18getRegistryEntryIDEv", b"_kernel_debug",
-                                   b"_IOLockLock", b"_IOLockUnlock")}
+                                   b"_IOLockLock", b"_IOLockUnlock", b"_assert_wait_deadline",
+                                   b"_thread_block", b"_clock_interval_to_deadline")}
     for command, offset in commands(boot, kernel[0]):
         if command != 2:
             continue
@@ -209,7 +215,8 @@ def check_boot_atomic(system, path):
         "55 48 89 e5 b8 ff ff ff ff f0 0f c1 07 5d c3"), "changed atomic decrement"
     for stub, name in ((0x101a4, b"__ZN15IORegistryEntry18getRegistryEntryIDEv"),
                        (0x101ce, b"_kernel_debug"), (0x10012, b"_IOLockLock"),
-                       (0x10018, b"_IOLockUnlock")):
+                       (0x10018, b"_IOLockUnlock"), (0x10c30, b"_assert_wait_deadline"),
+                       (0x10366, b"_thread_block"), (0x100d8, b"_clock_interval_to_deadline")):
         assert system[stub:stub + 2] == b"\xff\x25", "changed lock notification import stub"
         pointer = stub + 6 + struct.unpack_from("<i", system, stub + 2)[0]
         raw_pointer = struct.unpack_from("<Q", system, pointer)[0]
@@ -257,7 +264,8 @@ def check(path, boot_path=None):
     matches = {name: [] for name in {*CONTRACTS, *SCRUB_BODIES, *LOCK_COPIES, SHARED_VTABLE, RESOURCE_VTABLE,
                                     EVENT_VTABLE, EVENT_FINISH, EVENT_WAIT, EVENT_CLEAN, EVENT_SIGNAL, EVENT_RESTART,
                                     EVENT_MERGE_EXCLUDING, EVENT_SET_STAMP, GET_DATA_BUFFER,
-                                    EVENT_INIT, EVENT_COPY, EVENT_FINISH_UNLOCKED, EVENT_HARDWARE_ERROR}}
+                                    EVENT_INIT, EVENT_COPY, EVENT_FINISH_UNLOCKED, EVENT_HARDWARE_ERROR,
+                                    EVENT_DISABLE_STAMP_LOCKED, EVENT_ENABLE_STAMP, EVENT_DISABLE_STAMP}}
     for index in range(count):
         name_offset, _, _, _, address = struct.unpack_from("<IBBHQ", image, symbol_offset + index * 16)
         assert name_offset < string_size, "invalid symbol string"
@@ -335,7 +343,8 @@ def check(path, boot_path=None):
                        (0x148, EVENT_CLEAN), (0x250, EVENT_TERMINATE), (0x228, EVENT_SIGNAL),
                        (0x1c8, EVENT_MERGE_EXCLUDING), (0x1d0, EVENT_SET_STAMP),
                        (0x1d8, EVENT_INCREMENT), (0x1e0, EVENT_WRITE_STAMP),
-                       (0x140, EVENT_INIT), (0x1b0, EVENT_COPY), (0x178, EVENT_FINISH_UNLOCKED)):
+                       (0x140, EVENT_INIT), (0x1b0, EVENT_COPY), (0x178, EVENT_FINISH_UNLOCKED),
+                       (0x240, EVENT_ENABLE_STAMP), (0x248, EVENT_DISABLE_STAMP)):
         raw = struct.unpack("<Q", read(address_of(EVENT_VTABLE) + 16 + slot, 8))[0]
         assert (raw >> 30) & 3 == 1 and raw >> 63 == 0, "unexpected cache level/auth"
         assert raw & 0x3fffffff == address_of(name), f"changed event virtual {slot:#x}"
@@ -351,6 +360,10 @@ def check(path, boot_path=None):
     assert hashlib.sha256(read(address_of(EVENT_SET_STAMP), 0x9e)).hexdigest() == \
         "6240e1c9918181dd5d32c49d5fe01dab22e7705dc0d4d1d94b1e7189d8c8c995", "changed setEventStamp"
     wait = read(address_of(EVENT_WAIT), 0x34)
+    assert hashlib.sha256(read(address_of(EVENT_WAIT), 0x314)).hexdigest() == \
+        "66a79a6eeeae4a30fc91586b1e09f54b702ed2c86501af4e4d0e7bcfe7ddb1f9", "changed full waitForStamp"
+    assert hashlib.sha256(read(address_of(EVENT_DISABLE_STAMP_LOCKED), 0x48)).hexdigest() == \
+        "f1d296bd9cb53f41b56e43d5ad536695b5b4d83ef4ffa99cbd56a31837b021ea", "changed timeout waiter cleanup"
     assert wait[0x1c:0x32] == bytes.fromhex(
         "48 8b 4f 10 31 c0 83 b9 c8 0d 00 00 00 0f 85 f5 01 00 00 41 89 f7"), \
         "changed waitForStamp non-hardware early-success branch"
