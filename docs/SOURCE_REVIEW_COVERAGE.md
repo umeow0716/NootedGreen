@@ -7,6 +7,12 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 scheduler timer construction/cleanup follow-up: complete native init,
+unnamed shared cleanup and free reviewed as separate disassembled functions,
+not merged nearest-symbol ranges. Factories, failure-to-cleanup/free edges and
+exact windows pinned in both payloads. Factory kernel implementation, timer
+cancel/drain semantics and workloop removal synchronization remain pending.
+
 2026-10-04 Boot KC event-source follow-up: complete base normalInterruptOccurred
 and setTimeoutUS bodies read and pinned with their two vtable targets in the
 paired local fixture. Pending notification is distinguished from action

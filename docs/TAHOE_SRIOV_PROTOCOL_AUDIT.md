@@ -27,6 +27,24 @@ enforce fault-before-panic and prohibit native/helper/backing side effects.
 
 ## Mapping getter provenance follow-up (offline)
 
+Scheduler timer lifetime follow-up: complete native init (0x162 bytes), unnamed
+cleanup helper (0xe0) and free (0x24) were read and separately pinned in both
+payloads. Nearest-symbol ranges merge the helper into init and an unrelated
+factory into free, so they are not treated as single function bodies. Init
+creates OSSet capacity 2, obtains the default IOTimerEventSource factory with
+the scheduler owner and periodic callback, attaches it through workloop
+virtual `+0x140`, then allocates mutex `+0x440`. Factory/mutex allocation failures
+share the cleanup helper; the workloop attachment return is not checked here.
+Cleanup calls timer virtual `+0x218`, conditionally removes it through scheduler
+workloop getter `+0x218` and workloop remove `+0x148`, releases/clears timer,
+releases/clears collection, frees/clears mutex, then releases auxiliary source
+array members. Free uses the same helper before inherited free. Five factory/
+allocation imports and both cleanup caller edges are pinned. No direct MMIO
+occurs in these bodies. Timer virtual `+0x218` semantics, factory concrete type,
+workloop removal synchronization, allocation/attachment failure behavior and
+callback drain-before-mutex-free remain open; cleanup order alone is not proof
+of DMA or callback quiescence.
+
 Paired Tahoe Boot KC event-source follow-up: the base IOInterruptEventSource
 virtual `+0x1e0` is `normalInterruptOccurred`, not the driver's action callback.
 Its complete 0x140-byte body increments software producerCount at `+0x54`,

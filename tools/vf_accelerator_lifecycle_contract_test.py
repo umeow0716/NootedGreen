@@ -324,6 +324,9 @@ def macho_inventory(path):
     # These imports distinguish the periodic collection mutex from bridge
     # descriptor spin locks. They do not certify dynamic callback lifetime.
     stamp_irq_imports = {
+        0x5657a: "_IOLockAlloc", 0x5663e: "_IOLockFree",
+        0x56549: "__ZN18IOTimerEventSource16timerEventSourceEP8OSObjectPFvS1_PS_E",
+        0x5652e: "__ZN5OSSet12withCapacityEj", 0x564cb: "_memset",
         0x15ccb: "__ZN22IOInterruptEventSource20interruptEventSourceEP8OSObjectPFvS1_PS_iEP9IOServicei",
         0x2acf8: "__ZN22IOGraphicsAccelerator219signalStampsUpdatedEv",
         0x2acfd: "_mach_absolute_time",
@@ -405,6 +408,20 @@ def macho_inventory(path):
         start = value(name)
         assert next_symbol(start) - start == length, f"{path}: changed stamp IRQ body boundary: {name}"
         assert hashlib.sha256(image[start:start + length]).hexdigest() == digest, f"{path}: changed stamp IRQ body: {name}"
+    # Symbol boundaries alone merge unnamed functions into init/free. Pin the
+    # disassembled function windows separately, not as one fictitious body.
+    scheduler_init = value("__ZN11IGScheduler15initWithOptionsEjyP22IOGraphicsAccelerator2")
+    scheduler_free = value("__ZN11IGScheduler4freeEv")
+    for start, length, digest in (
+            (scheduler_init, 0x162, "b5835cb1b8a29f7502434b8a5e0660adc9f0d96f5e261c4455dd6c4f5570b46e"),
+            (scheduler_init + 0x162, 0xe0, "42074790409f72ce5a8c25e16d719c3f976758d72d34798e4cd152d0b9c89688"),
+            (scheduler_free, 0x24, "a967c406cd60ae66a315e23af8c8490c8e1986b6822a5446cee93853a850ff72")):
+        assert hashlib.sha256(image[start:start + length]).hexdigest() == digest, \
+            f"{path}: changed scheduler timer construction/cleanup window"
+    cleanup = scheduler_init + 0x162
+    for call in (scheduler_init + 0x14c, scheduler_free + 9):
+        assert image[call] == 0xe8 and call + 5 + struct.unpack_from("<i", image, call + 1)[0] == cleanup, \
+            f"{path}: changed shared scheduler cleanup edge"
     for table, slot, method in (
             (EVENT_MACHINE_VTABLE, 0x240, "__ZN19IGAccelEventMachine20enableStampInterruptEi"),
             (EVENT_MACHINE_VTABLE, 0x248, "__ZN19IGAccelEventMachine21disableStampInterruptEi"),
