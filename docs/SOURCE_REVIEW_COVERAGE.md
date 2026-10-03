@@ -756,3 +756,11 @@ verified effective vtable slots and external getter/legacy-table relocation
 identities. Paired SystemKC legacy submit slot resolves to reviewed base
 submit, not a new hardware-success method. Event-machine +0x1d0/+0x1d8/+0x1e0
 targets, runtime vtable changes and virtual-display feasibility remain pending.
+# Latest display stamp-record checkpoint
+
+Resolved display-called event virtuals through external relocations to Fast2
+setEventStamp/incrementStamp/writeStampCommand. Reviewed Intel writeStamp and
+getStampOffset complete bodies and effective vtable targets in both payloads.
+CPU `{index<<6,stamp}` record construction is not GPU submission/completion.
+Dependency overflow helper, record consumers and hardware retirement remain
+pending; this does not close runtime acceleration or containment requirements.

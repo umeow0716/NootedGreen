@@ -9,6 +9,8 @@ import sys
 # Complete reviewed native bodies. This fixes the concrete Intel override
 # graph, not inherited timer APIs, dynamic callbacks or runtime completion.
 STAMP_IRQ_NATIVE = {
+    "__ZN19IGAccelEventMachine10writeStampEiP17vendevtCommandRecj": (0x22, "005d2c2cfb037d2b79faf330183d7084d75493490ef638f9f5e4f9801f0fc41f"),
+    "__ZN19IGAccelEventMachine14getStampOffsetEi": (0xc, "4d9f0b18e011c0d3e92c48d0e9a837c7b96e70c05f23beb8bb8dae7a0625504a"),
     "__ZN18IGAccelDisplayPipe16beginTransactionEP12IOAccelEvent": (0x4e, "afaf2c261837e01c0ea05f84cb30e10cf3225d82381602b9e73274631d146ae9"),
     "__ZN18IGAccelDisplayPipe17submitTransactionEP30IOAccelDisplayPipeTransaction2": (0x5e, "883521e4857160a449dccb37298cfed86801910a5cbe0dcbacefd0312b25f2e2"),
     "__ZN19IGAccelEventMachine21enableSchedulerEventsEv": (0x40, "f8f0e4f69fbcd568efb5443e8e745994d3182412ce07a855f0cfd931a426d004"),
@@ -395,6 +397,9 @@ def macho_inventory(path):
     }
     observed_stamp_irq_imports = {address: [] for address in stamp_irq_imports}
     event_stop_imports = {
+        0xcebd8: "__ZN24IOAccelEventMachineFast213setEventStampEiP12IOAccelEvent",
+        0xcebe0: "__ZN24IOAccelEventMachineFast214incrementStampEi",
+        0xcebe8: "__ZN24IOAccelEventMachineFast217writeStampCommandEiP17IOAccelEventQueueP17vendevtCommandRec",
         0xc81c0: "__ZTV24IOAccelLegacyDisplayPipe",
         0xceb60: "__ZN24IOAccelEventMachineFast215finishAllStampsEv",
         0xcec70: "__ZN20IOAccelEventMachine24stopEv",
@@ -474,6 +479,11 @@ def macho_inventory(path):
         assert next_symbol(start) - start == length, f"{path}: changed stamp IRQ body boundary: {name}"
         assert hashlib.sha256(image[start:start + length]).hexdigest() == digest, f"{path}: changed stamp IRQ body: {name}"
     display_table = value("__ZTV18IGAccelDisplayPipe")
+    event_table = value("__ZTV19IGAccelEventMachine")
+    for slot, method in ((0x138, "__ZN19IGAccelEventMachine14getStampOffsetEi"),
+                         (0x2a0, "__ZN19IGAccelEventMachine10writeStampEiP17vendevtCommandRecj")):
+        assert struct.unpack_from("<Q", image, event_table + 16 + slot)[0] == value(method), f"{path}: changed Intel stamp record virtual target"
+    assert image[0x15f16:0x15f1c] == bytes.fromhex("89 03 44 89 73 04"), f"{path}: changed CPU stamp record stores"
     for slot, method in ((0x8b8, "__ZN18IGAccelDisplayPipe17submitTransactionEP30IOAccelDisplayPipeTransaction2"),
                          (0x8d8, "__ZN18IGAccelDisplayPipe16beginTransactionEP12IOAccelEvent")):
         assert struct.unpack_from("<Q", image, display_table + 16 + slot)[0] == value(method), f"{path}: changed Intel display transaction override"

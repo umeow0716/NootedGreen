@@ -5613,3 +5613,26 @@ do not replace that base status with fabricated success to obtain a desktop.
 VF virtual-display/capture feasibility remains a separate goal requirement.
 Both native payload contract tests and paired-KC checks pass locally; no
 production route, hardware test or deployment was introduced.
+# Display stamp-record construction follow-up
+
+Both pinned Intel payload event-machine vtables import Fast2 methods at
+object slots `+0x1d0` setEventStamp, `+0x1d8` incrementStamp and `+0x1e0`
+writeStampCommand; relocation entries `0xcebd8/0xcebe0/0xcebe8` establish
+identities rather than treating on-disk zero pointers as runtime null.
+The paired SystemKC bodies/virtual identities were already pinned and were
+re-read for this display caller: increment changes requested stamp and an
+accelerator counter, setEventStamp merges requested dependencies (with mapped
+stamp reads and an overflow helper), and writeStampCommand ignores its queue
+argument and tail-dispatches event-machine virtual `+0x2a0` with record output.
+The dependency overflow helper remains separately pending.
+
+Intel `+0x2a0` resolves to complete `writeStamp` (0x22 bytes), which invokes
+virtual `+0x138` getStampOffset (0xc bytes, `index << 6`) and writes the two
+32-bit fields `{offset, requestedStamp}` into the supplied CPU record. These
+complete bodies, local vtable slots and record stores are now pinned in both
+native-payload checks. They contain no GPU submission or completion wait.
+This caller writes to stack output in Intel display submit; downstream record
+consumers and actual display/engine retirement still need review. CPU record
+construction and requested-stamp increments are not hardware execution proof,
+and may not be substituted for a genuine completion observed from GPU backing.
+Targeted native checks pass; no driver deployment or runtime experiment.
