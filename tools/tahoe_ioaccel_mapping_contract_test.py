@@ -26,6 +26,10 @@ SHARED_SCRUB = "__ZN14IOAccelShared211scrubEventsEv"
 RESOURCE_SCRUB = "__ZN16IOAccelResource211scrubEventsEv"
 SHARED_VTABLE = "__ZTV14IOAccelShared2"
 RESOURCE_VTABLE = "__ZTV16IOAccelResource2"
+GET_DATA_BUFFER = "__ZN15IOAccelContext213getDataBufferEP29IOAccelContextGetDataBufferInP30IOAccelContextGetDataBufferOutP22IOAccelResourcePrivatey"
+EVENT_FINISH_UNLOCKED = "__ZN24IOAccelEventMachineFast219finishEventUnlockedEP12IOAccelEvent"
+EVENT_INIT = "__ZN24IOAccelEventMachineFast29initEventEP12IOAccelEvent"
+EVENT_COPY = "__ZN24IOAccelEventMachineFast29copyEventEP12IOAccelEventS1_"
 # Symbol-bounded bodies reviewed locally. These identities do not certify
 # overridden resource methods, iterator locking, DMA completion or host safety.
 SCRUB_BODIES = {
@@ -251,7 +255,8 @@ def check(path, boot_path=None):
     symbol_offset, count, string_offset, string_size = symtab
     matches = {name: [] for name in {*CONTRACTS, *SCRUB_BODIES, *LOCK_COPIES, SHARED_VTABLE, RESOURCE_VTABLE,
                                     EVENT_VTABLE, EVENT_FINISH, EVENT_WAIT, EVENT_CLEAN, EVENT_SIGNAL, EVENT_RESTART,
-                                    EVENT_MERGE_EXCLUDING, EVENT_SET_STAMP}}
+                                    EVENT_MERGE_EXCLUDING, EVENT_SET_STAMP, GET_DATA_BUFFER,
+                                    EVENT_INIT, EVENT_COPY, EVENT_FINISH_UNLOCKED}}
     for index in range(count):
         name_offset, _, _, _, address = struct.unpack_from("<IBBHQ", image, symbol_offset + index * 16)
         assert name_offset < string_size, "invalid symbol string"
@@ -284,6 +289,21 @@ def check(path, boot_path=None):
         for address, digest in copies.items():
             assert hashlib.sha256(read(address, length)).hexdigest() == digest, f"changed mutex copy {address:#x}"
     print("PASS all four local mutex-lock and five mutex-unlock bodies")
+    buffer_start = address_of(GET_DATA_BUFFER)
+    buffer_body = read(buffer_start, 0x9e4)
+    assert hashlib.sha256(buffer_body).hexdigest() == \
+        "7840d4fbada0dbedc42efd2896dcafefcc54b25c03833e00cf57b55e2ab7607b", "changed getDataBuffer"
+    # Helper-only call graph scans miss the second, inlined unlock/lock window.
+    for offset, target in ((0x244, 0x14b6c7f8), (0x26f, 0x14b6c7a6),
+                           (0x552, 0x10018), (0x593, 0x10012)):
+        assert buffer_body[offset] == 0xe8, "changed buffer wait lock edge"
+        assert buffer_start + offset + 5 + struct.unpack_from("<i", buffer_body, offset + 1)[0] == target, \
+            "changed buffer wait lock target"
+    for offset in (0x25e, 0x56c):
+        assert buffer_body[offset:offset + 6] == bytes.fromhex("ff 90 78 01 00 00"), "changed unlocked event wait"
+    for offset in (0x29b, 0x5e9):
+        assert buffer_body[offset:offset + 4] == bytes.fromhex("4d 8b 6e 38"), "changed post-wait buffer reload"
+    print("PASS getDataBuffer helper and inlined mutex-release wait windows")
     for table, slot, name in ((SHARED_VTABLE, 0x128, SHARED_SCRUB),
                               (RESOURCE_VTABLE, 0x228, RESOURCE_SCRUB),
                               (EVENT_VTABLE, 0x270, EVENT_SCRUB)):
@@ -301,7 +321,8 @@ def check(path, boot_path=None):
     for slot, name in ((0x188, EVENT_FINISH), (0x238, EVENT_WAIT),
                        (0x148, EVENT_CLEAN), (0x250, EVENT_TERMINATE), (0x228, EVENT_SIGNAL),
                        (0x1c8, EVENT_MERGE_EXCLUDING), (0x1d0, EVENT_SET_STAMP),
-                       (0x1d8, EVENT_INCREMENT), (0x1e0, EVENT_WRITE_STAMP)):
+                       (0x1d8, EVENT_INCREMENT), (0x1e0, EVENT_WRITE_STAMP),
+                       (0x140, EVENT_INIT), (0x1b0, EVENT_COPY), (0x178, EVENT_FINISH_UNLOCKED)):
         raw = struct.unpack("<Q", read(address_of(EVENT_VTABLE) + 16 + slot, 8))[0]
         assert (raw >> 30) & 3 == 1 and raw >> 63 == 0, "unexpected cache level/auth"
         assert raw & 0x3fffffff == address_of(name), f"changed event virtual {slot:#x}"

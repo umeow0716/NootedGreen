@@ -237,6 +237,28 @@ without knowing the producer caller's lock state would risk deadlock; busy
 counts, notification methods and this always-true query are not substitutes
 for the required producer serialization proof. No runtime lock/hook changed.
 
+`Context2::getDataBuffer` follow-up: its full symbol-bounded `0x9e4`-byte body
+was read, including allocation, reuse, list mutations, mapping and cleanup
+paths. A local body-hash contract now fixes that reviewed identity, but does
+not certify every called allocator/mapping method. There are **two** explicit
+unlocked wait windows: `0x14b6f1b4..0x14b6f1df` uses the local accelerator
+unlock/lock copies, while `0x14b6f4c2..0x14b6f503` inlines `IOLockUnlock` and
+`IOLockLock` on accelerator `+0x88`. The latter also performs busy accounting,
+notification virtuals and waiter-counter updates outside those two call sites.
+Thus a helper-call-only graph misses an actual unlocked interval.
+
+Each path initializes a 64-byte stack event through virtual `+0x140`, copies
+the selected resource event through `+0x1b0`, releases the mutex, and calls
+`+0x178` on that stack event. Local Fast2 vtable identities pin these as
+`initEvent`, `copyEvent`, and `finishEventUnlocked`; the last implementation
+and its lock/wait callbacks still require review. After reacquisition, both
+paths reload the buffer-list head `slot+0x38` rather than directly trusting
+the pre-wait selected resource. Exact lock targets, unlocked wait calls and
+post-wait reloads are separately pinned. Context/slot lifetime across the wait,
+upstream callers' lock admission, mapping lifetime and hardware completion
+remain unproved. The verified behavior requires producer bridge integration
+to distinguish its own invocation lifetime from broader native caller locking.
+
 Inherited implementation found locally (2026-10-04): archived Tahoe 25G229
 `SystemKernelExtensions.kc`, SHA-256
 `5cb1be1dc530b4b953a33943567589101d3ac46bb8cf90728566ee7e5b1fa214`,

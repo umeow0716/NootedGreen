@@ -68,6 +68,14 @@ have exact symbol inventory/body-hash contracts. Complete producer caller lock
 coverage remains open, including candidate unlock/relock windows. No locking was added at
 runtime and the local-only fixture is not a hardware or CI-KC certification.
 
+Context2 getDataBuffer was subsequently read in full (`0x9e4` bytes). A local
+identity contract and explicit helper/inlined unlock-lock, stack-event wait
+and post-wait list reload contracts cover both wait windows. Fast2 event init,
+copy and finishEventUnlocked effective virtuals are identified, not certified
+as fully reviewed implementations. Caller/slot lifetime, mapping callbacks
+and producer locking across those windows remain open; direct helper-call
+inventory alone is demonstrably insufficient for lock-coverage review.
+
 V267 closes the verified VF event-timeout return into inherited restart/retry
 by protocol-fault admission closure followed by guest fail-stop. This is not
 normal recovery or proof that already-published DMA stops. PF and normal debug
