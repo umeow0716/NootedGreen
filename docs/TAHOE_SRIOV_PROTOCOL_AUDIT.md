@@ -27,6 +27,23 @@ enforce fault-before-panic and prohibit native/helper/backing side effects.
 
 ## Mapping getter provenance follow-up (offline)
 
+Display-pipe admission caller follow-up: effective Fast2 vtable +0x258/+0x260
+resolve event-stamp enable/disable. No direct calls to those implementations
+were found by exploratory IOAccel text decoding; same-offset indirect calls
+from unrelated object types must not be classified as event-machine edges.
+Fully reviewed display pipe enable_event_interrupt 0x14bb2288 (0x4c) and
+disable_event_interrupt 0x14bb22d4 (0x52): pipe flag+0x29c gates duplicate
+enable, set before pipe+0x88 accelerator → +0x380 event owner → +0x258.
+Disable first calls its device-side helper, dispatches owner +0x260, then
+clears flag. Neither complete body takes a lock; caller synchronization and
+teardown balancing remain unproven. Added complete hashes, event virtuals and
+receiver-load/dispatch anchors to local paired-KC contracts; pass. An observed
++0x260 tail in deviceTerminatedUnlocked uses an explicitly loaded BASE vtable,
+not the effective event enable/disable table, so it is not classified as this
+reference cleanup. GitHub run 37156234302 observation initially returned HTTP
+504; this was not treated as terminal or a reason to restart CI. Production
+unchanged; next inspect display-pipe callers and outer lock/teardown ownership.
+
 Graph-verifier and event admission follow-up: direct byte branch candidates
 now reject any displacement overlapping external relocation storage. The native
 periodic unlock placeholder at 0x5690f must not create an enable-to-disable edge;

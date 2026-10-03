@@ -35,6 +35,8 @@ EVENT_DISABLE_STAMP_LOCKED = "__ZN20IOAccelEventMachine223disable_stamp_interrup
 EVENT_ENABLE_STAMP = "__ZN20IOAccelEventMachine220enableStampInterruptEi"
 EVENT_DISABLE_STAMP = "__ZN20IOAccelEventMachine221disableStampInterruptEi"
 EVENT_OWNER_BODIES = {
+    "__ZN18IOAccelDisplayPipe22enable_event_interruptEPK12IOAccelEvent": (0x4c, "2b2a6a9ebe4035e86d5d4351eebfba8f31e1ec2fa33bb58f55aef27dd030efcc"),
+    "__ZN18IOAccelDisplayPipe23disable_event_interruptEPK12IOAccelEvent": (0x52, "7ec7631f9126589adf8d984ec137c71381b42cd1fecdb900768da2140a2091e5"),
     "__ZN24IOAccelEventMachineFast226enableEventStampInterruptsEPK12IOAccelEvent": (0x66, "93974e6cdc73ba252aed43b7c0b42d08759c0b937b014f40b74cd8fbd5dac47a"),
     "__ZN24IOAccelEventMachineFast211finishStampEi": (0x158, "32f9a4ca4dbc18d2fceb8ca7c393a91565f766baca120340529088c8ea7afa7d"),
     "__ZN24IOAccelEventMachineFast215finishAllStampsEv": (0x6c, "09a27596eebdca0fac5ad94ae61f8a33a4bd822b3e4121d84433b82c14b12a1e"),
@@ -738,11 +740,21 @@ def check(path, boot_path=None):
                        (0x1c8, EVENT_MERGE_EXCLUDING), (0x1d0, EVENT_SET_STAMP),
                        (0x1d8, EVENT_INCREMENT), (0x1e0, EVENT_WRITE_STAMP),
                        (0x140, EVENT_INIT), (0x1b0, EVENT_COPY), (0x178, EVENT_FINISH_UNLOCKED),
-                       (0x240, EVENT_ENABLE_STAMP), (0x248, EVENT_DISABLE_STAMP)):
+                       (0x240, EVENT_ENABLE_STAMP), (0x248, EVENT_DISABLE_STAMP),
+                       (0x258, "__ZN24IOAccelEventMachineFast226enableEventStampInterruptsEPK12IOAccelEvent"),
+                       (0x260, "__ZN24IOAccelEventMachineFast227disableEventStampInterruptsEPK12IOAccelEvent")):
         raw = struct.unpack("<Q", read(address_of(EVENT_VTABLE) + 16 + slot, 8))[0]
         assert (raw >> 30) & 3 == 1 and raw >> 63 == 0, "unexpected cache level/auth"
         assert raw & 0x3fffffff == address_of(name), f"changed event virtual {slot:#x}"
     finish = read(address_of(EVENT_FINISH), 0x192)
+    for address, encoded in ((0x14bb22a5, "48 8b 87 88 00 00 00"),
+                            (0x14bb22ac, "48 8b b8 80 03 00 00"),
+                            (0x14bb22b6, "ff 90 58 02 00 00"),
+                            (0x14bb22fc, "48 8b 83 88 00 00 00"),
+                            (0x14bb2303, "48 8b b8 80 03 00 00"),
+                            (0x14bb2310, "ff 90 60 02 00 00")):
+        expected = bytes.fromhex(encoded)
+        assert read(address, len(expected)) == expected, "changed display-pipe event owner/enable-disable edge"
     assert hashlib.sha256(finish).hexdigest() == \
         "34c3638c2485ef35e2fdb1e70efeff61e935972b1db36bc72ec3084b7207c010", "changed finishEvent"
     assert hashlib.sha256(read(address_of(EVENT_SIGNAL), 0xa8)).hexdigest() == \
