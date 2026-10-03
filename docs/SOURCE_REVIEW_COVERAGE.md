@@ -7,6 +7,13 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 DMA return follow-up: returnDMACommand complete body re-reviewed
+against base command free/clear; unwire direct caller and selected argument,
+error-join, pool-lock/capacity/release anchors pinned. Return accepts command
+without state/stop validation; unwire logs clear failure then returns anyway.
+Prepare-count >1 is a conditional unsafe case, not yet proven reachable.
+Indirect callers, prepare ownership and shutdown admission remain unresolved.
+
 2026-10-04 DMA private allocation/free follow-up: complete Boot external typed
 allocator and base IODMACommand free reviewed/pinned. External flags are masked
 to 7, dropping NOFAIL; actual zone policy remains unresolved. Command free

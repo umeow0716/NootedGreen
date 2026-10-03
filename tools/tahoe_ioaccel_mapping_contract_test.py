@@ -856,6 +856,14 @@ def check(path, boot_path=None):
     assert stop_owner.count(bytes.fromhex("ff 90 48 01 00 00")) == 3, "changed base event stop source-removal inventory"
     print("PASS inherited event owner free/stop and per-event stamp-disable bodies (outer drain not proven)")
     lazy_setup = address_of("__ZN18IOAccelDisplayPipe14setup_workloopEv")
+    for address, encoded in ((0x14bba27a, "31 f6 31 d2 ff 90 48 01 00 00"),
+                             (0x14bba2c4, "31 f6 ff 90 30 01 00 00"),
+                             (0x14bba2fd, "e8 0a 60 45 eb"),
+                             (0x14ba8335, "48 8b bb 18 0a 00 00"),
+                             (0x14ba8347, "3b 83 1c 0d 00 00 73 3f"),
+                             (0x14ba8394, "ff 50 28")):
+        expected = bytes.fromhex(encoded)
+        assert read(address, len(expected)) == expected, "changed DMA return cleanup/status/lock-capacity contract"
     assert read(0x14ba0f35, 6) == bytes.fromhex("ff 90 b0 0a 00 00"), "changed accelerator DMA pool factory virtual"
     assert read(0x14ba1034, 6) == bytes.fromhex("ff 90 18 01 00 00"), "changed accelerator DMA template clone virtual"
     assert read(0x14ba22d3, 10) == bytes.fromhex("48 8b bb 10 0a 00 00 48 8b 07"), "changed DMA pool template final-release dereference"

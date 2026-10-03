@@ -6086,3 +6086,32 @@ This closes the local no-mutex failed-clone release ordering: initialized
 private state and any retained mapper are cleaned by the base free path.
 Concrete runtime subclasses, descriptor-bearing pool return/release discipline,
 allocator semantics and Dext-lock behavior remain pending. No runtime mutation.
+
+# DMA command return admission and cleanup-status follow-up
+
+Re-reviewed complete returnDMACommand (0xa6, already body-pinned) in context
+of command free/clear. A null command or disabled feature returns immediately;
+otherwise it takes pool lock +0xa18, then either inserts the command into the
+circular list/increments count, or releases it under the lock when capacity
+is reached. It performs no descriptor/prepare-state validation, complete,
+clear, stopping-state check or lock-null check. Release occurs before unlock,
+so adding a destructor/drain wrapper here also requires checking lock order.
+
+The direct-byte scan of this embedded accelerator address range found one
+candidate to this body, decoded as sys-memory unwire's call at 0x14bba30d.
+This is not an exhaustive indirect/imported caller inventory. That caller
+invokes complete(false,false) once, then clear(false); each nonzero status is
+logged but still joins the unconditional return-to-pool call. It clears its
+command field afterwards. Additional selected argument/error-join and pool
+lock/capacity/release anchors are pinned.
+
+For a base command entering unwire with prepare count greater than one,
+complete only decrements it, and clear(false) rejects the remaining count.
+This conditional case therefore leaves descriptor/prepared state intact but
+still returns/releases the command. Actual reachability of that initial count
+through wire/prepare callers is not yet established; do not label it the
+observed VF crash or repair it by silently draining without GPU-retirement
+proof. Likewise normal successful clear does not establish shutdown admission
+closure: a late return can still select a freed pool lock. The repair must
+address owner lifetime/admission and status propagation together, not just
+add a list lock. No production/runtime changes.
