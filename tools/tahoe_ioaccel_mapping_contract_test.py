@@ -200,6 +200,7 @@ def check_boot_atomic(system, path):
                                    b"__ZN18IOTimerEventSource14setTimeoutFuncEv")}
     symbols[b"__ZN18IOTimerEventSource11setWorkLoopEP10IOWorkLoop"] = []
     symbols[b"__ZN18IOTimerEventSource7disableEv"] = []
+    symbols[b"__ZN18IOTimerEventSource10wakeAtTimeEjyy"] = []
     symbols[b"__ZN18IOTimerEventSource17timeoutAndReleaseEPvS0_"] = []
     for name in (b"__ZTV10IOWorkLoop", b"__ZN10IOWorkLoop8openGateEv",
                  b"__ZN10IOWorkLoop4initEv",
@@ -473,6 +474,15 @@ def check_boot_atomic(system, path):
         assert instruction[0] == 0xe8 and call + 5 + struct.unpack_from("<i", instruction, 1)[0] == symbols[name][0], \
             "changed timer disable cancel branch"
     print("PASS Boot KC timer detach disables before clearing workloop")
+    wake = symbols[b"__ZN18IOTimerEventSource10wakeAtTimeEjyy"][0]
+    assert hashlib.sha256(kernel_read(wake, 0x130)).hexdigest() == \
+        "28931d5cf72ac20f040ffb5fed17e87ba6c3eacc876e81c3d3ac05f18992ca2c", \
+        "changed reviewed timer scheduling/retention body"
+    for offset, instruction in ((0x6a, "ff 50 20"), (0x74, "ff 50 20"),
+                                (0xbf, "ff 50 28"), (0xc9, "ff 50 28")):
+        assert kernel_read(wake + offset, len(bytes.fromhex(instruction))) == bytes.fromhex(instruction), \
+            "changed passive timer schedule retain/release instruction"
+    print("PASS Boot KC passive timer schedule-time reference pairing body")
     assert system[0x10132:0x10138] == bytes.fromhex("ff 25 60 40 01 00"), "changed atomic import stub"
     raw = struct.unpack_from("<Q", system, 0x24198)[0]
     assert (raw >> 30) & 3 == 0 and raw >> 63 == 0, "unexpected atomic import cache level/auth"

@@ -27,6 +27,18 @@ enforce fault-before-panic and prohibit native/helper/backing side effects.
 
 ## Mapping getter provenance follow-up (offline)
 
+Timer schedule-time retention follow-up: complete Boot wakeAtTime(options,
+deadline, leeway) 0x130-byte body is locally pinned. With action, enabled state,
+nonzero deadline/workloop and expansion storage, passive mode retains the
+source and workloop, stores expansion workloop and increments generation,
+then calls the scheduling helper. If that helper returns nonzero, passive mode
+releases the newly acquired pair; otherwise callback/cancel paths account for
+them. These references protect source/workloop, not independently the stored
+owner. Missing action fails; missing calloutEntry can panic. Kernel helper's
+exact identity/return semantics, concurrency interleavings and complete start
+still need verification. Selected XNU wakeAtTime and cancel methods were read
+as references, not proof that unreviewed Boot helpers behave identically.
+
 Timer detach follow-up: complete base setWorkLoop (0x60) and disable (0x60)
 bodies/virtuals are locally pinned. A null workloop first invokes disable,
 then stores null at +0x30. Disable increments generation, conditionally calls

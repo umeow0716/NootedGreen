@@ -7,6 +7,10 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 scheduling retention follow-up: complete Boot wakeAtTime(options)
+read/pinned with passive source/workloop reference pairs. Stored owner is not
+independently retained here; scheduling/cancel helper semantics remain pending.
+
 2026-10-04 timer detach/disable: complete Boot bodies/effective virtuals read
 and locally pinned; null detach disables before pointer clear. Schedule-time
 retains, cancel-return semantics and failed-removal owner lifetime remain open.
