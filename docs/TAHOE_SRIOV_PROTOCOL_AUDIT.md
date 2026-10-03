@@ -78,6 +78,17 @@ metadata policy: production synchronization, object lifetime, hook invocation
 association and actual publication still require integration and verification.
 `hasMarkerCoverage` must never be used alone as GPU idle or DMA-stop evidence.
 
+Reuse follow-up adds `resetForReuse`: it invalidates coverage, refuses while
+an invocation is active (tainting that invocation), and clears metadata only
+after the owner is gone. It deliberately preserves the monotonically increasing
+serial, including its exhausted value. Tests reuse a slot 1,024 times with the
+same owner/stamp/tail and reject every prior token against a subsequent active
+invocation; active reset and exhausted reset cannot restore marker coverage.
+Production integration must use this reset rather than memset/reconstructing
+the tracker. This only addresses reuse within the same tracker lifetime; table
+replacement and stale callers still require independently proven shutdown and
+object-lifetime synchronization. There is still no runtime coverage hook.
+
 Inherited implementation found locally (2026-10-04): archived Tahoe 25G229
 `SystemKernelExtensions.kc`, SHA-256
 `5cb1be1dc530b4b953a33943567589101d3ac46bb8cf90728566ee7e5b1fa214`,

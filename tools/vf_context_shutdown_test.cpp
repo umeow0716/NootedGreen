@@ -60,6 +60,35 @@ int main() {
     lateWriter.invalidate();
     assert(lateWriter.finish(lateToken, 1, true));
     assert(!lateWriter.hasMarkerCoverage());
+    NGVfSubmissionCoverage::Tracker reused;
+    for (uint64_t generation = 1; generation <= 1024; ++generation) {
+        const auto token = reused.begin(7, 5, 8, true);
+        assert(token == generation);
+        // An active slot cannot be reset; taint survives until its finish.
+        assert(!reused.resetForReuse());
+        assert(reused.claim(token, 7, 5, 8));
+        assert(reused.publish(token, 7, 5, 8));
+        assert(reused.finish(token, 7, true));
+        assert(!reused.hasMarkerCoverage());
+        assert(reused.resetForReuse());
+        assert(reused.serial == generation);
+        assert(!reused.claim(token, 7, 5, 8));
+    }
+    const auto newest = reused.begin(7, 5, 8, true);
+    for (uint64_t stale = 1; stale < newest; ++stale) {
+        assert(!reused.claim(stale, 7, 5, 8));
+        assert(!reused.publish(stale, 7, 5, 8));
+        assert(!reused.finish(stale, 7, true));
+    }
+    assert(reused.claim(newest, 7, 5, 8));
+    assert(reused.publish(newest, 7, 5, 8));
+    assert(reused.finish(newest, 7, true));
+    assert(reused.hasMarkerCoverage());
+    assert(reused.resetForReuse() && !reused.hasMarkerCoverage());
+    exhausted.covered = true;
+    assert(exhausted.resetForReuse());
+    assert(exhausted.serial == UINT64_MAX && !exhausted.hasMarkerCoverage());
+    assert(!exhausted.begin(1, 5, 8, true));
 
     // Independent widened endpoint oracle for all nearby slot/buffer edges.
     for (int32_t index = -2; index <= 192; ++index) {

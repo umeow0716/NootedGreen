@@ -138,6 +138,18 @@ struct Tracker {
 	}
 
 	bool hasMarkerCoverage() const { return !owner && covered; }
+
+	// Preserve serial across context-slot reuse. Resetting/reconstructing this
+	// tracker would permit an old token to alias a new invocation (ABA).
+	// Production must also ensure stale callers cannot outlive table teardown.
+	bool resetForReuse() {
+		invalidate();
+		if (owner)
+			return false;
+		stamp = tail = coveredStamp = coveredTail = 0;
+		claimed = published = carriesStamp = tainted = false;
+		return true;
+	}
 };
 } // namespace NGVfSubmissionCoverage
 
