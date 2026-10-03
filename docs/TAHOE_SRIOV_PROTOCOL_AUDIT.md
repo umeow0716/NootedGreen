@@ -27,6 +27,18 @@ enforce fault-before-panic and prohibit native/helper/backing side effects.
 
 ## Mapping getter provenance follow-up (offline)
 
+Tahoe timer cancel follow-up: the base timer virtual `+0x218` resolves to
+`cancelTimeout`. Its complete 0x70-byte Boot KC body increments generation when
+expansion storage exists, chooses `thread_call_cancel_wait` only when object
+flags byte `+0x2a` bit 1 is set, otherwise uses `thread_call_cancel`, clears
+deadline `+0x50`, and conditionally releases passive-mode source/workloop
+references. The paired local fixture pins the vtable, full body, active-mode
+selector and both exact branch targets. Cancellation is therefore not an
+unconditional callback-drain guarantee. Actual factory/init flag selection,
+thread-call semantics and workloop removal synchronization remain pending;
+the VM hold is unchanged. Neither a cancellation return nor software generation
+increment is proof of GPU DMA quiescence.
+
 Scheduler timer lifetime follow-up: complete native init (0x162 bytes), unnamed
 cleanup helper (0xe0) and free (0x24) were read and separately pinned in both
 payloads. Nearest-symbol ranges merge the helper into init and an unrelated

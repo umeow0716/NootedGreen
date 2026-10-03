@@ -7,6 +7,11 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 timer cancel follow-up: complete Tahoe base cancelTimeout body read;
+local paired fixture pins virtual +0x218, body, mode selector and both cancel/
+cancel-wait call targets. Actual timer init mode and thread-call draining remain
+pending; no unconditional callback or hardware quiescence claim.
+
 2026-10-04 scheduler timer construction/cleanup follow-up: complete native init,
 unnamed shared cleanup and free reviewed as separate disassembled functions,
 not merged nearest-symbol ranges. Factories, failure-to-cleanup/free edges and

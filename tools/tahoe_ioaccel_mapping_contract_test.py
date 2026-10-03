@@ -188,7 +188,9 @@ def check_boot_atomic(system, path):
                                    b"_thread_block", b"_clock_interval_to_deadline",
                                    b"__ZTV22IOInterruptEventSource", b"__ZTV18IOTimerEventSource",
                                    b"__ZN22IOInterruptEventSource23normalInterruptOccurredEPvP9IOServicei",
-                                   b"__ZN18IOTimerEventSource12setTimeoutUSEj")}
+                                   b"__ZN18IOTimerEventSource12setTimeoutUSEj",
+                                   b"__ZN18IOTimerEventSource13cancelTimeoutEv",
+                                   b"_thread_call_cancel", b"_thread_call_cancel_wait")}
     for command, offset in commands(boot, kernel[0]):
         if command != 2:
             continue
@@ -209,6 +211,9 @@ def check_boot_atomic(system, path):
     # These Boot KC vtable entries are canonical pointers, NOT System KC
     # chained cache-level targets. Do not silently apply the latter decoder.
     for table, slot, method, length, digest in (
+            (b"__ZTV18IOTimerEventSource", 0x218,
+             b"__ZN18IOTimerEventSource13cancelTimeoutEv", 0x70,
+             "ca6a6e9adbde9fcd3242f53c7c407c5dbc8b737620144c1ffc34f1aae08cb4ac"),
             (b"__ZTV22IOInterruptEventSource", 0x1e0,
              b"__ZN22IOInterruptEventSource23normalInterruptOccurredEPvP9IOServicei", 0x140,
              "7a10ac711e79fee59301c61844df895055cc3e47d20e083526ac0b361640e9bb"),
@@ -225,6 +230,14 @@ def check_boot_atomic(system, path):
     assert normal_body.count(bytes.fromhex("48 8b 7b 30 48 8b 07 ff 90 70 01 00 00")) == 1, \
         "changed workloop notification virtual"
     print("PASS Boot KC interrupt pending notification and microsecond timer base virtuals")
+    cancel = symbols[b"__ZN18IOTimerEventSource13cancelTimeoutEv"][0]
+    for offset, method in ((0x1e, b"_thread_call_cancel"), (0x25, b"_thread_call_cancel_wait")):
+        instruction = kernel_read(cancel + offset, 5)
+        assert instruction[0] == 0xe8 and cancel + offset + 5 + struct.unpack_from("<i", instruction, 1)[0] == symbols[method][0], \
+            "changed timer cancel versus cancel-wait branch target"
+    assert kernel_read(cancel + 0x14, 4) == bytes.fromhex("f6 43 2a 02"), \
+        "changed timer active-mode wait selector"
+    print("PASS Boot KC timer cancel virtual and conditional cancel-wait dispatch")
     assert system[0x10132:0x10138] == bytes.fromhex("ff 25 60 40 01 00"), "changed atomic import stub"
     raw = struct.unpack_from("<Q", system, 0x24198)[0]
     assert (raw >> 30) & 3 == 0 and raw >> 63 == 0, "unexpected atomic import cache level/auth"
