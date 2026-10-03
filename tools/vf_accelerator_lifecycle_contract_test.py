@@ -50,6 +50,18 @@ GUC_INVALIDATE_TLB = "__ZN13IGHardwareGuC13invalidateTLBEv"
 CONTEXT_FREE = "__ZN17IGHardwareContext4freeEv"
 CONTEXT_INIT = "__ZN17IGHardwareContext15initWithOptionsEP11IGAccelTaskRK23IGHardwareContextParamsh"
 CONTEXT_RING_GPU_ADDRESS = "__ZN17IGHardwareContext25initRingGPUVirtualAddressEv"
+TASK_STAMP_GPU_ADDRESS = "__ZNK11IGAccelTask25getStampGPUVirtualAddressEv"
+TASK_STAMPS = "__ZNK11IGAccelTask9getStampsEv"
+TASK_INIT_STAMPS = "__ZN11IGAccelTask24initStampAndScratchPagesEv"
+TASK_FREE = "__ZN11IGAccelTask4freeEv"
+TASK_RELEASE = "__ZNK11IGAccelTask7releaseEv"
+CONTEXT_NOTIFY_COMPLETE = "__ZN17IGHardwareContext14notifyCompleteEP12IOAccelEvent"
+FIFO_NOTIFY_COMPLETE = "__ZN18IGAccelFIFOChannel14notifyCompleteEP12IOAccelEvent"
+RING_NOTIFY_COMPLETE = "__ZN20IGHardwareRingBuffer14notifyCompleteEP12IOAccelEvent"
+SHARED_BUFFER_CPU_ADDRESS = "__ZNK20IGSharedMappedBuffer17getVirtualAddressEv"
+MAPPED_BUFFER_GPU_ADDRESS = "__ZNK14IGMappedBuffer20getGPUVirtualAddressEv"
+SHARED_BUFFER_CLONE = "__ZN20IGSharedMappedBuffer11cloneInTaskEP11IGAccelTask"
+SHARED_BUFFER_FACTORY = "__ZN20IGSharedMappedBuffer11withOptionsEP11IGAccelTaskmjj"
 SCHEDULER4_BIND = "__ZN12IGScheduler44bindE10IGHwCsTypeih"
 SCHEDULER4_UNBIND = "__ZN12IGScheduler46unbindEP17IGHardwareContext"
 GET_DEFAULT_RESET = "__ZN16IntelAccelerator20getDefaultResetValueEj"
@@ -524,6 +536,48 @@ def macho_inventory(path):
     if init_body.count(bytes.fromhex(
             "ff 90 28 01 00 00 49 8b 7d 50")) != 1:
         raise AssertionError(f"{path}: native unchecked context attach call changed")
+
+    # Both stamp address views borrow the task's same +0x288 buffer. Ordinary
+    # contexts retain the task, while the flag-bit-0 path skips that retain;
+    # the task's last-release path attempts notification of four owned contexts.
+    # These local contracts do not prove external task ownership or completion.
+    for getter, target in ((TASK_STAMP_GPU_ADDRESS, MAPPED_BUFFER_GPU_ADDRESS),
+                           (TASK_STAMPS, SHARED_BUFFER_CPU_ADDRESS)):
+        getter_start = value(getter)
+        getter_body = image[getter_start:next_symbol(getter_start)]
+        if getter_body[:12] != bytes.fromhex("55 48 89 e5 48 8b bf 88 02 00 00 5d") or \
+                len(direct_branches(getter, target)) != 1:
+            raise AssertionError(f"{path}: task stamp CPU/GPU backing identity changed")
+    if init_body.count(bytes.fromhex(
+            "41 f6 45 6e 01 75 12 49 8b 7d 58 48 8b 07 ff 50 20")) != 1:
+        raise AssertionError(f"{path}: context conditional task retain changed")
+    stamp_init_start = value(TASK_INIT_STAMPS)
+    stamp_init_body = image[stamp_init_start:next_symbol(stamp_init_start)]
+    if len(direct_branches(TASK_INIT_STAMPS, SHARED_BUFFER_CLONE)) != 1 or \
+            len(direct_branches(TASK_INIT_STAMPS, SHARED_BUFFER_FACTORY)) != 1 or \
+            stamp_init_body.count(bytes.fromhex("be 00 30 00 00")) != 1 or \
+            stamp_init_body.count(bytes.fromhex("48 89 83 88 02 00 00")) != 1:
+        raise AssertionError(f"{path}: task stamp allocation/clone contract changed")
+    task_free_start = value(TASK_FREE)
+    task_free_body = image[task_free_start:next_symbol(task_free_start)]
+    if task_free_body.count(bytes.fromhex("48 8b bb 88 02 00 00")) != 1 or \
+            task_free_body.count(bytes.fromhex("48 c7 83 88 02 00 00 00 00 00 00")) != 1:
+        raise AssertionError(f"{path}: task stamp final-release contract changed")
+    release_start = value(TASK_RELEASE)
+    release_body = image[release_start:next_symbol(release_start)]
+    if len(direct_branches(TASK_RELEASE, CONTEXT_NOTIFY_COMPLETE)) != 4:
+        raise AssertionError(f"{path}: task owned-context completion inventory changed")
+    for offset in (0x2a0, 0x2a8, 0x298, 0x290):
+        if release_body.count(b"\x48\xc7\x83" + struct.pack("<I", offset) + b"\0" * 4) != 1:
+            raise AssertionError(f"{path}: task owned-context {offset:#x} cleanup changed")
+    if len(direct_branches(CONTEXT_NOTIFY_COMPLETE, FIFO_NOTIFY_COMPLETE)) != 1 or \
+            len(direct_branches(FIFO_NOTIFY_COMPLETE, RING_NOTIFY_COMPLETE)) != 1:
+        raise AssertionError(f"{path}: task/context/FIFO notification graph changed")
+    notify_start = value(CONTEXT_NOTIFY_COMPLETE)
+    notify_body = image[notify_start:next_symbol(notify_start)]
+    if notify_body.count(bytes.fromhex(
+            "4d 85 ff 74 16 48 8b 7b 58 48 8b 07 ff 50 20 c6 83 c8 00 00 00 01")) != 1:
+        raise AssertionError(f"{path}: asynchronous context notification task retain changed")
 
     # Normal producer backpressure polls shared context head/stamp memory.
     # Keep its timeout diagnostic behind the already isolated entry rather

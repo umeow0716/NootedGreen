@@ -10,6 +10,24 @@ enforced containment precondition.
 
 ## V264 retain the actual DMA ring through deregistration (offline)
 
+Follow-up task/stamp review: `getStampGPUVirtualAddress` and `getStamps` both
+load task `+0x288`, then tail-call the GPU/CPU address getters respectively.
+`initStampAndScratchPages` either clones that shared buffer from the accelerator's
+kernel task or allocates `0x3000` bytes; task `free` releases and clears this
+field. Ordinary context initialization retains its task, but context flag
+`+0x6e` bit 0 skips that retain. Task `release` attempts notification/release
+of four owned context slots (`+0x2a0/+0x2a8/+0x298/+0x290`) on its guarded
+last-reference path. This is not proof that the notifications completed.
+
+Context notification delegates through FIFO to ring notification. If the FIFO
+reports success and the supplied event is non-null, the context retains its
+task and sets `+0xc8` to 1. This second ownership acquisition must be considered
+alongside the initialization retain; assuming that skipped initialization retain
+means no later task reference would be incorrect. Both payload contracts pin
+these getters, allocation/clone edges, four context slots, and the conditional
+notification retain. Ring notification/event completion and the full task owner
+graph remain open; this evidence does not justify adding or removing a retain.
+
 Allocation-site tracing corrects V263's `+0xa8` interpretation: it is an
 additional `IGSharedMappedBuffer`, not the ring object. Context initialization
 stores `IGHardwareRingBuffer::withHardwareContext` at `+0xb0` and its FIFO
