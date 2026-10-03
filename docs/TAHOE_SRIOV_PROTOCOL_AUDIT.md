@@ -62,6 +62,16 @@ no calls to these methods in the pinned text, which does not exclude virtual,
 inherited, or external callers. That reachability/lifetime obligation remains
 open. No new suppressing route or guessed idle signal has been added.
 
+Subsequent local-vtable inventory narrows that obligation: neither explicit
+CPU-unlock helper nor task stamp/scratch cleanup appears in any defined local
+vtable in either accelerator payload. Mapped/shared-buffer destructor slots
+are instead `+0x90`, pointing to their respective `free` methods. The offline
+test now checks this inventory. Thus local virtual dispatch to those two
+specific helpers is excluded; independently imported system-memory unlock,
+external direct callers and inherited mapping invalidation are still not
+excluded. The framebuffer's symbol inventory contains no reference to either
+helper. These findings narrow the search, not certify overall lifetime safety.
+
 Retaining a buffer does not prove an encoded destination lies within it.
 The native packet path uses signed stamp index at ring `+0x38`, a 64-byte
 slot stride and an eight-byte scratch post-sync store. Direct attach previously

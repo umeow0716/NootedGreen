@@ -92,6 +92,8 @@ MAPPED_BUFFER_MAPPING_OPTIONS = "__ZNK14IGMappedBuffer17getMappingOptionsEv"
 MAPPED_BUFFER_FREE = "__ZN14IGMappedBuffer4freeEv"
 SHARED_BUFFER_FREE = "__ZN20IGSharedMappedBuffer4freeEv"
 SHARED_BUFFER_UNLOCK = "__ZN20IGSharedMappedBuffer18unlockForCPUAccessEv"
+MAPPED_BUFFER_VTABLE = "__ZTV14IGMappedBuffer"
+SHARED_BUFFER_VTABLE = "__ZTV20IGSharedMappedBuffer"
 MEMORY_MAP_COMPLETE = "__ZN16IOAccelMemoryMap8completeEv"
 MEMORY_MAP_FINISH_EVENT = "__ZN16IOAccelMemoryMap11finishEventEv"
 SYS_MEMORY_UNLOCK = "__ZN16IOAccelSysMemory18unlockForCPUAccessEP4task"
@@ -681,6 +683,21 @@ def macho_inventory(path):
     if unlock_body.count(bytes.fromhex("48 c7 43 38 00 00 00 00")) != 1 or \
             bytes.fromhex("ff 90 40 01 00 00") in unlock_body:
         raise AssertionError(f"{path}: CPU unlock/GPU mapping distinction changed")
+    for table, destructor in ((MAPPED_BUFFER_VTABLE, MAPPED_BUFFER_FREE),
+                              (SHARED_BUFFER_VTABLE, SHARED_BUFFER_FREE)):
+        if struct.unpack_from("<Q", image, value(table) + 16 + 0x90)[0] != value(destructor):
+            raise AssertionError(f"{path}: backing destructor virtual changed")
+    # These concrete helper methods have no entry in ANY local vtable. This
+    # excludes local virtual dispatch to them, not inherited CPU-unlock calls
+    # or externally linked direct calls to their exported symbols.
+    explicit_cleanup_targets = {value(SHARED_BUFFER_UNLOCK), value(TASK_RELEASE_STAMPS)}
+    for name, table_start in zip(names, values):
+        if not name.startswith("__ZTV") or not table_start:
+            continue
+        table_end = next_symbol(table_start)
+        for slot in range(table_start + 16, table_end - 7, 8):
+            if struct.unpack_from("<Q", image, slot)[0] in explicit_cleanup_targets:
+                raise AssertionError(f"{path}: explicit mapping cleanup became virtual in {name}")
     mapping_body = image[mapping_init:next_symbol(mapping_init)]
     for anchor in ("ff 91 38 01 00 00", "ff 90 38 01 00 00",
                    "84 c0 74 2d 4c 89 7b 30 4c 89 73 10 4c 89 6b 18"):
