@@ -35,6 +35,11 @@ EVENT_DISABLE_STAMP_LOCKED = "__ZN20IOAccelEventMachine223disable_stamp_interrup
 EVENT_ENABLE_STAMP = "__ZN20IOAccelEventMachine220enableStampInterruptEi"
 EVENT_DISABLE_STAMP = "__ZN20IOAccelEventMachine221disableStampInterruptEi"
 EVENT_OWNER_BODIES = {
+    "__ZN18IOAccelDisplayPipe23transaction_queue_gatedEP30IOAccelDisplayPipeTransaction2": (0xac, "58a2d74c983748b5f770631e50efaa309c3b8cb8d682fe0f70564acd8047e43b"),
+    "__ZN30IOAccelDisplayPipeTransaction24freeEv": (0x1e2, "1864cfe99602e508dbd727f0551a2baec535805b34a95e8d99599e3ca7142c41"),
+    "__ZN30IOAccelDisplayPipeTransaction27prepareEv": (0x150, "c0324bf1dd0bcf47d1c344b29b7fb09d82903820426c1192ea22c51b41cc6f7f"),
+    "__ZN18IOAccelDisplayPipe17submitTransactionEP30IOAccelDisplayPipeTransaction2": (0x14, "e2c6e0c648573fd646ef67b2f53c9df6282278772026dc82f686f78d102ada79"),
+    "__ZN18IOAccelDisplayPipe16beginTransactionEP12IOAccelEvent": (0x6, "5a96d1fb661d55552184ea24023ae8190bd1523ae1f855a8d671b07143e8b1df"),
     "__ZN29IOAccelDisplayPipeUserClient217s_transaction_endEPS_PvP25IOExternalMethodArguments": (0xe, "000d47cc2f714b2e7c26089183cd6f4294485f8bc812ca6075ec39a66a4378ff"),
     "__ZN18IOAccelDisplayPipe15transaction_endEP29IOAccelDisplayPipeUserClient2P33IOAccelDisplayPipeTransactionArgs": (0x1b4, "29932dad1b6c1449a3b10c9024f3f67a629b75c00d66bc8583abcf8ffb076851"),
     "__ZN18IOAccelDisplayPipe21displayModeWillChangeEv": (0x34, "a2a5161d9727962a15fcb4f3e1522e28a7cf8c765b284596f9bcb56bbe3f33e2"),
@@ -754,10 +759,17 @@ def check(path, boot_path=None):
         assert encoded[0] in (0xe8, 0xe9) and call + 5 + struct.unpack_from("<i", encoded, 1)[0] == address_of(target), "changed transaction-end dispatch/queue edge"
     assert read(0x14bb061e, 6) == bytes.fromhex("41 89 c4 89 43 58"), "changed transaction preparation result preservation"
     for slot, method in ((0x868, "__ZN18IOAccelDisplayPipe21displayModeWillChangeEv"),
+                         (0x8b8, "__ZN18IOAccelDisplayPipe17submitTransactionEP30IOAccelDisplayPipeTransaction2"),
+                         (0x8d8, "__ZN18IOAccelDisplayPipe16beginTransactionEP12IOAccelEvent"),
                          (0x8e8, "__ZN18IOAccelDisplayPipe21framebufferTerminatedEv")):
         raw = struct.unpack("<Q", read(address_of("__ZTV18IOAccelDisplayPipe") + 16 + slot, 8))[0]
         assert raw >> 63 == 0 and (raw >> 30) & 3 == 1, "changed base display terminal virtual cache level/auth"
         assert raw & 0x3fffffff == address_of(method), "changed base display terminal virtual target"
+    for address, encoded in ((0x14bb211b, "41 89 46 58"),
+                             (0x14bb2165, "0f ae f8"),
+                             (0x14bb007d, "80 8b 40 01 00 00 01"),
+                             (0x14bb3e9d, "b9 0b 00 00 00")):
+        assert read(address, len(bytes.fromhex(encoded))) == bytes.fromhex(encoded), "changed transaction status/publication/prepare/notification edge"
     for address, encoded in ((0x14bb59e2, "48 89 83 e8 00 00 00"),
                             (0x14bb5a79, "ff 50 20"),
                             (0x14bb5793, "ff 50 28"),

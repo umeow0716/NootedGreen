@@ -740,3 +740,12 @@ Preparation errors preserve status but still queue the transaction. Downstream
 error retirement, prepare/argument callee bodies, virtual +0x8d8 overrides,
 event-machine +0x1b8 target and remaining 13 descriptor actions are pending.
 This extends reviewed coverage, not hardware acceleration or DMA safety proof.
+# Latest error-queue ownership checkpoint
+
+Pinned/reviewed complete gated queue, transaction prepare/free, base submit
+and begin virtuals. Queue overwrites transaction status with submit's result;
+base submit preserves prior errors but does not prove hardware submission.
+Free sends an 11-word async result before client/resource releases. Pending:
+actual framebuffer subclass overrides, resource preparation virtuals/imports,
+async payload semantics, queue-to-finished transfer and effective admission.
+Full-project and hardware-acceleration completion remain unproven.

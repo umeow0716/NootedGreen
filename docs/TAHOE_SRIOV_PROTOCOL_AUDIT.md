@@ -5554,3 +5554,37 @@ this is not established as a defect or safe to suppress without reviewing
 the downstream queue and destruction paths. List-validation cold targets
 contain trap instrumentation; they are not normal error-return cleanup.
 Paired-KC provenance tests pass. No production patch or runtime operation.
+# Error transaction queue and release follow-up
+
+Offline Tahoe 25G229: complete `transaction_queue_gated` (0xac bytes),
+transaction `prepare` (0x150), transaction `free` (0x1e2), base pipe
+`submitTransaction` (0x14) and `beginTransaction` (6) are reviewed and pinned.
+Base vtable slots `header+16+0x8b8`/`+0x8d8` resolve to the latter two methods.
+
+The gated queue calls virtual `+0x8b8` and overwrites transaction status `+0x58`
+with its result. Base submit preserves nonzero prior errors, otherwise returns
+`0xe0014042`; base begin is a no-op. Actual framebuffer subclass overrides
+remain unresolved, so base behavior is not a hardware-success proof. Queue
+stores the transaction in one of four embedded event slots, calls event-machine
+virtual `+0x1b0`, executes `sfence`, advances producer index `+0x23c`, then
+signals source `+0xc0`. No local terminal/capacity check exists here; upstream
+capacity/admission and effective gate binding are still required.
+
+Prepare visits resource slots in two plane records. After `checkDirty`, it
+calls resource virtual `+0x170`, counts successful calls and rolls back a
+partial failure through `+0x178`; success sets transaction flag `+0x140` bit 0
+and calls an imported helper on associated objects. Virtual identities and
+the imported helper remain pending; do not label them proven DMA pin/unpin.
+
+Transaction free, when its async reference `+0x158` exists, copies transaction
+ID to `+0x164`, calls `sendAsyncResult64` with status argument zero and 11
+result words, clears the reference and releases retained client `+0x150`.
+Thus the outer async status argument is not itself the transaction `+0x58`
+error; exact result payload semantics/callee remain pending. It then releases
+resource/auxiliary objects from the two plane records and remaining retained
+fields, clears/deallocates the backing record and delegates inherited free.
+No standalone DMA drain is established by these releases. Notification and
+retained-object cleanup explain why indiscriminately dropping an error queue
+entry is unsafe; complete queue-to-finished ownership transfer and actual
+subclass submission still need verification. Paired-KC tests passed locally;
+no production/runtime mutation was made.
