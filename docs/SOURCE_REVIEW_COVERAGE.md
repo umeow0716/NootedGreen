@@ -7,6 +7,12 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 sys-memory factory follow-up: complete legacy wrapper and bool
+overload reviewed/pinned. Prewired pool branch sets wired flag without ordinary
+wire/command construction; null command is not a universal broken-state test.
+Pool helper ownership/retirement and ordinary failed-prepare disposal remain
+pending. Same-offset virtual calls require receiver typing, not byte matching.
+
 2026-10-04 Intel wire/caller follow-up: complete native wire override in both
 payloads, base memory prepare and wire-count helpers reviewed/pinned. Explicit
 base-table wire dispatch is paired-KC resolved. Native override forwards false

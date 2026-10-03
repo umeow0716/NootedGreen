@@ -35,6 +35,8 @@ EVENT_DISABLE_STAMP_LOCKED = "__ZN20IOAccelEventMachine223disable_stamp_interrup
 EVENT_ENABLE_STAMP = "__ZN20IOAccelEventMachine220enableStampInterruptEi"
 EVENT_DISABLE_STAMP = "__ZN20IOAccelEventMachine221disableStampInterruptEi"
 EVENT_OWNER_BODIES = {
+    "__ZN16IOAccelSysMemory11withOptionsEP22IOGraphicsAccelerator2P4taskP14IOAccelShared2P16IOAccelResource2jy": (0x14, "0ef5944a07cf6ee013ef23d461815067460eaf83284f843c8dd13bf2ab5ce594"),
+    "__ZN16IOAccelSysMemory11withOptionsEP22IOGraphicsAccelerator2P4taskP14IOAccelShared2P16IOAccelResource2jyb": (0x4ce, "8583979aa58b81534b6ffb0127a4d3e0a2acb7bccab413baf2ce8313a06599fb"),
     "__ZN13IOAccelMemory7prepareEv": (0x3c, "89a5c623541e69e42f71ec60268646d7d2b06fbd7ac417a9a3913ed271ae31b4"),
     "__ZN16IOAccelSysMemory20increment_wire_countEv": (0xa, "c50a571103fe420707129053dc70743bdd5d0a800993bca739f16964bbe57584"),
     "__ZN16IOAccelSysMemory20decrement_wire_countEv": (0x30, "210286dfd0c31e5992460c98a0aa3d9011967dc9897d64bbb209c79a5c66f891"),
@@ -865,6 +867,10 @@ def check(path, boot_path=None):
     assert stop_owner.count(bytes.fromhex("ff 90 48 01 00 00")) == 3, "changed base event stop source-removal inventory"
     print("PASS inherited event owner free/stop and per-event stamp-disable bodies (outer drain not proven)")
     lazy_setup = address_of("__ZN18IOAccelDisplayPipe14setup_workloopEv")
+    factory_forward = read(0x14bb95b6, 5)
+    assert factory_forward[0] == 0xe8 and 0x14bb95bb + struct.unpack_from("<i", factory_forward, 1)[0] == address_of("__ZN16IOAccelSysMemory11withOptionsEP22IOGraphicsAccelerator2P4taskP14IOAccelShared2P16IOAccelResource2jyb"), "changed legacy sys-memory factory delegation"
+    assert read(0x14bb9954, 9) == bytes.fromhex("05 02 20 00 00 41 89 45 0c"), "changed prewired pool factory flags"
+    assert read(0x14bb995d, 8) == bytes.fromhex("41 c7 45 14 00 00 00 00"), "changed prewired pool initial wire count"
     raw_wire = struct.unpack("<Q", read(address_of("__ZTV16IOAccelSysMemory") + 0x1c0, 8))[0]
     assert raw_wire >> 63 == 0 and (raw_wire >> 30) & 3 == 1, "changed base sys-memory wire encoding"
     assert raw_wire & 0x3fffffff == address_of("__ZN16IOAccelSysMemory4wireEv"), "changed explicit Intel-delegated base wire target"

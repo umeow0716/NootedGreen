@@ -6175,3 +6175,29 @@ or failed-wire cleanup branch. Parent-count helper and callers still require
 review. Wire count, memory prepare count and command prepare count are distinct
 fields/protocols; none is a substitute for GPU retirement. No production/runtime
 mutation or broad per-owner-hook safety claim.
+
+# Sys-memory factory distinguishes prewired pool ownership
+
+Reviewed/pinned complete legacy withOptions wrapper (0x14) and bool-overload
+implementation (0x4ce). The wrapper forwards to that implementation. The latter
+builds/obtains a descriptor through pool, segmented-large-allocation or ordinary
+allocator paths, creates sys-memory via accelerator virtual +0x8b8, and stores
+descriptor +0xd0 and resource/task/size metadata. Allocation failure releases
+already-created segmented descriptors and their array; failed sys-memory
+creation releases the descriptor. Allocator/pool helper callees are not newly
+certified by these bodies.
+
+The successful pool-backed path performs an event-machine virtual +0x1b0 on
+the event-machine receiver (NOT sys-memory wire), stores pool provenance,
+sets flags including wired bit 1 and pool-mode 0x2000, zeros wire count +0x14,
+and calls sysmem_wired/parent accounting without calling ordinary wire or
+locally constructing a command. These flag/count anchors are now pinned.
+Hence a null command +0x148 with wired=true is not by itself proof of a broken
+wire. Actual pool preparation/retirement requires its helper protocol; reject
+any proposed blanket command-presence check until this branch is accounted for.
+
+This factory is not the missing cleanup after ordinary wire returns false;
+it does not call the ordinary wire path. Higher-level failed-prepare disposal
+remains pending. Byte patterns for virtual +0x1b0 alone cannot identify wire
+callers: receiver provenance and vtable type must be verified. No production
+patch or runtime/Host GPU mutation.
