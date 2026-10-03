@@ -27,6 +27,25 @@ enforce fault-before-panic and prohibit native/helper/backing side effects.
 
 ## Mapping getter provenance follow-up (offline)
 
+Display cleanup helpers follow-up: fully reviewed signalTransactionInterrupt
+0x14bafd20 (0x80): checks +0x2a4, records time and signals source+0xd0;
+it is not a synchronous queue flush or reference-deregistration acknowledgement.
+Fully read finishTransactionQueue 0x80, releaseLiveTransaction 0xf2 and
+teardown_workloop 0x102 called by free. They dispatch actions through object
++0xb0 virtual +0x1c8 before collecting finished transactions/releasing sources.
+Resolved and fully read transaction_queue_idle_gated 0xc0,
+get_finished_transactions_gated 0x48 and teardown_workloop_gated 0x132.
+Idle waits on queue indices/active transaction, invokes event finish and the
+reviewed event_interrupt_gated, then uses +0xb0 virtual +0x1e0 to wait/retry.
+Finished-list helper moves list ownership; source teardown disables/removes
+timer, transaction, event and other sources (six removals), ignoring statuses.
+The outer helper releases/clears sources then gate+0xb0/workloop+0xb8.
+Queue wait is an actual balancing candidate, not proof of concrete gate type,
+admission closure, timeout safety or successful source detach. Added seven
+complete hashes, three gated-action LEA identities and six-removal inventory;
+local paired KC passes. No production/VM changes. Next concrete gate/source
+construction and remaining live-transaction gated actions/caller serialization.
+
 Display queue caller follow-up: full event_interrupt_gated 0x14bb1896 (0x41e)
 read, with direct disable at 0x14bb19aa before transaction processing and
 enable at 0x14bb1aa6 when event test returns false and pipe flag+0x29c is zero.

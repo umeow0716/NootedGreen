@@ -35,6 +35,13 @@ EVENT_DISABLE_STAMP_LOCKED = "__ZN20IOAccelEventMachine223disable_stamp_interrup
 EVENT_ENABLE_STAMP = "__ZN20IOAccelEventMachine220enableStampInterruptEi"
 EVENT_DISABLE_STAMP = "__ZN20IOAccelEventMachine221disableStampInterruptEi"
 EVENT_OWNER_BODIES = {
+    "__ZN18IOAccelDisplayPipe26signalTransactionInterruptEPv": (0x80, "b56c911f2bd45b54ed57ec3a0a4c953ecb276b73294cdc7010a6d2d4613ea5b2"),
+    "__ZN18IOAccelDisplayPipe22finishTransactionQueueEv": (0x80, "90e48c306b49108c13fe51b498211bc595515b3646fc2246190f1aa9d5f75eb4"),
+    "__ZN18IOAccelDisplayPipe22releaseLiveTransactionEv": (0xf2, "a74c9fca08374a803dd5164a319ad0c8316495eddf05947e3fb1b9a678757f33"),
+    "__ZN18IOAccelDisplayPipe17teardown_workloopEv": (0x102, "7eaef7309212aeb6e8b24f5a33fd1afd2e6717f921ebdc10bdb717ea0d1bacaa"),
+    "__ZN18IOAccelDisplayPipe28transaction_queue_idle_gatedEv": (0xc0, "3f53a333ca96043b151d13f7e74e357bc32f6928ff86da507b9cbf4d40be846b"),
+    "__ZN18IOAccelDisplayPipe31get_finished_transactions_gatedEP26DisplayTransactionListHead": (0x48, "807c04039ace117e7d22fd3895f8d2818b0b81c9fbeca903f6a3c76f66c58cd2"),
+    "__ZN18IOAccelDisplayPipe23teardown_workloop_gatedEv": (0x132, "5d8affc81c42f9cb7313aea453525fd850e5df1a03e1fc9f9ec8d02845b0ccdc"),
     "__ZN18IOAccelDisplayPipe21event_interrupt_gatedEv": (0x41e, "82edb6e16a07280b596ab1f53104bebf5a8944f416833483099f4d16085d17d5"),
     "__ZN18IOAccelDisplayPipe17device_terminatedEv": (0x12, "44f2d112215eea94d1bdb399f2086b870445bf148e5553b81d163c3aa9b68105"),
     "__ZN18IOAccelDisplayPipe4freeEv": (0x1c0, "1c4ecbd1a0d601f1d0afab535af0dc1a2439503840d59d6c8d38eb7dab0cfac5"),
@@ -682,6 +689,14 @@ def check(path, boot_path=None):
     stop_owner = read(address_of("____ZN20IOAccelEventMachine24stopEv_block_invoke"), 0x8b)
     assert stop_owner.count(bytes.fromhex("ff 90 48 01 00 00")) == 3, "changed base event stop source-removal inventory"
     print("PASS inherited event owner free/stop and per-event stamp-disable bodies (outer drain not proven)")
+    for lea, target in ((0x14baec6f, "__ZN18IOAccelDisplayPipe28transaction_queue_idle_gatedEv"),
+                        (0x14baeca4, "__ZN18IOAccelDisplayPipe31get_finished_transactions_gatedEP26DisplayTransactionListHead"),
+                        (0x14baedde, "__ZN18IOAccelDisplayPipe23teardown_workloop_gatedEv")):
+        encoded = read(lea, 7)
+        assert encoded[:3] == bytes.fromhex("48 8d 35") and lea + 7 + struct.unpack_from("<i", encoded, 3)[0] == address_of(target), "changed display cleanup gated action identity"
+    teardown_sources = read(address_of("__ZN18IOAccelDisplayPipe23teardown_workloop_gatedEv"), 0x132)
+    assert teardown_sources.count(bytes.fromhex("ff 90 48 01 00 00")) == 5 and \
+        teardown_sources.count(bytes.fromhex("48 8b 80 48 01 00 00")) == 1, "changed six-source display teardown removal inventory"
     for address, encoded in ((0x14ba1add, "49 8b be 80 03 00 00"),
                             (0x14ba1aec, "ff 90 58 01 00 00"),
                             (0x14ba1af2, "49 8b be 80 03 00 00"),
