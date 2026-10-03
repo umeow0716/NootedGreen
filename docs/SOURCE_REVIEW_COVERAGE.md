@@ -7,6 +7,12 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 consolidated timer-review boundary: the protocol audit now separates
+resolved base construction/action delegation from unresolved actual Intel
+workloop/owner lifetime, timer retains/races, failed removal handling and true
+GPU completion. Chronological pending notes are not silently counted as closed;
+generic kernel identity review is not a substitute for those driver gates.
+
 2026-10-04 metaclass initializer follow-up: complete unnamed Boot initializer
 window reviewed/pinned, including exact vtable source/gMetaClass destination.
 Initializer execution/registration and concrete driver lifecycle remain pending.

@@ -27,6 +27,36 @@ enforce fault-before-panic and prohibit native/helper/backing side effects.
 
 ## Mapping getter provenance follow-up (offline)
 
+### Current timer teardown review boundary
+
+The follow-ups below are chronological findings; older "pending" statements
+are superseded only by subsequent explicit evidence. Current base-chain
+evidence: workloop init references command-gate gMetaClass; the reviewed
+initializer writes its metaclass vtable; allocator installs the base object
+vtable; inherited init stores owner/action; runCommand delegates to gated
+runAction; successful maintenance removal detaches/releases the source.
+This is not a successful acceleration or complete teardown baseline.
+
+Remaining driver-relevant gates, in priority order:
+
+1. Resolve Intel accelerator's actual workloop construction/getter and effective
+   overrides, scheduler ownership and callback owner lifetime. Base kernel
+   vtables do not establish these driver objects.
+2. Review schedule-time retains, generation/cancel races, unnamed action helper,
+   and source setWorkLoop(NULL) against the same actual gate.
+3. Design verified handling for failed native add/remove requests: scheduler
+   ignores those results. Never free owner/mutex while callbacks can dispatch,
+   or wait for cancellation under a gate needed by the callback. Do not add
+   runtime patches based on guessed object types.
+4. Prove normal GPU-written completion and backing reclamation independently
+   of termination-forged CPU stamps; finish MMIO/DMA lifecycle review and all
+   independent host containment requirements before any VM run.
+
+Local proprietary KC tests pin identities/selected instructions; remote CI
+only syntax-checks that fixture. Neither proves concurrency safety, callback
+drain or PF/DMA quiescence. Generic metaclass runtime registration is still
+unverified but must not substitute for the driver-specific gates above.
+
 Metaclass initializer follow-up: the complete unnamed initializer immediately
 after the separately bounded allocator was read and pinned as a 0x70-byte
 window. It passes gMetaClass/name/superclass/size 0x50 to the metaclass
