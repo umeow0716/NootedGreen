@@ -27,6 +27,23 @@ enforce fault-before-panic and prohibit native/helper/backing side effects.
 
 ## Mapping getter provenance follow-up (offline)
 
+Kernel cancellation boundary follow-up: the actual Boot thread_call_cancel
+symbol's nearest-symbol span is 0x310, but it contains the public wrapper
+(0x120) followed by an unnamed locked helper (0x1f0). The wrapper was read
+completely: validates call/group metadata, disables interrupts and takes the
+group ticket lock, calls the helper at `0xffffff80003bf320`, restores lock/
+interrupt state and returns the helper's boolean. There is no wait invocation
+in this wrapper. A subsequent separate, untruncated disassembly covered the
+entire 0x1f0 helper window: flag 0x40 is cleared with true returned; otherwise
+the dequeue helper's non-null result determines the boolean, updates pending
+accounting, and may cancel/reprogram the group's earliest delayed timer.
+No direct callback-completion wait appears in this helper. Its external
+dequeue/timer callees remain pending; this is not a transitive drain proof.
+Both windows and the wrapper-to-helper edge are pinned in the local fixture.
+cancel-wait's 0x3d0 body was located but not yet read. Do not
+substitute nearest-symbol ranges or reference XNU semantics for those missing
+reviews; runtime hold is unchanged.
+
 Timer schedule-time retention follow-up: complete Boot wakeAtTime(options,
 deadline, leeway) 0x130-byte body is locally pinned. With action, enabled state,
 nonzero deadline/workloop and expansion storage, passive mode retains the

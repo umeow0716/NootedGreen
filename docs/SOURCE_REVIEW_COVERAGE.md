@@ -80,6 +80,12 @@ pending; base gated invocation alone is not a cleanup success proof.
 reviewed/pinned; complete reference XNU runAction read. Actual Boot virtual
 +0x1c8, stored removal action and concrete control-gate type remain pending.
 
+2026-10-04 cancellation boundary follow-up: separately reviewed the complete
+Boot public cancel wrapper (0x120) and unnamed locked helper window (0x1f0).
+Local fixture pins both hashes and their call edge. Boolean cancellation is
+not callback/DMA drain proof; external helper callees and cancel-wait remain
+unreviewed. This does not complete the all-source audit.
+
 2026-10-04 workloop gate follow-up: complete Boot base closeGate/openGate and
 removeEventSource reviewed and locally pinned with effective virtuals and
 mutex edges. Recursive ownership distinguished from callback-drain proof;

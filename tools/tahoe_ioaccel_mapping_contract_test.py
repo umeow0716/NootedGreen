@@ -483,6 +483,19 @@ def check_boot_atomic(system, path):
         assert kernel_read(wake + offset, len(bytes.fromhex(instruction))) == bytes.fromhex(instruction), \
             "changed passive timer schedule retain/release instruction"
     print("PASS Boot KC passive timer schedule-time reference pairing body")
+    cancel = symbols[b"_thread_call_cancel"][0]
+    # The next named symbol includes an unnamed locked helper: do not merge
+    # the public wrapper and helper into one alleged function body.
+    for start, length, digest in (
+            (cancel, 0x120, "1744ae5843301d3f9f35d6e75d790c12866f84823dbceb19bd8b0bad8b215913"),
+            (cancel + 0x120, 0x1f0, "04ebbd1202258d02da097a28b70152d3307dc5317d8d8214bc78bde5cfcf702d")):
+        assert hashlib.sha256(kernel_read(start, length)).hexdigest() == digest, \
+            "changed reviewed non-waiting thread-call cancellation window"
+    call = cancel + 0x7b
+    instruction = kernel_read(call, 5)
+    assert instruction[0] == 0xe8 and call + 5 + struct.unpack_from("<i", instruction, 1)[0] == cancel + 0x120, \
+        "changed public cancellation to locked-helper edge"
+    print("PASS Boot KC cancellation wrapper and separate locked-helper windows (not a drain proof)")
     assert system[0x10132:0x10138] == bytes.fromhex("ff 25 60 40 01 00"), "changed atomic import stub"
     raw = struct.unpack_from("<Q", system, 0x24198)[0]
     assert (raw >> 30) & 3 == 0 and raw >> 63 == 0, "unexpected atomic import cache level/auth"
