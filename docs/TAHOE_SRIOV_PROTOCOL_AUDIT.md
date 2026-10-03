@@ -27,6 +27,17 @@ enforce fault-before-panic and prohibit native/helper/backing side effects.
 
 ## Mapping getter provenance follow-up (offline)
 
+Inherited owner/action storage follow-up: complete Boot IOEventSource init
+(0x70) and setAction (0x50) bodies are locally pinned. Init rejects null owner,
+stores the owner pointer at `+0x18` without an explicit retain, delegates action
+to virtual `+0x140`, enables the source and initializes expansion/statistics.
+The effective base IOCommandGate action setter is inherited setAction: it
+releases an existing block action when applicable, writes action `+0x20` and
+clears the block-action flag. This closes base control-gate action-storage
+delegation but does not independently pin owner lifetime. Workloop initializer
+metaclass pointer identity, concrete driver workloop and removal failure
+handling remain open; no runtime safety or acceleration claim follows.
+
 Command gate allocation/init follow-up: complete Boot command-gate init and
 metaclass allocator were read. Init delegates owner/action to inherited
 IOEventSource init and adds optional statistics; effective base virtual

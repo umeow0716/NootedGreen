@@ -7,6 +7,11 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 inherited event-source init/setter follow-up: complete Boot bodies
+read/pinned with owner store, action dispatch and effective command-gate setter.
+Owner is stored without explicit retain in reviewed init; owner lifetime and
+actual caller metaclass/concrete workloop remain pending.
+
 2026-10-04 command gate allocator/init follow-up: complete Boot init and
 allocator reviewed; allocator separately bounded from unnamed initializer.
 Local fixture pins base vtable installation, init virtual and inherited edge.

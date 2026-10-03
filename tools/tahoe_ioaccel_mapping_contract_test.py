@@ -201,6 +201,7 @@ def check_boot_atomic(system, path):
                  b"__ZN10IOWorkLoop4initEv",
                  b"__ZTV13IOCommandGate", b"__ZN13IOCommandGate10runCommandEPvS0_S0_S0_",
                  b"__ZN13IOCommandGate4initEP8OSObjectPFiS1_PvS2_S2_S2_E",
+                 b"__ZN13IOEventSource9setActionEPFvP8OSObjectzE",
                  b"__ZNK13IOCommandGate9MetaClass5allocEv",
                  b"__ZN13IOCommandGate9runActionEPFiP8OSObjectPvS2_S2_S2_ES2_S2_S2_S2_",
                  b"__ZN10IOWorkLoop13_maintRequestEPvS0_S0_S0_",
@@ -227,6 +228,9 @@ def check_boot_atomic(system, path):
     # These Boot KC vtable entries are canonical pointers, NOT System KC
     # chained cache-level targets. Do not silently apply the latter decoder.
     for table, slot, method, length, digest in (
+            (b"__ZTV13IOCommandGate", 0x140,
+             b"__ZN13IOEventSource9setActionEPFvP8OSObjectzE", 0x50,
+             "8cdc3bc5b1db948a9d976aa06d9bcb318519e859a4fd655f687ce8870b7d04d6"),
             (b"__ZTV13IOCommandGate", 0x1b8,
              b"__ZN13IOCommandGate4initEP8OSObjectPFiS1_PvS2_S2_S2_E", 0x30,
              "168ec388c4b98c395fa7cb00389015d571f9153b32d6a717f8f41b9955c125b3"),
@@ -374,6 +378,13 @@ def check_boot_atomic(system, path):
     assert instruction[0] == 0xe8 and call + 5 + struct.unpack_from("<i", instruction, 1)[0] == symbols[b"__ZN13IOEventSource4initEP8OSObjectPFvS1_zE"][0], \
         "changed command-gate inherited init target"
     print("PASS Boot KC command-gate allocator vtable and inherited init edge")
+    base_init = symbols[b"__ZN13IOEventSource4initEP8OSObjectPFvS1_zE"][0]
+    assert hashlib.sha256(kernel_read(base_init, 0x70)).hexdigest() == \
+        "f975c99f5099be0529c344faf80ba56970164feafab786803119f95ba64e0441", \
+        "changed inherited event-source owner/action init"
+    assert kernel_read(base_init + 0x12, 4) == bytes.fromhex("48 89 5f 18"), "changed event-source owner store"
+    assert kernel_read(base_init + 0x1c, 6) == bytes.fromhex("ff 90 40 01 00 00"), "changed event-source action setter virtual"
+    print("PASS Boot KC inherited owner storage and effective command action setter")
     assert system[0x10132:0x10138] == bytes.fromhex("ff 25 60 40 01 00"), "changed atomic import stub"
     raw = struct.unpack_from("<Q", system, 0x24198)[0]
     assert (raw >> 30) & 3 == 0 and raw >> 63 == 0, "unexpected atomic import cache level/auth"
