@@ -9,6 +9,9 @@ import sys
 # Complete reviewed native bodies. This fixes the concrete Intel override
 # graph, not inherited timer APIs, dynamic callbacks or runtime completion.
 STAMP_IRQ_NATIVE = {
+    "__ZN29IGHardwarePerProcessPageTable15initWithOptionsEP16IntelAcceleratorP11IGAccelTaskj": (0x3a, "e306e97f7f433d7cbb1f3bc321fe44096cefd96c1975d336d0ea7073090feb83"),
+    "__ZN31IGHardwarePerProcessPageTable3215initWithOptionsEP16IntelAcceleratorP11IGAccelTask": (0xbe, "7002d2e902245add7b5bca2f3c598f7a2122a1aa9753fa2838d486ad3460c106"),
+    "__ZN31IGHardwarePerProcessPageTable6415initWithOptionsEP16IntelAcceleratorP11IGAccelTask": (0x40, "3460b8dba11c7deb5f0c32b5eb5822290092ced82dd1d065d24be4b7ec6aa5fb"),
     "__ZN11IGAccelTask27releaseManagedPageTableListEv": (0x6e, "0087a143da10c4a5bd1efb713814ca5e18a990f5e4fea35b8d1da254ad45a75c"),
     "__ZN29IGHardwarePerProcessPageTable15synchronizeWithI25IGHardwareGlobalPageTableEEvPKT_RK14IGAddressRangeb": (0xa, "aafd66af2c321a1032ffdbaea51ef446e7df7cd4b20fe53e4fdf6af362acadb2"),
     "__ZN29IGHardwarePerProcessPageTable15synchronizeWithIS_EEvPKT_RK14IGAddressRangeb": (0x42, "09fcf7f1db075ec15752cef118f8cf28ef5ef334b4a1d48a899470e250d70a2c"),
@@ -507,6 +510,12 @@ def macho_inventory(path):
     display_table = value("__ZTV18IGAccelDisplayPipe")
     resource_table = value("__ZTV15IGAccelResource")
     map_table = value("__ZTV16IGAccelMemoryMap")
+    private_init = "__ZN29IGHardwarePerProcessPageTable15initWithOptionsEP16IntelAcceleratorP11IGAccelTaskj"
+    for method, call in (("__ZN31IGHardwarePerProcessPageTable3215initWithOptionsEP16IntelAcceleratorP11IGAccelTask", 0x11d4e),
+                         ("__ZN31IGHardwarePerProcessPageTable6415initWithOptionsEP16IntelAcceleratorP11IGAccelTask", 0xccf5)):
+        assert direct_branches(method, private_init) == [call], f"{path}: changed private page-table option initialization edge"
+    assert image[0x11d4c:0x11d4e] == bytes.fromhex("31 c9"), f"{path}: changed 32-bit per-entry synchronization option"
+    assert image[0xcce6:0xcceb] == bytes.fromhex("b9 01 00 00 00"), f"{path}: changed 64-bit descriptor synchronization option"
     for method, target, call in (
             ("__ZN15IGMemoryManager19newPageTableForTaskEP11IGAccelTask", "__ZN31IGHardwarePerProcessPageTable3211withOptionsEP16IntelAcceleratorP11IGAccelTask", 0xf8ff),
             ("__ZN15IGMemoryManager19newPageTableForTaskEP11IGAccelTask", "__ZN31IGHardwarePerProcessPageTable6411withOptionsEP16IntelAcceleratorP11IGAccelTask", 0xf90d),

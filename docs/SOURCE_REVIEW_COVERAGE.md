@@ -7,6 +7,12 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 synchronization feature provenance: complete common/32/64-bit page
+table initializers reviewed/pinned. 64-bit options=1 selects descriptor reuse;
+32-bit options=0 selects per-entry sync and ignores dummy-map statuses locally.
+Historical VF range crosses fixed reuse window, but actual shared-buffer
+requirements/current provisioning and safe dynamic-range reuse remain pending.
+
 2026-10-04 PPGTT synchronization/list release: six complete native wrapper/helper/
 read/list-release bodies reviewed/pinned. Per-entry failure silently ends void
 sync; descriptor branch uses a fixed 1 GiB range and ignores destination status.

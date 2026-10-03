@@ -6375,6 +6375,37 @@ release referenced table objects, revoke mappings or drain GPU users. That
 matches raw pointer storage locally, but table ownership/free ordering and
 callback admission must be proved elsewhere. No executable patch/runtime test.
 
+# Descriptor synchronization option has a concrete 64-bit constructor source
+
+Reviewed/pinned complete common per-process init (0x3a), 32-bit init (0xbe)
+and 64-bit init (0x40). Common init delegates to hardware-page-table base init,
+then stores task +0x20 and supplied options +0x28. The 32-bit initializer passes
+options 0; 64-bit passes 1. Thus normal 64-bit source/destination pairs meet
+the descriptor-sync branch condition reviewed above, not a speculative flag.
+Base initializer and actual task address-mode selection still need review.
+
+32-bit init clears four descriptor records and invokes virtual dummy mapping
++0x130 for manager ranges +0xa0/+0xb0/+0xc0 without testing their return values,
+then reports success. Those dummy-mapping callee bodies remain pending.
+64-bit init clears its root descriptor record and delegates to common init;
+that local body supplies no range-by-range failure propagation.
+
+Historical evidence only: archived ce166c8-runtime1/pre-reboot-live.log records
+the VF GGTT [0x5104000,+0xf9c06000] and proxy backing at 0x419aa000. The former
+crosses the fixed descriptor-share [0,1 GiB) window, and the latter is above
+it. This makes the fixed window a concrete compatibility review requirement,
+but does NOT establish current VF provisioning, that proxy backing must be
+copied to every user PPGTT, or a dynamically observed missing user mapping.
+Shared mapped-buffer clone/admission and descriptor granularity must be traced
+before rewriting the range. Do not simply disable PPGTT/64-bit contexts.
+No production/runtime/Host GPU mutation; native targeted checks pass.
+
+Checkpoint validation: full `tools/check-static.sh` completed with exit 0,
+diagnostics `/tmp/ngreen-static.NK1Ual`; the two existing TargetConditionals
+macro-redefinition warnings remain. Paired local Tahoe KC contract checks and
+`git diff --check` also pass. These are offline checks, not GPU/DMA safety proof.
+Remote branch still matched 573ef8a before this checkpoint was committed.
+
 # Mapping recovery frees other allocations and retries preparation
 
 Reviewed/pinned complete freeToPrepareMapping (0x260) and base
