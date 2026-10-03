@@ -27,6 +27,20 @@ enforce fault-before-panic and prohibit native/helper/backing side effects.
 
 ## Mapping getter provenance follow-up (offline)
 
+Maintenance action follow-up: complete Boot `_maintRequest` (0x290 bytes),
+including add and both active/passive remove branches, is locally pinned.
+Opcode 1 checks source workloop presence, selects the chain based on mode/
+checkForWork topology, finds/unlinks the source, calls source `setWorkLoop(NULL)`
+virtual `+0x128`, clears next virtual `+0x130`, releases the chain reference and
+marks loop restart. A source absent from its selected chain yields BadArgument
+without this detach sequence; no attached workloop yields success without
+removal. The complete XNU reference method was read too. Binding of this action
+in the actual workloop/control-gate initializer still requires proof, as do
+concrete overrides and caller removal-return handling. The already reviewed
+native scheduler cleanup does not check removal's return before releasing its
+own timer/set/mutex, so unconditional drain-before-free remains unproven.
+No runtime gate is relaxed by the successful-path detach order.
+
 Actual command action follow-up: complete Boot base IOCommandGate::runAction
 (0x280 bytes) and virtual `+0x1c8` are now locally pinned. It rejects null action
 or missing workloop, enters that workloop's `+0x180` gate, checks workloop-thread

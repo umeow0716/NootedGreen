@@ -7,6 +7,11 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 maintenance action follow-up: complete Boot/XNU _maintRequest
+reviewed; Boot body and detach/next-clear/release sequence pinned locally.
+Initializer binding/concrete types and unchecked native removal return remain
+open before any unconditional callback-drain claim.
+
 2026-10-04 actual command action follow-up: complete Boot runAction body/base
 virtual reviewed/pinned, including gated invocation, disabled sleep and teardown
 abort. Removal action, request result handling and concrete overrides remain

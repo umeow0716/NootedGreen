@@ -200,6 +200,7 @@ def check_boot_atomic(system, path):
     for name in (b"__ZTV10IOWorkLoop", b"__ZN10IOWorkLoop8openGateEv",
                  b"__ZTV13IOCommandGate", b"__ZN13IOCommandGate10runCommandEPvS0_S0_S0_",
                  b"__ZN13IOCommandGate9runActionEPFiP8OSObjectPvS2_S2_S2_ES2_S2_S2_S2_",
+                 b"__ZN10IOWorkLoop13_maintRequestEPvS0_S0_S0_",
                  b"__ZN10IOWorkLoop9closeGateEv",
                  b"__ZN10IOWorkLoop17removeEventSourceEP13IOEventSource"):
         symbols[name] = []
@@ -329,6 +330,16 @@ def check_boot_atomic(system, path):
         assert kernel_read(action + offset, len(bytes.fromhex(instruction))) == bytes.fromhex(instruction), \
             "changed command action gate/invocation/sleep instruction"
     print("PASS Boot KC command action gated invocation and disabled-gate sleep body")
+    maintenance = symbols[b"__ZN10IOWorkLoop13_maintRequestEPvS0_S0_S0_"][0]
+    assert hashlib.sha256(kernel_read(maintenance, 0x290)).hexdigest() == \
+        "c442e1b551f044431ce91ab6d9a0288f45de5571d4557c3817130109f5ece1fb", \
+        "changed workloop maintenance add/remove body"
+    for offset, instruction in ((0x236, "ff 90 28 01 00 00"),
+                                (0x244, "ff 90 30 01 00 00"),
+                                (0x250, "ff 50 28")):
+        assert kernel_read(maintenance + offset, len(bytes.fromhex(instruction))) == bytes.fromhex(instruction), \
+            "changed source detach/next-clear/release order"
+    print("PASS Boot KC maintenance removal detach and reference-release body")
     assert system[0x10132:0x10138] == bytes.fromhex("ff 25 60 40 01 00"), "changed atomic import stub"
     raw = struct.unpack_from("<Q", system, 0x24198)[0]
     assert (raw >> 30) & 3 == 0 and raw >> 63 == 0, "unexpected atomic import cache level/auth"
