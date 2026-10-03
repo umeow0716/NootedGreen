@@ -43,6 +43,25 @@ consistency. No registry property was changed on the guest or host.
 
 ## V266 validate packet backing bounds before registration (offline)
 
+Mapping lifetime follow-up: the separate task method
+`releaseStampAndScratchPages` performs two reference releases and clears task
+`+0x280/+0x288`; it does not directly invoke GPU mapping teardown. The mapped
+buffer's `free` calls imported `IOAccelMemoryMap::finishEvent`, mapping virtual
+`+0x140` (external relocation to `IOAccelMemoryMap::complete`), then releases
+and clears buffer `+0x30`. These names do not prove GuC/GPU completion and do
+not replace acknowledged context deregistration. Both payloads now pin these
+relocations and teardown anchors.
+
+`IGSharedMappedBuffer::free` first calls the imported system-memory CPU unlock
+and clears `+0x38`, then dispatches to mapped-buffer free. Its separate
+`unlockForCPUAccess` method performs that same CPU unlock and clears `+0x38`
+without a GPU mapping-complete call. Thus retaining the shared buffer is not
+proof that its CPU mapping remains available: explicit unlock must be excluded
+or synchronized for all active context/stamp users. A direct-call scan found
+no calls to these methods in the pinned text, which does not exclude virtual,
+inherited, or external callers. That reachability/lifetime obligation remains
+open. No new suppressing route or guessed idle signal has been added.
+
 Retaining a buffer does not prove an encoded destination lies within it.
 The native packet path uses signed stamp index at ring `+0x38`, a 64-byte
 slot stride and an eight-byte scratch post-sync store. Direct attach previously

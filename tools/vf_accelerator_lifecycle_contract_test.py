@@ -63,6 +63,7 @@ TASK_STAMP_GPU_ADDRESS = "__ZNK11IGAccelTask25getStampGPUVirtualAddressEv"
 TASK_STAMPS = "__ZNK11IGAccelTask9getStampsEv"
 TASK_INIT_STAMPS = "__ZN11IGAccelTask24initStampAndScratchPagesEv"
 TASK_FREE = "__ZN11IGAccelTask4freeEv"
+TASK_RELEASE_STAMPS = "__ZN11IGAccelTask27releaseStampAndScratchPagesEv"
 TASK_RELEASE = "__ZNK11IGAccelTask7releaseEv"
 CONTEXT_NOTIFY_COMPLETE = "__ZN17IGHardwareContext14notifyCompleteEP12IOAccelEvent"
 FIFO_NOTIFY_COMPLETE = "__ZN18IGAccelFIFOChannel14notifyCompleteEP12IOAccelEvent"
@@ -88,6 +89,12 @@ SYS_MEMORY_FACTORY = "__ZN16IOAccelSysMemory11withOptionsEP22IOGraphicsAccelerat
 PREPARE_MAPPING = "__ZN22IOGraphicsAccelerator220freeToPrepareMappingEP16IOAccelMemoryMap"
 POPULATE_ACCEL_CONFIG = "__ZN16IntelAccelerator19populateAccelConfigEP13IOAccelConfig"
 MAPPED_BUFFER_MAPPING_OPTIONS = "__ZNK14IGMappedBuffer17getMappingOptionsEv"
+MAPPED_BUFFER_FREE = "__ZN14IGMappedBuffer4freeEv"
+SHARED_BUFFER_FREE = "__ZN20IGSharedMappedBuffer4freeEv"
+SHARED_BUFFER_UNLOCK = "__ZN20IGSharedMappedBuffer18unlockForCPUAccessEv"
+MEMORY_MAP_COMPLETE = "__ZN16IOAccelMemoryMap8completeEv"
+MEMORY_MAP_FINISH_EVENT = "__ZN16IOAccelMemoryMap11finishEventEv"
+SYS_MEMORY_UNLOCK = "__ZN16IOAccelSysMemory18unlockForCPUAccessEP4task"
 SHARED_BUFFER_CLONE = "__ZN20IGSharedMappedBuffer11cloneInTaskEP11IGAccelTask"
 SHARED_BUFFER_FACTORY = "__ZN20IGSharedMappedBuffer11withOptionsEP11IGAccelTaskmjj"
 SCHEDULER4_BIND = "__ZN12IGScheduler44bindE10IGHwCsTypeih"
@@ -633,6 +640,14 @@ def macho_inventory(path):
         mapping_slot: (MEMORY_MAP_GPU_ADDRESS, (0, 3, 1, 0)),
         mapping_init + 0x71: (SYS_MEMORY_FACTORY, (1, 2, 1, 2)),
         mapping_init + 0xca: (PREPARE_MAPPING, (1, 2, 1, 2)),
+        value(MEMORY_MAP_VTABLE) + 16 + 0x140:
+            (MEMORY_MAP_COMPLETE, (0, 3, 1, 0)),
+        value(MAPPED_BUFFER_FREE) + 0x13:
+            (MEMORY_MAP_FINISH_EVENT, (1, 2, 1, 2)),
+        value(SHARED_BUFFER_FREE) + 0x23:
+            (SYS_MEMORY_UNLOCK, (1, 2, 1, 2)),
+        value(SHARED_BUFFER_UNLOCK) + 0x1c:
+            (SYS_MEMORY_UNLOCK, (1, 2, 1, 2)),
     }
     observed_mapping_relocations = {address: [] for address in expected_mapping_relocations}
     for index in range(external_count):
@@ -646,6 +661,26 @@ def macho_inventory(path):
             raise AssertionError(f"{path}: mapping provenance relocation {address:#x} changed")
     if struct.unpack_from("<Q", image, mapping_slot)[0] != 0:
         raise AssertionError(f"{path}: inherited mapping getter unexpectedly resolved")
+    free_start = value(MAPPED_BUFFER_FREE)
+    free_body = image[free_start:next_symbol(free_start)]
+    for anchor in ("48 8b 7b 30 48 8b 07 ff 90 40 01 00 00",
+                   "ff 50 28 48 c7 43 30 00 00 00 00"):
+        if free_body.count(bytes.fromhex(anchor)) != 1:
+            raise AssertionError(f"{path}: mapped-buffer mapping teardown changed")
+    # Explicit task cleanup only drops references, whereas CPU unlock clears
+    # its mapping even on a retained object. Neither is a GPU idle proof.
+    stamps_start = value(TASK_RELEASE_STAMPS)
+    stamps_body = image[stamps_start:next_symbol(stamps_start)]
+    if stamps_body.count(bytes.fromhex("ff 50 28")) != 2:
+        raise AssertionError(f"{path}: explicit task stamp cleanup releases changed")
+    for offset in (0x280, 0x288):
+        if stamps_body.count(b"\x48\xc7\x83" + struct.pack("<I", offset) + b"\0" * 4) != 1:
+            raise AssertionError(f"{path}: explicit task stamp cleanup {offset:#x} changed")
+    unlock_start = value(SHARED_BUFFER_UNLOCK)
+    unlock_body = image[unlock_start:next_symbol(unlock_start)]
+    if unlock_body.count(bytes.fromhex("48 c7 43 38 00 00 00 00")) != 1 or \
+            bytes.fromhex("ff 90 40 01 00 00") in unlock_body:
+        raise AssertionError(f"{path}: CPU unlock/GPU mapping distinction changed")
     mapping_body = image[mapping_init:next_symbol(mapping_init)]
     for anchor in ("ff 91 38 01 00 00", "ff 90 38 01 00 00",
                    "84 c0 74 2d 4c 89 7b 30 4c 89 73 10 4c 89 6b 18"):

@@ -42,6 +42,12 @@ The next delta pins the native `PPGTT` property/default and feature-bit
 assignment, plus the mapped-buffer mapping-options constant. The native map
 commit was traced to the task page-table list, but inherited allocation and
 option semantics remain open rather than inferred from the constant 7.
+Mapping teardown delta: explicit task stamp/scratch cleanup drops references;
+mapped-buffer free invokes inherited finishEvent/complete before mapping
+release. Shared-buffer explicit CPU unlock clears its CPU mapping independently
+of object retention. Relocations and teardown anchors are now pinned, but
+virtual/inherited unlock reachability is not certified and no hardware-idle
+claim follows from a method named complete.
 
 2026-10-04 ownership review delta: V263 fail-stops uncertain void descriptor
 detach, and V264 independently retains the actual DMA ring buffer in each
