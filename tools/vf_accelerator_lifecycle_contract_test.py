@@ -81,6 +81,11 @@ SCHEDULER4_CONTEXT_IDLE = "__ZNK12IGScheduler413isContextIdleEPK17IGHardwareCont
 GUC_KMD_CONTEXT_IDLE = "__ZN13IGHardwareGuC16isKmdContextIdleERK21SGfxContextDescriptor"
 SHARED_BUFFER_CPU_ADDRESS = "__ZNK20IGSharedMappedBuffer17getVirtualAddressEv"
 MAPPED_BUFFER_GPU_ADDRESS = "__ZNK14IGMappedBuffer20getGPUVirtualAddressEv"
+MEMORY_MAP_VTABLE = "__ZTV16IGAccelMemoryMap"
+MEMORY_MAP_GPU_ADDRESS = "__ZN16IOAccelMemoryMap20getGPUVirtualAddressEv"
+MAPPED_BUFFER_INIT = "__ZN14IGMappedBuffer15initWithOptionsEP11IGAccelTaskmbj"
+SYS_MEMORY_FACTORY = "__ZN16IOAccelSysMemory11withOptionsEP22IOGraphicsAccelerator2P4taskP14IOAccelShared2P16IOAccelResource2jy"
+PREPARE_MAPPING = "__ZN22IOGraphicsAccelerator220freeToPrepareMappingEP16IOAccelMemoryMap"
 SHARED_BUFFER_CLONE = "__ZN20IGSharedMappedBuffer11cloneInTaskEP11IGAccelTask"
 SHARED_BUFFER_FACTORY = "__ZN20IGSharedMappedBuffer11withOptionsEP11IGAccelTaskmjj"
 SCHEDULER4_BIND = "__ZN12IGScheduler44bindE10IGHwCsTypeih"
@@ -618,6 +623,32 @@ def macho_inventory(path):
     if merge_relocations != [(EVENT_MERGE, (0, 3, 1, 0))] or \
             struct.unpack_from("<Q", image, merge_slot)[0] != 0:
         raise AssertionError(f"{path}: ring notification mergeEvent virtual changed")
+    # The mapped-buffer getter delegates to an inherited mapping method. Its
+    # unresolved vtable word is NOT a GGTT address or proof of address space.
+    mapping_slot = value(MEMORY_MAP_VTABLE) + 16 + 0x128
+    mapping_init = value(MAPPED_BUFFER_INIT)
+    expected_mapping_relocations = {
+        mapping_slot: (MEMORY_MAP_GPU_ADDRESS, (0, 3, 1, 0)),
+        mapping_init + 0x71: (SYS_MEMORY_FACTORY, (1, 2, 1, 2)),
+        mapping_init + 0xca: (PREPARE_MAPPING, (1, 2, 1, 2)),
+    }
+    observed_mapping_relocations = {address: [] for address in expected_mapping_relocations}
+    for index in range(external_count):
+        address, bits = struct.unpack_from("<iI", image, external_offset + index * 8)
+        if address in observed_mapping_relocations:
+            observed_mapping_relocations[address].append((names[bits & 0xffffff],
+                ((bits >> 24) & 1, (bits >> 25) & 3,
+                 (bits >> 27) & 1, (bits >> 28) & 0xf)))
+    for address, expected in expected_mapping_relocations.items():
+        if observed_mapping_relocations[address] != [expected]:
+            raise AssertionError(f"{path}: mapping provenance relocation {address:#x} changed")
+    if struct.unpack_from("<Q", image, mapping_slot)[0] != 0:
+        raise AssertionError(f"{path}: inherited mapping getter unexpectedly resolved")
+    mapping_body = image[mapping_init:next_symbol(mapping_init)]
+    for anchor in ("ff 91 38 01 00 00", "ff 90 38 01 00 00",
+                   "84 c0 74 2d 4c 89 7b 30 4c 89 73 10 4c 89 6b 18"):
+        if mapping_body.count(bytes.fromhex(anchor)) != 1:
+            raise AssertionError(f"{path}: mapping admission/publication contract changed")
     ring_notify_start = value(RING_NOTIFY_COMPLETE)
     ring_notify_body = image[ring_notify_start:next_symbol(ring_notify_start)]
     for anchor in (bytes.fromhex("83 7f 38 00 78 30"),

@@ -32,6 +32,13 @@ sources returns the current count to 1,303; this does not close older coverage.
 
 ## Main project coverage
 
+2026-10-04 mapping provenance follow-up: both pinned payloads now have
+relocation contracts for the inherited GPU-address getter, system-memory
+factory and mapping-preparation fallback, plus mapping admission/publication
+anchors. These checks do not resolve the inherited IOAccel implementation or
+prove that packet flags select the mapping's actual address space. No runtime
+or mapping-lifetime certification is added.
+
 2026-10-04 ownership review delta: V263 fail-stops uncertain void descriptor
 detach, and V264 independently retains the actual DMA ring buffer in each
 direct GuC record through acknowledged deregistration and final reference

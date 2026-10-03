@@ -8,6 +8,25 @@ followed by i915 hangs and a host reboot. Keep `macos-tahoe-sriov` shut off unti
 corrected code passes the remaining offline review and every independently
 enforced containment precondition.
 
+## Mapping getter provenance follow-up (offline)
+
+Both pinned accelerator payloads resolve `IGAccelMemoryMap` vtable `+0x128`
+through an external unsigned 64-bit relocation to
+`IOAccelMemoryMap::getGPUVirtualAddress`. The mapped-buffer getter delegates
+to this slot; its unresolved zero word on disk is not a GPU address and does
+not establish GGTT versus PPGTT semantics.
+
+`IGMappedBuffer::initWithOptions(IGAccelTask*, size, bool, options)` calls the
+imported `IOAccelSysMemory::withOptions`, obtains a mapping through memory
+virtual `+0x138`, and checks mapping virtual `+0x138`. If that check fails,
+the imported `IOGraphicsAccelerator2::freeToPrepareMapping` must succeed
+before the mapping is published at buffer `+0x30`. This is an admission
+contract, not evidence that later explicit unmapping cannot invalidate it.
+The offline lifecycle test now pins these relocations and publication anchors
+for both payloads. Inherited IOAccel allocation/address semantics and their
+relationship to stamp packet address-space flags remain unproven; no DMA
+address rewrite, VM boot, or deployment is authorized by these checks.
+
 ## V266 validate packet backing bounds before registration (offline)
 
 Retaining a buffer does not prove an encoded destination lies within it.
