@@ -331,6 +331,9 @@ def macho_inventory(path):
         0x5657a: "_IOLockAlloc", 0x5663e: "_IOLockFree",
         0x37ce4: "__ZN10IOWorkLoop8workLoopEv", 0x37d58: "_IOMalloc",
         0x27ad5: "_PE_parse_boot_argn",
+        0x281b5: "__ZN15IORegistryEntry8fromPathEPKcPK15IORegistryPlanePcPiPS_",
+        0x281fe: "__ZN8OSNumber10withNumberEPKcj",
+        0x28191: "__ZN15OSMetaClassBase12safeMetaCastEPKS_PK11OSMetaClass",
         0x37d08: "__ZN22IOInterruptEventSource20interruptEventSourceEP8OSObjectPFvS1_PS_iEP9IOServicei",
         0x56549: "__ZN18IOTimerEventSource16timerEventSourceEP8OSObjectPFvS1_PS_E",
         0x5652e: "__ZN5OSSet12withCapacityEj", 0x564cb: "_memset",
@@ -442,6 +445,15 @@ def macho_inventory(path):
         f"{path}: changed private workloop clear before inherited cleanup"
     scheduler5_init = value("__ZN12IGScheduler519initWithAcceleratorEP22IOGraphicsAccelerator2")
     create = value("__ZN11IGScheduler6createEP16IntelAccelerator")
+    property_helper = value("__Z15utilGetPropertyIjET_P15IORegistryEntryPKcS0_")
+    assert next_symbol(property_helper) - property_helper == 0x18c and \
+        hashlib.sha256(image[property_helper:property_helper + 0x18c]).hexdigest() == \
+        "9da1339c8d7b6f93f71bf4020792fc4090572cca3bb9046120eb4dc617ef28af", \
+        f"{path}: changed reviewed numeric property helper including options override"
+    assert image[0x919be:0x919d4] == b"IODeviceTree:/options\0", \
+        f"{path}: changed late numeric property override path"
+    assert image[0x28216:0x28219] == bytes.fromhex("89 45 dc"), \
+        f"{path}: changed late options parsed-value overwrite"
     # Reviewed start subsection, not a claim of full accelerator-start review.
     assert hashlib.sha256(image[0x27a68:0x27b19]).hexdigest() == \
         "aa10449fd9fb97c083b7e98915901350999d241a9af78a7ef23a27bff90a7c5e", \

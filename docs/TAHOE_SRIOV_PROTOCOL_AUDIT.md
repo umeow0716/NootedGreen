@@ -27,6 +27,21 @@ enforce fault-before-panic and prohibit native/helper/backing side effects.
 
 ## Mapping getter provenance follow-up (offline)
 
+Late options override follow-up: complete utilGetProperty<unsigned int>
+0x18c body reviewed/pinned for both payloads. It obtains the requested
+registry property, distinguishes OSNumber/OSData using imported metaclass
+identities, and only when missing checks the Development dictionary. After
+that, it obtains IODeviceTree:/options and checks the same key there; OSData
+is passed to imported OSNumber::withNumber(const char *, 32), and a successful
+parse overwrites the earlier result before release/return. Thus accelerator
+GraphicsSchedulerSelect publication is not the final authority. Local fixtures
+pin full helper, path, overwrite and selected imported callees. Number/data
+virtual getter bodies and string-parser bounds remain pending; no assumption
+about NUL termination or accepted text syntax is justified yet. VF must also
+exclude or validate this late override before native start. This is a separate
+unresolved admission hole, not repaired by the firmware-disable guard. No
+runtime options state was inspected or changed in this offline turn.
+
 Firmware-disable scheduler override repair: reviewed native start subsection
 0x27a68..0x27b18, separately from the still-incomplete full start review. It
 loads GraphicsSchedulerSelect through an unreviewed property helper, accepts
