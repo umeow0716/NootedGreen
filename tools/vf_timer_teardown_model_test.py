@@ -39,6 +39,20 @@ def run(order, *, close_admission, drain):
     return unsafe, released
 
 
+def has_wait_cycle(owners, waiting):
+    edges = {actor: owners[lock] for actor, lock in waiting.items()
+             if lock in owners and owners[lock] != actor}
+    for start in edges:
+        seen = set()
+        actor = start
+        while actor in edges:
+            if actor in seen:
+                return True
+            seen.add(actor)
+            actor = edges[actor]
+    return False
+
+
 def main():
     # Only enforce each actor's local order; enumerate stop/producer/callback
     # interleavings rather than assuming cancel is last or a callback is idle.
@@ -59,8 +73,24 @@ def main():
         assert not unsafe, order
         successful_releases += released
     assert successful_releases > 0  # Avoid a vacuous never-release policy.
+    # Kernel evidence establishes timeout's gate-before-callback-mutex path,
+    # and removeEventSource delegates synchronously through a command gate.
+    # Model the proposed (NOT implemented) cleanup mutex-before-remove path.
+    owners = {"gate": "callback", "mutex": "cleanup"}
+    waiting = {"callback": "mutex", "cleanup": "gate"}
+    assert has_wait_cycle(owners, waiting)
+    # Consistent gate-first acquisition waits without a circular dependency.
+    assert not has_wait_cycle({"gate": "callback", "mutex": "callback"},
+                              {"cleanup": "gate"})
+    # Same-thread recursive gate entry is not this two-thread counterexample;
+    # but waiting for one's own callback completion is independently invalid.
+    owners["gate"] = "cleanup"
+    assert not has_wait_cycle(owners, waiting)
+    current_callback = "cleanup"
+    draining_actor = "cleanup"
+    assert current_callback == draining_actor  # Must defer, not wait on self.
     print(f"PASS: {len(orders)} abstract timer teardown orders; "
-          "cancel-only and admission-only counterexamples retained")
+          "cancel/admission-only, reversed-lock and self-drain counterexamples retained")
 
 
 if __name__ == "__main__":

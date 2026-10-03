@@ -346,6 +346,16 @@ def check_boot_atomic(system, path):
         assert instruction[0] == opcode and call + 5 + struct.unpack_from("<i", instruction, 1)[0] == symbols[target][0], \
             "changed workloop recursive gate mutex edge"
     print("PASS Boot KC recursive workloop gate and removal delegation bodies")
+    removal = symbols[b"__ZN10IOWorkLoop17removeEventSourceEP13IOEventSource"][0]
+    for offset, encoded in ((0x4, "48 89 f2"),
+                            (0x7, "48 8b 7f 20"),
+                            (0xe, "48 8b 80 c0 01 00 00"),
+                            (0x15, "be 01 00 00 00"),
+                            (0x20, "ff e0")):
+        expected = bytes.fromhex(encoded)
+        assert kernel_read(removal + offset, len(expected)) == expected, \
+            "changed synchronous remove delegation/operation selector"
+    print("PASS Boot KC removal delegates operation 1 and source to control gate")
     command = symbols[b"__ZN13IOCommandGate10runCommandEPvS0_S0_S0_"][0]
     assert kernel_read(command + 0x13, 11) == bytes.fromhex("48 8b 77 20 48 8b 80 c8 01 00 00"), \
         "changed command stored-action/runAction virtual dispatch"

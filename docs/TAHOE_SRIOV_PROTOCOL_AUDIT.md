@@ -27,6 +27,22 @@ enforce fault-before-panic and prohibit native/helper/backing side effects.
 
 ## Mapping getter provenance follow-up (offline)
 
+Removal lock-order follow-up: complete Boot removeEventSource 0x30,
+runCommand 0x30 and runAction 0x280 disassembly rechecked. Removal passes
+operation 1 and source to controlG+0x20 virtual +0x1c0, which dispatches the
+stored maintenance action through +0x1c8. runAction obtains workloop gate
+(+0x180) before action invocation and normally opens it (+0x178) afterward;
+unbound/disabled control gates have separate failure/sleep paths. This is
+synchronous delegation, not an asynchronous detach acknowledgement. Local
+paired-KC assertions now explicitly pin operation/source/controlG delegation.
+The abstract teardown model additionally detects the two-thread wait cycle
+gate-owner callback waiting on mutex / mutex-owner cleanup waiting on gate;
+consistent gate-first ownership has no such modeled cycle. Recursive same-
+thread gate acquisition is excluded from that cycle detector, but self-callback
+drain must still be deferred. No safe outer producer lifetime/admission contract
+is thereby proven; do not deploy a mutex-across-remove workaround. Paired KC
+and model tests pass; this fixture/model-only change has no production edits.
+
 Periodic synchronization follow-up: fully disassembled native enable 0x5689c
 (0x78), disable 0x56914 (0x64), callback 0x56688 (0x9c), and shared cleanup
 0x565a8 (0xe0). The three producers lock scheduler+0x440; enable/disable update
