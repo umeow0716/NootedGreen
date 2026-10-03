@@ -27,6 +27,17 @@ enforce fault-before-panic and prohibit native/helper/backing side effects.
 
 ## Mapping getter provenance follow-up (offline)
 
+Metaclass initializer follow-up: the complete unnamed initializer immediately
+after the separately bounded allocator was read and pinned as a 0x70-byte
+window. It passes gMetaClass/name/superclass/size 0x50 to the metaclass
+constructor, conditionally creates allocation metadata, then unconditionally
+writes the declared IOCommandGate metaclass vtable address point into
+gMetaClass. Exact RIP-relative vtable address and destination are checked.
+This explains the on-disk zero vptr; it does not prove execution/registration
+of the initializer or driver-specific workloop construction. Generic metaclass
+constructor/registration semantics and concrete driver lifecycle remain open.
+Runtime hold and unchecked removal-failure concern are unchanged.
+
 Control-gate metaclass reference follow-up: workloop init's RIP-relative load
 resolves to `IOCommandGate::gMetaClass`; the declared metaclass vtable `+0x88`
 resolves to the reviewed base allocator. Both identities are locally pinned.

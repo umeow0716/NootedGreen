@@ -398,6 +398,22 @@ def check_boot_atomic(system, path):
     assert struct.unpack("<Q", kernel_read(symbols[b"__ZTVN13IOCommandGate9MetaClassE"][0] + 16 + 0x88, 8))[0] == allocator, \
         "changed command-gate metaclass allocator virtual"
     print("PASS Boot KC control-gate metaclass reference and allocator identity (runtime init pending)")
+    # Unnamed metaclass initializer follows the allocator's separate window.
+    initializer = allocator + 0x80
+    assert hashlib.sha256(kernel_read(initializer, 0x70)).hexdigest() == \
+        "2d431a9f495d3d9cd94bd4af3c6e6840f7cc0f6b45063ddda97fe1a057f64da2", \
+        "changed command-gate metaclass initializer window"
+    lea = initializer + 0x51
+    instruction = kernel_read(lea, 7)
+    assert instruction[:3] == bytes.fromhex("48 8d 05") and \
+        lea + 7 + struct.unpack_from("<i", instruction, 3)[0] == symbols[b"__ZTVN13IOCommandGate9MetaClassE"][0] + 16, \
+        "changed metaclass initializer vtable address"
+    write = initializer + 0x58
+    instruction = kernel_read(write, 7)
+    assert instruction[:3] == bytes.fromhex("48 89 05") and \
+        write + 7 + struct.unpack_from("<i", instruction, 3)[0] == metaclass, \
+        "changed metaclass initializer vptr store"
+    print("PASS Boot KC metaclass initializer writes the declared allocator vtable")
     assert system[0x10132:0x10138] == bytes.fromhex("ff 25 60 40 01 00"), "changed atomic import stub"
     raw = struct.unpack_from("<Q", system, 0x24198)[0]
     assert (raw >> 30) & 3 == 0 and raw >> 63 == 0, "unexpected atomic import cache level/auth"

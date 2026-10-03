@@ -7,6 +7,10 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 metaclass initializer follow-up: complete unnamed Boot initializer
+window reviewed/pinned, including exact vtable source/gMetaClass destination.
+Initializer execution/registration and concrete driver lifecycle remain pending.
+
 2026-10-04 metaclass reference follow-up: actual workloop init RIP load and
 declared metaclass allocator virtual resolved/pinned locally. gMetaClass vptr
 is zero on disk and initialized at runtime; constructor path remains pending,
