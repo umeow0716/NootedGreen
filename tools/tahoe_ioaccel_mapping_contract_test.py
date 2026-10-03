@@ -35,6 +35,8 @@ EVENT_DISABLE_STAMP_LOCKED = "__ZN20IOAccelEventMachine223disable_stamp_interrup
 EVENT_ENABLE_STAMP = "__ZN20IOAccelEventMachine220enableStampInterruptEi"
 EVENT_DISABLE_STAMP = "__ZN20IOAccelEventMachine221disableStampInterruptEi"
 EVENT_OWNER_BODIES = {
+    "__ZN22IOGraphicsAccelerator218createIODMACommandEv": (0x40, "0920711193b7b044fc0fb1f6a5a4573c0b700d29590e8c00a458b123b450e029"),
+    "__ZN22IOGraphicsAccelerator213getDMACommandEv": (0xe0, "14a72d0e573be42b52cb1566b6d1bd91d37b1ef24c267d0e590049823f8a29c7"),
     "__ZN16IOAccelSysMemory6unwireEv": (0x1f8, "0bbd5ebb7b4eb2c05d75d4fda2724cc64fe4dafa62522bd70b1ed44cf34ab8f4"),
     "__ZN16IOAccelMemoryMap11release_pteEv": (0x80, "196496fd09cb82e3766f01773b04d43e56c02beb84b067f28dc0c8af136d02db"),
     "__ZN22IOGraphicsAccelerator216returnDMACommandEP12IODMACommand": (0xa6, "27835686c339a4aec379c879beead7dfc5f89893e4518a009ee0c0f6e3315587"),
@@ -271,6 +273,7 @@ def check_boot_atomic(system, path):
     symbols[b"__ZN18IOTimerEventSource11setWorkLoopEP10IOWorkLoop"] = []
     symbols[b"__ZTV8OSObject"] = []
     for name in (b"__ZTV12IODMACommand", b"__ZTV25IOGeneralMemoryDescriptor",
+                 b"__ZN12IODMACommand17withSpecificationEPFbPS_NS_9Segment64EPvjEhyNS_14MappingOptionsEyjP8IOMapperS2_",
                  b"__ZN12IODMACommand19setMemoryDescriptorEPK18IOMemoryDescriptorb",
                  b"__ZNK25IOGeneralMemoryDescriptor19dmaCommandOperationEjPvj",
                  b"__ZN12IODMACommand7walkAllEj", b"_upl_abort_range",
@@ -332,6 +335,7 @@ def check_boot_atomic(system, path):
     assert kernel_read(descriptor_operation + 0x165, 6) == bytes.fromhex("66 f0 0f c1 47 34"), "changed descriptor active-DMA atomic increment"
     assert kernel_read(descriptor_operation + 0x215, 5) == bytes.fromhex("66 f0 ff 4f 34"), "changed descriptor active-DMA atomic decrement"
     for method, length, digest in (
+            (b"__ZN12IODMACommand17withSpecificationEPFbPS_NS_9Segment64EPvjEhyNS_14MappingOptionsEyjP8IOMapperS2_", 0x90, "d8d6abfba6270076a9f8e81f874592f600c9c0d75862ef3abb1cd55475de2453"),
             (b"__ZN12IODMACommand19setMemoryDescriptorEPK18IOMemoryDescriptorb", 0x1d0, "c3f7554a7c9a6dbb4357bccb00a3de4d2fa3d640fdfd141e5e92dace59cabee6"),
             (b"__ZN25IOGeneralMemoryDescriptor8completeEj", 0x3a0, "05696feca129a66a231bfdffc6173151ae05db56d52377b7b551f452c1bc06f1"),
             (b"__ZN12IODMACommand7walkAllEj", 0x380, "21f231d75f108aab5a00af400fa56e8dc64a47ba29119f6f1fdd37629537adda"),
@@ -339,6 +343,11 @@ def check_boot_atomic(system, path):
             (b"__ZN12IODMACommand8completeEbb", 0x230, "7862d56c7f676b693648cda13d9973549ed700b71e093af739244d0dbae6edca")):
         assert hashlib.sha256(kernel_read(symbols[method][0], length)).hexdigest() == digest, "changed base DMA-command cleanup body"
     dma_complete = symbols[b"__ZN12IODMACommand8completeEbb"][0]
+    dma_factory_name = b"__ZN12IODMACommand17withSpecificationEPFbPS_NS_9Segment64EPvjEhyNS_14MappingOptionsEyjP8IOMapperS2_"
+    assert system[0x10072:0x10078] == bytes.fromhex("ff 25 20 40 01 00"), "changed accelerator DMA factory import stub"
+    raw_dma_factory = struct.unpack_from("<Q", system, 0x24098)[0]
+    assert raw_dma_factory >> 63 == 0 and (raw_dma_factory >> 30) & 3 == 0, "changed DMA factory cache level/auth"
+    assert bases[0] + (raw_dma_factory & 0x3fffffff) == symbols[dma_factory_name][0], "changed accelerator DMA factory imported identity"
     dma_set = symbols[b"__ZN12IODMACommand19setMemoryDescriptorEPK18IOMemoryDescriptorb"][0]
     assert kernel_read(dma_set + 0x1a0, 5) == bytes.fromhex("be 01 00 00 03"), "changed DMA descriptor registration operation"
     assert kernel_read(dma_set + 0x1b0, 5) == bytes.fromhex("45 84 f6 75 aa"), "changed DMA registration ignored-result/autoprepare edge"

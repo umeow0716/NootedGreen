@@ -844,3 +844,9 @@ Established flagged 03000001/03000000 registration pairing with ignored
 operation results and prepare-failure forced-clear order. Runtime subclasses,
 prepare failure semantics, creator options and concurrency remain unproven.
 No GPU retirement inference or production fix is made from ignored errors.
+# Latest base DMA factory checkpoint
+
+Reviewed/pinned base accelerator create/getDMACommand, exact imported Boot
+withSpecification overload and cross-KC import resolution. Mapped-mode/64-bit
+factory arguments are resolved; loaded globals, metaclass/init implementation,
+effective Intel factory/pool construction and runtime receivers remain pending.

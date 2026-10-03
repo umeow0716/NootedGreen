@@ -5930,3 +5930,27 @@ Local base pairing is now established; concrete runtime subclasses, prepare
 callee failure behavior, count-overflow/concurrent mutation and Intel creator
 options remain pending. This registration count is not GPU execution/retirement.
 Paired-KC targeted checks pass; no production or runtime mutation.
+# Base accelerator DMA-command factory/pool follow-up
+
+Reviewed/pinned complete base createIODMACommand (0x40) and getDMACommand
+(0xe0). Creation requires accelerator flag +0xcec bit 6. Its imported
+withSpecification overload uses 64-bit addressing, mapping-options value 0,
+zero max-transfer parameter, alignment 1, null mapper/refcon, and separately
+loaded output callback/max-segment global values. The SDK defines mapped
+mode/default system mapper; loaded globals and runtime effective options
+still require provenance, so do not infer a VF bypass or a fixed max segment.
+
+System stub 0x10072 and chained cell 0x24098 resolve to BootKC's exact
+withSpecification overload. Its complete 0x90 body allocates through a
+metaclass virtual, invokes initWithSpecification +0x120 with forwarded
+arguments, releases on failed initialization and returns null. The metaclass
+allocator/init body is not newly certified here. The other SegmentOptions
+overload was inspected but is not this imported path or newly test-pinned.
+
+getDMACommand requires the same feature flag, takes an imported lock wrapper,
+removes/validates a pooled command and updates count, or obtains one from
+command pool +0xa10 virtual +0x118 when the list is empty. Missing pool yields
+null. Concrete Intel accelerator factory override, pool construction,
+allocation virtual and command receiver identity remain pending; these base
+bodies alone do not establish which receiver is used at runtime. Targeted
+paired-KC checks pass; no runtime/production mutation.
