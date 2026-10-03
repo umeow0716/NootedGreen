@@ -47,6 +47,9 @@ SCHEDULER4_CLEANUP_PRIVATE = "__ZN12IGScheduler424cleanupSharedPrivateDataEP17IG
 GUC_ATTACH_DESC = "__ZN13IGHardwareGuC29AttachContextDescToGucContextERK21SGfxContextDescriptor"
 GUC_DETACH_DESC = "__ZN13IGHardwareGuC31DetachContextDescFromGucContextERK21SGfxContextDescriptor"
 GUC_INVALIDATE_TLB = "__ZN13IGHardwareGuC13invalidateTLBEv"
+CONTEXT_FREE = "__ZN17IGHardwareContext4freeEv"
+SCHEDULER4_BIND = "__ZN12IGScheduler44bindE10IGHwCsTypeih"
+SCHEDULER4_UNBIND = "__ZN12IGScheduler46unbindEP17IGHardwareContext"
 GET_DEFAULT_RESET = "__ZN16IntelAccelerator20getDefaultResetValueEj"
 TRACE_DISABLE = "__ZN25IGAccelTraceStreamManager17disableCollectionE27TraceStreamCollectionChange"
 TRACE_SHUTDOWN = "__ZN25IGAccelTraceStreamManager8shutdownEv"
@@ -479,7 +482,7 @@ def macho_inventory(path):
             raise AssertionError(
                 f"{path}: physical engine-reset {label} inventory changed")
 
-    # Ring shared-private lifecycle reaches routed GuC descriptor operations,
+    # Context shared-private lifecycle reaches routed GuC descriptor operations,
     # not the similarly named IGGuC shared-private allocation methods. Cleanup
     # invalidates translations before detaching the descriptor.
     if len(direct_branches(SCHEDULER4_INIT_PRIVATE, GUC_ATTACH_DESC)) != 1:
@@ -489,6 +492,23 @@ def macho_inventory(path):
     if len(invalidate_edges) != 1 or len(detach_edges) != 1 or \
             invalidate_edges[0] >= detach_edges[0]:
         raise AssertionError(f"{path}: shared-private invalidate/detach order changed")
+    for slot, target in ((0x138, SCHEDULER4_CLEANUP_PRIVATE),
+                         (0x1c8, SCHEDULER4_BIND),
+                         (0x1d8, SCHEDULER4_UNBIND)):
+        if struct.unpack_from("<Q", image,
+                              value(SCHEDULER4_VTABLE) + 16 + slot)[0] != value(target):
+            raise AssertionError(f"{path}: context/ring ownership slot {slot:#x} changed")
+    context_free_start = value(CONTEXT_FREE)
+    context_free_body = image[context_free_start:next_symbol(context_free_start)]
+    ownership_anchors = (
+        bytes.fromhex("ff 90 38 01 00 00"),
+        bytes.fromhex("48 8b bb a8 00 00 00"),
+        bytes.fromhex("48 8b b3 98 00 00 00"),
+        bytes.fromhex("48 8b 7b 58"))
+    if [context_free_body.count(anchor) for anchor in ownership_anchors] != [1, 1, 2, 1] or \
+            [context_free_body.index(anchor) for anchor in ownership_anchors] != sorted(
+                context_free_body.index(anchor) for anchor in ownership_anchors):
+        raise AssertionError(f"{path}: context detach/ring/image/task teardown order changed")
 
     # Normal producer backpressure polls shared context head/stamp memory.
     # Keep its timeout diagnostic behind the already isolated entry rather
@@ -1222,6 +1242,19 @@ def source_contract(path):
     attach = function_body(source, "bool Gen11::vfAttachContextDesc(void *that, const uint32_t *descriptor)")
     if "!gVfUsesMemoryIrq ||" not in attach or "vfPrepareContextMemoryIrq(" not in attach:
         raise AssertionError(f"{path}: LRCA memory-IRQ mutation is not capability-gated")
+    detach = function_body(source, "void Gen11::vfDetachContextDesc(void *that, const uint32_t *descriptor)")
+    for reason in (
+            "VF detach without valid context bookkeeping",
+            "invalid VF context identity before detach",
+            "context retirement without pinned H2G queue",
+            "duplicate final context detach",
+            "VF detach descriptor/backing identity mismatch",
+            "VF detach has no direct GuC context record",
+            "GuC context teardown timeout"):
+        fault = 'vfMarkProtocolFault("' + reason + '");'
+        following = detach[detach.index(fault) + len(fault):].lstrip()
+        if not following.startswith('PANIC_COND(true, "ngreen",'):
+            raise AssertionError(f"{path}: unsafe void detach can return after {reason}")
 
     drain = function_body(
         source, "bool Gen11::vfDrainGuCToHost(void *that, IOInterruptEventSource *source,")

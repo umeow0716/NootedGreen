@@ -1,12 +1,41 @@
 # Tahoe SR-IOV protocol audit — in progress
 
 Updated: 2026-10-04. The last dynamic source baseline is `ce166c8`; the latest
-completed offline-reviewed checkpoint is V262 reset/replay isolation on
+completed offline-reviewed checkpoint is V263 context-teardown fail-stop on
 `codex/tahoe-sriov-vf`. This is NOT a boot-test candidate or a successful
 driver baseline. The `ce166c8` run produced repeatable host PF DMAR faults
 followed by i915 hangs and a host reboot. Keep `macos-tahoe-sriov` shut off until the
 corrected code passes the remaining offline review and every independently
 enforced containment precondition.
+
+## V263 context teardown DMA backing boundary (offline)
+
+The Scheduler4 vtable distinguishes context cleanup at `+0x138` from ring
+`bind` at `+0x1c8` and `unbind` at `+0x1d8`. The latter is an exact no-op in
+the pinned payload. Context `free` invokes shared-private cleanup before
+releasing its ring (`+0xa8`), context image (`+0x98`) and task (`+0x58`), in
+that order. The lifecycle contract now pins the slots and destructor anchors.
+Earlier ring-init/free working notes must not equate bind/unbind with
+descriptor attach/detach.
+
+This ordering exposed a real failure-path gap: `vfDetachContextDesc` retained
+only the context image on uncertain or timed-out retirement, then returned
+through a void ABI. Native teardown could still release ring and task/stamp
+allocations while GuC might retain their addresses. Image quarantine alone
+does not establish safety for that graph. V263 now marks the protocol fault
+and fail-stops the guest at all seven previously returning uncertainty sites:
+missing bookkeeping, invalid identity, unavailable queue, duplicate final
+detach, mismatched backing, untracked record and incomplete disable/deregister.
+Existing post-shutdown assertions and successful retirement remain unchanged;
+PF behavior and route inventory are unchanged.
+
+This is a destructor safety boundary, not GPU reset, DMA cancellation or a
+successful hardware-acceleration baseline. A guest panic cannot guarantee host
+PF safety or undo already issued DMA. Independent host containment remains
+mandatory; VM start and deployment remain prohibited. Partial initialization,
+the special task-retain paths, and global DMA quiescence remain under review.
+Both focused payload contracts and the complete offline suite passed on
+2026-10-04 (`/tmp/ngreen-static.3k1coR`). CI and runtime validation are separate.
 
 ## V262 VF physical reset/replay exclusion (offline)
 

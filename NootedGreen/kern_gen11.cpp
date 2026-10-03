@@ -4752,6 +4752,10 @@ bool Gen11::vfAttachContextDesc(void *that, const uint32_t *descriptor) {
 }
 
 void Gen11::vfDetachContextDesc(void *that, const uint32_t *descriptor) {
+	// V263: this void hook runs before native context free releases the ring,
+	// context image and task/stamps. Pinning only the image cannot protect the
+	// other GPU-referenced allocations. Any unproven retirement must fail-stop
+	// the guest before returning into that destructor; it is not DMA recovery.
 	VfContextOperationGuard operationGuard;
 	const bool postShutdown = !operationGuard;
 	OSObject *contextBacking = nullptr;
@@ -4765,10 +4769,11 @@ void Gen11::vfDetachContextDesc(void *that, const uint32_t *descriptor) {
 	if (!that || !descriptor || !gVfGGTTReady || !gVfContextLock || !gVfContexts) {
 		// A void caller will proceed with hardware-context destruction. Even if
 		// bookkeeping itself is missing, retain any discoverable image before
-		// returning so late GuC DMA cannot target freed memory.
+		// fail-stop; the image retain alone does not protect the other backing.
 		if (contextBacking)
 			contextBacking->retain();
 		vfMarkProtocolFault("VF detach without valid context bookkeeping");
+		PANIC_COND(true, "ngreen", "VF detach cannot prove DMA backing retirement");
 		return;
 	}
 	PANIC_COND(postShutdown && !vfWaitForContextShutdown(that), "ngreen",
@@ -4788,10 +4793,12 @@ void Gen11::vfDetachContextDesc(void *that, const uint32_t *descriptor) {
 		// Detach is void, so its caller cannot observe failure and will continue
 		// destroying the hardware context. If any backing object is still
 		// discoverable, quarantine it before returning: malformed identity must
-		// never turn into a DMA use-after-free.
+		// never turn into a DMA use-after-free. Fail-stop also protects ring/task
+		// backing that would otherwise be released by the native destructor.
 		if (contextBacking)
 			contextBacking->retain();
 		vfMarkProtocolFault("invalid VF context identity before detach");
+		PANIC_COND(true, "ngreen", "Invalid VF detach cannot release DMA backing");
 		return;
 	}
 	if (postShutdown) {
@@ -4838,6 +4845,7 @@ void Gen11::vfDetachContextDesc(void *that, const uint32_t *descriptor) {
 		// the void native teardown releases it.
 		contextBacking->retain();
 		vfMarkProtocolFault("context retirement without pinned H2G queue");
+		PANIC_COND(true, "ngreen", "VF detach has no pinned retirement transport");
 		return;
 	}
 	IOInterruptState interruptState =
@@ -4856,6 +4864,7 @@ void Gen11::vfDetachContextDesc(void *that, const uint32_t *descriptor) {
 		} else if (!entry.refCount) {
 			IOSimpleLockUnlockEnableInterrupt(gVfContextLock, interruptState);
 			vfMarkProtocolFault("duplicate final context detach");
+			PANIC_COND(true, "ngreen", "Duplicate VF detach cannot prove DMA retirement");
 			return;
 		} else if (entry.refCount > 1) {
 			entry.refCount--;
@@ -4888,17 +4897,19 @@ void Gen11::vfDetachContextDesc(void *that, const uint32_t *descriptor) {
 		// return a teardown failure to its owner.
 		contextBacking->retain();
 		vfMarkProtocolFault("VF detach descriptor/backing identity mismatch");
+		PANIC_COND(true, "ngreen", "Mismatched VF detach cannot release DMA backing");
 		return;
 	}
 
 	if (slot < 0) {
 		// No fallback bookkeeping can prove that an untracked direct GuC
 		// registration disappeared. Pin this backing for the rest of the boot
-		// before caller destruction.
+		// before fail-stopping caller destruction.
 		contextBacking->retain();
 		SYSLOG("ngreen", "V237: quarantined untracked detach LRCA=%08x:%08x backing=%p",
 		       descriptorHi, descriptorLo, contextBacking);
 		vfMarkProtocolFault("VF detach has no direct GuC context record");
+		PANIC_COND(true, "ngreen", "Untracked VF detach cannot release DMA backing");
 		return;
 	}
 
@@ -4974,13 +4985,14 @@ void Gen11::vfDetachContextDesc(void *that, const uint32_t *descriptor) {
 		SYSLOG("ngreen", "V231: context teardown incomplete id=%u disabled=%d deregistered=%d fence=%u",
 		       gucId, disabled, deregistered, transportFence);
 		vfMarkProtocolFault("GuC context teardown timeout");
+		PANIC_COND(true, "ngreen", "VF context DMA retirement did not complete");
 	} else if (gVfContextLifecycleLogs++ < 64) {
 		SYSLOG("ngreen", "V230: deregistered GuC context id=%u LRCA=0x%08x",
 		       gucId, lrcaPage);
 	}
-	// The retained IGMappedBuffer reference above is the safety boundary: if
-	// GuC teardown timed out, the LRCA pages and GGTT mapping remain pinned and
-	// this GuC ID is quarantined. A completed deregistration is sufficient to
+	// Failure above cannot return into native ring/image/task destruction.
+	// The retained image also pins the direct record until acknowledged teardown.
+	// A completed deregistration is sufficient to
 	// retire the direct record because no VF legacy proxy/hash entry exists.
 	if (deregistered)
 		vfReleaseRetiredContextBacking(gucId);
