@@ -427,6 +427,18 @@ def check_boot_atomic(system, path):
         "changed accelerator workloop construction call"
     assert system[call + 5:call + 12] == bytes.fromhex("49 89 86 f0 00 00 00"), "changed accelerator workloop store"
     print("PASS paired KC accelerator workloop factory import and field store (full lifecycle pending)")
+    factory = symbols[b"__ZN10IOWorkLoop8workLoopEv"][0]
+    assert hashlib.sha256(kernel_read(factory, 0xb0)).hexdigest() == \
+        "f29215957d359f5d3c645b2752a35c06301834d22c2755190eb0e9e8f9709284", \
+        "changed reviewed workloop factory body"
+    lea = factory + 0x54
+    instruction = kernel_read(lea, 7)
+    assert instruction[:3] == bytes.fromhex("48 8d 05") and \
+        lea + 7 + struct.unpack_from("<i", instruction, 3)[0] == workloop_table + 16, \
+        "workloop factory no longer installs base vtable"
+    assert kernel_read(factory + 0x8d, 6) == bytes.fromhex("ff 90 88 00 00 00"), "changed workloop init dispatch"
+    assert kernel_read(factory + 0x9d, 5) == bytes.fromhex("ff 50 28 31 db"), "changed failed workloop init release/null result"
+    print("PASS Boot KC concrete base workloop factory and failed-init cleanup")
     assert system[0x10132:0x10138] == bytes.fromhex("ff 25 60 40 01 00"), "changed atomic import stub"
     raw = struct.unpack_from("<Q", system, 0x24198)[0]
     assert (raw >> 30) & 3 == 0 and raw >> 63 == 0, "unexpected atomic import cache level/auth"

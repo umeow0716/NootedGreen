@@ -27,6 +27,18 @@ enforce fault-before-panic and prohibit native/helper/backing side effects.
 
 ## Mapping getter provenance follow-up (offline)
 
+Actual accelerator workloop factory follow-up: complete Boot workLoop factory
+(0xb0 bytes) was read and locally pinned. It allocates an object, initializes
+reference count to 1, installs the base IOWorkLoop vtable, updates metaclass
+accounting, then invokes base effective init virtual `+0x88`. If init fails,
+it releases the object and returns null; success returns the initial reference.
+The factory vtable LEA, init dispatch and failure release/null instructions
+are checked. Combined with the paired import/store and actual getter evidence,
+this proves the reviewed start construction site uses a base workloop, not a
+guessed subclass. It does not prove no later field replacement, successful
+attachment/removal or safe owner teardown. Complete accelerator start/stop and
+stop-block control flow remain pending before applying this to lifetime safety.
+
 Accelerator workloop construction candidate: typed disassembly of inherited
 start identifies call `0x14ba02c7` through System KC import `0x10138`, followed
 by storing its result at accelerator `+0xf0` and a null-result failure branch.

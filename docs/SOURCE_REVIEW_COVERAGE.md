@@ -7,6 +7,10 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 workloop factory body follow-up: complete Boot factory reviewed and
+locally pinned with base vtable, init and failed-init release/null result.
+Actual construction-site type resolved; whole accelerator lifecycle pending.
+
 2026-10-04 accelerator workloop factory provenance: selected inherited start
 call/store and paired Boot import identity pinned. Full start/stop/stop block
 and factory-body review remain pending; selected windows are not full review.
