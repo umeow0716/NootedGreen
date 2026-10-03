@@ -89,6 +89,25 @@ the tracker. This only addresses reuse within the same tracker lifetime; table
 replacement and stale callers still require independently proven shutdown and
 object-lifetime synchronization. There is still no runtime coverage hook.
 
+Foreign-invocation follow-up tests wrong/zero owners and stale/zero tokens
+before claim, after claim and after publication. Every rejection must leave
+all live metadata unchanged; an unknown writer before claim, before publication
+or after publication must still prevent marker coverage at finish. The oracle
+does not use prior coverage to excuse a newly published un-stamped submission.
+Tokens are local to one tracker, not globally unique context identities: the
+production bridge must select and pin the exact context before token validation.
+
+Allocation/lifetime integration remains unresolved rather than silently patched:
+`vfInitContextBridge` allocates the plain context table with `IOMallocZero`,
+while `Tracker` currently has default member initializers. Adding it as a member
+requires an explicit C++ object-initialization/lifetime strategy. Retired backing
+release clears identity under the context lock, then releases objects outside
+that lock. Tracker reset must occur before a slot becomes reusable and must
+refuse an active invocation; table teardown must drain every producer bridge,
+not merely rely on the context lock or numeric token. The existing operation
+gate protects admitted operation lifetime, not concurrent producer serialization.
+No runtime member, hook, idle predicate or teardown behavior changed here.
+
 Inherited implementation found locally (2026-10-04): archived Tahoe 25G229
 `SystemKernelExtensions.kc`, SHA-256
 `5cb1be1dc530b4b953a33943567589101d3ac46bb8cf90728566ee7e5b1fa214`,

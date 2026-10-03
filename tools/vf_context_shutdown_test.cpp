@@ -90,6 +90,52 @@ int main() {
     assert(exhausted.serial == UINT64_MAX && !exhausted.hasMarkerCoverage());
     assert(!exhausted.begin(1, 5, 8, true));
 
+    // Independent contexts may reuse the same numeric token. The production
+    // bridge must first select/pin the exact context; a token is not a global
+    // identity. Within that context, wrong owners and stale invocations must
+    // not consume the live claim or finish, even after CTB publication.
+    for (unsigned marker = 0; marker < 2; ++marker)
+        for (unsigned prior = 0; prior < 2; ++prior)
+            for (unsigned invalidationPhase = 0; invalidationPhase < 4; ++invalidationPhase) {
+                NGVfSubmissionCoverage::Tracker tracker;
+                tracker.covered = prior;
+                const auto token = tracker.begin(7, 5, 8, marker);
+                const auto rejectForeign = [&]() {
+                    const auto before = tracker;
+                    for (uint64_t wrongOwner : {0ULL, 8ULL}) {
+                        assert(!tracker.claim(token, wrongOwner, 5, 8));
+                        assert(!tracker.publish(token, wrongOwner, 5, 8));
+                        assert(!tracker.finish(token, wrongOwner, true));
+                        assert(!tracker.finish(token, wrongOwner, false));
+                    }
+                    for (uint64_t stale : std::array<uint64_t, 3>{{0, 2, UINT64_MAX}}) {
+                        assert(!tracker.claim(stale, 7, 5, 8));
+                        assert(!tracker.publish(stale, 7, 5, 8));
+                        assert(!tracker.finish(stale, 7, true));
+                    }
+                    assert(tracker.serial == before.serial && tracker.owner == before.owner);
+                    assert(tracker.stamp == before.stamp && tracker.tail == before.tail);
+                    assert(tracker.claimed == before.claimed && tracker.published == before.published);
+                    assert(tracker.carriesStamp == before.carriesStamp && tracker.tainted == before.tainted);
+                    assert(tracker.covered == before.covered);
+                    assert(tracker.coveredStamp == before.coveredStamp && tracker.coveredTail == before.coveredTail);
+                };
+                rejectForeign();
+                if (invalidationPhase == 1)
+                    tracker.invalidate();
+                assert(tracker.claim(token, 7, 5, 8));
+                rejectForeign();
+                if (invalidationPhase == 2)
+                    tracker.invalidate();
+                assert(tracker.publish(token, 7, 5, 8));
+                rejectForeign();
+                if (invalidationPhase == 3)
+                    tracker.invalidate();
+                assert(!tracker.hasMarkerCoverage());
+                assert(tracker.finish(token, 7, true));
+                assert(tracker.hasMarkerCoverage() == (marker && invalidationPhase == 0));
+            }
+
     // Independent widened endpoint oracle for all nearby slot/buffer edges.
     for (int32_t index = -2; index <= 192; ++index) {
         for (uint64_t bytes = 0; bytes <= 0x3040; ++bytes) {
