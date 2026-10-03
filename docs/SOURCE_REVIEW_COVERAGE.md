@@ -7,6 +7,10 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 Intel workloop getters: four complete payload bodies and three
+effective virtuals reviewed/pinned. Scheduler4 resolves accelerator +0xf0;
+Scheduler5/GuC own fields differ. Actual +0xf0 construction/type/lifetime pending.
+
 2026-10-04 consolidated timer-review boundary: the protocol audit now separates
 resolved base construction/action delegation from unresolved actual Intel
 workloop/owner lifetime, timer retains/races, failed removal handling and true

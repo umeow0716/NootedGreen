@@ -27,6 +27,17 @@ enforce fault-before-panic and prohibit native/helper/backing side effects.
 
 ## Mapping getter provenance follow-up (offline)
 
+Concrete Intel workloop getter follow-up: both payloads pin four complete
+getter bodies and three effective virtuals. Scheduler4 `+0x218` uses inherited
+IGScheduler getter, which dispatches owner accelerator virtual `+0x688`;
+Intel's effective target returns accelerator `+0xf0`. Scheduler5 overrides
+the scheduler getter to return its own `+0xa80`; IGGuC returns its own `+0x458`.
+Thus Scheduler4 stamp timer cleanup targets the accelerator workloop, not
+automatically the GuC completion workloop or Scheduler5 private workloop.
+Different fields do not prove different live pointer values, but their
+provenance cannot be substituted. Actual accelerator `+0xf0` construction,
+effective workloop type and release order are the next lifetime gates.
+
 ### Current timer teardown review boundary
 
 The follow-ups below are chronological findings; older "pending" statements

@@ -9,6 +9,10 @@ import sys
 # Complete reviewed native bodies. This fixes the concrete Intel override
 # graph, not inherited timer APIs, dynamic callbacks or runtime completion.
 STAMP_IRQ_NATIVE = {
+    "__ZNK11IGScheduler11getWorkLoopEv": (0x12, "895c706830ac837dfdb730fc602937effaf5fc188add2c21937b12ffad12bb38"),
+    "__ZNK12IGScheduler511getWorkLoopEv": (0xd, "a384252c609ebb926362d345822bc7a0958dd681ff28627d11d57f490e7eb8c4"),
+    "__ZNK5IGGuC11getWorkLoopEv": (0xd, "082091370da302c29650b27b4d2ebff8c0731a022eb0c755ee4ee9689b5064c0"),
+    "__ZNK22IOGraphicsAccelerator211getWorkLoopEv": (0xe, "0ef049497a03533ecd154fb19d6db1634b48a484a93868849084e2b9c759fd8c"),
     "__ZN19IGAccelEventMachine4initEP22IOGraphicsAccelerator2ji": (0x64, "428bd74bf188a21082140b017f96719913dbe234d960d08effc6fada46de622d"),
     "__ZN19IGAccelEventMachine4freeEv": (0x66, "69c056b5678884fc01cb87e1a50e94a28a35a7d524b4730bc7d845a02a37af14"),
     "__ZN19IGAccelEventMachine29handleSchedulerStampInterruptEP22IOInterruptEventSourcei": (0x18, "c0cf1d2c8eeec02c61b149219a63f79263fc3912b9553803a5ff277ea7a596d1"),
@@ -423,6 +427,9 @@ def macho_inventory(path):
         assert image[call] == 0xe8 and call + 5 + struct.unpack_from("<i", image, call + 1)[0] == cleanup, \
             f"{path}: changed shared scheduler cleanup edge"
     for table, slot, method in (
+            (SCHEDULER4_VTABLE, 0x218, "__ZNK11IGScheduler11getWorkLoopEv"),
+            (SCHEDULER5_VTABLE, 0x218, "__ZNK12IGScheduler511getWorkLoopEv"),
+            (ACCELERATOR_VTABLE, 0x688, "__ZNK22IOGraphicsAccelerator211getWorkLoopEv"),
             (EVENT_MACHINE_VTABLE, 0x240, "__ZN19IGAccelEventMachine20enableStampInterruptEi"),
             (EVENT_MACHINE_VTABLE, 0x248, "__ZN19IGAccelEventMachine21disableStampInterruptEi"),
             (SCHEDULER4_VTABLE, 0x1b0, "__ZN12IGScheduler420enableStampInterruptEi"),
