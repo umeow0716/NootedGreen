@@ -9,6 +9,7 @@ import sys
 # Complete reviewed native bodies. This fixes the concrete Intel override
 # graph, not inherited timer APIs, dynamic callbacks or runtime completion.
 STAMP_IRQ_NATIVE = {
+    "__ZN16IGAccelSysMemory6unwireEv": (0x10e, "40fb9a8f5b8423fe9e34ad3d4531391e36ce95bd6ee7b3105a12abbb0bb89843"),
     "__ZN16IGAccelMemoryMap4freeEv": (0x12, "748257c15ee1b1bfcb9e08da1cc2f7ad2611bd715dae5f926581ce36fa9ae057"),
     "__ZN15IGAccelResource8completeEv": (0x6c, "ccc8dc301c086c4dac5eb2c70f24f454bdfb37c6055c82b68ee2bfdc199b7afb"),
     "__ZN19IGAccelEventMachine10writeStampEiP17vendevtCommandRecj": (0x22, "005d2c2cfb037d2b79faf330183d7084d75493490ef638f9f5e4f9801f0fc41f"),
@@ -399,6 +400,7 @@ def macho_inventory(path):
     }
     observed_stamp_irq_imports = {address: [] for address in stamp_irq_imports}
     event_stop_imports = {
+        0xc8140: "__ZTV16IOAccelSysMemory",
         0xcd778: "__ZN16IOAccelSysMemory4freeEv",
         0xc8130: "__ZTV16IOAccelMemoryMap",
         0xd9550: "__ZN16IOAccelResource27prepareEv",
@@ -488,6 +490,7 @@ def macho_inventory(path):
     resource_table = value("__ZTV15IGAccelResource")
     map_table = value("__ZTV16IGAccelMemoryMap")
     sys_memory_table = value("__ZTV16IGAccelSysMemory")
+    assert image[0x129b4:0x129ba] == bytes.fromhex("ff 90 c8 01 00 00"), f"{path}: changed explicit sys-memory base unwire delegation"
     assert struct.unpack_from("<Q", image, sys_memory_table + 16 + 0x1b8)[0] == value("__ZN16IGAccelSysMemory6unwireEv"), f"{path}: changed Intel sys-memory unwire override"
     assert struct.unpack_from("<Q", image, map_table + 0xa0)[0] == value("__ZN16IGAccelMemoryMap4freeEv"), f"{path}: changed Intel memory-map free override"
     assert image[0x10e68:0x10e6e] == bytes.fromhex("ff a0 a0 00 00 00"), f"{path}: changed memory-map base free delegation"

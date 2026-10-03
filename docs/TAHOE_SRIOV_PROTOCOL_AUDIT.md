@@ -5770,3 +5770,31 @@ external relocation `0xcd778`; effective object slot `+0x1b8` resolves to
 not yet a verified DMA/TLB barrier. This resolves a conditional cleanup edge
 without claiming release or counter decrement proves quiescence. Paired-KC
 and both native-payload targeted checks passed; no runtime/production writes.
+# Intel/base unwire and release-PTE follow-up
+
+Complete Intel SysMemory unwire (0x10e) first delegates imported base SysMemory
+table header `+0x1c8`, then performs conditional tracing/accounting reads.
+Native table import `0xc8140`, body and explicit delegation are pinned in
+both payloads. External debug-call relocations are not local fallthrough
+calls. Complete paired SystemKC base unwire (0x1f8) is now reviewed/pinned:
+for DMA-command `+0x148` it calls virtual `+0x148` and `+0x130`, logs nonzero
+statuses but continues, returns the command and clears the field. Those DMA
+virtual identities/effects remain pending; logging is not fail-closed drain.
+
+It temporarily adjusts parent prepare count while iterating the signed
+mapping count, calls release_pte for mappings whose flag `+0x10` bit 2 is set,
+then calls descriptor `+0xd0` virtual `+0x1f8` (status not tested in this
+body), performs flag-selected virtuals/recovery checks, clears wired bit,
+updates sysmem accounting and possibly invokes another purge-state virtual.
+Descriptor and purge virtual effects/return contracts remain pending.
+
+Complete release_pte (0x80) clears a resource state bit for every resource
+listed in the mapping, conditionally invokes mapping virtual `+0x178` based
+on mapping flags, clears its PTE-present flag, invokes parent virtual `+0x1d8`
+and increments mapping generation `+0x110`. It is not independently a DMA
+barrier until those virtual targets and backing lifetime are established.
+Complete returnDMACommand (0xa6) conditionally pools/releases commands under
+imported lock wrappers; complete sysmem_unwired (0x78) updates collections and
+byte accounting through helpers. These helper callees/locks are not newly
+certified. All four base bodies and caller edges are pinned. Targeted native
+and paired-KC tests pass; no production or runtime operations were added.

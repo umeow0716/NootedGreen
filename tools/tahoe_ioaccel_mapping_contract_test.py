@@ -35,6 +35,10 @@ EVENT_DISABLE_STAMP_LOCKED = "__ZN20IOAccelEventMachine223disable_stamp_interrup
 EVENT_ENABLE_STAMP = "__ZN20IOAccelEventMachine220enableStampInterruptEi"
 EVENT_DISABLE_STAMP = "__ZN20IOAccelEventMachine221disableStampInterruptEi"
 EVENT_OWNER_BODIES = {
+    "__ZN16IOAccelSysMemory6unwireEv": (0x1f8, "0bbd5ebb7b4eb2c05d75d4fda2724cc64fe4dafa62522bd70b1ed44cf34ab8f4"),
+    "__ZN16IOAccelMemoryMap11release_pteEv": (0x80, "196496fd09cb82e3766f01773b04d43e56c02beb84b067f28dc0c8af136d02db"),
+    "__ZN22IOGraphicsAccelerator216returnDMACommandEP12IODMACommand": (0xa6, "27835686c339a4aec379c879beead7dfc5f89893e4518a009ee0c0f6e3315587"),
+    "__ZN22IOGraphicsAccelerator214sysmem_unwiredEP16IOAccelSysMemory": (0x78, "3ba0b15e518d19f11a08d6adb1715822434e165d739eb1da4b5a7bdb638e03e3"),
     "__ZN13IOAccelMemory4freeEv": (0x80, "297d0bdaabf764760a687b384e18aea9a7a4f2c9662130814f9418937566ae61"),
     "__ZN13IOAccelMemory8completeEv": (0xa, "f159b74d1d9726151ecd33cfb99b05cdad4b4413d8fba54af1d77bed9d0fb85a"),
     "__ZN16IOAccelSysMemory4freeEv": (0x1d6, "be4bde0095f4e69781c03f296964a97f6718f0967f6e4174c182990b1885af5d"),
@@ -728,7 +732,7 @@ def check(path, boot_path=None):
             symtab = struct.unpack_from("<6I", image, offset)[2:]
     assert symtab is not None, "missing embedded symbol table"
     symbol_offset, count, string_offset, string_size = symtab
-    matches = {name: [] for name in {*CONTRACTS, *SCRUB_BODIES, *LOCK_COPIES, *EVENT_OWNER_BODIES, SHARED_VTABLE, RESOURCE_VTABLE, "__ZTV18IOAccelDisplayPipe", "__ZTV24IOAccelLegacyDisplayPipe", "__ZTV16IOAccelMemoryMap",
+    matches = {name: [] for name in {*CONTRACTS, *SCRUB_BODIES, *LOCK_COPIES, *EVENT_OWNER_BODIES, SHARED_VTABLE, RESOURCE_VTABLE, "__ZTV18IOAccelDisplayPipe", "__ZTV24IOAccelLegacyDisplayPipe", "__ZTV16IOAccelMemoryMap", "__ZTV16IOAccelSysMemory",
                                     EVENT_VTABLE, EVENT_FINISH, EVENT_WAIT, EVENT_CLEAN, EVENT_SIGNAL, EVENT_RESTART,
                                     EVENT_MERGE_EXCLUDING, EVENT_SET_STAMP, GET_DATA_BUFFER,
                                     EVENT_INIT, EVENT_COPY, EVENT_FINISH_UNLOCKED, EVENT_HARDWARE_ERROR,
@@ -766,6 +770,15 @@ def check(path, boot_path=None):
     assert stop_owner.count(bytes.fromhex("ff 90 48 01 00 00")) == 3, "changed base event stop source-removal inventory"
     print("PASS inherited event owner free/stop and per-event stamp-disable bodies (outer drain not proven)")
     lazy_setup = address_of("__ZN18IOAccelDisplayPipe14setup_workloopEv")
+    raw_unwire = struct.unpack("<Q", read(address_of("__ZTV16IOAccelSysMemory") + 0x1c8, 8))[0]
+    assert raw_unwire >> 63 == 0 and (raw_unwire >> 30) & 3 == 1, "changed base sys-memory unwire encoding"
+    assert raw_unwire & 0x3fffffff == address_of("__ZN16IOAccelSysMemory6unwireEv"), "changed base sys-memory unwire target"
+    for call, method in ((0x14bba340, "__ZN16IOAccelMemoryMap11release_pteEv"),
+                         (0x14bba30d, "__ZN22IOGraphicsAccelerator216returnDMACommandEP12IODMACommand"),
+                         (0x14bba3bc, "__ZN22IOGraphicsAccelerator214sysmem_unwiredEP16IOAccelSysMemory")):
+        encoded = read(call, 5)
+        assert encoded[0] == 0xe8 and call + 5 + struct.unpack_from("<i", encoded, 1)[0] == address_of(method), "changed unwire cleanup edge"
+    assert read(0x14bb74de, 6) == bytes.fromhex("ff 90 78 01 00 00"), "changed release-pte conditional mapping virtual"
     assert read(0x14bb8fe8, 4) == bytes.fromhex("f6 43 0c 02"), "changed sys-memory free conditional unwire flag"
     assert read(0x14bb8ff4, 6) == bytes.fromhex("ff 90 b8 01 00 00"), "changed sys-memory free unwire dispatch"
     assert read(0x14b675ce, 3) == bytes.fromhex("ff 4f 10"), "changed parent memory complete count decrement"

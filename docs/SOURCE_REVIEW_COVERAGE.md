@@ -801,3 +801,10 @@ Reviewed/pinned base parent memory free/complete and inherited SysMemory free.
 Resolved Intel SysMemory inherited-free import and conditional +0x1b8 target
 to Intel unwire. Unwire body, retained descriptor cleanup and accounting/
 collection callees remain pending. Complete counters are not DMA barriers.
+# Latest unwire checkpoint
+
+Reviewed/pinned Intel unwire delegation, complete base unwire/release_pte,
+returnDMACommand/sysmem_unwired bodies and concrete cleanup edges. Base
+unwire logs DMA virtual errors and continues; descriptor return is not tested.
+Concrete DMA/descriptor/purge virtuals, conditional mapping +0x178, parent
++0x1d8 and helper lock/collection semantics remain pending. Not a drain proof.
