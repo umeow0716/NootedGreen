@@ -35,6 +35,8 @@ EVENT_DISABLE_STAMP_LOCKED = "__ZN20IOAccelEventMachine223disable_stamp_interrup
 EVENT_ENABLE_STAMP = "__ZN20IOAccelEventMachine220enableStampInterruptEi"
 EVENT_DISABLE_STAMP = "__ZN20IOAccelEventMachine221disableStampInterruptEi"
 EVENT_OWNER_BODIES = {
+    "__ZN16IOAccelMemoryMap4freeEv": (0xa6, "723c9d67611abc2e6105c8dc70bd42c8b4319fb5c4f1569deec39a788702e066"),
+    "__ZN13IOAccelMemory14remove_mappingEP16IOAccelMemoryMap": (0x50, "665c5afbe4c79a80c44be0ea9a032d0cee835a8d12f24720e262f722933a74a8"),
     "__ZN16IOAccelMemoryMap15remove_resourceEP16IOAccelResource2": (0x5e, "72e6f743a75a66e9d29bfa658f891e0c5c99e462a9fe3a740c44deef0eb068ea"),
     "__ZN18IOAccelDisplayPipe25get_finished_transactionsEP26DisplayTransactionListHead": (0x32, "dc7e94f2cf118d96d51d1e535455923a1375080f63d1f30c60d17afd2cad4c80"),
     "__ZN18IOAccelDisplayPipe27set_current_plane_resourcesEP12IOAccelEventjP16IOAccelResource2S3_": (0x27a, "04981414ab38c24454a83fc31237480b41cb8ec56fd2c0b55d1db74c44b1c36d"),
@@ -723,7 +725,7 @@ def check(path, boot_path=None):
             symtab = struct.unpack_from("<6I", image, offset)[2:]
     assert symtab is not None, "missing embedded symbol table"
     symbol_offset, count, string_offset, string_size = symtab
-    matches = {name: [] for name in {*CONTRACTS, *SCRUB_BODIES, *LOCK_COPIES, *EVENT_OWNER_BODIES, SHARED_VTABLE, RESOURCE_VTABLE, "__ZTV18IOAccelDisplayPipe", "__ZTV24IOAccelLegacyDisplayPipe",
+    matches = {name: [] for name in {*CONTRACTS, *SCRUB_BODIES, *LOCK_COPIES, *EVENT_OWNER_BODIES, SHARED_VTABLE, RESOURCE_VTABLE, "__ZTV18IOAccelDisplayPipe", "__ZTV24IOAccelLegacyDisplayPipe", "__ZTV16IOAccelMemoryMap",
                                     EVENT_VTABLE, EVENT_FINISH, EVENT_WAIT, EVENT_CLEAN, EVENT_SIGNAL, EVENT_RESTART,
                                     EVENT_MERGE_EXCLUDING, EVENT_SET_STAMP, GET_DATA_BUFFER,
                                     EVENT_INIT, EVENT_COPY, EVENT_FINISH_UNLOCKED, EVENT_HARDWARE_ERROR,
@@ -761,6 +763,11 @@ def check(path, boot_path=None):
     assert stop_owner.count(bytes.fromhex("ff 90 48 01 00 00")) == 3, "changed base event stop source-removal inventory"
     print("PASS inherited event owner free/stop and per-event stamp-disable bodies (outer drain not proven)")
     lazy_setup = address_of("__ZN18IOAccelDisplayPipe14setup_workloopEv")
+    raw_map_free = struct.unpack("<Q", read(address_of("__ZTV16IOAccelMemoryMap") + 0xa0, 8))[0]
+    assert raw_map_free >> 63 == 0 and (raw_map_free >> 30) & 3 == 1, "changed memory-map free encoding"
+    assert raw_map_free & 0x3fffffff == address_of("__ZN16IOAccelMemoryMap4freeEv"), "changed memory-map base free target"
+    remove_call = read(0x14bb751e, 5)
+    assert remove_call[0] == 0xe8 and 0x14bb7523 + struct.unpack_from("<i", remove_call, 1)[0] == address_of("__ZN13IOAccelMemory14remove_mappingEP16IOAccelMemoryMap"), "changed memory-map parent inventory removal"
     for call, method in ((0x14ba608d, "__ZN30IOAccelDisplayPipeTransaction26finishEv"),
                          (0x14ba6095, "__ZN30IOAccelDisplayPipeTransaction28completeEv"),
                          (0x14baecc8, "__ZN22IOGraphicsAccelerator226accel_transaction_finishedEP26DisplayTransactionListHead"),

@@ -788,3 +788,10 @@ both display cleanup caller edges, extraction wrapper, complete current-plane
 replacement body and memory-map remove_resource. The latter only compacts CPU
 inventory. Local pairing is established for this path; other callers,
 replacement event completion, backing destructor and DMA lifetime remain open.
+# Latest backing final-free checkpoint
+
+Reviewed/pinned Intel memory-map free delegation, complete base memory-map
+free and parent remove_mapping inventory helper, with effective vtables and
+native import identities. No DMA barrier is established by these bodies.
+Parent final free, earlier unmap/complete, deallocator and inherited-free
+callees plus concurrent ownership remain pending. Targeted checks pass.

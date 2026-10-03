@@ -5729,3 +5729,22 @@ object release; missing entries leave the count unchanged. Consequently that
 helper alone is not DMA unmap/drain. The subsequent backing release/destructor
 and hardware lifetime need review. Paired-KC checks passed locally; no
 production mutation, runtime test or deployment.
+# Memory-map final-free delegation follow-up
+
+Complete Intel `IGAccelMemoryMap::free` (0x12 bytes) only tails to imported
+base memory-map vtable `+0xa0`. Both native payloads pin its effective free
+slot, body and table import relocation `0xc8130`. Complete SystemKC base
+`IOAccelMemoryMap::free` (0xa6) is the resolved base free vtable target.
+It removes itself from parent memory `+0x18`, releases/clears that parent,
+frees a non-null/non-embedded resource pointer array `+0xa0` using bounded
+capacity-to-byte arithmetic, then delegates inherited free. The allocation
+deallocator and inherited object-free callees remain separately pending.
+
+Complete parent `IOAccelMemory::remove_mapping` (0x50) searches pointer array
+`+0x50` with signed 16-bit count `+0x5a`, decrements count only for a match,
+and compacts subsequent entries; missing matches do not change count. It is
+CPU inventory maintenance, not hardware unmap or a completion wait. Neither
+this helper nor the Intel final-free body establishes DMA quiescence. Parent
+memory final free, earlier mapping complete/unmap operations, backing virtual
+identity and concurrent ownership still require review. Native payload and
+paired-KC targeted checks pass locally; no runtime or production mutation.
