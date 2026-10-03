@@ -7,6 +7,14 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 DMA template clone follow-up: complete Boot cloneCommand body
+reviewed/hash-pinned with initializer/failure-release instruction anchors.
+New command configuration is reconstructed from the template, not descriptor
+or prepared-state cloning. Null clone is skipped by pool construction; the
+original template/lock failure unwind remains separate. Clone initializer
+and metaclass internals, per-object VF ownership and shutdown admission still
+require review. No production/runtime changes or hardware validation.
+
 2026-10-04 display admission/cleanup follow-up: complete display pipe init,
 lazy setup callers, shared/private base workloop construction, setup,
 enable/disable event references, event_interrupt_gated, termination signal,

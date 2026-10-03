@@ -6005,3 +6005,27 @@ IOAccel methods using only global VF identity. The current shared-IOAccel
 routes do not provide that owner registry. Do not add a lock around this
 cleanup without checking gate/mutex order and late producer admission.
 Targeted paired-KC checks pass; no executable patch/deployment/runtime test.
+
+# DMA template clone allocation follow-up
+
+Reviewed the complete Boot IODMACommand::cloneCommand(void*) body at
+0xffffff8000ad24b0 (0xe0 bytes including trailing alignment), now hash-pinned.
+It constructs a zero-initialized 0x28-byte SegmentOptions record from the
+template's address width, maximum sizes and three stored alignment-minus-one
+fields (incremented when copied). It forwards the stored output callback,
+mapping options and mapper, but uses the caller's new refcon. This body does
+not copy the template's installed memory descriptor or prepared reference count.
+
+Allocation uses a metaclass virtual +0x88; null allocation returns null.
+The newly allocated object's virtual +0x180 initializer receives the options.
+False initialization releases that new object through +0x28 and returns null;
+success returns it. Initializer/metaclass implementation identity and their
+internal partial-failure cleanup remain pending; this selected body alone
+does not certify them or prove mapper/descriptor runtime ownership.
+
+Together with pool creation's reviewed clone-null skip, clone allocation
+failure itself does not select the template-null failed-start edge. Original
+template factory/lock failure remains the distinct unsafe partial-pool unwind.
+Per-object ownership still must be established before a shared IOAccel hook:
+current Intel start/stop routes classify through global VF identity, not a
+registry of System-kext accelerator owners. No production patch or VM test.

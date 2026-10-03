@@ -339,6 +339,7 @@ def check_boot_atomic(system, path):
     assert kernel_read(descriptor_operation + 0x165, 6) == bytes.fromhex("66 f0 0f c1 47 34"), "changed descriptor active-DMA atomic increment"
     assert kernel_read(descriptor_operation + 0x215, 5) == bytes.fromhex("66 f0 ff 4f 34"), "changed descriptor active-DMA atomic decrement"
     for method, length, digest in (
+            (b"__ZN12IODMACommand12cloneCommandEPv", 0xe0, "3dfcbe6d051b154d2826655cfafcf186237776218302cf500ba0d766bb750374"),
             (b"__ZN12IODMACommand17withSpecificationEPFbPS_NS_9Segment64EPvjEhyNS_14MappingOptionsEyjP8IOMapperS2_", 0x90, "d8d6abfba6270076a9f8e81f874592f600c9c0d75862ef3abb1cd55475de2453"),
             (b"__ZN12IODMACommand19setMemoryDescriptorEPK18IOMemoryDescriptorb", 0x1d0, "c3f7554a7c9a6dbb4357bccb00a3de4d2fa3d640fdfd141e5e92dace59cabee6"),
             (b"__ZN25IOGeneralMemoryDescriptor8completeEj", 0x3a0, "05696feca129a66a231bfdffc6173151ae05db56d52377b7b551f452c1bc06f1"),
@@ -347,6 +348,10 @@ def check_boot_atomic(system, path):
             (b"__ZN12IODMACommand8completeEbb", 0x230, "7862d56c7f676b693648cda13d9973549ed700b71e093af739244d0dbae6edca")):
         assert hashlib.sha256(kernel_read(symbols[method][0], length)).hexdigest() == digest, "changed base DMA-command cleanup body"
     dma_complete = symbols[b"__ZN12IODMACommand8completeEbb"][0]
+    dma_clone = symbols[b"__ZN12IODMACommand12cloneCommandEPv"][0]
+    assert kernel_read(dma_clone + 0xad, 7) == bytes.fromhex("41 ff 92 80 01 00 00"), "changed clone SegmentOptions initializer dispatch"
+    assert kernel_read(dma_clone + 0xb6, 7) == bytes.fromhex("74 05 4c 89 e8 eb 0c"), "changed clone initialization failure branch"
+    assert kernel_read(dma_clone + 0xc4, 3) == bytes.fromhex("ff 50 28"), "changed failed clone release dispatch"
     dma_factory_name = b"__ZN12IODMACommand17withSpecificationEPFbPS_NS_9Segment64EPvjEhyNS_14MappingOptionsEyjP8IOMapperS2_"
     assert system[0x10072:0x10078] == bytes.fromhex("ff 25 20 40 01 00"), "changed accelerator DMA factory import stub"
     raw_dma_factory = struct.unpack_from("<Q", system, 0x24098)[0]
