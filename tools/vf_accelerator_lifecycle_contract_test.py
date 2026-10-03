@@ -569,6 +569,11 @@ def macho_inventory(path):
         if getter_body[:12] != bytes.fromhex("55 48 89 e5 48 8b bf 88 02 00 00 5d") or \
                 len(direct_branches(getter, target)) != 1:
             raise AssertionError(f"{path}: task stamp CPU/GPU backing identity changed")
+    scratch_getter_start = value(TASK_SCRATCH_GPU_ADDRESS)
+    scratch_getter_body = image[scratch_getter_start:next_symbol(scratch_getter_start)]
+    if scratch_getter_body[:12] != bytes.fromhex("55 48 89 e5 48 8b bf 80 02 00 00 5d") or \
+            len(direct_branches(TASK_SCRATCH_GPU_ADDRESS, MAPPED_BUFFER_GPU_ADDRESS)) != 1:
+        raise AssertionError(f"{path}: task scratch backing provenance changed")
     if init_body.count(bytes.fromhex(
             "41 f6 45 6e 01 75 12 49 8b 7d 58 48 8b 07 ff 50 20")) != 1:
         raise AssertionError(f"{path}: context conditional task retain changed")
@@ -1439,6 +1444,23 @@ def source_contract(path):
                 "IOSimpleLockUnlockEnableInterrupt(") < retire.index(
                     "ringBacking->release();"):
         raise AssertionError(f"{path}: retired DMA ring release/lock order changed")
+    for backing in ("stampBacking", "scratchBacking"):
+        for token in ("!" + backing + " ||", "entry." + backing + " != " + backing):
+            if token not in attach:
+                raise AssertionError(f"{path}: context packet backing identity lacks {token}")
+        if not attach.index(backing + "->retain();") < attach.index(
+                "entry." + backing + " = " + backing + ";") < attach.index(
+                    "entry.state = kVfGucContextRegistering;"):
+            raise AssertionError(f"{path}: packet backing is not retained before registration")
+        if not retire.index(backing + " = entry." + backing + ";") < retire.index(
+                "NGVfContextEvent::clearReleasedIdentity(entry);") < retire.index(
+                    "IOSimpleLockUnlockEnableInterrupt(") < retire.index(backing + "->release();"):
+            raise AssertionError(f"{path}: packet backing release bypasses ownership boundary")
+        for signature in ("int32_t vfFindContextLocked(uint32_t lrcaPage)",
+                          "int32_t vfReserveContextLocked(uint32_t lrcaPage)",
+                          "bool vfDirectContextTableUnowned()"):
+            if backing not in function_body(source, signature):
+                raise AssertionError(f"{path}: table reuse/ownership ignores {backing}")
     detach = function_body(source, "void Gen11::vfDetachContextDesc(void *that, const uint32_t *descriptor)")
     for reason in (
             "VF detach without valid context bookkeeping",

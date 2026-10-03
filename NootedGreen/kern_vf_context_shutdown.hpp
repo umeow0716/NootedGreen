@@ -120,6 +120,8 @@ inline void clearReleasedIdentity(Context &context) {
 	context.engineInstance = 0;
 	context.contextBacking = nullptr;
 	context.ringBacking = nullptr;
+	context.stampBacking = nullptr;
+	context.scratchBacking = nullptr;
 }
 
 } // namespace NGVfContextEvent

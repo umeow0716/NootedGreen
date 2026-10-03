@@ -47,6 +47,10 @@ and normal reclamation are unresolved functional requirements. These updates
 supersede earlier image-only-quarantine claims without certifying the full
 ownership graph, all native callers, inherited IOAccel implementation, or runtime
 DMA safety as reviewed or complete.
+V265 additionally retains task stamp/scratch buffers as direct GuC record
+dependencies until the same deregistration/final-reference boundary. The buffer
+getter provenance, record identity, retain/release ordering and tombstone reuse
+are checked; this is not a completed review of every GPU-referenced resource.
 
 Current Gen11 delta: the route inventory is 93 unique symbols (90 accelerator,
 three framebuffer), superseding the earlier 65/62, 63/60 and 60/57 historical counts

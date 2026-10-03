@@ -101,9 +101,13 @@ int main() {
         bool disablePending;
         void *contextBacking;
         void *ringBacking;
+        void *stampBacking;
+        void *scratchBacking;
     };
     int backing = 0;
     int ringBacking = 0;
+    int stampBacking = 0;
+    int scratchBacking = 0;
     for (const auto initialState : {
              kVfGucContextEmpty, kVfGucContextTombstone,
              kVfGucContextRegistering, kVfGucContextRegistered,
@@ -111,7 +115,8 @@ int main() {
              kVfGucContextPendingDisable, kVfGucContextDisabled,
              kVfGucContextPendingDeregister}) {
         Context context {0x12345000U, 0x12345309U, 0xA5A20020U, 7,
-                         4, 2, initialState, true, true, &backing, &ringBacking};
+                         4, 2, initialState, true, true, &backing, &ringBacking,
+                         &stampBacking, &scratchBacking};
         const bool handled = NGVfContextEvent::deregisterDone(context);
         assert(handled ==
                (initialState == kVfGucContextPendingDeregister));
@@ -125,18 +130,22 @@ int main() {
         assert(context.engineInstance == 2);
         assert(context.contextBacking == &backing);
         assert(context.ringBacking == &ringBacking);
+        assert(context.stampBacking == &stampBacking);
+        assert(context.scratchBacking == &scratchBacking);
         assert(context.refCount == 7);
         assert(context.enablePending == !handled);
         assert(context.disablePending == !handled);
     }
 
     Context released {0x12345000U, 0x12345309U, 0xA5A20020U, 0,
-                      4, 2, kVfGucContextTombstone, false, false, &backing, &ringBacking};
+                      4, 2, kVfGucContextTombstone, false, false, &backing, &ringBacking,
+                      &stampBacking, &scratchBacking};
     NGVfContextEvent::clearReleasedIdentity(released);
     assert(released.lrcaPage == 0 && released.descriptorLo == 0 &&
            released.descriptorHi == 0 && released.engineClass == 0 &&
            released.engineInstance == 0 && released.contextBacking == nullptr &&
-           released.ringBacking == nullptr);
+           released.ringBacking == nullptr && released.stampBacking == nullptr &&
+           released.scratchBacking == nullptr);
     assert(released.refCount == 0 &&
            released.state == kVfGucContextTombstone);
 }

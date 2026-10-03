@@ -1,12 +1,46 @@
 # Tahoe SR-IOV protocol audit — in progress
 
 Updated: 2026-10-04. The last dynamic source baseline is `ce166c8`; the latest
-completed offline-reviewed checkpoint is V264 retained DMA ring backing on
+completed offline-reviewed checkpoint is V265 retained stamp/scratch backing on
 `codex/tahoe-sriov-vf`. This is NOT a boot-test candidate or a successful
 driver baseline. The `ce166c8` run produced repeatable host PF DMAR faults
 followed by i915 hangs and a host reboot. Keep `macos-tahoe-sriov` shut off until the
 corrected code passes the remaining offline review and every independently
 enforced containment precondition.
+
+## V265 retain packet stamp/scratch backing independently (offline)
+
+The packet audit establishes two more concrete backing dependencies:
+task `+0x288` provides the stamp address, and task `+0x280` provides the scratch
+address used by main/compute PIPE_CONTROL prerequisites. The direct GuC record
+previously retained image/ring only and relied on native task/event ownership
+to keep these packet destinations alive. That complete native owner graph has
+not been proven; dependency-registration success is not GPU completion.
+
+V265 adds independent retained stamp and scratch buffer pointers to each direct
+record. Both must exist and match on repeated attach, and both are retained
+before registration publication. Deregister completion plus final native
+reference retirement and the absence of a protocol fault remain prerequisites
+for release, which occurs outside the simple lock. Identity clearing, tombstone
+lookup/reuse and bootstrap-unowned checks now include all four backing objects.
+Only buffers are retained, not the task or context, avoiding a new task/context
+reference cycle. There are no buffer copies or additional H2G messages; the
+change adds two pointers per record and paired object references per lifecycle.
+
+The event model checks that DEREGISTER_DONE preserves all four references and
+that final release clears them. Source contracts pin retain-before-register and
+release-after-unlock. This protects the identified packet destinations; it does
+not prove the correctness of address-space flags, scratch initialization, all
+other resource references or firmware DMA quiescence. PF and the 93-route
+inventory are unchanged. No deployment or VM start is authorized by these checks.
+
+Publication review also confirmed the existing FAST sender writes the context
+tail only after space/credit admission, synchronizes it, writes the CTB packet,
+synchronizes before publishing CTB tail, then synchronizes before GuC notification.
+This is the observed code ordering, not a substitute for controlled hardware
+visibility or successful command-execution evidence.
+Both payload contracts and the complete offline suite passed on 2026-10-04
+(`/tmp/ngreen-static.vKUdLD`); controlled runtime validation remains outstanding.
 
 ## V264 retain the actual DMA ring through deregistration (offline)
 

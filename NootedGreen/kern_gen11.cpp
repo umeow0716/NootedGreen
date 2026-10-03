@@ -348,6 +348,8 @@ struct VfGucContext {
 	bool disablePending;
 	OSObject *contextBacking;
 	OSObject *ringBacking;
+	OSObject *stampBacking;
+	OSObject *scratchBacking;
 };
 
 IOSimpleLock *gVfContextLock = nullptr;
@@ -361,6 +363,9 @@ constexpr size_t kVfContextDescriptorOffset = 0x89;
 constexpr size_t kVfContextImageBufferOffset = 0x98;
 constexpr size_t kVfContextRingObjectOffset = 0xB0;
 constexpr size_t kVfRingMappedBufferOffset = 0x80;
+constexpr size_t kVfContextTaskOffset = 0x58;
+constexpr size_t kVfTaskScratchBufferOffset = 0x280;
+constexpr size_t kVfTaskStampBufferOffset = 0x288;
 // Tahoe IGMappedBuffer::initWithOptions stores the requested byte length at
 // +0x20 (0x13c48); fillIfRequested consumes the same field as a byte bound.
 constexpr size_t kVfMappedBufferLengthOffset = 0x20;
@@ -421,7 +426,8 @@ int32_t vfFindContextLocked(uint32_t lrcaPage)
 		const auto &entry = gVfContexts[slot];
 		if (entry.state == kVfGucContextEmpty)
 			return -1;
-		if ((entry.state != kVfGucContextTombstone || entry.contextBacking || entry.ringBacking) &&
+		if ((entry.state != kVfGucContextTombstone || entry.contextBacking ||
+		     entry.ringBacking || entry.stampBacking || entry.scratchBacking) &&
 		    entry.lrcaPage == lrcaPage)
 			return static_cast<int32_t>(slot);
 	}
@@ -439,7 +445,8 @@ int32_t vfReserveContextLocked(uint32_t lrcaPage)
 		const uint32_t slot = (start + probe) % gVfContextCapacity;
 		const auto state = gVfContexts[slot].state;
 		if (state == kVfGucContextTombstone &&
-		    !gVfContexts[slot].contextBacking && !gVfContexts[slot].ringBacking && tombstone < 0)
+		    !gVfContexts[slot].contextBacking && !gVfContexts[slot].ringBacking &&
+		    !gVfContexts[slot].stampBacking && !gVfContexts[slot].scratchBacking && tombstone < 0)
 			tombstone = static_cast<int32_t>(slot);
 		if (state == kVfGucContextEmpty)
 			return tombstone >= 0 ? tombstone : static_cast<int32_t>(slot);
@@ -454,6 +461,8 @@ void vfReleaseRetiredContextBacking(uint16_t gucId)
 
 	OSObject *backing = nullptr;
 	OSObject *ringBacking = nullptr;
+	OSObject *stampBacking = nullptr;
+	OSObject *scratchBacking = nullptr;
 	const IOInterruptState interruptState =
 		IOSimpleLockLockDisableInterrupt(gVfContextLock);
 	auto &entry = gVfContexts[gucId];
@@ -461,11 +470,17 @@ void vfReleaseRetiredContextBacking(uint16_t gucId)
 	    entry.refCount == 0) {
 		backing = entry.contextBacking;
 		ringBacking = entry.ringBacking;
+		stampBacking = entry.stampBacking;
+		scratchBacking = entry.scratchBacking;
 		NGVfContextEvent::clearReleasedIdentity(entry);
 	}
 	IOSimpleLockUnlockEnableInterrupt(gVfContextLock, interruptState);
 	if (ringBacking)
 		ringBacking->release();
+	if (stampBacking)
+		stampBacking->release();
+	if (scratchBacking)
+		scratchBacking->release();
 	if (backing)
 		backing->release();
 }
@@ -1184,6 +1199,7 @@ bool vfDirectContextTableUnowned()
 	for (uint32_t id = 0; id < gVfContextCapacity; id++) {
 		const auto &entry = gVfContexts[id];
 		if (entry.state != kVfGucContextEmpty || entry.contextBacking || entry.ringBacking ||
+		    entry.stampBacking || entry.scratchBacking ||
 		    entry.refCount || entry.enablePending || entry.disablePending)
 			return false;
 	}
@@ -4610,9 +4626,15 @@ bool Gen11::vfAttachContextDesc(void *that, const uint32_t *descriptor) {
 	auto *ringObject = getMember<void *>(hardwareContext, kVfContextRingObjectOffset);
 	auto *ringBacking = ringObject ? reinterpret_cast<OSObject *>(
 		getMember<void *>(ringObject, kVfRingMappedBufferOffset)) : nullptr;
+	auto *task = getMember<void *>(hardwareContext, kVfContextTaskOffset);
+	auto *stampBacking = task ? reinterpret_cast<OSObject *>(
+		getMember<void *>(task, kVfTaskStampBufferOffset)) : nullptr;
+	auto *scratchBacking = task ? reinterpret_cast<OSObject *>(
+		getMember<void *>(task, kVfTaskScratchBufferOffset)) : nullptr;
 	const uint64_t contextBytes = contextBacking ?
 		getMember<uint64_t>(contextBacking, kVfMappedBufferLengthOffset) : 0;
 	if (!descriptorAttributes.valid || !contextBacking || !ringBacking ||
+	    !stampBacking || !scratchBacking ||
 	    !NGGgtt::contains(gVfGGTTBase, gVfGGTTSize, lrcaPage, contextBytes) ||
 	    lrcaPage >= kGucGgttTop || contextBytes > kGucGgttTop - lrcaPage ||
 	    contextBytes < kVfContextMinimumImageBytes) {
@@ -4640,6 +4662,7 @@ bool Gen11::vfAttachContextDesc(void *that, const uint32_t *descriptor) {
 			    entry.state == kVfGucContextPendingEnable ||
 			    entry.state == kVfGucContextEnabled)) {
 				if (entry.refCount == 0xFFFFU || entry.ringBacking != ringBacking ||
+				    entry.stampBacking != stampBacking || entry.scratchBacking != scratchBacking ||
 				    !NGContextDescriptor::matchesRecord(descriptorValue,
 				        descriptorAttributes, contextBacking,
 				        {entry.descriptorLo, entry.descriptorHi}, entry.engineClass,
@@ -4675,6 +4698,12 @@ bool Gen11::vfAttachContextDesc(void *that, const uint32_t *descriptor) {
 				// deregistration and the final native reference are both retired.
 				ringBacking->retain();
 				entry.ringBacking = ringBacking;
+				// V265: packet encoders reference task stamp and scratch buffers.
+				// Pin buffers, not the task, to avoid a task/context reference cycle.
+				stampBacking->retain();
+				entry.stampBacking = stampBacking;
+				scratchBacking->retain();
+				entry.scratchBacking = scratchBacking;
 				entry.state = kVfGucContextRegistering;
 			}
 		}
@@ -4770,7 +4799,7 @@ bool Gen11::vfAttachContextDesc(void *that, const uint32_t *descriptor) {
 
 void Gen11::vfDetachContextDesc(void *that, const uint32_t *descriptor) {
 	// V263/V264: native context free already released ring/FIFO objects, but
-	// the direct GuC record pins the DMA ring buffer. This hook precedes release
+	// the direct GuC record pins ring, stamp and scratch DMA buffers. This hook precedes release
 	// of additional mapped backing, context image and task/stamps. Any unproven
 	// retirement must fail-stop
 	// the guest before returning into that destructor; it is not DMA recovery.
@@ -5009,7 +5038,7 @@ void Gen11::vfDetachContextDesc(void *that, const uint32_t *descriptor) {
 		       gucId, lrcaPage);
 	}
 	// Failure above cannot return into native ring/image/task destruction.
-	// The retained image also pins the direct record until acknowledged teardown.
+	// The record retains image, ring, stamp and scratch until acknowledged teardown.
 	// A completed deregistration is sufficient to
 	// retire the direct record because no VF legacy proxy/hash entry exists.
 	if (deregistered)
