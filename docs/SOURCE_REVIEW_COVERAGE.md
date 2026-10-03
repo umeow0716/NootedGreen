@@ -32,6 +32,22 @@ sources returns the current count to 1,303; this does not close older coverage.
 
 ## Main project coverage
 
+2026-10-04 ownership review delta: V263 fail-stops uncertain void descriptor
+detach, and V264 independently retains the actual DMA ring buffer in each
+direct GuC record through acknowledged deregistration and final reference
+release. The context ring/FIFO objects are released before descriptor cleanup;
+the buffer at context `+0xa8` is not the ring. Partially registered contexts
+whose compensating deregistration fails now fail-stop rather than return into
+the unchecked native initializer. Task stamp getter/allocation/clone paths and
+both task-retain paths are pinned. Ring notification only merges event
+dependencies; it is not hardware completion. Checked garbage collection reaches
+the routed descriptor-idle query, but forced collection and drain bypass idle
+checks. Enabled VF contexts still remain conservatively busy, so real completion
+and normal reclamation are unresolved functional requirements. These updates
+supersede earlier image-only-quarantine claims without certifying the full
+ownership graph, all native callers, inherited IOAccel implementation, or runtime
+DMA safety as reviewed or complete.
+
 Current Gen11 delta: the route inventory is 93 unique symbols (90 accelerator,
 three framebuffer), superseding the earlier 65/62, 63/60 and 60/57 historical counts
 retained below. Complete nested-path disassembly showed that bridge

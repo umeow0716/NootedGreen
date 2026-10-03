@@ -60,6 +60,16 @@ FIFO_NOTIFY_COMPLETE = "__ZN18IGAccelFIFOChannel14notifyCompleteEP12IOAccelEvent
 RING_NOTIFY_COMPLETE = "__ZN20IGHardwareRingBuffer14notifyCompleteEP12IOAccelEvent"
 EVENT_MACHINE_VTABLE = "__ZTV19IGAccelEventMachine"
 EVENT_MERGE = "__ZN24IOAccelEventMachineFast210mergeEventEP12IOAccelEventS1_"
+GC_OBJECT_RELEASE = "__ZNK10IGGCObject7releaseEv"
+GC_OBJECT_RELEASE_UNCHECKED = "__ZNK10IGGCObject14releaseNoCheckEv"
+GC_ADD = "__ZN18IGGarbageCollector3addEP14IGGCQueueEntry"
+GC_COLLECT = "__ZN18IGGarbageCollector7collectEv"
+GC_FORCE_COLLECT = "__ZN18IGGarbageCollector12forceCollectEv"
+GC_DRAIN = "__ZN18IGGarbageCollector5drainEv"
+CONTEXT_CHECK = "__ZNK17IGHardwareContext5checkEv"
+CONTEXT_VTABLE = "__ZTV17IGHardwareContext"
+SCHEDULER4_CONTEXT_IDLE = "__ZNK12IGScheduler413isContextIdleEPK17IGHardwareContext"
+GUC_KMD_CONTEXT_IDLE = "__ZN13IGHardwareGuC16isKmdContextIdleERK21SGfxContextDescriptor"
 SHARED_BUFFER_CPU_ADDRESS = "__ZNK20IGSharedMappedBuffer17getVirtualAddressEv"
 MAPPED_BUFFER_GPU_ADDRESS = "__ZNK14IGMappedBuffer20getGPUVirtualAddressEv"
 SHARED_BUFFER_CLONE = "__ZN20IGSharedMappedBuffer11cloneInTaskEP11IGAccelTask"
@@ -604,6 +614,28 @@ def macho_inventory(path):
     if direct_branches(RING_NOTIFY_COMPLETE, RING_SLEEP_STAMP) or \
             direct_branches(RING_NOTIFY_COMPLETE, SAFE_FORCE_WAKE):
         raise AssertionError(f"{path}: ring notification gained a hardware wait")
+
+    # Normal garbage collection checks the concrete context idle virtual.
+    # Forced collection/drain intentionally bypass that check; descriptor
+    # deregistration and retained DMA backing must remain independent barriers.
+    for table, slot, target in ((CONTEXT_VTABLE, 0x128, CONTEXT_CHECK),
+                                (CONTEXT_VTABLE, 0x118, GC_OBJECT_RELEASE_UNCHECKED),
+                                (SCHEDULER4_VTABLE, 0x168, SCHEDULER4_CONTEXT_IDLE)):
+        if struct.unpack_from("<Q", image, value(table) + 16 + slot)[0] != value(target):
+            raise AssertionError(f"{path}: garbage collection virtual {slot:#x} changed")
+    if len(direct_branches(GC_OBJECT_RELEASE, GC_ADD)) != 1 or \
+            len(direct_branches(SCHEDULER4_CONTEXT_IDLE, GUC_KMD_CONTEXT_IDLE)) != 1:
+        raise AssertionError(f"{path}: context GC/idle dispatch graph changed")
+    for owner, anchor, count in (
+            (GC_OBJECT_RELEASE, bytes.fromhex("ff 90 28 01 00 00"), 1),
+            (CONTEXT_CHECK, bytes.fromhex("48 8b 80 68 01 00 00"), 1),
+            (GC_COLLECT, bytes.fromhex("ff 50 28"), 1),
+            (GC_FORCE_COLLECT, bytes.fromhex("ff 90 18 01 00 00"), 1),
+            (GC_DRAIN, bytes.fromhex("ff 50 28"), 1),
+            (GC_DRAIN, bytes.fromhex("ff 90 18 01 00 00"), 1)):
+        owner_start = value(owner)
+        if image[owner_start:next_symbol(owner_start)].count(anchor) != count:
+            raise AssertionError(f"{path}: context GC release/check inventory changed in {owner}")
 
     # Normal producer backpressure polls shared context head/stamp memory.
     # Keep its timeout diagnostic behind the already isolated entry rather

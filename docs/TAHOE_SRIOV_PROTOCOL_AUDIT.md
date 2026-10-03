@@ -10,6 +10,30 @@ enforced containment precondition.
 
 ## V264 retain the actual DMA ring through deregistration (offline)
 
+Garbage-collection follow-up: `IGGCObject::release` queues its last-reference
+object on first release, then invokes the object's `check` virtual (`+0x128`)
+on a later release. For hardware contexts that slot resolves to
+`IGHardwareContext::check`, which tail-dispatches Scheduler4 `+0x168` to
+`isContextIdle`, then the routed GuC `isKmdContextIdle` descriptor query.
+`collect` invokes checked release (`+0x28`) on queued objects. In contrast,
+`forceCollect` uses `releaseNoCheck` (`+0x118`), and `drain` eventually falls
+back to that same unchecked release after its bounded retry loop. These paths
+cannot establish idle by themselves; successful descriptor deregistration and
+independently retained ring/image backing remain necessary even if ordinary
+collection normally waits. Contracts pin both checked and unchecked paths in
+both payloads.
+
+The current VF idle snapshot keeps enabled contexts busy even after execution
+could have completed. That prevents premature success but is not a functional
+completion mechanism: normal context reclamation can be delayed indefinitely
+until explicit disable/shutdown or forced collection. This is an outstanding
+driver functionality/performance gap, not a solved optimization. A future
+completion implementation must use proven hardware/event evidence and preserve
+deregistration safety; neither a fabricated idle response nor notification
+registration is an acceptable replacement. Collector `+0x20` comes from timer
+event-source creation, not the accelerator; its drain virtual must not be
+interpreted through an accelerator vtable.
+
 Follow-up task/stamp review: `getStampGPUVirtualAddress` and `getStamps` both
 load task `+0x288`, then tail-call the GPU/CPU address getters respectively.
 `initStampAndScratchPages` either clones that shared buffer from the accelerator's
