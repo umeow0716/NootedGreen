@@ -7,6 +7,20 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 display admission/cleanup follow-up: complete display pipe init,
+lazy setup callers, shared/private base workloop construction, setup,
+enable/disable event references, event_interrupt_gated, termination signal,
+queue finish/idle, live/finished ownership transfer and source teardown bodies
+reviewed and fixture-pinned. Paired Boot command gate factory and workloop
+factory import identities resolved. Setup is LAZY, not part of pipe init;
+gate-null external entrypoints can call setup again after field clearing unless
+outer admission prevents it. Init-only validation is insufficient. Unresolved:
+per-owner VF identification for a System-kext hook, outer admission/lifetime,
+caller ABI/error unwind, failed source attachment/removal and callback drain.
+Native unchecked statuses are inventories, not proof of an observed runtime
+failure. No global display hook, successful acceleration or completed all-file
+audit is claimed.
+
 2026-10-04 periodic/fallback consolidation: complete native periodic enable,
 disable, callback and shared cleanup; Intel event init/free/callback/stamp
 enable-disable/enableSchedulerEvents; streamer5 init/register/context-switch

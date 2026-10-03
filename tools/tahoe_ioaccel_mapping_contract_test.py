@@ -35,6 +35,11 @@ EVENT_DISABLE_STAMP_LOCKED = "__ZN20IOAccelEventMachine223disable_stamp_interrup
 EVENT_ENABLE_STAMP = "__ZN20IOAccelEventMachine220enableStampInterruptEi"
 EVENT_DISABLE_STAMP = "__ZN20IOAccelEventMachine221disableStampInterruptEi"
 EVENT_OWNER_BODIES = {
+    "__ZN18IOAccelDisplayPipe4initEP22IOGraphicsAccelerator2P21IOAccelDisplayMachineP13IOFramebufferj": (0x32c, "757d5afc16b89e8d8baa3866f93be1fb37a8c81ba1266cb2a1a581330e65a48d"),
+    "__ZN18IOAccelDisplayPipe26wait_for_queue_slot_nolockEv": (0x48, "5a942dec43525fd589bd15c359dda7012773fc1577e450a5c797af87a4b32479"),
+    "__ZN18IOAccelDisplayPipe17transaction_queueEP30IOAccelDisplayPipeTransaction2": (0x4a, "84c686f29480a66d4baed253b1bcf7c6cbf1a4bffc692f0af612b4b8348df2fa"),
+    "__ZN18IOAccelDisplayPipe14request_notifyEPyP40IOAccelDisplayPipeRequestNotifyGatedArgs": (0x58, "b7c2b65c2088ef1aa8faccbe63c59fa4be6706a853343713b06e927f163c6873"),
+    "__ZN18IOAccelDisplayPipe13remove_notifyEP31IOAccelDisplayPipeNotifyRequest": (0x4a, "49b41bc3f8a99cc0bf97a457a95aca1b3f10457c543a25d14efd6f91cea31d0f"),
     "__ZN21IOAccelDisplayMachine17get_pipe_workloopEv": (0x2a, "157f3d97ec2fe80f182305de154332520cc32972b904bc171d892887d2432f45"),
     "__ZN18IOAccelDisplayPipe30release_live_transaction_gatedEv": (0x40, "59fc652bb7111c94f78994d096c32d8975b89efcffc899fb84bf164eb9c22930"),
     "__ZN18IOAccelDisplayPipe14createWorkLoopEv": (0x5e, "ec85a9941105b2c0609e4d88c429af33ea225e7aa68004df43de5dd7dbf841ab"),
@@ -711,6 +716,14 @@ def check(path, boot_path=None):
     stop_owner = read(address_of("____ZN20IOAccelEventMachine24stopEv_block_invoke"), 0x8b)
     assert stop_owner.count(bytes.fromhex("ff 90 48 01 00 00")) == 3, "changed base event stop source-removal inventory"
     print("PASS inherited event owner free/stop and per-event stamp-disable bodies (outer drain not proven)")
+    lazy_setup = address_of("__ZN18IOAccelDisplayPipe14setup_workloopEv")
+    for call, load in ((0x14bb017a, 0x14bb017f), (0x14bb01c6, 0x14bb01cb),
+                       (0x14bb2f08, 0x14bb2f0d), (0x14bb2fec, 0x14bb2ff1)):
+        encoded = read(call, 5)
+        assert encoded[0] == 0xe8 and call + 5 + struct.unpack_from("<i", encoded, 1)[0] == lazy_setup, "changed display lazy setup direct edge"
+        assert read(load, 3) in (bytes.fromhex("48 8b bb"), bytes.fromhex("49 8b be"), bytes.fromhex("49 8b bf")) and \
+            read(load + 3, 4) == bytes.fromhex("b0 00 00 00") and \
+            read(load + 7, 3) == bytes.fromhex("48 8b 07"), "changed unchecked post-setup gate dereference"
     raw_pipe_factory = struct.unpack("<Q", read(address_of("__ZTV18IOAccelDisplayPipe") + 16 + 0x8c8, 8))[0]
     assert (raw_pipe_factory >> 30) & 3 == 1 and raw_pipe_factory >> 63 == 0, "unexpected base display pipe factory cache level/auth"
     assert raw_pipe_factory & 0x3fffffff == address_of("__ZN18IOAccelDisplayPipe14createWorkLoopEv"), "changed base display pipe createWorkLoop virtual"

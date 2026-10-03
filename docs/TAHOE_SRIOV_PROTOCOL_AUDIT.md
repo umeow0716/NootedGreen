@@ -27,6 +27,23 @@ enforce fault-before-panic and prohibit native/helper/backing side effects.
 
 ## Mapping getter provenance follow-up (offline)
 
+Lazy display setup/error-boundary follow-up: complete pipe init
+0x14bae358 (0x32c) reviewed: stores accelerator+0x88/display-machine+0x90/
+framebuffer+0x98, initializes four embedded events/storage/notification; it
+does NOT call setup_workloop. Four complete lazy callers were read:
+wait_for_queue_slot_nolock 0x48, transaction_queue 0x4a, request_notify 0x58,
+remove_notify 0x4a. Each tests gate+0xb0, calls setup if null, reloads it and
+dereferences immediately without checking post-setup success. Thus an init-only
+guard is the wrong boundary; setup allocation/attachment failure cannot be
+safely handled merely by returning early from its void body. Teardown clears
++0xb0, so preventing later lazy reconstruction requires a separate external
+owner admission/lifetime invariant. This is a conditional race/failure hazard,
+not a proven concurrent call or observed crash. Added five complete hashes,
+four exact setup edges and unchecked post-setup loads; local paired KC passes.
+Coverage ledger updated. No production change/global hook/VM operation. Next
+upstream caller ABI, owner identification and terminal admission state, not a
+blanket transport shutdown that also rejects required retirement work.
+
 Display workloop provenance/hook-scope follow-up: complete
 IOAccelDisplayMachine::get_pipe_workloop 0x14b73d76 (0x2a) reviewed; returns
 cached +0x120 or calls import 0x10138 and stores result. Base display-pipe
