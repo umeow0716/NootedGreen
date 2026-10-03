@@ -27,6 +27,19 @@ enforce fault-before-panic and prohibit native/helper/backing side effects.
 
 ## Mapping getter provenance follow-up (offline)
 
+Inherited stop follow-up: complete accelerator stop (0x43f) and its captured-
+owner block (0x2d7) were read/pinned locally. Stop releases the accelerator
+mutex before calling an imported block-execution helper with workloop +0xf0,
+then reacquires the mutex for further cleanup and later releases/clears +0xf0.
+The block contains twelve conditional source-removal calls, releasing/clearing
+each source afterward without checking removal return. Four source paths
+first call disable virtual +0x158. The block returns zero even if removal
+failed. No direct MMIO occurs in the two bodies, but called virtuals/helpers
+remain separate review obligations. Exact block-execution API/gate semantics,
+event-machine pre-stop virtuals, related helper bodies and full start remain
+pending. The observed unchecked failures are not repaired by a passing hash
+contract, and no callback or GPU quiescence is certified.
+
 Actual accelerator workloop factory follow-up: complete Boot workLoop factory
 (0xb0 bytes) was read and locally pinned. It allocates an object, initializes
 reference count to 1, installs the base IOWorkLoop vtable, updates metaclass

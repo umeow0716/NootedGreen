@@ -7,6 +7,11 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 inherited stop follow-up: complete accelerator stop and stop block
+read/pinned; twelve removal calls and workloop release/clear tested locally.
+Block-execution import and other callees remain pending; ignored removal
+results still prevent an unconditional drain-before-free claim.
+
 2026-10-04 workloop factory body follow-up: complete Boot factory reviewed and
 locally pinned with base vtable, init and failed-init release/null result.
 Actual construction-site type resolved; whole accelerator lifecycle pending.

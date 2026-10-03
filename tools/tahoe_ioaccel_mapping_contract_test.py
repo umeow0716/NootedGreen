@@ -484,6 +484,17 @@ def check(path, boot_path=None):
     # Identity is checked before parsing this deliberately version-specific
     # fixture. An unknown KC must be reviewed, never silently accepted.
     assert hashlib.sha256(image).hexdigest() == KC_SHA256, "unreviewed KC identity"
+    # Complete reviewed inherited stop and its captured-owner block. These
+    # hashes do not certify called virtuals or runActionBlock synchronization.
+    for start, length, digest in (
+            (0x14ba1a7c, 0x43f, "5a5b95178a1b0bd70d3699730f0fcadc69f4449232a74a1e44231ea94172820b"),
+            (0x14ba1ebb, 0x2d7, "bfcad84d6dc88c187f2478166bc752a66dbba41d2d4a123a4d8be8d8653232b1")):
+        assert hashlib.sha256(image[start:start + length]).hexdigest() == digest, "changed accelerator stop/block body"
+    stop_block = image[0x14ba1ebb:0x14ba2192]
+    assert stop_block.count(bytes.fromhex("ff 90 48 01 00 00")) == 12, "changed stop-block removal inventory"
+    assert image[0x14ba1d7d:0x14ba1d8b] == bytes.fromhex("ff 50 28 49 c7 86 f0 00 00 00 00 00 00 00"), \
+        "changed stop workloop release/clear sequence"
+    print("PASS complete inherited accelerator stop/block and twelve source removal calls")
     entries = []
     for command, offset in commands(image, 0):
         if command == 0x80000035:
