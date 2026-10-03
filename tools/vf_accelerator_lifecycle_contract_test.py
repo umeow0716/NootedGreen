@@ -48,6 +48,8 @@ GUC_ATTACH_DESC = "__ZN13IGHardwareGuC29AttachContextDescToGucContextERK21SGfxCo
 GUC_DETACH_DESC = "__ZN13IGHardwareGuC31DetachContextDescFromGucContextERK21SGfxContextDescriptor"
 GUC_INVALIDATE_TLB = "__ZN13IGHardwareGuC13invalidateTLBEv"
 CONTEXT_FREE = "__ZN17IGHardwareContext4freeEv"
+CONTEXT_INIT = "__ZN17IGHardwareContext15initWithOptionsEP11IGAccelTaskRK23IGHardwareContextParamsh"
+CONTEXT_RING_GPU_ADDRESS = "__ZN17IGHardwareContext25initRingGPUVirtualAddressEv"
 SCHEDULER4_BIND = "__ZN12IGScheduler44bindE10IGHwCsTypeih"
 SCHEDULER4_UNBIND = "__ZN12IGScheduler46unbindEP17IGHardwareContext"
 GET_DEFAULT_RESET = "__ZN16IntelAccelerator20getDefaultResetValueEj"
@@ -492,7 +494,8 @@ def macho_inventory(path):
     if len(invalidate_edges) != 1 or len(detach_edges) != 1 or \
             invalidate_edges[0] >= detach_edges[0]:
         raise AssertionError(f"{path}: shared-private invalidate/detach order changed")
-    for slot, target in ((0x138, SCHEDULER4_CLEANUP_PRIVATE),
+    for slot, target in ((0x128, SCHEDULER4_INIT_PRIVATE),
+                         (0x138, SCHEDULER4_CLEANUP_PRIVATE),
                          (0x1c8, SCHEDULER4_BIND),
                          (0x1d8, SCHEDULER4_UNBIND)):
         if struct.unpack_from("<Q", image,
@@ -501,14 +504,26 @@ def macho_inventory(path):
     context_free_start = value(CONTEXT_FREE)
     context_free_body = image[context_free_start:next_symbol(context_free_start)]
     ownership_anchors = (
+        bytes.fromhex("48 8b bb b0 00 00 00"),
+        bytes.fromhex("48 8b bb b8 00 00 00"),
         bytes.fromhex("ff 90 38 01 00 00"),
         bytes.fromhex("48 8b bb a8 00 00 00"),
         bytes.fromhex("48 8b b3 98 00 00 00"),
         bytes.fromhex("48 8b 7b 58"))
-    if [context_free_body.count(anchor) for anchor in ownership_anchors] != [1, 1, 2, 1] or \
+    if [context_free_body.count(anchor) for anchor in ownership_anchors] != [1, 1, 1, 1, 2, 1] or \
             [context_free_body.index(anchor) for anchor in ownership_anchors] != sorted(
                 context_free_body.index(anchor) for anchor in ownership_anchors):
         raise AssertionError(f"{path}: context detach/ring/image/task teardown order changed")
+    address_start = value(CONTEXT_RING_GPU_ADDRESS)
+    address_body = image[address_start:next_symbol(address_start)]
+    if address_body.count(bytes.fromhex(
+            "48 8b 87 b0 00 00 00 48 8b b8 80 00 00 00")) != 1:
+        raise AssertionError(f"{path}: context DMA ring backing source changed")
+    init_start = value(CONTEXT_INIT)
+    init_body = image[init_start:next_symbol(init_start)]
+    if init_body.count(bytes.fromhex(
+            "ff 90 28 01 00 00 49 8b 7d 50")) != 1:
+        raise AssertionError(f"{path}: native unchecked context attach call changed")
 
     # Normal producer backpressure polls shared context head/stamp memory.
     # Keep its timeout diagnostic behind the already isolated entry rather
@@ -1242,6 +1257,29 @@ def source_contract(path):
     attach = function_body(source, "bool Gen11::vfAttachContextDesc(void *that, const uint32_t *descriptor)")
     if "!gVfUsesMemoryIrq ||" not in attach or "vfPrepareContextMemoryIrq(" not in attach:
         raise AssertionError(f"{path}: LRCA memory-IRQ mutation is not capability-gated")
+    for token in ("!ringBacking ||", "entry.ringBacking != ringBacking",
+                  "kVfContextRingObjectOffset", "kVfRingMappedBufferOffset"):
+        if token not in attach:
+            raise AssertionError(f"{path}: direct context ring ownership lacks {token}")
+    if not attach.index("ringBacking->retain();") < attach.index(
+            "entry.ringBacking = ringBacking;") < attach.index(
+                "entry.state = kVfGucContextRegistering;") < attach.index(
+                    "vfSendCtbFastAction(that, request,"):
+        raise AssertionError(f"{path}: ring DMA backing is not pinned before registration")
+    partial_fault = 'vfMarkProtocolFault("failed to retire partially registered GuC context");'
+    if not attach[attach.index(partial_fault) + len(partial_fault):].lstrip().startswith(
+            'PANIC_COND(true, "ngreen",'):
+        raise AssertionError(f"{path}: partially owned context can return into native initialization")
+    retire = function_body(source, "void vfReleaseRetiredContextBacking(uint16_t gucId)")
+    for token in ("!gVfProtocolFault", "entry.state == kVfGucContextTombstone",
+                  "entry.refCount == 0"):
+        if token not in retire:
+            raise AssertionError(f"{path}: retired backing release lacks {token}")
+    if not retire.index("ringBacking = entry.ringBacking;") < retire.index(
+            "NGVfContextEvent::clearReleasedIdentity(entry);") < retire.index(
+                "IOSimpleLockUnlockEnableInterrupt(") < retire.index(
+                    "ringBacking->release();"):
+        raise AssertionError(f"{path}: retired DMA ring release/lock order changed")
     detach = function_body(source, "void Gen11::vfDetachContextDesc(void *that, const uint32_t *descriptor)")
     for reason in (
             "VF detach without valid context bookkeeping",

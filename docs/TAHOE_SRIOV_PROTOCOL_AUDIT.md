@@ -1,20 +1,58 @@
 # Tahoe SR-IOV protocol audit — in progress
 
 Updated: 2026-10-04. The last dynamic source baseline is `ce166c8`; the latest
-completed offline-reviewed checkpoint is V263 context-teardown fail-stop on
+completed offline-reviewed checkpoint is V264 retained DMA ring backing on
 `codex/tahoe-sriov-vf`. This is NOT a boot-test candidate or a successful
 driver baseline. The `ce166c8` run produced repeatable host PF DMAR faults
 followed by i915 hangs and a host reboot. Keep `macos-tahoe-sriov` shut off until the
 corrected code passes the remaining offline review and every independently
 enforced containment precondition.
 
+## V264 retain the actual DMA ring through deregistration (offline)
+
+Allocation-site tracing corrects V263's `+0xa8` interpretation: it is an
+additional `IGSharedMappedBuffer`, not the ring object. Context initialization
+stores `IGHardwareRingBuffer::withHardwareContext` at `+0xb0` and its FIFO
+channel at `+0xb8`. Context `free` releases both **before** Scheduler4 cleanup
+at `+0x138`. `initRingGPUVirtualAddress` follows context `+0xb0`, ring `+0x80`,
+and writes that mapped buffer's GPU address to context image `+0x1024`.
+Therefore V263's late fail-stop alone could not prevent early DMA ring release.
+
+V264 adds a separate retained `ringBacking` to the direct GuC record before
+REGISTER_CONTEXT publication. A repeated attach must match that ring backing
+as well as its existing descriptor/image identity. Native ring/FIFO object
+destruction can then drop their references without freeing the GPU ring pages.
+The record releases both ring and image outside the simple lock only after
+acknowledged deregistration, zero native references and no protocol fault;
+the tombstone identity-clearing helper clears both pointers. Tombstone reuse
+and bootstrap unowned-table checks also account for the ring reference.
+
+The native context initializer calls Scheduler4 attach at `+0x128` without
+checking its return value before continuing. An unsuccessful compensating
+deregistration after partial registration must therefore fail-stop immediately,
+not return false and rely on this native caller. Clean no-registration failures
+still return false; propagating those failures through native context creation
+is a separate unresolved issue, not a claimed successful allocation path.
+
+The two payload contracts now pin the ring address source, unchecked attach
+site and complete ring/FIFO-before-cleanup ordering. Source contracts pin retain
+before publication and release after unlocking; the shutdown event tests retain
+both pointers through DEREGISTER_DONE and clear them at final release. These
+are offline checks, not runtime proof or a guarantee against host PF faults.
+Both payload contracts and the complete offline suite passed on 2026-10-04
+(`/tmp/ngreen-static.TeFS7J`). No VM start, hardware-state change or deployment
+was performed.
+
 ## V263 context teardown DMA backing boundary (offline)
 
 The Scheduler4 vtable distinguishes context cleanup at `+0x138` from ring
 `bind` at `+0x1c8` and `unbind` at `+0x1d8`. The latter is an exact no-op in
 the pinned payload. Context `free` invokes shared-private cleanup before
-releasing its ring (`+0xa8`), context image (`+0x98`) and task (`+0x58`), in
-that order. The lifecycle contract now pins the slots and destructor anchors.
+releasing additional mapped backing (`+0xa8`), context image (`+0x98`) and task
+(`+0x58`), in that order. It already released the ring (`+0xb0`) and FIFO
+(`+0xb8`); V264 above corrects the earlier ownership interpretation and closes
+that early DMA ring release gap. The lifecycle contract pins the slots and
+destructor anchors.
 Earlier ring-init/free working notes must not equate bind/unbind with
 descriptor attach/detach.
 
@@ -60,8 +98,9 @@ not the similarly named `IGGuC` shared-private allocation methods. The focused
 contract pins these direct edges and their cleanup order in both payloads.
 Ring initialization borrows the context image and task stamp CPU mappings;
 the task stamp allocation at `+0x288` can be created or cloned from the kernel
-task. Context teardown releases its ring at `+0xa8` before its image at `+0x98`
-and task at `+0x58`. These local ownership observations do not establish global
+task. Context teardown releases additional mapped backing at `+0xa8` before
+its image at `+0x98` and task at `+0x58`; ring/FIFO are released earlier, as
+corrected and addressed in V264 above. These local ownership observations do not establish global
 DMA quiescence, all partial-init paths, or the special task-retain paths; those
 remain open obligations. No dynamic safety claim or driver route change follows.
 

@@ -100,8 +100,10 @@ int main() {
         bool enablePending;
         bool disablePending;
         void *contextBacking;
+        void *ringBacking;
     };
     int backing = 0;
+    int ringBacking = 0;
     for (const auto initialState : {
              kVfGucContextEmpty, kVfGucContextTombstone,
              kVfGucContextRegistering, kVfGucContextRegistered,
@@ -109,7 +111,7 @@ int main() {
              kVfGucContextPendingDisable, kVfGucContextDisabled,
              kVfGucContextPendingDeregister}) {
         Context context {0x12345000U, 0x12345309U, 0xA5A20020U, 7,
-                         4, 2, initialState, true, true, &backing};
+                         4, 2, initialState, true, true, &backing, &ringBacking};
         const bool handled = NGVfContextEvent::deregisterDone(context);
         assert(handled ==
                (initialState == kVfGucContextPendingDeregister));
@@ -122,17 +124,19 @@ int main() {
         assert(context.engineClass == 4);
         assert(context.engineInstance == 2);
         assert(context.contextBacking == &backing);
+        assert(context.ringBacking == &ringBacking);
         assert(context.refCount == 7);
         assert(context.enablePending == !handled);
         assert(context.disablePending == !handled);
     }
 
     Context released {0x12345000U, 0x12345309U, 0xA5A20020U, 0,
-                      4, 2, kVfGucContextTombstone, false, false, &backing};
+                      4, 2, kVfGucContextTombstone, false, false, &backing, &ringBacking};
     NGVfContextEvent::clearReleasedIdentity(released);
     assert(released.lrcaPage == 0 && released.descriptorLo == 0 &&
            released.descriptorHi == 0 && released.engineClass == 0 &&
-           released.engineInstance == 0 && released.contextBacking == nullptr);
+           released.engineInstance == 0 && released.contextBacking == nullptr &&
+           released.ringBacking == nullptr);
     assert(released.refCount == 0 &&
            released.state == kVfGucContextTombstone);
 }
