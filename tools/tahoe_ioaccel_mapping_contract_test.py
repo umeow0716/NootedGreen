@@ -35,6 +35,8 @@ EVENT_DISABLE_STAMP_LOCKED = "__ZN20IOAccelEventMachine223disable_stamp_interrup
 EVENT_ENABLE_STAMP = "__ZN20IOAccelEventMachine220enableStampInterruptEi"
 EVENT_DISABLE_STAMP = "__ZN20IOAccelEventMachine221disableStampInterruptEi"
 EVENT_OWNER_BODIES = {
+    "__ZN29IOAccelDisplayPipeUserClient217s_transaction_endEPS_PvP25IOExternalMethodArguments": (0xe, "000d47cc2f714b2e7c26089183cd6f4294485f8bc812ca6075ec39a66a4378ff"),
+    "__ZN18IOAccelDisplayPipe15transaction_endEP29IOAccelDisplayPipeUserClient2P33IOAccelDisplayPipeTransactionArgs": (0x1b4, "29932dad1b6c1449a3b10c9024f3f67a629b75c00d66bc8583abcf8ffb076851"),
     "__ZN18IOAccelDisplayPipe21displayModeWillChangeEv": (0x34, "a2a5161d9727962a15fcb4f3e1522e28a7cf8c765b284596f9bcb56bbe3f33e2"),
     "__ZN18IOAccelDisplayPipe21framebufferTerminatedEv": (0x6, "5a96d1fb661d55552184ea24023ae8190bd1523ae1f855a8d671b07143e8b1df"),
     "__ZN29IOAccelDisplayPipeUserClient214externalMethodEjP25IOExternalMethodArgumentsP24IOExternalMethodDispatchP8OSObjectPv": (0x2e, "8e35a9e1fddb14c9f1737b913eb5b0bc129fb2213a9511eb99eb24b735a29e01"),
@@ -742,6 +744,15 @@ def check(path, boot_path=None):
     assert stop_owner.count(bytes.fromhex("ff 90 48 01 00 00")) == 3, "changed base event stop source-removal inventory"
     print("PASS inherited event owner free/stop and per-event stamp-disable bodies (outer drain not proven)")
     lazy_setup = address_of("__ZN18IOAccelDisplayPipe14setup_workloopEv")
+    raw_action, scalar_in, struct_in, scalar_out, struct_out = struct.unpack("<Q4I", read(0x14be3950 + 8 * 24, 24))
+    assert raw_action >> 63 == 0 and (raw_action >> 30) & 3 == 1, "changed transaction-end descriptor target encoding"
+    assert raw_action & 0x3fffffff == address_of("__ZN29IOAccelDisplayPipeUserClient217s_transaction_endEPS_PvP25IOExternalMethodArguments"), "changed selector 8 action"
+    assert (scalar_in, struct_in, scalar_out, struct_out) == (0, 280, 0, 0), "changed transaction-end argument counts"
+    for call, target in ((0x14bb516d, "__ZN29IOAccelDisplayPipeUserClient214transactionEndEP33IOAccelDisplayPipeTransactionArgs"),
+                         (0x14bb06a3, "__ZN18IOAccelDisplayPipe17transaction_queueEP30IOAccelDisplayPipeTransaction2")):
+        encoded = read(call, 5)
+        assert encoded[0] in (0xe8, 0xe9) and call + 5 + struct.unpack_from("<i", encoded, 1)[0] == address_of(target), "changed transaction-end dispatch/queue edge"
+    assert read(0x14bb061e, 6) == bytes.fromhex("41 89 c4 89 43 58"), "changed transaction preparation result preservation"
     for slot, method in ((0x868, "__ZN18IOAccelDisplayPipe21displayModeWillChangeEv"),
                          (0x8e8, "__ZN18IOAccelDisplayPipe21framebufferTerminatedEv")):
         raw = struct.unpack("<Q", read(address_of("__ZTV18IOAccelDisplayPipe") + 16 + slot, 8))[0]

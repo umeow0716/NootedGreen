@@ -732,3 +732,11 @@ offset is verified separately from object-vptr offsets. Descriptor dispatch
 does not supply an accelerator lock or terminal admission check. Subclasses,
 higher-level entry serialization, legacy dispatch helpers, descriptor action
 coverage and lazy-setup failure unwind remain incomplete. No VM/PCI writes.
+# Latest selector/action checkpoint
+
+Selector 8 descriptor counts/target, `s_transaction_end` forwarding action,
+and complete base pipe `transaction_end` span are pinned and locally checked.
+Preparation errors preserve status but still queue the transaction. Downstream
+error retirement, prepare/argument callee bodies, virtual +0x8d8 overrides,
+event-machine +0x1b8 target and remaining 13 descriptor actions are pending.
+This extends reviewed coverage, not hardware acceleration or DMA safety proof.

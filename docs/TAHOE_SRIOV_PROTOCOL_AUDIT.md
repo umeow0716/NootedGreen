@@ -5529,3 +5529,28 @@ entry dispatch, descriptor actions, subclass overrides, registration failure
 unwind and concurrent lazy setup still require review. No production hook or
 runtime test was introduced. Paired-KC tests pin hashes and resolved targets;
 these are provenance checks, not a concurrency or hardware-success proof.
+# Selector 8 transaction-end dispatch follow-up
+
+Offline paired-KC evidence pins display descriptor 8 at `0x14be3950+8*24`:
+cache-level-1 action `s_transaction_end`, argument counts `(0,280,0,0)`.
+The 14-byte action forwards structure input (`arguments+0x30`) to the already
+reviewed user-client `transactionEnd`; it does not add synchronization.
+
+Reviewed complete base pipe `transaction_end` span `0x14bb0560..0x14bb0714`
+(0x1b4 bytes, including cold-call edges/padding). It searches pending
+transactions by ID, validates doubly linked-list relationships, unlinks the
+selected transaction, invokes virtual `+0x8d8`, sets transaction arguments and
+calls `prepare`. The latter two callee bodies and the virtual override are
+not certified by this review. Failures store status in transaction `+0x58`
+and preserve return status in `r12d`; both failure and success flow into
+`transaction_queue` at `0x14bb06a3`. Successful preparation also iterates
+resource/event entries and invokes event-machine virtual `+0x1b8` before
+queuing. Queue return is not substituted for the preserved status.
+
+No explicit pipe terminal test appears in this base body; the upstream
+user-client checks and lock/wait/recheck sequence remain relevant. Error
+transactions being queued may support notification/retirement semantics;
+this is not established as a defect or safe to suppress without reviewing
+the downstream queue and destruction paths. List-validation cold targets
+contain trap instrumentation; they are not normal error-return cleanup.
+Paired-KC provenance tests pass. No production patch or runtime operation.
