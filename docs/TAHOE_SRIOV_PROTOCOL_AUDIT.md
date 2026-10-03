@@ -27,6 +27,18 @@ enforce fault-before-panic and prohibit native/helper/backing side effects.
 
 ## Mapping getter provenance follow-up (offline)
 
+Scheduler5 init provenance follow-up: complete initWithAccelerator 0x17c
+body reviewed/pinned. It calls base initWithOptions first, then imports base
+IOWorkLoop::workLoop and stores private +0xa80; creates a provider-null
+IOInterruptEventSource +0xcd8 and adds/enables it on that private workloop
+(add return unchecked), allocates storage and creates engine objects. There
+is no base timer +0x448 access/rebinding in this body. Post-base failures call
+virtual +0x90, whose effective Scheduler5 vtable entry is the reviewed derived
+free. Factory and allocation import relocations are pinned for both payloads.
+This closes the proposed init-local timer-rebinding escape, but not helper/
+engine/upper-level detach or producer admission. The currently selected VF
+scheduler and partial-construction owner lifetime still need caller analysis.
+
 Derived scheduler destruction follow-up: complete Scheduler4 free (0xa2)
 and Scheduler5 free (0x126) bodies are reviewed/pinned for both payloads.
 Their RIP-relative base vtable references resolve to base IGScheduler::free

@@ -80,6 +80,11 @@ pending; base gated invocation alone is not a cleanup success proof.
 reviewed/pinned; complete reference XNU runAction read. Actual Boot virtual
 +0x1c8, stored removal action and concrete control-gate type remain pending.
 
+2026-10-04 Scheduler5 init follow-up: complete 0x17c body, base-init edge,
+private-workloop store, failed-init effective free virtual and three factory/
+allocation imports reviewed/pinned. No base timer rebinding in this body;
+engine/helper/upper-level ownership and selected scheduler remain pending.
+
 2026-10-04 derived scheduler free follow-up: full Scheduler4/Scheduler5 free
 bodies, base vtable free delegation and Scheduler5 private-workloop clear
 before inherited cleanup reviewed/pinned. Earlier getter evidence implies

@@ -329,6 +329,8 @@ def macho_inventory(path):
     # descriptor spin locks. They do not certify dynamic callback lifetime.
     stamp_irq_imports = {
         0x5657a: "_IOLockAlloc", 0x5663e: "_IOLockFree",
+        0x37ce4: "__ZN10IOWorkLoop8workLoopEv", 0x37d58: "_IOMalloc",
+        0x37d08: "__ZN22IOInterruptEventSource20interruptEventSourceEP8OSObjectPFvS1_PS_iEP9IOServicei",
         0x56549: "__ZN18IOTimerEventSource16timerEventSourceEP8OSObjectPFvS1_PS_E",
         0x5652e: "__ZN5OSSet12withCapacityEj", 0x564cb: "_memset",
         0x15ccb: "__ZN22IOInterruptEventSource20interruptEventSourceEP8OSObjectPFvS1_PS_iEP9IOServicei",
@@ -437,6 +439,20 @@ def macho_inventory(path):
     scheduler5_free = value("__ZN12IGScheduler54freeEv")
     assert image[scheduler5_free + 0x100:scheduler5_free + 0x10b] == bytes.fromhex("49 c7 86 80 0a 00 00 00 00 00 00"), \
         f"{path}: changed private workloop clear before inherited cleanup"
+    scheduler5_init = value("__ZN12IGScheduler519initWithAcceleratorEP22IOGraphicsAccelerator2")
+    assert next_symbol(scheduler5_init) - scheduler5_init == 0x17c and \
+        hashlib.sha256(image[scheduler5_init:scheduler5_init + 0x17c]).hexdigest() == \
+        "d9be84cb035ee2f753d469bdf54151714273201a81b1d30f1ddd6725dd01bda1", \
+        f"{path}: changed reviewed scheduler-5 initialization body"
+    call = scheduler5_init + 0x26
+    assert image[call] == 0xe8 and call + 5 + struct.unpack_from("<i", image, call + 1)[0] == scheduler_init, \
+        f"{path}: changed scheduler-5 inherited initialization edge"
+    assert image[scheduler5_init + 0x38:scheduler5_init + 0x40] == bytes.fromhex("49 89 84 24 80 0a 00 00"), \
+        f"{path}: changed private workloop store after inherited timer setup"
+    assert image[scheduler5_init + 0x167:scheduler5_init + 0x16d] == bytes.fromhex("ff 90 90 00 00 00"), \
+        f"{path}: changed scheduler-5 failed-init free dispatch"
+    assert struct.unpack_from("<Q", image, value(SCHEDULER5_VTABLE) + 16 + 0x90)[0] == scheduler5_free, \
+        f"{path}: changed scheduler-5 failed-init effective free target"
     # This is an inventory of the native failure-sensitive ordering, not a
     # claim that cancellation or unchecked removal drains every callback.
     for offset, instruction in (
