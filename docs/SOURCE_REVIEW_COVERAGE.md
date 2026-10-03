@@ -7,6 +7,11 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 actual timer factory follow-up: complete Boot default factory,
+options-init and setup code with five-entry data table reviewed/pinned locally.
+Options 1/passive setup distinguished from workloop-priority active mode;
+intermediate init delegation and callback/workloop draining remain pending.
+
 2026-10-04 timer cancel follow-up: complete Tahoe base cancelTimeout body read;
 local paired fixture pins virtual +0x218, body, mode selector and both cancel/
 cancel-wait call targets. Actual timer init mode and thread-call draining remain

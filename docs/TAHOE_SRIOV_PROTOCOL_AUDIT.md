@@ -27,6 +27,19 @@ enforce fault-before-panic and prohibit native/helper/backing side effects.
 
 ## Mapping getter provenance follow-up (offline)
 
+Actual Boot timer factory follow-up: complete default factory and options-init
+bodies, plus setTimeoutFunc code and its five-entry trailing jump table, were
+read. The factory installs the base timer vtable and passes options 1 through
+virtual `+0x220`; options-init stores them in `+0x50` and delegates through
+`+0x1c0`. Setup option 1 selects the table's second entry and ORs flag value 1
+(passive), whereas the workloop-priority case sets value 2 (active/cancel-wait).
+The local paired fixture pins these three windows, all five table targets,
+factory option and init virtual identity. Do not decode jump-table bytes as
+instructions. The middle init virtual and setup dispatch, callback retention/
+generation and workloop removal gates remain pending before certifying the
+complete actual factory-to-teardown chain. No unconditional drain guarantee
+or runtime authorization follows from the passive-mode observation.
+
 Tahoe timer cancel follow-up: the base timer virtual `+0x218` resolves to
 `cancelTimeout`. Its complete 0x70-byte Boot KC body increments generation when
 expansion storage exists, chooses `thread_call_cancel_wait` only when object

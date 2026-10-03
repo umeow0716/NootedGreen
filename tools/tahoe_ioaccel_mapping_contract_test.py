@@ -190,7 +190,10 @@ def check_boot_atomic(system, path):
                                    b"__ZN22IOInterruptEventSource23normalInterruptOccurredEPvP9IOServicei",
                                    b"__ZN18IOTimerEventSource12setTimeoutUSEj",
                                    b"__ZN18IOTimerEventSource13cancelTimeoutEv",
-                                   b"_thread_call_cancel", b"_thread_call_cancel_wait")}
+                                   b"_thread_call_cancel", b"_thread_call_cancel_wait",
+                                   b"__ZN18IOTimerEventSource16timerEventSourceEP8OSObjectPFvS1_PS_E",
+                                   b"__ZN18IOTimerEventSource4initEjP8OSObjectPFvS1_PS_E",
+                                   b"__ZN18IOTimerEventSource14setTimeoutFuncEv")}
     for command, offset in commands(boot, kernel[0]):
         if command != 2:
             continue
@@ -238,6 +241,28 @@ def check_boot_atomic(system, path):
     assert kernel_read(cancel + 0x14, 4) == bytes.fromhex("f6 43 2a 02"), \
         "changed timer active-mode wait selector"
     print("PASS Boot KC timer cancel virtual and conditional cancel-wait dispatch")
+    # The setup symbol window includes a five-entry jump table after code.
+    # Fix both the reviewed window and data targets, not a linear decoding of
+    # that table as instructions. Init's further virtual delegation is pending.
+    for method, length, digest in (
+            (b"__ZN18IOTimerEventSource16timerEventSourceEP8OSObjectPFvS1_PS_E", 0xc0,
+             "79088c15da63def57438cdb0a553488e577861f0100f3a0c442a484585a51d5a"),
+            (b"__ZN18IOTimerEventSource4initEjP8OSObjectPFvS1_PS_E", 0x20,
+             "191a549b208c6e8133230403a4342f3f15b278a09ce9f57652b7e9a33f2dd046"),
+            (b"__ZN18IOTimerEventSource14setTimeoutFuncEv", 0x120,
+             "031283000cf6d490d994506e758769c7f9712765b731b2d9b03f93dc42dfb13c")):
+        assert hashlib.sha256(kernel_read(symbols[method][0], length)).hexdigest() == digest, \
+            "changed timer factory/options/setup window"
+    setup = symbols[b"__ZN18IOTimerEventSource14setTimeoutFuncEv"][0]
+    table = setup + 0x104
+    for index, offset in enumerate((0x70, 0xb6, 0xa4, 0xad, 0x9b)):
+        assert table + struct.unpack("<i", kernel_read(table + 4 * index, 4))[0] == setup + offset, \
+            "changed timer priority jump-table target"
+    factory = symbols[b"__ZN18IOTimerEventSource16timerEventSourceEP8OSObjectPFvS1_PS_E"][0]
+    assert kernel_read(factory + 0x8d, 5) == bytes.fromhex("be 01 00 00 00"), "changed default timer options"
+    assert struct.unpack("<Q", kernel_read(symbols[b"__ZTV18IOTimerEventSource"][0] + 16 + 0x220, 8))[0] == symbols[b"__ZN18IOTimerEventSource4initEjP8OSObjectPFvS1_PS_E"][0], \
+        "changed timer options init virtual"
+    print("PASS Boot KC default timer factory/options and setup jump table")
     assert system[0x10132:0x10138] == bytes.fromhex("ff 25 60 40 01 00"), "changed atomic import stub"
     raw = struct.unpack_from("<Q", system, 0x24198)[0]
     assert (raw >> 30) & 3 == 0 and raw >> 63 == 0, "unexpected atomic import cache level/auth"
