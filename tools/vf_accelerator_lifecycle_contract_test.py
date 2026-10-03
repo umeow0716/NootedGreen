@@ -293,7 +293,7 @@ def macho_inventory(path):
                       if name in wanted}
     relocations = {}
     panic_relocations = set()
-    channel_imports = {}
+    inherited_event_imports = {}
     external_offset, external_count = dysymtab[16], dysymtab[17]
     for index in range(external_count):
         address, bits = struct.unpack_from(
@@ -302,10 +302,11 @@ def macho_inventory(path):
         if names[symbol_index] in (
                 "__ZN15IOAccelChannel219mergeEventExcludingEP12IOAccelEventS1_",
                 "__ZN15IOAccelChannel213setEventStampEP12IOAccelEvent",
-                "__ZN15IOAccelChannel214incrementStampEv"):
-            if address in channel_imports:
+                "__ZN15IOAccelChannel214incrementStampEv",
+                "__ZN22IOGraphicsAccelerator211scrubEventsEv"):
+            if address in inherited_event_imports:
                 raise AssertionError(f"{path}: duplicate channel method relocation")
-            channel_imports[address] = (names[symbol_index], bits >> 24)
+            inherited_event_imports[address] = (names[symbol_index], bits >> 24)
         if names[symbol_index] == "_panic":
             if ((bits >> 24) & 1, (bits >> 25) & 3,
                     (bits >> 27) & 1, (bits >> 28) & 0xF) != (1, 2, 1, 2):
@@ -490,8 +491,12 @@ def macho_inventory(path):
             (0x148, "__ZN15IOAccelChannel214incrementStampEv")):
         address = value(FIFO_VTABLE) + 16 + slot
         if struct.unpack_from("<Q", image, address)[0] != 0 or \
-                channel_imports.get(address) != (method, 0x0E):
+                inherited_event_imports.get(address) != (method, 0x0E):
             raise AssertionError(f"{path}: FIFO inherited event/stamp virtual changed")
+    scrub_slot = value("__ZTV16IntelAccelerator") + 16 + 0x8F0
+    if struct.unpack_from("<Q", image, scrub_slot)[0] != 0 or \
+            inherited_event_imports.get(scrub_slot) != ("__ZN22IOGraphicsAccelerator211scrubEventsEv", 0x0E):
+        raise AssertionError(f"{path}: stamp rollover scrub virtual changed")
     for anchor in ("44 8a 7b 48 45 84 ff", "c6 43 48 00",
                    "8b 53 64 8b 4b 68 45 31 c9", "45 0f b6 c7 ff 90 48 01 00 00"):
         if submit_body.count(bytes.fromhex(anchor)) != 1:

@@ -17,7 +17,40 @@ EVENT_CLEAN = "__ZN24IOAccelEventMachineFast210cleanEventEP12IOAccelEvent"
 EVENT_TERMINATE = "__ZN24IOAccelEventMachineFast224deviceTerminatedUnlockedEv"
 EVENT_SIGNAL = "__ZN20IOAccelEventMachine211signalStampEij"
 EVENT_RESTART = "__ZN20IOAccelEventMachine215restart_channelEv"
+EVENT_MERGE_EXCLUDING = "__ZN24IOAccelEventMachineFast219mergeEventExcludingEP12IOAccelEventS1_i"
+EVENT_SET_STAMP = "__ZN24IOAccelEventMachineFast213setEventStampEiP12IOAccelEvent"
+EVENT_INCREMENT = "__ZN24IOAccelEventMachineFast214incrementStampEi"
+EVENT_WRITE_STAMP = "__ZN24IOAccelEventMachineFast217writeStampCommandEiP17IOAccelEventQueueP17vendevtCommandRec"
 CONTRACTS = {
+    "__ZN22IOGraphicsAccelerator211scrubEventsEv":
+        bytes.fromhex("55 48 89 e5 41 57 41 56 53 48 83 ec 28 48 89 fb "
+                      "49 bf aa aa aa aa aa aa aa aa 4c 8d 75 e0 4d 89 3e "
+                      "48 8d b7 88 0a 00 00 4c 89 f7 e8 b2 96 fd ff "
+                      "4c 89 f7 e8 b6 96 fd ff 48 85 c0 74 0e 48 8b 08 "
+                      "48 89 c7 ff 91 28 01 00 00 eb e5 4c 8d 75 c8 4d 89 3e "
+                      "4d 89 7e 08 4d 89 7e 10 48 81 c3 00 0b 00 00 4c 89 f7 "
+                      "48 89 de e8 84 9c fd ff 4c 89 f7 e8 8a 9c fd ff "
+                      "48 85 c0 74 1d 48 8d 5d c8 48 8b 08 48 89 c7 "
+                      "ff 91 28 02 00 00 48 89 df e8 6d 9c fd ff 48 85 c0 "
+                      "75 e7 48 83 c4 28 5b 41 5e 41 5f 5d c3 90"),
+    "__ZN15IOAccelChannel213setEventStampEP12IOAccelEvent":
+        bytes.fromhex("55 48 89 e5 48 89 f2 48 8b 47 18 48 8b 80 80 03 00 00 "
+                      "8b 77 20 48 8b 08 48 8b 89 d0 01 00 00 48 89 c7 5d ff e1 90"),
+    "__ZN15IOAccelChannel214incrementStampEv":
+        bytes.fromhex("55 48 89 e5 48 8b 47 18 48 8b 80 80 03 00 00 8b 77 20 "
+                      "48 8b 08 48 8b 89 d8 01 00 00 48 89 c7 5d ff e1"),
+    "__ZN15IOAccelChannel219mergeEventExcludingEP12IOAccelEventS1_":
+        bytes.fromhex("55 48 89 e5 48 8b 47 18 48 8b 80 80 03 00 00 8b 4f 20 "
+                      "48 8b 38 4c 8b 87 c8 01 00 00 48 89 c7 5d 41 ff e0 90"),
+    EVENT_INCREMENT:
+        bytes.fromhex("55 48 89 e5 41 57 41 56 53 50 48 89 fb 48 63 c6 48 c1 e0 03 "
+                      "4c 8d 34 40 42 8b 84 37 fc 00 00 00 44 8d 78 01 44 31 f8 "
+                      "3d 00 00 00 40 72 0d 48 8b 7b 10 48 8b 07 ff 90 f0 08 00 00 "
+                      "46 89 bc 33 fc 00 00 00 48 8b 43 10 ff 80 a0 00 00 00 "
+                      "48 83 c4 08 5b 41 5e 41 5f 5d c3"),
+    EVENT_WRITE_STAMP:
+        bytes.fromhex("55 48 89 e5 48 63 f6 48 8d 04 76 8b 84 c7 fc 00 00 00 "
+                      "48 8b 17 4c 8b 82 a0 02 00 00 48 89 ca 89 c1 5d 41 ff e0 90"),
     EVENT_TERMINATE:
         bytes.fromhex("55 48 89 e5 48 8b 47 28 48 85 c0 74 30 8b 4f 30 85 c9 "
                       "7e 29 48 8d 97 04 01 00 00 31 f6 4c 8b 04 f0 4d 85 c0 "
@@ -140,7 +173,8 @@ def check(path, boot_path=None):
             symtab = struct.unpack_from("<6I", image, offset)[2:]
     assert symtab is not None, "missing embedded symbol table"
     symbol_offset, count, string_offset, string_size = symtab
-    matches = {name: [] for name in {*CONTRACTS, EVENT_VTABLE, EVENT_FINISH, EVENT_WAIT, EVENT_CLEAN, EVENT_SIGNAL, EVENT_RESTART}}
+    matches = {name: [] for name in {*CONTRACTS, EVENT_VTABLE, EVENT_FINISH, EVENT_WAIT, EVENT_CLEAN, EVENT_SIGNAL, EVENT_RESTART,
+                                    EVENT_MERGE_EXCLUDING, EVENT_SET_STAMP}}
     for index in range(count):
         name_offset, _, _, _, address = struct.unpack_from("<IBBHQ", image, symbol_offset + index * 16)
         assert name_offset < string_size, "invalid symbol string"
@@ -167,7 +201,9 @@ def check(path, boot_path=None):
     # target:30, cacheLevel:2, next:12, isAuth:1. This archived SystemKC
     # level-1 unslid base is zero; never apply this to a live slid pointer.
     for slot, name in ((0x188, EVENT_FINISH), (0x238, EVENT_WAIT),
-                       (0x148, EVENT_CLEAN), (0x250, EVENT_TERMINATE), (0x228, EVENT_SIGNAL)):
+                       (0x148, EVENT_CLEAN), (0x250, EVENT_TERMINATE), (0x228, EVENT_SIGNAL),
+                       (0x1c8, EVENT_MERGE_EXCLUDING), (0x1d0, EVENT_SET_STAMP),
+                       (0x1d8, EVENT_INCREMENT), (0x1e0, EVENT_WRITE_STAMP)):
         raw = struct.unpack("<Q", read(address_of(EVENT_VTABLE) + 16 + slot, 8))[0]
         assert (raw >> 30) & 3 == 1 and raw >> 63 == 0, "unexpected cache level/auth"
         assert raw & 0x3fffffff == address_of(name), f"changed event virtual {slot:#x}"
@@ -178,6 +214,10 @@ def check(path, boot_path=None):
         "02c75b9f3864be75d75b3b2fd1b777a52e016265036c7e77c096d810db3e260b", "changed signalStamp"
     assert hashlib.sha256(read(address_of(EVENT_RESTART), 0x23e)).hexdigest() == \
         "35a836d5773e442205b5f415e658630d2e643ed364a39bb800312d48b424345c", "changed restart_channel"
+    assert hashlib.sha256(read(address_of(EVENT_MERGE_EXCLUDING), 0x1d4)).hexdigest() == \
+        "20517fccc05f6ca02f2e15867e6b55ef6ec21ab7872f14a5abd9410bd8b8b4d8", "changed mergeEventExcluding"
+    assert hashlib.sha256(read(address_of(EVENT_SET_STAMP), 0x9e)).hexdigest() == \
+        "6240e1c9918181dd5d32c49d5fe01dab22e7705dc0d4d1d94b1e7189d8c8c995", "changed setEventStamp"
     wait = read(address_of(EVENT_WAIT), 0x34)
     assert wait[0x1c:0x32] == bytes.fromhex(
         "48 8b 4f 10 31 c0 83 b9 c8 0d 00 00 00 0f 85 f5 01 00 00 41 89 f7"), \

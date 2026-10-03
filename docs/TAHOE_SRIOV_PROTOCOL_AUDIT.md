@@ -149,6 +149,32 @@ The direct queue lock only begins in the GuC replacement, after the native
 producer has captured/cleared its stamp flag, so that lock alone does not prove
 safe concurrent capture at the Scheduler4 boundary. No runtime route was added.
 
+Inherited producer stamp follow-up (archived 25G229 SystemKC): the three
+`IOAccelChannel2` methods are short tail wrappers through accelerator `+0x380`
+to event-machine virtuals `+0x1c8`, `+0x1d0`, `+0x1d8`. Their complete bodies
+and Fast2 vtable targets are now locally pinned. Fast2 `incrementStamp(int)`
+reads channel software stamp `event+0xfc+channel*0x18`, computes the next
+32-bit value, calls accelerator virtual `+0x8f0` when `(old ^ next) >=
+0x40000000`, stores the new software stamp, then increments accelerator
+`+0xa0`. `writeStampCommand` reads that same software value and tail-dispatches
+to virtual `+0x2a0`; it does not inspect the mapped GPU-completed stamp.
+These two complete bodies are locally pinned, without asserting downstream
+packet handling or synchronization is finished.
+
+Both Intel payloads resolve accelerator virtual `+0x8f0` via an external
+64-bit relocation to inherited `IOGraphicsAccelerator2::scrubEvents()`.
+That complete KC body traverses shared list `+0xa88` and resource list
+`+0xb00`, invoking per-object virtuals `+0x128` and `+0x228`. Those callbacks
+and iterator lifetime/locking are still separate review obligations; the
+scrub call is not a GPU idle or producer-lock proof. Fast2 `setEventStamp`
+and `mergeEventExcluding` update packed event metadata and cached completed
+stamp `+0xf8`, read mapped stamps through `+0x28`, and can delegate to wait/
+restart methods when event slots are full. Complete body hashes now pin both
+reviewed functions locally; their callbacks and restart/termination bypasses
+remain open. No runtime coverage hook, completion predicate or driver behavior
+changed. The KC fixture stays local; CI only checks its Python syntax and the
+payload import identities, not the absent KC content.
+
 Inherited implementation found locally (2026-10-04): archived Tahoe 25G229
 `SystemKernelExtensions.kc`, SHA-256
 `5cb1be1dc530b4b953a33943567589101d3ac46bb8cf90728566ee7e5b1fa214`,

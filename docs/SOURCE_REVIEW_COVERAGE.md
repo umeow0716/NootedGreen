@@ -41,6 +41,15 @@ native `_panic`, not a normal retry path. Caller locking, inherited method
 implementation and complete virtual reachability remain open. This is a scoped
 binary-graph review, not certification of all sources or runtime correctness.
 
+Inherited producer follow-up: archived IOAccel channel wrapper bodies, Fast2
+increment/write/set/merge stamp methods and accelerator scrubEvents were read
+symbol-bounded. Local KC tests pin the wrappers, four effective event virtuals,
+increment/write/scrub complete bodies and set/merge body hashes. Both Intel
+payloads pin the inherited rollover scrub import. Stamp allocation updates
+software state, not GPU completion. Resource/shared scrub callbacks, event
+wait callbacks, iterator lifetime and producer serialization remain unfinished;
+the KC test is local-only and does not run against KC content in remote CI.
+
 V267 closes the verified VF event-timeout return into inherited restart/retry
 by protocol-fault admission closure followed by guest fail-stop. This is not
 normal recovery or proof that already-published DMA stops. PF and normal debug
