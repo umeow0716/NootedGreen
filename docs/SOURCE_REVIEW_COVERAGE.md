@@ -80,6 +80,11 @@ pending; base gated invocation alone is not a cleanup success proof.
 reviewed/pinned; complete reference XNU runAction read. Actual Boot virtual
 +0x1c8, stored removal action and concrete control-gate type remain pending.
 
+2026-10-04 complete native stop: full 0x3e4 body/branches reviewed/pinned,
+including type-5-only scheduler release, source-dependent unchecked removal
+and provider-gated inherited stop. stop(nullptr) does not reach inherited
+stop/block; constructor ordering and later free lifetime remain pending.
+
 2026-10-04 factory-null failure subsection: native 0xb3 window reviewed/pinned,
 busy/mutex unlock imports and effective stop(nullptr) target established.
 This is control-flow evidence, not partial-construction lifetime safety.

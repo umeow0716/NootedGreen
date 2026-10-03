@@ -447,6 +447,19 @@ def macho_inventory(path):
         f"{path}: changed private workloop clear before inherited cleanup"
     scheduler5_init = value("__ZN12IGScheduler519initWithAcceleratorEP22IOGraphicsAccelerator2")
     create = value("__ZN11IGScheduler6createEP16IntelAccelerator")
+    stop_start = value(ACCELERATOR_STOP)
+    assert next_symbol(stop_start) - stop_start == 0x3e4 and \
+        hashlib.sha256(image[stop_start:stop_start + 0x3e4]).hexdigest() == \
+        "ba1ef863b3a8aeb1137a044992ca41770f2145fd55ac3df006440cb2197302ca", \
+        f"{path}: changed complete reviewed native accelerator stop body"
+    for address, instruction in (
+            (0x2650c, "49 8b bf 50 12 00 00 48 8b 07"),
+            (0x26529, "ff 91 48 01 00 00"),
+            (0x26591, "3d 00 00 80 02"),
+            (0x266d8, "4d 85 f6 74 13"),
+            (0x266ea, "ff 90 d8 05 00 00")):
+        assert image[address:address + len(bytes.fromhex(instruction))] == bytes.fromhex(instruction), \
+            f"{path}: changed partial-state/type-5-release/provider-gated inherited-stop branch"
     assert hashlib.sha256(image[0x2473d:0x247f0]).hexdigest() == \
         "5288265edb6d924d92e219315b3d87d4a849a1f5751f16aca0992b5c5df015ad", \
         f"{path}: changed reviewed native start failure epilogue window"

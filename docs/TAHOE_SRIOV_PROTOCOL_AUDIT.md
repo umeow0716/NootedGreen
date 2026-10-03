@@ -27,6 +27,21 @@ enforce fault-before-panic and prohibit native/helper/backing side effects.
 
 ## Mapping getter provenance follow-up (offline)
 
+Complete native stop follow-up: all 0x3e4 bytes of IntelAccelerator::stop
+reviewed and locally pinned for both payloads. It finishes event-machine work,
+serializes busy/mutex transitions, calls routed engine stop, then releases
+software resources. Source +0x1460, when non-null, is disabled and removed
+through scheduler+0x1250's workloop getter without checking scheduler/null
+workloop or remove IOReturn. Reachability of that source with a null scheduler
+still needs construction-order evidence; do not claim a proven crash.
+Scheduler release/clear is conditional on native feature type 5, not type 4.
+The inherited accelerator stop virtual is called only with non-null provider;
+factory-failure stop(nullptr) skips it. Therefore the previously-reviewed
+inherited stop/block gate serialization does not establish this failure path's
+timer/source drain. The tail still invokes an imported helper; constructors,
+remaining helpers and later free must establish partial-state lifetime safety.
+No hardware or runtime behavior is certified by these body/branch checks.
+
 Factory-null unwind follow-up: reviewed native start failure subsection
 0x2473d..0x247ef as a window, not a standalone function. Null scheduler leads
 to error 0x211, shared error/property handling, imported unlock_busy, imported
