@@ -32,6 +32,15 @@ sources returns the current count to 1,303; this does not close older coverage.
 
 ## Main project coverage
 
+2026-10-04 producer review delta: symbol-bounded FIFO stamp/command/buffer,
+accelerator sync/main-ring, ring submit and Scheduler4 push bodies were read.
+Six concrete ring vtables share the submit virtual; five typed producer edges,
+sync write/stamp ordering and three inherited FIFO event/stamp imports are now
+contract-pinned for both payloads. False scheduler submission reaches a verified
+native `_panic`, not a normal retry path. Caller locking, inherited method
+implementation and complete virtual reachability remain open. This is a scoped
+binary-graph review, not certification of all sources or runtime correctness.
+
 V267 closes the verified VF event-timeout return into inherited restart/retry
 by protocol-fault admission closure followed by guest fail-stop. This is not
 normal recovery or proof that already-published DMA stops. PF and normal debug

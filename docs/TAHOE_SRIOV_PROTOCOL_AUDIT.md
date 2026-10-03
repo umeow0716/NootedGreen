@@ -126,6 +126,29 @@ and an explicitly justified error policy must be proved before implementing
 the hook. Existing bootstrap/transport rejection paths also remain possible
 native panic triggers; this discovery does not authorize enabling runtime.
 
+Producer receiver follow-up: all six concrete ring vtables (base, Main,
+Compute, Blit, Media and VEBox) resolve virtual `+0x138` to the same
+`submitToRing`. Typed receiver chains now pin FIFO `submitStampCommand`,
+`submitRingCommands` and `submitBuffer` through their owned ring `+0x130`,
+plus accelerator `submitSyncEvents` and `submitMainRingCommand`. The latter
+tail-dispatches through task -> context `+0xb8` -> FIFO `+0x130` -> ring.
+`submitSyncEvents` obtains the FIFO ring, writes three buffers, dispatches
+the ring, then calls FIFO `submitStampCommand`; a separate control-flow path
+also calls that stamp method. Both direct calls are pinned. A control-packet
+submission and its subsequent stamp submission therefore cannot be collapsed
+into one presumed completion transaction. These are reviewed typed edges,
+not a complete inventory of all virtual callers or proof of caller locking.
+
+FIFO virtuals `+0x138`, `+0x140` and `+0x148` have external 64-bit relocation
+identities `IOAccelChannel2::mergeEventExcluding`, `setEventStamp` and
+`incrementStamp`, respectively; the on-disk slots are zero before linking.
+Their names/import identities do not prove locking of native ring state.
+Selected FIFO producer bodies themselves contain no explicit surrounding
+producer lock; callers and inherited event-machine methods still need review.
+The direct queue lock only begins in the GuC replacement, after the native
+producer has captured/cleared its stamp flag, so that lock alone does not prove
+safe concurrent capture at the Scheduler4 boundary. No runtime route was added.
+
 Inherited implementation found locally (2026-10-04): archived Tahoe 25G229
 `SystemKernelExtensions.kc`, SHA-256
 `5cb1be1dc530b4b953a33943567589101d3ac46bb8cf90728566ee7e5b1fa214`,

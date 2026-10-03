@@ -108,6 +108,10 @@ GUC_SUBMIT_WORK_ITEM = "__ZN13IGHardwareGuC14submitWorkItemEjRK21SGfxContextDesc
 FIFO_FACTORY = "__ZN18IGAccelFIFOChannel11withOptionsEP22IOGraphicsAccelerator2P20IGHardwareRingBuffer"
 FIFO_INIT = "__ZN18IGAccelFIFOChannel15initWithOptionsEP22IOGraphicsAccelerator2P20IGHardwareRingBuffer"
 FIFO_FREE = "__ZN18IGAccelFIFOChannel4freeEv"
+FIFO_SUBMIT_COMMANDS = "__ZN18IGAccelFIFOChannel18submitRingCommandsEPjjj"
+FIFO_SUBMIT_BUFFER = "__ZN18IGAccelFIFOChannel12submitBufferEP24IOAccelCommandDescriptor"
+ACCEL_SUBMIT_SYNC = "__ZN16IntelAccelerator16submitSyncEventsEbP11IGAccelTask10IGHwCsTypeb"
+ACCEL_SUBMIT_MAIN = "__ZN16IntelAccelerator21submitMainRingCommandEPjm"
 GET_DEFAULT_RESET = "__ZN16IntelAccelerator20getDefaultResetValueEj"
 TRACE_DISABLE = "__ZN25IGAccelTraceStreamManager17disableCollectionE27TraceStreamCollectionChange"
 TRACE_SHUTDOWN = "__ZN25IGAccelTraceStreamManager8shutdownEv"
@@ -289,11 +293,19 @@ def macho_inventory(path):
                       if name in wanted}
     relocations = {}
     panic_relocations = set()
+    channel_imports = {}
     external_offset, external_count = dysymtab[16], dysymtab[17]
     for index in range(external_count):
         address, bits = struct.unpack_from(
             "<iI", image, external_offset + index * 8)
         symbol_index = bits & 0xFFFFFF
+        if names[symbol_index] in (
+                "__ZN15IOAccelChannel219mergeEventExcludingEP12IOAccelEventS1_",
+                "__ZN15IOAccelChannel213setEventStampEP12IOAccelEvent",
+                "__ZN15IOAccelChannel214incrementStampEv"):
+            if address in channel_imports:
+                raise AssertionError(f"{path}: duplicate channel method relocation")
+            channel_imports[address] = (names[symbol_index], bits >> 24)
         if names[symbol_index] == "_panic":
             if ((bits >> 24) & 1, (bits >> 25) & 3,
                     (bits >> 27) & 1, (bits >> 28) & 0xF) != (1, 2, 1, 2):
@@ -444,6 +456,42 @@ def macho_inventory(path):
             raise AssertionError(f"{path}: scheduler stamp/tail argument provenance changed")
     submit_start = value(RING_SUBMIT_TO_RING)
     submit_body = image[submit_start:next_symbol(submit_start)]
+    # Every concrete native ring class shares this producer virtual. These are
+    # typed receiver chains, not an untyped scan of every +0x138 virtual call.
+    for table in (RING_VTABLE, "__ZTV24IGHardwareRingBufferBlit",
+                  "__ZTV24IGHardwareRingBufferMain", "__ZTV25IGHardwareRingBufferMedia",
+                  "__ZTV25IGHardwareRingBufferVEBox", "__ZTV27IGHardwareRingBufferCompute"):
+        if struct.unpack_from("<Q", image, value(table) + 16 + 0x138)[0] != submit_start:
+            raise AssertionError(f"{path}: native ring producer override changed: {table}")
+    producer_chains = (
+        (FIFO_SUBMIT_STAMP, "48 8b bb 30 01 00 00 48 8b 07 ff 90 38 01 00 00"),
+        (FIFO_SUBMIT_COMMANDS, "49 8b bd 30 01 00 00 48 8b 07 ff 90 38 01 00 00"),
+        (FIFO_SUBMIT_BUFFER, "49 8b bc 24 30 01 00 00 48 8b 07 ff 90 38 01 00 00"),
+        (ACCEL_SUBMIT_SYNC, "49 8b 07 4c 89 ff ff 90 38 01 00 00"),
+        (ACCEL_SUBMIT_MAIN, "48 8b 80 b8 00 00 00 48 8b b8 30 01 00 00 48 8b 07 "
+                            "48 83 c4 08 5b 41 5e 41 5f 5d ff a0 38 01 00 00"),
+    )
+    for owner, anchor in producer_chains:
+        start = value(owner)
+        if image[start:next_symbol(start)].count(bytes.fromhex(anchor)) != 1:
+            raise AssertionError(f"{path}: typed ring producer dispatch changed: {owner}")
+    if len(direct_branches(ACCEL_SUBMIT_SYNC, FIFO_SUBMIT_STAMP)) != 2:
+        raise AssertionError(f"{path}: sync producer stamp follow-up graph changed")
+    sync_start = value(ACCEL_SUBMIT_SYNC)
+    sync_body = image[sync_start:next_symbol(sync_start)]
+    sync_ring = bytes.fromhex("4d 8b bc 24 30 01 00 00")
+    sync_dispatch = bytes.fromhex("49 8b 07 4c 89 ff ff 90 38 01 00 00")
+    if sync_body.count(sync_ring) != 1 or sync_body.index(sync_ring) >= sync_body.index(sync_dispatch) or \
+            len(direct_branches(ACCEL_SUBMIT_SYNC, RING_WRITE_BUFFER)) != 3:
+        raise AssertionError(f"{path}: sync FIFO/ring receiver or packet graph changed")
+    for slot, method in (
+            (0x138, "__ZN15IOAccelChannel219mergeEventExcludingEP12IOAccelEventS1_"),
+            (0x140, "__ZN15IOAccelChannel213setEventStampEP12IOAccelEvent"),
+            (0x148, "__ZN15IOAccelChannel214incrementStampEv")):
+        address = value(FIFO_VTABLE) + 16 + slot
+        if struct.unpack_from("<Q", image, address)[0] != 0 or \
+                channel_imports.get(address) != (method, 0x0E):
+            raise AssertionError(f"{path}: FIFO inherited event/stamp virtual changed")
     for anchor in ("44 8a 7b 48 45 84 ff", "c6 43 48 00",
                    "8b 53 64 8b 4b 68 45 31 c9", "45 0f b6 c7 ff 90 48 01 00 00"):
         if submit_body.count(bytes.fromhex(anchor)) != 1:
