@@ -7,6 +7,13 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 Boot KC event-source follow-up: complete base normalInterruptOccurred
+and setTimeoutUS bodies read and pinned with their two vtable targets in the
+paired local fixture. Pending notification is distinguished from action
+execution, and the base timer's microsecond API is identified. Actual driver
+source types, workloop action dispatch, teardown drain and deadline handling
+remain incomplete. No remote KC test or runtime safety is claimed.
+
 2026-10-04 stamp-source follow-up: complete Intel event-machine init/free,
 scheduler stamp callback and signalStampUpdate bodies reviewed and pinned;
 factory/notification/time/debug imports plus callback-to-notification and

@@ -27,6 +27,22 @@ enforce fault-before-panic and prohibit native/helper/backing side effects.
 
 ## Mapping getter provenance follow-up (offline)
 
+Paired Tahoe Boot KC event-source follow-up: the base IOInterruptEventSource
+virtual `+0x1e0` is `normalInterruptOccurred`, not the driver's action callback.
+Its complete 0x140-byte body increments software producerCount at `+0x54`,
+updates optional statistics/tracing, then notifies workloop `+0x30` through
+virtual `+0x170`; it does not directly invoke the stored action. Thus the
+scheduler's locked virtual dispatch must not be conflated with synchronous
+stamp-action execution. Workloop dispatch and concrete source overrides remain
+unreviewed. Base IOTimerEventSource `+0x1d8` is `setTimeoutUS`; its complete
+0x20-byte body delegates to virtual `+0x1e0` with scale 1000, so a base timer's
+argument 1000 requests 1000 microseconds, not 1000 milliseconds. Timer concrete
+type/overrides and deadline/cancel semantics remain open. The paired local
+fixture pins both base vtable targets, full-body hashes and pending-count/
+workloop-notification instructions. Boot vtables contain canonical pointers;
+they are not decoded as System KC chained cache-level targets. Remote CI only
+syntax-checks this proprietary-KC fixture; the paired KC run is local evidence.
+
 Stamp event-source construction and callback follow-up: complete Intel
 event-machine init/free/callback and `IntelAccelerator::signalStampUpdate`
 bodies are now pinned in both payloads. Init clears software accounting,

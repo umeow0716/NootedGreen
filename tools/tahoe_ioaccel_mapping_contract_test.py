@@ -185,7 +185,10 @@ def check_boot_atomic(system, path):
     symbols = {name: [] for name in (b"_OSIncrementAtomic", b"_OSDecrementAtomic", b"_thread_wakeup_prim",
                                    b"__ZN15IORegistryEntry18getRegistryEntryIDEv", b"_kernel_debug",
                                    b"_IOLockLock", b"_IOLockUnlock", b"_assert_wait_deadline",
-                                   b"_thread_block", b"_clock_interval_to_deadline")}
+                                   b"_thread_block", b"_clock_interval_to_deadline",
+                                   b"__ZTV22IOInterruptEventSource", b"__ZTV18IOTimerEventSource",
+                                   b"__ZN22IOInterruptEventSource23normalInterruptOccurredEPvP9IOServicei",
+                                   b"__ZN18IOTimerEventSource12setTimeoutUSEj")}
     for command, offset in commands(boot, kernel[0]):
         if command != 2:
             continue
@@ -197,6 +200,31 @@ def check_boot_atomic(system, path):
             if name in symbols:
                 symbols[name].append(address)
     assert all(len(values) == 1 for values in symbols.values()), "missing/ambiguous kernel imports"
+    def kernel_read(address, length):
+        matches = [f + address - v for v, f, size in segments
+                   if v <= address and address + length <= v + size]
+        assert len(matches) == 1, "unmapped/ambiguous event-source implementation"
+        return boot[matches[0]:matches[0] + length]
+
+    # These Boot KC vtable entries are canonical pointers, NOT System KC
+    # chained cache-level targets. Do not silently apply the latter decoder.
+    for table, slot, method, length, digest in (
+            (b"__ZTV22IOInterruptEventSource", 0x1e0,
+             b"__ZN22IOInterruptEventSource23normalInterruptOccurredEPvP9IOServicei", 0x140,
+             "7a10ac711e79fee59301c61844df895055cc3e47d20e083526ac0b361640e9bb"),
+            (b"__ZTV18IOTimerEventSource", 0x1d8,
+             b"__ZN18IOTimerEventSource12setTimeoutUSEj", 0x20,
+             "521f14403d11af5a02a549db936f42356c779fc6914a43036c671eb1cf8caeb5")):
+        target = symbols[method][0]
+        assert struct.unpack("<Q", kernel_read(symbols[table][0] + 16 + slot, 8))[0] == target, \
+            "changed kernel event-source virtual target"
+        assert hashlib.sha256(kernel_read(target, length)).hexdigest() == digest, \
+            "changed reviewed kernel event-source body"
+    normal_body = kernel_read(symbols[b"__ZN22IOInterruptEventSource23normalInterruptOccurredEPvP9IOServicei"][0], 0x140)
+    assert normal_body.count(bytes.fromhex("ff 43 54")) == 1, "changed pending interrupt increment"
+    assert normal_body.count(bytes.fromhex("48 8b 7b 30 48 8b 07 ff 90 70 01 00 00")) == 1, \
+        "changed workloop notification virtual"
+    print("PASS Boot KC interrupt pending notification and microsecond timer base virtuals")
     assert system[0x10132:0x10138] == bytes.fromhex("ff 25 60 40 01 00"), "changed atomic import stub"
     raw = struct.unpack_from("<Q", system, 0x24198)[0]
     assert (raw >> 30) & 3 == 0 and raw >> 63 == 0, "unexpected atomic import cache level/auth"
