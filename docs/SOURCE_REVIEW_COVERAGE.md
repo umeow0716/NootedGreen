@@ -795,3 +795,9 @@ free and parent remove_mapping inventory helper, with effective vtables and
 native import identities. No DMA barrier is established by these bodies.
 Parent final free, earlier unmap/complete, deallocator and inherited-free
 callees plus concurrent ownership remain pending. Targeted checks pass.
+# Latest parent/SysMemory free checkpoint
+
+Reviewed/pinned base parent memory free/complete and inherited SysMemory free.
+Resolved Intel SysMemory inherited-free import and conditional +0x1b8 target
+to Intel unwire. Unwire body, retained descriptor cleanup and accounting/
+collection callees remain pending. Complete counters are not DMA barriers.

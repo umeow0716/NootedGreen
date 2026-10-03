@@ -5748,3 +5748,25 @@ this helper nor the Intel final-free body establishes DMA quiescence. Parent
 memory final free, earlier mapping complete/unmap operations, backing virtual
 identity and concurrent ownership still require review. Native payload and
 paired-KC targeted checks pass locally; no runtime or production mutation.
+# Parent memory and inherited SysMemory free follow-up
+
+Complete base `IOAccelMemory::free` (0x80) rejects non-null field `+0x20`
+through a cold trap edge, frees mapping-array storage using signed capacity
+`+0x58`, releases/clears object `+0x60`, and delegates inherited free.
+Complete `IOAccelMemory::complete` (0xa) only decrements 32-bit count `+0x10`;
+the already pinned map complete similarly decrements `+0xc`. Neither is
+itself a hardware wait, and neither checks zero before decrement.
+
+Complete `IOAccelSysMemory::free` (0x1d6) logs/releases retained fields
+`+0xe8/+0x188`, conditionally calls virtual `+0x1b8` when byte `+0xc` bit 1
+is set, handles another flagged allocation helper, releases retained objects
+and descriptor-array entries, updates accelerator accounting and removes
+collection membership before explicit base-memory free delegation. Helper,
+descriptor and collection callees are not newly certified by the body hash.
+
+Both native Intel SysMemory vtables import inherited SysMemory free via
+external relocation `0xcd778`; effective object slot `+0x1b8` resolves to
+`IGAccelSysMemory::unwire`. That body is the next concrete review boundary,
+not yet a verified DMA/TLB barrier. This resolves a conditional cleanup edge
+without claiming release or counter decrement proves quiescence. Paired-KC
+and both native-payload targeted checks passed; no runtime/production writes.

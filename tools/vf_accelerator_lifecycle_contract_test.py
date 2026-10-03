@@ -399,6 +399,7 @@ def macho_inventory(path):
     }
     observed_stamp_irq_imports = {address: [] for address in stamp_irq_imports}
     event_stop_imports = {
+        0xcd778: "__ZN16IOAccelSysMemory4freeEv",
         0xc8130: "__ZTV16IOAccelMemoryMap",
         0xd9550: "__ZN16IOAccelResource27prepareEv",
         0xc8138: "__ZTV16IOAccelResource2",
@@ -486,6 +487,8 @@ def macho_inventory(path):
     display_table = value("__ZTV18IGAccelDisplayPipe")
     resource_table = value("__ZTV15IGAccelResource")
     map_table = value("__ZTV16IGAccelMemoryMap")
+    sys_memory_table = value("__ZTV16IGAccelSysMemory")
+    assert struct.unpack_from("<Q", image, sys_memory_table + 16 + 0x1b8)[0] == value("__ZN16IGAccelSysMemory6unwireEv"), f"{path}: changed Intel sys-memory unwire override"
     assert struct.unpack_from("<Q", image, map_table + 0xa0)[0] == value("__ZN16IGAccelMemoryMap4freeEv"), f"{path}: changed Intel memory-map free override"
     assert image[0x10e68:0x10e6e] == bytes.fromhex("ff a0 a0 00 00 00"), f"{path}: changed memory-map base free delegation"
     assert struct.unpack_from("<Q", image, resource_table + 16 + 0x178)[0] == value("__ZN15IGAccelResource8completeEv"), f"{path}: changed Intel resource complete override"
