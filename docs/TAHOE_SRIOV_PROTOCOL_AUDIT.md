@@ -28,6 +28,19 @@ these getters, allocation/clone edges, four context slots, and the conditional
 notification retain. Ring notification/event completion and the full task owner
 graph remain open; this evidence does not justify adding or removing a retain.
 
+Further ring notification tracing resolves the inherited event virtual through
+its external Mach-O relocation, not a guessed zero on-disk vtable word:
+`IGAccelEventMachine` slot `+0x1b8` (`0xcebc0`) binds to
+`IOAccelEventMachineFast2::mergeEvent(IOAccelEvent *, IOAccelEvent *)`.
+Ring `notifyComplete` returns false for a negative stamp index; otherwise it
+returns true, and a non-null supplied event is merged with FIFO event `+0x138`.
+There is no direct stamp wait or force-wake edge in that routine. Thus the
+success that triggers context's task retain establishes event dependency
+registration, not GPU completion or DMA quiescence. The two payload contracts
+pin the relocation's symbol/type/width and the dispatch/return-path anchors.
+The inherited merge implementation and final event callback ownership are still
+unreviewed; dependency registration must not be substituted for their evidence.
+
 Allocation-site tracing corrects V263's `+0xa8` interpretation: it is an
 additional `IGSharedMappedBuffer`, not the ring object. Context initialization
 stores `IGHardwareRingBuffer::withHardwareContext` at `+0xb0` and its FIFO

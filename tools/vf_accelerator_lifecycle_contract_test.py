@@ -58,6 +58,8 @@ TASK_RELEASE = "__ZNK11IGAccelTask7releaseEv"
 CONTEXT_NOTIFY_COMPLETE = "__ZN17IGHardwareContext14notifyCompleteEP12IOAccelEvent"
 FIFO_NOTIFY_COMPLETE = "__ZN18IGAccelFIFOChannel14notifyCompleteEP12IOAccelEvent"
 RING_NOTIFY_COMPLETE = "__ZN20IGHardwareRingBuffer14notifyCompleteEP12IOAccelEvent"
+EVENT_MACHINE_VTABLE = "__ZTV19IGAccelEventMachine"
+EVENT_MERGE = "__ZN24IOAccelEventMachineFast210mergeEventEP12IOAccelEventS1_"
 SHARED_BUFFER_CPU_ADDRESS = "__ZNK20IGSharedMappedBuffer17getVirtualAddressEv"
 MAPPED_BUFFER_GPU_ADDRESS = "__ZNK14IGMappedBuffer20getGPUVirtualAddressEv"
 SHARED_BUFFER_CLONE = "__ZN20IGSharedMappedBuffer11cloneInTaskEP11IGAccelTask"
@@ -578,6 +580,30 @@ def macho_inventory(path):
     if notify_body.count(bytes.fromhex(
             "4d 85 ff 74 16 48 8b 7b 58 48 8b 07 ff 50 20 c6 83 c8 00 00 00 01")) != 1:
         raise AssertionError(f"{path}: asynchronous context notification task retain changed")
+    # notifyComplete registers an event dependency, not GPU completion. The
+    # inherited mergeEvent virtual is unresolved on disk: prove its external
+    # relocation rather than interpreting the zero vtable word as a local call.
+    merge_slot = value(EVENT_MACHINE_VTABLE) + 16 + 0x1b8
+    merge_relocations = []
+    for index in range(external_count):
+        address, bits = struct.unpack_from("<iI", image, external_offset + index * 8)
+        if address == merge_slot:
+            merge_relocations.append((names[bits & 0xffffff],
+                ((bits >> 24) & 1, (bits >> 25) & 3,
+                 (bits >> 27) & 1, (bits >> 28) & 0xf)))
+    if merge_relocations != [(EVENT_MERGE, (0, 3, 1, 0))] or \
+            struct.unpack_from("<Q", image, merge_slot)[0] != 0:
+        raise AssertionError(f"{path}: ring notification mergeEvent virtual changed")
+    ring_notify_start = value(RING_NOTIFY_COMPLETE)
+    ring_notify_body = image[ring_notify_start:next_symbol(ring_notify_start)]
+    for anchor in (bytes.fromhex("83 7f 38 00 78 30"),
+                   bytes.fromhex("b3 01 48 85 f6 74 28"),
+                   bytes.fromhex("ff 90 b8 01 00 00")):
+        if ring_notify_body.count(anchor) != 1:
+            raise AssertionError(f"{path}: ring dependency-registration contract changed")
+    if direct_branches(RING_NOTIFY_COMPLETE, RING_SLEEP_STAMP) or \
+            direct_branches(RING_NOTIFY_COMPLETE, SAFE_FORCE_WAKE):
+        raise AssertionError(f"{path}: ring notification gained a hardware wait")
 
     # Normal producer backpressure polls shared context head/stamp memory.
     # Keep its timeout diagnostic behind the already isolated entry rather
