@@ -35,6 +35,11 @@ EVENT_DISABLE_STAMP_LOCKED = "__ZN20IOAccelEventMachine223disable_stamp_interrup
 EVENT_ENABLE_STAMP = "__ZN20IOAccelEventMachine220enableStampInterruptEi"
 EVENT_DISABLE_STAMP = "__ZN20IOAccelEventMachine221disableStampInterruptEi"
 EVENT_OWNER_BODIES = {
+    "__ZN16IOAccelSysMemory8completeEv": (0x42, "37fec16c6bebb121abb7612a23dbd90ccdae8179f025c1edae4e7553dc779240"),
+    "__ZN16IOAccelMemoryMap7prepareEv": (0x7c, "e2f18c8db02cdedfce50fc42a2c86c3e64b7c8d4bd4baacde07d0dfdb90858dc"),
+    "__ZN16IOAccelMemoryMap7prepareEv.cold.1": (0x62, "196a2d0f745818d6fb711949d6313b7b230605506ad6b315be2e04f0029953d8"),
+    "__ZNK13IOAccelMemory15getPrepareCountEv": (0x48, "dadefb723a37f0c3bc231ab5518b7a388efbe4ca4fbc7a36782805fee8d12edd"),
+    "__ZNK16IOAccelMemoryMap15getPrepareCountEv": (0x32, "f5f0a329bbdec86a0b989e8811cf1e5475ca993d60b985872ec159c2f83b5c95"),
     "__ZN16IOAccelSysMemory11withOptionsEP22IOGraphicsAccelerator2P4taskP14IOAccelShared2P16IOAccelResource2jy": (0x14, "0ef5944a07cf6ee013ef23d461815067460eaf83284f843c8dd13bf2ab5ce594"),
     "__ZN16IOAccelSysMemory11withOptionsEP22IOGraphicsAccelerator2P4taskP14IOAccelShared2P16IOAccelResource2jyb": (0x4ce, "8583979aa58b81534b6ffb0127a4d3e0a2acb7bccab413baf2ce8313a06599fb"),
     "__ZN13IOAccelMemory7prepareEv": (0x3c, "89a5c623541e69e42f71ec60268646d7d2b06fbd7ac417a9a3913ed271ae31b4"),
@@ -830,7 +835,7 @@ def check(path, boot_path=None):
     assert symtab is not None, "missing embedded symbol table"
     symbol_offset, count, string_offset, string_size = symtab
     matches = {name: [] for name in {*CONTRACTS, *SCRUB_BODIES, *LOCK_COPIES, *EVENT_OWNER_BODIES, SHARED_VTABLE, RESOURCE_VTABLE, "__ZTV18IOAccelDisplayPipe", "__ZTV24IOAccelLegacyDisplayPipe", "__ZTV16IOAccelMemoryMap", "__ZTV16IOAccelSysMemory",
-                                    EVENT_VTABLE, EVENT_FINISH, EVENT_WAIT, EVENT_CLEAN, EVENT_SIGNAL, EVENT_RESTART,
+                                    "__ZTV13IOAccelMemory", EVENT_VTABLE, EVENT_FINISH, EVENT_WAIT, EVENT_CLEAN, EVENT_SIGNAL, EVENT_RESTART,
                                     EVENT_MERGE_EXCLUDING, EVENT_SET_STAMP, GET_DATA_BUFFER,
                                     EVENT_INIT, EVENT_COPY, EVENT_FINISH_UNLOCKED, EVENT_HARDWARE_ERROR,
                                     EVENT_DISABLE_STAMP_LOCKED, EVENT_ENABLE_STAMP, EVENT_DISABLE_STAMP}}
@@ -867,6 +872,19 @@ def check(path, boot_path=None):
     assert stop_owner.count(bytes.fromhex("ff 90 48 01 00 00")) == 3, "changed base event stop source-removal inventory"
     print("PASS inherited event owner free/stop and per-event stamp-disable bodies (outer drain not proven)")
     lazy_setup = address_of("__ZN18IOAccelDisplayPipe14setup_workloopEv")
+    for table, slot, method in (("__ZTV16IOAccelMemoryMap", 0x138, "__ZN16IOAccelMemoryMap7prepareEv"),
+                                ("__ZTV16IOAccelSysMemory", 0x148, "__ZN13IOAccelMemory7prepareEv"),
+                                ("__ZTV16IOAccelSysMemory", 0x150, "__ZN16IOAccelSysMemory8completeEv"),
+                                ("__ZTV13IOAccelMemory", 0x150, "__ZN13IOAccelMemory8completeEv")):
+        raw = struct.unpack("<Q", read(address_of(table) + 16 + slot, 8))[0]
+        assert raw >> 63 == 0 and (raw >> 30) & 3 == 1, "changed map/parent prepare lifecycle encoding"
+        assert raw & 0x3fffffff == address_of(method), "changed map/parent prepare lifecycle target"
+    cold_call = read(0x14bb77c2, 5)
+    assert cold_call[0] == 0xe8 and 0x14bb77c7 + struct.unpack_from("<i", cold_call, 1)[0] == address_of("__ZN16IOAccelMemoryMap7prepareEv.cold.1"), "changed mapping prepare outlined-helper edge"
+    assert read(0x14bbca4c, 10) == bytes.fromhex("ff 90 48 01 00 00 84 c0 74 2d"), "changed failed parent prepare skips outer completion"
+    complete_table_lea = read(0x14bb9ea3, 7)
+    assert complete_table_lea[:3] == bytes.fromhex("48 8d 05") and 0x14bb9eaa + struct.unpack_from("<i", complete_table_lea, 3)[0] == address_of("__ZTV13IOAccelMemory"), "changed sys-memory explicit base complete table"
+    assert read(0x14bb9eaa, 6) == bytes.fromhex("ff 90 60 01 00 00"), "changed sys-memory base complete header dispatch"
     factory_forward = read(0x14bb95b6, 5)
     assert factory_forward[0] == 0xe8 and 0x14bb95bb + struct.unpack_from("<i", factory_forward, 1)[0] == address_of("__ZN16IOAccelSysMemory11withOptionsEP22IOGraphicsAccelerator2P4taskP14IOAccelShared2P16IOAccelResource2jyb"), "changed legacy sys-memory factory delegation"
     assert read(0x14bb9954, 9) == bytes.fromhex("05 02 20 00 00 41 89 45 0c"), "changed prewired pool factory flags"

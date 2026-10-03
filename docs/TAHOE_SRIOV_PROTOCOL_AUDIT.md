@@ -6201,3 +6201,41 @@ it does not call the ordinary wire path. Higher-level failed-prepare disposal
 remains pending. Byte patterns for virtual +0x1b0 alone cannot identify wire
 callers: receiver provenance and vtable type must be verified. No production
 patch or runtime/Host GPU mutation.
+
+# Mapping parent prepare failure has no local command cleanup
+
+Reviewed/pinned complete IOAccelMemoryMap::prepare (0x7c) and its outlined
+.cold.1 helper (0x62); this helper is normal fallible control flow, not a panic
+merely because its symbol contains "cold". Intel memory-map effective slot
++0x138 imports base prepare at relocation 0xcd040 (both payloads now checked).
+The paired base table and sys-memory slots +0x148/+0x150 resolve to previously
+reviewed parent memory prepare and newly reviewed sys-memory complete override,
+not command prepare/complete. The first fixture attempt incorrectly expected
+base memory complete at the sys-memory slot; actual-table inspection resolved
+the override and corrected that expectation before passing the checks.
+
+For a map with zero local count and no installed-PTE flag, the helper calls
+parent +0x148. False immediately selects its false-output return, with no
+parent complete, command complete/clear or command-field disposal. If parent
+prepare succeeded, it attempts PTE initialization; either success or failure
+balances parent memory prepare through +0x150, but only successful PTE setup
+increments mapping prepare count. PTE initializer is not newly reviewed here.
+Thus failed wire propagated via parent prepare is not repaired at this layer.
+Resource prepare's reviewed mapping +0x138 false branch can enter the separate
+accelerator recovery helper; that helper/caller disposal still must be traced.
+
+Also reviewed/pinned complete parent getPrepareCount (0x48) and mapping
+getPrepareCount (0x32). Mapping aggregates its own count with one unit per
+resource having nonzero prepare count; parent aggregates its own count with
+one unit per mapping having nonzero aggregate count. These are admission/
+accounting summaries, not command prepare references or GPU completion.
+They add without local overflow checks. Existing wire-count decrement therefore
+tests this aggregate, not command +0x68. No executable/runtime changes.
+
+The complete sys-memory complete override (0x42) explicitly calls base memory
+complete via its table-header +0x160, then tests wire count +0x14 and aggregate
+getPrepareCount. If both are zero, it dispatches virtual +0x1b8 unwire. Thus
+successful parent-prepare balancing can indirectly reach command cleanup; it
+is not merely a bare memory decrement. The failed parent-prepare branch above
+does not invoke this override, so that local failure conclusion remains valid.
+The full override, paired slot, explicit base table and dispatch are pinned.

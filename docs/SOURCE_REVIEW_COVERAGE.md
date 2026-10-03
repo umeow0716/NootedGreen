@@ -7,6 +7,14 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 mapping parent-prepare follow-up: complete map prepare/outlined helper
+and parent/map getPrepareCount reviewed/pinned; Intel map import and paired
+parent virtual identities resolved. Parent prepare false is propagated without
+command cleanup. PTE initializer, resource recovery helper and outer disposal
+remain pending. Aggregate accounting counts are not GPU retirement evidence.
+Actual sys-memory complete override (0x42) was resolved after a failed fixture
+expectation; it can dispatch unwire after balancing base/aggregate counts.
+
 2026-10-04 sys-memory factory follow-up: complete legacy wrapper and bool
 overload reviewed/pinned. Prewired pool branch sets wired flag without ordinary
 wire/command construction; null command is not a universal broken-state test.
