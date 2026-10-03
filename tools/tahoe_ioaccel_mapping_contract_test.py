@@ -35,6 +35,9 @@ EVENT_DISABLE_STAMP_LOCKED = "__ZN20IOAccelEventMachine223disable_stamp_interrup
 EVENT_ENABLE_STAMP = "__ZN20IOAccelEventMachine220enableStampInterruptEi"
 EVENT_DISABLE_STAMP = "__ZN20IOAccelEventMachine221disableStampInterruptEi"
 EVENT_OWNER_BODIES = {
+    "__ZN18IOAccelDisplayPipe21displayModeWillChangeEv": (0x34, "a2a5161d9727962a15fcb4f3e1522e28a7cf8c765b284596f9bcb56bbe3f33e2"),
+    "__ZN18IOAccelDisplayPipe21framebufferTerminatedEv": (0x6, "5a96d1fb661d55552184ea24023ae8190bd1523ae1f855a8d671b07143e8b1df"),
+    "__ZN29IOAccelDisplayPipeUserClient214externalMethodEjP25IOExternalMethodArgumentsP24IOExternalMethodDispatchP8OSObjectPv": (0x2e, "8e35a9e1fddb14c9f1737b913eb5b0bc129fb2213a9511eb99eb24b735a29e01"),
     "__ZN29IOAccelDisplayPipeUserClient25startEP9IOService": (0x6c, "34a3cb936cd474e5bd7a05bf82c3a50b9c96a3777974a34416ad9f2ae6bbb4be"),
     "__ZN29IOAccelDisplayPipeUserClient212setPipeIndexEjPy": (0x168, "3508def8fc565e30080f81daf666c91661831c1be3d813a4faa1e1db7f9f6186"),
     "__ZN18IOAccelDisplayPipe22user_client_terminatedEP29IOAccelDisplayPipeUserClient2": (0x7e, "15ed7924ad16dfcc1218e5ec575a32725e54478c96af47c76617a7e8aa737a35"),
@@ -239,6 +242,8 @@ def check_boot_atomic(system, path):
                                    b"__ZN18IOTimerEventSource14setTimeoutFuncEv")}
     symbols[b"__ZN18IOTimerEventSource11setWorkLoopEP10IOWorkLoop"] = []
     symbols[b"__ZTV8OSObject"] = []
+    symbols[b"__ZTV12IOUserClient"] = []
+    symbols[b"__ZN12IOUserClient14externalMethodEjP25IOExternalMethodArgumentsP24IOExternalMethodDispatchP8OSObjectPv"] = []
     symbols[b"__ZN8OSObject4freeEv"] = []
     symbols[b"__ZN8OSObjectdlEPvm"] = []
     symbols[b"__ZNK13IOEventSource11getWorkLoopEv"] = []
@@ -274,6 +279,18 @@ def check_boot_atomic(system, path):
                    if v <= address and address + length <= v + size]
         assert len(matches) == 1, "unmapped/ambiguous event-source implementation"
         return boot[matches[0]:matches[0] + length]
+
+    # This imported pointer addresses the vtable HEADER. The explicit base
+    # call uses +0x860, not the object-vptr convention of header+16+slot.
+    imported = struct.unpack_from("<Q", system, 0x14bcf088)[0]
+    assert imported >> 63 == 0 and (imported >> 30) & 3 == 0, "changed user-client import cache level/auth"
+    client_table = symbols[b"__ZTV12IOUserClient"][0]
+    assert bases[0] + (imported & 0x3fffffff) == client_table, "changed inherited user-client table import"
+    dispatch = symbols[b"__ZN12IOUserClient14externalMethodEjP25IOExternalMethodArgumentsP24IOExternalMethodDispatchP8OSObjectPv"][0]
+    assert struct.unpack("<Q", kernel_read(client_table + 0x860, 8))[0] == dispatch, "changed inherited external dispatch slot"
+    assert hashlib.sha256(kernel_read(dispatch, 0x3be)).hexdigest() == "5a00aca7334586415dc7bcd96be5fbae8243436eaffb9f57f7ffde2f9d017b7d", "changed inherited external dispatch instructions"
+    assert kernel_read(dispatch + 0x1e0, 6) == bytes.fromhex("48 8b 01 48 85 c0"), "changed descriptor action load/test"
+    assert kernel_read(dispatch + 0x1fc, 2) == bytes.fromhex("ff e0"), "changed descriptor action tail dispatch"
 
     # These Boot KC vtable entries are canonical pointers, NOT System KC
     # chained cache-level targets. Do not silently apply the latter decoder.
@@ -725,6 +742,11 @@ def check(path, boot_path=None):
     assert stop_owner.count(bytes.fromhex("ff 90 48 01 00 00")) == 3, "changed base event stop source-removal inventory"
     print("PASS inherited event owner free/stop and per-event stamp-disable bodies (outer drain not proven)")
     lazy_setup = address_of("__ZN18IOAccelDisplayPipe14setup_workloopEv")
+    for slot, method in ((0x868, "__ZN18IOAccelDisplayPipe21displayModeWillChangeEv"),
+                         (0x8e8, "__ZN18IOAccelDisplayPipe21framebufferTerminatedEv")):
+        raw = struct.unpack("<Q", read(address_of("__ZTV18IOAccelDisplayPipe") + 16 + slot, 8))[0]
+        assert raw >> 63 == 0 and (raw >> 30) & 3 == 1, "changed base display terminal virtual cache level/auth"
+        assert raw & 0x3fffffff == address_of(method), "changed base display terminal virtual target"
     for address, encoded in ((0x14bb59e2, "48 89 83 e8 00 00 00"),
                             (0x14bb5a79, "ff 50 20"),
                             (0x14bb5793, "ff 50 28"),

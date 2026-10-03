@@ -723,3 +723,12 @@ remains native.
   The complete syntax/analyzer/protocol suite passes in
   `/tmp/ngreen-static.zuSxRI`. This is configuration hygiene, not a Metal
   result.
+# Latest offline display dispatch checkpoint
+
+Reviewed and pinned the base `displayModeWillChange`/`framebufferTerminated`
+virtuals, display user-client external dispatch wrapper, and inherited BootKC
+`IOUserClient::externalMethod` instruction body. Explicit imported table-header
+offset is verified separately from object-vptr offsets. Descriptor dispatch
+does not supply an accelerator lock or terminal admission check. Subclasses,
+higher-level entry serialization, legacy dispatch helpers, descriptor action
+coverage and lazy-setup failure unwind remain incomplete. No VM/PCI writes.

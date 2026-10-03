@@ -5502,3 +5502,30 @@ disabled; read-only libvirt inspection reports 16 vCPUs and 16 GiB RAM.
   82 unique symbols (79 accelerator and three framebuffer). This checkpoint is
   static only: the host i915/DMAR hard hold remains in force, the VM was not
   started, and no candidate was installed or loaded.
+# Display terminal virtuals and inherited external dispatch follow-up
+
+Offline Tahoe 25G229 paired-KC review: base display-pipe vtable slots
+`header+16+0x868` and `header+16+0x8e8` resolve respectively to
+`displayModeWillChange` (0x34 bytes) and `framebufferTerminated` (6 bytes).
+The former finishes queued transactions and, unless accelerator byte `+0xcec`
+has bit 1 set, releases the live transaction; the latter is a base no-op.
+Subclass overrides remain unreviewed. Neither notification establishes DMA
+quiescence or closes all external producers.
+
+The display user-client `externalMethod` wrapper (0x2e bytes) selects one of
+14 24-byte descriptors and delegates to the inherited implementation. Its
+SystemKC import at `0x14bcf088` resolves through cache level 0 to BootKC
+`__ZTV12IOUserClient` at `0xffffff800027b778`. This is the table HEADER:
+the explicit base-call offset `+0x860` resolves to `externalMethod` at
+`0xffffff8000b00640`; do not add another 16 bytes as for an object vptr.
+
+Reviewed instructions through the inherited return (0x3be bytes): the
+non-null descriptor path validates scalar/structure argument counts, obtains
+memory-descriptor lengths when needed, and tail-dispatches its action. It
+does not itself acquire the accelerator busy mutex or check the pipe terminal
+flag. Null-descriptor legacy helper branches and their jump-table targets
+exist; their callees are not newly certified here. Higher-level user-client
+entry dispatch, descriptor actions, subclass overrides, registration failure
+unwind and concurrent lazy setup still require review. No production hook or
+runtime test was introduced. Paired-KC tests pin hashes and resolved targets;
+these are provenance checks, not a concurrency or hardware-success proof.
