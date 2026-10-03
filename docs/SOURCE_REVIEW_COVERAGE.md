@@ -816,3 +816,10 @@ release_pte's ignored bool result. This confirms false-return alone cannot
 preserve backing; existing VF unmap barrier remains required. No executable
 driver change. Task page-table ownership/getters, descriptor cleanup and Host
 DMA containment remain unproven.
+# Latest DMA-command identity checkpoint
+
+Reviewed/pinned complete base IODMACommand complete/clearMemoryDescriptor
+bodies and canonical Boot vtable slots. General descriptor complete slot is
+resolved but its body is not reviewed here. Runtime subclass/descriptor identity,
+mapping helper and DMA-operation virtuals remain pending. False clear rejects
+outstanding prepare references; cleanup success is not GPU retirement proof.

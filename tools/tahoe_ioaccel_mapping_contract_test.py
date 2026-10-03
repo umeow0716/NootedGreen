@@ -270,6 +270,11 @@ def check_boot_atomic(system, path):
                                    b"__ZN18IOTimerEventSource14setTimeoutFuncEv")}
     symbols[b"__ZN18IOTimerEventSource11setWorkLoopEP10IOWorkLoop"] = []
     symbols[b"__ZTV8OSObject"] = []
+    for name in (b"__ZTV12IODMACommand", b"__ZTV25IOGeneralMemoryDescriptor",
+                 b"__ZN12IODMACommand21clearMemoryDescriptorEb",
+                 b"__ZN12IODMACommand8completeEbb",
+                 b"__ZN25IOGeneralMemoryDescriptor8completeEj"):
+        symbols[name] = []
     symbols[b"__ZTV12IOUserClient"] = []
     symbols[b"__ZN12IOUserClient14externalMethodEjP25IOExternalMethodArgumentsP24IOExternalMethodDispatchP8OSObjectPv"] = []
     symbols[b"__ZN8OSObject4freeEv"] = []
@@ -307,6 +312,20 @@ def check_boot_atomic(system, path):
                    if v <= address and address + length <= v + size]
         assert len(matches) == 1, "unmapped/ambiguous event-source implementation"
         return boot[matches[0]:matches[0] + length]
+
+    for table, slot, method in (
+            (b"__ZTV12IODMACommand", 0x130, b"__ZN12IODMACommand21clearMemoryDescriptorEb"),
+            (b"__ZTV12IODMACommand", 0x148, b"__ZN12IODMACommand8completeEbb"),
+            (b"__ZTV25IOGeneralMemoryDescriptor", 0x1f8, b"__ZN25IOGeneralMemoryDescriptor8completeEj")):
+        assert struct.unpack("<Q", kernel_read(symbols[table][0] + 16 + slot, 8))[0] == symbols[method][0], "changed base DMA/descriptor virtual identity"
+    for method, length, digest in (
+            (b"__ZN12IODMACommand21clearMemoryDescriptorEb", 0x90, "b2e56b7f2a5154c2fc39d156c41faaf86ab8b54bb20a9d1b0566854515495d6b"),
+            (b"__ZN12IODMACommand8completeEbb", 0x230, "7862d56c7f676b693648cda13d9973549ed700b71e093af739244d0dbae6edca")):
+        assert hashlib.sha256(kernel_read(symbols[method][0], length)).hexdigest() == digest, "changed base DMA-command cleanup body"
+    dma_complete = symbols[b"__ZN12IODMACommand8completeEbb"][0]
+    assert kernel_read(dma_complete, 7) == bytes.fromhex("8b 4f 68 85 c9 74 6e"), "changed DMA complete zero-count check"
+    dma_clear = symbols[b"__ZN12IODMACommand21clearMemoryDescriptorEb"][0]
+    assert kernel_read(dma_clear + 0x7c, 8) == bytes.fromhex("48 c7 43 48 00 00 00 00"), "changed DMA descriptor pointer clear"
 
     # This imported pointer addresses the vtable HEADER. The explicit base
     # call uses +0x860, not the object-vptr convention of header+16+slot.

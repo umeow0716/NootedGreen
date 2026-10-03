@@ -5824,3 +5824,32 @@ its comment now records this additional inherited status-loss evidence.
 No executable driver behavior changed. Guest panic is still not a DMA barrier
 or substitute for the host containment plan. Targeted native/paired-KC tests
 pass; no VM/PCI/deployment operations.
+# BootKC DMA-command cleanup identity follow-up
+
+Base BootKC IODMACommand object slots `+0x148/+0x130` resolve to
+`complete(bool,bool)` and `clearMemoryDescriptor(bool)` respectively. The
+reviewed SystemKC SysMemory unwire calls them with `(false,false)` and `false`.
+Complete base bodies (0x230/0x90 including padding) and canonical Boot vtable
+identities are now pinned. This does not prove runtime receivers cannot be
+subclasses. General-memory-descriptor `+0x1f8` resolves to its complete method;
+abstract IOMemoryDescriptor's corresponding slot is pure virtual, so concrete
+descriptor identity must be established before certifying its effects.
+
+DMA-command complete returns `0xe00002d8` for zero prepare count; otherwise
+decrements `+0x68`, returns early for remaining references and on the final
+reference handles synchronization flags, a mapping helper at `0xad4050`,
+descriptor DMA-operation virtuals and mapping-record cleanup. The helper,
+descriptor DMA-operation implementation and subordinate virtuals remain
+pending. There is no explicit GPU retirement wait in these reviewed wrapper
+instructions, though unreviewed callees may synchronize DMA mappings.
+
+clearMemoryDescriptor(false) rejects a nonzero prepare count with the same
+status; it does not force-drain references in this mode. True mode instead
+repeatedly calls complete(true,true) until that count is zero. Once admitted,
+it optionally sends a descriptor operation, releases the descriptor and
+clears `+0x48`. The SysMemory unwire caller logs cleanup failures and continues
+to return/clear its command field, as previously recorded. Do not infer
+device-idle or DMA-safe backing release merely from command cleanup success.
+Paired-KC checks pass after correcting a new fixture anchor offset from
+`+0x4c` to the observed pointer-clear instruction `+0x7c`; no payload changed.
+No production/runtime mutation.
