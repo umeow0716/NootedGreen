@@ -199,6 +199,8 @@ def check_boot_atomic(system, path):
                                    b"__ZN13IOEventSource4initEP8OSObjectPFvS1_zE",
                                    b"__ZN18IOTimerEventSource14setTimeoutFuncEv")}
     symbols[b"__ZN18IOTimerEventSource11setWorkLoopEP10IOWorkLoop"] = []
+    symbols[b"__ZTV8OSObject"] = []
+    symbols[b"__ZN8OSObject4freeEv"] = []
     symbols[b"__ZN18IOTimerEventSource7disableEv"] = []
     symbols[b"__ZN18IOTimerEventSource10wakeAtTimeEjyy"] = []
     symbols[b"__ZN18IOTimerEventSource17timeoutAndReleaseEPvS0_"] = []
@@ -496,6 +498,15 @@ def check_boot_atomic(system, path):
     assert instruction[0] == 0xe8 and call + 5 + struct.unpack_from("<i", instruction, 1)[0] == cancel + 0x120, \
         "changed public cancellation to locked-helper edge"
     print("PASS Boot KC cancellation wrapper and separate locked-helper windows (not a drain proof)")
+    object_free = symbols[b"__ZN8OSObject4freeEv"][0]
+    assert hashlib.sha256(kernel_read(object_free, 0x30)).hexdigest() == \
+        "6b5b497597ec0a7094328a70abfd1f3c877fe7f1e07f32a017bc104382ef37cd", \
+        "changed reviewed OSObject free wrapper window"
+    assert struct.unpack("<Q", kernel_read(symbols[b"__ZTV8OSObject"][0] + 0xa0, 8))[0] == object_free, \
+        "changed OSObject base free dispatch slot"
+    assert kernel_read(object_free + 0x28, 3) == bytes.fromhex("ff 60 08"), \
+        "changed OSObject free deleting-destructor dispatch"
+    print("PASS Boot KC OSObject base free dispatch and deleting-destructor edge (callee review pending)")
     cancel_wait = symbols[b"_thread_call_cancel_wait"][0]
     assert hashlib.sha256(kernel_read(cancel_wait, 0x3d0)).hexdigest() == \
         "ab79f907dfbfeb04b2723874f2299984cdc722577b7c745328f5d916f5c84d48", \

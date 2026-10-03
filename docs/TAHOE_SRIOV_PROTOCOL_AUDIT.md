@@ -27,6 +27,18 @@ enforce fault-before-panic and prohibit native/helper/backing side effects.
 
 ## Mapping getter provenance follow-up (offline)
 
+Actual base-free follow-up: TGL IGScheduler::free's RIP pointer at +0xc81e0
+has external relocation to __ZTV8OSObject (external 64-bit type 0x0e), not an
+IOAccel scheduler cleanup vtable. Its raw vtable slot +0xa0 corresponds to
+Boot OSObject::free at 0xffffff8000a1c830. Complete actual 0x30 wrapper reviewed
+and locally pinned: obtains metaclass, conditionally accounts destruction,
+then tail-dispatches object virtual +8 (deleting destructor). This is not just
+field cleanup. The nearest-symbol 0x280 span includes additional unnamed
+functions, and its truncated exploratory output is not counted as their
+review. Concrete TGL deleting destructor/allocation release and actual
+refcount path remain pending before concluding reachable use-after-free or
+introducing a repair to partial-init virtual-free/factory-release behavior.
+
 Scheduler4 complete-init follow-up: its actual init body is 0xaf bytes ending
 at 0x1da80; the nearest named-symbol 0xc2 span also contains a separate unnamed
 GuC thunk. Full init reviewed/pinned as the smaller window. It calls scheduler
