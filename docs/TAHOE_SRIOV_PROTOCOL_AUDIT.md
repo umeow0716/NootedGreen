@@ -27,6 +27,19 @@ enforce fault-before-panic and prohibit native/helper/backing side effects.
 
 ## Mapping getter provenance follow-up (offline)
 
+Actual command action follow-up: complete Boot base IOCommandGate::runAction
+(0x280 bytes) and virtual `+0x1c8` are now locally pinned. It rejects null action
+or missing workloop, enters that workloop's `+0x180` gate, checks workloop-thread
+identity, and for other threads waits on disabled command state through sleep
+virtual `+0x190`. It accounts active actions around the stored action call,
+handles teardown/wakeup abort branches, and exits through gate `+0x178`.
+The local fixture pins full body plus entry/action/exit/sleep instructions.
+This establishes the base command path's gated action invocation, not success
+of every removal request: missing/disabled/tearing-down gates can fail or wait.
+Concrete control-gate/workloop types, removal action, return handling and
+callback retention still require review before claiming drain-before-free.
+No runtime hold or DMA-safety condition was relaxed.
+
 Control-gate command wrapper follow-up: complete Boot base IOCommandGate
 `runCommand` (0x30 bytes) and virtual `+0x1c0` are locally pinned. It shifts
 the four arguments, loads stored action `+0x20` and tail-delegates through

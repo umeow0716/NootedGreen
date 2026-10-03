@@ -199,6 +199,7 @@ def check_boot_atomic(system, path):
     symbols[b"__ZN18IOTimerEventSource17timeoutAndReleaseEPvS0_"] = []
     for name in (b"__ZTV10IOWorkLoop", b"__ZN10IOWorkLoop8openGateEv",
                  b"__ZTV13IOCommandGate", b"__ZN13IOCommandGate10runCommandEPvS0_S0_S0_",
+                 b"__ZN13IOCommandGate9runActionEPFiP8OSObjectPvS2_S2_S2_ES2_S2_S2_S2_",
                  b"__ZN10IOWorkLoop9closeGateEv",
                  b"__ZN10IOWorkLoop17removeEventSourceEP13IOEventSource"):
         symbols[name] = []
@@ -222,6 +223,9 @@ def check_boot_atomic(system, path):
     # These Boot KC vtable entries are canonical pointers, NOT System KC
     # chained cache-level targets. Do not silently apply the latter decoder.
     for table, slot, method, length, digest in (
+            (b"__ZTV13IOCommandGate", 0x1c8,
+             b"__ZN13IOCommandGate9runActionEPFiP8OSObjectPvS2_S2_S2_ES2_S2_S2_S2_", 0x280,
+             "b99aaabcc82bfb3f8116857b0ceed68604d84a049fc2068cd36335bd3d8ace12"),
             (b"__ZTV13IOCommandGate", 0x1c0,
              b"__ZN13IOCommandGate10runCommandEPvS0_S0_S0_", 0x30,
              "e3e3a145d770ee11a0fe2424d9adda5df15c0be7c5fa458c3278a44d5ee7dd41"),
@@ -317,6 +321,14 @@ def check_boot_atomic(system, path):
     assert kernel_read(command + 0x13, 11) == bytes.fromhex("48 8b 77 20 48 8b 80 c8 01 00 00"), \
         "changed command stored-action/runAction virtual dispatch"
     print("PASS Boot KC command-gate removal wrapper preserves action delegation")
+    action = symbols[b"__ZN13IOCommandGate9runActionEPFiP8OSObjectPvS2_S2_S2_ES2_S2_S2_S2_"][0]
+    for offset, instruction in ((0x43, "ff 90 80 01 00 00"),
+                                (0xa5, "41 ff d7"),
+                                (0x100, "ff 90 78 01 00 00"),
+                                (0x155, "ff 90 90 01 00 00")):
+        assert kernel_read(action + offset, len(bytes.fromhex(instruction))) == bytes.fromhex(instruction), \
+            "changed command action gate/invocation/sleep instruction"
+    print("PASS Boot KC command action gated invocation and disabled-gate sleep body")
     assert system[0x10132:0x10138] == bytes.fromhex("ff 25 60 40 01 00"), "changed atomic import stub"
     raw = struct.unpack_from("<Q", system, 0x24198)[0]
     assert (raw >> 30) & 3 == 0 and raw >> 63 == 0, "unexpected atomic import cache level/auth"

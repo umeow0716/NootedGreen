@@ -7,6 +7,11 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 actual command action follow-up: complete Boot runAction body/base
+virtual reviewed/pinned, including gated invocation, disabled sleep and teardown
+abort. Removal action, request result handling and concrete overrides remain
+pending; base gated invocation alone is not a cleanup success proof.
+
 2026-10-04 command wrapper follow-up: complete Boot runCommand and base virtual
 reviewed/pinned; complete reference XNU runAction read. Actual Boot virtual
 +0x1c8, stored removal action and concrete control-gate type remain pending.
