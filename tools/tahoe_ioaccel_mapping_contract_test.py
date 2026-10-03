@@ -276,6 +276,11 @@ def check_boot_atomic(system, path):
     symbols[b"__ZTV8OSObject"] = []
     for name in (b"__ZTV12IODMACommand", b"__ZTV25IOGeneralMemoryDescriptor",
                  b"__ZN12IODMACommand12cloneCommandEPv",
+                 b"__ZN12IODMACommand14initWithRefConEPv",
+                 b"__ZN12IODMACommand21initWithSpecificationEPFbPS_NS_9Segment64EPvjEPKNS_14SegmentOptionsEjP8IOMapperS2_",
+                 b"__ZN12IODMACommand16setSpecificationEPFbPS_NS_9Segment64EPvjEPKNS_14SegmentOptionsEjP8IOMapper",
+                 b"_kalloc_type_impl", b"__ZN8IOMapper19waitForSystemMapperEv",
+                 b"_lck_mtx_alloc_init",
                  b"__ZN12IODMACommand17withSpecificationEPFbPS_NS_9Segment64EPvjEhyNS_14MappingOptionsEyjP8IOMapperS2_",
                  b"__ZN12IODMACommand19setMemoryDescriptorEPK18IOMemoryDescriptorb",
                  b"__ZNK25IOGeneralMemoryDescriptor19dmaCommandOperationEjPvj",
@@ -325,6 +330,8 @@ def check_boot_atomic(system, path):
 
     for table, slot, method in (
             (b"__ZTV12IODMACommand", 0x118, b"__ZN12IODMACommand12cloneCommandEPv"),
+            (b"__ZTV12IODMACommand", 0x178, b"__ZN12IODMACommand14initWithRefConEPv"),
+            (b"__ZTV12IODMACommand", 0x180, b"__ZN12IODMACommand21initWithSpecificationEPFbPS_NS_9Segment64EPvjEPKNS_14SegmentOptionsEjP8IOMapperS2_"),
             (b"__ZTV12IODMACommand", 0x128, b"__ZN12IODMACommand19setMemoryDescriptorEPK18IOMemoryDescriptorb"),
             (b"__ZTV12IODMACommand", 0x130, b"__ZN12IODMACommand21clearMemoryDescriptorEb"),
             (b"__ZTV12IODMACommand", 0x148, b"__ZN12IODMACommand8completeEbb"),
@@ -340,6 +347,9 @@ def check_boot_atomic(system, path):
     assert kernel_read(descriptor_operation + 0x215, 5) == bytes.fromhex("66 f0 ff 4f 34"), "changed descriptor active-DMA atomic decrement"
     for method, length, digest in (
             (b"__ZN12IODMACommand12cloneCommandEPv", 0xe0, "3dfcbe6d051b154d2826655cfafcf186237776218302cf500ba0d766bb750374"),
+            (b"__ZN12IODMACommand14initWithRefConEPv", 0x50, "9bf2ee9c07c3677712965fc2168ed0fea43d9887de6461bf80a504c5fa9fb1c4"),
+            (b"__ZN12IODMACommand21initWithSpecificationEPFbPS_NS_9Segment64EPvjEPKNS_14SegmentOptionsEjP8IOMapperS2_", 0x60, "36cc23802bb6931657e908abf07c70352f24df054e3a7f432977c2dbe3a01e06"),
+            (b"__ZN12IODMACommand16setSpecificationEPFbPS_NS_9Segment64EPvjEPKNS_14SegmentOptionsEjP8IOMapper", 0x290, "f61949ac55f2086536faaffc191f98a9535b29e01926a875e7741a6b27aca1ab"),
             (b"__ZN12IODMACommand17withSpecificationEPFbPS_NS_9Segment64EPvjEhyNS_14MappingOptionsEyjP8IOMapperS2_", 0x90, "d8d6abfba6270076a9f8e81f874592f600c9c0d75862ef3abb1cd55475de2453"),
             (b"__ZN12IODMACommand19setMemoryDescriptorEPK18IOMemoryDescriptorb", 0x1d0, "c3f7554a7c9a6dbb4357bccb00a3de4d2fa3d640fdfd141e5e92dace59cabee6"),
             (b"__ZN25IOGeneralMemoryDescriptor8completeEj", 0x3a0, "05696feca129a66a231bfdffc6173151ae05db56d52377b7b551f452c1bc06f1"),
@@ -362,6 +372,10 @@ def check_boot_atomic(system, path):
     assert kernel_read(dma_set + 0x1b0, 5) == bytes.fromhex("45 84 f6 75 aa"), "changed DMA registration ignored-result/autoprepare edge"
     assert kernel_read(dma_set + 0x18a, 5) == bytes.fromhex("be 01 00 00 00"), "changed DMA prepare-failure forced-clear argument"
     for call, method in ((0xffffff8000ad2f98, b"__ZN12IODMACommand7walkAllEj"),
+                         (0xffffff8000ad338a, b"_kalloc_type_impl"),
+                         (0xffffff8000ad33dc, b"__ZN12IODMACommand16setSpecificationEPFbPS_NS_9Segment64EPvjEPKNS_14SegmentOptionsEjP8IOMapper"),
+                         (0xffffff8000ad363d, b"__ZN8IOMapper19waitForSystemMapperEv"),
+                         (0xffffff8000ad3747, b"_lck_mtx_alloc_init"),
                          (0xffffff8000add8a5, b"_upl_commit_range"),
                          (0xffffff8000add8d9, b"_upl_abort_range"),
                          (0xffffff8000add8af, b"_upl_deallocate"),

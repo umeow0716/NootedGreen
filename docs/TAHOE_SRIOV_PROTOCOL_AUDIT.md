@@ -6029,3 +6029,30 @@ template factory/lock failure remains the distinct unsafe partial-pool unwind.
 Per-object ownership still must be established before a shared IOAccel hook:
 current Intel start/stop routes classify through global VF identity, not a
 registry of System-kext accelerator owners. No production patch or VM test.
+
+# DMA clone initializer and mapper ownership follow-up
+
+Resolved base object slots +0x178/+0x180 to initWithRefCon (0x50) and the
+SegmentOptions initWithSpecification (0x60); both complete bodies and delegated
+setSpecification (0x290) are now pinned. The wrapper calls initWithRefCon,
+then converts setSpecification's zero return to true. initWithRefCon initializes
+the circular link and refcon, allocates private state +0x70 if absent and
+returns true without a local allocation-null test. The allocator is
+kalloc_type_impl with flags including literal 4, not an ordinary nullable
+IOMalloc conclusion: allocator flags/failure policy must be reviewed before
+alleging a recoverable null-allocation bug.
+
+setSpecification rejects null callback/options and checks address width with
+special cases for the built-in 32-bit output callbacks. Zero maximum sizes
+become all-ones limits; alignments are stored as minus-one with zero defaults.
+An explicitly supplied mapper is checked via its metaclass ancestry. Mapped
+mode may resolve/wait for the default system mapper; alternate mapping modes
+select different mapper handling. Changed effective mapper +0x40 is retained,
+and the previous mapper released; the separately stored mapper provenance
+at private +0xb8 is not itself retained by this body. Optional mutex creation
+stores its result at private +0xc0 without a local null-result test.
+
+These bodies establish local clone initialization/mapper reference operations,
+not mapper runtime validity, allocator failure semantics, full free/unwind or
+GPU retirement. Mapper wait, allocator and mutex implementations remain
+pending. No speculative null-allocation fix, executable patch or dynamic test.

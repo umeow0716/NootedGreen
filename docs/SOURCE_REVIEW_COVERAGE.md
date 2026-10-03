@@ -7,6 +7,13 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 clone initializer follow-up: complete initWithRefCon,
+SegmentOptions initWithSpecification and setSpecification reviewed/pinned;
+actual allocator, mapper-wait and mutex-factory direct calls resolved.
+Effective mapper changes retain/release locally. Allocator flag/failure policy,
+private-state free and optional mutex failure handling are not yet certified;
+absence of a local allocation-null check alone is not a proven defect.
+
 2026-10-04 DMA template clone follow-up: complete Boot cloneCommand body
 reviewed/hash-pinned with initializer/failure-release instruction anchors.
 New command configuration is reconstructed from the template, not descriptor
