@@ -28,6 +28,7 @@ SHARED_VTABLE = "__ZTV14IOAccelShared2"
 RESOURCE_VTABLE = "__ZTV16IOAccelResource2"
 GET_DATA_BUFFER = "__ZN15IOAccelContext213getDataBufferEP29IOAccelContextGetDataBufferInP30IOAccelContextGetDataBufferOutP22IOAccelResourcePrivatey"
 EVENT_FINISH_UNLOCKED = "__ZN24IOAccelEventMachineFast219finishEventUnlockedEP12IOAccelEvent"
+EVENT_HARDWARE_ERROR = "__ZN20IOAccelEventMachine219signalHardwareErrorE15eRestartRequesti"
 EVENT_INIT = "__ZN24IOAccelEventMachineFast29initEventEP12IOAccelEvent"
 EVENT_COPY = "__ZN24IOAccelEventMachineFast29copyEventEP12IOAccelEventS1_"
 # Symbol-bounded bodies reviewed locally. These identities do not certify
@@ -256,7 +257,7 @@ def check(path, boot_path=None):
     matches = {name: [] for name in {*CONTRACTS, *SCRUB_BODIES, *LOCK_COPIES, SHARED_VTABLE, RESOURCE_VTABLE,
                                     EVENT_VTABLE, EVENT_FINISH, EVENT_WAIT, EVENT_CLEAN, EVENT_SIGNAL, EVENT_RESTART,
                                     EVENT_MERGE_EXCLUDING, EVENT_SET_STAMP, GET_DATA_BUFFER,
-                                    EVENT_INIT, EVENT_COPY, EVENT_FINISH_UNLOCKED}}
+                                    EVENT_INIT, EVENT_COPY, EVENT_FINISH_UNLOCKED, EVENT_HARDWARE_ERROR}}
     for index in range(count):
         name_offset, _, _, _, address = struct.unpack_from("<IBBHQ", image, symbol_offset + index * 16)
         assert name_offset < string_size, "invalid symbol string"
@@ -304,6 +305,18 @@ def check(path, boot_path=None):
     for offset in (0x29b, 0x5e9):
         assert buffer_body[offset:offset + 4] == bytes.fromhex("4d 8b 6e 38"), "changed post-wait buffer reload"
     print("PASS getDataBuffer helper and inlined mutex-release wait windows")
+    unlocked_start = address_of(EVENT_FINISH_UNLOCKED)
+    unlocked_body = read(unlocked_start, 0x194)
+    assert hashlib.sha256(unlocked_body).hexdigest() == \
+        "fb78fffbb00c991767abc188fa7bbf743432de41b03ddd3c839d008963809dc2", "changed finishEventUnlocked"
+    assert unlocked_body[0x6f:0x80] == bytes.fromhex(
+        "49 8b 4e 10 83 b9 c8 0d 00 00 00 0f 85 f7 00 00 00"), "changed unlocked finish termination bypass"
+    assert unlocked_body[0xdc:0xe2] == bytes.fromhex("ff 90 38 02 00 00"), "changed unlocked stamp wait virtual"
+    assert unlocked_body[0xfa] == 0xe8 and unlocked_start + 0xff + struct.unpack_from("<i", unlocked_body, 0xfb)[0] == \
+        address_of(EVENT_HARDWARE_ERROR), "changed unlocked timeout error request"
+    assert hashlib.sha256(read(address_of(EVENT_HARDWARE_ERROR), 0x112)).hexdigest() == \
+        "fa0c96832f317613aa5389d04fdcae250b356be84cac4c009438b77b96afd649", "changed software hardware-error signaling"
+    print("PASS inherited unlocked finish retry and software error-request identities")
     for table, slot, name in ((SHARED_VTABLE, 0x128, SHARED_SCRUB),
                               (RESOURCE_VTABLE, 0x228, RESOURCE_SCRUB),
                               (EVENT_VTABLE, 0x270, EVENT_SCRUB)):

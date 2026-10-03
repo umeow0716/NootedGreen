@@ -76,6 +76,14 @@ as fully reviewed implementations. Caller/slot lifetime, mapping callbacks
 and producer locking across those windows remain open; direct helper-call
 inventory alone is demonstrably insufficient for lock-coverage review.
 
+Unlocked finish/error-request delta: complete Fast2 finishEventUnlocked and
+base signalHardwareError bodies were read and hash-pinned locally, including
+the termination bypass, wait virtual and timeout request. The caller retries
+without its own finite bound and returns elapsed-time accounting, not an idle
+boolean. Error signaling uses a distinct event-machine mutex and software
+request/event-source notification. Full wait locking, callback processing,
+mapping/event lifetime and actual DMA completion remain open.
+
 V267 closes the verified VF event-timeout return into inherited restart/retry
 by protocol-fault admission closure followed by guest fail-stop. This is not
 normal recovery or proof that already-published DMA stops. PF and normal debug

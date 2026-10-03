@@ -259,6 +259,29 @@ upstream callers' lock admission, mapping lifetime and hardware completion
 remain unproved. The verified behavior requires producer bridge integration
 to distinguish its own invocation lifetime from broader native caller locking.
 
+Unlocked finish follow-up: the complete Fast2 `finishEventUnlocked` body was
+read and locally hash-pinned (`0x194` bytes). It loops eight event entries,
+checks cached and mapped completed stamps with signed subtraction, but skips
+an outstanding entry if accelerator termination counter `+0xdc8` is nonzero.
+For a pending nonterminated entry it invokes wait virtual `+0x238`. Nonzero
+returns retry; `kIOReturnTimeout` (`0xe00002d6`, confirmed in SDK IOReturn.h)
+first calls `signalHardwareError(reason=3, channel)` and then retries too.
+This caller supplies no finite retry count or independent deadline. A zero
+wait return resumes accounting, not an extra hardware completion read here.
+The result accumulates converted elapsed wait time rather than returning a
+completion boolean; getDataBuffer uses it for accounting. Termination skipping,
+wait dispatch and error-request target are additionally pinned.
+
+The complete `signalHardwareError` body (`0x112` bytes) was also read and
+locally hash-pinned. It locks event-machine mutex `+0x50` via IOLockLock,
+compares/updates a channel's software restart request in array `+0x98`,
+and invokes event-source `+0x80` virtual `+0x1d8` only for a stronger request,
+then unlocks. This is not accelerator mutex `+0x88`, GPU reset acknowledgement
+or DMA-stop evidence. Downstream event-source processing and full wait method
+locking/lifetime still require review. These findings preserve the V267 error
+fail-stop boundary; they do not implement normal completion, finite recovery
+or certify that a guest panic protects the PF. No runtime behavior changed.
+
 Inherited implementation found locally (2026-10-04): archived Tahoe 25G229
 `SystemKernelExtensions.kc`, SHA-256
 `5cb1be1dc530b4b953a33943567589101d3ac46bb8cf90728566ee7e5b1fa214`,
