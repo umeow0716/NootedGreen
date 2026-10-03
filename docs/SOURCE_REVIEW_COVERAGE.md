@@ -7,6 +7,10 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 stop block API: paired import plus complete wrapper/adapter/base
+runAction read/pinned; normal stop block executes synchronously under base gate.
+Ignored removal results and owner/cancellation lifetime remain unresolved.
+
 2026-10-04 inherited stop follow-up: complete accelerator stop and stop block
 read/pinned; twelve removal calls and workloop release/clear tested locally.
 Block-execution import and other callees remain pending; ignored removal

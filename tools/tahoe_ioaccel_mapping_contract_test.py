@@ -187,6 +187,7 @@ def check_boot_atomic(system, path):
                                    b"_IOLockLock", b"_IOLockUnlock", b"_assert_wait_deadline",
                                    b"_thread_block", b"_clock_interval_to_deadline",
                                    b"__ZN10IOWorkLoop8workLoopEv",
+                                   b"__ZN10IOWorkLoop14runActionBlockEU13block_pointerFivE",
                                    b"__ZTV22IOInterruptEventSource", b"__ZTV18IOTimerEventSource",
                                    b"__ZN22IOInterruptEventSource23normalInterruptOccurredEPvP9IOServicei",
                                    b"__ZN18IOTimerEventSource12setTimeoutUSEj",
@@ -439,6 +440,21 @@ def check_boot_atomic(system, path):
     assert kernel_read(factory + 0x8d, 6) == bytes.fromhex("ff 90 88 00 00 00"), "changed workloop init dispatch"
     assert kernel_read(factory + 0x9d, 5) == bytes.fromhex("ff 50 28 31 db"), "changed failed workloop init release/null result"
     print("PASS Boot KC concrete base workloop factory and failed-init cleanup")
+    stub = 0x1051c
+    assert system[stub:stub + 6] == bytes.fromhex("ff 25 ae 41 01 00"), "changed stop block import"
+    pointer = stub + 6 + struct.unpack_from("<i", system, stub + 2)[0]
+    raw = struct.unpack_from("<Q", system, pointer)[0]
+    assert (raw >> 30) & 3 == 0 and raw >> 63 == 0, "unexpected stop block import cache/auth"
+    block_api = symbols[b"__ZN10IOWorkLoop14runActionBlockEU13block_pointerFivE"][0]
+    assert bases[0] + (raw & 0x3fffffff) == block_api, "changed stop block API identity"
+    for start, length, digest in (
+            (block_api, 0x40, "a38a67b32da3d99f873a5c26a175e11b20292dd190e22c189df7f5a815c15472"),
+            (block_api + 0x40, 0x10, "353d84cf14acdfbc12e30defec09060ca37f6116ecc2aedb54919200c05b601b"),
+            (0xffffff8000ac9be0, 0x60, "42ddad5ca2b1ca4851b501da78fc0a811a324aa38b798c6d591b2f08195b6100")):
+        assert hashlib.sha256(kernel_read(start, length)).hexdigest() == digest, "changed gated block execution body"
+    assert struct.unpack("<Q", kernel_read(workloop_table + 16 + 0x1a0, 8))[0] == 0xffffff8000ac9be0, \
+        "changed base workloop synchronous action virtual"
+    print("PASS paired KC stop block API and synchronous base workloop action body")
     assert system[0x10132:0x10138] == bytes.fromhex("ff 25 60 40 01 00"), "changed atomic import stub"
     raw = struct.unpack_from("<Q", system, 0x24198)[0]
     assert (raw >> 30) & 3 == 0 and raw >> 63 == 0, "unexpected atomic import cache level/auth"

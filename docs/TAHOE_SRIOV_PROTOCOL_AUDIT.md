@@ -27,6 +27,18 @@ enforce fault-before-panic and prohibit native/helper/backing side effects.
 
 ## Mapping getter provenance follow-up (offline)
 
+Stop block execution follow-up: paired import `0x1051c` resolves to
+IOWorkLoop::runActionBlock. Complete wrapper (0x40), separate unnamed block
+invoke adapter (0x10) and effective base runAction body (0x60) were read/pinned.
+The wrapper delegates through virtual +0x1a0; base runAction enters workloop
++0x180, synchronously calls the adapter/action, exits +0x178 and returns its
+result. The adapter invokes the block's +0x10 function pointer. Thus the reviewed
+stop block normally runs under the same base workloop gate as passive callbacks.
+This proves synchronous serialization, not source-removal success: the block
+ignores twelve removal returns and always returns zero. Owner lifetime,
+cancel/generation races and complete start remain pending; no runtime hold
+or DMA-quiescence requirement is relaxed.
+
 Inherited stop follow-up: complete accelerator stop (0x43f) and its captured-
 owner block (0x2d7) were read/pinned locally. Stop releases the accelerator
 mutex before calling an imported block-execution helper with workloop +0xf0,
