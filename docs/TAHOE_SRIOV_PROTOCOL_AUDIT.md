@@ -27,6 +27,17 @@ enforce fault-before-panic and prohibit native/helper/backing side effects.
 
 ## Mapping getter provenance follow-up (offline)
 
+Timer init delegation is now resolved locally: base timer virtual `+0x1c0`
+is `init(owner, action)`. Its complete 0x50-byte Boot body calls inherited
+IOEventSource init, fails if that fails, dispatches `setTimeoutFunc` through
+base timer virtual `+0x1b8`, then requires non-null calloutEntry `+0x48` before
+success. The paired fixture pins the full body, both base virtual identities,
+inherited init call target and setup dispatch instruction. This closes the
+middle timer options-init/setup delegation gap, but not inherited init internals,
+callback drain, thread-call execution or workloop removal. Existing passive-mode
+setup evidence therefore remains a mode-selection finding, not a teardown
+safety or hardware-completion guarantee. No runtime hold was relaxed.
+
 Actual Boot timer factory follow-up: complete default factory and options-init
 bodies, plus setTimeoutFunc code and its five-entry trailing jump table, were
 read. The factory installs the base timer vtable and passes options 1 through

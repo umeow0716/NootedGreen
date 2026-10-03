@@ -193,6 +193,8 @@ def check_boot_atomic(system, path):
                                    b"_thread_call_cancel", b"_thread_call_cancel_wait",
                                    b"__ZN18IOTimerEventSource16timerEventSourceEP8OSObjectPFvS1_PS_E",
                                    b"__ZN18IOTimerEventSource4initEjP8OSObjectPFvS1_PS_E",
+                                   b"__ZN18IOTimerEventSource4initEP8OSObjectPFvS1_PS_E",
+                                   b"__ZN13IOEventSource4initEP8OSObjectPFvS1_zE",
                                    b"__ZN18IOTimerEventSource14setTimeoutFuncEv")}
     for command, offset in commands(boot, kernel[0]):
         if command != 2:
@@ -214,6 +216,9 @@ def check_boot_atomic(system, path):
     # These Boot KC vtable entries are canonical pointers, NOT System KC
     # chained cache-level targets. Do not silently apply the latter decoder.
     for table, slot, method, length, digest in (
+            (b"__ZTV18IOTimerEventSource", 0x1c0,
+             b"__ZN18IOTimerEventSource4initEP8OSObjectPFvS1_PS_E", 0x50,
+             "a7e670f9a67cfecffd99d5280e9841fa418f6f9281d45edef55f3a2598ce63bb"),
             (b"__ZTV18IOTimerEventSource", 0x218,
              b"__ZN18IOTimerEventSource13cancelTimeoutEv", 0x70,
              "ca6a6e9adbde9fcd3242f53c7c407c5dbc8b737620144c1ffc34f1aae08cb4ac"),
@@ -263,6 +268,16 @@ def check_boot_atomic(system, path):
     assert struct.unpack("<Q", kernel_read(symbols[b"__ZTV18IOTimerEventSource"][0] + 16 + 0x220, 8))[0] == symbols[b"__ZN18IOTimerEventSource4initEjP8OSObjectPFvS1_PS_E"][0], \
         "changed timer options init virtual"
     print("PASS Boot KC default timer factory/options and setup jump table")
+    timer_init = symbols[b"__ZN18IOTimerEventSource4initEP8OSObjectPFvS1_PS_E"][0]
+    assert struct.unpack("<Q", kernel_read(symbols[b"__ZTV18IOTimerEventSource"][0] + 16 + 0x1b8, 8))[0] == setup, \
+        "changed timer init setup virtual"
+    call = timer_init + 9
+    instruction = kernel_read(call, 5)
+    assert instruction[0] == 0xe8 and call + 5 + struct.unpack_from("<i", instruction, 1)[0] == symbols[b"__ZN13IOEventSource4initEP8OSObjectPFvS1_zE"][0], \
+        "changed timer base event-source init edge"
+    assert kernel_read(timer_init + 0x18, 6) == bytes.fromhex("ff 90 b8 01 00 00"), \
+        "changed timer setup dispatch instruction"
+    print("PASS Boot KC timer init delegation reaches pinned setup virtual")
     assert system[0x10132:0x10138] == bytes.fromhex("ff 25 60 40 01 00"), "changed atomic import stub"
     raw = struct.unpack_from("<Q", system, 0x24198)[0]
     assert (raw >> 30) & 3 == 0 and raw >> 63 == 0, "unexpected atomic import cache level/auth"

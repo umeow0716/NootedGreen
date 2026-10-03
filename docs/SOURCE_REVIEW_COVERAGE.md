@@ -7,6 +7,11 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 timer init delegation follow-up: complete Boot owner/action init
+body read, local fixture pins virtual +0x1c0, setup virtual +0x1b8 and inherited
+event-source init call. Options-to-setup middle delegation resolved; inherited
+init internals, callbacks and teardown synchronization remain pending.
+
 2026-10-04 actual timer factory follow-up: complete Boot default factory,
 options-init and setup code with five-entry data table reviewed/pinned locally.
 Options 1/passive setup distinguished from workloop-priority active mode;
