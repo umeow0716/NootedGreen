@@ -317,10 +317,24 @@ def macho_inventory(path):
     panic_relocations = set()
     inherited_event_imports = {}
     external_offset, external_count = dysymtab[16], dysymtab[17]
+    # These imports distinguish the periodic collection mutex from bridge
+    # descriptor spin locks. They do not certify dynamic callback lifetime.
+    stamp_irq_imports = {
+        0x5669d: "_IOLockLock", 0x5671f: "_IOLockUnlock",
+        0x56855: "_IOLockLock", 0x56892: "_IOLockUnlock",
+        0x568b1: "_IOLockLock", 0x56910: "_IOLockUnlock",
+        0x56929: "_IOLockLock", 0x56974: "_IOLockUnlock",
+        0x566a9: "__ZN20OSCollectionIterator14withCollectionEPK12OSCollection",
+        0x4acc2: "_lck_spin_lock", 0x4ad71: "_lck_spin_unlock",
+        0x4adce: "_lck_spin_lock", 0x4ae7d: "_lck_spin_unlock",
+    }
+    observed_stamp_irq_imports = {address: [] for address in stamp_irq_imports}
     for index in range(external_count):
         address, bits = struct.unpack_from(
             "<iI", image, external_offset + index * 8)
         symbol_index = bits & 0xFFFFFF
+        if address in observed_stamp_irq_imports:
+            observed_stamp_irq_imports[address].append((names[symbol_index], bits >> 24))
         if names[symbol_index] in (
                 "__ZN15IOAccelChannel219mergeEventExcludingEP12IOAccelEventS1_",
                 "__ZN15IOAccelChannel213setEventStampEP12IOAccelEvent",
@@ -346,6 +360,11 @@ def macho_inventory(path):
                     (bits >> 27) & 1, (bits >> 28) & 0xF) != (1, 2, 1, 2):
                 raise AssertionError(f"{path}: incompatible {name} relocation")
             relocations[name] = address
+
+    for address, name in stamp_irq_imports.items():
+        opcode = 0xe9 if name in ("_IOLockUnlock", "_lck_spin_unlock") else 0xe8
+        if observed_stamp_irq_imports[address] != [(name, 0x2d)] or image[address - 1] != opcode:
+            raise AssertionError(f"{path}: changed stamp IRQ imported call at {address:#x}")
 
     def value(name):
         matches = [values[i] for i, candidate in enumerate(names)

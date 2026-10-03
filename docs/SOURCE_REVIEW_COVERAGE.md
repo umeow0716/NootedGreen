@@ -7,6 +7,13 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 periodic timer follow-up: read the complete external reference
+`xnu-12377.121.6/libkern/c++/OSCollectionIterator.cpp`, including both storage
+models, allocation failure, update-stamp invalidation and unretained iteration
+results. Pin 13 concrete TGL factory/mutex/spin-lock call imports in both
+payloads. Boot KC implementation identity and callback lifetime remain pending;
+this does not complete SDK/dependency review or establish hardware safety.
+
 At c312229, the tracked source/build/metadata inventory contained 1,305 files:
 
 | Area | Files | Current review boundary |

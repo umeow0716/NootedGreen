@@ -27,6 +27,23 @@ enforce fault-before-panic and prohibit native/helper/backing side effects.
 
 ## Mapping getter provenance follow-up (offline)
 
+Periodic timer import follow-up: both TGL payloads now pin all eight mutex
+lock/unlock call relocations in the callback and timer enable/disable paths,
+the `OSCollectionIterator::withCollection` factory call, and all four singular
+bridge descriptor spin-lock calls. The bridge uses `lck_spin_lock/unlock`, not
+`IOLock`; do not introduce sleeping work into that critical section.
+The local XNU 12377.121.6 `OSCollectionIterator.cpp` was read in full: its
+factory retains the collection, free releases it, iteration checks the
+collection update stamp, and `getNextObject` returns the collection's object
+without an additional retain. Allocation/init can fail. This source is a
+reference, not proof that the Tahoe Boot KC implementation is identical.
+Collection retention is not an independent callback-object lifetime guarantee;
+The complete native callback checks a null factory result at `0x566ad` and
+skips iteration to the count/rearm path; it releases a non-null iterator before
+rearm. The collection mutex remains held across each event-source virtual
+`+0x1e0` dispatch: mutation/reentrancy and the actual virtual target remain
+open. No runtime route or safety gate was relaxed.
+
 Normal-submit stamp provenance follow-up: `submitToRing` captures ring byte
 `+0x48` (stamp written), clears that byte before scheduler dispatch, and passes
 the saved boolean to Scheduler4 virtual `+0x148`; its tail argument is ring
