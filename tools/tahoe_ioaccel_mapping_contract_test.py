@@ -779,6 +779,7 @@ def check(path, boot_path=None):
         encoded = read(call, 5)
         assert encoded[0] == 0xe8 and call + 5 + struct.unpack_from("<i", encoded, 1)[0] == address_of(method), "changed unwire cleanup edge"
     assert read(0x14bb74de, 6) == bytes.fromhex("ff 90 78 01 00 00"), "changed release-pte conditional mapping virtual"
+    assert read(0x14bb74e4, 6) == bytes.fromhex("8b 43 10 83 e0 fb"), "changed release-pte ignored mapping-status/flag-clear edge"
     assert read(0x14bb8fe8, 4) == bytes.fromhex("f6 43 0c 02"), "changed sys-memory free conditional unwire flag"
     assert read(0x14bb8ff4, 6) == bytes.fromhex("ff 90 b8 01 00 00"), "changed sys-memory free unwire dispatch"
     assert read(0x14b675ce, 3) == bytes.fromhex("ff 4f 10"), "changed parent memory complete count decrement"

@@ -808,3 +808,11 @@ returnDMACommand/sysmem_unwired bodies and concrete cleanup edges. Base
 unwire logs DMA virtual errors and continues; descriptor return is not tested.
 Concrete DMA/descriptor/purge virtuals, conditional mapping +0x178, parent
 +0x1d8 and helper lock/collection semantics remain pending. Not a drain proof.
+# Latest mapping-release consolidation
+
+Re-reviewed/pinned complete Intel mapping/manager release bodies and effective
+mapping slot. Connected the prior native releaseRange review to SystemKC
+release_pte's ignored bool result. This confirms false-return alone cannot
+preserve backing; existing VF unmap barrier remains required. No executable
+driver change. Task page-table ownership/getters, descriptor cleanup and Host
+DMA containment remain unproven.

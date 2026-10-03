@@ -3157,6 +3157,8 @@ void Gen11::IGHardwareGlobalPageTableUnmapRange(void *that,
                                                 const NGIGAddressRange &range)
 {
 	// A void unmap cannot tell its caller not to free/reuse DMA backing.
+	// Tahoe IOAccelMemoryMap::release_pte also ignores the Intel mapping
+	// release bool, so returning false further up cannot preserve backing.
 	// Refuse to continue teardown on invalid input or a faulted VF; silently
 	// returning would turn a skipped PTE write into a use-after-free risk.
 	PANIC_COND(gVfIdentity != VfIdentity::Virtual || !gVfGGTTReady ||

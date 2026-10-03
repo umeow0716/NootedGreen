@@ -5798,3 +5798,29 @@ imported lock wrappers; complete sysmem_unwired (0x78) updates collections and
 byte accounting through helpers. These helper callees/locks are not newly
 certified. All four base bodies and caller edges are pinned. Targeted native
 and paired-KC tests pass; no production or runtime operations were added.
+# Inherited release-PTE status loss and native release-chain consolidation
+
+Verification checkpoint: full `bash tools/check-static.sh` exited 0 in
+`/tmp/ngreen-static.fxiqa6`; only the two existing SDK macro-redefinition
+warnings were emitted. Proprietary paired-KC checks ran separately locally.
+
+Re-reviewed complete Intel mapping `releaseFromGPUPageTable` (0x140) and
+manager `releaseFromPageTableForTask` (0x112); both are now pinned in native
+tests, including mapping virtual slot `+0x178` and direct manager call edge.
+The mapping skips flagged special mappings as success; otherwise it forwards
+to its accelerator memory manager and preserves that result. The manager
+builds the address range through native getters, traverses task page-table
+list `+0x268`, ANDs all releaseRange results, and returns success for an empty
+list. Concrete list ownership and getter/page-table identities remain pending.
+
+This consolidates the earlier “Synchronous GGTT unmap invalidation” review,
+not a new discovery of releaseRange's deferred-flush behavior. Newly paired
+with inherited SystemKC release_pte: after virtual `+0x178` returns, the caller
+reloads flags without checking the bool result, clears PTE-present and proceeds
+to parent notification/generation update. Therefore a false mapping/manager
+return cannot protect backing through this caller. The production VF void
+unmap already requires synchronous GuC invalidation or refuses unsafe cleanup;
+its comment now records this additional inherited status-loss evidence.
+No executable driver behavior changed. Guest panic is still not a DMA barrier
+or substitute for the host containment plan. Targeted native/paired-KC tests
+pass; no VM/PCI/deployment operations.
