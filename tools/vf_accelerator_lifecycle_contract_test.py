@@ -40,6 +40,8 @@ RING_RESET_GRAPHICS = "__ZN20IGHardwareRingBuffer19resetGraphicsEngineEP17IGHard
 FIFO_RESET_REPLAY = "__ZN18IGAccelFIFOChannel22resetHardwareAndReplayEv"
 FIFO_SUBMIT_STAMP = "__ZN18IGAccelFIFOChannel18submitStampCommandEv"
 RING_SLEEP_STAMP = "__ZN20IGHardwareRingBuffer13sleepForStampEPjjj"
+RING_WAIT_SPACE = "__ZN20IGHardwareRingBuffer12waitForSpaceEj"
+RING_WAIT_TIMEOUT = "__ZN20IGHardwareRingBuffer11waitTimeoutEU13block_pointerFbvE"
 GET_DEFAULT_RESET = "__ZN16IntelAccelerator20getDefaultResetValueEj"
 TRACE_DISABLE = "__ZN25IGAccelTraceStreamManager17disableCollectionE27TraceStreamCollectionChange"
 TRACE_SHUTDOWN = "__ZN25IGAccelTraceStreamManager8shutdownEv"
@@ -471,6 +473,30 @@ def macho_inventory(path):
         if reset_body.count(anchor) != count:
             raise AssertionError(
                 f"{path}: physical engine-reset {label} inventory changed")
+
+    # Normal producer backpressure polls shared context head/stamp memory.
+    # Keep its timeout diagnostic behind the already isolated entry rather
+    # than replacing normal waits or manufacturing completion.
+    if len(direct_branches(RING_WAIT_SPACE, RING_WAIT_TIMEOUT)) != 2 or \
+            len(direct_branches(RING_WAIT_TIMEOUT, RING_DEBUG_ENGINE)) != 1:
+        raise AssertionError(f"{path}: ring backpressure timeout graph changed")
+    wait_start = value(RING_WAIT_TIMEOUT)
+    wait_body = image[wait_start:next_symbol(wait_start)]
+    stamp_start = value(RING_SLEEP_STAMP)
+    stamp_body = image[stamp_start:next_symbol(stamp_start)]
+    for body, anchor, count, label in (
+            (wait_body, bytes.fromhex("48 8b 43 18 8b 40 10"), 1,
+             "shared context head"),
+            (wait_body, bytes.fromhex("ff 90 50 01 00 00"), 1,
+             "scheduler progress query"),
+            (stamp_body, bytes.fromhex("48 8b 43 30"), 3,
+             "shared stamp backing")):
+        if body.count(anchor) != count:
+            raise AssertionError(f"{path}: ring wait {label} inventory changed")
+    for owner in (RING_WAIT_SPACE, RING_WAIT_TIMEOUT, RING_SLEEP_STAMP):
+        if direct_branches(owner, SAFE_FORCE_WAKE) or \
+                direct_branches(owner, RING_RESET_GRAPHICS):
+            raise AssertionError(f"{path}: normal ring wait enters physical recovery")
 
     dpsm_start = value(DPSM_IDLE_TIMER)
     dpsm_end = next_symbol(dpsm_start)

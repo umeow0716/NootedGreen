@@ -10,6 +10,18 @@ enforced containment precondition.
 
 ## V262 VF physical reset/replay exclusion (offline)
 
+Follow-up review on 2026-10-04: native `waitForSpace()` has two direct
+`waitTimeout()` sites. The wait routine polls context backing at ring `+0x18`,
+head offset `+0x10`, queries the pinned Scheduler4 progress slot and has one
+diagnostic edge to the V261-contained `debugGraphicsEngine()` graph.
+`sleepForStamp()` polls the shared stamp backing at ring `+0x30` and returns
+the outstanding-stamp comparison. Neither wait has a direct physical reset
+or three-argument force-wake edge. The focused lifecycle contract now pins
+these call sites and shared-memory anchors in both payloads. This evidence
+covers these waiting routines only; their callers and backing lifetimes remain
+separate review obligations. Normal waits are retained without fabricated
+completion or additional suppression routes.
+
 - The adjacent FIFO recovery graph is independent of the V261 diagnostic
   routes. `IGAccelFIFOChannel` vtable slot `0x200` points to
   `resetHardwareAndReplay()`. That routine dispatches ring-buffer slot `0x168`,
