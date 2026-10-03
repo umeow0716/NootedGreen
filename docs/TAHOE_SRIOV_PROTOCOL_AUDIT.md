@@ -27,6 +27,18 @@ enforce fault-before-panic and prohibit native/helper/backing side effects.
 
 ## Mapping getter provenance follow-up (offline)
 
+Timer binding getter follow-up: complete Boot IOEventSource::getWorkLoop
+0x10 body reviewed/pinned: returns source+0x30. Timer effective vtable +0x168
+resolves to this getter. An exploratory +0x120 guess instead resolved to timer
+checkForWork/action dispatch and was discarded; it must never be used as a
+workloop getter. SDK declares getWorkLoop virtual, so future typed calls must
+also preserve the verified effective ABI. This provides a concrete startup
+postcondition for native base scheduler init's unchecked addEventSource:
+compare the created timer's binding to the accelerator workloop before later
+producer admission. Production startup validation is not added in this turn;
+failed detach/owner lifetime still requires independent handling. Local paired
+KC tests pin exact getter bytes and timer vtable edge; no runtime calls made.
+
 Scheduler patch uniqueness hardening: LookupPatchPlus preflight uses
 hasAtLeast for count=1, which does not reject duplicate candidates. Scheduler
 repair now separately requires an exact 0xaf range, one overlapping-aware

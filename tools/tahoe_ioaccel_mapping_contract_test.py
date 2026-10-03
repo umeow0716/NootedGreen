@@ -202,6 +202,7 @@ def check_boot_atomic(system, path):
     symbols[b"__ZTV8OSObject"] = []
     symbols[b"__ZN8OSObject4freeEv"] = []
     symbols[b"__ZN8OSObjectdlEPvm"] = []
+    symbols[b"__ZNK13IOEventSource11getWorkLoopEv"] = []
     symbols[b"__ZN18IOTimerEventSource7disableEv"] = []
     symbols[b"__ZN18IOTimerEventSource10wakeAtTimeEjyy"] = []
     symbols[b"__ZN18IOTimerEventSource17timeoutAndReleaseEPvS0_"] = []
@@ -513,6 +514,12 @@ def check_boot_atomic(system, path):
         "04b6869b3dc3784361e720a8287053f5f525011e12bbf9cd0b9fd8bcf8a609ae", \
         "changed reviewed OSObject sized delete wrapper"
     print("PASS Boot KC sized object-delete wrapper (allocator callee pending)")
+    source_workloop = symbols[b"__ZNK13IOEventSource11getWorkLoopEv"][0]
+    assert kernel_read(source_workloop, 0x10) == bytes.fromhex("55 48 89 e5 48 8b 47 30 5d c3 66 0f 1f 44 00 00"), \
+        "changed reviewed event-source workloop getter body"
+    assert struct.unpack("<Q", kernel_read(symbols[b"__ZTV18IOTimerEventSource"][0] + 16 + 0x168, 8))[0] == source_workloop, \
+        "changed effective timer attached-workloop getter slot"
+    print("PASS Boot KC timer effective attached-workloop getter (not callback slot)")
     cancel_wait = symbols[b"_thread_call_cancel_wait"][0]
     assert hashlib.sha256(kernel_read(cancel_wait, 0x3d0)).hexdigest() == \
         "ab79f907dfbfeb04b2723874f2299984cdc722577b7c745328f5d916f5c84d48", \
