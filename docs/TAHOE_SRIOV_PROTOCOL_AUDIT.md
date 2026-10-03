@@ -27,6 +27,22 @@ enforce fault-before-panic and prohibit native/helper/backing side effects.
 
 ## Mapping getter provenance follow-up (offline)
 
+Display queue caller follow-up: full event_interrupt_gated 0x14bb1896 (0x41e)
+read, with direct disable at 0x14bb19aa before transaction processing and
+enable at 0x14bb1aa6 when event test returns false and pipe flag+0x29c is zero.
+Queue indices+0x238/+0x23c, active transaction+0x248 and timers govern retries.
+The terminated byte+0x280 is checked on the processing path, not directly at
+the unmet-stamp enable branch; actual queue-flush/caller serialization must
+be resolved before declaring late enable impossible. The method's name is
+NOT a lock ownership proof. Complete device_terminated 0x14bafd0e (0x12) sets
++0x280 then tails to a separate helper at 0x14bafd20. Complete free
+0x14baea94 (0x1c0) calls three cleanup helpers before releasing storage/locks;
+their drain semantics remain unreviewed, so free alone proves no reference
+balance. Added these three whole-body hashes and two exact direct enable/
+disable queue edges; local paired KC passes. No runtime edits/VM actions.
+Next resolve termination queue helper and the free helpers plus gated entry
+construction/callers; do not insert a lock based on a suggestive method name.
+
 Display-pipe admission caller follow-up: effective Fast2 vtable +0x258/+0x260
 resolve event-stamp enable/disable. No direct calls to those implementations
 were found by exploratory IOAccel text decoding; same-offset indirect calls

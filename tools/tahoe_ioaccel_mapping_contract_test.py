@@ -35,6 +35,9 @@ EVENT_DISABLE_STAMP_LOCKED = "__ZN20IOAccelEventMachine223disable_stamp_interrup
 EVENT_ENABLE_STAMP = "__ZN20IOAccelEventMachine220enableStampInterruptEi"
 EVENT_DISABLE_STAMP = "__ZN20IOAccelEventMachine221disableStampInterruptEi"
 EVENT_OWNER_BODIES = {
+    "__ZN18IOAccelDisplayPipe21event_interrupt_gatedEv": (0x41e, "82edb6e16a07280b596ab1f53104bebf5a8944f416833483099f4d16085d17d5"),
+    "__ZN18IOAccelDisplayPipe17device_terminatedEv": (0x12, "44f2d112215eea94d1bdb399f2086b870445bf148e5553b81d163c3aa9b68105"),
+    "__ZN18IOAccelDisplayPipe4freeEv": (0x1c0, "1c4ecbd1a0d601f1d0afab535af0dc1a2439503840d59d6c8d38eb7dab0cfac5"),
     "__ZN18IOAccelDisplayPipe22enable_event_interruptEPK12IOAccelEvent": (0x4c, "2b2a6a9ebe4035e86d5d4351eebfba8f31e1ec2fa33bb58f55aef27dd030efcc"),
     "__ZN18IOAccelDisplayPipe23disable_event_interruptEPK12IOAccelEvent": (0x52, "7ec7631f9126589adf8d984ec137c71381b42cd1fecdb900768da2140a2091e5"),
     "__ZN24IOAccelEventMachineFast226enableEventStampInterruptsEPK12IOAccelEvent": (0x66, "93974e6cdc73ba252aed43b7c0b42d08759c0b937b014f40b74cd8fbd5dac47a"),
@@ -747,6 +750,10 @@ def check(path, boot_path=None):
         assert (raw >> 30) & 3 == 1 and raw >> 63 == 0, "unexpected cache level/auth"
         assert raw & 0x3fffffff == address_of(name), f"changed event virtual {slot:#x}"
     finish = read(address_of(EVENT_FINISH), 0x192)
+    for call, target in ((0x14bb19aa, "__ZN18IOAccelDisplayPipe23disable_event_interruptEPK12IOAccelEvent"),
+                         (0x14bb1aa6, "__ZN18IOAccelDisplayPipe22enable_event_interruptEPK12IOAccelEvent")):
+        encoded = read(call, 5)
+        assert encoded[0] == 0xe8 and call + 5 + struct.unpack_from("<i", encoded, 1)[0] == address_of(target), "changed display gated queue reference transition"
     for address, encoded in ((0x14bb22a5, "48 8b 87 88 00 00 00"),
                             (0x14bb22ac, "48 8b b8 80 03 00 00"),
                             (0x14bb22b6, "ff 90 58 02 00 00"),
