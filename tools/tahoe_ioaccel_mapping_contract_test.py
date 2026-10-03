@@ -271,6 +271,8 @@ def check_boot_atomic(system, path):
     symbols[b"__ZN18IOTimerEventSource11setWorkLoopEP10IOWorkLoop"] = []
     symbols[b"__ZTV8OSObject"] = []
     for name in (b"__ZTV12IODMACommand", b"__ZTV25IOGeneralMemoryDescriptor",
+                 b"__ZN12IODMACommand7walkAllEj", b"_upl_abort_range",
+                 b"_upl_commit_range", b"_upl_deallocate", b"_vm_page_free_list",
                  b"__ZN12IODMACommand21clearMemoryDescriptorEb",
                  b"__ZN12IODMACommand8completeEbb",
                  b"__ZN25IOGeneralMemoryDescriptor8completeEj"):
@@ -319,10 +321,19 @@ def check_boot_atomic(system, path):
             (b"__ZTV25IOGeneralMemoryDescriptor", 0x1f8, b"__ZN25IOGeneralMemoryDescriptor8completeEj")):
         assert struct.unpack("<Q", kernel_read(symbols[table][0] + 16 + slot, 8))[0] == symbols[method][0], "changed base DMA/descriptor virtual identity"
     for method, length, digest in (
+            (b"__ZN25IOGeneralMemoryDescriptor8completeEj", 0x3a0, "05696feca129a66a231bfdffc6173151ae05db56d52377b7b551f452c1bc06f1"),
+            (b"__ZN12IODMACommand7walkAllEj", 0x380, "21f231d75f108aab5a00af400fa56e8dc64a47ba29119f6f1fdd37629537adda"),
             (b"__ZN12IODMACommand21clearMemoryDescriptorEb", 0x90, "b2e56b7f2a5154c2fc39d156c41faaf86ab8b54bb20a9d1b0566854515495d6b"),
             (b"__ZN12IODMACommand8completeEbb", 0x230, "7862d56c7f676b693648cda13d9973549ed700b71e093af739244d0dbae6edca")):
         assert hashlib.sha256(kernel_read(symbols[method][0], length)).hexdigest() == digest, "changed base DMA-command cleanup body"
     dma_complete = symbols[b"__ZN12IODMACommand8completeEbb"][0]
+    for call, method in ((0xffffff8000ad2f98, b"__ZN12IODMACommand7walkAllEj"),
+                         (0xffffff8000add8a5, b"_upl_commit_range"),
+                         (0xffffff8000add8d9, b"_upl_abort_range"),
+                         (0xffffff8000add8af, b"_upl_deallocate"),
+                         (0xffffff8000ad42dd, b"_vm_page_free_list")):
+        encoded = kernel_read(call, 5)
+        assert encoded[0] == 0xe8 and call + 5 + struct.unpack_from("<i", encoded, 1)[0] == symbols[method][0], "changed DMA/descriptor backing release edge"
     assert kernel_read(dma_complete, 7) == bytes.fromhex("8b 4f 68 85 c9 74 6e"), "changed DMA complete zero-count check"
     dma_clear = symbols[b"__ZN12IODMACommand21clearMemoryDescriptorEb"][0]
     assert kernel_read(dma_clear + 0x7c, 8) == bytes.fromhex("48 c7 43 48 00 00 00 00"), "changed DMA descriptor pointer clear"

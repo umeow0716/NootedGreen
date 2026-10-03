@@ -823,3 +823,10 @@ bodies and canonical Boot vtable slots. General descriptor complete slot is
 resolved but its body is not reviewed here. Runtime subclass/descriptor identity,
 mapping helper and DMA-operation virtuals remain pending. False clear rejects
 outstanding prepare references; cleanup success is not GPU retirement proof.
+# Latest descriptor/page-release checkpoint
+
+Reviewed/pinned full GeneralMemoryDescriptor complete and DMA walkAll spans;
+resolved explicit UPL commit/abort/deallocate and vm_page_free_list calls.
+Actual page-release edges are established, not GPU retirement safety. Concrete
+receiver identity, active-DMA count producer pairing, mapping walker/callbacks
+and VM callee implementations remain pending. Targeted paired-KC checks pass.

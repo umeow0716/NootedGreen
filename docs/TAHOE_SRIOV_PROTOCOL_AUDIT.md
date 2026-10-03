@@ -5853,3 +5853,29 @@ device-idle or DMA-safe backing release merely from command cleanup success.
 Paired-KC checks pass after correcting a new fixture anchor offset from
 `+0x4c` to the observed pointer-clear instruction `+0x7c`; no payload changed.
 No production/runtime mutation.
+# General descriptor completion and DMA walkAll backing-release follow-up
+
+Reviewed/pinned complete BootKC `IOGeneralMemoryDescriptor::complete` (0x3a0)
+and `IODMACommand::walkAll` (0x380), including padding/cold edges. The former
+locks an optional descriptor mutex, handles type/flag/prepare-count branches,
+decrements preparation count when backing exists and on final/flag-selected
+cleanup invokes descriptor mapping helpers, UPL commit/abort and deallocation,
+then clears backing state. Active-DMA count `+0x34` has a cold panic edge in
+the final-release path, but its producer pairing and cross-device relevance
+are not yet certified. Other types/flags can bypass or perform alternate
+cleanup. Do not assume every concrete descriptor follows this base body.
+
+DMA walkAll handles several flags for preparation, copy/synchronization and
+release. The reviewed DMA complete invokes it with release bit `0x40` plus
+its second bool. Its release branch calls vm_page_free_list for a saved list,
+clears page count/list fields, releases the retained staging descriptor and
+clears staging state. Mapping walk helper `0xad39c0`, callbacks, allocation
+virtuals and descriptor read/write methods remain pending.
+
+Canonical Boot symbols verify direct calls to `_upl_commit_range`,
+`_upl_abort_range`, `_upl_deallocate` and `_vm_page_free_list`, now asserted
+as explicit edges alongside body hashes. Their VM implementations are not
+newly certified by caller review. These establish real backing-release paths,
+not a GPU-completion oracle: safety still requires native GPU retirement and
+translation invalidation before entering final release. Paired-KC targeted
+tests pass; no runtime/production mutation or deployment.
