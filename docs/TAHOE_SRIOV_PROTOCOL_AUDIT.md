@@ -27,6 +27,18 @@ enforce fault-before-panic and prohibit native/helper/backing side effects.
 
 ## Mapping getter provenance follow-up (offline)
 
+Base workloop initializer follow-up: complete Boot init (0x1a0 bytes) and
+base init virtual are locally pinned. It obtains maintenance action through
+workloop virtual `+0x118` (base target `_maintRequest`), allocates a control gate
+through a metaclass virtual, passes workloop owner/action to its init, stores
+the gate at `+0x20`, bootstraps its workloop and checks addEventSource return.
+The binding instructions and base maintenance target are pinned; allocation/
+init/attachment/thread-start failures make init fail. Existing non-null control
+gate state bypasses this binding branch. Metaclass identity, concrete driver
+workloop override selection and preexisting state remain unproven, so this is
+base construction evidence, not proof that every cleanup removes its timer.
+Native scheduler ignores removal failure; runtime hold remains unchanged.
+
 Maintenance action follow-up: complete Boot `_maintRequest` (0x290 bytes),
 including add and both active/passive remove branches, is locally pinned.
 Opcode 1 checks source workloop presence, selects the chain based on mode/

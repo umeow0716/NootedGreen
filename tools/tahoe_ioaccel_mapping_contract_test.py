@@ -198,6 +198,7 @@ def check_boot_atomic(system, path):
                                    b"__ZN18IOTimerEventSource14setTimeoutFuncEv")}
     symbols[b"__ZN18IOTimerEventSource17timeoutAndReleaseEPvS0_"] = []
     for name in (b"__ZTV10IOWorkLoop", b"__ZN10IOWorkLoop8openGateEv",
+                 b"__ZN10IOWorkLoop4initEv",
                  b"__ZTV13IOCommandGate", b"__ZN13IOCommandGate10runCommandEPvS0_S0_S0_",
                  b"__ZN13IOCommandGate9runActionEPFiP8OSObjectPvS2_S2_S2_ES2_S2_S2_S2_",
                  b"__ZN10IOWorkLoop13_maintRequestEPvS0_S0_S0_",
@@ -224,6 +225,8 @@ def check_boot_atomic(system, path):
     # These Boot KC vtable entries are canonical pointers, NOT System KC
     # chained cache-level targets. Do not silently apply the latter decoder.
     for table, slot, method, length, digest in (
+            (b"__ZTV10IOWorkLoop", 0x88, b"__ZN10IOWorkLoop4initEv", 0x1a0,
+             "3f0dee6fd2d4c2cbf11c7fcd7b0788c9bf2abb3c08526ae060fe159dfb7367f7"),
             (b"__ZTV13IOCommandGate", 0x1c8,
              b"__ZN13IOCommandGate9runActionEPFiP8OSObjectPvS2_S2_S2_ES2_S2_S2_S2_", 0x280,
              "b99aaabcc82bfb3f8116857b0ceed68604d84a049fc2068cd36335bd3d8ace12"),
@@ -340,6 +343,16 @@ def check_boot_atomic(system, path):
         assert kernel_read(maintenance + offset, len(bytes.fromhex(instruction))) == bytes.fromhex(instruction), \
             "changed source detach/next-clear/release order"
     print("PASS Boot KC maintenance removal detach and reference-release body")
+    workloop_table = symbols[b"__ZTV10IOWorkLoop"][0]
+    assert struct.unpack("<Q", kernel_read(workloop_table + 16 + 0x118, 8))[0] == maintenance, \
+        "changed base workloop maintenance action virtual"
+    workloop_init = symbols[b"__ZN10IOWorkLoop4initEv"][0]
+    for offset, instruction in ((0xe6, "4c 8b b8 18 01 00 00"),
+                                (0x112, "4c 89 fa"),
+                                (0x11f, "4c 89 73 20")):
+        assert kernel_read(workloop_init + offset, len(bytes.fromhex(instruction))) == bytes.fromhex(instruction), \
+            "changed workloop control-gate maintenance binding instruction"
+    print("PASS Boot KC base workloop initialization binds maintenance action")
     assert system[0x10132:0x10138] == bytes.fromhex("ff 25 60 40 01 00"), "changed atomic import stub"
     raw = struct.unpack_from("<Q", system, 0x24198)[0]
     assert (raw >> 30) & 3 == 0 and raw >> 63 == 0, "unexpected atomic import cache level/auth"

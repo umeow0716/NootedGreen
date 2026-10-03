@@ -7,6 +7,11 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 base workloop initializer follow-up: complete Boot init reviewed;
+local fixture pins full body, base init/maintenance virtuals and control-gate
+action binding instructions. Metaclass/concrete overrides and preexisting
+control gate selection remain pending before unconditional teardown claims.
+
 2026-10-04 maintenance action follow-up: complete Boot/XNU _maintRequest
 reviewed; Boot body and detach/next-clear/release sequence pinned locally.
 Initializer binding/concrete types and unchecked native removal return remain
