@@ -7,6 +7,13 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 DMA private allocation/free follow-up: complete Boot external typed
+allocator and base IODMACommand free reviewed/pinned. External flags are masked
+to 7, dropping NOFAIL; actual zone policy remains unresolved. Command free
+detaches descriptor without complete/clear; destruction is not a DMA drain.
+Local XNU source supports the intended detach workaround, not proof that all
+runtime allocation or optional-lock paths are safe.
+
 2026-10-04 clone initializer follow-up: complete initWithRefCon,
 SegmentOptions initWithSpecification and setSpecification reviewed/pinned;
 actual allocator, mapper-wait and mutex-factory direct calls resolved.

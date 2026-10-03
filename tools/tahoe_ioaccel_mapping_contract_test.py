@@ -277,6 +277,7 @@ def check_boot_atomic(system, path):
     for name in (b"__ZTV12IODMACommand", b"__ZTV25IOGeneralMemoryDescriptor",
                  b"__ZN12IODMACommand12cloneCommandEPv",
                  b"__ZN12IODMACommand14initWithRefConEPv",
+                 b"__ZN12IODMACommand4freeEv",
                  b"__ZN12IODMACommand21initWithSpecificationEPFbPS_NS_9Segment64EPvjEPKNS_14SegmentOptionsEjP8IOMapperS2_",
                  b"__ZN12IODMACommand16setSpecificationEPFbPS_NS_9Segment64EPvjEPKNS_14SegmentOptionsEjP8IOMapper",
                  b"_kalloc_type_impl", b"__ZN8IOMapper19waitForSystemMapperEv",
@@ -330,6 +331,7 @@ def check_boot_atomic(system, path):
 
     for table, slot, method in (
             (b"__ZTV12IODMACommand", 0x118, b"__ZN12IODMACommand12cloneCommandEPv"),
+            (b"__ZTV12IODMACommand", 0x90, b"__ZN12IODMACommand4freeEv"),
             (b"__ZTV12IODMACommand", 0x178, b"__ZN12IODMACommand14initWithRefConEPv"),
             (b"__ZTV12IODMACommand", 0x180, b"__ZN12IODMACommand21initWithSpecificationEPFbPS_NS_9Segment64EPvjEPKNS_14SegmentOptionsEjP8IOMapperS2_"),
             (b"__ZTV12IODMACommand", 0x128, b"__ZN12IODMACommand19setMemoryDescriptorEPK18IOMemoryDescriptorb"),
@@ -348,6 +350,8 @@ def check_boot_atomic(system, path):
     for method, length, digest in (
             (b"__ZN12IODMACommand12cloneCommandEPv", 0xe0, "3dfcbe6d051b154d2826655cfafcf186237776218302cf500ba0d766bb750374"),
             (b"__ZN12IODMACommand14initWithRefConEPv", 0x50, "9bf2ee9c07c3677712965fc2168ed0fea43d9887de6461bf80a504c5fa9fb1c4"),
+            (b"__ZN12IODMACommand4freeEv", 0xd0, "9d28f8d4336106353ff68e94b7636473253843289ace886c4f9ef43925422b67"),
+            (b"_kalloc_type_impl", 0x90, "5f34a636c2f1fbc91ff083c13527fa6b05bd0eb6a6056a3305170058be32cb10"),
             (b"__ZN12IODMACommand21initWithSpecificationEPFbPS_NS_9Segment64EPvjEPKNS_14SegmentOptionsEjP8IOMapperS2_", 0x60, "36cc23802bb6931657e908abf07c70352f24df054e3a7f432977c2dbe3a01e06"),
             (b"__ZN12IODMACommand16setSpecificationEPFbPS_NS_9Segment64EPvjEPKNS_14SegmentOptionsEjP8IOMapper", 0x290, "f61949ac55f2086536faaffc191f98a9535b29e01926a875e7741a6b27aca1ab"),
             (b"__ZN12IODMACommand17withSpecificationEPFbPS_NS_9Segment64EPvjEhyNS_14MappingOptionsEyjP8IOMapperS2_", 0x90, "d8d6abfba6270076a9f8e81f874592f600c9c0d75862ef3abb1cd55475de2453"),
@@ -358,6 +362,10 @@ def check_boot_atomic(system, path):
             (b"__ZN12IODMACommand8completeEbb", 0x230, "7862d56c7f676b693648cda13d9973549ed700b71e093af739244d0dbae6edca")):
         assert hashlib.sha256(kernel_read(symbols[method][0], length)).hexdigest() == digest, "changed base DMA-command cleanup body"
     dma_complete = symbols[b"__ZN12IODMACommand8completeEbb"][0]
+    allocator = symbols[b"_kalloc_type_impl"][0]
+    assert kernel_read(allocator + 9, 3) == bytes.fromhex("83 e2 07"), "changed external typed-allocation KPI flag mask"
+    dma_free = symbols[b"__ZN12IODMACommand4freeEv"][0]
+    assert kernel_read(dma_free + 0x9a, 8) == bytes.fromhex("48 c7 43 48 00 00 00 00"), "changed DMA free descriptor detach (not clearMemoryDescriptor)"
     dma_clone = symbols[b"__ZN12IODMACommand12cloneCommandEPv"][0]
     assert kernel_read(dma_clone + 0xad, 7) == bytes.fromhex("41 ff 92 80 01 00 00"), "changed clone SegmentOptions initializer dispatch"
     assert kernel_read(dma_clone + 0xb6, 7) == bytes.fromhex("74 05 4c 89 e8 eb 0c"), "changed clone initialization failure branch"

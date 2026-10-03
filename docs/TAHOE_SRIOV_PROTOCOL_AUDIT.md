@@ -6056,3 +6056,33 @@ These bodies establish local clone initialization/mapper reference operations,
 not mapper runtime validity, allocator failure semantics, full free/unwind or
 GPU retirement. Mapper wait, allocator and mutex implementations remain
 pending. No speculative null-allocation fix, executable patch or dynamic test.
+
+# DMA private allocation and free contract follow-up
+
+Reviewed/pinned complete Boot kalloc_type_impl/external alias body (0x90).
+It masks supplied flags with 7 before forwarding to zone/heap allocators;
+thus the conditional 0x8000 from initWithRefCon does NOT survive this external
+KPI wrapper. Literal 4 means Z_ZERO, not Z_NOFAIL. Local XNU reference
+12377.121.6 (git ac9718fb1af618d5ce8678d0dc6e8a58f252216f) defines WAITOK=0,
+ZERO=4 and NOFAIL=0x8000, and explains WAITOK's nonfailure guarantee only for
+non-exhaustible zones. The actual allocation-view zone/exhaustibility and
+downstream heap/zone failure policy remain unresolved, so null failure is not
+yet proven possible on this private-state allocation. Do not add a speculative
+null-check patch solely from a source-version analogy.
+
+Reviewed/pinned complete base IODMACommand::free (0xd0) and its effective
+vtable slot +0x90. It tests private state, conditionally handles/frees the
+optional mutex, frees/clears private +0x70, releases/clears mapper +0x40,
+then simply zeros descriptor +0x48. That last operation is NOT a call to
+clearMemoryDescriptor, nor registration decrement, descriptor release or
+prepare-reference drain. The matching local XNU source documents an intentional
+descriptor-detach leak workaround for callers missing clearMemoryDescriptor.
+Hence release of a command, including pool cleanup, cannot replace the required
+complete/clear protocol established earlier. The optional mutex branch calls
+CompleteDMA only if active; its call and allocator/free callees still require
+their own review. No claim that command destruction proves DMA quiescence.
+
+This closes the local no-mutex failed-clone release ordering: initialized
+private state and any retained mapper are cleaned by the base free path.
+Concrete runtime subclasses, descriptor-bearing pool return/release discipline,
+allocator semantics and Dext-lock behavior remain pending. No runtime mutation.
