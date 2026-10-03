@@ -35,6 +35,7 @@ EVENT_DISABLE_STAMP_LOCKED = "__ZN20IOAccelEventMachine223disable_stamp_interrup
 EVENT_ENABLE_STAMP = "__ZN20IOAccelEventMachine220enableStampInterruptEi"
 EVENT_DISABLE_STAMP = "__ZN20IOAccelEventMachine221disableStampInterruptEi"
 EVENT_OWNER_BODIES = {
+    "__ZN21IOAccelDisplayMachine17get_pipe_workloopEv": (0x2a, "157f3d97ec2fe80f182305de154332520cc32972b904bc171d892887d2432f45"),
     "__ZN18IOAccelDisplayPipe30release_live_transaction_gatedEv": (0x40, "59fc652bb7111c94f78994d096c32d8975b89efcffc899fb84bf164eb9c22930"),
     "__ZN18IOAccelDisplayPipe14createWorkLoopEv": (0x5e, "ec85a9941105b2c0609e4d88c429af33ea225e7aa68004df43de5dd7dbf841ab"),
     "__ZN18IOAccelDisplayPipe14setup_workloopEv": (0x2a0, "560d22438aedc391485ab3cc0a600e0bbe688ccf51af278cac7f0963a81f664c"),
@@ -443,6 +444,10 @@ def check_boot_atomic(system, path):
         expected = bytes.fromhex(encoded)
         assert kernel_read(gate_factory + offset, len(expected)) == expected, "changed gate factory allocator/init/failure release edge"
     print("PASS paired KC display gate factory import and complete construction body")
+    assert system[0x10138:0x1013e] == bytes.fromhex("ff 25 62 40 01 00"), "changed display workloop factory stub"
+    display_workloop_raw = struct.unpack_from("<Q", system, 0x241a0)[0]
+    assert (display_workloop_raw >> 30) & 3 == 0 and display_workloop_raw >> 63 == 0, "unexpected display workloop factory cache level/auth"
+    assert bases[0] + (display_workloop_raw & 0x3fffffff) == symbols[b"__ZN10IOWorkLoop8workLoopEv"][0], "changed shared/private display workloop factory identity"
     base_init = symbols[b"__ZN13IOEventSource4initEP8OSObjectPFvS1_zE"][0]
     assert hashlib.sha256(kernel_read(base_init, 0x70)).hexdigest() == \
         "f975c99f5099be0529c344faf80ba56970164feafab786803119f95ba64e0441", \
@@ -669,7 +674,7 @@ def check(path, boot_path=None):
             symtab = struct.unpack_from("<6I", image, offset)[2:]
     assert symtab is not None, "missing embedded symbol table"
     symbol_offset, count, string_offset, string_size = symtab
-    matches = {name: [] for name in {*CONTRACTS, *SCRUB_BODIES, *LOCK_COPIES, *EVENT_OWNER_BODIES, SHARED_VTABLE, RESOURCE_VTABLE,
+    matches = {name: [] for name in {*CONTRACTS, *SCRUB_BODIES, *LOCK_COPIES, *EVENT_OWNER_BODIES, SHARED_VTABLE, RESOURCE_VTABLE, "__ZTV18IOAccelDisplayPipe",
                                     EVENT_VTABLE, EVENT_FINISH, EVENT_WAIT, EVENT_CLEAN, EVENT_SIGNAL, EVENT_RESTART,
                                     EVENT_MERGE_EXCLUDING, EVENT_SET_STAMP, GET_DATA_BUFFER,
                                     EVENT_INIT, EVENT_COPY, EVENT_FINISH_UNLOCKED, EVENT_HARDWARE_ERROR,
@@ -706,6 +711,9 @@ def check(path, boot_path=None):
     stop_owner = read(address_of("____ZN20IOAccelEventMachine24stopEv_block_invoke"), 0x8b)
     assert stop_owner.count(bytes.fromhex("ff 90 48 01 00 00")) == 3, "changed base event stop source-removal inventory"
     print("PASS inherited event owner free/stop and per-event stamp-disable bodies (outer drain not proven)")
+    raw_pipe_factory = struct.unpack("<Q", read(address_of("__ZTV18IOAccelDisplayPipe") + 16 + 0x8c8, 8))[0]
+    assert (raw_pipe_factory >> 30) & 3 == 1 and raw_pipe_factory >> 63 == 0, "unexpected base display pipe factory cache level/auth"
+    assert raw_pipe_factory & 0x3fffffff == address_of("__ZN18IOAccelDisplayPipe14createWorkLoopEv"), "changed base display pipe createWorkLoop virtual"
     for address, encoded in ((0x14bb1612, "31 f6"),
                             (0x14bb1619, "48 89 83 b0 00 00 00"),
                             (0x14bb1632, "ff 91 40 01 00 00"),

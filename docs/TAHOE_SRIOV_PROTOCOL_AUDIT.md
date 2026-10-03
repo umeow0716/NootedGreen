@@ -27,6 +27,23 @@ enforce fault-before-panic and prohibit native/helper/backing side effects.
 
 ## Mapping getter provenance follow-up (offline)
 
+Display workloop provenance/hook-scope follow-up: complete
+IOAccelDisplayMachine::get_pipe_workloop 0x14b73d76 (0x2a) reviewed; returns
+cached +0x120 or calls import 0x10138 and stores result. Base display-pipe
+vtable +0x8c8 resolves createWorkLoop; shared path uses this getter plus retain,
+private path uses the same 0x10138 import. Stub → cell 0x241a0 chained level 0
+resolves previously reviewed Boot IOWorkLoop::workLoop base factory. Added
+getter hash, base-pipe virtual and paired import identity; local paired KC
+passes. This resolves base construction, not all possible display subclasses,
+shared-workloop concurrency, attachment success or caller ownership.
+Current production IOAcceleratorFamily branch only resolves lifecycle methods;
+it has no display setup/free route. A global System-kext hook cannot be added
+as if it were the existing VF-only TGL route table. A repair requires concrete
+per-owner VF classification and a proven init-error/unwind ABI, without changing
+PF/other accelerator behavior. No such global hook was introduced. Shared vs
+private workloop provenance is now resolved; next owner classification and
+initialization callers/error propagation are needed for scoped integration.
+
 Concrete display gate follow-up: complete release_live_transaction_gated
 0x14bb2d10 (0x40) moves live+0x250 transaction to finished list and clears
 live ownership, without directly changing event interrupt references. Complete
