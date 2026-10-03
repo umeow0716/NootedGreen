@@ -27,6 +27,24 @@ enforce fault-before-panic and prohibit native/helper/backing side effects.
 
 ## Mapping getter provenance follow-up (offline)
 
+Fallback owner follow-up: fully reread event-machine init 0x15c82 (0x64),
+free 0x15cfe (0x66), callback 0x15ce6 (0x18), and enableSchedulerEvents
+0x15d64 (0x40). Init creates source+0xd30 with the event machine as owner
+and this callback as action; callback forwards owner+0x10 accelerator and
+owner+0xd40 fallback bitset to signalStampUpdate. enableSchedulerEvents gets
+accelerator workloop, calls addEventSource without checking status, then sets
+flag+0xd88=1. Free conditionally removes the source using that flag, ignores
+remove status, releases/clears +0xd30, then delegates inherited free. No
+periodic collection deregistration exists in this complete derived free body.
+An outer fallback-disable/owner-drain invariant remains unproven; retaining
+source in scheduler's OSSet does not prove raw callback-owner lifetime.
+Added exact enable body hash and constructor callback/owner/source plus
+unchecked add/flag/remove/release anchors; both payload tests pass. Initial
+exploratory 0x44 range included the next function prologue; exact symbol/body
+boundary was rechecked as 0x40 before pinning. Production unchanged, no VM.
+Next audit stop/disable callers and inherited owner teardown before choosing
+a production ownership/admission fix (do not fabricate source cancellation).
+
 Periodic caller inventory follow-up: reviewed complete event-machine enable
 0x16182 (0xb6) and disable 0x16244 (0xf4). Their software stamp fallback
 selects accelerator+0x1250 scheduler and event-machine+0xd30 source, with direct

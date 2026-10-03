@@ -9,6 +9,7 @@ import sys
 # Complete reviewed native bodies. This fixes the concrete Intel override
 # graph, not inherited timer APIs, dynamic callbacks or runtime completion.
 STAMP_IRQ_NATIVE = {
+    "__ZN19IGAccelEventMachine21enableSchedulerEventsEv": (0x40, "f8f0e4f69fbcd568efb5443e8e745994d3182412ce07a855f0cfd931a426d004"),
     "__ZN26IGHardwareCommandStreamer54initEP22IOGraphicsAccelerator2P10IOWorkLoopP12IGScheduler510IGHwCsType": (0x224, "8f48a87d0813d09e9c4062970a48537d36182ffc2c9ac4a56894f5cffb075bc8"),
     "__ZN26IGHardwareCommandStreamer521registerForInterruptsEv": (0x90, "273bc67e508714d78441d1723972f3329308a1dc01e2b3e9616f6703a52e6370"),
     "__ZN26IGHardwareCommandStreamer528enableContextSwitchInterruptEv": (0x36, "e79036987a975eeab70e8fceb4c54e52685d7d67dd27cc03830dfbbe0fe6734d"),
@@ -451,6 +452,24 @@ def macho_inventory(path):
             expected = bytes.fromhex(encoded)
             assert image[start + offset:start + offset + len(expected)] == expected, \
                 f"{path}: changed periodic counter/lock/rearm semantic anchor: {name}+{offset:#x}"
+    # Fallback source is created with the event machine as raw callback owner.
+    # Native add/remove return statuses are ignored. Source retention by an
+    # OSSet must not be equated with retention of that callback owner.
+    for address, encoded in (
+            (0x15cbc, "48 8d 35 23 00 00 00"),
+            (0x15cc3, "48 89 df"),
+            (0x15ccf, "48 89 83 30 0d 00 00"),
+            (0x15d90, "ff 91 40 01 00 00"),
+            (0x15d96, "c6 83 88 0d 00 00 01"),
+            (0x15d2a, "ff 91 48 01 00 00"),
+            (0x15d30, "48 8b bb 30 0d 00 00"),
+            (0x15d42, "48 c7 83 30 0d 00 00 00 00 00 00")):
+        expected = bytes.fromhex(encoded)
+        assert image[address:address + len(expected)] == expected, \
+            f"{path}: changed fallback source constructor/unchecked attachment/release"
+    assert 0x15cbc + 7 + struct.unpack_from("<i", image, 0x15cbc + 3)[0] == \
+        value("__ZN19IGAccelEventMachine29handleSchedulerStampInterruptEP22IOInterruptEventSourcei"), \
+        f"{path}: changed fallback source callback constructor target"
     # Symbol boundaries alone merge unnamed functions into init/free. Pin the
     # disassembled function windows separately, not as one fictitious body.
     scheduler_init = value("__ZN11IGScheduler15initWithOptionsEjyP22IOGraphicsAccelerator2")
