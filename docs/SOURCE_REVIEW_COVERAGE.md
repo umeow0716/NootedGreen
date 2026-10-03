@@ -80,6 +80,10 @@ pending; base gated invocation alone is not a cleanup success proof.
 reviewed/pinned; complete reference XNU runAction read. Actual Boot virtual
 +0x1c8, stored removal action and concrete control-gate type remain pending.
 
+2026-10-04 scheduler patch admission: explicit unique/fixed-offset preflight
+added because generic count=1 only means at-least-one. Mutation/duplicate/
+moved/null/truncation rejection tests added; no concurrent patcher guarantee.
+
 2026-10-04 Scheduler4 failure repair: VF-only bounded 0xaf init patch removes
 premature free, retains factory release for all failures. Both payloads and
 in-memory patch tests verify only six bytes change. _kfree_ext identity resolved;

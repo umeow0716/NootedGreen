@@ -2184,6 +2184,9 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			PANIC_COND(!patcher.solveMultiple(index, schedulerBounds, address, size) ||
 			           schedulerWait <= schedulerInit || schedulerWait - schedulerInit != 0xc2,
 			           "ngreen", "Invalid VF scheduler failed-init patch bounds");
+			PANIC_COND(!NGVfGuCFactoryPatch::schedulerInitPreflight(
+			               reinterpret_cast<const uint8_t *>(schedulerInit), 0xaf),
+			           "ngreen", "Ambiguous or changed VF scheduler failed-init patch site");
 			LookupPatchPlus const schedulerInitPatch {
 				activeKext, NGVfGuCFactoryPatch::schedulerInitFreeFind,
 				NGVfGuCFactoryPatch::schedulerInitFreeReplace, 1,

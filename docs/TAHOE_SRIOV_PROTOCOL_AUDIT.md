@@ -27,6 +27,15 @@ enforce fault-before-panic and prohibit native/helper/backing side effects.
 
 ## Mapping getter provenance follow-up (offline)
 
+Scheduler patch uniqueness hardening: LookupPatchPlus preflight uses
+hasAtLeast for count=1, which does not reject duplicate candidates. Scheduler
+repair now separately requires an exact 0xaf range, one overlapping-aware
+findUnique result, and fixed +0x93 location before apply. Missing, duplicate,
+moved, truncated and null inputs reject without patch writes. Offline tests
+exercise every anchor byte mutation, duplicate/moved candidates and unchanged
+input on failure for both payloads. This strengthens production admission,
+not synchronization against another patcher modifying memory concurrently.
+
 Scheduler4 partial-init ownership repair: VF patch admission now resolves
 initWithAccelerator and the following waitForGpuIdle symbol, requires the
 pinned 0xc2 symbol distance, and searches only the actual 0xaf init window.

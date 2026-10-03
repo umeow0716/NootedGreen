@@ -32,6 +32,22 @@ static void verify(const char *path)
 	assert(stream);
 	std::vector<uint8_t> image((std::istreambuf_iterator<char>(stream)), {});
 	using namespace NGVfGuCFactoryPatch;
+	std::vector<uint8_t> body(image.begin() + 0x1d9d2, image.begin() + 0x1da81);
+	assert(schedulerInitPreflight(body.data(), body.size()));
+	assert(!schedulerInitPreflight(body.data(), body.size() - 1));
+	assert(!schedulerInitPreflight(nullptr, body.size()));
+	for (size_t index = 0; index < sizeof(schedulerInitFreeFind); ++index) {
+		auto mutated = body;
+		mutated[0x93 + index] ^= 1;
+		const auto before = mutated;
+		assert(!schedulerInitPreflight(mutated.data(), mutated.size()));
+		assert(mutated == before);
+	}
+	auto duplicate = body;
+	std::copy(std::begin(schedulerInitFreeFind), std::end(schedulerInitFreeFind), duplicate.begin());
+	assert(!schedulerInitPreflight(duplicate.data(), duplicate.size()));
+	std::fill(duplicate.begin() + 0x93, duplicate.begin() + 0x93 + sizeof(schedulerInitFreeFind), 0);
+	assert(!schedulerInitPreflight(duplicate.data(), duplicate.size()));
 	assert(offsetsInRange(image, schedulerInitFreeFind, 0x1d9d2, 0x1da81) ==
 	       std::vector<size_t> {0x1da65});
 	static_assert(sizeof(schedulerInitFreeFind) == sizeof(schedulerInitFreeReplace),

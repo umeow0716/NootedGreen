@@ -2103,10 +2103,14 @@ def source_contract(path):
 
     normalized_production = "".join(source.split())
     for token in ("schedulerWait-schedulerInit!=0xc2",
+                  "NGVfGuCFactoryPatch::schedulerInitPreflight(reinterpret_cast<constuint8_t*>(schedulerInit),0xaf)",
                   "schedulerInitPatch.apply(patcher,schedulerInit,0xaf)",
                   "NGVfGuCFactoryPatch::schedulerInitFreeFind",
                   "NGVfGuCFactoryPatch::schedulerInitFreeReplace"):
         assert token in normalized_production, "missing bounded scheduler failed-init production patch contract"
+    assert normalized_production.index("NGVfGuCFactoryPatch::schedulerInitPreflight(") < \
+        normalized_production.index("schedulerInitPatch.apply("), \
+        "scheduler uniqueness admission must precede patch writes"
     accelerator_start = function_body(source, "bool Gen11::start(void *that, void *provider)")
     create_guard = function_body(source, "void *Gen11::vfCreateScheduler(void *accelerator)")
     selection = create_guard.index("(getMember<uint32_t>(accelerator, 0x1190) >> 23) & 7U")

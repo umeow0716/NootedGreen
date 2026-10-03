@@ -3,6 +3,7 @@
 #define NGREEN_VF_GUC_FACTORY_PATCH_HPP
 
 #include <stdint.h>
+#include "kern_pattern_match.hpp"
 
 namespace NGVfGuCFactoryPatch {
 
@@ -19,6 +20,13 @@ constexpr uint8_t schedulerInitFreeReplace[] = {
 	0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
 	0x45, 0x31, 0xf6,
 };
+
+inline bool schedulerInitPreflight(const uint8_t *body, size_t length) {
+	size_t offset = 0;
+	return length == 0xaf && NGPattern::findUnique(body, length,
+		schedulerInitFreeFind, nullptr, sizeof(schedulerInitFreeFind), offset) &&
+		offset == 0x93;
+}
 
 // IGHardwareGuC::initWithOptions() calls the object's virtual free() on every
 // failure exit. OSObject::free() deletes the instance, but withOptions() then
