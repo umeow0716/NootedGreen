@@ -35,6 +35,10 @@ EVENT_DISABLE_STAMP_LOCKED = "__ZN20IOAccelEventMachine223disable_stamp_interrup
 EVENT_ENABLE_STAMP = "__ZN20IOAccelEventMachine220enableStampInterruptEi"
 EVENT_DISABLE_STAMP = "__ZN20IOAccelEventMachine221disableStampInterruptEi"
 EVENT_OWNER_BODIES = {
+    "__ZN16IOAccelMemoryMap15remove_resourceEP16IOAccelResource2": (0x5e, "72e6f743a75a66e9d29bfa658f891e0c5c99e462a9fe3a740c44deef0eb068ea"),
+    "__ZN18IOAccelDisplayPipe25get_finished_transactionsEP26DisplayTransactionListHead": (0x32, "dc7e94f2cf118d96d51d1e535455923a1375080f63d1f30c60d17afd2cad4c80"),
+    "__ZN18IOAccelDisplayPipe27set_current_plane_resourcesEP12IOAccelEventjP16IOAccelResource2S3_": (0x27a, "04981414ab38c24454a83fc31237480b41cb8ec56fd2c0b55d1db74c44b1c36d"),
+    "__ZN22IOGraphicsAccelerator226accel_transaction_finishedEP26DisplayTransactionListHead": (0x7e, "04858d0448d1be874ee6b0bb75d1650214e842fe5d270b0ec968e7511c6175c4"),
     "__ZN16IOAccelResource27prepareEv": (0x518, "b19dcd25b3bb38225c8eac5765a4cbc0506bb8ef5915f0d81131299626e61b2c"),
     "__ZN16IOAccelResource28completeEv": (0x74, "cf6473db8cf1433097cf4311898247f37b705e1fb0cb6a9822291d3d7c9a1c7c"),
     "__ZN18IOAccelDisplayPipe19completeTransactionEP30IOAccelDisplayPipeTransaction2": (0x152, "84b3c6c408e8018160adc80bf3b0c42d81d4cae42421f84a1d88a323f4a2bda2"),
@@ -757,6 +761,14 @@ def check(path, boot_path=None):
     assert stop_owner.count(bytes.fromhex("ff 90 48 01 00 00")) == 3, "changed base event stop source-removal inventory"
     print("PASS inherited event owner free/stop and per-event stamp-disable bodies (outer drain not proven)")
     lazy_setup = address_of("__ZN18IOAccelDisplayPipe14setup_workloopEv")
+    for call, method in ((0x14ba608d, "__ZN30IOAccelDisplayPipeTransaction26finishEv"),
+                         (0x14ba6095, "__ZN30IOAccelDisplayPipeTransaction28completeEv"),
+                         (0x14baecc8, "__ZN22IOGraphicsAccelerator226accel_transaction_finishedEP26DisplayTransactionListHead"),
+                         (0x14baedb8, "__ZN22IOGraphicsAccelerator226accel_transaction_finishedEP26DisplayTransactionListHead"),
+                         (0x14b8c447, "__ZN16IOAccelMemoryMap15remove_resourceEP16IOAccelResource2")):
+        encoded = read(call, 5)
+        assert encoded[0] == 0xe8 and call + 5 + struct.unpack_from("<i", encoded, 1)[0] == address_of(method), "changed finished transaction/backing inventory cleanup edge"
+    assert read(0x14ba60a0, 3) == bytes.fromhex("ff 50 28"), "changed finished transaction final release"
     for slot, method in ((0x170, "__ZN16IOAccelResource27prepareEv"),
                          (0x178, "__ZN16IOAccelResource28completeEv")):
         raw = struct.unpack("<Q", read(address_of(RESOURCE_VTABLE) + 16 + slot, 8))[0]

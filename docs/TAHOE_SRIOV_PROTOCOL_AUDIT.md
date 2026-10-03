@@ -5700,3 +5700,32 @@ event-machine `+0x1b0` when count is nonzero, invokes object `+0x238` virtual
 and explicit table-header offsets must not be confused. Intel auxiliary
 virtuals and backing cleanup remain pending. Native payload and paired-KC
 checks pass; no production guard, hardware access or deployment was added.
+# Finished-list pairing and backing inventory follow-up
+
+Reviewed/pinned complete accelerator `accel_transaction_finished` (0x7e):
+it validates/unlinks each transferred finished-list transaction, invokes
+transaction `finish` then `complete`, then virtual release `+0x28`, looping
+from the new head. Reviewed display finishTransactionQueue/releaseLiveTransaction
+both call this helper after their gated finished-list extraction. This proves
+the local unlink/finish/complete/release order, not absence of every other
+caller or full concurrency safety. List corruption branches reach a trap.
+The complete extraction wrapper (0x32) runs the already reviewed gated list
+transfer through the command gate and does nothing when that gate is absent.
+
+Complete `set_current_plane_resources` (0x27a) returns immediately for an
+unchanged resource pair. Replacement merges old resource/backing events,
+calls resource complete then release, clears old plane references, and
+prepares each non-null new resource independently; only successful prepares
+are stored/retained. Separate branches handle auxiliary plane objects.
+No local terminal admission, plane-index bounds check or failed-prepare error
+return appears here; callers, native virtual identities and partial replacement
+semantics remain obligations. The complete body is pinned, not a proof that
+the referenced event has actually completed on the GPU before cleanup.
+
+Backing `IOAccelMemoryMap::remove_resource` (0x5e), called by resource complete,
+searches the CPU pointer array `+0xa0`, decrements count `+0xb0` only when
+found, and compacts subsequent entries. It has no hardware access, wait or
+object release; missing entries leave the count unchanged. Consequently that
+helper alone is not DMA unmap/drain. The subsequent backing release/destructor
+and hardware lifetime need review. Paired-KC checks passed locally; no
+production mutation, runtime test or deployment.

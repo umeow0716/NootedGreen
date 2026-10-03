@@ -781,3 +781,10 @@ payloads. Complete's unguarded 32-bit decrement requires caller pairing;
 prepare success/count is not DMA completion. Mapping/recovery callees,
 backing cleanup helper and Intel auxiliary virtuals remain pending. No
 runtime evidence supports calling the counter hazard an observed VF defect.
+# Latest finished-list pairing checkpoint
+
+Reviewed/pinned accelerator finished-list unlink→finish→complete→release,
+both display cleanup caller edges, extraction wrapper, complete current-plane
+replacement body and memory-map remove_resource. The latter only compacts CPU
+inventory. Local pairing is established for this path; other callers,
+replacement event completion, backing destructor and DMA lifetime remain open.
