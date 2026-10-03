@@ -421,6 +421,33 @@ def macho_inventory(path):
         start = value(name)
         assert next_symbol(start) - start == length, f"{path}: changed stamp IRQ body boundary: {name}"
         assert hashlib.sha256(image[start:start + length]).hexdigest() == digest, f"{path}: changed stamp IRQ body: {name}"
+    # Explicit semantic anchors: the periodic callback uses collection count,
+    # whereas enable/disable maintain a separate unchecked reference counter.
+    # Do not replace one with the other or infer teardown serialization merely
+    # because all three producer methods acquire scheduler+0x440.
+    periodic_anchors = (
+        ("__ZN11IGScheduler33enablePeriodicEventTimerInterruptEP22IOInterruptEventSource", (
+            (0xd, "48 8b bf 40 04 00 00"),
+            (0x2c, "48 8b 83 50 04 00 00"),
+            (0x37, "48 89 8b 50 04 00 00"),
+            (0x62, "ff 90 d8 01 00 00"))),
+        ("__ZN11IGScheduler34disablePeriodicEventTimerInterruptEP22IOInterruptEventSource", (
+            (0xd, "48 8b bf 40 04 00 00"),
+            (0x33, "48 8d 48 ff"),
+            (0x37, "48 89 8b 50 04 00 00"),
+            (0x4e, "ff 90 58 01 00 00"))),
+        ("__ZN11IGScheduler28handlePeriodicTimerInterruptEP18IOTimerEventSource", (
+            (0xd, "48 8b bf 40 04 00 00"),
+            (0x4a, "ff 93 e0 01 00 00"),
+            (0x65, "ff 90 f0 01 00 00"),
+            (0x7f, "ff 90 d8 01 00 00"))),
+    )
+    for name, anchors in periodic_anchors:
+        start = value(name)
+        for offset, encoded in anchors:
+            expected = bytes.fromhex(encoded)
+            assert image[start + offset:start + offset + len(expected)] == expected, \
+                f"{path}: changed periodic counter/lock/rearm semantic anchor: {name}+{offset:#x}"
     # Symbol boundaries alone merge unnamed functions into init/free. Pin the
     # disassembled function windows separately, not as one fictitious body.
     scheduler_init = value("__ZN11IGScheduler15initWithOptionsEjyP22IOGraphicsAccelerator2")

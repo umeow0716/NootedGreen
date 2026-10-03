@@ -27,6 +27,25 @@ enforce fault-before-panic and prohibit native/helper/backing side effects.
 
 ## Mapping getter provenance follow-up (offline)
 
+Periodic synchronization follow-up: fully disassembled native enable 0x5689c
+(0x78), disable 0x56914 (0x64), callback 0x56688 (0x9c), and shared cleanup
+0x565a8 (0xe0). The three producers lock scheduler+0x440; enable/disable update
+a separate unchecked counter at +0x450, while callback checks OSSet+0x438
+count and rearms timer+0x448 under the mutex. Callback also dispatches event
+action +0x1e0 under this lock. Collection mutation results are not checked;
+duplicate enable/unbalanced disable semantics still require caller review.
+Cleanup cancels/removes/releases timer, releases collection, then frees mutex;
+it does not acquire that mutex in this complete body. No proven outer producer
+drain has been established. Do not simply hold the mutex across source removal:
+the verified timeout path obtains the workloop gate before invoking callback,
+which then takes this mutex. Mutex-to-workloop removal may invert that order.
+Actual removal locking, entry admission and external caller ownership must be
+resolved before production integration. Semantic anchors now pin distinct
+counter/collection/action/rearm instructions alongside existing whole-body
+hashes and imported lock calls, on both payload copies. One initial anchor
+offset typo (+0x66 versus actual +0x62) failed offline and was corrected;
+the targeted lifecycle contracts now pass. No runtime state changed.
+
 Timer teardown model follow-up: tools/vf_timer_teardown_model_test.py
 enumerates 30 atomic event orders preserving cancel-before-release and
 callback-begin-before-finish. It retains a concrete begin/cancel/rearm/release/
