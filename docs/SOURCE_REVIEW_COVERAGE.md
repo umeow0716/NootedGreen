@@ -92,6 +92,15 @@ were read, but Intel overrides them. Their overload/virtual/helper graph is
 not fully reviewed and is now an explicit next gate. Base-method verification
 must not be substituted for the concrete Intel hardware-safety review.
 
+Concrete Intel stamp-IRQ delta read 16 complete native bodies across event
+overloads, Scheduler4, CommandStreamer4, singular bridge descriptor accounting,
+periodic timer methods and type-index lookup (including its seven-entry jump
+table). Both payloads pin body boundaries/hashes, concrete virtual targets and
+typed direct edges. Singular traits methods have no direct MMIO in their bodies;
+no speculative no-op was introduced. Timer/imported API semantics, source
+construction, callback virtual and lifetime remain unfinished, so this scoped
+review is not complete interrupt or hardware-safety certification.
+
 V267 closes the verified VF event-timeout return into inherited restart/retry
 by protocol-fault admission closure followed by guest fail-stop. This is not
 normal recovery or proof that already-published DMA stops. PF and normal debug

@@ -2,8 +2,30 @@
 """Prove that the VF engine wrapper preserves Apple's IOAccel lifecycle tail."""
 
 import pathlib
+import hashlib
 import struct
 import sys
+
+# Complete reviewed native bodies. This fixes the concrete Intel override
+# graph, not inherited timer APIs, dynamic callbacks or runtime completion.
+STAMP_IRQ_NATIVE = {
+    "__ZL21getInterruptTypeIndexj": (0x2dc, "a437c9f3b0f1652461adcbd7dd5733d37fb70fd8b841d71e6678331312a3979c"),
+    "__ZN19IGAccelEventMachine20enableStampInterruptEi": (0xc, "d36367a855e7c70648ad4cebd97046b4cd0f93b1ea460faad009a1a3d8676db9"),
+    "__ZN19IGAccelEventMachine20enableStampInterruptEii": (0xb6, "a1258420942f61394025ad599519cee464bada81bc3d4779eb45ed0c25cade22"),
+    "__ZN19IGAccelEventMachine21disableStampInterruptEi": (0xc, "d36367a855e7c70648ad4cebd97046b4cd0f93b1ea460faad009a1a3d8676db9"),
+    "__ZN19IGAccelEventMachine21disableStampInterruptEii": (0xf4, "f4047aac956b154a0482d2853c70ebf184a1dbcd936ece39c5517cfd9f8f30ea"),
+    "__ZN12IGScheduler420enableStampInterruptEi": (0x46, "8318558af6a4c8679bbd3a24a4253d7e0fd8463cc6b75c518c3f2c6694351b73"),
+    "__ZN12IGScheduler421disableStampInterruptEi": (0x46, "cdc35acba686d6ee1103ab366372f0e051ab83ea9002ff48c591e28bd17ccd60"),
+    "__ZN26IGHardwareCommandStreamer420enableStampInterruptEi": (0x11e, "4c7dc2ad3f870ec4208a4d1e1e7cb9af47cc13f6c1376a81859599e0fe4f1e81"),
+    "__ZN26IGHardwareCommandStreamer421disableStampInterruptEi": (0x120, "c92525548bf13a3f096298f184bc5134814edb8cdd0b764c54a58795f8ed056f"),
+    "__ZN17IGInterruptBridge15enableInterruptEj": (0x3c, "8e518e0554ae427eb88ec58df690f698f25c7e3b50086768221770d1ebae2b21"),
+    "__ZN17IGInterruptBridge15enableInterruptEPNS_15InterruptTraitsE": (0xd0, "19dc8231d30e33d7c5fbcab1bc43267a749a3e74d6d24a69f8faab51c8e74081"),
+    "__ZN17IGInterruptBridge16disableInterruptEj": (0x3c, "87989129774e6e26990dbe789721201da8732b452891d20529c9f5e0b48be103"),
+    "__ZN17IGInterruptBridge16disableInterruptEPNS_15InterruptTraitsE": (0xd0, "28dd612dc90781aa9a0ca8938efed1d55a95c0eb4addf7b88478ab5b3e2591d4"),
+    "__ZN11IGScheduler33enablePeriodicEventTimerInterruptEP22IOInterruptEventSource": (0x78, "030b488c557f865c52343ba7561d7b084e109914a9894b9fab5c8c8b06c3cb79"),
+    "__ZN11IGScheduler34disablePeriodicEventTimerInterruptEP22IOInterruptEventSource": (0x64, "6ad9c37406ce3699146f34cc7a6a3ce77366e1f53bd356b34294d55eb23a82a1"),
+    "__ZN11IGScheduler28handlePeriodicTimerInterruptEP18IOTimerEventSource": (0x9c, "9c102a04de5a017636908823772724ea406316bc2142c0e8f2caf775809ec441"),
+}
 
 
 ENABLE = "__ZN22IOGraphicsAccelerator217enableAcceleratorEv"
@@ -351,6 +373,28 @@ def macho_inventory(path):
             if candidate + 5 + displacement == target_start:
                 calls.append(candidate)
         return calls
+
+    for name, (length, digest) in STAMP_IRQ_NATIVE.items():
+        start = value(name)
+        assert next_symbol(start) - start == length, f"{path}: changed stamp IRQ body boundary: {name}"
+        assert hashlib.sha256(image[start:start + length]).hexdigest() == digest, f"{path}: changed stamp IRQ body: {name}"
+    for table, slot, method in (
+            (EVENT_MACHINE_VTABLE, 0x240, "__ZN19IGAccelEventMachine20enableStampInterruptEi"),
+            (EVENT_MACHINE_VTABLE, 0x248, "__ZN19IGAccelEventMachine21disableStampInterruptEi"),
+            (SCHEDULER4_VTABLE, 0x1b0, "__ZN12IGScheduler420enableStampInterruptEi"),
+            (SCHEDULER4_VTABLE, 0x1b8, "__ZN12IGScheduler421disableStampInterruptEi")):
+        assert struct.unpack_from("<Q", image, value(table) + 16 + slot)[0] == value(method), \
+            f"{path}: changed concrete stamp IRQ virtual"
+    for owner, target in (
+            ("__ZN19IGAccelEventMachine20enableStampInterruptEi", "__ZN19IGAccelEventMachine20enableStampInterruptEii"),
+            ("__ZN19IGAccelEventMachine21disableStampInterruptEi", "__ZN19IGAccelEventMachine21disableStampInterruptEii"),
+            ("__ZN12IGScheduler420enableStampInterruptEi", "__ZN26IGHardwareCommandStreamer420enableStampInterruptEi"),
+            ("__ZN12IGScheduler421disableStampInterruptEi", "__ZN26IGHardwareCommandStreamer421disableStampInterruptEi"),
+            ("__ZN26IGHardwareCommandStreamer420enableStampInterruptEi", "__ZN17IGInterruptBridge15enableInterruptEj"),
+            ("__ZN26IGHardwareCommandStreamer421disableStampInterruptEi", "__ZN17IGInterruptBridge16disableInterruptEj"),
+            ("__ZN17IGInterruptBridge15enableInterruptEj", "__ZN17IGInterruptBridge15enableInterruptEPNS_15InterruptTraitsE"),
+            ("__ZN17IGInterruptBridge16disableInterruptEj", "__ZN17IGInterruptBridge16disableInterruptEPNS_15InterruptTraitsE")):
+        assert len(direct_branches(owner, target)) == 1, f"{path}: changed stamp IRQ graph edge"
 
     accelerator_start = value(ACCELERATOR_START)
     accelerator_start_end = next_symbol(accelerator_start)

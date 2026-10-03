@@ -306,6 +306,31 @@ review gate, not silently certified by the inherited no-ops. Mapped stamp
 pointer lifetime across sleep, native producer locking and actual completion
 remain unfinished. No VM, VF state or driver runtime behavior changed.
 
+Concrete Intel stamp-IRQ follow-up: all four EventMachine wrappers/overloads,
+two Scheduler4 methods, two CommandStreamer4 methods, four singular bridge
+methods, three periodic timer methods and interrupt-type index lookup were
+read fully. Both payloads now pin the 16 complete symbol-bounded bodies, four
+effective virtual targets and eight direct typed graph edges. This closes the
+previous preliminary override-body review, not all downstream API semantics.
+
+The EventMachine overloads update software waiter/mask state (`+0xd90`,
+`+0xd40`, `+0xd80`) and select either Scheduler4 stamp methods or periodic
+timer source `+0xd30`. Scheduler4 resolves the channel's command streamer;
+CommandStreamer4 updates its software refs/mask and calls bridge **singular**
+enable/disable. The type-index lookup selects a 12-byte descriptor at bridge
+`+0x680`; the traits overload only increments/decrements descriptor `+8`
+under its native lock. These reviewed singular bodies do not directly access
+MMIO. They must not be confused with plural `enableInterrupts` or replaced
+solely because their names contain "interrupt". No new no-op route was added.
+
+The periodic path uses software event-source set `scheduler+0x438`, mutex
+`+0x440`, timer `+0x448`, and user count `+0x450`. Its callback iterates source
+objects, invokes their `+0x1e0` virtual, and rearms the timer with argument 1000
+while the set is nonempty. The bodies are pinned, but imported set/iterator/
+timer API identities, source construction, callback virtual meaning and object
+lifetime are still review gates. This is not proof of host-safe callbacks,
+correct interrupt delivery, completed GPU work or a validated boot candidate.
+
 Inherited implementation found locally (2026-10-04): archived Tahoe 25G229
 `SystemKernelExtensions.kc`, SHA-256
 `5cb1be1dc530b4b953a33943567589101d3ac46bb8cf90728566ee7e5b1fa214`,
