@@ -80,6 +80,12 @@ pending; base gated invocation alone is not a cleanup success proof.
 reviewed/pinned; complete reference XNU runAction read. Actual Boot virtual
 +0x1c8, stored removal action and concrete control-gate type remain pending.
 
+2026-10-04 derived scheduler free follow-up: full Scheduler4/Scheduler5 free
+bodies, base vtable free delegation and Scheduler5 private-workloop clear
+before inherited cleanup reviewed/pinned. Earlier getter evidence implies
+null getter at base cleanup on this path; prior stop/detach topology remains
+unreviewed. No runtime race or ownership safety has been proven.
+
 2026-10-04 scheduler cleanup follow-up: native cleanup/free/periodic callback
 re-read; both payload variants pin unchecked removal followed by timer release,
 set clear and mutex-free call. Successful same-workloop gate serialization is

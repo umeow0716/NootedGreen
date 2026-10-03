@@ -27,6 +27,22 @@ enforce fault-before-panic and prohibit native/helper/backing side effects.
 
 ## Mapping getter provenance follow-up (offline)
 
+Derived scheduler destruction follow-up: complete Scheduler4 free (0xa2)
+and Scheduler5 free (0x126) bodies are reviewed/pinned for both payloads.
+Their RIP-relative base vtable references resolve to base IGScheduler::free
+at slot +0xa0. Scheduler4 releases GuC +0x488 and per-engine objects before
+base timer cleanup. Scheduler5 removes private sources without checking
+IOReturn, releases engine/storage objects, then releases and clears private
+workloop +0xa80 before delegating to base free. Since its already-reviewed
+effective getWorkLoop returns +0xa80, inherited cleanup's getter then returns
+null and skips timer removal on that path. Base init attaches its timer through
+the accelerator getter, not this private getter. Whether construction/rebinding
+or higher-level stop previously detaches that timer remains unreviewed; do not
+declare a reachable UAF or apply a workaround without that ownership evidence.
+This invalidates a blanket claim that every derived destructor reaches a
+successful same-workloop timer removal. Next: derived init/stop caller topology
+and registration/rebinding provenance, while preserving Gen11+ PF/VF scope.
+
 Scheduler cleanup ordering follow-up: re-read native shared cleanup/free and
 periodic callback against the now-reviewed timer semantics. Cleanup cancels,
 calls scheduler workloop getter twice, attempts removeEventSource, then loads

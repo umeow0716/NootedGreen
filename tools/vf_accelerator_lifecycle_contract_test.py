@@ -423,6 +423,20 @@ def macho_inventory(path):
         assert hashlib.sha256(image[start:start + length]).hexdigest() == digest, \
             f"{path}: changed scheduler timer construction/cleanup window"
     cleanup = scheduler_init + 0x162
+    for name, length, digest in (
+            ("__ZN12IGScheduler44freeEv", 0xa2, "61b83374f994845f22740f343019b57d0330405fd7e57fe66e5608f700a1a388"),
+            ("__ZN12IGScheduler54freeEv", 0x126, "39a1fffea7ae56ea13daabfffe6722828bb990b16eeb8be4cb707c2e55c0b44a")):
+        start = value(name)
+        assert next_symbol(start) - start == length and hashlib.sha256(image[start:start + length]).hexdigest() == digest, \
+            f"{path}: changed reviewed derived scheduler free body"
+        lea = start + (0x88 if length == 0xa2 else 0x10b)
+        assert image[lea:lea + 3] == bytes.fromhex("48 8d 05"), f"{path}: changed base scheduler vtable reference"
+        table = lea + 7 + struct.unpack_from("<i", image, lea + 3)[0]
+        assert struct.unpack_from("<Q", image, table + 0xa0)[0] == scheduler_free, \
+            f"{path}: derived scheduler free no longer delegates to base free"
+    scheduler5_free = value("__ZN12IGScheduler54freeEv")
+    assert image[scheduler5_free + 0x100:scheduler5_free + 0x10b] == bytes.fromhex("49 c7 86 80 0a 00 00 00 00 00 00"), \
+        f"{path}: changed private workloop clear before inherited cleanup"
     # This is an inventory of the native failure-sensitive ordering, not a
     # claim that cancellation or unchecked removal drains every callback.
     for offset, instruction in (
