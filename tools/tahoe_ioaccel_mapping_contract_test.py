@@ -35,6 +35,12 @@ EVENT_DISABLE_STAMP_LOCKED = "__ZN20IOAccelEventMachine223disable_stamp_interrup
 EVENT_ENABLE_STAMP = "__ZN20IOAccelEventMachine220enableStampInterruptEi"
 EVENT_DISABLE_STAMP = "__ZN20IOAccelEventMachine221disableStampInterruptEi"
 EVENT_OWNER_BODIES = {
+    "__ZN18IOAccelDisplayPipe19completeTransactionEP30IOAccelDisplayPipeTransaction2": (0x152, "84b3c6c408e8018160adc80bf3b0c42d81d4cae42421f84a1d88a323f4a2bda2"),
+    "__ZN30IOAccelDisplayPipeTransaction28completeEv": (0x68, "143e28ed4fb5b9169175034f013f0d151ee9922bda13d8195fa4750e19254fb9"),
+    "__ZN30IOAccelDisplayPipeTransaction26finishEv": (0x64, "f4f95d1ceb27695f6b057606e408e7f2fc1e3e91add0bad78bfd12f0e67c7825"),
+    "__ZN30IOAccelDisplayPipeTransaction216sendNotificationEv": (0x64, "248fd3972793ce1921e9be6de7ff8939e093e0747bff8d1cb909456e6624d139"),
+    "__ZN18IOAccelDisplayPipe21isTransactionCompleteEP30IOAccelDisplayPipeTransaction2": (0x34, "0b4bd8b265303062a1ef727894d0dbe07c929113ac78b1afdd16d0f2fc41f2a6"),
+    "__ZN29IOAccelDisplayPipeUserClient217sendAsyncResult64EPyiS0_j": (0xa, "d472474ff08f07583f2766d024ba52a8a15dd0d3edf602500024374c82d6e286"),
     "__ZN18IOAccelDisplayPipe23transaction_queue_gatedEP30IOAccelDisplayPipeTransaction2": (0xac, "58a2d74c983748b5f770631e50efaa309c3b8cb8d682fe0f70564acd8047e43b"),
     "__ZN30IOAccelDisplayPipeTransaction24freeEv": (0x1e2, "1864cfe99602e508dbd727f0551a2baec535805b34a95e8d99599e3ca7142c41"),
     "__ZN30IOAccelDisplayPipeTransaction27prepareEv": (0x150, "c0324bf1dd0bcf47d1c344b29b7fb09d82903820426c1192ea22c51b41cc6f7f"),
@@ -769,6 +775,11 @@ def check(path, boot_path=None):
         assert raw >> 63 == 0 and (raw >> 30) & 3 == 1, "changed base display terminal virtual cache level/auth"
         assert raw & 0x3fffffff == address_of(method), "changed base display terminal virtual target"
     for address, encoded in ((0x14bb211b, "41 89 46 58"),
+                             (0x14bb242b, "48 c7 83 48 02 00 00 00 00 00 00"),
+                             (0x14bb2436, "4c 89 b3 50 02 00 00"),
+                             (0x14bb41ce, "f6 87 40 01 00 00 01"),
+                             (0x14bb4236, "f6 87 40 01 00 00 01"),
+                             (0x14bb3834, "4c 89 bb 58 01 00 00"),
                              (0x14bb2165, "0f ae f8"),
                              (0x14bb007d, "80 8b 40 01 00 00 01"),
                              (0x14bb3e9d, "b9 0b 00 00 00")):

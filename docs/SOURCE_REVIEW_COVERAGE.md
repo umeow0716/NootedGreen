@@ -764,3 +764,12 @@ getStampOffset complete bodies and effective vtable targets in both payloads.
 CPU `{index<<6,stamp}` record construction is not GPU submission/completion.
 Dependency overflow helper, record consumers and hardware retirement remain
 pending; this does not close runtime acceleration or containment requirements.
+# Latest software completion checkpoint
+
+Pinned/reviewed pipe completeTransaction/isTransactionComplete, transaction
+complete/finish/sendNotification and the async-send wrapper. Queue ID ordering
+is not hardware completion; prepared flag is not cleared by complete/finish,
+so caller one-shot ownership/order must be established. Intel submit's stack
+record has no subsequent consumer in that complete override. Remaining:
+resource/import callees, signal override, retirement callers and genuine DMA
+backing lifetime. Targeted paired-KC checks pass; no runtime mutation.

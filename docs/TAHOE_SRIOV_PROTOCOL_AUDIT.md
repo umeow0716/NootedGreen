@@ -5636,3 +5636,36 @@ consumers and actual display/engine retirement still need review. CPU record
 construction and requested-stamp increments are not hardware execution proof,
 and may not be substituted for a genuine completion observed from GPU backing.
 Targeted native checks pass; no driver deployment or runtime experiment.
+# Display completion, notification and prepared-resource follow-up
+
+Re-reading the complete Intel submit override confirms its stack stamp record
+is not subsequently loaded or passed onward in that body: after record
+construction it stores the state byte and delegates legacy submit. No hidden
+record consumer in this override is established. Other writeStamp callers
+and their GPU-command consumers remain a separate review task.
+
+Complete SystemKC pipe `completeTransaction` (0x152 bytes) cancels the timeout
+timer, updates last-transaction metadata, conditionally sends notification,
+appends the previous live transaction to the finished list, clears active
+`+0x248`, replaces live `+0x250`, invokes signalTransactionComplete virtual
+`+0x8e0`, wakes the command-gate waiters and delegates an accelerator wakeup.
+The imported object helper, signal override and wakeup callee are not newly
+certified. This method's name does not independently establish GPU completion.
+
+Transaction `complete` (0x68) and `finish` (0x64) both require prepare-success
+flag `+0x140` bit 0. Complete invokes resource virtual `+0x178` on the two
+plane resource pairs; finish invokes an imported helper on associated objects.
+Neither clears that flag in its reviewed body. Correct one-shot ownership and
+call order therefore remain obligations of callers; repeated release safety
+cannot be inferred from these names or the flag alone. Resource virtual/import
+identities and native backing lifetime still require review.
+
+Transaction `sendNotification` (0x64) sends 11 result words with outer status
+zero, records send's result, clears async reference `+0x158`, releases/clears
+client `+0x150` and returns send's result. Its wrapper (0xa) tail-calls an
+import stub; the imported send implementation is still pending. Base pipe
+`isTransactionComplete` (0x34) compares the queried ID against active/live
+transaction IDs using signed comparisons, with no mapped hardware-stamp read.
+It is a software queue-state predicate, not a GPU/DMA completion oracle.
+These six complete bodies and explicit ownership/flag anchors are pinned;
+paired-KC checks pass locally. No runtime/deployment/production changes.
