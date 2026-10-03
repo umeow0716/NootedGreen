@@ -27,6 +27,24 @@ enforce fault-before-panic and prohibit native/helper/backing side effects.
 
 ## Mapping getter provenance follow-up (offline)
 
+Per-channel finish follow-up: Fast2 effective +0x150 decodes level-1 target
+finishStamp at 0x14b9554c, complete 0x158 body reviewed/pinned. It returns early
+if stamp delta is nonpositive; otherwise reads mapped stamp, dispatches
+waitForStamp through +0x238, and on errors calls signalHardwareError then
+retries. It does not itself sweep all existing interrupt references. Fully
+reread waitForStamp 0x314 and disable_stamp_interrupt 0x48: admitted waiters
+increment lock-protected per-channel count+0x48, invoke +0x240 only on 0-to-1,
+and decrement on ordinary exit, error exit, or timeout helper, invoking +0x248
+only on 1-to-0. The pre-admission non-hardware bypass creates no waiter ref.
+This balances the individual waiter, NOT all prior event/waiter references,
+future admission or raw callback owner lifetime. FinishAllStamps is therefore
+not by itself a proven periodic drain. Added effective finish virtual, complete
+body hash, wait dispatch and success/error/timeout cleanup anchors; local paired
+KC passes. First count-store encoding omitted the REX/index prefix and failed;
+exact bytes rechecked and corrected to 42 89 14 a0. Production unchanged.
+Next determine who closes external event/waiter admission and how existing
+references are retired before owner/free; do not fabricate zero reference state.
+
 Actual accelerator event-stop edge follow-up: complete native Intel stop
 0x263c8..0x267ac reread; it only invokes inherited accelerator stop for a
 nonnull provider (0x266d8 branch). Normal inherited stop loads event machine

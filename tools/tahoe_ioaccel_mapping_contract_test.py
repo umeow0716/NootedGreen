@@ -35,6 +35,7 @@ EVENT_DISABLE_STAMP_LOCKED = "__ZN20IOAccelEventMachine223disable_stamp_interrup
 EVENT_ENABLE_STAMP = "__ZN20IOAccelEventMachine220enableStampInterruptEi"
 EVENT_DISABLE_STAMP = "__ZN20IOAccelEventMachine221disableStampInterruptEi"
 EVENT_OWNER_BODIES = {
+    "__ZN24IOAccelEventMachineFast211finishStampEi": (0x158, "32f9a4ca4dbc18d2fceb8ca7c393a91565f766baca120340529088c8ea7afa7d"),
     "__ZN24IOAccelEventMachineFast215finishAllStampsEv": (0x6c, "09a27596eebdca0fac5ad94ae61f8a33a4bd822b3e4121d84433b82c14b12a1e"),
     "__ZN24IOAccelEventMachineFast24freeEv": (0x12, "de5103312cac712958fb96393f449efae2caaf0868144344864c1f96a6b5341b"),
     "__ZN20IOAccelEventMachine24freeEv": (0x108, "171509afb4d553c5f408f236d968a8465f431ffa74c33f2c1c31b073fb545996"),
@@ -730,7 +731,8 @@ def check(path, boot_path=None):
     # XNU EXTERNAL_HEADERS/mach-o/fixup-chains.h kernel-cache rebase:
     # target:30, cacheLevel:2, next:12, isAuth:1. This archived SystemKC
     # level-1 unslid base is zero; never apply this to a live slid pointer.
-    for slot, name in ((0x188, EVENT_FINISH), (0x238, EVENT_WAIT),
+    for slot, name in ((0x150, "__ZN24IOAccelEventMachineFast211finishStampEi"),
+                       (0x188, EVENT_FINISH), (0x238, EVENT_WAIT),
                        (0x148, EVENT_CLEAN), (0x250, EVENT_TERMINATE), (0x228, EVENT_SIGNAL),
                        (0x1c8, EVENT_MERGE_EXCLUDING), (0x1d0, EVENT_SET_STAMP),
                        (0x1d8, EVENT_INCREMENT), (0x1e0, EVENT_WRITE_STAMP),
@@ -755,6 +757,19 @@ def check(path, boot_path=None):
         "66a79a6eeeae4a30fc91586b1e09f54b702ed2c86501af4e4d0e7bcfe7ddb1f9", "changed full waitForStamp"
     assert hashlib.sha256(read(address_of(EVENT_DISABLE_STAMP_LOCKED), 0x48)).hexdigest() == \
         "f1d296bd9cb53f41b56e43d5ad536695b5b4d83ef4ffa99cbd56a31837b021ea", "changed timeout waiter cleanup"
+    for offset, encoded in ((0x5c, "42 89 14 a0"),
+                            (0x6d, "ff 90 40 02 00 00"),
+                            (0x202, "89 14 b0"),
+                            (0x213, "ff 90 48 02 00 00"),
+                            (0x287, "89 14 b0"),
+                            (0x298, "ff 90 48 02 00 00")):
+        expected = bytes.fromhex(encoded)
+        assert read(address_of(EVENT_WAIT) + offset, len(expected)) == expected, "changed waiter reference/disable semantic anchor"
+    cleanup_call = address_of(EVENT_WAIT) + 0x304
+    encoded = read(cleanup_call, 5)
+    assert encoded[0] == 0xe8 and cleanup_call + 5 + struct.unpack_from("<i", encoded, 1)[0] == address_of(EVENT_DISABLE_STAMP_LOCKED), "changed timeout waiter balanced cleanup call"
+    finish_stamp = address_of("__ZN24IOAccelEventMachineFast211finishStampEi")
+    assert read(finish_stamp + 0xb5, 6) == bytes.fromhex("ff 90 38 02 00 00"), "changed channel finish waitForStamp dispatch"
     assert wait[0x1c:0x32] == bytes.fromhex(
         "48 8b 4f 10 31 c0 83 b9 c8 0d 00 00 00 0f 85 f5 01 00 00 41 89 f7"), \
         "changed waitForStamp non-hardware early-success branch"
