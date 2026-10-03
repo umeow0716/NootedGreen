@@ -7,6 +7,13 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 complete native commitRange review: 0x41c body, manager direct call,
+global mapping virtual slots and ignored suffix result checked in both payloads.
+Later segment failure preserves earlier successful prefix; false commit does
+not publish installed flag. Per-owner transaction/whole-range rollback and
+multi-address-space cleanup remain required before runtime. Prior post-write
+barrier patch is not a complete solution to this separate failure protocol.
+
 2026-10-04 VF post-write completion repair: complete manager commit reviewed/
 pinned. Normal/dummy and both rotated post-write branches now reject unconfirmed
 TLB completion without returning into native backing cleanup. Four source guard/

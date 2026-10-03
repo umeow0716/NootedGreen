@@ -9,6 +9,7 @@ import sys
 # Complete reviewed native bodies. This fixes the concrete Intel override
 # graph, not inherited timer APIs, dynamic callbacks or runtime completion.
 STAMP_IRQ_NATIVE = {
+    "__ZN19IGHardwarePageTable11commitRangeERK14IGAddressRangePK16IGAccelMemoryMap": (0x41c, "e063629df4a8d16d85cf3d1b599c036372c0763b560a6a35289d488d80ac410a"),
     "__ZN15IGMemoryManager26commitIntoPageTableForTaskEP11IGAccelTaskP16IGAccelMemoryMap": (0x11a, "a433c1af43e1fbac1d82da400c6ec1857881e6385c07019d782441fe209713d1"),
     "__ZN16IGAccelMemoryMap22commitIntoGPUPageTableEv": (0x140, "b8318f92ed0a3a62eb086877f6f5a65e0c32cc53d610bcad69540967279189e4"),
     "__ZN16IGAccelSysMemory4wireEv": (0x10a, "ec07edd1fdb32fe38f4470a0336602acb181631387f8f3f32c3220a926b0b580"),
@@ -498,6 +499,12 @@ def macho_inventory(path):
     display_table = value("__ZTV18IGAccelDisplayPipe")
     resource_table = value("__ZTV15IGAccelResource")
     map_table = value("__ZTV16IGAccelMemoryMap")
+    global_table = value("__ZTV25IGHardwareGlobalPageTable")
+    for slot, method in ((0x118, GLOBAL_MAP_RANGE), (0x120, GLOBAL_MAP_ROTATED), (0x138, GLOBAL_MAP_DUMMY)):
+        assert struct.unpack_from("<Q", image, global_table + 16 + slot)[0] == value(method), f"{path}: changed global commit-range mapping virtual"
+    assert direct_branches("__ZN15IGMemoryManager26commitIntoPageTableForTaskEP11IGAccelTaskP16IGAccelMemoryMap", "__ZN19IGHardwarePageTable11commitRangeERK14IGAddressRangePK16IGAccelMemoryMap") == [0xf639], f"{path}: changed manager-to-page-table commit edge"
+    assert image[0x143ce:0x143d2] == bytes.fromhex("84 c0 74 4b"), f"{path}: changed segment mapping failure branch"
+    assert image[0x14487:0x14491] == bytes.fromhex("ff 90 38 01 00 00 49 8b 7f 10"), f"{path}: changed ignored suffix-dummy result edge"
     assert struct.unpack_from("<Q", image, map_table + 16 + 0x170)[0] == value("__ZN16IGAccelMemoryMap22commitIntoGPUPageTableEv"), f"{path}: changed mapping commit virtual"
     assert direct_branches("__ZN16IGAccelMemoryMap22commitIntoGPUPageTableEv", "__ZN15IGMemoryManager26commitIntoPageTableForTaskEP11IGAccelTaskP16IGAccelMemoryMap") == [0x11275], f"{path}: changed mapping-to-manager commit edge"
     assert struct.unpack_from("<Q", image, map_table + 16 + 0x178)[0] == value("__ZN16IGAccelMemoryMap23releaseFromGPUPageTableEv"), f"{path}: changed mapping release virtual"

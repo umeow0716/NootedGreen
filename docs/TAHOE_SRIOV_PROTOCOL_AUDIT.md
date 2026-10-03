@@ -6271,6 +6271,39 @@ prove callback admission closure, or repair sys-memory failed prepare. Guest
 panic is explicitly not a Host containment barrier. No deployment or VM test;
 runtime hold remains in force until all independent hazards/gates are resolved.
 
+# Native segment commit preserves a successful prefix on later failure
+
+Reviewed/pinned complete IGHardwarePageTable::commitRange (0x41c). Manager's
+direct 0xf639 call reaches this body. Global-page-table declared virtual slots
++0x118/+0x120/+0x138 resolve to the routed ordinary/rotated/dummy mapping
+methods, now checked in both payloads. This fixes the native receiver/dispatch
+graph without asserting all task-list members are global page tables.
+
+Ordinary commit retains descriptor iterators, rounds lengths and maps segments
+sequentially. A low-level map false branches out with result false; there is
+no unmap of the earlier successfully written prefix. After releasing iterator
+references, it attempts dummy mapping only for the suffix beginning at the
+current GPU cursor. That suffix call's result is ignored before deferred flush
+notification and return of the earlier result. Native arithmetic/descriptor
+iteration lacks a whole-operation preflight in this body. The rotated branch
+delegates to the routed rotated mapper and releases its iterator separately.
+
+The concrete conditional failed-commit chain is therefore: one segment
+succeeds, a later segment fails, only suffix cleanup is attempted, manager
+returns false, base commit_pte does not set installed flag, and parent complete
+can enter unwire whose release_pte loop tests that missing flag. A successful
+prefix is not automatically rolled back. No dynamic failure injection or
+historical crash attribution is claimed. The prior post-write invalidation
+repair covers failure within a single low-level operation, NOT later preflight
+failure or another address-space commit after an earlier successful operation.
+
+Repair must provide a per-owner full-operation mapping transaction, preserve
+descriptor/backing across every failure, and confirm rollback invalidation
+before native cleanup can proceed. Global counters or blanket shared hooks
+would not establish ownership/concurrency; silent false or fabricated success
+would preserve the hazard. No new production patch/runtime test this checkpoint;
+Host containment hold remains active.
+
 # Mapping recovery frees other allocations and retries preparation
 
 Reviewed/pinned complete freeToPrepareMapping (0x260) and base
