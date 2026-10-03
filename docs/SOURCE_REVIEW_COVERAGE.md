@@ -7,6 +7,13 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 VF post-write completion repair: complete manager commit reviewed/
+pinned. Normal/dummy and both rotated post-write branches now reject unconfirmed
+TLB completion without returning into native backing cleanup. Four source guard/
+release-order mutations are checked. Multi-segment/address-space partial commit,
+failed-wire cleanup and Host DMA quiescence remain unresolved. This production
+change is offline only and does not authorize runtime/claim acceleration.
+
 2026-10-04 PTE commit/final-free follow-up: complete base commit_pte and Intel
 GPU-page-table commit reviewed/pinned with native manager edge. Sys-memory
 free re-reviewed: wired-only unwire does not handle unwired failed command.

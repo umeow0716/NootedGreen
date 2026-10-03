@@ -2973,6 +2973,17 @@ static bool vfCompleteGgttUpdate()
 	return true;
 }
 
+static void vfRequireCompletedGgttUpdate()
+{
+	// Native commit failure does not publish the installed-PTE flag. Its
+	// cleanup can therefore skip release_pte and drop the backing even though
+	// our direct PTE stores have already happened. Never return into that
+	// cleanup after a failed post-write invalidation. A Guest panic is NOT
+	// proof that Host DMA has stopped; runtime containment remains mandatory.
+	PANIC_COND(!vfCompleteGgttUpdate(), "ngreen",
+		"VF GGTT stores lack confirmed invalidation; refusing native backing cleanup");
+}
+
 bool Gen11::IGHardwareGlobalPageTableMapRange(void *that,
                                               const NGIGAddressRange &range,
                                               uint64_t physical,
@@ -2998,7 +3009,8 @@ bool Gen11::IGHardwareGlobalPageTableMapRange(void *that,
 		pteBase[gpu >> 12] = NGVfGgttPte::encodeSystemMemory(physical);
 		physical += 0x1000ULL;
 	}
-	return vfCompleteGgttUpdate();
+	vfRequireCompletedGgttUpdate();
+	return true;
 }
 
 bool Gen11::IGHardwareGlobalPageTableMapRangeRotated(void *that,
@@ -3139,7 +3151,7 @@ bool Gen11::IGHardwareGlobalPageTableMapRangeRotated(void *that,
 			if (NGGgttRotation::destination(spec, source, destination))
 				pteBase[destination >> 12] = dummyPte;
 		}
-		(void)vfCompleteGgttUpdate();
+		vfRequireCompletedGgttUpdate();
 		segments->memory->release();
 		vfMarkProtocolFault("VF rotated physical segment changed during mapping");
 		return false;
@@ -3147,10 +3159,10 @@ bool Gen11::IGHardwareGlobalPageTableMapRangeRotated(void *that,
 
 	rotated->sourcePage = static_cast<uint32_t>(totalPages);
 	rotated->cursor = spec.rangeStart + spec.rangeLength;
-	const bool completed = vfCompleteGgttUpdate();
+	vfRequireCompletedGgttUpdate();
 	segments->memory->release();
 
-	return completed;
+	return true;
 }
 
 void Gen11::IGHardwareGlobalPageTableUnmapRange(void *that,
@@ -3216,7 +3228,8 @@ bool Gen11::IGHardwareGlobalPageTableMapRangeDummy(void *that,
 	const uint64_t end = range.start + range.length;
 	for (uint64_t gpu = range.start; gpu < end; gpu += 0x1000ULL)
 		pteBase[gpu >> 12] = dummyPte;
-	return vfCompleteGgttUpdate();
+	vfRequireCompletedGgttUpdate();
+	return true;
 }
 
 bool Gen11::IGAccelTaskIsKernelGPUTask(const void *that)

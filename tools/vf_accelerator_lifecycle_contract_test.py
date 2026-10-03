@@ -9,6 +9,7 @@ import sys
 # Complete reviewed native bodies. This fixes the concrete Intel override
 # graph, not inherited timer APIs, dynamic callbacks or runtime completion.
 STAMP_IRQ_NATIVE = {
+    "__ZN15IGMemoryManager26commitIntoPageTableForTaskEP11IGAccelTaskP16IGAccelMemoryMap": (0x11a, "a433c1af43e1fbac1d82da400c6ec1857881e6385c07019d782441fe209713d1"),
     "__ZN16IGAccelMemoryMap22commitIntoGPUPageTableEv": (0x140, "b8318f92ed0a3a62eb086877f6f5a65e0c32cc53d610bcad69540967279189e4"),
     "__ZN16IGAccelSysMemory4wireEv": (0x10a, "ec07edd1fdb32fe38f4470a0336602acb181631387f8f3f32c3220a926b0b580"),
     "__ZN16IGAccelMemoryMap23releaseFromGPUPageTableEv": (0x140, "7abf8665679b8628fe1472f77fd9dc87a03b4bbafa380c28b7efe11151938168"),
@@ -2447,7 +2448,51 @@ def source_contract(path):
     if "gVfCtbEverEnabled && gVfProtocolFault && !gVfDmaQuiesced" not in unmap:
         raise AssertionError(
             f"{path}: pre-CTB protocol failure cannot unwind DMA-free mappings")
+    ggtt_postwrite_contract(source, path)
     print(f"PASS: VF wrapper preserves native bridge/IOAccel lifecycle in {path}")
+
+
+def ggtt_postwrite_contract(source, path="<source>"):
+    ggtt_barrier = function_body(source, "static void vfRequireCompletedGgttUpdate()")
+    if 'PANIC_COND(!vfCompleteGgttUpdate(), "ngreen",' not in ggtt_barrier:
+        raise AssertionError(f"{path}: failed post-write GGTT invalidation returns into backing cleanup")
+    for signature, expected in (
+            ("bool Gen11::IGHardwareGlobalPageTableMapRange(void *that,", 1),
+            ("bool Gen11::IGHardwareGlobalPageTableMapRangeRotated(void *that,", 2),
+            ("bool Gen11::IGHardwareGlobalPageTableMapRangeDummy(void *that,", 1)):
+        body = function_body(source, signature)
+        if body.count("vfRequireCompletedGgttUpdate();") != expected or "vfCompleteGgttUpdate()" in body:
+            raise AssertionError(f"{path}: GGTT mapping bypasses checked post-write completion: {signature}")
+        first_write = body.index("pteBase[")
+        if body.index("vfRequireCompletedGgttUpdate();") < first_write:
+            raise AssertionError(f"{path}: GGTT completion barrier precedes PTE writes")
+    rotated_map = function_body(source, "bool Gen11::IGHardwareGlobalPageTableMapRangeRotated(void *that,")
+    rollback = rotated_map[rotated_map.index("const uint64_t dummyPte"):]
+    if rollback.index("vfRequireCompletedGgttUpdate();") > rollback.index("segments->memory->release();"):
+        raise AssertionError(f"{path}: failed GGTT rollback drops descriptor before completion")
+    final_map = rotated_map[rotated_map.index("rotated->sourcePage ="):]
+    if final_map.index("vfRequireCompletedGgttUpdate();") > final_map.index("segments->memory->release();"):
+        raise AssertionError(f"{path}: rotated mapping drops descriptor before completion")
+
+
+def ggtt_postwrite_mutations(path):
+    source = pathlib.Path(path).read_text()
+    mutations = (
+        ('PANIC_COND(!vfCompleteGgttUpdate()', 'PANIC_COND(vfCompleteGgttUpdate()'),
+        ('vfRequireCompletedGgttUpdate();', '(void)vfCompleteGgttUpdate();'),
+        ('\t\tvfRequireCompletedGgttUpdate();\n\t\tsegments->memory->release();',
+         '\t\tsegments->memory->release();\n\t\tvfRequireCompletedGgttUpdate();'),
+        ('\tvfRequireCompletedGgttUpdate();\n\tsegments->memory->release();',
+         '\tsegments->memory->release();\n\tvfRequireCompletedGgttUpdate();'),
+    )
+    for before, after in mutations:
+        assert before in source, "missing GGTT mutation anchor"
+        try:
+            ggtt_postwrite_contract(source.replace(before, after, 1))
+        except AssertionError:
+            continue
+        raise AssertionError("GGTT post-write contract accepted unsafe mutation")
+    print("PASS: four GGTT post-write guard/release-order mutations rejected (source contract, not DMA proof)")
 
 
 def main():
@@ -2455,6 +2500,7 @@ def main():
         raise SystemExit(f"usage: {sys.argv[0]} kern_gen11.cpp TGL-production TGL-debug")
     direct_branch_candidate_contract()
     source_contract(sys.argv[1])
+    ggtt_postwrite_mutations(sys.argv[1])
     macho_inventory(sys.argv[2])
     macho_inventory(sys.argv[3])
 

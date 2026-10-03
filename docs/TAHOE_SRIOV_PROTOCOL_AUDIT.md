@@ -6240,6 +6240,37 @@ is not merely a bare memory decrement. The failed parent-prepare branch above
 does not invoke this override, so that local failure conclusion remains valid.
 The full override, paired slot, explicit base table and dispatch are pinned.
 
+# VF post-write GGTT completion must not return into native cleanup
+
+Reviewed/pinned complete Intel manager commitIntoPageTableForTask (0x11a).
+It iterates the task list +0x268, calls address-space commitRange and ANDs
+results, continuing after false. An empty list returns true. It supplies no
+rollback of earlier successful entries. commitRange and cross-entry rollback
+remain pending; this manager result is not an all-or-nothing mapping guarantee.
+
+Combined with reviewed base commit_pte/prepare unwind: false commit does not
+publish installed-PTE flag, yet parent completion can reach unwire. The existing
+VF mapRange/dummy/rotated finalization wrote direct PTEs then returned the result
+of TLB invalidation; false could therefore enter native cleanup that skips PTE
+release. Rotated second-pass rollback also ignored failed invalidation before
+releasing its retained descriptor. These are concrete production control-flow
+gaps, not evidence of the historical crash's exact cause.
+
+Production repair: a shared VF-only post-write completion helper panics rather
+than returning if invalidation is unconfirmed. Normal/dummy mappings use it
+before true; rotated rollback and successful mapping use it BEFORE releasing
+the retained descriptor. Pre-write validation may still return false because
+no PTE stores occurred. Four source mutations check guard inversion, bypass,
+rollback release-before-barrier and successful-map release-before-barrier.
+Native full-body and source contracts do not simulate actual DMA.
+
+This prevents the specific post-write synchronization failure from returning
+into premature backing cleanup; it does NOT quiesce Host DMA, solve earlier
+successful segment/address-space commits followed by later preflight failure,
+prove callback admission closure, or repair sys-memory failed prepare. Guest
+panic is explicitly not a Host containment barrier. No deployment or VM test;
+runtime hold remains in force until all independent hazards/gates are resolved.
+
 # Mapping recovery frees other allocations and retries preparation
 
 Reviewed/pinned complete freeToPrepareMapping (0x260) and base
