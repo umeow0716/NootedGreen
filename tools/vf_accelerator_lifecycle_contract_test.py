@@ -42,6 +42,11 @@ FIFO_SUBMIT_STAMP = "__ZN18IGAccelFIFOChannel18submitStampCommandEv"
 RING_SLEEP_STAMP = "__ZN20IGHardwareRingBuffer13sleepForStampEPjjj"
 RING_WAIT_SPACE = "__ZN20IGHardwareRingBuffer12waitForSpaceEj"
 RING_WAIT_TIMEOUT = "__ZN20IGHardwareRingBuffer11waitTimeoutEU13block_pointerFbvE"
+SCHEDULER4_INIT_PRIVATE = "__ZN12IGScheduler421initSharedPrivateDataEP17IGHardwareContext"
+SCHEDULER4_CLEANUP_PRIVATE = "__ZN12IGScheduler424cleanupSharedPrivateDataEP17IGHardwareContext"
+GUC_ATTACH_DESC = "__ZN13IGHardwareGuC29AttachContextDescToGucContextERK21SGfxContextDescriptor"
+GUC_DETACH_DESC = "__ZN13IGHardwareGuC31DetachContextDescFromGucContextERK21SGfxContextDescriptor"
+GUC_INVALIDATE_TLB = "__ZN13IGHardwareGuC13invalidateTLBEv"
 GET_DEFAULT_RESET = "__ZN16IntelAccelerator20getDefaultResetValueEj"
 TRACE_DISABLE = "__ZN25IGAccelTraceStreamManager17disableCollectionE27TraceStreamCollectionChange"
 TRACE_SHUTDOWN = "__ZN25IGAccelTraceStreamManager8shutdownEv"
@@ -473,6 +478,17 @@ def macho_inventory(path):
         if reset_body.count(anchor) != count:
             raise AssertionError(
                 f"{path}: physical engine-reset {label} inventory changed")
+
+    # Ring shared-private lifecycle reaches routed GuC descriptor operations,
+    # not the similarly named IGGuC shared-private allocation methods. Cleanup
+    # invalidates translations before detaching the descriptor.
+    if len(direct_branches(SCHEDULER4_INIT_PRIVATE, GUC_ATTACH_DESC)) != 1:
+        raise AssertionError(f"{path}: shared-private attach dispatch changed")
+    invalidate_edges = direct_branches(SCHEDULER4_CLEANUP_PRIVATE, GUC_INVALIDATE_TLB)
+    detach_edges = direct_branches(SCHEDULER4_CLEANUP_PRIVATE, GUC_DETACH_DESC)
+    if len(invalidate_edges) != 1 or len(detach_edges) != 1 or \
+            invalidate_edges[0] >= detach_edges[0]:
+        raise AssertionError(f"{path}: shared-private invalidate/detach order changed")
 
     # Normal producer backpressure polls shared context head/stamp memory.
     # Keep its timeout diagnostic behind the already isolated entry rather

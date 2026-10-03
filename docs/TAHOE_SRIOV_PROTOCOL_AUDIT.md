@@ -1,6 +1,6 @@
 # Tahoe SR-IOV protocol audit — in progress
 
-Updated: 2026-09-29. The last dynamic source baseline is `ce166c8`; the latest
+Updated: 2026-10-04. The last dynamic source baseline is `ce166c8`; the latest
 completed offline-reviewed checkpoint is V262 reset/replay isolation on
 `codex/tahoe-sriov-vf`. This is NOT a boot-test candidate or a successful
 driver baseline. The `ce166c8` run produced repeatable host PF DMAR faults
@@ -21,6 +21,20 @@ these call sites and shared-memory anchors in both payloads. This evidence
 covers these waiting routines only; their callers and backing lifetimes remain
 separate review obligations. Normal waits are retained without fabricated
 completion or additional suppression routes.
+
+The adjacent Scheduler4 shared-private lifecycle was traced separately:
+`initSharedPrivateData` (`0x1e0fc`) tail-calls
+`IGHardwareGuC::AttachContextDescToGucContext` with context `+0x89`;
+`cleanupSharedPrivateData` (`0x1e126`) calls `invalidateTLB` before tail-calling
+`DetachContextDescFromGucContext`. These are the routed descriptor operations,
+not the similarly named `IGGuC` shared-private allocation methods. The focused
+contract pins these direct edges and their cleanup order in both payloads.
+Ring initialization borrows the context image and task stamp CPU mappings;
+the task stamp allocation at `+0x288` can be created or cloned from the kernel
+task. Context teardown releases its ring at `+0xa8` before its image at `+0x98`
+and task at `+0x58`. These local ownership observations do not establish global
+DMA quiescence, all partial-init paths, or the special task-retain paths; those
+remain open obligations. No dynamic safety claim or driver route change follows.
 
 - The adjacent FIFO recovery graph is independent of the V261 diagnostic
   routes. `IGAccelFIFOChannel` vtable slot `0x200` points to
