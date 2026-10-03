@@ -21,6 +21,15 @@ enum VfGucContextState : uint8_t {
 
 namespace NGVfContextShutdown {
 
+// Pinned native encoders address a 64-byte stamp slot and issue an eight-byte
+// PIPE_CONTROL post-sync scratch write. Validate before GuC registration;
+// subtraction/division avoids overflow even for malformed backing lengths.
+inline bool validPacketBacking(int32_t stampIndex, uint64_t stampBytes,
+	                             uint64_t scratchBytes) {
+	return stampIndex >= 0 && stampBytes >= 64 && scratchBytes >= 8 &&
+		static_cast<uint64_t>(stampIndex) <= (stampBytes - 64) / 64;
+}
+
 enum class Action : uint8_t {
 	Complete,
 	Wait,

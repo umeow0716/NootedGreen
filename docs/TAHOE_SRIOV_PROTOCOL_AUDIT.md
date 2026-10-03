@@ -1,12 +1,34 @@
 # Tahoe SR-IOV protocol audit — in progress
 
 Updated: 2026-10-04. The last dynamic source baseline is `ce166c8`; the latest
-completed offline-reviewed checkpoint is V265 retained stamp/scratch backing on
+completed offline-reviewed checkpoint is V266 packet backing bounds on
 `codex/tahoe-sriov-vf`. This is NOT a boot-test candidate or a successful
 driver baseline. The `ce166c8` run produced repeatable host PF DMAR faults
 followed by i915 hangs and a host reboot. Keep `macos-tahoe-sriov` shut off until the
 corrected code passes the remaining offline review and every independently
 enforced containment precondition.
+
+## V266 validate packet backing bounds before registration (offline)
+
+Retaining a buffer does not prove an encoded destination lies within it.
+The native packet path uses signed stamp index at ring `+0x38`, a 64-byte
+slot stride and an eight-byte scratch post-sync store. Direct attach previously
+checked context-image bounds but did not check these packet backing lengths.
+V266 rejects a negative stamp index, a slot extending beyond task stamp buffer
+length, or a scratch backing shorter than eight bytes, before any backing retain
+or REGISTER_CONTEXT publication. The subtraction/division formulation avoids
+overflow for malformed lengths. It does not validate the final GPU address,
+address-space flag or backing memory-descriptor integrity.
+
+The offline model compares nearby slot/buffer endpoints against an independent
+widened multiplication oracle, including scratch sizes 0/7/8/page-size,
+negative indices, INT32_MAX and UINT64_MAX lengths. Source contracts require the
+check before direct-record retain and registration. PF behavior, transport
+framing and the 93-route inventory remain unchanged. Address-space correctness
+and true enabled-context completion are still unresolved; no runtime safety
+claim follows from this numeric check.
+Both payload contracts and the full offline suite passed on 2026-10-04
+(`/tmp/ngreen-static.9zgLQ9`). No deployment, VM start or GPU-state write occurred.
 
 ## V265 retain packet stamp/scratch backing independently (offline)
 

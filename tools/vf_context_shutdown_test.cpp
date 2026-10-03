@@ -6,6 +6,23 @@
 using NGVfContextShutdown::Action;
 
 int main() {
+    // Independent widened endpoint oracle for all nearby slot/buffer edges.
+    for (int32_t index = -2; index <= 192; ++index) {
+        for (uint64_t bytes = 0; bytes <= 0x3040; ++bytes) {
+            for (uint64_t scratch : {0ULL, 7ULL, 8ULL, 4096ULL}) {
+                const bool expectedBacking = index >= 0 && scratch >= 8 &&
+                    (static_cast<uint64_t>(index) + 1) * 64 <= bytes;
+                assert(NGVfContextShutdown::validPacketBacking(index, bytes, scratch) ==
+                       expectedBacking);
+            }
+        }
+    }
+    assert(!NGVfContextShutdown::validPacketBacking(-1, UINT64_MAX, UINT64_MAX));
+    assert(NGVfContextShutdown::validPacketBacking(INT32_MAX, UINT64_MAX, 8));
+    const uint64_t lastEndpoint = (static_cast<uint64_t>(INT32_MAX) + 1) * 64;
+    assert(!NGVfContextShutdown::validPacketBacking(INT32_MAX, lastEndpoint - 1, 8));
+    assert(NGVfContextShutdown::validPacketBacking(INT32_MAX, lastEndpoint, 8));
+
     const std::array<Action, 9> expected {{
         Action::Complete,   // Empty
         Action::Complete,   // Tombstone

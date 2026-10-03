@@ -363,6 +363,7 @@ constexpr size_t kVfContextDescriptorOffset = 0x89;
 constexpr size_t kVfContextImageBufferOffset = 0x98;
 constexpr size_t kVfContextRingObjectOffset = 0xB0;
 constexpr size_t kVfRingMappedBufferOffset = 0x80;
+constexpr size_t kVfRingStampIndexOffset = 0x38;
 constexpr size_t kVfContextTaskOffset = 0x58;
 constexpr size_t kVfTaskScratchBufferOffset = 0x280;
 constexpr size_t kVfTaskStampBufferOffset = 0x288;
@@ -4631,10 +4632,17 @@ bool Gen11::vfAttachContextDesc(void *that, const uint32_t *descriptor) {
 		getMember<void *>(task, kVfTaskStampBufferOffset)) : nullptr;
 	auto *scratchBacking = task ? reinterpret_cast<OSObject *>(
 		getMember<void *>(task, kVfTaskScratchBufferOffset)) : nullptr;
+	const int32_t stampIndex = ringObject ?
+		getMember<int32_t>(ringObject, kVfRingStampIndexOffset) : -1;
+	const uint64_t stampBytes = stampBacking ?
+		getMember<uint64_t>(stampBacking, kVfMappedBufferLengthOffset) : 0;
+	const uint64_t scratchBytes = scratchBacking ?
+		getMember<uint64_t>(scratchBacking, kVfMappedBufferLengthOffset) : 0;
 	const uint64_t contextBytes = contextBacking ?
 		getMember<uint64_t>(contextBacking, kVfMappedBufferLengthOffset) : 0;
 	if (!descriptorAttributes.valid || !contextBacking || !ringBacking ||
 	    !stampBacking || !scratchBacking ||
+	    !NGVfContextShutdown::validPacketBacking(stampIndex, stampBytes, scratchBytes) ||
 	    !NGGgtt::contains(gVfGGTTBase, gVfGGTTSize, lrcaPage, contextBytes) ||
 	    lrcaPage >= kGucGgttTop || contextBytes > kGucGgttTop - lrcaPage ||
 	    contextBytes < kVfContextMinimumImageBytes) {

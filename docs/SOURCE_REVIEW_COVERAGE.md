@@ -51,6 +51,9 @@ V265 additionally retains task stamp/scratch buffers as direct GuC record
 dependencies until the same deregistration/final-reference boundary. The buffer
 getter provenance, record identity, retain/release ordering and tombstone reuse
 are checked; this is not a completed review of every GPU-referenced resource.
+V266 rejects negative/out-of-bounds stamp slots and undersized scratch backing
+before registration. The overflow-safe numeric helper is tested against widened
+endpoint arithmetic; address-space flags and actual GPU execution remain unproven.
 
 Current Gen11 delta: the route inventory is 93 unique symbols (90 accelerator,
 three framebuffer), superseding the earlier 65/62, 63/60 and 60/57 historical counts

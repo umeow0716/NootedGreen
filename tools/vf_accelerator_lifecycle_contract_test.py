@@ -1421,6 +1421,9 @@ def source_contract(path):
     attach = function_body(source, "bool Gen11::vfAttachContextDesc(void *that, const uint32_t *descriptor)")
     if "!gVfUsesMemoryIrq ||" not in attach or "vfPrepareContextMemoryIrq(" not in attach:
         raise AssertionError(f"{path}: LRCA memory-IRQ mutation is not capability-gated")
+    if not attach.index("NGVfContextShutdown::validPacketBacking(stampIndex, stampBytes, scratchBytes)") < \
+            attach.index("contextBacking->retain();") < attach.index("vfSendCtbFastAction(that, request,"):
+        raise AssertionError(f"{path}: packet backing bounds are not checked before registration")
     for token in ("!ringBacking ||", "entry.ringBacking != ringBacking",
                   "kVfContextRingObjectOffset", "kVfRingMappedBufferOffset"):
         if token not in attach:
