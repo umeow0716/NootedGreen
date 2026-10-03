@@ -80,6 +80,11 @@ pending; base gated invocation alone is not a cleanup success proof.
 reviewed/pinned; complete reference XNU runAction read. Actual Boot virtual
 +0x1c8, stored removal action and concrete control-gate type remain pending.
 
+2026-10-04 DPSM producer follow-up: complete Scheduler5 kick callback 0xe
+and direct owner-to-kick edge reviewed/pinned; other producer candidates are
+triage only, not whole-body review. Service-stop cancellation/quiesce ordering
+revalidated; rearm exclusion remains unfinished.
+
 2026-10-04 DPSM cancel restoration: VF-only engine-stop replacement now
 null-checks/cancels timer1460 before final shutdown, with no false idle write
 or PF wait. Callback/rearm exclusion and runtime safety remain unproven.

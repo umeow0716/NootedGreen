@@ -448,6 +448,13 @@ def macho_inventory(path):
         f"{path}: changed private workloop clear before inherited cleanup"
     scheduler5_init = value("__ZN12IGScheduler519initWithAcceleratorEP22IOGraphicsAccelerator2")
     create = value("__ZN11IGScheduler6createEP16IntelAccelerator")
+    kick_irq = value("__ZN12IGScheduler523handleKickDPSMInterruptEP22IOInterruptEventSourcei")
+    assert next_symbol(kick_irq) - kick_irq == 0xe and hashlib.sha256(image[kick_irq:kick_irq + 0xe]).hexdigest() == \
+        "501e06bc18a51b099b953b2adc98887bb848e2ed64fccc93e979f1ac27bef11c", \
+        f"{path}: changed complete scheduler-5 DPSM kick callback body"
+    branch = kick_irq + 9
+    assert image[branch] == 0xe9 and branch + 5 + struct.unpack_from("<i", image, branch + 1)[0] == value("__ZN16IntelAccelerator13dpsmKickTimerEv"), \
+        f"{path}: changed scheduler-5 callback to DPSM producer edge"
     for name, length, digest in (
             (DPSM_IDLE_TIMER, 0x96, "2be716f37bbbd3ba2df81c63a9cc0fe5d843f6ffc0fde9649fac540d542e477c"),
             ("__ZN16IntelAccelerator13dpsmKickTimerEv", 0x7e, "e22ef5bc66aaaa0ab4cf4eb802406d1d843bbcd8c33981720b4e1fc926ab9354"),

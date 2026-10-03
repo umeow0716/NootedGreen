@@ -27,6 +27,18 @@ enforce fault-before-panic and prohibit native/helper/backing side effects.
 
 ## Mapping getter provenance follow-up (offline)
 
+DPSM producer follow-up: production acceleratorStop sets final-stop intent
+then delegates to native stop; that stop's finishAllStamps precedes the routed
+engine-stop cancellation and GuC quiesce. No earlier quiesce was found in that
+wrapper. Full Scheduler5 handleKickDPSMInterrupt 0xe body reviewed/pinned:
+loads accelerator owner+0x10 and tail-calls dpsmKickTimer. Exploratory direct
+branch candidates also occur in IGGuC sendHostToGucMessage/ringDoorbell,
+Scheduler5 updateIdleState and display generateFlip; those containing bodies
+and actual VF reachability are not yet fully reviewed. Thus cancel alone is
+not producer exclusion, and disabling every callback without ownership/caller
+evidence is not justified. Prioritize VF-reachable producer admission and
+same-workloop detach before claiming timer/owner teardown safety.
+
 DPSM cancellation restoration: VF stopGraphicsEngine now null-checks the
 constructor-pinned IOTimerEventSource at accelerator+0x1460 and invokes its
 cancelTimeout before the existing final GuC shutdown boundary. It does not
