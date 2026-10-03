@@ -86,6 +86,8 @@ MEMORY_MAP_GPU_ADDRESS = "__ZN16IOAccelMemoryMap20getGPUVirtualAddressEv"
 MAPPED_BUFFER_INIT = "__ZN14IGMappedBuffer15initWithOptionsEP11IGAccelTaskmbj"
 SYS_MEMORY_FACTORY = "__ZN16IOAccelSysMemory11withOptionsEP22IOGraphicsAccelerator2P4taskP14IOAccelShared2P16IOAccelResource2jy"
 PREPARE_MAPPING = "__ZN22IOGraphicsAccelerator220freeToPrepareMappingEP16IOAccelMemoryMap"
+POPULATE_ACCEL_CONFIG = "__ZN16IntelAccelerator19populateAccelConfigEP13IOAccelConfig"
+MAPPED_BUFFER_MAPPING_OPTIONS = "__ZNK14IGMappedBuffer17getMappingOptionsEv"
 SHARED_BUFFER_CLONE = "__ZN20IGSharedMappedBuffer11cloneInTaskEP11IGAccelTask"
 SHARED_BUFFER_FACTORY = "__ZN20IGSharedMappedBuffer11withOptionsEP11IGAccelTaskmjj"
 SCHEDULER4_BIND = "__ZN12IGScheduler44bindE10IGHwCsTypeih"
@@ -649,6 +651,27 @@ def macho_inventory(path):
                    "84 c0 74 2d 4c 89 7b 30 4c 89 73 10 4c 89 6b 18"):
         if mapping_body.count(bytes.fromhex(anchor)) != 1:
             raise AssertionError(f"{path}: mapping admission/publication contract changed")
+    options_start = value(MAPPED_BUFFER_MAPPING_OPTIONS)
+    if image[options_start:options_start + 11] != bytes.fromhex(
+            "55 48 89 e5 b8 07 00 00 00 5d c3"):
+        raise AssertionError(f"{path}: mapped-buffer mapping options changed")
+    config_start = value(POPULATE_ACCEL_CONFIG)
+    config_body = image[config_start:next_symbol(config_start)]
+    # Pin the RIP-relative PPGTT property lookup, default 1, and the bit-8
+    # assignment in the 64-bit feature word. The inherited option-bit meaning
+    # is still unknown; do not turn this observation into a GGTT quota check.
+    ppgtt_lookup = config_start + 0xe2
+    if image[ppgtt_lookup:ppgtt_lookup + 3] != bytes.fromhex("48 8d 35"):
+        raise AssertionError(f"{path}: PPGTT property lookup changed")
+    ppgtt_name = ppgtt_lookup + 7 + struct.unpack_from("<i", image, ppgtt_lookup + 3)[0]
+    if image[ppgtt_name:ppgtt_name + 6] != b"PPGTT\0" or \
+            image[ppgtt_lookup + 7:ppgtt_lookup + 15] != bytes.fromhex(
+                "4c 89 e7 ba 01 00 00 00"):
+        raise AssertionError(f"{path}: PPGTT property/default changed")
+    if config_body.count(bytes.fromhex(
+            "21 d8 c1 e0 08 48 c7 c1 ff fe ff ff 49 23 8c 24 90 11 00 00 "
+            "48 09 c1 49 89 8c 24 90 11 00 00")) != 1:
+        raise AssertionError(f"{path}: PPGTT feature-bit publication changed")
     ring_notify_start = value(RING_NOTIFY_COMPLETE)
     ring_notify_body = image[ring_notify_start:next_symbol(ring_notify_start)]
     for anchor in (bytes.fromhex("83 7f 38 00 78 30"),

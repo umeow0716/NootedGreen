@@ -27,6 +27,20 @@ for both payloads. Inherited IOAccel allocation/address semantics and their
 relationship to stamp packet address-space flags remain unproven; no DMA
 address rewrite, VM boot, or deployment is authorized by these checks.
 
+The next feature-source review resolves `populateAccelConfig`'s RIP-relative
+`PPGTT` property lookup (default 1) and bit-8 assignment in the 64-bit feature
+word at accelerator `+0x1190`. This is byte `+0x1191` bit 0. The already-pinned
+`getGTTWriteMode` returns its inverse; main/compute stamp encoders put this
+value into PIPE_CONTROL's global-GTT bit. `IGMappedBuffer::getMappingOptions`
+returns 7, but the inherited IOAccel interpretation of these option bits is
+not available in this payload. The new test pins property identity, default,
+feature publication and the mapping-options getter for both variants.
+`IGMemoryManager::commitIntoPageTableForTask` obtains GPU address/length from
+mapping virtuals `+0x128/+0x168` and walks task `+0x268` page tables, calling
+`IGHardwarePageTable::commitRange`; mapping allocation and complete task
+page-table ownership must still be traced before certifying address-space
+consistency. No registry property was changed on the guest or host.
+
 ## V266 validate packet backing bounds before registration (offline)
 
 Retaining a buffer does not prove an encoded destination lies within it.

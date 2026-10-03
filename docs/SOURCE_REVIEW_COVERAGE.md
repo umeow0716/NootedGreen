@@ -38,6 +38,10 @@ factory and mapping-preparation fallback, plus mapping admission/publication
 anchors. These checks do not resolve the inherited IOAccel implementation or
 prove that packet flags select the mapping's actual address space. No runtime
 or mapping-lifetime certification is added.
+The next delta pins the native `PPGTT` property/default and feature-bit
+assignment, plus the mapped-buffer mapping-options constant. The native map
+commit was traced to the task page-table list, but inherited allocation and
+option semantics remain open rather than inferred from the constant 7.
 
 2026-10-04 ownership review delta: V263 fail-stops uncertain void descriptor
 detach, and V264 independently retains the actual DMA ring buffer in each
