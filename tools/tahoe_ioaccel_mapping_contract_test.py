@@ -35,6 +35,7 @@ EVENT_DISABLE_STAMP_LOCKED = "__ZN20IOAccelEventMachine223disable_stamp_interrup
 EVENT_ENABLE_STAMP = "__ZN20IOAccelEventMachine220enableStampInterruptEi"
 EVENT_DISABLE_STAMP = "__ZN20IOAccelEventMachine221disableStampInterruptEi"
 EVENT_OWNER_BODIES = {
+    "__ZN24IOAccelEventMachineFast215finishAllStampsEv": (0x6c, "09a27596eebdca0fac5ad94ae61f8a33a4bd822b3e4121d84433b82c14b12a1e"),
     "__ZN24IOAccelEventMachineFast24freeEv": (0x12, "de5103312cac712958fb96393f449efae2caaf0868144344864c1f96a6b5341b"),
     "__ZN20IOAccelEventMachine24freeEv": (0x108, "171509afb4d553c5f408f236d968a8465f431ffa74c33f2c1c31b073fb545996"),
     "__ZN20IOAccelEventMachine24stopEv": (0x63, "94b5760836e67bde79f7b2246e6aa701ea75026b42e7f7af8b5b311d919e9591"),
@@ -674,6 +675,12 @@ def check(path, boot_path=None):
     stop_owner = read(address_of("____ZN20IOAccelEventMachine24stopEv_block_invoke"), 0x8b)
     assert stop_owner.count(bytes.fromhex("ff 90 48 01 00 00")) == 3, "changed base event stop source-removal inventory"
     print("PASS inherited event owner free/stop and per-event stamp-disable bodies (outer drain not proven)")
+    for address, encoded in ((0x14ba1add, "49 8b be 80 03 00 00"),
+                            (0x14ba1aec, "ff 90 58 01 00 00"),
+                            (0x14ba1af2, "49 8b be 80 03 00 00"),
+                            (0x14ba1afc, "ff 90 68 02 00 00")):
+        expected = bytes.fromhex(encoded)
+        assert read(address, len(expected)) == expected, "changed inherited accelerator event finish-before-stop order"
     # There are multiple real local definitions, not one ambiguous address to
     # pick arbitrarily. Require the full reviewed copy inventory and bodies.
     for name, copies in LOCK_COPIES.items():

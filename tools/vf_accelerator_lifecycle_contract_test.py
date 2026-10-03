@@ -357,10 +357,17 @@ def macho_inventory(path):
         0x4adce: "_lck_spin_lock", 0x4ae7d: "_lck_spin_unlock",
     }
     observed_stamp_irq_imports = {address: [] for address in stamp_irq_imports}
+    event_stop_imports = {
+        0xceb60: "__ZN24IOAccelEventMachineFast215finishAllStampsEv",
+        0xcec70: "__ZN20IOAccelEventMachine24stopEv",
+    }
+    observed_event_stop_imports = {address: [] for address in event_stop_imports}
     for index in range(external_count):
         address, bits = struct.unpack_from(
             "<iI", image, external_offset + index * 8)
         symbol_index = bits & 0xFFFFFF
+        if address in observed_event_stop_imports:
+            observed_event_stop_imports[address].append((names[symbol_index], bits >> 24))
         if address in observed_stamp_irq_imports:
             observed_stamp_irq_imports[address].append((names[symbol_index], bits >> 24))
         if names[symbol_index] in (
@@ -400,6 +407,13 @@ def macho_inventory(path):
         if len(matches) != 1:
             raise AssertionError(f"{path}: expected one defined {name}")
         return matches[0]
+
+    for address, name in event_stop_imports.items():
+        assert observed_event_stop_imports[address] == [(name, 0x0e)], \
+            f"{path}: changed inherited event teardown virtual import"
+    for slot, address in ((0x158, 0xceb60), (0x268, 0xcec70)):
+        assert value(EVENT_MACHINE_VTABLE) + 16 + slot == address, \
+            f"{path}: inherited event teardown import moved outside effective vtable"
 
     def next_symbol(address):
         following = sorted(candidate for candidate in values

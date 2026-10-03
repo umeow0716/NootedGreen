@@ -27,6 +27,22 @@ enforce fault-before-panic and prohibit native/helper/backing side effects.
 
 ## Mapping getter provenance follow-up (offline)
 
+Actual accelerator event-stop edge follow-up: complete native Intel stop
+0x263c8..0x267ac reread; it only invokes inherited accelerator stop for a
+nonnull provider (0x266d8 branch). Normal inherited stop loads event machine
++0x380, calls virtual +0x158 then +0x268. Intel event vtable imported external
+entries 0xceb60/0xcec70 (0x0e relocations, NOT runtime null pointers) resolve
+to Fast2::finishAllStamps and base event-machine stop. These typed identities
+and inherited call ordering are now fixture-pinned. Null-provider start-failure
+cleanup skips this inherited path; do not extrapolate normal-stop drainage to it.
+Fully reviewed Fast2 finishAllStamps 0x14b956a4 (0x6c): iterates channel count
++0x30, invokes virtual +0x150, aggregates results and preserves -1 failure.
+It does not directly clear Intel fallback bitset/counter or deregister source;
+those obligations depend on per-channel finish and caller admission. Complete
+body hash is pinned in paired KC tests. Both native payload contracts and
+paired KC pass; production unchanged. Next resolve +0x150 per-channel finish
+and its stamp-disable edges before inferring owner-safe shutdown.
+
 Inherited fallback teardown follow-up: Intel free's RIP import storage 0xc81b8
 is external relocation __ZTV24IOAccelEventMachineFast2 (type 0x0e); SystemKC
 that vtable +0xa0 decodes level 1 target 0x14b95072 Fast2::free. Fully reviewed
