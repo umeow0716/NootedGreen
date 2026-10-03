@@ -3227,6 +3227,21 @@ bool Gen11::start(void *that, void *provider)
 		return false;
 	}
 	const bool vfActive = identity == VfIdentity::Virtual;
+	if (vfActive) {
+		// utilGetProperty<unsigned> lets this OSData override the mandatory
+		// accelerator property after publication. Do not invoke its string
+		// parser or mutate global options to resolve a VF conflict.
+		auto *options = IORegistryEntry::fromPath("IODeviceTree:/options");
+		auto *overrideProperty = options ?
+			options->copyProperty("GraphicsSchedulerSelect") : nullptr;
+		const bool hasSchedulerOverride = OSDynamicCast(OSData, overrideProperty);
+		OSSafeReleaseNULL(overrideProperty);
+		OSSafeReleaseNULL(options);
+		if (hasSchedulerOverride) {
+			vfMarkProtocolFault("VF rejects late device-tree scheduler override");
+			return false;
+		}
+	}
 	// Native start overrides GraphicsSchedulerSelect with scheduler 5 when
 	// this boot argument is present. A VF cannot enter that physical path.
 	int firmwareDisableArgument = 0;

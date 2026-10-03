@@ -80,6 +80,11 @@ pending; base gated invocation alone is not a cleanup success proof.
 reviewed/pinned; complete reference XNU runAction read. Actual Boot virtual
 +0x1c8, stored removal action and concrete control-gate type remain pending.
 
+2026-10-04 options admission repair: VF pre-start retained-copy type check
+rejects OSData scheduler override, releases both references and never mutates
+global options. Source order/scope contracts pass; later registry mutation and
+runtime behavior remain unproven.
+
 2026-10-04 numeric property helper: complete 0x18c body reviewed/pinned,
 including late IODeviceTree:/options override and imported number parser.
 Property publication alone does not guarantee final scheduler selection;

@@ -27,6 +27,20 @@ enforce fault-before-panic and prohibit native/helper/backing side effects.
 
 ## Mapping getter provenance follow-up (offline)
 
+Late options admission repair: VF start now resolves IODeviceTree:/options,
+copies/retains GraphicsSchedulerSelect for a stable type inspection, and
+releases both copied property and retained registry entry before returning.
+An OSData override causes protocol fault/false before GGTT bootstrap/native
+start. Missing entry/property or non-OSData does not trigger this guard, matching
+the observed native override type filter. PF skips the check entirely. No
+global property is changed. All OSData values are rejected, even textual 4:
+parser syntax/bounds are not yet established and this prevents relying on a
+second selection authority. Remove the redundant options override for a VF
+configuration; no options removal was performed here. Source contract checks
+VF-only scope, retained-copy/release order, fault-before-bootstrap and absence
+of options mutations. This admission snapshot does not exclude later external
+property mutation; final scheduler validation/routing remains pending.
+
 Late options override follow-up: complete utilGetProperty<unsigned int>
 0x18c body reviewed/pinned for both payloads. It obtains the requested
 registry property, distinguishes OSNumber/OSData using imported metaclass

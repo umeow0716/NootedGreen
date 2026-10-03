@@ -1982,6 +1982,20 @@ def source_contract(path):
             f"{path}: native stop begins before the VF device-stopping boundary")
 
     accelerator_start = function_body(source, "bool Gen11::start(void *that, void *provider)")
+    options_guard = accelerator_start.index('IORegistryEntry::fromPath("IODeviceTree:/options")')
+    options_copy = accelerator_start.index('options->copyProperty("GraphicsSchedulerSelect")', options_guard)
+    options_type = accelerator_start.index('OSDynamicCast(OSData, overrideProperty)', options_copy)
+    property_release = accelerator_start.index("OSSafeReleaseNULL(overrideProperty);", options_type)
+    options_release = accelerator_start.index("OSSafeReleaseNULL(options);", options_type)
+    options_fault = accelerator_start.index('vfMarkProtocolFault("VF rejects late device-tree scheduler override")', options_release)
+    options_return = accelerator_start.index("return false;", options_fault)
+    assert options_guard < options_copy < options_type < property_release < options_release < options_fault < options_return < accelerator_start.index("vfBootstrapDirectGgtt()"), \
+        "VF options override guard must release entry and reject before bootstrap"
+    options_block = accelerator_start[accelerator_start.rfind("if (vfActive)", 0, options_guard):options_return]
+    assert "if (vfActive) {" in options_block and "hasSchedulerOverride" in options_block, \
+        "device-tree override admission must be VF-only"
+    assert "options->setProperty" not in accelerator_start and "options->removeProperty" not in accelerator_start, \
+        "VF admission must not mutate global device-tree options"
     firmware_guard = accelerator_start.index('if (vfActive && PE_parse_boot_argn("-disablegfxfirmware"')
     firmware_fault = accelerator_start.index('vfMarkProtocolFault("VF cannot disable mandatory GuC firmware scheduling")', firmware_guard)
     firmware_return = accelerator_start.index("return false;", firmware_fault)
