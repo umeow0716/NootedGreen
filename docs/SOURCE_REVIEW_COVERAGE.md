@@ -7,6 +7,10 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 accelerator workloop factory provenance: selected inherited start
+call/store and paired Boot import identity pinned. Full start/stop/stop block
+and factory-body review remain pending; selected windows are not full review.
+
 2026-10-04 Intel workloop getters: four complete payload bodies and three
 effective virtuals reviewed/pinned. Scheduler4 resolves accelerator +0xf0;
 Scheduler5/GuC own fields differ. Actual +0xf0 construction/type/lifetime pending.

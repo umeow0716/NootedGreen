@@ -27,6 +27,18 @@ enforce fault-before-panic and prohibit native/helper/backing side effects.
 
 ## Mapping getter provenance follow-up (offline)
 
+Accelerator workloop construction candidate: typed disassembly of inherited
+start identifies call `0x14ba02c7` through System KC import `0x10138`, followed
+by storing its result at accelerator `+0xf0` and a null-result failure branch.
+The paired Boot import resolves to `IOWorkLoop::workLoop`; import identity,
+direct edge and field store are now pinned. A separate earlier +0xf0 store
+appears in initialization and stop contains release/clear of the field; those
+observations are not a complete lifetime proof. Full start (0x17ae), stop
+(0x43f), stop block (0x2d7) and actual factory body remain next review targets.
+No whole-function review, successful detach or owner lifetime is claimed from
+these selected windows. Candidate disassembly windows must start at verified
+instruction boundaries, not arbitrary preceding bytes.
+
 Concrete Intel workloop getter follow-up: both payloads pin four complete
 getter bodies and three effective virtuals. Scheduler4 `+0x218` uses inherited
 IGScheduler getter, which dispatches owner accelerator virtual `+0x688`;

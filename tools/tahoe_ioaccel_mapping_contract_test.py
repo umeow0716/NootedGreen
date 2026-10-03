@@ -186,6 +186,7 @@ def check_boot_atomic(system, path):
                                    b"__ZN15IORegistryEntry18getRegistryEntryIDEv", b"_kernel_debug",
                                    b"_IOLockLock", b"_IOLockUnlock", b"_assert_wait_deadline",
                                    b"_thread_block", b"_clock_interval_to_deadline",
+                                   b"__ZN10IOWorkLoop8workLoopEv",
                                    b"__ZTV22IOInterruptEventSource", b"__ZTV18IOTimerEventSource",
                                    b"__ZN22IOInterruptEventSource23normalInterruptOccurredEPvP9IOServicei",
                                    b"__ZN18IOTimerEventSource12setTimeoutUSEj",
@@ -414,6 +415,18 @@ def check_boot_atomic(system, path):
         write + 7 + struct.unpack_from("<i", instruction, 3)[0] == metaclass, \
         "changed metaclass initializer vptr store"
     print("PASS Boot KC metaclass initializer writes the declared allocator vtable")
+    stub = 0x10138
+    assert system[stub:stub + 6] == bytes.fromhex("ff 25 62 40 01 00"), "changed accelerator workloop factory stub"
+    pointer = stub + 6 + struct.unpack_from("<i", system, stub + 2)[0]
+    raw = struct.unpack_from("<Q", system, pointer)[0]
+    assert (raw >> 30) & 3 == 0 and raw >> 63 == 0, "unexpected workloop factory cache/auth"
+    assert bases[0] + (raw & 0x3fffffff) == symbols[b"__ZN10IOWorkLoop8workLoopEv"][0], \
+        "accelerator factory no longer resolves to IOWorkLoop::workLoop"
+    call = 0x14ba02c7
+    assert system[call] == 0xe8 and call + 5 + struct.unpack_from("<i", system, call + 1)[0] == stub, \
+        "changed accelerator workloop construction call"
+    assert system[call + 5:call + 12] == bytes.fromhex("49 89 86 f0 00 00 00"), "changed accelerator workloop store"
+    print("PASS paired KC accelerator workloop factory import and field store (full lifecycle pending)")
     assert system[0x10132:0x10138] == bytes.fromhex("ff 25 60 40 01 00"), "changed atomic import stub"
     raw = struct.unpack_from("<Q", system, 0x24198)[0]
     assert (raw >> 30) & 3 == 0 and raw >> 63 == 0, "unexpected atomic import cache level/auth"
