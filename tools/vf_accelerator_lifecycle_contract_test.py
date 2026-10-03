@@ -331,6 +331,8 @@ def macho_inventory(path):
         0x5657a: "_IOLockAlloc", 0x5663e: "_IOLockFree",
         0x37ce4: "__ZN10IOWorkLoop8workLoopEv", 0x37d58: "_IOMalloc",
         0x27ad5: "_PE_parse_boot_argn",
+        0x24767: "__ZN22IOGraphicsAccelerator211unlock_busyEv",
+        0x24773: "_IOLockUnlock",
         0x281b5: "__ZN15IORegistryEntry8fromPathEPKcPK15IORegistryPlanePcPiPS_",
         0x281fe: "__ZN8OSNumber10withNumberEPKcj",
         0x28191: "__ZN15OSMetaClassBase12safeMetaCastEPKS_PK11OSMetaClass",
@@ -383,7 +385,7 @@ def macho_inventory(path):
             relocations[name] = address
 
     for address, name in stamp_irq_imports.items():
-        opcode = 0xe9 if name in ("_IOLockUnlock", "_lck_spin_unlock") else 0xe8
+        opcode = 0xe9 if name in ("_IOLockUnlock", "_lck_spin_unlock") and address != 0x24773 else 0xe8
         if observed_stamp_irq_imports[address] != [(name, 0x2d)] or image[address - 1] != opcode:
             raise AssertionError(f"{path}: changed stamp IRQ imported call at {address:#x}")
 
@@ -445,6 +447,13 @@ def macho_inventory(path):
         f"{path}: changed private workloop clear before inherited cleanup"
     scheduler5_init = value("__ZN12IGScheduler519initWithAcceleratorEP22IOGraphicsAccelerator2")
     create = value("__ZN11IGScheduler6createEP16IntelAccelerator")
+    assert hashlib.sha256(image[0x2473d:0x247f0]).hexdigest() == \
+        "5288265edb6d924d92e219315b3d87d4a849a1f5751f16aca0992b5c5df015ad", \
+        f"{path}: changed reviewed native start failure epilogue window"
+    assert image[0x2477e:0x24786] == bytes.fromhex("31 f6 ff 90 c8 05 00 00"), \
+        f"{path}: changed null-provider virtual stop on start failure"
+    assert struct.unpack_from("<Q", image, value(ACCELERATOR_VTABLE) + 16 + 0x5c8)[0] == value(ACCELERATOR_STOP), \
+        f"{path}: changed effective start-failure stop virtual"
     for call, store in ((0x243f3, "49 89 85 50 12 00 00"),
                         (0x2448e, "49 89 85 50 12 00 00")):
         assert image[call] == 0xe8 and call + 5 + struct.unpack_from("<i", image, call + 1)[0] == create, \

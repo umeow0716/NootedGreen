@@ -27,6 +27,19 @@ enforce fault-before-panic and prohibit native/helper/backing side effects.
 
 ## Mapping getter provenance follow-up (offline)
 
+Factory-null unwind follow-up: reviewed native start failure subsection
+0x2473d..0x247ef as a window, not a standalone function. Null scheduler leads
+to error 0x211, shared error/property handling, imported unlock_busy, imported
+IOLockUnlock on accelerator+0x88, then virtual +0x5c8 with null provider.
+Effective IntelAccelerator vtable maps that slot to its stop method. The
+shared epilogue returns false after stack check; error 0x215 instead bypasses
+this path, already separately tracked. Local fixtures pin the full window,
+unlock import identities, null-provider dispatch and effective stop target.
+This establishes failure-control flow for the new factory guard, not safe
+partial-construction cleanup, owner/drain correctness or GPU quiescence.
+The earlier exploratory 0xf0 range extended into a different initializer;
+only the corrected 0xb3 failure subsection is claimed here.
+
 Final factory admission repair: the VF-only route table now preserves the
 typed IGScheduler::create trampoline and validates accelerator feature bits
 23..25 immediately before delegation. Non-type-4 returns null after protocol
