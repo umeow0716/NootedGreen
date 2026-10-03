@@ -108,6 +108,24 @@ not merely rely on the context lock or numeric token. The existing operation
 gate protects admitted operation lifetime, not concurrent producer serialization.
 No runtime member, hook, idle predicate or teardown behavior changed here.
 
+Native producer failure follow-up: the complete symbol-bounded Scheduler4 push
+returns the GuC boolean unchanged. At `submitToRing` (`0x432e8..0x434a2`),
+the scheduler dispatch at `0x4347e` tests AL and a false result branches to
+`0x4349c`, which calls `submitToRing.cold.1` at `0x90a84`. That cold function
+has a verified external PC-relative `_panic` relocation at `0x90a92`, with
+the string `Work queue failure detected` and native source line 1762. Only
+success clears ring `+0x4c` and `+0x6c`; stamp-presence `+0x48` was already
+cleared before dispatch in either case. Both payloads pin the result branch,
+success-only resets, exact cold body, panic relocation and diagnostic string.
+
+Thus a false submit is not a retry-capable admission failure at this producer.
+A future coverage bridge cannot casually return false for overlap or metadata
+mismatch and claim normal recovery; doing so inherits a guest panic. Returning
+true without real publication is equally invalid. Native producer serialization
+and an explicitly justified error policy must be proved before implementing
+the hook. Existing bootstrap/transport rejection paths also remain possible
+native panic triggers; this discovery does not authorize enabling runtime.
+
 Inherited implementation found locally (2026-10-04): archived Tahoe 25G229
 `SystemKernelExtensions.kc`, SHA-256
 `5cb1be1dc530b4b953a33943567589101d3ac46bb8cf90728566ee7e5b1fa214`,

@@ -103,6 +103,7 @@ SCHEDULER4_BIND = "__ZN12IGScheduler44bindE10IGHwCsTypeih"
 SCHEDULER4_UNBIND = "__ZN12IGScheduler46unbindEP17IGHardwareContext"
 SCHEDULER4_PUSH = "__ZN12IGScheduler44pushEP17IGHardwareContextjjbb"
 RING_SUBMIT_TO_RING = "__ZN20IGHardwareRingBuffer12submitToRingEv"
+RING_SUBMIT_FAILURE = RING_SUBMIT_TO_RING + ".cold.1"
 GUC_SUBMIT_WORK_ITEM = "__ZN13IGHardwareGuC14submitWorkItemEjRK21SGfxContextDescriptor10IGHwCsTypejjj"
 FIFO_FACTORY = "__ZN18IGAccelFIFOChannel11withOptionsEP22IOGraphicsAccelerator2P20IGHardwareRingBuffer"
 FIFO_INIT = "__ZN18IGAccelFIFOChannel15initWithOptionsEP22IOGraphicsAccelerator2P20IGHardwareRingBuffer"
@@ -287,11 +288,17 @@ def macho_inventory(path):
     wanted_indexes = {index: name for index, name in enumerate(names)
                       if name in wanted}
     relocations = {}
+    panic_relocations = set()
     external_offset, external_count = dysymtab[16], dysymtab[17]
     for index in range(external_count):
         address, bits = struct.unpack_from(
             "<iI", image, external_offset + index * 8)
         symbol_index = bits & 0xFFFFFF
+        if names[symbol_index] == "_panic":
+            if ((bits >> 24) & 1, (bits >> 25) & 3,
+                    (bits >> 27) & 1, (bits >> 28) & 0xF) != (1, 2, 1, 2):
+                raise AssertionError(f"{path}: incompatible panic relocation")
+            panic_relocations.add(address)
         if symbol_index in wanted_indexes:
             name = wanted_indexes[symbol_index]
             if name in relocations:
@@ -445,6 +452,25 @@ def macho_inventory(path):
             submit_body.index(bytes.fromhex("c6 43 48 00")) <
             submit_body.index(bytes.fromhex("ff 90 48 01 00 00"))):
         raise AssertionError(f"{path}: stamp-presence capture/clear/dispatch order changed")
+    # A false GuC/push result is NOT a recoverable rejection at the retained
+    # ring caller. It branches past the success-only reset to a cold panic.
+    result_anchor = bytes.fromhex(
+        "ff 90 48 01 00 00 84 c0 74 14 c7 43 4c 00 00 00 00 "
+        "c6 43 6c 00 5b 41 5c 41 5e 41 5f 5d c3 e8")
+    if submit_body.count(result_anchor) != 1:
+        raise AssertionError(f"{path}: native submit success/failure edge changed")
+    failure_call = submit_start + submit_body.index(result_anchor) + len(result_anchor) - 1
+    if failure_call + 5 + struct.unpack_from("<i", image, failure_call + 1)[0] != value(RING_SUBMIT_FAILURE):
+        raise AssertionError(f"{path}: failed submission no longer reaches cold failure")
+    failure_start = value(RING_SUBMIT_FAILURE)
+    failure_body = image[failure_start:next_symbol(failure_start)]
+    if failure_body != bytes.fromhex("55 48 89 e5 48 8d 3d a6 59 00 00 31 c0 e8 00 00 00 00") or \
+            failure_start + 14 not in panic_relocations:
+        raise AssertionError(f"{path}: native submit failure is not the verified panic import")
+    message_start = failure_start + 11 + struct.unpack_from("<i", failure_body, 7)[0]
+    message = image[message_start:image.index(0, message_start)]
+    if message != b'"Enter debugger: submitToRing: Work queue failure detected"@tgl/IGHardwareRingBuffer.cpp:1762':
+        raise AssertionError(f"{path}: native submit failure diagnosis changed")
     if struct.unpack_from("<Q", image,
             value(EVENT_MACHINE_VTABLE) + 16 + 0x220)[0] != timeout_start:
         raise AssertionError(f"{path}: inherited restart timeout override changed")
