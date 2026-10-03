@@ -80,6 +80,11 @@ pending; base gated invocation alone is not a cleanup success proof.
 reviewed/pinned; complete reference XNU runAction read. Actual Boot virtual
 +0x1c8, stored removal action and concrete control-gate type remain pending.
 
+2026-10-04 free/engine-stop: complete free wrapper 0x24, separate helper 0xce
+and native engine stop 0xc4 reviewed/pinned; timer1460 cancellation/state1458
+store and effective scheduler wait virtual pinned. VF omits these steps;
+timer/field provenance and safe software-only restoration remain pending.
+
 2026-10-04 complete native stop: full 0x3e4 body/branches reviewed/pinned,
 including type-5-only scheduler release, source-dependent unchecked removal
 and provider-gated inherited stop. stop(nullptr) does not reach inherited

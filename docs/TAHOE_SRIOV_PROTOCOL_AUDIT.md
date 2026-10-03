@@ -27,6 +27,22 @@ enforce fault-before-panic and prohibit native/helper/backing side effects.
 
 ## Mapping getter provenance follow-up (offline)
 
+Free/engine-stop follow-up: complete IntelAccelerator free wrapper (0x24),
+its separate unnamed helper (0xce), and native stopGraphicsEngine (0xc4)
+reviewed/pinned. Free helper conditionally processes registry matches and a
+service virtual, but has no scheduler+0x1250 release or workloop gate in its
+own instructions. Helper/import transitive behavior and inherited free remain
+pending; do not infer either an unconditional leak or a safe lifetime.
+Native engine stop conditionally cancels timer+0x1460, stores 1 at +0x1458,
+and calls scheduler virtual +0x170: both Scheduler4/5 tables identify this as
+waitForGpuIdle. It then calls other native hardware/lifecycle helpers. Current
+VF replacement does not perform those timer/state/wait steps. The timer and
+field's full construction/use provenance remains pending, and waitForGpuIdle
+is not certified safe for VF. Restoring this whole native engine-stop method
+would bypass the physical-MMIO containment boundary and is not authorized by
+these software findings. Next: timer1460 constructor/callback and state1458
+consumers, then prove the minimal software teardown needed without PF MMIO.
+
 Complete native stop follow-up: all 0x3e4 bytes of IntelAccelerator::stop
 reviewed and locally pinned for both payloads. It finishes event-machine work,
 serializes busy/mutex transitions, calls routed engine stop, then releases

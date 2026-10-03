@@ -447,6 +447,20 @@ def macho_inventory(path):
         f"{path}: changed private workloop clear before inherited cleanup"
     scheduler5_init = value("__ZN12IGScheduler519initWithAcceleratorEP22IOGraphicsAccelerator2")
     create = value("__ZN11IGScheduler6createEP16IntelAccelerator")
+    for start, length, digest in (
+            (value("__ZN16IntelAccelerator4freeEv"), 0x24,
+             "0eb67d3ff65227b0608257b4664d88c8d816ed1e66adba8e6fdc7b477bb4a2e6"),
+            (0x23dfe, 0xce, "80ea784abb76d4891a7aa3f1d03287bb7beb5c62787c76335baf808a4018623b"),
+            (value(STOP), 0xc4, "1a42a35a3faa031f11f24ed7992fd6378f38d3f36da1c620c745eac39466f619")):
+        assert hashlib.sha256(image[start:start + length]).hexdigest() == digest, \
+            f"{path}: changed reviewed accelerator free/helper/engine-stop window"
+    for table, target in ((SCHEDULER4_VTABLE, "__ZN12IGScheduler414waitForGpuIdleEv"),
+                          (SCHEDULER5_VTABLE, "__ZN12IGScheduler514waitForGpuIdleEv")):
+        assert struct.unpack_from("<Q", image, value(table) + 16 + 0x170)[0] == value(target), \
+            f"{path}: changed engine-stop scheduler wait virtual"
+    assert image[0x2680a:0x26810] == bytes.fromhex("ff 90 18 02 00 00") and \
+        image[0x26810:0x2681a] == bytes.fromhex("c7 83 58 14 00 00 01 00 00 00"), \
+        f"{path}: changed native engine-stop timer cancellation/stop-state store"
     stop_start = value(ACCELERATOR_STOP)
     assert next_symbol(stop_start) - stop_start == 0x3e4 and \
         hashlib.sha256(image[stop_start:stop_start + 0x3e4]).hexdigest() == \
