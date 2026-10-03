@@ -14,6 +14,21 @@ EVENT_FINISH = "__ZN24IOAccelEventMachineFast211finishEventEP12IOAccelEvent"
 EVENT_WAIT = "__ZN20IOAccelEventMachine212waitForStampEijPj"
 EVENT_CLEAN = "__ZN24IOAccelEventMachineFast210cleanEventEP12IOAccelEvent"
 CONTRACTS = {
+    "__ZN22IOGraphicsAccelerator217enableAcceleratorEv":
+        bytes.fromhex("55 48 89 e5 53 50 48 89 fb f6 87 92 0c 00 00 08 75 0c "
+                      "48 8b bb 80 03 00 00 e8 d8 10 fd ff 80 8b 78 0c 00 00 02 "
+                      "48 83 c4 08 5b 5d c3"),
+    "__ZN22IOGraphicsAccelerator218disableAcceleratorEv":
+        bytes.fromhex("55 48 89 e5 53 50 48 89 fb f6 87 92 0c 00 00 08 75 0c "
+                      "48 8b bb 80 03 00 00 e8 86 10 fd ff 80 a3 78 0c 00 00 fd "
+                      "48 83 c4 08 5b 5d c3"),
+    "__ZN20IOAccelEventMachine233stopHardwareProgressTimerUnlockedEv":
+        bytes.fromhex("55 48 89 e5 f6 47 74 01 74 1a 48 8b 47 60 48 85 c0 74 11 "
+                      "c6 47 74 00 48 8b 08 48 89 c7 5d ff a1 18 02 00 00 5d c3"),
+    "__ZN20IOAccelEventMachine234startHardwareProgressTimerUnlockedEv":
+        bytes.fromhex("55 48 89 e5 f6 47 74 01 75 20 48 8b 47 60 48 85 c0 74 17 "
+                      "c6 47 74 01 8b 77 70 48 8b 08 48 8b 89 d0 01 00 00 "
+                      "48 89 c7 5d ff e1 5d c3"),
     "__ZN16IOAccelMemoryMap20getGPUVirtualAddressEv":
         bytes.fromhex("f6 47 10 40 75 08 48 8b 87 98 00 00 00 c3"),
     "__ZN16IOAccelMemoryMap8completeEv":

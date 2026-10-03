@@ -52,6 +52,25 @@ unconditionally proof of hardware completion. The meaning and writers of
 The fixture now checks the complete finishEvent byte identity plus this early
 success branch/epilogue. No forced-idle shortcut or runtime route was added.
 
+Lifecycle follow-up excludes one tempting but incorrect attribution: inherited
+accelerator `enableAccelerator`/`disableAccelerator` do not write `+0xdc8`.
+They test accelerator `+0xc92 & 8`, conditionally start/stop the event machine's
+hardware-progress timer, then set/clear accelerator `+0xc78 & 2`. The timer
+helpers update event machine `+0x74` and invoke its timer object at `+0x60`;
+they also do not write the accelerator's early-success field. The local KC
+fixture pins all four complete helper bodies. Preserving these native calls
+in the VF wrapper remains necessary for software progress monitoring, not a
+GuC completion or hardware-quiescence proof.
+
+Symbol-bounded IOAccel disassembly found direct reads of `+0xdc8` in submit,
+progress check, wait, pageoff, event test/scrub, finalization and accelerator
+wait functions, but no direct writer in the examined decoded instructions.
+The Intel payload's explicit `0xdc8` accesses belong to WOPCM MMIO reached
+through accelerator `+0x1240`, not this accelerator member. No field writer
+or meaning is therefore claimed: alias-pointer stores, wider initialization,
+undecoded/external code and termination propagation remain to be checked.
+The driver must not forcibly clear this unknown inherited state.
+
 Both pinned accelerator payloads resolve `IGAccelMemoryMap` vtable `+0x128`
 through an external unsigned 64-bit relocation to
 `IOAccelMemoryMap::getGPUVirtualAddress`. The mapped-buffer getter delegates
