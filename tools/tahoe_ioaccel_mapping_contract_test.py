@@ -35,6 +35,8 @@ EVENT_DISABLE_STAMP_LOCKED = "__ZN20IOAccelEventMachine223disable_stamp_interrup
 EVENT_ENABLE_STAMP = "__ZN20IOAccelEventMachine220enableStampInterruptEi"
 EVENT_DISABLE_STAMP = "__ZN20IOAccelEventMachine221disableStampInterruptEi"
 EVENT_OWNER_BODIES = {
+    "__ZN16IOAccelResource27prepareEv": (0x518, "b19dcd25b3bb38225c8eac5765a4cbc0506bb8ef5915f0d81131299626e61b2c"),
+    "__ZN16IOAccelResource28completeEv": (0x74, "cf6473db8cf1433097cf4311898247f37b705e1fb0cb6a9822291d3d7c9a1c7c"),
     "__ZN18IOAccelDisplayPipe19completeTransactionEP30IOAccelDisplayPipeTransaction2": (0x152, "84b3c6c408e8018160adc80bf3b0c42d81d4cae42421f84a1d88a323f4a2bda2"),
     "__ZN30IOAccelDisplayPipeTransaction28completeEv": (0x68, "143e28ed4fb5b9169175034f013f0d151ee9922bda13d8195fa4750e19254fb9"),
     "__ZN30IOAccelDisplayPipeTransaction26finishEv": (0x64, "f4f95d1ceb27695f6b057606e408e7f2fc1e3e91add0bad78bfd12f0e67c7825"),
@@ -755,6 +757,13 @@ def check(path, boot_path=None):
     assert stop_owner.count(bytes.fromhex("ff 90 48 01 00 00")) == 3, "changed base event stop source-removal inventory"
     print("PASS inherited event owner free/stop and per-event stamp-disable bodies (outer drain not proven)")
     lazy_setup = address_of("__ZN18IOAccelDisplayPipe14setup_workloopEv")
+    for slot, method in ((0x170, "__ZN16IOAccelResource27prepareEv"),
+                         (0x178, "__ZN16IOAccelResource28completeEv")):
+        raw = struct.unpack("<Q", read(address_of(RESOURCE_VTABLE) + 16 + slot, 8))[0]
+        assert raw >> 63 == 0 and (raw >> 30) & 3 == 1, "changed resource lifecycle virtual encoding"
+        assert raw & 0x3fffffff == address_of(method), "changed resource lifecycle virtual target"
+    assert read(0x14b8c412, 6) == bytes.fromhex("ff 4f 28 74 01 c3"), "changed resource complete decrement/zero cleanup edge"
+    assert read(0x14b8c01c, 3) == bytes.fromhex("ff 43 28"), "changed first resource prepare count increment"
     legacy_submit = struct.unpack("<Q", read(address_of("__ZTV24IOAccelLegacyDisplayPipe") + 0x8c8, 8))[0]
     assert legacy_submit >> 63 == 0 and (legacy_submit >> 30) & 3 == 1, "changed legacy display submit cache level/auth"
     assert legacy_submit & 0x3fffffff == address_of("__ZN18IOAccelDisplayPipe17submitTransactionEP30IOAccelDisplayPipeTransaction2"), "changed explicit legacy-table submit target"

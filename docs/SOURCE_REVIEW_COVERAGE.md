@@ -773,3 +773,11 @@ so caller one-shot ownership/order must be established. Intel submit's stack
 record has no subsequent consumer in that complete override. Remaining:
 resource/import callees, signal override, retirement callers and genuine DMA
 backing lifetime. Targeted paired-KC checks pass; no runtime mutation.
+# Latest resource-count checkpoint
+
+Reviewed/pinned complete base resource prepare/complete bodies and SystemKC
+virtuals, plus Intel complete override/local slot/base-table import in both
+payloads. Complete's unguarded 32-bit decrement requires caller pairing;
+prepare success/count is not DMA completion. Mapping/recovery callees,
+backing cleanup helper and Intel auxiliary virtuals remain pending. No
+runtime evidence supports calling the counter hazard an observed VF defect.

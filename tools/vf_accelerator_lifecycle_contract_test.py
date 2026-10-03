@@ -9,6 +9,7 @@ import sys
 # Complete reviewed native bodies. This fixes the concrete Intel override
 # graph, not inherited timer APIs, dynamic callbacks or runtime completion.
 STAMP_IRQ_NATIVE = {
+    "__ZN15IGAccelResource8completeEv": (0x6c, "ccc8dc301c086c4dac5eb2c70f24f454bdfb37c6055c82b68ee2bfdc199b7afb"),
     "__ZN19IGAccelEventMachine10writeStampEiP17vendevtCommandRecj": (0x22, "005d2c2cfb037d2b79faf330183d7084d75493490ef638f9f5e4f9801f0fc41f"),
     "__ZN19IGAccelEventMachine14getStampOffsetEi": (0xc, "4d9f0b18e011c0d3e92c48d0e9a837c7b96e70c05f23beb8bb8dae7a0625504a"),
     "__ZN18IGAccelDisplayPipe16beginTransactionEP12IOAccelEvent": (0x4e, "afaf2c261837e01c0ea05f84cb30e10cf3225d82381602b9e73274631d146ae9"),
@@ -397,6 +398,8 @@ def macho_inventory(path):
     }
     observed_stamp_irq_imports = {address: [] for address in stamp_irq_imports}
     event_stop_imports = {
+        0xd9550: "__ZN16IOAccelResource27prepareEv",
+        0xc8138: "__ZTV16IOAccelResource2",
         0xcebd8: "__ZN24IOAccelEventMachineFast213setEventStampEiP12IOAccelEvent",
         0xcebe0: "__ZN24IOAccelEventMachineFast214incrementStampEi",
         0xcebe8: "__ZN24IOAccelEventMachineFast217writeStampCommandEiP17IOAccelEventQueueP17vendevtCommandRec",
@@ -479,6 +482,9 @@ def macho_inventory(path):
         assert next_symbol(start) - start == length, f"{path}: changed stamp IRQ body boundary: {name}"
         assert hashlib.sha256(image[start:start + length]).hexdigest() == digest, f"{path}: changed stamp IRQ body: {name}"
     display_table = value("__ZTV18IGAccelDisplayPipe")
+    resource_table = value("__ZTV15IGAccelResource")
+    assert struct.unpack_from("<Q", image, resource_table + 16 + 0x178)[0] == value("__ZN15IGAccelResource8completeEv"), f"{path}: changed Intel resource complete override"
+    assert image[0x753e6:0x753ec] == bytes.fromhex("ff a0 88 01 00 00"), f"{path}: changed resource base complete header-slot delegation"
     event_table = value("__ZTV19IGAccelEventMachine")
     for slot, method in ((0x138, "__ZN19IGAccelEventMachine14getStampOffsetEi"),
                          (0x2a0, "__ZN19IGAccelEventMachine10writeStampEiP17vendevtCommandRecj")):

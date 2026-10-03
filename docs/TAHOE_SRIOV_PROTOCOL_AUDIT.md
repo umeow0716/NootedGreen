@@ -5669,3 +5669,34 @@ transaction IDs using signed comparisons, with no mapped hardware-stamp read.
 It is a software queue-state predicate, not a GPU/DMA completion oracle.
 These six complete bodies and explicit ownership/flag anchors are pinned;
 paired-KC checks pass locally. No runtime/deployment/production changes.
+# Resource preparation count and Intel completion override follow-up
+
+Paired SystemKC resource vtable `header+16+0x170/+0x178` resolves to complete
+`IOAccelResource2::prepare` (0x518 bytes) and `complete` (0x74), now pinned.
+Prepare increments existing nonzero count `+0x28`; its first-prepare path
+obtains backing `+0x40`, invokes backing/manager virtuals and accelerator
+mapping helpers, increments the count after successful mapping and marks
+flag `+0xe` bit 4. A flag-only path sets count to 1. Failure branches include
+backing allocation, manager and accelerator operations, with an alternate
+resource recovery/retry path. These callees/virtual identities remain pending;
+this full body review does not certify their DMA operations or rollback.
+No explicit counter-overflow guard or local lifetime mutex is present.
+
+Base complete unconditionally decrements count, returning unless it becomes
+zero. For resource type 1, zero cleanup releases `+0xf8`, calls backing helper
+at `0x14bb79c2`, releases/clears `+0x40`, clears `+0x70/+0x20` and the prepared
+flag. Type 3 instead invokes object `+0xe0` virtual `+0x1e8` and clears the
+flag. The helper/virtual effects are not newly proven. Starting from zero
+wraps this 32-bit count to `0xffffffff`; a repeated completion is therefore
+not locally idempotent. This is a caller pairing obligation, not yet an
+observed VF defect or justification to silently suppress cleanup.
+
+Both Intel resource vtables import base prepare at relocation `0xd9550` but
+override complete at object slot `+0x178` with `IGAccelResource::complete`
+(0x6c bytes). If Intel flag `+0x240` is set, that override optionally calls
+event-machine `+0x1b0` when count is nonzero, invokes object `+0x238` virtual
+`+0x140`, clears the flag and tails to imported base-resource table header
+`+0x188`. Import `0xc8138` establishes base-table identity; the object-vptr
+and explicit table-header offsets must not be confused. Intel auxiliary
+virtuals and backing cleanup remain pending. Native payload and paired-KC
+checks pass; no production guard, hardware access or deployment was added.
