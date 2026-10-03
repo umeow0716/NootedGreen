@@ -196,6 +196,7 @@ def check_boot_atomic(system, path):
                                    b"__ZN18IOTimerEventSource4initEP8OSObjectPFvS1_PS_E",
                                    b"__ZN13IOEventSource4initEP8OSObjectPFvS1_zE",
                                    b"__ZN18IOTimerEventSource14setTimeoutFuncEv")}
+    symbols[b"__ZN18IOTimerEventSource17timeoutAndReleaseEPvS0_"] = []
     for command, offset in commands(boot, kernel[0]):
         if command != 2:
             continue
@@ -278,6 +279,18 @@ def check_boot_atomic(system, path):
     assert kernel_read(timer_init + 0x18, 6) == bytes.fromhex("ff 90 b8 01 00 00"), \
         "changed timer setup dispatch instruction"
     print("PASS Boot KC timer init delegation reaches pinned setup virtual")
+    timeout = symbols[b"__ZN18IOTimerEventSource17timeoutAndReleaseEPvS0_"][0]
+    body = kernel_read(timeout, 0x120)
+    assert hashlib.sha256(body).hexdigest() == "aea398e58d775cac636c1c9275b989e05b4eb8322ccfeb71c8c0434afbc9e2dc", \
+        "changed reviewed passive timer callback body"
+    for offset, instruction in (
+            (0x4c, "ff 90 80 01 00 00"),  # workloop gate entry
+            (0x7f, "44 39 20"),           # generation comparison
+            (0xf0, "ff 90 78 01 00 00"), # workloop gate exit
+            (0x117, "ff 60 28")):        # source release tail
+        assert kernel_read(timeout + offset, len(bytes.fromhex(instruction))) == bytes.fromhex(instruction), \
+            "changed passive timer generation/gate/release instruction"
+    print("PASS Boot KC passive timer generation, workloop gate and release body")
     assert system[0x10132:0x10138] == bytes.fromhex("ff 25 60 40 01 00"), "changed atomic import stub"
     raw = struct.unpack_from("<Q", system, 0x24198)[0]
     assert (raw >> 30) & 3 == 0 and raw >> 63 == 0, "unexpected atomic import cache level/auth"

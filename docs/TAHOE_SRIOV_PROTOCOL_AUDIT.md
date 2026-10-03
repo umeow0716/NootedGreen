@@ -27,6 +27,19 @@ enforce fault-before-panic and prohibit native/helper/backing side effects.
 
 ## Mapping getter provenance follow-up (offline)
 
+Passive timer callback follow-up: complete Boot `timeoutAndRelease` (0x120
+bytes) now has a local body contract. It checks initial enabled/action state,
+obtains the expansion-stored workloop, enters its virtual `+0x180`, rereads
+action and checks the passed generation against expansion generation before
+calling an unnamed action helper at `0xffffff8000ad01b0`. It leaves through
+workloop virtual `+0x178` and releases expansion-stored workloop/source refs.
+The body/hash and generation/gate/release instructions are pinned. There is
+no second enabled check after gate entry in this body; generation is the
+post-gate guard. Actual gate implementations, the unnamed action helper,
+schedule-time retains and removal synchronization remain unreviewed. A callback
+already past the generation check is not proven drained by incrementing the
+generation; no teardown or DMA-quiescence claim is made.
+
 Timer init delegation is now resolved locally: base timer virtual `+0x1c0`
 is `init(owner, action)`. Its complete 0x50-byte Boot body calls inherited
 IOEventSource init, fails if that fails, dispatches `setTimeoutFunc` through

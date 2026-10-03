@@ -7,6 +7,11 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 passive timer callback follow-up: complete Boot timeoutAndRelease
+reviewed and locally pinned with generation/gate/release instructions. Action
+helper, schedule-time retains, gate implementations and removal drain remain
+pending; generation invalidation alone does not certify teardown quiescence.
+
 2026-10-04 timer init delegation follow-up: complete Boot owner/action init
 body read, local fixture pins virtual +0x1c0, setup virtual +0x1b8 and inherited
 event-source init call. Options-to-setup middle delegation resolved; inherited
