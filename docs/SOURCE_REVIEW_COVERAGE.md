@@ -80,6 +80,11 @@ pending; base gated invocation alone is not a cleanup success proof.
 reviewed/pinned; complete reference XNU runAction read. Actual Boot virtual
 +0x1c8, stored removal action and concrete control-gate type remain pending.
 
+2026-10-04 Scheduler4 init: complete actual 0xaf window reviewed/pinned,
+separate from the extra unnamed thunk in nearest-symbol span; effective
+partial-init free virtual pinned. Manual-free/factory-release inherited
+lifetime semantics remain unresolved, not certified by clearing fields.
+
 2026-10-04 IGGuC construction: full 0x48 factory reviewed/pinned; type-3
 dispatcher/factory/init/base-init edges pinned. Full init and indirect
 construction remain pending. Normal type-3 dispatch excluded by VF guard;

@@ -447,6 +447,15 @@ def macho_inventory(path):
     assert image[scheduler5_free + 0x100:scheduler5_free + 0x10b] == bytes.fromhex("49 c7 86 80 0a 00 00 00 00 00 00"), \
         f"{path}: changed private workloop clear before inherited cleanup"
     scheduler5_init = value("__ZN12IGScheduler519initWithAcceleratorEP22IOGraphicsAccelerator2")
+    scheduler4_init = value(SCHEDULER4_INIT)
+    # The nearest symbol span additionally includes an unnamed GuC thunk.
+    assert hashlib.sha256(image[scheduler4_init:scheduler4_init + 0xaf]).hexdigest() == \
+        "77b13fd9de6707590ce67777bfe7dfdc4f475072740e0ac1baf1746ad3eda471", \
+        f"{path}: changed reviewed scheduler-4 initialization window"
+    assert image[scheduler4_init + 0x9a:scheduler4_init + 0xa0] == bytes.fromhex("ff 90 90 00 00 00"), \
+        f"{path}: changed scheduler-4 partial-init free dispatch"
+    assert struct.unpack_from("<Q", image, value(SCHEDULER4_VTABLE) + 16 + 0x90)[0] == value("__ZN12IGScheduler44freeEv"), \
+        f"{path}: changed scheduler-4 partial-init effective free target"
     create = value("__ZN11IGScheduler6createEP16IntelAccelerator")
     for name, length, digest in (
             ("__ZN5IGGuC20sendHostToGucMessageEPK18IGHostToGucMessagejU13block_pointerFvvE", 0x122,

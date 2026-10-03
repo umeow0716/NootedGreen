@@ -27,6 +27,20 @@ enforce fault-before-panic and prohibit native/helper/backing side effects.
 
 ## Mapping getter provenance follow-up (offline)
 
+Scheduler4 complete-init follow-up: its actual init body is 0xaf bytes ending
+at 0x1da80; the nearest named-symbol 0xc2 span also contains a separate unnamed
+GuC thunk. Full init reviewed/pinned as the smaller window. It calls scheduler
+base init first, clears +0x490 and creates per-engine command streamers from
+the accelerator engine mask. Streamer failure invokes virtual +0x90, resolved
+to the already-reviewed Scheduler4::free, before returning false. The factory
+then releases the failed object. Actual inherited free/refcount behavior must
+be resolved before certifying this manual-free/then-release combination;
+reference XNU OSObject release/free can delete objects, but that is not proof
+of this opaque native hierarchy's behavior. Do not infer double-free or safe
+idempotence solely from field clearing. No GuC firmware allocation appears in
+this init body; later firmware-init owns that boundary. Remaining ownership/
+callback and inherited free review blocks runtime safety certification.
+
 IGGuC construction classification follow-up: complete withAccelerator 0x48
 factory reviewed/pinned; native scheduler create type-3 edge resolves directly
 to it. Factory calls IGGuC initWithOptions; the reviewed initial base-init edge
