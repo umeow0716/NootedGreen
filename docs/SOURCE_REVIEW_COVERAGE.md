@@ -857,3 +857,10 @@ import and Boot cloneCommand slot. +0xa10 is the template command, not a
 distinct pool object. Outer failure cleanup and concurrent get/return admission
 must protect release's unchecked template dereference/unlocked list cleanup.
 Clone/metaclass bodies and shutdown serialization remain pending.
+# Latest failed-start pool unwind checkpoint
+
+Decoded/pinned selected start failure windows and direct createPool→false
+common path→base stop→releasePool edges. Together with partial pool creation,
+this exposes a static allocation-failure cleanup hazard; not a dynamic crash
+attribution or complete start review. Per-object VF ownership/partial-init
+state and external admission must precede a safe shared-IOAccel repair.

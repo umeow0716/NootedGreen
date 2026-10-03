@@ -835,6 +835,19 @@ def check(path, boot_path=None):
     raw_unwire = struct.unpack("<Q", read(address_of("__ZTV16IOAccelSysMemory") + 0x1c8, 8))[0]
     assert raw_unwire >> 63 == 0 and (raw_unwire >> 30) & 3 == 1, "changed base sys-memory unwire encoding"
     assert raw_unwire & 0x3fffffff == address_of("__ZN16IOAccelSysMemory6unwireEv"), "changed base sys-memory unwire target"
+    # These are selected complete failure-path windows, NOT a claim that the
+    # entire inherited accelerator start body has been reviewed here.
+    for start, length, digest in (
+            (0x14b9ff23, 0x1a, "9296105c846353d285040948e48173f53bd680989e8559d4e3ca397d96adcffe"),
+            (0x14ba07b5, 0x82, "2aa1d164ff8b96d52162ec54a1ae52b15e0e5aef5c4995e5117e9348cad71be2"),
+            (0x14b9fbc3, 0x2f, "6f3bd9c892c2647af39bbcc1455d34a152ee4ee4fe06fd58961b860497ebfa02"),
+            (0x14ba1e29, 0x12, "633db41e86ae7590862cdf404d6de633c7e63b6e79ba7114f91ba8e8ae259ae2")):
+        assert hashlib.sha256(read(start, length)).hexdigest() == digest, "changed DMA-pool failed-start/stop window"
+    for call, target in ((0x14b9ff30, address_of("__ZN22IOGraphicsAccelerator220createDMACommandPoolEv")),
+                         (0x14b9fbed, 0x14ba1a7c),
+                         (0x14ba1e36, address_of("__ZN22IOGraphicsAccelerator221releaseDMACommandPoolEv"))):
+        encoded = read(call, 5)
+        assert encoded[0] == 0xe8 and call + 5 + struct.unpack_from("<i", encoded, 1)[0] == target, "changed inherited failed-start pool cleanup edge"
     for call, method in ((0x14bba340, "__ZN16IOAccelMemoryMap11release_pteEv"),
                          (0x14bba30d, "__ZN22IOGraphicsAccelerator216returnDMACommandEP12IODMACommand"),
                          (0x14bba3bc, "__ZN22IOGraphicsAccelerator214sysmem_unwiredEP16IOAccelSysMemory")):

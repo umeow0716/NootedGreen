@@ -5978,3 +5978,30 @@ adding a guard/lock. Locking after normal get/return admission remains open
 would not by itself close lifetime races. Hashes/clone identity/native factory
 import and explicit failure-cleanup dereference anchors are pinned; targeted
 native/paired-KC checks pass. No production/runtime changes.
+# DMA-pool failed-start reaches inherited stop follow-up
+
+Direct byte candidates were checked against decoded selected instruction
+windows (not an exhaustive indirect-caller scan): accelerator start calls
+createDMACommandPool at 0x14b9ff30 under feature bit +0xcec bit 6; false takes
+0x14ba07b5, records failure and joins 0x14ba07fd. After notification/unlock,
+the false branch goes to 0x14b9fbc3 and directly calls base accelerator stop
+at 0x14b9fbed. The previously reviewed complete stop calls releaseDMACommandPool
+at 0x14ba1e36 under the same feature bit, with no template-presence test at
+that callsite. Selected complete windows and these explicit edges are pinned;
+the entire accelerator start span is NOT newly reviewed.
+
+Combined with reviewed pool creation order: lock/factory failure can return
+false before circular-list initialization and leave template +0xa10 null.
+The failed-start route nevertheless selects feature-gated pool cleanup, which
+assumes initialized list/template. This is a concrete static failure-unwind
+hazard under such allocation failures, not a dynamic reproduction or proof
+that it caused the historical VF panic/Host i915 hang. Earlier stop callees
+may fail first and remain relevant; no claim of first crash instruction is
+made. Successful shutdown also needs external get/return admission closure.
+
+A production repair must establish per-object VF ownership and partial-init
+state or patch the full paired cleanup contract, not blanket-hook shared
+IOAccel methods using only global VF identity. The current shared-IOAccel
+routes do not provide that owner registry. Do not add a lock around this
+cleanup without checking gate/mutex order and late producer admission.
+Targeted paired-KC checks pass; no executable patch/deployment/runtime test.
