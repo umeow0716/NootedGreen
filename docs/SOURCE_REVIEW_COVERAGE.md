@@ -7,6 +7,10 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 timer detach/disable: complete Boot bodies/effective virtuals read
+and locally pinned; null detach disables before pointer clear. Schedule-time
+retains, cancel-return semantics and failed-removal owner lifetime remain open.
+
 2026-10-04 stop block API: paired import plus complete wrapper/adapter/base
 runAction read/pinned; normal stop block executes synchronously under base gate.
 Ignored removal results and owner/cancellation lifetime remain unresolved.

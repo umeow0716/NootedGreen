@@ -198,6 +198,8 @@ def check_boot_atomic(system, path):
                                    b"__ZN18IOTimerEventSource4initEP8OSObjectPFvS1_PS_E",
                                    b"__ZN13IOEventSource4initEP8OSObjectPFvS1_zE",
                                    b"__ZN18IOTimerEventSource14setTimeoutFuncEv")}
+    symbols[b"__ZN18IOTimerEventSource11setWorkLoopEP10IOWorkLoop"] = []
+    symbols[b"__ZN18IOTimerEventSource7disableEv"] = []
     symbols[b"__ZN18IOTimerEventSource17timeoutAndReleaseEPvS0_"] = []
     for name in (b"__ZTV10IOWorkLoop", b"__ZN10IOWorkLoop8openGateEv",
                  b"__ZN10IOWorkLoop4initEv",
@@ -231,6 +233,12 @@ def check_boot_atomic(system, path):
     # These Boot KC vtable entries are canonical pointers, NOT System KC
     # chained cache-level targets. Do not silently apply the latter decoder.
     for table, slot, method, length, digest in (
+            (b"__ZTV18IOTimerEventSource", 0x128,
+             b"__ZN18IOTimerEventSource11setWorkLoopEP10IOWorkLoop", 0x60,
+             "c65344022bf8d9bc0d0b8e7531c46ebb93e5f1330b3c1b230cc950fd0eb76ff8"),
+            (b"__ZTV18IOTimerEventSource", 0x158,
+             b"__ZN18IOTimerEventSource7disableEv", 0x60,
+             "dfdaf0a822e0cead05bf9fd7676a3aaa0a78cff67f3cd9c270be9ef5c006e573"),
             (b"__ZTV13IOCommandGate", 0x140,
              b"__ZN13IOEventSource9setActionEPFvP8OSObjectzE", 0x50,
              "8cdc3bc5b1db948a9d976aa06d9bcb318519e859a4fd655f687ce8870b7d04d6"),
@@ -455,6 +463,16 @@ def check_boot_atomic(system, path):
     assert struct.unpack("<Q", kernel_read(workloop_table + 16 + 0x1a0, 8))[0] == 0xffffff8000ac9be0, \
         "changed base workloop synchronous action virtual"
     print("PASS paired KC stop block API and synchronous base workloop action body")
+    detach = symbols[b"__ZN18IOTimerEventSource11setWorkLoopEP10IOWorkLoop"][0]
+    assert kernel_read(detach + 0x15, 6) == bytes.fromhex("ff 90 58 01 00 00"), "changed timer detach disable dispatch"
+    assert kernel_read(detach + 0x1e, 4) == bytes.fromhex("48 89 5f 30"), "changed timer workloop-pointer store"
+    disable = symbols[b"__ZN18IOTimerEventSource7disableEv"][0]
+    for offset, name in ((0x1e, b"_thread_call_cancel"), (0x25, b"_thread_call_cancel_wait")):
+        call = disable + offset
+        instruction = kernel_read(call, 5)
+        assert instruction[0] == 0xe8 and call + 5 + struct.unpack_from("<i", instruction, 1)[0] == symbols[name][0], \
+            "changed timer disable cancel branch"
+    print("PASS Boot KC timer detach disables before clearing workloop")
     assert system[0x10132:0x10138] == bytes.fromhex("ff 25 60 40 01 00"), "changed atomic import stub"
     raw = struct.unpack_from("<Q", system, 0x24198)[0]
     assert (raw >> 30) & 3 == 0 and raw >> 63 == 0, "unexpected atomic import cache level/auth"

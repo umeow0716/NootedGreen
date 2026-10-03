@@ -27,6 +27,18 @@ enforce fault-before-panic and prohibit native/helper/backing side effects.
 
 ## Mapping getter provenance follow-up (offline)
 
+Timer detach follow-up: complete base setWorkLoop (0x60) and disable (0x60)
+bodies/virtuals are locally pinned. A null workloop first invokes disable,
+then stores null at +0x30. Disable increments generation, conditionally calls
+cancel versus cancel-wait using the active flag, clears enabled, and releases
+passive source/workloop references only when cancellation reports success.
+Non-null attachment may rearm a pending enabled deadline through virtual +0x210.
+Combined with successful gated maintenance removal, this gives the generation-
+invalidation order before unlink/release. It does not establish schedule-time
+retains, thread-call cancellation-return semantics, all generation interleavings
+or owner lifetime, and failed removal bypasses this detach. Those obligations
+remain open before certifying teardown; no runtime hold is relaxed.
+
 Stop block execution follow-up: paired import `0x1051c` resolves to
 IOWorkLoop::runActionBlock. Complete wrapper (0x40), separate unnamed block
 invoke adapter (0x10) and effective base runAction body (0x60) were read/pinned.
