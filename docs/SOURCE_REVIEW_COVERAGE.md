@@ -7,6 +7,11 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 metaclass reference follow-up: actual workloop init RIP load and
+declared metaclass allocator virtual resolved/pinned locally. gMetaClass vptr
+is zero on disk and initialized at runtime; constructor path remains pending,
+not evidence of a null runtime pointer or completed concrete-type review.
+
 2026-10-04 inherited event-source init/setter follow-up: complete Boot bodies
 read/pinned with owner store, action dispatch and effective command-gate setter.
 Owner is stored without explicit retain in reviewed init; owner lifetime and

@@ -27,6 +27,16 @@ enforce fault-before-panic and prohibit native/helper/backing side effects.
 
 ## Mapping getter provenance follow-up (offline)
 
+Control-gate metaclass reference follow-up: workloop init's RIP-relative load
+resolves to `IOCommandGate::gMetaClass`; the declared metaclass vtable `+0x88`
+resolves to the reviewed base allocator. Both identities are locally pinned.
+The on-disk gMetaClass vptr is zero runtime-initialized storage, not a null
+runtime allocation target, nor a System KC chained pointer. Do not follow it
+as a canonical pointer in an offline image. Metaclass static initialization
+must still be reviewed before claiming a complete constructed-object chain.
+Concrete driver workloop selection, preexisting gates and unchecked removal
+return also remain open; no callback-drain or host-safety proof is claimed.
+
 Inherited owner/action storage follow-up: complete Boot IOEventSource init
 (0x70) and setAction (0x50) bodies are locally pinned. Init rejects null owner,
 stores the owner pointer at `+0x18` without an explicit retain, delegates action

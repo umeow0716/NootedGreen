@@ -203,6 +203,7 @@ def check_boot_atomic(system, path):
                  b"__ZN13IOCommandGate4initEP8OSObjectPFiS1_PvS2_S2_S2_E",
                  b"__ZN13IOEventSource9setActionEPFvP8OSObjectzE",
                  b"__ZNK13IOCommandGate9MetaClass5allocEv",
+                 b"__ZN13IOCommandGate10gMetaClassE", b"__ZTVN13IOCommandGate9MetaClassE",
                  b"__ZN13IOCommandGate9runActionEPFiP8OSObjectPvS2_S2_S2_ES2_S2_S2_S2_",
                  b"__ZN10IOWorkLoop13_maintRequestEPvS0_S0_S0_",
                  b"__ZN10IOWorkLoop9closeGateEv",
@@ -385,6 +386,18 @@ def check_boot_atomic(system, path):
     assert kernel_read(base_init + 0x12, 4) == bytes.fromhex("48 89 5f 18"), "changed event-source owner store"
     assert kernel_read(base_init + 0x1c, 6) == bytes.fromhex("ff 90 40 01 00 00"), "changed event-source action setter virtual"
     print("PASS Boot KC inherited owner storage and effective command action setter")
+    # gMetaClass is runtime-initialized zero storage in this file. Resolve the
+    # initializer's symbolic reference, not a fictitious on-disk object vptr.
+    load = workloop_init + 0xed
+    instruction = kernel_read(load, 7)
+    metaclass = symbols[b"__ZN13IOCommandGate10gMetaClassE"][0]
+    assert instruction[:3] == bytes.fromhex("48 8b 05") and \
+        load + 7 + struct.unpack_from("<i", instruction, 3)[0] == metaclass, \
+        "changed workloop control-gate metaclass reference"
+    assert kernel_read(metaclass, 8) == b"\0" * 8, "changed on-disk metaclass initialization state"
+    assert struct.unpack("<Q", kernel_read(symbols[b"__ZTVN13IOCommandGate9MetaClassE"][0] + 16 + 0x88, 8))[0] == allocator, \
+        "changed command-gate metaclass allocator virtual"
+    print("PASS Boot KC control-gate metaclass reference and allocator identity (runtime init pending)")
     assert system[0x10132:0x10138] == bytes.fromhex("ff 25 60 40 01 00"), "changed atomic import stub"
     raw = struct.unpack_from("<Q", system, 0x24198)[0]
     assert (raw >> 30) & 3 == 0 and raw >> 63 == 0, "unexpected atomic import cache level/auth"
