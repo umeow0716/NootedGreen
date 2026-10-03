@@ -43,6 +43,12 @@ RING_SLEEP_STAMP = "__ZN20IGHardwareRingBuffer13sleepForStampEPjjj"
 RING_WRITE_STAMP = "__ZN20IGHardwareRingBuffer10writeStampEjb"
 RING_MAIN_WRITE_STAMP = "__ZN24IGHardwareRingBufferMain10writeStampEjb"
 RING_COMPUTE_WRITE_STAMP = "__ZN27IGHardwareRingBufferCompute10writeStampEjb"
+RING_COMMIT_STAMP = "__ZN20IGHardwareRingBuffer18commitStampCommandEjb"
+RING_MAIN_COMMIT_STAMP = "__ZN24IGHardwareRingBufferMain18commitStampCommandEjb"
+RING_COMPUTE_COMMIT_STAMP = "__ZN27IGHardwareRingBufferCompute18commitStampCommandEjb"
+RING_WRITE_BUFFER = "__ZN20IGHardwareRingBuffer11writeBufferEPjj"
+RING_GTT_WRITE_MODE = "__ZN20IGHardwareRingBuffer15getGTTWriteModeEv"
+TASK_SCRATCH_GPU_ADDRESS = "__ZNK11IGAccelTask27getScratchGPUVirtualAddressEv"
 RING_WAIT_SPACE = "__ZN20IGHardwareRingBuffer12waitForSpaceEj"
 RING_WAIT_TIMEOUT = "__ZN20IGHardwareRingBuffer11waitTimeoutEU13block_pointerFbvE"
 SCHEDULER4_INIT_PRIVATE = "__ZN12IGScheduler421initSharedPrivateDataEP17IGHardwareContext"
@@ -663,6 +669,31 @@ def macho_inventory(path):
     if stamp_body.count(bytes.fromhex(
             "48 c1 e2 06 8b 04 10 41 89 07")) != 1:
         raise AssertionError(f"{path}: completed-stamp slot-zero read changed")
+    for table, commit in ((RING_VTABLE, RING_COMMIT_STAMP),
+                          ("__ZTV24IGHardwareRingBufferMain", RING_MAIN_COMMIT_STAMP),
+                          ("__ZTV27IGHardwareRingBufferCompute", RING_COMPUTE_COMMIT_STAMP)):
+        if struct.unpack_from("<Q", image, value(table) + 16 + 0x140)[0] != value(commit):
+            raise AssertionError(f"{path}: stamp packet encoder virtual changed")
+    # Main/compute encode PIPE_CONTROL post-sync writes. Pin the destination
+    # (stamp GPU base + index*64), sequence data, scratch prerequisite and
+    # actual writeBuffer graph; source bookkeeping alone cannot prove execution.
+    for owner in (RING_MAIN_COMMIT_STAMP, RING_COMPUTE_COMMIT_STAMP):
+        start = value(owner)
+        body = image[start:next_symbol(start)]
+        if len(direct_branches(owner, RING_WRITE_BUFFER)) != 4 or \
+                len(direct_branches(owner, TASK_SCRATCH_GPU_ADDRESS)) != 2 or \
+                len(direct_branches(owner, RING_GTT_WRITE_MODE)) != 2:
+            raise AssertionError(f"{path}: PIPE_CONTROL stamp encoder call graph changed")
+        for anchor in (bytes.fromhex("48 b8 04 00 00 7a 98 44 10 01"),
+                       bytes.fromhex("49 63 74 24 38 48 c1 e6 06 49 03 74 24 28"),
+                       bytes.fromhex("8b 55 b4 49 89 55 10")):
+            if body.count(anchor) != 1:
+                raise AssertionError(f"{path}: PIPE_CONTROL stamp packet/data anchor changed")
+    base_start = value(RING_COMMIT_STAMP)
+    base_body = image[base_start:next_symbol(base_start)]
+    if len(direct_branches(RING_COMMIT_STAMP, RING_WRITE_BUFFER)) != 3 or \
+            base_body.count(bytes.fromhex("48 8d 84 02 03 40 00 13")) != 1:
+        raise AssertionError(f"{path}: base MI_FLUSH_DW stamp encoder changed")
     for body, anchor, count, label in (
             (wait_body, bytes.fromhex("48 8b 43 18 8b 40 10"), 1,
              "shared context head"),

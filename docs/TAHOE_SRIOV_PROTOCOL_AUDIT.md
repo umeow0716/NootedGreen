@@ -10,6 +10,29 @@ enforced containment precondition.
 
 ## V264 retain the actual DMA ring through deregistration (offline)
 
+Packet-encoder follow-up uses the local primary i915 reference pinned at
+`c613c76e2e7023b1617bed346b9d35bf871fb958` in
+`references/i915-sriov-current` (`strongtz/i915-sriov-dkms`), specifically
+`gt/intel_gpu_commands.h` and `gt/gen8_engine_cs.c`. Main and compute ring
+vtable `+0x140` resolve to their own `commitStampCommand` implementations.
+Both construct a six-dword `PIPE_CONTROL` (`0x7a000004`) with post-sync QW
+write and CS stall (`0x01104498` before address-space/notify adjustments),
+derive destination from stamp GPU base `+0x28` plus signed index `+0x38` times
+64, and place the supplied stamp in the immediate data. Their preceding
+scratch-target packet derives its address from task scratch GPU backing.
+Both paths have two scratch getter calls, two GTT-mode queries and four
+conditional `writeBuffer` sites, now pinned in both payloads.
+
+The base encoder instead builds `MI_FLUSH_DW` with a store operation
+(`0x13004003` before notify/address adjustments), using the same stamp-base
+and index-stride destination. The source/header comparison establishes the
+intended GPU store, not its execution or platform-specific correctness. The
+address-space flags, scratch lifetime, packet visibility before notification,
+successful transport publication, completed-event handling and sequence
+wraparound must still be verified together before changing the conservative
+enabled-context idle response. None of these offline anchors proves a Metal
+command actually completed.
+
 Stamp producer follow-up: base, main and compute `writeStamp` dispatch their
 packet encoder at ring vtable `+0x140`, then CPU-write the submitted value at
 stamp slot `+0x8`, ring `+0x44`, and the pending-stamp flag at `+0x48`.
