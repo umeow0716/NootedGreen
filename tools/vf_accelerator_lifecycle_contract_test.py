@@ -403,6 +403,9 @@ def macho_inventory(path):
             f"{path}: scheduler-4 active-context zero result changed")
 
     timeout_start = value(EVENT_TIMEOUT)
+    if struct.unpack_from("<Q", image,
+            value(EVENT_MACHINE_VTABLE) + 16 + 0x220)[0] != timeout_start:
+        raise AssertionError(f"{path}: inherited restart timeout override changed")
     timeout_body = image[timeout_start:next_symbol(timeout_start)]
     for slot_bytes, count, label in (
             (bytes.fromhex("ff 90 50 01 00 00"), 1, "checkForProgress"),

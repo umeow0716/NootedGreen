@@ -16,6 +16,7 @@ EVENT_WAIT = "__ZN20IOAccelEventMachine212waitForStampEijPj"
 EVENT_CLEAN = "__ZN24IOAccelEventMachineFast210cleanEventEP12IOAccelEvent"
 EVENT_TERMINATE = "__ZN24IOAccelEventMachineFast224deviceTerminatedUnlockedEv"
 EVENT_SIGNAL = "__ZN20IOAccelEventMachine211signalStampEij"
+EVENT_RESTART = "__ZN20IOAccelEventMachine215restart_channelEv"
 CONTRACTS = {
     EVENT_TERMINATE:
         bytes.fromhex("55 48 89 e5 48 8b 47 28 48 85 c0 74 30 8b 4f 30 85 c9 "
@@ -139,7 +140,7 @@ def check(path, boot_path=None):
             symtab = struct.unpack_from("<6I", image, offset)[2:]
     assert symtab is not None, "missing embedded symbol table"
     symbol_offset, count, string_offset, string_size = symtab
-    matches = {name: [] for name in {*CONTRACTS, EVENT_VTABLE, EVENT_FINISH, EVENT_WAIT, EVENT_CLEAN, EVENT_SIGNAL}}
+    matches = {name: [] for name in {*CONTRACTS, EVENT_VTABLE, EVENT_FINISH, EVENT_WAIT, EVENT_CLEAN, EVENT_SIGNAL, EVENT_RESTART}}
     for index in range(count):
         name_offset, _, _, _, address = struct.unpack_from("<IBBHQ", image, symbol_offset + index * 16)
         assert name_offset < string_size, "invalid symbol string"
@@ -175,6 +176,8 @@ def check(path, boot_path=None):
         "34c3638c2485ef35e2fdb1e70efeff61e935972b1db36bc72ec3084b7207c010", "changed finishEvent"
     assert hashlib.sha256(read(address_of(EVENT_SIGNAL), 0xa8)).hexdigest() == \
         "02c75b9f3864be75d75b3b2fd1b777a52e016265036c7e77c096d810db3e260b", "changed signalStamp"
+    assert hashlib.sha256(read(address_of(EVENT_RESTART), 0x23e)).hexdigest() == \
+        "35a836d5773e442205b5f415e658630d2e643ed364a39bb800312d48b424345c", "changed restart_channel"
     wait = read(address_of(EVENT_WAIT), 0x34)
     assert wait[0x1c:0x32] == bytes.fromhex(
         "48 8b 4f 10 31 c0 83 b9 c8 0d 00 00 00 0f 85 f5 01 00 00 41 89 f7"), \

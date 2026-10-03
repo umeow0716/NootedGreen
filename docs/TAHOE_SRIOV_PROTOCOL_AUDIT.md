@@ -124,6 +124,26 @@ termination callbacks still need review. Nothing here supplies a hardware
 idle or DMA-stop acknowledgement, so software-terminated stamps remain
 excluded from a future hardware-completion baseline.
 
+Restart follow-up: inherited `restart_channel` (`0x14b77dbc..0x14b77ff8`)
+uses event virtual `+0x218` for progress and `+0x220` for timeout recovery.
+On the normal recovery branch it stops the progress timer, calls the timeout
+virtual, optionally invokes returned object's virtual `+0x160`, then restarts
+the timer even when the returned object is null. Its common tail clears the
+channel entry at `+0x98`, clears restart state `+0x94`, updates channel `+0x90`,
+and signals its event source. These software changes are not GPU-stop evidence.
+The local KC fixture pins the complete restart_channel bytes.
+
+Crucially the actual Intel event-machine vtable overrides `+0x220` with
+`IGAccelEventMachine::eventTimeout`, now verified in both payloads by the
+offline lifecycle test. Do not substitute the base Fast2 eventTimeout when
+tracing this route. The pinned Scheduler4 progress method returns true,
+leading the Intel timeout path to encodeDebugInfo and a null recovery result.
+The current VF physical-debug replacement is a void no-op: it avoids raw
+diagnostic MMIO, but does not turn this timeout into a reliable protocol fault
+or bounded wait outcome. This remains a failure-propagation gap to fix at a
+verified timeout boundary, not by fabricating completion or repurposing every
+debug capture as a fatal error. No new runtime route was added in this review.
+
 Both pinned accelerator payloads resolve `IGAccelMemoryMap` vtable `+0x128`
 through an external unsigned 64-bit relocation to
 `IOAccelMemoryMap::getGPUVirtualAddress`. The mapped-buffer getter delegates
