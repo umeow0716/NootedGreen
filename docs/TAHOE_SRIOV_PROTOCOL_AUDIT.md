@@ -15,7 +15,7 @@ classified-VF-only replacement. It marks the protocol fault (closing native
 work admission) and fail-stops the guest before returning to inherited restart
 and wait retry. It does not call the original, free backing, fabricate stamp
 progress or issue hardware reset/MMIO. Ordinary debug capture remains a no-op;
-PF behavior remains native. The route inventory is now 94 (91 accelerator,
+PF behavior remains native. The route inventory is now 95 (92 accelerator,
 3 framebuffer admission symbols); both payloads pin the event-timeout virtual.
 
 This is a provisional error-containment boundary, not implemented GPU recovery,
@@ -26,6 +26,19 @@ and a real hardware-safe recovery design remain unfinished. Offline tests
 enforce fault-before-panic and prohibit native/helper/backing side effects.
 
 ## Mapping getter provenance follow-up (offline)
+
+Final factory admission repair: the VF-only route table now preserves the
+typed IGScheduler::create trampoline and validates accelerator feature bits
+23..25 immediately before delegation. Non-type-4 returns null after protocol
+fault instead of dispatching into a PF scheduler factory. No force-write of
+feature bits or synthetic scheduler is used; valid type 4 follows native
+allocation/ownership. Both native creation calls (0x243f3/0x2448e) store the
+result and branch on null to 0x2473d, now pinned in local payload fixtures.
+Route inventory increases from 94 to 95; source contract pins validation before
+delegation and typed route. This also covers native fallback calls that reach
+this factory. It is not synchronization against arbitrary concurrent writes
+to accelerator memory, proof of null-path teardown quiescence, or hardware
+acceleration. Complete native start and failure-unwind review remain pending.
 
 Late options admission repair: VF start now resolves IODeviceTree:/options,
 copies/retains GraphicsSchedulerSelect for a stable type inspection, and

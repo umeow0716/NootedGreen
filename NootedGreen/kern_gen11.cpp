@@ -2358,6 +2358,8 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			// Apple's lifecycle calls away from PF-owned registers; final stop still
 			// performs explicit direct-LRCA and DMA quiescence below.
 			{"__ZN16IntelAccelerator19startGraphicsEngineEv", startGraphicsEngine},
+			{"__ZN11IGScheduler6createEP16IntelAccelerator", vfCreateScheduler,
+			 this->originalSchedulerCreate},
 			{"__ZN16IntelAccelerator18stopGraphicsEngineEv",  stopGraphicsEngine},
 
 			// A VF has no guest-owned INSTDONE state. Derive the watchdog result
@@ -3663,6 +3665,21 @@ void *Gen11::getBlit3DContext(void *that, bool create)
 		return nullptr;
 	return FunctionCast(getBlit3DContext,
 	                    callback->ogetBlit3DContext)(that, create);
+}
+
+void *Gen11::vfCreateScheduler(void *accelerator)
+{
+	// Installed only on the VF route table. Validate the final native bits
+	// before create can tail-dispatch into any physical scheduler factory.
+	if (!accelerator || !callback || !callback->originalSchedulerCreate)
+		return nullptr;
+	const uint32_t schedulerType =
+		(getMember<uint32_t>(accelerator, 0x1190) >> 23) & 7U;
+	if (schedulerType != 4U) {
+		vfMarkProtocolFault("VF final native scheduler selection is not GuC type 4");
+		return nullptr;
+	}
+	return FunctionCast(vfCreateScheduler, callback->originalSchedulerCreate)(accelerator);
 }
 
 bool Gen11::startGraphicsEngine(void *that)

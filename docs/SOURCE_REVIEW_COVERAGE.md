@@ -80,6 +80,11 @@ pending; base gated invocation alone is not a cleanup success proof.
 reviewed/pinned; complete reference XNU runAction read. Actual Boot virtual
 +0x1c8, stored removal action and concrete control-gate type remain pending.
 
+2026-10-04 final factory admission: VF-only typed scheduler create route
+checks actual native bits before delegating; non-4 faults/returns null. Two
+native caller result stores/null branches pinned; 95 routes. This does not
+complete failure-unwind, callback lifetime or DMA containment review.
+
 2026-10-04 options admission repair: VF pre-start retained-copy type check
 rejects OSData scheduler override, releases both references and never mutates
 global options. Source order/scope contracts pass; later registry mutation and

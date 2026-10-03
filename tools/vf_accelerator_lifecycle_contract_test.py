@@ -445,6 +445,14 @@ def macho_inventory(path):
         f"{path}: changed private workloop clear before inherited cleanup"
     scheduler5_init = value("__ZN12IGScheduler519initWithAcceleratorEP22IOGraphicsAccelerator2")
     create = value("__ZN11IGScheduler6createEP16IntelAccelerator")
+    for call, store in ((0x243f3, "49 89 85 50 12 00 00"),
+                        (0x2448e, "49 89 85 50 12 00 00")):
+        assert image[call] == 0xe8 and call + 5 + struct.unpack_from("<i", image, call + 1)[0] == create, \
+            f"{path}: changed native scheduler creation call"
+        assert image[call + 5:call + 12] == bytes.fromhex(store) and image[call + 12:call + 17] == bytes.fromhex("48 85 c0 0f 84"), \
+            f"{path}: changed scheduler result store/null branch"
+        assert call + 21 + struct.unpack_from("<i", image, call + 17)[0] == 0x2473d, \
+            f"{path}: changed scheduler creation null-failure target"
     property_helper = value("__Z15utilGetPropertyIjET_P15IORegistryEntryPKcS0_")
     assert next_symbol(property_helper) - property_helper == 0x18c and \
         hashlib.sha256(image[property_helper:property_helper + 0x18c]).hexdigest() == \
@@ -1982,6 +1990,16 @@ def source_contract(path):
             f"{path}: native stop begins before the VF device-stopping boundary")
 
     accelerator_start = function_body(source, "bool Gen11::start(void *that, void *provider)")
+    create_guard = function_body(source, "void *Gen11::vfCreateScheduler(void *accelerator)")
+    selection = create_guard.index("(getMember<uint32_t>(accelerator, 0x1190) >> 23) & 7U")
+    reject = create_guard.index("if (schedulerType != 4U)", selection)
+    fault = create_guard.index('vfMarkProtocolFault("VF final native scheduler selection is not GuC type 4")', reject)
+    rejected = create_guard.index("return nullptr;", fault)
+    delegation = create_guard.index("FunctionCast(vfCreateScheduler, callback->originalSchedulerCreate)")
+    assert selection < reject < fault < rejected < delegation, "VF factory must reject non-GuC type before native dispatch"
+    normalized_routes = "".join(pci_resolution.split())
+    assert '{"__ZN11IGScheduler6createEP16IntelAccelerator",vfCreateScheduler,this->originalSchedulerCreate}' in normalized_routes, \
+        "missing typed native scheduler factory admission route"
     options_guard = accelerator_start.index('IORegistryEntry::fromPath("IODeviceTree:/options")')
     options_copy = accelerator_start.index('options->copyProperty("GraphicsSchedulerSelect")', options_guard)
     options_type = accelerator_start.index('OSDynamicCast(OSData, overrideProperty)', options_copy)

@@ -191,6 +191,8 @@ private:
 	static bool stopGraphicsEngine(void *that);
 	static bool startGraphicsEngine(void *that);
 	mach_vm_address_t vfSchedulerInitFirmware {};
+	mach_vm_address_t originalSchedulerCreate {};
+	static void *vfCreateScheduler(void *accelerator);
 	static void populateResetRegisterList(void *that);
 	static bool wrapIGScheduler5IsGpuIdle(const void *that);
 	static bool wrapIGScheduler4IsGpuIdle(const void *that);
