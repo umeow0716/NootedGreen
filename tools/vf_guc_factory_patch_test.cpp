@@ -32,6 +32,22 @@ static void verify(const char *path)
 	assert(stream);
 	std::vector<uint8_t> image((std::istreambuf_iterator<char>(stream)), {});
 	using namespace NGVfGuCFactoryPatch;
+	assert(offsetsInRange(image, schedulerInitFreeFind, 0x1d9d2, 0x1da81) ==
+	       std::vector<size_t> {0x1da65});
+	static_assert(sizeof(schedulerInitFreeFind) == sizeof(schedulerInitFreeReplace),
+	              "scheduler patch must preserve instruction extent");
+	auto patched = image;
+	std::copy(std::begin(schedulerInitFreeReplace), std::end(schedulerInitFreeReplace),
+	          patched.begin() + 0x1da65);
+	for (size_t index = 0; index < image.size(); ++index) {
+		if (index >= 0x1da6c && index < 0x1da72)
+			assert(patched[index] == 0x90);
+		else
+			assert(patched[index] == image[index]);
+	}
+	// Retain factory release for base-init as well as streamer-init failure.
+	assert(offsetsInRange(patched, releaseAfterFailedInitFind, 0x1d98a, 0x1d9d2) ==
+	       std::vector<size_t> {0x1d9bf});
 
 	// UUID-pinned symbol bounds:
 	//   IGHardwareGuC::withOptions     [0x1fdd0, 0x1fe18)

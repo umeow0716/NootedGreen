@@ -2176,6 +2176,20 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			PANIC_COND(!gucFactoryPatch.apply(
 			               patcher, gucFactory, gucInit - gucFactory), "ngreen",
 			           "Failed to remove VF GuC factory double destruction");
+			mach_vm_address_t schedulerInit = 0, schedulerWait = 0;
+			KernelPatcher::SolveRequest schedulerBounds[] = {
+				{"__ZN12IGScheduler419initWithAcceleratorEP22IOGraphicsAccelerator2", schedulerInit},
+				{"__ZN12IGScheduler414waitForGpuIdleEv", schedulerWait},
+			};
+			PANIC_COND(!patcher.solveMultiple(index, schedulerBounds, address, size) ||
+			           schedulerWait <= schedulerInit || schedulerWait - schedulerInit != 0xc2,
+			           "ngreen", "Invalid VF scheduler failed-init patch bounds");
+			LookupPatchPlus const schedulerInitPatch {
+				activeKext, NGVfGuCFactoryPatch::schedulerInitFreeFind,
+				NGVfGuCFactoryPatch::schedulerInitFreeReplace, 1,
+			};
+			PANIC_COND(!schedulerInitPatch.apply(patcher, schedulerInit, 0xaf),
+			           "ngreen", "Failed to preserve single-owner VF scheduler init cleanup");
 			// Metal's first Blit3D context fills scratch blend states through
 			// offset 0xd20f, but a VF-only shared-buffer mapping stops at
 			// 0xd000. Keep the native initializer and publish a page-rounded

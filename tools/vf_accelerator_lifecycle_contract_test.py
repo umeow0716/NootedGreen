@@ -448,6 +448,10 @@ def macho_inventory(path):
         f"{path}: changed private workloop clear before inherited cleanup"
     scheduler5_init = value("__ZN12IGScheduler519initWithAcceleratorEP22IOGraphicsAccelerator2")
     scheduler4_init = value(SCHEDULER4_INIT)
+    find = bytes.fromhex("49 8b 04 24 4c 89 e7 ff 90 90 00 00 00 45 31 f6")
+    assert image[scheduler4_init:scheduler4_init + 0xaf].count(find) == 1 and \
+        image[scheduler4_init + 0x93:scheduler4_init + 0xa3] == find, \
+        f"{path}: scheduler premature-free patch must have one exact bounded match"
     # The nearest symbol span additionally includes an unnamed GuC thunk.
     assert hashlib.sha256(image[scheduler4_init:scheduler4_init + 0xaf]).hexdigest() == \
         "77b13fd9de6707590ce67777bfe7dfdc4f475072740e0ac1baf1746ad3eda471", \
@@ -2097,6 +2101,12 @@ def source_contract(path):
         raise AssertionError(
             f"{path}: native stop begins before the VF device-stopping boundary")
 
+    normalized_production = "".join(source.split())
+    for token in ("schedulerWait-schedulerInit!=0xc2",
+                  "schedulerInitPatch.apply(patcher,schedulerInit,0xaf)",
+                  "NGVfGuCFactoryPatch::schedulerInitFreeFind",
+                  "NGVfGuCFactoryPatch::schedulerInitFreeReplace"):
+        assert token in normalized_production, "missing bounded scheduler failed-init production patch contract"
     accelerator_start = function_body(source, "bool Gen11::start(void *that, void *provider)")
     create_guard = function_body(source, "void *Gen11::vfCreateScheduler(void *accelerator)")
     selection = create_guard.index("(getMember<uint32_t>(accelerator, 0x1190) >> 23) & 7U")

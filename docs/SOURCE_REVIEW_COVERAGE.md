@@ -80,6 +80,12 @@ pending; base gated invocation alone is not a cleanup success proof.
 reviewed/pinned; complete reference XNU runAction read. Actual Boot virtual
 +0x1c8, stored removal action and concrete control-gate type remain pending.
 
+2026-10-04 Scheduler4 failure repair: VF-only bounded 0xaf init patch removes
+premature free, retains factory release for all failures. Both payloads and
+in-memory patch tests verify only six bytes change. _kfree_ext identity resolved;
+its extra unnamed helpers are not treated as one reviewed allocator function.
+Runtime validation and independent callback/drain safety remain pending.
+
 2026-10-04 base deletion: actual Boot OSObject free wrapper 0x30 and sized
 delete wrapper 0x40, plus TGL Scheduler4 D0 0x22 reviewed/pinned. Effective
 deleting slot and external base-vtable/delete relocations verified. Allocator

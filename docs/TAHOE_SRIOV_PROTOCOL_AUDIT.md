@@ -27,6 +27,23 @@ enforce fault-before-panic and prohibit native/helper/backing side effects.
 
 ## Mapping getter provenance follow-up (offline)
 
+Scheduler4 partial-init ownership repair: VF patch admission now resolves
+initWithAccelerator and the following waitForGpuIdle symbol, requires the
+pinned 0xc2 symbol distance, and searches only the actual 0xaf init window.
+One exact 16-byte anchor preserves owner/vtable loads and false return while
+NOPing only the six-byte virtual free call at 0x1da6c. Factory release remains
+unchanged for every failed init, including base-init failure, so that the
+factory performs the normal single final cleanup. Removing every factory
+release instead would leak the base-init failure case and is not used.
+Both payload fixtures and in-memory patch tests verify unique bounded match,
+exact six changed bytes, unchanged surrounding payload and retained factory
+release. Production source bounds/array use are checked. PF patch admission
+is unchanged; this is installed within the classified VF branch. Boot sized
+delete's callee resolves to _kfree_ext; its exploratory nearest-symbol 0x340
+span includes unnamed helpers, not one allocator body. Kernel allocator
+transitive review remains incomplete and is not a general memory-safety proof.
+No deployment or dynamic fault injection; timer-owner/drain obligations remain.
+
 Concrete deleting-destructor follow-up: complete TGL Scheduler4 D0 0x22
 body reviewed/pinned, effective virtual+8 and both base-vtable/sized-delete
 relocations verified for each payload. D0 calls its base destructor then

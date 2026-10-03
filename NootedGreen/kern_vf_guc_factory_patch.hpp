@@ -1,10 +1,24 @@
-/* Exact failed-init factory repair for the UUID-pinned Tahoe TGL accelerator. */
+/* Exact failed-init ownership repairs for the UUID-pinned Tahoe TGL accelerator. */
 #ifndef NGREEN_VF_GUC_FACTORY_PATCH_HPP
 #define NGREEN_VF_GUC_FACTORY_PATCH_HPP
 
 #include <stdint.h>
 
 namespace NGVfGuCFactoryPatch {
+
+// Scheduler4's streamer-failure branch manually deletes the scheduler, then
+// withAccelerator releases it again. Keep the factory's required release for
+// all failures (including base-init failures); omit only this premature free.
+constexpr uint8_t schedulerInitFreeFind[] = {
+	0x49, 0x8b, 0x04, 0x24, 0x4c, 0x89, 0xe7,
+	0xff, 0x90, 0x90, 0x00, 0x00, 0x00,
+	0x45, 0x31, 0xf6,
+};
+constexpr uint8_t schedulerInitFreeReplace[] = {
+	0x49, 0x8b, 0x04, 0x24, 0x4c, 0x89, 0xe7,
+	0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
+	0x45, 0x31, 0xf6,
+};
 
 // IGHardwareGuC::initWithOptions() calls the object's virtual free() on every
 // failure exit. OSObject::free() deletes the instance, but withOptions() then
