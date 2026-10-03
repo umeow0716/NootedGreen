@@ -47,6 +47,20 @@ writers before observing hardware completion. The current GuC wrapper's tail
 publication and conservative enabled-busy behavior remain unchanged. This
 review does not yet implement coverage tracking or prove mapping flag/coherency.
 
+Producer ownership follow-up: context init passes its newly created ring to
+FIFO::withOptions, which calls FIFO::initWithOptions. The FIFO stores and
+retains that ring at `+0x130`; FIFO::free releases and clears the same member.
+Both payloads now pin the factory graph and retain/final-release instructions.
+Scheduler4 push itself only has the one GuC submit call, then returns its
+boolean result; its original body ignores the incoming stamp-presence booleans.
+Any producer coverage bridge must preserve native argument/result semantics
+and associate metadata with the exact descriptor, stamp, tail and invocation.
+A global temporary flag would race concurrent producers; holding the GuC queue
+lock across a call to the native push would recursively enter that same lock.
+Neither approach is an acceptable implementation. Active object lifetime,
+per-invocation metadata and publication/failure ordering remain design gates
+before enabling any stamp-based idle/reclamation behavior.
+
 Inherited implementation found locally (2026-10-04): archived Tahoe 25G229
 `SystemKernelExtensions.kc`, SHA-256
 `5cb1be1dc530b4b953a33943567589101d3ac46bb8cf90728566ee7e5b1fa214`,

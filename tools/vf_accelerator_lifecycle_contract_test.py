@@ -104,6 +104,9 @@ SCHEDULER4_UNBIND = "__ZN12IGScheduler46unbindEP17IGHardwareContext"
 SCHEDULER4_PUSH = "__ZN12IGScheduler44pushEP17IGHardwareContextjjbb"
 RING_SUBMIT_TO_RING = "__ZN20IGHardwareRingBuffer12submitToRingEv"
 GUC_SUBMIT_WORK_ITEM = "__ZN13IGHardwareGuC14submitWorkItemEjRK21SGfxContextDescriptor10IGHwCsTypejjj"
+FIFO_FACTORY = "__ZN18IGAccelFIFOChannel11withOptionsEP22IOGraphicsAccelerator2P20IGHardwareRingBuffer"
+FIFO_INIT = "__ZN18IGAccelFIFOChannel15initWithOptionsEP22IOGraphicsAccelerator2P20IGHardwareRingBuffer"
+FIFO_FREE = "__ZN18IGAccelFIFOChannel4freeEv"
 GET_DEFAULT_RESET = "__ZN16IntelAccelerator20getDefaultResetValueEj"
 TRACE_DISABLE = "__ZN25IGAccelTraceStreamManager17disableCollectionE27TraceStreamCollectionChange"
 TRACE_SHUTDOWN = "__ZN25IGAccelTraceStreamManager8shutdownEv"
@@ -413,6 +416,20 @@ def macho_inventory(path):
     push_body = image[push_start:next_symbol(push_start)]
     if len(direct_branches(SCHEDULER4_PUSH, GUC_SUBMIT_WORK_ITEM)) != 1:
         raise AssertionError(f"{path}: scheduler/GuC submission graph changed")
+    if len(direct_branches(CONTEXT_INIT, FIFO_FACTORY)) != 1 or \
+            len(direct_branches(FIFO_FACTORY, FIFO_INIT)) != 1:
+        raise AssertionError(f"{path}: FIFO/ring producer ownership graph changed")
+    fifo_init_start = value(FIFO_INIT)
+    fifo_init_body = image[fifo_init_start:next_symbol(fifo_init_start)]
+    if fifo_init_body.count(bytes.fromhex(
+            "48 89 97 30 01 00 00 48 8b 02 48 89 d7 ff 50 20")) != 1:
+        raise AssertionError(f"{path}: FIFO producer ring retain changed")
+    fifo_free_start = value(FIFO_FREE)
+    fifo_free_body = image[fifo_free_start:next_symbol(fifo_free_start)]
+    if fifo_free_body.count(bytes.fromhex(
+            "49 8b be 30 01 00 00 48 85 ff 74 06 48 8b 07 ff 50 28 "
+            "49 c7 86 30 01 00 00 00 00 00 00")) != 1:
+        raise AssertionError(f"{path}: FIFO producer ring final release changed")
     for anchor in ("41 89 d2 48 89 f2 48 8b 86 b8 00 00 00",
                    "44 8b 40 20", "48 81 c2 89 00 00 00",
                    "48 8b 80 30 01 00 00 44 8b 48 44 44 89 14 24"):
