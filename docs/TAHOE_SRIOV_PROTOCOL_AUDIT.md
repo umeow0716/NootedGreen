@@ -27,6 +27,17 @@ enforce fault-before-panic and prohibit native/helper/backing side effects.
 
 ## Mapping getter provenance follow-up (offline)
 
+Command gate allocation/init follow-up: complete Boot command-gate init and
+metaclass allocator were read. Init delegates owner/action to inherited
+IOEventSource init and adds optional statistics; effective base virtual
+`+0x1b8` and inherited call are pinned. Allocator installs base IOCommandGate
+vtable and initializes references/metaclass accounting; its 0x80-byte window
+is separately pinned because the nearest symbol also contains an unrelated
+unnamed initializer. The exact vtable-address LEA is checked. Actual workloop
+initializer metaclass pointer resolution and inherited owner/action storage
+remain pending; this does not prove all preexisting gates or driver workloops
+use the base type, nor does it remedy unchecked scheduler removal failure.
+
 Base workloop initializer follow-up: complete Boot init (0x1a0 bytes) and
 base init virtual are locally pinned. It obtains maintenance action through
 workloop virtual `+0x118` (base target `_maintRequest`), allocates a control gate

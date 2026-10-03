@@ -200,6 +200,8 @@ def check_boot_atomic(system, path):
     for name in (b"__ZTV10IOWorkLoop", b"__ZN10IOWorkLoop8openGateEv",
                  b"__ZN10IOWorkLoop4initEv",
                  b"__ZTV13IOCommandGate", b"__ZN13IOCommandGate10runCommandEPvS0_S0_S0_",
+                 b"__ZN13IOCommandGate4initEP8OSObjectPFiS1_PvS2_S2_S2_E",
+                 b"__ZNK13IOCommandGate9MetaClass5allocEv",
                  b"__ZN13IOCommandGate9runActionEPFiP8OSObjectPvS2_S2_S2_ES2_S2_S2_S2_",
                  b"__ZN10IOWorkLoop13_maintRequestEPvS0_S0_S0_",
                  b"__ZN10IOWorkLoop9closeGateEv",
@@ -225,6 +227,9 @@ def check_boot_atomic(system, path):
     # These Boot KC vtable entries are canonical pointers, NOT System KC
     # chained cache-level targets. Do not silently apply the latter decoder.
     for table, slot, method, length, digest in (
+            (b"__ZTV13IOCommandGate", 0x1b8,
+             b"__ZN13IOCommandGate4initEP8OSObjectPFiS1_PvS2_S2_S2_E", 0x30,
+             "168ec388c4b98c395fa7cb00389015d571f9153b32d6a717f8f41b9955c125b3"),
             (b"__ZTV10IOWorkLoop", 0x88, b"__ZN10IOWorkLoop4initEv", 0x1a0,
              "3f0dee6fd2d4c2cbf11c7fcd7b0788c9bf2abb3c08526ae060fe159dfb7367f7"),
             (b"__ZTV13IOCommandGate", 0x1c8,
@@ -353,6 +358,22 @@ def check_boot_atomic(system, path):
         assert kernel_read(workloop_init + offset, len(bytes.fromhex(instruction))) == bytes.fromhex(instruction), \
             "changed workloop control-gate maintenance binding instruction"
     print("PASS Boot KC base workloop initialization binds maintenance action")
+    allocator = symbols[b"__ZNK13IOCommandGate9MetaClass5allocEv"][0]
+    assert hashlib.sha256(kernel_read(allocator, 0x80)).hexdigest() == \
+        "73955144ac7f8379c9117469d11186a3c0f61d1d121055713e6fcd754c738c41", \
+        "changed command-gate allocator window"
+    # Next symbol includes a separate unnamed initializer after this window.
+    lea = allocator + 0x4b
+    instruction = kernel_read(lea, 7)
+    assert instruction[:3] == bytes.fromhex("48 8d 0d") and \
+        lea + 7 + struct.unpack_from("<i", instruction, 3)[0] == symbols[b"__ZTV13IOCommandGate"][0] + 16, \
+        "command-gate allocator no longer installs base vtable"
+    init = symbols[b"__ZN13IOCommandGate4initEP8OSObjectPFiS1_PvS2_S2_S2_E"][0]
+    call = init + 9
+    instruction = kernel_read(call, 5)
+    assert instruction[0] == 0xe8 and call + 5 + struct.unpack_from("<i", instruction, 1)[0] == symbols[b"__ZN13IOEventSource4initEP8OSObjectPFvS1_zE"][0], \
+        "changed command-gate inherited init target"
+    print("PASS Boot KC command-gate allocator vtable and inherited init edge")
     assert system[0x10132:0x10138] == bytes.fromhex("ff 25 60 40 01 00"), "changed atomic import stub"
     raw = struct.unpack_from("<Q", system, 0x24198)[0]
     assert (raw >> 30) & 3 == 0 and raw >> 63 == 0, "unexpected atomic import cache level/auth"

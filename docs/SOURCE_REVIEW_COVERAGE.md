@@ -7,6 +7,11 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 command gate allocator/init follow-up: complete Boot init and
+allocator reviewed; allocator separately bounded from unnamed initializer.
+Local fixture pins base vtable installation, init virtual and inherited edge.
+Caller metaclass resolution and inherited action storage remain pending.
+
 2026-10-04 base workloop initializer follow-up: complete Boot init reviewed;
 local fixture pins full body, base init/maintenance virtuals and control-gate
 action binding instructions. Metaclass/concrete overrides and preexisting
