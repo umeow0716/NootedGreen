@@ -7,6 +7,12 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 task address-space construction: complete list init (0xfc) and new
+per-task page-table factory selector (0xa6) reviewed/pinned with synchronization
+edges. PPGTT-enabled kernel tasks can contain private+global tables, disproving
+GGTT-only rollback as a complete manager repair. Factory/synchronization bodies,
+pointer ownership and multi-space transaction/invalidation remain pending.
+
 2026-10-04 complete native commitRange review: 0x41c body, manager direct call,
 global mapping virtual slots and ignored suffix result checked in both payloads.
 Later segment failure preserves earlier successful prefix; false commit does

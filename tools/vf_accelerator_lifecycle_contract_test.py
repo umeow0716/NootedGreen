@@ -9,6 +9,8 @@ import sys
 # Complete reviewed native bodies. This fixes the concrete Intel override
 # graph, not inherited timer APIs, dynamic callbacks or runtime completion.
 STAMP_IRQ_NATIVE = {
+    "__ZN11IGAccelTask24initManagedPageTableListEv": (0xfc, "4b026fd8979c2010b304895b2d6f61c69167e83923cb7070cdc238b179d45e77"),
+    "__ZN15IGMemoryManager19newPageTableForTaskEP11IGAccelTask": (0xa6, "9f8b0a4af92e2da84cac933655cc33c6ed7ed5a31236a73a91955d91ba76d911"),
     "__ZN19IGHardwarePageTable11commitRangeERK14IGAddressRangePK16IGAccelMemoryMap": (0x41c, "e063629df4a8d16d85cf3d1b599c036372c0763b560a6a35289d488d80ac410a"),
     "__ZN15IGMemoryManager26commitIntoPageTableForTaskEP11IGAccelTaskP16IGAccelMemoryMap": (0x11a, "a433c1af43e1fbac1d82da400c6ec1857881e6385c07019d782441fe209713d1"),
     "__ZN16IGAccelMemoryMap22commitIntoGPUPageTableEv": (0x140, "b8318f92ed0a3a62eb086877f6f5a65e0c32cc53d610bcad69540967279189e4"),
@@ -499,6 +501,12 @@ def macho_inventory(path):
     display_table = value("__ZTV18IGAccelDisplayPipe")
     resource_table = value("__ZTV15IGAccelResource")
     map_table = value("__ZTV16IGAccelMemoryMap")
+    for method, target, call in (
+            ("__ZN15IGMemoryManager19newPageTableForTaskEP11IGAccelTask", "__ZN31IGHardwarePerProcessPageTable3211withOptionsEP16IntelAcceleratorP11IGAccelTask", 0xf8ff),
+            ("__ZN15IGMemoryManager19newPageTableForTaskEP11IGAccelTask", "__ZN31IGHardwarePerProcessPageTable6411withOptionsEP16IntelAcceleratorP11IGAccelTask", 0xf90d),
+            ("__ZN15IGMemoryManager19newPageTableForTaskEP11IGAccelTask", "__ZN29IGHardwarePerProcessPageTable15synchronizeWithI25IGHardwareGlobalPageTableEEvPKT_RK14IGAddressRangeb", 0xf93c),
+            ("__ZN15IGMemoryManager19newPageTableForTaskEP11IGAccelTask", "__ZN29IGHardwarePerProcessPageTable15synchronizeWithIS_EEvPKT_RK14IGAddressRangeb", 0xf969)):
+        assert direct_branches(method, target) == [call], f"{path}: changed native per-task page-table factory/synchronization edge"
     global_table = value("__ZTV25IGHardwareGlobalPageTable")
     for slot, method in ((0x118, GLOBAL_MAP_RANGE), (0x120, GLOBAL_MAP_ROTATED), (0x138, GLOBAL_MAP_DUMMY)):
         assert struct.unpack_from("<Q", image, global_table + 16 + slot)[0] == value(method), f"{path}: changed global commit-range mapping virtual"

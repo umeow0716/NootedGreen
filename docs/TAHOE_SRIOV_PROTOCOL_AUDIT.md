@@ -6304,6 +6304,40 @@ would not establish ownership/concurrency; silent false or fabricated success
 would preserve the hazard. No new production patch/runtime test this checkpoint;
 Host containment hold remains active.
 
+# Task address-space list can contain both PPGTT and GGTT
+
+Reviewed/pinned complete initManagedPageTableList (0xfc) and
+newPageTableForTask (0xa6) in both native payloads. An exploratory disassembly
+through 0x7cdc included the separate following initStampAndScratchPages body;
+actual next-symbol boundary 0x7bea was checked before pinning the list function.
+No combined-span claim is made.
+
+When accelerator feature +0x1191 bit 0 (PPGTT) is enabled, list construction
+allocates a node for task per-process page table +0x260. It additionally adds
+manager's global table +0x98 when task context/classification conditions permit;
+kernel/bootstrap task conditions can therefore yield BOTH per-process and
+global nodes. Later non-kernel task conditions suppress the global node when
+PPGTT is enabled. With PPGTT disabled, the examined list path adds global only.
+Nodes link through tail +0x270; allocation failure frees the first node before
+returning false. The list stores raw table pointers without local retain.
+Constructor ordering/table pointer validity and ownership release still need
+their own proof.
+
+newPageTableForTask selects 32-bit or 64-bit per-process factories by hardware
+context address mode, checks factory null, then synchronizes kernel-task table
+from global or another task from accelerator kernel-task per-process table.
+Those synchronization return paths are void at these callsites; internal
+allocation/mapping/failure semantics remain pending. Factory/synchronization
+direct identities are pinned, not their full callees.
+
+This supplies concrete evidence against a GGTT-only rollback being a complete
+manager-commit repair. The VF bootstrap classification wrapper changes which
+source is used for the first task; it does NOT replace its per-process object
+with the global object. Do not disable PPGTT or fabricate all-task kernel
+classification to avoid the multi-address-space lifetime problem. Full manager
+transaction, per-process invalidation and descriptor retention remain required.
+No production/runtime/Host GPU mutation this checkpoint.
+
 # Mapping recovery frees other allocations and retries preparation
 
 Reviewed/pinned complete freeToPrepareMapping (0x260) and base
