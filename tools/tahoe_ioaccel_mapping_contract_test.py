@@ -197,6 +197,10 @@ def check_boot_atomic(system, path):
                                    b"__ZN13IOEventSource4initEP8OSObjectPFvS1_zE",
                                    b"__ZN18IOTimerEventSource14setTimeoutFuncEv")}
     symbols[b"__ZN18IOTimerEventSource17timeoutAndReleaseEPvS0_"] = []
+    for name in (b"__ZTV10IOWorkLoop", b"__ZN10IOWorkLoop8openGateEv",
+                 b"__ZN10IOWorkLoop9closeGateEv",
+                 b"__ZN10IOWorkLoop17removeEventSourceEP13IOEventSource"):
+        symbols[name] = []
     for command, offset in commands(boot, kernel[0]):
         if command != 2:
             continue
@@ -217,6 +221,12 @@ def check_boot_atomic(system, path):
     # These Boot KC vtable entries are canonical pointers, NOT System KC
     # chained cache-level targets. Do not silently apply the latter decoder.
     for table, slot, method, length, digest in (
+            (b"__ZTV10IOWorkLoop", 0x178, b"__ZN10IOWorkLoop8openGateEv", 0x70,
+             "4474d3fed4f663608045d23044b0ab55df1259532e987df6ae9ee3c9c3ad9e8a"),
+            (b"__ZTV10IOWorkLoop", 0x180, b"__ZN10IOWorkLoop9closeGateEv", 0x90,
+             "423e960ba7f1dcd3e429a66e4fe1e83046e4eb9ec13d301178fe085736ff5d89"),
+            (b"__ZTV10IOWorkLoop", 0x148, b"__ZN10IOWorkLoop17removeEventSourceEP13IOEventSource", 0x30,
+             "d055def6065f00813231758928fc7c6a20c8383b7f8ff890f7353517cde22747"),
             (b"__ZTV18IOTimerEventSource", 0x1c0,
              b"__ZN18IOTimerEventSource4initEP8OSObjectPFvS1_PS_E", 0x50,
              "a7e670f9a67cfecffd99d5280e9841fa418f6f9281d45edef55f3a2598ce63bb"),
@@ -291,6 +301,14 @@ def check_boot_atomic(system, path):
         assert kernel_read(timeout + offset, len(bytes.fromhex(instruction))) == bytes.fromhex(instruction), \
             "changed passive timer generation/gate/release instruction"
     print("PASS Boot KC passive timer generation, workloop gate and release body")
+    for method, offset, opcode, target in (
+            (b"__ZN10IOWorkLoop9closeGateEv", 0x23, 0xe8, b"_IOLockLock"),
+            (b"__ZN10IOWorkLoop8openGateEv", 0x5c, 0xe9, b"_IOLockUnlock")):
+        call = symbols[method][0] + offset
+        instruction = kernel_read(call, 5)
+        assert instruction[0] == opcode and call + 5 + struct.unpack_from("<i", instruction, 1)[0] == symbols[target][0], \
+            "changed workloop recursive gate mutex edge"
+    print("PASS Boot KC recursive workloop gate and removal delegation bodies")
     assert system[0x10132:0x10138] == bytes.fromhex("ff 25 60 40 01 00"), "changed atomic import stub"
     raw = struct.unpack_from("<Q", system, 0x24198)[0]
     assert (raw >> 30) & 3 == 0 and raw >> 63 == 0, "unexpected atomic import cache level/auth"

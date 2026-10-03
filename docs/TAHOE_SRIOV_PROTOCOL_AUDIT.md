@@ -27,6 +27,17 @@ enforce fault-before-panic and prohibit native/helper/backing side effects.
 
 ## Mapping getter provenance follow-up (offline)
 
+Workloop gate follow-up: complete Boot base closeGate/openGate/removeEventSource
+bodies and effective base virtuals are locally pinned. CloseGate uses workloop
+`+0x10` recursive gate storage: same current-thread owner increments recursion;
+otherwise it locks the mutex, records owner and initializes count. OpenGate
+decrements count and only clears owner/unlocks on the last recursion. Neither
+method proves a concrete driver workloop has no override. RemoveEventSource
+does not itself acquire that mutex in its body; it delegates to control gate
+`+0x20` virtual `+0x1c0` with removal opcode 1. That command-gate method and
+removal action still require review before linking cleanup to callback drain.
+Exact mutex call/tail targets are checked locally; no VM/runtime gate changes.
+
 Passive timer callback follow-up: complete Boot `timeoutAndRelease` (0x120
 bytes) now has a local body contract. It checks initial enabled/action state,
 obtains the expansion-stored workloop, enters its virtual `+0x180`, rereads

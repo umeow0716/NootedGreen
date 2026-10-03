@@ -7,6 +7,11 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 workloop gate follow-up: complete Boot base closeGate/openGate and
+removeEventSource reviewed and locally pinned with effective virtuals and
+mutex edges. Recursive ownership distinguished from callback-drain proof;
+control-gate command/removal action and concrete overrides remain pending.
+
 2026-10-04 passive timer callback follow-up: complete Boot timeoutAndRelease
 reviewed and locally pinned with generation/gate/release instructions. Action
 helper, schedule-time retains, gate implementations and removal drain remain
