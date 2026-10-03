@@ -48,6 +48,12 @@ release. Shared-buffer explicit CPU unlock clears its CPU mapping independently
 of object retention. Relocations and teardown anchors are now pinned, but
 virtual/inherited unlock reachability is not certified and no hardware-idle
 claim follows from a method named complete.
+The archived Tahoe 25G229 SystemKC was subsequently located and its embedded
+IOAccel symbols and selected mapping implementations read directly. A separate
+hash-pinned local fixture test covers the getter's flag/field branch, the
+counter-only complete method, and finishEvent's event-machine dispatch. The
+inherited implementation is available for further analysis; its full review
+and mapping/event lifetime proof remain incomplete. The KC is not in CI.
 
 2026-10-04 ownership review delta: V263 fail-stops uncertain void descriptor
 detach, and V264 independently retains the actual DMA ring buffer in each

@@ -10,6 +10,27 @@ enforced containment precondition.
 
 ## Mapping getter provenance follow-up (offline)
 
+Inherited implementation found locally (2026-10-04): archived Tahoe 25G229
+`SystemKernelExtensions.kc`, SHA-256
+`5cb1be1dc530b4b953a33943567589101d3ac46bb8cf90728566ee7e5b1fa214`,
+contains IOAcceleratorFamily2 at fileset offset `0x14b65000` with a readable
+embedded symbol table. `tools/tahoe_ioaccel_mapping_contract_test.py` verifies
+its identity, fileset/symbol uniqueness, segment mapping and exact reviewed
+instruction prefixes; run it separately against that local KC. The proprietary
+KC is not committed or required by remote CI. This corrects the prior working
+assumption that no local inherited implementation could be inspected.
+
+At `0x14bb76ec`, `getGPUVirtualAddress` tests mapping flags `+0x10 & 0x40`:
+the clear branch returns `+0x98`; the set branch delegates through backing
+memory `+0x18`, virtual `+0x158`. Do not infer GGTT solely from the returned
+field or confuse its flag with packet global-GTT selection. At `0x14bb788c`,
+`complete` is only `dec dword [+0x0c]` and return: it does not wait, poll a GPU
+stamp, deregister a context or invalidate a page table. At `0x14bb7896`,
+`finishEvent` tail-dispatches accelerator `+0x380` event-machine virtual
+`+0x188`, passing mapping event storage `+0x38`. The latter event machinery
+must be reviewed before claiming mapping-free waits guarantee GPU quiescence.
+These exact binary contracts do not certify allocation, DMA order or runtime.
+
 Both pinned accelerator payloads resolve `IGAccelMemoryMap` vtable `+0x128`
 through an external unsigned 64-bit relocation to
 `IOAccelMemoryMap::getGPUVirtualAddress`. The mapped-buffer getter delegates
