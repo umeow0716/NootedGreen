@@ -27,6 +27,23 @@ enforce fault-before-panic and prohibit native/helper/backing side effects.
 
 ## Mapping getter provenance follow-up (offline)
 
+Admission boundary follow-up: reread production vfNativeGpuWorkReady,
+acceleratorStop, context enter/leave/RAII close-and-wait, quiesce and counted
+attach/submit entrypoints. DeviceStopping is a declaration only: readiness
+does not consume it, intentionally preserving native finishAllStamps retirement
+before engine-stop quiescence. Quiesce seals submission and closes/count-drains
+GuC attach/detach/submit, not native event waiters or periodic callback owners.
+Added an explicit production comment to prevent confusing transport readiness
+with a lifetime lease. Existing actual readiness tests now exercise sequential
+producer-stop/IRQ-disable/poll-drain/CTB-seal policy; the abstract timer model
+also retains prior-reference and subsequent-admission counterexamples after
+balanced finish waiter exit. No runtime behavior changed. The missing external
+admission boundary cannot be repaired by simply adding DeviceStopping to every
+readiness check, which may block required native retirement submissions.
+Full offline suite passes at /tmp/ngreen-static.EaVZKt; only the two existing
+SDK macro warnings remain. Checkpoint 8b65e9e CI 37155938371 passed. VM hold
+is unchanged; no runtime teardown or hardware acceleration was exercised.
+
 Per-channel finish follow-up: Fast2 effective +0x150 decodes level-1 target
 finishStamp at 0x14b9554c, complete 0x158 body reviewed/pinned. It returns early
 if stamp delta is nonpositive; otherwise reads mapped stamp, dispatches

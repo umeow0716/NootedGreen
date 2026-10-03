@@ -73,6 +73,16 @@ def main():
         assert not unsafe, order
         successful_releases += released
     assert successful_releases > 0  # Avoid a vacuous never-release policy.
+    # A finish waiter balances only its own reference. It cannot certify
+    # removal of an earlier event's reference or exclude a new entrant.
+    for prior_refs in range(4):
+        refs = prior_refs
+        refs += 1  # admitted finish waiter
+        refs -= 1  # balanced finish waiter exit (including error cleanup)
+        assert refs == prior_refs
+        assert (refs == 0) == (prior_refs == 0)
+        refs += 1  # admission still open: a later waiter can re-enable source
+        assert refs > 0
     # Kernel evidence establishes timeout's gate-before-callback-mutex path,
     # and removeEventSource delegates synchronously through a command gate.
     # Model the proposed (NOT implemented) cleanup mutex-before-remove path.

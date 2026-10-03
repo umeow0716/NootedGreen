@@ -7,6 +7,21 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 periodic/fallback consolidation: complete native periodic enable,
+disable, callback and shared cleanup; Intel event init/free/callback/stamp
+enable-disable/enableSchedulerEvents; streamer5 init/register/context-switch
+enable; SystemKC event Fast2/base free, stop/block, finishAllStamps,
+finishStamp, per-event stamp-disable, waitForStamp and timeout reference cleanup
+were read and locally pinned. Concrete normal accelerator stop virtual imports
+and null-provider inherited-stop bypass are resolved. Earlier pending notes
+below are chronological, not proof that these resolved windows are unread.
+Unresolved: external event/waiter admission, retirement of all prior interrupt
+references, callback-owner drain, source-removal failure handling and safe
+integration with the GuC counted gate. DeviceStopping does not close readiness;
+the current counted gate covers attach/detach/submit only. No complete global
+caller inventory, DMA containment, hardware acceleration or all-file review
+is claimed. Abstract models expose counterexamples, not native implementation.
+
 2026-10-04 scheduling retention follow-up: complete Boot wakeAtTime(options)
 read/pinned with passive source/workloop reference pairs. Stored owner is not
 independently retained here; scheduling/cancel helper semantics remain pending.

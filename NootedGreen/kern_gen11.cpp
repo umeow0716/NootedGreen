@@ -242,6 +242,11 @@ static bool vfInterruptTransportReady()
 
 static bool vfNativeGpuWorkReady()
 {
+	// This is transport readiness, not an external-user admission or owner-
+	// lifetime lease. DeviceStopping deliberately does not close it: native
+	// finishAllStamps may still need retirement submissions before engine stop.
+	// The counted GuC operation gate covers attach/detach/submit only; it does
+	// not drain native event-machine waiters or periodic timer callback owners.
 	OSSynchronizeIO();
 	return NGVfSubmission::ready({
 		gVfIdentity == VfIdentity::Virtual,
