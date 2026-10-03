@@ -27,6 +27,25 @@ enforce fault-before-panic and prohibit native/helper/backing side effects.
 
 ## Mapping getter provenance follow-up (offline)
 
+Upstream display ABI/lifetime follow-up: fully reviewed submitFlipBufferTransaction
+0x14bafaf0 (0x12a), DisplayPipeUserClient stop 0x14bb56dc (0x12c), requestNotify
+0x14bb5cb6 (0xde), transactionEnd 0x14bb622e (0x232). Flip submit ignores
+queue-slot wait result then tails into transaction_queue; user-client stop
+holds accelerator mutex/busy lock, removes notification ignoring its result,
+notifies pipe and releases/clears client pipe+0xe8 before inherited stop.
+requestNotify checks pipe+0xe8 and propagates returned gate result. transactionEnd
+checks client transaction state, pipe terminal flags and accelerator enabled
+state; when queue is full it retains pipe, releases accelerator busy/mutex,
+waits without these locks, then reacquires and releases pipe before retrying
+state checks. The wait's result is ignored. This establishes a real temporary
+pipe-lifetime lease and avoids holding accelerator locks across that wait;
+it is not global caller admission closure or proof of timer owner drain.
+Added four complete hashes, four upstream graph edges and result handling
+anchors; local paired KC passes. Uniform failure-return stubs across these
+callers are not valid repairs: ignored results/required cleanup must be handled
+at their actual owners. No production/VM changes. Next actual user-client/pipe
+ownership registration and terminal state ordering for VF-scoped integration.
+
 Lazy display setup/error-boundary follow-up: complete pipe init
 0x14bae358 (0x32c) reviewed: stores accelerator+0x88/display-machine+0x90/
 framebuffer+0x98, initializes four embedded events/storage/notification; it

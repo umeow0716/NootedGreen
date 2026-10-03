@@ -35,6 +35,10 @@ EVENT_DISABLE_STAMP_LOCKED = "__ZN20IOAccelEventMachine223disable_stamp_interrup
 EVENT_ENABLE_STAMP = "__ZN20IOAccelEventMachine220enableStampInterruptEi"
 EVENT_DISABLE_STAMP = "__ZN20IOAccelEventMachine221disableStampInterruptEi"
 EVENT_OWNER_BODIES = {
+    "__ZN18IOAccelDisplayPipe27submitFlipBufferTransactionEP12IOAccelEventjP16IOAccelResource2S3_": (0x12a, "3144a7201d7237f7128c77f2c897e12920caa14c8292ecaa6b621fb572f5991c"),
+    "__ZN29IOAccelDisplayPipeUserClient24stopEP9IOService": (0x12c, "1860c591fd835a8f4041dc81157830c8f649411340c23420302091b923438d2e"),
+    "__ZN29IOAccelDisplayPipeUserClient213requestNotifyEPyP35IOAccelDisplayPipeRequestNotifyArgs": (0xde, "f459216034eb6d3b960fe64dc7ef6af8f7774cf8a5cd1e1825c11f676d586aa6"),
+    "__ZN29IOAccelDisplayPipeUserClient214transactionEndEP33IOAccelDisplayPipeTransactionArgs": (0x232, "a04f9eb8f67fb1ac6479ebaea99a3bb3658e976367a5d44dbe2ee0d7b85f275e"),
     "__ZN18IOAccelDisplayPipe4initEP22IOGraphicsAccelerator2P21IOAccelDisplayMachineP13IOFramebufferj": (0x32c, "757d5afc16b89e8d8baa3866f93be1fb37a8c81ba1266cb2a1a581330e65a48d"),
     "__ZN18IOAccelDisplayPipe26wait_for_queue_slot_nolockEv": (0x48, "5a942dec43525fd589bd15c359dda7012773fc1577e450a5c797af87a4b32479"),
     "__ZN18IOAccelDisplayPipe17transaction_queueEP30IOAccelDisplayPipeTransaction2": (0x4a, "84c686f29480a66d4baed253b1bcf7c6cbf1a4bffc692f0af612b4b8348df2fa"),
@@ -717,6 +721,14 @@ def check(path, boot_path=None):
     assert stop_owner.count(bytes.fromhex("ff 90 48 01 00 00")) == 3, "changed base event stop source-removal inventory"
     print("PASS inherited event owner free/stop and per-event stamp-disable bodies (outer drain not proven)")
     lazy_setup = address_of("__ZN18IOAccelDisplayPipe14setup_workloopEv")
+    for call, target in ((0x14bafbed, "__ZN18IOAccelDisplayPipe26wait_for_queue_slot_nolockEv"),
+                         (0x14bb636a, "__ZN18IOAccelDisplayPipe26wait_for_queue_slot_nolockEv"),
+                         (0x14bb5758, "__ZN18IOAccelDisplayPipe13remove_notifyEP31IOAccelDisplayPipeNotifyRequest"),
+                         (0x14bb5d43, "__ZN18IOAccelDisplayPipe14request_notifyEPyP40IOAccelDisplayPipeRequestNotifyGatedArgs")):
+        encoded = read(call, 5)
+        assert encoded[0] == 0xe8 and call + 5 + struct.unpack_from("<i", encoded, 1)[0] == address_of(target), "changed display upstream lazy-operation caller edge"
+    assert read(0x14bb5d48, 3) == bytes.fromhex("41 89 c6"), "changed requestNotify gate result propagation"
+    assert read(0x14bb636f, 7) == bytes.fromhex("4c 8b ab d8 00 00 00"), "changed transactionEnd ignored-wait-result cleanup edge"
     for call, load in ((0x14bb017a, 0x14bb017f), (0x14bb01c6, 0x14bb01cb),
                        (0x14bb2f08, 0x14bb2f0d), (0x14bb2fec, 0x14bb2ff1)):
         encoded = read(call, 5)
