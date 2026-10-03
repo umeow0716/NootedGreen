@@ -32,6 +32,12 @@ sources returns the current count to 1,303; this does not close older coverage.
 
 ## Main project coverage
 
+V267 closes the verified VF event-timeout return into inherited restart/retry
+by protocol-fault admission closure followed by guest fail-stop. This is not
+normal recovery or proof that already-published DMA stops. PF and normal debug
+paths are unchanged; the runtime hold, complete review and true completion/
+reclamation obligations remain. The explicit route inventory increases to 94.
+
 2026-10-04 mapping provenance follow-up: both pinned payloads now have
 relocation contracts for the inherited GPU-address getter, system-memory
 factory and mapping-preparation fallback, plus mapping admission/publication

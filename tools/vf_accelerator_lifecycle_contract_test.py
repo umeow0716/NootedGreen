@@ -1382,6 +1382,7 @@ def source_contract(path):
     if pci_resolution.rfind("if (vfActive)", 0, timeout_routes_start) < 0:
         raise AssertionError(f"{path}: timeout isolation routes are not VF-only")
     for symbol, wrapper in (
+            (EVENT_TIMEOUT, "vfRejectEventTimeout"),
             (SCHEDULER_HALT, "vfSuppressTimeoutHardwareAction"),
             (SCHEDULER_RESUME, "vfSuppressTimeoutHardwareAction"),
             (ENCODE_DEBUG, "vfSuppressPhysicalDebugCapture"),
@@ -1395,6 +1396,15 @@ def source_contract(path):
 
     timeout_noop = function_body(
         source, "void Gen11::vfSuppressTimeoutHardwareAction(")
+    timeout_reject = function_body(source, "void *Gen11::vfRejectEventTimeout(")
+    fault = timeout_reject.find("vfMarkProtocolFault(")
+    fail_stop = timeout_reject.find("PANIC_COND(true")
+    if not (0 <= fault < fail_stop < timeout_reject.find("return nullptr;")):
+        raise AssertionError(f"{path}: VF event timeout returns before admission closure/fail-stop")
+    for forbidden in ("FunctionCast", "callback->", "getMember", "OSSynchronizeIO",
+                      "vfSend", "vfRelease", "OSObject", "0x1240"):
+        if forbidden in timeout_reject:
+            raise AssertionError(f"{path}: VF timeout fail-stop gained unsafe side effects: {forbidden}")
     debug_noop = function_body(
         source, "void Gen11::vfSuppressPhysicalDebugCapture(")
     hang_analysis = function_body(

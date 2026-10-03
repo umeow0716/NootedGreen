@@ -2369,8 +2369,10 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			// halt/resume a physical RING_MI_MODE register, capture the legacy GuC
 			// scratch bank and write the physical INSTDONE selector. The ring-buffer
 			// diagnosis entry points additionally dump a broad PF-owned MMIO
-			// registers. Preserve Tahoe's software timeout/event unwind, but make
-			// every physical recovery and diagnostic boundary inert for a VF.
+			// registers. A true event timeout must not return to inherited restart
+			// and wait retry with an unproven hardware state. Diagnostics remain
+			// inert; the separately verified timeout root fail-stops the guest.
+			{"__ZN19IGAccelEventMachine12eventTimeoutEi", vfRejectEventTimeout},
 			{"__ZN11IGScheduler19haltCommandStreamerE10IGHwCsType",
 			 vfSuppressTimeoutHardwareAction},
 			{"__ZN11IGScheduler21resumeCommandStreamerE10IGHwCsType",
@@ -5948,8 +5950,8 @@ bool Gen11::wrapIGScheduler4IsGpuIdle(const void *that) {
 }
 
 // Tahoe's timeout recovery assumes ownership of physical engine stop/start
-// registers. The PF owns those registers for an SR-IOV VF, so retain only the
-// surrounding software event recovery performed by IGAccelEventMachine.
+// registers. The PF owns those registers for an SR-IOV VF. Keep these lower
+// boundaries inert even though the actual event-timeout root now fail-stops.
 void Gen11::vfSuppressTimeoutHardwareAction(void *that, uint32_t engine) {
 	(void)that;
 	(void)engine;
@@ -5960,6 +5962,17 @@ void Gen11::vfSuppressTimeoutHardwareAction(void *that, uint32_t engine) {
 void Gen11::vfSuppressPhysicalDebugCapture(void *that, uint32_t reason) {
 	(void)that;
 	(void)reason;
+}
+
+void *Gen11::vfRejectEventTimeout(void *that, int32_t channel) {
+	(void)that;
+	// V267: inherited restart clears its software error and restarts the timer
+	// even when eventTimeout returns null. Do not return into that retry or
+	// fabricate completion while a direct GuC context may still DMA. Guest
+	// fail-stop is not PF containment; the independent host watcher is required.
+	vfMarkProtocolFault("VF native event timeout without verified GPU quiescence");
+	PANIC_COND(true, "ngreen", "V267: refusing VF event timeout recovery channel=%d", channel);
+	return nullptr;
 }
 
 // A zero signature is the native no-diagnosis result consumed by

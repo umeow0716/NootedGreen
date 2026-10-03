@@ -1,12 +1,29 @@
 # Tahoe SR-IOV protocol audit — in progress
 
 Updated: 2026-10-04. The last dynamic source baseline is `ce166c8`; the latest
-completed offline-reviewed checkpoint is V266 packet backing bounds on
+completed offline-reviewed checkpoint is V267 event-timeout fail-stop on
 `codex/tahoe-sriov-vf`. This is NOT a boot-test candidate or a successful
 driver baseline. The `ce166c8` run produced repeatable host PF DMAR faults
 followed by i915 hangs and a host reboot. Keep `macos-tahoe-sriov` shut off until the
 corrected code passes the remaining offline review and every independently
 enforced containment precondition.
+
+## V267 native event-timeout failure boundary (offline)
+
+The verified Intel `IGAccelEventMachine::eventTimeout(int)` entry now has a
+classified-VF-only replacement. It marks the protocol fault (closing native
+work admission) and fail-stops the guest before returning to inherited restart
+and wait retry. It does not call the original, free backing, fabricate stamp
+progress or issue hardware reset/MMIO. Ordinary debug capture remains a no-op;
+PF behavior remains native. The route inventory is now 94 (91 accelerator,
+3 framebuffer admission symbols); both payloads pin the event-timeout virtual.
+
+This is a provisional error-containment boundary, not implemented GPU recovery,
+successful acceleration or host DMA containment. A guest panic cannot stop
+already-issued DMA or guarantee PF health, so the runtime hold and independent
+host watcher/deadline are still mandatory. Normal completion, stable reclamation
+and a real hardware-safe recovery design remain unfinished. Offline tests
+enforce fault-before-panic and prohibit native/helper/backing side effects.
 
 ## Mapping getter provenance follow-up (offline)
 

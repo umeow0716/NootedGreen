@@ -196,6 +196,7 @@ private:
 	static bool wrapIGScheduler4IsGpuIdle(const void *that);
 	static void vfSuppressTimeoutHardwareAction(void *that, uint32_t engine);
 	static void vfSuppressPhysicalDebugCapture(void *that, uint32_t reason);
+	static void *vfRejectEventTimeout(void *that, int32_t channel);
 	static uint32_t vfSuppressHangAnalysis(void *that);
 	static void vfSuppressHangDump(void *that);
 	static void vfRejectHardwareResetReplay(void *that);
