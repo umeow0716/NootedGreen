@@ -35,6 +35,9 @@ EVENT_DISABLE_STAMP_LOCKED = "__ZN20IOAccelEventMachine223disable_stamp_interrup
 EVENT_ENABLE_STAMP = "__ZN20IOAccelEventMachine220enableStampInterruptEi"
 EVENT_DISABLE_STAMP = "__ZN20IOAccelEventMachine221disableStampInterruptEi"
 EVENT_OWNER_BODIES = {
+    "__ZN13IOAccelMemory7prepareEv": (0x3c, "89a5c623541e69e42f71ec60268646d7d2b06fbd7ac417a9a3913ed271ae31b4"),
+    "__ZN16IOAccelSysMemory20increment_wire_countEv": (0xa, "c50a571103fe420707129053dc70743bdd5d0a800993bca739f16964bbe57584"),
+    "__ZN16IOAccelSysMemory20decrement_wire_countEv": (0x30, "210286dfd0c31e5992460c98a0aa3d9011967dc9897d64bbb209c79a5c66f891"),
     "__ZN16IOAccelSysMemory4wireEv": (0x34c, "b17bb9715b19099e9b766ef221adceb8f45a672016fa498f280af34dadf42e4a"),
     "__ZN22IOGraphicsAccelerator220createDMACommandPoolEv": (0x1d4, "a5b83a1786a350b2e88f404affde3ca5ce3ed042aa192f2782c9e4f7f59bffc8"),
     "__ZN22IOGraphicsAccelerator221releaseDMACommandPoolEv": (0xf0, "d24040c0993ad5617b52e19f965a7cfa37579d527d09ed8dbea943cf381aca6e"),
@@ -862,6 +865,9 @@ def check(path, boot_path=None):
     assert stop_owner.count(bytes.fromhex("ff 90 48 01 00 00")) == 3, "changed base event stop source-removal inventory"
     print("PASS inherited event owner free/stop and per-event stamp-disable bodies (outer drain not proven)")
     lazy_setup = address_of("__ZN18IOAccelDisplayPipe14setup_workloopEv")
+    raw_wire = struct.unpack("<Q", read(address_of("__ZTV16IOAccelSysMemory") + 0x1c0, 8))[0]
+    assert raw_wire >> 63 == 0 and (raw_wire >> 30) & 3 == 1, "changed base sys-memory wire encoding"
+    assert raw_wire & 0x3fffffff == address_of("__ZN16IOAccelSysMemory4wireEv"), "changed explicit Intel-delegated base wire target"
     for address, encoded in ((0x14bba108, "31 d2 ff 91 28 01 00 00"),
                              (0x14bba16b, "31 f6 31 d2 31 c9 45 31 c0 ff 90 40 01 00 00"),
                              (0x14bba18b, "45 31 f6 31 f6 ff 90 30 01 00 00"),

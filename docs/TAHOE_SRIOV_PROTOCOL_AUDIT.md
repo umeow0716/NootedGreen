@@ -6148,3 +6148,30 @@ forced descriptor release: first establish command cleanup/status semantics,
 concrete owner, and whether any mapping/backing can still be referenced by GPU.
 Selected arguments, failure-clear, descriptor-complete and success-bit anchors
 are pinned; no production patch, deployment or VM test.
+
+# Intel wire override and outer prepare-count follow-up
+
+Reviewed/pinned complete Intel IGAccelSysMemory::wire (0x10a) in both archived
+payloads. Its effective object slot +0x1b0 selects that override; it loads the
+already relocation-pinned base sys-memory vtable import at 0xc8140 and calls
+header-relative +0x1c0. The paired System table resolves that slot to base
+sys-memory wire, now explicitly pinned. Intel saves the result, optionally
+emits tracing, and returns the saved result; it supplies no failed-wire cleanup.
+External tracing call relocation placeholders are not evidence of self-calls.
+
+Reviewed/pinned complete base IOAccelMemory::prepare (0x3c): if wired bit +0xc
+bit 1 is absent, call virtual +0x1b0; false returns false without incrementing
+memory prepare count +0x10. Success/already-wired increments that count and
+stores accelerator generation. Consequently the count gate suppresses normal
+repeated wire calls for that entrypoint, but does not clean a failed wire's
+stored command +0x148. Complete's previously reviewed count decrement is not
+a command complete call. Actual higher-level failed-prepare disposal remains
+pending; this is one concrete entrypoint, not all virtual slot users.
+
+Also reviewed/pinned wire-count helpers: increment only increments +0x14;
+decrement first decrements it and, on zero with a parent-count helper returning
+zero, dispatches virtual +0x1b8 unwire. There is no local count-underflow guard
+or failed-wire cleanup branch. Parent-count helper and callers still require
+review. Wire count, memory prepare count and command prepare count are distinct
+fields/protocols; none is a substitute for GPU retirement. No production/runtime
+mutation or broad per-owner-hook safety claim.

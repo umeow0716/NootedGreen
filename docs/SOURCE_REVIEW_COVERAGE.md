@@ -7,6 +7,13 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 Intel wire/caller follow-up: complete native wire override in both
+payloads, base memory prepare and wire-count helpers reviewed/pinned. Explicit
+base-table wire dispatch is paired-KC resolved. Native override forwards false
+without cleanup; base prepare avoids normal rewiring via wired flag, but leaves
+failed-wire command cleanup to outer callers. All failed-prepare disposal,
+parent-count helper and per-owner admission remain uncertified.
+
 2026-10-04 sys-memory wire/prepare follow-up: complete base wire and Boot DMA
 prepare reviewed/pinned, including bind/prepare/failure-clear/descriptor-complete
 anchors. Clean success prepares once; prepare errors after count increment
