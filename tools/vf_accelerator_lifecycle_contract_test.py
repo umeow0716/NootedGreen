@@ -543,12 +543,15 @@ def macho_inventory(path):
     assert hashlib.sha256(image[create:create + 0x36]).hexdigest() == \
         "efc58a38170d12a0f3b2b5c993ab39016364740a93f8816f90c581626696a2b0", \
         f"{path}: changed reviewed scheduler type dispatcher window"
-    for offset, target in ((0x26, "__ZN12IGScheduler415withAcceleratorEP22IOGraphicsAccelerator2"),
+    for offset, target in ((0x20, "__ZN5IGGuC15withAcceleratorEP22IOGraphicsAccelerator2"),
+                           (0x26, "__ZN12IGScheduler415withAcceleratorEP22IOGraphicsAccelerator2"),
                            (0x2c, "__ZN12IGScheduler515withAcceleratorEP22IOGraphicsAccelerator2")):
         branch = create + offset
         assert image[branch] == 0xe9 and branch + 5 + struct.unpack_from("<i", image, branch + 1)[0] == value(target), \
             f"{path}: changed scheduler type factory delegation"
     for name, length, digest in (
+            ("__ZN5IGGuC15withAcceleratorEP22IOGraphicsAccelerator2", 0x48,
+             "5e1ec8f283a501196a7a6649b7f14c4a7aebe71bdb54e4332962ec3c8f401575"),
             ("__ZN12IGScheduler415withAcceleratorEP22IOGraphicsAccelerator2", 0x48,
              "7e58f7befea67c06db244e8699348cca2ab834835393b9f9bf5cfd1b333bae3b"),
             ("__ZN12IGScheduler515withAcceleratorEP22IOGraphicsAccelerator2", 0x48,
@@ -556,6 +559,11 @@ def macho_inventory(path):
         start = value(name)
         assert next_symbol(start) - start == length and hashlib.sha256(image[start:start + length]).hexdigest() == digest, \
             f"{path}: changed reviewed scheduler factory allocation/init/release body"
+    legacy_factory = value("__ZN5IGGuC15withAcceleratorEP22IOGraphicsAccelerator2")
+    legacy_init = value("__ZN5IGGuC15initWithOptionsEP22IOGraphicsAccelerator2")
+    for call, target in ((legacy_factory + 0x2c, legacy_init), (legacy_init + 0x24, scheduler_init)):
+        assert image[call] == 0xe8 and call + 5 + struct.unpack_from("<i", image, call + 1)[0] == target, \
+            f"{path}: changed legacy scheduler factory/base-init provenance edge"
     assert next_symbol(scheduler5_init) - scheduler5_init == 0x17c and \
         hashlib.sha256(image[scheduler5_init:scheduler5_init + 0x17c]).hexdigest() == \
         "d9be84cb035ee2f753d469bdf54151714273201a81b1d30f1ddd6725dd01bda1", \

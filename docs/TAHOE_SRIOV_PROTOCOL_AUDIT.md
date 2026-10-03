@@ -27,6 +27,20 @@ enforce fault-before-panic and prohibit native/helper/backing side effects.
 
 ## Mapping getter provenance follow-up (offline)
 
+IGGuC construction classification follow-up: complete withAccelerator 0x48
+factory reviewed/pinned; native scheduler create type-3 edge resolves directly
+to it. Factory calls IGGuC initWithOptions; the reviewed initial base-init edge
+calls IGScheduler::initWithOptions. Full IGGuC init remains unread. This is a
+legacy scheduler construction path, not evidence of a shared VF helper object.
+The VF final type-4 factory guard excludes this normal type-3 dispatch. An
+exploratory direct-call scan found only create's type-3 factory edge, but this
+does not exclude metaclass allocation or indirect calls. TLB routing alone
+never proved actual VF IGGuC instantiation. Candidate H2G callers include
+sleep/wake, bind/unbind, display stamps, idle waits and reset/control methods;
+those caller bodies and alternate construction remain pending. Retain the
+H2G MMIO inventory without attributing it to current VF execution or deleting
+PF paths needed for the Gen11+ objective.
+
 IGGuC producer-body follow-up: complete sendHostToGucMessage 0x122 and
 ringDoorbell 0x12a bodies reviewed/pinned for both payloads, including their
 direct DPSM kick edges. H2G calls kick before readiness/mutex handling; its

@@ -80,6 +80,11 @@ pending; base gated invocation alone is not a cleanup success proof.
 reviewed/pinned; complete reference XNU runAction read. Actual Boot virtual
 +0x1c8, stored removal action and concrete control-gate type remain pending.
 
+2026-10-04 IGGuC construction: full 0x48 factory reviewed/pinned; type-3
+dispatcher/factory/init/base-init edges pinned. Full init and indirect
+construction remain pending. Normal type-3 dispatch excluded by VF guard;
+this is not a proof excluding all possible IGGuC allocation.
+
 2026-10-04 IGGuC producers: complete H2G 0x122 and doorbell 0x12a bodies
 reviewed/pinned with kick edges and H2G raw MMIO stores. Caller/allocator/
 virtual reachability and VF isolation remain unreviewed; no containment claim.
