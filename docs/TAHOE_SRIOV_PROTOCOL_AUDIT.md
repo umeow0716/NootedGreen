@@ -31,6 +31,27 @@ stamp, deregister a context or invalidate a page table. At `0x14bb7896`,
 must be reviewed before claiming mapping-free waits guarantee GPU quiescence.
 These exact binary contracts do not certify allocation, DMA order or runtime.
 
+Event follow-up: the archived KC uses chained kernel-cache pointer format 11;
+XNU `EXTERNAL_HEADERS/mach-o/fixup-chains.h` and
+`osfmk/mach/dyld_kernel_fixups.h` define the 30-bit target and 2-bit cache level.
+The Fast2 vtable's reviewed slots are unauthenticated level-1 references:
+`+0x188` to Fast2 `finishEvent`, `+0x238` to base `waitForStamp`, and `+0x148`
+to Fast2 `cleanEvent`. The local fixture test pins these encoded fields and
+symbol identities rather than treating the encoded pointer as a live address.
+
+Fast2 `finishEvent` (`0x14b95810..0x14b959a0`) visits eight event entries,
+skips channel -1, compares requested minus cached/read stamp as signed 32-bit,
+reads stamp storage through event-machine `+0x28`, and calls virtual `+0x238`
+for outstanding work. A nonzero result calls `handleFinishChannelRestart`
+then retries; the end invokes `cleanEvent`. Importantly, `waitForStamp` at
+`0x14b77954` loads accelerator `+0x10`, sets return value zero, and branches
+straight to its return epilogue when accelerator dword `+0xdc8` is nonzero,
+without reading stamp storage. Consequently a successful event wait is not
+unconditionally proof of hardware completion. The meaning and writers of
+`+0xdc8`, restart handler behavior and reset propagation remain to be reviewed.
+The fixture now checks the complete finishEvent byte identity plus this early
+success branch/epilogue. No forced-idle shortcut or runtime route was added.
+
 Both pinned accelerator payloads resolve `IGAccelMemoryMap` vtable `+0x128`
 through an external unsigned 64-bit relocation to
 `IOAccelMemoryMap::getGPUVirtualAddress`. The mapped-buffer getter delegates
