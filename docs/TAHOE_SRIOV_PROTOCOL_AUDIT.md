@@ -27,6 +27,25 @@ enforce fault-before-panic and prohibit native/helper/backing side effects.
 
 ## Mapping getter provenance follow-up (offline)
 
+Stamp event-source construction and callback follow-up: complete Intel
+event-machine init/free/callback and `IntelAccelerator::signalStampUpdate`
+bodies are now pinned in both payloads. Init clears software accounting,
+delegates to inherited init and allocates `IOInterruptEventSource` at `+0xd30`
+with the native callback, null provider and index zero; factory failure makes
+init fail. Free conditionally removes the source from the workloop when
+`+0xd88` is set, releases it and clears the pointer before inherited free.
+The callback tail-calls signalStampUpdate with the `+0xd40` channel mask.
+That method obtains task `+0x150` CPU stamps, compares each selected 64-byte
+slot's first dword against accelerator `+0x1478` cached channel values, updates
+the cache, calls event-machine virtual `+0x228`, and only signals inherited
+`signalStampsUpdated` if at least one changed. It also updates software tracing.
+The factory, tracing/time and inherited notification imports are pinned.
+No direct MMIO or GuC submission occurs in these reviewed bodies. This is
+CPU-observed change notification, not authenticated GPU completion: the
+termination path can fabricate stamp values. Source enable/workloop attachment,
+actual source virtual `+0x1e0`, inherited wakeup and drain-before-free still
+require review; no callback-lifetime or host-safety claim follows from hashes.
+
 Periodic timer import follow-up: both TGL payloads now pin all eight mutex
 lock/unlock call relocations in the callback and timer enable/disable paths,
 the `OSCollectionIterator::withCollection` factory call, and all four singular

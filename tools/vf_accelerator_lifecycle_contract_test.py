@@ -9,6 +9,10 @@ import sys
 # Complete reviewed native bodies. This fixes the concrete Intel override
 # graph, not inherited timer APIs, dynamic callbacks or runtime completion.
 STAMP_IRQ_NATIVE = {
+    "__ZN19IGAccelEventMachine4initEP22IOGraphicsAccelerator2ji": (0x64, "428bd74bf188a21082140b017f96719913dbe234d960d08effc6fada46de622d"),
+    "__ZN19IGAccelEventMachine4freeEv": (0x66, "69c056b5678884fc01cb87e1a50e94a28a35a7d524b4730bc7d845a02a37af14"),
+    "__ZN19IGAccelEventMachine29handleSchedulerStampInterruptEP22IOInterruptEventSourcei": (0x18, "c0cf1d2c8eeec02c61b149219a63f79263fc3912b9553803a5ff277ea7a596d1"),
+    "__ZN16IntelAccelerator17signalStampUpdateERK8IGBitSetILm64EE": (0x202, "1977013388b8e6a38317670d008d86e63a766e914054ab6b3df406e7b9c1ea45"),
     "__ZL21getInterruptTypeIndexj": (0x2dc, "a437c9f3b0f1652461adcbd7dd5733d37fb70fd8b841d71e6678331312a3979c"),
     "__ZN19IGAccelEventMachine20enableStampInterruptEi": (0xc, "d36367a855e7c70648ad4cebd97046b4cd0f93b1ea460faad009a1a3d8676db9"),
     "__ZN19IGAccelEventMachine20enableStampInterruptEii": (0xb6, "a1258420942f61394025ad599519cee464bada81bc3d4779eb45ed0c25cade22"),
@@ -320,6 +324,10 @@ def macho_inventory(path):
     # These imports distinguish the periodic collection mutex from bridge
     # descriptor spin locks. They do not certify dynamic callback lifetime.
     stamp_irq_imports = {
+        0x15ccb: "__ZN22IOInterruptEventSource20interruptEventSourceEP8OSObjectPFvS1_PS_iEP9IOServicei",
+        0x2acf8: "__ZN22IOGraphicsAccelerator219signalStampsUpdatedEv",
+        0x2acfd: "_mach_absolute_time",
+        0x2ac5b: "_kernel_debug", 0x2ad4b: "___stack_chk_fail",
         0x5669d: "_IOLockLock", 0x5671f: "_IOLockUnlock",
         0x56855: "_IOLockLock", 0x56892: "_IOLockUnlock",
         0x568b1: "_IOLockLock", 0x56910: "_IOLockUnlock",
@@ -405,6 +413,8 @@ def macho_inventory(path):
         assert struct.unpack_from("<Q", image, value(table) + 16 + slot)[0] == value(method), \
             f"{path}: changed concrete stamp IRQ virtual"
     for owner, target in (
+            ("__ZN19IGAccelEventMachine29handleSchedulerStampInterruptEP22IOInterruptEventSourcei", "__ZN16IntelAccelerator17signalStampUpdateERK8IGBitSetILm64EE"),
+            ("__ZN16IntelAccelerator17signalStampUpdateERK8IGBitSetILm64EE", TASK_STAMPS),
             ("__ZN19IGAccelEventMachine20enableStampInterruptEi", "__ZN19IGAccelEventMachine20enableStampInterruptEii"),
             ("__ZN19IGAccelEventMachine21disableStampInterruptEi", "__ZN19IGAccelEventMachine21disableStampInterruptEii"),
             ("__ZN12IGScheduler420enableStampInterruptEi", "__ZN26IGHardwareCommandStreamer420enableStampInterruptEi"),

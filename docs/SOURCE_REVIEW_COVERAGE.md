@@ -7,6 +7,13 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 stamp-source follow-up: complete Intel event-machine init/free,
+scheduler stamp callback and signalStampUpdate bodies reviewed and pinned;
+factory/notification/time/debug imports plus callback-to-notification and
+task-stamp direct edges tested. Workloop attachment, virtual interrupt dispatch
+and drain-before-free remain open; observed CPU stamp changes do not prove
+hardware completion or satisfy the runtime gate.
+
 2026-10-04 periodic timer follow-up: read the complete external reference
 `xnu-12377.121.6/libkern/c++/OSCollectionIterator.cpp`, including both storage
 models, allocation failure, update-stamp invalidation and unretained iteration
