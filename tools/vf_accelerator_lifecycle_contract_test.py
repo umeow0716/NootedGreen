@@ -9,6 +9,8 @@ import sys
 # Complete reviewed native bodies. This fixes the concrete Intel override
 # graph, not inherited timer APIs, dynamic callbacks or runtime completion.
 STAMP_IRQ_NATIVE = {
+    "__ZN18IGAccelDisplayPipe16beginTransactionEP12IOAccelEvent": (0x4e, "afaf2c261837e01c0ea05f84cb30e10cf3225d82381602b9e73274631d146ae9"),
+    "__ZN18IGAccelDisplayPipe17submitTransactionEP30IOAccelDisplayPipeTransaction2": (0x5e, "883521e4857160a449dccb37298cfed86801910a5cbe0dcbacefd0312b25f2e2"),
     "__ZN19IGAccelEventMachine21enableSchedulerEventsEv": (0x40, "f8f0e4f69fbcd568efb5443e8e745994d3182412ce07a855f0cfd931a426d004"),
     "__ZN26IGHardwareCommandStreamer54initEP22IOGraphicsAccelerator2P10IOWorkLoopP12IGScheduler510IGHwCsType": (0x224, "8f48a87d0813d09e9c4062970a48537d36182ffc2c9ac4a56894f5cffb075bc8"),
     "__ZN26IGHardwareCommandStreamer521registerForInterruptsEv": (0x90, "273bc67e508714d78441d1723972f3329308a1dc01e2b3e9616f6703a52e6370"),
@@ -364,6 +366,9 @@ def macho_inventory(path):
     # These imports distinguish the periodic collection mutex from bridge
     # descriptor spin locks. They do not certify dynamic callback lifetime.
     stamp_irq_imports = {
+        0x80dfc: "__ZNK18IOAccelDisplayPipe15getEventMachineEv",
+        0x80e16: "__ZNK18IOAccelDisplayPipe15getEventMachineEv",
+        0x80eb0: "__ZNK18IOAccelDisplayPipe15getEventMachineEv",
         0x5657a: "_IOLockAlloc", 0x5663e: "_IOLockFree",
         0x37ce4: "__ZN10IOWorkLoop8workLoopEv", 0x37d58: "_IOMalloc",
         0x27ad5: "_PE_parse_boot_argn",
@@ -390,6 +395,7 @@ def macho_inventory(path):
     }
     observed_stamp_irq_imports = {address: [] for address in stamp_irq_imports}
     event_stop_imports = {
+        0xc81c0: "__ZTV24IOAccelLegacyDisplayPipe",
         0xceb60: "__ZN24IOAccelEventMachineFast215finishAllStampsEv",
         0xcec70: "__ZN20IOAccelEventMachine24stopEv",
     }
@@ -467,6 +473,12 @@ def macho_inventory(path):
         start = value(name)
         assert next_symbol(start) - start == length, f"{path}: changed stamp IRQ body boundary: {name}"
         assert hashlib.sha256(image[start:start + length]).hexdigest() == digest, f"{path}: changed stamp IRQ body: {name}"
+    display_table = value("__ZTV18IGAccelDisplayPipe")
+    for slot, method in ((0x8b8, "__ZN18IGAccelDisplayPipe17submitTransactionEP30IOAccelDisplayPipeTransaction2"),
+                         (0x8d8, "__ZN18IGAccelDisplayPipe16beginTransactionEP12IOAccelEvent")):
+        assert struct.unpack_from("<Q", image, display_table + 16 + slot)[0] == value(method), f"{path}: changed Intel display transaction override"
+    assert image[0x80ecd:0x80ed4] == bytes.fromhex("c6 83 3a 13 00 00 01"), f"{path}: changed Intel transaction state store"
+    assert image[0x80ee1:0x80ee7] == bytes.fromhex("ff 90 c8 08 00 00"), f"{path}: changed explicit legacy-table submit delegation"
     # Explicit semantic anchors: the periodic callback uses collection count,
     # whereas enable/disable maintain a separate unchecked reference counter.
     # Do not replace one with the other or infer teardown serialization merely

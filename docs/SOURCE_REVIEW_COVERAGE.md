@@ -749,3 +749,10 @@ Free sends an 11-word async result before client/resource releases. Pending:
 actual framebuffer subclass overrides, resource preparation virtuals/imports,
 async payload semantics, queue-to-finished transfer and effective admission.
 Full-project and hardware-acceleration completion remain unproven.
+# Latest Intel display override checkpoint
+
+Reviewed complete IGAccelDisplayPipe begin/submit in both pinned payloads;
+verified effective vtable slots and external getter/legacy-table relocation
+identities. Paired SystemKC legacy submit slot resolves to reviewed base
+submit, not a new hardware-success method. Event-machine +0x1d0/+0x1d8/+0x1e0
+targets, runtime vtable changes and virtual-display feasibility remain pending.

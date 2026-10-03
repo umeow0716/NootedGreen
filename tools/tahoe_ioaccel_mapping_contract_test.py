@@ -711,7 +711,7 @@ def check(path, boot_path=None):
             symtab = struct.unpack_from("<6I", image, offset)[2:]
     assert symtab is not None, "missing embedded symbol table"
     symbol_offset, count, string_offset, string_size = symtab
-    matches = {name: [] for name in {*CONTRACTS, *SCRUB_BODIES, *LOCK_COPIES, *EVENT_OWNER_BODIES, SHARED_VTABLE, RESOURCE_VTABLE, "__ZTV18IOAccelDisplayPipe",
+    matches = {name: [] for name in {*CONTRACTS, *SCRUB_BODIES, *LOCK_COPIES, *EVENT_OWNER_BODIES, SHARED_VTABLE, RESOURCE_VTABLE, "__ZTV18IOAccelDisplayPipe", "__ZTV24IOAccelLegacyDisplayPipe",
                                     EVENT_VTABLE, EVENT_FINISH, EVENT_WAIT, EVENT_CLEAN, EVENT_SIGNAL, EVENT_RESTART,
                                     EVENT_MERGE_EXCLUDING, EVENT_SET_STAMP, GET_DATA_BUFFER,
                                     EVENT_INIT, EVENT_COPY, EVENT_FINISH_UNLOCKED, EVENT_HARDWARE_ERROR,
@@ -749,6 +749,9 @@ def check(path, boot_path=None):
     assert stop_owner.count(bytes.fromhex("ff 90 48 01 00 00")) == 3, "changed base event stop source-removal inventory"
     print("PASS inherited event owner free/stop and per-event stamp-disable bodies (outer drain not proven)")
     lazy_setup = address_of("__ZN18IOAccelDisplayPipe14setup_workloopEv")
+    legacy_submit = struct.unpack("<Q", read(address_of("__ZTV24IOAccelLegacyDisplayPipe") + 0x8c8, 8))[0]
+    assert legacy_submit >> 63 == 0 and (legacy_submit >> 30) & 3 == 1, "changed legacy display submit cache level/auth"
+    assert legacy_submit & 0x3fffffff == address_of("__ZN18IOAccelDisplayPipe17submitTransactionEP30IOAccelDisplayPipeTransaction2"), "changed explicit legacy-table submit target"
     raw_action, scalar_in, struct_in, scalar_out, struct_out = struct.unpack("<Q4I", read(0x14be3950 + 8 * 24, 24))
     assert raw_action >> 63 == 0 and (raw_action >> 30) & 3 == 1, "changed transaction-end descriptor target encoding"
     assert raw_action & 0x3fffffff == address_of("__ZN29IOAccelDisplayPipeUserClient217s_transaction_endEPS_PvP25IOExternalMethodArguments"), "changed selector 8 action"

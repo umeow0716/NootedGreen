@@ -5588,3 +5588,28 @@ retained-object cleanup explain why indiscriminately dropping an error queue
 entry is unsafe; complete queue-to-finished ownership transfer and actual
 subclass submission still need verification. Paired-KC tests passed locally;
 no production/runtime mutation was made.
+# Intel display transaction override follow-up
+
+Both pinned TGL accelerator payload variants expose `IGAccelDisplayPipe`
+vtable `header+16+0x8b8`/`+0x8d8` pointing to Intel submit/begin overrides.
+Complete begin (0x4e) obtains the event machine through two external
+`getEventMachine` relocations, invokes event-machine virtuals `+0x1d8` and
+`+0x1d0` using pipe index `+0x390` and the event argument, then sets byte
+`+0x133a` to 1. Concrete event-machine virtual targets remain pending.
+
+Complete submit (0x5e), when that byte is nonzero, obtains the event machine,
+invokes `+0x1e0` with index, zero argument and stack output, and again stores
+1 in the byte. It then calls an imported `IOAccelLegacyDisplayPipe` table
+at explicit header offset `+0x8c8`. Relocation `0xc81c0` establishes that
+import identity; branch relocations at `0x80dfc`, `0x80e16`, `0x80eb0`
+establish the getter identity. Their zero displacements are not local calls.
+The paired Tahoe SystemKC legacy table resolves `header+0x8c8` to the
+previously reviewed base submit preserving prior errors or returning
+`0xe0014042`; there is no distinct legacy submit body at this slot.
+
+This resolves the static delegation, not runtime vtable mutation, event
+progress, physical scanout or Metal/encoder acceleration. In particular,
+do not replace that base status with fabricated success to obtain a desktop.
+VF virtual-display/capture feasibility remains a separate goal requirement.
+Both native payload contract tests and paired-KC checks pass locally; no
+production route, hardware test or deployment was introduced.
