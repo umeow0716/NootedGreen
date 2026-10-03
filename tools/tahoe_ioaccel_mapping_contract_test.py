@@ -35,6 +35,10 @@ EVENT_DISABLE_STAMP_LOCKED = "__ZN20IOAccelEventMachine223disable_stamp_interrup
 EVENT_ENABLE_STAMP = "__ZN20IOAccelEventMachine220enableStampInterruptEi"
 EVENT_DISABLE_STAMP = "__ZN20IOAccelEventMachine221disableStampInterruptEi"
 EVENT_OWNER_BODIES = {
+    "__ZN29IOAccelDisplayPipeUserClient25startEP9IOService": (0x6c, "34a3cb936cd474e5bd7a05bf82c3a50b9c96a3777974a34416ad9f2ae6bbb4be"),
+    "__ZN29IOAccelDisplayPipeUserClient212setPipeIndexEjPy": (0x168, "3508def8fc565e30080f81daf666c91661831c1be3d813a4faa1e1db7f9f6186"),
+    "__ZN18IOAccelDisplayPipe22user_client_terminatedEP29IOAccelDisplayPipeUserClient2": (0x7e, "15ed7924ad16dfcc1218e5ec575a32725e54478c96af47c76617a7e8aa737a35"),
+    "__ZN18IOAccelDisplayPipe22framebuffer_terminatedEv": (0xc2, "8157e478b4691a37a77b01131b33fd94287471871195ae5c4f39ab21497f3e30"),
     "__ZN18IOAccelDisplayPipe27submitFlipBufferTransactionEP12IOAccelEventjP16IOAccelResource2S3_": (0x12a, "3144a7201d7237f7128c77f2c897e12920caa14c8292ecaa6b621fb572f5991c"),
     "__ZN29IOAccelDisplayPipeUserClient24stopEP9IOService": (0x12c, "1860c591fd835a8f4041dc81157830c8f649411340c23420302091b923438d2e"),
     "__ZN29IOAccelDisplayPipeUserClient213requestNotifyEPyP35IOAccelDisplayPipeRequestNotifyArgs": (0xde, "f459216034eb6d3b960fe64dc7ef6af8f7774cf8a5cd1e1825c11f676d586aa6"),
@@ -721,6 +725,14 @@ def check(path, boot_path=None):
     assert stop_owner.count(bytes.fromhex("ff 90 48 01 00 00")) == 3, "changed base event stop source-removal inventory"
     print("PASS inherited event owner free/stop and per-event stamp-disable bodies (outer drain not proven)")
     lazy_setup = address_of("__ZN18IOAccelDisplayPipe14setup_workloopEv")
+    for address, encoded in ((0x14bb59e2, "48 89 83 e8 00 00 00"),
+                            (0x14bb5a79, "ff 50 20"),
+                            (0x14bb5793, "ff 50 28"),
+                            (0x14bb5796, "48 c7 83 e8 00 00 00 00 00 00 00"),
+                            (0x14baf1b1, "c6 87 80 02 00 00 01"),
+                            (0x14baf24d, "48 c7 83 98 00 00 00 00 00 00 00")):
+        expected = bytes.fromhex(encoded)
+        assert read(address, len(expected)) == expected, "changed display pipe ownership/terminal ordering anchor"
     for call, target in ((0x14bafbed, "__ZN18IOAccelDisplayPipe26wait_for_queue_slot_nolockEv"),
                          (0x14bb636a, "__ZN18IOAccelDisplayPipe26wait_for_queue_slot_nolockEv"),
                          (0x14bb5758, "__ZN18IOAccelDisplayPipe13remove_notifyEP31IOAccelDisplayPipeNotifyRequest"),

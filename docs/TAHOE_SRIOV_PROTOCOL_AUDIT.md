@@ -27,6 +27,24 @@ enforce fault-before-panic and prohibit native/helper/backing side effects.
 
 ## Mapping getter provenance follow-up (offline)
 
+Display client ownership/terminal follow-up: complete user-client start 0x6c,
+setPipeIndex 0x168, pipe user_client_terminated 0x7e and framebuffer_terminated
+0xc2 reviewed. Start classifies/stores accelerator+0xd8 and display-machine
++0xe0, then inherited start. setPipeIndex holds accelerator mutex/busy lock,
+releases prior pipe, selects new pipe, checks entitlement/exclusive ownership,
+registers client and retains pipe on success. A separate complete 0x0e setter
+at 0x14bb350c stores raw client pointer in pipe+0xe8 without retain; transaction
+list entries are removed/released by user_client_terminated. Its corruption
+cold branch is not reviewed as normal successful cleanup. User-client stop's
+pipe release/clear uses the same observed accelerator lock/busy ordering.
+Framebuffer termination sets pipe+0x280 before virtual cleanup/release-live,
+unregisters framebuffer notifications then clears +0x98/index; it is not a
+global native event-owner drain. Added four complete body hashes and six
+ownership/terminal anchors; local paired KC passes. Cold callee, selection
+helper and terminal virtual implementations remain separate obligations.
+No production/VM change. Next terminal virtuals and external dispatch
+serialization before implementing a per-VF owner/lifetime boundary.
+
 Upstream display ABI/lifetime follow-up: fully reviewed submitFlipBufferTransaction
 0x14bafaf0 (0x12a), DisplayPipeUserClient stop 0x14bb56dc (0x12c), requestNotify
 0x14bb5cb6 (0xde), transactionEnd 0x14bb622e (0x232). Flip submit ignores
