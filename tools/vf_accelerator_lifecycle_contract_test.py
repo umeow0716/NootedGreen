@@ -457,6 +457,20 @@ def macho_inventory(path):
     assert struct.unpack_from("<Q", image, value(SCHEDULER4_VTABLE) + 16 + 0x90)[0] == value("__ZN12IGScheduler44freeEv"), \
         f"{path}: changed scheduler-4 partial-init effective free target"
     create = value("__ZN11IGScheduler6createEP16IntelAccelerator")
+    deleting = value("__ZN12IGScheduler4D0Ev")
+    assert next_symbol(deleting) - deleting == 0x22 and hashlib.sha256(image[deleting:deleting + 0x22]).hexdigest() == \
+        "f177eac0a487ced353d1984925cd44048aabaad94d8075762b40dc7e8782d13d", \
+        f"{path}: changed complete scheduler-4 deleting destructor"
+    assert struct.unpack_from("<Q", image, value(SCHEDULER4_VTABLE) + 16 + 8)[0] == deleting, \
+        f"{path}: changed effective scheduler-4 deleting destructor"
+    free_links = []
+    for index in range(dysymtab[17]):
+        relocation, bits = struct.unpack_from("<iI", image, dysymtab[16] + index * 8)
+        if relocation in (0xc81e0, deleting + 0x1d):
+            free_links.append((relocation, names[bits & 0xffffff], bits >> 24))
+    assert sorted(free_links) == sorted(((0xc81e0, "__ZTV8OSObject", 0x0e),
+                                       (deleting + 0x1d, "__ZN8OSObjectdlEPvm", 0x2d))), \
+        f"{path}: changed scheduler base-free/deallocation imported links"
     for name, length, digest in (
             ("__ZN5IGGuC20sendHostToGucMessageEPK18IGHostToGucMessagejU13block_pointerFvvE", 0x122,
              "0de3a1744332cb6811d2d75a0e5d5e3998e30746f4c56d67720f2d5860d1138a"),

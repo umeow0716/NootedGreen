@@ -27,6 +27,16 @@ enforce fault-before-panic and prohibit native/helper/backing side effects.
 
 ## Mapping getter provenance follow-up (offline)
 
+Concrete deleting-destructor follow-up: complete TGL Scheduler4 D0 0x22
+body reviewed/pinned, effective virtual+8 and both base-vtable/sized-delete
+relocations verified for each payload. D0 calls its base destructor then
+tail-calls OSObject::operator delete(object, 0x498). Complete Boot sized-delete
+0x40 wrapper reviewed/pinned: null check, allocator call, allocation accounting
+decrement and return. This strengthens the manual-free/factory-release concern;
+allocator callee and exact failing-init caller contract still need review
+before the repair boundary is declared complete. Object deletion is not a
+callback drain or DMA barrier. No dynamic fault was intentionally induced.
+
 Actual base-free follow-up: TGL IGScheduler::free's RIP pointer at +0xc81e0
 has external relocation to __ZTV8OSObject (external 64-bit type 0x0e), not an
 IOAccel scheduler cleanup vtable. Its raw vtable slot +0xa0 corresponds to

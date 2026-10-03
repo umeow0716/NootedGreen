@@ -201,6 +201,7 @@ def check_boot_atomic(system, path):
     symbols[b"__ZN18IOTimerEventSource11setWorkLoopEP10IOWorkLoop"] = []
     symbols[b"__ZTV8OSObject"] = []
     symbols[b"__ZN8OSObject4freeEv"] = []
+    symbols[b"__ZN8OSObjectdlEPvm"] = []
     symbols[b"__ZN18IOTimerEventSource7disableEv"] = []
     symbols[b"__ZN18IOTimerEventSource10wakeAtTimeEjyy"] = []
     symbols[b"__ZN18IOTimerEventSource17timeoutAndReleaseEPvS0_"] = []
@@ -507,6 +508,11 @@ def check_boot_atomic(system, path):
     assert kernel_read(object_free + 0x28, 3) == bytes.fromhex("ff 60 08"), \
         "changed OSObject free deleting-destructor dispatch"
     print("PASS Boot KC OSObject base free dispatch and deleting-destructor edge (callee review pending)")
+    object_delete = symbols[b"__ZN8OSObjectdlEPvm"][0]
+    assert hashlib.sha256(kernel_read(object_delete, 0x40)).hexdigest() == \
+        "04b6869b3dc3784361e720a8287053f5f525011e12bbf9cd0b9fd8bcf8a609ae", \
+        "changed reviewed OSObject sized delete wrapper"
+    print("PASS Boot KC sized object-delete wrapper (allocator callee pending)")
     cancel_wait = symbols[b"_thread_call_cancel_wait"][0]
     assert hashlib.sha256(kernel_read(cancel_wait, 0x3d0)).hexdigest() == \
         "ab79f907dfbfeb04b2723874f2299984cdc722577b7c745328f5d916f5c84d48", \

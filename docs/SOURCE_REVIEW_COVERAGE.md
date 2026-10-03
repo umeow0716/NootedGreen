@@ -80,6 +80,11 @@ pending; base gated invocation alone is not a cleanup success proof.
 reviewed/pinned; complete reference XNU runAction read. Actual Boot virtual
 +0x1c8, stored removal action and concrete control-gate type remain pending.
 
+2026-10-04 base deletion: actual Boot OSObject free wrapper 0x30 and sized
+delete wrapper 0x40, plus TGL Scheduler4 D0 0x22 reviewed/pinned. Effective
+deleting slot and external base-vtable/delete relocations verified. Allocator
+callee, failed-init contract and repair remain pending.
+
 2026-10-04 Scheduler4 init: complete actual 0xaf window reviewed/pinned,
 separate from the extra unnamed thunk in nearest-symbol span; effective
 partial-init free virtual pinned. Manual-free/factory-release inherited
