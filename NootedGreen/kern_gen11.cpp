@@ -3227,6 +3227,15 @@ bool Gen11::start(void *that, void *provider)
 		return false;
 	}
 	const bool vfActive = identity == VfIdentity::Virtual;
+	// Native start overrides GraphicsSchedulerSelect with scheduler 5 when
+	// this boot argument is present. A VF cannot enter that physical path.
+	int firmwareDisableArgument = 0;
+	if (vfActive && PE_parse_boot_argn("-disablegfxfirmware",
+	                                  &firmwareDisableArgument,
+	                                  sizeof(firmwareDisableArgument))) {
+		vfMarkProtocolFault("VF cannot disable mandatory GuC firmware scheduling");
+		return false;
+	}
 	if (vfActive && (getMember<uint8_t>(that, 0x1190) &
 	                 kVfLegacyPageOwnershipFlag)) {
 		vfMarkProtocolFault(

@@ -330,6 +330,7 @@ def macho_inventory(path):
     stamp_irq_imports = {
         0x5657a: "_IOLockAlloc", 0x5663e: "_IOLockFree",
         0x37ce4: "__ZN10IOWorkLoop8workLoopEv", 0x37d58: "_IOMalloc",
+        0x27ad5: "_PE_parse_boot_argn",
         0x37d08: "__ZN22IOInterruptEventSource20interruptEventSourceEP8OSObjectPFvS1_PS_iEP9IOServicei",
         0x56549: "__ZN18IOTimerEventSource16timerEventSourceEP8OSObjectPFvS1_PS_E",
         0x5652e: "__ZN5OSSet12withCapacityEj", 0x564cb: "_memset",
@@ -441,6 +442,12 @@ def macho_inventory(path):
         f"{path}: changed private workloop clear before inherited cleanup"
     scheduler5_init = value("__ZN12IGScheduler519initWithAcceleratorEP22IOGraphicsAccelerator2")
     create = value("__ZN11IGScheduler6createEP16IntelAccelerator")
+    # Reviewed start subsection, not a claim of full accelerator-start review.
+    assert hashlib.sha256(image[0x27a68:0x27b19]).hexdigest() == \
+        "aa10449fd9fb97c083b7e98915901350999d241a9af78a7ef23a27bff90a7c5e", \
+        f"{path}: changed scheduler-property/firmware-disable override window"
+    assert image[0x9505e:0x95072] == b"-disablegfxfirmware\0", \
+        f"{path}: changed native scheduler-5 override boot argument"
     # Nearest named-symbol span also includes two unnamed helpers. Only the
     # 0x36 dispatcher window was reviewed as create itself.
     assert hashlib.sha256(image[create:create + 0x36]).hexdigest() == \
@@ -1963,6 +1970,11 @@ def source_contract(path):
             f"{path}: native stop begins before the VF device-stopping boundary")
 
     accelerator_start = function_body(source, "bool Gen11::start(void *that, void *provider)")
+    firmware_guard = accelerator_start.index('if (vfActive && PE_parse_boot_argn("-disablegfxfirmware"')
+    firmware_fault = accelerator_start.index('vfMarkProtocolFault("VF cannot disable mandatory GuC firmware scheduling")', firmware_guard)
+    firmware_return = accelerator_start.index("return false;", firmware_fault)
+    assert firmware_guard < firmware_fault < firmware_return < accelerator_start.index("vfBootstrapDirectGgtt()"), \
+        "VF firmware-disable guard must fail before bootstrap/native scheduler side effects"
     legacy_reject = accelerator_start.index("kVfLegacyPageOwnershipFlag")
     ggtt_bootstrap = accelerator_start.index("vfBootstrapDirectGgtt()")
     configure = accelerator_start.index("callback->ioPciConfigureInterrupts)(")

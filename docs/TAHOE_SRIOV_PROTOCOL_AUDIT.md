@@ -27,6 +27,19 @@ enforce fault-before-panic and prohibit native/helper/backing side effects.
 
 ## Mapping getter provenance follow-up (offline)
 
+Firmware-disable scheduler override repair: reviewed native start subsection
+0x27a68..0x27b18, separately from the still-incomplete full start review. It
+loads GraphicsSchedulerSelect through an unreviewed property helper, accepts
+3..5 into feature bits 23..25, then checks -disablegfxfirmware. A successful
+boot-argument lookup unconditionally overwrites those bits with type 5. This
+can defeat wrapper VF type-4 publication. VF start now rejects presence of
+that argument with a protocol fault and false return before GGTT bootstrap,
+MSI allocation or native start. PF short-circuits the guard and retains native
+behavior. Local fixtures pin the reviewed native window/string and source
+fault/return ordering; this prevents one proven override, not every possible
+selection mutation or any existing DMA activity. Native lookup/import helper
+semantics and complete upper teardown remain pending. No runtime deployment.
+
 Scheduler selection/factory follow-up: native create has a separate 0x36
 dispatcher window (nearest symbol also includes unnamed helpers). It reads
 (accelerator+0x1190 >> 23) & 7 and tail-dispatches types 3/4/5, with invalid

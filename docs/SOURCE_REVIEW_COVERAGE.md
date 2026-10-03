@@ -80,6 +80,11 @@ pending; base gated invocation alone is not a cleanup success proof.
 reviewed/pinned; complete reference XNU runAction read. Actual Boot virtual
 +0x1c8, stored removal action and concrete control-gate type remain pending.
 
+2026-10-04 firmware override follow-up: reviewed/pinned native start subsection
+0x27a68..0x27b18 showing firmware-disable boot argument overwrites type with 5.
+VF source now rejects it before bootstrap/native start; PF unchanged. Property
+helper/full start and runtime verification remain incomplete.
+
 2026-10-04 selection follow-up: complete Scheduler4/5 factory bodies and
 separate native create dispatcher window reviewed/pinned. VF wrapper source
 forces type 4; property-to-feature-bit propagation/runtime selection remains
