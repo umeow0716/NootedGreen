@@ -6338,6 +6338,43 @@ classification to avoid the multi-address-space lifetime problem. Full manager
 transaction, per-process invalidation and descriptor retention remain required.
 No production/runtime/Host GPU mutation this checkpoint.
 
+# Page-table synchronization failure visibility and borrowed list release
+
+Reviewed/pinned six complete native bodies: global synchronize wrapper (0xa),
+per-process synchronize wrapper (0x42), synchronizeEachEntry (0xd0),
+synchronizePageDescriptor (0x5c), task managed-list release (0x6e) and global
+read (0x44). Wrapper/helper edges and global read virtual are pinned in both
+payloads. Global synchronization delegates to per-entry reads/maps; per-process
+synchronization chooses the descriptor path only when both table +0x28 bit 0
+flags are set, otherwise delegates to the same per-entry path.
+
+Per-entry synchronization reads source virtual +0x140, skips absent entries,
+then maps/remaps destination (+0x118/+0x128 selected by the boolean). False
+mapping exits the loop without rolling back previous entries or returning an
+error status. It only issues the previously reviewed deferred-flush notification
+before returning void. The constructor selector consequently returns its
+nonnull page table even if a synchronization helper stopped early; an actual
+failure has not been dynamically reproduced.
+
+The descriptor path replaces the requested range with [0, 0x40000000), reads
+source descriptor virtual +0x168, then invokes map/remap descriptor virtual
++0x158/+0x160. Destination status is not consumed. Actual table feature flags,
+descriptor ownership and compatibility of that fixed range with VF allocations
+must be established before reuse is certified or rewritten. It is not evidence
+that the user's current VF address range is necessarily outside that window.
+
+Global read assembles two 32-bit PTE loads, exposes low 12 attribute bits and
+masks physical addresses to 0x7ffffff000 (legacy 39-bit range); it does not
+locally lock or bounds-check. Current VF physical-range checks already limit
+native-address compatibility, but whole sync receiver bounds/concurrency and
+Gen12 attribute interpretation remain pending. Do not widen addresses without
+fixing every consumer of this getter.
+
+Managed-list release validates/unlinks/frees each 0x18-byte node. It does not
+release referenced table objects, revoke mappings or drain GPU users. That
+matches raw pointer storage locally, but table ownership/free ordering and
+callback admission must be proved elsewhere. No executable patch/runtime test.
+
 # Mapping recovery frees other allocations and retries preparation
 
 Reviewed/pinned complete freeToPrepareMapping (0x260) and base

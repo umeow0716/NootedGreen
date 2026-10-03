@@ -7,6 +7,12 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 PPGTT synchronization/list release: six complete native wrapper/helper/
+read/list-release bodies reviewed/pinned. Per-entry failure silently ends void
+sync; descriptor branch uses a fixed 1 GiB range and ignores destination status.
+Feature flags/range compatibility, descriptor ownership, table free ordering
+and runtime invalidation remain pending; list-node free is not GPU retirement.
+
 2026-10-04 task address-space construction: complete list init (0xfc) and new
 per-task page-table factory selector (0xa6) reviewed/pinned with synchronization
 edges. PPGTT-enabled kernel tasks can contain private+global tables, disproving
