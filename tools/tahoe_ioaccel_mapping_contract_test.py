@@ -35,6 +35,21 @@ SCRUB_BODIES = {
         (0x5a, "43bc8b5f00af74bdc67cbad08ff4994fd24ca075fe0d2c05a45a7604c71aa492"),
     EVENT_SCRUB: (0x7e, "7b3a41f9948c644a06cb48c6e86f7a014e28b9f05aee296f5c813efc3c822833"),
 }
+LOCK_COPIES = {
+    "__ZN22IOGraphicsAccelerator215acceleratorLockEv": {
+        0x14b6c7a6: "fed7918d5caa2b65a7400e742fdad37cea80fcd1aaba8a648840d44da1f48c1e",
+        0x14b7e0ba: "4e9a4289539e7a9c6b462cc5a19efc669fba9d7d397db0a8726f34456d1e4253",
+        0x14b901b0: "453eaae8d172876d5d7df2346e0225d3671589c04b521f4319390f4996baf4d0",
+        0x14b9975a: "901b711b0117df4a425bf80c4b2b72213d1695fd27a79f5687a0b70aecaa18c3",
+    },
+    "__ZN22IOGraphicsAccelerator217acceleratorUnlockEv": {
+        0x14b6c7f8: "c5a432f48d0f3208f2525bd995dfc1a5fbd1239af11163b853e6d38983777a2d",
+        0x14b70806: "b4f0dbfafce3dc7e3f14d8f56f98f82b54037474c765f71832c8937008395072",
+        0x14b7e084: "bdbe6331672d1f8760649b884188f8e06163016b0e1a7bc4bc6bb3bf5a49ce15",
+        0x14b90202: "3b470039180b89751871154bec962b1b4a7e508555ce8a3de7ea6c2493fc3bf6",
+        0x14b997ac: "ba3edbb0b0b596697ac6b352f469864fd98ca922d99b0bc67a169ab587255977",
+    },
+}
 CONTRACTS = {
     "__ZNK22IOGraphicsAccelerator223isLockedByCurrentThreadEv":
         bytes.fromhex("55 48 89 e5 b0 01 5d c3"),
@@ -234,7 +249,7 @@ def check(path, boot_path=None):
             symtab = struct.unpack_from("<6I", image, offset)[2:]
     assert symtab is not None, "missing embedded symbol table"
     symbol_offset, count, string_offset, string_size = symtab
-    matches = {name: [] for name in {*CONTRACTS, *SCRUB_BODIES, SHARED_VTABLE, RESOURCE_VTABLE,
+    matches = {name: [] for name in {*CONTRACTS, *SCRUB_BODIES, *LOCK_COPIES, SHARED_VTABLE, RESOURCE_VTABLE,
                                     EVENT_VTABLE, EVENT_FINISH, EVENT_WAIT, EVENT_CLEAN, EVENT_SIGNAL, EVENT_RESTART,
                                     EVENT_MERGE_EXCLUDING, EVENT_SET_STAMP}}
     for index in range(count):
@@ -261,6 +276,14 @@ def check(path, boot_path=None):
         print(f"PASS {name} at {address:#x}")
     for name, (length, digest) in SCRUB_BODIES.items():
         assert hashlib.sha256(read(address_of(name), length)).hexdigest() == digest, f"changed {name}"
+    # There are multiple real local definitions, not one ambiguous address to
+    # pick arbitrarily. Require the full reviewed copy inventory and bodies.
+    for name, copies in LOCK_COPIES.items():
+        assert sorted(matches[name]) == sorted(copies), f"changed local mutex copy inventory: {name}"
+        length = 0x52 if "acceleratorLockEv" in name else 0x36
+        for address, digest in copies.items():
+            assert hashlib.sha256(read(address, length)).hexdigest() == digest, f"changed mutex copy {address:#x}"
+    print("PASS all four local mutex-lock and five mutex-unlock bodies")
     for table, slot, name in ((SHARED_VTABLE, 0x128, SHARED_SCRUB),
                               (RESOURCE_VTABLE, 0x228, RESOURCE_SCRUB),
                               (EVENT_VTABLE, 0x270, EVENT_SCRUB)):

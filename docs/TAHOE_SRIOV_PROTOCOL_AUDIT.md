@@ -220,8 +220,15 @@ decrements the waiter counter, marks busy and dispatches virtual `+0x850`;
 unlock dispatches `+0x858`, clears busy and unlocks `+0x88`. SystemKC stubs
 `0x10012`/`0x10018` resolve through BootKC to `IOLockLock`/`IOLockUnlock`
 (also aliased to kernel mutex functions). These imports are pinned locally.
-The multiple local copies are not yet individually covered by body contracts,
-and producer-to-lock caller reachability remains unfinished.
+All four lock and five unlock local copies are now individually body-hash
+contracted, with exact symbol-copy inventory rather than arbitrarily selecting
+one duplicate symbol. Producer-to-lock caller reachability remains unfinished.
+An exploratory symbol-bounded direct-call scan found unlock/relock edges in
+Context2 `getDataBuffer`, GLContext2 `read_buffer` and Surface `surface_read`,
+plus SharedUserClient2 `connectClient` lock/unlock. These are candidate edges,
+not a certified exhaustive graph or proof of lock coverage across those bodies.
+Review must account for temporary unlock windows instead of assuming a method
+remains serialized solely because its entry path acquired the mutex.
 
 Crucially the complete inherited `isLockedByCurrentThread` body just returns
 true. It is now locally pinned so future integration cannot silently treat
