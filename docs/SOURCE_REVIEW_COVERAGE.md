@@ -80,6 +80,11 @@ pending; base gated invocation alone is not a cleanup success proof.
 reviewed/pinned; complete reference XNU runAction read. Actual Boot virtual
 +0x1c8, stored removal action and concrete control-gate type remain pending.
 
+2026-10-04 selection follow-up: complete Scheduler4/5 factory bodies and
+separate native create dispatcher window reviewed/pinned. VF wrapper source
+forces type 4; property-to-feature-bit propagation/runtime selection remains
+unverified. Scheduler5 concerns are not attributed to the current VF crash.
+
 2026-10-04 Scheduler5 init follow-up: complete 0x17c body, base-init edge,
 private-workloop store, failed-init effective free virtual and three factory/
 allocation imports reviewed/pinned. No base timer rebinding in this body;

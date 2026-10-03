@@ -27,6 +27,19 @@ enforce fault-before-panic and prohibit native/helper/backing side effects.
 
 ## Mapping getter provenance follow-up (offline)
 
+Scheduler selection/factory follow-up: native create has a separate 0x36
+dispatcher window (nearest symbol also includes unnamed helpers). It reads
+(accelerator+0x1190 >> 23) & 7 and tail-dispatches types 3/4/5, with invalid
+types reaching a cold helper. Reviewed/pinned both complete 0x48 Scheduler4/5
+factories: metaclass allocation, init call, and release/null on init failure.
+Wrapper source sets VF selection to 4 after boot/property overrides and
+requires GraphicsSchedulerSelect publication; PF defaults differ and may use
+5. Property-to-feature-bit propagation remains pending, so this is source
+intent plus native dispatch evidence, not a runtime-selected-type observation.
+Scheduler5 teardown concerns remain relevant to the full PF/VF objective but
+are not established as the current VF host-crash cause. Prioritize Scheduler4
+owner/GuC teardown and the selection propagation while retaining PF review.
+
 Scheduler5 init provenance follow-up: complete initWithAccelerator 0x17c
 body reviewed/pinned. It calls base initWithOptions first, then imports base
 IOWorkLoop::workLoop and stores private +0xa80; creates a provider-null
