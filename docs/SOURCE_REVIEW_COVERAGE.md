@@ -80,6 +80,10 @@ pending; base gated invocation alone is not a cleanup success proof.
 reviewed/pinned; complete reference XNU runAction read. Actual Boot virtual
 +0x1c8, stored removal action and concrete control-gate type remain pending.
 
+2026-10-04 IGGuC producers: complete H2G 0x122 and doorbell 0x12a bodies
+reviewed/pinned with kick edges and H2G raw MMIO stores. Caller/allocator/
+virtual reachability and VF isolation remain unreviewed; no containment claim.
+
 2026-10-04 DPSM producer follow-up: complete Scheduler5 kick callback 0xe
 and direct owner-to-kick edge reviewed/pinned; other producer candidates are
 triage only, not whole-body review. Service-stop cancellation/quiesce ordering

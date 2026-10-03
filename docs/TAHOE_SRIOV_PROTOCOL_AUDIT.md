@@ -27,6 +27,19 @@ enforce fault-before-panic and prohibit native/helper/backing side effects.
 
 ## Mapping getter provenance follow-up (offline)
 
+IGGuC producer-body follow-up: complete sendHostToGucMessage 0x122 and
+ringDoorbell 0x12a bodies reviewed/pinned for both payloads, including their
+direct DPSM kick edges. H2G calls kick before readiness/mutex handling; its
+admitted branch force-wakes and directly writes accelerator MMIO+0xc180 and
++0x1901f0, then clears force-wake. RingDoorbell computes a mapped page address,
+kicks DPSM and attempts a bounded doorbell update; it does not establish GPU
+completion. Neither body can be classified as a harmless timer producer.
+Current VF routes separately translate IGGuC::invalidateTLB, so the existence
+of Scheduler4/IGHardwareGuC transport does not by itself exclude all IGGuC
+objects. Allocation/caller/virtual reachability for these two methods remains
+pending. Their full-body and raw-MMIO checks are inventory, not containment.
+Do not deploy or infer current host-crash causation from this offline finding.
+
 DPSM producer follow-up: production acceleratorStop sets final-stop intent
 then delegates to native stop; that stop's finishAllStamps precedes the routed
 engine-stop cancellation and GuC quiesce. No earlier quiesce was found in that

@@ -448,6 +448,22 @@ def macho_inventory(path):
         f"{path}: changed private workloop clear before inherited cleanup"
     scheduler5_init = value("__ZN12IGScheduler519initWithAcceleratorEP22IOGraphicsAccelerator2")
     create = value("__ZN11IGScheduler6createEP16IntelAccelerator")
+    for name, length, digest in (
+            ("__ZN5IGGuC20sendHostToGucMessageEPK18IGHostToGucMessagejU13block_pointerFvvE", 0x122,
+             "0de3a1744332cb6811d2d75a0e5d5e3998e30746f4c56d67720f2d5860d1138a"),
+            ("__ZN5IGGuC12ringDoorbellE10IGHwCsType", 0x12a,
+             "3f0d630e69161b4fd8c80def32d4a3dcbee2e9eb9f894a40bae00c94f179bfa1")):
+        start = value(name)
+        assert next_symbol(start) - start == length and hashlib.sha256(image[start:start + length]).hexdigest() == digest, \
+            f"{path}: changed complete IGGuC DPSM producer body"
+    for call in (0x1a1b1, 0x1c3f7):
+        assert image[call] == 0xe8 and call + 5 + struct.unpack_from("<i", image, call + 1)[0] == value("__ZN16IntelAccelerator13dpsmKickTimerEv"), \
+            f"{path}: changed IGGuC producer to DPSM kick edge"
+    for address, instruction in ((0x1a21a, "48 8b 8f 40 12 00 00"),
+                                  (0x1a221, "89 81 80 c1 00 00"),
+                                  (0x1a227, "c7 81 f0 01 19 00 01 00 00 00")):
+        assert image[address:address + len(bytes.fromhex(instruction))] == bytes.fromhex(instruction), \
+            f"{path}: changed physical IGGuC H2G MMIO branch inventory"
     kick_irq = value("__ZN12IGScheduler523handleKickDPSMInterruptEP22IOInterruptEventSourcei")
     assert next_symbol(kick_irq) - kick_irq == 0xe and hashlib.sha256(image[kick_irq:kick_irq + 0xe]).hexdigest() == \
         "501e06bc18a51b099b953b2adc98887bb848e2ed64fccc93e979f1ac27bef11c", \
