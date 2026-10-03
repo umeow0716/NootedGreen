@@ -10,6 +10,28 @@ enforced containment precondition.
 
 ## V264 retain the actual DMA ring through deregistration (offline)
 
+Stamp producer follow-up: base, main and compute `writeStamp` dispatch their
+packet encoder at ring vtable `+0x140`, then CPU-write the submitted value at
+stamp slot `+0x8`, ring `+0x44`, and the pending-stamp flag at `+0x48`.
+`sleepForStamp` instead reads slot `+0x0` at the same 64-byte index stride and
+compares it with the requested stamp. The focused contracts distinguish these
+fields across all three producers; the software `+0x8` write is not completion
+evidence. Packet encoders, GPU visibility/order, full submission identity and
+wraparound semantics still require review before an enabled-context idle fix.
+
+Additional native wait-recovery primitives remain open: `clearEventWait`
+(`0x434d0`) and `clearSemaphoreWait` (`0x43510`) both derive an engine register
+offset from ring `+0x58`, write through accelerator MMIO `+0x1240`, and read
+through cached ring MMIO `+0x50`. Neither has a dedicated current VF route.
+Their direct/virtual callers and eligibility must be mapped before dynamic
+admission; ordinary completion must not be implemented by invoking these
+physical wait-clear helpers. These are observed primitive bodies, not yet
+proven reachable execution paths or diagnosed causes of the host crash.
+A preliminary scan of defined vtables and nonzero-displacement direct branches
+found no references to either exact entry point in the production payload.
+That negative scan does not exclude address-taken, indirect or inlined uses;
+it does not justify adding suppression routes without a verified caller graph.
+
 Garbage-collection follow-up: `IGGCObject::release` queues its last-reference
 object on first release, then invokes the object's `check` virtual (`+0x128`)
 on a later release. For hardware contexts that slot resolves to

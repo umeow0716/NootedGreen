@@ -40,6 +40,9 @@ RING_RESET_GRAPHICS = "__ZN20IGHardwareRingBuffer19resetGraphicsEngineEP17IGHard
 FIFO_RESET_REPLAY = "__ZN18IGAccelFIFOChannel22resetHardwareAndReplayEv"
 FIFO_SUBMIT_STAMP = "__ZN18IGAccelFIFOChannel18submitStampCommandEv"
 RING_SLEEP_STAMP = "__ZN20IGHardwareRingBuffer13sleepForStampEPjjj"
+RING_WRITE_STAMP = "__ZN20IGHardwareRingBuffer10writeStampEjb"
+RING_MAIN_WRITE_STAMP = "__ZN24IGHardwareRingBufferMain10writeStampEjb"
+RING_COMPUTE_WRITE_STAMP = "__ZN27IGHardwareRingBufferCompute10writeStampEjb"
 RING_WAIT_SPACE = "__ZN20IGHardwareRingBuffer12waitForSpaceEj"
 RING_WAIT_TIMEOUT = "__ZN20IGHardwareRingBuffer11waitTimeoutEU13block_pointerFbvE"
 SCHEDULER4_INIT_PRIVATE = "__ZN12IGScheduler421initSharedPrivateDataEP17IGHardwareContext"
@@ -647,6 +650,19 @@ def macho_inventory(path):
     wait_body = image[wait_start:next_symbol(wait_start)]
     stamp_start = value(RING_SLEEP_STAMP)
     stamp_body = image[stamp_start:next_symbol(stamp_start)]
+    # Slot +8 is CPU-published submitted bookkeeping, not the completed value
+    # read at slot +0. Main/compute override the packet emitter but retain the
+    # same software stamp bookkeeping. Never use the +8 write as GPU evidence.
+    for owner in (RING_WRITE_STAMP, RING_MAIN_WRITE_STAMP, RING_COMPUTE_WRITE_STAMP):
+        owner_start = value(owner)
+        body = image[owner_start:next_symbol(owner_start)]
+        for anchor in (bytes.fromhex("ff 90 40 01 00 00"),
+                       bytes.fromhex("44 89 74 08 08 44 89 73 44 c6 43 48 01")):
+            if body.count(anchor) != 1:
+                raise AssertionError(f"{path}: submitted-stamp bookkeeping changed in {owner}")
+    if stamp_body.count(bytes.fromhex(
+            "48 c1 e2 06 8b 04 10 41 89 07")) != 1:
+        raise AssertionError(f"{path}: completed-stamp slot-zero read changed")
     for body, anchor, count, label in (
             (wait_body, bytes.fromhex("48 8b 43 18 8b 40 10"), 1,
              "shared context head"),
