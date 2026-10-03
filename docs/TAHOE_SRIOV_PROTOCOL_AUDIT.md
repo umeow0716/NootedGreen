@@ -27,6 +27,21 @@ enforce fault-before-panic and prohibit native/helper/backing side effects.
 
 ## Mapping getter provenance follow-up (offline)
 
+Graph-verifier and event admission follow-up: direct byte branch candidates
+now reject any displacement overlapping external relocation storage. The native
+periodic unlock placeholder at 0x5690f must not create an enable-to-disable edge;
+synthetic zero-placeholder, all four displacement bytes, truncation, empty
+range and valid negative-displacement tests enforce this. Both payload graph
+contracts still pass. This remains a byte-candidate verifier, not a complete
+x86 boundary decoder or indirect reachability proof.
+Fully reviewed enableEventStampInterrupts at 0x14b95480 (0x66): iterates eight
+event channels, skips -1 entries, increments per-channel reference under
+lock+0x50, invokes +0x240 on zero-to-one and unlocks. It has no stopping or
+external admission check in this complete body. Its complete hash is now
+locally pinned alongside the matching disable path; whether its callers
+serialize with teardown remains open. Do not confuse transport producer gate
+with this independent reference-creation entrypoint. Production unchanged.
+
 Admission boundary follow-up: reread production vfNativeGpuWorkReady,
 acceleratorStop, context enter/leave/RAII close-and-wait, quiesce and counted
 attach/submit entrypoints. DeviceStopping is a declaration only: readiness

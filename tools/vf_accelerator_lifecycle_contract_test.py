@@ -289,6 +289,38 @@ UNSUPPORTED_NOOP_BODY = bytes.fromhex(
     "55 48 89 e5 b8 c7 02 00 e0 5d c3")
 
 
+def direct_branch_candidates(image, start, end, target, external_offsets):
+    """Bounded byte candidates, not an x86 instruction/reachability decoder.
+
+    External relocations can carry zero placeholders which accidentally look
+    like a local branch to the next function. Never treat their disk addend as
+    the final runtime displacement. Whole-body/anchor checks remain required.
+    """
+    assert 0 <= start <= end <= len(image)
+    found = []
+    for candidate in range(start, end - 4):
+        if image[candidate] not in (0xe8, 0xe9):
+            continue
+        if any(offset in external_offsets for offset in range(candidate + 1, candidate + 5)):
+            continue
+        displacement = struct.unpack_from("<i", image, candidate + 1)[0]
+        if candidate + 5 + displacement == target:
+            found.append(candidate)
+    return found
+
+
+def direct_branch_candidate_contract():
+    placeholder = bytes.fromhex("e9 00 00 00 00")
+    assert direct_branch_candidates(placeholder, 0, 5, 5, set()) == [0]
+    for relocated in range(1, 5):
+        assert direct_branch_candidates(placeholder, 0, 5, 5, {relocated}) == []
+    real = bytes.fromhex("e8 fb ff ff ff")
+    assert direct_branch_candidates(real, 0, 5, 0, set()) == [0]
+    assert direct_branch_candidates(real, 0, 4, 0, set()) == []
+    assert direct_branch_candidates(b"", 0, 0, 0, set()) == []
+    assert direct_branch_candidates(real, 0, 5, 0, {5}) == [0]
+
+
 def macho_inventory(path):
     image = pathlib.Path(path).read_bytes()
     header = struct.unpack_from("<8I", image)
@@ -362,10 +394,12 @@ def macho_inventory(path):
         0xcec70: "__ZN20IOAccelEventMachine24stopEv",
     }
     observed_event_stop_imports = {address: [] for address in event_stop_imports}
+    external_relocation_offsets = set()
     for index in range(external_count):
         address, bits = struct.unpack_from(
             "<iI", image, external_offset + index * 8)
         symbol_index = bits & 0xFFFFFF
+        external_relocation_offsets.add(address)
         if address in observed_event_stop_imports:
             observed_event_stop_imports[address].append((names[symbol_index], bits >> 24))
         if address in observed_stamp_irq_imports:
@@ -426,14 +460,8 @@ def macho_inventory(path):
         owner_start = value(owner)
         owner_end = next_symbol(owner_start)
         target_start = value(target)
-        calls = []
-        for candidate in range(owner_start, owner_end - 4):
-            if image[candidate] not in (0xE8, 0xE9):
-                continue
-            displacement = struct.unpack_from("<i", image, candidate + 1)[0]
-            if candidate + 5 + displacement == target_start:
-                calls.append(candidate)
-        return calls
+        return direct_branch_candidates(image, owner_start, owner_end,
+                                        target_start, external_relocation_offsets)
 
     for name, (length, digest) in STAMP_IRQ_NATIVE.items():
         start = value(name)
@@ -711,6 +739,8 @@ def macho_inventory(path):
     # must not be mistaken for the admitted scheduler4 implementation.
     periodic_enable = "__ZN11IGScheduler33enablePeriodicEventTimerInterruptEP22IOInterruptEventSource"
     periodic_disable = "__ZN11IGScheduler34disablePeriodicEventTimerInterruptEP22IOInterruptEventSource"
+    assert direct_branches(periodic_enable, periodic_disable) == [], \
+        f"{path}: imported periodic unlock placeholder became a fictitious local disable edge"
     for owner, target, address in (
             ("__ZN19IGAccelEventMachine20enableStampInterruptEii", periodic_enable, 0x16232),
             ("__ZN19IGAccelEventMachine21disableStampInterruptEii", periodic_disable, 0x162de),
@@ -2367,6 +2397,7 @@ def source_contract(path):
 def main():
     if len(sys.argv) != 4:
         raise SystemExit(f"usage: {sys.argv[0]} kern_gen11.cpp TGL-production TGL-debug")
+    direct_branch_candidate_contract()
     source_contract(sys.argv[1])
     macho_inventory(sys.argv[2])
     macho_inventory(sys.argv[3])

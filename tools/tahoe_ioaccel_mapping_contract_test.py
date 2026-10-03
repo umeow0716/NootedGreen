@@ -35,6 +35,7 @@ EVENT_DISABLE_STAMP_LOCKED = "__ZN20IOAccelEventMachine223disable_stamp_interrup
 EVENT_ENABLE_STAMP = "__ZN20IOAccelEventMachine220enableStampInterruptEi"
 EVENT_DISABLE_STAMP = "__ZN20IOAccelEventMachine221disableStampInterruptEi"
 EVENT_OWNER_BODIES = {
+    "__ZN24IOAccelEventMachineFast226enableEventStampInterruptsEPK12IOAccelEvent": (0x66, "93974e6cdc73ba252aed43b7c0b42d08759c0b937b014f40b74cd8fbd5dac47a"),
     "__ZN24IOAccelEventMachineFast211finishStampEi": (0x158, "32f9a4ca4dbc18d2fceb8ca7c393a91565f766baca120340529088c8ea7afa7d"),
     "__ZN24IOAccelEventMachineFast215finishAllStampsEv": (0x6c, "09a27596eebdca0fac5ad94ae61f8a33a4bd822b3e4121d84433b82c14b12a1e"),
     "__ZN24IOAccelEventMachineFast24freeEv": (0x12, "de5103312cac712958fb96393f449efae2caaf0868144344864c1f96a6b5341b"),
