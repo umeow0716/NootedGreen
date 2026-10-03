@@ -837,3 +837,10 @@ six-category jump table and atomic +0x34 increment/decrement. Category-3 count
 side effects precede a later size check; errors are not necessarily side-effect
 free. SetMemoryDescriptor/clear registration pairing and mapping VM callees
 remain pending. This protocol count is not direct GPU execution evidence.
+# Latest DMA registration pairing checkpoint
+
+Reviewed/pinned complete base setMemoryDescriptor and effective slot +0x128.
+Established flagged 03000001/03000000 registration pairing with ignored
+operation results and prepare-failure forced-clear order. Runtime subclasses,
+prepare failure semantics, creator options and concurrency remain unproven.
+No GPU retirement inference or production fix is made from ignored errors.

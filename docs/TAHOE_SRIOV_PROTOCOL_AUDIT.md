@@ -5904,3 +5904,29 @@ flag pairing, concrete receiver identity and failure unwind remain pending.
 The SDK header separately describes dmaCommandOperation as dedicated
 communication for IODMACommand; it does not supply private operation semantics.
 Paired-KC checks pass locally; no production/runtime mutation or deployment.
+# DMA descriptor registration and forced-clear pairing follow-up
+
+Complete BootKC IODMACommand setMemoryDescriptor span (0x1d0 including padding)
+and base object slot +0x128 are reviewed/pinned. Replacing an existing different
+descriptor rejects outstanding command prepare count `+0x68`; otherwise it
+calls clear(true) before installing a new one. Query-operation failure returns
+before retaining/installing the incoming descriptor. A same-descriptor call
+with autoPrepare false repeatedly completes existing prepare references;
+this branch is not a descriptor-registration replacement.
+
+After a successful query, set retains/installs the descriptor at +0x48 and
+sets registration flag in private state +0x7e according to command field
++0x40 being null. That mode sends `0x03000001` with dataSize zero and ignores
+the operation return, pairing the already reviewed clear path's flagged
+`0x03000000` decrement. General descriptor category-3 side effects precede
+the size error, so this caller behavior is consistent with side-effect-based
+registration; do not invent rollback solely on that ignored return status.
+
+If autoPrepare is requested, virtual +0x140 is called; failure preserves its
+error, calls clear(true) and returns the original failure. Clear's own return
+is ignored here. Forced-clear mode drains prepare references, decrements the
+descriptor registration when flagged, releases and clears the descriptor.
+Local base pairing is now established; concrete runtime subclasses, prepare
+callee failure behavior, count-overflow/concurrent mutation and Intel creator
+options remain pending. This registration count is not GPU execution/retirement.
+Paired-KC targeted checks pass; no production or runtime mutation.

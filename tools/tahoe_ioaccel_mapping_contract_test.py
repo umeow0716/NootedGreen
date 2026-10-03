@@ -271,6 +271,7 @@ def check_boot_atomic(system, path):
     symbols[b"__ZN18IOTimerEventSource11setWorkLoopEP10IOWorkLoop"] = []
     symbols[b"__ZTV8OSObject"] = []
     for name in (b"__ZTV12IODMACommand", b"__ZTV25IOGeneralMemoryDescriptor",
+                 b"__ZN12IODMACommand19setMemoryDescriptorEPK18IOMemoryDescriptorb",
                  b"__ZNK25IOGeneralMemoryDescriptor19dmaCommandOperationEjPvj",
                  b"__ZN12IODMACommand7walkAllEj", b"_upl_abort_range",
                  b"_upl_commit_range", b"_upl_deallocate", b"_vm_page_free_list",
@@ -317,6 +318,7 @@ def check_boot_atomic(system, path):
         return boot[matches[0]:matches[0] + length]
 
     for table, slot, method in (
+            (b"__ZTV12IODMACommand", 0x128, b"__ZN12IODMACommand19setMemoryDescriptorEPK18IOMemoryDescriptorb"),
             (b"__ZTV12IODMACommand", 0x130, b"__ZN12IODMACommand21clearMemoryDescriptorEb"),
             (b"__ZTV12IODMACommand", 0x148, b"__ZN12IODMACommand8completeEbb"),
             (b"__ZTV25IOGeneralMemoryDescriptor", 0x1f8, b"__ZN25IOGeneralMemoryDescriptor8completeEj")):
@@ -330,12 +332,17 @@ def check_boot_atomic(system, path):
     assert kernel_read(descriptor_operation + 0x165, 6) == bytes.fromhex("66 f0 0f c1 47 34"), "changed descriptor active-DMA atomic increment"
     assert kernel_read(descriptor_operation + 0x215, 5) == bytes.fromhex("66 f0 ff 4f 34"), "changed descriptor active-DMA atomic decrement"
     for method, length, digest in (
+            (b"__ZN12IODMACommand19setMemoryDescriptorEPK18IOMemoryDescriptorb", 0x1d0, "c3f7554a7c9a6dbb4357bccb00a3de4d2fa3d640fdfd141e5e92dace59cabee6"),
             (b"__ZN25IOGeneralMemoryDescriptor8completeEj", 0x3a0, "05696feca129a66a231bfdffc6173151ae05db56d52377b7b551f452c1bc06f1"),
             (b"__ZN12IODMACommand7walkAllEj", 0x380, "21f231d75f108aab5a00af400fa56e8dc64a47ba29119f6f1fdd37629537adda"),
             (b"__ZN12IODMACommand21clearMemoryDescriptorEb", 0x90, "b2e56b7f2a5154c2fc39d156c41faaf86ab8b54bb20a9d1b0566854515495d6b"),
             (b"__ZN12IODMACommand8completeEbb", 0x230, "7862d56c7f676b693648cda13d9973549ed700b71e093af739244d0dbae6edca")):
         assert hashlib.sha256(kernel_read(symbols[method][0], length)).hexdigest() == digest, "changed base DMA-command cleanup body"
     dma_complete = symbols[b"__ZN12IODMACommand8completeEbb"][0]
+    dma_set = symbols[b"__ZN12IODMACommand19setMemoryDescriptorEPK18IOMemoryDescriptorb"][0]
+    assert kernel_read(dma_set + 0x1a0, 5) == bytes.fromhex("be 01 00 00 03"), "changed DMA descriptor registration operation"
+    assert kernel_read(dma_set + 0x1b0, 5) == bytes.fromhex("45 84 f6 75 aa"), "changed DMA registration ignored-result/autoprepare edge"
+    assert kernel_read(dma_set + 0x18a, 5) == bytes.fromhex("be 01 00 00 00"), "changed DMA prepare-failure forced-clear argument"
     for call, method in ((0xffffff8000ad2f98, b"__ZN12IODMACommand7walkAllEj"),
                          (0xffffff8000add8a5, b"_upl_commit_range"),
                          (0xffffff8000add8d9, b"_upl_abort_range"),
