@@ -27,6 +27,26 @@ enforce fault-before-panic and prohibit native/helper/backing side effects.
 
 ## Mapping getter provenance follow-up (offline)
 
+Normal-submit stamp provenance follow-up: `submitToRing` captures ring byte
+`+0x48` (stamp written), clears that byte before scheduler dispatch, and passes
+the saved boolean to Scheduler4 virtual `+0x148`; its tail argument is ring
+`+0x64`, with a separate value at `+0x68`. The virtual is Scheduler4::push.
+That push obtains the FIFO at context `+0xb8`, its ring at FIFO `+0x130`, and
+loads ring `+0x44` into the GuC call's ringSequence argument. The original
+tail is saved and passed as the final stack argument. The saved per-submit
+stamp-presence boolean is not forwarded to submitWorkItem. Both payloads now
+pin this chain, fields, virtual and capture/clear/dispatch order.
+
+Therefore ringSequence is the last ring stamp value, not proof that every
+submit carries a fresh completion packet. A stamp-only idle implementation
+could incorrectly declare later un-stamped work complete using an older stamp.
+Future tracking must capture stamp coverage at a verified producer boundary
+(the Scheduler4 push still receives the boolean), invalidate coverage for
+subsequent un-stamped submissions, and exclude software termination/restart
+writers before observing hardware completion. The current GuC wrapper's tail
+publication and conservative enabled-busy behavior remain unchanged. This
+review does not yet implement coverage tracking or prove mapping flag/coherency.
+
 Inherited implementation found locally (2026-10-04): archived Tahoe 25G229
 `SystemKernelExtensions.kc`, SHA-256
 `5cb1be1dc530b4b953a33943567589101d3ac46bb8cf90728566ee7e5b1fa214`,

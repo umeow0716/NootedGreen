@@ -101,6 +101,9 @@ SHARED_BUFFER_CLONE = "__ZN20IGSharedMappedBuffer11cloneInTaskEP11IGAccelTask"
 SHARED_BUFFER_FACTORY = "__ZN20IGSharedMappedBuffer11withOptionsEP11IGAccelTaskmjj"
 SCHEDULER4_BIND = "__ZN12IGScheduler44bindE10IGHwCsTypeih"
 SCHEDULER4_UNBIND = "__ZN12IGScheduler46unbindEP17IGHardwareContext"
+SCHEDULER4_PUSH = "__ZN12IGScheduler44pushEP17IGHardwareContextjjbb"
+RING_SUBMIT_TO_RING = "__ZN20IGHardwareRingBuffer12submitToRingEv"
+GUC_SUBMIT_WORK_ITEM = "__ZN13IGHardwareGuC14submitWorkItemEjRK21SGfxContextDescriptor10IGHwCsTypejjj"
 GET_DEFAULT_RESET = "__ZN16IntelAccelerator20getDefaultResetValueEj"
 TRACE_DISABLE = "__ZN25IGAccelTraceStreamManager17disableCollectionE27TraceStreamCollectionChange"
 TRACE_SHUTDOWN = "__ZN25IGAccelTraceStreamManager8shutdownEv"
@@ -403,6 +406,28 @@ def macho_inventory(path):
             f"{path}: scheduler-4 active-context zero result changed")
 
     timeout_start = value(EVENT_TIMEOUT)
+    if struct.unpack_from("<Q", image,
+            value(SCHEDULER4_VTABLE) + 16 + 0x148)[0] != value(SCHEDULER4_PUSH):
+        raise AssertionError(f"{path}: ring submission scheduler virtual changed")
+    push_start = value(SCHEDULER4_PUSH)
+    push_body = image[push_start:next_symbol(push_start)]
+    if len(direct_branches(SCHEDULER4_PUSH, GUC_SUBMIT_WORK_ITEM)) != 1:
+        raise AssertionError(f"{path}: scheduler/GuC submission graph changed")
+    for anchor in ("41 89 d2 48 89 f2 48 8b 86 b8 00 00 00",
+                   "44 8b 40 20", "48 81 c2 89 00 00 00",
+                   "48 8b 80 30 01 00 00 44 8b 48 44 44 89 14 24"):
+        if push_body.count(bytes.fromhex(anchor)) != 1:
+            raise AssertionError(f"{path}: scheduler stamp/tail argument provenance changed")
+    submit_start = value(RING_SUBMIT_TO_RING)
+    submit_body = image[submit_start:next_symbol(submit_start)]
+    for anchor in ("44 8a 7b 48 45 84 ff", "c6 43 48 00",
+                   "8b 53 64 8b 4b 68 45 31 c9", "45 0f b6 c7 ff 90 48 01 00 00"):
+        if submit_body.count(bytes.fromhex(anchor)) != 1:
+            raise AssertionError(f"{path}: per-submit stamp-presence/tail provenance changed")
+    if not (submit_body.index(bytes.fromhex("44 8a 7b 48")) <
+            submit_body.index(bytes.fromhex("c6 43 48 00")) <
+            submit_body.index(bytes.fromhex("ff 90 48 01 00 00"))):
+        raise AssertionError(f"{path}: stamp-presence capture/clear/dispatch order changed")
     if struct.unpack_from("<Q", image,
             value(EVENT_MACHINE_VTABLE) + 16 + 0x220)[0] != timeout_start:
         raise AssertionError(f"{path}: inherited restart timeout override changed")
