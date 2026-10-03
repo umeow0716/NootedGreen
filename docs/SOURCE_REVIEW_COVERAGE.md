@@ -830,3 +830,10 @@ resolved explicit UPL commit/abort/deallocate and vm_page_free_list calls.
 Actual page-release edges are established, not GPU retirement safety. Concrete
 receiver identity, active-DMA count producer pairing, mapping walker/callbacks
 and VM callee implementations remain pending. Targeted paired-KC checks pass.
+# Latest descriptor DMA-operation checkpoint
+
+Reviewed/pinned complete GeneralMemoryDescriptor dmaCommandOperation span,
+six-category jump table and atomic +0x34 increment/decrement. Category-3 count
+side effects precede a later size check; errors are not necessarily side-effect
+free. SetMemoryDescriptor/clear registration pairing and mapping VM callees
+remain pending. This protocol count is not direct GPU execution evidence.

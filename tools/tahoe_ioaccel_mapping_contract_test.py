@@ -271,6 +271,7 @@ def check_boot_atomic(system, path):
     symbols[b"__ZN18IOTimerEventSource11setWorkLoopEP10IOWorkLoop"] = []
     symbols[b"__ZTV8OSObject"] = []
     for name in (b"__ZTV12IODMACommand", b"__ZTV25IOGeneralMemoryDescriptor",
+                 b"__ZNK25IOGeneralMemoryDescriptor19dmaCommandOperationEjPvj",
                  b"__ZN12IODMACommand7walkAllEj", b"_upl_abort_range",
                  b"_upl_commit_range", b"_upl_deallocate", b"_vm_page_free_list",
                  b"__ZN12IODMACommand21clearMemoryDescriptorEb",
@@ -320,6 +321,14 @@ def check_boot_atomic(system, path):
             (b"__ZTV12IODMACommand", 0x148, b"__ZN12IODMACommand8completeEbb"),
             (b"__ZTV25IOGeneralMemoryDescriptor", 0x1f8, b"__ZN25IOGeneralMemoryDescriptor8completeEj")):
         assert struct.unpack("<Q", kernel_read(symbols[table][0] + 16 + slot, 8))[0] == symbols[method][0], "changed base DMA/descriptor virtual identity"
+    descriptor_operation = symbols[b"__ZNK25IOGeneralMemoryDescriptor19dmaCommandOperationEjPvj"][0]
+    assert struct.unpack("<Q", kernel_read(symbols[b"__ZTV25IOGeneralMemoryDescriptor"][0] + 16 + 0x130, 8))[0] == descriptor_operation, "changed general descriptor DMA operation virtual"
+    assert hashlib.sha256(kernel_read(descriptor_operation, 0x8a0)).hexdigest() == "b86c29832730901e99dfd43d6c422cc2b6b77586b988d8e40a5d812410d9163e", "changed general descriptor DMA operation body/table"
+    dma_operation_table = descriptor_operation + 0x888
+    for index, offset in enumerate((0x21a, 0x35, 0x155, 0x181, 0xe9, 0x1c7)):
+        assert dma_operation_table + struct.unpack("<i", kernel_read(dma_operation_table + index * 4, 4))[0] == descriptor_operation + offset, "changed DMA operation category jump table"
+    assert kernel_read(descriptor_operation + 0x165, 6) == bytes.fromhex("66 f0 0f c1 47 34"), "changed descriptor active-DMA atomic increment"
+    assert kernel_read(descriptor_operation + 0x215, 5) == bytes.fromhex("66 f0 ff 4f 34"), "changed descriptor active-DMA atomic decrement"
     for method, length, digest in (
             (b"__ZN25IOGeneralMemoryDescriptor8completeEj", 0x3a0, "05696feca129a66a231bfdffc6173151ae05db56d52377b7b551f452c1bc06f1"),
             (b"__ZN12IODMACommand7walkAllEj", 0x380, "21f231d75f108aab5a00af400fa56e8dc64a47ba29119f6f1fdd37629537adda"),

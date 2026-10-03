@@ -5879,3 +5879,28 @@ newly certified by caller review. These establish real backing-release paths,
 not a GPU-completion oracle: safety still requires native GPU retirement and
 translation invalidation before entering final release. Paired-KC targeted
 tests pass; no runtime/production mutation or deployment.
+# Descriptor DMA-operation count producer follow-up
+
+Reviewed complete BootKC GeneralMemoryDescriptor dmaCommandOperation span
+(0x8a0 including six-entry relative jump table). Canonical object slot +0x130,
+body/table hashes, category targets and atomic count instructions are pinned.
+Dispatch uses `(operation-0x01000000)>>24`; categories 1..6 have separate
+size checks, segment queries, mapping allocation/reuse, limits and release.
+Mapping helpers/VM callees are not certified by this body review.
+
+Category 3 reaches `+0x155`: nonzero low 24 bits atomically adds one to the
+16-bit descriptor count `+0x34`, clearing field `+0x38` on the 0-to-1 edge;
+zero low bits checks nonzero then atomically decrements, otherwise reaches
+a cold trap. The increment has no explicit saturation check. Both then flow
+to the category-1 data-size/mapping query branch, so count side effects can
+precede a later argument-size error. The reviewed DMA-command clear path sends
+`0x03000000` with dataSize zero and ignores the descriptor operation result;
+do not assume a returned error means no count transition occurred.
+
+This explains the counter tested by descriptor complete's final-release trap:
+it is maintained by descriptor DMA-operation protocol, not a directly observed
+GPU execution counter. SetMemoryDescriptor producer, registration-success
+flag pairing, concrete receiver identity and failure unwind remain pending.
+The SDK header separately describes dmaCommandOperation as dedicated
+communication for IODMACommand; it does not supply private operation semantics.
+Paired-KC checks pass locally; no production/runtime mutation or deployment.
