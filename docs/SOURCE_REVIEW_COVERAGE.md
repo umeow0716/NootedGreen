@@ -58,6 +58,15 @@ nor retain nodes. Concrete resource subclass overrides, upstream list locking,
 storage-resource and mapping lifetime remain open; no runtime safety or idle
 certification follows from the newly pinned local fixture.
 
+Producer locking delta reviewed busy counter/notification/ownership-query
+bodies and the local accelerator lock/unlock copies. The local fixture pins
+five unique helper bodies, busy atomics and notification/mutex import identities
+across the paired KCs. Busy is counting, notifications are debug tracing, and
+the ownership query always returns true; none proves current-thread ownership.
+Actual mutex uses accelerator `+0x88`, but per-copy lock-body contracts and
+complete producer caller lock coverage remain open. No locking was added at
+runtime and the local-only fixture is not a hardware or CI-KC certification.
+
 V267 closes the verified VF event-timeout return into inherited restart/retry
 by protocol-fault admission closure followed by guest fail-stop. This is not
 normal recovery or proof that already-published DMA stops. PF and normal debug

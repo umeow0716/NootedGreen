@@ -36,6 +36,24 @@ SCRUB_BODIES = {
     EVENT_SCRUB: (0x7e, "7b3a41f9948c644a06cb48c6e86f7a014e28b9f05aee296f5c813efc3c822833"),
 }
 CONTRACTS = {
+    "__ZNK22IOGraphicsAccelerator223isLockedByCurrentThreadEv":
+        bytes.fromhex("55 48 89 e5 b0 01 5d c3"),
+    "__ZN22IOGraphicsAccelerator29lock_busyEv":
+        bytes.fromhex("55 48 89 e5 48 81 c7 58 01 00 00 5d e9 7f 93 46 eb 90"),
+    "__ZN22IOGraphicsAccelerator211unlock_busyEv":
+        bytes.fromhex("55 48 89 e5 53 50 48 89 fb 48 81 c7 58 01 00 00 e8 63 93 46 eb "
+                      "83 f8 01 75 39 f6 83 78 0c 00 00 04 75 30 48 8b 93 60 01 00 00 "
+                      "48 85 d2 74 24 48 8b 03 48 8b 8b 68 01 00 00 48 8b 80 38 07 00 00 "
+                      "48 89 df be 01 80 ff e3 45 31 c0 48 83 c4 08 5b 5d ff e0 "
+                      "48 83 c4 08 5b 5d c3"),
+    "__ZN22IOGraphicsAccelerator218acceleratorDidLockEPKci":
+        bytes.fromhex("83 3d 11 f5 03 00 00 74 21 55 48 89 e5 e8 92 90 46 eb "
+                      "bf 19 00 12 85 48 89 c6 31 d2 31 c9 45 31 c0 45 31 c9 "
+                      "5d e9 a4 90 46 eb c3 90"),
+    "__ZN22IOGraphicsAccelerator221acceleratorWillUnlockEPKci":
+        bytes.fromhex("83 3d e5 f4 03 00 00 74 21 55 48 89 e5 e8 66 90 46 eb "
+                      "bf 1a 00 12 85 48 89 c6 31 d2 31 c9 45 31 c0 45 31 c9 "
+                      "5d e9 78 90 46 eb c3 90"),
     "__ZN17IOAccelSharedList8IteratorC1ERS_":
         bytes.fromhex("55 48 89 e5 48 8b 06 48 89 07 5d c3"),
     "__ZN17IOAccelSharedList8Iterator13getNextSharedEv":
@@ -139,7 +157,9 @@ def check_boot_atomic(system, path):
             if boot[start:boot.index(0, start)] == b"com.apple.kernel":
                 kernel.append(file_offset)
     assert len(kernel) == len(bases) == 1, "missing/ambiguous kernel/base"
-    symbols = {b"_OSIncrementAtomic": [], b"_thread_wakeup_prim": []}
+    symbols = {name: [] for name in (b"_OSIncrementAtomic", b"_OSDecrementAtomic", b"_thread_wakeup_prim",
+                                   b"__ZN15IORegistryEntry18getRegistryEntryIDEv", b"_kernel_debug",
+                                   b"_IOLockLock", b"_IOLockUnlock")}
     for command, offset in commands(boot, kernel[0]):
         if command != 2:
             continue
@@ -156,6 +176,25 @@ def check_boot_atomic(system, path):
     assert (raw >> 30) & 3 == 0 and raw >> 63 == 0, "unexpected atomic import cache level/auth"
     address = bases[0] + (raw & 0x3fffffff)
     assert address == symbols[b"_OSIncrementAtomic"][0], "atomic import does not resolve to OSIncrementAtomic"
+    assert system[0x1012c:0x10132] == bytes.fromhex("ff 25 5e 40 01 00"), "changed decrement import stub"
+    decrement_raw = struct.unpack_from("<Q", system, 0x24190)[0]
+    assert (decrement_raw >> 30) & 3 == 0 and decrement_raw >> 63 == 0, "unexpected decrement cache level/auth"
+    decrement_address = bases[0] + (decrement_raw & 0x3fffffff)
+    assert decrement_address == symbols[b"_OSDecrementAtomic"][0], "busy decrement import does not resolve to OSDecrementAtomic"
+    decrement_locations = [f + decrement_address - v for v, f, size in segments
+                           if v <= decrement_address and decrement_address + 15 <= v + size]
+    assert len(decrement_locations) == 1, "unmapped decrement implementation"
+    decrement_offset = decrement_locations[0]
+    assert boot[decrement_offset:decrement_offset + 15] == bytes.fromhex(
+        "55 48 89 e5 b8 ff ff ff ff f0 0f c1 07 5d c3"), "changed atomic decrement"
+    for stub, name in ((0x101a4, b"__ZN15IORegistryEntry18getRegistryEntryIDEv"),
+                       (0x101ce, b"_kernel_debug"), (0x10012, b"_IOLockLock"),
+                       (0x10018, b"_IOLockUnlock")):
+        assert system[stub:stub + 2] == b"\xff\x25", "changed lock notification import stub"
+        pointer = stub + 6 + struct.unpack_from("<i", system, stub + 2)[0]
+        raw_pointer = struct.unpack_from("<Q", system, pointer)[0]
+        assert (raw_pointer >> 30) & 3 == 0 and raw_pointer >> 63 == 0, "unexpected lock notification cache level/auth"
+        assert bases[0] + (raw_pointer & 0x3fffffff) == symbols[name][0], "changed lock notification import identity"
     wake_stub = 0x10cae
     assert system[wake_stub:wake_stub + 2] == b"\xff\x25", "changed wakeup import stub"
     wake_pointer = wake_stub + 6 + struct.unpack_from("<i", system, wake_stub + 2)[0]
@@ -168,7 +207,7 @@ def check_boot_atomic(system, path):
     offset = locations[0]
     assert boot[offset:offset + 15] == bytes.fromhex(
         "55 48 89 e5 b8 01 00 00 00 f0 0f c1 07 5d c3"), "changed atomic increment"
-    print("PASS termination atomic and event wakeup imports across SystemKC/BootKC")
+    print("PASS busy/termination atomics, lock notifications and event wakeup imports across SystemKC/BootKC")
 
 
 def check(path, boot_path=None):

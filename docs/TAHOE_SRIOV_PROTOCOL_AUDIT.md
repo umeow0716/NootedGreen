@@ -205,6 +205,31 @@ scrub iterator does not itself pin nodes against concurrent removal; upstream
 serialization remains required. No runtime hook, release policy, GPU test,
 VM configuration or host GPU state changed in this review.
 
+Producer lock-name follow-up: complete archived `lock_busy` only increments
+accelerator counter `+0x158` via `OSIncrementAtomic`; `unlock_busy` decrements
+it via `OSDecrementAtomic` and can tail-dispatch notification virtual `+0x738`
+on transition from one. Neither counter operation is mutual exclusion.
+`acceleratorDidLock`/`acceleratorWillUnlock` conditionally obtain the registry
+entry ID and emit `kernel_debug` records, not lock acquisition/release. Their
+complete bodies and paired BootKC import identities are now locally pinned.
+The decrement implementation is verified `lock xadd -1` returning the old value.
+
+Actual local copies of `acceleratorLock`/`acceleratorUnlock` were found and
+read: lock increments waiter counter `+0x90`, locks the object pointer `+0x88`,
+decrements the waiter counter, marks busy and dispatches virtual `+0x850`;
+unlock dispatches `+0x858`, clears busy and unlocks `+0x88`. SystemKC stubs
+`0x10012`/`0x10018` resolve through BootKC to `IOLockLock`/`IOLockUnlock`
+(also aliased to kernel mutex functions). These imports are pinned locally.
+The multiple local copies are not yet individually covered by body contracts,
+and producer-to-lock caller reachability remains unfinished.
+
+Crucially the complete inherited `isLockedByCurrentThread` body just returns
+true. It is now locally pinned so future integration cannot silently treat
+that query as proof of ownership of `+0x88`. Reacquiring the native mutex
+without knowing the producer caller's lock state would risk deadlock; busy
+counts, notification methods and this always-true query are not substitutes
+for the required producer serialization proof. No runtime lock/hook changed.
+
 Inherited implementation found locally (2026-10-04): archived Tahoe 25G229
 `SystemKernelExtensions.kc`, SHA-256
 `5cb1be1dc530b4b953a33943567589101d3ac46bb8cf90728566ee7e5b1fa214`,
