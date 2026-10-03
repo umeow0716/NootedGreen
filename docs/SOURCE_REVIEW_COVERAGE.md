@@ -80,6 +80,11 @@ pending; base gated invocation alone is not a cleanup success proof.
 reviewed/pinned; complete reference XNU runAction read. Actual Boot virtual
 +0x1c8, stored removal action and concrete control-gate type remain pending.
 
+2026-10-04 scheduler cleanup follow-up: native cleanup/free/periodic callback
+re-read; both payload variants pin unchecked removal followed by timer release,
+set clear and mutex-free call. Successful same-workloop gate serialization is
+conditional, not a failed-detach lifetime guarantee; no runtime repair yet.
+
 2026-10-04 cancel-wait/owner follow-up: complete Boot cancel-wait 0x3d0
 body and separate callback-invocation helper 0x160 window reviewed and pinned.
 Conditional wait/fixed snapshot and direct owner forwarding are established;

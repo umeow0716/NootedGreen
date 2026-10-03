@@ -27,6 +27,20 @@ enforce fault-before-panic and prohibit native/helper/backing side effects.
 
 ## Mapping getter provenance follow-up (offline)
 
+Scheduler cleanup ordering follow-up: re-read native shared cleanup/free and
+periodic callback against the now-reviewed timer semantics. Cleanup cancels,
+calls scheduler workloop getter twice, attempts removeEventSource, then loads
+the timer for release without inspecting IOReturn; subsequently it clears the
+timer/set and frees the callback's mutex. Local payload fixtures now explicitly
+pin these instructions for both shipped payload variants. Successful removal
+on the same stable workloop can provide gate serialization and timer disable/
+generation invalidation; this cannot be extended to a missing workloop or
+failed removal. The periodic callback accesses owner+0x440/0x438/0x448 and may
+rearm the timer. No reachable failure is proven here; concrete ownership,
+workloop stability, cleanup admission and failed-detach containment remain
+required before introducing a runtime patch. Engine-stop ordering fixture
+messages now describe call order rather than falsely claiming DMA quiescence.
+
 Cancellation-wait and callback owner follow-up: the complete Boot
 thread_call_cancel_wait 0x3d0 body is now reviewed and locally pinned. It
 checks allocation ownership, enabled interrupts and self-call avoidance;

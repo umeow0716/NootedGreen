@@ -423,6 +423,18 @@ def macho_inventory(path):
         assert hashlib.sha256(image[start:start + length]).hexdigest() == digest, \
             f"{path}: changed scheduler timer construction/cleanup window"
     cleanup = scheduler_init + 0x162
+    # This is an inventory of the native failure-sensitive ordering, not a
+    # claim that cancellation or unchecked removal drains every callback.
+    for offset, instruction in (
+            (0x19, "ff 90 18 02 00 00"),  # cancel timer
+            (0x49, "ff 91 48 01 00 00"),  # remove source
+            (0x4f, "49 8b be 48 04 00 00"),  # immediately load timer for release: no status check
+            (0x5e, "ff 50 28"),
+            (0x61, "49 c7 86 48 04 00 00 00 00 00 00"),
+            (0x7e, "49 c7 86 38 04 00 00 00 00 00 00"),
+            (0x95, "e8")):
+        assert image[cleanup + offset:cleanup + offset + len(bytes.fromhex(instruction))] == bytes.fromhex(instruction), \
+            f"{path}: changed scheduler unchecked removal/release ordering"
     for call in (scheduler_init + 0x14c, scheduler_free + 9):
         assert image[call] == 0xe8 and call + 5 + struct.unpack_from("<i", image, call + 1)[0] == cleanup, \
             f"{path}: changed shared scheduler cleanup edge"
@@ -1327,7 +1339,8 @@ def macho_inventory(path):
     # The VF wrapper deliberately preserves native stop so Tahoe can finish its
     # software event lifecycle and release every scheduler-owned object.  Its
     # only engine boundary must remain the routed stopGraphicsEngine call, and
-    # all trace/sysctl teardown must follow that DMA-quiescing boundary.
+    # all trace/sysctl teardown must follow that routed engine-stop boundary.
+    # Call order alone does not establish successful GPU DMA quiescence.
     finish_calls = direct_branches(ACCELERATOR_STOP, EVENT_FINISH_ALL)
     trace_disable_calls = direct_branches(ACCELERATOR_STOP, TRACE_DISABLE)
     engine_stop_calls = direct_branches(ACCELERATOR_STOP, STOP)
@@ -1342,7 +1355,7 @@ def macho_inventory(path):
             all(engine_stop < call for call in trace_shutdown_calls) and
             engine_stop < unregister_calls[0]):
         raise AssertionError(
-            f"{path}: native accelerator stop no longer quiesces engine before teardown")
+            f"{path}: native accelerator stop no longer calls engine stop before teardown")
     accelerator_stop_end = next_symbol(value(ACCELERATOR_STOP))
     release_calls = []
     for pattern in (bytes.fromhex("ff 50 28"),
@@ -1356,7 +1369,7 @@ def macho_inventory(path):
             cursor += 1
     if not release_calls or any(call < engine_stop for call in release_calls):
         raise AssertionError(
-            f"{path}: native accelerator stop releases an object before VF DMA quiescence")
+            f"{path}: native accelerator stop releases an object before routed engine stop")
 
     # The runtime patch must search across the private global constructor.
     # Its production bounds deliberately use exported symbols because the
