@@ -34,6 +34,13 @@ EVENT_COPY = "__ZN24IOAccelEventMachineFast29copyEventEP12IOAccelEventS1_"
 EVENT_DISABLE_STAMP_LOCKED = "__ZN20IOAccelEventMachine223disable_stamp_interruptEi"
 EVENT_ENABLE_STAMP = "__ZN20IOAccelEventMachine220enableStampInterruptEi"
 EVENT_DISABLE_STAMP = "__ZN20IOAccelEventMachine221disableStampInterruptEi"
+EVENT_OWNER_BODIES = {
+    "__ZN24IOAccelEventMachineFast24freeEv": (0x12, "de5103312cac712958fb96393f449efae2caaf0868144344864c1f96a6b5341b"),
+    "__ZN20IOAccelEventMachine24freeEv": (0x108, "171509afb4d553c5f408f236d968a8465f431ffa74c33f2c1c31b073fb545996"),
+    "__ZN20IOAccelEventMachine24stopEv": (0x63, "94b5760836e67bde79f7b2246e6aa701ea75026b42e7f7af8b5b311d919e9591"),
+    "____ZN20IOAccelEventMachine24stopEv_block_invoke": (0x8b, "044430d23f6ebae467b72e05ecfa9d92eeb69bb1a43422c5d87195d4d25de4db"),
+    "__ZN24IOAccelEventMachineFast227disableEventStampInterruptsEPK12IOAccelEvent": (0x66, "4784b5d57c1cb8f9b7a430da8683cc7c11752ca018a108453b3408a412b9f25e"),
+}
 # Symbol-bounded bodies reviewed locally. These identities do not certify
 # overridden resource methods, iterator locking, DMA completion or host safety.
 SCRUB_BODIES = {
@@ -630,7 +637,7 @@ def check(path, boot_path=None):
             symtab = struct.unpack_from("<6I", image, offset)[2:]
     assert symtab is not None, "missing embedded symbol table"
     symbol_offset, count, string_offset, string_size = symtab
-    matches = {name: [] for name in {*CONTRACTS, *SCRUB_BODIES, *LOCK_COPIES, SHARED_VTABLE, RESOURCE_VTABLE,
+    matches = {name: [] for name in {*CONTRACTS, *SCRUB_BODIES, *LOCK_COPIES, *EVENT_OWNER_BODIES, SHARED_VTABLE, RESOURCE_VTABLE,
                                     EVENT_VTABLE, EVENT_FINISH, EVENT_WAIT, EVENT_CLEAN, EVENT_SIGNAL, EVENT_RESTART,
                                     EVENT_MERGE_EXCLUDING, EVENT_SET_STAMP, GET_DATA_BUFFER,
                                     EVENT_INIT, EVENT_COPY, EVENT_FINISH_UNLOCKED, EVENT_HARDWARE_ERROR,
@@ -659,6 +666,14 @@ def check(path, boot_path=None):
         print(f"PASS {name} at {address:#x}")
     for name, (length, digest) in SCRUB_BODIES.items():
         assert hashlib.sha256(read(address_of(name), length)).hexdigest() == digest, f"changed {name}"
+    for name, (length, digest) in EVENT_OWNER_BODIES.items():
+        assert hashlib.sha256(read(address_of(name), length)).hexdigest() == digest, f"changed event owner lifecycle: {name}"
+    raw_free = struct.unpack("<Q", read(address_of(EVENT_VTABLE) + 0xa0, 8))[0]
+    assert (raw_free >> 30) & 3 == 1 and raw_free >> 63 == 0, "unexpected event free cache level/auth"
+    assert raw_free & 0x3fffffff == address_of("__ZN24IOAccelEventMachineFast24freeEv"), "changed inherited Fast2 free target"
+    stop_owner = read(address_of("____ZN20IOAccelEventMachine24stopEv_block_invoke"), 0x8b)
+    assert stop_owner.count(bytes.fromhex("ff 90 48 01 00 00")) == 3, "changed base event stop source-removal inventory"
+    print("PASS inherited event owner free/stop and per-event stamp-disable bodies (outer drain not proven)")
     # There are multiple real local definitions, not one ambiguous address to
     # pick arbitrarily. Require the full reviewed copy inventory and bodies.
     for name, copies in LOCK_COPIES.items():

@@ -27,6 +27,25 @@ enforce fault-before-panic and prohibit native/helper/backing side effects.
 
 ## Mapping getter provenance follow-up (offline)
 
+Inherited fallback teardown follow-up: Intel free's RIP import storage 0xc81b8
+is external relocation __ZTV24IOAccelEventMachineFast2 (type 0x0e); SystemKC
+that vtable +0xa0 decodes level 1 target 0x14b95072 Fast2::free. Fully reviewed
+Fast2 free 0x12, base free 0x14b777a8 (0x108), base stop 0x14b776ba (0x63),
+its owner block 0x14b7771d (0x8b), and disableEventStampInterrupts
+0x14b954e6 (0x66). Fast2 free delegates base free, which frees locks/arrays,
+clears accelerator+0x10 and other fields, then delegates OSObject cleanup;
+it does not deregister Intel's periodic fallback source. Base stop synchronously
+runs a workloop block removing three base sources (+0x60/+0x78/+0x68), with
+unchecked remove statuses, then releases/clears workloop+0x58. It does not
+touch Intel +0xd30 or periodic scheduler membership. Per-event stamp-disable
+iterates eight event channels under lock+0x50 and invokes virtual +0x248 only
+on a reference count 1-to-0 transition. This offers an outer balancing path,
+not proof that every accelerator teardown uses it. Added five full-body hashes,
+inherited Fast2 free vtable identity and three-source stop inventory to local
+paired KC tests; pass. An exploratory substring symbol selection also printed
+kalloc_type_view DATA; that was excluded from code review/pinning. Production
+unchanged. Next trace actual accelerator cleanup callers, not assumed stop drain.
+
 Fallback owner follow-up: fully reread event-machine init 0x15c82 (0x64),
 free 0x15cfe (0x66), callback 0x15ce6 (0x18), and enableSchedulerEvents
 0x15d64 (0x40). Init creates source+0xd30 with the event machine as owner
