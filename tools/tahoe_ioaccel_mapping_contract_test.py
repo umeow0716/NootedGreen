@@ -35,6 +35,7 @@ EVENT_DISABLE_STAMP_LOCKED = "__ZN20IOAccelEventMachine223disable_stamp_interrup
 EVENT_ENABLE_STAMP = "__ZN20IOAccelEventMachine220enableStampInterruptEi"
 EVENT_DISABLE_STAMP = "__ZN20IOAccelEventMachine221disableStampInterruptEi"
 EVENT_OWNER_BODIES = {
+    "__ZN16IOAccelSysMemory4wireEv": (0x34c, "b17bb9715b19099e9b766ef221adceb8f45a672016fa498f280af34dadf42e4a"),
     "__ZN22IOGraphicsAccelerator220createDMACommandPoolEv": (0x1d4, "a5b83a1786a350b2e88f404affde3ca5ce3ed042aa192f2782c9e4f7f59bffc8"),
     "__ZN22IOGraphicsAccelerator221releaseDMACommandPoolEv": (0xf0, "d24040c0993ad5617b52e19f965a7cfa37579d527d09ed8dbea943cf381aca6e"),
     "__ZN22IOGraphicsAccelerator218createIODMACommandEv": (0x40, "0920711193b7b044fc0fb1f6a5a4573c0b700d29590e8c00a458b123b450e029"),
@@ -278,6 +279,7 @@ def check_boot_atomic(system, path):
                  b"__ZN12IODMACommand12cloneCommandEPv",
                  b"__ZN12IODMACommand14initWithRefConEPv",
                  b"__ZN12IODMACommand4freeEv",
+                 b"__ZN12IODMACommand7prepareEyybb",
                  b"__ZN12IODMACommand21initWithSpecificationEPFbPS_NS_9Segment64EPvjEPKNS_14SegmentOptionsEjP8IOMapperS2_",
                  b"__ZN12IODMACommand16setSpecificationEPFbPS_NS_9Segment64EPvjEPKNS_14SegmentOptionsEjP8IOMapper",
                  b"_kalloc_type_impl", b"__ZN8IOMapper19waitForSystemMapperEv",
@@ -336,6 +338,7 @@ def check_boot_atomic(system, path):
             (b"__ZTV12IODMACommand", 0x180, b"__ZN12IODMACommand21initWithSpecificationEPFbPS_NS_9Segment64EPvjEPKNS_14SegmentOptionsEjP8IOMapperS2_"),
             (b"__ZTV12IODMACommand", 0x128, b"__ZN12IODMACommand19setMemoryDescriptorEPK18IOMemoryDescriptorb"),
             (b"__ZTV12IODMACommand", 0x130, b"__ZN12IODMACommand21clearMemoryDescriptorEb"),
+            (b"__ZTV12IODMACommand", 0x140, b"__ZN12IODMACommand7prepareEyybb"),
             (b"__ZTV12IODMACommand", 0x148, b"__ZN12IODMACommand8completeEbb"),
             (b"__ZTV25IOGeneralMemoryDescriptor", 0x1f8, b"__ZN25IOGeneralMemoryDescriptor8completeEj")):
         assert struct.unpack("<Q", kernel_read(symbols[table][0] + 16 + slot, 8))[0] == symbols[method][0], "changed base DMA/descriptor virtual identity"
@@ -351,6 +354,7 @@ def check_boot_atomic(system, path):
             (b"__ZN12IODMACommand12cloneCommandEPv", 0xe0, "3dfcbe6d051b154d2826655cfafcf186237776218302cf500ba0d766bb750374"),
             (b"__ZN12IODMACommand14initWithRefConEPv", 0x50, "9bf2ee9c07c3677712965fc2168ed0fea43d9887de6461bf80a504c5fa9fb1c4"),
             (b"__ZN12IODMACommand4freeEv", 0xd0, "9d28f8d4336106353ff68e94b7636473253843289ace886c4f9ef43925422b67"),
+            (b"__ZN12IODMACommand7prepareEyybb", 0x650, "233852a2a7af0fbf5b3107c282a6837bd3e74a20611022b47359585a0134b475"),
             (b"_kalloc_type_impl", 0x90, "5f34a636c2f1fbc91ff083c13527fa6b05bd0eb6a6056a3305170058be32cb10"),
             (b"__ZN12IODMACommand21initWithSpecificationEPFbPS_NS_9Segment64EPvjEPKNS_14SegmentOptionsEjP8IOMapperS2_", 0x60, "36cc23802bb6931657e908abf07c70352f24df054e3a7f432977c2dbe3a01e06"),
             (b"__ZN12IODMACommand16setSpecificationEPFbPS_NS_9Segment64EPvjEPKNS_14SegmentOptionsEjP8IOMapper", 0x290, "f61949ac55f2086536faaffc191f98a9535b29e01926a875e7741a6b27aca1ab"),
@@ -362,6 +366,8 @@ def check_boot_atomic(system, path):
             (b"__ZN12IODMACommand8completeEbb", 0x230, "7862d56c7f676b693648cda13d9973549ed700b71e093af739244d0dbae6edca")):
         assert hashlib.sha256(kernel_read(symbols[method][0], length)).hexdigest() == digest, "changed base DMA-command cleanup body"
     dma_complete = symbols[b"__ZN12IODMACommand8completeEbb"][0]
+    dma_prepare = symbols[b"__ZN12IODMACommand7prepareEyybb"][0]
+    assert kernel_read(dma_prepare + 0x52, 11) == bytes.fromhex("8b 47 68 44 8d 48 01 44 89 4f 68"), "changed DMA prepare reference increment before fallible work"
     allocator = symbols[b"_kalloc_type_impl"][0]
     assert kernel_read(allocator + 9, 3) == bytes.fromhex("83 e2 07"), "changed external typed-allocation KPI flag mask"
     dma_free = symbols[b"__ZN12IODMACommand4freeEv"][0]
@@ -856,6 +862,13 @@ def check(path, boot_path=None):
     assert stop_owner.count(bytes.fromhex("ff 90 48 01 00 00")) == 3, "changed base event stop source-removal inventory"
     print("PASS inherited event owner free/stop and per-event stamp-disable bodies (outer drain not proven)")
     lazy_setup = address_of("__ZN18IOAccelDisplayPipe14setup_workloopEv")
+    for address, encoded in ((0x14bba108, "31 d2 ff 91 28 01 00 00"),
+                             (0x14bba16b, "31 f6 31 d2 31 c9 45 31 c0 ff 90 40 01 00 00"),
+                             (0x14bba18b, "45 31 f6 31 f6 ff 90 30 01 00 00"),
+                             (0x14bba1a0, "31 f6 ff 90 f8 01 00 00"),
+                             (0x14bba1eb, "80 4b 0c 02")):
+        expected = bytes.fromhex(encoded)
+        assert read(address, len(expected)) == expected, "changed sys-memory wire descriptor/prepare/failure cleanup contract"
     for address, encoded in ((0x14bba27a, "31 f6 31 d2 ff 90 48 01 00 00"),
                              (0x14bba2c4, "31 f6 ff 90 30 01 00 00"),
                              (0x14bba2fd, "e8 0a 60 45 eb"),

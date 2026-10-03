@@ -6115,3 +6115,36 @@ proof. Likewise normal successful clear does not establish shutdown admission
 closure: a late return can still select a freed pool lock. The repair must
 address owner lifetime/admission and status propagation together, not just
 add a list lock. No production/runtime changes.
+
+# Sys-memory wire and failed prepare reference follow-up
+
+Reviewed/pinned complete base sys-memory wire (0x34c) and Boot base
+IODMACommand prepare (0x650). Wire prepares its descriptor, gets/stores a
+command at +0x148, binds with autoPrepare=false, then calls prepare(0,0,false,
+false) once. Ordinary clean-command success therefore acquires one prepare
+reference, paired with unwire's single complete; this local normal path does
+not itself prove a count greater than one. Wire has no local wired-bit check
+before getting/overwriting the command; caller wire-count/admission remains
+pending. A null command is accepted by the local success branch.
+
+The more immediate failure issue is prepare's ordering: after initial
+specification/max-length checks, it increments +0x68 BEFORE fallible alignment,
+walk or mapper work, with no decrement in this complete body on those error
+returns. Nested mismatched-range requests also increment before returning an
+error. Wire's prepare-error branch calls clear(false), ignores its status,
+then calls descriptor complete(0) and returns false; it does NOT first complete
+the command or return/clear its stored command field. The wired bit is only
+set on success. Thus for a post-increment prepare error, clear(false) rejects
+the retained reference and leaves descriptor registration installed; immediate
+descriptor completion is not a proven valid unwind. The base/general descriptor
+active-registration panic checked earlier may then apply, depending on actual
+descriptor class/count. This is a conditional static failure protocol, not a
+reproduction or attribution of the historical panic/Host hang.
+
+New command binding failure similarly completes the descriptor without locally
+returning/clearing the stored command. Outer failed-wire disposal and effective
+Intel wire override still require review. Do not repair failed prepare by
+forced descriptor release: first establish command cleanup/status semantics,
+concrete owner, and whether any mapping/backing can still be referenced by GPU.
+Selected arguments, failure-clear, descriptor-complete and success-bit anchors
+are pinned; no production patch, deployment or VM test.

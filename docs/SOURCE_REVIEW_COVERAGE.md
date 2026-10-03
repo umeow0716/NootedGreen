@@ -7,6 +7,13 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 sys-memory wire/prepare follow-up: complete base wire and Boot DMA
+prepare reviewed/pinned, including bind/prepare/failure-clear/descriptor-complete
+anchors. Clean success prepares once; prepare errors after count increment
+retain the reference, while wire clear(false) ignores failure. Concrete Intel
+override, descriptor class, failed-wire disposal and mapping retirement remain
+pending; no observed panic attribution or runtime safety certification.
+
 2026-10-04 DMA return follow-up: returnDMACommand complete body re-reviewed
 against base command free/clear; unwire direct caller and selected argument,
 error-join, pool-lock/capacity/release anchors pinned. Return accepts command
