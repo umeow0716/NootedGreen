@@ -35,6 +35,9 @@ EVENT_DISABLE_STAMP_LOCKED = "__ZN20IOAccelEventMachine223disable_stamp_interrup
 EVENT_ENABLE_STAMP = "__ZN20IOAccelEventMachine220enableStampInterruptEi"
 EVENT_DISABLE_STAMP = "__ZN20IOAccelEventMachine221disableStampInterruptEi"
 EVENT_OWNER_BODIES = {
+    "__ZN18IOAccelDisplayPipe30release_live_transaction_gatedEv": (0x40, "59fc652bb7111c94f78994d096c32d8975b89efcffc899fb84bf164eb9c22930"),
+    "__ZN18IOAccelDisplayPipe14createWorkLoopEv": (0x5e, "ec85a9941105b2c0609e4d88c429af33ea225e7aa68004df43de5dd7dbf841ab"),
+    "__ZN18IOAccelDisplayPipe14setup_workloopEv": (0x2a0, "560d22438aedc391485ab3cc0a600e0bbe688ccf51af278cac7f0963a81f664c"),
     "__ZN18IOAccelDisplayPipe26signalTransactionInterruptEPv": (0x80, "b56c911f2bd45b54ed57ec3a0a4c953ecb276b73294cdc7010a6d2d4613ea5b2"),
     "__ZN18IOAccelDisplayPipe22finishTransactionQueueEv": (0x80, "90e48c306b49108c13fe51b498211bc595515b3646fc2246190f1aa9d5f75eb4"),
     "__ZN18IOAccelDisplayPipe22releaseLiveTransactionEv": (0xf2, "a74c9fca08374a803dd5164a319ad0c8316495eddf05947e3fb1b9a678757f33"),
@@ -225,6 +228,7 @@ def check_boot_atomic(system, path):
     symbols[b"__ZN8OSObject4freeEv"] = []
     symbols[b"__ZN8OSObjectdlEPvm"] = []
     symbols[b"__ZNK13IOEventSource11getWorkLoopEv"] = []
+    symbols[b"__ZN13IOCommandGate11commandGateEP8OSObjectPFiS1_PvS2_S2_S2_E"] = []
     symbols[b"__ZN18IOTimerEventSource7disableEv"] = []
     symbols[b"__ZN18IOTimerEventSource10wakeAtTimeEjyy"] = []
     symbols[b"__ZN18IOTimerEventSource17timeoutAndReleaseEPvS0_"] = []
@@ -426,6 +430,19 @@ def check_boot_atomic(system, path):
     assert instruction[0] == 0xe8 and call + 5 + struct.unpack_from("<i", instruction, 1)[0] == symbols[b"__ZN13IOEventSource4initEP8OSObjectPFvS1_zE"][0], \
         "changed command-gate inherited init target"
     print("PASS Boot KC command-gate allocator vtable and inherited init edge")
+    gate_factory = symbols[b"__ZN13IOCommandGate11commandGateEP8OSObjectPFiS1_PvS2_S2_S2_E"][0]
+    assert hashlib.sha256(kernel_read(gate_factory, 0x60)).hexdigest() == \
+        "7295677423d972b60335660a75fed45252f4540a645614dc97b2e5d49ab0c456", "changed command gate factory body"
+    assert system[0x10468:0x1046e] == bytes.fromhex("ff 25 72 41 01 00"), "changed display gate factory import stub"
+    factory_raw = struct.unpack_from("<Q", system, 0x245e0)[0]
+    assert (factory_raw >> 30) & 3 == 0 and factory_raw >> 63 == 0, "unexpected gate factory cache level/auth"
+    assert bases[0] + (factory_raw & 0x3fffffff) == gate_factory, "changed display gate factory imported identity"
+    for offset, encoded in ((0x1e, "ff 90 88 00 00 00"),
+                            (0x38, "ff 91 b8 01 00 00"),
+                            (0x4d, "ff 50 28")):
+        expected = bytes.fromhex(encoded)
+        assert kernel_read(gate_factory + offset, len(expected)) == expected, "changed gate factory allocator/init/failure release edge"
+    print("PASS paired KC display gate factory import and complete construction body")
     base_init = symbols[b"__ZN13IOEventSource4initEP8OSObjectPFvS1_zE"][0]
     assert hashlib.sha256(kernel_read(base_init, 0x70)).hexdigest() == \
         "f975c99f5099be0529c344faf80ba56970164feafab786803119f95ba64e0441", \
@@ -689,9 +706,17 @@ def check(path, boot_path=None):
     stop_owner = read(address_of("____ZN20IOAccelEventMachine24stopEv_block_invoke"), 0x8b)
     assert stop_owner.count(bytes.fromhex("ff 90 48 01 00 00")) == 3, "changed base event stop source-removal inventory"
     print("PASS inherited event owner free/stop and per-event stamp-disable bodies (outer drain not proven)")
+    for address, encoded in ((0x14bb1612, "31 f6"),
+                            (0x14bb1619, "48 89 83 b0 00 00 00"),
+                            (0x14bb1632, "ff 91 40 01 00 00"),
+                            (0x14bb1638, "48 8b bb b0 00 00 00")):
+        expected = bytes.fromhex(encoded)
+        assert read(address, len(expected)) == expected, "changed display gate null-action/store/unchecked attachment"
     for lea, target in ((0x14baec6f, "__ZN18IOAccelDisplayPipe28transaction_queue_idle_gatedEv"),
                         (0x14baeca4, "__ZN18IOAccelDisplayPipe31get_finished_transactions_gatedEP26DisplayTransactionListHead"),
-                        (0x14baedde, "__ZN18IOAccelDisplayPipe23teardown_workloop_gatedEv")):
+                        (0x14baedde, "__ZN18IOAccelDisplayPipe23teardown_workloop_gatedEv"),
+                        (0x14baed5f, "__ZN18IOAccelDisplayPipe30release_live_transaction_gatedEv"),
+                        (0x14baed94, "__ZN18IOAccelDisplayPipe31get_finished_transactions_gatedEP26DisplayTransactionListHead")):
         encoded = read(lea, 7)
         assert encoded[:3] == bytes.fromhex("48 8d 35") and lea + 7 + struct.unpack_from("<i", encoded, 3)[0] == address_of(target), "changed display cleanup gated action identity"
     teardown_sources = read(address_of("__ZN18IOAccelDisplayPipe23teardown_workloop_gatedEv"), 0x132)

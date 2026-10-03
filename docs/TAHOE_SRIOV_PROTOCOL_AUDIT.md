@@ -27,6 +27,24 @@ enforce fault-before-panic and prohibit native/helper/backing side effects.
 
 ## Mapping getter provenance follow-up (offline)
 
+Concrete display gate follow-up: complete release_live_transaction_gated
+0x14bb2d10 (0x40) moves live+0x250 transaction to finished list and clears
+live ownership, without directly changing event interrupt references. Complete
+createWorkLoop 0x14baf08c (0x5e) chooses shared device workloop/retain or kernel
+workloop factory; complete setup_workloop 0x14bb15f6 (0x2a0) installs +0xb8,
+calls commandGate(pipe, NULL action), stores +0xb0, then adds/enables gate and
+five sources without checking add statuses. Allocation failures log and continue.
+Resolved System import stub 0x10468 → cell 0x245e0, chained level 0 → Boot
+IOCommandGate::commandGate at 0xffffff8000acd100. Entire 0x60 factory reviewed:
+metaclass allocate +0x88, init +0x1b8, failure release/null. Existing concrete
+allocator/init evidence applies; effective bound gate still must be validated
+because constructor ignores attachment return. Pairing a gate factory with
+a field store does not prove successful synchronization or all caller ordering.
+Added four complete bodies (three System/one Boot), import identity, allocator/
+init/failure edges, null-action/store/unchecked-add anchors and live-action LEAs.
+Local paired KC passes; production unchanged. Next source/gate attachment
+failure handling and caller lifetime across shared versus private workloops.
+
 Display cleanup helpers follow-up: fully reviewed signalTransactionInterrupt
 0x14bafd20 (0x80): checks +0x2a4, records time and signals source+0xd0;
 it is not a synchronous queue flush or reference-deregistration acknowledgement.
