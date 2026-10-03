@@ -71,6 +71,28 @@ or meaning is therefore claimed: alias-pointer stores, wider initialization,
 undecoded/external code and termination propagation remain to be checked.
 The driver must not forcibly clear this unknown inherited state.
 
+Termination follow-up now resolves a writer: `deviceTerminatedUnlocked`
+(`0x14ba2434`) adds `0xdc8` to the accelerator pointer and calls stub
+`0x10132`. The stub's encoded level-0 import resolves to BootKC
+`OSIncrementAtomic`, whose reviewed implementation is locked xadd of 1,
+returning the previous value. This indirect-pointer writer was not visible
+in the earlier displacement-only scan. `requestTerminate` directly invokes
+the helper; the helper returns early if the old count is nonzero or `+0xdd0`
+is nonzero, otherwise invokes event-machine virtual `+0x250` and further
+termination callbacks. Thus `+0xdc8` is incremented by termination and enables
+the previously identified non-hardware wait success path. Counter reset,
+all termination callbacks and their GPU-stop guarantees are not yet proven.
+
+The local fixture optionally accepts the archived BootKC as its second argument
+and verifies SHA-256
+`5cba9e36ceed5d73e1d569d1772bc46fecbd0359f824db689863e686d856ea3b`,
+kernel symbol identity, stub bytes and encoded import, the BootKC `__HIB`
+unslid base, segment mapping, and the atomic implementation. BootKC and
+SystemKC use different address bases; blindly indexing the BootKC by the
+encoded target or using its `__TEXT` base is incorrect. This evidence confirms
+why event success after termination cannot substitute for GuC acknowledged
+deregistration. No termination counter manipulation or runtime shortcut added.
+
 Both pinned accelerator payloads resolve `IGAccelMemoryMap` vtable `+0x128`
 through an external unsigned 64-bit relocation to
 `IOAccelMemoryMap::getGPUVirtualAddress`. The mapped-buffer getter delegates

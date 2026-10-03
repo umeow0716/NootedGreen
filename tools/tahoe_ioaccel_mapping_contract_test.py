@@ -8,12 +8,17 @@ import sys
 
 
 KC_SHA256 = "5cb1be1dc530b4b953a33943567589101d3ac46bb8cf90728566ee7e5b1fa214"
+BOOT_SHA256 = "5cba9e36ceed5d73e1d569d1772bc46fecbd0359f824db689863e686d856ea3b"
 IDENTIFIER = b"com.apple.iokit.IOAcceleratorFamily2"
 EVENT_VTABLE = "__ZTV24IOAccelEventMachineFast2"
 EVENT_FINISH = "__ZN24IOAccelEventMachineFast211finishEventEP12IOAccelEvent"
 EVENT_WAIT = "__ZN20IOAccelEventMachine212waitForStampEijPj"
 EVENT_CLEAN = "__ZN24IOAccelEventMachineFast210cleanEventEP12IOAccelEvent"
 CONTRACTS = {
+    "__ZN22IOGraphicsAccelerator224deviceTerminatedUnlockedEv":
+        bytes.fromhex("55 48 89 e5 53 50 48 89 fb 48 81 c7 c8 0d 00 00 "
+                      "e8 e9 dc 46 eb 85 c0 75 09 83 bb d0 0d 00 00 00 "
+                      "74 07 48 83 c4 08 5b 5d c3"),
     "__ZN22IOGraphicsAccelerator217enableAcceleratorEv":
         bytes.fromhex("55 48 89 e5 53 50 48 89 fb f6 87 92 0c 00 00 08 75 0c "
                       "48 8b bb 80 03 00 00 e8 d8 10 fd ff 80 8b 78 0c 00 00 02 "
@@ -52,7 +57,49 @@ def commands(image, base):
     assert offset == limit, "load-command size mismatch"
 
 
-def check(path):
+def check_boot_atomic(system, path):
+    boot = pathlib.Path(path).read_bytes()
+    assert hashlib.sha256(boot).hexdigest() == BOOT_SHA256, "unreviewed BootKC identity"
+    segments = []
+    kernel = []
+    bases = []
+    for command, offset in commands(boot, 0):
+        if command == 0x19:
+            f = struct.unpack_from("<II16sQQQQIIII", boot, offset)
+            segments.append((f[3], f[5], f[6]))
+            if f[2].rstrip(b"\0") == b"__HIB":
+                bases.append(f[3])
+        elif command == 0x80000035:
+            _, _, _, file_offset, name_offset, _ = struct.unpack_from("<IIQQII", boot, offset)
+            start = offset + name_offset
+            if boot[start:boot.index(0, start)] == b"com.apple.kernel":
+                kernel.append(file_offset)
+    assert len(kernel) == len(bases) == 1, "missing/ambiguous kernel/base"
+    symbols = []
+    for command, offset in commands(boot, kernel[0]):
+        if command != 2:
+            continue
+        symbol_offset, count, string_offset, _ = struct.unpack_from("<6I", boot, offset)[2:]
+        for index in range(count):
+            name_offset, _, _, _, address = struct.unpack_from("<IBBHQ", boot, symbol_offset + 16 * index)
+            start = string_offset + name_offset
+            if boot[start:boot.index(0, start)] == b"_OSIncrementAtomic":
+                symbols.append(address)
+    assert len(symbols) == 1, "missing/ambiguous OSIncrementAtomic"
+    assert system[0x10132:0x10138] == bytes.fromhex("ff 25 60 40 01 00"), "changed atomic import stub"
+    raw = struct.unpack_from("<Q", system, 0x24198)[0]
+    assert (raw >> 30) & 3 == 0 and raw >> 63 == 0, "unexpected atomic import cache level/auth"
+    address = bases[0] + (raw & 0x3fffffff)
+    assert address == symbols[0], "atomic import does not resolve to OSIncrementAtomic"
+    locations = [f + address - v for v, f, size in segments if v <= address and address + 15 <= v + size]
+    assert len(locations) == 1, "unmapped atomic implementation"
+    offset = locations[0]
+    assert boot[offset:offset + 15] == bytes.fromhex(
+        "55 48 89 e5 b8 01 00 00 00 f0 0f c1 07 5d c3"), "changed atomic increment"
+    print("PASS termination-state atomic import resolves across SystemKC/BootKC")
+
+
+def check(path, boot_path=None):
     image = pathlib.Path(path).read_bytes()
     # Identity is checked before parsing this deliberately version-specific
     # fixture. An unknown KC must be reviewed, never silently accepted.
@@ -116,9 +163,11 @@ def check(path):
     assert read(address_of(EVENT_WAIT) + 0x224, 15) == bytes.fromhex(
         "48 83 c4 28 5b 41 5c 41 5d 41 5e 41 5f 5d c3"), "changed wait epilogue"
     print("PASS event virtuals, finishEvent identity and waitForStamp early-success path")
+    if boot_path is not None:
+        check_boot_atomic(image, boot_path)
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2:
-        raise SystemExit("usage: tahoe_ioaccel_mapping_contract_test.py SystemKernelExtensions.kc")
-    check(sys.argv[1])
+    if len(sys.argv) not in (2, 3):
+        raise SystemExit("usage: tahoe_ioaccel_mapping_contract_test.py SystemKernelExtensions.kc [BootKernelExtensions.kc]")
+    check(sys.argv[1], sys.argv[2] if len(sys.argv) == 3 else None)

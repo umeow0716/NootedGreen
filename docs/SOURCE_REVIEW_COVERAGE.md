@@ -54,6 +54,12 @@ hash-pinned local fixture test covers the getter's flag/field branch, the
 counter-only complete method, and finishEvent's event-machine dispatch. The
 inherited implementation is available for further analysis; its full review
 and mapping/event lifetime proof remain incomplete. The KC is not in CI.
+Termination follow-up resolves accelerator `+0xdc8` as a counter incremented
+by deviceTerminatedUnlocked through OSIncrementAtomic. The local fixture now
+optionally pins the paired BootKC, resolving the encoded import using its
+__HIB base and confirming locked xadd semantics. Termination enables a wait
+success branch without hardware-stamp evidence; complete callback/reset and
+quiescence guarantees remain unresolved rather than inferred from this result.
 
 2026-10-04 ownership review delta: V263 fail-stops uncertain void descriptor
 detach, and V264 independently retains the actual DMA ring buffer in each
