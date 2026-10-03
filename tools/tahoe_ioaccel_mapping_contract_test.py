@@ -35,6 +35,14 @@ EVENT_DISABLE_STAMP_LOCKED = "__ZN20IOAccelEventMachine223disable_stamp_interrup
 EVENT_ENABLE_STAMP = "__ZN20IOAccelEventMachine220enableStampInterruptEi"
 EVENT_DISABLE_STAMP = "__ZN20IOAccelEventMachine221disableStampInterruptEi"
 EVENT_OWNER_BODIES = {
+    "__ZN22IOGraphicsAccelerator212sysmem_wiredEP16IOAccelSysMemory": (0x78, "2af8bdaad7f93f070852b210c6594612b4830c13f317b6c0606f09ea551338e6"),
+    "__ZN24IOAccelResidentMemorySet9addMemoryEP13IOAccelMemory": (0x64, "40149e4f9e96697bf965b03d5786ab77eb8e52ab9c5e963632233f31ce5b9131"),
+    "__ZN24IOAccelResidentMemorySet12removeMemoryEP13IOAccelMemory": (0x6c, "3abb8f4eeb8d8b0cacac8d433d219dae87346b2d6fdaa38187ae423fad7b51e6"),
+    "__ZN24IOAccelResidentMemorySet11LRUIteratorC1ERS_": (0x1e, "61c65d6c7456b61ef1def643f5665beced80dbdaa58362a38b694541cb289168"),
+    "__ZN24IOAccelResidentMemorySet11LRUIterator13getNextMemoryEv": (0x70, "fb7ff01ffa4671534fe423cc5c1db1d5e84fe7d1ccd19018c5c46e4b647908f7"),
+    "__ZN24IOAccelResidentMemorySet4sortEv": (0x1c0, "d596290abea11b8c1d45b30a1a71bf5312bead39d4d14716f48b770bfae6ddbe"),
+    "__ZN24IOAccelResidentMemorySet7reallocEv": (0x7a, "f724e67795dc28b0325846e2df5627def50c7ce190563e3260199464bd0c557c"),
+    "__ZNK13IOAccelMemory10getLRUSeedEv": (0x56, "78a25180c308e0672b27a0967f988508dd9c624f1b28cd506323c84003060fd8"),
     "__ZN22IOGraphicsAccelerator220freeToPrepareMappingEP16IOAccelMemoryMap": (0x260, "8706a375f2e2538da76435f0f768ac1a42afc03ef111330ba5d09d51ac29973b"),
     "__ZN22IOGraphicsAccelerator223freeWaitToPrepareSysMapEP16IOAccelMemoryMapb": (0x1bc, "d36fa6823dfe656c5735419f5c48261954ee0a397e670822e2875197baad0bf5"),
     "__ZN16IOAccelSysMemory8completeEv": (0x42, "37fec16c6bebb121abb7612a23dbd90ccdae8179f025c1edae4e7553dc779240"),
@@ -877,6 +885,12 @@ def check(path, boot_path=None):
     assert stop_owner.count(bytes.fromhex("ff 90 48 01 00 00")) == 3, "changed base event stop source-removal inventory"
     print("PASS inherited event owner free/stop and per-event stamp-disable bodies (outer drain not proven)")
     lazy_setup = address_of("__ZN18IOAccelDisplayPipe14setup_workloopEv")
+    for call, method in ((0x14bb996b, "__ZN22IOGraphicsAccelerator212sysmem_wiredEP16IOAccelSysMemory"),
+                         (0x14bba1f6, "__ZN22IOGraphicsAccelerator212sysmem_wiredEP16IOAccelSysMemory"),
+                         (0x14ba5b0b, "__ZN24IOAccelResidentMemorySet9addMemoryEP13IOAccelMemory"),
+                         (0x14ba5b74, "__ZN24IOAccelResidentMemorySet12removeMemoryEP13IOAccelMemory")):
+        encoded = read(call, 5)
+        assert encoded[0] == 0xe8 and call + 5 + struct.unpack_from("<i", encoded, 1)[0] == address_of(method), "changed wired-resident collection publication/removal edge"
     for table, slot, method in (("__ZTV22IOGraphicsAccelerator2", 0x968, "__ZN22IOGraphicsAccelerator223freeWaitToPrepareSysMapEP16IOAccelMemoryMapb"),
                                 ("__ZTV22IOGraphicsAccelerator2", 0x940, "__ZN22IOGraphicsAccelerator223freeWaitToPrepareVidMapEP16IOAccelMemoryMapbb"),
                                 ("__ZTV16IOAccelMemoryMap", 0x168, "__ZNK16IOAccelMemoryMap9getLengthEv")):

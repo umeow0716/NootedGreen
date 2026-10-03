@@ -6273,3 +6273,36 @@ base vid/sys recovery imports at relocations 0xd19b0/0xd19d8, not distinct
 Intel implementations. Both native payloads now check their exact imported
 identity and slot position. Dynamic table mutation/other runtime accelerator
 classes are not established by this fixed declared-table evidence.
+
+# Recovery resident-set publication and borrowed iterator lifetime
+
+Reviewed/pinned complete sysmem_wired (0x78), resident-set add (0x64), remove
+(0x6c), iterator construction (0x1e), getNextMemory (0x70), sort (0x1c0),
+reallocation (0x7a) and parent getLRUSeed (0x56). Direct-byte candidates for
+sysmem_wired in the embedded accelerator range are the two previously decoded
+factory prewired/successful-wire calls; addMemory has the sysmem_wired caller.
+These selected decoded edges are pinned, not an exhaustive indirect inventory.
+
+sysmem_wired publishes the memory into resident set +0xa08 and adds its size
+to +0x350; sysmem_unwired removes it and subtracts its size. The examined fresh
+ordinary wire failure happens before this publication. Under these known
+paths, the recovery set therefore cannot be assumed to contain that failed
+target and unwind its stored command. Pre-existing/alternate membership and
+dynamic callers still require provenance.
+
+Resident add stores a raw memory pointer, index +0xa4 and membership +0xa0,
+without retain; remove trusts the index, compacts by moving the last pointer
+and updates its index. Iterator returns a borrowed pointer, restarts on sort
+generation changes and filters by signed LRU seed comparisons. Remove itself
+does not update that generation; iteration after compaction may skip a moved
+entry until the later sorted pass. Sort refreshes seeds, reorders entries,
+rebuilds indexes and increments generation. No local locks or count/index
+overflow/underflow guards are present in these selected bodies; outer locking
+and memory lifetime must be established before a concurrency repair.
+
+Reallocation doubles capacity, copies/frees the old buffer and installs the
+new one; null allocation branches to an outlined failure helper (not newly
+reviewed). Parent seed aggregates mapping seeds using signed comparisons;
+mapping-seed callee and wraparound policy remain pending. This review does not
+certify resident pointers across unlock/wait, mapper retirement or Host safety.
+No executable patch or runtime mutation.

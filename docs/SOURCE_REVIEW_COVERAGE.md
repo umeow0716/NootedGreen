@@ -7,6 +7,12 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 resident-set follow-up: complete wired publication, resident add/remove,
+iterator, sort/realloc and parent LRU seed reviewed/pinned. Examined ordinary
+wire failure precedes resident publication; recovery cannot be presumed to
+dispose that failed target. Raw borrowed pointer/outer locking, alternate
+membership, allocation failure helper and seed wrap policy remain pending.
+
 2026-10-04 mapping recovery follow-up: complete freeToPrepareMapping and base
 freeWaitToPrepareSysMap reviewed/pinned; resource direct edges and base recovery
 virtual identities resolved. Recovery unwires eligible collection entries and
