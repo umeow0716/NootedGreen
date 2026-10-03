@@ -27,6 +27,25 @@ enforce fault-before-panic and prohibit native/helper/backing side effects.
 
 ## Mapping getter provenance follow-up (offline)
 
+Periodic caller inventory follow-up: reviewed complete event-machine enable
+0x16182 (0xb6) and disable 0x16244 (0xf4). Their software stamp fallback
+selects accelerator+0x1250 scheduler and event-machine+0xd30 source, with direct
+periodic enable/disable tail branches 0x16232/0x162de. Enable uses the first
+fallback-count transition; disable checks the fallback bitset and last-count
+transition. Neither body establishes a teardown admission boundary. This
+fallback cannot be excluded merely by the VF type-4 factory guard.
+Also fully reviewed streamer5 init 0x39a78 (0x224), registerForInterrupts
+0x3a01e (0x90) and enableContextSwitchInterrupt 0x3aaa0 (0x36): periodic
+enable at 0x39c76 and disable at 0x3a033/0x3aab4 use streamer scheduler+0x20
+and source+0x1c08. Init has unchecked workloop source-add results and a virtual
+free failure edge; these type-5 paths are not the admitted VF scheduler4 path.
+Added exact full-body hashes for these three and five direct graph edges plus
+fallback ownership loads; both payload lifecycle tests pass. First exploratory
+linear disassembly stopped early at an invalid byte; rerun with skipdata found
+the calls, and native imported IOLockUnlock placeholder at 0x5690f was rejected
+as a spurious apparent branch to disable. No whole indirect caller inventory
+is claimed. Next inspect fallback-source construction/action/stop ownership.
+
 Removal lock-order follow-up: complete Boot removeEventSource 0x30,
 runCommand 0x30 and runAction 0x280 disassembly rechecked. Removal passes
 operation 1 and source to controlG+0x20 virtual +0x1c0, which dispatches the

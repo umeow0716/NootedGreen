@@ -9,6 +9,9 @@ import sys
 # Complete reviewed native bodies. This fixes the concrete Intel override
 # graph, not inherited timer APIs, dynamic callbacks or runtime completion.
 STAMP_IRQ_NATIVE = {
+    "__ZN26IGHardwareCommandStreamer54initEP22IOGraphicsAccelerator2P10IOWorkLoopP12IGScheduler510IGHwCsType": (0x224, "8f48a87d0813d09e9c4062970a48537d36182ffc2c9ac4a56894f5cffb075bc8"),
+    "__ZN26IGHardwareCommandStreamer521registerForInterruptsEv": (0x90, "273bc67e508714d78441d1723972f3329308a1dc01e2b3e9616f6703a52e6370"),
+    "__ZN26IGHardwareCommandStreamer528enableContextSwitchInterruptEv": (0x36, "e79036987a975eeab70e8fceb4c54e52685d7d67dd27cc03830dfbbe0fe6734d"),
     "__ZNK11IGScheduler11getWorkLoopEv": (0x12, "895c706830ac837dfdb730fc602937effaf5fc188add2c21937b12ffad12bb38"),
     "__ZNK12IGScheduler511getWorkLoopEv": (0xd, "a384252c609ebb926362d345822bc7a0958dd681ff28627d11d57f490e7eb8c4"),
     "__ZNK5IGGuC11getWorkLoopEv": (0xd, "082091370da302c29650b27b4d2ebff8c0731a022eb0c755ee4ee9689b5064c0"),
@@ -670,6 +673,27 @@ def macho_inventory(path):
         assert len(direct_branches(owner, target)) == 1, f"{path}: changed stamp IRQ graph edge"
 
     accelerator_start = value(ACCELERATOR_START)
+    # Reviewed direct callers, not a complete indirect-call reachability proof.
+    # Event-machine fallback remains relevant to VF type 4; streamer5 callers
+    # must not be mistaken for the admitted scheduler4 implementation.
+    periodic_enable = "__ZN11IGScheduler33enablePeriodicEventTimerInterruptEP22IOInterruptEventSource"
+    periodic_disable = "__ZN11IGScheduler34disablePeriodicEventTimerInterruptEP22IOInterruptEventSource"
+    for owner, target, address in (
+            ("__ZN19IGAccelEventMachine20enableStampInterruptEii", periodic_enable, 0x16232),
+            ("__ZN19IGAccelEventMachine21disableStampInterruptEii", periodic_disable, 0x162de),
+            ("__ZN26IGHardwareCommandStreamer54initEP22IOGraphicsAccelerator2P10IOWorkLoopP12IGScheduler510IGHwCsType", periodic_enable, 0x39c76),
+            ("__ZN26IGHardwareCommandStreamer521registerForInterruptsEv", periodic_disable, 0x3a033),
+            ("__ZN26IGHardwareCommandStreamer528enableContextSwitchInterruptEv", periodic_disable, 0x3aab4)):
+        assert direct_branches(owner, target) == [address], \
+            f"{path}: changed reviewed periodic producer call edge"
+    for address, encoded in (
+            (0x1621e, "48 8b b8 50 12 00 00"),
+            (0x16225, "48 8b b3 30 0d 00 00"),
+            (0x162cc, "48 8b b8 50 12 00 00"),
+            (0x162d3, "48 8b b3 30 0d 00 00")):
+        expected = bytes.fromhex(encoded)
+        assert image[address:address + len(expected)] == expected, \
+            f"{path}: changed fallback scheduler/event-source ownership edge"
     accelerator_start_end = next_symbol(accelerator_start)
     dpsm_failures = []
     cursor = 0
