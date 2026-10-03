@@ -111,6 +111,19 @@ remain conservatively busy; no stamp-only idle shortcut was introduced.
 This does not by itself fix termination admission, backing reclamation, or
 prove the entire termination callback graph is DMA-safe.
 
+Base callback follow-up resolves channel virtual `+0x228` to
+`IOAccelEventMachine2::signalStamp` (`0x14b77ffa`). It calls the same kernel
+stub twice, using the channel stamp address and event machine itself as wake
+events. Cross-KC symbol resolution confirms that stub imports
+`thread_wakeup_prim`; these are software wakeups, not GuC actions. It also
+notifies a software object at `+0xa8`, conditionally signals another event
+source at `+0x78`, and emits tracing. The local fixture pins the concrete
+virtual, complete signalStamp bytes and the BootKC wakeup import identity.
+Remaining notification-object/virtual details and the separate accelerator
+termination callbacks still need review. Nothing here supplies a hardware
+idle or DMA-stop acknowledgement, so software-terminated stamps remain
+excluded from a future hardware-completion baseline.
+
 Both pinned accelerator payloads resolve `IGAccelMemoryMap` vtable `+0x128`
 through an external unsigned 64-bit relocation to
 `IOAccelMemoryMap::getGPUVirtualAddress`. The mapped-buffer getter delegates

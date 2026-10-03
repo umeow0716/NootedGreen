@@ -15,6 +15,7 @@ EVENT_FINISH = "__ZN24IOAccelEventMachineFast211finishEventEP12IOAccelEvent"
 EVENT_WAIT = "__ZN20IOAccelEventMachine212waitForStampEijPj"
 EVENT_CLEAN = "__ZN24IOAccelEventMachineFast210cleanEventEP12IOAccelEvent"
 EVENT_TERMINATE = "__ZN24IOAccelEventMachineFast224deviceTerminatedUnlockedEv"
+EVENT_SIGNAL = "__ZN20IOAccelEventMachine211signalStampEij"
 CONTRACTS = {
     EVENT_TERMINATE:
         bytes.fromhex("55 48 89 e5 48 8b 47 28 48 85 c0 74 30 8b 4f 30 85 c9 "
@@ -82,7 +83,7 @@ def check_boot_atomic(system, path):
             if boot[start:boot.index(0, start)] == b"com.apple.kernel":
                 kernel.append(file_offset)
     assert len(kernel) == len(bases) == 1, "missing/ambiguous kernel/base"
-    symbols = []
+    symbols = {b"_OSIncrementAtomic": [], b"_thread_wakeup_prim": []}
     for command, offset in commands(boot, kernel[0]):
         if command != 2:
             continue
@@ -90,20 +91,28 @@ def check_boot_atomic(system, path):
         for index in range(count):
             name_offset, _, _, _, address = struct.unpack_from("<IBBHQ", boot, symbol_offset + 16 * index)
             start = string_offset + name_offset
-            if boot[start:boot.index(0, start)] == b"_OSIncrementAtomic":
-                symbols.append(address)
-    assert len(symbols) == 1, "missing/ambiguous OSIncrementAtomic"
+            name = boot[start:boot.index(0, start)]
+            if name in symbols:
+                symbols[name].append(address)
+    assert all(len(values) == 1 for values in symbols.values()), "missing/ambiguous kernel imports"
     assert system[0x10132:0x10138] == bytes.fromhex("ff 25 60 40 01 00"), "changed atomic import stub"
     raw = struct.unpack_from("<Q", system, 0x24198)[0]
     assert (raw >> 30) & 3 == 0 and raw >> 63 == 0, "unexpected atomic import cache level/auth"
     address = bases[0] + (raw & 0x3fffffff)
-    assert address == symbols[0], "atomic import does not resolve to OSIncrementAtomic"
+    assert address == symbols[b"_OSIncrementAtomic"][0], "atomic import does not resolve to OSIncrementAtomic"
+    wake_stub = 0x10cae
+    assert system[wake_stub:wake_stub + 2] == b"\xff\x25", "changed wakeup import stub"
+    wake_pointer = wake_stub + 6 + struct.unpack_from("<i", system, wake_stub + 2)[0]
+    wake_raw = struct.unpack_from("<Q", system, wake_pointer)[0]
+    assert (wake_raw >> 30) & 3 == 0 and wake_raw >> 63 == 0, "unexpected wakeup cache level/auth"
+    assert bases[0] + (wake_raw & 0x3fffffff) == symbols[b"_thread_wakeup_prim"][0], \
+        "signalStamp import does not resolve to thread_wakeup_prim"
     locations = [f + address - v for v, f, size in segments if v <= address and address + 15 <= v + size]
     assert len(locations) == 1, "unmapped atomic implementation"
     offset = locations[0]
     assert boot[offset:offset + 15] == bytes.fromhex(
         "55 48 89 e5 b8 01 00 00 00 f0 0f c1 07 5d c3"), "changed atomic increment"
-    print("PASS termination-state atomic import resolves across SystemKC/BootKC")
+    print("PASS termination atomic and event wakeup imports across SystemKC/BootKC")
 
 
 def check(path, boot_path=None):
@@ -130,7 +139,7 @@ def check(path, boot_path=None):
             symtab = struct.unpack_from("<6I", image, offset)[2:]
     assert symtab is not None, "missing embedded symbol table"
     symbol_offset, count, string_offset, string_size = symtab
-    matches = {name: [] for name in {*CONTRACTS, EVENT_VTABLE, EVENT_FINISH, EVENT_WAIT, EVENT_CLEAN}}
+    matches = {name: [] for name in {*CONTRACTS, EVENT_VTABLE, EVENT_FINISH, EVENT_WAIT, EVENT_CLEAN, EVENT_SIGNAL}}
     for index in range(count):
         name_offset, _, _, _, address = struct.unpack_from("<IBBHQ", image, symbol_offset + index * 16)
         assert name_offset < string_size, "invalid symbol string"
@@ -157,13 +166,15 @@ def check(path, boot_path=None):
     # target:30, cacheLevel:2, next:12, isAuth:1. This archived SystemKC
     # level-1 unslid base is zero; never apply this to a live slid pointer.
     for slot, name in ((0x188, EVENT_FINISH), (0x238, EVENT_WAIT),
-                       (0x148, EVENT_CLEAN), (0x250, EVENT_TERMINATE)):
+                       (0x148, EVENT_CLEAN), (0x250, EVENT_TERMINATE), (0x228, EVENT_SIGNAL)):
         raw = struct.unpack("<Q", read(address_of(EVENT_VTABLE) + 16 + slot, 8))[0]
         assert (raw >> 30) & 3 == 1 and raw >> 63 == 0, "unexpected cache level/auth"
         assert raw & 0x3fffffff == address_of(name), f"changed event virtual {slot:#x}"
     finish = read(address_of(EVENT_FINISH), 0x192)
     assert hashlib.sha256(finish).hexdigest() == \
         "34c3638c2485ef35e2fdb1e70efeff61e935972b1db36bc72ec3084b7207c010", "changed finishEvent"
+    assert hashlib.sha256(read(address_of(EVENT_SIGNAL), 0xa8)).hexdigest() == \
+        "02c75b9f3864be75d75b3b2fd1b777a52e016265036c7e77c096d810db3e260b", "changed signalStamp"
     wait = read(address_of(EVENT_WAIT), 0x34)
     assert wait[0x1c:0x32] == bytes.fromhex(
         "48 8b 4f 10 31 c0 83 b9 c8 0d 00 00 00 0f 85 f5 01 00 00 41 89 f7"), \
