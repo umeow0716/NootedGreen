@@ -93,6 +93,24 @@ encoded target or using its `__TEXT` base is incorrect. This evidence confirms
 why event success after termination cannot substitute for GuC acknowledged
 deregistration. No termination counter manipulation or runtime shortcut added.
 
+Termination callback review: Fast2 virtual `+0x250` resolves to
+`IOAccelEventMachineFast2::deviceTerminatedUnlocked` (`0x14b969f4`). It walks
+channel pointers in `+0x28`, copies software dwords from event-machine `+0x104`
+(stride `0x18`) into the pointed-to stamp storage, executes `sfence`, then
+dispatches the base termination virtual. The full body and concrete virtual
+identity are now pinned by the local fixture. This path does not wait for
+GuC disable/deregister acknowledgement. The base termination method tails
+another channel loop issuing virtual `+0x228` with argument zero; remaining
+virtual semantics are not certified yet.
+
+Safety implication: advancement of completed stamp memory can be a CPU write
+during termination, not a GPU post-sync write. A future VF completion/idle
+mechanism must distinguish this path and reject termination/restart/fault
+state before treating stamps as hardware evidence. Current enabled contexts
+remain conservatively busy; no stamp-only idle shortcut was introduced.
+This does not by itself fix termination admission, backing reclamation, or
+prove the entire termination callback graph is DMA-safe.
+
 Both pinned accelerator payloads resolve `IGAccelMemoryMap` vtable `+0x128`
 through an external unsigned 64-bit relocation to
 `IOAccelMemoryMap::getGPUVirtualAddress`. The mapped-buffer getter delegates

@@ -4245,6 +4245,10 @@ uint16_t Gen11::vfReacquireDoorbell(void *that, uint32_t contextId) {
 // Only states that cannot currently execute provide an idle snapshot. Enabled
 // contexts remain conservatively busy until a real completion/idle mechanism
 // is implemented. This is NOT a submission barrier or device-DMA-stop proof.
+// Tahoe IOAccel's Fast2 termination callback CPU-writes software values into
+// the same stamp storage. A future stamp-based completion mechanism must
+// exclude termination/restart/fault paths; stamp advancement alone is not GPU
+// completion evidence (see the hash-pinned local KC contract).
 static bool vfContextKnownIdle(const VfGucContext &entry) {
 	return !entry.enablePending && !entry.disablePending &&
 		(entry.state == kVfGucContextEmpty || entry.state == kVfGucContextTombstone ||

@@ -14,7 +14,14 @@ EVENT_VTABLE = "__ZTV24IOAccelEventMachineFast2"
 EVENT_FINISH = "__ZN24IOAccelEventMachineFast211finishEventEP12IOAccelEvent"
 EVENT_WAIT = "__ZN20IOAccelEventMachine212waitForStampEijPj"
 EVENT_CLEAN = "__ZN24IOAccelEventMachineFast210cleanEventEP12IOAccelEvent"
+EVENT_TERMINATE = "__ZN24IOAccelEventMachineFast224deviceTerminatedUnlockedEv"
 CONTRACTS = {
+    EVENT_TERMINATE:
+        bytes.fromhex("55 48 89 e5 48 8b 47 28 48 85 c0 74 30 8b 4f 30 85 c9 "
+                      "7e 29 48 8d 97 04 01 00 00 31 f6 4c 8b 04 f0 4d 85 c0 "
+                      "74 08 8b 0a 41 89 08 8b 4f 30 48 ff c6 4c 63 c1 48 83 "
+                      "c2 18 4c 39 c6 7c e0 0f ae f8 48 8d 05 65 00 04 00 "
+                      "5d ff a0 60 02 00 00"),
     "__ZN22IOGraphicsAccelerator224deviceTerminatedUnlockedEv":
         bytes.fromhex("55 48 89 e5 53 50 48 89 fb 48 81 c7 c8 0d 00 00 "
                       "e8 e9 dc 46 eb 85 c0 75 09 83 bb d0 0d 00 00 00 "
@@ -149,7 +156,8 @@ def check(path, boot_path=None):
     # XNU EXTERNAL_HEADERS/mach-o/fixup-chains.h kernel-cache rebase:
     # target:30, cacheLevel:2, next:12, isAuth:1. This archived SystemKC
     # level-1 unslid base is zero; never apply this to a live slid pointer.
-    for slot, name in ((0x188, EVENT_FINISH), (0x238, EVENT_WAIT), (0x148, EVENT_CLEAN)):
+    for slot, name in ((0x188, EVENT_FINISH), (0x238, EVENT_WAIT),
+                       (0x148, EVENT_CLEAN), (0x250, EVENT_TERMINATE)):
         raw = struct.unpack("<Q", read(address_of(EVENT_VTABLE) + 16 + slot, 8))[0]
         assert (raw >> 30) & 3 == 1 and raw >> 63 == 0, "unexpected cache level/auth"
         assert raw & 0x3fffffff == address_of(name), f"changed event virtual {slot:#x}"
