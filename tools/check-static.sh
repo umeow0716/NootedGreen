@@ -133,6 +133,11 @@ if python3 tools/route_symbol_contract_test.py \
 else
     failed=1
 fi
+if python3 -B tools/vf_timer_teardown_model_test.py; then
+    printf 'PASS offline abstract VF timer teardown model\n'
+else
+    failed=1
+fi
 if python3 -B tools/vf_accelerator_lifecycle_contract_test.py \
     NootedGreen/kern_gen11.cpp \
     sle_Internal/le/AppleIntelTGLGraphics.kext/Contents/MacOS/AppleIntelTGLGraphics \

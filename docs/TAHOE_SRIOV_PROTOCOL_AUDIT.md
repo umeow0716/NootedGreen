@@ -27,6 +27,18 @@ enforce fault-before-panic and prohibit native/helper/backing side effects.
 
 ## Mapping getter provenance follow-up (offline)
 
+Timer teardown model follow-up: tools/vf_timer_teardown_model_test.py
+enumerates 30 atomic event orders preserving cancel-before-release and
+callback-begin-before-finish. It retains a concrete begin/cancel/rearm/release/
+finish counterexample: cancellation alone allows rearm and owner use after
+release; closing admission alone leaves an entered callback alive. Abstract
+close-admission plus deferred release until no pending/active work avoids these
+model violations, with reachable successful releases (not a never-free policy).
+This is a specification model, NOT a production fix or proof of native
+atomicity, lock ordering, generation checks, callback ownership or DMA drain.
+Native stop currently cancels DPSM; this model does not invent a stopping check
+in the native timer producers. Actual gate/drain integration remains required.
+
 VF scheduler startup binding guard: route the typed base initWithOptions
 entry only for VF. Preserve native failure; after native success require the
 timer at scheduler+0x448 to report accelerator+0xf0 through getWorkLoop.
