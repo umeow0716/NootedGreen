@@ -27,6 +27,25 @@ enforce fault-before-panic and prohibit native/helper/backing side effects.
 
 ## Mapping getter provenance follow-up (offline)
 
+Cancellation-wait and callback owner follow-up: the complete Boot
+thread_call_cancel_wait 0x3d0 body is now reviewed and locally pinned. It
+checks allocation ownership, enabled interrupts and self-call avoidance;
+after locked cancellation, flag 0x20 takes a separate wait helper (still
+unreviewed). Without that flag, a true cancellation returns without waiting;
+false cancellation snapshots call+0x70 and waits until call+0x78 reaches it,
+releasing/reacquiring the group lock around the wait. This is a fixed snapshot,
+not an admission barrier against future submissions. Wait-queue/block callees
+remain unreviewed, and no GPU DMA cessation follows from these CPU counters.
+
+The passive callback's unnamed invocation helper at 0xffffff8000ad01b0 was
+read completely in a separate 0x160 window, including tracing and block-action
+branches. Direct action calls receive owner from source+0x18 and source itself;
+there is no explicit owner retain/release in this helper. Existing source and
+workloop references are not evidence that scheduler owner/its mutex survives.
+Local fixture pins this helper, the callback call edge and owner argument.
+Next: actual scheduler teardown/admission ordering and unchecked detach
+failure handling, plus outstanding kernel wait helpers. Runtime hold remains.
+
 Kernel cancellation boundary follow-up: the actual Boot thread_call_cancel
 symbol's nearest-symbol span is 0x310, but it contains the public wrapper
 (0x120) followed by an unnamed locked helper (0x1f0). The wrapper was read
@@ -40,7 +59,7 @@ accounting, and may cancel/reprogram the group's earliest delayed timer.
 No direct callback-completion wait appears in this helper. Its external
 dequeue/timer callees remain pending; this is not a transitive drain proof.
 Both windows and the wrapper-to-helper edge are pinned in the local fixture.
-cancel-wait's 0x3d0 body was located but not yet read. Do not
+The later cancellation-wait review above supersedes its earlier pending status. Do not
 substitute nearest-symbol ranges or reference XNU semantics for those missing
 reviews; runtime hold is unchanged.
 

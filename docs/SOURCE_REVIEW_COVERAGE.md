@@ -80,6 +80,11 @@ pending; base gated invocation alone is not a cleanup success proof.
 reviewed/pinned; complete reference XNU runAction read. Actual Boot virtual
 +0x1c8, stored removal action and concrete control-gate type remain pending.
 
+2026-10-04 cancel-wait/owner follow-up: complete Boot cancel-wait 0x3d0
+body and separate callback-invocation helper 0x160 window reviewed and pinned.
+Conditional wait/fixed snapshot and direct owner forwarding are established;
+external wait helpers, admission exclusion and owner lifetime are not.
+
 2026-10-04 cancellation boundary follow-up: separately reviewed the complete
 Boot public cancel wrapper (0x120) and unnamed locked helper window (0x1f0).
 Local fixture pins both hashes and their call edge. Boolean cancellation is

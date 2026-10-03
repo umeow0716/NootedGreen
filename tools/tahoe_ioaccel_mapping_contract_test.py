@@ -496,6 +496,31 @@ def check_boot_atomic(system, path):
     assert instruction[0] == 0xe8 and call + 5 + struct.unpack_from("<i", instruction, 1)[0] == cancel + 0x120, \
         "changed public cancellation to locked-helper edge"
     print("PASS Boot KC cancellation wrapper and separate locked-helper windows (not a drain proof)")
+    cancel_wait = symbols[b"_thread_call_cancel_wait"][0]
+    assert hashlib.sha256(kernel_read(cancel_wait, 0x3d0)).hexdigest() == \
+        "ab79f907dfbfeb04b2723874f2299984cdc722577b7c745328f5d916f5c84d48", \
+        "changed reviewed cancellation-wait body"
+    for offset, instruction in ((0xd6, "40 f6 c6 20"),
+                                (0xdf, "84 c0"),
+                                (0x173, "4c 8b 73 70"),
+                                (0x177, "4c 39 73 78"),
+                                (0x1a6, "80 4b 42 02")):
+        assert kernel_read(cancel_wait + offset, len(bytes.fromhex(instruction))) == bytes.fromhex(instruction), \
+            "changed cancellation-wait mode/result/snapshot/waiter branch"
+    print("PASS Boot KC conditional cancellation-wait and fixed counter snapshot (resubmission not excluded)")
+    invoke = 0xffffff8000ad01b0
+    assert hashlib.sha256(kernel_read(invoke, 0x160)).hexdigest() == \
+        "db682f5eff10d5a738d4dc74d880b75b3718960bd2716644dd9f7f0700ba11f9", \
+        "changed reviewed timer action invocation helper window"
+    call = timeout + 0xc1
+    instruction = kernel_read(call, 5)
+    assert instruction[0] == 0xe8 and call + 5 + struct.unpack_from("<i", instruction, 1)[0] == invoke, \
+        "changed passive timer invocation helper edge"
+    assert kernel_read(timeout + 0xb0, 4) == bytes.fromhex("48 8b 4b 18"), \
+        "changed callback owner argument load"
+    assert kernel_read(invoke + 0x4a, 9) == bytes.fromhex("48 89 df 48 89 d6 41 ff d4"), \
+        "changed direct timer action owner/source invocation"
+    print("PASS Boot KC passive timer owner forwarding and action helper (owner lifetime not established)")
     assert system[0x10132:0x10138] == bytes.fromhex("ff 25 60 40 01 00"), "changed atomic import stub"
     raw = struct.unpack_from("<Q", system, 0x24198)[0]
     assert (raw >> 30) & 3 == 0 and raw >> 63 == 0, "unexpected atomic import cache level/auth"
