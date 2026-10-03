@@ -61,6 +61,23 @@ Neither approach is an acceptable implementation. Active object lifetime,
 per-invocation metadata and publication/failure ordering remain design gates
 before enabling any stamp-based idle/reclamation behavior.
 
+The freestanding `NGVfSubmissionCoverage::Tracker` now models these metadata
+requirements, without a runtime route. A nonzero owner and monotonic 64-bit
+token identify one active invocation; claim/publish require exact owner,
+token, stamp and tail. Duplicate claim/publication and overlapping begin are
+rejected; token exhaustion refuses rather than wraps. Marker coverage is
+hidden while a producer is active, established only on publication carrying
+a stamp, and invalidated by a later un-stamped or unknown writer. Interference
+during the invocation taints it so a later publish cannot restore coverage.
+An accepted-result/publication mismatch invalidates coverage at finish.
+
+Offline tests compare accepted/rejected/marked/unmarked/interfering cases with
+an independent boolean oracle, plus identity mismatches, duplicate operations,
+stale tokens, late invalidation and stamp/token boundaries. This is only
+metadata policy: production synchronization, object lifetime, hook invocation
+association and actual publication still require integration and verification.
+`hasMarkerCoverage` must never be used alone as GPU idle or DMA-stop evidence.
+
 Inherited implementation found locally (2026-10-04): archived Tahoe 25G229
 `SystemKernelExtensions.kc`, SHA-256
 `5cb1be1dc530b4b953a33943567589101d3ac46bb8cf90728566ee7e5b1fa214`,

@@ -68,6 +68,79 @@ inline bool registrationCleanupComplete(bool registered,
 
 } // namespace NGVfContextShutdown
 
+// Producer metadata policy only: NOT a hardware completion/idle predicate.
+// Future kernel callers must serialize access, pin the concrete context/ring,
+// validate owner identity and call publish only after real CTB publication.
+// No runtime route uses this policy yet.
+namespace NGVfSubmissionCoverage {
+struct Tracker {
+	uint64_t serial = 0;
+	uint64_t owner = 0;
+	uint32_t stamp = 0;
+	uint32_t tail = 0;
+	bool carriesStamp = false;
+	bool claimed = false;
+	bool published = false;
+	bool tainted = false;
+	bool covered = false;
+	uint32_t coveredStamp = 0;
+	uint32_t coveredTail = 0;
+
+	uint64_t begin(uint64_t caller, uint32_t value, uint32_t byteTail, bool marker) {
+		if (!caller || owner || serial == UINT64_MAX)
+			return 0;
+		++serial;
+		owner = caller;
+		stamp = value;
+		tail = byteTail;
+		carriesStamp = marker;
+		claimed = published = tainted = false;
+		return serial;
+	}
+
+	bool matches(uint64_t token, uint64_t caller, uint32_t value, uint32_t byteTail) const {
+		return owner && owner == caller && token && token == serial &&
+			stamp == value && tail == byteTail;
+	}
+
+	bool claim(uint64_t token, uint64_t caller, uint32_t value, uint32_t byteTail) {
+		if (claimed || !matches(token, caller, value, byteTail))
+			return false;
+		claimed = true;
+		return true;
+	}
+
+	bool publish(uint64_t token, uint64_t caller, uint32_t value, uint32_t byteTail) {
+		if (!claimed || published || !matches(token, caller, value, byteTail))
+			return false;
+		published = true;
+		covered = carriesStamp && !tainted;
+		coveredStamp = value;
+		coveredTail = byteTail;
+		return true;
+	}
+
+	void invalidate() {
+		covered = false;
+		if (owner)
+			tainted = true;
+	}
+
+	bool finish(uint64_t token, uint64_t caller, bool accepted) {
+		if (!owner || owner != caller || !token || token != serial)
+			return false;
+		const bool consistent = accepted == published;
+		if (!consistent)
+			invalidate();
+		owner = 0;
+		claimed = published = carriesStamp = tainted = false;
+		return consistent;
+	}
+
+	bool hasMarkerCoverage() const { return !owner && covered; }
+};
+} // namespace NGVfSubmissionCoverage
+
 namespace NGVfContextEvent {
 
 struct ScheduleDone {

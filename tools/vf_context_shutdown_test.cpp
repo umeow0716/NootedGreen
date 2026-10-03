@@ -6,6 +6,61 @@
 using NGVfContextShutdown::Action;
 
 int main() {
+    // Metadata coverage is not GPU completion. Enumerate accepted/rejected
+    // transactions and interfering unknown writers against a simple oracle.
+    for (unsigned marker = 0; marker < 2; ++marker)
+        for (unsigned accept = 0; accept < 2; ++accept)
+            for (unsigned interfere = 0; interfere < 2; ++interfere)
+                for (uint32_t stamp : {0U, 1U, 0x7fffffffU, 0x80000000U, UINT32_MAX}) {
+                    NGVfSubmissionCoverage::Tracker tracker;
+                    tracker.covered = true; // prior submitted work had a marker
+                    const uint64_t token = tracker.begin(7, stamp, 64, marker);
+                    assert(token && !tracker.hasMarkerCoverage());
+                    assert(!tracker.begin(8, stamp, 64, true));
+                    assert(!tracker.claim(token, 8, stamp, 64));
+                    assert(!tracker.claim(token, 7, stamp ^ 1, 64));
+                    assert(!tracker.claim(token, 7, stamp, 72));
+                    assert(!tracker.publish(token, 7, stamp, 64));
+                    assert(tracker.claim(token, 7, stamp, 64));
+                    assert(!tracker.claim(token, 7, stamp, 64));
+                    if (interfere)
+                        tracker.invalidate();
+                    if (accept) {
+                        assert(tracker.publish(token, 7, stamp, 64));
+                        assert(!tracker.publish(token, 7, stamp, 64));
+                    }
+                    assert(!tracker.finish(token, 8, accept));
+                    assert(tracker.finish(token, 7, accept));
+                    const bool oracle = !interfere && (!accept || marker);
+                    assert(tracker.hasMarkerCoverage() == oracle);
+                    if (accept)
+                        assert(tracker.coveredStamp == stamp && tracker.coveredTail == 64);
+                    assert(!tracker.finish(token, 7, accept));
+                    const uint64_t next = tracker.begin(7, stamp, 72, true);
+                    assert(next != token && !tracker.claim(token, 7, stamp, 72));
+                    assert(tracker.finish(next, 7, false));
+                }
+    for (unsigned published = 0; published < 2; ++published) {
+        NGVfSubmissionCoverage::Tracker tracker;
+        const auto token = tracker.begin(1, 2, 8, true);
+        assert(tracker.claim(token, 1, 2, 8));
+        if (published)
+            assert(tracker.publish(token, 1, 2, 8));
+        assert(!tracker.finish(token, 1, !published));
+        assert(!tracker.hasMarkerCoverage());
+    }
+    NGVfSubmissionCoverage::Tracker exhausted;
+    exhausted.serial = UINT64_MAX;
+    assert(!exhausted.begin(1, 0, 8, true));
+    assert(!exhausted.begin(0, 0, 8, true));
+    NGVfSubmissionCoverage::Tracker lateWriter;
+    const auto lateToken = lateWriter.begin(1, 2, 8, true);
+    assert(lateWriter.claim(lateToken, 1, 2, 8));
+    assert(lateWriter.publish(lateToken, 1, 2, 8));
+    lateWriter.invalidate();
+    assert(lateWriter.finish(lateToken, 1, true));
+    assert(!lateWriter.hasMarkerCoverage());
+
     // Independent widened endpoint oracle for all nearby slot/buffer edges.
     for (int32_t index = -2; index <= 192; ++index) {
         for (uint64_t bytes = 0; bytes <= 0x3040; ++bytes) {
