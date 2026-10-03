@@ -6306,3 +6306,35 @@ reviewed). Parent seed aggregates mapping seeds using signed comparisons;
 mapping-seed callee and wraparound policy remain pending. This review does not
 certify resident pointers across unlock/wait, mapper retirement or Host safety.
 No executable patch or runtime mutation.
+
+# PTE commit status and failed-wire final free follow-up
+
+Reviewed/pinned complete base commit_pte (0x64) and Intel
+commitIntoGPUPageTable (0x140). Mapping prepare's outlined helper directly
+calls commit_pte after successful parent prepare. Certain map flag modes skip
+the hardware commit virtual; otherwise object +0x170 dispatches Intel commit.
+False returns before installed-PTE flag/counter publication; true sets the
+installed flag, updates parent accounting and increments generation. This
+flags/generation transition is not proof of GPU execution or DMA quiescence.
+
+Intel commit's bypass flag returns true; otherwise it invokes manager
+commitIntoPageTableForTask at 0x11275 and forwards the result. Native slot and
+direct manager edge are pinned in both payloads. Manager body/partial map
+failure behavior and exact bypass ownership are still pending; tracing import
+placeholders are not interpreted as self-calls.
+
+Re-reviewed the entire already-pinned sys-memory free (0x1d6). It calls unwire
+only when wired flag +0xc bit 1 is set, then releases descriptor +0xd0 and
+pool backing/provenance before inherited base free. It does not inspect,
+clear, complete or release command +0x148 in the unwired branch. Previously
+reviewed inherited memory free also has no command cleanup; Intel's declared
+free slot imports this base sys-memory free. Thus these final-free bodies do
+not supply missing failed-wire command cleanup. If the command still retains
+the descriptor, releasing the sys-memory descriptor reference does not alone
+prove freed backing/UAF: it can leave the command/descriptor reference leaked.
+The earlier premature descriptor complete and possible active-registration
+panic remain separate concerns. No assertion of observed crash cause.
+
+New wired-only free branch and commit-helper/virtual anchors are pinned.
+Target cleanup must close admission and respect command/descriptor pairing;
+do not force-release backing merely to eliminate the leak. No runtime mutation.

@@ -35,6 +35,7 @@ EVENT_DISABLE_STAMP_LOCKED = "__ZN20IOAccelEventMachine223disable_stamp_interrup
 EVENT_ENABLE_STAMP = "__ZN20IOAccelEventMachine220enableStampInterruptEi"
 EVENT_DISABLE_STAMP = "__ZN20IOAccelEventMachine221disableStampInterruptEi"
 EVENT_OWNER_BODIES = {
+    "__ZN16IOAccelMemoryMap10commit_pteEv": (0x64, "648a1ffd7c72e238dc0e8ad6cc99ad5d157687c64ba6531eed2424b5d4065574"),
     "__ZN22IOGraphicsAccelerator212sysmem_wiredEP16IOAccelSysMemory": (0x78, "2af8bdaad7f93f070852b210c6594612b4830c13f317b6c0606f09ea551338e6"),
     "__ZN24IOAccelResidentMemorySet9addMemoryEP13IOAccelMemory": (0x64, "40149e4f9e96697bf965b03d5786ab77eb8e52ab9c5e963632233f31ce5b9131"),
     "__ZN24IOAccelResidentMemorySet12removeMemoryEP13IOAccelMemory": (0x6c, "3abb8f4eeb8d8b0cacac8d433d219dae87346b2d6fdaa38187ae423fad7b51e6"),
@@ -885,6 +886,10 @@ def check(path, boot_path=None):
     assert stop_owner.count(bytes.fromhex("ff 90 48 01 00 00")) == 3, "changed base event stop source-removal inventory"
     print("PASS inherited event owner free/stop and per-event stamp-disable bodies (outer drain not proven)")
     lazy_setup = address_of("__ZN18IOAccelDisplayPipe14setup_workloopEv")
+    commit_call = read(0x14bbca59, 5)
+    assert commit_call[0] == 0xe8 and 0x14bbca5e + struct.unpack_from("<i", commit_call, 1)[0] == address_of("__ZN16IOAccelMemoryMap10commit_pteEv"), "changed mapping prepare PTE commit helper edge"
+    assert read(0x14bb77fc, 6) == bytes.fromhex("ff 90 70 01 00 00"), "changed mapping GPU-page-table commit dispatch"
+    assert read(0x14bb8fe8, 18) == bytes.fromhex("f6 43 0c 02 74 0c 48 8b 03 48 89 df ff 90 b8 01 00 00"), "changed sys-memory free wired-only unwire branch"
     for call, method in ((0x14bb996b, "__ZN22IOGraphicsAccelerator212sysmem_wiredEP16IOAccelSysMemory"),
                          (0x14bba1f6, "__ZN22IOGraphicsAccelerator212sysmem_wiredEP16IOAccelSysMemory"),
                          (0x14ba5b0b, "__ZN24IOAccelResidentMemorySet9addMemoryEP13IOAccelMemory"),

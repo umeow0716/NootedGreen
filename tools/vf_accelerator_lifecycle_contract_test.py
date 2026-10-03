@@ -9,6 +9,7 @@ import sys
 # Complete reviewed native bodies. This fixes the concrete Intel override
 # graph, not inherited timer APIs, dynamic callbacks or runtime completion.
 STAMP_IRQ_NATIVE = {
+    "__ZN16IGAccelMemoryMap22commitIntoGPUPageTableEv": (0x140, "b8318f92ed0a3a62eb086877f6f5a65e0c32cc53d610bcad69540967279189e4"),
     "__ZN16IGAccelSysMemory4wireEv": (0x10a, "ec07edd1fdb32fe38f4470a0336602acb181631387f8f3f32c3220a926b0b580"),
     "__ZN16IGAccelMemoryMap23releaseFromGPUPageTableEv": (0x140, "7abf8665679b8628fe1472f77fd9dc87a03b4bbafa380c28b7efe11151938168"),
     "__ZN15IGMemoryManager27releaseFromPageTableForTaskEP11IGAccelTaskP16IGAccelMemoryMap": (0x112, "d0d45163270d1b779be9bedfd1a7431bb4750ea2a7380dc4f6d1c4c5c1ab28eb"),
@@ -496,6 +497,8 @@ def macho_inventory(path):
     display_table = value("__ZTV18IGAccelDisplayPipe")
     resource_table = value("__ZTV15IGAccelResource")
     map_table = value("__ZTV16IGAccelMemoryMap")
+    assert struct.unpack_from("<Q", image, map_table + 16 + 0x170)[0] == value("__ZN16IGAccelMemoryMap22commitIntoGPUPageTableEv"), f"{path}: changed mapping commit virtual"
+    assert direct_branches("__ZN16IGAccelMemoryMap22commitIntoGPUPageTableEv", "__ZN15IGMemoryManager26commitIntoPageTableForTaskEP11IGAccelTaskP16IGAccelMemoryMap") == [0x11275], f"{path}: changed mapping-to-manager commit edge"
     assert struct.unpack_from("<Q", image, map_table + 16 + 0x178)[0] == value("__ZN16IGAccelMemoryMap23releaseFromGPUPageTableEv"), f"{path}: changed mapping release virtual"
     assert direct_branches("__ZN16IGAccelMemoryMap23releaseFromGPUPageTableEv", "__ZN15IGMemoryManager27releaseFromPageTableForTaskEP11IGAccelTaskP16IGAccelMemoryMap") == [0x113b5], f"{path}: changed mapping-to-manager release edge"
     sys_memory_table = value("__ZTV16IGAccelSysMemory")

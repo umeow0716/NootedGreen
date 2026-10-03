@@ -7,6 +7,13 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 PTE commit/final-free follow-up: complete base commit_pte and Intel
+GPU-page-table commit reviewed/pinned with native manager edge. Sys-memory
+free re-reviewed: wired-only unwire does not handle unwired failed command.
+Retained descriptor may leak, not necessarily become freed backing. Manager
+partial-commit behavior, bypass ownership and safe failure-unwind repair remain
+pending; no dynamic/panic or DMA-quiescence certification.
+
 2026-10-04 resident-set follow-up: complete wired publication, resident add/remove,
 iterator, sort/realloc and parent LRU seed reviewed/pinned. Examined ordinary
 wire failure precedes resident publication; recovery cannot be presumed to
