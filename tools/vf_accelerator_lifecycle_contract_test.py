@@ -333,6 +333,7 @@ def macho_inventory(path):
         0x27ad5: "_PE_parse_boot_argn",
         0x24767: "__ZN22IOGraphicsAccelerator211unlock_busyEv",
         0x24773: "_IOLockUnlock",
+        0x2464a: "__ZN18IOTimerEventSource16timerEventSourceEP8OSObjectPFvS1_PS_E",
         0x281b5: "__ZN15IORegistryEntry8fromPathEPKcPK15IORegistryPlanePcPiPS_",
         0x281fe: "__ZN8OSNumber10withNumberEPKcj",
         0x28191: "__ZN15OSMetaClassBase12safeMetaCastEPKS_PK11OSMetaClass",
@@ -447,6 +448,16 @@ def macho_inventory(path):
         f"{path}: changed private workloop clear before inherited cleanup"
     scheduler5_init = value("__ZN12IGScheduler519initWithAcceleratorEP22IOGraphicsAccelerator2")
     create = value("__ZN11IGScheduler6createEP16IntelAccelerator")
+    for name, length, digest in (
+            (DPSM_IDLE_TIMER, 0x96, "2be716f37bbbd3ba2df81c63a9cc0fe5d843f6ffc0fde9649fac540d542e477c"),
+            ("__ZN16IntelAccelerator13dpsmKickTimerEv", 0x7e, "e22ef5bc66aaaa0ab4cf4eb802406d1d843bbcd8c33981720b4e1fc926ab9354"),
+            ("__ZN16IntelAccelerator10dpsmIsIdleEv", 0xe, "9f3eac3e1a7c8eb1c2d2159cf3d8805748718c86ba9856da126e328d93d4fe93")):
+        start = value(name)
+        assert next_symbol(start) - start == length and hashlib.sha256(image[start:start + length]).hexdigest() == digest, \
+            f"{path}: changed complete DPSM timer/state consumer body"
+    assert hashlib.sha256(image[0x2463f:0x246a9]).hexdigest() == \
+        "972f26b62a647876bbe8e0da6240f34246bfc55507c9b9195be762ef65c35a28", \
+        f"{path}: changed reviewed post-scheduler DPSM construction subsection"
     for start, length, digest in (
             (value("__ZN16IntelAccelerator4freeEv"), 0x24,
              "0eb67d3ff65227b0608257b4664d88c8d816ed1e66adba8e6fdc7b477bb4a2e6"),

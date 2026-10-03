@@ -80,6 +80,11 @@ pending; base gated invocation alone is not a cleanup success proof.
 reviewed/pinned; complete reference XNU runAction read. Actual Boot virtual
 +0x1c8, stored removal action and concrete control-gate type remain pending.
 
+2026-10-04 DPSM provenance: complete idle/kick/isIdle bodies and separate
+constructor subsection reviewed/pinned; default factory import verified.
+1458 bit 0 is reported idle, not a neutral stopping flag. Software cancel
+restoration/producer exclusion and stale-state lifetime remain pending.
+
 2026-10-04 free/engine-stop: complete free wrapper 0x24, separate helper 0xce
 and native engine stop 0xc4 reviewed/pinned; timer1460 cancellation/state1458
 store and effective scheduler wait virtual pinned. VF omits these steps;

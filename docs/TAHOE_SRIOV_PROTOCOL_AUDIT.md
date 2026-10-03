@@ -27,6 +27,22 @@ enforce fault-before-panic and prohibit native/helper/backing side effects.
 
 ## Mapping getter provenance follow-up (offline)
 
+DPSM provenance follow-up: complete dpsmIdleTimer (0x96), dpsmKickTimer
+(0x7e) and dpsmIsIdle (0xe) bodies reviewed/pinned. Construction subsection
+0x2463f..0x246a8 calls the imported default IOTimerEventSource factory with
+dpsmIdleTimer, stores +0x1460, null-fails to 0x215, attaches through scheduler
+getWorkLoop (unchecked add), enables/cancels and marks feature+0x1191 bit 2.
+The callback serializes event/mutex work, queries scheduler idle and event
+state, sets +0x1458 bit 0 when idle, otherwise rearms. Kick clears bit 0,
+notifies and cancels/rearms; isIdle returns that bit. Consequently copying
+native engine-stop's +0x1458=1 into VF would assert software idle rather than
+merely set a neutral stopping flag. Do not fabricate that state. Timer cancel
+is independently identifiable software work, but it is not a drain or admission
+barrier. Construction-order evidence rules out the fresh-init factory-null
+path having reached this later timer allocation; stale/reused object state
+and whole-function failure paths remain pending. Next: restore justified
+timer cancellation without false idle or physical waits and prove lifetime.
+
 Free/engine-stop follow-up: complete IntelAccelerator free wrapper (0x24),
 its separate unnamed helper (0xce), and native stopGraphicsEngine (0xc4)
 reviewed/pinned. Free helper conditionally processes registry matches and a
