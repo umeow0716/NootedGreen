@@ -2017,6 +2017,13 @@ def source_contract(path):
     if start.count("initEvent(eventMachine") != 2:
         raise AssertionError(f"{path}: VF start does not initialize both native events")
     stop = function_body(source, "bool Gen11::stopGraphicsEngine(void *that)")
+    timer = stop.index("getMember<IOTimerEventSource *>(that, 0x1460)")
+    cancel = stop.index("dpsmTimer->cancelTimeout();", timer)
+    shutdown = stop.index("vfQuiesceDeviceForShutdown(")
+    assert timer < cancel < shutdown and "if (dpsmTimer)" in stop[timer:cancel], \
+        "VF stop must null-check and cancel native DPSM timer before shutdown"
+    assert "getMember<uint32_t>(that, 0x1458) =" not in stop and "waitForGpuIdle" not in stop, \
+        "VF timer cancellation must not forge idle state or enter physical idle wait"
     quiesce = stop.index("vfQuiesceDeviceForShutdown(gVfHardwareGuc)")
     bridge_disable = stop.index("vfInterruptBridgeDisable", quiesce)
     if not quiesce < bridge_disable:

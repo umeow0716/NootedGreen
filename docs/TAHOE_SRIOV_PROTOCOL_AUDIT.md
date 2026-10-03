@@ -27,6 +27,17 @@ enforce fault-before-panic and prohibit native/helper/backing side effects.
 
 ## Mapping getter provenance follow-up (offline)
 
+DPSM cancellation restoration: VF stopGraphicsEngine now null-checks the
+constructor-pinned IOTimerEventSource at accelerator+0x1460 and invokes its
+cancelTimeout before the existing final GuC shutdown boundary. It does not
+write +0x1458, call physical waitForGpuIdle, mutate PF behavior or assert a
+completion/drain acknowledgement. Local source contracts pin null-check and
+ordering. This restores a native software step omitted by the replacement,
+but outstanding callback/rearm, owner lifetime and detach error handling are
+still unresolved; cancellation alone cannot close those obligations. Native
+stop's later disable/remove/release sequence remains unchanged. No deployment
+or dynamic test is authorized until host-containment gates are satisfied.
+
 DPSM provenance follow-up: complete dpsmIdleTimer (0x96), dpsmKickTimer
 (0x7e) and dpsmIsIdle (0xe) bodies reviewed/pinned. Construction subsection
 0x2463f..0x246a8 calls the imported default IOTimerEventSource factory with

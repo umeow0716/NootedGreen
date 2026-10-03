@@ -1,6 +1,7 @@
 //  Copyright © 2026 Stezza @ inc. Licensed under the Thou Shalt Not Profit License version 1.0. See LICENSE for
 //  details.
 #include "kern_gen11.hpp"
+#include <IOKit/IOTimerEventSource.h>
 #include "kern_guc_ring.hpp"
 #include "kern_gpu_capabilities.hpp"
 #include "kern_ggtt_bounds.hpp"
@@ -3794,6 +3795,13 @@ bool Gen11::stopGraphicsEngine(void *that)
 		vfMarkProtocolFault("VF engine stop without accelerator lifecycle API");
 		return false;
 	}
+	// Preserve the native software timer cancellation before shutdown. The
+	// pinned constructor stores a base IOTimerEventSource at +0x1460.
+	// This invalidates scheduled work; it does not drain callbacks or prove
+	// DMA quiescence. Do not copy native +0x1458=1 (a reported idle state).
+	auto *dpsmTimer = getMember<IOTimerEventSource *>(that, 0x1460);
+	if (dpsmTimer)
+		dpsmTimer->cancelTimeout();
 	if (gVfDeviceStopping && gVfGGTTReady) {
 		PANIC_COND(!vfQuiesceDeviceForShutdown(gVfHardwareGuc), "ngreen",
 			"Cannot stop VF accelerator before every GuC context and DMA mapping is quiesced");

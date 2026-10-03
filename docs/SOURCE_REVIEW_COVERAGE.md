@@ -80,6 +80,10 @@ pending; base gated invocation alone is not a cleanup success proof.
 reviewed/pinned; complete reference XNU runAction read. Actual Boot virtual
 +0x1c8, stored removal action and concrete control-gate type remain pending.
 
+2026-10-04 DPSM cancel restoration: VF-only engine-stop replacement now
+null-checks/cancels timer1460 before final shutdown, with no false idle write
+or PF wait. Callback/rearm exclusion and runtime safety remain unproven.
+
 2026-10-04 DPSM provenance: complete idle/kick/isIdle bodies and separate
 constructor subsection reviewed/pinned; default factory import verified.
 1458 bit 0 is reported idle, not a neutral stopping flag. Software cancel
