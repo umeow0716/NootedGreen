@@ -7,6 +7,13 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 mapping recovery follow-up: complete freeToPrepareMapping and base
+freeWaitToPrepareSysMap reviewed/pinned; resource direct edges and base recovery
+virtual identities resolved. Recovery unwires eligible collection entries and
+retries target prepare; it is not direct target-command cleanup. Concrete Intel
+overrides, collection membership/waits, vid-map callee and failed-target disposal
+remain pending. Retry overwrite risk is conditional, not runtime reproduction.
+
 2026-10-04 mapping parent-prepare follow-up: complete map prepare/outlined helper
 and parent/map getPrepareCount reviewed/pinned; Intel map import and paired
 parent virtual identities resolved. Parent prepare false is propagated without

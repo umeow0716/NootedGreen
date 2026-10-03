@@ -6239,3 +6239,37 @@ successful parent-prepare balancing can indirectly reach command cleanup; it
 is not merely a bare memory decrement. The failed parent-prepare branch above
 does not invoke this override, so that local failure conclusion remains valid.
 The full override, paired slot, explicit base table and dispatch are pinned.
+
+# Mapping recovery frees other allocations and retries preparation
+
+Reviewed/pinned complete freeToPrepareMapping (0x260) and base
+freeWaitToPrepareSysMap (0x1bc). Both direct resource-prepare calls select the
+first helper. Base accelerator virtual +0x968 resolves to the sys-map helper;
++0x940 resolves to freeWaitToPrepareVidMap (identity only, body pending).
+Concrete Intel accelerator overrides of these slots remain to be resolved.
+
+The ordinary system-map branch invokes recovery with false then true mode.
+The base sys helper iterates accelerator collection +0xa08 twice, skips entries
+with nonzero aggregate prepare count, optionally performs memory/event waits,
+calls their virtual +0x1b8 unwire, then retries the TARGET mapping virtual
++0x138. It does not directly complete/clear the target command. The final
+true-mode fallback sets target parent flag 0x20000 and retries once more;
+earlier wire selects descriptor prepare arguments from that flag. Collection
+helpers and memory/event wait callees are not newly certified here.
+
+This is a resource-pressure retry protocol, not blanket failed-wire cleanup.
+If the target remains unwired with stored command +0x148 from a prior failed
+wire, another wire attempt has no local existing-command check before storing
+a newly obtained command. Target inclusion in the collection, effective native
+overrides and outer disposal must be established before claiming a reachable
+leak or implementing a cleanup/force-release hook. Vid-map branch additionally
+uses orphan-pool/virtual reclamation and timed escalation; those callee bodies
+remain pending. No observed-panic attribution or GPU-retirement proof.
+Targeted contracts cover complete selected bodies/base identities/direct edges,
+not all indirect callers or runtime concurrency. No production/runtime changes.
+
+Native follow-up: IntelAccelerator vtable slots +0x940/+0x968 are external
+base vid/sys recovery imports at relocations 0xd19b0/0xd19d8, not distinct
+Intel implementations. Both native payloads now check their exact imported
+identity and slot position. Dynamic table mutation/other runtime accelerator
+classes are not established by this fixed declared-table evidence.

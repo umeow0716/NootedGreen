@@ -403,6 +403,8 @@ def macho_inventory(path):
     }
     observed_stamp_irq_imports = {address: [] for address in stamp_irq_imports}
     event_stop_imports = {
+        0xd19b0: "__ZN22IOGraphicsAccelerator223freeWaitToPrepareVidMapEP16IOAccelMemoryMapbb",
+        0xd19d8: "__ZN22IOGraphicsAccelerator223freeWaitToPrepareSysMapEP16IOAccelMemoryMapb",
         0xcd040: "__ZN16IOAccelMemoryMap7prepareEv",
         0xd1b20: "__ZN22IOGraphicsAccelerator218createIODMACommandEv",
         0xc8140: "__ZTV16IOAccelSysMemory",
@@ -497,6 +499,8 @@ def macho_inventory(path):
     assert struct.unpack_from("<Q", image, map_table + 16 + 0x178)[0] == value("__ZN16IGAccelMemoryMap23releaseFromGPUPageTableEv"), f"{path}: changed mapping release virtual"
     assert direct_branches("__ZN16IGAccelMemoryMap23releaseFromGPUPageTableEv", "__ZN15IGMemoryManager27releaseFromPageTableForTaskEP11IGAccelTaskP16IGAccelMemoryMap") == [0x113b5], f"{path}: changed mapping-to-manager release edge"
     sys_memory_table = value("__ZTV16IGAccelSysMemory")
+    assert value(ACCELERATOR_VTABLE) + 16 + 0x940 == 0xd19b0, f"{path}: changed Intel video recovery import slot"
+    assert value(ACCELERATOR_VTABLE) + 16 + 0x968 == 0xd19d8, f"{path}: changed Intel system recovery import slot"
     assert struct.unpack_from("<Q", image, sys_memory_table + 16 + 0x1b0)[0] == value("__ZN16IGAccelSysMemory4wireEv"), f"{path}: changed Intel sys-memory wire override"
     assert image[0x128a4:0x128ab] == bytes.fromhex("48 8b 05 95 58 0b 00"), f"{path}: changed wire base-table import load"
     assert image[0x128ab:0x128b1] == bytes.fromhex("ff 90 c0 01 00 00"), f"{path}: changed explicit sys-memory base wire delegation"

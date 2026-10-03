@@ -35,6 +35,8 @@ EVENT_DISABLE_STAMP_LOCKED = "__ZN20IOAccelEventMachine223disable_stamp_interrup
 EVENT_ENABLE_STAMP = "__ZN20IOAccelEventMachine220enableStampInterruptEi"
 EVENT_DISABLE_STAMP = "__ZN20IOAccelEventMachine221disableStampInterruptEi"
 EVENT_OWNER_BODIES = {
+    "__ZN22IOGraphicsAccelerator220freeToPrepareMappingEP16IOAccelMemoryMap": (0x260, "8706a375f2e2538da76435f0f768ac1a42afc03ef111330ba5d09d51ac29973b"),
+    "__ZN22IOGraphicsAccelerator223freeWaitToPrepareSysMapEP16IOAccelMemoryMapb": (0x1bc, "d36fa6823dfe656c5735419f5c48261954ee0a397e670822e2875197baad0bf5"),
     "__ZN16IOAccelSysMemory8completeEv": (0x42, "37fec16c6bebb121abb7612a23dbd90ccdae8179f025c1edae4e7553dc779240"),
     "__ZN16IOAccelMemoryMap7prepareEv": (0x7c, "e2f18c8db02cdedfce50fc42a2c86c3e64b7c8d4bd4baacde07d0dfdb90858dc"),
     "__ZN16IOAccelMemoryMap7prepareEv.cold.1": (0x62, "196a2d0f745818d6fb711949d6313b7b230605506ad6b315be2e04f0029953d8"),
@@ -835,7 +837,10 @@ def check(path, boot_path=None):
     assert symtab is not None, "missing embedded symbol table"
     symbol_offset, count, string_offset, string_size = symtab
     matches = {name: [] for name in {*CONTRACTS, *SCRUB_BODIES, *LOCK_COPIES, *EVENT_OWNER_BODIES, SHARED_VTABLE, RESOURCE_VTABLE, "__ZTV18IOAccelDisplayPipe", "__ZTV24IOAccelLegacyDisplayPipe", "__ZTV16IOAccelMemoryMap", "__ZTV16IOAccelSysMemory",
-                                    "__ZTV13IOAccelMemory", EVENT_VTABLE, EVENT_FINISH, EVENT_WAIT, EVENT_CLEAN, EVENT_SIGNAL, EVENT_RESTART,
+                                    "__ZTV13IOAccelMemory", "__ZTV22IOGraphicsAccelerator2",
+                                    "__ZN22IOGraphicsAccelerator223freeWaitToPrepareVidMapEP16IOAccelMemoryMapbb",
+                                    "__ZNK16IOAccelMemoryMap9getLengthEv",
+                                    EVENT_VTABLE, EVENT_FINISH, EVENT_WAIT, EVENT_CLEAN, EVENT_SIGNAL, EVENT_RESTART,
                                     EVENT_MERGE_EXCLUDING, EVENT_SET_STAMP, GET_DATA_BUFFER,
                                     EVENT_INIT, EVENT_COPY, EVENT_FINISH_UNLOCKED, EVENT_HARDWARE_ERROR,
                                     EVENT_DISABLE_STAMP_LOCKED, EVENT_ENABLE_STAMP, EVENT_DISABLE_STAMP}}
@@ -872,6 +877,15 @@ def check(path, boot_path=None):
     assert stop_owner.count(bytes.fromhex("ff 90 48 01 00 00")) == 3, "changed base event stop source-removal inventory"
     print("PASS inherited event owner free/stop and per-event stamp-disable bodies (outer drain not proven)")
     lazy_setup = address_of("__ZN18IOAccelDisplayPipe14setup_workloopEv")
+    for table, slot, method in (("__ZTV22IOGraphicsAccelerator2", 0x968, "__ZN22IOGraphicsAccelerator223freeWaitToPrepareSysMapEP16IOAccelMemoryMapb"),
+                                ("__ZTV22IOGraphicsAccelerator2", 0x940, "__ZN22IOGraphicsAccelerator223freeWaitToPrepareVidMapEP16IOAccelMemoryMapbb"),
+                                ("__ZTV16IOAccelMemoryMap", 0x168, "__ZNK16IOAccelMemoryMap9getLengthEv")):
+        raw = struct.unpack("<Q", read(address_of(table) + 16 + slot, 8))[0]
+        assert raw >> 63 == 0 and (raw >> 30) & 3 == 1, "changed mapping recovery base virtual encoding"
+        assert raw & 0x3fffffff == address_of(method), "changed mapping recovery base virtual identity"
+    for call in (0x14b8c00f, 0x14b8c35b):
+        encoded = read(call, 5)
+        assert encoded[0] == 0xe8 and call + 5 + struct.unpack_from("<i", encoded, 1)[0] == address_of("__ZN22IOGraphicsAccelerator220freeToPrepareMappingEP16IOAccelMemoryMap"), "changed resource prepare recovery helper edge"
     for table, slot, method in (("__ZTV16IOAccelMemoryMap", 0x138, "__ZN16IOAccelMemoryMap7prepareEv"),
                                 ("__ZTV16IOAccelSysMemory", 0x148, "__ZN13IOAccelMemory7prepareEv"),
                                 ("__ZTV16IOAccelSysMemory", 0x150, "__ZN16IOAccelSysMemory8completeEv"),
