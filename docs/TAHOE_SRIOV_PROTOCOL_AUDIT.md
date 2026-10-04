@@ -6955,6 +6955,20 @@ No executable patch or runtime mutation.
 
 ### Update fanout must participate in the same owner transaction
 
+Resource event-pair producer follow-up (2026-10-04): the complete SystemKC
+Resource2::initialize at 0x14b88c08 (0x33e, fixture-pinned) sets flag +0xf bit
+0x10 for NewResourceArgs bit 12, stores the allocation at +0x90, and initializes
+the two event records without a local null check. Its 0x1020a import resolves
+through chained slot 0x242b8 to Boot `_IOMallocTypeImpl`, not plain IOMalloc.
+The complete 0x20 wrapper at 0xffffff8000a85dc0 selects flags using typed-view
++0x28 bit 0x10 and tail-calls `_kalloc_type_impl`; that external wrapper masks
+input flags and adds its own internal flags. Local XNU IOLib.cpp provides
+context (typed zone allocations request Z_NOFAIL), not an exact-build proof of
+downstream zone policy. Consequently the lack of a null branch is not yet a
+proven reachable failure and does not justify a speculative initializer patch.
+This does not resolve nullable event-vector growth omissions, pointer leases,
+or the pre-zero PPGTT retirement transaction. VM containment remains in force.
+
 Null-entry admission follow-up: re-read the previously whole-pinned channel
 setEventStamp wrapper and Fast2 setEventStamp (0x9e). Channel forwards the
 supplied event pointer to event-machine +0x1d0; Fast2 begins reading

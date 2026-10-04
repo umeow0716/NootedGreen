@@ -35,6 +35,7 @@ EVENT_DISABLE_STAMP_LOCKED = "__ZN20IOAccelEventMachine223disable_stamp_interrup
 EVENT_ENABLE_STAMP = "__ZN20IOAccelEventMachine220enableStampInterruptEi"
 EVENT_DISABLE_STAMP = "__ZN20IOAccelEventMachine221disableStampInterruptEi"
 EVENT_OWNER_BODIES = {
+    "__ZN16IOAccelResource210initializeEP22IOAccelNewResourceArgsy": (0x33e, "7d083706bf76b368690668e896e04d2f33c89bd906457e32e0699a283aa70c1a"),
     "__ZN16IOAccelResource210checkDirtyEv": (0x144, "9e26e53e3aa25e3a0d7c81a710ca44d4fb0a8081b31d186bb04566f618af5a64"),
     "__ZN16IOAccelResource212addToChannelEP15IOAccelChannel2j": (0x22a, "696a8c305a8d69ce7573addf9147eae02e4c4055bd231d9b433f88edec44631c"),
     "__ZN14IOAccelShared214lookupResourceEjPPv": (0xe, "839e3c8f1d2321d46fab9a7a166f590702861f015fe827f73d1ffd2b4e4ce8b7"),
@@ -345,7 +346,7 @@ def check_boot_atomic(system, path):
                  b"__ZN12IODMACommand7prepareEyybb",
                  b"__ZN12IODMACommand21initWithSpecificationEPFbPS_NS_9Segment64EPvjEPKNS_14SegmentOptionsEjP8IOMapperS2_",
                  b"__ZN12IODMACommand16setSpecificationEPFbPS_NS_9Segment64EPvjEPKNS_14SegmentOptionsEjP8IOMapper",
-                 b"_kalloc_type_impl", b"__ZN8IOMapper19waitForSystemMapperEv",
+                 b"_kalloc_type_impl", b"_IOMallocTypeImpl", b"__ZN8IOMapper19waitForSystemMapperEv",
                  b"_lck_mtx_alloc_init",
                  b"__ZN12IODMACommand17withSpecificationEPFbPS_NS_9Segment64EPvjEhyNS_14MappingOptionsEyjP8IOMapperS2_",
                  b"__ZN12IODMACommand19setMemoryDescriptorEPK18IOMemoryDescriptorb",
@@ -468,6 +469,15 @@ def check_boot_atomic(system, path):
     dma_prepare = symbols[b"__ZN12IODMACommand7prepareEyybb"][0]
     assert kernel_read(dma_prepare + 0x52, 11) == bytes.fromhex("8b 47 68 44 8d 48 01 44 89 4f 68"), "changed DMA prepare reference increment before fallible work"
     allocator = symbols[b"_kalloc_type_impl"][0]
+    typed_allocator = symbols[b"_IOMallocTypeImpl"][0]
+    assert hashlib.sha256(kernel_read(typed_allocator, 0x20)).hexdigest() == "a4caf37ae7b57d98f187be6fd68606b525bfe6cb3282abc4d0c4464042b4e623", "changed reviewed typed IOMalloc wrapper"
+    edge = kernel_read(typed_allocator + 0x15, 5)
+    assert edge[0] == 0xe9 and typed_allocator + 0x1a + struct.unpack_from("<i", edge, 1)[0] == allocator, "changed typed IOMalloc external allocation edge"
+    stub = system[0x1020a:0x10210]
+    assert stub == bytes.fromhex("ff 25 a8 40 01 00"), "changed resource typed allocation import stub"
+    encoded = struct.unpack_from("<Q", system, 0x242b8)[0]
+    assert (encoded >> 30) & 3 == 0 and bases[0] + (encoded & 0x3fffffff) == typed_allocator, "changed resource typed allocation import identity"
+    # This fixes allocator identity, not downstream zone no-failure policy.
     assert kernel_read(allocator + 9, 3) == bytes.fromhex("83 e2 07"), "changed external typed-allocation KPI flag mask"
     dma_free = symbols[b"__ZN12IODMACommand4freeEv"][0]
     assert kernel_read(dma_free + 0x9a, 8) == bytes.fromhex("48 c7 43 48 00 00 00 00"), "changed DMA free descriptor detach (not clearMemoryDescriptor)"

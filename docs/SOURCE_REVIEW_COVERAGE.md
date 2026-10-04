@@ -7,6 +7,13 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 resource event-pair producer: complete Resource2 initialize body
+reviewed and pinned (0x33e); bit-12 mode sets resource flag before storing the
+typed allocation at +0x90 and initializing both events without a null branch.
+Complete Boot IOMallocTypeImpl wrapper reviewed/pinned and its import and tail
+edge to external kalloc checked. Nullable versus must-succeed behavior still
+requires downstream allocation-policy proof; no reachable fault is claimed.
+
 2026-10-04 null entries: existing channel/Fast2 stamp consumers re-read; entry
 pointer is dereferenced without null guard. Pinned read anchor and extended
 test-only admission predicate to reject null even when exact lists match.
