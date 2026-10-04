@@ -1,7 +1,7 @@
 # Tahoe SR-IOV protocol audit — in progress
 
 Updated: 2026-10-04. The last dynamic source baseline is `ce166c8`; the current
-offline-reviewed worktree is V288 GL-client/SurfaceMTL inventory on
+offline-reviewed worktree is V289 Device/Shared/MemoryInfo and resource-paging inventory on
 `codex/tahoe-sriov-vf`. This is NOT a boot-test candidate or a successful
 driver baseline. The `ce166c8` run produced repeatable host PF DMAR faults
 followed by i915 hangs and a host reboot. Keep `macos-tahoe-sriov` shut off until the
@@ -20,6 +20,38 @@ KVMFR/client transport remains the intended receiving side.
 The authoritative dynamic-entry checklist is
 [`DYNAMIC_TEST_GATE.md`](DYNAMIC_TEST_GATE.md). Any open static gate keeps the
 VM hard hold in force.
+
+## V289 Device, Shared, MemoryInfo and resource-paging inventory (offline)
+
+The Tahoe 25G229 paired-KC contract now pins all ten `IOAccelDevice2`, all
+twenty-one `IOAccelSharedUserClient2` and all three
+`IOAccelMemoryInfoUserClient` selectors, including exact argument contracts,
+complete member/wrapper bodies, the Shared selector 0/17 variable-structure
+dispatch records and every observed accelerator busy/timeout-lock scope.
+Device remains metadata/configuration only. MemoryInfo gather and totals are
+read-side operations; purge takes a bounded two-second lock and invokes the
+accelerator video/system unwire virtuals, but no new GPU submit edge was found.
+
+Shared selector 2 `page_off_resource` is a newly classified paging producer
+root. It dispatches resource slot `+0x260` to
+`IOAccelResource2::pageoffIfNeeded`, which calls the concrete resource
+page-off virtual at `+0x1c8`. Both Intel payloads now pin the effective
+`IGAccelResource` initialize/alloc/page-on/page-off vtable slots and complete
+regions. `pageon` makes three and `pageoff` makes two direct calls to
+`IntelAccelerator::submitBlit`; each returned AL is ignored. Exact call sites
+and the instructions that overwrite/bypass the result are contracted. The
+initialize/helper region and alloc method contain no direct `submitBlit`.
+
+P5c is therefore closed as an inventory, completing P5a-P5c. This does not
+provide shutdown admission: page-off is an external Shared root, page-on is
+an internal paging producer, and their ignored results are an explicit SG-08
+failure-propagation gap. P6 display/flip, P7 internal-producer classification,
+P8 counted admission and P9 close/drain order remain open. Targeted paired-KC
+and dual-payload contracts pass, as does the full static suite at
+`/tmp/ngreen-static.KodlVY` with only the two known SDK macro warnings.
+Checkpoint `b534c1c` is pushed; exact-sha GitHub Actions run `37203779356`
+passed full static, x86_64 release kext, Metal smoke and both artifact uploads
+in 1m56s. No VM, deployment, PCI/sysfs, VF/PF or Host i915 state was touched.
 
 ## V288 GL client and SurfaceMTL inventory (offline)
 

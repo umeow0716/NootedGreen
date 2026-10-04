@@ -10,6 +10,23 @@ The current dynamic-entry gate table is
 
 ## Scope
 
+2026-10-04 Device/Shared/MemoryInfo delta: the paired Tahoe System/Boot KC
+contract now pins the complete Device ten-entry, Shared twenty-one-entry and
+MemoryInfo three-entry selector families, exact argument descriptors,
+complete member/wrapper bodies, Shared selector 0/17 special dispatch records,
+busy/timeout-lock scopes and MemoryInfo purge/unwire edges. Device and
+MemoryInfo add no direct GPU submit root. Shared selector 2 is a newly bounded
+external paging root through `IOAccelResource2::pageoffIfNeeded`; both Intel
+payloads pin the concrete resource vtable and complete initialize/alloc/
+page-on/page-off regions. Page-on makes three and page-off makes two direct
+`submitBlit` calls, all with ignored AL results. P5c is closed as an inventory,
+but the paging root, its failure propagation, display/flip, internal producers,
+counted admission and drain ordering remain open. Targeted contracts and the
+full static suite pass at `/tmp/ngreen-static.KodlVY`; checkpoint `b534c1c` is
+pushed and exact-sha GitHub Actions `37203779356` passed full static, release
+kext, Metal smoke and both artifacts in 1m56s. No runtime or hardware state
+was changed.
+
 2026-10-04 GL-client/SurfaceMTL delta: the paired Tahoe System KC contract now
 pins the complete GLContext six-entry dynamic table (`0x100..0x105`),
 GLDrawable six-entry table and SurfaceMTL nineteen-entry table, their exact
