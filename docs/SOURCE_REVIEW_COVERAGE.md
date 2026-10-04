@@ -1,9 +1,9 @@
-# Source-review coverage — incomplete
+# Source-review coverage — closed-static
 
-The user's baseline requires all program files to be reviewed. This ledger
-does not certify that requirement as complete, and passing CI is not source
-review or hardware validation. The VM must remain off while the protocol
-audit's runtime blockers are open.
+The user's all-program-file source-review baseline is closed for the exact
+source/tool checkpoint recorded below.  This is static review, not hardware
+validation; dynamic work still requires the separate containment preflight
+and a successful current-HEAD check.
 
 The current dynamic-entry gate table is
 [`DYNAMIC_TEST_GATE.md`](DYNAMIC_TEST_GATE.md); every open row is blocking.
@@ -36,9 +36,15 @@ userspace binaries are explicitly opaque identity coverage.  The reviewed
 anomaly: its Info.plist names `AppleIntelGraphicsSharedIL`, while the bundle
 contains the five compiler dylibs rather than that principal executable.  No
 other missing executable is accepted.  S11.1 through S11.6 are therefore
-`CLOSED-STATIC`.  Full static `/tmp/ngreen-static.HzpQUw` passed locally; the
-clean checkpoint, push and exact-SHA CI remain open, so this is not dynamic
-authorization and the ledger title remains incomplete.
+`CLOSED-STATIC`.  Full static `/tmp/ngreen-static.HzpQUw` passed locally.
+Clean source/tool checkpoint
+`0a41820d17c954f77b4fd903a3be7a96449da2c0` was pushed and exact-SHA CI
+`37235676592` passed the full static suite, x86_64 release kext, Metal smoke
+and both artifact uploads (83,684 and 2,943 bytes).  The earlier `efe3d1c`
+run failed only because Darwin `ar` exposes its `__.SYMDEF SORTED` archive
+index; the final contract permits only that metadata while retaining the
+exact `c_start.o` / `c_stop.o` member set.  This closes SG-11 source review,
+not the separate contained hardware validation.
 
 2026-10-05 V302 SG-10 negative-reachability closure: a decoder-backed scan
 now fixes every genuine `accelerator+0x1240` disp32 memory operand in both
