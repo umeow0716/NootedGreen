@@ -6961,6 +6961,22 @@ No executable patch or runtime mutation.
 
 ###### Complete waitForSpace reservation and failure ordering
 
+Correction after complete callee review: 43886/40 is debugGraphicsEngine,
+not a direct reset/recovery routine. It calls diagnostic bodies 438c6 and
+439b2, then tail-dispatches imported signalHardwareError with restart request
+1 and a context-derived stamp. Those diagnostic sub-bodies and downstream
+event restart behavior remain separate audit work. This wrapper does not
+itself prove reset, restored capacity or DMA quiescence. Earlier references
+to recovery 43886 should be read as an unresolved error-handling path, not
+verified recovery. Its complete body is now pinned in both native payloads.
+
+The complete waitTimeout cold body 90a72/12 is also pinned; its import is
+panic, with message indicating GPU reset did not succeed. That message is
+not evidence a hardware reset actually occurred before this branch. Guest
+panic still does not stop Host DMA. The accelerator +0x1250 virtual receiver
+and its effective +0x150 implementation remain to resolve before interpreting
+the preceding return paths. No production/runtime change.
+
 Complete waitTimeout 41aa4/106 and three waitForSpace block predicates are
 now reviewed/pinned. The first predicate begins at 41baa, not 41bab (which
 omits its push instruction); its complete length is 0x13. The other lengths

@@ -9,6 +9,8 @@ import sys
 # Complete reviewed native bodies. This fixes the concrete Intel override
 # graph, not inherited timer APIs, dynamic callbacks or runtime completion.
 STAMP_IRQ_NATIVE = {
+    "__ZN20IGHardwareRingBuffer19debugGraphicsEngineEv": (0x40, "ee36c90b746b8637259c7893cd17cd879316c7ae1d3b0c27687f9cd60bfdec74"),
+    "__ZN20IGHardwareRingBuffer11waitTimeoutEU13block_pointerFbvE.cold.1": (0x12, "ef98956647d1ee0727b6b56636f23433333ceab809ec72318da1223c5400a8a2"),
     "__ZN20IGHardwareRingBuffer11waitTimeoutEU13block_pointerFbvE": (0x106, "caa2ccd4ce6a411ac4daa58d3b037dd5a561a418c8169e0b824d30a04bc8e1fb"),
     "____ZN20IGHardwareRingBuffer12waitForSpaceEj_block_invoke": (0x13, "4b735a005272c87b450984233e364446d5611e1f76d63b4ca057ea5d7b54c946"),
     "____ZN20IGHardwareRingBuffer12waitForSpaceEj_block_invoke_2": (0x16, "53c7f4d2d02474e67d709ce68249d2d01e9989720f65936f8df3e9d2ba563d46"),
@@ -461,6 +463,7 @@ def macho_inventory(path):
     # These imports distinguish the periodic collection mutex from bridge
     # descriptor spin locks. They do not certify dynamic callback lifetime.
     stamp_irq_imports = {
+        0x90a80: "_panic",
         0x41b06: "_assert_wait_timeout", 0x41b0d: "_thread_block",
         0x41b54: "_mach_absolute_time", 0x41b89: "_mach_absolute_time",
         0xe27e: "_IOMalloc", 0xe297: "_memset",
