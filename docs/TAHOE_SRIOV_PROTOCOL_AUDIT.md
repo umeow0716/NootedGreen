@@ -6391,6 +6391,33 @@ callback admission must be proved elsewhere. No executable patch/runtime test.
 
 ######## Offline production repair: bounded initialized-prefix unwind
 
+######### Factory failed-init release cannot blindly use pool free
+
+Reviewed/pinned complete Tahoe Boot KC IOSimpleLockFree (0x50), lck_spin_free
+(0x50), lck_spin_destroy (0x30) and OSObject init (0x10), including exact
+next-symbol boundaries and effective OSObject init virtual. All three lock
+cleanup bodies dereference the lock before any null guard. OSObject init simply
+returns true here; the native pool's base-init failure branch is not a currently
+reachable allocator-failure substitute in this pinned base implementation.
+
+Local XNU ac9718fb1af618d5ce8678d0dc6e8a58f252216f independently agrees:
+iokit/Kernel/IOLocks.cpp IOSimpleLockFree delegates lck_spin_free;
+osfmk/i386/locks_i386.c spin destroy reads/writes the lock; OSObject::init
+returns true. Actual Boot KC code, not source version resemblance, is the
+authoritative runtime ABI evidence.
+
+Threaded pool lock allocation failure clears queue and leaves +0x68 null while
++0x64 remains true. Adding a factory release would enter pool free's unconditional
+IOSimpleLockFree(+0x68), invalid for this failed-init state. Thus failed-init
+leak repair must first make cleanup partial-state-safe or use narrowly validated
+base-object destruction after all owned state is cleared. Do not simply insert
+virtual release on every init false. Standard manager options=0 pools avoid
+this threaded branch; their failed-init factory can still have other obligations
+in a redesigned allocator. No production mutation in this checkpoint.
+Paired local KC contract checks and diff-check pass. 32cd0db CI37164951303
+success; full suite last passed for that production repair, not rerun for these
+KC-only fixture/document additions. No VM, kext deployment or Host GPU changes.
+
 Added UUID-pinned VF native patch for initPagePool's partial factory failure.
 Its symbol bounds must be exactly 0xcc and the complete 49-byte unwind window
 must match uniquely at +0x6b before mutation. Patch changes only five bytes:

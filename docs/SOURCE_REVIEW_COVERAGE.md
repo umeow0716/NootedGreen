@@ -7,6 +7,11 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 failed-init lock cleanup: four complete Boot KC bodies/boundaries and
+base-init virtual pinned. Spin-lock free cannot accept null; blanket factory
+release would break threaded failed-lock initialization. Partial-state cleanup
+must precede leak repair; no production/runtime change in this checkpoint.
+
 2026-10-04 initialized-prefix unwind repair: VF-only bounded native patch now
 visits N-1..0 on failed construction, never uninitialized suffix. Full static
 suite and both ASan/UBSan payload patch checks pass; 4097 index-control models

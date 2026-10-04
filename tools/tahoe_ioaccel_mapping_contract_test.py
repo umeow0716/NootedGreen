@@ -335,12 +335,18 @@ def check_boot_atomic(system, path):
                  b"__ZN10IOWorkLoop9closeGateEv",
                  b"__ZN10IOWorkLoop17removeEventSourceEP13IOEventSource"):
         symbols[name] = []
+    for name in (b"_IOSimpleLockFree", b"_lck_spin_free", b"_lck_spin_destroy",
+                 b"__ZN8OSObject4initEv"):
+        symbols[name] = []
+    kernel_defined_addresses = set()
     for command, offset in commands(boot, kernel[0]):
         if command != 2:
             continue
         symbol_offset, count, string_offset, _ = struct.unpack_from("<6I", boot, offset)[2:]
         for index in range(count):
             name_offset, _, _, _, address = struct.unpack_from("<IBBHQ", boot, symbol_offset + 16 * index)
+            if address:
+                kernel_defined_addresses.add(address)
             start = string_offset + name_offset
             name = boot[start:boot.index(0, start)]
             if name in symbols:
@@ -352,6 +358,16 @@ def check_boot_atomic(system, path):
         assert len(matches) == 1, "unmapped/ambiguous event-source implementation"
         return boot[matches[0]:matches[0] + length]
 
+    for name, length, digest in (
+            (b"_IOSimpleLockFree", 0x50, "7924e21ddc26f4a79618ebad26be0c6bd8867a2aac4a0d07d447fe2df35c62c7"),
+            (b"_lck_spin_free", 0x50, "a861440db5510d1c95c91eb5d9712428843a199e1e66042642b4fa07ffbf6a66"),
+            (b"_lck_spin_destroy", 0x30, "9d1007a28ffb8ffddfbb2c3027d2cd860400926b65dd5f4a62907f412d220168"),
+            (b"__ZN8OSObject4initEv", 0x10, "3d87417deea9934d463ef6b95f57292d339948cf6376364374173546137dff8c")):
+        address = symbols[name][0]
+        assert min(v for v in kernel_defined_addresses if v > address) - address == length, "changed lock/object method boundary"
+        assert hashlib.sha256(kernel_read(address, length)).hexdigest() == digest, "changed reviewed null-lock/base-init semantics"
+    assert struct.unpack("<Q", kernel_read(symbols[b"__ZTV8OSObject"][0] + 16 + 0x88, 8))[0] == symbols[b"__ZN8OSObject4initEv"][0], "changed OSObject base init virtual"
+    print("PASS Boot KC spin-lock free requires nonnull lock; base OSObject init returns true")
     for table, slot, method in (
             (b"__ZTV12IODMACommand", 0x118, b"__ZN12IODMACommand12cloneCommandEPv"),
             (b"__ZTV12IODMACommand", 0x90, b"__ZN12IODMACommand4freeEv"),
