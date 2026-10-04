@@ -9,6 +9,7 @@ import sys
 # Complete reviewed native bodies. This fixes the concrete Intel override
 # graph, not inherited timer APIs, dynamic callbacks or runtime completion.
 STAMP_IRQ_NATIVE = {
+    "__ZN20IGHardwareRingBuffer10writeQWordEy": (0x132, "ca328112ea77f150daa058f08cf7363e638748a85043c3c80777e25fffca2237"),
     "__ZN20IGHardwareRingBuffer11writeBufferEPjj": (0x16a, "d4fbab26bff0fec290ec13249eb2758f2bd491dbaabd1a2de12d85fdb7e06422"),
     "__ZN21IGAccelDisplayMachine16generateFlipWaitEP18IGAccelFIFOChannel": (0xda, "8ec7480e7b887eaeba9dbecc75dd1f366b9a761a95094f1a9f4cde80cfe9fb85"),
     "__ZN12IGScheduler416checkForProgressE10IGHwCsType": (0x8, "aaa500a73706124bc5374dc27c8b444160b15dc8a45b0fef9354b23106b76348"),
@@ -466,6 +467,7 @@ def macho_inventory(path):
     # These imports distinguish the periodic collection mutex from bridge
     # descriptor spin locks. They do not certify dynamic callback lifetime.
     stamp_irq_imports = {
+        0x41e76: "___stack_chk_fail",
         0x90a80: "_panic",
         0x41b06: "_assert_wait_timeout", 0x41b0d: "_thread_block",
         0x41b54: "_mach_absolute_time", 0x41b89: "_mach_absolute_time",
@@ -610,6 +612,8 @@ def macho_inventory(path):
     assert image[0x14518:0x1451e] == bytes.fromhex("ff 90 30 01 00 00"), f"{path}: changed releaseRange unmap virtual"
     assert direct_branches("__ZN19IGHardwarePageTable12releaseRangeERK14IGAddressRange", "__ZN16IntelAccelerator27flushHardwareAfterGttUpdateEv") == [0x14522], f"{path}: changed post-unmap deferred-flush edge"
     assert image[0x14573:0x14575] == bytes.fromhex("b0 01"), f"{path}: changed unconditional releaseRange success"
+    assert image[0x41da6:0x41dac] == bytes.fromhex("ff 90 60 01 00 00"), f"{path}: changed qword pending-TLB emission"
+    assert direct_branches("__ZN20IGHardwareRingBuffer10writeQWordEy", RING_WRITE_BUFFER) == [0x41e31], f"{path}: changed qword software prefix edge"
     assert image[0x41ede:0x41ee4] == bytes.fromhex("ff 90 60 01 00 00"), f"{path}: changed buffer pending-TLB emission"
     assert direct_branches(RING_WRITE_BUFFER, RING_WRITE_BUFFER) == [0x41f72], f"{path}: changed software-prefix recursive emission"
     assert direct_branches(RING_WRITE_BUFFER, "__ZN20IGHardwareRingBuffer16writeFlushAuxTLBEv") == [0x41f26], f"{path}: changed buffer AUX emission"

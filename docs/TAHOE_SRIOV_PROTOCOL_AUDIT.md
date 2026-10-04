@@ -6961,6 +6961,27 @@ No executable patch or runtime mutation.
 
 ###### Complete waitForSpace reservation and failure ordering
 
+Complete writeQWord 41d48/132 is now reviewed/pinned, closing the selected
+base dword/qword/buffer writer body review. Its pending TLB/AUX and recursive
+software-prefix ordering matches the other two writers. It performs a single
+eight-byte CPU store, advances/masks the cursor, and subtracts eight available
+bytes without local capacity or contiguous-tail validation. Its final apparent
+call to the next method is an imported stack_chk_fail relocation, not a
+writeBuffer edge; only the software-prefix call 41e31 is a real direct edge.
+The import and virtual emission are separately pinned.
+
+The repair requirements now distinguish four boundaries: reservation must
+establish actual space rather than elapsed wait; every writer must reject
+faulted/unreserved use before mutating pending flags or CPU bytes; submission
+must reject invalid ownership/state before advertising a tail; backing/table
+retirement must wait for the appropriate hardware completion. Satisfying one
+boundary does not imply the other three. The reviewed common bodies rely on
+outer reservation and serialization, so a VF admission repair needs their
+effective caller/locking model rather than unrelated global counters. All
+three bodies being pinned does not certify all writer callers or memory
+accesses in the project. No production/runtime change; next establish ring
+construction geometry, ownership/serialization and actual submit tail bounds.
+
 Complete writeBuffer 41e7a/16a is now reviewed/pinned. Like writeDWord, it
 consumes pending TLB/AUX bits only when readiness is set, clears the pending
 bit before emitting the corresponding command and clears readiness afterward.
