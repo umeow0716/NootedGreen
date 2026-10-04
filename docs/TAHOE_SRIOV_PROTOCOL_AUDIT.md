@@ -6385,6 +6385,34 @@ callback admission must be proved elsewhere. No executable patch/runtime test.
 
 ##### Queue publication failure is a real local allocator branch
 
+###### Pool initialization/free and hash removal
+
+Complete pool init (0x174), pool free (0x114), hash destructor (0x120) and
+hash remove (0xc3) reviewed/pinned. Init stores a borrowed accelerator +0x18,
+zeros state, initializes the free-list, then calls OSObject base init. It
+allocates the 0x48 queue object and writes it before a null check; initial
+vector grow(capacity 4) status is ignored. It similarly constructs the 0x18
+bucket container before checking allocation and tolerates zero bucket capacity.
+It publishes the queue and, in threaded mode, allocates a lock; lock failure
+destroys/frees/clears the queue and returns false. Earlier allocator failures
+are not safely represented by that checked lock-failure branch.
+
+Pool free prunes(mode 2) and destroys/frees the queue BEFORE timer/source
+cancellation, disabling and workloop removal. The queue pointer is not locally
+cleared after free. Timer virtual +0x218 semantics and effective source classes
+must be resolved, and callback admission/drain/outer locking proved: cancellation
+after data destruction alone does not establish safe lifetime. Do not confuse
+this order with proof a callback is actively racing in the current machine.
+
+Hash remove unlinks/frees a matching node, updates bucket/hash counts, then
+tail-calls shrinkIfNeeded. Missing key exits without change. Thus removal can
+trigger the reviewed non-atomic rehash, including during prune; the failure
+scope is wider than grow alone. Hash destructor frees hash nodes/bucket storage,
+not the PoolElements or their DMA backing. It zeroes occupancy before calling
+shrinkIfNeeded, making that call exit immediately. Hardware retirement remains
+an outer owner responsibility, not a consequence of deleting hash metadata.
+Native targeted checks pass; no production patch or runtime operation.
+
 Additional complete shrinkIfNeeded (0x52) and percolateDown (0x15a) reviewed/
 pinned. Shrink uses hash occupancy percentages, then tail-calls the same
 non-failure-atomic resizeAndRehash; it has no success result to its caller.

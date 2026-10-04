@@ -7,6 +7,11 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 pool init/free/hash removal: four complete native bodies pinned.
+Init has unchecked allocations and ignored initial growth; free destroys queue
+before source teardown; remove can trigger non-atomic rehash. Effective source
+types, outer admission/drain and failure-safe replacements remain open.
+
 2026-10-04 hash/heap callers: complete shrinkIfNeeded/percolateDown bodies pinned
 and native __text direct edges decoded excluding external placeholders. Inner
 heap index writes assume full hash membership; failed rehash can invalidate that

@@ -9,6 +9,10 @@ import sys
 # Complete reviewed native bodies. This fixes the concrete Intel override
 # graph, not inherited timer APIs, dynamic callbacks or runtime completion.
 STAMP_IRQ_NATIVE = {
+    "__ZN10IGPagePool15initWithOptionsEP16IntelAcceleratorj": (0x174, "fc32202718c77bc993d98568900c4e0490875f6d4c560e300de1faebcf705e24"),
+    "__ZN10IGPagePool4freeEv": (0x114, "115a4127e4b6a8b646d8410e411e9c57ed1d3acacbddd0c4089365b49b928de6"),
+    "__ZN11IGHashTableIPN10IGPagePool11PoolElementEmNS0_15PoolElementHashE25IGIOMallocAllocatorPolicyED1Ev": (0x120, "0a79a5b0a2d2e0da123f2e24275266707d7563ad24287d6f24f721fd3d62076a"),
+    "__ZN11IGHashTableIPN10IGPagePool11PoolElementEmNS0_15PoolElementHashE25IGIOMallocAllocatorPolicyE6removeERKS2_": (0xc3, "ea3cd8f81479b491152b5bd65341df215a93b33d4fc8de7391ab90cd6833339b"),
     "__ZN11IGHashTableIPN10IGPagePool11PoolElementEmNS0_15PoolElementHashE25IGIOMallocAllocatorPolicyE14shrinkIfNeededEv": (0x52, "ff90c793387645bee297503014bca4535e28a60556297cf57a295db08f95efdf"),
     "__ZN15IGPriorityQueueIPN10IGPagePool11PoolElementENS0_18PoolElementCompareENS0_15PoolElementHashE25IGIOMallocAllocatorPolicyE13percolateDownERKS2_mm": (0x15a, "7426afabddba0c53420eda649880faeee5706a4ba8ede1526a98022d9ef6fad7"),
     "__ZN11IGHashTableIPN10IGPagePool11PoolElementEmNS0_15PoolElementHashE25IGIOMallocAllocatorPolicyE15resizeAndRehashEm": (0x170, "8133ad3b23eeae7e622f6bb07c2a48c1ee560f07300104a8618c00449541112a"),
