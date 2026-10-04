@@ -7,6 +7,21 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 legacy/PF-owned GPU producer containment delta: the admitted Tahoe
+payloads' modern ring-to-Scheduler4-to-`IGHardwareGuC::submitWorkItem` chain
+remains the translated VF path. Five other common endpoints were fully bounded,
+hash-pinned and given exact direct-caller inventories: legacy GuC H2G MMIO,
+legacy GuC DMA, base doorbell, native legacy CTB and Scheduler5 execlist submit.
+A classified VF now protocol-faults and fail-stops at each endpoint before its
+PF-owned DMA/MMIO body; PF/non-VF behavior remains native. Fifteen source
+mutations and the exact route/call-graph contracts pass; route inventory is 124
+unique symbols (118 accelerator, three framebuffer and three System KC). Full
+static analysis passed at `/tmp/ngreen-static.tYF9jZ` with only the two known
+SDK macro warnings. This
+closes the known legacy producer sub-gate, not modern external producer/shutdown
+admission, render/depth/CCS propagation, callback/IRQ teardown or the complete
+PF-owned MMIO/DMA negative inventory. No VM boot is admitted yet.
+
 2026-10-04 common task/table/PagePool transaction delta: the task publication
 and final unlink, complete manager all-task iterator, commit/update/release,
 32/64-bit unmap/shrink, PagePool allocation/release/prune/final free, manager

@@ -349,6 +349,11 @@ SCHEDULER4_PUSH = "__ZN12IGScheduler44pushEP17IGHardwareContextjjbb"
 RING_SUBMIT_TO_RING = "__ZN20IGHardwareRingBuffer12submitToRingEv"
 RING_SUBMIT_FAILURE = RING_SUBMIT_TO_RING + ".cold.1"
 GUC_SUBMIT_WORK_ITEM = "__ZN13IGHardwareGuC14submitWorkItemEjRK21SGfxContextDescriptor10IGHwCsTypejjj"
+LEGACY_GUC_MESSAGE = "__ZN5IGGuC20sendHostToGucMessageEPK18IGHostToGucMessagejU13block_pointerFvvE"
+LEGACY_GUC_DMA = "__ZN5IGGuC12dmaHostToGuCEyjjNS_12IGGucDmaTypeEb"
+LEGACY_GUC_DOORBELL = "__ZN5IGGuC12ringDoorbellE10IGHwCsType"
+NATIVE_CTB_ACTION = "__ZN21IGHardwareGuCCTBuffer15hostToGuCActionEPKjjiPjb"
+LEGACY_EXEC_LIST = "__ZN26IGHardwareCommandStreamer514submitExecListEj"
 FIFO_FACTORY = "__ZN18IGAccelFIFOChannel11withOptionsEP22IOGraphicsAccelerator2P20IGHardwareRingBuffer"
 FIFO_INIT = "__ZN18IGAccelFIFOChannel15initWithOptionsEP22IOGraphicsAccelerator2P20IGHardwareRingBuffer"
 FIFO_FREE = "__ZN18IGAccelFIFOChannel4freeEv"
@@ -1428,13 +1433,33 @@ def macho_inventory(path):
                                        (deleting + 0x1d, "__ZN8OSObjectdlEPvm", 0x2d))), \
         f"{path}: changed scheduler base-free/deallocation imported links"
     for name, length, digest in (
-            ("__ZN5IGGuC20sendHostToGucMessageEPK18IGHostToGucMessagejU13block_pointerFvvE", 0x122,
+            (LEGACY_GUC_MESSAGE, 0x122,
              "0de3a1744332cb6811d2d75a0e5d5e3998e30746f4c56d67720f2d5860d1138a"),
-            ("__ZN5IGGuC12ringDoorbellE10IGHwCsType", 0x12a,
-             "3f0d630e69161b4fd8c80def32d4a3dcbee2e9eb9f894a40bae00c94f179bfa1")):
+            (LEGACY_GUC_DMA, 0x302,
+             "8a19dc3f4f7c97115c82e0f1d34618718b7858f7628481e8b5d32ddb96d7e92b"),
+            (LEGACY_GUC_DOORBELL, 0x12a,
+             "3f0d630e69161b4fd8c80def32d4a3dcbee2e9eb9f894a40bae00c94f179bfa1"),
+            (NATIVE_CTB_ACTION, 0x2fe,
+             "72563ce5e2e37dd2e2dca1e0e7354e035bbc94eabddef9c02c2497eb078f2304"),
+            (LEGACY_EXEC_LIST, 0x420,
+             "50f8f4d74ca8c33656dfbe29500a532fcb1548b908ee2c3ff136a47eb0ad54ac")):
         start = value(name)
         assert next_symbol(start) - start == length and hashlib.sha256(image[start:start + length]).hexdigest() == digest, \
-            f"{path}: changed complete IGGuC DPSM producer body"
+            f"{path}: changed complete legacy/PF-owned GPU producer body"
+    legacy_producer_calls = {
+        LEGACY_GUC_MESSAGE: [
+            0x1a154, 0x1a3bc, 0x1bbcb, 0x1bda4, 0x1be6c, 0x1c633,
+            0x1c6a3, 0x1c94a, 0x1c9b9, 0x1ca3c, 0x1caba, 0x1cb13,
+            0x1cbbb, 0x1ce11, 0x1ceab, 0x1d357, 0x1d3c5,
+        ],
+        LEGACY_GUC_DMA: [0x19d10, 0x19d6d],
+        LEGACY_GUC_DOORBELL: [0x1c33d, 0x1c4c0],
+        NATIVE_CTB_ACTION: [0x21827],
+        LEGACY_EXEC_LIST: [0x3a526, 0x3ba68],
+    }
+    for target, calls in legacy_producer_calls.items():
+        assert text_direct_branches(target) == calls, \
+            f"{path}: changed complete direct caller inventory for {target}"
     for call in (0x1a1b1, 0x1c3f7):
         assert image[call] == 0xe8 and call + 5 + struct.unpack_from("<i", image, call + 1)[0] == value("__ZN16IntelAccelerator13dpsmKickTimerEv"), \
             f"{path}: changed IGGuC producer to DPSM kick edge"
@@ -2717,6 +2742,84 @@ def function_body(source, signature):
     raise AssertionError(f"unterminated {signature}")
 
 
+def legacy_gpu_producer_containment_contract(source, path="<source>"):
+    process = function_body(
+        source,
+        "bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t address, size_t size)")
+    firmware_start = process.index("KernelPatcher::RouteRequest firmwareRoute[]")
+    firmware_end = process.index(
+        "Failed to route VF GuC firmware transport", firmware_start)
+    vf_gate = process.rfind("if (vfActive)", 0, firmware_start)
+    assert vf_gate >= 0, f"{path}: legacy producer routes are not classified-VF-only"
+    firmware_routes = "".join(process[firmware_start:firmware_end].split())
+    routes = (
+        (LEGACY_GUC_MESSAGE, "vfRejectLegacyGucMessage"),
+        (LEGACY_GUC_DMA, "vfRejectLegacyGucDma"),
+        (LEGACY_GUC_DOORBELL, "vfRejectLegacyDoorbell"),
+        (NATIVE_CTB_ACTION, "vfRejectNativeCtbAction"),
+        (LEGACY_EXEC_LIST, "vfRejectLegacyExecList"),
+    )
+    for symbol, wrapper in routes:
+        assert '{"' + symbol + '",' + wrapper + '},' in firmware_routes, \
+            f"{path}: missing VF legacy producer route {symbol} -> {wrapper}"
+
+    wrappers = (
+        "bool Gen11::vfRejectLegacyGucMessage(",
+        "bool Gen11::vfRejectLegacyGucDma(",
+        "void Gen11::vfRejectLegacyDoorbell(",
+        "bool Gen11::vfRejectNativeCtbAction(",
+        "void Gen11::vfRejectLegacyExecList(",
+    )
+    for signature in wrappers:
+        body = function_body(source, signature)
+        fault = body.find("vfMarkProtocolFault(")
+        fail_stop = body.find("PANIC_COND(true")
+        assert fault >= 0 and fail_stop > fault, \
+            f"{path}: {signature} must fault and fail-stop before returning"
+        assert body.count("vfMarkProtocolFault(") == 1 and \
+            body.count("PANIC_COND(true") == 1, \
+            f"{path}: {signature} has an ambiguous fail-closed path"
+        for forbidden in ("getRMMIOAddress", "vfSendCtbFastAction(",
+                          "vfGucSendMMIO("):
+            assert forbidden not in body, \
+                f"{path}: {signature} touches a live VF/PF transport"
+
+
+def legacy_gpu_producer_containment_mutations(path):
+    source = pathlib.Path(path).read_text()
+    routes = (
+        LEGACY_GUC_MESSAGE,
+        LEGACY_GUC_DMA,
+        LEGACY_GUC_DOORBELL,
+        NATIVE_CTB_ACTION,
+        LEGACY_EXEC_LIST,
+    )
+    mutations = []
+    for symbol in routes:
+        mutations.append(source.replace(symbol, symbol + "_REMOVED", 1))
+    for signature in (
+            "bool Gen11::vfRejectLegacyGucMessage(",
+            "bool Gen11::vfRejectLegacyGucDma(",
+            "void Gen11::vfRejectLegacyDoorbell(",
+            "bool Gen11::vfRejectNativeCtbAction(",
+            "void Gen11::vfRejectLegacyExecList("):
+        body = function_body(source, signature)
+        assert "vfMarkProtocolFault(" in body and "PANIC_COND(true" in body
+        mutations.append(source.replace(
+            body, body.replace("vfMarkProtocolFault(",
+                               "vfMarkProtocolFault_REMOVED(", 1), 1))
+        mutations.append(source.replace(
+            body, body.replace("PANIC_COND(true", "PANIC_COND(false", 1), 1))
+    for mutation in mutations:
+        try:
+            legacy_gpu_producer_containment_contract(mutation)
+        except AssertionError:
+            continue
+        raise AssertionError(
+            "legacy GPU producer containment accepted an unsafe mutation")
+    print(f"PASS: {len(mutations)} legacy GPU producer containment mutations rejected")
+
+
 def ring_backing_submit_contract(source, path="<source>"):
     submit = function_body(source, "bool Gen11::vfSubmitWorkItem(")
     for requirement in (
@@ -3741,6 +3844,7 @@ def page_table_common_serialization_model():
 
 def source_contract(path):
     source = pathlib.Path(path).read_text()
+    legacy_gpu_producer_containment_contract(source, path)
     ring_backing_submit_contract(source, path)
     ring_space_contract(source, path)
     ppgtt_retirement_contract(source, path)
@@ -4423,6 +4527,7 @@ def main():
     direct_branch_candidate_contract()
     event_collection_admission_model()
     source_contract(sys.argv[1])
+    legacy_gpu_producer_containment_mutations(sys.argv[1])
     ring_backing_submit_mutations(sys.argv[1])
     ring_space_mutations(sys.argv[1])
     g2h_event_transaction_mutations(sys.argv[1])

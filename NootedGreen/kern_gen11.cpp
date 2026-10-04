@@ -2876,6 +2876,19 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			// lifecycle entry points; a physical GPU keeps Apple's native dispatch.
 			KernelPatcher::RouteRequest firmwareRoute[] = {
 				{"__ZN13IGHardwareGuC13loadGuCBinaryEv", loadGuCBinary},
+				// V284: these legacy/base producers can bypass the modern
+				// IGHardwareGuC transport entirely.  Reject at their common entry
+				// points before any PF-owned DMA, CTB, doorbell or execlist MMIO.
+				{"__ZN5IGGuC20sendHostToGucMessageEPK18IGHostToGucMessagejU13block_pointerFvvE",
+				 vfRejectLegacyGucMessage},
+				{"__ZN5IGGuC12dmaHostToGuCEyjjNS_12IGGucDmaTypeEb",
+				 vfRejectLegacyGucDma},
+				{"__ZN5IGGuC12ringDoorbellE10IGHwCsType",
+				 vfRejectLegacyDoorbell},
+				{"__ZN21IGHardwareGuCCTBuffer15hostToGuCActionEPKjjiPjb",
+				 vfRejectNativeCtbAction},
+				{"__ZN26IGHardwareCommandStreamer514submitExecListEj",
+				 vfRejectLegacyExecList},
 				{"__ZN16IntelAccelerator17transferOwnershipEPK20IGSharedMappedBufferi",
 				 vfTransferOwnership},
 				// V222: scheduler 4 uses the Gen11 reference GuC transport, but its
@@ -5659,6 +5672,59 @@ uint16_t Gen11::vfReacquireDoorbell(void *that, uint32_t contextId) {
 	// Reject before the original's acquire/sleep/retry loop.
 	vfMarkProtocolFault("legacy doorbell retry on direct-LRCA VF");
 	return 0x100U;
+}
+
+bool Gen11::vfRejectLegacyGucMessage(void *that, const void *message,
+	                                 unsigned int flags, void *completion) {
+	(void)that;
+	(void)message;
+	(void)flags;
+	(void)completion;
+	vfMarkProtocolFault("legacy IGGuC host message reached a VF");
+	PANIC_COND(true, "ngreen", "Refusing PF-owned legacy GuC MMIO on a VF");
+	return false;
+}
+
+bool Gen11::vfRejectLegacyGucDma(void *that, uint64_t address,
+	                             unsigned int size, unsigned int offset,
+	                             unsigned int dmaType, bool wait) {
+	(void)that;
+	(void)address;
+	(void)size;
+	(void)offset;
+	(void)dmaType;
+	(void)wait;
+	vfMarkProtocolFault("legacy IGGuC DMA reached a VF");
+	PANIC_COND(true, "ngreen", "Refusing PF-owned legacy GuC DMA on a VF");
+	return false;
+}
+
+void Gen11::vfRejectLegacyDoorbell(void *that, IGHwCsType hwCsType) {
+	(void)that;
+	(void)hwCsType;
+	vfMarkProtocolFault("legacy IGGuC doorbell reached a VF");
+	PANIC_COND(true, "ngreen", "Refusing PF-owned legacy GuC doorbell on a VF");
+}
+
+bool Gen11::vfRejectNativeCtbAction(void *that, const uint32_t *request,
+	                                unsigned int requestLength, int timeout,
+	                                uint32_t *response, bool fence) {
+	(void)that;
+	(void)request;
+	(void)requestLength;
+	(void)timeout;
+	(void)response;
+	(void)fence;
+	vfMarkProtocolFault("native legacy CTB producer reached a VF");
+	PANIC_COND(true, "ngreen", "Refusing PF-owned native CTB producer on a VF");
+	return false;
+}
+
+void Gen11::vfRejectLegacyExecList(void *that, unsigned int tail) {
+	(void)that;
+	(void)tail;
+	vfMarkProtocolFault("legacy execlist submission reached a VF");
+	PANIC_COND(true, "ngreen", "Refusing PF-owned execlist submission on a VF");
 }
 
 // Modern contexts never update Apple's legacy proxy work-queue idle fields.

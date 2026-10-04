@@ -32,6 +32,16 @@ private:
 	static bool vfLegacyHostToGuCAction(void *that, const uint32_t *request,
 	                                    unsigned int requestLength, int timeout,
 	                                    uint32_t *response);
+	static bool vfRejectLegacyGucMessage(void *that, const void *message,
+	                                     unsigned int flags, void *completion);
+	static bool vfRejectLegacyGucDma(void *that, uint64_t address,
+	                                 unsigned int size, unsigned int offset,
+	                                 unsigned int dmaType, bool wait);
+	static void vfRejectLegacyDoorbell(void *that, IGHwCsType hwCsType);
+	static bool vfRejectNativeCtbAction(void *that, const uint32_t *request,
+	                                    unsigned int requestLength, int timeout,
+	                                    uint32_t *response, bool fence);
+	static void vfRejectLegacyExecList(void *that, unsigned int tail);
 	static uint32_t vfCreateUkContext(void *that, uint64_t owner, int priority);
 	mach_vm_address_t vfAllocContext {};
 	mach_vm_address_t vfReleaseContext {};

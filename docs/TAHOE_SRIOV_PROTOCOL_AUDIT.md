@@ -1,7 +1,7 @@
 # Tahoe SR-IOV protocol audit — in progress
 
 Updated: 2026-10-04. The last dynamic source baseline is `ce166c8`; the current
-offline-reviewed checkpoint is V283 common task/table/PagePool serialization on
+offline-reviewed checkpoint is V284 legacy/PF-owned producer containment on
 `codex/tahoe-sriov-vf`. This is NOT a boot-test candidate or a successful
 driver baseline. The `ce166c8` run produced repeatable host PF DMAR faults
 followed by i915 hangs and a host reboot. Keep `macos-tahoe-sriov` shut off until the
@@ -16,6 +16,46 @@ Glass B7's official Host Application documentation explicitly states that OSX
 capture is unsupported with no current support plan, so this is a future
 guest-producer development task rather than ordinary configuration. The Linux
 KVMFR/client transport remains the intended receiving side.
+
+## V284 legacy/PF-owned GPU producer containment (offline)
+
+The modern Tahoe submission chain remains the six concrete ring vtables at
+`+0x138` through the common `IGHardwareRingBuffer::submitToRing`, Scheduler4
+`push`, and its single direct `IGHardwareGuC::submitWorkItem` call. The last
+endpoint is already replaced by the direct-LRCA VF transport. A symbol-name
+inventory and bounded body review nevertheless found five independent legacy
+or physical producer endpoints that must not be accepted merely because the
+selected scheduler is expected not to instantiate their owners:
+
+- `IGGuC::sendHostToGucMessage` kicks DPSM, force-wakes the device and writes
+  the legacy `0xc180` scratch register plus `0x1901f0`;
+- `IGGuC::dmaHostToGuC` directly programs the PF DMA register block beginning
+  at `0xc300` and polls physical completion registers;
+- `IGGuC::ringDoorbell` is the base-scheduler legacy doorbell producer;
+- `IGHardwareGuCCTBuffer::hostToGuCAction` writes the native legacy CT ring and
+  directly rings `0x1901f0`; and
+- `IGHardwareCommandStreamer5::submitExecList` is the physical Scheduler5
+  execlist submission endpoint.
+
+All five complete bodies are symbol-bound and SHA-256 pinned in both admitted
+payloads. Their complete direct-branch inventories contain respectively 17,
+2, 2, 1 and 2 call sites. Entry routing, rather than caller-only suppression,
+also contains vtable/function-pointer reachability. On a classified VF each
+endpoint now records a protocol fault and unconditionally fail-stops before
+any native producer instruction can execute. The routes are installed only in
+the `vfActive` block, so PF/non-VF operation remains native. Returning false or
+silently doing nothing would be unsafe: several message callers discard the
+Boolean, and the doorbell/execlist ABIs cannot report rejection.
+
+The route inventory is now 124 unique symbols: 118 accelerator, three
+framebuffer and three System KC. Fifteen source mutations reject any removed
+route, protocol-fault publication or unconditional fail-stop. The complete
+static suite passed at `/tmp/ngreen-static.tYF9jZ` with only the two known SDK
+macro warnings. This closes the known legacy submission endpoints, not the entire submission
+admission gate: modern external producer/shutdown admission and completion
+ownership still need a common proof. Render/depth/CCS failure propagation,
+callback/IRQ teardown and the broader PF-owned MMIO/DMA negative inventory
+also remain boot blockers. No VM, PCI/sysfs or Host i915 state was touched.
 
 ## V283 common page-table ownership transaction (offline)
 
