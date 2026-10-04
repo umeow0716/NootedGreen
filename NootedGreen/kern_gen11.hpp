@@ -170,6 +170,12 @@ private:
 		void *that, const NGIGAddressRange &range);
 	static bool IGHardwareGlobalPageTableMapRangeDummy(
 		void *that, const NGIGAddressRange &range, uint64_t flags);
+	static void vfPpgtt32UnmapRange(
+		void *that, const NGIGAddressRange &range);
+	mach_vm_address_t oVfPpgtt32UnmapRange {};
+	static void vfPpgtt64ShrinkRange(
+		void *that, const NGIGAddressRange &range);
+	mach_vm_address_t oVfPpgtt64ShrinkRange {};
 
 	mach_vm_address_t oIGMappedBuffergetMemory {};
 	static void *getBlit2DContext(void *that, bool create);

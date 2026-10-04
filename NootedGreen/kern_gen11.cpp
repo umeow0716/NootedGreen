@@ -2639,6 +2639,14 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			 IGHardwareGlobalPageTableUnmapRange},
 			{"__ZN25IGHardwareGlobalPageTable13mapRangeDummyERK14IGAddressRangey",
 			 IGHardwareGlobalPageTableMapRangeDummy},
+			// The 32-bit unmapper does not prune table pages, so retire engine
+			// translations after its PTE stores. The 64-bit unmapper tail-calls
+			// shrinkRange, which can return table pages to the pool; intercept that
+			// boundary and retire translations before native pruning/zeroing.
+			{"__ZN31IGHardwarePerProcessPageTable3210unmapRangeERK14IGAddressRange",
+			 vfPpgtt32UnmapRange, this->oVfPpgtt32UnmapRange},
+			{"__ZN31IGHardwarePerProcessPageTable6411shrinkRangeERK14IGAddressRange",
+			 vfPpgtt64ShrinkRange, this->oVfPpgtt64ShrinkRange},
 
 			// Tahoe's aperture-resource path allocates a legacy hardware fence whose
 			// constructor and destructor both write the PF-owned 0x100000 fence
@@ -3713,6 +3721,46 @@ bool Gen11::IGHardwareGlobalPageTableMapRangeDummy(void *that,
 		pteBase[gpu >> 12] = dummyPte;
 	vfRequireCompletedGgttUpdate();
 	return true;
+}
+
+static void vfRequireCompletedPpgttUpdate()
+{
+	// Before CTB enable no GPU work could have consumed a translation. After
+	// device-wide shutdown all contexts and both TLB targets are already
+	// retired. Every live interval in between requires the engine target, not
+	// the GuC-internal target used for direct GGTT updates.
+	OSSynchronizeIO();
+	if (!gVfCtbEverEnabled || gVfDmaQuiesced)
+		return;
+	PANIC_COND(!gVfHardwareGuc || !vfInvalidateTLBSync(
+		gVfHardwareGuc, NGVfGuCRequest::TlbTarget::Engines),
+		"ngreen", "VF PPGTT update did not retire engine translations");
+}
+
+void Gen11::vfPpgtt32UnmapRange(void *that,
+	                             const NGIGAddressRange &range)
+{
+	PANIC_COND(!that || !callback->oVfPpgtt32UnmapRange,
+		"ngreen", "Missing native VF 32-bit PPGTT unmap boundary");
+	FunctionCast(vfPpgtt32UnmapRange,
+	             callback->oVfPpgtt32UnmapRange)(that, range);
+	// This native body only installs dummy leaf PTEs. Confirm their engine-wide
+	// visibility before releaseRange can return and free the mapped backing.
+	vfRequireCompletedPpgttUpdate();
+}
+
+void Gen11::vfPpgtt64ShrinkRange(void *that,
+	                              const NGIGAddressRange &range)
+{
+	PANIC_COND(!that || !callback->oVfPpgtt64ShrinkRange,
+		"ngreen", "Missing native VF 64-bit PPGTT shrink boundary");
+	// Every pinned caller has already finished its hardware-entry writes. The
+	// native shrink helpers may release a descriptor into PagePool, whose final
+	// return zeroes the CPU page before taking the optional pool lock. Retire
+	// engine translations first, then allow that irreversible page return.
+	vfRequireCompletedPpgttUpdate();
+	FunctionCast(vfPpgtt64ShrinkRange,
+	             callback->oVfPpgtt64ShrinkRange)(that, range);
 }
 
 bool Gen11::IGAccelTaskIsKernelGPUTask(const void *that)

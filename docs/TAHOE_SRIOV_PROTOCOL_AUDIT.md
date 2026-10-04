@@ -1,12 +1,40 @@
 # Tahoe SR-IOV protocol audit — in progress
 
 Updated: 2026-10-04. The last dynamic source baseline is `ce166c8`; the current
-offline-reviewed checkpoint is V274 exact VF dependency-event routing on
+offline-reviewed checkpoint is V276 live VF PPGTT retirement on
 `codex/tahoe-sriov-vf`. This is NOT a boot-test candidate or a successful
 driver baseline. The `ce166c8` run produced repeatable host PF DMAR faults
 followed by i915 hangs and a host reboot. Keep `macos-tahoe-sriov` shut off until the
 corrected code passes the remaining offline review and every independently
 enforced containment precondition.
+
+## V276 live per-process page-table retirement boundaries (offline)
+
+The two native per-process page-table implementations cannot share one
+post-unmap hook. Complete Tahoe disassembly shows that 32-bit `unmapRange`
+(`0x12282/0x8a`) only installs dummy leaf PTEs and does not prune page-table
+descriptors. Its classified-VF wrapper therefore calls native first, publishes
+the stores with `OSSynchronizeIO`, and requires a completed heavy
+engine-target TLB request before returning to a caller that may release the
+mapped backing.
+
+The 64-bit `unmapRange` (`0xda60/0xbe`) installs dummy PTEs and tail-calls
+`shrinkRange` at `0xd3fa`. All five direct shrink callers are pinned: mapRange
+`0xd19e`, mapRangeRotated `0xd7e2`, unmap `0xdb18`, mapRangeDummy `0xdbec`, and
+mapDescriptorForRange `0xdd58`. Native shrink can immediately return empty
+descriptors to PagePool, whose final return zeroes the page before its optional
+pool lock. The classified-VF shrink wrapper must therefore complete the same
+engine-target retirement before entering native pruning. Pre-CTB setup and an
+already device-wide-quiesced teardown are the only skips. PF uses both native
+bodies unchanged.
+
+The source contract rejects four target, lifecycle and ordering mutations; the
+payload symbol inventory requires both exact new routes. Current inventory is
+102 unique symbols (96 accelerator, three framebuffer, three System KC). This
+establishes per-call ordering for the intercepted normal paths only. It does not
+prove cross-owner serialization, cover every indirect call, or repair final
+32/64-bit page-table `free()` paths, so the runtime hold remains. No VM,
+PCI/sysfs or Host GPU operation accompanied this change.
 
 ## V275 complete direct grow-call inventory (offline)
 

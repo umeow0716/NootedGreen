@@ -2683,9 +2683,80 @@ def g2h_completion_lock_mutations(path):
     print("PASS: four selected completion lock-dependency mutations rejected (source graph, not runtime deadlock proof)")
 
 
+def ppgtt_retirement_contract(source, path):
+    helper = function_body(source, "static void vfRequireCompletedPpgttUpdate()")
+    early = "if (!gVfCtbEverEnabled || gVfDmaQuiesced)"
+    if early not in helper or helper.count("NGVfGuCRequest::TlbTarget::Engines") != 1:
+        raise AssertionError(f"{path}: PPGTT retirement lacks exact live-interval engine target")
+    if "NGVfGuCRequest::TlbTarget::Guc" in helper:
+        raise AssertionError(f"{path}: PPGTT retirement uses the GGTT/GuC-internal target")
+    if not helper.index("OSSynchronizeIO();") < helper.index(early) < helper.index("PANIC_COND("):
+        raise AssertionError(f"{path}: PPGTT publication/retirement ordering changed")
+
+    unmap32 = function_body(
+        source, "void Gen11::vfPpgtt32UnmapRange(void *that,")
+    native32 = unmap32.index("FunctionCast(vfPpgtt32UnmapRange,")
+    retire32 = unmap32.index("vfRequireCompletedPpgttUpdate();")
+    if not native32 < retire32 or "callback->oVfPpgtt32UnmapRange" not in unmap32:
+        raise AssertionError(f"{path}: 32-bit PPGTT does not retire after native PTE stores")
+
+    shrink64 = function_body(
+        source, "void Gen11::vfPpgtt64ShrinkRange(void *that,")
+    retire64 = shrink64.index("vfRequireCompletedPpgttUpdate();")
+    native64 = shrink64.index("FunctionCast(vfPpgtt64ShrinkRange,")
+    if not retire64 < native64 or "callback->oVfPpgtt64ShrinkRange" not in shrink64:
+        raise AssertionError(f"{path}: 64-bit PPGTT prunes before engine retirement")
+
+    normalized = "".join(source.split())
+    for route in (
+            '{"__ZN31IGHardwarePerProcessPageTable3210unmapRangeERK14IGAddressRange",vfPpgtt32UnmapRange,this->oVfPpgtt32UnmapRange}',
+            '{"__ZN31IGHardwarePerProcessPageTable6411shrinkRangeERK14IGAddressRange",vfPpgtt64ShrinkRange,this->oVfPpgtt64ShrinkRange}'):
+        if route not in normalized:
+            raise AssertionError(f"{path}: missing exact PPGTT retirement route {route}")
+
+
+def ppgtt_retirement_mutations(path):
+    source = pathlib.Path(path).read_text()
+    helper = function_body(source, "static void vfRequireCompletedPpgttUpdate()")
+    unmap32 = function_body(source, "void Gen11::vfPpgtt32UnmapRange(void *that,")
+    shrink64 = function_body(source, "void Gen11::vfPpgtt64ShrinkRange(void *that,")
+    native32 = ("FunctionCast(vfPpgtt32UnmapRange,\n"
+                "\t             callback->oVfPpgtt32UnmapRange)(that, range);")
+    native64 = ("FunctionCast(vfPpgtt64ShrinkRange,\n"
+                "\t             callback->oVfPpgtt64ShrinkRange)(that, range);")
+
+    def swap_once(body, first, second):
+        if body.count(first) != 1 or body.count(second) != 1:
+            raise AssertionError("ambiguous PPGTT order mutation")
+        marker = "__NGREEN_PPGTT_ORDER_MUTATION__"
+        return body.replace(first, marker, 1).replace(second, first, 1).replace(marker, second, 1)
+
+    mutations = (
+        (helper, helper.replace("NGVfGuCRequest::TlbTarget::Engines",
+                                "NGVfGuCRequest::TlbTarget::Guc", 1)),
+        (helper, helper.replace("if (!gVfCtbEverEnabled || gVfDmaQuiesced)",
+                                "if (false)", 1)),
+        (unmap32, swap_once(unmap32, native32,
+                            "vfRequireCompletedPpgttUpdate();")),
+        (shrink64, swap_once(shrink64, "vfRequireCompletedPpgttUpdate();",
+                             native64)),
+    )
+    for body, mutated_body in mutations:
+        if mutated_body == body:
+            raise AssertionError("missing PPGTT mutation target")
+        changed = source.replace(body, mutated_body, 1)
+        try:
+            ppgtt_retirement_contract(changed, path)
+        except (AssertionError, ValueError):
+            continue
+        raise AssertionError(f"{path}: escaped PPGTT retirement mutation")
+    print("PASS: four PPGTT target/order/lifecycle mutations rejected (source contract, not runtime proof)")
+
+
 def source_contract(path):
     source = pathlib.Path(path).read_text()
     ring_backing_submit_contract(source, path)
+    ppgtt_retirement_contract(source, path)
     for signature in ("bool Gen11::vfAttachContextDesc(",
                       "void Gen11::vfDetachContextDesc(",
                       "bool Gen11::vfSubmitWorkItem("):
@@ -3363,6 +3434,7 @@ def main():
     ring_backing_submit_mutations(sys.argv[1])
     g2h_event_transaction_mutations(sys.argv[1])
     g2h_completion_lock_mutations(sys.argv[1])
+    ppgtt_retirement_mutations(sys.argv[1])
     ggtt_postwrite_mutations(sys.argv[1])
     macho_inventory(sys.argv[2])
     macho_inventory(sys.argv[3])
