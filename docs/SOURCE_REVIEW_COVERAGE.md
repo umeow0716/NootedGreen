@@ -7,6 +7,12 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 allocator scope/prioritization: unnamed 0x3d4230 target's 0x4200
+nearest-symbol span is mixed/truncated, not reviewed completely. Reference zone
+creation defaults do not certify runtime policy. Standard non-threaded pool
+init has no demonstrated false path; park staged factory cleanup and prioritize
+the unresolved cross-owner mapping transaction/retirement gate.
+
 2026-10-04 allocation root/helper region pinned with null-propagation edge.
 OSObject flags lack NOFAIL, but WAITOK's effective guarantee depends on zone
 exhaustibility; selected pool size-class/zone initialization remain unresolved.

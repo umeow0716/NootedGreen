@@ -6393,6 +6393,26 @@ callback admission must be proved elsewhere. No executable patch/runtime test.
 
 ######### Factory failed-init release cannot blindly use pool free
 
+Allocator scope checkpoint: target 0xffffff80003d4230 has no defined function
+symbol in the selected kernel symbol table. The next named-symbol span is
+0x4200 and mixes several routines; exploratory disassembly output was truncated.
+It is NOT a complete function review and no full-span safety pin is added.
+Reference kalloc.c kalloc_heap_init invokes kalloc_zone_init with ZC_NONE, which
+passes creation flags to zone_create_ext; source zalloc_ext also checks execution
+context and NOFAIL compatibility. Actual selected zone/initialization/policy
+remain unresolved; source defaults are not current runtime configuration proof.
+
+Priority correction from established path evidence: standard manager pools use
+options 0 and the pinned base OSObject init returns true. They do not reach the
+threaded lock-allocation false branch. Thus factory failed-init release repair
+would address conditional threaded/other admission, not a demonstrated normal
+manager failure. Allocation-null faults can precede that return path and remain
+open. Keep the tested empty-state predicate staged, not a live-pool destructor.
+Do not delay the critical PPGTT/GGTT transaction/retirement audit behind an
+unbounded kernel allocator review. Next work returns to complete mapping/unmap
+callees and cross-owner rollback; Host containment hold remains unchanged.
+No production/hardware mutation, no claim the allocator is safe or complete.
+
 Reviewed Boot kalloc_ext root plus separate unnamed large-allocation helper
 region (named-symbol span 0x370) and pinned region hash, OSObject new's exact
 direct allocator edge and root null-propagation branch. The ordinary size-class
