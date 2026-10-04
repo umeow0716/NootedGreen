@@ -6953,6 +6953,41 @@ No executable patch or runtime mutation.
 
 ## Mapping last-release admission and deferred raw-list transfer
 
+G2H completion lock dependency follow-up and offline production repair:
+rechecked vfInvalidateTLBSync, vfSendCtbFastAction, vfCanWaitForGuc,
+vfDrainGuCToHost and complete vfCtbGucToHostAction. The synchronous TLB
+wait holds gVfGucLock, submits under native H2G +0x18, then directly polls
+the independent consumer under G2H +0x20. Its event application uses atomic
+credits/TLB sequence and the context spin lock; it does not acquire the
+accelerator +0x88 mutex, H2G mutex or gVfGucLock. This selected call-chain
+observation does not prove all external owner/teardown lock dependencies safe.
+
+Found a concrete source ordering hole: the consumer previously unlocked G2H
+after publishing descriptor head but before applying lifecycle/credit/fault
+state. An IRQ consumer and synchronous poll could dequeue adjacent events in
+firmware order yet apply them in reverse order. The context spin lock only
+serialized application, not its order relative to dequeue. No observed Host
+panic attribution or reproduced hardware race is claimed.
+
+The VF consumer now uses a noncopyable scoped ConsumerTransaction holding
+the existing G2H mutex from frame read through final event application and
+header normalization. All returns release it once. A locked readiness recheck
+rejects a queued consumer admitted before its predecessor set protocol fault.
+Fault publication now precedes unlock on malformed/unsupported events. No new
+lock object or PF path is added; the consumer contains no synchronous send,
+sleep, nested poll or invalidation wait. The existing context-spin interaction
+remains a lock-order obligation for callers and future hooks.
+
+The already-inspected native software handler 1f9a0/a4 is now whole-body
+pinned in both payloads. It invokes the routed reader and interprets its
+normalized short header without acquiring these producer/accelerator locks.
+Three negative source mutations (guard removal, premature unlock, missing
+locked admission) are rejected. These are structural regressions, not a
+runtime concurrency/DMA proof. Full offline suite passed at production fix
+in /tmp/ngreen-static.YIaufE with the two existing SDK macro warnings;
+the added native-body fixture also passes targeted paired-payload checks.
+No artifact was deployed, no VM started, and Host containment hold remains.
+
 Task allocator follow-up: complete allocate 14b9e2a2/c8, deallocate
 14b9e36a/6e and init 14b9de06/138 reviewed/pinned; declared Task +0x140/148
 vtable identities resolve to these methods. Init retains each supplied nonnull

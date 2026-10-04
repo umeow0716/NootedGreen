@@ -5637,30 +5637,39 @@ bool Gen11::vfCtbGucToHostAction(void *that, uint32_t *message) {
 		vfMarkProtocolFault("G2H CTB mapping mismatch");
 		return false;
 	}
-	IOLockLock(lock);
+	// Serialize frame removal through event application. IRQ and synchronous
+	// poll consumers can otherwise dequeue in order but apply MODE_DONE in
+	// reverse order after releasing the native G2H lock.
+	struct ConsumerTransaction {
+		IOLock *lock;
+		explicit ConsumerTransaction(IOLock *value) : lock(value) { IOLockLock(lock); }
+		~ConsumerTransaction() { IOLockUnlock(lock); }
+		ConsumerTransaction(const ConsumerTransaction &) = delete;
+		ConsumerTransaction &operator=(const ConsumerTransaction &) = delete;
+	} consumerTransaction(lock);
+	// A queued consumer may have passed admission before its predecessor
+	// quarantined the transport. Do not remove another frame in that case.
+	if (!vfCtbConsumerReady(false))
+		return false;
 	OSSynchronizeIO();
 	constexpr uint32_t ringDwords = kVfCtbG2HBufferBytes / sizeof(uint32_t);
 	uint32_t head = descriptor[4];
 	const uint32_t tail = descriptor[5];
 	if (!NGGuCRing::validDescriptor(descriptor[3], kVfCtbG2HBufferBytes,
 	                                head, tail, descriptor[6])) {
-		IOLockUnlock(lock);
 		vfMarkProtocolFault("invalid G2H CTB descriptor");
 		return false;
 	}
 	if (head == tail) {
-		IOLockUnlock(lock);
 		return false;
 	}
 	if (!NGGuCRing::readFrame(buffer, ringDwords, head, tail, message, 32)) {
-		IOLockUnlock(lock);
 		vfMarkProtocolFault("invalid or oversized G2H CTB frame");
 		return false;
 	}
 	OSSynchronizeIO();
 	descriptor[4] = head;
 	OSSynchronizeIO();
-	IOLockUnlock(lock);
 
 	// The bounded reader returns [modern CT header, HXG header, payload...].
 	// Only event frames are admitted on this FAST-only VF transport.

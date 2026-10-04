@@ -9,6 +9,7 @@ import sys
 # Complete reviewed native bodies. This fixes the concrete Intel override
 # graph, not inherited timer APIs, dynamic callbacks or runtime completion.
 STAMP_IRQ_NATIVE = {
+    "__ZN21IGHardwareGuCCTBuffer32handleSoftwareGuCToHostInterruptEv": (0xa4, "4e3a72792d35aff7c4ee3b1dd14b91de487b2717801c827f683d4e62e4c0f4bc"),
     "__ZN31IGHardwarePerProcessPageTable324freeEv": (0x80, "c5f1bb69bf4cedcdc999c0f6c34cc47167346196816f14db050a18609bb9893c"),
     "__ZN31IGHardwarePerProcessPageTable644freeEv": (0x1d4, "b3d0469c1f6405f8f9e5f77055fb7338fe457582600e16fba07baf10dd6fd165"),
     "__ZN29IGHardwarePerProcessPageTable4freeEv": (0x12, "6e7702f85ee359086167a27efd1347edb4b2ce757dcd7c6c91cb4c8c66c268aa"),
@@ -2161,6 +2162,48 @@ def ring_backing_submit_mutations(path):
     print("PASS: five ring backing/geometry guard mutations rejected (source contract, not DMA proof)")
 
 
+def g2h_event_transaction_contract(source, path):
+    body = function_body(source, "bool Gen11::vfCtbGucToHostAction(void *that, uint32_t *message)")
+    for token in ("explicit ConsumerTransaction(IOLock *value) : lock(value) { IOLockLock(lock); }",
+                  "~ConsumerTransaction() { IOLockUnlock(lock); }",
+                  "} consumerTransaction(lock);",
+                  "ConsumerTransaction(const ConsumerTransaction &) = delete;"):
+        if token not in body:
+            raise AssertionError(f"{path}: G2H event transaction lacks {token}")
+    if body.count("IOLockUnlock(lock);") != 1 or body.count("IOLockLock(lock);") != 1:
+        raise AssertionError(f"{path}: G2H transaction has an unscoped lock operation")
+    admission = body.index("} consumerTransaction(lock);")
+    read = body.index("NGGuCRing::readFrame(")
+    if "if (!vfCtbConsumerReady(false))" not in body[admission:read]:
+        raise AssertionError(f"{path}: queued G2H consumer lacks locked readiness recheck")
+    for forbidden in ("IOSleep(", "pollVfGuCToHost(", "vfSendCtbFastAction(",
+                      "vfInvalidateTLBSync(", "FunctionCast("):
+        if forbidden in body:
+            raise AssertionError(f"{path}: G2H transaction gained a blocking/reentrant dependency")
+
+
+def g2h_event_transaction_mutations(path):
+    source = pathlib.Path(path).read_text()
+    mutations = (
+        ("} consumerTransaction(lock);", "};"),
+        ("\tdescriptor[4] = head;\n", "\tdescriptor[4] = head;\n\tIOLockUnlock(lock);\n"),
+        ("\tif (!vfCtbConsumerReady(false))\n\t\treturn false;\n",
+         "\tif (false)\n\t\treturn false;\n"),
+    )
+    for before, after in mutations:
+        # The descriptor-head store also occurs elsewhere; bound mutations to
+        # this consumer body so an unrelated writer cannot satisfy the test.
+        body = function_body(source, "bool Gen11::vfCtbGucToHostAction(void *that, uint32_t *message)")
+        assert body.count(before) == 1, f"ambiguous G2H mutation: {before}"
+        changed = source.replace(body, body.replace(before, after, 1), 1)
+        try:
+            g2h_event_transaction_contract(changed, path)
+        except AssertionError:
+            continue
+        raise AssertionError(f"{path}: escaped G2H transaction mutation")
+    print("PASS: three G2H event transaction mutations rejected (source contract, not concurrency proof)")
+
+
 def source_contract(path):
     source = pathlib.Path(path).read_text()
     ring_backing_submit_contract(source, path)
@@ -2452,6 +2495,7 @@ def source_contract(path):
 
     drain = function_body(
         source, "bool Gen11::vfDrainGuCToHost(void *that, IOInterruptEventSource *source,")
+    g2h_event_transaction_contract(source, path)
     if "vfCtbConsumerReady(!synchronousPoll)" not in drain:
         raise AssertionError(
             f"{path}: synchronous CTB teardown cannot outlive hardware IRQ disable")
@@ -2760,6 +2804,7 @@ def main():
     direct_branch_candidate_contract()
     source_contract(sys.argv[1])
     ring_backing_submit_mutations(sys.argv[1])
+    g2h_event_transaction_mutations(sys.argv[1])
     ggtt_postwrite_mutations(sys.argv[1])
     macho_inventory(sys.argv[2])
     macho_inventory(sys.argv[3])

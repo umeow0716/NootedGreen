@@ -7,6 +7,15 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 G2H application ordering: VF source repair holds existing G2H mutex
+through event application instead of only frame copy, with locked readiness
+recheck and scoped all-return release. Native software handler body pinned;
+three guard/admission/unlock mutation regressions reject unsafe structures.
+Selected TLB wait/poll/application path has no accelerator/H2G/global-GuC
+mutex acquisition in its consumer; all external caller/teardown dependencies
+are not proven. Offline suite passes; repair remains undeployed/unvalidated
+against hardware, and does not implement native PPGTT retirement.
+
 2026-10-04 task allocator ownership: complete init/allocate/deallocate bodies
 and declared +0x140/148 targets reviewed/pinned. Supplied allocator references
 are retained, but options/class provenance remains unresolved. Full local XNU
