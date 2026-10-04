@@ -335,6 +335,120 @@ BASE_CLIENT_BODIES = {
         (0x9c, "c911271d23a8d373b1d7a0f732f222d0eac0dcd5192f6a670c9b20a81f7a0d62"),
     "__ZN14IOAccelShared228processResourceDirtyCommandsEv":
         (0x174, "03d68eb2483824c5316f89cca04ddad418fc81382252f8c494df7d760729624b"),
+    "__ZN17IOAccelGLContext211processSwapE7eDoSwap":
+        (0x454, "dbaa260c153479bcb1ad99a9ef461db0fe0c1619ea3e11655325d13d51a4fa9e"),
+    "__ZN17IOAccelGLContext211read_bufferEP30IOAccelGLContextReadBufferData":
+        (0x7f6, "653e970bdc05fdc755292460a2262ac42ff3bfc067755b73b7ec4508e493b013"),
+    "__ZN17IOAccelGLContext211set_surfaceEP30IOAccelGLContextSetSurfaceData":
+        (0x6d6, "791e8f840b79b634ff988f2c5b8ab53407ef6922ce2662aaf7b5fd530bad6432"),
+    "__ZN17IOAccelGLContext212contextStartEv":
+        (0x120, "0d4a7fd04c4eab47cd8d72c119cdcf84f2332ad48a140dbc6af5e2da9349f841"),
+    "__ZN17IOAccelGLContext213s_read_bufferEPS_PvP25IOExternalMethodArguments":
+        (0xe, "e1a0b8ea9510811af8e7f82316e2ef0ba7b3493a2261c8b85a7b918bf066a94c"),
+    "__ZN17IOAccelGLContext213s_set_surfaceEPS_PvP25IOExternalMethodArguments":
+        (0xe, "48b08f0fd5bbc2c84dd2a0f8b2bc8774a159552026333e2af6d07c87665b64a9"),
+    "__ZN17IOAccelGLContext213set_swap_rectEiiii":
+        (0x26, "e8337d689652ab825b3ddcb1ea1e0e6f71ccbeff3919e748115166cc08ea478b"),
+    "__ZN17IOAccelGLContext214externalMethodEjP25IOExternalMethodArgumentsP24IOExternalMethodDispatchP8OSObjectPv":
+        (0x4c, "89f72ebe618875b2b28b08cd8eec62aff35c42c5b8cef61a99fc64abf073d553"),
+    "__ZN17IOAccelGLContext215s_set_swap_rectEPS_PvP25IOExternalMethodArguments":
+        (0x38, "d2ff59f12687a58fb7fb5e3ad9ca48bbcfa04a9095a7450fbeea5ddaa2401fc7"),
+    "__ZN17IOAccelGLContext217set_swap_intervalEii":
+        (0x16, "93fb6d7e706e361fc34b20ec57371a7d905437560ba73baab331eca0745050a9"),
+    "__ZN17IOAccelGLContext218processDataBuffersEj":
+        (0x6b6, "f404c83e08bbf8e91391ccece622bd80fa328c1a56c0c12f76d622ab5b246788"),
+    "__ZN17IOAccelGLContext219s_set_swap_intervalEPS_PvP25IOExternalMethodArguments":
+        (0x22, "7e2c9f537f3f38ce3e1e5b25b27291d4786ff0bb7c2b44e57593ce1246bc2575"),
+    "__ZN17IOAccelGLContext226set_surface_volatile_stateEj":
+        (0xa8, "a2f931c465481032b4acd0fc8eb31ee5eb67c747d3ec5ad69fd2421f59785aca"),
+    "__ZN17IOAccelGLContext228s_set_surface_volatile_stateEPS_PvP25IOExternalMethodArguments":
+        (0x14, "3371d7f487f6232be12c3049315d2f54a0f2056442abd88a0ff220e6255a2dff"),
+    "__ZN17IOAccelGLContext229set_surface_get_config_statusEP30IOAccelGLContextSetSurfaceDataP31IOAccelGLContextGetConfigStatusyPy":
+        (0x498, "eaa144d03b4de8b9543e4e6ff742025e3ed6e78b96f1d20dcef7583a4f224f66"),
+    "__ZN17IOAccelGLContext231s_set_surface_get_config_statusEPS_PvP25IOExternalMethodArguments":
+        (0x12, "8a18da9787c26db8ba536be0e1c051b058d26798465a5cd9af12c6de4b98e15b"),
+    "__ZN27IOAccelGLDrawableUserClient11set_surfaceEP37IOAccelGLDrawableClientSetSurfaceData":
+        (0x516, "5ed7d0946d71b23eac02248dc47c66c094d9307b2c0a22bb0311aa6e4c868cf0"),
+    "__ZN27IOAccelGLDrawableUserClient13s_set_surfaceEPS_PvP25IOExternalMethodArguments":
+        (0xe, "9317414bdcab3bd5521e5f07a20e7cab2d495c76fa78cb9f14052f764b266dc4"),
+    "__ZN27IOAccelGLDrawableUserClient13set_swap_rectEiiii":
+        (0x26, "8b5ab890824d07db161fc93f061bc3d28d611cf723390bbfa175c8cd6c938590"),
+    "__ZN27IOAccelGLDrawableUserClient14externalMethodEjP25IOExternalMethodArgumentsP24IOExternalMethodDispatchP8OSObjectPv":
+        (0x4e, "17c99d89e6685f45446c8fa6a4cd57e8e20bbcfd4a90142a0a0d1506d6fa5d10"),
+    "__ZN27IOAccelGLDrawableUserClient15s_set_swap_rectEPS_PvP25IOExternalMethodArguments":
+        (0x38, "ef916f445150e7d4af3f3e93bbc7d031b98285c4a3c6674b2f217b5f2e7516e8"),
+    "__ZN27IOAccelGLDrawableUserClient17set_swap_intervalEii":
+        (0x16, "6cdd65bc620549f5da9ad6628496d5b3a7faac13fac79d7364d2e2eaa227db6e"),
+    "__ZN27IOAccelGLDrawableUserClient19s_set_swap_intervalEPS_PvP25IOExternalMethodArguments":
+        (0x22, "d55b2467b2112363c8930df82314ca5bc98f2e773c84d647891463861590e3de"),
+    "__ZN27IOAccelGLDrawableUserClient19signal_shared_eventEP4taskyjy":
+        (0x138, "7959f70b7f08397841cc681df395792a01f212a89729511ceb4c3b135acc2ccb"),
+    "__ZN27IOAccelGLDrawableUserClient21s_signal_shared_eventEPS_PvP25IOExternalMethodArguments":
+        (0x20, "1b3ae518d429e91d95bfcd1d29e1bddf98d01f3d8d07fd6b1b059e362b110dd7"),
+    "__ZN27IOAccelGLDrawableUserClient29set_surface_get_config_statusEP37IOAccelGLDrawableClientSetSurfaceDataP38IOAccelGLDrawableClientGetConfigStatusyPy":
+        (0x418, "8ad324a97ebce8de3899e8f9f76d11b4d2d17824f4bd22a734b82c59f0f475f6"),
+    "__ZN27IOAccelGLDrawableUserClient31create_mach_port_from_iosurfaceEyPj":
+        (0xe2, "dc9bca4042075f0f40f74afa98a616a5bf8077ce4b11f972772f0e992750cb45"),
+    "__ZN27IOAccelGLDrawableUserClient31s_set_surface_get_config_statusEPS_PvP25IOExternalMethodArguments":
+        (0x12, "d44aacde2fd21c5514805e6ccd78e18c290b3904788b58f31047e22c56793ab2"),
+    "__ZN27IOAccelGLDrawableUserClient33s_create_mach_port_from_iosurfaceEPS_PvP25IOExternalMethodArguments":
+        (0x16, "48087eb113c4fbce75bdd823ccf5449c2941a902bfa2157a751b414ed72d5668"),
+    "__ZN17IOAccelSurfaceMTL11s_set_shapeEPS_PvP25IOExternalMethodArguments":
+        (0xc0, "0ef1d9133810abb73d2d1ab0d682718e0898fdd974986910c603010f031c2339"),
+    "__ZN17IOAccelSurfaceMTL11set_id_modeEjj":
+        (0x27e, "4c327e8f963e65198931f69b920a00cf32fffc88f87798de419310bd53c7b0e7"),
+    "__ZN17IOAccelSurfaceMTL11set_scalingEjP21IOAccelSurfaceScaling":
+        (0x100, "238af5065a5251e7fcbe06da368c2a3a872a0c944163738a0ee60baf2a3167b8"),
+    "__ZN17IOAccelSurfaceMTL11surfaceStopEv":
+        (0x190, "37adc4b77f35b81fe9fc10a1bc678a7f77042fc73e35131c41921fecd9ae3e07"),
+    "__ZN17IOAccelSurfaceMTL12shapeSurfaceEjtt":
+        (0x88, "089c6708ff58b3bd5e5ed8c4dfb9667f72a4b6de77d01242bba2fa39c75543ac"),
+    "__ZN17IOAccelSurfaceMTL12surfaceStartEv":
+        (0x11c, "c0df854c78002fded275d6c9dca496ebb0df17f633ec5cee2d113202ec46dbb3"),
+    "__ZN17IOAccelSurfaceMTL12surface_readEP22IOAccelSurfaceReadDatay":
+        (0xc, "98bbbcb705f834dd29c76767fe0c3cb90a15bbbc235e7dfa742ff7d6f0c8625f"),
+    "__ZN17IOAccelSurfaceMTL12update_shapeEv":
+        (0x182, "a350d8a4f8d40aeef590fb69c4bc3b5146e636f3130afc2cea2695275982be90"),
+    "__ZN17IOAccelSurfaceMTL13surface_flushEjj":
+        (0xc, "98bbbcb705f834dd29c76767fe0c3cb90a15bbbc235e7dfa742ff7d6f0c8625f"),
+    "__ZN17IOAccelSurfaceMTL14externalMethodEjP25IOExternalMethodArgumentsP24IOExternalMethodDispatchP8OSObjectPv":
+        (0x84, "e80fc82f4552692dadd288b68cb8930aab277218b0eb402c925f8548cf28a992"),
+    "__ZN17IOAccelSurfaceMTL15surface_controlEjjPj":
+        (0xba, "382e6ddddb00f7b8609e0ab14568a63aa4cfcb40667a3d84bf8c1c6a0c68b5fb"),
+    "__ZN17IOAccelSurfaceMTL17surface_read_lockEP25IOAccelSurfaceInformationy":
+        (0x10, "78d6cb491d8bfaf74fc02f694643563f92c7d5504560b1f5d46651eae29e2ef9"),
+    "__ZN17IOAccelSurfaceMTL18surface_query_lockEv":
+        (0x8, "5b1ee01dedea0fcb3ecce46b2207fda587d289c2e69a0afdb9d54f2595762f2e"),
+    "__ZN17IOAccelSurfaceMTL18surface_write_lockEP25IOAccelSurfaceInformationy":
+        (0x10, "ad210ac5f24090afd21376f442551bbcbfcad7cf475b194cc24ed1b9e53670c6"),
+    "__ZN17IOAccelSurfaceMTL19signal_shared_eventEP4taskyjy":
+        (0x25c, "c075038ebcc0532fbc331eeacbb1736325ddc988954b4a5f709531b923256627"),
+    "__ZN17IOAccelSurfaceMTL19surface_read_unlockEv":
+        (0x8, "5b1ee01dedea0fcb3ecce46b2207fda587d289c2e69a0afdb9d54f2595762f2e"),
+    "__ZN17IOAccelSurfaceMTL20surface_write_unlockEv":
+        (0x8, "5b1ee01dedea0fcb3ecce46b2207fda587d289c2e69a0afdb9d54f2595762f2e"),
+    "__ZN17IOAccelSurfaceMTL21s_signal_shared_eventEPS_PvP25IOExternalMethodArguments":
+        (0x20, "34ec3bc2ad33d23cd7467cc013130ce396cf5b856dc22740555f64cc107f061c"),
+    "__ZN17IOAccelSurfaceMTL25surface_control_with_lockEjjPj":
+        (0x132, "43912d812c0e43dff9ed0b9e6148a0dcf0cc0f2fafbb23b7c6363777e808f4c7"),
+    "__ZN17IOAccelSurfaceMTL25surface_read_lock_optionsEjP25IOAccelSurfaceInformationy":
+        (0x10, "dc26e1f285d3babf622b34ba8906d2e01e951871d0948ec06de7338a367d6b39"),
+    "__ZN17IOAccelSurfaceMTL26getTargetAndMethodForIndexEPP9IOServicej":
+        (0x26, "3d3bf9a4e23ded2723ef2fdb6cf9e76ec69cff1aacf7ac97476fa15ac9a1e222"),
+    "__ZN17IOAccelSurfaceMTL26surface_write_lock_optionsEjP25IOAccelSurfaceInformationy":
+        (0x10, "8e485fa4f44f9f2ca62cfadde685f22804ed0392aeea3bc2ce702bc97e9bf4f0"),
+    "__ZN17IOAccelSurfaceMTL27surface_read_unlock_optionsEj":
+        (0x8, "5b1ee01dedea0fcb3ecce46b2207fda587d289c2e69a0afdb9d54f2595762f2e"),
+    "__ZN17IOAccelSurfaceMTL28set_shape_backing_length_extE24eIOAccelSurfaceShapeBitsjyjyP19IOAccelDeviceRegiony":
+        (0x3a0, "9d2f18034e3f7d36934cb4e8eae52b1641c1ac77e19c7a1032096a4155465911"),
+    "__ZN17IOAccelSurfaceMTL28surface_write_unlock_optionsEj":
+        (0x8, "5b1ee01dedea0fcb3ecce46b2207fda587d289c2e69a0afdb9d54f2595762f2e"),
+    "__ZN17IOAccelSurfaceMTL9get_stateEP24eIOAccelSurfaceStateBits":
+        (0x28, "ccc5dcfa7e3acf3068becbe1d0a8abeaf0f0c4017b6b04101029b0498de9da84"),
+    "__ZN17IOAccelSurfaceMTL9set_scaleEjP21IOAccelSurfaceScalingy":
+        (0xd2, "8a273e7b7eaa61745adc7320d385e7512394306da74ed9c3b218e9b4a1e21ed1"),
+    "__ZN17IOAccelSurfaceMTL9set_shapeE24eIOAccelSurfaceShapeBitsjP19IOAccelDeviceRegiony":
+        (0x26, "41926b32c523057c59d6df54ba1c090624fea5f3530aeccaece50bde1e977eec"),
 }
 SURFACE_METHODS = (
     ("__ZN14IOAccelSurface25surface_read_lock_optionsEjP25IOAccelSurfaceInformationy", (0, 2, 1, 0xffffffff)),
@@ -391,6 +505,43 @@ SHARED_METHODS = (
     ("__ZN24IOAccelSharedUserClient219get_resource_offsetEPyS0_", (0, 3, 16, 8)),
     ("__ZN24IOAccelSharedUserClient218get_allocated_sizeEP20IOAccelAllocatedSize", (0, 2, 0, 8)),
     ("__ZN24IOAccelSharedUserClient227set_resource_owner_identityEP43IOAccelResourceSetResourceOwnerIdentityData", (0, 3, 16, 0)),
+)
+GL_CONTEXT_METHODS = (
+    ("__ZN17IOAccelGLContext213s_set_surfaceEPS_PvP25IOExternalMethodArguments", (0, 0x30, 0, 0)),
+    ("__ZN17IOAccelGLContext231s_set_surface_get_config_statusEPS_PvP25IOExternalMethodArguments", (0, 0x30, 0, 0x28)),
+    ("__ZN17IOAccelGLContext215s_set_swap_rectEPS_PvP25IOExternalMethodArguments", (4, 0, 0, 0)),
+    ("__ZN17IOAccelGLContext219s_set_swap_intervalEPS_PvP25IOExternalMethodArguments", (2, 0, 0, 0)),
+    ("__ZN17IOAccelGLContext228s_set_surface_volatile_stateEPS_PvP25IOExternalMethodArguments", (1, 0, 0, 0)),
+    ("__ZN17IOAccelGLContext213s_read_bufferEPS_PvP25IOExternalMethodArguments", (0, 0x20, 0, 0)),
+)
+GL_DRAWABLE_METHODS = (
+    ("__ZN27IOAccelGLDrawableUserClient13s_set_surfaceEPS_PvP25IOExternalMethodArguments", (0, 0x30, 0, 0)),
+    ("__ZN27IOAccelGLDrawableUserClient31s_set_surface_get_config_statusEPS_PvP25IOExternalMethodArguments", (0, 0x30, 0, 0x28)),
+    ("__ZN27IOAccelGLDrawableUserClient15s_set_swap_rectEPS_PvP25IOExternalMethodArguments", (4, 0, 0, 0)),
+    ("__ZN27IOAccelGLDrawableUserClient19s_set_swap_intervalEPS_PvP25IOExternalMethodArguments", (2, 0, 0, 0)),
+    ("__ZN27IOAccelGLDrawableUserClient21s_signal_shared_eventEPS_PvP25IOExternalMethodArguments", (3, 0, 0, 0)),
+    ("__ZN27IOAccelGLDrawableUserClient33s_create_mach_port_from_iosurfaceEPS_PvP25IOExternalMethodArguments", (1, 0, 1, 0)),
+)
+SURFACE_MTL_METHODS = (
+    ("__ZN17IOAccelSurfaceMTL25surface_read_lock_optionsEjP25IOAccelSurfaceInformationy", (0, 2, 1, 0xffffffff)),
+    ("__ZN17IOAccelSurfaceMTL27surface_read_unlock_optionsEj", (0, 0, 1, 0)),
+    ("__ZN17IOAccelSurfaceMTL9get_stateEP24eIOAccelSurfaceStateBits", (0, 0, 0, 1)),
+    ("__ZN17IOAccelSurfaceMTL26surface_write_lock_optionsEjP25IOAccelSurfaceInformationy", (0, 2, 1, 0xffffffff)),
+    ("__ZN17IOAccelSurfaceMTL28surface_write_unlock_optionsEj", (0, 0, 1, 0)),
+    ("__ZN17IOAccelSurfaceMTL12surface_readEP22IOAccelSurfaceReadDatay", (0, 4, 0, 0xffffffff)),
+    (None, (0, 4, 4, 0xffffffff)),
+    ("__ZN17IOAccelSurfaceMTL11set_id_modeEjj", (0, 0, 2, 0)),
+    ("__ZN17IOAccelSurfaceMTL9set_scaleEjP21IOAccelSurfaceScalingy", (0, 4, 1, 0xffffffff)),
+    ("__ZN17IOAccelSurfaceMTL9set_shapeE24eIOAccelSurfaceShapeBitsjP19IOAccelDeviceRegiony", (0, 4, 2, 0xffffffff)),
+    ("__ZN17IOAccelSurfaceMTL13surface_flushEjj", (0, 0, 2, 0)),
+    ("__ZN17IOAccelSurfaceMTL18surface_query_lockEv", (0, 0, 0, 0)),
+    ("__ZN17IOAccelSurfaceMTL17surface_read_lockEP25IOAccelSurfaceInformationy", (0, 2, 0, 0xffffffff)),
+    ("__ZN17IOAccelSurfaceMTL19surface_read_unlockEv", (0, 0, 0, 0)),
+    ("__ZN17IOAccelSurfaceMTL18surface_write_lockEP25IOAccelSurfaceInformationy", (0, 2, 0, 0xffffffff)),
+    ("__ZN17IOAccelSurfaceMTL20surface_write_unlockEv", (0, 0, 0, 0)),
+    ("__ZN17IOAccelSurfaceMTL15surface_controlEjjPj", (0, 0, 2, 1)),
+    (None, (0, 4, 5, 0xffffffff)),
+    (None, (0, 0, 0, 1)),
 )
 # Symbol-bounded bodies reviewed locally. These identities do not certify
 # overridden resource methods, iterator locking, DMA completion or host safety.
@@ -1181,7 +1332,9 @@ def check(path, boot_path=None):
     assert uuids == [IOACCEL_UUID], "unreviewed IOAcceleratorFamily2 UUID"
     assert symtab is not None, "missing embedded symbol table"
     symbol_offset, count, string_offset, string_size = symtab
-    base_client_symbols = {method for table in (SURFACE_METHODS, DEVICE_METHODS, SHARED_METHODS)
+    base_client_symbols = {method for table in (
+        SURFACE_METHODS, DEVICE_METHODS, SHARED_METHODS, GL_CONTEXT_METHODS,
+        GL_DRAWABLE_METHODS, SURFACE_MTL_METHODS)
                            for method, _ in table if method is not None}
     wanted_symbols = {
         *CONTRACTS, *SCRUB_BODIES, *LOCK_COPIES, *EVENT_OWNER_BODIES,
@@ -1191,6 +1344,8 @@ def check(path, boot_path=None):
         "__ZTV19IOAccelCommandQueue", "__ZTV15IOAccelContext2",
         "__ZTV17IOAccel2DContext2", "__ZTV14IOAccelSurface",
         "__ZTV20IOAccelLegacySurface", "__ZTV14IOAccelDevice2",
+        "__ZTV17IOAccelGLContext2", "__ZTV27IOAccelGLDrawableUserClient",
+        "__ZTV17IOAccelSurfaceMTL",
         "__ZN19IOAccelCommandQueue20sCommandQueueMethodsE",
         "__ZN15IOAccelContext215sContextMethodsE",
         "__ZN17IOAccel2DContext217s2DContextMethodsE",
@@ -1199,6 +1354,22 @@ def check(path, boot_path=None):
         "__ZZN14IOAccelSurface14externalMethodEjP25IOExternalMethodArgumentsP24IOExternalMethodDispatchP8OSObjectPvE19newResourceDispatch",
         "__ZN14IOAccelDevice214sDeviceMethodsE",
         "__ZN24IOAccelSharedUserClient214sSharedMethodsE",
+        "__ZZN17IOAccelGLContext212contextStartEvE19methodDispatchDescs",
+        "__ZL25sGLContextMethodsDispatch",
+        "__ZN27IOAccelGLDrawableUserClient15sMethodDispatchE",
+        "__ZN17IOAccelSurfaceMTL15sSurfaceMethodsE",
+        "__ZN17IOAccelSurfaceMTL20sSignalEventDispatchE",
+        "__ZZN17IOAccelSurfaceMTL14externalMethodEjP25IOExternalMethodArgumentsP24IOExternalMethodDispatchP8OSObjectPvE19newResourceDispatch",
+        "__ZN17IOAccelGLContext211contextStopEv",
+        "__ZN17IOAccelGLContext226sleepForSwapCompleteNoLockEj",
+        "__ZN17IOAccelGLContext228addVendorSurfaceRequiredBitsEy",
+        "__ZN14IOAccelSurface21copyFromBufferWithCPUEiiiijjP16IOAccelResource2P16IOAccelSysMemoryjyj",
+        "__ZN20IOAccelLegacySurface25present_surface_with_flipEj",
+        "__ZN27IOAccelLegacyDisplayMachine16setup_fullscreenEP20IOAccelLegacySurface",
+        "__ZN17IOAccelSurfaceMTL22isSurfaceSizeSupportedEss",
+        "__ZN28IOSurfaceMTLSharedEventFence15withSharedEventEP20IOSurfaceSharedEventy",
+        "__ZN23IOAccelSharedEventFence15withSharedEventEP20IOSurfaceSharedEventyP22IOGraphicsAccelerator2P17IOAccelSubmitter2",
+        "__ZN19IOAccelFenceMachine13addEventFenceEP17IOAccelSubmitter2P17IOAccelEventFence",
         "__ZN19IOAccelCommandQueue16commandQueueStopEv",
         "__ZN19IOAccelCommandQueue11setPriorityE28eIOAccelCommandQueuePriority",
         "__ZTV16IOAccelMemoryMap", "__ZTV16IOAccelSysMemory",
@@ -1278,6 +1449,217 @@ def check(path, boot_path=None):
     check_dispatch_table(
         "__ZN24IOAccelSharedUserClient214sSharedMethodsE", SHARED_METHODS,
         "ba76d2c8dca49a0f9e44703c005f92a19695a17dbc95f60bbb507d0d2ee147ea")
+
+    def check_legacy_external_dispatch_table(table_name, expected, digest):
+        table = address_of(table_name)
+        assert hashlib.sha256(read(table, len(expected) * 24)).hexdigest() == digest, \
+            f"changed complete legacy external dispatch table: {table_name}"
+        for selector, (method, arguments) in enumerate(expected):
+            entry = struct.unpack("<Q4I", read(table + selector * 24, 24))
+            assert entry[1:] == arguments, \
+                f"changed legacy selector {selector} arguments: {table_name}"
+            assert entry[0] >> 63 == 0 and (entry[0] >> 30) & 3 == 1 and \
+                entry[0] & 0x3fffffff == address_of(method), \
+                f"changed legacy selector {selector} target: {table_name}"
+
+    check_legacy_external_dispatch_table(
+        "__ZZN17IOAccelGLContext212contextStartEvE19methodDispatchDescs",
+        GL_CONTEXT_METHODS,
+        "b0e84a5a26ba67226fa5514293cc60af71ce6daf85788eb98e9b57b12ca8c259")
+    check_legacy_external_dispatch_table(
+        "__ZN27IOAccelGLDrawableUserClient15sMethodDispatchE",
+        GL_DRAWABLE_METHODS,
+        "608a8a962b027791704ca9eac5acd9c30ea9e1eb3f9cd3581cf29f6f20977d89")
+    check_dispatch_table(
+        "__ZN17IOAccelSurfaceMTL15sSurfaceMethodsE", SURFACE_MTL_METHODS,
+        "acbedfcc5220cc7de2fb393c5757210b78ec40e36545e2ee36a712859f29515f")
+
+    gl_start = address_of("__ZN17IOAccelGLContext212contextStartEv")
+    for offset, prefix, target in (
+            (0x106, bytes.fromhex("48 8d 05"),
+             address_of("__ZZN17IOAccelGLContext212contextStartEvE19methodDispatchDescs")),
+            (0x10d, bytes.fromhex("48 89 05"), address_of("__ZL25sGLContextMethodsDispatch"))):
+        instruction = read(gl_start + offset, 7)
+        assert instruction[:3] == prefix and \
+            gl_start + offset + 7 + struct.unpack_from("<i", instruction, 3)[0] == target, \
+            "changed GL-context dispatch publication"
+    gl_external = address_of(
+        "__ZN17IOAccelGLContext214externalMethodEjP25IOExternalMethodArgumentsP24IOExternalMethodDispatchP8OSObjectPv")
+    assert read(gl_external + 4, 11) == bytes.fromhex(
+        "89 f0 8d b0 00 ff ff ff 83 fe 05"), \
+        "changed GL-context 0x100 selector normalization/bounds"
+    assert read(gl_external + 0x11, 7) == bytes.fromhex("f6 87 98 06 00 00 01"), \
+        "changed GL-context active-state admission"
+    dispatch_pointer = read(gl_external + 0x24, 7)
+    assert dispatch_pointer[:3] == bytes.fromhex("48 03 0d") and \
+        gl_external + 0x2b + struct.unpack_from("<i", dispatch_pointer, 3)[0] == \
+        address_of("__ZL25sGLContextMethodsDispatch"), \
+        "changed GL-context dynamic dispatch-pointer load"
+
+    gl_vtable = address_of("__ZTV17IOAccelGLContext2")
+    for slot, method in (
+            (0x9e0, "__ZN17IOAccelGLContext212contextStartEv"),
+            (0x9e8, "__ZN17IOAccelGLContext211contextStopEv"),
+            (0xa28, "__ZN17IOAccelGLContext218processDataBuffersEj"),
+            (0xb58, "__ZN17IOAccelGLContext226sleepForSwapCompleteNoLockEj"),
+            (0xb60, "__ZN17IOAccelGLContext228addVendorSurfaceRequiredBitsEy"),
+            (0xb70, "__ZN17IOAccelGLContext211processSwapE7eDoSwap")):
+        raw = struct.unpack("<Q", read(gl_vtable + 16 + slot, 8))[0]
+        assert raw >> 63 == 0 and (raw >> 30) & 3 == 1 and \
+            raw & 0x3fffffff == address_of(method), \
+            f"changed GL-context virtual target at {slot:#x}"
+
+    gl_read = address_of("__ZN17IOAccelGLContext211read_bufferEP30IOAccelGLContextReadBufferData")
+    assert direct_branch_offsets(
+        address_of("__ZN17IOAccelGLContext213s_read_bufferEPS_PvP25IOExternalMethodArguments"),
+        0xe, gl_read) == [0x9], "changed GL-context selector-0x105 read-buffer edge"
+    assert direct_branch_offsets(gl_read, 0x7f6, 0x10012) == [0xea] and \
+        direct_branch_offsets(gl_read, 0x7f6, 0x14ba6da2) == [0xfe] and \
+        direct_branch_offsets(gl_read, 0x7f6,
+                              address_of("__ZN22IOGraphicsAccelerator222acceleratorWaitEnabledEv")) == [0x144], \
+        "changed GL-context read-buffer admission lock/wait sequence"
+    assert direct_branch_offsets(gl_read, 0x7f6, 0x14ba6db4) == [0x1ad, 0x21b, 0x53e] and \
+        direct_branch_offsets(gl_read, 0x7f6, 0x10018) == [0x1b9, 0x227, 0x54a], \
+        "changed GL-context read-buffer balanced unlock inventory"
+    assert read(gl_read + 0x574, 6) == bytes.fromhex("ff 90 60 09 00 00"), \
+        "changed GL-context read-buffer surface copy producer dispatch"
+    assert direct_branch_offsets(
+        gl_read, 0x7f6,
+        address_of("__ZN14IOAccelSurface21copyFromBufferWithCPUEiiiijjP16IOAccelResource2P16IOAccelSysMemoryjyj")) == [0x75b], \
+        "changed GL-context read-buffer CPU fallback edge"
+
+    gl_set_surface = address_of("__ZN17IOAccelGLContext211set_surfaceEP30IOAccelGLContextSetSurfaceData")
+    assert direct_branch_offsets(gl_set_surface, 0x6d6, 0x10012) == [0x8d] and \
+        direct_branch_offsets(gl_set_surface, 0x6d6, 0x14ba6da2) == [0x9d] and \
+        direct_branch_offsets(gl_set_surface, 0x6d6, 0x14ba6db4) == [0x2cf, 0x64b] and \
+        direct_branch_offsets(gl_set_surface, 0x6d6, 0x10018) == [0x2db, 0x657], \
+        "changed GL-context set-surface lock inventory"
+    assert direct_branch_offsets(
+        gl_set_surface, 0x6d6,
+        address_of("__ZN27IOAccelLegacyDisplayMachine16setup_fullscreenEP20IOAccelLegacySurface")) == \
+        [0x592, 0x6cc], "changed GL-context legacy-display setup edges"
+
+    gl_process = address_of("__ZN17IOAccelGLContext218processDataBuffersEj")
+    gl_swap = address_of("__ZN17IOAccelGLContext211processSwapE7eDoSwap")
+    assert read(gl_process + 0x676, 6) == bytes.fromhex("ff 90 70 0b 00 00"), \
+        "changed GL-context process-to-swap virtual edge"
+    assert read(gl_swap + 0xc8, 6) == bytes.fromhex("ff 90 70 09 00 00") and \
+        read(gl_swap + 0x210, 6) == bytes.fromhex("ff 90 70 09 00 00"), \
+        "changed GL-context swap surface-copy virtuals"
+    assert direct_branch_offsets(
+        gl_swap, 0x454, address_of("__ZN14IOAccelSurface12flip_buffersEv")) == [0x2e4, 0x342, 0x378] and \
+        direct_branch_offsets(
+            gl_swap, 0x454,
+            address_of("__ZN20IOAccelLegacySurface25present_surface_with_flipEj")) == [0x301] and \
+        direct_branch_offsets(
+            gl_swap, 0x454,
+            address_of("__ZN20IOAccelLegacySurface25present_surface_with_swapEjj")) == [0x3de], \
+        "changed GL-context swap producer selection"
+
+    drawable_external = address_of(
+        "__ZN27IOAccelGLDrawableUserClient14externalMethodEjP25IOExternalMethodArgumentsP24IOExternalMethodDispatchP8OSObjectPv")
+    assert read(drawable_external + 4, 7) == bytes.fromhex("f6 87 08 01 00 00 01") and \
+        read(drawable_external + 0x17, 3) == bytes.fromhex("83 fe 06"), \
+        "changed GL-drawable active-state/selector admission"
+    drawable_table = read(drawable_external + 0x21, 7)
+    assert drawable_table[:3] == bytes.fromhex("4c 8d 1d") and \
+        drawable_external + 0x28 + struct.unpack_from("<i", drawable_table, 3)[0] == \
+        address_of("__ZN27IOAccelGLDrawableUserClient15sMethodDispatchE"), \
+        "changed GL-drawable static dispatch-table selection"
+    for wrapper, length, method, offsets in (
+            ("__ZN27IOAccelGLDrawableUserClient13s_set_surfaceEPS_PvP25IOExternalMethodArguments", 0xe,
+             "__ZN27IOAccelGLDrawableUserClient11set_surfaceEP37IOAccelGLDrawableClientSetSurfaceData", [0x9]),
+            ("__ZN27IOAccelGLDrawableUserClient31s_set_surface_get_config_statusEPS_PvP25IOExternalMethodArguments", 0x12,
+             "__ZN27IOAccelGLDrawableUserClient29set_surface_get_config_statusEP37IOAccelGLDrawableClientSetSurfaceDataP38IOAccelGLDrawableClientGetConfigStatusyPy", [0xd]),
+            ("__ZN27IOAccelGLDrawableUserClient21s_signal_shared_eventEPS_PvP25IOExternalMethodArguments", 0x20,
+             "__ZN27IOAccelGLDrawableUserClient19signal_shared_eventEP4taskyjy", [0x1a]),
+            ("__ZN27IOAccelGLDrawableUserClient33s_create_mach_port_from_iosurfaceEPS_PvP25IOExternalMethodArguments", 0x16,
+             "__ZN27IOAccelGLDrawableUserClient31create_mach_port_from_iosurfaceEyPj", [0x10])):
+        assert direct_branch_offsets(address_of(wrapper), length, address_of(method)) == offsets, \
+            f"changed GL-drawable wrapper edge: {wrapper}"
+    for method, locks, unlocks, mutexes, unmutexes in (
+            ("__ZN27IOAccelGLDrawableUserClient11set_surfaceEP37IOAccelGLDrawableClientSetSurfaceData",
+             [0x9d], [0x27e, 0x500], [0x8d], [0x28a, 0x50c]),
+            ("__ZN27IOAccelGLDrawableUserClient29set_surface_get_config_statusEP37IOAccelGLDrawableClientSetSurfaceDataP38IOAccelGLDrawableClientGetConfigStatusyPy",
+             [0x61, 0x182], [0xe4, 0x345], [0x51, 0x172], [0xf0, 0x352]),
+            ("__ZN27IOAccelGLDrawableUserClient19signal_shared_eventEP4taskyjy",
+             [0x4e], [0x114], [0x3e], [0x120])):
+        start = address_of(method)
+        length = BASE_CLIENT_BODIES[method][0]
+        assert direct_branch_offsets(start, length, 0x14ba6da2) == locks and \
+            direct_branch_offsets(start, length, 0x14ba6db4) == unlocks and \
+            direct_branch_offsets(start, length, 0x10012) == mutexes and \
+            direct_branch_offsets(start, length, 0x10018) == unmutexes, \
+            f"changed GL-drawable lock inventory: {method}"
+    drawable_set = address_of(
+        "__ZN27IOAccelGLDrawableUserClient11set_surfaceEP37IOAccelGLDrawableClientSetSurfaceData")
+    assert direct_branch_offsets(
+        drawable_set, 0x516, address_of("__ZN17IOAccelSurfaceMTL12update_shapeEv")) == [0x439, 0x4c9], \
+        "changed GL-drawable surface-shape edges"
+    assert direct_branch_offsets(
+        address_of("__ZN27IOAccelGLDrawableUserClient19signal_shared_eventEP4taskyjy"), 0x138,
+        address_of("__ZN17IOAccelSurfaceMTL19signal_shared_eventEP4taskyjy")) == [0x93], \
+        "changed GL-drawable shared-event registration edge"
+
+    surface_mtl_external = address_of(
+        "__ZN17IOAccelSurfaceMTL14externalMethodEjP25IOExternalMethodArgumentsP24IOExternalMethodDispatchP8OSObjectPv")
+    assert direct_branch_offsets(
+        surface_mtl_external, 0x84,
+        address_of("__ZN17IOAccelSurfaceMTL28set_shape_backing_length_extE24eIOAccelSurfaceShapeBitsjyjyP19IOAccelDeviceRegiony")) == \
+        [0x66], "changed SurfaceMTL selectors 6/17 shape-backing edge"
+    for offset, dispatch in (
+            (0x1d, "__ZZN17IOAccelSurfaceMTL14externalMethodEjP25IOExternalMethodArgumentsP24IOExternalMethodDispatchP8OSObjectPvE19newResourceDispatch"),
+            (0x3c, "__ZN17IOAccelSurfaceMTL20sSignalEventDispatchE")):
+        instruction = read(surface_mtl_external + offset, 7)
+        assert instruction[:3] == bytes.fromhex("48 8d 0d") and \
+            surface_mtl_external + offset + 7 + struct.unpack_from("<i", instruction, 3)[0] == \
+            address_of(dispatch), f"changed SurfaceMTL special dispatch: {dispatch}"
+    surface_mtl_vtable = address_of("__ZTV17IOAccelSurfaceMTL")
+    for slot, method in (
+            (0x960, "__ZN17IOAccelSurfaceMTL12surfaceStartEv"),
+            (0x968, "__ZN17IOAccelSurfaceMTL11surfaceStopEv"),
+            (0x970, "__ZN17IOAccelSurfaceMTL22isSurfaceSizeSupportedEss"),
+            (0x978, "__ZN17IOAccelSurfaceMTL12shapeSurfaceEjtt")):
+        raw = struct.unpack("<Q", read(surface_mtl_vtable + 16 + slot, 8))[0]
+        assert raw >> 63 == 0 and (raw >> 30) & 3 == 1 and \
+            raw & 0x3fffffff == address_of(method), \
+            f"changed SurfaceMTL virtual target at {slot:#x}"
+    assert read(address_of("__ZN17IOAccelSurfaceMTL12update_shapeEv") + 0x142, 6) == \
+        bytes.fromhex("ff 90 78 09 00 00"), "changed SurfaceMTL update-to-shape virtual"
+    shape_backing = address_of(
+        "__ZN17IOAccelSurfaceMTL28set_shape_backing_length_extE24eIOAccelSurfaceShapeBitsjyjyP19IOAccelDeviceRegiony")
+    assert read(shape_backing + 0xcf, 6) == bytes.fromhex("ff 90 70 09 00 00") and \
+        read(shape_backing + 0x27b, 6) == bytes.fromhex("ff 90 70 09 00 00"), \
+        "changed SurfaceMTL shape-backing size validation virtuals"
+    for method, locks, unlocks, mutexes, unmutexes in (
+            ("__ZN17IOAccelSurfaceMTL11set_id_modeEjj", [0x81], [0x227], [0x71], [0x233]),
+            ("__ZN17IOAccelSurfaceMTL9set_scaleEjP21IOAccelSurfaceScalingy", [0x56], [0xa7], [0x46], [0xb3]),
+            ("__ZN17IOAccelSurfaceMTL28set_shape_backing_length_extE24eIOAccelSurfaceShapeBitsjyjyP19IOAccelDeviceRegiony",
+             [0x189], [0x2dc, 0x347], [0x179], [0x2e8, 0x353]),
+            ("__ZN17IOAccelSurfaceMTL15surface_controlEjjPj", [0x48], [0x96], [0x38], [0xa2]),
+            ("__ZN17IOAccelSurfaceMTL19signal_shared_eventEP4taskyjy", [0xcd], [0x222], [0xbd], [0x22e])):
+        start = address_of(method)
+        length = BASE_CLIENT_BODIES[method][0]
+        assert direct_branch_offsets(start, length, 0x14ba6da2) == locks and \
+            direct_branch_offsets(start, length, 0x14ba6db4) == unlocks and \
+            direct_branch_offsets(start, length, 0x10012) == mutexes and \
+            direct_branch_offsets(start, length, 0x10018) == unmutexes, \
+            f"changed SurfaceMTL lock inventory: {method}"
+    assert direct_branch_offsets(
+        shape_backing, 0x3a0,
+        address_of("__ZN22IOGraphicsAccelerator222acceleratorWaitEnabledEv")) == [0x1b0], \
+        "changed SurfaceMTL shape-backing enabled wait"
+    surface_mtl_signal = address_of("__ZN17IOAccelSurfaceMTL19signal_shared_eventEP4taskyjy")
+    for method, offsets in (
+            ("__ZN28IOSurfaceMTLSharedEventFence15withSharedEventEP20IOSurfaceSharedEventy", [0x10c]),
+            ("__ZN23IOAccelSharedEventFence15withSharedEventEP20IOSurfaceSharedEventyP22IOGraphicsAccelerator2P17IOAccelSubmitter2", [0x196]),
+            ("__ZN19IOAccelFenceMachine13addEventFenceEP17IOAccelSubmitter2P17IOAccelEventFence", [0x1e6])):
+        assert direct_branch_offsets(surface_mtl_signal, 0x25c, address_of(method)) == offsets, \
+            f"changed SurfaceMTL shared-event fence edge: {method}"
+    assert direct_branch_offsets(
+        address_of("__ZN17IOAccelSurfaceMTL21s_signal_shared_eventEPS_PvP25IOExternalMethodArguments"),
+        0x20, surface_mtl_signal) == [0x1a], "changed SurfaceMTL signal wrapper edge"
+    print("PASS GLContext/GLDrawable/SurfaceMTL selectors, lock domains and producer classification")
 
     surface_external = address_of(
         "__ZN14IOAccelSurface14externalMethodEjP25IOExternalMethodArgumentsP24IOExternalMethodDispatchP8OSObjectPv")
