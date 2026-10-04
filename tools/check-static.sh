@@ -216,6 +216,12 @@ if python3 -B tools/vf_accelerator_lifecycle_contract_test.py \
 else
     failed=1
 fi
+if python3 -B tools/vf_external_producer_source_contract_test.py \
+    NootedGreen/kern_gen11.cpp; then
+    printf 'PASS offline counted VF external-producer contracts\n'
+else
+    failed=1
+fi
 if python3 -B tools/vf_telemetry_isolation_contract_test.py \
     NootedGreen/kern_gen11.cpp \
     sle_Internal/le/AppleIntelTGLGraphics.kext/Contents/Info.plist \

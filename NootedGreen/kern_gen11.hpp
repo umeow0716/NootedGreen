@@ -252,6 +252,63 @@ private:
 	mach_vm_address_t ioGraphicsEnableAccelerator {};
 	mach_vm_address_t ioGraphicsDisableAccelerator {};
 	mach_vm_address_t ioAccelEventMachineInitEvent {};
+	static IOReturn vfCommandQueueSubmit(void *that, const void *arguments);
+	mach_vm_address_t oVfCommandQueueSubmit {};
+	static IOReturn vfContextSubmit(void *that, void *input, void *output,
+	                               uint64_t options, uint64_t *stamp);
+	mach_vm_address_t oVfContextSubmit {};
+	static IOReturn vf2DSetSurface(void *that, uint32_t surface,
+	                              uint32_t mode);
+	mach_vm_address_t oVf2DSetSurface {};
+	static IOReturn vf2DFinish(void *that, uint32_t options);
+	mach_vm_address_t oVf2DFinish {};
+	static IOReturn vf2DBlit(void *that, void *command, uint64_t options);
+	mach_vm_address_t oVf2DBlit {};
+	static IOReturn vfSurfaceExternalMethod(void *that, uint32_t selector,
+	                                      void *arguments, void *dispatch,
+	                                      void *target, void *reference);
+	mach_vm_address_t oVfSurfaceExternalMethod {};
+	static IOReturn vfSharedExternalMethod(void *that, uint32_t selector,
+	                                     void *arguments, void *dispatch,
+	                                     void *target, void *reference);
+	mach_vm_address_t oVfSharedExternalMethod {};
+	static IOReturn vfGLContextExternalMethod(void *that, uint32_t selector,
+	                                        void *arguments, void *dispatch,
+	                                        void *target, void *reference);
+	mach_vm_address_t oVfGLContextExternalMethod {};
+	static IOReturn vfGLDrawableExternalMethod(void *that, uint32_t selector,
+	                                         void *arguments, void *dispatch,
+	                                         void *target, void *reference);
+	mach_vm_address_t oVfGLDrawableExternalMethod {};
+	static IOReturn vfSurfaceMtlExternalMethod(void *that, uint32_t selector,
+	                                         void *arguments, void *dispatch,
+	                                         void *target, void *reference);
+	mach_vm_address_t oVfSurfaceMtlExternalMethod {};
+	static IOReturn vfMemoryInfoExternalMethod(void *that, uint32_t selector,
+	                                         void *arguments, void *dispatch,
+	                                         void *target, void *reference);
+	mach_vm_address_t oVfMemoryInfoExternalMethod {};
+	static IOReturn vfDisplayPipeExternalMethod(void *that, uint32_t selector,
+	                                          void *arguments, void *dispatch,
+	                                          void *target, void *reference);
+	mach_vm_address_t oVfDisplayPipeExternalMethod {};
+	static IOReturn vfDisplayChangeHandler(void *that, void *reference,
+	                                     void *framebuffer, int event,
+	                                     void *argument);
+	mach_vm_address_t oVfDisplayChangeHandler {};
+	static void vfGartCollector(void *that, IOInterruptEventSource *source,
+	                           int count);
+	mach_vm_address_t oVfGartCollector {};
+	static void vfDeviceCacheControl(void *that, void *cache,
+	                                uint32_t selector, uint64_t argument0,
+	                                uint64_t argument1);
+	mach_vm_address_t oVfDeviceCacheControl {};
+	static void vfEmitFirstFlushEvents(void *that);
+	mach_vm_address_t oVfEmitFirstFlushEvents {};
+	static IOReturn vfDisplaySleepCallback(void *that, uint32_t command,
+	                                     uint32_t argument0,
+	                                     uint32_t argument1);
+	mach_vm_address_t oVfDisplaySleepCallback {};
 	static bool vfAllocMoreCommandBuffers(void *pool);
 	mach_vm_address_t oIOAccelAllocMoreCommandBuffers {};
 	static void *vfGetCommandBufferPtrNoInc(void *pool, uint32_t dwords);

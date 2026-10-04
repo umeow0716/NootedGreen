@@ -217,6 +217,10 @@ volatile UInt32 gVfCtbEverEnabled = 0;
 volatile UInt32 gVfSubmissionStopped = 0;
 volatile UInt32 gVfIrqCallbackGate = 0;
 volatile UInt32 gVfContextOperationGate = 0;
+// Count every externally reachable VF resource producer before it can enter
+// an inherited IOAccelerator mutex/wait scope.  The high bit closes admission;
+// the low bits are invocation-lifetime leases, not GPU-completion references.
+volatile UInt32 gVfExternalProducerGate = 0;
 volatile UInt32 gVfContextShutdownStarted = 0;
 volatile UInt32 gVfContextShutdownComplete = 0;
 volatile UInt32 gVfDmaQuiesced = 0;
@@ -322,6 +326,19 @@ static bool vfCtbConsumerReady(bool requireInterrupt)
 
 void vfMarkProtocolFault(const char *reason)
 {
+	// A terminal protocol fault must prevent any new user/control producer from
+	// reaching native resource state.  Do not wait here: faults can be raised by
+	// an admitted producer or interrupt callback which must first unwind its own
+	// lease.  Final accelerator stop performs the bounded drain.
+	for (;;) {
+		OSSynchronizeIO();
+		const UInt32 state = gVfExternalProducerGate;
+		const UInt32 next = NGVfIrqGate::close(state);
+		if (next == state ||
+		    OSCompareAndSwap(state, next, &gVfExternalProducerGate))
+			break;
+	}
+	OSSynchronizeIO();
 	if (OSCompareAndSwap(0, 1, &gVfProtocolFault))
 		SYSLOG("ngreen", "V237: VF protocol halted after %s", reason);
 }
@@ -409,6 +426,10 @@ uint32_t gVfContextLifecycleLogs = 0;
 
 constexpr uint32_t kVfContextEventTimeoutMs = 1000;
 constexpr uint32_t kVfCtbBackpressureTimeoutMs = 1000;
+// MemoryInfo has a pinned two-second native busy-lock timeout.  Leave margin
+// for a previously admitted caller to finish cleanup before teardown fails
+// closed instead of releasing objects beneath it.
+constexpr uint32_t kVfExternalProducerDrainTimeoutMs = 5000;
 constexpr size_t kVfContextDescriptorOffset = 0x89;
 constexpr size_t kVfContextImageBufferOffset = 0x98;
 constexpr size_t kVfContextRingObjectOffset = 0xB0;
@@ -831,6 +852,91 @@ bool vfCloseIrqCallbackGateAndWait(void *guc)
 		IOSleep(1);
 	}
 	vfMarkProtocolFault("timed out draining VF IRQ callbacks");
+	return false;
+}
+
+bool vfEnterExternalProducer()
+{
+	for (;;) {
+		OSSynchronizeIO();
+		const UInt32 state = gVfExternalProducerGate;
+		UInt32 next = 0;
+		if (!NGVfIrqGate::enter(state, next)) {
+			if (!NGVfIrqGate::closed(state))
+				vfMarkProtocolFault("VF external-producer gate overflow");
+			return false;
+		}
+		if (OSCompareAndSwap(state, next, &gVfExternalProducerGate)) {
+			OSSynchronizeIO();
+			return true;
+		}
+	}
+}
+
+void vfLeaveExternalProducer()
+{
+	for (;;) {
+		OSSynchronizeIO();
+		const UInt32 state = gVfExternalProducerGate;
+		UInt32 next = 0;
+		if (!NGVfIrqGate::leave(state, next)) {
+			vfMarkProtocolFault("VF external-producer gate underflow");
+			return;
+		}
+		if (OSCompareAndSwap(state, next, &gVfExternalProducerGate)) {
+			OSSynchronizeIO();
+			return;
+		}
+	}
+}
+
+class VfExternalProducerGuard {
+public:
+	explicit VfExternalProducerGuard(void *accelerator, bool route = true) :
+		tracked(false), admitted(true) {
+		OSSynchronizeIO();
+		tracked = route && gVfIdentity == VfIdentity::Virtual &&
+		          accelerator && gVfAccelerator &&
+		          accelerator == gVfAccelerator;
+		admitted = !tracked || vfEnterExternalProducer();
+	}
+
+	~VfExternalProducerGuard() {
+		if (tracked && admitted)
+			vfLeaveExternalProducer();
+	}
+
+	VfExternalProducerGuard(const VfExternalProducerGuard &) = delete;
+	VfExternalProducerGuard &operator=(const VfExternalProducerGuard &) = delete;
+	explicit operator bool() const { return admitted; }
+
+private:
+	bool tracked;
+	bool admitted;
+};
+
+static bool vfCloseExternalProducerGateAndWait()
+{
+	if (!vfCanUseSleepingLock())
+		return false;
+	for (;;) {
+		OSSynchronizeIO();
+		const UInt32 state = gVfExternalProducerGate;
+		const UInt32 next = NGVfIrqGate::close(state);
+		if (next == state ||
+		    OSCompareAndSwap(state, next, &gVfExternalProducerGate))
+			break;
+	}
+	OSSynchronizeIO();
+
+	for (uint32_t waited = 0;
+	     waited < kVfExternalProducerDrainTimeoutMs; waited++) {
+		OSSynchronizeIO();
+		if (NGVfIrqGate::drained(gVfExternalProducerGate))
+			return true;
+		IOSleep(1);
+	}
+	vfMarkProtocolFault("timed out draining VF external producers");
 	return false;
 }
 
@@ -2052,6 +2158,49 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		PANIC_COND(!patcher.routeMultiple(index, commandPoolRoutes, address, size),
 		           "ngreen", "Cannot route VF command-pool postconditions");
 		SYSLOG("ngreen", "V272: guarded VF command-pool growth and returned capacity");
+		// These are the unique outer roots of every admitted inherited
+		// resource producer.  Wrappers take one invocation lease before native
+		// mutexes or waits; lower prepare/load/page/submit helpers deliberately
+		// remain unhooked because final retirement must still use them after the
+		// gate closes.  Every nonmatching/PF receiver is an exact pass-through.
+		KernelPatcher::RouteRequest externalProducerRoutes[] = {
+			{"__ZN19IOAccelCommandQueue22submit_command_buffersEPK29IOAccelCommandQueueSubmitArgs",
+			 vfCommandQueueSubmit, this->oVfCommandQueueSubmit},
+			{"__ZN15IOAccelContext219submit_data_buffersEP33IOAccelContextSubmitDataBuffersInP34IOAccelContextSubmitDataBuffersOutyPy",
+			 vfContextSubmit, this->oVfContextSubmit},
+			{"__ZN17IOAccel2DContext211set_surfaceEj23eIOAccelContextModeBits",
+			 vf2DSetSurface, this->oVf2DSetSurface},
+			{"__ZN17IOAccel2DContext26finishEj",
+			 vf2DFinish, this->oVf2DFinish},
+			{"__ZN17IOAccel2DContext24blitEP20IOAccel2DBlitCommandy",
+			 vf2DBlit, this->oVf2DBlit},
+			{"__ZN14IOAccelSurface14externalMethodEjP25IOExternalMethodArgumentsP24IOExternalMethodDispatchP8OSObjectPv",
+			 vfSurfaceExternalMethod, this->oVfSurfaceExternalMethod},
+			{"__ZN24IOAccelSharedUserClient214externalMethodEjP25IOExternalMethodArgumentsP24IOExternalMethodDispatchP8OSObjectPv",
+			 vfSharedExternalMethod, this->oVfSharedExternalMethod},
+			{"__ZN17IOAccelGLContext214externalMethodEjP25IOExternalMethodArgumentsP24IOExternalMethodDispatchP8OSObjectPv",
+			 vfGLContextExternalMethod, this->oVfGLContextExternalMethod},
+			{"__ZN27IOAccelGLDrawableUserClient14externalMethodEjP25IOExternalMethodArgumentsP24IOExternalMethodDispatchP8OSObjectPv",
+			 vfGLDrawableExternalMethod, this->oVfGLDrawableExternalMethod},
+			{"__ZN17IOAccelSurfaceMTL14externalMethodEjP25IOExternalMethodArgumentsP24IOExternalMethodDispatchP8OSObjectPv",
+			 vfSurfaceMtlExternalMethod, this->oVfSurfaceMtlExternalMethod},
+			{"__ZN27IOAccelMemoryInfoUserClient14externalMethodEjP25IOExternalMethodArgumentsP24IOExternalMethodDispatchP8OSObjectPv",
+			 vfMemoryInfoExternalMethod, this->oVfMemoryInfoExternalMethod},
+			{"__ZN29IOAccelDisplayPipeUserClient214externalMethodEjP25IOExternalMethodArgumentsP24IOExternalMethodDispatchP8OSObjectPv",
+			 vfDisplayPipeExternalMethod, this->oVfDisplayPipeExternalMethod},
+			{"__ZN18IOAccelDisplayPipe22display_change_handlerEPvP13IOFramebufferiS0_",
+			 vfDisplayChangeHandler, this->oVfDisplayChangeHandler},
+			{"__ZN22IOGraphicsAccelerator214gart_collectorEP22IOInterruptEventSourcei",
+			 vfGartCollector, this->oVfGartCollector},
+			{"__ZN22IOGraphicsAccelerator218deviceCacheControlEP20IOSurfaceDeviceCachejyy",
+			 vfDeviceCacheControl, this->oVfDeviceCacheControl},
+			{"__ZN22IOGraphicsAccelerator220emitFirstFlushEventsEv",
+			 vfEmitFirstFlushEvents, this->oVfEmitFirstFlushEvents},
+		};
+		PANIC_COND(!patcher.routeMultiple(
+		               index, externalProducerRoutes, address, size),
+		           "ngreen", "Cannot route VF external-producer admission roots");
+		SYSLOG("ngreen", "V295: routed 16 counted VF external-producer roots");
 		return true;
 	}
 
@@ -2778,6 +2927,12 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			// physical function retains Apple's complete native implementation.
 			{"__ZN16IntelAccelerator19PAVPCommandCallbackE22PAVPSessionCommandID_tjPjb",
 			 vfRejectPavpCommandCallback},
+			// This independently registered power callback can stop/start the
+			// accelerator and synchronize display-owned resources without passing
+			// through an IOUserClient externalMethod.  Give its complete callback
+			// lifetime one lease at the concrete IntelAccelerator receiver.
+			{"__ZN16IntelAccelerator20DisplaySleepCallbackE17DisplaySleepCmd_tjj",
+			 vfDisplaySleepCallback, this->oVfDisplaySleepCallback},
 			// Telemetry is intentionally unavailable on a VF. recognizeFlip has no
 			// in-image caller but is exported and tail-calls IGTelemetryKMD::sample,
 			// which can submit a main-ring command. Remove that conservative producer
@@ -4562,6 +4717,206 @@ bool Gen11::IGAccelTaskIsKernelGPUTask(const void *that)
 	return original;
 }
 
+IOReturn Gen11::vfCommandQueueSubmit(void *that, const void *arguments)
+{
+	void *accelerator = that ? getMember<void *>(that, 0x5C0) : nullptr;
+	VfExternalProducerGuard guard(accelerator);
+	if (!guard)
+		return kIOReturnOffline;
+	return FunctionCast(vfCommandQueueSubmit,
+	                    callback->oVfCommandQueueSubmit)(that, arguments);
+}
+
+IOReturn Gen11::vfContextSubmit(void *that, void *input, void *output,
+	                            uint64_t options, uint64_t *stamp)
+{
+	void *accelerator = that ? getMember<void *>(that, 0x5A8) : nullptr;
+	VfExternalProducerGuard guard(accelerator);
+	if (!guard)
+		return kIOReturnOffline;
+	return FunctionCast(vfContextSubmit, callback->oVfContextSubmit)(
+		that, input, output, options, stamp);
+}
+
+IOReturn Gen11::vf2DSetSurface(void *that, uint32_t surface, uint32_t mode)
+{
+	void *accelerator = that ? getMember<void *>(that, 0x5A8) : nullptr;
+	VfExternalProducerGuard guard(accelerator);
+	if (!guard)
+		return kIOReturnOffline;
+	return FunctionCast(vf2DSetSurface, callback->oVf2DSetSurface)(
+		that, surface, mode);
+}
+
+IOReturn Gen11::vf2DFinish(void *that, uint32_t options)
+{
+	void *accelerator = that ? getMember<void *>(that, 0x5A8) : nullptr;
+	VfExternalProducerGuard guard(accelerator);
+	if (!guard)
+		return kIOReturnOffline;
+	return FunctionCast(vf2DFinish, callback->oVf2DFinish)(that, options);
+}
+
+IOReturn Gen11::vf2DBlit(void *that, void *command, uint64_t options)
+{
+	void *accelerator = that ? getMember<void *>(that, 0x5A8) : nullptr;
+	VfExternalProducerGuard guard(accelerator);
+	if (!guard)
+		return kIOReturnOffline;
+	return FunctionCast(vf2DBlit, callback->oVf2DBlit)(
+		that, command, options);
+}
+
+IOReturn Gen11::vfSurfaceExternalMethod(void *that, uint32_t selector,
+	                                   void *arguments, void *dispatch,
+	                                   void *target, void *reference)
+{
+	void *accelerator = that ? getMember<void *>(that, 0x12C8) : nullptr;
+	VfExternalProducerGuard guard(accelerator);
+	if (!guard)
+		return kIOReturnOffline;
+	return FunctionCast(vfSurfaceExternalMethod,
+	                    callback->oVfSurfaceExternalMethod)(
+		that, selector, arguments, dispatch, target, reference);
+}
+
+IOReturn Gen11::vfSharedExternalMethod(void *that, uint32_t selector,
+	                                  void *arguments, void *dispatch,
+	                                  void *target, void *reference)
+{
+	void *accelerator = that ? getMember<void *>(that, 0xF8) : nullptr;
+	VfExternalProducerGuard guard(accelerator);
+	if (!guard)
+		return kIOReturnOffline;
+	return FunctionCast(vfSharedExternalMethod,
+	                    callback->oVfSharedExternalMethod)(
+		that, selector, arguments, dispatch, target, reference);
+}
+
+IOReturn Gen11::vfGLContextExternalMethod(void *that, uint32_t selector,
+	                                     void *arguments, void *dispatch,
+	                                     void *target, void *reference)
+{
+	// Selectors below 0x100 use IOAccelContext2's inherited table.  Selector 2
+	// is already leased at submit_data_buffers; leasing this forwarding wrapper
+	// too would let close land between two gates in one transaction.
+	const bool specialized = selector >= 0x100 && selector <= 0x105;
+	void *accelerator = that ? getMember<void *>(that, 0x5A8) : nullptr;
+	VfExternalProducerGuard guard(accelerator, specialized);
+	if (!guard)
+		return kIOReturnOffline;
+	return FunctionCast(vfGLContextExternalMethod,
+	                    callback->oVfGLContextExternalMethod)(
+		that, selector, arguments, dispatch, target, reference);
+}
+
+IOReturn Gen11::vfGLDrawableExternalMethod(void *that, uint32_t selector,
+	                                      void *arguments, void *dispatch,
+	                                      void *target, void *reference)
+{
+	void *accelerator = that ? getMember<void *>(that, 0xF8) : nullptr;
+	VfExternalProducerGuard guard(accelerator);
+	if (!guard)
+		return kIOReturnOffline;
+	return FunctionCast(vfGLDrawableExternalMethod,
+	                    callback->oVfGLDrawableExternalMethod)(
+		that, selector, arguments, dispatch, target, reference);
+}
+
+IOReturn Gen11::vfSurfaceMtlExternalMethod(void *that, uint32_t selector,
+	                                      void *arguments, void *dispatch,
+	                                      void *target, void *reference)
+{
+	void *accelerator = that ? getMember<void *>(that, 0x2F8) : nullptr;
+	VfExternalProducerGuard guard(accelerator);
+	if (!guard)
+		return kIOReturnOffline;
+	return FunctionCast(vfSurfaceMtlExternalMethod,
+	                    callback->oVfSurfaceMtlExternalMethod)(
+		that, selector, arguments, dispatch, target, reference);
+}
+
+IOReturn Gen11::vfMemoryInfoExternalMethod(void *that, uint32_t selector,
+	                                      void *arguments, void *dispatch,
+	                                      void *target, void *reference)
+{
+	void *accelerator = that ? getMember<void *>(that, 0xE0) : nullptr;
+	VfExternalProducerGuard guard(accelerator);
+	if (!guard)
+		return kIOReturnOffline;
+	return FunctionCast(vfMemoryInfoExternalMethod,
+	                    callback->oVfMemoryInfoExternalMethod)(
+		that, selector, arguments, dispatch, target, reference);
+}
+
+IOReturn Gen11::vfDisplayPipeExternalMethod(void *that, uint32_t selector,
+	                                       void *arguments, void *dispatch,
+	                                       void *target, void *reference)
+{
+	void *accelerator = that ? getMember<void *>(that, 0xD8) : nullptr;
+	VfExternalProducerGuard guard(accelerator);
+	if (!guard)
+		return kIOReturnOffline;
+	return FunctionCast(vfDisplayPipeExternalMethod,
+	                    callback->oVfDisplayPipeExternalMethod)(
+		that, selector, arguments, dispatch, target, reference);
+}
+
+IOReturn Gen11::vfDisplayChangeHandler(void *that, void *reference,
+	                                  void *framebuffer, int event,
+	                                  void *argument)
+{
+	void *accelerator = that ? getMember<void *>(that, 0x88) : nullptr;
+	VfExternalProducerGuard guard(accelerator);
+	if (!guard)
+		return kIOReturnOffline;
+	return FunctionCast(vfDisplayChangeHandler,
+	                    callback->oVfDisplayChangeHandler)(
+		that, reference, framebuffer, event, argument);
+}
+
+void Gen11::vfGartCollector(void *that, IOInterruptEventSource *source,
+	                        int count)
+{
+	VfExternalProducerGuard guard(that);
+	if (!guard)
+		return;
+	FunctionCast(vfGartCollector, callback->oVfGartCollector)(
+		that, source, count);
+}
+
+void Gen11::vfDeviceCacheControl(void *that, void *cache,
+	                             uint32_t selector, uint64_t argument0,
+	                             uint64_t argument1)
+{
+	VfExternalProducerGuard guard(that);
+	if (!guard)
+		return;
+	FunctionCast(vfDeviceCacheControl, callback->oVfDeviceCacheControl)(
+		that, cache, selector, argument0, argument1);
+}
+
+void Gen11::vfEmitFirstFlushEvents(void *that)
+{
+	VfExternalProducerGuard guard(that);
+	if (!guard)
+		return;
+	FunctionCast(vfEmitFirstFlushEvents,
+	             callback->oVfEmitFirstFlushEvents)(that);
+}
+
+IOReturn Gen11::vfDisplaySleepCallback(void *that, uint32_t command,
+	                                  uint32_t argument0,
+	                                  uint32_t argument1)
+{
+	VfExternalProducerGuard guard(that);
+	if (!guard)
+		return kIOReturnOffline;
+	return FunctionCast(vfDisplaySleepCallback,
+	                    callback->oVfDisplaySleepCallback)(
+		that, command, argument0, argument1);
+}
+
 bool Gen11::start(void *that, void *provider)
 {
 	if (!that || !provider || !callback || !callback->ostart) {
@@ -4577,6 +4932,12 @@ bool Gen11::start(void *that, void *provider)
 	}
 	const bool vfActive = identity == VfIdentity::Virtual;
 	if (vfActive) {
+		OSSynchronizeIO();
+		if (gVfExternalProducerGate != 0) {
+			vfMarkProtocolFault(
+				"VF accelerator start found a reused external-producer gate");
+			return false;
+		}
 		// start() is the first stable point where the exact IntelAccelerator
 		// instance is available. Publish it before native context/pool creation;
 		// the System-KC wrapper compares this owner and leaves every other pool
@@ -4738,14 +5099,19 @@ bool Gen11::start(void *that, void *provider)
 
 void Gen11::acceleratorStop(void *that, void *provider)
 {
-	// Mark final service teardown before Apple's stop sequence. Its initial
-	// finishAllStamps call remains free to submit/drain work; stopGraphicsEngine
-	// is the later boundary where the VF operation gate is closed and every GuC
-	// context is retired while CTB and the selected IRQ transport remain live.
-	if (gVfIdentity == VfIdentity::Virtual) {
+	// Seal and drain every externally reachable resource producer before the
+	// native stop sequence can unlink user clients, display pipes or resource
+	// owners.  This wrapper acquires no inherited accelerator mutex; the wait is
+	// bounded so an unexpected caller-side lock cycle fails stop rather than
+	// permitting teardown beneath a live invocation.  Lower retirement helpers remain
+	// admitted so native finishAllStamps can run before stopGraphicsEngine closes
+	// the GuC context gate and proves final DMA quiescence.
+	if (gVfIdentity == VfIdentity::Virtual && that == gVfAccelerator) {
+		PANIC_COND(!vfCloseExternalProducerGateAndWait(), "ngreen",
+			"Cannot drain VF external producers before accelerator stop");
 		OSCompareAndSwap(0, 1, &gVfDeviceStopping);
 		OSSynchronizeIO();
-		SYSLOG("ngreen", "V242: VF accelerator stop requested; deferring quiescence until post-stamp engine stop");
+		SYSLOG("ngreen", "V295: VF external producers drained; deferring transport quiescence until post-stamp engine stop");
 	}
 	FunctionCast(acceleratorStop, callback->oAcceleratorStop)(that, provider);
 }

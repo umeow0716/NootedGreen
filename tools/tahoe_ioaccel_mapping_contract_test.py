@@ -2308,6 +2308,40 @@ def check(path, boot_path=None):
     assert read(device_cache_callback + 0x20, 3) == bytes.fromhex("48 89 fb"), \
         "changed device-cache accelerator receiver"
 
+    # Receiver-to-accelerator fields used by the counted outer admission
+    # wrappers.  Each instruction is inside a separately full-body-hashed
+    # producer owner above; spelling the loads out here prevents a future
+    # payload from silently turning an object-layout assumption into a route.
+    for method, offset, encoded in (
+            ("__ZN19IOAccelCommandQueue22submit_command_buffersEPK29IOAccelCommandQueueSubmitArgs",
+             0x17, "4c 8b b7 c0 05 00 00"),
+            ("__ZN15IOAccelContext219submit_data_buffersEP33IOAccelContextSubmitDataBuffersInP34IOAccelContextSubmitDataBuffersOutyPy",
+             0x71, "4c 8b 83 a8 05 00 00"),
+            ("__ZN17IOAccel2DContext211set_surfaceEj23eIOAccelContextModeBits",
+             0x52, "4c 8b af a8 05 00 00"),
+            ("__ZN17IOAccel2DContext26finishEj",
+             0x2d, "4c 8b bb a8 05 00 00"),
+            ("__ZN17IOAccel2DContext24blitEP20IOAccel2DBlitCommandy",
+             0x4d, "4c 8b a3 a8 05 00 00"),
+            ("__ZN14IOAccelSurface12surface_readEP22IOAccelSurfaceReadDatay",
+             0x53, "4c 8b b7 c8 12 00 00"),
+            ("__ZN24IOAccelSharedUserClient214externalMethodEjP25IOExternalMethodArgumentsP24IOExternalMethodDispatchP8OSObjectPv",
+             0xe3, "4c 8b bb f8 00 00 00"),
+            ("__ZN17IOAccelGLContext211read_bufferEP30IOAccelGLContextReadBufferData",
+             0xc9, "4c 8b af a8 05 00 00"),
+            ("__ZN27IOAccelGLDrawableUserClient11set_surfaceEP37IOAccelGLDrawableClientSetSurfaceData",
+             0x70, "4c 8b b7 f8 00 00 00"),
+            ("__ZN17IOAccelSurfaceMTL28set_shape_backing_length_extE24eIOAccelSurfaceShapeBitsjyjyP19IOAccelDeviceRegiony",
+             0x15a, "4c 8b a3 f8 02 00 00"),
+            ("__ZN27IOAccelMemoryInfoUserClient20purge_all_vid_memoryEv",
+             0x1e, "48 8b bb e0 00 00 00"),
+            ("__ZN29IOAccelDisplayPipeUserClient211copySurfaceEjj",
+             0x17, "4c 8b a7 d8 00 00 00")):
+        expected = bytes.fromhex(encoded)
+        assert read(address_of(method) + offset, len(expected)) == expected, \
+            f"changed external-producer accelerator owner: {method}"
+    print("PASS all counted outer-route receiver-to-accelerator fields")
+
     for table, slot, method in (
             ("__ZTV21IOAccelDisplayMachine", 0x8b8,
              "__ZN21IOAccelDisplayMachine26framebuffer_will_power_offEj"),

@@ -10,6 +10,25 @@ The current dynamic-entry gate table is
 
 ## Scope
 
+2026-10-04 counted external-producer delta: production now routes the 16
+System-KC outer roots derived from the complete P1–P7 inventory plus Intel
+`DisplaySleepCallback`. A receiver-scoped gate admits only the published VF
+accelerator; PF/nonmatching objects remain native. GLContext specialized
+selectors `0x100..0x105` are leased at `externalMethod`, while inherited
+selector 2 is leased only at `submit_data_buffers`, preventing nested gate
+acquisition. Resource prepare/load/unload/page-on/page-off, `submitBlit` and
+retirement helpers remain unhooked. Protocol faults close without waiting;
+final stop performs a five-second bounded drain before publishing device-stop
+intent and entering native `finishAllStamps`/engine teardown. Start rejects a
+nonzero reused gate. The paired KC pins all 12 representative receiver-field
+loads, and the source contract rejects eight route/offset/nesting/order
+mutations. Full static passes at `/tmp/ngreen-static.6zGGEk`; route inventory
+is 143 unique symbols (121 accelerator, three framebuffer, 19 System KC).
+P8 is `CLOSED-STATIC`. P9 remains under review because stop-caller lock state
+and callback cancel/late-entry/owner lifetime are not yet complete; the Tahoe
+always-true `isLockedByCurrentThread` stub is explicitly not used as proof.
+No VM, deployment or hardware state changed; exact-SHA CI is pending.
+
 2026-10-04 resource-root partition delta: all 104 executable calls using the
 five resource paging slot numbers are now an exact disjoint partition:
 57 admitted/control descendants, five retirement/teardown calls, eleven

@@ -1,7 +1,7 @@
 # Tahoe SR-IOV protocol audit — in progress
 
 Updated: 2026-10-04. The last dynamic source baseline is `ce166c8`; the current
-offline-reviewed worktree is V294 resource-root partition on
+offline-reviewed worktree is V295 counted external-producer admission on
 `codex/tahoe-sriov-vf`. This is NOT a boot-test candidate or a successful
 driver baseline. The `ce166c8` run produced repeatable host PF DMAR faults
 followed by i915 hangs and a host reboot. Keep `macos-tahoe-sriov` shut off until the
@@ -20,6 +20,54 @@ KVMFR/client transport remains the intended receiving side.
 The authoritative dynamic-entry checklist is
 [`DYNAMIC_TEST_GATE.md`](DYNAMIC_TEST_GATE.md). Any open static gate keeps the
 VM hard hold in force.
+
+## V295 counted external-producer admission (offline)
+
+The P1–P7 inventory now has a production admission boundary. Sixteen Tahoe
+IOAcceleratorFamily2 roots are routed: command-queue submit; legacy context
+submit; the three 2D entries; Surface, Shared, GLContext, GLDrawable,
+SurfaceMTL, MemoryInfo and DisplayPipe external methods; display notification;
+GART collection; IOSurface device-cache control; and KD first-flush emission.
+The independently registered Intel `DisplaySleepCallback` is the seventeenth
+root. The paired-KC contract explicitly pins the receiver-to-accelerator fields
+used by these wrappers (`+0x5c0`, `+0x5a8`, `+0x12c8`, `+0xf8`, `+0x2f8`,
+`+0xe0`, `+0xd8` and display-pipe `+0x88`); direct accelerator callbacks use
+their receiver. The complete callback/member bodies and registration points
+remain UUID/SHA bounded by the earlier V291–V294 contracts.
+
+Every wrapper compares a nonnull receiver accelerator with the published VF
+accelerator and takes one invocation-lifetime lease before entering the native
+body. Physical functions and nonmatching receivers call the original
+trampoline unchanged. GLContext selectors `0x100..0x105` take the external
+lease, while inherited selector 2 is leased only at
+`IOAccelContext2::submit_data_buffers`; this prevents a stop close from landing
+between two gates in the same transaction. Lower resource
+prepare/load/unload/page-on/page-off, `submitBlit` and GuC submission helpers
+are intentionally not routed, so native retirement and `finishAllStamps` keep
+their bridge after new external work is sealed.
+
+A protocol fault atomically closes new external admission but never waits from
+inside a possibly admitted producer or IRQ callback. Final accelerator stop
+closes the same gate, waits at most five seconds for its active count to reach
+zero, then publishes `gVfDeviceStopping` and calls native stop. A timeout or a
+non-sleepable stop context is fail-stop rather than permission to unlink owners
+beneath a live invocation. The one-shot start path rejects a reused/nonzero
+gate before publishing the accelerator. The implementation deliberately does
+not use `IOGraphicsAccelerator2::isLockedByCurrentThread`: the pinned Tahoe
+body always returns true and is not an ownership predicate.
+
+The exact route inventory is now 143 unique symbols: 121 accelerator, three
+framebuffer and 19 System KC. Eight source mutations cover missing lease,
+wrong owner offset, widened GL selector nesting, changed receiver scoping,
+unbalanced leave, missing DisplaySleep/queue route and removed stop drain.
+The full static suite passes at `/tmp/ngreen-static.6zGGEk`; the paired Tahoe
+System/Boot KC contract also passes with the new receiver-field anchors. P8 is
+closed as a static production implementation. P9 remains open because the
+stop caller and failure-roll-back lock states, plus cancel/late-entry/owner
+lifetime for display, GART, cache, KD and DisplaySleep callbacks, are not yet
+fully proven. SG-06–SG-11 also remain open. No VM, kext deployment, PCI/sysfs,
+VF/PF or Host i915 action was performed. Clean exact-SHA CI and artifacts are
+pending for this worktree.
 
 ## V294 resource-root partition and display lifecycle (offline)
 
@@ -50,9 +98,10 @@ lifecycle; final device stop remains the only quiescence path.
 
 Targeted paired-KC and dual-payload contracts and the full static suite at
 `/tmp/ngreen-static.2nwIOR` pass with only the two known SDK macro warnings.
-Clean exact-SHA CI and artifacts remain pending for this checkpoint. P8/P9 and
-SG-06–SG-11 remain open; no production route, VM, deployment, PCI/sysfs, VF/PF
-or Host i915 state was touched.
+Checkpoint `fb1a961` and exact-SHA push CI `37211776358` pass; release-kext and
+Metal-smoke artifacts are present and unexpired. V295 supersedes the statement
+that P8 was unimplemented. No VM, deployment, PCI/sysfs, VF/PF or Host i915
+state was touched.
 
 ## V293 inherited resource paging reachability (offline)
 
