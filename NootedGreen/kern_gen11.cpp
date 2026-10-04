@@ -369,6 +369,8 @@ constexpr size_t kVfContextDescriptorOffset = 0x89;
 constexpr size_t kVfContextImageBufferOffset = 0x98;
 constexpr size_t kVfContextRingObjectOffset = 0xB0;
 constexpr size_t kVfRingMappedBufferOffset = 0x80;
+constexpr size_t kVfRingSizeOffset = 0x8C;
+constexpr size_t kVfRingMaskOffset = 0x90;
 constexpr size_t kVfRingStampIndexOffset = 0x38;
 constexpr size_t kVfContextTaskOffset = 0x58;
 constexpr size_t kVfTaskScratchBufferOffset = 0x280;
@@ -5317,6 +5319,13 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 	if (!admittedRingBacking || ringBacking != admittedRingBacking ||
 	    getMember<uint64_t>(admittedRingBacking, kVfMappedBufferLengthOffset) < ringSize) {
 		vfMarkProtocolFault("submit ring backing identity or extent mismatch");
+		return false;
+	}
+	const uint32_t nativeRingSize = getMember<uint32_t>(ringObject, kVfRingSizeOffset);
+	const uint32_t nativeRingMask = getMember<uint32_t>(ringObject, kVfRingMaskOffset);
+	if (nativeRingSize != ringSize || (nativeRingSize & (nativeRingSize - 1U)) != 0 ||
+	    nativeRingMask != nativeRingSize - 1U) {
+		vfMarkProtocolFault("submit ring control and native geometry mismatch");
 		return false;
 	}
 	if ((ringControl & kRingControlValid) == 0 ||

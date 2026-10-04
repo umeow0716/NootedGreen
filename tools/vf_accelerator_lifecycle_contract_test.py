@@ -9,6 +9,7 @@ import sys
 # Complete reviewed native bodies. This fixes the concrete Intel override
 # graph, not inherited timer APIs, dynamic callbacks or runtime completion.
 STAMP_IRQ_NATIVE = {
+    "__ZN17IGHardwareContext15initRingControlEb": (0x62, "09abdc95cf3157992522b47053e289a5c2b476953853c0acf4f08eaab5dec6ca"),
     "__ZN18IGAccelFIFOChannel18submitRingCommandsEPjjj": (0x106, "1e7d84456ce9eda587497696e280fcf28591b3bb9af1a7cff339de340db7cc86"),
     "__ZN20IGHardwareRingBuffer9alignRingEj": (0x28, "c9612928d88c4157c5d80847c6e8a8123ae227b7b08a8879b54f5387b285a2ee"),
     "__ZN20IGHardwareRingBuffer14submitCommandsEPjjj": (0x5e, "922dbcc17b815c68b6bf5535ef09feaabac1d7dd0c63015fbe0f2e15a27dd8e0"),
@@ -2105,16 +2106,23 @@ def ring_backing_submit_contract(source, path="<source>"):
     for requirement in (
             "OSObject *admittedRingBacking = admitted ? gVfContexts[admittedSlot].ringBacking : nullptr;",
             "!admittedRingBacking || ringBacking != admittedRingBacking ||",
+            "nativeRingSize != ringSize || (nativeRingSize & (nativeRingSize - 1U)) != 0 ||",
+            "nativeRingMask != nativeRingSize - 1U",
             "getMember<uint64_t>(admittedRingBacking, kVfMappedBufferLengthOffset) < ringSize"):
         assert requirement in submit, f"{path}: missing retained ring submission guard"
     ring_fault = submit.index('vfMarkProtocolFault("submit ring backing identity or extent mismatch")')
     assert "return false;" in submit[ring_fault:submit.index("}", ring_fault)], f"{path}: ring mismatch branch must reject locally"
+    geometry_fault = submit.index('vfMarkProtocolFault("submit ring control and native geometry mismatch")')
+    assert "return false;" in submit[geometry_fault:submit.index("}", geometry_fault)], f"{path}: geometry mismatch must reject locally"
+    assert geometry_fault < submit.index("const uint32_t previousRingTail"), f"{path}: geometry must be validated before publication"
     assert ring_fault < submit.index("return false;", ring_fault) < submit.index("const uint32_t previousRingTail"), f"{path}: ring mismatch must reject before tail publication"
 
 
 def ring_backing_submit_mutations(path):
     source = pathlib.Path(path).read_text()
     mutations = (
+        ("nativeRingMask != nativeRingSize - 1U", "false"),
+        ("nativeRingSize != ringSize || (nativeRingSize & (nativeRingSize - 1U)) != 0 ||", "false ||"),
         ("!admittedRingBacking || ringBacking != admittedRingBacking ||",
          "!admittedRingBacking || false ||"),
         ("getMember<uint64_t>(admittedRingBacking, kVfMappedBufferLengthOffset) < ringSize",
@@ -2129,7 +2137,7 @@ def ring_backing_submit_mutations(path):
         except (AssertionError, ValueError):
             continue
         raise AssertionError("ring backing guard mutation escaped source contract")
-    print("PASS: three ring backing guard mutations rejected (source contract, not DMA proof)")
+    print("PASS: five ring backing/geometry guard mutations rejected (source contract, not DMA proof)")
 
 
 def source_contract(path):

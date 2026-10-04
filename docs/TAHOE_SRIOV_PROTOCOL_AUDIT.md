@@ -6998,6 +6998,19 @@ prefix callees. No production/runtime change. Next: outer FIFO ownership and
 event/stamp allocation serialization, followed by bounded reservation/write
 admission that preserves completion/backing semantics.
 
+Further offline-only hardening checks native ring size equals the decoded
+context control size, that the size is a power of two, and that its native
+cursor mask equals size-1, before tail publication. The preceding identity
+guard ensures ringObject is nonnull and its backing is the retained object;
+the decoded size is at least one page. Complete initRingControl 7c4fe/62 is
+reviewed/pinned: enabled state encodes configured KiB via page_shift and
+(page-count-1)<<12 plus valid bit, then writes the primary context and optional
+secondary context. The reviewed x86 4-KiB page configuration matches the
+existing submit decoder; no new claim about other page-size architectures.
+Two additional source mutations remove geometry checks, bringing the negative
+guard tests to five. Geometry checks prevent inconsistent tail publication,
+not earlier native CPU overrun or missing GPU invalidation acknowledgement.
+
 VF submit now captures the registered retained ring backing under the context
 lock while holding the existing queue ownership guard. Before tail publication,
 it requires the hardware context's current ring backing to match that retained
