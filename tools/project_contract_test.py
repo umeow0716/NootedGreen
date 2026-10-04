@@ -77,6 +77,22 @@ def main() -> int:
         str(path.relative_to(ROOT)) for path in product_headers - visited
     )
 
+    # An installed AuxKC must remain bootable when the GPU is deliberately not
+    # passed through for maintenance.  Missing hardware is not an ABI failure:
+    # it disables all later private-kext processing, while real PF/VF failures
+    # retain their existing fail-closed paths after driverReady publication.
+    green = (SOURCE_DIR / "kern_green.cpp").read_text(encoding="utf-8")
+    green_header = (SOURCE_DIR / "kern_green.hpp").read_text(encoding="utf-8")
+    assert 'PANIC_COND(!this->iGPU' not in green
+    assert 'SYSLOG("ngreen", "No built-in PCI GPU; NootedGreen remains inactive")' in green
+    assert green.index("if (!this->iGPU)") < green.index("ngResolveKernelTelemetry(patcher)")
+    assert green.index("DeviceInfo::deleter(devInfo);\n\tthis->driverReady = true;") < \
+        green.index("bool NGreen::processKext")
+    process_kext = green[green.index("bool NGreen::processKext"):]
+    assert process_kext.index("if (!this->driverReady)") < \
+        process_kext.index("gen11.processKext")
+    assert "bool driverReady {false};" in green_header
+
     target_match = re.search(
         r"isa = PBXNativeTarget;\n\s*buildConfigurationList = ([0-9A-F]+)", pbx
     )

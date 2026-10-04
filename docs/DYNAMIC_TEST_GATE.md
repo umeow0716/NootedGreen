@@ -17,17 +17,17 @@ kext/AuxKC、重綁 PCI 或寫入 SR-IOV sysfs。`CLOSED` 只代表指定的離�
 | SG-08 | render／depth／CCS／ICB／paging 的 allocation、event collection、partial submit 與錯誤傳遞 | CLOSED-STATIC | V300 固定八份 event-vector grow 的完整 147-call／38-owner 圖，52 個初始要求與 95 個 append growth 都由 postcondition fail-stop 保護；另以三個共同 boolean 邊界涵蓋 `submitBlit`、resource CCS 與 depth 的完整 35-call 清冊。非空 work 的 false、owner/transport 不一致與 later-plane/chunk rejection 都在 CPU 成功狀態可繼續發布前封門並 guest-panic；V281 cache/PTE commit-or-restore 仍為其前提。這是離線 fail-stop 證據，不是 GPU 執行或優雅復原證明。 |
 | SG-09 | timer／IRQ／workloop callback 的取消、排空與 owner lifetime | CLOSED-STATIC | V301 固定原生 DPSM、event-machine fallback 與 Scheduler4 passive timer 的 owner/binding/free 邊界；成功 start 在 publication 前驗證三者同屬 accelerator workloop，normal stop 在 base stop 清除 workloop 前同步 detach fallback/periodic source。Start 的 base rollback 與後續 null-provider Intel stop 也各自處理 partial binding。鎖內前後快照、workloop gate 同步 removal 與 IOTimer generation increment 排除 late raw-owner action；原生 owner 稍後負責 release，VF route 不偷取 reference。PagePool callback path 由既有 zero-option admission 排除。這仍是離線證據。 |
 | SG-10 | 所有 VF 可達 PF-owned MMIO／DMA／force-wake／reset 的 negative reachability | CLOSED-STATIC | V302 完成 `accelerator+0x1240` 的 131-owner／279-site 精確機械分割，並封閉 legacy construction、SafeRead/Write、Scheduler4 PM、cache/PAT/MOCS、dynamic-offset IRQ helper 與 modern GuC retained path。完整 static `/tmp/ngreen-static.CYth1a` 與 source checkpoint `5529127a03d5b92fcd8ae5ee538b9bad4e136be0` exact-SHA CI `37232739353` 通過。這仍不是硬體執行證據。 |
-| SG-11 | baseline 要求的所有程式檔完整審閱與 ledger closure | LOCAL-PASS / CI-PENDING | Exact ledger仍涵蓋1,500 paths及全部program/dependency/payload；V306補上跨domain的active VF唯一所有權gate，完整local static `/tmp/ngreen-static.wCvNGd`已通過。 |
-| SG-12 | 精確候選 commit 的完整 static suite、x86_64 release kext、Metal smoke build 與 artifact provenance | REVALIDATE V306 | V305 checkpoint `3cb57ac7806ce2a6245afb50caed19c7f5a19c68` 的exact-SHA CI `37238323119`成功且artifact已核對；V306更改host containment tool，必須在新clean pushed SHA重跑。 |
+| SG-11 | baseline 要求的所有程式檔完整審閱與 ledger closure | LOCAL-PASS / CI-PENDING | Exact ledger仍涵蓋1,500 paths及全部program/dependency/payload；V307依新panic修正無GPU時的plugin admission，完整static `/tmp/ngreen-static.nKkh89`已通過。 |
+| SG-12 | 精確候選 commit 的完整 static suite、x86_64 release kext、Metal smoke build 與 artifact provenance | REVALIDATE V307 | V306 checkpoint `d71b87ff87b387ace403452d81f2c2062659a1ac` 的exact-SHA CI `37241371132`成功且artifact已核對；V307修改production kext，必須在新clean pushed SHA重跑。 |
 
 ## 進入下一次動態前的即時阻擋表
 
 | ID | 必關閉條件 | 狀態 | 下一個可驗證出口 |
 | --- | --- | --- | --- |
-| RG-01 | 無 VF 的正常 runtime OpenCore 必須可穩定進入 SSH | OPEN | 第三次maintenance boot以15分鐘deadline證實畫面、block I/O與guest TX停止；先在沒有其他16-vCPU guest競爭時重建基線，仍失敗才進Recovery／safe-mode檢查。 |
+| RG-01 | 無 VF 的正常 runtime OpenCore 必須可穩定進入 SSH | ROOT CAUSE / RECOVERY PENDING | APFS唯讀快照找到新panic `09c192...`：舊active `ce166c8` AuxKC在5.48秒因`videoBuiltin is not IOPCIDevice`主動panic。V307讓無GPUplugin保持inactive並阻止後續private-kext patch；guest仍須先在Recovery恢復原始AuxKC `041a15...`。 |
 | RG-02 | 目標 VF `0000:00:02.1` 必須無其他active domain owner | OPEN | `win11`目前active XML含同一VF；V306 preflight已能fail closed。工具不會停止或修改該domain。 |
-| RG-03 | V306 clean pushed exact-SHA CI與artifact身分 | OPEN | local static `/tmp/ngreen-static.wCvNGd`通過；待commit、push及CI完整成功後固定zip、kext UUID/SHA與Metal smoke SHA。 |
-| RG-04 | exact V306 kext的final-path AuxKC與immutable runtime manifest | OPEN | 依賴RG-01與RG-03；SSH可達後才可在final path建AuxKC並回存hash，不允許沿用V305 manifest。 |
+| RG-03 | V307 clean pushed exact-SHA CI與artifact身分 | OPEN | V307 local static `/tmp/ngreen-static.nKkh89`已通過；仍待commit、push與exact-SHA CI。 |
+| RG-04 | exact V307 kext的final-path AuxKC與immutable runtime manifest | OPEN | 依賴RG-01與RG-03；SSH可達後才可在final path建AuxKC並回存hash，不允許沿用V305/V306 manifest。 |
 | RG-05 | 最終runtime XML／qcow2／root current-boot containment preflight | OPEN | 目前XML已精確恢復且兩個qcow2零錯誤；仍須在RG-01～04關閉且`win11`不再持有VF後重跑root preflight。 |
 
 ## 目前主路徑
@@ -38,6 +38,16 @@ runtime OpenCore，仍在相同guest kernel畫面維持到15分鐘host deadline�
 I/O與guest TX均停止，SSH未上線。deadline只destroy macOS domain，兩個qcow2複查零
 錯誤、精確runtime XML已恢復、host亦無新i915/IOMMU trigger。因此目前第一個動態阻擋
 點是先恢復「無VF也可穩定進SSH」的guest基線，而不是繼續碰VF。
+
+APFS唯讀raw快照隨後證明這不是乾淨原始AuxKC：active
+`AuxiliaryKernelExtensions.kc` SHA為`5b6e4766...`，與
+`candidate-ce166c8`完全相同；原始`041a15e0...`仍以`pre-ce166c8`保存。第三次boot
+在uptime 5.48秒產生panic `09c19212...`，舊NootedGreen UUID
+`03CD594E-A2EC-32D7-B5D7-7246F3494FD8`因沒有passthrough GPU而執行
+`videoBuiltin is not IOPCIDevice`的主動panic。V307把「無built-in PCI GPU」改成清理後
+inactive return，並以`driverReady`阻止全部後續private-kext處理；真正PF/VF存在後的
+ABI/identity/transport錯誤仍維持fail closed。Targeted project及1,500-path inventory
+contracts與完整static `/tmp/ngreen-static.nKkh89`已通過，exact-SHA CI仍待完成。
 
 同時發現另一個running `win11` domain正持有目標VF `0000:00:02.1`；V305只檢查
 macOS domain自己的殘留QEMU，未能發現跨domain ownership。V306現正加入全域running
@@ -269,8 +279,8 @@ contained boot，不是效能、Metal completion、媒體或 Looking Glass 測�
 | --- | --- | --- |
 | S11.1 exact tracked inventory／scope partition | CLOSED-STATIC | `source_review_inventory_test.py`固定目前1,500 paths與top-level partition：NootedGreen 42、tools 68、MacKernelSDK 1,227、Lilu.kext 40、sle_Internal 109、Xcode 4、workflow 1，另含docs/root metadata；新增、刪除、改名、symlink escape均fail closed。舊1,305-file快照只保留歷史用途。 |
 | S11.2 production source semantic review | CLOSED-STATIC | 六個`.cpp`、35個`.hpp`與Info.plist均在Xcode/compiler closure；`kern_gen11.cpp/.hpp`已逐段讀完，完整165-route與protocol contracts仍固定。Compiler/analyzer/cppcheck/clang-tidy未找到新的material defect；161個Gen11方法及95個route/original fields均有consumer。 |
-| S11.3 host tools／tests semantic review | CLOSED-STATIC | 既有tool inventory與V304 inert-iTCO/host-deadline contract保持；V306新增全域running-domain active XML inventory，拒絕任何其他domain已持有`0000:00:02.1`。targeted contract與完整static均通過。 |
+| S11.3 host tools／tests semantic review | CLOSED-STATIC | 既有tool inventory與V304 inert-iTCO/host-deadline contract保持；V306新增全域running-domain active XML inventory，拒絕任何其他domain已持有`0000:00:02.1`。targeted contract與完整static均通過。V307另在project contract固定無GPUinactive gate。 |
 | S11.4 vendored dependency closure | CLOSED-STATIC | 實際compiler closure固定為369 paths：41 product、15 Lilu與313 MacKernelSDK。Production的直接vendor surface另固定26個headers及68個external imports，其中16個由exact Lilu binary實際export、52個是kernel ABI；因此transitive include不再被誤列為逐項執行consumer。Lilu bundle/binary/plugin-start、`libkmod.a`及其兩個精確members/source identities均固定；Xcode contract固定唯一archive link input與plugin-start source。其餘vendored paths仍保留在1,500-path清冊，但不宣稱為active build implementation。 |
 | S11.5 payload／metadata／build closure | CLOSED-STATIC | 九個bundle／109 paths的content identity與topology已固定；43個plist/CodeResources可解析，15個MacOS payload全為x86_64 Mach-O。四個kernel binaries保留per-route review，11個userspace binaries只列opaque identity。`AppleIntelGraphicsShared.bundle`沿用受審12.5 resource-only layout，其plist所列但不存在的`AppleIntelGraphicsSharedIL`是唯一精確例外，新增任何缺 executable皆fail closed。Xcode與workflow contracts另固定6 sources、35 headers、3 configurations及artifact consumers。 |
 | S11.6 obsolete／duplicate／unowned code elimination | CLOSED-STATIC | 六個production translation units通過unused-function/private-field/internal-declaration硬錯誤；product無TODO/FIXME/XXX，161個Gen11 definitions與95個route/original fields皆有owner。62個tool programs及6個fixtures無未歸屬項；保留的legacy程式均由現行PF/VF隔離或轉譯contracts明確擁有，未找到可安全刪除而不改ABI的重複production path。 |
-| S11.7 integrated all-file regression | LOCAL-PASS / CI-PENDING | V306完整local static suite `/tmp/ngreen-static.wCvNGd`通過；尚缺clean commit/push及exact-SHA CI。完成前禁止啟動VM。 |
+| S11.7 integrated all-file regression | LOCAL-PASS / CI-PENDING | V307完整local static `/tmp/ngreen-static.nKkh89`通過；尚待clean commit/push及exact-SHA CI。完成前禁止啟動VM。 |

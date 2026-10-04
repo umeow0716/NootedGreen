@@ -32,15 +32,19 @@ void NGreen::init() {
 
 
 void NGreen::processPatcher(KernelPatcher &patcher) {
-	PANIC_COND(!ngResolveKernelTelemetry(patcher), "ngreen",
-		"Cannot resolve Tahoe kernel GPU telemetry ABI");
-
 	auto *devInfo = DeviceInfo::create();
 	PANIC_COND(!devInfo, "ngreen", "Failed to create DeviceInfo");
 	devInfo->processSwitchOff();
 
 	this->iGPU = OSDynamicCast(IOPCIDevice, devInfo->videoBuiltin);
-	PANIC_COND(!this->iGPU, "ngreen", "videoBuiltin is not IOPCIDevice");
+	if (!this->iGPU) {
+		DeviceInfo::deleter(devInfo);
+		SYSLOG("ngreen", "No built-in PCI GPU; NootedGreen remains inactive");
+		return;
+	}
+
+	PANIC_COND(!ngResolveKernelTelemetry(patcher), "ngreen",
+		"Cannot resolve Tahoe kernel GPU telemetry ABI");
 	// DeviceInfo keeps borrowed registry pointers and its deleter does not retain
 	// them.  The PCI object is needed later by lazy BAR0 mapping and config-read
 	// hooks, so make its plugin-lifetime ownership explicit before deleting the
@@ -71,6 +75,7 @@ void NGreen::processPatcher(KernelPatcher &patcher) {
 		"ngreen", "Failed to route PCI configuration readers");
 
 	DeviceInfo::deleter(devInfo);
+	this->driverReady = true;
 }
 
 
@@ -98,6 +103,8 @@ bool NGreen::setRMMIOIfNecessary() {
 }
 
 bool NGreen::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t address, size_t size) {
+	if (!this->driverReady)
+		return true;
 	if (gen11.processKext(patcher, index, address, size)) {
 		DBGLOG("ngreen", "Processed Generation 11 configuration");
 	}

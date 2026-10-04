@@ -61,6 +61,7 @@ public:
 private:
     uint32_t deviceId {0};
     IOPCIDevice *iGPU {nullptr};
+	bool driverReady {false};
 	
 	IOMemoryMap *rmmio {nullptr};
 	volatile UInt32 *rmmioPtr {nullptr};

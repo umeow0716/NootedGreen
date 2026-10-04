@@ -1,7 +1,7 @@
 # Tahoe SR-IOV protocol audit — in progress
 
 Updated: 2026-10-05. The last dynamic source baseline is `ce166c8`; the current
-offline-reviewed worktree is V306 active-VF ownership containment correction on
+offline-reviewed worktree is V307 no-device admission correction on
 `codex/tahoe-sriov-vf`. This is NOT a boot-test candidate or a successful
 driver baseline. The `ce166c8` run produced repeatable host PF DMAR faults
 followed by i915 hangs and a host reboot. Keep `macos-tahoe-sriov` shut off until the
@@ -20,6 +20,28 @@ KVMFR/client transport remains the intended receiving side.
 The authoritative dynamic-entry checklist is
 [`DYNAMIC_TEST_GATE.md`](DYNAMIC_TEST_GATE.md). Any open static gate keeps the
 VM hard hold in force.
+
+## V307 no-device admission correction (offline)
+
+- A read-only sparse raw snapshot of the post-test qcow2 was mounted with an
+  independently built read-only APFS tool.  It exposed a new panic at
+  `2026-10-05 06:23:28`, SHA-256 `09c192122fd36c71...`, at uptime 5.48 seconds.
+  The apparent 15-minute stall was the panic-stopped guest remaining inside
+  QEMU until the independent deadline.
+- The active AuxKC SHA-256 is `5b6e4766d385076d...`, byte-identical to
+  `AuxiliaryKernelExtensions.kc.candidate-ce166c8`, not the assumed original.
+  It loaded old NootedGreen UUID `03CD594E-A2EC-32D7-B5D7-7246F3494FD8` and
+  panicked at `videoBuiltin is not IOPCIDevice` because the maintenance XML had
+  correctly removed the only Intel PCI GPU.  The original AuxKC
+  `041a15e0415a2756...` is still preserved as `pre-ce166c8`.
+- NootedGreen's personality is rooted at `IOResources`, so an installed driver
+  must tolerate deliberate absence of the GPU.  V307 releases the temporary
+  `DeviceInfo`, logs an inactive state and returns before telemetry/PCI routes;
+  a new `driverReady` gate prevents every later private-kext patch callback.
+  Hardware-present PF/VF paths and their fail-closed ABI/protocol checks are
+  unchanged.  Recovery must restore the original AuxKC before another
+  maintenance boot.  V307 full static passes at
+  `/tmp/ngreen-static.nKkh89`; exact-SHA CI remains mandatory.
 
 ## V306 active-VF ownership correction (offline)
 

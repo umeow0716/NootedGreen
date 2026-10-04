@@ -10,6 +10,20 @@ The current dynamic-entry gate table is
 
 ## Scope
 
+2026-10-05 V307 no-device admission correction: a read-only APFS snapshot of
+the third maintenance boot exposed panic `09c192122fd36c71...` at 5.48 seconds,
+not a 15-minute live hang.  The active AuxKC SHA-256 was
+`5b6e4766d385076d...`, identical to `candidate-ce166c8`, and loaded old
+NootedGreen UUID `03CD594E-A2EC-32D7-B5D7-7246F3494FD8`.  With the VF removed,
+that driver deliberately panicked because `DeviceInfo::videoBuiltin` was not
+an `IOPCIDevice`.  The preserved original AuxKC `041a15e0415a2756...` remains
+on the Data volume.  V307 treats absence of a built-in PCI GPU as a legitimate
+inactive state: it releases `DeviceInfo`, returns before Tahoe telemetry or PCI
+routes, and gates all later private-kext processing on `driverReady`.  Real
+PF/VF paths retain all existing fail-closed checks.  Targeted project and
+1,500-path inventory contracts plus full static `/tmp/ngreen-static.nKkh89`
+pass; clean commit/push and exact-SHA CI are pending.
+
 2026-10-05 V306 active-VF ownership correction: the third no-VF maintenance
 boot proved that the guest can stall before SSH independently of VF attachment,
 while a separate running `win11` domain was found to own the exact target VF
