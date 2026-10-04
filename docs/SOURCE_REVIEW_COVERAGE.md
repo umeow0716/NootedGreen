@@ -7,6 +7,12 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 root snapshot: complete 32/64 PPGTT physical-root getters (0x20
+each) reviewed/pinned, concrete slot +0x148 and context task/private-table
+snapshot call checked. Existing 32-bit init revisited, not new review credit.
+Context CPU-image copies are not yet GuC registration/publication proof;
+root visibility and construction-failure admission remain incomplete.
+
 2026-10-04 pre-zero hook scope: complete 32-bit PPGTT expand (0x23e)
 reviewed/pinned, including descriptor rollback after software-index allocation
 failure. Imported IOMalloc/memset and rollback edge/clear checked. Direct

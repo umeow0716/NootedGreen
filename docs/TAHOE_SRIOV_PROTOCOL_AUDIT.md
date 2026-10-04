@@ -6955,6 +6955,31 @@ No executable patch or runtime mutation.
 
 ### Update fanout must participate in the same owner transaction
 
+Root snapshot versus hardware publication (2026-10-04): complete 32-bit
+getter 0x11e44/0x20 reviewed/pinned. It walks four inline parent records
++0x40/+0x60/+0x80/+0xa0, dereferences each descriptor +0x18 and returns four
+physical addresses without null tests or retains. Complete 64-bit getter
+0xd0ae/0x20 returns root +0x40's descriptor physical address and zeroes the
+other three output slots. Both concrete object vtable +0x148 bindings checked.
+
+Inside the previously reviewed context init, the instruction-aligned selected
+edge 0x7c29b obtains context's task +0x58, task private table +0x260, and calls
+that getter at 0x7c2ad into a four-qword stack array. The following loop copies
+the snapshot's upper/lower halves in reversed root order into context-image
+fields. This is CPU-image construction, not by itself the GuC publication
+boundary. No new complete context-init review credit is claimed.
+
+Revisited existing 32-bit table init: it zeroes four records and invokes three
+range-unmap virtuals before returning true; the body does not directly certify
+all root descriptors are nonnull. Therefore do not assume every successful
+table factory already satisfies the getter's four-nonnull requirement or that
+expand's parent-allocation rollback is construction-only without tracing the
+effective mappings/root consumers. Existing 32-bit runtime is not tested, and
+this is not a reproduced null fault. Next: effective context-image registration/
+scheduling and root update order versus table mutation/failure; collector must
+retain roots/backing until that real hardware boundary is safe. No deployment
+or VM start.
+
 Pre-zero hook caller scope (2026-10-04): function-bounded decoded direct-call
 inventory identifies descriptor release from 64-bit shrink levels, remap,
 expand failure paths, 32-bit free and 32-bit expand; releasePage's selected

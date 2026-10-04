@@ -9,6 +9,8 @@ import sys
 # Complete reviewed native bodies. This fixes the concrete Intel override
 # graph, not inherited timer APIs, dynamic callbacks or runtime completion.
 STAMP_IRQ_NATIVE = {
+    "__ZN31IGHardwarePerProcessPageTable3231getPageTableRootPhysicalAddressEPy": (0x20, "cd25ae2ea8652e97f3c1c2886a2e0bc2d3f768108abdf7f275e8469773dbb4e2"),
+    "__ZN31IGHardwarePerProcessPageTable6431getPageTableRootPhysicalAddressEPy": (0x20, "93122c3d3b36d35eb68786330a138b026db29a9bd24d533287dd739a8060643d"),
     "__ZN31IGHardwarePerProcessPageTable326expandE19GTTVirtualAddress32": (0x23e, "8b0e2172003ce89b7d08c603f55535e1c54d2c3d9380e53da00ad5ff83cde343"),
     "__ZN23IGAccelSharedUserClient11sharedStartEv": (0x40, "3ad72464337cc4e9fa4ac10461f44c34256cde6d1635212fc5cc34fe0fe510d1"),
     "__ZN11IGAccelTask11withOptionsEP16IntelAccelerator": (0x48, "294990cf7ca14e27020ecc569064444b73504a32e841c0856acbdb568081f207"),
@@ -860,6 +862,11 @@ def macho_inventory(path):
             ("__ZN15IGMemoryManager19newPageTableForTaskEP11IGAccelTask", "__ZN29IGHardwarePerProcessPageTable15synchronizeWithIS_EEvPKT_RK14IGAddressRangeb", 0xf969)):
         assert direct_branches(method, target) == [call], f"{path}: changed native per-task page-table factory/synchronization edge"
     global_table = value("__ZTV25IGHardwareGlobalPageTable")
+    for bits in (32, 64):
+        table = value(f"__ZTV31IGHardwarePerProcessPageTable{bits}")
+        getter = value(f"__ZN31IGHardwarePerProcessPageTable{bits}31getPageTableRootPhysicalAddressEPy")
+        assert struct.unpack_from("<Q", image, table + 16 + 0x148)[0] == getter, f"{path}: changed PPGTT root getter virtual"
+    assert image[0x7c29b:0x7c2b3] == bytes.fromhex("498b4558488bb860020000488b07488d75b0ff9048010000"), f"{path}: changed context task/private-table root snapshot edge"
     expand32 = "__ZN31IGHardwarePerProcessPageTable326expandE19GTTVirtualAddress32"
     assert direct_branches(expand32, "__ZN10IGPagePool14PageDescriptor7releaseEv") == [0x12646], f"{path}: changed 32-bit expansion software-index allocation rollback"
     assert image[0x1264f:0x12656] == bytes.fromhex("48 c7 00 00 00 00 00"), f"{path}: changed 32-bit rollback descriptor clear"
