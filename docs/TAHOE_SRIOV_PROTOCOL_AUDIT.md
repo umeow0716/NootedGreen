@@ -6961,6 +6961,33 @@ No executable patch or runtime mutation.
 
 ###### Complete waitForSpace reservation and failure ordering
 
+Rechecked complete manager releaseFromPageTableForTask f6aa/112 and added
+explicit fan-out edge/loop anchors. It captures mapping GPU range via virtual
+accessors, walks task +0x268's raw list, calls releaseRange at f74e for each
+table and ANDs results without short-circuiting. An empty list returns true.
+Its selected body has no local table retain or lock acquisition. Existing
+releaseRange unconditionally true does not represent acknowledged retirement.
+These behaviors were previously documented; the new anchors make the concrete
+transaction scope regression-checked, not newly discovered.
+
+A candidate retirement owner must cover the complete affected-table fan-out,
+not just a single leaf/table: acquire proven outer serialization and stabilize
+the list/table ownership, prevent new relevant submissions, unlink affected
+PTEs while retaining old page descriptors before any final return/zeroing,
+perform the required invalidation and observe its matching completion, then
+release retained pages. Failure must retain old tables/backing and invoke
+actual Host containment rather than return into ordinary backing destruction.
+Admission must not be reopened before the transaction finishes. These are
+implementation requirements, not an implemented hook or tested runtime flow.
+
+Manager-only post-call invalidation cannot meet the pre-zeroing requirement;
+a collector must intervene before final descriptor/page return during the
+fan-out. A single unowned global collector cannot establish per-task/thread
+exclusivity or cover reentrancy, shared descriptors, bootstrap and unrelated
+pool users. Next: effective mapping-release outer lock/admission and stable
+task/table ownership before choosing collector storage/hook boundaries.
+No production/runtime change; dynamic hold remains.
+
 PPGTT retirement follow-up rechecks the already-reviewed bodies and pins
 concrete ordering edges: leaf shrink writes the parent dummy PTE at cf0b,
 decrements parent count, and calls descriptor release at cf1b. The descriptor

@@ -628,6 +628,8 @@ def macho_inventory(path):
     assert image[0x14518:0x1451e] == bytes.fromhex("ff 90 30 01 00 00"), f"{path}: changed releaseRange unmap virtual"
     assert direct_branches("__ZN19IGHardwarePageTable12releaseRangeERK14IGAddressRange", "__ZN16IntelAccelerator27flushHardwareAfterGttUpdateEv") == [0x14522], f"{path}: changed post-unmap deferred-flush edge"
     assert image[0x14573:0x14575] == bytes.fromhex("b0 01"), f"{path}: changed unconditional releaseRange success"
+    assert direct_branches("__ZN15IGMemoryManager27releaseFromPageTableForTaskEP11IGAccelTaskP16IGAccelMemoryMap", "__ZN19IGHardwarePageTable12releaseRangeERK14IGAddressRange") == [0xf74e], f"{path}: changed task fan-out release edge"
+    assert image[0xf753:0xf75f] == bytes.fromhex("41 20 c7 48 8b 5b 08 48 85 db 75 e9"), f"{path}: changed non-short-circuit task page-table release loop"
     shrink_leaf = "__ZN31IGHardwarePerProcessPageTable6411shrinkLevelINS_10LevelEntryILm9E17GTTPageTableEntryEENS1_ILm9E21GTTPageDirectoryEntryEEEEbRT_yPT0_ym"
     assert direct_branches(shrink_leaf, "__ZN10IGPagePool14PageDescriptor7releaseEv") == [0xcf1b], f"{path}: changed pruned-table descriptor release edge"
     assert direct_branches("__ZN10IGPagePool14PageDescriptor7releaseEv", "__ZN10IGPagePool11releasePageEPKNS_14PageDescriptorE") == [0xbb7d], f"{path}: changed final-reference pool retirement edge"
