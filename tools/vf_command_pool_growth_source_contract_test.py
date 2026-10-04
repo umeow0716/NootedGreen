@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Source contract for the owner-scoped System-KC pool-growth wrapper."""
+"""Source contract for owner-scoped VF command-pool repairs."""
 import sys
 from pathlib import Path
 
@@ -20,6 +20,13 @@ REQUIRED = (
     "NGIOAccelCommandPool::extendedInitReplace, 1",
     "NGIOAccelCommandPool::hasReviewedRectListCapacity(",
     "NGIOAccelCommandPool::rectListCapacityReplace, 1",
+    "NGIOAccelCommandPool::hasReviewedResolveHizCapacity(",
+    "NGIOAccelCommandPool::resolveHizCapacityReplace, 1",
+    '"V268: resolved IOAccelerator lifecycle and guarded VF pool growth"',
+    '"V268: rejecting incomplete VF command-pool growth old=%u new=%u current=%d"',
+    '"V269: guarded VF extended-context pool construction"',
+    '"V270: bounded VF rect-list command requests to 0xfff8 bytes"',
+    '"V271: require full usable VF resolve-HIZ command capacity"',
     "gVfAccelerator = that;",
 )
 
@@ -60,19 +67,21 @@ def accepts(source: str) -> bool:
     return (driver.index("hasReviewedExtendedInitContract") <
             driver.index("extendedInitPatch.apply") <
             driver.index("hasReviewedRectListCapacity") <
-            driver.index("rectListCapacityPatch.apply"))
+            driver.index("rectListCapacityPatch.apply") <
+            driver.index("hasReviewedResolveHizCapacity") <
+            driver.index("resolveHizCapacityPatch.apply"))
 
 
 def main() -> None:
     if len(sys.argv) != 2:
         raise SystemExit("usage: vf_command_pool_growth_source_contract_test.py kern_gen11.cpp")
     source = Path(sys.argv[1]).read_text(encoding="utf-8")
-    assert accepts(source), "missing or reordered VF pool-growth contract"
+    assert accepts(source), "missing or reordered VF command-pool contract"
     for fragment in REQUIRED:
         assert source.count(fragment) == 1, f"ambiguous source contract: {fragment}"
         assert not accepts(source.replace(fragment, "MUTATED", 1)), \
             f"mutation escaped source contract: {fragment}"
-    print(f"PASS: owner-scoped VF pool-growth route and {len(REQUIRED)} rejected mutations")
+    print(f"PASS: owner-scoped VF command-pool routes and {len(REQUIRED)} rejected mutations")
 
 
 if __name__ == "__main__":

@@ -92,7 +92,7 @@ if "$compiler" -std=c++14 -Wall -Wextra -Werror -fsanitize=address,undefined \
     "$task_output/pool-patch-test" \
         sle_Internal/le/AppleIntelTGLGraphics.kext/Contents/MacOS/AppleIntelTGLGraphics \
         sle_Internal/sle/AppleIntelTGLGraphics.kext/Contents/MacOS/AppleIntelTGLGraphics; then
-    printf 'PASS offline VF command-pool constructor patch anchors\n'
+    printf 'PASS offline VF command-pool patch anchors\n'
 else
     failed=1
 fi

@@ -17,7 +17,8 @@ int main(int argc, char **argv) {
 	assert(argc == 3);
 	for (int argument = 1; argument < argc; ++argument) {
 		auto image = readFile(argv[argument]);
-		assert(image.size() >= 0x7cfb0 && image.size() >= 0x35960);
+		assert(image.size() >= 0x8b1c4 && image.size() >= 0x7cfb0 &&
+		       image.size() >= 0x35960);
 		assert(hasReviewedExtendedInitContract(image.data() + 0x7cebc,
 		                                      reviewedExtendedInitSize));
 		size_t matches = 0;
@@ -59,5 +60,30 @@ int main(int argc, char **argv) {
 			static_cast<uint32_t>(image[0x33c9a]) << 16 |
 			static_cast<uint32_t>(image[0x33c9b]) << 24;
 		assert(limit == blit3dUsableBytes);
+		assert(hasReviewedResolveHizCapacity(image.data() + 0x85a8c,
+		                                      reviewedResolveHizSize));
+		matches = 0;
+		for (size_t offset = 0; offset + sizeof(resolveHizCapacityFind) <= image.size();
+		     ++offset) {
+			bool equal = true;
+			for (size_t i = 0; i < sizeof(resolveHizCapacityFind); ++i)
+				equal &= image[offset + i] == resolveHizCapacityFind[i];
+			if (equal) {
+				assert(offset == 0x85afa);
+				++matches;
+			}
+		}
+		assert(matches == 1);
+		for (size_t i = 0; i < sizeof(resolveHizCapacityReplace); ++i)
+			image[0x85afa + i] = resolveHizCapacityReplace[i];
+		const uint32_t request = static_cast<uint32_t>(image[0x85afb]) |
+			static_cast<uint32_t>(image[0x85afc]) << 8 |
+			static_cast<uint32_t>(image[0x85afd]) << 16 |
+			static_cast<uint32_t>(image[0x85afe]) << 24;
+		assert(image[0x85afa] == 0xbe && request == resolveUsableDwords);
+		assert(image[0x85b0f] == 0x48 && image[0x85b10] == 0x89 &&
+		       image[0x85b11] == 0xdf && image[0x85b12] == 0x48 &&
+		       image[0x85b13] == 0x89 && image[0x85b14] == 0x55 &&
+		       image[0x85b15] == 0xc8);
 	}
 }

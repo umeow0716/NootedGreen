@@ -1,12 +1,51 @@
 # Tahoe SR-IOV protocol audit — in progress
 
 Updated: 2026-10-04. The last dynamic source baseline is `ce166c8`; the latest
-completed offline-reviewed checkpoint is V267 event-timeout fail-stop on
+completed offline-reviewed checkpoint is V271 VF resolve-HIZ full-slot admission on
 `codex/tahoe-sriov-vf`. This is NOT a boot-test candidate or a successful
 driver baseline. The `ce166c8` run produced repeatable host PF DMAR faults
 followed by i915 hangs and a host reboot. Keep `macos-tahoe-sriov` shut off until the
 corrected code passes the remaining offline review and every independently
 enforced containment precondition.
+
+## V268–V271 VF command-pool admission repairs (offline)
+
+The exact Tahoe 25G229 resolve-context initializer has one direct native caller:
+`IGHardwareResolveContext::initialize()`. A newly constructed resolve pool has
+`0xff8` usable bytes; `resolve_init_ctx_g7()` writes and publishes exactly
+`0x9b8`, leaving only `0x640`. The adjacent `resolve_hiz_g7()` originally asks
+`getBufferPtrNoInc()` for that remaining capacity minus two dwords (`0x18e`), so
+the getter returns the partial tail. HIZ assembly then derives a separate 4-KiB
+ceiling from that returned pointer, which is outside the actual slot.
+
+V271 changes only the classified VF request to the pool's full usable capacity,
+`0x3fe` dwords. The native getter must therefore submit/rotate a partial slot and
+recheck capacity before returning; on a fresh slot the request still fits. The
+complete `0x5738` HIZ body is identity-pinned, while the reviewed claim is limited
+to its capacity control flow: the early ceiling is start+`0xec0`, the resumed
+ceiling is no larger than start+`0x1000`, and all four fixed tails test `+0x6c`
+before advancing `+0x64`, preserving the configured final eight bytes. Variable
+phases use smaller derived ceilings. This is not a claim that every HIZ command
+semantic has been reviewed.
+
+The exact System-KC getter test executes both native capacity comparisons. The
+original `0x18e` request returns the old `base+0x9b8`; the V271 request takes a
+mocked, independently pinned submit/selection transition and returns a fresh
+base whose `0xff8` usable region contains the entire request. Hardware/channel
+callbacks are mocked, so this is a control-flow proof rather than DMA quiescence
+or runtime validation.
+
+V268–V270 are the non-colliding trace identifiers for the already added growth
+postcondition, constructor failure propagation and rect-list tail bound. Earlier
+draft labels V261–V263 collided with completed historical checkpoints and were
+renumbered without changing behavior.
+
+This remains deliberately undeployed. If native selection/growth cannot produce
+a complete slot, the getter can still return an inadequate pointer after its
+void selection path. V268 catches the reviewed growth false-success case, but
+the direct selection failure and the getter's final capacity postcondition are
+still open. PF behavior remains native. The VM/host containment hold therefore
+remains in force.
 
 ## V267 native event-timeout failure boundary (offline)
 

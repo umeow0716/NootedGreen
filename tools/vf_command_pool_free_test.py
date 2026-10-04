@@ -22,6 +22,72 @@ assert hashlib.sha256(image[0x14b6b2bc:0x14b6b3ca]).hexdigest() == \
     'bf2d3995728e15a07c3e8a2b0adebd4f8e9ecc063ee4767e44bc4c5e5763567a'
 
 
+def run_resolve_request(request):
+    """Execute the real getter around the resolve-context first-use cursor.
+
+    The submit body itself is already independently hash-pinned.  Its hardware
+    and channel callbacks are deliberately replaced here with the one state
+    transition relevant to the getter's post-submit capacity recheck: a fresh
+    0xff8-byte slot becomes current.
+    """
+    uc = Uc(UC_ARCH_X86, UC_MODE_64)
+    uc.mem_map(0x14b60000, 0xb0000)
+    uc.mem_write(0x14b60000, image[0x14b60000:0x14c10000])
+    uc.mem_map(0x300000, 0x310000)
+    pool, channel, channel_vtable = 0x410000, 0x420000, 0x430000
+    old_base, fresh_base = 0x500000, 0x502000
+
+    def put(address, value):
+        uc.mem_write(address, struct.pack('<Q', value))
+
+    def get(address):
+        return struct.unpack('<Q', uc.mem_read(address, 8))[0]
+
+    for offset, value in ((0x1848, old_base),
+                          (0x1850, old_base + 0xff8),
+                          (0x1858, old_base + 0x9b8)):
+        put(pool + offset, value)
+    put(pool + 0x20, channel)
+    put(channel, channel_vtable)
+    put(channel_vtable + 0x148, 0x600010)
+    events = []
+
+    def ret(value=0):
+        sp = uc.reg_read(UC_X86_REG_RSP)
+        uc.reg_write(UC_X86_REG_RAX, value)
+        uc.reg_write(UC_X86_REG_RIP, get(sp))
+        uc.reg_write(UC_X86_REG_RSP, sp + 8)
+
+    def hook(machine, address, size, data):
+        if address == 0x14b6b3ca:
+            # Model the already reviewed submit/rotation success tail.  Keeping
+            # this at the native callee boundary lets the real getter execute
+            # both capacity comparisons around it.
+            events.append('submit-and-select-fresh-slot')
+            for offset, value in ((0x1848, fresh_base),
+                                  (0x1850, fresh_base + 0xff8),
+                                  (0x1858, fresh_base)):
+                put(pool + offset, value)
+            ret()
+        elif address == 0x600010:
+            events.append('clear-channel-after-submit')
+            ret()
+        elif address == 0x600060:
+            uc.emu_stop()
+
+    uc.hook_add(UC_HOOK_CODE, hook)
+    sp = 0x5ff008
+    put(sp, 0x600060)
+    uc.reg_write(UC_X86_REG_RSP, sp)
+    uc.reg_write(UC_X86_REG_RDI, pool)
+    uc.reg_write(UC_X86_REG_RSI, request)
+    uc.emu_start(0x14b6b2bc, 0x600061, count=20000)
+    assert uc.reg_read(UC_X86_REG_RIP) == 0x600060
+    returned = uc.reg_read(UC_X86_REG_RAX)
+    assert returned + request * 4 <= get(pool + 0x1850)
+    return returned, events
+
+
 def run(slots, record, current=-1, linked=False, failure=None, runtime=False, request=None,
         old_event_complete=True, growth_guard=False):
     assert current == -1 or 0 <= current < slots
@@ -276,10 +342,20 @@ run(1, False, current=0, failure='gpu-map', runtime=True, request=1,
     old_event_complete=False)
 run(1, False, current=0, failure='gpu-map', runtime=True, request=1,
     old_event_complete=False, growth_guard=True)
+original_resolve_request = ((0xff8 - 0x9b8) >> 2) - 2
+assert original_resolve_request == 0x18e
+returned, rollover_events = run_resolve_request(original_resolve_request)
+assert returned == 0x500000 + 0x9b8 and rollover_events == []
+returned, rollover_events = run_resolve_request(0x3fe)
+assert returned == 0x502000
+assert rollover_events == ['submit-and-select-fresh-slot',
+                           'clear-channel-after-submit']
 print('PASS 24 KC partial/current/linked-pool free fixtures; complete precedes release;'
       ' five actual init/growth failure states cleaned;'
       ' runtime growth false-success/current preservation reproduced;'
       ' pointer capacity boundary and oversize return reproduced without writes;'
       ' pending-event growth false-success skips finish and reuses old slot;'
       ' growth postcondition rejection restores the pending-event finish path;'
+      ' resolve first-use dynamic request stays in the 0x640-byte tail while'
+      ' fixed 0x3fe dwords takes the reviewed submit/recheck path to a fresh slot;'
       ' callbacks mocked, no actual event/DMA quiescence proof')

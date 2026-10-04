@@ -18,9 +18,14 @@ constexpr uint16_t slotCapacity = 256;
 constexpr size_t reviewedGrowthSize = 0x202;
 constexpr size_t reviewedExtendedInitSize = 0xf4;
 constexpr size_t reviewedRectListSize = 0x24b0;
+constexpr size_t reviewedResolveHizSize = 0x5738;
 constexpr uint32_t blit3dBufferBytes = 0x10000;
 constexpr uint32_t blit3dReservedBytes = 8;
 constexpr uint32_t blit3dUsableBytes = blit3dBufferBytes - blit3dReservedBytes;
+constexpr uint32_t resolveBufferBytes = 0x1000;
+constexpr uint32_t resolveReservedBytes = 8;
+constexpr uint32_t resolveUsableDwords =
+	(resolveBufferBytes - resolveReservedBytes) / sizeof(uint32_t);
 
 // UUID admission is primary. These exact instruction anchors additionally
 // bind the count publication, void selection call and false-success tail used
@@ -87,6 +92,40 @@ inline bool hasReviewedRectListCapacity(const uint8_t *body, size_t length) {
 		return false;
 	for (size_t i = 0; i < sizeof(rectListCapacityFind); ++i)
 		if (body[0x7e5 + i] != rectListCapacityFind[i])
+			return false;
+	return true;
+}
+
+// The native request used (end-cursor)/4-2, which is tautologically small
+// enough for the current slot even when less than one HIZ chunk remains.  The
+// assembler then bounds commands relative to its returned pointer plus 4 KiB.
+// Require the complete configured 0xff8-byte usable region instead: this makes
+// the native getter submit/rotate a partially occupied slot before assembly.
+constexpr uint8_t resolveHizCapacityFind[] = {
+	0x48, 0x8b, 0xb3, 0x50, 0x18, 0x00, 0x00,
+	0x48, 0x2b, 0xb3, 0x58, 0x18, 0x00, 0x00,
+	0x48, 0xc1, 0xee, 0x02,
+	0x83, 0xc6, 0xfe,
+	0x48, 0x89, 0xdf,
+	0x48, 0x89, 0x55, 0xc8,
+};
+constexpr uint8_t resolveHizCapacityReplace[] = {
+	0xbe, 0xfe, 0x03, 0x00, 0x00,       // mov esi, 0x3fe dwords
+	0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
+	0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
+	0x48, 0x89, 0xdf,                   // mov rdi, rbx
+	0x48, 0x89, 0x55, 0xc8,             // mov [rbp - 0x38], rdx
+};
+static_assert(sizeof(resolveHizCapacityFind) == sizeof(resolveHizCapacityReplace),
+	"resolve HIZ capacity patch must preserve instruction extent");
+static_assert(resolveUsableDwords == 0x3fe,
+	"reviewed resolve pool usable capacity changed");
+
+inline bool hasReviewedResolveHizCapacity(const uint8_t *body, size_t length) {
+	if (!body || length != reviewedResolveHizSize)
+		return false;
+	for (size_t i = 0; i < sizeof(resolveHizCapacityFind); ++i)
+		if (body[0x6e + i] != resolveHizCapacityFind[i])
 			return false;
 	return true;
 }

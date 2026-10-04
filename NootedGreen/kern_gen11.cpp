@@ -2003,7 +2003,7 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		};
 		PANIC_COND(!patcher.routeMultiple(index, commandPoolRoutes, address, size),
 		           "ngreen", "Cannot route VF command-pool growth postcondition");
-		SYSLOG("ngreen", "V261: resolved IOAccelerator lifecycle and guarded VF pool growth");
+		SYSLOG("ngreen", "V268: resolved IOAccelerator lifecycle and guarded VF pool growth");
 		return true;
 	}
 
@@ -2254,7 +2254,7 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			PANIC_COND(!extendedInitPatch.apply(
 			               patcher, extendedInit, extendedFree - extendedInit),
 			           "ngreen", "Failed to propagate VF command-pool init failure");
-			SYSLOG("ngreen", "V262: guarded VF extended-context pool construction");
+			SYSLOG("ngreen", "V269: guarded VF extended-context pool construction");
 
 			// The rect-list request is 64-byte aligned, but native admitted exactly
 			// 64 KiB while this pool reserves its final eight bytes. Bound only this
@@ -2280,7 +2280,35 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			               patcher, rectListCapacityStart,
 			               rectListCapacityEnd - rectListCapacityStart),
 			           "ngreen", "Failed to reserve the VF rect-list pool tail");
-			SYSLOG("ngreen", "V263: bounded VF rect-list command requests to 0xfff8 bytes");
+			SYSLOG("ngreen", "V270: bounded VF rect-list command requests to 0xfff8 bytes");
+
+			// HIZ assembly uses a 4 KiB window relative to the pointer returned by
+			// getBufferPtrNoInc(). Its native dynamic request always fit the current
+			// tail and therefore failed to rotate the 0x9b8-byte initialization prefix.
+			// Require one complete configured usable region so the native getter
+			// submits a partial slot before any HIZ command is written.
+			mach_vm_address_t resolveHizStart = 0, resolveHizEnd = 0;
+			KernelPatcher::SolveRequest resolveHizBounds[] = {
+				{"__Z14resolve_hiz_g7P25IOAccelCommandBufferPool2P14IGMappedBufferP22depth_resolve_params_tR15resolve_phase_tRjS7_yb",
+				 resolveHizStart},
+				{"__ZL25hiz_first_instr_optimizedP24g8_hiz_resolve_cmd_buf_tPK22depth_resolve_params_tbjjjjR22SGfx3dStateDepthBufferR26SGfx3dStateHierDepthBuffery",
+				 resolveHizEnd},
+			};
+			PANIC_COND(!patcher.solveMultiple(
+			               index, resolveHizBounds, address, size) ||
+			           resolveHizEnd <= resolveHizStart ||
+			           !NGIOAccelCommandPool::hasReviewedResolveHizCapacity(
+			               reinterpret_cast<const uint8_t *>(resolveHizStart),
+			               resolveHizEnd - resolveHizStart),
+			           "ngreen", "Changed VF resolve-HIZ command-pool capacity contract");
+			LookupPatchPlus const resolveHizCapacityPatch {
+				activeKext, NGIOAccelCommandPool::resolveHizCapacityFind,
+				NGIOAccelCommandPool::resolveHizCapacityReplace, 1,
+			};
+			PANIC_COND(!resolveHizCapacityPatch.apply(
+			               patcher, resolveHizStart, resolveHizEnd - resolveHizStart),
+			           "ngreen", "Failed to require a fresh VF resolve-HIZ command slot");
+			SYSLOG("ngreen", "V271: require full usable VF resolve-HIZ command capacity");
 
 			// Tahoe's GuC factory releases the object after initWithOptions()
 			// already called virtual free() on the same failure path. XNU's
@@ -3032,7 +3060,7 @@ bool Gen11::vfAllocMoreCommandBuffers(void *pool)
 		nativeSuccess, maximum, previousCount, publishedCount, current,
 		memory, gpuMapping, cpuMapping);
 	if (!complete)
-		SYSLOG("ngreen", "V261: rejecting incomplete VF command-pool growth old=%u new=%u current=%d",
+		SYSLOG("ngreen", "V268: rejecting incomplete VF command-pool growth old=%u new=%u current=%d",
 		       previousCount, publishedCount, current);
 	return complete;
 }

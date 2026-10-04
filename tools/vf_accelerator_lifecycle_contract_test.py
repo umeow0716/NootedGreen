@@ -808,6 +808,55 @@ def macho_inventory(path):
     for remaining in range(8):
         request = ((remaining >> 2) - 2) & 0xffffffff
         assert request * 4 > remaining
+    resolve_hiz = value("__Z14resolve_hiz_g7P25IOAccelCommandBufferPool2P14IGMappedBufferP22depth_resolve_params_tR15resolve_phase_tRjS7_yb")
+    resolve_hiz_end = value("__ZL25hiz_first_instr_optimizedP24g8_hiz_resolve_cmd_buf_tPK22depth_resolve_params_tbjjjjR22SGfx3dStateDepthBufferR26SGfx3dStateHierDepthBuffery")
+    assert (resolve_hiz, resolve_hiz_end - resolve_hiz) == (0x85a8c, 0x5738), \
+        f"{path}: changed resolve-HIZ body boundary"
+    assert hashlib.sha256(image[resolve_hiz:resolve_hiz_end]).hexdigest() == \
+        "f19d614b67be8a3d259716962abd31b86ae58ac6f39c916c2f95a0c0b853878e", \
+        f"{path}: changed resolve-HIZ capacity control flow"
+    assert image[0x85d37:0x85d3e] == bytes.fromhex("4c8db300100000"), \
+        f"{path}: changed resolve-HIZ 4-KiB ceiling"
+    assert image[0x85f66:0x85f6b] == bytes.fromhex("bbc00e0000") and \
+        image[0x85fb4:0x85fbb] == bytes.fromhex("48039de0feffff"), \
+        f"{path}: changed resolve-HIZ conservative early ceiling"
+    fixed_tail_guards = (
+        (0x86bd9, bytes.fromhex("498d426c4989de4839d87612"), 0x86ca8),
+        (0x87dc5, bytes.fromhex("498d426c4c39c0762b"), 0x87eaa),
+        (0x88e97, bytes.fromhex("498d426c4c39f07620"), 0x88f71),
+        (0x8af4b, bytes.fromhex("498d426c4c39f87612"), 0x8b017),
+    )
+    for guard, expected, advance in fixed_tail_guards:
+        assert image[guard:guard + len(expected)] == expected, \
+            f"{path}: changed resolve-HIZ fixed-tail guard at {guard:#x}"
+        assert image[advance:advance + 4] == bytes.fromhex("4983c264"), \
+            f"{path}: changed resolve-HIZ fixed-tail advance at {advance:#x}"
+    # Each pinned fixed tail admits cursor+0x6c but advances only 0x64.  The
+    # largest enclosing ceiling is start+0x1000, so publication remains at or
+    # below the pool's start+0xff8 usable end.  Earlier phases use start+0xec0;
+    # variable phases derive still smaller -0x80/-0x180 sub-ceilings.
+    for ceiling in (0xec0, 0x1000):
+        for cursor in range(ceiling + 1):
+            if cursor + 0x6c <= ceiling:
+                assert cursor + 0x64 <= 0xff8
+    resolve_init = value("__Z19resolve_init_ctx_g7P25IOAccelCommandBufferPool2P14IGMappedBufferyb")
+    resolve_ccs = value("__Z11resolve_ccsP25IOAccelCommandBufferPool2P14IGMappedBufferP22color_resolve_params_tbRK8IGVectorI11blit_rect_t25IGIOMallocAllocatorPolicyE")
+    resolve_initialize = "__ZN24IGHardwareResolveContext10initializeEv"
+    assert (resolve_init, resolve_ccs - resolve_init) == (0x8c1b8, 0x972), \
+        f"{path}: changed resolve-init body boundary"
+    assert hashlib.sha256(image[resolve_init:resolve_ccs]).hexdigest() == \
+        "ef5baceedc59c0d8c5eb2049b7fbed9596a88e3a09f16fdd4f4f676965511639", \
+        f"{path}: changed resolve-init write/cursor body"
+    assert next_symbol(value(resolve_initialize)) - value(resolve_initialize) == 0x5e and \
+        hashlib.sha256(image[value(resolve_initialize):next_symbol(value(resolve_initialize))]).hexdigest() == \
+        "c3bd88fccab80a801b0196ede1e69042386a18e7d4a56c7ca86342a1b8185e15", \
+        f"{path}: changed resolve-context initializer"
+    assert direct_branches(resolve_initialize,
+                           "__Z19resolve_init_ctx_g7P25IOAccelCommandBufferPool2P14IGMappedBufferyb") == [0x7d8b3], \
+        f"{path}: changed resolve-init direct caller"
+    assert image[0x8cb06:0x8cb11] == bytes.fromhex("4881c3b8090000488b7dc8"), \
+        f"{path}: changed resolve-init fixed write extent"
+    assert 0x9b8 <= 0x1000 - 8
     for backing_name, backing_address, backing_bytes in (
             ("_g7_resolve_scratch_space_size", 0xc26c0, 0x5100),
             ("_blit3d_scratch_space_size", 0xb0c40, 0xd240)):

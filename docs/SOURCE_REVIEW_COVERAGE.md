@@ -7,6 +7,27 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 command-pool capacity delta: complete `resolve_init_ctx_g7`
+`0x8c1b8/0x972` and its sole direct `IGHardwareResolveContext::initialize`
+caller `0x7d85a/0x5e` are full-body hash-pinned. The initializer writes/publishes
+`0x9b8` into a fresh resolve slot with `0xff8` usable bytes. Complete
+`resolve_hiz_g7` `0x85a8c/0x5738` is identity-pinned, but only its request,
+ceilings and fixed-tail capacity control flow is credited as reviewed; this is
+not full HIZ command-semantic coverage. Native first use asks for only `0x18e`
+dwords and reuses the `0x640` tail while later bounding from the returned
+pointer plus 4 KiB. V271 changes the classified-VF request to `0x3fe` dwords so the native
+getter takes its submit/select/recheck path. Paired payload patch anchors, fixed
+tail arithmetic, and exact System-KC getter execution with a mocked fresh-slot
+transition pass offline. Growth false-success is guarded, but direct void
+selection failure and the getter's final capacity postcondition remain open;
+no runtime, DMA-safety, PF or successful-acceleration claim follows.
+
+Traceability delta: the recently introduced growth, construction and rect-list
+repairs are relabeled V268, V269 and V270; V271 is the HIZ capacity repair.
+This corrects collisions with the already completed historical V261–V263
+checkpoints without altering their code paths. A source mutation contract pins
+the new ordering and identifiers.
+
 Exact20-entry native external relocation inventory for command-pool
 setBufferPtr is now enforced across both archives. One-time decoded search
 found no direct destination operand at displacement1858 in defined native
