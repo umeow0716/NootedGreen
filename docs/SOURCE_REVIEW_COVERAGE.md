@@ -10,6 +10,23 @@ The current dynamic-entry gate table is
 
 ## Scope
 
+2026-10-04 Surface/base-client delta: the paired Tahoe System KC contract now
+pins complete `IOAccelSurface` (19), `IOAccelDevice2` (10) and
+`IOAccelSharedUserClient2` (21) selector tables, argument descriptors,
+get-target/external dispatch bodies and Surface special dispatch records. The
+base and legacy Surface bodies, exact accelerator mutex/busy scopes, inner
+no-relock helpers and copy/swap/update virtual edges are complete-body pinned.
+Shared dirty-ring selector 11 is bounded as CPU resource-state processing, not
+a newly identified GPU submitter. Both Intel payloads additionally pin the
+`IGAccelSurface` factory, effective vtable and complete concrete copy/swap/
+flush/forward bodies through their `submitBlit`, pending-wait and accelerator
+swap-copy edges. P5a is therefore closed as an inventory only. GLContext,
+GLDrawable, SurfaceMTL, MemoryInfo, display/flip, internal producers, counted
+admission and drain ordering remain open; no production or runtime state was
+changed. Targeted paired-KC/dual-payload contracts and the full static suite at
+`/tmp/ngreen-static.699HQl` pass; only the two known SDK macro redefinition
+warnings remain.
+
 2026-10-04 command-queue admission-boundary delta: the paired Tahoe System KC
 contract now pins the complete external/member command-queue submit,
 per-buffer submit, both command processors, acquire/release helper,

@@ -50,6 +50,23 @@ STAMP_IRQ_NATIVE = {
     "__ZN16IntelAccelerator15newVideoContextEv": (0x8, "5b1ee01dedea0fcb3ecce46b2207fda587d289c2e69a0afdb9d54f2595762f2e"),
     "__ZN16IntelAccelerator10newContextEj": (0x50, "571ddffde200f64d5b0de2839894e7fd8386d7c35bdd6df764a0a3699fd39f35"),
     "__ZN16IntelAccelerator15newCommandQueueEv": (0x18, "c655320edb4c511056ac0203f1e828cedad57cdd734aa3150b5f634455b1a0c5"),
+    "__ZN16IntelAccelerator10newSurfaceEv": (0x18, "a7ce9a95b902fe369584da12ceae14c50c09e4784eec0b96dfafc172beee7081"),
+    "__ZN14IGAccelSurface14copyFromBufferEiiiijjP12IOAccelEventP16IOAccelResource2P16IOAccelSysMemoryjyj": (0x2e, "dbfaa5261320d7206b8dc9368efbbd1d58f2682c8bd59aae3ed881c0937be6b2"),
+    "__ZN14IGAccelSurface14copyFromBufferEiiiijjP12IOAccelEventP16IOAccelResource2jP16IOAccelSysMemoryjyj": (0x7e, "f2f895ab897049ada8963129c913c6b7308f54e4174e536c065e9367c57b7c21"),
+    "__ZN14IGAccelSurface13copyBufferDMAEiiiijjP12IOAccelEventP16IOAccelResource2yP16IOAccelSysMemoryyyjj": (0x896, "a53c9b7b76e76a4c71bb9fe6eca7138b678011c0ac80ba123c2111b134ae3cac"),
+    "__ZN14IGAccelSurface12copyToBufferEiiiijjP12IOAccelEventP16IOAccelResource2P16IOAccelSysMemoryjyj": (0x70, "f650f888f5552bc5873cf5e9aa7254fb6dee6895f38c054ced5e911b23944262"),
+    "__ZN14IGAccelSurface14submitSwapCopyEP12IOAccelEventP16IOAccelResource2S3_": (0x42, "c911b98dc3b390cffc24590f60af18417de3c6ce640c174844b9c987fdb3d2d2"),
+    "__ZN14IGAccelSurface15submitSwapFlushEP12IOAccelEventP16IOAccelResource2S3_PK19IOAccelSwapFlushRecjjjPK13IOAccelBounds": (0x7d0, "36deaace4adf6a137d59bae39463b43d7a98e15af5f38748fdd2119eb5ddd889"),
+    "__ZN14IGAccelSurface13didSubmitSwapEjj": (0x9c, "43e8f9c7960c78e596a6eaff2e7f5c35219231544858ab0375ece76194f5115b"),
+    "__ZN14IGAccelSurface17isBackBufferReadyEj": (0x11a, "7327feb95ef3718a26d8df22adbfcbdb9365433187e331a4ad007917f0836914"),
+    "__ZN14IGAccelSurface17submitCopyForwardEP12IOAccelEventjP16IOAccelResource2S3_PK13IOAccelBoundsj": (0x4e6, "20a3fe93bad78ff15508a73f4bb2ed23e9faff363e366aa0d8f37967f66f6387"),
+    "__ZN14IGAccelSurface12submitUpdateEjP13IOAccelBoundsj": (0xc, "98bbbcb705f834dd29c76767fe0c3cb90a15bbbc235e7dfa742ff7d6f0c8625f"),
+    "__ZN14IGAccelSurface12surfaceStartEv": (0x2e, "c8e22a72abdd9ee342aaca82c7b00e17edef359da467ad32d48b1a92c6acc3fc"),
+    "__ZN14IGAccelSurface11surfaceStopEv": (0x12, "538e024bf5b065a37ccaf09758937648097223c93375dc7c0df51ae4c0f69669"),
+    "__ZN14IGAccelSurface15pickPresentTypeEj": (0x12, "c91a4a769942153d7941f5dfd5fdb64a385d36a0a0331344f1821e2dc664830b"),
+    "__ZN14IGAccelSurface11canTmpAllocEj": (0x3a, "fad6692bdda832b304c4bae7ecbdbe07fef173a3d26d59070a4edea11d16e3de"),
+    "__ZN14IGAccelSurface37getDirtyBufferBitsFromPrivateModeBitsEy": (0x14, "db81c15a5b31cca19d8b20bd7f51597734688dd3167613ca8558a4f7602113c1"),
+    "__ZN14IGAccelSurface12shapeSurfaceEjtt": (0x2ca, "8c52bb77414544e0c92e2e1aa1112d4b999d6383fc22fac3e2c951267407530a"),
     "__ZN16IGAccel2DContext8blitCopyEP12IOAccelEventP16IOAccelResource2S3_P22IOAccel2DBlitRectStrucj": (0x590, "549572653be196cac080840c8bdc7a975cfd8f9c46f65648b34ed1468ff87c75"),
     "__ZN16IGAccel2DContext8blitFillEP12IOAccelEventjP16IOAccelResource2P22IOAccel2DBlitRectStrucj": (0x47c, "c137a37afea690c5081625a346315f7fdcc3bc6d942443f31f2ede8a5284b1bb"),
     "__ZN19IGAccelCommandQueue28processParallelCommandBufferEjj": (0x17c, "b0b678e83fd4c5f6b4db567d4c69090268ae4fda18b5c3e2197d19005f492e20"),
@@ -1291,7 +1308,55 @@ def macho_inventory(path):
             (0xb48, "__ZN16IGAccel2DContext8blitFillEP12IOAccelEventjP16IOAccelResource2P22IOAccel2DBlitRectStrucj")):
         assert struct.unpack_from("<Q", image, two_d_vtable + 16 + slot)[0] == value(method), \
             f"{path}: changed concrete 2D-context producer at {slot:#x}"
-    print("PASS Intel shared selectors, context/queue factories and all concrete submit overrides")
+    new_surface = value("__ZN16IntelAccelerator10newSurfaceEv")
+    surface_metaclass = value("__ZN14IGAccelSurface9metaClassE")
+    factory_reference = image[new_surface + 4:new_surface + 11]
+    assert factory_reference[:3] == bytes.fromhex("48 8d 05") and \
+        new_surface + 11 + struct.unpack_from("<i", factory_reference, 3)[0] == surface_metaclass and \
+        image[new_surface + 11:new_surface + 24] == bytes.fromhex(
+            "48 8b 38 48 8b 07 5d ff a0 88 00 00 00"), \
+        f"{path}: changed Intel IGAccelSurface factory/metaclass allocation"
+    surface_vtable = value("__ZTV14IGAccelSurface")
+    for slot, method in (
+            (0x960, "__ZN14IGAccelSurface14copyFromBufferEiiiijjP12IOAccelEventP16IOAccelResource2P16IOAccelSysMemoryjyj"),
+            (0x968, "__ZN14IGAccelSurface12copyToBufferEiiiijjP12IOAccelEventP16IOAccelResource2P16IOAccelSysMemoryjyj"),
+            (0x970, "__ZN14IGAccelSurface14submitSwapCopyEP12IOAccelEventP16IOAccelResource2S3_"),
+            (0x978, "__ZN14IGAccelSurface12surfaceStartEv"),
+            (0x980, "__ZN14IGAccelSurface11surfaceStopEv"),
+            (0x990, "__ZN14IGAccelSurface12shapeSurfaceEjtt"),
+            (0x998, "__ZN14IGAccelSurface37getDirtyBufferBitsFromPrivateModeBitsEy"),
+            (0xa38, "__ZN14IGAccelSurface15submitSwapFlushEP12IOAccelEventP16IOAccelResource2S3_PK19IOAccelSwapFlushRecjjjPK13IOAccelBounds"),
+            (0xa40, "__ZN14IGAccelSurface13didSubmitSwapEjj"),
+            (0xa48, "__ZN14IGAccelSurface17isBackBufferReadyEj"),
+            (0xa50, "__ZN14IGAccelSurface17submitCopyForwardEP12IOAccelEventjP16IOAccelResource2S3_PK13IOAccelBoundsj"),
+            (0xa58, "__ZN14IGAccelSurface12submitUpdateEjP13IOAccelBoundsj"),
+            (0xa60, "__ZN14IGAccelSurface15pickPresentTypeEj"),
+            (0xa68, "__ZN14IGAccelSurface11canTmpAllocEj")):
+        assert struct.unpack_from("<Q", image, surface_vtable + 16 + slot)[0] == value(method), \
+            f"{path}: changed concrete Intel surface virtual at {slot:#x}"
+    copy_from = "__ZN14IGAccelSurface14copyFromBufferEiiiijjP12IOAccelEventP16IOAccelResource2P16IOAccelSysMemoryjyj"
+    copy_from_options = "__ZN14IGAccelSurface14copyFromBufferEiiiijjP12IOAccelEventP16IOAccelResource2jP16IOAccelSysMemoryjyj"
+    copy_dma = "__ZN14IGAccelSurface13copyBufferDMAEiiiijjP12IOAccelEventP16IOAccelResource2yP16IOAccelSysMemoryyyjj"
+    copy_to = "__ZN14IGAccelSurface12copyToBufferEiiiijjP12IOAccelEventP16IOAccelResource2P16IOAccelSysMemoryjyj"
+    submit_blit = "__ZN16IntelAccelerator10submitBlitEP15blit3d_params_tRK8IGVectorI11rect_pair_t25IGIOMallocAllocatorPolicyEP11IGAccelTaskb"
+    swap_flush = "__ZN14IGAccelSurface15submitSwapFlushEP12IOAccelEventP16IOAccelResource2S3_PK19IOAccelSwapFlushRecjjjPK13IOAccelBounds"
+    copy_forward = "__ZN14IGAccelSurface17submitCopyForwardEP12IOAccelEventjP16IOAccelResource2S3_PK13IOAccelBoundsj"
+    assert direct_branches(copy_from, copy_from_options) == [0x818d0] and \
+        direct_branches(copy_from_options, copy_dma) == [0x8193b] and \
+        direct_branches(copy_to, copy_dma) == [0x82248], \
+        f"{path}: changed Intel surface copy-to-DMA edges"
+    assert direct_branches(copy_dma, submit_blit) == [0x820dd] and \
+        direct_branches(swap_flush, submit_blit) == [0x82a65] and \
+        direct_branches(copy_forward, submit_blit) == [0x8351e], \
+        f"{path}: changed Intel surface blit submission edges"
+    assert direct_branches(
+        swap_flush,
+        "__ZN16IntelAccelerator25submitPendingWaitIfNeededEP20IOAccelLegacySurfaceP15IGAccelResourceP11IGAccelTask") == [0x82a3e], \
+        f"{path}: changed Intel surface pending-wait edge"
+    swap_copy = value("__ZN14IGAccelSurface14submitSwapCopyEP12IOAccelEventP16IOAccelResource2S3_")
+    assert image[swap_copy + 0x24:swap_copy + 0x2a] == bytes.fromhex("ff 90 a8 09 00 00"), \
+        f"{path}: changed Intel surface accelerator swap-copy dispatch"
+    print("PASS Intel shared selectors, context/queue/surface factories and all concrete submit overrides")
     ccs_planes = "__ZN15IGAccelResource16submitCCSResolveEPNS_17ResourceInfoEntryER16IntelAcceleratorP11IGAccelTask20EIntelCCSResolveType"
     ccs_enable = "__ZN15IGAccelResource36enableRenderCompressionWithAccelTaskEPNS_17ResourceInfoEntryEyR16IntelAcceleratorP11IGAccelTaskhhb"
     assert direct_branches(ccs_planes, ccs_resource) == [0x740d8], f"{path}: changed per-plane CCS dispatch"

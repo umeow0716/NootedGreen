@@ -229,6 +229,169 @@ EVENT_OWNER_BODIES = {
     "____ZN20IOAccelEventMachine24stopEv_block_invoke": (0x8b, "044430d23f6ebae467b72e05ecfa9d92eeb69bb1a43422c5d87195d4d25de4db"),
     "__ZN24IOAccelEventMachineFast227disableEventStampInterruptsEPK12IOAccelEvent": (0x66, "4784b5d57c1cb8f9b7a430da8683cc7c11752ca018a108453b3408a412b9f25e"),
 }
+# Complete Tahoe 25G229 base/legacy surface producer bodies and the adjacent
+# base-client dispatch owners.  These contracts establish the static call and
+# lock inventory only; they do not prove GPU completion or stop-time drain.
+BASE_CLIENT_BODIES = {
+    "__ZN14IOAccelSurface26getTargetAndMethodForIndexEPP9IOServicej":
+        (0x26, "accdd4f5594a23b4eb074443ddde0d1b3ba55273ec59e6e5ee32c18c05fb6924"),
+    "__ZN14IOAccelSurface14externalMethodEjP25IOExternalMethodArgumentsP24IOExternalMethodDispatchP8OSObjectPv":
+        (0x34a, "4b32552c7fdea46d26306e62d056d993dd27022ff4a5cdda1206b4a1620d20e9"),
+    "__ZN14IOAccelSurface11s_set_shapeEPS_PvP25IOExternalMethodArguments":
+        (0xb4, "dd2ff5691cdf3a025bdc7ba336d292711314ee83dcb19eaca5e787c42cdfb08b"),
+    "__ZN14IOAccelSurface21s_signal_shared_eventEPS_PvP25IOExternalMethodArguments":
+        (0x18, "d913994177a5d8ddc784e3d199e6d9d3bcc96a9e49d3db968efa554000d27d6f"),
+    "__ZN14IOAccelSurface25surface_read_lock_optionsEjP25IOAccelSurfaceInformationy":
+        (0x1e, "ff4b6e11554ce460d44162ad83f984d735bc5ef540d1728c825e7a7e73278620"),
+    "__ZN14IOAccelSurface27surface_read_unlock_optionsEj":
+        (0x18, "fac5b089dd0dd7434d2374245629e9ab2cc4587114b5e20ebed4dab6fec687a3"),
+    "__ZN14IOAccelSurface9get_stateEP24eIOAccelSurfaceStateBits":
+        (0x28, "ca2d4b40ae1b3fa2571b805746079819c2c7609078fe01c0825c5e8013734342"),
+    "__ZN14IOAccelSurface26surface_write_lock_optionsEjP25IOAccelSurfaceInformationy":
+        (0x1e, "559d8d80516c401458454349dfb7eba9704981d3e22d8e55e477353866efa08c"),
+    "__ZN14IOAccelSurface28surface_write_unlock_optionsEj":
+        (0x18, "e497f248ed0c0c64981ddaf68945e187fb48e7faf6a0800f0d5c89bb91668a48"),
+    "__ZN14IOAccelSurface12surface_readEP22IOAccelSurfaceReadDatay":
+        (0x48e, "9922ce0a17045dfbfd6941bd609a30a2ca653ea913ea5750f51d93f6ed52e4b3"),
+    "__ZN14IOAccelSurface9set_scaleEjP21IOAccelSurfaceScalingy":
+        (0xd6, "8afd0ae57182ab6130935b686e0d60f5b036029b143ad0e0a0f89a97b779d819"),
+    "__ZN14IOAccelSurface18surface_query_lockEv":
+        (0x8, "5b1ee01dedea0fcb3ecce46b2207fda587d289c2e69a0afdb9d54f2595762f2e"),
+    "__ZN14IOAccelSurface17surface_read_lockEP25IOAccelSurfaceInformationy":
+        (0x22, "66c09ea84b068582cd085819423aa83c6f404e6a96f765be9483c346fa79e871"),
+    "__ZN14IOAccelSurface19surface_read_unlockEv":
+        (0x1c, "214f9e0a5577c36e3064d0b3084ea1bc073a7a4d22cecc6b04c26e1b915328de"),
+    "__ZN14IOAccelSurface18surface_write_lockEP25IOAccelSurfaceInformationy":
+        (0x22, "34d431809b6becdd259a452455d76a31248ae14ad2809c55a0eda9e92b0f1946"),
+    "__ZN14IOAccelSurface20surface_write_unlockEv":
+        (0x1c, "7c31c219e1f444cb143b780489172326d96457612d95c922f2bce7a5d6eb4cc1"),
+    "__ZN14IOAccelSurface15surface_controlEjjPj":
+        (0xbe, "7377adff51379674d38e32d6da57f951fcc7ce5a88d3467de94046dc2a2ac256"),
+    "__ZN14IOAccelSurface22surface_unlock_optionsE9eLockTypej":
+        (0x132, "61d79b93b94ed81da4a3666359b18a1385a14679ca748f2a92f1a76ebff6b410"),
+    "__ZN14IOAccelSurface11set_id_modeEjj":
+        (0x2d4, "350590e0c5c7733e169fea03bf7887c00dbff79d2d895a591390945b51706f42"),
+    "__ZN14IOAccelSurface9set_shapeE24eIOAccelSurfaceShapeBitsjP19IOAccelDeviceRegiony":
+        (0x28, "ef0c8ed53810f662bb1e15c6b82c69f7dbfa9ca33883f9446cb0dda63bdf9c54"),
+    "__ZN14IOAccelSurface28set_shape_backing_length_extE24eIOAccelSurfaceShapeBitsjyjyP19IOAccelDeviceRegiony":
+        (0x8a0, "8aa2c1df8f6136e01ad6bdd9486ae77289bac24beaac381b12e823c25b4fa979"),
+    "__ZN14IOAccelSurface11set_scalingEjP21IOAccelSurfaceScaling":
+        (0x1ac, "6b40016353f1f0009ab2ea25b73295da6d582d49c826d3157a6f29ffc13805f6"),
+    "__ZN14IOAccelSurface25surface_control_with_lockEjjPj":
+        (0x1a8, "9f5beb9693465e2d483332d81a80852f9508c0033ee70e702c8b9f4e31d74b0e"),
+    "__ZN14IOAccelSurface18update_displayableEv":
+        (0x24e, "8f38ea2ee3b8b14a56450b1030861b572164e6c4016c3b5aa2877a6dcb3e3f56"),
+    "__ZN14IOAccelSurface12update_shapeEv":
+        (0x3ca, "d30572c1b011bc1b3b2d4d8b159dfaf68297f1cb83a498b9511c24af1beb7fdf"),
+    "__ZN14IOAccelSurface12flip_buffersEv":
+        (0x40, "8328a4ce113f3c19caa257c7114c6caed74d27cd757a4a3c5df51efc9bb385bd"),
+    "__ZN20IOAccelLegacySurface13surface_flushEjj":
+        (0x4ae, "3ecd557cb7c6f2b94368e03793262c29055284b394ef8764829a37de1a2f95e3"),
+    "__ZN20IOAccelLegacySurface25present_surface_with_swapEjj":
+        (0x128, "d7fdbeee1237184679c55645622df85c7ca5d63ec1c3d790c7e37feb4b71fa82"),
+    "__ZN20IOAccelLegacySurface19submit_scanout_swapEjj":
+        (0x180, "07eb7774e2a6d1abb08a4c7333273074e0d5025c91d8852623dbd8e916e67350"),
+    "__ZN20IOAccelLegacySurface11submit_swapEjj":
+        (0x544, "2b966e6b3c19ddf433b1251d78dd7ecd4b99066c6be755a3e45554aea2bb58ec"),
+    "__ZN20IOAccelLegacySurface11set_id_modeEjj":
+        (0x71e, "709a078e99e63c32d8ee3cb22c433b66f2070728b8d4e478bc77c569b886f31e"),
+    "__ZN20IOAccelLegacySurface20surface_lock_optionsE9eLockTypejP25IOAccelSurfaceInformationy":
+        (0x47a, "98e60748d676ab8d81c36ca8d78dfa96194d5cf1cdad421229cdba97fe78a5b9"),
+    "__ZN20IOAccelLegacySurface9set_shapeE24eIOAccelSurfaceShapeBitsjP19IOAccelDeviceRegiony":
+        (0x4e, "1ff198a8e90156dc83724b44541675974166c4ef37908acc43c4bdcd402fc31e"),
+    "__ZN20IOAccelLegacySurface28set_shape_backing_length_extE24eIOAccelSurfaceShapeBitsjyjyP19IOAccelDeviceRegiony":
+        (0xb8c, "4645604d782312526b1266376a563af718338cb0675526cc12ee58050d77d70b"),
+    "__ZN20IOAccelLegacySurface11set_scalingEjP21IOAccelSurfaceScaling":
+        (0x210, "51eb600b33a9ce7647e115104bed63768af3ddcfeb6b8af60753df4594e1489d"),
+    "__ZN20IOAccelLegacySurface25surface_control_with_lockEjjPj":
+        (0x110, "810161a7763790bbefe9d3dd47ada0aaa63431d38713c315fa200ec69d077b7e"),
+    "__ZN20IOAccelLegacySurface12update_shapeEv":
+        (0x51e, "7ca6d38f2e103f127a349624273aa2a496c8aace36f7c2f87db73d277265e40c"),
+    "__ZN20IOAccelLegacySurface12copy_forwardEjP19IOAccelDeviceRegiony":
+        (0x2a4, "7b0ed6631a9bfbaf97908e8ec1a3dda744b9fd75587caa8cb56554cdb7a23e96"),
+    "__ZN20IOAccelLegacySurface10did_updateEjP19IOAccelDeviceRegiony":
+        (0x152, "e062b42422c3c8f09015ea550c54bdf39ba06ee21bf86a340c5dd7df44f8074d"),
+    "__ZN20IOAccelLegacySurface22submitFullScreenUpdateEj":
+        (0x60, "d0be3507d30df6a834f91e26a538c015fe02c1a3ca251b0676ced65ac6cbc6ce"),
+    "__ZN20IOAccelLegacySurface13didSubmitSwapEjj":
+        (0x6, "5a96d1fb661d55552184ea24023ae8190bd1523ae1f855a8d671b07143e8b1df"),
+    "__ZN20IOAccelLegacySurface17isBackBufferReadyEj":
+        (0x8, "aaa500a73706124bc5374dc27c8b444160b15dc8a45b0fef9354b23106b76348"),
+    "__ZN20IOAccelLegacySurface17submitCopyForwardEP12IOAccelEventjP16IOAccelResource2S3_PK13IOAccelBoundsj":
+        (0xc, "98bbbcb705f834dd29c76767fe0c3cb90a15bbbc235e7dfa742ff7d6f0c8625f"),
+    "__ZN20IOAccelLegacySurface12submitUpdateEjP13IOAccelBoundsj":
+        (0xb, "38833f1eed078fe65bc30b3d08fec9be666f429175763e34f56cb2a450898764"),
+    "__ZN20IOAccelLegacySurface15pickPresentTypeEj":
+        (0xa4, "a33a46e7c49e782c314a044c2fff00d9a8498eecd538cb7cd70f69323dd33d81"),
+    "__ZN14IOAccelDevice214externalMethodEjP25IOExternalMethodArgumentsP24IOExternalMethodDispatchP8OSObjectPv":
+        (0x15e, "8bfd190a99fd5ff033652e885aa5e1eefab0119016fc55cf9686f70a3346dbb5"),
+    "__ZN14IOAccelDevice226getTargetAndMethodForIndexEPP9IOServicej":
+        (0x26, "456d7fec0a4295b4ee09409fdde8cadd03205858c5a0e17129a26ef54169be63"),
+    "__ZN24IOAccelSharedUserClient214externalMethodEjP25IOExternalMethodArgumentsP24IOExternalMethodDispatchP8OSObjectPv":
+        (0x1be, "498599782c5a3d1cb42b0f3d280aa454c8fe32dfbc00c113d86375b4b070240e"),
+    "__ZN24IOAccelSharedUserClient226getTargetAndMethodForIndexEPP9IOServicej":
+        (0x26, "71c379f3428b33493e28baa044b945a97a94b8729163a757aff7ac1800c29f8d"),
+    "__ZN24IOAccelSharedUserClient222process_dirty_commandsEv":
+        (0x9c, "c911271d23a8d373b1d7a0f732f222d0eac0dcd5192f6a670c9b20a81f7a0d62"),
+    "__ZN14IOAccelShared228processResourceDirtyCommandsEv":
+        (0x174, "03d68eb2483824c5316f89cca04ddad418fc81382252f8c494df7d760729624b"),
+}
+SURFACE_METHODS = (
+    ("__ZN14IOAccelSurface25surface_read_lock_optionsEjP25IOAccelSurfaceInformationy", (0, 2, 1, 0xffffffff)),
+    ("__ZN14IOAccelSurface27surface_read_unlock_optionsEj", (0, 0, 1, 0)),
+    ("__ZN14IOAccelSurface9get_stateEP24eIOAccelSurfaceStateBits", (0, 0, 0, 1)),
+    ("__ZN14IOAccelSurface26surface_write_lock_optionsEjP25IOAccelSurfaceInformationy", (0, 2, 1, 0xffffffff)),
+    ("__ZN14IOAccelSurface28surface_write_unlock_optionsEj", (0, 0, 1, 0)),
+    ("__ZN14IOAccelSurface12surface_readEP22IOAccelSurfaceReadDatay", (0, 4, 0, 0xffffffff)),
+    (None, (0, 4, 4, 0xffffffff)),
+    (None, (0, 0, 2, 0)),
+    ("__ZN14IOAccelSurface9set_scaleEjP21IOAccelSurfaceScalingy", (0, 4, 1, 0xffffffff)),
+    (None, (0, 4, 2, 0xffffffff)),
+    (None, (0, 0, 2, 0)),
+    ("__ZN14IOAccelSurface18surface_query_lockEv", (0, 0, 0, 0)),
+    ("__ZN14IOAccelSurface17surface_read_lockEP25IOAccelSurfaceInformationy", (0, 2, 0, 0xffffffff)),
+    ("__ZN14IOAccelSurface19surface_read_unlockEv", (0, 0, 0, 0)),
+    ("__ZN14IOAccelSurface18surface_write_lockEP25IOAccelSurfaceInformationy", (0, 2, 0, 0xffffffff)),
+    ("__ZN14IOAccelSurface20surface_write_unlockEv", (0, 0, 0, 0)),
+    ("__ZN14IOAccelSurface15surface_controlEjjPj", (0, 0, 2, 1)),
+    (None, (0, 4, 5, 0xffffffff)),
+    (None, (0, 0, 0, 0)),
+)
+DEVICE_METHODS = (
+    ("__ZN14IOAccelDevice210get_configEP23IOAccelDeviceConfigData", (0, 2, 0, 64)),
+    ("__ZN14IOAccelDevice28get_nameEPc", (0, 2, 0, 64)),
+    ("__ZN14IOAccelDevice217get_event_machineEP29IOAccelDeviceEventMachineData", (0, 2, 0, 600)),
+    ("__ZN14IOAccelDevice216get_surface_infoEjP24IOAccelDeviceSurfaceData", (0, 2, 1, 24)),
+    ("__ZN14IOAccelDevice210set_stereoEjj", (0, 0, 2, 0)),
+    ("__ZN14IOAccelDevice225get_next_global_object_idEP31IOAccelDeviceGlobalObjectIDData", (0, 2, 0, 8)),
+    ("__ZN14IOAccelDevice224get_current_trace_filterEP28IOAccelDeviceTraceFilterData", (0, 2, 0, 8)),
+    ("__ZN14IOAccelDevice215get_device_infoEP27IOAccelDeviceInfoReturnData", (0, 2, 0, 24)),
+    ("__ZN14IOAccelDevice218get_next_gid_groupEP25IOAccelDeviceGIDGroupData", (0, 2, 0, 16)),
+    ("__ZN14IOAccelDevice216set_api_propertyEP24IOAccelDeviceAPIProperty", (0, 3, 16, 0xffffffff)),
+)
+SHARED_METHODS = (
+    ("__ZN24IOAccelSharedUserClient212new_resourceEP22IOAccelNewResourceArgsP28IOAccelNewResourceReturnDatayPj", (0, 3, 0xffffffff, 0xffffffff)),
+    ("__ZN24IOAccelSharedUserClient215delete_resourceEj", (0, 0, 1, 0)),
+    ("__ZN24IOAccelSharedUserClient217page_off_resourceEP32IOAccelSharedPageoffResourceArgs", (0, 4, 0, 8)),
+    ("__ZN24IOAccelSharedUserClient219finish_object_eventEjj", (0, 0, 2, 0)),
+    ("__ZN24IOAccelSharedUserClient222set_resource_purgeableEj25eIOAccelResourcePurgeablePS0_", (0, 0, 2, 1)),
+    ("__ZN24IOAccelSharedUserClient216get_surface_infoEjPjS0_S0_S0_S0_", (0, 0, 1, 5)),
+    ("__ZN24IOAccelSharedUserClient217get_resource_infoEjP32IOAccelGetResourceInfoReturnDataPj", (0, 2, 1, 0xffffffff)),
+    ("__ZN24IOAccelSharedUserClient212create_shmemEjP22IOAccelDeviceShmemData", (0, 2, 1, 16)),
+    ("__ZN24IOAccelSharedUserClient213destroy_shmemEj", (0, 0, 1, 0)),
+    ("__ZN24IOAccelSharedUserClient215get_shared_infoEP30IOAccelSharedGetInfoReturnData", (0, 2, 0, 16)),
+    ("__ZN24IOAccelSharedUserClient216setup_dirty_ringEP37IOAccelSharedSetupDirtyRingReturnData", (0, 2, 0, 24)),
+    ("__ZN24IOAccelSharedUserClient222process_dirty_commandsEv", (0, 0, 0, 0)),
+    ("__ZN24IOAccelSharedUserClient221allocate_fence_memoryEPyS0_", (0, 3, 8, 8)),
+    ("__ZN24IOAccelSharedUserClient215create_mtleventEPyP27IOAccelCreateMTLEventResult", (0, 3, 8, 24)),
+    ("__ZN24IOAccelSharedUserClient216destroy_mtleventEj", (0, 0, 1, 0)),
+    ("__ZN24IOAccelSharedUserClient215get_memory_dataEP17IOAccelMemoryData", (0, 2, 0, 48)),
+    ("__ZN24IOAccelSharedUserClient215disconnect_peerEj", (0, 0, 1, 0)),
+    ("__ZN24IOAccelSharedUserClient223set_resources_purgeableEPKj25eIOAccelResourcePurgeablePS2_i", (0, 3, 0xffffffff, 0xffffffff)),
+    ("__ZN24IOAccelSharedUserClient219get_resource_offsetEPyS0_", (0, 3, 16, 8)),
+    ("__ZN24IOAccelSharedUserClient218get_allocated_sizeEP20IOAccelAllocatedSize", (0, 2, 0, 8)),
+    ("__ZN24IOAccelSharedUserClient227set_resource_owner_identityEP43IOAccelResourceSetResourceOwnerIdentityData", (0, 3, 16, 0)),
+)
 # Symbol-bounded bodies reviewed locally. These identities do not certify
 # overridden resource methods, iterator locking, DMA completion or host safety.
 SCRUB_BODIES = {
@@ -1018,14 +1181,37 @@ def check(path, boot_path=None):
     assert uuids == [IOACCEL_UUID], "unreviewed IOAcceleratorFamily2 UUID"
     assert symtab is not None, "missing embedded symbol table"
     symbol_offset, count, string_offset, string_size = symtab
-    matches = {name: [] for name in {*CONTRACTS, *SCRUB_BODIES, *LOCK_COPIES, *EVENT_OWNER_BODIES, SHARED_VTABLE, RESOURCE_VTABLE, "__ZTV18IOAccelDisplayPipe", "__ZTV24IOAccelLegacyDisplayPipe", "__ZTV19IOAccelCommandQueue", "__ZTV15IOAccelContext2", "__ZTV17IOAccel2DContext2", "__ZN19IOAccelCommandQueue20sCommandQueueMethodsE", "__ZN15IOAccelContext215sContextMethodsE", "__ZN17IOAccel2DContext217s2DContextMethodsE", "__ZN19IOAccelCommandQueue16commandQueueStopEv", "__ZN19IOAccelCommandQueue11setPriorityE28eIOAccelCommandQueuePriority", "__ZTV16IOAccelMemoryMap", "__ZTV16IOAccelSysMemory", "__ZTV11IOAccelTask", "__ZTV24IOAccelSharedUserClient2",
-                                    "__ZTV13IOAccelMemory", "__ZTV22IOGraphicsAccelerator2",
-                                    "__ZN22IOGraphicsAccelerator223freeWaitToPrepareVidMapEP16IOAccelMemoryMapbb",
-                                    "__ZNK16IOAccelMemoryMap9getLengthEv",
-                                    EVENT_VTABLE, EVENT_FINISH, EVENT_WAIT, EVENT_CLEAN, EVENT_SIGNAL, EVENT_RESTART,
-                                    EVENT_MERGE_EXCLUDING, EVENT_SET_STAMP, GET_DATA_BUFFER,
-                                    EVENT_INIT, EVENT_COPY, EVENT_FINISH_UNLOCKED, EVENT_HARDWARE_ERROR,
-                                    EVENT_DISABLE_STAMP_LOCKED, EVENT_ENABLE_STAMP, EVENT_DISABLE_STAMP}}
+    base_client_symbols = {method for table in (SURFACE_METHODS, DEVICE_METHODS, SHARED_METHODS)
+                           for method, _ in table if method is not None}
+    wanted_symbols = {
+        *CONTRACTS, *SCRUB_BODIES, *LOCK_COPIES, *EVENT_OWNER_BODIES,
+        *BASE_CLIENT_BODIES, *base_client_symbols,
+        SHARED_VTABLE, RESOURCE_VTABLE,
+        "__ZTV18IOAccelDisplayPipe", "__ZTV24IOAccelLegacyDisplayPipe",
+        "__ZTV19IOAccelCommandQueue", "__ZTV15IOAccelContext2",
+        "__ZTV17IOAccel2DContext2", "__ZTV14IOAccelSurface",
+        "__ZTV20IOAccelLegacySurface", "__ZTV14IOAccelDevice2",
+        "__ZN19IOAccelCommandQueue20sCommandQueueMethodsE",
+        "__ZN15IOAccelContext215sContextMethodsE",
+        "__ZN17IOAccel2DContext217s2DContextMethodsE",
+        "__ZN14IOAccelSurface15sSurfaceMethodsE",
+        "__ZN14IOAccelSurface20sSignalEventDispatchE",
+        "__ZZN14IOAccelSurface14externalMethodEjP25IOExternalMethodArgumentsP24IOExternalMethodDispatchP8OSObjectPvE19newResourceDispatch",
+        "__ZN14IOAccelDevice214sDeviceMethodsE",
+        "__ZN24IOAccelSharedUserClient214sSharedMethodsE",
+        "__ZN19IOAccelCommandQueue16commandQueueStopEv",
+        "__ZN19IOAccelCommandQueue11setPriorityE28eIOAccelCommandQueuePriority",
+        "__ZTV16IOAccelMemoryMap", "__ZTV16IOAccelSysMemory",
+        "__ZTV11IOAccelTask", "__ZTV24IOAccelSharedUserClient2",
+        "__ZTV13IOAccelMemory", "__ZTV22IOGraphicsAccelerator2",
+        "__ZN22IOGraphicsAccelerator223freeWaitToPrepareVidMapEP16IOAccelMemoryMapbb",
+        "__ZNK16IOAccelMemoryMap9getLengthEv",
+        EVENT_VTABLE, EVENT_FINISH, EVENT_WAIT, EVENT_CLEAN, EVENT_SIGNAL,
+        EVENT_RESTART, EVENT_MERGE_EXCLUDING, EVENT_SET_STAMP, GET_DATA_BUFFER,
+        EVENT_INIT, EVENT_COPY, EVENT_FINISH_UNLOCKED, EVENT_HARDWARE_ERROR,
+        EVENT_DISABLE_STAMP_LOCKED, EVENT_ENABLE_STAMP, EVENT_DISABLE_STAMP,
+    }
+    matches = {name: [] for name in wanted_symbols}
     for index in range(count):
         name_offset, _, _, _, address = struct.unpack_from("<IBBHQ", image, symbol_offset + index * 16)
         assert name_offset < string_size, "invalid symbol string"
@@ -1064,6 +1250,180 @@ def check(path, boot_path=None):
         assert hashlib.sha256(read(address_of(name), length)).hexdigest() == digest, f"changed {name}"
     for name, (length, digest) in EVENT_OWNER_BODIES.items():
         assert hashlib.sha256(read(address_of(name), length)).hexdigest() == digest, f"changed event owner lifecycle: {name}"
+    for name, (length, digest) in BASE_CLIENT_BODIES.items():
+        assert hashlib.sha256(read(address_of(name), length)).hexdigest() == digest, \
+            f"changed base-client/surface body: {name}"
+
+    def check_dispatch_table(table_name, expected, digest):
+        table = address_of(table_name)
+        assert hashlib.sha256(read(table, len(expected) * 48)).hexdigest() == digest, \
+            f"changed complete external dispatch table: {table_name}"
+        for selector, (method, arguments) in enumerate(expected):
+            entry = struct.unpack("<6Q", read(table + selector * 48, 48))
+            assert entry[0] == 0 and entry[2:] == arguments, \
+                f"changed selector {selector} arguments: {table_name}"
+            if method is None:
+                assert entry[1] == 0, f"changed special selector {selector} target: {table_name}"
+            else:
+                assert entry[1] >> 63 == 0 and (entry[1] >> 30) & 3 == 1 and \
+                    entry[1] & 0x3fffffff == address_of(method), \
+                    f"changed selector {selector} target: {table_name}"
+
+    check_dispatch_table(
+        "__ZN14IOAccelSurface15sSurfaceMethodsE", SURFACE_METHODS,
+        "1cba789edda2960c27c1da7c89fbba97b21b70b4371c6a2df213f1655be6246a")
+    check_dispatch_table(
+        "__ZN14IOAccelDevice214sDeviceMethodsE", DEVICE_METHODS,
+        "c5bf8567fbf60dbae2cf77e57d2514a56d5aace0ae5d2ab923808f69aaaff207")
+    check_dispatch_table(
+        "__ZN24IOAccelSharedUserClient214sSharedMethodsE", SHARED_METHODS,
+        "ba76d2c8dca49a0f9e44703c005f92a19695a17dbc95f60bbb507d0d2ee147ea")
+
+    surface_external = address_of(
+        "__ZN14IOAccelSurface14externalMethodEjP25IOExternalMethodArgumentsP24IOExternalMethodDispatchP8OSObjectPv")
+    assert read(surface_external + 0x115, 6) == bytes.fromhex("ff 90 08 0a 00 00") and \
+        read(surface_external + 0x184, 7) == bytes.fromhex("41 ff 92 18 0a 00 00"), \
+        "changed special surface set-id/set-shape virtual dispatch"
+    assert direct_branch_offsets(
+        surface_external, 0x34a,
+        address_of("__ZN20IOAccelLegacySurface13surface_flushEjj")) == [0x155], \
+        "changed special surface selector-10 flush edge"
+    for offset, dispatch in (
+            (0xa6, "__ZZN14IOAccelSurface14externalMethodEjP25IOExternalMethodArgumentsP24IOExternalMethodDispatchP8OSObjectPvE19newResourceDispatch"),
+            (0xbf, "__ZN14IOAccelSurface20sSignalEventDispatchE")):
+        instruction = read(surface_external + offset, 7)
+        assert instruction[:3] == bytes.fromhex("48 8d 0d") and \
+            surface_external + offset + 7 + struct.unpack_from("<i", instruction, 3)[0] == address_of(dispatch), \
+            f"changed special surface dispatch record: {dispatch}"
+
+    # These are the outer accelerator-mutex/busy scopes around inherited
+    # surface producer roots.  Inner helpers intentionally contain no second
+    # lock acquisition.
+    for method, locks, unlocks, mutexes, unmutexes in (
+            ("__ZN14IOAccelSurface12surface_readEP22IOAccelSurfaceReadDatay", [0x80], [0x13c], [0x70], [0x148]),
+            ("__ZN14IOAccelSurface9set_scaleEjP21IOAccelSurfaceScalingy", [0x56], [0xab], [0x46], [0xb7]),
+            ("__ZN14IOAccelSurface15surface_controlEjjPj", [0x48], [0x9a], [0x38], [0xa6]),
+            ("__ZN14IOAccelSurface22surface_unlock_optionsE9eLockTypej", [0x3e], [0x115], [0x2e], [0x121]),
+            ("__ZN14IOAccelSurface11set_id_modeEjj", [0x81], [0xfb], [0x71], [0x107]),
+            ("__ZN14IOAccelSurface28set_shape_backing_length_extE24eIOAccelSurfaceShapeBitsjyjyP19IOAccelDeviceRegiony", [0x169], [0x24f, 0x2ba], [0x159], [0x25b, 0x2c6]),
+            ("__ZN20IOAccelLegacySurface20surface_lock_optionsE9eLockTypejP25IOAccelSurfaceInformationy", [0x77], [0x10a, 0x2ef, 0x457], [0x67], [0x116, 0x2fb, 0x463]),
+            ("__ZN20IOAccelLegacySurface13surface_flushEjj", [0x47, 0x453], [0xd4, 0x3d0, 0x48b], [0x37, 0x443], [0xe0, 0x3dd, 0x497]),
+            ("__ZN20IOAccelLegacySurface11set_id_modeEjj", [0x84], [0xfe], [0x74], [0x10a]),
+            ("__ZN20IOAccelLegacySurface28set_shape_backing_length_extE24eIOAccelSurfaceShapeBitsjyjyP19IOAccelDeviceRegiony", [0x1bf], [0x2cb], [0x1af], [0x2d7]),
+            ("__ZN20IOAccelLegacySurface12copy_forwardEjP19IOAccelDeviceRegiony", [0xaf], [0x280], [0x9f], [0x28c]),
+            ("__ZN20IOAccelLegacySurface10did_updateEjP19IOAccelDeviceRegiony", [0xad], [0x12e], [0x9d], [0x13a]),
+            ("__ZN24IOAccelSharedUserClient222process_dirty_commandsEv", [0x3a], [0x7e], [0x2a], [0x8a])):
+        start = address_of(method)
+        length = BASE_CLIENT_BODIES[method][0]
+        assert direct_branch_offsets(start, length, 0x14ba6da2) == locks, \
+            f"changed surface/base-client busy-lock inventory: {method}"
+        assert direct_branch_offsets(start, length, 0x14ba6db4) == unlocks, \
+            f"changed surface/base-client busy-unlock inventory: {method}"
+        assert direct_branch_offsets(start, length, 0x10012) == mutexes, \
+            f"changed surface/base-client mutex inventory: {method}"
+        assert direct_branch_offsets(start, length, 0x10018) == unmutexes, \
+            f"changed surface/base-client mutex-unlock inventory: {method}"
+
+    for method in (
+            "__ZN14IOAccelSurface11set_scalingEjP21IOAccelSurfaceScaling",
+            "__ZN14IOAccelSurface25surface_control_with_lockEjjPj",
+            "__ZN14IOAccelSurface18update_displayableEv",
+            "__ZN14IOAccelSurface12update_shapeEv",
+            "__ZN14IOAccelSurface12flip_buffersEv",
+            "__ZN20IOAccelLegacySurface25present_surface_with_swapEjj",
+            "__ZN20IOAccelLegacySurface19submit_scanout_swapEjj",
+            "__ZN20IOAccelLegacySurface11submit_swapEjj",
+            "__ZN20IOAccelLegacySurface11set_scalingEjP21IOAccelSurfaceScaling",
+            "__ZN20IOAccelLegacySurface25surface_control_with_lockEjjPj",
+            "__ZN20IOAccelLegacySurface12update_shapeEv",
+            "__ZN20IOAccelLegacySurface22submitFullScreenUpdateEj",
+            "__ZN14IOAccelShared228processResourceDirtyCommandsEv"):
+        start = address_of(method)
+        length = BASE_CLIENT_BODIES[method][0]
+        assert direct_branch_offsets(start, length, 0x14ba6da2) == [] and \
+            direct_branch_offsets(start, length, 0x14ba6db4) == [] and \
+            direct_branch_offsets(start, length, 0x10012) == [] and \
+            direct_branch_offsets(start, length, 0x10018) == [], \
+            f"changed selected inner surface/helper lock state: {method}"
+
+    surface_read = address_of("__ZN14IOAccelSurface12surface_readEP22IOAccelSurfaceReadDatay")
+    update_displayable = address_of("__ZN14IOAccelSurface18update_displayableEv")
+    update_shape = address_of("__ZN14IOAccelSurface12update_shapeEv")
+    assert read(surface_read + 0x31e, 6) == bytes.fromhex("ff 90 60 09 00 00"), \
+        "changed surface-read copyFromBuffer producer dispatch"
+    assert read(update_displayable + 0x145, 6) == bytes.fromhex("ff 90 70 09 00 00") and \
+        read(update_shape + 0x2d1, 6) == bytes.fromhex("ff 90 70 09 00 00"), \
+        "changed surface swap-copy producer dispatch"
+    assert direct_branch_offsets(
+        address_of("__ZN14IOAccelSurface28set_shape_backing_length_extE24eIOAccelSurfaceShapeBitsjyjyP19IOAccelDeviceRegiony"),
+        0x8a0, update_displayable) == [0x6d0], \
+        "changed base shape-to-displayable producer edge"
+    assert direct_branch_offsets(
+        address_of("__ZN20IOAccelLegacySurface28set_shape_backing_length_extE24eIOAccelSurfaceShapeBitsjyjyP19IOAccelDeviceRegiony"),
+        0xb8c, update_displayable) == [0x9b2], \
+        "changed legacy shape-to-displayable producer edge"
+
+    legacy_present = address_of("__ZN20IOAccelLegacySurface25present_surface_with_swapEjj")
+    assert direct_branch_offsets(
+        legacy_present, 0x128,
+        address_of("__ZN20IOAccelLegacySurface19submit_scanout_swapEjj")) == [0xc1] and \
+        direct_branch_offsets(
+            legacy_present, 0x128,
+            address_of("__ZN20IOAccelLegacySurface11submit_swapEjj")) == [0xd1], \
+        "changed legacy surface swap selection edges"
+    legacy_set_shape = address_of(
+        "__ZN20IOAccelLegacySurface9set_shapeE24eIOAccelSurfaceShapeBitsjP19IOAccelDeviceRegiony")
+    assert direct_branch_offsets(
+        legacy_set_shape, 0x4e,
+        address_of("__ZN20IOAccelLegacySurface12copy_forwardEjP19IOAccelDeviceRegiony")) == [0x3c] and \
+        direct_branch_offsets(
+            legacy_set_shape, 0x4e,
+            address_of("__ZN20IOAccelLegacySurface10did_updateEjP19IOAccelDeviceRegiony")) == [0x49], \
+        "changed legacy surface shape producer selection"
+    assert read(address_of("__ZN20IOAccelLegacySurface19submit_scanout_swapEjj") + 0x9d, 7) == \
+        bytes.fromhex("41 ff 92 38 0a 00 00") and \
+        read(address_of("__ZN20IOAccelLegacySurface11submit_swapEjj") + 0x2e1, 7) == \
+        bytes.fromhex("41 ff 92 38 0a 00 00") and \
+        read(address_of("__ZN20IOAccelLegacySurface12copy_forwardEjP19IOAccelDeviceRegiony") + 0x178, 7) == \
+        bytes.fromhex("41 ff 92 50 0a 00 00") and \
+        read(address_of("__ZN20IOAccelLegacySurface10did_updateEjP19IOAccelDeviceRegiony") + 0xfb, 6) == \
+        bytes.fromhex("ff 90 58 0a 00 00") and \
+        read(address_of("__ZN20IOAccelLegacySurface22submitFullScreenUpdateEj") + 0x4e, 6) == \
+        bytes.fromhex("ff 90 58 0a 00 00"), \
+        "changed legacy surface swap/copy/update producer virtuals"
+
+    legacy_surface_vtable = address_of("__ZTV20IOAccelLegacySurface")
+    for slot, method in (
+            (0x9d8, "__ZN20IOAccelLegacySurface12update_shapeEv"),
+            (0x9f0, "__ZN20IOAccelLegacySurface11set_scalingEjP21IOAccelSurfaceScaling"),
+            (0xa08, "__ZN20IOAccelLegacySurface11set_id_modeEjj"),
+            (0xa10, "__ZN20IOAccelLegacySurface9set_shapeE24eIOAccelSurfaceShapeBitsjP19IOAccelDeviceRegiony"),
+            (0xa18, "__ZN20IOAccelLegacySurface28set_shape_backing_length_extE24eIOAccelSurfaceShapeBitsjyjyP19IOAccelDeviceRegiony"),
+            (0xa20, "__ZN20IOAccelLegacySurface20surface_lock_optionsE9eLockTypejP25IOAccelSurfaceInformationy"),
+            (0xa28, "__ZN14IOAccelSurface22surface_unlock_optionsE9eLockTypej"),
+            (0xa30, "__ZN20IOAccelLegacySurface25surface_control_with_lockEjjPj"),
+            (0xa40, "__ZN20IOAccelLegacySurface13didSubmitSwapEjj"),
+            (0xa48, "__ZN20IOAccelLegacySurface17isBackBufferReadyEj"),
+            (0xa50, "__ZN20IOAccelLegacySurface17submitCopyForwardEP12IOAccelEventjP16IOAccelResource2S3_PK13IOAccelBoundsj"),
+            (0xa58, "__ZN20IOAccelLegacySurface12submitUpdateEjP13IOAccelBoundsj"),
+            (0xa60, "__ZN20IOAccelLegacySurface15pickPresentTypeEj")):
+        raw = struct.unpack("<Q", read(legacy_surface_vtable + 16 + slot, 8))[0]
+        assert raw >> 63 == 0 and (raw >> 30) & 3 == 1 and \
+            raw & 0x3fffffff == address_of(method), \
+            f"changed legacy surface virtual target at {slot:#x}"
+    for slot in (0x960, 0x968, 0x970, 0x990, 0x998, 0xa38):
+        raw = struct.unpack("<Q", read(legacy_surface_vtable + 16 + slot, 8))[0]
+        assert raw == 0x40000000ab59c0, \
+            f"changed legacy surface abstract slot at {slot:#x}"
+    assert struct.unpack("<Q", read(legacy_surface_vtable + 16 + 0xa68, 8))[0] == \
+        0x100000000ab59c0, "changed authenticated legacy surface abstract slot at 0xa68"
+
+    shared_dirty = address_of("__ZN14IOAccelShared228processResourceDirtyCommandsEv")
+    for offset, slot in ((0xdb, 0x218), (0xfc, 0x230), (0x113, 0x210), (0x132, 0x238)):
+        assert read(shared_dirty + offset, 6) == bytes.fromhex("ff 90") + struct.pack("<I", slot), \
+            "changed shared dirty-ring resource-state dispatch"
+    print("PASS complete Surface/Device/Shared selectors and inherited surface producer lock graph")
+
     queue_vtable = address_of("__ZTV19IOAccelCommandQueue")
     queue_submit_dispatch = struct.unpack(
         "<Q4I", read(address_of("__ZN19IOAccelCommandQueue20sCommandQueueMethodsE") + 24, 24))

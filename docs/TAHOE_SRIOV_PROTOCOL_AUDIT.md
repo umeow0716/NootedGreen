@@ -1,7 +1,7 @@
 # Tahoe SR-IOV protocol audit — in progress
 
 Updated: 2026-10-04. The last dynamic source baseline is `ce166c8`; the current
-offline-reviewed checkpoint is V286 2D/concrete-override inventory on
+offline-reviewed worktree is V287 surface/base-client inventory on
 `codex/tahoe-sriov-vf`. This is NOT a boot-test candidate or a successful
 driver baseline. The `ce166c8` run produced repeatable host PF DMAR faults
 followed by i915 hangs and a host reboot. Keep `macos-tahoe-sriov` shut off until the
@@ -20,6 +20,40 @@ KVMFR/client transport remains the intended receiving side.
 The authoritative dynamic-entry checklist is
 [`DYNAMIC_TEST_GATE.md`](DYNAMIC_TEST_GATE.md). Any open static gate keeps the
 VM hard hold in force.
+
+## V287 surface and base-client inventory (offline, in progress)
+
+The Tahoe 25G229 System KC contract now pins the complete 19-entry
+`IOAccelSurface` table, 10-entry `IOAccelDevice2` table and 21-entry
+`IOAccelSharedUserClient2` table, including every argument descriptor and
+ordinary member target. It also pins the complete dispatch/get-target bodies
+and the Surface special-selector records for new-resource and shared-event,
+plus the virtual set-id/set-shape and direct legacy-flush edges.
+
+The complete base/legacy Surface producer graph is now bounded. Base
+`surface_read` dispatches copy-from-buffer at slot `+0x960`; shape and
+displayable updates dispatch swap-copy at `+0x970`. Legacy flush selects
+scanout/swap, copy-forward and update through slots `+0xa38`, `+0xa50` and
+`+0xa58`. Exact mutex/busy acquisition and release inventories are enforced
+for the external roots; the selected inner helpers are separately proven not
+to reacquire those locks. Base `flip_buffers` only swaps CPU-side pointers and
+is not classified as a new submit root. Full-screen update is reached from
+the display-pipe family and remains in P6.
+
+Both Intel payloads now pin the `newSurface` factory, the effective
+`IGAccelSurface` vtable and complete concrete bodies. Copy-from/copy-to enter
+`copyBufferDMA`, which calls `IntelAccelerator::submitBlit`; swap flush and
+copy-forward also call that submitter, while swap-copy dispatches accelerator
+slot `+0x9a8`. The pending-wait edge before swap-flush submission is pinned.
+Shared selector 11 consumes at most `0x400` CPU dirty-ring records and calls
+four resource-state virtuals; no GPU-submit edge was found in that bounded
+body. This closes only P5a Surface inventory. GLContext, GLDrawable,
+SurfaceMTL, MemoryInfo and remaining member semantics are still P5 blockers;
+display/flip, internal producers, counted admission and drain order remain
+open. The targeted paired-KC and dual-payload contracts pass, as does the full
+static suite at `/tmp/ngreen-static.699HQl` with only the two known SDK macro
+redefinition warnings. No production route, VM, PCI/sysfs or Host i915 state
+was touched.
 
 ## V285 external-producer admission inventory (offline)
 
