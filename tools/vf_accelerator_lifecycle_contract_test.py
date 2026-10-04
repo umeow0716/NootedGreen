@@ -474,6 +474,7 @@ def macho_inventory(path):
     # These imports distinguish the periodic collection mutex from bridge
     # descriptor spin locks. They do not certify dynamic callback lifetime.
     stamp_irq_imports = {
+        0xb895: "_memset",
         0x2810c: "__ZN15OSMetaClassBase12safeMetaCastEPKS_PK11OSMetaClass",
         0x28164: "__ZN15OSMetaClassBase12safeMetaCastEPKS_PK11OSMetaClass",
         0x28191: "__ZN15OSMetaClassBase12safeMetaCastEPKS_PK11OSMetaClass",
@@ -627,6 +628,10 @@ def macho_inventory(path):
     assert image[0x14518:0x1451e] == bytes.fromhex("ff 90 30 01 00 00"), f"{path}: changed releaseRange unmap virtual"
     assert direct_branches("__ZN19IGHardwarePageTable12releaseRangeERK14IGAddressRange", "__ZN16IntelAccelerator27flushHardwareAfterGttUpdateEv") == [0x14522], f"{path}: changed post-unmap deferred-flush edge"
     assert image[0x14573:0x14575] == bytes.fromhex("b0 01"), f"{path}: changed unconditional releaseRange success"
+    shrink_leaf = "__ZN31IGHardwarePerProcessPageTable6411shrinkLevelINS_10LevelEntryILm9E17GTTPageTableEntryEENS1_ILm9E21GTTPageDirectoryEntryEEEEbRT_yPT0_ym"
+    assert direct_branches(shrink_leaf, "__ZN10IGPagePool14PageDescriptor7releaseEv") == [0xcf1b], f"{path}: changed pruned-table descriptor release edge"
+    assert direct_branches("__ZN10IGPagePool14PageDescriptor7releaseEv", "__ZN10IGPagePool11releasePageEPKNS_14PageDescriptorE") == [0xbb7d], f"{path}: changed final-reference pool retirement edge"
+    assert image[0xcf0b:0xcf13] == bytes.fromhex("48 89 3c ce 66 ff 4a 10"), f"{path}: changed parent PTE/count before descriptor release"
     # Selected configuration window, not a complete populateAccelConfig audit.
     config = value("__ZN16IntelAccelerator19populateAccelConfigEP13IOAccelConfig")
     assert config <= 0x275be < 0x2760d <= next_symbol(config), f"{path}: changed ring-size validation owner"

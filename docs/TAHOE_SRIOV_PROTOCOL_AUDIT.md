@@ -6961,6 +6961,26 @@ No executable patch or runtime mutation.
 
 ###### Complete waitForSpace reservation and failure ordering
 
+PPGTT retirement follow-up rechecks the already-reviewed bodies and pins
+concrete ordering edges: leaf shrink writes the parent dummy PTE at cf0b,
+decrements parent count, and calls descriptor release at cf1b. The descriptor
+release atomic decrement's old-count-one branch tail-calls pool releasePage
+at bb7d. releasePage calls imported memset at b894 on descriptor CPU page
+before its optional pool lock or free-list bookkeeping. These edges and the
+memset import are now explicit contracts in addition to complete-body hashes.
+This is stronger ordering evidence, not a new discovery or runtime reproduction.
+
+The lifetime intervention point must therefore precede zeroing, not merely
+defer free-list reuse or pool pruning. A post-unmap invalidation cannot restore
+page contents already overwritten while stale GPU page-walk references may
+remain. A repair needs transactional ownership across table unlink and final
+page return, covering shared descriptors and all affected address spaces;
+its acknowledgement/transport-failure policy must retain backing until safe.
+Intercepting every descriptor release globally without such ownership could
+also block bootstrap or unrelated pool users and is not implemented here.
+No production/runtime change. Next: map transaction boundaries and determine
+where to retain/defer final page return before choosing a concrete hook.
+
 The FIFO vtable +0x140 at d65c0 is an external relocation to inherited
 IOAccelChannel2::setEventStamp, now pinned in both payloads. Its on-disk zero
 is not a null runtime method. The event-machine +0x1e0 slot at cebe8 is the
