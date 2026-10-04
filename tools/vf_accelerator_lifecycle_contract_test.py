@@ -9,6 +9,8 @@ import sys
 # Complete reviewed native bodies. This fixes the concrete Intel override
 # graph, not inherited timer APIs, dynamic callbacks or runtime completion.
 STAMP_IRQ_NATIVE = {
+    "__ZN15IGMemoryManager16initDeviceMemoryEv": (0x410, "bd63dc4bc1ab41493a9bd375699d29d377a83561aa5f85a59d167a5eb4bfa82d"),
+    "__ZN15IGMemoryManager12initSegmentsEv": (0xb4, "b9cf1738915b0a609c085aec9f83a6f06322d87f24ea16c51918e46063915cad"),
     "__ZN31IGHardwarePerProcessPageTable3210unmapRangeERK14IGAddressRange": (0x8a, "62cbf1c6629858563f2c06351cf8643f3c1541773f4e3b1fc038027efda7a586"),
     "__ZN31IGHardwarePerProcessPageTable3231getPageTableRootPhysicalAddressEPy": (0x20, "cd25ae2ea8652e97f3c1c2886a2e0bc2d3f768108abdf7f275e8469773dbb4e2"),
     "__ZN31IGHardwarePerProcessPageTable6431getPageTableRootPhysicalAddressEPy": (0x20, "93122c3d3b36d35eb68786330a138b026db29a9bd24d533287dd739a8060643d"),
@@ -863,6 +865,7 @@ def macho_inventory(path):
             ("__ZN15IGMemoryManager19newPageTableForTaskEP11IGAccelTask", "__ZN29IGHardwarePerProcessPageTable15synchronizeWithIS_EEvPKT_RK14IGAddressRangeb", 0xf969)):
         assert direct_branches(method, target) == [call], f"{path}: changed native per-task page-table factory/synchronization edge"
     global_table = value("__ZTV25IGHardwareGlobalPageTable")
+    assert image[0xec45:0xec5d] == bytes.fromhex("b8 00 00 00 40 48 89 83 c0 00 00 00 b9 00 00 00 be 48 89 8b c8 00 00 00"), f"{path}: changed manager fixed nonempty constructor range"
     for bits in (32, 64):
         table = value(f"__ZTV31IGHardwarePerProcessPageTable{bits}")
         getter = value(f"__ZN31IGHardwarePerProcessPageTable{bits}31getPageTableRootPhysicalAddressEPy")

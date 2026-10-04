@@ -7,6 +7,13 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 constructor range provenance: complete initDeviceMemory (0x410)
+reviewed/pinned; existing manager/base-table init and initSegments revisited,
+segments body added to consolidated fixtures. Fixed +0xc0 range start 0x40000000,
+length 0xbe000000 contradicts empty-directory unmap preconditions if the
+32-bit constructor is selected after manager setup. Current mode selection,
+hardware support and repair remain separate; no Host fault attribution.
+
 2026-10-04 32-bit init unmap preconditions: complete unmapRange (0x8a)
 reviewed/pinned and paired to constructor +0x130 calls. Zero length is a no-op;
 nonempty range directly dereferences software-directory/leaf descriptors and

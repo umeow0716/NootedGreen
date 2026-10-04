@@ -6955,6 +6955,34 @@ No executable patch or runtime mutation.
 
 ### Update fanout must participate in the same owner transaction
 
+Constructor range provenance and conditional 32-bit defect (2026-10-04):
+complete manager initDeviceMemory 0xe7b2/0x410 reviewed/pinned; it initializes
+device memory and task address-mode policy but does not populate table root
+records. Revisited already-reviewed manager init, initSegments and base table
+initializers. initSegments 0xebc2/0xb4 assigns +0xa0/+0xb0 ranges and a fixed
++0xc0 range start 0x40000000, length 0xbe000000 at 0xec45..0xec5c. This third
+range is unequivocally nonempty after successful segment setup, independent
+of BAR/stolen-memory input. Its complete body is now in consolidated fixtures.
+
+The 32-bit constructor zeroes all four inline directory records first, calls
+the base initializer (which only sets owner/type/task/options, not roots),
+then dispatches concrete unmapRange on manager +0xc0. That range starts in
+directory 1. Selected unmapRange immediately reads that directory's zero
+software-entry pointer and dereferences it for the first page; it neither
+allocates nor checks null. Thus if this exact 32-bit constructor is selected
+after normal manager segment setup, its precondition is violated, not merely
+an unknown possibility of zero-length input. Factory/mode reachability for
+the current device has not been demonstrated; this is not a reproduction or
+an explanation of the earlier Host i915 failure.
+
+Do not fix this by suppressing nonempty unmaps globally or pretending roots
+exist. A repair must establish correct empty/dummy root initialization before
+any range operation/root getter and preserve supported mode semantics, or
+explicitly establish hardware support/deprecation using the authoritative
+Gen11+ interface. Next: reconcile the 32-bit mode with current hardware/PRM
+and implement the proven constructor correction with failure unwind tests;
+the independent 64-bit retirement blocker remains. No runtime change.
+
 32-bit constructor unmap preconditions (2026-10-04): complete concrete
 unmapRange 0x12282/0x8a newly reviewed/pinned, paired to table object +0x130
 and existing init calls 0x11d6e/0x11d8b/0x11da8. Zero range length returns
