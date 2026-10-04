@@ -340,7 +340,7 @@ def check_boot_atomic(system, path):
                  b"__ZNK11OSMetaClass18instanceDestructedEv",
                  b"__ZN8OSObjectC2EPK11OSMetaClass",
                  b"__ZNK11OSMetaClass19instanceConstructedEv",
-                 b"__ZN8OSObjectnwEm"):
+                 b"__ZN8OSObjectnwEm", b"_kalloc_ext"):
         symbols[name] = []
     kernel_defined_addresses = set()
     for command, offset in commands(boot, kernel[0]):
@@ -377,6 +377,17 @@ def check_boot_atomic(system, path):
         assert hashlib.sha256(kernel_read(address, length)).hexdigest() == digest, "changed reviewed null-lock/base-init semantics"
     assert struct.unpack("<Q", kernel_read(symbols[b"__ZTV8OSObject"][0] + 16 + 0x88, 8))[0] == symbols[b"__ZN8OSObject4initEv"][0], "changed OSObject base init virtual"
     print("PASS Boot KC spin-lock free requires nonnull lock; base OSObject init returns true")
+    object_new = symbols[b"__ZN8OSObjectnwEm"][0]
+    allocation = symbols[b"_kalloc_ext"][0]
+    call = object_new + 0x1a
+    instruction = kernel_read(call, 5)
+    assert instruction[0] == 0xe8 and call + 5 + struct.unpack_from("<i", instruction, 1)[0] == allocation, "changed OSObject new allocator edge"
+    # Named-symbol span includes a separate unnamed large-allocation helper;
+    # pin the reviewed region, not a claim that it is one complete function.
+    assert hashlib.sha256(kernel_read(allocation, 0x370)).hexdigest() == "fd65e2351139e6231be769f673b75b18b9cfd41a275750b43ddc5973955b4e97", "changed reviewed allocation root/helper region"
+    assert kernel_read(allocation + 0x123, 5) == bytes.fromhex("48 85 c0 74 49"), "changed small-allocation null-result branch"
+    assert kernel_read(allocation + 0x171, 2) == bytes.fromhex("31 c0"), "changed allocator null-return register"
+    print("PASS Boot KC OSObject allocator edge/region and conditional null propagation (zone policy pending)")
     for table, slot, method in (
             (b"__ZTV12IODMACommand", 0x118, b"__ZN12IODMACommand12cloneCommandEPv"),
             (b"__ZTV12IODMACommand", 0x90, b"__ZN12IODMACommand4freeEv"),

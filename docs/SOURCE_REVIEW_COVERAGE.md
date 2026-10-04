@@ -7,6 +7,11 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 allocation root/helper region pinned with null-propagation edge.
+OSObject flags lack NOFAIL, but WAITOK's effective guarantee depends on zone
+exhaustibility; selected pool size-class/zone initialization remain unresolved.
+No null allocation or OOM reproduced; lower callees incomplete.
+
 2026-10-04 OSObject allocation wrapper: complete Boot operator new pinned;
 native binary returns allocator result without local source assert/null check.
 Underlying allocator/flags policy still unresolved; not a proven null return.

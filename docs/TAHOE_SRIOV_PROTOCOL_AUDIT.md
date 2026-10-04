@@ -6393,6 +6393,23 @@ callback admission must be proved elsewhere. No executable patch/runtime test.
 
 ######### Factory failed-init release cannot blindly use pool free
 
+Reviewed Boot kalloc_ext root plus separate unnamed large-allocation helper
+region (named-symbol span 0x370) and pinned region hash, OSObject new's exact
+direct allocator edge and root null-propagation branch. The ordinary size-class
+path calls allocator at 0xffffff80003d4230; if RAX is zero it branches to XOR EAX
+and returns zero, which OSObject new propagates unchanged. Region identity is
+not mislabeled as one complete function; lower zone/VM/diagnostic callees remain
+pending.
+
+Local XNU zalloc.h decodes 0x41004 as tag bits, backtrace tagging and ZERO with
+WAITOK; it does not include Z_NOFAIL (0x8000). Its documented WAITOK guarantee
+depends on non-exhaustible zone policy; exhaustible zones may fail at their
+limit. Therefore root null propagation plus absent NOFAIL is NOT proof that this
+specific pool's allocation can return null. The selected size-class zone,
+initialization/exhaustion flags and actual allocator policy must be resolved.
+No memory pressure/OOM test was run. Paired KC/diff-check pass; aa0439c
+CI37165903219 success. Fixture/docs-only, no full-suite rerun or runtime mutation.
+
 Complete Boot OSObject operator new (0x30) reviewed/pinned with next-symbol
 boundary: passes size and flags 0x41004 to allocator 0xffffff8000369360, updates
 global ivar-size accounting and returns the allocator result without a local
