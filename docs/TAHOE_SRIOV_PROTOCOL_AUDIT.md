@@ -6955,6 +6955,27 @@ No executable patch or runtime mutation.
 
 ### Update fanout must participate in the same owner transaction
 
+SharedUserClient effective lock: reviewed complete color_resolve at 0x7899c
+(0x5d0), pinned both payloads, lock/busy/lookup imports, CCS call edge and
+error-mapping anchors. After size 0x30, feature and nonzero-resource checks,
+the body loads client +0xf8 accelerator, locks its +0x88 at 0x78a0f and marks
+busy at 0x78a1f. It does resource lookup/validation, preparation and selected
+CCS resolve at 0x78f23 inside this scope. AL false maps to 0xe00002c2 and
+true to zero at 0x78f28..0x78f32. Resource virtual cleanup +0x198/+0x178
+then joins notifications, unlock_busy at 0x78e30 and mutex unlock at 0x78e3c.
+Early request rejection outside that scope goes directly to the return path.
+
+This establishes one concrete lock enclosing mapping/cache/event mutation and
+submission, rather than inferring unlock from nested bodies. It does NOT prove
+resource lookup retains backing, cleanup virtual semantics, every concurrent
+owner destruction, Metal/render/depth locking or firmware quiescence. Inherited
+stop cleanup previously reviewed also uses accelerator +0x88, but that alone
+does not close all ownership paths. A new synchronous retirement wait must
+account for this held mutex and downstream event waits; indiscriminately
+dropping it could invalidate borrowed resource/task pointers. Effective callback
+lock ordering and all cleanup variants remain required. No production/runtime
+change; native targeted contracts pass both payloads.
+
 Outer resolve state follow-up: reviewed complete plane-selecting resource
 submitCCSResolve at 0x74078 (0xa6), and enableRenderCompressionWithAccelTask
 at 0x73774 (0x2ac), pinned both payloads and selected edges/state anchors.

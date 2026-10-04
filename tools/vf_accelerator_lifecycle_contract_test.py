@@ -130,6 +130,7 @@ STAMP_IRQ_NATIVE = {
     "__ZN16IGAccelMemoryMap18updateGPUPageTableEv": (0x140, "75ba5674583a8d27d54acab18290e78bbc9de8157b19bfc6614c379d39fa3fbc"),
     "__ZN16IGAccelMemoryMap15updateCacheTypeEj": (0x24, "0c704192e43ed19c39a2179ea6e80551a07af30a8a541016a913f3d9572516f8"),
     "__ZN15IGAccelResource22updateMappingCacheTypeEj": (0x30, "499c98e59e89b29b95b7d14247a756db3f980b5f58134dcf2c49c3baf5db97bf"),
+    "__ZN23IGAccelSharedUserClient13color_resolveEPvy": (0x5d0, "8e09b7dcbb4d03aa0fc6eb10ae14a2db460543bcaf13d347ddb43fd3e457ef94"),
     "__ZN15IGAccelResource16submitCCSResolveEPNS_17ResourceInfoEntryER16IntelAcceleratorP11IGAccelTask20EIntelCCSResolveType": (0xa6, "bb27f13ada6c05e268f7f12e4089c601d90b946e041311e42d965199f618477f"),
     "__ZN15IGAccelResource36enableRenderCompressionWithAccelTaskEPNS_17ResourceInfoEntryEyR16IntelAcceleratorP11IGAccelTaskhhb": (0x2ac, "13fbc4f7a1fded75ad34c5699be050bf8b472fa635893b2ff6dfd5065f9cc87d"),
     "__ZN16IntelAccelerator20barrierForWaitEventsEbP18IGAccelFIFOChannel": (0x52, "1714d3e9be9868c3c9db6a8bd6cb8a2e8f3fc83a9acf2c82ba8e9f2d72ff57d8"),
@@ -506,6 +507,11 @@ def macho_inventory(path):
     # These imports distinguish the periodic collection mutex from bridge
     # descriptor spin locks. They do not certify dynamic callback lifetime.
     stamp_irq_imports = {
+        0x78a10: "_IOLockLock",
+        0x78e3d: "_IOLockUnlock",
+        0x78a20: "__ZN22IOGraphicsAccelerator29lock_busyEv",
+        0x78e31: "__ZN22IOGraphicsAccelerator211unlock_busyEv",
+        0x78a82: "__ZN14IOAccelShared214lookupResourceEjPPv",
         0x15ec9: "__ZN16IOSimpleReporter14incrementValueEyx",
         0x73c16: "_IOMalloc",
         0x73ed3: "_IOFree",
@@ -632,7 +638,7 @@ def macho_inventory(path):
             relocations[name] = address
 
     for address, name in stamp_irq_imports.items():
-        opcode = 0xe9 if address in (0xb825, 0xa73c, 0xa746, 0xa767) or (name in ("_IOLockUnlock", "_lck_spin_unlock") and address != 0x24773) else 0xe8
+        opcode = 0xe9 if address in (0xb825, 0xa73c, 0xa746, 0xa767) or (name in ("_IOLockUnlock", "_lck_spin_unlock") and address not in (0x24773, 0x78e3d)) else 0xe8
         if observed_stamp_irq_imports[address] != [(name, 0x2d)] or image[address - 1] != opcode:
             raise AssertionError(f"{path}: changed stamp IRQ imported call at {address:#x}")
 
@@ -749,6 +755,11 @@ def macho_inventory(path):
     assert direct_branches(wait_barrier, "__ZN19IGAccelEventMachine11finishEventEP12IOAccelEventj") == [0x2bc47], f"{path}: changed wait-barrier aggregate-event fallback"
     ccs_submit = "__ZN16IntelAccelerator16submitCCSResolveEP15IGAccelResourceP22color_resolve_params_tRK8IGVectorI11blit_rect_t25IGIOMallocAllocatorPolicyEP11IGAccelTask"
     ccs_resource = "__ZN15IGAccelResource16submitCCSResolveEPNS_17ResourceInfoEntryER16IntelAcceleratorP11IGAccelTask20EIntelCCSResolveTypehh"
+    color_resolve = "__ZN23IGAccelSharedUserClient13color_resolveEPvy"
+    assert direct_branches(color_resolve, ccs_resource) == [0x78f23], f"{path}: changed locked user-client CCS dispatch"
+    for address, expected in ((0x78a08, "48 8b bb 88 00 00 00"), (0x78e35, "48 8b bb 88 00 00 00"), (0x78f28, "31 c9 84 c0 41 be c2 02 00 e0 44 0f 45 f1")):
+        encoded = bytes.fromhex(expected)
+        assert image[address:address + len(encoded)] == encoded, f"{path}: changed color-resolve lock/error anchor at {address:#x}"
     ccs_planes = "__ZN15IGAccelResource16submitCCSResolveEPNS_17ResourceInfoEntryER16IntelAcceleratorP11IGAccelTask20EIntelCCSResolveType"
     ccs_enable = "__ZN15IGAccelResource36enableRenderCompressionWithAccelTaskEPNS_17ResourceInfoEntryEyR16IntelAcceleratorP11IGAccelTaskhhb"
     assert direct_branches(ccs_planes, ccs_resource) == [0x740d8], f"{path}: changed per-plane CCS dispatch"

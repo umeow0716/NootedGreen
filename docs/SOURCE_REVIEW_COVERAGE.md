@@ -7,6 +7,12 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 color_resolve: one full 0x5d0 user-client body reviewed/pinned with
+mutex/busy/lookup imports. Holds accelerator +0x88 across selected CCS resolve,
+maps false to 0xe00002c2, then resource cleanup/busy/mutex release. One concrete
+effective lock is proven, not all caller domains or owner retention. Waiting or
+dropping that lock requires callback/lifetime analysis. No new driver change.
+
 2026-10-04 outer CCS state: two full wrapper/enable bodies reviewed and pinned.
 Plane wrapper ANDs status while retaining partial progress; compression enable
 sets flags before selected resolve and does not propagate its Boolean. Effective
