@@ -2096,8 +2096,7 @@ def function_body(source, signature):
     raise AssertionError(f"unterminated {signature}")
 
 
-def source_contract(path):
-    source = pathlib.Path(path).read_text()
+def ring_backing_submit_contract(source, path="<source>"):
     submit = function_body(source, "bool Gen11::vfSubmitWorkItem(")
     for requirement in (
             "OSObject *admittedRingBacking = admitted ? gVfContexts[admittedSlot].ringBacking : nullptr;",
@@ -2105,7 +2104,33 @@ def source_contract(path):
             "getMember<uint64_t>(admittedRingBacking, kVfMappedBufferLengthOffset) < ringSize"):
         assert requirement in submit, f"{path}: missing retained ring submission guard"
     ring_fault = submit.index('vfMarkProtocolFault("submit ring backing identity or extent mismatch")')
+    assert "return false;" in submit[ring_fault:submit.index("}", ring_fault)], f"{path}: ring mismatch branch must reject locally"
     assert ring_fault < submit.index("return false;", ring_fault) < submit.index("const uint32_t previousRingTail"), f"{path}: ring mismatch must reject before tail publication"
+
+
+def ring_backing_submit_mutations(path):
+    source = pathlib.Path(path).read_text()
+    mutations = (
+        ("!admittedRingBacking || ringBacking != admittedRingBacking ||",
+         "!admittedRingBacking || false ||"),
+        ("getMember<uint64_t>(admittedRingBacking, kVfMappedBufferLengthOffset) < ringSize",
+         "getMember<uint64_t>(admittedRingBacking, kVfMappedBufferLengthOffset) > ringSize"),
+        ('vfMarkProtocolFault("submit ring backing identity or extent mismatch");\n\t\treturn false;',
+         'vfMarkProtocolFault("submit ring backing identity or extent mismatch");\n\t\t/* continue incorrectly */'),
+    )
+    for old, new in mutations:
+        assert source.count(old) == 1, "ring guard mutation must have one exact target"
+        try:
+            ring_backing_submit_contract(source.replace(old, new, 1))
+        except (AssertionError, ValueError):
+            continue
+        raise AssertionError("ring backing guard mutation escaped source contract")
+    print("PASS: three ring backing guard mutations rejected (source contract, not DMA proof)")
+
+
+def source_contract(path):
+    source = pathlib.Path(path).read_text()
+    ring_backing_submit_contract(source, path)
     required = (
         "com.apple.iokit.IOAcceleratorFamily2",
         "com.apple.iokit.IOPCIFamily",
@@ -2697,6 +2722,7 @@ def main():
         raise SystemExit(f"usage: {sys.argv[0]} kern_gen11.cpp TGL-production TGL-debug")
     direct_branch_candidate_contract()
     source_contract(sys.argv[1])
+    ring_backing_submit_mutations(sys.argv[1])
     ggtt_postwrite_mutations(sys.argv[1])
     macho_inventory(sys.argv[2])
     macho_inventory(sys.argv[3])

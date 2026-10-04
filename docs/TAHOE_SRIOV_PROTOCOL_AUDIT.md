@@ -6969,6 +6969,14 @@ Mismatch marks a protocol fault and returns false without tail publication or
 CTB submission. Existing alignment/control-valid/tail-below-size guards remain.
 The source contract pins this guard and its pre-publication placement.
 
+Follow-up negative tests remove backing identity comparison, invert the extent
+comparison, or remove the mismatch branch's local false return. The third
+mutation initially escaped the positional contract by matching the later
+tail-validation false return. The contract now requires false within the
+mismatch branch itself; all three in-memory mutations are rejected. This
+strengthens source-regression coverage, not a formal control-flow/DMA proof.
+No additional production behavior changed in this test follow-up.
+
 This is an offline-only production change, not deployed or dynamically verified.
 It prevents advertising a tail for mismatched/undersized backing; it cannot undo
 earlier CPU writes by native writers and does not prove actual capacity,
