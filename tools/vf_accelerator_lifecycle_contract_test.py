@@ -2164,6 +2164,10 @@ def ring_backing_submit_mutations(path):
 def source_contract(path):
     source = pathlib.Path(path).read_text()
     ring_backing_submit_contract(source, path)
+    for signature in ("bool Gen11::vfAttachContextDesc(",
+                      "void Gen11::vfDetachContextDesc(",
+                      "bool Gen11::vfSubmitWorkItem("):
+        assert "VfContextOperationGuard operationGuard;" in function_body(source, signature), f"{path}: lost counted context-operation admission: {signature}"
     required = (
         "com.apple.iokit.IOAcceleratorFamily2",
         "com.apple.iokit.IOPCIFamily",

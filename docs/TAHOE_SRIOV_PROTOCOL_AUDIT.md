@@ -6961,6 +6961,27 @@ No executable patch or runtime mutation.
 
 ###### Complete waitForSpace reservation and failure ordering
 
+Current source gate scope rechecked: VfContextOperationGuard is instantiated
+by vfAttachContextDesc, vfDetachContextDesc and vfSubmitWorkItem. These three
+typed entry points are now explicitly contract-checked. The guard enters/
+leaves the context-operation count; shutdown closes admission and waits for
+that count before sweeping direct contexts. This is the stated context
+snapshot domain, not an automatically complete page-table or pool lifetime
+domain. Native manager range release, task free, PPGTT free and descriptor
+release are not made counted operations merely because GuC submission is
+gated. Closing this gate alone cannot stabilize raw native task/table lists.
+
+For retirement integration, define an explicit mapping/destruction admission
+domain, stabilize task/table/pool owners before collecting releases, and prove
+interaction with the existing context gate and IRQ/CTB completion consumer.
+Do not wait for a count while the caller holds a lock required by counted
+operations or completion delivery. The existing sleep-context checks are
+necessary but do not prove that lock-order condition. This review identifies
+why the current context guard cannot simply be reused as a global PPGTT
+collector lock; it does not implement a new gate or certify full shutdown.
+No production/runtime change. Next: actual native mapping/destruction outer
+serialization and completion-consumer lock dependencies.
+
 Retirement owner follow-up rechecks the already-pinned descriptor retain and
 manager releasePagePool bodies. Descriptor retain only tail-calls OSAddAtomic64
 on descriptor +0x28 with +1; it does not retain the owning IGPagePool OSObject.
