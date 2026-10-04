@@ -6955,6 +6955,26 @@ No executable patch or runtime mutation.
 
 ### Update fanout must participate in the same owner transaction
 
+#### Resolve callers reserve eight bytes only under a cursor invariant
+
+The getter request windows in resolve_hiz_g7 `85afa..85b16` and
+resolve_init_ctx_g7 `8c1f2..8c20e` are byte/relocation-pinned in both
+images. Each computes the low32 request as
+`((pool.end - pool.cursor) >> 2) - 2`. An exhaustive arithmetic check for
+remaining8..10000 hex proves request*4+8<=remaining, so a valid cursor with
+at least eight bytes remaining fits and deliberately preserves the pool's
+reserved tail. For remaining0..7 the 32-bit subtract wraps and the modeled
+request exceeds remaining.
+
+The enclosing resolve bodies are5738/972 bytes and are not credited as
+whole reviews. This finding is conditional: pool initialization establishes
+start<=cursor<=end initially, but all writers/setBufferPtr callers and every
+loop iteration have not yet proven cursor<=end-8 at these two entries.
+It therefore narrows normal behavior without dismissing malformed-state
+underflow. No evidence here makes the earlier injected oversize request a
+normal resolve workload. Next trace cursor publication/writers and the
+post-getter write/setBufferPtr sequence.
+
 #### Rect-list caller permits the full 64 KiB boundary conditionally
 
 The bounded native window33c66..33caf is now byte-pinned in both images,

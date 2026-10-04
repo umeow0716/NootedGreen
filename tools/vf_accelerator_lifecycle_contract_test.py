@@ -787,6 +787,19 @@ def macho_inventory(path):
         "48c1ee02488bbda0feffff")
     assert image[0x33c66:0x33caf] == rect_request, f"{path}: changed rect-list bounded request derivation"
     assert image[0x33caf] == 0xe8 and pool_getter_imports.get(0x33cb0) == [0x2d], f"{path}: changed rect-list getter import"
+    resolve_requests = (
+        (0x85afa, 0x85b16, bytes.fromhex("488bb350180000482bb35818000048c1ee0283c6fe4889df488955c8")),
+        (0x8c1f2, 0x8c20e, bytes.fromhex("488bb350180000482bb35818000048c1ee0283c6fe48895dc84889df")),
+    )
+    for start, call, expected in resolve_requests:
+        assert image[start:call] == expected, f"{path}: changed resolve remaining-capacity request"
+        assert image[call] == 0xe8 and pool_getter_imports.get(call + 1) == [0x2d], f"{path}: changed resolve getter import"
+    for remaining in range(8, 0x10001):
+        request = ((remaining >> 2) - 2) & 0xffffffff
+        assert request * 4 + 8 <= remaining
+    for remaining in range(8):
+        request = ((remaining >> 2) - 2) & 0xffffffff
+        assert request * 4 > remaining
     for backing_name, backing_address, backing_bytes in (
             ("_g7_resolve_scratch_space_size", 0xc26c0, 0x5100),
             ("_blit3d_scratch_space_size", 0xb0c40, 0xd240)):
