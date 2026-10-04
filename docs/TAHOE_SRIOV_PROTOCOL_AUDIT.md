@@ -6955,6 +6955,25 @@ No executable patch or runtime mutation.
 
 ### Update fanout must participate in the same owner transaction
 
+#### Offline candidate branch executes correctly, deployment still absent
+
+Native ABI test now runs original/candidate × init success/failure on both
+archived images. Candidate replaces the displaced stack-cleanup/backing
+load window in emulator memory with a jump to a test-only cave: restore
+stack, test AL, branch false to native7cfa3, otherwise restore displaced
+backing-size load and resume7cf5e. A test-only init shim clears record1860
+in executed x86 before tailing to the mocked init callback. All ten init
+arguments, final stack and six callee-saved registers are asserted.
+Candidate false skips backing/setup and returns AL0; success preserves
+the selected continuation. Original false still reproduces the defect.
+
+This verifies candidate instruction semantics only. The cave is synthetic,
+no native executable-space ownership or relocation admission is proven,
+and pool init/base init/outer release remain mocked or outside this run.
+No code is linked into production. Next execute the native outer factory
+and extended free with partial-init fixtures, then select a real UUID/VF
+gated routing strategy; runtime buffer selection is still unrepaired.
+
 #### Native constructor instruction execution confirms ignored init status
 
 `tools/vf_command_pool_native_abi_test.py` executes the exact hash-pinned
