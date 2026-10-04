@@ -9,6 +9,11 @@ import sys
 # Complete reviewed native bodies. This fixes the concrete Intel override
 # graph, not inherited timer APIs, dynamic callbacks or runtime completion.
 STAMP_IRQ_NATIVE = {
+    "__ZN31IGHardwarePerProcessPageTable648mapRangeERK14IGAddressRangeyy": (0xe6, "f58bafe5bf67319aed0ecd8e44965f6d2dab044b6963b3a36d52a9d5a733cdba"),
+    "__ZNK31IGHardwarePerProcessPageTable649pageWalk3E19GTTVirtualAddress64RPNS_10LevelEntryILm9E17GTTPageTableEntryEE": (0x68, "78eae8bb2011882715ef02e83b19e0514736d601ac53d7a176a26cf386cb86b6"),
+    "__ZN31IGHardwarePerProcessPageTable6410unmapRangeERK14IGAddressRange": (0xbe, "d06c36dcf6a74a6400f97dd245ff6289685ea468f5f29453dab8122a8dec457a"),
+    "__ZN31IGHardwarePerProcessPageTable6413mapRangeDummyERK14IGAddressRangey": (0xe4, "e12a44913420fa13088c2bcee80915e2e6d44ee6fa875c40ac43843d1feac884"),
+    "__ZN31IGHardwarePerProcessPageTable6411expandRangeERK14IGAddressRange": (0x246, "d0b93020e89cf47d6b877b51cdac3640699624693bcf7a368d593227443fd89b"),
     "__ZNK10IGPagePool9MetaClass5allocEv": (0x40, "65f06ebfe980773f1197b135a255e6293f189a643e11488d8b7953cd51fdca69"),
     "__ZN10IGPagePoolC1EPK11OSMetaClass": (0x20, "48ed1831fa6b10b5f986207d9ce46af1ba0068f4e81aaabc938eae817c9ae9c2"),
     "__ZN10IGPagePoolD2Ev": (0xa, "aafd66af2c321a1032ffdbaea51ef446e7df7cd4b20fe53e4fdf6af362acadb2"),

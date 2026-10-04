@@ -6949,6 +6949,45 @@ mapping-seed callee and wraparound policy remain pending. This review does not
 certify resident pointers across unlock/wait, mapper retirement or Host safety.
 No executable patch or runtime mutation.
 
+# Native 64-bit PPGTT map/unmap failure and retirement boundary
+
+Complete symbol-bounded bodies reviewed in both native payloads and now hash
+pinned: mapRange d0ce/e6, pageWalk3 e3ae/68, unmapRange da60/be,
+mapRangeDummy db1e/e4 and expandRange d1b4/246. These pins detect payload drift;
+they do not prove runtime communication or GPU completion.
+
+Both mapping methods first expand the hierarchy. Expansion failure invokes
+shrinkRange and returns false. After expansion succeeds, a later pageWalk3
+failure returns false without undoing already-written leaf PTEs or invoking
+shrinkRange. Each successful store increments the leaf record count. Normal
+single-threaded expansion should populate the requested hierarchy: reachability
+of this later failure still needs caller locking, shared-record and range
+invariant proof. Do not present the conditional prefix hazard as a reproduced
+failure. The independently reviewed higher-level commit loop also retains
+earlier successful mapping segments on a subsequent failure.
+
+pageWalk3 checks descriptor pointers at the first two hierarchy levels, but
+dereferences their software-array pointers without separate null checks.
+expandRange likewise treats an existing descriptor as sufficient to descend.
+Shared descriptors and the fixed 1-GiB synchronization window therefore need
+an explicit caller-range proof, not a blanket claim that shared mappings crash.
+expandRange creates the root even for an empty range; its inclusive end and
+mapping methods' exclusive ends use unchecked arithmetic. Alignment and valid
+address-range guarantees remain caller obligations under review.
+
+unmapRange skips failed page walks, writes the manager's dummy physical PTE
+with flags 3 for successful walks, decrements the leaf count without testing
+the old PTE, and tail-calls shrinkRange. Do not infer a boolean success result
+from the symbol name or residual return register. None of these five bodies
+locally supplies GPU invalidation/completion before table pruning or backing
+reuse. Caller releaseRange/cleanup and GuC acknowledgement ordering must close
+that lifetime boundary. Mapping dummy PTE composition uses addition rather
+than OR; attribute/address overlap must be checked against caller policy.
+
+No production hook or runtime change accompanies this audit. Next: review the
+remaining lower-level expansion bodies, then map the full commit-failure
+rollback and release/invalidation owner graph before choosing a repair.
+
 # PTE commit status and failed-wire final free follow-up
 
 Reviewed/pinned complete base commit_pte (0x64) and Intel
