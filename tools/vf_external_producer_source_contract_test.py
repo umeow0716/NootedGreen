@@ -41,6 +41,7 @@ def contract(source, path="<source>"):
         "__ZN29IOAccelDisplayPipeUserClient214externalMethodEjP25IOExternalMethodArgumentsP24IOExternalMethodDispatchP8OSObjectPv",
         "__ZN18IOAccelDisplayPipe22display_change_handlerEPvP13IOFramebufferiS0_",
         "__ZN22IOGraphicsAccelerator214gart_collectorEP22IOInterruptEventSourcei",
+        "__ZN22IOGraphicsAccelerator218finalize_interruptEP22IOInterruptEventSourcei",
         "__ZN22IOGraphicsAccelerator218deviceCacheControlEP20IOSurfaceDeviceCachejyy",
         "__ZN22IOGraphicsAccelerator220emitFirstFlushEventsEv",
     )
@@ -88,16 +89,46 @@ def contract(source, path="<source>"):
 
     for signature, original in (
             ("void Gen11::vfGartCollector(", "oVfGartCollector"),
-            ("void Gen11::vfDeviceCacheControl(", "oVfDeviceCacheControl"),
             ("void Gen11::vfEmitFirstFlushEvents(", "oVfEmitFirstFlushEvents")):
         body = function_body(source, signature)
         for token in ("VfExternalProducerGuard guard(that);", "if (!guard)", original):
             assert token in body, f"{path}: incomplete direct-receiver callback gate: {signature}"
+        guard_index = body.index("VfExternalProducerGuard guard(that);")
+        assert "getMember" not in body[:guard_index] and \
+            guard_index < body.index(original), \
+            f"{path}: direct callback dereferenced/entered receiver before lease: {signature}"
+
+    finalize = function_body(source, "void Gen11::vfFinalizeInterrupt(")
+    for token in ("VfExternalProducerGuard guard(that);", "if (!guard)",
+                  "VfDeviceCacheRetirementScope retirement(that);",
+                  "oVfFinalizeInterrupt"):
+        assert token in finalize, \
+            f"{path}: incomplete counted finalize wrapper: {token}"
+    assert finalize.index("VfExternalProducerGuard guard(that);") < \
+        finalize.index("VfDeviceCacheRetirementScope retirement(that);") < \
+        finalize.index("oVfFinalizeInterrupt"), \
+        f"{path}: finalize retirement scope entered outside counted lease"
+
+    device_cache = function_body(source, "void Gen11::vfDeviceCacheControl(")
+    for token in ("selector == 3 || selector == 4",
+                  "gVfDeviceCacheRetirementDepth > 0",
+                  "VfExternalProducerGuard guard(that, !nestedRetirement);",
+                  "if (!guard)", "oVfDeviceCacheControl"):
+        assert token in device_cache, \
+            f"{path}: incomplete device-cache retirement admission: {token}"
+    cache_guard = device_cache.index("VfExternalProducerGuard guard")
+    assert "getMember" not in device_cache[:cache_guard] and \
+        cache_guard < device_cache.index("oVfDeviceCacheControl"), \
+        f"{path}: device-cache callback dereferenced/entered receiver before admission"
 
     sleep = function_body(source, "IOReturn Gen11::vfDisplaySleepCallback(")
     for token in ("VfExternalProducerGuard guard(that);", "if (!guard)",
                   "return kIOReturnOffline;", "oVfDisplaySleepCallback"):
         assert token in sleep, f"{path}: incomplete DisplaySleep admission: {token}"
+    sleep_guard = sleep.index("VfExternalProducerGuard guard(that);")
+    assert "getMember" not in sleep[:sleep_guard] and \
+        sleep_guard < sleep.index("oVfDisplaySleepCallback"), \
+        f"{path}: DisplaySleep dereferenced/entered receiver before lease"
     sleep_symbol = "__ZN16IntelAccelerator20DisplaySleepCallbackE17DisplaySleepCmd_tjj"
     assert source.count(sleep_symbol) == 1, \
         f"{path}: missing/duplicate DisplaySleep route"
@@ -111,6 +142,13 @@ def contract(source, path="<source>"):
     assert "OSSynchronizeIO();" in guard
     assert "admitted=!tracked||vfEnterExternalProducer();" in normalized_guard
     assert "if(tracked&&admitted)vfLeaveExternalProducer();" in normalized_guard
+    retirement_scope = block(source, "class VfDeviceCacheRetirementScope",\
+                             "static bool vfCloseExternalProducerGateAndWait()")
+    normalized_retirement = "".join(retirement_scope.split())
+    for token in ("OSIncrementAtomic(&gVfDeviceCacheRetirementDepth);",
+                  "OSDecrementAtomic(&gVfDeviceCacheRetirementDepth);"):
+        assert "".join(token.split()) in normalized_retirement, \
+            f"{path}: unbalanced device-cache retirement scope: {token}"
 
     fault = function_body(source, "void vfMarkProtocolFault(")
     assert fault.index("NGVfIrqGate::close") < fault.index("gVfProtocolFault"), \
@@ -128,10 +166,12 @@ def contract(source, path="<source>"):
     assert gate_check < publish, f"{path}: accelerator published before one-shot gate check"
     stop = function_body(source, "void Gen11::acceleratorStop(")
     close = stop.index("vfCloseExternalProducerGateAndWait()")
+    finalize = stop.index("callback->oVfFinalizeInterrupt")
+    balanced = stop.index("gVfDeviceCacheRetirementDepth != 0")
     stopping = stop.index("gVfDeviceStopping")
     native = stop.index("callback->oAcceleratorStop")
-    assert close < stopping < native, \
-        f"{path}: close/drain/device-stopping/native-stop order changed"
+    assert close < finalize < balanced < stopping < native, \
+        f"{path}: close/drain/cache-finalize/device-stopping/native-stop order changed"
     assert "isLockedByCurrentThread" not in stop, \
         f"{path}: always-true Tahoe ownership stub used as a lock proof"
     print("PASS counted VF external-producer source/route/teardown contract")
@@ -148,8 +188,14 @@ def mutation_contract(source, path):
         ("if (tracked && admitted)", "if (admitted)", 1),
         ("__ZN16IntelAccelerator20DisplaySleepCallbackE17DisplaySleepCmd_tjj",
          "__ZN16IntelAccelerator20DisplaySleepCallback_REMOVED", 1),
+        ("__ZN22IOGraphicsAccelerator218finalize_interruptEP22IOInterruptEventSourcei",
+         "__ZN22IOGraphicsAccelerator218finalize_interrupt_REMOVED", 1),
         ("__ZN19IOAccelCommandQueue22submit_command_buffersEPK29IOAccelCommandQueueSubmitArgs",
          "__ZN19IOAccelCommandQueue22submit_command_buffers_REMOVED", 1),
+        ("VfExternalProducerGuard guard(that);",
+         "getMember<void *>(that, 0x88);\n\tVfExternalProducerGuard guard(that);", 1),
+        ("gVfDeviceCacheRetirementDepth > 0",
+         "gVfDeviceCacheRetirementDepth >= 0", 1),
     )
     for mutation in mutations:
         old, new = mutation[:2]

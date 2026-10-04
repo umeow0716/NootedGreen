@@ -221,6 +221,12 @@ volatile UInt32 gVfContextOperationGate = 0;
 // an inherited IOAccelerator mutex/wait scope.  The high bit closes admission;
 // the low bits are invocation-lifetime leases, not GPU-completion references.
 volatile UInt32 gVfExternalProducerGate = 0;
+// Selector 3 (accelerator release) synchronously drops the last orphan-cache
+// reference and therefore nests selector 4 (cache free).  During the native
+// finalize handler these are retirement callbacks, not new resource producers.
+// A depth counter lets only that reviewed dynamic extent bypass the already
+// closed external-producer gate.
+volatile SInt32 gVfDeviceCacheRetirementDepth = 0;
 volatile UInt32 gVfContextShutdownStarted = 0;
 volatile UInt32 gVfContextShutdownComplete = 0;
 volatile UInt32 gVfDmaQuiesced = 0;
@@ -913,6 +919,31 @@ public:
 private:
 	bool tracked;
 	bool admitted;
+};
+
+class VfDeviceCacheRetirementScope {
+public:
+	explicit VfDeviceCacheRetirementScope(void *accelerator) : tracked(
+		gVfIdentity == VfIdentity::Virtual && accelerator &&
+		gVfAccelerator && accelerator == gVfAccelerator) {
+		if (tracked) {
+			OSIncrementAtomic(&gVfDeviceCacheRetirementDepth);
+			OSSynchronizeIO();
+		}
+	}
+
+	~VfDeviceCacheRetirementScope() {
+		if (tracked) {
+			OSSynchronizeIO();
+			OSDecrementAtomic(&gVfDeviceCacheRetirementDepth);
+		}
+	}
+
+	VfDeviceCacheRetirementScope(const VfDeviceCacheRetirementScope &) = delete;
+	VfDeviceCacheRetirementScope &operator=(const VfDeviceCacheRetirementScope &) = delete;
+
+private:
+	bool tracked;
 };
 
 static bool vfCloseExternalProducerGateAndWait()
@@ -2192,6 +2223,8 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			 vfDisplayChangeHandler, this->oVfDisplayChangeHandler},
 			{"__ZN22IOGraphicsAccelerator214gart_collectorEP22IOInterruptEventSourcei",
 			 vfGartCollector, this->oVfGartCollector},
+			{"__ZN22IOGraphicsAccelerator218finalize_interruptEP22IOInterruptEventSourcei",
+			 vfFinalizeInterrupt, this->oVfFinalizeInterrupt},
 			{"__ZN22IOGraphicsAccelerator218deviceCacheControlEP20IOSurfaceDeviceCachejyy",
 			 vfDeviceCacheControl, this->oVfDeviceCacheControl},
 			{"__ZN22IOGraphicsAccelerator220emitFirstFlushEventsEv",
@@ -2200,7 +2233,7 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		PANIC_COND(!patcher.routeMultiple(
 		               index, externalProducerRoutes, address, size),
 		           "ngreen", "Cannot route VF external-producer admission roots");
-		SYSLOG("ngreen", "V295: routed 16 counted VF external-producer roots");
+		SYSLOG("ngreen", "V296: routed 17 counted VF external-producer roots");
 		return true;
 	}
 
@@ -4885,11 +4918,25 @@ void Gen11::vfGartCollector(void *that, IOInterruptEventSource *source,
 		that, source, count);
 }
 
+void Gen11::vfFinalizeInterrupt(void *that,
+	                            IOInterruptEventSource *source, int count)
+{
+	VfExternalProducerGuard guard(that);
+	if (!guard)
+		return;
+	VfDeviceCacheRetirementScope retirement(that);
+	FunctionCast(vfFinalizeInterrupt, callback->oVfFinalizeInterrupt)(
+		that, source, count);
+}
+
 void Gen11::vfDeviceCacheControl(void *that, void *cache,
 	                             uint32_t selector, uint64_t argument0,
 	                             uint64_t argument1)
 {
-	VfExternalProducerGuard guard(that);
+	OSSynchronizeIO();
+	const bool nestedRetirement = (selector == 3 || selector == 4) &&
+	                              gVfDeviceCacheRetirementDepth > 0;
+	VfExternalProducerGuard guard(that, !nestedRetirement);
 	if (!guard)
 		return;
 	FunctionCast(vfDeviceCacheControl, callback->oVfDeviceCacheControl)(
@@ -5109,9 +5156,26 @@ void Gen11::acceleratorStop(void *that, void *provider)
 	if (gVfIdentity == VfIdentity::Virtual && that == gVfAccelerator) {
 		PANIC_COND(!vfCloseExternalProducerGateAndWait(), "ngreen",
 			"Cannot drain VF external producers before accelerator stop");
+		// Tahoe normally schedules this handler from IOService::finalize.  A
+		// stop can remove the +0x9e0 event source before a pending notification
+		// is consumed, so invoke the reviewed one-shot original synchronously
+		// after producer drain.  Its atomic +0xdd0 guard makes an already-run
+		// handler a no-op.  The IOSurface gather accepts only cache objects with
+		// retain count one; selector 3 releases that final reference and nests
+		// selector 4 entirely inside this retirement scope.
+		PANIC_COND(!callback || !callback->oVfFinalizeInterrupt, "ngreen",
+			"Missing native accelerator finalize handler during VF stop");
+		{
+			VfDeviceCacheRetirementScope retirement(that);
+			FunctionCast(vfFinalizeInterrupt,
+			             callback->oVfFinalizeInterrupt)(that, nullptr, 0);
+		}
+		OSSynchronizeIO();
+		PANIC_COND(gVfDeviceCacheRetirementDepth != 0, "ngreen",
+			"Unbalanced VF device-cache retirement scope");
 		OSCompareAndSwap(0, 1, &gVfDeviceStopping);
 		OSSynchronizeIO();
-		SYSLOG("ngreen", "V295: VF external producers drained; deferring transport quiescence until post-stamp engine stop");
+		SYSLOG("ngreen", "V296: VF external producers and IOSurface caches retired; deferring transport quiescence until post-stamp engine stop");
 	}
 	FunctionCast(acceleratorStop, callback->oAcceleratorStop)(that, provider);
 }

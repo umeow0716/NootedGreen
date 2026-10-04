@@ -299,6 +299,10 @@ private:
 	static void vfGartCollector(void *that, IOInterruptEventSource *source,
 	                           int count);
 	mach_vm_address_t oVfGartCollector {};
+	static void vfFinalizeInterrupt(void *that,
+	                               IOInterruptEventSource *source,
+	                               int count);
+	mach_vm_address_t oVfFinalizeInterrupt {};
 	static void vfDeviceCacheControl(void *that, void *cache,
 	                                uint32_t selector, uint64_t argument0,
 	                                uint64_t argument1);

@@ -498,6 +498,7 @@ SET_ASYNC_SLICE_COUNT = "__ZN16IntelAccelerator18setAsyncSliceCountE13IGSliceCon
 DPSM_IDLE_TIMER = "__ZN16IntelAccelerator13dpsmIdleTimerEv"
 DPSM_KICK_TIMER = "__ZN16IntelAccelerator13dpsmKickTimerEv"
 INIT_LOCAL_CALLBACKS = "__ZN16IntelAccelerator24initLocalCallbackSupportEv"
+REGISTER_FRAMEBUFFER_CALLBACKS = "__ZN16IntelAccelerator33registerWithFramebufferControllerEv"
 ENABLE_COARSE_POWER_GATING = "__ZL24_enableCoarsePowerGatingv"
 DPSM_NOTIFY = "__ZL11_dpsmNotifyPj"
 LOCAL_SAFE_FORCE_WAKE = "__ZL14_SafeForceWakebj"
@@ -870,6 +871,61 @@ def macho_inventory(path):
                     (bits >> 27) & 1, (bits >> 28) & 0xF) != (1, 2, 1, 2):
                 raise AssertionError(f"{path}: incompatible {name} relocation")
             relocations[name] = address
+
+    # IntelAccelerator::start owns exactly one accelerator-lock admission and
+    # has two mutually exclusive release paths.  Pin the complete direct
+    # import inventory, rather than only representative call sites: our VF
+    # wrapper may call acceleratorStop after native start returns false, so a
+    # new or moved release path is a lock-order review event.
+    accelerator_start = value(ACCELERATOR_START)
+    accelerator_start_end = min(
+        candidate for candidate in values if candidate > accelerator_start)
+    start_lock_imports = {
+        imported: sorted(
+            address for address, names_at_address in external_imports.items()
+            if accelerator_start <= address < accelerator_start_end and
+            imported in names_at_address)
+        for imported in (
+            "_IOLockLock",
+            "__ZN22IOGraphicsAccelerator29lock_busyEv",
+            "__ZN22IOGraphicsAccelerator211unlock_busyEv",
+            "_IOLockUnlock",
+        )
+    }
+    assert start_lock_imports == {
+        "_IOLockLock": [0x24114],
+        "__ZN22IOGraphicsAccelerator29lock_busyEv": [0x24124],
+        "__ZN22IOGraphicsAccelerator211unlock_busyEv": [0x245ce, 0x24767],
+        "_IOLockUnlock": [0x245da, 0x24773],
+    }, f"{path}: changed complete native start accelerator-lock import inventory"
+    for addresses in start_lock_imports.values():
+        assert all(image[address - 1] == 0xe8 for address in addresses), \
+            f"{path}: native start accelerator-lock import is no longer a direct call"
+
+    normal_unlock_busy = start_lock_imports[
+        "__ZN22IOGraphicsAccelerator211unlock_busyEv"][0]
+    normal_unlock = start_lock_imports["_IOLockUnlock"][0]
+    timer_factory = 0x2464a
+    timer_store = 0x2464e
+    timer_null_branch = 0x24658
+    timer_failure = 0x247de
+    assert start_lock_imports["_IOLockLock"][0] < \
+        start_lock_imports["__ZN22IOGraphicsAccelerator29lock_busyEv"][0] < \
+        normal_unlock_busy < normal_unlock < timer_factory < timer_store < \
+        timer_null_branch < timer_failure, \
+        f"{path}: native start normal unlock/DPSM failure order changed"
+    assert image[timer_null_branch:timer_null_branch + 2] == bytes.fromhex("0f 84") and \
+        timer_null_branch + 6 + struct.unpack_from(
+            "<i", image, timer_null_branch + 2)[0] == timer_failure, \
+        f"{path}: DPSM factory-null branch no longer reaches error 0x215"
+    error_unlock_busy = start_lock_imports[
+        "__ZN22IOGraphicsAccelerator211unlock_busyEv"][1]
+    error_unlock = start_lock_imports["_IOLockUnlock"][1]
+    native_stop_virtual = 0x24780
+    assert error_unlock_busy < error_unlock < native_stop_virtual and \
+        image[native_stop_virtual:native_stop_virtual + 6] == \
+        bytes.fromhex("ff 90 c8 05 00 00"), \
+        f"{path}: native start common-failure unlock/virtual-stop order changed"
 
     for address, name in stamp_irq_imports.items():
         opcode = 0xe9 if address in (0xb825, 0xa73c, 0xa746, 0xa767) or (name in ("_IOLockUnlock", "_lck_spin_unlock") and address not in (0x24773, 0x78e3d, 0x786b3)) else 0xe8
@@ -2672,6 +2728,42 @@ def macho_inventory(path):
             raise AssertionError(
                 f"{path}: local callback slot {slot:#x} no longer pins {name}")
 
+    # The DisplaySleep route is registered either through the framebuffer
+    # controller or through a locally allocated indirection table.  The
+    # controller receives the address of accelerator+0xde8, not a lasting raw
+    # pointer to that table.  Native stop frees and clears the table, while
+    # free unregisters the controller before inherited object destruction.
+    # Together with the counted wrapper drain, this makes both in-flight and
+    # post-close callback entry safe.
+    register_start = value(REGISTER_FRAMEBUFFER_CALLBACKS)
+    if next_symbol(register_start) - register_start != 0x1d0 or \
+            hashlib.sha256(image[register_start:register_start + 0x1d0]).hexdigest() != \
+            "f3318df5bfdeadd27a8bb58ef63fccda1e5a8cacb9f14edfcd0b54e06b3d288b":
+        raise AssertionError(f"{path}: changed complete framebuffer callback registration")
+    if next_symbol(callback_start) - callback_start != 0xa4 or \
+            hashlib.sha256(image[callback_start:callback_start + 0xa4]).hexdigest() != \
+            "5fef6688b5e3530698197a9816023467eb13b58176824912b3e4581f02aefb76":
+        raise AssertionError(f"{path}: changed complete local callback table construction")
+    if direct_branches(REGISTER_FRAMEBUFFER_CALLBACKS, INIT_LOCAL_CALLBACKS) != [0x249ef]:
+        raise AssertionError(f"{path}: changed headless local callback-table construction edge")
+    if image[0x24986:0x2498d] != bytes.fromhex("49 8d 9f e8 0d 00 00") or \
+            image[0x24a37:0x24a3e] != bytes.fromhex("48 8d 05 fa 5e 00 00") or \
+            0x24a37 + 7 + struct.unpack_from("<i", image, 0x24a3a)[0] != \
+            value(DISPLAY_SLEEP_CALLBACK_ENTRY) or \
+            image[0x24a92:0x24a98] != bytes.fromhex("ff 93 b8 06 00 00"):
+        raise AssertionError(f"{path}: changed DisplaySleep receiver/table registration")
+    if image[0x266f5:0x26720] != bytes.fromhex(
+            "41 80 bf 8c 12 00 00 00 75 21 49 8b bf e8 0d 00 00 "
+            "48 85 ff 74 15 be 60 00 00 00 e8 00 00 00 00 "
+            "49 c7 87 e8 0d 00 00 00 00 00 00"):
+        raise AssertionError(f"{path}: changed native local callback-table free/clear sequence")
+    accelerator_free = value("__ZN16IntelAccelerator4freeEv")
+    unregister_framebuffer = 0x23dfe
+    if image[accelerator_free + 9] != 0xe8 or \
+            accelerator_free + 14 + struct.unpack_from(
+                "<i", image, accelerator_free + 10)[0] != unregister_framebuffer:
+        raise AssertionError(f"{path}: accelerator free no longer unregisters framebuffer callbacks first")
+
     # Guest sleep/wake reaches the same routed engine boundaries. Scheduler
     # firmware initialization is explicitly idempotent: its +0x20 loaded byte
     # bypasses the +0x220 loadFirmware virtual call on every wake after the
@@ -2896,7 +2988,46 @@ def macho_inventory(path):
             engine_stop < unregister_calls[0]):
         raise AssertionError(
             f"{path}: native accelerator stop no longer calls engine stop before teardown")
-    accelerator_stop_end = next_symbol(value(ACCELERATOR_STOP))
+
+    # Pin every native stop import touching the accelerator lock.  The VF
+    # wrapper drains external producers before entering this method; the
+    # native method then acquires its own lock exactly once and releases it
+    # before any timer/source teardown.  Any added lock edge is a fresh
+    # deadlock-order review, not something this fixture may silently accept.
+    accelerator_stop_start = value(ACCELERATOR_STOP)
+    accelerator_stop_end = next_symbol(accelerator_stop_start)
+    stop_lock_imports = {
+        imported: sorted(
+            address for address, names_at_address in external_imports.items()
+            if accelerator_stop_start <= address < accelerator_stop_end and
+            imported in names_at_address)
+        for imported in (
+            "_IOLockLock",
+            "__ZN22IOGraphicsAccelerator29lock_busyEv",
+            "__ZN22IOGraphicsAccelerator211unlock_busyEv",
+            "_IOLockUnlock",
+        )
+    }
+    if stop_lock_imports != {
+            "_IOLockLock": [0x26421],
+            "__ZN22IOGraphicsAccelerator29lock_busyEv": [0x26431],
+            "__ZN22IOGraphicsAccelerator211unlock_busyEv": [0x264ae],
+            "_IOLockUnlock": [0x264ba],
+    }:
+        raise AssertionError(f"{path}: changed complete native stop accelerator-lock import inventory")
+    for addresses in stop_lock_imports.values():
+        if not all(image[address - 1] == 0xe8 for address in addresses):
+            raise AssertionError(f"{path}: native stop accelerator-lock import is no longer a direct call")
+    stop_lock = stop_lock_imports["_IOLockLock"][0]
+    stop_lock_busy = stop_lock_imports[
+        "__ZN22IOGraphicsAccelerator29lock_busyEv"][0]
+    stop_unlock_busy = stop_lock_imports[
+        "__ZN22IOGraphicsAccelerator211unlock_busyEv"][0]
+    stop_unlock = stop_lock_imports["_IOLockUnlock"][0]
+    if not (finish_calls[0] < stop_lock < stop_lock_busy < engine_stop <
+            stop_unlock_busy < stop_unlock < 0x264f7):
+        raise AssertionError(
+            f"{path}: native finish/lock/engine-stop/unlock/timer order changed")
     release_calls = []
     for pattern in (bytes.fromhex("ff 50 28"),
                     bytes.fromhex("ff 90 28 00 00 00")):

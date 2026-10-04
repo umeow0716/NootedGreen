@@ -718,6 +718,19 @@ RESOURCE_PAGING_BODIES = {
         (0x18, "db558f4554d6c9cda5446f4b2e4c250083932b67b931a196470c32f7320e1489"),
 }
 
+# IOGraphicsAccelerator2 defers IOSurface cache retirement through a dedicated
+# workloop source before stop removes that source.  Keep this lifecycle
+# separate from ordinary paging roots: it decides whether selector 3/4
+# callbacks are teardown work rather than rejectable post-close producers.
+ACCELERATOR_FINALIZE_BODIES = {
+    "__ZN22IOGraphicsAccelerator218finalize_interruptEP22IOInterruptEventSourcei":
+        (0x116, "abbfe51fc8d1667ac056185dfeb2186ecc1c97580a00de3a96a9186b36dc84af"),
+    "__ZN22IOGraphicsAccelerator28finalizeEj":
+        (0x72, "7815960d1c0bab062cfeb62230ec05eb36da6d88564fda072e28b0aeabd58b94"),
+    "__ZN22IOGraphicsAccelerator220finalize_if_possibleEv":
+        (0x3e, "1d3f17c11b29c3544e3572704fe5375c9222b85d84acc27a8a0e5fed976e04bc"),
+}
+
 # Every x86-64 indirect call [vtable + slot] in the executable segment.  The
 # set intentionally includes calls on unrelated classes that reuse the same
 # numeric slot: keeping the complete executable inventory prevents a newly
@@ -1061,6 +1074,7 @@ def check_boot_atomic(system, path):
     assert hashlib.sha256(boot).hexdigest() == BOOT_SHA256, "unreviewed BootKC identity"
     segments = []
     kernel = []
+    iosurface = []
     bases = []
     for command, offset in commands(boot, 0):
         if command == 0x19:
@@ -1071,15 +1085,23 @@ def check_boot_atomic(system, path):
         elif command == 0x80000035:
             _, _, _, file_offset, name_offset, _ = struct.unpack_from("<IIQQII", boot, offset)
             start = offset + name_offset
-            if boot[start:boot.index(0, start)] == b"com.apple.kernel":
+            identifier = boot[start:boot.index(0, start)]
+            if identifier == b"com.apple.kernel":
                 kernel.append(file_offset)
-    assert len(kernel) == len(bases) == 1, "missing/ambiguous kernel/base"
+            elif identifier == b"com.apple.iokit.IOSurface":
+                iosurface.append(file_offset)
+    assert len(kernel) == len(iosurface) == len(bases) == 1, \
+        "missing/ambiguous kernel/IOSurface/base"
     symbols = {name: [] for name in (b"_OSIncrementAtomic", b"_OSDecrementAtomic", b"_thread_wakeup_prim",
                                    b"__ZN15IORegistryEntry18getRegistryEntryIDEv", b"_kernel_debug",
+                                   b"_kernel_debug_register_callback",
                                    b"_IOLockLock", b"_IOLockUnlock", b"_assert_wait_deadline",
                                    b"_thread_block", b"_clock_interval_to_deadline",
                                    b"__ZN10IOWorkLoop8workLoopEv",
                                    b"__ZN10IOWorkLoop14runActionBlockEU13block_pointerFivE",
+                                   b"__ZN9IOService15serviceMatchingEPKcP12OSDictionary",
+                                   b"__ZN9IOService19getMatchingServicesEP12OSDictionary",
+                                   b"__ZN15OSMetaClassBase12safeMetaCastEPKS_PK11OSMetaClass",
                                    b"__ZTV22IOInterruptEventSource", b"__ZTV18IOTimerEventSource",
                                    b"__ZN22IOInterruptEventSource23normalInterruptOccurredEPvP9IOServicei",
                                    b"__ZN18IOTimerEventSource12setTimeoutUSEj",
@@ -1161,6 +1183,167 @@ def check_boot_atomic(system, path):
                    if v <= address and address + length <= v + size]
         assert len(matches) == 1, "unmapped/ambiguous event-source implementation"
         return boot[matches[0]:matches[0] + length]
+
+    # IOSurfaceDeviceCache owns the callback pointer installed by
+    # IOGraphicsAccelerator2.  Parse that fileset directly so selector 3/4
+    # retirement cannot be inferred from private names or a disassembly
+    # sample.  These are the complete Tahoe 25G229 methods that retain the
+    # accelerator, dispatch every selector, detach caches and terminate all
+    # caches for a particular accelerator.
+    surface_names = (
+        b"__ZNK20IOSurfaceDeviceCache7releaseEv",
+        b"__ZN20IOSurfaceDeviceCache4freeEv",
+        b"__ZN20IOSurfaceDeviceCache7pageOffEv",
+        b"__ZN20IOSurfaceDeviceCache4waitEv",
+        b"__ZN20IOSurfaceDeviceCache4waitEb",
+        b"__ZN20IOSurfaceDeviceCache12accelReleaseEv",
+        b"__ZN20IOSurfaceDeviceCache5purgeEv",
+        b"__ZN20IOSurfaceDeviceCache7unpurgeEb",
+        b"__ZN20IOSurfaceDeviceCache13testpurgeableEv",
+        b"__ZN20IOSurfaceDeviceCache12setPurgeableEj",
+        b"__ZN20IOSurfaceDeviceCache20signalEventOperationEyP20IOSurfaceSharedEventy",
+        b"__ZN20IOSurfaceDeviceCache14setControlFuncEPvPFvS0_PS_jyyE",
+        b"__ZN9IOSurface41gatherOrphanedDeviceCachesWithAcceleratorEPvP24IOSurfaceDeviceCacheList",
+        b"__ZN13IOSurfaceRoot36terminateDeviceCachesWithAcceleratorEPv",
+    )
+    surface_symbols = {name: [] for name in surface_names}
+    surface_segments = []
+    for command, offset in commands(boot, iosurface[0]):
+        if command == 0x19:
+            fields = struct.unpack_from("<II16sQQQQIIII", boot, offset)
+            surface_segments.append((fields[3], fields[5], fields[6]))
+        elif command == 2:
+            symbol_offset, count, string_offset, string_size = \
+                struct.unpack_from("<6I", boot, offset)[2:]
+            for index in range(count):
+                name_offset, _, _, _, address = struct.unpack_from(
+                    "<IBBHQ", boot, symbol_offset + 16 * index)
+                assert name_offset < string_size, "invalid IOSurface symbol string"
+                start = string_offset + name_offset
+                name = boot[start:boot.index(0, start, string_offset + string_size)]
+                if name in surface_symbols:
+                    surface_symbols[name].append(address)
+    assert all(len(values) == 1 for values in surface_symbols.values()), \
+        "missing/ambiguous IOSurface device-cache symbol"
+
+    def surface_address(name):
+        return surface_symbols[name][0]
+
+    def surface_file_offset(address, length=1):
+        matches = [file_offset + address - virtual
+                   for virtual, file_offset, size in surface_segments
+                   if virtual <= address and address + length <= virtual + size]
+        assert len(matches) == 1, "unmapped/ambiguous IOSurface implementation"
+        return matches[0]
+
+    def surface_read(address, length):
+        offset = surface_file_offset(address, length)
+        return boot[offset:offset + length]
+
+    cache_bodies = {
+        b"__ZNK20IOSurfaceDeviceCache7releaseEv":
+            (0x90, "4f89e1f10a03467da5f9cd88d9f5aed49ac42dc8ea0a569e1a9c120d75547ee8"),
+        b"__ZN20IOSurfaceDeviceCache4freeEv":
+            (0x6a, "1853f390cc65000ab614eba5c2a25e19800d2d8f23b71c642b34984c72ce61ee"),
+        b"__ZN20IOSurfaceDeviceCache7pageOffEv":
+            (0x2c, "e22f1f511740d68cc79ac44c52ac71decdd7cf717d42b611f61fb1eeee6f5740"),
+        b"__ZN20IOSurfaceDeviceCache4waitEv":
+            (0x30, "c4c4443edffe6541ebeeb0f34ac9dfa22e3c39e09522a2a73f555ffc9101086f"),
+        b"__ZN20IOSurfaceDeviceCache4waitEb":
+            (0x36, "cda5d6a13e15fcdfda68e66cb08e956a7cdb02bdd3b40eb72f5d6cb8029d6dce"),
+        b"__ZN20IOSurfaceDeviceCache12accelReleaseEv":
+            (0x30, "49638b7088b1951922b3a43d4c21062ad53f465a176644e1d6ce1cf29a8dabd6"),
+        b"__ZN20IOSurfaceDeviceCache5purgeEv":
+            (0x30, "85c88dc741301df2b0b710c74155e0b38b9b204378399b0e8cb7a5676fb917ea"),
+        b"__ZN20IOSurfaceDeviceCache7unpurgeEb":
+            (0x4c, "776bc4e5396a0890e29c86186dd68f08db44a5510ef631e2832d9d680bd18512"),
+        b"__ZN20IOSurfaceDeviceCache13testpurgeableEv":
+            (0x46, "568347d8c2089f648828e64f90ace8864b518c60f4af029b6b2c4f6ec723228a"),
+        b"__ZN20IOSurfaceDeviceCache12setPurgeableEj":
+            (0x34, "4bb2aad3ad72bc4ff1a470990439f29972d9bc6037a7d32800a9846c449c5289"),
+        b"__ZN20IOSurfaceDeviceCache20signalEventOperationEyP20IOSurfaceSharedEventy":
+            (0x64, "9d40903b93ce2066e0322720b54bb2e6f0acf8936c7d13a4ebdb9b5e48da7d0c"),
+        b"__ZN20IOSurfaceDeviceCache14setControlFuncEPvPFvS0_PS_jyyE":
+            (0xc, "5cabd619c4aeaf3b87f308c9d401659855483a27b9a4eec76a95767b3ecd3294"),
+        b"__ZN9IOSurface41gatherOrphanedDeviceCachesWithAcceleratorEPvP24IOSurfaceDeviceCacheList":
+            (0x114, "ab3ef8481d1f1c6326168e49af6b48d57a34bf3ae3d1ed86ba2e16ee58771584"),
+        b"__ZN13IOSurfaceRoot36terminateDeviceCachesWithAcceleratorEPv":
+            (0x12a, "6f1686fb3e3086559faf34aca7e633d6489c3e8d11a185260a67139f99f0ccca"),
+    }
+    for name, (length, digest) in cache_bodies.items():
+        assert hashlib.sha256(surface_read(surface_address(name), length)).hexdigest() == digest, \
+            f"changed IOSurface device-cache lifecycle: {name.decode()}"
+    set_control = surface_address(
+        b"__ZN20IOSurfaceDeviceCache14setControlFuncEPvPFvS0_PS_jyyE")
+    assert surface_read(set_control + 4, 8) == bytes.fromhex(
+        "48 89 77 20 48 89 57 28"), \
+        "changed IOSurface cache resource/control callback ownership"
+    cache_free = surface_address(b"__ZN20IOSurfaceDeviceCache4freeEv")
+    assert surface_read(cache_free + 9, 0x2f) == bytes.fromhex(
+        "48 83 7f 10 00 74 44 48 8b 7b 18 48 85 ff 74 1f "
+        "48 8b 43 28 48 85 c0 74 16 48 83 7b 20 00 74 0f "
+        "48 89 de ba 04 00 00 00 31 c9 45 31 c0 ff d0"), \
+        "changed IOSurface cache-free selector-4 retirement callback"
+    selector_methods = (
+        (b"__ZN20IOSurfaceDeviceCache7pageOffEv", 0),
+        (b"__ZN20IOSurfaceDeviceCache4waitEv", 2),
+        (b"__ZN20IOSurfaceDeviceCache4waitEb", 2),
+        (b"__ZN20IOSurfaceDeviceCache12accelReleaseEv", 3),
+        (b"__ZN20IOSurfaceDeviceCache5purgeEv", 5),
+        (b"__ZN20IOSurfaceDeviceCache7unpurgeEb", 6),
+        (b"__ZN20IOSurfaceDeviceCache13testpurgeableEv", 8),
+        (b"__ZN20IOSurfaceDeviceCache12setPurgeableEj", 7),
+        (b"__ZN20IOSurfaceDeviceCache20signalEventOperationEyP20IOSurfaceSharedEventy", 9),
+    )
+    for name, selector in selector_methods:
+        body = surface_read(surface_address(name), cache_bodies[name][0])
+        selector_load = bytes((0xba, selector, 0, 0, 0)) if selector else bytes.fromhex("31 d2")
+        assert body.count(selector_load) == 1, \
+            f"changed IOSurface callback selector: {name.decode()}"
+    terminate = surface_address(
+        b"__ZN13IOSurfaceRoot36terminateDeviceCachesWithAcceleratorEPv")
+    gather = surface_address(
+        b"__ZN9IOSurface41gatherOrphanedDeviceCachesWithAcceleratorEPvP24IOSurfaceDeviceCacheList")
+    accel_release = surface_address(b"__ZN20IOSurfaceDeviceCache12accelReleaseEv")
+    assert surface_read(gather + 0x5b, 4) == bytes.fromhex("4d 39 65 18") and \
+        surface_read(gather + 0x65, 5) == bytes.fromhex("41 f6 45 59 01") and \
+        surface_read(gather + 0x73, 6) == bytes.fromhex("ff 50 18 83 f8 01"), \
+        "changed IOSurface orphan-cache accelerator/flag/last-reference admission"
+    for call_offset, target in ((0x51, gather), (0xf0, accel_release)):
+        encoded = surface_read(terminate + call_offset, 5)
+        assert encoded[0] == 0xe8 and terminate + call_offset + 5 + \
+            struct.unpack_from("<i", encoded, 1)[0] == target, \
+            "changed IOSurface cache termination gather/release edge"
+    terminate_stub = 0x111ca
+    assert system[terminate_stub:terminate_stub + 6] == bytes.fromhex(
+        "ff 25 e8 45 01 00"), \
+        "changed SystemKC IOSurface cache-termination import stub"
+    terminate_pointer = terminate_stub + 6 + struct.unpack_from(
+        "<i", system, terminate_stub + 2)[0]
+    terminate_raw = struct.unpack_from("<Q", system, terminate_pointer)[0]
+    assert terminate_raw >> 63 == 0 and (terminate_raw >> 30) & 3 == 0 and \
+        terminate_raw & 0x3fffffff == surface_file_offset(terminate), \
+        "SystemKC finalize import no longer resolves to IOSurface cache termination"
+    print("PASS paired-KC IOSurface selectors and accelerator-cache finalize/retirement lifecycle")
+
+    # The global KD callback never caches an accelerator pointer.  It builds a
+    # fresh matching-services iterator for each notification and invokes the
+    # accelerator only while that iterator retains its backing OSSet.  Pin the
+    # three imported APIs; the SystemKC side below pins release ordering and
+    # the exact getNextObject/dynamic-cast/callback loop.
+    for stub, name in (
+            (0x10282, b"__ZN9IOService15serviceMatchingEPKcP12OSDictionary"),
+            (0x10288, b"__ZN9IOService19getMatchingServicesEP12OSDictionary"),
+            (0x1007e, b"__ZN15OSMetaClassBase12safeMetaCastEPKS_PK11OSMetaClass"),
+            (0x11272, b"_kernel_debug_register_callback")):
+        assert system[stub:stub + 2] == b"\xff\x25", \
+            "changed KD registry-iterator import stub"
+        pointer = stub + 6 + struct.unpack_from("<i", system, stub + 2)[0]
+        raw = struct.unpack_from("<Q", system, pointer)[0]
+        assert raw >> 63 == 0 and (raw >> 30) & 3 == 0 and \
+            bases[0] + (raw & 0x3fffffff) == symbols[name][0], \
+            "changed KD registry-iterator import identity"
+    print("PASS paired-KC KD matching-services iterator import identities")
 
     typed_new = kernel_read(0xffffff8000a1cc40, 0x50)
     typed_alloc = kernel_read(0xffffff8000369980, 0x90)
@@ -1725,7 +1908,8 @@ def check(path, boot_path=None):
                            for method, _ in table if method is not None}
     wanted_symbols = {
         *CONTRACTS, *SCRUB_BODIES, *LOCK_COPIES, *EVENT_OWNER_BODIES,
-        *BASE_CLIENT_BODIES, *RESOURCE_PAGING_BODIES, *base_client_symbols,
+        *BASE_CLIENT_BODIES, *RESOURCE_PAGING_BODIES,
+        *ACCELERATOR_FINALIZE_BODIES, *base_client_symbols,
         SHARED_VTABLE, RESOURCE_VTABLE,
         "__ZTV18IOAccelDisplayPipe", "__ZTV24IOAccelLegacyDisplayPipe",
         "__ZTV19IOAccelCommandQueue", "__ZTV15IOAccelContext2",
@@ -1822,6 +2006,9 @@ def check(path, boot_path=None):
     for name, (length, digest) in RESOURCE_PAGING_BODIES.items():
         assert hashlib.sha256(read(address_of(name), length)).hexdigest() == digest, \
             f"changed inherited resource-paging/control body: {name}"
+    for name, (length, digest) in ACCELERATOR_FINALIZE_BODIES.items():
+        assert hashlib.sha256(read(address_of(name), length)).hexdigest() == digest, \
+            f"changed accelerator finalize/device-cache body: {name}"
 
     def indirect_vtable_call_sites(slot):
         found = set()
@@ -2269,6 +2456,27 @@ def check(path, boot_path=None):
         address_of("__ZL23IOAcceleratorKDCallbackPv16kd_callback_typeS_"), 0x261,
         address_of("__ZN22IOGraphicsAccelerator220emitFirstFlushEventsEv")) == [0x214], \
         "changed KD first-flush resource-prepare root"
+    kd_callback = address_of("__ZL23IOAcceleratorKDCallbackPv16kd_callback_typeS_")
+    assert kd_callback == 0x14ba774f, "changed KD callback address"
+    assert direct_branch_offsets(kd_callback, 0x261, 0x10282) == [0x17c] and \
+        direct_branch_offsets(kd_callback, 0x261, 0x10288) == [0x190] and \
+        direct_branch_offsets(kd_callback, 0x261, 0x1007e) == [0x1c8], \
+        "changed KD matching-services iterator/dynamic-cast calls"
+    assert read(kd_callback + 0x198, 9) == bytes.fromhex(
+        "49 8b 06 4c 89 f7 ff 50 28"), \
+        "changed KD matching dictionary release after iterator creation"
+    assert read(kd_callback + 0x1aa, 12) == bytes.fromhex(
+        "48 8b 03 48 89 df ff 90 28 01 00 00") and \
+        read(kd_callback + 0x219, 12) == bytes.fromhex(
+            "48 8b 03 48 89 df ff 90 28 01 00 00"), \
+        "changed KD iterator getNextObject loop"
+    assert read(kd_callback + 0x22a, 0x17) == bytes.fromhex(
+        "48 8b 03 48 89 df 48 83 c4 08 5b 41 5c 41 5d 41 5e 41 5f 5d ff 60 28"), \
+        "changed KD iterator terminal release"
+    kd_register = read(0x14ba1236, 5)
+    assert kd_register[0] == 0xe8 and \
+        0x14ba123b + struct.unpack_from("<i", kd_register, 1)[0] == 0x11272, \
+        "changed permanent KD callback registration edge"
     assert direct_branch_offsets(
         address_of("__ZN22IOGraphicsAccelerator214gart_collectorEP22IOInterruptEventSourcei"),
         EVENT_OWNER_BODIES["__ZN22IOGraphicsAccelerator214gart_collectorEP22IOInterruptEventSourcei"][0],
@@ -2295,6 +2503,89 @@ def check(path, boot_path=None):
             encoded[2] & 0xc7 == 0x05 and \
             lea + 7 + struct.unpack_from("<i", encoded, 3)[0] == address_of(target), \
             f"changed paging-control callback registration: {target}"
+
+    # GART collection is workloop-owned.  Registration stores the event
+    # source at accelerator+0x110, adds it to accelerator+0xf0's workloop and
+    # enables it.  The inherited stop block runs under that workloop gate;
+    # IOWorkLoop::removeEventSource is synchronous and is followed by the
+    # source release and field clear.  Pin both ends so the VF producer drain
+    # cannot be invalidated by an untracked surviving event source.
+    assert read(0x14ba0391, 0x2f) == bytes.fromhex(
+        "49 89 86 10 01 00 00 48 85 c0 74 23 "
+        "49 8b be f0 00 00 00 48 8b 0f 48 89 c6 "
+        "ff 91 40 01 00 00 49 8b be 10 01 00 00 "
+        "48 8b 07 ff 90 50 01 00 00"), \
+        "changed GART event-source store/add/enable sequence"
+    assert read(0x14ba20af, 0x34) == bytes.fromhex(
+        "48 8b b3 10 01 00 00 48 85 f6 74 28 "
+        "48 8b bb f0 00 00 00 48 8b 07 ff 90 48 01 00 00 "
+        "48 8b bb 10 01 00 00 48 8b 07 ff 50 28 "
+        "48 c7 83 10 01 00 00 00 00 00 00"), \
+        "changed GART event-source synchronous remove/release/clear sequence"
+
+    # Finalization is not an ordinary external producer.  Both finalize entry
+    # points signal a dedicated interrupt source at accelerator+0x9e0.  Its
+    # handler synchronously asks IOSurfaceRoot to retire every cache for this
+    # accelerator, then invokes acceleratorFinalize under the native lock.
+    # Stop removes/releases/clears this source through the same synchronous
+    # workloop-maintenance path used above.  The paired BootKC check below pins
+    # the imported IOSurface target and selector-3/4 callback semantics.
+    finalize_interrupt = address_of(
+        "__ZN22IOGraphicsAccelerator218finalize_interruptEP22IOInterruptEventSourcei")
+    assert finalize_interrupt == 0x14ba1766, "changed accelerator finalize handler address"
+    finalize_lea = read(0x14ba0534, 7)
+    assert finalize_lea[:3] == bytes.fromhex("48 8d 35") and \
+        0x14ba053b + struct.unpack_from("<i", finalize_lea, 3)[0] == finalize_interrupt, \
+        "changed accelerator finalize callback registration"
+    assert read(0x14ba0547, 0x2f) == bytes.fromhex(
+        "49 89 86 e0 09 00 00 48 85 c0 74 23 "
+        "49 8b be f0 00 00 00 48 8b 0f 48 89 c6 "
+        "ff 91 40 01 00 00 49 8b be e0 09 00 00 "
+        "48 8b 07 ff 90 50 01 00 00"), \
+        "changed accelerator finalize-source store/add/enable sequence"
+    assert read(0x14ba1ec5, 0x44) == bytes.fromhex(
+        "48 8b bb e0 09 00 00 48 85 ff 74 38 48 8b 07 "
+        "ff 90 58 01 00 00 48 8b bb f0 00 00 00 "
+        "48 8b b3 e0 09 00 00 48 8b 07 ff 90 48 01 00 00 "
+        "48 8b bb e0 09 00 00 48 8b 07 ff 50 28 "
+        "48 c7 83 e0 09 00 00 00 00 00 00"), \
+        "changed accelerator finalize-source synchronous remove/release/clear sequence"
+    assert direct_branch_offsets(finalize_interrupt, 0x116, 0x111ca) == [0x2b], \
+        "changed accelerator-finalize to IOSurface cache-termination edge"
+    accelerator_finalize = "__ZN22IOGraphicsAccelerator219acceleratorFinalizeEv"
+    raw_finalize = struct.unpack(
+        "<Q", read(address_of("__ZTV22IOGraphicsAccelerator2") + 16 + 0x9a0, 8))[0]
+    assert raw_finalize >> 63 == 0 and (raw_finalize >> 30) & 3 == 1 and \
+        raw_finalize & 0x3fffffff == address_of(accelerator_finalize), \
+        "changed acceleratorFinalize virtual target"
+    assert read(finalize_interrupt + 0x7d, 6) == bytes.fromhex("ff 90 a0 09 00 00"), \
+        "changed finalize handler acceleratorFinalize dispatch"
+    finalize = address_of("__ZN22IOGraphicsAccelerator28finalizeEj")
+    finalize_if_possible = address_of(
+        "__ZN22IOGraphicsAccelerator220finalize_if_possibleEv")
+    assert read(finalize + 0x3d, 0x16) == bytes.fromhex(
+        "48 8b bb e0 09 00 00 48 8b 07 31 f6 31 d2 31 c9 "
+        "ff 90 d8 01 00 00"), \
+        "changed finalize event-source signal"
+    assert read(finalize_if_possible + 0x22, 0x1a) == bytes.fromhex(
+        "48 8b bf e0 09 00 00 48 8b 07 48 8b 80 d8 01 00 00 "
+        "31 f6 31 d2 31 c9 5d ff e0"), \
+        "changed finalize-if-possible event-source signal"
+
+    # IOService's display-interest notifier is retained by the pipe at +0xa0.
+    # IONotifier::remove is synchronizing with handler execution by API
+    # contract; IOAccelDisplayPipe::free invokes it before clearing the field
+    # or releasing any other pipe state.  This is the lifetime proof required
+    # for the display wrapper's pre-lease pipe->accelerator load.
+    assert read(0x14bae504, 0x2e) == bytes.fromhex(
+        "48 8d 35 79 01 00 00 4c 89 e7 48 89 da 4c 89 f9 "
+        "41 b8 70 01 00 00 45 31 c9 e8 28 52 15 00 "
+        "48 89 83 a0 00 00 00 48 85 c0 0f 84 20 01 00 00"), \
+        "changed display notification registration/store/null-check sequence"
+    assert read(0x14baeab6, 0x20) == bytes.fromhex(
+        "48 8b bb a0 00 00 00 48 85 ff 74 14 48 8b 07 "
+        "ff 90 18 01 00 00 48 c7 83 a0 00 00 00 00 00 00 00"), \
+        "changed display notifier synchronous remove/clear sequence"
     memory_info_start = address_of("__ZN27IOAccelMemoryInfoUserClient5startEP9IOService")
     assert read(memory_info_start + 0x26, 7) == bytes.fromhex("49 89 86 e0 00 00 00"), \
         "changed MemoryInfo accelerator ownership"
@@ -2307,6 +2598,23 @@ def check(path, boot_path=None):
         "__ZN22IOGraphicsAccelerator218deviceCacheControlEP20IOSurfaceDeviceCachejyy")
     assert read(device_cache_callback + 0x20, 3) == bytes.fromhex("48 89 fb"), \
         "changed device-cache accelerator receiver"
+    cache_jump_table = 0x14ba422c
+    cache_targets = tuple(
+        cache_jump_table + struct.unpack("<i", read(cache_jump_table + selector * 4, 4))[0]
+        for selector in range(10))
+    assert cache_targets[3] == 0x14ba3e4d and cache_targets[4] == 0x14ba4021, \
+        "changed device-cache selector-3/4 retirement dispatch"
+    selector3_release = read(0x14ba3ea6, 11)
+    assert selector3_release[:6] == bytes.fromhex("49 8b 07 4c 89 ff") and \
+        selector3_release[6] == 0xe9 and \
+        0x14ba3eb1 + struct.unpack_from("<i", selector3_release, 7)[0] == 0x14ba41ef and \
+        read(0x14ba41ef, 3) == bytes.fromhex("ff 50 28"), \
+        "changed selector-3 final cache release edge"
+    assert read(0x14ba4021, 7) == bytes.fromhex("4d 8b 77 20 4c 89 f7") and \
+        read(0x14ba4081, 0x22) == bytes.fromhex(
+            "49 c7 86 e0 00 00 00 00 00 00 00 49 8b 06 4c 89 f7 "
+            "48 83 c4 08 5b 41 5c 41 5d 41 5e 41 5f 5d ff 60 28"), \
+        "changed selector-4 resource clear/release edge"
 
     # Receiver-to-accelerator fields used by the counted outer admission
     # wrappers.  Each instruction is inside a separately full-body-hashed

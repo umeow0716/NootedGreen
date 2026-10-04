@@ -1,6 +1,6 @@
 # Tahoe VF 動態測試前靜態閘門
 
-Updated: 2026-10-04. 這是 fail-closed 清單，不是開機授權。任何標為
+Updated: 2026-10-05. 這是 fail-closed 清單，不是開機授權。任何標為
 `OPEN` 或 `REVIEWING` 的必要項都禁止啟動 `macos-tahoe-sriov`、部署候選
 kext/AuxKC、重綁 PCI 或寫入 SR-IOV sysfs。`CLOSED` 只代表指定的離線證據已
 閉合，不代表硬體執行成功。
@@ -11,18 +11,18 @@ kext/AuxKC、重綁 PCI 或寫入 SR-IOV sysfs。`CLOSED` 只代表指定的離�
 | SG-02 | VF/PF 身分、Gen11 virtual-MMIO 與 memory-IRQ 能力分流 | CLOSED | RPL/ADL/TGL 不再錯送 memory-IRQ KLV；MTL/ARL 才使用 memory IRQ。 |
 | SG-03 | 已知 legacy/PF-owned GPU producer 隔離 | CLOSED | V284 在 legacy H2G MMIO、GuC DMA、doorbell、native CTB 與 Scheduler5 execlist 五個入口先 fail-stop；modern path 另列 SG-05。 |
 | SG-04 | task／PPGTT／PagePool 共同 ownership transaction | CLOSED | V283 已涵蓋 task publish/free、commit/update/release、32/64-bit unmap/shrink、descriptor retirement 與 PagePool reuse/prune/free。這不取代 GPU completion 證明。 |
-| SG-05 | modern 外部 producer 在 stop 前可封門、排空，且不阻斷 `finishAllStamps` retirement | REVIEWING | V295 已關閉 P8：17 個 outer roots 使用同一 receiver-scoped counted gate，PF／非目標 receiver 與 low-level retirement bridge 保持原生；protocol fault 只封門，final stop 先做 5 秒 bounded drain 再發布 stopping。P9 仍須封閉 stop caller、callback cancel/lifetime 與鎖序證明。 |
+| SG-05 | modern 外部 producer 在 stop 前可封門、排空，且不阻斷 `finishAllStamps` retirement | CLOSED-STATIC | V296 已關閉 P9：18 個 outer/lifetime roots 共用 receiver-scoped counted gate；native start/stop lock order、DisplaySleep、display notifier、GART、IOSurface finalize/cache selector 3/4 與 KD iterator lifetime 均由雙 KC／雙 payload contracts 固定。Stop 依序 close→drain→同步 one-shot cache finalize→發布 stopping→native stop；低層 retirement bridge 仍保持原生。 |
 | SG-06 | reservation → CPU ring writes → tail publication → GuC submit 為一致的 owner/admission transaction | OPEN | reservation postcondition、ring geometry、retained backing 與 final submit validation 已有；但 native writer 在 final routed submit 前的跨呼叫區間仍沒有完整 lease。 |
 | SG-07 | GPU completion 與 ring/context/mapping/page-table backing 的最終釋放順序 | OPEN | GuC context deregistration與 heavy TLB ACK 已覆蓋選定 teardown；尚未證明所有完成事件、stamp、pool reuse 與 producer owner 都在釋放前退休。 |
 | SG-08 | render／depth／CCS／ICB／paging 的 allocation、event collection、partial submit 與錯誤傳遞 | OPEN | 已修補選定 CCS null rectangle 與兩個 event-vector capacity failure；多個 callers 仍忽略 result 或容許 partial progress。SharedUserClient ICB 的兩次，以及 `IGAccelResource::pageon/pageoff` 的三次／兩次 `submitBlit` 都不檢查 AL，不能宣稱 fail closed。 |
-| SG-09 | timer／IRQ／workloop callback 的取消、排空與 owner lifetime | OPEN | IRQ callback counted gate 已有；DPSM、event-machine、passive timer、workloop removal 的完整 no-late-callback／無反向鎖序證明尚未閉合。 |
+| SG-09 | timer／IRQ／workloop callback 的取消、排空與 owner lifetime | OPEN | IRQ callback counted gate 已有；SG-05 已關閉 display/GART/cache/KD/DisplaySleep 子集合，但 DPSM、event-machine、passive timer 與其 owner 的完整 no-late-callback／無反向鎖序證明尚未閉合。 |
 | SG-10 | 所有 VF 可達 PF-owned MMIO／DMA／force-wake／reset 的 negative reachability | OPEN | V292 已隔離 PAVP callback 的 force-wake/PF MMIO 與 `recognizeFlip` telemetry submission；仍須以完整 symbol/vtable/function-pointer inventory 證明沒有 retained native bypass。 |
 | SG-11 | baseline 要求的所有程式檔完整審閱與 ledger closure | OPEN | `SOURCE_REVIEW_COVERAGE.md` 仍明確標記 incomplete；新增／修改檔案也必須納入。CI 成功不能替代此項。 |
-| SG-12 | 精確候選 commit 的完整 static suite、x86_64 release kext、Metal smoke build 與 artifact provenance | REVALIDATE PER CANDIDATE | V294 `fb1a961` 的 exact-SHA push CI `37211776358` 已通過，兩份 artifacts 均未過期；目前 V295 worktree 的 full static `/tmp/ngreen-static.6zGGEk` 已通過，但仍待 clean commit/push 與新 SHA 的 CI/artifacts。這不解除 SG-05 至 SG-11。 |
+| SG-12 | 精確候選 commit 的完整 static suite、x86_64 release kext、Metal smoke build 與 artifact provenance | REVALIDATE PER CANDIDATE | 上一個 pushed checkpoint `dee2bd5` 的 exact-SHA CI `37213299963` 已通過且 artifacts 未過期；目前 V296 worktree 的 full static `/tmp/ngreen-static.eO5Rrz` 與新增 paired-KC contracts 已通過，但仍待 clean commit/push 與新 SHA 的 CI/artifacts。這不解除 SG-06 至 SG-11。 |
 
 ## 目前主路徑
 
-先關閉 SG-05。Tahoe 25G229 的 `IOAccelCommandQueue::submit_command_buffers`
+SG-05 已關閉；下一個主路徑是 SG-06。Tahoe 25G229 的 `IOAccelCommandQueue::submit_command_buffers`
 從 `queue+0x5c0` 取得 accelerator，整批持有 accelerator busy lock，並只在
 `canSubmitCommandBuffer == false` 的 pause window 暫時放鎖再重取。其預設與 queue
 override `canSubmitCommandBuffer` 都固定回傳 true，所以它本身不是 stop gate。外層
@@ -128,6 +128,15 @@ callback 內等待；final accelerator stop 才 bounded drain，之後發布
 mapping，但 callback owner lifetime、stop caller 鎖狀態及完整 cancel/drain 仍屬 P9／
 SG-09；不能因此進入動態。
 
+V296 關閉 P9。兩份 Intel payload 的 start/stop 鎖序與 Tahoe System/Boot KC 的
+workloop/notifier API 已交叉固定；DisplaySleep、display notifier 與 GART source 都先
+同步撤銷再清除 receiver。IOSurface 的 finalize source、跨 KC import、全 cache 掃描及
+selector 3/4 已完整固定，並修正原本 gate 會拒絕退役 callback 的缺口：finalize handler
+本身取得 counted lease，selector 3/4 只能在 retirement scope 中略過巢狀 lease，stop
+則在一般 producer drain 後同步執行原生 atomic one-shot finalize。KD callback 雖永久
+註冊，但只使用每次新建且持有 backing OSSet 的 registry iterator，沒有保存 accelerator
+receiver。這些證據只關閉 SG-05；SG-06 至 SG-11 仍阻擋動態測試。
+
 ## 靜態轉動態的交接條件
 
 只有 SG-01 至 SG-11 全部為 `CLOSED`，且 SG-12 在同一個 clean/pushed commit 上完成
@@ -150,5 +159,5 @@ contained boot，不是效能、Metal completion、媒體或 Looking Glass 測�
 | P5c Device／Shared／MemoryInfo clients | CLOSED-INVENTORY | Device 10、Shared 21 與 MemoryInfo 3 項 selector/argument contracts、完整 member/wrapper bodies、特殊 dispatch、busy/timeout-lock scopes 與 unwire edges 已固定。Shared selector 2 經 `pageoffIfNeeded` 進入 Intel page-off；page-on/page-off 共五次 `submitBlit` 的未消費 AL 已列入 SG-08。 |
 | P6 display／flip reachability | CLOSED-INVENTORY | 14-selector DisplayPipeUserClient、鎖域、pipe selection、transaction/copy producer、Intel factories/vtables 與 base→legacy framebuffer enumeration/create-pipe 鏈已固定。無法證明不可達，故 selector 8/12 與 downstream flip/copy 必須納入 P8/P9。 |
 | P7 非 user-triggered／內部 producers | CLOSED-INVENTORY | V294 將五組 slot 的 104 個 executable call sites 精確分成 admitted/control 57、retirement/teardown 5、shared bridge 11、unrelated receiver 31；display/GART/device-cache/KD 四個 control roots 的註冊與 receiver 亦已固定。Display mode stop/start 由 native scheduler loaded-byte 保證 firmware init 冪等。 |
-| P8 counted admission 實作 | CLOSED-STATIC | 17 個 outer roots 已 route；12 組 object→accelerator offsets、四個 direct accelerator callbacks 與 DisplaySleep ABI/route 均由 pinned binaries/source contracts 固定。PF／非目標 receiver pass-through，GL inherited selector 2 不重複 lease，低層 retirement bridge 保留。143-route 清冊與 8 個 source mutations 通過。 |
-| P9 close→drain→native stop 鎖序 | REVIEWING | production 已是 close→最多 5 秒 drain→`gVfDeviceStopping`→native stop，並禁止使用 Tahoe 永遠回 true 的 `isLockedByCurrentThread` 作 owner 證明。仍須完成 stop caller／失敗回滾入口的鎖狀態，以及 display/GART/cache/KD/DisplaySleep callback cancel、late-entry 與 owner lifetime 證明；`finishAllStamps` 不受低層 gate 阻斷已由 route 排除固定。 |
+| P8 counted admission 實作 | CLOSED-STATIC | 18 個 outer/lifetime roots 已 route；12 組 object→accelerator offsets、五個 direct accelerator callbacks 與 DisplaySleep ABI/route 均由 pinned binaries/source contracts 固定。PF／非目標 receiver pass-through，GL inherited selector 2 不重複 lease，低層 retirement bridge 保留。144-route 清冊與 11 個 source mutations 通過。 |
+| P9 close→drain→native stop 鎖序 | CLOSED-STATIC | Native start/stop 的 accelerator-lock／busy-lock 次序與失敗 stop edge 已固定；DisplaySleep 先撤銷 callback table，display notifier 的 `remove()` 與 GART/finalize source 的 workloop removal 均同步。IOSurface gather 只接納 retain-count 1 的 orphan cache，selector 3 最後 release 同步巢狀 selector 4；production 在 drain 後同步呼叫原生 one-shot finalize，再發布 `gVfDeviceStopping`。永久 KD callback 每次建立 retaining matching-services iterator，不保存 receiver，且 receiver wrapper 提供 late-entry gate。完整 static 與 paired-KC contracts 通過。 |

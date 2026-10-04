@@ -278,6 +278,7 @@ def main() -> None:
         "__ZN29IOAccelDisplayPipeUserClient214externalMethodEjP25IOExternalMethodArgumentsP24IOExternalMethodDispatchP8OSObjectPv",
         "__ZN18IOAccelDisplayPipe22display_change_handlerEPvP13IOFramebufferiS0_",
         "__ZN22IOGraphicsAccelerator214gart_collectorEP22IOInterruptEventSourcei",
+        "__ZN22IOGraphicsAccelerator218finalize_interruptEP22IOInterruptEventSourcei",
         "__ZN22IOGraphicsAccelerator218deviceCacheControlEP20IOSurfaceDeviceCachejyy",
         "__ZN22IOGraphicsAccelerator220emitFirstFlushEventsEv",
     }
@@ -286,7 +287,7 @@ def main() -> None:
 
     # Keep route inventory changes explicit. This count includes admission,
     # lifecycle, GGTT, GuC/CTB, IRQ, native producer and System-KC routes.
-    expected_route_count = 143
+    expected_route_count = 144
     if len(routes) != expected_route_count:
         raise AssertionError(
             f"route inventory changed: expected {expected_route_count}, got {len(routes)}"

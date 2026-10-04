@@ -10,6 +10,24 @@ The current dynamic-entry gate table is
 
 ## Scope
 
+2026-10-05 callback-lifetime/stop delta: SG-05/P9 is now `CLOSED-STATIC`.
+The Tahoe paired-KC contract pins native accelerator start/stop lock order,
+DisplaySleep unregister/free order, synchronous display-notifier and GART
+source removal, the dedicated finalize source, its SystemKC-to-IOSurface
+import, every IOSurfaceDeviceCache callback selector and cache-termination
+path. The orphan gather admits only matching caches with retain count one;
+selector 3 releases that last cache reference and synchronously nests selector
+4. Production now counts the finalize handler, permits selector 3/4 to bypass
+only inside an atomic retirement scope, and synchronously runs the native
+one-shot finalizer after external-producer drain but before publishing device
+stop. The permanent KD callback was also closed: it obtains a new
+matching-services iterator per notification, invokes the accelerator while
+the iterator-retained OSSet is live, and retains no receiver afterwards.
+There are now 18 outer/lifetime roots and 144 total routes (121 accelerator,
+three framebuffer, 20 System KC); 11 source mutations, targeted paired-KC
+contracts and full static `/tmp/ngreen-static.eO5Rrz` pass. SG-06 through
+SG-11 remain open, so runtime is still prohibited.
+
 2026-10-04 counted external-producer delta: production now routes the 16
 System-KC outer roots derived from the complete P1–P7 inventory plus Intel
 `DisplaySleepCallback`. A receiver-scoped gate admits only the published VF
