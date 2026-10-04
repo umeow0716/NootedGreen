@@ -35,6 +35,8 @@ EVENT_DISABLE_STAMP_LOCKED = "__ZN20IOAccelEventMachine223disable_stamp_interrup
 EVENT_ENABLE_STAMP = "__ZN20IOAccelEventMachine220enableStampInterruptEi"
 EVENT_DISABLE_STAMP = "__ZN20IOAccelEventMachine221disableStampInterruptEi"
 EVENT_OWNER_BODIES = {
+    "__ZN11IOAccelTask4initEP22IOGraphicsAccelerator2jPP16IORangeAllocator": (0x138, "f00989c4635c6bfcba66ac1d775dfb16259703e55064355a7686bb3e9db9e186"),
+    "__ZN15IOAccelTaskList7addTaskEP11IOAccelTask": (0x14, "dd5d756962a0d9d7bd2c5168492d6202cd17167529578338f639cf9abea4cdc4"),
     "__ZN24IOAccelSharedUserClient215delete_resourceEj": (0x116, "3284f01291ec4103e1a0695dcad54bdc3722cdb8a303c867459b7e3cce0cb302"),
     "__ZN16IOAccelMemoryMap15remove_resourceEP16IOAccelResource2": (0x5e, "72e6f743a75a66e9d29bfa658f891e0c5c99e462a9fe3a740c44deef0eb068ea"),
     "__ZN16IOAccelResource24freeEv": (0x41c, "ed792391afedafbd9924dc5d2bdc447d0b116644f8e5b2f34161398e982c79b4"),
@@ -1097,6 +1099,10 @@ def check(path, boot_path=None):
         assert encoded[0] == 0xe8 and call + 5 + struct.unpack_from("<i", encoded, 1)[0] == address_of(method), "changed Shared teardown cleanup edge"
     assert read(0x14b8e91c, 14) == bytes.fromhex("ff 50 28 48 c7 83 88 00 00 00 00 00 00 00"), "changed Shared task release/identity clear ordering"
     raw_shared_release = struct.unpack("<Q", read(address_of(RESOURCE_VTABLE) + 16 + 0x160, 8))[0]
+    base_task_init = struct.unpack("<Q", read(address_of("__ZTV11IOAccelTask") + 0x128, 8))[0]
+    assert base_task_init >> 63 == 0 and (base_task_init >> 30) & 3 == 1 and base_task_init & 0x3fffffff == address_of("__ZN11IOAccelTask4initEP22IOGraphicsAccelerator2jPP16IORangeAllocator"), "changed base task init header-relative dispatch"
+    edge = read(0x14b9df26, 5)
+    assert edge[0] == 0xe8 and 0x14b9df2b + struct.unpack_from("<i", edge, 1)[0] == address_of("__ZN15IOAccelTaskList7addTaskEP11IOAccelTask"), "changed base task raw list publication edge"
     for call, target in ((0x14b914b4, 0x10012), (0x14b9156f, 0x10018),
                          (0x14b914f0, address_of("__ZNK16IOAccelNamespace8lookupIdEjPPv"))):
         encoded = read(call, 5)

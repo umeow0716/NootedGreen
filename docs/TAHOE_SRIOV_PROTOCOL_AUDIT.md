@@ -6955,6 +6955,31 @@ No executable patch or runtime mutation.
 
 ### Update fanout must participate in the same owner transaction
 
+Task construction/publication admission (2026-10-04): complete native task
+initWithOptions 0x788c/0x1aa reviewed/pinned. It clears private table +0x260,
+initializes managed-list head +0x268 to zero and tail +0x270 to the head's
+address, then calls base init via header slot +0x128 at 0x797e. External
+relocation 0xc8118 resolves the header pointer to IOAccelTask's vtable (this
+is header-relative, object slot +0x118). Base init completes before native
+newPageTableForTask 0x79a4, private-table store 0x79a9 and managed-list init
+0x79b8. Subsequent stamp/scratch initialization and sampler construction
+still precede the native success return; selected failures release/reset the
+private table or return false for factory cleanup. Failure is not proof of
+hardware quiescence or that no list observer can see the partial task.
+
+The complete inherited IOAccelTask::init 0x14b9de06/0x138 was reviewed/pinned:
+it initializes owner/event/allocator state, retains supplied range allocators,
+and calls addTask at 0x14b9df26 with accelerator +0xc48. Complete addTask
+0x14b8201e/0x14 simply stores previous head into task +0x18, publishes task as
+new head and increments count; it has no retain, mutex or initialized-state
+filter. Thus base init genuinely publishes a task before native PPGTT/list
+construction is complete. This is construction order, not a reproduced race:
+the effective factory's outer lock may exclude all observers. A lifetime
+transaction must establish that outer serialization/publication boundary
+rather than assume every task reachable through the accelerator list is
+fully constructed. Next: effective withOptions/factory callers and task-list
+observer lock contract. No runtime change or VM start.
+
 Selected completion lock regression contract (2026-10-04): current synchronous
 TLB waiter retains gVfGucLock across direct poll, so its completion cannot
 require that lock. Re-read the existing native software wrapper 1f9a0/a4

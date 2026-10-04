@@ -7,6 +7,13 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 task construction/publication: complete native IGAccelTask init
+(0x1aa), inherited IOAccelTask init (0x138) and TaskList addTask (0x14)
+reviewed/pinned. Base init publishes task to accelerator raw list before
+private PPGTT and managed-table list construction. Base vtable relocation and
+header-relative slot verified. Outer factory serialization/construction
+visibility remains required; no concurrent partial-task observation claimed.
+
 2026-10-04 selected completion lock graph: re-read existing native software
 dispatcher and current poll/drain/parser/readiness/credit/fault/IRQ-gate helpers.
 New structural source contract covers twelve selected helper bodies and rejects

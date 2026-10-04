@@ -9,6 +9,7 @@ import sys
 # Complete reviewed native bodies. This fixes the concrete Intel override
 # graph, not inherited timer APIs, dynamic callbacks or runtime completion.
 STAMP_IRQ_NATIVE = {
+    "__ZN11IGAccelTask15initWithOptionsEP16IntelAccelerator": (0x1aa, "18246f4bec33ea91f21f670c87a4bbccc4f1ccbf7ed9f60bc34d07ba2f133a25"),
     "__ZN16IGAccelMemoryMap21freeGPUVirtualAddressEv": (0x10a, "ff45337bab3d4a8e8a5018d739955a37a365ffbba6a49a1d9f4ed0796b2cceb8"),
     "__ZN24IGStolenMemoryDescriptor12setPurgeableEjPj": (0x2a, "97baec040a0d4c7f45075fefae44847895641f129d598b41581dceb613be1b9e"),
     "__ZN18IGStolenMemoryPool8allocateEm": (0xa8, "2da22d3ece5349942f8b06df08644420dc1824d5c8059116ba3e107214a46875"),
@@ -595,6 +596,7 @@ def macho_inventory(path):
     }
     observed_stamp_irq_imports = {address: [] for address in stamp_irq_imports}
     event_stop_imports = {
+        0xc8118: "__ZTV11IOAccelTask",
         0xd9540: "__ZN16IOAccelResource213sharedReleaseEP14IOAccelShared2",
         0xd9570: "__ZN16IOAccelResource212addToChannelEP15IOAccelChannel2j",
         0xd9578: "__ZN16IOAccelResource217removeFromChannelEP15IOAccelChannel2",
