@@ -10,6 +10,21 @@ The current dynamic-entry gate table is
 
 ## Scope
 
+2026-10-04 GL-client/SurfaceMTL delta: the paired Tahoe System KC contract now
+pins the complete GLContext six-entry dynamic table (`0x100..0x105`),
+GLDrawable six-entry table and SurfaceMTL nineteen-entry table, their exact
+argument descriptors, complete member/wrapper bodies, special dispatch
+records, relevant vtable slots and outer mutex/busy/wait scopes. GLContext
+read-buffer is an independent external copy/DMA producer that enters the
+already-bounded Intel Surface `submitBlit` chain; GL `processSwap` remains in
+the P2 data-buffer family. Complete GLDrawable/SurfaceMTL shape, IOSurface and
+shared-event fence bodies reveal no new submit root. P5b is closed as an
+inventory only; P5c, display/flip, internal producers, counted admission and
+drain ordering remain open. The targeted paired-KC contract and full static
+suite pass at `/tmp/ngreen-static.BRtkex`. Checkpoint `68d3c9b` is pushed and
+exact-sha GitHub Actions `37202594711` passed full static, release kext, Metal
+smoke and both artifacts in 1m35s. No runtime or hardware state was changed.
+
 2026-10-04 Surface/base-client delta: the paired Tahoe System KC contract now
 pins complete `IOAccelSurface` (19), `IOAccelDevice2` (10) and
 `IOAccelSharedUserClient2` (21) selector tables, argument descriptors,

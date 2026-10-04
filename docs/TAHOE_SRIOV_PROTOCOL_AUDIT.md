@@ -1,7 +1,7 @@
 # Tahoe SR-IOV protocol audit — in progress
 
 Updated: 2026-10-04. The last dynamic source baseline is `ce166c8`; the current
-offline-reviewed worktree is V287 surface/base-client inventory on
+offline-reviewed worktree is V288 GL-client/SurfaceMTL inventory on
 `codex/tahoe-sriov-vf`. This is NOT a boot-test candidate or a successful
 driver baseline. The `ce166c8` run produced repeatable host PF DMAR faults
 followed by i915 hangs and a host reboot. Keep `macos-tahoe-sriov` shut off until the
@@ -20,6 +20,39 @@ KVMFR/client transport remains the intended receiving side.
 The authoritative dynamic-entry checklist is
 [`DYNAMIC_TEST_GATE.md`](DYNAMIC_TEST_GATE.md). Any open static gate keeps the
 VM hard hold in force.
+
+## V288 GL client and SurfaceMTL inventory (offline)
+
+The Tahoe 25G229 System KC contract now pins all six dynamic GLContext
+selectors (`0x100..0x105`), all six static GLDrawable selectors and all
+nineteen SurfaceMTL selectors, including exact argument descriptors, complete
+tables, complete reachable member/wrapper bodies, special dispatch records
+and the relevant concrete vtable slots. GLContext start's static-table
+publication and its runtime dispatch-pointer consumption are both pinned, so
+the older interface cannot silently change its selector layout.
+
+GLContext selector `0x105` read-buffer is a newly classified independent
+producer root. Its exact accelerator mutex/busy acquisition, enabled wait and
+all error/success unlocks are enforced. While admitted, it dispatches surface
+slot `+0x960`, which the V287 Intel Surface inventory already follows through
+copyBufferDMA to `IntelAccelerator::submitBlit`; its later CPU-copy fallback is
+also pinned. GL `processDataBuffers` reaches `processSwap` through vtable
+`+0xb70`; that function's surface-copy, base flip and legacy flip/swap choices
+are fixed, but it remains part of the existing P2 external data-buffer family
+rather than another external selector.
+
+GLDrawable set/config/event roots and SurfaceMTL id/scale/shape/control/event
+roots now have exact mutex/busy and wait inventories. The drawable-to-shape
+edges and both shared-event wrapper layers are pinned through IOSurface and
+IOAccel fence creation to `IOAccelFenceMachine::addEventFence`. No independent
+GPU-submit edge was found in those bounded complete bodies; SurfaceMTL read
+and flush are unsupported stubs in this fixture. P5b is therefore closed as
+an inventory only. It does not implement counted admission, prove completion
+or permit a boot. Targeted paired-KC contracts and the complete static suite
+pass at `/tmp/ngreen-static.BRtkex` with only the two known SDK macro warnings.
+Checkpoint `68d3c9b` is pushed; exact-sha GitHub Actions run `37202594711`
+passed full static, x86_64 release kext, Metal smoke and both artifact uploads
+in 1m35s. No VM, deployment, PCI/sysfs, VF/PF or Host i915 state was touched.
 
 ## V287 surface and base-client inventory (offline, in progress)
 
