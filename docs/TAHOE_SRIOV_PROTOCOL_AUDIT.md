@@ -6955,6 +6955,40 @@ No executable patch or runtime mutation.
 
 ### Update fanout must participate in the same owner transaction
 
+#### Display transaction entry into rotation preparation
+
+New complete native reviews/pins: DisplayPipe validateTransaction
+`0x80bd0/0x21e`, SHA-256
+`5b269acb9228757b84f056db88633774aff390b3016b48776bf76e7258b93a05`,
+and DecodeTransaction `0x8091e/0x2b2`, SHA-256
+`d23abcf017c44eb884e855914dd15d019d517c6bec1d71b231a6ca05ab182722`.
+Selected import/call edges now pinned in both archived payloads. Decoded
+direct-edge discovery located validateTransaction calling rotation creation
+at `0x80d0f`; it is not an all-indirect-caller inventory.
+
+Validation gets the framebuffer and dirty bits, decodes one dirty group,
+dispatches framebuffer virtual `+0x6b8`, and under selected accelerator/pipe
+feature guards iterates the decoded plane count. For each returned plane
+resource, an existing rotation map `+0x238` is prepared through `+0x138` and
+its bool stored in resource `+0x240`; an absent map calls rotation creation.
+Failures set an error but do not locally release/clear the failed mapping or
+undo its PTE prefix. The loop can continue. The function resets its saved
+status before decoding a new dirty group; whether later groups can mask an
+earlier error requires the effective transaction/decoder sequence and is not
+claimed as a reproduced fault. There is no local accelerator-mutex operation
+in this complete body; external caller exclusion remains unproved.
+
+DecodeTransaction consumes dirty bits, classifies low-bit groups, inspects
+selected transaction plane resources and an optional transformation matrix,
+sets plane count for relevant groups and clears processed dirty bits. It does
+not write resource rotation width/height or validate their nonzero values.
+External transaction accessors and framebuffer command semantics are not
+newly certified by these body reviews. This narrows rotation preparation to
+the selected display transaction route, not arbitrary mappings or proof that
+the present headless VF executes it. Next: effective outer display-transaction
+serialization, upstream geometry setter and transaction cleanup after failure.
+Both native payload contracts pass. No production/runtime change.
+
 #### Rotation acquisition: borrowed task and conditional mapping-reference transfer
 
 New complete paired-KC reviews/pins: `IOAccelResource2::getGPUTask`

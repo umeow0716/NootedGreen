@@ -7,6 +7,12 @@ audit's runtime blockers are open.
 
 ## Scope
 
+New complete native reviews: DisplayPipe validateTransaction `0x80bd0/0x21e`
+and DecodeTransaction `0x8091e/0x2b2`. Both body hashes and selected rotation
+creation/decoder/import edges pinned. These identify a display preparation
+entry, not runtime VF reachability or complete outer locking/cleanup. Geometry
+setter, framebuffer command and later transaction cleanup remain pending.
+
 New complete paired-KC reviews: resource getGPUTask `0x14b8c99c/0x22` and
 memory createMappingInTask `0x14b672ee/0x16`. Concrete Intel system-memory
 factory imports and rotation borrowed-task calls pinned in both native

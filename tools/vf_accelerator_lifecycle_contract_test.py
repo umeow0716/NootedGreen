@@ -9,6 +9,8 @@ import sys
 # Complete reviewed native bodies. This fixes the concrete Intel override
 # graph, not inherited timer APIs, dynamic callbacks or runtime completion.
 STAMP_IRQ_NATIVE = {
+    "__ZN18IGAccelDisplayPipe19validateTransactionEP30IOAccelDisplayPipeTransaction2": (0x21e, "5b269acb9228757b84f056db88633774aff390b3016b48776bf76e7258b93a05"),
+    "__ZN18IGAccelDisplayPipe17DecodeTransactionEP30IOAccelDisplayPipeTransaction2PyPj": (0x2b2, "d23abcf017c44eb884e855914dd15d019d517c6bec1d71b231a6ca05ab182722"),
     "__ZN15IGAccelResource4freeEv": (0x26c, "8bf6604632ce62b2bccd54c2d2ca22233633738b3de60ebbd4f00aa01a67a767"),
     "__ZN15IGAccelResource4initEP22IOGraphicsAccelerator2P14IOAccelShared2j": (0x8c, "77551d181809aac756b0e8ae80a91f3df84d9cae6ee36b881c5ee5c90e9fd70b"),
     "__ZN16IGAccelMemoryMap22allocGPUVirtualAddressEv": (0x212, "dbeabbc4bcff5ada45dd5be9ff14bb4ae00a66d544b720359040f504cf01058f"),
@@ -536,6 +538,12 @@ def macho_inventory(path):
     # These imports distinguish the periodic collection mutex from bridge
     # descriptor spin locks. They do not certify dynamic callback lifetime.
     stamp_irq_imports = {
+        0x80be8: "__ZNK18IOAccelDisplayPipe14getFramebufferEv",
+        0x80cd7: "__ZNK30IOAccelDisplayPipeTransaction216getPlaneResourceEjj",
+        0x80da6: "__ZNK30IOAccelDisplayPipeTransaction216getPlaneResourceEjj",
+        0x80c1b: "__ZNK30IOAccelDisplayPipeTransaction223getTransactionDirtyBitsEv",
+        0x80d64: "__ZNK30IOAccelDisplayPipeTransaction223getTransactionDirtyBitsEv",
+        0x80db6: "__ZN16IOAccelResource218getStorageResourceEv",
         0x752c4: "__ZNK16IOAccelResource210getGPUTaskEv",
         0x75325: "__ZNK16IOAccelResource210getGPUTaskEv",
         0x12618: "_IOMalloc",
@@ -761,6 +769,9 @@ def macho_inventory(path):
     assert image[0x7dbd:0x7dcf] == bytes.fromhex("48 8b bb 60 02 00 00 48 85 ff 74 06 48 8b 07 ff 50 28"), f"{path}: changed private page-table release before list cleanup"
     assert direct_branches("__ZN15IGMemoryManager27releaseFromPageTableForTaskEP11IGAccelTaskP16IGAccelMemoryMap", "__ZN19IGHardwarePageTable12releaseRangeERK14IGAddressRange") == [0xf74e], f"{path}: changed task fan-out release edge"
     assert image[0xf753:0xf75f] == bytes.fromhex("41 20 c7 48 8b 5b 08 48 85 db 75 e9"), f"{path}: changed non-short-circuit task page-table release loop"
+    validate_transaction = "__ZN18IGAccelDisplayPipe19validateTransactionEP30IOAccelDisplayPipeTransaction2"
+    assert direct_branches(validate_transaction, "__ZN15IGAccelResource31createAndPrepareRotationMappingEv") == [0x80d0f], f"{path}: changed display transaction rotation creation edge"
+    assert direct_branches(validate_transaction, "__ZN18IGAccelDisplayPipe17DecodeTransactionEP30IOAccelDisplayPipeTransaction2PyPj") == [0x80c3f], f"{path}: changed display transaction decoding edge"
     map_vtable = value("__ZTV16IGAccelMemoryMap")
     assert map_vtable + 16 + 0x138 == 0xcd040, f"{path}: changed inherited mapping prepare relocation slot"
     assert struct.unpack_from("<Q", image, map_vtable + 16 + 0x150)[0] == value("__ZN16IGAccelMemoryMap22allocGPUVirtualAddressEv"), f"{path}: changed mapping VA allocation dispatch"
