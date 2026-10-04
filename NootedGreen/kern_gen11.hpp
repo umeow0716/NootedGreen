@@ -188,6 +188,8 @@ private:
 	mach_vm_address_t ioAccelEventMachineInitEvent {};
 	static bool vfAllocMoreCommandBuffers(void *pool);
 	mach_vm_address_t oIOAccelAllocMoreCommandBuffers {};
+	static void *vfGetCommandBufferPtrNoInc(void *pool, uint32_t dwords);
+	mach_vm_address_t oIOAccelGetCommandBufferPtrNoInc {};
 	mach_vm_address_t vfInterruptBridgeEnable {};
 	mach_vm_address_t vfInterruptBridgeDisable {};
 	static bool stopGraphicsEngine(void *that);

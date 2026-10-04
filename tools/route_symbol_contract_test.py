@@ -258,13 +258,14 @@ def main() -> None:
     system_routes = {
         "__ZN25IOAccelCommandBufferPool24initEP22IOGraphicsAccelerator2P15IOAccelChannel2P11IOAccelTaskiijjjj",
         "__ZN25IOAccelCommandBufferPool223allocMoreCommandBuffersEv",
+        "__ZN25IOAccelCommandBufferPool217getBufferPtrNoIncEj",
     }
     if not system_routes <= routes:
         raise AssertionError("missing explicitly admitted System-KC route")
 
     # Keep route inventory changes explicit. This count includes admission,
     # lifecycle, GGTT, GuC/CTB, IRQ, native producer and System-KC routes.
-    expected_route_count = 98
+    expected_route_count = 99
     if len(routes) != expected_route_count:
         raise AssertionError(
             f"route inventory changed: expected {expected_route_count}, got {len(routes)}"

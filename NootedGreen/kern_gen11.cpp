@@ -1981,29 +1981,38 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		PANIC_COND(!patcher.solveMultiple(index, lifecycle, address, size),
 			"ngreen", "Cannot resolve native IOAccelerator lifecycle API");
 		mach_vm_address_t poolInitStart = 0, growthStart = 0, growthEnd = 0;
-		KernelPatcher::SolveRequest growthBounds[] = {
+		mach_vm_address_t getterStart = 0, getterEnd = 0;
+		KernelPatcher::SolveRequest commandPoolBounds[] = {
 			{"__ZN25IOAccelCommandBufferPool24initEP22IOGraphicsAccelerator2P15IOAccelChannel2P11IOAccelTaskiijjjj",
 			 poolInitStart},
 			{"__ZN25IOAccelCommandBufferPool223allocMoreCommandBuffersEv", growthStart},
 			{"__ZN25IOAccelCommandBufferPool24freeEv", growthEnd},
+			{"__ZN25IOAccelCommandBufferPool217getBufferPtrNoIncEj", getterStart},
+			{"__ZN25IOAccelCommandBufferPool212submitBufferEv", getterEnd},
 		};
-		PANIC_COND(!patcher.solveMultiple(index, growthBounds, address, size) ||
+		PANIC_COND(!patcher.solveMultiple(index, commandPoolBounds, address, size) ||
 		           growthStart <= poolInitStart ||
 		           growthStart - poolInitStart != 0x182 ||
 		           growthEnd <= growthStart ||
 		           !NGIOAccelCommandPool::hasReviewedGrowthContract(
 		               reinterpret_cast<const uint8_t *>(growthStart),
-		               growthEnd - growthStart),
-		           "ngreen", "Changed IOAccelerator command-pool growth contract");
+		               growthEnd - growthStart) ||
+		           getterEnd <= getterStart ||
+		           !NGIOAccelCommandPool::hasReviewedGetBufferContract(
+		               reinterpret_cast<const uint8_t *>(getterStart),
+		               getterEnd - getterStart),
+		           "ngreen", "Changed IOAccelerator command-pool contract");
 		KernelPatcher::RouteRequest commandPoolRoutes[] = {
 			{"__ZN25IOAccelCommandBufferPool24initEP22IOGraphicsAccelerator2P15IOAccelChannel2P11IOAccelTaskiijjjj",
 			 ngVfCommandPoolInitBridge, gIOAccelCommandPoolInit},
 			{"__ZN25IOAccelCommandBufferPool223allocMoreCommandBuffersEv",
 			 vfAllocMoreCommandBuffers, this->oIOAccelAllocMoreCommandBuffers},
+			{"__ZN25IOAccelCommandBufferPool217getBufferPtrNoIncEj",
+			 vfGetCommandBufferPtrNoInc, this->oIOAccelGetCommandBufferPtrNoInc},
 		};
 		PANIC_COND(!patcher.routeMultiple(index, commandPoolRoutes, address, size),
-		           "ngreen", "Cannot route VF command-pool growth postcondition");
-		SYSLOG("ngreen", "V268: resolved IOAccelerator lifecycle and guarded VF pool growth");
+		           "ngreen", "Cannot route VF command-pool postconditions");
+		SYSLOG("ngreen", "V272: guarded VF command-pool growth and returned capacity");
 		return true;
 	}
 
@@ -3063,6 +3072,55 @@ bool Gen11::vfAllocMoreCommandBuffers(void *pool)
 		SYSLOG("ngreen", "V268: rejecting incomplete VF command-pool growth old=%u new=%u current=%d",
 		       previousCount, publishedCount, current);
 	return complete;
+}
+
+void *Gen11::vfGetCommandBufferPtrNoInc(void *pool, uint32_t dwords)
+{
+	PANIC_COND(!callback || !callback->oIOAccelGetCommandBufferPtrNoInc,
+	           "ngreen", "Missing native command-pool getter trampoline");
+	const bool target = pool && gVfIdentity == VfIdentity::Virtual &&
+		gVfAccelerator &&
+		getMember<void *>(pool, NGIOAccelCommandPool::acceleratorOffset) ==
+			gVfAccelerator;
+	void *const result = FunctionCast(
+		vfGetCommandBufferPtrNoInc,
+		callback->oIOAccelGetCommandBufferPtrNoInc)(pool, dwords);
+	if (!target)
+		return result;
+
+	const uint16_t maximum =
+		getMember<uint16_t>(pool, NGIOAccelCommandPool::maximumOffset);
+	const uint16_t count =
+		getMember<uint16_t>(pool, NGIOAccelCommandPool::countOffset);
+	const int16_t current =
+		getMember<int16_t>(pool, NGIOAccelCommandPool::currentOffset);
+	uintptr_t memory = 0, gpuMapping = 0, cpuMapping = 0;
+	if (current >= 0 && static_cast<uint16_t>(current) < count &&
+	    static_cast<uint16_t>(current) < NGIOAccelCommandPool::slotCapacity) {
+		const size_t slot = NGIOAccelCommandPool::slotsOffset +
+			static_cast<size_t>(current) * NGIOAccelCommandPool::slotStride;
+		memory = reinterpret_cast<uintptr_t>(getMember<void *>(pool, slot));
+		gpuMapping = reinterpret_cast<uintptr_t>(
+			getMember<void *>(pool, slot + sizeof(uintptr_t)));
+		cpuMapping = reinterpret_cast<uintptr_t>(
+			getMember<void *>(pool, slot + 2 * sizeof(uintptr_t)));
+	}
+	const uintptr_t start = reinterpret_cast<uintptr_t>(
+		getMember<void *>(pool, NGIOAccelCommandPool::startOffset));
+	const uintptr_t end = reinterpret_cast<uintptr_t>(
+		getMember<void *>(pool, NGIOAccelCommandPool::endOffset));
+	const uintptr_t cursor = reinterpret_cast<uintptr_t>(
+		getMember<void *>(pool, NGIOAccelCommandPool::cursorOffset));
+	const bool complete = NGIOAccelCommandPool::hasReturnedCapacity(
+		maximum, count, current, memory, gpuMapping, cpuMapping,
+		start, end, cursor, reinterpret_cast<uintptr_t>(result), dwords);
+	if (!complete) {
+		vfMarkProtocolFault("VF command-pool getter returned inadequate capacity");
+		PANIC_COND(true, "ngreen",
+		           "V272: refusing inadequate VF command buffer request=%u current=%d count=%u",
+		           dwords, current, count);
+	}
+	return result;
 }
 
 bool Gen11::IGMemoryManagerInitSegments(void *that)

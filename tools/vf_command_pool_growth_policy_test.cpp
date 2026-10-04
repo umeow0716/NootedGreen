@@ -1,6 +1,7 @@
 #include "../NootedGreen/kern_ioaccel_command_pool.hpp"
 #include <cassert>
 #include <cstdint>
+#include <utility>
 #include <vector>
 
 using namespace NGIOAccelCommandPool;
@@ -22,6 +23,38 @@ int main() {
 		body[0xc2 + i] ^= 1;
 		assert(!hasReviewedGrowthContract(body.data(), body.size()));
 		body[0xc2 + i] ^= 1;
+	}
+	std::vector<uint8_t> getter(reviewedGetBufferSize, 0);
+	const uint8_t getterInitial[] = {
+		0x48, 0x8b, 0x87, 0x58, 0x18, 0x00, 0x00,
+		0x41, 0x89, 0xf6, 0x4a, 0x8d, 0x0c, 0xb0,
+		0x48, 0x3b, 0x8f, 0x50, 0x18, 0x00, 0x00,
+	};
+	const uint8_t getterSelection[] = {
+		0x0f, 0xbf, 0xf1, 0x48, 0x89, 0xdf,
+		0xe8, 0x04, 0xfe, 0xff, 0xff,
+	};
+	const uint8_t getterPublish[] = {
+		0x48, 0x89, 0x8b, 0x50, 0x18, 0x00, 0x00,
+		0x48, 0x89, 0x83, 0x58, 0x18, 0x00, 0x00,
+	};
+	for (size_t i = 0; i < sizeof(getterInitial); ++i)
+		getter[0x7 + i] = getterInitial[i];
+	for (size_t i = 0; i < sizeof(getterSelection); ++i)
+		getter[0x6f + i] = getterSelection[i];
+	for (size_t i = 0; i < sizeof(getterPublish); ++i)
+		getter[0xfa + i] = getterPublish[i];
+	assert(hasReviewedGetBufferContract(getter.data(), getter.size()));
+	assert(!hasReviewedGetBufferContract(nullptr, getter.size()));
+	assert(!hasReviewedGetBufferContract(getter.data(), getter.size() - 1));
+	for (auto range : {std::pair<size_t, size_t> {0x7, sizeof(getterInitial)},
+	                   std::pair<size_t, size_t> {0x6f, sizeof(getterSelection)},
+	                   std::pair<size_t, size_t> {0xfa, sizeof(getterPublish)}}) {
+		for (size_t i = 0; i < range.second; ++i) {
+			getter[range.first + i] ^= 1;
+			assert(!hasReviewedGetBufferContract(getter.data(), getter.size()));
+			getter[range.first + i] ^= 1;
+		}
 	}
 	std::vector<uint8_t> extended(reviewedExtendedInitSize, 0);
 	for (size_t i = 0; i < sizeof(extendedInitFind); ++i)
@@ -68,4 +101,28 @@ int main() {
 	assert(!completedGrowth(true, slotCapacity, slotCapacity,
 	                        slotCapacity, 0, 1, 2, 3));
 	assert(!completedGrowth(true, 3, 2, 4, 2, 1, 2, 3));
+
+	constexpr uintptr_t start = 0x1000;
+	constexpr uintptr_t end = start + 0xff8;
+	for (uint32_t request = 0; request <= 0x400; ++request)
+		assert(hasReturnedCapacity(8, 1, 0, 1, 2, start,
+		                           start, end, start, start, request) ==
+		       (request <= 0x3fe));
+	constexpr uintptr_t partial = start + 0x9b8;
+	assert(hasReturnedCapacity(8, 1, 0, 1, 2, start,
+	                           start, end, partial, partial, 0x18e));
+	assert(!hasReturnedCapacity(8, 1, 0, 1, 2, start,
+	                            start, end, partial, partial, 0x3fe));
+	assert(!hasReturnedCapacity(8, 1, 0, 1, 2, start,
+	                            start, end, start, start, UINT32_MAX));
+	assert(!hasReturnedCapacity(8, 1, 0, 1, 2, start,
+	                            start, end, start, start + 4, 1));
+	assert(!hasReturnedCapacity(8, 1, -1, 1, 2, start,
+	                            start, end, start, start, 1));
+	assert(!hasReturnedCapacity(8, 1, 0, 1, 0, start,
+	                            start, end, start, start, 1));
+	assert(!hasReturnedCapacity(8, 1, 0, 1, 2, start,
+	                            end, start, start, start, 1));
+	assert(!hasReturnedCapacity(8, 1, 0, 1, 2, start + 4,
+	                            start, end, start, start, 1));
 }

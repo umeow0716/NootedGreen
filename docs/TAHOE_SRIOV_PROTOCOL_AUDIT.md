@@ -1,12 +1,46 @@
 # Tahoe SR-IOV protocol audit — in progress
 
 Updated: 2026-10-04. The last dynamic source baseline is `ce166c8`; the latest
-completed offline-reviewed checkpoint is V271 VF resolve-HIZ full-slot admission on
+completed offline-reviewed checkpoint is V272 VF command-pointer capacity fail-stop on
 `codex/tahoe-sriov-vf`. This is NOT a boot-test candidate or a successful
 driver baseline. The `ce166c8` run produced repeatable host PF DMAR faults
 followed by i915 hangs and a host reboot. Keep `macos-tahoe-sriov` shut off until the
 corrected code passes the remaining offline review and every independently
 enforced containment precondition.
+
+## V272 VF command-pointer capacity postcondition (offline)
+
+The UUID-admitted System-KC route now wraps the complete, hash-pinned
+`IOAccelCommandBufferPool2::getBufferPtrNoInc(unsigned int)` ABI. Native code
+first evaluates `cursor + dwords*4`, which can wrap, and after a failed void
+slot selection can rebuild the published range from the still-current old slot
+without proving that the request fits. Returning null is not safe because the
+reviewed native callers do not expose a shared checked failure ABI.
+
+The wrapper therefore preserves the native result byte-for-byte for every PF
+and non-owner pool. For the classified VF accelerator owner only, it accepts a
+result when maximum/count/current describe the fixed 256-slot array, the current
+slot's memory/GPU-map/CPU-map members are all present, published start equals
+that CPU backing, the result equals the published cursor inside start/end, and
+`dwords <= (end-result)/4`. The final
+comparison is subtraction-based and cannot reproduce the native addition wrap.
+Any violation marks the VF protocol fault and fail-stops the guest before a
+caller can write through the inadequate pointer. It does not invent selection
+success, reuse a guessed slot or alter PF behavior.
+
+The full getter boundary and three semantic instruction regions are admitted
+before routing. Pure tests cover every request through `0x400` dwords at the
+resolve-slot boundary, the `0x9b8` partial cursor, `UINT32_MAX`, pointer mismatch,
+invalid index/backing and reversed bounds. Source mutation tests bind both owner
+checks, the native-call-before-validation order and fault-before-panic order.
+The route inventory is now 99 (93 accelerator, three framebuffer, three System
+KC). The exact local KC control-flow suite and full repository static suite pass.
+
+This is fail-stop containment, not GPU recovery or Host DMA quiescence. Native
+submission/selection side effects occur before the postcondition, and a guest
+panic cannot recall DMA already issued to the PF. The VM hold and independent
+Host containment requirements remain. No VM, PCI/sysfs or hardware operation
+was performed.
 
 ## V268–V271 VF command-pool admission repairs (offline)
 
@@ -40,12 +74,11 @@ postcondition, constructor failure propagation and rect-list tail bound. Earlier
 draft labels V261–V263 collided with completed historical checkpoints and were
 renumbered without changing behavior.
 
-This remains deliberately undeployed. If native selection/growth cannot produce
-a complete slot, the getter can still return an inadequate pointer after its
-void selection path. V268 catches the reviewed growth false-success case, but
-the direct selection failure and the getter's final capacity postcondition are
-still open. PF behavior remains native. The VM/host containment hold therefore
-remains in force.
+This remains deliberately undeployed. At the V271 boundary, native selection
+could still return an inadequate pointer after its void selection path; V272
+above now fail-stops that final capacity violation. Selection side effects,
+hardware quiescence and runtime behavior remain open. PF behavior remains
+native. The VM/host containment hold therefore remains in force.
 
 ## V267 native event-timeout failure boundary (offline)
 

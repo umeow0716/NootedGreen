@@ -13,9 +13,13 @@ constexpr size_t slotStride = 0x18;
 constexpr size_t maximumOffset = 0x1830;
 constexpr size_t countOffset = 0x1832;
 constexpr size_t currentOffset = 0x1842;
+constexpr size_t startOffset = 0x1848;
+constexpr size_t endOffset = 0x1850;
+constexpr size_t cursorOffset = 0x1858;
 constexpr size_t recordOffset = 0x1860;
 constexpr uint16_t slotCapacity = 256;
 constexpr size_t reviewedGrowthSize = 0x202;
+constexpr size_t reviewedGetBufferSize = 0x10e;
 constexpr size_t reviewedExtendedInitSize = 0xf4;
 constexpr size_t reviewedRectListSize = 0x24b0;
 constexpr size_t reviewedResolveHizSize = 0x5738;
@@ -41,6 +45,39 @@ inline bool hasReviewedGrowthContract(const uint8_t *body, size_t length) {
 		return false;
 	for (size_t i = 0; i < sizeof(countAndSelection); ++i)
 		if (body[0xc2 + i] != countAndSelection[i])
+			return false;
+	return true;
+}
+
+// getBufferPtrNoInc() can retain the old current slot when its void selection
+// helper fails.  Bind the initial capacity comparison, selection call and final
+// cursor publication before routing a VF-only postcondition around the body.
+inline bool hasReviewedGetBufferContract(const uint8_t *body, size_t length) {
+	constexpr uint8_t initialCapacity[] = {
+		0x48, 0x8b, 0x87, 0x58, 0x18, 0x00, 0x00,
+		0x41, 0x89, 0xf6,
+		0x4a, 0x8d, 0x0c, 0xb0,
+		0x48, 0x3b, 0x8f, 0x50, 0x18, 0x00, 0x00,
+	};
+	constexpr uint8_t selection[] = {
+		0x0f, 0xbf, 0xf1,
+		0x48, 0x89, 0xdf,
+		0xe8, 0x04, 0xfe, 0xff, 0xff,
+	};
+	constexpr uint8_t publishCursor[] = {
+		0x48, 0x89, 0x8b, 0x50, 0x18, 0x00, 0x00,
+		0x48, 0x89, 0x83, 0x58, 0x18, 0x00, 0x00,
+	};
+	if (!body || length != reviewedGetBufferSize)
+		return false;
+	for (size_t i = 0; i < sizeof(initialCapacity); ++i)
+		if (body[0x7 + i] != initialCapacity[i])
+			return false;
+	for (size_t i = 0; i < sizeof(selection); ++i)
+		if (body[0x6f + i] != selection[i])
+			return false;
+	for (size_t i = 0; i < sizeof(publishCursor); ++i)
+		if (body[0xfa + i] != publishCursor[i])
 			return false;
 	return true;
 }
@@ -146,6 +183,27 @@ inline bool completedGrowth(bool nativeSuccess, uint16_t maximum,
 	return expectedCount <= maximum && publishedCount == expectedCount &&
 		current == static_cast<int16_t>(previousCount) && memory != 0 &&
 		gpuMapping != 0 && cpuMapping != 0;
+}
+
+// Validate without forming returned + dwords*4, because that is the native
+// comparison whose unsigned wrap can admit an oversized request.  Slot backing
+// members are supplied by the owner-scoped wrapper only after current is proven
+// to index the published fixed array.
+inline bool hasReturnedCapacity(uint16_t maximum, uint16_t count,
+                                int16_t current, uintptr_t memory,
+                                uintptr_t gpuMapping, uintptr_t cpuMapping,
+                                uintptr_t start, uintptr_t end,
+                                uintptr_t cursor, uintptr_t returned,
+                                uint32_t dwords) {
+	if (maximum == 0 || maximum > slotCapacity || count == 0 ||
+	    count > maximum || current < 0 ||
+	    static_cast<uint16_t>(current) >= count || memory == 0 ||
+	    gpuMapping == 0 || cpuMapping == 0 || returned == 0 ||
+	    start != cpuMapping || returned != cursor || returned < start ||
+	    returned > end)
+		return false;
+	return static_cast<uintptr_t>(dwords) <=
+		(end - returned) / sizeof(uint32_t);
 }
 
 } // namespace NGIOAccelCommandPool
