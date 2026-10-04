@@ -289,6 +289,23 @@ STAMP_IRQ_NATIVE = {
     "__ZN11IGScheduler33enablePeriodicEventTimerInterruptEP22IOInterruptEventSource": (0x78, "030b488c557f865c52343ba7561d7b084e109914a9894b9fab5c8c8b06c3cb79"),
     "__ZN11IGScheduler34disablePeriodicEventTimerInterruptEP22IOInterruptEventSource": (0x64, "6ad9c37406ce3699146f34cc7a6a3ce77366e1f53bd356b34294d55eb23a82a1"),
     "__ZN11IGScheduler28handlePeriodicTimerInterruptEP18IOTimerEventSource": (0x9c, "9c102a04de5a017636908823772724ea406316bc2142c0e8f2caf775809ec441"),
+    "__ZN18IGGarbageCollector20handleTimerInterruptEP18IOTimerEventSource": (0x3e, "f00ca79a433411675f2304f41e4554df2a7a514484738b873dfc5e01f7844d24"),
+    "__ZN13IGHardwareGuC20handleTimerInterruptEP18IOTimerEventSource": (0x6, "5a96d1fb661d55552184ea24023ae8190bd1523ae1f855a8d671b07143e8b1df"),
+    "__ZN19IGAccelEventMachine15finishAllStampsEj": (0x70, "f5a25d337010f861c0f5fee3536404944c69c5ae94b1ef7130e6328b3ff4cd82"),
+    "__ZN12IGScheduler515updateIdleStateE10IGHwCsTypej": (0xbe, "0c0e065ad7d7366810bbadd3a0470b779e0c493334e95bb045bf5bd18437da21"),
+    "__ZN16IntelAccelerator19PAVPCommandCallbackE22PAVPSessionCommandID_tjPjb": (0x6b6, "5d3ac33f4517c59ab8f914bc75002ce5b76957259c5a3e6ecebaf83c09c6f4f7"),
+    "__ZN16IntelAccelerator20_PAVPCommandCallbackEP8OSObject22PAVPSessionCommandID_tjPj": (0x10, "f494e2403a84a8b4bf65372d62290589a975da4d29bead24f7e8252dac12389a"),
+    "__ZN16IntelAccelerator28_PAVPCommandCallbackRecoveryEP8OSObject22PAVPSessionCommandID_tjPj": (0xe, "3f364a649bd9b83224ee87a5f3fcc5ca8e7ae44f073d3de22d64dc511573f3c7"),
+    "__ZN16IntelAccelerator21_DisplaySleepCallbackEP8OSObject17DisplaySleepCmd_tjj": (0xa, "e9de0576f1f26c412a0944e337b0e1b7b21c1c6218ec2794455784d51b169e80"),
+    "__ZN16IntelAccelerator20DisplaySleepCallbackE17DisplaySleepCmd_tjj": (0x240, "9ebae452f344f097b6a2d02d2dd4db81caea70c1eed7c2508674ac422f0863b5"),
+    "__ZN16IntelAccelerator10submitFillEP15blit3d_params_tRK8IGVectorI11blit_rect_t25IGIOMallocAllocatorPolicyEP11IGAccelTask": (0x2fa, "817088619f5034beb04216718fcabe6cfbaa1d4ecdb62786d365d4dc6e8c280f"),
+    "__ZN14IGTelemetryKMD4initEP16IntelAcceleratory": (0x8a, "c5d0897249cf930fde761cb5508eb673300963e1e6e815a7587878c5bb997a53"),
+    "__ZN14IGTelemetryKMD6sampleEy": (0x9c, "76b83ce77c596dd245eef8ff43ba42f269be26f786827e684827ff64dd13d6cc"),
+    "__ZN25IGAccelTraceStreamManager13recognizeFlipEv": (0x30, "3779892f55887da103048356d78ce40a29a561d9ffca370af8a1d6647360b11a"),
+    "__ZN16IGAccelCLContext16endCommandStreamER24IOAccelCommandStreamInfo": (0x1e8, "39ca7314f985bc0d10b9027cd8b30443db949b57d9db942189369f7d73285b90"),
+    "__ZN16IGAccelGLContext16endCommandStreamER24IOAccelCommandStreamInfo": (0x498, "d8ea56749258b108d35593f3948b982c6dbe81012b53881f98f673a4db1a098b"),
+    "__ZN19IGAccelVideoContext16endCommandStreamER24IOAccelCommandStreamInfo": (0x36c, "c7a8df470ea62bf9f6f9102755f0789fb466b08189534f9dd4fa74d1b39f7dc7"),
+    "__ZN23IGHardwareBlit2DContext10initializeEv": (0x36, "786ed2c11281f3a36a7cc28fbda26c58d7c90b8f1ccda6a15aba0089f72bd429"),
 }
 
 
@@ -390,6 +407,7 @@ SCHEDULER4_UNBIND = "__ZN12IGScheduler46unbindEP17IGHardwareContext"
 SCHEDULER4_PUSH = "__ZN12IGScheduler44pushEP17IGHardwareContextjjbb"
 RING_SUBMIT_TO_RING = "__ZN20IGHardwareRingBuffer12submitToRingEv"
 RING_SUBMIT_FAILURE = RING_SUBMIT_TO_RING + ".cold.1"
+RING_RESUBMIT_STAMP = "__ZN20IGHardwareRingBuffer19resubmitStampToRingEjPj"
 GUC_SUBMIT_WORK_ITEM = "__ZN13IGHardwareGuC14submitWorkItemEjRK21SGfxContextDescriptor10IGHwCsTypejjj"
 LEGACY_GUC_MESSAGE = "__ZN5IGGuC20sendHostToGucMessageEPK18IGHostToGucMessagejU13block_pointerFvvE"
 LEGACY_GUC_DMA = "__ZN5IGGuC12dmaHostToGuCEyjjNS_12IGGucDmaTypeEb"
@@ -403,6 +421,14 @@ FIFO_SUBMIT_COMMANDS = "__ZN18IGAccelFIFOChannel18submitRingCommandsEPjjj"
 FIFO_SUBMIT_BUFFER = "__ZN18IGAccelFIFOChannel12submitBufferEP24IOAccelCommandDescriptor"
 ACCEL_SUBMIT_SYNC = "__ZN16IntelAccelerator16submitSyncEventsEbP11IGAccelTask10IGHwCsTypeb"
 ACCEL_SUBMIT_MAIN = "__ZN16IntelAccelerator21submitMainRingCommandEPjm"
+PAVP_CALLBACK = "__ZN16IntelAccelerator19PAVPCommandCallbackE22PAVPSessionCommandID_tjPjb"
+PAVP_CALLBACK_ENTRY = "__ZN16IntelAccelerator20_PAVPCommandCallbackEP8OSObject22PAVPSessionCommandID_tjPj"
+PAVP_CALLBACK_RECOVERY_ENTRY = "__ZN16IntelAccelerator28_PAVPCommandCallbackRecoveryEP8OSObject22PAVPSessionCommandID_tjPj"
+PAVP_SUBMIT = "__ZN16IntelAccelerator19appsPavpSessionMgmtEj22PAVPSessionCommandID_tjP16SGfxBltMIFlushDwPvbb"
+DISPLAY_SLEEP_CALLBACK = "__ZN16IntelAccelerator20DisplaySleepCallbackE17DisplaySleepCmd_tjj"
+DISPLAY_SLEEP_CALLBACK_ENTRY = "__ZN16IntelAccelerator21_DisplaySleepCallbackEP8OSObject17DisplaySleepCmd_tjj"
+TELEMETRY_SAMPLE = "__ZN14IGTelemetryKMD6sampleEy"
+TRACE_RECOGNIZE_FLIP = "__ZN25IGAccelTraceStreamManager13recognizeFlipEv"
 GET_DEFAULT_RESET = "__ZN16IntelAccelerator20getDefaultResetValueEj"
 TRACE_DISABLE = "__ZN25IGAccelTraceStreamManager17disableCollectionE27TraceStreamCollectionChange"
 TRACE_SHUTDOWN = "__ZN25IGAccelTraceStreamManager8shutdownEv"
@@ -467,6 +493,7 @@ CTB_INIT = "__ZN21IGHardwareGuCCTBuffer19initWithAcceleratorEP22IOGraphicsAccele
 CTB_FREE = "__ZN21IGHardwareGuCCTBuffer4freeEv"
 SET_ASYNC_SLICE_COUNT = "__ZN16IntelAccelerator18setAsyncSliceCountE13IGSliceConfig"
 DPSM_IDLE_TIMER = "__ZN16IntelAccelerator13dpsmIdleTimerEv"
+DPSM_KICK_TIMER = "__ZN16IntelAccelerator13dpsmKickTimerEv"
 INIT_LOCAL_CALLBACKS = "__ZN16IntelAccelerator24initLocalCallbackSupportEv"
 ENABLE_COARSE_POWER_GATING = "__ZL24_enableCoarsePowerGatingv"
 DPSM_NOTIFY = "__ZL11_dpsmNotifyPj"
@@ -2010,6 +2037,86 @@ def macho_inventory(path):
     if sync_body.count(sync_ring) != 1 or sync_body.index(sync_ring) >= sync_body.index(sync_dispatch) or \
             len(direct_branches(ACCEL_SUBMIT_SYNC, RING_WRITE_BUFFER)) != 3:
         raise AssertionError(f"{path}: sync FIFO/ring receiver or packet graph changed")
+
+    # P7 non-user/internal producer partition.  This is a complete direct-text
+    # inventory for the retained native ring producer helpers in this UUID,
+    # combined with the typed virtual receiver inventory above.  Two control
+    # callbacks are independent roots: PAVP and display sleep.  The exported
+    # trace recognizeFlip helper has no direct in-image caller and is therefore
+    # conservatively a third root; it tail-calls Telemetry sample.  The other
+    # telemetry, sync-event, context-stamp and Blit2D-initialize calls are
+    # descendants of the already inventoried external context/blit roots. Native engine-start
+    # stamp setup is unreachable on a classified VF because the complete
+    # startGraphicsEngine entry is replaced.  Reset replay and legacy DPSM
+    # producers remain behind the previously enforced IGGuC/Scheduler5 fences.
+    direct_producer_calls = {
+        FIFO_SUBMIT_STAMP: [
+            0x5c00, 0x5c0e,
+            0x25df4, 0x25e10, 0x25e2c,
+            0x2bb4a, 0x2bbe2,
+            0x4ca93, 0x4cb04,
+            0x699ec, 0x699fd,
+            0x7785a, 0x7786b,
+            0x7d942,
+        ],
+        FIFO_SUBMIT_COMMANDS: [0x2b164, 0x2b32a],
+        ACCEL_SUBMIT_SYNC: [0x2bdcd, 0x2bff2, 0x2c489],
+        ACCEL_SUBMIT_MAIN: [0x5b623],
+        RING_RESUBMIT_STAMP: [0x1cd9e, 0x3a43c, 0x3a4ae],
+        DPSM_KICK_TIMER: [0x1a1b1, 0x1c3f7, 0x381b5, 0x3824f, 0x804b6],
+        PAVP_SUBMIT: [0x2a0b1, 0x2a175, 0x2a23a, 0x2a299, 0x2a2e1],
+        TELEMETRY_SAMPLE: [0x9221, 0x7784a, 0x77924],
+        TRACE_RECOGNIZE_FLIP: [],
+        PAVP_CALLBACK: [0x25d0d, 0x2a925, 0x2a932],
+        DISPLAY_SLEEP_CALLBACK: [0x2a93d],
+    }
+    for target, calls in direct_producer_calls.items():
+        actual = text_direct_branches(target)
+        assert actual == calls, \
+            f"{path}: changed P7 direct producer partition for {target}: {actual}"
+    assert text_direct_branches(FIFO_SUBMIT_BUFFER) == [], \
+        f"{path}: FIFO submitBuffer gained an unclassified direct caller"
+    assert struct.unpack_from(
+        "<Q", image, value(FIFO_VTABLE) + 16 + 0x1f8)[0] == value(
+            FIFO_SUBMIT_BUFFER), \
+        f"{path}: FIFO submitBuffer effective virtual changed"
+    for owner, calls in (
+            (START, [0x25df4, 0x25e10, 0x25e2c]),
+            (ACCEL_SUBMIT_SYNC, [0x2bb4a, 0x2bbe2]),
+            ("__ZN16IGAccelCLContext16endCommandStreamER24IOAccelCommandStreamInfo",
+             [0x5c00, 0x5c0e]),
+            ("__ZN16IGAccelGLContext16endCommandStreamER24IOAccelCommandStreamInfo",
+             [0x699ec, 0x699fd]),
+            ("__ZN19IGAccelVideoContext16endCommandStreamER24IOAccelCommandStreamInfo",
+             [0x7785a, 0x7786b]),
+            ("__ZN23IGHardwareBlit2DContext10initializeEv", [0x7d942])):
+        assert direct_branches(owner, FIFO_SUBMIT_STAMP) == calls, \
+            f"{path}: changed P7 stamp-producer owner {owner}"
+    assert direct_branches(PAVP_CALLBACK_ENTRY, PAVP_CALLBACK) == [0x2a925] and \
+        direct_branches(PAVP_CALLBACK_RECOVERY_ENTRY, PAVP_CALLBACK) == [0x2a932], \
+        f"{path}: changed PAVP callback entry ownership"
+    assert direct_branches(START, PAVP_CALLBACK) == [0x25d0d], \
+        f"{path}: changed native-start PAVP descendant edge"
+    assert direct_branches(DISPLAY_SLEEP_CALLBACK_ENTRY,
+                           DISPLAY_SLEEP_CALLBACK) == [0x2a93d], \
+        f"{path}: changed display-sleep callback entry ownership"
+    assert direct_branches(TELEMETRY_SAMPLE, ACCEL_SUBMIT_MAIN) == [0x5b623], \
+        f"{path}: changed telemetry nested producer edge"
+    assert direct_branches(TRACE_RECOGNIZE_FLIP,
+                           TELEMETRY_SAMPLE) == [0x9221], \
+        f"{path}: changed trace-to-telemetry producer edge"
+    for owner in (
+            "__ZN18IGGarbageCollector20handleTimerInterruptEP18IOTimerEventSource",
+            "__ZN13IGHardwareGuC20handleTimerInterruptEP18IOTimerEventSource",
+            "__ZN11IGScheduler28handlePeriodicTimerInterruptEP18IOTimerEventSource",
+            DPSM_IDLE_TIMER, EVENT_FINISH_ALL):
+        for target in (FIFO_SUBMIT_STAMP, FIFO_SUBMIT_COMMANDS,
+                       FIFO_SUBMIT_BUFFER, ACCEL_SUBMIT_SYNC,
+                       ACCEL_SUBMIT_MAIN, RING_RESUBMIT_STAMP,
+                       RING_SUBMIT_TO_RING, GUC_SUBMIT_WORK_ITEM):
+            assert direct_branches(owner, target) == [], \
+                f"{path}: retirement/timer callback gained direct producer edge: {owner} -> {target}"
+    print(f"PASS {path}: internal producer partition and retirement callback separation")
     for slot, method in (
             (0x138, "__ZN15IOAccelChannel219mergeEventExcludingEP12IOAccelEventS1_"),
             (0x140, "__ZN15IOAccelChannel213setEventStampEP12IOAccelEvent"),
