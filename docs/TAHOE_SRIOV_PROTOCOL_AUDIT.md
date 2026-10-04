@@ -1,7 +1,7 @@
 # Tahoe SR-IOV protocol audit — in progress
 
 Updated: 2026-10-04. The last dynamic source baseline is `ce166c8`; the current
-offline-reviewed checkpoint is V284 legacy/PF-owned producer containment on
+offline-reviewed checkpoint is V285 external-producer admission inventory on
 `codex/tahoe-sriov-vf`. This is NOT a boot-test candidate or a successful
 driver baseline. The `ce166c8` run produced repeatable host PF DMAR faults
 followed by i915 hangs and a host reboot. Keep `macos-tahoe-sriov` shut off until the
@@ -16,6 +16,63 @@ Glass B7's official Host Application documentation explicitly states that OSX
 capture is unsupported with no current support plan, so this is a future
 guest-producer development task rather than ordinary configuration. The Linux
 KVMFR/client transport remains the intended receiving side.
+
+The authoritative dynamic-entry checklist is
+[`DYNAMIC_TEST_GATE.md`](DYNAMIC_TEST_GATE.md). Any open static gate keeps the
+VM hard hold in force.
+
+## V285 external-producer admission inventory (offline)
+
+The complete Tahoe 25G229 System KC external/member command-queue submit,
+per-buffer submit, both command processors, acquire/release helper, enabled
+wait, stop and stopLocked bodies are now hash-pinned. The concrete queue
+vtable also pins `commandQueueStop`, `setPriority`, `canSubmitCommandBuffer`
+and `pauseSubmitCommandBuffer`. Both the base context and queue
+`canSubmitCommandBuffer` implementations return true unconditionally; the
+pause methods sleep and do not provide a stopping predicate.
+
+The external selector has one reviewed direct edge to
+`submit_command_buffers`. That member obtains the accelerator at queue
+`+0x5c0`, holds its busy-lock domain across the batch, and calls the per-buffer
+submitter. When its virtual can-submit test is false, however, it releases the
+accelerator mutex/busy state, calls the pause virtual, then reacquires the same
+domain and retries. Queue stop uses that same domain around `stopLocked`.
+Exact call offsets, the two enabled-wait calls, two busy-lock/unlock pairs,
+pause/relock window, held-flag cleanup and stop edge are enforced by the paired
+KC contract.
+
+This establishes a viable receiver-scoped outer admission point for ordinary
+command queues, not a global producer proof and not a production route yet.
+The gate must still account for independent SharedUserClient depth/color/ICB roots,
+Metal/GL/media ownership, and display/flip reachability, then prove that
+closing/draining it before native `finishAllStamps` neither deadlocks nor
+rejects required retirement work. Routing only `canSubmitCommandBuffer` would
+leave submitters sleeping indefinitely during stop; routing only the final GuC
+submit is too late to cover CPU ring writes. No VM, PCI/sysfs, Host i915 or
+runtime driver state was touched.
+
+The independent SharedUserClient ICB root is also complete-body pinned:
+`icbBufferBlit` is `0x8ce` bytes with identical SHA-256 in both payloads. It
+acquires client `+0xf8` accelerator mutex/busy ownership, looks up and prepares
+the selected resources, and has two exact direct calls to native `submitBlit`.
+Neither edge tests the returned AL; the first tests a pre-existing `r15d`, the
+second immediately advances loop state, and the common success path clears the
+IOReturn to zero. Its six imported lock/busy calls and both result anchors are
+contracted. This is both a producer-admission root and an SG-08 result-
+propagation defect; guarding command queues alone would miss it.
+
+The inherited legacy submission root is separate again. System KC old-style
+context selector 2 points directly to the complete `0x972`-byte
+`IOAccelContext2::submit_data_buffers`, while command-queue selector 1 points
+to its static queue wrapper. The context body gets its accelerator from
+context `+0x5a8`, has two busy-lock acquisitions and two matching unlocks, and
+dispatches concrete `processDataBuffers` under the second admitted scope. Its
+can-submit loop releases mutex/busy ownership, invokes `pauseSubmitCommandBuffer`,
+then reacquires and retests. Context stop uses the same accelerator domain
+around `contextStop`. The selector records, complete submit/start/stop/process
+bodies, context vtable slots and exact lock/dispatch offsets are now enforced.
+Consequently a command-queue-only gate would still leave legacy GL/media-style
+context submissions outside the shutdown drain.
 
 ## V284 legacy/PF-owned GPU producer containment (offline)
 

@@ -195,6 +195,7 @@ STAMP_IRQ_NATIVE = {
     "__ZN15IGAccelResource18submitDepthResolveEPNS_17ResourceInfoEntryER16IntelAcceleratorP11IGAccelTask17EIntelResolveTypehhtt": (0x3f0, "a3f33094b424e909e708e33b10b3be2d6abf6e3682dda5fa273331de867febde"),
     "__ZN23IGAccelSharedUserClient12bindResourceEP15IGAccelResource": (0x48, "51d8bc7e5b290db9452dc62000c768ece7c42a3fc767938d2592a73e4323a820"),
     "__ZN23IGAccelSharedUserClient13color_resolveEPvy": (0x5d0, "8e09b7dcbb4d03aa0fc6eb10ae14a2db460543bcaf13d347ddb43fd3e457ef94"),
+    "__ZN23IGAccelSharedUserClient13icbBufferBlitEPvy": (0x8ce, "5cf7137755ace45d9fa3e1f579a60ac7530345fb9903030e796da46b717f1a88"),
     "__ZN15IGAccelResource16submitCCSResolveEPNS_17ResourceInfoEntryER16IntelAcceleratorP11IGAccelTask20EIntelCCSResolveType": (0xa6, "bb27f13ada6c05e268f7f12e4089c601d90b946e041311e42d965199f618477f"),
     "__ZN15IGAccelResource36enableRenderCompressionWithAccelTaskEPNS_17ResourceInfoEntryEyR16IntelAcceleratorP11IGAccelTaskhhb": (0x2ac, "13fbc4f7a1fded75ad34c5699be050bf8b472fa635893b2ff6dfd5065f9cc87d"),
     "__ZN16IntelAccelerator20barrierForWaitEventsEbP18IGAccelFIFOChannel": (0x52, "1714d3e9be9868c3c9db6a8bd6cb8a2e8f3fc83a9acf2c82ba8e9f2d72ff57d8"),
@@ -1208,6 +1209,26 @@ def macho_inventory(path):
     for address, expected in ((0x78a08, "48 8b bb 88 00 00 00"), (0x78e35, "48 8b bb 88 00 00 00"), (0x78f28, "31 c9 84 c0 41 be c2 02 00 e0 44 0f 45 f1")):
         encoded = bytes.fromhex(expected)
         assert image[address:address + len(encoded)] == encoded, f"{path}: changed color-resolve lock/error anchor at {address:#x}"
+    icb_blit = "__ZN23IGAccelSharedUserClient13icbBufferBlitEPvy"
+    assert direct_branches(icb_blit, "__ZN16IntelAccelerator10submitBlitEP15blit3d_params_tRK8IGVectorI11rect_pair_t25IGIOMallocAllocatorPolicyEP11IGAccelTaskb") == [0x795b5, 0x797de], \
+        f"{path}: changed shared-user ICB blit submission edges"
+    for address, imported in (
+            (0x790cd, "_OSIncrementAtomic"),
+            (0x790d9, "_IOLockLock"),
+            (0x790e1, "_OSDecrementAtomic"),
+            (0x790e9, "__ZN22IOGraphicsAccelerator29lock_busyEv"),
+            (0x798b9, "__ZN22IOGraphicsAccelerator211unlock_busyEv"),
+            (0x798c5, "_IOLockUnlock")):
+        assert image[address] == 0xe8 and external_imports.get(address + 1) == [imported], \
+            f"{path}: changed shared-user ICB blit lock import at {address:#x}"
+    for address, expected in (
+            (0x7906b, "48 8b 9f f8 00 00 00"),
+            (0x795b5, "e8 d4 26 fb ff 45 85 ff"),
+            (0x797de, "e8 ab 24 fb ff 48 8b 8d 30 ff ff ff"),
+            (0x79853, "45 31 ff b3 01")):
+        encoded = bytes.fromhex(expected)
+        assert image[address:address + len(encoded)] == encoded, \
+            f"{path}: changed shared-user ICB blit owner/result anchor at {address:#x}"
     ccs_planes = "__ZN15IGAccelResource16submitCCSResolveEPNS_17ResourceInfoEntryER16IntelAcceleratorP11IGAccelTask20EIntelCCSResolveType"
     ccs_enable = "__ZN15IGAccelResource36enableRenderCompressionWithAccelTaskEPNS_17ResourceInfoEntryEyR16IntelAcceleratorP11IGAccelTaskhhb"
     assert direct_branches(ccs_planes, ccs_resource) == [0x740d8], f"{path}: changed per-plane CCS dispatch"

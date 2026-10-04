@@ -36,6 +36,28 @@ EVENT_DISABLE_STAMP_LOCKED = "__ZN20IOAccelEventMachine223disable_stamp_interrup
 EVENT_ENABLE_STAMP = "__ZN20IOAccelEventMachine220enableStampInterruptEi"
 EVENT_DISABLE_STAMP = "__ZN20IOAccelEventMachine221disableStampInterruptEi"
 EVENT_OWNER_BODIES = {
+    "__ZN15IOAccelContext219submit_data_buffersEP33IOAccelContextSubmitDataBuffersInP34IOAccelContextSubmitDataBuffersOutyPy": (0x972, "d79b1848b67a97bdf24ef16ce5b76f4431ede6500bd4b99afd04a6b691f1c0bb"),
+    "__ZN15IOAccelContext210stopLockedEv": (0x52, "a5b99d2db4fbb23a56228962f8b641d7495ed916bba2c91096ab30cd30ea6c54"),
+    "__ZN15IOAccelContext24stopEP9IOService": (0xd4, "e3a5af9de5bf44f29f60a0a795a754c1bfb80123915ed8ae6e6b2fe52e6e8552"),
+    "__ZN15IOAccelContext212contextStartEv": (0x424, "9b5da3ec12301b8ec5b7efe54362371aa8a6fd91e2d6105ed0c123dd6d104175"),
+    "__ZN15IOAccelContext211contextStopEv": (0x278, "0544bbbb0d2e84ffa6e65365d43fc1b82ee588ab5ab0ed1e30d812597391684c"),
+    "__ZN15IOAccelContext218processDataBuffersEj": (0x1b8, "17cc659d6536950bbcf5773445a36a3c74982437500f07e026057d34c6fa0a73"),
+    "__ZN15IOAccelContext226getTargetAndMethodForIndexEPP9IOServicej": (0x4c, "aee1728e8f66dc533ec275c689f4da0a5946787357ab0565ae7c7863f8562b6b"),
+    "__ZN19IOAccelCommandQueue24s_submit_command_buffersEPS_PvP25IOExternalMethodArguments": (0x130, "a52d207321a36401036ea55030dec2f107d78189f6822dbc688f715e18f85432"),
+    "__ZN19IOAccelCommandQueue10stopLockedEv": (0xae, "a72a67b078ee8dd715efe31a50ae55064ab77274521e7ca872b54f9feff211ec"),
+    "__ZN19IOAccelCommandQueue4stopEP9IOService": (0x96, "be5aa23dab120c8477bdd1fcf08f3b4b7090c94ce72248c7cb0cdd3f9ef78eea"),
+    "__ZN19IOAccelCommandQueue22submit_command_buffersEPK29IOAccelCommandQueueSubmitArgs": (0x394, "e5fcf4650c57a73f6761d81b9ff4ac63e1fdfb76046026e5d08bb93a03d5056e"),
+    "__ZN19IOAccelCommandQueue21submit_command_bufferEjjyy": (0x26e, "1848221712bd1f1a5dc9e642b6c62308f6d47c60ca0f74d3f67e0a2f3d09a0c3"),
+    "__ZN19IOAccelCommandQueue20processCommandBufferEjj": (0x590, "5665608a9c122e75fd821c2874eec220890daf988dd9bc337019d5ba6b7823e5"),
+    "__ZN19IOAccelCommandQueue22process_command_bufferEjj": (0x580, "f5c959f48d3cae9fb9498b5336510a8775b47b01b2609bf0df26aee08030fa90"),
+    "__ZN19IOAccelCommandQueue22releaseAcceleratorLockEv": (0x62, "ffe0e06201741cc7921d0a758be1b5405cc01ce4736c65deeab7eef3b2c329a9"),
+    "__ZN19IOAccelCommandQueue22acquireAcceleratorLockEv": (0x80, "4fb4e1e4d21a05672a06ac10548d48087309343b1dcab7670b762f8e6316dfa4"),
+    "__ZN22IOGraphicsAccelerator222acceleratorWaitEnabledEv": (0xbc, "548ab4a104556a0907dbbf4939411fca5bbe55373c51b1bc916826eb0c03bb5a"),
+    "__ZN19IOAccelCommandQueue27shouldHardwareCommandNoopedEv": (0x8, "5b1ee01dedea0fcb3ecce46b2207fda587d289c2e69a0afdb9d54f2595762f2e"),
+    "__ZN19IOAccelCommandQueue22canSubmitCommandBufferEv": (0x8, "aaa500a73706124bc5374dc27c8b444160b15dc8a45b0fef9354b23106b76348"),
+    "__ZN19IOAccelCommandQueue24pauseSubmitCommandBufferEv": (0xf, "ccf6e7e6a202c29bdb7f560fbd89d522c30456c3ec0bf18760b66c97c3f1ac94"),
+    "__ZN15IOAccelContext222canSubmitCommandBufferEv": (0x8, "aaa500a73706124bc5374dc27c8b444160b15dc8a45b0fef9354b23106b76348"),
+    "__ZN15IOAccelContext224pauseSubmitCommandBufferEv": (0xf, "1a4e0dc116008dda5af49a0cb424eca0433ad07c36dbec572a19b439c87e7058"),
     "__ZNK25IOAccelCommandBufferPool29MetaClass5allocEv": (0x48, "9859ba4306233dba03cef99c8cc67a1001c7dc469e0fef1f93212822331ad712"),
     "__ZN25IOAccelCommandBufferPool2C1Ev": (0x30, "22f68369dac6b818a50084fdfa943033e3801c1b55f91858521f9c5cf77fbb36"),
     "__ZN28IOAccelCommandBufferPoolList14addCommandPoolEP25IOAccelCommandBufferPool2": (0x14, "dd5d756962a0d9d7bd2c5168492d6202cd17167529578338f639cf9abea4cdc4"),
@@ -990,7 +1012,7 @@ def check(path, boot_path=None):
     assert uuids == [IOACCEL_UUID], "unreviewed IOAcceleratorFamily2 UUID"
     assert symtab is not None, "missing embedded symbol table"
     symbol_offset, count, string_offset, string_size = symtab
-    matches = {name: [] for name in {*CONTRACTS, *SCRUB_BODIES, *LOCK_COPIES, *EVENT_OWNER_BODIES, SHARED_VTABLE, RESOURCE_VTABLE, "__ZTV18IOAccelDisplayPipe", "__ZTV24IOAccelLegacyDisplayPipe", "__ZTV16IOAccelMemoryMap", "__ZTV16IOAccelSysMemory", "__ZTV11IOAccelTask", "__ZTV24IOAccelSharedUserClient2",
+    matches = {name: [] for name in {*CONTRACTS, *SCRUB_BODIES, *LOCK_COPIES, *EVENT_OWNER_BODIES, SHARED_VTABLE, RESOURCE_VTABLE, "__ZTV18IOAccelDisplayPipe", "__ZTV24IOAccelLegacyDisplayPipe", "__ZTV19IOAccelCommandQueue", "__ZTV15IOAccelContext2", "__ZN19IOAccelCommandQueue20sCommandQueueMethodsE", "__ZN15IOAccelContext215sContextMethodsE", "__ZN19IOAccelCommandQueue16commandQueueStopEv", "__ZN19IOAccelCommandQueue11setPriorityE28eIOAccelCommandQueuePriority", "__ZTV16IOAccelMemoryMap", "__ZTV16IOAccelSysMemory", "__ZTV11IOAccelTask", "__ZTV24IOAccelSharedUserClient2",
                                     "__ZTV13IOAccelMemory", "__ZTV22IOGraphicsAccelerator2",
                                     "__ZN22IOGraphicsAccelerator223freeWaitToPrepareVidMapEP16IOAccelMemoryMapbb",
                                     "__ZNK16IOAccelMemoryMap9getLengthEv",
@@ -1036,6 +1058,94 @@ def check(path, boot_path=None):
         assert hashlib.sha256(read(address_of(name), length)).hexdigest() == digest, f"changed {name}"
     for name, (length, digest) in EVENT_OWNER_BODIES.items():
         assert hashlib.sha256(read(address_of(name), length)).hexdigest() == digest, f"changed event owner lifecycle: {name}"
+    queue_vtable = address_of("__ZTV19IOAccelCommandQueue")
+    queue_submit_dispatch = struct.unpack(
+        "<Q4I", read(address_of("__ZN19IOAccelCommandQueue20sCommandQueueMethodsE") + 24, 24))
+    assert queue_submit_dispatch[0] >> 63 == 0 and \
+        queue_submit_dispatch[0] & 0x3fffffff == address_of(
+            "__ZN19IOAccelCommandQueue24s_submit_command_buffersEPS_PvP25IOExternalMethodArguments"), \
+        "changed command-queue selector-1 submit target"
+    assert queue_submit_dispatch[1:] == (0, 0xffffffff, 0, 0), \
+        "changed command-queue selector-1 argument contract"
+    for slot, method in (
+            (0x9e8, "__ZN19IOAccelCommandQueue16commandQueueStopEv"),
+            (0xa28, "__ZN19IOAccelCommandQueue11setPriorityE28eIOAccelCommandQueuePriority"),
+            (0xa78, "__ZN19IOAccelCommandQueue22canSubmitCommandBufferEv"),
+            (0xa80, "__ZN19IOAccelCommandQueue24pauseSubmitCommandBufferEv")):
+        raw = struct.unpack("<Q", read(queue_vtable + 16 + slot, 8))[0]
+        assert raw >> 63 == 0 and (raw >> 30) & 3 == 1, "changed command-queue virtual encoding"
+        assert raw & 0x3fffffff == address_of(method), "changed command-queue virtual target"
+    queue_submit = address_of("__ZN19IOAccelCommandQueue22submit_command_buffersEPK29IOAccelCommandQueueSubmitArgs")
+    assert direct_branch_offsets(
+        address_of("__ZN19IOAccelCommandQueue24s_submit_command_buffersEPS_PvP25IOExternalMethodArguments"),
+        0x130, queue_submit) == [0xf7], "changed external-to-member command-queue submit edge"
+    assert direct_branch_offsets(queue_submit, 0x394,
+        address_of("__ZN19IOAccelCommandQueue21submit_command_bufferEjjyy")) == [0x30f], \
+        "changed per-buffer command-queue submit edge"
+    assert direct_branch_offsets(queue_submit, 0x394,
+        address_of("__ZN22IOGraphicsAccelerator222acceleratorWaitEnabledEv")) == [0xa8, 0x23c], \
+        "changed command-queue enabled-wait inventory"
+    assert direct_branch_offsets(queue_submit, 0x394, 0x14ba6da2) == [0x44, 0x21f], \
+        "changed command-queue busy-lock inventory"
+    assert direct_branch_offsets(queue_submit, 0x394, 0x14ba6db4) == [0x1d5, 0x370], \
+        "changed command-queue busy-unlock inventory"
+    assert read(queue_submit + 0x168, 14) == bytes.fromhex(
+        "48 8b 03 48 89 df ff 90 78 0a 00 00 84 c0"), \
+        "changed command-queue can-submit dispatch"
+    assert read(queue_submit + 0x1ba, 0x7b) == bytes.fromhex(
+        "4c 8b b3 c0 05 00 00 49 8b 06 4c 89 f7 4c 89 fe 31 d2 ff 90 58 08 00 00 4c 89 f7 e8 2e cd ff ff 49 8b be 88 00 00 00 e8 86 5f 46 eb 48 8b 03 48 89 df ff 90 80 0a 00 00 4c 8b b3 c0 05 00 00 4d 8d a6 90 00 00 00 4c 89 e7 e8 7e 60 46 eb 49 8b be 88 00 00 00 e8 52 5f 46 eb 4c 89 e7 e8 64 60 46 eb 4c 89 f7 e8 d2 cc ff ff 49 8b 06 4c 89 f7 4c 89 fe 31 d2 ff 90 50 08 00 00"), \
+        "changed command-queue pause unlock/relock window"
+    assert read(queue_submit + 0x340, 13) == bytes.fromhex(
+        "66 c7 83 15 06 00 00 00 00 48 89 df e8"), \
+        "changed command-queue held/admission flag cleanup"
+    queue_stop = address_of("__ZN19IOAccelCommandQueue4stopEP9IOService")
+    assert direct_branch_offsets(queue_stop, 0x96,
+        address_of("__ZN19IOAccelCommandQueue10stopLockedEv")) == [0x5a], \
+        "changed command-queue stopLocked edge"
+    assert direct_branch_offsets(queue_stop, 0x96, 0x14ba6da2) == [0x3a] and \
+        direct_branch_offsets(queue_stop, 0x96, 0x14ba6db4) == [0x7a], \
+        "changed command-queue stop busy-lock scope"
+    print("PASS command-queue external submit, pause/relock and stop serialization boundary")
+    context_vtable = address_of("__ZTV15IOAccelContext2")
+    context_submit_entry = struct.unpack(
+        "<6Q", read(address_of("__ZN15IOAccelContext215sContextMethodsE") + 2 * 48, 48))
+    assert context_submit_entry[0] == 0 and context_submit_entry[1] >> 63 == 0 and \
+        context_submit_entry[1] & 0x3fffffff == address_of(
+            "__ZN15IOAccelContext219submit_data_buffersEP33IOAccelContextSubmitDataBuffersInP34IOAccelContextSubmitDataBuffersOutyPy"), \
+        "changed legacy-context selector-2 submit target"
+    assert context_submit_entry[2:] == (0, 3, 0x88, 0xffffffff), \
+        "changed legacy-context selector-2 argument contract"
+    for slot, method in (
+            (0x9e8, "__ZN15IOAccelContext211contextStopEv"),
+            (0xa28, "__ZN15IOAccelContext218processDataBuffersEj"),
+            (0xa68, GET_DATA_BUFFER),
+            (0xab8, "__ZN15IOAccelContext222canSubmitCommandBufferEv"),
+            (0xac0, "__ZN15IOAccelContext224pauseSubmitCommandBufferEv")):
+        raw = struct.unpack("<Q", read(context_vtable + 16 + slot, 8))[0]
+        assert raw >> 63 == 0 and (raw >> 30) & 3 == 1, "changed context virtual encoding"
+        assert raw & 0x3fffffff == address_of(method), "changed context virtual target"
+    context_submit = address_of(
+        "__ZN15IOAccelContext219submit_data_buffersEP33IOAccelContextSubmitDataBuffersInP34IOAccelContextSubmitDataBuffersOutyPy")
+    assert direct_branch_offsets(context_submit, 0x972, 0x14ba6da2) == [0x342, 0x492], \
+        "changed legacy-context busy-lock inventory"
+    assert direct_branch_offsets(context_submit, 0x972, 0x14ba6db4) == [0x448, 0x952], \
+        "changed legacy-context busy-unlock inventory"
+    for offset, expected in (
+            (0x3df, "48 8b 03 48 89 df ff 90 b8 0a 00 00 84 c0"),
+            (0x459, "48 8b 03 48 89 df ff 90 c0 0a 00 00"),
+            (0x4a9, "48 8b 03 48 89 df ff 90 b8 0a 00 00 84 c0"),
+            (0x512, "48 8b 03 48 89 df 8b 75 c8 ff 90 28 0a 00 00")):
+        encoded = bytes.fromhex(expected)
+        assert read(context_submit + offset, len(encoded)) == encoded, \
+            "changed legacy-context submit/pause/process dispatch"
+    context_stop = address_of("__ZN15IOAccelContext24stopEP9IOService")
+    assert direct_branch_offsets(context_stop, 0xd4, 0x14ba6da2) == [0x3a] and \
+        direct_branch_offsets(context_stop, 0xd4, 0x14ba6db4) == [0xb8], \
+        "changed legacy-context stop busy-lock scope"
+    assert read(context_stop + 0x57, 12) == bytes.fromhex(
+        "48 8b 03 48 89 df ff 90 e8 09 00 00"), \
+        "changed legacy-context stop dispatch"
+    print("PASS legacy-context external submit, pause/relock and stop serialization boundary")
     assert read(0x14b6abd9, 10) == bytes.fromhex("48 8d 05 30 79 06 00 48 89 03"), "changed pool allocator concrete vtable install"
     pool_init_pointer = struct.unpack("<Q", read(0x14bd2628, 8))[0]
     assert pool_init_pointer >> 63 == 0 and (pool_init_pointer >> 30) & 3 == 1, "changed pool init cache-level encoding"

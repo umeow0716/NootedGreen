@@ -5,7 +5,34 @@ does not certify that requirement as complete, and passing CI is not source
 review or hardware validation. The VM must remain off while the protocol
 audit's runtime blockers are open.
 
+The current dynamic-entry gate table is
+[`DYNAMIC_TEST_GATE.md`](DYNAMIC_TEST_GATE.md); every open row is blocking.
+
 ## Scope
+
+2026-10-04 command-queue admission-boundary delta: the paired Tahoe System KC
+contract now pins the complete external/member command-queue submit,
+per-buffer submit, both command processors, acquire/release helper,
+accelerator enabled wait, stop/stopLocked, base/queue can-submit and pause
+bodies. It also pins the queue vtable, exact external/member/per-buffer edges,
+two enabled-wait calls, two busy-lock/unlock pairs, pause unlock/relock window,
+held-flag cleanup and stop serialization. Ordinary queue submission therefore
+has a concrete outer receiver and lock scope, but the always-true can-submit
+virtual is not a stop gate. Complete SharedUserClient `icbBufferBlit` is also
+hash-pinned with its mutex/busy scope, two `submitBlit` edges and ignored-AL
+anchors; this is an additional external root and failure-propagation gap.
+Other SharedUserClient, display/flip and producer roots remain to be enumerated
+before a counted admission route is safe. This
+is fixture/documentation progress only: no production route, VM boot or Host
+GPU operation.
+
+The legacy System KC submission path is also now bounded independently:
+old-style context selector 2 directly targets complete
+`IOAccelContext2::submit_data_buffers` (`0x972`), not the command queue. Full
+context submit/start/stop/process bodies, relevant vtable slots, two busy-lock
+scopes, pause unlock/relock and the locked `processDataBuffers` dispatch are
+pinned. This adds a second required outer admission root; no production route
+has yet been installed.
 
 2026-10-04 legacy/PF-owned GPU producer containment delta: the admitted Tahoe
 payloads' modern ring-to-Scheduler4-to-`IGHardwareGuC::submitWorkItem` chain
