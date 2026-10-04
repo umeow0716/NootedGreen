@@ -352,7 +352,8 @@ def check_boot_atomic(system, path):
     symbols[b"__ZN18IOTimerEventSource11setWorkLoopEP10IOWorkLoop"] = []
     symbols[b"__ZTV8OSObject"] = []
     for name in (b"__ZNK8OSObject6retainEv", b"__ZNK8OSObject14getRetainCountEv",
-                 b"__ZNK8OSObject12taggedRetainEPKv"):
+                 b"__ZNK8OSObject12taggedRetainEPKv", b"__ZNK8OSObject7releaseEv",
+                 b"__ZNK8OSObject13taggedReleaseEPKv", b"__ZNK8OSObject13taggedReleaseEPKvi"):
         symbols[name] = []
     for name in (b"__ZTV12IODMACommand", b"__ZTV25IOGeneralMemoryDescriptor",
                  b"__ZN12IODMACommand12cloneCommandEPv",
@@ -421,6 +422,9 @@ def check_boot_atomic(system, path):
         return boot[matches[0]:matches[0] + length]
 
     for name, length, digest in (
+            (b"__ZNK8OSObject7releaseEv", 0x10, "da552c7fa83867904273c879beed50027c1c0325336862a6723a77e1d0b18e79"),
+            (b"__ZNK8OSObject13taggedReleaseEPKv", 0x20, "82115e870c334d8be1cf952d56bb15fd54341a30cf51dc9a5103d132c34c99e1"),
+            (b"__ZNK8OSObject13taggedReleaseEPKvi", 0xa0, "8e9a7872a69643787cfda92299764daac3e4427aaa60905a92968d226775b5f3"),
             (b"__ZNK8OSObject6retainEv", 0x10, "2be2f61d85bc0c7c51b0311f2501c1cfbe395d0681c6dc3939845f0b1f202649"),
             (b"__ZNK8OSObject14getRetainCountEv", 0x10, "d6251a4bc32d01d7a1fb85ec1b3e34cc197988eb3d24141855bd27976d51cc1a"),
             (b"__ZNK8OSObject12taggedRetainEPKv", 0x70, "df3131032cc056d05c27ffc14ef8f87960a1b087906110491d9b835a503e9b7c"),

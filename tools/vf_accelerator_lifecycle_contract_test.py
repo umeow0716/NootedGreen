@@ -507,6 +507,13 @@ def macho_inventory(path):
         names.append(name)
         values.append(value)
 
+    def value(name):
+        matches = [values[i] for i, candidate in enumerate(names)
+                   if candidate == name and values[i]]
+        if len(matches) != 1:
+            raise AssertionError(f"{path}: expected one defined {name}")
+        return matches[0]
+
     wanted = {ENABLE, DISABLE}
     wanted_indexes = {index: name for index, name in enumerate(names)
                       if name in wanted}
@@ -633,6 +640,14 @@ def macho_inventory(path):
         0xceb60: "__ZN24IOAccelEventMachineFast215finishAllStampsEv",
         0xcec70: "__ZN20IOAccelEventMachine24stopEv",
     }
+    for table in ("__ZTV10IGPagePool", "__ZTV31IGHardwarePerProcessPageTable32",
+                  "__ZTV31IGHardwarePerProcessPageTable64", "__ZTV25IGHardwareGlobalPageTable"):
+        for slot, method in ((0x20, "__ZNK8OSObject6retainEv"),
+                             (0x28, "__ZNK8OSObject7releaseEv"),
+                             (0x48, "__ZNK8OSObject12taggedRetainEPKv"),
+                             (0x50, "__ZNK8OSObject13taggedReleaseEPKv"),
+                             (0x58, "__ZNK8OSObject13taggedReleaseEPKvi")):
+            event_stop_imports[value(table) + 16 + slot] = method
     observed_event_stop_imports = {address: [] for address in event_stop_imports}
     external_relocation_offsets = set()
     for index in range(external_count):
@@ -674,13 +689,6 @@ def macho_inventory(path):
         opcode = 0xe9 if address in (0xb825, 0xa73c, 0xa746, 0xa767) or (name in ("_IOLockUnlock", "_lck_spin_unlock") and address not in (0x24773, 0x78e3d, 0x786b3)) else 0xe8
         if observed_stamp_irq_imports[address] != [(name, 0x2d)] or image[address - 1] != opcode:
             raise AssertionError(f"{path}: changed stamp IRQ imported call at {address:#x}")
-
-    def value(name):
-        matches = [values[i] for i, candidate in enumerate(names)
-                   if candidate == name and values[i]]
-        if len(matches) != 1:
-            raise AssertionError(f"{path}: expected one defined {name}")
-        return matches[0]
 
     for address, name in event_stop_imports.items():
         assert observed_event_stop_imports[address] == [(name, 0x0e)], \

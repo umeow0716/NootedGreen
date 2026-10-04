@@ -6955,6 +6955,27 @@ No executable patch or runtime mutation.
 
 ### Update fanout must participate in the same owner transaction
 
+Concrete table/pool owner reference pairing (2026-10-04): verified twenty
+external vtable imports across IGPagePool, 32/64-bit per-process tables and
+global table: object slots +0x20/+0x28/+0x48/+0x50/+0x58 bind OSObject retain,
+release, taggedRetain and both taggedRelease overloads. Complete paired Boot
+release 0x10, taggedRelease 0x20 and threshold overload 0xa0 reviewed/pinned.
+Ordinary release passes null tag; taggedRelease passes threshold 1 to the
+virtual overload, which uses locked compare/exchange and dispatches object
++0x90 free only at its terminal-count transition. Special terminal/tag-accounting
+diagnostics are preserved. This identifies the actual reference API for the
+selected owners, not a raw descriptor counter masquerading as pool ownership.
+
+An acquired live owner reference can defer ordinary OSObject final-release
+destruction, but does not prevent explicit free calls, arbitrary threshold
+release callers, table mutation or descriptor final return. Pool/table reference
+acquisition still needs outer serialization before dereferencing borrowed
+addresses. Keep separate descriptor and pool leases through matching GuC
+invalidation and release descriptor first/pool last; a retained table alone
+is not proof of an owned pool relationship. Current runtime collector remains
+unimplemented. Next: concrete acquisition/collection hook boundaries before
+descriptor zeroing, covering all table fan-out and destruction paths.
+
 Concrete task reference acquisition (2026-10-04): native IGAccelTask vtable
 object slots +0x18/+0x20/+0x48 import OSObject getRetainCount/retain/taggedRetain
 at 0xca608/0xca610/0xca638, now verified in both payloads. Complete paired

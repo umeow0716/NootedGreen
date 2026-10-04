@@ -7,6 +7,13 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 concrete table/pool owner references: twenty inherited retain/
+release/tagged virtual imports checked across pool, 32/64 PPGTT and GGTT.
+Complete Boot release (0x10), taggedRelease (0x20) and threshold overload
+(0xa0) reviewed/pinned. Ordinary last-release dispatch is not GPU retirement;
+explicit free, special threshold calls and outer owner admission remain scope
+limits. No transaction or driver behavior was installed.
+
 2026-10-04 task reference acquisition: complete Boot OSObject retain (0x10),
 getRetainCount (0x10), taggedRetain (0x70) reviewed/pinned; concrete native task
 virtual imports checked. Atomic count update presupposes live object ownership,
