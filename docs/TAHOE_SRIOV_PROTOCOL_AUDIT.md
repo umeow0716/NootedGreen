@@ -6955,6 +6955,27 @@ No executable patch or runtime mutation.
 
 ### Update fanout must participate in the same owner transaction
 
+Selected completion lock regression contract (2026-10-04): current synchronous
+TLB waiter retains gVfGucLock across direct poll, so its completion cannot
+require that lock. Re-read the existing native software wrapper 1f9a0/a4
+(already reviewed/pinned, not newly credited): it invokes the routed parser
+and interprets its normalized short header without a producer/accelerator
+lock. Current direct poll/drain/parser plus readiness, mapping identity,
+credit/fault and IRQ-gate helpers use the scoped G2H +0x20 mutex; selected
+context completions additionally acquire the context spin lock briefly.
+The selected bodies contain no inverse GuC/H2G/accelerator acquisition.
+
+New structural checks cover these twelve selected source bodies and the
+waiter's lock/poll/unlock ordering. Four injected dependencies (GuC lock in
+credit return, accelerator lock in drain, H2G lock in pending check and a
+nested invalidation wait in fault publication) must reject. This is a literal
+source regression check, not a compiler call-graph or whole-driver deadlock
+proof; external primitives, indirect route installation, context-lock users,
+all destruction callers and retained-owner admission still require their
+own proof. In particular it does not authorize waiting while an arbitrary
+native caller holds an unknown lock, nor remove the pre-zero PPGTT hold.
+No production behavior or runtime artifact changed.
+
 Concrete resource-delete admission (2026-10-04): complete SharedUserClient2
 delete_resource 0x14b91470/0x116 reviewed and pinned. It temporarily increments
 accelerator +0x90 around acquiring IOLock at accelerator +0x88 (call

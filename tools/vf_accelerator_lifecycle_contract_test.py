@@ -2348,6 +2348,61 @@ def g2h_event_transaction_mutations(path):
     print("PASS: three G2H event transaction mutations rejected (source contract, not concurrency proof)")
 
 
+def g2h_completion_lock_contract(source, path):
+    """Selected direct-poll graph only; not a whole-driver deadlock proof.
+
+    TLB waits hold gVfGucLock while polling. Completion cannot reacquire that
+    lock, the H2G producer lock, or an outer accelerator mutex. Check helpers
+    too: inspecting just the event transaction would miss a nested dependency.
+    Native dispatcher body/route identity is checked separately.
+    """
+    signatures = (
+        "bool Gen11::pollVfGuCToHost(void *that)",
+        "bool Gen11::vfDrainGuCToHost(void *that, IOInterruptEventSource *source,",
+        "bool Gen11::vfCtbGucToHostAction(void *that, uint32_t *message)",
+        "static bool vfCtbConsumerReady(bool requireInterrupt)",
+        "static bool vfInterruptTransportReady()",
+        "bool vfCanUseSleepingLock()",
+        "bool vfValidG2HMapping(const volatile uint32_t *descriptor,",
+        "bool vfEnterIrqCallback()",
+        "void vfLeaveIrqCallback()",
+        "bool vfG2HCtbPending(uint32_t &head)",
+        "void vfReleaseG2HCredits(uint32_t count)",
+        "void vfMarkProtocolFault(const char *reason)",
+    )
+    for signature in signatures:
+        body = function_body(source, signature)
+        for forbidden in ("gVfGucLock", "vfSendCtbFastAction(",
+                          "vfInvalidateTLBSync(", "FunctionCast(",
+                          "0x88)", "0x18)"):
+            if forbidden in body:
+                raise AssertionError(f"{path}: completion graph acquired producer/outer dependency in {signature}: {forbidden}")
+        # The consumer's sole sleeping mutex is the explicitly scoped G2H
+        # transaction. Its context spin-lock operations are separately pinned.
+        expected_locks = 1 if "vfCtbGucToHostAction" in signature else 0
+        if body.count("IOLockLock(") != expected_locks:
+            raise AssertionError(f"{path}: completion graph gained a sleeping lock in {signature}")
+    wait = function_body(source, "bool vfInvalidateTLBSync(void *guc)")
+    assert wait.index("IOLockLock(gVfGucLock);") < wait.index("pollVfGuCToHost(guc)") < wait.index("IOLockUnlock(gVfGucLock);"), f"{path}: changed TLB waiter lock/poll boundary"
+
+
+def g2h_completion_lock_mutations(path):
+    source = pathlib.Path(path).read_text()
+    for signature, dependency in (
+            ("void vfReleaseG2HCredits(uint32_t count)", "IOLockLock(gVfGucLock);"),
+            ("bool Gen11::vfDrainGuCToHost(void *that, IOInterruptEventSource *source,", "IOLockLock(getMember<IOLock *>(that, 0x88));"),
+            ("bool vfG2HCtbPending(uint32_t &head)", "IOLockLock(getMember<IOLock *>(that, 0x18));"),
+            ("void vfMarkProtocolFault(const char *reason)", "vfInvalidateTLBSync(nullptr);")):
+        body = function_body(source, signature)
+        changed = source.replace(body, "{\n" + dependency + body[1:], 1)
+        try:
+            g2h_completion_lock_contract(changed, path)
+        except AssertionError:
+            continue
+        raise AssertionError(f"{path}: completion lock dependency mutation escaped")
+    print("PASS: four selected completion lock-dependency mutations rejected (source graph, not runtime deadlock proof)")
+
+
 def source_contract(path):
     source = pathlib.Path(path).read_text()
     ring_backing_submit_contract(source, path)
@@ -2640,6 +2695,7 @@ def source_contract(path):
     drain = function_body(
         source, "bool Gen11::vfDrainGuCToHost(void *that, IOInterruptEventSource *source,")
     g2h_event_transaction_contract(source, path)
+    g2h_completion_lock_contract(source, path)
     if "vfCtbConsumerReady(!synchronousPoll)" not in drain:
         raise AssertionError(
             f"{path}: synchronous CTB teardown cannot outlive hardware IRQ disable")
@@ -3012,6 +3068,7 @@ def main():
     source_contract(sys.argv[1])
     ring_backing_submit_mutations(sys.argv[1])
     g2h_event_transaction_mutations(sys.argv[1])
+    g2h_completion_lock_mutations(sys.argv[1])
     ggtt_postwrite_mutations(sys.argv[1])
     macho_inventory(sys.argv[2])
     macho_inventory(sys.argv[3])

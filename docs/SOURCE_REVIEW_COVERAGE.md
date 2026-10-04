@@ -7,6 +7,13 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 selected completion lock graph: re-read existing native software
+dispatcher and current poll/drain/parser/readiness/credit/fault/IRQ-gate helpers.
+New structural source contract covers twelve selected helper bodies and rejects
+four inverse-lock/wait mutations. No new native-body review is credited for
+the already-pinned dispatcher. Outer task/table admission, other callbacks,
+external APIs and runtime deadlock/DMA proof remain incomplete.
+
 2026-10-04 selected destruction admission: complete SharedUserClient2
 delete_resource (0x116) reviewed/pinned. Accelerator mutex +0x88 covers
 namespace borrowed lookup and resource Shared-release; native IGAccelResource
