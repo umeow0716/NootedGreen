@@ -9,6 +9,9 @@ import sys
 # Complete reviewed native bodies. This fixes the concrete Intel override
 # graph, not inherited timer APIs, dynamic callbacks or runtime completion.
 STAMP_IRQ_NATIVE = {
+    "__ZN11IGAccelTask11withOptionsEP16IntelAccelerator": (0x48, "294990cf7ca14e27020ecc569064444b73504a32e841c0856acbdb568081f207"),
+    "__ZN16IntelAccelerator19createKernelGPUTaskEv": (0xa, "30021915389fd196a6e879b21a175f135be03e009e385a325f9fc33595937ba6"),
+    "__ZN16IntelAccelerator17createUserGPUTaskEv": (0x3c, "3ff9c8b607763de74cd8eccb7125f9a4abb7261a59fa48f2ef78dafeabbef377"),
     "__ZN11IGAccelTask15initWithOptionsEP16IntelAccelerator": (0x1aa, "18246f4bec33ea91f21f670c87a4bbccc4f1ccbf7ed9f60bc34d07ba2f133a25"),
     "__ZN16IGAccelMemoryMap21freeGPUVirtualAddressEv": (0x10a, "ff45337bab3d4a8e8a5018d739955a37a365ffbba6a49a1d9f4ed0796b2cceb8"),
     "__ZN24IGStolenMemoryDescriptor12setPurgeableEjPj": (0x2a, "97baec040a0d4c7f45075fefae44847895641f129d598b41581dceb613be1b9e"),
@@ -838,6 +841,11 @@ def macho_inventory(path):
             ("__ZN15IGMemoryManager19newPageTableForTaskEP11IGAccelTask", "__ZN29IGHardwarePerProcessPageTable15synchronizeWithIS_EEvPKT_RK14IGAddressRangeb", 0xf969)):
         assert direct_branches(method, target) == [call], f"{path}: changed native per-task page-table factory/synchronization edge"
     global_table = value("__ZTV25IGHardwareGlobalPageTable")
+    accelerator_table = value("__ZTV16IntelAccelerator")
+    for slot, name in ((0x998, "__ZN16IntelAccelerator17createUserGPUTaskEv"),
+                       (0x9d0, "__ZN16IntelAccelerator19createKernelGPUTaskEv")):
+        assert struct.unpack_from("<Q", image, accelerator_table + 16 + slot)[0] == value(name), f"{path}: changed concrete task factory virtual"
+    assert direct_branches("__ZN11IGAccelTask11withOptionsEP16IntelAccelerator", "__ZN11IGAccelTask15initWithOptionsEP16IntelAccelerator") == [0x7870], f"{path}: changed task factory initialization edge"
     assert struct.unpack_from("<Q", image, global_table + 16 + 0x140)[0] == value("__ZNK25IGHardwareGlobalPageTable4readEyRyS0_"), f"{path}: changed global PTE read virtual"
     for method, target, call in (
             ("__ZN29IGHardwarePerProcessPageTable15synchronizeWithI25IGHardwareGlobalPageTableEEvPKT_RK14IGAddressRangeb", "__ZN29IGHardwarePerProcessPageTable20synchronizeEachEntryEPK19IGHardwarePageTableRK14IGAddressRangeb", 0x12c99),

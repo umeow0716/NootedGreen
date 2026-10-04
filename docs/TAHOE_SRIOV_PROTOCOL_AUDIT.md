@@ -6955,6 +6955,29 @@ No executable patch or runtime mutation.
 
 ### Update fanout must participate in the same owner transaction
 
+Task factory ownership follow-up (2026-10-04): complete native withOptions
+0x7844/0x48 reviewed/pinned: metaclass allocation, initWithOptions at 0x7870,
+failed-init virtual release +0x28 and null return. Complete kernel factory
+0x2d204/0xa tail-calls it. Complete user factory 0x2d20e/0x3c checks accelerator
++0x1191 bit 1: clear means retain kernel task +0x150 via virtual +0x20 and
+return that same task; set means tail-call withOptions. Neither factory has a
+local mutex. Native accelerator vtable object slots +0x998/+0x9d0 are verified
+as user/kernel factories, respectively. A per-Shared transaction cannot assume
+exclusive task/table ownership: multiple Shared objects may own the same
+retained kernel task in this supported native mode.
+
+Complete inherited Shared2::init 0x14b8e516/0x208 reviewed/pinned: stores
+accelerator +0x78, references the process task, invokes accelerator factory
++0x998 at 0x14b8e547 and stores its owning result at Shared +0x88; null rejects.
+It then publishes Shared in accelerator's list before constructing namespace
+and remaining bookkeeping. This selected body has no local accelerator mutex;
+outer Shared allocation/init caller serialization must still be traced. A
+function-bounded instruction scan found other +0x998/+0x9d0 calls in different
+classes, whose receiver types differ: those are not automatically factory
+callers. Construction publication is not a demonstrated race without the
+outer caller/observer contract. No runtime change or VM start. Next: effective
+Shared factory/creation caller lock covering task and Shared publication.
+
 Task construction/publication admission (2026-10-04): complete native task
 initWithOptions 0x788c/0x1aa reviewed/pinned. It clears private table +0x260,
 initializes managed-list head +0x268 to zero and tail +0x270 to the head's

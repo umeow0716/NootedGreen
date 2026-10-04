@@ -7,6 +7,13 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 task factory ownership: complete native withOptions (0x48), kernel
+factory (0xa), user factory (0x3c) and inherited Shared init (0x208) reviewed/
+pinned. User factory either retains/reuses kernel task or constructs a new
+task according to feature bit; concrete accelerator virtual slots checked.
+No local lock in these bodies. Caller-side serialization remains unresolved;
+same virtual offsets in unrelated classes are not factory call evidence.
+
 2026-10-04 task construction/publication: complete native IGAccelTask init
 (0x1aa), inherited IOAccelTask init (0x138) and TaskList addTask (0x14)
 reviewed/pinned. Base init publishes task to accelerator raw list before
