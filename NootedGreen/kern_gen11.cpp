@@ -156,6 +156,7 @@ constexpr size_t kGucDoorbellAllocatorOffset = 0xDC;
 constexpr size_t kGucDoorbellTopologyOffset = 0x9E0;
 
 IOLock *gVfGucLock = nullptr;
+IOLock *gVfPageTableUpdateLock = nullptr;
 uint64_t gVfGGTTBase = 0;
 uint64_t gVfGGTTSize = 0;
 uint32_t gVfContextCount = 0;
@@ -539,6 +540,7 @@ void vfReleaseRetiredContextBacking(uint16_t gucId)
 }
 
 bool vfEnsureGucLock();
+bool vfEnsurePageTableUpdateLock();
 bool vfValidH2GMapping(const volatile uint32_t *descriptor,
                        const volatile uint32_t *buffer);
 bool vfValidG2HMapping(const volatile uint32_t *descriptor,
@@ -1478,6 +1480,23 @@ bool vfEnsureGucLock()
 	// Publish one lifetime-long mailbox lock. Losing concurrent allocators
 	// must use the published lock, not serialize on different instances.
 	if (!OSCompareAndSwapPtr(nullptr, candidate, &gVfGucLock))
+		IOLockFree(candidate);
+	return true;
+}
+
+bool vfEnsurePageTableUpdateLock()
+{
+	if (!vfCanUseSleepingLock())
+		return false;
+	if (gVfPageTableUpdateLock)
+		return true;
+	auto *candidate = IOLockAlloc();
+	if (!candidate)
+		return false;
+	// Cache-type requests arrive from every graphics/media pipeline. Publish
+	// one lifetime-long lock so two callers cannot observe different old types
+	// while either is repairing a failed multi-table update.
+	if (!OSCompareAndSwapPtr(nullptr, candidate, &gVfPageTableUpdateLock))
 		IOLockFree(candidate);
 	return true;
 }
@@ -2661,6 +2680,11 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			// task, mapping and native caller's ownership scope are still intact.
 			{"__ZN15IGMemoryManager26commitIntoPageTableForTaskEP11IGAccelTaskP16IGAccelMemoryMap",
 			 vfCommitPageTablesForTask, this->oVfCommitPageTablesForTask},
+			// Cache-type requests from Metal, GL, blit and media all converge here.
+			// Keep resource flags and every installed page table in one recoverable
+			// transaction; the native void tail otherwise hides a partial failure.
+			{"__ZN15IGAccelResource22updateMappingCacheTypeEj",
+			 vfUpdateMappingCacheType, this->oVfUpdateMappingCacheType},
 			// Several native callers ignore a false reservation, while timeout
 			// recovery can return true without rechecking capacity. Validate the
 			// complete reservation before any common ring writer can run.
@@ -3811,6 +3835,100 @@ bool Gen11::vfCommitPageTablesForTask(void *that, void *task, void *mapping)
 	PANIC_COND(!rolledBack, "ngreen",
 		"VF partial page-table commit could not be rolled back safely");
 	return false;
+}
+
+void Gen11::vfUpdateMappingCacheType(void *that, uint32_t requestedType)
+{
+	PANIC_COND(!that || !callback || !callback->oVfUpdateMappingCacheType,
+		"ngreen", "Missing VF cache-type transaction boundary");
+	if (gVfIdentity != VfIdentity::Virtual) {
+		FunctionCast(vfUpdateMappingCacheType,
+		             callback->oVfUpdateMappingCacheType)(that, requestedType);
+		return;
+	}
+
+	PANIC_COND(!vfEnsurePageTableUpdateLock(), "ngreen",
+		"VF cache-type update cannot acquire a sleepable transaction lock");
+	IOLockLock(gVfPageTableUpdateLock);
+
+	constexpr uint32_t cacheFlagMask = 3U << 25;
+	const uint32_t oldResourceFlags = getMember<uint32_t>(that, 0x108);
+	const uint32_t newResourceFlags =
+		(oldResourceFlags & ~cacheFlagMask) |
+		((requestedType & 3U) << 25);
+	auto *mapping = getMember<void *>(that, 0x40);
+	if (!mapping) {
+		// Preserve native behavior for a resource whose mapping has not yet
+		// been created: only its advertised low two cache bits change.
+		getMember<uint32_t>(that, 0x108) = newResourceFlags;
+		IOLockUnlock(gVfPageTableUpdateLock);
+		return;
+	}
+
+	const uint32_t oldMappingType = getMember<uint32_t>(mapping, 0x114);
+	if (oldMappingType == requestedType) {
+		getMember<uint32_t>(that, 0x108) = newResourceFlags;
+		IOLockUnlock(gVfPageTableUpdateLock);
+		return;
+	}
+	const bool installed = (getMember<uint32_t>(mapping, 0x10) & 4U) != 0;
+	if (!installed) {
+		getMember<uint32_t>(that, 0x108) = newResourceFlags;
+		getMember<uint32_t>(mapping, 0x114) = requestedType;
+		IOLockUnlock(gVfPageTableUpdateLock);
+		return;
+	}
+
+	auto *vtable = *reinterpret_cast<mach_vm_address_t **>(mapping);
+	using UpdateGPUPageTable = bool (*)(void *);
+	auto updateGPUPageTable = vtable ?
+		reinterpret_cast<UpdateGPUPageTable>(vtable[0x180 / sizeof(mach_vm_address_t)]) :
+		nullptr;
+	const bool admitted = updateGPUPageTable && gVfGGTTReady &&
+		!gVfSubmissionStopped && !gVfProtocolFault &&
+		gVfAccelerator && getMember<void *>(mapping, 0x88) == gVfAccelerator &&
+		(!gVfCtbEverEnabled || vfNativeGpuWorkReady());
+	if (!admitted) {
+		IOLockUnlock(gVfPageTableUpdateLock);
+		vfMarkProtocolFault("installed VF cache-type update lacks stable owners or transport");
+		PANIC_COND(true, "ngreen",
+			"Refusing installed VF cache-type update before page-table mutation");
+		return;
+	}
+
+	// Match the native order: software state changes before the installed
+	// mapping is fanned out across every task page table.
+	getMember<uint32_t>(that, 0x108) = newResourceFlags;
+	getMember<uint32_t>(mapping, 0x114) = requestedType;
+	if (updateGPUPageTable(mapping)) {
+		IOLockUnlock(gVfPageTableUpdateLock);
+		return;
+	}
+
+	// updatePageTableForTask and updateRange both preserve successful prefixes.
+	// Under the native caller's existing ownership scope, replaying the same
+	// range with the old type restores every entry written before the pinned
+	// pre-write page-walk failure. Neither backing nor installed ownership may
+	// be released by this void operation.
+	getMember<uint32_t>(mapping, 0x114) = oldMappingType;
+	getMember<uint32_t>(that, 0x108) = oldResourceFlags;
+	const bool replayedOldType = updateGPUPageTable(mapping);
+	OSSynchronizeIO();
+	bool enginesRetired = !gVfCtbEverEnabled || gVfDmaQuiesced;
+	bool gucRetired = enginesRetired;
+	if (!enginesRetired && !gVfProtocolFault) {
+		enginesRetired = gVfHardwareGuc && vfInvalidateTLBSync(
+			gVfHardwareGuc, NGVfGuCRequest::TlbTarget::Engines);
+		gucRetired = enginesRetired && vfInvalidateTLBSync(
+			gVfHardwareGuc, NGVfGuCRequest::TlbTarget::Guc);
+	}
+	IOLockUnlock(gVfPageTableUpdateLock);
+
+	SYSLOG("ngreen", "V281: cache-type update failed; old state replay=%d engines=%d guc=%d",
+	       replayedOldType, enginesRetired, gucRetired);
+	vfMarkProtocolFault("VF cache-type page-table update failed after rollback");
+	PANIC_COND(true, "ngreen",
+		"VF cache-type update failed; restored state cannot return through void ABI");
 }
 
 static void *vfRingVirtual(void *ring, size_t byteOffset)

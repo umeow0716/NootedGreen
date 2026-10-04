@@ -197,6 +197,9 @@ STAMP_IRQ_NATIVE = {
     "__ZN16IntelAccelerator16submitCCSResolveEP15IGAccelResourceP22color_resolve_params_tRK8IGVectorI11blit_rect_t25IGIOMallocAllocatorPolicyEP11IGAccelTask": (0x2b0, "66bb41fb30a7dbf3b678fbae69ddb8b72a5f825b96042ce1a643eaf13c54c6c0"),
     "__ZN19IGAccelVideoContext30updateResourceMappingCacheTypeEP15IGAccelResource": (0x24, "91ca56bc8ad407f81ad7472060497e0ddb88b32259389dba252e9c29890d9d02"),
     "__ZN19IGHardwarePageTable11updateRangeERK14IGAddressRangePK16IGAccelMemoryMap": (0x3c4, "7bd38a56c02637892a4672882eed36a3bea60b0b6ee6017982a0760713713b92"),
+    "__ZN31IGHardwarePerProcessPageTable6410remapRangeERK14IGAddressRangeyy": (0xca, "68e5dea45252ce6d383c0d91d045cba306e5d7e93acf9965f4a54d6c9e7bc1d6"),
+    "__ZN31IGHardwarePerProcessPageTable3210remapRangeERK14IGAddressRangeyy": (0x9c, "8b7cf1ef83f0ccf09f0a8b41c5ef4710e584964d74b98fe7787d93c0ae9d0b4c"),
+    "__ZN25IGHardwareGlobalPageTable10remapRangeERK14IGAddressRangeyy": (0x12, "2a68b0d389b7d30d2c6fb506f260e0197f1a53e658e1db0bc410beb65c5fa560"),
     "__ZN19IGHardwarePageTable11commitRangeERK14IGAddressRangePK16IGAccelMemoryMap": (0x41c, "e063629df4a8d16d85cf3d1b599c036372c0763b560a6a35289d488d80ac410a"),
     "__ZN15IGMemoryManager26commitIntoPageTableForTaskEP11IGAccelTaskP16IGAccelMemoryMap": (0x11a, "a433c1af43e1fbac1d82da400c6ec1857881e6385c07019d782441fe209713d1"),
     "__ZN16IGAccelMemoryMap22commitIntoGPUPageTableEv": (0x140, "b8318f92ed0a3a62eb086877f6f5a65e0c32cc53d610bcad69540967279189e4"),
@@ -1094,6 +1097,50 @@ def macho_inventory(path):
         encoded = bytes.fromhex(expected)
         assert image[address:address + len(encoded)] == encoded, f"{path}: changed update result/remap anchor at {address:#x}"
     assert image[0x148d6:0x148db] == b"\xe8" + struct.pack("<i", 0x2d1d8 - 0x148db), f"{path}: changed update flush notification edge"
+    remap64 = "__ZN31IGHardwarePerProcessPageTable6410remapRangeERK14IGAddressRangeyy"
+    remap32 = "__ZN31IGHardwarePerProcessPageTable3210remapRangeERK14IGAddressRangeyy"
+    remap_global = "__ZN25IGHardwareGlobalPageTable10remapRangeERK14IGAddressRangeyy"
+    page_walk64 = "__ZNK31IGHardwarePerProcessPageTable649pageWalk3E19GTTVirtualAddress64RPNS_10LevelEntryILm9E17GTTPageTableEntryEE"
+    assert direct_branches(remap64, page_walk64) == [0xd9e9], f"{path}: changed 64-bit cache remap page-walk edge"
+    assert image[0xd9ee:0xd9f2] == bytes.fromhex("84 c0 74 5c"), f"{path}: changed pre-write 64-bit remap failure branch"
+    for table, method in (
+            ("__ZTV31IGHardwarePerProcessPageTable64", remap64),
+            ("__ZTV31IGHardwarePerProcessPageTable32", remap32),
+            ("__ZTV25IGHardwareGlobalPageTable", remap_global)):
+        assert struct.unpack_from("<Q", image, value(table) + 16 + 0x128)[0] == value(method), \
+            f"{path}: changed concrete cache remap dispatch: {table}"
+    resource_cache_update = "__ZN15IGAccelResource22updateMappingCacheTypeEj"
+    video_cache_update = "__ZN19IGAccelVideoContext30updateResourceMappingCacheTypeEP15IGAccelResource"
+    mapping_cache_update = "__ZN16IGAccelMemoryMap15updateCacheTypeEj"
+    mapping_gpu_update = "__ZN16IGAccelMemoryMap18updateGPUPageTableEv"
+    resource_cache_calls = [
+        0x2c06f, 0x2c94b, 0x34a33, 0x34cef, 0x4fd87, 0x502fa,
+        0x52403, 0x52a0b, 0x52c99, 0x52cdf, 0x52e9e, 0x52f99,
+        0x53113, 0x53183, 0x545a6, 0x54aa2, 0x55099, 0x550d5,
+        0x55127, 0x55179, 0x5608b, 0x560fc, 0x5aa13, 0x5aa87,
+        0x63065, 0x63291, 0x635ce, 0x63be0, 0x63e73, 0x643a5,
+        0x6518e, 0x67cf0, 0x67f60, 0x68268, 0x6b593, 0x6c759,
+        0x6c7d1, 0x78105,
+    ]
+    video_cache_calls = [
+        0x367ec, 0x36c77, 0x372ec, 0x37389, 0x3740b, 0x374bc,
+        0x3deb9, 0x3df1d, 0x3df82, 0x3dfc2, 0x3e26c, 0x3e30f,
+        0x3e38e, 0x3e4f9, 0x3ed80, 0x3ef76, 0x3f591, 0x3f5e1,
+        0x3f646, 0x3f686, 0x3f929, 0x3fa87, 0x3faf4, 0x3fb5a,
+        0x3fba3, 0x3fddb, 0x40637, 0x40689, 0x406db, 0x4072d,
+        0x4077f, 0x407d1, 0x40829, 0x40881, 0x408d9, 0x40931,
+        0x4098a, 0x409c6, 0x40a60, 0x40a9e, 0x40af2, 0x40bb1,
+        0x40eb3, 0x40fcc, 0x41034, 0x41070, 0x410bf, 0x4110e,
+        0x4117d,
+    ]
+    assert text_direct_branches(resource_cache_update) == resource_cache_calls, \
+        f"{path}: changed complete shared cache-update caller inventory"
+    assert text_direct_branches(video_cache_update) == video_cache_calls, \
+        f"{path}: changed complete video cache-update caller inventory"
+    assert text_direct_branches(mapping_cache_update) == [0x751cf], \
+        f"{path}: changed complete mapping cache-update caller inventory"
+    assert text_direct_branches(mapping_gpu_update) == [], \
+        f"{path}: gained an unaccounted direct GPU page-table update caller"
     resource_table = value("__ZTV15IGAccelResource")
     assert struct.unpack_from("<Q", image, resource_table + 16 + 0x178)[0] == value("__ZN15IGAccelResource8completeEv"), f"{path}: changed color-resolve concrete completion target"
     assert resource_table + 16 + 0x198 == 0xd9578, f"{path}: moved inherited resource channel cleanup slot"
@@ -3072,6 +3119,168 @@ def page_table_commit_rollback_mutations(path):
     print("PASS: six failed page-table commit rollback mutations rejected (source contract, not runtime proof)")
 
 
+def cache_type_update_transaction_contract(source, path):
+    wrapper = function_body(
+        source, "void Gen11::vfUpdateMappingCacheType(void *that,")
+    compact = "".join(wrapper.split())
+    required = (
+        "callback->oVfUpdateMappingCacheType)(that,requestedType);",
+        "vfEnsurePageTableUpdateLock()",
+        "IOLockLock(gVfPageTableUpdateLock);",
+        "constuint32_toldResourceFlags=getMember<uint32_t>(that,0x108);",
+        "constuint32_toldMappingType=getMember<uint32_t>(mapping,0x114);",
+        "getMember<void*>(mapping,0x88)==gVfAccelerator",
+        "getMember<uint32_t>(that,0x108)=newResourceFlags;",
+        "getMember<uint32_t>(mapping,0x114)=requestedType;",
+        "if(updateGPUPageTable(mapping))",
+        "getMember<uint32_t>(mapping,0x114)=oldMappingType;",
+        "getMember<uint32_t>(that,0x108)=oldResourceFlags;",
+        "constboolreplayedOldType=updateGPUPageTable(mapping);",
+        "NGVfGuCRequest::TlbTarget::Engines",
+        "NGVfGuCRequest::TlbTarget::Guc",
+        "vfMarkProtocolFault(\"VFcache-typepage-tableupdatefailedafterrollback\");",
+        "PANIC_COND(true,\"ngreen\",\"VFcache-typeupdatefailed;restoredstatecannotreturnthroughvoidABI\");",
+    )
+    for token in required:
+        if token not in compact:
+            raise AssertionError(
+                f"{path}: incomplete cache-type page-table transaction: {token}")
+    lock = compact.index("IOLockLock(gVfPageTableUpdateLock);")
+    old_flags = compact.index(
+        "constuint32_toldResourceFlags=getMember<uint32_t>(that,0x108);", lock)
+    old_type = compact.index(
+        "constuint32_toldMappingType=getMember<uint32_t>(mapping,0x114);", old_flags)
+    admission = compact.index("constbooladmitted=", old_type)
+    new_flags = compact.index(
+        "getMember<uint32_t>(that,0x108)=newResourceFlags;", admission)
+    new_type = compact.index(
+        "getMember<uint32_t>(mapping,0x114)=requestedType;", new_flags)
+    first_update = compact.index("if(updateGPUPageTable(mapping))", new_type)
+    restore_type = compact.index(
+        "getMember<uint32_t>(mapping,0x114)=oldMappingType;", first_update)
+    restore_flags = compact.index(
+        "getMember<uint32_t>(that,0x108)=oldResourceFlags;", restore_type)
+    replay = compact.index(
+        "constboolreplayedOldType=updateGPUPageTable(mapping);", restore_flags)
+    engines = compact.index("NGVfGuCRequest::TlbTarget::Engines", replay)
+    guc = compact.index("NGVfGuCRequest::TlbTarget::Guc", engines)
+    unlock = compact.index("IOLockUnlock(gVfPageTableUpdateLock);", guc)
+    fault = compact.index(
+        "vfMarkProtocolFault(\"VFcache-typepage-tableupdatefailedafterrollback\");",
+        unlock)
+    panic = compact.index("PANIC_COND(true,\"ngreen\",", fault)
+    if not lock < old_flags < old_type < admission < new_flags < new_type < \
+            first_update < restore_type < restore_flags < replay < engines < \
+            guc < unlock < fault < panic:
+        raise AssertionError(
+            f"{path}: cache-type update/rollback/retirement order changed")
+    if compact.count("updateGPUPageTable(mapping)") != 2:
+        raise AssertionError(
+            f"{path}: cache-type transaction must have exactly update and replay")
+
+    normalized = "".join(source.split())
+    route = ('{"__ZN15IGAccelResource22updateMappingCacheTypeEj",'
+             'vfUpdateMappingCacheType,this->oVfUpdateMappingCacheType}')
+    if route not in normalized:
+        raise AssertionError(f"{path}: missing shared cache-type transaction route")
+    ensure = function_body(source, "bool vfEnsurePageTableUpdateLock()")
+    for token in ("vfCanUseSleepingLock()", "IOLockAlloc()",
+                  "OSCompareAndSwapPtr(nullptr, candidate, &gVfPageTableUpdateLock)",
+                  "IOLockFree(candidate)"):
+        if token not in ensure:
+            raise AssertionError(
+                f"{path}: cache-type transaction lock publication lacks {token}")
+
+
+def cache_type_update_transaction_mutations(path):
+    source = pathlib.Path(path).read_text()
+    wrapper = function_body(
+        source, "void Gen11::vfUpdateMappingCacheType(void *that,")
+
+    def replace_once(body, before, after):
+        if body.count(before) != 1:
+            raise AssertionError(f"ambiguous cache transaction mutation: {before}")
+        return body.replace(before, after, 1)
+
+    route = ('\t\t\t{"__ZN15IGAccelResource22updateMappingCacheTypeEj",\n'
+             '\t\t\t vfUpdateMappingCacheType, this->oVfUpdateMappingCacheType},\n')
+    mutations = (
+        (source, replace_once(source, route, "")),
+        (wrapper, replace_once(wrapper,
+            "if (updateGPUPageTable(mapping))", "if (true)")),
+        (wrapper, replace_once(wrapper,
+            "getMember<uint32_t>(mapping, 0x114) = oldMappingType;", "")),
+        (wrapper, replace_once(wrapper,
+            "getMember<uint32_t>(that, 0x108) = oldResourceFlags;", "")),
+        (wrapper, replace_once(wrapper,
+            "const bool replayedOldType = updateGPUPageTable(mapping);",
+            "const bool replayedOldType = false;")),
+        (wrapper, replace_once(wrapper,
+            "NGVfGuCRequest::TlbTarget::Engines",
+            "NGVfGuCRequest::TlbTarget::Guc")),
+        (wrapper, replace_once(wrapper,
+            "NGVfGuCRequest::TlbTarget::Guc",
+            "NGVfGuCRequest::TlbTarget::Engines")),
+        (wrapper, replace_once(wrapper,
+            "vfMarkProtocolFault(\"VF cache-type page-table update failed after rollback\");",
+            "")),
+        (wrapper, replace_once(wrapper,
+            "PANIC_COND(true, \"ngreen\",\n\t\t\"VF cache-type update failed; restored state cannot return through void ABI\");",
+            "return;")),
+        (source, replace_once(source,
+            "OSCompareAndSwapPtr(nullptr, candidate, &gVfPageTableUpdateLock)",
+            "OSCompareAndSwapPtr(nullptr, candidate, &gVfGucLock)")),
+    )
+    for body, mutated_body in mutations:
+        changed = mutated_body if body == source else source.replace(
+            body, mutated_body, 1)
+        try:
+            cache_type_update_transaction_contract(changed, path)
+        except (AssertionError, ValueError):
+            continue
+        raise AssertionError(f"{path}: escaped cache-type transaction mutation")
+    print("PASS: ten cache-type update/rollback mutations rejected (source contract, not runtime proof)")
+
+
+def cache_type_update_transaction_model():
+    cases = 0
+    for unrelated_flags in range(16):
+        for old_resource_type in range(4):
+            old_flags = unrelated_flags | (old_resource_type << 25)
+            for old_type in range(4):
+                for requested in range(4):
+                    expected_flags = ((old_flags & ~(3 << 25)) |
+                                      ((requested & 3) << 25))
+                    for mapping_present in (False, True):
+                        for installed in (False, True):
+                            for first_ok in (False, True):
+                                returned = False
+                                terminal = False
+                                flags, cache_type = old_flags, old_type
+                                flags = expected_flags
+                                if not mapping_present:
+                                    returned = True
+                                elif old_type == requested:
+                                    returned = True
+                                else:
+                                    cache_type = requested
+                                    if not installed or first_ok:
+                                        returned = True
+                                    else:
+                                        cache_type = old_type
+                                        flags = old_flags
+                                        terminal = True
+                                assert returned != terminal
+                                if terminal:
+                                    assert (flags, cache_type) == (old_flags, old_type)
+                                elif mapping_present and old_type != requested:
+                                    assert (flags, cache_type) == (expected_flags, requested)
+                                else:
+                                    assert flags == expected_flags
+                                cases += 1
+    print(f"PASS: {cases} cache-type transaction states preserve commit-or-restore semantics (offline model)")
+
+
 def source_contract(path):
     source = pathlib.Path(path).read_text()
     ring_backing_submit_contract(source, path)
@@ -3079,6 +3288,7 @@ def source_contract(path):
     ppgtt_retirement_contract(source, path)
     ppgtt_final_free_contract(source, path)
     page_table_commit_rollback_contract(source, path)
+    cache_type_update_transaction_contract(source, path)
     for signature in ("bool Gen11::vfAttachContextDesc(",
                       "void Gen11::vfDetachContextDesc(",
                       "bool Gen11::vfSubmitWorkItem("):
@@ -3760,6 +3970,8 @@ def main():
     ppgtt_retirement_mutations(sys.argv[1])
     ppgtt_final_free_mutations(sys.argv[1])
     page_table_commit_rollback_mutations(sys.argv[1])
+    cache_type_update_transaction_mutations(sys.argv[1])
+    cache_type_update_transaction_model()
     ggtt_postwrite_mutations(sys.argv[1])
     macho_inventory(sys.argv[2])
     macho_inventory(sys.argv[3])

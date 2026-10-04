@@ -1,12 +1,67 @@
 # Tahoe SR-IOV protocol audit — in progress
 
 Updated: 2026-10-04. The last dynamic source baseline is `ce166c8`; the current
-offline-reviewed checkpoint is V280 complete ring-caller accounting on
+offline-reviewed checkpoint is V281 cache-type page-table rollback on
 `codex/tahoe-sriov-vf`. This is NOT a boot-test candidate or a successful
 driver baseline. The `ce166c8` run produced repeatable host PF DMAR faults
 followed by i915 hangs and a host reboot. Keep `macos-tahoe-sriov` shut off until the
 corrected code passes the remaining offline review and every independently
 enforced containment precondition.
+
+The user's final display target is now Looking Glass, not Sunshine/Moonlight.
+Older Sunshine references below are historical review notes. No macOS Tahoe
+guest capture/shared-framebuffer implementation has been selected or tested;
+that work remains after a safe real Metal/media acceleration baseline. Looking
+Glass B7's official Host Application documentation explicitly states that OSX
+capture is unsupported with no current support plan, so this is a future
+guest-producer development task rather than ordinary configuration. The Linux
+KVMFR/client transport remains the intended receiving side.
+
+## V281 cache-type page-table rollback (offline)
+
+The admitted production and debug payloads each contain exactly 38 direct
+branches to `IGAccelResource::updateMappingCacheType` and 49 direct branches
+to the video cache wrapper, partitioned across 29 symbol-bounded owners. Metal,
+GL, blit, compute and media therefore converge on the resource updater. Its
+only mapping tail enters `IGAccelMemoryMap::updateCacheType`; the mapping's
+`+0x180` virtual is the sole observed dispatch to `updateGPUPageTable`, and no
+direct text branch bypasses that virtual. Exact whole-text inventories now
+reject an added, removed or moved direct caller in either Tahoe payload.
+
+Native code stores resource cache bits and mapping cache type before its void
+tail dispatch. The manager then continues across every task page table after a
+false result, while `updateRange` retains successful physical-segment prefixes.
+The three concrete `+0x128` remap implementations are now whole-body pinned.
+The 64-bit PPGTT implementation can return false only when `pageWalk3` fails
+before the current PTE write; the 32-bit implementation returns true after its
+leaf writes, and the global implementation delegates to its mapped route.
+
+A classified VF now routes the shared resource updater. PF operation delegates
+unchanged to the native trampoline. A lifetime-published sleepable lock
+serializes cache-type requests; null mappings, unchanged mapping types and
+uninstalled mappings preserve native software-only behavior. An installed
+mapping must retain the admitted accelerator identity and live transport before
+either software field changes. A successful native virtual update remains the
+normal path. On false, the wrapper restores both the mapping type and complete
+resource flags, replays the old type through the same virtual, drains CPU page-
+table writes, and completes heavy Engines then GuC invalidations when GPU work
+has ever been admitted. It then records a protocol fault and fail-stops because
+the native void ABI cannot report failure to 87 upstream call sites; it never
+returns a fabricated successful cache transition into command submission.
+
+Ten source mutations cover route removal, fabricated update success, either
+missing software rollback, missing replay, either wrong TLB target, missing
+fault/fail-stop and incorrect lock publication. An 8,192-state model covers
+resource-bit preservation, absent/same/uninstalled mappings and installed
+success/failure commit-or-restore behavior. Full static analysis passed in
+`/tmp/ngreen-static.eiotr0` with only the two known SDK macro warnings. Route
+inventory is now 106 unique symbols (100 accelerator, three framebuffer and
+three System KC).
+
+This is an offline selected-transaction proof, not proof of external
+commit/release/prune serialization, every indirect caller, runtime TLB
+acceptance or historical Host-crash cause. VM, PCI/sysfs and Host i915 state
+were not touched; the containment hold remains active.
 
 ## V280 complete ring-caller accounting (offline)
 

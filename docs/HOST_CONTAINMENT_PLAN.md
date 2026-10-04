@@ -92,8 +92,9 @@ a tombstone, zero native references, and no protocol fault. None of these tests
 extends the context admission gate to native task/page-table/page-pool lifetimes
 or proves a deferred PPGTT retirement transaction safe.
 
-One clean boot is not a safety or acceleration baseline. Sunshine, Moonlight,
-virtual-display removal, unattended guest login and VM autostart stay disabled
-until repeated contained runs prove real Metal command completion and media
-workloads, clean shutdown/quiescence, and zero new PF DMAR/i915 faults. Only then
-may display and service integration be evaluated as a separate phase.
+One clean boot is not a safety or acceleration baseline. Looking Glass guest
+capture/shared-framebuffer integration, virtual-display removal, unattended
+guest login and VM autostart stay disabled until repeated contained runs prove
+real Metal command completion and media workloads, clean shutdown/quiescence,
+and zero new PF DMAR/i915 faults. Only then may display and service integration
+be evaluated as a separate phase.

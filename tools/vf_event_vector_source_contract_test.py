@@ -46,7 +46,7 @@ GEN11_REQUIRED = (
     'vfMarkProtocolFault("VF event-vector growth received unsafe pre-state")',
     '"V273: refusing unsafe VF event vector size=%llu capacity=%llu request=%llu"',
     "const bool nativeResult = native(vector, requested);",
-    "if (gVfIdentity != VfIdentity::Virtual)",
+    "const bool nativeResult = native(vector, requested);\n\tif (gVfIdentity != VfIdentity::Virtual)",
     "NGEventVector::hasCapacity(",
     'vfMarkProtocolFault("VF event-vector growth did not publish requested capacity")',
     '"V273: refusing incomplete VF event vector size=%llu capacity=%llu request=%llu"',

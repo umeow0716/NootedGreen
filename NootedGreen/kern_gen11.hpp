@@ -180,6 +180,8 @@ private:
 		void *that, void *task, void *mapping);
 	mach_vm_address_t oVfCommitPageTablesForTask {};
 	mach_vm_address_t vfReleasePageTablesForTask {};
+	static void vfUpdateMappingCacheType(void *that, uint32_t requestedType);
+	mach_vm_address_t oVfUpdateMappingCacheType {};
 	static bool vfWaitForRingSpace(void *that, uint32_t requestedDwords);
 	mach_vm_address_t oVfWaitForRingSpace {};
 	static void vfAccelTaskFree(void *that);
