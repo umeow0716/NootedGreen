@@ -21,7 +21,7 @@ The authoritative dynamic-entry checklist is
 [`DYNAMIC_TEST_GATE.md`](DYNAMIC_TEST_GATE.md). Any open static gate keeps the
 VM hard hold in force.
 
-## V302 SG-10 raw BAR0 negative-reachability candidate (offline)
+## V302 SG-10 raw BAR0 negative-reachability closure (offline)
 
 The two admitted Tahoe accelerator payloads now have a complete decoded
 inventory of genuine `accelerator+0x1240` disp32 memory operands: 131 canonical
@@ -58,12 +58,14 @@ MTL/ARL still route filter/read/bridge/scheduler through memory IRQ, while
 TGL/ADL/RPL retain the fixed virtual-MMIO bridge and suppress only physical
 per-engine error helpers.
 
-The working route inventory is 165 (141 accelerator, three framebuffer and 21
+The route inventory is 165 (141 accelerator, three framebuffer and 21
 System KC), plus eight exact-address event-vector routes. Targeted dual-payload
 lifecycle and route contracts plus complete static
-`/tmp/ngreen-static.CYth1a` pass. S10.1–S10.7 are closed candidates, but S10.8
-still requires a clean pushed commit and its exact-SHA CI before SG-10 may
-become `CLOSED-STATIC`. SG-11 remains open, so no
+`/tmp/ngreen-static.CYth1a` pass. Clean source checkpoint
+`5529127a03d5b92fcd8ae5ee538b9bad4e136be0` was pushed, and exact-SHA CI
+`37232739353` passed full static, x86_64 release kext, Metal smoke and both
+artifact uploads. S10.1–S10.8 and SG-10 are now `CLOSED-STATIC`. SG-11 remains
+open, so no
 VM, kext deployment, PCI/sysfs/VF/PF or Host i915 operation is authorized.
 
 ## V301 SG-09 native callback-owner closure (offline)

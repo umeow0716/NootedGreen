@@ -10,7 +10,7 @@ The current dynamic-entry gate table is
 
 ## Scope
 
-2026-10-05 V302 SG-10 negative-reachability candidate: a decoder-backed scan
+2026-10-05 V302 SG-10 negative-reachability closure: a decoder-backed scan
 now fixes every genuine `accelerator+0x1240` disp32 memory operand in both
 admitted Tahoe payloads: 131 canonical owners and 279 sites split exactly into
 telemetry/diagnostic 37/70, legacy construction 31/85, physical roots 24/74,
@@ -28,11 +28,13 @@ branch, and the five retained WorkQueue/CTB/release-context bodies receive exact
 adjacent-symbol-bounded `0xCEE8` patches. The complete 14-owner interrupt set is
 also fixed: 12 fixed-offset native bridge bodies remain within the i915 Gen11
 VF allowlist, while the two caller-selected-offset helpers have no in-image
-root and are now rejected at their VF public entries. The working route
+root and are now rejected at their VF public entries. The route
 inventory is 165 (141 accelerator, three framebuffer, 21 System KC), plus eight
-exact-address event-vector routes. S10.1–S10.7 are closed candidates; full
-static `/tmp/ngreen-static.CYth1a` passes; clean commit/push and exact-SHA CI
-are still required for S10.8.
+exact-address event-vector routes. Full static `/tmp/ngreen-static.CYth1a` and
+clean source checkpoint
+`5529127a03d5b92fcd8ae5ee538b9bad4e136be0` exact-SHA CI `37232739353`
+passed, including release kext, Metal smoke and both artifacts. SG-10 is now
+`CLOSED-STATIC`; the all-program-file SG-11 ledger still prohibits runtime.
 
 2026-10-05 V301 SG-09 callback-owner delta: SG-09 is now
 `CLOSED-STATIC`. The remaining raw-owner inventory is the Scheduler4 passive
