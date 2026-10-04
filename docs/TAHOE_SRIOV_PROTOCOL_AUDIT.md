@@ -6955,6 +6955,44 @@ No executable patch or runtime mutation.
 
 ### Update fanout must participate in the same owner transaction
 
+#### Selector-8 outer lock reaches concrete Intel rotation validation
+
+New complete KC review/pin: transaction set_transaction_args
+`0x14bb0714/0xab0`, SHA-256
+`830382a2686dc7615224b4b12d072e1484eef55f80854c6f017ffae6b9d1ceb2`.
+Re-read already-reviewed complete user-client transactionEnd
+`0x14bb622e/0x232` and pipe transaction_end `0x14bb0560/0x1b4`.
+The former takes accelerator mutex `+0x88` and busy lock before state checks;
+its queue-full wait retains the pipe, unlocks, waits, then reacquires and
+rechecks. The final transaction_end call `0x14bb6456` occurs while those
+locks are held, before their common unlock path. Thus this selected selector-8
+route supplies outer accelerator exclusion to rotation validation; it is not
+a claim that every display/mapping entry shares that exclusion.
+
+Pipe transaction_end calls set_transaction_args at `0x14bb0602`. That complete
+body processes two plane records and dirty-bit-controlled state, performs
+resource lookup/object-factory dispatch, stores and retains selected related
+objects in transaction records, reuses/retains live-pipe record objects in
+unchanged branches, updates plane rectangles and other transaction state,
+and invokes concrete pipe validation through virtual `+0x8a0` at
+`0x14bb1134`. The Intel table entry is validateTransaction `0x80bd0`.
+Selected factory/helper semantics, namespace lookup ownership, earlier-field
+validation and all virtual callees are not automatically certified by reading
+this enclosing body. In particular, calls to plane-resource update helpers
+still need review for rotation geometry and ownership side effects.
+
+Nonzero validation status returns to pipe transaction_end, which preserves
+the error at transaction `+0x58`, skips ordinary prepare, and nevertheless
+queues the transaction through the existing cleanup/notification route.
+There is no local PTE-prefix rollback in this error return. Previously reviewed
+transaction free releases its retained plane-related objects, but that fact
+does not prove the resource-private rotation mapping `+0x238` reference is
+balanced or that GPU backing is safe to reuse. Do not bypass error queuing as
+a shortcut. New paired-KC checks pin caller/argument-setter/validation/error
+edges; native checks bind the concrete Intel virtual. Both pass. No production
+or runtime change. Next: complete plane-update helper and rotation geometry
+setter/owner-transfer semantics under this now-established selected outer lock.
+
 #### Display transaction entry into rotation preparation
 
 New complete native reviews/pins: DisplayPipe validateTransaction

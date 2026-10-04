@@ -7,6 +7,12 @@ audit's runtime blockers are open.
 
 ## Scope
 
+New complete paired-KC review: transaction set_transaction_args
+`0x14bb0714/0xab0`. Revisited existing user-client and pipe transaction-end
+bodies; selected selector-8 outer accelerator mutex/busy lock now connected to
+Intel validation virtual and rotation preparation. This does not cover all
+entries or prove geometry-helper/rotation-reference cleanup semantics.
+
 New complete native reviews: DisplayPipe validateTransaction `0x80bd0/0x21e`
 and DecodeTransaction `0x8091e/0x2b2`. Both body hashes and selected rotation
 creation/decoder/import edges pinned. These identify a display preparation

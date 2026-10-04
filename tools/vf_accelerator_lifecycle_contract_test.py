@@ -770,6 +770,7 @@ def macho_inventory(path):
     assert direct_branches("__ZN15IGMemoryManager27releaseFromPageTableForTaskEP11IGAccelTaskP16IGAccelMemoryMap", "__ZN19IGHardwarePageTable12releaseRangeERK14IGAddressRange") == [0xf74e], f"{path}: changed task fan-out release edge"
     assert image[0xf753:0xf75f] == bytes.fromhex("41 20 c7 48 8b 5b 08 48 85 db 75 e9"), f"{path}: changed non-short-circuit task page-table release loop"
     validate_transaction = "__ZN18IGAccelDisplayPipe19validateTransactionEP30IOAccelDisplayPipeTransaction2"
+    assert struct.unpack_from("<Q", image, value("__ZTV18IGAccelDisplayPipe") + 16 + 0x8a0)[0] == value(validate_transaction), f"{path}: changed concrete display transaction validation virtual"
     assert direct_branches(validate_transaction, "__ZN15IGAccelResource31createAndPrepareRotationMappingEv") == [0x80d0f], f"{path}: changed display transaction rotation creation edge"
     assert direct_branches(validate_transaction, "__ZN18IGAccelDisplayPipe17DecodeTransactionEP30IOAccelDisplayPipeTransaction2PyPj") == [0x80c3f], f"{path}: changed display transaction decoding edge"
     map_vtable = value("__ZTV16IGAccelMemoryMap")

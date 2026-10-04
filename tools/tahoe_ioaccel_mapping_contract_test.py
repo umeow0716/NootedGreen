@@ -35,6 +35,7 @@ EVENT_DISABLE_STAMP_LOCKED = "__ZN20IOAccelEventMachine223disable_stamp_interrup
 EVENT_ENABLE_STAMP = "__ZN20IOAccelEventMachine220enableStampInterruptEi"
 EVENT_DISABLE_STAMP = "__ZN20IOAccelEventMachine221disableStampInterruptEi"
 EVENT_OWNER_BODIES = {
+    "__ZN30IOAccelDisplayPipeTransaction220set_transaction_argsEP33IOAccelDisplayPipeTransactionArgs": (0xab0, "830382a2686dc7615224b4b12d072e1484eef55f80854c6f017ffae6b9d1ceb2"),
     "__ZN13IOAccelMemory19createMappingInTaskEP11IOAccelTaskj": (0x16, "47b5beedeaa9f97ff450a1c3e79647872b26fbd32afe277c8638f9016202bac1"),
     "__ZNK16IOAccelResource210getGPUTaskEv": (0x22, "7dc3a618b56c2611b1d27a58ce28260cd354c9d58275fb75b084e23e31fe0b3a"),
     "__ZN11IOAccelTask4freeEv": (0x144, "e03bbd00acba08d6610d5a07d51fd15f52a3f96925399177e6f5d61599dbad23"),
@@ -1220,9 +1221,13 @@ def check(path, boot_path=None):
     assert raw_action & 0x3fffffff == address_of("__ZN29IOAccelDisplayPipeUserClient217s_transaction_endEPS_PvP25IOExternalMethodArguments"), "changed selector 8 action"
     assert (scalar_in, struct_in, scalar_out, struct_out) == (0, 280, 0, 0), "changed transaction-end argument counts"
     for call, target in ((0x14bb516d, "__ZN29IOAccelDisplayPipeUserClient214transactionEndEP33IOAccelDisplayPipeTransactionArgs"),
+                         (0x14bb6456, "__ZN18IOAccelDisplayPipe15transaction_endEP29IOAccelDisplayPipeUserClient2P33IOAccelDisplayPipeTransactionArgs"),
+                         (0x14bb0602, "__ZN30IOAccelDisplayPipeTransaction220set_transaction_argsEP33IOAccelDisplayPipeTransactionArgs"),
                          (0x14bb06a3, "__ZN18IOAccelDisplayPipe17transaction_queueEP30IOAccelDisplayPipeTransaction2")):
         encoded = read(call, 5)
         assert encoded[0] in (0xe8, 0xe9) and call + 5 + struct.unpack_from("<i", encoded, 1)[0] == address_of(target), "changed transaction-end dispatch/queue edge"
+    assert read(0x14bb1134, 6) == bytes.fromhex("ff 90 a0 08 00 00"), "changed transaction argument validation dispatch"
+    assert read(0x14bb0607, 15) == bytes.fromhex("85 c0 74 0b 41 89 c4 89 43 58 e9 83 00 00 00"), "changed validation error preservation before queue cleanup"
     assert read(0x14bb061e, 6) == bytes.fromhex("41 89 c4 89 43 58"), "changed transaction preparation result preservation"
     for slot, method in ((0x868, "__ZN18IOAccelDisplayPipe21displayModeWillChangeEv"),
                          (0x8b8, "__ZN18IOAccelDisplayPipe17submitTransactionEP30IOAccelDisplayPipeTransaction2"),
