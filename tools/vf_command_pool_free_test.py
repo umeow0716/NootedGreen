@@ -20,9 +20,11 @@ assert hashlib.sha256(image[0x14b6b13a:0x14b6b2bc]).hexdigest() == \
     '5cf69325a1d3fe2e3f09751af5ec3b3eece1542d255c6b04411d348e40c2f033'
 
 
-def run(slots, record, current=-1, linked=False, failure=None):
+def run(slots, record, current=-1, linked=False, failure=None, runtime=False):
     assert current == -1 or 0 <= current < slots
     selection_failure = failure in ('gpu-map', 'va', 'prepare')
+    allocation_memory = 0x491000 if runtime else 0x490000
+    allocation_cpu = 0x501000 if runtime else 0x500000
     uc = Uc(UC_ARCH_X86, UC_MODE_64)
     uc.mem_map(0x14b60000, 0xb0000)
     uc.mem_write(0x14b60000, image[0x14b60000:0x14c10000])
@@ -84,15 +86,15 @@ def run(slots, record, current=-1, linked=False, failure=None):
                   0x600080: 'channel-retain'}
         if failure and address == 0x14bb95c2:
             events.append('allocate-memory')
-            put(0x490000, 0x470000)
-            ret(0 if failure == 'memory' else 0x490000)
+            put(allocation_memory, 0x470000)
+            ret(0 if failure == 'memory' else allocation_memory)
             return
         if failure and address == 0x14bba45a:
             events.append('create-cpu-map')
-            ret(0x500000 if selection_failure else 0)
+            ret(allocation_cpu if selection_failure else 0)
             return
         if selection_failure and address == 0x600090:
-            assert uc.reg_read(UC_X86_REG_RDI) == 0x490000
+            assert uc.reg_read(UC_X86_REG_RDI) == allocation_memory
             assert uc.reg_read(UC_X86_REG_RSI) == 0x4f1000
             events.append('create-gpu-map')
             ret(0 if failure == 'gpu-map' else 0x4c0000)
@@ -102,7 +104,7 @@ def run(slots, record, current=-1, linked=False, failure=None):
                            0x6000c0: 'recover-va', 0x14ba43a0: 'recover-prepare'}[address])
             ret(0)
             return
-        if selection_failure and address == 0x14b6ad2f:
+        if selection_failure and not runtime and address == 0x14b6ad2f:
             assert uc.reg_read(UC_X86_REG_RAX) & 0xff == 1
         if address in labels:
             if address == 0x600070:
@@ -113,7 +115,25 @@ def run(slots, record, current=-1, linked=False, failure=None):
             uc.emu_stop()
     uc.hook_add(UC_HOOK_CODE, hook)
     sp = 0x5ff008
-    if failure:
+    if runtime:
+        assert failure == 'gpu-map' and slots == 1 and current == 0 and not linked
+        put(pool + 0x28, 0x4f1000)
+        uc.mem_write(pool + 0x1830, struct.pack('<HHIII', 8, 1, 4096, 0x300, 1))
+        put(sp, 0x600060)
+        uc.reg_write(UC_X86_REG_RSP, sp)
+        uc.reg_write(UC_X86_REG_RDI, pool)
+        uc.emu_start(0x14b6adea, 0x600061, count=20000)
+        assert uc.reg_read(UC_X86_REG_RIP) == 0x600060
+        assert uc.reg_read(UC_X86_REG_RAX) & 0xff == 1
+        assert events == ['allocate-memory', 'create-cpu-map', 'create-gpu-map', 'unlinked-log'], events
+        assert uc.mem_read(pool + 0x1842, 2) == b'\x00\x00'
+        assert uc.mem_read(pool + 0x1832, 2) == b'\x02\x00'
+        assert get(pool + 0x38) == 0x4c0000
+        assert get(pool + 0x48) == allocation_memory
+        assert get(pool + 0x50) == 0 and get(pool + 0x58) == allocation_cpu
+        memories.append(allocation_memory)
+        events.clear()
+    elif failure:
         assert slots == 0 and not record and current == -1 and not linked
         # Native init performs actual slot/index/count setup and growth.
         put(sp, 0x600060)
@@ -155,10 +175,12 @@ def run(slots, record, current=-1, linked=False, failure=None):
     expected = [] if linked else ['unlinked-log']
     if current >= 0:
         expected += ['complete-current']
-    if selection_failure:
+    if selection_failure and not runtime:
         expected += ['remove-cpu', 'object-release']
     for _ in range(slots):
         expected += ['finish-event', 'object-release', 'remove-cpu', 'object-release']
+    if runtime:
+        expected += ['remove-cpu', 'object-release']
     expected += ['channel-release'] + (['record-release'] if record else []) + ['base-free']
     assert events == expected, events
     assert get(accel + 0xc68) == (0x4f2000 if linked else 0)
@@ -183,6 +205,8 @@ for slots in (0, 1, 2):
 assert cases == 24
 for failure in ('memory', 'cpu-map', 'gpu-map', 'va', 'prepare'):
     run(0, False, failure=failure)
+run(1, False, current=0, failure='gpu-map', runtime=True)
 print('PASS 24 KC partial/current/linked-pool free fixtures; complete precedes release;'
       ' five actual init/growth failure states cleaned;'
+      ' runtime growth false-success/current preservation reproduced;'
       ' callbacks mocked, no actual event/DMA quiescence proof')

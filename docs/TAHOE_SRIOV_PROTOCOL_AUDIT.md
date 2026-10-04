@@ -6955,6 +6955,25 @@ No executable patch or runtime mutation.
 
 ### Update fanout must participate in the same owner transaction
 
+#### Runtime growth reproduces success with unchanged old current slot
+
+KC emulator now begins with count1/current0 and an existing slot triple,
+then executes actual allocMoreCommandBuffers with a new memory/CPU mapping
+and GPU-map creation returning null. Growth returns AL1, publishes count2,
+keeps current0 and its existing GPU mapping, and leaves slot1 with memory/
+CPU mapping but null GPU mapping. Subsequent actual free completes slot0,
+cleans its triple, then removes slot1 CPU mapping/releases memory exactly
+in slot order. All assertions pass alongside the29 earlier fixtures.
+
+This executes the runtime false-success behavior absent init's negative
+current-index check. It does NOT demonstrate a GPU overwrite or submit
+completion: submitBuffer/getBufferPtrNoInc continuation and hardware event
+state remain outside this case. A growth Boolean-only repair would also
+need caller handling; pointer acquisition directly invokes void selection.
+Next execute the old-buffer continuation with bounded output canaries to
+determine the necessary postcondition, before choosing production hook
+placement. No production repair or runtime VM admission yet.
+
 #### Selection failures generated through actual init/growth/selection
 
 KC instruction test now injects GPU mapping creation null, VA allocation
