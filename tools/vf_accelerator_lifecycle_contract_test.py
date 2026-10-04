@@ -68,7 +68,22 @@ STAMP_IRQ_NATIVE = {
     "__ZN19IGHardwarePageTable4freeEv": (0x12, "2055826c29bb9708f5dce7f67f665c461226732dd4a3ab43ae624fd64fb478fc"),
     "__ZN11IGAccelTask4freeEv": (0xe8, "0ae2167df94317690656c9858eb1918b8bdc54b5737f367d0fea768a10e99a07"),
     "__ZN17IGHardwareContext15initRingControlEb": (0x62, "09abdc95cf3157992522b47053e289a5c2b476953853c0acf4f08eaab5dec6ca"),
+    "__ZN16IntelAccelerator19appsPavpSessionMgmtEj22PAVPSessionCommandID_tjP16SGfxBltMIFlushDwPvbb": (0x25a, "51951260ace6b2af39d1f6cb7dbcb2f91612877a26dd7d1b881f5d7b76646d17"),
+    "__ZN16IntelAccelerator16submitSyncEventsEbP11IGAccelTask10IGHwCsTypeb": (0x22a, "57942fc367c18afb065dbafcf5bcd31f71c34edb21b4f96fc0cccb0981832420"),
+    "__ZN16IntelAccelerator24configureBlitterTrackingEP20IGHardwareRingBufferb": (0xf8, "638f4f61fc5fdf70a9165123e7ce4b0aeb2515756e710068ba85d7c9db7377e5"),
+    "__ZN16IntelAccelerator21submitMainRingCommandEPjm": (0x96, "a172b2a23376b09109e743b896561ab5890901e9dc4753339c7a4a7116d81b13"),
+    "__Z17blt2d_source_copyP23IGHardwareBlit2DContextP15blit3d_params_tRK8IGVectorI11rect_pair_t25IGIOMallocAllocatorPolicyEP9_WA_TABLE": (0x540, "168c1c51d2c679cdd035bd495075843528079c1a221539015dd8a3bc8bcc0e98"),
+    "__Z15blt2d_fast_copyP23IGHardwareBlit2DContextP15blit3d_params_tRK8IGVectorI11rect_pair_t25IGIOMallocAllocatorPolicyEP9_WA_TABLE": (0x5b0, "ebd3542b2d3cec27eda254841abcadf07bf68cb04524bfce7113046860eb8b68"),
+    "__Z16blt2d_color_fillP23IGHardwareBlit2DContextP15blit3d_params_tRK8IGVectorI11blit_rect_t25IGIOMallocAllocatorPolicyEP9_WA_TABLE": (0x360, "2494a874aa59443ce3ff105b0d04a74152814e01ec8e2549caac9115cbf6ddbc"),
+    "__ZL16blt2d_recompressbP20IGHardwareRingBufferyP9_WA_TABLE": (0xb2, "11a33fb334dc5eae02a5dceae648f566dc132129f6702605425520704d0a92f0"),
+    "__ZN20IGHardwareRingBuffer16waitForSemaphoreEjj": (0x156, "c9729dcce21da49dd59f15bea86c30d7f110b9815f803ec319e2238ca3522898"),
+    "__ZN20IGHardwareRingBuffer19resubmitStampToRingEjPj": (0x68, "128c9bd2b38a09099d8e5a4c56ff1d5f2ee652009944ce3b8f9655a464c2f073"),
+    "__ZN18IGAccelFIFOChannel18submitStampCommandEv": (0xba, "dc2abecde11fa4c718ebb62c3e8205e278724891e012b89d728898f3e8e0d337"),
     "__ZN18IGAccelFIFOChannel18submitRingCommandsEPjjj": (0x106, "1e7d84456ce9eda587497696e280fcf28591b3bb9af1a7cff339de340db7cc86"),
+    "__ZN18IGAccelFIFOChannel12submitBufferEP24IOAccelCommandDescriptor": (0x2d6, "22a23c415fe1e96d81e647e6ed362b37632c6245d4b93c70e2370041fc8c61f2"),
+    "__ZN27IGHardwareRingBufferCompute16waitForSemaphoreEjj": (0x146, "289e21e5da3030ab14f628308d8b35ed1352f361a22903fa9b762aefeb85d6e7"),
+    "__ZN24IGHardwareRingBufferBlit16waitForSemaphoreEjj": (0x182, "92d11f9f9f6f9aff74a6f8d23c938037580980b9ffc0677190cd205ef34e13d8"),
+    "__ZN24IGHardwareRingBufferMain16waitForSemaphoreEjj": (0x178, "d65ba6ee7becd6575fbed623c98d148ca0521ae59049d3c85e3f275661bb5440"),
     "__ZN20IGHardwareRingBuffer9alignRingEj": (0x28, "c9612928d88c4157c5d80847c6e8a8123ae227b7b08a8879b54f5387b285a2ee"),
     "__ZN20IGHardwareRingBuffer14submitCommandsEPjjj": (0x5e, "922dbcc17b815c68b6bf5535ef09feaabac1d7dd0c63015fbe0f2e15a27dd8e0"),
     "__Z15utilGetPropertyIjET_P15IORegistryEntryPKcS0_": (0x18c, "9da1339c8d7b6f93f71bf4020792fc4090572cca3bb9046120eb4dc617ef28af"),
@@ -515,6 +530,7 @@ def macho_inventory(path):
 
     symtab = None
     dysymtab = None
+    text_section = None
     offset = 32
     for _ in range(header[4]):
         command, size = struct.unpack_from("<2I", image, offset)
@@ -522,9 +538,21 @@ def macho_inventory(path):
             symtab = struct.unpack_from("<6I", image, offset)[2:]
         elif command == 0xB:
             dysymtab = struct.unpack_from("<20I", image, offset)
+        elif command == 0x19:  # LC_SEGMENT_64
+            segment = struct.unpack_from("<II16sQQQQiiII", image, offset)
+            section_offset = offset + 72
+            for section_index in range(segment[9]):
+                section = struct.unpack_from(
+                    "<16s16sQQIIIIIIII", image,
+                    section_offset + section_index * 80)
+                section_name = section[0].split(b"\0", 1)[0]
+                segment_name = section[1].split(b"\0", 1)[0]
+                if segment_name == b"__TEXT" and section_name == b"__text":
+                    text_section = (section[2], section[3], section[4])
         offset += size
-    if not symtab or not dysymtab:
-        raise AssertionError(f"{path}: missing Mach-O symbol/relocation tables")
+    if not symtab or not dysymtab or not text_section:
+        raise AssertionError(
+            f"{path}: missing Mach-O symbol/relocation/text tables")
 
     symbol_offset, symbol_count, string_offset, _ = symtab
     names = []
@@ -779,6 +807,18 @@ def macho_inventory(path):
         return direct_branch_candidates(image, owner_start, owner_end,
                                         target_start, external_relocation_offsets)
 
+    def text_direct_branches(target):
+        text_address, text_size, text_file_offset = text_section
+        # This UUID-pinned kext currently maps __text at its file offset. Keep
+        # the conversion explicit so a future payload cannot silently turn a
+        # file-offset scan into a virtual-address claim.
+        target_file_offset = text_file_offset + value(target) - text_address
+        candidates = direct_branch_candidates(
+            image, text_file_offset, text_file_offset + text_size,
+            target_file_offset, external_relocation_offsets)
+        return [text_address + candidate - text_file_offset
+                for candidate in candidates]
+
     # Complete getter relocation/owner inventory plus selected decoded argument
     # windows. These are not whole caller or outer-serialization proofs.
     getter_calls = (
@@ -990,11 +1030,42 @@ def macho_inventory(path):
     flip_wait = "__ZN21IGAccelDisplayMachine16generateFlipWaitEP18IGAccelFIFOChannel"
     assert direct_branches(flip_wait, "__ZN20IGHardwareRingBuffer10writeDWordEj") == [0x7e178], f"{path}: changed unchecked flip dword emission"
     assert direct_branches(flip_wait, RING_WRITE_BUFFER) == [0x7e1e0], f"{path}: changed unchecked flip buffer emission"
-    for owner, calls in (
-            ("__ZN18IGAccelFIFOChannel18submitStampCommandEv", [0x4c552]),
-            ("__ZN18IGAccelFIFOChannel18submitRingCommandsEPjjj", [0x4c63b]),
-            ("__ZN21IGAccelDisplayMachine16generateFlipWaitEP18IGAccelFIFOChannel", [0x7e169, 0x7e1d0])):
-        assert direct_branches(owner, RING_WAIT_SPACE) == calls, f"{path}: changed selected reservation caller edges: {owner}"
+    # Complete __text inventory. These whole-body hashes and direct edges pin
+    # every native reservation arithmetic path. submitSyncEvents is the sole
+    # reviewed under-counter: it requests field+1 at 0x2baec but emits
+    # marker+field+marker at 0x2bb0c/0x2bb22/0x2bb36. The VF wrapper therefore
+    # adds exactly one caller dword before invoking the native reservation.
+    ring_wait_callers = (
+        ("__ZN16IntelAccelerator19appsPavpSessionMgmtEj22PAVPSessionCommandID_tjP16SGfxBltMIFlushDwPvbb", [0x2afd6]),
+        (ACCEL_SUBMIT_SYNC, [0x2baf1]),
+        ("__ZN16IntelAccelerator24configureBlitterTrackingEP20IGHardwareRingBufferb", [0x2c2a7, 0x2c309]),
+        (ACCEL_SUBMIT_MAIN, [0x2d157]),
+        ("__Z17blt2d_source_copyP23IGHardwareBlit2DContextP15blit3d_params_tRK8IGVectorI11rect_pair_t25IGIOMallocAllocatorPolicyEP9_WA_TABLE", [0x304d6, 0x30601]),
+        ("__Z15blt2d_fast_copyP23IGHardwareBlit2DContextP15blit3d_params_tRK8IGVectorI11rect_pair_t25IGIOMallocAllocatorPolicyEP9_WA_TABLE", [0x30b51]),
+        ("__Z16blt2d_color_fillP23IGHardwareBlit2DContextP15blit3d_params_tRK8IGVectorI11blit_rect_t25IGIOMallocAllocatorPolicyEP9_WA_TABLE", [0x30f64, 0x310ad]),
+        ("__ZL16blt2d_recompressbP20IGHardwareRingBufferyP9_WA_TABLE", [0x312b1]),
+        ("__ZN20IGHardwareRingBuffer16waitForSemaphoreEjj", [0x4285c]),
+        ("__ZN20IGHardwareRingBuffer19resubmitStampToRingEjPj", [0x432a1]),
+        (FIFO_SUBMIT_STAMP, [0x4c552]),
+        (FIFO_SUBMIT_COMMANDS, [0x4c63b]),
+        (FIFO_SUBMIT_BUFFER, [0x4c766, 0x4c7c0]),
+        ("__ZN27IGHardwareRingBufferCompute16waitForSemaphoreEjj", [0x4e949]),
+        ("__ZN24IGHardwareRingBufferBlit16waitForSemaphoreEjj", [0x4ef55]),
+        (flip_wait, [0x7e169, 0x7e1d0]),
+        ("__ZN24IGHardwareRingBufferMain16waitForSemaphoreEjj", [0x85300]),
+    )
+    expected_ring_wait_calls = [
+        call for _, calls in ring_wait_callers for call in calls]
+    assert text_direct_branches(RING_WAIT_SPACE) == expected_ring_wait_calls, \
+        f"{path}: changed complete ring reservation caller inventory"
+    for owner, calls in ring_wait_callers:
+        assert direct_branches(owner, RING_WAIT_SPACE) == calls, f"{path}: changed complete reservation caller edges: {owner}"
+    assert image[0x2bae5:0x2baf1] == bytes.fromhex(
+        "41 8b b5 a8 12 00 00 ff c6 4c 89 ff"), \
+        f"{path}: changed sync-event field+one reservation arithmetic"
+    assert direct_branches(ACCEL_SUBMIT_SYNC, RING_WRITE_BUFFER) == [
+        0x2bb0c, 0x2bb22, 0x2bb36], \
+        f"{path}: changed sync-event marker/payload/marker writes"
     for address in (0x4c557, 0x4c640):
         assert image[address:address + 3] == bytes.fromhex("84 c0 74"), f"{path}: changed FIFO reservation-result guard"
     assert struct.unpack_from("<Q", image, value(SCHEDULER4_VTABLE) + 16 + 0x150)[0] == value("__ZN12IGScheduler416checkForProgressE10IGHwCsType"), f"{path}: changed scheduler4 timeout progress query"
@@ -2605,9 +2676,11 @@ def ring_space_contract(source, path):
         "vfRingVirtual(that,0x150)",
         "flushTlbDwords!=5&&flushTlbDwords!=6&&",
         "flushTlbDwords!=10&&flushTlbDwords!=12",
-        "NGVfSubmission::ringReservation(",
+        "NGVfSubmission::guardedRingCallerRequest(requestedDwords)",
+        "PANIC_COND(!callerRequest.valid",
+        "NGVfSubmission::ringReservation(callerRequest.dwords,",
         "PANIC_COND(!reservation.valid",
-        "callback->oVfWaitForRingSpace)(that,requestedDwords);",
+        "callback->oVfWaitForRingSpace)(that,callerRequest.dwords);",
         "PANIC_COND(!nativeResult||",
         "!NGVfSubmission::ringReservationSatisfied(",
         "returntrue;",
@@ -2615,11 +2688,14 @@ def ring_space_contract(source, path):
     for fragment in required:
         if fragment not in compact:
             raise AssertionError(f"{path}: incomplete VF ring-space contract: {fragment}")
-    reserve = compact.index("NGVfSubmission::ringReservation(")
+    guard = compact.index(
+        "NGVfSubmission::guardedRingCallerRequest(requestedDwords)")
+    reserve = compact.index(
+        "NGVfSubmission::ringReservation(callerRequest.dwords,")
     native = compact.index(
-        "callback->oVfWaitForRingSpace)(that,requestedDwords);")
+        "callback->oVfWaitForRingSpace)(that,callerRequest.dwords);")
     post = compact.index("!NGVfSubmission::ringReservationSatisfied(")
-    if not reserve < native < post < compact.rindex("returntrue;"):
+    if not guard < reserve < native < post < compact.rindex("returntrue;"):
         raise AssertionError(f"{path}: VF ring-space proof does not enclose native wait")
     route = ('{"__ZN20IGHardwareRingBuffer12waitForSpaceEj",'
              'vfWaitForRingSpace,this->oVfWaitForRingSpace}')
@@ -2644,6 +2720,12 @@ def ring_space_mutations(path):
         (wrapper, replace_once(
             wrapper, "getMember<uint8_t>(that, 0x6D) != 0", "false")),
         (wrapper, replace_once(
+            wrapper, "NGVfSubmission::guardedRingCallerRequest(requestedDwords)",
+            "NGVfSubmission::guardedRingCallerRequest(0)")),
+        (wrapper, replace_once(
+            wrapper, "NGVfSubmission::ringReservation(\n\t\tcallerRequest.dwords,",
+            "NGVfSubmission::ringReservation(\n\t\trequestedDwords,")),
+        (wrapper, replace_once(
             wrapper, "PANIC_COND(!reservation.valid", "PANIC_COND(false")),
         (wrapper, replace_once(
             wrapper, "PANIC_COND(!nativeResult ||", "PANIC_COND(false ||")),
@@ -2660,7 +2742,7 @@ def ring_space_mutations(path):
         except (AssertionError, ValueError):
             continue
         raise AssertionError(f"{path}: escaped VF ring-space mutation")
-    print("PASS: six VF ring-space admission/capacity mutations rejected (source contract, not runtime proof)")
+    print("PASS: eight VF ring-space admission/capacity mutations rejected (source contract, not runtime proof)")
 
 
 def g2h_event_transaction_contract(source, path):

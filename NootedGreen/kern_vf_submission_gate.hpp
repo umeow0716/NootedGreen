@@ -56,6 +56,24 @@ struct RingReservation {
 	uint32_t bytes;
 };
 
+struct RingCallerRequest {
+	bool valid;
+	uint32_t dwords;
+};
+
+// The UUID-pinned Tahoe caller inventory contains one producer
+// (IntelAccelerator::submitSyncEvents) which requests count + 1 dwords but
+// emits marker + count + marker before submitToRing adds its final alignment
+// dword(s). Preserve the native ABI while adding the single missing payload
+// dword at the common VF reservation boundary. This is deliberately VF-only;
+// a future payload must pass the complete caller inventory before admission.
+constexpr RingCallerRequest guardedRingCallerRequest(uint32_t requestedDwords)
+{
+	if (requestedDwords == UINT32_MAX)
+		return {false, 0};
+	return {true, requestedDwords + 1U};
+}
+
 // Tahoe reserves the caller payload plus a ring trailer, optional deferred
 // TLB/AUX commands and one alignment dword when the current tail is not
 // qword-aligned. Use 64-bit arithmetic so malformed requests cannot wrap the

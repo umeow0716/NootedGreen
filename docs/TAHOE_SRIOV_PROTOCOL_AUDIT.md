@@ -1,12 +1,48 @@
 # Tahoe SR-IOV protocol audit — in progress
 
 Updated: 2026-10-04. The last dynamic source baseline is `ce166c8`; the current
-offline-reviewed checkpoint is V279 VF ring reservation postcondition on
+offline-reviewed checkpoint is V280 complete ring-caller accounting on
 `codex/tahoe-sriov-vf`. This is NOT a boot-test candidate or a successful
 driver baseline. The `ce166c8` run produced repeatable host PF DMAR faults
 followed by i915 hangs and a host reboot. Keep `macos-tahoe-sriov` shut off until the
 corrected code passes the remaining offline review and every independently
 enforced containment precondition.
+
+## V280 complete ring-caller accounting (offline)
+
+The admitted Tahoe payload's entire `__TEXT,__text` section contains exactly
+22 direct calls to `IGHardwareRingBuffer::waitForSpace`, partitioned across 17
+owners: PAVP/session setup, sync events, blitter tracking and commands, base/
+Blit/Compute/Main semaphore paths, stamp/resubmit/FIFO paths, command-buffer
+submission and display flip waits. The lifecycle contract now parses the
+Mach-O text section, fixes that complete address/owner inventory, and pins all
+17 owner bodies. A payload cannot add, remove or move a direct reservation
+caller without failing the offline gate.
+
+This review found one concrete native accounting defect. At `0x2baec`,
+`IntelAccelerator::submitSyncEvents` reserves field `+0x12a8 + 1`, but its
+three following `writeBuffer` calls at `0x2bb0c`, `0x2bb22` and `0x2bb36`
+emit one marker, exactly that field count, and a second marker: `count + 2`
+payload dwords. Depending on starting cursor and count parity, that missing
+dword can consume space intended for `submitToRing`'s final dword/alignment.
+The other 21 reviewed calls are exact, deliberately redundant, or include
+their nested flush/serialize/stamp/alignment writers.
+
+The classified-VF wrapper now converts every caller request to a checked
+`requested + 1` before both its 64-bit preflight and the native wait call, and
+post-validates capacity against the same guarded amount. `UINT32_MAX` fails
+before addition. This repairs the sole under-counter without routing any
+writer or changing PF behavior; because native qword rounding is retained, a
+wait may require zero or eight additional bytes of available capacity. Seven
+guard-boundary cases and 256 sync marker/count/cursor/render-prefix cases
+(which reproduce 128 native under-reservations), plus eight source mutations,
+cover the new edge in addition to 28,080 reservation states. The route count
+remains 105 (99 accelerator, three framebuffer, three System KC).
+
+This is a complete static direct-caller/accounting proof for the UUID-pinned
+payload, not proof against indirect/concurrent producers, command execution,
+GPU head progress or DMA after teardown. No VM, PCI/sysfs or Host GPU action
+accompanied it; the boot hold remains.
 
 ## V279 VF ring reservation postcondition (offline)
 

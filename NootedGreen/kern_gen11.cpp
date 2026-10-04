@@ -3860,15 +3860,19 @@ bool Gen11::vfWaitForRingSpace(void *that, uint32_t requestedDwords)
 	}
 	const bool extendedRenderTrailer = engine == 0 &&
 		(getMember<uint64_t>(accelerator, 0x1190) & (1ULL << 14)) != 0;
+	const auto callerRequest =
+		NGVfSubmission::guardedRingCallerRequest(requestedDwords);
+	PANIC_COND(!callerRequest.valid, "ngreen",
+		"Overflowing VF ring caller reservation");
 	const auto reservation = NGVfSubmission::ringReservation(
-		requestedDwords, ringBytes, cursor, extendedRenderTrailer,
+		callerRequest.dwords, ringBytes, cursor, extendedRenderTrailer,
 		tlbPending, flushTlbDwords, auxPending);
 	PANIC_COND(!reservation.valid, "ngreen",
 		"Oversized or malformed VF ring reservation");
 
 	const bool nativeResult = FunctionCast(
 		vfWaitForRingSpace,
-		callback->oVfWaitForRingSpace)(that, requestedDwords);
+		callback->oVfWaitForRingSpace)(that, callerRequest.dwords);
 	const uint32_t available = getMember<uint32_t>(that, 0x88);
 	const uint32_t committedCursor = getMember<uint32_t>(that, 0x64);
 	PANIC_COND(!nativeResult ||

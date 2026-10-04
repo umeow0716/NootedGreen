@@ -7,6 +7,25 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 complete ring-caller accounting delta: the Mach-O contract now
+parses `__TEXT,__text`, proves that the admitted Tahoe payload contains exactly
+22 direct `waitForSpace` calls partitioned across 17 whole-body-hash-pinned
+owners, and rejects any added, removed or moved caller. The review found one
+concrete native under-count in `IntelAccelerator::submitSyncEvents`: its
+reservation is `count + 1`, while the following three `writeBuffer` calls emit
+one marker, `count` payload dwords and one final marker before the normal
+submission trailer. A classified VF now passes a checked `requested + 1` to
+the native wait and validates the same guarded amount afterward; `UINT32_MAX`
+is rejected before addition. Other reviewed callers retain at least this
+slack, so the common correction costs no new route or writer hook and can
+increase a wait's capacity threshold by at most eight bytes after qword
+rounding. Seven guarded-request boundary cases, 256 sync marker/count/cursor/
+render-prefix cases (including 128 native under-reservations), and eight source
+mutations pin the correction in addition to the existing 28,080 reservation
+cases. The route inventory remains 105 unique symbols. This is an offline caller/writer
+accounting proof for the pinned payload, not a concurrency, GPU execution or
+DMA-quiescence proof; the VM remains off.
+
 2026-10-04 VF ring reservation postcondition delta: a classified VF now routes
 the complete/hash-pinned `IGHardwareRingBuffer::waitForSpace`. Before native
 execution, the wrapper validates ring geometry, engine/readiness state and

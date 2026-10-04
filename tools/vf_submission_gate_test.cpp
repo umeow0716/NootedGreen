@@ -72,6 +72,38 @@ int main()
 	}
 	assert(syntheticBootstrap == 1);
 
+	uint64_t guardedRingRequests = 0;
+	for (const uint32_t requested : {0U, 1U, 2U, 7U, 16U,
+	                                UINT32_MAX - 1U, UINT32_MAX}) {
+		const auto guarded =
+			NGVfSubmission::guardedRingCallerRequest(requested);
+		assert(guarded.valid == (requested != UINT32_MAX));
+		assert(guarded.dwords ==
+			(requested == UINT32_MAX ? 0U : requested + 1U));
+		++guardedRingRequests;
+	}
+	uint64_t syncAccountingCases = 0;
+	uint64_t nativeSyncUnderruns = 0;
+	for (const uint32_t cursor : {0U, 4U})
+	for (uint32_t count = 0; count < 64; ++count)
+	for (unsigned extended = 0; extended <= 1; ++extended) {
+		// submitSyncEvents requests count+1 but writes two markers around
+		// count payload dwords. The common writer may also prepend three
+		// render dwords, and submitToRing writes through qword alignment.
+		uint32_t actualDwords = count + 2U + (extended ? 3U : 0U) + 1U;
+		if (((cursor / 4U + actualDwords) & 1U) != 0)
+			actualDwords++;
+		const auto native = NGVfSubmission::ringReservation(
+			count + 1U, 4096, cursor, extended != 0, false, 0, false);
+		const auto guarded = NGVfSubmission::ringReservation(
+			count + 2U, 4096, cursor, extended != 0, false, 0, false);
+		assert(native.valid && guarded.valid);
+		nativeSyncUnderruns += native.bytes < actualDwords * 4U;
+		assert(guarded.bytes >= actualDwords * 4U);
+		++syncAccountingCases;
+	}
+	assert(nativeSyncUnderruns == 128);
+
 	uint64_t ringCases = 0;
 	for (uint32_t ringBytes = 16; ringBytes <= 65536; ringBytes <<= 1) {
 		const uint32_t dwordCapacity = ringBytes / 4;
@@ -122,6 +154,8 @@ int main()
 	for (const uint32_t badRing : {0U, 4U, 8U, 12U, 24U, 4095U})
 		assert(!NGVfSubmission::ringReservation(
 			1, badRing, 0, false, false, 0, false).valid);
-	std::printf("PASS: 512 VF producer/consumer, 32 bootstrap-task and %llu ring reservation states\n",
+	std::printf("PASS: 512 VF producer/consumer, 32 bootstrap-task, %llu guarded caller, %llu sync-accounting and %llu ring reservation states\n",
+	            static_cast<unsigned long long>(guardedRingRequests),
+	            static_cast<unsigned long long>(syncAccountingCases),
 	            static_cast<unsigned long long>(ringCases));
 }
