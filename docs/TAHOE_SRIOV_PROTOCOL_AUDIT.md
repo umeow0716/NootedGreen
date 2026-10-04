@@ -1,12 +1,42 @@
 # Tahoe SR-IOV protocol audit — in progress
 
 Updated: 2026-10-04. The last dynamic source baseline is `ce166c8`; the current
-offline-reviewed checkpoint is V277 final task-owned PPGTT retirement on
+offline-reviewed checkpoint is V278 failed page-table commit rollback on
 `codex/tahoe-sriov-vf`. This is NOT a boot-test candidate or a successful
 driver baseline. The `ce166c8` run produced repeatable host PF DMAR faults
 followed by i915 hangs and a host reboot. Keep `macos-tahoe-sriov` shut off until the
 corrected code passes the remaining offline review and every independently
 enforced containment precondition.
+
+## V278 failed multi-table page-table commit rollback (offline)
+
+Tahoe's complete/hash-pinned
+`IGMemoryManager::commitIntoPageTableForTask` walks every task page table,
+ANDs each `commitRange` result and deliberately continues after false. A
+single `commitRange` likewise preserves earlier successful physical segments
+when a later segment fails. The inherited mapping caller does not publish its
+installed-PTE bit on the resulting false return, so ordinary cleanup can omit
+all those prefixes while releasing the mapping's backing.
+
+A classified VF now routes the manager commit boundary. Success returns
+unchanged. On failure, while the original task, mapping and caller ownership
+frame are still live, the wrapper invokes the paired complete/hash-pinned
+`releaseFromPageTableForTask`; that method walks the same task table list and
+releases the full mapping range from every address space. Routed GGTT unmap
+completes target-3 GuC translation invalidation, 32-bit PPGTT unmap completes
+target-0 engine invalidation after its dummy PTE stores, and 64-bit PPGTT
+shrink completes target-0 invalidation before descriptor return/zeroing. A
+failed rollback is fatal rather than returning into inherited backing cleanup.
+
+The two native non-short-circuit loops, their direct commit/release edges and
+complete bodies are binary contracts in both admitted payloads. Six source
+mutations reject a missing release resolution or route, inverted success
+condition, bypassed rollback, removed fail-stop and fabricated success. The
+inventory is now 104 unique routes (98 accelerator, three framebuffer, three
+System KC). This closes the selected multi-segment and multi-address-space
+failed-prefix cleanup offline; it does not prove every outer-lock/asynchronous
+callback interaction or runtime DMA behavior and does not relax the boot hold.
+No VM, PCI/sysfs or Host GPU operation accompanied this change.
 
 ## V277 final task-owned page-table retirement (offline)
 
@@ -33,7 +63,7 @@ device-wide shutdown require no second request through a sealed CTB.
 
 Six source mutations cover omission of the owner scan, lifecycle weakening,
 barrier/native-order reversal, missing route, missing attached-task publication
-and submit identity bypass. Current inventory is 103 unique symbols (97
+and submit identity bypass. At V277 the inventory was 103 unique symbols (97
 accelerator, three framebuffer, three System KC). This closes the selected
 task-owned nonempty final-free ordering offline. It does not prove arbitrary
 external table retains, every asynchronous callback/outer-lock interaction,

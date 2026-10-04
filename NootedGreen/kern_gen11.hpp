@@ -176,6 +176,10 @@ private:
 	static void vfPpgtt64ShrinkRange(
 		void *that, const NGIGAddressRange &range);
 	mach_vm_address_t oVfPpgtt64ShrinkRange {};
+	static bool vfCommitPageTablesForTask(
+		void *that, void *task, void *mapping);
+	mach_vm_address_t oVfCommitPageTablesForTask {};
+	mach_vm_address_t vfReleasePageTablesForTask {};
 	static void vfAccelTaskFree(void *that);
 	mach_vm_address_t oVfAccelTaskFree {};
 

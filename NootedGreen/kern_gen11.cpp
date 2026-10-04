@@ -2624,6 +2624,13 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		}
 
 		if (vfActive) {
+			KernelPatcher::SolveRequest pageTableRollback[] = {
+				{"__ZN15IGMemoryManager27releaseFromPageTableForTaskEP11IGAccelTaskP16IGAccelMemoryMap",
+				 this->vfReleasePageTablesForTask},
+			};
+			PANIC_COND(!patcher.solveMultiple(
+			               index, pageTableRollback, address, size), "ngreen",
+			           "Cannot resolve VF page-table rollback boundary");
 			KernelPatcher::RouteRequest requests[] = {
 			// V217: Query the media-12 PF-provisioned GGTT range, replace Apple's
 			// zero/stolen-derived allocator ranges, and validate direct BAR0 PTE
@@ -2649,6 +2656,11 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			 vfPpgtt32UnmapRange, this->oVfPpgtt32UnmapRange},
 			{"__ZN31IGHardwarePerProcessPageTable6411shrinkRangeERK14IGAddressRange",
 			 vfPpgtt64ShrinkRange, this->oVfPpgtt64ShrinkRange},
+			// Native commit fan-out preserves successful segment/address-space
+			// prefixes when a later table fails. Roll every table back while the
+			// task, mapping and native caller's ownership scope are still intact.
+			{"__ZN15IGMemoryManager26commitIntoPageTableForTaskEP11IGAccelTaskP16IGAccelMemoryMap",
+			 vfCommitPageTablesForTask, this->oVfCommitPageTablesForTask},
 
 			// Tahoe's aperture-resource path allocates a legacy hardware fence whose
 			// constructor and destructor both write the PF-owned 0x100000 fence
@@ -3767,6 +3779,33 @@ void Gen11::vfPpgtt64ShrinkRange(void *that,
 	vfRequireCompletedPpgttUpdate();
 	FunctionCast(vfPpgtt64ShrinkRange,
 	             callback->oVfPpgtt64ShrinkRange)(that, range);
+}
+
+bool Gen11::vfCommitPageTablesForTask(void *that, void *task, void *mapping)
+{
+	PANIC_COND(!that || !task || !mapping ||
+	           !callback->oVfCommitPageTablesForTask ||
+	           !callback->vfReleasePageTablesForTask,
+		"ngreen", "Missing VF page-table commit/rollback boundary");
+	const bool committed = FunctionCast(
+		vfCommitPageTablesForTask,
+		callback->oVfCommitPageTablesForTask)(that, task, mapping);
+	if (committed)
+		return true;
+
+	// The native manager ANDs every table result without rolling back an
+	// earlier successful table or segment. Its false result prevents the
+	// inherited mapping from publishing installed-PTE ownership, so returning
+	// directly would let later backing cleanup skip release_pte. Use the paired
+	// native release fan-out before leaving this still-owned call frame. The
+	// routed GGTT and PPGTT unmap boundaries synchronously retire the applicable
+	// translation target before any native descriptor/backing release.
+	const bool rolledBack = FunctionCast(
+		vfCommitPageTablesForTask,
+		callback->vfReleasePageTablesForTask)(that, task, mapping);
+	PANIC_COND(!rolledBack, "ngreen",
+		"VF partial page-table commit could not be rolled back safely");
+	return false;
 }
 
 static bool vfPpgttTaskHasNoDirectContexts(void *task)

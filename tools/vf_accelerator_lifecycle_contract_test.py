@@ -1126,6 +1126,7 @@ def macho_inventory(path):
     for slot, method in ((0x118, GLOBAL_MAP_RANGE), (0x120, GLOBAL_MAP_ROTATED), (0x138, GLOBAL_MAP_DUMMY)):
         assert struct.unpack_from("<Q", image, global_table + 16 + slot)[0] == value(method), f"{path}: changed global commit-range mapping virtual"
     assert direct_branches("__ZN15IGMemoryManager26commitIntoPageTableForTaskEP11IGAccelTaskP16IGAccelMemoryMap", "__ZN19IGHardwarePageTable11commitRangeERK14IGAddressRangePK16IGAccelMemoryMap") == [0xf639], f"{path}: changed manager-to-page-table commit edge"
+    assert image[0xf63e:0xf64a] == bytes.fromhex("41 20 c4 48 8b 5b 08 48 85 db 75 e6"), f"{path}: changed non-short-circuit task page-table commit loop"
     assert image[0x143ce:0x143d2] == bytes.fromhex("84 c0 74 4b"), f"{path}: changed segment mapping failure branch"
     assert image[0x14487:0x14491] == bytes.fromhex("ff 90 38 01 00 00 49 8b 7f 10"), f"{path}: changed ignored suffix-dummy result edge"
     assert struct.unpack_from("<Q", image, map_table + 16 + 0x170)[0] == value("__ZN16IGAccelMemoryMap22commitIntoGPUPageTableEv"), f"{path}: changed mapping commit virtual"
@@ -2845,11 +2846,81 @@ def ppgtt_final_free_mutations(path):
     print("PASS: six final PPGTT owner/route/order mutations rejected (source contract, not runtime proof)")
 
 
+def page_table_commit_rollback_contract(source, path):
+    wrapper = function_body(
+        source, "bool Gen11::vfCommitPageTablesForTask(void *that,")
+    compact = "".join(wrapper.split())
+    native = ("callback->oVfCommitPageTablesForTask)"
+              "(that,task,mapping);")
+    success = "if(committed)returntrue;"
+    rollback = ("callback->vfReleasePageTablesForTask)"
+                "(that,task,mapping);")
+    fail_stop = "PANIC_COND(!rolledBack"
+    final_false = "returnfalse;"
+    for fragment in (native, success, rollback, fail_stop, final_false):
+        if fragment not in compact:
+            raise AssertionError(
+                f"{path}: incomplete failed page-table commit rollback")
+    if not compact.index(native) < compact.index(success) < \
+            compact.index(rollback) < compact.index(fail_stop) < \
+            compact.rindex(final_false):
+        raise AssertionError(
+            f"{path}: failed page-table commit escapes before full rollback")
+
+    normalized = "".join(source.split())
+    solve = ('{"__ZN15IGMemoryManager27releaseFromPageTableForTaskEP11IGAccelTaskP16IGAccelMemoryMap",'
+             'this->vfReleasePageTablesForTask}')
+    route = ('{"__ZN15IGMemoryManager26commitIntoPageTableForTaskEP11IGAccelTaskP16IGAccelMemoryMap",'
+             'vfCommitPageTablesForTask,this->oVfCommitPageTablesForTask}')
+    if solve not in normalized:
+        raise AssertionError(f"{path}: missing native all-table rollback boundary")
+    if route not in normalized:
+        raise AssertionError(f"{path}: missing task page-table commit transaction route")
+
+
+def page_table_commit_rollback_mutations(path):
+    source = pathlib.Path(path).read_text()
+    wrapper = function_body(
+        source, "bool Gen11::vfCommitPageTablesForTask(void *that,")
+    route = ('\t\t\t{"__ZN15IGMemoryManager26commitIntoPageTableForTaskEP11IGAccelTaskP16IGAccelMemoryMap",\n'
+             '\t\t\t vfCommitPageTablesForTask, this->oVfCommitPageTablesForTask},\n')
+
+    def replace_once(body, before, after):
+        if body.count(before) != 1:
+            raise AssertionError(f"ambiguous commit rollback mutation: {before}")
+        return body.replace(before, after, 1)
+
+    mutations = (
+        (wrapper, replace_once(wrapper, "if (committed)", "if (!committed)")),
+        (wrapper, replace_once(
+            wrapper, "callback->vfReleasePageTablesForTask)(that, task, mapping);",
+            "callback->oVfCommitPageTablesForTask)(that, task, mapping);")),
+        (wrapper, replace_once(
+            wrapper, "PANIC_COND(!rolledBack", "PANIC_COND(false && !rolledBack")),
+        (wrapper, replace_once(wrapper, "return false;", "return true;")),
+        (source, replace_once(source, route, "")),
+        (source, replace_once(
+            source,
+            "__ZN15IGMemoryManager27releaseFromPageTableForTaskEP11IGAccelTaskP16IGAccelMemoryMap",
+            "__ZN15IGMemoryManager27missingRollbackBoundaryEP11IGAccelTaskP16IGAccelMemoryMap")),
+    )
+    for body, mutated_body in mutations:
+        changed = mutated_body if body == source else source.replace(
+            body, mutated_body, 1)
+        try:
+            page_table_commit_rollback_contract(changed, path)
+        except (AssertionError, ValueError):
+            continue
+        raise AssertionError(f"{path}: escaped page-table rollback mutation")
+    print("PASS: six failed page-table commit rollback mutations rejected (source contract, not runtime proof)")
+
+
 def source_contract(path):
     source = pathlib.Path(path).read_text()
     ring_backing_submit_contract(source, path)
     ppgtt_retirement_contract(source, path)
     ppgtt_final_free_contract(source, path)
+    page_table_commit_rollback_contract(source, path)
     for signature in ("bool Gen11::vfAttachContextDesc(",
                       "void Gen11::vfDetachContextDesc(",
                       "bool Gen11::vfSubmitWorkItem("):
@@ -3529,6 +3600,7 @@ def main():
     g2h_completion_lock_mutations(sys.argv[1])
     ppgtt_retirement_mutations(sys.argv[1])
     ppgtt_final_free_mutations(sys.argv[1])
+    page_table_commit_rollback_mutations(sys.argv[1])
     ggtt_postwrite_mutations(sys.argv[1])
     macho_inventory(sys.argv[2])
     macho_inventory(sys.argv[3])
