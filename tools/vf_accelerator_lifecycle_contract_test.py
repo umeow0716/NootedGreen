@@ -4184,6 +4184,7 @@ def page_table_common_serialization_model():
 def source_contract(path):
     source = pathlib.Path(path).read_text()
     legacy_gpu_producer_containment_contract(source, path)
+    internal_optional_producer_isolation_contract(source, path)
     ring_backing_submit_contract(source, path)
     ring_space_contract(source, path)
     ppgtt_retirement_contract(source, path)
@@ -4755,6 +4756,85 @@ def source_contract(path):
     print(f"PASS: VF wrapper preserves native bridge/IOAccel lifecycle in {path}")
 
 
+def internal_optional_producer_isolation_contract(source, path="<source>"):
+    process = function_body(
+        source,
+        "bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t address, size_t size)")
+    route_start = process.rfind(
+        "KernelPatcher::RouteRequest requests[]", 0,
+        process.index(PAVP_CALLBACK))
+    if route_start < 0:
+        raise AssertionError(f"{path}: missing VF accelerator route table")
+    route_end = process.index(
+        '"Failed to route VF accelerator symbols"', route_start)
+    routes = "".join(process[route_start:route_end].split())
+    for symbol, wrapper in (
+            (PAVP_CALLBACK, "vfRejectPavpCommandCallback"),
+            (TRACE_RECOGNIZE_FLIP, "vfIgnoreTraceRecognizeFlip")):
+        if '{"' + symbol + '",' + wrapper + '},' not in routes:
+            raise AssertionError(
+                f"{path}: missing VF optional-producer route {symbol} -> {wrapper}")
+
+    pavp = function_body(
+        source, "IOReturn Gen11::vfRejectPavpCommandCallback(void *that,")
+    for token in (
+            "(void)that;", "(void)command;", "(void)session;",
+            "(void)data;", "(void)recovery;", "return kIOReturnUnsupported;"):
+        if token not in pavp:
+            raise AssertionError(
+                f"{path}: VF PAVP callback rejection is incomplete: {token}")
+    trace = function_body(
+        source, "void Gen11::vfIgnoreTraceRecognizeFlip(void *that)")
+    if "(void)that;" not in trace:
+        raise AssertionError(f"{path}: VF recognizeFlip replacement is incomplete")
+    for body, label in ((pavp, "PAVP callback"), (trace, "recognizeFlip")):
+        for forbidden in (
+                "FunctionCast", "callback->", "getMember", "SafeForceWake",
+                "vfSend", "submit", "MMIO", "0x1240"):
+            if forbidden in body:
+                raise AssertionError(
+                    f"{path}: VF {label} replacement re-enters hardware through {forbidden}")
+
+
+def internal_optional_producer_isolation_mutations(path):
+    source = pathlib.Path(path).read_text()
+
+    def mutate_function(signature, before, after):
+        body = function_body(source, signature)
+        if body.count(before) != 1:
+            raise AssertionError(
+                f"ambiguous optional-producer mutation in {signature}: {before}")
+        signature_start = source.index(signature)
+        body_start = source.index(body, signature_start)
+        return (source[:body_start] + body.replace(before, after, 1) +
+                source[body_start + len(body):])
+
+    mutations = (
+        source.replace(
+            '{"' + PAVP_CALLBACK + '",\n\t\t\t vfRejectPavpCommandCallback},',
+            '{"' + PAVP_CALLBACK + '",\n\t\t\t vfIgnoreTraceRecognizeFlip},', 1),
+        source.replace(
+            '{"' + TRACE_RECOGNIZE_FLIP + '",\n\t\t\t vfIgnoreTraceRecognizeFlip},',
+            '{"' + TRACE_RECOGNIZE_FLIP + '",\n\t\t\t vfRejectPavpCommandCallback},', 1),
+        mutate_function(
+            "IOReturn Gen11::vfRejectPavpCommandCallback(void *that,",
+            "return kIOReturnUnsupported;", "return kIOReturnSuccess;"),
+        mutate_function(
+            "void Gen11::vfIgnoreTraceRecognizeFlip(void *that)",
+            "(void)that;", "getMember<uint32_t>(that, 0x1240) = 0;"),
+    )
+    if mutations[0] == source or mutations[1] == source:
+        raise AssertionError("missing optional-producer route mutation target")
+    for changed in mutations:
+        try:
+            internal_optional_producer_isolation_contract(changed)
+        except AssertionError:
+            continue
+        raise AssertionError(
+            f"{path}: escaped VF optional-producer containment mutation")
+    print("PASS: four VF PAVP/trace producer-isolation mutations rejected")
+
+
 def ggtt_postwrite_contract(source, path="<source>"):
     ggtt_barrier = function_body(source, "static void vfRequireCompletedGgttUpdate()")
     if 'PANIC_COND(!vfCompleteGgttUpdate(), "ngreen",' not in ggtt_barrier:
@@ -4867,6 +4947,7 @@ def main():
     event_collection_admission_model()
     source_contract(sys.argv[1])
     legacy_gpu_producer_containment_mutations(sys.argv[1])
+    internal_optional_producer_isolation_mutations(sys.argv[1])
     ring_backing_submit_mutations(sys.argv[1])
     ring_space_mutations(sys.argv[1])
     g2h_event_transaction_mutations(sys.argv[1])

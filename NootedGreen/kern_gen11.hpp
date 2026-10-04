@@ -150,6 +150,10 @@ private:
 	static void vfTelemetryUsageFrameCalc(void *that, void *accelerator,
 	                                      uint32_t frame);
 	static void vfDisableDebugSysctl(void *that);
+	static IOReturn vfRejectPavpCommandCallback(void *that, uint32_t command,
+	                                            uint32_t session,
+	                                            uint32_t *data, bool recovery);
+	static void vfIgnoreTraceRecognizeFlip(void *that);
 	static void *vfRejectPhysicalFence(void *that,
 	                                   const NGIGAddressRange &range,
 	                                   uint64_t pitch, uint32_t tileMode);

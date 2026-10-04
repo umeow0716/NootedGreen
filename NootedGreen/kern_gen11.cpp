@@ -2770,6 +2770,20 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			// retain the base initializer's false capability state without MMIO.
 			{"__ZN21IntelTGLMemoryManager11detectEDRAMEv",
 			 vfDisableEdramProbe},
+
+			// The independent PAVP callback reaches physical force-wake and the
+			// PF-owned 0x1082c0/0x320fc register pair before protected-media ring
+			// submission. A VF cannot implement that protocol, and fabricated success
+			// would falsely acknowledge DRM state. Fail at the callback root while a
+			// physical function retains Apple's complete native implementation.
+			{"__ZN16IntelAccelerator19PAVPCommandCallbackE22PAVPSessionCommandID_tjPjb",
+			 vfRejectPavpCommandCallback},
+			// Telemetry is intentionally unavailable on a VF. recognizeFlip has no
+			// in-image caller but is exported and tail-calls IGTelemetryKMD::sample,
+			// which can submit a main-ring command. Remove that conservative producer
+			// root rather than admitting a trace operation which cannot produce data.
+			{"__ZN25IGAccelTraceStreamManager13recognizeFlipEv",
+			 vfIgnoreTraceRecognizeFlip},
 			
 			// A VF owns neither engine power/reset nor legacy execlist rings. Keep
 			// Apple's lifecycle calls away from PF-owned registers; final stop still
@@ -4917,6 +4931,23 @@ void Gen11::vfTelemetryUsageFrameCalc(void *that, void *accelerator,
 }
 
 void Gen11::vfDisableDebugSysctl(void *that)
+{
+	(void)that;
+}
+
+IOReturn Gen11::vfRejectPavpCommandCallback(void *that, uint32_t command,
+	                                         uint32_t session, uint32_t *data,
+	                                         bool recovery)
+{
+	(void)that;
+	(void)command;
+	(void)session;
+	(void)data;
+	(void)recovery;
+	return kIOReturnUnsupported;
+}
+
+void Gen11::vfIgnoreTraceRecognizeFlip(void *that)
 {
 	(void)that;
 }
