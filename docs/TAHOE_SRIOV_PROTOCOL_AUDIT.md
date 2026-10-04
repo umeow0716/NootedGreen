@@ -6955,6 +6955,32 @@ No executable patch or runtime mutation.
 
 ### Update fanout must participate in the same owner transaction
 
+Shared construction outer-mutex proof (2026-10-04): complete inherited
+SharedUserClient2::start 0x14b900c6/0xea reviewed/pinned. It acquires accelerator
++0x88 mutex at 0x14b90129, adjusts the +0x90 lock-entry counter, calls
+lock_busy/notification and invokes client object slot +0x990 at 0x14b9015c.
+It records returned AL in +0x108, balances notification/busy state, unlocks at
+0x14b90192 and returns the saved success. The concrete Intel client inherits
+this start through external relocation 0xdb7e0. Its +0x990 override is native
+sharedStart 0x783f4/0x40, now reviewed/pinned; that calls base header +0x9a0
+(object +0x990) using external vtable pointer 0xc81c8, then initializes its
+Intel-specific channel fields only after base success.
+
+Complete base sharedStart 0x14b9275a/0x62 calls accelerator +0x8b0 to obtain
+Shared, stores it in client +0x100 and publishes the client list link on
+success. Complete createShared 0x14ba3ab8/0x50 invokes newShared +0xa08, then
+Shared init +0x118, releasing the object and returning null on failed init.
+Intel accelerator inherits both createShared and newShared, verified by
+relocations 0xd1920/0xd1a78; base Shared init slot is also paired. This connects
+the real Intel entry to the prior task-construction graph under one outer
+mutex, including factory failure cleanup. It explains how the selected start
+entry can exclude observers that obey the same mutex during early raw task/
+Shared publication. It does not establish that every observer/factory entry
+uses that mutex, nor provide retained task/table/pool leases for an async
+collector. Do not repair this selected construction ordering speculatively.
+Next: remaining list observers and lifetime-admission boundaries before
+implementing pre-zero PPGTT retirement. No runtime change or VM start.
+
 Task factory ownership follow-up (2026-10-04): complete native withOptions
 0x7844/0x48 reviewed/pinned: metaclass allocation, initWithOptions at 0x7870,
 failed-init virtual release +0x28 and null return. Complete kernel factory

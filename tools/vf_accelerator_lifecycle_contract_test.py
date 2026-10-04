@@ -9,6 +9,7 @@ import sys
 # Complete reviewed native bodies. This fixes the concrete Intel override
 # graph, not inherited timer APIs, dynamic callbacks or runtime completion.
 STAMP_IRQ_NATIVE = {
+    "__ZN23IGAccelSharedUserClient11sharedStartEv": (0x40, "3ad72464337cc4e9fa4ac10461f44c34256cde6d1635212fc5cc34fe0fe510d1"),
     "__ZN11IGAccelTask11withOptionsEP16IntelAccelerator": (0x48, "294990cf7ca14e27020ecc569064444b73504a32e841c0856acbdb568081f207"),
     "__ZN16IntelAccelerator19createKernelGPUTaskEv": (0xa, "30021915389fd196a6e879b21a175f135be03e009e385a325f9fc33595937ba6"),
     "__ZN16IntelAccelerator17createUserGPUTaskEv": (0x3c, "3ff9c8b607763de74cd8eccb7125f9a4abb7261a59fa48f2ef78dafeabbef377"),
@@ -599,6 +600,10 @@ def macho_inventory(path):
     }
     observed_stamp_irq_imports = {address: [] for address in stamp_irq_imports}
     event_stop_imports = {
+        0xdb7e0: "__ZN24IOAccelSharedUserClient25startEP9IOService",
+        0xc81c8: "__ZTV24IOAccelSharedUserClient2",
+        0xd1920: "__ZN22IOGraphicsAccelerator212createSharedEP4task",
+        0xd1a78: "__ZN22IOGraphicsAccelerator29newSharedEv",
         0xc8118: "__ZTV11IOAccelTask",
         0xd9540: "__ZN16IOAccelResource213sharedReleaseEP14IOAccelShared2",
         0xd9570: "__ZN16IOAccelResource212addToChannelEP15IOAccelChannel2j",
@@ -842,6 +847,7 @@ def macho_inventory(path):
         assert direct_branches(method, target) == [call], f"{path}: changed native per-task page-table factory/synchronization edge"
     global_table = value("__ZTV25IGHardwareGlobalPageTable")
     accelerator_table = value("__ZTV16IntelAccelerator")
+    assert struct.unpack_from("<Q", image, value("__ZTV23IGAccelSharedUserClient") + 16 + 0x990)[0] == value("__ZN23IGAccelSharedUserClient11sharedStartEv"), f"{path}: changed concrete Shared-start virtual"
     for slot, name in ((0x998, "__ZN16IntelAccelerator17createUserGPUTaskEv"),
                        (0x9d0, "__ZN16IntelAccelerator19createKernelGPUTaskEv")):
         assert struct.unpack_from("<Q", image, accelerator_table + 16 + slot)[0] == value(name), f"{path}: changed concrete task factory virtual"

@@ -7,6 +7,13 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 Shared construction outer mutex: complete inherited user-client
+start (0xea), sharedStart (0x62), createShared (0x50) and native Shared-start
+override (0x40) reviewed/pinned. Effective Intel start inheritance, override
+dispatch and base-header call pairing checked. Accelerator +0x88 spans the
+selected Shared/task factory and failed-init cleanup chain. Other factory
+entries/list observers and all owner leases remain outside this proof.
+
 2026-10-04 task factory ownership: complete native withOptions (0x48), kernel
 factory (0xa), user factory (0x3c) and inherited Shared init (0x208) reviewed/
 pinned. User factory either retains/reuses kernel task or constructs a new

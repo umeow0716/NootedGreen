@@ -35,6 +35,9 @@ EVENT_DISABLE_STAMP_LOCKED = "__ZN20IOAccelEventMachine223disable_stamp_interrup
 EVENT_ENABLE_STAMP = "__ZN20IOAccelEventMachine220enableStampInterruptEi"
 EVENT_DISABLE_STAMP = "__ZN20IOAccelEventMachine221disableStampInterruptEi"
 EVENT_OWNER_BODIES = {
+    "__ZN24IOAccelSharedUserClient25startEP9IOService": (0xea, "0daca245b77c7a9be1d589e35170d3b9c99952365780f0f98d66bcd548b95cb8"),
+    "__ZN24IOAccelSharedUserClient211sharedStartEv": (0x62, "31735fd69d8d3860bbc5cc1cbef7e669bdfbfaa97213af6d14b237fd434208e7"),
+    "__ZN22IOGraphicsAccelerator212createSharedEP4task": (0x50, "7256dbd56b27e4f81d558ece49ba7614a28ad69024c57f3b07fc602615be87b8"),
     "__ZN14IOAccelShared24initEP22IOGraphicsAccelerator2P4task": (0x208, "6c3bf31fd74c2c0066ef53a4597b640a967bb96a8b2a974a1a88a81fe217b20a"),
     "__ZN11IOAccelTask4initEP22IOGraphicsAccelerator2jPP16IORangeAllocator": (0x138, "f00989c4635c6bfcba66ac1d775dfb16259703e55064355a7686bb3e9db9e186"),
     "__ZN15IOAccelTaskList7addTaskEP11IOAccelTask": (0x14, "dd5d756962a0d9d7bd2c5168492d6202cd17167529578338f639cf9abea4cdc4"),
@@ -1100,6 +1103,16 @@ def check(path, boot_path=None):
         assert encoded[0] == 0xe8 and call + 5 + struct.unpack_from("<i", encoded, 1)[0] == address_of(method), "changed Shared teardown cleanup edge"
     assert read(0x14b8e91c, 14) == bytes.fromhex("ff 50 28 48 c7 83 88 00 00 00 00 00 00 00"), "changed Shared task release/identity clear ordering"
     raw_shared_release = struct.unpack("<Q", read(address_of(RESOURCE_VTABLE) + 16 + 0x160, 8))[0]
+    for table, slot, method in (("__ZTV24IOAccelSharedUserClient2", 0x990, "__ZN24IOAccelSharedUserClient211sharedStartEv"),
+                                ("__ZTV22IOGraphicsAccelerator2", 0x8b0, "__ZN22IOGraphicsAccelerator212createSharedEP4task"),
+                                (SHARED_VTABLE, 0x118, "__ZN14IOAccelShared24initEP22IOGraphicsAccelerator2P4task")):
+        raw = struct.unpack("<Q", read(address_of(table) + 16 + slot, 8))[0]
+        assert raw >> 63 == 0 and (raw >> 30) & 3 == 1 and raw & 0x3fffffff == address_of(method), "changed Shared construction declared virtual"
+    for call, target in ((0x14b90129, 0x10012), (0x14b90192, 0x10018)):
+        edge = read(call, 5)
+        assert edge[0] == 0xe8 and call + 5 + struct.unpack_from("<i", edge, 1)[0] == target, "changed Shared start outer mutex edge"
+    assert read(0x14b90122, 7) == bytes.fromhex("49 8b be 88 00 00 00"), "changed Shared construction mutex identity"
+    assert read(0x14b9015c, 6) == bytes.fromhex("ff 90 90 09 00 00"), "changed sharedStart dispatch inside outer mutex"
     base_task_init = struct.unpack("<Q", read(address_of("__ZTV11IOAccelTask") + 0x128, 8))[0]
     assert base_task_init >> 63 == 0 and (base_task_init >> 30) & 3 == 1 and base_task_init & 0x3fffffff == address_of("__ZN11IOAccelTask4initEP22IOGraphicsAccelerator2jPP16IORangeAllocator"), "changed base task init header-relative dispatch"
     edge = read(0x14b9df26, 5)
