@@ -6961,6 +6961,27 @@ No executable patch or runtime mutation.
 
 ###### Complete waitForSpace reservation and failure ordering
 
+Retirement owner follow-up rechecks the already-pinned descriptor retain and
+manager releasePagePool bodies. Descriptor retain only tail-calls OSAddAtomic64
+on descriptor +0x28 with +1; it does not retain the owning IGPagePool OSObject.
+The reviewed grow loop stores raw pool/block owners in each descriptor, now
+explicitly anchored at b35e. Manager releasePagePool directly dispatches pool
+release +0x28 at f3da, clears array slots and frees the owner array; it contains
+no local pending-retirement drain. Existing external owner references may
+prevent final destruction, but a descriptor counter alone is not one.
+
+A collector must acquire both a descriptor/page reference before ordinary
+final return and an explicit pool-owner reference while that owner is still
+valid, plus any required task/table transaction references. Release order is
+page descriptor first, pool owner last, after acknowledged retirement. Pool
+lookup cannot rely on manager's array after teardown clears/frees it. A failed
+transaction must retain both layers until proven safe containment/recovery;
+dropping the pool reference while retaining only a descriptor would leave a
+raw owner pointer without a lifetime guarantee. This requirement changes the
+collector ownership design, not a claim of observed UAF or implemented hook.
+No production/runtime change. Next: prove the acquisition serialization and
+per-transaction ownership across task/table/pool final teardown.
+
 Complete 32-bit PPGTT free 11dc4/80 is now reviewed/pinned with its concrete
 free vtable slot, leaf/parent descriptor release edges and IOFree import.
 It walks four inline directory records; for each present parent descriptor,

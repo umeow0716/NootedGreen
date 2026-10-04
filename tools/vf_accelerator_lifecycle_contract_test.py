@@ -635,6 +635,8 @@ def macho_inventory(path):
     assert image[0x14518:0x1451e] == bytes.fromhex("ff 90 30 01 00 00"), f"{path}: changed releaseRange unmap virtual"
     assert direct_branches("__ZN19IGHardwarePageTable12releaseRangeERK14IGAddressRange", "__ZN16IntelAccelerator27flushHardwareAfterGttUpdateEv") == [0x14522], f"{path}: changed post-unmap deferred-flush edge"
     assert image[0x14573:0x14575] == bytes.fromhex("b0 01"), f"{path}: changed unconditional releaseRange success"
+    assert image[0xb35e:0xb366] == bytes.fromhex("4c 89 73 d8 4c 89 6b e0"), f"{path}: changed raw descriptor pool/block owner stores"
+    assert image[0xf3da:0xf3dd] == bytes.fromhex("ff 51 28"), f"{path}: changed manager pool owner release virtual"
     assert struct.unpack_from("<Q", image, value("__ZTV31IGHardwarePerProcessPageTable32") + 16 + 0x90)[0] == value("__ZN31IGHardwarePerProcessPageTable324freeEv"), f"{path}: changed 32-bit page-table free dispatch"
     assert direct_branches("__ZN31IGHardwarePerProcessPageTable324freeEv", "__ZN10IGPagePool14PageDescriptor7releaseEv") == [0x11df9, 0x11e1e], f"{path}: changed 32-bit leaf/parent descriptor destruction"
     assert struct.unpack_from("<Q", image, value("__ZTV31IGHardwarePerProcessPageTable64") + 16 + 0x90)[0] == value("__ZN31IGHardwarePerProcessPageTable644freeEv"), f"{path}: changed 64-bit page-table free dispatch"
