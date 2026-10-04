@@ -7,6 +7,13 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 collector ownership: five complete bodies reviewed/pinned (Task
+last release, orphan-task cleanup/timer kick, garbage/GART collectors). Both
+collector paths demonstrably hold accelerator +0x88 IOLock during cleanup;
+Task release alone has no local lock and can defer whole tasks by aggregate
+event status. Counter/notification calls are not the mutex. Other caller
+exclusion and GuC completion-consumer lock dependencies remain unfinished.
+
 2026-10-04 task mapping drains: nine complete bodies reviewed/pinned across
 ordinary orphan cleanup, prune, freeAllGPU, mapping finish/test wrappers,
 reverse iterator and Fast2 event tests. Declared +0x190 is event test, not a

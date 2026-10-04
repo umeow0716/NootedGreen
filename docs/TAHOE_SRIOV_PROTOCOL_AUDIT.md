@@ -6953,6 +6953,40 @@ No executable patch or runtime mutation.
 
 ## Mapping last-release admission and deferred raw-list transfer
 
+Caller follow-up: complete Task::release const (14b9e082/1a2), accelerator
+free_orphaned_gputasks (14ba57d6/8c), kickOrphanResourceTimer (14ba579a/3c),
+garbage_collector (14ba1280/ce) and gart_collector (14ba1376/1d4) reviewed.
+Both collectors acquire the accelerator +0x88 IOLock before orphan-task
+cleanup and release it afterward; the paired Boot import identities already
+resolve these stubs to IOLockLock/Unlock. Busy counters/virtual notification
+calls are separate from this mutex, not substitutes for it. This establishes
+outer exclusion on these two fixed paths only, not every release caller.
+
+Last Task release aggregates deferred mapping events into task +0x20 using
+event-machine virtual +0x1b8, then tests the aggregate. A false test (or feature
+c78 bit 3) marks task flag 1, moves it between accelerator lists +0xc48/c58,
+kicks the orphan timer, and returns without base decrement. Otherwise it
+cleans orphan mappings and visits active mappings; zero prepare count plus
+installed flag 4 leads to finishEvent, release_pte and virtual +0x160 before
+base counted release. free_orphaned_gputasks tests each task aggregate and,
+on true, cleans its deferred mappings and invokes task virtual release. The
+newly established event termination bypass therefore reaches task cleanup as
+well; task event success is still not proof of GPU/TLB retirement.
+
+Timer kick sets pending +0xe0 before invoking timer +0xf8 virtual +0x1d0 with
+100, unless already pending or feature c78 bit 4 prohibits it. This schedules
+work, not a synchronous drain. Neither Task release nor orphan-task cleanup
+itself acquires a local mutex; collector ownership does not certify unrelated
+mapping factories, Shared free, sleep/wake or indirect release paths.
+
+Exploratory linear decoded direct-edge scan also found prune callers in the
+mapping factory, Shared free and system_did_wake, and free-orphan callers in
+Task release, orphan-task cleanup and systemWillSleep. This is a locator, not
+an exhaustive indirect-call inventory. Next establish those effective caller
+lock ranges and the GuC completion-consumer dependencies before holding
++0x88 across any new acknowledgement wait. Five new whole-body contracts,
+eight direct edges and two mutex-field anchors pass offline. No runtime hook.
+
 Follow-up: reviewed/pinned complete Task free_orphaned_mappings (7e),
 prune_orphaned_mappings (82), freeAllGPUMappings (ce), mapping finish/test
 wrappers (26 each), reverse iterator construction (e) and traversal (16),

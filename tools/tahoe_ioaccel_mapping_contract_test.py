@@ -35,6 +35,11 @@ EVENT_DISABLE_STAMP_LOCKED = "__ZN20IOAccelEventMachine223disable_stamp_interrup
 EVENT_ENABLE_STAMP = "__ZN20IOAccelEventMachine220enableStampInterruptEi"
 EVENT_DISABLE_STAMP = "__ZN20IOAccelEventMachine221disableStampInterruptEi"
 EVENT_OWNER_BODIES = {
+    "__ZNK11IOAccelTask7releaseEv": (0x1a2, "a3e402420b875e449bce460ff8e7efc7756406af7c6ad2cebf12f18ccd37cdad"),
+    "__ZN22IOGraphicsAccelerator222free_orphaned_gputasksEv": (0x8c, "94abdc9982851a426b754470c26e1bb1040000a6ddda2262262d809c614f44fe"),
+    "__ZN22IOGraphicsAccelerator223kickOrphanResourceTimerEv": (0x3c, "a82728319f96b77e8783a066eb6db8b23b9bfa77d8c1a2711fec61bb459973ef"),
+    "__ZN22IOGraphicsAccelerator217garbage_collectorEP22IOInterruptEventSourcei": (0xce, "61f516a20d099fa5cec14c3e5a2d3e94068319aab6ba6e74511e2faa25f7fbd5"),
+    "__ZN22IOGraphicsAccelerator214gart_collectorEP22IOInterruptEventSourcei": (0x1d4, "c8340782d1db7b9496bae81aadee5664d2697480265cb02c1e6e32349601b047"),
     "__ZN11IOAccelTask22free_orphaned_mappingsEv": (0x7e, "97d743c58e34dfba9f18849fa65ffe915d28af60f8b2128c8a94ce5a771bda5b"),
     "__ZN11IOAccelTask23prune_orphaned_mappingsEv": (0x82, "27fb718099f7605e54763ca2c0f847341ee269eac72bd41ebf21a93d73d812de"),
     "__ZN11IOAccelTask18freeAllGPUMappingsEv": (0xce, "73823442676f252f9be50c157c8d4a87e8b012e255d9c33a9e1d647f59e8fa66"),
@@ -1031,6 +1036,18 @@ def check(path, boot_path=None):
         assert encoded[0] == 0xe8 and call + 5 + struct.unpack_from("<i", encoded, 1)[0] == address_of(method), "changed task mapping cleanup edge"
     assert read(0x14b959c0, 2) == bytes.fromhex("74 0f"), "changed event test conditional cleanup"
     assert read(0x14b95465, 9) == bytes.fromhex("83 b9 c8 0d 00 00 00 74 0d"), "changed termination bypass in mapping event test"
+    for call, target in ((0x14ba12a0, 0x10012),
+                         (0x14ba138b, 0x10012),
+                         (0x14ba12da, address_of("__ZN22IOGraphicsAccelerator222free_orphaned_gputasksEv")),
+                         (0x14ba1414, address_of("__ZN22IOGraphicsAccelerator222free_orphaned_gputasksEv")),
+                         (0x14ba150a, 0x10018),
+                         (0x14ba5839, address_of("__ZN11IOAccelTask22free_orphaned_mappingsEv")),
+                         (0x14b9e143, address_of("__ZN11IOAccelTask22free_orphaned_mappingsEv")),
+                         (0x14b9e1b1, address_of("__ZN16IOAccelMemoryMap11release_pteEv"))):
+        encoded = read(call, 5)
+        assert encoded[0] == 0xe8 and call + 5 + struct.unpack_from("<i", encoded, 1)[0] == target, "changed serialized collector/task cleanup edge"
+    assert read(0x14ba1299, 7) == bytes.fromhex("48 8b bb 88 00 00 00"), "changed garbage collector mutex identity"
+    assert read(0x14ba1384, 7) == bytes.fromhex("48 8b bf 88 00 00 00"), "changed GART collector mutex identity"
     for call, method in ((0x14bb73da, "__ZN16IOAccelMemoryMap11release_pteEv"),
                          (0x14bb7421, "__ZN20IOAccelMemoryMapList13removeMappingEP16IOAccelMemoryMap"),
                          (0x14bb7435, "__ZN20IOAccelMemoryMapList10addMappingEP16IOAccelMemoryMap"),
