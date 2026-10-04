@@ -6955,6 +6955,24 @@ No executable patch or runtime mutation.
 
 ### Update fanout must participate in the same owner transaction
 
+#### Current mapping completion and linked-list preservation fixtures
+
+KC pool-free instruction test expanded to24 cases: zero/one/two slots,
+record absent/present, current=-1 or each populated slot, and unlinked or
+linked head with a surviving next node. Actual native complete dispatch
+at14b6b028 reaches the selected current mapping before per-slot event/
+release/unmap cleanup. Linked removal preserves the next head and decrements
+count2 to1; unlinked removal logs without changing an empty list. Pool next
+pointer, all slots, channel/record and final cursor/index/stack checks pass.
+Completion itself is still a mocked virtual callback, not hardware progress.
+
+Fixtures are deliberately constructed states, not outputs from executing
+native init/growth. No claim of actual failed-init reachability, retain
+balance, event acknowledgement or DMA retirement follows. Next generate
+failure states by executing init/growth with allocation/mapping failure
+injection, then feed those states to this free path; production routing
+must wait for that combined test rather than relying on state enumeration.
+
 #### Exact KC pool free executes on six partial-state fixtures
 
 `tools/vf_command_pool_free_test.py` executes hash-pinned System KC pool

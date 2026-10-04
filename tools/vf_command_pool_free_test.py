@@ -14,7 +14,8 @@ assert hashlib.sha256(image[0x14b82226:0x14b822c0]).hexdigest() == \
     'fcc000816e19074bcb33ab0425fb6bca1615d6b623f8aa42f2d17759e6311c81'
 
 
-def run(slots, record):
+def run(slots, record, current=-1, linked=False):
+    assert current == -1 or 0 <= current < slots
     uc = Uc(UC_ARCH_X86, UC_MODE_64)
     uc.mem_map(0x14b60000, 0xb0000)
     uc.mem_write(0x14b60000, image[0x14b60000:0x14c10000])
@@ -25,7 +26,11 @@ def run(slots, record):
     pool, accel, channel, vt = 0x410000, 0x420000, 0x430000, 0x440000
     put(pool + 0x10, accel)
     put(pool + 0x20, channel)
-    uc.mem_write(pool + 0x1842, b'\xff\xff')
+    if linked:
+        put(accel + 0xc68, pool)
+        uc.mem_write(accel + 0xc70, struct.pack('<I', 2))
+        put(pool + 0x18, 0x4f2000)
+    uc.mem_write(pool + 0x1842, struct.pack('<h', current))
     put(pool + 0x1860, 0x480000 if record else 0)
     put(accel, vt)
     put(vt + 0x8e0, 0x600020)
@@ -39,6 +44,7 @@ def run(slots, record):
     put(cell, 0x460000)
     put(0x460000 + 0xa0, 0x600040)
     put(0x470000 + 0x28, 0x600050)
+    put(0x470000 + 0x140, 0x600070)
     memories = []
     for i in range(slots):
         memory, mapping = 0x490000 + i * 0x1000, 0x4c0000 + i * 0x1000
@@ -57,8 +63,10 @@ def run(slots, record):
         labels = {0x1030c: 'unlinked-log', 0x14bb7896: 'finish-event',
                   0x14bba678: 'remove-cpu', 0x600020: 'record-release',
                   0x600030: 'channel-release', 0x600040: 'base-free',
-                  0x600050: 'object-release'}
+                  0x600050: 'object-release', 0x600070: 'complete-current'}
         if address in labels:
+            if address == 0x600070:
+                assert uc.reg_read(UC_X86_REG_RDI) == 0x4c0000 + current * 0x1000
             events.append(labels[address])
             ret()
         elif address == 0x600060:
@@ -70,12 +78,16 @@ def run(slots, record):
     uc.reg_write(UC_X86_REG_RDI, pool)
     uc.emu_start(0x14b6afec, 0x600061, count=20000)
     assert uc.reg_read(UC_X86_REG_RIP) == 0x600060
-    expected = ['unlinked-log']
+    expected = [] if linked else ['unlinked-log']
+    if current >= 0:
+        expected += ['complete-current']
     for _ in range(slots):
         expected += ['finish-event', 'object-release', 'remove-cpu', 'object-release']
     expected += ['channel-release'] + (['record-release'] if record else []) + ['base-free']
     assert events == expected, events
-    assert get(accel + 0xc68) == 0 and get(accel + 0xc70) == 0
+    assert get(accel + 0xc68) == (0x4f2000 if linked else 0)
+    assert struct.unpack('<I', uc.mem_read(accel + 0xc70, 4))[0] == int(linked)
+    assert get(pool + 0x18) == 0
     assert all(get(pool + 0x30 + i * 24 + j * 8) == 0
                for i in range(256) for j in range(3))
     assert all(uc.mem_read(m + 0xc, 1)[0] & 1 for m in memories)
@@ -85,8 +97,13 @@ def run(slots, record):
     assert uc.reg_read(UC_X86_REG_RSP) == sp + 8
 
 
+cases = 0
 for slots in (0, 1, 2):
     for record in (False, True):
-        run(slots, record)
-print('PASS six KC partial-pool free fixtures; exact release order and clearing;'
+        for current in range(-1, slots):
+            for linked in (False, True):
+                run(slots, record, current, linked)
+                cases += 1
+assert cases == 24
+print('PASS 24 KC partial/current/linked-pool free fixtures; complete precedes release;'
       ' callbacks mocked, no actual event/DMA quiescence proof')
