@@ -864,6 +864,19 @@ def macho_inventory(path):
             ("__ZN15IGMemoryManager19newPageTableForTaskEP11IGAccelTask", "__ZN29IGHardwarePerProcessPageTable15synchronizeWithI25IGHardwareGlobalPageTableEEvPKT_RK14IGAddressRangeb", 0xf93c),
             ("__ZN15IGMemoryManager19newPageTableForTaskEP11IGAccelTask", "__ZN29IGHardwarePerProcessPageTable15synchronizeWithIS_EEvPKT_RK14IGAddressRangeb", 0xf969)):
         assert direct_branches(method, target) == [call], f"{path}: changed native per-task page-table factory/synchronization edge"
+    # Whole-body hashes above pin these already-reviewed methods. These
+    # selected anchors connect the manager policy to task/factory selection;
+    # they do not observe a live device's property or prove GPU acceptance.
+    for address, encoded in (
+            (0x791b, "498b86601200008a8801010000888bd9020000"),
+            (0x82cc, "80bfd9020000000f94c08d440001"),
+            (0xea25, "c745e040000000"),
+            (0xeb88, "837de020410f948601010000"),
+            (0xf8ee, "83f803741383f801754b")):
+        expected = bytes.fromhex(encoded)
+        assert image[address:address + len(expected)] == expected, f"{path}: changed PageTableMode manager/task/factory policy at {address:#x}"
+    mode_property = b"PageTableMode\0"
+    assert image[0x9198d:0x9198d + len(mode_property)] == mode_property, f"{path}: changed page-table mode property name"
     global_table = value("__ZTV25IGHardwareGlobalPageTable")
     assert image[0xec45:0xec5d] == bytes.fromhex("b8 00 00 00 40 48 89 83 c0 00 00 00 b9 00 00 00 be 48 89 8b c8 00 00 00"), f"{path}: changed manager fixed nonempty constructor range"
     for bits in (32, 64):

@@ -6955,6 +6955,41 @@ No executable patch or runtime mutation.
 
 ### Update fanout must participate in the same owner transaction
 
+#### Native PageTableMode provenance follow-up
+
+Re-read complete already-pinned task init `0x788c/0x1aa`, manager
+initDeviceMemory `0xe7b2/0x410`, and task address-mode getter
+`0x82c6/0x16`; no new whole-body credit. Task init loads accelerator's manager
+at `+0x1260`, copies manager byte `+0x101` into task `+0x2d9` at
+`0x791b..0x792d`, before base init and private-table factory publication.
+Manager policy uses the property string `PageTableMode` at `0x9198d`,
+defaults its local integer to 64 at `0xea25`, and stores the comparison
+against 32 into `+0x101` at `0xeb88..0xeb93`. Its property lookup paths
+include accelerator properties, Development dictionary fallback and the
+IODeviceTree options node. External cast/parse imports and live property
+values are not newly established by this selected data-flow check.
+
+The getter maps zero to mode 3 and nonzero to mode 1. The already-pinned
+manager factory compares exactly those encodings at `0xf8ee..0xf8f7` and
+calls the 64-bit/32-bit factories respectively. Thus absent overrides, the
+native policy selects 64-bit; a successfully parsed value 32 selects the
+known defective 32-bit constructor. This is not evidence that a present
+running task took either branch. Function-bounded Capstone discovery found
+the selected `+0x2d9` write in init and read in the getter; that inventory is
+not an absence proof for aliases, indirect addressing or inherited code.
+
+The native regression contract now pins the manager default/comparison,
+task copy, getter, factory compare and property name in both archived
+payloads, alongside their existing whole-body hashes and direct-call checks.
+Both payload checks pass. The initial string fixture erroneously assumed
+padding and then used the wrong fixed span; corrected it to the literal's
+computed length, without changing the payload or production driver.
+Full static suite last passed immediately before this fixture addition at
+`1205c20` (`/tmp/ngreen-static.OEgEdI`); no full rerun claimed here.
+Next prioritize the default 64-bit retirement transaction and its page/pool
+leases, while preserving the supported 32-bit constructor repair requirement.
+No runtime deployment, mode override or acceleration proof in this checkpoint.
+
 #### TGL primary-specification check: 32-bit PPGTT is not obsolete by definition
 
 The Intel-authored [TGL Volume 2d, Command Reference: Structures](https://cdrdv2-public.intel.com/703050/intel-gfx-prm-osrc-tgl-vol-02-d-command-reference-structures.pdf),

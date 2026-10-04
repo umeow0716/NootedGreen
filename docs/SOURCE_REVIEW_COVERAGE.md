@@ -7,6 +7,14 @@ audit's runtime blockers are open.
 
 ## Scope
 
+Native PageTableMode provenance: re-read complete already-pinned task init,
+manager initDeviceMemory and getter, and checked selected factory instructions.
+Added exact policy/data-flow/property anchors to both archived native payload
+contracts. Default policy is 64, with parsed value 32 selecting mode 1;
+current guest values, external property parsing and all alternative writers
+remain unverified. This is neither new whole-body credit nor current-device
+execution evidence. Default 64-bit retirement remains the next priority.
+
 TGL address-mode specification follow-up: Intel `IHD-OS-TGL-Vol 2d-12.21`
 printed pages 277-278 were extracted and both complete pages visually
 checked. They explicitly retain legacy 32-bit and 48-bit-canonical PPGTT
