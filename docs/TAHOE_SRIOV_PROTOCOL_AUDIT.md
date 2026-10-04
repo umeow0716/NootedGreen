@@ -1,7 +1,7 @@
 # Tahoe SR-IOV protocol audit — in progress
 
 Updated: 2026-10-05. The last dynamic source baseline is `ce166c8`; the current
-offline-reviewed worktree is V303 containment-contract correction on
+offline-reviewed worktree is V304 containment-contract correction on
 `codex/tahoe-sriov-vf`. This is NOT a boot-test candidate or a successful
 driver baseline. The `ce166c8` run produced repeatable host PF DMAR faults
 followed by i915 hangs and a host reboot. Keep `macos-tahoe-sriov` shut off until the
@@ -21,19 +21,35 @@ The authoritative dynamic-entry checklist is
 [`DYNAMIC_TEST_GATE.md`](DYNAMIC_TEST_GATE.md). Any open static gate keeps the
 VM hard hold in force.
 
-## V303 guest-watchdog containment correction (offline)
+## V304 Q35 watchdog normalization correction (offline)
+
+- Defining V303's watchdog-free inactive XML succeeded, but Q35/libvirt
+  normalized the integrated iTCO device back to `action='reset'`.  The VM
+  remained shut off; only its persistent lifecycle XML changed.
+- A separately generated candidate containing exactly one Q35 iTCO watchdog
+  with `action='none'` passes `virt-xml-validate`.  V304 makes that exact
+  count/model/action tuple a fail-closed preflight requirement.  This prevents
+  watchdog expiry from resetting or restarting the guest; the independent
+  systemd monotonic host deadline remains the only timeout authority.
+- V304 source-contract and full-static `/tmp/ngreen-static.kSsbt5` pass
+  locally.  A clean pushed checkpoint and exact-SHA CI revalidation remain
+  required before applying the inert watchdog XML or starting the VM.
+
+## V303 guest-watchdog containment correction (superseded offline rule)
 
 - A real inactive-domain define attempt rejected `watchdog action='destroy'`:
   libvirt does not implement that action.  Because validation failed before
   define, the persistent VM XML remained unchanged and the VM stayed off.
-- The first contained-run contract now requires zero guest watchdog devices.
-  This removes every reset/restart path from that device class; the independent
-  systemd monotonic host deadline remains the only timeout authority.  All
-  poweroff/reboot/crash lifecycle policies still have to be `destroy`.
+- The intermediate contained-run contract required zero guest watchdog
+  devices.  A later define/re-dump proved Q35 automatically restores its
+  integrated iTCO watchdog with `action='reset'`; V304 supersedes this rule
+  with one exact iTCO device using `action='none'`.  All poweroff/reboot/crash
+  lifecycle policies still have to be `destroy`.
 - The preflight and its offline source contract were updated together.  Shell
   syntax, targeted containment tests and full static
   `/tmp/ngreen-static.2kQrmU` pass.  A clean pushed checkpoint and exact-SHA CI
-  remain required before the persistent XML may be changed or the VM started.
+  completed at checkpoint `7f74f18` in exact-SHA CI `37236513894`.  That result
+  does not validate the superseding V304 rule or authorize a VM start.
 
 ## V302 SG-10 raw BAR0 negative-reachability closure (offline)
 
@@ -3063,9 +3079,10 @@ remain open obligations. No dynamic safety claim or driver route change follows.
 
 - The canonical root preflight is read-only and hard-codes the only admitted
   domain, PF and VF. The original V254 text required a nonexistent libvirt
-  watchdog `destroy` action; V303 corrects that fail-closed defect by requiring
-  no guest watchdog at all. It requires the domain off with no autostart/managed
-  save, all poweroff/reboot/crash actions set to `destroy`,
+  watchdog `destroy` action; V304 corrects that fail-closed defect and Q35's
+  watchdog normalization by requiring exactly one iTCO with `action=none`. It
+  requires the domain off with no autostart/managed save, all
+  poweroff/reboot/crash actions set to `destroy`,
   exact Intel `8086:a7a8` identities and i915/vfio-pci bindings, one VF,
   distinct IOMMU groups, no surviving QEMU, authoritative current-boot kernel
   journal access and zero configured PF DMAR/i915 triggers. Missing privilege or

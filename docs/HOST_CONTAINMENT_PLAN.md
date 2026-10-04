@@ -13,9 +13,10 @@ binary, build and protocol validation is permitted.
 - PF `0000:00:02.0` (`8086:a7a8`) is bound to i915. VF `0000:00:02.1` is bound
   to vfio-pci. The PF and VF are in IOMMU groups 0 and 19 respectively, and the
   PF currently exposes one of seven possible VFs.
-- The domain XML presently uses `<on_crash>preserve</on_crash>` and an emulated
-  iTCO watchdog with reset action. Neither protects the host from a wedged PF;
-  this configuration is not a runtime-test candidate.
+- The domain XML now has one-shot `destroy` lifecycle actions, but its Q35
+  iTCO watchdog was normalized back to `action='reset'` when libvirt defined a
+  watchdog-free candidate. The reset action could silently exercise the VF a
+  second time, so this configuration is not a runtime-test candidate.
 - Current-boot kernel health has not been proven. Unprivileged journal access
   cannot read the kernel log and non-interactive sudo requires a password.
   Therefore a preflight must fail closed until a user-authorized privileged
@@ -37,13 +38,15 @@ binary, build and protocol validation is permitted.
    retained native bootstrap and stop lifecycles. The complete offline suite and
    native macOS build/link must pass at that exact commit.
 3. Use a disposable libvirt XML checkpoint with autostart disabled, no managed
-   save, no emulated guest watchdog, and all three lifecycle policies set to one-shot behavior:
+   save, exactly one Q35 iTCO watchdog with `action='none'`, and all three
+   lifecycle policies set to one-shot behavior:
    `<on_poweroff>destroy</on_poweroff>`, `<on_reboot>destroy</on_reboot>` and
    `<on_crash>destroy</on_crash>`. Libvirt has no `destroy` watchdog action;
-   keeping the current `reset` watchdog could silently exercise the VF for a
-   second time. The first run therefore removes the guest watchdog entirely and
-   relies on the independent host deadline below. Confirm the effective live
-   XML before the run and restore the reviewed persistent XML after evidence capture.
+   Q35 also normalizes an omitted integrated iTCO device back to
+   `action='reset'`. The first run therefore keeps that one device inert with
+   `action='none'` and relies on the independent host deadline below. Confirm
+   the effective live XML before the run and restore the reviewed persistent
+   XML after evidence capture.
 4. Hold a host sleep inhibitor before VM start and through the full post-stop
    cooldown. The previous incident entered suspend after the PF hang and then
    logged VF pause timeout/ENOMEM, so suspend must not overlap a VF test.

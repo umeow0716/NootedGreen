@@ -97,6 +97,8 @@ else
 	on_reboot=$(xml_value '/domain/on_reboot' "$domain_xml" || true)
 	on_crash=$(xml_value '/domain/on_crash' "$domain_xml" || true)
 	watchdog_count=$(xml_value 'count(/domain/devices/watchdog)' "$domain_xml" || true)
+	watchdog_model=$(xml_value '/domain/devices/watchdog/@model' "$domain_xml" || true)
+	watchdog_action=$(xml_value '/domain/devices/watchdog/@action' "$domain_xml" || true)
 	hostdev_count=$(xml_value 'count(/domain/devices/hostdev[@type="pci"]/source/address[@domain="0x0000" and @bus="0x00" and @slot="0x02" and @function="0x1"])' "$domain_xml" || true)
 
 	if [[ $on_poweroff == destroy && $on_reboot == destroy && $on_crash == destroy ]]; then
@@ -104,10 +106,10 @@ else
 	else
 		fail "one-shot policies required: poweroff=destroy reboot=destroy crash=destroy (observed ${on_poweroff:-missing}/${on_reboot:-missing}/${on_crash:-missing})"
 	fi
-	if [[ $watchdog_count == 0 ]]; then
-		pass "domain has no guest watchdog capable of reset/restart"
+	if [[ $watchdog_count == 1 && $watchdog_model == itco && $watchdog_action == none ]]; then
+		pass "domain has exactly one inert Q35 iTCO watchdog; host deadline is the only timeout authority"
 	else
-		fail "guest watchdog must be absent; host deadline is the only timeout authority (observed count: ${watchdog_count:-unavailable})"
+		fail "exactly one iTCO watchdog with action=none is required; host deadline is the only timeout authority (observed count/model/action: ${watchdog_count:-unavailable}/${watchdog_model:-missing}/${watchdog_action:-missing})"
 	fi
 	if [[ $hostdev_count == 1 ]]; then
 		pass "domain contains exactly one ${vf_bdf} PCI hostdev source"

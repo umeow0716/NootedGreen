@@ -10,14 +10,18 @@ The current dynamic-entry gate table is
 
 ## Scope
 
-2026-10-05 V303 containment-contract correction: a real libvirt define dry run
-proved that watchdog `action=destroy` does not exist.  The failed define left
-the persistent domain unchanged.  The reviewed first-run contract now requires
-zero guest watchdog devices and retains the independent host monotonic deadline
-as the only timeout authority; poweroff, reboot and crash lifecycle policies
-remain one-shot `destroy`.  The updated source contract, shell syntax and full
-static suite `/tmp/ngreen-static.2kQrmU` pass locally.  Clean checkpoint and
-exact-SHA CI are pending, so the dynamic hold remains in force.
+2026-10-05 V304 containment-contract correction: defining the V303
+watchdog-free XML showed that Q35/libvirt normalizes its integrated iTCO device
+back to `action='reset'`.  A separately generated candidate containing exactly
+one iTCO watchdog with `action='none'` passes `virt-xml-validate`.  The reviewed
+first-run contract therefore requires that exact inert device while retaining
+the independent host monotonic deadline as the only timeout authority;
+poweroff, reboot and crash lifecycle policies remain one-shot `destroy`.  V304
+source-contract and full-static `/tmp/ngreen-static.kSsbt5` pass locally;
+clean checkpoint and exact-SHA CI are pending, so the dynamic hold remains in
+force.  V303's zero-watchdog rule is superseded by this evidence;
+its local suite `/tmp/ngreen-static.2kQrmU` and exact-SHA CI `37236513894`
+otherwise passed.
 
 2026-10-05 SG-11 ledger progress: the current fail-closed inventory covers
 exactly 1,500 repository paths.  It partitions all 68 tool paths into 50
