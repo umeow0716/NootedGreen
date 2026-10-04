@@ -7,6 +7,17 @@ audit's runtime blockers are open.
 
 ## Scope
 
+TGL address-mode specification follow-up: Intel `IHD-OS-TGL-Vol 2d-12.21`
+printed pages 277-278 were extracted and both complete pages visually
+checked. They explicitly retain legacy 32-bit and 48-bit-canonical PPGTT
+modes. Selected i915 descriptor/root helpers and the GEN8-to-GEN12 feature
+inheritance were cross-checked at `c613c76e2e7023b1617bed346b9d35bf871fb958`;
+this is selected-function/reference evidence, not whole-file review credit.
+The native constructor defect therefore remains conditional, not obsolete;
+current VF mode reachability and safe 64-bit retirement are still unproved.
+See the protocol audit's TGL primary-specification subsection for document
+URL, exact hash, bit fields, and the explicit runtime limitations.
+
 2026-10-04 constructor range provenance: complete initDeviceMemory (0x410)
 reviewed/pinned; existing manager/base-table init and initSegments revisited,
 segments body added to consolidated fixtures. Fixed +0xc0 range start 0x40000000,

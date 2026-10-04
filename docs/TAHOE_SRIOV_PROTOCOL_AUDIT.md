@@ -6955,6 +6955,51 @@ No executable patch or runtime mutation.
 
 ### Update fanout must participate in the same owner transaction
 
+#### TGL primary-specification check: 32-bit PPGTT is not obsolete by definition
+
+The Intel-authored [TGL Volume 2d, Command Reference: Structures](https://cdrdv2-public.intel.com/703050/intel-gfx-prm-osrc-tgl-vol-02-d-command-reference-structures.pdf),
+Doc Ref `IHD-OS-TGL-Vol 2d-12.21`, printed pages 277-278 (PDF pages
+293-294), was downloaded and both complete relevant pages were rendered and
+visually inspected. The downloaded file SHA-256 is
+`bc4ff0780e992f1e5c51b5d3ef8c5850620444d7b484110f419c6d7cb837d5a7`.
+The context-descriptor bits 4:3 table specifies `01b` for legacy 32-bit
+PPGTT with the PDP descriptors describing the 4-GiB address space, and `11b`
+for legacy 48-bit-canonical PPGTT with PDP0 identifying the PML4 and the
+other PDP descriptors ignored. These are supported TGL modes, not merely
+an inference from a pre-Gen11 document. The same table requires privilege
+access bit 8 and describes the legacy fault-and-hang behavior; a page fault
+must not be treated as an automatic context switch or successful quiescence.
+
+Cross-check against local i915 source at
+`c613c76e2e7023b1617bed346b9d35bf871fb958`:
+`gt/intel_lrc.c:init_ppgtt_regs` selects the four PDP roots versus PML4;
+`lrc_descriptor` selects the corresponding legacy addressing encoding;
+`gt/intel_gtt.h:i915_vm_is_4lvl` derives that choice from VM size.
+`i915_pci.c:GEN8_FEATURES` sets 48 address bits, inherited through
+GEN9/GEN11/GEN12, with explicit platform overrides such as EHL/JSL 36 and
+DG1 47. Linux's configured address-space size is not proof that hardware
+rejects the 32-bit mode.
+
+Consequently, the previously pinned native 32-bit constructor's nonempty
+segment unmap with zero software-root arrays remains a real conditional
+constructor defect. It cannot be dismissed or globally bypassed as an
+unsupported TGL feature. This specification check does **not** establish
+which mode the present ADL VF actually selected, validate every Gen11+
+platform, prove GuC/VF acceptance of a context, or attribute the host crash.
+Before any constructor replacement, prove the mode-selection caller,
+initial root/page ownership, allocation-failure unwind, and context
+publication ordering. Independently, 64-bit PPGTT retirement still needs
+ownership retained before the descriptor release path zeroes a page and
+completion proved before reuse. No runtime deployment is authorized by
+this documentation-only cross-check.
+
+Validation for this follow-up: the complete `tools/check-static.sh` suite
+passed (exit 0, diagnostics `/tmp/ngreen-static.OEgEdI`; two existing SDK
+macro-redefinition warnings), and the paired Tahoe SystemKC/BootKC contract
+test passed. Previous HEAD `a688c8e` CI run `37177118629` also completed
+successfully. These results check the current static contracts, not corrected
+constructor behavior, whole-project audit completion, or GPU acceleration.
+
 Constructor range provenance and conditional 32-bit defect (2026-10-04):
 complete manager initDeviceMemory 0xe7b2/0x410 reviewed/pinned; it initializes
 device memory and task address-mode policy but does not populate table root
