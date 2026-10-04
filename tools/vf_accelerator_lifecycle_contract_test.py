@@ -2098,6 +2098,14 @@ def function_body(source, signature):
 
 def source_contract(path):
     source = pathlib.Path(path).read_text()
+    submit = function_body(source, "bool Gen11::vfSubmitWorkItem(")
+    for requirement in (
+            "OSObject *admittedRingBacking = admitted ? gVfContexts[admittedSlot].ringBacking : nullptr;",
+            "!admittedRingBacking || ringBacking != admittedRingBacking ||",
+            "getMember<uint64_t>(admittedRingBacking, kVfMappedBufferLengthOffset) < ringSize"):
+        assert requirement in submit, f"{path}: missing retained ring submission guard"
+    ring_fault = submit.index('vfMarkProtocolFault("submit ring backing identity or extent mismatch")')
+    assert ring_fault < submit.index("return false;", ring_fault) < submit.index("const uint32_t previousRingTail"), f"{path}: ring mismatch must reject before tail publication"
     required = (
         "com.apple.iokit.IOAcceleratorFamily2",
         "com.apple.iokit.IOPCIFamily",

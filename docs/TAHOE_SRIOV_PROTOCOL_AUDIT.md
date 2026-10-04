@@ -6961,6 +6961,22 @@ No executable patch or runtime mutation.
 
 ###### Complete waitForSpace reservation and failure ordering
 
+VF submit now captures the registered retained ring backing under the context
+lock while holding the existing queue ownership guard. Before tail publication,
+it requires the hardware context's current ring backing to match that retained
+object and requires its mapped length to cover the context ring-control size.
+Mismatch marks a protocol fault and returns false without tail publication or
+CTB submission. Existing alignment/control-valid/tail-below-size guards remain.
+The source contract pins this guard and its pre-publication placement.
+
+This is an offline-only production change, not deployed or dynamically verified.
+It prevents advertising a tail for mismatched/undersized backing; it cannot undo
+earlier CPU writes by native writers and does not prove actual capacity,
+completion, full ring locking or page-table retirement. Existing queue ownership
+and retained context-record lifetime are the scope of the check; no new raw
+global pointer or unowned backing is introduced. Native failed submit may panic,
+which is still not Host DMA containment. Dynamic testing remains on hold.
+
 Complete unsigned utilGetProperty 280a6/18c is now reviewed/pinned. The ring
 configuration uses key RingSizeKB and default 0x20. The helper first queries
 the supplied registry entry, then, only if that property is absent, its

@@ -5260,6 +5260,7 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 		 gVfContexts[admittedSlot].state == kVfGucContextDisabled ||
 		 gVfContexts[admittedSlot].state == kVfGucContextEnabled);
 	OSObject *admittedBacking = admitted ? gVfContexts[admittedSlot].contextBacking : nullptr;
+	OSObject *admittedRingBacking = admitted ? gVfContexts[admittedSlot].ringBacking : nullptr;
 	IOSimpleLockUnlockEnableInterrupt(gVfContextLock, admissionState);
 	if (!admitted)
 		return false;
@@ -5308,6 +5309,16 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 		contextImage + kContextRingControlOffset);
 	const uint32_t ringSize =
 		(ringControl & kRingControlPagesMask) + PAGE_SIZE;
+	// Queue ownership prevents final detach while inspecting the retained ring.
+	// A valid control word alone cannot authorize a tail beyond real backing.
+	auto *ringObject = getMember<void *>(hardwareContext, kVfContextRingObjectOffset);
+	auto *ringBacking = ringObject ? reinterpret_cast<OSObject *>(
+		getMember<void *>(ringObject, kVfRingMappedBufferOffset)) : nullptr;
+	if (!admittedRingBacking || ringBacking != admittedRingBacking ||
+	    getMember<uint64_t>(admittedRingBacking, kVfMappedBufferLengthOffset) < ringSize) {
+		vfMarkProtocolFault("submit ring backing identity or extent mismatch");
+		return false;
+	}
 	if ((ringControl & kRingControlValid) == 0 ||
 	    (ringTail & (sizeof(uint64_t) - 1U)) != 0 || ringTail >= ringSize) {
 		SYSLOG("ngreen", "V233: rejected ring tail=0x%x ctl=0x%08x size=0x%x LRCA=0x%08x",
