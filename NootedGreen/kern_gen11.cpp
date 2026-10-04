@@ -3046,7 +3046,17 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		
 			 // Preserve native submit work, but validate the borrowed task and every
 			 // context object before the pinned Tahoe body dereferences its FIFO.
+			 // A non-empty VF submission may not return false: many native ICB,
+			 // paging, Surface, GL and Metal callers ignore AL and would otherwise
+			 // publish CPU-side progress for work which never reached a ring.
 			 {"__ZN16IntelAccelerator10submitBlitEP15blit3d_params_tRK8IGVectorI11rect_pair_t25IGIOMallocAllocatorPolicyEP11IGAccelTaskb", submitBlit, this->osubmitBlit},
+			 // Resource CCS/depth callers have the same boolean ABI problem. Route
+			 // their common pre-publication boundaries so a rejected later plane or
+			 // chunk cannot be converted into successful partial resolve state.
+			 {"__ZN15IGAccelResource16submitCCSResolveEPNS_17ResourceInfoEntryER16IntelAcceleratorP11IGAccelTask20EIntelCCSResolveTypehh",
+			  vfSubmitCCSResolve, this->oVfSubmitCCSResolve},
+			 {"__ZN15IGAccelResource18submitDepthResolveEPNS_17ResourceInfoEntryER16IntelAcceleratorP11IGAccelTask17EIntelResolveTypehhtt",
+			  vfSubmitDepthResolve, this->oVfSubmitDepthResolve},
 
 			 // barrierSubmission must keep its event/FIFO side effects. The wrapper
 			 // admits the original only after all contexts used by that body exist.
@@ -5680,37 +5690,102 @@ bool Gen11::stopGraphicsEngine(void *that)
 	return true;
 }
 
+static bool vfRequireSuccessfulNativeSubmission(bool submitted,
+	const char *failure)
+{
+	if (submitted)
+		return true;
+	vfMarkProtocolFault(failure);
+	PANIC_COND(true, "ngreen", "%s", failure);
+	return false;
+}
+
 bool Gen11::submitBlit(void *that, void *param_1, void *param_2, void *param_3, bool param_4) {
 	// Native returns a boolean in AL, not an IOReturn. Every rejected/no-op
-	// path below returns false; success is propagated only from actual native work.
-	// Caller paths that ignore this result still need separate failure handling.
-	if (!that || !param_2 || !callback->osubmitBlit)
-		return false;
+	// path below returns false. A classified VF must fail-stop those paths for
+	// non-empty work because the complete caller inventory includes consumers
+	// which ignore AL and publish successful CPU-side progress.
+	PANIC_COND(!callback || !callback->osubmitBlit, "ngreen",
+		"Missing native blit submission trampoline");
+	if (gVfIdentity != VfIdentity::Virtual)
+		return FunctionCast(submitBlit, callback->osubmitBlit)(
+			that, param_1, param_2, param_3, param_4);
+	if (!that || !param_2)
+		return vfRequireSuccessfulNativeSubmission(false,
+			"VF blit submission received invalid arguments");
 
-	// The native implementation returns true immediately for an empty vector.
+	// An empty vector is a genuine native no-op. Preserve its return without
+	// requiring transport or task/context ownership.
 	const uint64_t count = *reinterpret_cast<const uint64_t *>(param_2);
 	if (count == 0)
 		return FunctionCast(submitBlit, callback->osubmitBlit)(
 			that, param_1, param_2, param_3, param_4);
 	if (!param_1 || !param_3 || !getMember<void *>(param_3, 0x0))
-		return false;
-
-	if (gVfIdentity == VfIdentity::Virtual && !vfNativeGpuWorkReady())
-		return false;
+		return vfRequireSuccessfulNativeSubmission(false,
+			"VF blit submission lacks parameters or task ownership");
+	if (!vfNativeGpuWorkReady())
+		return vfRequireSuccessfulNativeSubmission(false,
+			"VF blit submission reached a stopped transport");
 
 	// Tahoe may dereference either native blit-context FIFO depending on its
-	// format/route selection. Preallocate both through the original factories, but do not write
-	// private task slots or substitute a task with unrelated ownership.
+	// format/route selection. Preallocate both through the original factories,
+	// but do not write private task slots or substitute unrelated objects.
 	void *blit2D = getBlit2DContext(param_3, true);
 	void *blit3D = getBlit3DContext(param_3, true);
 	if (!blit2D || !blit3D || !getMember<void *>(blit2D, 0xb8) ||
 	    !getMember<void *>(blit3D, 0xb8)) {
-		SYSLOG("ngreen", "V243: rejected blit with incomplete native contexts task=%p 2D=%p 3D=%p",
+		SYSLOG("ngreen", "V300: rejected blit with incomplete native contexts task=%p 2D=%p 3D=%p",
 		       param_3, blit2D, blit3D);
-		return false;
+		return vfRequireSuccessfulNativeSubmission(false,
+			"VF blit submission has incomplete native contexts");
 	}
 
-	return FunctionCast(submitBlit, callback->osubmitBlit)(that, param_1, param_2, param_3, param_4);
+	const bool submitted = FunctionCast(submitBlit,
+		callback->osubmitBlit)(that, param_1, param_2, param_3, param_4);
+	return vfRequireSuccessfulNativeSubmission(submitted,
+		"Native VF blit returned without publishing non-empty work");
+}
+
+bool Gen11::vfSubmitCCSResolve(void *that, void *entry, void *accelerator,
+	void *task, uint32_t resolveType, uint8_t plane, uint8_t level)
+{
+	PANIC_COND(!callback || !callback->oVfSubmitCCSResolve, "ngreen",
+		"Missing native CCS resolve trampoline");
+	using Submit = bool (*)(void *, void *, void *, void *, uint32_t,
+	                       uint8_t, uint8_t);
+	auto native = reinterpret_cast<Submit>(callback->oVfSubmitCCSResolve);
+	if (gVfIdentity != VfIdentity::Virtual)
+		return native(that, entry, accelerator, task, resolveType, plane, level);
+	if (!that || !entry || !task || accelerator != gVfAccelerator ||
+	    !vfNativeGpuWorkReady())
+		return vfRequireSuccessfulNativeSubmission(false,
+			"VF CCS resolve lacks stable owners or transport");
+	const bool submitted = native(
+		that, entry, accelerator, task, resolveType, plane, level);
+	return vfRequireSuccessfulNativeSubmission(submitted,
+		"Native VF CCS resolve returned false after admission");
+}
+
+bool Gen11::vfSubmitDepthResolve(void *that, void *entry, void *accelerator,
+	void *task, uint32_t resolveType, uint8_t plane, uint8_t level,
+	uint16_t width, uint16_t height)
+{
+	PANIC_COND(!callback || !callback->oVfSubmitDepthResolve, "ngreen",
+		"Missing native depth resolve trampoline");
+	using Submit = bool (*)(void *, void *, void *, void *, uint32_t,
+	                       uint8_t, uint8_t, uint16_t, uint16_t);
+	auto native = reinterpret_cast<Submit>(callback->oVfSubmitDepthResolve);
+	if (gVfIdentity != VfIdentity::Virtual)
+		return native(that, entry, accelerator, task, resolveType, plane, level,
+		              width, height);
+	if (!that || !entry || !task || accelerator != gVfAccelerator ||
+	    !vfNativeGpuWorkReady())
+		return vfRequireSuccessfulNativeSubmission(false,
+			"VF depth resolve lacks stable owners or transport");
+	const bool submitted = native(that, entry, accelerator, task, resolveType,
+		plane, level, width, height);
+	return vfRequireSuccessfulNativeSubmission(submitted,
+		"Native VF depth resolve returned false after admission");
 }
 
 void Gen11::barrierSubmission(void *queue, void *accelerator, void *cmdDesc,

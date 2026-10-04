@@ -148,6 +148,15 @@ if python3 -B tools/vf_event_vector_callgraph_contract_test.py \
 else
     failed=1
 fi
+if python3 -B tools/vf_submission_result_contract_test.py \
+    NootedGreen/kern_gen11.cpp \
+    "$task_output/kern-gen11.bridge.o" \
+    sle_Internal/le/AppleIntelTGLGraphics.kext/Contents/MacOS/AppleIntelTGLGraphics \
+    sle_Internal/sle/AppleIntelTGLGraphics.kext/Contents/MacOS/AppleIntelTGLGraphics; then
+    printf 'PASS offline VF submission-result boundaries\n'
+else
+    failed=1
+fi
 if "$compiler" -std=c++14 -O1 -g -fsanitize=address,undefined \
     tools/gpu_capabilities_test.cpp -o "$task_output/gpu-capabilities-test" && \
     "$task_output/gpu-capabilities-test"; then

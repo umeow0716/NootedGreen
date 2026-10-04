@@ -1,7 +1,7 @@
 # Tahoe SR-IOV protocol audit — in progress
 
 Updated: 2026-10-05. The last dynamic source baseline is `ce166c8`; the current
-offline-reviewed worktree is V299 SG-07 completion integration on
+offline-reviewed worktree is V300 SG-08 submission-result integration on
 `codex/tahoe-sriov-vf`. This is NOT a boot-test candidate or a successful
 driver baseline. The `ce166c8` run produced repeatable host PF DMAR faults
 followed by i915 hangs and a host reboot. Keep `macos-tahoe-sriov` shut off until the
@@ -20,6 +20,54 @@ KVMFR/client transport remains the intended receiving side.
 The authoritative dynamic-entry checklist is
 [`DYNAMIC_TEST_GATE.md`](DYNAMIC_TEST_GATE.md). Any open static gate keeps the
 VM hard hold in force.
+
+## V300 SG-08 allocation/event/result closure (offline)
+
+SG-08 is now `CLOSED-STATIC`. This checkpoint does not claim rollback of work
+already issued to a GPU. It makes every remaining reviewed failure boundary
+fail-stop before native callers can convert an omitted dependency or rejected
+later plane/chunk into continued CPU-side success, state clearing or backing
+release.
+
+The V274/V275 event-vector repair is now used as an explicit SG-08 premise:
+both Tahoe payloads contain exactly eight duplicate grow implementations and
+147 direct calls across 38 owners. All eight targets are routed by exact
+owner/address, with 52 ignored initial-capacity requests post-validated and 95
+append-growth results checked before the native helper can skip an event.
+There are no direct tail calls or RIP-relative address-taken entries to those
+targets. The selected event collector bodies, native event-result semantics
+and 2,720 omission/alias/substitution states remain pinned. A typed resource
+event-pair that cannot be constructed stops in native resource initialization
+before a GPU submission can publish; it is not accepted as an empty event.
+
+The complete Tahoe text contains 35 direct calls into the three Boolean
+submission boundaries relevant to the open failure graph: 26 to
+`IntelAccelerator::submitBlit`, four to the resource CCS resolver and five to
+the resource depth resolver. Whole-body hashes and the full call addresses are
+identical in both admitted payloads, with no direct tail or address-taken
+bypass. This includes the two SharedUserClient ICB calls and all five resource
+page-on/page-off blits whose AL results are ignored by their native callers.
+
+The existing VF `submitBlit` route now preserves PF/non-VF behavior and the
+native empty-vector no-op. Non-empty VF work must have the exact accelerator
+transport, task owner and both native 2D/3D FIFO contexts, and the original
+must return true. The two new resource CCS/depth routes preserve their exact
+x86_64 register/stack ABI, require the published accelerator owner and live
+transport, and require the native Boolean result. Any rejection first closes
+new producers with `vfMarkProtocolFault`, then guest-panics. Successful earlier
+planes/chunks therefore cannot be rolled back, but a later rejection also
+cannot fall through to fabricated success or release of unresolved state.
+
+The cache/PTE half remains provided by V281: an installed cache-type update
+either commits or restores both software fields, replays the old mapping type,
+completes Engines and GuC retirement, and fail-stops on the native void-ABI
+failure. Ten mutations and 8,192 transaction states cover that boundary.
+V300 adds eight result-boundary mutations, compiled exact-ABI symbol plus source
+forwarding checks, the exact 35-call inventory, and raises the route inventory
+to 147 (124 accelerator, three framebuffer and 20 System KC). The complete
+offline suite passed at `/tmp/ngreen-static.a0ic6Y`. Clean commit, push and
+exact-SHA CI remain SG-12 work. SG-09 through SG-11 still prohibit any VM,
+kext deployment, PCI/sysfs/VF/PF or Host i915 operation.
 
 ## V299 SG-07 completion integration (offline)
 
@@ -62,8 +110,10 @@ replaced/freed during driver lifetime; slot serials never reset or wrap, active
 owners block reuse/release, and shutdown closes/drains the operation gate
 before scanning it. Sanitizer tests, seventeen source mutations, both targeted
 payload contracts and full static `/tmp/ngreen-static.uJPHdJ` pass. Clean
-commit and exact-SHA CI are still pending. No VM, deployment, PCI/sysfs/VF/PF
-or Host i915 operation was performed.
+checkpoint `578e7d4daae483babe6049bcbe8a884e3b107fe0` and exact-SHA CI
+`37226026931` also passed full static, x86_64 release kext, Metal smoke and
+both artifact uploads. No VM, deployment, PCI/sysfs/VF/PF or Host i915
+operation was performed.
 
 ## V295 counted external-producer admission (offline)
 

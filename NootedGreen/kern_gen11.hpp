@@ -172,6 +172,16 @@ private:
 	static bool submitBlit(void *that, void *params, void *rects, void *task,
 	                       bool synchronous);
 	mach_vm_address_t osubmitBlit {};
+	static bool vfSubmitCCSResolve(void *that, void *entry, void *accelerator,
+	                              void *task, uint32_t resolveType,
+	                              uint8_t plane, uint8_t level);
+	mach_vm_address_t oVfSubmitCCSResolve {};
+	static bool vfSubmitDepthResolve(void *that, void *entry,
+	                                void *accelerator, void *task,
+	                                uint32_t resolveType, uint8_t plane,
+	                                uint8_t level, uint16_t width,
+	                                uint16_t height);
+	mach_vm_address_t oVfSubmitDepthResolve {};
 	static void forceWake(void *that, bool set, uint32_t domain, uint32_t context);
 	static void wrapSafeForceWake(void *that, bool set, uint32_t domain);
 	mach_vm_address_t orgInitSchedControl {};
