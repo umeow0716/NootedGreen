@@ -526,6 +526,7 @@ def macho_inventory(path):
     }
     observed_stamp_irq_imports = {address: [] for address in stamp_irq_imports}
     event_stop_imports = {
+        0xd65c0: "__ZN15IOAccelChannel213setEventStampEP12IOAccelEvent",
         0xc8240: "_real_ncpus",  # Pool count is a linked kernel datum, not zero.
         0xd19b0: "__ZN22IOGraphicsAccelerator223freeWaitToPrepareVidMapEP16IOAccelMemoryMapbb",
         0xd19d8: "__ZN22IOGraphicsAccelerator223freeWaitToPrepareSysMapEP16IOAccelMemoryMapb",

@@ -6961,6 +6961,21 @@ No executable patch or runtime mutation.
 
 ###### Complete waitForSpace reservation and failure ordering
 
+The FIFO vtable +0x140 at d65c0 is an external relocation to inherited
+IOAccelChannel2::setEventStamp, now pinned in both payloads. Its on-disk zero
+is not a null runtime method. The event-machine +0x1e0 slot at cebe8 is the
+already-pinned inherited writeStampCommand import. Thus the selected FIFO
+sequence acquires/constructs stamp command data before reservation and publishes
+channel event stamp after ring submission; these slots are not inferred lock
+or hardware-completion methods. Existing paired-KC contracts review the inherited
+stamp APIs, and their software stamp bookkeeping is not a TLB/DMA completion
+certificate. This resolves two concrete dispatch identities, not full outer
+locking or runtime owner identity. No production/runtime change.
+
+Keep the remaining review focused on ring admission and PPGTT retirement:
+do not expand stamp metadata traversal into an unbounded prerequisite audit
+unless its concrete locking/lifetime edge changes the repair decision.
+
 Complete FIFO submitRingCommands 4c5c0/106, alignRing 41bea/28 and ring
 submitCommands 430aa/5e are now reviewed/pinned. FIFO skips disabled-feature,
 null-buffer and empty-input paths; otherwise it obtains event/stamp information,
