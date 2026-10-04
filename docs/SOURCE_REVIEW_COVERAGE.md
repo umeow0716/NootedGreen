@@ -1778,3 +1778,17 @@ scopes, while Task release/freeAllGPUMappings, mapping release/release_pte and
 Shared final free contain no local acquisition. Stable cross-owner admission,
 pre-zero interception and VA reservation retention remain required before a
 live PPGTT route or VM test.
+
+# Latest initial PPGTT synchronization checkpoint
+
+V282 replaces the VF `newPageTableForTask` transaction because both native
+void synchronization paths can hide a failed destination map. The exact
+32/64 factories, address-mode/kernel-task policy, unique unpublished owner,
+entry/descriptor virtual slots and native unwind are pinned in both Tahoe
+payloads. A failed clone now releases the unpublished table and returns null;
+sparse source entries remain valid. Eleven mutations and 680 offline states
+pass, and the full route inventory is 107 unique symbols.
+
+This does not close PagePool recycle/prune, accelerator-list observer ordering
+or shared serialization across commit, cache update, unmap and final release.
+Those remain static blockers before any dynamic VF test.

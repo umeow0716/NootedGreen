@@ -98,3 +98,9 @@ guest login and VM autostart stay disabled until repeated contained runs prove
 real Metal command completion and media workloads, clean shutdown/quiescence,
 and zero new PF DMAR/i915 faults. Only then may display and service integration
 be evaluated as a separate phase.
+
+V282 closes failed initial PPGTT clone publication by releasing an unpublished
+partial table before task +0x260 is assigned. It does not establish PagePool
+recycle/prune safety or a common lock across live commit, cache update, unmap
+and release. The hard hold therefore remains unchanged; no dynamic VF test is
+admitted by this checkpoint.

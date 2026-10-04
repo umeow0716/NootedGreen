@@ -162,6 +162,9 @@ STAMP_IRQ_NATIVE = {
     "__ZN31IGHardwarePerProcessPageTable6411shrinkLevelINS_10LevelEntryILm9E21GTTPageMapLevel4EntryEEvEEbRT_yPT0_ym": (0x4e, "3060c61f22633fe9b0ea1bdce718028912bbd26d27824aaee6cc1034ce390aa5"),
     "__ZN19IGHardwarePageTable15initWithOptionsEP16IntelAcceleratorNS_4TypeE": (0x3e, "4dd2d3d12a42751fe3a58852b7c9b758ebe81cf80aa32015c9550db78070356f"),
     "__ZNK11IGAccelTask29getHardwareContextAddressModeEv": (0x16, "009814216381ad12a9161899b0e332c8630311c31f5307a937f0c1b63f5a022b"),
+    "__ZNK11IGAccelTask15isKernelGPUTaskEv": (0x2e, "a33f65575ee25dbf7e70f722991c3f815f31f5d9fae16a6c7059c5973cd6792f"),
+    "__ZN31IGHardwarePerProcessPageTable3211withOptionsEP16IntelAcceleratorP11IGAccelTask": (0x58, "766580006d732725f08f8e8cb0fb862603ce2d2ab00f7af45233db21da542b38"),
+    "__ZN31IGHardwarePerProcessPageTable6411withOptionsEP16IntelAcceleratorP11IGAccelTask": (0x70, "c258b3c1008fd715e6577a6ea58adcd91f5d996da45772dd353fc8634ca75d1a"),
     "__ZN31IGHardwarePerProcessPageTable6421mapDescriptorForRangeERK14IGAddressRangePN10IGPagePool14PageDescriptorE": (0xb6, "e0e111abf4ec5a2de14ca65d1304611a6c4990f5da6decb5abaa1a29d4fe78c6"),
     "__ZN31IGHardwarePerProcessPageTable6423remapDescriptorForRangeERK14IGAddressRangePN10IGPagePool14PageDescriptorE": (0x8a, "eb27e5cf9f9a519893647c044cae0fb8d967f098701a46d3cd9dca9fac0ff9ee"),
     "__ZNK31IGHardwarePerProcessPageTable6422readDescriptorForRangeERK14IGAddressRangePPN10IGPagePool14PageDescriptorE": (0x32, "fb2644014513475491f0504737f0fe210e37e4635d3200f2a973539e907909bf"),
@@ -1206,6 +1209,9 @@ def macho_inventory(path):
             ("__ZN15IGMemoryManager19newPageTableForTaskEP11IGAccelTask", "__ZN29IGHardwarePerProcessPageTable15synchronizeWithI25IGHardwareGlobalPageTableEEvPKT_RK14IGAddressRangeb", 0xf93c),
             ("__ZN15IGMemoryManager19newPageTableForTaskEP11IGAccelTask", "__ZN29IGHardwarePerProcessPageTable15synchronizeWithIS_EEvPKT_RK14IGAddressRangeb", 0xf969)):
         assert direct_branches(method, target) == [call], f"{path}: changed native per-task page-table factory/synchronization edge"
+    assert direct_branches(
+        "__ZN11IGAccelTask15initWithOptionsEP16IntelAccelerator",
+        "__ZN15IGMemoryManager19newPageTableForTaskEP11IGAccelTask") == [0x79a4], f"{path}: changed unique unpublished page-table factory owner"
     # Whole-body hashes above pin these already-reviewed methods. These
     # selected anchors connect the manager policy to task/factory selection;
     # they do not observe a live device's property or prove GPU acceptance.
@@ -1225,6 +1231,11 @@ def macho_inventory(path):
         table = value(f"__ZTV31IGHardwarePerProcessPageTable{bits}")
         getter = value(f"__ZN31IGHardwarePerProcessPageTable{bits}31getPageTableRootPhysicalAddressEPy")
         assert struct.unpack_from("<Q", image, table + 16 + 0x148)[0] == getter, f"{path}: changed PPGTT root getter virtual"
+        assert struct.unpack_from("<Q", image, table + 16 + 0x118)[0] == value(f"__ZN31IGHardwarePerProcessPageTable{bits}8mapRangeERK14IGAddressRangeyy"), f"{path}: changed initial PPGTT map virtual"
+        assert struct.unpack_from("<Q", image, table + 16 + 0x140)[0] == value(f"__ZNK31IGHardwarePerProcessPageTable{bits}4readEyRyS0_"), f"{path}: changed initial PPGTT read virtual"
+    table64 = value("__ZTV31IGHardwarePerProcessPageTable64")
+    assert struct.unpack_from("<Q", image, table64 + 16 + 0x158)[0] == value("__ZN31IGHardwarePerProcessPageTable6421mapDescriptorForRangeERK14IGAddressRangePN10IGPagePool14PageDescriptorE"), f"{path}: changed initial descriptor-map virtual"
+    assert struct.unpack_from("<Q", image, table64 + 16 + 0x168)[0] == value("__ZNK31IGHardwarePerProcessPageTable6422readDescriptorForRangeERK14IGAddressRangePPN10IGPagePool14PageDescriptorE"), f"{path}: changed initial descriptor-read virtual"
     assert struct.unpack_from("<Q", image, value("__ZTV31IGHardwarePerProcessPageTable32") + 16 + 0x130)[0] == value("__ZN31IGHardwarePerProcessPageTable3210unmapRangeERK14IGAddressRange"), f"{path}: changed 32-bit init unmap virtual"
     for call in (0x11d6e, 0x11d8b, 0x11da8):
         assert image[call:call + 6] == bytes.fromhex("ff 90 30 01 00 00"), f"{path}: changed 32-bit init range-unmap edge"
@@ -3119,6 +3130,187 @@ def page_table_commit_rollback_mutations(path):
     print("PASS: six failed page-table commit rollback mutations rejected (source contract, not runtime proof)")
 
 
+def initial_page_table_sync_contract(source, path):
+    wrapper = function_body(
+        source, "void *Gen11::vfNewPageTableForTask(void *that, void *task)")
+    compact = "".join(wrapper.split())
+    required = (
+        "callback->oVfNewPageTableForTask)(that,task);",
+        "vfEnsurePageTableUpdateLock()",
+        "IOLockLock(gVfPageTableUpdateLock);",
+        "callback->vfGetHardwareContextAddressMode)(task);",
+        "if(accelerator&&addressMode==1)",
+        "callback->vfPpgtt32WithOptions)(accelerator,task);",
+        "elseif(accelerator&&addressMode==3)",
+        "callback->vfPpgtt64WithOptions)(accelerator,task);",
+        "constboolkernelTask=IGAccelTaskIsKernelGPUTask(task);",
+        "source=getMember<void*>(that,0x98);",
+        "getMember<void*>(accelerator,0x150);",
+        "source=getMember<void*>(bootstrapTask,0x260);",
+        "managerRange.length<=UINT64_MAX-managerRange.start;",
+        "!kernelTask&&destinationUsesDescriptors&&sourceUsesDescriptors",
+        "sourceVtable[0x168/sizeof(mach_vm_address_t)]",
+        "destinationVtable[0x158/sizeof(mach_vm_address_t)]",
+        "synchronized=descriptor&&mapDescriptor(pageTable,descriptorRange,descriptor);",
+        "sourceVtable[0x140/sizeof(mach_vm_address_t)]",
+        "destinationVtable[0x118/sizeof(mach_vm_address_t)]",
+        "synchronized&&address!=end;address+=PAGE_SIZE",
+        "if(!readEntry(source,address,physical,flags))continue;",
+        "synchronized=mapEntry(pageTable,pageRange,physical,flags);",
+        "callback->vfFlushHardwareAfterGttUpdate)(accelerator);",
+        "destinationVtable[0x28/sizeof(mach_vm_address_t)]",
+        "release(pageTable);",
+        "pageTable=nullptr;",
+        "IOLockUnlock(gVfPageTableUpdateLock);",
+        "returnpageTable;",
+    )
+    for token in required:
+        if token not in compact:
+            raise AssertionError(
+                f"{path}: incomplete initial page-table transaction: {token}")
+
+    lock = compact.index("IOLockLock(gVfPageTableUpdateLock);")
+    factory = compact.index("callback->vfPpgtt32WithOptions)(accelerator,task);", lock)
+    source_owner = compact.index(
+        "constboolkernelTask=IGAccelTaskIsKernelGPUTask(task);", factory)
+    descriptor_read = compact.index(
+        "sourceVtable[0x168/sizeof(mach_vm_address_t)]", source_owner)
+    descriptor_map = compact.index(
+        "synchronized=descriptor&&mapDescriptor(pageTable,descriptorRange,descriptor);",
+        descriptor_read)
+    entry_read = compact.index(
+        "sourceVtable[0x140/sizeof(mach_vm_address_t)]", descriptor_map)
+    entry_map = compact.index(
+        "synchronized=mapEntry(pageTable,pageRange,physical,flags);", entry_read)
+    flush = compact.index(
+        "callback->vfFlushHardwareAfterGttUpdate)(accelerator);", entry_map)
+    release = compact.index("release(pageTable);", flush)
+    unlock = compact.rindex("IOLockUnlock(gVfPageTableUpdateLock);")
+    result = compact.rindex("returnpageTable;")
+    if not lock < factory < source_owner < descriptor_read < descriptor_map < \
+            entry_read < entry_map < flush < release < unlock < result:
+        raise AssertionError(
+            f"{path}: initial page-table create/sync/release order changed")
+    if "destinationVtable[0x128/" in compact or \
+            "destinationVtable[0x160/" in compact:
+        raise AssertionError(
+            f"{path}: initial synchronization unexpectedly gained remap semantics")
+
+    normalized = "".join(source.split())
+    route = ('{"__ZN15IGMemoryManager19newPageTableForTaskEP11IGAccelTask",'
+             'vfNewPageTableForTask,this->oVfNewPageTableForTask}')
+    if route not in normalized:
+        raise AssertionError(f"{path}: missing initial page-table transaction route")
+    for solve in (
+            '{"__ZNK11IGAccelTask29getHardwareContextAddressModeEv",this->vfGetHardwareContextAddressMode}',
+            '{"__ZN31IGHardwarePerProcessPageTable3211withOptionsEP16IntelAcceleratorP11IGAccelTask",this->vfPpgtt32WithOptions}',
+            '{"__ZN31IGHardwarePerProcessPageTable6411withOptionsEP16IntelAcceleratorP11IGAccelTask",this->vfPpgtt64WithOptions}',
+            '{"__ZN16IntelAccelerator27flushHardwareAfterGttUpdateEv",this->vfFlushHardwareAfterGttUpdate}'):
+        if solve not in normalized:
+            raise AssertionError(
+                f"{path}: missing native initial page-table dependency {solve}")
+
+
+def initial_page_table_sync_mutations(path):
+    source = pathlib.Path(path).read_text()
+    wrapper = function_body(
+        source, "void *Gen11::vfNewPageTableForTask(void *that, void *task)")
+
+    def replace_once(body, before, after):
+        if body.count(before) != 1:
+            raise AssertionError(f"ambiguous initial-sync mutation: {before}")
+        return body.replace(before, after, 1)
+
+    route = ('\t\t\t{"__ZN15IGMemoryManager19newPageTableForTaskEP11IGAccelTask",\n'
+             '\t\t\t vfNewPageTableForTask, this->oVfNewPageTableForTask},\n')
+    mutations = (
+        (source, replace_once(source, route, "")),
+        (source, replace_once(
+            source,
+            "__ZN31IGHardwarePerProcessPageTable3211withOptionsEP16IntelAcceleratorP11IGAccelTask",
+            "__ZN31IGHardwarePerProcessPageTable3211missingFactoryEP16IntelAcceleratorP11IGAccelTask")),
+        (wrapper, replace_once(wrapper, "addressMode == 3", "addressMode == 1")),
+        (wrapper, replace_once(
+            wrapper, "source = getMember<void *>(that, 0x98);",
+            "source = getMember<void *>(that, 0x90);")),
+        (wrapper, replace_once(
+            wrapper, "managerRange.length <= UINT64_MAX - managerRange.start;",
+            "true;")),
+        (wrapper, replace_once(
+            wrapper,
+            "synchronized = descriptor &&\n\t\t\t\tmapDescriptor(pageTable, descriptorRange, descriptor);",
+            "(void)mapDescriptor(pageTable, descriptorRange, descriptor);")),
+        (wrapper, replace_once(
+            wrapper,
+            "synchronized = mapEntry(pageTable, pageRange, physical, flags);",
+            "(void)mapEntry(pageTable, pageRange, physical, flags);")),
+        (wrapper, replace_once(
+            wrapper,
+            "callback->vfFlushHardwareAfterGttUpdate)(accelerator);",
+            "callback->vfFlushHardwareAfterGttUpdate)(nullptr);")),
+        (wrapper, replace_once(wrapper, "release(pageTable);", "")),
+        (wrapper, replace_once(
+            wrapper, "IOLockLock(gVfPageTableUpdateLock);",
+            "/* missing transaction lock */")),
+        (wrapper, replace_once(
+            wrapper, "sourceUsesDescriptors) {", "false) {")),
+    )
+    for body, mutated_body in mutations:
+        changed = mutated_body if body == source else source.replace(
+            body, mutated_body, 1)
+        try:
+            initial_page_table_sync_contract(changed, path)
+        except (AssertionError, ValueError):
+            continue
+        raise AssertionError(f"{path}: escaped initial page-table mutation")
+    print("PASS: eleven initial page-table factory/sync/rollback mutations rejected (source contract, not runtime proof)")
+
+
+def initial_page_table_sync_model():
+    cases = 0
+    # Per-entry source holes are legal. Every present entry must map, and a
+    # first false result makes the unpublished destination releasable as one
+    # object rather than publishing a successful prefix.
+    for factory_ok in (False, True):
+        for source_ok in (False, True):
+            for range_ok in (False, True):
+                for encoded in range(3 ** 4):
+                    value = encoded
+                    states = []
+                    for _ in range(4):
+                        states.append(value % 3)  # absent, mapped, map-failed
+                        value //= 3
+                    synchronized = factory_ok and source_ok and range_ok
+                    released = False
+                    if synchronized:
+                        synchronized = all(state != 2 for state in states)
+                    if factory_ok and not synchronized:
+                        released = True
+                    assert synchronized == (
+                        factory_ok and source_ok and range_ok and
+                        all(state != 2 for state in states))
+                    assert released == (factory_ok and not synchronized)
+                    cases += 1
+
+    # Descriptor reads use sparse success semantics, but a reported descriptor
+    # must be non-null and its destination map result must be observed.
+    for factory_ok in (False, True):
+        for source_ok in (False, True):
+            for read_present in (False, True):
+                for descriptor_valid in (False, True):
+                    for map_ok in (False, True):
+                        synchronized = factory_ok and source_ok
+                        if synchronized and read_present:
+                            synchronized = descriptor_valid and map_ok
+                        released = factory_ok and not synchronized
+                        expected = factory_ok and source_ok and (
+                            not read_present or (descriptor_valid and map_ok))
+                        assert synchronized == expected
+                        assert released == (factory_ok and not expected)
+                        cases += 1
+    print(f"PASS: {cases} initial PPGTT synchronization states preserve publish-or-release semantics (offline model)")
+
+
 def cache_type_update_transaction_contract(source, path):
     wrapper = function_body(
         source, "void Gen11::vfUpdateMappingCacheType(void *that,")
@@ -3288,6 +3480,7 @@ def source_contract(path):
     ppgtt_retirement_contract(source, path)
     ppgtt_final_free_contract(source, path)
     page_table_commit_rollback_contract(source, path)
+    initial_page_table_sync_contract(source, path)
     cache_type_update_transaction_contract(source, path)
     for signature in ("bool Gen11::vfAttachContextDesc(",
                       "void Gen11::vfDetachContextDesc(",
@@ -3970,6 +4163,8 @@ def main():
     ppgtt_retirement_mutations(sys.argv[1])
     ppgtt_final_free_mutations(sys.argv[1])
     page_table_commit_rollback_mutations(sys.argv[1])
+    initial_page_table_sync_mutations(sys.argv[1])
+    initial_page_table_sync_model()
     cache_type_update_transaction_mutations(sys.argv[1])
     cache_type_update_transaction_model()
     ggtt_postwrite_mutations(sys.argv[1])

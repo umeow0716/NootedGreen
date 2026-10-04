@@ -2646,6 +2646,14 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			KernelPatcher::SolveRequest pageTableRollback[] = {
 				{"__ZN15IGMemoryManager27releaseFromPageTableForTaskEP11IGAccelTaskP16IGAccelMemoryMap",
 				 this->vfReleasePageTablesForTask},
+				{"__ZNK11IGAccelTask29getHardwareContextAddressModeEv",
+				 this->vfGetHardwareContextAddressMode},
+				{"__ZN31IGHardwarePerProcessPageTable3211withOptionsEP16IntelAcceleratorP11IGAccelTask",
+				 this->vfPpgtt32WithOptions},
+				{"__ZN31IGHardwarePerProcessPageTable6411withOptionsEP16IntelAcceleratorP11IGAccelTask",
+				 this->vfPpgtt64WithOptions},
+				{"__ZN16IntelAccelerator27flushHardwareAfterGttUpdateEv",
+				 this->vfFlushHardwareAfterGttUpdate},
 			};
 			PANIC_COND(!patcher.solveMultiple(
 			               index, pageTableRollback, address, size), "ngreen",
@@ -2680,6 +2688,12 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			// task, mapping and native caller's ownership scope are still intact.
 			{"__ZN15IGMemoryManager26commitIntoPageTableForTaskEP11IGAccelTaskP16IGAccelMemoryMap",
 			 vfCommitPageTablesForTask, this->oVfCommitPageTablesForTask},
+			// Native synchronization has a void ABI: both the per-entry and the
+			// descriptor path can leave a partially populated PPGTT and still return
+			// it to the task. Rebuild that one factory transaction with observable
+			// map results and release the unpublished table on any failure.
+			{"__ZN15IGMemoryManager19newPageTableForTaskEP11IGAccelTask",
+			 vfNewPageTableForTask, this->oVfNewPageTableForTask},
 			// Cache-type requests from Metal, GL, blit and media all converge here.
 			// Keep resource flags and every installed page table in one recoverable
 			// transaction; the native void tail otherwise hides a partial failure.
@@ -3835,6 +3849,129 @@ bool Gen11::vfCommitPageTablesForTask(void *that, void *task, void *mapping)
 	PANIC_COND(!rolledBack, "ngreen",
 		"VF partial page-table commit could not be rolled back safely");
 	return false;
+}
+
+void *Gen11::vfNewPageTableForTask(void *that, void *task)
+{
+	PANIC_COND(!that || !task || !callback ||
+	           !callback->oVfNewPageTableForTask ||
+	           !callback->vfGetHardwareContextAddressMode ||
+	           !callback->vfPpgtt32WithOptions ||
+	           !callback->vfPpgtt64WithOptions ||
+	           !callback->vfFlushHardwareAfterGttUpdate,
+		"ngreen", "Missing VF initial page-table synchronization boundary");
+	if (gVfIdentity != VfIdentity::Virtual)
+		return FunctionCast(vfNewPageTableForTask,
+		                    callback->oVfNewPageTableForTask)(that, task);
+
+	if (!vfEnsurePageTableUpdateLock()) {
+		SYSLOG("ngreen", "V282: cannot serialize initial VF page-table synchronization");
+		return nullptr;
+	}
+	IOLockLock(gVfPageTableUpdateLock);
+
+	auto *accelerator = getMember<void *>(that, 0x10);
+	using GetAddressMode = uint32_t (*)(const void *);
+	const uint32_t addressMode = reinterpret_cast<GetAddressMode>(
+		callback->vfGetHardwareContextAddressMode)(task);
+	using WithOptions = void *(*)(void *, void *);
+	void *pageTable = nullptr;
+	if (accelerator && addressMode == 1)
+		pageTable = reinterpret_cast<WithOptions>(
+			callback->vfPpgtt32WithOptions)(accelerator, task);
+	else if (accelerator && addressMode == 3)
+		pageTable = reinterpret_cast<WithOptions>(
+			callback->vfPpgtt64WithOptions)(accelerator, task);
+	if (!pageTable) {
+		IOLockUnlock(gVfPageTableUpdateLock);
+		return nullptr;
+	}
+
+	void *source = nullptr;
+	const bool kernelTask = IGAccelTaskIsKernelGPUTask(task);
+	if (kernelTask) {
+		source = getMember<void *>(that, 0x98);
+	} else if (accelerator) {
+		auto *bootstrapTask = getMember<void *>(accelerator, 0x150);
+		if (bootstrapTask)
+			source = getMember<void *>(bootstrapTask, 0x260);
+	}
+
+	auto *destinationVtable =
+		*reinterpret_cast<mach_vm_address_t **>(pageTable);
+	auto *sourceVtable = source ?
+		*reinterpret_cast<mach_vm_address_t **>(source) : nullptr;
+	const NGIGAddressRange managerRange =
+		getMember<NGIGAddressRange>(that, 0xA0);
+	const bool rangeValid =
+		(managerRange.start & (PAGE_SIZE - 1U)) == 0 &&
+		(managerRange.length & (PAGE_SIZE - 1U)) == 0 &&
+		managerRange.length <= UINT64_MAX - managerRange.start;
+	bool synchronized = destinationVtable && sourceVtable && rangeValid;
+
+	const bool destinationUsesDescriptors =
+		(getMember<uint32_t>(pageTable, 0x28) & 1U) != 0;
+	const bool sourceUsesDescriptors = source &&
+		(getMember<uint32_t>(source, 0x28) & 1U) != 0;
+	if (synchronized && !kernelTask && destinationUsesDescriptors &&
+	    sourceUsesDescriptors) {
+		// Match the native 64-bit-to-64-bit clone window exactly. A missing
+		// source descriptor is a sparse success; a present descriptor must be
+		// accepted by the destination or the unpublished table is discarded.
+		const NGIGAddressRange descriptorRange {0, 0x40000000ULL};
+		void *descriptor = nullptr;
+		using ReadDescriptor = bool (*)(const void *,
+		                                const NGIGAddressRange &, void **);
+		using MapDescriptor = bool (*)(void *, const NGIGAddressRange &, void *);
+		auto readDescriptor = reinterpret_cast<ReadDescriptor>(
+			sourceVtable[0x168 / sizeof(mach_vm_address_t)]);
+		auto mapDescriptor = reinterpret_cast<MapDescriptor>(
+			destinationVtable[0x158 / sizeof(mach_vm_address_t)]);
+		synchronized = readDescriptor && mapDescriptor;
+		if (synchronized && readDescriptor(source, descriptorRange, &descriptor))
+			synchronized = descriptor &&
+				mapDescriptor(pageTable, descriptorRange, descriptor);
+	} else if (synchronized) {
+		using ReadEntry = bool (*)(const void *, uint64_t, uint64_t &, uint64_t &);
+		using MapEntry = bool (*)(void *, const NGIGAddressRange &,
+		                         uint64_t, uint64_t);
+		auto readEntry = reinterpret_cast<ReadEntry>(
+			sourceVtable[0x140 / sizeof(mach_vm_address_t)]);
+		auto mapEntry = reinterpret_cast<MapEntry>(
+			destinationVtable[0x118 / sizeof(mach_vm_address_t)]);
+		synchronized = readEntry && mapEntry;
+		const uint64_t end = managerRange.start + managerRange.length;
+		for (uint64_t address = managerRange.start;
+		     synchronized && address != end; address += PAGE_SIZE) {
+			uint64_t physical = 0;
+			uint64_t flags = 0;
+			if (!readEntry(source, address, physical, flags))
+				continue;
+			const NGIGAddressRange pageRange {address, PAGE_SIZE};
+			synchronized = mapEntry(pageTable, pageRange, physical, flags);
+		}
+		// Native synchronizeEachEntry always records the deferred flush,
+		// including empty and failed ranges. Preserve that ordering before an
+		// unpublished partial hierarchy can be released.
+		using FlushGtt = void (*)(void *);
+		reinterpret_cast<FlushGtt>(
+			callback->vfFlushHardwareAfterGttUpdate)(accelerator);
+	}
+
+	if (!synchronized) {
+		using Release = void (*)(void *);
+		auto release = destinationVtable ?
+			reinterpret_cast<Release>(
+				destinationVtable[0x28 / sizeof(mach_vm_address_t)]) : nullptr;
+		PANIC_COND(!release, "ngreen",
+			"Cannot release failed unpublished VF page table");
+		release(pageTable);
+		pageTable = nullptr;
+		SYSLOG("ngreen", "V282: rejected partial VF page-table synchronization");
+	}
+
+	IOLockUnlock(gVfPageTableUpdateLock);
+	return pageTable;
 }
 
 void Gen11::vfUpdateMappingCacheType(void *that, uint32_t requestedType)

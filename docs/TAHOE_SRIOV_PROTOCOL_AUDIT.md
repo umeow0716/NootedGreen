@@ -10333,3 +10333,54 @@ after native release: native pruning may already have returned and zeroed page
 descriptors. A live repair still needs pre-return interception plus stable
 task/table/pool/VA ownership. No VM, PCI or runtime GPU operation accompanied
 this change.
+
+# V282 unpublished PPGTT synchronization transaction
+
+Both admitted Tahoe accelerator payloads have one direct caller of
+`IGMemoryManager::newPageTableForTask`: `IGAccelTask::initWithOptions` at
+0x79a4. The result is not stored in task +0x260 until the call returns. A null
+result takes the task-init false path; `IGAccelTask::withOptions` then invokes
+the new object's virtual release. This is the bounded ownership point used by
+V282. It is not a claim that partially initialized tasks are globally hidden:
+the inherited base initializer has already linked the task into the accelerator
+list, and universal observer serialization remains a separate audit item.
+
+The complete native manager body and synchronization helpers remain hash
+pinned in both payloads. Native `synchronizeEachEntry` skips sparse source
+entries, but the first false destination map ends the loop, records only a
+deferred flush flag and returns through a void ABI. Native
+`synchronizePageDescriptor` likewise ignores the bool returned by map/remap.
+Consequently the native factory can publish a non-null table containing a
+successful prefix after a later allocation/map failure.
+
+V282 routes only the manager factory on a classified VF. PF/non-VF execution
+delegates to the native trampoline. The VF path resolves and invokes the
+unchanged 32/64 factories selected by the pinned task address-mode getter,
+then performs the native clone policy with observable results while holding
+the existing page-table update mutex. Kernel/bootstrap tasks clone the manager
+global table entry-by-entry. User 64-to-64 descriptor tables clone the native
+fixed `[0, 1 GiB)` descriptor window; all other combinations use the manager's
+page-aligned, overflow-checked range. Sparse source reads remain successful.
+A present entry or descriptor must map successfully.
+
+The exact source/destination virtuals are pinned: entry read +0x140, map
++0x118, descriptor read +0x168 and descriptor map +0x158. Initial clone calls
+never request remap semantics. Per-entry cloning preserves native deferred
+flush ordering. On any invalid owner/range/vtable or false destination map,
+the still-unpublished destination is released through the same +0x28 virtual
+used by Apple's factories and the manager returns null. Its task caller then
+uses the native initialization unwind; no table root has been installed into a
+hardware context, so this local release does not require retirement of a live
+GPU translation.
+
+Static coverage pins both factory bodies, task identity/address-mode methods,
+the unique factory caller, synchronization bodies and every consumed vtable
+slot in both payloads. Eleven source mutations are rejected and 680 offline
+states enforce publish-or-release semantics. The route inventory is now 107
+unique symbols: 101 accelerator, three framebuffer and three System KC.
+
+This checkpoint closes only failed initial clone publication. It does not prove
+that the page-table update mutex serializes native commit, unmap, release,
+PagePool prune or accelerator-list observers; those operations do not all use
+it yet. PagePool recycle/prune lifetime and the common page-table transaction
+domain remain hard blockers. No VM, PCI, sysfs or Host i915 operation was run.

@@ -180,6 +180,12 @@ private:
 		void *that, void *task, void *mapping);
 	mach_vm_address_t oVfCommitPageTablesForTask {};
 	mach_vm_address_t vfReleasePageTablesForTask {};
+	static void *vfNewPageTableForTask(void *that, void *task);
+	mach_vm_address_t oVfNewPageTableForTask {};
+	mach_vm_address_t vfGetHardwareContextAddressMode {};
+	mach_vm_address_t vfPpgtt32WithOptions {};
+	mach_vm_address_t vfPpgtt64WithOptions {};
+	mach_vm_address_t vfFlushHardwareAfterGttUpdate {};
 	static void vfUpdateMappingCacheType(void *that, uint32_t requestedType);
 	mach_vm_address_t oVfUpdateMappingCacheType {};
 	static bool vfWaitForRingSpace(void *that, uint32_t requestedDwords);
