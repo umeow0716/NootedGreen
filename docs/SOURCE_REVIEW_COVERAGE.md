@@ -7,6 +7,13 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 PagePool allocation/prune/grow: four complete native bodies pinned.
+Allocator reuses published free bits without the prune age filter; prune's
+descriptor completion result is ignored. Actual backing types, new-block
+allocation factories, hash helpers and outer GPU lifetime remain pending. Grow
+has an unchecked map result and non-propagated queue publication failures;
+factory guarantees/recovery must be established before a safe implementation.
+
 2026-10-04 PagePool reuse/PPGTT expansion: nine complete native bodies pinned.
 Last descriptor release clears backing and publishes a free bit without a local
 GPU barrier; hierarchy shrink is not full transactional mapping rollback.

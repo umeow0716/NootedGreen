@@ -9,6 +9,10 @@ import sys
 # Complete reviewed native bodies. This fixes the concrete Intel override
 # graph, not inherited timer APIs, dynamic callbacks or runtime completion.
 STAMP_IRQ_NATIVE = {
+    "__ZN10IGPagePool4growEv": (0x52e, "b6dd584c6c29ec5a49e518753c2613534a413ce25ebacce80b78c4abb8086ae0"),
+    "__ZN10IGPagePool12allocatePageEv": (0x1f2, "f5510c1459a78d42faa38e262fb7a7514f52974ecc184ecedd9e31b8c2c4e851"),
+    "__ZN10IGPagePool5pruneEj": (0x436, "5fc5da8153de076b57dfb6b217037f4421b4d88f7be6b080035fccd33764d605"),
+    "__ZN15IGPriorityQueueIPN10IGPagePool11PoolElementENS0_18PoolElementCompareENS0_15PoolElementHashE25IGIOMallocAllocatorPolicyE4evalERKS2_": (0x18a, "c09752525356d466e3948b5ef023111d0f576807cb04ddefb40db7ff0a3d8af9"),
     "__ZN10IGPagePool11releasePageEPKNS_14PageDescriptorE": (0x15e, "c0517b90af5a3ee2250dec98476192459c0da84b78fc8a33efc230d8c0b45822"),
     "__ZN10IGPagePool13schedulePruneEv": (0x4c, "4823a25c10061da7466412539c82cd1eda14b5bdea7cf8cdcc267c624e300d27"),
     "__ZN31IGHardwarePerProcessPageTable6411expandLevelINS_10LevelEntryILm9E21GTTPageMapLevel4EntryEEvEEbRT_yyPT0_ym": (0x9e, "0ea77cb30a3a0c26fcfc21c3a1abdfe148a3689ce57bdbf6843db6684b8b190b"),
@@ -405,6 +409,10 @@ def macho_inventory(path):
     # These imports distinguish the periodic collection mutex from bridge
     # descriptor spin locks. They do not certify dynamic callback lifetime.
     stamp_irq_imports = {
+        0xb209: "__ZN24IOBufferMemoryDescriptor17inTaskWithOptionsEP4taskjmm",
+        0xb2dd: "__ZN18IOMemoryDescriptor19createMappingInTaskEP4taskyjyy",
+        0xb30b: "_OSAddAtomic64",
+        0xb0f9: "_OSAddAtomic64",
         0xb825: "_OSAddAtomic64", 0xbb67: "_OSAddAtomic64",
         0x80dfc: "__ZNK18IOAccelDisplayPipe15getEventMachineEv",
         0x80e16: "__ZNK18IOAccelDisplayPipe15getEventMachineEv",

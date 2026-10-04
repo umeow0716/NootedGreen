@@ -6381,6 +6381,58 @@ callback admission must be proved elsewhere. No executable patch/runtime test.
 
 ### PagePool reuse and expansion/shrink bodies
 
+#### Reallocation is not gated by prune age
+
+Complete grow (0x52e) additionally reviewed/pinned with its descriptor factory,
+CPU-map factory and atomic index imports. Correction: allocator target 0xb15e
+is named grow, not allocatePoolElement. It allocates a 0xcc0 software block,
+creates IOBufferMemoryDescriptor with options 0x23 and length 64 << page shift,
+and checks descriptor prepare status. A failed prepare triggers prune(mode 0)
+and one retry, then release/free on failure.
+
+Successful prepare calls createMappingInTask, then immediately dereferences its
+return to call mapping virtual +0x118 WITHOUT a local null check. A zero virtual
+address completes/releases the descriptor and frees the software block, but
+does not locally release the mapping object. Those failure paths need upstream
+factory guarantees; they are not a reproduced panic/leak. Successful setup
+stores map/block base, builds 64 page records with physical-segment virtual
++0x138 (no local zero/result validation), backing CPU address and zero refs.
+Address truncation/segment-contiguity and default-map options remain open.
+
+Queue publication takes the optional lock. Resize failure and hash insertion
+failure converge on +64 availability, free-list enqueue and a true return;
+failure to insert is not propagated to allocator retry. Consequently grow=true
+alone does not prove a block is discoverable in the allocation priority queue.
+Subordinate hash/resize contracts and recoverability must be established before
+fixing publication; blanket false could leak or discard an already published
+block. No production patch or actual allocation failure was induced.
+
+Complete allocatePage (0x1f2), prune (0x436) and priority-queue eval (0x18a)
+reviewed/pinned. Allocation takes the optional pool lock, selects the queue
+head's nonzero free bitmap, removes an entirely free block from the prune list,
+chooses a free page by BSF, decrements availability, records uptime, clears its
+bitmap bit and reorders the queue. After unlocking it increments the returned
+descriptor reference count through imported OSAddAtomic64. No age threshold,
+GPU-completion test or quarantine intervenes between a released free bit and
+this allocation. Empty/no-free queue unlocks and calls grow;
+false returns null, true retries. That allocator and concurrent pool lifetimes
+remain pending.
+
+eval reorders using free-page popcount classes (zero, 1..48, 49..64) and uptime,
+with hash-index helpers maintaining locations. It is an allocation preference,
+not retirement accounting. Its subordinate hash/heap helper contracts are still
+pending; these three reviewed bodies are not a complete pool concurrency audit.
+
+Prune mode 1 uses elapsed uptime versus pool +0x58; other modes skip that age
+filter. It removes eligible blocks from queue/hash/prune list, subtracts 64
+available pages and moves them to a temporary list under the optional lock.
+After unlocking it releases block +0x10 object, calls descriptor +0x08 complete
+virtual +0x1f8 with direction 0 (status ignored), releases that descriptor and
+frees the 0xcc0 software block. Object types, mapping revocation and DMA lifetime
+must be traced through grow and descriptor factories before treating those operations as
+safe. The prune delay is not a GPU completion proof and does not delay ordinary
+page reuse. No production/runtime change or inferred historical crash cause.
+
 Nine additional complete bodies reviewed/pinned: releasePage (0x15e),
 schedulePrune (0x4c), both expandLevel variants (0x9e/0xde), shrinkRange
 (0x2d0), and four shrinkLevel variants (0x86/0x86/0x86/0x4e).
