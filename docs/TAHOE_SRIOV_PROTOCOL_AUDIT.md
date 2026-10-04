@@ -6961,6 +6961,23 @@ No executable patch or runtime mutation.
 
 ###### Complete waitForSpace reservation and failure ordering
 
+The scheduler4 vtable +0x150 is now resolved/pinned to checkForProgress at
+1db54/8. The complete method unconditionally returns true; it checks no ring
+head, completion token or hardware status. The existing VF startup uses
+accelerator +0x1250 as its scheduler receiver, consistent with this native
+typed vtable interpretation. Runtime object identity still requires observation;
+do not generalize this result to every scheduler class.
+
+For the reviewed scheduler4 dispatch, waitTimeout's true-result branch skips
+debugGraphicsEngine and its reset-failed counter/panic path, adds elapsed
+accounting and returns even if the last predicate remained true. Thus the
+native helper provides no capacity postcondition on this timeout branch.
+Whether an outer owner prevents this branch or ensures a later recovery
+remains to prove. It is not safe to claim checkForProgress true proves GPU
+progress or that timeout automatically performs reset. Next: establish caller
+handling and effective VF routing before a fail-closed reservation repair;
+do not simply panic and treat that as Host DMA containment.
+
 Correction after complete callee review: 43886/40 is debugGraphicsEngine,
 not a direct reset/recovery routine. It calls diagnostic bodies 438c6 and
 439b2, then tail-dispatches imported signalHardwareError with restart request

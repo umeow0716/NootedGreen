@@ -9,6 +9,7 @@ import sys
 # Complete reviewed native bodies. This fixes the concrete Intel override
 # graph, not inherited timer APIs, dynamic callbacks or runtime completion.
 STAMP_IRQ_NATIVE = {
+    "__ZN12IGScheduler416checkForProgressE10IGHwCsType": (0x8, "aaa500a73706124bc5374dc27c8b444160b15dc8a45b0fef9354b23106b76348"),
     "__ZN20IGHardwareRingBuffer19debugGraphicsEngineEv": (0x40, "ee36c90b746b8637259c7893cd17cd879316c7ae1d3b0c27687f9cd60bfdec74"),
     "__ZN20IGHardwareRingBuffer11waitTimeoutEU13block_pointerFbvE.cold.1": (0x12, "ef98956647d1ee0727b6b56636f23433333ceab809ec72318da1223c5400a8a2"),
     "__ZN20IGHardwareRingBuffer11waitTimeoutEU13block_pointerFbvE": (0x106, "caa2ccd4ce6a411ac4daa58d3b037dd5a561a418c8169e0b824d30a04bc8e1fb"),
@@ -607,6 +608,7 @@ def macho_inventory(path):
     assert image[0x14518:0x1451e] == bytes.fromhex("ff 90 30 01 00 00"), f"{path}: changed releaseRange unmap virtual"
     assert direct_branches("__ZN19IGHardwarePageTable12releaseRangeERK14IGAddressRange", "__ZN16IntelAccelerator27flushHardwareAfterGttUpdateEv") == [0x14522], f"{path}: changed post-unmap deferred-flush edge"
     assert image[0x14573:0x14575] == bytes.fromhex("b0 01"), f"{path}: changed unconditional releaseRange success"
+    assert struct.unpack_from("<Q", image, value(SCHEDULER4_VTABLE) + 16 + 0x150)[0] == value("__ZN12IGScheduler416checkForProgressE10IGHwCsType"), f"{path}: changed scheduler4 timeout progress query"
     assert image[0x4177c:0x41782] == bytes.fromhex("ff 90 50 01 00 00"), f"{path}: changed pending-TLB reservation virtual"
     assert image[0x41785:0x4178a] == bytes.fromhex("41 c6 46 6d 01"), f"{path}: changed pre-validation TLB readiness store"
     assert image[0x417b1:0x417b6] == bytes.fromhex("41 c6 46 6e 01"), f"{path}: changed pre-validation AUX readiness store"
