@@ -10,6 +10,36 @@ The current dynamic-entry gate table is
 
 ## Scope
 
+2026-10-05 SG-11 ledger progress: the current fail-closed inventory covers
+exactly 1,500 repository paths.  It partitions all 68 tool paths into 50
+directly executed programs, 12 explicitly owned indirect/external programs
+and six data/fixture files; all six production `.cpp` files and 35 production
+headers are in the real compiler closure.  The full `kern_gen11.cpp/.hpp` was
+read end-to-end.  Compiler unused diagnostics and the ownership ledger account
+for all 161 Gen11 method definitions and 95 route/original-address fields.
+
+The compiler-derived dependency closure is 369 paths: 41 product paths, 15
+Lilu paths and 313 MacKernelSDK headers.  The direct vendor surface is only 26
+headers, and an object-level ledger fixes all 68 external product imports: 16
+are exported by the exact pinned Lilu binary and 52 are kernel ABI imports.
+This separates actual consumers from declarations pulled in transitively.
+The exact Lilu plugin-start source and binary are pinned; the only Xcode-linked
+SDK archive is `libkmod.a`, whose two members and matching `c_start.c` /
+`c_stop.c` identities are fixed.  Other vendored paths remain in the all-file
+inventory but are not represented as active executable build inputs.
+
+The payload ledger fixes nine bundles and all 109 files by content identity:
+43 plist/CodeResources files parse and all 15 `Contents/MacOS` payloads are
+x86_64 Mach-O.  Four kernel binaries retain exact per-route review; the 11
+userspace binaries are explicitly opaque identity coverage.  The reviewed
+12.5 resource-only `AppleIntelGraphicsShared.bundle` has one inherited, pinned
+anomaly: its Info.plist names `AppleIntelGraphicsSharedIL`, while the bundle
+contains the five compiler dylibs rather than that principal executable.  No
+other missing executable is accepted.  S11.1 through S11.6 are therefore
+`CLOSED-STATIC`.  Full static `/tmp/ngreen-static.HzpQUw` passed locally; the
+clean checkpoint, push and exact-SHA CI remain open, so this is not dynamic
+authorization and the ledger title remains incomplete.
+
 2026-10-05 V302 SG-10 negative-reachability closure: a decoder-backed scan
 now fixes every genuine `accelerator+0x1240` disp32 memory operand in both
 admitted Tahoe payloads: 131 canonical owners and 279 sites split exactly into

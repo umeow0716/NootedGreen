@@ -5,9 +5,16 @@ compiler="${CXX:-clang++}"
 task_output="$(mktemp -d /tmp/ngreen-static.XXXXXX)"
 printf 'Diagnostic directory: %s\n' "$task_output"
 failed=0
+if bash -n tools/*.sh; then
+    printf 'PASS shell syntax: all host/static scripts\n'
+else
+    failed=1
+fi
 for source in NootedGreen/*.cpp; do
     if "$compiler" --target=x86_64-apple-macos13 -std=c++14 \
         -fsyntax-only -ffreestanding -fno-builtin \
+        -Werror=unused-function -Werror=unused-private-field \
+        -Werror=unneeded-internal-declaration \
         -DKERNEL=1 -DKERNEL_PRIVATE=1 -DMODULE_VERSION=100 \
         -DPRODUCT_NAME=NootedGreen -D__MAC_OS_X_VERSION_MIN_REQUIRED=130000 \
         -I. -ILilu.kext/Contents/Resources -IMacKernelSDK/Headers \
@@ -121,6 +128,11 @@ else
 fi
 if python3 -B tools/project_contract_test.py; then
     printf 'PASS offline Xcode/plist/scheme/CI contracts\n'
+else
+    failed=1
+fi
+if python3 -B tools/source_review_inventory_test.py; then
+    printf 'PASS exact SG-11 all-file inventory contract\n'
 else
     failed=1
 fi

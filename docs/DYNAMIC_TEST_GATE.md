@@ -17,13 +17,14 @@ kext/AuxKC、重綁 PCI 或寫入 SR-IOV sysfs。`CLOSED` 只代表指定的離�
 | SG-08 | render／depth／CCS／ICB／paging 的 allocation、event collection、partial submit 與錯誤傳遞 | CLOSED-STATIC | V300 固定八份 event-vector grow 的完整 147-call／38-owner 圖，52 個初始要求與 95 個 append growth 都由 postcondition fail-stop 保護；另以三個共同 boolean 邊界涵蓋 `submitBlit`、resource CCS 與 depth 的完整 35-call 清冊。非空 work 的 false、owner/transport 不一致與 later-plane/chunk rejection 都在 CPU 成功狀態可繼續發布前封門並 guest-panic；V281 cache/PTE commit-or-restore 仍為其前提。這是離線 fail-stop 證據，不是 GPU 執行或優雅復原證明。 |
 | SG-09 | timer／IRQ／workloop callback 的取消、排空與 owner lifetime | CLOSED-STATIC | V301 固定原生 DPSM、event-machine fallback 與 Scheduler4 passive timer 的 owner/binding/free 邊界；成功 start 在 publication 前驗證三者同屬 accelerator workloop，normal stop 在 base stop 清除 workloop 前同步 detach fallback/periodic source。Start 的 base rollback 與後續 null-provider Intel stop 也各自處理 partial binding。鎖內前後快照、workloop gate 同步 removal 與 IOTimer generation increment 排除 late raw-owner action；原生 owner 稍後負責 release，VF route 不偷取 reference。PagePool callback path 由既有 zero-option admission 排除。這仍是離線證據。 |
 | SG-10 | 所有 VF 可達 PF-owned MMIO／DMA／force-wake／reset 的 negative reachability | CLOSED-STATIC | V302 完成 `accelerator+0x1240` 的 131-owner／279-site 精確機械分割，並封閉 legacy construction、SafeRead/Write、Scheduler4 PM、cache/PAT/MOCS、dynamic-offset IRQ helper 與 modern GuC retained path。完整 static `/tmp/ngreen-static.CYth1a` 與 source checkpoint `5529127a03d5b92fcd8ae5ee538b9bad4e136be0` exact-SHA CI `37232739353` 通過。這仍不是硬體執行證據。 |
-| SG-11 | baseline 要求的所有程式檔完整審閱與 ledger closure | OPEN | `SOURCE_REVIEW_COVERAGE.md` 仍明確標記 incomplete；新增／修改檔案也必須納入。CI 成功不能替代此項。 |
+| SG-11 | baseline 要求的所有程式檔完整審閱與 ledger closure | LOCAL-PASS / CI-PENDING | Exact fail-closed ledger涵蓋1,500 paths、369個實際編譯依賴、26個direct vendor headers、68個external ABI imports、62個tool programs、6個tool data、109個payload及全部41個product sources/headers。S11.1–S11.6已關閉，完整local static通過；尚缺clean pushed exact-SHA CI。 |
 | SG-12 | 精確候選 commit 的完整 static suite、x86_64 release kext、Metal smoke build 與 artifact provenance | REVALIDATE PER CANDIDATE | Pushed V302 source checkpoint `5529127a03d5b92fcd8ae5ee538b9bad4e136be0` 的 exact-SHA CI `37232739353` 已通過 full static、x86_64 release kext、Metal smoke 與兩個 artifact upload（83,683／2,943 bytes）。但 SG-11 尚未解除；未來真正動態候選仍須在其自身 clean/pushed exact SHA 即時重驗。 |
 
 ## 目前主路徑
 
 SG-10 已關閉為 `CLOSED-STATIC`；下一個且唯一仍開放的主路徑是 SG-11 全程式檔
-ledger。V299 的 completion predicate、V300 的 submission-result boundary、V301 的
+ledger的clean commit/push與exact-SHA CI。精確清冊、compiler dependency closure、
+實際ABI import分割及完整local static均已通過。V299 的 completion predicate、V300 的 submission-result boundary、V301 的
 同步 callback detach 與 V302 的 negative reachability 都不能將靜態證據誤稱為 GPU
 已實際執行；SG-11 與未來動態候選的 SG-12 即時重驗仍禁止動態。以下保留 SG-05/SG-06
 producer 路徑證據作為 transaction 前提。
@@ -241,3 +242,15 @@ contained boot，不是效能、Metal completion、媒體或 Looking Glass 測�
 | S10.6 telemetry／OA／debug sysctl／PAVP | CLOSED-STATIC | 既有 end-to-end contracts固定 pre-engine manager、usage、trace、OA user-client、55 OIDs及 hardware descendants；VF routes保留必要 object lifetime但不進 force-wake/PF MMIO。PAVP callback與 telemetry flip root亦已隔離。 |
 | S10.7 raw helpers with no reachable owner | CLOSED-STATIC | `clearEventWait`、`clearSemaphoreWait`、CommandStreamer4 `setGTFrequencyMMIO`、GuC `readMDRBRegister`／`writeMDRBRegister` 均以 exact whole-body及零 direct/tail、RIP-LEA、loaded-pointer reference固定；任何未來 address-taken或 caller新增即測試失敗。 |
 | S10.8 SG-10 integrated regression | CLOSED-STATIC | Targeted dual-payload lifecycle、165-route contract、`git diff --check`及完整 static suite `/tmp/ngreen-static.CYth1a` 均通過；clean source checkpoint `5529127a03d5b92fcd8ae5ee538b9bad4e136be0` 已 push，exact-SHA CI `37232739353` 成功並產出 release kext與 Metal smoke artifacts。SG-11仍禁止啟動 VM或操作 VF/PF。 |
+
+## SG-11 子閘門（所有程式檔 ledger）
+
+| 子項 | 狀態 | 證據／剩餘工作 |
+| --- | --- | --- |
+| S11.1 exact tracked inventory／scope partition | CLOSED-STATIC | `source_review_inventory_test.py`固定目前1,500 paths與top-level partition：NootedGreen 42、tools 68、MacKernelSDK 1,227、Lilu.kext 40、sle_Internal 109、Xcode 4、workflow 1，另含docs/root metadata；新增、刪除、改名、symlink escape均fail closed。舊1,305-file快照只保留歷史用途。 |
+| S11.2 production source semantic review | CLOSED-STATIC | 六個`.cpp`、35個`.hpp`與Info.plist均在Xcode/compiler closure；`kern_gen11.cpp/.hpp`已逐段讀完，完整165-route與protocol contracts仍固定。Compiler/analyzer/cppcheck/clang-tidy未找到新的material defect；161個Gen11方法及95個route/original fields均有consumer。 |
+| S11.3 host tools／tests semantic review | CLOSED-STATIC | 68個tools paths精確分為50個static/workflow direct programs、12個明列的indirect/external programs與6個data/fixtures；28個Python AST、3個shell syntax、全部C++ model/static contracts均受測。Pinned System/Boot KC contract及兩個Unicorn command-pool tests亦已離線通過。 |
+| S11.4 vendored dependency closure | CLOSED-STATIC | 實際compiler closure固定為369 paths：41 product、15 Lilu與313 MacKernelSDK。Production的直接vendor surface另固定26個headers及68個external imports，其中16個由exact Lilu binary實際export、52個是kernel ABI；因此transitive include不再被誤列為逐項執行consumer。Lilu bundle/binary/plugin-start、`libkmod.a`及其兩個精確members/source identities均固定；Xcode contract固定唯一archive link input與plugin-start source。其餘vendored paths仍保留在1,500-path清冊，但不宣稱為active build implementation。 |
+| S11.5 payload／metadata／build closure | CLOSED-STATIC | 九個bundle／109 paths的content identity與topology已固定；43個plist/CodeResources可解析，15個MacOS payload全為x86_64 Mach-O。四個kernel binaries保留per-route review，11個userspace binaries只列opaque identity。`AppleIntelGraphicsShared.bundle`沿用受審12.5 resource-only layout，其plist所列但不存在的`AppleIntelGraphicsSharedIL`是唯一精確例外，新增任何缺 executable皆fail closed。Xcode與workflow contracts另固定6 sources、35 headers、3 configurations及artifact consumers。 |
+| S11.6 obsolete／duplicate／unowned code elimination | CLOSED-STATIC | 六個production translation units通過unused-function/private-field/internal-declaration硬錯誤；product無TODO/FIXME/XXX，161個Gen11 definitions與95個route/original fields皆有owner。62個tool programs及6個fixtures無未歸屬項；保留的legacy程式均由現行PF/VF隔離或轉譯contracts明確擁有，未找到可安全刪除而不改ABI的重複production path。 |
+| S11.7 integrated all-file regression | LOCAL-PASS / CI-PENDING | 完整static suite `/tmp/ngreen-static.HzpQUw` 已通過，包含新增ledger/ABI/payload/ownership檢查與既有全套雙payload/KC contracts。尚缺clean commit/push及該精確SHA的CI；完成前標題維持incomplete且禁止任何VM／PCI／VF/PF／Host i915動態操作。 |
