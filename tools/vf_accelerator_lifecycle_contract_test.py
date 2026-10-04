@@ -9,6 +9,8 @@ import sys
 # Complete reviewed native bodies. This fixes the concrete Intel override
 # graph, not inherited timer APIs, dynamic callbacks or runtime completion.
 STAMP_IRQ_NATIVE = {
+    "__ZN18IGAccelDisplayPipe14submitCommandsEP12IOAccelEventS1_": (0x12e, "5639208f730ed9514532333fe17d48a8ec200646992bf62f79832bdf5d063f71"),
+    "__ZN18IGAccelDisplayPipe21displayReadRegister32Ei": (0x64, "c5065afa9f0406976ee881c4ad7d502d1e1bd01d965ac63dab48687c754204d1"),
     "__ZN18IGAccelDisplayPipe23submitScanoutFlipBufferEP12IOAccelEventjP16IOAccelResource2S3_": (0x15e, "357071e49e6025c1f612a74f6f4f3650d273bca97f02dd3bde0bc12349532a58"),
     "__ZN18IGAccelDisplayPipe16submitFlipBufferEP12IOAccelEventjP16IOAccelResource2S3_": (0x22e, "965d468497109a5ac2fe596554b7045240c1bea0837789aab64abc9e8a16f1d8"),
     "__ZN18IGAccelDisplayPipe12generateFlipEP12IOAccelEventjP16IOAccelResource2S3_": (0x96c, "04b86ad3b4a6d5cd59e9a02d8bebc3dfb2c92825e76e60a28e67d9d7b4c56a3a"),
@@ -545,6 +547,10 @@ def macho_inventory(path):
     # These imports distinguish the periodic collection mutex from bridge
     # descriptor spin locks. They do not certify dynamic callback lifetime.
     stamp_irq_imports = {
+        0x80842: "__ZN25IOAccelCommandBufferPool212setBufferPtrEPj",
+        0x80876: "__ZN25IOAccelCommandBufferPool212submitBufferEv",
+        0x7ecd5: "__ZNK18IOAccelDisplayPipe14getFramebufferEv",
+        0x807cc: "__ZNK18IOAccelDisplayPipe15getEventMachineEv",
         0x7fd7f: "__ZN18IOAccelDisplayPipe27submitFlipBufferTransactionEP12IOAccelEventjP16IOAccelResource2S3_",
         0x80076: "__ZN18IOAccelDisplayPipe27submitFlipBufferTransactionEP12IOAccelEventjP16IOAccelResource2S3_",
         0x7fcd7: "__ZN25IOAccelCommandBufferPool217getBufferPtrNoIncEj",

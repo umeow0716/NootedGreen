@@ -7,6 +7,12 @@ audit's runtime blockers are open.
 
 ## Scope
 
+New complete native reviews: display submitCommands `0x8076c/0x12e` and
+displayReadRegister32 `0x7ecb6/0x64`; new paired-KC pool setBufferPtr
+`0x14b6b550/0xe`, submitBuffer `0x14b6b3ca/0x186`. Whole hashes/imports
+checked. Pool reuse/wait and concrete queue transfer remain unproved, as does
+VF reachability of framebuffer virtual reads; no DMA lifetime certification.
+
 New complete native reviews: submitScanoutFlipBuffer `0x805c0/0x15e`,
 submitFlipBuffer `0x7f940/0x22e`, generateFlip `0x7fb6e/0x96c`. Whole hashes,
 buffer/legacy imports and selected generator/display-read/submit/DPSM edges

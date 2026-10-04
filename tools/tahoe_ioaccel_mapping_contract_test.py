@@ -35,6 +35,8 @@ EVENT_DISABLE_STAMP_LOCKED = "__ZN20IOAccelEventMachine223disable_stamp_interrup
 EVENT_ENABLE_STAMP = "__ZN20IOAccelEventMachine220enableStampInterruptEi"
 EVENT_DISABLE_STAMP = "__ZN20IOAccelEventMachine221disableStampInterruptEi"
 EVENT_OWNER_BODIES = {
+    "__ZN25IOAccelCommandBufferPool212setBufferPtrEPj": (0xe, "966161046c4b88de4a6eebbb532da658c7a201330fb194055973f8af790dd35f"),
+    "__ZN25IOAccelCommandBufferPool212submitBufferEv": (0x186, "148ea39a6e655b0db0ef181a37165ebd35bb92ab0bf72607001484e420697602"),
     "__ZN18IOAccelDisplayPipe38set_current_plane_ioSurfaceDeviceCacheEP12IOAccelEventjjP20IOSurfaceDeviceCache": (0x21a, "8beabc3abe7e423ff49dacf19daa96567c69e70b727205ae1db92b8b4ed10ce5"),
     "__ZN30IOAccelDisplayPipeTransaction220set_transaction_argsEP33IOAccelDisplayPipeTransactionArgs": (0xab0, "830382a2686dc7615224b4b12d072e1484eef55f80854c6f017ffae6b9d1ceb2"),
     "__ZN13IOAccelMemory19createMappingInTaskEP11IOAccelTaskj": (0x16, "47b5beedeaa9f97ff450a1c3e79647872b26fbd32afe277c8638f9016202bac1"),

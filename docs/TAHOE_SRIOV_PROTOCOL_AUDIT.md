@@ -6955,6 +6955,48 @@ No executable patch or runtime mutation.
 
 ### Update fanout must participate in the same owner transaction
 
+#### Display command submission crosses the shared command-buffer pool
+
+New complete native reviews/pins: DisplayPipe submitCommands
+`0x8076c/0x12e` and displayReadRegister32 `0x7ecb6/0x64`; four relevant
+external imports are pinned in both archived payloads. New complete paired-KC
+reviews/pins: pool setBufferPtr `0x14b6b550/0xe`, submitBuffer
+`0x14b6b3ca/0x186`. Whole-body hashes are in their respective contracts.
+
+Native submitCommands obtains the pool/event queue through the display-machine
+owner chain. Its selected prerequisite-event path allocates a temporary event,
+tries event merge, tries a barrier, and on barrier failure finishes the temporary
+event; effective event-machine identities follow the previously reviewed
+virtual ABI, not a newly established GPU-completion result here. It passes the
+pipe command cursor to imported setBufferPtr, merges optional/output event
+storage through queue virtual `+0x140`, calls submitBuffer, then clears pipe
+command pointers `+0x1340/+0x1348`. No pool/page/mapping retain or synchronous
+hardware completion is supplied locally. Clearing the caller's pointers does
+not establish safe pool backing reuse.
+
+Pool setBufferPtr only writes raw cursor `+0x1858`; no local capacity validation.
+submitBuffer writes CPU/GPU buffer address and dword length into its current
+record, dispatches event-queue virtual `+0x130`, merges the selected mapping's
+event storage through `+0x140`, then advances/alines a suballocation cursor or
+selects the next buffer. The latter path may inspect mapping reuse, grow the
+pool, or invoke mapping wait before resetting cursors. Their callee semantics,
+pool-count/pointer bounds, concrete queue submission and final backing owner
+still need proof. Reading this enclosing body does not certify those waits
+as successful GPU completion. This shared pool is also called from previously
+reviewed CCS/depth paths, so its lifetime proof cannot be display-only.
+
+displayReadRegister32 checks accelerator byte `+0x128c`; false returns zero,
+true obtains framebuffer and calls virtual `+0x6b8` with stack output. It
+does not locally initialize that output, check framebuffer null or interpret
+the call status before reading the output. Valid caller/command behavior
+could establish those preconditions; this is not proof of a live fault.
+No named source route intercepts this method. Existing physical framebuffer
+admission rejection is separate from proving the selected call unreachable
+on a VF; an inactive return of zero is not that device-identity proof.
+Both native payload and paired-KC contracts pass. No production/runtime change.
+Next review effective pool reuse/wait and queue ownership before integrating
+retirement, keeping physical display API exclusion separate from VF capture.
+
 #### Effective flip generation includes display commands and a DPSM producer
 
 New complete native reviews/pins: submitScanoutFlipBuffer `0x805c0/0x15e`,
