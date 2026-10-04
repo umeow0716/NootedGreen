@@ -705,6 +705,7 @@ def macho_inventory(path):
             event_stop_imports[value(table) + 16 + slot] = method
     observed_event_stop_imports = {address: [] for address in event_stop_imports}
     external_relocation_offsets = set()
+    external_imports = {}
     pool_getter_imports = {}
     pool_set_pointer_imports = {}
     for index in range(external_count):
@@ -712,6 +713,7 @@ def macho_inventory(path):
             "<iI", image, external_offset + index * 8)
         symbol_index = bits & 0xFFFFFF
         external_relocation_offsets.add(address)
+        external_imports.setdefault(address, []).append(names[symbol_index])
         if names[symbol_index] == "__ZN25IOAccelCommandBufferPool217getBufferPtrNoIncEj":
             pool_getter_imports.setdefault(address, []).append(bits >> 24)
         if names[symbol_index] == "__ZN25IOAccelCommandBufferPool212setBufferPtrEPj":
@@ -777,7 +779,42 @@ def macho_inventory(path):
         return direct_branch_candidates(image, owner_start, owner_end,
                                         target_start, external_relocation_offsets)
 
-    # Decoded imported-call argument windows, not whole caller proofs.
+    # Complete getter relocation/owner inventory plus selected decoded argument
+    # windows. These are not whole caller or outer-serialization proofs.
+    getter_calls = (
+        0x30689, 0x30be1, 0x31128, 0x31ba8, 0x33cb0,
+        0x7fcd7, 0x7fe8d, 0x800a7, 0x80754,
+        0x85b17, 0x8c20f, 0x8cb86,
+    )
+    assert pool_getter_imports == {address: [0x2d] for address in getter_calls}, \
+        f"{path}: changed complete native command-pool getter relocation inventory"
+    getter_owners = (
+        ("__Z17blt2d_source_copyP23IGHardwareBlit2DContextP15blit3d_params_tRK8IGVectorI11rect_pair_t25IGIOMallocAllocatorPolicyEP9_WA_TABLE", (0x30689,)),
+        ("__Z15blt2d_fast_copyP23IGHardwareBlit2DContextP15blit3d_params_tRK8IGVectorI11rect_pair_t25IGIOMallocAllocatorPolicyEP9_WA_TABLE", (0x30be1,)),
+        ("__Z16blt2d_color_fillP23IGHardwareBlit2DContextP15blit3d_params_tRK8IGVectorI11blit_rect_t25IGIOMallocAllocatorPolicyEP9_WA_TABLE", (0x31128,)),
+        ("__Z15blit3d_init_ctxP23IGHardwareBlit3DContext", (0x31ba8,)),
+        ("__ZL22blit3d_submit_rectlistP23IGHardwareBlit3DContextP15blit3d_params_tPK8IGVectorI11rect_pair_t25IGIOMallocAllocatorPolicyE", (0x33cb0,)),
+        ("__ZN18IGAccelDisplayPipe12generateFlipEP12IOAccelEventjP16IOAccelResource2S3_", (0x7fcd7, 0x7fe8d, 0x800a7)),
+        ("__ZN18IGAccelDisplayPipe13beginCommandsEv", (0x80754,)),
+        ("__Z14resolve_hiz_g7P25IOAccelCommandBufferPool2P14IGMappedBufferP22depth_resolve_params_tR15resolve_phase_tRjS7_yb", (0x85b17,)),
+        ("__Z19resolve_init_ctx_g7P25IOAccelCommandBufferPool2P14IGMappedBufferyb", (0x8c20f,)),
+        ("__Z11resolve_ccsP25IOAccelCommandBufferPool2P14IGMappedBufferP22color_resolve_params_tbRK8IGVectorI11blit_rect_t25IGIOMallocAllocatorPolicyE", (0x8cb86,)),
+    )
+    assert tuple(call for _, calls in getter_owners for call in calls) == getter_calls, \
+        f"{path}: incomplete command-pool getter owner partition"
+    for owner, calls in getter_owners:
+        owner_start = value(owner)
+        owner_end = next_symbol(owner_start)
+        assert all(owner_start <= call < owner_end for call in calls), \
+            f"{path}: command-pool getter moved outside {owner}"
+        direct_sync_imports = {
+            name for address, imported in external_imports.items()
+            if owner_start <= address < owner_end
+            for name in imported
+            if "Lock" in name or "lock_busy" in name or "unlock_busy" in name
+        }
+        assert not direct_sync_imports, \
+            f"{path}: getter owner direct synchronization imports changed: {owner}"
     assert pool_set_pointer_imports == {address: [0x2d] for address in (
         0x308b6, 0x30e25, 0x3120e, 0x3259e, 0x3544b, 0x80842,
         0x85c36, 0x86d27, 0x87380, 0x87ddf, 0x88111, 0x8819d,

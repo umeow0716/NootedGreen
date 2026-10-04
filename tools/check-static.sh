@@ -87,6 +87,14 @@ else
     failed=1
 fi
 if "$compiler" -std=c++14 -Wall -Wextra -Werror -fsanitize=address,undefined \
+    tools/vf_event_vector_test.cpp \
+    -o "$task_output/vf-event-vector-test" && \
+    "$task_output/vf-event-vector-test"; then
+    printf 'PASS offline VF event-vector growth postconditions\n'
+else
+    failed=1
+fi
+if "$compiler" -std=c++14 -Wall -Wextra -Werror -fsanitize=address,undefined \
     tools/vf_command_pool_patch_test.cpp \
     -o "$task_output/pool-patch-test" && \
     "$task_output/pool-patch-test" \
@@ -119,6 +127,12 @@ fi
 if python3 -B tools/vf_command_pool_growth_source_contract_test.py \
     NootedGreen/kern_gen11.cpp; then
     printf 'PASS offline VF command-pool source contract\n'
+else
+    failed=1
+fi
+if python3 -B tools/vf_event_vector_source_contract_test.py \
+    NootedGreen/kern_gen11.cpp; then
+    printf 'PASS offline VF event-vector source contract\n'
 else
     failed=1
 fi

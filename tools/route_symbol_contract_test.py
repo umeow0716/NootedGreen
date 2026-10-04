@@ -229,15 +229,15 @@ def routed_symbols(source: Path) -> set[str]:
     names = []
     for block in blocks:
         names.extend(re.findall(r'\{\s*"([^"]+)"\s*,', block))
-    uuid_specific_duplicate = (
-        "__ZN31AppleIntelFramebufferController5startEP9IOService"
-    )
+    allowed_duplicate_counts = {
+        "__ZN31AppleIntelFramebufferController5startEP9IOService": 2,
+        "__ZN8IGVectorIP12IOAccelEvent25IGIOMallocAllocatorPolicyE4growEm": 2,
+    }
     duplicates = sorted(
         {
             name
             for name in names
-            if names.count(name) != 1
-            and not (name == uuid_specific_duplicate and names.count(name) == 2)
+            if names.count(name) != allowed_duplicate_counts.get(name, 1)
         }
     )
     if duplicates:
@@ -265,7 +265,7 @@ def main() -> None:
 
     # Keep route inventory changes explicit. This count includes admission,
     # lifecycle, GGTT, GuC/CTB, IRQ, native producer and System-KC routes.
-    expected_route_count = 99
+    expected_route_count = 100
     if len(routes) != expected_route_count:
         raise AssertionError(
             f"route inventory changed: expected {expected_route_count}, got {len(routes)}"
@@ -279,6 +279,11 @@ def main() -> None:
         "__ZN24AppleIntelBaseController5probeEP9IOServicePi",
         "__ZN31AppleIntelFramebufferController5probeEP9IOServicePi",
     }
+    accelerator_duplicate_specific = {
+        "__ZN8IGVectorIP12IOAccelEvent25IGIOMallocAllocatorPolicyE4growEm":
+            [0x7396, 0x2EA12, 0x55B84, 0x5B018,
+             0x6B8B8, 0x757B2, 0x79A2E, 0x844D4],
+    }
     for path, symbols in zip(payload_paths[:2], accelerator):
         verify_runtime_patch_owners(source, path, symbols)
     for route in sorted(routes - system_routes):
@@ -291,6 +296,14 @@ def main() -> None:
                 f"{route}: route must belong to exactly one payload family"
             )
         if in_accel:
+            if route in accelerator_duplicate_specific:
+                expected = accelerator_duplicate_specific[route]
+                if any(sorted(values) != expected for values in accel_values):
+                    raise AssertionError(
+                        f"{route}: changed duplicate accelerator route addresses"
+                    )
+                accelerator_count += 1
+                continue
             if any(len(values) != 1 for values in accel_values):
                 raise AssertionError(f"{route}: missing or non-unique in accelerator variants")
             if accel_values[0][0] != accel_values[1][0]:

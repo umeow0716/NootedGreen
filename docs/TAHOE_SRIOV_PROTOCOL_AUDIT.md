@@ -1,12 +1,45 @@
 # Tahoe SR-IOV protocol audit — in progress
 
 Updated: 2026-10-04. The last dynamic source baseline is `ce166c8`; the latest
-completed offline-reviewed checkpoint is V272 VF command-pointer capacity fail-stop on
+completed offline-reviewed checkpoint is V273 VF dependency-event allocation fail-stop on
 `codex/tahoe-sriov-vf`. This is NOT a boot-test candidate or a successful
 driver baseline. The `ce166c8` run produced repeatable host PF DMAR faults
 followed by i915 hangs and a host reboot. Keep `macos-tahoe-sriov` shut off until the
 corrected code passes the remaining offline review and every independently
 enforced containment precondition.
+
+## V273 dependency-event vector growth postcondition (offline)
+
+The Tahoe payload contains eight same-named event-pointer `IGVector::grow`
+instantiations. Only the two complete/hash-pinned copies used by the reviewed
+resource CCS/depth graph (`0x757b2`) and shared-user-client graph (`0x79a2e`)
+are routed. Each duplicate symbol is solved inside a distinct pair of unique
+owner bounds; both bodies and their following private `AddDstResourceEvents`
+boundaries are validated before the first route. The full eight-address symbol
+set is pinned so another template copy cannot be selected accidentally.
+
+Native `grow` returns false both when capacity is already sufficient and when
+`IOMalloc` fails, so AL is not treated as a success status. Before native can
+multiply or copy, the VF-only wrappers require a consistent current
+size/capacity/storage tuple and a non-overflowing `requested*8`. After native
+returns they require size<=capacity, capacity>=requested and consistent
+zero/nonzero storage. Allocation
+failure therefore marks the protocol fault and guest-panics before the private
+append helpers can silently omit a dependency and continue to command
+submission. PF does not install either route.
+
+Pure tests cover no-growth, successful growth, partially filled capacity,
+missing/inconsistent storage, size overflow and pre-native multiplication
+overflow. Exact
+owner/body hashes, both bounded route sites, 27 source mutations and the
+complete 12-call command-pool getter inventory pass offline. The route inventory
+is now 100 unique symbols (94 accelerator, three framebuffer, three System KC),
+with two bounded route sites for this one duplicated accelerator symbol.
+
+This is allocation-failure containment for two reviewed dependency graphs, not
+proof of complete event collection, outer serialization, DMA quiescence or the
+other six `grow` instantiations. Guest panic still cannot recall prior GPU work.
+No VM, PCI/sysfs or hardware operation was performed; the runtime hold remains.
 
 ## V272 VF command-pointer capacity postcondition (offline)
 
@@ -33,14 +66,26 @@ before routing. Pure tests cover every request through `0x400` dwords at the
 resolve-slot boundary, the `0x9b8` partial cursor, `UINT32_MAX`, pointer mismatch,
 invalid index/backing and reversed bounds. Source mutation tests bind both owner
 checks, the native-call-before-validation order and fault-before-panic order.
-The route inventory is now 99 (93 accelerator, three framebuffer, three System
-KC). The exact local KC control-flow suite and full repository static suite pass.
+At V272 the route inventory was 99 (93 accelerator, three framebuffer, three
+System KC). The exact local KC control-flow suite and full repository static suite pass.
 
 This is fail-stop containment, not GPU recovery or Host DMA quiescence. Native
 submission/selection side effects occur before the postcondition, and a guest
 panic cannot recall DMA already issued to the PF. The VM hold and independent
 Host containment requirements remain. No VM, PCI/sysfs or hardware operation
 was performed.
+
+Getter relocation follow-up: both archived accelerator payloads contain exactly
+12 external calls to `getBufferPtrNoInc`, partitioned across ten symbol-bounded
+owners: three 2D assemblers, Blit3D init and rect-list submission, display
+`generateFlip` (three calls) and `beginCommands`, resolve-HIZ, resolve init and
+CCS. The complete relocation set, branch-relocation flags and owner boundaries
+are now enforced. None of these ten owner bodies directly imports `IOLock*` or
+accelerator `lock_busy`/`unlock_busy`; any serialization must therefore be
+supplied by an outer caller or another indirect mechanism. This is negative
+direct-import evidence, not proof that calls are concurrent or lockless. Full
+outer call/lifetime review remains required, especially for depth/CCS and any
+future virtual-display use.
 
 ## V268–V271 VF command-pool admission repairs (offline)
 
@@ -8780,8 +8825,10 @@ duplicate/reapply rejection, untouched neighbours, null destination/empty-state
 and selected success-setup equivalence. Separate actual x86 Unicorn execution
 verified five non-null pointers including high-bit/maximal values, identical
 vector/r12/flags, null branch to cleanup and Capstone RCX liveness. These are
-selected CPU setup checks, not whole-kernel or firmware/DMA proof. Event append
-failure propagation and cross-owner PPGTT transaction are STILL unimplemented.
+selected CPU setup checks, not whole-kernel or firmware/DMA proof. At this
+historical checkpoint, event append allocation failure and cross-owner PPGTT
+transaction were still unimplemented; V273 above now fail-stops allocation
+failure in the two reviewed vector copies.
 No native macOS build/artifact promotion or runtime deployment/VM start claimed.
 
 CCS cleanup verification: relocation identifies the 16-byte rectangle request
@@ -8800,10 +8847,10 @@ payloads. Grow returns false without modifying its vector on allocation null,
 and also returns false when requested capacity is already sufficient. AddDst
 checks each growth result, skips a failed append, and continues other event
 append attempts; it returns no aggregate admission status. Initial event-vector
-growth results in the CCS caller are also not checked. Therefore repairing
-the rectangle null write alone does not establish complete dependency-event
-coverage or safe submission under allocation failure. This separate propagation
-requirement must remain open; do not mistake CPU fault removal for DMA safety.
+growth results in the CCS caller are also not checked. Therefore the rectangle
+null repair alone did not establish safe allocation failure; V273 now enforces
+post-growth capacity for these two helper copies. Complete dependency-event
+semantics and DMA safety remain open.
 
 Resource CCS caller follow-up: reviewed complete resource submitCCSResolve
 at 0x73a20 (0x554) and pinned its downstream edge 0x73e99. After that call,

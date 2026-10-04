@@ -28,6 +28,7 @@
 #include "kern_workqueue_unwind.hpp"
 #include "kern_binary_identity.hpp"
 #include "kern_ioaccel_command_pool.hpp"
+#include "kern_event_vector.hpp"
 #include <Headers/kern_api.hpp>
 #include "kern_green.hpp"
 #include <IOKit/IOBufferMemoryDescriptor.h>
@@ -2422,6 +2423,76 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			};
 			PANIC_COND(!ccsAllocationPatch.apply(patcher, ccsStart, ccsEnd - ccsStart),
 			           "ngreen", "Failed to preserve CCS allocation-failure cleanup");
+
+			// Both event-pointer vector grow instantiations return false when no
+			// growth was needed as well as on allocation failure. Their callers can
+			// silently omit dependencies, so admit each duplicate symbol only inside
+			// its exact owner range and validate the published capacity after native.
+			mach_vm_address_t resourceEventOwnerStart = 0, resourceEventOwnerEnd = 0;
+			mach_vm_address_t sharedEventOwnerStart = 0, sharedEventOwnerEnd = 0;
+			KernelPatcher::SolveRequest eventOwnerBounds[] = {
+				{"__ZN15IGAccelResource22updateMappingCacheTypeEj", resourceEventOwnerStart},
+				{"__GLOBAL__sub_I_IGAccelResource.cpp", resourceEventOwnerEnd},
+				{"__ZN23IGAccelSharedUserClient9MetaClassD0Ev", sharedEventOwnerStart},
+				{"__GLOBAL__sub_I_IGAccelSharedUserClient.cpp", sharedEventOwnerEnd},
+			};
+			PANIC_COND(!patcher.solveMultiple(index, eventOwnerBounds, address, size) ||
+			           resourceEventOwnerEnd <= resourceEventOwnerStart ||
+			           sharedEventOwnerEnd <= sharedEventOwnerStart,
+			           "ngreen", "Invalid VF event-vector owner bounds");
+			constexpr const char *eventGrowSymbol =
+				"__ZN8IGVectorIP12IOAccelEvent25IGIOMallocAllocatorPolicyE4growEm";
+			constexpr const char *addResourceEventsSymbol =
+				"__ZL20AddDstResourceEventsR18wait_update_eventsP15IGAccelResourceb";
+			mach_vm_address_t resourceEventGrow = 0, resourceAddEvents = 0;
+			KernelPatcher::SolveRequest resourceEventHelpers[] = {
+				{eventGrowSymbol, resourceEventGrow},
+				{addResourceEventsSymbol, resourceAddEvents},
+			};
+			mach_vm_address_t sharedEventGrow = 0, sharedAddEvents = 0;
+			KernelPatcher::SolveRequest sharedEventHelpers[] = {
+				{eventGrowSymbol, sharedEventGrow},
+				{addResourceEventsSymbol, sharedAddEvents},
+			};
+			PANIC_COND(!patcher.solveMultiple(
+			               index, resourceEventHelpers, resourceEventOwnerStart,
+			               resourceEventOwnerEnd - resourceEventOwnerStart) ||
+			           !patcher.solveMultiple(
+			               index, sharedEventHelpers, sharedEventOwnerStart,
+			               sharedEventOwnerEnd - sharedEventOwnerStart) ||
+			           resourceAddEvents - resourceEventGrow !=
+			               NGEventVector::reviewedGrowSize ||
+			           sharedAddEvents - sharedEventGrow !=
+			               NGEventVector::reviewedGrowSize ||
+			           !NGEventVector::hasReviewedGrow(
+			               reinterpret_cast<const uint8_t *>(resourceEventGrow),
+			               resourceAddEvents - resourceEventGrow) ||
+			           !NGEventVector::hasReviewedGrow(
+			               reinterpret_cast<const uint8_t *>(sharedEventGrow),
+			               sharedAddEvents - sharedEventGrow),
+			           "ngreen", "Changed VF event-vector growth contracts");
+			KernelPatcher::RouteRequest resourceEventGrowRoute[] = {
+				{"__ZN8IGVectorIP12IOAccelEvent25IGIOMallocAllocatorPolicyE4growEm",
+				 vfResourceEventVectorGrow,
+				 this->oVfResourceEventVectorGrow},
+			};
+			KernelPatcher::RouteRequest sharedEventGrowRoute[] = {
+				{"__ZN8IGVectorIP12IOAccelEvent25IGIOMallocAllocatorPolicyE4growEm",
+				 vfSharedEventVectorGrow,
+				 this->oVfSharedEventVectorGrow},
+			};
+			PANIC_COND(!patcher.routeMultiple(
+			               index, resourceEventGrowRoute, 1,
+			               resourceEventOwnerStart,
+			               resourceEventOwnerEnd - resourceEventOwnerStart,
+			               true, false) ||
+			           !patcher.routeMultiple(
+			               index, sharedEventGrowRoute, 1,
+			               sharedEventOwnerStart,
+			               sharedEventOwnerEnd - sharedEventOwnerStart,
+			               true, false),
+			           "ngreen", "Failed to guard VF event-vector growth");
+			SYSLOG("ngreen", "V273: guarded both VF event-vector growth instantiations");
 			KernelPatcher::RouteRequest workQueueInitRoute[] = {
 				{"__ZN22IGHardwareGuCWorkQueue19initWithAcceleratorEP22IOGraphicsAccelerator2jP37UK_GEN11_SCHED_PROCESS_DESCRIPTOR_REC",
 				 vfWorkQueueInit, this->oVfWorkQueueInit},
@@ -3121,6 +3192,65 @@ void *Gen11::vfGetCommandBufferPtrNoInc(void *pool, uint32_t dwords)
 		           dwords, current, count);
 	}
 	return result;
+}
+
+static bool vfEventVectorGrowChecked(void *vector, size_t requested,
+	bool (*native)(void *, size_t))
+{
+	PANIC_COND(!vector || !native, "ngreen",
+	           "Missing VF event-vector growth state or trampoline");
+	if (gVfIdentity == VfIdentity::Virtual) {
+		const size_t vectorSize =
+			getMember<size_t>(vector, NGEventVector::sizeOffset);
+		const size_t capacity =
+			getMember<size_t>(vector, NGEventVector::capacityOffset);
+		const uintptr_t storage = reinterpret_cast<uintptr_t>(
+			getMember<void *>(vector, NGEventVector::storageOffset));
+		if (!NGEventVector::hasConsistentState(vectorSize, capacity, storage) ||
+		    !NGEventVector::hasRepresentableRequest(requested)) {
+			vfMarkProtocolFault("VF event-vector growth received unsafe pre-state");
+			PANIC_COND(true, "ngreen",
+			           "V273: refusing unsafe VF event vector size=%llu capacity=%llu request=%llu",
+			           static_cast<uint64_t>(vectorSize), static_cast<uint64_t>(capacity),
+			           static_cast<uint64_t>(requested));
+		}
+	}
+	const bool nativeResult = native(vector, requested);
+	if (gVfIdentity != VfIdentity::Virtual)
+		return nativeResult;
+	const size_t vectorSize =
+		getMember<size_t>(vector, NGEventVector::sizeOffset);
+	const size_t capacity =
+		getMember<size_t>(vector, NGEventVector::capacityOffset);
+	const uintptr_t storage = reinterpret_cast<uintptr_t>(
+		getMember<void *>(vector, NGEventVector::storageOffset));
+	if (!NGEventVector::hasCapacity(
+	        vectorSize, capacity, storage, requested)) {
+		vfMarkProtocolFault("VF event-vector growth did not publish requested capacity");
+		PANIC_COND(true, "ngreen",
+		           "V273: refusing incomplete VF event vector size=%llu capacity=%llu request=%llu",
+		           static_cast<uint64_t>(vectorSize), static_cast<uint64_t>(capacity),
+		           static_cast<uint64_t>(requested));
+	}
+	return nativeResult;
+}
+
+bool Gen11::vfResourceEventVectorGrow(void *vector, size_t requested)
+{
+	PANIC_COND(!callback || !callback->oVfResourceEventVectorGrow,
+	           "ngreen", "Missing resource event-vector growth trampoline");
+	using Grow = bool (*)(void *, size_t);
+	return vfEventVectorGrowChecked(vector, requested,
+		reinterpret_cast<Grow>(callback->oVfResourceEventVectorGrow));
+}
+
+bool Gen11::vfSharedEventVectorGrow(void *vector, size_t requested)
+{
+	PANIC_COND(!callback || !callback->oVfSharedEventVectorGrow,
+	           "ngreen", "Missing shared event-vector growth trampoline");
+	using Grow = bool (*)(void *, size_t);
+	return vfEventVectorGrowChecked(vector, requested,
+		reinterpret_cast<Grow>(callback->oVfSharedEventVectorGrow));
 }
 
 bool Gen11::IGMemoryManagerInitSegments(void *that)
