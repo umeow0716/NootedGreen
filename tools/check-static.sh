@@ -141,6 +141,13 @@ if python3 -B tools/vf_event_vector_source_contract_test.py \
 else
     failed=1
 fi
+if python3 -B tools/vf_event_vector_callgraph_contract_test.py \
+    sle_Internal/le/AppleIntelTGLGraphics.kext/Contents/MacOS/AppleIntelTGLGraphics \
+    sle_Internal/sle/AppleIntelTGLGraphics.kext/Contents/MacOS/AppleIntelTGLGraphics; then
+    printf 'PASS offline VF event-vector direct-call graph\n'
+else
+    failed=1
+fi
 if "$compiler" -std=c++14 -O1 -g -fsanitize=address,undefined \
     tools/gpu_capabilities_test.cpp -o "$task_output/gpu-capabilities-test" && \
     "$task_output/gpu-capabilities-test"; then

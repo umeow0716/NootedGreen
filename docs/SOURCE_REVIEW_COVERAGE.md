@@ -7,6 +7,19 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 event-vector call-graph delta: after excluding external-relocation
+placeholders, both payloads contain exactly 147 direct calls into the eight
+grow copies, partitioned across 38 symbol-bounded owners. Fifty-two are the
+fixed-capacity-four initialization sites and each has a nearby RBP-relative
+frame-address construction; the other 95 are append-growth sites that consume
+native AL. The complete address/owner/category inventory is now a CI contract.
+The initially observed 148th candidate was the zero disk addend of relocated
+`stack_chk_fail` immediately before `0x55b84`, not a real grow edge. This
+supports frame-local ownership for the initialization sites and ensures V274
+covers every direct call, but it is a bounded byte/data-flow classification,
+not proof of every helper argument alias, indirect call, resource event-pair
+lifetime, outer lock or GPU completion.
+
 2026-10-04 exact event-route correction delta: V274 supersedes V273 before any
 deployment. Lilu 1.7.2's ranged lookup first resolves one ordinary symbol and
 only then checks the range, so it cannot choose among eight duplicate grow

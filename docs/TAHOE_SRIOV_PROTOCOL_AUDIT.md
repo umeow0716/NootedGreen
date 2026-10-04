@@ -8,6 +8,25 @@ followed by i915 hangs and a host reboot. Keep `macos-tahoe-sriov` shut off unti
 corrected code passes the remaining offline review and every independently
 enforced containment precondition.
 
+## V275 complete direct grow-call inventory (offline)
+
+Both archived accelerator payloads now require the complete 147-call graph
+into the eight V274 grow targets and its partition across 38 symbol-bounded
+owners. The scanner parses `LC_DYSYMTAB` and excludes external-relocation bytes:
+the first raw candidate count of 148 incorrectly treated the zero on-disk
+`stack_chk_fail` displacement at `0x55b7f` as a local call to the immediately
+following `0x55b84` grow body. That edge is not credited.
+
+Of the 147 real direct calls, 52 are fixed request-four initialization sites;
+each selected preceding window contains an RBP-relative frame-address LEA. The
+remaining 95 growth calls inspect native AL before append. V274's wrapper now
+makes allocation failure fail-stop before those 95 skip branches and validates
+the state after the 52 ignored initial returns. This is exact direct-call and
+bounded local-address evidence, not a complete x86 data-flow proof. Helper
+argument aliases, indirect invocation, resource event-pair ownership, outer
+serialization and GPU completion remain open. No production driver behavior,
+VM, PCI/sysfs or hardware state changed in V275.
+
 ## V274 exact routing of all event-vector copies (offline)
 
 V273 was not deployable: reading the pinned Lilu 1.7.2 implementation established
