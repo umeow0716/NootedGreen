@@ -127,6 +127,8 @@ STAMP_IRQ_NATIVE = {
     "__ZN11IGAccelTask24initManagedPageTableListEv": (0xfc, "4b026fd8979c2010b304895b2d6f61c69167e83923cb7070cdc238b179d45e77"),
     "__ZN15IGMemoryManager19newPageTableForTaskEP11IGAccelTask": (0xa6, "9f8b0a4af92e2da84cac933655cc33c6ed7ed5a31236a73a91955d91ba76d911"),
     "__ZN15IGMemoryManager22updatePageTableForTaskEP11IGAccelTaskP16IGAccelMemoryMap": (0x11a, "9b574d3a8f1ae07327da68f84f4eb99a08e8ea154a596f723ae7f558ffdf46a2"),
+    "__ZN16IGAccelMemoryMap18updateGPUPageTableEv": (0x140, "75ba5674583a8d27d54acab18290e78bbc9de8157b19bfc6614c379d39fa3fbc"),
+    "__ZN16IGAccelMemoryMap15updateCacheTypeEj": (0x24, "0c704192e43ed19c39a2179ea6e80551a07af30a8a541016a913f3d9572516f8"),
     "__ZN19IGHardwarePageTable11updateRangeERK14IGAddressRangePK16IGAccelMemoryMap": (0x3c4, "7bd38a56c02637892a4672882eed36a3bea60b0b6ee6017982a0760713713b92"),
     "__ZN19IGHardwarePageTable11commitRangeERK14IGAddressRangePK16IGAccelMemoryMap": (0x41c, "e063629df4a8d16d85cf3d1b599c036372c0763b560a6a35289d488d80ac410a"),
     "__ZN15IGMemoryManager26commitIntoPageTableForTaskEP11IGAccelTaskP16IGAccelMemoryMap": (0x11a, "a433c1af43e1fbac1d82da400c6ec1857881e6385c07019d782441fe209713d1"),
@@ -712,6 +714,10 @@ def macho_inventory(path):
     assert image[0x148d6:0x148db] == b"\xe8" + struct.pack("<i", 0x2d1d8 - 0x148db), f"{path}: changed update flush notification edge"
     resource_table = value("__ZTV15IGAccelResource")
     map_table = value("__ZTV16IGAccelMemoryMap")
+    assert struct.unpack_from("<Q", image, map_table + 16 + 0x180)[0] == value("__ZN16IGAccelMemoryMap18updateGPUPageTableEv"), f"{path}: changed mapping update virtual"
+    assert direct_branches("__ZN16IGAccelMemoryMap18updateGPUPageTableEv", "__ZN15IGMemoryManager22updatePageTableForTaskEP11IGAccelTaskP16IGAccelMemoryMap") == [0x114f5], f"{path}: changed mapping update manager edge"
+    assert image[0x115a8:0x115ae] == bytes.fromhex("89 b7 14 01 00 00"), f"{path}: changed pre-update cache-type store"
+    assert image[0x115ba:0x115c0] == bytes.fromhex("ff a0 80 01 00 00"), f"{path}: changed cache-type update tail dispatch"
     private_init = "__ZN29IGHardwarePerProcessPageTable15initWithOptionsEP16IntelAcceleratorP11IGAccelTaskj"
     for method, call in (("__ZN31IGHardwarePerProcessPageTable3215initWithOptionsEP16IntelAcceleratorP11IGAccelTask", 0x11d4e),
                          ("__ZN31IGHardwarePerProcessPageTable6415initWithOptionsEP16IntelAcceleratorP11IGAccelTask", 0xccf5)):

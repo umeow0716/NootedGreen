@@ -7,6 +7,12 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 mapping update caller: two additional complete native bodies and
+declared +0x180 dispatch pinned. Cache-type software field changes before an
+installed mapping's update; local caller has no failure restoration. Mapping
+wrapper borrows task/accelerator owners, forwards manager result. Effective
+outer serialization and indirect caller/override coverage remain incomplete.
+
 2026-10-04 update fanout: two additional complete native bodies reviewed and
 pinned (manager updatePageTableForTask and hardware updateRange). Raw task-list
 traversal continues after a failed update; segment remap failure has no local

@@ -6955,6 +6955,25 @@ No executable patch or runtime mutation.
 
 ### Update fanout must participate in the same owner transaction
 
+Follow-up: reviewed complete IGAccelMemoryMap::updateGPUPageTable at 0x11444
+(0x140) and updateCacheType at 0x1159c (0x24); pinned both payloads, declared
+mapping virtual +0x180, manager direct edge 0x114f5 and cache-store/tail-dispatch
+anchors. updateGPUPageTable returns success immediately for flag 0x20; otherwise
+it passes borrowed mapping task +0x90 and accelerator +0x88 -> manager +0x1260
+to updatePageTableForTask and returns its result. No local owner retain or mutex
+appears. Direct-call inventory found this manager caller in native text after
+excluding external relocation placeholders; indirect callers are not exhausted.
+
+updateCacheType returns if +0x114 already matches; otherwise it stores the new
+type BEFORE testing installed flag 4 and tail-dispatching virtual +0x180. This
+body has no result test, retry or restoration of the prior cache type. Thus a
+false manager result can leave software cache type changed and successful
+earlier segments/tables already remapped. This conditional path is not proof of
+a reproduced failure, nor proof that effective outer callers lack serialization.
+The outer cache-type request domain, overrides and rollback semantics still
+need review; do not repair by returning fabricated success or by fencing only
+unmap. No production/runtime/Host GPU mutation this follow-up.
+
 Reviewed complete updatePageTableForTask at 0xf7bc (0x11a) and updateRange
 at 0x14580 (0x3c4); added whole-body fixtures for both native payloads.
 Manager obtains mapping range through virtual +0x128/+0x168, borrows task
