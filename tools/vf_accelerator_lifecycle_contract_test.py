@@ -18,6 +18,9 @@ STAMP_IRQ_NATIVE = {
     "__Z26ExtendedContextWithOptionsI24IGHardwareResolveContextEPT_P11IGAccelTask": (0x4f, "9aa7ffaec74e7f9e71f122db4f147146c14e3a2b91723c702d2aeb737f6ca20a"),
     "__ZN25IGHardwareExtendedContext4freeEv": (0x52, "3e2b482df8f8906d267905195831fb569ca59ea7276595efb8856f7b5ed3a3c2"),
     "__ZN21IGAccelDisplayMachine5startEP11IOPCIDevice": (0xb4, "ac2b4a8bee964444c8c07115c412e54f3ceb52f9ee79c180d5ff59ee6551ea37"),
+    "__ZN21IGAccelDisplayMachine4initEP22IOGraphicsAccelerator2": (0x3e, "95f092b80ab27eeb73ca3b7db6c51d5521cc92d41216891c9cc97b39e07b29b7"),
+    "__ZN16IntelAccelerator17newDisplayMachineEv": (0x18, "85573962cf46d6ac3247db3af4dc2eedc966c183fcb4e5f1949c4d918b6a4b2c"),
+    "__ZN16IntelAccelerator14newDisplayPipeEv": (0x18, "aad5daa8b49e07ac625576c9a9bc8c2549abd61eba11f431d97772b7a342b3c5"),
     "__ZN25IGHardwareExtendedContext15initWithOptionsEP11IGAccelTaskRK31IGHardwareExtendedContextParams": (0xf4, "67dfb7530b4142f6a2186b617e396df18dcb46517e45ab2ce540a38c1cc20fd1"),
     "__ZN18IGAccelDisplayPipe14submitCommandsEP12IOAccelEventS1_": (0x12e, "5639208f730ed9514532333fe17d48a8ec200646992bf62f79832bdf5d063f71"),
     "__ZN18IGAccelDisplayPipe21displayReadRegister32Ei": (0x64, "c5065afa9f0406976ee881c4ad7d502d1e1bd01d965ac63dab48687c754204d1"),
@@ -785,6 +788,12 @@ def macho_inventory(path):
                              (0x58, "__ZNK8OSObject13taggedReleaseEPKvi")):
             event_stop_imports[value(table) + 16 + slot] = method
     observed_event_stop_imports = {address: [] for address in event_stop_imports}
+    display_reachability_imports = {
+        0xd1978: "__ZN22IOGraphicsAccelerator217createDisplayPipeEP13IOFramebufferj",
+        0xddce8: "__ZN27IOAccelLegacyDisplayMachine17found_framebufferEP13IOFramebuffer",
+    }
+    observed_display_reachability_imports = {
+        address: [] for address in display_reachability_imports}
     external_relocation_offsets = set()
     external_imports = {}
     pool_getter_imports = {}
@@ -801,6 +810,9 @@ def macho_inventory(path):
             pool_set_pointer_imports.setdefault(address, []).append(bits >> 24)
         if address in observed_event_stop_imports:
             observed_event_stop_imports[address].append((names[symbol_index], bits >> 24))
+        if address in observed_display_reachability_imports:
+            observed_display_reachability_imports[address].append(
+                (names[symbol_index], bits >> 24))
         if address in observed_stamp_irq_imports:
             observed_stamp_irq_imports[address].append((names[symbol_index], bits >> 24))
         if names[symbol_index] in (
@@ -837,6 +849,9 @@ def macho_inventory(path):
     for address, name in event_stop_imports.items():
         assert observed_event_stop_imports[address] == [(name, 0x0e)], \
             f"{path}: changed inherited event teardown virtual import"
+    for address, name in display_reachability_imports.items():
+        assert observed_display_reachability_imports[address] == [(name, 0x0e)], \
+            f"{path}: changed inherited display reachability virtual import"
     pool_table = value("__ZTV10IGPagePool")
     for slot, method in ((0, "__ZN10IGPagePoolD1Ev"),
                          (8, "__ZN10IGPagePoolD0Ev"),
@@ -1463,6 +1478,34 @@ def macho_inventory(path):
     assert direct_branches(expand32, "__ZN10IGPagePool14PageDescriptor7releaseEv") == [0x12646], f"{path}: changed 32-bit expansion software-index allocation rollback"
     assert image[0x1264f:0x12656] == bytes.fromhex("48 c7 00 00 00 00 00"), f"{path}: changed 32-bit rollback descriptor clear"
     accelerator_table = value("__ZTV16IntelAccelerator")
+    for slot, method in (
+            (0xa00, "__ZN16IntelAccelerator17newDisplayMachineEv"),
+            (0xa48, "__ZN16IntelAccelerator14newDisplayPipeEv")):
+        assert struct.unpack_from("<Q", image, accelerator_table + 16 + slot)[0] == value(method), \
+            f"{path}: changed concrete display factory virtual at {slot:#x}"
+    for factory, metaclass in (
+            ("__ZN16IntelAccelerator17newDisplayMachineEv", "__ZN21IGAccelDisplayMachine9metaClassE"),
+            ("__ZN16IntelAccelerator14newDisplayPipeEv", "__ZN18IGAccelDisplayPipe9metaClassE")):
+        start = value(factory)
+        reference = image[start + 4:start + 11]
+        assert reference[:3] == bytes.fromhex("48 8d 05") and \
+            start + 11 + struct.unpack_from("<i", reference, 3)[0] == value(metaclass) and \
+            image[start + 11:start + 24] == bytes.fromhex(
+                "48 8b 38 48 8b 07 5d ff a0 88 00 00 00"), \
+            f"{path}: changed concrete display factory/metaclass allocation: {factory}"
+    display_machine_table = value("__ZTV21IGAccelDisplayMachine")
+    for slot, method in (
+            (0x850, "__ZN21IGAccelDisplayMachine4initEP22IOGraphicsAccelerator2"),
+            (0x858, "__ZN21IGAccelDisplayMachine5startEP11IOPCIDevice")):
+        assert struct.unpack_from("<Q", image, display_machine_table + 16 + slot)[0] == value(method), \
+            f"{path}: changed concrete display-machine virtual at {slot:#x}"
+    assert image[value("__ZN21IGAccelDisplayMachine4initEP22IOGraphicsAccelerator2") + 0x10:
+                 value("__ZN21IGAccelDisplayMachine4initEP22IOGraphicsAccelerator2") + 0x16] == \
+        bytes.fromhex("ff 90 60 08 00 00") and \
+        image[value("__ZN21IGAccelDisplayMachine5startEP11IOPCIDevice") + 0x14:
+              value("__ZN21IGAccelDisplayMachine5startEP11IOPCIDevice") + 0x1a] == \
+        bytes.fromhex("ff 90 68 08 00 00"), \
+        f"{path}: changed IG-to-legacy display-machine init/start delegation"
     assert struct.unpack_from("<Q", image, value("__ZTV23IGAccelSharedUserClient") + 16 + 0x990)[0] == value("__ZN23IGAccelSharedUserClient11sharedStartEv"), f"{path}: changed concrete Shared-start virtual"
     for slot, name in ((0x998, "__ZN16IntelAccelerator17createUserGPUTaskEv"),
                        (0x9d0, "__ZN16IntelAccelerator19createKernelGPUTaskEv")):

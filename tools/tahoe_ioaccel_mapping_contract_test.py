@@ -539,6 +539,86 @@ BASE_CLIENT_BODIES = {
         (0x7a, "067d5eac57b441ee8021e546860373e03c6613d2d89081d483c56c02624a0135"),
     "__ZN27IOAccelMemoryInfoUserClient17lock_with_timeoutEy":
         (0xae, "adfcb726151be178a643992d631d2c9efcb4400747b1bace2d0134dc522904b4"),
+    "__ZN29IOAccelDisplayPipeUserClient216s_set_pipe_indexEPS_PvP25IOExternalMethodArguments":
+        (0x14, "8d8f4c496e71e9ea007a83d4c88cc682efa43a14fefc2ad89521c4ec84d35ff1"),
+    "__ZN29IOAccelDisplayPipeUserClient225s_get_display_mode_scalerEPS_PvP25IOExternalMethodArguments":
+        (0xe, "2ebc54bdc3ac35603d97592bb8a210c94af92deda37b17b47f465d7653110b8b"),
+    "__ZN29IOAccelDisplayPipeUserClient223s_get_capabilities_dataEPS_PvP25IOExternalMethodArguments":
+        (0xa6, "7fcd647dfe1ed5e73567fda1b7ca312cd10dbade31c717ef30130aba84c9fea9"),
+    "__ZN29IOAccelDisplayPipeUserClient216s_request_notifyEPS_PvP25IOExternalMethodArguments":
+        (0x24, "b0b334b2dd97005f1f53444a61a6071ade920d3e7b9f266e811f0ccfc7925b45"),
+    "__ZN29IOAccelDisplayPipeUserClient219s_transaction_beginEPS_PvP25IOExternalMethodArguments":
+        (0x3a, "1d9638bafd888e86d63abb6fe4cdd7a4d0755ec3818cd76563db3ea198e7b920"),
+    "__ZN29IOAccelDisplayPipeUserClient235s_transaction_set_plane_gamma_tableEPS_PvP25IOExternalMethodArguments":
+        (0xb4, "f73c5104313df533dd6a7bd3dbe4d3685f5569235138cc6e87c316c3965044b6"),
+    "__ZN29IOAccelDisplayPipeUserClient237s_transaction_set_pipe_pregamma_tableEPS_PvP25IOExternalMethodArguments":
+        (0xb4, "d7d99c0e34b799a25992a389d978670ce33f249351c58c86b04d436ab8f54577"),
+    "__ZN29IOAccelDisplayPipeUserClient238s_transaction_set_pipe_postgamma_tableEPS_PvP25IOExternalMethodArguments":
+        (0xb4, "3d894115d668bc93ddaf9010985b94bbab8f59253d9eaaab0f25f23874dee5df"),
+    "__ZN29IOAccelDisplayPipeUserClient218s_transaction_waitEPS_PvP25IOExternalMethodArguments":
+        (0xe, "8bbcb93a040864504b7e75444576d5e6e28fe44b99ca637c11ce9802b8f48c71"),
+    "__ZN29IOAccelDisplayPipeUserClient246s_transaction_set_pipe_precsclinearization_vidEPS_PvP25IOExternalMethodArguments":
+        (0xb0, "51a8cf658aa2bed6dfed41459c11995451fb4683346b49ccfe7d91e912296aae"),
+    "__ZN29IOAccelDisplayPipeUserClient239s_transaction_set_pipe_postcscgamma_vidEPS_PvP25IOExternalMethodArguments":
+        (0xb0, "0c30ffafcfe19fae32427c08492fb5ad287b5d164f85144cb9f8ae9f4af1bdc0"),
+    "__ZN29IOAccelDisplayPipeUserClient214s_copy_surfaceEPS_PvP25IOExternalMethodArguments":
+        (0x3a, "24cdff9f77b53b3f396f2ae87312788189d21193bb1483c2f3c4012cd1dcce96"),
+    "__ZN29IOAccelDisplayPipeUserClient28s_triageEPS_PvP25IOExternalMethodArguments":
+        (0xae, "45d2483195691e3f8606d38a118990c502b4ca3fcf6da1cbc3c7aa84a9c4aeed"),
+    "__ZN29IOAccelDisplayPipeUserClient24initEP12OSDictionaryP4task":
+        (0x64, "73373a01026baeb58dbd03bfb5d841d929dd2b0a14b5b96f8bd9a618196c0406"),
+    "__ZN29IOAccelDisplayPipeUserClient24freeEv":
+        (0x30, "bbf5c9d31f93bcc7b2e2907bd257098dd64da6b1802d216d43b3c1f8b2eada96"),
+    "__ZN29IOAccelDisplayPipeUserClient211clientCloseEv":
+        (0xe6, "3d2639a2ec3f706477e4736e575164aa8a8b3e84944394faeaacb468494cc37e"),
+    "__ZN29IOAccelDisplayPipeUserClient219setAsyncReference64EPyP8ipc_portyy":
+        (0xa, "b68adbb0b2e045c7742eaeca26b851ccde3a4c06f4804937215ab27e7c768aa8"),
+    "__ZN29IOAccelDisplayPipeUserClient217canUseDisplayPipeEv":
+        (0x12, "cf581a8d8a278e22ea3af9c3cde70d8870e55d993945be83bd58b7ac73144fe7"),
+    "__ZN29IOAccelDisplayPipeUserClient220getDisplayModeScalerEP24IOAccelDisplayPipeScaler":
+        (0xb8, "daae18e26bc5951a32f6e514b552beb38139d06edf08dc7e171d85303c2d0cad"),
+    "__ZN29IOAccelDisplayPipeUserClient219getCapabilitiesDataEPhPy":
+        (0x154, "86960bb8c39d4692f693bf0dad7cd9b9a6d6ccd248367e9133d1cda11debf785"),
+    "__ZN29IOAccelDisplayPipeUserClient216transactionBeginEPj":
+        (0xd0, "2dc8436bdacf4b9d8c48d149c8a913b3f746e300234b5328f8bba22f67c6d7ab"),
+    "__ZN29IOAccelDisplayPipeUserClient229transactionSetPlaneGammaTableEP32IOAccelDisplayPipeGammaTableArgs":
+        (0xc2, "93db83d3a31e7264b9c6d72157993892d342e5150217605b070694156a19ec95"),
+    "__ZN29IOAccelDisplayPipeUserClient231transactionSetPipePreGammaTableEP32IOAccelDisplayPipeGammaTableArgs":
+        (0xc2, "337320a637c36894a713ce93426a1c770d5dda59993c633753e2ee23a5957c55"),
+    "__ZN29IOAccelDisplayPipeUserClient232transactionSetPipePostGammaTableEP32IOAccelDisplayPipeGammaTableArgs":
+        (0xc2, "cc3718f07d8798b07293c81c52c4d4db431e8b3ae80ac615d09c25c92dda6267"),
+    "__ZN29IOAccelDisplayPipeUserClient240transactionSetPipePreCSCLinearizationVIDEP41IOAccelDisplayPipePreCSCLinearizationArgs":
+        (0xc2, "6bf6fd46f44ed88b3ed51ee7776761e1eb0c435ae109b49fee4323de4d9b8b0e"),
+    "__ZN29IOAccelDisplayPipeUserClient233transactionSetPipePostCSCGammaVIDEP39IOAccelDisplayPipePostCSCGammaTableArgs":
+        (0xc2, "3880145ec24a601439b533268ece03525ec8dfbaae91b1dc9c810c0d7b3bdceb"),
+    "__ZN29IOAccelDisplayPipeUserClient215transactionWaitEP37IOAccelDisplayPipeTransactionWaitArgs":
+        (0x1b6, "02a9a5264c8555d61107884827605363f07900a3d1bbd5d5866573ab3676aa60"),
+    "__ZN29IOAccelDisplayPipeUserClient220getDisplayPipeNoLockEv":
+        (0x3a, "485b972f9bea8760e9b7b207383940fb07b83c1966455eab117635b188cb24c6"),
+    "__ZN29IOAccelDisplayPipeUserClient211copySurfaceEjj":
+        (0xc6, "d87e338ab8d96d5cfcd0072ae73c6ab8c99b14650bbe143f0e9c2d3ba2208806"),
+    "__ZN29IOAccelDisplayPipeUserClient220doesEntitlementExistEPKc":
+        (0x5c, "24a6818ad9be5cd5f09ad2bbb40aa36723b97d510355c8913a9f4f1f469cd04c"),
+    "__ZN29IOAccelDisplayPipeUserClient26triageEPPcPy":
+        (0x48, "9bf247cf23439f5099ab1889c785fcde4cc4d46b94f5d577dcb1d6f05633797e"),
+    "__ZN18IOAccelDisplayPipe11copySurfaceEjj":
+        (0x1fe, "24d5b168385d91babdb3cc50a86e85ad5c062bc8b8081c6a7c909a5274f1f52b"),
+    "__ZN22IOGraphicsAccelerator217createDisplayPipeEP13IOFramebufferj":
+        (0x5e, "d9afbef0e40721dd997e0c187d36b515441d8e0ffe24effe39ccfef217927b66"),
+    "__ZN21IOAccelDisplayMachine4initEP22IOGraphicsAccelerator2":
+        (0x38, "d5504a921904e99e95c6aab0a050e94b1149bff5fbe1deb0c78f7974c812489c"),
+    "__ZN21IOAccelDisplayMachine5startEP11IOPCIDevice":
+        (0x1f8, "32c0db11361bde95208839ad3884d6ed7273e1c1821329c5a9059e7b4c3eabda"),
+    "__ZNK21IOAccelDisplayMachine19getFramebufferCountEv":
+        (0xc, "d415df741f33607acc471cbba18d7656dc0c5c1b82c98411942957484200bb16"),
+    "__ZNK21IOAccelDisplayMachine14getDisplayPipeEj":
+        (0x10, "93725164a8a6be58cd158f1598de8bfec4af2b3832d57743c0f6cd989df9cb3f"),
+    "__ZN21IOAccelDisplayMachine17found_framebufferEP13IOFramebuffer":
+        (0xb6, "8b94db88f1a6ae0e5c4c4ea9688c823ab4cb1bd6b653b05aad2c14ed3b719519"),
+    "__ZN27IOAccelLegacyDisplayMachine5startEP11IOPCIDevice":
+        (0x12, "2cc74bf2d9e3055a4214e2e74fdcde1970fd26c3b090e813791404b818189660"),
+    "__ZN27IOAccelLegacyDisplayMachine17found_framebufferEP13IOFramebuffer":
+        (0x7a, "c172a83062fc19d7f945fc4652c7b97a7d5c430f26e73854a50a2dd8ed12229e"),
 }
 SURFACE_METHODS = (
     ("__ZN14IOAccelSurface25surface_read_lock_optionsEjP25IOAccelSurfaceInformationy", (0, 2, 1, 0xffffffff)),
@@ -640,6 +720,22 @@ MEMORY_INFO_METHODS = (
      (0, 0xffffffff, 0, 0x70)),
     ("__ZN27IOAccelMemoryInfoUserClient22s_purge_all_vid_memoryEP8OSObjectPvP25IOExternalMethodArguments",
      (0, 0, 0, 0)),
+)
+DISPLAY_PIPE_METHODS = (
+    ("__ZN29IOAccelDisplayPipeUserClient216s_set_pipe_indexEPS_PvP25IOExternalMethodArguments", (1, 0, 1, 0)),
+    ("__ZN29IOAccelDisplayPipeUserClient225s_get_display_mode_scalerEPS_PvP25IOExternalMethodArguments", (0, 0, 0, 0x18)),
+    ("__ZN29IOAccelDisplayPipeUserClient223s_get_capabilities_dataEPS_PvP25IOExternalMethodArguments", (0, 0, 0, 0xffffffff)),
+    ("__ZN29IOAccelDisplayPipeUserClient216s_request_notifyEPS_PvP25IOExternalMethodArguments", (0, 0x18, 0, 0)),
+    ("__ZN29IOAccelDisplayPipeUserClient219s_transaction_beginEPS_PvP25IOExternalMethodArguments", (0, 0, 1, 0)),
+    ("__ZN29IOAccelDisplayPipeUserClient235s_transaction_set_plane_gamma_tableEPS_PvP25IOExternalMethodArguments", (0, 0xffffffff, 0, 0)),
+    ("__ZN29IOAccelDisplayPipeUserClient237s_transaction_set_pipe_pregamma_tableEPS_PvP25IOExternalMethodArguments", (0, 0xffffffff, 0, 0)),
+    ("__ZN29IOAccelDisplayPipeUserClient238s_transaction_set_pipe_postgamma_tableEPS_PvP25IOExternalMethodArguments", (0, 0xffffffff, 0, 0)),
+    ("__ZN29IOAccelDisplayPipeUserClient217s_transaction_endEPS_PvP25IOExternalMethodArguments", (0, 0x118, 0, 0)),
+    ("__ZN29IOAccelDisplayPipeUserClient218s_transaction_waitEPS_PvP25IOExternalMethodArguments", (0, 0xc, 0, 0)),
+    ("__ZN29IOAccelDisplayPipeUserClient246s_transaction_set_pipe_precsclinearization_vidEPS_PvP25IOExternalMethodArguments", (0, 0xffffffff, 0, 0)),
+    ("__ZN29IOAccelDisplayPipeUserClient239s_transaction_set_pipe_postcscgamma_vidEPS_PvP25IOExternalMethodArguments", (0, 0xffffffff, 0, 0)),
+    ("__ZN29IOAccelDisplayPipeUserClient214s_copy_surfaceEPS_PvP25IOExternalMethodArguments", (2, 0, 0, 0)),
+    ("__ZN29IOAccelDisplayPipeUserClient28s_triageEPS_PvP25IOExternalMethodArguments", (0, 0, 0, 0xffffffff)),
 )
 # Symbol-bounded bodies reviewed locally. These identities do not certify
 # overridden resource methods, iterator locking, DMA completion or host safety.
@@ -1432,7 +1528,8 @@ def check(path, boot_path=None):
     symbol_offset, count, string_offset, string_size = symtab
     base_client_symbols = {method for table in (
         SURFACE_METHODS, DEVICE_METHODS, SHARED_METHODS, GL_CONTEXT_METHODS,
-        GL_DRAWABLE_METHODS, SURFACE_MTL_METHODS, MEMORY_INFO_METHODS)
+        GL_DRAWABLE_METHODS, SURFACE_MTL_METHODS, MEMORY_INFO_METHODS,
+        DISPLAY_PIPE_METHODS)
                            for method, _ in table if method is not None}
     wanted_symbols = {
         *CONTRACTS, *SCRUB_BODIES, *LOCK_COPIES, *EVENT_OWNER_BODIES,
@@ -1445,6 +1542,8 @@ def check(path, boot_path=None):
         "__ZTV17IOAccelGLContext2", "__ZTV27IOAccelGLDrawableUserClient",
         "__ZTV17IOAccelSurfaceMTL",
         "__ZTV27IOAccelMemoryInfoUserClient",
+        "__ZTV21IOAccelDisplayMachine", "__ZTV27IOAccelLegacyDisplayMachine",
+        "__ZTV29IOAccelDisplayPipeUserClient2",
         "__ZN19IOAccelCommandQueue20sCommandQueueMethodsE",
         "__ZN15IOAccelContext215sContextMethodsE",
         "__ZN17IOAccel2DContext217s2DContextMethodsE",
@@ -1455,6 +1554,7 @@ def check(path, boot_path=None):
         "__ZN24IOAccelSharedUserClient214sSharedMethodsE",
         "__ZZN24IOAccelSharedUserClient214externalMethodEjP25IOExternalMethodArgumentsP24IOExternalMethodDispatchP8OSObjectPvE7methods",
         "__ZZN27IOAccelMemoryInfoUserClient14externalMethodEjP25IOExternalMethodArgumentsP24IOExternalMethodDispatchP8OSObjectPvE15gather_dispatch",
+        "__ZN29IOAccelDisplayPipeUserClient219sDisplayMethodDescsE",
         "__ZZN17IOAccelGLContext212contextStartEvE19methodDispatchDescs",
         "__ZL25sGLContextMethodsDispatch",
         "__ZN27IOAccelGLDrawableUserClient15sMethodDispatchE",
@@ -1577,6 +1677,10 @@ def check(path, boot_path=None):
         "__ZZN27IOAccelMemoryInfoUserClient14externalMethodEjP25IOExternalMethodArgumentsP24IOExternalMethodDispatchP8OSObjectPvE15gather_dispatch",
         MEMORY_INFO_METHODS,
         "9a7180e937fe917fec5ca4273f58b79ff4ef9bdae8f9c350c79fdc7463bd0a3b")
+    check_legacy_external_dispatch_table(
+        "__ZN29IOAccelDisplayPipeUserClient219sDisplayMethodDescsE",
+        DISPLAY_PIPE_METHODS,
+        "fa48e879df1eeaaaab8a89f01cff91038e7b88414e9372fca451396187c9007a")
     check_dispatch_table(
         "__ZN17IOAccelSurfaceMTL15sSurfaceMethodsE", SURFACE_MTL_METHODS,
         "acbedfcc5220cc7de2fb393c5757210b78ec40e36545e2ee36a712859f29515f")
@@ -1920,6 +2024,152 @@ def check(path, boot_path=None):
         read(memory_purge + 0x38, 6) == bytes.fromhex("ff 90 78 09 00 00"), \
         "changed MemoryInfo video/system unwire dispatches"
     print("PASS Device/Shared/MemoryInfo selectors, lock scopes and page-off producer root")
+
+    # The display user client is a legacy 24-byte dispatch-table owner.  Pin
+    # every wrapper edge, not just transaction-end, because selector 12 is a
+    # second producer: copySurface reaches the accelerator submitSwapCopy
+    # virtual at +0x9a8.
+    display_external = address_of(
+        "__ZN29IOAccelDisplayPipeUserClient214externalMethodEjP25IOExternalMethodArgumentsP24IOExternalMethodDispatchP8OSObjectPv")
+    assert read(display_external + 4, 3) == bytes.fromhex("83 fe 0e"), \
+        "changed DisplayPipeUserClient fourteen-selector bound"
+    display_table_instruction = read(display_external + 0xd, 7)
+    assert display_table_instruction[:3] == bytes.fromhex("4c 8d 15") and \
+        display_external + 0x14 + struct.unpack_from("<i", display_table_instruction, 3)[0] == address_of(
+            "__ZN29IOAccelDisplayPipeUserClient219sDisplayMethodDescsE") and \
+        read(display_external + 0x20, 14) == bytes.fromhex(
+            "48 8b 05 73 97 01 00 5d ff a0 60 08 00 00"), \
+        "changed DisplayPipeUserClient table selection/inherited dispatch"
+    display_wrapper_edges = (
+        ("__ZN29IOAccelDisplayPipeUserClient216s_set_pipe_indexEPS_PvP25IOExternalMethodArguments",
+         "__ZN29IOAccelDisplayPipeUserClient212setPipeIndexEjPy", [0xf]),
+        ("__ZN29IOAccelDisplayPipeUserClient225s_get_display_mode_scalerEPS_PvP25IOExternalMethodArguments",
+         "__ZN29IOAccelDisplayPipeUserClient220getDisplayModeScalerEP24IOAccelDisplayPipeScaler", [0x9]),
+        ("__ZN29IOAccelDisplayPipeUserClient223s_get_capabilities_dataEPS_PvP25IOExternalMethodArguments",
+         "__ZN29IOAccelDisplayPipeUserClient219getCapabilitiesDataEPhPy", [0x70]),
+        ("__ZN29IOAccelDisplayPipeUserClient216s_request_notifyEPS_PvP25IOExternalMethodArguments",
+         "__ZN29IOAccelDisplayPipeUserClient213requestNotifyEPyP35IOAccelDisplayPipeRequestNotifyArgs", [0x18]),
+        ("__ZN29IOAccelDisplayPipeUserClient219s_transaction_beginEPS_PvP25IOExternalMethodArguments",
+         "__ZN29IOAccelDisplayPipeUserClient216transactionBeginEPj", [0x1c]),
+        ("__ZN29IOAccelDisplayPipeUserClient235s_transaction_set_plane_gamma_tableEPS_PvP25IOExternalMethodArguments",
+         "__ZN29IOAccelDisplayPipeUserClient229transactionSetPlaneGammaTableEP32IOAccelDisplayPipeGammaTableArgs", [0x8a]),
+        ("__ZN29IOAccelDisplayPipeUserClient237s_transaction_set_pipe_pregamma_tableEPS_PvP25IOExternalMethodArguments",
+         "__ZN29IOAccelDisplayPipeUserClient231transactionSetPipePreGammaTableEP32IOAccelDisplayPipeGammaTableArgs", [0x8a]),
+        ("__ZN29IOAccelDisplayPipeUserClient238s_transaction_set_pipe_postgamma_tableEPS_PvP25IOExternalMethodArguments",
+         "__ZN29IOAccelDisplayPipeUserClient232transactionSetPipePostGammaTableEP32IOAccelDisplayPipeGammaTableArgs", [0x8a]),
+        ("__ZN29IOAccelDisplayPipeUserClient217s_transaction_endEPS_PvP25IOExternalMethodArguments",
+         "__ZN29IOAccelDisplayPipeUserClient214transactionEndEP33IOAccelDisplayPipeTransactionArgs", [0x9]),
+        ("__ZN29IOAccelDisplayPipeUserClient218s_transaction_waitEPS_PvP25IOExternalMethodArguments",
+         "__ZN29IOAccelDisplayPipeUserClient215transactionWaitEP37IOAccelDisplayPipeTransactionWaitArgs", [0x9]),
+        ("__ZN29IOAccelDisplayPipeUserClient246s_transaction_set_pipe_precsclinearization_vidEPS_PvP25IOExternalMethodArguments",
+         "__ZN29IOAccelDisplayPipeUserClient240transactionSetPipePreCSCLinearizationVIDEP41IOAccelDisplayPipePreCSCLinearizationArgs", [0x86]),
+        ("__ZN29IOAccelDisplayPipeUserClient239s_transaction_set_pipe_postcscgamma_vidEPS_PvP25IOExternalMethodArguments",
+         "__ZN29IOAccelDisplayPipeUserClient233transactionSetPipePostCSCGammaVIDEP39IOAccelDisplayPipePostCSCGammaTableArgs", [0x86]),
+        ("__ZN29IOAccelDisplayPipeUserClient214s_copy_surfaceEPS_PvP25IOExternalMethodArguments",
+         "__ZN29IOAccelDisplayPipeUserClient211copySurfaceEjj", [0x2d]),
+        ("__ZN29IOAccelDisplayPipeUserClient28s_triageEPS_PvP25IOExternalMethodArguments",
+         "__ZN29IOAccelDisplayPipeUserClient26triageEPPcPy", [0x78]),
+    )
+    for wrapper, member, offsets in display_wrapper_edges:
+        body = BASE_CLIENT_BODIES.get(wrapper, EVENT_OWNER_BODIES.get(wrapper))
+        assert body is not None and direct_branch_offsets(
+            address_of(wrapper), body[0], address_of(member)) == offsets, \
+            f"changed DisplayPipeUserClient wrapper edge: {wrapper}"
+
+    display_lock_inventory = (
+        ("__ZN29IOAccelDisplayPipeUserClient212setPipeIndexEjPy", [0x46], [0x10d], [0x36], [0x119]),
+        ("__ZN29IOAccelDisplayPipeUserClient220getDisplayModeScalerEP24IOAccelDisplayPipeScaler", [0x3e], [0x9a], [0x2e], [0xa6]),
+        ("__ZN29IOAccelDisplayPipeUserClient219getCapabilitiesDataEPhPy", [0x45], [0x131], [0x35], [0x13d]),
+        ("__ZN29IOAccelDisplayPipeUserClient213requestNotifyEPyP35IOAccelDisplayPipeRequestNotifyArgs", [0x60], [0xbc], [0x50], [0xc8]),
+        ("__ZN29IOAccelDisplayPipeUserClient216transactionBeginEPj", [0x3e], [0xb2], [0x2e], [0xbe]),
+        ("__ZN29IOAccelDisplayPipeUserClient229transactionSetPlaneGammaTableEP32IOAccelDisplayPipeGammaTableArgs", [0x3e], [0xa5], [0x2e], [0xb1]),
+        ("__ZN29IOAccelDisplayPipeUserClient231transactionSetPipePreGammaTableEP32IOAccelDisplayPipeGammaTableArgs", [0x3e], [0xa5], [0x2e], [0xb1]),
+        ("__ZN29IOAccelDisplayPipeUserClient232transactionSetPipePostGammaTableEP32IOAccelDisplayPipeGammaTableArgs", [0x3e], [0xa5], [0x2e], [0xb1]),
+        ("__ZN29IOAccelDisplayPipeUserClient214transactionEndEP33IOAccelDisplayPipeTransactionArgs", [0x41, 0x16e], [0x128, 0x1f4], [0x31, 0x15e], [0x134, 0x200]),
+        ("__ZN29IOAccelDisplayPipeUserClient215transactionWaitEP37IOAccelDisplayPipeTransactionWaitArgs", [0x4b, 0x11a], [0xce, 0x18b], [0x3b, 0x10a], [0xda, 0x197]),
+        ("__ZN29IOAccelDisplayPipeUserClient240transactionSetPipePreCSCLinearizationVIDEP41IOAccelDisplayPipePreCSCLinearizationArgs", [0x3e], [0xa5], [0x2e], [0xb1]),
+        ("__ZN29IOAccelDisplayPipeUserClient233transactionSetPipePostCSCGammaVIDEP39IOAccelDisplayPipePostCSCGammaTableArgs", [0x3e], [0xa5], [0x2e], [0xb1]),
+        ("__ZN29IOAccelDisplayPipeUserClient211copySurfaceEjj", [0x46], [0xa2], [0x36], [0xae]),
+    )
+    for method, locks, unlocks, mutexes, unmutexes in display_lock_inventory:
+        body = BASE_CLIENT_BODIES.get(method, EVENT_OWNER_BODIES.get(method))
+        assert body is not None
+        start = address_of(method)
+        assert direct_branch_offsets(start, body[0], 0x14ba6da2) == locks and \
+            direct_branch_offsets(start, body[0], 0x14ba6db4) == unlocks and \
+            direct_branch_offsets(start, body[0], 0x10012) == mutexes and \
+            direct_branch_offsets(start, body[0], 0x10018) == unmutexes, \
+            f"changed DisplayPipeUserClient lock scope: {method}"
+    display_triage = "__ZN29IOAccelDisplayPipeUserClient26triageEPPcPy"
+    assert all(direct_branch_offsets(
+        address_of(display_triage), BASE_CLIENT_BODIES[display_triage][0], target) == []
+        for target in (0x14ba6da2, 0x14ba6db4, 0x10012, 0x10018)), \
+        "DisplayPipeUserClient triage gained a lock transition"
+
+    display_start = address_of("__ZN29IOAccelDisplayPipeUserClient25startEP9IOService")
+    assert read(display_start + 0x1f, 7) == bytes.fromhex("48 89 83 d8 00 00 00") and \
+        read(display_start + 0x2b, 14) == bytes.fromhex(
+            "48 8b 80 78 03 00 00 48 89 83 e0 00 00 00") and \
+        read(display_start + 0x46, 6) == bytes.fromhex("ff 90 d0 05 00 00"), \
+        "changed DisplayPipeUserClient accelerator/display-machine ownership"
+    set_pipe = address_of("__ZN29IOAccelDisplayPipeUserClient212setPipeIndexEjPy")
+    get_pipe_no_lock = address_of("__ZN29IOAccelDisplayPipeUserClient220getDisplayPipeNoLockEv")
+    framebuffer_count = address_of("__ZNK21IOAccelDisplayMachine19getFramebufferCountEv")
+    get_display_pipe = address_of("__ZNK21IOAccelDisplayMachine14getDisplayPipeEj")
+    assert direct_branch_offsets(set_pipe, 0x168, framebuffer_count) == [0x68] and \
+        direct_branch_offsets(set_pipe, 0x168, get_display_pipe) == [0xad] and \
+        direct_branch_offsets(get_pipe_no_lock, 0x3a, framebuffer_count) == [0x17] and \
+        direct_branch_offsets(get_pipe_no_lock, 0x3a, get_display_pipe) == [0x2d], \
+        "changed DisplayPipeUserClient pipe selection edges"
+    display_transaction_end = address_of(
+        "__ZN29IOAccelDisplayPipeUserClient214transactionEndEP33IOAccelDisplayPipeTransactionArgs")
+    display_copy = address_of("__ZN29IOAccelDisplayPipeUserClient211copySurfaceEjj")
+    pipe_copy = address_of("__ZN18IOAccelDisplayPipe11copySurfaceEjj")
+    assert direct_branch_offsets(
+        display_transaction_end, 0x232,
+        address_of("__ZN18IOAccelDisplayPipe15transaction_endEP29IOAccelDisplayPipeUserClient2P33IOAccelDisplayPipeTransactionArgs")) == [0x228] and \
+        direct_branch_offsets(display_copy, 0xc6, pipe_copy) == [0x73] and \
+        read(pipe_copy + 0x174, 6) == bytes.fromhex("ff 90 a8 09 00 00"), \
+        "changed DisplayPipe transaction/copy producer roots"
+
+    # A rejected Intel physical framebuffer does not prove this family
+    # unreachable.  The inherited display-machine start enumerates registry
+    # IOFramebuffer instances and dispatches found_framebuffer; the legacy
+    # override delegates to the base creator, which invokes the concrete
+    # accelerator newDisplayPipe factory.
+    for table, slot, method in (
+            ("__ZTV21IOAccelDisplayMachine", 0x850, "__ZN21IOAccelDisplayMachine4initEP22IOGraphicsAccelerator2"),
+            ("__ZTV21IOAccelDisplayMachine", 0x858, "__ZN21IOAccelDisplayMachine5startEP11IOPCIDevice"),
+            ("__ZTV21IOAccelDisplayMachine", 0x8d8, "__ZN21IOAccelDisplayMachine17found_framebufferEP13IOFramebuffer"),
+            ("__ZTV27IOAccelLegacyDisplayMachine", 0x850, "__ZN21IOAccelDisplayMachine4initEP22IOGraphicsAccelerator2"),
+            ("__ZTV27IOAccelLegacyDisplayMachine", 0x858, "__ZN27IOAccelLegacyDisplayMachine5startEP11IOPCIDevice"),
+            ("__ZTV27IOAccelLegacyDisplayMachine", 0x8d8, "__ZN27IOAccelLegacyDisplayMachine17found_framebufferEP13IOFramebuffer"),
+            ("__ZTV22IOGraphicsAccelerator2", 0x908, "__ZN22IOGraphicsAccelerator217createDisplayPipeEP13IOFramebufferj")):
+        raw = struct.unpack("<Q", read(address_of(table) + 16 + slot, 8))[0]
+        assert raw >> 63 == 0 and (raw >> 30) & 3 == 1 and \
+            raw & 0x3fffffff == address_of(method), \
+            f"changed display creation virtual: {table} {slot:#x}"
+    display_machine_start = address_of("__ZN21IOAccelDisplayMachine5startEP11IOPCIDevice")
+    assert read(display_machine_start + 0xcc, 6) == bytes.fromhex("ff 90 d8 08 00 00") and \
+        read(display_machine_start + 0x15d, 6) == bytes.fromhex("ff 91 d8 08 00 00") and \
+        read(display_machine_start + 0x19e, 6) == bytes.fromhex("ff 91 d8 08 00 00"), \
+        "changed IOFramebuffer enumeration-to-found dispatches"
+    legacy_machine_start = address_of("__ZN27IOAccelLegacyDisplayMachine5startEP11IOPCIDevice")
+    legacy_found = address_of("__ZN27IOAccelLegacyDisplayMachine17found_framebufferEP13IOFramebuffer")
+    base_found = address_of("__ZN21IOAccelDisplayMachine17found_framebufferEP13IOFramebuffer")
+    create_pipe = address_of("__ZN22IOGraphicsAccelerator217createDisplayPipeEP13IOFramebufferj")
+    assert read(legacy_machine_start + 0xc, 6) == bytes.fromhex("ff a0 68 08 00 00") and \
+        read(legacy_found + 0x15, 6) == bytes.fromhex("ff 90 e8 08 00 00") and \
+        read(base_found + 0x55, 6) == bytes.fromhex("ff 90 08 09 00 00") and \
+        read(create_pipe + 0x17, 6) == bytes.fromhex("ff 90 48 0a 00 00") and \
+        read(create_pipe + 0x3c, 6) == bytes.fromhex("ff 90 50 08 00 00"), \
+        "changed legacy/base display-pipe creation chain"
+    assert read(0x14ba0153, 0x16) == bytes.fromhex(
+        "49 8b 06 4c 89 f7 ff 90 00 0a 00 00 49 89 86 78 03 00 00 48 85 c0") and \
+        read(0x14ba0191, 0x16) == bytes.fromhex(
+            "49 8b 86 78 03 00 00 48 8b 08 48 89 c7 4c 89 f6 ff 91 50 08 00 00"), \
+        "changed accelerator display-machine factory/store/init window"
+    print("PASS DisplayPipe selectors, locks, producer roots and conservative creation reachability")
 
     surface_external = address_of(
         "__ZN14IOAccelSurface14externalMethodEjP25IOExternalMethodArgumentsP24IOExternalMethodDispatchP8OSObjectPv")
