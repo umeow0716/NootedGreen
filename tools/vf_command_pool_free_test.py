@@ -18,9 +18,11 @@ assert hashlib.sha256(image[0x14b6adea:0x14b6afec]).hexdigest() == \
     '32fc16f1a5c64764f3c81e4c0e2a95a65d6cdd9a3da934964e3e4db74e379f3b'
 assert hashlib.sha256(image[0x14b6b13a:0x14b6b2bc]).hexdigest() == \
     '5cf69325a1d3fe2e3f09751af5ec3b3eece1542d255c6b04411d348e40c2f033'
+assert hashlib.sha256(image[0x14b6b2bc:0x14b6b3ca]).hexdigest() == \
+    'bf2d3995728e15a07c3e8a2b0adebd4f8e9ecc063ee4767e44bc4c5e5763567a'
 
 
-def run(slots, record, current=-1, linked=False, failure=None, runtime=False):
+def run(slots, record, current=-1, linked=False, failure=None, runtime=False, request=None):
     assert current == -1 or 0 <= current < slots
     selection_failure = failure in ('gpu-map', 'va', 'prepare')
     allocation_memory = 0x491000 if runtime else 0x490000
@@ -106,6 +108,11 @@ def run(slots, record, current=-1, linked=False, failure=None, runtime=False):
             return
         if selection_failure and not runtime and address == 0x14b6ad2f:
             assert uc.reg_read(UC_X86_REG_RAX) & 0xff == 1
+        if request is not None and address == 0x14bb7462:
+            assert uc.reg_read(UC_X86_REG_RDI) == 0x4c0000
+            events.append('test-old-event')
+            ret(1)
+            return
         if address in labels:
             if address == 0x600070:
                 assert uc.reg_read(UC_X86_REG_RDI) == 0x4c0000 + current * 0x1000
@@ -133,6 +140,26 @@ def run(slots, record, current=-1, linked=False, failure=None, runtime=False):
         assert get(pool + 0x50) == 0 and get(pool + 0x58) == allocation_cpu
         memories.append(allocation_memory)
         events.clear()
+        if request is not None:
+            for offset, value in ((0x1848, 0x500000), (0x1850, 0x501000),
+                                  (0x1858, 0x500000)):
+                put(pool + offset, value)
+            canary = b'\xa5' * 8192
+            uc.mem_write(0x500000, canary)
+            put(sp, 0x600060)
+            uc.reg_write(UC_X86_REG_RSP, sp)
+            uc.reg_write(UC_X86_REG_RDI, pool)
+            uc.reg_write(UC_X86_REG_RSI, request)
+            uc.emu_start(0x14b6b2bc, 0x600061, count=20000)
+            assert uc.reg_read(UC_X86_REG_RIP) == 0x600060
+            assert uc.reg_read(UC_X86_REG_RAX) == 0x500000
+            assert get(pool + 0x1850) == 0x501000
+            assert events == ([] if request <= 1024 else
+                              ['create-gpu-map', 'unlinked-log', 'test-old-event']), events
+            assert bytes(uc.mem_read(0x500000, 8192)) == canary
+            if request > 1024:
+                assert uc.reg_read(UC_X86_REG_RAX) + request * 4 > get(pool + 0x1850)
+            events.clear()
     elif failure:
         assert slots == 0 and not record and current == -1 and not linked
         # Native init performs actual slot/index/count setup and growth.
@@ -206,7 +233,10 @@ assert cases == 24
 for failure in ('memory', 'cpu-map', 'gpu-map', 'va', 'prepare'):
     run(0, False, failure=failure)
 run(1, False, current=0, failure='gpu-map', runtime=True)
+for request in (1024, 1025, 2048):
+    run(1, False, current=0, failure='gpu-map', runtime=True, request=request)
 print('PASS 24 KC partial/current/linked-pool free fixtures; complete precedes release;'
       ' five actual init/growth failure states cleaned;'
       ' runtime growth false-success/current preservation reproduced;'
+      ' pointer capacity boundary and oversize return reproduced without writes;'
       ' callbacks mocked, no actual event/DMA quiescence proof')

@@ -6955,6 +6955,24 @@ No executable patch or runtime mutation.
 
 ### Update fanout must participate in the same owner transaction
 
+#### Pointer acquisition returns an undersized old buffer in injected cases
+
+After the generated runtime-growth failure, emulator executes the exact
+hash-pinned getBufferPtrNoInc14b6b2bc/10e with cursor=start of slot0,
+end=start+4096, requests1024/1025/2048 dwords. The1024 case returns via
+the fit path. Larger cases retry slot1 GPU mapping (mock returns null),
+keep current0, query old mapping testEvent (mock returns true), reset
+cursors to old CPU base and return it although returned+request*4>end.
+Checks preserve8192 bytes of output canaries: the getter itself writes
+no command payload. Subsequent free remains verified in each case.
+
+This is concrete native instruction behavior for injected requests/events,
+not proof that real native callers request more than capacity, or that a
+hardware-active old buffer is overwritten. Caller request bounds, actual
+event state and submit continuation remain pending. Production design
+must enforce a pointer-capacity postcondition in addition to selection
+success; growth status alone cannot cover the direct getter path.
+
 #### Runtime growth reproduces success with unchanged old current slot
 
 KC emulator now begins with count1/current0 and an existing slot triple,
