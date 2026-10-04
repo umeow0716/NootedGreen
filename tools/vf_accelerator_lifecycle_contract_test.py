@@ -2947,6 +2947,11 @@ def event_collection_admission_model():
     Native body fixtures separately pin the reviewed branch graph. Snapshot
     addresses here are symbolic stable inputs, not evidence of runtime leases.
     """
+    def snapshot_matches(expected, observed):
+        # Selected consumer dereferences entries without a null guard. This
+        # rejects null, but does not validate pointer ownership or accessibility.
+        return all(value != 0 for vector in expected for value in vector) and expected == observed
+
     cases = 0
     for client_copy in (False, True):
         for skip_wait in (False, True):
@@ -2974,7 +2979,7 @@ def event_collection_admission_model():
                             observed = (
                                 tuple(value for i, value in enumerate(wait) if mask & (1 << i)),
                                 tuple(value for i, value in enumerate(update, len(wait)) if mask & (1 << i)))
-                            complete = observed == expected
+                            complete = snapshot_matches(expected, observed)
                             assert complete == (mask == (1 << required) - 1)
                             assert not complete or sum(map(len, observed)) == required
                             cases += 1
@@ -2984,14 +2989,17 @@ def event_collection_admission_model():
                                 substitution[-1] = 0xdead0000
                                 bad = list(expected)
                                 bad[vector] = tuple(substitution)
-                                assert tuple(bad) != expected  # same count is insufficient
+                                assert not snapshot_matches(expected, tuple(bad))  # same count is insufficient
                                 assert tuple(map(len, bad)) == tuple(map(len, expected))
                         assert len(wait) == (0 if pair_events or (client_copy and skip_wait) else 2)
                         assert len(update) == (6 if mapped else 4)
     # Genuine no-op selection is distinct from all required events omitted.
     selected_noop = ((), ())
     omitted_required_wait = ((0x100,), ())
-    assert selected_noop != omitted_required_wait
+    assert snapshot_matches(selected_noop, selected_noop)
+    assert not snapshot_matches(omitted_required_wait, selected_noop)
+    for expected in (((0,), ()), ((), (0,)), ((), (0, 0))):
+        assert not snapshot_matches(expected, expected)  # exact identity alone is insufficient
     print(f"PASS: {cases} selected event-omission states; legal skip/alias and same-count substitution (offline model, not runtime admission)")
 
 

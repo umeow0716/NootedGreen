@@ -1315,6 +1315,7 @@ def check(path, boot_path=None):
     assert read(address_of(EVENT_MERGE_EXCLUDING) + 0x1bb, 9) == bytes.fromhex("48 89 de ff 90 90 01 00 00"), "changed merged destination completion query (not merge-error status)"
     assert hashlib.sha256(read(address_of(EVENT_SET_STAMP), 0x9e)).hexdigest() == \
         "6240e1c9918181dd5d32c49d5fe01dab22e7705dc0d4d1d94b1e7189d8c8c995", "changed setEventStamp"
+    assert read(address_of(EVENT_SET_STAMP) + 6, 4) == bytes.fromhex("48 8b 0c c2"), "changed direct event-entry read (no null admission guard)"
     wait = read(address_of(EVENT_WAIT), 0x34)
     assert hashlib.sha256(read(address_of(EVENT_WAIT), 0x314)).hexdigest() == \
         "66a79a6eeeae4a30fc91586b1e09f54b702ed2c86501af4e4d0e7bcfe7ddb1f9", "changed full waitForStamp"

@@ -6955,6 +6955,24 @@ No executable patch or runtime mutation.
 
 ### Update fanout must participate in the same owner transaction
 
+Null-entry admission follow-up: re-read the previously whole-pinned channel
+setEventStamp wrapper and Fast2 setEventStamp (0x9e). Channel forwards the
+supplied event pointer to event-machine +0x1d0; Fast2 begins reading
+[rdx+rax*8] at 0x14b96242 without an event null guard. Both reviewed collector
+copies can append resource event-pair +0x90 and a second pointer conditionally
+set to zero when that base is null. Thus a zero vector ENTRY cannot be treated
+as an empty vector or completed event; valid producer construction must ensure
+required pair pointers are non-null before those paths reach this consumer.
+The producer-side invariant remains unproven, so this is a conditional graph
+hazard, not a demonstrated reachable malformed resource or panic attribution.
+
+Added the consumer read anchor and extended the test-only snapshot predicate:
+exact sequence matching also rejects expected/observed null entries, while a
+genuinely selected empty pair of vectors remains admissible. Non-null alone
+does NOT establish mapped accessibility, canonical address, event owner retain
+or backing lifetime. Runtime enumeration/owner acquisition is still absent;
+no driver behavior, VM or Host GPU state changed this checkpoint.
+
 Offline expected-event admission specification: added 2,720 omission states
 for the two reviewed collector variants, Boolean wait skip, pair-vs-indexed
 resource events, optional mapping event and two potentially aliased resources.
