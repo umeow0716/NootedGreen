@@ -6955,6 +6955,36 @@ No executable patch or runtime mutation.
 
 ### Update fanout must participate in the same owner transaction
 
+#### Command-pool growth publishes capacity before selection succeeds
+
+Whole System KC bodies reviewed: pool init `14b6ac68/182`, growth
+`14b6adea/202`, and free `14b6afec/13c`; exact hashes are pinned in the
+KC contract test. Growth doubles the previous count (zero becomes one),
+allocates memory and CPU mappings for the new slots, publishes count at
+`14b6aeac`, calls void selection at `14b6aeba`, and unconditionally sets
+success at `14b6aebf`. Selection failure therefore does not propagate
+through growth's Boolean result. Allocation/CPU-map failure instead unwinds
+the newly allocated prefix and returns false. This distinction matters to
+both pointer-acquisition and submission callers already reviewed.
+
+Init sets current index to -1 and count/cursors to zero; after growth it
+checks both AL and a nonnegative current index before publishing cursors.
+Runtime growth lacks that initial-index postcondition. Init retains the
+channel via virtual offset 20; accelerator and task fields are raw stores,
+not local retains. Free completes the current mapping, then iterates all
+256 fixed slots, invokes finishEvent, releases mappings, removes CPU maps,
+and releases memories before releasing the channel and command record.
+These local calls do not prove a matched hardware TLB/GuC acknowledgement
+or establish task/accelerator lifetime across all callers.
+
+Growth only compares current count with maximum for equality before
+doubling; init does not locally validate a power-of-two maximum, fixed-slot
+limit, or reserved bytes versus buffer size. Caller-supplied constraints
+must be resolved before treating these as reachable defects. Next work:
+resolve construction arguments, outer ownership/serialization, and every
+selection caller before defining a VF-only postcondition repair. No
+production change or dynamic VF/PF test is authorized by these fixtures.
+
 Command-pool selection caller follow-up: new complete KC getBufferPtrNoInc
 `0x14b6b2bc/0x10e` reviewed/hash-pinned. It checks requested dword space
 against the current end pointer; when needed it submits a nonempty buffer,

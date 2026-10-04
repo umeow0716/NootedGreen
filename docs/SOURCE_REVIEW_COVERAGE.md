@@ -7,6 +7,14 @@ audit's runtime blockers are open.
 
 ## Scope
 
+Command-pool lifecycle increment: complete System KC init
+`14b6ac68/182`, allocMoreCommandBuffers `14b6adea/202`, and free
+`14b6afec/13c` reviewed and pinned. Growth's success result ignores void
+selection failure after capacity publication; initial construction checks
+negative current index separately. Construction argument constraints and
+outer task/accelerator ownership remain unverified. This is three bounded
+body reviews, not completion of the pool's full caller/lifetime graph.
+
 New complete KC review: pool getBufferPtrNoInc `0x14b6b2bc/0x10e`, hash-pinned
 with selected pointer acquisition/submission/selection edges. Pool growth's
 selection call discovered, not its full body reviewed. Exact size/owner init

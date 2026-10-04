@@ -35,6 +35,9 @@ EVENT_DISABLE_STAMP_LOCKED = "__ZN20IOAccelEventMachine223disable_stamp_interrup
 EVENT_ENABLE_STAMP = "__ZN20IOAccelEventMachine220enableStampInterruptEi"
 EVENT_DISABLE_STAMP = "__ZN20IOAccelEventMachine221disableStampInterruptEi"
 EVENT_OWNER_BODIES = {
+    "__ZN25IOAccelCommandBufferPool24initEP22IOGraphicsAccelerator2P15IOAccelChannel2P11IOAccelTaskiijjjj": (0x182, "58d38ff5fe772731cb08b042d75ce12ae46ea7cc046b78e7cda9b2d4865fc82c"),
+    "__ZN25IOAccelCommandBufferPool223allocMoreCommandBuffersEv": (0x202, "32fc16f1a5c64764f3c81e4c0e2a95a65d6cdd9a3da934964e3e4db74e379f3b"),
+    "__ZN25IOAccelCommandBufferPool24freeEv": (0x13c, "739b44800bc58c97f593876b5e102076a8b17adcdda60c512129fff840b580d3"),
     "__ZN25IOAccelCommandBufferPool217getBufferPtrNoIncEj": (0x10e, "bf2d3995728e15a07c3e8a2b0adebd4f8e9ecc063ee4767e44bc4c5e5763567a"),
     "__ZN25IOAccelCommandBufferPool221setBufferCurrentIndexEs": (0x182, "5cf69325a1d3fe2e3f09751af5ec3b3eece1542d255c6b04411d348e40c2f033"),
     "__ZN25IOAccelCommandBufferPool212setBufferPtrEPj": (0xe, "966161046c4b88de4a6eebbb532da658c7a201330fb194055973f8af790dd35f"),
