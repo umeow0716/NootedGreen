@@ -35,6 +35,15 @@ EVENT_DISABLE_STAMP_LOCKED = "__ZN20IOAccelEventMachine223disable_stamp_interrup
 EVENT_ENABLE_STAMP = "__ZN20IOAccelEventMachine220enableStampInterruptEi"
 EVENT_DISABLE_STAMP = "__ZN20IOAccelEventMachine221disableStampInterruptEi"
 EVENT_OWNER_BODIES = {
+    "__ZN11IOAccelTask22free_orphaned_mappingsEv": (0x7e, "97d743c58e34dfba9f18849fa65ffe915d28af60f8b2128c8a94ce5a771bda5b"),
+    "__ZN11IOAccelTask23prune_orphaned_mappingsEv": (0x82, "27fb718099f7605e54763ca2c0f847341ee269eac72bd41ebf21a93d73d812de"),
+    "__ZN11IOAccelTask18freeAllGPUMappingsEv": (0xce, "73823442676f252f9be50c157c8d4a87e8b012e255d9c33a9e1d647f59e8fa66"),
+    "__ZN16IOAccelMemoryMap11finishEventEv": (0x26, "9f63366c69a3921beecdf3f17fd6442c3a164b13c58271a98c3493cd16c2eb03"),
+    "__ZN16IOAccelMemoryMap9testEventEv": (0x26, "ba2d03cf31f94fead1d82e2957c392db5b512b18d18658198c9a7b38bc1d6b6c"),
+    "__ZN20IOAccelMemoryMapList15ReverseIteratorC1ERS_": (0xe, "efa5c4b0f81f739fa8e47eacdc469e74a2b65b2c9239f19b2ced366ebb62607b"),
+    "__ZN20IOAccelMemoryMapList15ReverseIterator14getPrevMappingEv": (0x16, "e6f7f96d180c0e35feee238564b6a24025becd983bb363e01165717bfcfd25a4"),
+    "__ZN24IOAccelEventMachineFast29testEventEP12IOAccelEvent": (0x3e, "6a3da94f7b063da6967b9804bde524c225da4135b7fb11ec4e80cda03671d193"),
+    "__ZN24IOAccelEventMachineFast217testEventUnlockedEP12IOAccelEvent": (0x6c, "cb4859871ba1903a1f25b38ca9f29f8502d2627794aa45624d0fb85291e66e40"),
     "__ZNK16IOAccelMemoryMap7releaseEv": (0xfe, "1b2bdc6aa5b9cf5b153d22ee8509b4293033285bab3cf297179f87b73fb08691"),
     "__ZN20IOAccelMemoryMapList13removeMappingEP16IOAccelMemoryMap": (0x7c, "0da924d403ae611e17fc1e2d9bb1b35e17d8a3c27a44a88418fc54702fb0420b"),
     "__ZN20IOAccelMemoryMapList10addMappingEP16IOAccelMemoryMap": (0x2a, "e142938a7033edaef0ef5446d522d5fc627a8c8224c60061d81f529957a2392b"),
@@ -1015,6 +1024,13 @@ def check(path, boot_path=None):
     raw_map_release = struct.unpack("<Q", read(address_of("__ZTV16IOAccelMemoryMap") + 0x38, 8))[0]
     assert raw_map_release >> 63 == 0 and (raw_map_release >> 30) & 3 == 1, "changed mapping release vtable encoding"
     assert raw_map_release & 0x3fffffff == address_of("__ZNK16IOAccelMemoryMap7releaseEv"), "changed mapping release vtable target"
+    for call, method in ((0x14b9e27a, "__ZN16IOAccelMemoryMap11finishEventEv"),
+                         (0x14b9e450, "__ZN16IOAccelMemoryMap9testEventEv"),
+                         (0x14b9e7c2, "__ZN16IOAccelMemoryMap11release_pteEv")):
+        encoded = read(call, 5)
+        assert encoded[0] == 0xe8 and call + 5 + struct.unpack_from("<i", encoded, 1)[0] == address_of(method), "changed task mapping cleanup edge"
+    assert read(0x14b959c0, 2) == bytes.fromhex("74 0f"), "changed event test conditional cleanup"
+    assert read(0x14b95465, 9) == bytes.fromhex("83 b9 c8 0d 00 00 00 74 0d"), "changed termination bypass in mapping event test"
     for call, method in ((0x14bb73da, "__ZN16IOAccelMemoryMap11release_pteEv"),
                          (0x14bb7421, "__ZN20IOAccelMemoryMapList13removeMappingEP16IOAccelMemoryMap"),
                          (0x14bb7435, "__ZN20IOAccelMemoryMapList10addMappingEP16IOAccelMemoryMap"),
@@ -1169,6 +1185,8 @@ def check(path, boot_path=None):
     # target:30, cacheLevel:2, next:12, isAuth:1. This archived SystemKC
     # level-1 unslid base is zero; never apply this to a live slid pointer.
     for slot, name in ((0x150, "__ZN24IOAccelEventMachineFast211finishStampEi"),
+                       (0x190, "__ZN24IOAccelEventMachineFast29testEventEP12IOAccelEvent"),
+                       (0x180, "__ZN24IOAccelEventMachineFast217testEventUnlockedEP12IOAccelEvent"),
                        (0x188, EVENT_FINISH), (0x238, EVENT_WAIT),
                        (0x148, EVENT_CLEAN), (0x250, EVENT_TERMINATE), (0x228, EVENT_SIGNAL),
                        (0x1c8, EVENT_MERGE_EXCLUDING), (0x1d0, EVENT_SET_STAMP),

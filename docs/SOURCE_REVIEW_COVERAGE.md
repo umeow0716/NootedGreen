@@ -7,6 +7,14 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 task mapping drains: nine complete bodies reviewed/pinned across
+ordinary orphan cleanup, prune, freeAllGPU, mapping finish/test wrappers,
+reverse iterator and Fast2 event tests. Declared +0x190 is event test, not a
+page-table manager predicate. Termination +0xdc8 permits outstanding stamps
+to pass, so cleanup admission cannot certify hardware completion. Borrowed
+predecessor snapshots support serial removal but do not establish concurrent
+owner lifetime. Outer exclusion and finish/wait dependencies remain open.
+
 2026-10-04 mapping last-release: complete release const, raw-list add/remove,
 and parent orphan-state comparison reviewed/pinned with declared vtable and
 four direct edges. Immediate installed-PTE cleanup differs from deferred

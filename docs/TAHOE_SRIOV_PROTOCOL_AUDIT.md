@@ -6953,6 +6953,39 @@ No executable patch or runtime mutation.
 
 ## Mapping last-release admission and deferred raw-list transfer
 
+Follow-up: reviewed/pinned complete Task free_orphaned_mappings (7e),
+prune_orphaned_mappings (82), freeAllGPUMappings (ce), mapping finish/test
+wrappers (26 each), reverse iterator construction (e) and traversal (16),
+Fast2 testEvent (3e) and testEventUnlocked (6c). The two owner lists are the
+task's +0x1e8/+0x200 lists. Ordinary orphan cleanup, unless feature c78 bit 3
+is set, traverses the deferred list, finishes each event and invokes mapping
+virtual release. Prune tests each event and stops the entire pass at the first
+false, otherwise releases it. freeAllGPUMappings instead releases deferred
+entries directly, then visits the active list: flag 2 or nonzero prepare count
+skips cleanup; otherwise installed flag 4 dispatches release_pte, followed by
+virtual +0x160. These are distinct cleanup contracts, not one generic drain.
+
+The formerly unresolved +0x190 predicate is accelerator +0x380's event-machine
+testEvent, confirmed by the mapping wrapper and declared Fast2 vtable. It
+dispatches testEventUnlocked (+0x180) and, on true, cleanEvent (+0x148).
+Unlocked testing examines eight channel/stamp entries, skips channel -1,
+compares stamps via signed subtraction, and refreshes cached completion from
+mapped stamp memory when needed. Crucially, accelerator termination counter
++0xdc8 nonzero allows a still-outstanding stamp to pass. Thus mapping event
+test success is not sufficient evidence of hardware completion during device
+termination, and never substitutes for an acknowledged GuC TLB invalidation.
+The existing termination-counter audit supplies field provenance; this newly
+reviewed consumer connects that bypass to mapping cleanup admission.
+
+Reverse traversal snapshots the predecessor before returning a borrowed
+mapping, permitting serial removal of the returned entry. It does not retain
+that predecessor or stabilize concurrent mutations. None of these task/list
+bodies acquires a local accelerator lock. Effective caller exclusion and the
+event finish/wait lock dependencies remain necessary before placing any
+synchronous retirement hook. The contracts add nine whole bodies, three
+direct cleanup edges, two Fast2 vtable identities, and termination-bypass
+anchors. This is offline reference evidence only; no runtime fix/deployment.
+
 Reviewed the complete previously unpinned IOAccelMemoryMap::release() const
 at 14bb7364/fe, plus MemoryMapList removeMapping 14b81f24/7c, addMapping
 14b81ebe/2a and parent check_orphan_state 14b66e6a/42. The declared mapping
