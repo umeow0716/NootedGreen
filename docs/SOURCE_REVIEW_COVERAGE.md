@@ -25,7 +25,9 @@ GLDrawable, SurfaceMTL, MemoryInfo, display/flip, internal producers, counted
 admission and drain ordering remain open; no production or runtime state was
 changed. Targeted paired-KC/dual-payload contracts and the full static suite at
 `/tmp/ngreen-static.699HQl` pass; only the two known SDK macro redefinition
-warnings remain.
+warnings remain. Checkpoint `d3ad915` is pushed and exact-sha GitHub Actions
+run `37201222757` passed full static, release kext, Metal smoke and artifact
+uploads.
 
 2026-10-04 command-queue admission-boundary delta: the paired Tahoe System KC
 contract now pins the complete external/member command-queue submit,

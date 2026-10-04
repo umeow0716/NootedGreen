@@ -52,8 +52,10 @@ SurfaceMTL, MemoryInfo and remaining member semantics are still P5 blockers;
 display/flip, internal producers, counted admission and drain order remain
 open. The targeted paired-KC and dual-payload contracts pass, as does the full
 static suite at `/tmp/ngreen-static.699HQl` with only the two known SDK macro
-redefinition warnings. No production route, VM, PCI/sysfs or Host i915 state
-was touched.
+redefinition warnings. Checkpoint `d3ad915` is pushed; exact-sha GitHub Actions
+run `37201222757` passed full static, x86_64 release kext, Metal smoke and both
+artifact uploads. No production route, VM, PCI/sysfs or Host i915 state was
+touched.
 
 ## V285 external-producer admission inventory (offline)
 

@@ -18,7 +18,7 @@ kext/AuxKC、重綁 PCI 或寫入 SR-IOV sysfs。`CLOSED` 只代表指定的離�
 | SG-09 | timer／IRQ／workloop callback 的取消、排空與 owner lifetime | OPEN | IRQ callback counted gate 已有；DPSM、event-machine、passive timer、workloop removal 的完整 no-late-callback／無反向鎖序證明尚未閉合。 |
 | SG-10 | 所有 VF 可達 PF-owned MMIO／DMA／force-wake／reset 的 negative reachability | OPEN | 已隔離多批具名入口；仍須以完整 symbol/vtable/function-pointer inventory 證明沒有 retained native bypass。 |
 | SG-11 | baseline 要求的所有程式檔完整審閱與 ledger closure | OPEN | `SOURCE_REVIEW_COVERAGE.md` 仍明確標記 incomplete；新增／修改檔案也必須納入。CI 成功不能替代此項。 |
-| SG-12 | 精確候選 commit 的完整 static suite、x86_64 release kext、Metal smoke build 與 artifact provenance | REVALIDATE PER CANDIDATE | 最後已知綠燈 commit 是 V286 `3d1ba6d`（GitHub Actions `37199252040`）。V287 工作區的 targeted paired-KC contracts 與 full static `/tmp/ngreen-static.699HQl` 已通過；仍須提交、push 並核對 exact-sha CI/artifacts。任何產品碼或 payload 變更立即重開本項。 |
+| SG-12 | 精確候選 commit 的完整 static suite、x86_64 release kext、Metal smoke build 與 artifact provenance | REVALIDATE PER CANDIDATE | V287 `d3ad915` 的 targeted paired-KC contracts、full static `/tmp/ngreen-static.699HQl` 與 exact-sha GitHub Actions `37201222757` 已通過；release kext 與 Metal smoke artifacts 均存在。這只重驗該 SHA，不解除 SG-05 至 SG-11。任何產品碼或 payload 變更立即重開本項。 |
 
 ## 目前主路徑
 
