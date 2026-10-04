@@ -9,6 +9,8 @@ import sys
 # Complete reviewed native bodies. This fixes the concrete Intel override
 # graph, not inherited timer APIs, dynamic callbacks or runtime completion.
 STAMP_IRQ_NATIVE = {
+    "__ZN16IntelAccelerator15systemWillSleepEv": (0x64, "37b3d5f2b38d0ba7a61820c7e0c24f593101fc0cf521a9380e1c3047b8e6f363"),
+    "__ZN16IntelAccelerator13systemDidWakeEv": (0x62, "4f76040d34525555af43b282b2dd5c3ccaca5fa15dcc718f227151753aa8f4f0"),
     "__ZN21IGHardwareGuCCTBuffer32handleSoftwareGuCToHostInterruptEv": (0xa4, "4e3a72792d35aff7c4ee3b1dd14b91de487b2717801c827f683d4e62e4c0f4bc"),
     "__ZN31IGHardwarePerProcessPageTable324freeEv": (0x80, "c5f1bb69bf4cedcdc999c0f6c34cc47167346196816f14db050a18609bb9893c"),
     "__ZN31IGHardwarePerProcessPageTable644freeEv": (0x1d4, "b3d0469c1f6405f8f9e5f77055fb7338fe457582600e16fba07baf10dd6fd165"),
@@ -536,6 +538,7 @@ def macho_inventory(path):
     }
     observed_stamp_irq_imports = {address: [] for address in stamp_irq_imports}
     event_stop_imports = {
+        0xc81a8: "__ZTV22IOGraphicsAccelerator2",
         0xd65c0: "__ZN15IOAccelChannel213setEventStampEP12IOAccelEvent",
         0xc8240: "_real_ncpus",  # Pool count is a linked kernel datum, not zero.
         0xd19b0: "__ZN22IOGraphicsAccelerator223freeWaitToPrepareVidMapEP16IOAccelMemoryMapbb",
@@ -720,6 +723,9 @@ def macho_inventory(path):
     assert direct_branches("__ZN16IGAccelMemoryMap23releaseFromGPUPageTableEv", "__ZN15IGMemoryManager27releaseFromPageTableForTaskEP11IGAccelTaskP16IGAccelMemoryMap") == [0x113b5], f"{path}: changed mapping-to-manager release edge"
     sys_memory_table = value("__ZTV16IGAccelSysMemory")
     assert value(ACCELERATOR_VTABLE) + 16 + 0x940 == 0xd19b0, f"{path}: changed Intel video recovery import slot"
+    for slot, method in ((0x9d8, "__ZN16IntelAccelerator15systemWillSleepEv"),
+                         (0x9e0, "__ZN16IntelAccelerator13systemDidWakeEv")):
+        assert struct.unpack_from("<Q", image, value(ACCELERATOR_VTABLE) + 16 + slot)[0] == value(method), f"{path}: changed Intel power override identity"
     assert value(ACCELERATOR_VTABLE) + 16 + 0x968 == 0xd19d8, f"{path}: changed Intel system recovery import slot"
     assert struct.unpack_from("<Q", image, sys_memory_table + 16 + 0x1b0)[0] == value("__ZN16IGAccelSysMemory4wireEv"), f"{path}: changed Intel sys-memory wire override"
     assert image[0x128a4:0x128ab] == bytes.fromhex("48 8b 05 95 58 0b 00"), f"{path}: changed wire base-table import load"

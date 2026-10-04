@@ -35,6 +35,7 @@ EVENT_DISABLE_STAMP_LOCKED = "__ZN20IOAccelEventMachine223disable_stamp_interrup
 EVENT_ENABLE_STAMP = "__ZN20IOAccelEventMachine220enableStampInterruptEi"
 EVENT_DISABLE_STAMP = "__ZN20IOAccelEventMachine221disableStampInterruptEi"
 EVENT_OWNER_BODIES = {
+    "__ZN22IOGraphicsAccelerator217system_will_sleepEib": (0x25c, "0e551a9a306fff5cfb8d9fad02635355ce639e4a28cb2635687da8253d07f580"),
     "__ZN22IOGraphicsAccelerator215systemWillSleepEv": (0x190, "0ed3b3ceeb3fdab4a219b59e50049aa79b8c2b126252413e682c6b2b1aa7641d"),
     "__ZN22IOGraphicsAccelerator215system_did_wakeEib": (0x20c, "9859c2de3fbba2eee6dbd9eb6a5aeebc92cacf7b855e4bcc08c46de6c79d3ca0"),
     "__ZN15IOAccelTaskList8IteratorC1ERS_": (0xc, "b381fee4d716b47f962d55fec3af58dd61a81d635a5141be724b0af8f0287012"),
@@ -1093,6 +1094,13 @@ def check(path, boot_path=None):
     assert read(0x14ba5f7f, 4) == bytes.fromhex("48 8d 7d b8"), "changed sleep second iterator construction slot"
     assert read(0x14ba5f9a, 4) == bytes.fromhex("48 8d 7d d0"), "changed unrepaired sleep second iterator read slot"
     assert read(0x14ba5fab, 4) == bytes.fromhex("4c 8d 75 d0"), "changed unrepaired sleep iterator loop slot"
+    raw_sleep = struct.unpack("<Q", read(address_of("__ZTV22IOGraphicsAccelerator2") + 16 + 0x9d8, 8))[0]
+    assert raw_sleep >> 63 == 0 and (raw_sleep >> 30) & 3 == 1 and raw_sleep & 0x3fffffff == address_of("__ZN22IOGraphicsAccelerator215systemWillSleepEv"), "changed inherited sleep target"
+    for call, target in ((0x14ba618e, 0x10012), (0x14ba627c, 0x10018),
+                         (0x14ba6306, 0x10012), (0x14ba636f, 0x10018)):
+        encoded = read(call, 5)
+        assert encoded[0] == 0xe8 and call + 5 + struct.unpack_from("<i", encoded, 1)[0] == target, "changed system-will-sleep mutex edge"
+    assert read(0x14ba61cf, 6) == bytes.fromhex("ff 90 d8 09 00 00"), "changed sleep virtual dispatch inside mutex scope"
     for slot, name in ((0x140, "__ZN11IOAccelTask8allocateEPK16IOAccelMemoryMap"),
                        (0x148, "__ZN11IOAccelTask10deallocateEPK16IOAccelMemoryMapy")):
         raw = struct.unpack("<Q", read(address_of("__ZTV11IOAccelTask") + 16 + slot, 8))[0]

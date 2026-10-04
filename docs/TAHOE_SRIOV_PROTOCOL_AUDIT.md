@@ -6953,6 +6953,35 @@ No executable patch or runtime mutation.
 
 ## Mapping last-release admission and deferred raw-list transfer
 
+Effective sleep caller follow-up: complete system_will_sleep
+(14ba6144/25c) and IntelAccelerator systemWillSleep (28916/64),
+systemDidWake (2897a/62) reviewed/pinned. In the true-mode system_will_sleep
+branch, accelerator +0x88 IOLock is acquired before virtual +0x9d8 dispatch
+and released afterward. Dispatch occurs only when feature c78 bit 0 is clear;
+the routine publishes sleep-related flags/timer cancellation afterward.
+The false-mode path first calls display methods outside that mutex, then locks
+for orphan-pool cleanup. These different scopes must not be collapsed into
+a universal power-event lock assertion.
+
+The declared Intel +0x9d8/+0x9e0 slots resolve to the reviewed Intel overrides,
+not directly to base methods. Intel sleep dispatches scheduler +0x118 and
+calls a bridge subordinate before explicitly invoking the imported base
+accelerator vtable +0x9e8 (header-inclusive +0x9d8). It then invokes another
+native engine subordinate. Intel wake resets selected bookkeeping, invokes
+engine/scheduler subordinates and delegates through base +0x9f0. The import
+at c81a8 is verified as the base accelerator vtable, and the corresponding
+KC base sleep slot resolves to systemWillSleep. This connects the recorded
+iterator mismatch to the fixed Intel/base power graph, not to an observed
+guest suspend or Host fault. Scheduler/bridge/engine quiescence at these
+boundaries is not established merely by their method names.
+
+Contracts add the three complete bodies, declared Intel power slots, base
+vtable import/slot, four mutex edges and in-scope sleep dispatch. Paired KC,
+both Intel payload and negative source contracts pass. Next review the
+effective power subordinates and remaining mapping admission before changing
+sleep cleanup or introducing acknowledged page-table retirement. No runtime
+or production modification; suspend containment remains mandatory.
+
 Sleep/wake follow-up: complete systemWillSleep (14ba5eb2/190),
 system_did_wake (14ba63a0/20c), TaskList iterator constructor
 (14b820d8/c) and getNextTask (14b820e4/16) reviewed/pinned. The true-mode

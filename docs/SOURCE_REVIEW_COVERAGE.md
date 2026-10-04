@@ -7,6 +7,13 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 effective power graph: three complete system_will_sleep/Intel
+sleep/wake bodies reviewed/pinned. True-mode caller holds accelerator mutex
+while Intel override delegates to the base sleep slot, connecting the archived
+iterator defect to this declared graph. False-mode display scope differs.
+Scheduler/bridge/engine quiescence and actual dynamic admission remain open;
+lock ownership is not DMA completion and the iterator defect stays unrepaired.
+
 2026-10-04 sleep/wake: four complete bodies reviewed/pinned, including task
 iterator semantics. True-mode wake cleanup holds accelerator mutex; sleep
 caller locking unresolved. Archived sleep's second iterator is built at -48
