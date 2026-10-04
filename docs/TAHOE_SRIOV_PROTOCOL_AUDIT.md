@@ -6955,6 +6955,30 @@ No executable patch or runtime mutation.
 
 ### Update fanout must participate in the same owner transaction
 
+Depth caller status/lock follow-up: reviewed complete SharedUserClient
+depth_resolve at 0x78434 (0x52a) and Metal depthStencilResolve at 0x4f150
+(0xa0); full bodies, imported lock/busy/lookup and selected dispatch/status
+anchors pinned in both payloads. User-client allocates two vectors through a
+different duplicate grow copy before taking accelerator +0x88 at 0x7857f;
+initial growth results are not checked. Under that mutex it looks up/binds
+resource, collects resource/storage events through another private copy,
+builds depth params and calls native publisher at 0x788e6. Post-submit cleanup
+removes resource from channel/completes preparation, then clears return status
+r15d at 0x78924 before busy/mutex unlock at 0x786a6/0x786b2. There is no local
+native submission-result check on this path. Pre-submit validation/bind failure
+uses error cleanup with 0xe00002c2. Effective lock is concrete for this caller,
+not a universal proof of Metal/GL serialization or firmware completion.
+
+Metal depthStencilResolve tests selected entry resolve bits, optionally invokes
+resource depth resolve at 0x4f1c5, maps AL false to integer status 10 and true
+to zero; no-op selection also returns zero. Do not conflate that status with
+the user-client IOReturn. Its native body has no local lock/retain. Larger
+Metal render and GL token callers are identified by function-bounded direct
+scan but NOT whole-reviewed here. Consequently pre-publication admission must
+cover distinct status contracts, selected duplicate collection helpers and
+prepare/channel pairing rather than changing one shared void publisher and
+assuming every caller observes failure. No production/runtime change here.
+
 Native depth publication boundary: reviewed complete accelerator
 submitDepthResolve at 0x2c656 (0x1f6), pinned both payloads, aggregate barrier,
 chunk assembler edge, imported submitBuffer and software-phase loop anchor.

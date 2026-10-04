@@ -7,6 +7,12 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 depth caller domains: full user-client and small Metal wrapper
+reviewed/pinned. User-client holds accelerator mutex but post-publish cleanup
+returns unconditional success; Metal wrapper maps resource false to status10.
+Different helper copies and status/admission contracts require coverage.
+Large Metal/GL caller bodies and full owner lifetime remain pending.
+
 2026-10-04 native depth publisher: one complete 0x1f6 wrapper reviewed/pinned,
 barrier/assembler/imported submit and phase-loop anchors checked. Empty wait
 list bypasses aggregate barrier; chunks publish until software phase0xe, not

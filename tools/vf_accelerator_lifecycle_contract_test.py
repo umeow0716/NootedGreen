@@ -130,6 +130,8 @@ STAMP_IRQ_NATIVE = {
     "__ZN16IGAccelMemoryMap18updateGPUPageTableEv": (0x140, "75ba5674583a8d27d54acab18290e78bbc9de8157b19bfc6614c379d39fa3fbc"),
     "__ZN16IGAccelMemoryMap15updateCacheTypeEj": (0x24, "0c704192e43ed19c39a2179ea6e80551a07af30a8a541016a913f3d9572516f8"),
     "__ZN15IGAccelResource22updateMappingCacheTypeEj": (0x30, "499c98e59e89b29b95b7d14247a756db3f980b5f58134dcf2c49c3baf5db97bf"),
+    "__ZN23IGAccelSharedUserClient13depth_resolveEPvy": (0x52a, "ddb1d9367ac5a3047151e18fd6433553e6e3529559f2ec58f84e450b89ad52aa"),
+    "__Z19depthStencilResolveR16IOAccelResource2RKN14IntelMTLRender20sResolveResourceDescEP11IGAccelTaskR16IntelAcceleratorPN15IGAccelResource17ResourceInfoEntryEbb": (0xa0, "821adafde1ed4acb197457b8b4ad613a883ed6f392f5fd4fc3cce682a64c7864"),
     "__ZN16IntelAccelerator18submitDepthResolveEP22depth_resolve_params_tP11IGAccelTask": (0x1f6, "79b934f887406d3ad54a541be2de697328137c7af5d43350253231713f8f9987"),
     "__ZN15IGAccelResource18submitDepthResolveEPNS_17ResourceInfoEntryER16IntelAcceleratorP11IGAccelTask17EIntelResolveTypehhtt": (0x3f0, "a3f33094b424e909e708e33b10b3be2d6abf6e3682dda5fa273331de867febde"),
     "__ZN23IGAccelSharedUserClient12bindResourceEP15IGAccelResource": (0x48, "51d8bc7e5b290db9452dc62000c768ece7c42a3fc767938d2592a73e4323a820"),
@@ -510,6 +512,11 @@ def macho_inventory(path):
     # These imports distinguish the periodic collection mutex from bridge
     # descriptor spin locks. They do not certify dynamic callback lifetime.
     stamp_irq_imports = {
+        0x78580: "_IOLockLock",
+        0x786b3: "_IOLockUnlock",
+        0x78594: "__ZN22IOGraphicsAccelerator29lock_busyEv",
+        0x786a7: "__ZN22IOGraphicsAccelerator211unlock_busyEv",
+        0x785f7: "__ZN14IOAccelShared214lookupResourceEjPPv",
         0x2c82f: "__ZN25IOAccelCommandBufferPool212submitBufferEv",
         0x74519: "_IOFree",
         0x74535: "_IOFree",
@@ -648,7 +655,7 @@ def macho_inventory(path):
             relocations[name] = address
 
     for address, name in stamp_irq_imports.items():
-        opcode = 0xe9 if address in (0xb825, 0xa73c, 0xa746, 0xa767) or (name in ("_IOLockUnlock", "_lck_spin_unlock") and address not in (0x24773, 0x78e3d)) else 0xe8
+        opcode = 0xe9 if address in (0xb825, 0xa73c, 0xa746, 0xa767) or (name in ("_IOLockUnlock", "_lck_spin_unlock") and address not in (0x24773, 0x78e3d, 0x786b3)) else 0xe8
         if observed_stamp_irq_imports[address] != [(name, 0x2d)] or image[address - 1] != opcode:
             raise AssertionError(f"{path}: changed stamp IRQ imported call at {address:#x}")
 
@@ -769,6 +776,13 @@ def macho_inventory(path):
     ccs_resource = "__ZN15IGAccelResource16submitCCSResolveEPNS_17ResourceInfoEntryER16IntelAcceleratorP11IGAccelTask20EIntelCCSResolveTypehh"
     depth_resource = "__ZN15IGAccelResource18submitDepthResolveEPNS_17ResourceInfoEntryER16IntelAcceleratorP11IGAccelTask17EIntelResolveTypehhtt"
     depth_submit = "__ZN16IntelAccelerator18submitDepthResolveEP22depth_resolve_params_tP11IGAccelTask"
+    depth_client = "__ZN23IGAccelSharedUserClient13depth_resolveEPvy"
+    depth_metal = "__Z19depthStencilResolveR16IOAccelResource2RKN14IntelMTLRender20sResolveResourceDescEP11IGAccelTaskR16IntelAcceleratorPN15IGAccelResource17ResourceInfoEntryEbb"
+    assert direct_branches(depth_client, depth_submit) == [0x788e6], f"{path}: changed locked user-client depth publication edge"
+    assert direct_branches(depth_metal, depth_resource) == [0x4f1c5], f"{path}: changed Metal depth resource dispatch"
+    for address, expected in ((0x78578, "48 8b bb 88 00 00 00"), (0x786ab, "48 8b bb 88 00 00 00"), (0x78924, "45 31 ff"), (0x4f1d0, "84 c0 b8 0a 00 00 00 0f 45 c1")):
+        encoded = bytes.fromhex(expected)
+        assert image[address:address + len(encoded)] == encoded, f"{path}: changed depth caller lock/status anchor at {address:#x}"
     depth_assembler = "__Z14resolve_hiz_g7P25IOAccelCommandBufferPool2P14IGMappedBufferP22depth_resolve_params_tR15resolve_phase_tRjS7_yb"
     assert direct_branches(depth_submit, "__ZN16IntelAccelerator20barrierForWaitEventsEbP18IGAccelFIFOChannel") == [0x2c74e], f"{path}: changed depth aggregate barrier edge"
     assert direct_branches(depth_submit, depth_assembler) == [0x2c7b9], f"{path}: changed depth chunk assembly edge"
