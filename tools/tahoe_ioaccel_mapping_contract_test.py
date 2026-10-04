@@ -620,6 +620,98 @@ BASE_CLIENT_BODIES = {
     "__ZN27IOAccelLegacyDisplayMachine17found_framebufferEP13IOFramebuffer":
         (0x7a, "c172a83062fc19d7f945fc4652c7b97a7d5c430f26e73854a50a2dd8ed12229e"),
 }
+
+# Complete bodies on the inherited resource paging bridge and the independent
+# control paths that can reach it.  These hashes are deliberately separate
+# from BASE_CLIENT_BODIES: they establish the page-on/page-off call inventory,
+# but do not classify every caller as new work versus stop-time retirement.
+RESOURCE_PAGING_BODIES = {
+    "__ZN16IOAccelResource24loadEv":
+        (0x5e, "30fdcd2d6c973ff3a78f94df1995a79539820e83e57b342d5bf11a03fde2f31b"),
+    "__ZN16IOAccelResource26unloadEv":
+        (0x5e, "5b58c54a08b7e68d718836eab29d1daf776118ed10c71cee00ae21586b4a9ed1"),
+    "__ZN16IOAccelResource27unpurgeEb":
+        (0x152, "8e50b07ce04ef6d06d3e5e1a96f00190f075c1298bb068dd4b7ad8671327c673"),
+    "__ZN16IOAccelResource215pageoffInLinearEv":
+        (0x11a, "7784a3457241d083690fe143104b095eb20831096bb09506ed99eb467078789b"),
+    "__ZN16IOAccelResource216lockForCPUAccessEP4task9eLockTypejbhhPi":
+        (0x5b8, "20eefd146a8f1d32929e277627dc8c8aae3a5ec85701eb1678b8eb66d17ac0d1"),
+    "__ZN16IOAccelResource217getPhysicalOffsetEyPy":
+        (0x70, "f2f2f1c356f8d8a8de0cd0c75b59efcbea10fbbcdf2233ba72c4403713e973de"),
+    "__ZN14IOAccelSurface15pageoffInLinearEv":
+        (0x4e, "da8b58f019547eea3ca0528039658934c66ca74a166249035d9641bf5e3b3fb7"),
+    "__ZN22IOGraphicsAccelerator222pageoffSurfaceInLinearEv":
+        (0x44, "5045e9eae20a1a27397bd03dea65fcf9cb962cfc8d0f00d1acfa9aaaa97556b4"),
+    "__ZN22IOGraphicsAccelerator218deviceCacheControlEP20IOSurfaceDeviceCachejyy":
+        (0x4c8, "dd5856e492fa174d14f87f77493353012cf61bd94265adc75f3ab51cd1e52451"),
+    "__ZN22IOGraphicsAccelerator220emitFirstFlushEventsEv":
+        (0x1d8, "a6f8b156e93108b0a2bd0670c83ac12ea5e07e30bee4caeee1055d140b3c1810"),
+    "__ZN22IOGraphicsAccelerator226try_unload_dirty_resourcesEj":
+        (0x12c, "0b7e275093d7d7d12892f70230210018d26a35338a7439b788a9400fdb84e3d3"),
+    "__ZN22IOGraphicsAccelerator222unload_dirty_resourcesEv":
+        (0x16c, "2e792839b0339b767b09b0f1652cbb83a0958f10b48fd0cfb222de49d5335e45"),
+    "__ZN22IOGraphicsAccelerator218unwireAllVidMemoryEv":
+        (0xa0, "33fc9c9f60ad926dce70c3769759f5399d028c2569934527afaeb59b13363a24"),
+    "__ZL23IOAcceleratorKDCallbackPv16kd_callback_typeS_":
+        (0x261, "396c2f7256646008b50e587dd9ee035f8d2df251c50ecac1e133b8541520e482"),
+    "__ZN21IOAccelDisplayMachine24display_mode_will_changeEj":
+        (0x1d0, "626449a853fb2283ff02dd43ed689c0a5d3399de667566adf4fccb4a4aa76fcc"),
+    "__ZN27IOAccelLegacyDisplayMachine24display_mode_will_changeEj":
+        (0x2c2, "66a4b2ba61ce0d9c20193e2ae37fd2c5ea9e75b79c854fd2f3be748b5bf3b644"),
+    "__ZN24IOAccelLegacyDisplayPipe26framebuffer_will_power_offEv":
+        (0x36, "0c3d2f56e3af5dc08436bbc9070bd9ec98e3fbc401be7ad84cdb30b363e3f15c"),
+    "__ZN18IOAccelDisplayPipe20displayModeDidChangeEv":
+        (0x1a4, "d49ec6f742ecd2539309dead66526513d515f0934d74b0d4efd4b0350a566ebe"),
+    "__ZN24IOAccelLegacyDisplayPipe20displayModeDidChangeEv":
+        (0x254, "191f39b3628ccbd9f7b697d7bb993084aebb92d9a0318ad2ba8b75afe08409ae"),
+    "__ZN18IOAccelDisplayPipe18wsaaWillEnterDeferEi":
+        (0x7c, "a55161b0a536bd1167017060b322749316ddb27324812bda4bfb84d17e7d7e7e"),
+    "__ZN20IOAccelLegacySurface20update_exclusive_bitEjbb":
+        (0x2b2, "6aecc25e82a8da01904fc0bc94b5e01852b26a52b8d9c09f2400547f154b8999"),
+    "__ZN14IOAccelSurface20surface_lock_optionsE9eLockTypejP25IOAccelSurfaceInformationy":
+        (0x43c, "596c382406f1dcf1472364b03272b11fc2356378a1e96defb6fc5437d3108433"),
+}
+
+# Every x86-64 indirect call [vtable + slot] in the executable segment.  The
+# set intentionally includes calls on unrelated classes that reuse the same
+# numeric slot: keeping the complete executable inventory prevents a newly
+# introduced resource call from being silently omitted by name heuristics.
+RESOURCE_SLOT_CALL_SITES = {
+    0x170: {
+        0x14b6826d, 0x14b68508, 0x14b6a05c, 0x14b6e377, 0x14b6ebbd,
+        0x14b6fc85, 0x14b6fd5e, 0x14b76d3c, 0x14b772e4, 0x14b773b0,
+        0x14b7c13e, 0x14b7c156, 0x14b7c30b, 0x14b7c323, 0x14b7c49a,
+        0x14b7c4b2, 0x14b7c64e, 0x14b7c67e, 0x14b7d087, 0x14b7d09c,
+        0x14b8c8d6, 0x14b9722a, 0x14b97877, 0x14b97942, 0x14b97ab2,
+        0x14b97c0f, 0x14b97e80, 0x14b9801f, 0x14b98260, 0x14b985d8,
+        0x14b98682, 0x14b98c50, 0x14b9b159, 0x14b9c64b, 0x14b9c660,
+        0x14b9d5cb, 0x14b9d5df, 0x14ba8113, 0x14baf60b, 0x14baf953,
+        0x14baffd1, 0x14bb2bf0, 0x14bb2c22, 0x14bb3390, 0x14bb77fc,
+        0x14bbc58c,
+    },
+    0x180: {
+        0x14b83a53, 0x14b83a78, 0x14b83c2e, 0x14b83c4e, 0x14b8c082,
+        0x14b959b5, 0x14bb130b, 0x14bb1490, 0x14bb1960, 0x14bb28c8,
+        0x14bb785e,
+    },
+    0x188: {
+        0x14b6764a, 0x14b697d0, 0x14b6f289, 0x14b6f584, 0x14b7b2b4,
+        0x14b89ae4, 0x14b8a738, 0x14b8b63a, 0x14b8b6b2, 0x14b9127c,
+        0x14b9aca1, 0x14b9be1a, 0x14b9d82b, 0x14ba26ca, 0x14ba2753,
+        0x14ba407b, 0x14ba568b, 0x14bafa91, 0x14bb29fb, 0x14bb7852,
+        0x14bba48b, 0x14bbadbe,
+    },
+    0x260: {
+        0x14b89a0c, 0x14b8adfb, 0x14b8b1ed, 0x14b8b5a3, 0x14b916db,
+        0x14ba3e42, 0x14ba4057, 0x14bb2310,
+    },
+    0x268: {
+        0x14b77193, 0x14b89761, 0x14b8b197, 0x14b8b448, 0x14b92fb7,
+        0x14b92ff0, 0x14b93029, 0x14b93062, 0x14b9309b, 0x14b930d4,
+        0x14b9f6e2, 0x14ba0e2f, 0x14ba1afc, 0x14ba7d88, 0x14ba7dee,
+        0x14ba7e64, 0x14bae559,
+    },
+}
 SURFACE_METHODS = (
     ("__ZN14IOAccelSurface25surface_read_lock_optionsEjP25IOAccelSurfaceInformationy", (0, 2, 1, 0xffffffff)),
     ("__ZN14IOAccelSurface27surface_read_unlock_optionsEj", (0, 0, 1, 0)),
@@ -1511,12 +1603,15 @@ def check(path, boot_path=None):
                 entries.append(file_offset)
     assert len(entries) == 1, "missing/ambiguous IOAccel fileset"
     segments = []
+    executable_segments = []
     symtab = None
     uuids = []
     for command, offset in commands(image, entries[0]):
         if command == 0x19:
             fields = struct.unpack_from("<II16sQQQQIIII", image, offset)
             segments.append((fields[3], fields[5], fields[6]))
+            if fields[8] & 4:
+                executable_segments.append((fields[3], fields[5], fields[6]))
         elif command == 2:
             assert symtab is None, "duplicate symbol table"
             symtab = struct.unpack_from("<6I", image, offset)[2:]
@@ -1533,7 +1628,7 @@ def check(path, boot_path=None):
                            for method, _ in table if method is not None}
     wanted_symbols = {
         *CONTRACTS, *SCRUB_BODIES, *LOCK_COPIES, *EVENT_OWNER_BODIES,
-        *BASE_CLIENT_BODIES, *base_client_symbols,
+        *BASE_CLIENT_BODIES, *RESOURCE_PAGING_BODIES, *base_client_symbols,
         SHARED_VTABLE, RESOURCE_VTABLE,
         "__ZTV18IOAccelDisplayPipe", "__ZTV24IOAccelLegacyDisplayPipe",
         "__ZTV19IOAccelCommandQueue", "__ZTV15IOAccelContext2",
@@ -1627,6 +1722,28 @@ def check(path, boot_path=None):
     for name, (length, digest) in BASE_CLIENT_BODIES.items():
         assert hashlib.sha256(read(address_of(name), length)).hexdigest() == digest, \
             f"changed base-client/surface body: {name}"
+    for name, (length, digest) in RESOURCE_PAGING_BODIES.items():
+        assert hashlib.sha256(read(address_of(name), length)).hexdigest() == digest, \
+            f"changed inherited resource-paging/control body: {name}"
+
+    def indirect_vtable_call_sites(slot):
+        found = set()
+        for virtual, file_offset, size in executable_segments:
+            body = image[file_offset:file_offset + size]
+            for relative in range(max(0, size - 5)):
+                # FF /2 with mod=10 and r/m selecting any GPR, followed by a
+                # little-endian disp32.  An optional REX byte precedes FF and
+                # therefore does not change this instruction-local match.
+                if body[relative] == 0xff and 0x90 <= body[relative + 1] <= 0x97 and \
+                        struct.unpack_from("<I", body, relative + 2)[0] == slot:
+                    found.add(virtual + relative)
+        return found
+
+    for slot, expected in RESOURCE_SLOT_CALL_SITES.items():
+        actual = indirect_vtable_call_sites(slot)
+        assert actual == expected, \
+            f"changed complete executable vtable-call inventory for slot {slot:#x}: {sorted(actual)}"
+    print("PASS complete inherited resource paging-slot call-site inventory")
 
     def check_dispatch_table(table_name, expected, digest):
         table = address_of(table_name)
@@ -1976,7 +2093,10 @@ def check(path, boot_path=None):
         "changed Shared page-off to resource pageoffIfNeeded dispatch"
     resource_vtable = address_of("__ZTV16IOAccelResource2")
     for slot, method in (
+            (0x170, "__ZN16IOAccelResource27prepareEv"),
             (0x178, "__ZN16IOAccelResource28completeEv"),
+            (0x180, "__ZN16IOAccelResource24loadEv"),
+            (0x188, "__ZN16IOAccelResource26unloadEv"),
             (0x260, "__ZN16IOAccelResource215pageoffIfNeededEjj"),
             (0x268, "__ZN16IOAccelResource214pageonIfNeededEv"),
             (0x270, "__ZN16IOAccelResource29gartEventEv")):
@@ -1986,6 +2106,67 @@ def check(path, boot_path=None):
     resource_pageoff = address_of("__ZN16IOAccelResource215pageoffIfNeededEjj")
     assert read(resource_pageoff + 0x421, 6) == bytes.fromhex("ff 90 c8 01 00 00"), \
         "changed resource pageoffIfNeeded concrete page-off dispatch"
+
+    # Pin the inherited transitive bridge into the concrete Intel paging
+    # methods.  These edges deliberately remain below admission: native event
+    # retirement and teardown use the same unload/page-off chain.
+    paging_edges = (
+        ("__ZN16IOAccelResource27prepareEv", 0x188, 0x180),
+        ("__ZN16IOAccelResource24loadEv", 0x1f, 0x268),
+        ("__ZN16IOAccelResource26unloadEv", 0x40, 0x260),
+        ("__ZN16IOAccelResource27unpurgeEb", 0x113, 0x260),
+        ("__ZN16IOAccelResource215pageoffInLinearEv", 0xa3, 0x268),
+        ("__ZN16IOAccelResource215pageoffInLinearEv", 0xf9, 0x260),
+        ("__ZN16IOAccelResource216lockForCPUAccessEP4task9eLockTypejbhhPi", 0x23a, 0x268),
+        ("__ZN16IOAccelResource216lockForCPUAccessEP4task9eLockTypejbhhPi", 0x395, 0x260),
+        ("__ZN16IOAccelResource216lockForCPUAccessEP4task9eLockTypejbhhPi", 0x42c, 0x188),
+        ("__ZN16IOAccelResource216lockForCPUAccessEP4task9eLockTypejbhhPi", 0x4a4, 0x188),
+        ("__ZN16IOAccelResource217getPhysicalOffsetEyPy", 0x2c, 0x170),
+    )
+    for method, offset, slot in paging_edges:
+        assert read(address_of(method) + offset, 6) == \
+            bytes.fromhex("ff 90") + struct.pack("<I", slot), \
+            f"changed inherited resource paging edge: {method}+{offset:#x}"
+    assert direct_branch_offsets(
+        address_of("__ZN24IOAccelSharedUserClient219get_resource_offsetEPyS0_"),
+        BASE_CLIENT_BODIES["__ZN24IOAccelSharedUserClient219get_resource_offsetEPyS0_"][0],
+        address_of("__ZN16IOAccelResource217getPhysicalOffsetEyPy")) == [0xc1], \
+        "changed Shared physical-offset to resource-prepare path"
+    assert read(address_of(
+        "__ZN24IOAccelSharedUserClient212new_resourceEP22IOAccelNewResourceArgsP28IOAccelNewResourceReturnDatayPj") +
+        0xa76, 6) == bytes.fromhex("ff 90 88 01 00 00"), \
+        "changed Shared new-resource cleanup unload path"
+    resource_cpu_lock = address_of(
+        "__ZN16IOAccelResource216lockForCPUAccessEP4task9eLockTypejbhhPi")
+    for method, offset in (
+            ("__ZN14IOAccelSurface20surface_lock_optionsE9eLockTypejP25IOAccelSurfaceInformationy", 0x318),
+            ("__ZN20IOAccelLegacySurface20surface_lock_optionsE9eLockTypejP25IOAccelSurfaceInformationy", 0x342)):
+        assert direct_branch_offsets(
+            address_of(method), BASE_CLIENT_BODIES.get(
+                method, RESOURCE_PAGING_BODIES.get(method))[0], resource_cpu_lock) == [offset], \
+            f"changed Surface CPU-lock paging path: {method}"
+    assert direct_branch_offsets(
+        address_of("__ZN22IOGraphicsAccelerator222pageoffSurfaceInLinearEv"), 0x44,
+        address_of("__ZN14IOAccelSurface15pageoffInLinearEv")) == [0x36] and \
+        direct_branch_offsets(
+            address_of("__ZN14IOAccelSurface15pageoffInLinearEv"), 0x4e,
+            address_of("__ZN16IOAccelResource215pageoffInLinearEv")) == [0x46], \
+        "changed accelerator-to-surface linear page-off chain"
+    assert direct_branch_offsets(
+        address_of("__ZL23IOAcceleratorKDCallbackPv16kd_callback_typeS_"), 0x261,
+        address_of("__ZN22IOGraphicsAccelerator220emitFirstFlushEventsEv")) == [0x214], \
+        "changed KD first-flush resource-prepare root"
+    assert direct_branch_offsets(
+        address_of("__ZN22IOGraphicsAccelerator214gart_collectorEP22IOInterruptEventSourcei"),
+        EVENT_OWNER_BODIES["__ZN22IOGraphicsAccelerator214gart_collectorEP22IOInterruptEventSourcei"][0],
+        address_of("__ZN22IOGraphicsAccelerator226try_unload_dirty_resourcesEj")) == [0xe4], \
+        "changed gart-collector transitive page-off root"
+    assert direct_branch_offsets(
+        address_of("__ZN22IOGraphicsAccelerator218unwireAllVidMemoryEv"),
+        RESOURCE_PAGING_BODIES["__ZN22IOGraphicsAccelerator218unwireAllVidMemoryEv"][0],
+        address_of("__ZN22IOGraphicsAccelerator222unload_dirty_resourcesEv")) == [0xe], \
+        "changed unwire-to-resource-unload path"
+    print("PASS inherited resource page-on/page-off roots and shared retirement bridge")
 
     memory_external = address_of(
         "__ZN27IOAccelMemoryInfoUserClient14externalMethodEjP25IOExternalMethodArgumentsP24IOExternalMethodDispatchP8OSObjectPv")

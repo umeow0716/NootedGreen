@@ -10,6 +10,22 @@ The current dynamic-entry gate table is
 
 ## Scope
 
+2026-10-04 inherited resource-paging delta: the Tahoe paired-KC contract now
+pins complete inherited resource load/unload/unpurge/linear-pageoff/CPU-lock/
+physical-offset bodies and selected surface, display, cache-control and KD
+owners. It exhaustively fixes all executable calls using resource slot
+numbers `+0x170/+0x180/+0x188/+0x260/+0x268` (46/11/22/8/17 sites), including
+same-number calls on unrelated receivers. This exposes transitive page-on/
+page-off submission roots missed by the direct Intel producer inventory:
+Shared physical-offset/new-resource paths, Surface lock/exclusive-scale, GL
+fullscreen setup, display mode/power/WSAA, gart/cache-control/linear-pageoff,
+KD first-flush and MemoryInfo purge. The same bridge is used by event/channel
+finish and mapping/transaction/unwire teardown, so a low-level admission hook
+would also block retirement. P7 is reopened as `REVIEWING`; P8/P9 remain
+unimplemented and runtime remains prohibited. The targeted paired-KC test and
+full static suite pass at `/tmp/ngreen-static.vaWL8G`; no production or
+hardware state changed.
+
 2026-10-04 optional-producer containment delta: native Tahoe PAVP callback
 force-wake, PF-owned MMIO and possible PAVP ring submission are no longer VF
 reachable. Both classified payloads route the complete callback to an
@@ -19,9 +35,8 @@ main-ring submission, is an explicit VF no-op because VF telemetry is not
 available. PF behavior remains native. Route inventory is now 126 unique
 entries (120 accelerator, three framebuffer, three System KC), and four
 mutation cases pin the mappings, return value and hardware-free bodies. Thus
-only `DisplaySleepCallback` remains an independent internal/control producer
-for P8; its mixed submission/retirement semantics still prevent admission
-closure. Targeted contracts and full static pass at
+V292 removed both optional Intel-payload roots; V293 later reopened the wider
+System-KC transitive resource-paging inventory. Targeted contracts and full static pass at
 `/tmp/ngreen-static.ZOtcfQ`; checkpoint `f8135e3` and exact-sha GitHub Actions
 `37207803000` pass, with release/Metal artifacts of 73,975/2,943 bytes present
 and not expired. SG-05 remains under review and SG-06–SG-11 remain open. No

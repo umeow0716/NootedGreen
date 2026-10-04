@@ -11,14 +11,14 @@ kext/AuxKC、重綁 PCI 或寫入 SR-IOV sysfs。`CLOSED` 只代表指定的離�
 | SG-02 | VF/PF 身分、Gen11 virtual-MMIO 與 memory-IRQ 能力分流 | CLOSED | RPL/ADL/TGL 不再錯送 memory-IRQ KLV；MTL/ARL 才使用 memory IRQ。 |
 | SG-03 | 已知 legacy/PF-owned GPU producer 隔離 | CLOSED | V284 在 legacy H2G MMIO、GuC DMA、doorbell、native CTB 與 Scheduler5 execlist 五個入口先 fail-stop；modern path 另列 SG-05。 |
 | SG-04 | task／PPGTT／PagePool 共同 ownership transaction | CLOSED | V283 已涵蓋 task publish/free、commit/update/release、32/64-bit unmap/shrink、descriptor retirement 與 PagePool reuse/prune/free。這不取代 GPU completion 證明。 |
-| SG-05 | modern 外部 producer 在 stop 前可封門、排空，且不阻斷 `finishAllStamps` retirement | REVIEWING | P1–P7 的 external/base/display/internal roots 已完成 inventory；PAVP callback 與 `recognizeFlip` 已在 VF 隔離。尚須涵蓋其餘 roots 的 receiver-scoped counted admission，並證明 close/drain 鎖序。 |
+| SG-05 | modern 外部 producer 在 stop 前可封門、排空，且不阻斷 `finishAllStamps` retirement | REVIEWING | V293 重新打開 P7：direct Intel producer inventory 漏掉 System KC resource prepare/load/unload/page-on/page-off 的 transitive roots。PAVP callback 與 `recognizeFlip` 已在 VF 隔離，但外層 root/retirement 分割尚未閉合。 |
 | SG-06 | reservation → CPU ring writes → tail publication → GuC submit 為一致的 owner/admission transaction | OPEN | reservation postcondition、ring geometry、retained backing 與 final submit validation 已有；但 native writer 在 final routed submit 前的跨呼叫區間仍沒有完整 lease。 |
 | SG-07 | GPU completion 與 ring/context/mapping/page-table backing 的最終釋放順序 | OPEN | GuC context deregistration與 heavy TLB ACK 已覆蓋選定 teardown；尚未證明所有完成事件、stamp、pool reuse 與 producer owner 都在釋放前退休。 |
 | SG-08 | render／depth／CCS／ICB／paging 的 allocation、event collection、partial submit 與錯誤傳遞 | OPEN | 已修補選定 CCS null rectangle 與兩個 event-vector capacity failure；多個 callers 仍忽略 result 或容許 partial progress。SharedUserClient ICB 的兩次，以及 `IGAccelResource::pageon/pageoff` 的三次／兩次 `submitBlit` 都不檢查 AL，不能宣稱 fail closed。 |
 | SG-09 | timer／IRQ／workloop callback 的取消、排空與 owner lifetime | OPEN | IRQ callback counted gate 已有；DPSM、event-machine、passive timer、workloop removal 的完整 no-late-callback／無反向鎖序證明尚未閉合。 |
 | SG-10 | 所有 VF 可達 PF-owned MMIO／DMA／force-wake／reset 的 negative reachability | OPEN | V292 已隔離 PAVP callback 的 force-wake/PF MMIO 與 `recognizeFlip` telemetry submission；仍須以完整 symbol/vtable/function-pointer inventory 證明沒有 retained native bypass。 |
 | SG-11 | baseline 要求的所有程式檔完整審閱與 ledger closure | OPEN | `SOURCE_REVIEW_COVERAGE.md` 仍明確標記 incomplete；新增／修改檔案也必須納入。CI 成功不能替代此項。 |
-| SG-12 | 精確候選 commit 的完整 static suite、x86_64 release kext、Metal smoke build 與 artifact provenance | REVALIDATE PER CANDIDATE | V292 `f8135e3` 的 targeted dual-payload contracts、full static `/tmp/ngreen-static.ZOtcfQ` 與 exact-sha GitHub Actions `37207803000` 已通過；release kext 與 Metal smoke artifacts（73,975／2,943 bytes）均存在且未過期。這只重驗該 SHA，不解除 SG-05 至 SG-11。任何產品碼或 payload 變更立即重開本項。 |
+| SG-12 | 精確候選 commit 的完整 static suite、x86_64 release kext、Metal smoke build 與 artifact provenance | REVALIDATE PER CANDIDATE | V293 targeted paired-KC contract 與 full static `/tmp/ngreen-static.vaWL8G` 已通過；尚缺 clean/pushed exact-sha GitHub Actions、release/Metal artifacts。這只屬工具與文件變更，不解除 SG-05 至 SG-11。 |
 
 ## 目前主路徑
 
@@ -64,12 +64,15 @@ flip 與 legacy present 選擇已固定。GLDrawable 與 SurfaceMTL 只找到 sh
 
 Device 十項 selector 的完整 body 與三個 busy-lock 讀取範圍已固定，沒有新的 GPU
 producer。Shared 二十一項 member body、selector 0/17 的可變結構特殊 dispatch 及其
-busy-lock 範圍也已固定；selector 2 `page_off_resource` 是新的 paging producer root，
-會經 `IOAccelResource2::pageoffIfNeeded` 的 concrete virtual 進入
+busy-lock 範圍也已固定；selector 2 `page_off_resource` 與 selector 18
+`get_resource_offset` 都可進入 paging producer，後者經 `getPhysicalOffset -> prepare`；
+new-resource 的錯誤清理由 `unload` 也可能 page-off。selector 2 會經
+`IOAccelResource2::pageoffIfNeeded` 的 concrete virtual 進入
 `IGAccelResource::pageoff`。Intel payload 另固定 resource initialize/alloc、page-on、
 page-off 的完整區域與 vtable：page-on 有三次、page-off 有兩次 `submitBlit`，五個 AL
 結果皆未被消費。MemoryInfo 的三項 selector、argument contract、2 秒 bounded lock、
-gather 與 purge/unwire 路徑也已固定，未找到另一個 submit root。這關閉 P5c inventory，
+gather 與 purge/unwire 路徑也已固定；V293 證明 purge 的 unwire 可再到
+`unload_dirty_resources -> unload -> pageoffIfNeeded`。這關閉 selector/body inventory，
 但新增的 paging root 必須由 P8/P9 與 SG-08 一起解決。
 
 DisplayPipeUserClient 的十四項 selector、完整 argument table、wrapper/member bodies、
@@ -86,17 +89,22 @@ framebuffer 並不足以證明無 pipe：其他 registry `IOFramebuffer` 仍可�
 非 user-triggered/internal producer 的直接呼叫清單也已在兩份 Intel payload
 逐一固定。V292 已把 PAVP command callback 在 VF 改為不碰硬體且回傳
 `kIOReturnUnsupported`，也把會 tail-call telemetry sample 的 `recognizeFlip` 改為 VF
-no-op；兩者不再進入 counted admission。DisplaySleep callback 是 P8 唯一仍待處理的
-獨立 internal/control producer root。原生 `startGraphicsEngine` 內的 PAVP 與 stamp
+no-op；兩者不再進入 counted admission。V292 當時只剩 DisplaySleep callback；V293
+證明這個 direct-call 結論漏掉 System KC 的 transitive resource paging，包括 display
+mode/power/WSAA、gart/cache control、linear page-off 與 KD first-flush roots。原生
+`startGraphicsEngine` 內的 PAVP 與 stamp
 提交在 classified VF
 上因整個入口被替換而不可達；reset replay 與舊 DPSM kick 則留在已隔離的
 IGGuC/Scheduler5 路徑後方。其餘 telemetry、sync-event、context stamp 與 Blit2D
 initialize 呼叫都是已列 external roots 的後裔。
 
 GC/GuC/scheduler/DPSM timer 與 `finishAllStamps` 另以完整 body 及 negative direct-edge
-契約證明沒有直接進入已知 ring producer。這只把它們分為 retirement／通知路徑，
-不是 owner-lifetime 或 no-late-callback 證明；P8 不得把 retirement 一併封死，P9 與
-SG-09 仍須證明 cancel/drain/lifetime。P7 因此只關閉為 inventory。
+契約證明沒有直接進入已知 Intel ring producer；但 gart collector 可經 inherited
+`try_unload_dirty_resources -> unload -> pageoffIfNeeded` 間接到 Intel page-off。
+event/channel finish、transaction idle、mapping/unwire/freeAllGPUMappings 也使用同一
+lower bridge，屬必須保留的 retirement／teardown 路徑。這表示 low-level hook 不安全，
+也不是 owner-lifetime 或 no-late-callback 證明；P8 不得把 retirement 一併封死，P9 與
+SG-09 仍須證明 cancel/drain/lifetime。P7 因此維持 `REVIEWING`。
 
 因此一般 command queue 可以使用「VF accelerator receiver identity + 外層 counted
 admission」封門，但不能把它當成全域 producer gate。P1–P7 已固定的
@@ -127,6 +135,6 @@ contained boot，不是效能、Metal completion、媒體或 Looking Glass 測�
 | P5b GLContext／GLDrawable／SurfaceMTL | CLOSED-INVENTORY | 三組完整 selector/argument tables、dynamic/static/special dispatch、完整 member bodies、vtable、mutex/busy/wait scopes 與 producer/fence edges 已固定。GL selector `0x105` read-buffer 是獨立 copy/DMA root；processSwap 屬 P2 家族；另兩類未找到新 submit root。 |
 | P5c Device／Shared／MemoryInfo clients | CLOSED-INVENTORY | Device 10、Shared 21 與 MemoryInfo 3 項 selector/argument contracts、完整 member/wrapper bodies、特殊 dispatch、busy/timeout-lock scopes 與 unwire edges 已固定。Shared selector 2 經 `pageoffIfNeeded` 進入 Intel page-off；page-on/page-off 共五次 `submitBlit` 的未消費 AL 已列入 SG-08。 |
 | P6 display／flip reachability | CLOSED-INVENTORY | 14-selector DisplayPipeUserClient、鎖域、pipe selection、transaction/copy producer、Intel factories/vtables 與 base→legacy framebuffer enumeration/create-pipe 鏈已固定。無法證明不可達，故 selector 8/12 與 downstream flip/copy 必須納入 P8/P9。 |
-| P7 非 user-triggered／內部 producers | CLOSED-INVENTORY | 兩份 payload 的 retained direct producer targets/callers、virtual `submitBuffer` receiver、原始三組獨立／保守 roots、native-start/legacy descendants，以及 timer/`finishAllStamps` negative producer edges 已固定。V292 已在 VF 拒絕 PAVP callback 並使 `recognizeFlip` no-op，只剩 DisplaySleep 進入 P8。這不是 callback lifetime 或 drain 證明。 |
-| P8 counted admission 實作 | OPEN | 依 P1–P7 的完整 root 清單設計 receiver-scoped close/count；未證明每個 producer 都在任何 CPU ring write 前取得 lease 前，不安裝 production route。 |
+| P7 非 user-triggered／內部 producers | REVIEWING | V292 的 Intel-payload direct inventory 仍有效，PAVP/trace 已隔離；V293 另固定 resource slot `+0x170/+0x180/+0x188/+0x260/+0x268` 的 46/11/22/8/17 個 executable call sites，並證明 display、gart、cache、linear-pageoff、KD 等 transitive roots。尚須逐一完成 outer-new-work 對 retirement/teardown 的分類。 |
+| P8 counted admission 實作 | OPEN | 必須先完成 V293 transitive root 分類，再設計 receiver-scoped close/count。不得在 resource prepare/load/unload/page-on/page-off 或 `submitBlit` 單點封門，因為 `finishAllStamps` 與 teardown 會使用同一 bridge。 |
 | P9 close→drain→native stop 鎖序 | OPEN | 必須證明無 sleep-with-lock、反向鎖序、漏計數或阻斷 `finishAllStamps`。 |

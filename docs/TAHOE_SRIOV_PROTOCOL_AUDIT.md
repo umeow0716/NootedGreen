@@ -1,7 +1,7 @@
 # Tahoe SR-IOV protocol audit — in progress
 
 Updated: 2026-10-04. The last dynamic source baseline is `ce166c8`; the current
-offline-reviewed worktree is V292 optional-producer containment on
+offline-reviewed worktree is V293 inherited resource-paging reachability on
 `codex/tahoe-sriov-vf`. This is NOT a boot-test candidate or a successful
 driver baseline. The `ce166c8` run produced repeatable host PF DMAR faults
 followed by i915 hangs and a host reboot. Keep `macos-tahoe-sriov` shut off until the
@@ -21,6 +21,42 @@ The authoritative dynamic-entry checklist is
 [`DYNAMIC_TEST_GATE.md`](DYNAMIC_TEST_GATE.md). Any open static gate keeps the
 VM hard hold in force.
 
+## V293 inherited resource paging reachability (offline)
+
+The previous P7 conclusion was too narrow because it inventoried direct Intel
+ring-producer calls but did not close the transitive System KC resource path.
+The Tahoe contract now pins complete bodies for the inherited resource
+`load`, `unload`, `unpurge`, linear page-off, CPU-lock and physical-offset
+bridge, plus selected surface, display, cache-control and kernel-debug control
+owners. It also enumerates every executable indirect call using the five
+resource vtable slot numbers: 46 at `+0x170` (prepare), 11 at `+0x180` (load),
+22 at `+0x188` (unload), eight at `+0x260` (`pageoffIfNeeded`) and 17 at
+`+0x268` (`pageonIfNeeded`). The sets deliberately include unrelated classes
+that reuse a numeric slot, so a new call cannot disappear behind a receiver
+name assumption.
+
+The real resource chain proves `prepare -> load -> pageonIfNeeded`, while
+`unload`, `unpurge`, linear page-off, CPU access and accelerator cache control
+can enter `pageoffIfNeeded`; linear page-off and CPU access can also re-enter
+page-on. This adds previously omitted new-work candidates above the already
+pinned Intel `IGAccelResource::pageon/pageoff -> submitBlit` edges: Shared
+`get_resource_offset` and new-resource cleanup, Surface lock/exclusive-scale,
+GL set-surface/fullscreen setup, display mode/power/WSAA control, gart
+collection, device-cache control, surface linear page-off and the KD first-
+flush callback. MemoryInfo purge can likewise reach unload/page-off through
+`unwireAllVidMemory`.
+
+The same lower bridge is also used by retirement and teardown: event/channel
+finish, transaction-idle cleanup, mapping release, unwire and
+`freeAllGPUMappings`. Therefore routing `prepare`, `load`, `unload`, page-on,
+page-off or `submitBlit` as a simple closed gate would block native
+`finishAllStamps` cleanup and is not a valid P8 design. P7 is reopened as
+`REVIEWING`; P8 must separate all outer new-work/control roots from these
+retirement descendants before production routing. The targeted paired-KC
+contract and full static suite pass at `/tmp/ngreen-static.vaWL8G` with only
+the two known SDK macro warnings. No production route, VM, deployment,
+PCI/sysfs, VF/PF or Host i915 state was touched.
+
 ## V292 optional VF producer containment (offline)
 
 Tahoe's native `IntelAccelerator::PAVPCommandCallback` performs force-wake,
@@ -35,9 +71,9 @@ the PF path native.
 
 These routes remove PAVP callback and `recognizeFlip` from P8 admission rather
 than reporting false success or allowing CPU ring/MMIO side effects before a
-late submit rejection. `DisplaySleepCallback` remains the only independent
-internal/control producer root carried from P7 into P8; its mixed new-work and
-retirement behavior still requires a counted lifetime design. The Tahoe route
+late submit rejection. At V292, `DisplaySleepCallback` was the only identified
+independent Intel-payload control root; V293 subsequently reopened P7 after
+finding additional transitive System-KC resource-paging roots. The Tahoe route
 inventory is now 126 unique routes: 120 accelerator, three framebuffer and
 three System KC routes. Source contracts and four mutation cases pin both
 route mappings, the PAVP unsupported result and both hardware-free bodies.
@@ -76,7 +112,8 @@ target. They must remain outside the new-work close so stamp/event retirement
 can proceed. This is a direct-call partition, not an indirect-call, callback
 lifetime, DMA completion or drain proof; P8, P9 and SG-09 remain open.
 
-P7 is closed as `CLOSED-INVENTORY`. Targeted dual-payload and paired
+At V291, P7 was closed as `CLOSED-INVENTORY`; V293 supersedes that status.
+Targeted dual-payload and paired
 SystemKC/BootKC contracts pass, as does the full static suite at
 `/tmp/ngreen-static.Fd5vsu` with only the two known SDK macro warnings.
 Checkpoint `fa1dbae` is pushed; exact-sha GitHub Actions run `37206711121`
