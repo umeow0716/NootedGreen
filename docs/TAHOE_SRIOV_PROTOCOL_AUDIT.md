@@ -6961,6 +6961,28 @@ No executable patch or runtime mutation.
 
 ###### Complete waitForSpace reservation and failure ordering
 
+Complete FIFO submitRingCommands 4c5c0/106, alignRing 41bea/28 and ring
+submitCommands 430aa/5e are now reviewed/pinned. FIFO skips disabled-feature,
+null-buffer and empty-input paths; otherwise it obtains event/stamp information,
+computes command plus alignment plus submit overhead, calls waitForSpace and
+checks false before writing. On true it optionally aligns, emits commands,
+invokes ring virtual +0x138, updates FIFO stamp state and invokes channel
+virtual +0x140. There is no explicit local lock acquisition in the selected
+body; invoked methods and outer owners must establish serialization. No claim
+of an actual race follows solely from this absence.
+
+alignRing repeatedly writes zero dwords until cursor & caller mask is zero,
+without its own capacity reservation. submitCommands may emit a scheduler-mode
+dependent prefix, invokes writeBuffer, then virtual +0x158 for stamp emission
+and returns true without inspecting writeBuffer's result. FIFO likewise does
+not inspect submitCommands's result. The already reviewed waitTimeout false
+postcondition gap therefore reaches a checked FIFO path too: checking AL is
+insufficient when the wait method returns true without proven available space.
+This does not establish runtime timeout reachability or certify the stamp/
+prefix callees. No production/runtime change. Next: outer FIFO ownership and
+event/stamp allocation serialization, followed by bounded reservation/write
+admission that preserves completion/backing semantics.
+
 VF submit now captures the registered retained ring backing under the context
 lock while holding the existing queue ownership guard. Before tail publication,
 it requires the hardware context's current ring backing to match that retained

@@ -9,6 +9,9 @@ import sys
 # Complete reviewed native bodies. This fixes the concrete Intel override
 # graph, not inherited timer APIs, dynamic callbacks or runtime completion.
 STAMP_IRQ_NATIVE = {
+    "__ZN18IGAccelFIFOChannel18submitRingCommandsEPjjj": (0x106, "1e7d84456ce9eda587497696e280fcf28591b3bb9af1a7cff339de340db7cc86"),
+    "__ZN20IGHardwareRingBuffer9alignRingEj": (0x28, "c9612928d88c4157c5d80847c6e8a8123ae227b7b08a8879b54f5387b285a2ee"),
+    "__ZN20IGHardwareRingBuffer14submitCommandsEPjjj": (0x5e, "922dbcc17b815c68b6bf5535ef09feaabac1d7dd0c63015fbe0f2e15a27dd8e0"),
     "__Z15utilGetPropertyIjET_P15IORegistryEntryPKcS0_": (0x18c, "9da1339c8d7b6f93f71bf4020792fc4090572cca3bb9046120eb4dc617ef28af"),
     "__ZN20IGHardwareRingBuffer4initEP17IGHardwareContext": (0x1ec, "34cc30b4c471c23a0790bc8de98ddafe0aa25606ba37fee065a30f3a6f1ee1c9"),
     "__ZNK17IGHardwareContext17getRingBufferSizeEv": (0x14, "fe5061119174d816668edb9231f98b31fe3a7455d979e3f89d9467c538f4249a"),
