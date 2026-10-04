@@ -9,6 +9,15 @@ import sys
 # Complete reviewed native bodies. This fixes the concrete Intel override
 # graph, not inherited timer APIs, dynamic callbacks or runtime completion.
 STAMP_IRQ_NATIVE = {
+    "__ZN10IGPagePool11releasePageEPKNS_14PageDescriptorE": (0x15e, "c0517b90af5a3ee2250dec98476192459c0da84b78fc8a33efc230d8c0b45822"),
+    "__ZN10IGPagePool13schedulePruneEv": (0x4c, "4823a25c10061da7466412539c82cd1eda14b5bdea7cf8cdcc267c624e300d27"),
+    "__ZN31IGHardwarePerProcessPageTable6411expandLevelINS_10LevelEntryILm9E21GTTPageMapLevel4EntryEEvEEbRT_yyPT0_ym": (0x9e, "0ea77cb30a3a0c26fcfc21c3a1abdfe148a3689ce57bdbf6843db6684b8b190b"),
+    "__ZN31IGHardwarePerProcessPageTable6411expandLevelINS_10LevelEntryILm9E28GTTPageDirectoryPointerEntryEENS1_ILm9E21GTTPageMapLevel4EntryEEEEbRT_yyPT0_ym": (0xde, "064ba497cfafbe98e4aca310a5ccc2670fa74dd180e01c5fc994116b06b46f05"),
+    "__ZN31IGHardwarePerProcessPageTable6411shrinkRangeERK14IGAddressRange": (0x2d0, "4998b7b753950de7880477e43dc13e5eb5329decc2b9e1cc416c8f0f42ad42dc"),
+    "__ZN31IGHardwarePerProcessPageTable6411shrinkLevelINS_10LevelEntryILm9E17GTTPageTableEntryEENS1_ILm9E21GTTPageDirectoryEntryEEEEbRT_yPT0_ym": (0x86, "2e46f3208e230b8bbbf52502b09dac6961c4eb8468daa1f7f673c3c4770e2187"),
+    "__ZN31IGHardwarePerProcessPageTable6411shrinkLevelINS_10LevelEntryILm9E21GTTPageDirectoryEntryEENS1_ILm9E28GTTPageDirectoryPointerEntryEEEEbRT_yPT0_ym": (0x86, "6b02ec67cd079a50395b3f5450536af287dcb4d957c517c6250536893f46f754"),
+    "__ZN31IGHardwarePerProcessPageTable6411shrinkLevelINS_10LevelEntryILm9E28GTTPageDirectoryPointerEntryEENS1_ILm9E21GTTPageMapLevel4EntryEEEEbRT_yPT0_ym": (0x86, "0cbb866397e6b36620f1efae900e78218fc4a7c9e846a6e10fe9238a8f77df48"),
+    "__ZN31IGHardwarePerProcessPageTable6411shrinkLevelINS_10LevelEntryILm9E21GTTPageMapLevel4EntryEEvEEbRT_yPT0_ym": (0x4e, "3060c61f22633fe9b0ea1bdce718028912bbd26d27824aaee6cc1034ce390aa5"),
     "__ZN19IGHardwarePageTable15initWithOptionsEP16IntelAcceleratorNS_4TypeE": (0x3e, "4dd2d3d12a42751fe3a58852b7c9b758ebe81cf80aa32015c9550db78070356f"),
     "__ZNK11IGAccelTask29getHardwareContextAddressModeEv": (0x16, "009814216381ad12a9161899b0e332c8630311c31f5307a937f0c1b63f5a022b"),
     "__ZN31IGHardwarePerProcessPageTable6421mapDescriptorForRangeERK14IGAddressRangePN10IGPagePool14PageDescriptorE": (0xb6, "e0e111abf4ec5a2de14ca65d1304611a6c4990f5da6decb5abaa1a29d4fe78c6"),

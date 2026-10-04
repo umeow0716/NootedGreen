@@ -7,6 +7,11 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 PagePool reuse/PPGTT expansion: nine complete native bodies pinned.
+Last descriptor release clears backing and publishes a free bit without a local
+GPU barrier; hierarchy shrink is not full transactional mapping rollback.
+Page allocation/prune, outer GPU lifetime and shared-record counts remain open.
+
 2026-10-04 base/descriptor ownership: eight complete native bodies reviewed and
 pinned, including address-mode selector and atomic descriptor reference calls.
 1 GiB descriptor granularity and release-before-remap ordering are concrete;

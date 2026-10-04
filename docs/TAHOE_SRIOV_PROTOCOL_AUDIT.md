@@ -6379,6 +6379,38 @@ callback admission must be proved elsewhere. No executable patch/runtime test.
 
 ## Base ownership and 64-bit descriptor operations
 
+### PagePool reuse and expansion/shrink bodies
+
+Nine additional complete bodies reviewed/pinned: releasePage (0x15e),
+schedulePrune (0x4c), both expandLevel variants (0x9e/0xde), shrinkRange
+(0x2d0), and four shrinkLevel variants (0x86/0x86/0x86/0x4e).
+Correction: mapDescriptor failure target 0xd3fa is shrinkRange, not releaseRange;
+hierarchy pruning is not transactional removal of an installed mapping prefix.
+
+releasePage clears CPU page backing with imported memset BEFORE the optional
+pool lock. It sets the free bitmap bit, calls availability helper 0xb68c,
+increments available-page count and, for a completely free block, records
+uptime, enqueues it and schedules prune. No local GPU wait/invalidation precedes
+clearing/free-bit publication. schedulePrune uses timer virtual +0x1e8 in
+threaded mode or calls prune 0xab36 synchronously otherwise. Allocation/prune,
+helper semantics and external GPU quiescence remain pending; this does not prove
+a reachable stale-GPU use or historical crash cause.
+
+Expansion allocates a PagePool page, fills 512 hardware entries with dummy
+physical address masked to 39 bits plus 3, then allocates/zeros 16 KiB software
+records. Software allocation failure releases the page and clears its pointer.
+Child expansion publishes its parent hardware entry only after software
+allocation succeeds. Page allocation invariants are pending; no local barrier.
+
+shrinkRange walks the hierarchy and ignores shrink-helper statuses. Non-root
+helpers act only when signed low-word count <=0: replace parent entry with dummy,
+decrement parent count, release/clear descriptor, and free software records only
+if the upper count word is zero. Root variant releases similarly. Shared marker
+0x10200 inhibits ordinary low-word pruning; count/alias lifecycle needs all
+callers, not a blind unmap shortcut. No local GPU invalidation separates entry
+replacement from releasePage. Outer serialization, GPU completion and deferred
+release remain required before cross-address-space rollback or dynamic tests.
+
 Complete native bodies reviewed/pinned: hardware base init (0x3e), task address
 mode (0x16), 64-bit descriptor map/remap/read (0xb6/0x8a/0x32), expand2 (0x84),
 and PageDescriptor retain/release (0x14/0x38). Base init calls OSObject base init
@@ -6393,7 +6425,7 @@ bits 39..47 and the subordinate descriptor index bits 30..38. Thus sharing is
 at 1 GiB granularity, not an arbitrary byte-range copy. Map expands the root/
 second-level structures, stores/retains the incoming descriptor, sets software
 record flags 0x10200, and publishes its physical address masked to 39 bits plus
-3 into the hardware entry. Expansion failure invokes releaseRange then returns
+3 into the hardware entry. Expansion failure invokes shrinkRange then returns
 false; that cleanup's ownership and failure semantics remain pending.
 
 Remap releases the old descriptor BEFORE replacing/retaining the new one and
