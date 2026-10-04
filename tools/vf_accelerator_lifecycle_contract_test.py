@@ -9,6 +9,7 @@ import sys
 # Complete reviewed native bodies. This fixes the concrete Intel override
 # graph, not inherited timer APIs, dynamic callbacks or runtime completion.
 STAMP_IRQ_NATIVE = {
+    "__ZN16IGAccelMemoryMap22allocGPUVirtualAddressEv": (0x212, "dbeabbc4bcff5ada45dd5be9ff14bb4ae00a66d544b720359040f504cf01058f"),
     "__ZN15IGAccelResource31createAndPrepareRotationMappingEv": (0xf4, "3ecec4f2acb2a437f81f304a571663c062632f47270ba1a17993e9a254029e3b"),
     "__ZN16IGAccelMemoryMap4initEP22IOGraphicsAccelerator2P11IOAccelTaskP13IOAccelMemoryj": (0x68, "970afaf15c9854e913ad4aa67af32f4ff61ca1267ba3f4f06ad6dd1f15fea892"),
     "__ZN31IGHardwarePerProcessPageTable6415mapRangeRotatedER33IGAddressRangeRotatedPageIteratorR25IGPhysicalSegmentIteratory": (0x2cc, "3b6131194a023eb7513ccbb26a210c5fa2288c4fc74d66723188a46887a1b11b"),
@@ -754,6 +755,15 @@ def macho_inventory(path):
     assert image[0x7dbd:0x7dcf] == bytes.fromhex("48 8b bb 60 02 00 00 48 85 ff 74 06 48 8b 07 ff 50 28"), f"{path}: changed private page-table release before list cleanup"
     assert direct_branches("__ZN15IGMemoryManager27releaseFromPageTableForTaskEP11IGAccelTaskP16IGAccelMemoryMap", "__ZN19IGHardwarePageTable12releaseRangeERK14IGAddressRange") == [0xf74e], f"{path}: changed task fan-out release edge"
     assert image[0xf753:0xf75f] == bytes.fromhex("41 20 c7 48 8b 5b 08 48 85 db 75 e9"), f"{path}: changed non-short-circuit task page-table release loop"
+    map_vtable = value("__ZTV16IGAccelMemoryMap")
+    assert map_vtable + 16 + 0x138 == 0xcd040, f"{path}: changed inherited mapping prepare relocation slot"
+    assert struct.unpack_from("<Q", image, map_vtable + 16 + 0x150)[0] == value("__ZN16IGAccelMemoryMap22allocGPUVirtualAddressEv"), f"{path}: changed mapping VA allocation dispatch"
+    for address, encoded in ((0x75317, "ff9050010000"),
+                             (0x75342, "ff9038010000"),
+                             (0x10ff4, "ff9060010000"),
+                             (0x10ffd, "488b45e048898398000000")):
+        expected = bytes.fromhex(encoded)
+        assert image[address:address + len(expected)] == expected, f"{path}: changed rotation preparation/VA publication anchor at {address:#x}"
     private_rotated = "__ZN31IGHardwarePerProcessPageTable6415mapRangeRotatedER33IGAddressRangeRotatedPageIteratorR25IGPhysicalSegmentIteratory"
     assert struct.unpack_from("<Q", image, value("__ZTV31IGHardwarePerProcessPageTable64") + 16 + 0x120)[0] == value(private_rotated), f"{path}: changed private rotated PPGTT dispatch"
     for address, encoded in (

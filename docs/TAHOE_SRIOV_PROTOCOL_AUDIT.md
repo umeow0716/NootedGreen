@@ -6955,6 +6955,49 @@ No executable patch or runtime mutation.
 
 ### Update fanout must participate in the same owner transaction
 
+#### Effective rotation preparation and VA-allocation dispatch
+
+Resolved the concrete Intel memory-map vtable: object slot `+0x138` at
+`0xcd040` imports inherited `IOAccelMemoryMap::prepare`; slot `+0x150`
+is native `IGAccelMemoryMap::allocGPUVirtualAddress` at `0x10e6e`.
+The already-existing external relocation fixture pins the former import;
+new checks bind it to the concrete table and pin the latter method and
+rotation caller dispatches `0x75317/0x75342`. An exploratory relocation
+script initially used LC_DYSYMTAB field indices relative to `+8` instead
+of the complete command, producing invalid import output. Corrected that
+read-only probe and verified against the existing contract; no payload or
+production changes resulted.
+
+Re-read the complete already-pinned inherited prepare `0x14bb7754/0x7c`,
+commit_pte `0x14bb77d0/0x64` and prepare.cold.1 `0x14bbca32/0x62`.
+First preparation of a mapping without installed-PTE bit 4 dispatches the
+cold helper. It prepares the parent, invokes commit_pte, and completes the
+parent in both commit-success and commit-failure cases. Only commit success
+increments the prepare count. commit_pte dispatches map virtual `+0x170`
+unless its existing special flags bypass that call; false prevents setting
+installed bit 4. These software flags/counts are not a partial-PTE rollback
+or GPU-completion proof. Neither complete inherited body validates Intel
+rotation width/height. Resource rotation creation stores map prepare's bool
+in resource `+0x240`; it does not locally release/clear the mapping on that
+prepare-false path. The distinct preceding recovery-failure path does
+release and clear resource `+0x238`. Later owner cleanup still needs review.
+
+New complete native review/pin: allocGPUVirtualAddress `0x10e6e/0x212`,
+SHA-256 `dbeabbc4bcff5ada45dd5be9ff14bb4ae00a66d544b720359040f504cf01058f`.
+It ordinarily delegates to inherited allocation through the imported base
+vtable. A selected flag/physical-address lookup path may set flag `0x20`,
+call that same base allocator, and then store the selected physical address
+at mapping `+0x98` even when the saved allocator bool is false. The body
+returns that saved bool; this local publication is not independently proof
+of active-list publication, safe backing ownership or a reachable failure.
+Physical lookup semantics, range invariants and upstream caller cleanup are
+not inferred from symbol names. No rotation-geometry check appears locally.
+
+Both native payload contracts and paired Tahoe KC contracts pass. KC methods
+are revisited, not newly credited. No production hook, deployment or Host GPU
+operation. Next: effective resource geometry-setting/cleanup entry and complete
+failure unwind, together with the independent pre-zero page/pool lease gate.
+
 #### Rotated mapping geometry reaches private PPGTT through commitRange
 
 New complete native bodies reviewed/pinned in both payloads:

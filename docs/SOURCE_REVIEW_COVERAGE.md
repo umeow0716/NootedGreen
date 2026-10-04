@@ -7,6 +7,13 @@ audit's runtime blockers are open.
 
 ## Scope
 
+New complete native review: Intel memory-map allocGPUVirtualAddress
+`0x10e6e/0x212`, hash-pinned in both payloads. Resolved concrete rotation
+prepare/VA-allocation vtable identities and revisited three existing complete
+KC prepare/commit bodies without duplicate review credit. Preparation failure
+is not a partial-PTE rollback proof; geometry setter and later cleanup remain
+pending. No runtime or broad lifecycle safety claim.
+
 New complete native reviews: resource createAndPrepareRotationMapping
 `0x7528c/0xf4` and Intel memory-map init `0x10d5e/0x68`. Revisited existing
 complete commitRange and pinned selected geometry-copy/load/virtual edges in
