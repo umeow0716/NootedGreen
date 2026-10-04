@@ -6953,6 +6953,31 @@ No executable patch or runtime mutation.
 
 ## Lower-level construction and concrete release caller follow-up
 
+### Deferred AUX flag and ring command emission follow-up
+
+Complete reviewed/pinned bodies: flushHardwareAfterGttUpdateOfAux 2d1ee/16,
+base writeFlushTLB 4290c/116, Compute writeFlushTLB 4e6f8/172 and Main
+writeFlushTLB 8509c/172. The AUX helper tests the same accelerator feature
+bit and ORs +0x1380 with 0x3f; it is also not a synchronous invalidator.
+
+The base ring method derives a destination from task resource GPU address,
+combines native flags and emits one or two five-dword buffers depending on
+accelerator +0xfd6 bit 16. Compute/Main emit one or two six-dword buffers
+under that bit, incorporating a context selector from 42364 and the resource
+GPU address. Six direct writeBuffer call sites are pinned in both payloads.
+These methods construct commands and return; there is no local completion
+wait or GuC invalidation acknowledgement in the reviewed bodies. Their command
+constants are recorded by body hashes, not newly certified against Intel
+generation-specific specifications. Caller execution ordering, effective VF
+routes, resource-address lifetime and command completion remain to trace.
+
+An exploratory __text scan for memory displacements 1341..1347 found no
+operands. As with the earlier 1340 scan, this does not exclude indexed-byte
+access, derived field pointers, aliases or outlined consumers. Do not mistake
+unrelated ring-buffer indexed +1340 accesses for the accelerator pending
+flags. These four added bodies narrow the candidate graph but do not yet
+connect flag consumption to safe PPGTT retirement. No production/runtime change.
+
 Reviewed and pinned the remaining expandLevel methods at e212/de and e2f0/98.
 Both obtain a page from the manager's pool, store its descriptor in the child
 record, and initialize all 512 hardware entries with the masked dummy page

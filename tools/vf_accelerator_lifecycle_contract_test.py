@@ -9,6 +9,10 @@ import sys
 # Complete reviewed native bodies. This fixes the concrete Intel override
 # graph, not inherited timer APIs, dynamic callbacks or runtime completion.
 STAMP_IRQ_NATIVE = {
+    "__ZN16IntelAccelerator32flushHardwareAfterGttUpdateOfAuxEv": (0x16, "bf1c2cfda9f70eb29f938d9699cd21e4a10afebc12bf15912310386579804d6a"),
+    "__ZN20IGHardwareRingBuffer13writeFlushTLBEv": (0x116, "047d585e1a417ff67d8de8d761ba42e15f3a7206bf224a1b51bdaf5599117110"),
+    "__ZN27IGHardwareRingBufferCompute13writeFlushTLBEv": (0x172, "c42d172fd9503b115c3b3196a7138eebff9cd3f9a4a7e717acf7941f61bb8f79"),
+    "__ZN24IGHardwareRingBufferMain13writeFlushTLBEv": (0x172, "006309753fdb2c5ab236aa577eafedd7f901677a07e7acd6a8d7b24cd97b6ab0"),
     "__ZN31IGHardwarePerProcessPageTable6411expandLevelINS_10LevelEntryILm9E21GTTPageDirectoryEntryEENS1_ILm9E28GTTPageDirectoryPointerEntryEEEEbRT_yyPT0_ym": (0xde, "4c0a775e56fefaf5fd0b970cf396668811bc58ca3b3c882d57c76e4a0653df80"),
     "__ZN31IGHardwarePerProcessPageTable6411expandLevelINS_10LevelEntryILm9E17GTTPageTableEntryEENS1_ILm9E21GTTPageDirectoryEntryEEEEbRT_yyPT0_ym": (0x98, "2f377f041a36bf2f733a4e34d25d239d256f9bd57e8445837aec60170c9235d4"),
     "__ZN19IGHardwarePageTable12releaseRangeERK14IGAddressRange": (0xd4, "7fb7fa5dd40ed422c9a2aa219d8e0c78dfcd35bfdeaaa77d27ad3c193cfb9489"),
@@ -588,6 +592,11 @@ def macho_inventory(path):
     assert image[0x14518:0x1451e] == bytes.fromhex("ff 90 30 01 00 00"), f"{path}: changed releaseRange unmap virtual"
     assert direct_branches("__ZN19IGHardwarePageTable12releaseRangeERK14IGAddressRange", "__ZN16IntelAccelerator27flushHardwareAfterGttUpdateEv") == [0x14522], f"{path}: changed post-unmap deferred-flush edge"
     assert image[0x14573:0x14575] == bytes.fromhex("b0 01"), f"{path}: changed unconditional releaseRange success"
+    for owner, calls in (
+            ("__ZN20IGHardwareRingBuffer13writeFlushTLBEv", [0x429c5, 0x429f8]),
+            ("__ZN27IGHardwareRingBufferCompute13writeFlushTLBEv", [0x4e814, 0x4e841]),
+            ("__ZN24IGHardwareRingBufferMain13writeFlushTLBEv", [0x851b8, 0x851e5])):
+        assert direct_branches(owner, RING_WRITE_BUFFER) == calls, f"{path}: changed TLB command-buffer emission edges: {owner}"
     display_table = value("__ZTV18IGAccelDisplayPipe")
     resource_table = value("__ZTV15IGAccelResource")
     map_table = value("__ZTV16IGAccelMemoryMap")
