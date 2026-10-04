@@ -35,6 +35,10 @@ EVENT_DISABLE_STAMP_LOCKED = "__ZN20IOAccelEventMachine223disable_stamp_interrup
 EVENT_ENABLE_STAMP = "__ZN20IOAccelEventMachine220enableStampInterruptEi"
 EVENT_DISABLE_STAMP = "__ZN20IOAccelEventMachine221disableStampInterruptEi"
 EVENT_OWNER_BODIES = {
+    "__ZN13IOAccelMemory34createMappingInTaskAtAddressLengthEP11IOAccelTaskjyy": (0x272, "0f88152129c26add226c33d981c05fa0a0f3f4fa14c3655446872be8ac308758"),
+    "__ZN16IOAccelMemoryMap22allocGPUVirtualAddressEv": (0x6a, "3e5d8e2802624a6e6c3122ba4a5767c26ac6e7c7d257f992c2e436745acf0549"),
+    "__ZN16IOAccelMemoryMap24reserveGPUVirtualAddressEyy": (0x68, "9fec19ea44c53e447b4aa03d6f548f80ce78b60048e8ff6521b8aaecb7476583"),
+    "__ZN16IOAccelMemoryMap21freeGPUVirtualAddressEv": (0x6c, "2ad700b816aed108e396bdc25f75919cb459af88a69b3b427704db1f1af6b3f6"),
     "__ZNK11IOAccelTask7releaseEv": (0x1a2, "a3e402420b875e449bce460ff8e7efc7756406af7c6ad2cebf12f18ccd37cdad"),
     "__ZN22IOGraphicsAccelerator222free_orphaned_gputasksEv": (0x8c, "94abdc9982851a426b754470c26e1bb1040000a6ddda2262262d809c614f44fe"),
     "__ZN22IOGraphicsAccelerator223kickOrphanResourceTimerEv": (0x3c, "a82728319f96b77e8783a066eb6db8b23b9bfa77d8c1a2711fec61bb459973ef"),
@@ -1048,6 +1052,18 @@ def check(path, boot_path=None):
         assert encoded[0] == 0xe8 and call + 5 + struct.unpack_from("<i", encoded, 1)[0] == target, "changed serialized collector/task cleanup edge"
     assert read(0x14ba1299, 7) == bytes.fromhex("48 8b bb 88 00 00 00"), "changed garbage collector mutex identity"
     assert read(0x14ba1384, 7) == bytes.fromhex("48 8b bf 88 00 00 00"), "changed GART collector mutex identity"
+    for call, method in ((0x14b6752b, "__ZN11IOAccelTask23prune_orphaned_mappingsEv"),
+                         (0x14b67543, "__ZN11IOAccelTask22free_orphaned_mappingsEv"),
+                         (0x14b674c8, "__ZN20IOAccelMemoryMapList13removeMappingEP16IOAccelMemoryMap"),
+                         (0x14b674da, "__ZN20IOAccelMemoryMapList10addMappingEP16IOAccelMemoryMap"),
+                         (0x14bb76a5, "__ZN20IOAccelMemoryMapList13removeMappingEP16IOAccelMemoryMap")):
+        encoded = read(call, 5)
+        assert encoded[0] == 0xe8 and call + 5 + struct.unpack_from("<i", encoded, 1)[0] == address_of(method), "changed mapping VA reuse/cleanup edge"
+    for slot, name in ((0x150, "__ZN16IOAccelMemoryMap22allocGPUVirtualAddressEv"),
+                       (0x158, "__ZN16IOAccelMemoryMap24reserveGPUVirtualAddressEyy"),
+                       (0x160, "__ZN16IOAccelMemoryMap21freeGPUVirtualAddressEv")):
+        raw = struct.unpack("<Q", read(address_of("__ZTV16IOAccelMemoryMap") + 16 + slot, 8))[0]
+        assert raw >> 63 == 0 and (raw >> 30) & 3 == 1 and raw & 0x3fffffff == address_of(name), "changed declared mapping VA lifecycle target"
     for call, method in ((0x14bb73da, "__ZN16IOAccelMemoryMap11release_pteEv"),
                          (0x14bb7421, "__ZN20IOAccelMemoryMapList13removeMappingEP16IOAccelMemoryMap"),
                          (0x14bb7435, "__ZN20IOAccelMemoryMapList10addMappingEP16IOAccelMemoryMap"),

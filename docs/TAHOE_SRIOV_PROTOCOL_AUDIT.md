@@ -6953,6 +6953,47 @@ No executable patch or runtime mutation.
 
 ## Mapping last-release admission and deferred raw-list transfer
 
+Factory/VA follow-up: complete createMappingInTaskAtAddressLength
+(14b67304/272), allocGPUVirtualAddress (14bb7616/6a),
+reserveGPUVirtualAddress (14bb75ae/68) and freeGPUVirtualAddress
+(14bb7680/6c) reviewed/pinned. The factory searches the parent's raw mapping
+array for the requested task/options. A nondeferred match is retained; a
+deferred match is reactivated by moving it from task +0x200 to +0x1e8 and
+clearing flag 8 without a new local retain. This preserves the deferred
+reference rather than creating an independent owner. Neither path locally
+acquires the accelerator mutex. Actual factory caller serialization remains
+unresolved, including virtual callers not found by a direct-edge locator.
+
+For new mappings the accelerator virtual factory is followed, for the relevant
+flag-2 path, by fixed-address reserve or ordinary VA allocation. Failed ordinary
+allocation either invokes task pressure recovery or, under c92 bit 6, prunes
+orphans, retries, finishes/frees orphans, then retries again. Exhaustion invokes
+mapping release and returns null. These recovery stages can therefore trigger
+the previously reviewed event/termination cleanup policy inside VA allocation.
+
+Ordinary VA allocation, unless already flag-1 allocated, calls task +0x140
+unless flag 0x20 selects the no-allocation path; zero fails in the ordinary
+allocator path. Success adds the mapping to the active task list, records the
+address, and publishes flag 1. Fixed reservation writes address/length and
+flag 0x4000 before task +0x140; only an exact returned-address match publishes
+active-list membership and flag 1. This local body is not a rollback proof for
+the task allocator's mismatching-address policy.
+
+freeGPUVirtualAddress removes the mapping from the active or deferred list
+according to flag 8, then (unless flag 0x20) calls task virtual +0x148 with
+its saved address. It clears address/length and flag 1 afterward. There is no
+local GuC acknowledgement before that address return. Therefore a proposed
+asynchronous page-table quarantine must also preserve the VA reservation and
+its task/mapping owners until safe retirement, or prove equivalent submission
+exclusion; retaining only physical page descriptors/pool owners is insufficient
+to exclude stale-translation aliasing after VA reuse. This is a required design
+invariant, not a demonstrated runtime stale-translation event.
+
+Contracts add four complete bodies, three declared mapping VA vtable targets
+and five selected factory/list edges. Next resolve task allocator/free and
+factory caller lock scope together with the completion-consumer dependency.
+No production hooks or hardware tests were changed.
+
 Caller follow-up: complete Task::release const (14b9e082/1a2), accelerator
 free_orphaned_gputasks (14ba57d6/8c), kickOrphanResourceTimer (14ba579a/3c),
 garbage_collector (14ba1280/ce) and gart_collector (14ba1376/1d4) reviewed.

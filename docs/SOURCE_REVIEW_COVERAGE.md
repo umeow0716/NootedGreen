@@ -7,6 +7,14 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 factory/VA lifecycle: four whole bodies reviewed/pinned with three
+declared VA method identities and five direct edges. Deferred mapping reuse
+transfers the saved reference rather than retaining anew; factory has no local
+mutex. VA free returns its saved address to task before clearing identity,
+without local GuC ACK. Retirement must also exclude premature VA reuse, not
+only physical-page reuse. Task allocator policy and effective caller locks
+remain unverified; this is not a reproduced stale-translation fault.
+
 2026-10-04 collector ownership: five complete bodies reviewed/pinned (Task
 last release, orphan-task cleanup/timer kick, garbage/GART collectors). Both
 collector paths demonstrably hold accelerator +0x88 IOLock during cleanup;
