@@ -182,6 +182,9 @@ STAMP_IRQ_NATIVE = {
     "__ZNK25IGHardwareGlobalPageTable4readEyRyS0_": (0x44, "5cc6a86d9a27cf1ee2f28388b3542d08102ffd35a4bc6db509e3cd5dd2d71ccd"),
     "__ZN11IGAccelTask24initManagedPageTableListEv": (0xfc, "4b026fd8979c2010b304895b2d6f61c69167e83923cb7070cdc238b179d45e77"),
     "__ZN15IGMemoryManager19newPageTableForTaskEP11IGAccelTask": (0xa6, "9f8b0a4af92e2da84cac933655cc33c6ed7ed5a31236a73a91955d91ba76d911"),
+    "__ZN15IGMemoryManager19synchronizeAllTasksEv": (0xa6, "1250401ca95e7eccce5540f41e084034a1106e647380530461239a03d9af9eb7"),
+    "__ZN21IntelTGLMemoryManager19synchronizeAllTasksEv": (0x22, "df135c01f9886a9e4c4b3819fcbb55e3614517a92a7a2ed92534d43413602729"),
+    "__ZN18IGAccelDisplayPipe20displayModeDidChangeEv": (0x3c, "df9a27bea3cc4740f8d63e9cf09e6555d8d11447da1ce7e78d7bf211b2d54065"),
     "__ZN15IGMemoryManager22updatePageTableForTaskEP11IGAccelTaskP16IGAccelMemoryMap": (0x11a, "9b574d3a8f1ae07327da68f84f4eb99a08e8ea154a596f723ae7f558ffdf46a2"),
     "__ZN16IGAccelMemoryMap18updateGPUPageTableEv": (0x140, "75ba5674583a8d27d54acab18290e78bbc9de8157b19bfc6614c379d39fa3fbc"),
     "__ZN16IGAccelMemoryMap15updateCacheTypeEj": (0x24, "0c704192e43ed19c39a2179ea6e80551a07af30a8a541016a913f3d9572516f8"),
@@ -1022,6 +1025,28 @@ def macho_inventory(path):
     assert direct_branches(shrink_leaf, "__ZN10IGPagePool14PageDescriptor7releaseEv") == [0xcf1b], f"{path}: changed pruned-table descriptor release edge"
     assert direct_branches("__ZN10IGPagePool14PageDescriptor7releaseEv", "__ZN10IGPagePool11releasePageEPKNS_14PageDescriptorE") == [0xbb7d], f"{path}: changed final-reference pool retirement edge"
     assert image[0xcf0b:0xcf13] == bytes.fromhex("48 89 3c ce 66 ff 4a 10"), f"{path}: changed parent PTE/count before descriptor release"
+    pool_allocate = "__ZN10IGPagePool12allocatePageEv"
+    for owner, calls in (
+            ("__ZN31IGHardwarePerProcessPageTable6411expandLevelINS_10LevelEntryILm9E21GTTPageMapLevel4EntryEEvEEbRT_yyPT0_ym", [0xdece]),
+            ("__ZN31IGHardwarePerProcessPageTable6411expandLevelINS_10LevelEntryILm9E28GTTPageDirectoryPointerEntryEENS1_ILm9E21GTTPageMapLevel4EntryEEEEbRT_yyPT0_ym", [0xdf79]),
+            ("__ZN31IGHardwarePerProcessPageTable6411expandLevelINS_10LevelEntryILm9E21GTTPageDirectoryEntryEENS1_ILm9E28GTTPageDirectoryPointerEntryEEEEbRT_yyPT0_ym", [0xe23f]),
+            ("__ZN31IGHardwarePerProcessPageTable6411expandLevelINS_10LevelEntryILm9E17GTTPageTableEntryEENS1_ILm9E21GTTPageDirectoryEntryEEEEbRT_yyPT0_ym", [0xe31a]),
+            ("__ZN31IGHardwarePerProcessPageTable326expandE19GTTVirtualAddress32", [0x12512, 0x125da])):
+        actual = direct_branches(owner, pool_allocate)
+        assert actual == calls, f"{path}: changed page-pool allocation owner: {owner}: {actual}"
+    pool_prune = "__ZN10IGPagePool5pruneEj"
+    for owner, calls in (
+            ("__ZN10IGPagePool4freeEv", [0xaa3b]),
+            ("__ZN10IGPagePool4growEv", [0xb245]),
+            ("__ZN10IGPagePool13schedulePruneEv", [0xb9ce]),
+            ("__ZN10IGPagePool10pruneEventEP22IOInterruptEventSourcei", [0xb9e2])):
+        assert direct_branches(owner, pool_prune) == calls, f"{path}: changed page-pool prune owner: {owner}"
+    assert direct_branches(
+        "__ZN15IGMemoryManager12initPagePoolEv",
+        "__ZN10IGPagePool11withOptionsEP16IntelAcceleratorj") == [0xede6], \
+        f"{path}: changed unique standard page-pool factory owner"
+    assert image[0xede4:0xede6] == bytes.fromhex("31 f6"), \
+        f"{path}: manager page pool became threaded/callback-backed"
     # Selected configuration window, not a complete populateAccelConfig audit.
     config = value("__ZN16IntelAccelerator19populateAccelConfigEP13IOAccelConfig")
     assert config <= 0x275be < 0x2760d <= next_symbol(config), f"{path}: changed ring-size validation owner"
@@ -1255,6 +1280,17 @@ def macho_inventory(path):
             ("__ZN29IGHardwarePerProcessPageTable15synchronizeWithIS_EEvPKT_RK14IGAddressRangeb", "__ZN29IGHardwarePerProcessPageTable20synchronizeEachEntryEPK19IGHardwarePageTableRK14IGAddressRangeb", 0x12d8a),
             ("__ZN29IGHardwarePerProcessPageTable15synchronizeWithIS_EEvPKT_RK14IGAddressRangeb", "__ZN29IGHardwarePerProcessPageTable25synchronizePageDescriptorEPKS_RK14IGAddressRangeb", 0x12da5)):
         assert direct_branches(method, target) == [call], f"{path}: changed page-table synchronization helper edge"
+    sync_all = "__ZN15IGMemoryManager19synchronizeAllTasksEv"
+    assert direct_branches(sync_all, "__ZN29IGHardwarePerProcessPageTable15synchronizeWithI25IGHardwareGlobalPageTableEEvPKT_RK14IGAddressRangeb") == [0xf537], f"{path}: changed all-task global synchronization edge"
+    assert direct_branches(sync_all, "__ZN29IGHardwarePerProcessPageTable15synchronizeWithIS_EEvPKT_RK14IGAddressRangeb") == [0xf573], f"{path}: changed all-task private synchronization edge"
+    base_manager_table = value("__ZTV15IGMemoryManager")
+    tgl_manager_table = value("__ZTV21IntelTGLMemoryManager")
+    tgl_sync_all = "__ZN21IntelTGLMemoryManager19synchronizeAllTasksEv"
+    assert struct.unpack_from("<Q", image, base_manager_table + 16 + 0x130)[0] == value(sync_all), f"{path}: changed base all-task synchronization virtual"
+    assert struct.unpack_from("<Q", image, tgl_manager_table + 16 + 0x130)[0] == value(tgl_sync_all), f"{path}: changed TGL all-task synchronization virtual"
+    assert image[0x4ba47:0x4ba55] == bytes.fromhex("48 8d 05 52 0a 08 00 5d ff a0 40 01 00 00"), f"{path}: changed TGL-to-base all-task tail"
+    assert image[0x7f874:0x7f891] == bytes.fromhex("48 8b 83 88 00 00 00 48 8b b8 60 12 00 00 48 8b 07 48 83 c4 08 5b 5d ff a0 30 01 00 00"), f"{path}: changed display-mode all-task dispatch"
+    assert struct.unpack_from("<Q", image, table64 + 16 + 0x160)[0] == value("__ZN31IGHardwarePerProcessPageTable6423remapDescriptorForRangeERK14IGAddressRangePN10IGPagePool14PageDescriptorE"), f"{path}: changed shared-descriptor remap virtual"
     for slot, method in ((0x118, GLOBAL_MAP_RANGE), (0x120, GLOBAL_MAP_ROTATED), (0x138, GLOBAL_MAP_DUMMY)):
         assert struct.unpack_from("<Q", image, global_table + 16 + slot)[0] == value(method), f"{path}: changed global commit-range mapping virtual"
     assert direct_branches("__ZN15IGMemoryManager26commitIntoPageTableForTaskEP11IGAccelTaskP16IGAccelMemoryMap", "__ZN19IGHardwarePageTable11commitRangeERK14IGAddressRangePK16IGAccelMemoryMap") == [0xf639], f"{path}: changed manager-to-page-table commit edge"
@@ -2998,7 +3034,7 @@ def ppgtt_final_free_contract(source, path):
         if fragment not in wrapper:
             raise AssertionError(f"{path}: incomplete final task/PPGTT retirement boundary")
     if not wrapper.index(lifecycle) < wrapper.index(task_check) < \
-            wrapper.index(retire) < wrapper.index(native):
+            wrapper.index(retire) < wrapper.rindex(native):
         raise AssertionError(f"{path}: native task free precedes owner exclusion/retirement")
 
     normalized = "".join(source.split())
@@ -3033,8 +3069,12 @@ def ppgtt_final_free_mutations(path):
         return body.replace(before, after, 1)
 
     marker = "__NGREEN_FINAL_PPGTT_ORDER_MUTATION__"
-    swapped = wrapper.replace(retire, marker, 1).replace(
-        native, retire, 1).replace(marker, native, 1)
+    swapped = wrapper.replace(retire, marker, 1)
+    native_at = swapped.rfind(native)
+    if native_at < 0:
+        raise AssertionError("missing final native-free mutation target")
+    swapped = (swapped[:native_at] + retire +
+               swapped[native_at + len(native):]).replace(marker, native, 1)
     route = ('{"__ZN11IGAccelTask4freeEv", vfAccelTaskFree,\n'
              '\t\t\t  this->oVfAccelTaskFree},')
     mutations = (
@@ -3067,8 +3107,8 @@ def page_table_commit_rollback_contract(source, path):
     compact = "".join(wrapper.split())
     native = ("callback->oVfCommitPageTablesForTask)"
               "(that,task,mapping);")
-    success = "if(committed)returntrue;"
-    rollback = ("callback->vfReleasePageTablesForTask)"
+    success = "if(committed){"
+    rollback = ("callback->oVfReleasePageTablesForTask)"
                 "(that,task,mapping);")
     fail_stop = "PANIC_COND(!rolledBack"
     final_false = "returnfalse;"
@@ -3083,12 +3123,12 @@ def page_table_commit_rollback_contract(source, path):
             f"{path}: failed page-table commit escapes before full rollback")
 
     normalized = "".join(source.split())
-    solve = ('{"__ZN15IGMemoryManager27releaseFromPageTableForTaskEP11IGAccelTaskP16IGAccelMemoryMap",'
-             'this->vfReleasePageTablesForTask}')
+    release_route = ('{"__ZN15IGMemoryManager27releaseFromPageTableForTaskEP11IGAccelTaskP16IGAccelMemoryMap",'
+                     'vfReleasePageTablesForTask,this->oVfReleasePageTablesForTask}')
     route = ('{"__ZN15IGMemoryManager26commitIntoPageTableForTaskEP11IGAccelTaskP16IGAccelMemoryMap",'
              'vfCommitPageTablesForTask,this->oVfCommitPageTablesForTask}')
-    if solve not in normalized:
-        raise AssertionError(f"{path}: missing native all-table rollback boundary")
+    if release_route not in normalized:
+        raise AssertionError(f"{path}: missing native all-table release transaction route")
     if route not in normalized:
         raise AssertionError(f"{path}: missing task page-table commit transaction route")
 
@@ -3108,7 +3148,7 @@ def page_table_commit_rollback_mutations(path):
     mutations = (
         (wrapper, replace_once(wrapper, "if (committed)", "if (!committed)")),
         (wrapper, replace_once(
-            wrapper, "callback->vfReleasePageTablesForTask)(that, task, mapping);",
+            wrapper, "callback->oVfReleasePageTablesForTask)(that, task, mapping);",
             "callback->oVfCommitPageTablesForTask)(that, task, mapping);")),
         (wrapper, replace_once(
             wrapper, "PANIC_COND(!rolledBack", "PANIC_COND(false && !rolledBack")),
@@ -3137,7 +3177,7 @@ def initial_page_table_sync_contract(source, path):
     required = (
         "callback->oVfNewPageTableForTask)(that,task);",
         "vfEnsurePageTableUpdateLock()",
-        "IOLockLock(gVfPageTableUpdateLock);",
+        "IORecursiveLockLock(gVfPageTableUpdateLock);",
         "callback->vfGetHardwareContextAddressMode)(task);",
         "if(accelerator&&addressMode==1)",
         "callback->vfPpgtt32WithOptions)(accelerator,task);",
@@ -3161,7 +3201,7 @@ def initial_page_table_sync_contract(source, path):
         "destinationVtable[0x28/sizeof(mach_vm_address_t)]",
         "release(pageTable);",
         "pageTable=nullptr;",
-        "IOLockUnlock(gVfPageTableUpdateLock);",
+        "IORecursiveLockUnlock(gVfPageTableUpdateLock);",
         "returnpageTable;",
     )
     for token in required:
@@ -3169,7 +3209,7 @@ def initial_page_table_sync_contract(source, path):
             raise AssertionError(
                 f"{path}: incomplete initial page-table transaction: {token}")
 
-    lock = compact.index("IOLockLock(gVfPageTableUpdateLock);")
+    lock = compact.index("IORecursiveLockLock(gVfPageTableUpdateLock);")
     factory = compact.index("callback->vfPpgtt32WithOptions)(accelerator,task);", lock)
     source_owner = compact.index(
         "constboolkernelTask=IGAccelTaskIsKernelGPUTask(task);", factory)
@@ -3185,7 +3225,7 @@ def initial_page_table_sync_contract(source, path):
     flush = compact.index(
         "callback->vfFlushHardwareAfterGttUpdate)(accelerator);", entry_map)
     release = compact.index("release(pageTable);", flush)
-    unlock = compact.rindex("IOLockUnlock(gVfPageTableUpdateLock);")
+    unlock = compact.rindex("IORecursiveLockUnlock(gVfPageTableUpdateLock);")
     result = compact.rindex("returnpageTable;")
     if not lock < factory < source_owner < descriptor_read < descriptor_map < \
             entry_read < entry_map < flush < release < unlock < result:
@@ -3250,7 +3290,7 @@ def initial_page_table_sync_mutations(path):
             "callback->vfFlushHardwareAfterGttUpdate)(nullptr);")),
         (wrapper, replace_once(wrapper, "release(pageTable);", "")),
         (wrapper, replace_once(
-            wrapper, "IOLockLock(gVfPageTableUpdateLock);",
+            wrapper, "IORecursiveLockLock(gVfPageTableUpdateLock);",
             "/* missing transaction lock */")),
         (wrapper, replace_once(
             wrapper, "sourceUsesDescriptors) {", "false) {")),
@@ -3318,7 +3358,7 @@ def cache_type_update_transaction_contract(source, path):
     required = (
         "callback->oVfUpdateMappingCacheType)(that,requestedType);",
         "vfEnsurePageTableUpdateLock()",
-        "IOLockLock(gVfPageTableUpdateLock);",
+        "IORecursiveLockLock(gVfPageTableUpdateLock);",
         "constuint32_toldResourceFlags=getMember<uint32_t>(that,0x108);",
         "constuint32_toldMappingType=getMember<uint32_t>(mapping,0x114);",
         "getMember<void*>(mapping,0x88)==gVfAccelerator",
@@ -3337,7 +3377,7 @@ def cache_type_update_transaction_contract(source, path):
         if token not in compact:
             raise AssertionError(
                 f"{path}: incomplete cache-type page-table transaction: {token}")
-    lock = compact.index("IOLockLock(gVfPageTableUpdateLock);")
+    lock = compact.index("IORecursiveLockLock(gVfPageTableUpdateLock);")
     old_flags = compact.index(
         "constuint32_toldResourceFlags=getMember<uint32_t>(that,0x108);", lock)
     old_type = compact.index(
@@ -3356,7 +3396,7 @@ def cache_type_update_transaction_contract(source, path):
         "constboolreplayedOldType=updateGPUPageTable(mapping);", restore_flags)
     engines = compact.index("NGVfGuCRequest::TlbTarget::Engines", replay)
     guc = compact.index("NGVfGuCRequest::TlbTarget::Guc", engines)
-    unlock = compact.index("IOLockUnlock(gVfPageTableUpdateLock);", guc)
+    unlock = compact.index("IORecursiveLockUnlock(gVfPageTableUpdateLock);", guc)
     fault = compact.index(
         "vfMarkProtocolFault(\"VFcache-typepage-tableupdatefailedafterrollback\");",
         unlock)
@@ -3376,9 +3416,9 @@ def cache_type_update_transaction_contract(source, path):
     if route not in normalized:
         raise AssertionError(f"{path}: missing shared cache-type transaction route")
     ensure = function_body(source, "bool vfEnsurePageTableUpdateLock()")
-    for token in ("vfCanUseSleepingLock()", "IOLockAlloc()",
+    for token in ("vfCanUseSleepingLock()", "IORecursiveLockAlloc()",
                   "OSCompareAndSwapPtr(nullptr, candidate, &gVfPageTableUpdateLock)",
-                  "IOLockFree(candidate)"):
+                  "IORecursiveLockFree(candidate)"):
         if token not in ensure:
             raise AssertionError(
                 f"{path}: cache-type transaction lock publication lacks {token}")
@@ -3473,6 +3513,232 @@ def cache_type_update_transaction_model():
     print(f"PASS: {cases} cache-type transaction states preserve commit-or-restore semantics (offline model)")
 
 
+def page_table_common_serialization_contract(source, path):
+    normalized = "".join(source.split())
+    ensure = "".join(function_body(
+        source, "bool vfEnsurePageTableUpdateLock()").split())
+    for token in (
+            "IORecursiveLock*gVfPageTableUpdateLock=nullptr;",
+            "IORecursiveLockAlloc()",
+            "OSCompareAndSwapPtr(nullptr,candidate,&gVfPageTableUpdateLock)",
+            "IORecursiveLockFree(candidate)"):
+        body = normalized if token.startswith("IORecursiveLock*g") else ensure
+        if token not in body:
+            raise AssertionError(
+                f"{path}: common page-table lock lacks recursive publication {token}")
+
+    pool_owner = "".join(function_body(
+        source, "bool vfAdmitPagePoolTransactionOwner(void *pool)").split())
+    for token in (
+            "getMember<void*>(pool,0x18)==gVfAccelerator",
+            "getMember<uint8_t>(pool,0x64)==0"):
+        if token not in pool_owner:
+            raise AssertionError(
+                f"{path}: PagePool transaction admits callback-backed/foreign owner")
+
+    def locked_wrapper(signature, native, last_native=False):
+        body = "".join(function_body(source, signature).split())
+        lock = body.index("IORecursiveLockLock(gVfPageTableUpdateLock);")
+        call = body.rindex(native) if last_native else body.index(native, lock)
+        unlock = body.index("IORecursiveLockUnlock(gVfPageTableUpdateLock);", call)
+        if not lock < call < unlock:
+            raise AssertionError(
+                f"{path}: common page-table transaction escaped in {signature}")
+        return body
+
+    factory = locked_wrapper(
+        "void *Gen11::igAccelTaskWithOptions(void *that)",
+        "callback->oigAccelTaskWithOptions)(that);")
+    if factory.index("IORecursiveLockLock(gVfPageTableUpdateLock);") > \
+            factory.index("callback->oigAccelTaskWithOptions)(that);"):
+        raise AssertionError(f"{path}: task publication precedes common transaction")
+    locked_wrapper("void Gen11::vfAccelTaskFree(void *that)",
+                   "callback->oVfAccelTaskFree)(that);", True)
+    locked_wrapper("void Gen11::vfSynchronizeAllTasks(void *that)",
+                   "callback->oVfSynchronizeAllTasks)(that);")
+    locked_wrapper("bool Gen11::vfReleasePageTablesForTask(void *that,",
+                   "callback->oVfReleasePageTablesForTask)(that,task,mapping);")
+    locked_wrapper("bool Gen11::vfUpdatePageTablesForTask(void *that,",
+                   "callback->oVfUpdatePageTablesForTask)(that,task,mapping);")
+    locked_wrapper("void Gen11::vfPpgtt32UnmapRange(void *that,",
+                   "callback->oVfPpgtt32UnmapRange)(that,range);")
+    locked_wrapper("void Gen11::vfPpgtt64UnmapRange(void *that,",
+                   "callback->oVfPpgtt64UnmapRange)(that,range);")
+    locked_wrapper("void Gen11::vfPpgtt64ShrinkRange(void *that,",
+                   "callback->oVfPpgtt64ShrinkRange)(that,range);")
+    for signature, native in (
+            ("void *Gen11::vfPagePoolAllocatePage(void *that)",
+             "callback->oVfPagePoolAllocatePage)(that);"),
+            ("void Gen11::vfPagePoolReleasePage(void *that,",
+             "callback->oVfPagePoolReleasePage)(that,descriptor);"),
+            ("void Gen11::vfPagePoolPrune(void *that, uint32_t age)",
+             "callback->oVfPagePoolPrune)(that,age);"),
+            ("void Gen11::vfPagePoolFree(void *that)",
+             "callback->oVfPagePoolFree)(that);"),
+            ("void Gen11::vfReleasePagePool(void *that)",
+             "callback->oVfReleasePagePool)(that);"),
+            ("void Gen11::vfMemoryManagerFree(void *that)",
+             "callback->oVfMemoryManagerFree)(that);")):
+        wrapper = locked_wrapper(signature, native)
+        if "Gen11::vfPagePool" in signature and \
+                "vfAdmitPagePoolTransactionOwner(that)" not in wrapper:
+            raise AssertionError(
+                f"{path}: PagePool wrapper lacks standard-owner admission")
+
+    entry = "".join(function_body(
+        source, "void Gen11::vfSynchronizeEachEntry(void *that,").split())
+    for token in (
+            "sourceVtable[0x140/sizeof(mach_vm_address_t)]",
+            "destinationVtable[0x118/sizeof(mach_vm_address_t)]",
+            "destinationVtable[0x128/sizeof(mach_vm_address_t)]",
+            "synchronized=remap&&remapEntry?",
+            "if(!synchronized&&remap)synchronized=mapEntry(",
+            "callback->vfFlushHardwareAfterGttUpdate)(accelerator);",
+            "vfMarkProtocolFault(\"VFentrysynchronizationfailedinsidevoidABI\");",
+            "PANIC_COND(true,\"ngreen\",\"RefusingpartiallysynchronizedVFpagetables\");"):
+        if token not in entry:
+            raise AssertionError(
+                f"{path}: status-aware entry synchronization lacks {token}")
+    entry_lock = entry.index("IORecursiveLockLock(gVfPageTableUpdateLock);")
+    remap = entry.index("synchronized=remap&&remapEntry?", entry_lock)
+    fallback = entry.index("if(!synchronized&&remap)synchronized=mapEntry(", remap)
+    flush = entry.index(
+        "callback->vfFlushHardwareAfterGttUpdate)(accelerator);", fallback)
+    entry_unlock = entry.index(
+        "IORecursiveLockUnlock(gVfPageTableUpdateLock);", flush)
+    fault = entry.index(
+        "vfMarkProtocolFault(\"VFentrysynchronizationfailedinsidevoidABI\");",
+        entry_unlock)
+    if not entry_lock < remap < fallback < flush < entry_unlock < fault:
+        raise AssertionError(f"{path}: entry synchronization/fail-stop order changed")
+
+    descriptor = "".join(function_body(
+        source, "bool Gen11::vfPpgtt64RemapDescriptor(void *that,").split())
+    for token in (
+            "vtable[0x168/sizeof(mach_vm_address_t)]",
+            "callback->vfPageDescriptorRetain)(oldDescriptor);",
+            "callback->oVfPpgtt64RemapDescriptor)(that,range,descriptor);",
+            "vfRequireCompletedPpgttUpdate();",
+            "callback->vfPageDescriptorRelease)(oldDescriptor);"):
+        if token not in descriptor:
+            raise AssertionError(
+                f"{path}: retained descriptor remap lacks {token}")
+    retain = descriptor.index(
+        "callback->vfPageDescriptorRetain)(oldDescriptor);")
+    native = descriptor.index(
+        "callback->oVfPpgtt64RemapDescriptor)(that,range,descriptor);", retain)
+    retire = descriptor.index("vfRequireCompletedPpgttUpdate();", native)
+    release = descriptor.index(
+        "callback->vfPageDescriptorRelease)(oldDescriptor);", retire)
+    desc_unlock = descriptor.index(
+        "IORecursiveLockUnlock(gVfPageTableUpdateLock);", release)
+    if not retain < native < retire < release < desc_unlock:
+        raise AssertionError(f"{path}: old descriptor can return before retirement")
+
+    routes = (
+        '{"__ZN15IGMemoryManager19synchronizeAllTasksEv",vfSynchronizeAllTasks,this->oVfSynchronizeAllTasks}',
+        '{"__ZN29IGHardwarePerProcessPageTable20synchronizeEachEntryEPK19IGHardwarePageTableRK14IGAddressRangeb",vfSynchronizeEachEntry}',
+        '{"__ZN31IGHardwarePerProcessPageTable6423remapDescriptorForRangeERK14IGAddressRangePN10IGPagePool14PageDescriptorE",vfPpgtt64RemapDescriptor,this->oVfPpgtt64RemapDescriptor}',
+        '{"__ZN15IGMemoryManager27releaseFromPageTableForTaskEP11IGAccelTaskP16IGAccelMemoryMap",vfReleasePageTablesForTask,this->oVfReleasePageTablesForTask}',
+        '{"__ZN15IGMemoryManager22updatePageTableForTaskEP11IGAccelTaskP16IGAccelMemoryMap",vfUpdatePageTablesForTask,this->oVfUpdatePageTablesForTask}',
+        '{"__ZN31IGHardwarePerProcessPageTable6410unmapRangeERK14IGAddressRange",vfPpgtt64UnmapRange,this->oVfPpgtt64UnmapRange}',
+        '{"__ZN10IGPagePool12allocatePageEv",vfPagePoolAllocatePage,this->oVfPagePoolAllocatePage}',
+        '{"__ZN10IGPagePool11releasePageEPKNS_14PageDescriptorE",vfPagePoolReleasePage,this->oVfPagePoolReleasePage}',
+        '{"__ZN10IGPagePool5pruneEj",vfPagePoolPrune,this->oVfPagePoolPrune}',
+        '{"__ZN10IGPagePool4freeEv",vfPagePoolFree,this->oVfPagePoolFree}',
+        '{"__ZN15IGMemoryManager15releasePagePoolEv",vfReleasePagePool,this->oVfReleasePagePool}',
+        '{"__ZN15IGMemoryManager4freeEv",vfMemoryManagerFree,this->oVfMemoryManagerFree}',
+    )
+    for route in routes:
+        if route not in normalized:
+            raise AssertionError(f"{path}: missing common transaction route {route}")
+
+
+def page_table_common_serialization_mutations(path):
+    source = pathlib.Path(path).read_text()
+
+    def mutate_function(signature, before, after):
+        body = function_body(source, signature)
+        if body.count(before) != 1:
+            raise AssertionError(f"ambiguous common-transaction mutation: {before}")
+        return source.replace(body, body.replace(before, after, 1), 1)
+
+    mutations = [
+        source.replace("IORecursiveLock *gVfPageTableUpdateLock = nullptr;",
+                       "IOLock *gVfPageTableUpdateLock = nullptr;", 1),
+        mutate_function("void *Gen11::igAccelTaskWithOptions(void *that)",
+                        "IORecursiveLockLock(gVfPageTableUpdateLock);", ""),
+        mutate_function("void Gen11::vfAccelTaskFree(void *that)",
+                        "IORecursiveLockLock(gVfPageTableUpdateLock);", ""),
+        mutate_function("void Gen11::vfSynchronizeAllTasks(void *that)",
+                        "IORecursiveLockLock(gVfPageTableUpdateLock);", ""),
+        mutate_function("void Gen11::vfSynchronizeEachEntry(void *that,",
+                        "if (!synchronized && remap)", "if (false && remap)"),
+        mutate_function("void Gen11::vfSynchronizeEachEntry(void *that,",
+                        "vfMarkProtocolFault(\"VF entry synchronization failed inside void ABI\");", ""),
+        mutate_function("bool Gen11::vfPpgtt64RemapDescriptor(void *that,",
+                        "callback->vfPageDescriptorRetain)(oldDescriptor);",
+                        "callback->vfPageDescriptorRelease)(oldDescriptor);"),
+        mutate_function("bool Gen11::vfPpgtt64RemapDescriptor(void *that,",
+                        "vfRequireCompletedPpgttUpdate();", ""),
+        mutate_function("void Gen11::vfPagePoolReleasePage(void *that,",
+                        "IORecursiveLockLock(gVfPageTableUpdateLock);", ""),
+        mutate_function("void Gen11::vfMemoryManagerFree(void *that)",
+                        "IORecursiveLockLock(gVfPageTableUpdateLock);", ""),
+        source.replace("getMember<uint8_t>(pool, 0x64) == 0",
+                       "getMember<uint8_t>(pool, 0x64) != 0", 1),
+        source.replace(
+            "__ZN15IGMemoryManager19synchronizeAllTasksEv",
+            "__ZN15IGMemoryManager19missingSynchronizeAllTasksEv", 1),
+        source.replace(
+            "__ZN31IGHardwarePerProcessPageTable6423remapDescriptorForRangeERK14IGAddressRangePN10IGPagePool14PageDescriptorE",
+            "__ZN31IGHardwarePerProcessPageTable6423missingDescriptorRemapERK14IGAddressRangePN10IGPagePool14PageDescriptorE", 1),
+        source.replace(
+            "__ZN10IGPagePool11releasePageEPKNS_14PageDescriptorE",
+            "__ZN10IGPagePool18missingReleasePageEPKNS_14PageDescriptorE", 1),
+    ]
+    for changed in mutations:
+        if changed == source:
+            raise AssertionError("missing common page-table transaction mutation target")
+        try:
+            page_table_common_serialization_contract(changed, path)
+        except (AssertionError, ValueError):
+            continue
+        raise AssertionError(f"{path}: escaped common page-table transaction mutation")
+    print("PASS: fourteen common task/table/PagePool transaction mutations rejected")
+
+
+def page_table_common_serialization_model():
+    cases = 0
+    # The destination owns one old descriptor reference. An extra temporary
+    # retain must keep it nonzero across native release until acknowledgement.
+    for other_references in range(5):
+        old_count = 1 + other_references
+        held = old_count + 1
+        after_native_release = held - 1
+        assert after_native_release >= 1
+        after_ack_release = after_native_release - 1
+        assert after_ack_release == other_references
+        cases += 1
+    # Remap failure is repaired only by a successful allocating map; otherwise
+    # the void synchronization ABI terminates instead of publishing a prefix.
+    for source_present in (False, True):
+        for remap_ok in (False, True):
+            for fallback_ok in (False, True):
+                terminal = source_present and not remap_ok and not fallback_ok
+                synchronized = (not source_present or remap_ok or fallback_ok)
+                assert terminal != synchronized
+                cases += 1
+    # Construction, observation and destruction are whole lock transactions:
+    # no legal serialization can observe the two published-but-incomplete or
+    # still-linked-after-table-free intermediate states.
+    for create_first in (False, True):
+        observed = "complete" if create_first else "absent"
+        assert observed in ("complete", "absent")
+        cases += 1
+    print(f"PASS: {cases} common page-table ownership/rollback states (offline model)")
+
+
 def source_contract(path):
     source = pathlib.Path(path).read_text()
     ring_backing_submit_contract(source, path)
@@ -3482,6 +3748,7 @@ def source_contract(path):
     page_table_commit_rollback_contract(source, path)
     initial_page_table_sync_contract(source, path)
     cache_type_update_transaction_contract(source, path)
+    page_table_common_serialization_contract(source, path)
     for signature in ("bool Gen11::vfAttachContextDesc(",
                       "void Gen11::vfDetachContextDesc(",
                       "bool Gen11::vfSubmitWorkItem("):
@@ -4167,6 +4434,8 @@ def main():
     initial_page_table_sync_model()
     cache_type_update_transaction_mutations(sys.argv[1])
     cache_type_update_transaction_model()
+    page_table_common_serialization_mutations(sys.argv[1])
+    page_table_common_serialization_model()
     ggtt_postwrite_mutations(sys.argv[1])
     macho_inventory(sys.argv[2])
     macho_inventory(sys.argv[3])

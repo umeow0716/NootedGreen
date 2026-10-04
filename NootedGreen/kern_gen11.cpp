@@ -156,7 +156,7 @@ constexpr size_t kGucDoorbellAllocatorOffset = 0xDC;
 constexpr size_t kGucDoorbellTopologyOffset = 0x9E0;
 
 IOLock *gVfGucLock = nullptr;
-IOLock *gVfPageTableUpdateLock = nullptr;
+IORecursiveLock *gVfPageTableUpdateLock = nullptr;
 uint64_t gVfGGTTBase = 0;
 uint64_t gVfGGTTSize = 0;
 uint32_t gVfContextCount = 0;
@@ -1490,15 +1490,28 @@ bool vfEnsurePageTableUpdateLock()
 		return false;
 	if (gVfPageTableUpdateLock)
 		return true;
-	auto *candidate = IOLockAlloc();
+	auto *candidate = IORecursiveLockAlloc();
 	if (!candidate)
 		return false;
-	// Cache-type requests arrive from every graphics/media pipeline. Publish
-	// one lifetime-long lock so two callers cannot observe different old types
-	// while either is repairing a failed multi-table update.
+	// Page-table construction and failure unwind can re-enter task destruction,
+	// while cache rollback and manager fan-out can re-enter lower table/pool
+	// operations. Publish one lifetime-long recursive transaction lock so those
+	// native ownership paths remain balanced without opening an interleaving
+	// window to another task, table or PagePool operation.
 	if (!OSCompareAndSwapPtr(nullptr, candidate, &gVfPageTableUpdateLock))
-		IOLockFree(candidate);
+		IORecursiveLockFree(candidate);
 	return true;
+}
+
+bool vfAdmitPagePoolTransactionOwner(void *pool)
+{
+	// The admitted Tahoe manager is the only direct PagePool factory caller and
+	// passes options=0. Reject an unexpected threaded/callback-backed pool before
+	// entering the sleepable transaction: its queued callback admission would
+	// require a separate drain protocol around final free.
+	return pool && gVfAccelerator &&
+	       getMember<void *>(pool, 0x18) == gVfAccelerator &&
+	       getMember<uint8_t>(pool, 0x64) == 0;
 }
 
 static bool vfWaitMmioHeader(NGreen *cb, bool busyPhase, uint32_t &header)
@@ -2644,8 +2657,6 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 
 		if (vfActive) {
 			KernelPatcher::SolveRequest pageTableRollback[] = {
-				{"__ZN15IGMemoryManager27releaseFromPageTableForTaskEP11IGAccelTaskP16IGAccelMemoryMap",
-				 this->vfReleasePageTablesForTask},
 				{"__ZNK11IGAccelTask29getHardwareContextAddressModeEv",
 				 this->vfGetHardwareContextAddressMode},
 				{"__ZN31IGHardwarePerProcessPageTable3211withOptionsEP16IntelAcceleratorP11IGAccelTask",
@@ -2654,6 +2665,10 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				 this->vfPpgtt64WithOptions},
 				{"__ZN16IntelAccelerator27flushHardwareAfterGttUpdateEv",
 				 this->vfFlushHardwareAfterGttUpdate},
+				{"__ZN10IGPagePool14PageDescriptor6retainEv",
+				 this->vfPageDescriptorRetain},
+				{"__ZN10IGPagePool14PageDescriptor7releaseEv",
+				 this->vfPageDescriptorRelease},
 			};
 			PANIC_COND(!patcher.solveMultiple(
 			               index, pageTableRollback, address, size), "ngreen",
@@ -2681,6 +2696,8 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			// boundary and retire translations before native pruning/zeroing.
 			{"__ZN31IGHardwarePerProcessPageTable3210unmapRangeERK14IGAddressRange",
 			 vfPpgtt32UnmapRange, this->oVfPpgtt32UnmapRange},
+			{"__ZN31IGHardwarePerProcessPageTable6410unmapRangeERK14IGAddressRange",
+			 vfPpgtt64UnmapRange, this->oVfPpgtt64UnmapRange},
 			{"__ZN31IGHardwarePerProcessPageTable6411shrinkRangeERK14IGAddressRange",
 			 vfPpgtt64ShrinkRange, this->oVfPpgtt64ShrinkRange},
 			// Native commit fan-out preserves successful segment/address-space
@@ -2688,12 +2705,46 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			// task, mapping and native caller's ownership scope are still intact.
 			{"__ZN15IGMemoryManager26commitIntoPageTableForTaskEP11IGAccelTaskP16IGAccelMemoryMap",
 			 vfCommitPageTablesForTask, this->oVfCommitPageTablesForTask},
+			{"__ZN15IGMemoryManager27releaseFromPageTableForTaskEP11IGAccelTaskP16IGAccelMemoryMap",
+			 vfReleasePageTablesForTask, this->oVfReleasePageTablesForTask},
+			{"__ZN15IGMemoryManager22updatePageTableForTaskEP11IGAccelTaskP16IGAccelMemoryMap",
+			 vfUpdatePageTablesForTask, this->oVfUpdatePageTablesForTask},
 			// Native synchronization has a void ABI: both the per-entry and the
 			// descriptor path can leave a partially populated PPGTT and still return
 			// it to the task. Rebuild that one factory transaction with observable
 			// map results and release the unpublished table on any failure.
 			{"__ZN15IGMemoryManager19newPageTableForTaskEP11IGAccelTask",
 			 vfNewPageTableForTask, this->oVfNewPageTableForTask},
+			// Display-mode changes synchronize the kernel table and every published
+			// task through void helpers. Serialize the complete iterator, make entry
+			// failures fail closed, and retain replaced shared descriptors until an
+			// acknowledged engine invalidation has completed.
+			{"__ZN15IGMemoryManager19synchronizeAllTasksEv",
+			 vfSynchronizeAllTasks, this->oVfSynchronizeAllTasks},
+			{"__ZN29IGHardwarePerProcessPageTable20synchronizeEachEntryEPK19IGHardwarePageTableRK14IGAddressRangeb",
+			 vfSynchronizeEachEntry},
+			{"__ZN31IGHardwarePerProcessPageTable6423remapDescriptorForRangeERK14IGAddressRangePN10IGPagePool14PageDescriptorE",
+			 vfPpgtt64RemapDescriptor, this->oVfPpgtt64RemapDescriptor},
+			// Tahoe constructs the manager pools without their optional native lock.
+			// Put allocation, zero-before-return, prune and final teardown in the
+			// same recursive ownership domain as every task/table transaction.
+			{"__ZN10IGPagePool12allocatePageEv",
+			 vfPagePoolAllocatePage, this->oVfPagePoolAllocatePage},
+			{"__ZN10IGPagePool11releasePageEPKNS_14PageDescriptorE",
+			 vfPagePoolReleasePage, this->oVfPagePoolReleasePage},
+			{"__ZN10IGPagePool5pruneEj",
+			 vfPagePoolPrune, this->oVfPagePoolPrune},
+			{"__ZN10IGPagePool4freeEv",
+			 vfPagePoolFree, this->oVfPagePoolFree},
+			{"__ZN15IGMemoryManager15releasePagePoolEv",
+			 vfReleasePagePool, this->oVfReleasePagePool},
+			// Normal manager destruction independently releases dummy/global page
+			// tables and clears every published segment before its base free. Keep
+			// that complete owner teardown in the transaction too; locking only the
+			// pool helpers would still allow synchronization to borrow a cleared
+			// +0x98 table or range while final free was in progress.
+			{"__ZN15IGMemoryManager4freeEv",
+			 vfMemoryManagerFree, this->oVfMemoryManagerFree},
 			// Cache-type requests from Metal, GL, blit and media all converge here.
 			// Keep resource flags and every installed page table in one recoverable
 			// transaction; the native void tail otherwise hides a partial failure.
@@ -3803,11 +3854,31 @@ void Gen11::vfPpgtt32UnmapRange(void *that,
 {
 	PANIC_COND(!that || !callback->oVfPpgtt32UnmapRange,
 		"ngreen", "Missing native VF 32-bit PPGTT unmap boundary");
+	PANIC_COND(!vfEnsurePageTableUpdateLock(), "ngreen",
+		"VF 32-bit PPGTT unmap cannot enter the page-table transaction");
+	IORecursiveLockLock(gVfPageTableUpdateLock);
 	FunctionCast(vfPpgtt32UnmapRange,
 	             callback->oVfPpgtt32UnmapRange)(that, range);
 	// This native body only installs dummy leaf PTEs. Confirm their engine-wide
 	// visibility before releaseRange can return and free the mapped backing.
 	vfRequireCompletedPpgttUpdate();
+	IORecursiveLockUnlock(gVfPageTableUpdateLock);
+}
+
+void Gen11::vfPpgtt64UnmapRange(void *that,
+	                             const NGIGAddressRange &range)
+{
+	PANIC_COND(!that || !callback->oVfPpgtt64UnmapRange,
+		"ngreen", "Missing native VF 64-bit PPGTT unmap boundary");
+	PANIC_COND(!vfEnsurePageTableUpdateLock(), "ngreen",
+		"VF 64-bit PPGTT unmap cannot enter the page-table transaction");
+	IORecursiveLockLock(gVfPageTableUpdateLock);
+	// The original tail enters the separately routed shrink boundary. Keeping
+	// this outer recursive hold prevents another mapper/task/pool operation from
+	// observing the dummy-PTE prefix before pruning and retirement complete.
+	FunctionCast(vfPpgtt64UnmapRange,
+	             callback->oVfPpgtt64UnmapRange)(that, range);
+	IORecursiveLockUnlock(gVfPageTableUpdateLock);
 }
 
 void Gen11::vfPpgtt64ShrinkRange(void *that,
@@ -3815,6 +3886,9 @@ void Gen11::vfPpgtt64ShrinkRange(void *that,
 {
 	PANIC_COND(!that || !callback->oVfPpgtt64ShrinkRange,
 		"ngreen", "Missing native VF 64-bit PPGTT shrink boundary");
+	PANIC_COND(!vfEnsurePageTableUpdateLock(), "ngreen",
+		"VF 64-bit PPGTT shrink cannot enter the page-table transaction");
+	IORecursiveLockLock(gVfPageTableUpdateLock);
 	// Every pinned caller has already finished its hardware-entry writes. The
 	// native shrink helpers may release a descriptor into PagePool, whose final
 	// return zeroes the CPU page before taking the optional pool lock. Retire
@@ -3822,19 +3896,25 @@ void Gen11::vfPpgtt64ShrinkRange(void *that,
 	vfRequireCompletedPpgttUpdate();
 	FunctionCast(vfPpgtt64ShrinkRange,
 	             callback->oVfPpgtt64ShrinkRange)(that, range);
+	IORecursiveLockUnlock(gVfPageTableUpdateLock);
 }
 
 bool Gen11::vfCommitPageTablesForTask(void *that, void *task, void *mapping)
 {
 	PANIC_COND(!that || !task || !mapping ||
 	           !callback->oVfCommitPageTablesForTask ||
-	           !callback->vfReleasePageTablesForTask,
+	           !callback->oVfReleasePageTablesForTask,
 		"ngreen", "Missing VF page-table commit/rollback boundary");
+	PANIC_COND(!vfEnsurePageTableUpdateLock(), "ngreen",
+		"VF page-table commit cannot enter the page-table transaction");
+	IORecursiveLockLock(gVfPageTableUpdateLock);
 	const bool committed = FunctionCast(
 		vfCommitPageTablesForTask,
 		callback->oVfCommitPageTablesForTask)(that, task, mapping);
-	if (committed)
+	if (committed) {
+		IORecursiveLockUnlock(gVfPageTableUpdateLock);
 		return true;
+	}
 
 	// The native manager ANDs every table result without rolling back an
 	// earlier successful table or segment. Its false result prevents the
@@ -3845,10 +3925,41 @@ bool Gen11::vfCommitPageTablesForTask(void *that, void *task, void *mapping)
 	// translation target before any native descriptor/backing release.
 	const bool rolledBack = FunctionCast(
 		vfCommitPageTablesForTask,
-		callback->vfReleasePageTablesForTask)(that, task, mapping);
+		callback->oVfReleasePageTablesForTask)(that, task, mapping);
 	PANIC_COND(!rolledBack, "ngreen",
 		"VF partial page-table commit could not be rolled back safely");
+	IORecursiveLockUnlock(gVfPageTableUpdateLock);
 	return false;
+}
+
+bool Gen11::vfReleasePageTablesForTask(void *that, void *task, void *mapping)
+{
+	PANIC_COND(!that || !task || !mapping ||
+	           !callback->oVfReleasePageTablesForTask,
+		"ngreen", "Missing native VF page-table release boundary");
+	PANIC_COND(!vfEnsurePageTableUpdateLock(), "ngreen",
+		"VF page-table release cannot enter the page-table transaction");
+	IORecursiveLockLock(gVfPageTableUpdateLock);
+	const bool released = FunctionCast(
+		vfReleasePageTablesForTask,
+		callback->oVfReleasePageTablesForTask)(that, task, mapping);
+	IORecursiveLockUnlock(gVfPageTableUpdateLock);
+	return released;
+}
+
+bool Gen11::vfUpdatePageTablesForTask(void *that, void *task, void *mapping)
+{
+	PANIC_COND(!that || !task || !mapping ||
+	           !callback->oVfUpdatePageTablesForTask,
+		"ngreen", "Missing native VF page-table update boundary");
+	PANIC_COND(!vfEnsurePageTableUpdateLock(), "ngreen",
+		"VF page-table update cannot enter the page-table transaction");
+	IORecursiveLockLock(gVfPageTableUpdateLock);
+	const bool updated = FunctionCast(
+		vfUpdatePageTablesForTask,
+		callback->oVfUpdatePageTablesForTask)(that, task, mapping);
+	IORecursiveLockUnlock(gVfPageTableUpdateLock);
+	return updated;
 }
 
 void *Gen11::vfNewPageTableForTask(void *that, void *task)
@@ -3868,7 +3979,7 @@ void *Gen11::vfNewPageTableForTask(void *that, void *task)
 		SYSLOG("ngreen", "V282: cannot serialize initial VF page-table synchronization");
 		return nullptr;
 	}
-	IOLockLock(gVfPageTableUpdateLock);
+	IORecursiveLockLock(gVfPageTableUpdateLock);
 
 	auto *accelerator = getMember<void *>(that, 0x10);
 	using GetAddressMode = uint32_t (*)(const void *);
@@ -3883,7 +3994,7 @@ void *Gen11::vfNewPageTableForTask(void *that, void *task)
 		pageTable = reinterpret_cast<WithOptions>(
 			callback->vfPpgtt64WithOptions)(accelerator, task);
 	if (!pageTable) {
-		IOLockUnlock(gVfPageTableUpdateLock);
+		IORecursiveLockUnlock(gVfPageTableUpdateLock);
 		return nullptr;
 	}
 
@@ -3970,8 +4081,211 @@ void *Gen11::vfNewPageTableForTask(void *that, void *task)
 		SYSLOG("ngreen", "V282: rejected partial VF page-table synchronization");
 	}
 
-	IOLockUnlock(gVfPageTableUpdateLock);
+	IORecursiveLockUnlock(gVfPageTableUpdateLock);
 	return pageTable;
+}
+
+void Gen11::vfSynchronizeAllTasks(void *that)
+{
+	PANIC_COND(!that || !callback->oVfSynchronizeAllTasks ||
+	           getMember<void *>(that, 0x10) != gVfAccelerator,
+		"ngreen", "Missing or foreign VF all-task synchronization owner");
+	PANIC_COND(!vfEnsurePageTableUpdateLock(), "ngreen",
+		"VF all-task synchronization cannot enter the page-table transaction");
+	IORecursiveLockLock(gVfPageTableUpdateLock);
+	// The native iterator borrows raw tasks from accelerator +0xc48. Task
+	// construction and final free now use this same recursive domain, so every
+	// +0x260 table remains published for the complete native walk.
+	FunctionCast(vfSynchronizeAllTasks,
+	             callback->oVfSynchronizeAllTasks)(that);
+	IORecursiveLockUnlock(gVfPageTableUpdateLock);
+}
+
+void Gen11::vfSynchronizeEachEntry(void *that, const void *source,
+	                                const NGIGAddressRange &range,
+	                                bool remap)
+{
+	PANIC_COND(!that || !source || !callback->vfFlushHardwareAfterGttUpdate,
+		"ngreen", "Missing VF entry synchronization owner");
+	PANIC_COND(!vfEnsurePageTableUpdateLock(), "ngreen",
+		"VF entry synchronization cannot enter the page-table transaction");
+	IORecursiveLockLock(gVfPageTableUpdateLock);
+
+	auto *destinationVtable = *reinterpret_cast<mach_vm_address_t **>(that);
+	auto *sourceVtable = *reinterpret_cast<mach_vm_address_t *const *>(source);
+	auto *accelerator = getMember<void *>(that, 0x10);
+	const bool rangeValid =
+		(range.start & (PAGE_SIZE - 1U)) == 0 &&
+		(range.length & (PAGE_SIZE - 1U)) == 0 &&
+		range.length <= UINT64_MAX - range.start;
+	bool synchronized = destinationVtable && sourceVtable && rangeValid &&
+		accelerator == gVfAccelerator &&
+		getMember<void *>(const_cast<void *>(source), 0x10) == accelerator;
+
+	using ReadEntry = bool (*)(const void *, uint64_t, uint64_t &, uint64_t &);
+	using WriteEntry = bool (*)(void *, const NGIGAddressRange &,
+	                           uint64_t, uint64_t);
+	auto readEntry = synchronized ? reinterpret_cast<ReadEntry>(
+		sourceVtable[0x140 / sizeof(mach_vm_address_t)]) : nullptr;
+	auto mapEntry = synchronized ? reinterpret_cast<WriteEntry>(
+		destinationVtable[0x118 / sizeof(mach_vm_address_t)]) : nullptr;
+	auto remapEntry = synchronized && remap ? reinterpret_cast<WriteEntry>(
+		destinationVtable[0x128 / sizeof(mach_vm_address_t)]) : nullptr;
+	synchronized = readEntry && mapEntry && (!remap || remapEntry);
+
+	const uint64_t end = range.start + range.length;
+	for (uint64_t address = range.start;
+	     synchronized && address != end; address += PAGE_SIZE) {
+		uint64_t physical = 0;
+		uint64_t flags = 0;
+		if (!readEntry(source, address, physical, flags))
+			continue;
+		const NGIGAddressRange pageRange {address, PAGE_SIZE};
+		// A one-page remap can fail only before its store when the destination
+		// hierarchy is absent. Build that missing hierarchy with mapRange rather
+		// than letting the native void helper publish a silent prefix.
+		synchronized = remap && remapEntry ?
+			remapEntry(that, pageRange, physical, flags) :
+			mapEntry(that, pageRange, physical, flags);
+		if (!synchronized && remap)
+			synchronized = mapEntry(that, pageRange, physical, flags);
+	}
+
+	using FlushGtt = void (*)(void *);
+	reinterpret_cast<FlushGtt>(
+		callback->vfFlushHardwareAfterGttUpdate)(accelerator);
+	IORecursiveLockUnlock(gVfPageTableUpdateLock);
+	if (!synchronized) {
+		vfMarkProtocolFault("VF entry synchronization failed inside void ABI");
+		PANIC_COND(true, "ngreen",
+			"Refusing partially synchronized VF page tables");
+	}
+}
+
+bool Gen11::vfPpgtt64RemapDescriptor(void *that,
+	                                  const NGIGAddressRange &range,
+	                                  void *descriptor)
+{
+	PANIC_COND(!that || !descriptor || !callback->oVfPpgtt64RemapDescriptor ||
+	           !callback->vfPageDescriptorRetain ||
+	           !callback->vfPageDescriptorRelease,
+		"ngreen", "Missing VF shared-descriptor remap boundary");
+	PANIC_COND(!vfEnsurePageTableUpdateLock(), "ngreen",
+		"VF shared-descriptor remap cannot enter the page-table transaction");
+	IORecursiveLockLock(gVfPageTableUpdateLock);
+
+	auto *vtable = *reinterpret_cast<mach_vm_address_t **>(that);
+	using ReadDescriptor = bool (*)(const void *,
+	                               const NGIGAddressRange &, void **);
+	auto readDescriptor = vtable ? reinterpret_cast<ReadDescriptor>(
+		vtable[0x168 / sizeof(mach_vm_address_t)]) : nullptr;
+	void *oldDescriptor = nullptr;
+	const bool rangeValid = range.length == 0x40000000ULL &&
+		(range.start & (range.length - 1U)) == 0 &&
+		range.length <= UINT64_MAX - range.start;
+	const bool oldPresent = rangeValid && readDescriptor &&
+		readDescriptor(that, range, &oldDescriptor) && oldDescriptor;
+	PANIC_COND(!oldPresent, "ngreen",
+		"VF descriptor remap has no stable old shared descriptor");
+
+	using DescriptorRef = void (*)(void *);
+	reinterpret_cast<DescriptorRef>(
+		callback->vfPageDescriptorRetain)(oldDescriptor);
+	const bool remapped = FunctionCast(
+		vfPpgtt64RemapDescriptor,
+		callback->oVfPpgtt64RemapDescriptor)(that, range, descriptor);
+	if (!remapped) {
+		// The admitted native body is pinned as an unconditional store/success.
+		// Preserve the retained old backing if that contract is ever violated.
+		vfMarkProtocolFault("VF shared-descriptor remap violated its pinned ABI");
+		PANIC_COND(true, "ngreen",
+			"Cannot recover an unknown shared-descriptor remap state");
+	}
+
+	// The extra reference keeps the old descriptor and its CPU page out of
+	// PagePool while native code releases the destination reference first. The
+	// new parent entry is already stored here; retire all prior engine walks
+	// before the retained old page is allowed to reach zero/reuse.
+	vfRequireCompletedPpgttUpdate();
+	reinterpret_cast<DescriptorRef>(
+		callback->vfPageDescriptorRelease)(oldDescriptor);
+	IORecursiveLockUnlock(gVfPageTableUpdateLock);
+	return true;
+}
+
+void *Gen11::vfPagePoolAllocatePage(void *that)
+{
+	PANIC_COND(!vfAdmitPagePoolTransactionOwner(that) ||
+	           !callback->oVfPagePoolAllocatePage ||
+	           !vfEnsurePageTableUpdateLock(), "ngreen",
+		"Missing VF PagePool allocation transaction");
+	IORecursiveLockLock(gVfPageTableUpdateLock);
+	auto *descriptor = FunctionCast(
+		vfPagePoolAllocatePage, callback->oVfPagePoolAllocatePage)(that);
+	IORecursiveLockUnlock(gVfPageTableUpdateLock);
+	return descriptor;
+}
+
+void Gen11::vfPagePoolReleasePage(void *that, const void *descriptor)
+{
+	PANIC_COND(!vfAdmitPagePoolTransactionOwner(that) || !descriptor ||
+	           !callback->oVfPagePoolReleasePage ||
+	           !vfEnsurePageTableUpdateLock(), "ngreen",
+		"Missing VF PagePool return transaction");
+	IORecursiveLockLock(gVfPageTableUpdateLock);
+	FunctionCast(vfPagePoolReleasePage,
+	             callback->oVfPagePoolReleasePage)(that, descriptor);
+	IORecursiveLockUnlock(gVfPageTableUpdateLock);
+}
+
+void Gen11::vfPagePoolPrune(void *that, uint32_t age)
+{
+	PANIC_COND(!vfAdmitPagePoolTransactionOwner(that) ||
+	           !callback->oVfPagePoolPrune ||
+	           !vfEnsurePageTableUpdateLock(), "ngreen",
+		"Missing VF PagePool prune transaction");
+	IORecursiveLockLock(gVfPageTableUpdateLock);
+	FunctionCast(vfPagePoolPrune,
+	             callback->oVfPagePoolPrune)(that, age);
+	IORecursiveLockUnlock(gVfPageTableUpdateLock);
+}
+
+void Gen11::vfPagePoolFree(void *that)
+{
+	PANIC_COND(!vfAdmitPagePoolTransactionOwner(that) ||
+	           !callback->oVfPagePoolFree ||
+	           !vfEnsurePageTableUpdateLock(), "ngreen",
+		"Missing VF PagePool final-free transaction");
+	IORecursiveLockLock(gVfPageTableUpdateLock);
+	FunctionCast(vfPagePoolFree,
+	             callback->oVfPagePoolFree)(that);
+	IORecursiveLockUnlock(gVfPageTableUpdateLock);
+}
+
+void Gen11::vfReleasePagePool(void *that)
+{
+	PANIC_COND(!that || !callback->oVfReleasePagePool ||
+	           !vfEnsurePageTableUpdateLock(), "ngreen",
+		"Missing VF manager PagePool teardown transaction");
+	IORecursiveLockLock(gVfPageTableUpdateLock);
+	FunctionCast(vfReleasePagePool,
+	             callback->oVfReleasePagePool)(that);
+	IORecursiveLockUnlock(gVfPageTableUpdateLock);
+}
+
+void Gen11::vfMemoryManagerFree(void *that)
+{
+	PANIC_COND(!that || !callback->oVfMemoryManagerFree ||
+	           !vfEnsurePageTableUpdateLock(), "ngreen",
+		"Missing VF memory-manager final-free transaction");
+	IORecursiveLockLock(gVfPageTableUpdateLock);
+	// The native destructor clears the kernel/global table, segment ranges and
+	// device memory before delegating to OSObject::free(). Holding the outermost
+	// boundary prevents a display-mode synchronization or task transaction from
+	// observing those fields halfway through teardown.
+	FunctionCast(vfMemoryManagerFree,
+	             callback->oVfMemoryManagerFree)(that);
+	IORecursiveLockUnlock(gVfPageTableUpdateLock);
 }
 
 void Gen11::vfUpdateMappingCacheType(void *that, uint32_t requestedType)
@@ -3986,7 +4300,7 @@ void Gen11::vfUpdateMappingCacheType(void *that, uint32_t requestedType)
 
 	PANIC_COND(!vfEnsurePageTableUpdateLock(), "ngreen",
 		"VF cache-type update cannot acquire a sleepable transaction lock");
-	IOLockLock(gVfPageTableUpdateLock);
+	IORecursiveLockLock(gVfPageTableUpdateLock);
 
 	constexpr uint32_t cacheFlagMask = 3U << 25;
 	const uint32_t oldResourceFlags = getMember<uint32_t>(that, 0x108);
@@ -3998,21 +4312,21 @@ void Gen11::vfUpdateMappingCacheType(void *that, uint32_t requestedType)
 		// Preserve native behavior for a resource whose mapping has not yet
 		// been created: only its advertised low two cache bits change.
 		getMember<uint32_t>(that, 0x108) = newResourceFlags;
-		IOLockUnlock(gVfPageTableUpdateLock);
+		IORecursiveLockUnlock(gVfPageTableUpdateLock);
 		return;
 	}
 
 	const uint32_t oldMappingType = getMember<uint32_t>(mapping, 0x114);
 	if (oldMappingType == requestedType) {
 		getMember<uint32_t>(that, 0x108) = newResourceFlags;
-		IOLockUnlock(gVfPageTableUpdateLock);
+		IORecursiveLockUnlock(gVfPageTableUpdateLock);
 		return;
 	}
 	const bool installed = (getMember<uint32_t>(mapping, 0x10) & 4U) != 0;
 	if (!installed) {
 		getMember<uint32_t>(that, 0x108) = newResourceFlags;
 		getMember<uint32_t>(mapping, 0x114) = requestedType;
-		IOLockUnlock(gVfPageTableUpdateLock);
+		IORecursiveLockUnlock(gVfPageTableUpdateLock);
 		return;
 	}
 
@@ -4026,7 +4340,7 @@ void Gen11::vfUpdateMappingCacheType(void *that, uint32_t requestedType)
 		gVfAccelerator && getMember<void *>(mapping, 0x88) == gVfAccelerator &&
 		(!gVfCtbEverEnabled || vfNativeGpuWorkReady());
 	if (!admitted) {
-		IOLockUnlock(gVfPageTableUpdateLock);
+		IORecursiveLockUnlock(gVfPageTableUpdateLock);
 		vfMarkProtocolFault("installed VF cache-type update lacks stable owners or transport");
 		PANIC_COND(true, "ngreen",
 			"Refusing installed VF cache-type update before page-table mutation");
@@ -4038,7 +4352,7 @@ void Gen11::vfUpdateMappingCacheType(void *that, uint32_t requestedType)
 	getMember<uint32_t>(that, 0x108) = newResourceFlags;
 	getMember<uint32_t>(mapping, 0x114) = requestedType;
 	if (updateGPUPageTable(mapping)) {
-		IOLockUnlock(gVfPageTableUpdateLock);
+		IORecursiveLockUnlock(gVfPageTableUpdateLock);
 		return;
 	}
 
@@ -4059,7 +4373,7 @@ void Gen11::vfUpdateMappingCacheType(void *that, uint32_t requestedType)
 		gucRetired = enginesRetired && vfInvalidateTLBSync(
 			gVfHardwareGuc, NGVfGuCRequest::TlbTarget::Guc);
 	}
-	IOLockUnlock(gVfPageTableUpdateLock);
+	IORecursiveLockUnlock(gVfPageTableUpdateLock);
 
 	SYSLOG("ngreen", "V281: cache-type update failed; old state replay=%d engines=%d guc=%d",
 	       replayedOldType, enginesRetired, gucRetired);
@@ -4170,6 +4484,13 @@ void Gen11::vfAccelTaskFree(void *that)
 {
 	PANIC_COND(!that || !callback->oVfAccelTaskFree,
 		"ngreen", "Missing native VF task-free boundary");
+	if (gVfIdentity != VfIdentity::Virtual) {
+		FunctionCast(vfAccelTaskFree, callback->oVfAccelTaskFree)(that);
+		return;
+	}
+	PANIC_COND(!vfEnsurePageTableUpdateLock(), "ngreen",
+		"VF task free cannot enter the page-table transaction");
+	IORecursiveLockLock(gVfPageTableUpdateLock);
 	// Native final free releases the Aux table and private PPGTT before its
 	// inherited owner. Ordinary hardware contexts retain the task; the special
 	// task-owned contexts are released by IGAccelTask::release before free can
@@ -4185,6 +4506,10 @@ void Gen11::vfAccelTaskFree(void *that)
 		vfRequireCompletedPpgttUpdate();
 	}
 	FunctionCast(vfAccelTaskFree, callback->oVfAccelTaskFree)(that);
+	// The original Intel body delegates to inherited IOAccelTask::free before
+	// returning, so accelerator-list unlink is complete before this transaction
+	// is opened to synchronizeAllTasks or another task factory.
+	IORecursiveLockUnlock(gVfPageTableUpdateLock);
 }
 
 bool Gen11::IGAccelTaskIsKernelGPUTask(const void *that)
@@ -4622,10 +4947,17 @@ void *Gen11::igAccelTaskWithOptions(void *that)
 	// Reset the stale value before the next unassigned accelerator constructs its
 	// kernel task.  Changing the per-object identity later in initialization is
 	// unsafe because address mode and page-table state have already been chosen.
-	if (vfIdentifyDevice() == VfIdentity::Virtual && that != nullptr &&
-	    getMember<void *>(that, 0x150) == nullptr) {
+	const bool vfTask = vfIdentifyDevice() == VfIdentity::Virtual && that != nullptr;
+	if (vfTask && !vfEnsurePageTableUpdateLock()) {
+		SYSLOG("ngreen", "V283: cannot serialize VF task construction");
+		return nullptr;
+	}
+	if (vfTask)
+		IORecursiveLockLock(gVfPageTableUpdateLock);
+	if (vfTask && getMember<void *>(that, 0x150) == nullptr) {
 		if (callback->igAccelTaskCounter == 0) {
 			SYSLOG("ngreen", "V216: bootstrap task counter symbol is unavailable; refusing unsafe allocation");
+			IORecursiveLockUnlock(gVfPageTableUpdateLock);
 			return nullptr;
 		}
 
@@ -4649,15 +4981,21 @@ void *Gen11::igAccelTaskWithOptions(void *that)
 				SYSLOG("ngreen",
 				       "V216: could not stabilize VF bootstrap task counter (current=%llu); refusing unsafe allocation",
 				       static_cast<unsigned long long>(*counter));
+				IORecursiveLockUnlock(gVfPageTableUpdateLock);
 				return nullptr;
 			}
 		}
 	}
 
 	// Preserve native ownership: a failed factory returns null. Never write an
-	// unrelated IOAccelTask base-class field or substitute a borrowed task.
-	return FunctionCast(igAccelTaskWithOptions,
-	                    callback->oigAccelTaskWithOptions)(that);
+	// unrelated IOAccelTask base-class field or substitute a borrowed task. The
+	// recursive domain spans inherited early list publication, private-table
+	// construction and failed-init destruction/list unlink.
+	auto *task = FunctionCast(igAccelTaskWithOptions,
+	                         callback->oigAccelTaskWithOptions)(that);
+	if (vfTask)
+		IORecursiveLockUnlock(gVfPageTableUpdateLock);
+	return task;
 }
 
 void *Gen11::getBlit3DContext(void *that, bool create)

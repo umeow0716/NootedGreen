@@ -1,7 +1,7 @@
 # Tahoe SR-IOV protocol audit — in progress
 
 Updated: 2026-10-04. The last dynamic source baseline is `ce166c8`; the current
-offline-reviewed checkpoint is V281 cache-type page-table rollback on
+offline-reviewed checkpoint is V283 common task/table/PagePool serialization on
 `codex/tahoe-sriov-vf`. This is NOT a boot-test candidate or a successful
 driver baseline. The `ce166c8` run produced repeatable host PF DMAR faults
 followed by i915 hangs and a host reboot. Keep `macos-tahoe-sriov` shut off until the
@@ -16,6 +16,51 @@ Glass B7's official Host Application documentation explicitly states that OSX
 capture is unsupported with no current support plan, so this is a future
 guest-producer development task rather than ordinary configuration. The Linux
 KVMFR/client transport remains the intended receiving side.
+
+## V283 common page-table ownership transaction (offline)
+
+The native Tahoe task factory publishes a task in the accelerator list before
+constructing task +0x260, while display-mode synchronization walks that list
+without a local lock. Native commit, update, release, 32/64-bit unmap, PagePool
+allocate/release/prune and manager teardown also did not share one serialization
+domain. In particular, PagePool release clears a returned CPU page before its
+optional internal lock, and the manager creates these pools with locking option
+zero. The 64-bit descriptor remap releases its old shared descriptor before it
+stores/retains the replacement and returns unconditional success. These exact
+bodies, callers and relevant vtable slots are pinned in both admitted payloads.
+
+V283 changes the lifetime-published cache mutex to an `IORecursiveLock` and
+uses it as the common VF ownership transaction. It now spans complete concrete
+task construction/failure unwind and final task free/list unlink; manager
+commit/update/release and all-task synchronization; entry synchronization;
+32/64-bit unmap and shrink; PagePool allocation, zero-before-return, prune and
+final free; manager pool release; and the outermost memory-manager free that
+clears the global table and segment ranges. Recursion is required because the
+native outer operations deliberately enter the routed lower operations during
+normal cleanup and failure unwind. PF/non-VF paths retain their native behavior.
+
+The void native entry synchronizer is replaced on a classified VF with an
+observable per-page transaction. A failed remap may use the allocating map
+operation to build a missing destination hierarchy; an unrecoverable result
+records a protocol fault and fail-stops after preserving the native deferred
+flush ordering. For a 1-GiB shared descriptor remap, the old descriptor receives
+an extra reference before the native release/store/retain sequence. A heavy
+Engines TLB acknowledgement completes before that extra reference is released,
+so its CPU page cannot return to PagePool and be zeroed/reused while an older
+engine walk can still address it.
+
+The route inventory is now 119 unique symbols: 113 accelerator, three
+framebuffer and three System KC. The exact allocation/prune/factory caller
+inventory also pins the manager as the only direct pool factory and its
+`options=0` argument; every PagePool wrapper rejects a foreign owner or a
+threaded/callback-backed pool before attempting the sleepable transaction.
+Fourteen selected source mutations reject a missing common boundary/route or
+that admission guard, and 15 ownership/rollback states exercise the descriptor
+and synchronization policy. The finalized complete static suite passed at
+`/tmp/ngreen-static.vwEUJ0` with only the two known SDK macro warnings. This is
+offline serialization and lifetime evidence, not runtime DMA proof. Submission
+admission, render/depth/CCS failure propagation, callback/IRQ teardown and the
+remaining PF-owned MMIO/DMA negative proof still block a VM boot.
 
 ## V281 cache-type page-table rollback (offline)
 

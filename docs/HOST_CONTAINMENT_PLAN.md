@@ -99,8 +99,12 @@ real Metal command completion and media workloads, clean shutdown/quiescence,
 and zero new PF DMAR/i915 faults. Only then may display and service integration
 be evaluated as a separate phase.
 
-V282 closes failed initial PPGTT clone publication by releasing an unpublished
-partial table before task +0x260 is assigned. It does not establish PagePool
-recycle/prune safety or a common lock across live commit, cache update, unmap
-and release. The hard hold therefore remains unchanged; no dynamic VF test is
-admitted by this checkpoint.
+V283 now gives task publication/final unlink, all-task synchronization, live
+commit/update/release/unmap, descriptor retirement, PagePool reuse/prune/free
+and outer manager teardown one recursive transaction. Replaced shared
+descriptors remain retained through an acknowledged Engines invalidation. This
+closes the prior PagePool/task-list/common-serialization blocker only. It does
+not prove complete command-submission admission, render/depth/CCS failure
+propagation, callback/IRQ teardown or every retained native PF-owned MMIO/DMA
+path. The hard hold therefore remains unchanged; no dynamic VF test is admitted
+by this checkpoint.

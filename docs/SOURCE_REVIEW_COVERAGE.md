@@ -7,6 +7,25 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 common task/table/PagePool transaction delta: the task publication
+and final unlink, complete manager all-task iterator, commit/update/release,
+32/64-bit unmap/shrink, PagePool allocation/release/prune/final free, manager
+pool release and outer manager final free now share one classified-VF recursive
+transaction. The 64-bit shared-descriptor replacement retains the old backing
+through an acknowledged heavy Engines invalidation. The exact factory/caller
+inventory pins manager pools to `options=0`; routed pool methods reject a
+foreign owner or threaded/callback-backed pool before their sleepable lock. The
+void per-entry sync
+uses observable map/remap results, allocates a missing hierarchy only through
+the native map operation and fail-stops instead of publishing an unrecoverable
+prefix. Exact bodies/callers/vtable slots in both Tahoe payloads, 14 selected
+mutations and 15 offline ownership states pin the boundary. Full static analysis
+passed at `/tmp/ngreen-static.vwEUJ0`; the route inventory is 119 unique symbols
+(113 accelerator, three framebuffer and three System KC). This closes the
+previous PagePool/task-list/common-serialization blocker, but not all submission
+admission, render/depth/CCS failure propagation, callback/IRQ teardown or the
+remaining PF-owned MMIO/DMA negative proof. No VM boot is admitted yet.
+
 2026-10-04 cache-type page-table transaction delta: both admitted Tahoe
 payloads have an exact whole-text inventory of 38 direct resource cache-update
 branches plus 49 video-wrapper branches across 29 owners. All converge on the

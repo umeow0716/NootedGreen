@@ -173,19 +173,49 @@ private:
 	static void vfPpgtt32UnmapRange(
 		void *that, const NGIGAddressRange &range);
 	mach_vm_address_t oVfPpgtt32UnmapRange {};
+	static void vfPpgtt64UnmapRange(
+		void *that, const NGIGAddressRange &range);
+	mach_vm_address_t oVfPpgtt64UnmapRange {};
 	static void vfPpgtt64ShrinkRange(
 		void *that, const NGIGAddressRange &range);
 	mach_vm_address_t oVfPpgtt64ShrinkRange {};
 	static bool vfCommitPageTablesForTask(
 		void *that, void *task, void *mapping);
 	mach_vm_address_t oVfCommitPageTablesForTask {};
-	mach_vm_address_t vfReleasePageTablesForTask {};
+	static bool vfReleasePageTablesForTask(
+		void *that, void *task, void *mapping);
+	mach_vm_address_t oVfReleasePageTablesForTask {};
+	static bool vfUpdatePageTablesForTask(
+		void *that, void *task, void *mapping);
+	mach_vm_address_t oVfUpdatePageTablesForTask {};
 	static void *vfNewPageTableForTask(void *that, void *task);
 	mach_vm_address_t oVfNewPageTableForTask {};
+	static void vfSynchronizeAllTasks(void *that);
+	mach_vm_address_t oVfSynchronizeAllTasks {};
+	static void vfSynchronizeEachEntry(
+		void *that, const void *source, const NGIGAddressRange &range,
+		bool remap);
+	static bool vfPpgtt64RemapDescriptor(
+		void *that, const NGIGAddressRange &range, void *descriptor);
+	mach_vm_address_t oVfPpgtt64RemapDescriptor {};
+	mach_vm_address_t vfPageDescriptorRetain {};
+	mach_vm_address_t vfPageDescriptorRelease {};
 	mach_vm_address_t vfGetHardwareContextAddressMode {};
 	mach_vm_address_t vfPpgtt32WithOptions {};
 	mach_vm_address_t vfPpgtt64WithOptions {};
 	mach_vm_address_t vfFlushHardwareAfterGttUpdate {};
+	static void *vfPagePoolAllocatePage(void *that);
+	mach_vm_address_t oVfPagePoolAllocatePage {};
+	static void vfPagePoolReleasePage(void *that, const void *descriptor);
+	mach_vm_address_t oVfPagePoolReleasePage {};
+	static void vfPagePoolPrune(void *that, uint32_t age);
+	mach_vm_address_t oVfPagePoolPrune {};
+	static void vfPagePoolFree(void *that);
+	mach_vm_address_t oVfPagePoolFree {};
+	static void vfReleasePagePool(void *that);
+	mach_vm_address_t oVfReleasePagePool {};
+	static void vfMemoryManagerFree(void *that);
+	mach_vm_address_t oVfMemoryManagerFree {};
 	static void vfUpdateMappingCacheType(void *that, uint32_t requestedType);
 	mach_vm_address_t oVfUpdateMappingCacheType {};
 	static bool vfWaitForRingSpace(void *that, uint32_t requestedDwords);
