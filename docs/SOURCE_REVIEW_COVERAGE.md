@@ -7,6 +7,12 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 bind pairing: native bindResource and KC dirty/channel-add complete
+bodies reviewed/pinned. prepare false skips channel-add; post-bind cleanup
+requires both channel state and preparation. Channel +0xa0 is distinct from
+prepare +0x28 and OSObject lifetime. Storage recursion/dirty subordinate
+helpers and complete owner domain remain pending; no driver change.
+
 2026-10-04 borrowed lookup: three complete KC wrappers/lookup/channel-cleanup
 bodies reviewed and pinned, plus native +0x178/+0x198 cleanup identities.
 Namespace lookup has no retain; removeFromChannel updates events/counts rather

@@ -35,6 +35,8 @@ EVENT_DISABLE_STAMP_LOCKED = "__ZN20IOAccelEventMachine223disable_stamp_interrup
 EVENT_ENABLE_STAMP = "__ZN20IOAccelEventMachine220enableStampInterruptEi"
 EVENT_DISABLE_STAMP = "__ZN20IOAccelEventMachine221disableStampInterruptEi"
 EVENT_OWNER_BODIES = {
+    "__ZN16IOAccelResource210checkDirtyEv": (0x144, "9e26e53e3aa25e3a0d7c81a710ca44d4fb0a8081b31d186bb04566f618af5a64"),
+    "__ZN16IOAccelResource212addToChannelEP15IOAccelChannel2j": (0x22a, "696a8c305a8d69ce7573addf9147eae02e4c4055bd231d9b433f88edec44631c"),
     "__ZN14IOAccelShared214lookupResourceEjPPv": (0xe, "839e3c8f1d2321d46fab9a7a166f590702861f015fe827f73d1ffd2b4e4ce8b7"),
     "__ZNK16IOAccelNamespace8lookupIdEjPPv": (0x2a, "1f00cff53025fc424b77a62fde2f5d9357dc200a4604f1bc5edcd95a6aad6f4a"),
     "__ZN16IOAccelResource217removeFromChannelEP15IOAccelChannel2": (0x14c, "6c564440b5d53195a0a352e8bddd4516e114a533aa5facb11f0de6c35a1b73ba"),
@@ -1142,6 +1144,7 @@ def check(path, boot_path=None):
     assert read(0x14ba60a0, 3) == bytes.fromhex("ff 50 28"), "changed finished transaction final release"
     for slot, method in ((0x170, "__ZN16IOAccelResource27prepareEv"),
                          (0x178, "__ZN16IOAccelResource28completeEv"),
+                         (0x190, "__ZN16IOAccelResource212addToChannelEP15IOAccelChannel2j"),
                          (0x198, "__ZN16IOAccelResource217removeFromChannelEP15IOAccelChannel2")):
         raw = struct.unpack("<Q", read(address_of(RESOURCE_VTABLE) + 16 + slot, 8))[0]
         assert raw >> 63 == 0 and (raw >> 30) & 3 == 1, "changed resource lifecycle virtual encoding"

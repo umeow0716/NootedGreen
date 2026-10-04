@@ -6955,6 +6955,27 @@ No executable patch or runtime mutation.
 
 ### Update fanout must participate in the same owner transaction
 
+Bind/preparation pairing: reviewed complete native bindResource (0x48), KC
+checkDirty (0x144) and addToChannel (0x22a); pinned bodies, native checkDirty
+import, prepare-result branch and channel dispatch, plus declared base channel
+virtual. bindResource ignores dirty-query return, invokes resource prepare
++0x170 and returns false immediately on AL false. Only prepare success calls
+addToChannel +0x190 with access 1 and cached client channel +0x170, then returns
+true. color_resolve's false bind path goes to mutex/busy cleanup, while its
+post-bind paths use removeFromChannel and concrete complete. Do not insert
+post-bind cleanup on a path that never acquired those states.
+
+checkDirty can inspect mapping installed/ownership flags, update generation/
+dirty metadata and call subordinate storage/surface helpers; its result is
+dirty-state classification, not an admission result consumed by bindResource.
+Subordinate helper bodies remain unreviewed here. addToChannel increments
+resource +0xa0 before optional storage delegation, initializes/ORs access
++0x98 and records channel id +0x9c when first admitted. These counters are
+separate from resource prepare +0x28 and are not OSObject retains or GPU ACKs.
+Both add/remove paths have storage recursion; full effective lifetime and
+subordinate event callback closure remain pending. No new production/runtime
+change, and no claim that the existing prepare body was newly reviewed.
+
 Borrowed lookup and cleanup identities: reviewed full Shared2::lookupResource
 (0xe), Namespace::lookupId (0x2a), and Resource2::removeFromChannel (0x14c)
 in paired archived KC. Shared wrapper tail-calls namespace lookup. Lookup
