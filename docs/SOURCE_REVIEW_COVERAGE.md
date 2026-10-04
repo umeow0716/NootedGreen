@@ -10,6 +10,17 @@ The current dynamic-entry gate table is
 
 ## Scope
 
+2026-10-05 V306 active-VF ownership correction: the third no-VF maintenance
+boot proved that the guest can stall before SSH independently of VF attachment,
+while a separate running `win11` domain was found to own the exact target VF
+`0000:00:02.1`.  V305 checked only for a surviving QEMU process of the target
+macOS domain, so it could not reject this cross-domain ownership conflict.
+The preflight now enumerates every running libvirt domain, parses each active
+XML and fails closed if any domain already contains the target VF.  The running
+Windows domain was not modified.  V306 full static passes at
+`/tmp/ngreen-static.wCvNGd`; clean commit/push and exact-SHA CI revalidation
+remain required before any further boot.
+
 2026-10-05 V305 disk-integrity containment correction: a read-only pre-boot
 check found one missing data-cluster refcount in the system qcow2 (reported as
 two related corruptions).  A byte-identical sparse recovery copy was preserved

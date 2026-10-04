@@ -77,6 +77,10 @@ binary, build and protocol validation is permitted.
    inactive XML and require `qemu-img check` to pass.  Do not boot a dirty or
    structurally inconsistent image; preserve a byte-identical recovery copy
    before any repair.
+10. Enumerate every running libvirt domain and inspect its active XML.  The
+    target VF `0000:00:02.1` must not appear in any active domain, including a
+    different guest.  A vfio-pci driver binding proves only host-driver state;
+    it does not prove that another QEMU process has not already opened the VF.
 
 The kill watcher and deadline must run independently of the Codex process and
 guest network. They may stop only the named libvirt domain; they must not rebind

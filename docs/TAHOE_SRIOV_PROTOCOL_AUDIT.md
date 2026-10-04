@@ -1,7 +1,7 @@
 # Tahoe SR-IOV protocol audit — in progress
 
 Updated: 2026-10-05. The last dynamic source baseline is `ce166c8`; the current
-offline-reviewed worktree is V305 disk-integrity containment correction on
+offline-reviewed worktree is V306 active-VF ownership containment correction on
 `codex/tahoe-sriov-vf`. This is NOT a boot-test candidate or a successful
 driver baseline. The `ce166c8` run produced repeatable host PF DMAR faults
 followed by i915 hangs and a host reboot. Keep `macos-tahoe-sriov` shut off until the
@@ -20,6 +20,26 @@ KVMFR/client transport remains the intended receiving side.
 The authoritative dynamic-entry checklist is
 [`DYNAMIC_TEST_GATE.md`](DYNAMIC_TEST_GATE.md). Any open static gate keeps the
 VM hard hold in force.
+
+## V306 active-VF ownership correction (offline)
+
+- A third maintenance boot removed the VF hostdev entirely and used the normal
+  runtime OpenCore image.  It remained at the same guest kernel screen for the
+  full independent 15-minute deadline: framebuffer hash, block I/O counters
+  and guest transmit bytes stopped changing, and SSH never became reachable.
+  The deadline destroyed only the macOS domain.  Both writable qcow2 images
+  subsequently passed read-only integrity checks, the exact runtime XML was
+  restored, and the host recorded no configured i915/IOMMU containment trigger.
+- The repeated IOVersatile and unsupported page-shift messages are also present
+  in earlier successful boots that reached SSH in roughly 60--90 seconds, so
+  they are not by themselves the new blocking cause.
+- A separate running `win11` libvirt domain was found to own the exact target
+  VF `0000:00:02.1`.  V305 only rejected a residual QEMU process for the macOS
+  domain.  V306 adds a global running-domain active-XML inventory and refuses
+  when any domain already owns the target VF.  It does not stop or alter that
+  domain.  The complete local static suite passes at
+  `/tmp/ngreen-static.wCvNGd`; the no-VF boot baseline and exact V306 CI must
+  still be recovered before a contained VF run.
 
 ## V305 writable-qcow2 integrity correction (offline)
 

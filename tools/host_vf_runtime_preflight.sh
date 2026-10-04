@@ -173,6 +173,38 @@ else
 	fail "PF/VF IOMMU isolation is not proven (observed ${pf_group:-none}/${vf_group:-none})"
 fi
 
+active_vf_owners=()
+active_domain_inventory_ok=1
+if running_domains=$(virsh -c "$libvirt_uri" list --state-running --name 2>/dev/null); then
+	while IFS= read -r running_domain; do
+		[[ -n $running_domain ]] || continue
+		running_xml=$(virsh -c "$libvirt_uri" dumpxml "$running_domain" 2>/dev/null || true)
+		if [[ -z $running_xml ]]; then
+			fail "cannot inspect active XML for running domain ${running_domain}"
+			active_domain_inventory_ok=0
+			continue
+		fi
+		running_vf_count=$(xml_value 'count(/domain/devices/hostdev[@type="pci"]/source/address[@domain="0x0000" and @bus="0x00" and @slot="0x02" and @function="0x1"])' "$running_xml" || true)
+		if [[ ! $running_vf_count =~ ^[0-9]+$ ]]; then
+			fail "cannot prove ${vf_bdf} hostdev absence for running domain ${running_domain}"
+			active_domain_inventory_ok=0
+		elif ((running_vf_count != 0)); then
+			active_vf_owners+=("$running_domain")
+		fi
+	done <<< "$running_domains"
+else
+	fail "cannot enumerate running libvirt domains for ${vf_bdf} ownership"
+	active_domain_inventory_ok=0
+fi
+if ((active_domain_inventory_ok)); then
+	if ((${#active_vf_owners[@]} == 0)); then
+		pass "no active libvirt domain owns target VF ${vf_bdf}"
+	else
+		owner_list=$(IFS=,; printf '%s' "${active_vf_owners[*]}")
+		fail "target VF ${vf_bdf} is already assigned to active domain(s): ${owner_list}"
+	fi
+fi
+
 if pgrep -af '[q]emu-system' | grep -Eq '(guest=macos-tahoe-sriov|name=macos-tahoe-sriov)'; then
 	fail "a QEMU process for ${domain_name} is still present"
 else

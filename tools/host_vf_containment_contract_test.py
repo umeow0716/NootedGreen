@@ -65,6 +65,12 @@ def main() -> None:
             "writable qcow2 inventory")
     require(preflight, 'qemu-img check --output=json "$disk_path"',
             "read-only qcow2 integrity gate")
+    require(preflight, 'virsh -c "$libvirt_uri" list --state-running --name',
+            "global active-domain inventory")
+    require(preflight, 'active_vf_owners+=("$running_domain")',
+            "active VF owner recording")
+    require(preflight, "no active libvirt domain owns target VF",
+            "exclusive active VF ownership gate")
     require(preflight, "journalctl -k -b", "current-boot journal gate")
     require(preflight, '((EUID == 0))', "root journal gate")
 
