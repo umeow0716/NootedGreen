@@ -7,6 +7,12 @@ audit's runtime blockers are open.
 
 ## Scope
 
+Four complete KC bodies: pool metaclass allocator/default constructor and
+pool-list add/remove now pinned. Concrete init dispatch checked via allocator
+bytes and chained vtable target. Failed-init unlinked-list removal is locally
+nonfatal. XNU ordinary zero-allocation source inspected; exact Boot allocator
+and optional tracking branch remain pending, not runtime cleanup proof.
+
 Backing-source correction: resolve/3D sizes are local defined native qwords
 5100/d240 hex, not external imports; address/symbol/value assertions added.
 Base context free re-read and full hash added to existing anchor coverage;

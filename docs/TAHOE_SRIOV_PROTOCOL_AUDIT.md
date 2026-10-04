@@ -6955,6 +6955,31 @@ No executable patch or runtime mutation.
 
 ### Update fanout must participate in the same owner transaction
 
+#### Pool allocator and failed-init list removal
+
+Complete System KC metaclass allocator `14b6abac/48`, default constructor
+`14b6ac08/30`, pool-list add `14b82212/14` and remove `14b82226/9a`
+reviewed and pinned. Allocator requests 18b8 bytes and installs object
+vtable14bd2510; init virtual118 resolves to14b6ac68. Tests now check the
+allocator install bytes and exact chained init target, not only body hashes.
+Stub10036 dereferences cell24048, level0 targetffffff8000a1cc40 named
+OSObject_typed_operator_new; constructor10108 resolves OSObjectC2, and
+100ae resolves OSMetaClass::instanceConstructed. No allocator-local null
+test occurs before constructing the returned object.
+
+Pool init adds to acceleratorC68 list only after successful cursor/record
+setup. Free nevertheless removes from that list unconditionally. Removal
+of an unlinked pool logs and returns without decrementing count or clearing
+other nodes; it is not a fatal assertion locally. This permits selected
+early-init failure cleanup without corrupting list membership. Allocator
+zeroing is still relevant because early failure precedes record1860 setup.
+Local XNU12377.121.6 OSObject.cpp lines312–345 shows both ordinary typed
+and size-fallback allocation request Z_WAITOK_ZERO; optional IOTRACKING
+trackedNew and exact Boot KC implementation must be checked separately
+before using this source analogy as runtime cleanup proof. No production
+status guard is admitted yet. Outer serialization and DMA retirement remain
+independent unresolved requirements.
+
 #### Backing-size correction and base-owner teardown
 
 Correction to the earlier initializer note: c26c0 and b0c40 have no

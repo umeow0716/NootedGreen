@@ -35,6 +35,10 @@ EVENT_DISABLE_STAMP_LOCKED = "__ZN20IOAccelEventMachine223disable_stamp_interrup
 EVENT_ENABLE_STAMP = "__ZN20IOAccelEventMachine220enableStampInterruptEi"
 EVENT_DISABLE_STAMP = "__ZN20IOAccelEventMachine221disableStampInterruptEi"
 EVENT_OWNER_BODIES = {
+    "__ZNK25IOAccelCommandBufferPool29MetaClass5allocEv": (0x48, "9859ba4306233dba03cef99c8cc67a1001c7dc469e0fef1f93212822331ad712"),
+    "__ZN25IOAccelCommandBufferPool2C1Ev": (0x30, "22f68369dac6b818a50084fdfa943033e3801c1b55f91858521f9c5cf77fbb36"),
+    "__ZN28IOAccelCommandBufferPoolList14addCommandPoolEP25IOAccelCommandBufferPool2": (0x14, "dd5d756962a0d9d7bd2c5168492d6202cd17167529578338f639cf9abea4cdc4"),
+    "__ZN28IOAccelCommandBufferPoolList17removeCommandPoolEP25IOAccelCommandBufferPool2": (0x9a, "fcc000816e19074bcb33ab0425fb6bca1615d6b623f8aa42f2d17759e6311c81"),
     "__ZN25IOAccelCommandBufferPool24initEP22IOGraphicsAccelerator2P15IOAccelChannel2P11IOAccelTaskiijjjj": (0x182, "58d38ff5fe772731cb08b042d75ce12ae46ea7cc046b78e7cda9b2d4865fc82c"),
     "__ZN25IOAccelCommandBufferPool223allocMoreCommandBuffersEv": (0x202, "32fc16f1a5c64764f3c81e4c0e2a95a65d6cdd9a3da934964e3e4db74e379f3b"),
     "__ZN25IOAccelCommandBufferPool24freeEv": (0x13c, "739b44800bc58c97f593876b5e102076a8b17adcdda60c512129fff840b580d3"),
@@ -1005,6 +1009,10 @@ def check(path, boot_path=None):
         assert hashlib.sha256(read(address_of(name), length)).hexdigest() == digest, f"changed {name}"
     for name, (length, digest) in EVENT_OWNER_BODIES.items():
         assert hashlib.sha256(read(address_of(name), length)).hexdigest() == digest, f"changed event owner lifecycle: {name}"
+    assert read(0x14b6abd9, 10) == bytes.fromhex("48 8d 05 30 79 06 00 48 89 03"), "changed pool allocator concrete vtable install"
+    pool_init_pointer = struct.unpack("<Q", read(0x14bd2628, 8))[0]
+    assert pool_init_pointer >> 63 == 0 and (pool_init_pointer >> 30) & 3 == 1, "changed pool init cache-level encoding"
+    assert pool_init_pointer & 0x3fffffff == address_of("__ZN25IOAccelCommandBufferPool24initEP22IOGraphicsAccelerator2P15IOAccelChannel2P11IOAccelTaskiijjjj"), "changed concrete pool init virtual target"
     raw_free = struct.unpack("<Q", read(address_of(EVENT_VTABLE) + 0xa0, 8))[0]
     assert (raw_free >> 30) & 3 == 1 and raw_free >> 63 == 0, "unexpected event free cache level/auth"
     assert raw_free & 0x3fffffff == address_of("__ZN24IOAccelEventMachineFast24freeEv"), "changed inherited Fast2 free target"
