@@ -6961,6 +6961,25 @@ No executable patch or runtime mutation.
 
 ###### Complete waitForSpace reservation and failure ordering
 
+Rechecked complete inherited sys-memory unwire 14bba228/1f8. It completes/
+clears and returns the DMA command first, then visits mappings whose installed
+PTE bit 4 is set and invokes release_pte. After that loop it completes the
+memory descriptor and continues sys-memory unwired/purge-related bookkeeping.
+New instruction anchors pin installed-bit admission and descriptor-complete
+ordering, complementing the existing full body/cleanup-edge contracts.
+
+No accelerator lock acquisition is visible in this complete body either;
+its caller may already hold one. Command/descriptor complete virtuals must not
+be interpreted as GuC GPU translation acknowledgements. Previously reviewed
+error logging continues after command complete/clear failures; this follow-up
+does not repair those failures or discover a new one. Likewise a mapping with
+unpublished installed flag after partial commit can bypass this release loop,
+so collector scope only at release_pte is not a complete commit-failure repair.
+Mapping commit, rollback and final task/table destruction need one coherent
+owner/lifetime policy. No production/runtime change. Next: effective unwire
+caller lock contract and partial-commit owner admission, without treating DMA
+command teardown as proof of GPU quiescence.
+
 Rechecked the already-pinned complete inherited release_pte 14bb7488/80.
 Its conditional virtual +0x178 invokes Intel release; the next instruction
 reloads mapping flags into EAX, discarding the release result, then clears

@@ -1003,6 +1003,8 @@ def check(path, boot_path=None):
     assert read(0x14bb8fe8, 4) == bytes.fromhex("f6 43 0c 02"), "changed sys-memory free conditional unwire flag"
     assert read(0x14bb74de, 9) == bytes.fromhex("ff 90 78 01 00 00 8b 43 10"), "changed ignored Intel release result before installed-flag reload"
     assert read(0x14bb74e7, 6) == bytes.fromhex("83 e0 fb 89 43 10"), "changed unconditional installed-PTE flag clearing"
+    assert read(0x14bba33a, 6) == bytes.fromhex("f6 47 10 04 74 09"), "changed unwire installed-PTE-only release admission"
+    assert read(0x14bba369, 6) == bytes.fromhex("ff 90 f8 01 00 00"), "changed descriptor complete after mapping PTE releases"
     assert read(0x14bb8ff4, 6) == bytes.fromhex("ff 90 b8 01 00 00"), "changed sys-memory free unwire dispatch"
     assert read(0x14b675ce, 3) == bytes.fromhex("ff 4f 10"), "changed parent memory complete count decrement"
     raw_map_free = struct.unpack("<Q", read(address_of("__ZTV16IOAccelMemoryMap") + 0xa0, 8))[0]
