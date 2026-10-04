@@ -6961,6 +6961,29 @@ No executable patch or runtime mutation.
 
 ###### Complete waitForSpace reservation and failure ordering
 
+Complete writeBuffer 41e7a/16a is now reviewed/pinned. Like writeDWord, it
+consumes pending TLB/AUX bits only when readiness is set, clears the pending
+bit before emitting the corresponding command and clears readiness afterward.
+The ordinary recursive software-prefix branch sets ring +0x6c before writing
+its three-dword prefix, preventing that branch from recursively adding itself.
+The selected virtual TLB, AUX and recursive edges are pinned.
+
+It obtains the CPU ring address, copies the requested dwords contiguously,
+subtracts count*4 from available bytes, advances/masks the cursor and returns
+true. There is no local capacity/contiguous-tail check, source/destination null
+guard, count-overflow check or protocol-fault gate. Even a zero count enters
+pending-command handling first. These are caller preconditions, not proof of
+reachable faults under valid reservation/locking. In particular a false
+reservation ignored by a caller cannot be recovered merely by trusting this
+method's true return. The per-engine pending bitmap update is a non-atomic
+read/modify/store in this body; outer serialization must be established before
+calling it a race. Clearing pending before emission prevents ordinary same-bit
+recursive insertion, but is not an invalidation completion acknowledgement.
+
+No production/runtime change. The repair boundary must cover reservation,
+write helpers and submission under a consistent owner/admission contract;
+retaining old page-table/backing lifetime is a separate required transaction.
+
 Complete generateFlipWait 7e13c/da is now reviewed/pinned. It gets the ring
 from FIFO channel +0x130, requests one dword then writes display-machine
 +0x200 directly with writeDWord. It next obtains a resource GPU address,
