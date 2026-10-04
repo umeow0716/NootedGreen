@@ -7,6 +7,13 @@ audit's runtime blockers are open.
 
 ## Scope
 
+Local XNU zone allocation/return/validation and normal/percpu/RO free
+functions inspected: zero-on-free explains why allocation-time memset
+search is insufficient. Exact Boot unsymbolized zone entry is not credited
+as a whole body. Constructor repair design now requires explicit early
+record initialization and failure emulation instead of assuming allocator
+fulfillment; runtime pool-selection repair remains separate.
+
 Two complete Boot allocation spans added: typed allocator369980/90
 (distinct-address boundary despite aliases) and heap allocator369360/370
 including unsymbolized large helper. Zero flag forwarding/translation

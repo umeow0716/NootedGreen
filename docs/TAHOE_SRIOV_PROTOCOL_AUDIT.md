@@ -6955,6 +6955,36 @@ No executable patch or runtime mutation.
 
 ### Update fanout must participate in the same owner transaction
 
+#### Zone fulfillment audit changes the constructor repair strategy
+
+Local XNU12377.121.6 complete zalloc_ext, zalloc_return,
+__zcache_mark_valid, zalloc_validate_element, zfree, zfree_percpu and
+zfree_ro were inspected. The normal free paths zero the element before
+returning it to the zone; allocation validates existing zeros when enabled
+rather than necessarily performing a new memset. Thus searching only for
+an allocation-time zero call is insufficient. This source-level result
+does not prove the exact Boot zone implementation or pool's zone state.
+
+Boot target ffffff80003d4230 is not a defined text symbol in the inspected
+kernel symbol table; next defined symbol is zone_require at3d8430. Do not
+invent a 4200-hex function boundary or claim that whole span reviewed.
+The selected allocator request/forwarding bodies remain the bounded
+evidence established so far.
+
+Repair design should explicitly initialize cleanup-sensitive pool record
+1860 before a potentially failing native init, rather than depend solely
+on allocator zeroing. Preserve init's count/index/cursor and slot-array
+initialization; selected maximums are nonzero. A context-level false return
+must release its pool through the checked cleanup paths, and must avoid
+the optional backing allocation after failure. Runtime selection requires
+a separate postcondition: constructor error propagation alone does not
+prevent old-buffer reuse on growth or pointer acquisition failure. These
+are design constraints, not an implemented production repair; exact hook
+ownership, ABI, UUID gating, failure-injection and PF-preserving tests are
+still required. The next action is a bounded native constructor repair
+prototype with explicit initialization and failure-path emulation, not
+unbounded recursive kernel-allocation review.
+
 #### Typed and heap allocation preserve the zero flag downstream
 
 Complete Boot typed allocator `ffffff8000369980/90` reviewed using
