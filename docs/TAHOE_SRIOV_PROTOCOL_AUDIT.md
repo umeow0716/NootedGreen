@@ -6955,6 +6955,31 @@ No executable patch or runtime mutation.
 
 ### Update fanout must participate in the same owner transaction
 
+#### Native extended-context construction ignores pool-init status
+
+Complete native `IGHardwareExtendedContext::initWithOptions`
+`7cebc/f4` is now reviewed and hash-pinned. A function-bounded decoded
+native search found its metaclass reference at `7cef9` to imported pool
+metaclass pointer `c80d8`; this is discovery of one constructor, not proof
+that inherited or other-image constructors are absent. Allocation uses
+metaclass virtual 88 and stores the pool at context E0. Pool virtual 118
+is called at `7cf4e` with accelerator context50, channel contextB8, task
+argument, maximum params18, bytes params20, flags 300, mapping options 1,
+alignment params28 and reserved bytes params30. Its return is not checked:
+execution continues directly through stack restoration to optional backing
+allocation, then virtual context setup and unconditional success.
+
+The maximum is conditionally tested as a qword at params18 but passed as
+a dword; caller-side parameter initialization and concrete pool vtable
+identity still require verification. No local validation of maximum/size
+constraints appears. If optional backing allocation fails, cleanup releases
+contextE0 without a local null check, including the branch where no pool
+was requested; reachability depends on actual parameter combinations.
+Do not equate these conditional paths with an observed runtime failure.
+The next repair must account for constructor failure propagation as well
+as runtime growth, and preserve owner/refcount cleanup, not merely add a
+Boolean check to growth. No production patch or dynamic test yet.
+
 #### Command-pool growth publishes capacity before selection succeeds
 
 Whole System KC bodies reviewed: pool init `14b6ac68/182`, growth

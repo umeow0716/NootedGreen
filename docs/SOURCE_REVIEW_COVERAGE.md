@@ -7,6 +7,12 @@ audit's runtime blockers are open.
 
 ## Scope
 
+Complete native extended-context initWithOptions `7cebc/f4` reviewed and
+pinned: pool init virtual 118 return is ignored; optional backing failure
+releases pool without local null guard. Parameter-producing callers and
+concrete pool vtable linkage remain pending; conditional hazards are not
+runtime-reachability proof.
+
 Command-pool lifecycle increment: complete System KC init
 `14b6ac68/182`, allocMoreCommandBuffers `14b6adea/202`, and free
 `14b6afec/13c` reviewed and pinned. Growth's success result ignores void
