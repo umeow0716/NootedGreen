@@ -6951,6 +6951,40 @@ No executable patch or runtime mutation.
 
 # Native 64-bit PPGTT map/unmap failure and retirement boundary
 
+## Mapping last-release admission and deferred raw-list transfer
+
+Reviewed the complete previously unpinned IOAccelMemoryMap::release() const
+at 14bb7364/fe, plus MemoryMapList removeMapping 14b81f24/7c, addMapping
+14b81ebe/2a and parent check_orphan_state 14b66e6a/42. The declared mapping
+vtable +0x38 (including its two header words) resolves to this release body;
+this is a fixed class identity, not an exhaustive dynamic caller inventory.
+
+Release first tests mapping flag 1 and virtual retain count == 1. Other cases
+delegate to base counted release. The special path uses flags, a parent flag,
+an unresolved manager virtual +0x190 predicate and accelerator feature bits
+to choose immediate cleanup or deferred ownership. Immediate cleanup calls
+release_pte only when installed flag 4 is set, then optionally virtual +0x160,
+and finally delegates release. The deferred branch sets flag 8, removes the
+mapping from owner +0x90's list +0x1e8, adds it to that owner's list +0x200,
+and tests parent orphan state. It returns without base release or tail-calls
+parent virtual +0x1c0 depending on that result. Therefore release is not an
+unconditional final decrement, and a collector must preserve this owner policy.
+
+Both list helpers manipulate raw next/previous pointers and counts without
+retain/release or local locking. check_orphan_state counts flag-8 mappings in
+the parent's mapping array and compares that count to virtual retain count;
+this is an ownership comparison, not a GPU idle predicate. None of these four
+bodies locally issues/waits for GuC invalidation. Existing outer locking could
+still serialize them; its identity and acquisition remain to trace. No claim
+of a reproduced race or use-after-free follows from these local observations.
+
+The paired-KC contract now pins all four complete bodies, last-reference and
+deferred flag anchors, the declared release vtable target, and four direct
+cleanup/list/orphan edges. Next inspect manager +0x190 and the two owner-list
+drain paths before deciding where a page-table retirement transaction may
+safely hold owners and wait without blocking its completion consumer. No
+production hook, VM deployment or Host GPU operation was made.
+
 ## Lower-level construction and concrete release caller follow-up
 
 ### Deferred AUX flag and ring command emission follow-up

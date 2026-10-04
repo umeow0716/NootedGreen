@@ -35,6 +35,10 @@ EVENT_DISABLE_STAMP_LOCKED = "__ZN20IOAccelEventMachine223disable_stamp_interrup
 EVENT_ENABLE_STAMP = "__ZN20IOAccelEventMachine220enableStampInterruptEi"
 EVENT_DISABLE_STAMP = "__ZN20IOAccelEventMachine221disableStampInterruptEi"
 EVENT_OWNER_BODIES = {
+    "__ZNK16IOAccelMemoryMap7releaseEv": (0xfe, "1b2bdc6aa5b9cf5b153d22ee8509b4293033285bab3cf297179f87b73fb08691"),
+    "__ZN20IOAccelMemoryMapList13removeMappingEP16IOAccelMemoryMap": (0x7c, "0da924d403ae611e17fc1e2d9bb1b35e17d8a3c27a44a88418fc54702fb0420b"),
+    "__ZN20IOAccelMemoryMapList10addMappingEP16IOAccelMemoryMap": (0x2a, "e142938a7033edaef0ef5446d522d5fc627a8c8224c60061d81f529957a2392b"),
+    "__ZN13IOAccelMemory18check_orphan_stateEv": (0x42, "8fa89f21351705d925cc4d43426c46a92bb99ba85c99935d27c280f91d1ef7a9"),
     "__ZN16IOAccelMemoryMap10commit_pteEv": (0x64, "648a1ffd7c72e238dc0e8ad6cc99ad5d157687c64ba6531eed2424b5d4065574"),
     "__ZN22IOGraphicsAccelerator212sysmem_wiredEP16IOAccelSysMemory": (0x78, "2af8bdaad7f93f070852b210c6594612b4830c13f317b6c0606f09ea551338e6"),
     "__ZN24IOAccelResidentMemorySet9addMemoryEP13IOAccelMemory": (0x64, "40149e4f9e96697bf965b03d5786ab77eb8e52ab9c5e963632233f31ce5b9131"),
@@ -1006,6 +1010,17 @@ def check(path, boot_path=None):
     assert read(0x14bba33a, 6) == bytes.fromhex("f6 47 10 04 74 09"), "changed unwire installed-PTE-only release admission"
     assert read(0x14bba369, 6) == bytes.fromhex("ff 90 f8 01 00 00"), "changed descriptor complete after mapping PTE releases"
     assert read(0x14bb8ff4, 6) == bytes.fromhex("ff 90 b8 01 00 00"), "changed sys-memory free unwire dispatch"
+    assert read(0x14bb736d, 20) == bytes.fromhex("f6 47 10 01 74 7f 48 8b 03 48 89 df ff 50 18 83 f8 01 75 71"), "changed mapping last-reference release admission"
+    assert read(0x14bb740c, 6) == bytes.fromhex("83 c8 08 89 43 10"), "changed deferred mapping flag publication"
+    raw_map_release = struct.unpack("<Q", read(address_of("__ZTV16IOAccelMemoryMap") + 0x38, 8))[0]
+    assert raw_map_release >> 63 == 0 and (raw_map_release >> 30) & 3 == 1, "changed mapping release vtable encoding"
+    assert raw_map_release & 0x3fffffff == address_of("__ZNK16IOAccelMemoryMap7releaseEv"), "changed mapping release vtable target"
+    for call, method in ((0x14bb73da, "__ZN16IOAccelMemoryMap11release_pteEv"),
+                         (0x14bb7421, "__ZN20IOAccelMemoryMapList13removeMappingEP16IOAccelMemoryMap"),
+                         (0x14bb7435, "__ZN20IOAccelMemoryMapList10addMappingEP16IOAccelMemoryMap"),
+                         (0x14bb743e, "__ZN13IOAccelMemory18check_orphan_stateEv")):
+        encoded = read(call, 5)
+        assert encoded[0] == 0xe8 and call + 5 + struct.unpack_from("<i", encoded, 1)[0] == address_of(method), "changed mapping immediate/deferred release edge"
     assert read(0x14b675ce, 3) == bytes.fromhex("ff 4f 10"), "changed parent memory complete count decrement"
     raw_map_free = struct.unpack("<Q", read(address_of("__ZTV16IOAccelMemoryMap") + 0xa0, 8))[0]
     assert raw_map_free >> 63 == 0 and (raw_map_free >> 30) & 3 == 1, "changed memory-map free encoding"

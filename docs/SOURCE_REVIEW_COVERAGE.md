@@ -7,6 +7,14 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 mapping last-release: complete release const, raw-list add/remove,
+and parent orphan-state comparison reviewed/pinned with declared vtable and
+four direct edges. Immediate installed-PTE cleanup differs from deferred
+flag-8 transfer between owner lists; deferred release does not decrement the
+base reference locally. No local lock/GuC ACK; outer owner serialization,
+manager predicate and list drains remain unresolved. These fixed-class checks
+are not an exhaustive indirect-call inventory or DMA retirement proof.
+
 2026-10-04 allocator scope/prioritization: unnamed 0x3d4230 target's 0x4200
 nearest-symbol span is mixed/truncated, not reviewed completely. Reference zone
 creation defaults do not certify runtime policy. Standard non-threaded pool
