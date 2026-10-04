@@ -6955,6 +6955,25 @@ No executable patch or runtime mutation.
 
 ### Update fanout must participate in the same owner transaction
 
+Resource CCS caller follow-up: reviewed complete resource submitCCSResolve
+at 0x73a20 (0x554) and pinned its downstream edge 0x73e99. After that call,
+the body clears selected resolve bits in ResourceInfoEntry +0x4c and sets
++0x64 to zero at 0x73eb6, frees temporary vectors, then returns AL=1 at
+0x73f0f. There is no local downstream submission-result test on this path;
+other preparation/error paths return false. No local owner retain/mutex is
+visible. This does not certify effective callers or asynchronous completion.
+
+UNREPAIRED native allocation failure: r12 is zeroed at 0x73bf8, the one-element
+rectangle vector starts empty, and allocation requests 16 bytes at 0x73c10.
+The null test at 0x73c1a jumps from 0x73c1d to 0x73c3c, skipping the only
+r12=allocation store at 0x73c39. Following arithmetic reaches [r12] store
+0x73d08 without another r12 null test; null allocation can therefore cause
+a CPU null write instead of a clean preparation failure. Whole-body and bad
+branch/store anchors are evidence of the archived defect, NOT a correctness
+gate. No failure injection or historical panic attribution is claimed.
+Before patching, imported allocation/free identities and alternate false-return
+cleanup must be checked to avoid leaking the preceding resource vectors.
+
 CCS submission follow-up: reviewed complete submitCCSResolve at 0x2c84c
 (0x2b0), pinned its full body in both payloads, resource cache update edge
 0x2c94b, resolve_ccs assembly edge 0x2cad0 and external submitBuffer relocation

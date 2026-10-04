@@ -130,6 +130,7 @@ STAMP_IRQ_NATIVE = {
     "__ZN16IGAccelMemoryMap18updateGPUPageTableEv": (0x140, "75ba5674583a8d27d54acab18290e78bbc9de8157b19bfc6614c379d39fa3fbc"),
     "__ZN16IGAccelMemoryMap15updateCacheTypeEj": (0x24, "0c704192e43ed19c39a2179ea6e80551a07af30a8a541016a913f3d9572516f8"),
     "__ZN15IGAccelResource22updateMappingCacheTypeEj": (0x30, "499c98e59e89b29b95b7d14247a756db3f980b5f58134dcf2c49c3baf5db97bf"),
+    "__ZN15IGAccelResource16submitCCSResolveEPNS_17ResourceInfoEntryER16IntelAcceleratorP11IGAccelTask20EIntelCCSResolveTypehh": (0x554, "a10208dea187f2099cf0deab208c392b50c600d292f2604d6fffea3b7aacc528"),
     "__ZN16IntelAccelerator16submitCCSResolveEP15IGAccelResourceP22color_resolve_params_tRK8IGVectorI11blit_rect_t25IGIOMallocAllocatorPolicyEP11IGAccelTask": (0x2b0, "66bb41fb30a7dbf3b678fbae69ddb8b72a5f825b96042ce1a643eaf13c54c6c0"),
     "__ZN19IGAccelVideoContext30updateResourceMappingCacheTypeEP15IGAccelResource": (0x24, "91ca56bc8ad407f81ad7472060497e0ddb88b32259389dba252e9c29890d9d02"),
     "__ZN19IGHardwarePageTable11updateRangeERK14IGAddressRangePK16IGAccelMemoryMap": (0x3c4, "7bd38a56c02637892a4672882eed36a3bea60b0b6ee6017982a0760713713b92"),
@@ -719,6 +720,11 @@ def macho_inventory(path):
     resource_table = value("__ZTV15IGAccelResource")
     map_table = value("__ZTV16IGAccelMemoryMap")
     ccs_submit = "__ZN16IntelAccelerator16submitCCSResolveEP15IGAccelResourceP22color_resolve_params_tRK8IGVectorI11blit_rect_t25IGIOMallocAllocatorPolicyEP11IGAccelTask"
+    ccs_resource = "__ZN15IGAccelResource16submitCCSResolveEPNS_17ResourceInfoEntryER16IntelAcceleratorP11IGAccelTask20EIntelCCSResolveTypehh"
+    assert direct_branches(ccs_resource, ccs_submit) == [0x73e99], f"{path}: changed resource CCS submission edge"
+    for address, expected in ((0x73c1a, "48 85 c0"), (0x73c1d, "74 1d"), (0x73d08, "4d 89 0c 24"), (0x73eb6, "41 c7 46 64 00 00 00 00"), (0x73f0f, "b0 01")):
+        encoded = bytes.fromhex(expected)
+        assert image[address:address + len(encoded)] == encoded, f"{path}: changed archived unrepaired CCS allocation/result anchor at {address:#x}"
     assert direct_branches(ccs_submit, "__ZN15IGAccelResource22updateMappingCacheTypeEj") == [0x2c94b], f"{path}: changed CCS cache update edge"
     assert direct_branches(ccs_submit, "__Z11resolve_ccsP25IOAccelCommandBufferPool2P14IGMappedBufferP22color_resolve_params_tbRK8IGVectorI11blit_rect_t25IGIOMallocAllocatorPolicyE") == [0x2cad0], f"{path}: changed CCS resolve assembly edge"
     assert direct_branches("__ZN15IGAccelResource22updateMappingCacheTypeEj", "__ZN16IGAccelMemoryMap15updateCacheTypeEj") == [0x751cf], f"{path}: changed resource cache update edge"

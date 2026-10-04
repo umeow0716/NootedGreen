@@ -7,6 +7,12 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 resource CCS: one complete 0x554 body reviewed/pinned. Downstream
+submission precedes resolve-state clearing and successful return, with no local
+submission status gate. UNREPAIRED allocation-null path keeps r12 zero and can
+reach rectangle stores. Anchors preserve evidence of the defect, not certify
+correctness. Cleanup/import semantics and effective outer lock remain pending.
+
 2026-10-04 CCS submission: complete submitCCSResolve reviewed/pinned with cache
 update, resolve assembly and relocated command-buffer submission identities.
 No local update-result gate precedes downstream submission. Function-bounded
