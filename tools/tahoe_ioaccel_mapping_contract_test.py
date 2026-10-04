@@ -35,6 +35,10 @@ EVENT_DISABLE_STAMP_LOCKED = "__ZN20IOAccelEventMachine223disable_stamp_interrup
 EVENT_ENABLE_STAMP = "__ZN20IOAccelEventMachine220enableStampInterruptEi"
 EVENT_DISABLE_STAMP = "__ZN20IOAccelEventMachine221disableStampInterruptEi"
 EVENT_OWNER_BODIES = {
+    "__ZN24IOAccelSharedUserClient211clientCloseEv": (0x54, "c97b26393ef1c8b63b77659306adbd55b501f72dff0201c0384f5e02d82ca9ea"),
+    "__ZN24IOAccelSharedUserClient24freeEv": (0x6a, "ad1419c125f7c469eae38203746a917ead22faf069eebb909121c85dd70dddd3"),
+    "__ZN24IOAccelSharedUserClient24stopEP9IOService": (0xf4, "28f150a450f8d1a8a00677a7d69332cc0ca1b873ebe61ac3c12fedd37be25dbf"),
+    "__ZN24IOAccelSharedUserClient210sharedStopEv": (0x46, "dab0e743927cb3b74cbed094abb998040275f4c86a9ddbf53bf358ddcff9ae4b"),
     "__ZN14IOAccelShared24freeEv": (0x2be, "5f5f01995a1f2b57eaab2d62109fa86cb1345ff459099eaf3502419cc42a4e59"),
     "__ZN25IOAccelOrphanedMemoryPool13sharedReleaseEP14IOAccelShared2": (0x9a, "2677894d4102600f9b8f05eb577d45efa015d334f75f13d227f26c60e2f91140"),
     "__ZN16IOAccelResource213sharedReleaseEP14IOAccelShared2": (0xcc, "e17e5a1f423425d6b0c68a263e756d7295cdde33bce3838acb02475b3c6d8be0"),
@@ -909,7 +913,7 @@ def check(path, boot_path=None):
             symtab = struct.unpack_from("<6I", image, offset)[2:]
     assert symtab is not None, "missing embedded symbol table"
     symbol_offset, count, string_offset, string_size = symtab
-    matches = {name: [] for name in {*CONTRACTS, *SCRUB_BODIES, *LOCK_COPIES, *EVENT_OWNER_BODIES, SHARED_VTABLE, RESOURCE_VTABLE, "__ZTV18IOAccelDisplayPipe", "__ZTV24IOAccelLegacyDisplayPipe", "__ZTV16IOAccelMemoryMap", "__ZTV16IOAccelSysMemory", "__ZTV11IOAccelTask",
+    matches = {name: [] for name in {*CONTRACTS, *SCRUB_BODIES, *LOCK_COPIES, *EVENT_OWNER_BODIES, SHARED_VTABLE, RESOURCE_VTABLE, "__ZTV18IOAccelDisplayPipe", "__ZTV24IOAccelLegacyDisplayPipe", "__ZTV16IOAccelMemoryMap", "__ZTV16IOAccelSysMemory", "__ZTV11IOAccelTask", "__ZTV24IOAccelSharedUserClient2",
                                     "__ZTV13IOAccelMemory", "__ZTV22IOGraphicsAccelerator2",
                                     "__ZN22IOGraphicsAccelerator223freeWaitToPrepareVidMapEP16IOAccelMemoryMapbb",
                                     "__ZNK16IOAccelMemoryMap9getLengthEv",
@@ -1066,6 +1070,14 @@ def check(path, boot_path=None):
     assert read(0x14b8e91c, 14) == bytes.fromhex("ff 50 28 48 c7 83 88 00 00 00 00 00 00 00"), "changed Shared task release/identity clear ordering"
     raw_shared_release = struct.unpack("<Q", read(address_of(RESOURCE_VTABLE) + 16 + 0x160, 8))[0]
     assert raw_shared_release >> 63 == 0 and (raw_shared_release >> 30) & 3 == 1 and raw_shared_release & 0x3fffffff == address_of("__ZN16IOAccelResource213sharedReleaseEP14IOAccelShared2"), "changed declared resource Shared-release target"
+    raw_shared_stop = struct.unpack("<Q", read(address_of("__ZTV24IOAccelSharedUserClient2") + 16 + 0x998, 8))[0]
+    assert raw_shared_stop >> 63 == 0 and (raw_shared_stop >> 30) & 3 == 1 and raw_shared_stop & 0x3fffffff == address_of("__ZN24IOAccelSharedUserClient210sharedStopEv"), "changed declared Shared user-client stop target"
+    for call, target in ((0x14b90323, 0x10012), (0x14b903bd, 0x10018),
+                         (0x14b907ca, 0x10012), (0x14b907e7, 0x10018)):
+        encoded = read(call, 5)
+        assert encoded[0] == 0xe8 and call + 5 + struct.unpack_from("<i", encoded, 1)[0] == target, "changed Shared user-client mutex edge"
+    assert read(0x14b9031c, 7) == bytes.fromhex("49 8b be 88 00 00 00"), "changed user-client stop accelerator mutex field"
+    assert read(0x14b90366, 6) == bytes.fromhex("ff 90 98 09 00 00"), "changed sharedStop invocation inside stop mutex scope"
     for slot, name in ((0x140, "__ZN11IOAccelTask8allocateEPK16IOAccelMemoryMap"),
                        (0x148, "__ZN11IOAccelTask10deallocateEPK16IOAccelMemoryMapy")):
         raw = struct.unpack("<Q", read(address_of("__ZTV11IOAccelTask") + 16 + slot, 8))[0]

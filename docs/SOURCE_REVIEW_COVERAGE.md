@@ -7,6 +7,13 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 Shared user-client teardown: four whole bodies and declared
+sharedStop slot reviewed/pinned. Active stop holds captured accelerator +0x88
+mutex and an explicit accelerator retain while sharedStop releases its object.
+clientClose uses a distinct client mutex and can defer termination; success
+is not a drain. Other actual classes/last-reference callers remain unresolved;
+one established locked path is not universal teardown or DMA safety proof.
+
 2026-10-04 Shared destruction: three complete Shared/resource/orphan-pool
 bodies reviewed/pinned, plus resource virtual identity and task cleanup edges.
 Shared task is pruned/released/cleared after resource/pool processing; borrowed

@@ -6953,6 +6953,32 @@ No executable patch or runtime mutation.
 
 ## Mapping last-release admission and deferred raw-list transfer
 
+Shared release caller follow-up: complete SharedUserClient2 clientClose
+(14b907b2/54), free (14b90238/6a), stop (14b902ec/f4) and sharedStop
+(14b927bc/46) reviewed/pinned. In the active +0x108 stop branch, it captures
+accelerator +0xf8, acquires that accelerator's +0x88 IOLock, balances busy
+state/notifications, retains the accelerator, then invokes virtual +0x998.
+The declared user-client vtable resolves +0x998 to sharedStop. That method
+clears its owned shared object's +0x110 association, invokes object release,
+clears client +0x100 and removes client list membership. Stop subsequently
+detaches/clears accelerator storage, releases the client, unlocks the captured
+accelerator mutex, then releases its explicit accelerator retain. Thus this
+selected shared-object release occurs inside an established mutex lifetime.
+
+clientClose instead marks closure and samples outstanding +0x160 operations
+under the client +0x158 IOLock. It unlocks before optional virtual termination
+and returns success even when outstanding operations defer termination. That
+client mutex is not the accelerator mutex and close success is not teardown
+completion. Client free disposes its client lock and other owned objects but
+does not locally acquire the accelerator mutex or explicitly free Shared.
+
+These bodies and declared slot prove one ordinary stop route's lock scope,
+not every actual shared-object class, last reference or user-client override.
+Other release paths and external admission must remain covered by the future
+retirement transaction. Four whole bodies, one declared stop identity, four
+mutex edges and two stop scope anchors pass offline. Next connect sleep/wake
+and remaining mapping admission callers; no production/runtime change.
+
 Shared teardown follow-up: complete Shared2::free (14b8e71e/2be),
 OrphanedMemoryPool::sharedRelease (14bb8404/9a) and Resource2::sharedRelease
 (14b868cc/cc) reviewed/pinned. The declared resource virtual +0x160 resolves
