@@ -9,6 +9,7 @@ import sys
 # Complete reviewed native bodies. This fixes the concrete Intel override
 # graph, not inherited timer APIs, dynamic callbacks or runtime completion.
 STAMP_IRQ_NATIVE = {
+    "__ZN11IGAccelTask4freeEv": (0xe8, "0ae2167df94317690656c9858eb1918b8bdc54b5737f367d0fea768a10e99a07"),
     "__ZN17IGHardwareContext15initRingControlEb": (0x62, "09abdc95cf3157992522b47053e289a5c2b476953853c0acf4f08eaab5dec6ca"),
     "__ZN18IGAccelFIFOChannel18submitRingCommandsEPjjj": (0x106, "1e7d84456ce9eda587497696e280fcf28591b3bb9af1a7cff339de340db7cc86"),
     "__ZN20IGHardwareRingBuffer9alignRingEj": (0x28, "c9612928d88c4157c5d80847c6e8a8123ae227b7b08a8879b54f5387b285a2ee"),
@@ -628,6 +629,8 @@ def macho_inventory(path):
     assert image[0x14518:0x1451e] == bytes.fromhex("ff 90 30 01 00 00"), f"{path}: changed releaseRange unmap virtual"
     assert direct_branches("__ZN19IGHardwarePageTable12releaseRangeERK14IGAddressRange", "__ZN16IntelAccelerator27flushHardwareAfterGttUpdateEv") == [0x14522], f"{path}: changed post-unmap deferred-flush edge"
     assert image[0x14573:0x14575] == bytes.fromhex("b0 01"), f"{path}: changed unconditional releaseRange success"
+    assert direct_branches("__ZN11IGAccelTask4freeEv", "__ZN11IGAccelTask27releaseManagedPageTableListEv") == [0x7ddd], f"{path}: changed task final list cleanup"
+    assert image[0x7dbd:0x7dcf] == bytes.fromhex("48 8b bb 60 02 00 00 48 85 ff 74 06 48 8b 07 ff 50 28"), f"{path}: changed private page-table release before list cleanup"
     assert direct_branches("__ZN15IGMemoryManager27releaseFromPageTableForTaskEP11IGAccelTaskP16IGAccelMemoryMap", "__ZN19IGHardwarePageTable12releaseRangeERK14IGAddressRange") == [0xf74e], f"{path}: changed task fan-out release edge"
     assert image[0xf753:0xf75f] == bytes.fromhex("41 20 c7 48 8b 5b 08 48 85 db 75 e9"), f"{path}: changed non-short-circuit task page-table release loop"
     shrink_leaf = "__ZN31IGHardwarePerProcessPageTable6411shrinkLevelINS_10LevelEntryILm9E17GTTPageTableEntryEENS1_ILm9E21GTTPageDirectoryEntryEEEEbRT_yPT0_ym"

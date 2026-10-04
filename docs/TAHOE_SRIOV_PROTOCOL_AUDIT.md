@@ -6961,6 +6961,24 @@ No executable patch or runtime mutation.
 
 ###### Complete waitForSpace reservation and failure ordering
 
+Complete IGAccelTask::free 7d4a/e8 is now reviewed/pinned. It first invokes
+scheduler releaseSemaphoreWaitBuffers, releases/clears owned fields +0x280,
++0x288 and +0x278, then releases/clears private page table +0x260 before calling
+releaseManagedPageTableList at 7ddd. It subsequently releases other task fields
+and dispatches inherited base free. The private-table release and list cleanup
+ordering are explicit contracts; previously reviewed list cleanup frees raw
+nodes rather than retaining/releasing each table.
+
+Consequently a retirement collector cannot carry borrowed task-list table
+pointers across asynchronous task destruction without explicit retained owner
+references and a proven exclusion rule. The selected free body has no local
+invalidation acknowledgement or transaction-drain wait, but its scheduler/
+owned-object/base callees and outer task teardown may have additional lifetime
+requirements not yet proven. This is not evidence of an observed concurrent
+UAF. Next: native private-page-table free and effective task teardown admission,
+so page-return interception also covers destruction rather than only range
+unmap. No production/runtime change.
+
 Rechecked complete manager releaseFromPageTableForTask f6aa/112 and added
 explicit fan-out edge/loop anchors. It captures mapping GPU range via virtual
 accessors, walks task +0x268's raw list, calls releaseRange at f74e for each
