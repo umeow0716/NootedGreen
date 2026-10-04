@@ -7,6 +7,13 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 sleep/wake: four complete bodies reviewed/pinned, including task
+iterator semantics. True-mode wake cleanup holds accelerator mutex; sleep
+caller locking unresolved. Archived sleep's second iterator is built at -48
+but read at exhausted -30, so its orphan-task cleanup is skipped. This defect
+is explicitly UNREPAIRED; fixture success pins bad reference bytes, not correct
+sleep behavior. No guest-suspend/Host-panic attribution or runtime patch.
+
 2026-10-04 Shared user-client teardown: four whole bodies and declared
 sharedStop slot reviewed/pinned. Active stop holds captured accelerator +0x88
 mutex and an explicit accelerator retain while sharedStop releases its object.

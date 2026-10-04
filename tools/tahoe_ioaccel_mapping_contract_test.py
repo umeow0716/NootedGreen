@@ -35,6 +35,10 @@ EVENT_DISABLE_STAMP_LOCKED = "__ZN20IOAccelEventMachine223disable_stamp_interrup
 EVENT_ENABLE_STAMP = "__ZN20IOAccelEventMachine220enableStampInterruptEi"
 EVENT_DISABLE_STAMP = "__ZN20IOAccelEventMachine221disableStampInterruptEi"
 EVENT_OWNER_BODIES = {
+    "__ZN22IOGraphicsAccelerator215systemWillSleepEv": (0x190, "0ed3b3ceeb3fdab4a219b59e50049aa79b8c2b126252413e682c6b2b1aa7641d"),
+    "__ZN22IOGraphicsAccelerator215system_did_wakeEib": (0x20c, "9859c2de3fbba2eee6dbd9eb6a5aeebc92cacf7b855e4bcc08c46de6c79d3ca0"),
+    "__ZN15IOAccelTaskList8IteratorC1ERS_": (0xc, "b381fee4d716b47f962d55fec3af58dd61a81d635a5141be724b0af8f0287012"),
+    "__ZN15IOAccelTaskList8Iterator11getNextTaskEv": (0x16, "7d2d9468414d7b35cd266d97b73da45c3a02d815e2f0d8a65674137e136ce023"),
     "__ZN24IOAccelSharedUserClient211clientCloseEv": (0x54, "c97b26393ef1c8b63b77659306adbd55b501f72dff0201c0384f5e02d82ca9ea"),
     "__ZN24IOAccelSharedUserClient24freeEv": (0x6a, "ad1419c125f7c469eae38203746a917ead22faf069eebb909121c85dd70dddd3"),
     "__ZN24IOAccelSharedUserClient24stopEP9IOService": (0xf4, "28f150a450f8d1a8a00677a7d69332cc0ca1b873ebe61ac3c12fedd37be25dbf"),
@@ -1078,6 +1082,17 @@ def check(path, boot_path=None):
         assert encoded[0] == 0xe8 and call + 5 + struct.unpack_from("<i", encoded, 1)[0] == target, "changed Shared user-client mutex edge"
     assert read(0x14b9031c, 7) == bytes.fromhex("49 8b be 88 00 00 00"), "changed user-client stop accelerator mutex field"
     assert read(0x14b90366, 6) == bytes.fromhex("ff 90 98 09 00 00"), "changed sharedStop invocation inside stop mutex scope"
+    for call, target in ((0x14ba63ee, 0x10012), (0x14ba6573, 0x10018),
+                         (0x14ba6530, address_of("__ZN11IOAccelTask23prune_orphaned_mappingsEv")),
+                         (0x14ba5f78, address_of("__ZN11IOAccelTask22free_orphaned_mappingsEv")),
+                         (0x14ba5fca, address_of("__ZN11IOAccelTask22free_orphaned_mappingsEv"))):
+        encoded = read(call, 5)
+        assert encoded[0] == 0xe8 and call + 5 + struct.unpack_from("<i", encoded, 1)[0] == target, "changed sleep/wake cleanup and mutex edge"
+    # Pin an UNREPAIRED reference defect, not a successful cleanup invariant:
+    # the orphan-list iterator is built at -0x48 but read at exhausted -0x30.
+    assert read(0x14ba5f7f, 4) == bytes.fromhex("48 8d 7d b8"), "changed sleep second iterator construction slot"
+    assert read(0x14ba5f9a, 4) == bytes.fromhex("48 8d 7d d0"), "changed unrepaired sleep second iterator read slot"
+    assert read(0x14ba5fab, 4) == bytes.fromhex("4c 8d 75 d0"), "changed unrepaired sleep iterator loop slot"
     for slot, name in ((0x140, "__ZN11IOAccelTask8allocateEPK16IOAccelMemoryMap"),
                        (0x148, "__ZN11IOAccelTask10deallocateEPK16IOAccelMemoryMapy")):
         raw = struct.unpack("<Q", read(address_of("__ZTV11IOAccelTask") + 16 + slot, 8))[0]

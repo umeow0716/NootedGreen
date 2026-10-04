@@ -6953,6 +6953,35 @@ No executable patch or runtime mutation.
 
 ## Mapping last-release admission and deferred raw-list transfer
 
+Sleep/wake follow-up: complete systemWillSleep (14ba5eb2/190),
+system_did_wake (14ba63a0/20c), TaskList iterator constructor
+(14b820d8/c) and getNextTask (14b820e4/16) reviewed/pinned. The true-mode
+wake branch acquires accelerator +0x88 IOLock before optional orphan task
+release/active-task pruning and unlocks afterward. Its false-mode display
+branch does not acquire that mutex or perform the same mapping cleanup.
+Sleep has no local accelerator lock; effective caller locking remains open.
+These paths are not interchangeable quiescence predicates.
+
+A concrete archived native sleep defect is now recorded, not repaired:
+the active-task iterator at rbp-0x30 is consumed to null. The following
+orphan-task iterator is initialized at rbp-0x48 (5f7f), but the next fetch
+uses rbp-0x30 (5f9a), and its loop alias also uses rbp-0x30 (5fab).
+The reviewed constructor stores only the selected list head at [rdi];
+getNextTask reads that slot and advances it to task +0x18. Thus this second
+loop reads the exhausted first iterator instead of the new orphan iterator,
+skipping its cleanup in the pinned native reference. It is not evidence that
+any actual guest suspend or Host hang traversed this path.
+
+The cleanup success checks pin those wrong stack displacements explicitly as
+an UNREPAIRED defect. A green fixture does not certify sleep correctness.
+Both iterator displacements would need consistent repair, but adding a KC
+patch before effective power lifecycle, lock admission and DMA quiescence
+are reviewed could activate previously skipped unsafe cleanup. No runtime
+patch is added here; do not relax Host suspend containment based on this
+finding. Four new whole bodies, five cleanup/lock edges and three defect
+anchors pass paired-KC checks. Next resolve effective sleep callers and
+retained owner admission before implementing safe retirement integration.
+
 Shared release caller follow-up: complete SharedUserClient2 clientClose
 (14b907b2/54), free (14b90238/6a), stop (14b902ec/f4) and sharedStop
 (14b927bc/46) reviewed/pinned. In the active +0x108 stop branch, it captures
