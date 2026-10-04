@@ -9,6 +9,7 @@ import sys
 # Complete reviewed native bodies. This fixes the concrete Intel override
 # graph, not inherited timer APIs, dynamic callbacks or runtime completion.
 STAMP_IRQ_NATIVE = {
+    "__ZN31IGHardwarePerProcessPageTable326expandE19GTTVirtualAddress32": (0x23e, "8b0e2172003ce89b7d08c603f55535e1c54d2c3d9380e53da00ad5ff83cde343"),
     "__ZN23IGAccelSharedUserClient11sharedStartEv": (0x40, "3ad72464337cc4e9fa4ac10461f44c34256cde6d1635212fc5cc34fe0fe510d1"),
     "__ZN11IGAccelTask11withOptionsEP16IntelAccelerator": (0x48, "294990cf7ca14e27020ecc569064444b73504a32e841c0856acbdb568081f207"),
     "__ZN16IntelAccelerator19createKernelGPUTaskEv": (0xa, "30021915389fd196a6e879b21a175f135be03e009e385a325f9fc33595937ba6"),
@@ -524,6 +525,8 @@ def macho_inventory(path):
     # These imports distinguish the periodic collection mutex from bridge
     # descriptor spin locks. They do not certify dynamic callback lifetime.
     stamp_irq_imports = {
+        0x12618: "_IOMalloc",
+        0x12631: "_memset",
         0x79a4d: "_IOMalloc",
         0x79a89: "_IOFree",
         0x78580: "_IOLockLock",
@@ -857,6 +860,9 @@ def macho_inventory(path):
             ("__ZN15IGMemoryManager19newPageTableForTaskEP11IGAccelTask", "__ZN29IGHardwarePerProcessPageTable15synchronizeWithIS_EEvPKT_RK14IGAddressRangeb", 0xf969)):
         assert direct_branches(method, target) == [call], f"{path}: changed native per-task page-table factory/synchronization edge"
     global_table = value("__ZTV25IGHardwareGlobalPageTable")
+    expand32 = "__ZN31IGHardwarePerProcessPageTable326expandE19GTTVirtualAddress32"
+    assert direct_branches(expand32, "__ZN10IGPagePool14PageDescriptor7releaseEv") == [0x12646], f"{path}: changed 32-bit expansion software-index allocation rollback"
+    assert image[0x1264f:0x12656] == bytes.fromhex("48 c7 00 00 00 00 00"), f"{path}: changed 32-bit rollback descriptor clear"
     accelerator_table = value("__ZTV16IntelAccelerator")
     assert struct.unpack_from("<Q", image, value("__ZTV23IGAccelSharedUserClient") + 16 + 0x990)[0] == value("__ZN23IGAccelSharedUserClient11sharedStartEv"), f"{path}: changed concrete Shared-start virtual"
     for slot, name in ((0x998, "__ZN16IntelAccelerator17createUserGPUTaskEv"),

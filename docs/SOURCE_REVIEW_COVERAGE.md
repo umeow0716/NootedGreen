@@ -7,6 +7,13 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 pre-zero hook scope: complete 32-bit PPGTT expand (0x23e)
+reviewed/pinned, including descriptor rollback after software-index allocation
+failure. Imported IOMalloc/memset and rollback edge/clear checked. Direct
+release caller inventory spans shrink/remap/expand/free, not a complete
+indirect/inlined call graph. Hardware publication status at each caller still
+must be proven before distinguishing safe unpublished cleanup from retirement.
+
 2026-10-04 concrete table/pool owner references: twenty inherited retain/
 release/tagged virtual imports checked across pool, 32/64 PPGTT and GGTT.
 Complete Boot release (0x10), taggedRelease (0x20) and threshold overload

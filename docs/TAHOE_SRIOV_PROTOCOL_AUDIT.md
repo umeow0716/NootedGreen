@@ -6955,6 +6955,33 @@ No executable patch or runtime mutation.
 
 ### Update fanout must participate in the same owner transaction
 
+Pre-zero hook caller scope (2026-10-04): function-bounded decoded direct-call
+inventory identifies descriptor release from 64-bit shrink levels, remap,
+expand failure paths, 32-bit free and 32-bit expand; releasePage's selected
+direct caller is descriptor final release. This inventory excludes external
+relocation placeholders, but is not complete indirect/inlined reachability.
+It reinforces that a generic release interception must distinguish normal
+retirement from construction/rollback, not require live transport for every
+new unpublished page cleanup.
+
+Complete 32-bit PPGTT expand 0x1242e/0x23e newly reviewed/pinned. It can allocate
+a parent descriptor, store it in the inline directory record and fill its 512
+PDEs with a dummy physical address. It then requests a 0x4000-byte software
+directory-entry array; on null, 0x12646 releases that parent descriptor and
+0x1264f clears the record before returning false. Leaf creation similarly
+stores/fills a descriptor and later writes its physical address into the
+parent PDE at 0x12560. Selected IOMalloc/memset imports, rollback release and
+clear are now checked. There is no local invalidation wait or owner lock.
+
+The new-parent failure branch does not itself write a leaf PDE, but that alone
+is not proof the parent physical address is invisible to hardware: root-
+directory consumers and outer construction/publication need verification.
+Do not mark this branch safe-unpublished solely because it is a rollback.
+A collector policy must establish publication/generation/ownership before
+choosing bypass versus retained pre-zero retirement, including bootstrap when
+CTB is not yet usable. No production hook installed; next trace 32-bit root
+directory address publication and its relation to this expand failure path.
+
 Concrete table/pool owner reference pairing (2026-10-04): verified twenty
 external vtable imports across IGPagePool, 32/64-bit per-process tables and
 global table: object slots +0x20/+0x28/+0x48/+0x50/+0x58 bind OSObject retain,
