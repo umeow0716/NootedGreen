@@ -12,9 +12,13 @@ assert hashlib.sha256(image[0x14b6afec:0x14b6b128]).hexdigest() == \
     '739b44800bc58c97f593876b5e102076a8b17adcdda60c512129fff840b580d3'
 assert hashlib.sha256(image[0x14b82226:0x14b822c0]).hexdigest() == \
     'fcc000816e19074bcb33ab0425fb6bca1615d6b623f8aa42f2d17759e6311c81'
+assert hashlib.sha256(image[0x14b6ac68:0x14b6adea]).hexdigest() == \
+    '58d38ff5fe772731cb08b042d75ce12ae46ea7cc046b78e7cda9b2d4865fc82c'
+assert hashlib.sha256(image[0x14b6adea:0x14b6afec]).hexdigest() == \
+    '32fc16f1a5c64764f3c81e4c0e2a95a65d6cdd9a3da934964e3e4db74e379f3b'
 
 
-def run(slots, record, current=-1, linked=False):
+def run(slots, record, current=-1, linked=False, failure=None):
     assert current == -1 or 0 <= current < slots
     uc = Uc(UC_ARCH_X86, UC_MODE_64)
     uc.mem_map(0x14b60000, 0xb0000)
@@ -39,6 +43,7 @@ def run(slots, record, current=-1, linked=False):
     put(task_cell, 0x4f0000)
     put(0x4f0000, 0x4f1000)
     put(0x450000 + 0x28, 0x600030)
+    put(0x450000 + 0x20, 0x600080)
     # Base free imported vtable pointer read near the final tail jump.
     cell = 0x14b6b114 + struct.unpack_from('<i', image, 0x14b6b110)[0]
     put(cell, 0x460000)
@@ -54,16 +59,26 @@ def run(slots, record, current=-1, linked=False):
         for off, value in ((0, memory), (8, mapping), (16, 0x500000 + i * 4096)):
             put(pool + 0x30 + i * 24 + off, value)
     events = []
-    def ret():
+    def ret(value=0):
         sp = uc.reg_read(UC_X86_REG_RSP)
-        uc.reg_write(UC_X86_REG_RAX, 0)
+        uc.reg_write(UC_X86_REG_RAX, value)
         uc.reg_write(UC_X86_REG_RIP, get(sp))
         uc.reg_write(UC_X86_REG_RSP, sp + 8)
     def hook(machine, address, size, data):
         labels = {0x1030c: 'unlinked-log', 0x14bb7896: 'finish-event',
                   0x14bba678: 'remove-cpu', 0x600020: 'record-release',
                   0x600030: 'channel-release', 0x600040: 'base-free',
-                  0x600050: 'object-release', 0x600070: 'complete-current'}
+                  0x600050: 'object-release', 0x600070: 'complete-current',
+                  0x600080: 'channel-retain'}
+        if failure and address == 0x14bb95c2:
+            events.append('allocate-memory')
+            put(0x490000, 0x470000)
+            ret(0 if failure == 'memory' else 0x490000)
+            return
+        if failure and address == 0x14bba45a:
+            events.append('create-cpu-map')
+            ret(0)
+            return
         if address in labels:
             if address == 0x600070:
                 assert uc.reg_read(UC_X86_REG_RDI) == 0x4c0000 + current * 0x1000
@@ -73,6 +88,29 @@ def run(slots, record, current=-1, linked=False):
             uc.emu_stop()
     uc.hook_add(UC_HOOK_CODE, hook)
     sp = 0x5ff008
+    if failure:
+        assert slots == 0 and not record and current == -1 and not linked
+        # Native init performs actual slot/index/count setup and growth.
+        put(sp, 0x600060)
+        for i, value in enumerate((0x300, 1, 64, 8)):
+            put(sp + 8 + i * 8, value)
+        for register, value in ((UC_X86_REG_RSP, sp), (UC_X86_REG_RDI, pool),
+                                (UC_X86_REG_RSI, accel), (UC_X86_REG_RDX, channel),
+                                (UC_X86_REG_RCX, 0x4f1000), (UC_X86_REG_R8, 8),
+                                (UC_X86_REG_R9, 4096)):
+            uc.reg_write(register, value)
+        uc.emu_start(0x14b6ac68, 0x600061, count=20000)
+        assert uc.reg_read(UC_X86_REG_RIP) == 0x600060
+        assert uc.reg_read(UC_X86_REG_RAX) & 0xff == 0
+        assert events == (['channel-retain', 'allocate-memory', 'unlinked-log',
+                           'unlinked-log', 'unlinked-log'] if failure == 'memory'
+                          else ['channel-retain', 'allocate-memory', 'create-cpu-map',
+                                'unlinked-log', 'object-release', 'unlinked-log',
+                                'unlinked-log']), events
+        assert get(pool + 0x30) == 0 and get(pool + 0x38) == 0
+        assert uc.mem_read(pool + 0x1842, 2) == b'\xff\xff'
+        assert uc.mem_read(pool + 0x1832, 2) == b'\x00\x00'
+        events.clear()
     put(sp, 0x600060)
     uc.reg_write(UC_X86_REG_RSP, sp)
     uc.reg_write(UC_X86_REG_RDI, pool)
@@ -105,5 +143,8 @@ for slots in (0, 1, 2):
                 run(slots, record, current, linked)
                 cases += 1
 assert cases == 24
+for failure in ('memory', 'cpu-map'):
+    run(0, False, failure=failure)
 print('PASS 24 KC partial/current/linked-pool free fixtures; complete precedes release;'
+      ' two actual init/growth allocation-failure states cleaned;'
       ' callbacks mocked, no actual event/DMA quiescence proof')
