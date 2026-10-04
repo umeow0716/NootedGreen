@@ -7,6 +7,13 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 Shared destruction: three complete Shared/resource/orphan-pool
+bodies reviewed/pinned, plus resource virtual identity and task cleanup edges.
+Shared task is pruned/released/cleared after resource/pool processing; borrowed
+task pointers cannot survive async work without explicit owner references.
+No local accelerator mutex acquisition, but effective caller locks and pool
+disposition helpers remain unverified. This does not certify DMA quiescence.
+
 2026-10-04 G2H application ordering: VF source repair holds existing G2H mutex
 through event application instead of only frame copy, with locked readiness
 recheck and scoped all-return release. Native software handler body pinned;

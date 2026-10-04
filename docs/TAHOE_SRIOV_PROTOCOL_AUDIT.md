@@ -6953,6 +6953,37 @@ No executable patch or runtime mutation.
 
 ## Mapping last-release admission and deferred raw-list transfer
 
+Shared teardown follow-up: complete Shared2::free (14b8e71e/2be),
+OrphanedMemoryPool::sharedRelease (14bb8404/9a) and Resource2::sharedRelease
+(14b868cc/cc) reviewed/pinned. The declared resource virtual +0x160 resolves
+to the reviewed sharedRelease body. Shared free first walks its resource list
+and invokes that operation, then notifies two accelerator orphan pools. It
+releases other owned objects/arrays before pruning mappings on its task +0x88,
+invoking task virtual release, and clearing that field. Thus its task pointer
+cannot be borrowed by asynchronous retirement after Shared destruction.
+
+Resource sharedRelease first validates its stored table entry's identity,
+removes that entry and Shared list membership, then releases selected owned
+objects and finally itself. Orphan-pool sharedRelease traverses two raw node
+lists with next-node snapshots, matches memory +0x30 against the dying Shared,
+and either clears that association or removes/updates/re-adds memory according
+to helper policy. Subordinate memory disposition helpers remain uncertified;
+these list operations do not prove firmware ownership ended.
+
+None of the three bodies locally acquires accelerator +0x88 IOLock. This does
+not prove an unlocked effective caller: Shared free could run under a caller's
+release lock, and its distinct +0x80 field must not be confused with accelerator
+mutex storage. Collector locking already established for other paths is not
+automatically inherited here. The required retirement owner must independently
+retain task/mapping/allocator/page-pool resources and cover Shared destruction,
+not merely store the Shared task address until a later worker executes.
+
+Contracts add three whole bodies, one declared resource vtable identity,
+three direct Shared cleanup edges and task release-before-clear bytes. Targeted
+paired KC checks pass; no production change or hardware validation. Next
+resolve effective Shared release callers and sleep/wake lock scope before
+choosing retirement interception points.
+
 G2H completion lock dependency follow-up and offline production repair:
 rechecked vfInvalidateTLBSync, vfSendCtbFastAction, vfCanWaitForGuc,
 vfDrainGuCToHost and complete vfCtbGucToHostAction. The synchronous TLB

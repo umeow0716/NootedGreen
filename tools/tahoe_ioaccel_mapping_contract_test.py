@@ -35,6 +35,9 @@ EVENT_DISABLE_STAMP_LOCKED = "__ZN20IOAccelEventMachine223disable_stamp_interrup
 EVENT_ENABLE_STAMP = "__ZN20IOAccelEventMachine220enableStampInterruptEi"
 EVENT_DISABLE_STAMP = "__ZN20IOAccelEventMachine221disableStampInterruptEi"
 EVENT_OWNER_BODIES = {
+    "__ZN14IOAccelShared24freeEv": (0x2be, "5f5f01995a1f2b57eaab2d62109fa86cb1345ff459099eaf3502419cc42a4e59"),
+    "__ZN25IOAccelOrphanedMemoryPool13sharedReleaseEP14IOAccelShared2": (0x9a, "2677894d4102600f9b8f05eb577d45efa015d334f75f13d227f26c60e2f91140"),
+    "__ZN16IOAccelResource213sharedReleaseEP14IOAccelShared2": (0xcc, "e17e5a1f423425d6b0c68a263e756d7295cdde33bce3838acb02475b3c6d8be0"),
     "__ZN11IOAccelTask8allocateEPK16IOAccelMemoryMap": (0xc8, "861b200bb16c1a1c269a89bcbe9b903b185aae1a790818b603f7eacdcc5bf4fb"),
     "__ZN11IOAccelTask10deallocateEPK16IOAccelMemoryMapy": (0x6e, "9b10f7f24edcb00e45e9a15816d4dea1ec5467202c7f5efc6681b71d1bae6170"),
     "__ZN11IOAccelTask4initEP22IOGraphicsAccelerator2jPP16IORangeAllocator": (0x138, "f00989c4635c6bfcba66ac1d775dfb16259703e55064355a7686bb3e9db9e186"),
@@ -1055,6 +1058,14 @@ def check(path, boot_path=None):
         assert encoded[0] == 0xe8 and call + 5 + struct.unpack_from("<i", encoded, 1)[0] == target, "changed serialized collector/task cleanup edge"
     assert read(0x14ba1299, 7) == bytes.fromhex("48 8b bb 88 00 00 00"), "changed garbage collector mutex identity"
     assert read(0x14ba1384, 7) == bytes.fromhex("48 8b bf 88 00 00 00"), "changed GART collector mutex identity"
+    for call, method in ((0x14b8e78d, "__ZN25IOAccelOrphanedMemoryPool13sharedReleaseEP14IOAccelShared2"),
+                         (0x14b8e79e, "__ZN25IOAccelOrphanedMemoryPool13sharedReleaseEP14IOAccelShared2"),
+                         (0x14b8e90d, "__ZN11IOAccelTask23prune_orphaned_mappingsEv")):
+        encoded = read(call, 5)
+        assert encoded[0] == 0xe8 and call + 5 + struct.unpack_from("<i", encoded, 1)[0] == address_of(method), "changed Shared teardown cleanup edge"
+    assert read(0x14b8e91c, 14) == bytes.fromhex("ff 50 28 48 c7 83 88 00 00 00 00 00 00 00"), "changed Shared task release/identity clear ordering"
+    raw_shared_release = struct.unpack("<Q", read(address_of(RESOURCE_VTABLE) + 16 + 0x160, 8))[0]
+    assert raw_shared_release >> 63 == 0 and (raw_shared_release >> 30) & 3 == 1 and raw_shared_release & 0x3fffffff == address_of("__ZN16IOAccelResource213sharedReleaseEP14IOAccelShared2"), "changed declared resource Shared-release target"
     for slot, name in ((0x140, "__ZN11IOAccelTask8allocateEPK16IOAccelMemoryMap"),
                        (0x148, "__ZN11IOAccelTask10deallocateEPK16IOAccelMemoryMapy")):
         raw = struct.unpack("<Q", read(address_of("__ZTV11IOAccelTask") + 16 + slot, 8))[0]
