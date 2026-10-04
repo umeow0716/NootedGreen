@@ -358,9 +358,38 @@ private:
 	mach_vm_address_t vfSchedulerInitFirmware {};
 	mach_vm_address_t originalSchedulerCreate {};
 	static void *vfCreateScheduler(void *accelerator);
+	static void *vfRejectLegacySchedulerFactory(void *accelerator);
+	static bool vfRejectLegacySchedulerInit(void *scheduler, void *accelerator);
+	static void *vfRejectLegacyCommandStreamerFactory(void *accelerator,
+	                                                  void *workLoop,
+	                                                  void *scheduler,
+	                                                  uint32_t engine);
+	static bool vfRejectLegacyCommandStreamerInit(void *streamer,
+	                                             void *accelerator,
+	                                             void *workLoop,
+	                                             void *scheduler,
+	                                             uint32_t engine);
 	mach_vm_address_t originalSchedulerInit {};
 	static bool vfInitScheduler(void *scheduler, uint32_t options,
 	                            uint64_t privateSize, void *accelerator);
+	static uint32_t vfRejectSafeReadRegister32(void *accelerator,
+	                                          uint64_t registerOffset);
+	static uint64_t vfRejectSafeReadRegister64(void *accelerator,
+	                                          uint64_t registerOffset);
+	static void vfRejectSafeWriteRegister32(void *accelerator,
+	                                      uint64_t registerOffset,
+	                                      uint32_t value);
+	static IOReturn vfRejectSchedulerPmAttributes(void *scheduler,
+	                                             const void *attributes);
+	static void vfDisablePhysicalCacheInit(void *memoryManager);
+	static void vfRejectDynamicInterruptClear(void *bridge, uint32_t identity,
+	                                         uint32_t identityClear,
+	                                         uint32_t iir,
+	                                         uint32_t iirClearMask);
+	static uint32_t vfRejectDynamicInterruptRead(void *bridge,
+	                                           uint32_t identity,
+	                                           uint32_t iir,
+	                                           uint32_t iirClearMask);
 	static void populateResetRegisterList(void *that);
 	static bool wrapIGScheduler5IsGpuIdle(const void *that);
 	static bool wrapIGScheduler4IsGpuIdle(const void *that);

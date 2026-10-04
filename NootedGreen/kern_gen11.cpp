@@ -3150,6 +3150,21 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			{"__ZN16IGFenceAllocator8allocateERK14IGAddressRangem19GFX3DSTATE_TILEMODE",
 			 vfRejectPhysicalFence},
 
+			// Every cache/PAT/MOCS member below writes PF-owned global register
+			// state. startGraphicsEngine is already replaced, but route the complete
+			// virtual surface too so a future direct or cross-kext dispatch cannot
+			// recover the physical initializer on a VF.
+			{"__ZN15IGMemoryManager9initCacheEv",
+			 vfDisablePhysicalCacheInit},
+			{"__ZN15IGMemoryManager20initMOCSTableEntriesEv",
+			 vfDisablePhysicalCacheInit},
+			{"__ZN21IntelTGLMemoryManager14initGTL3LayoutEv",
+			 vfDisablePhysicalCacheInit},
+			{"__ZN21IntelTGLMemoryManager20initMOCSTableEntriesEv",
+			 vfDisablePhysicalCacheInit},
+			{"__ZN21IntelTGLMemoryManager24updatePageAttributeTableEv",
+			 vfDisablePhysicalCacheInit},
+
 			// IGMemoryManager::init invokes this TGL virtual before engine start.
 			// Native detection reads and may program physical eDRAM registers even
 			// after force-wake itself has been suppressed. A VF has no eDRAM aperture;
@@ -3183,9 +3198,37 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			{"__ZN16IntelAccelerator19startGraphicsEngineEv", startGraphicsEngine},
 			{"__ZN11IGScheduler6createEP16IntelAccelerator", vfCreateScheduler,
 			 this->originalSchedulerCreate},
+			// Scheduler type is already locked to 4 before the native dispatcher,
+			// but these factory routes also reject an unexpected direct caller.
+			{"__ZN5IGGuC15withAcceleratorEP22IOGraphicsAccelerator2",
+			 vfRejectLegacySchedulerFactory},
+			{"__ZN5IGGuC15initWithOptionsEP22IOGraphicsAccelerator2",
+			 vfRejectLegacySchedulerInit},
+			{"__ZN12IGScheduler515withAcceleratorEP22IOGraphicsAccelerator2",
+			 vfRejectLegacySchedulerFactory},
+			{"__ZN12IGScheduler519initWithAcceleratorEP22IOGraphicsAccelerator2",
+			 vfRejectLegacySchedulerInit},
+			{"__ZN26IGHardwareCommandStreamer523hardwareCommandStreamerEP22IOGraphicsAccelerator2P10IOWorkLoopP12IGScheduler510IGHwCsType",
+			 vfRejectLegacyCommandStreamerFactory},
+			{"__ZN26IGHardwareCommandStreamer54initEP22IOGraphicsAccelerator2P10IOWorkLoopP12IGScheduler510IGHwCsType",
+			 vfRejectLegacyCommandStreamerInit},
 			{"__ZN11IGScheduler15initWithOptionsEjyP22IOGraphicsAccelerator2", vfInitScheduler,
 			 this->originalSchedulerInit},
 			{"__ZN16IntelAccelerator18stopGraphicsEngineEv",  stopGraphicsEngine},
+
+			// These generic helpers still dereference accelerator+0x1240 after
+			// force-wake. Current direct callers are legacy IGGuC-only, but reject at
+			// the final sink as well so no indirect caller can touch physical BAR0.
+			{"__ZN16IntelAccelerator18SafeReadRegister32Em",
+			 vfRejectSafeReadRegister32},
+			{"__ZN16IntelAccelerator18SafeReadRegister64Em",
+			 vfRejectSafeReadRegister64},
+			{"__ZN16IntelAccelerator19SafeWriteRegister32Emj",
+			 vfRejectSafeWriteRegister32},
+			// Scheduler4 exposes this method through its vtable and writes the
+			// PF-owned 0xA210 power register. A VF does not implement that protocol.
+			{"__ZN12IGScheduler415setPmAttributesEPKv",
+			 vfRejectSchedulerPmAttributes},
 
 			// A VF has no guest-owned INSTDONE state. Derive the watchdog result
 			// solely from the tracked GuC context lifecycle.
@@ -3354,6 +3397,15 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				 vfCtbGucToHostAction},
 				{"__ZN13IGHardwareGuC32handleSoftwareGuCToHostInterruptEP22IOInterruptEventSourcei",
 				 vfSoftwareGuCInterrupt},
+				// These exported generic helpers accept caller-selected BAR0 offsets.
+				// The pinned payload has no genuine direct, vtable or address-taken
+				// caller for either helper; reject any future cross-kext entry rather
+				// than treating arbitrary offsets as part of the fixed Gen11 VF IRQ
+				// register protocol retained below.
+				{"__ZN17IGInterruptBridge32clearQueuedHeirarchichalIntrBitsEjjjj",
+				 vfRejectDynamicInterruptClear},
+				{"__ZN17IGInterruptBridge7readIIREjjj",
+				 vfRejectDynamicInterruptRead},
 				// startGraphicsEngine enables the bridge before GuC construction so
 				// CTB-backed allocations can wait for completions. Tahoe's native
 				// request method only appends to a list that enable() services once;
@@ -5785,6 +5837,120 @@ void *Gen11::vfCreateScheduler(void *accelerator)
 		return nullptr;
 	}
 	return FunctionCast(vfCreateScheduler, callback->originalSchedulerCreate)(accelerator);
+}
+
+void *Gen11::vfRejectLegacySchedulerFactory(void *accelerator)
+{
+	(void)accelerator;
+	vfMarkProtocolFault("legacy scheduler factory reached a VF");
+	return nullptr;
+}
+
+bool Gen11::vfRejectLegacySchedulerInit(void *scheduler, void *accelerator)
+{
+	(void)scheduler;
+	(void)accelerator;
+	vfMarkProtocolFault("legacy scheduler initialization reached a VF");
+	return false;
+}
+
+void *Gen11::vfRejectLegacyCommandStreamerFactory(void *accelerator,
+	                                               void *workLoop,
+	                                               void *scheduler,
+	                                               uint32_t engine)
+{
+	(void)accelerator;
+	(void)workLoop;
+	(void)scheduler;
+	(void)engine;
+	vfMarkProtocolFault("Scheduler5 command-streamer factory reached a VF");
+	return nullptr;
+}
+
+bool Gen11::vfRejectLegacyCommandStreamerInit(void *streamer,
+	                                          void *accelerator,
+	                                          void *workLoop,
+	                                          void *scheduler,
+	                                          uint32_t engine)
+{
+	(void)streamer;
+	(void)accelerator;
+	(void)workLoop;
+	(void)scheduler;
+	(void)engine;
+	vfMarkProtocolFault("Scheduler5 command-streamer initialization reached a VF");
+	return false;
+}
+
+uint32_t Gen11::vfRejectSafeReadRegister32(void *accelerator,
+	                                       uint64_t registerOffset)
+{
+	(void)accelerator;
+	(void)registerOffset;
+	vfMarkProtocolFault("physical SafeReadRegister32 reached a VF");
+	PANIC_COND(true, "ngreen", "Refusing PF-owned 32-bit register read on a VF");
+	return 0;
+}
+
+uint64_t Gen11::vfRejectSafeReadRegister64(void *accelerator,
+	                                       uint64_t registerOffset)
+{
+	(void)accelerator;
+	(void)registerOffset;
+	vfMarkProtocolFault("physical SafeReadRegister64 reached a VF");
+	PANIC_COND(true, "ngreen", "Refusing PF-owned 64-bit register read on a VF");
+	return 0;
+}
+
+void Gen11::vfRejectSafeWriteRegister32(void *accelerator,
+	                                    uint64_t registerOffset,
+	                                    uint32_t value)
+{
+	(void)accelerator;
+	(void)registerOffset;
+	(void)value;
+	vfMarkProtocolFault("physical SafeWriteRegister32 reached a VF");
+	PANIC_COND(true, "ngreen", "Refusing PF-owned 32-bit register write on a VF");
+}
+
+IOReturn Gen11::vfRejectSchedulerPmAttributes(void *scheduler,
+	                                          const void *attributes)
+{
+	(void)scheduler;
+	(void)attributes;
+	vfMarkProtocolFault("physical scheduler PM attributes reached a VF");
+	return kIOReturnUnsupported;
+}
+
+void Gen11::vfDisablePhysicalCacheInit(void *memoryManager)
+{
+	(void)memoryManager;
+	vfMarkProtocolFault("physical cache/PAT/MOCS initialization reached a VF");
+}
+
+void Gen11::vfRejectDynamicInterruptClear(void *bridge, uint32_t identity,
+	                                       uint32_t identityClear,
+	                                       uint32_t iir,
+	                                       uint32_t iirClearMask)
+{
+	(void)bridge;
+	(void)identity;
+	(void)identityClear;
+	(void)iir;
+	(void)iirClearMask;
+	vfMarkProtocolFault("dynamic interrupt-register clear reached a VF");
+}
+
+uint32_t Gen11::vfRejectDynamicInterruptRead(void *bridge, uint32_t identity,
+	                                         uint32_t iir,
+	                                         uint32_t iirClearMask)
+{
+	(void)bridge;
+	(void)identity;
+	(void)iir;
+	(void)iirClearMask;
+	vfMarkProtocolFault("dynamic interrupt-register read reached a VF");
+	return 0;
 }
 
 bool Gen11::startGraphicsEngine(void *that)

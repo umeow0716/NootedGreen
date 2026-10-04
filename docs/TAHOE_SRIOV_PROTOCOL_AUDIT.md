@@ -1,7 +1,7 @@
 # Tahoe SR-IOV protocol audit — in progress
 
 Updated: 2026-10-05. The last dynamic source baseline is `ce166c8`; the current
-offline-reviewed worktree is V301 SG-09 callback-owner integration on
+offline-reviewed worktree is V302 SG-10 negative-reachability integration on
 `codex/tahoe-sriov-vf`. This is NOT a boot-test candidate or a successful
 driver baseline. The `ce166c8` run produced repeatable host PF DMAR faults
 followed by i915 hangs and a host reboot. Keep `macos-tahoe-sriov` shut off until the
@@ -20,6 +20,51 @@ KVMFR/client transport remains the intended receiving side.
 The authoritative dynamic-entry checklist is
 [`DYNAMIC_TEST_GATE.md`](DYNAMIC_TEST_GATE.md). Any open static gate keeps the
 VM hard hold in force.
+
+## V302 SG-10 raw BAR0 negative-reachability candidate (offline)
+
+The two admitted Tahoe accelerator payloads now have a complete decoded
+inventory of genuine `accelerator+0x1240` disp32 memory operands: 131 canonical
+owners and 279 access sites. The contract partitions them exactly into
+telemetry/diagnostic 37/70, legacy construction 31/85, physical roots 24/74,
+modern GuC 21/27, object layout/publication 4/4 and interrupt bridge 14/19.
+Owner aliases, new sites and same-count cross-category substitutions fail
+closed. Two other literal `0x1240` byte sequences are immediate Blit copy
+lengths and are deliberately excluded by instruction decoding.
+
+The V302 routes reject the legacy IGGuC/Scheduler5/CommandStreamer5 factories
+and initializers, the final SafeRead32/64 and SafeWrite32 sinks, Scheduler4's
+physical PM virtual, and all five cache/PAT/MOCS virtual entries. The complete
+factory/body/vtable/caller/reference inventories establish these as the final
+reachable boundaries rather than guessed descendants. PF and non-VF devices
+retain native behavior.
+
+All 21 modern-GuC raw owners are now individually reconciled. Fifteen public
+entries are VF-routed. `checkWOPCMSettings` has one genuine call, inside the
+fully replaced native firmware loader, and no address-taken root. MDRB read,
+MDRB write and the CS4 frequency helper have no direct/tail, RIP-LEA or loaded
+pointer reference. CS4 physical error interrupt programming is cut at the
+capability-specific Scheduler4 branch. Five retained WorkQueue/CTB/context
+teardown bodies preserve their software lifecycle but apply exact `0xCEE8`
+removals within independently resolved adjacent-symbol bounds; the complete
+binary anchor inventory is also fixed.
+
+The interrupt subset is exactly 14 owners/19 BAR0 sites. Twelve native Gen11
+bridge bodies use fixed `0x190000`-range offsets, and every extracted offset is
+inside the current i915 VF allowlist. The two remaining helpers accept
+caller-selected offsets; both have exact bodies and zero native branch,
+RIP-LEA or loaded-pointer roots, and V302 rejects their exported VF entries.
+MTL/ARL still route filter/read/bridge/scheduler through memory IRQ, while
+TGL/ADL/RPL retain the fixed virtual-MMIO bridge and suppress only physical
+per-engine error helpers.
+
+The working route inventory is 165 (141 accelerator, three framebuffer and 21
+System KC), plus eight exact-address event-vector routes. Targeted dual-payload
+lifecycle and route contracts plus complete static
+`/tmp/ngreen-static.CYth1a` pass. S10.1–S10.7 are closed candidates, but S10.8
+still requires a clean pushed commit and its exact-SHA CI before SG-10 may
+become `CLOSED-STATIC`. SG-11 remains open, so no
+VM, kext deployment, PCI/sysfs/VF/PF or Host i915 operation is authorized.
 
 ## V301 SG-09 native callback-owner closure (offline)
 

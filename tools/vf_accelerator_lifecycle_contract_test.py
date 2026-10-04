@@ -2,6 +2,7 @@
 """Prove that the VF engine wrapper preserves Apple's IOAccel lifecycle tail."""
 
 import pathlib
+import functools
 import hashlib
 import struct
 import sys
@@ -362,6 +363,8 @@ RING_COMPUTE_WRITE_STAMP = "__ZN27IGHardwareRingBufferCompute10writeStampEjb"
 RING_INIT = "__ZN20IGHardwareRingBuffer4initEP17IGHardwareContext"
 RING_REFRESH = "__ZN20IGHardwareRingBuffer11refreshRingEv"
 RING_RESET = "__ZN20IGHardwareRingBuffer9resetRingEv"
+RING_CLEAR_EVENT_WAIT = "__ZN20IGHardwareRingBuffer14clearEventWaitEv"
+RING_CLEAR_SEMAPHORE_WAIT = "__ZN20IGHardwareRingBuffer18clearSemaphoreWaitEv"
 SCHEDULER4_PROCESS_RESET = "__ZN12IGScheduler415processGPUResetE10IGHwCsTypeP17IGHardwareContext"
 RING_WRITE_DWORD = "__ZN20IGHardwareRingBuffer10writeDWordEj"
 RING_WRITE_QWORD = "__ZN20IGHardwareRingBuffer10writeQWordEy"
@@ -460,6 +463,9 @@ INIT_HARDWARE_STATUS_REGISTERS = "__ZN16IntelAccelerator31initHardwareStatusPage
 INIT_MODE_REGISTERS = "__ZN16IntelAccelerator17initModeRegistersEv"
 SAFE_FORCE_WAKE = "__ZN16IntelAccelerator13SafeForceWakeEbj"
 SAFE_FORCE_WAKE_BOOL = "__ZN16IntelAccelerator13SafeForceWakeEb"
+SAFE_READ_REGISTER32 = "__ZN16IntelAccelerator18SafeReadRegister32Em"
+SAFE_READ_REGISTER64 = "__ZN16IntelAccelerator18SafeReadRegister64Em"
+SAFE_WRITE_REGISTER32 = "__ZN16IntelAccelerator19SafeWriteRegister32Emj"
 BRIDGE_ENABLE = "__ZN17IGInterruptBridge6enableEv"
 BRIDGE_DISABLE = "__ZN17IGInterruptBridge7disableEv"
 BRIDGE_FILTER = "__ZN17IGInterruptBridge22interruptFilterHandlerEP28IOFilterInterruptEventSource"
@@ -472,6 +478,8 @@ BRIDGE_READ_BCS = "__ZN17IGInterruptBridge25readAndClearBCSInterruptsER8IGBitSet
 BRIDGE_READ_GUC = "__ZN17IGInterruptBridge25readAndClearGuCInterruptsER8IGBitSetILm46EEj"
 BRIDGE_READ_VCS = "__ZN17IGInterruptBridge25readAndClearVCSInterruptsER8IGBitSetILm46EEj"
 BRIDGE_READ_VECS = "__ZN17IGInterruptBridge26readAndClearVECSInterruptsER8IGBitSetILm46EEj"
+BRIDGE_DYNAMIC_CLEAR = "__ZN17IGInterruptBridge32clearQueuedHeirarchichalIntrBitsEjjjj"
+BRIDGE_DYNAMIC_READ = "__ZN17IGInterruptBridge7readIIREjjj"
 EVENT_INIT = "__ZN24IOAccelEventMachineFast29initEventEP12IOAccelEvent"
 SCHEDULER_ENABLE = "__ZN12IGScheduler416enableInterruptsEv"
 SCHEDULER_DISABLE = "__ZN12IGScheduler417disableInterruptsEv"
@@ -492,10 +500,12 @@ SCHEDULER4_INIT = "__ZN12IGScheduler419initWithAcceleratorEP22IOGraphicsAccelera
 SCHEDULER4_LOAD_FIRMWARE = "__ZN12IGScheduler412loadFirmwareEv"
 SCHEDULER4_IS_GPU_IDLE = "__ZNK12IGScheduler49isGpuIdleEv"
 SCHEDULER5_IS_GPU_IDLE = "__ZNK12IGScheduler59isGpuIdleEv"
+SCHEDULER4_SET_PM_ATTRIBUTES = "__ZN12IGScheduler415setPmAttributesEPKv"
 SCHEDULER_BASE_INIT = "__ZN11IGScheduler15initWithOptionsEjyP22IOGraphicsAccelerator2"
 COMMAND_STREAMER_FACTORY = "__ZN26IGHardwareCommandStreamer423hardwareCommandStreamerEP22IOGraphicsAccelerator2P10IOWorkLoopP12IGScheduler410IGHwCsType"
 COMMAND_STREAMER_INIT = "__ZN26IGHardwareCommandStreamer44initEP22IOGraphicsAccelerator2P10IOWorkLoopP12IGScheduler410IGHwCsType"
 COMMAND_STREAMER_REGISTER = "__ZN26IGHardwareCommandStreamer421registerForInterruptsEv"
+COMMAND_STREAMER_SET_GT_FREQUENCY = "__ZN26IGHardwareCommandStreamer418setGTFrequencyMMIOEj"
 REQUEST_ENABLE_CALLBACK = "__ZN17IGInterruptBridge21requestEnableCallbackEP8OSObjectPFvS1_zE"
 GUC_INIT_INTERRUPTS = "__ZN13IGHardwareGuC14initInterruptsEv"
 GUC_REGISTER_INTERRUPTS = "__ZN13IGHardwareGuC21registerForInterruptsEv"
@@ -530,9 +540,19 @@ LOCAL_GUC_WILL_LOAD = "__ZL17_accelWillLoadGuCyPv"
 LOCAL_GUC_FAILED = "__ZL21_accelFailedToLoadGuCv"
 LOCAL_GUC_DID_LOAD = "__ZL16_accelDidLoadGuCv"
 GUC_LOAD_BINARY = "__ZN13IGHardwareGuC13loadGuCBinaryEv"
+GUC_CHECK_WOPCM = "__ZN13IGHardwareGuC18checkWOPCMSettingsEmR14IOVirtualRange"
 GUC_REGISTER_CTB = "__ZN13IGHardwareGuC31registerCommandTransportBuffersEv"
 GUC_DEREGISTER_CTB = "__ZN13IGHardwareGuC33deregisterCommandTransportBuffersEv"
 GUC_MMIO_ACTION = "__ZN13IGHardwareGuC19mmioHostToGuCActionEPKjjiPj"
+GUC_READ_MDRB = "__ZN13IGHardwareGuC16readMDRBRegisterEjh"
+GUC_WRITE_MDRB = "__ZN13IGHardwareGuC17writeMDRBRegisterEjhj"
+GUC_ACQUIRE_DOORBELL = "__ZN13IGHardwareGuC15acquireDoorbellEP35UK_GEN11_GUC_CONTEXT_DESCRIPTOR_RECb"
+GUC_RELEASE_DOORBELL = "__ZN13IGHardwareGuC15releaseDoorbellEP35UK_GEN11_GUC_CONTEXT_DESCRIPTOR_REC"
+GUC_ALLOC_UK_DOORBELL = "__ZN13IGHardwareGuC15allocUkDoorbellEjb"
+GUC_RELEASE_UK_CONTEXT = "__ZN13IGHardwareGuC16releaseUkContextEj"
+GUC_SOFTWARE_INTERRUPT = "__ZN13IGHardwareGuC32handleSoftwareGuCToHostInterruptEP22IOInterruptEventSourcei"
+WORK_QUEUE_INIT = "__ZN22IGHardwareGuCWorkQueue19initWithAcceleratorEP22IOGraphicsAccelerator2jP37UK_GEN11_SCHED_PROCESS_DESCRIPTOR_REC"
+WORK_QUEUE_FREE = "__ZN22IGHardwareGuCWorkQueue4freeEv"
 CREATE_UK_CONTEXT = "__ZN13IGHardwareGuC15createUkContextEy25UK_GEN11_CONTEXT_PRIORITY"
 MAPPED_WITH_OPTIONS = "__ZN20IGSharedMappedBuffer11withOptionsEP11IGAccelTaskmjj"
 MAPPED_INIT = "__ZN20IGSharedMappedBuffer15initWithOptionsEP11IGAccelTaskmjj"
@@ -553,6 +573,11 @@ NEW_MEMORY_MANAGER = "__ZN16IntelAccelerator16newMemoryManagerEv"
 TGL_MEMORY_METACLASS = "__ZN21IntelTGLMemoryManager9metaClassE"
 TGL_MEMORY_VTABLE = "__ZTV21IntelTGLMemoryManager"
 MEMORY_MANAGER_INIT = "__ZN15IGMemoryManager4initEP16IntelAcceleratorRK18IntelSharedMemInfoRK14_stolenMemInfo"
+MEMORY_MANAGER_INIT_CACHE = "__ZN15IGMemoryManager9initCacheEv"
+MEMORY_MANAGER_INIT_MOCS = "__ZN15IGMemoryManager20initMOCSTableEntriesEv"
+TGL_MEMORY_INIT_GTL3 = "__ZN21IntelTGLMemoryManager14initGTL3LayoutEv"
+TGL_MEMORY_INIT_MOCS = "__ZN21IntelTGLMemoryManager20initMOCSTableEntriesEv"
+TGL_MEMORY_UPDATE_PAT = "__ZN21IntelTGLMemoryManager24updatePageAttributeTableEv"
 TGL_DETECT_EDRAM = "__ZN21IntelTGLMemoryManager11detectEDRAMEv"
 BLIT3D_BOUNDS_START = "__ZN23IGHardwareBlit2DContext10initializeEv"
 BLIT3D_BOUNDS_END = "__ZN21IGAccelDisplayMachine9MetaClassC1Ev"
@@ -637,6 +662,7 @@ def macho_inventory(path):
     symtab = None
     dysymtab = None
     text_section = None
+    file_sections = []
     offset = 32
     for _ in range(header[4]):
         command, size = struct.unpack_from("<2I", image, offset)
@@ -653,8 +679,15 @@ def macho_inventory(path):
                     section_offset + section_index * 80)
                 section_name = section[0].split(b"\0", 1)[0]
                 segment_name = section[1].split(b"\0", 1)[0]
+                section_address, section_size, section_file_offset = section[2:5]
+                if section_file_offset and \
+                        section_file_offset + section_size <= len(image):
+                    file_sections.append((segment_name, section_name,
+                                          section_address, section_size,
+                                          section_file_offset))
                 if segment_name == b"__TEXT" and section_name == b"__text":
-                    text_section = (section[2], section[3], section[4])
+                    text_section = (section_address, section_size,
+                                    section_file_offset)
         offset += size
     if not symtab or not dysymtab or not text_section:
         raise AssertionError(
@@ -980,6 +1013,7 @@ def macho_inventory(path):
         return direct_branch_candidates(image, owner_start, owner_end,
                                         target_start, external_relocation_offsets)
 
+    @functools.lru_cache(maxsize=None)
     def text_direct_branches(target):
         text_address, text_size, text_file_offset = text_section
         # This UUID-pinned kext currently maps __text at its file offset. Keep
@@ -991,6 +1025,332 @@ def macho_inventory(path):
             target_file_offset, external_relocation_offsets)
         return [text_address + candidate - text_file_offset
                 for candidate in candidates]
+
+    @functools.lru_cache(maxsize=None)
+    def text_rip_lea_references(target):
+        """Conservative x86-64 RIP-relative address-taken scan."""
+        text_address, text_size, text_file_offset = text_section
+        target_file_offset = text_file_offset + value(target) - text_address
+        found = []
+        text_end = text_file_offset + text_size
+        for candidate in range(text_file_offset, text_end - 6):
+            # A kernel pointer needs the REX.W LEA form. Matching any REX byte
+            # is deliberately conservative and may fail closed on instruction
+            # lookalikes in a future admitted payload.
+            if not (0x40 <= image[candidate] <= 0x4f and
+                    image[candidate + 1] == 0x8d and
+                    image[candidate + 2] & 0xc7 == 0x05):
+                continue
+            instruction_end = candidate + 7
+            displacement = struct.unpack_from("<i", image, candidate + 3)[0]
+            if instruction_end + displacement == target_file_offset:
+                found.append(text_address + candidate - text_file_offset)
+        return found
+
+    @functools.lru_cache(maxsize=None)
+    def loaded_pointer_references(target):
+        encoded = struct.pack("<Q", value(target))
+        found = []
+        for segment_name, section_name, section_address, section_size, \
+                section_file_offset in file_sections:
+            cursor = section_file_offset
+            section_end = section_file_offset + section_size
+            while True:
+                cursor = image.find(encoded, cursor, section_end)
+                if cursor < 0:
+                    break
+                found.append((segment_name, section_name,
+                              section_address + cursor - section_file_offset))
+                cursor += 1
+        return found
+
+    # Complete accelerator+0x1240 displacement inventory.  This is the Tahoe
+    # IntelAccelerator BAR0 mapping field only for the hardware families below;
+    # two GLContext members use the same numeric offset in a different object,
+    # and start/configureDevice publish the mapping rather than dereference a
+    # register.  Decode only x86-64 disp32 memory operands so the two unrelated
+    # `mov $0x1240,%edx` Blit-kernel copy lengths are not misclassified.
+    def is_bar0_field_operand(displacement_offset):
+        if displacement_offset >= 3:
+            rex, opcode, modrm = image[
+                displacement_offset - 3:displacement_offset]
+            if 0x40 <= rex <= 0x4f and opcode in (0x03, 0x8b, 0x89, 0x8d) and \
+                    modrm & 0xc0 == 0x80 and modrm & 0x07 != 0x04:
+                return True
+        if displacement_offset >= 4:
+            rex, opcode, modrm, _ = image[
+                displacement_offset - 4:displacement_offset]
+            if 0x40 <= rex <= 0x4f and opcode in (0x03, 0x8b, 0x89, 0x8d) and \
+                    modrm & 0xc7 == 0x84:
+                return True
+        return False
+
+    text_address, text_size, text_file_offset = text_section
+    text_end = text_file_offset + text_size
+    bar0_sites = []
+    cursor = text_file_offset
+    displacement = bytes.fromhex("40 12 00 00")
+    while True:
+        cursor = image.find(displacement, cursor, text_end)
+        if cursor < 0:
+            break
+        if is_bar0_field_operand(cursor):
+            bar0_sites.append(text_address + cursor - text_file_offset)
+        cursor += 1
+
+    defined_text_symbols = sorted(set(
+        candidate for candidate in values
+        if text_address <= candidate < text_address + text_size))
+    names_at_value = {}
+    for name, candidate in zip(names, values):
+        if name and candidate in defined_text_symbols:
+            names_at_value.setdefault(candidate, []).append(name)
+    bar0_owner_counts = {}
+    for site in bar0_sites:
+        owner_start = max(candidate for candidate in defined_text_symbols
+                          if candidate <= site)
+        owner_names = names_at_value[owner_start]
+        # Every reviewed owner has one canonical symbol at its entry.  Aliases
+        # would make a reachability classification ambiguous and must fail.
+        if len(owner_names) != 1:
+            raise AssertionError(
+                f"{path}: ambiguous BAR0 owner at {owner_start:#x}: {owner_names}")
+        owner = owner_names[0]
+        bar0_owner_counts[owner] = bar0_owner_counts.get(owner, 0) + 1
+
+    object_layout_or_publication = {
+        "__ZN16IGAccelGLContext12contextStartEv",
+        "__ZN16IGAccelGLContext20processSidebandTokenER24IOAccelCommandStreamInfo",
+        "__ZN16IntelAccelerator5startEP9IOService",
+        "__ZN16IntelAccelerator15configureDeviceEP11IOPCIDevice",
+    }
+    telemetry_diagnostic_exact = {
+        "__ZN16IntelAccelerator16gatherKeyGuCDataEv",
+        "__ZN16IntelAccelerator16getInstDoneSliceE10IGHwCsType",
+        "__ZN16IntelAccelerator17gatherKeyRingDataE10IGHwCsType",
+    }
+    physical_root_exact = {
+        "__ZN11IGScheduler19haltCommandStreamerE10IGHwCsType",
+        "__ZN11IGScheduler21resumeCommandStreamerE10IGHwCsType",
+        SCHEDULER4_SET_PM_ATTRIBUTES,
+        MEMORY_MANAGER_INIT_CACHE,
+        MEMORY_MANAGER_INIT_MOCS,
+        "__ZN16IntelAccelerator10getGPUInfoEv",
+        INIT_MODE_REGISTERS,
+        SAFE_READ_REGISTER32,
+        SAFE_READ_REGISTER64,
+        SET_ASYNC_SLICE_COUNT,
+        PAVP_CALLBACK,
+        SAFE_WRITE_REGISTER32,
+        START,
+        "__ZN16IntelAccelerator25populateResetRegisterListEv",
+        "__ZN16IntelAccelerator26SafeForceWakeMultithreadedEbjj",
+        INIT_HARDWARE_STATUS_REGISTERS,
+        RING_CLEAR_EVENT_WAIT,
+        RING_CLEAR_SEMAPHORE_WAIT,
+        RING_RESET_GRAPHICS,
+        TGL_MEMORY_INIT_GTL3,
+        TGL_MEMORY_INIT_MOCS,
+        TGL_MEMORY_UPDATE_PAT,
+        FENCE_INIT,
+        FENCE_FREE,
+    }
+
+    def bar0_owner_class(name):
+        if name in object_layout_or_publication:
+            return "object-layout/publication"
+        if name.startswith("__ZN17IGInterruptBridge"):
+            return "vf-irq-allowlist-or-reject"
+        if name.startswith((
+                "__ZN25IGAccelTraceStreamManager",
+                "__ZN16IGTelemetryUsage",
+                "__ZN18IGTelemetryManager",
+                "__ZN19IGPerfCounterConfig",
+                "__ZN29IGPerfCounterRestoreOnRC6Exit",
+                "__ZN14IGSupportMDAPI")) or \
+                name in telemetry_diagnostic_exact:
+            return "telemetry/diagnostic-contained"
+        if name.startswith((
+                "__ZN5IGGuC", "__ZNK5IGGuC",
+                "__ZN26IGHardwareCommandStreamer5",
+                "__ZN18IGHwCsStatsTracker")) or \
+                name == "__ZL19changeFrequencyWaitP16IntelAcceleratorj":
+            return "legacy-construction-contained"
+        if name.startswith((
+                "__ZN13IGHardwareGuC",
+                "__ZN21IGHardwareGuCCTBuffer",
+                "__ZN22IGHardwareGuCWorkQueue",
+                "__ZN26IGHardwareCommandStreamer4")):
+            return "modern-guc-routed-or-patched"
+        if name in physical_root_exact:
+            return "physical-root-routed-or-gated"
+        raise AssertionError(f"{path}: unclassified accelerator+0x1240 owner: {name}")
+
+    observed_bar0_groups = {}
+    for owner, count in bar0_owner_counts.items():
+        group = bar0_owner_class(owner)
+        owner_count, site_count = observed_bar0_groups.get(group, (0, 0))
+        observed_bar0_groups[group] = (owner_count + 1, site_count + count)
+    expected_bar0_groups = {
+        "telemetry/diagnostic-contained": (37, 70),
+        "legacy-construction-contained": (31, 85),
+        "physical-root-routed-or-gated": (24, 74),
+        "modern-guc-routed-or-patched": (21, 27),
+        "object-layout/publication": (4, 4),
+        "vf-irq-allowlist-or-reject": (14, 19),
+    }
+    expected_bar0_owner_counts = {
+        "__ZL19changeFrequencyWaitP16IntelAcceleratorj": 2,
+        "__ZN11IGScheduler19haltCommandStreamerE10IGHwCsType": 2,
+        "__ZN11IGScheduler21resumeCommandStreamerE10IGHwCsType": 2,
+        "__ZN12IGScheduler415setPmAttributesEPKv": 2,
+        "__ZN13IGHardwareGuC13invalidateTLBEv": 1,
+        "__ZN13IGHardwareGuC13loadGuCBinaryEv": 4,
+        "__ZN13IGHardwareGuC15acquireDoorbellEP35UK_GEN11_GUC_CONTEXT_DESCRIPTOR_RECb": 1,
+        "__ZN13IGHardwareGuC15allocUkDoorbellEjb": 1,
+        "__ZN13IGHardwareGuC15releaseDoorbellEP35UK_GEN11_GUC_CONTEXT_DESCRIPTOR_REC": 1,
+        "__ZN13IGHardwareGuC16readMDRBRegisterEjh": 1,
+        "__ZN13IGHardwareGuC16releaseUkContextEj": 1,
+        "__ZN13IGHardwareGuC17writeMDRBRegisterEjhj": 1,
+        "__ZN13IGHardwareGuC18checkWOPCMSettingsEmR14IOVirtualRange": 2,
+        "__ZN13IGHardwareGuC19mmioHostToGuCActionEPKjjiPj": 2,
+        "__ZN13IGHardwareGuC23readDoorbellSQIDIConfigEv": 1,
+        "__ZN13IGHardwareGuC29AttachContextDescToGucContextERK21SGfxContextDescriptor": 1,
+        "__ZN13IGHardwareGuC31DetachContextDescFromGucContextERK21SGfxContextDescriptor": 1,
+        "__ZN13IGHardwareGuC32handleSoftwareGuCToHostInterruptEP22IOInterruptEventSourcei": 1,
+        "__ZN14IGSupportMDAPI12readOABufferEP21MDAPIReadOABufferOpInP22MDAPIReadOABufferOpOut": 2,
+        "__ZN14IGSupportMDAPI13getDeviceInfoEyRx": 4,
+        "__ZN14IGSupportMDAPI16finalizeOaBufferEbPj": 1,
+        "__ZN14IGSupportMDAPI19getDualSubSliceInfoERyS0_": 1,
+        "__ZN14IGSupportMDAPI19getOaBufferDataSizeEv": 1,
+        "__ZN14IGSupportMDAPI24enableOaBufferCollectionEPj": 1,
+        "__ZN14IGSupportMDAPI25disableOABufferCollectionEPj": 1,
+        "__ZN15IGMemoryManager20initMOCSTableEntriesEv": 1,
+        "__ZN15IGMemoryManager9initCacheEv": 2,
+        "__ZN16IGAccelGLContext12contextStartEv": 1,
+        "__ZN16IGAccelGLContext20processSidebandTokenER24IOAccelCommandStreamInfo": 1,
+        "__ZN16IGTelemetryUsage17reportGlobalUsageEv": 1,
+        "__ZN16IntelAccelerator10getGPUInfoEv": 1,
+        "__ZN16IntelAccelerator15configureDeviceEP11IOPCIDevice": 1,
+        "__ZN16IntelAccelerator16gatherKeyGuCDataEv": 1,
+        "__ZN16IntelAccelerator16getInstDoneSliceE10IGHwCsType": 1,
+        "__ZN16IntelAccelerator17gatherKeyRingDataE10IGHwCsType": 9,
+        "__ZN16IntelAccelerator17initModeRegistersEv": 2,
+        "__ZN16IntelAccelerator18SafeReadRegister32Em": 1,
+        "__ZN16IntelAccelerator18SafeReadRegister64Em": 1,
+        "__ZN16IntelAccelerator18setAsyncSliceCountE13IGSliceConfig": 1,
+        "__ZN16IntelAccelerator19PAVPCommandCallbackE22PAVPSessionCommandID_tjPjb": 7,
+        "__ZN16IntelAccelerator19SafeWriteRegister32Emj": 1,
+        "__ZN16IntelAccelerator19startGraphicsEngineEv": 10,
+        "__ZN16IntelAccelerator25populateResetRegisterListEv": 19,
+        "__ZN16IntelAccelerator26SafeForceWakeMultithreadedEbjj": 11,
+        "__ZN16IntelAccelerator31initHardwareStatusPageRegistersEv": 2,
+        "__ZN16IntelAccelerator5startEP9IOService": 1,
+        "__ZN17IGInterruptBridge16enableInterruptsEv": 1,
+        "__ZN17IGInterruptBridge17disableInterruptsEv": 1,
+        "__ZN17IGInterruptBridge22interruptFilterHandlerEP28IOFilterInterruptEventSource": 2,
+        "__ZN17IGInterruptBridge22readAndClearInterruptsER8IGBitSetILm46EE": 3,
+        "__ZN17IGInterruptBridge25readAndClearBCSInterruptsER8IGBitSetILm46EEj": 1,
+        "__ZN17IGInterruptBridge25readAndClearCCSInterruptsER8IGBitSetILm46EEj": 1,
+        "__ZN17IGInterruptBridge25readAndClearGuCInterruptsER8IGBitSetILm46EEj": 1,
+        "__ZN17IGInterruptBridge25readAndClearRCSInterruptsER8IGBitSetILm46EEj": 1,
+        "__ZN17IGInterruptBridge25readAndClearVCSInterruptsER8IGBitSetILm46EEj": 1,
+        "__ZN17IGInterruptBridge26readAndClearVECSInterruptsER8IGBitSetILm46EEj": 1,
+        "__ZN17IGInterruptBridge32clearQueuedHeirarchichalIntrBitsEjjjj": 1,
+        "__ZN17IGInterruptBridge6enableEv": 2,
+        "__ZN17IGInterruptBridge7disableEv": 2,
+        "__ZN17IGInterruptBridge7readIIREjjj": 1,
+        "__ZN18IGHwCsStatsTracker32updateWithContextUtilizationDataEP17IGHardwareContext": 2,
+        "__ZN18IGTelemetryManager13sampleToShmemEy": 1,
+        "__ZN18IGTelemetryManager14printDashboardEy": 6,
+        "__ZN18IGTelemetryManager15calcGlobalUsageEy": 2,
+        "__ZN18IGTelemetryManager15initGlobalUsageEv": 2,
+        "__ZN18IGTelemetryManager17readEDRAMCountersEPy": 1,
+        "__ZN18IGTelemetryManager19initWithAcceleratorEP16IntelAcceleratorj": 2,
+        "__ZN18IGTelemetryManager21patchOAContextControlEPji": 1,
+        "__ZN18IGTelemetryManager24patchSaveRestoreOARStateEPji": 1,
+        "__ZN18IGTelemetryManager9operationEyxP18TelemetryOperationP19TelemetryConnectionP4task": 2,
+        "__ZN19IGPerfCounterConfig10SendPrologEP20TelemetryOffsetValuej": 1,
+        "__ZN19IGPerfCounterConfig10restoreMSREv": 1,
+        "__ZN19IGPerfCounterConfig14SendAllPrologsEy": 1,
+        "__ZN19IGPerfCounterConfig14SetClockGatingEb": 1,
+        "__ZN19IGPerfCounterConfig19resendCurrentConfigEy": 2,
+        "__ZN19IGPerfCounterConfig20saveClockGatingStateEv": 1,
+        "__ZN19IGPerfCounterConfig21configSpmGpmEuMetricsEP16IntelAccelerator": 1,
+        "__ZN19IGPerfCounterConfig22ConfigurePerfRegistersEyR17PerfCounterConfigj": 8,
+        "__ZN19IGPerfCounterConfig22configPerfcntForSQFullEP16IntelAccelerator": 1,
+        "__ZN19IGPerfCounterConfig23restoreClockGatingStateEv": 1,
+        "__ZN19IGPerfCounterConfig30setUncorePerfCounterEnableFlagEi": 1,
+        "__ZN19IGPerfCounterConfig7readMSREj": 1,
+        "__ZN19IGPerfCounterConfig7saveMSREv": 1,
+        "__ZN19IGPerfCounterConfig8writeMSREji": 1,
+        "__ZN19IGPerfCounterConfig9configMSREv": 1,
+        "__ZN20IGHardwareRingBuffer14clearEventWaitEv": 1,
+        "__ZN20IGHardwareRingBuffer18clearSemaphoreWaitEv": 1,
+        "__ZN20IGHardwareRingBuffer19resetGraphicsEngineEP17IGHardwareContext": 2,
+        "__ZN21IGHardwareGuCCTBuffer15hostToGuCActionEPKjjiPjb": 2,
+        "__ZN21IGHardwareGuCCTBuffer19initWithAcceleratorEP22IOGraphicsAccelerator2": 1,
+        "__ZN21IGHardwareGuCCTBuffer4freeEv": 1,
+        "__ZN21IntelTGLMemoryManager14initGTL3LayoutEv": 1,
+        "__ZN21IntelTGLMemoryManager20initMOCSTableEntriesEv": 1,
+        "__ZN21IntelTGLMemoryManager24updatePageAttributeTableEv": 1,
+        "__ZN22IGHardwareGuCWorkQueue19initWithAcceleratorEP22IOGraphicsAccelerator2jP37UK_GEN11_SCHED_PROCESS_DESCRIPTOR_REC": 1,
+        "__ZN22IGHardwareGuCWorkQueue4freeEv": 1,
+        "__ZN25IGAccelTraceStreamManager34gpuReadTimeTupleWithSampleUsageGPUER23TelemetrySampleUsageGPURy": 3,
+        "__ZN26IGHardwareCommandStreamer418setGTFrequencyMMIOEj": 1,
+        "__ZN26IGHardwareCommandStreamer420enableErrorInterruptEv": 1,
+        "__ZN26IGHardwareCommandStreamer511resetOnWakeEv": 1,
+        "__ZN26IGHardwareCommandStreamer514submitExecListEj": 1,
+        "__ZN26IGHardwareCommandStreamer515processGPUResetEv": 1,
+        "__ZN26IGHardwareCommandStreamer516processCSBDetailEP28SGfxContextStatusBufferEntryRj": 1,
+        "__ZN26IGHardwareCommandStreamer518setGTFrequencyMMIOEj": 1,
+        "__ZN26IGHardwareCommandStreamer520enableErrorInterruptEv": 1,
+        "__ZN26IGHardwareCommandStreamer526processContextStatusBufferEj": 1,
+        "__ZN26IGHardwareCommandStreamer528handleHardwareErrorInterruptEP8OSObjectPv": 1,
+        "__ZN26IGHardwareCommandStreamer529hardwareErrorInterruptHandlerEv": 1,
+        "__ZN26IGHardwareCommandStreamer54initEP22IOGraphicsAccelerator2P10IOWorkLoopP12IGScheduler510IGHwCsType": 1,
+        "__ZN29IGPerfCounterRestoreOnRC6Exit28clearRc6WABatchBufferPointerEv": 3,
+        "__ZN5IGGuC10loadBinaryEb": 11,
+        "__ZN5IGGuC11initGucCtrlEPV9IGGucCtrl": 1,
+        "__ZN5IGGuC12dmaHostToGuCEyjjNS_12IGGucDmaTypeEb": 5,
+        "__ZN5IGGuC12loadFirmwareEv": 1,
+        "__ZN5IGGuC13systemDidWakeEv": 1,
+        "__ZN5IGGuC15LogGuCLoadRetryEPKcj": 6,
+        "__ZN5IGGuC15canLoadFirmwareEP22IOGraphicsAccelerator2": 3,
+        "__ZN5IGGuC15initWithOptionsEP22IOGraphicsAccelerator2": 1,
+        "__ZN5IGGuC15prepareGPUResetE10IGHwCsType": 1,
+        "__ZN5IGGuC15writeRegAndPollEP16IntelAcceleratorjjjjjPKc": 2,
+        "__ZN5IGGuC17getActiveContextsE10IGHwCsTypePP17IGHardwareContextPyS3_": 1,
+        "__ZN5IGGuC18checkWOPCMSettingsEmR14IOVirtualRange": 2,
+        "__ZN5IGGuC20sendHostToGucMessageEPK18IGHostToGucMessagejU13block_pointerFvvE": 1,
+        "__ZN5IGGuC21dumpGuCPanicDebugInfoEPKcj": 27,
+        "__ZN5IGGuC21enableErrorInterruptsEv": 1,
+        "__ZN5IGGuC28handleHardwareErrorInterruptEP8OSObjectPv": 1,
+        "__ZN5IGGuC6isHungEj": 4,
+        "__ZN5IGGuC6isHungEj.cold.1": 1,
+        "__ZN7IGFence15initWithOptionsEP16IGFenceAllocatormRK14IGAddressRangem19GFX3DSTATE_TILEMODE": 1,
+        "__ZN7IGFence4freeEv": 1,
+        "__ZNK5IGGuC13invalidateTLBEv": 1,
+    }
+    assert bar0_owner_counts == expected_bar0_owner_counts and \
+        len(bar0_owner_counts) == 131 and len(bar0_sites) == 279 and \
+        observed_bar0_groups == expected_bar0_groups, \
+        f"{path}: changed complete accelerator+0x1240 owner partition: " \
+        f"{observed_bar0_groups}"
+    expected_irq_bar0_owners = {
+        BRIDGE_ENABLE, BRIDGE_ENABLE_INTERRUPTS, BRIDGE_DISABLE,
+        BRIDGE_DISABLE_INTERRUPTS, BRIDGE_FILTER, BRIDGE_DYNAMIC_CLEAR,
+        BRIDGE_READ, BRIDGE_READ_RCS, BRIDGE_READ_CCS, BRIDGE_READ_BCS,
+        BRIDGE_READ_GUC, BRIDGE_READ_VCS, BRIDGE_READ_VECS,
+        BRIDGE_DYNAMIC_READ,
+    }
+    observed_irq_bar0_owners = {
+        name for name in bar0_owner_counts
+        if name.startswith("__ZN17IGInterruptBridge")
+    }
+    assert observed_irq_bar0_owners == expected_irq_bar0_owners, \
+        f"{path}: changed complete interrupt-bridge BAR0 owner set: " \
+        f"{observed_irq_bar0_owners}"
 
     # Complete getter relocation/owner inventory plus selected decoded argument
     # windows. These are not whole caller or outer-serialization proofs.
@@ -2024,6 +2384,17 @@ def macho_inventory(path):
         branch = create + offset
         assert image[branch] == 0xe9 and branch + 5 + struct.unpack_from("<i", image, branch + 1)[0] == value(target), \
             f"{path}: changed scheduler type factory delegation"
+    # Type 0 and type 5 have no alternate in-image construction edge, loaded
+    # function pointer or address-taking instruction. Production nevertheless
+    # routes both factories on a VF, so a future cross-kext direct call cannot
+    # bypass the type-4 admission check at IGScheduler::create.
+    for target, offset in (
+            ("__ZN5IGGuC15withAcceleratorEP22IOGraphicsAccelerator2", 0x20),
+            ("__ZN12IGScheduler515withAcceleratorEP22IOGraphicsAccelerator2", 0x2c)):
+        assert text_direct_branches(target) == [create + offset] and \
+            text_rip_lea_references(target) == [] and \
+            loaded_pointer_references(target) == [], \
+            f"{path}: legacy scheduler gained an alternate factory root: {target}"
     for name, length, digest in (
             ("__ZN5IGGuC15withAcceleratorEP22IOGraphicsAccelerator2", 0x48,
              "5e1ec8f283a501196a7a6649b7f14c4a7aebe71bdb54e4332962ec3c8f401575"),
@@ -2052,6 +2423,99 @@ def macho_inventory(path):
         f"{path}: changed scheduler-5 failed-init free dispatch"
     assert struct.unpack_from("<Q", image, value(SCHEDULER5_VTABLE) + 16 + 0x90)[0] == scheduler5_free, \
         f"{path}: changed scheduler-5 failed-init effective free target"
+
+    # The generic safe-register helpers still dereference accelerator+0x1240;
+    # force-wake suppression does not make their raw access safe. All current
+    # 32-bit callers are in the excluded legacy IGGuC family (including its
+    # cold interrupt clone), 64-bit read has no caller, and the sole write is
+    # legacy systemDidWake. Keep that complete inventory pinned in addition to
+    # the VF-only fail-stop routes on the helpers themselves.
+    for name, length, digest in (
+            (SAFE_READ_REGISTER32, 0x4e,
+             "ae7663d67c250fc2bd21cd1848c5820885b4d26aed27885ab96cef3e715e0fc9"),
+            (SAFE_READ_REGISTER64, 0x4e,
+             "eec380a730e2f2cbc8b96d7fd4d471e37f65d668c1330a8b39a2b09ef61bd4c6"),
+            (SAFE_WRITE_REGISTER32, 0x4c,
+             "598bbe5212b64430f858ff5ba72796981449abbed43af1a393ad8573ef58b4f5")):
+        start = value(name)
+        assert next_symbol(start) - start == length and \
+            hashlib.sha256(image[start:start + length]).hexdigest() == digest, \
+            f"{path}: changed raw safe-register helper: {name}"
+        assert text_rip_lea_references(name) == [] and \
+            loaded_pointer_references(name) == [], \
+            f"{path}: safe-register helper became address-taken: {name}"
+    assert text_direct_branches(SAFE_READ_REGISTER32) == [
+        0x18d41, 0x19482, 0x194d5, 0x19e54, 0x1a2dc, 0x1b884, 0x1b8ba,
+        0x903f6, 0x90406, 0x90416, 0x90426,
+    ], f"{path}: changed complete SafeReadRegister32 caller inventory"
+    assert text_direct_branches(SAFE_READ_REGISTER64) == [], \
+        f"{path}: SafeReadRegister64 gained a caller"
+    assert text_direct_branches(SAFE_WRITE_REGISTER32) == [0x1a33f], \
+        f"{path}: changed complete SafeWriteRegister32 caller inventory"
+
+    # Scheduler4 exposes setPmAttributes through its concrete vtable. It reads
+    # and conditionally writes PF-owned 0xA210, so an external virtual caller is
+    # a real root even though this image contains no direct call. The VF route
+    # must reject the complete method before that first force-wake/MMIO access.
+    pm_attributes = value(SCHEDULER4_SET_PM_ATTRIBUTES)
+    assert next_symbol(pm_attributes) - pm_attributes == 0xaa and \
+        hashlib.sha256(image[pm_attributes:pm_attributes + 0xaa]).hexdigest() == \
+        "e07f7f2678515f4d95fa7ede57a701c5d857634e7a4460e750ae796f3a5e53f8", \
+        f"{path}: changed Scheduler4 physical PM-attribute body"
+    assert struct.unpack_from(
+        "<Q", image, value(SCHEDULER4_VTABLE) + 16 + 0x1e8)[0] == pm_attributes, \
+        f"{path}: changed Scheduler4 PM-attribute virtual slot"
+    assert text_direct_branches(SCHEDULER4_SET_PM_ATTRIBUTES) == [] and \
+        text_rip_lea_references(SCHEDULER4_SET_PM_ATTRIBUTES) == [] and \
+        loaded_pointer_references(SCHEDULER4_SET_PM_ATTRIBUTES) == [
+            (b"__DATA", b"__const", value(SCHEDULER4_VTABLE) + 16 + 0x1e8)], \
+        f"{path}: changed Scheduler4 PM-attribute entry inventory"
+
+    # Three additional raw register helpers are present but have no executable
+    # entry in this UUID: no direct/tail call, loaded function pointer or
+    # RIP-relative address-taking instruction. Keep their complete bodies and
+    # negative reference inventory fixed so they cannot silently become part of
+    # the admitted Scheduler4/modern-GuC graph.
+    for name, length, digest in (
+            (COMMAND_STREAMER_SET_GT_FREQUENCY, 0x74,
+             "87d8ac88a5fddff19fff452834fa9b59dbfbbf120dfc1800d589b4356e56168f"),
+            (GUC_READ_MDRB, 0x32,
+             "e4c9de9844fe095f95e50b116d9605c2b8091c19c98e28382ef70212c814a5e0"),
+            (GUC_WRITE_MDRB, 0x32,
+             "73ece2ad35fd26de2fd716100002bdb363e2d19e30909aea2d5de2b7fee0707f")):
+        start = value(name)
+        assert next_symbol(start) - start == length and \
+            hashlib.sha256(image[start:start + length]).hexdigest() == digest, \
+            f"{path}: changed unreferenced raw-register helper: {name}"
+        assert text_direct_branches(name) == [] and \
+            text_rip_lea_references(name) == [] and \
+            loaded_pointer_references(name) == [], \
+            f"{path}: raw-register helper became reachable: {name}"
+
+    # loadGuCBinary is replaced in full on a VF, so its only raw descendant,
+    # checkWOPCMSettings, must remain reachable solely from that excluded native
+    # body.  releaseUkContext has no in-image entry root but remains a public
+    # teardown surface; production bounds and removes its 0xCEE8 sequence while
+    # retaining the rest of the software cleanup.
+    check_wopcm = value(GUC_CHECK_WOPCM)
+    assert next_symbol(check_wopcm) - check_wopcm == 0x140 and \
+        hashlib.sha256(image[check_wopcm:check_wopcm + 0x140]).hexdigest() == \
+        "987967ea879e2464c2f8b7bc6b4ec821408ba0c980780b43bc17006e53a06607", \
+        f"{path}: changed native WOPCM checker"
+    assert text_direct_branches(GUC_CHECK_WOPCM) == [0x202cb] and \
+        direct_branches(GUC_LOAD_BINARY, GUC_CHECK_WOPCM) == [0x202cb] and \
+        text_rip_lea_references(GUC_CHECK_WOPCM) == [] and \
+        loaded_pointer_references(GUC_CHECK_WOPCM) == [], \
+        f"{path}: changed complete WOPCM checker reachability"
+    release_uk = value(GUC_RELEASE_UK_CONTEXT)
+    assert next_symbol(release_uk) - release_uk == 0x11c and \
+        hashlib.sha256(image[release_uk:release_uk + 0x11c]).hexdigest() == \
+        "7e0062ebe073ebf11aef88150fa4a74b802570fead95d7410b3deff2a75afd27", \
+        f"{path}: changed native releaseUkContext body"
+    assert text_direct_branches(GUC_RELEASE_UK_CONTEXT) == [] and \
+        text_rip_lea_references(GUC_RELEASE_UK_CONTEXT) == [] and \
+        loaded_pointer_references(GUC_RELEASE_UK_CONTEXT) == [], \
+        f"{path}: releaseUkContext gained an unreviewed entry root"
     # This is an inventory of the native failure-sensitive ordering, not a
     # claim that cancellation or unchecked removal drains every callback.
     for offset, instruction in (
@@ -2397,6 +2861,25 @@ def macho_inventory(path):
                 "__ZN26IGHardwareCommandStreamer515processGPUResetEv",
                 RING_RESET) != [0x3a42a]:
         raise AssertionError(f"{path}: CPU ring-head reset caller inventory changed")
+
+    # These inherited wait-recovery primitives write physical engine registers
+    # through accelerator +0x1240.  They have no entry in any loaded vtable or
+    # function-pointer section, no direct/tail branch and no RIP-relative
+    # address-taking instruction in either admitted payload.  Symbol-table
+    # nlist values live outside loaded sections and are intentionally excluded.
+    for name, length, digest in (
+            (RING_CLEAR_EVENT_WAIT, 0x40,
+             "a06809b12317e26eea64e90832ae9d49a6975520ec01747a7950eba52e95ea54"),
+            (RING_CLEAR_SEMAPHORE_WAIT, 0x40,
+             "e30af006832056d7566c6e7e2f356e16b70a420d7e3e8012285f98e0fffa10eb")):
+        start = value(name)
+        if next_symbol(start) - start != length or \
+                hashlib.sha256(image[start:start + length]).hexdigest() != digest:
+            raise AssertionError(f"{path}: changed physical wait-clear primitive {name}")
+        if text_direct_branches(name) or text_rip_lea_references(name) or \
+                loaded_pointer_references(name):
+            raise AssertionError(
+                f"{path}: physical wait-clear primitive became reachable: {name}")
     print(f"PASS {path}: exact normal-submit marker association and post-marker bookkeeping")
 
     # P7 non-user/internal producer partition.  This is a complete direct-text
@@ -3212,6 +3695,70 @@ def macho_inventory(path):
             "<Q", image, memory_vtable + 16 + 0x148)[0] != value(
                 TGL_DETECT_EDRAM):
         raise AssertionError(f"{path}: TGL eDRAM virtual slot changed")
+    # The other cache virtuals are equally physical: base initCache writes
+    # MOCS/L3/PAT after force-wake, and its three TGL dispatches write GTL3,
+    # MOCS and PAT registers. Native start reaches initCache through the exact
+    # memory-manager receiver at accelerator+0x1260. The complete group is
+    # routed to a hardware-free VF replacement, so neither a changed native
+    # start nor an external virtual dispatch can recover a raw register path.
+    cache_methods = (
+        (MEMORY_MANAGER_INIT_CACHE, 0x13c,
+         "b031b573d31c0d5a55032b975d67951487da8178e0ddad1d20c318484bdd4425"),
+        (MEMORY_MANAGER_INIT_MOCS, 0x44,
+         "cb0a0ea3c586122cc95935bc9ae4e71dcf46c79d4f4d883ddf08f7275e33054b"),
+        (TGL_MEMORY_INIT_GTL3, 0x26,
+         "3758c8cf119de9540d657e7e78ac6dc9dcde616890b99cba66242b5965020637"),
+        (TGL_MEMORY_INIT_MOCS, 0x32,
+         "2996726e8730b57acdedf15b213eb249b96f1a8e76d695cd56bf5f0694dd5698"),
+        (TGL_MEMORY_UPDATE_PAT, 0x32,
+         "f5fd57154e8f9c8594e1731c5689e2f783379252bd1aed73b83c586a1dfb5b69"),
+    )
+    for name, length, digest in cache_methods:
+        start = value(name)
+        assert next_symbol(start) - start == length and \
+            hashlib.sha256(image[start:start + length]).hexdigest() == digest, \
+            f"{path}: changed physical cache/PAT/MOCS method: {name}"
+        assert text_direct_branches(name) == [] and \
+            text_rip_lea_references(name) == [], \
+            f"{path}: physical cache method gained a direct/address-taken entry: {name}"
+    base_memory_vtable = value("__ZTV15IGMemoryManager")
+    cache_pointer_inventory = {
+        MEMORY_MANAGER_INIT_CACHE: [
+            (b"__DATA", b"__const", base_memory_vtable + 16 + 0x120),
+            (b"__DATA", b"__const", memory_vtable + 16 + 0x120),
+        ],
+        MEMORY_MANAGER_INIT_MOCS: [
+            (b"__DATA", b"__const", base_memory_vtable + 16 + 0x138),
+        ],
+        TGL_MEMORY_INIT_MOCS: [
+            (b"__DATA", b"__const", memory_vtable + 16 + 0x138),
+        ],
+        TGL_MEMORY_INIT_GTL3: [
+            (b"__DATA", b"__const", memory_vtable + 16 + 0x140),
+        ],
+        TGL_MEMORY_UPDATE_PAT: [
+            (b"__DATA", b"__const", memory_vtable + 16 + 0x150),
+        ],
+    }
+    for name, expected in cache_pointer_inventory.items():
+        assert loaded_pointer_references(name) == expected, \
+            f"{path}: changed physical cache/PAT/MOCS vtable inventory: {name}"
+    assert image[0x25bc4:0x25bd4] == bytes.fromhex(
+        "49 8b bd 60 12 00 00 48 8b 07 ff 90 20 01 00 00"), \
+        f"{path}: changed engine-start memory-manager initCache receiver"
+    for slot, target in ((0x120, MEMORY_MANAGER_INIT_CACHE),
+                         (0x138, TGL_MEMORY_INIT_MOCS),
+                         (0x140, TGL_MEMORY_INIT_GTL3),
+                         (0x150, TGL_MEMORY_UPDATE_PAT)):
+        assert struct.unpack_from(
+            "<Q", image, memory_vtable + 16 + slot)[0] == value(target), \
+            f"{path}: changed TGL cache/PAT/MOCS virtual slot {slot:#x}"
+    init_cache = image[value(MEMORY_MANAGER_INIT_CACHE):
+                       next_symbol(value(MEMORY_MANAGER_INIT_CACHE))]
+    for dispatch in ("ff 90 50 01 00 00", "ff 90 40 01 00 00",
+                     "ff 90 38 01 00 00"):
+        assert init_cache.count(bytes.fromhex(dispatch)) == 1, \
+            f"{path}: changed base initCache derived dispatch inventory"
     factory_start = value(NEW_MEMORY_MANAGER)
     factory_end = next_symbol(factory_start)
     metaclass_refs = []
@@ -3445,6 +3992,25 @@ def macho_inventory(path):
         if not direct_branches(scheduler_error, streamer):
             raise AssertionError(
                 f"{path}: {scheduler_error} no longer owns the physical {streamer} call")
+
+    # These two generic bridge helpers take caller-selected MMIO offsets.  They
+    # are not part of the fixed Gen11 VF protocol below: in the admitted Tahoe
+    # payload they have no genuine branch, address-taken or loaded-pointer
+    # entry.  The apparent branch immediately before dynamic-clear is the
+    # external stack-check relocation and is excluded by text_direct_branches.
+    for name, length, digest in (
+            (BRIDGE_DYNAMIC_CLEAR, 0x3c,
+             "6971436773027e3939e17378f21d8744706114a8f35f14d68c1b1d94595e40c3"),
+            (BRIDGE_DYNAMIC_READ, 0x28,
+             "859af0c44117579fd70fb30cf2f41ceac3702b26e02fac9b189ace3e77d3109c")):
+        start = value(name)
+        assert next_symbol(start) - start == length and \
+            hashlib.sha256(image[start:start + length]).hexdigest() == digest, \
+            f"{path}: changed dynamic interrupt-register helper: {name}"
+        assert text_direct_branches(name) == [] and \
+            text_rip_lea_references(name) == [] and \
+            loaded_pointer_references(name) == [], \
+            f"{path}: dynamic interrupt-register helper gained a native caller: {name}"
 
     # TGL/ADL/RPL VFs use this native Gen11 virtual-interrupt register block.
     # Treat every aligned 0x190000-range displacement in the live bridge bodies
@@ -5172,6 +5738,8 @@ def source_contract(path):
         BRIDGE_READ,
         BRIDGE_ENABLE_INTERRUPTS,
         BRIDGE_DISABLE_INTERRUPTS,
+        BRIDGE_DYNAMIC_CLEAR,
+        BRIDGE_DYNAMIC_READ,
         SCHEDULER_ERROR_ENABLE,
         SCHEDULER_ERROR_DISABLE,
         SCHEDULER_HALT,
@@ -5209,6 +5777,97 @@ def source_contract(path):
         raise AssertionError(
             f"{path}: VF no longer replaces the complete physical engine-start body")
 
+    # Every modern-GuC owner that contains an accelerator+0x1240 dereference is
+    # either replaced at its public entry or bounded-patched below.  The four
+    # remaining owners are pinned by the binary negative-reachability checks
+    # above or by the IRQ branch proof below.
+    for symbol, wrapper in (
+            (WORK_QUEUE_INIT, "vfWorkQueueInit"),
+            (WORK_QUEUE_FREE, "vfWorkQueueFree"),
+            (CTB_INIT, "vfCtbInitWithAccelerator"),
+            (CTB_FREE, "vfCtbFree"),
+            (NATIVE_CTB_ACTION, "vfRejectNativeCtbAction"),
+            (GUC_LOAD_BINARY, "loadGuCBinary"),
+            (GUC_INVALIDATE_TLB, "vfInvalidateTLB"),
+            (GUC_READ_DOORBELLS, "vfReadDoorbellSQIDIConfig"),
+            (GUC_ACQUIRE_DOORBELL, "vfAcquireDoorbell"),
+            (GUC_RELEASE_DOORBELL, "vfReleaseDoorbell"),
+            (GUC_ALLOC_UK_DOORBELL, "vfAllocUkDoorbell"),
+            (GUC_ATTACH_DESC, "vfAttachContextDesc"),
+            (GUC_DETACH_DESC, "vfDetachContextDesc"),
+            (GUC_SOFTWARE_INTERRUPT, "vfSoftwareGuCInterrupt"),
+            (GUC_MMIO_ACTION, "vfMmioHostToGuCAction")):
+        if '{"' + symbol + '",' + wrapper not in normalized_pci_resolution:
+            raise AssertionError(
+                f"{path}: modern raw-BAR0 owner is not VF-routed: {symbol}")
+
+    load_guc_route = function_body(source, "bool Gen11::loadGuCBinary(void *that)")
+    for forbidden in ("FunctionCast", GUC_CHECK_WOPCM, "0x1240",
+                      "SafeForceWake", "MMIO"):
+        if forbidden in load_guc_route:
+            raise AssertionError(
+                f"{path}: VF firmware route re-enters native WOPCM through {forbidden}")
+
+    tlb_patch_start = pci_resolution.index(
+        "mach_vm_address_t workQueueInit = 0, workQueueInitEnd = 0;")
+    tlb_patch_end = pci_resolution.index(
+        "// Keep IGAccelDevice::deviceStart native", tlb_patch_start)
+    tlb_patch = "".join(pci_resolution[tlb_patch_start:tlb_patch_end].split())
+    for token in (
+            '{"' + WORK_QUEUE_INIT + '",workQueueInit}',
+            '{"__ZN22IGHardwareGuCWorkQueue9lockQueueEv",workQueueInitEnd}',
+            '{"' + WORK_QUEUE_FREE + '",workQueueFree}',
+            '{"__ZN22IGHardwareGuCWorkQueue18calculateFreeSpaceEv",workQueueFreeEnd}',
+            '{"' + CTB_INIT + '",ctbInit}',
+            '{"__ZN21IGHardwareGuCCTBuffer9lockQueueE34UK_GEN11_CMD_TRANSPORT_BUFFER_TYPE",ctbInitEnd}',
+            '{"' + CTB_FREE + '",ctbFree}',
+            '{"' + NATIVE_CTB_ACTION + '",ctbFreeEnd}',
+            '{"' + GUC_RELEASE_UK_CONTEXT + '",releaseUkContext}',
+            '{"__ZN13IGHardwareGuC13isContextIdleEj",releaseUkContextEnd}',
+            "vfCtbTlbPollPatch.apply(patcher,ctbInit,ctbInitEnd-ctbInit)",
+            "LookupPatchPlus::applyAll(patcher,immediateEcxPatches,workQueueInit,workQueueInitEnd-workQueueInit)",
+            "LookupPatchPlus::applyAll(patcher,immediateEcxPatches,workQueueFree,workQueueFreeEnd-workQueueFree)",
+            "LookupPatchPlus::applyAll(patcher,immediateMemoryPatches,ctbFree,ctbFreeEnd-ctbFree)",
+            "LookupPatchPlus::applyAll(patcher,immediateEcxPatches,releaseUkContext,releaseUkContextEnd-releaseUkContext)"):
+        if token not in tlb_patch:
+            raise AssertionError(
+                f"{path}: incomplete bounded physical-TLB patch contract: {token}")
+    for owner, end, ceiling in (
+            ("workQueueInit", "workQueueInitEnd", "0x200"),
+            ("workQueueFree", "workQueueFreeEnd", "0x100"),
+            ("ctbInit", "ctbInitEnd", "0x200"),
+            ("ctbFree", "ctbFreeEnd", "0x100"),
+            ("releaseUkContext", "releaseUkContextEnd", "0x200")):
+        for token in (end + "<=" + owner,
+                      end + "-" + owner + ">" + ceiling):
+            if token not in tlb_patch:
+                raise AssertionError(
+                    f"{path}: missing bounded patch guard for {owner}: {token}")
+
+    for symbol, wrapper in (
+            (BRIDGE_DYNAMIC_CLEAR, "vfRejectDynamicInterruptClear"),
+            (BRIDGE_DYNAMIC_READ, "vfRejectDynamicInterruptRead")):
+        if '{"' + symbol + '",' + wrapper + '},' not in \
+                normalized_pci_resolution:
+            raise AssertionError(
+                f"{path}: dynamic interrupt-register helper is not rejected: {symbol}")
+    dynamic_clear = function_body(
+        source, "void Gen11::vfRejectDynamicInterruptClear(")
+    dynamic_read = function_body(
+        source, "uint32_t Gen11::vfRejectDynamicInterruptRead(")
+    if "vfMarkProtocolFault(" not in dynamic_clear or \
+            "vfMarkProtocolFault(" not in dynamic_read or \
+            "return 0;" not in dynamic_read:
+        raise AssertionError(
+            f"{path}: dynamic interrupt-register rejection does not fail closed")
+    for body, label in ((dynamic_clear, "dynamic IRQ clear"),
+                        (dynamic_read, "dynamic IRQ read")):
+        for forbidden in ("FunctionCast", "callback->", "getMember", "0x1240",
+                          "SafeForceWake", "MMIO"):
+            if forbidden in body:
+                raise AssertionError(
+                    f"{path}: {label} rejection re-enters hardware through {forbidden}")
+
     timeout_routes_start = pci_resolution.rfind(
         "KernelPatcher::RouteRequest requests[]", 0,
         pci_resolution.index(FENCE_ALLOCATE))
@@ -5232,6 +5891,87 @@ def source_contract(path):
         if '{"' + symbol + '",' + wrapper + '},' not in timeout_routes:
             raise AssertionError(
                 f"{path}: missing VF timeout route {symbol} -> {wrapper}")
+
+    negative_reachability_routes = (
+        ("__ZN5IGGuC15withAcceleratorEP22IOGraphicsAccelerator2",
+         "vfRejectLegacySchedulerFactory"),
+        ("__ZN5IGGuC15initWithOptionsEP22IOGraphicsAccelerator2",
+         "vfRejectLegacySchedulerInit"),
+        ("__ZN12IGScheduler515withAcceleratorEP22IOGraphicsAccelerator2",
+         "vfRejectLegacySchedulerFactory"),
+        ("__ZN12IGScheduler519initWithAcceleratorEP22IOGraphicsAccelerator2",
+         "vfRejectLegacySchedulerInit"),
+        ("__ZN26IGHardwareCommandStreamer523hardwareCommandStreamerEP22IOGraphicsAccelerator2P10IOWorkLoopP12IGScheduler510IGHwCsType",
+         "vfRejectLegacyCommandStreamerFactory"),
+        ("__ZN26IGHardwareCommandStreamer54initEP22IOGraphicsAccelerator2P10IOWorkLoopP12IGScheduler510IGHwCsType",
+         "vfRejectLegacyCommandStreamerInit"),
+        (SAFE_READ_REGISTER32, "vfRejectSafeReadRegister32"),
+        (SAFE_READ_REGISTER64, "vfRejectSafeReadRegister64"),
+        (SAFE_WRITE_REGISTER32, "vfRejectSafeWriteRegister32"),
+        (SCHEDULER4_SET_PM_ATTRIBUTES, "vfRejectSchedulerPmAttributes"),
+        (MEMORY_MANAGER_INIT_CACHE, "vfDisablePhysicalCacheInit"),
+        (MEMORY_MANAGER_INIT_MOCS, "vfDisablePhysicalCacheInit"),
+        (TGL_MEMORY_INIT_GTL3, "vfDisablePhysicalCacheInit"),
+        (TGL_MEMORY_INIT_MOCS, "vfDisablePhysicalCacheInit"),
+        (TGL_MEMORY_UPDATE_PAT, "vfDisablePhysicalCacheInit"),
+    )
+    for symbol, wrapper in negative_reachability_routes:
+        if '{"' + symbol + '",' + wrapper + '},' not in timeout_routes:
+            raise AssertionError(
+                f"{path}: missing VF negative-reachability route "
+                f"{symbol} -> {wrapper}")
+
+    legacy_factory_reject = function_body(
+        source, "void *Gen11::vfRejectLegacySchedulerFactory(")
+    if 'vfMarkProtocolFault("legacy scheduler factory reached a VF")' not in \
+            legacy_factory_reject or "return nullptr;" not in legacy_factory_reject:
+        raise AssertionError(f"{path}: legacy scheduler factory is not rejected")
+    for signature, result in (
+            ("bool Gen11::vfRejectLegacySchedulerInit(", "return false;"),
+            ("void *Gen11::vfRejectLegacyCommandStreamerFactory(",
+             "return nullptr;"),
+            ("bool Gen11::vfRejectLegacyCommandStreamerInit(", "return false;")):
+        body = function_body(source, signature)
+        if "vfMarkProtocolFault(" not in body or result not in body:
+            raise AssertionError(
+                f"{path}: legacy scheduler construction boundary is incomplete: "
+                f"{signature}")
+        for forbidden in ("FunctionCast", "callback->", "getMember", "0x1240",
+                          "SafeForceWake", "MMIO"):
+            if forbidden in body:
+                raise AssertionError(
+                    f"{path}: legacy scheduler construction rejection re-enters "
+                    f"hardware through {forbidden}")
+    cache_reject = function_body(
+        source, "void Gen11::vfDisablePhysicalCacheInit(")
+    pm_reject = function_body(
+        source, "IOReturn Gen11::vfRejectSchedulerPmAttributes(")
+    if "vfMarkProtocolFault(" not in cache_reject or \
+            "kIOReturnUnsupported" not in pm_reject:
+        raise AssertionError(f"{path}: physical cache/PM root does not fail closed")
+    for signature in (
+            "uint32_t Gen11::vfRejectSafeReadRegister32(",
+            "uint64_t Gen11::vfRejectSafeReadRegister64(",
+            "void Gen11::vfRejectSafeWriteRegister32("):
+        body = function_body(source, signature)
+        if "vfMarkProtocolFault(" not in body or "PANIC_COND(true" not in body:
+            raise AssertionError(
+                f"{path}: raw safe-register sink is not fail-stop: {signature}")
+        for forbidden in ("FunctionCast", "callback->", "getMember", "0x1240",
+                          "SafeForceWake"):
+            if forbidden in body:
+                raise AssertionError(
+                    f"{path}: raw safe-register rejection re-enters hardware "
+                    f"through {forbidden}")
+    for body, label in ((legacy_factory_reject, "legacy factory"),
+                        (cache_reject, "physical cache init"),
+                        (pm_reject, "scheduler PM attributes")):
+        for forbidden in ("FunctionCast", "callback->", "getMember", "0x1240",
+                          "SafeForceWake", "MMIO"):
+            if forbidden in body:
+                raise AssertionError(
+                    f"{path}: VF {label} replacement re-enters hardware "
+                    f"through {forbidden}")
 
     timeout_noop = function_body(
         source, "void Gen11::vfSuppressTimeoutHardwareAction(")
