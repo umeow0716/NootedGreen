@@ -6955,6 +6955,41 @@ No executable patch or runtime mutation.
 
 ### Update fanout must participate in the same owner transaction
 
+#### Scanout/fullscreen wrappers do not supply rotation retirement
+
+New complete native reviews/pins: setupScanout `0x804da/0x6c`, resetScanout
+`0x80546/0x7a`, setupFullScreen `0x7f892/0x60`, and resetFullScreen
+`0x7f8f2/0x4e`. All four hashes are now checked in both archived payloads.
+Each gates on its local active byte and accelerator enabled bit. The scanout
+pair compares the primary mapping address with cached pipe `+0x12d0`, calls
+pipe virtual `+0x9b8` if different, then changes local byte `+0x1339`.
+The fullscreen pair calls `+0x9c0` and changes byte `+0x1338`; setup also gets
+the storage resource and calls the existing resource-resolution helper.
+Reset clears a selected accelerator state byte before submission. These local
+state changes are not proof of accepted or completed GPU work.
+
+Concrete virtuals resolve to submitScanoutFlipBuffer `0x805c0` and
+submitFlipBuffer `0x7f940`; their vtable identities and fullscreen storage
+accessor import are pinned, but those submit bodies are not newly reviewed by
+this checkpoint. The four complete wrappers neither set resource rotation
+width/height nor supply a page-table invalidation completion wait. There is
+no local owner retain or accelerator mutex acquisition; external admission
+and resource lifetime must be established at their actual callers.
+
+Expanded function-bounded decoded discovery inspected field-pointer and
+aggregate-store candidates overlapping private geometry, not just exact
+scalar width/height stores. It found existing initialization/rotation-copy
+sites but no new setter in that selected scan. This is not an absence proof:
+derived pointers, relocated data, inherited or external framebuffer code and
+indirect stores remain possible. Do not disable a supported rotation path on
+that negative evidence. Next read the effective submit methods and their
+external framebuffer/geometry interface before selecting a geometry repair.
+
+Validation: full `tools/check-static.sh` passed exit 0, diagnostics
+`/tmp/ngreen-static.ZdYtcJ`, with two existing SDK macro warnings; paired
+Tahoe KC contracts also passed. Previous commit `8268668` CI `37178729210`
+completed successfully. No production/runtime change or acceleration claim.
+
 #### Plane cache replacement is owner transfer, not geometry validation
 
 New complete KC review/pin: set_current_plane_ioSurfaceDeviceCache

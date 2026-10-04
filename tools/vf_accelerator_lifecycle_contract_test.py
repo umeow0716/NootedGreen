@@ -9,6 +9,10 @@ import sys
 # Complete reviewed native bodies. This fixes the concrete Intel override
 # graph, not inherited timer APIs, dynamic callbacks or runtime completion.
 STAMP_IRQ_NATIVE = {
+    "__ZN18IGAccelDisplayPipe12setupScanoutEP16IOAccelResource2S1_": (0x6c, "c5a18430ec26d95832be4f41dbb293ce0291a9aa4689ace8d9a91b7561a0af87"),
+    "__ZN18IGAccelDisplayPipe12resetScanoutEP12IOAccelEventP16IOAccelResource2S3_": (0x7a, "e312d911daa09da6b843554307a58e08df055eaf62762183a2e72bb836a9539c"),
+    "__ZN18IGAccelDisplayPipe15setupFullScreenEP16IOAccelResource2S1_": (0x60, "0fc19533907ef1a1181b52fe37c926c45a5fbe4840c3d8b6144210e369471d14"),
+    "__ZN18IGAccelDisplayPipe15resetFullScreenEP12IOAccelEventP16IOAccelResource2S3_": (0x4e, "a050ce06f49f810cc9e02ffcf01803cd01f8a0fe9acb5607d50b9f0c7c20e7a8"),
     "__ZN18IGAccelDisplayPipe19validateTransactionEP30IOAccelDisplayPipeTransaction2": (0x21e, "5b269acb9228757b84f056db88633774aff390b3016b48776bf76e7258b93a05"),
     "__ZN18IGAccelDisplayPipe17DecodeTransactionEP30IOAccelDisplayPipeTransaction2PyPj": (0x2b2, "d23abcf017c44eb884e855914dd15d019d517c6bec1d71b231a6ca05ab182722"),
     "__ZN15IGAccelResource4freeEv": (0x26c, "8bf6604632ce62b2bccd54c2d2ca22233633738b3de60ebbd4f00aa01a67a767"),
@@ -538,6 +542,7 @@ def macho_inventory(path):
     # These imports distinguish the periodic collection mutex from bridge
     # descriptor spin locks. They do not certify dynamic callback lifetime.
     stamp_irq_imports = {
+        0x7f8d2: "__ZN16IOAccelResource218getStorageResourceEv",
         0x80be8: "__ZNK18IOAccelDisplayPipe14getFramebufferEv",
         0x80cd7: "__ZNK30IOAccelDisplayPipeTransaction216getPlaneResourceEjj",
         0x80da6: "__ZNK30IOAccelDisplayPipeTransaction216getPlaneResourceEjj",
@@ -770,6 +775,10 @@ def macho_inventory(path):
     assert direct_branches("__ZN15IGMemoryManager27releaseFromPageTableForTaskEP11IGAccelTaskP16IGAccelMemoryMap", "__ZN19IGHardwarePageTable12releaseRangeERK14IGAddressRange") == [0xf74e], f"{path}: changed task fan-out release edge"
     assert image[0xf753:0xf75f] == bytes.fromhex("41 20 c7 48 8b 5b 08 48 85 db 75 e9"), f"{path}: changed non-short-circuit task page-table release loop"
     validate_transaction = "__ZN18IGAccelDisplayPipe19validateTransactionEP30IOAccelDisplayPipeTransaction2"
+    display_vtable = value("__ZTV18IGAccelDisplayPipe")
+    for slot, method in ((0x9b8, "__ZN18IGAccelDisplayPipe23submitScanoutFlipBufferEP12IOAccelEventjP16IOAccelResource2S3_"),
+                         (0x9c0, "__ZN18IGAccelDisplayPipe16submitFlipBufferEP12IOAccelEventjP16IOAccelResource2S3_")):
+        assert struct.unpack_from("<Q", image, display_vtable + 16 + slot)[0] == value(method), f"{path}: changed scanout/fullscreen concrete submit dispatch"
     assert struct.unpack_from("<Q", image, value("__ZTV18IGAccelDisplayPipe") + 16 + 0x8a0)[0] == value(validate_transaction), f"{path}: changed concrete display transaction validation virtual"
     assert direct_branches(validate_transaction, "__ZN15IGAccelResource31createAndPrepareRotationMappingEv") == [0x80d0f], f"{path}: changed display transaction rotation creation edge"
     assert direct_branches(validate_transaction, "__ZN18IGAccelDisplayPipe17DecodeTransactionEP30IOAccelDisplayPipeTransaction2PyPj") == [0x80c3f], f"{path}: changed display transaction decoding edge"

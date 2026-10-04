@@ -7,6 +7,12 @@ audit's runtime blockers are open.
 
 ## Scope
 
+New complete native reviews: setup/resetScanout `0x804da/0x6c`,
+`0x80546/0x7a`, setup/resetFullScreen `0x7f892/0x60`, `0x7f8f2/0x4e`.
+Concrete submit vtable targets pinned, not newly reviewed bodies. Expanded
+geometry discovery remains non-exhaustive. Full static suite ZdYtcJ and
+paired KC contracts passed; this does not establish completed GPU retirement.
+
 New complete paired-KC review: set_current_plane_ioSurfaceDeviceCache
 `0x14bb31ee/0x21a`, with two caller and prepare/complete failure-edge checks.
 It replaces and retains plane owners, not rotation width/height; event merge
