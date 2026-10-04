@@ -130,6 +130,8 @@ STAMP_IRQ_NATIVE = {
     "__ZN16IGAccelMemoryMap18updateGPUPageTableEv": (0x140, "75ba5674583a8d27d54acab18290e78bbc9de8157b19bfc6614c379d39fa3fbc"),
     "__ZN16IGAccelMemoryMap15updateCacheTypeEj": (0x24, "0c704192e43ed19c39a2179ea6e80551a07af30a8a541016a913f3d9572516f8"),
     "__ZN15IGAccelResource22updateMappingCacheTypeEj": (0x30, "499c98e59e89b29b95b7d14247a756db3f980b5f58134dcf2c49c3baf5db97bf"),
+    "__ZN15IGAccelResource16submitCCSResolveEPNS_17ResourceInfoEntryER16IntelAcceleratorP11IGAccelTask20EIntelCCSResolveType": (0xa6, "bb27f13ada6c05e268f7f12e4089c601d90b946e041311e42d965199f618477f"),
+    "__ZN15IGAccelResource36enableRenderCompressionWithAccelTaskEPNS_17ResourceInfoEntryEyR16IntelAcceleratorP11IGAccelTaskhhb": (0x2ac, "13fbc4f7a1fded75ad34c5699be050bf8b472fa635893b2ff6dfd5065f9cc87d"),
     "__ZN16IntelAccelerator20barrierForWaitEventsEbP18IGAccelFIFOChannel": (0x52, "1714d3e9be9868c3c9db6a8bd6cb8a2e8f3fc83a9acf2c82ba8e9f2d72ff57d8"),
     "__ZN19IGAccelEventMachine11finishEventEP12IOAccelEventj": (0x70, "897fdb00bbbe43b901ca0af633003863b20d2e1b2e16646bfece3bb92d6a9850"),
     "__ZN15IGAccelResource16submitCCSResolveEPNS_17ResourceInfoEntryER16IntelAcceleratorP11IGAccelTask20EIntelCCSResolveTypehh": (0x554, "a10208dea187f2099cf0deab208c392b50c600d292f2604d6fffea3b7aacc528"),
@@ -747,6 +749,13 @@ def macho_inventory(path):
     assert direct_branches(wait_barrier, "__ZN19IGAccelEventMachine11finishEventEP12IOAccelEventj") == [0x2bc47], f"{path}: changed wait-barrier aggregate-event fallback"
     ccs_submit = "__ZN16IntelAccelerator16submitCCSResolveEP15IGAccelResourceP22color_resolve_params_tRK8IGVectorI11blit_rect_t25IGIOMallocAllocatorPolicyEP11IGAccelTask"
     ccs_resource = "__ZN15IGAccelResource16submitCCSResolveEPNS_17ResourceInfoEntryER16IntelAcceleratorP11IGAccelTask20EIntelCCSResolveTypehh"
+    ccs_planes = "__ZN15IGAccelResource16submitCCSResolveEPNS_17ResourceInfoEntryER16IntelAcceleratorP11IGAccelTask20EIntelCCSResolveType"
+    ccs_enable = "__ZN15IGAccelResource36enableRenderCompressionWithAccelTaskEPNS_17ResourceInfoEntryEyR16IntelAcceleratorP11IGAccelTaskhhb"
+    assert direct_branches(ccs_planes, ccs_resource) == [0x740d8], f"{path}: changed per-plane CCS dispatch"
+    assert direct_branches(ccs_enable, ccs_resource) == [0x739d6], f"{path}: changed compression-enable resolve dispatch"
+    for address, expected in ((0x740dd, "41 20 c5"), (0x739ad, "0c 02"), (0x739af, "88 83 91 00 00 00")):
+        encoded = bytes.fromhex(expected)
+        assert image[address:address + len(encoded)] == encoded, f"{path}: changed CCS aggregation/pre-resolve state at {address:#x}"
     assert direct_branches(ccs_resource, ccs_submit) == [0x73e99], f"{path}: changed resource CCS submission edge"
     for address, expected in ((0x73c1a, "48 85 c0"), (0x73c1d, "74 1d"), (0x73d08, "4d 89 0c 24"), (0x73eb6, "41 c7 46 64 00 00 00 00"), (0x73f0f, "b0 01")):
         encoded = bytes.fromhex(expected)

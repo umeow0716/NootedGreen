@@ -6955,6 +6955,33 @@ No executable patch or runtime mutation.
 
 ### Update fanout must participate in the same owner transaction
 
+Outer resolve state follow-up: reviewed complete plane-selecting resource
+submitCCSResolve at 0x74078 (0xa6), and enableRenderCompressionWithAccelTask
+at 0x73774 (0x2ac), pinned both payloads and selected edges/state anchors.
+The plane wrapper iterates six groups of selected plane bits, calls the
+previously reviewed per-plane resource function at 0x740d8, ANDs AL into r13b
+at 0x740dd, reloads resolve bits and continues after false. It returns aggregate
+Boolean failure without undoing already successful planes. Independent-plane
+continuation is not itself classified as a hardware bug; callers must interpret
+partial progress and preserve unresolved state correctly.
+
+Compression enable can map two auxiliary ranges through task +0x278; it tests
+both mapping returns, and second-map failure can release the first range. After
+successful setup it sets ResourceInfoEntry +0x91 flags 0x1/0x2 (0x739a4/0x739af)
+BEFORE the conditional selected resolve at 0x739d6. That call's AL is not locally
+tested, and the epilogue loads the stack canary into RAX; do not assume this
+enable function returns the resolve Boolean. A new event-admission failure
+return alone cannot establish outer compression/resolve-state consistency.
+No local mutex/owner retain appears in these two complete bodies; effective
+caller serialization remains unproven. Auxiliary map/release callees were
+identified only, not newly whole-reviewed or declared quiescent.
+
+Direct bounded inventory also found selected resolve invoked from Metal render
+and SharedUserClient color_resolve, while the private event append helper is
+used by depth resolve as well as CCS. Those larger callers and effective
+locking/failure propagation remain required work. No new production/runtime
+change; the rectangle-null repair stays separate from event admission and DMA.
+
 Event-result semantics follow-up: re-read the already pinned complete Tahoe
 Fast2::mergeEventExcluding (0x1d4). Its final call at 0x14b96798 is virtual
 +0x190 testEvent on the DESTINATION aggregate, after the source's eligible

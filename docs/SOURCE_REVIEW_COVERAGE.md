@@ -7,6 +7,12 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 outer CCS state: two full wrapper/enable bodies reviewed and pinned.
+Plane wrapper ANDs status while retaining partial progress; compression enable
+sets flags before selected resolve and does not propagate its Boolean. Effective
+outer state/locks, depth helper users and render/user-client propagation remain
+open. Auxiliary map/release identified, not wholly reviewed. No production change.
+
 2026-10-04 event-result semantics: existing full merge body re-read; final AL
 queries aggregate completion, not merge-error status. Two native barrier/finish
 wrapper bodies newly pinned with effective imports. Fallback waits aggregate,
