@@ -6961,6 +6961,27 @@ No executable patch or runtime mutation.
 
 ###### Complete waitForSpace reservation and failure ordering
 
+Complete ring init 41414/1ec and context getRingBufferSize 7c560/14 are now
+reviewed/pinned. Init stores a borrowed context, obtains accelerator through
+context +0x58's object +0x10, copies engine ID, obtains a context resource CPU
+address and writes its initial head. It stores size at ring +0x8c, size-8 at
++0x88 and size-1 at +0x90; head/tail, readiness and prefix state are cleared.
+It allocates the ring backing via accelerator +0x150 using the size getter;
+allocation failure returns false. Later scheduler setup failure releases and
+clears that backing before false. Some setup success calls an external helper
+whose zero-displacement placeholder is not treated as a self-call.
+
+The getter returns accelerator +0x119c shifted left ten in a 32-bit register.
+Neither this getter nor init locally verifies a nonzero, power-of-two size,
+shift overflow or size >= eight, despite later cursor masking relying on
+size-1. The actual producer/configuration of +0x119c must establish those
+invariants; this review does not claim an invalid configured size occurs.
+Likewise repeated getter calls are assumed stable under initialization
+ownership, and resource/context lifetimes require outer-owner proof. This
+establishes the origin of ring geometry rather than inventing a constant
+capacity for a future guard. No production/runtime change. Next: actual
+configuration of +0x119c and allocator mapping size, then owner serialization.
+
 Complete writeQWord 41d48/132 is now reviewed/pinned, closing the selected
 base dword/qword/buffer writer body review. Its pending TLB/AUX and recursive
 software-prefix ordering matches the other two writers. It performs a single
