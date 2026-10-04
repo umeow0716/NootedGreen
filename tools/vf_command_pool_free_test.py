@@ -16,10 +16,13 @@ assert hashlib.sha256(image[0x14b6ac68:0x14b6adea]).hexdigest() == \
     '58d38ff5fe772731cb08b042d75ce12ae46ea7cc046b78e7cda9b2d4865fc82c'
 assert hashlib.sha256(image[0x14b6adea:0x14b6afec]).hexdigest() == \
     '32fc16f1a5c64764f3c81e4c0e2a95a65d6cdd9a3da934964e3e4db74e379f3b'
+assert hashlib.sha256(image[0x14b6b13a:0x14b6b2bc]).hexdigest() == \
+    '5cf69325a1d3fe2e3f09751af5ec3b3eece1542d255c6b04411d348e40c2f033'
 
 
 def run(slots, record, current=-1, linked=False, failure=None):
     assert current == -1 or 0 <= current < slots
+    selection_failure = failure in ('gpu-map', 'va', 'prepare')
     uc = Uc(UC_ARCH_X86, UC_MODE_64)
     uc.mem_map(0x14b60000, 0xb0000)
     uc.mem_write(0x14b60000, image[0x14b60000:0x14c10000])
@@ -50,6 +53,15 @@ def run(slots, record, current=-1, linked=False, failure=None):
     put(0x460000 + 0xa0, 0x600040)
     put(0x470000 + 0x28, 0x600050)
     put(0x470000 + 0x140, 0x600070)
+    put(0x470000 + 0x138, 0x600090)
+    put(0x4c0000, 0x4e0000)
+    put(0x4e0000 + 0x138, 0x6000a0)
+    put(0x4e0000 + 0x150, 0x6000b0)
+    put(0x4e0000 + 0x28, 0x600050)
+    put(0x4f1000, 0x4d0000)
+    put(0x4d0000 + 0x120, 0x6000c0)
+    if failure == 'prepare':
+        uc.mem_write(0x4c0010, b'\x01')
     memories = []
     for i in range(slots):
         memory, mapping = 0x490000 + i * 0x1000, 0x4c0000 + i * 0x1000
@@ -77,8 +89,21 @@ def run(slots, record, current=-1, linked=False, failure=None):
             return
         if failure and address == 0x14bba45a:
             events.append('create-cpu-map')
+            ret(0x500000 if selection_failure else 0)
+            return
+        if selection_failure and address == 0x600090:
+            assert uc.reg_read(UC_X86_REG_RDI) == 0x490000
+            assert uc.reg_read(UC_X86_REG_RSI) == 0x4f1000
+            events.append('create-gpu-map')
+            ret(0 if failure == 'gpu-map' else 0x4c0000)
+            return
+        if selection_failure and address in (0x6000a0, 0x6000b0, 0x6000c0, 0x14ba43a0):
+            events.append({0x6000a0: 'prepare', 0x6000b0: 'allocate-va',
+                           0x6000c0: 'recover-va', 0x14ba43a0: 'recover-prepare'}[address])
             ret(0)
             return
+        if selection_failure and address == 0x14b6ad2f:
+            assert uc.reg_read(UC_X86_REG_RAX) & 0xff == 1
         if address in labels:
             if address == 0x600070:
                 assert uc.reg_read(UC_X86_REG_RDI) == 0x4c0000 + current * 0x1000
@@ -102,14 +127,25 @@ def run(slots, record, current=-1, linked=False, failure=None):
         uc.emu_start(0x14b6ac68, 0x600061, count=20000)
         assert uc.reg_read(UC_X86_REG_RIP) == 0x600060
         assert uc.reg_read(UC_X86_REG_RAX) & 0xff == 0
-        assert events == (['channel-retain', 'allocate-memory', 'unlinked-log',
+        selection_events = ['channel-retain', 'allocate-memory', 'create-cpu-map', 'create-gpu-map']
+        if failure == 'va':
+            selection_events += ['allocate-va', 'recover-va', 'object-release']
+        elif failure == 'prepare':
+            selection_events += ['prepare', 'recover-prepare', 'object-release']
+        selection_events += ['unlinked-log', 'unlinked-log']
+        assert events == (selection_events if selection_failure else
+                          ['channel-retain', 'allocate-memory', 'unlinked-log',
                            'unlinked-log', 'unlinked-log'] if failure == 'memory'
                           else ['channel-retain', 'allocate-memory', 'create-cpu-map',
                                 'unlinked-log', 'object-release', 'unlinked-log',
                                 'unlinked-log']), events
-        assert get(pool + 0x30) == 0 and get(pool + 0x38) == 0
+        assert get(pool + 0x30) == (0x490000 if selection_failure else 0)
+        assert get(pool + 0x38) == 0
         assert uc.mem_read(pool + 0x1842, 2) == b'\xff\xff'
-        assert uc.mem_read(pool + 0x1832, 2) == b'\x00\x00'
+        assert uc.mem_read(pool + 0x1832, 2) == (b'\x01\x00' if selection_failure else b'\x00\x00')
+        if selection_failure:
+            assert get(pool + 0x40) == 0x500000
+            memories.append(0x490000)
         events.clear()
     put(sp, 0x600060)
     uc.reg_write(UC_X86_REG_RSP, sp)
@@ -119,6 +155,8 @@ def run(slots, record, current=-1, linked=False, failure=None):
     expected = [] if linked else ['unlinked-log']
     if current >= 0:
         expected += ['complete-current']
+    if selection_failure:
+        expected += ['remove-cpu', 'object-release']
     for _ in range(slots):
         expected += ['finish-event', 'object-release', 'remove-cpu', 'object-release']
     expected += ['channel-release'] + (['record-release'] if record else []) + ['base-free']
@@ -143,8 +181,8 @@ for slots in (0, 1, 2):
                 run(slots, record, current, linked)
                 cases += 1
 assert cases == 24
-for failure in ('memory', 'cpu-map'):
+for failure in ('memory', 'cpu-map', 'gpu-map', 'va', 'prepare'):
     run(0, False, failure=failure)
 print('PASS 24 KC partial/current/linked-pool free fixtures; complete precedes release;'
-      ' two actual init/growth allocation-failure states cleaned;'
+      ' five actual init/growth failure states cleaned;'
       ' callbacks mocked, no actual event/DMA quiescence proof')
