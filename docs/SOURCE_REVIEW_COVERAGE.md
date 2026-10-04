@@ -7,6 +7,11 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 hash/heap callers: complete shrinkIfNeeded/percolateDown bodies pinned
+and native __text direct edges decoded excluding external placeholders. Inner
+heap index writes assume full hash membership; failed rehash can invalidate that
+invariant. Indirect callers, pool init and removal lifecycle remain pending.
+
 2026-10-04 queue publication callees: six complete native vector/hash bodies
 pinned. False really includes allocation failure; uninserted blocks can be
 published/countable but undiscoverable to allocator retries. Missing-key index

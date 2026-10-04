@@ -6385,6 +6385,26 @@ callback admission must be proved elsewhere. No executable patch/runtime test.
 
 ##### Queue publication failure is a real local allocator branch
 
+Additional complete shrinkIfNeeded (0x52) and percolateDown (0x15a) reviewed/
+pinned. Shrink uses hash occupancy percentages, then tail-calls the same
+non-failure-atomic resizeAndRehash; it has no success result to its caller.
+percolateDown updates heap entries and immediately writes through operator[]
+without contains guards. Its safety requires complete hash coverage for all heap
+elements, which failed rehash copies can invalidate. Adding contains only at
+eval's entrance does not protect this inner heap-index update.
+
+Exploratory instruction-decoded direct CALL/JMP inventory of the native __text
+section, excluding external relocation placeholders, found resizeAndRehash
+from add at 0xc024 and shrinkIfNeeded at 0xbe3a; vector grow from pool init
+0xa951 and pool grow 0xb3c2; hash add from pool grow 0xb3e8 and rehash 0xbed6.
+operator[] direct sites are prune (0xac3d/0xac63/0xac83), grow
+(0xb47e/0xb5df), eval (0xb6ba/0xb7a7/0xb7ff) and percolateDown
+(0xc288/0xc2c1). Eval is invoked by allocatePage/releasePage at 0xb0cf/0xb8d3.
+These are decoded direct edges, NOT a complete indirect-call or owner inventory;
+cold/code-data decoding, addresses taken and lifecycle callers remain pending.
+Pool init and hash removal/shrink invocation must be traced next. No production
+patch, allocation failure injection or hardware execution in this checkpoint.
+
 Further complete resizeAndRehash (0x170) and bucket-vector constructor (0xa2)
 reviewed/pinned. Resize allocates a 0x18 container and calls the constructor
 before checking the allocated pointer; constructor immediately writes three

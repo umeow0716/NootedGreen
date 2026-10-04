@@ -9,6 +9,8 @@ import sys
 # Complete reviewed native bodies. This fixes the concrete Intel override
 # graph, not inherited timer APIs, dynamic callbacks or runtime completion.
 STAMP_IRQ_NATIVE = {
+    "__ZN11IGHashTableIPN10IGPagePool11PoolElementEmNS0_15PoolElementHashE25IGIOMallocAllocatorPolicyE14shrinkIfNeededEv": (0x52, "ff90c793387645bee297503014bca4535e28a60556297cf57a295db08f95efdf"),
+    "__ZN15IGPriorityQueueIPN10IGPagePool11PoolElementENS0_18PoolElementCompareENS0_15PoolElementHashE25IGIOMallocAllocatorPolicyE13percolateDownERKS2_mm": (0x15a, "7426afabddba0c53420eda649880faeee5706a4ba8ede1526a98022d9ef6fad7"),
     "__ZN11IGHashTableIPN10IGPagePool11PoolElementEmNS0_15PoolElementHashE25IGIOMallocAllocatorPolicyE15resizeAndRehashEm": (0x170, "8133ad3b23eeae7e622f6bb07c2a48c1ee560f07300104a8618c00449541112a"),
     "__ZN8IGVectorIN11IGHashTableIPN10IGPagePool11PoolElementEmNS1_15PoolElementHashE25IGIOMallocAllocatorPolicyE4SlotES5_EC1Em": (0xa2, "7b753decc920c14c6625a45e26fb343ea9f1a192b1e5fbc3b870c64a64bdf259"),
     "__ZN8IGVectorIPN10IGPagePool11PoolElementE25IGIOMallocAllocatorPolicyE4growEm": (0x78, "d0eadd8fc2d8b9227e151fa3b7f5e650f0be03ffd879463ac349f75217c6c440"),
