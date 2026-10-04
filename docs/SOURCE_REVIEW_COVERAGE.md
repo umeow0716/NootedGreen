@@ -7,6 +7,11 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 manager pool cleanup: three complete native bodies pinned; device
+memory release is distinct from pool release. Failure cleanup needs initialized
+prefix tracking; ordinary free lacks local pool release. Indirect teardown and
+GPU/table lifetime must be established before adding release.
+
 2026-10-04 standard pool ownership: four complete native bodies pinned.
 real_ncpus pools use options 0 (non-threaded), narrowing prior callback hazard.
 Partial creation cleanup increments beyond array; withOptions leaks failed-init

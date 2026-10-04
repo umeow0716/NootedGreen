@@ -9,6 +9,9 @@ import sys
 # Complete reviewed native bodies. This fixes the concrete Intel override
 # graph, not inherited timer APIs, dynamic callbacks or runtime completion.
 STAMP_IRQ_NATIVE = {
+    "__ZN15IGMemoryManager19releaseDeviceMemoryEv": (0x46, "85eb115d6987c20d6b921fce637404510616ef4846cff455cc0c76cb43fa635c"),
+    "__ZN15IGMemoryManager15releasePagePoolEv": (0x92, "d23b081e493b13dbe74745d7618b2b5c8122e7f0ad8ad6ecf7bde07f532e433c"),
+    "__ZN15IGMemoryManager4initEP16IntelAcceleratorRK18IntelSharedMemInfoRK14_stolenMemInfo": (0x232, "4dec40e7229fc980e61dee463496e387f893fd06789f6841a5dafd5dff572347"),
     "__ZN15IGMemoryManager12initPagePoolEv": (0xcc, "f5a5d43004dbecc5719cdc76507ee529775658060db9aea3fbdf6256f813b176"),
     "__ZN15IGMemoryManager4freeEv": (0xb4, "69f568f6fe6e36f88666926f823d5b61677d984d47ff6095fc06cf148e6714b6"),
     "__ZN15IGMemoryManager14registerEventsEv": (0x50, "3fd8b2a3929eb106d81bb314a22376d3218f1865d8842a9e33f6cca920e46cf0"),

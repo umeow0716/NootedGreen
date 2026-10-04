@@ -6389,6 +6389,30 @@ callback admission must be proved elsewhere. No executable patch/runtime test.
 
 ####### Standard pool owner path is non-threaded
 
+Further complete manager init (0x232), releaseDeviceMemory (0x46) and
+releasePagePool (0x92) reviewed/pinned. releaseDeviceMemory only clears +0x18
+and releases/clears +0x68/+0x70 objects; it does NOT touch pool array +0x110.
+releasePagePool separately releases each slot across real_ncpus, clears it,
+frees the array and clears +0x110. That helper assumes every slot is either
+initialized or null and the CPU count still equals the allocation count.
+
+Manager init clears +0x110 before constructing device resources, dummy pages,
+global page table, stolen/fence objects and pools. Its failure branch releases
+device/global/stolen/fence/dummy resources then releasePagePool. But initPagePool
+already contains the erroneous partial-failure loop, so the outer helper cannot
+be relied on to recover from that loop. The pool array allocation is not zeroed
+locally; a partially populated array cannot safely be passed to the full-count
+release helper without first initializing all slots or passing prefix length.
+
+Native __text decoded direct edges (external placeholders excluded) show only
+initPagePool calling pool withOptions (options 0); registerEvents is called by
+IntelAccelerator start at 0x24145; releasePagePool's direct caller is manager
+init's failure branch at 0xe7a2. Reviewed manager free does not call it, directly
+or via releaseDeviceMemory. This exposes an ownership gap requiring effective
+vtable/indirect/stop caller review; it is not yet a whole-path leak proof.
+Any new release must follow true table/GPU-user retirement, not merely a free
+method name. No production patch, runtime or Host GPU mutation.
+
 Complete manager initPagePool/free/registerEvents and pool withOptions reviewed/
 pinned (0xcc/0xb4/0x50/0x4e). Native relocation at 0xc8240 resolves to
 _real_ncpus, not a literal zero pointer or constant pool count. An initial
