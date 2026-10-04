@@ -9,6 +9,10 @@ import sys
 # Complete reviewed native bodies. This fixes the concrete Intel override
 # graph, not inherited timer APIs, dynamic callbacks or runtime completion.
 STAMP_IRQ_NATIVE = {
+    "__ZN31IGHardwarePerProcessPageTable6411expandLevelINS_10LevelEntryILm9E21GTTPageDirectoryEntryEENS1_ILm9E28GTTPageDirectoryPointerEntryEEEEbRT_yyPT0_ym": (0xde, "4c0a775e56fefaf5fd0b970cf396668811bc58ca3b3c882d57c76e4a0653df80"),
+    "__ZN31IGHardwarePerProcessPageTable6411expandLevelINS_10LevelEntryILm9E17GTTPageTableEntryEENS1_ILm9E21GTTPageDirectoryEntryEEEEbRT_yyPT0_ym": (0x98, "2f377f041a36bf2f733a4e34d25d239d256f9bd57e8445837aec60170c9235d4"),
+    "__ZN19IGHardwarePageTable12releaseRangeERK14IGAddressRange": (0xd4, "7fb7fa5dd40ed422c9a2aa219d8e0c78dfcd35bfdeaaa77d27ad3c193cfb9489"),
+    "__ZN16IntelAccelerator27flushHardwareAfterGttUpdateEv": (0x16, "0c05a6864ebec38017506837721a541f874f1c17997dcba65ef00919e3a3b18f"),
     "__ZN31IGHardwarePerProcessPageTable648mapRangeERK14IGAddressRangeyy": (0xe6, "f58bafe5bf67319aed0ecd8e44965f6d2dab044b6963b3a36d52a9d5a733cdba"),
     "__ZNK31IGHardwarePerProcessPageTable649pageWalk3E19GTTVirtualAddress64RPNS_10LevelEntryILm9E17GTTPageTableEntryEE": (0x68, "78eae8bb2011882715ef02e83b19e0514736d601ac53d7a176a26cf386cb86b6"),
     "__ZN31IGHardwarePerProcessPageTable6410unmapRangeERK14IGAddressRange": (0xbe, "d06c36dcf6a74a6400f97dd245ff6289685ea468f5f29453dab8122a8dec457a"),
@@ -443,6 +447,7 @@ def macho_inventory(path):
     # These imports distinguish the periodic collection mutex from bridge
     # descriptor spin locks. They do not certify dynamic callback lifetime.
     stamp_irq_imports = {
+        0xe27e: "_IOMalloc", 0xe297: "_memset",
         0xa720: "__ZN8OSObjectC2EPK11OSMetaClass",
         0xa7c3: "__ZN8OSObjectnwEm", 0xa7d8: "__ZN8OSObjectC2EPK11OSMetaClass",
         0xa7ea: "__ZNK11OSMetaClass19instanceConstructedEv",
@@ -580,6 +585,9 @@ def macho_inventory(path):
         start = value(name)
         assert next_symbol(start) - start == length, f"{path}: changed stamp IRQ body boundary: {name}"
         assert hashlib.sha256(image[start:start + length]).hexdigest() == digest, f"{path}: changed stamp IRQ body: {name}"
+    assert image[0x14518:0x1451e] == bytes.fromhex("ff 90 30 01 00 00"), f"{path}: changed releaseRange unmap virtual"
+    assert direct_branches("__ZN19IGHardwarePageTable12releaseRangeERK14IGAddressRange", "__ZN16IntelAccelerator27flushHardwareAfterGttUpdateEv") == [0x14522], f"{path}: changed post-unmap deferred-flush edge"
+    assert image[0x14573:0x14575] == bytes.fromhex("b0 01"), f"{path}: changed unconditional releaseRange success"
     display_table = value("__ZTV18IGAccelDisplayPipe")
     resource_table = value("__ZTV15IGAccelResource")
     map_table = value("__ZTV16IGAccelMemoryMap")

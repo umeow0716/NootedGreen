@@ -6951,6 +6951,47 @@ No executable patch or runtime mutation.
 
 # Native 64-bit PPGTT map/unmap failure and retirement boundary
 
+## Lower-level construction and concrete release caller follow-up
+
+Reviewed and pinned the remaining expandLevel methods at e212/de and e2f0/98.
+Both obtain a page from the manager's pool, store its descriptor in the child
+record, and initialize all 512 hardware entries with the masked dummy page
+and flags 3 before publishing the parent hardware entry. The directory method
+additionally allocates/zeros a 0x4000 software-record array. On that allocation
+failure it releases the newly allocated descriptor, clears the child descriptor
+and returns false without publishing a parent hardware entry. Imported calls
+at e27e and e297 are IOMalloc and memset, not zero-displacement self-calls.
+The leaf method has no software-array allocation after page acquisition.
+
+Both methods guard the parent pointer for the hardware entry store but then
+increment the parent count unconditionally. Their reviewed expandRange call
+sites pass a parent; this conditional null dereference is not an independently
+proven reachable defect. Neither method contains a local invalidation or
+completion barrier. This construction ordering does not establish retirement
+of a formerly live descriptor or safety of caller rollback.
+
+Also reviewed/pinned complete releaseRange 144ac/d4 and
+flushHardwareAfterGttUpdate 2d1d8/16, with explicit virtual-unmap, subsequent
+direct-flush edge and unconditional-success anchors. releaseRange invokes
+virtual offset 0x130, then calls the flush method and returns true. The flush
+method only tests accelerator +0xc78 bit 1 and, when set, ORs +0x1340 with 0x3f;
+it issues no request and waits for no acknowledgement. This corroborates the
+already documented deferred-flush behavior; it is not a new defect discovery.
+Combined with native unmap's pruning/release before this call, the PPGTT
+retirement proof must locate the effective consumer and its locking/admission
+policy. The custom VF GGTT unmap has its own synchronous invalidation path;
+do not conflate that repaired path with unmodified native PPGTT pruning.
+
+No executable patch, deployment, VM start or Host GPU manipulation. Next:
+trace effective deferred-flush consumption and establish a transaction owner
+that retains old tables/backing until required GPU invalidation completes.
+An exploratory linear __text operand scan for displacement 0x1340 found
+constructor/start writes, the flush OR and many accesses in unrelated object
+types or indexed ring-buffer expressions. Equal displacement is not field
+identity. This scan is not a complete consumer inventory: pointer arithmetic,
+other bytes of the flags word, outlined code and register aliasing remain to
+trace. Do not infer that the flag has no consumer from this negative search.
+
 Complete symbol-bounded bodies reviewed in both native payloads and now hash
 pinned: mapRange d0ce/e6, pageWalk3 e3ae/68, unmapRange da60/be,
 mapRangeDummy db1e/e4 and expandRange d1b4/246. These pins detect payload drift;
