@@ -6377,6 +6377,43 @@ callback admission must be proved elsewhere. No executable patch/runtime test.
 
 # Descriptor synchronization option has a concrete 64-bit constructor source
 
+## Base ownership and 64-bit descriptor operations
+
+Complete native bodies reviewed/pinned: hardware base init (0x3e), task address
+mode (0x16), 64-bit descriptor map/remap/read (0xb6/0x8a/0x32), expand2 (0x84),
+and PageDescriptor retain/release (0x14/0x38). Base init calls OSObject base init
+through imported vtable, stores accelerator +0x10 and type +0x18 without a local
+accelerator retain. Address mode reads task byte +0x2d9: zero returns 3 (64-bit
+factory), nonzero returns 1 (32-bit factory). Writers of this byte and outer
+accelerator/table lifetime are still pending; this does not establish the mode
+of any current task.
+
+Descriptor operations use only range start, not its length: root index selects
+bits 39..47 and the subordinate descriptor index bits 30..38. Thus sharing is
+at 1 GiB granularity, not an arbitrary byte-range copy. Map expands the root/
+second-level structures, stores/retains the incoming descriptor, sets software
+record flags 0x10200, and publishes its physical address masked to 39 bits plus
+3 into the hardware entry. Expansion failure invokes releaseRange then returns
+false; that cleanup's ownership and failure semantics remain pending.
+
+Remap releases the old descriptor BEFORE replacing/retaining the new one and
+updating the hardware entry. No local invalidation/drain appears. Read blindly
+dereferences the root/subordinate records, writes the descriptor pointer and
+returns true; it supplies no null/bounds validation locally. Caller invariants
+must be established before treating either operation as safe or erroneous.
+Retain/release use imported OSAddAtomic64 on descriptor +0x28; release seeing
+old count 1 tail-calls PagePool's release helper. Its actual reuse/free ordering,
+aliasing assumptions, expansion callees and cross-owner invalidation remain
+unreviewed. Do not infer a GPU lifetime barrier from atomic reference counting.
+No production patch or runtime operation in this checkpoint.
+
+Validation: both native payload contracts and four source guard/order mutation
+checks pass, as does diff whitespace validation. The first new atomic import
+check incorrectly expected a CALL for retain; disassembly/relocation identifies
+its tail JMP, and the contract now checks that exact opcode (release uses CALL).
+No binary or production change was made to resolve the fixture error. Full
+static suite last passed at 825e45d; its CI 37163430723 is now successful.
+
 Reviewed/pinned complete common per-process init (0x3a), 32-bit init (0xbe)
 and 64-bit init (0x40). Common init delegates to hardware-page-table base init,
 then stores task +0x20 and supplied options +0x28. The 32-bit initializer passes

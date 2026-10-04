@@ -9,6 +9,14 @@ import sys
 # Complete reviewed native bodies. This fixes the concrete Intel override
 # graph, not inherited timer APIs, dynamic callbacks or runtime completion.
 STAMP_IRQ_NATIVE = {
+    "__ZN19IGHardwarePageTable15initWithOptionsEP16IntelAcceleratorNS_4TypeE": (0x3e, "4dd2d3d12a42751fe3a58852b7c9b758ebe81cf80aa32015c9550db78070356f"),
+    "__ZNK11IGAccelTask29getHardwareContextAddressModeEv": (0x16, "009814216381ad12a9161899b0e332c8630311c31f5307a937f0c1b63f5a022b"),
+    "__ZN31IGHardwarePerProcessPageTable6421mapDescriptorForRangeERK14IGAddressRangePN10IGPagePool14PageDescriptorE": (0xb6, "e0e111abf4ec5a2de14ca65d1304611a6c4990f5da6decb5abaa1a29d4fe78c6"),
+    "__ZN31IGHardwarePerProcessPageTable6423remapDescriptorForRangeERK14IGAddressRangePN10IGPagePool14PageDescriptorE": (0x8a, "eb27e5cf9f9a519893647c044cae0fb8d967f098701a46d3cd9dca9fac0ff9ee"),
+    "__ZNK31IGHardwarePerProcessPageTable6422readDescriptorForRangeERK14IGAddressRangePPN10IGPagePool14PageDescriptorE": (0x32, "fb2644014513475491f0504737f0fe210e37e4635d3200f2a973539e907909bf"),
+    "__ZN31IGHardwarePerProcessPageTable647expand2E19GTTVirtualAddress64": (0x84, "b92e3f9f67a7d71b4b2a63a4d3ed2c48e25e703a0e966146d9592e546bfac44a"),
+    "__ZN10IGPagePool14PageDescriptor6retainEv": (0x14, "1b3cd9862b970917206f59e670062a08d6a5eedd1362ad697c95b7ffd84b5c0c"),
+    "__ZN10IGPagePool14PageDescriptor7releaseEv": (0x38, "97af69e37be7b19aab2f4769dc243f9759121e84f57eada2e57846a27b54f2ac"),
     "__ZN29IGHardwarePerProcessPageTable15initWithOptionsEP16IntelAcceleratorP11IGAccelTaskj": (0x3a, "e306e97f7f433d7cbb1f3bc321fe44096cefd96c1975d336d0ea7073090feb83"),
     "__ZN31IGHardwarePerProcessPageTable3215initWithOptionsEP16IntelAcceleratorP11IGAccelTask": (0xbe, "7002d2e902245add7b5bca2f3c598f7a2122a1aa9753fa2838d486ad3460c106"),
     "__ZN31IGHardwarePerProcessPageTable6415initWithOptionsEP16IntelAcceleratorP11IGAccelTask": (0x40, "3460b8dba11c7deb5f0c32b5eb5822290092ced82dd1d065d24be4b7ec6aa5fb"),
@@ -388,6 +396,7 @@ def macho_inventory(path):
     # These imports distinguish the periodic collection mutex from bridge
     # descriptor spin locks. They do not certify dynamic callback lifetime.
     stamp_irq_imports = {
+        0xb825: "_OSAddAtomic64", 0xbb67: "_OSAddAtomic64",
         0x80dfc: "__ZNK18IOAccelDisplayPipe15getEventMachineEv",
         0x80e16: "__ZNK18IOAccelDisplayPipe15getEventMachineEv",
         0x80eb0: "__ZNK18IOAccelDisplayPipe15getEventMachineEv",
@@ -471,7 +480,7 @@ def macho_inventory(path):
             relocations[name] = address
 
     for address, name in stamp_irq_imports.items():
-        opcode = 0xe9 if name in ("_IOLockUnlock", "_lck_spin_unlock") and address != 0x24773 else 0xe8
+        opcode = 0xe9 if address == 0xb825 or (name in ("_IOLockUnlock", "_lck_spin_unlock") and address != 0x24773) else 0xe8
         if observed_stamp_irq_imports[address] != [(name, 0x2d)] or image[address - 1] != opcode:
             raise AssertionError(f"{path}: changed stamp IRQ imported call at {address:#x}")
 

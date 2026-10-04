@@ -7,6 +7,12 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 base/descriptor ownership: eight complete native bodies reviewed and
+pinned, including address-mode selector and atomic descriptor reference calls.
+1 GiB descriptor granularity and release-before-remap ordering are concrete;
+PagePool recycling, expansion failure cleanup, mode writers and outer lifetime
+remain open. This is not a GPU invalidation/drain proof.
+
 2026-10-04 synchronization feature provenance: complete common/32/64-bit page
 table initializers reviewed/pinned. 64-bit options=1 selects descriptor reuse;
 32-bit options=0 selects per-entry sync and ignores dummy-map statuses locally.
