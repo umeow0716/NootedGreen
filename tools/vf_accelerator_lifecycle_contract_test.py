@@ -9,6 +9,9 @@ import sys
 # Complete reviewed native bodies. This fixes the concrete Intel override
 # graph, not inherited timer APIs, dynamic callbacks or runtime completion.
 STAMP_IRQ_NATIVE = {
+    "__ZN20IGHardwareRingBuffer16getFlushTLBSpaceEv": (0x20, "371c66eaa0eb7f33572bfeca005edcd13b44d6cb1f1cb2f8a92b3baa8bbb5c26"),
+    "__ZN27IGHardwareRingBufferCompute16getFlushTLBSpaceEv": (0x20, "e60720b063a6a465489f7c5594d97f92c14bfe0122ae41a6bcea00d8fb66f380"),
+    "__ZN24IGHardwareRingBufferMain16getFlushTLBSpaceEv": (0x20, "e60720b063a6a465489f7c5594d97f92c14bfe0122ae41a6bcea00d8fb66f380"),
     "__ZN20IGHardwareRingBuffer10writeDWordEj": (0x136, "ebcb4164727daaf22fd9df83aadbf2c68de0a8024df79bb7fcc1c3f1c1790d47"),
     "__ZN20IGHardwareRingBuffer16writeFlushAuxTLBEv": (0x46, "a6886597ded0b5439e645aa2f9de563b1b94241c12c7c7696a396759d4505a31"),
     "__ZN16IntelAccelerator32flushHardwareAfterGttUpdateOfAuxEv": (0x16, "bf1c2cfda9f70eb29f938d9699cd21e4a10afebc12bf15912310386579804d6a"),
@@ -594,6 +597,12 @@ def macho_inventory(path):
     assert image[0x14518:0x1451e] == bytes.fromhex("ff 90 30 01 00 00"), f"{path}: changed releaseRange unmap virtual"
     assert direct_branches("__ZN19IGHardwarePageTable12releaseRangeERK14IGAddressRange", "__ZN16IntelAccelerator27flushHardwareAfterGttUpdateEv") == [0x14522], f"{path}: changed post-unmap deferred-flush edge"
     assert image[0x14573:0x14575] == bytes.fromhex("b0 01"), f"{path}: changed unconditional releaseRange success"
+    for table, prefix in (
+            ("__ZTV20IGHardwareRingBuffer", "__ZN20IGHardwareRingBuffer"),
+            ("__ZTV27IGHardwareRingBufferCompute", "__ZN27IGHardwareRingBufferCompute"),
+            ("__ZTV24IGHardwareRingBufferMain", "__ZN24IGHardwareRingBufferMain")):
+        for slot, suffix in ((0x150, "16getFlushTLBSpaceEv"), (0x160, "13writeFlushTLBEv")):
+            assert struct.unpack_from("<Q", image, value(table) + 16 + slot)[0] == value(prefix + suffix), f"{path}: changed TLB reservation/emission pairing: {table}"
     assert image[0x41c70:0x41c76] == bytes.fromhex("ff 90 60 01 00 00"), f"{path}: changed pending-TLB virtual emission"
     assert direct_branches("__ZN20IGHardwareRingBuffer10writeDWordEj", "__ZN20IGHardwareRingBuffer16writeFlushAuxTLBEv") == [0x41cb5], f"{path}: changed pending AUX emission"
     for owner, calls in (

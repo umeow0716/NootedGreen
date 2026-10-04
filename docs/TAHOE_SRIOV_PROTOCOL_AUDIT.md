@@ -6957,6 +6957,20 @@ No executable patch or runtime mutation.
 
 #### Correction: indexed ring accesses do consume accelerator pending flags
 
+##### Concrete reservation/emission vtable pairing
+
+The base, Compute and Main ring vtables now pin +0x150 to their respective
+getFlushTLBSpace methods and +0x160 to their writeFlushTLB methods. Complete
+0x20-byte reservation bodies at 428ec, 4e6d8 and 8507c are reviewed/pinned.
+Base returns 5 dwords when accelerator +0xfd6 bit 16 is clear, 10 when set;
+Compute/Main return 6 or 12 under the same bit. These totals match the
+previously reviewed single/double command emissions. This establishes the
+selected native vtable pairing and size calculation, not complete caller
+space accounting, readiness lifetime, effective patched runtime dispatch or
+hardware command completion. Other ring-class pairings remain to inspect.
+No production change; the deferred native invalidation still cannot stand
+in for synchronous retirement of old PPGTT tables.
+
 Tracing base registers in the writeDWord body establishes that ring +0x10
 supplies the accelerator and ring +0x40 supplies the engine ID. The indexed
 qword accesses at accelerator +0x1340 and +0x1380 are therefore pending bitmaps,
