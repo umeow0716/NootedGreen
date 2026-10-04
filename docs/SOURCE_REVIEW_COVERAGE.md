@@ -7,6 +7,12 @@ audit's runtime blockers are open.
 
 ## Scope
 
+New complete native reviews: resource init `0x6e840/0x8c` and resource free
+`0x6f59e/0x26c`, pinned in both payloads. Revisited existing resource complete
+without duplicate credit. Rotation prepared-state completion is distinct from
+final OSObject release; private rotation-owner final cleanup remains unresolved.
+Absence of a local free-field access is not a whole-owner-graph leak proof.
+
 New complete native review: Intel memory-map allocGPUVirtualAddress
 `0x10e6e/0x212`, hash-pinned in both payloads. Resolved concrete rotation
 prepare/VA-allocation vtable identities and revisited three existing complete

@@ -6955,6 +6955,46 @@ No executable patch or runtime mutation.
 
 ### Update fanout must participate in the same owner transaction
 
+#### Rotation owner cleanup boundary: complete is not final release
+
+New complete native reviews/pins: resource init `0x6e840/0x8c`, SHA-256
+`77551d181809aac756b0e8ae80a91f3df84d9cae6ee36b881c5ee5c90e9fd70b`,
+and resource free `0x6f59e/0x26c`, SHA-256
+`8bf6604632ce62b2bccd54c2d2ca22233633738b3de60ebbd4f00aa01a67a767`.
+Re-read already-pinned complete `0x75380/0x6c`; no duplicate whole-body
+credit. Init saves the inherited init bool, clears private owner fields
+including rotation mapping `+0x238`, prepared flag `+0x240`, rotation mode
+`+0x244` and width/height `+0x248`, then returns the saved bool. Initial
+zeros do not establish what later geometry-setting APIs validate.
+
+Complete checks `+0x240` first. When true it may merge mapping event storage
+through accelerator's event machine, invokes rotation map virtual `+0x140`
+and clears the prepared flag. When false it skips that entire path and
+delegates inherited resource complete. It does not release or clear the
+rotation pointer. Thus a rotation prepare-false result from the preceding
+review is not followed by a local rotation-map completion in this method.
+Completion and dropping the OSObject reference are distinct operations.
+
+The complete native free body walks resource-info entries and returns selected
+CCS-related ranges, frees resource-info/auxiliary arrays, releases owner fields
+`+0x228` and `+0x220` (completing the latter first), then delegates inherited
+free. It does not directly load/release/clear rotation field `+0x238` or
+dispatch complete on that mapping. The previously reviewed inherited resource
+free's treatment of primary mapping `+0x40` is not automatically treatment
+of this private field. This narrows the missing ownership graph; it is not
+proof of a leak because other effective callers, raw aliases, aggregate owner
+storage or earlier cleanup could handle the mapping. Adding a blind final
+release would risk double-release or premature backing reuse without that
+graph and GPU-completion proof.
+
+Both archived native payload contracts pass with the two new complete-body
+fixtures. Decoded resource-method field discovery located init, creation and
+complete accesses; negative field search does not exclude indirect addressing
+or inherited/external cleanup. No production repair or runtime operation.
+Next: establish rotation mapping acquisition/owner transfer and cleanup across
+all preparation failures, and connect it to retained page/pool retirement
+before native backing zero/reuse.
+
 #### Effective rotation preparation and VA-allocation dispatch
 
 Resolved the concrete Intel memory-map vtable: object slot `+0x138` at

@@ -9,6 +9,8 @@ import sys
 # Complete reviewed native bodies. This fixes the concrete Intel override
 # graph, not inherited timer APIs, dynamic callbacks or runtime completion.
 STAMP_IRQ_NATIVE = {
+    "__ZN15IGAccelResource4freeEv": (0x26c, "8bf6604632ce62b2bccd54c2d2ca22233633738b3de60ebbd4f00aa01a67a767"),
+    "__ZN15IGAccelResource4initEP22IOGraphicsAccelerator2P14IOAccelShared2j": (0x8c, "77551d181809aac756b0e8ae80a91f3df84d9cae6ee36b881c5ee5c90e9fd70b"),
     "__ZN16IGAccelMemoryMap22allocGPUVirtualAddressEv": (0x212, "dbeabbc4bcff5ada45dd5be9ff14bb4ae00a66d544b720359040f504cf01058f"),
     "__ZN15IGAccelResource31createAndPrepareRotationMappingEv": (0xf4, "3ecec4f2acb2a437f81f304a571663c062632f47270ba1a17993e9a254029e3b"),
     "__ZN16IGAccelMemoryMap4initEP22IOGraphicsAccelerator2P11IOAccelTaskP13IOAccelMemoryj": (0x68, "970afaf15c9854e913ad4aa67af32f4ff61ca1267ba3f4f06ad6dd1f15fea892"),
