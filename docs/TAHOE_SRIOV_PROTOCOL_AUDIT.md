@@ -6955,6 +6955,27 @@ No executable patch or runtime mutation.
 
 ### Update fanout must participate in the same owner transaction
 
+#### Typed and heap allocation preserve the zero flag downstream
+
+Complete Boot typed allocator `ffffff8000369980/90` reviewed using
+the next DISTINCT defined address (kalloc_type_impl and external are
+same-address aliases). It copies ESI to EDX and masks with7, preserving
+Z_ZERO4. Registered-zone branches add d1000/d1040 then tail to
+ffffff80003d4230; the no-zone branch adds d1000 and tails to kalloc_ext.
+The 90-byte fixture and low-flag preservation instruction window are pinned.
+
+Complete kalloc_ext `ffffff8000369360/370` reviewed and pinned, including
+the unsymbolized large-allocation helper beginning3694e0 within that span.
+Zone selection may add40, but passes the existing flags to3d4230 at36947b.
+Large path masks original flags with4 at369549, shifts that bit left5,
+and includes it in allocator flags passed to419ae0 at369627. Both selected
+routes therefore preserve or translate the zero request, rather than
+silently clearing it. Exact zone/VM allocator fulfillment is not established
+by these forwarding bodies; no allocator failure result or actual memory
+content has been dynamically observed. Next determine the pool type-view
+zone and review its selected zeroing path, without recursively crediting
+unread callees or enabling a VM on forwarding evidence alone.
+
 #### Exact Boot object allocator requests zeroing on both branches
 
 Complete Boot KC OSObject_typed_operator_new

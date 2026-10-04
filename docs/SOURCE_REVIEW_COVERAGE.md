@@ -7,6 +7,11 @@ audit's runtime blockers are open.
 
 ## Scope
 
+Two complete Boot allocation spans added: typed allocator369980/90
+(distinct-address boundary despite aliases) and heap allocator369360/370
+including unsymbolized large helper. Zero flag forwarding/translation
+verified and pinned; final zone/VM fulfillment is not yet proven.
+
 Complete Boot typed-object allocator ffffff8000a1cc40/50 reviewed and
 pinned with both zero-request immediates. No tracking branch in this body;
 allocator callee fulfillment remains pending. Empty alias span for

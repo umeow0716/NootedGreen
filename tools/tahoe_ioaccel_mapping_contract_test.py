@@ -437,6 +437,11 @@ def check_boot_atomic(system, path):
         return boot[matches[0]:matches[0] + length]
 
     typed_new = kernel_read(0xffffff8000a1cc40, 0x50)
+    typed_alloc = kernel_read(0xffffff8000369980, 0x90)
+    assert hashlib.sha256(typed_alloc).hexdigest() == "5f34a636c2f1fbc91ff083c13527fa6b05bd0eb6a6056a3305170058be32cb10", "changed typed allocation flag forwarding"
+    assert typed_alloc[4:12] == bytes.fromhex("89 f2 48 8b 07 83 e2 07"), "changed typed allocation low flag preservation"
+    heap_alloc = kernel_read(0xffffff8000369360, 0x370)
+    assert hashlib.sha256(heap_alloc).hexdigest() == "fd65e2351139e6231be769f673b75b18b9cfd41a275750b43ddc5973955b4e97", "changed heap zone/large allocation forwarding"
     assert hashlib.sha256(typed_new).hexdigest() == "938c1b57ae18044138a66393284b04e4bd1c2249a9bd58200cd28b55d65a929e", "changed Boot typed object allocation policy"
     assert typed_new[0x20:0x25] == bytes.fromhex("ba 04 10 04 00"), "changed sized allocation zero flags"
     assert typed_new[0x2e:0x33] == bytes.fromhex("be 04 00 00 00"), "changed typed allocation zero flags"
