@@ -9,6 +9,13 @@ import sys
 # Complete reviewed native bodies. This fixes the concrete Intel override
 # graph, not inherited timer APIs, dynamic callbacks or runtime completion.
 STAMP_IRQ_NATIVE = {
+    "__ZN18IGStolenMemoryPool5purgeEv": (0x32, "f001f9826c7d49fe1748b47b97f5850bcb8c1cef18405b7088f93573526c9f9b"),
+    "__ZN17IGInterruptBridge15systemWillSleepEv": (0x2c, "e6e531af30a1da358a33e447f4007ba1d2beb51b13f05ebb9d2b1f2506116449"),
+    "__ZN17IGInterruptBridge13systemDidWakeEv": (0xa, "fd901862e71d5dfd92db1285d1f904a2a2edc3b097f8bbeade9271fbb0cf870c"),
+    "__ZN12IGScheduler415systemWillSleepEv": (0x12, "ebc6258ca855696d94fdaa3df1e2006f5549fb32d7b70d049dd2fa51a16bcd19"),
+    "__ZN12IGScheduler413systemDidWakeEv": (0x12, "e0172f9154cee45d45aaa5ca84ea00dc0a92a63227809759b44478965e9a56ae"),
+    "__ZN11IGScheduler15systemWillSleepEv": (0x52, "42a0d04c4318678cf073b9cbe5ccc96f98b7452db1915b4a99e358e0fa85bfc0"),
+    "__ZN11IGScheduler13systemDidWakeEv": (0x6, "5a96d1fb661d55552184ea24023ae8190bd1523ae1f855a8d671b07143e8b1df"),
     "__ZN16IntelAccelerator15systemWillSleepEv": (0x64, "37b3d5f2b38d0ba7a61820c7e0c24f593101fc0cf521a9380e1c3047b8e6f363"),
     "__ZN16IntelAccelerator13systemDidWakeEv": (0x62, "4f76040d34525555af43b282b2dd5c3ccaca5fa15dcc718f227151753aa8f4f0"),
     "__ZN21IGHardwareGuCCTBuffer32handleSoftwareGuCToHostInterruptEv": (0xa4, "4e3a72792d35aff7c4ee3b1dd14b91de487b2717801c827f683d4e62e4c0f4bc"),
@@ -1725,6 +1732,9 @@ def macho_inventory(path):
             len(direct_branches(BRIDGE_SYSTEM_WAKE, BRIDGE_ENABLE)) != 1:
         raise AssertionError(
             f"{path}: interrupt-bridge sleep/wake lifecycle changed")
+    intel_sleep = "__ZN16IntelAccelerator15systemWillSleepEv"
+    assert direct_branches(intel_sleep, "__ZN18IGStolenMemoryPool5purgeEv") == [0x2894b], f"{path}: changed pre-base stolen-pool purge"
+    assert direct_branches(intel_sleep, BRIDGE_SYSTEM_SLEEP) == [0x28967], f"{path}: changed post-base bridge sleep"
     firmware_start = value(SCHEDULER_INIT_FIRMWARE)
     firmware_body = image[firmware_start:next_symbol(firmware_start)]
     firmware_steps = (

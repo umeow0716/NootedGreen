@@ -7,6 +7,13 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 power subordinate ordering: seven new full-body fixtures include
+purge, scheduler/base forwarding and previously edge-reviewed bridge helpers.
+Corrected Intel ordering to scheduler -> stolen-pool purge -> base cleanup ->
+bridge sleep. Base scheduler sleep only manages its timer; no local GuC/GPU
+retirement. Purge callee disposition and finishAllStamps dependencies remain
+open. Native power-path correctness and DMA quiescence are not certified.
+
 2026-10-04 effective power graph: three complete system_will_sleep/Intel
 sleep/wake bodies reviewed/pinned. True-mode caller holds accelerator mutex
 while Intel override delegates to the base sleep slot, connecting the archived

@@ -6953,6 +6953,32 @@ No executable patch or runtime mutation.
 
 ## Mapping last-release admission and deferred raw-list transfer
 
+Power subordinate follow-up/correction: reviewed complete stolen-memory
+pool purge c9ac/32, base scheduler sleep 56844/52 and wake 56896/6, and
+Scheduler4 forwarding bodies 1db5c/12 and 1db6e/12. Bridge sleep/wake
+4ab14/2c and 4ab40/a were previously checked by selected lifecycle edges;
+their complete-body hashes are now added as well. Seven whole-body fixtures
+are new, not seven newly discovered runtime routes.
+
+Corrected the preceding Intel sleep description: c9ac is stolen-memory purge,
+not bridge shutdown. The actual order is scheduler sleep, stolen-pool purge,
+base accelerator cleanup, then interrupt-bridge sleep. Purge walks a raw chain
+and dispatches virtual +0x120 with operation 4; that callee's disposition and
+outer lifetime still need provenance. Base scheduler sleep locks +0x440,
+cancels/disables timer +0x448, clears +0x450 and unlocks; Scheduler4 forwards
+to those base vtable slots, and base wake is a no-op. These selected bodies do
+not themselves send a GuC disable or wait for GPU DMA retirement.
+
+Bridge sleep invokes finishAllStamps with mask 0x2b before tail-dispatching
+its established disable method. Wake tail-dispatches enable. Stamp completion
+and IRQ disable do not independently prove TLB invalidation or all native
+page-table users retired, especially under the already documented termination
+stamp bypass. No hardware/panic attribution is made. Two explicit Intel
+purge/bridge call-edge checks now prevent repeating the ordering confusion;
+both payloads and negative source contracts pass. Next trace purge disposition
+and finishAllStamps dependencies against native mapping retirement. No runtime
+or production hook changed, and Host containment hold remains.
+
 Effective sleep caller follow-up: complete system_will_sleep
 (14ba6144/25c) and IntelAccelerator systemWillSleep (28916/64),
 systemDidWake (2897a/62) reviewed/pinned. In the true-mode system_will_sleep
@@ -6965,9 +6991,9 @@ a universal power-event lock assertion.
 
 The declared Intel +0x9d8/+0x9e0 slots resolve to the reviewed Intel overrides,
 not directly to base methods. Intel sleep dispatches scheduler +0x118 and
-calls a bridge subordinate before explicitly invoking the imported base
+calls stolen-memory pool purge before explicitly invoking the imported base
 accelerator vtable +0x9e8 (header-inclusive +0x9d8). It then invokes another
-native engine subordinate. Intel wake resets selected bookkeeping, invokes
+interrupt-bridge sleep. Intel wake resets selected bookkeeping, invokes
 engine/scheduler subordinates and delegates through base +0x9f0. The import
 at c81a8 is verified as the base accelerator vtable, and the corresponding
 KC base sleep slot resolves to systemWillSleep. This connects the recorded
