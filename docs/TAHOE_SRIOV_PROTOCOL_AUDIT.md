@@ -7069,6 +7069,31 @@ event state and submit continuation remain pending. Production design
 must enforce a pointer-capacity postcondition in addition to selection
 success; growth status alone cannot cover the direct getter path.
 
+#### Pending old event is reused after growth falsely reports selection success
+
+The same instruction emulator now drives the exact getter through the
+event-pending branch after the first runtime growth has left count2/current0
+and slot1 without a GPU mapping. An injected boundary cursor state makes a
+one-dword request require another slot without first submitting the empty
+buffer. Slot1 selection again fails, old slot0 `testEvent` returns false,
+and count2 below maximum8 enters native growth. Growth allocates slots2 and3,
+but selection of slot2 also fails GPU-map creation. It nevertheless returns
+AL1. The getter therefore skips old slot0 `finishEvent`, reloads slot0's CPU
+base/end/cursor, and returns its base while current remains0. The callback
+trace explicitly contains no `finish-event`; final count is4 and actual free
+cleans the complete slot0 triple plus the three partial slot triples.
+
+This reproduces old-buffer reuse across a pending-event result in exact KC
+control flow. The event result, allocation and mapping failures are mocked,
+and the boundary cursor state is injected, so it is not proof that the current
+VF workload reaches this state or that hardware overwrote memory. It does
+show that growth's Boolean contract must include successful publication of
+the requested current index: returning false here would send this getter path
+through `finishEvent` before reusing slot0. That repair alone still does not
+cover the getter's direct void selection failure or its separate request-size
+postcondition. No production patch or hardware admission follows from this
+offline result.
+
 #### Runtime growth reproduces success with unchanged old current slot
 
 KC emulator now begins with count1/current0 and an existing slot triple,

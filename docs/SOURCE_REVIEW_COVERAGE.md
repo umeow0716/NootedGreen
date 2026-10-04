@@ -73,6 +73,16 @@ negative current index separately. Construction argument constraints and
 outer task/accelerator ownership remain unverified. This is three bounded
 body reviews, not completion of the pool's full caller/lifetime graph.
 
+Exact KC execution now also composes runtime growth, getter and free: with
+old slot0 event mocked pending, slot1 selection failure, and another growth
+whose slot2 selection fails, growth still returns true and the getter skips
+`finishEvent` before returning slot0's CPU base. Count4 and cleanup of the
+complete slot plus three partial slots are asserted. The cursor boundary and
+callbacks are injected, so this is a native control-flow reproduction rather
+than hardware reachability or DMA-safety proof. Growth status must cover
+requested-index publication; direct void selection and request capacity still
+need independent postconditions before a production repair.
+
 New complete KC review: pool getBufferPtrNoInc `0x14b6b2bc/0x10e`, hash-pinned
 with selected pointer acquisition/submission/selection edges. Pool growth's
 selection call discovered, not its full body reviewed. Exact size/owner init
