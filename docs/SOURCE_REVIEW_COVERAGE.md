@@ -7,6 +7,12 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 duplicate collector: full selected user-client grow/collector copies
+reviewed/pinned. Grow identical to CCS, collector has an extra Boolean-controlled
+wait omission while retaining update collection. Expected completeness must
+respect helper options/resource flags; fixed-count or name-only routing is not
+valid. Other copies/callers and failure integration remain unreviewed/incomplete.
+
 2026-10-04 depth caller domains: full user-client and small Metal wrapper
 reviewed/pinned. User-client holds accelerator mutex but post-publish cleanup
 returns unconditional success; Metal wrapper maps resource false to status10.

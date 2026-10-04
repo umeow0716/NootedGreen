@@ -512,6 +512,8 @@ def macho_inventory(path):
     # These imports distinguish the periodic collection mutex from bridge
     # descriptor spin locks. They do not certify dynamic callback lifetime.
     stamp_irq_imports = {
+        0x79a4d: "_IOMalloc",
+        0x79a89: "_IOFree",
         0x78580: "_IOLockLock",
         0x786b3: "_IOLockUnlock",
         0x78594: "__ZN22IOGraphicsAccelerator29lock_busyEv",
@@ -700,10 +702,13 @@ def macho_inventory(path):
     # never silently choose another instantiation with the same symbol name.
     for name, start, length, digest in (
             ("__ZN8IGVectorIP12IOAccelEvent25IGIOMallocAllocatorPolicyE4growEm", 0x757b2, 0x78, "d0eadd8fc2d8b9227e151fa3b7f5e650f0be03ffd879463ac349f75217c6c440"),
-            ("__ZL20AddDstResourceEventsR18wait_update_eventsP15IGAccelResourceb", 0x7582a, 0x172, "5dde422ed4edf1c957284fb9856877845d570a8e04df2d4d8f27225f1b7b245a")):
+            ("__ZL20AddDstResourceEventsR18wait_update_eventsP15IGAccelResourceb", 0x7582a, 0x172, "5dde422ed4edf1c957284fb9856877845d570a8e04df2d4d8f27225f1b7b245a"),
+            ("__ZN8IGVectorIP12IOAccelEvent25IGIOMallocAllocatorPolicyE4growEm", 0x79a2e, 0x78, "d0eadd8fc2d8b9227e151fa3b7f5e650f0be03ffd879463ac349f75217c6c440"),
+            ("__ZL20AddDstResourceEventsR18wait_update_eventsP15IGAccelResourceb", 0x79aa6, 0x176, "c7d57dca9a6af01f663c01137cbc42b87d024a00e2fcd3926bf5c3752e0d53a8")):
         assert any(candidate == name and address == start for candidate, address in zip(names, values)), f"{path}: missing selected CCS helper: {name}"
         assert next_symbol(start) == start + length, f"{path}: changed selected CCS helper boundary: {name}"
         assert hashlib.sha256(image[start:start + length]).hexdigest() == digest, f"{path}: changed selected CCS helper: {name}"
+    assert image[0x79ac1:0x79ac5] == bytes.fromhex("84 d2 75 3c"), f"{path}: changed user-client wait omission option (not allocation status)"
     assert image[0x14518:0x1451e] == bytes.fromhex("ff 90 30 01 00 00"), f"{path}: changed releaseRange unmap virtual"
     assert direct_branches("__ZN19IGHardwarePageTable12releaseRangeERK14IGAddressRange", "__ZN16IntelAccelerator27flushHardwareAfterGttUpdateEv") == [0x14522], f"{path}: changed post-unmap deferred-flush edge"
     assert image[0x14573:0x14575] == bytes.fromhex("b0 01"), f"{path}: changed unconditional releaseRange success"

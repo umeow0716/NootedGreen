@@ -6955,6 +6955,25 @@ No executable patch or runtime mutation.
 
 ### Update fanout must participate in the same owner transaction
 
+Duplicate collection ABI distinction: reviewed complete direct user-client
+grow copy at 0x79a2e (0x78) and private AddDstResourceEvents at 0x79aa6
+(0x176), pinned selected name/address/boundary/hash and allocator imports.
+Grow bytes match the previously reviewed CCS copy, but collector bytes and
+semantics differ: when resource +0xf bit0x10 is clear, user-client helper
+tests DL at 0x79ac1 and nonzero skips the initial wait-vector append, while
+continuing update-event collection. The CCS copy at 0x7582a has no corresponding
+DL branch. Native depth client passes zero to this helper at the reviewed
+resource/storage callsites, but that does not justify treating all other uses
+of the symbol as equivalent. Both copies still skip failed growth with no
+aggregate error return.
+
+Completeness design must enumerate expected wait/update entries from the actual
+resource flags and each selected helper's option, not demand an unconditional
+fixed count or route duplicate symbols by name alone. Retain legal empty/no-op
+semantics while distinguishing allocation omission from intentional omission.
+This checks two selected copies, not the entire duplicate-symbol population.
+No new production/runtime change or firmware ownership proof claimed.
+
 Depth caller status/lock follow-up: reviewed complete SharedUserClient
 depth_resolve at 0x78434 (0x52a) and Metal depthStencilResolve at 0x4f150
 (0xa0); full bodies, imported lock/busy/lookup and selected dispatch/status
