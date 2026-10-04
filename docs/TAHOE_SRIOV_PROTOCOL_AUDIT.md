@@ -6387,6 +6387,37 @@ callback admission must be proved elsewhere. No executable patch/runtime test.
 
 ###### Pool initialization/free and hash removal
 
+####### Standard pool owner path is non-threaded
+
+Complete manager initPagePool/free/registerEvents and pool withOptions reviewed/
+pinned (0xcc/0xb4/0x50/0x4e). Native relocation at 0xc8240 resolves to
+_real_ncpus, not a literal zero pointer or constant pool count. An initial
+exploratory raw-pointer lookup returned zero because this is an unresolved
+import cell; relocation resolves the provenance, not current guest CPU count.
+
+initPagePool creates one pool per real_ncpus and passes options 0. Therefore
+standard manager-owned pools have threaded flag +0x64 false: registerEvents
+returns success without installing sources and schedulePrune runs synchronously.
+The previously reviewed timer rearm hazard applies conditionally to threaded
+pool users, NOT proof of a standard manager callback race. Other factory callers
+and runtime option mutation must still be inventoried.
+
+Partial creation failure with index >0 starts cleanup at the failed (null)
+entry, then INCREMENTS the index and loops until wrap-to-zero. It does not
+bound the index to real_ncpus or release the created prefix. This is a concrete
+conditional out-of-bounds cleanup path, not a dynamically induced failure.
+withOptions itself returns null after init false without releasing the newly
+allocated pool, a separate local failed-init ownership gap. A correct unwind
+must release only initialized prefix entries in reverse order, retain valid
+ownership during cleanup and free/clear the array exactly once. Merely changing
+INC to DEC skips index zero and is not a correct fix.
+
+Manager registerEvents ANDs statuses across pools while continuing after false;
+its own caller failure handling is pending. Manager free releases dummy pages,
+stolen/fence objects and global page table, then calls releaseDeviceMemory.
+That callee and all owner admission/retirement must be reviewed before claiming
+safe pool release. No production patch or hardware execution in this checkpoint.
+
 Complete pool registerEvents/pruneEvent/pruneTimer/inPruneList/allocation-report
 bodies (0xc0/0x46/0x4e/0x24/0x6) reviewed/pinned with both event factory imports.
 Threaded registration creates a software interrupt source (provider/index zero)

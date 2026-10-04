@@ -7,6 +7,11 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 standard pool ownership: four complete native bodies pinned.
+real_ncpus pools use options 0 (non-threaded), narrowing prior callback hazard.
+Partial creation cleanup increments beyond array; withOptions leaks failed-init
+object locally. Correct prefix unwind and outer releaseDeviceMemory pending.
+
 2026-10-04 pool event callbacks: five complete native bodies/factory imports
 pinned. Timer hands off to software interrupt; interrupt callback can rearm.
 Source add results unchecked, no local terminal admission; base +0x218 is

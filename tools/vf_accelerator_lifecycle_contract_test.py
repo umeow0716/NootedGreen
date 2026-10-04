@@ -9,6 +9,10 @@ import sys
 # Complete reviewed native bodies. This fixes the concrete Intel override
 # graph, not inherited timer APIs, dynamic callbacks or runtime completion.
 STAMP_IRQ_NATIVE = {
+    "__ZN15IGMemoryManager12initPagePoolEv": (0xcc, "f5a5d43004dbecc5719cdc76507ee529775658060db9aea3fbdf6256f813b176"),
+    "__ZN15IGMemoryManager4freeEv": (0xb4, "69f568f6fe6e36f88666926f823d5b61677d984d47ff6095fc06cf148e6714b6"),
+    "__ZN15IGMemoryManager14registerEventsEv": (0x50, "3fd8b2a3929eb106d81bb314a22376d3218f1865d8842a9e33f6cca920e46cf0"),
+    "__ZN10IGPagePool11withOptionsEP16IntelAcceleratorj": (0x4e, "2a792cbfe2276f7349bc1eee5f550cde74c3f6b916793da473a59ad28307e0a6"),
     "__ZN10IGPagePool10pruneEventEP22IOInterruptEventSourcei": (0x46, "17ea1938584ddf61ac147cd4b6f164e8b9ddae802a9d4f2cdf3a8c7f825e2c8f"),
     "__ZN10IGPagePool10pruneTimerEP18IOTimerEventSource": (0x4e, "45fc274f9ca594a9bf136f3c25a7c34e3bca0ed4141305a4a5c21df4d221c1d3"),
     "__ZN10IGPagePool11inPruneListEPNS_11PoolElementE": (0x24, "af1c4fb1f9fa50011285cfce15061aaa638e230c75daff90e3c6b6601d86156f"),
@@ -462,6 +466,7 @@ def macho_inventory(path):
     }
     observed_stamp_irq_imports = {address: [] for address in stamp_irq_imports}
     event_stop_imports = {
+        0xc8240: "_real_ncpus",  # Pool count is a linked kernel datum, not zero.
         0xd19b0: "__ZN22IOGraphicsAccelerator223freeWaitToPrepareVidMapEP16IOAccelMemoryMapbb",
         0xd19d8: "__ZN22IOGraphicsAccelerator223freeWaitToPrepareSysMapEP16IOAccelMemoryMapb",
         0xcd040: "__ZN16IOAccelMemoryMap7prepareEv",
