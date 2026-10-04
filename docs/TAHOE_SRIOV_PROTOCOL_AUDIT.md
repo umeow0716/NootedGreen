@@ -6955,6 +6955,23 @@ No executable patch or runtime mutation.
 
 ### Update fanout must participate in the same owner transaction
 
+#### Native constructor instruction execution confirms ignored init status
+
+`tools/vf_command_pool_native_abi_test.py` executes the exact hash-pinned
+7cebc/f4 native constructor in Unicorn with bounded instructions and
+mocked external/base/virtual callbacks. Both archived native images pass
+both injected init outcomes. At virtual118, six register arguments and
+four stack arguments match pool, accelerator, channel, task, max256,
+bytes65536, flags300, mapping1, alignment64, reserved8. Injected false
+still executes backing allocation and setup and returns AL1, reproducing
+the original ignored-status behavior rather than asserting a repair.
+Context E0/D8 ownership publication is checked, but mocked base and pool
+callbacks do not prove native cleanup, loader admission, or hardware DMA.
+Run via `uv run --with unicorn python tools/vf_command_pool_native_abi_test.py
+<native-image>`; it is not implicitly part of CI and does not access hardware.
+Next extend instruction execution to a bounded candidate's failure branch
+and outer-release path before production integration.
+
 #### Offline constructor policy prototype, not a native patch
 
 `tools/vf_command_pool_constructor_prototype_test.cpp` implements the
