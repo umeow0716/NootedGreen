@@ -6955,6 +6955,27 @@ No executable patch or runtime mutation.
 
 ### Update fanout must participate in the same owner transaction
 
+Depth resolve shared admission: reviewed complete resource submitDepthResolve
+at 0x7415e (0x3f0), pinned both payloads, exact selected duplicate helper
+addresses, native submit edge and storage/free imports. It initializes two
+event vectors and requests capacity 4 at 0x741eb/0x7420b without testing AL.
+Depending on resource flags it collects resource/storage events through the
+already reviewed private helper at 0x7430e/0x74331. No aggregate collection
+failure status gates subsequent native depth submit at 0x744d7. Selected
+resolve bits and +0x64 can then be cleared, depending on resolve-type flag.
+Temporary vectors are freed through IOFree at 0x74518/0x74534. No local
+accelerator mutex/OSObject owner retain is present; effective caller locks
+remain separate required review. The submission callee is identified, not
+newly reviewed as a whole body or certified to complete GPU work.
+
+This extends the actual omission graph beyond CCS: a CCS-only collection
+patch would leave depth resolve unchanged. A shared repair must preserve
+event completeness, binding/prepare cleanup, selected per-plane progress and
+outer compression-state semantics across both entrypoints. Enlarging capacity
+alone cannot handle initial allocation null, and waiting the admitted aggregate
+cannot recover events never appended. No new production/runtime change here;
+the implemented rectangle-null repair remains distinct from this open problem.
+
 Bind/preparation pairing: reviewed complete native bindResource (0x48), KC
 checkDirty (0x144) and addToChannel (0x22a); pinned bodies, native checkDirty
 import, prepare-result branch and channel dispatch, plus declared base channel

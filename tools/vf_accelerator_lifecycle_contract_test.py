@@ -130,6 +130,7 @@ STAMP_IRQ_NATIVE = {
     "__ZN16IGAccelMemoryMap18updateGPUPageTableEv": (0x140, "75ba5674583a8d27d54acab18290e78bbc9de8157b19bfc6614c379d39fa3fbc"),
     "__ZN16IGAccelMemoryMap15updateCacheTypeEj": (0x24, "0c704192e43ed19c39a2179ea6e80551a07af30a8a541016a913f3d9572516f8"),
     "__ZN15IGAccelResource22updateMappingCacheTypeEj": (0x30, "499c98e59e89b29b95b7d14247a756db3f980b5f58134dcf2c49c3baf5db97bf"),
+    "__ZN15IGAccelResource18submitDepthResolveEPNS_17ResourceInfoEntryER16IntelAcceleratorP11IGAccelTask17EIntelResolveTypehhtt": (0x3f0, "a3f33094b424e909e708e33b10b3be2d6abf6e3682dda5fa273331de867febde"),
     "__ZN23IGAccelSharedUserClient12bindResourceEP15IGAccelResource": (0x48, "51d8bc7e5b290db9452dc62000c768ece7c42a3fc767938d2592a73e4323a820"),
     "__ZN23IGAccelSharedUserClient13color_resolveEPvy": (0x5d0, "8e09b7dcbb4d03aa0fc6eb10ae14a2db460543bcaf13d347ddb43fd3e457ef94"),
     "__ZN15IGAccelResource16submitCCSResolveEPNS_17ResourceInfoEntryER16IntelAcceleratorP11IGAccelTask20EIntelCCSResolveType": (0xa6, "bb27f13ada6c05e268f7f12e4089c601d90b946e041311e42d965199f618477f"),
@@ -508,6 +509,9 @@ def macho_inventory(path):
     # These imports distinguish the periodic collection mutex from bridge
     # descriptor spin locks. They do not certify dynamic callback lifetime.
     stamp_irq_imports = {
+        0x74519: "_IOFree",
+        0x74535: "_IOFree",
+        0x74317: "__ZN16IOAccelResource218getStorageResourceEv",
         0x799bf: "__ZN16IOAccelResource210checkDirtyEv",
         0x78a10: "_IOLockLock",
         0x78e3d: "_IOLockUnlock",
@@ -761,6 +765,10 @@ def macho_inventory(path):
     assert direct_branches(wait_barrier, "__ZN19IGAccelEventMachine11finishEventEP12IOAccelEventj") == [0x2bc47], f"{path}: changed wait-barrier aggregate-event fallback"
     ccs_submit = "__ZN16IntelAccelerator16submitCCSResolveEP15IGAccelResourceP22color_resolve_params_tRK8IGVectorI11blit_rect_t25IGIOMallocAllocatorPolicyEP11IGAccelTask"
     ccs_resource = "__ZN15IGAccelResource16submitCCSResolveEPNS_17ResourceInfoEntryER16IntelAcceleratorP11IGAccelTask20EIntelCCSResolveTypehh"
+    depth_resource = "__ZN15IGAccelResource18submitDepthResolveEPNS_17ResourceInfoEntryER16IntelAcceleratorP11IGAccelTask17EIntelResolveTypehhtt"
+    assert direct_branches(depth_resource, "__ZN16IntelAccelerator18submitDepthResolveEP22depth_resolve_params_tP11IGAccelTask") == [0x744d7], f"{path}: changed depth resolve submission edge"
+    assert direct_branch_candidates(image, value(depth_resource), next_symbol(value(depth_resource)), 0x757b2, external_relocation_offsets) == [0x741eb, 0x7420b], f"{path}: changed selected depth event-vector growth copies"
+    assert direct_branch_candidates(image, value(depth_resource), next_symbol(value(depth_resource)), 0x7582a, external_relocation_offsets) == [0x7430e, 0x74331], f"{path}: changed selected depth event collection copies"
     color_resolve = "__ZN23IGAccelSharedUserClient13color_resolveEPvy"
     assert direct_branches(color_resolve, "__ZN23IGAccelSharedUserClient12bindResourceEP15IGAccelResource") == [0x78d95], f"{path}: changed color-resolve bind edge"
     assert image[0x799cf:0x799d3] == bytes.fromhex("84 c0 74 1c"), f"{path}: changed bind prepare-result admission"

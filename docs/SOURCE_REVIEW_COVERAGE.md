@@ -7,6 +7,12 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 depth admission: complete resource submitDepthResolve reviewed/pinned
+with exact duplicate vector/collection helper copies and submission/free imports.
+Initial growth and collection omission have no result gate before submit/state
+clear. Shared CCS/depth completeness and effective outer locking remain pending;
+callee identity is not a whole-body completion proof. No production change.
+
 2026-10-04 bind pairing: native bindResource and KC dirty/channel-add complete
 bodies reviewed/pinned. prepare false skips channel-add; post-bind cleanup
 requires both channel state and preparation. Channel +0xa0 is distinct from
