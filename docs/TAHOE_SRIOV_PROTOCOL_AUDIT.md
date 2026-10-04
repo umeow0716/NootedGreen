@@ -6961,6 +6961,27 @@ No executable patch or runtime mutation.
 
 ###### Complete waitForSpace reservation and failure ordering
 
+Selected populateAccelConfig window 275be..2760d now establishes the missing
+configuration invariant: unsigned (KiB-4) <= 0x1fc and popcount(KiB) < 2.
+Together these accept powers of two from 4 through 512 KiB inclusive, despite
+the diagnostic string describing strict bounds. Invalid values are replaced
+with 32 KiB. The window hash/owner bounds are pinned; a later firmware-mode
+store 27cc8 explicitly overrides size to 16 KiB and is separately pinned.
+These accepted sizes safely fit the getter's 32-bit left shift and supply
+power-of-two masks and at least eight bytes when those reviewed assignments
+govern initialization.
+
+This is a selected configuration-window review, not a complete
+populateAccelConfig control-flow audit or runtime size observation. An
+exploratory displacement scan located these +0x119c writes but cannot exclude
+derived aliases or other initialization paths. The earlier getter/init lack
+of local validation is therefore not sufficient to allege malformed normal
+configuration. Outer configuration ownership and ordering remain to verify.
+No executable/runtime change. Next: full effective configuration ordering,
+backing allocation bounds and ring-owner serialization; retain the independent
+timeout-success and unchecked-writer issues rather than conflating them with
+size validation.
+
 Complete ring init 41414/1ec and context getRingBufferSize 7c560/14 are now
 reviewed/pinned. Init stores a borrowed context, obtains accelerator through
 context +0x58's object +0x10, copies engine ID, obtains a context resource CPU

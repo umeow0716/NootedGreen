@@ -614,6 +614,11 @@ def macho_inventory(path):
     assert image[0x14518:0x1451e] == bytes.fromhex("ff 90 30 01 00 00"), f"{path}: changed releaseRange unmap virtual"
     assert direct_branches("__ZN19IGHardwarePageTable12releaseRangeERK14IGAddressRange", "__ZN16IntelAccelerator27flushHardwareAfterGttUpdateEv") == [0x14522], f"{path}: changed post-unmap deferred-flush edge"
     assert image[0x14573:0x14575] == bytes.fromhex("b0 01"), f"{path}: changed unconditional releaseRange success"
+    # Selected configuration window, not a complete populateAccelConfig audit.
+    config = value("__ZN16IntelAccelerator19populateAccelConfigEP13IOAccelConfig")
+    assert config <= 0x275be < 0x2760d <= next_symbol(config), f"{path}: changed ring-size validation owner"
+    assert hashlib.sha256(image[0x275be:0x2760d]).hexdigest() == "fe215a9a0ba9b8f6bd9c8ccdf56799c5aff7f7af98f6c33167164e1c22ae71b9", f"{path}: changed ring-size power-of-two validation/fallback window"
+    assert image[0x27cc8:0x27cd4] == bytes.fromhex("41 c7 84 24 9c 11 00 00 10 00 00 00"), f"{path}: changed firmware ring-size override"
     assert image[0x41da6:0x41dac] == bytes.fromhex("ff 90 60 01 00 00"), f"{path}: changed qword pending-TLB emission"
     assert direct_branches("__ZN20IGHardwareRingBuffer10writeQWordEy", RING_WRITE_BUFFER) == [0x41e31], f"{path}: changed qword software prefix edge"
     assert image[0x41ede:0x41ee4] == bytes.fromhex("ff 90 60 01 00 00"), f"{path}: changed buffer pending-TLB emission"
