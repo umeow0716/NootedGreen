@@ -6955,6 +6955,28 @@ No executable patch or runtime mutation.
 
 ### Update fanout must participate in the same owner transaction
 
+#### Exact KC pool free executes on six partial-state fixtures
+
+`tools/vf_command_pool_free_test.py` executes hash-pinned System KC pool
+free14b6afec/13c and actual list removal14b82226/9a in Unicorn. Six
+fixtures combine 0/1/2 slot triples and absent/present command record,
+with current index -1 and no list membership. Checks cover nonfatal
+unlinked logging, per-slot finishEvent/release/CPU-unmap/memory-release
+order, channel release, optional record release, base-free tail, all256
+cleared slot triples, memory flagC bit1, cleared record/channel/cursors,
+index -2 and final stack. All pass. Imported task pointer must be resolved
+in the fixture before CPU mapping removal; initial unmapped-read failure
+was fixed by supplying this dependency, not bypassing a native load.
+
+Underlying event, object release, CPU-unmap and base-free callbacks are
+mocked. Current mapping complete is deliberately not exercised because
+current=-1; successful native preparation followed by later init failure
+needs a separate current-slot fixture. These selected state fixtures are
+not evidence that native init actually produces each state, nor DMA/TLB
+quiescence or retain-count correctness. Run offline with uv --with unicorn;
+not automatically part of CI. Next current-slot complete/event ordering
+and realistic init-failure state generation before production integration.
+
 #### Native outer 3D factory and extended free execute on candidate failure
 
 ABI emulator now runs eight combinations per archive: direct/outer entry,
