@@ -6955,6 +6955,30 @@ No executable patch or runtime mutation.
 
 ### Update fanout must participate in the same owner transaction
 
+Native depth publication boundary: reviewed complete accelerator
+submitDepthResolve at 0x2c656 (0x1f6), pinned both payloads, aggregate barrier,
+chunk assembler edge, imported submitBuffer and software-phase loop anchor.
+It obtains task contexts, cleans accelerator aggregate +0x11e8, merges the
+wait-vector entries from params +0xb8/+0xc8 through event virtual +0x1c8,
+and invokes barrierForWaitEvents. An empty vector uses AL=1, bypassing an
+outstanding aggregate barrier; that is not evidence every required source
+event was collected. It then prepares FIFO updates from +0xd0/+0xe0.
+
+The depth chunk assembler at 0x85a8c is resolve_hiz_g7 (0x5738); only its
+identity/edge is reviewed here, NOT its whole body or return-status semantics.
+Its AL controls a diagnostic block, while both branches join submitBuffer
+at 0x2c82e. After each publication, software phase [rbp-0x2c] is compared
+with 0xe and can repeat FIFO preparation, assembly and publication. Therefore
+AL must not be treated as an assembly error without reviewing the assembler,
+and phase 0xe is not a GPU/GuC ACK. No independent complete-collection status
+is tested in this wrapper. No local mutex/owner retain is present; effective
+callers remain separate review work.
+
+Reliable admission must reject an incomplete event set before the first
+publication, not after one chunk or only on phase termination. Partial-chunk
+progress/owner lifetime and native-ring failure propagation remain open.
+No new production/runtime changes, acceleration or DMA-safety claims.
+
 Depth resolve shared admission: reviewed complete resource submitDepthResolve
 at 0x7415e (0x3f0), pinned both payloads, exact selected duplicate helper
 addresses, native submit edge and storage/free imports. It initializes two

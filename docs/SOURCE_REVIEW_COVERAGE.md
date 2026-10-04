@@ -7,6 +7,12 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 native depth publisher: one complete 0x1f6 wrapper reviewed/pinned,
+barrier/assembler/imported submit and phase-loop anchors checked. Empty wait
+list bypasses aggregate barrier; chunks publish until software phase0xe, not
+hardware ACK. Large resolve_hiz_g7 identified only, not whole-reviewed; AL
+meaning, partial-progress lifetime and admission failure propagation remain open.
+
 2026-10-04 depth admission: complete resource submitDepthResolve reviewed/pinned
 with exact duplicate vector/collection helper copies and submission/free imports.
 Initial growth and collection omission have no result gate before submit/state
