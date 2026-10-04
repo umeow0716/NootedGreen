@@ -2941,10 +2941,65 @@ def ggtt_postwrite_mutations(path):
     print("PASS: four GGTT post-write guard/release-order mutations rejected (source contract, not DMA proof)")
 
 
+def event_collection_admission_model():
+    """Selected collector specification only; NOT a live owner/admission gate.
+
+    Native body fixtures separately pin the reviewed branch graph. Snapshot
+    addresses here are symbolic stable inputs, not evidence of runtime leases.
+    """
+    cases = 0
+    for client_copy in (False, True):
+        for skip_wait in (False, True):
+            for pair_events in (False, True):
+                for mapped in (False, True):
+                    for aliased in (False, True):
+                        wait, update = [], []
+                        # Include two resources, which can legitimately alias
+                        # event storage. Preserve multiplicity, never dedup.
+                        for resource in range(2):
+                            base = 0x10000 + (0 if aliased else resource * 0x1000)
+                            if pair_events:
+                                update.extend((base + 0x900, base + 0x940))
+                            else:
+                                if not (client_copy and skip_wait):
+                                    wait.append(base + 0x100)
+                                update.extend((base + 0x100, base + 0x140))
+                            if mapped:
+                                update.append(base + 0xa38)
+                        expected = (tuple(wait), tuple(update))
+                        required = len(wait) + len(update)
+                        # Superset of allocation omissions: every possible
+                        # missing-entry set must reject before publication.
+                        for mask in range(1 << required):
+                            observed = (
+                                tuple(value for i, value in enumerate(wait) if mask & (1 << i)),
+                                tuple(value for i, value in enumerate(update, len(wait)) if mask & (1 << i)))
+                            complete = observed == expected
+                            assert complete == (mask == (1 << required) - 1)
+                            assert not complete or sum(map(len, observed)) == required
+                            cases += 1
+                        for vector in (0, 1):
+                            if expected[vector]:
+                                substitution = list(expected[vector])
+                                substitution[-1] = 0xdead0000
+                                bad = list(expected)
+                                bad[vector] = tuple(substitution)
+                                assert tuple(bad) != expected  # same count is insufficient
+                                assert tuple(map(len, bad)) == tuple(map(len, expected))
+                        assert len(wait) == (0 if pair_events or (client_copy and skip_wait) else 2)
+                        assert len(update) == (6 if mapped else 4)
+    # Genuine no-op selection is distinct from all required events omitted.
+    selected_noop = ((), ())
+    omitted_required_wait = ((0x100,), ())
+    assert selected_noop != omitted_required_wait
+    print(f"PASS: {cases} selected event-omission states; legal skip/alias and same-count substitution (offline model, not runtime admission)")
+
+
 def main():
     if len(sys.argv) != 4:
         raise SystemExit(f"usage: {sys.argv[0]} kern_gen11.cpp TGL-production TGL-debug")
     direct_branch_candidate_contract()
+    event_collection_admission_model()
     source_contract(sys.argv[1])
     ring_backing_submit_mutations(sys.argv[1])
     g2h_event_transaction_mutations(sys.argv[1])

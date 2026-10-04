@@ -6955,6 +6955,25 @@ No executable patch or runtime mutation.
 
 ### Update fanout must participate in the same owner transaction
 
+Offline expected-event admission specification: added 2,720 omission states
+for the two reviewed collector variants, Boolean wait skip, pair-vs-indexed
+resource events, optional mapping event and two potentially aliased resources.
+Expected wait and update sequences remain distinct; legal aliases retain
+multiplicity. All incomplete subsets reject exact expected-sequence matching;
+same-count substitution demonstrates that a length-only check is insufficient.
+Intentional wait omission still requires update events, and a selected genuine
+no-op is distinguished from dropping a required wait set.
+
+This is a test-only symbolic snapshot/specification, not executable native
+instruction emulation, pointer validation, full protocol model or a deployed
+admission gate. Arbitrary omission sets are a conservative superset, not a claim
+that every subset is realizable by the native allocator. Resource values here
+remain assumed stable; actual enumeration must acquire owner protection before
+reading pointers and preserve it across any wait/cleanup. Ordering equivalence,
+all unreviewed collector copies, null event-pair semantics and direct GL uses
+remain pending before adopting this specification as a runtime predicate.
+No driver behavior or VM/Host GPU state changed this checkpoint.
+
 Duplicate collection ABI distinction: reviewed complete direct user-client
 grow copy at 0x79a2e (0x78) and private AddDstResourceEvents at 0x79aa6
 (0x176), pinned selected name/address/boundary/hash and allocator imports.

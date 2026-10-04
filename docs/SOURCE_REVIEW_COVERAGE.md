@@ -7,6 +7,11 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 admission specification: test-only 2,720 event-omission states cover
+selected variants/skip/alias/mapping cases and reject same-count substitutions.
+Not a runtime fix, instruction equivalence or owner-lease proof. Null semantics,
+other copies, ordering and integration remain pending; source audit incomplete.
+
 2026-10-04 duplicate collector: full selected user-client grow/collector copies
 reviewed/pinned. Grow identical to CCS, collector has an extra Boolean-controlled
 wait omission while retaining update collection. Expected completeness must
