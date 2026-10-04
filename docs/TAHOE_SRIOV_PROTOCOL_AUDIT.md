@@ -6955,6 +6955,41 @@ No executable patch or runtime mutation.
 
 ### Update fanout must participate in the same owner transaction
 
+#### Rotation acquisition: borrowed task and conditional mapping-reference transfer
+
+New complete paired-KC reviews/pins: `IOAccelResource2::getGPUTask`
+`0x14b8c99c/0x22` (SHA-256
+`7dc3a618b56c2611b1d27a58ce28260cd354c9d58275fb75b084e23e31fe0b3a`)
+and `IOAccelMemory::createMappingInTask` `0x14b672ee/0x16` (SHA-256
+`47b5beedeaa9f97ff450a1c3e79647872b26fbd32afe277c8638f9016202bac1`).
+Native calls `0x752c3/0x75324` resolve to getGPUTask, not an accelerator
+accessor: it reads resource Shared owner `+0x68`, returning Shared task
+`+0x48` when present, otherwise accelerator `+0x150`. There is no local
+retain or lock, so any transaction must stabilize the supplying owner before
+using this borrowed task.
+
+For the concrete Intel system-memory class, object slots `+0x138/+0x140`
+import createMappingInTask and createMappingInTaskAtAddressLength at
+`0xcd820/0xcd828`; native external relocation checks now pin both. The wrapper
+zeros address/length arguments and tail-dispatches `+0x140`. Re-read the
+complete already-pinned factory `0x14b67304/0x272`, without new whole-body
+credit: a normal matching mapping gets a retain at `0x14b674a1`, whereas a
+deferred match preserves/transfers its existing deferred reference through
+list movement and flag clearing. New mapping allocation/failure uses the
+previously reviewed accelerator factory and VA-recovery paths. This proves
+the selected system-memory route, not every possible class of resource
+backing `+0x88/+0x80`, nor mapping-array synchronization or GPU completion.
+
+Rotation creation stores the returned reference in resource `+0x238` before
+preparation; assigning that raw field does not itself add another retain.
+Owner transfer must be distinguished from deferred-list reuse when designing
+failure cleanup. Factory geometry arguments are zero here, while rotation
+width/height are copied separately afterward, so this wrapper cannot be cited
+as validation of rotation geometry. Both native payload contracts and paired
+KC contracts pass. No production/runtime change. Next: trace the caller that
+sets geometry and balances the resource's returned mapping reference, with
+outer task/parent/mapping serialization proved before retirement integration.
+
 #### Rotation owner cleanup boundary: complete is not final release
 
 New complete native reviews/pins: resource init `0x6e840/0x8c`, SHA-256

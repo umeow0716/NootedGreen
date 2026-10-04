@@ -536,6 +536,8 @@ def macho_inventory(path):
     # These imports distinguish the periodic collection mutex from bridge
     # descriptor spin locks. They do not certify dynamic callback lifetime.
     stamp_irq_imports = {
+        0x752c4: "__ZNK16IOAccelResource210getGPUTaskEv",
+        0x75325: "__ZNK16IOAccelResource210getGPUTaskEv",
         0x12618: "_IOMalloc",
         0x12631: "_memset",
         0x79a4d: "_IOMalloc",
@@ -621,6 +623,8 @@ def macho_inventory(path):
     }
     observed_stamp_irq_imports = {address: [] for address in stamp_irq_imports}
     event_stop_imports = {
+        0xcd820: "__ZN13IOAccelMemory19createMappingInTaskEP11IOAccelTaskj",
+        0xcd828: "__ZN13IOAccelMemory34createMappingInTaskAtAddressLengthEP11IOAccelTaskjyy",
         0xca608: "__ZNK8OSObject14getRetainCountEv",
         0xca610: "__ZNK8OSObject6retainEv",
         0xca638: "__ZNK8OSObject12taggedRetainEPKv",

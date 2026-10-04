@@ -7,6 +7,13 @@ audit's runtime blockers are open.
 
 ## Scope
 
+New complete paired-KC reviews: resource getGPUTask `0x14b8c99c/0x22` and
+memory createMappingInTask `0x14b672ee/0x16`. Concrete Intel system-memory
+factory imports and rotation borrowed-task calls pinned in both native
+payloads. Revisited existing full mapping factory, without duplicate credit;
+deferred-reference transfer differs from an additional retain. Other backing
+classes, final balance and outer acquisition serialization remain pending.
+
 New complete native reviews: resource init `0x6e840/0x8c` and resource free
 `0x6f59e/0x26c`, pinned in both payloads. Revisited existing resource complete
 without duplicate credit. Rotation prepared-state completion is distinct from
