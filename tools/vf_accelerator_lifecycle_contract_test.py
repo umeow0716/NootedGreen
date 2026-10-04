@@ -9,6 +9,7 @@ import sys
 # Complete reviewed native bodies. This fixes the concrete Intel override
 # graph, not inherited timer APIs, dynamic callbacks or runtime completion.
 STAMP_IRQ_NATIVE = {
+    "__ZN21IGAccelDisplayMachine16generateFlipWaitEP18IGAccelFIFOChannel": (0xda, "8ec7480e7b887eaeba9dbecc75dd1f366b9a761a95094f1a9f4cde80cfe9fb85"),
     "__ZN12IGScheduler416checkForProgressE10IGHwCsType": (0x8, "aaa500a73706124bc5374dc27c8b444160b15dc8a45b0fef9354b23106b76348"),
     "__ZN20IGHardwareRingBuffer19debugGraphicsEngineEv": (0x40, "ee36c90b746b8637259c7893cd17cd879316c7ae1d3b0c27687f9cd60bfdec74"),
     "__ZN20IGHardwareRingBuffer11waitTimeoutEU13block_pointerFbvE.cold.1": (0x12, "ef98956647d1ee0727b6b56636f23433333ceab809ec72318da1223c5400a8a2"),
@@ -608,6 +609,9 @@ def macho_inventory(path):
     assert image[0x14518:0x1451e] == bytes.fromhex("ff 90 30 01 00 00"), f"{path}: changed releaseRange unmap virtual"
     assert direct_branches("__ZN19IGHardwarePageTable12releaseRangeERK14IGAddressRange", "__ZN16IntelAccelerator27flushHardwareAfterGttUpdateEv") == [0x14522], f"{path}: changed post-unmap deferred-flush edge"
     assert image[0x14573:0x14575] == bytes.fromhex("b0 01"), f"{path}: changed unconditional releaseRange success"
+    flip_wait = "__ZN21IGAccelDisplayMachine16generateFlipWaitEP18IGAccelFIFOChannel"
+    assert direct_branches(flip_wait, "__ZN20IGHardwareRingBuffer10writeDWordEj") == [0x7e178], f"{path}: changed unchecked flip dword emission"
+    assert direct_branches(flip_wait, RING_WRITE_BUFFER) == [0x7e1e0], f"{path}: changed unchecked flip buffer emission"
     for owner, calls in (
             ("__ZN18IGAccelFIFOChannel18submitStampCommandEv", [0x4c552]),
             ("__ZN18IGAccelFIFOChannel18submitRingCommandsEPjjj", [0x4c63b]),

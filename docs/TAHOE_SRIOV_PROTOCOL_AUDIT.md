@@ -6961,6 +6961,27 @@ No executable patch or runtime mutation.
 
 ###### Complete waitForSpace reservation and failure ordering
 
+Complete generateFlipWait 7e13c/da is now reviewed/pinned. It gets the ring
+from FIFO channel +0x130, requests one dword then writes display-machine
++0x200 directly with writeDWord. It next obtains a resource GPU address,
+constructs a seven-dword command buffer, requests seven dwords, writes that
+buffer and clears display-machine +0x1f8/+0x200. Neither reservation result
+is checked anywhere in this full body. It does not locally submitToRing or
+wait for completion; downstream caller submission remains to trace.
+
+The product kern_gen11.cpp has no named generateFlipWait/writeDWord/writeBuffer
+route. This selected source-search result does not prove an exhaustive absence
+of indirect/binary modification or runtime execution. The complete method
+establishes the unchecked caller obligation more strongly than the earlier
+short windows, but does not by itself show its fixed-size requests overflow
+valid ring geometry or reproduce a fault. Timeout-success behavior is a
+separate path even when requests fit capacity. A repair that only improves
+the boolean reservation result cannot protect this caller's subsequent writes
+or its clearing of display state. Admission must cover the actual write and
+submission graph, retaining resources on fault rather than silently advancing.
+No production/runtime change. Next: effective caller/submit graph and writing
+helper postconditions, before selecting a bounded VF-only implementation.
+
 A source search finds no product route named waitForSpace, waitTimeout or
 checkForProgress. This does not exclude all binary patches or indirect
 runtime changes. Existing lifecycle tests already checked portions of this
