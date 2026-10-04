@@ -7,6 +7,13 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 32-bit init unmap preconditions: complete unmapRange (0x8a)
+reviewed/pinned and paired to constructor +0x130 calls. Zero length is a no-op;
+nonempty range directly dereferences software-directory/leaf descriptors and
+writes dummy PTEs without allocation, null tests or ACK. Initialization range
+lengths and mapping/context admission still need provenance; no reachable
+fault or root construction guarantee follows from factory success alone.
+
 2026-10-04 root snapshot: complete 32/64 PPGTT physical-root getters (0x20
 each) reviewed/pinned, concrete slot +0x148 and context task/private-table
 snapshot call checked. Existing 32-bit init revisited, not new review credit.

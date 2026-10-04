@@ -6955,6 +6955,26 @@ No executable patch or runtime mutation.
 
 ### Update fanout must participate in the same owner transaction
 
+32-bit constructor unmap preconditions (2026-10-04): complete concrete
+unmapRange 0x12282/0x8a newly reviewed/pinned, paired to table object +0x130
+and existing init calls 0x11d6e/0x11d8b/0x11da8. Zero range length returns
+immediately. Nonempty ranges directly index the inline directory's software
+entry array, dereference the selected leaf descriptor CPU address +0x20 and
+write a dummy physical PTE from manager +0xf0. There is no allocation, missing-
+directory/leaf check, local retain/mutex or invalidation acknowledgement in
+this body. It therefore does not construct absent root descriptors.
+
+Combined with the reviewed init's initial zero records, those constructor
+calls require either zero effective ranges or a separately established
+directory/leaf precondition. Current constructor/manager range provenance
+and downstream context mapping have not certified that precondition; do not
+claim a reachable null fault without proving actual nonzero input. Similarly
+successful factory completion is not alone proof all four root descriptors
+are ready for the unchecked getter. This narrows the root-publication inquiry:
+trace mapping/commit establishment of roots and effective constructor ranges,
+then hardware registration/scheduling; do not invent a getter fallback or
+silently disable 32-bit mode to bypass missing evidence. No runtime change.
+
 Root snapshot versus hardware publication (2026-10-04): complete 32-bit
 getter 0x11e44/0x20 reviewed/pinned. It walks four inline parent records
 +0x40/+0x60/+0x80/+0xa0, dereferences each descriptor +0x18 and returns four

@@ -9,6 +9,7 @@ import sys
 # Complete reviewed native bodies. This fixes the concrete Intel override
 # graph, not inherited timer APIs, dynamic callbacks or runtime completion.
 STAMP_IRQ_NATIVE = {
+    "__ZN31IGHardwarePerProcessPageTable3210unmapRangeERK14IGAddressRange": (0x8a, "62cbf1c6629858563f2c06351cf8643f3c1541773f4e3b1fc038027efda7a586"),
     "__ZN31IGHardwarePerProcessPageTable3231getPageTableRootPhysicalAddressEPy": (0x20, "cd25ae2ea8652e97f3c1c2886a2e0bc2d3f768108abdf7f275e8469773dbb4e2"),
     "__ZN31IGHardwarePerProcessPageTable6431getPageTableRootPhysicalAddressEPy": (0x20, "93122c3d3b36d35eb68786330a138b026db29a9bd24d533287dd739a8060643d"),
     "__ZN31IGHardwarePerProcessPageTable326expandE19GTTVirtualAddress32": (0x23e, "8b0e2172003ce89b7d08c603f55535e1c54d2c3d9380e53da00ad5ff83cde343"),
@@ -866,6 +867,9 @@ def macho_inventory(path):
         table = value(f"__ZTV31IGHardwarePerProcessPageTable{bits}")
         getter = value(f"__ZN31IGHardwarePerProcessPageTable{bits}31getPageTableRootPhysicalAddressEPy")
         assert struct.unpack_from("<Q", image, table + 16 + 0x148)[0] == getter, f"{path}: changed PPGTT root getter virtual"
+    assert struct.unpack_from("<Q", image, value("__ZTV31IGHardwarePerProcessPageTable32") + 16 + 0x130)[0] == value("__ZN31IGHardwarePerProcessPageTable3210unmapRangeERK14IGAddressRange"), f"{path}: changed 32-bit init unmap virtual"
+    for call in (0x11d6e, 0x11d8b, 0x11da8):
+        assert image[call:call + 6] == bytes.fromhex("ff 90 30 01 00 00"), f"{path}: changed 32-bit init range-unmap edge"
     assert image[0x7c29b:0x7c2b3] == bytes.fromhex("498b4558488bb860020000488b07488d75b0ff9048010000"), f"{path}: changed context task/private-table root snapshot edge"
     expand32 = "__ZN31IGHardwarePerProcessPageTable326expandE19GTTVirtualAddress32"
     assert direct_branches(expand32, "__ZN10IGPagePool14PageDescriptor7releaseEv") == [0x12646], f"{path}: changed 32-bit expansion software-index allocation rollback"
