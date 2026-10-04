@@ -6959,6 +6959,33 @@ No executable patch or runtime mutation.
 
 ##### Concrete reservation/emission vtable pairing
 
+###### Complete waitForSpace reservation and failure ordering
+
+The full symbol-bounded waitForSpace 416c8/3d0 body has now been reviewed and
+pinned, superseding the earlier partial-window scope. It adds native overhead
+to requested dwords, checks pending engine bits, dispatches +0x150 for TLB
+space and sets readiness +0x6d; AUX adds three dwords and sets +0x6e. Both
+readiness stores precede the capacity check. The rounded byte requirement
+must fit ring size minus eight; an oversized request returns false without
+locally clearing those readiness bytes. Whether callers ever issue such a
+request, and how they handle false before subsequent writes, remains to prove.
+
+The remaining body reads masked head information from ring +0x18, recalculates
+free bytes, handles cursor wrap by zero-filling the unused tail, and may call
+helper 41aa4 with stack-constructed predicates. It accounts the helper's return
+in elapsed statistics and returns true on the completed ordinary path; the
+helper/predicate bodies have not yet been fully reviewed. Do not infer a
+bounded wait or failure propagation merely from this method name. Arithmetic
+uses 32-bit counts and signed free-space comparisons; caller size bounds
+and valid ring geometry remain required.
+
+This method reserves command space and observes ring-head progress, not an
+acknowledgement for a particular TLB invalidation. Neither its successful
+return nor the readiness bit demonstrates retirement of an old page table.
+No executable patch or runtime mutation. Next: review the wait helper and
+predicates, caller handling of false, and submission ordering that separates
+command insertion from completion.
+
 The base, Compute and Main ring vtables now pin +0x150 to their respective
 getFlushTLBSpace methods and +0x160 to their writeFlushTLB methods. Complete
 0x20-byte reservation bodies at 428ec, 4e6d8 and 8507c are reviewed/pinned.

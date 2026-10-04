@@ -9,6 +9,7 @@ import sys
 # Complete reviewed native bodies. This fixes the concrete Intel override
 # graph, not inherited timer APIs, dynamic callbacks or runtime completion.
 STAMP_IRQ_NATIVE = {
+    "__ZN20IGHardwareRingBuffer12waitForSpaceEj": (0x3d0, "6de374e33ab0cb73879b30e9102f651e2236371295f9575df7aba524d6cddc18"),
     "__ZN20IGHardwareRingBuffer16getFlushTLBSpaceEv": (0x20, "371c66eaa0eb7f33572bfeca005edcd13b44d6cb1f1cb2f8a92b3baa8bbb5c26"),
     "__ZN27IGHardwareRingBufferCompute16getFlushTLBSpaceEv": (0x20, "e60720b063a6a465489f7c5594d97f92c14bfe0122ae41a6bcea00d8fb66f380"),
     "__ZN24IGHardwareRingBufferMain16getFlushTLBSpaceEv": (0x20, "e60720b063a6a465489f7c5594d97f92c14bfe0122ae41a6bcea00d8fb66f380"),
@@ -597,6 +598,9 @@ def macho_inventory(path):
     assert image[0x14518:0x1451e] == bytes.fromhex("ff 90 30 01 00 00"), f"{path}: changed releaseRange unmap virtual"
     assert direct_branches("__ZN19IGHardwarePageTable12releaseRangeERK14IGAddressRange", "__ZN16IntelAccelerator27flushHardwareAfterGttUpdateEv") == [0x14522], f"{path}: changed post-unmap deferred-flush edge"
     assert image[0x14573:0x14575] == bytes.fromhex("b0 01"), f"{path}: changed unconditional releaseRange success"
+    assert image[0x4177c:0x41782] == bytes.fromhex("ff 90 50 01 00 00"), f"{path}: changed pending-TLB reservation virtual"
+    assert image[0x41785:0x4178a] == bytes.fromhex("41 c6 46 6d 01"), f"{path}: changed pre-validation TLB readiness store"
+    assert image[0x417b1:0x417b6] == bytes.fromhex("41 c6 46 6e 01"), f"{path}: changed pre-validation AUX readiness store"
     for table, prefix in (
             ("__ZTV20IGHardwareRingBuffer", "__ZN20IGHardwareRingBuffer"),
             ("__ZTV27IGHardwareRingBufferCompute", "__ZN27IGHardwareRingBufferCompute"),
