@@ -7,6 +7,11 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 pool construction admission: two native and two Boot bodies pinned.
+Initial refcount 1/class accounting confirmed; metaclass alloc has no local null
+check. Allocator failure policy, runtime metaclass vptr and exclusive factory
+hook admission remain open; resource predicate still not integrated.
+
 2026-10-04 empty-state cleanup predicate implemented/tested (39 offline states).
 Not integrated into deletion hook: resource emptiness does not prove exclusive
 factory ownership/no escape or GPU retirement. Actual admission remains pending.

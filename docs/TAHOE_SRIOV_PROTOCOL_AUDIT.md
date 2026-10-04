@@ -6393,6 +6393,27 @@ callback admission must be proved elsewhere. No executable patch/runtime test.
 
 ######### Factory failed-init release cannot blindly use pool free
 
+Complete native pool metaclass alloc (0x40)/explicit-meta constructor (0x20),
+and Boot OSObjectC2 (0x20)/instanceConstructed (0x30) reviewed/pinned. Native
+alloc requests 0x78 through OSObject new, calls base constructor, installs pool
+vtable, increments class instance bookkeeping and returns that object. Base
+constructor installs OSObject vtable and initializes reference count to 1;
+instanceConstructed atomically increments class count and superclass only on
+the first instance, pairing the reviewed destruction bookkeeping. No pool queue,
+callback or GPU backing is published by those constructor bodies.
+
+Native metaclass alloc does NOT locally check OSObject new's returned pointer
+before constructing/installing vtable. Its allocator's failure policy remains
+pending; the downstream withOptions null check alone does not establish safe
+allocation failure handling. Declared metaclass alloc/effective runtime vptr
+initialization and all indirect factory admission must be established separately.
+Future failed-init cleanup must verify reference count 1, matching borrowed
+owner and fully empty resource predicate at factory-exclusive entry/return,
+not infer exclusivity from constructor history or emptiness alone. No hook is
+installed by this audit checkpoint. Both native/paired KC targeted checks and
+diff-check pass; 53a2dc2 CI37165604548 success. Fixture/docs-only; last full
+suite remains /tmp/ngreen-static.gUoMsZ. No runtime/Host GPU changes.
+
 Implemented `NGVfPagePoolPatch::failedFactoryStateIsEmpty` as an explicit
 resource-state predicate for future failed-construction cleanup. It requires
 nonzero object/borrowed accelerator, zero available pages/page-ID count, null

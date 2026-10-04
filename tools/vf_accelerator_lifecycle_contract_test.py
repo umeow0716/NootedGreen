@@ -9,6 +9,8 @@ import sys
 # Complete reviewed native bodies. This fixes the concrete Intel override
 # graph, not inherited timer APIs, dynamic callbacks or runtime completion.
 STAMP_IRQ_NATIVE = {
+    "__ZNK10IGPagePool9MetaClass5allocEv": (0x40, "65f06ebfe980773f1197b135a255e6293f189a643e11488d8b7953cd51fdca69"),
+    "__ZN10IGPagePoolC1EPK11OSMetaClass": (0x20, "48ed1831fa6b10b5f986207d9ce46af1ba0068f4e81aaabc938eae817c9ae9c2"),
     "__ZN10IGPagePoolD2Ev": (0xa, "aafd66af2c321a1032ffdbaea51ef446e7df7cd4b20fe53e4fdf6af362acadb2"),
     "__ZN10IGPagePoolD1Ev": (0xa, "aafd66af2c321a1032ffdbaea51ef446e7df7cd4b20fe53e4fdf6af362acadb2"),
     "__ZN10IGPagePoolD0Ev": (0x22, "b405fb72aec724a6adf49da0d176239a1ad6a1c7fd78469f09e809bb4544e864"),
@@ -436,6 +438,9 @@ def macho_inventory(path):
     # These imports distinguish the periodic collection mutex from bridge
     # descriptor spin locks. They do not certify dynamic callback lifetime.
     stamp_irq_imports = {
+        0xa720: "__ZN8OSObjectC2EPK11OSMetaClass",
+        0xa7c3: "__ZN8OSObjectnwEm", 0xa7d8: "__ZN8OSObjectC2EPK11OSMetaClass",
+        0xa7ea: "__ZNK11OSMetaClass19instanceConstructedEv",
         0xa73c: "__ZN8OSObjectD2Ev", 0xa746: "__ZN8OSObjectD2Ev",
         0xa754: "__ZN8OSObjectD2Ev", 0xa767: "__ZN8OSObjectdlEPvm",
         0xbab2: "__ZN22IOInterruptEventSource20interruptEventSourceEP8OSObjectPFvS1_PS_iEP9IOServicei",

@@ -337,7 +337,9 @@ def check_boot_atomic(system, path):
         symbols[name] = []
     for name in (b"_IOSimpleLockFree", b"_lck_spin_free", b"_lck_spin_destroy",
                  b"__ZN8OSObject4initEv", b"__ZN8OSObjectD2Ev",
-                 b"__ZNK11OSMetaClass18instanceDestructedEv"):
+                 b"__ZNK11OSMetaClass18instanceDestructedEv",
+                 b"__ZN8OSObjectC2EPK11OSMetaClass",
+                 b"__ZNK11OSMetaClass19instanceConstructedEv"):
         symbols[name] = []
     kernel_defined_addresses = set()
     for command, offset in commands(boot, kernel[0]):
@@ -360,6 +362,8 @@ def check_boot_atomic(system, path):
         return boot[matches[0]:matches[0] + length]
 
     for name, length, digest in (
+            (b"__ZN8OSObjectC2EPK11OSMetaClass", 0x20, "3bff5fda79db9a259910ce7c7bd2abc320e4f802db12952733c6cd5172127e8c"),
+            (b"__ZNK11OSMetaClass19instanceConstructedEv", 0x30, "7da7d572ec33568cb147606982d6f62b83c2cdc233e7a1cfe4315de6703918c7"),
             (b"__ZN8OSObjectD2Ev", 0x10, "f87c6d05828374250e441fa1f70966f19d575146c67e3cff53439197774cf85b"),
             (b"__ZNK11OSMetaClass18instanceDestructedEv", 0x90, "0d67e188d3f4ceada292a22f4fe66ae4a8396f2497702f5466da893dd7c804a0"),
             (b"_IOSimpleLockFree", 0x50, "7924e21ddc26f4a79618ebad26be0c6bd8867a2aac4a0d07d447fe2df35c62c7"),
