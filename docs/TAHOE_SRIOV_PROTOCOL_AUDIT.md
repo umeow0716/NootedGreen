@@ -6393,6 +6393,18 @@ callback admission must be proved elsewhere. No executable patch/runtime test.
 
 ######### Factory failed-init release cannot blindly use pool free
 
+Complete Boot OSObject operator new (0x30) reviewed/pinned with next-symbol
+boundary: passes size and flags 0x41004 to allocator 0xffffff8000369360, updates
+global ivar-size accounting and returns the allocator result without a local
+null check/assert/panic. Native pool metaclass allocator therefore depends on
+that underlying allocator's failure semantics before dereferencing the result.
+Reference XNU OSObject.cpp contains assert(mem), but it is not present in this
+pinned binary; source assertion is not a runtime nonnull guarantee. Allocation
+flags and actual callee must be reviewed before alleging recoverable null return
+or assuming allocation failure cannot happen. No failure was induced.
+Paired KC contract and diff-check pass; 9839ed1 CI37165811210 remains in progress.
+Fixture/docs-only; no full-suite rerun, hook, deployment or Host GPU operation.
+
 Complete native pool metaclass alloc (0x40)/explicit-meta constructor (0x20),
 and Boot OSObjectC2 (0x20)/instanceConstructed (0x30) reviewed/pinned. Native
 alloc requests 0x78 through OSObject new, calls base constructor, installs pool

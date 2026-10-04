@@ -339,7 +339,8 @@ def check_boot_atomic(system, path):
                  b"__ZN8OSObject4initEv", b"__ZN8OSObjectD2Ev",
                  b"__ZNK11OSMetaClass18instanceDestructedEv",
                  b"__ZN8OSObjectC2EPK11OSMetaClass",
-                 b"__ZNK11OSMetaClass19instanceConstructedEv"):
+                 b"__ZNK11OSMetaClass19instanceConstructedEv",
+                 b"__ZN8OSObjectnwEm"):
         symbols[name] = []
     kernel_defined_addresses = set()
     for command, offset in commands(boot, kernel[0]):
@@ -362,6 +363,7 @@ def check_boot_atomic(system, path):
         return boot[matches[0]:matches[0] + length]
 
     for name, length, digest in (
+            (b"__ZN8OSObjectnwEm", 0x30, "ede18fc0e04e045546d27a1994374beec6c7e3849165336ef54e69b03ae6c8fc"),
             (b"__ZN8OSObjectC2EPK11OSMetaClass", 0x20, "3bff5fda79db9a259910ce7c7bd2abc320e4f802db12952733c6cd5172127e8c"),
             (b"__ZNK11OSMetaClass19instanceConstructedEv", 0x30, "7da7d572ec33568cb147606982d6f62b83c2cdc233e7a1cfe4315de6703918c7"),
             (b"__ZN8OSObjectD2Ev", 0x10, "f87c6d05828374250e441fa1f70966f19d575146c67e3cff53439197774cf85b"),
