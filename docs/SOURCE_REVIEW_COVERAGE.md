@@ -7,6 +7,12 @@ audit's runtime blockers are open.
 
 ## Scope
 
+Exact20-entry native external relocation inventory for command-pool
+setBufferPtr is now enforced across both archives. One-time decoded search
+found no direct destination operand at displacement1858 in defined native
+functions. Computed/aliased writes and setter argument validity remain
+unproven; this is inventory evidence, not whole HIZ dataflow review.
+
 Complete native display-pipe init `7eaf0/d2` and beginCommands `8071e/4e`
 reviewed and pinned. Dynamic getter request field1330 is initialized to
 0x68/0x6e dwords, fitting the 4096-8 display pool. This does not establish

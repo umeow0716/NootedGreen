@@ -706,6 +706,7 @@ def macho_inventory(path):
     observed_event_stop_imports = {address: [] for address in event_stop_imports}
     external_relocation_offsets = set()
     pool_getter_imports = {}
+    pool_set_pointer_imports = {}
     for index in range(external_count):
         address, bits = struct.unpack_from(
             "<iI", image, external_offset + index * 8)
@@ -713,6 +714,8 @@ def macho_inventory(path):
         external_relocation_offsets.add(address)
         if names[symbol_index] == "__ZN25IOAccelCommandBufferPool217getBufferPtrNoIncEj":
             pool_getter_imports.setdefault(address, []).append(bits >> 24)
+        if names[symbol_index] == "__ZN25IOAccelCommandBufferPool212setBufferPtrEPj":
+            pool_set_pointer_imports.setdefault(address, []).append(bits >> 24)
         if address in observed_event_stop_imports:
             observed_event_stop_imports[address].append((names[symbol_index], bits >> 24))
         if address in observed_stamp_irq_imports:
@@ -775,6 +778,11 @@ def macho_inventory(path):
                                         target_start, external_relocation_offsets)
 
     # Decoded imported-call argument windows, not whole caller proofs.
+    assert pool_set_pointer_imports == {address: [0x2d] for address in (
+        0x308b6, 0x30e25, 0x3120e, 0x3259e, 0x3544b, 0x80842,
+        0x85c36, 0x86d27, 0x87380, 0x87ddf, 0x88111, 0x8819d,
+        0x8862e, 0x88eae, 0x89223, 0x899de, 0x8b042, 0x8b0aa,
+        0x8cb15, 0x8d4b9)}, f"{path}: changed native pool cursor setter inventory"
     for call, expected in (
             (0x30688, 12), (0x30be0, 12), (0x31127, 9),
             (0x31ba7, 0x3ffe), (0x8cb85, 2)):

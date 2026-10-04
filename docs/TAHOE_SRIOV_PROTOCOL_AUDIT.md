@@ -6955,6 +6955,25 @@ No executable patch or runtime mutation.
 
 ### Update fanout must participate in the same owner transaction
 
+#### Native cursor setter inventory is complete for external relocations
+
+Both native archives now require exactly20 branch relocations to
+IOAccelCommandBufferPool2::setBufferPtr, all relocation type2d:
+five 2D/Blit3D sites, display submit80842, twelve HIZ sites85c36 through
+8b0aa, resolve-init8cb15 and CCS8d4b9. The exact address inventory is a
+hard contract. Function-bounded Capstone discovery over defined native
+symbols found no instruction whose destination operand directly uses
+displacement1858, but this one-time discovery is not a decoder-backed CI
+assertion and does not exclude aliases, computed addresses or other images.
+
+Several HIZ setters are preceded by local pointer-plus-constant comparisons,
+while others publish working pointers directly. A relocation inventory is
+not a proof that each RSI lies in [start,end]; full dataflow through the
+5738-byte HIZ body remains open. It does show that production cursor checks
+cannot cover only the smaller fixed callers. Next audit setter arguments
+by semantic group and add an executable setter-range policy model before
+changing production behavior.
+
 #### Resolve callers reserve eight bytes only under a cursor invariant
 
 The getter request windows in resolve_hiz_g7 `85afa..85b16` and
