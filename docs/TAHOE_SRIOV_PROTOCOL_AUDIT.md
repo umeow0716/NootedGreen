@@ -7013,6 +7013,27 @@ request is returned after selection failure, but does not connect a real
 rect-list workload to this exact arithmetic state. Next model and constrain
 the producer operands, and review the immediate post-getter write extent.
 
+#### VF rect-list requests now preserve the configured eight-byte tail
+
+The UUID/VF-gated production patch changes only the request-loop comparison
+immediate from10000 tofff8 hex inside the exact24b0-byte rect-list function.
+The computed request is always 64-byte aligned at this comparison, so the
+largest newly admitted value becomes ffc0; an exact10000 now performs one
+additional native decrement/recalculation instead of reaching the getter.
+This leaves at least38 hex bytes beyond the requested command region and thus
+preserves the pool's configured8-byte tail without truncating a caller write or
+changing getter semantics. PF retains the native10000 comparison.
+
+Both archived payloads require the nine-byte compare/branch anchor to be
+globally unique at33c95 and within the exact334b0..35960 function boundary.
+The same-size replacement retains the original unsigned backward branch; a
+sanitizer test decodes the new immediate and exhaustively checks every aligned
+request through20000 hex, proving the admitted aligned maximum isffc0. Runtime
+source admission pins the full function preflight before applying one patch.
+This is built/static evidence only: realistic operand reachability and the
+whole rect-list write dataflow remain unclaimed, while HIZ setter ranges and
+resolve's sub-eight-byte underflow remain open capacity work.
+
 #### Display dynamic request is initialized to a small bounded constant
 
 Complete native display-pipe init `7eaf0/d2` and beginCommands `8071e/4e`

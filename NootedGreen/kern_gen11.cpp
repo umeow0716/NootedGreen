@@ -2256,6 +2256,32 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			           "ngreen", "Failed to propagate VF command-pool init failure");
 			SYSLOG("ngreen", "V262: guarded VF extended-context pool construction");
 
+			// The rect-list request is 64-byte aligned, but native admitted exactly
+			// 64 KiB while this pool reserves its final eight bytes. Bound only this
+			// producer to the configured usable capacity; PF remains byte-identical.
+			mach_vm_address_t rectListCapacityStart = 0, rectListCapacityEnd = 0;
+			KernelPatcher::SolveRequest rectListCapacityBounds[] = {
+				{"__ZL22blit3d_submit_rectlistP23IGHardwareBlit3DContextP15blit3d_params_tPK8IGVectorI11rect_pair_t25IGIOMallocAllocatorPolicyE",
+				 rectListCapacityStart},
+				{"__ZL19IsSurfaceCompressedj", rectListCapacityEnd},
+			};
+			PANIC_COND(!patcher.solveMultiple(
+			               index, rectListCapacityBounds, address, size) ||
+			           rectListCapacityEnd <= rectListCapacityStart ||
+			           !NGIOAccelCommandPool::hasReviewedRectListCapacity(
+			               reinterpret_cast<const uint8_t *>(rectListCapacityStart),
+			               rectListCapacityEnd - rectListCapacityStart),
+			           "ngreen", "Changed VF rect-list command-pool capacity contract");
+			LookupPatchPlus const rectListCapacityPatch {
+				activeKext, NGIOAccelCommandPool::rectListCapacityFind,
+				NGIOAccelCommandPool::rectListCapacityReplace, 1,
+			};
+			PANIC_COND(!rectListCapacityPatch.apply(
+			               patcher, rectListCapacityStart,
+			               rectListCapacityEnd - rectListCapacityStart),
+			           "ngreen", "Failed to reserve the VF rect-list pool tail");
+			SYSLOG("ngreen", "V263: bounded VF rect-list command requests to 0xfff8 bytes");
+
 			// Tahoe's GuC factory releases the object after initWithOptions()
 			// already called virtual free() on the same failure path. XNU's
 			// OSObject::free() deletes the instance, so the second virtual dispatch

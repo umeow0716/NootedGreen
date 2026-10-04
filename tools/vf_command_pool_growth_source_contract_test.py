@@ -18,6 +18,8 @@ REQUIRED = (
     "NGIOAccelCommandPool::completedGrowth(",
     "NGIOAccelCommandPool::hasReviewedExtendedInitContract(",
     "NGIOAccelCommandPool::extendedInitReplace, 1",
+    "NGIOAccelCommandPool::hasReviewedRectListCapacity(",
+    "NGIOAccelCommandPool::rectListCapacityReplace, 1",
     "gVfAccelerator = that;",
 )
 
@@ -56,7 +58,9 @@ def accepts(source: str) -> bool:
     driver_end = source.index("// Tahoe's GuC factory", driver_start)
     driver = source[driver_start:driver_end]
     return (driver.index("hasReviewedExtendedInitContract") <
-            driver.index("extendedInitPatch.apply"))
+            driver.index("extendedInitPatch.apply") <
+            driver.index("hasReviewedRectListCapacity") <
+            driver.index("rectListCapacityPatch.apply"))
 
 
 def main() -> None:

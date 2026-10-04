@@ -17,6 +17,10 @@ constexpr size_t recordOffset = 0x1860;
 constexpr uint16_t slotCapacity = 256;
 constexpr size_t reviewedGrowthSize = 0x202;
 constexpr size_t reviewedExtendedInitSize = 0xf4;
+constexpr size_t reviewedRectListSize = 0x24b0;
+constexpr uint32_t blit3dBufferBytes = 0x10000;
+constexpr uint32_t blit3dReservedBytes = 8;
+constexpr uint32_t blit3dUsableBytes = blit3dBufferBytes - blit3dReservedBytes;
 
 // UUID admission is primary. These exact instruction anchors additionally
 // bind the count publication, void selection call and false-success tail used
@@ -62,6 +66,27 @@ inline bool hasReviewedExtendedInitContract(const uint8_t *body, size_t length) 
 		return false;
 	for (size_t i = 0; i < sizeof(extendedInitFind); ++i)
 		if (body[0x99 + i] != extendedInitFind[i])
+			return false;
+	return true;
+}
+
+// The request is 64-byte aligned. Native admitted exactly 64 KiB even though
+// pool construction reserves its final eight bytes. Comparing against 0xfff8
+// makes the largest admitted aligned request 0xffc0 without changing the loop.
+constexpr uint8_t rectListCapacityFind[] = {
+	0x49, 0x81, 0xfc, 0x00, 0x00, 0x01, 0x00, 0x77, 0xc8,
+};
+constexpr uint8_t rectListCapacityReplace[] = {
+	0x49, 0x81, 0xfc, 0xf8, 0xff, 0x00, 0x00, 0x77, 0xc8,
+};
+static_assert(sizeof(rectListCapacityFind) == sizeof(rectListCapacityReplace),
+	"rect-list capacity patch must preserve instruction extent");
+
+inline bool hasReviewedRectListCapacity(const uint8_t *body, size_t length) {
+	if (!body || length != reviewedRectListSize)
+		return false;
+	for (size_t i = 0; i < sizeof(rectListCapacityFind); ++i)
+		if (body[0x7e5 + i] != rectListCapacityFind[i])
 			return false;
 	return true;
 }

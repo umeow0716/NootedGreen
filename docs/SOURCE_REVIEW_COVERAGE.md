@@ -102,6 +102,13 @@ branch targets, compiled bridge bytes/relocation and direct/outer instruction
 execution across false/true outcomes pass. PF constructor bytes remain native.
 Callbacks/refcounts are mocked and hardware quiescence is not established.
 
+The proven Blit3D rect-list capacity mismatch now has a VF-only one-immediate
+repair: the unique request-loop limit changes from10000 tofff8 hex inside the
+exact24b0-byte owner. Since requests are 64-byte aligned, the maximum admitted
+request isffc0 and the configured8-byte tail remains available. Both payload
+anchors/branch targets and every aligned request through20000 hex are tested.
+PF is unchanged; HIZ cursor ranges and resolve underflow remain open.
+
 New complete KC review: pool getBufferPtrNoInc `0x14b6b2bc/0x10e`, hash-pinned
 with selected pointer acquisition/submission/selection edges. Pool growth's
 selection call discovered, not its full body reviewed. Exact size/owner init

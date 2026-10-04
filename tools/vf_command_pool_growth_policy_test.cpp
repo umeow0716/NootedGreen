@@ -34,6 +34,10 @@ int main() {
 		assert(!hasReviewedExtendedInitContract(extended.data(), extended.size()));
 		extended[0x99 + i] ^= 1;
 	}
+	for (uint32_t request = 0; request <= blit3dBufferBytes * 2; request += 64) {
+		const bool admitted = request <= blit3dUsableBytes;
+		assert(admitted == (request <= 0xffc0));
+	}
 
 	auto checkValid = [](uint16_t maximum, uint16_t previous) {
 		const uint16_t published = previous == 0 ? 1 : previous * 2;
