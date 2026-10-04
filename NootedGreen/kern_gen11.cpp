@@ -2247,6 +2247,23 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			               blit3dBoundsEnd - blit3dBoundsStart), "ngreen",
 			           "Failed to enlarge Blit3D scratch allocation");
 			SYSLOG("ngreen", "V250: enlarged Blit3D scratch allocation 0xd240→0xe000");
+			mach_vm_address_t ccsStart = 0, ccsEnd = 0;
+			KernelPatcher::SolveRequest ccsBounds[] = {
+				{"__ZN15IGAccelResource16submitCCSResolveEPNS_17ResourceInfoEntryER16IntelAcceleratorP11IGAccelTask20EIntelCCSResolveTypehh", ccsStart},
+				{"__ZN15IGAccelResource24disableRenderCompressionEPNS_17ResourceInfoEntryE", ccsEnd},
+			};
+			PANIC_COND(!patcher.solveMultiple(index, ccsBounds, address, size) ||
+			           ccsEnd <= ccsStart || ccsEnd - ccsStart != 0x554,
+			           "ngreen", "Invalid CCS allocation repair bounds");
+			PANIC_COND(!NGVfBlit3dScratchPatch::ccsAllocationPreflight(
+			               reinterpret_cast<const uint8_t *>(ccsStart), ccsEnd - ccsStart),
+			           "ngreen", "Changed or ambiguous CCS allocation repair anchors");
+			LookupPatchPlus const ccsAllocationPatch {
+				activeKext, NGVfBlit3dScratchPatch::ccsAllocationFind,
+				NGVfBlit3dScratchPatch::ccsAllocationReplace, 1,
+			};
+			PANIC_COND(!ccsAllocationPatch.apply(patcher, ccsStart, ccsEnd - ccsStart),
+			           "ngreen", "Failed to preserve CCS allocation-failure cleanup");
 			KernelPatcher::RouteRequest workQueueInitRoute[] = {
 				{"__ZN22IGHardwareGuCWorkQueue19initWithAcceleratorEP22IOGraphicsAccelerator2jP37UK_GEN11_SCHED_PROCESS_DESCRIPTOR_REC",
 				 vfWorkQueueInit, this->oVfWorkQueueInit},

@@ -6955,6 +6955,28 @@ No executable patch or runtime mutation.
 
 ### Update fanout must participate in the same owner transaction
 
+Implemented bounded VF CCS rectangle-null repair (not deployed): the exact
+34-byte result-setup block at 0x73c1a now uses a near JE to 0x73f13, retains
+the allocation pointer and r12 on success, and stores byte 1 into count/capacity
+whose complete qwords were previously zeroed. This preserves original full
+qword values without widening the body. Removed RCX=1 is dead: native code
+first overwrites RCX at 0x73cd9 before reading it or calling another function.
+The remaining instructions and all cleanup/import sites stay at their original
+addresses. Existing UUID/VF gate plus solved start/end bound 0x554, unique
+allocation/zero patterns and selected false-cleanup anchor fail closed before
+apply. The archived binary remains unchanged; its bad-branch fixtures preserve
+original evidence rather than claiming the archived code itself was repaired.
+
+Full offline suite passed in /tmp/ngreen-static.wgZbXe (two existing SDK macro
+warnings). Tests cover both payloads, 68 single-byte preflight mutations,
+duplicate/reapply rejection, untouched neighbours, null destination/empty-state
+and selected success-setup equivalence. Separate actual x86 Unicorn execution
+verified five non-null pointers including high-bit/maximal values, identical
+vector/r12/flags, null branch to cleanup and Capstone RCX liveness. These are
+selected CPU setup checks, not whole-kernel or firmware/DMA proof. Event append
+failure propagation and cross-owner PPGTT transaction are STILL unimplemented.
+No native macOS build/artifact promotion or runtime deployment/VM start claimed.
+
 CCS cleanup verification: relocation identifies the 16-byte rectangle request
 as IOMalloc (0x73c16); normal rectangle cleanup is IOFree (0x73ed3).
 Both failure-path vector frees are IOFree (0x73f2b/0x73f47), sized by vector

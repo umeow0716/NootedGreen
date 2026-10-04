@@ -7,6 +7,12 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 implemented VF CCS null repair: 34-byte bounded setup rewrite enters
+verified false cleanup on null, preserves successful vector/r12 and neighbours.
+Exact start/end, zero-state and cleanup preflight required. Full offline suite
+and separate selected actual x86 emulation passed; event dependency failure,
+cross-owner admission/retirement and runtime safety remain unproven. Not deployed.
+
 2026-10-04 CCS cleanup: imported rectangle allocation/free and both false-path
 vector frees pinned; false cleanup can accept empty rectangle allocation state.
 Two complete event-vector grow/append helpers reviewed/pinned. Failed event
