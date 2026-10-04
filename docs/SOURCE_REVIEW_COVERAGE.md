@@ -7,6 +7,12 @@ audit's runtime blockers are open.
 
 ## Scope
 
+New complete paired-KC review: set_current_plane_ioSurfaceDeviceCache
+`0x14bb31ee/0x21a`, with two caller and prepare/complete failure-edge checks.
+It replaces and retains plane owners, not rotation width/height; event merge
+does not establish hardware completion. Other callers and private rotation-map
+final cleanup remain pending; no production retirement repair claimed.
+
 New complete paired-KC review: transaction set_transaction_args
 `0x14bb0714/0xab0`. Revisited existing user-client and pipe transaction-end
 bodies; selected selector-8 outer accelerator mutex/busy lock now connected to

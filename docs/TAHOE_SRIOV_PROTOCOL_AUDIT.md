@@ -6955,6 +6955,36 @@ No executable patch or runtime mutation.
 
 ### Update fanout must participate in the same owner transaction
 
+#### Plane cache replacement is owner transfer, not geometry validation
+
+New complete KC review/pin: set_current_plane_ioSurfaceDeviceCache
+`0x14bb31ee/0x21a`, SHA-256
+`8beabc3abe7e423ff49dacf19daa96567c69e70b727205ae1db92b8b4ed10ce5`.
+The previously reviewed argument setter reaches it at `0x14bb08ca` and
+`0x14bb0d1a`; both edges now checked. An identical nonnull incoming cache
+returns early. Otherwise the helper computes the plane/subplane record,
+merges old resource and primary mapping event storage into the transaction
+event through event-machine `+0x1b8`, completes the old resource via `+0x178`,
+releases it, and releases/clears associated cache and related-object fields.
+The alternate no-cache/old-resource branch also completes/releases the old
+resource before replacement. No synchronous hardware completion wait occurs.
+
+For a nonnull incoming cache it calls its resource virtual `+0x170` first.
+False exits without publishing new cache/resource references; old owners may
+already have been removed. True stores three related pointers in the live
+plane record and retains each owner. The selected selector-8 route supplies
+the previously established accelerator outer lock, but this complete helper
+has no local lock and other callers remain separate obligations. Event merge,
+resource complete and OSObject release are not interchangeable with GuC ACK.
+Its complete body does not set private Intel rotation width/height or finally
+release private rotation map `+0x238` directly. Consequently it is an owner
+replacement entry, not the missing geometry setter or complete retirement
+proof. Tests pin both resource complete calls, incoming prepare and the
+failed-prepare branch, alongside the full body hash. Paired KC passes and
+whitespace validation passes. No production/runtime change. Next trace the
+geometry setter separately while including this replacement path in resource
+retirement ownership and partial-prepare failure handling.
+
 #### Selector-8 outer lock reaches concrete Intel rotation validation
 
 New complete KC review/pin: transaction set_transaction_args
