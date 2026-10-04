@@ -130,6 +130,7 @@ STAMP_IRQ_NATIVE = {
     "__ZN16IGAccelMemoryMap18updateGPUPageTableEv": (0x140, "75ba5674583a8d27d54acab18290e78bbc9de8157b19bfc6614c379d39fa3fbc"),
     "__ZN16IGAccelMemoryMap15updateCacheTypeEj": (0x24, "0c704192e43ed19c39a2179ea6e80551a07af30a8a541016a913f3d9572516f8"),
     "__ZN15IGAccelResource22updateMappingCacheTypeEj": (0x30, "499c98e59e89b29b95b7d14247a756db3f980b5f58134dcf2c49c3baf5db97bf"),
+    "__ZN16IntelAccelerator16submitCCSResolveEP15IGAccelResourceP22color_resolve_params_tRK8IGVectorI11blit_rect_t25IGIOMallocAllocatorPolicyEP11IGAccelTask": (0x2b0, "66bb41fb30a7dbf3b678fbae69ddb8b72a5f825b96042ce1a643eaf13c54c6c0"),
     "__ZN19IGAccelVideoContext30updateResourceMappingCacheTypeEP15IGAccelResource": (0x24, "91ca56bc8ad407f81ad7472060497e0ddb88b32259389dba252e9c29890d9d02"),
     "__ZN19IGHardwarePageTable11updateRangeERK14IGAddressRangePK16IGAccelMemoryMap": (0x3c4, "7bd38a56c02637892a4672882eed36a3bea60b0b6ee6017982a0760713713b92"),
     "__ZN19IGHardwarePageTable11commitRangeERK14IGAddressRangePK16IGAccelMemoryMap": (0x41c, "e063629df4a8d16d85cf3d1b599c036372c0763b560a6a35289d488d80ac410a"),
@@ -500,6 +501,7 @@ def macho_inventory(path):
     # These imports distinguish the periodic collection mutex from bridge
     # descriptor spin locks. They do not certify dynamic callback lifetime.
     stamp_irq_imports = {
+        0x2cad9: "__ZN25IOAccelCommandBufferPool212submitBufferEv",
         0x11e16: "_IOFree",
         0xcdc7: "_memset", 0xce0b: "_memset", 0xce5d: "_memset", 0xcea0: "_memset",
         0xb895: "_memset",
@@ -716,6 +718,9 @@ def macho_inventory(path):
     assert image[0x148d6:0x148db] == b"\xe8" + struct.pack("<i", 0x2d1d8 - 0x148db), f"{path}: changed update flush notification edge"
     resource_table = value("__ZTV15IGAccelResource")
     map_table = value("__ZTV16IGAccelMemoryMap")
+    ccs_submit = "__ZN16IntelAccelerator16submitCCSResolveEP15IGAccelResourceP22color_resolve_params_tRK8IGVectorI11blit_rect_t25IGIOMallocAllocatorPolicyEP11IGAccelTask"
+    assert direct_branches(ccs_submit, "__ZN15IGAccelResource22updateMappingCacheTypeEj") == [0x2c94b], f"{path}: changed CCS cache update edge"
+    assert direct_branches(ccs_submit, "__Z11resolve_ccsP25IOAccelCommandBufferPool2P14IGMappedBufferP22color_resolve_params_tbRK8IGVectorI11blit_rect_t25IGIOMallocAllocatorPolicyE") == [0x2cad0], f"{path}: changed CCS resolve assembly edge"
     assert direct_branches("__ZN15IGAccelResource22updateMappingCacheTypeEj", "__ZN16IGAccelMemoryMap15updateCacheTypeEj") == [0x751cf], f"{path}: changed resource cache update edge"
     assert direct_branches("__ZN19IGAccelVideoContext30updateResourceMappingCacheTypeEP15IGAccelResource", "__ZN15IGAccelResource22updateMappingCacheTypeEj") == [0x78105], f"{path}: changed video resource cache update edge"
     assert struct.unpack_from("<Q", image, map_table + 16 + 0x180)[0] == value("__ZN16IGAccelMemoryMap18updateGPUPageTableEv"), f"{path}: changed mapping update virtual"

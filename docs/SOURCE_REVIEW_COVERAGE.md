@@ -7,6 +7,14 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 CCS submission: complete submitCCSResolve reviewed/pinned with cache
+update, resolve assembly and relocated command-buffer submission identities.
+No local update-result gate precedes downstream submission. Function-bounded
+direct inventory found 87 resource/video-wrapper edges across 29 native owners,
+including Metal render/compute/blit, GL and media; inventory is NOT whole-body
+review of these owners or indirect-call closure. Shared admission and effective
+outer locking must encompass more than video wrappers.
+
 2026-10-04 resource cache update: two complete small resource/video wrappers
 reviewed and pinned. Resource flag update precedes borrowed mapping dispatch;
 video capability-gated wrapper requests cache type 1. No local retain/lock or

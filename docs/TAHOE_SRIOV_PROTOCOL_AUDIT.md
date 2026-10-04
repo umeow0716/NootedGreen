@@ -6955,6 +6955,29 @@ No executable patch or runtime mutation.
 
 ### Update fanout must participate in the same owner transaction
 
+CCS submission follow-up: reviewed complete submitCCSResolve at 0x2c84c
+(0x2b0), pinned its full body in both payloads, resource cache update edge
+0x2c94b, resolve_ccs assembly edge 0x2cad0 and external submitBuffer relocation
+0x2cad9 (instruction 0x2cad8). The resource cache request is type 2, conditional
+on non-null resource. It is followed by debug/bookkeeping branches, FIFO
+virtual operations, optional event-resource append, resolve assembly, then
+command-buffer submit and clearing the bookkeeping pointer +0x1860 -> +0x48.
+No local result test or rollback connects cache update to downstream submit.
+External call placeholder 0x2cadd is NOT a self-call; relocation identifies
+IOAccelCommandBufferPool2::submitBuffer. No local IOLock acquisition is in
+this complete body; effective outer caller locks remain unproven. Previously
+reviewed barrierForWaitEvents is not a newly reviewed full body here.
+
+Function-bounded scan of defined native text owners found 87 direct edges to
+the resource cache updater or video wrapper across 29 owners. Routes include
+submitBlit, submitCCSResolve, blit rectlist, Metal render/posh/blit/compute,
+GL binding/indirect state and media token processing. This scan excludes
+external branch relocations and does not establish all indirect routes or
+whole review of those owners. Consequently a video-only admission hook cannot
+cover the observed mutation graph. Repair requires shared owner admission,
+cache-state rollback and pre-submit failure propagation across pipelines.
+Runtime safety, DMA quiescence and Metal/media acceleration remain unproven.
+
 Resource follow-up: complete updateMappingCacheType at 0x751a6 (0x30)
 sets resource +0x108 bits 25..26 from requested type & 3 before borrowing
 mapping +0x40. Non-null mapping tail-calls updateCacheType at 0x751cf;
