@@ -15,6 +15,26 @@ constexpr uint32_t scheduleContextModeSet = 0x1001;
 constexpr uint32_t updateContextPolicies = 0x100B;
 constexpr uint32_t tlbInvalidation = 0x7000;
 
+enum class TlbTarget : uint32_t {
+	Engines = 0x0,
+	Guc = 0x3,
+};
+
+constexpr uint32_t tlbInvalidationFlushCache = 1U << 31;
+constexpr uint32_t tlbInvalidationHeavyMode = 0U << 8;
+
+inline uint32_t tlbInvalidationControl(TlbTarget target)
+{
+	return tlbInvalidationFlushCache | tlbInvalidationHeavyMode |
+		static_cast<uint32_t>(target);
+}
+
+inline bool validTlbInvalidationControl(uint32_t control)
+{
+	return control == tlbInvalidationControl(TlbTarget::Engines) ||
+		control == tlbInvalidationControl(TlbTarget::Guc);
+}
+
 struct Attributes {
 	bool valid;
 	bool retirement;
@@ -70,7 +90,8 @@ inline Attributes inspect(const uint32_t *request, size_t length)
 			result.responseCredits = result.valid ? 3U : 0U;
 			break;
 		case tlbInvalidation:
-			result.valid = length == 3 && request[2] == 0x80000003U;
+			result.valid = length == 3 &&
+				validTlbInvalidationControl(request[2]);
 			result.retirement = result.valid;
 			result.responseCredits = result.valid ? 3U : 0U;
 			break;

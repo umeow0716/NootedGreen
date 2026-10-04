@@ -2662,7 +2662,7 @@ def g2h_completion_lock_contract(source, path):
         expected_locks = 1 if "vfCtbGucToHostAction" in signature else 0
         if body.count("IOLockLock(") != expected_locks:
             raise AssertionError(f"{path}: completion graph gained a sleeping lock in {signature}")
-    wait = function_body(source, "bool vfInvalidateTLBSync(void *guc)")
+    wait = function_body(source, "bool vfInvalidateTLBSync(void *guc, NGVfGuCRequest::TlbTarget target)")
     assert wait.index("IOLockLock(gVfGucLock);") < wait.index("pollVfGuCToHost(guc)") < wait.index("IOLockUnlock(gVfGucLock);"), f"{path}: changed TLB waiter lock/poll boundary"
 
 
@@ -3153,6 +3153,20 @@ def source_contract(path):
             "OSCompareAndSwap(0, 1, &gVfContextShutdownComplete)"):
         if token not in quiesce:
             raise AssertionError(f"{path}: incomplete pre-CTB rollback proof: {token}")
+    engine_invalidate = quiesce.index(
+        "vfInvalidateTLBSync(guc, NGVfGuCRequest::TlbTarget::Engines)")
+    guc_invalidate = quiesce.index(
+        "vfInvalidateTLBSync(guc, NGVfGuCRequest::TlbTarget::Guc)")
+    dma_quiesced = quiesce.index(
+        "OSCompareAndSwap(0, 1, &gVfDmaQuiesced)", engine_invalidate)
+    if not engine_invalidate < guc_invalidate < dma_quiesced:
+        raise AssertionError(
+            f"{path}: shutdown publishes DMA quiescence before both TLB targets complete")
+
+    invalidate = function_body(
+        source, "bool vfInvalidateTLBSync(void *guc, NGVfGuCRequest::TlbTarget target)")
+    if "NGVfGuCRequest::tlbInvalidationControl(target)" not in invalidate:
+        raise AssertionError(f"{path}: synchronous invalidation ignores its typed target")
 
     unowned = function_body(source, "bool vfDirectContextTableUnowned()")
     for token in (
@@ -3193,7 +3207,7 @@ def source_contract(path):
         raise AssertionError(
             f"{path}: CTB enable-boundary drain is not ordered before success")
     for signature in (
-            "bool vfInvalidateTLBSync(void *guc)",
+            "bool vfInvalidateTLBSync(void *guc, NGVfGuCRequest::TlbTarget target)",
             "bool vfWaitForContextState(void *guc, uint16_t gucId, VfGucContextState wanted)",
             "bool vfWaitForContextTransition(void *guc, uint16_t gucId, uint32_t lrcaPage,"):
         if "pollVfGuCToHost(guc)" not in function_body(source, signature):

@@ -541,7 +541,7 @@ bool vfValidH2GMapping(const volatile uint32_t *descriptor,
                        const volatile uint32_t *buffer);
 bool vfValidG2HMapping(const volatile uint32_t *descriptor,
                        const volatile uint32_t *buffer);
-bool vfInvalidateTLBSync(void *guc);
+bool vfInvalidateTLBSync(void *guc, NGVfGuCRequest::TlbTarget target);
 bool vfQuiesceDeviceForShutdown(void *guc);
 bool vfGucSendMMIO(const uint32_t request[4], uint32_t requestLength,
                    uint32_t response[4]);
@@ -918,13 +918,14 @@ bool vfWaitForContextShutdown(void *guc)
 	return false;
 }
 
-bool vfInvalidateTLBSync(void *guc)
+bool vfInvalidateTLBSync(void *guc, NGVfGuCRequest::TlbTarget target)
 {
 	// GEN12_GUC_TLB_INV_CR (0xCEE8) belongs to the physical GT and is not in
-	// a VF's runtime MMIO allowlist. i915's gen12vf_ggtt_invalidate() sends a
-	// GuC-internal, heavy invalidation with cache flush and waits for its G2H
-	// sequence completion. Serialize requests so a single bounded waiter is
-	// sufficient and never fall back to the physical register on failure.
+	// a VF's runtime MMIO allowlist. i915 sends target GUC for internal/GGTT
+	// translations and target ENGINES for the full engine/PPGTT barrier; both
+	// use heavy mode with cache flush and wait for the matching G2H sequence.
+	// Serialize requests so a single bounded waiter is sufficient and never
+	// fall back to the physical register on failure.
 	if (!vfCaptureHardwareGuc(guc))
 		return false;
 	if (!gVfGGTTReady || gVfProtocolFault || !vfInterruptTransportReady() ||
@@ -950,7 +951,7 @@ bool vfInvalidateTLBSync(void *guc)
 	const uint32_t request[] = {
 		kGucActionTlbInvalidation,
 		seqno,
-		0x80000003U, // FLUSH_CACHE | HEAVY | GUC internal translations
+		NGVfGuCRequest::tlbInvalidationControl(target),
 	};
 	uint32_t transportFence = 0;
 	const bool sent = vfSendCtbFastAction(guc, request, arrsize(request),
@@ -973,8 +974,8 @@ bool vfInvalidateTLBSync(void *guc)
 	IOLockUnlock(gVfGucLock);
 
 	if (!sent || !completed) {
-		SYSLOG("ngreen", "V237: VF GuC TLB invalidate failed seq=%u sent=%d fence=%u",
-		       seqno, sent, transportFence);
+		SYSLOG("ngreen", "V237: VF GuC TLB invalidate failed seq=%u target=%u sent=%d fence=%u",
+		       seqno, static_cast<unsigned int>(target), sent, transportFence);
 		vfMarkProtocolFault(sent ? "GuC TLB invalidation timeout" :
 		                         "GuC TLB invalidation enqueue failure");
 	}
@@ -1354,11 +1355,14 @@ bool vfQuiesceDeviceForShutdown(void *guc)
 			return false;
 	}
 
-	// Once CTB has run, finish with the same heavy GuC invalidation used for a
-	// live unmap. All contexts are now deregistered and the operation gate is
-	// closed, so completion is a device-wide DMA/translation boundary for every
-	// later teardown unmap. Before CTB enable there cannot have been GPU work.
-	if (gVfCtbEverEnabled && !vfInvalidateTLBSync(guc))
+	// Once CTB has run, independently retire engine/PPGTT translations and the
+	// GuC's internal/GGTT translations. All contexts are now deregistered and
+	// the operation gate is closed, so both matching heavy-invalidation
+	// completions form the device-wide DMA/translation boundary for every later
+	// teardown unmap. Before CTB enable there cannot have been GPU work.
+	if (gVfCtbEverEnabled &&
+	    (!vfInvalidateTLBSync(guc, NGVfGuCRequest::TlbTarget::Engines) ||
+	     !vfInvalidateTLBSync(guc, NGVfGuCRequest::TlbTarget::Guc)))
 		return false;
 
 	OSCompareAndSwap(0, 1, &gVfDmaQuiesced);
@@ -3443,7 +3447,8 @@ static bool vfCompleteGgttUpdate()
 	OSSynchronizeIO();
 	if (!gVfCtbEverEnabled)
 		return true;
-	if (!gVfHardwareGuc || !vfInvalidateTLBSync(gVfHardwareGuc)) {
+	if (!gVfHardwareGuc || !vfInvalidateTLBSync(
+		gVfHardwareGuc, NGVfGuCRequest::TlbTarget::Guc)) {
 		vfMarkProtocolFault("VF GGTT update did not complete TLB invalidation");
 		return false;
 	}
@@ -3678,7 +3683,8 @@ void Gen11::IGHardwareGlobalPageTableUnmapRange(void *that,
 	__asm__ volatile("sfence" ::: "memory");
 	if (invalidation == NGGgtt::TlbInvalidation::NotRequired)
 		return;
-	PANIC_COND(!vfInvalidateTLBSync(gVfHardwareGuc),
+	PANIC_COND(!vfInvalidateTLBSync(
+		gVfHardwareGuc, NGVfGuCRequest::TlbTarget::Guc),
 		"ngreen", "VF GGTT unmap could not quiesce translations before DMA release");
 }
 
@@ -6063,7 +6069,8 @@ void Gen11::vfInvalidateTLB(void *that) {
 	// retiring shared GPU data. A failed synchronous invalidation cannot be
 	// reported, so returning would permit stale translations to outlive their
 	// backing.
-	PANIC_COND(!that || !vfInvalidateTLBSync(that), "ngreen",
+	PANIC_COND(!that || !vfInvalidateTLBSync(
+		that, NGVfGuCRequest::TlbTarget::Guc), "ngreen",
 		"Required IGHardwareGuC VF TLB invalidation did not complete");
 }
 
@@ -6080,7 +6087,8 @@ void Gen11::vfBaseInvalidateTLB(const void *that) {
 		return;
 	if (gVfDmaQuiesced)
 		return;
-	PANIC_COND(!gVfHardwareGuc || !vfInvalidateTLBSync(gVfHardwareGuc),
+	PANIC_COND(!gVfHardwareGuc || !vfInvalidateTLBSync(
+		gVfHardwareGuc, NGVfGuCRequest::TlbTarget::Guc),
 		"ngreen", "Required IGGuC VF TLB invalidation did not complete");
 }
 

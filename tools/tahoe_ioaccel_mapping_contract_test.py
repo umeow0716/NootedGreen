@@ -1016,6 +1016,18 @@ def check(path, boot_path=None):
         offset = locations[0]
         return image[offset:offset + length]
 
+    def direct_branch_offsets(start, length, target):
+        """Pinned symbol-window E8/E9 locator, not an indirect-call proof."""
+        body = read(start, length)
+        found = []
+        for offset in range(max(0, length - 4)):
+            if body[offset] not in (0xe8, 0xe9):
+                continue
+            displacement = struct.unpack_from("<i", body, offset + 1)[0]
+            if start + offset + 5 + displacement == target:
+                found.append(offset)
+        return found
+
     for name, expected in CONTRACTS.items():
         address = address_of(name)
         assert read(address, len(expected)) == expected, f"changed {name}"
@@ -1143,6 +1155,19 @@ def check(path, boot_path=None):
         assert encoded[0] == 0xe8 and call + 5 + struct.unpack_from("<i", encoded, 1)[0] == target, "changed serialized collector/task cleanup edge"
     assert read(0x14ba1299, 7) == bytes.fromhex("48 8b bb 88 00 00 00"), "changed garbage collector mutex identity"
     assert read(0x14ba1384, 7) == bytes.fromhex("48 8b bf 88 00 00 00"), "changed GART collector mutex identity"
+    for method in ("__ZN14IOAccelShared24freeEv",
+                   "__ZNK11IOAccelTask7releaseEv",
+                   "__ZN11IOAccelTask18freeAllGPUMappingsEv",
+                   "__ZNK16IOAccelMemoryMap7releaseEv",
+                   "__ZN16IOAccelMemoryMap11release_pteEv"):
+        start = address_of(method)
+        length = EVENT_OWNER_BODIES[method][0]
+        assert direct_branch_offsets(start, length, 0x10012) == [], f"changed selected lock-free cleanup entry: {method}"
+        assert direct_branch_offsets(start, length, 0x10018) == [], f"changed selected unlock-free cleanup entry: {method}"
+    assert direct_branch_offsets(0x14ba1280, 0xce, 0x10012) == [0x20], "changed garbage collector lock entry"
+    assert direct_branch_offsets(0x14ba1280, 0xce, 0x10018) == [0xc8], "changed garbage collector unlock exit"
+    assert direct_branch_offsets(0x14ba1376, 0x1d4, 0x10012) == [0x15], "changed GART collector lock entry"
+    assert direct_branch_offsets(0x14ba1376, 0x1d4, 0x10018) == [0x194, 0x1ce], "changed GART collector unlock exits"
     for call, method in ((0x14b8e78d, "__ZN25IOAccelOrphanedMemoryPool13sharedReleaseEP14IOAccelShared2"),
                          (0x14b8e79e, "__ZN25IOAccelOrphanedMemoryPool13sharedReleaseEP14IOAccelShared2"),
                          (0x14b8e90d, "__ZN11IOAccelTask23prune_orphaned_mappingsEv")):
@@ -1187,6 +1212,8 @@ def check(path, boot_path=None):
                          (0x14ba5fca, address_of("__ZN11IOAccelTask22free_orphaned_mappingsEv"))):
         encoded = read(call, 5)
         assert encoded[0] == 0xe8 and call + 5 + struct.unpack_from("<i", encoded, 1)[0] == target, "changed sleep/wake cleanup and mutex edge"
+    assert direct_branch_offsets(0x14ba63a0, 0x20c, 0x10012) == [0x4e], "changed wake cleanup lock entry"
+    assert direct_branch_offsets(0x14ba63a0, 0x20c, 0x10018) == [0x1d3], "changed wake cleanup unlock exit"
     # Pin an UNREPAIRED reference defect, not a successful cleanup invariant:
     # the orphan-list iterator is built at -0x48 but read at exhausted -0x30.
     assert read(0x14ba5f7f, 4) == bytes.fromhex("48 8d 7d b8"), "changed sleep second iterator construction slot"
@@ -1199,6 +1226,8 @@ def check(path, boot_path=None):
         encoded = read(call, 5)
         assert encoded[0] == 0xe8 and call + 5 + struct.unpack_from("<i", encoded, 1)[0] == target, "changed system-will-sleep mutex edge"
     assert read(0x14ba61cf, 6) == bytes.fromhex("ff 90 d8 09 00 00"), "changed sleep virtual dispatch inside mutex scope"
+    assert direct_branch_offsets(0x14ba6144, 0x25c, 0x10012) == [0x4a, 0x1c2], "changed sleep cleanup lock entries"
+    assert direct_branch_offsets(0x14ba6144, 0x25c, 0x10018) == [0x138, 0x22b], "changed sleep cleanup unlock exits"
     for slot, name in ((0x140, "__ZN11IOAccelTask8allocateEPK16IOAccelMemoryMap"),
                        (0x148, "__ZN11IOAccelTask10deallocateEPK16IOAccelMemoryMapy")):
         raw = struct.unpack("<Q", read(address_of("__ZTV11IOAccelTask") + 16 + slot, 8))[0]

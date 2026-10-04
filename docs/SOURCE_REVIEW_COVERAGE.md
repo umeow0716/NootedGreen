@@ -1661,3 +1661,20 @@ common path→base stop→releasePool edges. Together with partial pool creation
 this exposes a static allocation-failure cleanup hazard; not a dynamic crash
 attribution or complete start review. Per-object VF ownership/partial-init
 state and external admission must precede a safe shared-IOAccel repair.
+
+# Latest TLB-target separation checkpoint
+
+Revalidated i915 GuC ABI target 0 (engine/PPGTT) versus target 3
+(GuC-internal/GGTT) against local source commit c613c76. The request model now
+accepts only the two exact heavy+flush control words, all existing GGTT users
+name target 3 explicitly, and final device shutdown requires target 0 followed
+by target 3 before publishing DMA quiescence. Selected synchronous-consumer
+lock contracts and offline request tests pass. This corrects the shutdown
+protocol but does not intercept live PPGTT page return.
+
+SystemKC caller review also rules out treating accelerator +0x88 as a
+universal retirement lock: collectors and sleep/wake provide selected outer
+scopes, while Task release/freeAllGPUMappings, mapping release/release_pte and
+Shared final free contain no local acquisition. Stable cross-owner admission,
+pre-zero interception and VA reservation retention remain required before a
+live PPGTT route or VM test.

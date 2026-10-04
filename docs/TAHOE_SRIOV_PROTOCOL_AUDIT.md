@@ -10077,3 +10077,42 @@ panic remain separate concerns. No assertion of observed crash cause.
 New wired-only free branch and commit-helper/virtual anchors are pinned.
 Target cleanup must close admission and respect command/descriptor pairing;
 do not force-release backing merely to eliminate the leak. No runtime mutation.
+
+# Engine versus GuC TLB retirement target correction
+
+Rechecked the locally pinned i915 SR-IOV tree at commit
+`c613c76e2e7023b1617bed346b9d35bf871fb958`. The GuC `0x7000` ABI defines
+two distinct targets: `ENGINES=0` and `GUC=3`. Heavy mode blocks the targeted
+engine pipeline and guarantees in-flight transactions are globally observed
+before the matching completion. Linux consequently uses target 0 for a full
+engine TLB barrier and target 3 for the GuC-internal translation used by GGTT
+invalidation. These targets are not interchangeable. Reviewed file SHA-256
+identities are
+`56fac30102eb3e2f17ccecbde1de549013e4263179c3dee12169b00846622b8a`
+for `guc_actions_abi.h`,
+`6bbeabcd6a45fff4e39dd60407e31a3b2bb8e31f6e1758ca509bc0bf73d44c21`
+for `intel_guc_submission.c`, and
+`eef089cd245411d0a65e46362ff70b8deaf3c4406cb258dec1adfb199ba0147e`
+for `intel_tlb.c`.
+
+The VF request validator and synchronous sender now carry a typed target and
+admit exactly the two heavy, cache-flushing control words `0x80000000` and
+`0x80000003`; lite mode, no-flush and unknown target values remain rejected.
+Every existing live GGTT call site explicitly selects `Guc`, preserving its
+protocol. Device-wide shutdown now waits for `Engines` and then `Guc` before
+publishing `gVfDmaQuiesced`, so a GuC-internal invalidation can no longer be
+misrepresented as the PPGTT/engine retirement boundary.
+
+This correction does not yet fix live native PPGTT unmap. SystemKC review
+confirms that `release_pte` reaches Intel release through mapping slot +0x178,
+and Task final release, `freeAllGPUMappings`, and mapping last-reference paths
+can then call VA-free slot +0x160. The collector, sleep and wake routes have
+selected accelerator +0x88 mutex scopes, but complete Task release,
+`freeAllGPUMappings`, mapping release/release_pte and `IOAccelShared2::free`
+do not acquire that mutex locally. Shared final free itself prunes its Task and
+releases it. Therefore the collector mutex is not a proven universal mapping
+retirement admission domain, and an invalidation wait cannot simply be added
+after native release: native pruning may already have returned and zeroed page
+descriptors. A live repair still needs pre-return interception plus stable
+task/table/pool/VA ownership. No VM, PCI or runtime GPU operation accompanied
+this change.

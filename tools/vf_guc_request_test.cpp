@@ -38,14 +38,34 @@ int main()
 	const uint32_t enable[] = {0x1001, 12, 1};
 	const uint32_t disable[] = {0x1001, 12, 0};
 	const uint32_t deregister[] = {0x4503, 12};
-	const uint32_t invalidate[] = {0x7000, 0x89abcdef, 0x80000003};
+	const uint32_t invalidateEngines[] = {0x7000, 0x89abcdef, 0x80000000};
+	const uint32_t invalidateGuc[] = {0x7000, 0x89abcdef, 0x80000003};
 	valid(registration, false, 0);
 	valid(policy, false, 0);
 	valid(schedule, false, 0);
 	valid(enable, false, 4);
 	valid(disable, true, 4);
 	valid(deregister, true, 3);
-	valid(invalidate, true, 3);
+	valid(invalidateEngines, true, 3);
+	valid(invalidateGuc, true, 3);
+	assert(NGVfGuCRequest::tlbInvalidationControl(
+	           NGVfGuCRequest::TlbTarget::Engines) == 0x80000000U);
+	assert(NGVfGuCRequest::tlbInvalidationControl(
+	           NGVfGuCRequest::TlbTarget::Guc) == 0x80000003U);
+	for (uint32_t flush = 0; flush < 2; ++flush) {
+		for (uint32_t mode = 0; mode < 16; ++mode) {
+			for (uint32_t target = 0; target < 256; ++target) {
+				const uint32_t control = (flush << 31) | (mode << 8) | target;
+				const bool expected = flush == 1 && mode == 0 &&
+					(target == 0 || target == 3);
+				assert(NGVfGuCRequest::validTlbInvalidationControl(control) ==
+				       expected);
+			}
+		}
+	}
+	for (uint32_t reserved = 12; reserved < 31; ++reserved)
+		assert(!NGVfGuCRequest::validTlbInvalidationControl(
+			0x80000000U | (1U << reserved)));
 
 	auto badRegistration = std::array<uint32_t, 12>({
 		0x4502, 1, 12, 1, 4, 0, 0, 0, 0, 0, 0x1234530d, 0,
@@ -110,11 +130,15 @@ int main()
 
 	const uint32_t badMode[] = {0x1001, 12, 2};
 	const uint32_t badId[] = {0x1000, 0xFFFF};
-	const uint32_t badInvalidate[] = {0x7000, 1, 0x80000001};
+	const uint32_t badInvalidateType[] = {0x7000, 1, 0x80000001};
+	const uint32_t badInvalidateLite[] = {0x7000, 1, 0x80000100};
+	const uint32_t badInvalidateNoFlush[] = {0x7000, 1, 0x00000000};
 	const uint32_t unknown[] = {0x1234, 0};
 	assert(!inspect(badMode, 3).valid);
 	assert(!inspect(badId, 2).valid);
-	assert(!inspect(badInvalidate, 3).valid);
+	assert(!inspect(badInvalidateType, 3).valid);
+	assert(!inspect(badInvalidateLite, 3).valid);
+	assert(!inspect(badInvalidateNoFlush, 3).valid);
 	assert(!inspect(unknown, 2).valid);
 	assert(!inspect(nullptr, 0).valid);
 
