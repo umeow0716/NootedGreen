@@ -7,6 +7,13 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 task-list destruction/observer: complete base task free (0x144),
+TaskList removeTask (0x9a), accelerator freeAllGPUMappings (0xba) reviewed/
+pinned. Native private-table teardown precedes base raw-list unlink. Selected
+observer walks active and orphan lists without local retain/mutex; its outer
+caller admission is required. Function-bounded direct iterator-edge inventory
+is discovery only, not complete coverage of all inlined/indirect observers.
+
 2026-10-04 Shared construction outer mutex: complete inherited user-client
 start (0xea), sharedStart (0x62), createShared (0x50) and native Shared-start
 override (0x40) reviewed/pinned. Effective Intel start inheritance, override

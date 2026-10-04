@@ -6955,6 +6955,30 @@ No executable patch or runtime mutation.
 
 ### Update fanout must participate in the same owner transaction
 
+Task-list teardown and selected observer (2026-10-04): complete inherited
+IOAccelTask::free 0x14b9df3e/0x144 reviewed/pinned. It walks existing mapping
+collections, performs mapping virtual cleanup, releases supplied allocator
+references, then calls TaskList::removeTask at 0x14b9e05f before base object
+free. The list is accelerator +0xc48 or +0xc58 according to task +0x60 bit 0.
+Complete removeTask 0x14b82032/0x9a searches raw head/next pointers, rewrites
+head or predecessor, decrements count and clears task +0x18 only on a match;
+empty/absent cases log and return. No local lock, retain or hardware wait is
+present. Combining the already-pinned native task free with this newly reviewed
+base body proves native private page-table release precedes accelerator list
+unlink. Raw list membership therefore cannot alone certify table lifetime.
+
+Complete accelerator freeAllGPUMappings 0x14ba55fc/0xba reviewed/pinned: walks
+active +0xc48 tasks and invokes task +0x128, then orphan +0xc58 tasks, invokes
+event-machine cleanup and task release +0x28. It locally acquires neither
+mutex nor task retain. A function-bounded direct-call inventory identifies
+additional TaskList iterator consumers in dynamic-VA, vidmem, sysmem, orphan
+cleanup, sleep/wake and allocation reporting. Those edges identify further
+review targets, not all inlined/indirect observers or evidence that callers
+are unlocked. Selected caller outer locks may provide necessary exclusion.
+Do not asynchronously carry raw iterator tasks/tables past that exclusion
+without independent retained owners and admission. No runtime change; next
+verify effective collector caller lock and native task final-release domain.
+
 Shared construction outer-mutex proof (2026-10-04): complete inherited
 SharedUserClient2::start 0x14b900c6/0xea reviewed/pinned. It acquires accelerator
 +0x88 mutex at 0x14b90129, adjusts the +0x90 lock-entry counter, calls

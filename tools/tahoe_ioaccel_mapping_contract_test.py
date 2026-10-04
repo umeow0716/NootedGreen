@@ -35,6 +35,9 @@ EVENT_DISABLE_STAMP_LOCKED = "__ZN20IOAccelEventMachine223disable_stamp_interrup
 EVENT_ENABLE_STAMP = "__ZN20IOAccelEventMachine220enableStampInterruptEi"
 EVENT_DISABLE_STAMP = "__ZN20IOAccelEventMachine221disableStampInterruptEi"
 EVENT_OWNER_BODIES = {
+    "__ZN11IOAccelTask4freeEv": (0x144, "e03bbd00acba08d6610d5a07d51fd15f52a3f96925399177e6f5d61599dbad23"),
+    "__ZN15IOAccelTaskList10removeTaskEP11IOAccelTask": (0x9a, "9f9a37a7142d6594debe3200a77b7aacbaaaa9ad8dd55df2c490f0cbf232267b"),
+    "__ZN22IOGraphicsAccelerator218freeAllGPUMappingsEv": (0xba, "55e1bb60b897503d7fd25ee08668ca0caa985914b1a0735cce97aab7c726548e"),
     "__ZN24IOAccelSharedUserClient25startEP9IOService": (0xea, "0daca245b77c7a9be1d589e35170d3b9c99952365780f0f98d66bcd548b95cb8"),
     "__ZN24IOAccelSharedUserClient211sharedStartEv": (0x62, "31735fd69d8d3860bbc5cc1cbef7e669bdfbfaa97213af6d14b237fd434208e7"),
     "__ZN22IOGraphicsAccelerator212createSharedEP4task": (0x50, "7256dbd56b27e4f81d558ece49ba7614a28ad69024c57f3b07fc602615be87b8"),
@@ -1103,6 +1106,8 @@ def check(path, boot_path=None):
         assert encoded[0] == 0xe8 and call + 5 + struct.unpack_from("<i", encoded, 1)[0] == address_of(method), "changed Shared teardown cleanup edge"
     assert read(0x14b8e91c, 14) == bytes.fromhex("ff 50 28 48 c7 83 88 00 00 00 00 00 00 00"), "changed Shared task release/identity clear ordering"
     raw_shared_release = struct.unpack("<Q", read(address_of(RESOURCE_VTABLE) + 16 + 0x160, 8))[0]
+    edge = read(0x14b9e05f, 5)
+    assert edge[0] == 0xe8 and 0x14b9e064 + struct.unpack_from("<i", edge, 1)[0] == address_of("__ZN15IOAccelTaskList10removeTaskEP11IOAccelTask"), "changed base task final list unlink edge"
     for table, slot, method in (("__ZTV24IOAccelSharedUserClient2", 0x990, "__ZN24IOAccelSharedUserClient211sharedStartEv"),
                                 ("__ZTV22IOGraphicsAccelerator2", 0x8b0, "__ZN22IOGraphicsAccelerator212createSharedEP4task"),
                                 (SHARED_VTABLE, 0x118, "__ZN14IOAccelShared24initEP22IOGraphicsAccelerator2P4task")):
