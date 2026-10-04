@@ -6955,6 +6955,20 @@ No executable patch or runtime mutation.
 
 ### Update fanout must participate in the same owner transaction
 
+Command-pool selection caller follow-up: new complete KC getBufferPtrNoInc
+`0x14b6b2bc/0x10e` reviewed/hash-pinned. It checks requested dword space
+against the current end pointer; when needed it submits a nonempty buffer,
+then directly selects another index at `0x14b6b331`, tests/finishes its mapping
+event or grows, resets cursors and returns the pointer. That final fallback
+does not locally recheck requested space or expose selection failure. Effective
+size/configuration invariants remain pending; this is not a runtime overflow
+proof. Decoded pool-method direct discovery also found allocMoreCommandBuffers
+calling selection at `0x14b6aeba`, in addition to submitBuffer's existing edge.
+The allocation body/owner init still needs complete review before a selection
+guard; discovery is not whole-body credit or all indirect callers. Getter body
+and two direct caller edges now pinned; paired KC passes. No production/runtime
+change. This establishes why a submit-only guard would miss pointer acquisition.
+
 #### Command-pool index selection can fail without caller-visible status
 
 New complete KC review/pin: setBufferCurrentIndex `0x14b6b13a/0x182`,

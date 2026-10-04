@@ -7,6 +7,11 @@ audit's runtime blockers are open.
 
 ## Scope
 
+New complete KC review: pool getBufferPtrNoInc `0x14b6b2bc/0x10e`, hash-pinned
+with selected pointer acquisition/submission/selection edges. Pool growth's
+selection call discovered, not its full body reviewed. Exact size/owner init
+and allocation failure contracts remain pending before a VF guard.
+
 New complete paired-KC review: pool setBufferCurrentIndex `0x14b6b13a/0x182`.
 Existing map event wrappers revisited without new credit. Index publication,
 failed candidate cleanup and caller reuse/event edges pinned; selected void

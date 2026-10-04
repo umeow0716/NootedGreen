@@ -35,6 +35,7 @@ EVENT_DISABLE_STAMP_LOCKED = "__ZN20IOAccelEventMachine223disable_stamp_interrup
 EVENT_ENABLE_STAMP = "__ZN20IOAccelEventMachine220enableStampInterruptEi"
 EVENT_DISABLE_STAMP = "__ZN20IOAccelEventMachine221disableStampInterruptEi"
 EVENT_OWNER_BODIES = {
+    "__ZN25IOAccelCommandBufferPool217getBufferPtrNoIncEj": (0x10e, "bf2d3995728e15a07c3e8a2b0adebd4f8e9ecc063ee4767e44bc4c5e5763567a"),
     "__ZN25IOAccelCommandBufferPool221setBufferCurrentIndexEs": (0x182, "5cf69325a1d3fe2e3f09751af5ec3b3eece1542d255c6b04411d348e40c2f033"),
     "__ZN25IOAccelCommandBufferPool212setBufferPtrEPj": (0xe, "966161046c4b88de4a6eebbb532da658c7a201330fb194055973f8af790dd35f"),
     "__ZN25IOAccelCommandBufferPool212submitBufferEv": (0x186, "148ea39a6e655b0db0ef181a37165ebd35bb92ab0bf72607001484e420697602"),
@@ -1240,6 +1241,8 @@ def check(path, boot_path=None):
         expected = bytes.fromhex(encoded)
         assert read(address, len(expected)) == expected, "changed plane-cache prepare/complete lifecycle anchor"
     for call, method in ((0x14b6b4b8, "__ZN25IOAccelCommandBufferPool221setBufferCurrentIndexEs"),
+                         (0x14b6b331, "__ZN25IOAccelCommandBufferPool221setBufferCurrentIndexEs"),
+                         (0x14b6b2ed, "__ZN25IOAccelCommandBufferPool212submitBufferEv"),
                          (0x14b6b4d3, "__ZN16IOAccelMemoryMap9testEventEv"),
                          (0x14b6b50e, "__ZN16IOAccelMemoryMap11finishEventEv")):
         encoded = read(call, 5)
