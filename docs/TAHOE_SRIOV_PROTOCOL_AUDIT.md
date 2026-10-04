@@ -6955,6 +6955,25 @@ No executable patch or runtime mutation.
 
 ### Update fanout must participate in the same owner transaction
 
+#### Native outer 3D factory and extended free execute on candidate failure
+
+ABI emulator now runs eight combinations per archive: direct/outer entry,
+original/candidate branch, and injected init false/true. Outer entry executes
+hash-pinned getBlit3DContext8114/66. On candidate false it dispatches the
+context release exactly once; a modeled last-release callback redirects to
+actual hash-pinned extended free7cfb0/52, which calls pool release once,
+clears E0/D8 and tails to base free. Factory returns null and task298 stays
+zero. Successful/original continuation publishes the context as expected.
+Stack and callee-saved registers are checked on outer entry too.
+
+Pool release and base free remain mocked, as do base init and actual pool
+init. This does NOT prove partial-init pool destruction or last-reference
+dispatch correctness. An initial fixture error used an extra metaclass
+pointer indirection for the outer factory and caused invalid-instruction
+failure; corrected to the decoded native lookup and reran both archives.
+Next execute actual KC pool free on defined partial-init states before
+production routing. No synthetic cave is considered deployable.
+
 #### Offline candidate branch executes correctly, deployment still absent
 
 Native ABI test now runs original/candidate × init success/failure on both

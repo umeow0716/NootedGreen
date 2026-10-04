@@ -8,7 +8,7 @@ from unicorn import Uc, UC_ARCH_X86, UC_MODE_64, UC_HOOK_CODE
 from unicorn.x86_const import *
 
 
-def run(image, success, candidate=False):
+def run(image, success, candidate=False, outer=False):
     uc = Uc(UC_ARCH_X86, UC_MODE_64)
     uc.mem_map(0, (len(image) + 0xfff) & ~0xfff)
     uc.mem_write(0, image)
@@ -20,6 +20,13 @@ def run(image, success, candidate=False):
     def get(a): return struct.unpack('<Q', uc.mem_read(a, 8))[0]
     put(context, 0x490000)
     put(0x490000 + 0x130, 0x600030)
+    put(0x490000 + 0x28, 0x600060)
+    put(vt + 0x28, 0x600070)
+    # The outer 3D factory allocates a context through its own metaclass.
+    put(0xdcd18, 0x4c0000)
+    put(0x4c0000, 0x4d0000)
+    put(0x4d0000, 0x4e0000)
+    put(0x4d0000 + 0x88, 0x600080)
     put(0xc80d8, 0x4a0000)
     put(0x4a0000, meta)
     put(meta, mvt)
@@ -46,6 +53,8 @@ def run(image, success, candidate=False):
     for offset, value in ((0x10, 0xd240), (0x18, 256),
                           (0x20, 65536), (0x28, 64), (0x30, 8)):
         put(params + offset, value)
+    if outer:
+        uc.mem_write(0x14b200, bytes(uc.mem_read(params, 56)))
     events = []
     def ret(value):
         sp = uc.reg_read(UC_X86_REG_RSP)
@@ -79,6 +88,22 @@ def run(image, success, candidate=False):
         elif address == 0x600030:
             events.append('setup')
             ret(0)
+        elif address == 0x600080:
+            events.append('context-allocate')
+            ret(context)
+        elif address == 0x600060:
+            assert uc.reg_read(UC_X86_REG_RDI) == context
+            events.append('context-release')
+            # Model last release dispatch; execute the actual extended free.
+            uc.reg_write(UC_X86_REG_RIP, 0x7cfb0)
+        elif address == 0x600070:
+            assert uc.reg_read(UC_X86_REG_RDI) == pool
+            events.append('pool-release')
+            ret(0)
+        elif outer and address == 0x7c5d8:
+            # Base context free remains outside this bounded cleanup test.
+            events.append('base-free')
+            ret(0)
         elif address == 0x600040:
             uc.emu_stop()
     uc.hook_add(UC_HOOK_CODE, hook)
@@ -87,18 +112,35 @@ def run(image, success, candidate=False):
     for r, v in ((UC_X86_REG_RSP, sp), (UC_X86_REG_RDI, context),
                  (UC_X86_REG_RSI, task), (UC_X86_REG_RDX, params)):
         uc.reg_write(r, v)
+    if outer:
+        uc.reg_write(UC_X86_REG_RDI, task)
+        uc.reg_write(UC_X86_REG_RSI, 1)
     saved = {r: 0x123000 + i * 16 for i, r in enumerate((
         UC_X86_REG_RBX, UC_X86_REG_RBP, UC_X86_REG_R12,
         UC_X86_REG_R13, UC_X86_REG_R14, UC_X86_REG_R15))}
     for r, v in saved.items():
         uc.reg_write(r, v)
-    uc.emu_start(0x7cebc, 0x600041, count=1000)
+    try:
+        uc.emu_start(0x8114 if outer else 0x7cebc, 0x600041, count=1000)
+    except Exception as error:
+        raise RuntimeError((hex(uc.reg_read(UC_X86_REG_RIP)),
+                            success, candidate, outer, events)) from error
     assert uc.reg_read(UC_X86_REG_RIP) == 0x600040
     expected_ok = not candidate or success
-    assert uc.reg_read(UC_X86_REG_RAX) & 0xff == int(expected_ok)
-    assert events == (['allocate', 'init', 'backing', 'setup']
-                      if expected_ok else ['allocate', 'init']), events
-    assert get(context + 0xe0) == pool
+    if outer:
+        assert uc.reg_read(UC_X86_REG_RAX) == (context if expected_ok else 0)
+        assert get(task + 0x298) == (context if expected_ok else 0)
+    else:
+        assert uc.reg_read(UC_X86_REG_RAX) & 0xff == int(expected_ok)
+    expected_events = ['allocate', 'init']
+    if expected_ok:
+        expected_events += ['backing', 'setup']
+    elif outer:
+        expected_events += ['context-release', 'pool-release', 'base-free']
+    if outer:
+        expected_events.insert(0, 'context-allocate')
+    assert events == expected_events, events
+    assert get(context + 0xe0) == (0 if outer and not expected_ok else pool)
     assert get(context + 0xd8) == (0x4b0000 if expected_ok else 0)
     assert uc.reg_read(UC_X86_REG_RSP) == sp + 8
     assert all(uc.reg_read(r) == v for r, v in saved.items())
@@ -107,9 +149,15 @@ def run(image, success, candidate=False):
 image = Path(sys.argv[1]).read_bytes()
 assert hashlib.sha256(image[0x7cebc:0x7cfb0]).hexdigest() == \
     '67dfb7530b4142f6a2186b617e396df18dcb46517e45ab2ce540a38c1cc20fd1'
-for candidate in (False, True):
-    for result in (False, True):
-        run(image, result, candidate)
+assert hashlib.sha256(image[0x8114:0x817a]).hexdigest() == \
+    '146dd5e2ab09d819195f631d9c9a540e5058f169cc2da75c194b652c228bc8f4'
+assert hashlib.sha256(image[0x7cfb0:0x7d002]).hexdigest() == \
+    '3e2b482df8f8906d267905195831fb569ca59ea7276595efb8856f7b5ed3a3c2'
+for outer in (False, True):
+    for candidate in (False, True):
+        for result in (False, True):
+            run(image, result, candidate, outer)
 print('PASS native constructor ABI and offline candidate failure branch;'
       ' original ignores false, candidate skips backing/setup;'
-      ' no production cave, outer cleanup or GPU proof')
+      ' selected outer factory/free release once;'
+      ' no production cave, pool/base cleanup or GPU proof')
