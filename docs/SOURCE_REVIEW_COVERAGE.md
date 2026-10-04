@@ -7,6 +7,13 @@ audit's runtime blockers are open.
 
 ## Scope
 
+New complete native reviews: resource createAndPrepareRotationMapping
+`0x7528c/0xf4` and Intel memory-map init `0x10d5e/0x68`. Revisited existing
+complete commitRange and pinned selected geometry-copy/load/virtual edges in
+both payloads. Resource width/height feed the private rotated PPGTT mapper;
+upstream geometry validation and effective preparation callees remain pending.
+These bodies do not certify arbitrary-input reachability or safe retirement.
+
 New complete native-body review: private 64-bit PPGTT mapRangeRotated
 `0xd6ca/0x2cc`, now hash-pinned in both payloads. Selected five direct
 shrinkRange entries also pinned; decoded discovery is not an all-entry proof.

@@ -9,6 +9,8 @@ import sys
 # Complete reviewed native bodies. This fixes the concrete Intel override
 # graph, not inherited timer APIs, dynamic callbacks or runtime completion.
 STAMP_IRQ_NATIVE = {
+    "__ZN15IGAccelResource31createAndPrepareRotationMappingEv": (0xf4, "3ecec4f2acb2a437f81f304a571663c062632f47270ba1a17993e9a254029e3b"),
+    "__ZN16IGAccelMemoryMap4initEP22IOGraphicsAccelerator2P11IOAccelTaskP13IOAccelMemoryj": (0x68, "970afaf15c9854e913ad4aa67af32f4ff61ca1267ba3f4f06ad6dd1f15fea892"),
     "__ZN31IGHardwarePerProcessPageTable6415mapRangeRotatedER33IGAddressRangeRotatedPageIteratorR25IGPhysicalSegmentIteratory": (0x2cc, "3b6131194a023eb7513ccbb26a210c5fa2288c4fc74d66723188a46887a1b11b"),
     "__ZN15IGMemoryManager16initDeviceMemoryEv": (0x410, "bd63dc4bc1ab41493a9bd375699d29d377a83561aa5f85a59d167a5eb4bfa82d"),
     "__ZN15IGMemoryManager12initSegmentsEv": (0xb4, "b9cf1738915b0a609c085aec9f83a6f06322d87f24ea16c51918e46063915cad"),
@@ -752,6 +754,14 @@ def macho_inventory(path):
     assert image[0x7dbd:0x7dcf] == bytes.fromhex("48 8b bb 60 02 00 00 48 85 ff 74 06 48 8b 07 ff 50 28"), f"{path}: changed private page-table release before list cleanup"
     assert direct_branches("__ZN15IGMemoryManager27releaseFromPageTableForTaskEP11IGAccelTaskP16IGAccelMemoryMap", "__ZN19IGHardwarePageTable12releaseRangeERK14IGAddressRange") == [0xf74e], f"{path}: changed task fan-out release edge"
     assert image[0xf753:0xf75f] == bytes.fromhex("41 20 c7 48 8b 5b 08 48 85 db 75 e9"), f"{path}: changed non-short-circuit task page-table release loop"
+    private_rotated = "__ZN31IGHardwarePerProcessPageTable6415mapRangeRotatedER33IGAddressRangeRotatedPageIteratorR25IGPhysicalSegmentIteratory"
+    assert struct.unpack_from("<Q", image, value("__ZTV31IGHardwarePerProcessPageTable64") + 16 + 0x120)[0] == value(private_rotated), f"{path}: changed private rotated PPGTT dispatch"
+    for address, encoded in (
+            (0x1411d, "8b83200100008b8b24010000"),
+            (0x141d2, "ff9020010000"),
+            (0x752e9, "498b86440200004889831c010000418b864c020000898324010000b00188831c010000")):
+        expected = bytes.fromhex(encoded)
+        assert image[address:address + len(expected)] == expected, f"{path}: changed rotated PPGTT geometry/commit edge at {address:#x}"
     shrink_range = "__ZN31IGHardwarePerProcessPageTable6411shrinkRangeERK14IGAddressRange"
     for caller, address in (
             ("__ZN31IGHardwarePerProcessPageTable648mapRangeERK14IGAddressRangeyy", 0xd19e),

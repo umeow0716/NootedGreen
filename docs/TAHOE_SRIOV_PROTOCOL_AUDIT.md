@@ -6955,6 +6955,45 @@ No executable patch or runtime mutation.
 
 ### Update fanout must participate in the same owner transaction
 
+#### Rotated mapping geometry reaches private PPGTT through commitRange
+
+New complete native bodies reviewed/pinned in both payloads:
+`IGAccelResource::createAndPrepareRotationMapping` `0x7528c/0xf4`, SHA-256
+`3ecec4f2acb2a437f81f304a571663c062632f47270ba1a17993e9a254029e3b`,
+and `IGAccelMemoryMap::init` `0x10d5e/0x68`, SHA-256
+`970afaf15c9854e913ad4aa67af32f4ff61ca1267ba3f4f06ad6dd1f15fea892`.
+Re-read the already-pinned complete commitRange `0x14090/0x41c`; no new
+whole-body credit for that method.
+
+Mapping init clears rotation flag `+0x11c` and the two geometry dwords at
+`+0x120/+0x124`. Resource rotation creation obtains a mapping, stores it at
+resource `+0x238`, copies resource `+0x244..0x24b` into mapping
+`+0x11c..0x123`, copies resource `+0x24c` into mapping `+0x124`, then sets
+the low flag byte at `+0x11c` to one. Thus the width consumed by the private
+mapper is resource `+0x248`, height is resource `+0x24c`. The complete
+rotation-creation body contains no local zero-width/height rejection before
+these writes and subsequent mapping preparation dispatches. Its virtual
+callees and earlier geometry setters still require review.
+
+commitRange tests mapping flag `+0x11c`, loads width/height at
+`0x1411d/0x14123`, constructs the iterator, decrements height without a
+local nonzero check, computes/clamps the initial cursor against range end,
+and calls table virtual `+0x120` at `0x141d2`. The concrete 64-bit vtable
+entry is private mapRangeRotated `0xd6ca`. It returns that method's status
+after releasing its local iterator memory reference and setting deferred
+hardware-flush flags. This closes the selected resource-to-private-table
+geometry connection; it does not prove an invalid user input can traverse
+all earlier layers. Upstream validation and the effective virtual preparation
+callees remain necessary before a production guard/rollback replacement.
+
+The new contracts pin the complete bodies, geometry-copy bytes, commit
+loads/dispatch and concrete vtable entry. Both payload checks pass. An
+exploratory decoded MOV-store search found resource initialization but not
+the nonzero geometry setter; derived pointers, aggregate/vector copies,
+inherited code and shared external storage remain possible. Negative search
+is not a proof that geometry is immutable or always zero. No production
+change, runtime mode observation, VM start or VF/PF manipulation.
+
 #### Additional pruning entry: private rotated PPGTT mapping
 
 Function-bounded decoded direct CALL/JMP discovery identified five selected
