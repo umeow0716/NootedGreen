@@ -349,10 +349,15 @@ RING_SLEEP_STAMP = "__ZN20IGHardwareRingBuffer13sleepForStampEPjjj"
 RING_WRITE_STAMP = "__ZN20IGHardwareRingBuffer10writeStampEjb"
 RING_MAIN_WRITE_STAMP = "__ZN24IGHardwareRingBufferMain10writeStampEjb"
 RING_COMPUTE_WRITE_STAMP = "__ZN27IGHardwareRingBufferCompute10writeStampEjb"
+RING_WRITE_DWORD = "__ZN20IGHardwareRingBuffer10writeDWordEj"
+RING_WRITE_QWORD = "__ZN20IGHardwareRingBuffer10writeQWordEy"
 RING_COMMIT_STAMP = "__ZN20IGHardwareRingBuffer18commitStampCommandEjb"
 RING_MAIN_COMMIT_STAMP = "__ZN24IGHardwareRingBufferMain18commitStampCommandEjb"
 RING_COMPUTE_COMMIT_STAMP = "__ZN27IGHardwareRingBufferCompute18commitStampCommandEjb"
 RING_WRITE_BUFFER = "__ZN20IGHardwareRingBuffer11writeBufferEPjj"
+RING_ALIGN = "__ZN20IGHardwareRingBuffer9alignRingEj"
+RING_SUBMIT_COMMANDS = "__ZN20IGHardwareRingBuffer14submitCommandsEPjjj"
+RING_SUBMIT_STAMP = "__ZN20IGHardwareRingBuffer11submitStampEj"
 RING_GTT_WRITE_MODE = "__ZN20IGHardwareRingBuffer15getGTTWriteModeEv"
 TASK_SCRATCH_GPU_ADDRESS = "__ZNK11IGAccelTask27getScratchGPUVirtualAddressEv"
 RING_WAIT_SPACE = "__ZN20IGHardwareRingBuffer12waitForSpaceEj"
@@ -1236,6 +1241,105 @@ def macho_inventory(path):
         f"{path}: changed complete ring reservation caller inventory"
     for owner, calls in ring_wait_callers:
         assert direct_branches(owner, RING_WAIT_SPACE) == calls, f"{path}: changed complete reservation caller edges: {owner}"
+    # Complete direct ring-writer inventory.  Native callers inherit the
+    # accelerator mutex from their reviewed outer root; none may release that
+    # mutex between waitForSpace, CPU ring writes and the final producer
+    # dispatch.  Keep the zero-call targets too: writeQWord is reached only by
+    # a typed virtual dispatch and submitToRing only through the six concrete
+    # ring vtables pinned below.
+    ring_direct_writer_callers = {
+        RING_WRITE_DWORD: (
+            (RING_ALIGN, [0x41c01]),
+            ("__ZN20IGHardwareRingBuffer30insertSemaphoreWaitPollCommandEPKN26IGSemaphoreWaitBufferQueue29SemaphoreWaitBufferDescriptorE", [0x4253d]),
+            ("__ZN20IGHardwareRingBuffer17submitBatchBufferEyjPjjbb", [0x4305b]),
+            ("__ZN20IGHardwareRingBuffer19resubmitStampToRingEjPj", [0x432c2]),
+            (RING_SUBMIT_TO_RING, [0x43362]),
+            (flip_wait, [0x7e178]),
+        ),
+        RING_WRITE_QWORD: (),
+        RING_WRITE_BUFFER: (
+            (ACCEL_SUBMIT_SYNC, [0x2bb0c, 0x2bb22, 0x2bb36]),
+            ("__ZN16IntelAccelerator24configureBlitterTrackingEP20IGHardwareRingBufferb", [0x2c2d8, 0x2c33a]),
+            (ACCEL_SUBMIT_MAIN, [0x2d181]),
+            ("__Z17blt2d_source_copyP23IGHardwareBlit2DContextP15blit3d_params_tRK8IGVectorI11rect_pair_t25IGIOMallocAllocatorPolicyEP9_WA_TABLE", [0x30513, 0x30632]),
+            ("__Z15blt2d_fast_copyP23IGHardwareBlit2DContextP15blit3d_params_tRK8IGVectorI11rect_pair_t25IGIOMallocAllocatorPolicyEP9_WA_TABLE", [0x30b81]),
+            ("__Z16blt2d_color_fillP23IGHardwareBlit2DContextP15blit3d_params_tRK8IGVectorI11blit_rect_t25IGIOMallocAllocatorPolicyEP9_WA_TABLE", [0x30f98, 0x310dc]),
+            ("__ZL16blt2d_recompressbP20IGHardwareRingBufferyP9_WA_TABLE", [0x312f0, 0x31316]),
+            (RING_WRITE_DWORD, [0x41cfb]),
+            (RING_WRITE_QWORD, [0x41e31]),
+            (RING_WRITE_BUFFER, [0x41f72]),
+            (RING_COMMIT_STAMP, [0x422c8, 0x42308, 0x42341]),
+            ("__ZN20IGHardwareRingBuffer30insertSemaphoreWaitPollCommandEPKN26IGSemaphoreWaitBufferQueue29SemaphoreWaitBufferDescriptorE", [0x42533, 0x425ad]),
+            ("__ZN20IGHardwareRingBuffer19serializeSubmissionEv", [0x42737, 0x42748, 0x42766]),
+            ("__ZN20IGHardwareRingBuffer16waitForSemaphoreEjj", [0x42886, 0x42897]),
+            ("__ZN20IGHardwareRingBuffer10writeFlushEv", [0x428e7]),
+            ("__ZN20IGHardwareRingBuffer13writeFlushTLBEv", [0x429c5, 0x429f8]),
+            ("__ZN20IGHardwareRingBuffer16writeFlushAuxTLBEv", [0x42a5d]),
+            ("__ZN20IGHardwareRingBuffer28writeBlockFenceMMIOTimestampEy", [0x42aeb]),
+            ("__ZN20IGHardwareRingBuffer15sampleTimestampEy", [0x42cc3, 0x42cd7]),
+            ("__ZN20IGHardwareRingBuffer21sampleTimestampHiLoHiEy", [0x42f3f, 0x42f53]),
+            ("__ZN20IGHardwareRingBuffer17submitBatchBufferEyjPjjbb", [0x43051]),
+            (RING_SUBMIT_COMMANDS, [0x430e3]),
+            ("__ZN16IGTelemetryUsage18writePipelineFlushEP20IGHardwareRingBuffer", [0x4d0fe]),
+            (RING_COMPUTE_COMMIT_STAMP, [0x4e4d9, 0x4e59d, 0x4e5e0, 0x4e60d]),
+            ("__ZN27IGHardwareRingBufferCompute13writeFlushTLBEv", [0x4e814, 0x4e841]),
+            ("__ZN27IGHardwareRingBufferCompute16waitForSemaphoreEjj", [0x4e967, 0x4e977]),
+            ("__ZN27IGHardwareRingBufferCompute10writeFlushEv", [0x4ea50, 0x4ea80]),
+            ("__ZN24IGHardwareRingBufferBlit16waitForSemaphoreEjj", [0x4ef8e, 0x4ef9f]),
+            (flip_wait, [0x7e1e0]),
+            (RING_MAIN_COMMIT_STAMP, [0x84e7d, 0x84f41, 0x84f84, 0x84fb1]),
+            ("__ZN24IGHardwareRingBufferMain13writeFlushTLBEv", [0x851b8, 0x851e5]),
+            ("__ZN24IGHardwareRingBufferMain16waitForSemaphoreEjj", [0x85339, 0x8534a]),
+            ("__ZN24IGHardwareRingBufferMain10writeFlushEv", [
+                0x8543a, 0x8546a, 0x854fb, 0x8550b, 0x8551b,
+                0x8552b, 0x8553b, 0x8554b, 0x8555b, 0x8556b,
+            ]),
+        ),
+        RING_ALIGN: ((FIFO_SUBMIT_COMMANDS, [0x4c653]),),
+        RING_SUBMIT_COMMANDS: ((FIFO_SUBMIT_COMMANDS, [0x4c668]),),
+        RING_SUBMIT_STAMP: (
+            (FIFO_SUBMIT_STAMP, [0x4c565]),
+            (FIFO_SUBMIT_BUFFER, [0x4c7d8]),
+        ),
+        RING_SUBMIT_TO_RING: (),
+    }
+    direct_writer_count = 0
+    for target, owners in ring_direct_writer_callers.items():
+        expected = [call for _, calls in owners for call in calls]
+        direct_writer_count += len(expected)
+        actual = text_direct_branches(target)
+        assert actual == expected, \
+            f"{path}: changed complete direct ring-writer inventory: {target}: {actual}"
+        for owner, calls in owners:
+            assert direct_branches(owner, target) == calls, \
+                f"{path}: changed direct ring-writer owner: {owner} -> {target}"
+    assert direct_writer_count == 79, f"{path}: incomplete direct ring-writer call partition"
+
+    ring_transaction_owners = {
+        owner for owner, _ in ring_wait_callers}
+    ring_transaction_owners.update(
+        owner for owners in ring_direct_writer_callers.values()
+        for owner, _ in owners)
+    assert len(ring_transaction_owners) == 40, \
+        f"{path}: changed ring transaction owner count"
+    for owner in ring_transaction_owners:
+        owner_start = value(owner)
+        owner_end = next_symbol(owner_start)
+        releases = {
+            imported: sorted(
+                address for address, names_at_address in external_imports.items()
+                if owner_start <= address < owner_end and
+                imported in names_at_address)
+            for imported in (
+                "_IOLockUnlock",
+                "__ZN22IOGraphicsAccelerator211unlock_busyEv",
+            )
+        }
+        assert releases == {
+            "_IOLockUnlock": [],
+            "__ZN22IOGraphicsAccelerator211unlock_busyEv": [],
+        }, f"{path}: ring transaction owner drops accelerator admission: {owner}"
+    print("PASS 40 native ring transaction owners retain accelerator admission across 79 direct writer edges")
     assert image[0x2bae5:0x2baf1] == bytes.fromhex(
         "41 8b b5 a8 12 00 00 ff c6 4c 89 ff"), \
         f"{path}: changed sync-event field+one reservation arithmetic"
@@ -2170,6 +2274,38 @@ def macho_inventory(path):
     assert direct_branches(DISPLAY_SLEEP_CALLBACK_ENTRY,
                            DISPLAY_SLEEP_CALLBACK) == [0x2a93d], \
         f"{path}: changed display-sleep callback entry ownership"
+    display_sleep_lock_imports = {
+        imported: sorted(
+            address for address, names_at_address in external_imports.items()
+            if value(DISPLAY_SLEEP_CALLBACK) <= address <
+            next_symbol(value(DISPLAY_SLEEP_CALLBACK)) and
+            imported in names_at_address)
+        for imported in (
+            "_IOLockLock",
+            "__ZN22IOGraphicsAccelerator29lock_busyEv",
+            "__ZN22IOGraphicsAccelerator211unlock_busyEv",
+            "_IOLockUnlock",
+        )
+    }
+    assert display_sleep_lock_imports == {
+        "_IOLockLock": [0x2b1f9],
+        "__ZN22IOGraphicsAccelerator29lock_busyEv": [0x2b209],
+        "__ZN22IOGraphicsAccelerator211unlock_busyEv": [0x2b3e0],
+        "_IOLockUnlock": [0x2b3ed],
+    }, f"{path}: changed display-sleep accelerator-lock inventory"
+    for addresses in display_sleep_lock_imports.values():
+        assert all(image[address - 1] == 0xe8 for address in addresses), \
+            f"{path}: display-sleep accelerator-lock import is no longer a direct call"
+    display_sleep_virtual_producer = 0x2b2f6
+    assert display_sleep_lock_imports["_IOLockLock"][0] < \
+        display_sleep_lock_imports["__ZN22IOGraphicsAccelerator29lock_busyEv"][0] < \
+        display_sleep_virtual_producer < 0x2b32a < \
+        display_sleep_lock_imports["__ZN22IOGraphicsAccelerator211unlock_busyEv"][0] < \
+        display_sleep_lock_imports["_IOLockUnlock"][0] and \
+        image[display_sleep_virtual_producer:display_sleep_virtual_producer + 6] == \
+        bytes.fromhex("ff 90 48 01 00 00") and \
+        direct_branches(DISPLAY_SLEEP_CALLBACK, FIFO_SUBMIT_COMMANDS) == [0x2b32a], \
+        f"{path}: display-sleep producer escaped accelerator-lock interval"
     assert direct_branches(TELEMETRY_SAMPLE, ACCEL_SUBMIT_MAIN) == [0x5b623], \
         f"{path}: changed telemetry nested producer edge"
     assert direct_branches(TRACE_RECOGNIZE_FLIP,

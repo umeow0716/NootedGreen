@@ -2598,6 +2598,37 @@ def check(path, boot_path=None):
         "__ZN22IOGraphicsAccelerator218deviceCacheControlEP20IOSurfaceDeviceCachejyy")
     assert read(device_cache_callback + 0x20, 3) == bytes.fromhex("48 89 fb"), \
         "changed device-cache accelerator receiver"
+
+    # These control roots are the native serialization side of the VF outer
+    # admission transaction.  Pin every direct IOLock entry/exit and every
+    # busy-count release in each whole-body-hashed owner: a producer may not
+    # reserve ring space under one admission interval and publish its tail
+    # after that interval has ended.
+    unlock_busy = address_of("__ZN22IOGraphicsAccelerator211unlock_busyEv")
+    for method, length, locks, busy_releases, unlocks in (
+            ("__ZN22IOGraphicsAccelerator214gart_collectorEP22IOInterruptEventSourcei",
+             0x1d4, [0x15], [0x188, 0x1ba], [0x194, 0x1ce]),
+            ("__ZN22IOGraphicsAccelerator218finalize_interruptEP22IOInterruptEventSourcei",
+             0x116, [0x46], [0xa8], [0xb4]),
+            ("__ZN22IOGraphicsAccelerator218deviceCacheControlEP20IOSurfaceDeviceCachejyy",
+             0x4c8, [0x4b, 0xd7, 0x13f, 0x1e6, 0x24a, 0x359],
+             [0x3ef, 0x47e], [0x3fb, 0x498]),
+            ("__ZN22IOGraphicsAccelerator220emitFirstFlushEventsEv",
+             0x1d8, [0x28], [0x1b9], [0x1c5])):
+        start = address_of(method)
+        assert direct_branch_offsets(start, length, 0x10012) == locks and \
+            direct_branch_offsets(start, length, unlock_busy) == busy_releases and \
+            direct_branch_offsets(start, length, 0x10018) == unlocks, \
+            f"changed control-root accelerator-lock interval: {method}"
+
+    lock_busy = address_of("__ZN22IOGraphicsAccelerator29lock_busyEv")
+    assert direct_branch_offsets(display_handler, 0x410, 0x10012) == [0x80] and \
+        direct_branch_offsets(display_handler, 0x410, lock_busy) == [0x90] and \
+        direct_branch_offsets(display_handler, 0x410, unlock_busy) == [0xd4] and \
+        direct_branch_offsets(display_handler, 0x410, 0x10018) == [0xe0], \
+        "changed display-callback outer accelerator-lock interval"
+    print("PASS complete callback/control accelerator-lock intervals")
+
     cache_jump_table = 0x14ba422c
     cache_targets = tuple(
         cache_jump_table + struct.unpack("<i", read(cache_jump_table + selector * 4, 4))[0]

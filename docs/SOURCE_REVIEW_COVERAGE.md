@@ -10,6 +10,27 @@ The current dynamic-entry gate table is
 
 ## Scope
 
+2026-10-05 reservation-to-submit delta: SG-06 is now `CLOSED-STATIC`. The two
+Tahoe Intel payloads now enforce an exact inventory of all 22 direct ring-space
+reservations, 79 direct writer/helper edges and 40 unique transaction owners.
+No owner directly releases the inherited accelerator mutex between reservation,
+CPU writes and the final virtual producer dispatch. The six concrete ring
+vtables and `submitToRing -> Scheduler4::push -> submitWorkItem` chain remain
+pinned. The paired-KC contract additionally fixes every IOLock/unlock and
+busy-release edge in the GART, finalize, device-cache, first-flush and display
+control roots; the Intel contract does the same for DisplaySleep. The existing
+counted outer lease therefore retains the native invocation while Tahoe's
+accelerator mutex serializes its ring transaction. The final bridge revalidates
+descriptor/task/context/ring backing, geometry and tail under the H2G queue
+lock, and publishes the LRCA tail only after CTB space and response credits are
+reserved, immediately before H2G tail publication. Failed enqueue does not
+publish the LRCA tail. This is not GPU-completion or backing-retirement proof:
+the unused freestanding coverage tracker and all stamp/pool/final-release work
+remain in SG-07. Targeted dual-payload and paired-KC contracts plus full static
+`/tmp/ngreen-static.H0Uwp3` pass; the clean checkpoint and exact-SHA CI for V297
+remain pending. SG-07 through SG-11 still prohibit runtime. No VM, deployment,
+PCI/sysfs/VF/PF or Host i915 state was touched.
+
 2026-10-05 callback-lifetime/stop delta: SG-05/P9 is now `CLOSED-STATIC`.
 The Tahoe paired-KC contract pins native accelerator start/stop lock order,
 DisplaySleep unregister/free order, synchronous display-notifier and GART
