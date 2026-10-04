@@ -7,6 +7,12 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 borrowed lookup: three complete KC wrappers/lookup/channel-cleanup
+bodies reviewed and pinned, plus native +0x178/+0x198 cleanup identities.
+Namespace lookup has no retain; removeFromChannel updates events/counts rather
+than releasing a lookup reference. Existing mutex scope cannot be casually
+dropped across waits. Preparation/subordinate callbacks and leases remain open.
+
 2026-10-04 color_resolve: one full 0x5d0 user-client body reviewed/pinned with
 mutex/busy/lookup imports. Holds accelerator +0x88 across selected CCS resolve,
 maps false to 0xe00002c2, then resource cleanup/busy/mutex release. One concrete

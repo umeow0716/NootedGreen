@@ -35,6 +35,9 @@ EVENT_DISABLE_STAMP_LOCKED = "__ZN20IOAccelEventMachine223disable_stamp_interrup
 EVENT_ENABLE_STAMP = "__ZN20IOAccelEventMachine220enableStampInterruptEi"
 EVENT_DISABLE_STAMP = "__ZN20IOAccelEventMachine221disableStampInterruptEi"
 EVENT_OWNER_BODIES = {
+    "__ZN14IOAccelShared214lookupResourceEjPPv": (0xe, "839e3c8f1d2321d46fab9a7a166f590702861f015fe827f73d1ffd2b4e4ce8b7"),
+    "__ZNK16IOAccelNamespace8lookupIdEjPPv": (0x2a, "1f00cff53025fc424b77a62fde2f5d9357dc200a4604f1bc5edcd95a6aad6f4a"),
+    "__ZN16IOAccelResource217removeFromChannelEP15IOAccelChannel2": (0x14c, "6c564440b5d53195a0a352e8bddd4516e114a533aa5facb11f0de6c35a1b73ba"),
     "__ZN22IOGraphicsAccelerator217system_will_sleepEib": (0x25c, "0e551a9a306fff5cfb8d9fad02635355ce639e4a28cb2635687da8253d07f580"),
     "__ZN22IOGraphicsAccelerator215systemWillSleepEv": (0x190, "0ed3b3ceeb3fdab4a219b59e50049aa79b8c2b126252413e682c6b2b1aa7641d"),
     "__ZN22IOGraphicsAccelerator215system_did_wakeEib": (0x20c, "9859c2de3fbba2eee6dbd9eb6a5aeebc92cacf7b855e4bcc08c46de6c79d3ca0"),
@@ -1138,7 +1141,8 @@ def check(path, boot_path=None):
         assert encoded[0] == 0xe8 and call + 5 + struct.unpack_from("<i", encoded, 1)[0] == address_of(method), "changed finished transaction/backing inventory cleanup edge"
     assert read(0x14ba60a0, 3) == bytes.fromhex("ff 50 28"), "changed finished transaction final release"
     for slot, method in ((0x170, "__ZN16IOAccelResource27prepareEv"),
-                         (0x178, "__ZN16IOAccelResource28completeEv")):
+                         (0x178, "__ZN16IOAccelResource28completeEv"),
+                         (0x198, "__ZN16IOAccelResource217removeFromChannelEP15IOAccelChannel2")):
         raw = struct.unpack("<Q", read(address_of(RESOURCE_VTABLE) + 16 + slot, 8))[0]
         assert raw >> 63 == 0 and (raw >> 30) & 3 == 1, "changed resource lifecycle virtual encoding"
         assert raw & 0x3fffffff == address_of(method), "changed resource lifecycle virtual target"

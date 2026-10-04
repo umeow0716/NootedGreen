@@ -578,6 +578,7 @@ def macho_inventory(path):
     }
     observed_stamp_irq_imports = {address: [] for address in stamp_irq_imports}
     event_stop_imports = {
+        0xd9578: "__ZN16IOAccelResource217removeFromChannelEP15IOAccelChannel2",
         0xc81b8: "__ZTV24IOAccelEventMachineFast2",
         0xcebd0: "__ZN24IOAccelEventMachineFast219mergeEventExcludingEP12IOAccelEventS1_i",
         0xcebf8: "__ZN24IOAccelEventMachineFast224writeEventBarrierCommandEP17IOAccelEventQueueP12IOAccelEventP17vendevtBarrierReci",
@@ -748,6 +749,8 @@ def macho_inventory(path):
         assert image[address:address + len(encoded)] == encoded, f"{path}: changed update result/remap anchor at {address:#x}"
     assert image[0x148d6:0x148db] == b"\xe8" + struct.pack("<i", 0x2d1d8 - 0x148db), f"{path}: changed update flush notification edge"
     resource_table = value("__ZTV15IGAccelResource")
+    assert struct.unpack_from("<Q", image, resource_table + 16 + 0x178)[0] == value("__ZN15IGAccelResource8completeEv"), f"{path}: changed color-resolve concrete completion target"
+    assert resource_table + 16 + 0x198 == 0xd9578, f"{path}: moved inherited resource channel cleanup slot"
     map_table = value("__ZTV16IGAccelMemoryMap")
     wait_barrier = "__ZN16IntelAccelerator20barrierForWaitEventsEbP18IGAccelFIFOChannel"
     assert image[0x2bc25:0x2bc2b] == bytes.fromhex("ff 90 f0 01 00 00"), f"{path}: changed event-barrier packet virtual"

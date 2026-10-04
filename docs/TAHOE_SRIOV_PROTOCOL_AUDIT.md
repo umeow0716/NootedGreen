@@ -6955,6 +6955,30 @@ No executable patch or runtime mutation.
 
 ### Update fanout must participate in the same owner transaction
 
+Borrowed lookup and cleanup identities: reviewed full Shared2::lookupResource
+(0xe), Namespace::lookupId (0x2a), and Resource2::removeFromChannel (0x14c)
+in paired archived KC. Shared wrapper tail-calls namespace lookup. Lookup
+checks id < capacity, reads table pointer, rejects null, writes output and
+prefetches before returning true; it does NOT retain, increment preparation,
+lock or clear output on failure. color_resolve initialized its output to zero
+and holds accelerator mutex while accessing the resulting borrowed resource.
+No asynchronous lease can be inferred from lookup's Boolean success.
+
+Declared native IGAccelResource +0x198 imports removeFromChannel, while +0x178
+targets the already reviewed concrete IGAccelResource::complete; base KC
+resource +0x198/+0x178 identities are also pinned. removeFromChannel updates
+channel events through channel +0x140 for mapping/resource/storage conditions,
+may recurse through another resource's +0x198 or call a subordinate helper,
+then decrements resource +0xa0 and resets packed +0x98 when zero. It is not
+a generic OSObject release, GuC ACK or simply dropping a retained lookup ref.
+Subordinate callbacks and preparation pairing remain their own obligations.
+
+This rules out unlocking during a new wait on the assumption that lookup
+owns its returned resource. A valid owner lease must be acquired while the
+effective admission lock still protects the pointer and include backing/task/
+table/pool requirements; OSObject retain alone does not prove those domains.
+No new production/runtime changes or full indirect lifecycle closure claimed.
+
 SharedUserClient effective lock: reviewed complete color_resolve at 0x7899c
 (0x5d0), pinned both payloads, lock/busy/lookup imports, CCS call edge and
 error-mapping anchors. After size 0x30, feature and nonzero-resource checks,
