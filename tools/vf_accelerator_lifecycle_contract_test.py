@@ -9,6 +9,7 @@ import sys
 # Complete reviewed native bodies. This fixes the concrete Intel override
 # graph, not inherited timer APIs, dynamic callbacks or runtime completion.
 STAMP_IRQ_NATIVE = {
+    "__ZN16IGAccelMemoryMap21freeGPUVirtualAddressEv": (0x10a, "ff45337bab3d4a8e8a5018d739955a37a365ffbba6a49a1d9f4ed0796b2cceb8"),
     "__ZN24IGStolenMemoryDescriptor12setPurgeableEjPj": (0x2a, "97baec040a0d4c7f45075fefae44847895641f129d598b41581dceb613be1b9e"),
     "__ZN18IGStolenMemoryPool8allocateEm": (0xa8, "2da22d3ece5349942f8b06df08644420dc1824d5c8059116ba3e107214a46875"),
     "__ZN18IGStolenMemoryPool10deallocateEP24IGStolenMemoryDescriptorym": (0x8e, "27b8b16ab322e5396a7108e0c7ef4831662f3ac1873a6e949762fc2504b5f58a"),
@@ -731,6 +732,8 @@ def macho_inventory(path):
     assert struct.unpack_from("<Q", image, map_table + 16 + 0x170)[0] == value("__ZN16IGAccelMemoryMap22commitIntoGPUPageTableEv"), f"{path}: changed mapping commit virtual"
     assert direct_branches("__ZN16IGAccelMemoryMap22commitIntoGPUPageTableEv", "__ZN15IGMemoryManager26commitIntoPageTableForTaskEP11IGAccelTaskP16IGAccelMemoryMap") == [0x11275], f"{path}: changed mapping-to-manager commit edge"
     assert struct.unpack_from("<Q", image, map_table + 16 + 0x178)[0] == value("__ZN16IGAccelMemoryMap23releaseFromGPUPageTableEv"), f"{path}: changed mapping release virtual"
+    assert struct.unpack_from("<Q", image, map_table + 16 + 0x160)[0] == value("__ZN16IGAccelMemoryMap21freeGPUVirtualAddressEv"), f"{path}: changed Intel mapping VA-free override"
+    assert image[0x11116:0x1111c] == bytes.fromhex("ff 90 70 01 00 00"), f"{path}: changed Intel VA-free base delegation"
     assert direct_branches("__ZN16IGAccelMemoryMap23releaseFromGPUPageTableEv", "__ZN15IGMemoryManager27releaseFromPageTableForTaskEP11IGAccelTaskP16IGAccelMemoryMap") == [0x113b5], f"{path}: changed mapping-to-manager release edge"
     sys_memory_table = value("__ZTV16IGAccelSysMemory")
     assert value(ACCELERATOR_VTABLE) + 16 + 0x940 == 0xd19b0, f"{path}: changed Intel video recovery import slot"

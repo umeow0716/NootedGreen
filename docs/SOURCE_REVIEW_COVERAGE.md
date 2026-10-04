@@ -7,6 +7,13 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 concrete Intel VA-free: one new complete override and declared
+slot/base-dispatch anchor reviewed/pinned. It only adds diagnostics around
+base VA release; no added ACK boundary. Existing page recycle before outer
+VA free means retirement cannot be repaired only there or at free-list publish.
+Cross-owner pre-zero acquisition/admission/submission/destruction integration
+remains unimplemented; fixed graph is not hardware safety proof.
+
 2026-10-04 stolen purge disposition: four whole bodies reviewed/pinned;
 declared setPurgeable operation 4 only updates software state, not backing
 release/PTE invalidation/GPU quiescence. Pool deallocation separately returns

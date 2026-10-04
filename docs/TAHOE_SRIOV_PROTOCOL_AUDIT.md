@@ -6953,6 +6953,31 @@ No executable patch or runtime mutation.
 
 ## Mapping last-release admission and deferred raw-list transfer
 
+Concrete mapping VA-free follow-up: existing full commit/release/free bodies
+and +0x170/178 slots were already reviewed/pinned; do not count them as new.
+The previously unpinned Intel freeGPUVirtualAddress 11080/10a is now fully
+reviewed. Its declared mapping virtual +0x160 resolves to this override. It
+does optional diagnostics around explicit base-vtable +0x170 delegation
+(header-inclusive base +0x160) at 11116. The already pinned c8130 import is
+the base IOAccelMemoryMap vtable. Thus the real declared Intel path reaches
+the reviewed base list removal/address return/identity clear operation; it
+does not add a GuC wait or hardware-retirement boundary before VA reuse.
+
+Combined with the established releaseFromGPUPageTable -> manager fan-out ->
+releaseRange -> unmap/shrink -> page descriptor/pool recycle graph, this
+rules out fixing retirement solely in the outer VA-free wrapper: physical
+page zero/reuse may have occurred earlier. Likewise merely delaying page-pool
+free-list publication does not preserve the already-zeroed page contents or
+the subsequently returned VA reservation. A correct integration must acquire
+explicit owner references before hierarchy unlink/zero, serialize affected
+mapping admission, exclude conflicting submission, and retire all affected
+table/VA/backing owners only after real firmware completion. Exact transaction
+and destruction coverage remains unimplemented, not proven by this graph.
+
+One new whole body and concrete VA-free slot/base-dispatch anchor pass in both
+payloads. Review priority remains cross-owner retirement, not generic memory
+allocator investigation. No production hook, deployment or Host operation.
+
 Stolen purge disposition: complete setPurgeable fda2/2a, pool allocate
 c876/a8, deallocate c91e/8e and descriptor withSubRange fc90/88 reviewed.
 Allocate obtains a range, creates the typed stolen descriptor, updates counts
