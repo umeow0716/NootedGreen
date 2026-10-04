@@ -1618,6 +1618,9 @@ def check_boot_atomic(system, path):
     assert hashlib.sha256(kernel_read(maintenance, 0x290)).hexdigest() == \
         "c442e1b551f044431ce91ab6d9a0288f45de5571d4557c3817130109f5ece1fb", \
         "changed workloop maintenance add/remove body"
+    assert kernel_read(maintenance + 0x11, 9) == bytes.fromhex(
+        "83 fe 01 0f 84 af 00 00 00"), \
+        "changed workloop maintenance operation-1 removal selector"
     for offset, instruction in ((0x236, "ff 90 28 01 00 00"),
                                 (0x244, "ff 90 30 01 00 00"),
                                 (0x250, "ff 50 28")):
@@ -1745,12 +1748,15 @@ def check_boot_atomic(system, path):
     assert kernel_read(detach + 0x15, 6) == bytes.fromhex("ff 90 58 01 00 00"), "changed timer detach disable dispatch"
     assert kernel_read(detach + 0x1e, 4) == bytes.fromhex("48 89 5f 30"), "changed timer workloop-pointer store"
     disable = symbols[b"__ZN18IOTimerEventSource7disableEv"][0]
+    assert kernel_read(disable + 9, 11) == bytes.fromhex(
+        "48 8b 47 58 48 85 c0 74 02 ff 00"), \
+        "changed timer generation-pointer load/increment before cancellation"
     for offset, name in ((0x1e, b"_thread_call_cancel"), (0x25, b"_thread_call_cancel_wait")):
         call = disable + offset
         instruction = kernel_read(call, 5)
         assert instruction[0] == 0xe8 and call + 5 + struct.unpack_from("<i", instruction, 1)[0] == symbols[name][0], \
             "changed timer disable cancel branch"
-    print("PASS Boot KC timer detach disables before clearing workloop")
+    print("PASS Boot KC timer detach increments generation and disables before clearing workloop")
     wake = symbols[b"__ZN18IOTimerEventSource10wakeAtTimeEjyy"][0]
     assert hashlib.sha256(kernel_read(wake, 0x130)).hexdigest() == \
         "28931d5cf72ac20f040ffb5fed17e87ba6c3eacc876e81c3d3ac05f18992ca2c", \
@@ -1954,6 +1960,7 @@ def check(path, boot_path=None):
         "__ZTV16IOAccelMemoryMap", "__ZTV16IOAccelSysMemory",
         "__ZTV11IOAccelTask", "__ZTV24IOAccelSharedUserClient2",
         "__ZTV13IOAccelMemory", "__ZTV22IOGraphicsAccelerator2",
+        "__ZN22IOGraphicsAccelerator24stopEP9IOService",
         "__ZN22IOGraphicsAccelerator223freeWaitToPrepareVidMapEP16IOAccelMemoryMapbb",
         "__ZNK16IOAccelMemoryMap9getLengthEv",
         EVENT_VTABLE, EVENT_FINISH, EVENT_WAIT, EVENT_CLEAN, EVENT_SIGNAL,
@@ -1991,6 +1998,15 @@ def check(path, boot_path=None):
             if start + offset + 5 + displacement == target:
                 found.append(offset)
         return found
+
+    base_stop = address_of("__ZN22IOGraphicsAccelerator24stopEP9IOService")
+    assert base_stop == 0x14ba1a7c, "changed inherited accelerator stop symbol identity"
+    raw_stop = struct.unpack(
+        "<Q", read(address_of("__ZTV22IOGraphicsAccelerator2") + 0x5d8, 8))[0]
+    assert raw_stop >> 63 == 0 and (raw_stop >> 30) & 3 == 1 and \
+        raw_stop & 0x3fffffff == base_stop, \
+        "changed inherited accelerator stop virtual target"
+    print("PASS exact inherited accelerator stop symbol/vtable boundary")
 
     for name, expected in CONTRACTS.items():
         address = address_of(name)

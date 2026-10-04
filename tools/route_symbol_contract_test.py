@@ -281,13 +281,14 @@ def main() -> None:
         "__ZN22IOGraphicsAccelerator218finalize_interruptEP22IOInterruptEventSourcei",
         "__ZN22IOGraphicsAccelerator218deviceCacheControlEP20IOSurfaceDeviceCachejyy",
         "__ZN22IOGraphicsAccelerator220emitFirstFlushEventsEv",
+        "__ZN22IOGraphicsAccelerator24stopEP9IOService",
     }
     if not system_routes <= routes:
         raise AssertionError("missing explicitly admitted System-KC route")
 
     # Keep route inventory changes explicit. This count includes admission,
     # lifecycle, GGTT, GuC/CTB, IRQ, native producer and System-KC routes.
-    expected_route_count = 147
+    expected_route_count = 148
     if len(routes) != expected_route_count:
         raise AssertionError(
             f"route inventory changed: expected {expected_route_count}, got {len(routes)}"

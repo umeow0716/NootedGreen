@@ -116,6 +116,8 @@ private:
 	static void acceleratorStop(void *that, void *provider);
 	mach_vm_address_t ostart {};
 	mach_vm_address_t oAcceleratorStop {};
+	static void vfBaseAcceleratorStop(void *that, void *provider);
+	mach_vm_address_t oVfBaseAcceleratorStop {};
 	mach_vm_address_t ioPciConfigureInterrupts {};
 	static uint32_t vfTelemetryPrintDashboard(void *that, uint64_t options);
 	static int vfTelemetryInitWithAccelerator(void *that, void *accelerator,

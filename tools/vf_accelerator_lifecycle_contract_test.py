@@ -1825,6 +1825,17 @@ def macho_inventory(path):
     assert 0x15cbc + 7 + struct.unpack_from("<i", image, 0x15cbc + 3)[0] == \
         value("__ZN19IGAccelEventMachine29handleSchedulerStampInterruptEP22IOInterruptEventSourcei"), \
         f"{path}: changed fallback source callback constructor target"
+    event_free = value("__ZN19IGAccelEventMachine4freeEv")
+    assert image[event_free + 9:event_free + 0x10] == bytes.fromhex(
+        "80 bf 88 0d 00 00 00"), \
+        f"{path}: event-machine free no longer conditions native removal on +0xd88"
+    assert image[event_free + 0x32:event_free + 0x44] == bytes.fromhex(
+        "48 8b bb 30 0d 00 00 48 85 ff 74 06 48 8b 07 ff 50 28"), \
+        f"{path}: detached fallback source is no longer released outside the removal branch"
+    enable_scheduler_events = value("__ZN19IGAccelEventMachine21enableSchedulerEventsEv")
+    assert image[enable_scheduler_events + 0x2c:enable_scheduler_events + 0x39] == \
+        bytes.fromhex("ff 91 40 01 00 00 c6 83 88 0d 00 00 01"), \
+        f"{path}: fallback attachment flag is no longer published after native add"
     # Symbol boundaries alone merge unnamed functions into init/free. Pin the
     # disassembled function windows separately, not as one fictitious body.
     scheduler_init = value("__ZN11IGScheduler15initWithOptionsEjyP22IOGraphicsAccelerator2")
@@ -1836,6 +1847,10 @@ def macho_inventory(path):
         assert hashlib.sha256(image[start:start + length]).hexdigest() == digest, \
             f"{path}: changed scheduler timer construction/cleanup window"
     cleanup = scheduler_init + 0x162
+    scheduler_get_workloop = value("__ZNK11IGScheduler11getWorkLoopEv")
+    assert image[scheduler_get_workloop:scheduler_get_workloop + 0x12] == bytes.fromhex(
+        "55 48 89 e5 48 8b 7f 10 48 8b 07 5d ff a0 88 06 00 00"), \
+        f"{path}: base scheduler workloop getter no longer delegates through accelerator +0x688"
     for name, length, digest in (
             ("__ZN12IGScheduler44freeEv", 0xa2, "61b83374f994845f22740f343019b57d0330405fd7e57fe66e5608f700a1a388"),
             ("__ZN12IGScheduler54freeEv", 0x126, "39a1fffea7ae56ea13daabfffe6722828bb990b16eeb8be4cb707c2e55c0b44a")):
@@ -1966,6 +1981,15 @@ def macho_inventory(path):
         f"{path}: changed null-provider virtual stop on start failure"
     assert struct.unpack_from("<Q", image, value(ACCELERATOR_VTABLE) + 16 + 0x5c8)[0] == value(ACCELERATOR_STOP), \
         f"{path}: changed effective start-failure stop virtual"
+    assert image[0x240cb:0x240e6] == bytes.fromhex(
+        "48 8b 05 d6 40 0a 00 4c 89 ef 4c 89 fe ff 90 d0 05 00 00 "
+        "84 c0 0f 84 b1 01 00 00"), \
+        f"{path}: changed inherited-start call/false rollback edge"
+    scheduler_events = "__ZN19IGAccelEventMachine21enableSchedulerEventsEv"
+    assert direct_branches(ACCELERATOR_START, scheduler_events) == [0x24159], \
+        f"{path}: scheduler fallback attachment no longer follows inherited-start success"
+    assert 0x240d8 < 0x24159 < 0x24528 < 0x2463f, \
+        f"{path}: inherited start/fallback/engine/DPSM lifecycle order changed"
     for call, store in ((0x243f3, "49 89 85 50 12 00 00"),
                         (0x2448e, "49 89 85 50 12 00 00")):
         assert image[call] == 0xe8 and call + 5 + struct.unpack_from("<i", image, call + 1)[0] == create, \
@@ -3330,6 +3354,26 @@ def macho_inventory(path):
             stop_unlock_busy < stop_unlock < 0x264f7):
         raise AssertionError(
             f"{path}: native finish/lock/engine-stop/unlock/timer order changed")
+    # Intel stop removes/releases the DPSM source before the inherited stop
+    # virtual, but intentionally leaves scheduler type 4 alive until base
+    # ownership teardown.  The routed inherited-stop entry is therefore the
+    # last boundary where its +0x448 source and the event-machine fallback can
+    # still be synchronously detached from accelerator +0xf0.
+    for address, encoded in (
+            (0x264f7, "49 8b bf 60 14 00 00"),
+            (0x26506, "ff 90 58 01 00 00"),
+            (0x2650c, "49 8b bf 50 12 00 00"),
+            (0x26516, "ff 90 18 02 00 00"),
+            (0x26529, "ff 91 48 01 00 00"),
+            (0x2653e, "ff 50 28"),
+            (0x26541, "49 c7 87 60 14 00 00 00 00 00 00"),
+            (0x26585, "b8 00 00 80 03 41 23 87 90 11 00 00 3d 00 00 80 02 75 1d"),
+            (0x266ea, "ff 90 d8 05 00 00")):
+        expected = bytes.fromhex(encoded)
+        assert image[address:address + len(expected)] == expected, \
+            f"{path}: changed DPSM/Scheduler4/inherited-stop ownership boundary"
+    assert 0x26541 < 0x266ea < accelerator_stop_end, \
+        f"{path}: inherited stop no longer follows DPSM owner release"
     release_calls = []
     for pattern in (bytes.fromhex("ff 50 28"),
                     bytes.fromhex("ff 90 28 00 00 00")):
@@ -4847,6 +4891,251 @@ def page_table_common_serialization_model():
     print(f"PASS: {cases} common page-table ownership/rollback states (offline model)")
 
 
+def callback_owner_lifetime_contract(source, path="<source>"):
+    """Pin the VF-only raw callback-owner admission and pre-base-stop drain."""
+    ready = function_body(source, "bool vfNativeCallbackBindingsReady(void *accelerator)")
+    normalized_ready = "".join(ready.split())
+    for token in (
+            "getMember<IOWorkLoop*>(accelerator,0xF0)",
+            "getMember<void*>(accelerator,0x380)",
+            "getMember<void*>(accelerator,0x1250)",
+            "getMember<IOTimerEventSource*>(accelerator,0x1460)",
+            "getMember<IOInterruptEventSource*>(eventMachine,0xD30)",
+            "getMember<OSSet*>(scheduler,0x438)",
+            "getMember<IOLock*>(scheduler,0x440)",
+            "getMember<IOTimerEventSource*>(scheduler,0x448)",
+            "IOLockLock(periodicLock);",
+            "getMember<uint8_t>(eventMachine,0xD88)==1",
+            "getMember<uint64_t>(eventMachine,0xD80)==0",
+            "getMember<uint64_t>(eventMachine,0xD90)==0",
+            "getMember<uint64_t>(scheduler,0x450)==0",
+            "periodicSet->getCount()==0",
+            "IOLockUnlock(periodicLock);",
+            "returncallbacksEmpty&&",
+            "fallback->getWorkLoop()==workloop",
+            "periodicTimer->getWorkLoop()==workloop",
+            "dpsmTimer->getWorkLoop()==workloop"):
+        if token not in normalized_ready:
+            raise AssertionError(f"{path}: incomplete native callback binding admission: {token}")
+
+    detach = function_body(
+        source, "bool vfDetachNativeCallbackSourcesBeforeBaseStop(void *accelerator)")
+    normalized_detach = "".join(detach.split())
+    for token in (
+            "getMember<IOTimerEventSource*>(accelerator,0x1460)!=nullptr",
+            "IOLockLock(periodicLock);",
+            "getMember<uint64_t>(eventMachine,0xD80)==0",
+            "getMember<uint64_t>(eventMachine,0xD90)==0",
+            "getMember<uint64_t>(scheduler,0x450)==0",
+            "periodicSet->getCount()==0",
+            "IOLockUnlock(periodicLock);",
+            "if(!callbacksEmpty)returnfalse;",
+            "constautofallbackAttached=getMember<uint8_t>(eventMachine,0xD88);",
+            "if(fallbackAttached==1)",
+            "if(fallback->getWorkLoop()!=workloop)returnfalse;",
+            "fallback->disable();",
+            "workloop->removeEventSource(fallback)!=kIOReturnSuccess",
+            "fallback->getWorkLoop()!=nullptr",
+            "getMember<uint8_t>(eventMachine,0xD88)=0;",
+            "fallbackAttached!=0||fallback->getWorkLoop()!=nullptr",
+            "auto*periodicAttached=periodicTimer->getWorkLoop();",
+            "if(periodicAttached!=workloop)returnfalse;",
+            "periodicTimer->cancelTimeout();",
+            "workloop->removeEventSource(periodicTimer)!=kIOReturnSuccess",
+            "periodicTimer->getWorkLoop()!=nullptr",
+            "constboolpostDetachEmpty=",
+            "returnpostDetachEmpty;"):
+        if token not in normalized_detach:
+            raise AssertionError(f"{path}: incomplete native callback detach: {token}")
+    lock = normalized_detach.index("IOLockLock(periodicLock);")
+    unlock = normalized_detach.index("IOLockUnlock(periodicLock);", lock)
+    fallback_remove = normalized_detach.index(
+        "workloop->removeEventSource(fallback)", unlock)
+    periodic_remove = normalized_detach.index(
+        "workloop->removeEventSource(periodicTimer)", fallback_remove)
+    post_lock = normalized_detach.index(
+        "IOLockLock(periodicLock);", periodic_remove)
+    post_unlock = normalized_detach.index(
+        "IOLockUnlock(periodicLock);", post_lock)
+    post_return = normalized_detach.index("returnpostDetachEmpty;", post_unlock)
+    if not lock < unlock < fallback_remove < periodic_remove < post_lock < post_unlock < post_return:
+        raise AssertionError(
+            f"{path}: callback detach may invert scheduler mutex/workloop-gate order")
+    for forbidden in ("->release(", "OSSafeRelease", "OSSafeReleaseNULL"):
+        if forbidden in detach:
+            raise AssertionError(
+                f"{path}: pre-base-stop drain stole native callback-object ownership")
+
+    rollback_detach = function_body(
+        source,
+        "bool vfDetachPartialNativeCallbackSources(void *accelerator)")
+    normalized_rollback = "".join(rollback_detach.split())
+    for token in (
+            "getMember<IOTimerEventSource*>(accelerator,0x1460)!=nullptr",
+            "if(!eventMachine&&!scheduler)returntrue;",
+            "getMember<uint64_t>(eventMachine,0xD80)!=0",
+            "getMember<uint64_t>(eventMachine,0xD90)!=0",
+            "getMember<uint8_t>(eventMachine,0xD88)==1",
+            "fallback->getWorkLoop()!=workloop",
+            "workloop->removeEventSource(fallback)!=kIOReturnSuccess",
+            "getMember<uint8_t>(eventMachine,0xD88)=0;",
+            "getMember<uint8_t>(eventMachine,0xD88)!=0",
+            "fallback&&fallback->getWorkLoop()!=nullptr",
+            "IOLockLock(periodicLock);",
+            "getMember<uint64_t>(scheduler,0x450)==0",
+            "periodicSet->getCount()==0",
+            "IOLockUnlock(periodicLock);",
+            "auto*attached=periodicTimer->getWorkLoop();",
+            "if(attached!=workloop)returnfalse;",
+            "periodicTimer->cancelTimeout();",
+            "workloop->removeEventSource(periodicTimer)!=kIOReturnSuccess",
+            "constboolpostDetachEmpty=",
+            "returnpostDetachEmpty;"):
+        if token not in normalized_rollback:
+            raise AssertionError(
+                f"{path}: incomplete unpublished callback rollback: {token}")
+    rollback_unlock = normalized_rollback.index("IOLockUnlock(periodicLock);")
+    rollback_remove = normalized_rollback.index(
+        "workloop->removeEventSource(periodicTimer)", rollback_unlock)
+    rollback_post_lock = normalized_rollback.index(
+        "IOLockLock(periodicLock);", rollback_remove)
+    rollback_post_unlock = normalized_rollback.index(
+        "IOLockUnlock(periodicLock);", rollback_post_lock)
+    rollback_post_return = normalized_rollback.index(
+        "returnpostDetachEmpty;", rollback_post_unlock)
+    if not rollback_unlock < rollback_remove < rollback_post_lock < \
+            rollback_post_unlock < rollback_post_return:
+        raise AssertionError(
+            f"{path}: unpublished callback rollback holds mutex across gate removal")
+    for forbidden in ("->release(", "OSSafeRelease", "OSSafeReleaseNULL"):
+        if forbidden in rollback_detach:
+            raise AssertionError(
+                f"{path}: unpublished callback rollback stole native object ownership")
+
+    process = "".join(function_body(
+        source,
+        "bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t address, size_t size)").split())
+    route = ('{"__ZN22IOGraphicsAccelerator24stopEP9IOService",'
+             'vfBaseAcceleratorStop,this->oVfBaseAcceleratorStop}')
+    if route not in process:
+        raise AssertionError(f"{path}: missing exact base-stop teardown route")
+    route_apply = "routeMultiple(index,callbackOwnerTeardown,address,size)"
+    if route_apply not in process:
+        raise AssertionError(f"{path}: base-stop teardown route is not applied")
+
+    wrapper = function_body(
+        source, "void Gen11::vfBaseAcceleratorStop(void *that, void *provider)")
+    normalized_wrapper = "".join(wrapper.split())
+    for token in (
+            "!callback||!callback->oVfBaseAcceleratorStop",
+            "gVfIdentity==VfIdentity::Virtual&&that==gVfAccelerator",
+            "if(gVfDeviceStopping)",
+            "!NGVfIrqGate::closed(gVfExternalProducerGate)",
+            "!NGVfIrqGate::drained(gVfExternalProducerGate)",
+            "!vfDetachNativeCallbackSourcesBeforeBaseStop(that)",
+            "gVfSchedulerFirmwareReady||gVfCtbEverEnabled",
+            "gVfExternalProducerGate!=0",
+            "!vfDetachPartialNativeCallbackSources(that)",
+            "FunctionCast(vfBaseAcceleratorStop,callback->oVfBaseAcceleratorStop)(that,provider)"):
+        if token not in normalized_wrapper:
+            raise AssertionError(f"{path}: incomplete base-stop callback drain wrapper: {token}")
+    precondition = normalized_wrapper.index("if(gVfDeviceStopping)")
+    detach_call = normalized_wrapper.index(
+        "!vfDetachNativeCallbackSourcesBeforeBaseStop(that)", precondition)
+    rollback_call = normalized_wrapper.index(
+        "!vfDetachPartialNativeCallbackSources(that)", detach_call)
+    original = normalized_wrapper.index(
+        "FunctionCast(vfBaseAcceleratorStop,callback->oVfBaseAcceleratorStop)(that,provider)",
+        rollback_call)
+    if not precondition < detach_call < rollback_call < original:
+        raise AssertionError(f"{path}: base stop can clear the workloop before callback drain")
+
+    start = function_body(source, "bool Gen11::start(void *that, void *provider)")
+    native_result = start.index(
+        "const auto result = FunctionCast(start, callback->ostart)(that, provider)")
+    rollback = start.index("acceleratorStop(that, nullptr)", native_result)
+    ready_call = start.index("vfNativeCallbackBindingsReady(that)", rollback)
+    publication = start.index("service->registerService(kIOServiceAsynchronous)", ready_call)
+    if not native_result < rollback < ready_call < publication:
+        raise AssertionError(
+            f"{path}: callback ownership is not admitted after rollback and before publication")
+
+    intel_stop = function_body(source, "void Gen11::acceleratorStop(void *that, void *provider)")
+    original = intel_stop.index(
+        "FunctionCast(acceleratorStop, callback->oAcceleratorStop)(that, provider)")
+    dpsm_postcondition = intel_stop.index(
+        "getMember<IOTimerEventSource *>(that, 0x1460) != nullptr", original)
+    null_provider = intel_stop.index("if (!provider)", dpsm_postcondition)
+    partial_detach = intel_stop.index(
+        "!vfDetachPartialNativeCallbackSources(that)", null_provider)
+    if not original < dpsm_postcondition < null_provider < partial_detach:
+        raise AssertionError(f"{path}: DPSM owner postcondition precedes native stop")
+
+
+def callback_owner_lifetime_mutations(path):
+    source = pathlib.Path(path).read_text()
+
+    def mutate_function(signature, before, after):
+        body = function_body(source, signature)
+        if body.count(before) != 1:
+            raise AssertionError(f"ambiguous callback-owner mutation: {before}")
+        return source.replace(body, body.replace(before, after, 1), 1)
+
+    ready = "bool vfNativeCallbackBindingsReady(void *accelerator)"
+    detach = "bool vfDetachNativeCallbackSourcesBeforeBaseStop(void *accelerator)"
+    wrapper = "void Gen11::vfBaseAcceleratorStop(void *that, void *provider)"
+    mutations = (
+        ("ready flag", mutate_function(ready,
+            "getMember<uint8_t>(eventMachine, 0xD88) == 1",
+            "getMember<uint8_t>(eventMachine, 0xD88) == 0")),
+        ("ready set", mutate_function(ready,
+            "periodicSet->getCount() == 0", "periodicSet->getCount() != 0")),
+        ("ready binding", mutate_function(ready,
+            "fallback->getWorkLoop() == workloop",
+            "fallback->getWorkLoop() != workloop")),
+        ("detach unlock", mutate_function(detach,
+            "IOLockUnlock(periodicLock);\n\tif (!callbacksEmpty)",
+            "if (!callbacksEmpty)")),
+        ("fallback disable", mutate_function(detach, "fallback->disable();", "")),
+        ("fallback flag", mutate_function(detach,
+            "getMember<uint8_t>(eventMachine, 0xD88) = 0;", "")),
+        ("periodic cancel", mutate_function(detach, "periodicTimer->cancelTimeout();", "")),
+        ("periodic remove", mutate_function(detach,
+            "workloop->removeEventSource(periodicTimer)",
+            "workloop->addEventSource(periodicTimer)")),
+        ("detach postcheck", mutate_function(detach,
+            "return postDetachEmpty;", "return true;")),
+        ("wrapper drained", mutate_function(wrapper,
+            "!NGVfIrqGate::drained(gVfExternalProducerGate)",
+            "NGVfIrqGate::drained(gVfExternalProducerGate)")),
+        ("wrapper normal detach", mutate_function(wrapper,
+            "!vfDetachNativeCallbackSourcesBeforeBaseStop(that)",
+            "vfDetachNativeCallbackSourcesBeforeBaseStop(that)")),
+        ("null-provider detach", mutate_function(
+            "void Gen11::acceleratorStop(void *that, void *provider)",
+            "!vfDetachPartialNativeCallbackSources(that)",
+            "vfDetachPartialNativeCallbackSources(that)")),
+        ("rollback state", mutate_function(wrapper,
+            "gVfSchedulerFirmwareReady || gVfCtbEverEnabled",
+            "gVfSchedulerFirmwareReady && gVfCtbEverEnabled")),
+        ("start binding", mutate_function("bool Gen11::start(void *that, void *provider)",
+            "vfNativeCallbackBindingsReady(that)",
+            "vfNativeCallbackBindingsReady(nullptr)")),
+        ("base route", source.replace(
+            "__ZN22IOGraphicsAccelerator24stopEP9IOService",
+            "__ZN22IOGraphicsAccelerator27missingEP9IOService", 1)),
+    )
+    for label, changed in mutations:
+        if changed == source:
+            raise AssertionError(f"missing callback-owner lifetime mutation target: {label}")
+        try:
+            callback_owner_lifetime_contract(changed, path)
+        except (AssertionError, ValueError):
+            continue
+        raise AssertionError(f"{path}: escaped callback-owner lifetime mutation: {label}")
+    print("PASS: fifteen callback-owner binding/drain mutations rejected")
+
+
 def source_contract(path):
     source = pathlib.Path(path).read_text()
     legacy_gpu_producer_containment_contract(source, path)
@@ -4860,6 +5149,7 @@ def source_contract(path):
     initial_page_table_sync_contract(source, path)
     cache_type_update_transaction_contract(source, path)
     page_table_common_serialization_contract(source, path)
+    callback_owner_lifetime_contract(source, path)
     for signature in ("bool Gen11::vfAttachContextDesc(",
                       "void Gen11::vfDetachContextDesc(",
                       "bool Gen11::vfSubmitWorkItem("):
@@ -5631,6 +5921,7 @@ def main():
     cache_type_update_transaction_model()
     page_table_common_serialization_mutations(sys.argv[1])
     page_table_common_serialization_model()
+    callback_owner_lifetime_mutations(sys.argv[1])
     ggtt_postwrite_mutations(sys.argv[1])
     macho_inventory(sys.argv[2])
     macho_inventory(sys.argv[3])

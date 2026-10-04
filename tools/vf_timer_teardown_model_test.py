@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Abstract teardown counterexamples, NOT an implementation/KC verifier.
 
-Events are atomic at the model boundary. Native locks, generation checks,
-producer admission, callback ownership and DMA must be verified separately.
+Events are atomic at the model boundary. Pinned KC/source contracts verify the
+native locks, generation checks and callback ownership used by this model;
+this file remains an interleaving model, not runtime execution evidence.
 """
 from itertools import permutations
 
@@ -53,6 +54,30 @@ def has_wait_cycle(owners, waiting):
     return False
 
 
+def detached_passive_timer(*, active, queued):
+    """Model synchronous gate removal plus IOTimerEventSource generation skip."""
+    generation = 7
+    scheduled_generation = generation
+    owner_alive = True
+    action_after_remove = False
+
+    # An already-entered callback owns the workloop gate. removeEventSource
+    # cannot enter its maintenance action until that callback returns.
+    if active:
+        active = False
+
+    # setWorkLoop(nullptr) invokes disable before clearing the binding. A
+    # queued passive callout retains the source, but its old generation can no
+    # longer dispatch the raw owner after the synchronous remove returns.
+    generation += 1
+    attached = False
+    if queued:
+        action_after_remove = generation == scheduled_generation
+    assert not attached
+    owner_alive = False
+    return active, action_after_remove, owner_alive
+
+
 def main():
     # Only enforce each actor's local order; enumerate stop/producer/callback
     # interleavings rather than assuming cancel is last or a callback is idle.
@@ -85,11 +110,17 @@ def main():
         assert refs > 0
     # Kernel evidence establishes timeout's gate-before-callback-mutex path,
     # and removeEventSource delegates synchronously through a command gate.
-    # Model the proposed (NOT implemented) cleanup mutex-before-remove path.
+    # Retain the rejected mutex-before-remove counterexample.
     owners = {"gate": "callback", "mutex": "cleanup"}
     waiting = {"callback": "mutex", "cleanup": "gate"}
     assert has_wait_cycle(owners, waiting)
-    # Consistent gate-first acquisition waits without a circular dependency.
+    # Production only snapshots the empty collection under its mutex, releases
+    # that mutex, and then enters the gate for removal: no simultaneous
+    # mutex-before-gate ownership exists.
+    owners = {"gate": "callback"}
+    waiting = {"cleanup": "gate"}
+    assert not has_wait_cycle(owners, waiting)
+    # Consistent gate-first acquisition also waits without a circular edge.
     assert not has_wait_cycle({"gate": "callback", "mutex": "callback"},
                               {"cleanup": "gate"})
     # Same-thread recursive gate entry is not this two-thread counterexample;
@@ -99,8 +130,14 @@ def main():
     current_callback = "cleanup"
     draining_actor = "cleanup"
     assert current_callback == draining_actor  # Must defer, not wait on self.
-    print(f"PASS: {len(orders)} abstract timer teardown orders; "
-          "cancel/admission-only, reversed-lock and self-drain counterexamples retained")
+    for active in (False, True):
+        for queued in (False, True):
+            active_after, action_after, owner_alive = detached_passive_timer(
+                active=active, queued=queued)
+            assert not active_after and not action_after and not owner_alive
+    print(f"PASS: {len(orders)} abstract timer teardown orders and four "
+          "gate/generation detach states; cancel/admission-only, reversed-lock "
+          "and self-drain counterexamples retained")
 
 
 if __name__ == "__main__":

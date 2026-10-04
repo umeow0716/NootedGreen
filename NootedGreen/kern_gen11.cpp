@@ -37,6 +37,7 @@
 #include <IOKit/IOLocks.h>
 #include <IOKit/IOWorkLoop.h>
 #include <IOKit/pci/IOPCIDevice.h>
+#include <libkern/c++/OSSet.h>
 #include <kern/thread_call.h>
 #include <kern/sched_prim.h>
 #include <i386/machine_routines.h>
@@ -1657,6 +1658,196 @@ bool vfAdmitPagePoolTransactionOwner(void *pool)
 	       getMember<uint8_t>(pool, 0x64) == 0;
 }
 
+bool vfNativeCallbackBindingsReady(void *accelerator)
+{
+	if (!accelerator)
+		return false;
+	auto *workloop = getMember<IOWorkLoop *>(accelerator, 0xF0);
+	auto *eventMachine = getMember<void *>(accelerator, 0x380);
+	auto *scheduler = getMember<void *>(accelerator, 0x1250);
+	auto *dpsmTimer = getMember<IOTimerEventSource *>(accelerator, 0x1460);
+	if (!workloop || !eventMachine || !scheduler || !dpsmTimer)
+		return false;
+
+	auto *fallback = getMember<IOInterruptEventSource *>(eventMachine, 0xD30);
+	auto *periodicSet = getMember<OSSet *>(scheduler, 0x438);
+	auto *periodicLock = getMember<IOLock *>(scheduler, 0x440);
+	auto *periodicTimer = getMember<IOTimerEventSource *>(scheduler, 0x448);
+	if (!fallback || !periodicSet || !periodicLock || !periodicTimer)
+		return false;
+
+	// No client can reach this unpublished accelerator yet.  The initial
+	// callback collections therefore have to be empty, and all three native
+	// raw-owner sources must already be bound to the one accelerator workloop.
+	IOLockLock(periodicLock);
+	const bool callbacksEmpty =
+		getMember<uint64_t>(eventMachine, 0xD80) == 0 &&
+		getMember<uint64_t>(eventMachine, 0xD90) == 0 &&
+		getMember<uint64_t>(scheduler, 0x450) == 0 &&
+		periodicSet->getCount() == 0;
+	IOLockUnlock(periodicLock);
+	return callbacksEmpty &&
+	       getMember<uint8_t>(eventMachine, 0xD88) == 1 &&
+	       fallback->getWorkLoop() == workloop &&
+	       periodicTimer->getWorkLoop() == workloop &&
+	       dpsmTimer->getWorkLoop() == workloop;
+}
+
+bool vfDetachNativeCallbackSourcesBeforeBaseStop(void *accelerator)
+{
+	if (!accelerator)
+		return false;
+	auto *workloop = getMember<IOWorkLoop *>(accelerator, 0xF0);
+	auto *eventMachine = getMember<void *>(accelerator, 0x380);
+	auto *scheduler = getMember<void *>(accelerator, 0x1250);
+	if (!workloop || !eventMachine || !scheduler ||
+	    getMember<IOTimerEventSource *>(accelerator, 0x1460) != nullptr)
+		return false;
+
+	auto *fallback = getMember<IOInterruptEventSource *>(eventMachine, 0xD30);
+	auto *periodicSet = getMember<OSSet *>(scheduler, 0x438);
+	auto *periodicLock = getMember<IOLock *>(scheduler, 0x440);
+	auto *periodicTimer = getMember<IOTimerEventSource *>(scheduler, 0x448);
+	if (!fallback || !periodicSet || !periodicLock || !periodicTimer)
+		return false;
+
+	// IntelAccelerator::stop has already executed finishAllStamps(43) at this
+	// boundary.  Stabilize the periodic collection under its native mutex, but
+	// never hold that mutex across removeEventSource(): passive timer callbacks
+	// enter the workloop gate before acquiring scheduler+0x440.
+	IOLockLock(periodicLock);
+	const bool callbacksEmpty =
+		getMember<uint64_t>(eventMachine, 0xD80) == 0 &&
+		getMember<uint64_t>(eventMachine, 0xD90) == 0 &&
+		getMember<uint64_t>(scheduler, 0x450) == 0 &&
+		periodicSet->getCount() == 0;
+	IOLockUnlock(periodicLock);
+	if (!callbacksEmpty)
+		return false;
+
+	// Both removals synchronously enter the same workloop gate.  The timer's
+	// setWorkLoop(nullptr) path first disables it and increments its generation,
+	// so a queued passive callout can retain/release the source but cannot invoke
+	// the raw scheduler owner after this function returns.  Keep both source
+	// objects alive for their native owner free() routines; only detach them here
+	// before IOGraphicsAccelerator2::stop clears accelerator+0xf0.
+	const auto fallbackAttached = getMember<uint8_t>(eventMachine, 0xD88);
+	if (fallbackAttached == 1) {
+		if (fallback->getWorkLoop() != workloop)
+			return false;
+		fallback->disable();
+		if (workloop->removeEventSource(fallback) != kIOReturnSuccess ||
+		    fallback->getWorkLoop() != nullptr)
+			return false;
+		getMember<uint8_t>(eventMachine, 0xD88) = 0;
+	} else if (fallbackAttached != 0 || fallback->getWorkLoop() != nullptr) {
+		return false;
+	}
+
+	auto *periodicAttached = periodicTimer->getWorkLoop();
+	if (periodicAttached) {
+		if (periodicAttached != workloop)
+			return false;
+		periodicTimer->cancelTimeout();
+		if (workloop->removeEventSource(periodicTimer) != kIOReturnSuccess ||
+		    periodicTimer->getWorkLoop() != nullptr)
+			return false;
+	}
+
+	// A callback that had already entered the workloop gate at the first
+	// snapshot is allowed to finish before removeEventSource returns.  Recheck
+	// its terminal state only after both raw-owner sources are detached.
+	IOLockLock(periodicLock);
+	const bool postDetachEmpty =
+		getMember<uint64_t>(eventMachine, 0xD80) == 0 &&
+		getMember<uint64_t>(eventMachine, 0xD90) == 0 &&
+		getMember<uint64_t>(scheduler, 0x450) == 0 &&
+		periodicSet->getCount() == 0;
+	IOLockUnlock(periodicLock);
+	return postDetachEmpty;
+}
+
+bool vfDetachPartialNativeCallbackSources(void *accelerator)
+{
+	if (!accelerator ||
+	    getMember<IOTimerEventSource *>(accelerator, 0x1460) != nullptr)
+		return false;
+	auto *workloop = getMember<IOWorkLoop *>(accelerator, 0xF0);
+	auto *eventMachine = getMember<void *>(accelerator, 0x380);
+	auto *scheduler = getMember<void *>(accelerator, 0x1250);
+	if (!eventMachine && !scheduler)
+		return true;
+	if (!workloop)
+		return false;
+
+	// IOGraphicsAccelerator2::start can call its own stop before returning
+	// false to IntelAccelerator::start.  That edge precedes Intel's
+	// enableSchedulerEvents, engine start and DPSM construction, but a virtual
+	// factory may already have created a scheduler timer.  Intel's later
+	// failure epilogue instead invokes IntelAccelerator::stop with a null
+	// provider, which deliberately skips base stop.  In both cases only
+	// zero-use partial bindings may survive to this helper.
+	if (eventMachine) {
+		auto *fallback = getMember<IOInterruptEventSource *>(eventMachine, 0xD30);
+		if (getMember<uint64_t>(eventMachine, 0xD80) != 0 ||
+		    getMember<uint64_t>(eventMachine, 0xD90) != 0)
+			return false;
+		if (getMember<uint8_t>(eventMachine, 0xD88) == 1) {
+			if (!fallback || fallback->getWorkLoop() != workloop)
+				return false;
+			fallback->disable();
+			if (workloop->removeEventSource(fallback) != kIOReturnSuccess ||
+			    fallback->getWorkLoop() != nullptr)
+				return false;
+			getMember<uint8_t>(eventMachine, 0xD88) = 0;
+		} else if (getMember<uint8_t>(eventMachine, 0xD88) != 0 ||
+		           (fallback && fallback->getWorkLoop() != nullptr)) {
+			return false;
+		}
+	}
+
+	if (scheduler) {
+		auto *periodicSet = getMember<OSSet *>(scheduler, 0x438);
+		auto *periodicLock = getMember<IOLock *>(scheduler, 0x440);
+		auto *periodicTimer = getMember<IOTimerEventSource *>(scheduler, 0x448);
+		if (!periodicSet || !periodicLock || !periodicTimer)
+			return false;
+		IOLockLock(periodicLock);
+		const bool callbacksEmpty =
+			getMember<uint64_t>(scheduler, 0x450) == 0 &&
+			periodicSet->getCount() == 0;
+		IOLockUnlock(periodicLock);
+		if (!callbacksEmpty)
+			return false;
+		auto *attached = periodicTimer->getWorkLoop();
+		if (attached) {
+			if (attached != workloop)
+				return false;
+			periodicTimer->cancelTimeout();
+			if (workloop->removeEventSource(periodicTimer) != kIOReturnSuccess ||
+			    periodicTimer->getWorkLoop() != nullptr)
+				return false;
+		}
+	}
+
+	if (scheduler) {
+		auto *periodicSet = getMember<OSSet *>(scheduler, 0x438);
+		auto *periodicLock = getMember<IOLock *>(scheduler, 0x440);
+		IOLockLock(periodicLock);
+		const bool postDetachEmpty =
+			(!eventMachine ||
+			 (getMember<uint64_t>(eventMachine, 0xD80) == 0 &&
+			  getMember<uint64_t>(eventMachine, 0xD90) == 0)) &&
+			getMember<uint64_t>(scheduler, 0x450) == 0 &&
+			periodicSet->getCount() == 0;
+		IOLockUnlock(periodicLock);
+		return postDetachEmpty;
+	}
+	return !eventMachine ||
+	       (getMember<uint64_t>(eventMachine, 0xD80) == 0 &&
+	        getMember<uint64_t>(eventMachine, 0xD90) == 0);
+}
+
 static bool vfWaitMmioHeader(NGreen *cb, bool busyPhase, uint32_t &header)
 {
 	// intel_guc_send_mmio allows 10 ms for ownership, then up to 20 s BUSY
@@ -2162,6 +2353,13 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		};
 		PANIC_COND(!patcher.solveMultiple(index, lifecycle, address, size),
 			"ngreen", "Cannot resolve native IOAccelerator lifecycle API");
+		KernelPatcher::RouteRequest callbackOwnerTeardown[] = {
+			{"__ZN22IOGraphicsAccelerator24stopEP9IOService",
+			 vfBaseAcceleratorStop, this->oVfBaseAcceleratorStop},
+		};
+		PANIC_COND(!patcher.routeMultiple(index, callbackOwnerTeardown,
+		                                      address, size),
+		           "ngreen", "Cannot route VF callback-owner teardown boundary");
 		mach_vm_address_t poolInitStart = 0, growthStart = 0, growthEnd = 0;
 		mach_vm_address_t getterStart = 0, getterEnd = 0;
 		KernelPatcher::SolveRequest commandPoolBounds[] = {
@@ -5158,6 +5356,11 @@ bool Gen11::start(void *that, void *provider)
 		}
 		return result;
 	}
+	if (vfActive) {
+		PANIC_COND(!vfNativeCallbackBindingsReady(that), "ngreen",
+			"Native VF start published incomplete timer/event-source ownership");
+		SYSLOG("ngreen", "V301: verified VF DPSM/periodic/fallback source bindings before publication");
+	}
 
 	// The accelerator personality is injected before this wrapper runs. Publish
 	// only after native start succeeds so matching cannot observe partial state.
@@ -5199,6 +5402,43 @@ void Gen11::acceleratorStop(void *that, void *provider)
 		SYSLOG("ngreen", "V296: VF external producers and IOSurface caches retired; deferring transport quiescence until post-stamp engine stop");
 	}
 	FunctionCast(acceleratorStop, callback->oAcceleratorStop)(that, provider);
+	if (gVfIdentity == VfIdentity::Virtual && that == gVfAccelerator) {
+		OSSynchronizeIO();
+		PANIC_COND(getMember<IOTimerEventSource *>(that, 0x1460) != nullptr,
+			"ngreen", "Native VF stop returned with a live DPSM timer owner");
+		if (!provider) {
+			PANIC_COND(!NGVfIrqGate::closed(gVfExternalProducerGate) ||
+			           !NGVfIrqGate::drained(gVfExternalProducerGate) ||
+			           !vfDetachPartialNativeCallbackSources(that),
+				"ngreen", "Cannot drain partial VF callback owners after null-provider stop");
+			SYSLOG("ngreen", "V301: detached partial VF callback bindings after null-provider stop");
+		}
+	}
+}
+
+void Gen11::vfBaseAcceleratorStop(void *that, void *provider)
+{
+	PANIC_COND(!callback || !callback->oVfBaseAcceleratorStop,
+		"ngreen", "Missing native IOAccelerator stop trampoline");
+	if (gVfIdentity == VfIdentity::Virtual && that == gVfAccelerator) {
+		OSSynchronizeIO();
+		if (gVfDeviceStopping) {
+			PANIC_COND(!NGVfIrqGate::closed(gVfExternalProducerGate) ||
+			           !NGVfIrqGate::drained(gVfExternalProducerGate),
+				"ngreen", "Base VF stop reached before producer closure/drain");
+			PANIC_COND(!vfDetachNativeCallbackSourcesBeforeBaseStop(that),
+				"ngreen", "Cannot drain VF periodic/fallback callback owners before workloop teardown");
+			SYSLOG("ngreen", "V301: synchronously detached VF periodic/fallback sources before base workloop teardown");
+		} else {
+			PANIC_COND(gVfSchedulerFirmwareReady || gVfCtbEverEnabled ||
+			           gVfExternalProducerGate != 0 ||
+			           !vfDetachPartialNativeCallbackSources(that),
+				"ngreen", "Unsafe unpublished VF start rollback reached base workloop teardown");
+			SYSLOG("ngreen", "V301: detached zero-use partial VF callback bindings during native start rollback");
+		}
+	}
+	FunctionCast(vfBaseAcceleratorStop,
+	             callback->oVfBaseAcceleratorStop)(that, provider);
 }
 
 uint32_t Gen11::vfTelemetryPrintDashboard(void *that, uint64_t options)

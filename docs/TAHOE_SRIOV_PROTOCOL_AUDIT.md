@@ -1,7 +1,7 @@
 # Tahoe SR-IOV protocol audit — in progress
 
 Updated: 2026-10-05. The last dynamic source baseline is `ce166c8`; the current
-offline-reviewed worktree is V300 SG-08 submission-result integration on
+offline-reviewed worktree is V301 SG-09 callback-owner integration on
 `codex/tahoe-sriov-vf`. This is NOT a boot-test candidate or a successful
 driver baseline. The `ce166c8` run produced repeatable host PF DMAR faults
 followed by i915 hangs and a host reboot. Keep `macos-tahoe-sriov` shut off until the
@@ -20,6 +20,52 @@ KVMFR/client transport remains the intended receiving side.
 The authoritative dynamic-entry checklist is
 [`DYNAMIC_TEST_GATE.md`](DYNAMIC_TEST_GATE.md). Any open static gate keeps the
 VM hard hold in force.
+
+## V301 SG-09 native callback-owner closure (offline)
+
+SG-09 is now `CLOSED-STATIC`; this is not evidence that a timer, IRQ or GPU has
+run safely on the hardware. The dual-payload inventory identifies the remaining
+raw-owner sources as Scheduler4's passive timer at `+0x448`, the event-machine
+fallback interrupt source at `+0xd30`, and the accelerator DPSM timer at
+`+0x1460`. The only PagePool factory and existing owner admission require
+options zero and `pool+0x64 == 0`, excluding its callback-backed mode on the VF
+path.
+
+Successful native start must now present all three source objects on the one
+`accelerator+0xf0` workloop before `registerService` can publish the
+accelerator. The event and periodic collections are sampled empty under the
+native scheduler mutex. During normal stop, native Intel code first completes
+stamps, stops the engine and removes/releases/clears the DPSM source. A new
+VF-scoped route at the exact inherited `IOGraphicsAccelerator2::stop` boundary
+then requires the external producer gate to be closed and drained, disables
+and synchronously removes the event fallback, and cancels and synchronously
+removes the periodic timer before base stop clears the workloop pointer. The
+source objects are not released by the route; the native owner free routines
+retain that responsibility. Collection/count state is verified under the
+native mutex both before removal and again after both gate drains, while the
+mutex is never held across workloop removal.
+
+The start-failure graph required two additional paths. The inherited base
+start may call its own stop before returning false, earlier than event fallback,
+engine and DPSM construction. Later Intel failures call the virtual Intel stop
+with a null provider, whose native body deliberately skips inherited base stop.
+Both paths now accept only zero-use partial bindings and detach any published
+fallback/periodic source while the workloop still exists. The separate DPSM
+allocation failure which bypasses native stop remains covered by V252's
+explicit live-engine rollback.
+
+Tahoe 25G229 Boot KC proves the synchronization mechanics used here:
+`removeEventSource` delegates through the workloop command gate to maintenance
+operation 1; detach calls `setWorkLoop(nullptr)` under that gate; timer disable
+increments the queued-call generation before cancel/cancel-wait. Consequently
+an already active action finishes before synchronous removal returns, while an
+old queued passive callout cannot invoke its raw owner after the generation
+change. Fifteen source mutations, 30 teardown orders, four active/queued timer
+states, both Intel payloads, the paired System/Boot KC contract and full static
+`/tmp/ngreen-static.uzHEFL` pass. The route inventory is 148 (124 accelerator,
+three framebuffer, 21 System KC). Clean commit/push/exact-SHA CI remain SG-12
+work; SG-10 and SG-11 still prohibit VM, deployment, PCI/sysfs/VF/PF and Host
+i915 operations.
 
 ## V300 SG-08 allocation/event/result closure (offline)
 
@@ -66,8 +112,10 @@ V300 adds eight result-boundary mutations, compiled exact-ABI symbol plus source
 forwarding checks, the exact 35-call inventory, and raises the route inventory
 to 147 (124 accelerator, three framebuffer and 20 System KC). The complete
 offline suite passed at `/tmp/ngreen-static.a0ic6Y`. Clean commit, push and
-exact-SHA CI remain SG-12 work. SG-09 through SG-11 still prohibit any VM,
-kext deployment, PCI/sysfs/VF/PF or Host i915 operation.
+exact-SHA CI `37227125652` for commit
+`a02245bab1d57148d0684eea0860c1c563a0759e` also passed. At that checkpoint
+SG-09 through SG-11 still prohibited any VM, kext deployment, PCI/sysfs/VF/PF
+or Host i915 operation.
 
 ## V299 SG-07 completion integration (offline)
 
