@@ -353,8 +353,13 @@ def verify_dependency_closure():
     members = subprocess.check_output(
         ar + ["t", archive], cwd=ROOT, text=True
     ).splitlines()
-    assert members == ["c_start.o", "c_stop.o"], (
-        f"linked libkmod member set changed: {members}"
+    metadata = [member for member in members if member.startswith("__.SYMDEF")]
+    objects = [member for member in members if not member.startswith("__.SYMDEF")]
+    assert set(metadata) <= {"__.SYMDEF", "__.SYMDEF SORTED"}, (
+        f"linked libkmod archive metadata changed: {metadata}"
+    )
+    assert objects == ["c_start.o", "c_stop.o"], (
+        f"linked libkmod object member set changed: {objects}"
     )
     symbols = product_symbol_surface()
     return dependencies, len(includes), len(symbols["external"])
