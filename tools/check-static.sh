@@ -58,6 +58,14 @@ else
     failed=1
 fi
 git diff --check || failed=1
+if "$compiler" -std=c++14 -Wall -Wextra -Werror -fsanitize=address,undefined \
+    tools/vf_command_pool_constructor_prototype_test.cpp \
+    -o "$task_output/pool-constructor-prototype-test" && \
+    "$task_output/pool-constructor-prototype-test"; then
+    printf 'PASS offline pool constructor design prototype (not production)\n'
+else
+    failed=1
+fi
 if python3 -B tools/host_vf_containment_contract_test.py; then
     printf 'PASS offline host VF containment contracts\n'
 else

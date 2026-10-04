@@ -6955,6 +6955,22 @@ No executable patch or runtime mutation.
 
 ### Update fanout must participate in the same owner transaction
 
+#### Offline constructor policy prototype, not a native patch
+
+`tools/vf_command_pool_constructor_prototype_test.cpp` implements the
+bounded design with a mock native callback: admitted VF clears only pool
+record1860, calls init once, and returns false before optional backing
+on init failure. Selected outer factory owns the single release. PF keeps
+the native ignored-status continuation and receives no record write.
+Four VF/PF × success/failure cases run with dirty initial bytes and verify
+the entire pool byte array for unintended writes. ASan/UBSan and strict
+warnings pass. The prototype is included in check-static.sh but is NOT
+linked into the kext, installed, or claimed as native failure emulation.
+It does not cover backing failure, native partial mutations, or DMA.
+Next implement native instruction/callback ABI validation and failure
+injection before promoting any production constructor guard; runtime pool
+selection remains an independent unrepaired hazard.
+
 #### Zone fulfillment audit changes the constructor repair strategy
 
 Local XNU12377.121.6 complete zalloc_ext, zalloc_return,
