@@ -6961,6 +6961,27 @@ No executable patch or runtime mutation.
 
 ###### Complete waitForSpace reservation and failure ordering
 
+Complete 64-bit PPGTT free ccfa/1d4 and inherited private/base page-table
+free wrappers 12c82/12 and 14028/12 are now reviewed/pinned. The concrete
+64-bit free slot +0x90 is pinned. When the root exists, free walks 512-entry
+hierarchy records, resets counts and zeroes software child-record arrays,
+then invokes the already-reviewed shrinkLevel variants for leaf, directory,
+pointer and root levels. A shared-marker branch skips leaf traversal, preserving
+that separate ownership distinction. Four software memset imports are pinned;
+zero-displacement calls are not interpreted as self-calls.
+
+There is no local GuC invalidation/acknowledgement before these shrink calls
+and final descriptor returns. The inherited wrappers merely delegate free
+through their base vtables; selected bodies do not add a drain. Outer task/
+context shutdown and other inherited ownership still require proof, so this
+is not a claim that normal task destruction demonstrably frees live GPU pages.
+It does establish a separate destruction path bypassing releaseRange: a
+collector only scoped around manager range-unmap would not cover it. Physical
+page clearing by pool return and software metadata clearing here are distinct;
+retained descriptor records/parent ownership must survive whichever defer
+strategy is chosen. No production/runtime change. Next: stable final-destruction
+admission and shared descriptor references, then implement scoped retirement.
+
 Complete IGAccelTask::free 7d4a/e8 is now reviewed/pinned. It first invokes
 scheduler releaseSemaphoreWaitBuffers, releases/clears owned fields +0x280,
 +0x288 and +0x278, then releases/clears private page table +0x260 before calling
