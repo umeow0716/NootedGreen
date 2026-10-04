@@ -1,14 +1,23 @@
-# Source-review coverage — closed-static
+# Source-review coverage — local-pass / CI-pending
 
-The user's all-program-file source-review baseline is closed for the exact
-source/tool checkpoint recorded below.  This is static review, not hardware
-validation; dynamic work still requires the separate containment preflight
-and a successful current-HEAD check.
+The user's all-program-file source-review baseline is complete locally for the
+current worktree.  This is static review, not hardware validation; dynamic work
+still requires a clean pushed exact-SHA CI and the separate containment
+preflight.
 
 The current dynamic-entry gate table is
 [`DYNAMIC_TEST_GATE.md`](DYNAMIC_TEST_GATE.md); every open row is blocking.
 
 ## Scope
+
+2026-10-05 V303 containment-contract correction: a real libvirt define dry run
+proved that watchdog `action=destroy` does not exist.  The failed define left
+the persistent domain unchanged.  The reviewed first-run contract now requires
+zero guest watchdog devices and retains the independent host monotonic deadline
+as the only timeout authority; poweroff, reboot and crash lifecycle policies
+remain one-shot `destroy`.  The updated source contract, shell syntax and full
+static suite `/tmp/ngreen-static.2kQrmU` pass locally.  Clean checkpoint and
+exact-SHA CI are pending, so the dynamic hold remains in force.
 
 2026-10-05 SG-11 ledger progress: the current fail-closed inventory covers
 exactly 1,500 repository paths.  It partitions all 68 tool paths into 50

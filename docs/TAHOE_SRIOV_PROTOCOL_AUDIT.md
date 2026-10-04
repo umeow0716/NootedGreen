@@ -1,7 +1,7 @@
 # Tahoe SR-IOV protocol audit — in progress
 
 Updated: 2026-10-05. The last dynamic source baseline is `ce166c8`; the current
-offline-reviewed worktree is V302 SG-10 negative-reachability integration on
+offline-reviewed worktree is V303 containment-contract correction on
 `codex/tahoe-sriov-vf`. This is NOT a boot-test candidate or a successful
 driver baseline. The `ce166c8` run produced repeatable host PF DMAR faults
 followed by i915 hangs and a host reboot. Keep `macos-tahoe-sriov` shut off until the
@@ -20,6 +20,20 @@ KVMFR/client transport remains the intended receiving side.
 The authoritative dynamic-entry checklist is
 [`DYNAMIC_TEST_GATE.md`](DYNAMIC_TEST_GATE.md). Any open static gate keeps the
 VM hard hold in force.
+
+## V303 guest-watchdog containment correction (offline)
+
+- A real inactive-domain define attempt rejected `watchdog action='destroy'`:
+  libvirt does not implement that action.  Because validation failed before
+  define, the persistent VM XML remained unchanged and the VM stayed off.
+- The first contained-run contract now requires zero guest watchdog devices.
+  This removes every reset/restart path from that device class; the independent
+  systemd monotonic host deadline remains the only timeout authority.  All
+  poweroff/reboot/crash lifecycle policies still have to be `destroy`.
+- The preflight and its offline source contract were updated together.  Shell
+  syntax, targeted containment tests and full static
+  `/tmp/ngreen-static.2kQrmU` pass.  A clean pushed checkpoint and exact-SHA CI
+  remain required before the persistent XML may be changed or the VM started.
 
 ## V302 SG-10 raw BAR0 negative-reachability closure (offline)
 
@@ -3048,8 +3062,10 @@ remain open obligations. No dynamic safety claim or driver route change follows.
 ## V254 fail-closed host containment gate (offline)
 
 - The canonical root preflight is read-only and hard-codes the only admitted
-  domain, PF and VF. It requires the domain off with no autostart/managed save,
-  all poweroff/reboot/crash actions and the guest watchdog set to `destroy`,
+  domain, PF and VF. The original V254 text required a nonexistent libvirt
+  watchdog `destroy` action; V303 corrects that fail-closed defect by requiring
+  no guest watchdog at all. It requires the domain off with no autostart/managed
+  save, all poweroff/reboot/crash actions set to `destroy`,
   exact Intel `8086:a7a8` identities and i915/vfio-pci bindings, one VF,
   distinct IOMMU groups, no surviving QEMU, authoritative current-boot kernel
   journal access and zero configured PF DMAR/i915 triggers. Missing privilege or

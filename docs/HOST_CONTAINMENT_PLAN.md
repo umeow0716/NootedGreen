@@ -37,13 +37,13 @@ binary, build and protocol validation is permitted.
    retained native bootstrap and stop lifecycles. The complete offline suite and
    native macOS build/link must pass at that exact commit.
 3. Use a disposable libvirt XML checkpoint with autostart disabled, no managed
-   save, and all three lifecycle policies set to one-shot behavior:
+   save, no emulated guest watchdog, and all three lifecycle policies set to one-shot behavior:
    `<on_poweroff>destroy</on_poweroff>`, `<on_reboot>destroy</on_reboot>` and
-   `<on_crash>destroy</on_crash>`. The emulated watchdog action must also be
-   `destroy`, never `reset`; otherwise a guest reboot, panic or watchdog event
-   can silently exercise the VF for a second time. Confirm the effective live
-   XML before the run and restore the reviewed persistent XML after evidence
-   capture.
+   `<on_crash>destroy</on_crash>`. Libvirt has no `destroy` watchdog action;
+   keeping the current `reset` watchdog could silently exercise the VF for a
+   second time. The first run therefore removes the guest watchdog entirely and
+   relies on the independent host deadline below. Confirm the effective live
+   XML before the run and restore the reviewed persistent XML after evidence capture.
 4. Hold a host sleep inhibitor before VM start and through the full post-stop
    cooldown. The previous incident entered suspend after the PF hang and then
    logged VF pause timeout/ENOMEM, so suspend must not overlap a VF test.
@@ -58,8 +58,8 @@ binary, build and protocol validation is permitted.
    bounded deadline that the domain is off. It must preserve all logs and must
    not automatically start a second run.
 7. A separate monotonic deadline must destroy the domain even when no trigger
-   appears. Guest watchdog, SSH and serial output are evidence channels; none
-   replaces this host-side deadline.
+   appears. SSH and serial output are evidence channels; neither replaces this
+   host-side deadline.
 8. After every stop, verify there is no surviving QEMU process, the VF remains
    bound to vfio-pci, the PF remains bound to i915, `sriov_numvfs` remains 1,
    the PF answers read-only health queries, and no new DMAR/i915 fault appeared

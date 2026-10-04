@@ -56,7 +56,9 @@ def main() -> None:
     require(preflight, "on_poweroff == destroy", "poweroff one-shot check")
     require(preflight, "on_reboot == destroy", "reboot one-shot check")
     require(preflight, "on_crash == destroy", "crash one-shot check")
-    require(preflight, "watchdog_action == destroy", "watchdog one-shot check")
+    require(preflight, "watchdog_count == 0", "guest-watchdog absence check")
+    require(preflight, "host deadline is the only timeout authority",
+            "host-only timeout authority")
     require(preflight, "journalctl -k -b", "current-boot journal gate")
     require(preflight, '((EUID == 0))', "root journal gate")
 
