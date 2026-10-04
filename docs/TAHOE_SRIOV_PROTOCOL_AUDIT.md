@@ -6955,6 +6955,28 @@ No executable patch or runtime mutation.
 
 ### Update fanout must participate in the same owner transaction
 
+Concrete task reference acquisition (2026-10-04): native IGAccelTask vtable
+object slots +0x18/+0x20/+0x48 import OSObject getRetainCount/retain/taggedRetain
+at 0xca608/0xca610/0xca638, now verified in both payloads. Complete paired
+Boot bodies are reviewed/pinned: getRetainCount reads low 16 bits at object
++8; retain dispatches object +0x48 with null tag; taggedRetain performs a
+retrying locked compare/exchange on the 32-bit count at +8 and has special
+terminal-count handling (return or diagnostic panic), not a pointer-validity
+or resurrection API. The existing native task release's count-one test and
+owned-context cleanup were revisited only; no additional whole-body review
+credit is claimed for that already-pinned function.
+
+A prospective task lease can use the concrete inherited retain API only
+while a real owner/outer mutex proves the pointer is live. Reading a raw list
+pointer, dropping exclusion, then retaining it permits destruction between
+lookup and count access. Likewise one task retain does not itself retain a
+shared manager's page pool or independently stabilize every raw managed-table
+node. The collector must acquire all relevant owners inside proven admission,
+hold them through matching invalidation completion and release in proven
+dependency order. These are integration obligations, not an installed runtime
+collector or DMA proof. Next: table/pool owner retention and coverage of final
+release/destruction entry points. VM containment remains unchanged.
+
 Task-list teardown and selected observer (2026-10-04): complete inherited
 IOAccelTask::free 0x14b9df3e/0x144 reviewed/pinned. It walks existing mapping
 collections, performs mapping virtual cleanup, releases supplied allocator

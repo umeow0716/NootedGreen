@@ -7,6 +7,12 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 task reference acquisition: complete Boot OSObject retain (0x10),
+getRetainCount (0x10), taggedRetain (0x70) reviewed/pinned; concrete native task
+virtual imports checked. Atomic count update presupposes live object ownership,
+not a borrowed-pointer validity check. Existing native task release revisited,
+not new complete-body review. Outer lifetime/admission still unimplemented.
+
 2026-10-04 task-list destruction/observer: complete base task free (0x144),
 TaskList removeTask (0x9a), accelerator freeAllGPUMappings (0xba) reviewed/
 pinned. Native private-table teardown precedes base raw-list unlink. Selected

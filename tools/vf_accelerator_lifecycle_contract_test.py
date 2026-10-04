@@ -600,6 +600,9 @@ def macho_inventory(path):
     }
     observed_stamp_irq_imports = {address: [] for address in stamp_irq_imports}
     event_stop_imports = {
+        0xca608: "__ZNK8OSObject14getRetainCountEv",
+        0xca610: "__ZNK8OSObject6retainEv",
+        0xca638: "__ZNK8OSObject12taggedRetainEPKv",
         0xdb7e0: "__ZN24IOAccelSharedUserClient25startEP9IOService",
         0xc81c8: "__ZTV24IOAccelSharedUserClient2",
         0xd1920: "__ZN22IOGraphicsAccelerator212createSharedEP4task",

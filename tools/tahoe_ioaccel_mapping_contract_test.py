@@ -351,6 +351,9 @@ def check_boot_atomic(system, path):
                                    b"__ZN18IOTimerEventSource14setTimeoutFuncEv")}
     symbols[b"__ZN18IOTimerEventSource11setWorkLoopEP10IOWorkLoop"] = []
     symbols[b"__ZTV8OSObject"] = []
+    for name in (b"__ZNK8OSObject6retainEv", b"__ZNK8OSObject14getRetainCountEv",
+                 b"__ZNK8OSObject12taggedRetainEPKv"):
+        symbols[name] = []
     for name in (b"__ZTV12IODMACommand", b"__ZTV25IOGeneralMemoryDescriptor",
                  b"__ZN12IODMACommand12cloneCommandEPv",
                  b"__ZN12IODMACommand14initWithRefConEPv",
@@ -418,6 +421,9 @@ def check_boot_atomic(system, path):
         return boot[matches[0]:matches[0] + length]
 
     for name, length, digest in (
+            (b"__ZNK8OSObject6retainEv", 0x10, "2be2f61d85bc0c7c51b0311f2501c1cfbe395d0681c6dc3939845f0b1f202649"),
+            (b"__ZNK8OSObject14getRetainCountEv", 0x10, "d6251a4bc32d01d7a1fb85ec1b3e34cc197988eb3d24141855bd27976d51cc1a"),
+            (b"__ZNK8OSObject12taggedRetainEPKv", 0x70, "df3131032cc056d05c27ffc14ef8f87960a1b087906110491d9b835a503e9b7c"),
             (b"__ZN8OSObjectnwEm", 0x30, "ede18fc0e04e045546d27a1994374beec6c7e3849165336ef54e69b03ae6c8fc"),
             (b"__ZN8OSObjectC2EPK11OSMetaClass", 0x20, "3bff5fda79db9a259910ce7c7bd2abc320e4f802db12952733c6cd5172127e8c"),
             (b"__ZNK11OSMetaClass19instanceConstructedEv", 0x30, "7da7d572ec33568cb147606982d6f62b83c2cdc233e7a1cfe4315de6703918c7"),
