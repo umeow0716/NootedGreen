@@ -6961,6 +6961,32 @@ No executable patch or runtime mutation.
 
 ###### Complete waitForSpace reservation and failure ordering
 
+Complete waitTimeout 41aa4/106 and three waitForSpace block predicates are
+now reviewed/pinned. The first predicate begins at 41baa, not 41bab (which
+omits its push instruction); its complete length is 0x13. The other lengths
+are 0x16 and 0x17. Predicates respectively test head > tail (unsigned),
+required bytes + 8 > head (unsigned), and free bytes < requirement (signed).
+They observe ring geometry, not a particular invalidation completion token.
+
+waitTimeout initially evaluates the predicate and returns zero if already
+satisfied. Otherwise it uses assert_wait_timeout/event plus thread_block,
+adds 0x186a0 per iteration, rereads masked head/free bytes, and reevaluates.
+The comparison threshold is 0x12a05f200 or 0x746a528800 depending on accelerator
++0x1190 bit 5. The counter is nominal per-iteration accounting, not a fresh
+wall-clock comparison. Scheduler delay, recovery and downstream blocking are
+not bounded by that comparison alone; do not describe this as a hard deadline.
+
+If the predicate remains true at the threshold, it records mach_absolute_time,
+dispatches accelerator +0x1250 object's virtual +0x150 with engine ID, and
+conditionally invokes ring recovery 43886. A subsequent ring +0x94 threshold
+can branch to cold helper 90a72; recovery/cold bodies and effective receiver
+vtable remain pending. Returning paths add recovery-time delta to the counter
+and return that amount, without a local final predicate check or boolean
+failure status. Thus waitForSpace's later true is not independently proof that
+requested capacity was obtained after recovery. Caller/recovery postconditions
+must supply that proof before any repair changes readiness or backing lifetime.
+Imported waits/time calls are pinned, not misread as self-calls. No runtime change.
+
 The full symbol-bounded waitForSpace 416c8/3d0 body has now been reviewed and
 pinned, superseding the earlier partial-window scope. It adds native overhead
 to requested dwords, checks pending engine bits, dispatches +0x150 for TLB

@@ -9,6 +9,10 @@ import sys
 # Complete reviewed native bodies. This fixes the concrete Intel override
 # graph, not inherited timer APIs, dynamic callbacks or runtime completion.
 STAMP_IRQ_NATIVE = {
+    "__ZN20IGHardwareRingBuffer11waitTimeoutEU13block_pointerFbvE": (0x106, "caa2ccd4ce6a411ac4daa58d3b037dd5a561a418c8169e0b824d30a04bc8e1fb"),
+    "____ZN20IGHardwareRingBuffer12waitForSpaceEj_block_invoke": (0x13, "4b735a005272c87b450984233e364446d5611e1f76d63b4ca057ea5d7b54c946"),
+    "____ZN20IGHardwareRingBuffer12waitForSpaceEj_block_invoke_2": (0x16, "53c7f4d2d02474e67d709ce68249d2d01e9989720f65936f8df3e9d2ba563d46"),
+    "____ZN20IGHardwareRingBuffer12waitForSpaceEj_block_invoke_3": (0x17, "6b36cfc2db80a58536fcdce6fbc358f83b3358b33da57e50ad59816a9f339554"),
     "__ZN20IGHardwareRingBuffer12waitForSpaceEj": (0x3d0, "6de374e33ab0cb73879b30e9102f651e2236371295f9575df7aba524d6cddc18"),
     "__ZN20IGHardwareRingBuffer16getFlushTLBSpaceEv": (0x20, "371c66eaa0eb7f33572bfeca005edcd13b44d6cb1f1cb2f8a92b3baa8bbb5c26"),
     "__ZN27IGHardwareRingBufferCompute16getFlushTLBSpaceEv": (0x20, "e60720b063a6a465489f7c5594d97f92c14bfe0122ae41a6bcea00d8fb66f380"),
@@ -457,6 +461,8 @@ def macho_inventory(path):
     # These imports distinguish the periodic collection mutex from bridge
     # descriptor spin locks. They do not certify dynamic callback lifetime.
     stamp_irq_imports = {
+        0x41b06: "_assert_wait_timeout", 0x41b0d: "_thread_block",
+        0x41b54: "_mach_absolute_time", 0x41b89: "_mach_absolute_time",
         0xe27e: "_IOMalloc", 0xe297: "_memset",
         0xa720: "__ZN8OSObjectC2EPK11OSMetaClass",
         0xa7c3: "__ZN8OSObjectnwEm", 0xa7d8: "__ZN8OSObjectC2EPK11OSMetaClass",
