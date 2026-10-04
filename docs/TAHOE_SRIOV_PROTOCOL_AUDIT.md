@@ -6955,6 +6955,36 @@ No executable patch or runtime mutation.
 
 ### Update fanout must participate in the same owner transaction
 
+Event-pair destruction follow-up (2026-10-04): complete Resource2::free
+0x14b86478/0x41c is now reviewed and fixture-pinned. For nonnull mapping +0x40
+it calls remove_resource at 0x14b86588 and mapping release at 0x14b86594,
+clearing +0x40 before reaching the event-pair branch. At 0x14b86753 it reads
++0x90, skips null, clears that field before typed free through 0x101f2;
+paired import 0x24298 resolves to Boot `_IOFreeTypeImpl`. The body has no
+local lock or direct event-completion wait, but its virtual/type-specific
+callees and outer destruction serialization have not been certified. This
+is not a reproduced UAF. A deferred event snapshot cannot establish safety
+by retaining an event address alone: resource/mapping owners and admission
+must be stabilized before destruction can reach these releases. No runtime
+hook has been installed and the independent pre-zero PPGTT blocker remains.
+
+The complete mapping remove_resource callee 0x14bb79c2/0x5e was also reviewed
+and pinned. It searches mapping +0xa0's raw resource-pointer array using count
++0xb0, decrements count only on a match, then compacts following entries; an
+absent resource leaves count unchanged. It neither retains/releases resources
+nor acquires a lock or waits for an event. Therefore removal from this array
+is not itself an event lease or a completion barrier. Caller/outer lifetime
+serialization remains required; the subsequent mapping release is separate.
+
+Allocator-policy clarification: local XNU kalloc_type_impl_external explicitly
+applies Z_KPI_MASK in both zone and heap branches, consistent with the reviewed
+Boot mask instruction. That mask excludes Z_NOFAIL. zalloc.h documents that
+Z_WAITOK never fails for a non-exhaustible zone, but an exhaustible zone may
+fail at its limit. Thus neither the high-level typed-wrapper NOFAIL request
+nor its loss at the KPI establishes selected-callsite null reachability.
+Runtime typed-view fixups, selected zone/heap and its exhaustion policy remain
+to be proven; do not add a speculative initializer repair on this evidence.
+
 Resource event-pair producer follow-up (2026-10-04): the complete SystemKC
 Resource2::initialize at 0x14b88c08 (0x33e, fixture-pinned) sets flag +0xf bit
 0x10 for NewResourceArgs bit 12, stores the allocation at +0x90, and initializes

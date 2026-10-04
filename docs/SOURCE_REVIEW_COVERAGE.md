@@ -7,6 +7,14 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 event storage destruction: complete Resource2::free reviewed/pinned
+(0x41c), including all selected type branches and corruption exits. Mapping
+remove_resource and release precede event-pair clear/typed free. Free import
+identity and clear-before-free bytes checked; outer serialization, callees'
+event drain and retained-owner implementation are not proven by this body.
+Complete mapping remove_resource (0x5e) also reviewed/pinned: raw pointer array
+lookup, decrement and compaction only, no retain/release, lock or drain.
+
 2026-10-04 resource event-pair producer: complete Resource2 initialize body
 reviewed and pinned (0x33e); bit-12 mode sets resource flag before storing the
 typed allocation at +0x90 and initializing both events without a null branch.

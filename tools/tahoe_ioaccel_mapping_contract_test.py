@@ -35,6 +35,8 @@ EVENT_DISABLE_STAMP_LOCKED = "__ZN20IOAccelEventMachine223disable_stamp_interrup
 EVENT_ENABLE_STAMP = "__ZN20IOAccelEventMachine220enableStampInterruptEi"
 EVENT_DISABLE_STAMP = "__ZN20IOAccelEventMachine221disableStampInterruptEi"
 EVENT_OWNER_BODIES = {
+    "__ZN16IOAccelMemoryMap15remove_resourceEP16IOAccelResource2": (0x5e, "72e6f743a75a66e9d29bfa658f891e0c5c99e462a9fe3a740c44deef0eb068ea"),
+    "__ZN16IOAccelResource24freeEv": (0x41c, "ed792391afedafbd9924dc5d2bdc447d0b116644f8e5b2f34161398e982c79b4"),
     "__ZN16IOAccelResource210initializeEP22IOAccelNewResourceArgsy": (0x33e, "7d083706bf76b368690668e896e04d2f33c89bd906457e32e0699a283aa70c1a"),
     "__ZN16IOAccelResource210checkDirtyEv": (0x144, "9e26e53e3aa25e3a0d7c81a710ca44d4fb0a8081b31d186bb04566f618af5a64"),
     "__ZN16IOAccelResource212addToChannelEP15IOAccelChannel2j": (0x22a, "696a8c305a8d69ce7573addf9147eae02e4c4055bd231d9b433f88edec44631c"),
@@ -346,7 +348,7 @@ def check_boot_atomic(system, path):
                  b"__ZN12IODMACommand7prepareEyybb",
                  b"__ZN12IODMACommand21initWithSpecificationEPFbPS_NS_9Segment64EPvjEPKNS_14SegmentOptionsEjP8IOMapperS2_",
                  b"__ZN12IODMACommand16setSpecificationEPFbPS_NS_9Segment64EPvjEPKNS_14SegmentOptionsEjP8IOMapper",
-                 b"_kalloc_type_impl", b"_IOMallocTypeImpl", b"__ZN8IOMapper19waitForSystemMapperEv",
+                 b"_kalloc_type_impl", b"_IOMallocTypeImpl", b"_IOFreeTypeImpl", b"__ZN8IOMapper19waitForSystemMapperEv",
                  b"_lck_mtx_alloc_init",
                  b"__ZN12IODMACommand17withSpecificationEPFbPS_NS_9Segment64EPvjEhyNS_14MappingOptionsEyjP8IOMapperS2_",
                  b"__ZN12IODMACommand19setMemoryDescriptorEPK18IOMemoryDescriptorb",
@@ -477,6 +479,11 @@ def check_boot_atomic(system, path):
     assert stub == bytes.fromhex("ff 25 a8 40 01 00"), "changed resource typed allocation import stub"
     encoded = struct.unpack_from("<Q", system, 0x242b8)[0]
     assert (encoded >> 30) & 3 == 0 and bases[0] + (encoded & 0x3fffffff) == typed_allocator, "changed resource typed allocation import identity"
+    free_stub = system[0x101f2:0x101f8]
+    assert free_stub[0:2] == bytes.fromhex("ff 25") and 0x101f8 + struct.unpack_from("<i", free_stub, 2)[0] == 0x24298, "changed typed event-pair free stub"
+    encoded_free = struct.unpack_from("<Q", system, 0x24298)[0]
+    assert (encoded_free >> 30) & 3 == 0 and bases[0] + (encoded_free & 0x3fffffff) == symbols[b"_IOFreeTypeImpl"][0], "changed typed event-pair free import identity"
+    assert system[0x14b86753:0x14b86776] == bytes.fromhex("488bb3900000004885f6741748c7839000000000000000488d3d8f120600e87c9a48eb"), "changed resource event-pair clear-before-typed-free order"
     # This fixes allocator identity, not downstream zone no-failure policy.
     assert kernel_read(allocator + 9, 3) == bytes.fromhex("83 e2 07"), "changed external typed-allocation KPI flag mask"
     dma_free = symbols[b"__ZN12IODMACommand4freeEv"][0]
