@@ -24,6 +24,11 @@ binary, build and protocol validation is permitted.
 - No candidate kext/AuxKC may be installed or loaded, no VM may be started, no
   PCI driver may be rebound and no SR-IOV sysfs value may be written while this
   hold remains in force.
+- The host-crash image was found with one missing qcow2 data-cluster refcount.
+  A byte-identical sparse backup was preserved, `qemu-img check -r all`
+  rebuilt the original image's refcount structure, and a second read-only
+  check now reports zero errors.  Future preflight must reject any writable
+  qcow2 that fails its own read-only integrity check.
 
 ## Preconditions for a future controlled run
 
@@ -68,6 +73,10 @@ binary, build and protocol validation is permitted.
    the PF answers read-only health queries, and no new DMAR/i915 fault appeared
    during cooldown. If the PF does not recover, prohibit another run and perform
    only a deliberate user-visible host recovery/reboot.
+9. While the domain is off, enumerate every writable qcow2 from the effective
+   inactive XML and require `qemu-img check` to pass.  Do not boot a dirty or
+   structurally inconsistent image; preserve a byte-identical recovery copy
+   before any repair.
 
 The kill watcher and deadline must run independently of the Codex process and
 guest network. They may stop only the named libvirt domain; they must not rebind

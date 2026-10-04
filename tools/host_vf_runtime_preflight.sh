@@ -60,7 +60,7 @@ if (($# != 0)); then
 	exit 64
 fi
 
-for command_name in virsh xmllint journalctl systemd-inhibit readlink basename pgrep grep; do
+for command_name in virsh xmllint journalctl systemd-inhibit readlink basename pgrep grep qemu-img; do
 	need_command "$command_name"
 done
 
@@ -100,6 +100,7 @@ else
 	watchdog_model=$(xml_value '/domain/devices/watchdog/@model' "$domain_xml" || true)
 	watchdog_action=$(xml_value '/domain/devices/watchdog/@action' "$domain_xml" || true)
 	hostdev_count=$(xml_value 'count(/domain/devices/hostdev[@type="pci"]/source/address[@domain="0x0000" and @bus="0x00" and @slot="0x02" and @function="0x1"])' "$domain_xml" || true)
+	writable_qcow_count=$(xml_value 'count(/domain/devices/disk[@device="disk" and driver/@type="qcow2" and not(readonly)])' "$domain_xml" || true)
 
 	if [[ $on_poweroff == destroy && $on_reboot == destroy && $on_crash == destroy ]]; then
 		pass "libvirt poweroff/reboot/crash policies are one-shot destroy"
@@ -115,6 +116,20 @@ else
 		pass "domain contains exactly one ${vf_bdf} PCI hostdev source"
 	else
 		fail "domain must contain exactly one ${vf_bdf} PCI hostdev source (observed: ${hostdev_count:-unavailable})"
+	fi
+	if [[ $writable_qcow_count =~ ^[1-9][0-9]*$ ]]; then
+		for ((disk_index = 1; disk_index <= writable_qcow_count; disk_index++)); do
+			disk_path=$(xml_value "(/domain/devices/disk[@device='disk' and driver/@type='qcow2' and not(readonly)])[${disk_index}]/source/@file" "$domain_xml" || true)
+			if [[ $disk_path != /* || ! -f $disk_path || -L $disk_path ]]; then
+				fail "writable qcow2 source ${disk_index} is not an absolute regular non-symlink file: ${disk_path:-missing}"
+			elif qemu-img check --output=json "$disk_path" >/dev/null 2>&1; then
+				pass "writable qcow2 integrity passes: ${disk_path}"
+			else
+				fail "writable qcow2 integrity check failed: ${disk_path}"
+			fi
+		done
+	else
+		fail "domain must contain at least one writable qcow2 disk (observed: ${writable_qcow_count:-unavailable})"
 	fi
 fi
 

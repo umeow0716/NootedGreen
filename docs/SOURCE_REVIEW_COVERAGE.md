@@ -10,6 +10,16 @@ The current dynamic-entry gate table is
 
 ## Scope
 
+2026-10-05 V305 disk-integrity containment correction: a read-only pre-boot
+check found one missing data-cluster refcount in the system qcow2 (reported as
+two related corruptions).  A byte-identical sparse recovery copy was preserved
+before `qemu-img check -r all` rebuilt the original refcount structure; the
+repaired image now passes with zero check errors and no dirty flag.  The
+preflight now enumerates every writable qcow2 in the inactive XML and fails
+closed unless each read-only integrity check passes.  V305 source-contract and
+full-static `/tmp/ngreen-static.5M8IL1` pass locally; clean checkpoint and
+exact-SHA CI revalidation are pending, and the VM remains off.
+
 2026-10-05 V304 containment-contract correction: defining the V303
 watchdog-free XML showed that Q35/libvirt normalizes its integrated iTCO device
 back to `action='reset'`.  A separately generated candidate containing exactly
@@ -21,7 +31,9 @@ source-contract and full-static `/tmp/ngreen-static.kSsbt5` pass locally;
 clean checkpoint and exact-SHA CI are pending, so the dynamic hold remains in
 force.  V303's zero-watchdog rule is superseded by this evidence;
 its local suite `/tmp/ngreen-static.2kQrmU` and exact-SHA CI `37236513894`
-otherwise passed.
+otherwise passed.  Its exact-SHA CI `37237068929` also passed release kext,
+Metal smoke and both artifact uploads after retrying a transient GitHub
+CreateArtifact DNS `ENOTFOUND`; root current-boot preflight then passed.
 
 2026-10-05 SG-11 ledger progress: the current fail-closed inventory covers
 exactly 1,500 repository paths.  It partitions all 68 tool paths into 50

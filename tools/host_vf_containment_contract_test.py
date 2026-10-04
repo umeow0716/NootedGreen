@@ -61,6 +61,10 @@ def main() -> None:
     require(preflight, "watchdog_action == none", "inert watchdog action check")
     require(preflight, "host deadline is the only timeout authority",
             "host-only timeout authority")
+    require(preflight, 'driver/@type="qcow2" and not(readonly)',
+            "writable qcow2 inventory")
+    require(preflight, 'qemu-img check --output=json "$disk_path"',
+            "read-only qcow2 integrity gate")
     require(preflight, "journalctl -k -b", "current-boot journal gate")
     require(preflight, '((EUID == 0))', "root journal gate")
 

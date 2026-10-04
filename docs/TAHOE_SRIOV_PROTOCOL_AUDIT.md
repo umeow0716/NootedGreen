@@ -1,7 +1,7 @@
 # Tahoe SR-IOV protocol audit — in progress
 
 Updated: 2026-10-05. The last dynamic source baseline is `ce166c8`; the current
-offline-reviewed worktree is V304 containment-contract correction on
+offline-reviewed worktree is V305 disk-integrity containment correction on
 `codex/tahoe-sriov-vf`. This is NOT a boot-test candidate or a successful
 driver baseline. The `ce166c8` run produced repeatable host PF DMAR faults
 followed by i915 hangs and a host reboot. Keep `macos-tahoe-sriov` shut off until the
@@ -21,6 +21,20 @@ The authoritative dynamic-entry checklist is
 [`DYNAMIC_TEST_GATE.md`](DYNAMIC_TEST_GATE.md). Any open static gate keeps the
 VM hard hold in force.
 
+## V305 writable-qcow2 integrity correction (offline)
+
+- A read-only `qemu-img check` found one missing data-cluster refcount in the
+  system disk, reported as two related qcow2 corruptions.  This was residual
+  host-crash damage that the V304 preflight did not inspect; no VM was started.
+- A sparse recovery copy was preserved and verified byte-for-byte identical
+  before the original image's refcount structure was rebuilt.  The repaired
+  original now has zero check errors and no dirty flag; the untouched backup
+  retains the exact pre-repair state.
+- V305 makes every writable qcow2 named by the inactive XML pass a read-only
+  `qemu-img check`.  Source-contract and full-static
+  `/tmp/ngreen-static.5M8IL1` pass locally; clean checkpoint and exact-SHA CI
+  revalidation remain required before any maintenance or VF boot.
+
 ## V304 Q35 watchdog normalization correction (offline)
 
 - Defining V303's watchdog-free inactive XML succeeded, but Q35/libvirt
@@ -31,9 +45,11 @@ VM hard hold in force.
   count/model/action tuple a fail-closed preflight requirement.  This prevents
   watchdog expiry from resetting or restarting the guest; the independent
   systemd monotonic host deadline remains the only timeout authority.
-- V304 source-contract and full-static `/tmp/ngreen-static.kSsbt5` pass
-  locally.  A clean pushed checkpoint and exact-SHA CI revalidation remain
-  required before applying the inert watchdog XML or starting the VM.
+- V304 source-contract and full-static `/tmp/ngreen-static.kSsbt5` passed
+  locally; exact-SHA CI `37237068929` passed full static, release kext, Metal
+  smoke and both artifacts after a transient upload DNS retry.  The inert XML
+  was then applied and authoritative root current-boot preflight passed.  V305
+  disk-integrity revalidation still prohibits starting the VM.
 
 ## V303 guest-watchdog containment correction (superseded offline rule)
 
