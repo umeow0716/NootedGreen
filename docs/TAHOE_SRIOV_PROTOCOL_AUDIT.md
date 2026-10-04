@@ -6955,6 +6955,47 @@ No executable patch or runtime mutation.
 
 ### Update fanout must participate in the same owner transaction
 
+#### Additional pruning entry: private rotated PPGTT mapping
+
+Function-bounded decoded direct CALL/JMP discovery identified five selected
+entries to native 64-bit shrinkRange `0xd3fa`: ordinary map `0xd19e`, rotated
+map `0xd7e2`, unmap tail jump `0xdb18`, dummy map `0xdbec`, and descriptor map
+`0xdd58`. Regression checks now pin all five edges in both archived payloads.
+This does not exclude indirect, inlined, alias-derived or inherited entries.
+It establishes that wrapping only ordinary unmap would leave allocation
+rollback pruning outside the proposed retirement domain.
+
+Complete native private `mapRangeRotated` `0xd6ca/0x2cc` newly reviewed and
+hash-pinned, SHA-256
+`3b6131194a023eb7513ccbb26a210c5fa2288c4fc74d66723188a46887a1b11b`.
+This is distinct from the existing custom VF global/GGTT rotated mapper;
+that repair does not cover this private PPGTT method. It expands first;
+expansion failure shrinks at `0xd7e2` and returns false. On success it retains
+the input memory descriptor for two local iterator copies, walks physical
+segments and finds software leaf records through pageWalk3 `0xd874`.
+It writes the PTE and increments the leaf count at `0xd8ae..0xd8b5` before
+the unsigned division by iterator width at `0xd8de`. No local width-zero
+check precedes that division. Rotation arithmetic and clamping update the
+iterator cursor after the PTE store; caller geometry/preconditions remain
+unproved, so this is a conditional hazard, not a demonstrated live fault.
+
+If pageWalk3 returns false, `0xd915` sets BL to zero but flows onward through
+the segment-iterator advancement path, not an immediate cleanup return.
+A subsequent successfully completed physical segment can set BL back to one
+at `0xd911`; neither path explicitly undoes already-written PTEs. Reachability
+requires proving the relevant descriptor/segment and concurrent hierarchy
+conditions. The final result is BL masked to one bit. The body releases its
+local memory-descriptor references on normal completion, but contains no
+GPU invalidation acknowledgement before pruning or return. A CPU descriptor
+retain does not certify the lifetime of hardware page-table pages.
+
+Both native payload contracts pass with the new complete-body fixture and
+selected store/divisor/result anchors. These preserve evidence of unrepaired
+behavior; they are not correctness tests for that behavior. No production
+hook or runtime operation. Next: include rollback pruning in the transaction
+owner graph, prove rotated caller geometry, and build prefix-rollback tests
+before replacing this method; retain the independent page/pool lifetime gate.
+
 #### Native PageTableMode provenance follow-up
 
 Re-read complete already-pinned task init `0x788c/0x1aa`, manager

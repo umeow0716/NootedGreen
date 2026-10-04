@@ -9,6 +9,7 @@ import sys
 # Complete reviewed native bodies. This fixes the concrete Intel override
 # graph, not inherited timer APIs, dynamic callbacks or runtime completion.
 STAMP_IRQ_NATIVE = {
+    "__ZN31IGHardwarePerProcessPageTable6415mapRangeRotatedER33IGAddressRangeRotatedPageIteratorR25IGPhysicalSegmentIteratory": (0x2cc, "3b6131194a023eb7513ccbb26a210c5fa2288c4fc74d66723188a46887a1b11b"),
     "__ZN15IGMemoryManager16initDeviceMemoryEv": (0x410, "bd63dc4bc1ab41493a9bd375699d29d377a83561aa5f85a59d167a5eb4bfa82d"),
     "__ZN15IGMemoryManager12initSegmentsEv": (0xb4, "b9cf1738915b0a609c085aec9f83a6f06322d87f24ea16c51918e46063915cad"),
     "__ZN31IGHardwarePerProcessPageTable3210unmapRangeERK14IGAddressRange": (0x8a, "62cbf1c6629858563f2c06351cf8643f3c1541773f4e3b1fc038027efda7a586"),
@@ -751,6 +752,19 @@ def macho_inventory(path):
     assert image[0x7dbd:0x7dcf] == bytes.fromhex("48 8b bb 60 02 00 00 48 85 ff 74 06 48 8b 07 ff 50 28"), f"{path}: changed private page-table release before list cleanup"
     assert direct_branches("__ZN15IGMemoryManager27releaseFromPageTableForTaskEP11IGAccelTaskP16IGAccelMemoryMap", "__ZN19IGHardwarePageTable12releaseRangeERK14IGAddressRange") == [0xf74e], f"{path}: changed task fan-out release edge"
     assert image[0xf753:0xf75f] == bytes.fromhex("41 20 c7 48 8b 5b 08 48 85 db 75 e9"), f"{path}: changed non-short-circuit task page-table release loop"
+    shrink_range = "__ZN31IGHardwarePerProcessPageTable6411shrinkRangeERK14IGAddressRange"
+    for caller, address in (
+            ("__ZN31IGHardwarePerProcessPageTable648mapRangeERK14IGAddressRangeyy", 0xd19e),
+            ("__ZN31IGHardwarePerProcessPageTable6415mapRangeRotatedER33IGAddressRangeRotatedPageIteratorR25IGPhysicalSegmentIteratory", 0xd7e2),
+            ("__ZN31IGHardwarePerProcessPageTable6410unmapRangeERK14IGAddressRange", 0xdb18),
+            ("__ZN31IGHardwarePerProcessPageTable6413mapRangeDummyERK14IGAddressRangey", 0xdbec),
+            ("__ZN31IGHardwarePerProcessPageTable6421mapDescriptorForRangeERK14IGAddressRangePN10IGPagePool14PageDescriptorE", 0xdd58)):
+        assert direct_branches(caller, shrink_range) == [address], f"{path}: changed selected PPGTT pruning entry: {caller}"
+    for address, encoded in ((0xd8ae, "4889141966ff4010"),
+                             (0xd8dc, "31d241f774240c"),
+                             (0xd915, "31db"), (0xd911, "b301eb02")):
+        expected = bytes.fromhex(encoded)
+        assert image[address:address + len(expected)] == expected, f"{path}: changed archived rotated PPGTT store/divisor/result anchor at {address:#x}"
     shrink_leaf = "__ZN31IGHardwarePerProcessPageTable6411shrinkLevelINS_10LevelEntryILm9E17GTTPageTableEntryEENS1_ILm9E21GTTPageDirectoryEntryEEEEbRT_yPT0_ym"
     assert direct_branches(shrink_leaf, "__ZN10IGPagePool14PageDescriptor7releaseEv") == [0xcf1b], f"{path}: changed pruned-table descriptor release edge"
     assert direct_branches("__ZN10IGPagePool14PageDescriptor7releaseEv", "__ZN10IGPagePool11releasePageEPKNS_14PageDescriptorE") == [0xbb7d], f"{path}: changed final-reference pool retirement edge"

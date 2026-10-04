@@ -7,6 +7,13 @@ audit's runtime blockers are open.
 
 ## Scope
 
+New complete native-body review: private 64-bit PPGTT mapRangeRotated
+`0xd6ca/0x2cc`, now hash-pinned in both payloads. Selected five direct
+shrinkRange entries also pinned; decoded discovery is not an all-entry proof.
+Conditional rotated width/prefix/result hazards and allocation-rollback
+retirement coverage are recorded in the protocol audit. Existing VF GGTT
+rotation repair does not cover private PPGTT; no production repair claimed.
+
 Native PageTableMode provenance: re-read complete already-pinned task init,
 manager initDeviceMemory and getter, and checked selected factory instructions.
 Added exact policy/data-flow/property anchors to both archived native payload
