@@ -129,6 +129,8 @@ STAMP_IRQ_NATIVE = {
     "__ZN15IGMemoryManager22updatePageTableForTaskEP11IGAccelTaskP16IGAccelMemoryMap": (0x11a, "9b574d3a8f1ae07327da68f84f4eb99a08e8ea154a596f723ae7f558ffdf46a2"),
     "__ZN16IGAccelMemoryMap18updateGPUPageTableEv": (0x140, "75ba5674583a8d27d54acab18290e78bbc9de8157b19bfc6614c379d39fa3fbc"),
     "__ZN16IGAccelMemoryMap15updateCacheTypeEj": (0x24, "0c704192e43ed19c39a2179ea6e80551a07af30a8a541016a913f3d9572516f8"),
+    "__ZN15IGAccelResource22updateMappingCacheTypeEj": (0x30, "499c98e59e89b29b95b7d14247a756db3f980b5f58134dcf2c49c3baf5db97bf"),
+    "__ZN19IGAccelVideoContext30updateResourceMappingCacheTypeEP15IGAccelResource": (0x24, "91ca56bc8ad407f81ad7472060497e0ddb88b32259389dba252e9c29890d9d02"),
     "__ZN19IGHardwarePageTable11updateRangeERK14IGAddressRangePK16IGAccelMemoryMap": (0x3c4, "7bd38a56c02637892a4672882eed36a3bea60b0b6ee6017982a0760713713b92"),
     "__ZN19IGHardwarePageTable11commitRangeERK14IGAddressRangePK16IGAccelMemoryMap": (0x41c, "e063629df4a8d16d85cf3d1b599c036372c0763b560a6a35289d488d80ac410a"),
     "__ZN15IGMemoryManager26commitIntoPageTableForTaskEP11IGAccelTaskP16IGAccelMemoryMap": (0x11a, "a433c1af43e1fbac1d82da400c6ec1857881e6385c07019d782441fe209713d1"),
@@ -714,6 +716,8 @@ def macho_inventory(path):
     assert image[0x148d6:0x148db] == b"\xe8" + struct.pack("<i", 0x2d1d8 - 0x148db), f"{path}: changed update flush notification edge"
     resource_table = value("__ZTV15IGAccelResource")
     map_table = value("__ZTV16IGAccelMemoryMap")
+    assert direct_branches("__ZN15IGAccelResource22updateMappingCacheTypeEj", "__ZN16IGAccelMemoryMap15updateCacheTypeEj") == [0x751cf], f"{path}: changed resource cache update edge"
+    assert direct_branches("__ZN19IGAccelVideoContext30updateResourceMappingCacheTypeEP15IGAccelResource", "__ZN15IGAccelResource22updateMappingCacheTypeEj") == [0x78105], f"{path}: changed video resource cache update edge"
     assert struct.unpack_from("<Q", image, map_table + 16 + 0x180)[0] == value("__ZN16IGAccelMemoryMap18updateGPUPageTableEv"), f"{path}: changed mapping update virtual"
     assert direct_branches("__ZN16IGAccelMemoryMap18updateGPUPageTableEv", "__ZN15IGMemoryManager22updatePageTableForTaskEP11IGAccelTaskP16IGAccelMemoryMap") == [0x114f5], f"{path}: changed mapping update manager edge"
     assert image[0x115a8:0x115ae] == bytes.fromhex("89 b7 14 01 00 00"), f"{path}: changed pre-update cache-type store"

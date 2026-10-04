@@ -7,6 +7,13 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 resource cache update: two complete small resource/video wrappers
+reviewed and pinned. Resource flag update precedes borrowed mapping dispatch;
+video capability-gated wrapper requests cache type 1. No local retain/lock or
+failure recovery. Function-bounded inventory is required: linear text decoding
+can stop on invalid bytes. Larger blit/video parser callers are NOT whole-reviewed
+by this checkpoint; outer synchronization remains open.
+
 2026-10-04 mapping update caller: two additional complete native bodies and
 declared +0x180 dispatch pinned. Cache-type software field changes before an
 installed mapping's update; local caller has no failure restoration. Mapping

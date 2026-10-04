@@ -6955,6 +6955,24 @@ No executable patch or runtime mutation.
 
 ### Update fanout must participate in the same owner transaction
 
+Resource follow-up: complete updateMappingCacheType at 0x751a6 (0x30)
+sets resource +0x108 bits 25..26 from requested type & 3 before borrowing
+mapping +0x40. Non-null mapping tail-calls updateCacheType at 0x751cf;
+null mapping returns with resource flags changed. Complete video-context
+updateResourceMappingCacheType at 0x780e6 (0x24) tests accelerator +0x1184
+bit 0 through context +0x5a8, then tail-calls resource update with type 1 at
+0x78105. Neither body locally retains/locks owners or handles a failed update.
+Both full bodies and tail edges are pinned; effective outer admission remains
+unproven. Resource flags must also participate in eventual rollback consistency.
+
+Exploratory whole-text Capstone decoding stopped at invalid bytes, so its empty
+cache-caller result was discarded, not used as absence evidence. Repeated
+function-bounded scanning found the resource tail edge and additional blit/video
+callers. Large caller disassembly output was truncated; those bodies are NOT
+claimed as wholly reviewed. Same-offset indirect calls on unrelated classes
+are not classified as mapping dispatch without receiver identity proof.
+No production changes or dynamic GPU test this checkpoint.
+
 Follow-up: reviewed complete IGAccelMemoryMap::updateGPUPageTable at 0x11444
 (0x140) and updateCacheType at 0x1159c (0x24); pinned both payloads, declared
 mapping virtual +0x180, manager direct edge 0x114f5 and cache-store/tail-dispatch
