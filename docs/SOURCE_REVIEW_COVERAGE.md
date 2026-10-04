@@ -7,6 +7,10 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 empty-state cleanup predicate implemented/tested (39 offline states).
+Not integrated into deletion hook: resource emptiness does not prove exclusive
+factory ownership/no escape or GPU retirement. Actual admission remains pending.
+
 2026-10-04 base destructor bookkeeping: complete Boot OSObjectD2/instanceDestructed
 pinned; no second derived cleanup. Sized delete leads to kfree_ext, whose nearest
 span mixes unnamed helpers and remains incompletely reviewed. Do not infer full

@@ -33,7 +33,32 @@ static void verify(const char *path)
 	std::vector<uint8_t> image((std::istreambuf_iterator<char>(stream)), {});
 	using namespace NGVfGuCFactoryPatch;
 	using namespace NGVfPagePoolPatch;
+	const FailedFactoryState emptyPool {0x1000, 0x2000, 0, 0, 0, 0, 0x1030, 0, 0, 0, 0};
+	assert(failedFactoryStateIsEmpty(emptyPool));
+	for (unsigned mask = 1; mask < 32; ++mask) {
+		auto state = emptyPool;
+		state.queue = (mask & 1) ? 0x3000 : 0;
+		state.freeHead = (mask & 2) ? 0x4000 : 0;
+		state.interruptSource = (mask & 4) ? 0x5000 : 0;
+		state.timerSource = (mask & 8) ? 0x6000 : 0;
+		state.lock = (mask & 16) ? 0x7000 : 0;
+		assert(!failedFactoryStateIsEmpty(state));
+	}
+	for (unsigned mutation = 0; mutation < 7; ++mutation) {
+		auto state = emptyPool;
+		switch (mutation) {
+			case 0: state.object = 0; break;
+			case 1: state.object = UINTPTR_MAX - 0x20; break;
+			case 2: state.accelerator = 0; break;
+			case 3: state.availablePages = 1; break;
+			case 4: state.nextPageId = 1; break;
+			case 5: state.freeTail = 0; break;
+			case 6: state.timerScheduled = 1; break;
+		}
+		assert(!failedFactoryStateIsEmpty(state));
+	}
 	std::vector<uint8_t> poolBody(image.begin() + 0xed9e, image.begin() + 0xee6a);
+	std::printf("PASS: 39 empty-owned-state cases (not ownership/DMA proof) in %s\n", path);
 	assert(prefixUnwindPreflight(poolBody.data(), poolBody.size()));
 	assert(!prefixUnwindPreflight(nullptr, poolBody.size()));
 	assert(!prefixUnwindPreflight(poolBody.data(), poolBody.size() - 1));

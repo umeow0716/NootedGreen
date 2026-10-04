@@ -46,6 +46,28 @@ constexpr uint8_t releaseAfterFailedInitReplace[] = {
 } // namespace NGVfGuCFactoryPatch
 
 namespace NGVfPagePoolPatch {
+// Resource-state predicate only. Factory-exclusive ownership and the exact
+// native ABI must be established separately before deleting an object.
+struct FailedFactoryState {
+	uintptr_t object;
+	uintptr_t accelerator; // borrowed by the native pool, not retained
+	uint64_t availablePages;
+	uint64_t nextPageId;
+	uintptr_t queue;
+	uintptr_t freeHead;
+	uintptr_t freeTail;
+	uintptr_t interruptSource;
+	uintptr_t timerSource;
+	uint8_t timerScheduled;
+	uintptr_t lock;
+};
+inline bool failedFactoryStateIsEmpty(const FailedFactoryState &state) {
+	return state.object != 0 && state.object <= UINTPTR_MAX - 0x30 &&
+		state.accelerator != 0 && state.availablePages == 0 && state.nextPageId == 0 &&
+		state.queue == 0 && state.freeHead == 0 && state.freeTail == state.object + 0x30 &&
+		state.interruptSource == 0 && state.timerSource == 0 && state.timerScheduled == 0 &&
+		state.lock == 0;
+}
 // initPagePool has created [0, RBX); RBX is the failed factory index.
 // Pre-decrement before the first access, then descend through zero. A plain
 // INC-to-DEC replacement would still skip the first successfully created pool.

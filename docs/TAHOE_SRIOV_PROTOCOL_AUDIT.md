@@ -6393,6 +6393,26 @@ callback admission must be proved elsewhere. No executable patch/runtime test.
 
 ######### Factory failed-init release cannot blindly use pool free
 
+Implemented `NGVfPagePoolPatch::failedFactoryStateIsEmpty` as an explicit
+resource-state predicate for future failed-construction cleanup. It requires
+nonzero object/borrowed accelerator, zero available pages/page-ID count, null
+queue/free-list head/interrupt/timer/lock, cleared scheduled flag, and the empty
+free-list tail pointing to object+0x30 with checked pointer arithmetic. It does
+not mutate fields or release anything, and is NOT integrated into a hook yet.
+It intentionally does not claim factory-exclusive ownership, reference-count
+validity, absence of escapes or GPU quiescence; those must be established at
+the actual entrypoint before base deletion can be authorized.
+
+ASan/UBSan tests for both payloads cover the valid empty state, all 31 nonempty
+combinations of five owned pointer fields and seven invalid scalar/list/owner/
+overflow states (39 cases), alongside existing prefix-unwind mutation tests and
+4097 index cases. No new failed-init release behavior is enabled by this helper.
+
+Full tools/check-static.sh exit0, diagnostics /tmp/ngreen-static.gUoMsZ (two
+existing TargetConditionals macro warnings), including the new cases for both
+payloads. Diff-check passes; 981abe4 CI37165426168 success. No deployment,
+VM start, PCI/Host GPU operation or hardware acceleration proof.
+
 Complete Boot KC OSObjectD2 (0x10) and OSMetaClass::instanceDestructed (0x90)
 reviewed/pinned with next-symbol boundaries. D2 overwrites vptr with -1 and
 returns; no derived pool cleanup or second free dispatch. instanceDestructed
