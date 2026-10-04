@@ -6393,6 +6393,25 @@ callback admission must be proved elsewhere. No executable patch/runtime test.
 
 ######### Factory failed-init release cannot blindly use pool free
 
+Complete Boot KC OSObjectD2 (0x10) and OSMetaClass::instanceDestructed (0x90)
+reviewed/pinned with next-symbol boundaries. D2 overwrites vptr with -1 and
+returns; no derived pool cleanup or second free dispatch. instanceDestructed
+atomically decrements class instance count, recursively updates superclass only
+on zero, and emits an error path if count is negative. It is class bookkeeping,
+not pool ownership, descriptor or GPU retirement accounting. Base free's
+getMetaClass virtual and this direct call must preserve valid class construction
+counts before deletion; they do not justify deleting an escaped live object.
+
+Exploratory nearest-symbol span for OSObject free was 0x280, but its reviewed
+wrapper is only the existing 0x30 window ending at an unnamed subsequent body.
+Do NOT claim the entire 0x280 as one free method. Sized delete's reviewed 0x40
+wrapper calls kfree_ext at 0xffffff8000369a30 with object pointer/size; its nearest
+0x340 span also includes unnamed internal helpers/multiple return paths. Only
+exploratory decoding was performed there, with truncated output; allocator
+callee coverage remains incomplete and no complete-body pin is added for it.
+This correct boundary accounting prevents a synthetic all-callee safety claim.
+No production patch or runtime action in this checkpoint.
+
 Complete pool D2/D1/D0 bodies (0xa/0xa/0x22) reviewed/pinned with external
 destructor/delete relocations and effective vtable targets. D1/D2 tail-call
 OSObjectD2 through relocation placeholders; they do NOT call the next local

@@ -7,6 +7,11 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 base destructor bookkeeping: complete Boot OSObjectD2/instanceDestructed
+pinned; no second derived cleanup. Sized delete leads to kfree_ext, whose nearest
+span mixes unnamed helpers and remains incompletely reviewed. Do not infer full
+deletion/allocator coverage from the existing small wrapper checks.
+
 2026-10-04 pool deletion ABI: complete D2/D1/D0 plus imports/vtable pinned.
 Deleting destructor only delegates base destructor/sized delete (0x78), not
 owned-resource cleanup. A failed-init base-free bypass needs empty-owned-state
