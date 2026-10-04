@@ -7,6 +7,12 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 event-result semantics: existing full merge body re-read; final AL
+queries aggregate completion, not merge-error status. Two native barrier/finish
+wrapper bodies newly pinned with effective imports. Fallback waits aggregate,
+not all stamps; 0x2b indexes statistics. Missing pre-merge events remain uncovered.
+No new driver patch; effective event admission/owner serialization still pending.
+
 2026-10-04 implemented VF CCS null repair: 34-byte bounded setup rewrite enters
 verified false cleanup on null, preserves successful vector/r12 and neighbours.
 Exact start/end, zero-state and cleanup preflight required. Full offline suite

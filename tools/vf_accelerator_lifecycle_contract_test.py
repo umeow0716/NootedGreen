@@ -130,6 +130,8 @@ STAMP_IRQ_NATIVE = {
     "__ZN16IGAccelMemoryMap18updateGPUPageTableEv": (0x140, "75ba5674583a8d27d54acab18290e78bbc9de8157b19bfc6614c379d39fa3fbc"),
     "__ZN16IGAccelMemoryMap15updateCacheTypeEj": (0x24, "0c704192e43ed19c39a2179ea6e80551a07af30a8a541016a913f3d9572516f8"),
     "__ZN15IGAccelResource22updateMappingCacheTypeEj": (0x30, "499c98e59e89b29b95b7d14247a756db3f980b5f58134dcf2c49c3baf5db97bf"),
+    "__ZN16IntelAccelerator20barrierForWaitEventsEbP18IGAccelFIFOChannel": (0x52, "1714d3e9be9868c3c9db6a8bd6cb8a2e8f3fc83a9acf2c82ba8e9f2d72ff57d8"),
+    "__ZN19IGAccelEventMachine11finishEventEP12IOAccelEventj": (0x70, "897fdb00bbbe43b901ca0af633003863b20d2e1b2e16646bfece3bb92d6a9850"),
     "__ZN15IGAccelResource16submitCCSResolveEPNS_17ResourceInfoEntryER16IntelAcceleratorP11IGAccelTask20EIntelCCSResolveTypehh": (0x554, "a10208dea187f2099cf0deab208c392b50c600d292f2604d6fffea3b7aacc528"),
     "__ZN16IntelAccelerator16submitCCSResolveEP15IGAccelResourceP22color_resolve_params_tRK8IGVectorI11blit_rect_t25IGIOMallocAllocatorPolicyEP11IGAccelTask": (0x2b0, "66bb41fb30a7dbf3b678fbae69ddb8b72a5f825b96042ce1a643eaf13c54c6c0"),
     "__ZN19IGAccelVideoContext30updateResourceMappingCacheTypeEP15IGAccelResource": (0x24, "91ca56bc8ad407f81ad7472060497e0ddb88b32259389dba252e9c29890d9d02"),
@@ -502,6 +504,7 @@ def macho_inventory(path):
     # These imports distinguish the periodic collection mutex from bridge
     # descriptor spin locks. They do not certify dynamic callback lifetime.
     stamp_irq_imports = {
+        0x15ec9: "__ZN16IOSimpleReporter14incrementValueEyx",
         0x73c16: "_IOMalloc",
         0x73ed3: "_IOFree",
         0x73eef: "_IOFree",
@@ -567,6 +570,9 @@ def macho_inventory(path):
     }
     observed_stamp_irq_imports = {address: [] for address in stamp_irq_imports}
     event_stop_imports = {
+        0xc81b8: "__ZTV24IOAccelEventMachineFast2",
+        0xcebd0: "__ZN24IOAccelEventMachineFast219mergeEventExcludingEP12IOAccelEventS1_i",
+        0xcebf8: "__ZN24IOAccelEventMachineFast224writeEventBarrierCommandEP17IOAccelEventQueueP12IOAccelEventP17vendevtBarrierReci",
         0xc81a8: "__ZTV22IOGraphicsAccelerator2",
         0xd65c0: "__ZN15IOAccelChannel213setEventStampEP12IOAccelEvent",
         0xc8240: "_real_ncpus",  # Pool count is a linked kernel datum, not zero.
@@ -735,6 +741,10 @@ def macho_inventory(path):
     assert image[0x148d6:0x148db] == b"\xe8" + struct.pack("<i", 0x2d1d8 - 0x148db), f"{path}: changed update flush notification edge"
     resource_table = value("__ZTV15IGAccelResource")
     map_table = value("__ZTV16IGAccelMemoryMap")
+    wait_barrier = "__ZN16IntelAccelerator20barrierForWaitEventsEbP18IGAccelFIFOChannel"
+    assert image[0x2bc25:0x2bc2b] == bytes.fromhex("ff 90 f0 01 00 00"), f"{path}: changed event-barrier packet virtual"
+    assert image[0x2bc2b:0x2bc2f] == bytes.fromhex("84 c0 74 05"), f"{path}: changed event-barrier emission fallback"
+    assert direct_branches(wait_barrier, "__ZN19IGAccelEventMachine11finishEventEP12IOAccelEventj") == [0x2bc47], f"{path}: changed wait-barrier aggregate-event fallback"
     ccs_submit = "__ZN16IntelAccelerator16submitCCSResolveEP15IGAccelResourceP22color_resolve_params_tRK8IGVectorI11blit_rect_t25IGIOMallocAllocatorPolicyEP11IGAccelTask"
     ccs_resource = "__ZN15IGAccelResource16submitCCSResolveEPNS_17ResourceInfoEntryER16IntelAcceleratorP11IGAccelTask20EIntelCCSResolveTypehh"
     assert direct_branches(ccs_resource, ccs_submit) == [0x73e99], f"{path}: changed resource CCS submission edge"

@@ -1305,6 +1305,7 @@ def check(path, boot_path=None):
         "35a836d5773e442205b5f415e658630d2e643ed364a39bb800312d48b424345c", "changed restart_channel"
     assert hashlib.sha256(read(address_of(EVENT_MERGE_EXCLUDING), 0x1d4)).hexdigest() == \
         "20517fccc05f6ca02f2e15867e6b55ef6ec21ab7872f14a5abd9410bd8b8b4d8", "changed mergeEventExcluding"
+    assert read(address_of(EVENT_MERGE_EXCLUDING) + 0x1bb, 9) == bytes.fromhex("48 89 de ff 90 90 01 00 00"), "changed merged destination completion query (not merge-error status)"
     assert hashlib.sha256(read(address_of(EVENT_SET_STAMP), 0x9e)).hexdigest() == \
         "6240e1c9918181dd5d32c49d5fe01dab22e7705dc0d4d1d94b1e7189d8c8c995", "changed setEventStamp"
     wait = read(address_of(EVENT_WAIT), 0x34)

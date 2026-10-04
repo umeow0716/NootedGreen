@@ -6955,6 +6955,31 @@ No executable patch or runtime mutation.
 
 ### Update fanout must participate in the same owner transaction
 
+Event-result semantics follow-up: re-read the already pinned complete Tahoe
+Fast2::mergeEventExcluding (0x1d4). Its final call at 0x14b96798 is virtual
++0x190 testEvent on the DESTINATION aggregate, after the source's eligible
+stamps were merged. Return false therefore means that aggregate is not yet
+complete, NOT that merging failed. Added an epilogue anchor to retain this
+distinction. The last merge completion query includes earlier aggregate
+members; do not introduce a Boolean failure accumulator from those AL values.
+This does not recover source events silently omitted before merging.
+
+Reviewed/pinned barrierForWaitEvents (0x52) and the selected finishEvent
+instrumentation wrapper (0x70), plus imported merge/barrier/base-vtable/reporter
+identities in both payloads. When aggregate completion is false, the barrier
+helper invokes event-machine +0x1f0 to emit an event barrier; false emission
+tail-calls finishEvent on aggregate accelerator +0x11e8. Target 0x15e90 is
+finishEvent, NOT finishAllStamps. Its third argument 0x2b is a statistics
+bucket: wrapper invokes base Fast2 header-table +0x198 (object slot +0x188),
+then IOSimpleReporter::incrementValue and bucket accounting. It is NOT a
+channel mask or independent whole-device quiescence. This effective graph
+corrects the exploratory target assumption before any production change.
+
+Only events admitted to the aggregate are covered; allocation-skipped events
+are not magically recovered by this fallback. The existing Fast2 completion
+termination bypass and outer task/table lifetime obligations also remain open.
+Targeted native and paired-KC contracts pass; no production/runtime change.
+
 Implemented bounded VF CCS rectangle-null repair (not deployed): the exact
 34-byte result-setup block at 0x73c1a now uses a near JE to 0x73f13, retains
 the allocation pointer and r12 on success, and stores byte 1 into count/capacity
