@@ -6955,6 +6955,47 @@ No executable patch or runtime mutation.
 
 ### Update fanout must participate in the same owner transaction
 
+#### Command-pool index selection can fail without caller-visible status
+
+New complete KC review/pin: setBufferCurrentIndex `0x14b6b13a/0x182`,
+SHA-256 `5cf69325a1d3fe2e3f09751af5ec3b3eece1542d255c6b04411d348e40c2f033`.
+Re-read already-pinned map testEvent/finishEvent wrappers; no new body credit.
+The selected pool helper creates a missing mapping for its requested slot,
+allocates VA when needed, tries task allocation recovery on failure, then
+prepares the mapping and may use accelerator preparation recovery. Only
+the successful path completes the prior current mapping and publishes the
+requested index at pool `+0x1842` (`0x14b6b204`). Failure paths clear/release
+the candidate mapping and log, or just log absent factory output, without
+publishing the new index or returning a failure status. It is a void ABI.
+
+Previously reviewed pool submitBuffer calls this helper at `0x14b6b4b8`,
+then rereads current index and mapping. If the mapping event test is false
+it may grow or call mapping finishEvent, then resets CPU cursors using that
+current slot's CPU backing. There is no caller-visible selection-success
+check at this boundary. If a distinct requested slot failed, the old current
+slot can remain selected after being submitted; whether reuse becomes unsafe
+depends on effective event completion, retained mapping/backing, configuration
+and caller admission. This is a proven conditional control-flow gap, not a
+reproduced current-VF corruption or the cause of the historical Host reboot.
+
+Map testEvent tail-dispatches event-machine `+0x190`; finishEvent tail-
+dispatches `+0x188` on mapping event storage. These are the existing event
+mechanisms, not an independently sequenced GuC TLB invalidation request.
+Their completion/error policy must be considered before claiming subsequent
+buffer reuse safe. The selection helper supplies no local lock or GPU ACK.
+Current owner/layout and outer synchronization still need proof for a
+VF-specific failure postcondition guard. A void wrapper must not return
+normally after failed selection if its caller would continue writing; blanket
+PF changes or guessed success output are not a valid substitute. Any guest
+fail-stop guard remains containment, not proof of Host DMA quiescence, and
+would not lift the runtime hold.
+
+Paired-KC tests pin the new full body, index publication and candidate clear
+anchors, plus selection/testEvent/finishEvent caller edges. They pass. No
+production/runtime change. Next inspect the pool's exact owner/init/layout
+and all selection callers before implementing a bounded VF failure guard;
+retain the separate page-table retirement and full-goal requirements.
+
 #### Display command submission crosses the shared command-buffer pool
 
 New complete native reviews/pins: DisplayPipe submitCommands

@@ -7,6 +7,12 @@ audit's runtime blockers are open.
 
 ## Scope
 
+New complete paired-KC review: pool setBufferCurrentIndex `0x14b6b13a/0x182`.
+Existing map event wrappers revisited without new credit. Index publication,
+failed candidate cleanup and caller reuse/event edges pinned; selected void
+failure propagation gap remains conditional on actual configuration/lifetime.
+Pool owner/init/serialization proof needed before a VF postcondition guard.
+
 New complete native reviews: display submitCommands `0x8076c/0x12e` and
 displayReadRegister32 `0x7ecb6/0x64`; new paired-KC pool setBufferPtr
 `0x14b6b550/0xe`, submitBuffer `0x14b6b3ca/0x186`. Whole hashes/imports

@@ -35,6 +35,7 @@ EVENT_DISABLE_STAMP_LOCKED = "__ZN20IOAccelEventMachine223disable_stamp_interrup
 EVENT_ENABLE_STAMP = "__ZN20IOAccelEventMachine220enableStampInterruptEi"
 EVENT_DISABLE_STAMP = "__ZN20IOAccelEventMachine221disableStampInterruptEi"
 EVENT_OWNER_BODIES = {
+    "__ZN25IOAccelCommandBufferPool221setBufferCurrentIndexEs": (0x182, "5cf69325a1d3fe2e3f09751af5ec3b3eece1542d255c6b04411d348e40c2f033"),
     "__ZN25IOAccelCommandBufferPool212setBufferPtrEPj": (0xe, "966161046c4b88de4a6eebbb532da658c7a201330fb194055973f8af790dd35f"),
     "__ZN25IOAccelCommandBufferPool212submitBufferEv": (0x186, "148ea39a6e655b0db0ef181a37165ebd35bb92ab0bf72607001484e420697602"),
     "__ZN18IOAccelDisplayPipe38set_current_plane_ioSurfaceDeviceCacheEP12IOAccelEventjjP20IOSurfaceDeviceCache": (0x21a, "8beabc3abe7e423ff49dacf19daa96567c69e70b727205ae1db92b8b4ed10ce5"),
@@ -1238,6 +1239,17 @@ def check(path, boot_path=None):
                              (0x14bb3396, "84 c0 74 5f")):
         expected = bytes.fromhex(encoded)
         assert read(address, len(expected)) == expected, "changed plane-cache prepare/complete lifecycle anchor"
+    for call, method in ((0x14b6b4b8, "__ZN25IOAccelCommandBufferPool221setBufferCurrentIndexEs"),
+                         (0x14b6b4d3, "__ZN16IOAccelMemoryMap9testEventEv"),
+                         (0x14b6b50e, "__ZN16IOAccelMemoryMap11finishEventEv")):
+        encoded = read(call, 5)
+        assert encoded[0] == 0xe8 and call + 5 + struct.unpack_from("<i", encoded, 1)[0] == address_of(method), "changed command-pool selection/reuse-event edge"
+    for address, encoded in ((0x14b6b204, "66 41 89 9e 42 18 00 00"),
+                             (0x14b6b21b, "49 c7 47 08 00 00 00 00"),
+                             (0x14b6b280, "49 c7 47 08 00 00 00 00"),
+                             (0x14b6b51f, "48 8b 44 c3 40")):
+        expected = bytes.fromhex(encoded)
+        assert read(address, len(expected)) == expected, "changed command-pool current-index publication/failure cleanup anchor"
     assert read(0x14bb1134, 6) == bytes.fromhex("ff 90 a0 08 00 00"), "changed transaction argument validation dispatch"
     assert read(0x14bb0607, 15) == bytes.fromhex("85 c0 74 0b 41 89 c4 89 43 58 e9 83 00 00 00"), "changed validation error preservation before queue cleanup"
     assert read(0x14bb061e, 6) == bytes.fromhex("41 89 c4 89 43 58"), "changed transaction preparation result preservation"
