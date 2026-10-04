@@ -703,11 +703,14 @@ def macho_inventory(path):
             event_stop_imports[value(table) + 16 + slot] = method
     observed_event_stop_imports = {address: [] for address in event_stop_imports}
     external_relocation_offsets = set()
+    pool_getter_imports = {}
     for index in range(external_count):
         address, bits = struct.unpack_from(
             "<iI", image, external_offset + index * 8)
         symbol_index = bits & 0xFFFFFF
         external_relocation_offsets.add(address)
+        if names[symbol_index] == "__ZN25IOAccelCommandBufferPool217getBufferPtrNoIncEj":
+            pool_getter_imports.setdefault(address, []).append(bits >> 24)
         if address in observed_event_stop_imports:
             observed_event_stop_imports[address].append((names[symbol_index], bits >> 24))
         if address in observed_stamp_irq_imports:
@@ -769,6 +772,13 @@ def macho_inventory(path):
         return direct_branch_candidates(image, owner_start, owner_end,
                                         target_start, external_relocation_offsets)
 
+    # Decoded imported-call argument windows, not whole caller proofs.
+    for call, expected in (
+            (0x30688, 12), (0x30be0, 12), (0x31127, 9),
+            (0x31ba7, 0x3ffe), (0x8cb85, 2)):
+        assert image[call - 5:call] == b"\xbe" + struct.pack("<I", expected), f"{path}: changed selected pool request size"
+        assert image[call] == 0xe8, f"{path}: changed pool getter call opcode"
+        assert pool_getter_imports.get(call + 1) == [0x2d], f"{path}: changed pool getter import"
     for backing_name, backing_address, backing_bytes in (
             ("_g7_resolve_scratch_space_size", 0xc26c0, 0x5100),
             ("_blit3d_scratch_space_size", 0xb0c40, 0xd240)):

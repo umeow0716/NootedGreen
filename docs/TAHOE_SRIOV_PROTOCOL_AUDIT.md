@@ -6955,6 +6955,26 @@ No executable patch or runtime mutation.
 
 ### Update fanout must participate in the same owner transaction
 
+#### Native getter callsite request discovery bounds the oversize inference
+
+Function-bounded decoding plus external relocation inventory found12 native
+getter imports. Five immediate request windows now checked in both images:
+2D source/fast copy12 dwords at30688/30be0, color fill9 at31127,
+Blit3D init3ffe at31ba7, and CCS2 at8cb85. Each check includes ESI immediate,
+call opcode and unique branch relocation2d to the getter, not a guessed
+local target from unresolved E8 displacement. Blit3D request3ffe*4=65528
+exactly matches initialized64KiB minus reserved8; the fixed2D requests fit
+its4096-8 capacity. Thus the earlier injected4KiB oversize cases cannot be
+claimed reachable from these fixed callsites.
+
+Remaining dynamic request windows: rect-list33caf uses r12>>2; three
+generateFlip calls and beginCommands80753 load pipe1330; HIZ85b16 and
+resolve-init8c20e derive (end-cursor)/4-2. These are discovery windows only,
+not complete caller-body review or proof of range validity/underflow.
+Next trace the dynamic producers and submit continuation. A pointer capacity
+guard remains defense-in-depth, but actual oversize reachability is still
+unproven and runtime selection failure remains independently reproduced.
+
 #### Pointer acquisition returns an undersized old buffer in injected cases
 
 After the generated runtime-growth failure, emulator executes the exact
