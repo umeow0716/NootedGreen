@@ -7,6 +7,11 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 pool deletion ABI: complete D2/D1/D0 plus imports/vtable pinned.
+Deleting destructor only delegates base destructor/sized delete (0x78), not
+owned-resource cleanup. A failed-init base-free bypass needs empty-owned-state
+preflight and callee/admission proof; no repair implemented in this checkpoint.
+
 2026-10-04 failed-init lock cleanup: four complete Boot KC bodies/boundaries and
 base-init virtual pinned. Spin-lock free cannot accept null; blanket factory
 release would break threaded failed-lock initialization. Partial-state cleanup

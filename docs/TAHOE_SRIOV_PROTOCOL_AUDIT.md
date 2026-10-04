@@ -6393,6 +6393,24 @@ callback admission must be proved elsewhere. No executable patch/runtime test.
 
 ######### Factory failed-init release cannot blindly use pool free
 
+Complete pool D2/D1/D0 bodies (0xa/0xa/0x22) reviewed/pinned with external
+destructor/delete relocations and effective vtable targets. D1/D2 tail-call
+OSObjectD2 through relocation placeholders; they do NOT call the next local
+function despite the zero displacement seen before linking. D0 calls OSObjectD2
+then sized OSObject delete with 0x78. Pool virtual free is separately at +0x90.
+The deleting destructor contains no queue/lock/backing cleanup.
+
+This narrows a potential failed-init leak repair: after an init failure, bypassing
+pool free via already resolved base OSObject free could delete the instance
+without the null-lock path ONLY when every owned queue/source/lock/backing field
+is demonstrably cleared and no object escaped. Such a repair needs explicit
+field-state preflight and the base destructor/delete callees' full review.
+It is not safe for a normal/live pool and has not been implemented here. The
+native factory's sole decoded init caller does not prove all indirect admission.
+Both native payload contracts/imports/vtable checks and diff-check pass;
+9b101b4 CI37165122377 success. Fixture/docs-only, no full-suite rerun and no
+production/runtime/Host GPU mutation in this checkpoint.
+
 Reviewed/pinned complete Tahoe Boot KC IOSimpleLockFree (0x50), lck_spin_free
 (0x50), lck_spin_destroy (0x30) and OSObject init (0x10), including exact
 next-symbol boundaries and effective OSObject init virtual. All three lock

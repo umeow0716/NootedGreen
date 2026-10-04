@@ -9,6 +9,9 @@ import sys
 # Complete reviewed native bodies. This fixes the concrete Intel override
 # graph, not inherited timer APIs, dynamic callbacks or runtime completion.
 STAMP_IRQ_NATIVE = {
+    "__ZN10IGPagePoolD2Ev": (0xa, "aafd66af2c321a1032ffdbaea51ef446e7df7cd4b20fe53e4fdf6af362acadb2"),
+    "__ZN10IGPagePoolD1Ev": (0xa, "aafd66af2c321a1032ffdbaea51ef446e7df7cd4b20fe53e4fdf6af362acadb2"),
+    "__ZN10IGPagePoolD0Ev": (0x22, "b405fb72aec724a6adf49da0d176239a1ad6a1c7fd78469f09e809bb4544e864"),
     "__ZN15IGMemoryManager19releaseDeviceMemoryEv": (0x46, "85eb115d6987c20d6b921fce637404510616ef4846cff455cc0c76cb43fa635c"),
     "__ZN15IGMemoryManager15releasePagePoolEv": (0x92, "d23b081e493b13dbe74745d7618b2b5c8122e7f0ad8ad6ecf7bde07f532e433c"),
     "__ZN15IGMemoryManager4initEP16IntelAcceleratorRK18IntelSharedMemInfoRK14_stolenMemInfo": (0x232, "4dec40e7229fc980e61dee463496e387f893fd06789f6841a5dafd5dff572347"),
@@ -433,6 +436,8 @@ def macho_inventory(path):
     # These imports distinguish the periodic collection mutex from bridge
     # descriptor spin locks. They do not certify dynamic callback lifetime.
     stamp_irq_imports = {
+        0xa73c: "__ZN8OSObjectD2Ev", 0xa746: "__ZN8OSObjectD2Ev",
+        0xa754: "__ZN8OSObjectD2Ev", 0xa767: "__ZN8OSObjectdlEPvm",
         0xbab2: "__ZN22IOInterruptEventSource20interruptEventSourceEP8OSObjectPFvS1_PS_iEP9IOServicei",
         0xbaca: "__ZN18IOTimerEventSource16timerEventSourceEP8OSObjectPFvS1_PS_E",
         0xb209: "__ZN24IOBufferMemoryDescriptor17inTaskWithOptionsEP4taskjmm",
@@ -524,7 +529,7 @@ def macho_inventory(path):
             relocations[name] = address
 
     for address, name in stamp_irq_imports.items():
-        opcode = 0xe9 if address == 0xb825 or (name in ("_IOLockUnlock", "_lck_spin_unlock") and address != 0x24773) else 0xe8
+        opcode = 0xe9 if address in (0xb825, 0xa73c, 0xa746, 0xa767) or (name in ("_IOLockUnlock", "_lck_spin_unlock") and address != 0x24773) else 0xe8
         if observed_stamp_irq_imports[address] != [(name, 0x2d)] or image[address - 1] != opcode:
             raise AssertionError(f"{path}: changed stamp IRQ imported call at {address:#x}")
 
@@ -538,6 +543,11 @@ def macho_inventory(path):
     for address, name in event_stop_imports.items():
         assert observed_event_stop_imports[address] == [(name, 0x0e)], \
             f"{path}: changed inherited event teardown virtual import"
+    pool_table = value("__ZTV10IGPagePool")
+    for slot, method in ((0, "__ZN10IGPagePoolD1Ev"),
+                         (8, "__ZN10IGPagePoolD0Ev"),
+                         (0x90, "__ZN10IGPagePool4freeEv")):
+        assert struct.unpack_from("<Q", image, pool_table + 16 + slot)[0] == value(method), f"{path}: changed pool deletion/free virtual target"
     for slot, address in ((0x158, 0xceb60), (0x268, 0xcec70)):
         assert value(EVENT_MACHINE_VTABLE) + 16 + slot == address, \
             f"{path}: inherited event teardown import moved outside effective vtable"
