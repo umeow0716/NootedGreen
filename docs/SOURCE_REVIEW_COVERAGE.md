@@ -10,6 +10,22 @@ The current dynamic-entry gate table is
 
 ## Scope
 
+2026-10-04 resource-root partition delta: all 104 executable calls using the
+five resource paging slot numbers are now an exact disjoint partition:
+57 admitted/control descendants, five retirement/teardown calls, eleven
+shared low-level bridge calls and 31 unrelated receivers. The contract also
+pins the registration sites and receiver ownership for the four non-user
+roots (display notification, GART collector, IOSurface device-cache control
+and KD first-flush), along with the complete display machine/pipe control
+bodies and their downstream paging edges. Both Intel payloads pin concrete
+display-mode will/did-change callbacks and their routed engine stop/start
+tails. The already pinned scheduler loaded-byte guard proves repeated display
+resume does not reconstruct GuC/CTB firmware. P7 is now `CLOSED-INVENTORY`;
+P8/P9 and SG-06–SG-11 remain open, so runtime is still prohibited. Targeted
+paired-KC and dual-payload contracts and the full static suite at
+`/tmp/ngreen-static.2nwIOR` pass; exact-SHA CI remains pending. No production
+route or hardware state changed.
+
 2026-10-04 inherited resource-paging delta: the Tahoe paired-KC contract now
 pins complete inherited resource load/unload/unpurge/linear-pageoff/CPU-lock/
 physical-offset bodies and selected surface, display, cache-control and KD

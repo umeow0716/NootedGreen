@@ -19,6 +19,9 @@ STAMP_IRQ_NATIVE = {
     "__ZN25IGHardwareExtendedContext4freeEv": (0x52, "3e2b482df8f8906d267905195831fb569ca59ea7276595efb8856f7b5ed3a3c2"),
     "__ZN21IGAccelDisplayMachine5startEP11IOPCIDevice": (0xb4, "ac2b4a8bee964444c8c07115c412e54f3ceb52f9ee79c180d5ff59ee6551ea37"),
     "__ZN21IGAccelDisplayMachine4initEP22IOGraphicsAccelerator2": (0x3e, "95f092b80ab27eeb73ca3b7db6c51d5521cc92d41216891c9cc97b39e07b29b7"),
+    "__ZN21IGAccelDisplayMachine21displayModeWillChangeEv": (0x12, "7e9b49099dbdeabe493de4e47cc138824798001111ae6176cfb96c3eba628621"),
+    "__ZN21IGAccelDisplayMachine20displayModeDidChangeEv": (0x12, "6bbbbd3a68e6749b6db4ce2edd42dfae6524642230e5dddb480613aa59c3d2f3"),
+    "__ZN11IGScheduler12initFirmwareEv": (0x40, "7b7e17350df2816f735401d6b838a0a844e6d41775bd8119ec5b9b09a6f458fe"),
     "__ZN16IntelAccelerator17newDisplayMachineEv": (0x18, "85573962cf46d6ac3247db3af4dc2eedc966c183fcb4e5f1949c4d918b6a4b2c"),
     "__ZN16IntelAccelerator14newDisplayPipeEv": (0x18, "aad5daa8b49e07ac625576c9a9bc8c2549abd61eba11f431d97772b7a342b3c5"),
     "__ZN25IGHardwareExtendedContext15initWithOptionsEP11IGAccelTaskRK31IGHardwareExtendedContextParams": (0xf4, "67dfb7530b4142f6a2186b617e396df18dcb46517e45ab2ce540a38c1cc20fd1"),
@@ -1523,7 +1526,9 @@ def macho_inventory(path):
     display_machine_table = value("__ZTV21IGAccelDisplayMachine")
     for slot, method in (
             (0x850, "__ZN21IGAccelDisplayMachine4initEP22IOGraphicsAccelerator2"),
-            (0x858, "__ZN21IGAccelDisplayMachine5startEP11IOPCIDevice")):
+            (0x858, "__ZN21IGAccelDisplayMachine5startEP11IOPCIDevice"),
+            (0x868, "__ZN21IGAccelDisplayMachine21displayModeWillChangeEv"),
+            (0x870, "__ZN21IGAccelDisplayMachine20displayModeDidChangeEv")):
         assert struct.unpack_from("<Q", image, display_machine_table + 16 + slot)[0] == value(method), \
             f"{path}: changed concrete display-machine virtual at {slot:#x}"
     assert image[value("__ZN21IGAccelDisplayMachine4initEP22IOGraphicsAccelerator2") + 0x10:
@@ -1533,6 +1538,15 @@ def macho_inventory(path):
               value("__ZN21IGAccelDisplayMachine5startEP11IOPCIDevice") + 0x1a] == \
         bytes.fromhex("ff 90 68 08 00 00"), \
         f"{path}: changed IG-to-legacy display-machine init/start delegation"
+    assert direct_branches(
+        "__ZN21IGAccelDisplayMachine21displayModeWillChangeEv",
+        "__ZN16IntelAccelerator18stopGraphicsEngineEv") == [
+            value("__ZN21IGAccelDisplayMachine21displayModeWillChangeEv") + 0xc] and \
+        direct_branches(
+            "__ZN21IGAccelDisplayMachine20displayModeDidChangeEv",
+            "__ZN16IntelAccelerator19startGraphicsEngineEv") == [
+                value("__ZN21IGAccelDisplayMachine20displayModeDidChangeEv") + 0xc], \
+        f"{path}: changed display-mode stop/start engine control edge"
     assert struct.unpack_from("<Q", image, value("__ZTV23IGAccelSharedUserClient") + 16 + 0x990)[0] == value("__ZN23IGAccelSharedUserClient11sharedStartEv"), f"{path}: changed concrete Shared-start virtual"
     for slot, name in ((0x998, "__ZN16IntelAccelerator17createUserGPUTaskEv"),
                        (0x9d0, "__ZN16IntelAccelerator19createKernelGPUTaskEv")):

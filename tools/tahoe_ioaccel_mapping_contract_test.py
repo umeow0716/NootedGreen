@@ -662,6 +662,8 @@ RESOURCE_PAGING_BODIES = {
         (0x36, "0c3d2f56e3af5dc08436bbc9070bd9ec98e3fbc401be7ad84cdb30b363e3f15c"),
     "__ZN18IOAccelDisplayPipe20displayModeDidChangeEv":
         (0x1a4, "d49ec6f742ecd2539309dead66526513d515f0934d74b0d4efd4b0350a566ebe"),
+    "__ZN24IOAccelLegacyDisplayPipe21displayModeWillChangeEv":
+        (0x7e, "331586042fa2c5606e036a55b91a93132b0c4ab1418a5e1187c98a8a1a55dd67"),
     "__ZN24IOAccelLegacyDisplayPipe20displayModeDidChangeEv":
         (0x254, "191f39b3628ccbd9f7b697d7bb993084aebb92d9a0318ad2ba8b75afe08409ae"),
     "__ZN18IOAccelDisplayPipe18wsaaWillEnterDeferEi":
@@ -670,6 +672,50 @@ RESOURCE_PAGING_BODIES = {
         (0x2b2, "6aecc25e82a8da01904fc0bc94b5e01852b26a52b8d9c09f2400547f154b8999"),
     "__ZN14IOAccelSurface20surface_lock_optionsE9eLockTypejP25IOAccelSurfaceInformationy":
         (0x43c, "596c382406f1dcf1472364b03272b11fc2356378a1e96defb6fc5437d3108433"),
+    "__ZN27IOAccelMemoryInfoUserClient5startEP9IOService":
+        (0x50, "70319ef24efe543bb227447962c8f2926abdbf22bb34dd3ecf56701df3674f12"),
+    "__ZN18IOAccelDisplayPipe22display_change_handlerEPvP13IOFramebufferiS0_":
+        (0x410, "62fe06fa92852756fb95efd54847ba84a740171e090bee460801dbcc8c0e3e00"),
+    "__ZN22IOGraphicsAccelerator223deviceCacheForIOSurfaceEP9IOSurfacej":
+        (0x134, "7f3ffd5740c0e649d8f41f614bbdf22ebf53edcea160ae3550bad5d9adde88d0"),
+    "__ZN22IOGraphicsAccelerator212oneTimeSetupEv":
+        (0x106, "90dbeebed8a7d20215a270c26ead5b003c79eceb08a8cb0343797a7ed1e27e62"),
+    "__ZN22IOGraphicsAccelerator219acceleratorFinalizeEv":
+        (0x30, "ccb417e4534182a8a4302902a733a57b0267faaa521b94d5aaf284d12ab05901"),
+    "__ZN21IOAccelDisplayMachine23display_mode_did_changeEj":
+        (0x1e4, "62a146e74693332913f38776f14872331df492c755ec7b1eaa7c5de98281b358"),
+    "__ZN21IOAccelDisplayMachine26framebuffer_will_power_offEj":
+        (0xa6, "6838dce61bcb8c594a47b288226201a66ac112744a1ac1128643e9e8ce285953"),
+    "__ZN21IOAccelDisplayMachine24framebuffer_did_power_onEj":
+        (0xa6, "982891589cee8d926ff49aaf106292a9a6f8524d556e6f01dfa892d66cd46d90"),
+    "__ZN21IOAccelDisplayMachine21wsaa_will_enter_deferEji":
+        (0xc8, "f89459ee63f9f67d92c060286befb001edc1175d157f9c1f87f74031e1920662"),
+    "__ZN21IOAccelDisplayMachine20wsaa_will_exit_deferEji":
+        (0xc8, "1886024d7f5d78161147688fbc36c0e6029da5d7210cf9b108f809dfcbbf3494"),
+    "__ZN21IOAccelDisplayMachine17system_will_sleepEv":
+        (0x36, "7aa7eb970dacfff23e471569593b3765d03fb5a919d5459ff859c829063b7296"),
+    "__ZN27IOAccelLegacyDisplayMachine23display_mode_did_changeEj":
+        (0x220, "688b51d9ef974c7754a50a7ee1c6ed0f4c1d54ff117e3afcf7d802bf07ca2504"),
+    "__ZN27IOAccelLegacyDisplayMachine26framebuffer_will_power_offEj":
+        (0x120, "c0c91fd8c4d83f4454161f7eee4b5cd1eb96c821a0e5557c40ba313b31352c89"),
+    "__ZN27IOAccelLegacyDisplayMachine24framebuffer_did_power_onEj":
+        (0x11a, "070e912a4c01032a7f17d0492536482d02ecf0ddb2ef82f9b10fddc67c34569b"),
+    "__ZN24IOAccelLegacyDisplayPipe20save_scanout_surfaceEv":
+        (0x38, "3908a7ddc5c22e8aa767dfc921a8dfda750ca5155d4dd7971dcef1cddd897952"),
+    "__ZN24IOAccelLegacyDisplayPipe23save_fullscreen_surfaceEv":
+        (0x1d4, "83c4d32b195342d6c1981d7393973505af79ca42d0f45d65e6ae0413270ae0c9"),
+    "__ZN24IOAccelLegacyDisplayPipe24framebuffer_did_power_onEv":
+        (0x5a, "999be24e952c9d1538b6654714fd9974b10825c3caadc1e4d0355d966cbc2a31"),
+    "__ZN24IOAccelLegacyDisplayPipe23restore_scanout_surfaceEv":
+        (0x30, "0bfa4c73bba0d21c81f630b59b6e78cc769e0b5a4d3d9669479a9293d080fd85"),
+    "__ZN24IOAccelLegacyDisplayPipe26restore_fullscreen_surfaceEv":
+        (0x60, "904439242aa5ead6512413863c63660d0fee9f026dab8969571d82e09824be9d"),
+    "__ZN18IOAccelDisplayPipe17wsaaWillExitDeferEi":
+        (0x11a, "38f19835b1fcd300b27d24b29729987e3fab6df6f974479212673736e07332a3"),
+    "__ZN18IOAccelDisplayPipe26framebuffer_will_power_offEv":
+        (0x3a, "e4634b01d2bacce413b19917267f65dfd12341800f1406e0fc2e2fd3e949e729"),
+    "__ZN18IOAccelDisplayPipe24framebuffer_did_power_onEv":
+        (0x18, "db558f4554d6c9cda5446f4b2e4c250083932b67b931a196470c32f7320e1489"),
 }
 
 # Every x86-64 indirect call [vtable + slot] in the executable segment.  The
@@ -709,6 +755,57 @@ RESOURCE_SLOT_CALL_SITES = {
         0x14b77193, 0x14b89761, 0x14b8b197, 0x14b8b448, 0x14b92fb7,
         0x14b92ff0, 0x14b93029, 0x14b93062, 0x14b9309b, 0x14b930d4,
         0x14b9f6e2, 0x14ba0e2f, 0x14ba1afc, 0x14ba7d88, 0x14ba7dee,
+        0x14ba7e64, 0x14bae559,
+    },
+}
+
+# Partition every numeric-slot call site above.  The first class is reached
+# only below an already inventoried external selector or one of the four
+# asynchronous control roots pinned below.  Retirement calls must remain
+# callable after admission closes.  Shared bridge calls can be reached from
+# both classes, which is why no low-level prepare/load/unload/page-on/page-off
+# route is a valid producer gate.  The final class is an unrelated receiver
+# that happens to reuse the same numeric vtable offset.
+RESOURCE_SLOT_CALL_SITE_CLASSES = {
+    "admitted_or_control_descendant": {
+        0x14b6826d, 0x14b68508, 0x14b6e377, 0x14b6ebbd,
+        0x14b6fc85, 0x14b6fd5e, 0x14b76d3c, 0x14b7c13e,
+        0x14b7c156, 0x14b7c30b, 0x14b7c323, 0x14b7c49a,
+        0x14b7c4b2, 0x14b7c64e, 0x14b7c67e, 0x14b7d087,
+        0x14b7d09c, 0x14b8c8d6, 0x14b9722a, 0x14b97877,
+        0x14b97942, 0x14b97ab2, 0x14b97c0f, 0x14b97e80,
+        0x14b9801f, 0x14b98260, 0x14b985d8, 0x14b98682,
+        0x14b98c50, 0x14b9b159, 0x14b9c64b, 0x14b9c660,
+        0x14b9d5cb, 0x14b9d5df, 0x14ba8113, 0x14baf60b,
+        0x14baf953, 0x14baffd1, 0x14bb2bf0, 0x14bb2c22,
+        0x14bb3390,
+        0x14b6f289, 0x14b6f584, 0x14b7b2b4, 0x14b89ae4,
+        0x14b8b63a, 0x14b8b6b2, 0x14b9127c, 0x14b9aca1,
+        0x14b9be1a, 0x14b9d82b, 0x14ba407b, 0x14bafa91,
+        0x14bba48b,
+        0x14b916db, 0x14ba3e42, 0x14ba4057,
+    },
+    "retirement_or_teardown": {
+        0x14b6764a, 0x14b697d0, 0x14ba568b, 0x14bb29fb,
+        0x14bbadbe,
+    },
+    "shared_low_level_bridge": {
+        0x14b8c082,
+        0x14b8a738, 0x14ba26ca, 0x14ba2753,
+        0x14b89a0c, 0x14b8adfb, 0x14b8b1ed, 0x14b8b5a3,
+        0x14b89761, 0x14b8b197, 0x14b8b448,
+    },
+    "unrelated_receiver": {
+        0x14b6a05c, 0x14b772e4, 0x14b773b0, 0x14bb77fc,
+        0x14bbc58c,
+        0x14b83a53, 0x14b83a78, 0x14b83c2e, 0x14b83c4e,
+        0x14b959b5, 0x14bb130b, 0x14bb1490, 0x14bb1960,
+        0x14bb28c8, 0x14bb785e,
+        0x14bb7852,
+        0x14bb2310,
+        0x14b77193, 0x14b92fb7, 0x14b92ff0, 0x14b93029,
+        0x14b93062, 0x14b9309b, 0x14b930d4, 0x14b9f6e2,
+        0x14ba0e2f, 0x14ba1afc, 0x14ba7d88, 0x14ba7dee,
         0x14ba7e64, 0x14bae559,
     },
 }
@@ -1745,6 +1842,22 @@ def check(path, boot_path=None):
             f"changed complete executable vtable-call inventory for slot {slot:#x}: {sorted(actual)}"
     print("PASS complete inherited resource paging-slot call-site inventory")
 
+    all_resource_slot_sites = set().union(*RESOURCE_SLOT_CALL_SITES.values())
+    classified_resource_slot_sites = set()
+    for classification, sites in RESOURCE_SLOT_CALL_SITE_CLASSES.items():
+        assert classified_resource_slot_sites.isdisjoint(sites), \
+            f"duplicate resource-slot classification: {classification}"
+        classified_resource_slot_sites.update(sites)
+    assert classified_resource_slot_sites == all_resource_slot_sites, \
+        "resource-slot classification is not an exact complete partition"
+    assert {name: len(sites) for name, sites in RESOURCE_SLOT_CALL_SITE_CLASSES.items()} == {
+        "admitted_or_control_descendant": 57,
+        "retirement_or_teardown": 5,
+        "shared_low_level_bridge": 11,
+        "unrelated_receiver": 31,
+    }, "changed resource-slot classification cardinality"
+    print("PASS complete resource paging-slot admission/retirement/bridge partition")
+
     def check_dispatch_table(table_name, expected, digest):
         table = address_of(table_name)
         assert hashlib.sha256(read(table, len(expected) * 48)).hexdigest() == digest, \
@@ -2166,7 +2279,110 @@ def check(path, boot_path=None):
         RESOURCE_PAGING_BODIES["__ZN22IOGraphicsAccelerator218unwireAllVidMemoryEv"][0],
         address_of("__ZN22IOGraphicsAccelerator222unload_dirty_resourcesEv")) == [0xe], \
         "changed unwire-to-resource-unload path"
-    print("PASS inherited resource page-on/page-off roots and shared retirement bridge")
+
+    # Four callback/control roots sit outside the user-client inventory:
+    # display notifications, the GART collector, IOSurface device-cache
+    # control, and the global KD first-flush callback.  Pin their registration
+    # sites and concrete receiver ownership.  Lower resource methods remain
+    # shared with the retirement paths partitioned above.
+    for lea, target in (
+            (0x14ba037e, "__ZN22IOGraphicsAccelerator214gart_collectorEP22IOInterruptEventSourcei"),
+            (0x14ba1201, "__ZL23IOAcceleratorKDCallbackPv16kd_callback_typeS_"),
+            (0x14ba3caf, "__ZN22IOGraphicsAccelerator218deviceCacheControlEP20IOSurfaceDeviceCachejyy"),
+            (0x14bae504, "__ZN18IOAccelDisplayPipe22display_change_handlerEPvP13IOFramebufferiS0_")):
+        encoded = read(lea, 7)
+        assert encoded[0] in (0x48, 0x4c) and encoded[1] == 0x8d and \
+            encoded[2] & 0xc7 == 0x05 and \
+            lea + 7 + struct.unpack_from("<i", encoded, 3)[0] == address_of(target), \
+            f"changed paging-control callback registration: {target}"
+    memory_info_start = address_of("__ZN27IOAccelMemoryInfoUserClient5startEP9IOService")
+    assert read(memory_info_start + 0x26, 7) == bytes.fromhex("49 89 86 e0 00 00 00"), \
+        "changed MemoryInfo accelerator ownership"
+    display_handler = address_of(
+        "__ZN18IOAccelDisplayPipe22display_change_handlerEPvP13IOFramebufferiS0_")
+    assert read(display_handler + 0x63, 7) == bytes.fromhex("4d 8b be 88 00 00 00") and \
+        read(display_handler + 0x12f, 7) == bytes.fromhex("49 8b be 90 00 00 00"), \
+        "changed display callback accelerator/display-machine ownership"
+    device_cache_callback = address_of(
+        "__ZN22IOGraphicsAccelerator218deviceCacheControlEP20IOSurfaceDeviceCachejyy")
+    assert read(device_cache_callback + 0x20, 3) == bytes.fromhex("48 89 fb"), \
+        "changed device-cache accelerator receiver"
+
+    for table, slot, method in (
+            ("__ZTV21IOAccelDisplayMachine", 0x8b8,
+             "__ZN21IOAccelDisplayMachine26framebuffer_will_power_offEj"),
+            ("__ZTV21IOAccelDisplayMachine", 0x8c0,
+             "__ZN21IOAccelDisplayMachine24framebuffer_did_power_onEj"),
+            ("__ZTV21IOAccelDisplayMachine", 0x8c8,
+             "__ZN21IOAccelDisplayMachine24display_mode_will_changeEj"),
+            ("__ZTV21IOAccelDisplayMachine", 0x8d0,
+             "__ZN21IOAccelDisplayMachine23display_mode_did_changeEj"),
+            ("__ZTV27IOAccelLegacyDisplayMachine", 0x8b8,
+             "__ZN27IOAccelLegacyDisplayMachine26framebuffer_will_power_offEj"),
+            ("__ZTV27IOAccelLegacyDisplayMachine", 0x8c0,
+             "__ZN27IOAccelLegacyDisplayMachine24framebuffer_did_power_onEj"),
+            ("__ZTV27IOAccelLegacyDisplayMachine", 0x8c8,
+             "__ZN27IOAccelLegacyDisplayMachine24display_mode_will_changeEj"),
+            ("__ZTV27IOAccelLegacyDisplayMachine", 0x8d0,
+             "__ZN27IOAccelLegacyDisplayMachine23display_mode_did_changeEj"),
+            ("__ZTV18IOAccelDisplayPipe", 0x868,
+             "__ZN18IOAccelDisplayPipe21displayModeWillChangeEv"),
+            ("__ZTV18IOAccelDisplayPipe", 0x870,
+             "__ZN18IOAccelDisplayPipe20displayModeDidChangeEv"),
+            ("__ZTV18IOAccelDisplayPipe", 0x8f8,
+             "__ZN18IOAccelDisplayPipe17wsaaWillExitDeferEi"),
+            ("__ZTV18IOAccelDisplayPipe", 0x908,
+             "__ZN18IOAccelDisplayPipe18wsaaWillEnterDeferEi"),
+            ("__ZTV18IOAccelDisplayPipe", 0x978,
+             "__ZN18IOAccelDisplayPipe26framebuffer_will_power_offEv"),
+            ("__ZTV18IOAccelDisplayPipe", 0x980,
+             "__ZN18IOAccelDisplayPipe24framebuffer_did_power_onEv"),
+            ("__ZTV24IOAccelLegacyDisplayPipe", 0x868,
+             "__ZN24IOAccelLegacyDisplayPipe21displayModeWillChangeEv"),
+            ("__ZTV24IOAccelLegacyDisplayPipe", 0x870,
+             "__ZN24IOAccelLegacyDisplayPipe20displayModeDidChangeEv"),
+            ("__ZTV24IOAccelLegacyDisplayPipe", 0x978,
+             "__ZN24IOAccelLegacyDisplayPipe26framebuffer_will_power_offEv"),
+            ("__ZTV24IOAccelLegacyDisplayPipe", 0x980,
+             "__ZN24IOAccelLegacyDisplayPipe24framebuffer_did_power_onEv")):
+        raw = struct.unpack("<Q", read(address_of(table) + 16 + slot, 8))[0]
+        assert raw >> 63 == 0 and (raw >> 30) & 3 == 1 and \
+            raw & 0x3fffffff == address_of(method), \
+            f"changed display-control virtual: {table} {slot:#x}"
+
+    for call, slot in (
+            (0x14bae7c0, 0x8c8), (0x14bae89a, 0x8b8),
+            (0x14bae907, 0x8d0), (0x14bae964, 0x8c0),
+            (0x14b734e0, 0x908), (0x14b73670, 0x8f8),
+            (0x14b737ed, 0x978), (0x14b73893, 0x980)):
+        assert read(call, 6) == bytes.fromhex("ff 90") + struct.pack("<I", slot), \
+            f"changed display callback/control dispatch at {call:#x}"
+    for machine, unload_offset, linear_offset, unwire_offset in (
+            ("__ZN21IOAccelDisplayMachine24display_mode_will_changeEj", 0x103, 0x11e, 0x12e),
+            ("__ZN27IOAccelLegacyDisplayMachine24display_mode_will_changeEj", 0x1f4, 0x20f, 0x21f)):
+        start = address_of(machine)
+        assert direct_branch_offsets(
+            start, RESOURCE_PAGING_BODIES[machine][0],
+            address_of("__ZN22IOGraphicsAccelerator222unload_dirty_resourcesEv")) == [unload_offset] and \
+            read(start + linear_offset, 6) == bytes.fromhex("ff 90 58 09 00 00") and \
+            read(start + unwire_offset, 6) == bytes.fromhex("ff 90 48 09 00 00"), \
+            f"changed display-mode paging-control chain: {machine}"
+    for owner, target, expected in (
+            ("__ZN24IOAccelLegacyDisplayPipe26framebuffer_will_power_offEv",
+             "__ZN24IOAccelLegacyDisplayPipe20save_scanout_surfaceEv", [0x9]),
+            ("__ZN24IOAccelLegacyDisplayPipe26framebuffer_will_power_offEv",
+             "__ZN24IOAccelLegacyDisplayPipe23save_fullscreen_surfaceEv", [0x1a]),
+            ("__ZN24IOAccelLegacyDisplayPipe24framebuffer_did_power_onEv",
+             "__ZN24IOAccelLegacyDisplayPipe26restore_fullscreen_surfaceEv", [0x4c]),
+            ("__ZN18IOAccelDisplayPipe22display_change_handlerEPvP13IOFramebufferiS0_",
+             "__ZN22IOGraphicsAccelerator217system_will_sleepEib", [0x1e5]),
+            ("__ZN22IOGraphicsAccelerator215systemWillSleepEv",
+             "__ZN21IOAccelDisplayMachine17system_will_sleepEv", [0x1c])):
+        assert direct_branch_offsets(
+            address_of(owner), RESOURCE_PAGING_BODIES.get(
+                owner, EVENT_OWNER_BODIES.get(owner))[0], address_of(target)) == expected, \
+            f"changed outer paging-control edge: {owner}"
+    print("PASS inherited resource roots, four control callbacks and shared retirement bridge")
 
     memory_external = address_of(
         "__ZN27IOAccelMemoryInfoUserClient14externalMethodEjP25IOExternalMethodArgumentsP24IOExternalMethodDispatchP8OSObjectPv")

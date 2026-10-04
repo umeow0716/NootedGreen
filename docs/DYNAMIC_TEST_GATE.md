@@ -11,14 +11,14 @@ kext/AuxKC、重綁 PCI 或寫入 SR-IOV sysfs。`CLOSED` 只代表指定的離�
 | SG-02 | VF/PF 身分、Gen11 virtual-MMIO 與 memory-IRQ 能力分流 | CLOSED | RPL/ADL/TGL 不再錯送 memory-IRQ KLV；MTL/ARL 才使用 memory IRQ。 |
 | SG-03 | 已知 legacy/PF-owned GPU producer 隔離 | CLOSED | V284 在 legacy H2G MMIO、GuC DMA、doorbell、native CTB 與 Scheduler5 execlist 五個入口先 fail-stop；modern path 另列 SG-05。 |
 | SG-04 | task／PPGTT／PagePool 共同 ownership transaction | CLOSED | V283 已涵蓋 task publish/free、commit/update/release、32/64-bit unmap/shrink、descriptor retirement 與 PagePool reuse/prune/free。這不取代 GPU completion 證明。 |
-| SG-05 | modern 外部 producer 在 stop 前可封門、排空，且不阻斷 `finishAllStamps` retirement | REVIEWING | V293 重新打開 P7：direct Intel producer inventory 漏掉 System KC resource prepare/load/unload/page-on/page-off 的 transitive roots。PAVP callback 與 `recognizeFlip` 已在 VF 隔離，但外層 root/retirement 分割尚未閉合。 |
+| SG-05 | modern 外部 producer 在 stop 前可封門、排空，且不阻斷 `finishAllStamps` retirement | REVIEWING | V294 已關閉 P7 inventory：104 個 resource-slot call sites 精確分成 57 個 admitted/control descendants、5 個 retirement/teardown、11 個共用 low-level bridge 與 31 個無關 receiver，四個非 user-client control roots 亦已固定。P8 counted admission 與 P9 close/drain 尚未實作。 |
 | SG-06 | reservation → CPU ring writes → tail publication → GuC submit 為一致的 owner/admission transaction | OPEN | reservation postcondition、ring geometry、retained backing 與 final submit validation 已有；但 native writer 在 final routed submit 前的跨呼叫區間仍沒有完整 lease。 |
 | SG-07 | GPU completion 與 ring/context/mapping/page-table backing 的最終釋放順序 | OPEN | GuC context deregistration與 heavy TLB ACK 已覆蓋選定 teardown；尚未證明所有完成事件、stamp、pool reuse 與 producer owner 都在釋放前退休。 |
 | SG-08 | render／depth／CCS／ICB／paging 的 allocation、event collection、partial submit 與錯誤傳遞 | OPEN | 已修補選定 CCS null rectangle 與兩個 event-vector capacity failure；多個 callers 仍忽略 result 或容許 partial progress。SharedUserClient ICB 的兩次，以及 `IGAccelResource::pageon/pageoff` 的三次／兩次 `submitBlit` 都不檢查 AL，不能宣稱 fail closed。 |
 | SG-09 | timer／IRQ／workloop callback 的取消、排空與 owner lifetime | OPEN | IRQ callback counted gate 已有；DPSM、event-machine、passive timer、workloop removal 的完整 no-late-callback／無反向鎖序證明尚未閉合。 |
 | SG-10 | 所有 VF 可達 PF-owned MMIO／DMA／force-wake／reset 的 negative reachability | OPEN | V292 已隔離 PAVP callback 的 force-wake/PF MMIO 與 `recognizeFlip` telemetry submission；仍須以完整 symbol/vtable/function-pointer inventory 證明沒有 retained native bypass。 |
 | SG-11 | baseline 要求的所有程式檔完整審閱與 ledger closure | OPEN | `SOURCE_REVIEW_COVERAGE.md` 仍明確標記 incomplete；新增／修改檔案也必須納入。CI 成功不能替代此項。 |
-| SG-12 | 精確候選 commit 的完整 static suite、x86_64 release kext、Metal smoke build 與 artifact provenance | REVALIDATE PER CANDIDATE | V293 targeted paired-KC contract 與 full static `/tmp/ngreen-static.vaWL8G` 已通過；尚缺 clean/pushed exact-sha GitHub Actions、release/Metal artifacts。這只屬工具與文件變更，不解除 SG-05 至 SG-11。 |
+| SG-12 | 精確候選 commit 的完整 static suite、x86_64 release kext、Metal smoke build 與 artifact provenance | REVALIDATE PER CANDIDATE | V294 targeted contracts 與 full static `/tmp/ngreen-static.2nwIOR` 已通過；尚缺 clean/pushed exact-sha GitHub Actions、release/Metal artifacts。這只屬工具與文件變更，不解除 SG-05 至 SG-11。 |
 
 ## 目前主路徑
 
@@ -104,7 +104,18 @@ GC/GuC/scheduler/DPSM timer 與 `finishAllStamps` 另以完整 body 及 negative
 event/channel finish、transaction idle、mapping/unwire/freeAllGPUMappings 也使用同一
 lower bridge，屬必須保留的 retirement／teardown 路徑。這表示 low-level hook 不安全，
 也不是 owner-lifetime 或 no-late-callback 證明；P8 不得把 retirement 一併封死，P9 與
-SG-09 仍須證明 cancel/drain/lifetime。P7 因此維持 `REVIEWING`。
+SG-09 仍須證明 cancel/drain/lifetime。V294 已將全部 104 個 slot call sites
+分割成 57/5/11/31 四類，並固定 display notification、GART collector、
+IOSurface device-cache control 與 KD first-flush 四個非 user-client control roots
+的註冊點和 receiver ownership。P7 因此關閉為 inventory；callback
+drain/lifetime 仍由 SG-09 處理。
+
+Display notification 另會透過 concrete `IGAccelDisplayMachine` 在 mode-change
+前後直接呼叫 routed engine stop/start。這不會重建已存在的 GuC/CTB：Tahoe
+`IGScheduler::initFirmware` 會先檢查 scheduler `+0x20` loaded byte，只有首次
+成功前才 dispatch `+0x220 loadFirmware`，成功後的 display resume 是明確的
+idempotent fast path。兩份 payload 的 callback bodies、vtable slots 及 stop/start edges
+已固定；這只解除重複 firmware-init 疑慮，不代替 P8/P9。
 
 因此一般 command queue 可以使用「VF accelerator receiver identity + 外層 counted
 admission」封門，但不能把它當成全域 producer gate。P1–P7 已固定的
@@ -135,6 +146,6 @@ contained boot，不是效能、Metal completion、媒體或 Looking Glass 測�
 | P5b GLContext／GLDrawable／SurfaceMTL | CLOSED-INVENTORY | 三組完整 selector/argument tables、dynamic/static/special dispatch、完整 member bodies、vtable、mutex/busy/wait scopes 與 producer/fence edges 已固定。GL selector `0x105` read-buffer 是獨立 copy/DMA root；processSwap 屬 P2 家族；另兩類未找到新 submit root。 |
 | P5c Device／Shared／MemoryInfo clients | CLOSED-INVENTORY | Device 10、Shared 21 與 MemoryInfo 3 項 selector/argument contracts、完整 member/wrapper bodies、特殊 dispatch、busy/timeout-lock scopes 與 unwire edges 已固定。Shared selector 2 經 `pageoffIfNeeded` 進入 Intel page-off；page-on/page-off 共五次 `submitBlit` 的未消費 AL 已列入 SG-08。 |
 | P6 display／flip reachability | CLOSED-INVENTORY | 14-selector DisplayPipeUserClient、鎖域、pipe selection、transaction/copy producer、Intel factories/vtables 與 base→legacy framebuffer enumeration/create-pipe 鏈已固定。無法證明不可達，故 selector 8/12 與 downstream flip/copy 必須納入 P8/P9。 |
-| P7 非 user-triggered／內部 producers | REVIEWING | V292 的 Intel-payload direct inventory 仍有效，PAVP/trace 已隔離；V293 另固定 resource slot `+0x170/+0x180/+0x188/+0x260/+0x268` 的 46/11/22/8/17 個 executable call sites，並證明 display、gart、cache、linear-pageoff、KD 等 transitive roots。尚須逐一完成 outer-new-work 對 retirement/teardown 的分類。 |
-| P8 counted admission 實作 | OPEN | 必須先完成 V293 transitive root 分類，再設計 receiver-scoped close/count。不得在 resource prepare/load/unload/page-on/page-off 或 `submitBlit` 單點封門，因為 `finishAllStamps` 與 teardown 會使用同一 bridge。 |
+| P7 非 user-triggered／內部 producers | CLOSED-INVENTORY | V294 將五組 slot 的 104 個 executable call sites 精確分成 admitted/control 57、retirement/teardown 5、shared bridge 11、unrelated receiver 31；display/GART/device-cache/KD 四個 control roots 的註冊與 receiver 亦已固定。Display mode stop/start 由 native scheduler loaded-byte 保證 firmware init 冪等。 |
+| P8 counted admission 實作 | OPEN | 在 P1–P7 已完整的 outer roots 建立 receiver-scoped close/count，並讓 PF 及 retirement path 維持原生。不得在 resource prepare/load/unload/page-on/page-off 或 `submitBlit` 單點封門，因為 `finishAllStamps` 與 teardown 會使用同一 bridge。 |
 | P9 close→drain→native stop 鎖序 | OPEN | 必須證明無 sleep-with-lock、反向鎖序、漏計數或阻斷 `finishAllStamps`。 |

@@ -1,7 +1,7 @@
 # Tahoe SR-IOV protocol audit — in progress
 
 Updated: 2026-10-04. The last dynamic source baseline is `ce166c8`; the current
-offline-reviewed worktree is V293 inherited resource-paging reachability on
+offline-reviewed worktree is V294 resource-root partition on
 `codex/tahoe-sriov-vf`. This is NOT a boot-test candidate or a successful
 driver baseline. The `ce166c8` run produced repeatable host PF DMAR faults
 followed by i915 hangs and a host reboot. Keep `macos-tahoe-sriov` shut off until the
@@ -20,6 +20,39 @@ KVMFR/client transport remains the intended receiving side.
 The authoritative dynamic-entry checklist is
 [`DYNAMIC_TEST_GATE.md`](DYNAMIC_TEST_GATE.md). Any open static gate keeps the
 VM hard hold in force.
+
+## V294 resource-root partition and display lifecycle (offline)
+
+The V293 call-site inventory is now an exact, disjoint classification of all
+104 executable calls which reuse the five resource paging slot numbers:
+57 admitted external/control descendants, five retirement/teardown calls,
+eleven low-level bridge calls shared by both sides and 31 calls on unrelated
+receiver classes. The paired-KC contract fails if a site is added, removed,
+duplicated between classes or omitted from their union.
+
+Four non-user-client roots are now fixed at both ends: registration and
+receiver ownership for the display notification handler, GART collector,
+IOSurface device-cache callback and global KD first-flush callback. Complete
+base/legacy display-machine and display-pipe control bodies, vtable slots,
+notification dispatches and downstream unload/page-on/page-off edges are also
+pinned. This closes P7 as an inventory while keeping the eleven shared bridge
+sites and five retirement sites outside the future new-work gate.
+
+The display graph exposed concrete `IGAccelDisplayMachine` mode-change
+callbacks which tail-call routed `stopGraphicsEngine`/`startGraphicsEngine`.
+This does not rebuild a live VF GuC/CTB: native
+`IGScheduler::initFirmware` tests its `+0x20` loaded byte and bypasses the
+`+0x220 loadFirmware` virtual after the first success. Both concrete callback
+bodies/vtable slots and the direct engine edges are now pinned in both Tahoe
+payloads, in addition to the existing complete idempotence guard. Temporary
+display stop therefore preserves transport and resumes the native software
+lifecycle; final device stop remains the only quiescence path.
+
+Targeted paired-KC and dual-payload contracts and the full static suite at
+`/tmp/ngreen-static.2nwIOR` pass with only the two known SDK macro warnings.
+Clean exact-SHA CI and artifacts remain pending for this checkpoint. P8/P9 and
+SG-06–SG-11 remain open; no production route, VM, deployment, PCI/sysfs, VF/PF
+or Host i915 state was touched.
 
 ## V293 inherited resource paging reachability (offline)
 
