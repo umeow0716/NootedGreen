@@ -1,7 +1,7 @@
 # Tahoe SR-IOV protocol audit — in progress
 
 Updated: 2026-10-04. The last dynamic source baseline is `ce166c8`; the current
-offline-reviewed worktree is V291 internal-producer inventory on
+offline-reviewed worktree is V292 optional-producer containment on
 `codex/tahoe-sriov-vf`. This is NOT a boot-test candidate or a successful
 driver baseline. The `ce166c8` run produced repeatable host PF DMAR faults
 followed by i915 hangs and a host reboot. Keep `macos-tahoe-sriov` shut off until the
@@ -20,6 +20,35 @@ KVMFR/client transport remains the intended receiving side.
 The authoritative dynamic-entry checklist is
 [`DYNAMIC_TEST_GATE.md`](DYNAMIC_TEST_GATE.md). Any open static gate keeps the
 VM hard hold in force.
+
+## V292 optional VF producer containment (offline)
+
+Tahoe's native `IntelAccelerator::PAVPCommandCallback` performs force-wake,
+direct PF-owned MMIO access at physical offsets `0x1082c0`/`0x320fc`, and may
+submit PAVP ring work. Both classified VF payloads now route that complete
+callback entry to an ABI-compatible, hardware-free rejector returning
+`kIOReturnUnsupported`; PF devices retain Apple's native callback. The
+exported `IGAccelTraceStreamManager::recognizeFlip` entry can tail-call
+telemetry sampling and thereby reach main-ring submission, while VF telemetry
+is deliberately unavailable. It is now an explicit VF no-op, again leaving
+the PF path native.
+
+These routes remove PAVP callback and `recognizeFlip` from P8 admission rather
+than reporting false success or allowing CPU ring/MMIO side effects before a
+late submit rejection. `DisplaySleepCallback` remains the only independent
+internal/control producer root carried from P7 into P8; its mixed new-work and
+retirement behavior still requires a counted lifetime design. The Tahoe route
+inventory is now 126 unique routes: 120 accelerator, three framebuffer and
+three System KC routes. Source contracts and four mutation cases pin both
+route mappings, the PAVP unsupported result and both hardware-free bodies.
+
+Targeted dual-payload contracts and the full static suite pass at
+`/tmp/ngreen-static.ZOtcfQ` with only the two known SDK macro warnings.
+Checkpoint `f8135e3` is pushed; exact-sha GitHub Actions run `37207803000`
+passed full static, x86_64 release kext, Metal smoke and both artifact uploads.
+Artifact sizes are 73,975 and 2,943 bytes and neither is expired. SG-05 remains
+`REVIEWING`; P8/P9 and SG-06 through SG-11 still prohibit dynamic work. No VM,
+deployment, PCI/sysfs, VF/PF or Host i915 state was touched.
 
 ## V291 internal producer and retirement partition (offline)
 

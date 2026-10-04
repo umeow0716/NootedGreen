@@ -10,6 +10,23 @@ The current dynamic-entry gate table is
 
 ## Scope
 
+2026-10-04 optional-producer containment delta: native Tahoe PAVP callback
+force-wake, PF-owned MMIO and possible PAVP ring submission are no longer VF
+reachable. Both classified payloads route the complete callback to an
+ABI-compatible `kIOReturnUnsupported` rejector with no hardware access. The
+exported `recognizeFlip` entry, which can tail-call telemetry sampling and
+main-ring submission, is an explicit VF no-op because VF telemetry is not
+available. PF behavior remains native. Route inventory is now 126 unique
+entries (120 accelerator, three framebuffer, three System KC), and four
+mutation cases pin the mappings, return value and hardware-free bodies. Thus
+only `DisplaySleepCallback` remains an independent internal/control producer
+for P8; its mixed submission/retirement semantics still prevent admission
+closure. Targeted contracts and full static pass at
+`/tmp/ngreen-static.ZOtcfQ`; checkpoint `f8135e3` and exact-sha GitHub Actions
+`37207803000` pass, with release/Metal artifacts of 73,975/2,943 bytes present
+and not expired. SG-05 remains under review and SG-06–SG-11 remain open. No
+runtime or hardware state was changed.
+
 2026-10-04 internal-producer delta: both Tahoe accelerator payloads now pin
 the complete direct-text caller sets for native FIFO stamp/commands/buffer,
 accelerator sync/main submit, ring stamp replay, DPSM kick, PAVP submission and
