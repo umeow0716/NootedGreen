@@ -9,6 +9,12 @@ import sys
 # Complete reviewed native bodies. This fixes the concrete Intel override
 # graph, not inherited timer APIs, dynamic callbacks or runtime completion.
 STAMP_IRQ_NATIVE = {
+    "__GLOBAL__sub_I_IGHardwareContext.cpp": (0x1d2, "6711947627dae699c9c795092bd136db00e93383338dfffacf06b95a39294dbe"),
+    "__ZN11IGAccelTask16getBlit2DContextEb": (0x66, "9be9858119a59a6c6e6d6e984dba02be9ed6c90814cbe05fe384d360a1d8df4c"),
+    "__ZN11IGAccelTask16getBlit3DContextEb": (0x66, "146dd5e2ab09d819195f631d9c9a540e5058f169cc2da75c194b652c228bc8f4"),
+    "__Z26ExtendedContextWithOptionsI24IGHardwareResolveContextEPT_P11IGAccelTask": (0x4f, "9aa7ffaec74e7f9e71f122db4f147146c14e3a2b91723c702d2aeb737f6ca20a"),
+    "__ZN25IGHardwareExtendedContext4freeEv": (0x52, "3e2b482df8f8906d267905195831fb569ca59ea7276595efb8856f7b5ed3a3c2"),
+    "__ZN21IGAccelDisplayMachine5startEP11IOPCIDevice": (0xb4, "ac2b4a8bee964444c8c07115c412e54f3ceb52f9ee79c180d5ff59ee6551ea37"),
     "__ZN25IGHardwareExtendedContext15initWithOptionsEP11IGAccelTaskRK31IGHardwareExtendedContextParams": (0xf4, "67dfb7530b4142f6a2186b617e396df18dcb46517e45ab2ce540a38c1cc20fd1"),
     "__ZN18IGAccelDisplayPipe14submitCommandsEP12IOAccelEventS1_": (0x12e, "5639208f730ed9514532333fe17d48a8ec200646992bf62f79832bdf5d063f71"),
     "__ZN18IGAccelDisplayPipe21displayReadRegister32Ei": (0x64, "c5065afa9f0406976ee881c4ad7d502d1e1bd01d965ac63dab48687c754204d1"),

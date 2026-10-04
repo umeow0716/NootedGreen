@@ -7,6 +7,18 @@ audit's runtime blockers are open.
 
 ## Scope
 
+Complete native hardware-context global initializer `7d98a/1d2` reviewed:
+3D/resolve initial maximum256, sizes65536/4096, alignment64, reserved8.
+Imported backing sizes and loader execution remain unresolved. File-zero
+parameter records are not the initialized runtime configuration.
+
+Five complete native pool-owner bodies added: task 2D/3D context getters,
+resolve factory, display-machine start, and extended-context free. Selected
+factories honor context-init false and release the allocation. Static
+2D/display parameter records inspected; runtime-filled 3D/resolve records
+and base hardware-context free still need review. No all-entry lifetime
+or VF runtime configuration claim follows from these body pins.
+
 Complete native extended-context initWithOptions `7cebc/f4` reviewed and
 pinned: pool init virtual 118 return is ignored; optional backing failure
 releases pool without local null guard. Parameter-producing callers and

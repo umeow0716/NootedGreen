@@ -6955,6 +6955,47 @@ No executable patch or runtime mutation.
 
 ### Update fanout must participate in the same owner transaction
 
+#### Runtime-filled context parameters have a concrete initializer
+
+Follow-up decoded RIP-reference search identified complete native global
+initializer `7d98a/1d2`, now reviewed and pinned. It writes resolve params
+`14b1c8` and 3D params `14b200`: both maximums are 100 hex (256),
+alignment 40 hex, reserved bytes 8; resolve buffer size is 1000 hex and
+3D is 10000 hex. Thus these initial values also meet the 256-slot ceiling,
+power-of-two and reserved-size constraints. Backing sizes are loaded from
+external pointer cells (initializer RIP-derived addresses c26c0 and b0c40)
+and cannot be inferred from file-zero destination records. Their imports,
+actual values, initializer admission and later writes remain pending.
+Six earlier call-next placeholders in this initializer are relocations,
+not evidence of local metaclass construction callees. Whole-body review
+does not itself establish loader execution. Next focus is concrete pool
+vtable and backing imports, then bounded constructor-status propagation.
+
+#### Selected extended-context factories preserve failure cleanup
+
+Complete native direct callers of `7cebc` in the decoded text-symbol
+scan: task getBlit2DContext `80ae/66`, getBlit3DContext `8114/66`, resolve
+factory `81a7/4f`, display-machine start `7dd90/b4`. All check AL and
+release the newly allocated context on failure before publishing a null
+task/display slot or returning null. Thus selected callers support a
+context-level false return; this does not prove all virtual callers do.
+Extended-context free `7cfb0/52` separately null-checks and releases D8
+backing and E0 pool, clears both, and tails to hardware-context free
+`7c5d8` (callee review remains separate).
+
+RIP-derived parameter addresses are 2D `c0430`, display `c0468`, 3D
+`14b200`, resolve `14b1c8`; segment mapping was checked before reading
+56-byte records. The immutable 2D/display records have backing size zero,
+maximum 8, buffer bytes 1000 hex, alignment 40 hex, reserved bytes 8.
+These two configurations satisfy fixed-slot, power-of-two and reserved
+size assumptions. The 3D/resolve records are initially all zero in the
+file: this is NOT evidence they remain zero at runtime or disable pools.
+Their initialization writers must be identified next. For the two static
+records the optional backing-allocation failure branch is excluded, but
+pool-init status remains ignored and growth selection still loses status.
+Native factories and cleanup are hash-pinned; runtime state, outer locks,
+pool vtable binding and hardware retirement remain unverified.
+
 #### Native extended-context construction ignores pool-init status
 
 Complete native `IGHardwareExtendedContext::initWithOptions`
