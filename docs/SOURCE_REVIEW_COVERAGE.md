@@ -7,6 +7,11 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 initialized-prefix unwind repair: VF-only bounded native patch now
+visits N-1..0 on failed construction, never uninitialized suffix. Full static
+suite and both ASan/UBSan payload patch checks pass; 4097 index-control models
+are not DMA tests. All other pool/mapping/retirement hazards remain unresolved.
+
 2026-10-04 manager pool cleanup: three complete native bodies pinned; device
 memory release is distinct from pool release. Failure cleanup needs initialized
 prefix tracking; ordinary free lacks local pool release. Indirect teardown and

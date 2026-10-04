@@ -32,6 +32,47 @@ static void verify(const char *path)
 	assert(stream);
 	std::vector<uint8_t> image((std::istreambuf_iterator<char>(stream)), {});
 	using namespace NGVfGuCFactoryPatch;
+	using namespace NGVfPagePoolPatch;
+	std::vector<uint8_t> poolBody(image.begin() + 0xed9e, image.begin() + 0xee6a);
+	assert(prefixUnwindPreflight(poolBody.data(), poolBody.size()));
+	assert(!prefixUnwindPreflight(nullptr, poolBody.size()));
+	assert(!prefixUnwindPreflight(poolBody.data(), poolBody.size() - 1));
+	for (size_t i = 0; i < sizeof(prefixUnwindFind); ++i) {
+		auto mutated = poolBody;
+		mutated[0x6b + i] ^= 1;
+		assert(!prefixUnwindPreflight(mutated.data(), mutated.size()));
+	}
+	auto duplicatePool = poolBody;
+	std::copy(std::begin(prefixUnwindFind), std::end(prefixUnwindFind), duplicatePool.begin());
+	assert(!prefixUnwindPreflight(duplicatePool.data(), duplicatePool.size()));
+	auto patchedPool = poolBody;
+	std::copy(std::begin(prefixUnwindReplace), std::end(prefixUnwindReplace),
+	          patchedPool.begin() + 0x6b);
+	assert(!prefixUnwindPreflight(patchedPool.data(), patchedPool.size()));
+	for (size_t i = 0; i < poolBody.size(); ++i) {
+		if (i != 0x6c && i != 0x6d && i != 0x6e && i != 0x99 && i != 0x9a)
+			assert(patchedPool[i] == poolBody[i]);
+	}
+	assert(prefixUnwindReplace[3] == 0x78 && prefixUnwindReplace[4] == 0x2c);
+	assert(prefixUnwindReplace[47] == 0x79 && prefixUnwindReplace[48] == 0xd4);
+	// The JS and JNS targets are respectively loop exit and first array load.
+	assert(5 + static_cast<int8_t>(prefixUnwindReplace[4]) == 49);
+	assert(49 + static_cast<int8_t>(prefixUnwindReplace[48]) == 5);
+	for (size_t i = 5; i < 44; ++i)
+		assert(prefixUnwindReplace[i] == prefixUnwindFind[i]);
+	// Model only the decoded DEC/JS/DEC/JNS index control, not DMA or callbacks.
+	for (int64_t created = 0; created <= 4096; ++created) {
+		int64_t cursor = created - 1;
+		int64_t released = 0;
+		while (cursor >= 0) {
+			assert(cursor == created - released - 1 && cursor < created);
+			++released;
+			--cursor;
+			assert(released <= created);
+		}
+		assert(released == created && cursor == -1);
+	}
+	std::printf("PASS: bounded pool prefix unwind and 4097 offline index-control cases in %s\n", path);
 	std::vector<uint8_t> body(image.begin() + 0x1d9d2, image.begin() + 0x1da81);
 	assert(schedulerInitPreflight(body.data(), body.size()));
 	assert(!schedulerInitPreflight(body.data(), body.size() - 1));

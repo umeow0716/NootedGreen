@@ -2182,6 +2182,26 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			               patcher, gucFactory, gucInit - gucFactory), "ngreen",
 			           "Failed to remove VF GuC factory double destruction");
 			mach_vm_address_t schedulerInit = 0, schedulerWait = 0;
+			// Pools here are newly initialized and have no allocated GPU pages.
+			// Preserve native release/free cleanup, but visit only the created
+			// prefix instead of walking forward past the failed factory slot.
+			mach_vm_address_t poolInit = 0, managerFree = 0;
+			KernelPatcher::SolveRequest poolBounds[] = {
+				{"__ZN15IGMemoryManager12initPagePoolEv", poolInit},
+				{"__ZN15IGMemoryManager4freeEv", managerFree},
+			};
+			PANIC_COND(!patcher.solveMultiple(index, poolBounds, address, size) ||
+			           managerFree <= poolInit || managerFree - poolInit != 0xcc,
+			           "ngreen", "Invalid VF page-pool init patch bounds");
+			PANIC_COND(!NGVfPagePoolPatch::prefixUnwindPreflight(
+			               reinterpret_cast<const uint8_t *>(poolInit), managerFree - poolInit),
+			           "ngreen", "Changed or ambiguous VF page-pool unwind");
+			LookupPatchPlus const poolUnwindPatch {
+				activeKext, NGVfPagePoolPatch::prefixUnwindFind,
+				NGVfPagePoolPatch::prefixUnwindReplace, 1,
+			};
+			PANIC_COND(!poolUnwindPatch.apply(patcher, poolInit, managerFree - poolInit),
+			           "ngreen", "Failed to repair VF page-pool prefix unwind");
 			KernelPatcher::SolveRequest schedulerBounds[] = {
 				{"__ZN12IGScheduler419initWithAcceleratorEP22IOGraphicsAccelerator2", schedulerInit},
 				{"__ZN12IGScheduler414waitForGpuIdleEv", schedulerWait},

@@ -6389,6 +6389,34 @@ callback admission must be proved elsewhere. No executable patch/runtime test.
 
 ####### Standard pool owner path is non-threaded
 
+######## Offline production repair: bounded initialized-prefix unwind
+
+Added UUID-pinned VF native patch for initPagePool's partial factory failure.
+Its symbol bounds must be exactly 0xcc and the complete 49-byte unwind window
+must match uniquely at +0x6b before mutation. Patch changes only five bytes:
+initial TEST/JE becomes DEC/JS, final INC/JNE becomes DEC/JNS. RBX starts as
+the failed index N, so the first access is N-1 and traversal includes zero;
+N=0 exits before any access. Native pool release, slot clearing, array free/
+pointer clearing and false return are preserved. Normal successful initialization
+is unchanged. The patch lives under existing VF classification, not PF behavior.
+
+The pools are freshly initialized without page allocations or registered sources
+on this path, so this is failed construction cleanup, not retirement of mapped
+GPU backing. It does not fix factory failed-init leaks, unchecked queue/map
+allocations, rehash atomicity, postwrite mapping transactions or ordinary teardown.
+Do not reuse this reverse-prefix logic for live GPU resources without retirement.
+
+Offline tests verify both payload anchors, exact branch destinations, unchanged
+inner release/clear body and all bytes outside the five changed positions,
+49 single-byte anchor mutations, duplicate/missing/changed-length/null/already
+patched rejection, and 4097 decoded index-control cases (prefix lengths 0..4096).
+Those cases model index control only, not callbacks/DMA. Full check-static exit0
+at /tmp/ngreen-static.rD6AqK (two existing TargetConditionals warnings); after
+adding extra duplicate/outside-byte checks the ASan/UBSan native patch test was
+rebuilt and passed again for both payloads. Offline disassembly confirms JS
+0xee3a and JNS 0xee0e. Diff-check passes; 401009d CI37164723083 success.
+No kext build/deployment, VM start, PCI mutation or hardware safety claim.
+
 Further complete manager init (0x232), releaseDeviceMemory (0x46) and
 releasePagePool (0x92) reviewed/pinned. releaseDeviceMemory only clears +0x18
 and releases/clears +0x68/+0x70 objects; it does NOT touch pool array +0x110.
