@@ -64,6 +64,13 @@ int main(int argc, char **argv) {
                            tglFramebufferDebugUuid));
     assert(!matchesKextUuid(framebuffer.data(), framebuffer.size(),
                             tglFramebufferProductionUuid));
+    auto ioAccelerator = good;
+    for (size_t i = 0; i < 16; ++i)
+        ioAccelerator[48 + i] = ioAcceleratorTahoe25G229Uuid[i];
+    assert(matchesKextUuid(ioAccelerator.data(), ioAccelerator.size(),
+                           ioAcceleratorTahoe25G229Uuid));
+    assert(!matchesKextUuid(ioAccelerator.data(), ioAccelerator.size(),
+                            tglVfPayloadUuid));
     // Deterministic malformed command/header fuzz, sanitizer bounds checking.
     uint32_t seed = 0x8E0291;
     for (size_t n = 0; n < 50000; ++n) {

@@ -27,6 +27,7 @@
 #include "kern_context_descriptor.hpp"
 #include "kern_workqueue_unwind.hpp"
 #include "kern_binary_identity.hpp"
+#include "kern_ioaccel_command_pool.hpp"
 #include <Headers/kern_api.hpp>
 #include "kern_green.hpp"
 #include <IOKit/IOBufferMemoryDescriptor.h>
@@ -160,6 +161,7 @@ uint32_t gVfContextCount = 0;
 uint32_t gVfDoorbellCount = 0;
 void *gVfGlobalPageTable = nullptr;
 void *gVfHardwareGuc = nullptr;
+void *gVfAccelerator = nullptr;
 bool gVfGGTTReady = false;
 NGVfRuntime::Registers gVfRuntimeRegisters = {};
 NGVfRuntime::Topology gVfTopology = {};
@@ -1924,6 +1926,11 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 	}
 
 	if (index == kextIOAcceleratorFamily2.loadIndex) {
+		const auto *ioAccelImage = reinterpret_cast<const uint8_t *>(address);
+		PANIC_COND(!NGBinaryIdentity::matchesKextUuid(
+		               ioAccelImage, size,
+		               NGBinaryIdentity::ioAcceleratorTahoe25G229Uuid),
+		           "ngreen", "Unsupported Tahoe IOAcceleratorFamily2 private ABI");
 		KernelPatcher::SolveRequest lifecycle[] = {
 			{"__ZN22IOGraphicsAccelerator217enableAcceleratorEv",
 			 this->ioGraphicsEnableAccelerator},
@@ -1934,7 +1941,24 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		};
 		PANIC_COND(!patcher.solveMultiple(index, lifecycle, address, size),
 			"ngreen", "Cannot resolve native IOAccelerator lifecycle API");
-		SYSLOG("ngreen", "V244: resolved native IOAccelerator enable/disable lifecycle");
+		mach_vm_address_t growthStart = 0, growthEnd = 0;
+		KernelPatcher::SolveRequest growthBounds[] = {
+			{"__ZN25IOAccelCommandBufferPool223allocMoreCommandBuffersEv", growthStart},
+			{"__ZN25IOAccelCommandBufferPool24freeEv", growthEnd},
+		};
+		PANIC_COND(!patcher.solveMultiple(index, growthBounds, address, size) ||
+		           growthEnd <= growthStart ||
+		           !NGIOAccelCommandPool::hasReviewedGrowthContract(
+		               reinterpret_cast<const uint8_t *>(growthStart),
+		               growthEnd - growthStart),
+		           "ngreen", "Changed IOAccelerator command-pool growth contract");
+		KernelPatcher::RouteRequest commandPoolRoutes[] = {
+			{"__ZN25IOAccelCommandBufferPool223allocMoreCommandBuffersEv",
+			 vfAllocMoreCommandBuffers, this->oIOAccelAllocMoreCommandBuffers},
+		};
+		PANIC_COND(!patcher.routeMultiple(index, commandPoolRoutes, address, size),
+		           "ngreen", "Cannot route VF command-pool growth postcondition");
+		SYSLOG("ngreen", "V261: resolved IOAccelerator lifecycle and guarded VF pool growth");
 		return true;
 	}
 
@@ -2875,6 +2899,47 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
     return false;
 }
 
+bool Gen11::vfAllocMoreCommandBuffers(void *pool)
+{
+	PANIC_COND(!callback || !callback->oIOAccelAllocMoreCommandBuffers,
+	           "ngreen", "Missing native command-pool growth trampoline");
+	const bool target = pool && gVfIdentity == VfIdentity::Virtual &&
+		gVfAccelerator &&
+		getMember<void *>(pool, NGIOAccelCommandPool::acceleratorOffset) ==
+			gVfAccelerator;
+	const uint16_t maximum = target ?
+		getMember<uint16_t>(pool, NGIOAccelCommandPool::maximumOffset) : 0;
+	const uint16_t previousCount = target ?
+		getMember<uint16_t>(pool, NGIOAccelCommandPool::countOffset) : 0;
+	const bool nativeSuccess = FunctionCast(
+		vfAllocMoreCommandBuffers,
+		callback->oIOAccelAllocMoreCommandBuffers)(pool);
+	if (!target || !nativeSuccess)
+		return nativeSuccess;
+
+	const uint16_t publishedCount =
+		getMember<uint16_t>(pool, NGIOAccelCommandPool::countOffset);
+	const int16_t current =
+		getMember<int16_t>(pool, NGIOAccelCommandPool::currentOffset);
+	if (previousCount >= NGIOAccelCommandPool::slotCapacity)
+		return false;
+	const size_t slot = NGIOAccelCommandPool::slotsOffset +
+		static_cast<size_t>(previousCount) * NGIOAccelCommandPool::slotStride;
+	const uintptr_t memory = reinterpret_cast<uintptr_t>(
+		getMember<void *>(pool, slot));
+	const uintptr_t gpuMapping = reinterpret_cast<uintptr_t>(
+		getMember<void *>(pool, slot + sizeof(uintptr_t)));
+	const uintptr_t cpuMapping = reinterpret_cast<uintptr_t>(
+		getMember<void *>(pool, slot + 2 * sizeof(uintptr_t)));
+	const bool complete = NGIOAccelCommandPool::completedGrowth(
+		nativeSuccess, maximum, previousCount, publishedCount, current,
+		memory, gpuMapping, cpuMapping);
+	if (!complete)
+		SYSLOG("ngreen", "V261: rejecting incomplete VF command-pool growth old=%u new=%u current=%d",
+		       previousCount, publishedCount, current);
+	return complete;
+}
+
 bool Gen11::IGMemoryManagerInitSegments(void *that)
 {
 	if (gVfIdentity != VfIdentity::Virtual || !that || !vfBootstrapDirectGgtt())
@@ -3308,6 +3373,14 @@ bool Gen11::start(void *that, void *provider)
 		return false;
 	}
 	const bool vfActive = identity == VfIdentity::Virtual;
+	if (vfActive) {
+		// start() is the first stable point where the exact IntelAccelerator
+		// instance is available. Publish it before native context/pool creation;
+		// the System-KC wrapper compares this owner and leaves every other pool
+		// on the native PF path.
+		gVfAccelerator = that;
+		OSSynchronizeIO();
+	}
 	if (vfActive) {
 		// utilGetProperty<unsigned> lets this OSData override the mandatory
 		// accelerator property after publication. Do not invoke its string

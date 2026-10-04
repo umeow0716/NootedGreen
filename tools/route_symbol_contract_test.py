@@ -255,10 +255,15 @@ def main() -> None:
     payload_paths = [Path(value) for value in sys.argv[2:]]
     payloads = [macho_symbols(path) for path in payload_paths]
     routes = routed_symbols(source)
+    system_routes = {
+        "__ZN25IOAccelCommandBufferPool223allocMoreCommandBuffersEv",
+    }
+    if not system_routes <= routes:
+        raise AssertionError("missing explicitly admitted System-KC route")
 
     # Keep route inventory changes explicit. This count includes admission,
-    # lifecycle, GGTT, GuC/CTB, IRQ and native producer routes.
-    expected_route_count = 96
+    # lifecycle, GGTT, GuC/CTB, IRQ, native producer and System-KC routes.
+    expected_route_count = 97
     if len(routes) != expected_route_count:
         raise AssertionError(
             f"route inventory changed: expected {expected_route_count}, got {len(routes)}"
@@ -274,7 +279,7 @@ def main() -> None:
     }
     for path, symbols in zip(payload_paths[:2], accelerator):
         verify_runtime_patch_owners(source, path, symbols)
-    for route in sorted(routes):
+    for route in sorted(routes - system_routes):
         accel_values = [table.get(route, []) for table in accelerator]
         fb_values = [table.get(route, []) for table in framebuffer]
         in_accel = any(accel_values)
@@ -302,7 +307,8 @@ def main() -> None:
     print(
         "PASS: "
         f"{len(routes)} unique routed Tahoe symbols "
-        f"({accelerator_count} accelerator, {framebuffer_count} framebuffer)"
+        f"({accelerator_count} accelerator, {framebuffer_count} framebuffer, "
+        f"{len(system_routes)} System KC)"
     )
 
 

@@ -10,6 +10,7 @@ import sys
 KC_SHA256 = "5cb1be1dc530b4b953a33943567589101d3ac46bb8cf90728566ee7e5b1fa214"
 BOOT_SHA256 = "5cba9e36ceed5d73e1d569d1772bc46fecbd0359f824db689863e686d856ea3b"
 IDENTIFIER = b"com.apple.iokit.IOAcceleratorFamily2"
+IOACCEL_UUID = bytes.fromhex("6c4a16b166dc3a8b9f0bd3e027b16eb1")
 EVENT_VTABLE = "__ZTV24IOAccelEventMachineFast2"
 EVENT_FINISH = "__ZN24IOAccelEventMachineFast211finishEventEP12IOAccelEvent"
 EVENT_WAIT = "__ZN20IOAccelEventMachine212waitForStampEijPj"
@@ -975,6 +976,7 @@ def check(path, boot_path=None):
     assert len(entries) == 1, "missing/ambiguous IOAccel fileset"
     segments = []
     symtab = None
+    uuids = []
     for command, offset in commands(image, entries[0]):
         if command == 0x19:
             fields = struct.unpack_from("<II16sQQQQIIII", image, offset)
@@ -982,6 +984,10 @@ def check(path, boot_path=None):
         elif command == 2:
             assert symtab is None, "duplicate symbol table"
             symtab = struct.unpack_from("<6I", image, offset)[2:]
+        elif command == 0x1b:
+            assert struct.unpack_from("<I", image, offset + 4)[0] == 24, "malformed LC_UUID"
+            uuids.append(image[offset + 8:offset + 24])
+    assert uuids == [IOACCEL_UUID], "unreviewed IOAcceleratorFamily2 UUID"
     assert symtab is not None, "missing embedded symbol table"
     symbol_offset, count, string_offset, string_size = symtab
     matches = {name: [] for name in {*CONTRACTS, *SCRUB_BODIES, *LOCK_COPIES, *EVENT_OWNER_BODIES, SHARED_VTABLE, RESOURCE_VTABLE, "__ZTV18IOAccelDisplayPipe", "__ZTV24IOAccelLegacyDisplayPipe", "__ZTV16IOAccelMemoryMap", "__ZTV16IOAccelSysMemory", "__ZTV11IOAccelTask", "__ZTV24IOAccelSharedUserClient2",

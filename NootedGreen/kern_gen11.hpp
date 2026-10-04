@@ -186,6 +186,8 @@ private:
 	mach_vm_address_t ioGraphicsEnableAccelerator {};
 	mach_vm_address_t ioGraphicsDisableAccelerator {};
 	mach_vm_address_t ioAccelEventMachineInitEvent {};
+	static bool vfAllocMoreCommandBuffers(void *pool);
+	mach_vm_address_t oIOAccelAllocMoreCommandBuffers {};
 	mach_vm_address_t vfInterruptBridgeEnable {};
 	mach_vm_address_t vfInterruptBridgeDisable {};
 	static bool stopGraphicsEngine(void *that);

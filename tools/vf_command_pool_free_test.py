@@ -23,7 +23,7 @@ assert hashlib.sha256(image[0x14b6b2bc:0x14b6b3ca]).hexdigest() == \
 
 
 def run(slots, record, current=-1, linked=False, failure=None, runtime=False, request=None,
-        old_event_complete=True):
+        old_event_complete=True, growth_guard=False):
     assert current == -1 or 0 <= current < slots
     selection_failure = failure in ('gpu-map', 'va', 'prepare')
     allocation_memory = 0x491000 if runtime else 0x490000
@@ -70,6 +70,7 @@ def run(slots, record, current=-1, linked=False, failure=None, runtime=False, re
     memories = []
     allocation_calls = 0
     cpu_map_calls = 0
+    guard_active = False
     for i in range(slots):
         memory, mapping = 0x490000 + i * 0x1000, 0x4c0000 + i * 0x1000
         memories.append(memory)
@@ -123,6 +124,13 @@ def run(slots, record, current=-1, linked=False, failure=None, runtime=False, re
             events.append('test-old-event')
             ret(int(old_event_complete))
             return
+        if guard_active and address == 0x14b6afda:
+            # Model the production wrapper rejecting native AL=true after its
+            # requested slot failed to become current. The native growth body
+            # and all state mutations have already executed at this point.
+            assert uc.mem_read(pool + 0x1842, 2) == b'\x00\x00'
+            events.append('growth-postcondition-reject')
+            uc.reg_write(UC_X86_REG_R14, 0)
         if address in labels:
             if address == 0x600070:
                 assert uc.reg_read(UC_X86_REG_RDI) == 0x4c0000 + current * 0x1000
@@ -150,6 +158,7 @@ def run(slots, record, current=-1, linked=False, failure=None, runtime=False, re
         assert get(pool + 0x50) == 0 and get(pool + 0x58) == allocation_cpu
         events.clear()
         if request is not None:
+            guard_active = growth_guard
             start = 0x500000 if old_event_complete else 0x500ff8
             end = 0x501000 if old_event_complete else 0x500ff8
             cursor = start
@@ -175,7 +184,11 @@ def run(slots, record, current=-1, linked=False, failure=None, runtime=False, re
                     'allocate-memory', 'create-cpu-map',
                     'create-gpu-map', 'unlinked-log',
                 ]
-                assert 'finish-event' not in events
+                if growth_guard:
+                    expected_request += ['growth-postcondition-reject', 'finish-event']
+                    assert events.count('finish-event') == 1
+                else:
+                    assert 'finish-event' not in events
                 assert uc.mem_read(pool + 0x1832, 2) == b'\x04\x00'
                 assert uc.mem_read(pool + 0x1842, 2) == b'\x00\x00'
             assert events == expected_request, events
@@ -261,9 +274,12 @@ for request in (1024, 1025, 2048):
     run(1, False, current=0, failure='gpu-map', runtime=True, request=request)
 run(1, False, current=0, failure='gpu-map', runtime=True, request=1,
     old_event_complete=False)
+run(1, False, current=0, failure='gpu-map', runtime=True, request=1,
+    old_event_complete=False, growth_guard=True)
 print('PASS 24 KC partial/current/linked-pool free fixtures; complete precedes release;'
       ' five actual init/growth failure states cleaned;'
       ' runtime growth false-success/current preservation reproduced;'
       ' pointer capacity boundary and oversize return reproduced without writes;'
       ' pending-event growth false-success skips finish and reuses old slot;'
+      ' growth postcondition rejection restores the pending-event finish path;'
       ' callbacks mocked, no actual event/DMA quiescence proof')

@@ -7094,6 +7094,36 @@ cover the getter's direct void selection failure or its separate request-size
 postcondition. No production patch or hardware admission follows from this
 offline result.
 
+#### Owner-scoped growth postcondition rejects the reproduced false success
+
+Production now routes only `IOAccelCommandBufferPool2::allocMoreCommandBuffers`
+in the UUID-pinned Tahoe 25G229 IOAcceleratorFamily2 image. Before routing, it
+resolves the exact growth/free boundary and checks the count-publication,
+void-selection-call and unconditional-success instruction window. The wrapper
+captures maximum/count, calls the native body once, and preserves the native
+result for PF and every pool not owned by the currently starting VF accelerator.
+For the admitted owner it accepts true only when count has doubled within the
+256-slot/maximum bounds, current equals the first newly allocated index, and
+that slot has nonnull memory, GPU mapping and CPU mapping. No native allocation
+or cleanup is replaced.
+
+The accelerator owner is published before the native IntelAccelerator start
+can construct contexts. A source mutation contract pins UUID/bounds/route,
+owner comparison, before/after ordering and postcondition use. A sanitizer
+unit test covers every power-of-two maximum/current growth state and rejects
+native false, invalid limits, count/index mismatches and each missing slot
+member. The exact-KC emulator additionally models the wrapper rejecting the
+second false-success in the pending-event fixture; getter then calls old slot0
+`finishEvent` exactly once before reuse, while the same native allocation and
+partial-slot cleanup still execute.
+
+This code is built and statically tested but not installed or executed in the
+guest. It repairs the runtime growth Boolean contract only. Initial pool init
+now receives false through the routed growth entry, but the native extended-
+context constructor still ignores that result; direct void selection and
+request-capacity postconditions also remain separate. Those unresolved paths
+continue to block VM admission.
+
 #### Runtime growth reproduces success with unchanged old current slot
 
 KC emulator now begins with count1/current0 and an existing slot triple,
