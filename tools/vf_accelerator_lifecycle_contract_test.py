@@ -608,6 +608,13 @@ def macho_inventory(path):
     assert image[0x14518:0x1451e] == bytes.fromhex("ff 90 30 01 00 00"), f"{path}: changed releaseRange unmap virtual"
     assert direct_branches("__ZN19IGHardwarePageTable12releaseRangeERK14IGAddressRange", "__ZN16IntelAccelerator27flushHardwareAfterGttUpdateEv") == [0x14522], f"{path}: changed post-unmap deferred-flush edge"
     assert image[0x14573:0x14575] == bytes.fromhex("b0 01"), f"{path}: changed unconditional releaseRange success"
+    for owner, calls in (
+            ("__ZN18IGAccelFIFOChannel18submitStampCommandEv", [0x4c552]),
+            ("__ZN18IGAccelFIFOChannel18submitRingCommandsEPjjj", [0x4c63b]),
+            ("__ZN21IGAccelDisplayMachine16generateFlipWaitEP18IGAccelFIFOChannel", [0x7e169, 0x7e1d0])):
+        assert direct_branches(owner, RING_WAIT_SPACE) == calls, f"{path}: changed selected reservation caller edges: {owner}"
+    for address in (0x4c557, 0x4c640):
+        assert image[address:address + 3] == bytes.fromhex("84 c0 74"), f"{path}: changed FIFO reservation-result guard"
     assert struct.unpack_from("<Q", image, value(SCHEDULER4_VTABLE) + 16 + 0x150)[0] == value("__ZN12IGScheduler416checkForProgressE10IGHwCsType"), f"{path}: changed scheduler4 timeout progress query"
     assert image[0x4177c:0x41782] == bytes.fromhex("ff 90 50 01 00 00"), f"{path}: changed pending-TLB reservation virtual"
     assert image[0x41785:0x4178a] == bytes.fromhex("41 c6 46 6d 01"), f"{path}: changed pre-validation TLB readiness store"

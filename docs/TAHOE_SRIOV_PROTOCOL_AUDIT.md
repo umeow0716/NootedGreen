@@ -6961,6 +6961,30 @@ No executable patch or runtime mutation.
 
 ###### Complete waitForSpace reservation and failure ordering
 
+A source search finds no product route named waitForSpace, waitTimeout or
+checkForProgress. This does not exclude all binary patches or indirect
+runtime changes. Existing lifecycle tests already checked portions of this
+progress/timeout graph; the recent complete-body pins supplement rather than
+replace those contracts. Avoid representing these repeated edges as new
+runtime validation.
+
+An exploratory decoded direct-call scan, excluding external relocation
+placeholders, found 22 waitForSpace call sites in native __text. This is not
+an indirect-call inventory or proof of runtime reachability. Selected edges
+are now pinned: FIFO submitStampCommand 4c552 and submitRingCommands 4c63b
+immediately test AL and branch on false. Display generateFlipWait calls
+7e169 and 7e1d0 have no immediate result test before proceeding toward
+writeDWord/writeBuffer. Other callers include semaphore, blit and sync-event
+paths. Full caller-body and effective VF route review remains necessary.
+
+Therefore changing waitForSpace alone to return false on timeout cannot be
+assumed safe across retained callers: some checked callers can propagate a
+failure, while unchecked ones may continue command writing. A repair needs
+an owner-aware admission rule that prevents subsequent writes/submission,
+preserves backing and distinguishes reservation failure from GPU completion.
+Do not patch the common method blindly or substitute Guest panic for Host
+containment. No production/runtime change accompanies these selected contracts.
+
 The scheduler4 vtable +0x150 is now resolved/pinned to checkForProgress at
 1db54/8. The complete method unconditionally returns true; it checks no ring
 head, completion token or hardware status. The existing VF startup uses
