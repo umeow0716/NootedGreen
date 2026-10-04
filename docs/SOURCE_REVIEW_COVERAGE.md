@@ -7,6 +7,13 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 selected destruction admission: complete SharedUserClient2
+delete_resource (0x116) reviewed/pinned. Accelerator mutex +0x88 covers
+namespace borrowed lookup and resource Shared-release; native IGAccelResource
+inherits that virtual, now checked via import relocation. This proves one
+selected deletion caller's outer lock, not all mapping/PPGTT destruction paths
+or completion-consumer compatibility while holding that lock.
+
 2026-10-04 event storage destruction: complete Resource2::free reviewed/pinned
 (0x41c), including all selected type branches and corruption exits. Mapping
 remove_resource and release precede event-pair clear/typed free. Free import

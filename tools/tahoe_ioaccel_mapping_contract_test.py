@@ -35,6 +35,7 @@ EVENT_DISABLE_STAMP_LOCKED = "__ZN20IOAccelEventMachine223disable_stamp_interrup
 EVENT_ENABLE_STAMP = "__ZN20IOAccelEventMachine220enableStampInterruptEi"
 EVENT_DISABLE_STAMP = "__ZN20IOAccelEventMachine221disableStampInterruptEi"
 EVENT_OWNER_BODIES = {
+    "__ZN24IOAccelSharedUserClient215delete_resourceEj": (0x116, "3284f01291ec4103e1a0695dcad54bdc3722cdb8a303c867459b7e3cce0cb302"),
     "__ZN16IOAccelMemoryMap15remove_resourceEP16IOAccelResource2": (0x5e, "72e6f743a75a66e9d29bfa658f891e0c5c99e462a9fe3a740c44deef0eb068ea"),
     "__ZN16IOAccelResource24freeEv": (0x41c, "ed792391afedafbd9924dc5d2bdc447d0b116644f8e5b2f34161398e982c79b4"),
     "__ZN16IOAccelResource210initializeEP22IOAccelNewResourceArgsy": (0x33e, "7d083706bf76b368690668e896e04d2f33c89bd906457e32e0699a283aa70c1a"),
@@ -1096,6 +1097,12 @@ def check(path, boot_path=None):
         assert encoded[0] == 0xe8 and call + 5 + struct.unpack_from("<i", encoded, 1)[0] == address_of(method), "changed Shared teardown cleanup edge"
     assert read(0x14b8e91c, 14) == bytes.fromhex("ff 50 28 48 c7 83 88 00 00 00 00 00 00 00"), "changed Shared task release/identity clear ordering"
     raw_shared_release = struct.unpack("<Q", read(address_of(RESOURCE_VTABLE) + 16 + 0x160, 8))[0]
+    for call, target in ((0x14b914b4, 0x10012), (0x14b9156f, 0x10018),
+                         (0x14b914f0, address_of("__ZNK16IOAccelNamespace8lookupIdEjPPv"))):
+        encoded = read(call, 5)
+        assert encoded[0] == 0xe8 and call + 5 + struct.unpack_from("<i", encoded, 1)[0] == target, "changed resource delete mutex/lookup edge"
+    assert read(0x14b914ac, 8) == bytes.fromhex("49 8b bc 24 88 00 00 00"), "changed resource delete accelerator mutex field"
+    assert read(0x14b91513, 6) == bytes.fromhex("ff 90 60 01 00 00"), "changed resource delete Shared-release dispatch"
     assert raw_shared_release >> 63 == 0 and (raw_shared_release >> 30) & 3 == 1 and raw_shared_release & 0x3fffffff == address_of("__ZN16IOAccelResource213sharedReleaseEP14IOAccelShared2"), "changed declared resource Shared-release target"
     raw_shared_stop = struct.unpack("<Q", read(address_of("__ZTV24IOAccelSharedUserClient2") + 16 + 0x998, 8))[0]
     assert raw_shared_stop >> 63 == 0 and (raw_shared_stop >> 30) & 3 == 1 and raw_shared_stop & 0x3fffffff == address_of("__ZN24IOAccelSharedUserClient210sharedStopEv"), "changed declared Shared user-client stop target"

@@ -6955,6 +6955,28 @@ No executable patch or runtime mutation.
 
 ### Update fanout must participate in the same owner transaction
 
+Concrete resource-delete admission (2026-10-04): complete SharedUserClient2
+delete_resource 0x14b91470/0x116 reviewed and pinned. It temporarily increments
+accelerator +0x90 around acquiring IOLock at accelerator +0x88 (call
+0x14b914b4), then calls lock_busy and notification virtual +0x850. Namespace
+lookup 0x14b914f0 is borrowed but occurs inside that mutex. Successful lookup
+for a resource whose type byte is not 0x0a invokes resource virtual +0x160 at
+0x14b91513; type 0x0a skips that invocation and still records success. Missing
+lookup returns e00002c2. Both paths converge on notification +0x858,
+unlock_busy and IOLockUnlock at 0x14b9156f. Native IGAccelResource's object
+slot +0x160 is external relocation 0xd9540 to base Resource2::sharedRelease,
+now contract-checked, connecting this selected concrete class to the existing
+reviewed release graph rather than assuming base-vtable inheritance.
+
+This supplies real outer serialization for one resource-deletion path, in
+addition to already-reviewed color/depth resolve callers. It does not prove
+all GC/task/map/PPGTT destruction is serialized, nor that a GuC wait while
+holding accelerator +0x88 cannot deadlock an effective completion/submission
+path. The temporary +0x90 counter is not a resource retain. A retirement hook
+must respect the existing mutex and sharedRelease's nested release graph;
+do not add an unconditional reacquisition or equate deletion success with
+GPU translation acknowledgement. No runtime changes; containment remains.
+
 Event-pair destruction follow-up (2026-10-04): complete Resource2::free
 0x14b86478/0x41c is now reviewed and fixture-pinned. For nonnull mapping +0x40
 it calls remove_resource at 0x14b86588 and mapping release at 0x14b86594,

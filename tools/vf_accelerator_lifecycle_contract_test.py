@@ -595,6 +595,7 @@ def macho_inventory(path):
     }
     observed_stamp_irq_imports = {address: [] for address in stamp_irq_imports}
     event_stop_imports = {
+        0xd9540: "__ZN16IOAccelResource213sharedReleaseEP14IOAccelShared2",
         0xd9570: "__ZN16IOAccelResource212addToChannelEP15IOAccelChannel2j",
         0xd9578: "__ZN16IOAccelResource217removeFromChannelEP15IOAccelChannel2",
         0xc81b8: "__ZTV24IOAccelEventMachineFast2",
