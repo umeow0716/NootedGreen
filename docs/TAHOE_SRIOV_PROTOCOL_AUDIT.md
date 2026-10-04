@@ -1,7 +1,7 @@
 # Tahoe SR-IOV protocol audit — in progress
 
 Updated: 2026-10-04. The last dynamic source baseline is `ce166c8`; the current
-offline-reviewed worktree is V289 Device/Shared/MemoryInfo and resource-paging inventory on
+offline-reviewed worktree is V290 DisplayPipe producer/reachability inventory on
 `codex/tahoe-sriov-vf`. This is NOT a boot-test candidate or a successful
 driver baseline. The `ce166c8` run produced repeatable host PF DMAR faults
 followed by i915 hangs and a host reboot. Keep `macos-tahoe-sriov` shut off until the
@@ -20,6 +20,47 @@ KVMFR/client transport remains the intended receiving side.
 The authoritative dynamic-entry checklist is
 [`DYNAMIC_TEST_GATE.md`](DYNAMIC_TEST_GATE.md). Any open static gate keeps the
 VM hard hold in force.
+
+## V290 DisplayPipe producer and reachability inventory (offline)
+
+The Tahoe 25G229 paired-KC contract now pins the complete fourteen-entry
+`IOAccelDisplayPipeUserClient2` legacy dispatch table, exact scalar/structure
+argument counts, selector bound/table selection, every wrapper/member body and
+edge, and every observed accelerator mutex/busy acquisition and release. Its
+start body stores the accelerator and accelerator `+0x378` display machine;
+`setPipeIndex` and `getDisplayPipeNoLock` are connected to the bounded
+framebuffer-count and pipe getters.
+
+Two external producers are classified. Selector 8 `transactionEnd` reaches
+the already-reviewed transaction preparation, queue and concrete Intel flip
+path. Selector 12 `copySurface` reaches the complete base pipe copy body and
+dispatches accelerator slot `+0x9a8`, whose concrete Intel target is
+`IntelAccelerator::submitSwapCopy`. The other twelve selectors configure or
+inspect display/transaction state and do not add another independent external
+submit root in their complete bounded bodies.
+
+The construction graph is also fixed across the System KC and both Intel
+payloads. `IOGraphicsAccelerator2::start` calls accelerator `+0xa00`, stores
+the resulting machine at `+0x378` and initializes it at machine `+0x850`.
+The Intel vtable maps `+0xa00/+0xa48` to complete metaclass factories for
+`IGAccelDisplayMachine` and `IGAccelDisplayPipe`. Concrete machine init/start
+delegate through the legacy table; inherited start enumerates registry
+`IOFramebuffer` objects and dispatches `found_framebuffer` at `+0x8d8`.
+Legacy found delegates to the base method, which dispatches accelerator
+`+0x908 createDisplayPipe`; that method calls concrete `newDisplayPipe` and
+pipe init.
+
+Consequently, rejecting the Intel physical framebuffer is not a valid proof
+that all display pipes are unreachable: another registry `IOFramebuffer`
+could still be discovered. P6 closes only as `CLOSED-INVENTORY`; transaction,
+copy and downstream flip producers must be included in P8 counted admission
+and P9 close/drain ordering. Targeted paired-KC and dual-payload contracts
+pass, as does the full static suite at `/tmp/ngreen-static.jJXM0N` with only
+the two known SDK macro warnings. Checkpoint `2483191` is pushed; exact-sha
+GitHub Actions run `37205588039` passed full static, x86_64 release kext,
+Metal smoke and both artifact uploads in 1m53s. Artifact sizes are 73,951 and
+2,943 bytes and neither is expired. No VM, deployment, PCI/sysfs, VF/PF or Host
+i915 state was touched.
 
 ## V289 Device, Shared, MemoryInfo and resource-paging inventory (offline)
 

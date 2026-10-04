@@ -11,14 +11,14 @@ kext/AuxKC、重綁 PCI 或寫入 SR-IOV sysfs。`CLOSED` 只代表指定的離�
 | SG-02 | VF/PF 身分、Gen11 virtual-MMIO 與 memory-IRQ 能力分流 | CLOSED | RPL/ADL/TGL 不再錯送 memory-IRQ KLV；MTL/ARL 才使用 memory IRQ。 |
 | SG-03 | 已知 legacy/PF-owned GPU producer 隔離 | CLOSED | V284 在 legacy H2G MMIO、GuC DMA、doorbell、native CTB 與 Scheduler5 execlist 五個入口先 fail-stop；modern path 另列 SG-05。 |
 | SG-04 | task／PPGTT／PagePool 共同 ownership transaction | CLOSED | V283 已涵蓋 task publish/free、commit/update/release、32/64-bit unmap/shrink、descriptor retirement 與 PagePool reuse/prune/free。這不取代 GPU completion 證明。 |
-| SG-05 | modern 外部 producer 在 stop 前可封門、排空，且不阻斷 `finishAllStamps` retirement | REVIEWING | command queue、legacy context、2D、Intel SharedUserClient 與 P5 全部 base-client roots 已固定。尚須閉合 display/flip 與所有非 user-triggered producers，實作 receiver-scoped counted admission，並證明 close/drain 鎖序。 |
+| SG-05 | modern 外部 producer 在 stop 前可封門、排空，且不阻斷 `finishAllStamps` retirement | REVIEWING | P1–P6 的 external/base/display roots 已完成 inventory。尚須閉合所有非 user-triggered producers，實作 receiver-scoped counted admission，並證明 close/drain 鎖序。 |
 | SG-06 | reservation → CPU ring writes → tail publication → GuC submit 為一致的 owner/admission transaction | OPEN | reservation postcondition、ring geometry、retained backing 與 final submit validation 已有；但 native writer 在 final routed submit 前的跨呼叫區間仍沒有完整 lease。 |
 | SG-07 | GPU completion 與 ring/context/mapping/page-table backing 的最終釋放順序 | OPEN | GuC context deregistration與 heavy TLB ACK 已覆蓋選定 teardown；尚未證明所有完成事件、stamp、pool reuse 與 producer owner 都在釋放前退休。 |
 | SG-08 | render／depth／CCS／ICB／paging 的 allocation、event collection、partial submit 與錯誤傳遞 | OPEN | 已修補選定 CCS null rectangle 與兩個 event-vector capacity failure；多個 callers 仍忽略 result 或容許 partial progress。SharedUserClient ICB 的兩次，以及 `IGAccelResource::pageon/pageoff` 的三次／兩次 `submitBlit` 都不檢查 AL，不能宣稱 fail closed。 |
 | SG-09 | timer／IRQ／workloop callback 的取消、排空與 owner lifetime | OPEN | IRQ callback counted gate 已有；DPSM、event-machine、passive timer、workloop removal 的完整 no-late-callback／無反向鎖序證明尚未閉合。 |
 | SG-10 | 所有 VF 可達 PF-owned MMIO／DMA／force-wake／reset 的 negative reachability | OPEN | 已隔離多批具名入口；仍須以完整 symbol/vtable/function-pointer inventory 證明沒有 retained native bypass。 |
 | SG-11 | baseline 要求的所有程式檔完整審閱與 ledger closure | OPEN | `SOURCE_REVIEW_COVERAGE.md` 仍明確標記 incomplete；新增／修改檔案也必須納入。CI 成功不能替代此項。 |
-| SG-12 | 精確候選 commit 的完整 static suite、x86_64 release kext、Metal smoke build 與 artifact provenance | REVALIDATE PER CANDIDATE | V289 `b534c1c` 的 targeted paired-KC/dual-payload contracts、full static `/tmp/ngreen-static.KodlVY` 與 exact-sha GitHub Actions `37203779356` 已通過；release kext 與 Metal smoke artifacts 均存在。這只重驗該 SHA，不解除 SG-05 至 SG-11。任何產品碼或 payload 變更立即重開本項。 |
+| SG-12 | 精確候選 commit 的完整 static suite、x86_64 release kext、Metal smoke build 與 artifact provenance | REVALIDATE PER CANDIDATE | V290 `2483191` 的 targeted paired-KC/dual-payload contracts、full static `/tmp/ngreen-static.jJXM0N` 與 exact-sha GitHub Actions `37205588039` 已通過；release kext 與 Metal smoke artifacts 均存在。這只重驗該 SHA，不解除 SG-05 至 SG-11。任何產品碼或 payload 變更立即重開本項。 |
 
 ## 目前主路徑
 
@@ -72,10 +72,21 @@ page-off 的完整區域與 vtable：page-on 有三次、page-off 有兩次 `sub
 gather 與 purge/unwire 路徑也已固定，未找到另一個 submit root。這關閉 P5c inventory，
 但新增的 paging root 必須由 P7/P8/P9 與 SG-08 一起解決。
 
+DisplayPipeUserClient 的十四項 selector、完整 argument table、wrapper/member bodies、
+accelerator mutex/busy scopes 及 pipe selection 已固定。selector 8
+`transactionEnd` 會進入既有 transaction queue／flip path；selector 12
+`copySurface` 會進入 pipe copy 並經 accelerator `+0x9a8` 到
+`IntelAccelerator::submitSwapCopy`，兩者都是 P8/P9 必須涵蓋的 external roots。
+Intel `newDisplayMachine`／`newDisplayPipe` factories、concrete vtable，以及
+base→legacy display-machine start、`IOFramebuffer` enumeration、
+`found_framebuffer`、`createDisplayPipe` 鏈亦已固定。拒絕 Intel physical
+framebuffer 並不足以證明無 pipe：其他 registry `IOFramebuffer` 仍可能被掃描。
+因此 P6 是 `CLOSED-INVENTORY`，不是 unreachable 或安全執行證明。
+
 因此一般 command queue 可以使用「VF accelerator receiver identity + 外層 counted
 admission」封門，但尚不能把它當成全域 producer gate。SharedUserClient
-depth/color/ICB 有獨立 external roots；native display/flip、command-buffer pool、driver
-override 以外的非 user-triggered producer 旁路或
+depth/color/ICB、display transaction/copy 與 paging 都有獨立 external roots；
+command-buffer pool、driver override 以外的非 user-triggered producer 旁路或
 不可達性仍要逐一閉合。不得只在 `vfSubmitWorkItem`、`submitToRing` 或
 `waitForSpace` 單點拒絕：前兩者太晚才涵蓋 CPU ring writes，後者無法以一般 RAII 跨越
 後續 writer 與 submission，且部分 callers 不檢查 reservation Boolean。
@@ -100,7 +111,7 @@ contained boot，不是效能、Metal completion、媒體或 Looking Glass 測�
 | P5a Base/Legacy/Intel Surface | CLOSED-INVENTORY | 19-selector 表、特殊 dispatch、完整 producer bodies/lock scopes、legacy 與 Intel vtable/factory、copy/swap/flush/blit edges 已固定；不代表已實作 admission。 |
 | P5b GLContext／GLDrawable／SurfaceMTL | CLOSED-INVENTORY | 三組完整 selector/argument tables、dynamic/static/special dispatch、完整 member bodies、vtable、mutex/busy/wait scopes 與 producer/fence edges 已固定。GL selector `0x105` read-buffer 是獨立 copy/DMA root；processSwap 屬 P2 家族；另兩類未找到新 submit root。 |
 | P5c Device／Shared／MemoryInfo clients | CLOSED-INVENTORY | Device 10、Shared 21 與 MemoryInfo 3 項 selector/argument contracts、完整 member/wrapper bodies、特殊 dispatch、busy/timeout-lock scopes 與 unwire edges 已固定。Shared selector 2 經 `pageoffIfNeeded` 進入 Intel page-off；page-on/page-off 共五次 `submitBlit` 的未消費 AL 已列入 SG-08。 |
-| P6 display／flip reachability | OPEN | 必須證明 VF 無 pipe producer 可達，或將其納入 gate；僅拒絕 physical framebuffer start 不足以代替 call-graph 證明。 |
+| P6 display／flip reachability | CLOSED-INVENTORY | 14-selector DisplayPipeUserClient、鎖域、pipe selection、transaction/copy producer、Intel factories/vtables 與 base→legacy framebuffer enumeration/create-pipe 鏈已固定。無法證明不可達，故 selector 8/12 與 downstream flip/copy 必須納入 P8/P9。 |
 | P7 非 user-triggered／內部 producers | OPEN | 必須區分需封門的新工作與 stop 所需的 stamp/event retirement。 |
 | P8 counted admission 實作 | OPEN | 所有 root 確定前不安裝 production route。 |
 | P9 close→drain→native stop 鎖序 | OPEN | 必須證明無 sleep-with-lock、反向鎖序、漏計數或阻斷 `finishAllStamps`。 |

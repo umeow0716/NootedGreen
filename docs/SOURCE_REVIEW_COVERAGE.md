@@ -10,6 +10,23 @@ The current dynamic-entry gate table is
 
 ## Scope
 
+2026-10-04 DisplayPipe delta: the Tahoe paired-KC contract now pins the full
+fourteen-selector DisplayPipeUserClient table, all argument descriptors,
+complete wrapper/member bodies, pipe selection and exact mutex/busy scopes.
+Selector 8 transaction-end and selector 12 copy-surface are the two external
+producer roots; the latter reaches accelerator `+0x9a8 submitSwapCopy`.
+Complete base/legacy display-machine init/start/found-framebuffer and
+create-pipe bodies, vtable slots and the accelerator start factory/store/init
+window are fixed. Both Intel payloads pin concrete display-machine/pipe
+metaclass factories, vtable slots and legacy delegation. Because inherited
+start enumerates generic registry `IOFramebuffer` objects, physical Intel
+framebuffer rejection does not prove no pipe can exist. P6 is therefore
+closed as an inventory and its producers transfer to P8/P9; P7–P9 and
+SG-06–SG-11 remain blockers. Targeted contracts and full static pass at
+`/tmp/ngreen-static.jJXM0N`; checkpoint `2483191` and exact-sha GitHub Actions
+run `37205588039` pass, with both artifacts present. No runtime or hardware
+state was changed.
+
 2026-10-04 Device/Shared/MemoryInfo delta: the paired Tahoe System/Boot KC
 contract now pins the complete Device ten-entry, Shared twenty-one-entry and
 MemoryInfo three-entry selector families, exact argument descriptors,
@@ -1745,7 +1762,7 @@ remains native.
   The complete syntax/analyzer/protocol suite passes in
   `/tmp/ngreen-static.zuSxRI`. This is configuration hygiene, not a Metal
   result.
-# Latest offline display dispatch checkpoint
+# Earlier offline display dispatch checkpoint (superseded by V290 where applicable)
 
 Reviewed and pinned the base `displayModeWillChange`/`framebufferTerminated`
 virtuals, display user-client external dispatch wrapper, and inherited BootKC
@@ -1754,15 +1771,18 @@ offset is verified separately from object-vptr offsets. Descriptor dispatch
 does not supply an accelerator lock or terminal admission check. Subclasses,
 higher-level entry serialization, legacy dispatch helpers, descriptor action
 coverage and lazy-setup failure unwind remain incomplete. No VM/PCI writes.
-# Latest selector/action checkpoint
+# Earlier selector/action checkpoint (superseded by V290 where applicable)
 
 Selector 8 descriptor counts/target, `s_transaction_end` forwarding action,
 and complete base pipe `transaction_end` span are pinned and locally checked.
-Preparation errors preserve status but still queue the transaction. Downstream
-error retirement, prepare/argument callee bodies, virtual +0x8d8 overrides,
-event-machine +0x1b8 target and remaining 13 descriptor actions are pending.
-This extends reviewed coverage, not hardware acceleration or DMA safety proof.
-# Latest error-queue ownership checkpoint
+Preparation errors preserve status but still queue the transaction. At this
+checkpoint, downstream error retirement, prepare/argument callee bodies,
+virtual +0x8d8 overrides, event-machine +0x1b8 target and the remaining 13
+descriptor actions were pending. V290 closes the selector/action and +0x8d8
+display-machine inventory; event-machine retirement/admission remains in
+P7–P9. This extends reviewed coverage, not hardware acceleration or DMA safety
+proof.
+# Earlier error-queue ownership checkpoint (superseded by V290 where applicable)
 
 Pinned/reviewed complete gated queue, transaction prepare/free, base submit
 and begin virtuals. Queue overwrites transaction status with submit's result;
@@ -1771,14 +1791,14 @@ Free sends an 11-word async result before client/resource releases. Pending:
 actual framebuffer subclass overrides, resource preparation virtuals/imports,
 async payload semantics, queue-to-finished transfer and effective admission.
 Full-project and hardware-acceleration completion remain unproven.
-# Latest Intel display override checkpoint
+# Earlier Intel display override checkpoint (superseded by V290 where applicable)
 
 Reviewed complete IGAccelDisplayPipe begin/submit in both pinned payloads;
 verified effective vtable slots and external getter/legacy-table relocation
 identities. Paired SystemKC legacy submit slot resolves to reviewed base
 submit, not a new hardware-success method. Event-machine +0x1d0/+0x1d8/+0x1e0
 targets, runtime vtable changes and virtual-display feasibility remain pending.
-# Latest display stamp-record checkpoint
+# Earlier display stamp-record checkpoint (superseded by V290 where applicable)
 
 Resolved display-called event virtuals through external relocations to Fast2
 setEventStamp/incrementStamp/writeStampCommand. Reviewed Intel writeStamp and
