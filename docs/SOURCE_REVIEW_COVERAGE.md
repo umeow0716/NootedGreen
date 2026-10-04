@@ -7,6 +7,12 @@ audit's runtime blockers are open.
 
 ## Scope
 
+New complete native reviews: submitScanoutFlipBuffer `0x805c0/0x15e`,
+submitFlipBuffer `0x7f940/0x22e`, generateFlip `0x7fb6e/0x96c`. Whole hashes,
+buffer/legacy imports and selected generator/display-read/submit/DPSM edges
+pinned. This closes one previously discovery-only timer producer body, not
+VF reachability, complete shutdown exclusion or virtual-display feasibility.
+
 New complete native reviews: setup/resetScanout `0x804da/0x6c`,
 `0x80546/0x7a`, setup/resetFullScreen `0x7f892/0x60`, `0x7f8f2/0x4e`.
 Concrete submit vtable targets pinned, not newly reviewed bodies. Expanded

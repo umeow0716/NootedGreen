@@ -9,6 +9,9 @@ import sys
 # Complete reviewed native bodies. This fixes the concrete Intel override
 # graph, not inherited timer APIs, dynamic callbacks or runtime completion.
 STAMP_IRQ_NATIVE = {
+    "__ZN18IGAccelDisplayPipe23submitScanoutFlipBufferEP12IOAccelEventjP16IOAccelResource2S3_": (0x15e, "357071e49e6025c1f612a74f6f4f3650d273bca97f02dd3bde0bc12349532a58"),
+    "__ZN18IGAccelDisplayPipe16submitFlipBufferEP12IOAccelEventjP16IOAccelResource2S3_": (0x22e, "965d468497109a5ac2fe596554b7045240c1bea0837789aab64abc9e8a16f1d8"),
+    "__ZN18IGAccelDisplayPipe12generateFlipEP12IOAccelEventjP16IOAccelResource2S3_": (0x96c, "04b86ad3b4a6d5cd59e9a02d8bebc3dfb2c92825e76e60a28e67d9d7b4c56a3a"),
     "__ZN18IGAccelDisplayPipe12setupScanoutEP16IOAccelResource2S1_": (0x6c, "c5a18430ec26d95832be4f41dbb293ce0291a9aa4689ace8d9a91b7561a0af87"),
     "__ZN18IGAccelDisplayPipe12resetScanoutEP12IOAccelEventP16IOAccelResource2S3_": (0x7a, "e312d911daa09da6b843554307a58e08df055eaf62762183a2e72bb836a9539c"),
     "__ZN18IGAccelDisplayPipe15setupFullScreenEP16IOAccelResource2S1_": (0x60, "0fc19533907ef1a1181b52fe37c926c45a5fbe4840c3d8b6144210e369471d14"),
@@ -542,6 +545,11 @@ def macho_inventory(path):
     # These imports distinguish the periodic collection mutex from bridge
     # descriptor spin locks. They do not certify dynamic callback lifetime.
     stamp_irq_imports = {
+        0x7fd7f: "__ZN18IOAccelDisplayPipe27submitFlipBufferTransactionEP12IOAccelEventjP16IOAccelResource2S3_",
+        0x80076: "__ZN18IOAccelDisplayPipe27submitFlipBufferTransactionEP12IOAccelEventjP16IOAccelResource2S3_",
+        0x7fcd7: "__ZN25IOAccelCommandBufferPool217getBufferPtrNoIncEj",
+        0x7fe8d: "__ZN25IOAccelCommandBufferPool217getBufferPtrNoIncEj",
+        0x800a7: "__ZN25IOAccelCommandBufferPool217getBufferPtrNoIncEj",
         0x7f8d2: "__ZN16IOAccelResource218getStorageResourceEv",
         0x80be8: "__ZNK18IOAccelDisplayPipe14getFramebufferEv",
         0x80cd7: "__ZNK30IOAccelDisplayPipeTransaction216getPlaneResourceEjj",
@@ -776,6 +784,13 @@ def macho_inventory(path):
     assert image[0xf753:0xf75f] == bytes.fromhex("41 20 c7 48 8b 5b 08 48 85 db 75 e9"), f"{path}: changed non-short-circuit task page-table release loop"
     validate_transaction = "__ZN18IGAccelDisplayPipe19validateTransactionEP30IOAccelDisplayPipeTransaction2"
     display_vtable = value("__ZTV18IGAccelDisplayPipe")
+    generate_flip = "__ZN18IGAccelDisplayPipe12generateFlipEP12IOAccelEventjP16IOAccelResource2S3_"
+    assert direct_branches(generate_flip, "__ZN16IntelAccelerator13dpsmKickTimerEv") == [0x804b6], f"{path}: changed display DPSM timer producer edge"
+    assert direct_branches(generate_flip, "__ZN18IGAccelDisplayPipe21displayReadRegister32Ei") == [0x800ec], f"{path}: changed display register read generation edge"
+    assert direct_branches(generate_flip, "__ZN18IGAccelDisplayPipe14submitCommandsEP12IOAccelEventS1_") == [0x7fd6a, 0x80060, 0x804cf], f"{path}: changed display command submission edges"
+    for caller, calls in (("__ZN18IGAccelDisplayPipe23submitScanoutFlipBufferEP12IOAccelEventjP16IOAccelResource2S3_", [0x806a1]),
+                          ("__ZN18IGAccelDisplayPipe16submitFlipBufferEP12IOAccelEventjP16IOAccelResource2S3_", [0x7fae2])):
+        assert direct_branches(caller, generate_flip) == calls, f"{path}: changed native display generation edge"
     for slot, method in ((0x9b8, "__ZN18IGAccelDisplayPipe23submitScanoutFlipBufferEP12IOAccelEventjP16IOAccelResource2S3_"),
                          (0x9c0, "__ZN18IGAccelDisplayPipe16submitFlipBufferEP12IOAccelEventjP16IOAccelResource2S3_")):
         assert struct.unpack_from("<Q", image, display_vtable + 16 + slot)[0] == value(method), f"{path}: changed scanout/fullscreen concrete submit dispatch"

@@ -6955,6 +6955,47 @@ No executable patch or runtime mutation.
 
 ### Update fanout must participate in the same owner transaction
 
+#### Effective flip generation includes display commands and a DPSM producer
+
+New complete native reviews/pins: submitScanoutFlipBuffer `0x805c0/0x15e`,
+submitFlipBuffer `0x7f940/0x22e`, and generateFlip `0x7fb6e/0x96c`.
+Exact whole-body hashes are in the paired-payload contract. Scanout submit
+derives a mapping-based address, saves pipe `+0x12d0`, and calls generateFlip.
+Fullscreen submit first prepares the resource; false exits, true sets selected
+accelerator state, computes/caches address at `+0x12c8`, conditionally resolves
+resource state and calls generateFlip, then completes the resource and clears
+the selected state. Cached-address/event branches are not new hardware success
+or owner-retirement evidence. None of these complete methods sets private
+rotation width/height.
+
+generateFlip allocates command-buffer space via the imported
+getBufferPtrNoInc helper, fills command data and calls submitCommands at
+`0x7fd6a`, `0x80060`, or `0x804cf`. Selected branches also call inherited
+submitFlipBufferTransaction. It calls displayReadRegister32 with argument
+`0x70180` at `0x800ec` and emits register-oriented command words; exact command
+generation validity is not newly certified against a PRM by this body review.
+Framebuffer virtual `+0x6b8` is used on selected branches. These are native
+display/hardware interactions, not a virtual-screen/capture abstraction.
+Buffer capacity, helper failure semantics and outer lifetime/admission still
+need the effective callees, rather than assuming the command pointer safe.
+
+The complete generator confirms the previously discovered DPSM producer:
+direct call `0x804b6` targets dpsmKickTimer `0x26f60`. It is now explicitly
+edge-pinned, along with the display read and three submitCommands edges.
+Other calls to `0x4d9dc` in these functions are frameCalcGPUBusy telemetry,
+not the DPSM timer call. The source's UUID/generation-specific physical
+framebuffer admission rejection remains in place, but alone does not prove
+that every legacy display submission or prospective virtual-display consumer
+is excluded on a VF. That reachability/admission proof must accompany timer
+teardown and the eventual Sunshine display design. Do not reuse this native
+display command path as a substitute for a safe VF virtual display.
+
+Both archived native payload contracts pass; full suite last passed in
+`/tmp/ngreen-static.ZdYtcJ` before these fixture additions. No production hook,
+runtime deployment or Host GPU operation. Next review effective submitCommands
+buffer-owner transfer and display-read containment, then return the confirmed
+producer edge to the shutdown/retirement admission graph.
+
 #### Scanout/fullscreen wrappers do not supply rotation retirement
 
 New complete native reviews/pins: setupScanout `0x804da/0x6c`, resetScanout
