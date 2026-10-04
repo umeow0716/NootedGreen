@@ -50,6 +50,18 @@ if ! "$compiler" --target=x86_64-apple-macos13 -std=c++14 \
 else
     printf 'PASS strict Gen11 format/alignment/layout warnings\n'
 fi
+if "$compiler" --target=x86_64-apple-macos13 -std=c++14 -c \
+    -ffreestanding -fno-builtin -fvisibility=hidden \
+    -DKERNEL=1 -DKERNEL_PRIVATE=1 -DMODULE_VERSION=100 \
+    -DPRODUCT_NAME=NootedGreen -D__MAC_OS_X_VERSION_MIN_REQUIRED=130000 \
+    -I. -ILilu.kext/Contents/Resources -IMacKernelSDK/Headers \
+    NootedGreen/kern_gen11.cpp -o "$task_output/kern-gen11.bridge.o" && \
+    python3 -B tools/vf_command_pool_bridge_object_test.py \
+        "$task_output/kern-gen11.bridge.o"; then
+    printf 'PASS compiled VF command-pool bridge ABI\n'
+else
+    failed=1
+fi
 if "$compiler" -std=c++14 -O1 -g -fsanitize=address,undefined \
     tools/guc_ring_test.cpp -o "$task_output/guc-ring-test" && \
     "$task_output/guc-ring-test"; then
@@ -71,6 +83,16 @@ if "$compiler" -std=c++14 -Wall -Wextra -Werror -fsanitize=address,undefined \
     -o "$task_output/pool-growth-policy-test" && \
     "$task_output/pool-growth-policy-test"; then
     printf 'PASS offline VF command-pool growth postcondition policy\n'
+else
+    failed=1
+fi
+if "$compiler" -std=c++14 -Wall -Wextra -Werror -fsanitize=address,undefined \
+    tools/vf_command_pool_patch_test.cpp \
+    -o "$task_output/pool-patch-test" && \
+    "$task_output/pool-patch-test" \
+        sle_Internal/le/AppleIntelTGLGraphics.kext/Contents/MacOS/AppleIntelTGLGraphics \
+        sle_Internal/sle/AppleIntelTGLGraphics.kext/Contents/MacOS/AppleIntelTGLGraphics; then
+    printf 'PASS offline VF command-pool constructor patch anchors\n'
 else
     failed=1
 fi

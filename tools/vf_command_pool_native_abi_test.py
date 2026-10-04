@@ -34,22 +34,13 @@ def run(image, success, candidate=False, outer=False):
     put(pool, vt)
     put(vt + 0x118, 0x600020)
     put(pool + 0x1860, 0xa5a5a5a5a5a5a5a5)
-    def jump(source, target):
-        return b'\xe9' + struct.pack('<i', target - source - 5)
     if candidate:
-        # Offline caves only; no deployable patch or executable-cave claim.
-        # Preserve the displaced stack cleanup and backing-size load.
-        assert image[0x7cf55:0x7cf5e] == bytes.fromhex('48 83 c4 20 49 8b 74 24 10')
-        uc.mem_write(0x7cf55, jump(0x7cf55, 0x600100) + b'\x90' * 4)
-        cave = bytes.fromhex('48 83 c4 20 84 c0 0f 84')
-        cave += struct.pack('<i', 0x7cfa3 - (0x600100 + 12))
-        cave += bytes.fromhex('49 8b 74 24 10')
-        cave += jump(0x600100 + len(cave), 0x7cf5e)
-        uc.mem_write(0x600100, cave)
-        # Model a future init wrapper's explicit record initialization in x86,
-        # then tail to the same mocked callback. It does not change init ABI.
-        shim = bytes.fromhex('48 c7 87 60 18 00 00 00 00 00 00')
-        uc.mem_write(0x600020, shim + jump(0x600020 + len(shim), 0x600050))
+        original = bytes.fromhex(
+            '48 83 c4 20 49 8b 74 24 10 48 85 f6 74 18 4c 89 f7')
+        replacement = bytes.fromhex(
+            '48 8d 64 24 20 74 47 49 8b 74 24 10 48 85 f6 74 15')
+        assert image[0x7cf55:0x7cf66] == original
+        uc.mem_write(0x7cf55, replacement)
     for offset, value in ((0x10, 0xd240), (0x18, 256),
                           (0x20, 65536), (0x28, 64), (0x30, 8)):
         put(params + offset, value)
@@ -69,7 +60,7 @@ def run(image, success, candidate=False, outer=False):
         elif address == 0x600010:
             events.append('allocate')
             ret(pool)
-        elif address == (0x600050 if candidate else 0x600020):
+        elif address == 0x600020:
             args = [uc.reg_read(r) for r in (UC_X86_REG_RDI,
                     UC_X86_REG_RSI, UC_X86_REG_RDX, UC_X86_REG_RCX,
                     UC_X86_REG_R8, UC_X86_REG_R9)]
@@ -77,8 +68,17 @@ def run(image, success, candidate=False, outer=False):
             args += [get(sp + 8 + i * 8) for i in range(4)]
             assert args == [pool, accel, channel, task, 256, 65536,
                             0x300, 1, 64, 8], args
+            if candidate:
+                put(pool + 0x1860, 0)
             assert get(pool + 0x1860) == (0 if candidate else 0xa5a5a5a5a5a5a5a5)
             events.append('init')
+            if candidate:
+                # Model the routed bridge's explicit nonstandard return ABI:
+                # task in RDI and ZF set exactly when native AL is false.
+                uc.reg_write(UC_X86_REG_RDI, task)
+                flags = uc.reg_read(UC_X86_REG_EFLAGS)
+                uc.reg_write(UC_X86_REG_EFLAGS,
+                             flags & ~0x40 if success else flags | 0x40)
             ret(int(success))
         elif address == 0x10924:
             assert uc.reg_read(UC_X86_REG_RDI) == task
@@ -157,7 +157,7 @@ for outer in (False, True):
     for candidate in (False, True):
         for result in (False, True):
             run(image, result, candidate, outer)
-print('PASS native constructor ABI and offline candidate failure branch;'
+print('PASS native constructor ABI and production no-cave failure branch;'
       ' original ignores false, candidate skips backing/setup;'
       ' selected outer factory/free release once;'
-      ' no production cave, pool/base cleanup or GPU proof')
+      ' bridge callbacks mocked; no actual pool/base refs or GPU proof')

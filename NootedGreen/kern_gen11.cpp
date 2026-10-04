@@ -162,6 +162,7 @@ uint32_t gVfDoorbellCount = 0;
 void *gVfGlobalPageTable = nullptr;
 void *gVfHardwareGuc = nullptr;
 void *gVfAccelerator = nullptr;
+mach_vm_address_t gIOAccelCommandPoolInit = 0;
 bool gVfGGTTReady = false;
 NGVfRuntime::Registers gVfRuntimeRegisters = {};
 NGVfRuntime::Topology gVfTopology = {};
@@ -234,6 +235,44 @@ volatile UInt32 gVfTlbDoneSeqno = 0;
 // plus its empty/full sentinel. Counts include both CT and HXG headers.
 constexpr uint32_t kVfG2HCreditCapacity = (0x4000 - 0x1000) / 4 - 1;
 volatile UInt32 gVfG2HCreditsUsed = 0;
+
+extern "C" __attribute__((noinline))
+bool ngVfCommandPoolInitHelper(void *pool, void *accelerator, void *channel,
+	void *task, uint32_t maximum, uint32_t bytes, const uint64_t *tail)
+{
+	PANIC_COND(!gIOAccelCommandPoolInit || !tail, "ngreen",
+	           "Missing native command-pool init trampoline or stack arguments");
+	if (pool && gVfIdentity == VfIdentity::Virtual && gVfAccelerator &&
+	    accelerator == gVfAccelerator)
+		getMember<uint64_t>(pool, NGIOAccelCommandPool::recordOffset) = 0;
+	using Init = bool (*)(void *, void *, void *, void *, uint32_t, uint32_t,
+	                      uint32_t, uint32_t, uint32_t, uint32_t);
+	return reinterpret_cast<Init>(gIOAccelCommandPoolInit)(
+		pool, accelerator, channel, task, maximum, bytes,
+		static_cast<uint32_t>(tail[0]), static_cast<uint32_t>(tail[1]),
+		static_cast<uint32_t>(tail[2]), static_cast<uint32_t>(tail[3]));
+}
+
+// Nonstandard return contract consumed only by the UUID-pinned VF constructor
+// patch: preserve native AL, set ZF from it and restore task in RDI. All normal
+// ABI callee-saved registers and the incoming ten-argument stack are preserved.
+extern "C" __attribute__((naked, noinline))
+bool ngVfCommandPoolInitBridge(void *, void *, void *, void *, uint32_t,
+	uint32_t, uint32_t, uint32_t, uint32_t, uint32_t)
+{
+	__asm__ volatile(
+		"pushq %rbx\n\t"
+		"subq $8, %rsp\n\t"
+		"movq %rcx, %rbx\n\t"
+		"leaq 24(%rsp), %rax\n\t"
+		"pushq %rax\n\t"
+		"callq _ngVfCommandPoolInitHelper\n\t"
+		"addq $16, %rsp\n\t"
+		"movq %rbx, %rdi\n\t"
+		"popq %rbx\n\t"
+		"testb %al, %al\n\t"
+		"retq\n\t");
+}
 
 static bool vfInterruptTransportReady()
 {
@@ -1941,18 +1980,24 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		};
 		PANIC_COND(!patcher.solveMultiple(index, lifecycle, address, size),
 			"ngreen", "Cannot resolve native IOAccelerator lifecycle API");
-		mach_vm_address_t growthStart = 0, growthEnd = 0;
+		mach_vm_address_t poolInitStart = 0, growthStart = 0, growthEnd = 0;
 		KernelPatcher::SolveRequest growthBounds[] = {
+			{"__ZN25IOAccelCommandBufferPool24initEP22IOGraphicsAccelerator2P15IOAccelChannel2P11IOAccelTaskiijjjj",
+			 poolInitStart},
 			{"__ZN25IOAccelCommandBufferPool223allocMoreCommandBuffersEv", growthStart},
 			{"__ZN25IOAccelCommandBufferPool24freeEv", growthEnd},
 		};
 		PANIC_COND(!patcher.solveMultiple(index, growthBounds, address, size) ||
+		           growthStart <= poolInitStart ||
+		           growthStart - poolInitStart != 0x182 ||
 		           growthEnd <= growthStart ||
 		           !NGIOAccelCommandPool::hasReviewedGrowthContract(
 		               reinterpret_cast<const uint8_t *>(growthStart),
 		               growthEnd - growthStart),
 		           "ngreen", "Changed IOAccelerator command-pool growth contract");
 		KernelPatcher::RouteRequest commandPoolRoutes[] = {
+			{"__ZN25IOAccelCommandBufferPool24initEP22IOGraphicsAccelerator2P15IOAccelChannel2P11IOAccelTaskiijjjj",
+			 ngVfCommandPoolInitBridge, gIOAccelCommandPoolInit},
 			{"__ZN25IOAccelCommandBufferPool223allocMoreCommandBuffersEv",
 			 vfAllocMoreCommandBuffers, this->oIOAccelAllocMoreCommandBuffers},
 		};
@@ -2184,6 +2229,32 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				"__ZN8OSObject4freeEv");
 			PANIC_COND(!this->vfOSObjectFree, "ngreen",
 			           "Cannot resolve base destructor for failed VF workqueues");
+
+			// Pool init returns bool, but this UUID-pinned constructor discarded it
+			// before backing allocation and base setup. The routed System-KC bridge
+			// clears cleanup-sensitive record state, preserves AL in ZF and restores
+			// the task in RDI; this same-size patch branches false to the constructor's
+			// existing epilogue without a code cave.
+			mach_vm_address_t extendedInit = 0, extendedFree = 0;
+			KernelPatcher::SolveRequest extendedBounds[] = {
+				{"__ZN25IGHardwareExtendedContext15initWithOptionsEP11IGAccelTaskRK31IGHardwareExtendedContextParams",
+				 extendedInit},
+				{"__ZN25IGHardwareExtendedContext4freeEv", extendedFree},
+			};
+			PANIC_COND(!patcher.solveMultiple(index, extendedBounds, address, size) ||
+			           extendedFree <= extendedInit ||
+			           !NGIOAccelCommandPool::hasReviewedExtendedInitContract(
+			               reinterpret_cast<const uint8_t *>(extendedInit),
+			               extendedFree - extendedInit),
+			           "ngreen", "Changed VF extended-context pool-init contract");
+			LookupPatchPlus const extendedInitPatch {
+				activeKext, NGIOAccelCommandPool::extendedInitFind,
+				NGIOAccelCommandPool::extendedInitReplace, 1,
+			};
+			PANIC_COND(!extendedInitPatch.apply(
+			               patcher, extendedInit, extendedFree - extendedInit),
+			           "ngreen", "Failed to propagate VF command-pool init failure");
+			SYSLOG("ngreen", "V262: guarded VF extended-context pool construction");
 
 			// Tahoe's GuC factory releases the object after initWithOptions()
 			// already called virtual free() on the same failure path. XNU's

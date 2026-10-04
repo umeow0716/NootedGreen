@@ -13,8 +13,10 @@ constexpr size_t slotStride = 0x18;
 constexpr size_t maximumOffset = 0x1830;
 constexpr size_t countOffset = 0x1832;
 constexpr size_t currentOffset = 0x1842;
+constexpr size_t recordOffset = 0x1860;
 constexpr uint16_t slotCapacity = 256;
 constexpr size_t reviewedGrowthSize = 0x202;
+constexpr size_t reviewedExtendedInitSize = 0xf4;
 
 // UUID admission is primary. These exact instruction anchors additionally
 // bind the count publication, void selection call and false-success tail used
@@ -30,6 +32,36 @@ inline bool hasReviewedGrowthContract(const uint8_t *body, size_t length) {
 		return false;
 	for (size_t i = 0; i < sizeof(countAndSelection); ++i)
 		if (body[0xc2 + i] != countAndSelection[i])
+			return false;
+	return true;
+}
+
+// Replace exactly the post-pool-init cleanup/load/test sequence. The routed
+// init bridge returns with ZF reflecting AL and RDI restored to the task. LEA
+// discards the four stack arguments without changing ZF; false reaches the
+// constructor's existing failure epilogue before backing/setup side effects.
+constexpr uint8_t extendedInitFind[] = {
+	0x48, 0x83, 0xc4, 0x20,             // add rsp, 0x20
+	0x49, 0x8b, 0x74, 0x24, 0x10,       // mov rsi, [r12 + 0x10]
+	0x48, 0x85, 0xf6,                   // test rsi, rsi
+	0x74, 0x18,                         // je setup
+	0x4c, 0x89, 0xf7,                   // mov rdi, r14
+};
+constexpr uint8_t extendedInitReplace[] = {
+	0x48, 0x8d, 0x64, 0x24, 0x20,       // lea rsp, [rsp + 0x20], preserve ZF
+	0x74, 0x47,                         // jz existing false epilogue
+	0x49, 0x8b, 0x74, 0x24, 0x10,       // mov rsi, [r12 + 0x10]
+	0x48, 0x85, 0xf6,                   // test rsi, rsi
+	0x74, 0x15,                         // je setup; RDI supplied by bridge
+};
+static_assert(sizeof(extendedInitFind) == sizeof(extendedInitReplace),
+	"extended-context init patch must preserve instruction extent");
+
+inline bool hasReviewedExtendedInitContract(const uint8_t *body, size_t length) {
+	if (!body || length != reviewedExtendedInitSize)
+		return false;
+	for (size_t i = 0; i < sizeof(extendedInitFind); ++i)
+		if (body[0x99 + i] != extendedInitFind[i])
 			return false;
 	return true;
 }

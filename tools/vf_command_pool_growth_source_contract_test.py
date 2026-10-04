@@ -6,13 +6,18 @@ from pathlib import Path
 
 REQUIRED = (
     "NGBinaryIdentity::ioAcceleratorTahoe25G229Uuid",
+    "ngVfCommandPoolInitBridge, gIOAccelCommandPoolInit",
+    "getMember<uint64_t>(pool, NGIOAccelCommandPool::recordOffset) = 0;",
+    '"testb %al, %al\\n\\t"',
     '"__ZN25IOAccelCommandBufferPool223allocMoreCommandBuffersEv", growthStart',
     "NGIOAccelCommandPool::hasReviewedGrowthContract(",
     '"__ZN25IOAccelCommandBufferPool223allocMoreCommandBuffersEv",\n\t\t\t vfAllocMoreCommandBuffers, this->oIOAccelAllocMoreCommandBuffers',
-    "pool && gVfIdentity == VfIdentity::Virtual &&",
+    "const bool target = pool && gVfIdentity == VfIdentity::Virtual &&",
     "getMember<void *>(pool, NGIOAccelCommandPool::acceleratorOffset) ==\n\t\t\tgVfAccelerator",
     "callback->oIOAccelAllocMoreCommandBuffers)(pool)",
     "NGIOAccelCommandPool::completedGrowth(",
+    "NGIOAccelCommandPool::hasReviewedExtendedInitContract(",
+    "NGIOAccelCommandPool::extendedInitReplace, 1",
     "gVfAccelerator = that;",
 )
 
@@ -27,6 +32,13 @@ def accepts(source: str) -> bool:
             io.index("hasReviewedGrowthContract") <
             io.index("commandPoolRoutes") < io.index("routeMultiple")):
         return False
+    if io.index("ngVfCommandPoolInitBridge") > io.index("vfAllocMoreCommandBuffers"):
+        return False
+    helper_start = source.index("bool ngVfCommandPoolInitHelper(")
+    helper_end = source.index("bool ngVfCommandPoolInitBridge(", helper_start)
+    helper = source[helper_start:helper_end]
+    if helper.index("recordOffset") > helper.index("gIOAccelCommandPoolInit)("):
+        return False
     wrapper_start = source.index("bool Gen11::vfAllocMoreCommandBuffers(void *pool)")
     wrapper_end = source.index("bool Gen11::IGMemoryManagerInitSegments", wrapper_start)
     wrapper = source[wrapper_start:wrapper_end]
@@ -36,7 +48,15 @@ def accepts(source: str) -> bool:
     start_start = source.index("bool Gen11::start(void *that, void *provider)")
     start_end = source.index("void Gen11::acceleratorStop", start_start)
     start = source[start_start:start_end]
-    return start.index("gVfAccelerator = that;") < start.index("FunctionCast(start")
+    if start.index("gVfAccelerator = that;") > start.index("FunctionCast(start"):
+        return False
+    driver_start = source.rfind("if (vfActive) {", 0, source.index("bufferAccessors[]"))
+    if driver_start < 0:
+        return False
+    driver_end = source.index("// Tahoe's GuC factory", driver_start)
+    driver = source[driver_start:driver_end]
+    return (driver.index("hasReviewedExtendedInitContract") <
+            driver.index("extendedInitPatch.apply"))
 
 
 def main() -> None:

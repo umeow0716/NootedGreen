@@ -7117,12 +7117,43 @@ second false-success in the pending-event fixture; getter then calls old slot0
 `finishEvent` exactly once before reuse, while the same native allocation and
 partial-slot cleanup still execute.
 
-This code is built and statically tested but not installed or executed in the
-guest. It repairs the runtime growth Boolean contract only. Initial pool init
-now receives false through the routed growth entry, but the native extended-
-context constructor still ignores that result; direct void selection and
-request-capacity postconditions also remain separate. Those unresolved paths
-continue to block VM admission.
+At this checkpoint the code was built and statically tested but not installed
+or executed in the guest. It repaired the runtime growth Boolean contract
+only; the following constructor repair closes the initial ignored-false edge.
+Direct void selection and request-capacity postconditions remain separate.
+
+#### No-cave constructor patch propagates the initial pool failure immediately
+
+Production now also routes the exact System-KC pool `init` ABI through a small
+x86_64 bridge. Its C++ helper forwards all ten native arguments unchanged and,
+only when the accelerator argument equals the published VF owner, zeros the
+cleanup-sensitive pool record at1860 before calling the native implementation.
+The bridge preserves RBX and the caller's stack, restores the task argument in
+RDI, and returns native AL with ZF set from that value. A Mach-O object test
+pins its exact32-byte instruction body and the single PC-relative helper
+relocation, so the nonstandard flags/RDI contract is checked after compilation
+rather than inferred from C++ source.
+
+Only for the classified VF, a same-size17-byte patch is admitted inside the
+UUID-pinned `IGHardwareExtendedContext::initWithOptions` body at offset99.
+It changes stack cleanup from flag-clobbering `add` to `lea`, branches ZF to
+the existing false epilogue at7cfa3, then retains the original backing-size
+load/test. RDI no longer needs the displaced `mov rdi,r14` because the bridge
+supplies the identical task. Success still reaches backing allocation and
+base setup; false now reaches neither. No executable cave, new allocation or
+duplicated constructor body is used. PF keeps the original constructor bytes;
+non-owner System-KC init calls retain their native result and arguments.
+
+Sanitizer tests require the17-byte source anchor to be unique at7cf55 in both
+payloads and verify both replacement branch targets. Unicorn executes direct
+constructor and outer Blit3D factory entry for original/candidate × init
+false/true on each archive. Candidate false skips backing/setup, returns false,
+and the outer factory releases the context; actual extended free releases and
+clears pool E0 before base free. Candidate success preserves the native path,
+stack and six callee-saved registers. Bridge callbacks and base/pool reference
+operations remain mocked; separate exact-KC free fixtures cover partial slot
+cleanup but do not prove real refcounts, hardware progress or DMA quiescence.
+The repair is built/static only and does not lift the host-safe runtime hold.
 
 #### Runtime growth reproduces success with unchanged old current slot
 

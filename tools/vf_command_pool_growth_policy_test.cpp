@@ -23,6 +23,17 @@ int main() {
 		assert(!hasReviewedGrowthContract(body.data(), body.size()));
 		body[0xc2 + i] ^= 1;
 	}
+	std::vector<uint8_t> extended(reviewedExtendedInitSize, 0);
+	for (size_t i = 0; i < sizeof(extendedInitFind); ++i)
+		extended[0x99 + i] = extendedInitFind[i];
+	assert(hasReviewedExtendedInitContract(extended.data(), extended.size()));
+	assert(!hasReviewedExtendedInitContract(nullptr, extended.size()));
+	assert(!hasReviewedExtendedInitContract(extended.data(), extended.size() - 1));
+	for (size_t i = 0; i < sizeof(extendedInitFind); ++i) {
+		extended[0x99 + i] ^= 1;
+		assert(!hasReviewedExtendedInitContract(extended.data(), extended.size()));
+		extended[0x99 + i] ^= 1;
+	}
 
 	auto checkValid = [](uint16_t maximum, uint16_t previous) {
 		const uint16_t published = previous == 0 ? 1 : previous * 2;

@@ -256,6 +256,7 @@ def main() -> None:
     payloads = [macho_symbols(path) for path in payload_paths]
     routes = routed_symbols(source)
     system_routes = {
+        "__ZN25IOAccelCommandBufferPool24initEP22IOGraphicsAccelerator2P15IOAccelChannel2P11IOAccelTaskiijjjj",
         "__ZN25IOAccelCommandBufferPool223allocMoreCommandBuffersEv",
     }
     if not system_routes <= routes:
@@ -263,7 +264,7 @@ def main() -> None:
 
     # Keep route inventory changes explicit. This count includes admission,
     # lifecycle, GGTT, GuC/CTB, IRQ, native producer and System-KC routes.
-    expected_route_count = 97
+    expected_route_count = 98
     if len(routes) != expected_route_count:
         raise AssertionError(
             f"route inventory changed: expected {expected_route_count}, got {len(routes)}"
