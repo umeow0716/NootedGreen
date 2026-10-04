@@ -9,6 +9,10 @@ import sys
 # Complete reviewed native bodies. This fixes the concrete Intel override
 # graph, not inherited timer APIs, dynamic callbacks or runtime completion.
 STAMP_IRQ_NATIVE = {
+    "__ZN24IGStolenMemoryDescriptor12setPurgeableEjPj": (0x2a, "97baec040a0d4c7f45075fefae44847895641f129d598b41581dceb613be1b9e"),
+    "__ZN18IGStolenMemoryPool8allocateEm": (0xa8, "2da22d3ece5349942f8b06df08644420dc1824d5c8059116ba3e107214a46875"),
+    "__ZN18IGStolenMemoryPool10deallocateEP24IGStolenMemoryDescriptorym": (0x8e, "27b8b16ab322e5396a7108e0c7ef4831662f3ac1873a6e949762fc2504b5f58a"),
+    "__ZN24IGStolenMemoryDescriptor12withSubRangeEP18IGStolenMemoryPoolP18IOMemoryDescriptoryyj": (0x88, "5158c6c9238bdd55360ab52313b3fd1458a22651c01734be688d09aad671de9a"),
     "__ZN18IGStolenMemoryPool5purgeEv": (0x32, "f001f9826c7d49fe1748b47b97f5850bcb8c1cef18405b7088f93573526c9f9b"),
     "__ZN17IGInterruptBridge15systemWillSleepEv": (0x2c, "e6e531af30a1da358a33e447f4007ba1d2beb51b13f05ebb9d2b1f2506116449"),
     "__ZN17IGInterruptBridge13systemDidWakeEv": (0xa, "fd901862e71d5dfd92db1285d1f904a2a2edc3b097f8bbeade9271fbb0cf870c"),
@@ -1735,6 +1739,9 @@ def macho_inventory(path):
     intel_sleep = "__ZN16IntelAccelerator15systemWillSleepEv"
     assert direct_branches(intel_sleep, "__ZN18IGStolenMemoryPool5purgeEv") == [0x2894b], f"{path}: changed pre-base stolen-pool purge"
     assert direct_branches(intel_sleep, BRIDGE_SYSTEM_SLEEP) == [0x28967], f"{path}: changed post-base bridge sleep"
+    purge_slot = value("__ZTV24IGStolenMemoryDescriptor") + 16 + 0x120
+    assert struct.unpack_from("<Q", image, purge_slot)[0] == value("__ZN24IGStolenMemoryDescriptor12setPurgeableEjPj"), f"{path}: changed declared stolen purgeable target"
+    assert direct_branches("__ZN18IGStolenMemoryPool8allocateEm", "__ZN24IGStolenMemoryDescriptor12withSubRangeEP18IGStolenMemoryPoolP18IOMemoryDescriptoryyj") == [0xc8bd], f"{path}: changed stolen descriptor factory edge"
     firmware_start = value(SCHEDULER_INIT_FIRMWARE)
     firmware_body = image[firmware_start:next_symbol(firmware_start)]
     firmware_steps = (

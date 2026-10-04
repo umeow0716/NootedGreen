@@ -7,6 +7,13 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 stolen purge disposition: four whole bodies reviewed/pinned;
+declared setPurgeable operation 4 only updates software state, not backing
+release/PTE invalidation/GPU quiescence. Pool deallocation separately returns
+allocator range/unlinks descriptor without local ACK. Final destruction and
+pool ownership remain incomplete; prioritize cross-owner PPGTT admission and
+retirement rather than treating purge as a completion gate.
+
 2026-10-04 power subordinate ordering: seven new full-body fixtures include
 purge, scheduler/base forwarding and previously edge-reviewed bridge helpers.
 Corrected Intel ordering to scheduler -> stolen-pool purge -> base cleanup ->

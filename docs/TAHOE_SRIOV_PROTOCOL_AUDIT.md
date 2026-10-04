@@ -6953,6 +6953,32 @@ No executable patch or runtime mutation.
 
 ## Mapping last-release admission and deferred raw-list transfer
 
+Stolen purge disposition: complete setPurgeable fda2/2a, pool allocate
+c876/a8, deallocate c91e/8e and descriptor withSubRange fc90/88 reviewed.
+Allocate obtains a range, creates the typed stolen descriptor, updates counts
+and links it into the pool chain; descriptor factory success stores the pool
+pointer and initial state 2. Failed factory creation returns the range.
+The declared descriptor +0x120 slot resolves to setPurgeable. It accepts
+states 2..4 by storing descriptor +0x78, permits state-query operation 1,
+optionally returns the previous state, and rejects other values. It does not
+release backing, modify GPU PTEs, call the pool allocator or issue/wait for
+GuC invalidation. Thus the reviewed sleep purge's operation 4 is metadata,
+not a backing retirement or DMA-completion barrier.
+
+Actual pool deallocate is distinct: it returns address/length to the allocator,
+decreases byte usage, checks intrusive-link consistency and unlinks the
+descriptor. Its outlined invariant-failure callees and final descriptor
+destruction are not newly reviewed here; this body contains no local GuC
+acknowledgement. No malformed descriptor, allocator failure or runtime race
+was reproduced. The raw chain and borrowed pool pointer still require outer
+ownership provenance; fixed declared class identity is not a dynamic inventory.
+
+Four complete-body fixtures, the declared purgeable slot and typed factory
+edge pass for both payloads. This resolves the selected purge question without
+pretending it solves cross-owner PPGTT retirement. Return review priority to
+mapping admission/transaction owners and actual invalidation-before-reuse
+integration; no executable source hook or hardware action was changed.
+
 Power subordinate follow-up/correction: reviewed complete stolen-memory
 pool purge c9ac/32, base scheduler sleep 56844/52 and wake 56896/6, and
 Scheduler4 forwarding bodies 1db5c/12 and 1db6e/12. Bridge sleep/wake
