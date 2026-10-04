@@ -6961,6 +6961,25 @@ No executable patch or runtime mutation.
 
 ###### Complete waitForSpace reservation and failure ordering
 
+Rechecked the already-pinned complete inherited release_pte 14bb7488/80.
+Its conditional virtual +0x178 invokes Intel release; the next instruction
+reloads mapping flags into EAX, discarding the release result, then clears
+installed-PTE bit 4 and performs parent accounting/generation updates. New
+paired-KC instruction anchors pin the ignored result and flag clear. These
+software transitions do not certify hardware invalidation completion. This
+consolidates the existing overlapping instruction anchors and extends them
+through the flag store, rather than discovering previously untested dispatch.
+
+No local accelerator lock acquisition appears in this complete body. That
+does not establish that callers are unlocked: sys-memory unwire and other
+mapping owners may supply outer serialization, still to trace. A collector
+cannot use a false manager/Intel return as an instruction to preserve backing
+through this inherited boundary, because the result is discarded. Nor can
+it treat this API as proof of an acquired lock. Retirement ownership must
+intervene before irreversible page return and establish the actual outer
+lock/admission independently. This confirms an existing failure-propagation
+limitation rather than a new runtime fault. No production/runtime change.
+
 Current source gate scope rechecked: VfContextOperationGuard is instantiated
 by vfAttachContextDesc, vfDetachContextDesc and vfSubmitWorkItem. These three
 typed entry points are now explicitly contract-checked. The guard enters/
