@@ -423,6 +423,8 @@ struct VfGucContext {
 	OSObject *ringBacking;
 	OSObject *stampBacking;
 	OSObject *scratchBacking;
+	uint32_t stampIndex;
+	NGVfSubmissionCoverage::Tracker submissionCoverage;
 };
 
 IOSimpleLock *gVfContextLock = nullptr;
@@ -507,7 +509,8 @@ int32_t vfFindContextLocked(uint32_t lrcaPage)
 		if (entry.state == kVfGucContextEmpty)
 			return -1;
 		if ((entry.state != kVfGucContextTombstone || entry.task || entry.contextBacking ||
-		     entry.ringBacking || entry.stampBacking || entry.scratchBacking) &&
+		     entry.ringBacking || entry.stampBacking || entry.scratchBacking ||
+		     entry.submissionCoverage.owner) &&
 		    entry.lrcaPage == lrcaPage)
 			return static_cast<int32_t>(slot);
 	}
@@ -527,7 +530,8 @@ int32_t vfReserveContextLocked(uint32_t lrcaPage)
 		if (state == kVfGucContextTombstone &&
 		    !gVfContexts[slot].task && !gVfContexts[slot].contextBacking &&
 		    !gVfContexts[slot].ringBacking &&
-		    !gVfContexts[slot].stampBacking && !gVfContexts[slot].scratchBacking && tombstone < 0)
+		    !gVfContexts[slot].stampBacking && !gVfContexts[slot].scratchBacking &&
+		    !gVfContexts[slot].submissionCoverage.owner && tombstone < 0)
 			tombstone = static_cast<int32_t>(slot);
 		if (state == kVfGucContextEmpty)
 			return tombstone >= 0 ? tombstone : static_cast<int32_t>(slot);
@@ -548,11 +552,12 @@ void vfReleaseRetiredContextBacking(uint16_t gucId)
 		IOSimpleLockLockDisableInterrupt(gVfContextLock);
 	auto &entry = gVfContexts[gucId];
 	if (!gVfProtocolFault && entry.state == kVfGucContextTombstone &&
-	    entry.refCount == 0) {
+	    entry.refCount == 0 && entry.submissionCoverage.resetForReuse()) {
 		backing = entry.contextBacking;
 		ringBacking = entry.ringBacking;
 		stampBacking = entry.stampBacking;
 		scratchBacking = entry.scratchBacking;
+		entry.stampIndex = 0;
 		NGVfContextEvent::clearReleasedIdentity(entry);
 	}
 	IOSimpleLockUnlockEnableInterrupt(gVfContextLock, interruptState);
@@ -1393,7 +1398,8 @@ bool vfDirectContextTableUnowned()
 		const auto &entry = gVfContexts[id];
 		if (entry.state != kVfGucContextEmpty || entry.task || entry.contextBacking || entry.ringBacking ||
 		    entry.stampBacking || entry.scratchBacking ||
-		    entry.refCount || entry.enablePending || entry.disablePending)
+		    entry.refCount || entry.enablePending || entry.disablePending ||
+		    entry.submissionCoverage.owner)
 			return false;
 	}
 	return true;
@@ -3163,6 +3169,11 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				 vfAttachContextDesc},
 				{"__ZN13IGHardwareGuC31DetachContextDescFromGucContextERK21SGfxContextDescriptor",
 				 vfDetachContextDesc},
+				// V298: this is the only Tahoe boundary that still carries the
+				// submitToRing stamp-present bit. Bind it synchronously to the routed
+				// inner CTB publication; normal idle remains conservative below.
+				{"__ZN12IGScheduler44pushEP17IGHardwareContextjjbb",
+				 vfSchedulerPush, this->oVfSchedulerPush},
 				{"__ZN13IGHardwareGuC14submitWorkItemEjRK21SGfxContextDescriptor10IGHwCsTypejjj",
 				 vfSubmitWorkItem},
 			};
@@ -6189,22 +6200,85 @@ void Gen11::vfRejectLegacyExecList(void *that, unsigned int tail) {
 }
 
 // Modern contexts never update Apple's legacy proxy work-queue idle fields.
-// Only states that cannot currently execute provide an idle snapshot. Enabled
-// contexts remain conservatively busy until a real completion/idle mechanism
-// is implemented. This is NOT a submission barrier or device-DMA-stop proof.
-// Tahoe IOAccel's Fast2 termination callback CPU-writes software values into
-// the same stamp storage. A future stamp-based completion mechanism must
-// exclude termination/restart/fault paths; stamp advancement alone is not GPU
-// completion evidence (see the hash-pinned local KC contract).
-static bool vfContextKnownIdle(const VfGucContext &entry) {
-	return !entry.enablePending && !entry.disablePending &&
-		(entry.state == kVfGucContextEmpty || entry.state == kVfGucContextTombstone ||
-		 entry.state == kVfGucContextRegistered || entry.state == kVfGucContextDisabled);
+// A successful native marker is followed by MI_REPORT_HEAD in the same ring
+// transaction. Require both independent GPU writes: the requested stamp (with
+// Tahoe's signed wrap comparison) and the exact post-marker reported head.
+// This is an ordinary completion snapshot, NOT a submission barrier or the
+// device-wide DMA-stop proof used for teardown.
+static bool vfContextKnownIdle(const VfGucContext &entry,
+	                            bool softwareCompletionPossible,
+	                            mach_vm_address_t mappedBufferGetter) {
+	if (entry.enablePending || entry.disablePending ||
+	    entry.submissionCoverage.owner)
+		return false;
+	switch (entry.state) {
+		case kVfGucContextEmpty:
+		case kVfGucContextTombstone:
+			return true;
+		case kVfGucContextRegistered:
+		case kVfGucContextEnabled:
+		case kVfGucContextDisabled:
+			break;
+		case kVfGucContextRegistering:
+		case kVfGucContextPendingEnable:
+		case kVfGucContextPendingDisable:
+		case kVfGucContextPendingDeregister:
+		default:
+			return false;
+	}
+
+	// A newly registered context has no admitted GPU work. Once any CTB submit
+	// has been published, an unmarked later submit deliberately removes this
+	// shortcut until another exact marker covers it.
+	if (!entry.submissionCoverage.hasSubmittedWork())
+		return true;
+	if (!mappedBufferGetter ||
+	    !entry.contextBacking || !entry.stampBacking ||
+	    !NGVfContextShutdown::validPacketBacking(
+	        static_cast<int32_t>(entry.stampIndex),
+	        getMember<uint64_t>(entry.stampBacking, kVfMappedBufferLengthOffset),
+	        sizeof(uint64_t)) ||
+	    getMember<uint64_t>(entry.contextBacking,
+	                        kVfMappedBufferLengthOffset) < PAGE_SIZE)
+		return false;
+
+	using GetVirtualAddress = void *(*)(void *);
+	auto getVirtualAddress = reinterpret_cast<GetVirtualAddress>(
+		mappedBufferGetter);
+	// The two admitted Tahoe payloads hash-pin this exact getter to a 10-byte
+	// leaf that only loads backing +0x38. It cannot sleep, allocate, unlock the
+	// mapping or recurse while the context spin lock protects this snapshot.
+	auto *contextImage = static_cast<volatile uint8_t *>(
+		getVirtualAddress(entry.contextBacking));
+	auto *stamps = static_cast<volatile uint8_t *>(
+		getVirtualAddress(entry.stampBacking));
+	if (!contextImage || !stamps)
+		return false;
+	OSSynchronizeIO();
+	const uint32_t observedHead = *reinterpret_cast<volatile uint32_t *>(
+		contextImage + 0x10);
+	const uint32_t observedStamp = *reinterpret_cast<volatile uint32_t *>(
+		stamps + static_cast<size_t>(entry.stampIndex) * 64U);
+	OSSynchronizeIO();
+	return entry.submissionCoverage.gpuComplete(
+		observedStamp, observedHead, softwareCompletionPossible);
 }
 
-static bool vfKnownIdleSnapshot(const uint32_t *descriptor = nullptr) {
+static bool vfKnownIdleSnapshot(mach_vm_address_t mappedBufferGetter,
+	                            const uint32_t *descriptor = nullptr) {
 	if (gVfIdentity != VfIdentity::Virtual || !gVfCtbEnabled || gVfCtbStopped ||
-	    gVfProtocolFault || !gVfContextLock || !gVfContexts)
+	    gVfSubmissionStopped || gVfProtocolFault || gVfDeviceStopping ||
+	    gVfContextShutdownStarted || !gVfAccelerator || !mappedBufferGetter ||
+	    !gVfContextLock ||
+	    !gVfContexts)
+		return false;
+	// IOAccelEventMachineFast2::deviceTerminatedUnlocked CPU-writes the stamp
+	// slots after incrementing accelerator +0xdc8. Such values are software
+	// completion and can never satisfy the GPU-idle contract.
+	OSSynchronizeIO();
+	const bool softwareCompletionPossible =
+		getMember<volatile UInt32>(gVfAccelerator, 0xDC8) != 0;
+	if (softwareCompletionPossible)
 		return false;
 	const IOInterruptState saved = IOSimpleLockLockDisableInterrupt(gVfContextLock);
 	bool idle = true;
@@ -6212,22 +6286,157 @@ static bool vfKnownIdleSnapshot(const uint32_t *descriptor = nullptr) {
 		const auto value = NGContextDescriptor::read(descriptor);
 		const int32_t slot = vfFindContextLocked(value.low & 0xFFFFF000U);
 		idle = slot >= 0 && gVfContexts[slot].descriptorLo == value.low &&
-		       vfContextKnownIdle(gVfContexts[slot]);
+		       vfContextKnownIdle(gVfContexts[slot],
+		                          softwareCompletionPossible,
+		                          mappedBufferGetter);
 	} else {
 		for (uint32_t i = 0; i < gVfContextCapacity; ++i) {
-			if (!vfContextKnownIdle(gVfContexts[i])) {
+			if (!vfContextKnownIdle(gVfContexts[i],
+			                        softwareCompletionPossible,
+			                        mappedBufferGetter)) {
 				idle = false;
 				break;
 			}
 		}
 	}
+	// Termination publishes +0xdc8 before copying software completion values
+	// into stamp slots. Sample the counter again after every stamp/head read:
+	// an overlap can only turn this snapshot into busy, never GPU-complete.
+	OSSynchronizeIO();
+	const bool terminationRaced =
+		getMember<volatile UInt32>(gVfAccelerator, 0xDC8) != 0;
 	IOSimpleLockUnlockEnableInterrupt(gVfContextLock, saved);
-	return idle;
+	return idle && !terminationRaced;
+}
+
+bool Gen11::vfSchedulerPush(void *that, void *hardwareContext,
+	                        unsigned int ringTail,
+	                        unsigned int auxiliary,
+	                        bool carriesStamp,
+	                        bool hasPendingCommands) {
+	// submitToRing's saved +0x48 marker exists only at this ABI. Keep one
+	// invocation-scoped record until the synchronous native push returns; the
+	// routed vfSubmitWorkItem below must claim the same owner/stamp/tail before
+	// it can publish CTB work. Do not hold the H2G queue lock across the native
+	// call because vfSubmitWorkItem acquires that lock itself.
+	VfContextOperationGuard operationGuard;
+	if (!operationGuard || !that || !hardwareContext || !callback ||
+	    !callback->oVfSchedulerPush ||
+	    !callback->vfSharedMappedBufferGetVirtualAddress ||
+	    !gVfContextLock || !gVfContexts ||
+	    gVfSubmissionStopped || gVfProtocolFault) {
+		vfMarkProtocolFault("invalid Scheduler4 push admission");
+		PANIC_COND(true, "ngreen", "VF Scheduler4 push lacks a safe admission boundary");
+		return false;
+	}
+
+	auto *descriptor = reinterpret_cast<const uint32_t *>(
+		reinterpret_cast<uint8_t *>(hardwareContext) + kVfContextDescriptorOffset);
+	const auto descriptorValue = NGContextDescriptor::read(descriptor);
+	const auto attributes = NGContextDescriptor::inspect(descriptorValue);
+	auto *task = getMember<void *>(hardwareContext, kVfContextTaskOffset);
+	auto *contextBacking = reinterpret_cast<OSObject *>(
+		getMember<void *>(hardwareContext, kVfContextImageBufferOffset));
+	auto *ringObject = getMember<void *>(hardwareContext, kVfContextRingObjectOffset);
+	auto *ringBacking = ringObject ? reinterpret_cast<OSObject *>(
+		getMember<void *>(ringObject, kVfRingMappedBufferOffset)) : nullptr;
+	const int32_t nativeStampIndex = ringObject ?
+		getMember<int32_t>(ringObject, kVfRingStampIndexOffset) : -1;
+	const uint32_t ringSequence = ringObject ?
+		getMember<uint32_t>(ringObject, 0x44) : 0;
+	const uint32_t ringSize = ringObject ?
+		getMember<uint32_t>(ringObject, kVfRingSizeOffset) : 0;
+	const uint32_t ringMask = ringObject ?
+		getMember<uint32_t>(ringObject, kVfRingMaskOffset) : 0;
+	const uint64_t owner = static_cast<uint64_t>(
+		reinterpret_cast<uintptr_t>(IOThreadSelf()));
+	using GetVirtualAddress = void *(*)(void *);
+	auto *ring = ringBacking ? static_cast<volatile uint8_t *>(
+		reinterpret_cast<GetVirtualAddress>(
+			callback->vfSharedMappedBufferGetVirtualAddress)(ringBacking)) : nullptr;
+	uint32_t reportHead = 0;
+	bool reportHeadValid = false;
+	if (ring && ringSize >= 16 && ringMask == ringSize - 1U &&
+	    getMember<uint64_t>(ringBacking, kVfMappedBufferLengthOffset) >= ringSize &&
+	    ringTail < ringSize && (ringTail & (sizeof(uint64_t) - 1U)) == 0) {
+		const uint32_t lastOffset =
+			(ringTail - sizeof(uint32_t)) & ringMask;
+		const uint32_t previousOffset =
+			(ringTail - 2U * sizeof(uint32_t)) & ringMask;
+		OSSynchronizeIO();
+		const uint32_t lastDword = *reinterpret_cast<volatile uint32_t *>(
+			ring + lastOffset);
+		const uint32_t previousDword = *reinterpret_cast<volatile uint32_t *>(
+			ring + previousOffset);
+		reportHeadValid = NGVfSubmissionCoverage::reportHeadForTail(
+			ringTail, ringSize, lastDword, previousDword, reportHead);
+	}
+
+	int32_t slot = -1;
+	uint64_t token = 0;
+	if (attributes.valid && task && contextBacking && ringBacking &&
+	    nativeStampIndex >= 0 && owner && reportHeadValid) {
+		const IOInterruptState saved =
+			IOSimpleLockLockDisableInterrupt(gVfContextLock);
+		slot = vfFindContextLocked(attributes.lrcaPage);
+		if (slot >= 0) {
+			auto &entry = gVfContexts[slot];
+			const bool identity = entry.refCount && entry.task == task &&
+				entry.contextBacking == contextBacking &&
+				entry.ringBacking == ringBacking &&
+				entry.stampIndex == static_cast<uint32_t>(nativeStampIndex) &&
+				entry.descriptorLo == descriptorValue.low &&
+				entry.descriptorHi == descriptorValue.high &&
+				(entry.state == kVfGucContextRegistered ||
+				 entry.state == kVfGucContextDisabled ||
+				 entry.state == kVfGucContextEnabled);
+			if (identity)
+				token = entry.submissionCoverage.begin(
+					owner, ringSequence, ringTail, reportHead, carriesStamp);
+			if (!token)
+				entry.submissionCoverage.invalidate();
+		}
+		IOSimpleLockUnlockEnableInterrupt(gVfContextLock, saved);
+	}
+	if (!token) {
+		vfMarkProtocolFault("Scheduler4 push context/coverage identity mismatch");
+		PANIC_COND(true, "ngreen", "VF Scheduler4 push cannot bind submission metadata");
+		return false;
+	}
+
+	const bool accepted = FunctionCast(vfSchedulerPush,
+		callback->oVfSchedulerPush)(that, hardwareContext, ringTail, auxiliary,
+		                            carriesStamp, hasPendingCommands);
+	bool finished = false;
+	bool retired = false;
+	const IOInterruptState saved =
+		IOSimpleLockLockDisableInterrupt(gVfContextLock);
+	const int32_t finalSlot = vfFindContextLocked(attributes.lrcaPage);
+	if (finalSlot == slot && finalSlot >= 0) {
+		auto &entry = gVfContexts[finalSlot];
+		if (entry.descriptorLo == descriptorValue.low &&
+		    entry.descriptorHi == descriptorValue.high) {
+			finished = entry.submissionCoverage.finish(
+				token, owner, accepted);
+			retired = finished && entry.state == kVfGucContextTombstone &&
+				entry.refCount == 0;
+		}
+	}
+	IOSimpleLockUnlockEnableInterrupt(gVfContextLock, saved);
+	if (!finished) {
+		vfMarkProtocolFault("Scheduler4 push publication/result mismatch");
+		PANIC_COND(true, "ngreen", "VF submission metadata did not match CTB publication");
+		return false;
+	}
+	if (retired)
+		vfReleaseRetiredContextBacking(static_cast<uint16_t>(finalSlot));
+	return accepted;
 }
 
 bool Gen11::vfIsGuCIdle(void *that) {
 	(void)that;
-	return vfKnownIdleSnapshot();
+	return vfKnownIdleSnapshot(callback ?
+		callback->vfSharedMappedBufferGetVirtualAddress : 0);
 }
 
 bool Gen11::vfIsContextIdle(void *that, uint32_t contextId) {
@@ -6235,12 +6444,14 @@ bool Gen11::vfIsContextIdle(void *that, uint32_t contextId) {
 	(void)contextId;
 	// Legacy proxy ID cannot identify a single modern LRCA. All-idle is a
 	// conservative sufficient condition; never inspect unused proxy counters.
-	return vfKnownIdleSnapshot();
+	return vfKnownIdleSnapshot(callback ?
+		callback->vfSharedMappedBufferGetVirtualAddress : 0);
 }
 
 bool Gen11::vfIsKmdContextIdle(void *that, const uint32_t *descriptor) {
 	(void)that;
-	return descriptor && vfKnownIdleSnapshot(descriptor);
+	return descriptor && vfKnownIdleSnapshot(callback ?
+		callback->vfSharedMappedBufferGetVirtualAddress : 0, descriptor);
 }
 
 void Gen11::vfTransferOwnership(void *that, const void *backing, int owner) {
@@ -6608,6 +6819,7 @@ bool Gen11::vfAttachContextDesc(void *that, const uint32_t *descriptor) {
 		return false;
 
 	int32_t slot = -1;
+	bool invalidCoverageReuse = false;
 	IOInterruptState interruptState;
 	for (;;) {
 		bool waitForTransition = false;
@@ -6623,6 +6835,7 @@ bool Gen11::vfAttachContextDesc(void *that, const uint32_t *descriptor) {
 				if (entry.refCount == 0xFFFFU || entry.task != task ||
 				    entry.ringBacking != ringBacking ||
 				    entry.stampBacking != stampBacking || entry.scratchBacking != scratchBacking ||
+				    entry.stampIndex != static_cast<uint32_t>(stampIndex) ||
 				    !NGContextDescriptor::matchesRecord(descriptorValue,
 				        descriptorAttributes, contextBacking,
 				        {entry.descriptorLo, entry.descriptorHi}, entry.engineClass,
@@ -6643,29 +6856,35 @@ bool Gen11::vfAttachContextDesc(void *that, const uint32_t *descriptor) {
 			slot = vfReserveContextLocked(lrcaPage);
 			if (slot >= 0) {
 				auto &entry = gVfContexts[slot];
-				entry.lrcaPage = lrcaPage;
-				entry.descriptorLo = descriptorLo;
-				entry.descriptorHi = descriptorHi;
-				entry.refCount = 1;
-				entry.engineClass = descriptorAttributes.gucClass;
-				entry.engineInstance = static_cast<uint8_t>(engineInstance);
-				entry.enablePending = false;
-				entry.disablePending = false;
-				entry.task = task;
-				contextBacking->retain();
-				entry.contextBacking = contextBacking;
-				// V264: native context free releases ring/FIFO before descriptor
-				// cleanup. Keep the DMA ring buffer alive independently until GuC
-				// deregistration and the final native reference are both retired.
-				ringBacking->retain();
-				entry.ringBacking = ringBacking;
-				// V265: packet encoders reference task stamp and scratch buffers.
-				// Pin buffers, not the task, to avoid a task/context reference cycle.
-				stampBacking->retain();
-				entry.stampBacking = stampBacking;
-				scratchBacking->retain();
-				entry.scratchBacking = scratchBacking;
-				entry.state = kVfGucContextRegistering;
+				if (!entry.submissionCoverage.resetForReuse()) {
+					invalidCoverageReuse = true;
+					slot = -1;
+				} else {
+					entry.lrcaPage = lrcaPage;
+					entry.descriptorLo = descriptorLo;
+					entry.descriptorHi = descriptorHi;
+					entry.refCount = 1;
+					entry.engineClass = descriptorAttributes.gucClass;
+					entry.engineInstance = static_cast<uint8_t>(engineInstance);
+					entry.enablePending = false;
+					entry.disablePending = false;
+					entry.task = task;
+					contextBacking->retain();
+					entry.contextBacking = contextBacking;
+					// V264: native context free releases ring/FIFO before descriptor
+					// cleanup. Keep the DMA ring buffer alive independently until GuC
+					// deregistration and the final native reference are both retired.
+					ringBacking->retain();
+					entry.ringBacking = ringBacking;
+					// V265: packet encoders reference task stamp and scratch buffers.
+					// Pin buffers, not the task, to avoid a task/context reference cycle.
+					stampBacking->retain();
+					entry.stampBacking = stampBacking;
+					scratchBacking->retain();
+					entry.scratchBacking = scratchBacking;
+					entry.stampIndex = static_cast<uint32_t>(stampIndex);
+					entry.state = kVfGucContextRegistering;
+				}
 			}
 		}
 		IOSimpleLockUnlockEnableInterrupt(gVfContextLock, interruptState);
@@ -6680,6 +6899,11 @@ bool Gen11::vfAttachContextDesc(void *that, const uint32_t *descriptor) {
 			vfMarkProtocolFault("GuC context-ID reuse timeout");
 			return false;
 		}
+	}
+	if (invalidCoverageReuse) {
+		vfMarkProtocolFault("active submission metadata reached context-slot reuse");
+		PANIC_COND(true, "ngreen", "VF context slot reused during an active submission");
+		return false;
 	}
 	if (slot < 0) {
 		SYSLOG("ngreen", "V230: exhausted %u direct GuC context IDs",
@@ -7063,9 +7287,13 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 	// acquire this queue before clearing refCount, so it cannot deregister or
 	// release backing between this check, the tail write and CTB publication.
 	const uint32_t lrcaPage = descriptorLo & 0xFFFFF000U;
+	const uint64_t submissionOwner = static_cast<uint64_t>(
+		reinterpret_cast<uintptr_t>(IOThreadSelf()));
+	uint64_t submissionToken = 0;
+	bool coverageClaimed = false;
 	IOInterruptState admissionState = IOSimpleLockLockDisableInterrupt(gVfContextLock);
 	const int32_t admittedSlot = vfFindContextLocked(lrcaPage);
-	const bool admitted = admittedSlot >= 0 && gVfContexts[admittedSlot].refCount &&
+	const bool identityAdmitted = admittedSlot >= 0 && gVfContexts[admittedSlot].refCount &&
 		gVfContexts[admittedSlot].task == task &&
 		NGContextDescriptor::matchesRecord(descriptorValue,
 			descriptorAttributes,
@@ -7078,11 +7306,24 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 		(gVfContexts[admittedSlot].state == kVfGucContextRegistered ||
 		 gVfContexts[admittedSlot].state == kVfGucContextDisabled ||
 		 gVfContexts[admittedSlot].state == kVfGucContextEnabled);
+	if (identityAdmitted && submissionOwner) {
+		auto &coverage = gVfContexts[admittedSlot].submissionCoverage;
+		submissionToken = coverage.serial;
+		coverageClaimed = coverage.claim(
+			submissionToken, submissionOwner, ringSequence, ringTail);
+		if (!coverageClaimed)
+			coverage.invalidate();
+	}
+	const bool admitted = identityAdmitted && coverageClaimed;
 	OSObject *admittedBacking = admitted ? gVfContexts[admittedSlot].contextBacking : nullptr;
 	OSObject *admittedRingBacking = admitted ? gVfContexts[admittedSlot].ringBacking : nullptr;
 	IOSimpleLockUnlockEnableInterrupt(gVfContextLock, admissionState);
-	if (!admitted)
+	if (!admitted) {
+		if (identityAdmitted) {
+			vfMarkProtocolFault("GuC submit lacked matching Scheduler4 coverage metadata");
+		}
 		return false;
+	}
 
 	// Tahoe's legacy WQ encoder proves that the final argument is the byte
 	// ring tail: it stores (arg >> 3) in WQ_RING_TAIL[28:18].  The previous
@@ -7188,6 +7429,24 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 		                    transportFence, queue.get(), ringTailField, ringTail) :
 		vfSendCtbFastAction(that, scheduleRequest, arrsize(scheduleRequest),
 		                    transportFence, queue.get(), ringTailField, ringTail);
+	if (submitted) {
+		bool coveragePublished = false;
+		interruptState = IOSimpleLockLockDisableInterrupt(gVfContextLock);
+		const int32_t publishedSlot = vfFindContextLocked(lrcaPage);
+		if (publishedSlot == admittedSlot && publishedSlot >= 0) {
+			auto &entry = gVfContexts[publishedSlot];
+			coveragePublished = entry.descriptorLo == descriptorLo &&
+				entry.descriptorHi == descriptorHi &&
+				entry.submissionCoverage.publish(
+					submissionToken, submissionOwner, ringSequence, ringTail);
+		}
+		IOSimpleLockUnlockEnableInterrupt(gVfContextLock, interruptState);
+		if (!coveragePublished) {
+			vfMarkProtocolFault("CTB publication lost Scheduler4 coverage metadata");
+			PANIC_COND(true, "ngreen", "Published VF work has no exact completion marker state");
+			return false;
+		}
+	}
 
 	if (enable) {
 		if (submitted) {
@@ -7923,12 +8182,14 @@ bool Gen11::injectAcceleratorPersonality(const char *bundleId)
 // after every tracked direct-LRCA context has reached an idle lifecycle state.
 bool Gen11::wrapIGScheduler5IsGpuIdle(const void *that) {
 	(void)that;
-	return vfKnownIdleSnapshot();
+	return vfKnownIdleSnapshot(callback ?
+		callback->vfSharedMappedBufferGetVirtualAddress : 0);
 }
 
 bool Gen11::wrapIGScheduler4IsGpuIdle(const void *that) {
 	(void)that;
-	return vfKnownIdleSnapshot();
+	return vfKnownIdleSnapshot(callback ?
+		callback->vfSharedMappedBufferGetVirtualAddress : 0);
 }
 
 // Tahoe's timeout recovery assumes ownership of physical engine stop/start

@@ -1,7 +1,7 @@
 # Tahoe SR-IOV protocol audit — in progress
 
-Updated: 2026-10-04. The last dynamic source baseline is `ce166c8`; the current
-offline-reviewed worktree is V295 counted external-producer admission on
+Updated: 2026-10-05. The last dynamic source baseline is `ce166c8`; the current
+offline-reviewed worktree is V299 SG-07 completion integration on
 `codex/tahoe-sriov-vf`. This is NOT a boot-test candidate or a successful
 driver baseline. The `ce166c8` run produced repeatable host PF DMAR faults
 followed by i915 hangs and a host reboot. Keep `macos-tahoe-sriov` shut off until the
@@ -20,6 +20,50 @@ KVMFR/client transport remains the intended receiving side.
 The authoritative dynamic-entry checklist is
 [`DYNAMIC_TEST_GATE.md`](DYNAMIC_TEST_GATE.md). Any open static gate keeps the
 VM hard hold in force.
+
+## V299 SG-07 completion integration (offline)
+
+SG-07's six fail-closed sub-gates are now `CLOSED-STATIC`. The earlier retained
+image/ring/stamp/scratch backing, shutdown disable/deregister plus Engines/GuC
+TLB acknowledgements, and V280–V283 mapping/page-table retirement remain the
+release foundation. V299 adds the missing ordinary-completion bridge.
+
+`IGHardwareRingBuffer::submitToRing` captures ring byte `+0x48`, clears it and
+passes stamp-present to the sole Scheduler4 `+0x148` virtual. The new VF-only
+wrapper holds the counted context-operation guard and binds one invocation to
+the exact descriptor, task, retained context/ring backing, native stamp index,
+thread owner, ring sequence/tail and final ring topology. The routed inner GuC
+submit must claim that token under the context lock. Coverage is published only
+after CTB space/credits and the action tail are published; native return and
+inner publication must agree. An unmarked accepted submit invalidates prior
+coverage, and any published-but-untracked action fail-stops.
+
+The completion predicate reads only the GPU-completed task-stamp slot `+0`,
+uses Tahoe's signed wrap comparison, and independently requires context/HWSP
+dword `+0x10` to equal the transaction's final published ring tail. The latter
+is admitted only when the final ring words are exactly `MI_REPORT_HEAD` or
+`MI_REPORT_HEAD, MI_NOOP`; uncertain report timing can therefore yield
+false-busy but never false-idle. Both payloads pin the complete native submit,
+ring init/refresh, base/main/compute stamp encoders and the 10-byte
+`IGSharedMappedBuffer::getVirtualAddress` leaf. Intel's public command-stream
+PRM defines MI_REPORT_HEAD as writing the ring-head register to HWS, and its
+ring model defines head equal to tail as empty; no notification, submitted
+slot `+8`, queue ID or software sequence is accepted as completion.
+
+Termination counter `+0xdc8` is checked before and after all head/stamp reads,
+so a concurrent CPU stamp copy can only force busy. Submission stop, protocol
+fault, device stop and context shutdown also reject idle. Scheduler4's reset
+slot is an exact no-op; CPU `resetRing` callers remain confined to the excluded
+legacy IGGuC/Scheduler5 paths, while event timeout, replay and physical-reset
+roots fail closed. Forced GC/drain may bypass the idle query, but context free
+still reaches the routed GuC detach and all four backings stay retained until
+matching deregister completion. The context table is allocated once and never
+replaced/freed during driver lifetime; slot serials never reset or wrap, active
+owners block reuse/release, and shutdown closes/drains the operation gate
+before scanning it. Sanitizer tests, seventeen source mutations, both targeted
+payload contracts and full static `/tmp/ngreen-static.uJPHdJ` pass. Clean
+commit and exact-SHA CI are still pending. No VM, deployment, PCI/sysfs/VF/PF
+or Host i915 operation was performed.
 
 ## V295 counted external-producer admission (offline)
 
@@ -2510,7 +2554,7 @@ independently retained ring/image backing remain necessary even if ordinary
 collection normally waits. Contracts pin both checked and unchecked paths in
 both payloads.
 
-The current VF idle snapshot keeps enabled contexts busy even after execution
+At this pre-V299 review point, the VF idle snapshot kept enabled contexts busy even after execution
 could have completed. That prevents premature success but is not a functional
 completion mechanism: normal context reclamation can be delayed indefinitely
 until explicit disable/shutdown or forced collection. This is an outstanding

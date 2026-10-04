@@ -101,6 +101,7 @@ STAMP_IRQ_NATIVE = {
     "__ZN17IGInterruptBridge13systemDidWakeEv": (0xa, "fd901862e71d5dfd92db1285d1f904a2a2edc3b097f8bbeade9271fbb0cf870c"),
     "__ZN12IGScheduler415systemWillSleepEv": (0x12, "ebc6258ca855696d94fdaa3df1e2006f5549fb32d7b70d049dd2fa51a16bcd19"),
     "__ZN12IGScheduler413systemDidWakeEv": (0x12, "e0172f9154cee45d45aaa5ca84ea00dc0a92a63227809759b44478965e9a56ae"),
+    "__ZN12IGScheduler44pushEP17IGHardwareContextjjbb": (0x74, "3e13082a123871f1e1c5ebf5101d69bedd634c32b073c69782fde2a83fd38522"),
     "__ZN11IGScheduler15systemWillSleepEv": (0x52, "42a0d04c4318678cf073b9cbe5ccc96f98b7452db1915b4a99e358e0fa85bfc0"),
     "__ZN11IGScheduler13systemDidWakeEv": (0x6, "5a96d1fb661d55552184ea24023ae8190bd1523ae1f855a8d671b07143e8b1df"),
     "__ZN16IntelAccelerator15systemWillSleepEv": (0x64, "37b3d5f2b38d0ba7a61820c7e0c24f593101fc0cf521a9380e1c3047b8e6f363"),
@@ -130,8 +131,17 @@ STAMP_IRQ_NATIVE = {
     "__ZN24IGHardwareRingBufferMain16waitForSemaphoreEjj": (0x178, "d65ba6ee7becd6575fbed623c98d148ca0521ae59049d3c85e3f275661bb5440"),
     "__ZN20IGHardwareRingBuffer9alignRingEj": (0x28, "c9612928d88c4157c5d80847c6e8a8123ae227b7b08a8879b54f5387b285a2ee"),
     "__ZN20IGHardwareRingBuffer14submitCommandsEPjjj": (0x5e, "922dbcc17b815c68b6bf5535ef09feaabac1d7dd0c63015fbe0f2e15a27dd8e0"),
+    "__ZN20IGHardwareRingBuffer11submitStampEj": (0x42, "a9663aeaca5df5de7b984ac45fbf7c30d18293277775d6426f02dec01422cc98"),
+    "__ZN20IGHardwareRingBuffer12submitToRingEv": (0x1ba, "3d141c671f8c7a0b83321f5fd895eae67fead3504294fdfd91fc429b14d4073c"),
+    "__ZN20IGHardwareRingBuffer10writeStampEjb": (0xa2, "ef31d3ae0aa2c0061ab8a4a43d56b55129087509f5ad1cfa39754dcea89914ad"),
+    "__ZN27IGHardwareRingBufferCompute10writeStampEjb": (0xa2, "275196c2f3da6094ed4403fff63e444c37a68883655f5f6d4f43ba0eb825a955"),
+    "__ZN24IGHardwareRingBufferMain10writeStampEjb": (0xa2, "b096f40c8e91968868f628e033025ed7d29ed28d0b4a7204a25b0aeff162e17d"),
     "__Z15utilGetPropertyIjET_P15IORegistryEntryPKcS0_": (0x18c, "9da1339c8d7b6f93f71bf4020792fc4090572cca3bb9046120eb4dc617ef28af"),
     "__ZN20IGHardwareRingBuffer4initEP17IGHardwareContext": (0x1ec, "34cc30b4c471c23a0790bc8de98ddafe0aa25606ba37fee065a30f3a6f1ee1c9"),
+    "__ZN20IGHardwareRingBuffer11refreshRingEv": (0x30, "b6fd907a2575bc4fa5ef4cab748421eedfee494bfec2b2086ed7f80c014a4641"),
+    "__ZN20IGHardwareRingBuffer9resetRingEv": (0x52, "f42e2b6048a4d2567967c03d70fa8e96be68c861518fc7820925590ba7ffe9c0"),
+    "__ZN12IGScheduler415processGPUResetE10IGHwCsTypeP17IGHardwareContext": (0x6, "5a96d1fb661d55552184ea24023ae8190bd1523ae1f855a8d671b07143e8b1df"),
+    "__ZNK20IGSharedMappedBuffer17getVirtualAddressEv": (0xa, "d3a421a73dd87cb691d1acbc5239d218e6b478c74026a7f591d3ff4abad16be5"),
     "__ZNK17IGHardwareContext17getRingBufferSizeEv": (0x14, "fe5061119174d816668edb9231f98b31fe3a7455d979e3f89d9467c538f4249a"),
     "__ZN20IGHardwareRingBuffer10writeQWordEy": (0x132, "ca328112ea77f150daa058f08cf7363e638748a85043c3c80777e25fffca2237"),
     "__ZN20IGHardwareRingBuffer11writeBufferEPjj": (0x16a, "d4fbab26bff0fec290ec13249eb2758f2bd491dbaabd1a2de12d85fdb7e06422"),
@@ -349,6 +359,10 @@ RING_SLEEP_STAMP = "__ZN20IGHardwareRingBuffer13sleepForStampEPjjj"
 RING_WRITE_STAMP = "__ZN20IGHardwareRingBuffer10writeStampEjb"
 RING_MAIN_WRITE_STAMP = "__ZN24IGHardwareRingBufferMain10writeStampEjb"
 RING_COMPUTE_WRITE_STAMP = "__ZN27IGHardwareRingBufferCompute10writeStampEjb"
+RING_INIT = "__ZN20IGHardwareRingBuffer4initEP17IGHardwareContext"
+RING_REFRESH = "__ZN20IGHardwareRingBuffer11refreshRingEv"
+RING_RESET = "__ZN20IGHardwareRingBuffer9resetRingEv"
+SCHEDULER4_PROCESS_RESET = "__ZN12IGScheduler415processGPUResetE10IGHwCsTypeP17IGHardwareContext"
 RING_WRITE_DWORD = "__ZN20IGHardwareRingBuffer10writeDWordEj"
 RING_WRITE_QWORD = "__ZN20IGHardwareRingBuffer10writeQWordEy"
 RING_COMMIT_STAMP = "__ZN20IGHardwareRingBuffer18commitStampCommandEjb"
@@ -2160,8 +2174,45 @@ def macho_inventory(path):
         raise AssertionError(f"{path}: ring submission scheduler virtual changed")
     push_start = value(SCHEDULER4_PUSH)
     push_body = image[push_start:next_symbol(push_start)]
-    if len(direct_branches(SCHEDULER4_PUSH, GUC_SUBMIT_WORK_ITEM)) != 1:
+    push_submit_edges = direct_branches(SCHEDULER4_PUSH, GUC_SUBMIT_WORK_ITEM)
+    if len(push_submit_edges) != 1 or \
+            text_direct_branches(GUC_SUBMIT_WORK_ITEM) != push_submit_edges:
         raise AssertionError(f"{path}: scheduler/GuC submission graph changed")
+    if text_direct_branches(SCHEDULER4_PUSH):
+        raise AssertionError(f"{path}: Scheduler4 push gained a direct text caller")
+    push_vtable_slots = []
+    submit_vtable_slots = []
+    for name, table_start in zip(names, values):
+        if not name.startswith("__ZTV") or not table_start:
+            continue
+        table_end = next_symbol(table_start)
+        for slot in range(table_start + 16, table_end - 7, 8):
+            if struct.unpack_from("<Q", image, slot)[0] == push_start:
+                push_vtable_slots.append((name, slot - table_start))
+            if struct.unpack_from("<Q", image, slot)[0] == value(
+                    GUC_SUBMIT_WORK_ITEM):
+                submit_vtable_slots.append((name, slot - table_start))
+    if push_vtable_slots != [(SCHEDULER4_VTABLE, 16 + 0x148)]:
+        raise AssertionError(
+            f"{path}: Scheduler4 push virtual-entry inventory changed: {push_vtable_slots}")
+    if submit_vtable_slots:
+        raise AssertionError(
+            f"{path}: GuC submit gained a direct virtual entry: {submit_vtable_slots}")
+    # SysV arguments are (this, context, tail, auxiliary, stamp-present,
+    # pending-count).  The complete hash above and these register anchors prove
+    # that push preserves only incoming EDX as the final stack tail.  It
+    # overwrites incoming ECX/R8/R9 with hwCsType/channel/ringSequence before
+    # its sole synchronous GuC call.  Therefore stamp-present exists only at
+    # this boundary and cannot be reconstructed in vfSubmitWorkItem.
+    for anchor in (
+            "41 89 d2 48 89 f2 48 8b 86 b8 00 00 00 44 8b 40 20",
+            "48 8b 4f 10 be 00 80 01 00 23 b1 90 11 00 00 31 c9",
+            "0f b6 4a 6c 48 81 c2 89 00 00 00",
+            "48 8b 80 30 01 00 00 44 8b 48 44 44 89 14 24"):
+        if push_body.count(bytes.fromhex(anchor)) != 1:
+            raise AssertionError(
+                f"{path}: Scheduler4 push argument-use contract changed")
+    print(f"PASS {path}: Scheduler4 push has one virtual entry and exact tail/stamp ABI")
     if len(direct_branches(CONTEXT_INIT, FIFO_FACTORY)) != 1 or \
             len(direct_branches(FIFO_FACTORY, FIFO_INIT)) != 1:
         raise AssertionError(f"{path}: FIFO/ring producer ownership graph changed")
@@ -2211,6 +2262,118 @@ def macho_inventory(path):
     if sync_body.count(sync_ring) != 1 or sync_body.index(sync_ring) >= sync_body.index(sync_dispatch) or \
             len(direct_branches(ACCEL_SUBMIT_SYNC, RING_WRITE_BUFFER)) != 3:
         raise AssertionError(f"{path}: sync FIFO/ring receiver or packet graph changed")
+
+    # The stamp-present bit consumed by submitToRing must come from one of the
+    # three reviewed GPU stamp encoders, not from another class which happens
+    # to use the same virtual offset.  Base, blit, media and VEBox share the
+    # base encoder; main and compute have their PIPE_CONTROL overrides.
+    ring_stamp_slots = (
+        (RING_VTABLE, RING_WRITE_STAMP),
+        ("__ZTV24IGHardwareRingBufferBlit", RING_WRITE_STAMP),
+        ("__ZTV25IGHardwareRingBufferMedia", RING_WRITE_STAMP),
+        ("__ZTV25IGHardwareRingBufferVEBox", RING_WRITE_STAMP),
+        ("__ZTV24IGHardwareRingBufferMain", RING_MAIN_WRITE_STAMP),
+        ("__ZTV27IGHardwareRingBufferCompute", RING_COMPUTE_WRITE_STAMP),
+    )
+    for table, target in ring_stamp_slots:
+        if struct.unpack_from("<Q", image,
+                value(table) + 16 + 0x158)[0] != value(target):
+            raise AssertionError(
+                f"{path}: ring stamp encoder virtual changed: {table}")
+
+    # Complete __text inventory of the store which publishes ring +0x48 = 1.
+    # The fixed payload contains exactly the base/main/compute writeStamp
+    # implementations.  submitToRing later snapshots and clears this byte.
+    marker_store = bytes.fromhex("c6 43 48 01")
+    text_address, text_size, text_file_offset = text_section
+    marker_store_sites = []
+    cursor = text_file_offset
+    text_end = text_file_offset + text_size
+    while True:
+        cursor = image.find(marker_store, cursor, text_end)
+        if cursor < 0:
+            break
+        marker_store_sites.append(text_address + cursor - text_file_offset)
+        cursor += 1
+    if marker_store_sites != [0x423ac, 0x4e668, 0x8500c]:
+        raise AssertionError(
+            f"{path}: ring stamp-present store inventory changed: {marker_store_sites}")
+
+    # All ordinary FIFO paths emit their final user-work marker before the
+    # common submitToRing dispatch.  submitCommands and submitStamp return
+    # immediately after their marker virtual; submitBuffer's normal path may
+    # perform only its pinned CPU trace between marker and dispatch.  The
+    # alternate submitBuffer branch calls submitStamp and joins the same final
+    # dispatch.  This proves marker association, not full GPU idleness:
+    # submitToRing appends its fixed 0x03800000 ring-bookkeeping word(s).
+    stamp_dispatch = bytes.fromhex("ff 90 58 01 00 00")
+    submit_dispatch = bytes.fromhex("ff 90 38 01 00 00")
+    for owner, sites in (
+            (RING_SUBMIT_COMMANDS, [0x430f6]),
+            (RING_SUBMIT_STAMP, [0x43186]),
+            (FIFO_SUBMIT_BUFFER, [0x4c8e9])):
+        owner_start = value(owner)
+        owner_body = image[owner_start:next_symbol(owner_start)]
+        observed = []
+        offset = 0
+        while True:
+            offset = owner_body.find(stamp_dispatch, offset)
+            if offset < 0:
+                break
+            observed.append(owner_start + offset)
+            offset += 1
+        if observed != sites:
+            raise AssertionError(
+                f"{path}: typed ring stamp dispatch inventory changed: {owner}: {observed}")
+    for owner, marker_site, submit_site in (
+            (FIFO_SUBMIT_STAMP, 0x4c565, 0x4c574),
+            (FIFO_SUBMIT_COMMANDS, 0x4c668, 0x4c677),
+            (FIFO_SUBMIT_BUFFER, 0x4c7d8, 0x4c91d),
+            (FIFO_SUBMIT_BUFFER, 0x4c8e9, 0x4c91d)):
+        owner_start = value(owner)
+        owner_end = next_symbol(owner_start)
+        if not (owner_start <= marker_site < submit_site < owner_end) or \
+                image[submit_site:submit_site + len(submit_dispatch)] != submit_dispatch:
+            raise AssertionError(
+                f"{path}: marker-to-submit ordering changed: {owner}")
+    if direct_branches(RING_SUBMIT_TO_RING, RING_WRITE_DWORD) != [0x43362] or \
+            image[0x4335d:0x43362] != bytes.fromhex("be 00 00 80 03"):
+        raise AssertionError(
+            f"{path}: post-marker ring bookkeeping inventory changed")
+
+    # The native ring uses the retained context-image mapping as its per-
+    # process hardware status page. DWord 4 (+0x10) is initialized here and
+    # refreshRing consumes its masked report-head value. This is the same
+    # backing retained by the direct GuC record, not an unowned ring pointer.
+    ring_init = image[value(RING_INIT):next_symbol(value(RING_INIT))]
+    if ring_init.count(bytes.fromhex(
+            "49 8b bf 98 00 00 00 e8 f2 f6 fc ff 49 89 46 18")) != 1 or \
+            ring_init.count(bytes.fromhex("49 8b 46 18 89 58 10")) != 1:
+        raise AssertionError(
+            f"{path}: ring context-image/HWSP mapping provenance changed")
+    ring_refresh = image[value(RING_REFRESH):next_symbol(value(RING_REFRESH))]
+    if ring_refresh.count(bytes.fromhex(
+            "48 8b 4f 18 b8 fc ff 1f 00 23 41 10 89 47 60")) != 1:
+        raise AssertionError(f"{path}: reported ring-head consumer changed")
+
+    # CPU resetRing can forge the same HWSP head, so it must not be reachable
+    # through the selected Scheduler4 reset slot. Scheduler4's concrete reset
+    # callback is an exact no-op; resetRing's only two direct callers belong to
+    # the legacy IGGuC and Scheduler5 command-streamer paths.
+    if struct.unpack_from("<Q", image,
+            value(SCHEDULER4_VTABLE) + 16 + 0x190)[0] != value(
+                SCHEDULER4_PROCESS_RESET) or \
+            image[value(SCHEDULER4_PROCESS_RESET):next_symbol(
+                value(SCHEDULER4_PROCESS_RESET))] != bytes.fromhex("554889e55dc3"):
+        raise AssertionError(f"{path}: Scheduler4 reset exclusion changed")
+    if direct_branches(
+            "__ZN5IGGuC15processGPUResetE10IGHwCsTypeP17IGHardwareContext",
+            RING_RESET) != [0x1ccd5] or \
+            direct_branches(
+                "__ZN26IGHardwareCommandStreamer515processGPUResetEv",
+                RING_RESET) != [0x3a42a]:
+        raise AssertionError(f"{path}: CPU ring-head reset caller inventory changed")
+    print(f"PASS {path}: exact normal-submit marker association and post-marker bookkeeping")
 
     # P7 non-user/internal producer partition.  This is a complete direct-text
     # inventory for the retained native ring producer helpers in this UUID,
@@ -2653,6 +2816,9 @@ def macho_inventory(path):
     if unlock_body.count(bytes.fromhex("48 c7 43 38 00 00 00 00")) != 1 or \
             bytes.fromhex("ff 90 40 01 00 00") in unlock_body:
         raise AssertionError(f"{path}: CPU unlock/GPU mapping distinction changed")
+    if text_direct_branches(SHARED_BUFFER_UNLOCK):
+        raise AssertionError(
+            f"{path}: shared stamp backing gained a direct CPU-unlock caller")
     for table, destructor in ((MAPPED_BUFFER_VTABLE, MAPPED_BUFFER_FREE),
                               (SHARED_BUFFER_VTABLE, SHARED_BUFFER_FREE)):
         if struct.unpack_from("<Q", image, value(table) + 16 + 0x90)[0] != value(destructor):
@@ -3604,6 +3770,225 @@ def g2h_event_transaction_mutations(path):
     print("PASS: three G2H event transaction mutations rejected (source contract, not concurrency proof)")
 
 
+def submission_coverage_integration_contract(source, path):
+    record = function_body(source, "struct VfGucContext")
+    for token in (
+            "uint32_t stampIndex;",
+            "NGVfSubmissionCoverage::Tracker submissionCoverage;"):
+        if token not in record:
+            raise AssertionError(f"{path}: direct context lacks submission coverage field {token}")
+
+    reserve = function_body(source, "int32_t vfReserveContextLocked(uint32_t lrcaPage)")
+    if "!gVfContexts[slot].submissionCoverage.owner" not in reserve:
+        raise AssertionError(f"{path}: context slot can be reused by an active coverage owner")
+
+    table_init = function_body(source, "bool vfInitContextBridge()")
+    for token in (
+            "IOLockLock(gVfGucLock);",
+            "if (gVfContexts && gVfContextLock && gVfContextCapacity)",
+            "IOMallocZero(",
+            "gVfContextLock = lock;",
+            "gVfContexts = contexts;",
+            "gVfContextCapacity = gVfContextCount;"):
+        if token not in table_init:
+            raise AssertionError(f"{path}: context table lifetime lacks {token}")
+    if source.count("gVfContexts = contexts;") != 1 or \
+            "IOFree(gVfContexts" in source or "IOSimpleLockFree(gVfContextLock" in source:
+        raise AssertionError(f"{path}: context table can be replaced/freed beneath stale callers")
+
+    operation_guard = function_body(source, "class VfContextOperationGuard")
+    for token in ("admitted(vfEnterContextOperation())",
+                  "if (admitted)", "vfLeaveContextOperation();"):
+        if token not in operation_guard:
+            raise AssertionError(f"{path}: context-operation RAII drain lacks {token}")
+
+    unowned = function_body(source, "bool vfDirectContextTableUnowned()")
+    if "entry.submissionCoverage.owner" not in unowned:
+        raise AssertionError(f"{path}: shutdown table proof ignores an active submission owner")
+    quiesce = function_body(source, "bool vfQuiesceDeviceForShutdown(void *guc)")
+    close_gate = quiesce.index("vfCloseContextOperationGateAndWait(guc)")
+    retire_table = quiesce.index("for (uint32_t id = 0; id < gVfContextCapacity; id++)")
+    if not close_gate < retire_table:
+        raise AssertionError(f"{path}: shutdown scans the context table before active calls drain")
+
+    release = function_body(source, "void vfReleaseRetiredContextBacking(uint16_t gucId)")
+    reset = release.index("entry.submissionCoverage.resetForReuse()")
+    clear = release.index("NGVfContextEvent::clearReleasedIdentity(entry)")
+    backing_release = release.index("ringBacking->release()")
+    if not reset < clear < backing_release:
+        raise AssertionError(f"{path}: coverage reset/backing release order changed")
+
+    attach = function_body(source, "bool Gen11::vfAttachContextDesc(")
+    for token in (
+            "entry.stampIndex != static_cast<uint32_t>(stampIndex)",
+            "entry.submissionCoverage.resetForReuse()",
+            "entry.stampIndex = static_cast<uint32_t>(stampIndex)"):
+        if token not in attach:
+            raise AssertionError(f"{path}: attach/reuse coverage identity lacks {token}")
+    if not attach.index("entry.submissionCoverage.resetForReuse()") < \
+            attach.index("entry.contextBacking = contextBacking") < \
+            attach.index("entry.stampIndex = static_cast<uint32_t>(stampIndex)"):
+        raise AssertionError(f"{path}: context publishes backing before coverage reset")
+
+    wrapper = function_body(source, "bool Gen11::vfSchedulerPush(")
+    wrapper_order = (
+        "VfContextOperationGuard operationGuard;",
+        "getMember<int32_t>(ringObject, kVfRingStampIndexOffset)",
+        "reportHeadValid = NGVfSubmissionCoverage::reportHeadForTail(",
+        "entry.submissionCoverage.begin(",
+        "FunctionCast(vfSchedulerPush,",
+        "entry.submissionCoverage.finish(",
+        "vfReleaseRetiredContextBacking(static_cast<uint16_t>(finalSlot))",
+    )
+    for token in wrapper_order:
+        if token not in wrapper:
+            raise AssertionError(f"{path}: Scheduler4 coverage wrapper lacks {token}")
+    positions = [wrapper.index(token) for token in wrapper_order]
+    if positions != sorted(positions):
+        raise AssertionError(f"{path}: Scheduler4 begin/native/finish/release order changed")
+    for token in (
+            "owner, ringSequence, ringTail, reportHead, carriesStamp",
+            "lastDword, previousDword, reportHead",
+            "getMember<uint64_t>(ringBacking, kVfMappedBufferLengthOffset) >= ringSize",
+            "entry.descriptorLo == descriptorValue.low",
+            "entry.descriptorHi == descriptorValue.high",
+            "PANIC_COND(true, \"ngreen\", \"VF submission metadata did not match CTB publication\")"):
+        if token not in wrapper:
+            raise AssertionError(f"{path}: Scheduler4 exact identity/failure policy lacks {token}")
+
+    submit = function_body(source, "bool Gen11::vfSubmitWorkItem(")
+    claim = submit.index("coverage.claim(")
+    tail_write = submit.index("auto *ringTailField")
+    send = submit.index("bool submitted = enable ?")
+    publish = submit.index("entry.submissionCoverage.publish(", send)
+    queue_unlock = submit.index("queue.unlock();", publish)
+    if not claim < tail_write < send < publish < queue_unlock:
+        raise AssertionError(f"{path}: claim/CTB publication/coverage order changed")
+    for token in (
+            "coverage.invalidate();",
+            "submissionToken, submissionOwner, ringSequence, ringTail",
+            "CTB publication lost Scheduler4 coverage metadata",
+            "Published VF work has no exact completion marker state"):
+        if token not in submit:
+            raise AssertionError(f"{path}: submit coverage/failure contract lacks {token}")
+
+    idle = function_body(source, "static bool vfContextKnownIdle(")
+    for token in (
+            "entry.submissionCoverage.owner",
+            "entry.submissionCoverage.hasSubmittedWork()",
+            "mappedBufferGetter",
+            "NGVfContextShutdown::validPacketBacking(",
+            "getVirtualAddress(entry.contextBacking)",
+            "getVirtualAddress(entry.stampBacking)",
+            "contextImage + 0x10",
+            "static_cast<size_t>(entry.stampIndex) * 64U",
+            "return entry.submissionCoverage.gpuComplete(",
+            "observedStamp, observedHead, softwareCompletionPossible"):
+        if token not in idle:
+            raise AssertionError(f"{path}: GPU completion predicate lacks {token}")
+    if not idle.index("hasSubmittedWork()") < idle.index(
+            "getVirtualAddress(entry.contextBacking)") < idle.index(
+                "contextImage + 0x10") < idle.index(
+                    "return entry.submissionCoverage.gpuComplete("):
+        raise AssertionError(f"{path}: idle shortcut/mapping/observation order changed")
+
+    snapshot = function_body(source, "static bool vfKnownIdleSnapshot(")
+    for token in (
+            "gVfSubmissionStopped", "gVfProtocolFault", "gVfDeviceStopping",
+            "gVfContextShutdownStarted", "!gVfAccelerator", "!mappedBufferGetter",
+            "const bool softwareCompletionPossible =\n\t\tgetMember<volatile UInt32>(gVfAccelerator, 0xDC8) != 0;",
+            "if (softwareCompletionPossible)\n\t\treturn false;",
+            "const bool terminationRaced =",
+            "return idle && !terminationRaced;"):
+        if token not in snapshot:
+            raise AssertionError(f"{path}: idle snapshot exclusion lacks {token}")
+    initial_termination = snapshot.index("if (softwareCompletionPossible)")
+    context_lock = snapshot.index("IOSimpleLockLockDisableInterrupt(gVfContextLock)")
+    final_termination = snapshot.index("const bool terminationRaced =")
+    context_unlock = snapshot.index("IOSimpleLockUnlockEnableInterrupt(gVfContextLock, saved)")
+    if not initial_termination < context_lock < final_termination < context_unlock:
+        raise AssertionError(f"{path}: termination race exclusion does not enclose completion reads")
+
+    normalized = "".join(source.split())
+    route = ('{"__ZN12IGScheduler44pushEP17IGHardwareContextjjbb",'
+             'vfSchedulerPush,this->oVfSchedulerPush}')
+    if route not in normalized:
+        raise AssertionError(f"{path}: missing exact Scheduler4 coverage route/trampoline")
+
+    header = pathlib.Path(path).with_name("kern_gen11.hpp").read_text()
+    for token in ("static bool vfSchedulerPush(",
+                  "mach_vm_address_t oVfSchedulerPush {};"):
+        if token not in header:
+            raise AssertionError(f"{path}: Scheduler4 wrapper ABI/original slot lacks {token}")
+    context_header = pathlib.Path(path).with_name(
+        "kern_vf_context_shutdown.hpp").read_text()
+    for token in (
+            "static_assert(__is_trivial(Tracker)",
+            "inline bool reportHeadForTail(",
+            "static_cast<int32_t>(coveredStamp - observedStamp) <= 0",
+            "(observedHead & ringHeadMask) == coveredHead",
+            "bool submitted;"):
+        if token not in context_header:
+            raise AssertionError(f"{path}: completion metadata contract lacks {token}")
+    begin = function_body(context_header, "uint64_t begin(")
+    reset = function_body(context_header, "bool resetForReuse()")
+    if "serial == UINT64_MAX" not in begin or "++serial;" not in begin or \
+            "serial =" in reset or "owner" not in reset:
+        raise AssertionError(f"{path}: submission token can wrap/reset across slot reuse")
+
+
+def submission_coverage_integration_mutations(path):
+    source = pathlib.Path(path).read_text()
+
+    def mutate_function(signature, before, after):
+        body = function_body(source, signature)
+        if body.count(before) != 1:
+            raise AssertionError(f"ambiguous completion mutation: {before}")
+        return source.replace(body, body.replace(before, after, 1), 1)
+
+    mutations = (
+        source.replace("entry.submissionCoverage.resetForReuse()", "true", 1),
+        source.replace("!gVfContexts[slot].submissionCoverage.owner", "true", 1),
+        source.replace("entry.stampIndex != static_cast<uint32_t>(stampIndex)", "false", 1),
+        source.replace("entry.submissionCoverage.begin(", "entry.submissionCoverage.publish(", 1),
+        source.replace("coverage.claim(", "coverage.publish(", 1),
+        source.replace("entry.submissionCoverage.publish(", "entry.submissionCoverage.claim(", 1),
+        source.replace("entry.submissionCoverage.finish(", "entry.submissionCoverage.claim(", 1),
+        source.replace("reportHeadValid = NGVfSubmissionCoverage::reportHeadForTail(",
+                       "reportHeadValid = true || NGVfSubmissionCoverage::reportHeadForTail(", 1),
+        mutate_function("static bool vfContextKnownIdle(",
+                        "return entry.submissionCoverage.gpuComplete(",
+                        "return true || entry.submissionCoverage.gpuComplete("),
+        mutate_function("static bool vfContextKnownIdle(",
+                        "entry.submissionCoverage.owner", "false"),
+        mutate_function("static bool vfKnownIdleSnapshot(",
+                        "const bool softwareCompletionPossible =\n\t\tgetMember<volatile UInt32>(gVfAccelerator, 0xDC8) != 0;",
+                        "const bool softwareCompletionPossible = false;"),
+        mutate_function("static bool vfKnownIdleSnapshot(",
+                        "return idle && !terminationRaced;",
+                        "return idle;"),
+        mutate_function("static bool vfKnownIdleSnapshot(",
+                        "gVfDeviceStopping ||", "false ||"),
+        mutate_function("bool vfDirectContextTableUnowned()",
+                        "entry.submissionCoverage.owner", "false"),
+        mutate_function("bool vfQuiesceDeviceForShutdown(void *guc)",
+                        "vfCloseContextOperationGateAndWait(guc)", "true"),
+        source.replace("gVfContexts = contexts;", "gVfContexts = nullptr;", 1),
+        source.replace(
+            '{"__ZN12IGScheduler44pushEP17IGHardwareContextjjbb",\n\t\t\t\t vfSchedulerPush, this->oVfSchedulerPush},', "", 1),
+    )
+    for mutation_index, changed in enumerate(mutations):
+        if changed == source:
+            raise AssertionError("missing submission-coverage mutation target")
+        try:
+            submission_coverage_integration_contract(changed, path)
+        except (AssertionError, ValueError):
+            continue
+        raise AssertionError(
+            f"{path}: escaped submission-coverage integration mutation {mutation_index}")
+    print("PASS: seventeen Scheduler4/completion coverage mutations rejected")
+
+
 def g2h_completion_lock_contract(source, path):
     """Selected direct-poll graph only; not a whole-driver deadlock proof.
 
@@ -4468,6 +4853,7 @@ def source_contract(path):
     internal_optional_producer_isolation_contract(source, path)
     ring_backing_submit_contract(source, path)
     ring_space_contract(source, path)
+    submission_coverage_integration_contract(source, path)
     ppgtt_retirement_contract(source, path)
     ppgtt_final_free_contract(source, path)
     page_table_commit_rollback_contract(source, path)
@@ -4920,7 +5306,9 @@ def source_contract(path):
 
     for wrapper in ("bool Gen11::wrapIGScheduler5IsGpuIdle(const void *that)",
                     "bool Gen11::wrapIGScheduler4IsGpuIdle(const void *that)"):
-        if "return vfKnownIdleSnapshot();" not in function_body(source, wrapper):
+        body = function_body(source, wrapper)
+        if "vfKnownIdleSnapshot(callback ?" not in body or \
+                "callback->vfSharedMappedBufferGetVirtualAddress : 0" not in body:
             raise AssertionError(
                 f"{path}: DPSM idle route no longer uses VF context state")
 
@@ -5231,6 +5619,7 @@ def main():
     internal_optional_producer_isolation_mutations(sys.argv[1])
     ring_backing_submit_mutations(sys.argv[1])
     ring_space_mutations(sys.argv[1])
+    submission_coverage_integration_mutations(sys.argv[1])
     g2h_event_transaction_mutations(sys.argv[1])
     g2h_completion_lock_mutations(sys.argv[1])
     ppgtt_retirement_mutations(sys.argv[1])

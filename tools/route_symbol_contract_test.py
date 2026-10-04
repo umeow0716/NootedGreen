@@ -287,7 +287,7 @@ def main() -> None:
 
     # Keep route inventory changes explicit. This count includes admission,
     # lifecycle, GGTT, GuC/CTB, IRQ, native producer and System-KC routes.
-    expected_route_count = 144
+    expected_route_count = 145
     if len(routes) != expected_route_count:
         raise AssertionError(
             f"route inventory changed: expected {expected_route_count}, got {len(routes)}"

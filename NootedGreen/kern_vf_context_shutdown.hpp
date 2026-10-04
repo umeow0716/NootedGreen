@@ -68,31 +68,70 @@ inline bool registrationCleanupComplete(bool registered,
 
 } // namespace NGVfContextShutdown
 
-// Producer metadata policy only: NOT a hardware completion/idle predicate.
-// Future kernel callers must serialize access, pin the concrete context/ring,
-// validate owner identity and call publish only after real CTB publication.
-// No runtime route uses this policy yet.
+// Producer metadata policy only: NOT by itself a hardware completion/idle
+// predicate. The production Scheduler4/GuC bridge serializes access, pins the
+// concrete context/ring, validates owner identity and calls publish only after
+// real CTB publication. A consumer must still prove GPU-written stamp and ring
+// head progress, and exclude software termination/restart/fault paths.
 namespace NGVfSubmissionCoverage {
-struct Tracker {
-	uint64_t serial = 0;
-	uint64_t owner = 0;
-	uint32_t stamp = 0;
-	uint32_t tail = 0;
-	bool carriesStamp = false;
-	bool claimed = false;
-	bool published = false;
-	bool tainted = false;
-	bool covered = false;
-	uint32_t coveredStamp = 0;
-	uint32_t coveredTail = 0;
+constexpr uint32_t ringHeadMask = 0x001FFFFCU;
+constexpr uint32_t miReportHead = 0x03800000U;
 
-	uint64_t begin(uint64_t caller, uint32_t value, uint32_t byteTail, bool marker) {
+// submitToRing always finishes the native ring transaction with
+// MI_REPORT_HEAD and, when needed, one MI_NOOP so the published tail is QWord
+// aligned. Validate the two final ring words, but deliberately accept only an
+// observed head equal to the final published tail. Intel defines head==tail as
+// the empty-ring condition; predicting the value captured while the report
+// command itself executes would be weaker and generation-dependent. A padded
+// report may therefore produce a conservative false-busy result, never a
+// false-idle result. ringSize is power-of-two in Tahoe's native contract.
+inline bool reportHeadForTail(uint32_t ringTail, uint32_t ringSize,
+	                          uint32_t lastDword, uint32_t previousDword,
+	                          uint32_t &reportHead) {
+	if (ringSize < 16 || ringSize > ringHeadMask + sizeof(uint32_t) ||
+	    (ringSize & (ringSize - 1U)) != 0 ||
+	    (ringTail & (sizeof(uint64_t) - 1U)) != 0 || ringTail >= ringSize)
+		return false;
+	if (lastDword == miReportHead) {
+		reportHead = ringTail;
+		return true;
+	}
+	if (lastDword == 0 && previousDword == miReportHead) {
+		reportHead = ringTail;
+		return true;
+	}
+	return false;
+}
+
+struct Tracker {
+	// Keep this type trivial: the production context table is allocated with
+	// IOMallocZero and has no per-element constructor pass.  Zero is the exact
+	// initial state; slot reuse goes through resetForReuse() without resetting
+	// the monotonic serial.
+	uint64_t serial;
+	uint64_t owner;
+	uint32_t stamp;
+	uint32_t tail;
+	bool carriesStamp;
+	bool claimed;
+	bool published;
+	bool tainted;
+	bool covered;
+	bool submitted;
+	uint32_t reportHead;
+	uint32_t coveredStamp;
+	uint32_t coveredTail;
+	uint32_t coveredHead;
+
+	uint64_t begin(uint64_t caller, uint32_t value, uint32_t byteTail,
+	               uint32_t expectedHead, bool marker) {
 		if (!caller || owner || serial == UINT64_MAX)
 			return 0;
 		++serial;
 		owner = caller;
 		stamp = value;
 		tail = byteTail;
+		reportHead = expectedHead;
 		carriesStamp = marker;
 		claimed = published = tainted = false;
 		return serial;
@@ -114,9 +153,11 @@ struct Tracker {
 		if (!claimed || published || !matches(token, caller, value, byteTail))
 			return false;
 		published = true;
+		submitted = true;
 		covered = carriesStamp && !tainted;
 		coveredStamp = value;
 		coveredTail = byteTail;
+		coveredHead = reportHead;
 		return true;
 	}
 
@@ -138,6 +179,14 @@ struct Tracker {
 	}
 
 	bool hasMarkerCoverage() const { return !owner && covered; }
+	bool hasSubmittedWork() const { return submitted; }
+
+	bool gpuComplete(uint32_t observedStamp, uint32_t observedHead,
+	                bool softwareCompletionPossible) const {
+		return !softwareCompletionPossible && hasMarkerCoverage() &&
+			static_cast<int32_t>(coveredStamp - observedStamp) <= 0 &&
+			(observedHead & ringHeadMask) == coveredHead;
+	}
 
 	// Preserve serial across context-slot reuse. Resetting/reconstructing this
 	// tracker would permit an old token to alias a new invocation (ABA).
@@ -146,11 +195,14 @@ struct Tracker {
 		invalidate();
 		if (owner)
 			return false;
-		stamp = tail = coveredStamp = coveredTail = 0;
+		stamp = tail = reportHead = coveredStamp = coveredTail = coveredHead = 0;
 		claimed = published = carriesStamp = tainted = false;
+		submitted = false;
 		return true;
 	}
 };
+static_assert(__is_trivial(Tracker),
+	"VF submission coverage must remain valid in an IOMallocZero table");
 } // namespace NGVfSubmissionCoverage
 
 namespace NGVfContextEvent {

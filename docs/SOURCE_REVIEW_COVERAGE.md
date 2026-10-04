@@ -10,6 +10,28 @@ The current dynamic-entry gate table is
 
 ## Scope
 
+2026-10-05 V299 SG-07 completion delta: all six sub-gates are now
+`CLOSED-STATIC`. A VF-only Scheduler4 `push` wrapper binds Tahoe's saved
+stamp-present bit to one exact descriptor/task/context/ring/stamp index,
+thread owner, sequence and tail. The nested GuC bridge must claim the same
+monotonic token and publishes coverage only after a real CTB action is
+published; a rejected/mismatched result invalidates or fail-stops, and every
+later unmarked submission removes old coverage. Idle now requires both the
+GPU-written task stamp at slot `+0` (signed wrap-safe) and the retained
+context/HWSP dword `+0x10` to match the final tail of the exact native
+`MI_REPORT_HEAD[, MI_NOOP]` transaction. The native ring-init/refresh bodies,
+three stamp encoders, submit transaction, Scheduler4 reset no-op and the
+10-byte mapped-buffer getter are binary-pinned in both payloads. Termination
+`+0xdc8` is sampled before and after completion reads; stop/fault/shutdown,
+reset and replay cannot manufacture idle. Forced GC still reaches routed GuC
+detach, while backing remains retained through matching deregister ACK. The
+lifetime-long table, non-wrapping serial, active-owner release/reuse rejection
+and context-operation close/drain exclude table UAF and token ABA. Sanitizer
+state-machine tests, seventeen integration mutations, targeted dual-payload
+contracts and full static `/tmp/ngreen-static.uJPHdJ` pass. Clean commit and
+exact-SHA CI remain pending for this worktree. No VM, PCI/sysfs/VF/PF or Host
+i915 state changed.
+
 2026-10-05 reservation-to-submit delta: SG-06 is now `CLOSED-STATIC`. The two
 Tahoe Intel payloads now enforce an exact inventory of all 22 direct ring-space
 reservations, 79 direct writer/helper edges and 40 unique transaction owners.
@@ -27,8 +49,9 @@ reserved, immediately before H2G tail publication. Failed enqueue does not
 publish the LRCA tail. This is not GPU-completion or backing-retirement proof:
 the unused freestanding coverage tracker and all stamp/pool/final-release work
 remain in SG-07. Targeted dual-payload and paired-KC contracts plus full static
-`/tmp/ngreen-static.H0Uwp3` pass; the clean checkpoint and exact-SHA CI for V297
-remain pending. SG-07 through SG-11 still prohibit runtime. No VM, deployment,
+`/tmp/ngreen-static.H0Uwp3` pass; clean checkpoint
+`6f8a325d9f45bc183be8845c3f8966ee0bacfbf4` and exact-SHA CI `37221608262`
+also pass. SG-07 through SG-11 still prohibit runtime. No VM, deployment,
 PCI/sysfs/VF/PF or Host i915 state was touched.
 
 2026-10-05 callback-lifetime/stop delta: SG-05/P9 is now `CLOSED-STATIC`.

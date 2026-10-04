@@ -64,6 +64,12 @@ private:
 	static bool vfIsGuCIdle(void *that);
 	static bool vfIsContextIdle(void *that, uint32_t contextId);
 	static bool vfIsKmdContextIdle(void *that, const uint32_t *descriptor);
+	static bool vfSchedulerPush(void *that, void *hardwareContext,
+	                            unsigned int ringTail,
+	                            unsigned int auxiliary,
+	                            bool carriesStamp,
+	                            bool hasPendingCommands);
+	mach_vm_address_t oVfSchedulerPush {};
 	static void vfTransferOwnership(void *that, const void *backing, int owner);
 	static void vfInitDoorbells(void *that);
 	static bool vfReadDoorbellSQIDIConfig(void *that);

@@ -12,11 +12,11 @@ int main() {
         for (unsigned accept = 0; accept < 2; ++accept)
             for (unsigned interfere = 0; interfere < 2; ++interfere)
                 for (uint32_t stamp : {0U, 1U, 0x7fffffffU, 0x80000000U, UINT32_MAX}) {
-                    NGVfSubmissionCoverage::Tracker tracker;
+                    NGVfSubmissionCoverage::Tracker tracker {};
                     tracker.covered = true; // prior submitted work had a marker
-                    const uint64_t token = tracker.begin(7, stamp, 64, marker);
+                    const uint64_t token = tracker.begin(7, stamp, 64, 60, marker);
                     assert(token && !tracker.hasMarkerCoverage());
-                    assert(!tracker.begin(8, stamp, 64, true));
+                    assert(!tracker.begin(8, stamp, 64, 60, true));
                     assert(!tracker.claim(token, 8, stamp, 64));
                     assert(!tracker.claim(token, 7, stamp ^ 1, 64));
                     assert(!tracker.claim(token, 7, stamp, 72));
@@ -34,35 +34,36 @@ int main() {
                     const bool oracle = !interfere && (!accept || marker);
                     assert(tracker.hasMarkerCoverage() == oracle);
                     if (accept)
-                        assert(tracker.coveredStamp == stamp && tracker.coveredTail == 64);
+                        assert(tracker.coveredStamp == stamp && tracker.coveredTail == 64 &&
+                               tracker.coveredHead == 60 && tracker.hasSubmittedWork());
                     assert(!tracker.finish(token, 7, accept));
-                    const uint64_t next = tracker.begin(7, stamp, 72, true);
+                    const uint64_t next = tracker.begin(7, stamp, 72, 72, true);
                     assert(next != token && !tracker.claim(token, 7, stamp, 72));
                     assert(tracker.finish(next, 7, false));
                 }
     for (unsigned published = 0; published < 2; ++published) {
-        NGVfSubmissionCoverage::Tracker tracker;
-        const auto token = tracker.begin(1, 2, 8, true);
+        NGVfSubmissionCoverage::Tracker tracker {};
+        const auto token = tracker.begin(1, 2, 8, 4, true);
         assert(tracker.claim(token, 1, 2, 8));
         if (published)
             assert(tracker.publish(token, 1, 2, 8));
         assert(!tracker.finish(token, 1, !published));
         assert(!tracker.hasMarkerCoverage());
     }
-    NGVfSubmissionCoverage::Tracker exhausted;
+    NGVfSubmissionCoverage::Tracker exhausted {};
     exhausted.serial = UINT64_MAX;
-    assert(!exhausted.begin(1, 0, 8, true));
-    assert(!exhausted.begin(0, 0, 8, true));
-    NGVfSubmissionCoverage::Tracker lateWriter;
-    const auto lateToken = lateWriter.begin(1, 2, 8, true);
+    assert(!exhausted.begin(1, 0, 8, 4, true));
+    assert(!exhausted.begin(0, 0, 8, 4, true));
+    NGVfSubmissionCoverage::Tracker lateWriter {};
+    const auto lateToken = lateWriter.begin(1, 2, 8, 4, true);
     assert(lateWriter.claim(lateToken, 1, 2, 8));
     assert(lateWriter.publish(lateToken, 1, 2, 8));
     lateWriter.invalidate();
     assert(lateWriter.finish(lateToken, 1, true));
     assert(!lateWriter.hasMarkerCoverage());
-    NGVfSubmissionCoverage::Tracker reused;
+    NGVfSubmissionCoverage::Tracker reused {};
     for (uint64_t generation = 1; generation <= 1024; ++generation) {
-        const auto token = reused.begin(7, 5, 8, true);
+        const auto token = reused.begin(7, 5, 8, 4, true);
         assert(token == generation);
         // An active slot cannot be reset; taint survives until its finish.
         assert(!reused.resetForReuse());
@@ -74,7 +75,7 @@ int main() {
         assert(reused.serial == generation);
         assert(!reused.claim(token, 7, 5, 8));
     }
-    const auto newest = reused.begin(7, 5, 8, true);
+    const auto newest = reused.begin(7, 5, 8, 4, true);
     for (uint64_t stale = 1; stale < newest; ++stale) {
         assert(!reused.claim(stale, 7, 5, 8));
         assert(!reused.publish(stale, 7, 5, 8));
@@ -85,10 +86,71 @@ int main() {
     assert(reused.finish(newest, 7, true));
     assert(reused.hasMarkerCoverage());
     assert(reused.resetForReuse() && !reused.hasMarkerCoverage());
+    assert(!reused.hasSubmittedWork());
     exhausted.covered = true;
     assert(exhausted.resetForReuse());
     assert(exhausted.serial == UINT64_MAX && !exhausted.hasMarkerCoverage());
-    assert(!exhausted.begin(1, 5, 8, true));
+    assert(!exhausted.begin(1, 5, 8, 4, true));
+
+    // The final native ring transaction is either [MI_REPORT_HEAD] at the
+    // last DWord or [MI_REPORT_HEAD, MI_NOOP] when padding is required. Check
+    // wraparound and reject every malformed geometry/final-word pairing.
+    for (uint32_t ringSize : {16U, 4096U, 65536U, 0x200000U}) {
+        for (uint32_t tail : {0U, 8U, ringSize - 8U}) {
+            uint32_t head = UINT32_MAX;
+            assert(NGVfSubmissionCoverage::reportHeadForTail(
+                tail, ringSize, NGVfSubmissionCoverage::miReportHead,
+                0xA5A5A5A5U, head));
+            assert(head == tail);
+            assert(NGVfSubmissionCoverage::reportHeadForTail(
+                tail, ringSize, 0, NGVfSubmissionCoverage::miReportHead,
+                head));
+            assert(head == tail);
+            assert(!NGVfSubmissionCoverage::reportHeadForTail(
+                tail, ringSize, 0, 0, head));
+        }
+    }
+    for (uint32_t invalidSize : {0U, 8U, 24U, 0x400000U}) {
+        uint32_t head = 0;
+        assert(!NGVfSubmissionCoverage::reportHeadForTail(
+            0, invalidSize, NGVfSubmissionCoverage::miReportHead, 0, head));
+    }
+    for (uint32_t invalidTail : {4U, 4096U, UINT32_MAX}) {
+        uint32_t head = 0;
+        assert(!NGVfSubmissionCoverage::reportHeadForTail(
+            invalidTail, 4096, NGVfSubmissionCoverage::miReportHead, 0, head));
+    }
+
+    // A software-observed stamp is accepted only with exact marker coverage,
+    // Tahoe's signed wrap-safe ordering and the independent reported head.
+    for (uint32_t requested : {0U, 1U, 0x7FFFFFFFU, 0x80000000U,
+                               0xFFFFFFFEU, UINT32_MAX}) {
+        NGVfSubmissionCoverage::Tracker tracker {};
+        const auto token = tracker.begin(9, requested, 64, 60, true);
+        assert(tracker.claim(token, 9, requested, 64));
+        assert(tracker.publish(token, 9, requested, 64));
+        assert(tracker.finish(token, 9, true));
+        for (uint32_t observed : {0U, 1U, 0x7FFFFFFFU, 0x80000000U,
+                                  0xFFFFFFFEU, UINT32_MAX}) {
+            const bool stampReached =
+                static_cast<int32_t>(requested - observed) <= 0;
+            for (bool softwareCompletionPossible : {false, true}) {
+                assert(tracker.gpuComplete(
+                    observed, 0xABC00000U | 60U,
+                    softwareCompletionPossible) ==
+                    (stampReached && !softwareCompletionPossible));
+                assert(!tracker.gpuComplete(
+                    observed, 56, softwareCompletionPossible));
+            }
+        }
+    }
+    NGVfSubmissionCoverage::Tracker unmarked {};
+    const auto unmarkedToken = unmarked.begin(1, 7, 8, 4, false);
+    assert(unmarked.claim(unmarkedToken, 1, 7, 8));
+    assert(unmarked.publish(unmarkedToken, 1, 7, 8));
+    assert(unmarked.finish(unmarkedToken, 1, true));
+    assert(unmarked.hasSubmittedWork() && !unmarked.hasMarkerCoverage());
+    assert(!unmarked.gpuComplete(7, 4, false));
 
     // Independent contexts may reuse the same numeric token. The production
     // bridge must first select/pin the exact context; a token is not a global
@@ -97,9 +159,9 @@ int main() {
     for (unsigned marker = 0; marker < 2; ++marker)
         for (unsigned prior = 0; prior < 2; ++prior)
             for (unsigned invalidationPhase = 0; invalidationPhase < 4; ++invalidationPhase) {
-                NGVfSubmissionCoverage::Tracker tracker;
+                NGVfSubmissionCoverage::Tracker tracker {};
                 tracker.covered = prior;
-                const auto token = tracker.begin(7, 5, 8, marker);
+                const auto token = tracker.begin(7, 5, 8, 4, marker);
                 const auto rejectForeign = [&]() {
                     const auto before = tracker;
                     for (uint64_t wrongOwner : {0ULL, 8ULL}) {
@@ -114,11 +176,15 @@ int main() {
                         assert(!tracker.finish(stale, 7, true));
                     }
                     assert(tracker.serial == before.serial && tracker.owner == before.owner);
-                    assert(tracker.stamp == before.stamp && tracker.tail == before.tail);
+                    assert(tracker.stamp == before.stamp && tracker.tail == before.tail &&
+                           tracker.reportHead == before.reportHead);
                     assert(tracker.claimed == before.claimed && tracker.published == before.published);
                     assert(tracker.carriesStamp == before.carriesStamp && tracker.tainted == before.tainted);
                     assert(tracker.covered == before.covered);
-                    assert(tracker.coveredStamp == before.coveredStamp && tracker.coveredTail == before.coveredTail);
+                    assert(tracker.coveredStamp == before.coveredStamp &&
+                           tracker.coveredTail == before.coveredTail &&
+                           tracker.coveredHead == before.coveredHead &&
+                           tracker.submitted == before.submitted);
                 };
                 rejectForeign();
                 if (invalidationPhase == 1)
