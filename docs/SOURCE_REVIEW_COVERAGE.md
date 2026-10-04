@@ -7,6 +7,12 @@ audit's runtime blockers are open.
 
 ## Scope
 
+Backing-source correction: resolve/3D sizes are local defined native qwords
+5100/d240 hex, not external imports; address/symbol/value assertions added.
+Base context free re-read and full hash added to existing anchor coverage;
+do not count it as a newly discovered body. Pool init vtable slot decoded,
+but allocator/loader linkage and partial-init cleanup remain pending.
+
 Complete native hardware-context global initializer `7d98a/1d2` reviewed:
 3D/resolve initial maximum256, sizes65536/4096, alignment64, reserved8.
 Imported backing sizes and loader execution remain unresolved. File-zero

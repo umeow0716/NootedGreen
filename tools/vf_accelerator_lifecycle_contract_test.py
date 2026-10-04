@@ -9,6 +9,7 @@ import sys
 # Complete reviewed native bodies. This fixes the concrete Intel override
 # graph, not inherited timer APIs, dynamic callbacks or runtime completion.
 STAMP_IRQ_NATIVE = {
+    "__ZN17IGHardwareContext4freeEv": (0x14e, "36ddb3ffb068c1f21c3369da7d03bd7b2d84f1b97f518210557a24b5ce8e6d2e"),
     "__GLOBAL__sub_I_IGHardwareContext.cpp": (0x1d2, "6711947627dae699c9c795092bd136db00e93383338dfffacf06b95a39294dbe"),
     "__ZN11IGAccelTask16getBlit2DContextEb": (0x66, "9be9858119a59a6c6e6d6e984dba02be9ed6c90814cbe05fe384d360a1d8df4c"),
     "__ZN11IGAccelTask16getBlit3DContextEb": (0x66, "146dd5e2ab09d819195f631d9c9a540e5058f169cc2da75c194b652c228bc8f4"),
@@ -768,6 +769,11 @@ def macho_inventory(path):
         return direct_branch_candidates(image, owner_start, owner_end,
                                         target_start, external_relocation_offsets)
 
+    for backing_name, backing_address, backing_bytes in (
+            ("_g7_resolve_scratch_space_size", 0xc26c0, 0x5100),
+            ("_blit3d_scratch_space_size", 0xb0c40, 0xd240)):
+        assert value(backing_name) == backing_address, f"{path}: changed extended context backing symbol"
+        assert struct.unpack_from("<Q", image, backing_address)[0] == backing_bytes, f"{path}: changed extended context backing size"
     for name, (length, digest) in STAMP_IRQ_NATIVE.items():
         start = value(name)
         assert next_symbol(start) - start == length, f"{path}: changed stamp IRQ body boundary: {name}"

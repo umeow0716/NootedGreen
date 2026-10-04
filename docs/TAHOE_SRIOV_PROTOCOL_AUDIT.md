@@ -6955,6 +6955,33 @@ No executable patch or runtime mutation.
 
 ### Update fanout must participate in the same owner transaction
 
+#### Backing-size correction and base-owner teardown
+
+Correction to the earlier initializer note: c26c0 and b0c40 have no
+external relocations and resolve to defined native data symbols
+`_g7_resolve_scratch_space_size` and `_blit3d_scratch_space_size`.
+Their qwords are respectively 5100 and d240 hex, now symbol/address/value
+checked by the native test. They are local backing-size cells, not imported
+pointer cells. The initializer directly loads each cell's qword; later
+mutation and loader execution remain distinct runtime questions.
+
+Re-read complete base context free `7c5d8/14e` and added its full hash
+alongside the pre-existing ordered ownership-anchor test (this is not new
+all-file review credit). Extended free releases D8 and E0 before base free;
+base removes the accelerator context list node, releases B0 and B8, calls
+accelerator1250 virtual138, releases A8 and image98 (optional helper
+2a318), then task58 and clears accelerator50. Thus pool destruction
+precedes task release on this selected path. No local lock or hardware
+quiescence acknowledgement is established by that ordering.
+
+System KC pool vtable header is 14bd2500; object slot118 at header+16+118
+contains raw chained pointer 40000054b6ac68, level1 low30 target14b6ac68.
+This matches the reviewed pool init implementation rather than a guessed
+virtual method name. Allocator installation/loader linkage remains to be
+closed before admitting a production hook. Constructor error propagation
+must leave a releasable pool and context; returning false alone does not
+prove native partial-init cleanup is safe.
+
 #### Runtime-filled context parameters have a concrete initializer
 
 Follow-up decoded RIP-reference search identified complete native global
