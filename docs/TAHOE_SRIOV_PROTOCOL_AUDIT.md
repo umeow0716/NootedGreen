@@ -6953,6 +6953,35 @@ No executable patch or runtime mutation.
 
 ## Mapping last-release admission and deferred raw-list transfer
 
+Task allocator follow-up: complete allocate 14b9e2a2/c8, deallocate
+14b9e36a/6e and init 14b9de06/138 reviewed/pinned; declared Task +0x140/148
+vtable identities resolve to these methods. Init retains each supplied nonnull
+IORangeAllocator and stores it in task +0x168's indexed array, with limit/free
+accounting arrays initialized alongside it. This demonstrates allocator owner
+references, not allocator option settings or exclusive task ownership.
+
+Allocate selects the allocator using mapping +0x78, dispatches ordinary
+allocate (+0x150) with mapping length/alignment or fixed allocateRange (+0x158)
+with requested address/length under flag 0x4000, and increases indexed usage
+only on success. Failure returns zero. Deallocate recomputes the applicable
+length, dispatches allocator +0x160 with the saved address, then decreases
+indexed usage unconditionally. Neither method locally locks the accelerator
+or issues/waits for GuC retirement. Index and init-count provenance still need
+caller validation; absence of local checks is not proof of malformed inputs.
+
+Read the entire local XNU 12377.121.6 IORangeAllocator.cpp (400 lines) and
+header (171 lines). Source SHA-256 respectively
+6a01112b12cb82651b238440c3c63176ce0546ad672831e0d33532d835bb1708 and
+2dc8ef8a4af34218317feae5d704a77204fd364ab7c9bae89e5d52e29a9f762e.
+That reference optionally locks with kLocking (default factory options zero),
+allocates from free fragments, and deallocate merges/inserts ranges directly;
+it contains no GPU completion mechanism. This is a protocol comparison, not
+proof of concrete runtime allocator class/options or exact KC equivalence.
+Even a locking allocator would serialize its free list, not establish GPU
+quiescence. Concrete allocator factory policy and completion-consumer lock
+dependencies remain pending. Three new whole-body and two vtable checks pass
+offline; no production/runtime changes.
+
 Factory/VA follow-up: complete createMappingInTaskAtAddressLength
 (14b67304/272), allocGPUVirtualAddress (14bb7616/6a),
 reserveGPUVirtualAddress (14bb75ae/68) and freeGPUVirtualAddress

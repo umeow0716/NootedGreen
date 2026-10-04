@@ -35,6 +35,9 @@ EVENT_DISABLE_STAMP_LOCKED = "__ZN20IOAccelEventMachine223disable_stamp_interrup
 EVENT_ENABLE_STAMP = "__ZN20IOAccelEventMachine220enableStampInterruptEi"
 EVENT_DISABLE_STAMP = "__ZN20IOAccelEventMachine221disableStampInterruptEi"
 EVENT_OWNER_BODIES = {
+    "__ZN11IOAccelTask8allocateEPK16IOAccelMemoryMap": (0xc8, "861b200bb16c1a1c269a89bcbe9b903b185aae1a790818b603f7eacdcc5bf4fb"),
+    "__ZN11IOAccelTask10deallocateEPK16IOAccelMemoryMapy": (0x6e, "9b10f7f24edcb00e45e9a15816d4dea1ec5467202c7f5efc6681b71d1bae6170"),
+    "__ZN11IOAccelTask4initEP22IOGraphicsAccelerator2jPP16IORangeAllocator": (0x138, "f00989c4635c6bfcba66ac1d775dfb16259703e55064355a7686bb3e9db9e186"),
     "__ZN13IOAccelMemory34createMappingInTaskAtAddressLengthEP11IOAccelTaskjyy": (0x272, "0f88152129c26add226c33d981c05fa0a0f3f4fa14c3655446872be8ac308758"),
     "__ZN16IOAccelMemoryMap22allocGPUVirtualAddressEv": (0x6a, "3e5d8e2802624a6e6c3122ba4a5767c26ac6e7c7d257f992c2e436745acf0549"),
     "__ZN16IOAccelMemoryMap24reserveGPUVirtualAddressEyy": (0x68, "9fec19ea44c53e447b4aa03d6f548f80ce78b60048e8ff6521b8aaecb7476583"),
@@ -903,7 +906,7 @@ def check(path, boot_path=None):
             symtab = struct.unpack_from("<6I", image, offset)[2:]
     assert symtab is not None, "missing embedded symbol table"
     symbol_offset, count, string_offset, string_size = symtab
-    matches = {name: [] for name in {*CONTRACTS, *SCRUB_BODIES, *LOCK_COPIES, *EVENT_OWNER_BODIES, SHARED_VTABLE, RESOURCE_VTABLE, "__ZTV18IOAccelDisplayPipe", "__ZTV24IOAccelLegacyDisplayPipe", "__ZTV16IOAccelMemoryMap", "__ZTV16IOAccelSysMemory",
+    matches = {name: [] for name in {*CONTRACTS, *SCRUB_BODIES, *LOCK_COPIES, *EVENT_OWNER_BODIES, SHARED_VTABLE, RESOURCE_VTABLE, "__ZTV18IOAccelDisplayPipe", "__ZTV24IOAccelLegacyDisplayPipe", "__ZTV16IOAccelMemoryMap", "__ZTV16IOAccelSysMemory", "__ZTV11IOAccelTask",
                                     "__ZTV13IOAccelMemory", "__ZTV22IOGraphicsAccelerator2",
                                     "__ZN22IOGraphicsAccelerator223freeWaitToPrepareVidMapEP16IOAccelMemoryMapbb",
                                     "__ZNK16IOAccelMemoryMap9getLengthEv",
@@ -1052,6 +1055,10 @@ def check(path, boot_path=None):
         assert encoded[0] == 0xe8 and call + 5 + struct.unpack_from("<i", encoded, 1)[0] == target, "changed serialized collector/task cleanup edge"
     assert read(0x14ba1299, 7) == bytes.fromhex("48 8b bb 88 00 00 00"), "changed garbage collector mutex identity"
     assert read(0x14ba1384, 7) == bytes.fromhex("48 8b bf 88 00 00 00"), "changed GART collector mutex identity"
+    for slot, name in ((0x140, "__ZN11IOAccelTask8allocateEPK16IOAccelMemoryMap"),
+                       (0x148, "__ZN11IOAccelTask10deallocateEPK16IOAccelMemoryMapy")):
+        raw = struct.unpack("<Q", read(address_of("__ZTV11IOAccelTask") + 16 + slot, 8))[0]
+        assert raw >> 63 == 0 and (raw >> 30) & 3 == 1 and raw & 0x3fffffff == address_of(name), "changed declared task allocator dispatch"
     for call, method in ((0x14b6752b, "__ZN11IOAccelTask23prune_orphaned_mappingsEv"),
                          (0x14b67543, "__ZN11IOAccelTask22free_orphaned_mappingsEv"),
                          (0x14b674c8, "__ZN20IOAccelMemoryMapList13removeMappingEP16IOAccelMemoryMap"),

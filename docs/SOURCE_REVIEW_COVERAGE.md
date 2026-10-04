@@ -7,6 +7,13 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 task allocator ownership: complete init/allocate/deallocate bodies
+and declared +0x140/148 targets reviewed/pinned. Supplied allocator references
+are retained, but options/class provenance remains unresolved. Full local XNU
+IORangeAllocator cpp/header read as reference: optional free-list locking is
+not GPU retirement. Runtime class/option equivalence, index/count provenance
+and completion-consumer lock dependencies are not certified by this review.
+
 2026-10-04 factory/VA lifecycle: four whole bodies reviewed/pinned with three
 declared VA method identities and five direct edges. Deferred mapping reuse
 transfers the saved reference rather than retaining anew; factory has no local
