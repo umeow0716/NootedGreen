@@ -6961,6 +6961,25 @@ No executable patch or runtime mutation.
 
 ###### Complete waitForSpace reservation and failure ordering
 
+Complete 32-bit PPGTT free 11dc4/80 is now reviewed/pinned with its concrete
+free vtable slot, leaf/parent descriptor release edges and IOFree import.
+It walks four inline directory records; for each present parent descriptor,
+it walks 512 software child records, releases each present leaf descriptor,
+frees the 0x4000 software array and releases the parent descriptor. It then
+delegates inherited free. Unlike 64-bit free's shrink helpers, this selected
+body directly returns descriptors and does not first rewrite parent PTEs.
+There is no local invalidation acknowledgement or active-context exclusion.
+Outer shutdown may provide additional guarantees not yet established.
+
+The previously reviewed task mode chooses a 32-bit or 64-bit table, so the
+retirement design must cover both rather than silently excluding an existing
+native task mode. Software-record freeing here must not invalidate deferred
+descriptor identities; retained physical backing and final owner references
+must be independent of the soon-freed arrays. This is not a runtime UAF/crash
+claim, and no executable patch or mode disabling accompanies this review.
+Next: finalize descriptor identity/owner lifetime across both destruction
+paths and map effective submission exclusion before retirement interception.
+
 Complete 64-bit PPGTT free ccfa/1d4 and inherited private/base page-table
 free wrappers 12c82/12 and 14028/12 are now reviewed/pinned. The concrete
 64-bit free slot +0x90 is pinned. When the root exists, free walks 512-entry

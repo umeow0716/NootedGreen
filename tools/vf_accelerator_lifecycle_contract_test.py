@@ -9,6 +9,7 @@ import sys
 # Complete reviewed native bodies. This fixes the concrete Intel override
 # graph, not inherited timer APIs, dynamic callbacks or runtime completion.
 STAMP_IRQ_NATIVE = {
+    "__ZN31IGHardwarePerProcessPageTable324freeEv": (0x80, "c5f1bb69bf4cedcdc999c0f6c34cc47167346196816f14db050a18609bb9893c"),
     "__ZN31IGHardwarePerProcessPageTable644freeEv": (0x1d4, "b3d0469c1f6405f8f9e5f77055fb7338fe457582600e16fba07baf10dd6fd165"),
     "__ZN29IGHardwarePerProcessPageTable4freeEv": (0x12, "6e7702f85ee359086167a27efd1347edb4b2ce757dcd7c6c91cb4c8c66c268aa"),
     "__ZN19IGHardwarePageTable4freeEv": (0x12, "2055826c29bb9708f5dce7f67f665c461226732dd4a3ab43ae624fd64fb478fc"),
@@ -478,6 +479,7 @@ def macho_inventory(path):
     # These imports distinguish the periodic collection mutex from bridge
     # descriptor spin locks. They do not certify dynamic callback lifetime.
     stamp_irq_imports = {
+        0x11e16: "_IOFree",
         0xcdc7: "_memset", 0xce0b: "_memset", 0xce5d: "_memset", 0xcea0: "_memset",
         0xb895: "_memset",
         0x2810c: "__ZN15OSMetaClassBase12safeMetaCastEPKS_PK11OSMetaClass",
@@ -633,6 +635,8 @@ def macho_inventory(path):
     assert image[0x14518:0x1451e] == bytes.fromhex("ff 90 30 01 00 00"), f"{path}: changed releaseRange unmap virtual"
     assert direct_branches("__ZN19IGHardwarePageTable12releaseRangeERK14IGAddressRange", "__ZN16IntelAccelerator27flushHardwareAfterGttUpdateEv") == [0x14522], f"{path}: changed post-unmap deferred-flush edge"
     assert image[0x14573:0x14575] == bytes.fromhex("b0 01"), f"{path}: changed unconditional releaseRange success"
+    assert struct.unpack_from("<Q", image, value("__ZTV31IGHardwarePerProcessPageTable32") + 16 + 0x90)[0] == value("__ZN31IGHardwarePerProcessPageTable324freeEv"), f"{path}: changed 32-bit page-table free dispatch"
+    assert direct_branches("__ZN31IGHardwarePerProcessPageTable324freeEv", "__ZN10IGPagePool14PageDescriptor7releaseEv") == [0x11df9, 0x11e1e], f"{path}: changed 32-bit leaf/parent descriptor destruction"
     assert struct.unpack_from("<Q", image, value("__ZTV31IGHardwarePerProcessPageTable64") + 16 + 0x90)[0] == value("__ZN31IGHardwarePerProcessPageTable644freeEv"), f"{path}: changed 64-bit page-table free dispatch"
     assert direct_branches("__ZN11IGAccelTask4freeEv", "__ZN11IGAccelTask27releaseManagedPageTableListEv") == [0x7ddd], f"{path}: changed task final list cleanup"
     assert image[0x7dbd:0x7dcf] == bytes.fromhex("48 8b bb 60 02 00 00 48 85 ff 74 06 48 8b 07 ff 50 28"), f"{path}: changed private page-table release before list cleanup"
