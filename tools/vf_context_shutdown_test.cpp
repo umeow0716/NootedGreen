@@ -169,6 +169,21 @@ int main() {
         assert(NGVfContextShutdown::action(
                    static_cast<VfGucContextState>(state)) == expected[state]);
     }
+    // The fixed uint8_t representation also admits unknown state bytes.
+    // None may authorize shutdown completion or consume a pending event.
+    for (unsigned rawState = expected.size(); rawState <= UINT8_MAX; ++rawState) {
+        const auto unknown = static_cast<VfGucContextState>(rawState);
+        assert(NGVfContextShutdown::action(unknown) == Action::Wait);
+        for (unsigned enable = 0; enable <= 1; ++enable)
+            for (unsigned disable = 0; disable <= 1; ++disable)
+                for (uint32_t runnable : {0U, 1U, 2U, UINT32_MAX}) {
+                    const auto result = NGVfContextEvent::scheduleDone(
+                        unknown, enable != 0, disable != 0, runnable);
+                    assert(!result.handled && result.state == unknown);
+                    assert(result.enablePending == (enable != 0));
+                    assert(result.disablePending == (disable != 0));
+                }
+    }
 
     // Exhaust the failed-attach compensation boundary. Once registration was
     // published, neither a failed send nor an unobserved DEREGISTER_DONE can be
@@ -186,12 +201,12 @@ int main() {
     }
 
     // Exhaust every lifecycle state, pending-token combination, and the two
-    // defined runnable payloads plus an invalid value.  Enable completions have
+    // defined runnable payloads plus malformed values. Enable completions have
     // ordering priority when both tokens exist; a disable cannot overtake one.
     for (unsigned rawState = 0; rawState < expected.size(); ++rawState) {
         for (unsigned enable = 0; enable <= 1; ++enable) {
             for (unsigned disable = 0; disable <= 1; ++disable) {
-                for (uint32_t runnable : {0U, 1U, 2U}) {
+                for (uint32_t runnable : {0U, 1U, 2U, 0x80000000U, UINT32_MAX}) {
                     const auto state =
                         static_cast<VfGucContextState>(rawState);
                     const auto result = NGVfContextEvent::scheduleDone(
@@ -255,14 +270,12 @@ int main() {
     int ringBacking = 0;
     int stampBacking = 0;
     int scratchBacking = 0;
-    for (const auto initialState : {
-             kVfGucContextEmpty, kVfGucContextTombstone,
-             kVfGucContextRegistering, kVfGucContextRegistered,
-             kVfGucContextPendingEnable, kVfGucContextEnabled,
-             kVfGucContextPendingDisable, kVfGucContextDisabled,
-             kVfGucContextPendingDeregister}) {
+    for (unsigned rawState = 0; rawState <= UINT8_MAX; ++rawState)
+    for (unsigned enable = 0; enable <= 1; ++enable)
+    for (unsigned disable = 0; disable <= 1; ++disable) {
+        const auto initialState = static_cast<VfGucContextState>(rawState);
         Context context {0x12345000U, 0x12345309U, 0xA5A20020U, 7,
-                         4, 2, initialState, true, true, &backing, &ringBacking,
+                         4, 2, initialState, enable != 0, disable != 0, &backing, &ringBacking,
                          &stampBacking, &scratchBacking};
         const bool handled = NGVfContextEvent::deregisterDone(context);
         assert(handled ==
@@ -280,8 +293,8 @@ int main() {
         assert(context.stampBacking == &stampBacking);
         assert(context.scratchBacking == &scratchBacking);
         assert(context.refCount == 7);
-        assert(context.enablePending == !handled);
-        assert(context.disablePending == !handled);
+        assert(context.enablePending == ((enable != 0) && !handled));
+        assert(context.disablePending == ((disable != 0) && !handled));
     }
 
     Context released {0x12345000U, 0x12345309U, 0xA5A20020U, 0,

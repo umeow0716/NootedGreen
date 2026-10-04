@@ -82,6 +82,16 @@ described above.
 
 ## Promotion boundary
 
+The offline context shutdown model covers all 256 underlying state bytes:
+unknown values must remain wait-only, reject schedule/deregister completion,
+and preserve pending tokens and context identity. Deregistration checks all
+four pending-token combinations; schedule checks include high-bit and maximal
+malformed runnable payloads. These are helper-policy regressions, not evidence
+that firmware stopped DMA. The runtime identity-clear caller separately requires
+a tombstone, zero native references, and no protocol fault. None of these tests
+extends the context admission gate to native task/page-table/page-pool lifetimes
+or proves a deferred PPGTT retirement transaction safe.
+
 One clean boot is not a safety or acceleration baseline. Sunshine, Moonlight,
 virtual-display removal, unattended guest login and VM autostart stay disabled
 until repeated contained runs prove real Metal command completion and media
