@@ -2424,75 +2424,81 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			PANIC_COND(!ccsAllocationPatch.apply(patcher, ccsStart, ccsEnd - ccsStart),
 			           "ngreen", "Failed to preserve CCS allocation-failure cleanup");
 
-			// Both event-pointer vector grow instantiations return false when no
-			// growth was needed as well as on allocation failure. Their callers can
-			// silently omit dependencies, so admit each duplicate symbol only inside
-			// its exact owner range and validate the published capacity after native.
+			// All eight event-pointer vector grow copies return false when no growth
+			// was needed as well as on allocation failure. Lilu cannot range-select
+			// duplicate symbols, so derive each exact target from unique owner anchors
+			// in the admitted payload and validate every body before the first route.
+			mach_vm_address_t twoDEventOwnerStart = 0, twoDEventOwnerEnd = 0;
+			mach_vm_address_t acceleratorEventOwnerStart = 0, acceleratorEventOwnerEnd = 0;
+			mach_vm_address_t renderEventOwnerStart = 0, renderEventOwnerEnd = 0;
+			mach_vm_address_t blitEventOwnerStart = 0, blitEventOwnerEnd = 0;
+			mach_vm_address_t glEventOwnerStart = 0, glEventOwnerEnd = 0;
 			mach_vm_address_t resourceEventOwnerStart = 0, resourceEventOwnerEnd = 0;
 			mach_vm_address_t sharedEventOwnerStart = 0, sharedEventOwnerEnd = 0;
+			mach_vm_address_t surfaceEventOwnerStart = 0, surfaceEventOwnerEnd = 0;
 			KernelPatcher::SolveRequest eventOwnerBounds[] = {
+				{"__ZN16IGAccel2DContext8blitCopyEP12IOAccelEventP16IOAccelResource2S3_P22IOAccel2DBlitRectStrucj", twoDEventOwnerStart},
+				{"__GLOBAL__sub_I_IGAccel2DContext.cpp", twoDEventOwnerEnd},
+				{"__ZN19IGBlockFenceManagerD0Ev", acceleratorEventOwnerStart},
+				{"__ZL18kDisplayVar_sysctlP10sysctl_oidPviP10sysctl_req", acceleratorEventOwnerEnd},
+				{"__Z25process_MSAABufferResolveR26IGAccelSegmentResourceListR24IGAccelCommandDescriptorR22IOGraphicsAccelerator2RKN14IntelMTLRender20sResolveResourceDescES8_NS5_14eResolveFilterE10BufferTypeR12IOAccelEvent", renderEventOwnerStart},
+				{"__Z40surfaceStateFillMemoryObjectControlStateR22SGfxRenderSurfaceStateP15IGAccelResourceP15IGMemoryManager", renderEventOwnerEnd},
+				{"__ZN21IntelMTLBlitFunctions7executeEN12IntelMTLBlit7eTokensER19IGAccelCommandQueueR26IGAccelSegmentResourceListRK20IOAccelKernelCommandR24IGAccelCommandDescriptorR13IGHeapsAccessR22IOGraphicsAccelerator2R17IGHardwareContextR12IOAccelEvent", blitEventOwnerStart},
+				{"__ZN14IGTelemetryKMD4initEP16IntelAcceleratory", blitEventOwnerEnd},
+				{"__ZN16IGAccelGLContext32process_token_ResolveDepthBufferER24IOAccelCommandStreamInfo", glEventOwnerStart},
+				{"__GLOBAL__sub_I_IGAccelGLContext.cpp", glEventOwnerEnd},
 				{"__ZN15IGAccelResource22updateMappingCacheTypeEj", resourceEventOwnerStart},
 				{"__GLOBAL__sub_I_IGAccelResource.cpp", resourceEventOwnerEnd},
 				{"__ZN23IGAccelSharedUserClient9MetaClassD0Ev", sharedEventOwnerStart},
 				{"__GLOBAL__sub_I_IGAccelSharedUserClient.cpp", sharedEventOwnerEnd},
+				{"__ZN14IGAccelSurface9MetaClassD0Ev", surfaceEventOwnerStart},
+				{"__GLOBAL__sub_I_IGAccelSurface.cpp", surfaceEventOwnerEnd},
 			};
-			PANIC_COND(!patcher.solveMultiple(index, eventOwnerBounds, address, size) ||
-			           resourceEventOwnerEnd <= resourceEventOwnerStart ||
-			           sharedEventOwnerEnd <= sharedEventOwnerStart,
+			PANIC_COND(!patcher.solveMultiple(index, eventOwnerBounds, address, size),
 			           "ngreen", "Invalid VF event-vector owner bounds");
-			constexpr const char *eventGrowSymbol =
-				"__ZN8IGVectorIP12IOAccelEvent25IGIOMallocAllocatorPolicyE4growEm";
-			constexpr const char *addResourceEventsSymbol =
-				"__ZL20AddDstResourceEventsR18wait_update_eventsP15IGAccelResourceb";
-			mach_vm_address_t resourceEventGrow = 0, resourceAddEvents = 0;
-			KernelPatcher::SolveRequest resourceEventHelpers[] = {
-				{eventGrowSymbol, resourceEventGrow},
-				{addResourceEventsSymbol, resourceAddEvents},
-			};
-			mach_vm_address_t sharedEventGrow = 0, sharedAddEvents = 0;
-			KernelPatcher::SolveRequest sharedEventHelpers[] = {
-				{eventGrowSymbol, sharedEventGrow},
-				{addResourceEventsSymbol, sharedAddEvents},
-			};
-			PANIC_COND(!patcher.solveMultiple(
-			               index, resourceEventHelpers, resourceEventOwnerStart,
-			               resourceEventOwnerEnd - resourceEventOwnerStart) ||
-			           !patcher.solveMultiple(
-			               index, sharedEventHelpers, sharedEventOwnerStart,
-			               sharedEventOwnerEnd - sharedEventOwnerStart) ||
-			           resourceAddEvents - resourceEventGrow !=
-			               NGEventVector::reviewedGrowSize ||
-			           sharedAddEvents - sharedEventGrow !=
-			               NGEventVector::reviewedGrowSize ||
-			           !NGEventVector::hasReviewedGrow(
-			               reinterpret_cast<const uint8_t *>(resourceEventGrow),
-			               resourceAddEvents - resourceEventGrow) ||
-			           !NGEventVector::hasReviewedGrow(
-			               reinterpret_cast<const uint8_t *>(sharedEventGrow),
-			               sharedAddEvents - sharedEventGrow),
+			const mach_vm_address_t twoDEventGrow = NGEventVector::locateReviewedGrow(
+				twoDEventOwnerStart, twoDEventOwnerEnd, 0xA74);
+			const mach_vm_address_t acceleratorEventGrow = NGEventVector::locateReviewedGrow(
+				acceleratorEventOwnerStart, acceleratorEventOwnerEnd, 0x244);
+			const mach_vm_address_t renderEventGrow = NGEventVector::locateReviewedGrow(
+				renderEventOwnerStart, renderEventOwnerEnd, 0x764);
+			const mach_vm_address_t blitEventGrow = NGEventVector::locateReviewedGrow(
+				blitEventOwnerStart, blitEventOwnerEnd, 0x16C8);
+			const mach_vm_address_t glEventGrow = NGEventVector::locateReviewedGrow(
+				glEventOwnerStart, glEventOwnerEnd, 0x4AC8);
+			const mach_vm_address_t resourceEventGrow = NGEventVector::locateReviewedGrow(
+				resourceEventOwnerStart, resourceEventOwnerEnd, 0x60C);
+			const mach_vm_address_t sharedEventGrow = NGEventVector::locateReviewedGrow(
+				sharedEventOwnerStart, sharedEventOwnerEnd, 0xA);
+			const mach_vm_address_t surfaceEventGrow = NGEventVector::locateReviewedGrow(
+				surfaceEventOwnerStart, surfaceEventOwnerEnd, 0xA);
+			PANIC_COND(!twoDEventGrow || !acceleratorEventGrow || !renderEventGrow ||
+			           !blitEventGrow || !glEventGrow || !resourceEventGrow ||
+			           !sharedEventGrow || !surfaceEventGrow,
 			           "ngreen", "Changed VF event-vector growth contracts");
-			KernelPatcher::RouteRequest resourceEventGrowRoute[] = {
+			ExactRouteRequest eventGrowRoutes[] = {
 				{"__ZN8IGVectorIP12IOAccelEvent25IGIOMallocAllocatorPolicyE4growEm",
-				 vfResourceEventVectorGrow,
+				 twoDEventGrow, vf2DEventVectorGrow, this->oVf2DEventVectorGrow},
+				{"__ZN8IGVectorIP12IOAccelEvent25IGIOMallocAllocatorPolicyE4growEm",
+				 acceleratorEventGrow, vfAcceleratorEventVectorGrow,
+				 this->oVfAcceleratorEventVectorGrow},
+				{"__ZN8IGVectorIP12IOAccelEvent25IGIOMallocAllocatorPolicyE4growEm",
+				 renderEventGrow, vfRenderEventVectorGrow, this->oVfRenderEventVectorGrow},
+				{"__ZN8IGVectorIP12IOAccelEvent25IGIOMallocAllocatorPolicyE4growEm",
+				 blitEventGrow, vfBlitEventVectorGrow, this->oVfBlitEventVectorGrow},
+				{"__ZN8IGVectorIP12IOAccelEvent25IGIOMallocAllocatorPolicyE4growEm",
+				 glEventGrow, vfGLEventVectorGrow, this->oVfGLEventVectorGrow},
+				{"__ZN8IGVectorIP12IOAccelEvent25IGIOMallocAllocatorPolicyE4growEm",
+				 resourceEventGrow, vfResourceEventVectorGrow,
 				 this->oVfResourceEventVectorGrow},
-			};
-			KernelPatcher::RouteRequest sharedEventGrowRoute[] = {
 				{"__ZN8IGVectorIP12IOAccelEvent25IGIOMallocAllocatorPolicyE4growEm",
-				 vfSharedEventVectorGrow,
-				 this->oVfSharedEventVectorGrow},
+				 sharedEventGrow, vfSharedEventVectorGrow, this->oVfSharedEventVectorGrow},
+				{"__ZN8IGVectorIP12IOAccelEvent25IGIOMallocAllocatorPolicyE4growEm",
+				 surfaceEventGrow, vfSurfaceEventVectorGrow, this->oVfSurfaceEventVectorGrow},
 			};
-			PANIC_COND(!patcher.routeMultiple(
-			               index, resourceEventGrowRoute, 1,
-			               resourceEventOwnerStart,
-			               resourceEventOwnerEnd - resourceEventOwnerStart,
-			               true, false) ||
-			           !patcher.routeMultiple(
-			               index, sharedEventGrowRoute, 1,
-			               sharedEventOwnerStart,
-			               sharedEventOwnerEnd - sharedEventOwnerStart,
-			               true, false),
+			PANIC_COND(!routeExactMultiple(patcher, eventGrowRoutes),
 			           "ngreen", "Failed to guard VF event-vector growth");
-			SYSLOG("ngreen", "V273: guarded both VF event-vector growth instantiations");
+			SYSLOG("ngreen", "V274: guarded all eight VF event-vector growth copies");
 			KernelPatcher::RouteRequest workQueueInitRoute[] = {
 				{"__ZN22IGHardwareGuCWorkQueue19initWithAcceleratorEP22IOGraphicsAccelerator2jP37UK_GEN11_SCHED_PROCESS_DESCRIPTOR_REC",
 				 vfWorkQueueInit, this->oVfWorkQueueInit},
@@ -3235,6 +3241,51 @@ static bool vfEventVectorGrowChecked(void *vector, size_t requested,
 	return nativeResult;
 }
 
+bool Gen11::vf2DEventVectorGrow(void *vector, size_t requested)
+{
+	PANIC_COND(!callback || !callback->oVf2DEventVectorGrow,
+	           "ngreen", "Missing 2D event-vector growth trampoline");
+	using Grow = bool (*)(void *, size_t);
+	return vfEventVectorGrowChecked(vector, requested,
+		reinterpret_cast<Grow>(callback->oVf2DEventVectorGrow));
+}
+
+bool Gen11::vfAcceleratorEventVectorGrow(void *vector, size_t requested)
+{
+	PANIC_COND(!callback || !callback->oVfAcceleratorEventVectorGrow,
+	           "ngreen", "Missing accelerator event-vector growth trampoline");
+	using Grow = bool (*)(void *, size_t);
+	return vfEventVectorGrowChecked(vector, requested,
+		reinterpret_cast<Grow>(callback->oVfAcceleratorEventVectorGrow));
+}
+
+bool Gen11::vfRenderEventVectorGrow(void *vector, size_t requested)
+{
+	PANIC_COND(!callback || !callback->oVfRenderEventVectorGrow,
+	           "ngreen", "Missing render event-vector growth trampoline");
+	using Grow = bool (*)(void *, size_t);
+	return vfEventVectorGrowChecked(vector, requested,
+		reinterpret_cast<Grow>(callback->oVfRenderEventVectorGrow));
+}
+
+bool Gen11::vfBlitEventVectorGrow(void *vector, size_t requested)
+{
+	PANIC_COND(!callback || !callback->oVfBlitEventVectorGrow,
+	           "ngreen", "Missing blit event-vector growth trampoline");
+	using Grow = bool (*)(void *, size_t);
+	return vfEventVectorGrowChecked(vector, requested,
+		reinterpret_cast<Grow>(callback->oVfBlitEventVectorGrow));
+}
+
+bool Gen11::vfGLEventVectorGrow(void *vector, size_t requested)
+{
+	PANIC_COND(!callback || !callback->oVfGLEventVectorGrow,
+	           "ngreen", "Missing GL event-vector growth trampoline");
+	using Grow = bool (*)(void *, size_t);
+	return vfEventVectorGrowChecked(vector, requested,
+		reinterpret_cast<Grow>(callback->oVfGLEventVectorGrow));
+}
+
 bool Gen11::vfResourceEventVectorGrow(void *vector, size_t requested)
 {
 	PANIC_COND(!callback || !callback->oVfResourceEventVectorGrow,
@@ -3251,6 +3302,15 @@ bool Gen11::vfSharedEventVectorGrow(void *vector, size_t requested)
 	using Grow = bool (*)(void *, size_t);
 	return vfEventVectorGrowChecked(vector, requested,
 		reinterpret_cast<Grow>(callback->oVfSharedEventVectorGrow));
+}
+
+bool Gen11::vfSurfaceEventVectorGrow(void *vector, size_t requested)
+{
+	PANIC_COND(!callback || !callback->oVfSurfaceEventVectorGrow,
+	           "ngreen", "Missing surface event-vector growth trampoline");
+	using Grow = bool (*)(void *, size_t);
+	return vfEventVectorGrowChecked(vector, requested,
+		reinterpret_cast<Grow>(callback->oVfSurfaceEventVectorGrow));
 }
 
 bool Gen11::IGMemoryManagerInitSegments(void *that)

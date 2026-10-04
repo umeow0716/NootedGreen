@@ -224,6 +224,11 @@ def routed_symbols(source: Path) -> set[str]:
         text,
         flags=re.DOTALL,
     )
+    blocks.extend(re.findall(
+        r"ExactRouteRequest\s+\w+\[\]\s*=\s*\{(.*?)\n\s*\};",
+        text,
+        flags=re.DOTALL,
+    ))
     if not blocks:
         raise AssertionError(f"{source}: no RouteRequest arrays found")
     names = []
@@ -231,7 +236,7 @@ def routed_symbols(source: Path) -> set[str]:
         names.extend(re.findall(r'\{\s*"([^"]+)"\s*,', block))
     allowed_duplicate_counts = {
         "__ZN31AppleIntelFramebufferController5startEP9IOService": 2,
-        "__ZN8IGVectorIP12IOAccelEvent25IGIOMallocAllocatorPolicyE4growEm": 2,
+        "__ZN8IGVectorIP12IOAccelEvent25IGIOMallocAllocatorPolicyE4growEm": 8,
     }
     duplicates = sorted(
         {

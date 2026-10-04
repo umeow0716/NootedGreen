@@ -55,3 +55,33 @@ bool LookupPatchPlus::applyAll(KernelPatcher &patcher, const LookupPatchPlus *pa
 	}
 	return true;
 }
+
+bool routeExactMultiple(KernelPatcher &patcher, ExactRouteRequest *requests,
+	size_t count) {
+	if (!requests && count)
+		return false;
+	// Preflight the entire exact-address group before the first trampoline write.
+	for (size_t i = 0; i < count; i++) {
+		if (!requests[i].identity || !requests[i].from || !requests[i].to ||
+		    !requests[i].org || *requests[i].org)
+			return false;
+		for (size_t j = 0; j < i; j++)
+			if (requests[i].from == requests[j].from)
+				return false;
+	}
+	for (size_t i = 0; i < count; i++) {
+		patcher.clearError();
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+		const mach_vm_address_t wrapper = patcher.routeFunction(
+			requests[i].from, requests[i].to, true, true, true);
+#pragma clang diagnostic pop
+		if (!wrapper || patcher.getError() != KernelPatcher::Error::NoError) {
+			SYSLOG("Patcher+", "Failed exact route %s at " PRIKADDR,
+			       requests[i].identity, CASTKADDR(requests[i].from));
+			return false;
+		}
+		*requests[i].org = wrapper;
+	}
+	return true;
+}

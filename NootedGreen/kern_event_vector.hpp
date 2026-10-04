@@ -42,6 +42,17 @@ inline bool hasReviewedGrow(const uint8_t *body, size_t length) {
 	return true;
 }
 
+inline uintptr_t locateReviewedGrow(uintptr_t ownerStart, uintptr_t ownerEnd,
+                                    size_t offset) {
+	if (!ownerStart || ownerEnd <= ownerStart ||
+	    offset > ownerEnd - ownerStart ||
+	    reviewedGrowSize > ownerEnd - ownerStart - offset)
+		return 0;
+	const uintptr_t candidate = ownerStart + offset;
+	return hasReviewedGrow(reinterpret_cast<const uint8_t *>(candidate),
+	                       reviewedGrowSize) ? candidate : 0;
+}
+
 inline bool hasConsistentState(size_t size, size_t capacity,
                                uintptr_t storage) {
 	if (size > capacity)

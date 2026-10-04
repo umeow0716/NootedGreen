@@ -30,6 +30,16 @@ int main() {
 		assert(!hasReviewedGrow(body.data(), body.size()));
 		body[offset] ^= 1;
 	}
+	const uintptr_t bodyStart = reinterpret_cast<uintptr_t>(body.data());
+	assert(locateReviewedGrow(bodyStart - 0x20,
+	                          bodyStart + reviewedGrowSize + 0x20, 0x20) == bodyStart);
+	assert(locateReviewedGrow(0, bodyStart + reviewedGrowSize, 0) == 0);
+	assert(locateReviewedGrow(bodyStart, bodyStart, 0) == 0);
+	assert(locateReviewedGrow(bodyStart, bodyStart + reviewedGrowSize - 1, 0) == 0);
+	assert(locateReviewedGrow(bodyStart, bodyStart + reviewedGrowSize, 1) == 0);
+	body[0] ^= 1;
+	assert(locateReviewedGrow(bodyStart, bodyStart + reviewedGrowSize, 0) == 0);
+	body[0] ^= 1;
 
 	assert(hasCapacity(0, 0, 0, 0));
 	assert(hasCapacity(0, 4, 0x1000, 4));

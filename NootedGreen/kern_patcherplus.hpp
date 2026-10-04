@@ -55,3 +55,28 @@ private:
 	bool preflight(mach_vm_address_t address, size_t maxSize) const;
 	bool applyPrepared(mach_vm_address_t address, size_t maxSize) const;
 };
+
+// Lilu's ranged symbol overload validates the one address returned by its
+// ordinary lookup; it cannot select among duplicate Mach-O symbols by range.
+// Exact routes are for UUID/hash-admitted targets derived from unique anchors.
+struct ExactRouteRequest {
+	const char *identity {nullptr};
+	mach_vm_address_t from {0};
+	mach_vm_address_t to {0};
+	mach_vm_address_t *org {nullptr};
+
+	template <typename T>
+	ExactRouteRequest(const char *name, mach_vm_address_t source, T replacement,
+	                  mach_vm_address_t &original)
+		: identity {name}, from {source},
+		  to {reinterpret_cast<mach_vm_address_t>(replacement)}, org {&original} {}
+};
+
+bool routeExactMultiple(KernelPatcher &patcher, ExactRouteRequest *requests,
+	size_t count);
+
+template <size_t N>
+inline bool routeExactMultiple(KernelPatcher &patcher,
+	ExactRouteRequest (&requests)[N]) {
+	return routeExactMultiple(patcher, requests, N);
+}

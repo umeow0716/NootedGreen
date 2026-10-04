@@ -131,7 +131,12 @@ else
     failed=1
 fi
 if python3 -B tools/vf_event_vector_source_contract_test.py \
-    NootedGreen/kern_gen11.cpp; then
+	NootedGreen/kern_gen11.cpp \
+	NootedGreen/kern_patcherplus.hpp \
+	NootedGreen/kern_patcherplus.cpp \
+	Lilu.kext/Contents/Resources/Headers/kern_patcher.hpp \
+	sle_Internal/le/AppleIntelTGLGraphics.kext/Contents/MacOS/AppleIntelTGLGraphics \
+	sle_Internal/sle/AppleIntelTGLGraphics.kext/Contents/MacOS/AppleIntelTGLGraphics; then
     printf 'PASS offline VF event-vector source contract\n'
 else
     failed=1

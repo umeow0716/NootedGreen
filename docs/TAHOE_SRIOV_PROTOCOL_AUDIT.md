@@ -1,14 +1,46 @@
 # Tahoe SR-IOV protocol audit — in progress
 
-Updated: 2026-10-04. The last dynamic source baseline is `ce166c8`; the latest
-completed offline-reviewed checkpoint is V273 VF dependency-event allocation fail-stop on
+Updated: 2026-10-04. The last dynamic source baseline is `ce166c8`; the current
+offline-reviewed checkpoint is V274 exact VF dependency-event routing on
 `codex/tahoe-sriov-vf`. This is NOT a boot-test candidate or a successful
 driver baseline. The `ce166c8` run produced repeatable host PF DMAR faults
 followed by i915 hangs and a host reboot. Keep `macos-tahoe-sriov` shut off until the
 corrected code passes the remaining offline review and every independently
 enforced containment precondition.
 
+## V274 exact routing of all event-vector copies (offline)
+
+V273 was not deployable: reading the pinned Lilu 1.7.2 implementation established
+that its ranged `solveSymbol` overload first performs one ordinary name lookup
+and only then rejects an address outside the supplied range. It does not search
+duplicate symbols within that range. The two V273 bounded name routes would
+therefore fail-stop at kext processing rather than select both intended copies.
+No VM or hardware test used that checkpoint.
+
+V274 removes duplicate name resolution entirely. In both hash/UUID-admitted
+Tahoe payloads, 16 individually unique owner-bound symbols plus eight fixed
+offsets resolve exactly the complete grow-address set
+`7396/2ea12/55b84/5b018/6b8b8/757b2/79a2e/844d4`. Every target lies within its
+owner bounds and passes the reviewed body contract before the first write. A
+new exact-address route helper preflights all request identities, target and
+replacement addresses, empty trampoline slots and pairwise-distinct targets;
+then eight distinct wrappers preserve the corresponding native trampolines and
+share the V273 VF state guard. PF installs none of these routes.
+
+Both payload layouts, the local Lilu ranged-lookup implementation, 57 mutated
+source/API contracts, pure state tests, the 100-unique-symbol route inventory
+and the full repository static suite pass offline. This closes allocation-state
+containment across all eight copies,
+not dependency completeness, outer serialization, DMA quiescence or runtime
+acceleration. Direct routing remains sequential: an allocator/protection error
+after an earlier trampoline write reaches the mandatory guest panic but cannot
+roll back that prefix. No VM, PCI/sysfs or hardware operation was performed.
+
 ## V273 dependency-event vector growth postcondition (offline)
+
+Historical note: the postcondition logic below remains in V274, but V273's
+duplicate-symbol route-selection mechanism was invalid and is superseded by the
+exact-address routing above. It was never a runtime candidate.
 
 The Tahoe payload contains eight same-named event-pointer `IGVector::grow`
 instantiations. Only the two complete/hash-pinned copies used by the reviewed
