@@ -7,6 +7,11 @@ audit's runtime blockers are open.
 
 ## Scope
 
+Complete native display-pipe init `7eaf0/d2` and beginCommands `8071e/4e`
+reviewed and pinned. Dynamic getter request field1330 is initialized to
+0x68/0x6e dwords, fitting the 4096-8 display pool. This does not establish
+selection success, virtual-display viability, or VF runtime reachability.
+
 Local XNU zone allocation/return/validation and normal/percpu/RO free
 functions inspected: zero-on-free explains why allocation-time memset
 search is insufficient. Exact Boot unsymbolized zone entry is not credited

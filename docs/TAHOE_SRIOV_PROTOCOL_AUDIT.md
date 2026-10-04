@@ -6955,6 +6955,43 @@ No executable patch or runtime mutation.
 
 ### Update fanout must participate in the same owner transaction
 
+#### Rect-list caller permits the full 64 KiB boundary conditionally
+
+The bounded native window33c66..33caf is now byte-pinned in both images,
+including its getter branch relocation. It selects a per-rectangle term,
+64-byte-aligns the computed byte requirement, decrements the working rect
+count while the result is strictly above10000 hex, then passes result>>2
+to getBufferPtrNoInc. Because the comparison is unsigned `ja`, exactly
+10000 bytes is admitted as4000 dwords. The Blit3D pool usable bound is
+10000-reserved8=fff8 bytes (3ffe dwords), so the caller's admitted upper
+boundary is eight bytes larger than getter end.
+
+This proves a code-level boundary mismatch, not that realistic rect/vector,
+GPU-address and feature inputs reach exactly10000. The enclosing function
+is24b0 bytes; only the request window is credited here, not a complete-body
+review. Existing injected getter execution shows how an over-capacity
+request is returned after selection failure, but does not connect a real
+rect-list workload to this exact arithmetic state. Next model and constrain
+the producer operands, and review the immediate post-getter write extent.
+
+#### Display dynamic request is initialized to a small bounded constant
+
+Complete native display-pipe init `7eaf0/d2` and beginCommands `8071e/4e`
+are reviewed and hash-pinned. Init clears command cursors and selects field
+1330 as either 68 or 6e hex dwords depending on accelerator feature bits
+1190 mask18000. beginCommands resolves the display-machine extended-context
+pool, advances the channel event queue, passes that field to the getter and
+publishes the returned pointer to1340/1348 without a null check. All three
+generateFlip getter calls read the same field. Both possible requests are
+at most440 bytes and fit the display pool's 4096-8 usable bytes.
+
+No other decoded write to field1330 was found in the selected native text
+symbols. This bounds the display request under the reviewed image; it does
+not prove the returned pointer belongs to the intended new slot after a
+selection failure, nor make the physical display route safe for a VF.
+Display does not establish the injected oversize reachability. Rect-list
+and resolve dynamic request producers remain pending.
+
 #### Native getter callsite request discovery bounds the oversize inference
 
 Function-bounded decoding plus external relocation inventory found12 native

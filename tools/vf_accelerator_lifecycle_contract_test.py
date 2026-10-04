@@ -9,6 +9,8 @@ import sys
 # Complete reviewed native bodies. This fixes the concrete Intel override
 # graph, not inherited timer APIs, dynamic callbacks or runtime completion.
 STAMP_IRQ_NATIVE = {
+    "__ZN18IGAccelDisplayPipe4initEP22IOGraphicsAccelerator2P27IOAccelLegacyDisplayMachineP13IOFramebufferj": (0xd2, "4dbd9f1f1aad564774b07823c2b6eacc10b27d756aa5ec8278ea70701cb62f8e"),
+    "__ZN18IGAccelDisplayPipe13beginCommandsEv": (0x4e, "6b288ba9b0665e8abf4751056ff782a32021678bc4d74f0d92386eeb83627711"),
     "__ZN17IGHardwareContext4freeEv": (0x14e, "36ddb3ffb068c1f21c3369da7d03bd7b2d84f1b97f518210557a24b5ce8e6d2e"),
     "__GLOBAL__sub_I_IGHardwareContext.cpp": (0x1d2, "6711947627dae699c9c795092bd136db00e93383338dfffacf06b95a39294dbe"),
     "__ZN11IGAccelTask16getBlit2DContextEb": (0x66, "9be9858119a59a6c6e6d6e984dba02be9ed6c90814cbe05fe384d360a1d8df4c"),
@@ -779,6 +781,12 @@ def macho_inventory(path):
         assert image[call - 5:call] == b"\xbe" + struct.pack("<I", expected), f"{path}: changed selected pool request size"
         assert image[call] == 0xe8, f"{path}: changed pool getter call opcode"
         assert pool_getter_imports.get(call + 1) == [0x2d], f"{path}: changed pool getter import"
+    rect_request = bytes.fromhex(
+        "4d89f5664183fa01bb2c000000480f44da4c8da403ff0100004921fc4901f4"
+        "4921fc49ffcf4829ca4883c6a049ffce4981fc0000010077c84801c34c89e6"
+        "48c1ee02488bbda0feffff")
+    assert image[0x33c66:0x33caf] == rect_request, f"{path}: changed rect-list bounded request derivation"
+    assert image[0x33caf] == 0xe8 and pool_getter_imports.get(0x33cb0) == [0x2d], f"{path}: changed rect-list getter import"
     for backing_name, backing_address, backing_bytes in (
             ("_g7_resolve_scratch_space_size", 0xc26c0, 0x5100),
             ("_blit3d_scratch_space_size", 0xb0c40, 0xd240)):
