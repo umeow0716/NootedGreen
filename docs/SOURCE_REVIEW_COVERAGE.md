@@ -7,6 +7,11 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 pool event callbacks: five complete native bodies/factory imports
+pinned. Timer hands off to software interrupt; interrupt callback can rearm.
+Source add results unchecked, no local terminal admission; base +0x218 is
+cancelTimeout, not established drain. Concrete workloop/outer owner unresolved.
+
 2026-10-04 pool init/free/hash removal: four complete native bodies pinned.
 Init has unchecked allocations and ignored initial growth; free destroys queue
 before source teardown; remove can trigger non-atomic rehash. Effective source

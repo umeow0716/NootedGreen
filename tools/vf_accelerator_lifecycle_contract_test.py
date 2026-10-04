@@ -9,6 +9,11 @@ import sys
 # Complete reviewed native bodies. This fixes the concrete Intel override
 # graph, not inherited timer APIs, dynamic callbacks or runtime completion.
 STAMP_IRQ_NATIVE = {
+    "__ZN10IGPagePool10pruneEventEP22IOInterruptEventSourcei": (0x46, "17ea1938584ddf61ac147cd4b6f164e8b9ddae802a9d4f2cdf3a8c7f825e2c8f"),
+    "__ZN10IGPagePool10pruneTimerEP18IOTimerEventSource": (0x4e, "45fc274f9ca594a9bf136f3c25a7c34e3bca0ed4141305a4a5c21df4d221c1d3"),
+    "__ZN10IGPagePool11inPruneListEPNS_11PoolElementE": (0x24, "af1c4fb1f9fa50011285cfce15061aaa638e230c75daff90e3c6b6601d86156f"),
+    "__ZN10IGPagePool14registerEventsEv": (0xc0, "a7a62cd8bda261e217a338827df271f23f306a7a07a83fc3b442fc0d55aa2356"),
+    "__ZN10IGPagePool25describeDriverAllocationsEP21IOAccelAllocationInfoi": (0x6, "5a96d1fb661d55552184ea24023ae8190bd1523ae1f855a8d671b07143e8b1df"),
     "__ZN10IGPagePool15initWithOptionsEP16IntelAcceleratorj": (0x174, "fc32202718c77bc993d98568900c4e0490875f6d4c560e300de1faebcf705e24"),
     "__ZN10IGPagePool4freeEv": (0x114, "115a4127e4b6a8b646d8410e411e9c57ed1d3acacbddd0c4089365b49b928de6"),
     "__ZN11IGHashTableIPN10IGPagePool11PoolElementEmNS0_15PoolElementHashE25IGIOMallocAllocatorPolicyED1Ev": (0x120, "0a79a5b0a2d2e0da123f2e24275266707d7563ad24287d6f24f721fd3d62076a"),
@@ -421,6 +426,8 @@ def macho_inventory(path):
     # These imports distinguish the periodic collection mutex from bridge
     # descriptor spin locks. They do not certify dynamic callback lifetime.
     stamp_irq_imports = {
+        0xbab2: "__ZN22IOInterruptEventSource20interruptEventSourceEP8OSObjectPFvS1_PS_iEP9IOServicei",
+        0xbaca: "__ZN18IOTimerEventSource16timerEventSourceEP8OSObjectPFvS1_PS_E",
         0xb209: "__ZN24IOBufferMemoryDescriptor17inTaskWithOptionsEP4taskjmm",
         0xb2dd: "__ZN18IOMemoryDescriptor19createMappingInTaskEP4taskyjyy",
         0xb30b: "_OSAddAtomic64",

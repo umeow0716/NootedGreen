@@ -6387,6 +6387,31 @@ callback admission must be proved elsewhere. No executable patch/runtime test.
 
 ###### Pool initialization/free and hash removal
 
+Complete pool registerEvents/pruneEvent/pruneTimer/inPruneList/allocation-report
+bodies (0xc0/0x46/0x4e/0x24/0x6) reviewed/pinned with both event factory imports.
+Threaded registration creates a software interrupt source (provider/index zero)
+and a default timer, passing the pool as owner. It adds/enables both on
+accelerator virtual +0x688 workloop WITHOUT testing either addEventSource result.
+Timer factory failure releases/clears the interrupt source; interrupt failure
+returns false. Actual callers must handle registration failure and avoid
+duplicate registration; local body has neither an existing-source guard nor a
+terminal admission flag.
+
+pruneTimer clears scheduled flag +0x50 under optional lock then dispatches the
+interrupt source virtual +0x1d8. pruneEvent calls prune(mode 1), then acquires
+optional lock and calls schedulePrune, potentially rearming the timer. Neither
+callback locally rejects teardown. inPruneList traverses raw free-list nodes
+without local locking; describeDriverAllocations is a no-op, not backing-lifetime
+or allocation accounting evidence.
+
+Paired Tahoe Boot KC's already reviewed base timer vtable +0x218 resolves to
+cancelTimeout. This matches the default factory used here: the pool free call
+is cancellation, not a demonstrated callback drain. Default owner storage,
+passive timer semantics and cancel rearm counterexamples are covered elsewhere
+in this audit; concrete pool workloop/callback admission still require review.
+The interrupt handoff plus pruneEvent rearm makes cancellation after destroying
+queue state insufficient locally. No race was induced and no runtime was run.
+
 Complete pool init (0x174), pool free (0x114), hash destructor (0x120) and
 hash remove (0xc3) reviewed/pinned. Init stores a borrowed accelerator +0x18,
 zeros state, initializes the free-list, then calls OSObject base init. It
