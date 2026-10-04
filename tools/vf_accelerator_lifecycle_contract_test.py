@@ -9,6 +9,7 @@ import sys
 # Complete reviewed native bodies. This fixes the concrete Intel override
 # graph, not inherited timer APIs, dynamic callbacks or runtime completion.
 STAMP_IRQ_NATIVE = {
+    "__Z15utilGetPropertyIjET_P15IORegistryEntryPKcS0_": (0x18c, "9da1339c8d7b6f93f71bf4020792fc4090572cca3bb9046120eb4dc617ef28af"),
     "__ZN20IGHardwareRingBuffer4initEP17IGHardwareContext": (0x1ec, "34cc30b4c471c23a0790bc8de98ddafe0aa25606ba37fee065a30f3a6f1ee1c9"),
     "__ZNK17IGHardwareContext17getRingBufferSizeEv": (0x14, "fe5061119174d816668edb9231f98b31fe3a7455d979e3f89d9467c538f4249a"),
     "__ZN20IGHardwareRingBuffer10writeQWordEy": (0x132, "ca328112ea77f150daa058f08cf7363e638748a85043c3c80777e25fffca2237"),
@@ -469,6 +470,13 @@ def macho_inventory(path):
     # These imports distinguish the periodic collection mutex from bridge
     # descriptor spin locks. They do not certify dynamic callback lifetime.
     stamp_irq_imports = {
+        0x2810c: "__ZN15OSMetaClassBase12safeMetaCastEPKS_PK11OSMetaClass",
+        0x28164: "__ZN15OSMetaClassBase12safeMetaCastEPKS_PK11OSMetaClass",
+        0x28191: "__ZN15OSMetaClassBase12safeMetaCastEPKS_PK11OSMetaClass",
+        0x281e0: "__ZN15OSMetaClassBase12safeMetaCastEPKS_PK11OSMetaClass",
+        0x2813d: "___memcpy_chk",
+        0x281b5: "__ZN15IORegistryEntry8fromPathEPKcPK15IORegistryPlanePcPiPS_",
+        0x281fe: "__ZN8OSNumber10withNumberEPKcj",
         0x41e76: "___stack_chk_fail",
         0x90a80: "_panic",
         0x41b06: "_assert_wait_timeout", 0x41b0d: "_thread_block",

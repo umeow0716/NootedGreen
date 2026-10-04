@@ -6961,6 +6961,27 @@ No executable patch or runtime mutation.
 
 ###### Complete waitForSpace reservation and failure ordering
 
+Complete unsigned utilGetProperty 280a6/18c is now reviewed/pinned. The ring
+configuration uses key RingSizeKB and default 0x20. The helper first queries
+the supplied registry entry, then, only if that property is absent, its
+Development dictionary. It accepts exact OSNumber/OSData metaclass matches;
+wrong-type presence returns the default rather than trying Development.
+Finally it checks IODeviceTree:/options, where an OSData string may be parsed
+through OSNumber::withNumber with width 32 and override the prior value.
+The temporary parsed number is released; the fromPath entry is not locally
+released in this body (API ownership still needs separate verification).
+
+The first OSData branch passes its reported length into imported memcpy_chk
+with a four-byte destination size. There is no local exact-size test: a short
+value partially overwrites the initialized default; an oversized value relies
+on the imported checked-copy failure policy, not a safe fallback in this
+helper. This is configuration parsing, not proof of malformed runtime input
+or a reproduced panic. The copy/import identities are pinned. Later RingSizeKB
+range/power-of-two validation still applies to successfully returned values.
+Other utilGetProperty template instantiations and the entire populateAccelConfig
+remain outside this complete-body review. No executable/runtime change;
+next typed-property length/ownership policy and effective configuration ordering.
+
 Selected populateAccelConfig window 275be..2760d now establishes the missing
 configuration invariant: unsigned (KiB-4) <= 0x1fc and popcount(KiB) < 2.
 Together these accept powers of two from 4 through 512 KiB inclusive, despite
