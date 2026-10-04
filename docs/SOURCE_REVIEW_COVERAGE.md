@@ -7,6 +7,13 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 CCS cleanup: imported rectangle allocation/free and both false-path
+vector frees pinned; false cleanup can accept empty rectangle allocation state.
+Two complete event-vector grow/append helpers reviewed/pinned. Failed event
+append is silently skipped without aggregate status, so a rectangle-null repair
+cannot certify dependency coverage. Bounded branch rewrite and outer submission
+failure propagation remain to implement; no runtime changes this checkpoint.
+
 2026-10-04 resource CCS: one complete 0x554 body reviewed/pinned. Downstream
 submission precedes resolve-state clearing and successful return, with no local
 submission status gate. UNREPAIRED allocation-null path keeps r12 zero and can

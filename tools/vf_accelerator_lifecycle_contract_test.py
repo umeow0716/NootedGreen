@@ -502,6 +502,14 @@ def macho_inventory(path):
     # These imports distinguish the periodic collection mutex from bridge
     # descriptor spin locks. They do not certify dynamic callback lifetime.
     stamp_irq_imports = {
+        0x73c16: "_IOMalloc",
+        0x73ed3: "_IOFree",
+        0x73eef: "_IOFree",
+        0x73f0b: "_IOFree",
+        0x73f2b: "_IOFree",
+        0x73f47: "_IOFree",
+        0x757d1: "_IOMalloc",
+        0x7580d: "_IOFree",
         0x2cad9: "__ZN25IOAccelCommandBufferPool212submitBufferEv",
         0x11e16: "_IOFree",
         0xcdc7: "_memset", 0xce0b: "_memset", 0xce5d: "_memset", 0xcea0: "_memset",
@@ -657,6 +665,14 @@ def macho_inventory(path):
         start = value(name)
         assert next_symbol(start) - start == length, f"{path}: changed stamp IRQ body boundary: {name}"
         assert hashlib.sha256(image[start:start + length]).hexdigest() == digest, f"{path}: changed stamp IRQ body: {name}"
+    # Duplicate template/private names require the selected reviewed address;
+    # never silently choose another instantiation with the same symbol name.
+    for name, start, length, digest in (
+            ("__ZN8IGVectorIP12IOAccelEvent25IGIOMallocAllocatorPolicyE4growEm", 0x757b2, 0x78, "d0eadd8fc2d8b9227e151fa3b7f5e650f0be03ffd879463ac349f75217c6c440"),
+            ("__ZL20AddDstResourceEventsR18wait_update_eventsP15IGAccelResourceb", 0x7582a, 0x172, "5dde422ed4edf1c957284fb9856877845d570a8e04df2d4d8f27225f1b7b245a")):
+        assert any(candidate == name and address == start for candidate, address in zip(names, values)), f"{path}: missing selected CCS helper: {name}"
+        assert next_symbol(start) == start + length, f"{path}: changed selected CCS helper boundary: {name}"
+        assert hashlib.sha256(image[start:start + length]).hexdigest() == digest, f"{path}: changed selected CCS helper: {name}"
     assert image[0x14518:0x1451e] == bytes.fromhex("ff 90 30 01 00 00"), f"{path}: changed releaseRange unmap virtual"
     assert direct_branches("__ZN19IGHardwarePageTable12releaseRangeERK14IGAddressRange", "__ZN16IntelAccelerator27flushHardwareAfterGttUpdateEv") == [0x14522], f"{path}: changed post-unmap deferred-flush edge"
     assert image[0x14573:0x14575] == bytes.fromhex("b0 01"), f"{path}: changed unconditional releaseRange success"

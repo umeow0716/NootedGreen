@@ -6955,6 +6955,27 @@ No executable patch or runtime mutation.
 
 ### Update fanout must participate in the same owner transaction
 
+CCS cleanup verification: relocation identifies the 16-byte rectangle request
+as IOMalloc (0x73c16); normal rectangle cleanup is IOFree (0x73ed3).
+Both failure-path vector frees are IOFree (0x73f2b/0x73f47), sized by vector
+capacity * 8. False cleanup at 0x73f13 releases the two preceding event
+vectors and reaches AL=0 at 0x73f4b; it does not submit or clear resolve state.
+At rectangle-allocation null, its pointer/count/capacity are still zero and
+need no additional free. This establishes a candidate null-failure destination,
+not an implemented patch. The 2-byte JE cannot be widened by overwriting its
+following instructions without rebuilding/verifying that bounded setup region.
+
+Reviewed complete event-pointer vector grow at 0x757b2 (0x78) and
+AddDstResourceEvents at 0x7582a (0x172); full bodies/imports pinned in both
+payloads. Grow returns false without modifying its vector on allocation null,
+and also returns false when requested capacity is already sufficient. AddDst
+checks each growth result, skips a failed append, and continues other event
+append attempts; it returns no aggregate admission status. Initial event-vector
+growth results in the CCS caller are also not checked. Therefore repairing
+the rectangle null write alone does not establish complete dependency-event
+coverage or safe submission under allocation failure. This separate propagation
+requirement must remain open; do not mistake CPU fault removal for DMA safety.
+
 Resource CCS caller follow-up: reviewed complete resource submitCCSResolve
 at 0x73a20 (0x554) and pinned its downstream edge 0x73e99. After that call,
 the body clears selected resolve bits in ResourceInfoEntry +0x4c and sets
