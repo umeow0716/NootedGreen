@@ -9,6 +9,12 @@ import sys
 # Complete reviewed native bodies. This fixes the concrete Intel override
 # graph, not inherited timer APIs, dynamic callbacks or runtime completion.
 STAMP_IRQ_NATIVE = {
+    "__ZN11IGHashTableIPN10IGPagePool11PoolElementEmNS0_15PoolElementHashE25IGIOMallocAllocatorPolicyE15resizeAndRehashEm": (0x170, "8133ad3b23eeae7e622f6bb07c2a48c1ee560f07300104a8618c00449541112a"),
+    "__ZN8IGVectorIN11IGHashTableIPN10IGPagePool11PoolElementEmNS1_15PoolElementHashE25IGIOMallocAllocatorPolicyE4SlotES5_EC1Em": (0xa2, "7b753decc920c14c6625a45e26fb343ea9f1a192b1e5fbc3b870c64a64bdf259"),
+    "__ZN8IGVectorIPN10IGPagePool11PoolElementE25IGIOMallocAllocatorPolicyE4growEm": (0x78, "d0eadd8fc2d8b9227e151fa3b7f5e650f0be03ffd879463ac349f75217c6c440"),
+    "__ZN11IGHashTableIPN10IGPagePool11PoolElementEmNS0_15PoolElementHashE25IGIOMallocAllocatorPolicyE3addERKS2_RKm": (0x120, "a28254e0b16c65ea6d5499fb072371a87ea32636bf833a1be0b8458070dcd689"),
+    "__ZNK11IGHashTableIPN10IGPagePool11PoolElementEmNS0_15PoolElementHashE25IGIOMallocAllocatorPolicyE8containsERKS2_": (0x56, "4c27852052d7d9fdf831c256199644240d324dc8acd5bc05330f41e50dc92124"),
+    "__ZN11IGHashTableIPN10IGPagePool11PoolElementEmNS0_15PoolElementHashE25IGIOMallocAllocatorPolicyEixERKS2_": (0x56, "057b3616612957616516b8c0959418666e431b7dd67a029f3ecedb17885dc04b"),
     "__ZN10IGPagePool4growEv": (0x52e, "b6dd584c6c29ec5a49e518753c2613534a413ce25ebacce80b78c4abb8086ae0"),
     "__ZN10IGPagePool12allocatePageEv": (0x1f2, "f5510c1459a78d42faa38e262fb7a7514f52974ecc184ecedd9e31b8c2c4e851"),
     "__ZN10IGPagePool5pruneEj": (0x436, "5fc5da8153de076b57dfb6b217037f4421b4d88f7be6b080035fccd33764d605"),

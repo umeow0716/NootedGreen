@@ -7,6 +7,13 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 queue publication callees: six complete native vector/hash bodies
+pinned. False really includes allocation failure; uninserted blocks can be
+published/countable but undiscoverable to allocator retries. Missing-key index
+returns address 0x8. Resize publishes before checking bucket storage and ignores
+copy insertion failure before deleting original nodes; full caller inventory
+and failure-atomic replacement remain open.
+
 2026-10-04 PagePool allocation/prune/grow: four complete native bodies pinned.
 Allocator reuses published free bits without the prune age filter; prune's
 descriptor completion result is ignored. Actual backing types, new-block

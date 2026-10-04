@@ -6383,6 +6383,51 @@ callback admission must be proved elsewhere. No executable patch/runtime test.
 
 #### Reallocation is not gated by prune age
 
+##### Queue publication failure is a real local allocator branch
+
+Further complete resizeAndRehash (0x170) and bucket-vector constructor (0xa2)
+reviewed/pinned. Resize allocates a 0x18 container and calls the constructor
+before checking the allocated pointer; constructor immediately writes three
+qwords without a null check. Its separate bucket allocation failure leaves
+size/capacity/backing zero. Resize nevertheless publishes that container,
+resets hash counters and copies old entries through add while IGNORING each
+insertion result. It then destroys old nodes/buckets/container and returns true.
+Thus this resize is not a failure-atomic transaction preserving old entries.
+Actual allocator failure was not induced; these are conditional native branches.
+
+If a copy insertion fails, the old entry can be lost when old nodes are freed;
+subsequent queue index lookup may encounter the missing-key 0x8 path. If bucket
+allocation fails, later zero-capacity indexing is not locally guarded. Safe
+replacement must allocate all destination storage/nodes before publishing,
+preserve original entries on failure, and admit no new queue element until its
+hash membership is established. All source-template callers and pool ownership
+must be checked before implementing a native hook; the current audit contract
+does not change or certify these algorithms.
+
+Complete vector grow (0x78), hash add (0x120), contains (0x56) and operator[]
+(0x56) reviewed/pinned. Vector grow returns false if requested capacity is not
+larger or backing IOMalloc fails; allocation failure leaves the existing vector
+intact. Hash add returns false for a missing bucket container or failed 0x20
+node allocation. A resize attempt's status is ignored, but insertion continues
+using the current bucket container. Resize callee semantics remain pending.
+
+Thus PagePool grow's false-publication branches are not an assumed interpretation
+of an opaque return value: vector/hash allocation failures can take them. Grow
+still enqueues/counts the uninserted block and returns true. allocatePage retries
+the allocation queue, which cannot discover that new block. Under repeated
+publication failures, this can repeat growth until another allocation fails;
+it is not locally bounded to one grow attempt. Prune can later process such a
+free-list block without a hash entry, but does not make it allocatable. This is
+static conditional failure evidence, not a hardware/OOM reproduction.
+
+contains keys compare PoolElement's first qword (the monotonic block identifier).
+operator[] returns node+8; its missing-key path zeroes RAX then still adds 8,
+so the returned address is 0x8, not null or an inserted default entry. Reviewed
+eval/prune guard lookups with contains, and successful add precedes grow's index
+updates; whole caller inventory and mutation/locking still need review. A null
+check on operator[] would not provide a valid missing-key guard. Do not patch
+the shared template globally without validating all callers and owners.
+
 Complete grow (0x52e) additionally reviewed/pinned with its descriptor factory,
 CPU-map factory and atomic index imports. Correction: allocator target 0xb15e
 is named grow, not allocatePoolElement. It allocates a 0xcc0 software block,
