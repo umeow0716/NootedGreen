@@ -13,11 +13,13 @@ grow copies, partitioned across 38 symbol-bounded owners. Fifty-two are the
 fixed-capacity-four initialization sites and each has a nearby RBP-relative
 frame-address construction; the other 95 are append-growth sites that consume
 native AL. The complete address/owner/category inventory is now a CI contract.
+No non-relocated direct tail jump or RIP-relative function-address LEA targets
+any grow copy.
 The initially observed 148th candidate was the zero disk addend of relocated
 `stack_chk_fail` immediately before `0x55b84`, not a real grow edge. This
 supports frame-local ownership for the initialization sites and ensures V274
 covers every direct call, but it is a bounded byte/data-flow classification,
-not proof of every helper argument alias, indirect call, resource event-pair
+not proof of every helper argument alias, other indirect encoding, resource event-pair
 lifetime, outer lock or GPU completion.
 
 2026-10-04 exact event-route correction delta: V274 supersedes V273 before any

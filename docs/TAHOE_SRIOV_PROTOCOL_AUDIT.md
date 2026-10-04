@@ -22,7 +22,9 @@ each selected preceding window contains an RBP-relative frame-address LEA. The
 remaining 95 growth calls inspect native AL before append. V274's wrapper now
 makes allocation failure fail-stop before those 95 skip branches and validates
 the state after the 52 ignored initial returns. This is exact direct-call and
-bounded local-address evidence, not a complete x86 data-flow proof. Helper
+bounded local-address evidence; no non-relocated direct tail jump or
+RIP-relative function-address LEA targets a grow copy. It is not a complete
+x86 data-flow proof. Helper
 argument aliases, indirect invocation, resource event-pair ownership, outer
 serialization and GPU completion remain open. No production driver behavior,
 VM, PCI/sysfs or hardware state changed in V275.

@@ -121,21 +121,33 @@ def macho_layout(data: bytes, path: Path) -> tuple[int, int, int, set[int]]:
     return *text, relocated
 
 
-def direct_calls(path: Path) -> dict[int, tuple[int, ...]]:
+def direct_calls(path: Path) -> tuple[dict[int, tuple[int, ...]], tuple[int, ...], tuple[int, ...]]:
     data = path.read_bytes()
     vmaddr, file_offset, file_size, relocated = macho_layout(data, path)
     found = {target: [] for target in EXPECTED}
+    tail_jumps = []
+    address_takes = []
     end = file_offset + file_size
-    for offset in range(file_offset, end - 4):
-        if data[offset] != 0xE8:
-            continue
+    for offset in range(file_offset, end - 6):
         call = vmaddr + offset - file_offset
-        if any(call + byte in relocated for byte in range(1, 5)):
-            continue
-        target = call + 5 + struct.unpack_from("<i", data, offset + 1)[0]
-        if target in found:
-            found[target].append(call)
-    return {target: tuple(calls) for target, calls in found.items()}
+        if data[offset] in (0xE8, 0xE9):
+            if any(call + byte in relocated for byte in range(1, 5)):
+                continue
+            target = call + 5 + struct.unpack_from("<i", data, offset + 1)[0]
+            if target in found:
+                if data[offset] == 0xE8:
+                    found[target].append(call)
+                else:
+                    tail_jumps.append(call)
+        if (data[offset] & 0xF8) == 0x48 and data[offset + 1] == 0x8D and \
+                (data[offset + 2] & 0xC7) == 0x05:
+            if any(call + byte in relocated for byte in range(3, 7)):
+                continue
+            target = call + 7 + struct.unpack_from("<i", data, offset + 3)[0]
+            if target in found:
+                address_takes.append(call)
+    return ({target: tuple(calls) for target, calls in found.items()},
+            tuple(tail_jumps), tuple(address_takes))
 
 
 def verify(path: Path) -> int:
@@ -144,7 +156,9 @@ def verify(path: Path) -> int:
     def payload_offset(address: int) -> int:
         return file_offset + address - vmaddr
     symbols = macho_symbols(path)
-    actual = direct_calls(path)
+    actual, tail_jumps, address_takes = direct_calls(path)
+    assert not tail_jumps, f"{path}: unexpected event-vector tail calls"
+    assert not address_takes, f"{path}: event-vector function address became reachable"
     expected_flat = {
         target: tuple(call for _, _, calls in owners for call in calls)
         for target, owners in EXPECTED.items()
@@ -202,7 +216,8 @@ def main() -> None:
     assert counts[0] == counts[1] == 147
     print(
         "PASS: complete 147-call / 38-owner event-vector grow graph; "
-        "52 initial requests and 95 checked append-growth calls in both payloads"
+        "52 initial requests, 95 checked append-growth calls and no direct "
+        "tail/address-taken edges in both payloads"
     )
 
 
