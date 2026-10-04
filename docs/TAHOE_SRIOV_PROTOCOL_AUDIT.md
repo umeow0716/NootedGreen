@@ -6955,6 +6955,34 @@ No executable patch or runtime mutation.
 
 ### Deferred AUX flag and ring command emission follow-up
 
+#### Correction: indexed ring accesses do consume accelerator pending flags
+
+Tracing base registers in the writeDWord body establishes that ring +0x10
+supplies the accelerator and ring +0x40 supplies the engine ID. The indexed
+qword accesses at accelerator +0x1340 and +0x1380 are therefore pending bitmaps,
+not unrelated ring-array fields. Earlier exploratory wording that grouped
+these indexed ring accesses with unrelated-object matches was too broad.
+The GL/display object matches remain distinct; equal offsets alone are still
+insufficient. This positive base-register trace supersedes that classification.
+
+Complete writeDWord 41c12/136 and writeFlushAuxTLB 42a22/46 are now reviewed
+and pinned. writeDWord checks the engine bit and ring +0x6d readiness; when
+both are set, it clears the bit before invoking virtual +0x160 to emit the
+TLB command, then clears readiness. AUX follows analogous +0x1380/+0x6e
+handling with direct call 42a22. The AUX emitter accepts engine IDs 0..5
+selected by mask 0x2b and emits three dwords; unsupported IDs return without
+emission. Engine provisioning/caller readiness invariants remain to verify.
+
+A partial waitForSpace window 416c8..41790 independently shows the same
+accelerator bitmap and engine ID, requests extra space via virtual +0x150,
+and sets readiness +0x6d. This window is not a complete waitForSpace review.
+writeDWord later obtains the CPU ring address, writes the requested dword,
+advances/wraps its cursor and decreases available bytes. It has no local GPU
+completion wait. Clearing pending flags means command insertion has begun,
+not that hardware has executed the invalidation. Effective vtable targets,
+complete reservation handling and submission/completion ordering remain open.
+No production/runtime change or claim that all consumers have been inventoried.
+
 Complete reviewed/pinned bodies: flushHardwareAfterGttUpdateOfAux 2d1ee/16,
 base writeFlushTLB 4290c/116, Compute writeFlushTLB 4e6f8/172 and Main
 writeFlushTLB 8509c/172. The AUX helper tests the same accelerator feature

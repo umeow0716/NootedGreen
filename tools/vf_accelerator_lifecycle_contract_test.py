@@ -9,6 +9,8 @@ import sys
 # Complete reviewed native bodies. This fixes the concrete Intel override
 # graph, not inherited timer APIs, dynamic callbacks or runtime completion.
 STAMP_IRQ_NATIVE = {
+    "__ZN20IGHardwareRingBuffer10writeDWordEj": (0x136, "ebcb4164727daaf22fd9df83aadbf2c68de0a8024df79bb7fcc1c3f1c1790d47"),
+    "__ZN20IGHardwareRingBuffer16writeFlushAuxTLBEv": (0x46, "a6886597ded0b5439e645aa2f9de563b1b94241c12c7c7696a396759d4505a31"),
     "__ZN16IntelAccelerator32flushHardwareAfterGttUpdateOfAuxEv": (0x16, "bf1c2cfda9f70eb29f938d9699cd21e4a10afebc12bf15912310386579804d6a"),
     "__ZN20IGHardwareRingBuffer13writeFlushTLBEv": (0x116, "047d585e1a417ff67d8de8d761ba42e15f3a7206bf224a1b51bdaf5599117110"),
     "__ZN27IGHardwareRingBufferCompute13writeFlushTLBEv": (0x172, "c42d172fd9503b115c3b3196a7138eebff9cd3f9a4a7e717acf7941f61bb8f79"),
@@ -592,6 +594,8 @@ def macho_inventory(path):
     assert image[0x14518:0x1451e] == bytes.fromhex("ff 90 30 01 00 00"), f"{path}: changed releaseRange unmap virtual"
     assert direct_branches("__ZN19IGHardwarePageTable12releaseRangeERK14IGAddressRange", "__ZN16IntelAccelerator27flushHardwareAfterGttUpdateEv") == [0x14522], f"{path}: changed post-unmap deferred-flush edge"
     assert image[0x14573:0x14575] == bytes.fromhex("b0 01"), f"{path}: changed unconditional releaseRange success"
+    assert image[0x41c70:0x41c76] == bytes.fromhex("ff 90 60 01 00 00"), f"{path}: changed pending-TLB virtual emission"
+    assert direct_branches("__ZN20IGHardwareRingBuffer10writeDWordEj", "__ZN20IGHardwareRingBuffer16writeFlushAuxTLBEv") == [0x41cb5], f"{path}: changed pending AUX emission"
     for owner, calls in (
             ("__ZN20IGHardwareRingBuffer13writeFlushTLBEv", [0x429c5, 0x429f8]),
             ("__ZN27IGHardwareRingBufferCompute13writeFlushTLBEv", [0x4e814, 0x4e841]),
