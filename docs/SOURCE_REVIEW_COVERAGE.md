@@ -7,6 +7,13 @@ audit's runtime blockers are open.
 
 ## Scope
 
+2026-10-04 update fanout: two additional complete native bodies reviewed and
+pinned (manager updatePageTableForTask and hardware updateRange). Raw task-list
+traversal continues after a failed update; segment remap failure has no local
+prefix rollback, and deferred flush is not an ACK. Descriptor virtual references
+do not prove task/table/pool ownership. Update admission must join the pending
+cross-owner retirement transaction. No runtime safety certification.
+
 2026-10-04 concrete Intel VA-free: one new complete override and declared
 slot/base-dispatch anchor reviewed/pinned. It only adds diagnostics around
 base VA release; no added ACK boundary. Existing page recycle before outer

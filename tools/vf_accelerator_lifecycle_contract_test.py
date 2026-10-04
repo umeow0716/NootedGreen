@@ -126,6 +126,8 @@ STAMP_IRQ_NATIVE = {
     "__ZNK25IGHardwareGlobalPageTable4readEyRyS0_": (0x44, "5cc6a86d9a27cf1ee2f28388b3542d08102ffd35a4bc6db509e3cd5dd2d71ccd"),
     "__ZN11IGAccelTask24initManagedPageTableListEv": (0xfc, "4b026fd8979c2010b304895b2d6f61c69167e83923cb7070cdc238b179d45e77"),
     "__ZN15IGMemoryManager19newPageTableForTaskEP11IGAccelTask": (0xa6, "9f8b0a4af92e2da84cac933655cc33c6ed7ed5a31236a73a91955d91ba76d911"),
+    "__ZN15IGMemoryManager22updatePageTableForTaskEP11IGAccelTaskP16IGAccelMemoryMap": (0x11a, "9b574d3a8f1ae07327da68f84f4eb99a08e8ea154a596f723ae7f558ffdf46a2"),
+    "__ZN19IGHardwarePageTable11updateRangeERK14IGAddressRangePK16IGAccelMemoryMap": (0x3c4, "7bd38a56c02637892a4672882eed36a3bea60b0b6ee6017982a0760713713b92"),
     "__ZN19IGHardwarePageTable11commitRangeERK14IGAddressRangePK16IGAccelMemoryMap": (0x41c, "e063629df4a8d16d85cf3d1b599c036372c0763b560a6a35289d488d80ac410a"),
     "__ZN15IGMemoryManager26commitIntoPageTableForTaskEP11IGAccelTaskP16IGAccelMemoryMap": (0x11a, "a433c1af43e1fbac1d82da400c6ec1857881e6385c07019d782441fe209713d1"),
     "__ZN16IGAccelMemoryMap22commitIntoGPUPageTableEv": (0x140, "b8318f92ed0a3a62eb086877f6f5a65e0c32cc53d610bcad69540967279189e4"),
@@ -703,6 +705,11 @@ def macho_inventory(path):
             ("__ZN24IGHardwareRingBufferMain13writeFlushTLBEv", [0x851b8, 0x851e5])):
         assert direct_branches(owner, RING_WRITE_BUFFER) == calls, f"{path}: changed TLB command-buffer emission edges: {owner}"
     display_table = value("__ZTV18IGAccelDisplayPipe")
+    assert direct_branches("__ZN15IGMemoryManager22updatePageTableForTaskEP11IGAccelTaskP16IGAccelMemoryMap", "__ZN19IGHardwarePageTable11updateRangeERK14IGAddressRangePK16IGAccelMemoryMap") == [0xf865], f"{path}: changed task update fanout edge"
+    for address, expected in ((0xf86a, "41 20 c4"), (0x1483d, "ff 90 28 01 00 00"), (0x14843, "84 c0")):
+        encoded = bytes.fromhex(expected)
+        assert image[address:address + len(encoded)] == encoded, f"{path}: changed update result/remap anchor at {address:#x}"
+    assert image[0x148d6:0x148db] == b"\xe8" + struct.pack("<i", 0x2d1d8 - 0x148db), f"{path}: changed update flush notification edge"
     resource_table = value("__ZTV15IGAccelResource")
     map_table = value("__ZTV16IGAccelMemoryMap")
     private_init = "__ZN29IGHardwarePerProcessPageTable15initWithOptionsEP16IntelAcceleratorP11IGAccelTaskj"

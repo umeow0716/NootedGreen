@@ -6953,6 +6953,32 @@ No executable patch or runtime mutation.
 
 ## Mapping last-release admission and deferred raw-list transfer
 
+### Update fanout must participate in the same owner transaction
+
+Reviewed complete updatePageTableForTask at 0xf7bc (0x11a) and updateRange
+at 0x14580 (0x3c4); added whole-body fixtures for both native payloads.
+Manager obtains mapping range through virtual +0x128/+0x168, borrows task
++0x268 list, calls updateRange at 0xf865 and ANDs each AL into r12b at
+0xf86a. It continues to the next raw node even when AL is false; empty-list
+result is true. There is no local task/table retain, lock, rollback or ACK.
+This is a local-body claim, not proof that every effective caller is unlocked.
+
+updateRange constructs descriptor/segment iterators, uses descriptor virtual
++0x20 references and releases through +0x28 before its flush notification.
+Those references are not a demonstrated retain of the task, table or page pool.
+Its per-segment remap virtual +0x128 at 0x1483d is tested at 0x14843;
+false exits through 0x14892 without locally undoing previous successful
+segments. Cleanup calls the previously reviewed deferred-flush helper 0x2d1d8
+at 0x148d6 on both success and failure. Notification is not a GuC completion.
+External relocation placeholders in tracing/memory helper calls are not treated
+as actual recursive targets.
+
+Consequently the proposed retirement domain must also exclude/admit updates,
+preserve all affected owners before mutation, and account for partial segment
+and cross-table updates. A release-only fence or holding iterator descriptors
+does not establish this. No production patch, hardware failure injection or
+historical Host crash attribution is claimed; containment hold remains active.
+
 Concrete mapping VA-free follow-up: existing full commit/release/free bodies
 and +0x170/178 slots were already reviewed/pinned; do not count them as new.
 The previously unpinned Intel freeGPUVirtualAddress 11080/10a is now fully
