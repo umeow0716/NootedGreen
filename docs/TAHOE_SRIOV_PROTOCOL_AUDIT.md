@@ -1,12 +1,44 @@
 # Tahoe SR-IOV protocol audit — in progress
 
 Updated: 2026-10-04. The last dynamic source baseline is `ce166c8`; the current
-offline-reviewed checkpoint is V276 live VF PPGTT retirement on
+offline-reviewed checkpoint is V277 final task-owned PPGTT retirement on
 `codex/tahoe-sriov-vf`. This is NOT a boot-test candidate or a successful
 driver baseline. The `ce166c8` run produced repeatable host PF DMAR faults
 followed by i915 hangs and a host reboot. Keep `macos-tahoe-sriov` shut off until the
 corrected code passes the remaining offline review and every independently
 enforced containment precondition.
+
+## V277 final task-owned page-table retirement (offline)
+
+A pre-free invalidation at either concrete 32/64-bit table body is insufficient
+by itself: a still-runnable context could refill an old translation after the
+completion and before native descriptor return. The selected boundary is
+instead the complete/hash-pinned `IGAccelTask::free`, before its native body
+releases task `+0x278` Aux and `+0x260` private page tables. Ordinary Tahoe
+hardware contexts retain their task before Scheduler4 attach; the special
+task-owned context path is released by `IGAccelTask::release` before final
+free. The context-free body reaches routed detach before releasing its image
+and task. These identities and orderings remain binary contracts in both
+admitted payloads.
+
+The direct GuC record now also stores the native task pointer without retaining
+it, avoiding a task/context cycle. Duplicate attach, live submit and both
+ordinary and post-shutdown detach require that task identity to match. The
+identity is cleared only after DEREGISTER_DONE, zero native references and the
+existing backing-release boundary. On final task free, any record still naming
+the task is a fatal containment failure; with none remaining, a heavy
+engine-target completion occurs before entering native free. Pre-CTB objects
+were never GPU-consumable, and objects destroyed after the already completed
+device-wide shutdown require no second request through a sealed CTB.
+
+Six source mutations cover omission of the owner scan, lifecycle weakening,
+barrier/native-order reversal, missing route, missing attached-task publication
+and submit identity bypass. Current inventory is 103 unique symbols (97
+accelerator, three framebuffer, three System KC). This closes the selected
+task-owned nonempty final-free ordering offline. It does not prove arbitrary
+external table retains, every asynchronous callback/outer-lock interaction,
+or runtime hardware behavior, and it does not relax the boot hold. No VM,
+PCI/sysfs or Host GPU operation accompanied this change.
 
 ## V276 live per-process page-table retirement boundaries (offline)
 
@@ -29,7 +61,7 @@ already device-wide-quiesced teardown are the only skips. PF uses both native
 bodies unchanged.
 
 The source contract rejects four target, lifecycle and ordering mutations; the
-payload symbol inventory requires both exact new routes. Current inventory is
+payload symbol inventory requires both exact new routes. At V276 the inventory was
 102 unique symbols (96 accelerator, three framebuffer, three System KC). This
 establishes per-call ordering for the intercepted normal paths only. It does not
 prove cross-owner serialization, cover every indirect call, or repair final

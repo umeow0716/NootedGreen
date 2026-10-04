@@ -176,6 +176,8 @@ private:
 	static void vfPpgtt64ShrinkRange(
 		void *that, const NGIGAddressRange &range);
 	mach_vm_address_t oVfPpgtt64ShrinkRange {};
+	static void vfAccelTaskFree(void *that);
+	mach_vm_address_t oVfAccelTaskFree {};
 
 	mach_vm_address_t oIGMappedBuffergetMemory {};
 	static void *getBlit2DContext(void *that, bool create);

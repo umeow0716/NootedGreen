@@ -212,6 +212,7 @@ inline void clearReleasedIdentity(Context &context) {
 	context.descriptorHi = 0;
 	context.engineClass = 0;
 	context.engineInstance = 0;
+	context.task = nullptr;
 	context.contextBacking = nullptr;
 	context.ringBacking = nullptr;
 	context.stampBacking = nullptr;

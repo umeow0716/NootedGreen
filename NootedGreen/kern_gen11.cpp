@@ -394,6 +394,7 @@ struct VfGucContext {
 	VfGucContextState state;
 	bool enablePending;
 	bool disablePending;
+	void *task;
 	OSObject *contextBacking;
 	OSObject *ringBacking;
 	OSObject *stampBacking;
@@ -477,7 +478,7 @@ int32_t vfFindContextLocked(uint32_t lrcaPage)
 		const auto &entry = gVfContexts[slot];
 		if (entry.state == kVfGucContextEmpty)
 			return -1;
-		if ((entry.state != kVfGucContextTombstone || entry.contextBacking ||
+		if ((entry.state != kVfGucContextTombstone || entry.task || entry.contextBacking ||
 		     entry.ringBacking || entry.stampBacking || entry.scratchBacking) &&
 		    entry.lrcaPage == lrcaPage)
 			return static_cast<int32_t>(slot);
@@ -496,7 +497,8 @@ int32_t vfReserveContextLocked(uint32_t lrcaPage)
 		const uint32_t slot = (start + probe) % gVfContextCapacity;
 		const auto state = gVfContexts[slot].state;
 		if (state == kVfGucContextTombstone &&
-		    !gVfContexts[slot].contextBacking && !gVfContexts[slot].ringBacking &&
+		    !gVfContexts[slot].task && !gVfContexts[slot].contextBacking &&
+		    !gVfContexts[slot].ringBacking &&
 		    !gVfContexts[slot].stampBacking && !gVfContexts[slot].scratchBacking && tombstone < 0)
 			tombstone = static_cast<int32_t>(slot);
 		if (state == kVfGucContextEmpty)
@@ -1250,7 +1252,7 @@ bool vfDirectContextTableUnowned()
 	OSSynchronizeIO();
 	for (uint32_t id = 0; id < gVfContextCapacity; id++) {
 		const auto &entry = gVfContexts[id];
-		if (entry.state != kVfGucContextEmpty || entry.contextBacking || entry.ringBacking ||
+		if (entry.state != kVfGucContextEmpty || entry.task || entry.contextBacking || entry.ringBacking ||
 		    entry.stampBacking || entry.scratchBacking ||
 		    entry.refCount || entry.enablePending || entry.disablePending)
 			return false;
@@ -2720,6 +2722,10 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			 // as the kernel task so it synchronizes from Global GTT; once +0x150 is
 			 // populated, preserve Apple's classification for every later task.
 			 {"__ZNK11IGAccelTask15isKernelGPUTaskEv", IGAccelTaskIsKernelGPUTask, this->oIGAccelTaskIsKernelGPUTask},
+			 // Final task destruction releases Aux/PPGTT objects before inherited
+			 // cleanup. Retire translations while their owners are still intact.
+			 {"__ZN11IGAccelTask4freeEv", vfAccelTaskFree,
+			  this->oVfAccelTaskFree},
 			 // Route the four native context producers so incomplete allocation is
 			 // rejected before Tahoe dereferences each context's FIFO at +0xb8.
 			 {"__ZN11IGAccelTask16getBlit3DContextEb", getBlit3DContext, this->ogetBlit3DContext},
@@ -3761,6 +3767,49 @@ void Gen11::vfPpgtt64ShrinkRange(void *that,
 	vfRequireCompletedPpgttUpdate();
 	FunctionCast(vfPpgtt64ShrinkRange,
 	             callback->oVfPpgtt64ShrinkRange)(that, range);
+}
+
+static bool vfPpgttTaskHasNoDirectContexts(void *task)
+{
+	if (!task)
+		return false;
+	if (!gVfContextLock && !gVfContexts && !gVfContextCapacity)
+		return true;
+	if (!gVfContextLock || !gVfContexts || !gVfContextCapacity)
+		return false;
+
+	bool empty = true;
+	const IOInterruptState interruptState =
+		IOSimpleLockLockDisableInterrupt(gVfContextLock);
+	for (uint32_t id = 0; id < gVfContextCapacity; id++) {
+		if (gVfContexts[id].task == task) {
+			empty = false;
+			break;
+		}
+	}
+	IOSimpleLockUnlockEnableInterrupt(gVfContextLock, interruptState);
+	return empty;
+}
+
+void Gen11::vfAccelTaskFree(void *that)
+{
+	PANIC_COND(!that || !callback->oVfAccelTaskFree,
+		"ngreen", "Missing native VF task-free boundary");
+	// Native final free releases the Aux table and private PPGTT before its
+	// inherited owner. Ordinary hardware contexts retain the task; the special
+	// task-owned contexts are released by IGAccelTask::release before free can
+	// run. Our direct record independently proves that no GuC context still
+	// names this task. With no producer left, the engine completion cannot be
+	// followed by a refill from the soon-to-be-freed tables.
+	OSSynchronizeIO();
+	const bool ownsPageTable = getMember<void *>(that, 0x260) ||
+	                           getMember<void *>(that, 0x278);
+	if (ownsPageTable && gVfCtbEverEnabled && !gVfDmaQuiesced) {
+		PANIC_COND(!vfPpgttTaskHasNoDirectContexts(that), "ngreen",
+			"VF task reached page-table free with a live GuC context");
+		vfRequireCompletedPpgttUpdate();
+	}
+	FunctionCast(vfAccelTaskFree, callback->oVfAccelTaskFree)(that);
 }
 
 bool Gen11::IGAccelTaskIsKernelGPUTask(const void *that)
@@ -5302,7 +5351,7 @@ bool Gen11::vfAttachContextDesc(void *that, const uint32_t *descriptor) {
 		getMember<uint64_t>(scratchBacking, kVfMappedBufferLengthOffset) : 0;
 	const uint64_t contextBytes = contextBacking ?
 		getMember<uint64_t>(contextBacking, kVfMappedBufferLengthOffset) : 0;
-	if (!descriptorAttributes.valid || !contextBacking || !ringBacking ||
+	if (!descriptorAttributes.valid || !task || !contextBacking || !ringBacking ||
 	    !stampBacking || !scratchBacking ||
 	    !NGVfContextShutdown::validPacketBacking(stampIndex, stampBytes, scratchBytes) ||
 	    !NGGgtt::contains(gVfGGTTBase, gVfGGTTSize, lrcaPage, contextBytes) ||
@@ -5331,7 +5380,8 @@ bool Gen11::vfAttachContextDesc(void *that, const uint32_t *descriptor) {
 			if (entry.refCount && (entry.state == kVfGucContextRegistered ||
 			    entry.state == kVfGucContextPendingEnable ||
 			    entry.state == kVfGucContextEnabled)) {
-				if (entry.refCount == 0xFFFFU || entry.ringBacking != ringBacking ||
+				if (entry.refCount == 0xFFFFU || entry.task != task ||
+				    entry.ringBacking != ringBacking ||
 				    entry.stampBacking != stampBacking || entry.scratchBacking != scratchBacking ||
 				    !NGContextDescriptor::matchesRecord(descriptorValue,
 				        descriptorAttributes, contextBacking,
@@ -5361,6 +5411,7 @@ bool Gen11::vfAttachContextDesc(void *that, const uint32_t *descriptor) {
 				entry.engineInstance = static_cast<uint8_t>(engineInstance);
 				entry.enablePending = false;
 				entry.disablePending = false;
+				entry.task = task;
 				contextBacking->retain();
 				entry.contextBacking = contextBacking;
 				// V264: native context free releases ring/FIFO before descriptor
@@ -5476,10 +5527,12 @@ void Gen11::vfDetachContextDesc(void *that, const uint32_t *descriptor) {
 	VfContextOperationGuard operationGuard;
 	const bool postShutdown = !operationGuard;
 	OSObject *contextBacking = nullptr;
+	void *task = nullptr;
 	if (descriptor) {
 		auto *hardwareContext = const_cast<uint8_t *>(
 			reinterpret_cast<const uint8_t *>(descriptor) -
 			kVfContextDescriptorOffset);
+		task = getMember<void *>(hardwareContext, kVfContextTaskOffset);
 		contextBacking = reinterpret_cast<OSObject *>(
 			getMember<void *>(hardwareContext, kVfContextImageBufferOffset));
 	}
@@ -5503,7 +5556,7 @@ void Gen11::vfDetachContextDesc(void *that, const uint32_t *descriptor) {
 	const uint32_t lrcaPage = descriptorAttributes.lrcaPage;
 	const uint64_t contextBytes = contextBacking ?
 		getMember<uint64_t>(contextBacking, kVfMappedBufferLengthOffset) : 0;
-	if (!descriptorAttributes.valid || !contextBacking ||
+	if (!descriptorAttributes.valid || !task || !contextBacking ||
 	    contextBytes < kVfContextMinimumImageBytes ||
 	    !NGGgtt::contains(gVfGGTTBase, gVfGGTTSize, lrcaPage, contextBytes) ||
 	    lrcaPage >= kGucGgttTop || contextBytes > kGucGgttTop - lrcaPage) {
@@ -5533,6 +5586,7 @@ void Gen11::vfDetachContextDesc(void *that, const uint32_t *descriptor) {
 			auto &entry = gVfContexts[shutdownSlot];
 			invalidShutdownRecord =
 				entry.state != kVfGucContextTombstone || entry.refCount == 0 ||
+				entry.task != task ||
 				!NGContextDescriptor::matchesRecord(descriptorValue,
 				    descriptorAttributes, contextBacking,
 				    {entry.descriptorLo, entry.descriptorHi}, entry.engineClass,
@@ -5570,7 +5624,8 @@ void Gen11::vfDetachContextDesc(void *that, const uint32_t *descriptor) {
 	slot = vfFindContextLocked(lrcaPage);
 	if (slot >= 0) {
 		auto &entry = gVfContexts[slot];
-		identityMismatch = !NGContextDescriptor::matchesRecord(descriptorValue,
+		identityMismatch = entry.task != task ||
+			!NGContextDescriptor::matchesRecord(descriptorValue,
 			descriptorAttributes, contextBacking,
 			{entry.descriptorLo, entry.descriptorHi}, entry.engineClass,
 			entry.engineInstance, entry.contextBacking);
@@ -5736,7 +5791,11 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 	const uint32_t descriptorHi = descriptorValue.high;
 	const auto descriptorAttributes =
 		NGContextDescriptor::inspect(descriptorValue);
-	if (!descriptorAttributes.valid ||
+	auto *hardwareContext = const_cast<uint8_t *>(
+		reinterpret_cast<const uint8_t *>(descriptor) -
+		kVfContextDescriptorOffset);
+	auto *task = getMember<void *>(hardwareContext, kVfContextTaskOffset);
+	if (!descriptorAttributes.valid || !task ||
 	    static_cast<uint32_t>(hwCsType) != descriptorAttributes.hwCsType) {
 		vfMarkProtocolFault("submit descriptor/command-streamer identity mismatch");
 		return false;
@@ -5767,6 +5826,7 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 	IOInterruptState admissionState = IOSimpleLockLockDisableInterrupt(gVfContextLock);
 	const int32_t admittedSlot = vfFindContextLocked(lrcaPage);
 	const bool admitted = admittedSlot >= 0 && gVfContexts[admittedSlot].refCount &&
+		gVfContexts[admittedSlot].task == task &&
 		NGContextDescriptor::matchesRecord(descriptorValue,
 			descriptorAttributes,
 			gVfContexts[admittedSlot].contextBacking,
@@ -5801,9 +5861,6 @@ bool Gen11::vfSubmitWorkItem(void *that, unsigned int legacyContextId,
 	constexpr size_t kContextRingControlOffset = 0x102C;
 	constexpr uint32_t kRingControlPagesMask = 0x001FF000U;
 	constexpr uint32_t kRingControlValid = 1U;
-	auto *hardwareContext = const_cast<uint8_t *>(
-		reinterpret_cast<const uint8_t *>(descriptor) -
-		kVfContextDescriptorOffset);
 	auto *contextImageBuffer =
 		getMember<void *>(hardwareContext, kVfContextImageBufferOffset);
 	if (contextImageBuffer != admittedBacking) {

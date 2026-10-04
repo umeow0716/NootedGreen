@@ -261,6 +261,7 @@ int main() {
         VfGucContextState state;
         bool enablePending;
         bool disablePending;
+        void *task;
         void *contextBacking;
         void *ringBacking;
         void *stampBacking;
@@ -270,12 +271,14 @@ int main() {
     int ringBacking = 0;
     int stampBacking = 0;
     int scratchBacking = 0;
+    int task = 0;
     for (unsigned rawState = 0; rawState <= UINT8_MAX; ++rawState)
     for (unsigned enable = 0; enable <= 1; ++enable)
     for (unsigned disable = 0; disable <= 1; ++disable) {
         const auto initialState = static_cast<VfGucContextState>(rawState);
         Context context {0x12345000U, 0x12345309U, 0xA5A20020U, 7,
-                         4, 2, initialState, enable != 0, disable != 0, &backing, &ringBacking,
+                         4, 2, initialState, enable != 0, disable != 0, &task,
+                         &backing, &ringBacking,
                          &stampBacking, &scratchBacking};
         const bool handled = NGVfContextEvent::deregisterDone(context);
         assert(handled ==
@@ -288,6 +291,7 @@ int main() {
         assert(context.descriptorHi == 0xA5A20020U);
         assert(context.engineClass == 4);
         assert(context.engineInstance == 2);
+        assert(context.task == &task);
         assert(context.contextBacking == &backing);
         assert(context.ringBacking == &ringBacking);
         assert(context.stampBacking == &stampBacking);
@@ -298,12 +302,14 @@ int main() {
     }
 
     Context released {0x12345000U, 0x12345309U, 0xA5A20020U, 0,
-                      4, 2, kVfGucContextTombstone, false, false, &backing, &ringBacking,
+                      4, 2, kVfGucContextTombstone, false, false, &task,
+                      &backing, &ringBacking,
                       &stampBacking, &scratchBacking};
     NGVfContextEvent::clearReleasedIdentity(released);
     assert(released.lrcaPage == 0 && released.descriptorLo == 0 &&
            released.descriptorHi == 0 && released.engineClass == 0 &&
-           released.engineInstance == 0 && released.contextBacking == nullptr &&
+           released.engineInstance == 0 && released.task == nullptr &&
+           released.contextBacking == nullptr &&
            released.ringBacking == nullptr && released.stampBacking == nullptr &&
            released.scratchBacking == nullptr);
     assert(released.refCount == 0 &&

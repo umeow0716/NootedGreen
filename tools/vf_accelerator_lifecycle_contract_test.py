@@ -923,6 +923,7 @@ def macho_inventory(path):
     assert direct_branches("__ZN31IGHardwarePerProcessPageTable324freeEv", "__ZN10IGPagePool14PageDescriptor7releaseEv") == [0x11df9, 0x11e1e], f"{path}: changed 32-bit leaf/parent descriptor destruction"
     assert struct.unpack_from("<Q", image, value("__ZTV31IGHardwarePerProcessPageTable64") + 16 + 0x90)[0] == value("__ZN31IGHardwarePerProcessPageTable644freeEv"), f"{path}: changed 64-bit page-table free dispatch"
     assert direct_branches("__ZN11IGAccelTask4freeEv", "__ZN11IGAccelTask27releaseManagedPageTableListEv") == [0x7ddd], f"{path}: changed task final list cleanup"
+    assert image[0x7da0:0x7db2] == bytes.fromhex("48 8b bb 78 02 00 00 48 85 ff 74 06 48 8b 07 ff 50 28"), f"{path}: changed auxiliary page-table release before private page-table release"
     assert image[0x7dbd:0x7dcf] == bytes.fromhex("48 8b bb 60 02 00 00 48 85 ff 74 06 48 8b 07 ff 50 28"), f"{path}: changed private page-table release before list cleanup"
     assert direct_branches("__ZN15IGMemoryManager27releaseFromPageTableForTaskEP11IGAccelTaskP16IGAccelMemoryMap", "__ZN19IGHardwarePageTable12releaseRangeERK14IGAddressRange") == [0xf74e], f"{path}: changed task fan-out release edge"
     assert image[0xf753:0xf75f] == bytes.fromhex("41 20 c7 48 8b 5b 08 48 85 db 75 e9"), f"{path}: changed non-short-circuit task page-table release loop"
@@ -2753,10 +2754,102 @@ def ppgtt_retirement_mutations(path):
     print("PASS: four PPGTT target/order/lifecycle mutations rejected (source contract, not runtime proof)")
 
 
+def ppgtt_final_free_contract(source, path):
+    owner_check = function_body(
+        source, "static bool vfPpgttTaskHasNoDirectContexts(void *task)")
+    required_owner_fragments = (
+        "if (!gVfContextLock && !gVfContexts && !gVfContextCapacity)",
+        "if (!gVfContextLock || !gVfContexts || !gVfContextCapacity)",
+        "IOSimpleLockLockDisableInterrupt(gVfContextLock)",
+        "if (gVfContexts[id].task == task)",
+        "IOSimpleLockUnlockEnableInterrupt(gVfContextLock, interruptState)",
+    )
+    if any(fragment not in owner_check for fragment in required_owner_fragments):
+        raise AssertionError(f"{path}: final PPGTT free lacks exact task/context exclusion")
+    if not owner_check.index(required_owner_fragments[2]) < \
+            owner_check.index(required_owner_fragments[3]) < \
+            owner_check.index(required_owner_fragments[4]):
+        raise AssertionError(f"{path}: final PPGTT task scan escaped its spin-lock scope")
+
+    wrapper = function_body(source, "void Gen11::vfAccelTaskFree(void *that)")
+    lifecycle = "if (ownsPageTable && gVfCtbEverEnabled && !gVfDmaQuiesced)"
+    task_check = "PANIC_COND(!vfPpgttTaskHasNoDirectContexts(that)"
+    retire = "vfRequireCompletedPpgttUpdate();"
+    native = "FunctionCast(vfAccelTaskFree, callback->oVfAccelTaskFree)(that);"
+    for fragment in ("getMember<void *>(that, 0x260)",
+                     "getMember<void *>(that, 0x278)", lifecycle,
+                     task_check, retire, native):
+        if fragment not in wrapper:
+            raise AssertionError(f"{path}: incomplete final task/PPGTT retirement boundary")
+    if not wrapper.index(lifecycle) < wrapper.index(task_check) < \
+            wrapper.index(retire) < wrapper.index(native):
+        raise AssertionError(f"{path}: native task free precedes owner exclusion/retirement")
+
+    normalized = "".join(source.split())
+    route = ('{"__ZN11IGAccelTask4freeEv",vfAccelTaskFree,'
+             'this->oVfAccelTaskFree}')
+    if route not in normalized:
+        raise AssertionError(f"{path}: missing exact final task-free retirement route")
+    for fragment in ("entry.task = task;", "entry.task != task",
+                     "gVfContexts[admittedSlot].task == task"):
+        if fragment not in source:
+            raise AssertionError(f"{path}: context record lacks task identity {fragment}")
+
+    context_header = pathlib.Path(path).with_name(
+        "kern_vf_context_shutdown.hpp").read_text()
+    clear = function_body(context_header,
+                          "inline void clearReleasedIdentity(Context &context)")
+    if "context.task = nullptr;" not in clear:
+        raise AssertionError(f"{path}: retired context leaves a stale task identity")
+
+
+def ppgtt_final_free_mutations(path):
+    source = pathlib.Path(path).read_text()
+    owner_check = function_body(
+        source, "static bool vfPpgttTaskHasNoDirectContexts(void *task)")
+    wrapper = function_body(source, "void Gen11::vfAccelTaskFree(void *that)")
+    native = "FunctionCast(vfAccelTaskFree, callback->oVfAccelTaskFree)(that);"
+    retire = "vfRequireCompletedPpgttUpdate();"
+
+    def replace_body(body, before, after):
+        if body.count(before) != 1:
+            raise AssertionError(f"ambiguous final PPGTT mutation: {before}")
+        return body.replace(before, after, 1)
+
+    marker = "__NGREEN_FINAL_PPGTT_ORDER_MUTATION__"
+    swapped = wrapper.replace(retire, marker, 1).replace(
+        native, retire, 1).replace(marker, native, 1)
+    route = ('{"__ZN11IGAccelTask4freeEv", vfAccelTaskFree,\n'
+             '\t\t\t  this->oVfAccelTaskFree},')
+    mutations = (
+        (owner_check, replace_body(owner_check,
+            "if (gVfContexts[id].task == task)", "if (false)")),
+        (wrapper, replace_body(wrapper,
+            "if (ownsPageTable && gVfCtbEverEnabled && !gVfDmaQuiesced)",
+            "if (ownsPageTable)")),
+        (wrapper, swapped),
+        (source, source.replace(route, "", 1)),
+        (source, source.replace("entry.task = task;", "", 1)),
+        (source, source.replace(
+            "gVfContexts[admittedSlot].task == task &&", "true &&", 1)),
+    )
+    for body, mutated_body in mutations:
+        if body == mutated_body:
+            raise AssertionError("missing final PPGTT mutation target")
+        changed = mutated_body if body == source else source.replace(body, mutated_body, 1)
+        try:
+            ppgtt_final_free_contract(changed, path)
+        except (AssertionError, ValueError):
+            continue
+        raise AssertionError(f"{path}: escaped final PPGTT retirement mutation")
+    print("PASS: six final PPGTT owner/route/order mutations rejected (source contract, not runtime proof)")
+
+
 def source_contract(path):
     source = pathlib.Path(path).read_text()
     ring_backing_submit_contract(source, path)
     ppgtt_retirement_contract(source, path)
+    ppgtt_final_free_contract(source, path)
     for signature in ("bool Gen11::vfAttachContextDesc(",
                       "void Gen11::vfDetachContextDesc(",
                       "bool Gen11::vfSubmitWorkItem("):
@@ -3435,6 +3528,7 @@ def main():
     g2h_event_transaction_mutations(sys.argv[1])
     g2h_completion_lock_mutations(sys.argv[1])
     ppgtt_retirement_mutations(sys.argv[1])
+    ppgtt_final_free_mutations(sys.argv[1])
     ggtt_postwrite_mutations(sys.argv[1])
     macho_inventory(sys.argv[2])
     macho_inventory(sys.argv[3])
