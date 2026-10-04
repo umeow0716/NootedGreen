@@ -436,6 +436,10 @@ def check_boot_atomic(system, path):
         assert len(matches) == 1, "unmapped/ambiguous event-source implementation"
         return boot[matches[0]:matches[0] + length]
 
+    typed_new = kernel_read(0xffffff8000a1cc40, 0x50)
+    assert hashlib.sha256(typed_new).hexdigest() == "938c1b57ae18044138a66393284b04e4bd1c2249a9bd58200cd28b55d65a929e", "changed Boot typed object allocation policy"
+    assert typed_new[0x20:0x25] == bytes.fromhex("ba 04 10 04 00"), "changed sized allocation zero flags"
+    assert typed_new[0x2e:0x33] == bytes.fromhex("be 04 00 00 00"), "changed typed allocation zero flags"
     for name, length, digest in (
             (b"__ZNK8OSObject7releaseEv", 0x10, "da552c7fa83867904273c879beed50027c1c0325336862a6723a77e1d0b18e79"),
             (b"__ZNK8OSObject13taggedReleaseEPKv", 0x20, "82115e870c334d8be1cf952d56bb15fd54341a30cf51dc9a5103d132c34c99e1"),

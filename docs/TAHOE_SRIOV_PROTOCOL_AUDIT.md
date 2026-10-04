@@ -6955,6 +6955,24 @@ No executable patch or runtime mutation.
 
 ### Update fanout must participate in the same owner transaction
 
+#### Exact Boot object allocator requests zeroing on both branches
+
+Complete Boot KC OSObject_typed_operator_new
+`ffffff8000a1cc40/50` reviewed and hash-pinned. It compares requested
+size against the low24 bits of type-view size. Larger allocation calls
+kalloc_ext at ffffff8000369360 with EDX41004; typed allocation calls
+kalloc_type_impl at ffffff8000369980 with ESI4. Local XNU zalloc.h defines
+Z_ZERO as4, matching both requests. This exact body has no tracking branch,
+so the earlier source-only IOTRACKING uncertainty does not apply to this
+selected Boot implementation. Tests check both immediate flag sequences.
+
+This establishes a zeroing request, not yet the callee's fulfillment or
+full partial-init cleanup proof. kalloc_type_impl has an address alias in
+the symbol table; using the next table entry yields a zero-length span.
+Future complete-body review must use next distinct defined address rather
+than hash an empty alias interval. kalloc_ext's bounded size is370 hex and
+has not yet been fully reviewed. No new production hook or VM admission.
+
 #### Pool allocator and failed-init list removal
 
 Complete System KC metaclass allocator `14b6abac/48`, default constructor

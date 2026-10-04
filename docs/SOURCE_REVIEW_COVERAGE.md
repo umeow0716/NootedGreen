@@ -7,6 +7,11 @@ audit's runtime blockers are open.
 
 ## Scope
 
+Complete Boot typed-object allocator ffffff8000a1cc40/50 reviewed and
+pinned with both zero-request immediates. No tracking branch in this body;
+allocator callee fulfillment remains pending. Empty alias span for
+kalloc_type_impl is explicitly not counted as a reviewed body.
+
 Four complete KC bodies: pool metaclass allocator/default constructor and
 pool-list add/remove now pinned. Concrete init dispatch checked via allocator
 bytes and chained vtable target. Failed-init unlinked-list removal is locally
