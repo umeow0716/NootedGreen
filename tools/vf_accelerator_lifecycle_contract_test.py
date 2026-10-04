@@ -32,6 +32,9 @@ STAMP_IRQ_NATIVE = {
     "__ZN18IGAccelDisplayPipe17DecodeTransactionEP30IOAccelDisplayPipeTransaction2PyPj": (0x2b2, "d23abcf017c44eb884e855914dd15d019d517c6bec1d71b231a6ca05ab182722"),
     "__ZN15IGAccelResource4freeEv": (0x26c, "8bf6604632ce62b2bccd54c2d2ca22233633738b3de60ebbd4f00aa01a67a767"),
     "__ZN15IGAccelResource4initEP22IOGraphicsAccelerator2P14IOAccelShared2j": (0x8c, "77551d181809aac756b0e8ae80a91f3df84d9cae6ee36b881c5ee5c90e9fd70b"),
+    "__ZN15IGAccelResource11allocMemoryEP14IOAccelShared2": (0x36, "7c5b2e4833b6f5615e0dfe34459c16f2e670375f68714dc3e48e77e67b4fd722"),
+    "__ZN15IGAccelResource6pageonEP12IOAccelEventby": (0xea4, "5b620a211c46fb7907c507bf1a1b7a2b4a1e024a63fb523b451b77b0938a1dbb"),
+    "__ZN15IGAccelResource7pageoffEP12IOAccelEventbPby": (0xac2, "7bd75311da5f21365440e14644e79cbc1415a831e0645a52618c353f0c6d3796"),
     "__ZN16IGAccelMemoryMap22allocGPUVirtualAddressEv": (0x212, "dbeabbc4bcff5ada45dd5be9ff14bb4ae00a66d544b720359040f504cf01058f"),
     "__ZN15IGAccelResource31createAndPrepareRotationMappingEv": (0xf4, "3ecec4f2acb2a437f81f304a571663c062632f47270ba1a17993e9a254029e3b"),
     "__ZN16IGAccelMemoryMap4initEP22IOGraphicsAccelerator2P11IOAccelTaskP13IOAccelMemoryj": (0x68, "970afaf15c9854e913ad4aa67af32f4ff61ca1267ba3f4f06ad6dd1f15fea892"),
@@ -1211,7 +1214,44 @@ def macho_inventory(path):
     assert text_direct_branches(mapping_gpu_update) == [], \
         f"{path}: gained an unaccounted direct GPU page-table update caller"
     resource_table = value("__ZTV15IGAccelResource")
-    assert struct.unpack_from("<Q", image, resource_table + 16 + 0x178)[0] == value("__ZN15IGAccelResource8completeEv"), f"{path}: changed color-resolve concrete completion target"
+    for slot, method in (
+            (0x120, "__ZN15IGAccelResource11allocMemoryEP14IOAccelShared2"),
+            (0x140, "__ZN15IGAccelResource10initializeEP22IOAccelNewResourceArgsy"),
+            (0x178, "__ZN15IGAccelResource8completeEv"),
+            (0x1b8, "__ZN15IGAccelResource6pageonEP12IOAccelEventby"),
+            (0x1c8, "__ZN15IGAccelResource7pageoffEP12IOAccelEventbPby")):
+        assert struct.unpack_from("<Q", image, resource_table + 16 + slot)[0] == value(method), \
+            f"{path}: changed Intel resource virtual at {slot:#x}"
+    paging_submit = "__ZN16IntelAccelerator10submitBlitEP15blit3d_params_tRK8IGVectorI11rect_pair_t25IGIOMallocAllocatorPolicyEP11IGAccelTaskb"
+    resource_initialize = "__ZN15IGAccelResource10initializeEP22IOAccelNewResourceArgsy"
+    resource_alloc = "__ZN15IGAccelResource11allocMemoryEP14IOAccelShared2"
+    resource_pageon = "__ZN15IGAccelResource6pageonEP12IOAccelEventby"
+    resource_pageoff = "__ZN15IGAccelResource7pageoffEP12IOAccelEventbPby"
+    initialize_start = value(resource_initialize)
+    initialize_end = value(resource_alloc)
+    initialize_helper = value("__ZL20ComputeLevelOffsetXYjjjjjjjjjbbbbjbbbjPjS_S_S_")
+    assert initialize_end - initialize_start == 0xc9c and \
+        initialize_helper - initialize_start == 0x6ee and \
+        hashlib.sha256(image[initialize_start:initialize_end]).hexdigest() == \
+        "56cb545aa1e2debc8dfb88f538ec28c2557de42d06837b0f4d951156526563dc", \
+        f"{path}: changed resource initialize/helper region"
+    assert direct_branch_candidates(
+        image, initialize_start, initialize_end, value(paging_submit),
+        external_relocation_offsets) == [] and direct_branches(resource_alloc, paging_submit) == [], \
+        f"{path}: resource initialization gained an unaccounted blit submission"
+    assert direct_branches(resource_pageon, paging_submit) == [0x704bd, 0x706b8, 0x70973], \
+        f"{path}: changed resource page-on blit submissions"
+    assert direct_branches(resource_pageoff, paging_submit) == [0x71330, 0x71538], \
+        f"{path}: changed resource page-off blit submissions"
+    for address, expected in (
+            (0x704c2, "31 c0"),
+            (0x706bd, "49 8b 7e 10"),
+            (0x70978, "49 8b 7e 10"),
+            (0x71335, "31 c0"),
+            (0x7153d, "49 8b 7e 10")):
+        encoded = bytes.fromhex(expected)
+        assert image[address:address + len(encoded)] == encoded, \
+            f"{path}: changed ignored resource paging submit result at {address:#x}"
     assert resource_table + 16 + 0x198 == 0xd9578, f"{path}: moved inherited resource channel cleanup slot"
     map_table = value("__ZTV16IGAccelMemoryMap")
     wait_barrier = "__ZN16IntelAccelerator20barrierForWaitEventsEbP18IGAccelFIFOChannel"

@@ -449,6 +449,96 @@ BASE_CLIENT_BODIES = {
         (0xd2, "8a273e7b7eaa61745adc7320d385e7512394306da74ed9c3b218e9b4a1e21ed1"),
     "__ZN17IOAccelSurfaceMTL9set_shapeE24eIOAccelSurfaceShapeBitsjP19IOAccelDeviceRegiony":
         (0x26, "41926b32c523057c59d6df54ba1c090624fea5f3530aeccaece50bde1e977eec"),
+    "__ZN14IOAccelDevice210get_configEP23IOAccelDeviceConfigData":
+        (0x124, "05b5c4fbacf0f03bf6e23a4837b29f8a3f8dc4a184a60a46b6e693043054dded"),
+    "__ZN14IOAccelDevice28get_nameEPc":
+        (0x38, "adbb44b5294fc2346457b633ff70a238dbf95c84c07b7232f6f2bbe846f523ad"),
+    "__ZN14IOAccelDevice217get_event_machineEP29IOAccelDeviceEventMachineData":
+        (0x146, "52c3f1ebf4adb173da3dd8fb47f209af2d55aff0184819fc5cd905037ee207e8"),
+    "__ZN14IOAccelDevice216get_surface_infoEjP24IOAccelDeviceSurfaceData":
+        (0x1c8, "dc7998bc4aaccad56f7eb23e76c8b772096b2999f7808a6a57939cbcd9d53131"),
+    "__ZN14IOAccelDevice210set_stereoEjj":
+        (0xc, "98bbbcb705f834dd29c76767fe0c3cb90a15bbbc235e7dfa742ff7d6f0c8625f"),
+    "__ZN14IOAccelDevice225get_next_global_object_idEP31IOAccelDeviceGlobalObjectIDData":
+        (0x26, "e9a72b22860e0d7b8069aac4890232a4cd65491d9e325ecc0f8d6ab776abb7ff"),
+    "__ZN14IOAccelDevice224get_current_trace_filterEP28IOAccelDeviceTraceFilterData":
+        (0x10, "030108f12f12b7f409fe349f13d6358c98434da1ab66c425e195e30c62b71da0"),
+    "__ZN14IOAccelDevice215get_device_infoEP27IOAccelDeviceInfoReturnData":
+        (0x80, "d31f11f0fc3ec2d8df3fd13a105fe765e79676ebf5ec035ed938c7e638f37c9f"),
+    "__ZN14IOAccelDevice218get_next_gid_groupEP25IOAccelDeviceGIDGroupData":
+        (0x44, "9458b3fe4a2ed420f329237925a7219f93c174b8a5cb103803104dc15766f8d5"),
+    "__ZN14IOAccelDevice216set_api_propertyEP24IOAccelDeviceAPIProperty":
+        (0x7a, "9c1dd1e87cfb5b3e70cc9d6f4e2111a42ecc4fcea9db53a7f2b3724a45746060"),
+    "__ZN24IOAccelSharedUserClient214s_new_resourceEPS_PvP25IOExternalMethodArguments":
+        (0x12c, "9df17dd0e7e7b7a65e0ed735507352d8777daf1acc4c41017971e819061b0210"),
+    "__ZN24IOAccelSharedUserClient225s_set_resources_purgeableEPS_PvP25IOExternalMethodArguments":
+        (0xc, "98bbbcb705f834dd29c76767fe0c3cb90a15bbbc235e7dfa742ff7d6f0c8625f"),
+    "__ZN24IOAccelSharedUserClient212new_resourceEP22IOAccelNewResourceArgsP28IOAccelNewResourceReturnDatayPj":
+        (0xc6a, "7c4731cbbf652662eae7535d288183c02242c9545945c2030a1065bb22ca313e"),
+    "__ZN24IOAccelSharedUserClient215delete_resourceEj":
+        (0x116, "3284f01291ec4103e1a0695dcad54bdc3722cdb8a303c867459b7e3cce0cb302"),
+    "__ZN24IOAccelSharedUserClient217page_off_resourceEP32IOAccelSharedPageoffResourceArgs":
+        (0x21a, "36174de689a22cf12264f90081fe739832e22c6f03fe698a01f56927391112b4"),
+    "__ZN24IOAccelSharedUserClient219finish_object_eventEjj":
+        (0x202, "80134a8ab44e54f367762ee8a6e4dbdcbbbd6df4f8cd3044a6fc155b2bfce426"),
+    "__ZN24IOAccelSharedUserClient222set_resource_purgeableEj25eIOAccelResourcePurgeablePS0_":
+        (0x15e, "4ef42c91323db15b05cfa08986519b25363f85568c36cf3090ce05cedc46e2be"),
+    "__ZN24IOAccelSharedUserClient216get_surface_infoEjPjS0_S0_S0_S0_":
+        (0x1d6, "9d56deb1f80aa81a8fa306dc5afbaf739773d0ecf9de29c1d2807bf28248496a"),
+    "__ZN24IOAccelSharedUserClient217get_resource_infoEjP32IOAccelGetResourceInfoReturnDataPj":
+        (0x10c, "c819568ea95fa8135a9cd8309884f81fa5d632147f5b9f19a7cc857ae92f83d0"),
+    "__ZN24IOAccelSharedUserClient212create_shmemEjP22IOAccelDeviceShmemData":
+        (0xc0, "2cc73e4edc6ab94b5240bfee74afd7d6cb1721d74997d702b5e9da124c975dee"),
+    "__ZN24IOAccelSharedUserClient213destroy_shmemEj":
+        (0xa6, "1f6bf43999fdad152e5abd3de903beee9effbdb12079c2c153710754e6b349ca"),
+    "__ZN24IOAccelSharedUserClient215get_shared_infoEP30IOAccelSharedGetInfoReturnData":
+        (0xea, "6c3295465e9ef5be5371f5c3dab32f200abce4674789a994d2b93052dc56dcbe"),
+    "__ZN24IOAccelSharedUserClient216setup_dirty_ringEP37IOAccelSharedSetupDirtyRingReturnData":
+        (0xae, "f9b862dbabb2e02eed6cba14ee8651aa39804e749916e6b0d2758a4ed54eacf9"),
+    "__ZN24IOAccelSharedUserClient221allocate_fence_memoryEPyS0_":
+        (0xb8, "d24ac332aa7553c55ce4f299a85b5b265312489702e48970a5dc5e167ce65ad7"),
+    "__ZN24IOAccelSharedUserClient215create_mtleventEPyP27IOAccelCreateMTLEventResult":
+        (0xb8, "6632bd775075bfdf67007a139252ff98d9d94e5c49685db84189185f82ecd263"),
+    "__ZN24IOAccelSharedUserClient216destroy_mtleventEj":
+        (0xa6, "45743bcd83efd0c58e14f7c8d677db695ae659b622284c64d494661554318c39"),
+    "__ZN24IOAccelSharedUserClient215get_memory_dataEP17IOAccelMemoryData":
+        (0xa2, "1c603474cedc2584729db63a09f2691d8db160232d68c09e6fa27a9784ed14dc"),
+    "__ZN24IOAccelSharedUserClient215disconnect_peerEj":
+        (0xa6, "460afad9a726fc56b28dfafbaf89392ea6080dd9e8f716a4c3a0f76cecf6b7da"),
+    "__ZN24IOAccelSharedUserClient223set_resources_purgeableEPKj25eIOAccelResourcePurgeablePS2_i":
+        (0xc, "98bbbcb705f834dd29c76767fe0c3cb90a15bbbc235e7dfa742ff7d6f0c8625f"),
+    "__ZN24IOAccelSharedUserClient219get_resource_offsetEPyS0_":
+        (0x116, "0900038adc1771a5bd7bef461f29ba33486d3a3aec6998fb70e93d7567be0496"),
+    "__ZN24IOAccelSharedUserClient218get_allocated_sizeEP20IOAccelAllocatedSize":
+        (0xa6, "2b3383addbb54587781cef9a002541747dd01e20bc3e2cda2ec89c11e1d6becb"),
+    "__ZN24IOAccelSharedUserClient227set_resource_owner_identityEP43IOAccelResourceSetResourceOwnerIdentityData":
+        (0xb8, "84c79db9d8299c5d4ecb870f00704a8218caa5cfd976245e9abbaa9e96cf05b4"),
+    "__ZN16IOAccelResource214pageonIfNeededEv":
+        (0x382, "f18b73e4af2ce5556617d49fc15d36e8b588ea4497178fcdf0f8945d2d65680c"),
+    "__ZN16IOAccelResource215pageoffIfNeededEjj":
+        (0x756, "1587d228f067cf5e94f9fe1279850152a703e0b1707289e5ddafe642b03b69bc"),
+    "__ZN16IOAccelResource29gartEventEv":
+        (0x62, "2536f1ae64bb4554c5e5cee42ba2514d05cbf086166474e0dcf749a5e944293b"),
+    "__ZN16IOAccelResource28completeEv":
+        (0x74, "cf6473db8cf1433097cf4311898247f37b705e1fb0cb6a9822291d3d7c9a1c7c"),
+    "__ZN27IOAccelMemoryInfoUserClient14externalMethodEjP25IOExternalMethodArgumentsP24IOExternalMethodDispatchP8OSObjectPv":
+        (0x36, "da2345b3b79afedfe949e9286e987b233896b5879c3096ec738469f05be5e812"),
+    "__ZN27IOAccelMemoryInfoUserClient20s_gather_memory_dataEP8OSObjectPvP25IOExternalMethodArguments":
+        (0xe4, "9ee51f0ad35f01a9967d9f9a78c51dfe8e10634d9cb2f5ed0355940d9ff00566"),
+    "__ZN27IOAccelMemoryInfoUserClient27s_gather_memory_data_totalsEP8OSObjectPvP25IOExternalMethodArguments":
+        (0x56, "e52c98c99ad8037502fb1519f639e46b11af0e32e87013d11b0da6a32b4c5a3d"),
+    "__ZN27IOAccelMemoryInfoUserClient22s_purge_all_vid_memoryEP8OSObjectPvP25IOExternalMethodArguments":
+        (0x4a, "c021c79e2a49b56e4b2c48fd7eff09716fe24bbb1fd51529879e3cceece39ed9"),
+    "__ZN27IOAccelMemoryInfoUserClient19s_allowed_to_gatherEv":
+        (0x50, "f24ef8f4d4b1b1568e8ac85143a328e07b3e5587c3e8a52a740c46cc2fe23ad6"),
+    "__ZN27IOAccelMemoryInfoUserClient18gather_memory_dataEjPjS0_Pv":
+        (0x166, "ea877cd9d739fab9d5a03d1935e2f29c957fd6efafba4672dda46d5dc09ff09f"),
+    "__ZN27IOAccelMemoryInfoUserClient25gather_memory_data_totalsEP12OSDictionaryPjP28IOAccelMemoryInfoAllocTotals":
+        (0x8c, "270f220c145621fd89c73329866fc6facfbb19fbba36ee312d8eea4b1ea25e8f"),
+    "__ZN27IOAccelMemoryInfoUserClient20purge_all_vid_memoryEv":
+        (0x7a, "067d5eac57b441ee8021e546860373e03c6613d2d89081d483c56c02624a0135"),
+    "__ZN27IOAccelMemoryInfoUserClient17lock_with_timeoutEy":
+        (0xae, "adfcb726151be178a643992d631d2c9efcb4400747b1bace2d0134dc522904b4"),
 }
 SURFACE_METHODS = (
     ("__ZN14IOAccelSurface25surface_read_lock_optionsEjP25IOAccelSurfaceInformationy", (0, 2, 1, 0xffffffff)),
@@ -542,6 +632,14 @@ SURFACE_MTL_METHODS = (
     ("__ZN17IOAccelSurfaceMTL15surface_controlEjjPj", (0, 0, 2, 1)),
     (None, (0, 4, 5, 0xffffffff)),
     (None, (0, 0, 0, 1)),
+)
+MEMORY_INFO_METHODS = (
+    ("__ZN27IOAccelMemoryInfoUserClient20s_gather_memory_dataEP8OSObjectPvP25IOExternalMethodArguments",
+     (0, 0, 1, 0xffffffff)),
+    ("__ZN27IOAccelMemoryInfoUserClient27s_gather_memory_data_totalsEP8OSObjectPvP25IOExternalMethodArguments",
+     (0, 0xffffffff, 0, 0x70)),
+    ("__ZN27IOAccelMemoryInfoUserClient22s_purge_all_vid_memoryEP8OSObjectPvP25IOExternalMethodArguments",
+     (0, 0, 0, 0)),
 )
 # Symbol-bounded bodies reviewed locally. These identities do not certify
 # overridden resource methods, iterator locking, DMA completion or host safety.
@@ -1334,7 +1432,7 @@ def check(path, boot_path=None):
     symbol_offset, count, string_offset, string_size = symtab
     base_client_symbols = {method for table in (
         SURFACE_METHODS, DEVICE_METHODS, SHARED_METHODS, GL_CONTEXT_METHODS,
-        GL_DRAWABLE_METHODS, SURFACE_MTL_METHODS)
+        GL_DRAWABLE_METHODS, SURFACE_MTL_METHODS, MEMORY_INFO_METHODS)
                            for method, _ in table if method is not None}
     wanted_symbols = {
         *CONTRACTS, *SCRUB_BODIES, *LOCK_COPIES, *EVENT_OWNER_BODIES,
@@ -1346,6 +1444,7 @@ def check(path, boot_path=None):
         "__ZTV20IOAccelLegacySurface", "__ZTV14IOAccelDevice2",
         "__ZTV17IOAccelGLContext2", "__ZTV27IOAccelGLDrawableUserClient",
         "__ZTV17IOAccelSurfaceMTL",
+        "__ZTV27IOAccelMemoryInfoUserClient",
         "__ZN19IOAccelCommandQueue20sCommandQueueMethodsE",
         "__ZN15IOAccelContext215sContextMethodsE",
         "__ZN17IOAccel2DContext217s2DContextMethodsE",
@@ -1354,6 +1453,8 @@ def check(path, boot_path=None):
         "__ZZN14IOAccelSurface14externalMethodEjP25IOExternalMethodArgumentsP24IOExternalMethodDispatchP8OSObjectPvE19newResourceDispatch",
         "__ZN14IOAccelDevice214sDeviceMethodsE",
         "__ZN24IOAccelSharedUserClient214sSharedMethodsE",
+        "__ZZN24IOAccelSharedUserClient214externalMethodEjP25IOExternalMethodArgumentsP24IOExternalMethodDispatchP8OSObjectPvE7methods",
+        "__ZZN27IOAccelMemoryInfoUserClient14externalMethodEjP25IOExternalMethodArgumentsP24IOExternalMethodDispatchP8OSObjectPvE15gather_dispatch",
         "__ZZN17IOAccelGLContext212contextStartEvE19methodDispatchDescs",
         "__ZL25sGLContextMethodsDispatch",
         "__ZN27IOAccelGLDrawableUserClient15sMethodDispatchE",
@@ -1370,6 +1471,8 @@ def check(path, boot_path=None):
         "__ZN28IOSurfaceMTLSharedEventFence15withSharedEventEP20IOSurfaceSharedEventy",
         "__ZN23IOAccelSharedEventFence15withSharedEventEP20IOSurfaceSharedEventyP22IOGraphicsAccelerator2P17IOAccelSubmitter2",
         "__ZN19IOAccelFenceMachine13addEventFenceEP17IOAccelSubmitter2P17IOAccelEventFence",
+        "__ZN22IOGraphicsAccelerator218unwireAllVidMemoryEv",
+        "__ZN22IOGraphicsAccelerator218unwireAllSysMemoryEv",
         "__ZN19IOAccelCommandQueue16commandQueueStopEv",
         "__ZN19IOAccelCommandQueue11setPriorityE28eIOAccelCommandQueuePriority",
         "__ZTV16IOAccelMemoryMap", "__ZTV16IOAccelSysMemory",
@@ -1470,6 +1573,10 @@ def check(path, boot_path=None):
         "__ZN27IOAccelGLDrawableUserClient15sMethodDispatchE",
         GL_DRAWABLE_METHODS,
         "608a8a962b027791704ca9eac5acd9c30ea9e1eb3f9cd3581cf29f6f20977d89")
+    check_legacy_external_dispatch_table(
+        "__ZZN27IOAccelMemoryInfoUserClient14externalMethodEjP25IOExternalMethodArgumentsP24IOExternalMethodDispatchP8OSObjectPvE15gather_dispatch",
+        MEMORY_INFO_METHODS,
+        "9a7180e937fe917fec5ca4273f58b79ff4ef9bdae8f9c350c79fdc7463bd0a3b")
     check_dispatch_table(
         "__ZN17IOAccelSurfaceMTL15sSurfaceMethodsE", SURFACE_MTL_METHODS,
         "acbedfcc5220cc7de2fb393c5757210b78ec40e36545e2ee36a712859f29515f")
@@ -1660,6 +1767,159 @@ def check(path, boot_path=None):
         address_of("__ZN17IOAccelSurfaceMTL21s_signal_shared_eventEPS_PvP25IOExternalMethodArguments"),
         0x20, surface_mtl_signal) == [0x1a], "changed SurfaceMTL signal wrapper edge"
     print("PASS GLContext/GLDrawable/SurfaceMTL selectors, lock domains and producer classification")
+
+    # Device selectors are read-only metadata/configuration except for the
+    # API-property virtual and the unsupported stereo stub.  The three
+    # collection reads that need accelerator serialization have exact busy
+    # scopes; no selector is a GPU command producer.
+    for method, locks, unlocks in (
+            ("__ZN14IOAccelDevice210get_configEP23IOAccelDeviceConfigData", [0x40], [0x108]),
+            ("__ZN14IOAccelDevice217get_event_machineEP29IOAccelDeviceEventMachineData", [0x3e], [0x129]),
+            ("__ZN14IOAccelDevice216get_surface_infoEjP24IOAccelDeviceSurfaceData", [0x46], [0x1a4])):
+        start = address_of(method)
+        length = BASE_CLIENT_BODIES[method][0]
+        assert direct_branch_offsets(start, length, 0x14ba6da2) == locks and \
+            direct_branch_offsets(start, length, 0x14ba6db4) == unlocks, \
+            f"changed Device client busy-lock inventory: {method}"
+    for method in (
+            "__ZN14IOAccelDevice28get_nameEPc",
+            "__ZN14IOAccelDevice210set_stereoEjj",
+            "__ZN14IOAccelDevice225get_next_global_object_idEP31IOAccelDeviceGlobalObjectIDData",
+            "__ZN14IOAccelDevice224get_current_trace_filterEP28IOAccelDeviceTraceFilterData",
+            "__ZN14IOAccelDevice215get_device_infoEP27IOAccelDeviceInfoReturnData",
+            "__ZN14IOAccelDevice218get_next_gid_groupEP25IOAccelDeviceGIDGroupData",
+            "__ZN14IOAccelDevice216set_api_propertyEP24IOAccelDeviceAPIProperty"):
+        start = address_of(method)
+        length = BASE_CLIENT_BODIES[method][0]
+        assert direct_branch_offsets(start, length, 0x14ba6da2) == [] and \
+            direct_branch_offsets(start, length, 0x14ba6db4) == [], \
+            f"Device metadata method gained a busy-lock transition: {method}"
+
+    shared_special = address_of(
+        "__ZZN24IOAccelSharedUserClient214externalMethodEjP25IOExternalMethodArgumentsP24IOExternalMethodDispatchP8OSObjectPvE7methods")
+    assert hashlib.sha256(read(shared_special, 48)).hexdigest() == \
+        "7ee90dd428e43637af578bf039d67cc4f1e20876508c5ec55e3036d53c9bf8c8", \
+        "changed Shared selector-0 special dispatch record"
+    entry = struct.unpack("<6Q", read(shared_special, 48))
+    assert entry[0] >> 63 == 0 and (entry[0] >> 30) & 3 == 1 and \
+        entry[0] & 0x3fffffff == address_of(
+            "__ZN24IOAccelSharedUserClient214s_new_resourceEPS_PvP25IOExternalMethodArguments") and \
+        entry[1:] == (0xffffffff00000000, 0xffffffff00000000, 0, 0, 0), \
+        "changed Shared selector-0 variable-structure contract"
+    shared_external = address_of(
+        "__ZN24IOAccelSharedUserClient214externalMethodEjP25IOExternalMethodArgumentsP24IOExternalMethodDispatchP8OSObjectPv")
+    selector17_instruction = read(shared_external + 0x29, 7)
+    selector0_instruction = read(shared_external + 0x32, 7)
+    assert selector17_instruction[:3] == bytes.fromhex("4c 8d 35") and \
+        selector0_instruction[:3] == bytes.fromhex("4c 8d 35"), \
+        "changed Shared selector-0/17 special dispatch instructions"
+    shared_purge_special = shared_external + 0x30 + struct.unpack_from(
+        "<i", selector17_instruction, 3)[0]
+    assert shared_external + 0x39 + struct.unpack_from("<i", selector0_instruction, 3)[0] == \
+        shared_special, "changed Shared selector-0 special dispatch selection"
+    assert hashlib.sha256(read(shared_purge_special, 48)).hexdigest() == \
+        "e97d73096e047fad99684bf05805d4c1042f78b7a166832b6d7ca8e6a7a00446", \
+        "changed Shared selector-17 special dispatch record"
+    purge_entry = struct.unpack("<Q4I", read(shared_purge_special, 24))
+    assert purge_entry[0] >> 63 == 0 and purge_entry[0] & 0x3fffffff == address_of(
+        "__ZN24IOAccelSharedUserClient225s_set_resources_purgeableEPS_PvP25IOExternalMethodArguments") and \
+        purge_entry[1:] == (1, 0xffffffff, 0, 0xffffffff), \
+        "changed Shared selector-17 variable-array contract"
+    assert direct_branch_offsets(
+        address_of("__ZN24IOAccelSharedUserClient214s_new_resourceEPS_PvP25IOExternalMethodArguments"),
+        0x12c,
+        address_of("__ZN24IOAccelSharedUserClient212new_resourceEP22IOAccelNewResourceArgsP28IOAccelNewResourceReturnDatayPj")) == [0xa2], \
+        "changed Shared selector-0 wrapper-to-member edge"
+
+    shared_lock_inventory = (
+        ("__ZN24IOAccelSharedUserClient212new_resourceEP22IOAccelNewResourceArgsP28IOAccelNewResourceReturnDatayPj", [0x1d7], [0x34c, 0xa15]),
+        ("__ZN24IOAccelSharedUserClient215delete_resourceEj", [0x54], [0xf3]),
+        ("__ZN24IOAccelSharedUserClient217page_off_resourceEP32IOAccelSharedPageoffResourceArgs", [0x54], [0x9d, 0x110, 0x1e8]),
+        ("__ZN24IOAccelSharedUserClient219finish_object_eventEjj", [0x87, 0x176], [0x125, 0x1de]),
+        ("__ZN24IOAccelSharedUserClient222set_resource_purgeableEj25eIOAccelResourcePurgeablePS0_", [0x76], [0x13b]),
+        ("__ZN24IOAccelSharedUserClient216get_surface_infoEjPjS0_S0_S0_S0_", [0x53], [0x1b2]),
+        ("__ZN24IOAccelSharedUserClient217get_resource_infoEjP32IOAccelGetResourceInfoReturnDataPj", [0x6b], [0xe9]),
+        ("__ZN24IOAccelSharedUserClient212create_shmemEjP22IOAccelDeviceShmemData", [0x46], [0x9c]),
+        ("__ZN24IOAccelSharedUserClient213destroy_shmemEj", [0x3e], [0x88]),
+        ("__ZN24IOAccelSharedUserClient215get_shared_infoEP30IOAccelSharedGetInfoReturnData", [0x44], [0xc3]),
+        ("__ZN24IOAccelSharedUserClient216setup_dirty_ringEP37IOAccelSharedSetupDirtyRingReturnData", [0x3e], [0x90]),
+        ("__ZN24IOAccelSharedUserClient222process_dirty_commandsEv", [0x3a], [0x7e]),
+        ("__ZN24IOAccelSharedUserClient221allocate_fence_memoryEPyS0_", [0x46], [0x94]),
+        ("__ZN24IOAccelSharedUserClient215create_mtleventEPyP27IOAccelCreateMTLEventResult", [0x46], [0x94]),
+        ("__ZN24IOAccelSharedUserClient216destroy_mtleventEj", [0x3e], [0x88]),
+        ("__ZN24IOAccelSharedUserClient215get_memory_dataEP17IOAccelMemoryData", [0x3e], [0x85]),
+        ("__ZN24IOAccelSharedUserClient215disconnect_peerEj", [0x3e], [0x88]),
+        ("__ZN24IOAccelSharedUserClient223set_resources_purgeableEPKj25eIOAccelResourcePurgeablePS2_i", [], []),
+        ("__ZN24IOAccelSharedUserClient219get_resource_offsetEPyS0_", [0x63], [0xf3]),
+        ("__ZN24IOAccelSharedUserClient218get_allocated_sizeEP20IOAccelAllocatedSize", [0x3e], [0x8a]),
+        ("__ZN24IOAccelSharedUserClient227set_resource_owner_identityEP43IOAccelResourceSetResourceOwnerIdentityData", [0x47], [0x95]),
+    )
+    for method, locks, unlocks in shared_lock_inventory:
+        start = address_of(method)
+        length = BASE_CLIENT_BODIES[method][0]
+        assert direct_branch_offsets(start, length, 0x14ba6da2) == locks and \
+            direct_branch_offsets(start, length, 0x14ba6db4) == unlocks, \
+            f"changed Shared selector busy-lock inventory: {method}"
+    shared_new = address_of(
+        "__ZN24IOAccelSharedUserClient212new_resourceEP22IOAccelNewResourceArgsP28IOAccelNewResourceReturnDatayPj")
+    assert direct_branch_offsets(
+        shared_new, 0xc6a,
+        address_of("__ZN22IOGraphicsAccelerator222acceleratorWaitEnabledEv")) == [0x1f8], \
+        "changed Shared new-resource enabled wait"
+    shared_pageoff = address_of(
+        "__ZN24IOAccelSharedUserClient217page_off_resourceEP32IOAccelSharedPageoffResourceArgs")
+    assert read(shared_pageoff + 0x155, 6) == bytes.fromhex("ff 90 60 02 00 00"), \
+        "changed Shared page-off to resource pageoffIfNeeded dispatch"
+    resource_vtable = address_of("__ZTV16IOAccelResource2")
+    for slot, method in (
+            (0x178, "__ZN16IOAccelResource28completeEv"),
+            (0x260, "__ZN16IOAccelResource215pageoffIfNeededEjj"),
+            (0x268, "__ZN16IOAccelResource214pageonIfNeededEv"),
+            (0x270, "__ZN16IOAccelResource29gartEventEv")):
+        raw = struct.unpack("<Q", read(resource_vtable + 16 + slot, 8))[0]
+        assert raw >> 63 == 0 and raw & 0x3fffffff == address_of(method), \
+            f"changed resource paging virtual at {slot:#x}"
+    resource_pageoff = address_of("__ZN16IOAccelResource215pageoffIfNeededEjj")
+    assert read(resource_pageoff + 0x421, 6) == bytes.fromhex("ff 90 c8 01 00 00"), \
+        "changed resource pageoffIfNeeded concrete page-off dispatch"
+
+    memory_external = address_of(
+        "__ZN27IOAccelMemoryInfoUserClient14externalMethodEjP25IOExternalMethodArgumentsP24IOExternalMethodDispatchP8OSObjectPv")
+    assert read(memory_external + 4, 5) == bytes.fromhex("83 fe 02 76 07"), \
+        "changed MemoryInfo three-selector bound"
+    memory_table = read(memory_external + 0x16, 7)
+    assert memory_table[:3] == bytes.fromhex("48 8d 0d") and \
+        memory_external + 0x1d + struct.unpack_from("<i", memory_table, 3)[0] == address_of(
+            "__ZZN27IOAccelMemoryInfoUserClient14externalMethodEjP25IOExternalMethodArgumentsP24IOExternalMethodDispatchP8OSObjectPvE15gather_dispatch"), \
+        "changed MemoryInfo dispatch-table selection"
+    for wrapper, member, offsets in (
+            ("__ZN27IOAccelMemoryInfoUserClient20s_gather_memory_dataEP8OSObjectPvP25IOExternalMethodArguments",
+             "__ZN27IOAccelMemoryInfoUserClient18gather_memory_dataEjPjS0_Pv", [0x94]),
+            ("__ZN27IOAccelMemoryInfoUserClient27s_gather_memory_data_totalsEP8OSObjectPvP25IOExternalMethodArguments",
+             "__ZN27IOAccelMemoryInfoUserClient25gather_memory_data_totalsEP12OSDictionaryPjP28IOAccelMemoryInfoAllocTotals", [0x4a]),
+            ("__ZN27IOAccelMemoryInfoUserClient22s_purge_all_vid_memoryEP8OSObjectPvP25IOExternalMethodArguments",
+             "__ZN27IOAccelMemoryInfoUserClient20purge_all_vid_memoryEv", [0x3d])):
+        assert direct_branch_offsets(
+            address_of(wrapper), BASE_CLIENT_BODIES[wrapper][0], address_of(member)) == offsets, \
+            f"changed MemoryInfo wrapper edge: {wrapper}"
+    memory_lock = address_of("__ZN27IOAccelMemoryInfoUserClient17lock_with_timeoutEy")
+    assert direct_branch_offsets(memory_lock, 0xae, 0x14ba6da2) == [0x79] and \
+        read(memory_lock + 0x19, 7) == bytes.fromhex("4d 69 e6 40 42 0f 00"), \
+        "changed MemoryInfo bounded lock/busy admission"
+    for method, lock_edge, unlock_edge in (
+            ("__ZN27IOAccelMemoryInfoUserClient18gather_memory_dataEjPjS0_Pv", 0x2c, 0x70),
+            ("__ZN27IOAccelMemoryInfoUserClient25gather_memory_data_totalsEP12OSDictionaryPjP28IOAccelMemoryInfoAllocTotals", 0x1f, 0x62),
+            ("__ZN27IOAccelMemoryInfoUserClient20purge_all_vid_memoryEv", 0xf, 0x60)):
+        start = address_of(method)
+        length = BASE_CLIENT_BODIES[method][0]
+        assert direct_branch_offsets(start, length, memory_lock) == [lock_edge] and \
+            direct_branch_offsets(start, length, 0x14ba6db4) == [unlock_edge], \
+            f"changed MemoryInfo lock/unlock scope: {method}"
+    memory_purge = address_of("__ZN27IOAccelMemoryInfoUserClient20purge_all_vid_memoryEv")
+    assert read(memory_purge + 0x28, 6) == bytes.fromhex("ff 90 48 09 00 00") and \
+        read(memory_purge + 0x38, 6) == bytes.fromhex("ff 90 78 09 00 00"), \
+        "changed MemoryInfo video/system unwire dispatches"
+    print("PASS Device/Shared/MemoryInfo selectors, lock scopes and page-off producer root")
 
     surface_external = address_of(
         "__ZN14IOAccelSurface14externalMethodEjP25IOExternalMethodArgumentsP24IOExternalMethodDispatchP8OSObjectPv")
