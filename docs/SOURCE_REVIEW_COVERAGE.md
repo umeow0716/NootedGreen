@@ -34,6 +34,19 @@ scopes, pause unlock/relock and the locked `processDataBuffers` dispatch are
 pinned. This adds a second required outer admission root; no production route
 has yet been installed.
 
+2026-10-04 2D/concrete-override delta: the System KC's complete three-entry
+`IOAccel2DContext2` table maps selectors `0x100..0x102` to set-surface, finish
+and blit. Their complete bodies and accelerator busy-lock scopes are pinned;
+blit dispatches concrete Intel `blitCopy`/`blitFill` at vtable `+0xb40/+0xb48`
+and is independent of both previously identified submit families. Both Intel
+payloads now also pin the complete queue processor, five GL/CL/video legacy
+processors, all relevant vtable slots and their factories. The complete
+SharedUserClient extra method table proves exactly selectors `20..28`, with
+depth/color/ICB at 20/22/27. This closes the accelerator-specific dispatch
+inventory only. Inherited base clients/surface, display/flip reachability,
+internal producers and close/drain integration remain open; production and
+runtime state are unchanged.
+
 2026-10-04 legacy/PF-owned GPU producer containment delta: the admitted Tahoe
 payloads' modern ring-to-Scheduler4-to-`IGHardwareGuC::submitWorkItem` chain
 remains the translated VF path. Five other common endpoints were fully bounded,

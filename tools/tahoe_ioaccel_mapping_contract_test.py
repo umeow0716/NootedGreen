@@ -36,6 +36,12 @@ EVENT_DISABLE_STAMP_LOCKED = "__ZN20IOAccelEventMachine223disable_stamp_interrup
 EVENT_ENABLE_STAMP = "__ZN20IOAccelEventMachine220enableStampInterruptEi"
 EVENT_DISABLE_STAMP = "__ZN20IOAccelEventMachine221disableStampInterruptEi"
 EVENT_OWNER_BODIES = {
+    "__ZN17IOAccel2DContext211set_surfaceEj23eIOAccelContextModeBits": (0x338, "eb383c47336521fc9c7c55b7bb1f979bc55e51d23e582390434f92a4883defff"),
+    "__ZN17IOAccel2DContext26finishEj": (0x158, "4d59163fe136e649136c614f200b425e1807f1c2c8b5884ed46019afdba8b320"),
+    "__ZN17IOAccel2DContext24blitEP20IOAccel2DBlitCommandy": (0x7ae, "2fcbf2f864a5133910c0cdd7096d0464e9fa2787ef1d079a7c2fa8fbf172307e"),
+    "__ZN17IOAccel2DContext212contextStartEv": (0xa0, "8f77114e552abeffa9a366a0d478a4870b0737c8e3406378c15030484e5e0138"),
+    "__ZN17IOAccel2DContext211contextStopEv": (0x9e, "75a96e57df086bab884b5928e4d12e3a3ab3c3ff1b552310727d167a91944145"),
+    "__ZN17IOAccel2DContext226getTargetAndMethodForIndexEPP9IOServicej": (0x36, "f7a9b91b57ca910960fcc84026c9880b649e210756519ba3476a0a37f0da40da"),
     "__ZN15IOAccelContext219submit_data_buffersEP33IOAccelContextSubmitDataBuffersInP34IOAccelContextSubmitDataBuffersOutyPy": (0x972, "d79b1848b67a97bdf24ef16ce5b76f4431ede6500bd4b99afd04a6b691f1c0bb"),
     "__ZN15IOAccelContext210stopLockedEv": (0x52, "a5b99d2db4fbb23a56228962f8b641d7495ed916bba2c91096ab30cd30ea6c54"),
     "__ZN15IOAccelContext24stopEP9IOService": (0xd4, "e3a5af9de5bf44f29f60a0a795a754c1bfb80123915ed8ae6e6b2fe52e6e8552"),
@@ -1012,7 +1018,7 @@ def check(path, boot_path=None):
     assert uuids == [IOACCEL_UUID], "unreviewed IOAcceleratorFamily2 UUID"
     assert symtab is not None, "missing embedded symbol table"
     symbol_offset, count, string_offset, string_size = symtab
-    matches = {name: [] for name in {*CONTRACTS, *SCRUB_BODIES, *LOCK_COPIES, *EVENT_OWNER_BODIES, SHARED_VTABLE, RESOURCE_VTABLE, "__ZTV18IOAccelDisplayPipe", "__ZTV24IOAccelLegacyDisplayPipe", "__ZTV19IOAccelCommandQueue", "__ZTV15IOAccelContext2", "__ZN19IOAccelCommandQueue20sCommandQueueMethodsE", "__ZN15IOAccelContext215sContextMethodsE", "__ZN19IOAccelCommandQueue16commandQueueStopEv", "__ZN19IOAccelCommandQueue11setPriorityE28eIOAccelCommandQueuePriority", "__ZTV16IOAccelMemoryMap", "__ZTV16IOAccelSysMemory", "__ZTV11IOAccelTask", "__ZTV24IOAccelSharedUserClient2",
+    matches = {name: [] for name in {*CONTRACTS, *SCRUB_BODIES, *LOCK_COPIES, *EVENT_OWNER_BODIES, SHARED_VTABLE, RESOURCE_VTABLE, "__ZTV18IOAccelDisplayPipe", "__ZTV24IOAccelLegacyDisplayPipe", "__ZTV19IOAccelCommandQueue", "__ZTV15IOAccelContext2", "__ZTV17IOAccel2DContext2", "__ZN19IOAccelCommandQueue20sCommandQueueMethodsE", "__ZN15IOAccelContext215sContextMethodsE", "__ZN17IOAccel2DContext217s2DContextMethodsE", "__ZN19IOAccelCommandQueue16commandQueueStopEv", "__ZN19IOAccelCommandQueue11setPriorityE28eIOAccelCommandQueuePriority", "__ZTV16IOAccelMemoryMap", "__ZTV16IOAccelSysMemory", "__ZTV11IOAccelTask", "__ZTV24IOAccelSharedUserClient2",
                                     "__ZTV13IOAccelMemory", "__ZTV22IOGraphicsAccelerator2",
                                     "__ZN22IOGraphicsAccelerator223freeWaitToPrepareVidMapEP16IOAccelMemoryMapbb",
                                     "__ZNK16IOAccelMemoryMap9getLengthEv",
@@ -1146,6 +1152,43 @@ def check(path, boot_path=None):
         "48 8b 03 48 89 df ff 90 e8 09 00 00"), \
         "changed legacy-context stop dispatch"
     print("PASS legacy-context external submit, pause/relock and stop serialization boundary")
+    two_d_vtable = address_of("__ZTV17IOAccel2DContext2")
+    for slot, method in (
+            (0x9e0, "__ZN17IOAccel2DContext212contextStartEv"),
+            (0x9e8, "__ZN17IOAccel2DContext211contextStopEv")):
+        raw = struct.unpack("<Q", read(two_d_vtable + 16 + slot, 8))[0]
+        assert raw >> 63 == 0 and (raw >> 30) & 3 == 1, \
+            "changed 2D-context lifecycle virtual encoding"
+        assert raw & 0x3fffffff == address_of(method), \
+            "changed 2D-context lifecycle virtual target"
+    two_d_methods = address_of("__ZN17IOAccel2DContext217s2DContextMethodsE")
+    assert hashlib.sha256(read(two_d_methods, 0x90)).hexdigest() == \
+        "d976b38686b08380b806836c3ce684ea690fa33454ebcaeda287018547787e16", \
+        "changed complete 2D-context external method table"
+    for selector, method, arguments in (
+            (0x100, "__ZN17IOAccel2DContext211set_surfaceEj23eIOAccelContextModeBits", (0, 0, 2, 0)),
+            (0x101, "__ZN17IOAccel2DContext26finishEj", (0, 0, 1, 0)),
+            (0x102, "__ZN17IOAccel2DContext24blitEP20IOAccel2DBlitCommandy", (0, 4, 0, 0xffffffff))):
+        entry = struct.unpack("<6Q", read(two_d_methods + (selector - 0x100) * 48, 48))
+        raw = entry[1]
+        assert entry[0] == 0 and raw >> 63 == 0 and (raw >> 30) & 3 == 1 and \
+            raw & 0x3fffffff == address_of(method), \
+            f"changed 2D-context selector {selector:#x} target"
+        assert entry[2:] == arguments, f"changed 2D-context selector {selector:#x} arguments"
+    for owner, length, locks, unlocks in (
+            ("__ZN17IOAccel2DContext211set_surfaceEj23eIOAccelContextModeBits", 0x338, [0x7f], [0x315]),
+            ("__ZN17IOAccel2DContext26finishEj", 0x158, [0x5a], [0xb0]),
+            ("__ZN17IOAccel2DContext24blitEP20IOAccel2DBlitCommandy", 0x7ae, [0x7c], [0x190, 0x1ff, 0x771])):
+        start = address_of(owner)
+        assert direct_branch_offsets(start, length, 0x14ba6da2) == locks, \
+            f"changed 2D-context busy-lock inventory: {owner}"
+        assert direct_branch_offsets(start, length, 0x14ba6db4) == unlocks, \
+            f"changed 2D-context busy-unlock inventory: {owner}"
+    two_d_blit = address_of("__ZN17IOAccel2DContext24blitEP20IOAccel2DBlitCommandy")
+    assert read(two_d_blit + 0x3eb, 6) == bytes.fromhex("ff 90 48 0b 00 00") and \
+        read(two_d_blit + 0x5bc, 6) == bytes.fromhex("ff 90 40 0b 00 00"), \
+        "changed 2D-context fill/copy virtual dispatch"
+    print("PASS 2D-context selectors, complete external bodies, lock scopes and producer dispatch")
     assert read(0x14b6abd9, 10) == bytes.fromhex("48 8d 05 30 79 06 00 48 89 03"), "changed pool allocator concrete vtable install"
     pool_init_pointer = struct.unpack("<Q", read(0x14bd2628, 8))[0]
     assert pool_init_pointer >> 63 == 0 and (pool_init_pointer >> 30) & 3 == 1, "changed pool init cache-level encoding"

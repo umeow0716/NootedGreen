@@ -43,6 +43,24 @@ STAMP_IRQ_NATIVE = {
     "__ZN31IGHardwarePerProcessPageTable6431getPageTableRootPhysicalAddressEPy": (0x20, "93122c3d3b36d35eb68786330a138b026db29a9bd24d533287dd739a8060643d"),
     "__ZN31IGHardwarePerProcessPageTable326expandE19GTTVirtualAddress32": (0x23e, "8b0e2172003ce89b7d08c603f55535e1c54d2c3d9380e53da00ad5ff83cde343"),
     "__ZN23IGAccelSharedUserClient11sharedStartEv": (0x40, "3ad72464337cc4e9fa4ac10461f44c34256cde6d1635212fc5cc34fe0fe510d1"),
+    "__ZN23IGAccelSharedUserClient26getTargetAndMethodForIndexEPP9IOServicej": (0x38, "3cd988b1daae8e631c913d8fa40e837e2d2e3a57b04e2ce4cdba581594505d28"),
+    "__ZN16IntelAccelerator12newGLContextEv": (0x18, "2abb41f7d0afbad36e959333ab500633d6e6fcd729938de59cce3eb50aff20d4"),
+    "__ZN16IntelAccelerator12newCLContextEv": (0x18, "31650267ac59c4fdc7e5836618f46ebde9dcb087f2d7e78839d39aeb626aa10b"),
+    "__ZN16IntelAccelerator12new2DContextEv": (0x18, "607d67a9d314f6ebb80cce99ba63a93e49644b548dd63f69ff8c65b6baf41e6b"),
+    "__ZN16IntelAccelerator15newVideoContextEv": (0x8, "5b1ee01dedea0fcb3ecce46b2207fda587d289c2e69a0afdb9d54f2595762f2e"),
+    "__ZN16IntelAccelerator10newContextEj": (0x50, "571ddffde200f64d5b0de2839894e7fd8386d7c35bdd6df764a0a3699fd39f35"),
+    "__ZN16IntelAccelerator15newCommandQueueEv": (0x18, "c655320edb4c511056ac0203f1e828cedad57cdd734aa3150b5f634455b1a0c5"),
+    "__ZN16IGAccel2DContext8blitCopyEP12IOAccelEventP16IOAccelResource2S3_P22IOAccel2DBlitRectStrucj": (0x590, "549572653be196cac080840c8bdc7a975cfd8f9c46f65648b34ed1468ff87c75"),
+    "__ZN16IGAccel2DContext8blitFillEP12IOAccelEventjP16IOAccelResource2P22IOAccel2DBlitRectStrucj": (0x47c, "c137a37afea690c5081625a346315f7fdcc3bc6d942443f31f2ede8a5284b1bb"),
+    "__ZN19IGAccelCommandQueue28processParallelCommandBufferEjj": (0x17c, "b0b678e83fd4c5f6b4db567d4c69090268ae4fda18b5c3e2197d19005f492e20"),
+    "__ZN19IGAccelCommandQueue20processCommandBufferEjj": (0xbe, "0691c14f0d32a6d3fc9457d1bbe1095c4c7330c6dcdd49527d532b77560a3126"),
+    "__ZN19IOAccelCommandQueue22canSubmitCommandBufferEv": (0x8, "aaa500a73706124bc5374dc27c8b444160b15dc8a45b0fef9354b23106b76348"),
+    "__ZN19IOAccelCommandQueue24pauseSubmitCommandBufferEv": (0x10, "af8ebb4771b221621272b4030cb6f3886bf615f2e7310e7d06f04b57a9bd7945"),
+    "__ZN16IGAccelCLContext18processDataBuffersEj": (0x108, "9908aa2fad69f6d138c6cfb88b7be24deea33a01d37b0ac38695d811dc0697d1"),
+    "__ZN16IGAccelGLContext18processDataBuffersEj": (0x13a, "2d286627eecb62e2d7abfcbb61b8bd457f6f4301415995c63a0fb92d05bdf065"),
+    "__ZN23IGAccelVideoContextMain18processDataBuffersEj": (0x146, "a0255cdf6017ff31cc9cb791ba8d08a016ed26145eef7030f6a8d4d628235acc"),
+    "__ZN24IGAccelVideoContextMedia18processDataBuffersEj": (0x114, "90f5ae50512695ada976c6799b70962b81b4109a7005daac6eeb15495f995281"),
+    "__ZN24IGAccelVideoContextVEBox18processDataBuffersEj": (0x114, "6ec0a8140445e9e92f2ab1ea8d75ad88e61911d0930b77691db192c1cabdab13"),
     "__ZN11IGAccelTask11withOptionsEP16IntelAccelerator": (0x48, "294990cf7ca14e27020ecc569064444b73504a32e841c0856acbdb568081f207"),
     "__ZN16IntelAccelerator19createKernelGPUTaskEv": (0xa, "30021915389fd196a6e879b21a175f135be03e009e385a325f9fc33595937ba6"),
     "__ZN16IntelAccelerator17createUserGPUTaskEv": (0x3c, "3ff9c8b607763de74cd8eccb7125f9a4abb7261a59fa48f2ef78dafeabbef377"),
@@ -1229,6 +1247,51 @@ def macho_inventory(path):
         encoded = bytes.fromhex(expected)
         assert image[address:address + len(encoded)] == encoded, \
             f"{path}: changed shared-user ICB blit owner/result anchor at {address:#x}"
+    shared_methods = value("__ZZN23IGAccelSharedUserClient11sharedStartEvE11methodDescs")
+    assert next_symbol(shared_methods) == shared_methods + 0x1b0 and \
+        hashlib.sha256(image[shared_methods:shared_methods + 0x1b0]).hexdigest() == \
+        "28c510734e47fb8be3867429f203ca8b919dccf185efea394a54503090675939", \
+        f"{path}: changed complete Intel shared-user method table"
+    shared_selectors = (
+        (20, "__ZN23IGAccelSharedUserClient13depth_resolveEPvy", (0, 4, 0, 0xffffffff)),
+        (21, "__ZN23IGAccelSharedUserClient13getMemoryInfoEP15IntelMemoryInfo", (0, 2, 0, 0x10)),
+        (22, "__ZN23IGAccelSharedUserClient13color_resolveEPvy", (0, 4, 0, 0xffffffff)),
+        (23, "__ZN23IGAccelSharedUserClient18telemetryOperationEP18TelemetryOperationS1_yPy", (0, 3, 0xffffffff, 0xffffffff)),
+        (24, "__ZN23IGAccelSharedUserClient21telemetryInitOABufferEP19MDAPIInitOABufferOpS1_yPy", (0, 3, 0xffffffff, 0xffffffff)),
+        (25, "__ZN23IGAccelSharedUserClient21telemetryReadOABufferEP21MDAPIReadOABufferOpInP22MDAPIReadOABufferOpOutyPy", (0, 3, 0xffffffff, 0xffffffff)),
+        (26, "__ZN23IGAccelSharedUserClient26telemetryMapOABufferMemoryEP27IntelDeviceMapStatsMemInOutS1_yPy", (0, 3, 0xffffffff, 0xffffffff)),
+        (27, "__ZN23IGAccelSharedUserClient13icbBufferBlitEPvy", (0, 4, 0, 0x68)),
+        (28, "__ZN23IGAccelSharedUserClient32setDeviceSettingsUserPreferencesEP25IntelSkuFeatureTableExRecS1_yPy", (0, 3, 0xffffffff, 0xffffffff)),
+    )
+    for selector, method, arguments in shared_selectors:
+        entry = struct.unpack_from("<6Q", image, shared_methods + (selector - 20) * 48)
+        assert entry[0] == 0 and entry[1] == value(method), \
+            f"{path}: changed Intel shared-user selector {selector} target"
+        assert entry[2:] == arguments, \
+            f"{path}: changed Intel shared-user selector {selector} arguments"
+    command_queue_vtable = value("__ZTV19IGAccelCommandQueue")
+    for slot, method in (
+            (0xa20, "__ZN19IGAccelCommandQueue20processCommandBufferEjj"),
+            (0xa28, "__ZN19IGAccelCommandQueue11setPriorityE28eIOAccelCommandQueuePriority"),
+            (0xa78, "__ZN19IOAccelCommandQueue22canSubmitCommandBufferEv"),
+            (0xa80, "__ZN19IOAccelCommandQueue24pauseSubmitCommandBufferEv")):
+        assert struct.unpack_from("<Q", image, command_queue_vtable + 16 + slot)[0] == value(method), \
+            f"{path}: changed Intel command-queue virtual target at {slot:#x}"
+    for table, method in (
+            ("__ZTV16IGAccelCLContext", "__ZN16IGAccelCLContext18processDataBuffersEj"),
+            ("__ZTV16IGAccelGLContext", "__ZN16IGAccelGLContext18processDataBuffersEj"),
+            ("__ZTV23IGAccelVideoContextMain", "__ZN23IGAccelVideoContextMain18processDataBuffersEj"),
+            ("__ZTV24IGAccelVideoContextMedia", "__ZN24IGAccelVideoContextMedia18processDataBuffersEj"),
+            ("__ZTV24IGAccelVideoContextVEBox", "__ZN24IGAccelVideoContextVEBox18processDataBuffersEj")):
+        assert struct.unpack_from("<Q", image, value(table) + 16 + 0xa28)[0] == value(method), \
+            f"{path}: changed concrete legacy-context processor: {table}"
+    two_d_vtable = value("__ZTV16IGAccel2DContext")
+    for slot, method in (
+            (0xb40, "__ZN16IGAccel2DContext8blitCopyEP12IOAccelEventP16IOAccelResource2S3_P22IOAccel2DBlitRectStrucj"),
+            (0xb48, "__ZN16IGAccel2DContext8blitFillEP12IOAccelEventjP16IOAccelResource2P22IOAccel2DBlitRectStrucj")):
+        assert struct.unpack_from("<Q", image, two_d_vtable + 16 + slot)[0] == value(method), \
+            f"{path}: changed concrete 2D-context producer at {slot:#x}"
+    print("PASS Intel shared selectors, context/queue factories and all concrete submit overrides")
     ccs_planes = "__ZN15IGAccelResource16submitCCSResolveEPNS_17ResourceInfoEntryER16IntelAcceleratorP11IGAccelTask20EIntelCCSResolveType"
     ccs_enable = "__ZN15IGAccelResource36enableRenderCompressionWithAccelTaskEPNS_17ResourceInfoEntryEyR16IntelAcceleratorP11IGAccelTaskhhb"
     assert direct_branches(ccs_planes, ccs_resource) == [0x740d8], f"{path}: changed per-plane CCS dispatch"

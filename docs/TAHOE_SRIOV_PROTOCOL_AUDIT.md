@@ -1,7 +1,7 @@
 # Tahoe SR-IOV protocol audit — in progress
 
 Updated: 2026-10-04. The last dynamic source baseline is `ce166c8`; the current
-offline-reviewed checkpoint is V285 external-producer admission inventory on
+offline-reviewed checkpoint is V286 2D/concrete-override inventory on
 `codex/tahoe-sriov-vf`. This is NOT a boot-test candidate or a successful
 driver baseline. The `ce166c8` run produced repeatable host PF DMAR faults
 followed by i915 hangs and a host reboot. Keep `macos-tahoe-sriov` shut off until the
@@ -73,6 +73,35 @@ around `contextStop`. The selector records, complete submit/start/stop/process
 bodies, context vtable slots and exact lock/dispatch offsets are now enforced.
 Consequently a command-queue-only gate would still leave legacy GL/media-style
 context submissions outside the shutdown drain.
+
+## V286 2D and concrete override inventory (offline)
+
+The inherited 2D interface is a fourth independent external family. Its exact
+three-entry table maps selectors `0x100`, `0x101` and `0x102` to complete
+`set_surface`, `finish` and `blit` bodies. All three use the accelerator at
+context `+0x5a8` under its mutex/busy domain. The `0x7ae`-byte blit body may
+release that domain to wait and re-enter, then dispatches vtable `+0xb40` or
+`+0xb48` while admitted. The Intel `IGAccel2DContext` binds those slots to the
+complete `blitCopy` and `blitFill` producers. This path does not enter command
+queue selector 1 or legacy data-buffer selector 2 and therefore requires its
+own outer admission bridge.
+
+The concrete Intel override inventory is now also pinned. Complete factories
+select `IGAccelCommandQueue`, 2D, GL, CL and main/media/VEBox video contexts;
+the corresponding vtables bind command processing, all five legacy
+`processDataBuffers` implementations and both 2D blitters. The inherited
+queue can-submit method still returns true and its pause method only sleeps,
+so these bindings do not create a native shutdown predicate.
+
+Finally, the complete Intel SharedUserClient method table contains exactly
+nine extra selectors `20..28`. Selectors 20, 22 and 27 are the already
+identified depth-resolve, color-resolve and ICB-blit producer roots; the other
+entries are memory information, telemetry and device settings. The table,
+range-mapping body and exact argument contracts are now enforced for both
+payloads. This closes the accelerator-specific selector/override inventory,
+not inherited base-client/surface methods, display/flip reachability, internal
+producers, counted admission or drain ordering. No production route, VM,
+PCI/sysfs or Host i915 state was changed.
 
 ## V284 legacy/PF-owned GPU producer containment (offline)
 
