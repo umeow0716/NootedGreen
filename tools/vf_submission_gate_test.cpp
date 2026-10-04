@@ -1,7 +1,9 @@
 #include "../NootedGreen/kern_vf_submission_gate.hpp"
 
 #include <cassert>
+#include <cstdint>
 #include <cstdio>
+#include <initializer_list>
 
 int main()
 {
@@ -69,5 +71,57 @@ int main()
 			++syntheticBootstrap;
 	}
 	assert(syntheticBootstrap == 1);
-	std::printf("PASS: 512 VF producer/consumer and 32 bootstrap-task admission states\n");
+
+	uint64_t ringCases = 0;
+	for (uint32_t ringBytes = 16; ringBytes <= 65536; ringBytes <<= 1) {
+		const uint32_t dwordCapacity = ringBytes / 4;
+		const uint32_t cursors[] = {0, 4, ringBytes / 2,
+		                            ringBytes >= 8 ? ringBytes - 8 : 0,
+		                            ringBytes - 4};
+		const uint32_t requests[] = {0, 1, 2, 7, 16,
+		                             dwordCapacity > 0 ? dwordCapacity - 1 : 0,
+		                             dwordCapacity, dwordCapacity + 1,
+		                             UINT32_MAX};
+		for (const auto cursor : cursors)
+		for (const auto requested : requests)
+		for (unsigned trailer = 0; trailer <= 1; ++trailer)
+		for (unsigned tlb = 0; tlb <= 1; ++tlb)
+		for (const uint32_t flush : {0U, 5U, 6U, 10U, 12U, 17U})
+		for (unsigned aux = 0; aux <= 1; ++aux) {
+			uint64_t dwords = requested + (trailer ? 4ULL : 1ULL);
+			if (tlb)
+				dwords += flush;
+			if (aux)
+				dwords += 3;
+			if (cursor & 7U)
+				dwords++;
+			dwords = (dwords + 1ULL) & ~1ULL;
+			const uint64_t bytes = dwords * 4ULL;
+			const bool geometry = cursor < ringBytes && (cursor & 3U) == 0;
+			const bool flushValid = (!tlb && flush == 0) ||
+				(tlb && flush > 0 && flush <= 16);
+			const bool expected = geometry && flushValid &&
+				bytes <= UINT32_MAX && bytes <= ringBytes - 8U;
+			const auto actual = NGVfSubmission::ringReservation(
+				requested, ringBytes, cursor, trailer != 0, tlb != 0,
+				flush, aux != 0);
+			assert(actual.valid == expected);
+			assert(actual.bytes == (expected ? static_cast<uint32_t>(bytes) : 0));
+			if (actual.valid) {
+				assert(NGVfSubmission::ringReservationSatisfied(
+					actual, actual.bytes, ringBytes));
+				if (actual.bytes)
+					assert(!NGVfSubmission::ringReservationSatisfied(
+						actual, actual.bytes - 1U, ringBytes));
+				assert(!NGVfSubmission::ringReservationSatisfied(
+					actual, ringBytes, ringBytes));
+			}
+			++ringCases;
+		}
+	}
+	for (const uint32_t badRing : {0U, 4U, 8U, 12U, 24U, 4095U})
+		assert(!NGVfSubmission::ringReservation(
+			1, badRing, 0, false, false, 0, false).valid);
+	std::printf("PASS: 512 VF producer/consumer, 32 bootstrap-task and %llu ring reservation states\n",
+	            static_cast<unsigned long long>(ringCases));
 }

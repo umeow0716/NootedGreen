@@ -2661,6 +2661,11 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			// task, mapping and native caller's ownership scope are still intact.
 			{"__ZN15IGMemoryManager26commitIntoPageTableForTaskEP11IGAccelTaskP16IGAccelMemoryMap",
 			 vfCommitPageTablesForTask, this->oVfCommitPageTablesForTask},
+			// Several native callers ignore a false reservation, while timeout
+			// recovery can return true without rechecking capacity. Validate the
+			// complete reservation before any common ring writer can run.
+			{"__ZN20IGHardwareRingBuffer12waitForSpaceEj",
+			 vfWaitForRingSpace, this->oVfWaitForRingSpace},
 
 			// Tahoe's aperture-resource path allocates a legacy hardware fence whose
 			// constructor and destructor both write the PF-owned 0x100000 fence
@@ -3806,6 +3811,78 @@ bool Gen11::vfCommitPageTablesForTask(void *that, void *task, void *mapping)
 	PANIC_COND(!rolledBack, "ngreen",
 		"VF partial page-table commit could not be rolled back safely");
 	return false;
+}
+
+static void *vfRingVirtual(void *ring, size_t byteOffset)
+{
+	if (!ring || (byteOffset % sizeof(mach_vm_address_t)) != 0)
+		return nullptr;
+	auto *vtable = *reinterpret_cast<mach_vm_address_t **>(ring);
+	if (!vtable)
+		return nullptr;
+	return reinterpret_cast<void *>(vtable[byteOffset / sizeof(mach_vm_address_t)]);
+}
+
+bool Gen11::vfWaitForRingSpace(void *that, uint32_t requestedDwords)
+{
+	PANIC_COND(!that || !callback->oVfWaitForRingSpace ||
+	           gVfIdentity != VfIdentity::Virtual || gVfSubmissionStopped ||
+	           gVfProtocolFault || !vfCanUseSleepingLock(),
+		"ngreen", "Invalid VF ring reservation admission");
+	auto *accelerator = getMember<void *>(that, 0x10);
+	const uint8_t engine = getMember<uint8_t>(that, 0x40);
+	const uint32_t cursor = getMember<uint32_t>(that, 0x64);
+	const uint32_t ringBytes = getMember<uint32_t>(that, 0x8C);
+	const uint32_t ringMask = getMember<uint32_t>(that, 0x90);
+	PANIC_COND(!accelerator || !getMember<void *>(that, 0x18) ||
+	           !getMember<void *>(that, 0x80) || engine >= 6 ||
+	           ringBytes < 16 || ringMask != ringBytes - 1U ||
+	           getMember<uint8_t>(that, 0x6D) != 0 ||
+	           getMember<uint8_t>(that, 0x6E) != 0,
+		"ngreen", "Malformed VF ring reservation state");
+
+	const uint64_t engineMask = 1ULL << engine;
+	const bool tlbPending =
+		(getMember<uint64_t>(accelerator, 0x1340) & engineMask) != 0;
+	const bool auxPending =
+		(getMember<uint64_t>(accelerator, 0x1380) & engineMask) != 0;
+	uint32_t flushTlbDwords = 0;
+	if (tlbPending) {
+		using GetFlushTLBSpace = uint32_t (*)(void *);
+		auto getFlushTLBSpace = reinterpret_cast<GetFlushTLBSpace>(
+			vfRingVirtual(that, 0x150));
+		PANIC_COND(!getFlushTLBSpace, "ngreen",
+			"Missing VF ring TLB reservation virtual");
+		flushTlbDwords = getFlushTLBSpace(that);
+		PANIC_COND(flushTlbDwords != 5 && flushTlbDwords != 6 &&
+		           flushTlbDwords != 10 && flushTlbDwords != 12,
+			"ngreen", "Unexpected VF ring TLB reservation size");
+	}
+	const bool extendedRenderTrailer = engine == 0 &&
+		(getMember<uint64_t>(accelerator, 0x1190) & (1ULL << 14)) != 0;
+	const auto reservation = NGVfSubmission::ringReservation(
+		requestedDwords, ringBytes, cursor, extendedRenderTrailer,
+		tlbPending, flushTlbDwords, auxPending);
+	PANIC_COND(!reservation.valid, "ngreen",
+		"Oversized or malformed VF ring reservation");
+
+	const bool nativeResult = FunctionCast(
+		vfWaitForRingSpace,
+		callback->oVfWaitForRingSpace)(that, requestedDwords);
+	const uint32_t available = getMember<uint32_t>(that, 0x88);
+	const uint32_t committedCursor = getMember<uint32_t>(that, 0x64);
+	PANIC_COND(!nativeResult ||
+	           getMember<void *>(that, 0x10) != accelerator ||
+	           getMember<uint8_t>(that, 0x40) != engine ||
+	           getMember<uint32_t>(that, 0x8C) != ringBytes ||
+	           getMember<uint32_t>(that, 0x90) != ringMask ||
+	           committedCursor >= ringBytes || (committedCursor & 3U) != 0 ||
+	           getMember<uint8_t>(that, 0x6D) != (tlbPending ? 1U : 0U) ||
+	           getMember<uint8_t>(that, 0x6E) != (auxPending ? 1U : 0U) ||
+	           !NGVfSubmission::ringReservationSatisfied(
+	               reservation, available, ringBytes),
+		"ngreen", "VF ring reservation returned without proven capacity");
+	return true;
 }
 
 static bool vfPpgttTaskHasNoDirectContexts(void *task)

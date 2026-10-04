@@ -1,12 +1,48 @@
 # Tahoe SR-IOV protocol audit — in progress
 
 Updated: 2026-10-04. The last dynamic source baseline is `ce166c8`; the current
-offline-reviewed checkpoint is V278 failed page-table commit rollback on
+offline-reviewed checkpoint is V279 VF ring reservation postcondition on
 `codex/tahoe-sriov-vf`. This is NOT a boot-test candidate or a successful
 driver baseline. The `ce166c8` run produced repeatable host PF DMAR faults
 followed by i915 hangs and a host reboot. Keep `macos-tahoe-sriov` shut off until the
 corrected code passes the remaining offline review and every independently
 enforced containment precondition.
+
+## V279 VF ring reservation postcondition (offline)
+
+Tahoe's complete/hash-pinned `IGHardwareRingBuffer::waitForSpace` computes a
+payload reservation plus its native trailer, pending TLB/AUX commands and
+qword alignment. Its timeout helper can reach scheduler diagnostics/recovery
+and return without re-evaluating the final predicate; `waitForSpace` then
+returns true. Several complete callers proceed directly into common writers,
+and `generateFlipWait` ignores both reservation results entirely. Returning a
+more truthful false alone would therefore leave unchecked writers unsafe.
+
+A classified VF now routes this single common boundary. Before native code,
+the wrapper validates the receiver, ring size/mask/cursor, engine ID, backing,
+sleepable context and absence of stale readiness. It calls the effective
+TLB-space virtual only when that engine has a pending TLB command; all six
+concrete ring vtables are now pinned to the reviewed base, Compute or Main
+reservation/emission pairs. A 64-bit pure calculation then includes the
+one-or-four-dword trailer, exact five/six/ten/twelve-dword TLB reservation,
+three AUX dwords, current-tail alignment and the native eight-byte ring guard.
+Malformed or oversized input cannot enter native 32-bit arithmetic.
+
+After native returns, the wrapper requires true, stable accelerator/engine/
+size/mask identity, an aligned in-range cursor, exact pending-command readiness
+and an available-byte count covering the computed reservation. Any timeout
+false-positive or native false fail-stops before `writeDWord`, `writeQWord` or
+`writeBuffer` can mutate CPU ring memory. The pure model covers 28,080
+geometry, boundary, feature and overflow states; six source mutations reject
+engine/readiness bypass, missing preflight, fabricated native success, missing
+capacity postcondition and route removal. Route inventory is 105 unique
+symbols (99 accelerator, three framebuffer, three System KC).
+
+This establishes the selected software capacity postcondition and leaves the
+successful writer hot path unchanged after reservation. It does not prove GPU
+head progress, actual command completion, arbitrary unreviewed concurrent
+writers or runtime DMA safety, and it does not relax the boot hold. No VM,
+PCI/sysfs or Host GPU operation accompanied this change.
 
 ## V278 failed multi-table page-table commit rollback (offline)
 
@@ -32,7 +68,7 @@ The two native non-short-circuit loops, their direct commit/release edges and
 complete bodies are binary contracts in both admitted payloads. Six source
 mutations reject a missing release resolution or route, inverted success
 condition, bypassed rollback, removed fail-stop and fabricated success. The
-inventory is now 104 unique routes (98 accelerator, three framebuffer, three
+inventory at V278 was 104 unique routes (98 accelerator, three framebuffer, three
 System KC). This closes the selected multi-segment and multi-address-space
 failed-prefix cleanup offline; it does not prove every outer-lock/asynchronous
 callback interaction or runtime DMA behavior and does not relax the boot hold.

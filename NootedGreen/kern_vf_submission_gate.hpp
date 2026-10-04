@@ -1,6 +1,8 @@
 #ifndef kern_vf_submission_gate_hpp
 #define kern_vf_submission_gate_hpp
 
+#include <stdint.h>
+
 namespace NGVfSubmission {
 
 struct State {
@@ -47,6 +49,53 @@ constexpr bool bootstrapKernelTask(bool nativeClassification,
 {
 	return nativeClassification ||
 		(virtualDevice && taskPresent && acceleratorPresent && !kernelTaskAssigned);
+}
+
+struct RingReservation {
+	bool valid;
+	uint32_t bytes;
+};
+
+// Tahoe reserves the caller payload plus a ring trailer, optional deferred
+// TLB/AUX commands and one alignment dword when the current tail is not
+// qword-aligned. Use 64-bit arithmetic so malformed requests cannot wrap the
+// native 32-bit calculation into an apparently small reservation.
+constexpr RingReservation ringReservation(uint32_t requestedDwords,
+	                                       uint32_t ringBytes,
+	                                       uint32_t cursor,
+	                                       bool extendedRenderTrailer,
+	                                       bool tlbPending,
+	                                       uint32_t flushTlbDwords,
+	                                       bool auxPending)
+{
+	if (ringBytes < 16 || (ringBytes & (ringBytes - 1U)) != 0 ||
+	    cursor >= ringBytes || (cursor & 3U) != 0 ||
+	    (!tlbPending && flushTlbDwords != 0) ||
+	    (tlbPending && (flushTlbDwords == 0 || flushTlbDwords > 16)))
+		return {false, 0};
+
+	uint64_t dwords = requestedDwords +
+		(extendedRenderTrailer ? 4ULL : 1ULL);
+	if (tlbPending)
+		dwords += flushTlbDwords;
+	if (auxPending)
+		dwords += 3;
+	if ((cursor & 7U) != 0)
+		dwords++;
+	dwords = (dwords + 1ULL) & ~1ULL;
+	const uint64_t bytes = dwords * sizeof(uint32_t);
+	if (bytes > UINT32_MAX || bytes > static_cast<uint64_t>(ringBytes - 8U))
+		return {false, 0};
+	return {true, static_cast<uint32_t>(bytes)};
+}
+
+constexpr bool ringReservationSatisfied(const RingReservation &reservation,
+	                                     uint32_t availableBytes,
+	                                     uint32_t ringBytes)
+{
+	return reservation.valid && ringBytes >= 8 &&
+		availableBytes <= ringBytes - 8U &&
+		availableBytes >= reservation.bytes;
 }
 
 } // namespace NGVfSubmission

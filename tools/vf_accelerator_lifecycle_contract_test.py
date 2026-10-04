@@ -1001,12 +1001,15 @@ def macho_inventory(path):
     assert image[0x4177c:0x41782] == bytes.fromhex("ff 90 50 01 00 00"), f"{path}: changed pending-TLB reservation virtual"
     assert image[0x41785:0x4178a] == bytes.fromhex("41 c6 46 6d 01"), f"{path}: changed pre-validation TLB readiness store"
     assert image[0x417b1:0x417b6] == bytes.fromhex("41 c6 46 6e 01"), f"{path}: changed pre-validation AUX readiness store"
-    for table, prefix in (
-            ("__ZTV20IGHardwareRingBuffer", "__ZN20IGHardwareRingBuffer"),
-            ("__ZTV27IGHardwareRingBufferCompute", "__ZN27IGHardwareRingBufferCompute"),
-            ("__ZTV24IGHardwareRingBufferMain", "__ZN24IGHardwareRingBufferMain")):
-        for slot, suffix in ((0x150, "16getFlushTLBSpaceEv"), (0x160, "13writeFlushTLBEv")):
-            assert struct.unpack_from("<Q", image, value(table) + 16 + slot)[0] == value(prefix + suffix), f"{path}: changed TLB reservation/emission pairing: {table}"
+    for table, getter, writer in (
+            ("__ZTV20IGHardwareRingBuffer", "__ZN20IGHardwareRingBuffer16getFlushTLBSpaceEv", "__ZN20IGHardwareRingBuffer13writeFlushTLBEv"),
+            ("__ZTV25IGHardwareRingBufferVEBox", "__ZN20IGHardwareRingBuffer16getFlushTLBSpaceEv", "__ZN20IGHardwareRingBuffer13writeFlushTLBEv"),
+            ("__ZTV24IGHardwareRingBufferBlit", "__ZN20IGHardwareRingBuffer16getFlushTLBSpaceEv", "__ZN20IGHardwareRingBuffer13writeFlushTLBEv"),
+            ("__ZTV25IGHardwareRingBufferMedia", "__ZN20IGHardwareRingBuffer16getFlushTLBSpaceEv", "__ZN20IGHardwareRingBuffer13writeFlushTLBEv"),
+            ("__ZTV27IGHardwareRingBufferCompute", "__ZN27IGHardwareRingBufferCompute16getFlushTLBSpaceEv", "__ZN27IGHardwareRingBufferCompute13writeFlushTLBEv"),
+            ("__ZTV24IGHardwareRingBufferMain", "__ZN24IGHardwareRingBufferMain16getFlushTLBSpaceEv", "__ZN24IGHardwareRingBufferMain13writeFlushTLBEv")):
+        assert struct.unpack_from("<Q", image, value(table) + 16 + 0x150)[0] == value(getter), f"{path}: changed TLB reservation pairing: {table}"
+        assert struct.unpack_from("<Q", image, value(table) + 16 + 0x160)[0] == value(writer), f"{path}: changed TLB emission pairing: {table}"
     assert image[0x41c70:0x41c76] == bytes.fromhex("ff 90 60 01 00 00"), f"{path}: changed pending-TLB virtual emission"
     assert direct_branches("__ZN20IGHardwareRingBuffer10writeDWordEj", "__ZN20IGHardwareRingBuffer16writeFlushAuxTLBEv") == [0x41cb5], f"{path}: changed pending AUX emission"
     for owner, calls in (
@@ -2588,6 +2591,78 @@ def ring_backing_submit_mutations(path):
     print("PASS: five ring backing/geometry guard mutations rejected (source contract, not DMA proof)")
 
 
+def ring_space_contract(source, path):
+    wrapper = function_body(
+        source, "bool Gen11::vfWaitForRingSpace(void *that,")
+    compact = "".join(wrapper.split())
+    required = (
+        "gVfIdentity!=VfIdentity::Virtual",
+        "gVfSubmissionStopped",
+        "gVfProtocolFault",
+        "engine>=6",
+        "getMember<uint8_t>(that,0x6D)!=0",
+        "getMember<uint8_t>(that,0x6E)!=0",
+        "vfRingVirtual(that,0x150)",
+        "flushTlbDwords!=5&&flushTlbDwords!=6&&",
+        "flushTlbDwords!=10&&flushTlbDwords!=12",
+        "NGVfSubmission::ringReservation(",
+        "PANIC_COND(!reservation.valid",
+        "callback->oVfWaitForRingSpace)(that,requestedDwords);",
+        "PANIC_COND(!nativeResult||",
+        "!NGVfSubmission::ringReservationSatisfied(",
+        "returntrue;",
+    )
+    for fragment in required:
+        if fragment not in compact:
+            raise AssertionError(f"{path}: incomplete VF ring-space contract: {fragment}")
+    reserve = compact.index("NGVfSubmission::ringReservation(")
+    native = compact.index(
+        "callback->oVfWaitForRingSpace)(that,requestedDwords);")
+    post = compact.index("!NGVfSubmission::ringReservationSatisfied(")
+    if not reserve < native < post < compact.rindex("returntrue;"):
+        raise AssertionError(f"{path}: VF ring-space proof does not enclose native wait")
+    route = ('{"__ZN20IGHardwareRingBuffer12waitForSpaceEj",'
+             'vfWaitForRingSpace,this->oVfWaitForRingSpace}')
+    if route not in "".join(source.split()):
+        raise AssertionError(f"{path}: missing exact VF ring-space route")
+
+
+def ring_space_mutations(path):
+    source = pathlib.Path(path).read_text()
+    wrapper = function_body(
+        source, "bool Gen11::vfWaitForRingSpace(void *that,")
+    route = ('\t\t\t{"__ZN20IGHardwareRingBuffer12waitForSpaceEj",\n'
+             '\t\t\t vfWaitForRingSpace, this->oVfWaitForRingSpace},\n')
+
+    def replace_once(body, before, after):
+        if body.count(before) != 1:
+            raise AssertionError(f"ambiguous ring-space mutation: {before}")
+        return body.replace(before, after, 1)
+
+    mutations = (
+        (wrapper, replace_once(wrapper, "engine >= 6", "false")),
+        (wrapper, replace_once(
+            wrapper, "getMember<uint8_t>(that, 0x6D) != 0", "false")),
+        (wrapper, replace_once(
+            wrapper, "PANIC_COND(!reservation.valid", "PANIC_COND(false")),
+        (wrapper, replace_once(
+            wrapper, "PANIC_COND(!nativeResult ||", "PANIC_COND(false ||")),
+        (wrapper, replace_once(
+            wrapper, "!NGVfSubmission::ringReservationSatisfied(",
+            "false && NGVfSubmission::ringReservationSatisfied(")),
+        (source, replace_once(source, route, "")),
+    )
+    for body, mutated_body in mutations:
+        changed = mutated_body if body == source else source.replace(
+            body, mutated_body, 1)
+        try:
+            ring_space_contract(changed, path)
+        except (AssertionError, ValueError):
+            continue
+        raise AssertionError(f"{path}: escaped VF ring-space mutation")
+    print("PASS: six VF ring-space admission/capacity mutations rejected (source contract, not runtime proof)")
+
+
 def g2h_event_transaction_contract(source, path):
     body = function_body(source, "bool Gen11::vfCtbGucToHostAction(void *that, uint32_t *message)")
     for token in ("explicit ConsumerTransaction(IOLock *value) : lock(value) { IOLockLock(lock); }",
@@ -2918,6 +2993,7 @@ def page_table_commit_rollback_mutations(path):
 def source_contract(path):
     source = pathlib.Path(path).read_text()
     ring_backing_submit_contract(source, path)
+    ring_space_contract(source, path)
     ppgtt_retirement_contract(source, path)
     ppgtt_final_free_contract(source, path)
     page_table_commit_rollback_contract(source, path)
@@ -3596,6 +3672,7 @@ def main():
     event_collection_admission_model()
     source_contract(sys.argv[1])
     ring_backing_submit_mutations(sys.argv[1])
+    ring_space_mutations(sys.argv[1])
     g2h_event_transaction_mutations(sys.argv[1])
     g2h_completion_lock_mutations(sys.argv[1])
     ppgtt_retirement_mutations(sys.argv[1])
