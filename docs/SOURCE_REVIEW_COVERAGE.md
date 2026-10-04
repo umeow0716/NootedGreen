@@ -10,6 +10,23 @@ The current dynamic-entry gate table is
 
 ## Scope
 
+2026-10-04 internal-producer delta: both Tahoe accelerator payloads now pin
+the complete direct-text caller sets for native FIFO stamp/commands/buffer,
+accelerator sync/main submit, ring stamp replay, DPSM kick, PAVP submission and
+telemetry sampling, together with selected complete owner hashes and the
+effective FIFO virtual receiver. PAVP callback, DisplaySleep callback and the
+conservatively independent `recognizeFlip -> telemetry sample` path are the
+three internal/control roots that P8 must admit or reject. Native-start
+PAVP/stamp calls are descendants of the whole-entry VF replacement; reset and
+legacy DPSM descendants remain behind existing IGGuC/Scheduler5 fences.
+GC/GuC/scheduler/DPSM timers and `finishAllStamps` are separated as
+retirement/notification paths by complete bodies and negative direct producer
+edges; their callback lifetime remains SG-09 work. P7 closes as inventory only;
+P8/P9 and SG-06–SG-11 still block runtime. Targeted contracts and full static
+pass at `/tmp/ngreen-static.Fd5vsu`; checkpoint `fa1dbae` and exact-sha GitHub
+Actions `37206711121` pass, with both artifacts present. No runtime or hardware
+state was changed.
+
 2026-10-04 DisplayPipe delta: the Tahoe paired-KC contract now pins the full
 fourteen-selector DisplayPipeUserClient table, all argument descriptors,
 complete wrapper/member bodies, pipe selection and exact mutex/busy scopes.

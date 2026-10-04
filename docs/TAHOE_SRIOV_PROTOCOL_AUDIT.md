@@ -1,7 +1,7 @@
 # Tahoe SR-IOV protocol audit — in progress
 
 Updated: 2026-10-04. The last dynamic source baseline is `ce166c8`; the current
-offline-reviewed worktree is V290 DisplayPipe producer/reachability inventory on
+offline-reviewed worktree is V291 internal-producer inventory on
 `codex/tahoe-sriov-vf`. This is NOT a boot-test candidate or a successful
 driver baseline. The `ce166c8` run produced repeatable host PF DMAR faults
 followed by i915 hangs and a host reboot. Keep `macos-tahoe-sriov` shut off until the
@@ -20,6 +20,40 @@ KVMFR/client transport remains the intended receiving side.
 The authoritative dynamic-entry checklist is
 [`DYNAMIC_TEST_GATE.md`](DYNAMIC_TEST_GATE.md). Any open static gate keeps the
 VM hard hold in force.
+
+## V291 internal producer and retirement partition (offline)
+
+Both Tahoe 25G229 Intel accelerator payloads now have an exact direct-text
+inventory for every retained target in the native FIFO/ring producer family:
+`submitStamp`, `submitRingCommands`, virtual `submitBuffer`, accelerator
+sync/main submit, ring stamp resubmit, DPSM kick, PAVP session submission and
+telemetry sampling. The contract also fixes every selected owner as a complete
+body hash and pins the effective FIFO `submitBuffer` vtable receiver.
+
+Three independent or conservative internal/control roots must therefore join
+P8 counted admission: the PAVP command callback, DisplaySleep callback and
+exported `recognizeFlip`, which has no direct in-image caller and tail-calls
+telemetry sample before main-ring submission. Native `startGraphicsEngine`
+contains one PAVP and three stamp descendants, but its complete entry is
+replaced on a classified VF. Reset replay and old DPSM-kick descendants remain
+behind the already enforced IGGuC/Scheduler5 legacy fences. The remaining
+telemetry, sync-event, context-stamp and Blit2D-initialize calls descend from
+previously inventoried external roots.
+
+The complete GC timer, GuC timer, scheduler periodic timer, Scheduler5 idle
+update and `finishAllStamps` bodies are also pinned. Selected timer/retirement
+bodies have negative direct edges to every known FIFO/ring/GuC submission
+target. They must remain outside the new-work close so stamp/event retirement
+can proceed. This is a direct-call partition, not an indirect-call, callback
+lifetime, DMA completion or drain proof; P8, P9 and SG-09 remain open.
+
+P7 is closed as `CLOSED-INVENTORY`. Targeted dual-payload and paired
+SystemKC/BootKC contracts pass, as does the full static suite at
+`/tmp/ngreen-static.Fd5vsu` with only the two known SDK macro warnings.
+Checkpoint `fa1dbae` is pushed; exact-sha GitHub Actions run `37206711121`
+passed full static, x86_64 release kext, Metal smoke and both artifact uploads
+in 1m40s. Artifact sizes are 73,946 and 2,943 bytes and neither is expired. No
+VM, deployment, PCI/sysfs, VF/PF or Host i915 state was touched.
 
 ## V290 DisplayPipe producer and reachability inventory (offline)
 
