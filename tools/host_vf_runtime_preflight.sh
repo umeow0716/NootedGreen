@@ -19,7 +19,7 @@ readonly pf_bdf="0000:00:02.0"
 readonly vf_bdf="0000:00:02.1"
 readonly expected_vendor="0x8086"
 readonly expected_device="0xa7a8"
-readonly trigger_pattern='(DMAR|IOMMU).*(00:02\.0|0000:00:02\.0).*(fault|Fault)|(fault|Fault).*(DMAR|IOMMU).*(00:02\.0|0000:00:02\.0)|i915.*(GPU HANG|reset[^[:cntrl:]]*(timed out|timeout)|fence[^[:cntrl:]]*(timed out|timeout)|GuC[^[:cntrl:]]*(timed out|timeout)|VF[^[:cntrl:]]*pause[^[:cntrl:]]*(timed out|timeout))'
+readonly trigger_pattern='(DMAR|IOMMU).*(00:02\.0|0000:00:02\.0).*(fault|Fault)|(fault|Fault).*(DMAR|IOMMU).*(00:02\.0|0000:00:02\.0)|i915.*(Atomic update failure on pipe|GPU HANG|reset[^[:cntrl:]]*(timed out|timeout)|fence[^[:cntrl:]]*(timed out|timeout)|GuC[^[:cntrl:]]*(timed out|timeout)|VF[^[:cntrl:]]*pause[^[:cntrl:]]*(timed out|timeout))'
 
 failures=0
 
@@ -226,7 +226,10 @@ if ((EUID == 0)); then
 	else
 		fail "kernel journal returned no authoritative current-boot evidence"
 	fi
-	if journalctl -k -b --no-pager -o cat 2>/dev/null | grep -Eiq "$trigger_pattern"; then
+	# Do not use grep -q here.  With pipefail, an early grep exit can give
+	# journalctl SIGPIPE and invert a real match into a false-negative result.
+	if journalctl -k -b --no-pager -o cat 2>/dev/null |
+		grep -Ei "$trigger_pattern" >/dev/null; then
 		fail "current boot already contains a VF-test containment trigger"
 	else
 		pass "current boot contains no configured PF DMAR/i915 containment trigger"

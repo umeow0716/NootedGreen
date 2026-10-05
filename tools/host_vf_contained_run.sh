@@ -22,7 +22,7 @@ readonly evidence_root="/var/log/macos-vf-tests"
 readonly max_runtime_seconds=45
 readonly cooldown_seconds=20
 readonly service_runtime_seconds=120
-readonly trigger_pattern='(DMAR|IOMMU).*(00:02\.0|0000:00:02\.0).*(fault|Fault)|(fault|Fault).*(DMAR|IOMMU).*(00:02\.0|0000:00:02\.0)|i915.*(GPU HANG|reset[^[:cntrl:]]*(timed out|timeout)|fence[^[:cntrl:]]*(timed out|timeout)|GuC[^[:cntrl:]]*(timed out|timeout)|VF[^[:cntrl:]]*pause[^[:cntrl:]]*(timed out|timeout))'
+readonly trigger_pattern='(DMAR|IOMMU).*(00:02\.0|0000:00:02\.0).*(fault|Fault)|(fault|Fault).*(DMAR|IOMMU).*(00:02\.0|0000:00:02\.0)|i915.*(Atomic update failure on pipe|GPU HANG|reset[^[:cntrl:]]*(timed out|timeout)|fence[^[:cntrl:]]*(timed out|timeout)|GuC[^[:cntrl:]]*(timed out|timeout)|VF[^[:cntrl:]]*pause[^[:cntrl:]]*(timed out|timeout))'
 readonly script_path="$(readlink -f "$0")"
 readonly script_dir="$(dirname "$script_path")"
 readonly preflight_path="${script_dir}/host_vf_runtime_preflight.sh"
@@ -103,7 +103,7 @@ start_kernel_watch() {
 	(
 		while IFS= read -r line; do
 			printf '%s\n' "$line" >> "${evidence_dir}/kernel-follow.log"
-			if printf '%s\n' "$line" | grep -Eiq "$trigger_pattern"; then
+			if grep -Eiq "$trigger_pattern" <<< "$line"; then
 				printf '%s\n' "$line" > "${evidence_dir}/kernel.trigger"
 				bounded_destroy "$evidence_dir" "kernel-trigger"
 				exit 0

@@ -25,11 +25,30 @@ def shell_body(text: str) -> str:
     )
 
 
+def trigger_pattern(text: str) -> str:
+    match = re.search(r"^readonly trigger_pattern='([^']+)'$", text, re.MULTILINE)
+    if not match:
+        raise AssertionError("missing single-quoted containment trigger pattern")
+    return match.group(1)
+
+
+def grep_matches(pattern: str, line: str) -> bool:
+    result = subprocess.run(
+        ["grep", "-Eiq", pattern], input=line, text=True,
+        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+    )
+    if result.returncode not in (0, 1):
+        raise AssertionError(f"invalid containment trigger ERE: {result.stderr}")
+    return result.returncode == 0
+
+
 def main() -> None:
     preflight = PREFLIGHT.read_text()
     runner = RUNNER.read_text()
     preflight_body = shell_body(preflight)
     runner_body = shell_body(runner)
+    preflight_trigger = trigger_pattern(preflight)
+    runner_trigger = trigger_pattern(runner)
 
     for path in (PREFLIGHT, RUNNER):
         subprocess.run(["bash", "-n", str(path)], check=True)
@@ -74,6 +93,30 @@ def main() -> None:
             "exclusive active VF ownership gate")
     require(preflight, "journalctl -k -b", "current-boot journal gate")
     require(preflight, '((EUID == 0))', "root journal gate")
+    require(preflight, 'grep -Ei "$trigger_pattern" >/dev/null',
+            "pipefail-safe whole-journal trigger scan")
+    if re.search(r"journalctl[^\n]*\|\s*grep\s+[^\n]*q", preflight_body):
+        raise AssertionError("journal preflight uses early-exit grep under pipefail")
+
+    if preflight_trigger != runner_trigger:
+        raise AssertionError("preflight and runtime watcher trigger patterns differ")
+    trigger_examples = (
+        "i915 0000:00:02.0: [drm] *ERROR* Atomic update failure on pipe A",
+        "i915 0000:00:02.0: [drm] *ERROR* GPU HANG: ecode 12:1",
+        "i915 0000:00:02.0: GuC reset timed out",
+        "DMAR: [DMA Read NO_PASID] device [00:02.0] fault addr 0x1000",
+    )
+    for line in trigger_examples:
+        if not grep_matches(runner_trigger, line):
+            raise AssertionError(f"containment pattern misses: {line}")
+    non_trigger_examples = (
+        "i915 0000:00:02.0: VF1 FLR",
+        "amdgpu 0000:03:00.0: Atomic update failure on pipe A",
+        "DMAR: device [00:14.0] fault addr 0x1000",
+    )
+    for line in non_trigger_examples:
+        if grep_matches(runner_trigger, line):
+            raise AssertionError(f"containment pattern is overbroad: {line}")
 
     if runner.count('virsh -c "$libvirt_uri" start "$domain_name"') != 1:
         raise AssertionError("runner must contain exactly one exact-domain start")
@@ -97,6 +140,8 @@ def main() -> None:
     require(runner, "export LC_ALL=C", "locale-independent controller")
     require(runner, 'readonly cooldown_seconds=20', "fixed cooldown")
     require(runner, "journalctl -k -f -n0", "new-message kernel watcher")
+    require(runner, 'grep -Eiq "$trigger_pattern" <<< "$line"',
+            "pipefail-safe per-line trigger scan")
     require(runner, "systemd-inhibit --what=sleep", "sleep inhibitor")
     require(runner, "--arm-exactly-one-contained-run", "explicit arm token")
     require(runner, 'python3 -B "$manifest_verifier"', "immutable manifest gate")

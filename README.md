@@ -16,8 +16,10 @@ memory interrupt and direct-LRCA transport.
 **Work in progress.** Historical physical-RPL testing reached the login screen
 and exercised the accelerator, but those Sonoma results do not validate the
 current Tahoe SR-IOV VF path. This branch has passed its offline protocol,
-sanitizer, analyzer and remote build gates; controlled VF boot validation is
-still intentionally blocked by the incomplete source/lifetime audit.
+sanitizer, analyzer and remote build gates. The exact Tahoe V308 image has also
+loaded in no-VF boots and completed contained idle VF enumeration. Deliberate
+TGL accelerator startup and Metal submission remain blocked by a host-display
+warning gate described below.
 
 The former global DYLD/shared-cache mutation, unversioned CoreDisplay control-
 flow stubs, CoreLSKD path, ICL Metal ID bypass and GPU-bundle path redirect have
@@ -107,9 +109,21 @@ inherit runtime claims from the older Sonoma/Raptor Lake display experiments.
   framebuffer path and does not acquire a display engine from it.
 - Static analyzers and exhaustive host-side protocol models pass. This is not a
   Metal, media, DMA-quiescence or display validation result.
-- The Tahoe VM remains off until the active route and byte-patch audit has no
-  open safety blocker. Runtime results will be recorded only after a controlled
-  boot against the pinned payload.
+- Three exact-artifact contained VF attachment runs enumerated the assigned
+  Raptor Lake VF and exercised no Metal workload. Two of those three runs
+  produced an i915 `Atomic update failure on pipe A` immediately after the
+  start-time VF FLRs; the attempted TGL start-only run never reached SSH, so it
+  did not start TGL and is not acceleration evidence.
+- The host preflight rejects any boot that already contains that display-atomic
+  message, and the live watcher treats a new occurrence as an immediate
+  containment trigger. The whole-journal scan deliberately avoids early-exit
+  `grep` under `pipefail`, which could otherwise turn a real match into a false
+  negative through `journalctl` SIGPIPE. Ordinary successful `VF1 FLR` notices
+  alone do not trip the gate.
+- The Tahoe VM remains off until the host i915 VF-FLR/display interaction has a
+  source-grounded disposition. Any later runtime result must come from the
+  manifest-pinned one-shot controller with its watcher and deadline already
+  live before QEMU starts.
 
 ## Requirements
 
