@@ -51,6 +51,7 @@ def main() -> None:
             raise AssertionError(f"runner contains forbidden host mutation: {forbidden}")
 
     require(preflight, 'readonly domain_name="macos-tahoe-sriov"', "exact domain")
+    require(preflight, "export LC_ALL=C", "locale-independent preflight")
     require(preflight, 'readonly pf_bdf="0000:00:02.0"', "exact PF")
     require(preflight, 'readonly vf_bdf="0000:00:02.1"', "exact VF")
     require(preflight, "on_poweroff == destroy", "poweroff one-shot check")
@@ -93,6 +94,7 @@ def main() -> None:
         raise AssertionError("public preflight must precede transient service creation")
 
     require(runner, 'readonly max_runtime_seconds=45', "fixed short deadline")
+    require(runner, "export LC_ALL=C", "locale-independent controller")
     require(runner, 'readonly cooldown_seconds=20', "fixed cooldown")
     require(runner, "journalctl -k -f -n0", "new-message kernel watcher")
     require(runner, "systemd-inhibit --what=sleep", "sleep inhibitor")
@@ -102,6 +104,12 @@ def main() -> None:
         raise AssertionError("manifest must be verified before and inside the systemd service")
     require(runner, '[[ $(driver_name "$pf_bdf") != i915', "PF postflight")
     require(runner, '$(driver_name "$vf_bdf") != vfio-pci', "VF postflight")
+    require(runner, "printf -v cleanup_trap 'cleanup %q %q'",
+            "scope-independent cleanup trap arguments")
+    require(runner, 'bounded_destroy "$cleanup_evidence_dir" "controller-exit"',
+            "scope-independent cleanup evidence path")
+    require(runner, 'stop_deadline "$cleanup_deadline_unit"',
+            "scope-independent cleanup deadline unit")
 
     print("PASS: fail-closed host VF preflight/containment source contract")
 

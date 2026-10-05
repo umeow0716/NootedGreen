@@ -6,6 +6,13 @@
 
 set -euo pipefail
 
+# libvirt localizes state strings (for example, `shut off`).  This gate is
+# also rerun inside a root systemd service, whose locale may differ from the
+# invoking user's locale.  Pin command output before making exact comparisons.
+export LC_ALL=C
+export LANG=C
+export LANGUAGE=C
+
 readonly domain_name="macos-tahoe-sriov"
 readonly libvirt_uri="qemu:///system"
 readonly pf_bdf="0000:00:02.0"

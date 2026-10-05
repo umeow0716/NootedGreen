@@ -8,6 +8,12 @@
 
 set -euo pipefail
 
+# Keep every exact command-output comparison stable when the controller moves
+# from the invoking user's environment into a root systemd service.
+export LC_ALL=C
+export LANG=C
+export LANGUAGE=C
+
 readonly domain_name="macos-tahoe-sriov"
 readonly libvirt_uri="qemu:///system"
 readonly pf_bdf="0000:00:02.0"
@@ -167,6 +173,7 @@ internal_run_mode() {
 	local manifest_path="${evidence_dir}/runtime-manifest.tsv"
 	local deadline_unit="${guard_unit}-deadline"
 	local run_failed=0
+	local cleanup_trap=""
 	journal_pid=""
 	watcher_pid=""
 	require_root
@@ -178,16 +185,19 @@ internal_run_mode() {
 
 	cleanup() {
 		local status=$?
+		local cleanup_evidence_dir=$1
+		local cleanup_deadline_unit=$2
 		trap - EXIT INT TERM
 		if [[ $(domain_state) != "shut off" ]]; then
-			bounded_destroy "$evidence_dir" "controller-exit" || status=1
+			bounded_destroy "$cleanup_evidence_dir" "controller-exit" || status=1
 		fi
-		stop_deadline "$deadline_unit"
+		stop_deadline "$cleanup_deadline_unit"
 		if [[ -n $watcher_pid ]]; then kill "$watcher_pid" 2>/dev/null || true; fi
 		if [[ -n $journal_pid ]]; then kill "$journal_pid" 2>/dev/null || true; fi
 		exit "$status"
 	}
-	trap cleanup EXIT INT TERM
+	printf -v cleanup_trap 'cleanup %q %q' "$evidence_dir" "$deadline_unit"
+	trap "$cleanup_trap" EXIT INT TERM
 
 	log_line "$evidence_dir" "BEGIN one-shot contained VF run"
 	"$preflight_path" >> "${evidence_dir}/preflight.log" 2>&1
