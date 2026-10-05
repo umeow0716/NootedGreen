@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 # This digest covers the sorted, NUL-delimited path inventory, not file
 # contents. Git commit identity already fixes contents; this independent guard
 # prevents a new, removed or renamed path from silently escaping SG-11 review.
-EXPECTED_PATH_DIGEST = "5aeb97c1f95d383b82ab1458135bb0e33ddb7279c9b1dd504ba8c62f8d6de3e0"
+EXPECTED_PATH_DIGEST = "a202c31ed34ba3cd2a345dc4b47bde832a87a3268b9cb2f9d1eb854c8ef0b043"
 EXPECTED_TOP_LEVEL_COUNTS = {
     ".github": 1,
     ".gitignore": 1,
@@ -31,7 +31,7 @@ EXPECTED_TOP_LEVEL_COUNTS = {
     "Release alias": 1,
     "docs": 5,
     "sle_Internal": 109,
-    "tools": 68,
+    "tools": 70,
 }
 
 EXPECTED_DEPENDENCY_DIGEST = (
@@ -112,6 +112,7 @@ INDIRECT_OR_EXTERNAL_PROGRAMS = {
     "tools/host_vf_contained_run.sh": "source-contracted guarded host controller",
     "tools/host_vf_runtime_manifest.py": "imported by manifest mutation test",
     "tools/host_vf_runtime_preflight.sh": "source-contracted read-only preflight",
+    "tools/host_vf_trace_analyzer.py": "executed by trace analyzer test and guarded host controller",
     "tools/linux_mmio_mapper/GhidraMMIOExport.py": "Ghidra-only; AST parsed offline",
     "tools/linux_mmio_mapper/batch_map_kexts.py": "imported by mapper harness",
     "tools/linux_mmio_mapper/confirm_with_linux_source.py": "imported/executed by mapper harness",
@@ -371,7 +372,7 @@ def verify_tool_ledger(paths):
         path for path in paths
         if path.startswith("tools/") and Path(path).suffix in program_suffixes
     }
-    assert len(programs) == 62, f"tool program count changed: {len(programs)}"
+    assert len(programs) == 64, f"tool program count changed: {len(programs)}"
 
     check_static = (ROOT / "tools/check-static.sh").read_text(encoding="utf-8")
     workflow = (ROOT / ".github/workflows/build-kext.yml").read_text(

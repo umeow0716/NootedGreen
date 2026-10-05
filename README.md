@@ -120,6 +120,13 @@ inherit runtime claims from the older Sonoma/Raptor Lake display experiments.
   `grep` under `pipefail`, which could otherwise turn a real match into a false
   negative through `journalctl` SIGPIPE. Ordinary successful `VF1 FLR` notices
   alone do not trip the gate.
+- A future clean-boot run must also start a private tracefs instance before
+  QEMU. It records the PF FLR worker, VF GGTT ownership rewrite and the pipe A
+  vblank-evade boundaries with a monotonic clock. The post-run analyzer pairs
+  every evaded/end frame and fails the run if the frame counter changes or the
+  capture is incomplete. A two-second no-VF probe captured 289 complete pipe A
+  updates with zero mismatches (p95 4 us, maximum 6 us), removed only its
+  private instance and left the global tracer at `nop`.
 - The Tahoe VM remains off until the host i915 VF-FLR/display interaction has a
   source-grounded disposition. Any later runtime result must come from the
   manifest-pinned one-shot controller with its watcher and deadline already

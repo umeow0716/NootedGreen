@@ -95,6 +95,18 @@ def main() -> None:
     require(preflight, '((EUID == 0))', "root journal gate")
     require(preflight, 'grep -Ei "$trigger_pattern" >/dev/null',
             "pipefail-safe whole-journal trigger scan")
+    require(preflight, 'readonly tracefs_root="/sys/kernel/tracing"',
+            "exact tracefs root")
+    require(preflight, '"${tracefs_root}/available_filter_functions"',
+            "read-only ftrace function inventory")
+    for trace_name in (
+        "pf_state_worker_func",
+        "i915_ggtt_set_space_owner",
+        "intel_pipe_update_start",
+        "intel_pipe_update_end",
+        "intel_pipe_update_vblank_evaded",
+    ):
+        require(preflight, trace_name, f"preflight trace capability {trace_name}")
     if re.search(r"journalctl[^\n]*\|\s*grep\s+[^\n]*q", preflight_body):
         raise AssertionError("journal preflight uses early-exit grep under pipefail")
 
@@ -125,10 +137,14 @@ def main() -> None:
 
     internal = runner[require(runner, "internal_run_mode()", "internal controller"):]
     watch = require(internal, 'start_kernel_watch "$evidence_dir"', "watcher start")
+    trace = require(internal, 'start_trace_capture "$evidence_dir" "$guard_unit"',
+                    "ftrace capture start")
     deadline = require(internal, 'schedule_deadline "$evidence_dir"', "deadline start")
     start = require(internal, 'virsh -c "$libvirt_uri" start "$domain_name"', "VM start")
-    if not watch < deadline < start:
-        raise AssertionError("watcher and independent deadline must precede VM start")
+    if not watch < trace < deadline < start:
+        raise AssertionError(
+            "watcher, private ftrace capture and independent deadline must precede VM start"
+        )
 
     arm = runner[require(runner, "arm_mode()", "public arm mode"):]
     preflight_call = require(arm, '"$preflight_path"', "public preflight")
@@ -140,6 +156,54 @@ def main() -> None:
     require(runner, "export LC_ALL=C", "locale-independent controller")
     require(runner, 'readonly cooldown_seconds=20', "fixed cooldown")
     require(runner, "journalctl -k -f -n0", "new-message kernel watcher")
+    require(runner, 'readonly tracefs_root="/sys/kernel/tracing"',
+            "private tracefs root")
+    require(runner, 'printf \'%s\\n\' mono > "${trace_instance}/trace_clock"',
+            "monotonic trace clock")
+    trace_capture = runner[
+        require(runner, "start_trace_capture()", "trace capture function"):
+        require(runner, "postflight()", "postflight function")
+    ]
+    trace_create = require(trace_capture, 'mkdir "$trace_instance"',
+                           "private trace instance creation")
+    trace_initial_stop = require(
+        trace_capture,
+        'printf \'%s\\n\' 0 > "${trace_instance}/tracing_on"',
+        "trace disabled before configuration",
+    )
+    trace_start = require(
+        trace_capture,
+        'printf \'%s\\n\' 1 > "${trace_instance}/tracing_on"',
+        "explicit trace start",
+    )
+    if not trace_create < trace_initial_stop < trace_start:
+        raise AssertionError("private trace must be stopped while it is configured")
+    require(runner, 'printf \'%s\\n\' function_graph > "${trace_instance}/current_tracer"',
+            "function graph tracer")
+    require(runner, 'printf \'%s\\n\' 1 > "${trace_instance}/options/funcgraph-proc"',
+            "task-aware function graph")
+    require(runner, 'cat "${trace_instance}/trace_pipe" > "${evidence_dir}/host-ftrace.log" &',
+            "streaming trace collector")
+    require(runner, 'grep -Fq "NG_VF_TRACE_BEGIN"',
+            "trace collector liveness marker")
+    require(runner, 'grep -Fq "NG_VF_TRACE_END"',
+            "trace collector completion marker")
+    require(runner, '((end_marker_seen == 1)) || failed=1',
+            "trace completion marker fail-closed gate")
+    require(runner, '! kill -0 "$trace_pid"',
+            "live trace collector health gate")
+    require(runner, 'rmdir -- "$trace_instance"',
+            "exact private trace instance cleanup")
+    if "rm -rf" in runner:
+        raise AssertionError("trace capture must not recursively remove tracefs state")
+    for trace_name in (
+        "pf_state_worker_func",
+        "i915_ggtt_set_space_owner",
+        "intel_pipe_update_start",
+        "intel_pipe_update_end",
+        "intel_pipe_update_vblank_evaded",
+    ):
+        require(runner, trace_name, f"runtime trace coverage {trace_name}")
     require(runner, 'grep -Eiq "$trigger_pattern" <<< "$line"',
             "pipefail-safe per-line trigger scan")
     require(runner, "systemd-inhibit --what=sleep", "sleep inhibitor")
@@ -155,6 +219,21 @@ def main() -> None:
             "scope-independent cleanup evidence path")
     require(runner, 'stop_deadline "$cleanup_deadline_unit"',
             "scope-independent cleanup deadline unit")
+    require(runner, 'stop_trace_capture "$cleanup_evidence_dir" || status=1',
+            "scope-independent trace cleanup")
+    trace_stop = require(internal, 'stop_trace_capture "$evidence_dir"',
+                         "normal trace stop")
+    trace_analyze = require(
+        internal,
+        'python3 -B "$trace_analyzer" --require-vf-flr',
+        "post-capture trace analysis",
+    )
+    postflight = require(internal, 'postflight "$evidence_dir"', "postflight")
+    if not trace_stop < trace_analyze < postflight:
+        raise AssertionError("trace must stop and be analyzed before postflight")
+    require(runner, '[[ -x $trace_analyzer ]]', "executable trace analyzer gate")
+    require(runner, 'sha256sum "$script_path" "$preflight_path" "$trace_analyzer"',
+            "trace analyzer evidence identity")
 
     print("PASS: fail-closed host VF preflight/containment source contract")
 

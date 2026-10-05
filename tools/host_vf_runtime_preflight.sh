@@ -17,6 +17,7 @@ readonly domain_name="macos-tahoe-sriov"
 readonly libvirt_uri="qemu:///system"
 readonly pf_bdf="0000:00:02.0"
 readonly vf_bdf="0000:00:02.1"
+readonly tracefs_root="/sys/kernel/tracing"
 readonly expected_vendor="0x8086"
 readonly expected_device="0xa7a8"
 readonly trigger_pattern='(DMAR|IOMMU).*(00:02\.0|0000:00:02\.0).*(fault|Fault)|(fault|Fault).*(DMAR|IOMMU).*(00:02\.0|0000:00:02\.0)|i915.*(Atomic update failure on pipe|GPU HANG|reset[^[:cntrl:]]*(timed out|timeout)|fence[^[:cntrl:]]*(timed out|timeout)|GuC[^[:cntrl:]]*(timed out|timeout)|VF[^[:cntrl:]]*pause[^[:cntrl:]]*(timed out|timeout))'
@@ -70,6 +71,35 @@ fi
 for command_name in virsh xmllint journalctl systemd-inhibit readlink basename pgrep grep qemu-img; do
 	need_command "$command_name"
 done
+
+if [[ -r ${tracefs_root}/available_tracers && -r ${tracefs_root}/available_filter_functions &&
+      -d ${tracefs_root}/instances ]]; then
+	available_tracers=$(read_one_line "${tracefs_root}/available_tracers")
+	if [[ " ${available_tracers} " == *" function_graph "* ]]; then
+		pass "private function_graph tracing is available"
+	else
+		fail "function_graph tracer is unavailable"
+	fi
+	for trace_function in pf_state_worker_func i915_ggtt_set_space_owner \
+		intel_pipe_update_start intel_pipe_update_end; do
+		if grep -Eq "^${trace_function}( \\[i915\\])?$" \
+			"${tracefs_root}/available_filter_functions"; then
+			pass "ftrace function available: ${trace_function}"
+		else
+			fail "ftrace function unavailable: ${trace_function}"
+		fi
+	done
+	for trace_event in intel_pipe_update_start intel_pipe_update_vblank_evaded \
+		intel_pipe_update_end; do
+		if [[ -r ${tracefs_root}/events/i915/${trace_event}/format ]]; then
+			pass "i915 tracepoint available: ${trace_event}"
+		else
+			fail "i915 tracepoint unavailable: ${trace_event}"
+		fi
+	done
+else
+	fail "private tracefs instance capability is unavailable"
+fi
 
 if ((EUID == 0)); then
 	pass "running as root for authoritative kernel-journal access"

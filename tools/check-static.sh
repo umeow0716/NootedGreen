@@ -116,6 +116,11 @@ if python3 -B tools/host_vf_containment_contract_test.py; then
 else
     failed=1
 fi
+if python3 -B tools/host_vf_trace_analyzer_test.py; then
+    printf 'PASS offline host VF trace-analysis contracts\n'
+else
+    failed=1
+fi
 if python3 -B tools/host_vf_runtime_manifest_test.py; then
     printf 'PASS offline host VF runtime-manifest contracts\n'
 else

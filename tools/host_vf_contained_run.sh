@@ -19,6 +19,7 @@ readonly libvirt_uri="qemu:///system"
 readonly pf_bdf="0000:00:02.0"
 readonly vf_bdf="0000:00:02.1"
 readonly evidence_root="/var/log/macos-vf-tests"
+readonly tracefs_root="/sys/kernel/tracing"
 readonly max_runtime_seconds=45
 readonly cooldown_seconds=20
 readonly service_runtime_seconds=120
@@ -27,6 +28,7 @@ readonly script_path="$(readlink -f "$0")"
 readonly script_dir="$(dirname "$script_path")"
 readonly preflight_path="${script_dir}/host_vf_runtime_preflight.sh"
 readonly manifest_verifier="${script_dir}/host_vf_runtime_manifest.py"
+readonly trace_analyzer="${script_dir}/host_vf_trace_analyzer.py"
 
 usage() {
 	printf 'This command is dangerous and is not authorized by a passing preflight alone.\n' >&2
@@ -135,6 +137,121 @@ stop_deadline() {
 	systemctl stop "${deadline_unit}.timer" >/dev/null 2>&1 || true
 }
 
+stop_trace_capture() {
+	local evidence_dir=$1
+	local failed=0
+	local end_marker_seen=0
+	local instance_removed=0
+
+	if [[ -z ${trace_instance:-} ]]; then
+		return 0
+	fi
+	if [[ ! $trace_instance =~ ^/sys/kernel/tracing/instances/ng_vf_[0-9]{8}T[0-9]{6}Z$ ]]; then
+		log_line "$evidence_dir" "FAIL refusing to clean unexpected trace instance ${trace_instance}"
+		return 1
+	fi
+
+	if [[ -d $trace_instance ]]; then
+		if [[ -n ${trace_pid:-} ]]; then
+			if kill -0 "$trace_pid" 2>/dev/null; then
+				printf '%s\n' "NG_VF_TRACE_END" > "${trace_instance}/trace_marker" || failed=1
+				for ((attempt = 0; attempt < 20; attempt++)); do
+					if grep -Fq "NG_VF_TRACE_END" "${evidence_dir}/host-ftrace.log" 2>/dev/null; then
+						end_marker_seen=1
+						break
+					fi
+					sleep 0.05
+				done
+				((end_marker_seen == 1)) || failed=1
+			else
+				failed=1
+			fi
+		fi
+		printf '%s\n' 0 > "${trace_instance}/tracing_on" || failed=1
+		if [[ -n ${trace_pid:-} ]]; then
+			kill "$trace_pid" 2>/dev/null || true
+			wait "$trace_pid" 2>/dev/null || true
+		fi
+		printf '%s\n' nop > "${trace_instance}/current_tracer" || failed=1
+		if rmdir -- "$trace_instance"; then
+			instance_removed=1
+		else
+			failed=1
+		fi
+	else
+		instance_removed=1
+	fi
+
+	trace_pid=""
+	if ((instance_removed == 1)); then
+		trace_instance=""
+	fi
+	if ((failed != 0)); then
+		log_line "$evidence_dir" "FAIL host ftrace capture cleanup was incomplete"
+		return 1
+	fi
+	log_line "$evidence_dir" "PASS host ftrace capture stopped and private instance removed"
+}
+
+start_trace_capture() {
+	local evidence_dir=$1
+	local guard_unit=$2
+	local trace_name="ng_vf_${guard_unit#macos-vf-guard-}"
+	local event expected
+
+	trace_instance="${tracefs_root}/instances/${trace_name}"
+	[[ $trace_instance =~ ^/sys/kernel/tracing/instances/ng_vf_[0-9]{8}T[0-9]{6}Z$ ]]
+	[[ -d ${tracefs_root}/instances && ! -e $trace_instance ]]
+	mkdir "$trace_instance"
+
+	printf '%s\n' 0 > "${trace_instance}/tracing_on"
+	printf '%s\n' mono > "${trace_instance}/trace_clock"
+	printf '%s\n' 1 > "${trace_instance}/options/funcgraph-abstime"
+	printf '%s\n' 1 > "${trace_instance}/options/funcgraph-duration"
+	printf '%s\n' 1 > "${trace_instance}/options/funcgraph-proc"
+	printf '%s\n' \
+		pf_state_worker_func \
+		i915_ggtt_set_space_owner \
+		intel_pipe_update_start \
+		intel_pipe_update_end \
+		> "${trace_instance}/set_ftrace_filter"
+	for expected in pf_state_worker_func i915_ggtt_set_space_owner \
+		intel_pipe_update_start intel_pipe_update_end; do
+		grep -Eq "^${expected}( \\[i915\\])?$" "${trace_instance}/set_ftrace_filter"
+	done
+	printf '%s\n' function_graph > "${trace_instance}/current_tracer"
+	for event in intel_pipe_update_start intel_pipe_update_vblank_evaded \
+		intel_pipe_update_end; do
+		[[ -f ${trace_instance}/events/i915/${event}/enable ]]
+		printf '%s\n' 1 > "${trace_instance}/events/i915/${event}/enable"
+	done
+	: > "${trace_instance}/trace"
+	{
+		printf 'trace_clock='; cat "${trace_instance}/trace_clock"
+		printf 'current_tracer='; cat "${trace_instance}/current_tracer"
+		printf '%s\n' 'set_ftrace_filter:'
+		cat "${trace_instance}/set_ftrace_filter"
+		printf '%s\n' 'enabled_events:'
+		cat "${trace_instance}/set_event"
+	} > "${evidence_dir}/host-ftrace-config.txt"
+
+	cat "${trace_instance}/trace_pipe" > "${evidence_dir}/host-ftrace.log" &
+	trace_pid=$!
+	sleep 0.25
+	kill -0 "$trace_pid"
+	printf '%s\n' 1 > "${trace_instance}/tracing_on"
+	printf '%s\n' "NG_VF_TRACE_BEGIN" > "${trace_instance}/trace_marker"
+	for ((attempt = 0; attempt < 20; attempt++)); do
+		if grep -Fq "NG_VF_TRACE_BEGIN" "${evidence_dir}/host-ftrace.log" 2>/dev/null; then
+			log_line "$evidence_dir" "PASS private host ftrace capture is live"
+			return 0
+		fi
+		sleep 0.05
+	done
+	log_line "$evidence_dir" "FAIL host ftrace collector did not record its start marker"
+	return 1
+}
+
 postflight() {
 	local evidence_dir=$1
 	local failures=0
@@ -176,6 +293,8 @@ internal_run_mode() {
 	local cleanup_trap=""
 	journal_pid=""
 	watcher_pid=""
+	trace_instance=""
+	trace_pid=""
 	require_root
 	if ! validate_evidence_dir "$evidence_dir" || [[ ! -d $evidence_dir ]] ||
 	   [[ ! $guard_unit =~ ^macos-vf-guard-[0-9]{8}T[0-9]{6}Z$ ]]; then
@@ -194,6 +313,7 @@ internal_run_mode() {
 		stop_deadline "$cleanup_deadline_unit"
 		if [[ -n $watcher_pid ]]; then kill "$watcher_pid" 2>/dev/null || true; fi
 		if [[ -n $journal_pid ]]; then kill "$journal_pid" 2>/dev/null || true; fi
+		stop_trace_capture "$cleanup_evidence_dir" || status=1
 		exit "$status"
 	}
 	printf -v cleanup_trap 'cleanup %q %q' "$evidence_dir" "$deadline_unit"
@@ -206,10 +326,11 @@ internal_run_mode() {
 	python3 -B "$manifest_verifier" "$manifest_path" "${script_dir}/.." \
 		"${evidence_dir}/domain-recheck.xml" >> "${evidence_dir}/manifest-recheck.log" 2>&1
 	start_kernel_watch "$evidence_dir"
+	start_trace_capture "$evidence_dir" "$guard_unit"
 	schedule_deadline "$evidence_dir" "$deadline_unit"
 
-	# This is the only VM start in the controller. Both independent safety
-	# channels above must already be live before this line is reachable.
+	# This is the only VM start in the controller. The kernel watcher, private
+	# trace collector and independent deadline must all be live first.
 	if ! virsh -c "$libvirt_uri" start "$domain_name" \
 		>>"${evidence_dir}/virsh-start.log" 2>&1; then
 		log_line "$evidence_dir" "FAIL one-shot domain start returned failure"
@@ -229,9 +350,10 @@ internal_run_mode() {
 			run_failed=1
 			break
 		fi
-		if ! kill -0 "$watcher_pid" 2>/dev/null || ! kill -0 "$journal_pid" 2>/dev/null; then
-			log_line "$evidence_dir" "FAIL kernel watcher exited while VM was live"
-			bounded_destroy "$evidence_dir" "watcher-exit" || true
+		if ! kill -0 "$watcher_pid" 2>/dev/null || ! kill -0 "$journal_pid" 2>/dev/null ||
+		   ! kill -0 "$trace_pid" 2>/dev/null; then
+			log_line "$evidence_dir" "FAIL kernel watcher or ftrace collector exited while VM was live"
+			bounded_destroy "$evidence_dir" "observer-exit" || true
 			run_failed=1
 			break
 		fi
@@ -243,6 +365,17 @@ internal_run_mode() {
 	for ((second = 0; second < cooldown_seconds; second++)); do
 		sleep 1
 	done
+	if ! stop_trace_capture "$evidence_dir"; then
+		run_failed=1
+	fi
+	if python3 -B "$trace_analyzer" --require-vf-flr \
+		"${evidence_dir}/host-ftrace.log" \
+		> "${evidence_dir}/host-ftrace-analysis.txt" 2>&1; then
+		log_line "$evidence_dir" "PASS host ftrace analysis completed without a crossed vblank"
+	else
+		log_line "$evidence_dir" "FAIL host ftrace analysis rejected the run"
+		run_failed=1
+	fi
 	if ! postflight "$evidence_dir"; then
 		run_failed=1
 	fi
@@ -258,7 +391,7 @@ arm_mode() {
 	require_root
 	for command_name in systemd-run systemctl systemd-inhibit virsh journalctl \
 		timeout flock lspci python3 readlink dirname tee date grep mkfifo sleep \
-		sha256sum git install mktemp rm pgrep basename; do
+		sha256sum git install mktemp rm pgrep basename cat mkdir rmdir kill; do
 		command -v "$command_name" >/dev/null 2>&1 || {
 			printf 'FAIL: missing command %s\n' "$command_name" >&2
 			exit 1
@@ -270,6 +403,10 @@ arm_mode() {
 	}
 	[[ -x $manifest_verifier ]] || {
 		printf 'FAIL: manifest verifier is not executable: %s\n' "$manifest_verifier" >&2
+		exit 1
+	}
+	[[ -x $trace_analyzer ]] || {
+		printf 'FAIL: trace analyzer is not executable: %s\n' "$trace_analyzer" >&2
 		exit 1
 	}
 	[[ $manifest_path = /* && -f $manifest_path && ! -L $manifest_path ]] || {
@@ -299,7 +436,7 @@ arm_mode() {
 		printf 'max_runtime_seconds=%s\n' "$max_runtime_seconds"
 		printf 'cooldown_seconds=%s\n' "$cooldown_seconds"
 		printf 'source_commit=%s\n' "$(git -C "${script_dir}/.." rev-parse HEAD)"
-		sha256sum "$script_path" "$preflight_path"
+		sha256sum "$script_path" "$preflight_path" "$trace_analyzer"
 	} > "${evidence_dir}/manifest.txt"
 
 	systemd-run --unit="$guard_unit" --description="Contained macOS Intel VF validation" \
