@@ -41,6 +41,13 @@ NAMED_CLOSE = NORMAL.replace(
     " 1.000060 | 5) kworker-42 | 50.000 us | }\n",
     " 1.000060 | 5) kworker-42 | 50.000 us | } /* pf_state_worker_func [i915] */\n",
 )
+RENAMED_CONTEXT = NAMED_CLOSE.replace(
+    " 1.000010 | 1) kworker-42 | pf_state_worker_func [i915]() {\n",
+    " 1.000010 | 1) <...>-42   | pf_state_worker_func [i915]() {\n",
+).replace(
+    " 1.000020 | 3) kworker-42 | i915_ggtt_set_space_owner [i915]() {\n",
+    " 1.000020 | 3) <...>-42   | i915_ggtt_set_space_owner [i915]() {\n",
+)
 UNTERMINATED_FUNCTION = NAMED_CLOSE.replace(
     " 1.000040 | 4) kworker-42 | 20.000 us | } /* i915_ggtt_set_space_owner [i915] */\n",
     "",
@@ -97,6 +104,14 @@ def main() -> None:
     named_close = ANALYZER.analyze_text(NAMED_CLOSE, require_vf_flr=True)
     assert not named_close.issues
     assert [interval.name for interval in named_close.function_intervals] == [
+        "i915_ggtt_set_space_owner", "pf_state_worker_func",
+    ]
+
+    renamed_context = ANALYZER.analyze_text(
+        RENAMED_CONTEXT, require_vf_flr=True
+    )
+    assert not renamed_context.issues
+    assert [interval.name for interval in renamed_context.function_intervals] == [
         "i915_ggtt_set_space_owner", "pf_state_worker_func",
     ]
 

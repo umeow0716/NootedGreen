@@ -14,6 +14,7 @@ LINE = re.compile(
     r"^\s*(?P<time>[0-9]+\.[0-9]+)\s+\|\s*(?P<cpu>[0-9]+)\)"
     r"\s+(?:(?P<task>\S+)\s+)?\|"
 )
+TASK_PID = re.compile(r"-(?P<pid>[0-9]+)$")
 EVENT = re.compile(
     r"/\* intel_pipe_update_(?P<kind>vblank_evaded|end): .*"
     r"pipe (?P<pipe>[A-Z]), frame=(?P<frame>[0-9]+), "
@@ -84,7 +85,15 @@ def analyze_text(text: str, require_vf_flr: bool = False) -> Analysis:
             continue
         timestamp = Decimal(prefix.group("time"))
         cpu = int(prefix.group("cpu"))
-        context = prefix.group("task") or f"cpu:{cpu}"
+        task = prefix.group("task")
+        if task:
+            task_pid = TASK_PID.search(task)
+            context = (
+                f"pid:{task_pid.group('pid')}"
+                if task_pid else f"task:{task}"
+            )
+        else:
+            context = f"cpu:{cpu}"
 
         event = EVENT.search(line)
         if event:
