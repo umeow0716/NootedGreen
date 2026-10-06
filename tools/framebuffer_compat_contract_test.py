@@ -1,12 +1,32 @@
 #!/usr/bin/env python3
 """Validate the pinned TGL framebuffer compatibility-provider ABI."""
 
+import os
 import plistlib
 import re
+import shlex
+import shutil
 import struct
 import subprocess
 import sys
 from pathlib import Path
+
+
+def macho_nm_command():
+    configured = os.environ.get("NM")
+    if configured:
+        result = shlex.split(configured)
+        assert result, "empty NM command"
+        return result
+    candidates = ["llvm-nm"] + [
+        f"llvm-nm-{version}" for version in range(22, 13, -1)
+    ]
+    candidates.append("nm")
+    for candidate in candidates:
+        path = shutil.which(candidate)
+        if path:
+            return [path]
+    raise AssertionError("no nm implementation found")
 
 
 BASE_METHODS = {
@@ -30,7 +50,10 @@ COMMON_METHODS = {
 def nm_symbols(path: Path, undefined: bool) -> set[str]:
     flags = ["-u"] if undefined else ["-g"]
     output = subprocess.run(
-        ["nm", *flags, str(path)], check=True, capture_output=True, text=True
+        [*macho_nm_command(), *flags, str(path)],
+        check=True,
+        capture_output=True,
+        text=True,
     ).stdout
     symbols = set()
     for line in output.splitlines():

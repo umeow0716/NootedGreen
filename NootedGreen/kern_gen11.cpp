@@ -3244,6 +3244,14 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			// Apple's lifecycle calls away from PF-owned registers; final stop still
 			// performs explicit direct-LRCA and DMA quiescence below.
 			{"__ZN16IntelAccelerator19startGraphicsEngineEv", startGraphicsEngine},
+			// Tahoe's headless bridge registers its PCI MSI source before the
+			// scheduler and HWS mappings exist. IOPCIFamily registration also
+			// enables PCI bus mastering. Defer only that source construction to
+			// the routed engine-start boundary, while retaining the bridge object
+			// now so native scheduler callback ownership remains unchanged.
+			{"__ZN17IGInterruptBridge32createFilterInterruptEventSourceEv",
+			 vfDeferFilterInterruptEventSource,
+			 this->oVfCreateFilterInterruptEventSource},
 			{"__ZN11IGScheduler6createEP16IntelAccelerator", vfCreateScheduler,
 			 this->originalSchedulerCreate},
 			// Scheduler type is already locked to 4 before the native dispatcher,
@@ -6012,6 +6020,33 @@ uint32_t Gen11::vfRejectDynamicInterruptRead(void *bridge, uint32_t identity,
 	return 0;
 }
 
+bool Gen11::vfDeferFilterInterruptEventSource(void *that)
+{
+	if (!callback || !callback->oVfCreateFilterInterruptEventSource || !that) {
+		vfMarkProtocolFault("missing VF local interrupt-source factory");
+		return false;
+	}
+
+	// MTL/ARL use a separately provisioned memory-IRQ transport. Preserve their
+	// existing source-registration point; V311 is restricted to the Gen11
+	// virtual-MMIO path observed on TGL/ADL/RPL media-12 VFs.
+	if (gVfUsesMemoryIrq)
+		return FunctionCast(vfDeferFilterInterruptEventSource,
+		                    callback->oVfCreateFilterInterruptEventSource)(that);
+
+	// initInterruptBridge has not published the bridge globally yet. Its native
+	// free() explicitly accepts a null +0x20 source, so returning success here
+	// preserves rollback ownership without opening MSI or PCI bus mastering.
+	if (getMember<uint8_t>(that, 0x8AA) != 0 ||
+	    getMember<void *>(that, 0x20) != nullptr) {
+		vfMarkProtocolFault("VF local interrupt source was already published before HWS");
+		return false;
+	}
+	OSSynchronizeIO();
+	SYSLOG("ngreen", "V311: deferred Gen11 VF MSI source and bus-master transition until HWS readiness");
+	return true;
+}
+
 bool Gen11::startGraphicsEngine(void *that)
 {
 	// This replacement is installed only for a classified VF. Ring power,
@@ -6024,6 +6059,7 @@ bool Gen11::startGraphicsEngine(void *that)
 	if (!that || !callback || !callback->vfSchedulerInitFirmware ||
 	    !callback->vfInterruptBridgeEnable ||
 	    !callback->vfInterruptBridgeDisable ||
+	    !callback->oVfCreateFilterInterruptEventSource ||
 	    !callback->ioGraphicsEnableAccelerator ||
 	    !callback->ioAccelEventMachineInitEvent) {
 		vfMarkProtocolFault("VF engine start before accelerator lifecycle is ready");
@@ -6046,6 +6082,69 @@ bool Gen11::startGraphicsEngine(void *that)
 	if (!interruptBridge) {
 		vfMarkProtocolFault("missing VF interrupt bridge during engine start");
 		return false;
+	}
+
+	if (!gVfUsesMemoryIrq) {
+		// Reaching this routed call proves native start successfully constructed
+		// the scheduler, stats/telemetry objects and every HWS mapped buffer. Do
+		// not rely on the call order alone: validate all six pinned engine HWS
+		// mappings and the global HWS mapping before the IOPCIFamily factory can
+		// turn on PCI bus mastering.
+		if (getMember<uint8_t>(interruptBridge, 0x8AA) != 0 ||
+		    getMember<void *>(interruptBridge, 0x20) != nullptr ||
+		    !callback->vfSharedMappedBufferGetVirtualAddress ||
+		    !callback->vfMappedBufferGetGPUVirtualAddress ||
+		    (getMember<uint64_t>(that, 0x1300) & 0x3FULL) != 0x3FULL) {
+			vfMarkProtocolFault("VF deferred interrupt source reached an incomplete HWS boundary");
+			return false;
+		}
+		using CpuAddress = uint8_t *(*)(void *);
+		using GpuAddress = uint64_t (*)(void *);
+		auto getCpu = reinterpret_cast<CpuAddress>(
+			callback->vfSharedMappedBufferGetVirtualAddress);
+		auto getGpu = reinterpret_cast<GpuAddress>(
+			callback->vfMappedBufferGetGPUVirtualAddress);
+		auto mappedHws = [&](OSObject *backing) {
+			if (!backing || !getMember<void *>(backing, 0x30))
+				return false;
+			return NGGgtt::mappedBacking(
+				reinterpret_cast<uintptr_t>(getCpu(backing)),
+				getMember<uint64_t>(backing, kVfMappedBufferLengthOffset),
+				PAGE_SIZE, getGpu(backing), gVfGGTTBase, gVfGGTTSize,
+				kGucGgttTop);
+		};
+		for (size_t index = 0; index < 6; index++) {
+			if (!mappedHws(getMember<OSObject *>(that, 0x1408 + index * 8))) {
+				vfMarkProtocolFault("VF engine HWS mapping incomplete before bus mastering");
+				return false;
+			}
+		}
+		if (!mappedHws(getMember<OSObject *>(that, 0x1438))) {
+			vfMarkProtocolFault("VF global HWS mapping incomplete before bus mastering");
+			return false;
+		}
+
+		auto *provider = OSDynamicCast(
+			IOPCIDevice, static_cast<IOService *>(that)->getProvider());
+		if (!provider ||
+		    (provider->configRead16(kIOPCIConfigCommand) &
+		     kIOPCICommandBusMaster) != 0) {
+			vfMarkProtocolFault("VF PCI bus mastering escaped the deferred HWS boundary");
+			return false;
+		}
+		using CreateFilterSource = bool (*)(void *);
+		const bool sourceCreated =
+			reinterpret_cast<CreateFilterSource>(
+				callback->oVfCreateFilterInterruptEventSource)(interruptBridge);
+		OSSynchronizeIO();
+		if (!sourceCreated ||
+		    getMember<void *>(interruptBridge, 0x20) == nullptr ||
+		    (provider->configRead16(kIOPCIConfigCommand) &
+		     kIOPCICommandBusMaster) == 0) {
+			vfMarkProtocolFault("VF deferred MSI source did not establish its bus-master boundary");
+			return false;
+		}
+		SYSLOG("ngreen", "V311: created Gen11 VF MSI source after validating all HWS mappings");
 	}
 	using LifecycleMethod = void (*)(void *);
 	// A VF has to admit its MSI consumer before CTB enable. Unlike the physical

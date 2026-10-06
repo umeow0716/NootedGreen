@@ -8,12 +8,30 @@ from pathlib import Path
 import plistlib
 import re
 import shlex
+import shutil
 import struct
 import subprocess
 import tempfile
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def macho_nm_command():
+    configured = os.environ.get("NM")
+    if configured:
+        result = shlex.split(configured)
+        assert result, "empty NM command"
+        return result
+    candidates = ["llvm-nm"] + [
+        f"llvm-nm-{version}" for version in range(22, 13, -1)
+    ]
+    candidates.append("nm")
+    for candidate in candidates:
+        path = shutil.which(candidate)
+        if path:
+            return [path]
+    raise AssertionError("no nm implementation found")
 
 # This digest covers the sorted, NUL-delimited path inventory, not file
 # contents. Git commit identity already fixes contents; this independent guard
@@ -90,18 +108,18 @@ EXPECTED_DIRECT_VENDOR_INCLUDES = {
     "MacKernelSDK/Headers/string.h",
 }
 EXPECTED_PRODUCT_SYMBOL_COUNTS = {
-    "undefined": 79,
-    "defined": 619,
-    "external": 68,
+    "undefined": 80,
+    "defined": 621,
+    "external": 69,
 }
 EXPECTED_PRODUCT_SYMBOL_DIGESTS = {
-    "undefined": "1919ce9f6d1f99b6a37f3d05bf97afc38191db4f4e6ba4bd652c3a7ae0abbc74",
-    "defined": "a83106ef8e29bdb1ba16f049cc7fdd92f4cd95d9aa982a88218015abd9b4f917",
-    "external": "44ac8354090f6b913faf496c390a182a00d40b22659aeb18bc37c4cb227ef87b",
+    "undefined": "ef4db32a81690fba34f75525418d6966d9d9a3fd874b16ca1c71448698fbc94d",
+    "defined": "c321743731e6870f1f542b533021ec2d572725efde822424453368354969c7de",
+    "external": "338d33f99d48dab47a7c7a2640c5f09c7ff711979713d158ef22f65f0086bff7",
 }
 EXPECTED_EXTERNAL_ABI_PARTITIONS = {
     "Lilu": (16, "c826042ab195d1496195d180c6b4edf01160cdb5158e43e2f4a6d51eb56eee1a"),
-    "kernel": (52, "a0f32756161f88a451f8445ece2f197aec2cf9a3434af4b0d41acc233b3fbaad"),
+    "kernel": (53, "6af786a2fcefc5c7d89a2c6219e46f0f5f35e9d75733f296f3c3f8f962cc4625"),
 }
 
 # These programs require an execution environment deliberately absent from the
@@ -230,8 +248,8 @@ def direct_vendor_includes():
 
 def product_symbol_surface():
     compiler = shlex.split(os.environ.get("CXX", "clang++"))
-    nm = shlex.split(os.environ.get("NM", "nm"))
-    assert compiler and nm, "empty CXX or NM command"
+    nm = macho_nm_command()
+    assert compiler, "empty CXX command"
     common = [
         "--target=x86_64-apple-macos13", "-std=c++14", "-c",
         "-ffreestanding", "-fno-builtin", "-fno-exceptions", "-fno-rtti",
@@ -492,7 +510,7 @@ def verify_product_ownership():
     method_names = set(re.findall(
         r"\bGen11::([A-Za-z_][A-Za-z0-9_]*)\s*\(", gen11_cpp
     ))
-    assert len(method_names) == 161, (
+    assert len(method_names) == 162, (
         f"Gen11 definition inventory changed: {len(method_names)}"
     )
     for name in method_names:
@@ -505,7 +523,7 @@ def verify_product_ownership():
     route_fields = re.findall(
         r"\bmach_vm_address_t\s+([A-Za-z_][A-Za-z0-9_]*)\s*\{", gen11_header
     )
-    assert len(route_fields) == 95, (
+    assert len(route_fields) == 96, (
         f"Gen11 route/original field inventory changed: {len(route_fields)}"
     )
     for name in route_fields:

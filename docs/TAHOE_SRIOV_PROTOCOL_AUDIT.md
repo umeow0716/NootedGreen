@@ -1,14 +1,16 @@
 # Tahoe SR-IOV protocol audit — in progress
 
-Updated: 2026-10-07. The latest dynamic controller baseline is `1fb1610`; the
-loaded driver product came from `aaf58c9`. The V309 90-second start-only run
-loaded the exact Tahoe TGL executable but produced three host PF `00:02.0`
-DMAR writes to address zero before routed `startGraphicsEngine()` was reached.
-The current offline worktree is the V310 pre-MSI interrupt-reset correction on
-`codex/tahoe-sriov-vf`. It is NOT a boot-test candidate or a successful driver
-baseline. Keep `macos-tahoe-sriov` shut off until V310 passes the complete
-offline/CI/build provenance gates and the host has rebooted to a journal with
-no pre-existing containment trigger.
+Updated: 2026-10-07. The last deployed driver is exact V310 commit
+`2eff6da12362e9f7067091da98b9859afcd40c6a`, CI `37505970500`, executable
+UUID `E288091F-4FE1-3532-A983-DF354CC4707A`. Its only 90-second contained
+start completed the Gen11 IRQ reset but produced a host PF `00:02.0` DMA write
+to address zero before routed scheduler creation. The current offline worktree
+is V311 on `codex/tahoe-sriov-vf`: it defers the local filter-source and PCI Bus
+Master transition until all native HWS mappings exist. It has a complete local
+static pass at `/tmp/ngreen-static.RUrIPh`, but is NOT yet a boot-test candidate
+or successful driver baseline. Keep `macos-tahoe-sriov` shut off until V311 has
+a clean pushed exact-SHA CI/artifact, exact deployment/runtime provenance, and
+a rebooted Host journal with no pre-existing containment trigger.
 
 The user's final display target is now Looking Glass, not Sunshine/Moonlight.
 Older Sunshine references below are historical review notes. No macOS Tahoe
@@ -23,22 +25,21 @@ The authoritative dynamic-entry checklist is
 [`DYNAMIC_TEST_GATE.md`](DYNAMIC_TEST_GATE.md). Any open static gate keeps the
 VM hard hold in force.
 
-## V309 incident and V310 pre-MSI interrupt reset (offline)
+## V310 incident and V311 deferred Bus Master boundary (offline)
 
-- The immutable V309 run is preserved under
-  `build/diagnostics/v309-tgl-start-90s-20261006T165049Z` in the VM workspace.
-  `kmutil --load-style start-only` returned success and loaded TGL UUID
-  `BA3AA1C0-FE6B-33B3-9D85-73F848394E3D`. NootedGreen completed VF identity,
-  GuC ABI, PF runtime topology, quotas, direct GGTT, 70 symbol routes, PCI MSI
-  allocation and native HWCAPS. No Metal or media command was submitted.
-- Roughly three seconds later, the host recorded PF requester `00:02.0` DMA
-  writes to address zero at monotonic `1723.100176`, `1723.108121` and
-  `1723.112099`; the independent watcher destroyed the VM. The guest never
-  logged V251's routed `startGraphicsEngine()` entry, so CTB/engine submission
-  had not started. This localizes the first unsafe side effect to native
-  `IntelAccelerator::start()` before its engine-start call; it does not by
-  itself prove whether the transaction was an MSI or another autonomous GPU
-  write.
+- The immutable V310 run is preserved under
+  `build/diagnostics/v310-tgl-start-90s-20261006T180735Z` in the VM workspace.
+  Every pre-run gate was closed: exact source/CI/artifact, atomic AuxKC
+  deployment, independent no-VF load proof, runtime manifest and clean-boot
+  root preflight. `kmutil --load-style start-only` completed all sixteen V310
+  reset writes with master readback zero, allocated the one PCI MSI and reached
+  native HWCAPS/scheduler 4. No Metal, media or Looking Glass command ran.
+- The host then recorded PF requester `00:02.0` DMA write to address zero at
+  monotonic `846.876112`; the independent watcher destroyed the VM. The guest
+  never logged V310's routed `IGScheduler::create()` entry, so the fault was
+  earlier than scheduler factory, HWS construction and routed engine start.
+  This disproves the narrow claim that IRQ reset alone is sufficient; it does
+  not prove which autonomous transaction used the PF requester identity.
 - Complete Tahoe/XNU/IOPCIFamily source review found a missing ordering edge.
   `IOInterruptEventSource::init()` registers the source. Tahoe
   `IOPCIMessagedInterruptController::registerInterrupt()` then calls
@@ -51,22 +52,44 @@ VM hard hold in force.
   banks and masks sources, and only then does IRQ registration proceed. On the
   live RPL-P PF the audited engine inventory is exactly RCS0, BCS0, VCS0,
   VECS0 and CCS0; `has_heci_gscfi` is false and `has_iov_memirq` is false.
-- V310 applies that exact media-12 reset before Tahoe MSI allocation can make
+- V310 applied that exact media-12 reset before Tahoe MSI allocation could make
   source registration reachable: master `0x190010` is written zero and read
   back with bit 31 clear, six applicable enable banks are zeroed, and nine
   RPL-P source masks are written all ones. Every one of the 16 writes is in
   i915's fixed VF BAR0 allowlist. A failed/all-ones read or re-enabled master
   fails admission before native start. MTL/ARL memory-IRQ devices do not use
   this Gen11 plan.
-- V310 also adds already-routed scheduler-factory entry/return markers. They
+- V310 also added already-routed scheduler-factory entry/return markers. They
   add no new route or hardware action, but make the next contained run prove
   whether native start passed IRQ/HWS setup before any fault. The pure reset
   plan, BAR0 allowlist, posted-master ordering and dual-payload lifecycle
-  contracts pass targeted sanitizer/source tests. Complete local static also
-  passes at `/tmp/ngreen-static.NHGcqa`, including syntax/analyzer, strict ABI,
-  both payloads, 1,502-path ledger and exhaustive protocol models. Release
-  build, clean commit, exact-SHA CI, guest deployment and dynamic proof remain
-  open.
+  contracts passed targeted sanitizer/source tests and complete static. Its
+  exact commit, CI, artifact and deployment identities are recorded above;
+  the dynamic result failed and V310 is not reusable as a candidate.
+- Exact disassembly proves scheduler 4 maps to scheduler type 2 and must call
+  the first routed `IGScheduler::create()` after `initInterruptBridge()`. The
+  headless bridge calls `createFilterInterruptEventSource()` during init.
+  XNU registers that source immediately; IOPCIFamily's messaged interrupt
+  controller calls `enableDeviceMSI()`, which both enables MSI and ORs PCI
+  Interrupt Disable plus Bus Master into the command register. This is an
+  earlier autonomous-DMA opening than scheduler/HWS setup.
+- V311 keeps the bridge object alive at its native point so scheduler callback
+  ownership is unchanged, but returns success without constructing the source
+  only for TGL/ADL/RPL virtual-MMIO VFs. At routed `startGraphicsEngine()` it
+  requires all six low engine bits, validates six engine HWS buffers plus the
+  global HWS through their actual CPU/GPU accessors and GGTT backing, resolves
+  the real `IOPCIDevice` provider and requires Bus Master off. It then invokes
+  the original source factory, requires the source pointer and Bus Master-on
+  readback, and only afterward enables the bridge and initializes GuC firmware.
+  MTL/ARL memory-IRQ invokes the original factory at the native point; PF never
+  installs this route.
+- Both Tahoe payloads pin the native start call sites, scheduler-type body,
+  bridge init/factory/filter/free bodies and null-source rollback branch. Source
+  contracts enforce the seven HWS checks and pre/post PCI command ordering.
+  The product inventory is now 166 routes (142 accelerator, three framebuffer,
+  21 System KC), 162 Gen11 methods, 96 route fields and 69 external imports.
+  Complete local static passes at `/tmp/ngreen-static.RUrIPh`; clean commit,
+  exact-SHA CI/artifact, deployment and a new clean Host boot remain open.
 
 ## V307 no-device admission correction (offline)
 

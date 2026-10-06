@@ -95,6 +95,8 @@ private:
 	static void vfEnableInterrupts(void *that);
 	static void vfDisableInterrupts(void *that);
 	static void vfSuppressPhysicalErrorInterrupts(void *that);
+	static bool vfDeferFilterInterruptEventSource(void *that);
+	mach_vm_address_t oVfCreateFilterInterruptEventSource {};
 	static void *vfCtbMappedBufferWithOptions(void *accelTask,
 	                                          unsigned long size,
 	                                          unsigned int type,

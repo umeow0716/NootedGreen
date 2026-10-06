@@ -472,6 +472,11 @@ BRIDGE_FILTER = "__ZN17IGInterruptBridge22interruptFilterHandlerEP28IOFilterInte
 BRIDGE_READ = "__ZN17IGInterruptBridge22readAndClearInterruptsER8IGBitSetILm46EE"
 BRIDGE_ENABLE_INTERRUPTS = "__ZN17IGInterruptBridge16enableInterruptsEv"
 BRIDGE_DISABLE_INTERRUPTS = "__ZN17IGInterruptBridge17disableInterruptsEv"
+BRIDGE_CREATE_FILTER = "__ZN17IGInterruptBridge32createFilterInterruptEventSourceEv"
+ACCELERATOR_INIT_BRIDGE = "__ZN16IntelAccelerator19initInterruptBridgeEv"
+BRIDGE_FACTORY = "__ZN17IGInterruptBridge15interruptBridgeEP22IOGraphicsAccelerator2P9IOService"
+BRIDGE_INIT = "__ZN17IGInterruptBridge19initInterruptBridgeEP22IOGraphicsAccelerator2P9IOService"
+BRIDGE_FREE = "__ZN17IGInterruptBridge4freeEv"
 BRIDGE_READ_RCS = "__ZN17IGInterruptBridge25readAndClearRCSInterruptsER8IGBitSetILm46EEj"
 BRIDGE_READ_CCS = "__ZN17IGInterruptBridge25readAndClearCCSInterruptsER8IGBitSetILm46EEj"
 BRIDGE_READ_BCS = "__ZN17IGInterruptBridge25readAndClearBCSInterruptsER8IGBitSetILm46EEj"
@@ -2350,6 +2355,35 @@ def macho_inventory(path):
         f"{path}: scheduler fallback attachment no longer follows inherited-start success"
     assert 0x240d8 < 0x24159 < 0x24528 < 0x2463f, \
         f"{path}: inherited start/fallback/engine/DPSM lifecycle order changed"
+    for call, target in ((0x243a9, ACCELERATOR_INIT_BRIDGE),
+                         (0x24441, INIT_HARDWARE_STATUS_MEMORY),
+                         (0x24528, START),
+                         (0x24c38, BRIDGE_FACTORY),
+                         (0x49f6d, BRIDGE_INIT),
+                         (0x4a0a4, BRIDGE_CREATE_FILTER)):
+        assert image[call] == 0xe8 and \
+            call + 5 + struct.unpack_from("<i", image, call + 1)[0] == value(target), \
+            f"{path}: changed native bridge/HWS/engine/filter call {call:#x}"
+    for symbol, length, digest in (
+            (BRIDGE_INIT, 0x144,
+             "251aa13dee4ccc21cf3460a0cecfdb720a054f68e7bdadad90af2e732aef169c"),
+            (BRIDGE_CREATE_FILTER, 0xde,
+             "b47e81796a93a86d767a297991f75270a99204c1a18057c70515ed3e59873797"),
+            (BRIDGE_FREE, 0xc8,
+             "841e7707423c8c9b26b7fd42bad3a525aa6c3bfba9e287d6e76c48b8e99c7835")):
+        owner = value(symbol)
+        assert next_symbol(owner) - owner == length and \
+            hashlib.sha256(image[owner:owner + length]).hexdigest() == digest, \
+            f"{path}: changed reviewed deferred-filter ownership body {symbol}"
+    bridge_free = value(BRIDGE_FREE)
+    assert image[bridge_free + 0x2a:bridge_free + 0x3a] == bytes.fromhex(
+        "80 bb aa 08 00 00 00 75 3b 48 83 7b 20 00 74 34"), \
+        f"{path}: bridge free no longer accepts a null deferred local source"
+    scheduler_type = value("__ZN11IGScheduler13schedulerTypeEh")
+    assert next_symbol(scheduler_type) - scheduler_type == 0x26 and \
+        hashlib.sha256(image[scheduler_type:scheduler_type + 0x26]).hexdigest() == \
+        "5b3006a4a403c151851dfae51ca6e6cfb15eddbd8d56533c2f26b8db8d829823", \
+        f"{path}: scheduler-type mapping no longer pins selector 4 to the first factory"
     for call, store in ((0x243f3, "49 89 85 50 12 00 00"),
                         (0x2448e, "49 89 85 50 12 00 00")):
         assert image[call] == 0xe8 and call + 5 + struct.unpack_from("<i", image, call + 1)[0] == create, \
@@ -5731,6 +5765,7 @@ def source_contract(path):
         SCHEDULER_ENABLE,
         SCHEDULER_DISABLE,
         PCI_CONFIGURE_INTERRUPTS,
+        BRIDGE_CREATE_FILTER,
         SCHEDULER_INIT_FIRMWARE,
         REQUEST_ENABLE_CALLBACK,
         SYS_MEMORY_PHYSICAL,
@@ -5776,6 +5811,11 @@ def source_contract(path):
             normalized_pci_resolution):
         raise AssertionError(
             f"{path}: VF no longer replaces the complete physical engine-start body")
+    if ('{"' + BRIDGE_CREATE_FILTER +
+            '",vfDeferFilterInterruptEventSource,this->oVfCreateFilterInterruptEventSource},'
+            not in normalized_pci_resolution):
+        raise AssertionError(
+            f"{path}: VF no longer defers the headless PCI MSI source")
 
     # Every modern-GuC owner that contains an accelerator+0x1240 dereference is
     # either replaced at its public entry or bounded-patched below.  The four
@@ -6212,13 +6252,43 @@ def source_contract(path):
         if forbidden in start:
             raise AssertionError(
                 f"{path}: VF engine-start re-enters physical state through {forbidden}")
-    bridge = start.index("callback->vfInterruptBridgeEnable)(")
+    hws_engine_check = start.index("for (size_t index = 0; index < 6; index++)")
+    hws_global_check = start.index("getMember<OSObject *>(that, 0x1438)", hws_engine_check)
+    bus_master_precheck = start.index("VF PCI bus mastering escaped", hws_global_check)
+    create_source = start.index(
+        "callback->oVfCreateFilterInterruptEventSource)(interruptBridge)",
+        bus_master_precheck)
+    source_postcheck = start.index(
+        "VF deferred MSI source did not establish its bus-master boundary",
+        create_source)
+    bridge = start.index("callback->vfInterruptBridgeEnable)(", source_postcheck)
     firmware = start.index("callback->vfSchedulerInitFirmware)(scheduler)")
     ready = start.index("if (!vfNativeGpuWorkReady())")
     accelerator = start.index("callback->ioGraphicsEnableAccelerator)(that)")
-    if not bridge < firmware < ready < accelerator:
+    if not hws_engine_check < hws_global_check < bus_master_precheck < \
+            create_source < source_postcheck < bridge < firmware < ready < accelerator:
         raise AssertionError(
-            f"{path}: VF MSI/firmware/transport/accelerator lifecycle order is reversed")
+            f"{path}: VF HWS/MSI/firmware/transport/accelerator lifecycle order is reversed")
+    for token in ("NGGgtt::mappedBacking(", "kIOPCICommandBusMaster",
+                  "getMember<void *>(interruptBridge, 0x20) == nullptr",
+                  "static_cast<IOService *>(that)->getProvider()"):
+        if token not in start:
+            raise AssertionError(
+                f"{path}: deferred VF MSI boundary is missing {token}")
+    defer_source = function_body(
+        source, "bool Gen11::vfDeferFilterInterruptEventSource(void *that)")
+    memory_original = defer_source.index("if (gVfUsesMemoryIrq)")
+    original_factory = defer_source.index(
+        "callback->oVfCreateFilterInterruptEventSource)(that)", memory_original)
+    virtual_null_check = defer_source.index(
+        "getMember<void *>(that, 0x20) != nullptr", original_factory)
+    deferred_return = defer_source.index("return true;", virtual_null_check)
+    if not memory_original < original_factory < virtual_null_check < deferred_return:
+        raise AssertionError(
+            f"{path}: Gen11 virtual-MMIO filter deferral no longer preserves memory-IRQ behavior")
+    if "FunctionCast" in defer_source[original_factory:deferred_return]:
+        raise AssertionError(
+            f"{path}: virtual-MMIO deferral unexpectedly constructs the source early")
     failure = start.index("VF scheduler firmware initialization failed")
     disable = start.index("callback->vfInterruptBridgeDisable)(", failure)
     fault = start.index("VF scheduler firmware initialization failure", failure)

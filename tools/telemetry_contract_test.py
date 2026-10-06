@@ -1,11 +1,31 @@
 #!/usr/bin/env python3
 """Check the pinned accelerator's private GPU telemetry provider contract."""
 
+import os
 import plistlib
 import re
+import shlex
+import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+
+def macho_nm_command():
+    configured = os.environ.get("NM")
+    if configured:
+        result = shlex.split(configured)
+        assert result, "empty NM command"
+        return result
+    candidates = ["llvm-nm"] + [
+        f"llvm-nm-{version}" for version in range(22, 13, -1)
+    ]
+    candidates.append("nm")
+    for candidate in candidates:
+        path = shutil.which(candidate)
+        if path:
+            return [path]
+    raise AssertionError("no nm implementation found")
 
 
 def main() -> int:
@@ -23,7 +43,7 @@ def main() -> int:
     assert "org.smichaud.HookCase" not in libraries
 
     undefined = subprocess.run(
-        ["nm", "-u", str(binary_path)],
+        [*macho_nm_command(), "-u", str(binary_path)],
         check=True,
         capture_output=True,
         text=True,
