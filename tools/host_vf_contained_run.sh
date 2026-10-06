@@ -20,9 +20,10 @@ readonly pf_bdf="0000:00:02.0"
 readonly vf_bdf="0000:00:02.1"
 readonly evidence_root="/var/log/macos-vf-tests"
 readonly tracefs_root="/sys/kernel/tracing"
-readonly max_runtime_seconds=45
+readonly trace_runtime_seconds=45
+readonly tgl_start_runtime_seconds=90
 readonly cooldown_seconds=20
-readonly service_runtime_seconds=120
+readonly service_runtime_seconds=180
 readonly trigger_pattern='(DMAR|IOMMU).*(00:02\.0|0000:00:02\.0).*(fault|Fault)|(fault|Fault).*(DMAR|IOMMU).*(00:02\.0|0000:00:02\.0)|i915.*(Atomic update failure on pipe|GPU HANG|reset[^[:cntrl:]]*(timed out|timeout)|fence[^[:cntrl:]]*(timed out|timeout)|GuC[^[:cntrl:]]*(timed out|timeout)|VF[^[:cntrl:]]*pause[^[:cntrl:]]*(timed out|timeout))'
 readonly script_path="$(readlink -f "$0")"
 readonly script_dir="$(dirname "$script_path")"
@@ -32,7 +33,17 @@ readonly trace_analyzer="${script_dir}/host_vf_trace_analyzer.py"
 
 usage() {
 	printf 'This command is dangerous and is not authorized by a passing preflight alone.\n' >&2
-	printf 'Usage (only after separate review): sudo %s --arm-exactly-one-contained-run --manifest /absolute/manifest.tsv\n' "$0" >&2
+	printf 'Usage (only after separate review):\n' >&2
+	printf '  sudo %s --arm-exactly-one-contained-run --manifest /absolute/manifest.tsv\n' "$0" >&2
+	printf '  sudo %s --arm-exactly-one-contained-tgl-start --manifest /absolute/manifest.tsv\n' "$0" >&2
+}
+
+runtime_seconds_for_mode() {
+	case $1 in
+		trace-only) printf '%s\n' "$trace_runtime_seconds" ;;
+		tgl-start-only) printf '%s\n' "$tgl_start_runtime_seconds" ;;
+		*) return 1 ;;
+	esac
 }
 
 require_root() {
@@ -124,12 +135,13 @@ start_kernel_watch() {
 schedule_deadline() {
 	local evidence_dir=$1
 	local deadline_unit=$2
-	systemd-run --unit="$deadline_unit" --on-active="${max_runtime_seconds}s" \
+	local runtime_seconds=$3
+	systemd-run --unit="$deadline_unit" --on-active="${runtime_seconds}s" \
 		--timer-property=AccuracySec=1s --collect --no-block \
 		"$script_path" --internal-deadline "$evidence_dir" \
 		>>"${evidence_dir}/deadline-unit.log" 2>&1
 	systemctl is-active --quiet "${deadline_unit}.timer"
-	log_line "$evidence_dir" "PASS independent ${max_runtime_seconds}s deadline is active"
+	log_line "$evidence_dir" "PASS independent ${runtime_seconds}s deadline is active"
 }
 
 stop_deadline() {
@@ -287,6 +299,8 @@ postflight() {
 internal_run_mode() {
 	local evidence_dir=${1:-}
 	local guard_unit=${2:-}
+	local run_mode=${3:-}
+	local runtime_seconds
 	local manifest_path="${evidence_dir}/runtime-manifest.tsv"
 	local deadline_unit="${guard_unit}-deadline"
 	local run_failed=0
@@ -297,7 +311,8 @@ internal_run_mode() {
 	trace_pid=""
 	require_root
 	if ! validate_evidence_dir "$evidence_dir" || [[ ! -d $evidence_dir ]] ||
-	   [[ ! $guard_unit =~ ^macos-vf-guard-[0-9]{8}T[0-9]{6}Z$ ]]; then
+	   [[ ! $guard_unit =~ ^macos-vf-guard-[0-9]{8}T[0-9]{6}Z$ ]] ||
+	   ! runtime_seconds=$(runtime_seconds_for_mode "$run_mode"); then
 		printf 'FAIL: invalid internal-run arguments.\n' >&2
 		exit 64
 	fi
@@ -327,7 +342,7 @@ internal_run_mode() {
 		"${evidence_dir}/domain-recheck.xml" >> "${evidence_dir}/manifest-recheck.log" 2>&1
 	start_kernel_watch "$evidence_dir"
 	start_trace_capture "$evidence_dir" "$guard_unit"
-	schedule_deadline "$evidence_dir" "$deadline_unit"
+	schedule_deadline "$evidence_dir" "$deadline_unit" "$runtime_seconds"
 
 	# This is the only VM start in the controller. The kernel watcher, private
 	# trace collector and independent deadline must all be live first.
@@ -388,7 +403,13 @@ internal_run_mode() {
 
 arm_mode() {
 	local manifest_path=$1
+	local run_mode=$2
+	local runtime_seconds
 	require_root
+	runtime_seconds=$(runtime_seconds_for_mode "$run_mode") || {
+		printf 'FAIL: invalid contained-run mode.\n' >&2
+		exit 64
+	}
 	for command_name in systemd-run systemctl systemd-inhibit virsh journalctl \
 		timeout flock lspci python3 readlink dirname tee date grep mkfifo sleep \
 		sha256sum git install mktemp rm pgrep basename cat mkdir rmdir kill; do
@@ -433,7 +454,8 @@ arm_mode() {
 	{
 		printf 'domain=%s\n' "$domain_name"
 		printf 'boot_id=%s\n' "$boot_id"
-		printf 'max_runtime_seconds=%s\n' "$max_runtime_seconds"
+		printf 'run_mode=%s\n' "$run_mode"
+		printf 'max_runtime_seconds=%s\n' "$runtime_seconds"
 		printf 'cooldown_seconds=%s\n' "$cooldown_seconds"
 		printf 'source_commit=%s\n' "$(git -C "${script_dir}/.." rev-parse HEAD)"
 		sha256sum "$script_path" "$preflight_path" "$trace_analyzer"
@@ -444,18 +466,22 @@ arm_mode() {
 		--property="RuntimeMaxSec=${service_runtime_seconds}s" --property=TimeoutStopSec=15s \
 		systemd-inhibit --what=sleep --mode=block --who=NootedGreen-VF \
 			--why="Contained Intel VF validation" \
-			"$script_path" --internal-run "$evidence_dir" "$guard_unit"
+			"$script_path" --internal-run "$evidence_dir" "$guard_unit" "$run_mode"
 	printf 'ARMED: %s (evidence %s)\n' "$guard_unit" "$evidence_dir"
 }
 
 case ${1:-} in
 	--arm-exactly-one-contained-run)
 		(($# == 3)) && [[ ${2:-} == --manifest ]] || { usage; exit 64; }
-		arm_mode "$3"
+		arm_mode "$3" trace-only
+		;;
+	--arm-exactly-one-contained-tgl-start)
+		(($# == 3)) && [[ ${2:-} == --manifest ]] || { usage; exit 64; }
+		arm_mode "$3" tgl-start-only
 		;;
 	--internal-run)
-		(($# == 3)) || { usage; exit 64; }
-		internal_run_mode "$2" "$3"
+		(($# == 4)) || { usage; exit 64; }
+		internal_run_mode "$2" "$3" "$4"
 		;;
 	--internal-deadline)
 		(($# == 2)) || { usage; exit 64; }

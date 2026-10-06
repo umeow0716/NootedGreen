@@ -152,7 +152,18 @@ def main() -> None:
     if not preflight_call < service:
         raise AssertionError("public preflight must precede transient service creation")
 
-    require(runner, 'readonly max_runtime_seconds=45', "fixed short deadline")
+    require(runner, 'readonly trace_runtime_seconds=45',
+            "fixed trace-only deadline")
+    require(runner, 'readonly tgl_start_runtime_seconds=90',
+            "fixed TGL start-only deadline")
+    require(runner, 'readonly service_runtime_seconds=180',
+            "bounded service runtime")
+    require(runner, 'runtime_seconds_for_mode()', "closed runtime-mode selector")
+    require(runner, 'trace-only) printf', "trace-only mode allowlist")
+    require(runner, 'tgl-start-only) printf', "TGL start-only mode allowlist")
+    require(runner,
+            'schedule_deadline "$evidence_dir" "$deadline_unit" "$runtime_seconds"',
+            "mode-selected deadline")
     require(runner, "export LC_ALL=C", "locale-independent controller")
     require(runner, 'readonly cooldown_seconds=20', "fixed cooldown")
     require(runner, "journalctl -k -f -n0", "new-message kernel watcher")
@@ -208,6 +219,11 @@ def main() -> None:
             "pipefail-safe per-line trigger scan")
     require(runner, "systemd-inhibit --what=sleep", "sleep inhibitor")
     require(runner, "--arm-exactly-one-contained-run", "explicit arm token")
+    require(runner, "--arm-exactly-one-contained-tgl-start",
+            "explicit TGL start-only arm token")
+    require(runner,
+            '"$script_path" --internal-run "$evidence_dir" "$guard_unit" "$run_mode"',
+            "immutable internal mode handoff")
     require(runner, 'python3 -B "$manifest_verifier"', "immutable manifest gate")
     if runner.count('python3 -B "$manifest_verifier"') != 2:
         raise AssertionError("manifest must be verified before and inside the systemd service")
