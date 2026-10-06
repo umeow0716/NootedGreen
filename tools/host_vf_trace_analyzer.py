@@ -23,7 +23,11 @@ FUNCTION = re.compile(
     r"\|\s+(?P<name>pf_state_worker_func|i915_ggtt_set_space_owner|"
     r"intel_pipe_update_start|intel_pipe_update_end) \[i915\]\(\) \{$"
 )
-CLOSE = re.compile(r"\|\s+\}$")
+FUNCTION_CLOSE = re.compile(
+    r"\|\s+\}\s*(?:/\*\s*(?P<name>pf_state_worker_func|"
+    r"i915_ggtt_set_space_owner|intel_pipe_update_start|"
+    r"intel_pipe_update_end) \[i915\]\s*\*/)?$"
+)
 TARGETS = ("pf_state_worker_func", "i915_ggtt_set_space_owner")
 
 
@@ -106,12 +110,33 @@ def analyze_text(text: str, require_vf_flr: bool = False) -> Analysis:
         function = FUNCTION.search(line)
         if function:
             stacks.setdefault(context, []).append((function.group("name"), timestamp))
-        elif CLOSE.search(line):
+        else:
+            close = FUNCTION_CLOSE.search(line)
+            if not close:
+                continue
             stack = stacks.get(context)
-            if stack:
-                name, start = stack.pop()
-                if name in TARGETS and timestamp >= start:
-                    function_intervals.append(Interval(name, start, timestamp))
+            close_name = close.group("name")
+            if not stack:
+                issues.append(
+                    f"function graph context {context} closes "
+                    f"{close_name or 'a function'} without a start"
+                )
+                continue
+            name, start = stack[-1]
+            if close_name is not None and close_name != name:
+                issues.append(
+                    f"function graph context {context} closes {close_name} "
+                    f"while {name} is active"
+                )
+                continue
+            stack.pop()
+            if timestamp < start:
+                issues.append(
+                    f"function graph context {context} closes {name} "
+                    "before its start"
+                )
+            elif name in TARGETS:
+                function_intervals.append(Interval(name, start, timestamp))
 
     if begin_markers != 1:
         issues.append(f"expected one BEGIN marker, observed {begin_markers}")
@@ -121,6 +146,14 @@ def analyze_text(text: str, require_vf_flr: bool = False) -> Analysis:
         issues.append("ftrace reported lost events")
     for pipe in sorted(pending):
         issues.append(f"pipe {pipe} has an unterminated update")
+    for context in sorted(stacks):
+        stack = stacks[context]
+        if stack:
+            active = ",".join(name for name, _ in stack)
+            issues.append(
+                f"function graph context {context} has unterminated stack: "
+                f"{active}"
+            )
     if not updates:
         issues.append("no complete pipe update was captured")
     if require_vf_flr:
@@ -180,17 +213,38 @@ def render(analysis: Analysis) -> str:
              for interval in intervals),
             Decimal(0),
         )
+        interval_usecs = [
+            (interval.end - interval.start) * Decimal(1_000_000)
+            for interval in intervals
+        ]
+        duration_summary = ""
+        if interval_usecs:
+            duration_summary = (
+                f" interval_us_min={min(interval_usecs):.3f}"
+                f" interval_us_p50={percentile(interval_usecs, 1, 2):.3f}"
+                f" interval_us_max={max(interval_usecs):.3f}"
+            )
         lines.append(
             f"{target} intervals={len(intervals)} "
             f"total_us={total_usecs:.3f} overlapping_pipe_updates={overlap_count}"
+            f"{duration_summary}"
         )
 
     for update in analysis.frame_mismatches:
+        overlap_names = [
+            target for target in TARGETS
+            if any(
+                interval.name == target and
+                overlaps(update.start, update.end, interval.start, interval.end)
+                for interval in analysis.function_intervals
+            )
+        ]
         lines.append(
             f"FRAME_MISMATCH pipe={update.pipe} "
             f"frame={update.start_frame}->{update.end_frame} "
             f"scanline={update.start_scanline}->{update.end_scanline} "
-            f"critical_us={update.usecs:.3f}"
+            f"critical_us={update.usecs:.3f} "
+            f"overlaps={','.join(overlap_names) if overlap_names else 'none'}"
         )
     lines.extend(f"STRUCTURE_ERROR {issue}" for issue in analysis.issues)
     if analysis.issues:

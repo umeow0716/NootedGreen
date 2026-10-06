@@ -34,6 +34,21 @@ MALFORMED = NORMAL.replace("/* NG_VF_TRACE_END */", "/* marker missing */").repl
     "",
 )
 LOST = NORMAL + "CPU:1 [LOST 7 EVENTS]\n"
+NAMED_CLOSE = NORMAL.replace(
+    " 1.000040 | 4) kworker-42 | 20.000 us | }\n",
+    " 1.000040 | 4) kworker-42 | 20.000 us | } /* i915_ggtt_set_space_owner [i915] */\n",
+).replace(
+    " 1.000060 | 5) kworker-42 | 50.000 us | }\n",
+    " 1.000060 | 5) kworker-42 | 50.000 us | } /* pf_state_worker_func [i915] */\n",
+)
+UNTERMINATED_FUNCTION = NAMED_CLOSE.replace(
+    " 1.000040 | 4) kworker-42 | 20.000 us | } /* i915_ggtt_set_space_owner [i915] */\n",
+    "",
+)
+MISMATCHED_FUNCTION_CLOSE = NAMED_CLOSE.replace(
+    "} /* i915_ggtt_set_space_owner [i915] */",
+    "} /* pf_state_worker_func [i915] */",
+)
 NO_VF = NORMAL.replace(
     " 1.000010 | 1) kworker-42 | pf_state_worker_func [i915]() {\n"
     " 1.000020 | 3) kworker-42 | i915_ggtt_set_space_owner [i915]() {\n",
@@ -79,6 +94,29 @@ def main() -> None:
     required = run_fixture(NORMAL, "--require-vf-flr")
     assert required.returncode == 0
 
+    named_close = ANALYZER.analyze_text(NAMED_CLOSE, require_vf_flr=True)
+    assert not named_close.issues
+    assert [interval.name for interval in named_close.function_intervals] == [
+        "i915_ggtt_set_space_owner", "pf_state_worker_func",
+    ]
+
+    unterminated_function = ANALYZER.analyze_text(UNTERMINATED_FUNCTION)
+    assert any(
+        "unterminated stack" in issue for issue in unterminated_function.issues
+    )
+    assert any(
+        "closes pf_state_worker_func while i915_ggtt_set_space_owner is active"
+        in issue
+        for issue in unterminated_function.issues
+    )
+
+    mismatched_close = ANALYZER.analyze_text(MISMATCHED_FUNCTION_CLOSE)
+    assert any(
+        "closes pf_state_worker_func while i915_ggtt_set_space_owner is active"
+        in issue
+        for issue in mismatched_close.issues
+    )
+
     no_vf = run_fixture(NO_VF)
     assert no_vf.returncode == 0
     missing_vf = run_fixture(NO_VF, "--require-vf-flr")
@@ -88,6 +126,10 @@ def main() -> None:
     mismatch = run_fixture(MISMATCH)
     assert mismatch.returncode == 2
     assert "FRAME_MISMATCH pipe=A frame=10->11" in mismatch.stdout
+    assert (
+        "overlaps=pf_state_worker_func,i915_ggtt_set_space_owner"
+        in mismatch.stdout
+    )
     assert "crossed vblank" in mismatch.stdout
 
     malformed = run_fixture(MALFORMED)
