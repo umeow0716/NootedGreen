@@ -2292,6 +2292,54 @@ bool ngGpuRegisterAccessAllowed(unsigned long reg)
 	return allowed;
 }
 
+namespace {
+bool vfQuiesceVirtualInterruptsBeforeMsi()
+{
+	// MTL/ARL use a separately negotiated memory-IRQ page. This register plan
+	// is the Linux Gen11 virtual-MMIO reset used by the admitted TGL/ADL/RPL
+	// media-12 path only.
+	if (gVfUsesMemoryIrq)
+		return true;
+	auto *cb = NGreen::callback;
+	if (!cb || !cb->setRMMIOIfNecessary()) {
+		vfMarkProtocolFault("cannot map VF BAR0 for pre-MSI interrupt reset");
+		return false;
+	}
+
+	// Master disable must be the first posted write, matching
+	// i915::gen11_master_intr_disable(). Sample it before touching the source
+	// banks so a failed BAR transaction cannot be mistaken for quiescence.
+	cb->writeReg32(NGVfIrqGate::preMsiQuiescePlan[0].offset,
+	               NGVfIrqGate::preMsiQuiescePlan[0].value);
+	OSSynchronizeIO();
+	const uint32_t firstMaster =
+		cb->readReg32(NGVfIrqGate::masterRegister);
+	if (!NGVfIrqGate::masterDisabled(firstMaster)) {
+		SYSLOG("ngreen", "V310: VF master IRQ disable failed value=0x%08x",
+		       firstMaster);
+		vfMarkProtocolFault("VF master interrupt remained enabled before MSI");
+		return false;
+	}
+
+	for (uint32_t index = 1;
+	     index < NGVfIrqGate::preMsiQuiesceCount; index++) {
+		const auto &write = NGVfIrqGate::preMsiQuiescePlan[index];
+		cb->writeReg32(write.offset, write.value);
+	}
+	OSSynchronizeIO();
+	const uint32_t finalMaster = cb->readReg32(NGVfIrqGate::masterRegister);
+	if (!NGVfIrqGate::masterDisabled(finalMaster)) {
+		SYSLOG("ngreen", "V310: VF master IRQ re-enabled during reset value=0x%08x",
+		       finalMaster);
+		vfMarkProtocolFault("VF interrupt reset did not preserve master disable");
+		return false;
+	}
+	SYSLOG("ngreen", "V310: quiesced Gen11 VF IRQ sources before PCI MSI registration master=0x%08x",
+	       finalMaster);
+	return true;
+}
+} // namespace
+
 void Gen11::init() {
 	callback = this;
 	const bool tglRequested = checkKernelArgument("-ngreentglfb") ||
@@ -5304,6 +5352,12 @@ bool Gen11::start(void *that, void *provider)
 		// INTx route; explicitly allocate that MSI before the old driver creates
 		// its IOFilterInterruptEventSource.  This is a public IOPCIFamily ABI in
 		// Tahoe (and an exported symbol), not a fabricated interrupt property.
+		// IOPCIMessagedInterruptController::registerInterrupt() later enables the
+		// device MSI immediately, even though its software vector starts disabled.
+		// Match Linux i915 by quiescing Gen11 master/source state before allocation
+		// makes that registration path reachable.
+		if (!vfQuiesceVirtualInterruptsBeforeMsi())
+			return false;
 		if (!callback->ioPciConfigureInterrupts) {
 			vfMarkProtocolFault("missing exported PCI MSI configurator");
 			return false;
@@ -5836,7 +5890,12 @@ void *Gen11::vfCreateScheduler(void *accelerator)
 		vfMarkProtocolFault("VF final native scheduler selection is not GuC type 4");
 		return nullptr;
 	}
-	return FunctionCast(vfCreateScheduler, callback->originalSchedulerCreate)(accelerator);
+	SYSLOG("ngreen", "V310: entering native GuC scheduler factory after IRQ quiescence");
+	auto *scheduler =
+		FunctionCast(vfCreateScheduler, callback->originalSchedulerCreate)(accelerator);
+	SYSLOG("ngreen", "V310: native GuC scheduler factory returned %s",
+	       scheduler ? "success" : "failure");
+	return scheduler;
 }
 
 void *Gen11::vfRejectLegacySchedulerFactory(void *accelerator)

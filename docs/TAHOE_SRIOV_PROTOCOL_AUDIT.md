@@ -1,12 +1,14 @@
 # Tahoe SR-IOV protocol audit — in progress
 
-Updated: 2026-10-05. The last dynamic source baseline is `ce166c8`; the current
-offline-reviewed worktree is V307 no-device admission correction on
-`codex/tahoe-sriov-vf`. This is NOT a boot-test candidate or a successful
-driver baseline. The `ce166c8` run produced repeatable host PF DMAR faults
-followed by i915 hangs and a host reboot. Keep `macos-tahoe-sriov` shut off until the
-corrected code passes the remaining offline review and every independently
-enforced containment precondition.
+Updated: 2026-10-07. The latest dynamic controller baseline is `1fb1610`; the
+loaded driver product came from `aaf58c9`. The V309 90-second start-only run
+loaded the exact Tahoe TGL executable but produced three host PF `00:02.0`
+DMAR writes to address zero before routed `startGraphicsEngine()` was reached.
+The current offline worktree is the V310 pre-MSI interrupt-reset correction on
+`codex/tahoe-sriov-vf`. It is NOT a boot-test candidate or a successful driver
+baseline. Keep `macos-tahoe-sriov` shut off until V310 passes the complete
+offline/CI/build provenance gates and the host has rebooted to a journal with
+no pre-existing containment trigger.
 
 The user's final display target is now Looking Glass, not Sunshine/Moonlight.
 Older Sunshine references below are historical review notes. No macOS Tahoe
@@ -20,6 +22,51 @@ KVMFR/client transport remains the intended receiving side.
 The authoritative dynamic-entry checklist is
 [`DYNAMIC_TEST_GATE.md`](DYNAMIC_TEST_GATE.md). Any open static gate keeps the
 VM hard hold in force.
+
+## V309 incident and V310 pre-MSI interrupt reset (offline)
+
+- The immutable V309 run is preserved under
+  `build/diagnostics/v309-tgl-start-90s-20261006T165049Z` in the VM workspace.
+  `kmutil --load-style start-only` returned success and loaded TGL UUID
+  `BA3AA1C0-FE6B-33B3-9D85-73F848394E3D`. NootedGreen completed VF identity,
+  GuC ABI, PF runtime topology, quotas, direct GGTT, 70 symbol routes, PCI MSI
+  allocation and native HWCAPS. No Metal or media command was submitted.
+- Roughly three seconds later, the host recorded PF requester `00:02.0` DMA
+  writes to address zero at monotonic `1723.100176`, `1723.108121` and
+  `1723.112099`; the independent watcher destroyed the VM. The guest never
+  logged V251's routed `startGraphicsEngine()` entry, so CTB/engine submission
+  had not started. This localizes the first unsafe side effect to native
+  `IntelAccelerator::start()` before its engine-start call; it does not by
+  itself prove whether the transaction was an MSI or another autonomous GPU
+  write.
+- Complete Tahoe/XNU/IOPCIFamily source review found a missing ordering edge.
+  `IOInterruptEventSource::init()` registers the source. Tahoe
+  `IOPCIMessagedInterruptController::registerInterrupt()` then calls
+  `enableDeviceMSI()` immediately even though the software vector begins hard
+  and soft disabled. The old TGL driver constructs that source during
+  `IGInterruptBridge::initInterruptBridge()`, before its later bridge-enable
+  boundary.
+- Linux i915 uses the opposite hardware ordering: Gen11 master IRQ is first
+  written zero and posting-read, `gen11_gt_irq_reset()` clears source-enable
+  banks and masks sources, and only then does IRQ registration proceed. On the
+  live RPL-P PF the audited engine inventory is exactly RCS0, BCS0, VCS0,
+  VECS0 and CCS0; `has_heci_gscfi` is false and `has_iov_memirq` is false.
+- V310 applies that exact media-12 reset before Tahoe MSI allocation can make
+  source registration reachable: master `0x190010` is written zero and read
+  back with bit 31 clear, six applicable enable banks are zeroed, and nine
+  RPL-P source masks are written all ones. Every one of the 16 writes is in
+  i915's fixed VF BAR0 allowlist. A failed/all-ones read or re-enabled master
+  fails admission before native start. MTL/ARL memory-IRQ devices do not use
+  this Gen11 plan.
+- V310 also adds already-routed scheduler-factory entry/return markers. They
+  add no new route or hardware action, but make the next contained run prove
+  whether native start passed IRQ/HWS setup before any fault. The pure reset
+  plan, BAR0 allowlist, posted-master ordering and dual-payload lifecycle
+  contracts pass targeted sanitizer/source tests. Complete local static also
+  passes at `/tmp/ngreen-static.NHGcqa`, including syntax/analyzer, strict ABI,
+  both payloads, 1,502-path ledger and exhaustive protocol models. Release
+  build, clean commit, exact-SHA CI, guest deployment and dynamic proof remain
+  open.
 
 ## V307 no-device admission correction (offline)
 

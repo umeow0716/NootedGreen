@@ -6291,6 +6291,9 @@ def source_contract(path):
     rejected = create_guard.index("return nullptr;", fault)
     delegation = create_guard.index("FunctionCast(vfCreateScheduler, callback->originalSchedulerCreate)")
     assert selection < reject < fault < rejected < delegation, "VF factory must reject non-GuC type before native dispatch"
+    assert create_guard.index("entering native GuC scheduler factory", rejected) < delegation < \
+        create_guard.index("native GuC scheduler factory returned", delegation), \
+        "VF scheduler factory boundary diagnostics changed"
     normalized_routes = "".join(pci_resolution.split())
     assert '{"__ZN11IGScheduler6createEP16IntelAccelerator",vfCreateScheduler,this->originalSchedulerCreate}' in normalized_routes, \
         "missing typed native scheduler factory admission route"
@@ -6315,13 +6318,27 @@ def source_contract(path):
         "VF firmware-disable guard must fail before bootstrap/native scheduler side effects"
     legacy_reject = accelerator_start.index("kVfLegacyPageOwnershipFlag")
     ggtt_bootstrap = accelerator_start.index("vfBootstrapDirectGgtt()")
+    irq_quiesce = accelerator_start.index("vfQuiesceVirtualInterruptsBeforeMsi()")
     configure = accelerator_start.index("callback->ioPciConfigureInterrupts)(")
     native_start = accelerator_start.index("FunctionCast(start, callback->ostart)")
-    if not legacy_reject < ggtt_bootstrap < configure < native_start:
+    if not legacy_reject < ggtt_bootstrap < irq_quiesce < configure < native_start:
         raise AssertionError(
-            f"{path}: VF legacy-MMIO rejection/GGTT/MSI order changed before native start")
+            f"{path}: VF legacy-MMIO rejection/GGTT/IRQ-reset/MSI order changed before native start")
     if "pciDevice, kIOInterruptTypePCIMessaged, 1, 1, 0" not in accelerator_start:
         raise AssertionError(f"{path}: VF MSI request is not exactly one required vector")
+    irq_reset = function_body(source, "bool vfQuiesceVirtualInterruptsBeforeMsi()")
+    first_write = irq_reset.index("preMsiQuiescePlan[0].offset")
+    first_barrier = irq_reset.index("OSSynchronizeIO()", first_write)
+    first_read = irq_reset.index("readReg32(NGVfIrqGate::masterRegister)", first_barrier)
+    first_check = irq_reset.index("masterDisabled(firstMaster)", first_read)
+    source_loop = irq_reset.index("index = 1;", first_check)
+    second_barrier = irq_reset.index("OSSynchronizeIO()", source_loop)
+    second_read = irq_reset.index("readReg32(NGVfIrqGate::masterRegister)", second_barrier)
+    second_check = irq_reset.index("masterDisabled(finalMaster)", second_read)
+    if not first_write < first_barrier < first_read < first_check < source_loop < \
+            second_barrier < second_read < second_check:
+        raise AssertionError(
+            f"{path}: pre-MSI VF interrupt reset no longer posts and verifies master around source masking")
     native_result = accelerator_start.index(
         "const auto result = FunctionCast(start, callback->ostart)(that, provider)")
     firmware_live = accelerator_start.index(

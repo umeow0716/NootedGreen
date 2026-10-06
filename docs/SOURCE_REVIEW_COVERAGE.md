@@ -10,6 +10,18 @@ The current dynamic-entry gate table is
 
 ## Scope
 
+2026-10-07 V310 pre-MSI interrupt reset: the latest contained TGL start loaded
+the exact driver but caused three PF address-zero DMAR writes inside native
+accelerator start before routed engine start. Tahoe IOPCIFamily enables PCI MSI
+as an interrupt-source registration side effect, while Linux first disables
+and posting-reads the Gen11 master, clears the applicable source enables and
+masks every live source. V310 restores that order for TGL/ADL/RPL virtual-MMIO
+VFs with an exact 16-write RPL-P plan; MTL/ARL memory IRQ remains separate.
+The plan, allowlist, ordering and dual-payload lifecycle are fixed by tests.
+The full static suite passes at `/tmp/ngreen-static.NHGcqa`; clean exact-SHA CI
+and a fresh artifact remain pending, and the current Host boot is tainted by
+the preserved V309 DMAR trigger.
+
 2026-10-05 V307 no-device admission correction: a read-only APFS snapshot of
 the third maintenance boot exposed panic `09c192122fd36c71...` at 5.48 seconds,
 not a 15-minute live hang.  The active AuxKC SHA-256 was
@@ -60,9 +72,9 @@ otherwise passed.  Its exact-SHA CI `37237068929` also passed release kext,
 Metal smoke and both artifact uploads after retrying a transient GitHub
 CreateArtifact DNS `ENOTFOUND`; root current-boot preflight then passed.
 
-2026-10-05 SG-11 ledger progress: the current fail-closed inventory covers
-exactly 1,500 repository paths.  It partitions all 68 tool paths into 50
-directly executed programs, 12 explicitly owned indirect/external programs
+2026-10-07 SG-11 ledger status: the current fail-closed inventory covers
+exactly 1,502 repository paths. It partitions all 70 tool paths into 51
+directly executed programs, 13 explicitly owned indirect/external programs
 and six data/fixture files; all six production `.cpp` files and 35 production
 headers are in the real compiler closure.  The full `kern_gen11.cpp/.hpp` was
 read end-to-end.  Compiler unused diagnostics and the ownership ledger account

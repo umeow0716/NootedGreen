@@ -1,4 +1,5 @@
 #include "../NootedGreen/kern_vf_irq_gate.hpp"
+#include "../NootedGreen/kern_gpu_capabilities.hpp"
 
 #include <cassert>
 #include <cstdint>
@@ -55,7 +56,43 @@ int main() {
     assert(NGVfIrqGate::leave(state, state));
     assert(NGVfIrqGate::drained(state));
 
-    std::printf("PASS: %llu VF IRQ gate state cases\n",
-                static_cast<unsigned long long>(cases));
+    constexpr NGVfIrqGate::RegisterWrite expectedReset[] = {
+        {0x190010U, 0U},
+        {0x190030U, 0U}, {0x190034U, 0U}, {0x190038U, 0U},
+        {0x19003CU, 0U}, {0x190040U, 0U}, {0x190048U, 0U},
+        {0x190090U, 0xFFFFFFFFU}, {0x1900A0U, 0xFFFFFFFFU},
+        {0x1900A8U, 0xFFFFFFFFU}, {0x1900ACU, 0xFFFFFFFFU},
+        {0x1900D0U, 0xFFFFFFFFU}, {0x1900E8U, 0xFFFFFFFFU},
+        {0x1900ECU, 0xFFFFFFFFU}, {0x1900F0U, 0xFFFFFFFFU},
+        {0x190100U, 0xFFFFFFFFU},
+    };
+    constexpr uint32_t expectedResetCount =
+        sizeof(expectedReset) / sizeof(expectedReset[0]);
+    assert(NGVfIrqGate::preMsiQuiesceCount == expectedResetCount);
+    assert(NGVfIrqGate::preMsiQuiescePlan[0].offset ==
+           NGVfIrqGate::masterRegister);
+    assert(NGVfIrqGate::preMsiQuiescePlan[0].value == 0U);
+    for (uint32_t index = 0;
+         index < NGVfIrqGate::preMsiQuiesceCount; ++index) {
+        const auto &write = NGVfIrqGate::preMsiQuiescePlan[index];
+        assert(write.offset == expectedReset[index].offset);
+        assert(write.value == expectedReset[index].value);
+        assert(NGGpuCapabilities::isVfMmioRegister(write.offset));
+        if (index >= 1U && index <= 6U)
+            assert(write.value == 0U);
+        if (index >= 7U)
+            assert(write.value == 0xFFFFFFFFU);
+        for (uint32_t prior = 0; prior < index; ++prior)
+            assert(NGVfIrqGate::preMsiQuiescePlan[prior].offset !=
+                   write.offset);
+    }
+    assert(NGVfIrqGate::masterDisabled(0U));
+    assert(NGVfIrqGate::masterDisabled(0x7FFFFFFFU));
+    assert(!NGVfIrqGate::masterDisabled(0x80000000U));
+    assert(!NGVfIrqGate::masterDisabled(0xFFFFFFFFU));
+
+    std::printf("PASS: %llu VF IRQ gate states and %u pre-MSI reset writes\n",
+                static_cast<unsigned long long>(cases),
+                NGVfIrqGate::preMsiQuiesceCount);
     return 0;
 }
