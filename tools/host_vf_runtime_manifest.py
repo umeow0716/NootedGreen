@@ -14,7 +14,9 @@ import zipfile
 
 REQUIRED_KEYS = {
     "source_commit",
-    "ci_run_id",
+    "source_ci_run_id",
+    "driver_source_commit",
+    "driver_ci_run_id",
     "artifact_zip_path",
     "artifact_zip_sha256",
     "kext_executable_path",
@@ -26,6 +28,12 @@ REQUIRED_KEYS = {
     "efi_backup_sha256",
     "domain_xml_sha256",
 }
+DRIVER_SOURCE_PATHS = (
+    "NootedGreen",
+    "NootedGreen.xcodeproj",
+    "Lilu.kext",
+    "MacKernelSDK",
+)
 PATH_KEYS = {
     "artifact_zip_path",
     "kext_executable_path",
@@ -129,12 +137,24 @@ def git_output(repo: Path, *args: str) -> str:
     return result.stdout.strip()
 
 
+def git_status(repo: Path, *args: str) -> int:
+    return subprocess.run(
+        ["git", "-c", f"safe.directory={repo}", "-C", str(repo), *args],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+    ).returncode
+
+
 def verify(manifest_path: Path, repo: Path, domain_xml: Path) -> dict[str, str]:
     values = load_manifest(manifest_path)
-    if not COMMIT.fullmatch(values["source_commit"]):
-        raise ManifestError("source_commit must be a full lowercase Git object ID")
-    if not values["ci_run_id"].isdigit():
-        raise ManifestError("ci_run_id must be decimal")
+    for key in ("source_commit", "driver_source_commit"):
+        if not COMMIT.fullmatch(values[key]):
+            raise ManifestError(f"{key} must be a full lowercase Git object ID")
+    for key in ("source_ci_run_id", "driver_ci_run_id"):
+        if not values[key].isdigit():
+            raise ManifestError(f"{key} must be decimal")
     for key in SHA_KEYS:
         if not HEX64.fullmatch(values[key]):
             raise ManifestError(f"{key} must be a lowercase SHA-256")
@@ -146,6 +166,22 @@ def verify(manifest_path: Path, repo: Path, domain_xml: Path) -> dict[str, str]:
         raise ManifestError("repository HEAD does not match source_commit")
     if git_output(repo, "status", "--porcelain=v1"):
         raise ManifestError("repository worktree is not clean")
+    if git_status(
+        repo, "merge-base", "--is-ancestor",
+        values["driver_source_commit"], values["source_commit"],
+    ) != 0:
+        raise ManifestError("driver_source_commit is not an ancestor of source_commit")
+    driver_diff = git_status(
+        repo, "diff", "--quiet",
+        values["driver_source_commit"], values["source_commit"], "--",
+        *DRIVER_SOURCE_PATHS,
+    )
+    if driver_diff == 1:
+        raise ManifestError(
+            "driver product sources changed after driver_source_commit"
+        )
+    if driver_diff != 0:
+        raise ManifestError("cannot compare driver product source trees")
 
     paths = {key: checked_path(values[key], key) for key in PATH_KEYS}
     domain_xml = checked_path(str(domain_xml), "domain XML snapshot")
@@ -194,7 +230,10 @@ def main() -> None:
         raise SystemExit(f"FAIL: runtime manifest verification: {error}") from error
     print(
         "PASS: immutable runtime manifest "
-        f"commit={values['source_commit']} ci_run={values['ci_run_id']} "
+        f"commit={values['source_commit']} "
+        f"source_ci_run={values['source_ci_run_id']} "
+        f"driver_commit={values['driver_source_commit']} "
+        f"driver_ci_run={values['driver_ci_run_id']} "
         f"kext_uuid={values['kext_uuid']}"
     )
 

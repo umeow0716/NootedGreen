@@ -1,7 +1,9 @@
 # Copy this file outside the Git worktree and replace every placeholder.
 # Format is exactly key<TAB>value. Unknown, missing or duplicate keys fail.
 source_commit	0000000000000000000000000000000000000000
-ci_run_id	0
+source_ci_run_id	0
+driver_source_commit	0000000000000000000000000000000000000000
+driver_ci_run_id	0
 artifact_zip_path	/absolute/path/to/NootedGreen-Tahoe-x86_64.zip
 artifact_zip_sha256	0000000000000000000000000000000000000000000000000000000000000000
 kext_executable_path	/absolute/path/to/extracted/NootedGreen

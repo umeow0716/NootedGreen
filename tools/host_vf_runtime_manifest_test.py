@@ -43,10 +43,24 @@ def main() -> None:
         run_git(repo, "init", "-q")
         run_git(repo, "config", "user.name", "contract-test")
         run_git(repo, "config", "user.email", "contract-test@example.invalid")
-        (repo / "tracked").write_text("pinned\n")
-        run_git(repo, "add", "tracked")
-        run_git(repo, "commit", "-q", "-m", "fixture")
-        commit = run_git(repo, "rev-parse", "HEAD")
+        for relative in (
+            "NootedGreen/driver.cpp",
+            "NootedGreen.xcodeproj/project.pbxproj",
+            "Lilu.kext/lilu.hpp",
+            "MacKernelSDK/sdk.hpp",
+        ):
+            path = repo / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("pinned driver input\n")
+        run_git(repo, "add", ".")
+        run_git(repo, "commit", "-q", "-m", "driver fixture")
+        driver_commit = run_git(repo, "rev-parse", "HEAD")
+        controller = repo / "tools" / "controller.py"
+        controller.parent.mkdir()
+        controller.write_text("print('controller')\n")
+        run_git(repo, "add", "tools/controller.py")
+        run_git(repo, "commit", "-q", "-m", "controller-only fixture")
+        source_commit = run_git(repo, "rev-parse", "HEAD")
 
         image_uuid = uuid.UUID("9773b4c9-ff71-36b0-8107-910c0f318ec5")
         command = struct.pack("<II16s", 0x1B, 24, image_uuid.bytes)
@@ -68,8 +82,10 @@ def main() -> None:
         domain_xml.write_bytes(b"<domain/>\n")
         manifest = root / "manifest.tsv"
         values = {
-            "source_commit": commit,
-            "ci_run_id": "36330781623",
+            "source_commit": source_commit,
+            "source_ci_run_id": "36330781624",
+            "driver_source_commit": driver_commit,
+            "driver_ci_run_id": "36330781623",
             "artifact_zip_path": str(artifact),
             "artifact_zip_sha256": MODULE.sha256_path(artifact),
             "kext_executable_path": str(executable_path),
@@ -95,7 +111,7 @@ def main() -> None:
         artifact.write_bytes(original)
 
         with manifest.open("a") as stream:
-            stream.write(f"ci_run_id\t{values['ci_run_id']}\n")
+            stream.write(f"driver_ci_run_id\t{values['driver_ci_run_id']}\n")
         try:
             MODULE.load_manifest(manifest)
         except MODULE.ManifestError:
@@ -103,7 +119,23 @@ def main() -> None:
         else:
             raise AssertionError("duplicate manifest key was accepted")
 
-    print("PASS: runtime manifest hash/UUID/zip/worktree mutation contracts")
+        (repo / "NootedGreen" / "driver.cpp").write_text("mutated driver input\n")
+        run_git(repo, "add", "NootedGreen/driver.cpp")
+        run_git(repo, "commit", "-q", "-m", "driver mutation")
+        mutated_values = dict(values)
+        mutated_values["source_commit"] = run_git(repo, "rev-parse", "HEAD")
+        write_manifest(manifest, mutated_values)
+        try:
+            MODULE.verify(manifest, repo, domain_xml)
+        except MODULE.ManifestError as error:
+            assert "driver product sources changed" in str(error)
+        else:
+            raise AssertionError("driver-source drift was accepted")
+
+    print(
+        "PASS: runtime manifest controller/driver provenance, "
+        "hash/UUID/zip/worktree mutation contracts"
+    )
 
 
 if __name__ == "__main__":

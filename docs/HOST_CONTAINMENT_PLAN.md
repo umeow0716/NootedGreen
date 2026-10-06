@@ -32,8 +32,11 @@ binary, build and protocol validation is permitted.
 
 ## Preconditions for a future controlled run
 
-1. Record the exact source commit, CI run, artifact zip SHA-256, kext executable
-   UUID/SHA-256, final-path-built AuxKC SHA-256 and guest EFI backup. Reject any
+1. Record the exact controller source commit/CI run separately from the driver
+   source commit/CI run, plus artifact zip SHA-256, kext executable UUID/SHA-256,
+   final-path-built AuxKC SHA-256 and guest EFI backup. A controller-only update
+   may retain a previously loaded driver only when the driver commit is an
+   ancestor and the complete product source trees are Git-identical. Reject any
    mismatch before the domain starts. The runtime manifest format is pinned by
    `HOST_RUNTIME_MANIFEST.example.tsv`; the controller verifies it once before
    creating its transient service and again inside that service against a fresh
