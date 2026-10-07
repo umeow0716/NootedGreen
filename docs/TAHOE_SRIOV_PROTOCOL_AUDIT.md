@@ -1,16 +1,16 @@
 # Tahoe SR-IOV protocol audit — in progress
 
-Updated: 2026-10-07. The last deployed driver is exact V310 commit
-`2eff6da12362e9f7067091da98b9859afcd40c6a`, CI `37505970500`, executable
-UUID `E288091F-4FE1-3532-A983-DF354CC4707A`. Its only 90-second contained
-start completed the Gen11 IRQ reset but produced a host PF `00:02.0` DMA write
-to address zero before routed scheduler creation. The current offline worktree
-is V311 on `codex/tahoe-sriov-vf`: it defers the local filter-source and PCI Bus
-Master transition until all native HWS mappings exist. It has a complete local
-static pass at `/tmp/ngreen-static.RUrIPh`, but is NOT yet a boot-test candidate
-or successful driver baseline. Keep `macos-tahoe-sriov` shut off until V311 has
-a clean pushed exact-SHA CI/artifact, exact deployment/runtime provenance, and
-a rebooted Host journal with no pre-existing containment trigger.
+Updated: 2026-10-08. The last deployed driver is exact V311 commit
+`e1648aa91c0546a0d732dd7cd95255ee9506f5b8`, CI `37512998167`, executable
+UUID `577AF5BD-4880-348E-A8D1-05F96393C46F`. Its only 90-second contained
+start kept the Gen11 local filter source deferred and VF Bus Master disabled,
+but still produced a Host PF `00:02.0` DMA write to address zero after native
+HWCAPS. The current offline V312 worktree adds only bounded raw GGTT-PTE
+round-trip and exact native-start/task/table stage diagnostics. Complete local
+static passes at `/tmp/ngreen-static.mYSjB5`; V312 is NOT yet a boot-test
+candidate or a successful driver baseline. Keep `macos-tahoe-sriov` shut off
+until V312 has a clean pushed exact-SHA CI/artifact, exact deployment/runtime
+provenance, and a rebooted Host journal with no pre-existing trigger.
 
 The user's final display target is now Looking Glass, not Sunshine/Moonlight.
 Older Sunshine references below are historical review notes. No macOS Tahoe
@@ -24,6 +24,48 @@ KVMFR/client transport remains the intended receiving side.
 The authoritative dynamic-entry checklist is
 [`DYNAMIC_TEST_GATE.md`](DYNAMIC_TEST_GATE.md). Any open static gate keeps the
 VM hard hold in force.
+
+## V311 incident and V312 bounded diagnostic candidate
+
+- Exact V311 source, CI, artifact, final-path AuxKC and immutable runtime
+  manifest all passed. The guest load proof fixed executable SHA
+  `ce8d57ca829a7e3cd62265deea9431388e5cae49cafd1ab6b82cc54eacc04550`
+  and AuxKC SHA
+  `70880c9705e5378b78fbfd67b6afa6ce8698ac5dc29df082863c2a9d57e48a18`.
+- The single contained run is preserved at
+  `build/diagnostics/v311-tgl-start-90s-20261007T161141Z`. It reached exact
+  TGL load, VF identity, GuC ABI, PF topology/quotas, direct GGTT, 71 routes,
+  Gen11 IRQ reset, PCI MSI allocation, scheduler 4, global GGTT init and native
+  HWCAPS. `vfio-pci` enabled only PCI Memory Space (`0000 -> 0002`); V311's
+  local filter source and corresponding VF Bus Master transition had not been
+  observed.
+- Host monotonic `957.860230` then reported PF requester `00:02.0`, address
+  zero, `DMA Write NO_PASID`, reason `0x05`; containment destroyed the VM. The
+  current boot contains two additional equivalent faults in the destroy/FLR
+  interval and is tainted. No Metal, media or Looking Glass workload ran.
+- The independent guest log SSH process exited at `00:12:32.918`, about two
+  seconds before the first fault. Consequently the absence of later V311
+  markers does not prove that `startGraphicsEngine()` or another later native
+  stage was not reached. The next run must keep logging independent of the
+  `kmutil` request until Host containment.
+- Host ftrace completed with 2,262 pipe updates, zero frame mismatch, no
+  vblank crossing, three GGTT-owner intervals and 48 microseconds maximum
+  display critical time. The fault is not explained by a crossed-vblank
+  regression in the Host arbitration patch.
+- With the VM off, the PF raw PTE at assigned GGTT base
+  `0x5104000` read `0x0000000000000005`: Present + VFID1 with address zero.
+  This proves post-FLR Host provisioning only. Linux's media-12 direct VF path
+  also emits address + Present without explicitly adding VFID, so an ownership
+  OR/retain change is not source-grounded until direct-aperture readback is
+  observed.
+- V312 records at most 32 operations and only the first existing PTE store of
+  each: raw `before`, unchanged encoded `intended`, fenced raw `after`, GPU
+  address, physical address and operation class. It neither merges `before`
+  nor changes `NGVfGgttPte::encodeSystemMemory`. It also brackets the native
+  Intel start, `IGAccelTask` factory, and initial PPGTT factory/sync. Five
+  negative source mutations ensure the diagnostic cannot silently become an
+  ownership fix, lose its bound/barrier, or lose stage ordering. Complete
+  static passes at `/tmp/ngreen-static.mYSjB5`.
 
 ## V310 incident and V311 deferred Bus Master boundary (offline)
 

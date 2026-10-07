@@ -1,6 +1,6 @@
 # Tahoe VF 動態測試前靜態閘門
 
-Updated: 2026-10-07. 這是 fail-closed 清單，不是開機授權。任何標為
+Updated: 2026-10-08. 這是 fail-closed 清單，不是開機授權。任何標為
 `OPEN` 或 `REVIEWING` 的必要項都禁止啟動 `macos-tahoe-sriov`、部署候選
 kext/AuxKC、重綁 PCI 或寫入 SR-IOV sysfs。`CLOSED` 只代表指定的離線證據已
 閉合，不代表硬體執行成功。
@@ -17,37 +17,38 @@ kext/AuxKC、重綁 PCI 或寫入 SR-IOV sysfs。`CLOSED` 只代表指定的離�
 | SG-08 | render／depth／CCS／ICB／paging 的 allocation、event collection、partial submit 與錯誤傳遞 | CLOSED-STATIC | V300 固定八份 event-vector grow 的完整 147-call／38-owner 圖，52 個初始要求與 95 個 append growth 都由 postcondition fail-stop 保護；另以三個共同 boolean 邊界涵蓋 `submitBlit`、resource CCS 與 depth 的完整 35-call 清冊。非空 work 的 false、owner/transport 不一致與 later-plane/chunk rejection 都在 CPU 成功狀態可繼續發布前封門並 guest-panic；V281 cache/PTE commit-or-restore 仍為其前提。這是離線 fail-stop 證據，不是 GPU 執行或優雅復原證明。 |
 | SG-09 | timer／IRQ／workloop callback 的取消、排空與 owner lifetime | CLOSED-STATIC | V301 固定原生 DPSM、event-machine fallback 與 Scheduler4 passive timer 的 owner/binding/free 邊界；成功 start 在 publication 前驗證三者同屬 accelerator workloop，normal stop 在 base stop 清除 workloop 前同步 detach fallback/periodic source。Start 的 base rollback 與後續 null-provider Intel stop 也各自處理 partial binding。鎖內前後快照、workloop gate 同步 removal 與 IOTimer generation increment 排除 late raw-owner action；原生 owner 稍後負責 release，VF route 不偷取 reference。PagePool callback path 由既有 zero-option admission 排除。這仍是離線證據。 |
 | SG-10 | 所有 VF 可達 PF-owned MMIO／DMA／force-wake／reset 的 negative reachability | CLOSED-STATIC | V302 完成 `accelerator+0x1240` 的 131-owner／279-site 精確機械分割，並封閉 legacy construction、SafeRead/Write、Scheduler4 PM、cache/PAT/MOCS、dynamic-offset IRQ helper 與 modern GuC retained path。完整 static `/tmp/ngreen-static.CYth1a` 與 source checkpoint `5529127a03d5b92fcd8ae5ee538b9bad4e136be0` exact-SHA CI `37232739353` 通過。這仍不是硬體執行證據。 |
-| SG-11 | baseline 要求的所有程式檔完整審閱與 ledger closure | LOCAL-PASS / CI-PENDING | Exact ledger涵蓋1,502 paths及全部program/dependency/payload；V311新增的filter-source route、IOPCIFamily Bus Master ABI與HWS mapping boundary已納入雙payload及product-symbol ledger。完整static `/tmp/ngreen-static.RUrIPh`通過。 |
-| SG-12 | 精確候選 commit 的完整 static suite、x86_64 release kext、Metal smoke build 與 artifact provenance | OPEN V311 | V310 exact `2eff6da`／CI `37505970500`已完成但動態失敗，不能再作候選。V311仍須clean commit/push、exact-SHA CI成功並核對新artifact。 |
+| SG-11 | baseline 要求的所有程式檔完整審閱與 ledger closure | CLOSED-STATIC | Exact ledger涵蓋1,502 paths及全部program/dependency/payload；V311 filter-source/HWS boundary與V312 bounded GGTT round-trip/stage markers均納入source/mutation contracts。完整V312 static `/tmp/ngreen-static.mYSjB5`通過。 |
+| SG-12 | 精確候選 commit 的完整 static suite、x86_64 release kext、Metal smoke build 與 artifact provenance | OPEN V312 | V311 exact `e1648aa`／CI `37512998167`及部署均完成但動態失敗，不能重測。V312目前只有未提交worktree與local static；仍須clean commit/push、exact-SHA CI、release artifact與identity核對。 |
 
 ## 進入下一次動態前的即時阻擋表
 
 | ID | 必關閉條件 | 狀態 | 下一個可驗證出口 |
 | --- | --- | --- | --- |
-| RG-01 | 新Host boot的current-boot journal不得含既有containment trigger | OPEN / REBOOT REQUIRED | Boot `1cbc1016-be0c-444b-a614-1cea6796fba2`含V310在monotonic `846.876112`的PF `00:02.0` address-zero DMAR fault；禁止再測。V311離線/CI與可部署artifact完成後才可重開Host，並須由root preflight重驗。 |
+| RG-01 | 新Host boot的current-boot journal不得含既有containment trigger | OPEN / REBOOT REQUIRED | Boot `d2000a25-802a-4907-bbfa-ae8b5e77c87c`含V311自monotonic `957.860230`起的PF `00:02.0` address-zero DMAR fault；禁止再測。V312完整static/CI/部署後才可重開Host，並須由root preflight重驗。 |
 | RG-02 | 目標 VF `0000:00:02.1` 必須無其他active domain owner | CLOSED-NOW / RECHECK | `macos-tahoe-sriov`已shut off，當下沒有任何running libvirt domain；PF為i915、VF為vfio-pci、`sriov_numvfs=1`。啟動前必須重新列舉active XML。 |
-| RG-03 | V311 clean pushed exact-SHA CI與artifact身分 | LOCAL-PASS / CI-PENDING | Filter-source deferral、六個engine HWS＋global HWS、pre/post Bus Master、null-source rollback、雙payload exact call-chain與完整static `/tmp/ngreen-static.RUrIPh`通過；仍待commit/push、exact-SHA CI與artifact核對。 |
-| RG-04 | exact V311 kext的final-path AuxKC與immutable runtime manifest | OPEN | 依賴RG-03；不得沿用V310的`2eff6da` kext、AuxKC或manifest。部署只能使用核對後的V311 artifact。 |
+| RG-03 | V312 clean pushed exact-SHA CI與artifact身分 | LOCAL-PASS / CI-PENDING | 32次上限的first-store raw PTE round-trip、native start／kernel-task／initial page-table階段標記及五個negative mutation已通過完整static `/tmp/ngreen-static.mYSjB5`；仍待commit/push、exact-SHA CI與artifact核對。 |
+| RG-04 | exact V312 kext的final-path AuxKC與immutable runtime manifest | OPEN | 依賴RG-03；不得沿用V311的`e1648aa` kext、AuxKC或manifest。部署只能使用核對後的V312 artifact。 |
 | RG-05 | 最終runtime XML／qcow2／root current-boot containment preflight | OPEN | 新Host boot須先證明journal無trigger；部署完成後重新鎖定XML、qcow2、EFI、kext與AuxKC。四道閘門全關閉前不得進行VF-attached啟動；首輪仍只允許單次contained start-only，不得提交Metal／媒體工作。 |
 
 ## 目前主路徑
 
-V310 exact `2eff6da12362e9f7067091da98b9859afcd40c6a`、CI
-`37505970500`、AuxKC與immutable runtime manifest均已通過，且no-VF載入證明了
-UUID `E288091F-4FE1-3532-A983-DF354CC4707A`。唯一一次90秒contained start-only
-完成16筆IRQ reset、MSI allocation、HWCAPS與scheduler 4設定後，仍在routed
-`IGScheduler::create()`之前觸發PF `00:02.0` address-zero DMAR write；watcher立即
-destroy domain，未跑Metal、媒體或Looking Glass。證據保存在
-`build/diagnostics/v310-tgl-start-90s-20261006T180735Z/`。
+V311 exact `e1648aa91c0546a0d732dd7cd95255ee9506f5b8`、CI
+`37512998167`、AuxKC `70880c97...`與immutable manifest均已通過。唯一一次90秒
+contained start-only在VF PCI Command仍只有Memory Space、local filter source仍延後的
+條件下完成IRQ reset、MSI allocation、global GGTT init與HWCAPS，但Host約兩秒後仍捕捉
+PF `00:02.0` address-zero DMAR write並destroy domain；未跑Metal、媒體或Looking Glass。
+這排除「未遮罩VF IRQ／VF Bus Master已開」作為足夠解釋。Guest live log卻在fault前約
+兩秒隨`kmutil` SSH結束，所以不能以缺少後續V311 marker宣稱native stage未到達。證據與
+完整限制保存在`build/diagnostics/v311-tgl-start-90s-20261007T161141Z/README.md`。
 
-V311的精確Tahoe/XNU/IOPCIFamily審閱證明local filter event-source registration會
-透過`enableDeviceMSI()`同時開啟PCI Bus Master。新候選只對Gen11 virtual-MMIO VF
-延後filter-source construction，保留bridge物件供native scheduler callback ownership；
-到routed `startGraphicsEngine()`才逐一驗證六個engine HWS與global HWS的CPU/GPU／GGTT
-映射、PCI provider與Bus Master仍關閉，再呼叫原生factory並要求source發布及Bus Master
-開啟，之後才允許bridge與GuC firmware。MTL/ARL memory-IRQ與PF時序不變。完整local
-static已在`/tmp/ngreen-static.RUrIPh`通過；exact-SHA CI、artifact、部署與新boot root
-containment尚未完成，所以VM維持hard hold。
+VM關閉後唯讀PF GGTT檢查顯示assigned base第一筆raw PTE為`0x5`（Present+VFID1、
+address zero），只證明post-FLR provisioning，未證明guest direct store後ownership位。
+Linux media-12 VF direct path同樣寫address+Present，因此V312不先猜測保留VFID。它僅對
+最多32個GGTT operation的第一筆既有store記錄`before/intended/fenced after`，並精確標記
+native Intel start、IGAccelTask factory與initial PPGTT factory/sync；encoder、store值、
+PF行為與控制分支不變。完整local static已在`/tmp/ngreen-static.mYSjB5`通過；exact-SHA
+CI、artifact、部署與新boot root containment尚未完成，所以VM維持hard hold。下一輪另須
+讓獨立Guest log stream存活至Host containment，仍只允許start-only。
 
 V305 checkpoint `3cb57ac` 的完整static、x86_64 release kext、Metal smoke、artifact
 與root preflight都已通過。其後第三次maintenance boot完全移除VF hostdev、使用正常

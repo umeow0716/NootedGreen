@@ -6644,6 +6644,132 @@ def ggtt_postwrite_contract(source, path="<source>"):
         raise AssertionError(f"{path}: rotated mapping drops descriptor before completion")
 
 
+def v312_diagnostic_contract(source, path="<source>"):
+    """Pin V312 as bounded observation, never an ownership-bit repair."""
+    normalized = "".join(source.split())
+    if normalized.count("volatileSInt32gVfGgttDiagnosticWrites=0;") != 1:
+        raise AssertionError(f"{path}: missing unique V312 diagnostic counter")
+
+    helper = function_body(
+        source, "static void vfStoreFirstPteWithDiagnostic(")
+    compact = "".join(helper.split())
+    required = (
+        "constSInt32sample=OSIncrementAtomic(&gVfGgttDiagnosticWrites);",
+        "if(sample<=0||sample>32)",
+        "constuint64_tbefore=pteBase[gpu>>12];",
+        "pteBase[gpu>>12]=intended;",
+        '__asm__volatile("sfence":::"memory");',
+        "constuint64_tafter=pteBase[gpu>>12];",
+        'SYSLOG("ngreen","V312:GGTTsample=%dop=%ugpu=0x%llxphysical=0x%llxbefore=0x%016llxintended=0x%016llxafter=0x%016llx"',
+    )
+    for token in required:
+        if token not in compact:
+            raise AssertionError(
+                f"{path}: incomplete V312 GGTT diagnostic boundary: {token}")
+    if compact.count("pteBase[gpu>>12]=intended;") != 2:
+        raise AssertionError(
+            f"{path}: V312 diagnostic changed the exact-store cardinality")
+    for forbidden in (
+            "intended|before", "before|intended", "intended&before",
+            "before&intended", "intended|=", "intended&=",
+            "encodeSystemMemory", "vfMarkProtocolFault", "PANIC_COND"):
+        if forbidden in compact:
+            raise AssertionError(
+                f"{path}: V312 diagnostic became a behavior change: {forbidden}")
+    cap = compact.index("if(sample<=0||sample>32)")
+    fast_store = compact.index("pteBase[gpu>>12]=intended;", cap)
+    fast_return = compact.index("return;", fast_store)
+    before = compact.index("constuint64_tbefore=", fast_return)
+    observed_store = compact.index("pteBase[gpu>>12]=intended;", before)
+    fence = compact.index('__asm__volatile("sfence":::"memory");', observed_store)
+    after = compact.index("constuint64_tafter=", fence)
+    log = compact.index('SYSLOG("ngreen","V312:GGTTsample=', after)
+    if not cap < fast_store < fast_return < before < observed_store < fence < after < log:
+        raise AssertionError(
+            f"{path}: V312 before/store/readback ordering changed")
+
+    wrappers = (
+        ("bool Gen11::IGHardwareGlobalPageTableMapRange(void *that,",
+         "VfGgttDiagnosticOperation::Map"),
+        ("bool Gen11::IGHardwareGlobalPageTableMapRangeRotated(void *that,",
+         "VfGgttDiagnosticOperation::RotatedMap"),
+        ("bool Gen11::IGHardwareGlobalPageTableMapRangeRotated(void *that,",
+         "VfGgttDiagnosticOperation::RotatedRollback"),
+        ("void Gen11::IGHardwareGlobalPageTableUnmapRange(void *that,",
+         "VfGgttDiagnosticOperation::Unmap"),
+        ("bool Gen11::IGHardwareGlobalPageTableMapRangeDummy(void *that,",
+         "VfGgttDiagnosticOperation::DummyMap"),
+    )
+    for signature, operation in wrappers:
+        body = function_body(source, signature)
+        if body.count(operation) != 1 or body.count(
+                "vfStoreFirstPteWithDiagnostic(") < 1:
+            raise AssertionError(
+                f"{path}: direct GGTT entry lacks first-store observation: {operation}")
+
+    start = function_body(source, "bool Gen11::start(void *that, void *provider)")
+    start_pre = start.index(
+        'SYSLOG("ngreen", "V312: entering exact native IntelAccelerator start")')
+    start_call = start.index(
+        "const auto result = FunctionCast(start, callback->ostart)(that, provider)",
+        start_pre)
+    start_post = start.index(
+        'SYSLOG("ngreen", "V312: exact native IntelAccelerator start returned %d"',
+        start_call)
+    if not start_pre < start_call < start_post:
+        raise AssertionError(f"{path}: V312 native-start markers do not bracket the call")
+
+    task = function_body(source, "void *Gen11::igAccelTaskWithOptions(void *that)")
+    task_pre = task.index(
+        'SYSLOG("ngreen", "V312: entering native IGAccelTask factory accelerator=%p"')
+    task_call = task.index(
+        "callback->oigAccelTaskWithOptions)(that);", task_pre)
+    task_post = task.index(
+        'SYSLOG("ngreen", "V312: native IGAccelTask factory returned task=%p"',
+        task_call)
+    task_unlock = task.index(
+        "IORecursiveLockUnlock(gVfPageTableUpdateLock);", task_post)
+    if not task_pre < task_call < task_post < task_unlock:
+        raise AssertionError(f"{path}: V312 task-factory markers escaped the lock")
+
+    table = function_body(
+        source, "void *Gen11::vfNewPageTableForTask(void *that, void *task)")
+    table_entry = table.index(
+        'SYSLOG("ngreen", "V312: entering initial VF page-table factory')
+    table_factory = table.index(
+        'SYSLOG("ngreen", "V312: initial VF page-table factory returned',
+        table_entry)
+    table_sync = table.index(
+        'SYSLOG("ngreen", "V312: initial VF page-table synchronization returned',
+        table_factory)
+    table_unlock = table.rindex("IORecursiveLockUnlock(gVfPageTableUpdateLock);")
+    if not table_entry < table_factory < table_sync < table_unlock:
+        raise AssertionError(f"{path}: V312 initial-table markers changed transaction order")
+
+
+def v312_diagnostic_mutations(path):
+    source = pathlib.Path(path).read_text()
+    mutations = (
+        source.replace("sample > 32", "sample > 3200", 1),
+        source.replace("pteBase[gpu >> 12] = intended;\n\t__asm__",
+                       "pteBase[gpu >> 12] = intended | before;\n\t__asm__", 1),
+        source.replace('__asm__ volatile("sfence" ::: "memory");\n\tOSSynchronizeIO();\n\tconst uint64_t after',
+                       "const uint64_t after", 1),
+        source.replace('SYSLOG("ngreen", "V312: entering exact native IntelAccelerator start");',
+                       "/* missing start marker */", 1),
+        source.replace("VfGgttDiagnosticOperation::DummyMap", "VfGgttDiagnosticOperation::Map", 1),
+    )
+    for changed in mutations:
+        if changed == source:
+            raise AssertionError("missing V312 diagnostic mutation anchor")
+        try:
+            v312_diagnostic_contract(changed, path)
+        except (AssertionError, ValueError):
+            continue
+        raise AssertionError(f"{path}: escaped V312 diagnostic-only mutation")
+    print("PASS: five V312 bounded diagnostic/ordering mutations rejected")
+
+
 def ggtt_postwrite_mutations(path):
     source = pathlib.Path(path).read_text()
     mutations = (
@@ -6749,6 +6875,8 @@ def main():
     page_table_common_serialization_mutations(sys.argv[1])
     page_table_common_serialization_model()
     callback_owner_lifetime_mutations(sys.argv[1])
+    v312_diagnostic_contract(pathlib.Path(sys.argv[1]).read_text(), sys.argv[1])
+    v312_diagnostic_mutations(sys.argv[1])
     ggtt_postwrite_mutations(sys.argv[1])
     macho_inventory(sys.argv[2])
     macho_inventory(sys.argv[3])

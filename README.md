@@ -109,14 +109,15 @@ inherit runtime claims from the older Sonoma/Raptor Lake display experiments.
   framebuffer path and does not acquire a display engine from it.
 - Static analyzers and exhaustive host-side protocol models pass. This is not a
   Metal, media, DMA-quiescence or display validation result.
-- Three exact-artifact contained VF attachment runs enumerated the assigned
-  Raptor Lake VF and exercised no Metal workload. Two of those three runs
-  produced an i915 `Atomic update failure on pipe A` immediately after the
-  start-time VF FLRs. A later V309 run did reach SSH and successfully loaded
-  the exact TGL executable, but the host then recorded three PF `00:02.0` DMA
-  writes to address zero before routed engine start. V310 is an offline-only
-  candidate that restores Linux's Gen11 interrupt-reset-before-MSI ordering;
-  it is not acceleration evidence and must not run on the current tainted boot.
+- Exact-artifact contained VF runs through V311 have exercised no Metal
+  workload. V309 and V310 recorded PF `00:02.0` DMA writes to address zero;
+  V311 reproduced the fault even while its Gen11 local filter source remained
+  deferred and VF Bus Master stayed disabled. Its guest log ended roughly two
+  seconds before containment, so missing late markers are not stage proof.
+  V312 is diagnostic-only: it bounds raw first-store GGTT PTE round trips and
+  native start/task/table markers without changing the encoder or ownership
+  bits. It is not acceleration evidence and must not run on the current
+  tainted boot.
 - The host preflight rejects any boot that already contains that display-atomic
   message, and the live watcher treats a new occurrence as an immediate
   containment trigger. The whole-journal scan deliberately avoids early-exit

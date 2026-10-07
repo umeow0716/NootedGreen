@@ -239,6 +239,11 @@ volatile UInt32 gVfMemIrqRequested = 0;
 volatile UInt32 gVfMmioIrqReady = 0;
 volatile UInt32 gVfProtocolFault = 0;
 bool gVfMmioPoisoned = false; // protected by gVfGucLock
+// V312 diagnostic-only counter.  It bounds GGTT PTE round-trip logging across
+// every direct-map entry point without changing the encoded value or retaining
+// PF-owned ownership bits.  The diagnostic helper is used only for the first
+// store of an operation; all remaining stores keep the established V219 path.
+volatile SInt32 gVfGgttDiagnosticWrites = 0;
 volatile UInt32 gVfBootstrapStarted = 0;
 volatile UInt32 gVfTlbNextSeqno = 0;
 volatile UInt32 gVfTlbWaitActive = 0;
@@ -4087,6 +4092,45 @@ static volatile uint64_t *vfDirectPteBase(void *that)
 	return pteBase;
 }
 
+enum class VfGgttDiagnosticOperation : uint32_t {
+	Map = 1,
+	RotatedMap = 2,
+	RotatedRollback = 3,
+	Unmap = 4,
+	DummyMap = 5,
+};
+
+static void vfStoreFirstPteWithDiagnostic(volatile uint64_t *pteBase,
+	                                       uint64_t gpu, uint64_t physical,
+	                                       uint64_t intended,
+	                                       VfGgttDiagnosticOperation operation)
+{
+	const SInt32 sample = OSIncrementAtomic(&gVfGgttDiagnosticWrites);
+	if (sample <= 0 || sample > 32) {
+		pteBase[gpu >> 12] = intended;
+		return;
+	}
+
+	// Read the VF-visible raw entry before and after the exact pre-existing
+	// encoded store.  Do not merge `before` into `intended`: ownership bits are
+	// still a hypothesis and V312 must distinguish hardware preservation from a
+	// guest write that clears them.  A completed readback also places the record
+	// in the log before any later autonomous transaction can trip containment.
+	OSSynchronizeIO();
+	const uint64_t before = pteBase[gpu >> 12];
+	pteBase[gpu >> 12] = intended;
+	__asm__ volatile("sfence" ::: "memory");
+	OSSynchronizeIO();
+	const uint64_t after = pteBase[gpu >> 12];
+	SYSLOG("ngreen", "V312: GGTT sample=%d op=%u gpu=0x%llx physical=0x%llx before=0x%016llx intended=0x%016llx after=0x%016llx",
+	       static_cast<int>(sample), static_cast<unsigned int>(operation),
+	       static_cast<unsigned long long>(gpu),
+	       static_cast<unsigned long long>(physical),
+	       static_cast<unsigned long long>(before),
+	       static_cast<unsigned long long>(intended),
+	       static_cast<unsigned long long>(after));
+}
+
 static bool vfCanCompleteGgttUpdate()
 {
 	OSSynchronizeIO();
@@ -4150,7 +4194,12 @@ bool Gen11::IGHardwareGlobalPageTableMapRange(void *that,
 	}
 	const uint64_t end = range.start + range.length;
 	for (uint64_t gpu = range.start; gpu < end; gpu += 0x1000ULL) {
-		pteBase[gpu >> 12] = NGVfGgttPte::encodeSystemMemory(physical);
+		const uint64_t intended = NGVfGgttPte::encodeSystemMemory(physical);
+		if (gpu == range.start)
+			vfStoreFirstPteWithDiagnostic(pteBase, gpu, physical, intended,
+				VfGgttDiagnosticOperation::Map);
+		else
+			pteBase[gpu >> 12] = intended;
 		physical += 0x1000ULL;
 	}
 	vfRequireCompletedGgttUpdate();
@@ -4279,8 +4328,12 @@ bool Gen11::IGHardwareGlobalPageTableMapRangeRotated(void *that,
 				validSegments = false;
 				break;
 			}
-			pteBase[destination >> 12] =
-				NGVfGgttPte::encodeSystemMemory(physical);
+			const uint64_t intended = NGVfGgttPte::encodeSystemMemory(physical);
+			if (mappedPages == 0)
+				vfStoreFirstPteWithDiagnostic(pteBase, destination, physical,
+					intended, VfGgttDiagnosticOperation::RotatedMap);
+			else
+				pteBase[destination >> 12] = intended;
 			physical += 0x1000ULL;
 			mappedPages++;
 		}
@@ -4292,8 +4345,14 @@ bool Gen11::IGHardwareGlobalPageTableMapRangeRotated(void *that,
 		const uint64_t dummyPte = NGVfGgttPte::encodeSystemMemory(dummyPage);
 		for (uint64_t source = 0; source < mappedPages; source++) {
 			uint64_t destination = 0;
-			if (NGGgttRotation::destination(spec, source, destination))
-				pteBase[destination >> 12] = dummyPte;
+			if (NGGgttRotation::destination(spec, source, destination)) {
+				if (source == 0)
+					vfStoreFirstPteWithDiagnostic(pteBase, destination,
+						dummyPage, dummyPte,
+						VfGgttDiagnosticOperation::RotatedRollback);
+				else
+					pteBase[destination >> 12] = dummyPte;
+			}
 		}
 		vfRequireCompletedGgttUpdate();
 		segments->memory->release();
@@ -4334,8 +4393,13 @@ void Gen11::IGHardwareGlobalPageTableUnmapRange(void *that,
 		"ngreen", "VF GGTT unmap has no valid direct PTE or dummy page");
 	const uint64_t dummyPte = NGVfGgttPte::encodeSystemMemory(dummyPage);
 	const uint64_t end = range.start + range.length;
-	for (uint64_t gpu = range.start; gpu < end; gpu += 0x1000ULL)
-		pteBase[gpu >> 12] = dummyPte;
+	for (uint64_t gpu = range.start; gpu < end; gpu += 0x1000ULL) {
+		if (gpu == range.start)
+			vfStoreFirstPteWithDiagnostic(pteBase, gpu, dummyPage, dummyPte,
+				VfGgttDiagnosticOperation::Unmap);
+		else
+			pteBase[gpu >> 12] = dummyPte;
+	}
 
 	// Apple releaseRange calls this virtual method, sets only a deferred flush
 	// bit and can then return to a caller that releases the DMA mapping. A
@@ -4371,8 +4435,13 @@ bool Gen11::IGHardwareGlobalPageTableMapRangeDummy(void *that,
 	}
 	const uint64_t dummyPte = NGVfGgttPte::encodeSystemMemory(dummyPage);
 	const uint64_t end = range.start + range.length;
-	for (uint64_t gpu = range.start; gpu < end; gpu += 0x1000ULL)
-		pteBase[gpu >> 12] = dummyPte;
+	for (uint64_t gpu = range.start; gpu < end; gpu += 0x1000ULL) {
+		if (gpu == range.start)
+			vfStoreFirstPteWithDiagnostic(pteBase, gpu, dummyPage, dummyPte,
+				VfGgttDiagnosticOperation::DummyMap);
+		else
+			pteBase[gpu >> 12] = dummyPte;
+	}
 	vfRequireCompletedGgttUpdate();
 	return true;
 }
@@ -4516,6 +4585,8 @@ void *Gen11::vfNewPageTableForTask(void *that, void *task)
 	if (gVfIdentity != VfIdentity::Virtual)
 		return FunctionCast(vfNewPageTableForTask,
 		                    callback->oVfNewPageTableForTask)(that, task);
+	SYSLOG("ngreen", "V312: entering initial VF page-table factory task=%p manager=%p",
+	       task, that);
 
 	if (!vfEnsurePageTableUpdateLock()) {
 		SYSLOG("ngreen", "V282: cannot serialize initial VF page-table synchronization");
@@ -4535,6 +4606,8 @@ void *Gen11::vfNewPageTableForTask(void *that, void *task)
 	else if (accelerator && addressMode == 3)
 		pageTable = reinterpret_cast<WithOptions>(
 			callback->vfPpgtt64WithOptions)(accelerator, task);
+	SYSLOG("ngreen", "V312: initial VF page-table factory returned table=%p mode=%u",
+	       pageTable, addressMode);
 	if (!pageTable) {
 		IORecursiveLockUnlock(gVfPageTableUpdateLock);
 		return nullptr;
@@ -4623,6 +4696,8 @@ void *Gen11::vfNewPageTableForTask(void *that, void *task)
 		SYSLOG("ngreen", "V282: rejected partial VF page-table synchronization");
 	}
 
+	SYSLOG("ngreen", "V312: initial VF page-table synchronization returned table=%p kernel=%d synchronized=%d",
+	       pageTable, kernelTask, synchronized);
 	IORecursiveLockUnlock(gVfPageTableUpdateLock);
 	return pageTable;
 }
@@ -5446,7 +5521,12 @@ bool Gen11::start(void *that, void *provider)
 		}
 	}
 
+	if (vfActive)
+		SYSLOG("ngreen", "V312: entering exact native IntelAccelerator start");
 	const auto result = FunctionCast(start, callback->ostart)(that, provider);
+	if (vfActive)
+		SYSLOG("ngreen", "V312: exact native IntelAccelerator start returned %d",
+		       result);
 	if (!result) {
 		if (vfActive) {
 			// The pinned Tahoe start body normally routes failures after
@@ -5840,8 +5920,14 @@ void *Gen11::igAccelTaskWithOptions(void *that)
 	// unrelated IOAccelTask base-class field or substitute a borrowed task. The
 	// recursive domain spans inherited early list publication, private-table
 	// construction and failed-init destruction/list unlink.
+	if (vfTask)
+		SYSLOG("ngreen", "V312: entering native IGAccelTask factory accelerator=%p",
+		       that);
 	auto *task = FunctionCast(igAccelTaskWithOptions,
 	                         callback->oigAccelTaskWithOptions)(that);
+	if (vfTask)
+		SYSLOG("ngreen", "V312: native IGAccelTask factory returned task=%p",
+		       task);
 	if (vfTask)
 		IORecursiveLockUnlock(gVfPageTableUpdateLock);
 	return task;
