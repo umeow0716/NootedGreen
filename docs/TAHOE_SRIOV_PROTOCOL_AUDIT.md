@@ -1,17 +1,19 @@
 # Tahoe SR-IOV protocol audit — in progress
 
-Updated: 2026-10-08. The last deployed driver is exact V314 commit
-`facf568270467257c0f78fa600f87d17df99d46a`, CI `37676393786`, executable
-UUID `5D4FB152-C4E3-37D6-9BCE-BDCBCF7F6F5A`. Its valid sole 90-second
-contained start proved VF PCI Bus Master was held off, then reached the initial
-mode-3 PPGTT factory/global-owner scan before a Host PF `00:02.0` address-zero
-DMA write about 42 ms later. The independent Guest log remained live until
-domain off; no Metal, media or Looking Glass ran. The current offline V315
-worktree replaces only the exact empty initial kernel-PPGTT scan. The complete
-local static suite passes at `/tmp/ngreen-static.oDSDqJ`, but commit, CI and all
-deployment gates remain open. V315 is NOT yet a boot-test candidate or a successful driver
-baseline. Keep `macos-tahoe-sriov` shut off; current Host boot
-`538a2b42-8fd3-4120-965b-d1032d0a7da3` is tainted and may not start any VM.
+Updated: 2026-10-08. The last deployed driver is exact V315 commit
+`3059bb0de400c1e26ddd2e01ad5c6bf0b456ea08`, CI `37686920388`, executable
+UUID `FB9A3F5D-D604-346D-993C-7C2B8CAD7215` and candidate AuxKC
+`1c5d21911092548ee79892933f82e90fab7eb4ae056493c4ef29272533e8ee22`.
+Its sole 90-second contained start crossed V314's empty initial kernel-PPGTT
+fault and completed ten bounded direct-GGTT first-PTE readbacks. It did not
+return from the native task factory, but neither Guest nor Host reported a
+protocol fault, panic or configured containment trigger; the fixed deadline
+ended the run. No Metal, media or Looking Glass ran. The current offline V316
+worktree adds only bounded task-construction diagnostics. Full static passes at
+`/tmp/ngreen-static.CCghFU`; clean commit, exact-SHA CI, artifact, deployment
+and fresh-boot gates remain open. Keep `macos-tahoe-sriov` shut off. Current
+Host boot `69a5e843-2b12-47d6-9be4-9e7fb48b46f0` is clean but retired by the
+one-start rule and may not start any VM.
 
 The user's final display target is now Looking Glass, not Sunshine/Moonlight.
 Older Sunshine references below are historical review notes. No macOS Tahoe
@@ -26,7 +28,52 @@ The authoritative dynamic-entry checklist is
 [`DYNAMIC_TEST_GATE.md`](DYNAMIC_TEST_GATE.md). Any open static gate keeps the
 VM hard hold in force.
 
-## V314 incident and V315 exact empty kernel-PPGTT bootstrap
+## V315 result and V316 bounded task-construction diagnostics
+
+- V315 passed exact-SHA CI/artifact provenance, two active no-VF maintenance
+  boots, four-sample load proof and immutable runtime manifest
+  `389a375d6a6e4a6a8407ceae2d4d6ff77c6547c28ea4c349b93d3ba1ca2d6887`.
+  Fresh Host boot `69a5e843-2b12-47d6-9be4-9e7fb48b46f0` passed exact
+  repo/evidence, DKMS/i915, PF/VF, qcow2 and root current-boot containment
+  before its sole domain start. The Guest helper SHA was exact, and the
+  independent live log remained active until domain off.
+- The V315 start admitted the exact empty initial kernel PPGTT and returned
+  `kernel=1 synchronized=1`. Ten `op=1` direct-GGTT samples then recorded
+  owner-placeholder `before=0x1` and exact intended/after equality; the last
+  sample was GPU `0x4000d000`, physical `0x39e7f2000`. The task factory and
+  native accelerator start did not return before the fixed deadline. There was
+  no Guest panic, protocol fault or Host configured trigger. Complete evidence
+  is sealed under `build/diagnostics/v315-tgl-start-90s-20261007T215448Z`
+  with outer manifest SHA `e88a9def...` and Host regular-file manifest SHA
+  `2301a727...`.
+- Exact Tahoe disassembly fixes the next native construction sequence as
+  page-table creation, managed-page-table-list initialization,
+  `initStampAndScratchPages`, then `IGAuxPageTable::withOptions`. The managed
+  list step only allocates its list node. Stamp/scratch creates mapped scratch
+  and shared stamp storage; the Aux factory allocates and maps fixed `0x8000`
+  backing before initializing its software state. The ten V315 first-PTE
+  samples are consistent with those allocations, but lack operation lengths
+  and completion markers, so that attribution is deliberately not asserted.
+- V316 leaves every mapping, PTE value, invalidation, ownership and BME branch
+  unchanged. The existing first-PTE record gains the operation length and a
+  bounded ticket; a matching completion marker appears only after every store
+  and the required synchronous GGTT invalidation. Exact VF-only pass-through
+  wrappers bracket native `initStampAndScratchPages` and
+  `IGAuxPageTable::withOptions` calls while preserving arguments, result and
+  ownership. A separate atomic counter caps this stage telemetry at eight
+  tickets; the established `V312: GGTT sample=` prefix remains intact.
+- Both payloads pin the task-init-to-stamp/Aux call edges, complete stamp and
+  Aux bodies, the fixed Aux `0x8000` allocation and their exact body hashes.
+  Eight negative V316 mutations reject missing completion/order/length and
+  weakened stage bounds. The full static suite passes at
+  `/tmp/ngreen-static.CCghFU`: 1,503 ledger paths, 164 Gen11 methods, 98 route
+  fields, 623 defined product symbols and 168 unique routes (144 accelerator,
+  three framebuffer, 21 System KC). This is observation-only static evidence;
+  V316 is not deployable until clean commit, exact-SHA CI/artifact identity,
+  two no-VF maintenance boots, load proof, immutable manifest and a fresh Host
+  root gate all pass.
+
+## V314 incident and V315 exact empty kernel-PPGTT bootstrap (historical)
 
 - V314 passed exact-SHA CI, release provenance, two active no-VF deployment
   boots, four-sample load proof and immutable runtime manifest `c51bcd47...`.

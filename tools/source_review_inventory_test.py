@@ -109,12 +109,12 @@ EXPECTED_DIRECT_VENDOR_INCLUDES = {
 }
 EXPECTED_PRODUCT_SYMBOL_COUNTS = {
     "undefined": 80,
-    "defined": 621,
+    "defined": 623,
     "external": 69,
 }
 EXPECTED_PRODUCT_SYMBOL_DIGESTS = {
     "undefined": "ef4db32a81690fba34f75525418d6966d9d9a3fd874b16ca1c71448698fbc94d",
-    "defined": "c321743731e6870f1f542b533021ec2d572725efde822424453368354969c7de",
+    "defined": "305b37e7bfa2c33d300a39d8a7b3f1d7f4eefcc9da9fc5acf715b428c3a1fe33",
     "external": "338d33f99d48dab47a7c7a2640c5f09c7ff711979713d158ef22f65f0086bff7",
 }
 EXPECTED_EXTERNAL_ABI_PARTITIONS = {
@@ -294,11 +294,13 @@ def product_symbol_surface():
         "external": sorted(external),
     }
     for name, values in surfaces.items():
+        actual_digest = digest_paths(values)
         assert len(values) == EXPECTED_PRODUCT_SYMBOL_COUNTS[name], (
-            f"product {name} symbol count changed: {len(values)}"
+            f"product {name} symbol count changed: {len(values)}; "
+            f"digest {actual_digest}"
         )
-        assert digest_paths(values) == EXPECTED_PRODUCT_SYMBOL_DIGESTS[name], (
-            f"product {name} symbol surface changed"
+        assert actual_digest == EXPECTED_PRODUCT_SYMBOL_DIGESTS[name], (
+            f"product {name} symbol surface changed: {actual_digest}"
         )
 
     lilu_binary = str(ROOT / "Lilu.kext/Contents/MacOS/Lilu")
@@ -510,7 +512,7 @@ def verify_product_ownership():
     method_names = set(re.findall(
         r"\bGen11::([A-Za-z_][A-Za-z0-9_]*)\s*\(", gen11_cpp
     ))
-    assert len(method_names) == 162, (
+    assert len(method_names) == 164, (
         f"Gen11 definition inventory changed: {len(method_names)}"
     )
     for name in method_names:
@@ -523,7 +525,7 @@ def verify_product_ownership():
     route_fields = re.findall(
         r"\bmach_vm_address_t\s+([A-Za-z_][A-Za-z0-9_]*)\s*\{", gen11_header
     )
-    assert len(route_fields) == 96, (
+    assert len(route_fields) == 98, (
         f"Gen11 route/original field inventory changed: {len(route_fields)}"
     )
     for name in route_fields:

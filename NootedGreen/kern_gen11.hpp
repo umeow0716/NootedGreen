@@ -170,6 +170,10 @@ private:
 	static void vfDisableEdramProbe(void *that);
 	static void *igAccelTaskWithOptions(void *that);
 	mach_vm_address_t oigAccelTaskWithOptions {};
+	static bool vfInitStampAndScratchPages(void *that);
+	mach_vm_address_t oVfInitStampAndScratchPages {};
+	static void *vfAuxPageTableWithOptions(void *accelerator, void *task);
+	mach_vm_address_t oVfAuxPageTableWithOptions {};
 	mach_vm_address_t igAccelTaskCounter {};
 	static bool IGAccelTaskIsKernelGPUTask(const void *that);
 	mach_vm_address_t oIGAccelTaskIsKernelGPUTask {};

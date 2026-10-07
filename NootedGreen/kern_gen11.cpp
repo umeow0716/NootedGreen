@@ -246,6 +246,10 @@ bool gVfMmioPoisoned = false; // protected by gVfGucLock
 // Saturate after the bounded diagnostic window.  Nonzero is consequently a
 // monotonic, non-wrapping proof that a routed direct GGTT store has occurred.
 volatile UInt32 gVfGgttDiagnosticWrites = 0;
+// V316 diagnostic-only task-construction tickets.  One ticket brackets one
+// complete native substage; saturation keeps repeated task creation from
+// turning a start-boundary probe into an unbounded kernel log source.
+static volatile UInt32 gVfTaskConstructionDiagnosticStages = 0;
 volatile UInt32 gVfBootstrapStarted = 0;
 volatile UInt32 gVfTlbNextSeqno = 0;
 volatile UInt32 gVfTlbWaitActive = 0;
@@ -3334,6 +3338,13 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			 // Keep the bootstrap task identity coherent before native allocation.
 			 // Allocation failures propagate; no borrowed kernel task is substituted.
 			 {"__ZN11IGAccelTask11withOptionsEP16IntelAccelerator", igAccelTaskWithOptions, this->oigAccelTaskWithOptions},
+			 // Diagnostic-only V316 brackets distinguish scratch/stamp completion
+			 // from the following fixed-size Aux page-table construction. Both
+			 // wrappers preserve the native ABI, arguments, result and ownership.
+			 {"__ZN11IGAccelTask24initStampAndScratchPagesEv",
+			  vfInitStampAndScratchPages, this->oVfInitStampAndScratchPages},
+			 {"__ZN14IGAuxPageTable11withOptionsEP16IntelAcceleratorP11IGAccelTask",
+			  vfAuxPageTableWithOptions, this->oVfAuxPageTableWithOptions},
 			 // V214: During IOAccel bootstrap IntelAccelerator+0x150 is still null.  The
 			 // TGL driver otherwise takes the non-kernel branch in newPageTableForTask
 			 // and dereferences that null task at +0x260.  Treat only this first VF task
@@ -4102,10 +4113,11 @@ enum class VfGgttDiagnosticOperation : uint32_t {
 	DummyMap = 5,
 };
 
-static void vfStoreFirstPteWithDiagnostic(volatile uint64_t *pteBase,
-	                                       uint64_t gpu, uint64_t physical,
-	                                       uint64_t intended,
-	                                       VfGgttDiagnosticOperation operation)
+static UInt32 vfStoreFirstPteWithDiagnostic(volatile uint64_t *pteBase,
+	                                         uint64_t gpu, uint64_t physical,
+	                                         uint64_t intended,
+	                                         VfGgttDiagnosticOperation operation,
+	                                         uint64_t operationLength)
 {
 	UInt32 sample = gVfGgttDiagnosticWrites;
 	while (sample < 33) {
@@ -4118,7 +4130,7 @@ static void vfStoreFirstPteWithDiagnostic(volatile uint64_t *pteBase,
 	}
 	if (sample == 0 || sample > 32) {
 		pteBase[gpu >> 12] = intended;
-		return;
+		return 0;
 	}
 
 	// Read the VF-visible raw entry before and after the exact pre-existing
@@ -4132,13 +4144,15 @@ static void vfStoreFirstPteWithDiagnostic(volatile uint64_t *pteBase,
 	__asm__ volatile("sfence" ::: "memory");
 	OSSynchronizeIO();
 	const uint64_t after = pteBase[gpu >> 12];
-	SYSLOG("ngreen", "V312: GGTT sample=%d op=%u gpu=0x%llx physical=0x%llx before=0x%016llx intended=0x%016llx after=0x%016llx",
+	SYSLOG("ngreen", "V312: GGTT sample=%d op=%u gpu=0x%llx length=0x%llx physical=0x%llx before=0x%016llx intended=0x%016llx after=0x%016llx",
 	       static_cast<int>(sample), static_cast<unsigned int>(operation),
 	       static_cast<unsigned long long>(gpu),
+	       static_cast<unsigned long long>(operationLength),
 	       static_cast<unsigned long long>(physical),
 	       static_cast<unsigned long long>(before),
 	       static_cast<unsigned long long>(intended),
 	       static_cast<unsigned long long>(after));
+	return sample;
 }
 
 static bool vfCanCompleteGgttUpdate()
@@ -4203,16 +4217,23 @@ bool Gen11::IGHardwareGlobalPageTableMapRange(void *that,
 		return false;
 	}
 	const uint64_t end = range.start + range.length;
+	UInt32 diagnosticSample = 0;
 	for (uint64_t gpu = range.start; gpu < end; gpu += 0x1000ULL) {
 		const uint64_t intended = NGVfGgttPte::encodeSystemMemory(physical);
 		if (gpu == range.start)
-			vfStoreFirstPteWithDiagnostic(pteBase, gpu, physical, intended,
-				VfGgttDiagnosticOperation::Map);
+			diagnosticSample = vfStoreFirstPteWithDiagnostic(
+				pteBase, gpu, physical, intended,
+				VfGgttDiagnosticOperation::Map, range.length);
 		else
 			pteBase[gpu >> 12] = intended;
 		physical += 0x1000ULL;
 	}
 	vfRequireCompletedGgttUpdate();
+	if (diagnosticSample != 0)
+		SYSLOG("ngreen", "V316: GGTT complete sample=%d gpu=0x%llx length=0x%llx",
+		       static_cast<int>(diagnosticSample),
+		       static_cast<unsigned long long>(range.start),
+		       static_cast<unsigned long long>(range.length));
 	return true;
 }
 
@@ -4340,8 +4361,10 @@ bool Gen11::IGHardwareGlobalPageTableMapRangeRotated(void *that,
 			}
 			const uint64_t intended = NGVfGgttPte::encodeSystemMemory(physical);
 			if (mappedPages == 0)
-				vfStoreFirstPteWithDiagnostic(pteBase, destination, physical,
-					intended, VfGgttDiagnosticOperation::RotatedMap);
+				vfStoreFirstPteWithDiagnostic(
+					pteBase, destination, physical, intended,
+					VfGgttDiagnosticOperation::RotatedMap,
+					spec.rangeLength);
 			else
 				pteBase[destination >> 12] = intended;
 			physical += 0x1000ULL;
@@ -4357,9 +4380,10 @@ bool Gen11::IGHardwareGlobalPageTableMapRangeRotated(void *that,
 			uint64_t destination = 0;
 			if (NGGgttRotation::destination(spec, source, destination)) {
 				if (source == 0)
-					vfStoreFirstPteWithDiagnostic(pteBase, destination,
-						dummyPage, dummyPte,
-						VfGgttDiagnosticOperation::RotatedRollback);
+					vfStoreFirstPteWithDiagnostic(
+						pteBase, destination, dummyPage, dummyPte,
+						VfGgttDiagnosticOperation::RotatedRollback,
+						mappedPages * 0x1000ULL);
 				else
 					pteBase[destination >> 12] = dummyPte;
 			}
@@ -4405,8 +4429,9 @@ void Gen11::IGHardwareGlobalPageTableUnmapRange(void *that,
 	const uint64_t end = range.start + range.length;
 	for (uint64_t gpu = range.start; gpu < end; gpu += 0x1000ULL) {
 		if (gpu == range.start)
-			vfStoreFirstPteWithDiagnostic(pteBase, gpu, dummyPage, dummyPte,
-				VfGgttDiagnosticOperation::Unmap);
+			vfStoreFirstPteWithDiagnostic(
+				pteBase, gpu, dummyPage, dummyPte,
+				VfGgttDiagnosticOperation::Unmap, range.length);
 		else
 			pteBase[gpu >> 12] = dummyPte;
 	}
@@ -4447,8 +4472,9 @@ bool Gen11::IGHardwareGlobalPageTableMapRangeDummy(void *that,
 	const uint64_t end = range.start + range.length;
 	for (uint64_t gpu = range.start; gpu < end; gpu += 0x1000ULL) {
 		if (gpu == range.start)
-			vfStoreFirstPteWithDiagnostic(pteBase, gpu, dummyPage, dummyPte,
-				VfGgttDiagnosticOperation::DummyMap);
+			vfStoreFirstPteWithDiagnostic(
+				pteBase, gpu, dummyPage, dummyPte,
+				VfGgttDiagnosticOperation::DummyMap, range.length);
 		else
 			pteBase[gpu >> 12] = dummyPte;
 	}
@@ -5929,6 +5955,60 @@ void Gen11::vfDisableEdramProbe(void *that)
 		return;
 	getMember<uint8_t>(that, 0x20) = 0;
 	getMember<uint8_t>(that, 0x21) = 0;
+}
+
+static UInt32 vfTakeTaskConstructionDiagnosticStage()
+{
+	UInt32 stage = gVfTaskConstructionDiagnosticStages;
+	while (stage < 9) {
+		const UInt32 next = stage + 1;
+		if (OSCompareAndSwap(
+		        stage, next, &gVfTaskConstructionDiagnosticStages)) {
+			stage = next;
+			break;
+		}
+		stage = gVfTaskConstructionDiagnosticStages;
+	}
+	return stage > 8 ? 0 : stage;
+}
+
+bool Gen11::vfInitStampAndScratchPages(void *that)
+{
+	PANIC_COND(!that || !callback || !callback->oVfInitStampAndScratchPages,
+		"ngreen", "Missing native VF stamp/scratch construction boundary");
+	const UInt32 stage = gVfIdentity == VfIdentity::Virtual ?
+		vfTakeTaskConstructionDiagnosticStage() : 0;
+	if (stage != 0)
+		SYSLOG("ngreen", "V316: task stage=%d stamp-scratch enter task=%p",
+		       static_cast<int>(stage), that);
+	const bool initialized = FunctionCast(
+		vfInitStampAndScratchPages,
+		callback->oVfInitStampAndScratchPages)(that);
+	if (stage != 0)
+		SYSLOG("ngreen", "V316: task stage=%d stamp-scratch return=%d scratch=%p stamp=%p",
+		       static_cast<int>(stage), initialized,
+		       getMember<void *>(that, 0x280),
+		       getMember<void *>(that, 0x288));
+	return initialized;
+}
+
+void *Gen11::vfAuxPageTableWithOptions(void *accelerator, void *task)
+{
+	PANIC_COND(!accelerator || !task || !callback ||
+	           !callback->oVfAuxPageTableWithOptions,
+		"ngreen", "Missing native VF Aux page-table construction boundary");
+	const UInt32 stage = gVfIdentity == VfIdentity::Virtual ?
+		vfTakeTaskConstructionDiagnosticStage() : 0;
+	if (stage != 0)
+		SYSLOG("ngreen", "V316: task stage=%d Aux page-table enter accelerator=%p task=%p",
+		       static_cast<int>(stage), accelerator, task);
+	auto *table = FunctionCast(
+		vfAuxPageTableWithOptions,
+		callback->oVfAuxPageTableWithOptions)(accelerator, task);
+	if (stage != 0)
+		SYSLOG("ngreen", "V316: task stage=%d Aux page-table return=%p",
+		       static_cast<int>(stage), table);
+	return table;
 }
 
 void Gen11::populateResetRegisterList(void *that)

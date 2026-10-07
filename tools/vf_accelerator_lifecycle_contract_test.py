@@ -92,6 +92,9 @@ STAMP_IRQ_NATIVE = {
     "__ZN16IntelAccelerator19createKernelGPUTaskEv": (0xa, "30021915389fd196a6e879b21a175f135be03e009e385a325f9fc33595937ba6"),
     "__ZN16IntelAccelerator17createUserGPUTaskEv": (0x3c, "3ff9c8b607763de74cd8eccb7125f9a4abb7261a59fa48f2ef78dafeabbef377"),
     "__ZN11IGAccelTask15initWithOptionsEP16IntelAccelerator": (0x1aa, "18246f4bec33ea91f21f670c87a4bbccc4f1ccbf7ed9f60bc34d07ba2f133a25"),
+    "__ZN11IGAccelTask24initStampAndScratchPagesEv": (0xf2, "06f8653ced2ed12ff574b0bfabf21e6e1a0e830fe177af56c13647f0aa261c35"),
+    "__ZN14IGAuxPageTable11withOptionsEP16IntelAcceleratorP11IGAccelTask": (0x58, "8e57d35cc6da63ccc811d46a2238b47b820a0478aae55c29bb6db65a0c1ddc62"),
+    "__ZN14IGAuxPageTable15initWithOptionsEP16IntelAcceleratorP11IGAccelTask": (0x178, "d06998a0dc5123b92ad9e05bff5b6206d947e21f3340c54533dd3d649a931286"),
     "__ZN16IGAccelMemoryMap21freeGPUVirtualAddressEv": (0x10a, "ff45337bab3d4a8e8a5018d739955a37a365ffbba6a49a1d9f4ed0796b2cceb8"),
     "__ZN24IGStolenMemoryDescriptor12setPurgeableEjPj": (0x2a, "97baec040a0d4c7f45075fefae44847895641f129d598b41581dceb613be1b9e"),
     "__ZN18IGStolenMemoryPool8allocateEm": (0xa8, "2da22d3ece5349942f8b06df08644420dc1824d5c8059116ba3e107214a46875"),
@@ -390,6 +393,8 @@ CONTEXT_RING_GPU_ADDRESS = "__ZN17IGHardwareContext25initRingGPUVirtualAddressEv
 TASK_STAMP_GPU_ADDRESS = "__ZNK11IGAccelTask25getStampGPUVirtualAddressEv"
 TASK_STAMPS = "__ZNK11IGAccelTask9getStampsEv"
 TASK_INIT_STAMPS = "__ZN11IGAccelTask24initStampAndScratchPagesEv"
+AUX_PAGE_TABLE_FACTORY = "__ZN14IGAuxPageTable11withOptionsEP16IntelAcceleratorP11IGAccelTask"
+AUX_PAGE_TABLE_INIT = "__ZN14IGAuxPageTable15initWithOptionsEP16IntelAcceleratorP11IGAccelTask"
 TASK_FREE = "__ZN11IGAccelTask4freeEv"
 TASK_RELEASE_STAMPS = "__ZN11IGAccelTask27releaseStampAndScratchPagesEv"
 TASK_RELEASE = "__ZNK11IGAccelTask7releaseEv"
@@ -2035,6 +2040,28 @@ def macho_inventory(path):
     assert direct_branches(
         "__ZN11IGAccelTask15initWithOptionsEP16IntelAccelerator",
         "__ZN15IGMemoryManager19newPageTableForTaskEP11IGAccelTask") == [0x79a4], f"{path}: changed unique unpublished page-table factory owner"
+    assert direct_branches(
+        "__ZN11IGAccelTask15initWithOptionsEP16IntelAccelerator",
+        TASK_INIT_STAMPS) == [0x79c4], \
+        f"{path}: changed task stamp/scratch construction edge"
+    assert direct_branches(
+        "__ZN11IGAccelTask15initWithOptionsEP16IntelAccelerator",
+        AUX_PAGE_TABLE_FACTORY) == [0x79d4], \
+        f"{path}: changed task Aux page-table construction edge"
+    assert direct_branches(
+        TASK_INIT_STAMPS,
+        "__ZN14IGMappedBuffer11withOptionsEP11IGAccelTaskmbj") == [0x7c68], \
+        f"{path}: changed kernel scratch-buffer construction edge"
+    assert direct_branches(
+        TASK_INIT_STAMPS, SHARED_BUFFER_FACTORY) == [0x7c83], \
+        f"{path}: changed kernel stamp-buffer construction edge"
+    assert direct_branches(
+        AUX_PAGE_TABLE_FACTORY, AUX_PAGE_TABLE_INIT) == [0x14bef], \
+        f"{path}: changed Aux page-table factory initialization edge"
+    aux_init = value(AUX_PAGE_TABLE_INIT)
+    assert image[aux_init + 0xa9:aux_init + 0xaf] == \
+        bytes.fromhex("41 b9 00 80 00 00"), \
+        f"{path}: changed fixed 0x8000 Aux page-table backing length"
     # Whole-body hashes above pin these already-reviewed methods. These
     # selected anchors connect the manager policy to task/factory selection;
     # they do not observe a live device's property or prove GPU acceptance.
@@ -6779,7 +6806,7 @@ def v312_diagnostic_contract(source, path="<source>"):
         raise AssertionError(f"{path}: missing unique V312 diagnostic counter")
 
     helper = function_body(
-        source, "static void vfStoreFirstPteWithDiagnostic(")
+        source, "static UInt32 vfStoreFirstPteWithDiagnostic(")
     compact = "".join(helper.split())
     required = (
         "UInt32sample=gVfGgttDiagnosticWrites;",
@@ -6789,11 +6816,13 @@ def v312_diagnostic_contract(source, path="<source>"):
         "sample=next;",
         "sample=gVfGgttDiagnosticWrites;",
         "if(sample==0||sample>32)",
+        "return0;",
         "constuint64_tbefore=pteBase[gpu>>12];",
         "pteBase[gpu>>12]=intended;",
         '__asm__volatile("sfence":::"memory");',
         "constuint64_tafter=pteBase[gpu>>12];",
-        'SYSLOG("ngreen","V312:GGTTsample=%dop=%ugpu=0x%llxphysical=0x%llxbefore=0x%016llxintended=0x%016llxafter=0x%016llx"',
+        'SYSLOG("ngreen","V312:GGTTsample=%dop=%ugpu=0x%llxlength=0x%llxphysical=0x%llxbefore=0x%016llxintended=0x%016llxafter=0x%016llx"',
+        "returnsample;",
     )
     for token in required:
         if token not in compact:
@@ -6816,7 +6845,7 @@ def v312_diagnostic_contract(source, path="<source>"):
         saturation)
     cap = compact.index("if(sample==0||sample>32)", mutation)
     fast_store = compact.index("pteBase[gpu>>12]=intended;", cap)
-    fast_return = compact.index("return;", fast_store)
+    fast_return = compact.index("return0;", fast_store)
     before = compact.index("constuint64_tbefore=", fast_return)
     observed_store = compact.index("pteBase[gpu>>12]=intended;", before)
     fence = compact.index('__asm__volatile("sfence":::"memory");', observed_store)
@@ -6910,6 +6939,134 @@ def v312_diagnostic_mutations(path):
             continue
         raise AssertionError(f"{path}: escaped V312 diagnostic-only mutation")
     print("PASS: six V312 bounded diagnostic/ordering mutations rejected")
+
+
+def v316_start_boundary_contract(source, path="<source>"):
+    """Pin V316 as bounded, result-preserving task/map observation."""
+    normalized = "".join(source.split())
+    if normalized.count(
+            "staticvolatileUInt32gVfTaskConstructionDiagnosticStages=0;") != 1:
+        raise AssertionError(f"{path}: missing unique V316 task-stage counter")
+
+    ticket = "".join(function_body(
+        source, "static UInt32 vfTakeTaskConstructionDiagnosticStage()").split())
+    for token in (
+            "UInt32stage=gVfTaskConstructionDiagnosticStages;",
+            "while(stage<9)",
+            "constUInt32next=stage+1;",
+            "OSCompareAndSwap(stage,next,&gVfTaskConstructionDiagnosticStages)",
+            "stage=next;",
+            "stage=gVfTaskConstructionDiagnosticStages;",
+            "returnstage>8?0:stage;"):
+        if token not in ticket:
+            raise AssertionError(
+                f"{path}: incomplete bounded V316 stage ticket: {token}")
+
+    stamp = "".join(function_body(
+        source, "bool Gen11::vfInitStampAndScratchPages(void *that)").split())
+    stamp_tokens = (
+        "constUInt32stage=gVfIdentity==VfIdentity::Virtual?",
+        "vfTakeTaskConstructionDiagnosticStage():0;",
+        'SYSLOG("ngreen","V316:taskstage=%dstamp-scratchentertask=%p"',
+        "callback->oVfInitStampAndScratchPages)(that);",
+        'SYSLOG("ngreen","V316:taskstage=%dstamp-scratchreturn=%dscratch=%pstamp=%p"',
+        "returninitialized;",
+    )
+    for token in stamp_tokens:
+        if token not in stamp:
+            raise AssertionError(
+                f"{path}: incomplete V316 stamp/scratch bracket: {token}")
+    stamp_pre = stamp.index("stamp-scratchentertask=")
+    stamp_call = stamp.index("callback->oVfInitStampAndScratchPages)(that);", stamp_pre)
+    stamp_post = stamp.index("stamp-scratchreturn=", stamp_call)
+    stamp_return = stamp.index("returninitialized;", stamp_post)
+    if not stamp_pre < stamp_call < stamp_post < stamp_return:
+        raise AssertionError(f"{path}: V316 stamp/scratch markers do not bracket native result")
+
+    aux = "".join(function_body(
+        source,
+        "void *Gen11::vfAuxPageTableWithOptions(void *accelerator, void *task)").split())
+    aux_tokens = (
+        "constUInt32stage=gVfIdentity==VfIdentity::Virtual?",
+        "vfTakeTaskConstructionDiagnosticStage():0;",
+        'SYSLOG("ngreen","V316:taskstage=%dAuxpage-tableenteraccelerator=%ptask=%p"',
+        "callback->oVfAuxPageTableWithOptions)(accelerator,task);",
+        'SYSLOG("ngreen","V316:taskstage=%dAuxpage-tablereturn=%p"',
+        "returntable;",
+    )
+    for token in aux_tokens:
+        if token not in aux:
+            raise AssertionError(
+                f"{path}: incomplete V316 Aux page-table bracket: {token}")
+    aux_pre = aux.index("Auxpage-tableenter")
+    aux_call = aux.index(
+        "callback->oVfAuxPageTableWithOptions)(accelerator,task);", aux_pre)
+    aux_post = aux.index("Auxpage-tablereturn=", aux_call)
+    aux_return = aux.index("returntable;", aux_post)
+    if not aux_pre < aux_call < aux_post < aux_return:
+        raise AssertionError(f"{path}: V316 Aux markers do not bracket native result")
+
+    direct = "".join(function_body(
+        source, "bool Gen11::IGHardwareGlobalPageTableMapRange(void *that,").split())
+    for token in (
+            "UInt32diagnosticSample=0;",
+            "diagnosticSample=vfStoreFirstPteWithDiagnostic(",
+            "VfGgttDiagnosticOperation::Map,range.length);",
+            "vfRequireCompletedGgttUpdate();",
+            "if(diagnosticSample!=0)",
+            'SYSLOG("ngreen","V316:GGTTcompletesample=%dgpu=0x%llxlength=0x%llx"'):
+        if token not in direct:
+            raise AssertionError(
+                f"{path}: incomplete V316 direct-map completion bracket: {token}")
+    first = direct.index("diagnosticSample=vfStoreFirstPteWithDiagnostic(")
+    barrier = direct.index("vfRequireCompletedGgttUpdate();", first)
+    complete = direct.index('SYSLOG("ngreen","V316:GGTTcomplete', barrier)
+    result = direct.index("returntrue;", complete)
+    if not first < barrier < complete < result:
+        raise AssertionError(f"{path}: V316 map completion is not post-invalidation")
+
+    for route in (
+            '{"__ZN11IGAccelTask24initStampAndScratchPagesEv",vfInitStampAndScratchPages,this->oVfInitStampAndScratchPages}',
+            '{"__ZN14IGAuxPageTable11withOptionsEP16IntelAcceleratorP11IGAccelTask",vfAuxPageTableWithOptions,this->oVfAuxPageTableWithOptions}'):
+        if route not in normalized:
+            raise AssertionError(f"{path}: missing V316 native-stage route {route}")
+
+
+def v316_start_boundary_mutations(path):
+    source = pathlib.Path(path).read_text()
+    mutations = (
+        source.replace("while (stage < 9)", "while (stage < 900)", 1),
+        source.replace(
+            "VfGgttDiagnosticOperation::Map, range.length);",
+            "VfGgttDiagnosticOperation::Map, 0);", 1),
+        source.replace(
+            'SYSLOG("ngreen", "V316: task stage=%d stamp-scratch enter task=%p",',
+            'SYSLOG("ngreen", "missing V316 stamp enter",', 1),
+        source.replace(
+            'SYSLOG("ngreen", "V316: task stage=%d Aux page-table return=%p",',
+            'SYSLOG("ngreen", "missing V316 Aux return",', 1),
+        source.replace(
+            "callback->oVfInitStampAndScratchPages)(that);",
+            "callback->oVfInitStampAndScratchPages)(nullptr);", 1),
+        source.replace(
+            "callback->oVfAuxPageTableWithOptions)(accelerator, task);",
+            "callback->oVfAuxPageTableWithOptions)(task, accelerator);", 1),
+        source.replace(
+            '\tvfRequireCompletedGgttUpdate();\n\tif (diagnosticSample != 0)',
+            '\tif (diagnosticSample != 0)', 1),
+        source.replace(
+            '"__ZN14IGAuxPageTable11withOptionsEP16IntelAcceleratorP11IGAccelTask",',
+            '"__ZN14IGAuxPageTable12missingEP16IntelAcceleratorP11IGAccelTask",', 1),
+    )
+    for changed in mutations:
+        if changed == source:
+            raise AssertionError("missing V316 diagnostic mutation anchor")
+        try:
+            v316_start_boundary_contract(changed, path)
+        except (AssertionError, ValueError):
+            continue
+        raise AssertionError(f"{path}: escaped V316 bounded stage/map mutation")
+    print("PASS: eight V316 bounded stage/map mutations rejected")
 
 
 def v313_owner_placeholder_contract(source, path="<source>"):
@@ -7098,6 +7255,9 @@ def main():
     callback_owner_lifetime_mutations(sys.argv[1])
     v312_diagnostic_contract(pathlib.Path(sys.argv[1]).read_text(), sys.argv[1])
     v312_diagnostic_mutations(sys.argv[1])
+    v316_start_boundary_contract(
+        pathlib.Path(sys.argv[1]).read_text(), sys.argv[1])
+    v316_start_boundary_mutations(sys.argv[1])
     v313_owner_placeholder_contract(
         pathlib.Path(sys.argv[1]).read_text(), sys.argv[1])
     v313_owner_placeholder_mutations(sys.argv[1])
