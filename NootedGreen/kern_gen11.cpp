@@ -4629,11 +4629,15 @@ void *Gen11::vfNewPageTableForTask(void *that, void *task)
 		*reinterpret_cast<mach_vm_address_t **>(source) : nullptr;
 	const NGIGAddressRange managerRange =
 		getMember<NGIGAddressRange>(that, 0xA0);
+	const bool sourceIsGlobal = source && source == gVfGlobalPageTable;
+	const bool sourceOwnerValid = kernelTask ? sourceIsGlobal :
+		(source && !sourceIsGlobal);
 	const bool rangeValid =
 		(managerRange.start & (PAGE_SIZE - 1U)) == 0 &&
 		(managerRange.length & (PAGE_SIZE - 1U)) == 0 &&
 		managerRange.length <= UINT64_MAX - managerRange.start;
-	bool synchronized = destinationVtable && sourceVtable && rangeValid;
+	bool synchronized = destinationVtable && sourceVtable &&
+		sourceOwnerValid && rangeValid;
 
 	const bool destinationUsesDescriptors =
 		(getMember<uint32_t>(pageTable, 0x28) & 1U) != 0;
@@ -4666,15 +4670,34 @@ void *Gen11::vfNewPageTableForTask(void *that, void *task)
 		auto mapEntry = reinterpret_cast<MapEntry>(
 			destinationVtable[0x118 / sizeof(mach_vm_address_t)]);
 		synchronized = readEntry && mapEntry;
+		uint64_t sparseGlobalEntries = 0;
+		uint64_t mappedEntries = 0;
 		const uint64_t end = managerRange.start + managerRange.length;
 		for (uint64_t address = managerRange.start;
 		     synchronized && address != end; address += PAGE_SIZE) {
 			uint64_t physical = 0;
 			uint64_t flags = 0;
-			if (!readEntry(source, address, physical, flags))
+			const bool present = readEntry(source, address, physical, flags);
+			const auto entry = NGGgtt::classifySynchronizationEntry(
+				present, sourceIsGlobal, physical, flags);
+			if (!entry.valid) {
+				synchronized = false;
+				break;
+			}
+			if (!entry.map) {
+				if (present && sourceIsGlobal) {
+					if (sparseGlobalEntries == 0)
+						SYSLOG("ngreen", "V313: ignored global GGTT owner placeholder address=0x%llx flags=0x%llx",
+						       static_cast<unsigned long long>(address),
+						       static_cast<unsigned long long>(flags));
+					sparseGlobalEntries++;
+				}
 				continue;
+			}
 			const NGIGAddressRange pageRange {address, PAGE_SIZE};
-			synchronized = mapEntry(pageTable, pageRange, physical, flags);
+			synchronized = mapEntry(pageTable, pageRange, physical, entry.flags);
+			if (synchronized)
+				mappedEntries++;
 		}
 		// Native synchronizeEachEntry always records the deferred flush,
 		// including empty and failed ranges. Preserve that ordering before an
@@ -4682,6 +4705,9 @@ void *Gen11::vfNewPageTableForTask(void *that, void *task)
 		using FlushGtt = void (*)(void *);
 		reinterpret_cast<FlushGtt>(
 			callback->vfFlushHardwareAfterGttUpdate)(accelerator);
+		SYSLOG("ngreen", "V313: initial VF page-table entry copy global=%d sparse=%llu mapped=%llu synchronized=%d",
+		       sourceIsGlobal, static_cast<unsigned long long>(sparseGlobalEntries),
+		       static_cast<unsigned long long>(mappedEntries), synchronized);
 	}
 
 	if (!synchronized) {
@@ -4749,23 +4775,31 @@ void Gen11::vfSynchronizeEachEntry(void *that, const void *source,
 	auto remapEntry = synchronized && remap ? reinterpret_cast<WriteEntry>(
 		destinationVtable[0x128 / sizeof(mach_vm_address_t)]) : nullptr;
 	synchronized = readEntry && mapEntry && (!remap || remapEntry);
+	const bool sourceIsGlobal = source == gVfGlobalPageTable;
 
 	const uint64_t end = range.start + range.length;
 	for (uint64_t address = range.start;
 	     synchronized && address != end; address += PAGE_SIZE) {
 		uint64_t physical = 0;
 		uint64_t flags = 0;
-		if (!readEntry(source, address, physical, flags))
+		const bool present = readEntry(source, address, physical, flags);
+		const auto entry = NGGgtt::classifySynchronizationEntry(
+			present, sourceIsGlobal, physical, flags);
+		if (!entry.valid) {
+			synchronized = false;
+			break;
+		}
+		if (!entry.map)
 			continue;
 		const NGIGAddressRange pageRange {address, PAGE_SIZE};
 		// A one-page remap can fail only before its store when the destination
 		// hierarchy is absent. Build that missing hierarchy with mapRange rather
 		// than letting the native void helper publish a silent prefix.
 		synchronized = remap && remapEntry ?
-			remapEntry(that, pageRange, physical, flags) :
-			mapEntry(that, pageRange, physical, flags);
+			remapEntry(that, pageRange, physical, entry.flags) :
+			mapEntry(that, pageRange, physical, entry.flags);
 		if (!synchronized && remap)
-			synchronized = mapEntry(that, pageRange, physical, flags);
+			synchronized = mapEntry(that, pageRange, physical, entry.flags);
 	}
 
 	using FlushGtt = void (*)(void *);

@@ -1,15 +1,16 @@
 # Tahoe SR-IOV protocol audit — in progress
 
-Updated: 2026-10-08. The last deployed driver is exact V311 commit
-`e1648aa91c0546a0d732dd7cd95255ee9506f5b8`, CI `37512998167`, executable
-UUID `577AF5BD-4880-348E-A8D1-05F96393C46F`. Its only 90-second contained
-start kept the Gen11 local filter source deferred and VF Bus Master disabled,
-but still produced a Host PF `00:02.0` DMA write to address zero after native
-HWCAPS. The current offline V312 worktree adds only bounded raw GGTT-PTE
-round-trip and exact native-start/task/table stage diagnostics. Complete local
-static passes at `/tmp/ngreen-static.mYSjB5`; V312 is NOT yet a boot-test
+Updated: 2026-10-08. The last deployed driver is exact V312 commit
+`ca18cf3ca424fd38f3d0b920b30a93de3afe44a5`, CI `37655560280`, executable
+UUID `E12057F6-92B1-3190-B3E0-C25678EEBB50`. Its only 90-second contained
+start reached native Intel start, HWCAPS, the kernel-task factory and initial
+64-bit PPGTT factory return, then produced a Host PF `00:02.0` DMA write to
+address zero. The independent Guest log remained live until containment and no
+direct-GGTT store probe fired. The current offline V313 worktree repairs the
+now-proven PF-owner-placeholder to PPGTT translation error. Complete local
+static passes at `/tmp/ngreen-static.0M8aQe`; V313 is NOT yet a boot-test
 candidate or a successful driver baseline. Keep `macos-tahoe-sriov` shut off
-until V312 has a clean pushed exact-SHA CI/artifact, exact deployment/runtime
+until V313 has a clean pushed exact-SHA CI/artifact, exact deployment/runtime
 provenance, and a rebooted Host journal with no pre-existing trigger.
 
 The user's final display target is now Looking Glass, not Sunshine/Moonlight.
@@ -24,6 +25,53 @@ KVMFR/client transport remains the intended receiving side.
 The authoritative dynamic-entry checklist is
 [`DYNAMIC_TEST_GATE.md`](DYNAMIC_TEST_GATE.md). Any open static gate keeps the
 VM hard hold in force.
+
+## V312 incident and V313 owner-placeholder repair
+
+- V312 source, exact-SHA CI/artifact, final-path executable/AuxKC, no-VF load
+  proof and immutable runtime manifest all passed before the single dynamic
+  start. The fixed executable SHA is `1baf9f7c...`, AuxKC SHA `a6904253...`
+  and manifest SHA `3923e215...`.
+- Root preflight on Host boot `5c887a3b-5ec8-40f5-916b-e0b742999b5a`
+  proved the exact DKMS i915, PF=i915, VF=vfio-pci, groups 0/19, one VF,
+  healthy qcow2 images, one-shot XML and a trigger-free current journal.
+- The controller started the domain exactly once with its kernel watcher,
+  private ftrace and 90-second deadline already live. A separate Guest live
+  log remained active until domain off. No Metal, media or Looking Glass work
+  was run.
+- TGL reached VF identity, virtual MMIO, GuC ABI 0.1.17.0, PF topology/quotas,
+  direct GGTT, exact native Intel start/HWCAPS, IGAccelTask factory and initial
+  64-bit PPGTT factory return. It emitted zero `V312: GGTT sample=` records and
+  never reached the initial sync, task factory or native-start return marker.
+- The first Host fault was at `2026-10-08T02:00:29.730554+08:00`, about 108 ms
+  after factory return: PF requester `00:02.0`, address zero, DMA write,
+  reason `0x05`. Containment destroyed the domain, completed its cooldown and
+  left both qcow2 checks at zero errors. Host ftrace recorded 11,645 pipe
+  updates, no frame mismatch and no vblank crossing. The complete immutable
+  record is `build/diagnostics/v312-tgl-start-90s-20261007T175927Z/README.md`.
+- Exact Tahoe disassembly proves `IGHardwareGlobalPageTable::read()` masks the
+  address with `0x7ffffff000`, returns raw bit 0 as presence and returns the low
+  12 bits as flags. Host raw `0x5` therefore becomes present, physical zero,
+  flags 5. Exact native 64-bit PPGTT `mapRange()` then masks the physical input,
+  ORs the flags and Present, and writes the resulting PTE; it has no sparse
+  page-zero case.
+- The paired i915 source proves `i915_ggtt_set_space_owner()` fills every
+  unused TGL VF slot with `prepare_vf_pte(vfid) = Present | VFID`. The live VF1
+  value `0x5` is therefore an ownership placeholder, not DMA backing. V312's
+  initial global-to-PPGTT synchronization copied it as a real page-zero map.
+- V313 introduces one pure classification used at both initial and later
+  per-entry synchronization roots. A global-source present address-zero entry
+  is sparse; a private-source page-zero entry is corruption; all other entries
+  require a nonzero aligned 39-bit DMA page. Valid global entries copy with
+  flags zero because the low GGTT bits are PF-owned VFID/LM fields that overlap
+  Apple's physical-driver attributes. Initial kernel/private source identity is
+  also exact rather than accepting a foreign table.
+- The repair is covered by 48 ASan/UBSan model cases, two synchronization
+  source contracts, five negative mutations and exact full-body/semantic
+  anchors for both Tahoe payloads. The complete local suite passes at
+  `/tmp/ngreen-static.0M8aQe`. This is static evidence only; clean commit/CI,
+  artifact, final-path deployment, new-boot root containment and a new
+  immutable manifest remain open.
 
 ## V311 incident and V312 bounded diagnostic candidate
 

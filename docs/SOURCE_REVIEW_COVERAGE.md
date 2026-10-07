@@ -10,6 +10,29 @@ The current dynamic-entry gate table is
 
 ## Scope
 
+2026-10-08 V312 dynamic result and V313 page-zero translation repair: exact
+V312 `ca18cf3`/CI `37655560280`/artifact/final AuxKC/immutable manifest reached
+native Intel start, HWCAPS, IGAccelTask and initial 64-bit PPGTT factory return
+in its only contained start. The independent Guest logger remained live until
+domain off; no direct-GGTT store probe fired. About 108 ms after factory return,
+Host boot `5c887a3b-...` reported PF requester `00:02.0` writing address zero,
+and containment stopped the domain. No Metal, media or Looking Glass ran;
+qcow2 postflight remained clean. Evidence is preserved under
+`build/diagnostics/v312-tgl-start-90s-20261007T175927Z`.
+
+Both pinned Tahoe payloads prove that global `read()` decodes raw `0x5` as a
+present physical-zero entry with flags 5 and that 64-bit PPGTT `mapRange()`
+stores physical/flags/Present without rejecting page zero. The paired i915
+source proves PF GGTT owner provisioning is `Present|VFID`; live VF1 therefore
+uses `0x5` as an unused owner placeholder. V313 classifies only global-source
+address-zero as sparse, rejects private/DMA page zero, strips PF-owned low flags
+from valid global-to-PPGTT copies and verifies the exact global/private source
+owner. The same classification covers initial and later per-entry sync. Forty-
+eight sanitizer cases, five negative mutations, both Mach-O semantic anchors,
+the unchanged 1,502-path/621-defined-symbol ledger and full static
+`/tmp/ngreen-static.0M8aQe` pass. Commit, exact-SHA CI/artifact, deployment and
+fresh-boot containment are pending; this is not hardware success.
+
 2026-10-07 V311 deferred Bus Master boundary: exact V310 commit `2eff6da` and
 CI `37505970500` were deployed and loaded, but its only contained start still
 triggered a PF-attributed address-zero DMAR write after all 16 IRQ reset writes

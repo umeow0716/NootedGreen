@@ -106,12 +106,34 @@ int main() {
     unsigned dmaCases = 0;
     for (auto physical : dmaValues) for (auto length : dmaValues) {
         using Wide = unsigned __int128;
-        const bool expected = ((physical | length) & 0xFFF) == 0 &&
+        const bool expected = physical != 0 &&
+            ((physical | length) & 0xFFF) == 0 &&
             Wide(physical) + length <= (Wide(1) << 39);
         assert(NGGgtt::nativePhysicalRange(physical, length) == expected);
         ++dmaCases;
     }
     std::printf("PASS: %u native DMA address truncation/bounds cases\n", dmaCases);
+
+    unsigned synchronizationCases = 0;
+    for (bool present : {false, true})
+    for (bool global : {false, true})
+    for (uint64_t physical : {UINT64_C(0), UINT64_C(0x1000),
+                              UINT64_C(0x12345000), UINT64_C(0x100000000000)})
+    for (uint64_t flags : {UINT64_C(0), UINT64_C(0x5), UINT64_C(0x9A)}) {
+        const auto entry = NGGgtt::classifySynchronizationEntry(
+            present, global, physical, flags);
+        const bool addressValid = physical != 0 && !(physical & 0xFFF) &&
+            physical <= (UINT64_C(1) << 39) - 0x1000;
+        const bool expectedMap = present && addressValid;
+        const bool expectedValid = !present || (global && physical == 0) ||
+            addressValid;
+        assert(entry.valid == expectedValid);
+        assert(entry.map == expectedMap);
+        assert(entry.flags == (expectedMap ? (global ? 0 : flags) : 0));
+        ++synchronizationCases;
+    }
+    std::printf("PASS: %u PF-owner placeholder/private-entry synchronization cases\n",
+                synchronizationCases);
     const uint64_t windows[][2] = {{0x1000, 0x100000},
         {0xFED00000, 0x100000}, {0, UINT64_C(0x100000000)}};
     const uint64_t tops[] = {0, 0xFEE00000, UINT64_MAX};

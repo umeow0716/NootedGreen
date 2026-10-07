@@ -2092,6 +2092,19 @@ def macho_inventory(path):
         assert struct.unpack_from("<Q", image, accelerator_table + 16 + slot)[0] == value(name), f"{path}: changed concrete task factory virtual"
     assert direct_branches("__ZN11IGAccelTask11withOptionsEP16IntelAccelerator", "__ZN11IGAccelTask15initWithOptionsEP16IntelAccelerator") == [0x7870], f"{path}: changed task factory initialization edge"
     assert struct.unpack_from("<Q", image, global_table + 16 + 0x140)[0] == value("__ZNK25IGHardwareGlobalPageTable4readEyRyS0_"), f"{path}: changed global PTE read virtual"
+    global_read = value("__ZNK25IGHardwareGlobalPageTable4readEyRyS0_")
+    assert image[global_read:global_read + 0x44] == bytes.fromhex(
+        "55 48 89 e5 49 89 c8 48 8b 05 36 7b 0b 00 8a 08 48 d3 ee "
+        "48 8b 47 28 8b 4c f0 04 8b 04 f0 48 c1 e1 20 48 09 c1 "
+        "48 be 00 f0 ff ff 7f 00 00 00 48 21 ce 48 89 32 89 c1 "
+        "81 e1 ff 0f 00 00 49 89 08 24 01 5d c3"), \
+        f"{path}: changed global GGTT raw-present/address/flag decoder"
+    map64 = value("__ZN31IGHardwarePerProcessPageTable648mapRangeERK14IGAddressRangeyy")
+    assert image[map64 + 0x78:map64 + 0x9e] == bytes.fromhex(
+        "48 be 00 f0 ff ff 7f 00 00 00 48 21 f2 48 0b 55 d0 "
+        "48 83 ca 01 4c 89 fe 48 c1 ee 09 81 e6 f8 0f 00 00 "
+        "48 89 14 31"), \
+        f"{path}: changed native PPGTT physical-zero/flags/PTE store semantics"
     for method, target, call in (
             ("__ZN29IGHardwarePerProcessPageTable15synchronizeWithI25IGHardwareGlobalPageTableEEvPKT_RK14IGAddressRangeb", "__ZN29IGHardwarePerProcessPageTable20synchronizeEachEntryEPK19IGHardwarePageTableRK14IGAddressRangeb", 0x12c99),
             ("__ZN29IGHardwarePerProcessPageTable15synchronizeWithIS_EEvPKT_RK14IGAddressRangeb", "__ZN29IGHardwarePerProcessPageTable20synchronizeEachEntryEPK19IGHardwarePageTableRK14IGAddressRangeb", 0x12d8a),
@@ -4939,7 +4952,10 @@ def initial_page_table_sync_contract(source, path):
         "source=getMember<void*>(that,0x98);",
         "getMember<void*>(accelerator,0x150);",
         "source=getMember<void*>(bootstrapTask,0x260);",
+        "constboolsourceIsGlobal=source&&source==gVfGlobalPageTable;",
+        "constboolsourceOwnerValid=kernelTask?sourceIsGlobal:(source&&!sourceIsGlobal);",
         "managerRange.length<=UINT64_MAX-managerRange.start;",
+        "sourceOwnerValid&&rangeValid",
         "!kernelTask&&destinationUsesDescriptors&&sourceUsesDescriptors",
         "sourceVtable[0x168/sizeof(mach_vm_address_t)]",
         "destinationVtable[0x158/sizeof(mach_vm_address_t)]",
@@ -4947,8 +4963,11 @@ def initial_page_table_sync_contract(source, path):
         "sourceVtable[0x140/sizeof(mach_vm_address_t)]",
         "destinationVtable[0x118/sizeof(mach_vm_address_t)]",
         "synchronized&&address!=end;address+=PAGE_SIZE",
-        "if(!readEntry(source,address,physical,flags))continue;",
-        "synchronized=mapEntry(pageTable,pageRange,physical,flags);",
+        "constboolpresent=readEntry(source,address,physical,flags);",
+        "NGGgtt::classifySynchronizationEntry(present,sourceIsGlobal,physical,flags);",
+        "if(!entry.valid)",
+        "if(!entry.map)",
+        "synchronized=mapEntry(pageTable,pageRange,physical,entry.flags);",
         "callback->vfFlushHardwareAfterGttUpdate)(accelerator);",
         "destinationVtable[0x28/sizeof(mach_vm_address_t)]",
         "release(pageTable);",
@@ -4972,15 +4991,18 @@ def initial_page_table_sync_contract(source, path):
         descriptor_read)
     entry_read = compact.index(
         "sourceVtable[0x140/sizeof(mach_vm_address_t)]", descriptor_map)
+    classification = compact.index(
+        "NGGgtt::classifySynchronizationEntry(", entry_read)
     entry_map = compact.index(
-        "synchronized=mapEntry(pageTable,pageRange,physical,flags);", entry_read)
+        "synchronized=mapEntry(pageTable,pageRange,physical,entry.flags);",
+        classification)
     flush = compact.index(
         "callback->vfFlushHardwareAfterGttUpdate)(accelerator);", entry_map)
     release = compact.index("release(pageTable);", flush)
     unlock = compact.rindex("IORecursiveLockUnlock(gVfPageTableUpdateLock);")
     result = compact.rindex("returnpageTable;")
     if not lock < factory < source_owner < descriptor_read < descriptor_map < \
-            entry_read < entry_map < flush < release < unlock < result:
+            entry_read < classification < entry_map < flush < release < unlock < result:
         raise AssertionError(
             f"{path}: initial page-table create/sync/release order changed")
     if "destinationVtable[0x128/" in compact or \
@@ -5029,12 +5051,19 @@ def initial_page_table_sync_mutations(path):
             wrapper, "managerRange.length <= UINT64_MAX - managerRange.start;",
             "true;")),
         (wrapper, replace_once(
+            wrapper, "sourceOwnerValid && rangeValid",
+            "rangeValid")),
+        (wrapper, replace_once(
             wrapper,
             "synchronized = descriptor &&\n\t\t\t\tmapDescriptor(pageTable, descriptorRange, descriptor);",
             "(void)mapDescriptor(pageTable, descriptorRange, descriptor);")),
         (wrapper, replace_once(
+            wrapper, "const auto entry = NGGgtt::classifySynchronizationEntry(\n"
+            "\t\t\t\tpresent, sourceIsGlobal, physical, flags);",
+            "const auto entry = NGGgtt::SynchronizationEntry {true, true, flags};")),
+        (wrapper, replace_once(
             wrapper,
-            "synchronized = mapEntry(pageTable, pageRange, physical, flags);",
+            "synchronized = mapEntry(pageTable, pageRange, physical, entry.flags);",
             "(void)mapEntry(pageTable, pageRange, physical, flags);")),
         (wrapper, replace_once(
             wrapper,
@@ -5055,7 +5084,7 @@ def initial_page_table_sync_mutations(path):
         except (AssertionError, ValueError):
             continue
         raise AssertionError(f"{path}: escaped initial page-table mutation")
-    print("PASS: eleven initial page-table factory/sync/rollback mutations rejected (source contract, not runtime proof)")
+    print("PASS: thirteen initial page-table factory/sync/rollback mutations rejected (source contract, not runtime proof)")
 
 
 def initial_page_table_sync_model():
@@ -5343,6 +5372,12 @@ def page_table_common_serialization_contract(source, path):
             "sourceVtable[0x140/sizeof(mach_vm_address_t)]",
             "destinationVtable[0x118/sizeof(mach_vm_address_t)]",
             "destinationVtable[0x128/sizeof(mach_vm_address_t)]",
+            "constboolsourceIsGlobal=source==gVfGlobalPageTable;",
+            "NGGgtt::classifySynchronizationEntry(present,sourceIsGlobal,physical,flags);",
+            "if(!entry.valid)",
+            "if(!entry.map)",
+            "remapEntry(that,pageRange,physical,entry.flags)",
+            "mapEntry(that,pageRange,physical,entry.flags)",
             "synchronized=remap&&remapEntry?",
             "if(!synchronized&&remap)synchronized=mapEntry(",
             "callback->vfFlushHardwareAfterGttUpdate)(accelerator);",
@@ -5427,6 +5462,10 @@ def page_table_common_serialization_mutations(path):
         mutate_function("void Gen11::vfSynchronizeEachEntry(void *that,",
                         "if (!synchronized && remap)", "if (false && remap)"),
         mutate_function("void Gen11::vfSynchronizeEachEntry(void *that,",
+                        "const auto entry = NGGgtt::classifySynchronizationEntry(\n"
+                        "\t\t\tpresent, sourceIsGlobal, physical, flags);",
+                        "const auto entry = NGGgtt::SynchronizationEntry {true, true, flags};"),
+        mutate_function("void Gen11::vfSynchronizeEachEntry(void *that,",
                         "vfMarkProtocolFault(\"VF entry synchronization failed inside void ABI\");", ""),
         mutate_function("bool Gen11::vfPpgtt64RemapDescriptor(void *that,",
                         "callback->vfPageDescriptorRetain)(oldDescriptor);",
@@ -5457,7 +5496,7 @@ def page_table_common_serialization_mutations(path):
         except (AssertionError, ValueError):
             continue
         raise AssertionError(f"{path}: escaped common page-table transaction mutation")
-    print("PASS: fourteen common task/table/PagePool transaction mutations rejected")
+    print("PASS: fifteen common task/table/PagePool transaction mutations rejected")
 
 
 def page_table_common_serialization_model():
@@ -6770,6 +6809,87 @@ def v312_diagnostic_mutations(path):
     print("PASS: five V312 bounded diagnostic/ordering mutations rejected")
 
 
+def v313_owner_placeholder_contract(source, path="<source>"):
+    """Pin the PF-owner tombstone translation at both synchronization roots."""
+    initial = function_body(
+        source, "void *Gen11::vfNewPageTableForTask(void *that, void *task)")
+    common = function_body(
+        source, "void Gen11::vfSynchronizeEachEntry(void *that,")
+    initial_compact = "".join(initial.split())
+    common_compact = "".join(common.split())
+    for body, label in ((initial_compact, "initial"),
+                        (common_compact, "common")):
+        for token in (
+                "constboolsourceIsGlobal=",
+                "NGGgtt::classifySynchronizationEntry(present,sourceIsGlobal,physical,flags);",
+                "if(!entry.valid)",
+                "if(!entry.map)",
+                "physical,entry.flags"):
+            if token not in body:
+                raise AssertionError(
+                    f"{path}: V313 {label} synchronization lacks {token}")
+    if "sourceOwnerValid&&rangeValid" not in initial_compact:
+        raise AssertionError(f"{path}: V313 initial synchronization accepts a foreign source")
+    if 'SYSLOG("ngreen","V313:ignoredglobalGGTTownerplaceholder' not in initial_compact or \
+            'SYSLOG("ngreen","V313:initialVFpage-tableentrycopy' not in initial_compact:
+        raise AssertionError(f"{path}: V313 runtime proof markers are incomplete")
+    placeholder = initial_compact.index(
+        'SYSLOG("ngreen","V313:ignoredglobalGGTTownerplaceholder')
+    map_entry = initial_compact.index(
+        "synchronized=mapEntry(pageTable,pageRange,physical,entry.flags);",
+        placeholder)
+    summary = initial_compact.index(
+        'SYSLOG("ngreen","V313:initialVFpage-tableentrycopy', map_entry)
+    final_marker = initial_compact.index(
+        'SYSLOG("ngreen","V312:initialVFpage-tablesynchronizationreturned',
+        summary)
+    if not placeholder < map_entry < summary < final_marker:
+        raise AssertionError(f"{path}: V313 placeholder/copy/final marker order changed")
+
+
+def v313_owner_placeholder_mutations(path):
+    source = pathlib.Path(path).read_text()
+
+    def mutate_function(signature, before, after):
+        body = function_body(source, signature)
+        if body.count(before) != 1:
+            raise AssertionError(f"ambiguous V313 mutation: {before}")
+        return source.replace(body, body.replace(before, after, 1), 1)
+
+    def mutate_function_all(signature, before, after):
+        body = function_body(source, signature)
+        if body.count(before) < 1:
+            raise AssertionError(f"missing V313 mutation: {before}")
+        return source.replace(body, body.replace(before, after), 1)
+
+    mutations = (
+        mutate_function(
+            "void *Gen11::vfNewPageTableForTask(void *that, void *task)",
+            "sourceOwnerValid && rangeValid", "rangeValid"),
+        mutate_function(
+            "void *Gen11::vfNewPageTableForTask(void *that, void *task)",
+            "physical, entry.flags", "physical, flags"),
+        mutate_function_all(
+            "void Gen11::vfSynchronizeEachEntry(void *that,",
+            "physical, entry.flags", "physical, flags"),
+        source.replace(
+            'SYSLOG("ngreen", "V313: ignored global GGTT owner placeholder',
+            'SYSLOG("ngreen", "missing V313 placeholder marker', 1),
+        source.replace(
+            'SYSLOG("ngreen", "V313: initial VF page-table entry copy',
+            'SYSLOG("ngreen", "missing V313 copy marker', 1),
+    )
+    for changed in mutations:
+        if changed == source:
+            raise AssertionError("missing V313 mutation anchor")
+        try:
+            v313_owner_placeholder_contract(changed, path)
+        except (AssertionError, ValueError):
+            continue
+        raise AssertionError(f"{path}: escaped V313 owner-placeholder mutation")
+    print("PASS: five V313 owner-placeholder/source/flag mutations rejected")
+
+
 def ggtt_postwrite_mutations(path):
     source = pathlib.Path(path).read_text()
     mutations = (
@@ -6877,6 +6997,9 @@ def main():
     callback_owner_lifetime_mutations(sys.argv[1])
     v312_diagnostic_contract(pathlib.Path(sys.argv[1]).read_text(), sys.argv[1])
     v312_diagnostic_mutations(sys.argv[1])
+    v313_owner_placeholder_contract(
+        pathlib.Path(sys.argv[1]).read_text(), sys.argv[1])
+    v313_owner_placeholder_mutations(sys.argv[1])
     ggtt_postwrite_mutations(sys.argv[1])
     macho_inventory(sys.argv[2])
     macho_inventory(sys.argv[3])
