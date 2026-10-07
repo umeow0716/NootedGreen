@@ -93,6 +93,28 @@ def main() -> int:
         process_kext.index("gen11.processKext")
     assert "bool driverReady {false};" in green_header
 
+    # SR-IOV PF/VF classification may read BAR0 after memory decoding is
+    # enabled, but it must not leave an unclassified function capable of DMA.
+    # Only a positively identified physical GPU may regain Bus Master here;
+    # the VF path admits it later, after its HWS/MSI boundary.
+    pci_id = green.index("this->deviceId = WIOKit::readPCIConfigValue(")
+    sriov_class = green.index("NGGpuCapabilities::sriov(this->deviceId)", pci_id)
+    early_bus_stop = green.index("this->iGPU->setBusMasterEnable(false);", sriov_class)
+    memory_enable = green.index("this->iGPU->setMemoryEnable(true);", early_bus_stop)
+    identity = green.index("const bool physicalAccess = ngPhysicalGpuAccessAllowed();", memory_enable)
+    identity_bus_state = green.index(
+        "this->iGPU->setBusMasterEnable(physicalAccess);", identity)
+    command_readback = green.index(
+        "this->iGPU->configRead16(kIOPCIConfigCommand)", identity_bus_state)
+    command_check = green.index(
+        "busMasterEnabled != physicalAccess", command_readback)
+    config_routes = green.index("KernelPatcher::routeVirtual(this->iGPU", command_check)
+    assert pci_id < sriov_class < early_bus_stop < memory_enable < identity < \
+        identity_bus_state < command_readback < command_check < config_routes
+    assert "setBusMasterEnable(true)" not in green
+    assert "sriovCapability != NGGpuCapabilities::Sriov::Absent" in \
+        green[sriov_class:memory_enable]
+
     target_match = re.search(
         r"isa = PBXNativeTarget;\n\s*buildConfigurationList = ([0-9A-F]+)", pbx
     )

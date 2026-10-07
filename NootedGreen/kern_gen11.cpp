@@ -5414,6 +5414,28 @@ bool Gen11::start(void *that, void *provider)
 		return false;
 	}
 	const bool vfActive = identity == VfIdentity::Virtual;
+	auto *pciDevice = vfActive ? OSDynamicCast(
+		IOPCIDevice, reinterpret_cast<OSObject *>(provider)) : nullptr;
+	if (vfActive) {
+		if (!pciDevice) {
+			vfMarkProtocolFault("accelerator provider is not an IOPCIDevice");
+			return false;
+		}
+		// NootedGreen used to enable Bus Master unconditionally during its
+		// processPatcher() setup.  That made a VF DMA-capable before the initial
+		// PPGTT, HWS mappings, interrupt consumer or GuC transport existed.  Close
+		// the command bit again at the stable accelerator/provider boundary and
+		// fail before any native allocation if VFIO did not reflect the write.
+		pciDevice->setBusMasterEnable(false);
+		OSSynchronizeIO();
+		if ((pciDevice->configRead16(kIOPCIConfigCommand) &
+		     kIOPCICommandBusMaster) != 0) {
+			vfMarkProtocolFault(
+				"VF PCI bus mastering remained enabled before native start");
+			return false;
+		}
+		SYSLOG("ngreen", "V314: held VF PCI Bus Master off before native accelerator start");
+	}
 	if (vfActive) {
 		OSSynchronizeIO();
 		if (gVfExternalProducerGate != 0) {
@@ -5477,12 +5499,6 @@ bool Gen11::start(void *that, void *provider)
 			return false;
 		if (!callback->ioPciConfigureInterrupts) {
 			vfMarkProtocolFault("missing exported PCI MSI configurator");
-			return false;
-		}
-		auto *pciDevice = OSDynamicCast(
-			IOPCIDevice, reinterpret_cast<OSObject *>(provider));
-		if (!pciDevice) {
-			vfMarkProtocolFault("accelerator provider is not an IOPCIDevice");
 			return false;
 		}
 		using ConfigureInterrupts = IOReturn (*)(IOPCIDevice *, UInt32,
@@ -6369,6 +6385,22 @@ bool Gen11::stopGraphicsEngine(void *that)
 		interruptBridge);
 	OSCompareAndSwap(1, 0, &gVfMmioIrqReady);
 	OSSynchronizeIO();
+	// IOPCIFamily's MSI unregister/disable path does not revoke the PCI
+	// Command Bus Master bit that source registration enabled.  Clear it only
+	// after the final device-wide quiescence proof; an ordinary sleep/wake
+	// engine stop must retain its configured source and restart capability.
+	if (gVfDmaQuiesced) {
+		auto *provider = OSDynamicCast(
+			IOPCIDevice, static_cast<IOService *>(that)->getProvider());
+		PANIC_COND(!provider, "ngreen",
+			"Cannot revoke VF PCI bus mastering without its provider");
+		provider->setBusMasterEnable(false);
+		OSSynchronizeIO();
+		PANIC_COND((provider->configRead16(kIOPCIConfigCommand) &
+		            kIOPCICommandBusMaster) != 0,
+			"ngreen", "VF PCI bus mastering remained enabled after DMA quiescence");
+		SYSLOG("ngreen", "V314: revoked VF PCI Bus Master after DMA quiescence");
+	}
 	reinterpret_cast<LifecycleMethod>(callback->ioGraphicsDisableAccelerator)(that);
 	SYSLOG("ngreen", "V244: disabled VF interrupt bridge and IOAccelerator lifecycle");
 	return true;

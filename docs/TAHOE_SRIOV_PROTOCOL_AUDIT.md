@@ -1,17 +1,18 @@
 # Tahoe SR-IOV protocol audit — in progress
 
-Updated: 2026-10-08. The last deployed driver is exact V312 commit
-`ca18cf3ca424fd38f3d0b920b30a93de3afe44a5`, CI `37655560280`, executable
-UUID `E12057F6-92B1-3190-B3E0-C25678EEBB50`. Its only 90-second contained
-start reached native Intel start, HWCAPS, the kernel-task factory and initial
-64-bit PPGTT factory return, then produced a Host PF `00:02.0` DMA write to
-address zero. The independent Guest log remained live until containment and no
-direct-GGTT store probe fired. The current offline V313 worktree repairs the
-now-proven PF-owner-placeholder to PPGTT translation error. Complete local
-static passes at `/tmp/ngreen-static.0M8aQe`; V313 is NOT yet a boot-test
-candidate or a successful driver baseline. Keep `macos-tahoe-sriov` shut off
-until V313 has a clean pushed exact-SHA CI/artifact, exact deployment/runtime
-provenance, and a rebooted Host journal with no pre-existing trigger.
+Updated: 2026-10-08. The last deployed driver is exact V313 commit
+`64906e86e6e84736e0350aca67ad981e7bb94e88`, CI `37667149064`, executable
+UUID `C789ABE1-1C6C-3DC7-A125-0070E6D6C4E3`. Its only 90-second contained
+start reached the V313 global-owner-placeholder rejection, then produced a
+Host PF `00:02.0` address-zero DMA write about 29 ms later. The independent
+Guest log remained live until domain off; no Metal, media or Looking Glass ran.
+The current offline V314 worktree repairs a newly proven, earlier PCI Bus
+Master admission error and closes Bus Master again after final DMA quiescence.
+Complete local static passes at `/tmp/ngreen-static.lZMABM`; V314 is NOT yet a
+boot-test candidate or a successful driver baseline. Keep
+`macos-tahoe-sriov` shut off until V314 has a clean pushed exact-SHA
+CI/artifact, exact deployment/runtime provenance, and a rebooted Host journal
+with no pre-existing trigger.
 
 The user's final display target is now Looking Glass, not Sunshine/Moonlight.
 Older Sunshine references below are historical review notes. No macOS Tahoe
@@ -25,6 +26,53 @@ KVMFR/client transport remains the intended receiving side.
 The authoritative dynamic-entry checklist is
 [`DYNAMIC_TEST_GATE.md`](DYNAMIC_TEST_GATE.md). Any open static gate keeps the
 VM hard hold in force.
+
+## V313 incident and V314 PCI Bus Master transaction repair
+
+- V313 passed exact-SHA CI, two no-VF deployment boots, final-path/AuxKC load
+  proof and immutable manifest `523cab75...`. Fresh Host boot
+  `2dca3e9c-8589-434a-bf85-a70f197c8df7` passed the root i915/DKMS, PF/VF,
+  qcow2, exact-manifest and current-boot containment gate before the domain was
+  started exactly once. The separate Guest logger remained live until domain
+  off. Evidence is preserved under
+  `build/diagnostics/v313-tgl-start-90s-20261007T190232Z`.
+- Guest execution reached native Intel start, HWCAPS, IGAccelTask, initial
+  64-bit PPGTT mode 3 and the first V313 sparse classification. It ignored the
+  raw `0x5` global owner placeholder at GGTT `0x5104000`, but did not reach the
+  synchronization summary, factory return, task return or accelerator-start
+  return. At `2026-10-08T03:03:43.166614+08:00`, about 29 ms after that
+  record, Host DMAR reported requester `00:02.0`, address zero, DMA write,
+  reason `0x05`; containment destroyed the domain and both qcow2 post-checks
+  remained clean.
+- Host ftrace places the final GGTT-owner rewrite about 63 seconds before the
+  fault, not across it. The current boot contains no system suspend/resume
+  interval, so the i915 SR-IOV `pf_restore_vfs_pci_state()` path did not run.
+  These facts exclude those two mechanisms for this occurrence without
+  claiming that PF-attributed requester semantics identify the Guest producer.
+- The exact local Debian QEMU 10.0.13 source shows that
+  `vfio_pci_write_config()` forwards PCI Command writes to VFIO rather than
+  emulating or caching Bus Master. V313's live `BusMaster+` snapshot therefore
+  represented real VF configuration state.
+- The earlier `master=0` diagnostic was the Gen11 IRQ master MMIO register, not
+  PCI Command Bus Master. A complete source recheck found the actual escape:
+  `NGreen::processPatcher()` unconditionally called
+  `setBusMasterEnable(true)` before PF/VF identity, initial PPGTT/HWS, MSI
+  consumer and GuC readiness. This also made V311's later HWS boundary
+  ineffective because the VF arrived there already DMA-capable.
+- V314 captures the unspoofed PCI identity first, holds every SR-IOV-capable or
+  unknown function at Bus Master-off while Memory/BAR decoding is established,
+  and restores early Bus Master only for a positively classified PF. The VF
+  accelerator wrapper repeats and verifies Bus Master-off before publishing
+  its owner or allocating native state. The existing HWS/source boundary is
+  still the only VF transition to Bus Master-on.
+- Final teardown now disables the interrupt bridge, then clears and verifies
+  PCI Bus Master only after the existing device-wide GuC context, Engines/Guc
+  TLB and DMA-quiescence proof. Ordinary sleep/wake does not clear it. A new
+  source contract rejects nine ordering/polarity/readback regressions; the
+  1,503-path ledger contains 65 tool programs, and the full offline suite
+  `/tmp/ngreen-static.lZMABM` passes. This remains static evidence pending a
+  clean commit, exact-SHA CI/artifact, no-VF deployment/load proof, immutable
+  manifest and a new root-contained Host boot.
 
 ## V312 incident and V313 owner-placeholder repair
 

@@ -52,18 +52,36 @@ void NGreen::processPatcher(KernelPatcher &patcher) {
 	// installed; the matching release therefore belongs to whole-kext teardown.
 	this->iGPU->retain();
 
-	// The GPU must be in D0 with memory and DMA decoding enabled before its
-	// BARs or VF capability register are accessed.
+	// PCI configuration space does not require either BAR decoding or bus
+	// mastering.  Capture the unspoofed identity first, then prevent every
+	// SR-IOV-capable or unknown function from initiating DMA while BAR0 is used
+	// to distinguish a PF from a VF.  A confirmed PF regains the historical
+	// bus-master setting below; a VF must remain stopped until the routed engine
+	// start has validated all HWS mappings and registers its MSI consumer.
 	this->iGPU->enablePCIPowerManagement(kPCIPMCSPowerStateD0);
-	this->iGPU->setBusMasterEnable(true);
+	this->deviceId = WIOKit::readPCIConfigValue(
+		this->iGPU, WIOKit::kIOPCIConfigDeviceID);
+	const auto sriovCapability = NGGpuCapabilities::sriov(this->deviceId);
+	if (sriovCapability != NGGpuCapabilities::Sriov::Absent)
+		this->iGPU->setBusMasterEnable(false);
 	this->iGPU->setMemoryEnable(true);
 
 	WIOKit::renameDevice(this->iGPU, "IGPU");
 	WIOKit::awaitPublishing(this->iGPU);
-	this->deviceId = WIOKit::readPCIConfigValue(this->iGPU, WIOKit::kIOPCIConfigDeviceID);
 
-	const bool physicalTgl = NGGpuCapabilities::isTigerLake(this->deviceId) &&
-		ngPhysicalGpuAccessAllowed();
+	const bool physicalAccess = ngPhysicalGpuAccessAllowed();
+	this->iGPU->setBusMasterEnable(physicalAccess);
+	OSSynchronizeIO();
+	const bool busMasterEnabled =
+		(this->iGPU->configRead16(kIOPCIConfigCommand) &
+		 kIOPCICommandBusMaster) != 0;
+	PANIC_COND(busMasterEnabled != physicalAccess, "ngreen",
+		"Cannot establish identity-scoped PCI Bus Master state");
+	SYSLOG("ngreen", "V314: PCI Bus Master %s after PF/VF identity classification",
+	       physicalAccess ? "enabled for physical GPU" : "held off for VF/unknown GPU");
+
+	const bool physicalTgl =
+		NGGpuCapabilities::isTigerLake(this->deviceId) && physicalAccess;
 	this->isRealTGL = NGGpuCapabilities::useNativeTigerLakePath(this->deviceId, physicalTgl);
 	SYSLOG("ngreen", "V243: GPU=%04x nativeTglPf=%d", this->deviceId, this->isRealTGL);
 

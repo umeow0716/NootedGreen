@@ -242,6 +242,12 @@ if python3 -B tools/vf_accelerator_lifecycle_contract_test.py \
 else
     failed=1
 fi
+if python3 -B tools/vf_pci_bus_master_contract_test.py \
+    NootedGreen/kern_green.cpp NootedGreen/kern_gen11.cpp; then
+    printf 'PASS offline PF/VF PCI Bus Master admission contracts\n'
+else
+    failed=1
+fi
 if python3 -B tools/vf_external_producer_source_contract_test.py \
     NootedGreen/kern_gen11.cpp; then
     printf 'PASS offline counted VF external-producer contracts\n'

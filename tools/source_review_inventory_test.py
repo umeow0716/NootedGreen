@@ -36,7 +36,7 @@ def macho_nm_command():
 # This digest covers the sorted, NUL-delimited path inventory, not file
 # contents. Git commit identity already fixes contents; this independent guard
 # prevents a new, removed or renamed path from silently escaping SG-11 review.
-EXPECTED_PATH_DIGEST = "a202c31ed34ba3cd2a345dc4b47bde832a87a3268b9cb2f9d1eb854c8ef0b043"
+EXPECTED_PATH_DIGEST = "e221b73099f8f22bd5dfc4b1d6c5cce271b12e9237714278cec1f67a598d03ea"
 EXPECTED_TOP_LEVEL_COUNTS = {
     ".github": 1,
     ".gitignore": 1,
@@ -49,7 +49,7 @@ EXPECTED_TOP_LEVEL_COUNTS = {
     "Release alias": 1,
     "docs": 5,
     "sle_Internal": 109,
-    "tools": 70,
+    "tools": 71,
 }
 
 EXPECTED_DEPENDENCY_DIGEST = (
@@ -390,7 +390,7 @@ def verify_tool_ledger(paths):
         path for path in paths
         if path.startswith("tools/") and Path(path).suffix in program_suffixes
     }
-    assert len(programs) == 64, f"tool program count changed: {len(programs)}"
+    assert len(programs) == 65, f"tool program count changed: {len(programs)}"
 
     check_static = (ROOT / "tools/check-static.sh").read_text(encoding="utf-8")
     workflow = (ROOT / ".github/workflows/build-kext.yml").read_text(

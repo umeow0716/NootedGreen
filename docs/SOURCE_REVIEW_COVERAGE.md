@@ -10,6 +10,31 @@ The current dynamic-entry gate table is
 
 ## Scope
 
+2026-10-08 V313 dynamic result and V314 PCI Bus Master repair: exact V313
+`64906e86e6e84736e0350aca67ad981e7bb94e88`/CI `37667149064`, final AuxKC
+`a1788685...` and immutable manifest `523cab75...` passed every deployment
+gate. Its sole contained start on fresh boot `2dca3e9c-...` reached the first
+V313 global owner-placeholder rejection, then Host DMAR reported PF requester
+`00:02.0` writing address zero about 29 ms later. The independent Guest log
+remained live to domain off; no Metal, media or Looking Glass ran, and both
+qcow2 post-checks remained clean. Evidence is preserved under
+`build/diagnostics/v313-tgl-start-90s-20261007T190232Z`.
+
+Static re-review corrected the prior interpretation of `master=0`: that field
+was Gen11 IRQ-master MMIO, not PCI Command Bus Master. QEMU 10.0.13 forwards
+PCI Command writes directly through VFIO, while NootedGreen's common
+`processPatcher()` unconditionally enabled Bus Master before PF/VF identity,
+initial PPGTT/HWS, MSI consumer or GuC readiness. V314 now holds
+SR-IOV-capable/unknown functions Bus Master-off through identity, restores the
+early setting only for a proven PF, re-verifies VF Bus Master-off at the native
+accelerator boundary, and revokes it after final DMA quiescence. The existing
+validated-HWS/filter-source boundary remains the sole VF enable transition.
+Nine negative mutations cover the complete off/classify/off/HWS-on/quiesce-off
+transaction. The exact inventory is now 1,503 paths and 65 tool programs; full
+static `/tmp/ngreen-static.lZMABM` passes. V314 clean commit, exact-SHA CI,
+artifact, deployment/load proof, manifest and fresh-root containment remain
+pending, so this is not hardware success.
+
 2026-10-08 V312 dynamic result and V313 page-zero translation repair: exact
 V312 `ca18cf3`/CI `37655560280`/artifact/final AuxKC/immutable manifest reached
 native Intel start, HWCAPS, IGAccelTask and initial 64-bit PPGTT factory return

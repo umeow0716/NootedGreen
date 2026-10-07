@@ -6430,9 +6430,26 @@ def source_contract(path):
     irq_quiesce = accelerator_start.index("vfQuiesceVirtualInterruptsBeforeMsi()")
     configure = accelerator_start.index("callback->ioPciConfigureInterrupts)(")
     native_start = accelerator_start.index("FunctionCast(start, callback->ostart)")
-    if not legacy_reject < ggtt_bootstrap < irq_quiesce < configure < native_start:
+    provider_cast = accelerator_start.index(
+        "IOPCIDevice, reinterpret_cast<OSObject *>(provider)")
+    bus_master_stop = accelerator_start.index(
+        "pciDevice->setBusMasterEnable(false)", provider_cast)
+    bus_master_barrier = accelerator_start.index("OSSynchronizeIO()", bus_master_stop)
+    bus_master_readback = accelerator_start.index(
+        "pciDevice->configRead16(kIOPCIConfigCommand)", bus_master_barrier)
+    bus_master_fault = accelerator_start.index(
+        "VF PCI bus mastering remained enabled before native start",
+        bus_master_readback)
+    owner_publish = accelerator_start.index("gVfAccelerator = that")
+    if not provider_cast < bus_master_stop < bus_master_barrier < \
+            bus_master_readback < bus_master_fault < owner_publish < \
+            legacy_reject < ggtt_bootstrap < irq_quiesce < configure < native_start:
         raise AssertionError(
-            f"{path}: VF legacy-MMIO rejection/GGTT/IRQ-reset/MSI order changed before native start")
+            f"{path}: VF PCI-stop/ownership/GGTT/IRQ-reset/MSI order changed before native start")
+    if accelerator_start.count("setBusMasterEnable(") != 1 or \
+            "setBusMasterEnable(true)" in accelerator_start:
+        raise AssertionError(
+            f"{path}: pre-native VF wrapper gained another PCI Bus Master transition")
     if "pciDevice, kIOInterruptTypePCIMessaged, 1, 1, 0" not in accelerator_start:
         raise AssertionError(f"{path}: VF MSI request is not exactly one required vector")
     irq_reset = function_body(source, "bool vfQuiesceVirtualInterruptsBeforeMsi()")
