@@ -134,6 +134,24 @@ int main() {
     }
     std::printf("PASS: %u PF-owner placeholder/private-entry synchronization cases\n",
                 synchronizationCases);
+
+    unsigned bootstrapCases = 0;
+    for (bool kernelTask : {false, true})
+    for (bool globalSource : {false, true})
+    for (bool assignedRangeExact : {false, true})
+    for (uint32_t addressMode : {UINT32_C(0), UINT32_C(1), UINT32_C(3),
+                                 UINT32_MAX})
+    for (bool rootEmpty : {false, true})
+    for (bool mutationSeen : {false, true}) {
+        const bool expected = kernelTask && globalSource && assignedRangeExact &&
+            addressMode == 3 && rootEmpty && !mutationSeen;
+        assert(NGGgtt::emptyKernelPpgttBootstrap(
+            kernelTask, globalSource, assignedRangeExact, addressMode,
+            rootEmpty, mutationSeen) == expected);
+        ++bootstrapCases;
+    }
+    std::printf("PASS: %u empty kernel PPGTT bootstrap admission cases\n",
+                bootstrapCases);
     const uint64_t windows[][2] = {{0x1000, 0x100000},
         {0xFED00000, 0x100000}, {0, UINT64_C(0x100000000)}};
     const uint64_t tops[] = {0, 0xFEE00000, UINT64_MAX};

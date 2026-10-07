@@ -243,7 +243,9 @@ bool gVfMmioPoisoned = false; // protected by gVfGucLock
 // every direct-map entry point without changing the encoded value or retaining
 // PF-owned ownership bits.  The diagnostic helper is used only for the first
 // store of an operation; all remaining stores keep the established V219 path.
-volatile SInt32 gVfGgttDiagnosticWrites = 0;
+// Saturate after the bounded diagnostic window.  Nonzero is consequently a
+// monotonic, non-wrapping proof that a routed direct GGTT store has occurred.
+volatile UInt32 gVfGgttDiagnosticWrites = 0;
 volatile UInt32 gVfBootstrapStarted = 0;
 volatile UInt32 gVfTlbNextSeqno = 0;
 volatile UInt32 gVfTlbWaitActive = 0;
@@ -4105,8 +4107,16 @@ static void vfStoreFirstPteWithDiagnostic(volatile uint64_t *pteBase,
 	                                       uint64_t intended,
 	                                       VfGgttDiagnosticOperation operation)
 {
-	const SInt32 sample = OSIncrementAtomic(&gVfGgttDiagnosticWrites);
-	if (sample <= 0 || sample > 32) {
+	UInt32 sample = gVfGgttDiagnosticWrites;
+	while (sample < 33) {
+		const UInt32 next = sample + 1;
+		if (OSCompareAndSwap(sample, next, &gVfGgttDiagnosticWrites)) {
+			sample = next;
+			break;
+		}
+		sample = gVfGgttDiagnosticWrites;
+	}
+	if (sample == 0 || sample > 32) {
 		pteBase[gpu >> 12] = intended;
 		return;
 	}
@@ -4632,6 +4642,8 @@ void *Gen11::vfNewPageTableForTask(void *that, void *task)
 	const bool sourceIsGlobal = source && source == gVfGlobalPageTable;
 	const bool sourceOwnerValid = kernelTask ? sourceIsGlobal :
 		(source && !sourceIsGlobal);
+	const bool assignedRangeExact = managerRange.start == gVfGGTTBase &&
+		managerRange.length == gVfGGTTSize && gVfGGTTSize != 0;
 	const bool rangeValid =
 		(managerRange.start & (PAGE_SIZE - 1U)) == 0 &&
 		(managerRange.length & (PAGE_SIZE - 1U)) == 0 &&
@@ -4643,7 +4655,27 @@ void *Gen11::vfNewPageTableForTask(void *that, void *task)
 		(getMember<uint32_t>(pageTable, 0x28) & 1U) != 0;
 	const bool sourceUsesDescriptors = source &&
 		(getMember<uint32_t>(source, 0x28) & 1U) != 0;
-	if (synchronized && !kernelTask && destinationUsesDescriptors &&
+	const bool destinationRootEmpty =
+		addressMode == 3 &&
+		getMember<uint64_t>(pageTable, 0x40) == 0 &&
+		getMember<uint64_t>(pageTable, 0x48) == 0 &&
+		getMember<uint64_t>(pageTable, 0x50) == 0 &&
+		getMember<uint64_t>(pageTable, 0x58) == 0;
+	const bool emptyKernelBootstrap = synchronized &&
+		NGGgtt::emptyKernelPpgttBootstrap(
+			kernelTask, sourceIsGlobal, assignedRangeExact, addressMode,
+			destinationRootEmpty,
+			gVfGgttDiagnosticWrites != 0);
+	if (kernelTask) {
+		// Native Tahoe copies every page in managerRange from the global GGTT.
+		// On this VF that is almost one million uncached MMIO reads over PF owner
+		// tombstones.  The exact factory has returned a rootless 64-bit table and
+		// no direct GGTT operation has occurred, so the correct initial PPGTT is
+		// empty.  Later real mappings use routed commit/all-task transactions.
+		synchronized = emptyKernelBootstrap;
+		if (synchronized)
+			SYSLOG("ngreen", "V315: admitted empty initial kernel PPGTT before any direct GGTT mutation");
+	} else if (synchronized && destinationUsesDescriptors &&
 	    sourceUsesDescriptors) {
 		// Match the native 64-bit-to-64-bit clone window exactly. A missing
 		// source descriptor is a sparse success; a present descriptor must be
@@ -4670,7 +4702,6 @@ void *Gen11::vfNewPageTableForTask(void *that, void *task)
 		auto mapEntry = reinterpret_cast<MapEntry>(
 			destinationVtable[0x118 / sizeof(mach_vm_address_t)]);
 		synchronized = readEntry && mapEntry;
-		uint64_t sparseGlobalEntries = 0;
 		uint64_t mappedEntries = 0;
 		const uint64_t end = managerRange.start + managerRange.length;
 		for (uint64_t address = managerRange.start;
@@ -4678,22 +4709,17 @@ void *Gen11::vfNewPageTableForTask(void *that, void *task)
 			uint64_t physical = 0;
 			uint64_t flags = 0;
 			const bool present = readEntry(source, address, physical, flags);
+			// A non-kernel task is admitted only with its private bootstrap table.
+			// Address zero is corruption here; PF GGTT owner tombstones are handled
+			// solely by the later common synchronizer.
 			const auto entry = NGGgtt::classifySynchronizationEntry(
-				present, sourceIsGlobal, physical, flags);
+				present, false, physical, flags);
 			if (!entry.valid) {
 				synchronized = false;
 				break;
 			}
-			if (!entry.map) {
-				if (present && sourceIsGlobal) {
-					if (sparseGlobalEntries == 0)
-						SYSLOG("ngreen", "V313: ignored global GGTT owner placeholder address=0x%llx flags=0x%llx",
-						       static_cast<unsigned long long>(address),
-						       static_cast<unsigned long long>(flags));
-					sparseGlobalEntries++;
-				}
+			if (!entry.map)
 				continue;
-			}
 			const NGIGAddressRange pageRange {address, PAGE_SIZE};
 			synchronized = mapEntry(pageTable, pageRange, physical, entry.flags);
 			if (synchronized)
@@ -4705,8 +4731,7 @@ void *Gen11::vfNewPageTableForTask(void *that, void *task)
 		using FlushGtt = void (*)(void *);
 		reinterpret_cast<FlushGtt>(
 			callback->vfFlushHardwareAfterGttUpdate)(accelerator);
-		SYSLOG("ngreen", "V313: initial VF page-table entry copy global=%d sparse=%llu mapped=%llu synchronized=%d",
-		       sourceIsGlobal, static_cast<unsigned long long>(sparseGlobalEntries),
+		SYSLOG("ngreen", "V315: initial private page-table entry copy mapped=%llu synchronized=%d",
 		       static_cast<unsigned long long>(mappedEntries), synchronized);
 	}
 

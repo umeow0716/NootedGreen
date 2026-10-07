@@ -23,6 +23,23 @@ struct SynchronizationEntry {
     uint64_t flags;
 };
 
+// The first VF kernel task is created before any direct GGTT mapping exists.
+// Its freshly allocated 64-bit PPGTT has no root descriptor yet, so copying a
+// PF-provisioned, nearly 4 GiB owner-only GGTT range is both unnecessary and a
+// long MMIO read window before HWS setup.  Admit an empty bootstrap only when
+// every provenance condition is exact.  Any prior direct mutation, non-kernel
+// owner, non-global source, different address mode, or pre-existing root must
+// use a separately proven synchronization path (or fail closed at the caller).
+static inline bool emptyKernelPpgttBootstrap(bool kernelTask,
+                                             bool globalSource,
+                                             bool assignedRangeExact,
+                                             uint32_t addressMode,
+                                             bool rootEmpty,
+                                             bool directGgttMutationSeen) {
+    return kernelTask && globalSource && assignedRangeExact &&
+           addressMode == 3 && rootEmpty && !directGgttMutationSeen;
+}
+
 // Before the VF command transport has ever run, no GPU request can retain a
 // translation and initialization rollback needs no TLB rendezvous. Once the
 // transport has run, every unmap must complete a heavy GuC invalidation while

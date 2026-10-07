@@ -2012,6 +2012,26 @@ def macho_inventory(path):
             ("__ZN15IGMemoryManager19newPageTableForTaskEP11IGAccelTask", "__ZN29IGHardwarePerProcessPageTable15synchronizeWithI25IGHardwareGlobalPageTableEEvPKT_RK14IGAddressRangeb", 0xf93c),
             ("__ZN15IGMemoryManager19newPageTableForTaskEP11IGAccelTask", "__ZN29IGHardwarePerProcessPageTable15synchronizeWithIS_EEvPKT_RK14IGAddressRangeb", 0xf969)):
         assert direct_branches(method, target) == [call], f"{path}: changed native per-task page-table factory/synchronization edge"
+    ppgtt64_factory = value(
+        "__ZN31IGHardwarePerProcessPageTable6411withOptionsEP16IntelAcceleratorP11IGAccelTask")
+    ppgtt_base_init = value(
+        "__ZN29IGHardwarePerProcessPageTable15initWithOptionsEP16IntelAcceleratorP11IGAccelTaskj")
+    hardware_table_init = value(
+        "__ZN19IGHardwarePageTable15initWithOptionsEP16IntelAcceleratorNS_4TypeE")
+    assert image[ppgtt64_factory + 0x2c:ppgtt64_factory + 0x3a] == \
+        bytes.fromhex("48 89 df 48 83 c7 40 ba 20 00 00 00 31 f6"), \
+        f"{path}: changed 64-bit factory four-qword root zeroing"
+    assert direct_branches(
+        "__ZN31IGHardwarePerProcessPageTable6411withOptionsEP16IntelAcceleratorP11IGAccelTask",
+        "__ZN29IGHardwarePerProcessPageTable15initWithOptionsEP16IntelAcceleratorP11IGAccelTaskj") == \
+        [ppgtt64_factory + 0x4d], \
+        f"{path}: changed rootless 64-bit factory-to-base initialization edge"
+    assert image[ppgtt_base_init + 0x21:ppgtt_base_init + 0x29] == \
+        bytes.fromhex("4c 89 7b 20 44 89 73 28"), \
+        f"{path}: changed private base owner/options field initialization"
+    assert image[hardware_table_init + 0x24:hardware_table_init + 0x2c] == \
+        bytes.fromhex("4c 89 7b 10 44 89 73 18"), \
+        f"{path}: changed hardware-table owner/type field initialization"
     assert direct_branches(
         "__ZN11IGAccelTask15initWithOptionsEP16IntelAccelerator",
         "__ZN15IGMemoryManager19newPageTableForTaskEP11IGAccelTask") == [0x79a4], f"{path}: changed unique unpublished page-table factory owner"
@@ -4954,9 +4974,15 @@ def initial_page_table_sync_contract(source, path):
         "source=getMember<void*>(bootstrapTask,0x260);",
         "constboolsourceIsGlobal=source&&source==gVfGlobalPageTable;",
         "constboolsourceOwnerValid=kernelTask?sourceIsGlobal:(source&&!sourceIsGlobal);",
+        "constboolassignedRangeExact=managerRange.start==gVfGGTTBase&&managerRange.length==gVfGGTTSize&&gVfGGTTSize!=0;",
         "managerRange.length<=UINT64_MAX-managerRange.start;",
         "sourceOwnerValid&&rangeValid",
-        "!kernelTask&&destinationUsesDescriptors&&sourceUsesDescriptors",
+        "constbooldestinationRootEmpty=addressMode==3&&getMember<uint64_t>(pageTable,0x40)==0&&getMember<uint64_t>(pageTable,0x48)==0&&getMember<uint64_t>(pageTable,0x50)==0&&getMember<uint64_t>(pageTable,0x58)==0;",
+        "NGGgtt::emptyKernelPpgttBootstrap(kernelTask,sourceIsGlobal,assignedRangeExact,addressMode,destinationRootEmpty,gVfGgttDiagnosticWrites!=0);",
+        "if(kernelTask)",
+        "synchronized=emptyKernelBootstrap;",
+        'SYSLOG("ngreen","V315:admittedemptyinitialkernelPPGTTbeforeanydirectGGTTmutation");',
+        "elseif(synchronized&&destinationUsesDescriptors&&sourceUsesDescriptors)",
         "sourceVtable[0x168/sizeof(mach_vm_address_t)]",
         "destinationVtable[0x158/sizeof(mach_vm_address_t)]",
         "synchronized=descriptor&&mapDescriptor(pageTable,descriptorRange,descriptor);",
@@ -4964,11 +4990,12 @@ def initial_page_table_sync_contract(source, path):
         "destinationVtable[0x118/sizeof(mach_vm_address_t)]",
         "synchronized&&address!=end;address+=PAGE_SIZE",
         "constboolpresent=readEntry(source,address,physical,flags);",
-        "NGGgtt::classifySynchronizationEntry(present,sourceIsGlobal,physical,flags);",
+        "NGGgtt::classifySynchronizationEntry(present,false,physical,flags);",
         "if(!entry.valid)",
         "if(!entry.map)",
         "synchronized=mapEntry(pageTable,pageRange,physical,entry.flags);",
         "callback->vfFlushHardwareAfterGttUpdate)(accelerator);",
+        'SYSLOG("ngreen","V315:initialprivatepage-tableentrycopymapped=%llusynchronized=%d",',
         "destinationVtable[0x28/sizeof(mach_vm_address_t)]",
         "release(pageTable);",
         "pageTable=nullptr;",
@@ -4984,8 +5011,14 @@ def initial_page_table_sync_contract(source, path):
     factory = compact.index("callback->vfPpgtt32WithOptions)(accelerator,task);", lock)
     source_owner = compact.index(
         "constboolkernelTask=IGAccelTaskIsKernelGPUTask(task);", factory)
+    empty_bootstrap = compact.index(
+        "NGGgtt::emptyKernelPpgttBootstrap(", source_owner)
+    kernel_branch = compact.index("if(kernelTask)", empty_bootstrap)
+    bootstrap_marker = compact.index(
+        'SYSLOG("ngreen","V315:admittedemptyinitialkernelPPGTT',
+        kernel_branch)
     descriptor_read = compact.index(
-        "sourceVtable[0x168/sizeof(mach_vm_address_t)]", source_owner)
+        "sourceVtable[0x168/sizeof(mach_vm_address_t)]", bootstrap_marker)
     descriptor_map = compact.index(
         "synchronized=descriptor&&mapDescriptor(pageTable,descriptorRange,descriptor);",
         descriptor_read)
@@ -5001,7 +5034,8 @@ def initial_page_table_sync_contract(source, path):
     release = compact.index("release(pageTable);", flush)
     unlock = compact.rindex("IORecursiveLockUnlock(gVfPageTableUpdateLock);")
     result = compact.rindex("returnpageTable;")
-    if not lock < factory < source_owner < descriptor_read < descriptor_map < \
+    if not lock < factory < source_owner < empty_bootstrap < kernel_branch < \
+            bootstrap_marker < descriptor_read < descriptor_map < \
             entry_read < classification < entry_map < flush < release < unlock < result:
         raise AssertionError(
             f"{path}: initial page-table create/sync/release order changed")
@@ -5043,7 +5077,9 @@ def initial_page_table_sync_mutations(path):
             source,
             "__ZN31IGHardwarePerProcessPageTable3211withOptionsEP16IntelAcceleratorP11IGAccelTask",
             "__ZN31IGHardwarePerProcessPageTable3211missingFactoryEP16IntelAcceleratorP11IGAccelTask")),
-        (wrapper, replace_once(wrapper, "addressMode == 3", "addressMode == 1")),
+        (wrapper, replace_once(
+            wrapper, "else if (accelerator && addressMode == 3)",
+            "else if (accelerator && addressMode == 1)")),
         (wrapper, replace_once(
             wrapper, "source = getMember<void *>(that, 0x98);",
             "source = getMember<void *>(that, 0x90);")),
@@ -5055,11 +5091,29 @@ def initial_page_table_sync_mutations(path):
             "rangeValid")),
         (wrapper, replace_once(
             wrapper,
+            "managerRange.start == gVfGGTTBase &&\n\t\tmanagerRange.length == gVfGGTTSize && gVfGGTTSize != 0;",
+            "managerRange.start != gVfGGTTBase &&\n\t\tmanagerRange.length == gVfGGTTSize && gVfGGTTSize != 0;")),
+        (wrapper, replace_once(
+            wrapper, "getMember<uint64_t>(pageTable, 0x58) == 0;",
+            "true;")),
+        (wrapper, replace_once(
+            wrapper,
+            "const bool destinationRootEmpty =\n\t\taddressMode == 3 &&",
+            "const bool destinationRootEmpty =\n\t\taddressMode == 1 &&")),
+        (wrapper, replace_once(
+            wrapper, "gVfGgttDiagnosticWrites != 0);",
+            "false);")),
+        (wrapper, replace_once(
+            wrapper,
+            "if (kernelTask) {\n\t\t// Native Tahoe copies every page",
+            "if (false) {\n\t\t// Native Tahoe copies every page")),
+        (wrapper, replace_once(
+            wrapper,
             "synchronized = descriptor &&\n\t\t\t\tmapDescriptor(pageTable, descriptorRange, descriptor);",
             "(void)mapDescriptor(pageTable, descriptorRange, descriptor);")),
         (wrapper, replace_once(
             wrapper, "const auto entry = NGGgtt::classifySynchronizationEntry(\n"
-            "\t\t\t\tpresent, sourceIsGlobal, physical, flags);",
+            "\t\t\t\tpresent, false, physical, flags);",
             "const auto entry = NGGgtt::SynchronizationEntry {true, true, flags};")),
         (wrapper, replace_once(
             wrapper,
@@ -5084,11 +5138,29 @@ def initial_page_table_sync_mutations(path):
         except (AssertionError, ValueError):
             continue
         raise AssertionError(f"{path}: escaped initial page-table mutation")
-    print("PASS: thirteen initial page-table factory/sync/rollback mutations rejected (source contract, not runtime proof)")
+    print("PASS: eighteen initial page-table factory/bootstrap/sync/rollback mutations rejected (source contract, not runtime proof)")
 
 
 def initial_page_table_sync_model():
     cases = 0
+    bootstrap_cases = 0
+    for kernel_task in (False, True):
+        for global_source in (False, True):
+            for assigned_range_exact in (False, True):
+                for address_mode in (0, 1, 3, 0xFFFFFFFF):
+                    for root_empty in (False, True):
+                        for mutation_seen in (False, True):
+                            admitted = (kernel_task and global_source and
+                                        assigned_range_exact and
+                                        address_mode == 3 and root_empty and
+                                        not mutation_seen)
+                            assert admitted == all((
+                                kernel_task, global_source,
+                                assigned_range_exact, address_mode == 3,
+                                root_empty, not mutation_seen))
+                            bootstrap_cases += 1
+    assert bootstrap_cases == 128
+
     # Per-entry source holes are legal. Every present entry must map, and a
     # first false result makes the unpublished destination releasable as one
     # object rather than publishing a successful prefix.
@@ -5129,7 +5201,7 @@ def initial_page_table_sync_model():
                         assert synchronized == expected
                         assert released == (factory_ok and not expected)
                         cases += 1
-    print(f"PASS: {cases} initial PPGTT synchronization states preserve publish-or-release semantics (offline model)")
+    print(f"PASS: {bootstrap_cases} empty-bootstrap admissions and {cases} initial PPGTT synchronization states preserve publish-or-release semantics (offline model)")
 
 
 def cache_type_update_transaction_contract(source, path):
@@ -6703,15 +6775,20 @@ def ggtt_postwrite_contract(source, path="<source>"):
 def v312_diagnostic_contract(source, path="<source>"):
     """Pin V312 as bounded observation, never an ownership-bit repair."""
     normalized = "".join(source.split())
-    if normalized.count("volatileSInt32gVfGgttDiagnosticWrites=0;") != 1:
+    if normalized.count("volatileUInt32gVfGgttDiagnosticWrites=0;") != 1:
         raise AssertionError(f"{path}: missing unique V312 diagnostic counter")
 
     helper = function_body(
         source, "static void vfStoreFirstPteWithDiagnostic(")
     compact = "".join(helper.split())
     required = (
-        "constSInt32sample=OSIncrementAtomic(&gVfGgttDiagnosticWrites);",
-        "if(sample<=0||sample>32)",
+        "UInt32sample=gVfGgttDiagnosticWrites;",
+        "while(sample<33)",
+        "constUInt32next=sample+1;",
+        "OSCompareAndSwap(sample,next,&gVfGgttDiagnosticWrites)",
+        "sample=next;",
+        "sample=gVfGgttDiagnosticWrites;",
+        "if(sample==0||sample>32)",
         "constuint64_tbefore=pteBase[gpu>>12];",
         "pteBase[gpu>>12]=intended;",
         '__asm__volatile("sfence":::"memory");',
@@ -6732,7 +6809,12 @@ def v312_diagnostic_contract(source, path="<source>"):
         if forbidden in compact:
             raise AssertionError(
                 f"{path}: V312 diagnostic became a behavior change: {forbidden}")
-    cap = compact.index("if(sample<=0||sample>32)")
+    sample = compact.index("UInt32sample=gVfGgttDiagnosticWrites;")
+    saturation = compact.index("while(sample<33)", sample)
+    mutation = compact.index(
+        "OSCompareAndSwap(sample,next,&gVfGgttDiagnosticWrites)",
+        saturation)
+    cap = compact.index("if(sample==0||sample>32)", mutation)
     fast_store = compact.index("pteBase[gpu>>12]=intended;", cap)
     fast_return = compact.index("return;", fast_store)
     before = compact.index("constuint64_tbefore=", fast_return)
@@ -6740,7 +6822,8 @@ def v312_diagnostic_contract(source, path="<source>"):
     fence = compact.index('__asm__volatile("sfence":::"memory");', observed_store)
     after = compact.index("constuint64_tafter=", fence)
     log = compact.index('SYSLOG("ngreen","V312:GGTTsample=', after)
-    if not cap < fast_store < fast_return < before < observed_store < fence < after < log:
+    if not sample < saturation < mutation < cap < fast_store < fast_return < before < \
+            observed_store < fence < after < log:
         raise AssertionError(
             f"{path}: V312 before/store/readback ordering changed")
 
@@ -6806,6 +6889,9 @@ def v312_diagnostic_contract(source, path="<source>"):
 def v312_diagnostic_mutations(path):
     source = pathlib.Path(path).read_text()
     mutations = (
+        source.replace(
+            "OSCompareAndSwap(sample, next, &gVfGgttDiagnosticWrites)",
+            "sample == next", 1),
         source.replace("sample > 32", "sample > 3200", 1),
         source.replace("pteBase[gpu >> 12] = intended;\n\t__asm__",
                        "pteBase[gpu >> 12] = intended | before;\n\t__asm__", 1),
@@ -6823,45 +6909,41 @@ def v312_diagnostic_mutations(path):
         except (AssertionError, ValueError):
             continue
         raise AssertionError(f"{path}: escaped V312 diagnostic-only mutation")
-    print("PASS: five V312 bounded diagnostic/ordering mutations rejected")
+    print("PASS: six V312 bounded diagnostic/ordering mutations rejected")
 
 
 def v313_owner_placeholder_contract(source, path="<source>"):
-    """Pin the PF-owner tombstone translation at both synchronization roots."""
+    """Pin PF-owner tombstones to the common global synchronization root."""
     initial = function_body(
         source, "void *Gen11::vfNewPageTableForTask(void *that, void *task)")
     common = function_body(
         source, "void Gen11::vfSynchronizeEachEntry(void *that,")
     initial_compact = "".join(initial.split())
     common_compact = "".join(common.split())
-    for body, label in ((initial_compact, "initial"),
-                        (common_compact, "common")):
-        for token in (
-                "constboolsourceIsGlobal=",
-                "NGGgtt::classifySynchronizationEntry(present,sourceIsGlobal,physical,flags);",
-                "if(!entry.valid)",
-                "if(!entry.map)",
-                "physical,entry.flags"):
-            if token not in body:
-                raise AssertionError(
-                    f"{path}: V313 {label} synchronization lacks {token}")
-    if "sourceOwnerValid&&rangeValid" not in initial_compact:
-        raise AssertionError(f"{path}: V313 initial synchronization accepts a foreign source")
-    if 'SYSLOG("ngreen","V313:ignoredglobalGGTTownerplaceholder' not in initial_compact or \
-            'SYSLOG("ngreen","V313:initialVFpage-tableentrycopy' not in initial_compact:
-        raise AssertionError(f"{path}: V313 runtime proof markers are incomplete")
-    placeholder = initial_compact.index(
-        'SYSLOG("ngreen","V313:ignoredglobalGGTTownerplaceholder')
-    map_entry = initial_compact.index(
-        "synchronized=mapEntry(pageTable,pageRange,physical,entry.flags);",
-        placeholder)
-    summary = initial_compact.index(
-        'SYSLOG("ngreen","V313:initialVFpage-tableentrycopy', map_entry)
-    final_marker = initial_compact.index(
-        'SYSLOG("ngreen","V312:initialVFpage-tablesynchronizationreturned',
-        summary)
-    if not placeholder < map_entry < summary < final_marker:
-        raise AssertionError(f"{path}: V313 placeholder/copy/final marker order changed")
+    for token in (
+            "constboolsourceIsGlobal=",
+            "sourceOwnerValid&&rangeValid",
+            "NGGgtt::emptyKernelPpgttBootstrap(",
+            "NGGgtt::classifySynchronizationEntry(present,false,physical,flags);",
+            "if(!entry.valid)",
+            "if(!entry.map)",
+            "physical,entry.flags",
+            'SYSLOG("ngreen","V315:admittedemptyinitialkernelPPGTT'):
+        if token not in initial_compact:
+            raise AssertionError(
+                f"{path}: V315 initial synchronization lacks {token}")
+    if 'SYSLOG("ngreen","V313:ignoredglobalGGTTownerplaceholder' in initial_compact:
+        raise AssertionError(
+            f"{path}: initial private synchronization still admits global tombstones")
+    for token in (
+            "constboolsourceIsGlobal=",
+            "NGGgtt::classifySynchronizationEntry(present,sourceIsGlobal,physical,flags);",
+            "if(!entry.valid)",
+            "if(!entry.map)",
+            "physical,entry.flags"):
+        if token not in common_compact:
+            raise AssertionError(
+                f"{path}: V313 common synchronization lacks {token}")
 
 
 def v313_owner_placeholder_mutations(path):
@@ -6889,12 +6971,14 @@ def v313_owner_placeholder_mutations(path):
         mutate_function_all(
             "void Gen11::vfSynchronizeEachEntry(void *that,",
             "physical, entry.flags", "physical, flags"),
-        source.replace(
-            'SYSLOG("ngreen", "V313: ignored global GGTT owner placeholder',
-            'SYSLOG("ngreen", "missing V313 placeholder marker', 1),
-        source.replace(
-            'SYSLOG("ngreen", "V313: initial VF page-table entry copy',
-            'SYSLOG("ngreen", "missing V313 copy marker', 1),
+        mutate_function(
+            "void Gen11::vfSynchronizeEachEntry(void *that,",
+            "present, sourceIsGlobal, physical, flags",
+            "present, false, physical, flags"),
+        mutate_function(
+            "void *Gen11::vfNewPageTableForTask(void *that, void *task)",
+            "present, false, physical, flags",
+            "present, sourceIsGlobal, physical, flags"),
     )
     for changed in mutations:
         if changed == source:

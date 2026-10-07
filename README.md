@@ -15,11 +15,13 @@ memory interrupt and direct-LRCA transport.
 
 **Work in progress.** Historical physical-RPL testing reached the login screen
 and exercised the accelerator, but those Sonoma results do not validate the
-current Tahoe SR-IOV VF path. This branch has passed its offline protocol,
-sanitizer, analyzer and remote build gates. The exact Tahoe V308 image has also
-loaded in no-VF boots and completed contained idle VF enumeration. Deliberate
-TGL accelerator startup and Metal submission remain blocked by a host-display
-warning gate described below.
+current Tahoe SR-IOV VF path. Exact V314 passed CI, artifact provenance, two
+no-VF deployment boots and immutable runtime-manifest verification, but its
+single contained accelerator start still triggered a Host PF address-zero DMA
+fault during initial kernel-PPGTT construction. V315 is an offline-only repair
+candidate with a complete local static pass; commit, exact-SHA CI, deployment
+and fresh-boot containment gates remain open. Metal submission has not been
+attempted.
 
 The former global DYLD/shared-cache mutation, unversioned CoreDisplay control-
 flow stubs, CoreLSKD path, ICL Metal ID bypass and GPU-bundle path redirect have
@@ -109,15 +111,17 @@ inherit runtime claims from the older Sonoma/Raptor Lake display experiments.
   framebuffer path and does not acquire a display engine from it.
 - Static analyzers and exhaustive host-side protocol models pass. This is not a
   Metal, media, DMA-quiescence or display validation result.
-- Exact-artifact contained VF runs through V311 have exercised no Metal
-  workload. V309 and V310 recorded PF `00:02.0` DMA writes to address zero;
-  V311 reproduced the fault even while its Gen11 local filter source remained
-  deferred and VF Bus Master stayed disabled. Its guest log ended roughly two
-  seconds before containment, so missing late markers are not stage proof.
-  V312 is diagnostic-only: it bounds raw first-store GGTT PTE round trips and
-  native start/task/table markers without changing the encoder or ownership
-  bits. It is not acceleration evidence and must not run on the current
-  tainted boot.
+- Exact-artifact contained VF runs through V314 have exercised no Metal
+  workload. V314 proved PCI Bus Master was held off before native accelerator
+  start, then reached the mode-3 PPGTT factory and first global owner
+  placeholder before a PF `00:02.0` address-zero DMA fault. Its independent
+  Guest log remained live through containment, so this is a valid driver-stage
+  boundary rather than an operational timeout.
+- V315 admits an empty initial kernel PPGTT only when the exact global source,
+  exact PF-assigned range, mode 3, four zero root qwords and the saturated
+  no-prior-direct-GGTT diagnostic counter all agree. Non-kernel private cloning and
+  later global synchronization remain status-aware. Targeted sanitizer,
+  mutation and paired-payload Mach-O contracts pass; this is not runtime proof.
 - The host preflight rejects any boot that already contains that display-atomic
   message, and the live watcher treats a new occurrence as an immediate
   containment trigger. The whole-journal scan deliberately avoids early-exit
@@ -131,10 +135,11 @@ inherit runtime claims from the older Sonoma/Raptor Lake display experiments.
   capture is incomplete. A two-second no-VF probe captured 289 complete pipe A
   updates with zero mismatches (p95 4 us, maximum 6 us), removed only its
   private instance and left the global tracer at `nop`.
-- The Tahoe VM remains off until the host i915 VF-FLR/display interaction has a
-  source-grounded disposition. Any later runtime result must come from the
-  manifest-pinned one-shot controller with its watcher and deadline already
-  live before QEMU starts.
+- The Tahoe VM remains off, and current Host boot
+  `538a2b42-8fd3-4120-965b-d1032d0a7da3` is tainted by the V314 containment
+  trigger. Any later runtime result requires a new exact candidate, CI/artifact,
+  two no-VF deployment/load-proof boots, immutable manifest and fresh Host;
+  its one-shot controller must have watcher and deadline live before QEMU.
 
 ## Requirements
 

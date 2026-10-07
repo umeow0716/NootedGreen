@@ -1,18 +1,17 @@
 # Tahoe SR-IOV protocol audit — in progress
 
-Updated: 2026-10-08. The last deployed driver is exact V313 commit
-`64906e86e6e84736e0350aca67ad981e7bb94e88`, CI `37667149064`, executable
-UUID `C789ABE1-1C6C-3DC7-A125-0070E6D6C4E3`. Its only 90-second contained
-start reached the V313 global-owner-placeholder rejection, then produced a
-Host PF `00:02.0` address-zero DMA write about 29 ms later. The independent
-Guest log remained live until domain off; no Metal, media or Looking Glass ran.
-The current offline V314 worktree repairs a newly proven, earlier PCI Bus
-Master admission error and closes Bus Master again after final DMA quiescence.
-Complete local static passes at `/tmp/ngreen-static.lZMABM`; V314 is NOT yet a
-boot-test candidate or a successful driver baseline. Keep
-`macos-tahoe-sriov` shut off until V314 has a clean pushed exact-SHA
-CI/artifact, exact deployment/runtime provenance, and a rebooted Host journal
-with no pre-existing trigger.
+Updated: 2026-10-08. The last deployed driver is exact V314 commit
+`facf568270467257c0f78fa600f87d17df99d46a`, CI `37676393786`, executable
+UUID `5D4FB152-C4E3-37D6-9BCE-BDCBCF7F6F5A`. Its valid sole 90-second
+contained start proved VF PCI Bus Master was held off, then reached the initial
+mode-3 PPGTT factory/global-owner scan before a Host PF `00:02.0` address-zero
+DMA write about 42 ms later. The independent Guest log remained live until
+domain off; no Metal, media or Looking Glass ran. The current offline V315
+worktree replaces only the exact empty initial kernel-PPGTT scan. The complete
+local static suite passes at `/tmp/ngreen-static.oDSDqJ`, but commit, CI and all
+deployment gates remain open. V315 is NOT yet a boot-test candidate or a successful driver
+baseline. Keep `macos-tahoe-sriov` shut off; current Host boot
+`538a2b42-8fd3-4120-965b-d1032d0a7da3` is tainted and may not start any VM.
 
 The user's final display target is now Looking Glass, not Sunshine/Moonlight.
 Older Sunshine references below are historical review notes. No macOS Tahoe
@@ -27,7 +26,56 @@ The authoritative dynamic-entry checklist is
 [`DYNAMIC_TEST_GATE.md`](DYNAMIC_TEST_GATE.md). Any open static gate keeps the
 VM hard hold in force.
 
-## V313 incident and V314 PCI Bus Master transaction repair
+## V314 incident and V315 exact empty kernel-PPGTT bootstrap
+
+- V314 passed exact-SHA CI, release provenance, two active no-VF deployment
+  boots, four-sample load proof and immutable runtime manifest `c51bcd47...`.
+  Fresh Host boot `538a2b42-8fd3-4120-965b-d1032d0a7da3` passed exact repo,
+  evidence, i915/DKMS, PF/VF, qcow2 and current-boot containment gates before
+  the domain was started once. The exact Guest helper SHA was verified, and an
+  independent Guest live logger remained active through domain off. Evidence
+  is preserved under
+  `build/diagnostics/v314-tgl-start-90s-20261007T202730Z`.
+- Guest execution proved the V314 early-BME transaction: it logged the VF PCI
+  Bus Master hold before native Intel start, then reached HWCAPS, IGAccelTask,
+  mode-3 PPGTT factory return and the first V313 global owner-placeholder
+  classification. It did not reach the initial synchronization summary,
+  factory return, task return or native-start return. Roughly 42 ms after the
+  final Guest marker, Host DMAR reported requester `00:02.0`, address zero,
+  DMA write, reason `0x05`; containment stopped the domain. Fixed deadline did
+  not fire, both qcow2 checks stayed clean, and no workload ran.
+- Exact V314 telemetry recorded zero `V312: GGTT sample=` entries before the
+  task factory. Therefore no routed direct-GGTT map/dummy-map/unmap/rollback
+  operation preceded construction of this first PPGTT. The native full-range
+  copy was not preserving a real mapping created through the reviewed VF path.
+- Both pinned Tahoe payloads prove the mode-3 factory allocates its object,
+  zeroes exactly four qwords at `+0x40..+0x5f`, then calls base initializers
+  which write owner/type/options fields only. The manager's kernel-task branch
+  nevertheless invokes global synchronization across its complete assigned
+  range. On this VF that means nearly one million uncached PTE reads through a
+  PF-provisioned, almost-4-GiB owner-only aperture before HWS construction.
+- V315 makes the existing diagnostic counter atomically saturate at 33 before
+  the first store of every routed direct GGTT operation, so nonzero cannot wrap
+  back to zero. It admits an empty initial PPGTT only for the exact
+  kernel task, exact global source, exact PF-assigned range, address mode 3,
+  four still-zero root qwords and a zero saturated counter. No condition is inferred from
+  PCI identity alone. If any condition fails, the unpublished table is
+  released and task construction fails closed.
+- The non-kernel path still clones only its private bootstrap source and treats
+  a present physical-zero private entry as corruption. Later global
+  synchronization retains V313's PF-owner-placeholder classification and all
+  existing PagePool/PPGTT serialization; real mappings remain handled by
+  manager commit and routed all-task synchronization.
+- Evidence passes 128 pure ASan/UBSan admission states, 18
+  negative factory/bootstrap/synchronization mutations, the direct-mutation
+  counter contract, paired-payload root-zeroing/call-edge anchors and full
+  static `/tmp/ngreen-static.oDSDqJ`. This is a source-grounded repair
+  hypothesis, not proof that the subsequent HWS/native stage is safe. CI,
+  artifact, two no-VF deployment boots,
+  immutable manifest and a fresh Host root gate are mandatory before another
+  single contained start-only run.
+
+## V313 incident and V314 PCI Bus Master transaction repair (historical)
 
 - V313 passed exact-SHA CI, two no-VF deployment boots, final-path/AuxKC load
   proof and immutable manifest `523cab75...`. Fresh Host boot
@@ -65,14 +113,15 @@ VM hard hold in force.
   accelerator wrapper repeats and verifies Bus Master-off before publishing
   its owner or allocating native state. The existing HWS/source boundary is
   still the only VF transition to Bus Master-on.
-- Final teardown now disables the interrupt bridge, then clears and verifies
+- Final teardown disables the interrupt bridge, then clears and verifies
   PCI Bus Master only after the existing device-wide GuC context, Engines/Guc
   TLB and DMA-quiescence proof. Ordinary sleep/wake does not clear it. A new
   source contract rejects nine ordering/polarity/readback regressions; the
   1,503-path ledger contains 65 tool programs, and the full offline suite
-  `/tmp/ngreen-static.lZMABM` passes. This remains static evidence pending a
-  clean commit, exact-SHA CI/artifact, no-VF deployment/load proof, immutable
-  manifest and a new root-contained Host boot.
+  `/tmp/ngreen-static.lZMABM` passed. V314 later completed commit, exact-SHA
+  CI/artifact, no-VF deployment/load proof and immutable manifest; its dynamic
+  result is recorded in the V315 section above and shows that early BME closure
+  was necessary but not sufficient.
 
 ## V312 incident and V313 owner-placeholder repair
 
