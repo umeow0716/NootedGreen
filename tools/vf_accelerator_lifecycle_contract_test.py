@@ -2104,7 +2104,11 @@ def macho_inventory(path):
         assert struct.unpack_from("<Q", image, table + 16 + 0x140)[0] == value(f"__ZNK31IGHardwarePerProcessPageTable{bits}4readEyRyS0_"), f"{path}: changed initial PPGTT read virtual"
     table64 = value("__ZTV31IGHardwarePerProcessPageTable64")
     assert struct.unpack_from("<Q", image, table64 + 16 + 0x158)[0] == value("__ZN31IGHardwarePerProcessPageTable6421mapDescriptorForRangeERK14IGAddressRangePN10IGPagePool14PageDescriptorE"), f"{path}: changed initial descriptor-map virtual"
-    assert struct.unpack_from("<Q", image, table64 + 16 + 0x168)[0] == value("__ZNK31IGHardwarePerProcessPageTable6422readDescriptorForRangeERK14IGAddressRangePPN10IGPagePool14PageDescriptorE"), f"{path}: changed initial descriptor-read virtual"
+    descriptor_read = value("__ZNK31IGHardwarePerProcessPageTable6422readDescriptorForRangeERK14IGAddressRangePPN10IGPagePool14PageDescriptorE")
+    assert struct.unpack_from("<Q", image, table64 + 16 + 0x168)[0] == descriptor_read, f"{path}: changed initial descriptor-read virtual"
+    assert image[descriptor_read + 0x26:descriptor_read + 0x31] == \
+        bytes.fromhex("48 8b 04 01 48 89 02 b0 01 5d c3"), \
+        f"{path}: changed descriptor read output/unconditional-success semantics"
     assert struct.unpack_from("<Q", image, value("__ZTV31IGHardwarePerProcessPageTable32") + 16 + 0x130)[0] == value("__ZN31IGHardwarePerProcessPageTable3210unmapRangeERK14IGAddressRange"), f"{path}: changed 32-bit init unmap virtual"
     for call in (0x11d6e, 0x11d8b, 0x11da8):
         assert image[call:call + 6] == bytes.fromhex("ff 90 30 01 00 00"), f"{path}: changed 32-bit init range-unmap edge"
@@ -5063,7 +5067,10 @@ def initial_page_table_sync_contract(source, path):
         "elseif(synchronized&&destinationUsesDescriptors&&sourceUsesDescriptors)",
         "sourceVtable[0x168/sizeof(mach_vm_address_t)]",
         "destinationVtable[0x158/sizeof(mach_vm_address_t)]",
-        "synchronized=descriptor&&mapDescriptor(pageTable,descriptorRange,descriptor);",
+        "constbooldescriptorRead=synchronized&&readDescriptor(source,descriptorRange,&descriptor);",
+        "if(descriptorRead&&descriptor)",
+        "synchronized=mapDescriptor(pageTable,descriptorRange,descriptor);",
+        'SYSLOG("ngreen","V326:admittedsparseinitialprivatePPGTTdescriptorread=%d",',
         "sourceVtable[0x140/sizeof(mach_vm_address_t)]",
         "destinationVtable[0x118/sizeof(mach_vm_address_t)]",
         "synchronized&&address!=end;address+=PAGE_SIZE",
@@ -5098,7 +5105,7 @@ def initial_page_table_sync_contract(source, path):
     descriptor_read = compact.index(
         "sourceVtable[0x168/sizeof(mach_vm_address_t)]", bootstrap_marker)
     descriptor_map = compact.index(
-        "synchronized=descriptor&&mapDescriptor(pageTable,descriptorRange,descriptor);",
+        "synchronized=mapDescriptor(pageTable,descriptorRange,descriptor);",
         descriptor_read)
     entry_read = compact.index(
         "sourceVtable[0x140/sizeof(mach_vm_address_t)]", descriptor_map)
@@ -5187,8 +5194,11 @@ def initial_page_table_sync_mutations(path):
             "if (false) {\n\t\t// Native Tahoe copies every page")),
         (wrapper, replace_once(
             wrapper,
-            "synchronized = descriptor &&\n\t\t\t\tmapDescriptor(pageTable, descriptorRange, descriptor);",
+            "synchronized =\n\t\t\t\tmapDescriptor(pageTable, descriptorRange, descriptor);",
             "(void)mapDescriptor(pageTable, descriptorRange, descriptor);")),
+        (wrapper, replace_once(
+            wrapper, "if (descriptorRead && descriptor)",
+            "if (descriptorRead)")),
         (wrapper, replace_once(
             wrapper, "const auto entry = NGGgtt::classifySynchronizationEntry(\n"
             "\t\t\t\tpresent, false, physical, flags);",
@@ -5216,7 +5226,7 @@ def initial_page_table_sync_mutations(path):
         except (AssertionError, ValueError):
             continue
         raise AssertionError(f"{path}: escaped initial page-table mutation")
-    print("PASS: eighteen initial page-table factory/bootstrap/sync/rollback mutations rejected (source contract, not runtime proof)")
+    print("PASS: nineteen initial page-table factory/bootstrap/sync/rollback mutations rejected (source contract, not runtime proof)")
 
 
 def initial_page_table_sync_model():
@@ -5263,19 +5273,20 @@ def initial_page_table_sync_model():
                     assert released == (factory_ok and not synchronized)
                     cases += 1
 
-    # Descriptor reads use sparse success semantics, but a reported descriptor
-    # must be non-null and its destination map result must be observed.
+    # Descriptor reads use sparse success semantics. A null descriptor is the
+    # valid empty fixed window observed after the VF relocates bootstrap
+    # mappings to 1 GiB; only a present descriptor must map successfully.
     for factory_ok in (False, True):
         for source_ok in (False, True):
             for read_present in (False, True):
                 for descriptor_valid in (False, True):
                     for map_ok in (False, True):
                         synchronized = factory_ok and source_ok
-                        if synchronized and read_present:
-                            synchronized = descriptor_valid and map_ok
+                        if synchronized and read_present and descriptor_valid:
+                            synchronized = map_ok
                         released = factory_ok and not synchronized
                         expected = factory_ok and source_ok and (
-                            not read_present or (descriptor_valid and map_ok))
+                            not read_present or not descriptor_valid or map_ok)
                         assert synchronized == expected
                         assert released == (factory_ok and not expected)
                         cases += 1

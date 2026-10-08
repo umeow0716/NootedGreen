@@ -4900,9 +4900,14 @@ void *Gen11::vfNewPageTableForTask(void *that, void *task)
 		auto mapDescriptor = reinterpret_cast<MapDescriptor>(
 			destinationVtable[0x158 / sizeof(mach_vm_address_t)]);
 		synchronized = readDescriptor && mapDescriptor;
-		if (synchronized && readDescriptor(source, descriptorRange, &descriptor))
-			synchronized = descriptor &&
+		const bool descriptorRead = synchronized &&
+			readDescriptor(source, descriptorRange, &descriptor);
+		if (descriptorRead && descriptor)
+			synchronized =
 				mapDescriptor(pageTable, descriptorRange, descriptor);
+		if (synchronized && !descriptor)
+			SYSLOG("ngreen", "V326: admitted sparse initial private PPGTT descriptor read=%d",
+			       descriptorRead);
 	} else if (synchronized) {
 		using ReadEntry = bool (*)(const void *, uint64_t, uint64_t &, uint64_t &);
 		using MapEntry = bool (*)(void *, const NGIGAddressRange &,
