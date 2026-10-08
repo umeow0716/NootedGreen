@@ -11,45 +11,54 @@ kext/AuxKC、重綁 PCI 或寫入 SR-IOV sysfs。`CLOSED` 只代表指定的離�
 | SG-02 | VF/PF 身分、Gen11 virtual-MMIO 與 memory-IRQ 能力分流 | CLOSED | RPL/ADL/TGL 不再錯送 memory-IRQ KLV；MTL/ARL 才使用 memory IRQ。 |
 | SG-03 | 已知 legacy/PF-owned GPU producer 隔離 | CLOSED | V284 在 legacy H2G MMIO、GuC DMA、doorbell、native CTB 與 Scheduler5 execlist 五個入口先 fail-stop；modern path 另列 SG-05。 |
 | SG-04 | task／PPGTT／PagePool 共同 ownership transaction | CLOSED | V283 已涵蓋 task publish/free、commit/update/release、32/64-bit unmap/shrink、descriptor retirement 與 PagePool reuse/prune/free。這不取代 GPU completion 證明。 |
-| SG-05 | modern 外部 producer 在 stop 前可封門、排空，且不阻斷 `finishAllStamps` retirement | CLOSED-STATIC | V296 已關閉 P9：18 個 outer/lifetime roots 共用 receiver-scoped counted gate；native start/stop lock order、DisplaySleep、display notifier、GART、IOSurface finalize/cache selector 3/4 與 KD iterator lifetime 均由雙 KC／雙 payload contracts 固定。Stop 依序 close→drain→同步 one-shot cache finalize→發布 stopping→native stop；低層 retirement bridge 仍保持原生。 |
+| SG-05 | modern 外部 producer 在 stop 前可封門、排空，且不阻斷 `finishAllStamps` retirement | CLOSED-STATIC V317 | 17 個 counted roots（16 個 System-KC ordinary roots 加 Intel DisplaySleep）共用 receiver-scoped gate；finalizer 是 lifecycle owner，不是第 18 個 producer。V317 以 atomic phase machine 協調 native finalizer→`IOService::finalize`→routed stop 的同步重入；cache selector 3/4 只有同一 thread-local retirement owner 可越過已關閉 gate。Stop 在 close→drain 後只發布一次 stopping 並只進入一次 native stop；低層 retirement bridge 保持原生。 |
 | SG-06 | reservation → CPU ring writes → tail publication → GuC submit 為一致的 owner/admission transaction | CLOSED-STATIC | V297 已固定 22 個 reservation edges、40 個 transaction owners、79 個 direct writer edges、六組 concrete ring vtable 與全部外層 mutex roots。Outer counted lease 包住整次 native invocation，native accelerator mutex 跨越 reservation/write/submit；final bridge 在同一 H2G queue lock 內重驗 context/ring/backing 並原子發布 LRCA tail 與 CTB tail。這不代表 GPU completion。 |
 | SG-07 | GPU completion 與 ring/context/mapping/page-table backing 的最終釋放順序 | CLOSED-STATIC | V299 將 native marker、Scheduler4 invocation 與成功 CTB publication 原子綁定；idle 同時要求 GPU stamp 與 exact HWS head，並排除 termination/reset/fault。Forced GC、slot reuse、active invocation、deregister ACK 與 backing release 順序已有雙 payload/source/mutation contracts。此狀態不是硬體執行證明。 |
 | SG-08 | render／depth／CCS／ICB／paging 的 allocation、event collection、partial submit 與錯誤傳遞 | CLOSED-STATIC | V300 固定八份 event-vector grow 的完整 147-call／38-owner 圖，52 個初始要求與 95 個 append growth 都由 postcondition fail-stop 保護；另以三個共同 boolean 邊界涵蓋 `submitBlit`、resource CCS 與 depth 的完整 35-call 清冊。非空 work 的 false、owner/transport 不一致與 later-plane/chunk rejection 都在 CPU 成功狀態可繼續發布前封門並 guest-panic；V281 cache/PTE commit-or-restore 仍為其前提。這是離線 fail-stop 證據，不是 GPU 執行或優雅復原證明。 |
 | SG-09 | timer／IRQ／workloop callback 的取消、排空與 owner lifetime | CLOSED-STATIC | V301 固定原生 DPSM、event-machine fallback 與 Scheduler4 passive timer 的 owner/binding/free 邊界；成功 start 在 publication 前驗證三者同屬 accelerator workloop，normal stop 在 base stop 清除 workloop 前同步 detach fallback/periodic source。Start 的 base rollback 與後續 null-provider Intel stop 也各自處理 partial binding。鎖內前後快照、workloop gate 同步 removal 與 IOTimer generation increment 排除 late raw-owner action；原生 owner 稍後負責 release，VF route 不偷取 reference。PagePool callback path 由既有 zero-option admission 排除。這仍是離線證據。 |
 | SG-10 | 所有 VF 可達 PF-owned MMIO／DMA／force-wake／reset 的 negative reachability | CLOSED-STATIC | V302 完成 `accelerator+0x1240` 的 131-owner／279-site 精確機械分割，並封閉 legacy construction、SafeRead/Write、Scheduler4 PM、cache/PAT/MOCS、dynamic-offset IRQ helper 與 modern GuC retained path。完整 static `/tmp/ngreen-static.CYth1a` 與 source checkpoint `5529127a03d5b92fcd8ae5ee538b9bad4e136be0` exact-SHA CI `37232739353` 通過。這仍不是硬體執行證據。 |
-| SG-11 | baseline 要求的所有程式檔完整審閱與 ledger closure | CLOSED-STATIC V316 | Exact ledger涵蓋1,503 paths、65個tool programs及全部program/dependency/payload。V316 task-construction source/Mach-O/mutation contracts與完整static `/tmp/ngreen-static.CCghFU`均通過；產品ABI為623個defined symbols，route inventory為168。 |
-| SG-12 | 精確候選 commit 的完整 static suite、x86_64 release kext、Metal smoke build 與 artifact provenance | LOCAL-PASS / CI-PENDING V316 | V315 exact `3059bb0`／CI `37686920388`／artifact／兩次no-VF部署／manifest／sole contained start均已完成。V316完整local suite、release kext與Metal smoke已通過；仍須clean commit/push、exact-SHA CI、release artifact與identity核對。 |
+| SG-11 | baseline 要求的所有程式檔完整審閱與 ledger closure | CLOSED-STATIC V317 | Exact ledger 涵蓋 1,505 paths、66 個 tool programs 及全部 program/dependency/payload。V317 lifecycle source/Mach-O/mutation contracts、exhaustive state model 與完整 static `/tmp/ngreen-static.lHzHaH` 均通過；產品 ABI 為 631 個 defined symbols，route inventory 為 168。 |
+| SG-12 | 精確候選 commit 的完整 static suite、x86_64 release kext、Metal smoke build 與 artifact provenance | STATIC-PASS / COMMIT+CI-PENDING V317 | V316 exact `fdc9224`／CI／artifact／部署／sole contained start 與 panic recovery 證據均已封存。V317 完整 local static、strict Gen11 compile/analyzer 與 paired-KC contract 已通過；仍須 clean commit/push、exact-SHA CI、release artifact 與 identity 核對。 |
 
 ## 進入下一次動態前的即時阻擋表
 
 | ID | 必關閉條件 | 狀態 | 下一個可驗證出口 |
 | --- | --- | --- | --- |
-| RG-01 | 新Host boot的current-boot journal不得含既有containment trigger | OPEN / REBOOT REQUIRED | Boot `69a5e843-2b12-47d6-9be4-9e7fb48b46f0`的V315 run沒有configured Host trigger，但已依one-start規則retire；本boot禁止再啟動任何VM。V316完整static/CI/部署後才可重開Host並由root preflight重驗。 |
+| RG-01 | 新Host boot的current-boot journal不得含既有containment trigger | OPEN / REBOOT REQUIRED | Current boot `9120ce8a-7eed-4155-8f22-1c61ffb99b94` 已完成唯一 V316 retained-panic recovery boot 並 retire；本 boot 禁止再啟動任何 VM。V317 exact artifact 就緒後，必須先武裝並驗證含完整 goal／checkpoint／唯一下一動作的一次性 resume prompt，才可重開 Host。 |
 | RG-02 | 目標 VF `0000:00:02.1` 必須無其他active domain owner | CLOSED-NOW / RECHECK | `macos-tahoe-sriov`已shut off，當下沒有任何running libvirt domain；PF為i915、VF為vfio-pci、`sriov_numvfs=1`。啟動前必須重新列舉active XML。 |
-| RG-03 | V316 clean pushed exact-SHA CI與artifact身分 | LOCAL-PASS / CI-PENDING | V316只加入有界task-construction觀測；雙payload exact bodies/call edges、168-route contract、八個negative mutations及完整static `/tmp/ngreen-static.CCghFU`通過，仍待commit/push、exact-SHA CI與artifact核對。 |
-| RG-04 | exact V316 kext的final-path AuxKC與immutable runtime manifest | OPEN | 依賴RG-03；不得沿用V315的`3059bb0` kext、AuxKC `1c5d2191...`或manifest `389a375d...`。必須重新完成兩個active零hostdev maintenance boots、load proof及immutable manifest。 |
-| RG-05 | 最終runtime XML／qcow2／root current-boot containment preflight | OPEN | 新Host boot須先證明journal無trigger；部署完成後重新鎖定XML、qcow2、EFI、kext與AuxKC。四道閘門全關閉前不得進行VF-attached啟動；首輪仍只允許單次contained start-only，不得提交Metal／媒體或Looking Glass工作。 |
+| RG-03 | V317 clean pushed exact-SHA CI 與 artifact 身分 | STATIC-PASS / CI-PENDING | V317 修復同步 finalizer/stop 重入、thread-affine cache retirement 與 exactly-once native stop；雙 payload exact edges、14 個 source mutations、168-route contract、exhaustive state model 及完整 static `/tmp/ngreen-static.lHzHaH`通過，仍待 commit/push、exact-SHA CI 與 artifact 核對。 |
+| RG-04 | exact V317 kext 的 final-path AuxKC 與最小部署 load proof | OPEN | 依賴 RG-03；不得沿用 V316 AuxKC `d511cbed...`。效率政策只允許一次必要的 active 零 hostdev maintenance boot 完成 stage/install/build/activate、核對 final-path executable／UUID／AuxKC、取得 current-boot load proof並正常關機；不再重跑兩個部署 boot 或四樣本長鏈。 |
+| RG-05 | 最終 runtime XML／qcow2／root current-boot containment 與斷點 trace | OPEN | 部署 boot 封存後，先武裝並驗證下一個 one-shot resume，再重開 Host。Fresh root gate 只重驗 exact source/artifact/load identity、XML/qcow2、PF/VF/i915 與 current-boot containment，隨後直接執行唯一一次 contained V317 start-only 回到 V316 損壞點。Guest trace 必須覆蓋 lifecycle phase/finalizer/stop/thread owner 與 GGTT samples，Host watcher/ftrace 維持至 domain off；禁止 retry、第二次 start、Metal、媒體與 Looking Glass。 |
 
 ## 目前主路徑
 
-V315 exact `3059bb0de400c1e26ddd2e01ad5c6bf0b456ea08`、CI `37686920388`、
-artifact、兩次active零hostdev部署、candidate AuxKC `1c5d2191...`與immutable manifest
-`389a375d...`全數通過。有效的唯一一次90秒contained start-only在fresh boot
-`69a5e843-...`執行；獨立Guest log先於sole helper啟動並維持至domain off，未跑Metal、
-媒體或Looking Glass。V315跨過empty initial kernel-PPGTT邊界並完成十個direct-GGTT
-first-PTE readback，最後為GPU `0x4000d000`／physical `0x39e7f2000`；未到task factory或
-native-start return。Guest無panic/protocol fault，Host無configured trigger，fixed deadline
-唯一結束測試。完整證據在`build/diagnostics/v315-tgl-start-90s-20261007T215448Z/`，
-外層manifest `e88a9def...`、Host manifest `2301a727...`均PASS；本boot依one-start規則已retire。
+V316 唯一 contained start-only 已完成 stamp/scratch 與七組 matching GGTT completion，
+最後一筆 sample-7 在 `07:00:27.691`。下一個 no-VF recovery boot 轉存完整 panic：
+`Unbalanced VF device-cache retirement scope`，uptime `54.375735771s` 對應
+`07:00:28.392815828`，只晚 `0.701815844s`。panic 的 V316 UUID
+`3DC014F4-E067-380C-A7B3-3117DC7FA83A`、TGL UUID
+`BA3AA1C0-FE6B-33B3-9D85-73F848394E3D` 與 raw SHA
+`8877dfd3...` 都已核對；start-only evidence 外層 manifest 是 `b25d7cf8...`，recovery
+evidence 位於 `build/diagnostics/v316-deploy-novf-20261007T232102Z/`，外層 manifest
+`f1960e9e...`。這證明故障是 native start failure unwind 的 stop/finalize 重入，不是
+sample-7 GGTT store；current Host boot `9120ce8a-...` 已 retire，不得再啟動 VM。
 
-V316以exact Tahoe task construction順序縮小新邊界：既有first-PTE diagnostic增加操作長度與
-ticket，只有在全部store及同步GGTT invalidation完成後才記錄matching completion。另以兩個
-VF-only pass-through routes精確包住native `initStampAndScratchPages`與
-`IGAuxPageTable::withOptions` enter/return，保留參數、結果與ownership；獨立counter最多發出
-八組stage ticket。映射、PTE、cache、owner-bit、BME、同步與PF路徑完全不變。雙payload body／
-call-edge anchors、八個negative mutations、168-route／623-symbol inventory及完整static
-`/tmp/ngreen-static.CCghFU`已PASS。V316仍未commit、CI或部署；RG-03至RG-05全部關閉前禁止
-啟動VM。
+V317 精確修復該邊界。Tahoe finalizer 在 cache retirement 後會呼叫
+`acceleratorFinalize`，termination counter 為零時完整 frame-pop 並 tail-dispatch virtual
+`+0x618` 至 `IOService::finalize`，同步重入 routed Intel stop。舊碼由外層 stop 先開全域
+retirement depth，再由內層 stop 重開一次；native one-shot 已消耗，內層離開後 depth 仍為 1，
+因而觸發錯誤的「必須為零」panic。V317 把 finalizer 從 external producer 分離，以 atomic
+五相 lifecycle machine 與 thread-local retirement owner 保證一個 finalizer、一個 native stop，
+並只允許同執行緒 selector 3/4 越過 closed gate。完整 static
+`/tmp/ngreen-static.lHzHaH`、14 個 source mutations、exhaustive state model、paired Tahoe
+System/Boot KC、strict Gen11 compile/analyzer、1,505-path／66-tool／631-defined-symbol ledger
+均 PASS；仍須 clean commit、exact-SHA CI/artifact 與最小部署。
+
+後續不重跑 V316 的兩個 maintenance boots／四樣本 load-proof 長鏈。V317 artifact 只做一次
+active 零 hostdev 安裝/啟用 boot；封存 exact final-path identity 與 load proof 後，下一個 fresh
+Host boot 直接做唯一一次 contained VF start-only。trace 必須足以判斷 lifecycle phase、finalizer
+entry/return、retirement owner thread、exact native-stop enter/complete、GGTT sample 與 Host
+containment；沒有到達 native start 穩定返回前，不進 Metal、媒體或 Looking Glass。
 
 V312 exact `ca18cf3ca424fd38f3d0b920b30a93de3afe44a5`、CI
 `37655560280`、final AuxKC `a6904253...`與immutable manifest `3923e215...`
@@ -269,8 +278,8 @@ contained boot，不是效能、Metal completion、媒體或 Looking Glass 測�
 | P5c Device／Shared／MemoryInfo clients | CLOSED-INVENTORY | Device 10、Shared 21 與 MemoryInfo 3 項 selector/argument contracts、完整 member/wrapper bodies、特殊 dispatch、busy/timeout-lock scopes 與 unwire edges 已固定。Shared selector 2 經 `pageoffIfNeeded` 進入 Intel page-off；page-on/page-off 共五次 `submitBlit` 的未消費 AL 已列入 SG-08。 |
 | P6 display／flip reachability | CLOSED-INVENTORY | 14-selector DisplayPipeUserClient、鎖域、pipe selection、transaction/copy producer、Intel factories/vtables 與 base→legacy framebuffer enumeration/create-pipe 鏈已固定。無法證明不可達，故 selector 8/12 與 downstream flip/copy 必須納入 P8/P9。 |
 | P7 非 user-triggered／內部 producers | CLOSED-INVENTORY | V294 將五組 slot 的 104 個 executable call sites 精確分成 admitted/control 57、retirement/teardown 5、shared bridge 11、unrelated receiver 31；display/GART/device-cache/KD 四個 control roots 的註冊與 receiver 亦已固定。Display mode stop/start 由 native scheduler loaded-byte 保證 firmware init 冪等。 |
-| P8 counted admission 實作 | CLOSED-STATIC | 18 個 outer/lifetime roots 已 route；12 組 object→accelerator offsets、五個 direct accelerator callbacks 與 DisplaySleep ABI/route 均由 pinned binaries/source contracts 固定。PF／非目標 receiver pass-through，GL inherited selector 2 不重複 lease，低層 retirement bridge 保留。V301 clean baseline 為 148 routes；V302 working tree 加入 17 個 SG-10 isolation routes 後為 165（141 accelerator、3 framebuffer、21 System KC）。 |
-| P9 close→drain→native stop 鎖序 | CLOSED-STATIC | Native start/stop 的 accelerator-lock／busy-lock 次序與失敗 stop edge 已固定；DisplaySleep 先撤銷 callback table，display notifier 的 `remove()` 與 GART/finalize source 的 workloop removal 均同步。IOSurface gather 只接納 retain-count 1 的 orphan cache，selector 3 最後 release 同步巢狀 selector 4；production 在 drain 後同步呼叫原生 one-shot finalize，再發布 `gVfDeviceStopping`。永久 KD callback 每次建立 retaining matching-services iterator，不保存 receiver，且 receiver wrapper 提供 late-entry gate。完整 static 與 paired-KC contracts 通過。 |
+| P8 counted admission 實作 | CLOSED-STATIC V317 | 17 個 counted roots 已 route：16 個 System-KC ordinary roots 加 Intel DisplaySleep；lifecycle finalizer 不取得 producer lease。12 組 object→accelerator offsets、五個 direct accelerator callbacks、DisplaySleep 及 KD lifetime 均由 pinned binaries/source contracts 固定。PF／非目標 receiver pass-through，GL inherited selector 2 不重複 lease，低層 retirement bridge 保留；總 route inventory 為 168（144 accelerator、3 framebuffer、21 System KC）。 |
+| P9 close→drain→native stop 鎖序 | CLOSED-STATIC V317 | Native start/stop 的 accelerator-lock／busy-lock 次序與失敗 stop edge 已固定。Finalizer 自行 claim lifecycle、close/drain producer、在 thread-affine scope 內退休 cache；其同步 `IOService::finalize` 重入才可將 `Finalizing` 推進到 `NativeStopActive`。沒有重入時 owner 走唯一 fallback；後續正常 stop 可從 `Finalized` 恢復。`gVfDeviceStopping` 在唯一 native stop 前只發布一次，完成 callback detach/postconditions 後才進 `NativeStopComplete`；concurrent／recursive stop fail-stop。完整 static、state model 與 paired-KC contracts 通過。 |
 
 ## SG-06 子閘門
 
@@ -278,7 +287,7 @@ contained boot，不是效能、Metal completion、媒體或 Looking Glass 測�
 | --- | --- | --- |
 | S6.1 reservation budget/postcondition | CLOSED-STATIC | 22 個 native reservation edges 完整分割；VF wrapper 對 caller overhead、TLB/AUX trailer、ring mask/cursor 與回傳 available capacity fail closed。 |
 | S6.2 writer/dispatch inventory | CLOSED-STATIC | 40 個 owners、79 個 direct writer/helper edges、六組 concrete ring vtable 及 `submitToRing -> Scheduler4::push -> submitWorkItem` receiver chain 均已固定。 |
-| S6.3 outer owner lifetime | CLOSED-STATIC | SG-05 的 18 個 counted roots 保持整次 native invocation；stop close/drain 在 native `finishAllStamps` 與 engine teardown 前完成。 |
+| S6.3 outer owner lifetime | CLOSED-STATIC V317 | SG-05 的 17 個 counted producer roots 保持整次 native invocation；lifecycle finalizer 由獨立 atomic phase owner 管理。Stop close/drain 在 native `finishAllStamps` 與 engine teardown 前完成。 |
 | S6.4 native writer serialization | CLOSED-STATIC | 40 個 transaction owners 均無 direct unlock edge；Intel DisplaySleep 及 System-KC control roots 的完整 accelerator mutex 進出口已固定。 |
 | S6.5 final identity/publication | CLOSED-STATIC | Context-operation gate + H2G queue lock 下重驗 descriptor/task/context/ring backing/geometry/tail；只在 CTB/credit reservation 後依序發布 LRCA tail、H2G tail 與 interrupt。 |
 | S6.6 failure/stop ordering | CLOSED-STATIC | Failed enqueue 不寫 LRCA tail；false submit 走 Tahoe fatal work-queue path。Outer producer drain 早於 context gate close，不會在已接納 transaction 中途釋放 backing。GPU completion 及最終釋放仍屬 SG-07。 |

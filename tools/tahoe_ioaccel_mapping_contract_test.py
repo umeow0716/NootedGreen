@@ -681,7 +681,7 @@ RESOURCE_PAGING_BODIES = {
     "__ZN22IOGraphicsAccelerator212oneTimeSetupEv":
         (0x106, "90dbeebed8a7d20215a270c26ead5b003c79eceb08a8cb0343797a7ed1e27e62"),
     "__ZN22IOGraphicsAccelerator219acceleratorFinalizeEv":
-        (0x30, "ccb417e4534182a8a4302902a733a57b0267faaa521b94d5aaf284d12ab05901"),
+        (0x38, "2a6e3e1b8c0046b83250e0204d1e246518a68fc3b3663bc458b57516db3a1604"),
     "__ZN21IOAccelDisplayMachine23display_mode_did_changeEj":
         (0x1e4, "62a146e74693332913f38776f14872331df492c755ec7b1eaa7c5de98281b358"),
     "__ZN21IOAccelDisplayMachine26framebuffer_will_power_offEj":
@@ -2576,6 +2576,33 @@ def check(path, boot_path=None):
         "changed acceleratorFinalize virtual target"
     assert read(finalize_interrupt + 0x7d, 6) == bytes.fromhex("ff 90 a0 09 00 00"), \
         "changed finalize handler acceleratorFinalize dispatch"
+    # The finalizer tests the termination counter only after cache retirement.
+    # Its zero-counter edge pops the complete finalize_interrupt frame and
+    # tail-dispatches inherited virtual +0x618. V316's retained panic stack
+    # independently identified that synchronous target as IOService::finalize;
+    # this is the exact re-entry edge which reaches routed IntelAccelerator::stop.
+    assert read(finalize_interrupt + 0xb9, 9) == bytes.fromhex(
+        "83 bb c8 0d 00 00 00 74 38"), \
+        "changed finalize termination-counter/zero-branch edge"
+    assert read(finalize_interrupt + 0xfa, 0x1c) == bytes.fromhex(
+        "48 8b 05 29 d8 02 00 48 89 df 31 f6 48 83 c4 08 "
+        "5b 41 5e 41 5f 5d ff a0 18 06 00 00"), \
+        "changed synchronous finalize frame-pop/tail-dispatch edge"
+    for slot, name in (
+            (0x948, "__ZN22IOGraphicsAccelerator218unwireAllVidMemoryEv"),
+            (0x978, "__ZN22IOGraphicsAccelerator218unwireAllSysMemoryEv")):
+        raw = struct.unpack(
+            "<Q", read(address_of("__ZTV22IOGraphicsAccelerator2") +
+                        16 + slot, 8))[0]
+        assert raw >> 63 == 0 and (raw >> 30) & 3 == 1 and \
+            raw & 0x3fffffff == address_of(name), \
+            f"changed acceleratorFinalize retirement virtual {slot:#x}"
+    assert read(address_of(accelerator_finalize) + 0x20, 6) == \
+        bytes.fromhex("ff 90 48 09 00 00"), \
+        "changed acceleratorFinalize video-memory retirement dispatch"
+    assert read(address_of(accelerator_finalize) + 0x32, 6) == \
+        bytes.fromhex("ff a0 78 09 00 00"), \
+        "changed acceleratorFinalize system-memory retirement tail dispatch"
     finalize = address_of("__ZN22IOGraphicsAccelerator28finalizeEj")
     finalize_if_possible = address_of(
         "__ZN22IOGraphicsAccelerator220finalize_if_possibleEv")

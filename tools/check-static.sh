@@ -254,6 +254,14 @@ if python3 -B tools/vf_external_producer_source_contract_test.py \
 else
     failed=1
 fi
+if "$compiler" -std=c++14 -O1 -g -fsanitize=address,undefined \
+    tools/vf_accelerator_stop_test.cpp \
+    -o "$task_output/vf-accelerator-stop-test" && \
+    "$task_output/vf-accelerator-stop-test"; then
+    printf 'PASS offline VF accelerator finalize/stop state model\n'
+else
+    failed=1
+fi
 if python3 -B tools/vf_telemetry_isolation_contract_test.py \
     NootedGreen/kern_gen11.cpp \
     sle_Internal/le/AppleIntelTGLGraphics.kext/Contents/Info.plist \

@@ -99,19 +99,31 @@ def contract(source, path="<source>"):
             f"{path}: direct callback dereferenced/entered receiver before lease: {signature}"
 
     finalize = function_body(source, "void Gen11::vfFinalizeInterrupt(")
-    for token in ("VfExternalProducerGuard guard(that);", "if (!guard)",
+    for token in ("vfTargetsPublishedAccelerator(that)",
+                  "NGVfAcceleratorStop::finalizeAction(phase)",
+                  "NGVfAcceleratorStop::Phase::Idle",
+                  "NGVfAcceleratorStop::Phase::Finalizing",
+                  "vfCloseExternalProducerGateAndWait()",
                   "VfDeviceCacheRetirementScope retirement(that);",
+                  "NGVfAcceleratorStop::ownerReturnAction(phase, false)",
+                  "NGVfAcceleratorStop::Phase::Finalized",
                   "oVfFinalizeInterrupt"):
         assert token in finalize, \
-            f"{path}: incomplete counted finalize wrapper: {token}"
-    assert finalize.index("VfExternalProducerGuard guard(that);") < \
-        finalize.index("VfDeviceCacheRetirementScope retirement(that);") < \
-        finalize.index("oVfFinalizeInterrupt"), \
-        f"{path}: finalize retirement scope entered outside counted lease"
+            f"{path}: incomplete lifecycle-owned finalize wrapper: {token}"
+    assert "VfExternalProducerGuard" not in finalize, \
+        f"{path}: finalizer can deadlock while draining its own producer lease"
+    claim = finalize.index("NGVfAcceleratorStop::Phase::Idle")
+    close = finalize.index("vfCloseExternalProducerGateAndWait()", claim)
+    scope = finalize.index("VfDeviceCacheRetirementScope retirement(that);", close)
+    native = finalize.rindex("FunctionCast(vfFinalizeInterrupt")
+    returned = finalize.index(
+        "NGVfAcceleratorStop::ownerReturnAction(phase, false)", native)
+    assert claim < close < scope < native < returned, \
+        f"{path}: finalize owner/drain/thread-scope/native order changed"
 
     device_cache = function_body(source, "void Gen11::vfDeviceCacheControl(")
     for token in ("selector == 3 || selector == 4",
-                  "gVfDeviceCacheRetirementDepth > 0",
+                  "vfOwnsDeviceCacheRetirement()",
                   "VfExternalProducerGuard guard(that, !nestedRetirement);",
                   "if (!guard)", "oVfDeviceCacheControl"):
         assert token in device_cache, \
@@ -134,7 +146,7 @@ def contract(source, path="<source>"):
         f"{path}: missing/duplicate DisplaySleep route"
 
     guard = block(source, "class VfExternalProducerGuard",\
-                  "static bool vfCloseExternalProducerGateAndWait()")
+                  "class VfDeviceCacheRetirementScope")
     normalized_guard = "".join(guard.split())
     predicate = ("route&&gVfIdentity==VfIdentity::Virtual&&accelerator&&"
                  "gVfAccelerator&&accelerator==gVfAccelerator")
@@ -143,12 +155,18 @@ def contract(source, path="<source>"):
     assert "admitted=!tracked||vfEnterExternalProducer();" in normalized_guard
     assert "if(tracked&&admitted)vfLeaveExternalProducer();" in normalized_guard
     retirement_scope = block(source, "class VfDeviceCacheRetirementScope",\
-                             "static bool vfCloseExternalProducerGateAndWait()")
+                             "static bool vfOwnsDeviceCacheRetirement()")
     normalized_retirement = "".join(retirement_scope.split())
-    for token in ("OSIncrementAtomic(&gVfDeviceCacheRetirementDepth);",
-                  "OSDecrementAtomic(&gVfDeviceCacheRetirementDepth);"):
+    for token in ("gVfDeviceCacheRetirementDepth.get();",
+                  "gVfDeviceCacheRetirementDepth.set(1)",
+                  "gVfDeviceCacheRetirementDepth.erase()"):
         assert "".join(token.split()) in normalized_retirement, \
             f"{path}: unbalanced device-cache retirement scope: {token}"
+    assert "OSIncrementAtomic" not in retirement_scope and \
+        "OSDecrementAtomic" not in retirement_scope, \
+        f"{path}: cache retirement reverted to cross-thread global depth"
+    assert "ThreadLocal<UInt32, 1> gVfDeviceCacheRetirementDepth" in source, \
+        f"{path}: missing single-owner thread-local retirement storage"
 
     fault = function_body(source, "void vfMarkProtocolFault(")
     assert fault.index("NGVfIrqGate::close") < fault.index("gVfProtocolFault"), \
@@ -162,16 +180,40 @@ def contract(source, path="<source>"):
 
     start = function_body(source, "bool Gen11::start(void *that, void *provider)")
     gate_check = start.index("gVfExternalProducerGate != 0")
+    phase_check = start.index("vfAcceleratorStopPhase()", gate_check)
     publish = start.index("gVfAccelerator = that")
-    assert gate_check < publish, f"{path}: accelerator published before one-shot gate check"
+    assert gate_check < phase_check < publish, \
+        f"{path}: accelerator published before one-shot teardown-state check"
     stop = function_body(source, "void Gen11::acceleratorStop(")
-    close = stop.index("vfCloseExternalProducerGateAndWait()")
-    finalize = stop.index("callback->oVfFinalizeInterrupt")
-    balanced = stop.index("gVfDeviceCacheRetirementDepth != 0")
-    stopping = stop.index("gVfDeviceStopping")
-    native = stop.index("callback->oAcceleratorStop")
-    assert close < finalize < balanced < stopping < native, \
-        f"{path}: close/drain/cache-finalize/device-stopping/native-stop order changed"
+    for token in (
+            "NGVfAcceleratorStop::stopAction(",
+            "NGVfAcceleratorStop::StopAction::BeginFinalization",
+            "NGVfAcceleratorStop::Phase::Idle",
+            "NGVfAcceleratorStop::Phase::Finalizing",
+            "vfCloseExternalProducerGateAndWait()",
+            "VfDeviceCacheRetirementScope retirement(that);",
+            "NGVfAcceleratorStop::ownerReturnAction(phase, true)",
+            "NGVfAcceleratorStop::Phase::NativeStopActive",
+            "NGVfAcceleratorStop::Phase::NativeStopComplete",
+            "vfOwnsDeviceCacheRetirement()",
+            "Cross-thread VF stop collided with active cache finalizer"):
+        assert token in stop, f"{path}: incomplete exactly-once stop protocol: {token}"
+    run_native = stop.index("const auto runNativeStop")
+    closed = stop.index("NGVfIrqGate::closed(gVfExternalProducerGate)", run_native)
+    stopping = stop.index("OSCompareAndSwap(0, 1, &gVfDeviceStopping)", closed)
+    native = stop.index("callback->oAcceleratorStop)(that, provider)", stopping)
+    complete = stop.index("NGVfAcceleratorStop::Phase::NativeStopComplete", native)
+    assert run_native < closed < stopping < native < complete, \
+        f"{path}: producer-drain/device-stopping/native-stop/completion order changed"
+    claim = stop.index("NGVfAcceleratorStop::StopAction::BeginFinalization", complete)
+    close = stop.index("vfCloseExternalProducerGateAndWait()", claim)
+    finalize_call = stop.index("FunctionCast(vfFinalizeInterrupt", close)
+    owner_return = stop.index(
+        "NGVfAcceleratorStop::ownerReturnAction(phase, true)", finalize_call)
+    assert claim < close < finalize_call < owner_return, \
+        f"{path}: stop owner no longer finalizes caches before native fallback"
+    assert stop.count("callback->oAcceleratorStop)(that, provider)") == 2, \
+        f"{path}: PF pass-through or sole VF native-stop call changed"
     assert "isLockedByCurrentThread" not in stop, \
         f"{path}: always-true Tahoe ownership stub used as a lock proof"
     print("PASS counted VF external-producer source/route/teardown contract")
@@ -194,8 +236,14 @@ def mutation_contract(source, path):
          "__ZN19IOAccelCommandQueue22submit_command_buffers_REMOVED", 1),
         ("VfExternalProducerGuard guard(that);",
          "getMember<void *>(that, 0x88);\n\tVfExternalProducerGuard guard(that);", 1),
-        ("gVfDeviceCacheRetirementDepth > 0",
-         "gVfDeviceCacheRetirementDepth >= 0", 1),
+        ("vfOwnsDeviceCacheRetirement()",
+         "true /* cross-thread retirement bypass */", 1),
+        ("ThreadLocal<UInt32, 1> gVfDeviceCacheRetirementDepth",
+         "volatile UInt32 gVfDeviceCacheRetirementDepth", 1),
+        ("NGVfAcceleratorStop::ownerReturnAction(phase, true)",
+         "NGVfAcceleratorStop::ownerReturnAction(phase, false)", 1),
+        ("NGVfAcceleratorStop::Phase::NativeStopComplete",
+         "NGVfAcceleratorStop::Phase::Finalized", 1),
     )
     for mutation in mutations:
         old, new = mutation[:2]

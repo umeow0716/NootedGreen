@@ -5799,8 +5799,10 @@ def callback_owner_lifetime_contract(source, path="<source>"):
             f"{path}: callback ownership is not admitted after rollback and before publication")
 
     intel_stop = function_body(source, "void Gen11::acceleratorStop(void *that, void *provider)")
+    run_native = intel_stop.index("const auto runNativeStop")
     original = intel_stop.index(
-        "FunctionCast(acceleratorStop, callback->oAcceleratorStop)(that, provider)")
+        "callback->oAcceleratorStop)(that, provider)",
+        run_native)
     dpsm_postcondition = intel_stop.index(
         "getMember<IOTimerEventSource *>(that, 0x1460) != nullptr", original)
     null_provider = intel_stop.index("if (!provider)", dpsm_postcondition)
@@ -6462,7 +6464,8 @@ def source_contract(path):
     stopping = accelerator_stop.index(
         "OSCompareAndSwap(0, 1, &gVfDeviceStopping)")
     original_stop = accelerator_stop.index(
-        "FunctionCast(acceleratorStop, callback->oAcceleratorStop)(that, provider)")
+        "callback->oAcceleratorStop)(that, provider)",
+        stopping)
     if not stopping < original_stop:
         raise AssertionError(
             f"{path}: native stop begins before the VF device-stopping boundary")

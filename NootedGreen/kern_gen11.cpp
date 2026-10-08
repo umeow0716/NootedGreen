@@ -8,6 +8,7 @@
 #include "kern_ggtt_rotation.hpp"
 #include "kern_vf_ggtt_pte.hpp"
 #include "kern_vf_irq_gate.hpp"
+#include "kern_vf_accelerator_stop.hpp"
 #include "kern_vf_context_shutdown.hpp"
 #include "kern_vf_submission_gate.hpp"
 #include "kern_vf_runtime.hpp"
@@ -30,6 +31,7 @@
 #include "kern_ioaccel_command_pool.hpp"
 #include "kern_event_vector.hpp"
 #include <Headers/kern_api.hpp>
+#include <Headers/kern_util.hpp>
 #include "kern_green.hpp"
 #include <IOKit/IOBufferMemoryDescriptor.h>
 #include <IOKit/IOCatalogue.h>
@@ -223,11 +225,16 @@ volatile UInt32 gVfContextOperationGate = 0;
 // the low bits are invocation-lifetime leases, not GPU-completion references.
 volatile UInt32 gVfExternalProducerGate = 0;
 // Selector 3 (accelerator release) synchronously drops the last orphan-cache
-// reference and therefore nests selector 4 (cache free).  During the native
+// reference and therefore nests selector 4 (cache free). During the native
 // finalize handler these are retirement callbacks, not new resource producers.
-// A depth counter lets only that reviewed dynamic extent bypass the already
-// closed external-producer gate.
-volatile SInt32 gVfDeviceCacheRetirementDepth = 0;
+// Keep the dynamic extent thread-affine: a global depth allowed an unrelated
+// callback thread to bypass the already-closed external-producer gate.
+ThreadLocal<UInt32, 1> gVfDeviceCacheRetirementDepth {};
+// Tahoe's finalize handler retires caches and can synchronously tail-call
+// IOService::finalize, which re-enters the routed IntelAccelerator::stop. One
+// atomic lifecycle owner coordinates that recursion and calls native stop once.
+volatile UInt32 gVfAcceleratorStopPhase =
+	NGVfAcceleratorStop::raw(NGVfAcceleratorStop::Phase::Idle);
 volatile UInt32 gVfContextShutdownStarted = 0;
 volatile UInt32 gVfContextShutdownComplete = 0;
 volatile UInt32 gVfDmaQuiesced = 0;
@@ -944,7 +951,15 @@ public:
 		gVfIdentity == VfIdentity::Virtual && accelerator &&
 		gVfAccelerator && accelerator == gVfAccelerator) {
 		if (tracked) {
-			OSIncrementAtomic(&gVfDeviceCacheRetirementDepth);
+			auto *depth = gVfDeviceCacheRetirementDepth.get();
+			if (depth) {
+				PANIC_COND(*depth == UINT32_MAX, "ngreen",
+					"VF device-cache retirement scope overflow");
+				++*depth;
+			} else {
+				PANIC_COND(!gVfDeviceCacheRetirementDepth.set(1), "ngreen",
+					"Concurrent VF device-cache retirement owner");
+			}
 			OSSynchronizeIO();
 		}
 	}
@@ -952,7 +967,14 @@ public:
 	~VfDeviceCacheRetirementScope() {
 		if (tracked) {
 			OSSynchronizeIO();
-			OSDecrementAtomic(&gVfDeviceCacheRetirementDepth);
+			auto *depth = gVfDeviceCacheRetirementDepth.get();
+			PANIC_COND(!depth || *depth == 0, "ngreen",
+				"Unbalanced VF device-cache retirement scope");
+			const bool outermost = *depth == 1;
+			--*depth;
+			if (outermost)
+				PANIC_COND(!gVfDeviceCacheRetirementDepth.erase(), "ngreen",
+					"Cannot release VF device-cache retirement owner");
 		}
 	}
 
@@ -962,6 +984,40 @@ public:
 private:
 	bool tracked;
 };
+
+static bool vfOwnsDeviceCacheRetirement()
+{
+	auto *depth = gVfDeviceCacheRetirementDepth.get();
+	return depth && *depth != 0;
+}
+
+static NGVfAcceleratorStop::Phase vfAcceleratorStopPhase()
+{
+	OSSynchronizeIO();
+	const auto phase = static_cast<NGVfAcceleratorStop::Phase>(
+		gVfAcceleratorStopPhase);
+	PANIC_COND(!NGVfAcceleratorStop::valid(phase), "ngreen",
+		"Invalid VF accelerator stop phase %u", gVfAcceleratorStopPhase);
+	return phase;
+}
+
+static bool vfTransitionAcceleratorStop(
+	NGVfAcceleratorStop::Phase expected,
+	NGVfAcceleratorStop::Phase next)
+{
+	const bool changed = OSCompareAndSwap(
+		NGVfAcceleratorStop::raw(expected),
+		NGVfAcceleratorStop::raw(next), &gVfAcceleratorStopPhase);
+	OSSynchronizeIO();
+	return changed;
+}
+
+static bool vfTargetsPublishedAccelerator(void *accelerator)
+{
+	OSSynchronizeIO();
+	return gVfIdentity == VfIdentity::Virtual && accelerator &&
+	       gVfAccelerator && accelerator == gVfAccelerator;
+}
 
 static bool vfCloseExternalProducerGateAndWait()
 {
@@ -2496,7 +2552,7 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		PANIC_COND(!patcher.routeMultiple(
 		               index, externalProducerRoutes, address, size),
 		           "ngreen", "Cannot route VF external-producer admission roots");
-		SYSLOG("ngreen", "V296: routed 17 counted VF external-producer roots");
+		SYSLOG("ngreen", "V317: routed 16 counted VF external-producer roots plus one lifecycle finalizer");
 		return true;
 	}
 
@@ -5408,12 +5464,59 @@ void Gen11::vfGartCollector(void *that, IOInterruptEventSource *source,
 void Gen11::vfFinalizeInterrupt(void *that,
 	                            IOInterruptEventSource *source, int count)
 {
-	VfExternalProducerGuard guard(that);
-	if (!guard)
+	if (!vfTargetsPublishedAccelerator(that)) {
+		FunctionCast(vfFinalizeInterrupt, callback->oVfFinalizeInterrupt)(
+			that, source, count);
 		return;
-	VfDeviceCacheRetirementScope retirement(that);
-	FunctionCast(vfFinalizeInterrupt, callback->oVfFinalizeInterrupt)(
-		that, source, count);
+	}
+	PANIC_COND(!callback || !callback->oVfFinalizeInterrupt, "ngreen",
+		"Missing native accelerator finalize handler");
+	auto phase = vfAcceleratorStopPhase();
+	auto action = NGVfAcceleratorStop::finalizeAction(phase);
+	SYSLOG("ngreen", "V317: VF finalizer entry phase=%u thread=%p",
+	       NGVfAcceleratorStop::raw(phase),
+	       reinterpret_cast<void *>(current_thread()));
+	PANIC_COND(action == NGVfAcceleratorStop::FinalizeAction::Reject,
+		"ngreen", "Invalid VF accelerator finalize entry phase %u",
+		NGVfAcceleratorStop::raw(phase));
+	if (action == NGVfAcceleratorStop::FinalizeAction::AlreadyOwned) {
+		SYSLOG("ngreen", "V317: ignored duplicate VF finalizer phase=%u",
+		       NGVfAcceleratorStop::raw(phase));
+		return;
+	}
+	if (!vfTransitionAcceleratorStop(
+		    NGVfAcceleratorStop::Phase::Idle,
+		    NGVfAcceleratorStop::Phase::Finalizing)) {
+		phase = vfAcceleratorStopPhase();
+		PANIC_COND(NGVfAcceleratorStop::finalizeAction(phase) ==
+		           NGVfAcceleratorStop::FinalizeAction::Reject,
+			"ngreen", "VF finalizer lost ownership to invalid phase %u",
+			NGVfAcceleratorStop::raw(phase));
+		return;
+	}
+	PANIC_COND(!vfCloseExternalProducerGateAndWait(), "ngreen",
+		"Cannot drain VF external producers before accelerator finalize");
+	{
+		VfDeviceCacheRetirementScope retirement(that);
+		SYSLOG("ngreen", "V317: entered sole VF cache-finalization owner");
+		FunctionCast(vfFinalizeInterrupt, callback->oVfFinalizeInterrupt)(
+			that, source, count);
+	}
+	phase = vfAcceleratorStopPhase();
+	const auto returned = NGVfAcceleratorStop::ownerReturnAction(phase, false);
+	if (returned == NGVfAcceleratorStop::OwnerReturnAction::PublishFinalized) {
+		PANIC_COND(!vfTransitionAcceleratorStop(
+		    NGVfAcceleratorStop::Phase::Finalizing,
+		    NGVfAcceleratorStop::Phase::Finalized), "ngreen",
+			"Cannot publish completed VF cache finalization");
+		SYSLOG("ngreen", "V317: cache finalization awaits native stop");
+		return;
+	}
+	PANIC_COND(returned !=
+	           NGVfAcceleratorStop::OwnerReturnAction::AlreadyComplete,
+		"ngreen", "VF finalizer returned in invalid stop phase %u",
+		NGVfAcceleratorStop::raw(phase));
+	SYSLOG("ngreen", "V317: synchronous finalize re-entry completed native VF stop");
 }
 
 void Gen11::vfDeviceCacheControl(void *that, void *cache,
@@ -5422,7 +5525,7 @@ void Gen11::vfDeviceCacheControl(void *that, void *cache,
 {
 	OSSynchronizeIO();
 	const bool nestedRetirement = (selector == 3 || selector == 4) &&
-	                              gVfDeviceCacheRetirementDepth > 0;
+	                              vfOwnsDeviceCacheRetirement();
 	VfExternalProducerGuard guard(that, !nestedRetirement);
 	if (!guard)
 		return;
@@ -5489,9 +5592,10 @@ bool Gen11::start(void *that, void *provider)
 	}
 	if (vfActive) {
 		OSSynchronizeIO();
-		if (gVfExternalProducerGate != 0) {
+		if (gVfExternalProducerGate != 0 ||
+		    vfAcceleratorStopPhase() != NGVfAcceleratorStop::Phase::Idle) {
 			vfMarkProtocolFault(
-				"VF accelerator start found a reused external-producer gate");
+				"VF accelerator start found reused teardown state");
 			return false;
 		}
 		// start() is the first stable point where the exact IntelAccelerator
@@ -5665,39 +5769,34 @@ bool Gen11::start(void *that, void *provider)
 
 void Gen11::acceleratorStop(void *that, void *provider)
 {
-	// Seal and drain every externally reachable resource producer before the
-	// native stop sequence can unlink user clients, display pipes or resource
-	// owners.  This wrapper acquires no inherited accelerator mutex; the wait is
-	// bounded so an unexpected caller-side lock cycle fails stop rather than
-	// permitting teardown beneath a live invocation.  Lower retirement helpers remain
-	// admitted so native finishAllStamps can run before stopGraphicsEngine closes
-	// the GuC context gate and proves final DMA quiescence.
-	if (gVfIdentity == VfIdentity::Virtual && that == gVfAccelerator) {
-		PANIC_COND(!vfCloseExternalProducerGateAndWait(), "ngreen",
-			"Cannot drain VF external producers before accelerator stop");
-		// Tahoe normally schedules this handler from IOService::finalize.  A
-		// stop can remove the +0x9e0 event source before a pending notification
-		// is consumed, so invoke the reviewed one-shot original synchronously
-		// after producer drain.  Its atomic +0xdd0 guard makes an already-run
-		// handler a no-op.  The IOSurface gather accepts only cache objects with
-		// retain count one; selector 3 releases that final reference and nests
-		// selector 4 entirely inside this retirement scope.
-		PANIC_COND(!callback || !callback->oVfFinalizeInterrupt, "ngreen",
-			"Missing native accelerator finalize handler during VF stop");
+	if (!vfTargetsPublishedAccelerator(that)) {
+		FunctionCast(acceleratorStop, callback->oAcceleratorStop)(that, provider);
+		return;
+	}
+	PANIC_COND(!callback || !callback->oAcceleratorStop ||
+	           !callback->oVfFinalizeInterrupt, "ngreen",
+		"Missing native VF accelerator lifecycle trampoline");
+
+	// One helper owns the only transition through native stop. It runs inside
+	// the thread-affine retirement extent established by the finalizer owner (or
+	// creates that extent when resuming a completed asynchronous finalizer).
+	const auto runNativeStop = [&]() {
+		PANIC_COND(vfAcceleratorStopPhase() !=
+		           NGVfAcceleratorStop::Phase::NativeStopActive,
+			"ngreen", "Native VF stop entered outside its active phase");
+		PANIC_COND(!NGVfIrqGate::closed(gVfExternalProducerGate) ||
+		           !NGVfIrqGate::drained(gVfExternalProducerGate),
+			"ngreen", "Native VF stop reached before producer closure/drain");
+		PANIC_COND(!OSCompareAndSwap(0, 1, &gVfDeviceStopping), "ngreen",
+			"Duplicate VF device-stopping publication");
+		OSSynchronizeIO();
+		SYSLOG("ngreen", "V317: entering exactly-once native VF stop phase thread=%p",
+		       reinterpret_cast<void *>(current_thread()));
 		{
 			VfDeviceCacheRetirementScope retirement(that);
-			FunctionCast(vfFinalizeInterrupt,
-			             callback->oVfFinalizeInterrupt)(that, nullptr, 0);
+			FunctionCast(acceleratorStop,
+			             callback->oAcceleratorStop)(that, provider);
 		}
-		OSSynchronizeIO();
-		PANIC_COND(gVfDeviceCacheRetirementDepth != 0, "ngreen",
-			"Unbalanced VF device-cache retirement scope");
-		OSCompareAndSwap(0, 1, &gVfDeviceStopping);
-		OSSynchronizeIO();
-		SYSLOG("ngreen", "V296: VF external producers and IOSurface caches retired; deferring transport quiescence until post-stamp engine stop");
-	}
-	FunctionCast(acceleratorStop, callback->oAcceleratorStop)(that, provider);
-	if (gVfIdentity == VfIdentity::Virtual && that == gVfAccelerator) {
 		OSSynchronizeIO();
 		PANIC_COND(getMember<IOTimerEventSource *>(that, 0x1460) != nullptr,
 			"ngreen", "Native VF stop returned with a live DPSM timer owner");
@@ -5708,7 +5807,81 @@ void Gen11::acceleratorStop(void *that, void *provider)
 				"ngreen", "Cannot drain partial VF callback owners after null-provider stop");
 			SYSLOG("ngreen", "V301: detached partial VF callback bindings after null-provider stop");
 		}
+		PANIC_COND(!vfTransitionAcceleratorStop(
+		    NGVfAcceleratorStop::Phase::NativeStopActive,
+		    NGVfAcceleratorStop::Phase::NativeStopComplete), "ngreen",
+			"Cannot publish completed native VF stop");
+		SYSLOG("ngreen", "V317: completed exactly-once native VF stop");
+	};
+
+	auto phase = vfAcceleratorStopPhase();
+	auto action = NGVfAcceleratorStop::stopAction(
+		phase, vfOwnsDeviceCacheRetirement());
+	SYSLOG("ngreen", "V317: VF stop entry phase=%u owner=%u thread=%p",
+	       NGVfAcceleratorStop::raw(phase),
+	       static_cast<unsigned int>(vfOwnsDeviceCacheRetirement()),
+	       reinterpret_cast<void *>(current_thread()));
+	PANIC_COND(action == NGVfAcceleratorStop::StopAction::Reject,
+		"ngreen", "Concurrent or recursive VF accelerator stop phase=%u owner=%u",
+		NGVfAcceleratorStop::raw(phase), vfOwnsDeviceCacheRetirement());
+	if (action == NGVfAcceleratorStop::StopAction::AlreadyComplete) {
+		SYSLOG("ngreen", "V317: ignored duplicate completed VF stop");
+		return;
 	}
+
+	if (action == NGVfAcceleratorStop::StopAction::BeginFinalization) {
+		PANIC_COND(!vfTransitionAcceleratorStop(
+		    NGVfAcceleratorStop::Phase::Idle,
+		    NGVfAcceleratorStop::Phase::Finalizing), "ngreen",
+			"Cannot claim VF accelerator stop lifecycle");
+		PANIC_COND(!vfCloseExternalProducerGateAndWait(), "ngreen",
+			"Cannot drain VF external producers before accelerator stop");
+		// The one-shot Tahoe finalizer retires IOSurface caches, then may
+		// synchronously tail-call IOService::finalize and re-enter this wrapper.
+		// Keep this retirement owner live across that complete nested native stop.
+		VfDeviceCacheRetirementScope retirement(that);
+		SYSLOG("ngreen", "V317: stop owner entered sole VF cache finalizer");
+		FunctionCast(vfFinalizeInterrupt,
+		             callback->oVfFinalizeInterrupt)(that, nullptr, 0);
+		phase = vfAcceleratorStopPhase();
+		const auto returned = NGVfAcceleratorStop::ownerReturnAction(phase, true);
+		if (returned ==
+		    NGVfAcceleratorStop::OwnerReturnAction::AlreadyComplete) {
+			SYSLOG("ngreen", "V317: nested IOService finalize completed VF stop");
+			return;
+		}
+		PANIC_COND(returned !=
+		           NGVfAcceleratorStop::OwnerReturnAction::RunNativeStop,
+			"ngreen", "VF stop finalizer returned in invalid phase %u",
+			NGVfAcceleratorStop::raw(phase));
+		PANIC_COND(!vfTransitionAcceleratorStop(
+		    NGVfAcceleratorStop::Phase::Finalizing,
+		    NGVfAcceleratorStop::Phase::NativeStopActive), "ngreen",
+			"Cannot claim fallback native VF stop");
+		runNativeStop();
+		return;
+	}
+
+	if (phase == NGVfAcceleratorStop::Phase::Finalizing) {
+		PANIC_COND(!vfOwnsDeviceCacheRetirement(), "ngreen",
+			"Cross-thread VF stop collided with active cache finalizer");
+		PANIC_COND(!vfTransitionAcceleratorStop(
+		    NGVfAcceleratorStop::Phase::Finalizing,
+		    NGVfAcceleratorStop::Phase::NativeStopActive), "ngreen",
+			"Cannot claim nested native VF stop");
+	} else {
+		PANIC_COND(phase != NGVfAcceleratorStop::Phase::Finalized, "ngreen",
+			"Unexpected resumable VF stop phase %u",
+			NGVfAcceleratorStop::raw(phase));
+		PANIC_COND(!NGVfIrqGate::closed(gVfExternalProducerGate) ||
+		           !NGVfIrqGate::drained(gVfExternalProducerGate),
+			"ngreen", "Finalized VF cache owner left producers undrained");
+		PANIC_COND(!vfTransitionAcceleratorStop(
+		    NGVfAcceleratorStop::Phase::Finalized,
+		    NGVfAcceleratorStop::Phase::NativeStopActive), "ngreen",
+			"Cannot resume native VF stop after cache finalization");
+	}
+	runNativeStop();
 }
 
 void Gen11::vfBaseAcceleratorStop(void *that, void *provider)

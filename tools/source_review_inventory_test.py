@@ -36,34 +36,34 @@ def macho_nm_command():
 # This digest covers the sorted, NUL-delimited path inventory, not file
 # contents. Git commit identity already fixes contents; this independent guard
 # prevents a new, removed or renamed path from silently escaping SG-11 review.
-EXPECTED_PATH_DIGEST = "e221b73099f8f22bd5dfc4b1d6c5cce271b12e9237714278cec1f67a598d03ea"
+EXPECTED_PATH_DIGEST = "346e769c22049a83747bcd10a54a17d791e16dda3ffb6f5cdc28d8388124568a"
 EXPECTED_TOP_LEVEL_COUNTS = {
     ".github": 1,
     ".gitignore": 1,
     "LICENSE": 1,
     "Lilu.kext": 40,
     "MacKernelSDK": 1227,
-    "NootedGreen": 42,
+    "NootedGreen": 43,
     "NootedGreen.xcodeproj": 4,
     "README.md": 1,
     "Release alias": 1,
     "docs": 5,
     "sle_Internal": 109,
-    "tools": 71,
+    "tools": 72,
 }
 
 EXPECTED_DEPENDENCY_DIGEST = (
-    "6a95af2e3db26ec54590a00907b643c76dd842239d1f7917fc4c8cba47bbbf42"
+    "ccdd62d875abf05e3cbf1624b59508350c0702eec1bc01ba63caeb72cd907c1c"
 )
 EXPECTED_DEPENDENCY_COUNTS = {
     "Lilu.kext": 15,
     "MacKernelSDK": 313,
-    "NootedGreen": 41,
+    "NootedGreen": 42,
 }
 EXPECTED_DEPENDENCY_DIGESTS = {
     "Lilu.kext": "daace5409ae90b66d64ca8852a91ac88215f043c6e96d65cc17c43362911b561",
     "MacKernelSDK": "dd900b10e301afd4ae24ddb9871ba83e2b90fc5f090968c752da79cf04d359f0",
-    "NootedGreen": "4f0e589ddeea5e0ef02bee5c0ab220579456fd51427a1db6684fe5cc90cd93d2",
+    "NootedGreen": "8f5a65bbdd1973f4ad044de29793c3e493a12ecbbe43ab20f96618a12b60092e",
 }
 EXPECTED_VENDOR_IDENTITIES = {
     "Lilu.kext/Contents/Info.plist":
@@ -108,18 +108,18 @@ EXPECTED_DIRECT_VENDOR_INCLUDES = {
     "MacKernelSDK/Headers/string.h",
 }
 EXPECTED_PRODUCT_SYMBOL_COUNTS = {
-    "undefined": 80,
-    "defined": 623,
-    "external": 69,
+    "undefined": 79,
+    "defined": 631,
+    "external": 68,
 }
 EXPECTED_PRODUCT_SYMBOL_DIGESTS = {
-    "undefined": "ef4db32a81690fba34f75525418d6966d9d9a3fd874b16ca1c71448698fbc94d",
-    "defined": "305b37e7bfa2c33d300a39d8a7b3f1d7f4eefcc9da9fc5acf715b428c3a1fe33",
-    "external": "338d33f99d48dab47a7c7a2640c5f09c7ff711979713d158ef22f65f0086bff7",
+    "undefined": "51be69ce360d74d9623b5a8a667f477b6076645caccff1e0c368be6ee91fe6d5",
+    "defined": "976521a6e600279445da9e6a32aeaae9169e2404f971a821e1faf0c3a2939eb0",
+    "external": "d9ee5d44c90fca71af6204bb6c8b8c3b8a37d56b8780a310e7a81669e42c2c63",
 }
 EXPECTED_EXTERNAL_ABI_PARTITIONS = {
     "Lilu": (16, "c826042ab195d1496195d180c6b4edf01160cdb5158e43e2f4a6d51eb56eee1a"),
-    "kernel": (53, "6af786a2fcefc5c7d89a2c6219e46f0f5f35e9d75733f296f3c3f8f962cc4625"),
+    "kernel": (52, "bd083937eb559b618d306eb88a905a15b21e8fffcae97523019eaafcb153c64f"),
 }
 
 # These programs require an execution environment deliberately absent from the
@@ -322,15 +322,16 @@ def product_symbol_surface():
         assert len(values) == expected_count, (
             f"product {name} ABI import count changed: {len(values)}"
         )
-        assert digest_paths(values) == expected_digest, (
-            f"product {name} ABI import surface changed"
+        actual_digest = digest_paths(values)
+        assert actual_digest == expected_digest, (
+            f"product {name} ABI import surface changed: {actual_digest}"
         )
     return surfaces
 
 
 def verify_dependency_closure():
     dependencies = compiler_dependency_paths()
-    assert len(dependencies) == 369, (
+    assert len(dependencies) == 370, (
         f"compiled dependency count changed: {len(dependencies)}"
     )
     assert digest_paths(dependencies) == EXPECTED_DEPENDENCY_DIGEST, (
@@ -392,7 +393,7 @@ def verify_tool_ledger(paths):
         path for path in paths
         if path.startswith("tools/") and Path(path).suffix in program_suffixes
     }
-    assert len(programs) == 65, f"tool program count changed: {len(programs)}"
+    assert len(programs) == 66, f"tool program count changed: {len(programs)}"
 
     check_static = (ROOT / "tools/check-static.sh").read_text(encoding="utf-8")
     workflow = (ROOT / ".github/workflows/build-kext.yml").read_text(

@@ -1,19 +1,23 @@
 # Tahoe SR-IOV protocol audit — in progress
 
-Updated: 2026-10-08. The last deployed driver is exact V315 commit
-`3059bb0de400c1e26ddd2e01ad5c6bf0b456ea08`, CI `37686920388`, executable
-UUID `FB9A3F5D-D604-346D-993C-7C2B8CAD7215` and candidate AuxKC
-`1c5d21911092548ee79892933f82e90fab7eb4ae056493c4ef29272533e8ee22`.
-Its sole 90-second contained start crossed V314's empty initial kernel-PPGTT
-fault and completed ten bounded direct-GGTT first-PTE readbacks. It did not
-return from the native task factory, but neither Guest nor Host reported a
-protocol fault, panic or configured containment trigger; the fixed deadline
-ended the run. No Metal, media or Looking Glass ran. The current offline V316
-worktree adds only bounded task-construction diagnostics. Full static passes at
-`/tmp/ngreen-static.CCghFU`; clean commit, exact-SHA CI, artifact, deployment
-and fresh-boot gates remain open. Keep `macos-tahoe-sriov` shut off. Current
-Host boot `69a5e843-2b12-47d6-9be4-9e7fb48b46f0` is clean but retired by the
-one-start rule and may not start any VM.
+Updated: 2026-10-08. The last deployed driver is exact V316 commit
+`fdc9224577fbbad946d75863222e0f0a172715b7`. Its sole contained start and
+retained-panic recovery are sealed respectively under
+`build/diagnostics/v316-tgl-start-90s-20261007T225909Z` (manifest
+`b25d7cf8...`) and `build/diagnostics/v316-deploy-novf-20261007T232102Z`
+(manifest `f1960e9e...`). V316 reached seven matching direct-GGTT completion
+records, then failed during native start unwind with
+`Unbalanced VF device-cache retirement scope`; the complete retained panic is
+SHA-256 `8877dfd3...`. No Metal, media or Looking Glass ran. Current Host boot
+`9120ce8a-7eed-4155-8f22-1c61ffb99b94` is clean but retired and may not start
+another VM.
+
+The current offline V317 worktree fixes the exact synchronous
+finalizer/`IOService::finalize`/Intel-stop re-entry rather than changing the
+already-completed GGTT mapping. Full static passes at
+`/tmp/ngreen-static.lHzHaH`; clean commit, exact-SHA CI, release artifact,
+minimal no-VF deployment and a new fresh-boot root gate remain open. Keep
+`macos-tahoe-sriov` shut off.
 
 The user's final display target is now Looking Glass, not Sunshine/Moonlight.
 Older Sunshine references below are historical review notes. No macOS Tahoe
@@ -27,6 +31,57 @@ KVMFR/client transport remains the intended receiving side.
 The authoritative dynamic-entry checklist is
 [`DYNAMIC_TEST_GATE.md`](DYNAMIC_TEST_GATE.md). Any open static gate keeps the
 VM hard hold in force.
+
+## V316 retained panic and V317 exactly-once teardown repair
+
+- The retained panic carries V316 UUID
+  `3DC014F4-E067-380C-A7B3-3117DC7FA83A`, TGL UUID
+  `BA3AA1C0-FE6B-33B3-9D85-73F848394E3D`, and uptime
+  `54.375735771s`. Combining uptime with the prior Guest boot time places it at
+  `07:00:28.392815828`, 0.701815844 seconds after sample-7 completion at
+  `07:00:27.691`. The next no-VF boot only transferred the report, so the panic
+  belongs to V316's VF start-failure unwind, not the recovery boot.
+- Kext offset `0x20290` maps to the old outer stop's post-finalizer depth
+  assertion. Both pinned Tahoe KCs now fix the complete 0x38-byte
+  `acceleratorFinalize` (`2a6e3e1b...`), video/system unwire virtuals, the
+  finalizer termination-counter test and the exact 0x1c-byte frame-pop/tail
+  dispatch to virtual `+0x618`. The retained stack independently identifies
+  that target as `IOService::finalize`, which synchronously re-enters routed
+  Intel stop on the same thread.
+- The old wrapper opened a global device-cache retirement scope, invoked the
+  native one-shot finalizer, then opened a second scope in the nested stop. The
+  nested scope returned from depth 2 to 1 and the outer assertion incorrectly
+  required zero before the outer owner could leave. A global counter also let
+  unrelated threads bypass the closed producer gate; treating the finalizer as
+  an external producer could make it wait on its own lease.
+- V317 removes all three defects. A five-phase atomic model (`Idle`,
+  `Finalizing`, `Finalized`, `NativeStopActive`, `NativeStopComplete`) assigns
+  exactly one lifecycle owner. The finalizer closes/drains external producers
+  without taking a producer lease. Retirement ownership is thread-local; only
+  its dynamic extent may admit nested cache selectors 3/4. Synchronous stop
+  re-entry performs the one native stop; absence of re-entry uses one exact
+  fallback; a later ordinary stop may resume `Finalized`; concurrent or
+  recursive stop fails closed. `gVfDeviceStopping` is published once directly
+  before native stop, and completion follows callback detach/postconditions.
+- Production tracing records finalizer and stop phase, current thread,
+  retirement-owner status, sole cache-finalizer entry, and exact native-stop
+  enter/complete. Existing V316 stage tickets and GGTT before/intended/after
+  completion markers remain unchanged, while Host watcher/private ftrace retain
+  PF/IOMMU/i915 containment coverage.
+- The freestanding state test exhausts every valid phase/owner pair, all invalid
+  values 5..255, and stop-first/finalizer-first flows with and without
+  synchronous re-entry. Fourteen source mutations, both Tahoe payloads, paired
+  System/Boot KC contracts, strict Gen11 compile/analyzer, 168-route inventory
+  and full static `/tmp/ngreen-static.lHzHaH` pass. The exact ledger is 1,505
+  paths, 66 tool programs and 631 defined product symbols.
+- The next dynamic sequence is intentionally short. After V317 exact-SHA CI and
+  artifact identity, one active no-VF maintenance boot may install/activate it
+  and record final-path UUID/AuxKC/current-boot load proof. Before each Host
+  reboot, a verified one-shot resume prompt must contain the complete active
+  goal, exact checkpoint and unique next action. The following fresh boot goes
+  directly to one contained VF start-only with sufficient Guest/Host trace.
+  Historical two-boot/four-sample load-proof chains are not repeated. Retry,
+  second start, Metal, media and Looking Glass remain prohibited at this gate.
 
 ## V315 result and V316 bounded task-construction diagnostics
 
@@ -68,10 +123,10 @@ VM hard hold in force.
   weakened stage bounds. The full static suite passes at
   `/tmp/ngreen-static.CCghFU`: 1,503 ledger paths, 164 Gen11 methods, 98 route
   fields, 623 defined product symbols and 168 unique routes (144 accelerator,
-  three framebuffer, 21 System KC). This is observation-only static evidence;
-  V316 is not deployable until clean commit, exact-SHA CI/artifact identity,
-  two no-VF maintenance boots, load proof, immutable manifest and a fresh Host
-  root gate all pass.
+  three framebuffer, 21 System KC). At that historical checkpoint this was
+  observation-only static evidence; V316 was subsequently committed, passed
+  exact-SHA CI/artifact and deployment gates, and produced the contained result
+  and retained panic attributed in the V317 section above.
 
 ## V314 incident and V315 exact empty kernel-PPGTT bootstrap (historical)
 

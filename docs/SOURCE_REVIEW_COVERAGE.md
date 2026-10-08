@@ -10,7 +10,57 @@ The current dynamic-entry gate table is
 
 ## Scope
 
-2026-10-08 V315 dynamic result and V316 observation-only refinement: exact
+2026-10-08 V316 retained-panic attribution and V317 lifecycle repair: the sole
+V316 contained start evidence is sealed under
+`build/diagnostics/v316-tgl-start-90s-20261007T225909Z` (outer manifest
+`b25d7cf8...`). Its seven matching GGTT completions ended at sample 7; the next
+active no-VF recovery boot preserved the full panic with SHA-256
+`8877dfd3...`. UUIDs `3DC014F4-E067-380C-A7B3-3117DC7FA83A` (V316) and
+`BA3AA1C0-FE6B-33B3-9D85-73F848394E3D` (TGL), uptime
+`54.375735771s`, and absolute time `07:00:28.392815828` assign it to V316's
+start-failure unwind, 0.701815844 seconds after sample 7. Recovery evidence is
+sealed under `build/diagnostics/v316-deploy-novf-20261007T232102Z` (outer
+manifest `f1960e9e...`). Current Host boot
+`9120ce8a-7eed-4155-8f22-1c61ffb99b94` is retired and may not start another VM.
+
+Exact Tahoe System/Boot KC review expands `acceleratorFinalize` to its complete
+0x38-byte body (`2a6e3e1b...`), fixes its video/system unwire virtuals, and pins
+the native finalizer's termination-counter zero edge: it pops the full frame and
+tail-dispatches virtual `+0x618` to `IOService::finalize`. That synchronous edge
+re-enters routed Intel stop. The V296 design opened a global retirement depth in
+the outer stop and again in the nested stop; the native one-shot finalizer was
+already consumed, so the nested return left depth 1 and the outer zero-depth
+assertion produced `Unbalanced VF device-cache retirement scope`. It also let an
+unrelated thread observe a global retirement bypass and made the finalizer hold
+an ordinary producer lease while attempting to close that gate.
+
+V317 makes teardown an explicit five-phase atomic state machine. The finalizer
+is a lifecycle owner, not an external producer; only the same thread-local
+retirement owner can bypass cache selectors 3/4. Synchronous re-entry advances
+`Finalizing` to the one `NativeStopActive` invocation; no-reentry and later-stop
+paths have exact fallbacks; concurrent/recursive entry fails closed; stopping is
+published once and completion only after native stop postconditions. The pure
+state model exhausts every phase/owner pair, invalid values 5..255, stop-first
+and finalizer-first paths with and without synchronous re-entry. Fourteen source
+mutations, paired KC contracts, strict Gen11 compile/analyzer and full static
+`/tmp/ngreen-static.lHzHaH` pass. The ledger is now 1,505 paths, 66 tool
+programs, 631 defined product symbols and 168 routes. Clean commit, exact-SHA
+CI/release identity and minimal deployment remain pending; no hardware-success
+claim is made.
+
+Efficiency policy for the next dynamic checkpoint supersedes the historical
+long deployment chains below. After exact artifact provenance, perform one
+active no-VF maintenance boot to install/activate V317 and preserve final-path
+identity/current-boot load proof. Arm and verify a one-shot resume prompt before
+each Host reboot. The following fresh Host boot goes directly to one contained
+V317 VF start-only with lifecycle/thread-owner/GGTT Guest trace and Host
+watcher/ftrace; do not repeat two maintenance boots or a four-sample load-proof
+chain. Metal, media and Looking Glass remain prohibited until native start is
+proved stable.
+
+### Historical V315 dynamic result and V316 observation-only refinement
+
+At that checkpoint, exact
 V315 `3059bb0de400c1e26ddd2e01ad5c6bf0b456ea08`/CI `37686920388`, release
 artifact, two active no-VF maintenance boots, candidate AuxKC `1c5d2191...`
 and immutable manifest `389a375d...` passed every gate. Its sole contained
