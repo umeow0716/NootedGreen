@@ -156,11 +156,14 @@ def main() -> None:
             "fixed trace-only deadline")
     require(runner, 'readonly tgl_start_runtime_seconds=90',
             "fixed TGL start-only deadline")
-    require(runner, 'readonly service_runtime_seconds=180',
+    require(runner, 'readonly metal_smoke_runtime_seconds=150',
+            "fixed Metal-smoke deadline")
+    require(runner, 'readonly service_runtime_seconds=240',
             "bounded service runtime")
     require(runner, 'runtime_seconds_for_mode()', "closed runtime-mode selector")
     require(runner, 'trace-only) printf', "trace-only mode allowlist")
     require(runner, 'tgl-start-only) printf', "TGL start-only mode allowlist")
+    require(runner, 'metal-smoke) printf', "Metal-smoke mode allowlist")
     require(runner,
             'schedule_deadline "$evidence_dir" "$deadline_unit" "$runtime_seconds"',
             "mode-selected deadline")
@@ -221,6 +224,8 @@ def main() -> None:
     require(runner, "--arm-exactly-one-contained-run", "explicit arm token")
     require(runner, "--arm-exactly-one-contained-tgl-start",
             "explicit TGL start-only arm token")
+    require(runner, "--arm-exactly-one-contained-metal-smoke",
+            "explicit Metal-smoke arm token")
     require(runner,
             '"$script_path" --internal-run "$evidence_dir" "$guard_unit" "$run_mode"',
             "immutable internal mode handoff")
