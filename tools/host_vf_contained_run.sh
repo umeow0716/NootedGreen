@@ -23,6 +23,7 @@ readonly tracefs_root="/sys/kernel/tracing"
 readonly trace_runtime_seconds=45
 readonly tgl_start_runtime_seconds=90
 readonly metal_smoke_runtime_seconds=150
+readonly media_smoke_runtime_seconds=150
 readonly cooldown_seconds=20
 readonly service_runtime_seconds=240
 readonly trigger_pattern='(DMAR|IOMMU).*(00:02\.0|0000:00:02\.0).*(fault|Fault)|(fault|Fault).*(DMAR|IOMMU).*(00:02\.0|0000:00:02\.0)|i915.*(Atomic update failure on pipe|GPU HANG|reset[^[:cntrl:]]*(timed out|timeout)|fence[^[:cntrl:]]*(timed out|timeout)|GuC[^[:cntrl:]]*(timed out|timeout)|VF[^[:cntrl:]]*pause[^[:cntrl:]]*(timed out|timeout))'
@@ -38,6 +39,7 @@ usage() {
 	printf '  sudo %s --arm-exactly-one-contained-run --manifest /absolute/manifest.tsv\n' "$0" >&2
 	printf '  sudo %s --arm-exactly-one-contained-tgl-start --manifest /absolute/manifest.tsv\n' "$0" >&2
 	printf '  sudo %s --arm-exactly-one-contained-metal-smoke --manifest /absolute/manifest.tsv\n' "$0" >&2
+	printf '  sudo %s --arm-exactly-one-contained-media-smoke --manifest /absolute/manifest.tsv\n' "$0" >&2
 }
 
 runtime_seconds_for_mode() {
@@ -45,6 +47,7 @@ runtime_seconds_for_mode() {
 		trace-only) printf '%s\n' "$trace_runtime_seconds" ;;
 		tgl-start-only) printf '%s\n' "$tgl_start_runtime_seconds" ;;
 		metal-smoke) printf '%s\n' "$metal_smoke_runtime_seconds" ;;
+		media-smoke) printf '%s\n' "$media_smoke_runtime_seconds" ;;
 		*) return 1 ;;
 	esac
 }
@@ -485,6 +488,10 @@ case ${1:-} in
 	--arm-exactly-one-contained-metal-smoke)
 		(($# == 3)) && [[ ${2:-} == --manifest ]] || { usage; exit 64; }
 		arm_mode "$3" metal-smoke
+		;;
+	--arm-exactly-one-contained-media-smoke)
+		(($# == 3)) && [[ ${2:-} == --manifest ]] || { usage; exit 64; }
+		arm_mode "$3" media-smoke
 		;;
 	--internal-run)
 		(($# == 4)) || { usage; exit 64; }

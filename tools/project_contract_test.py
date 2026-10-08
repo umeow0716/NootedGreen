@@ -13,6 +13,43 @@ PROJECT = ROOT / "NootedGreen.xcodeproj" / "project.pbxproj"
 SCHEME = ROOT / "NootedGreen.xcodeproj" / "xcshareddata" / "xcschemes" / "NootedGreen.xcscheme"
 WORKSPACE = ROOT / "NootedGreen.xcodeproj" / "project.xcworkspace" / "contents.xcworkspacedata"
 WORKFLOW = ROOT / ".github" / "workflows" / "build-kext.yml"
+ACCELERATION_SMOKE = ROOT / "tools" / "metal_smoke" / "main.m"
+
+
+def validate_acceleration_smoke(source: str) -> None:
+    compact = "".join(source.split())
+    for token in (
+        'strcmp(argv[1],"--media-smoke")==0',
+        "constint32_twidth=1920",
+        "constint32_theight=1080",
+        "kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange",
+        "kVTVideoEncoderSpecification_RequireHardwareAcceleratedVideoEncoder",
+        "kVTCompressionPropertyKey_UsingHardwareAcceleratedVideoEncoder",
+        "kVTVideoDecoderSpecification_RequireHardwareAcceleratedVideoDecoder",
+        "kVTDecompressionPropertyKey_UsingHardwareAcceleratedVideoDecoder",
+        "VTCompressionSessionEncodeFrame",
+        "VTCompressionSessionCompleteFrames",
+        "VTDecompressionSessionDecodeFrame",
+        "VTDecompressionSessionWaitForAsynchronousFrames",
+        "10LL*NSEC_PER_SEC",
+        "validateDecodedNV12",
+        "PASS:VideoToolboxhardwareH.264encode/decodecompletedfor1920x1080NV12",
+    ):
+        assert token in compact, f"missing acceleration-smoke contract: {token}"
+    assert source.count("VTCompressionSessionEncodeFrame(") == 1
+    assert source.count("VTDecompressionSessionDecodeFrame(") == 1
+    assert source.count("validateDecodedNV12(") == 2
+    assert "DISPATCH_TIME_FOREVER" not in source
+    assert "kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder" not in source
+    assert "kVTVideoDecoderSpecification_EnableHardwareAcceleratedVideoDecoder" not in source
+    order = (
+        source.index('stage("media-create-hardware-encoder: begin")'),
+        source.index('stage("media-hardware-encode-frame: begin")'),
+        source.index('stage("media-create-hardware-decoder: begin")'),
+        source.index('stage("media-hardware-decode-frame: begin")'),
+        source.index("PASS: VideoToolbox hardware H.264 encode/decode"),
+    )
+    assert order == tuple(sorted(order)), "media encode/decode stage order"
 
 
 def version_tuple(value: str):
@@ -192,6 +229,39 @@ def main() -> int:
     assert file_ref is not None and file_ref.attrib["location"] == "self:"
 
     workflow = WORKFLOW.read_text(encoding="utf-8")
+    acceleration_smoke = ACCELERATION_SMOKE.read_text(encoding="utf-8")
+    validate_acceleration_smoke(acceleration_smoke)
+    smoke_mutations = (
+        acceleration_smoke.replace(
+            "kVTVideoEncoderSpecification_RequireHardwareAcceleratedVideoEncoder",
+            "kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder",
+            1,
+        ),
+        acceleration_smoke.replace(
+            "kVTVideoDecoderSpecification_RequireHardwareAcceleratedVideoDecoder",
+            "kVTVideoDecoderSpecification_EnableHardwareAcceleratedVideoDecoder",
+            1,
+        ),
+        acceleration_smoke.replace("const int32_t width = 1920", "const int32_t width = 1919", 1),
+        acceleration_smoke.replace("10LL * NSEC_PER_SEC", "DISPATCH_TIME_FOREVER", 1),
+        acceleration_smoke.replace(
+            "kVTCompressionPropertyKey_UsingHardwareAcceleratedVideoEncoder",
+            "kVTCompressionPropertyKey_EncoderID",
+            1,
+        ),
+        acceleration_smoke.replace(
+            "kVTDecompressionPropertyKey_UsingHardwareAcceleratedVideoDecoder",
+            "kVTDecompressionPropertyKey_PixelBufferPool",
+            1,
+        ),
+        acceleration_smoke.replace("validateDecodedNV12", "skipDecodedNV12", 1),
+    )
+    for index, mutation in enumerate(smoke_mutations, 1):
+        try:
+            validate_acceleration_smoke(mutation)
+        except (AssertionError, ValueError):
+            continue
+        raise AssertionError(f"escaped acceleration-smoke mutation {index}")
     assert "HookCase" not in workflow
     assert not (ROOT / "HookCase-master").exists()
     for required in (
@@ -203,6 +273,9 @@ def main() -> int:
         "-scheme NootedGreen",
         "ARCHS=x86_64",
         "Build x86_64 Metal smoke test",
+        "-framework VideoToolbox",
+        "-framework CoreMedia",
+        "-framework CoreVideo",
     ):
         assert required in workflow
 

@@ -50,6 +50,9 @@ jobs:
             tools/metal_smoke/main.m \
             -framework Foundation \
             -framework Metal \
+            -framework VideoToolbox \
+            -framework CoreMedia \
+            -framework CoreVideo \
             -o "$RUNNER_TEMP/metal-smoke"
 
       - name: Stage artifact
