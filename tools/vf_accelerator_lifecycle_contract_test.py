@@ -611,6 +611,10 @@ FENCE_FREE_MMIO_ANCHOR = bytes.fromhex(
 FENCE_RESOURCE_NULL_UNWIND = bytes.fromhex(
     "49 89 86 28 02 00 00 48 85 c0 74 60")
 MEMORY_EDRAM_ZERO_STATE = bytes.fromhex("66 41 89 46 20")
+MEMORY_EDRAM_DISPATCH = bytes.fromhex(
+    "49 8b 06 4c 89 f7 ff 90 48 01 00 00 49 8b 7e 10")
+MEMORY_EDRAM_DISPATCH_BYPASS = bytes.fromhex(
+    "49 8b 06 4c 89 f7 90 90 90 90 90 90 49 8b 7e 10")
 EDRAM_CAPABILITY_MMIO_READ = bytes.fromhex(
     "49 8b 46 18 8b 98 10 00 12 00")
 EDRAM_CONTROL_MMIO_WRITES = bytes.fromhex(
@@ -3880,7 +3884,8 @@ def macho_inventory(path):
     memory_init_start = value(MEMORY_MANAGER_INIT)
     memory_init_body = image[memory_init_start:next_symbol(memory_init_start)]
     if memory_init_body.count(MEMORY_EDRAM_ZERO_STATE) != 1 or \
-            memory_init_body.count(bytes.fromhex("ff 90 48 01 00 00")) != 1:
+            memory_init_body.count(bytes.fromhex("ff 90 48 01 00 00")) != 1 or \
+            memory_init_body.count(MEMORY_EDRAM_DISPATCH) != 1:
         raise AssertionError(
             f"{path}: base memory-manager eDRAM init/dispatch changed")
     edram_start = value(TGL_DETECT_EDRAM)
@@ -6120,8 +6125,83 @@ def stop_memory_manager_lifetime_mutations(path):
     print("PASS: eleven stop memory-manager ownership/order mutations rejected")
 
 
+def v321_edram_dispatch_source_contract(source, path):
+    body = function_body(
+        source,
+        "bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t address, size_t size)")
+    normalized = "".join(body.split())
+    required = (
+        'mach_vm_address_tmemoryManagerInit=0;',
+        'mach_vm_address_tmemoryManagerInitEnd=0;',
+        '{"' + MEMORY_MANAGER_INIT + '",memoryManagerInit}',
+        '{"__ZN15IGMemoryManager16initDeviceMemoryEv",memoryManagerInitEnd}',
+        'memoryManagerInitEnd-memoryManagerInit!=0x232',
+        'staticconstuint8_tedramDispatchFind[]={0x49,0x8b,0x06,0x4c,0x89,0xf7,0xff,0x90,0x48,0x01,0x00,0x00,0x49,0x8b,0x7e,0x10,};',
+        'staticconstuint8_tedramDispatchReplace[]={0x49,0x8b,0x06,0x4c,0x89,0xf7,0x90,0x90,0x90,0x90,0x90,0x90,0x49,0x8b,0x7e,0x10,};',
+        'LookupPatchPlusconstedramDispatchPatch{activeKext,edramDispatchFind,edramDispatchReplace,1,};',
+        'edramDispatchPatch.apply(patcher,memoryManagerInit,memoryManagerInitEnd-memoryManagerInit)',
+        'V321:bypassedphysicalTGLeDRAMdispatchatmemory-managerinit',
+        '{"' + TGL_DETECT_EDRAM + '",vfDisableEdramProbe}',
+    )
+    for token in required:
+        if token not in normalized:
+            raise AssertionError(
+                f"{path}: V321 concrete eDRAM dispatch closure lacks {token}")
+    patch = normalized.index('edramDispatchPatch.apply(')
+    routes = normalized.index('KernelPatcher::RouteRequestrequests[]=', patch)
+    detector = normalized.index(
+        '{"' + TGL_DETECT_EDRAM + '",vfDisableEdramProbe}', routes)
+    if not patch < routes < detector:
+        raise AssertionError(
+            f"{path}: V321 eDRAM call-site closure/defence route order changed")
+    replacement = normalized[
+        normalized.index('staticconstuint8_tedramDispatchReplace[]'):
+        normalized.index('LookupPatchPlusconstedramDispatchPatch')]
+    if '0xff' in replacement or replacement.count('0x90') != 6:
+        raise AssertionError(
+            f"{path}: V321 eDRAM dispatch replacement is not exactly six NOPs")
+
+    detector_body = "".join(function_body(
+        source, "void Gen11::vfDisableEdramProbe(void *that)").split())
+    for token in (
+            'getMember<uint8_t>(that,0x20)=0;',
+            'getMember<uint8_t>(that,0x21)=0;',
+            'V321:suppressedindependentTGLeDRAMprobe'):
+        if token not in detector_body:
+            raise AssertionError(
+                f"{path}: V321 independent eDRAM route lacks {token}")
+
+
+def v321_edram_dispatch_source_mutations(path):
+    source = pathlib.Path(path).read_text()
+    mutations = (
+        ('memoryManagerInitEnd - memoryManagerInit != 0x232',
+         'memoryManagerInitEnd - memoryManagerInit > 0x300'),
+        ('\t\t\t\t0x90, 0x90, 0x90, 0x90, 0x90, 0x90,\n'
+         '\t\t\t\t0x49, 0x8b, 0x7e, 0x10,\n'
+         '\t\t\t};\n\t\t\tLookupPatchPlus const edramDispatchPatch',
+         '\t\t\t\t0xff, 0x90, 0x90, 0x90, 0x90, 0x90,\n'
+         '\t\t\t\t0x49, 0x8b, 0x7e, 0x10,\n'
+         '\t\t\t};\n\t\t\tLookupPatchPlus const edramDispatchPatch'),
+        ('patcher, memoryManagerInit,\n'
+         '\t\t\t               memoryManagerInitEnd - memoryManagerInit)',
+         'patcher, address, size)'),
+    )
+    for before, after in mutations:
+        if before not in source:
+            raise AssertionError("missing V321 eDRAM mutation anchor")
+        mutated = source.replace(before, after, 1)
+        try:
+            v321_edram_dispatch_source_contract(mutated, path)
+        except AssertionError:
+            continue
+        raise AssertionError("V321 eDRAM dispatch contract accepted unsafe mutation")
+    print("PASS: three V321 eDRAM call-site mutations rejected")
+
+
 def source_contract(path):
     source = pathlib.Path(path).read_text()
+    v321_edram_dispatch_source_contract(source, path)
     legacy_gpu_producer_containment_contract(source, path)
     internal_optional_producer_isolation_contract(source, path)
     ring_backing_submit_contract(source, path)
@@ -7509,6 +7589,7 @@ def main():
     direct_branch_candidate_contract()
     event_collection_admission_model()
     source_contract(sys.argv[1])
+    v321_edram_dispatch_source_mutations(sys.argv[1])
     legacy_gpu_producer_containment_mutations(sys.argv[1])
     internal_optional_producer_isolation_mutations(sys.argv[1])
     ring_backing_submit_mutations(sys.argv[1])

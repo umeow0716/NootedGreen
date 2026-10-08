@@ -3190,6 +3190,45 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			PANIC_COND(!patcher.solveMultiple(
 			               index, pageTableRollback, address, size), "ngreen",
 			           "Cannot resolve VF page-table rollback boundary");
+
+			// Tahoe's base IGMemoryManager::init reaches the TGL eDRAM detector
+			// through vtable slot 0x148 after the global GGTT is live.  The V320
+			// runtime boundary proved that this concrete dispatch can remain live
+			// even though the public detector symbol is routed below.  Remove the
+			// one void dispatch at its owner while retaining the symbol route as a
+			// second boundary for any independent virtual/external caller.  Base
+			// init has already zeroed both eDRAM capability bytes at this point.
+			mach_vm_address_t memoryManagerInit = 0;
+			mach_vm_address_t memoryManagerInitEnd = 0;
+			KernelPatcher::SolveRequest memoryManagerInitBounds[] = {
+				{"__ZN15IGMemoryManager4initEP16IntelAcceleratorRK18IntelSharedMemInfoRK14_stolenMemInfo",
+				 memoryManagerInit},
+				{"__ZN15IGMemoryManager16initDeviceMemoryEv",
+				 memoryManagerInitEnd},
+			};
+			PANIC_COND(!patcher.solveMultiple(
+			               index, memoryManagerInitBounds, address, size) ||
+			           memoryManagerInitEnd - memoryManagerInit != 0x232,
+			           "ngreen", "Changed VF memory-manager init boundary");
+			static const uint8_t edramDispatchFind[] = {
+				0x49, 0x8b, 0x06, 0x4c, 0x89, 0xf7,
+				0xff, 0x90, 0x48, 0x01, 0x00, 0x00,
+				0x49, 0x8b, 0x7e, 0x10,
+			};
+			static const uint8_t edramDispatchReplace[] = {
+				0x49, 0x8b, 0x06, 0x4c, 0x89, 0xf7,
+				0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
+				0x49, 0x8b, 0x7e, 0x10,
+			};
+			LookupPatchPlus const edramDispatchPatch {
+				activeKext, edramDispatchFind, edramDispatchReplace, 1,
+			};
+			PANIC_COND(!edramDispatchPatch.apply(
+			               patcher, memoryManagerInit,
+			               memoryManagerInitEnd - memoryManagerInit), "ngreen",
+			           "Failed to close the VF eDRAM dispatch edge");
+			SYSLOG("ngreen", "V321: bypassed physical TGL eDRAM dispatch at memory-manager init");
+
 			KernelPatcher::RouteRequest requests[] = {
 			// V217: Query the media-12 PF-provisioned GGTT range, replace Apple's
 			// zero/stolen-derived allocator ranges, and validate direct BAR0 PTE
@@ -6255,6 +6294,7 @@ void Gen11::vfDisableEdramProbe(void *that)
 		return;
 	getMember<uint8_t>(that, 0x20) = 0;
 	getMember<uint8_t>(that, 0x21) = 0;
+	SYSLOG("ngreen", "V321: suppressed independent TGL eDRAM probe");
 }
 
 static UInt32 vfTakeTaskConstructionDiagnosticStage()
