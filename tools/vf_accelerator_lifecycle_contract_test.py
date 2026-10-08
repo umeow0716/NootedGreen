@@ -5757,6 +5757,13 @@ def callback_owner_lifetime_contract(source, path="<source>"):
              'vfBaseAcceleratorStop,this->oVfBaseAcceleratorStop}')
     if route not in process:
         raise AssertionError(f"{path}: missing exact base-stop teardown route")
+    finish_route = ('{"__ZN24IOAccelEventMachineFast215finishAllStampsEv",'
+                    'vfEventMachineFinishAllStamps,'
+                    'this->oVfEventMachineFinishAllStamps}')
+    stop_route = ('{"__ZN20IOAccelEventMachine24stopEv",'
+                  'vfEventMachineStop,this->oVfEventMachineStop}')
+    if finish_route not in process or stop_route not in process:
+        raise AssertionError(f"{path}: missing exact event-machine teardown trace route")
     route_apply = "routeMultiple(index,callbackOwnerTeardown,address,size)"
     if route_apply not in process:
         raise AssertionError(f"{path}: base-stop teardown route is not applied")
@@ -5787,6 +5794,42 @@ def callback_owner_lifetime_contract(source, path="<source>"):
         rollback_call)
     if not precondition < detach_call < rollback_call < original:
         raise AssertionError(f"{path}: base stop can clear the workloop before callback drain")
+
+    finish_wrapper = "".join(function_body(
+        source, "int Gen11::vfEventMachineFinishAllStamps(void *that)").split())
+    for token in (
+            "!callback||!callback->oVfEventMachineFinishAllStamps",
+            "gVfIdentity==VfIdentity::Virtual&&gVfAccelerator&&",
+            "that==getMember<void*>(gVfAccelerator,0x380)",
+            "V318:inheritedVFfinishAllStampsenter",
+            "FunctionCast(vfEventMachineFinishAllStamps,callback->oVfEventMachineFinishAllStamps)(that)",
+            "V318:inheritedVFfinishAllStampsreturn=%d"):
+        if token not in finish_wrapper:
+            raise AssertionError(
+                f"{path}: incomplete VF finishAllStamps trace wrapper: {token}")
+    finish_call = finish_wrapper.index(
+        "FunctionCast(vfEventMachineFinishAllStamps,callback->oVfEventMachineFinishAllStamps)(that)")
+    if finish_wrapper.index("V318:inheritedVFfinishAllStampsenter") > finish_call or \
+            finish_wrapper.index("V318:inheritedVFfinishAllStampsreturn=%d") < finish_call:
+        raise AssertionError(f"{path}: finishAllStamps trace does not bracket native call")
+
+    stop_wrapper = "".join(function_body(
+        source, "void Gen11::vfEventMachineStop(void *that)").split())
+    for token in (
+            "!callback||!callback->oVfEventMachineStop",
+            "gVfIdentity==VfIdentity::Virtual&&gVfAccelerator&&",
+            "that==getMember<void*>(gVfAccelerator,0x380)",
+            "V318:inheritedVFevent-machinestopenter",
+            "FunctionCast(vfEventMachineStop,callback->oVfEventMachineStop)(that)",
+            "V318:inheritedVFevent-machinestopreturn"):
+        if token not in stop_wrapper:
+            raise AssertionError(
+                f"{path}: incomplete VF event-machine stop trace wrapper: {token}")
+    stop_call = stop_wrapper.index(
+        "FunctionCast(vfEventMachineStop,callback->oVfEventMachineStop)(that)")
+    if stop_wrapper.index("V318:inheritedVFevent-machinestopenter") > stop_call or \
+            stop_wrapper.index("V318:inheritedVFevent-machinestopreturn") < stop_call:
+        raise AssertionError(f"{path}: event-machine stop trace does not bracket native call")
 
     start = function_body(source, "bool Gen11::start(void *that, void *provider)")
     native_result = start.index(
@@ -5864,6 +5907,20 @@ def callback_owner_lifetime_mutations(path):
         ("base route", source.replace(
             "__ZN22IOGraphicsAccelerator24stopEP9IOService",
             "__ZN22IOGraphicsAccelerator27missingEP9IOService", 1)),
+        ("finish trace route", source.replace(
+            "__ZN24IOAccelEventMachineFast215finishAllStampsEv",
+            "__ZN24IOAccelEventMachineFast218missingAllStampsEv", 1)),
+        ("stop trace route", source.replace(
+            "__ZN20IOAccelEventMachine24stopEv",
+            "__ZN20IOAccelEventMachine27missingEv", 1)),
+        ("finish trace owner", mutate_function(
+            "int Gen11::vfEventMachineFinishAllStamps(void *that)",
+            "that == getMember<void *>(gVfAccelerator, 0x380)",
+            "that != getMember<void *>(gVfAccelerator, 0x380)")),
+        ("stop trace owner", mutate_function(
+            "void Gen11::vfEventMachineStop(void *that)",
+            "that == getMember<void *>(gVfAccelerator, 0x380)",
+            "that != getMember<void *>(gVfAccelerator, 0x380)")),
     )
     for label, changed in mutations:
         if changed == source:
@@ -5873,7 +5930,7 @@ def callback_owner_lifetime_mutations(path):
         except (AssertionError, ValueError):
             continue
         raise AssertionError(f"{path}: escaped callback-owner lifetime mutation: {label}")
-    print("PASS: fifteen callback-owner binding/drain mutations rejected")
+    print("PASS: twenty callback-owner binding/drain/trace mutations rejected")
 
 
 def source_contract(path):
@@ -6392,7 +6449,17 @@ def source_contract(path):
         if forbidden in start:
             raise AssertionError(
                 f"{path}: VF engine-start re-enters physical state through {forbidden}")
+    hws_mask = start.index(
+        "const uint64_t engineMask = getMember<uint64_t>(that, 0x1300)")
+    hws_mask_check = start.index(
+        "engineMask == 0 || (engineMask & ~0x3FULL) != 0", hws_mask)
     hws_engine_check = start.index("for (size_t index = 0; index < 6; index++)")
+    hws_active_check = start.index(
+        "(engineMask & (1ULL << index)) == 0", hws_engine_check)
+    hws_inactive_reject = start.index(
+        "VF inactive engine has an HWS mapping", hws_active_check)
+    hws_active_reject = start.index(
+        "VF engine HWS mapping incomplete before bus mastering", hws_inactive_reject)
     hws_global_check = start.index("getMember<OSObject *>(that, 0x1438)", hws_engine_check)
     bus_master_precheck = start.index("VF PCI bus mastering escaped", hws_global_check)
     create_source = start.index(
@@ -6405,7 +6472,8 @@ def source_contract(path):
     firmware = start.index("callback->vfSchedulerInitFirmware)(scheduler)")
     ready = start.index("if (!vfNativeGpuWorkReady())")
     accelerator = start.index("callback->ioGraphicsEnableAccelerator)(that)")
-    if not hws_engine_check < hws_global_check < bus_master_precheck < \
+    if not hws_mask < hws_mask_check < hws_engine_check < hws_active_check < \
+            hws_inactive_reject < hws_active_reject < hws_global_check < bus_master_precheck < \
             create_source < source_postcheck < bridge < firmware < ready < accelerator:
         raise AssertionError(
             f"{path}: VF HWS/MSI/firmware/transport/accelerator lifecycle order is reversed")

@@ -120,6 +120,10 @@ private:
 	mach_vm_address_t oAcceleratorStop {};
 	static void vfBaseAcceleratorStop(void *that, void *provider);
 	mach_vm_address_t oVfBaseAcceleratorStop {};
+	static int vfEventMachineFinishAllStamps(void *that);
+	mach_vm_address_t oVfEventMachineFinishAllStamps {};
+	static void vfEventMachineStop(void *that);
+	mach_vm_address_t oVfEventMachineStop {};
 	mach_vm_address_t ioPciConfigureInterrupts {};
 	static uint32_t vfTelemetryPrintDashboard(void *that, uint64_t options);
 	static int vfTelemetryInitWithAccelerator(void *that, void *accelerator,

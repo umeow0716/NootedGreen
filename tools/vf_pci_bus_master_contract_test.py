@@ -66,6 +66,10 @@ def contract(green, gen11, label):
         raise AssertionError(f"{label}: pre-native wrapper gained another Bus Master transition")
 
     engine = function_body(gen11, "bool Gen11::startGraphicsEngine(void *that)")
+    mask = engine.index(
+        "const uint64_t engineMask = getMember<uint64_t>(that, 0x1300)")
+    mask_validation = engine.index(
+        "engineMask == 0 || (engineMask & ~0x3FULL) != 0", mask)
     hws = engine.index("for (size_t index = 0; index < 6; index++)")
     global_hws = engine.index("getMember<OSObject *>(that, 0x1438)", hws)
     precheck = engine.index("VF PCI bus mastering escaped", global_hws)
@@ -74,8 +78,15 @@ def contract(green, gen11, label):
     postcheck = engine.index(
         "VF deferred MSI source did not establish its bus-master boundary",
         register_source)
-    if not hws < global_hws < precheck < register_source < postcheck:
+    if not mask < mask_validation < hws < global_hws < precheck < \
+            register_source < postcheck:
         raise AssertionError(f"{label}: late HWS/MSI Bus Master admission changed")
+    for token in ("(engineMask & (1ULL << index)) == 0",
+                  "VF inactive engine has an HWS mapping",
+                  "VF engine HWS mapping incomplete before bus mastering"):
+        if token not in engine:
+            raise AssertionError(
+                f"{label}: native active HWS-mask validation lost {token}")
 
     stop_engine = function_body(gen11, "bool Gen11::stopGraphicsEngine(void *that)")
     quiesce = stop_engine.index("vfQuiesceDeviceForShutdown(gVfHardwareGuc)")

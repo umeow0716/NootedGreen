@@ -2471,6 +2471,11 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		KernelPatcher::RouteRequest callbackOwnerTeardown[] = {
 			{"__ZN22IOGraphicsAccelerator24stopEP9IOService",
 			 vfBaseAcceleratorStop, this->oVfBaseAcceleratorStop},
+			{"__ZN24IOAccelEventMachineFast215finishAllStampsEv",
+			 vfEventMachineFinishAllStamps,
+			 this->oVfEventMachineFinishAllStamps},
+			{"__ZN20IOAccelEventMachine24stopEv",
+			 vfEventMachineStop, this->oVfEventMachineStop},
 		};
 		PANIC_COND(!patcher.routeMultiple(index, callbackOwnerTeardown,
 		                                      address, size),
@@ -5909,6 +5914,34 @@ void Gen11::vfBaseAcceleratorStop(void *that, void *provider)
 	             callback->oVfBaseAcceleratorStop)(that, provider);
 }
 
+int Gen11::vfEventMachineFinishAllStamps(void *that)
+{
+	PANIC_COND(!callback || !callback->oVfEventMachineFinishAllStamps,
+		"ngreen", "Missing native event-machine finish trampoline");
+	const bool vfOwner = gVfIdentity == VfIdentity::Virtual &&
+		gVfAccelerator && that == getMember<void *>(gVfAccelerator, 0x380);
+	if (vfOwner)
+		SYSLOG("ngreen", "V318: inherited VF finishAllStamps enter");
+	const int result = FunctionCast(vfEventMachineFinishAllStamps,
+		callback->oVfEventMachineFinishAllStamps)(that);
+	if (vfOwner)
+		SYSLOG("ngreen", "V318: inherited VF finishAllStamps return=%d", result);
+	return result;
+}
+
+void Gen11::vfEventMachineStop(void *that)
+{
+	PANIC_COND(!callback || !callback->oVfEventMachineStop,
+		"ngreen", "Missing native event-machine stop trampoline");
+	const bool vfOwner = gVfIdentity == VfIdentity::Virtual &&
+		gVfAccelerator && that == getMember<void *>(gVfAccelerator, 0x380);
+	if (vfOwner)
+		SYSLOG("ngreen", "V318: inherited VF event-machine stop enter");
+	FunctionCast(vfEventMachineStop, callback->oVfEventMachineStop)(that);
+	if (vfOwner)
+		SYSLOG("ngreen", "V318: inherited VF event-machine stop return");
+}
+
 uint32_t Gen11::vfTelemetryPrintDashboard(void *that, uint64_t options)
 {
 	(void)that;
@@ -6501,17 +6534,27 @@ bool Gen11::startGraphicsEngine(void *that)
 	if (!gVfUsesMemoryIrq) {
 		// Reaching this routed call proves native start successfully constructed
 		// the scheduler, stats/telemetry objects and every HWS mapped buffer. Do
-		// not rely on the call order alone: validate all six pinned engine HWS
-		// mappings and the global HWS mapping before the IOPCIFamily factory can
-		// turn on PCI bus mastering.
+		// not rely on the call order alone: validate the native active subset of
+		// six possible engine HWS mappings and the global HWS mapping before the
+		// IOPCIFamily factory can turn on PCI bus mastering. Tahoe allocates only
+		// bits present in accelerator+0x1300; requiring all six fabricates engines
+		// that are absent from the runtime topology.
 		if (getMember<uint8_t>(interruptBridge, 0x8AA) != 0 ||
 		    getMember<void *>(interruptBridge, 0x20) != nullptr ||
 		    !callback->vfSharedMappedBufferGetVirtualAddress ||
-		    !callback->vfMappedBufferGetGPUVirtualAddress ||
-		    (getMember<uint64_t>(that, 0x1300) & 0x3FULL) != 0x3FULL) {
-			vfMarkProtocolFault("VF deferred interrupt source reached an incomplete HWS boundary");
+		    !callback->vfMappedBufferGetGPUVirtualAddress) {
+			vfMarkProtocolFault("VF deferred interrupt source preconditions are incomplete");
 			return false;
 		}
+		const uint64_t engineMask = getMember<uint64_t>(that, 0x1300);
+		if (engineMask == 0 || (engineMask & ~0x3FULL) != 0) {
+			SYSLOG("ngreen", "V318: invalid native HWS engine mask=0x%llx",
+			       static_cast<unsigned long long>(engineMask));
+			vfMarkProtocolFault("VF native HWS engine mask is invalid");
+			return false;
+		}
+		SYSLOG("ngreen", "V318: validating native active HWS engine mask=0x%llx",
+		       static_cast<unsigned long long>(engineMask));
 		using CpuAddress = uint8_t *(*)(void *);
 		using GpuAddress = uint64_t (*)(void *);
 		auto getCpu = reinterpret_cast<CpuAddress>(
@@ -6528,7 +6571,19 @@ bool Gen11::startGraphicsEngine(void *that)
 				kGucGgttTop);
 		};
 		for (size_t index = 0; index < 6; index++) {
-			if (!mappedHws(getMember<OSObject *>(that, 0x1408 + index * 8))) {
+			auto *backing = getMember<OSObject *>(that, 0x1408 + index * 8);
+			if ((engineMask & (1ULL << index)) == 0) {
+				if (backing) {
+					SYSLOG("ngreen", "V318: inactive native HWS slot=%lu is populated",
+					       index);
+					vfMarkProtocolFault("VF inactive engine has an HWS mapping");
+					return false;
+				}
+				continue;
+			}
+			if (!mappedHws(backing)) {
+				SYSLOG("ngreen", "V318: active native HWS mapping failed slot=%lu mask=0x%llx",
+				       index, static_cast<unsigned long long>(engineMask));
 				vfMarkProtocolFault("VF engine HWS mapping incomplete before bus mastering");
 				return false;
 			}
