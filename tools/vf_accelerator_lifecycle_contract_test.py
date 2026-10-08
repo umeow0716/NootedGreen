@@ -938,6 +938,21 @@ def macho_inventory(path):
                 raise AssertionError(f"{path}: incompatible {name} relocation")
             relocations[name] = address
 
+    # V323 suppresses only the UUID-pinned native synchronous publication.
+    # The six-byte indirect call follows DPSM setup and resolves through the
+    # concrete IntelAccelerator vtable to IOService::registerService(unsigned).
+    # Source applies this patch only for a classified VF and retains the outer
+    # asynchronous publication after callback-owner validation.
+    accelerator_table = value("__ZTV16IntelAccelerator")
+    native_publication_slot = accelerator_table + 16 + 0x5B0
+    assert external_imports.get(native_publication_slot) == [
+        "__ZN9IOService15registerServiceEj"
+    ], f"{path}: changed native accelerator service-publication virtual target"
+    assert image[0x246A9:0x246C3] == bytes.fromhex(
+        "49 8b 45 00 45 31 ff 4c 89 ef 31 f6 ff 90 b0 05 00 00 "
+        "4c 89 ef e8 ff 19 00 00"), \
+        f"{path}: changed native post-engine publication/sysctl sequence"
+
     # IntelAccelerator::start owns exactly one accelerator-lock admission and
     # has two mutually exclusive release paths.  Pin the complete direct
     # import inventory, rather than only representative call sites: our VF
@@ -6199,9 +6214,81 @@ def v321_edram_dispatch_source_mutations(path):
     print("PASS: three V321 eDRAM call-site mutations rejected")
 
 
+def v323_native_publication_source_contract(source, path):
+    process = "".join(function_body(
+        source,
+        "bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t address, size_t size)").split())
+    required = (
+        'mach_vm_address_tacceleratorStart=0;',
+        'mach_vm_address_tacceleratorStartEnd=0;',
+        '{"' + ACCELERATOR_START + '",acceleratorStart}',
+        '{"__ZN16IntelAccelerator10initIdVarsEv",acceleratorStartEnd}',
+        'acceleratorStartEnd-acceleratorStart!=0x924',
+        'staticconstuint8_tnativePublicationFind[]={0x41,0x80,0x8d,0x91,0x11,0x00,0x00,0x04,0x49,0x8b,0x45,0x00,0x45,0x31,0xff,0x4c,0x89,0xef,0x31,0xf6,0xff,0x90,0xb0,0x05,0x00,0x00,0x4c,0x89,0xef,};',
+        'staticconstuint8_tnativePublicationReplace[]={0x41,0x80,0x8d,0x91,0x11,0x00,0x00,0x04,0x49,0x8b,0x45,0x00,0x45,0x31,0xff,0x4c,0x89,0xef,0x31,0xf6,0x90,0x90,0x90,0x90,0x90,0x90,0x4c,0x89,0xef,};',
+        'LookupPatchPlusconstnativePublicationPatch{activeKext,nativePublicationFind,nativePublicationReplace,1,};',
+        'nativePublicationPatch.apply(patcher,acceleratorStart,acceleratorStartEnd-acceleratorStart)',
+        'V323:deferrednativesynchronousVFservicepublicationuntilcallbackvalidation',
+    )
+    for token in required:
+        if token not in process:
+            raise AssertionError(
+                f"{path}: V323 native service-publication closure lacks {token}")
+    replacement = process[
+        process.index('staticconstuint8_tnativePublicationReplace[]'):
+        process.index('LookupPatchPlusconstnativePublicationPatch')]
+    if replacement.count('0xff') != 1 or replacement.count('0x90') != 6:
+        raise AssertionError(
+            f"{path}: V323 native publication replacement is not exactly six NOPs")
+    if not process.index('V321:bypassedphysicalTGLeDRAMdispatch') < \
+            process.index('nativePublicationPatch.apply(') < \
+            process.index('KernelPatcher::RouteRequestrequests[]='):
+        raise AssertionError(
+            f"{path}: V323 native publication patch escaped the VF patch phase")
+
+    start = "".join(function_body(source, "bool Gen11::start(void *that, void *provider)").split())
+    callback_check = 'vfNativeCallbackBindingsReady(that)'
+    admitted_publication = 'service->registerService(kIOServiceAsynchronous);'
+    if callback_check not in start or admitted_publication not in start or \
+            start.index(callback_check) > start.index(admitted_publication):
+        raise AssertionError(
+            f"{path}: V323 admitted publication no longer follows callback-owner validation")
+
+
+def v323_native_publication_source_mutations(path):
+    source = pathlib.Path(path).read_text()
+    mutations = (
+        ('acceleratorStartEnd - acceleratorStart != 0x924',
+         'acceleratorStartEnd - acceleratorStart > 0x900'),
+        ('\t\t\t\t0x90, 0x90, 0x90, 0x90, 0x90, 0x90,\n'
+         '\t\t\t\t0x4c, 0x89, 0xef,\n'
+         '\t\t\t};\n\t\t\tLookupPatchPlus const nativePublicationPatch',
+         '\t\t\t\t0xff, 0x90, 0x90, 0x90, 0x90, 0x90,\n'
+         '\t\t\t\t0x4c, 0x89, 0xef,\n'
+         '\t\t\t};\n\t\t\tLookupPatchPlus const nativePublicationPatch'),
+        ('patcher, acceleratorStart,\n'
+         '\t\t\t               acceleratorStartEnd - acceleratorStart)',
+         'patcher, address, size)'),
+        ('\tservice->registerService(kIOServiceAsynchronous);',
+         '\t// publication removed'),
+    )
+    for before, after in mutations:
+        if before not in source:
+            raise AssertionError("missing V323 native publication mutation anchor")
+        mutated = source.replace(before, after, 1)
+        try:
+            v323_native_publication_source_contract(mutated, path)
+        except AssertionError:
+            continue
+        raise AssertionError(
+            "V323 native publication contract accepted unsafe mutation")
+    print("PASS: four V323 native publication mutations rejected")
+
+
 def source_contract(path):
     source = pathlib.Path(path).read_text()
     v321_edram_dispatch_source_contract(source, path)
+    v323_native_publication_source_contract(source, path)
     legacy_gpu_producer_containment_contract(source, path)
     internal_optional_producer_isolation_contract(source, path)
     ring_backing_submit_contract(source, path)
@@ -7590,6 +7677,7 @@ def main():
     event_collection_admission_model()
     source_contract(sys.argv[1])
     v321_edram_dispatch_source_mutations(sys.argv[1])
+    v323_native_publication_source_mutations(sys.argv[1])
     legacy_gpu_producer_containment_mutations(sys.argv[1])
     internal_optional_producer_isolation_mutations(sys.argv[1])
     ring_backing_submit_mutations(sys.argv[1])

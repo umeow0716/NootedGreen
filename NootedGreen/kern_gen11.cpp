@@ -3229,6 +3229,47 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			           "Failed to close the VF eDRAM dispatch edge");
 			SYSLOG("ngreen", "V321: bypassed physical TGL eDRAM dispatch at memory-manager init");
 
+			// Tahoe's native IntelAccelerator::start publishes the service
+			// synchronously after engine/CTB setup but before it returns to this
+			// driver's outer lifecycle wrapper.  That lets matching clients enter
+			// resource creation before V301 has verified the DPSM, periodic and
+			// fallback callback owners.  The wrapper already performs the one
+			// intended asynchronous publication after those checks.  Remove only
+			// this UUID-pinned inner virtual call for a classified VF; PF start and
+			// the wrapper's admitted publication remain native.
+			mach_vm_address_t acceleratorStart = 0;
+			mach_vm_address_t acceleratorStartEnd = 0;
+			KernelPatcher::SolveRequest acceleratorStartBounds[] = {
+				{"__ZN16IntelAccelerator5startEP9IOService", acceleratorStart},
+				{"__ZN16IntelAccelerator10initIdVarsEv", acceleratorStartEnd},
+			};
+			PANIC_COND(!patcher.solveMultiple(
+			               index, acceleratorStartBounds, address, size) ||
+			           acceleratorStartEnd - acceleratorStart != 0x924,
+			           "ngreen", "Changed VF accelerator start publication boundary");
+			static const uint8_t nativePublicationFind[] = {
+				0x41, 0x80, 0x8d, 0x91, 0x11, 0x00, 0x00, 0x04,
+				0x49, 0x8b, 0x45, 0x00, 0x45, 0x31, 0xff,
+				0x4c, 0x89, 0xef, 0x31, 0xf6,
+				0xff, 0x90, 0xb0, 0x05, 0x00, 0x00,
+				0x4c, 0x89, 0xef,
+			};
+			static const uint8_t nativePublicationReplace[] = {
+				0x41, 0x80, 0x8d, 0x91, 0x11, 0x00, 0x00, 0x04,
+				0x49, 0x8b, 0x45, 0x00, 0x45, 0x31, 0xff,
+				0x4c, 0x89, 0xef, 0x31, 0xf6,
+				0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
+				0x4c, 0x89, 0xef,
+			};
+			LookupPatchPlus const nativePublicationPatch {
+				activeKext, nativePublicationFind, nativePublicationReplace, 1,
+			};
+			PANIC_COND(!nativePublicationPatch.apply(
+			               patcher, acceleratorStart,
+			               acceleratorStartEnd - acceleratorStart), "ngreen",
+			           "Failed to defer native VF service publication");
+			SYSLOG("ngreen", "V323: deferred native synchronous VF service publication until callback validation");
+
 			KernelPatcher::RouteRequest requests[] = {
 			// V217: Query the media-12 PF-provisioned GGTT range, replace Apple's
 			// zero/stolen-derived allocator ranges, and validate direct BAR0 PTE
@@ -5800,8 +5841,9 @@ bool Gen11::start(void *that, void *provider)
 		SYSLOG("ngreen", "V301: verified VF DPSM/periodic/fallback source bindings before publication");
 	}
 
-	// The accelerator personality is injected before this wrapper runs. Publish
-	// only after native start succeeds so matching cannot observe partial state.
+	// The accelerator personality is injected before this wrapper runs.  V323
+	// removes the UUID-pinned native synchronous publication, so this is the
+	// only VF publication and matching cannot observe partial callback state.
 	service->registerService(kIOServiceAsynchronous);
 	return result;
 }
