@@ -9501,6 +9501,7 @@ bool Gen11::injectAcceleratorPersonality(const char *bundleId)
 		OSDynamicCast(OSDictionary, source->getObject("Development")) &&
 		OSDynamicCast(OSDictionary, source->getObject("Debug")) &&
 		OSDynamicCast(OSDictionary, source->getObject("IOAccelDisplayPipeCapabilities")) &&
+		OSDynamicCast(OSDictionary, source->getObject("IOGVAH264EncodeCapabilities")) &&
 		OSDynamicCast(OSDictionary, source->getObject("IOGVAHEVCDecodeCapabilities")) &&
 		OSDynamicCast(OSDictionary, source->getObject("IOGVAHEVCEncodeCapabilities"));
 	auto *dict = complete ? OSDictionary::withDictionary(source) : nullptr;
@@ -9545,7 +9546,7 @@ bool Gen11::injectAcceleratorPersonality(const char *bundleId)
 		return false;
 	}
 
-	SYSLOG("ngreen", "injectAcceleratorPersonality: publishing complete %s personality",
+	SYSLOG("ngreen", "V327: publishing complete %s personality with Tahoe H.264 encode capability",
 		bundleId);
 	const bool ok = gIOCatalogue->addDrivers(array, true);
 	array->release();

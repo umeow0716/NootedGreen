@@ -162,7 +162,7 @@ EXPECTED_PAYLOAD_BUNDLES = {
     "sle_Internal/sle/AppleIntelTGLGraphicsVAME.bundle": 4,
 }
 EXPECTED_PAYLOAD_CONTENT_DIGEST = (
-    "96896c057a3bf32d1d64888fc81ca3b1afbd0ce263e60485213ee108b4f95c1f"
+    "b5319df28e74316aa3fbdc15946b79f08222fbf27410ab5280b3d2e689456a19"
 )
 ROUTE_REVIEWED_KERNEL_BINARIES = {
     "sle_Internal/le/AppleIntelTGLGraphics.kext/Contents/MacOS/AppleIntelTGLGraphics",

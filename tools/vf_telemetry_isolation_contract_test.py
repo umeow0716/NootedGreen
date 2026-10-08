@@ -406,6 +406,7 @@ def source_contract(path):
     inject = function_body(
         source, "bool Gen11::injectAcceleratorPersonality(const char *bundleId)")
     for token in (
+        'source->getObject("IOGVAH264EncodeCapabilities")',
         "OSDictionary::withDictionary(sourceDevelopment)",
         'development->setObject("TelemetryDisable", telemetryDisabled)',
         'dict->setObject("Development", development)',
