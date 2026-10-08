@@ -5631,6 +5631,9 @@ bool Gen11::start(void *that, void *provider)
 			vfMarkProtocolFault("accelerator provider is not an IOPCIDevice");
 			return false;
 		}
+		NGreen::callback->closeVfBusMasterAdmission();
+		PANIC_COND(NGreen::callback->vfBusMasterAdmissionOpen(), "ngreen",
+			"Cannot close stale VF PCI Bus Master admission before native start");
 		// NootedGreen used to enable Bus Master unconditionally during its
 		// processPatcher() setup.  That made a VF DMA-capable before the initial
 		// PPGTT, HWS mappings, interrupt consumer or GuC transport existed.  Close
@@ -6736,6 +6739,10 @@ bool Gen11::startGraphicsEngine(void *that)
 			vfMarkProtocolFault("VF PCI bus mastering escaped the deferred HWS boundary");
 			return false;
 		}
+		PANIC_COND(!NGreen::callback->openVfBusMasterAdmission(), "ngreen",
+			"Cannot open the validated VF PCI Bus Master admission");
+		OSSynchronizeIO();
+		SYSLOG("ngreen", "V322: opened VF PCI Bus Master admission after native HWS validation");
 		// Tahoe exposes one 64-bit MSI vector and no legacy INTx route for this
 		// VF. configureInterrupts is the first operation which turns on Bus Master,
 		// so it belongs after the complete HWS proof and immediately before the
@@ -6749,6 +6756,7 @@ bool Gen11::startGraphicsEngine(void *that)
 		if (interruptResult != kIOReturnSuccess) {
 			SYSLOG("ngreen", "V320: late VF MSI allocation failed ret=0x%x",
 			       interruptResult);
+			NGreen::callback->closeVfBusMasterAdmission();
 			provider->setBusMasterEnable(false);
 			OSSynchronizeIO();
 			PANIC_COND((provider->configRead16(kIOPCIConfigCommand) &
@@ -6768,6 +6776,7 @@ bool Gen11::startGraphicsEngine(void *that)
 		    getMember<void *>(interruptBridge, 0x20) == nullptr ||
 		    (provider->configRead16(kIOPCIConfigCommand) &
 		     kIOPCICommandBusMaster) == 0) {
+			NGreen::callback->closeVfBusMasterAdmission();
 			provider->setBusMasterEnable(false);
 			OSSynchronizeIO();
 			PANIC_COND((provider->configRead16(kIOPCIConfigCommand) &
@@ -6890,6 +6899,7 @@ bool Gen11::stopGraphicsEngine(void *that)
 			IOPCIDevice, static_cast<IOService *>(that)->getProvider());
 		PANIC_COND(!provider, "ngreen",
 			"Cannot revoke VF PCI bus mastering without its provider");
+		NGreen::callback->closeVfBusMasterAdmission();
 		provider->setBusMasterEnable(false);
 		OSSynchronizeIO();
 		PANIC_COND((provider->configRead16(kIOPCIConfigCommand) &

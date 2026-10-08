@@ -23,8 +23,11 @@ class NGreen {
 	
 	static uint16_t configRead16(IORegistryEntry *service, uint32_t space, uint8_t offset);
 	static uint32_t configRead32(IORegistryEntry *service, uint32_t space, uint8_t offset);
+	static bool setBusMasterEnable(IOPCIDevice *device, bool enable);
 	WIOKit::t_PCIConfigRead16 orgConfigRead16 {nullptr};
 	WIOKit::t_PCIConfigRead32 orgConfigRead32 {nullptr};
+	using t_SetBusMasterEnable = bool (*)(IOPCIDevice *, bool);
+	t_SetBusMasterEnable orgSetBusMasterEnable {nullptr};
 	
 	// Checked BAR0 register access used by the VF GuC mailbox/doorbell path.
 	UInt32 readReg32(unsigned long reg) {
@@ -59,9 +62,26 @@ public:
     // Captured from PCI configuration before installing our ID spoof hooks.
     uint32_t getOriginalDeviceId() const { return deviceId; }
 private:
-    uint32_t deviceId {0};
-    IOPCIDevice *iGPU {nullptr};
+	uint32_t deviceId {0};
+	IOPCIDevice *iGPU {nullptr};
 	bool driverReady {false};
+	// The Tahoe IOGraphicsAccelerator2 base start enables PCI Bus Master before
+	// Intel's HWS construction.  Keep the exact VF sink closed until Gen11 has
+	// validated every native HWS mapping and is ready to allocate its sole MSI.
+	volatile UInt32 vfBusMasterAdmission {0};
+	volatile UInt32 vfEarlyBusMasterSuppressions {0};
+	static constexpr size_t kSetBusMasterEnableVirtualOffset = 0x11B;
+	bool openVfBusMasterAdmission() {
+		OSSynchronizeIO();
+		return OSCompareAndSwap(0, 1, &vfBusMasterAdmission);
+	}
+	void closeVfBusMasterAdmission() {
+		OSCompareAndSwap(1, 0, &vfBusMasterAdmission);
+		OSSynchronizeIO();
+	}
+	bool vfBusMasterAdmissionOpen() const {
+		return vfBusMasterAdmission != 0;
+	}
 	
 	IOMemoryMap *rmmio {nullptr};
 	volatile UInt32 *rmmioPtr {nullptr};

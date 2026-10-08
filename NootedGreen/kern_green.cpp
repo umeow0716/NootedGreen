@@ -89,8 +89,12 @@ void NGreen::processPatcher(KernelPatcher &patcher) {
 		WIOKit::PCIConfigOffset::ConfigRead16, configRead16, &orgConfigRead16);
 	const bool routedRead32 = KernelPatcher::routeVirtual(this->iGPU,
 		WIOKit::PCIConfigOffset::ConfigRead32, configRead32, &orgConfigRead32);
-	PANIC_COND(!routedRead16 || !routedRead32 || !orgConfigRead16 || !orgConfigRead32,
-		"ngreen", "Failed to route PCI configuration readers");
+	const bool routedBusMaster = KernelPatcher::routeVirtual(this->iGPU,
+		kSetBusMasterEnableVirtualOffset, setBusMasterEnable,
+		&orgSetBusMasterEnable);
+	PANIC_COND(!routedRead16 || !routedRead32 || !routedBusMaster ||
+		!orgConfigRead16 || !orgConfigRead32 || !orgSetBusMasterEnable,
+		"ngreen", "Failed to route PCI configuration/Bus Master boundary");
 
 	DeviceInfo::deleter(devInfo);
 	this->driverReady = true;
@@ -161,4 +165,30 @@ uint32_t NGreen::configRead32(IORegistryEntry *service, uint32_t space, uint8_t 
 	}
 
 	return UINT32_MAX;
+}
+
+bool NGreen::setBusMasterEnable(IOPCIDevice *device, bool enable) {
+	auto *owner = callback;
+	if (!owner || !owner->orgSetBusMasterEnable)
+		return false;
+	if (device != owner->iGPU || ngPhysicalGpuAccessAllowed() || !enable ||
+	    owner->vfBusMasterAdmissionOpen())
+		return owner->orgSetBusMasterEnable(device, enable);
+
+	// Tahoe 25G229 IOGraphicsAccelerator2::start calls the IOPCIDevice virtual
+	// at vtable +0x8d8 after setMemoryEnable(true), before IntelAccelerator has
+	// created any HWS mapping.  Preserve setBusMasterEnable's previous-state
+	// result while suppressing only this identity-scoped premature VF enable.
+	const bool previous =
+		(device->configRead16(kIOPCIConfigCommand) & kIOPCICommandBusMaster) != 0;
+	if (previous) {
+		owner->orgSetBusMasterEnable(device, false);
+		OSSynchronizeIO();
+		PANIC_COND((device->configRead16(kIOPCIConfigCommand) &
+		            kIOPCICommandBusMaster) != 0,
+			"ngreen", "Cannot close premature VF PCI Bus Master admission");
+	}
+	OSIncrementAtomic(&owner->vfEarlyBusMasterSuppressions);
+	SYSLOG("ngreen", "V322: suppressed premature VF PCI Bus Master enable at the IOPCIDevice sink");
+	return previous;
 }

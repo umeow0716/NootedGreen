@@ -1075,6 +1075,7 @@ def check_boot_atomic(system, path):
     segments = []
     kernel = []
     iosurface = []
+    iopci = []
     bases = []
     for command, offset in commands(boot, 0):
         if command == 0x19:
@@ -1090,8 +1091,10 @@ def check_boot_atomic(system, path):
                 kernel.append(file_offset)
             elif identifier == b"com.apple.iokit.IOSurface":
                 iosurface.append(file_offset)
-    assert len(kernel) == len(iosurface) == len(bases) == 1, \
-        "missing/ambiguous kernel/IOSurface/base"
+            elif identifier == b"com.apple.iokit.IOPCIFamily":
+                iopci.append(file_offset)
+    assert len(kernel) == len(iosurface) == len(iopci) == len(bases) == 1, \
+        "missing/ambiguous kernel/IOSurface/IOPCIFamily/base"
     symbols = {name: [] for name in (b"_OSIncrementAtomic", b"_OSDecrementAtomic", b"_thread_wakeup_prim",
                                    b"__ZN15IORegistryEntry18getRegistryEntryIDEv", b"_kernel_debug",
                                    b"_kernel_debug_register_callback",
@@ -1183,6 +1186,58 @@ def check_boot_atomic(system, path):
                    if v <= address and address + length <= v + size]
         assert len(matches) == 1, "unmapped/ambiguous event-source implementation"
         return boot[matches[0]:matches[0] + length]
+
+    # Tahoe's inherited accelerator start performs two adjacent virtual calls
+    # on its PCI provider.  Resolve the actual BootKC IOPCIDevice vtable rather
+    # than inferring the slots from an SDK header: +0x8c8 is memory decoding and
+    # +0x8d8 is the premature Bus Master transition suppressed by V322.
+    pci_names = (
+        b"__ZTV11IOPCIDevice",
+        b"__ZN11IOPCIDevice15setMemoryEnableEb",
+        b"__ZN11IOPCIDevice18setBusMasterEnableEb",
+    )
+    pci_symbols = {name: [] for name in pci_names}
+    pci_segments = []
+    for command, offset in commands(boot, iopci[0]):
+        if command == 0x19:
+            fields = struct.unpack_from("<II16sQQQQIIII", boot, offset)
+            pci_segments.append((fields[3], fields[5], fields[6]))
+        elif command == 2:
+            symbol_offset, count, string_offset, string_size = \
+                struct.unpack_from("<6I", boot, offset)[2:]
+            for index in range(count):
+                name_offset, _, _, _, address = struct.unpack_from(
+                    "<IBBHQ", boot, symbol_offset + 16 * index)
+                assert name_offset < string_size, "invalid IOPCIFamily symbol string"
+                start = string_offset + name_offset
+                name = boot[start:boot.index(0, start, string_offset + string_size)]
+                if name in pci_symbols:
+                    pci_symbols[name].append(address)
+    assert all(len(values) == 1 for values in pci_symbols.values()), \
+        "missing/ambiguous IOPCIFamily Bus Master symbols"
+
+    def pci_read(address, length):
+        locations = [file_offset + address - virtual
+                     for virtual, file_offset, size in pci_segments
+                     if virtual <= address and address + length <= virtual + size]
+        assert len(locations) == 1, "unmapped/ambiguous IOPCIFamily vtable"
+        return boot[locations[0]:locations[0] + length]
+
+    pci_vtable = pci_symbols[b"__ZTV11IOPCIDevice"][0]
+    for slot, name in (
+            (0x8c8, b"__ZN11IOPCIDevice15setMemoryEnableEb"),
+            (0x8d8, b"__ZN11IOPCIDevice18setBusMasterEnableEb")):
+        raw = struct.unpack("<Q", pci_read(pci_vtable + 16 + slot, 8))[0]
+        assert raw >> 63 == 0 and (raw >> 30) & 3 == 0 and \
+            bases[0] + (raw & 0x3fffffff) == pci_symbols[name][0], \
+            "changed IOPCIDevice memory/Bus Master virtual identity"
+    assert hashlib.sha256(system[0x14ba0d65:0x14ba0da5]).hexdigest() == \
+        "3edea04d5f401fec76aeac4512b9ae026d28b3ab2c65119751b429c867800afe", \
+        "changed inherited accelerator PCI-provider admission window"
+    assert system[0x14ba0d8e:0x14ba0d94] == bytes.fromhex("ff 90 c8 08 00 00") and \
+        system[0x14ba0d9f:0x14ba0da5] == bytes.fromhex("ff 90 d8 08 00 00"), \
+        "changed inherited memory/Bus Master call sequence"
+    print("PASS exact inherited PCI memory/Bus Master owner and BootKC vtable targets")
 
     # IOSurfaceDeviceCache owns the callback pointer installed by
     # IOGraphicsAccelerator2.  Parse that fileset directly so selector 3/4
@@ -1960,6 +2015,7 @@ def check(path, boot_path=None):
         "__ZTV16IOAccelMemoryMap", "__ZTV16IOAccelSysMemory",
         "__ZTV11IOAccelTask", "__ZTV24IOAccelSharedUserClient2",
         "__ZTV13IOAccelMemory", "__ZTV22IOGraphicsAccelerator2",
+        "__ZN22IOGraphicsAccelerator25startEP9IOService",
         "__ZN22IOGraphicsAccelerator24stopEP9IOService",
         "__ZN22IOGraphicsAccelerator223freeWaitToPrepareVidMapEP16IOAccelMemoryMapbb",
         "__ZNK16IOAccelMemoryMap9getLengthEv",
@@ -2007,6 +2063,8 @@ def check(path, boot_path=None):
         raw_stop & 0x3fffffff == base_stop, \
         "changed inherited accelerator stop virtual target"
     print("PASS exact inherited accelerator stop symbol/vtable boundary")
+    assert address_of("__ZN22IOGraphicsAccelerator25startEP9IOService") == \
+        0x14b9f752, "changed inherited accelerator start symbol identity"
 
     for name, expected in CONTRACTS.items():
         address = address_of(name)

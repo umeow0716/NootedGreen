@@ -109,12 +109,12 @@ EXPECTED_DIRECT_VENDOR_INCLUDES = {
 }
 EXPECTED_PRODUCT_SYMBOL_COUNTS = {
     "undefined": 79,
-    "defined": 635,
+    "defined": 640,
     "external": 68,
 }
 EXPECTED_PRODUCT_SYMBOL_DIGESTS = {
     "undefined": "51be69ce360d74d9623b5a8a667f477b6076645caccff1e0c368be6ee91fe6d5",
-    "defined": "6317fdd5ccd614298336882c6436dbf58ba098ebbcb4c549727f17d38cb71bbb",
+    "defined": "141a387643eef43a19ada7addf81ec94e581412ea13b472ad40b1912da0d1984",
     "external": "d9ee5d44c90fca71af6204bb6c8b8c3b8a37d56b8780a310e7a81669e42c2c63",
 }
 EXPECTED_EXTERNAL_ABI_PARTITIONS = {

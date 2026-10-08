@@ -243,7 +243,8 @@ else
     failed=1
 fi
 if python3 -B tools/vf_pci_bus_master_contract_test.py \
-    NootedGreen/kern_green.cpp NootedGreen/kern_gen11.cpp; then
+    NootedGreen/kern_green.cpp NootedGreen/kern_green.hpp \
+    NootedGreen/kern_gen11.cpp; then
     printf 'PASS offline PF/VF PCI Bus Master admission contracts\n'
 else
     failed=1
