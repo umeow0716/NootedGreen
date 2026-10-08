@@ -6650,19 +6650,27 @@ def source_contract(path):
         "VF engine HWS mapping incomplete before bus mastering", hws_inactive_reject)
     hws_global_check = start.index("getMember<OSObject *>(that, 0x1438)", hws_engine_check)
     bus_master_precheck = start.index("VF PCI bus mastering escaped", hws_global_check)
+    configure = start.index(
+        "callback->ioPciConfigureInterrupts)(", bus_master_precheck)
+    failed_configuration_revoke = start.index(
+        "provider->setBusMasterEnable(false)", configure)
     create_source = start.index(
         "callback->oVfCreateFilterInterruptEventSource)(interruptBridge)",
-        bus_master_precheck)
+        failed_configuration_revoke)
+    failed_admission_revoke = start.index(
+        "provider->setBusMasterEnable(false)", create_source)
     source_postcheck = start.index(
         "VF deferred MSI source did not establish its bus-master boundary",
-        create_source)
+        failed_admission_revoke)
     bridge = start.index("callback->vfInterruptBridgeEnable)(", source_postcheck)
     firmware = start.index("callback->vfSchedulerInitFirmware)(scheduler)")
     ready = start.index("if (!vfNativeGpuWorkReady())")
     accelerator = start.index("callback->ioGraphicsEnableAccelerator)(that)")
     if not hws_mask < hws_mask_check < hws_engine_check < hws_active_check < \
             hws_inactive_reject < hws_active_reject < hws_global_check < bus_master_precheck < \
-            create_source < source_postcheck < bridge < firmware < ready < accelerator:
+            configure < failed_configuration_revoke < create_source < \
+            failed_admission_revoke < source_postcheck < bridge < firmware < \
+            ready < accelerator:
         raise AssertionError(
             f"{path}: VF HWS/MSI/firmware/transport/accelerator lifecycle order is reversed")
     for token in ("NGGgtt::mappedBacking(", "kIOPCICommandBusMaster",
@@ -6671,6 +6679,12 @@ def source_contract(path):
         if token not in start:
             raise AssertionError(
                 f"{path}: deferred VF MSI boundary is missing {token}")
+    if "provider, kIOInterruptTypePCIMessaged, 1, 1, 0" not in start:
+        raise AssertionError(f"{path}: late VF MSI request is not exactly one vector")
+    if start.count("setBusMasterEnable(") != 2 or \
+            "setBusMasterEnable(true)" in start:
+        raise AssertionError(
+            f"{path}: late MSI boundary gained an unsafe Bus Master transition")
     defer_source = function_body(
         source, "bool Gen11::vfDeferFilterInterruptEventSource(void *that)")
     memory_original = defer_source.index("if (gVfUsesMemoryIrq)")
@@ -6786,7 +6800,6 @@ def source_contract(path):
     legacy_reject = accelerator_start.index("kVfLegacyPageOwnershipFlag")
     ggtt_bootstrap = accelerator_start.index("vfBootstrapDirectGgtt()")
     irq_quiesce = accelerator_start.index("vfQuiesceVirtualInterruptsBeforeMsi()")
-    configure = accelerator_start.index("callback->ioPciConfigureInterrupts)(")
     native_start = accelerator_start.index("FunctionCast(start, callback->ostart)")
     provider_cast = accelerator_start.index(
         "IOPCIDevice, reinterpret_cast<OSObject *>(provider)")
@@ -6801,15 +6814,16 @@ def source_contract(path):
     owner_publish = accelerator_start.index("gVfAccelerator = that")
     if not provider_cast < bus_master_stop < bus_master_barrier < \
             bus_master_readback < bus_master_fault < owner_publish < \
-            legacy_reject < ggtt_bootstrap < irq_quiesce < configure < native_start:
+            legacy_reject < ggtt_bootstrap < irq_quiesce < native_start:
         raise AssertionError(
-            f"{path}: VF PCI-stop/ownership/GGTT/IRQ-reset/MSI order changed before native start")
+            f"{path}: VF PCI-stop/ownership/GGTT/IRQ-reset order changed before native start")
     if accelerator_start.count("setBusMasterEnable(") != 1 or \
             "setBusMasterEnable(true)" in accelerator_start:
         raise AssertionError(
             f"{path}: pre-native VF wrapper gained another PCI Bus Master transition")
-    if "pciDevice, kIOInterruptTypePCIMessaged, 1, 1, 0" not in accelerator_start:
-        raise AssertionError(f"{path}: VF MSI request is not exactly one required vector")
+    if "ioPciConfigureInterrupts" in accelerator_start:
+        raise AssertionError(
+            f"{path}: MSI allocation escaped into pre-HWS native start")
     irq_reset = function_body(source, "bool vfQuiesceVirtualInterruptsBeforeMsi()")
     first_write = irq_reset.index("preMsiQuiescePlan[0].offset")
     first_barrier = irq_reset.index("OSSynchronizeIO()", first_write)

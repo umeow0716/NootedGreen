@@ -56,14 +56,16 @@ def contract(green, gen11, label):
         "VF PCI bus mastering remained enabled before native start", start_readback)
     owner = start.index("gVfAccelerator = that", start_check)
     bootstrap = start.index("vfBootstrapDirectGgtt()", owner)
-    configure = start.index("callback->ioPciConfigureInterrupts)(", bootstrap)
-    native = start.index("FunctionCast(start, callback->ostart)", configure)
+    quiesce = start.index("vfQuiesceVirtualInterruptsBeforeMsi()", bootstrap)
+    native = start.index("FunctionCast(start, callback->ostart)", quiesce)
     if not classified < provider < stop < start_barrier < start_readback < \
-            start_check < owner < bootstrap < configure < native:
+            start_check < owner < bootstrap < quiesce < native:
         raise AssertionError(f"{label}: VF Bus Master stop escaped the pre-native boundary")
     if start.count("setBusMasterEnable(") != 1 or \
             "setBusMasterEnable(true)" in start:
         raise AssertionError(f"{label}: pre-native wrapper gained another Bus Master transition")
+    if "ioPciConfigureInterrupts" in start:
+        raise AssertionError(f"{label}: MSI allocation escaped into pre-HWS native start")
 
     engine = function_body(gen11, "bool Gen11::startGraphicsEngine(void *that)")
     mask = engine.index(
@@ -73,14 +75,26 @@ def contract(green, gen11, label):
     hws = engine.index("for (size_t index = 0; index < 6; index++)")
     global_hws = engine.index("getMember<OSObject *>(that, 0x1438)", hws)
     precheck = engine.index("VF PCI bus mastering escaped", global_hws)
+    configure = engine.index("callback->ioPciConfigureInterrupts)(", precheck)
+    failed_configuration_revoke = engine.index(
+        "provider->setBusMasterEnable(false)", configure)
     register_source = engine.index(
-        "callback->oVfCreateFilterInterruptEventSource)(interruptBridge)", precheck)
+        "callback->oVfCreateFilterInterruptEventSource)(interruptBridge)",
+        failed_configuration_revoke)
+    failed_admission_revoke = engine.index(
+        "provider->setBusMasterEnable(false)", register_source)
     postcheck = engine.index(
         "VF deferred MSI source did not establish its bus-master boundary",
-        register_source)
+        failed_admission_revoke)
     if not mask < mask_validation < hws < global_hws < precheck < \
-            register_source < postcheck:
+            configure < failed_configuration_revoke < register_source < \
+            failed_admission_revoke < postcheck:
         raise AssertionError(f"{label}: late HWS/MSI Bus Master admission changed")
+    if "provider, kIOInterruptTypePCIMessaged, 1, 1, 0" not in engine:
+        raise AssertionError(f"{label}: late VF MSI request is not exactly one vector")
+    if engine.count("setBusMasterEnable(") != 2 or \
+            "setBusMasterEnable(true)" in engine:
+        raise AssertionError(f"{label}: late MSI boundary gained an unsafe Bus Master transition")
     for token in ("(engineMask & (1ULL << index)) == 0",
                   "VF inactive engine has an HWS mapping",
                   "VF engine HWS mapping incomplete before bus mastering"):

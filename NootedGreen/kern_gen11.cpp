@@ -3329,9 +3329,10 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			{"__ZN16IntelAccelerator19startGraphicsEngineEv", startGraphicsEngine},
 			// Tahoe's headless bridge registers its PCI MSI source before the
 			// scheduler and HWS mappings exist. IOPCIFamily registration also
-			// enables PCI bus mastering. Defer only that source construction to
-			// the routed engine-start boundary, while retaining the bridge object
-			// now so native scheduler callback ownership remains unchanged.
+			// enables PCI bus mastering. Defer the MSI allocation and source
+			// construction to the routed engine-start boundary, while retaining
+			// the bridge object now so native scheduler callback ownership remains
+			// unchanged.
 			{"__ZN17IGInterruptBridge32createFilterInterruptEventSourceEv",
 			 vfDeferFilterInterruptEventSource,
 			 this->oVfCreateFilterInterruptEventSource},
@@ -5657,34 +5658,14 @@ bool Gen11::start(void *that, void *provider)
 	}
 	if (vfActive) {
 		// The UUID-pinned TGL driver predates IOPCIDevice::configureInterrupts
-		// and asks getInterruptType() to lazily resolve a local filter source.
-		// Tahoe exposes the VF's one-vector, 64-bit MSI capability, but no legacy
-		// INTx route; explicitly allocate that MSI before the old driver creates
-		// its IOFilterInterruptEventSource.  This is a public IOPCIFamily ABI in
-		// Tahoe (and an exported symbol), not a fabricated interrupt property.
-		// IOPCIMessagedInterruptController::registerInterrupt() later enables the
-		// device MSI immediately, even though its software vector starts disabled.
-		// Match Linux i915 by quiescing Gen11 master/source state before allocation
-		// makes that registration path reachable.
+		// and asks getInterruptType() while creating its local filter source.
+		// Quiesce Gen11 master/source state before native object construction, but
+		// do not allocate MSI here: Tahoe's configureInterrupts itself enables PCI
+		// Bus Master.  The routed engine-start boundary performs that allocation
+		// only after every native HWS mapping has been validated.
 		if (!vfQuiesceVirtualInterruptsBeforeMsi())
 			return false;
-		if (!callback->ioPciConfigureInterrupts) {
-			vfMarkProtocolFault("missing exported PCI MSI configurator");
-			return false;
-		}
-		using ConfigureInterrupts = IOReturn (*)(IOPCIDevice *, UInt32,
-			UInt32, UInt32, IOOptionBits);
-		const IOReturn interruptResult =
-			reinterpret_cast<ConfigureInterrupts>(
-				callback->ioPciConfigureInterrupts)(
-					pciDevice, kIOInterruptTypePCIMessaged, 1, 1, 0);
-		if (interruptResult != kIOReturnSuccess) {
-			SYSLOG("ngreen", "V246: VF MSI allocation failed ret=0x%x",
-			       interruptResult);
-			vfMarkProtocolFault("VF MSI allocation failed before native start");
-			return false;
-		}
-		SYSLOG("ngreen", "V246: allocated the VF PCI MSI before local interrupt-bridge creation");
+		SYSLOG("ngreen", "V320: deferred VF PCI MSI allocation until native HWS validation");
 	}
 
 	auto *service = static_cast<IOService *>(that);
@@ -6620,6 +6601,7 @@ bool Gen11::startGraphicsEngine(void *that)
 	    !callback->vfInterruptBridgeEnable ||
 	    !callback->vfInterruptBridgeDisable ||
 	    !callback->oVfCreateFilterInterruptEventSource ||
+	    !callback->ioPciConfigureInterrupts ||
 	    !callback->ioGraphicsEnableAccelerator ||
 	    !callback->ioAccelEventMachineInitEvent) {
 		vfMarkProtocolFault("VF engine start before accelerator lifecycle is ready");
@@ -6714,6 +6696,29 @@ bool Gen11::startGraphicsEngine(void *that)
 			vfMarkProtocolFault("VF PCI bus mastering escaped the deferred HWS boundary");
 			return false;
 		}
+		// Tahoe exposes one 64-bit MSI vector and no legacy INTx route for this
+		// VF. configureInterrupts is the first operation which turns on Bus Master,
+		// so it belongs after the complete HWS proof and immediately before the
+		// original filter-source factory which consumes the configured vector.
+		using ConfigureInterrupts = IOReturn (*)(IOPCIDevice *, UInt32,
+			UInt32, UInt32, IOOptionBits);
+		const IOReturn interruptResult =
+			reinterpret_cast<ConfigureInterrupts>(
+				callback->ioPciConfigureInterrupts)(
+					provider, kIOInterruptTypePCIMessaged, 1, 1, 0);
+		if (interruptResult != kIOReturnSuccess) {
+			SYSLOG("ngreen", "V320: late VF MSI allocation failed ret=0x%x",
+			       interruptResult);
+			provider->setBusMasterEnable(false);
+			OSSynchronizeIO();
+			PANIC_COND((provider->configRead16(kIOPCIConfigCommand) &
+			            kIOPCICommandBusMaster) != 0,
+				"ngreen", "Cannot revoke failed VF MSI configuration Bus Master admission");
+			vfMarkProtocolFault("VF MSI allocation failed after HWS validation");
+			return false;
+		}
+		OSSynchronizeIO();
+		SYSLOG("ngreen", "V320: allocated VF PCI MSI after validating all HWS mappings");
 		using CreateFilterSource = bool (*)(void *);
 		const bool sourceCreated =
 			reinterpret_cast<CreateFilterSource>(
@@ -6723,10 +6728,15 @@ bool Gen11::startGraphicsEngine(void *that)
 		    getMember<void *>(interruptBridge, 0x20) == nullptr ||
 		    (provider->configRead16(kIOPCIConfigCommand) &
 		     kIOPCICommandBusMaster) == 0) {
+			provider->setBusMasterEnable(false);
+			OSSynchronizeIO();
+			PANIC_COND((provider->configRead16(kIOPCIConfigCommand) &
+			            kIOPCICommandBusMaster) != 0,
+				"ngreen", "Cannot revoke failed late VF MSI Bus Master admission");
 			vfMarkProtocolFault("VF deferred MSI source did not establish its bus-master boundary");
 			return false;
 		}
-		SYSLOG("ngreen", "V311: created Gen11 VF MSI source after validating all HWS mappings");
+		SYSLOG("ngreen", "V320: created Gen11 VF MSI source after late allocation and HWS validation");
 	}
 	using LifecycleMethod = void (*)(void *);
 	// A VF has to admit its MSI consumer before CTB enable. Unlike the physical
