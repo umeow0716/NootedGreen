@@ -2391,6 +2391,18 @@ def macho_inventory(path):
         hashlib.sha256(image[stop_start:stop_start + 0x3e4]).hexdigest() == \
         "ba1ef863b3a8aeb1137a044992ca41770f2145fd55ac3df006440cb2197302ca", \
         f"{path}: changed complete reviewed native accelerator stop body"
+    # Native Intel stop drops +0x1260 before its provider-gated inherited stop;
+    # that base stop can release the kernel task and its installed mappings.
+    # This exact inverted owner order is why the VF wrapper must retain and
+    # temporarily republish the manager rather than weakening release_pte.
+    assert image[0x266bd:0x266d8] == bytes.fromhex(
+        "49 8b bf 60 12 00 00 48 85 ff 74 06 48 8b 07 ff 50 28 "
+        "31 c0 49 89 87 60 12 00 00"), \
+        f"{path}: changed native memory-manager release/clear ordering"
+    assert image[0x266d8:0x266f5] == bytes.fromhex(
+        "4d 85 f6 74 13 48 8b 05 c4 1a 0a 00 4c 89 ff 4c 89 f6 "
+        "ff 90 d8 05 00 00 e8 41 13 fe ff"), \
+        f"{path}: changed inherited-stop/task-stop ordering after manager clear"
     for address, instruction in (
             (0x2650c, "49 8b bf 50 12 00 00 48 8b 07"),
             (0x26529, "ff 91 48 01 00 00"),
@@ -5933,6 +5945,181 @@ def callback_owner_lifetime_mutations(path):
     print("PASS: twenty callback-owner binding/drain/trace mutations rejected")
 
 
+def stop_memory_manager_lifetime_contract(source, path="<source>"):
+    """Pin the VF-only manager hold across Tahoe's inverted stop ordering."""
+    normalized = "".join(source.split())
+    for token in (
+            "OSObject*gVfStopMemoryManager=nullptr;",
+            "void*gVfStopMemoryManagerAccelerator=nullptr;",
+            "IOThreadgVfStopMemoryManagerThread=nullptr;"):
+        if token not in normalized:
+            raise AssertionError(
+                f"{path}: missing retained stop memory-manager state: {token}")
+
+    stop = "".join(function_body(
+        source, "void Gen11::acceleratorStop(void *that, void *provider)").split())
+    capture = "auto*stopMemoryManager=getMember<OSObject*>(that,0x1260);"
+    retain = "stopMemoryManager->retain();"
+    publish_owner = "gVfStopMemoryManager=stopMemoryManager;"
+    publish_accelerator = "gVfStopMemoryManagerAccelerator=that;"
+    publish_thread = "gVfStopMemoryManagerThread=IOThreadSelf();"
+    native = "callback->oAcceleratorStop)(that,provider);"
+    null_field = "getMember<void*>(that,0x1260)!=nullptr"
+    cleanup_owner = "gVfStopMemoryManager=nullptr;"
+    cleanup_accelerator = "gVfStopMemoryManagerAccelerator=nullptr;"
+    cleanup_thread = "gVfStopMemoryManagerThread=nullptr;"
+    release = "stopMemoryManager->release();"
+    for token in (
+            "gVfStopMemoryManager||gVfStopMemoryManagerAccelerator||gVfStopMemoryManagerThread",
+            capture, retain, publish_owner, publish_accelerator, publish_thread,
+            native, null_field, "vfEnsurePageTableUpdateLock()",
+            "IORecursiveLockLock(gVfPageTableUpdateLock);", cleanup_owner,
+            cleanup_accelerator, cleanup_thread, release,
+            "IORecursiveLockUnlock(gVfPageTableUpdateLock);"):
+        if token not in stop:
+            raise AssertionError(
+                f"{path}: incomplete native-stop memory-manager hold: {token}")
+    capture_at = stop.index(capture)
+    retain_at = stop.index(retain, capture_at)
+    owner_at = stop.index(publish_owner, retain_at)
+    accelerator_at = stop.index(publish_accelerator, owner_at)
+    thread_at = stop.index(publish_thread, accelerator_at)
+    native_at = stop.index(native, thread_at)
+    null_at = stop.index(null_field, native_at)
+    lock_at = stop.index("IORecursiveLockLock(gVfPageTableUpdateLock);", null_at)
+    republish_at = stop.index(
+        "getMember<OSObject*>(that,0x1260)=stopMemoryManager;", lock_at)
+    release_at = stop.index(release, republish_at)
+    clear_field_at = stop.index(
+        "getMember<OSObject*>(that,0x1260)=nullptr;", release_at)
+    clear_at = stop.index(cleanup_owner, clear_field_at)
+    unlock_at = stop.index("IORecursiveLockUnlock(gVfPageTableUpdateLock);", clear_at)
+    if not capture_at < retain_at < owner_at < accelerator_at < thread_at < \
+            native_at < null_at < lock_at < republish_at < release_at < \
+            clear_field_at < clear_at < unlock_at:
+        raise AssertionError(
+            f"{path}: null-provider manager hold escaped native-stop lifetime")
+
+    base = "".join(function_body(
+        source,
+        "void Gen11::vfBaseAcceleratorStop(void *that, void *provider)").split())
+    detach = "!vfDetachNativeCallbackSourcesBeforeBaseStop(that)"
+    take = "stopMemoryManager=gVfStopMemoryManager;"
+    owner_check = "gVfStopMemoryManagerAccelerator!=that"
+    thread_check = "gVfStopMemoryManagerThread!=IOThreadSelf()"
+    empty_field = "getMember<void*>(that,0x1260)!=nullptr"
+    lock = "IORecursiveLockLock(gVfPageTableUpdateLock);"
+    republish = "getMember<OSObject*>(that,0x1260)=stopMemoryManager;"
+    unlock = "IORecursiveLockUnlock(gVfPageTableUpdateLock);"
+    original = "callback->oVfBaseAcceleratorStop)(that,provider);"
+    same_field = "getMember<OSObject*>(that,0x1260)!=stopMemoryManager"
+    clear_field = "getMember<OSObject*>(that,0x1260)=nullptr;"
+    clear_owner = "gVfStopMemoryManager=nullptr;"
+    base_release = "stopMemoryManager->release();"
+    for token in (
+            detach, take, "gVfCtbEverEnabled&&!stopMemoryManager", owner_check,
+            thread_check, empty_field, "vfEnsurePageTableUpdateLock()", lock,
+            republish, original, same_field, clear_field, clear_owner,
+            "gVfStopMemoryManagerAccelerator=nullptr;",
+            "gVfStopMemoryManagerThread=nullptr;", base_release, unlock):
+        if token not in base:
+            raise AssertionError(
+                f"{path}: incomplete inherited-stop manager lifetime: {token}")
+    detach_at = base.index(detach)
+    take_at = base.index(take, detach_at)
+    owner_check_at = base.index(owner_check, take_at)
+    thread_check_at = base.index(thread_check, owner_check_at)
+    empty_at = base.index(empty_field, thread_check_at)
+    lock_at = base.index(lock, empty_at)
+    republish_at = base.index(republish, lock_at)
+    unlock_publish_at = base.index(unlock, republish_at)
+    original_at = base.index(original, unlock_publish_at)
+    relock_at = base.index(lock, original_at)
+    same_at = base.index(same_field, relock_at)
+    release_at = base.index(base_release, same_at)
+    clear_field_at = base.index(clear_field, release_at)
+    clear_owner_at = base.index(clear_owner, clear_field_at)
+    unlock_at = base.index(unlock, clear_owner_at)
+    if not detach_at < take_at < owner_check_at < thread_check_at < empty_at < \
+            lock_at < republish_at < unlock_publish_at < original_at < \
+            relock_at < same_at < release_at < clear_field_at < \
+            clear_owner_at < unlock_at:
+        raise AssertionError(
+            f"{path}: inherited stop does not bracket mapping release with retained manager")
+
+    release_wrapper = "".join(function_body(
+        source,
+        "bool Gen11::vfReleasePageTablesForTask(void *that,").split())
+    if "PANIC_COND(!that||!task||!mapping||" not in release_wrapper or \
+            "callback->oVfReleasePageTablesForTask)(that,task,mapping);" not in release_wrapper:
+        raise AssertionError(
+            f"{path}: page-table release was weakened instead of repairing manager lifetime")
+
+
+def stop_memory_manager_lifetime_mutations(path):
+    source = pathlib.Path(path).read_text()
+
+    def mutate_function(signature, before, after):
+        body = function_body(source, signature)
+        if body.count(before) != 1:
+            raise AssertionError(f"ambiguous stop manager mutation: {before}")
+        return source.replace(body, body.replace(before, after, 1), 1)
+
+    stop = "void Gen11::acceleratorStop(void *that, void *provider)"
+    base = "void Gen11::vfBaseAcceleratorStop(void *that, void *provider)"
+    mutations = (
+        ("retain", mutate_function(stop, "stopMemoryManager->retain();", "")),
+        ("stop owner", mutate_function(stop,
+            "gVfStopMemoryManagerAccelerator = that;", "")),
+        ("stop thread", mutate_function(stop,
+            "gVfStopMemoryManagerThread = IOThreadSelf();", "")),
+        ("null-provider field", mutate_function(stop,
+            "getMember<void *>(that, 0x1260) != nullptr",
+            "getMember<void *>(that, 0x1260) == nullptr")),
+        ("base live admission", mutate_function(base,
+            "gVfCtbEverEnabled && !stopMemoryManager",
+            "gVfCtbEverEnabled && stopMemoryManager")),
+        ("base thread", mutate_function(base,
+            "gVfStopMemoryManagerAccelerator != that ||\n"
+            "\t\t\t\t           gVfStopMemoryManagerThread != IOThreadSelf() ||\n"
+            "\t\t\t\t           getMember<void *>(that, 0x1260) != nullptr,\n"
+            "\t\t\t\t\t\"ngreen\", \"VF base stop cannot republish retained memory manager\"",
+            "gVfStopMemoryManagerAccelerator != that ||\n"
+            "\t\t\t\t           gVfStopMemoryManagerThread == IOThreadSelf() ||\n"
+            "\t\t\t\t           getMember<void *>(that, 0x1260) != nullptr,\n"
+            "\t\t\t\t\t\"ngreen\", \"VF base stop cannot republish retained memory manager\"")),
+        ("base republish", mutate_function(base,
+            "getMember<OSObject *>(that, 0x1260) = stopMemoryManager;", "")),
+        ("base publish unlock", mutate_function(base,
+            "\t\t\t\t// Do not carry the page-table lock into inherited base stop: its\n"
+            "\t\t\t\t// accelerator-mutex acquisition is the opposite order used by\n"
+            "\t\t\t\t// ordinary mapping callers.  The retained object and closed producer\n"
+            "\t\t\t\t// gate keep the publication valid; each nested mapping transaction\n"
+            "\t\t\t\t// takes this lock independently.\n"
+            "\t\t\t\tIORecursiveLockUnlock(gVfPageTableUpdateLock);",
+            "")),
+        ("base clear", mutate_function(base,
+            "getMember<OSObject *>(that, 0x1260) = nullptr;", "")),
+        ("base release", mutate_function(base,
+            "stopMemoryManager->release();", "")),
+        ("release bypass", mutate_function(
+            "bool Gen11::vfReleasePageTablesForTask(void *that,",
+            "PANIC_COND(!that || !task || !mapping ||",
+            "PANIC_COND(!task || !mapping ||")),
+    )
+    for label, changed in mutations:
+        if changed == source:
+            raise AssertionError(
+                f"missing stop memory-manager lifetime mutation target: {label}")
+        try:
+            stop_memory_manager_lifetime_contract(changed, path)
+        except (AssertionError, ValueError):
+            continue
+        raise AssertionError(
+            f"{path}: escaped stop memory-manager lifetime mutation: {label}")
+    print("PASS: eleven stop memory-manager ownership/order mutations rejected")
+
+
 def source_contract(path):
     source = pathlib.Path(path).read_text()
     legacy_gpu_producer_containment_contract(source, path)
@@ -5947,6 +6134,7 @@ def source_contract(path):
     cache_type_update_transaction_contract(source, path)
     page_table_common_serialization_contract(source, path)
     callback_owner_lifetime_contract(source, path)
+    stop_memory_manager_lifetime_contract(source, path)
     for signature in ("bool Gen11::vfAttachContextDesc(",
                       "void Gen11::vfDetachContextDesc(",
                       "bool Gen11::vfSubmitWorkItem("):
@@ -7324,6 +7512,7 @@ def main():
     page_table_common_serialization_mutations(sys.argv[1])
     page_table_common_serialization_model()
     callback_owner_lifetime_mutations(sys.argv[1])
+    stop_memory_manager_lifetime_mutations(sys.argv[1])
     v312_diagnostic_contract(pathlib.Path(sys.argv[1]).read_text(), sys.argv[1])
     v312_diagnostic_mutations(sys.argv[1])
     v316_start_boundary_contract(

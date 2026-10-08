@@ -167,6 +167,17 @@ uint32_t gVfDoorbellCount = 0;
 void *gVfGlobalPageTable = nullptr;
 void *gVfHardwareGuc = nullptr;
 void *gVfAccelerator = nullptr;
+// Tahoe's IntelAccelerator::stop releases and clears +0x1260 before invoking
+// the inherited IOGraphicsAccelerator2::stop.  That inherited body then drops
+// the kernel task, whose stamp/scratch mappings can still enter release_pte and
+// resolve their IGMemoryManager through the now-cleared accelerator field.
+// Keep exactly one retained manager across native stop and republish only for
+// the synchronous inherited-stop extent.  These three fields are owned by the
+// exactly-once accelerator-stop thread; the page-table recursive lock protects
+// the temporary +0x1260 publication and every nested mapping/table destructor.
+OSObject *gVfStopMemoryManager = nullptr;
+void *gVfStopMemoryManagerAccelerator = nullptr;
+IOThread gVfStopMemoryManagerThread = nullptr;
 mach_vm_address_t gIOAccelCommandPoolInit = 0;
 bool gVfGGTTReady = false;
 NGVfRuntime::Registers gVfRuntimeRegisters = {};
@@ -5794,15 +5805,60 @@ void Gen11::acceleratorStop(void *that, void *provider)
 			"ngreen", "Native VF stop reached before producer closure/drain");
 		PANIC_COND(!OSCompareAndSwap(0, 1, &gVfDeviceStopping), "ngreen",
 			"Duplicate VF device-stopping publication");
+		PANIC_COND(gVfStopMemoryManager ||
+		           gVfStopMemoryManagerAccelerator ||
+		           gVfStopMemoryManagerThread,
+			"ngreen", "Native VF stop found a stale memory-manager hold");
+		auto *stopMemoryManager =
+			getMember<OSObject *>(that, 0x1260);
+		if (stopMemoryManager) {
+			stopMemoryManager->retain();
+			gVfStopMemoryManager = stopMemoryManager;
+			gVfStopMemoryManagerAccelerator = that;
+			gVfStopMemoryManagerThread = IOThreadSelf();
+		}
 		OSSynchronizeIO();
-		SYSLOG("ngreen", "V317: entering exactly-once native VF stop phase thread=%p",
-		       reinterpret_cast<void *>(current_thread()));
+		SYSLOG("ngreen", "V319: entering exactly-once native VF stop phase thread=%p manager-held=%u",
+		       reinterpret_cast<void *>(current_thread()),
+		       static_cast<unsigned int>(stopMemoryManager != nullptr));
 		{
 			VfDeviceCacheRetirementScope retirement(that);
 			FunctionCast(acceleratorStop,
 			             callback->oAcceleratorStop)(that, provider);
 		}
 		OSSynchronizeIO();
+		if (stopMemoryManager) {
+			if (gVfStopMemoryManager) {
+				// A null-provider native rollback deliberately skips inherited
+				// base stop.  Native Intel stop has nevertheless dropped and
+				// cleared its field owner, so release our sole retained hold now.
+				PANIC_COND(gVfStopMemoryManager != stopMemoryManager ||
+				           gVfStopMemoryManagerAccelerator != that ||
+				           gVfStopMemoryManagerThread != IOThreadSelf() ||
+				           getMember<void *>(that, 0x1260) != nullptr,
+					"ngreen", "Native VF stop returned with inconsistent memory-manager hold");
+				PANIC_COND(!vfEnsurePageTableUpdateLock(), "ngreen",
+					"Cannot close skipped VF base-stop memory-manager hold");
+				IORecursiveLockLock(gVfPageTableUpdateLock);
+				// Restore the native release-before-clear invariant for the
+				// deferred final reference as well.  The original release could
+				// not call free while our extra retain was outstanding.
+				getMember<OSObject *>(that, 0x1260) = stopMemoryManager;
+				OSSynchronizeIO();
+				stopMemoryManager->release();
+				getMember<OSObject *>(that, 0x1260) = nullptr;
+				gVfStopMemoryManager = nullptr;
+				gVfStopMemoryManagerAccelerator = nullptr;
+				gVfStopMemoryManagerThread = nullptr;
+				OSSynchronizeIO();
+				IORecursiveLockUnlock(gVfPageTableUpdateLock);
+				SYSLOG("ngreen", "V319: released memory-manager hold after null-provider native stop");
+			} else {
+				PANIC_COND(gVfStopMemoryManagerAccelerator ||
+				           gVfStopMemoryManagerThread,
+					"ngreen", "Inherited VF base stop left partial memory-manager hold state");
+			}
+		}
 		PANIC_COND(getMember<IOTimerEventSource *>(that, 0x1460) != nullptr,
 			"ngreen", "Native VF stop returned with a live DPSM timer owner");
 		if (!provider) {
@@ -5816,7 +5872,7 @@ void Gen11::acceleratorStop(void *that, void *provider)
 		    NGVfAcceleratorStop::Phase::NativeStopActive,
 		    NGVfAcceleratorStop::Phase::NativeStopComplete), "ngreen",
 			"Cannot publish completed native VF stop");
-		SYSLOG("ngreen", "V317: completed exactly-once native VF stop");
+		SYSLOG("ngreen", "V319: completed exactly-once native VF stop");
 	};
 
 	auto phase = vfAcceleratorStopPhase();
@@ -5893,6 +5949,8 @@ void Gen11::vfBaseAcceleratorStop(void *that, void *provider)
 {
 	PANIC_COND(!callback || !callback->oVfBaseAcceleratorStop,
 		"ngreen", "Missing native IOAccelerator stop trampoline");
+	OSObject *stopMemoryManager = nullptr;
+	bool stopMemoryManagerPublished = false;
 	if (gVfIdentity == VfIdentity::Virtual && that == gVfAccelerator) {
 		OSSynchronizeIO();
 		if (gVfDeviceStopping) {
@@ -5902,6 +5960,38 @@ void Gen11::vfBaseAcceleratorStop(void *that, void *provider)
 			PANIC_COND(!vfDetachNativeCallbackSourcesBeforeBaseStop(that),
 				"ngreen", "Cannot drain VF periodic/fallback callback owners before workloop teardown");
 			SYSLOG("ngreen", "V301: synchronously detached VF periodic/fallback sources before base workloop teardown");
+			stopMemoryManager = gVfStopMemoryManager;
+			PANIC_COND((stopMemoryManager == nullptr) !=
+			           (gVfStopMemoryManagerAccelerator == nullptr) ||
+			           (stopMemoryManager == nullptr) !=
+			           (gVfStopMemoryManagerThread == nullptr),
+				"ngreen", "VF base stop observed partial memory-manager hold state");
+			PANIC_COND(gVfCtbEverEnabled && !stopMemoryManager,
+				"ngreen", "Live VF base stop has no retained memory manager");
+			if (stopMemoryManager) {
+				PANIC_COND(gVfStopMemoryManagerAccelerator != that ||
+				           gVfStopMemoryManagerThread != IOThreadSelf() ||
+				           getMember<void *>(that, 0x1260) != nullptr,
+					"ngreen", "VF base stop cannot republish retained memory manager");
+				PANIC_COND(!vfEnsurePageTableUpdateLock(), "ngreen",
+					"VF base stop cannot serialize memory-manager lifetime");
+				IORecursiveLockLock(gVfPageTableUpdateLock);
+				PANIC_COND(gVfStopMemoryManager != stopMemoryManager ||
+				           gVfStopMemoryManagerAccelerator != that ||
+				           gVfStopMemoryManagerThread != IOThreadSelf() ||
+				           getMember<void *>(that, 0x1260) != nullptr,
+					"ngreen", "VF base stop lost memory-manager ownership before publication");
+				getMember<OSObject *>(that, 0x1260) = stopMemoryManager;
+				stopMemoryManagerPublished = true;
+				OSSynchronizeIO();
+				// Do not carry the page-table lock into inherited base stop: its
+				// accelerator-mutex acquisition is the opposite order used by
+				// ordinary mapping callers.  The retained object and closed producer
+				// gate keep the publication valid; each nested mapping transaction
+				// takes this lock independently.
+				IORecursiveLockUnlock(gVfPageTableUpdateLock);
+				SYSLOG("ngreen", "V319: republished retained memory manager for inherited VF base stop");
+			}
 		} else {
 			PANIC_COND(gVfSchedulerFirmwareReady || gVfCtbEverEnabled ||
 			           gVfExternalProducerGate != 0 ||
@@ -5912,6 +6002,29 @@ void Gen11::vfBaseAcceleratorStop(void *that, void *provider)
 	}
 	FunctionCast(vfBaseAcceleratorStop,
 	             callback->oVfBaseAcceleratorStop)(that, provider);
+	if (stopMemoryManagerPublished) {
+		// Re-enter after Apple has dropped its accelerator locks.  This waits
+		// for every synchronous mapping/PTE transaction started by base stop
+		// before the retained manager is finally destroyed.
+		IORecursiveLockLock(gVfPageTableUpdateLock);
+		OSSynchronizeIO();
+		PANIC_COND(getMember<OSObject *>(that, 0x1260) != stopMemoryManager ||
+		           gVfStopMemoryManager != stopMemoryManager ||
+		           gVfStopMemoryManagerAccelerator != that ||
+		           gVfStopMemoryManagerThread != IOThreadSelf(),
+			"ngreen", "Inherited VF base stop changed retained memory-manager ownership");
+		// Preserve Intel's native manager release-before-field-clear ABI.  Base
+		// task/mapping destruction has completed synchronously while the retained
+		// manager was published, so this final release now owns manager free.
+		stopMemoryManager->release();
+		getMember<OSObject *>(that, 0x1260) = nullptr;
+		gVfStopMemoryManager = nullptr;
+		gVfStopMemoryManagerAccelerator = nullptr;
+		gVfStopMemoryManagerThread = nullptr;
+		OSSynchronizeIO();
+		IORecursiveLockUnlock(gVfPageTableUpdateLock);
+		SYSLOG("ngreen", "V319: completed inherited VF mapping release before memory-manager free");
+	}
 }
 
 int Gen11::vfEventMachineFinishAllStamps(void *that)
