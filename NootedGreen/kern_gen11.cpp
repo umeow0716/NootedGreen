@@ -1744,7 +1744,7 @@ bool vfNativeCallbackBindingsReady(void *accelerator)
 	auto *eventMachine = getMember<void *>(accelerator, 0x380);
 	auto *scheduler = getMember<void *>(accelerator, 0x1250);
 	auto *dpsmTimer = getMember<IOTimerEventSource *>(accelerator, 0x1460);
-	if (!workloop || !eventMachine || !scheduler || !dpsmTimer)
+	if (!workloop || !eventMachine || !scheduler)
 		return false;
 
 	auto *fallback = getMember<IOInterruptEventSource *>(eventMachine, 0xD30);
@@ -1783,15 +1783,22 @@ bool vfNativeCallbackBindingsReady(void *accelerator)
 		periodicRefCount <= 1 &&
 		fallbackRegistered == fallbackActive &&
 		periodicRefCount == (fallbackActive ? 1ULL : 0ULL);
+	// Tahoe initializes +0x1460 to null, asks the power controller whether an
+	// idle timer is needed, and branches directly past construction when that
+	// answer is non-negative.  A null DPSM timer is therefore a complete native
+	// state, not a missing callback owner.  If native start did create one, keep
+	// requiring the exact accelerator workloop binding before publication.
+	const bool dpsmBindingReady =
+		!dpsmTimer || dpsmTimer->getWorkLoop() == workloop;
 	const bool sourceBindingsReady =
 		getMember<uint8_t>(eventMachine, 0xD88) == 1 &&
 		fallback->getWorkLoop() == workloop &&
 		periodicTimer->getWorkLoop() == workloop &&
-		dpsmTimer->getWorkLoop() == workloop;
-	SYSLOG("ngreen", "V324: native callback ownership fallback=%llu bitmap=%llu secondary=%llu periodicRefs=%llu periodicMembers=%u registered=%d coherent=%d bindings=%d",
+		dpsmBindingReady;
+	SYSLOG("ngreen", "V325: native callback ownership fallback=%llu bitmap=%llu secondary=%llu periodicRefs=%llu periodicMembers=%u registered=%d coherent=%d bindings=%d dpsm=%d",
 	       fallbackUsers, fallbackBitmapUsers, secondaryStampUsers, periodicRefCount,
 	       periodicMemberCount, fallbackRegistered, periodicOwnershipCoherent,
-	       sourceBindingsReady);
+	       sourceBindingsReady, dpsmTimer != nullptr);
 	return periodicOwnershipCoherent && sourceBindingsReady;
 }
 

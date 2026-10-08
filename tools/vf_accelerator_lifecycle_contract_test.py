@@ -2737,9 +2737,19 @@ def macho_inventory(path):
         raise AssertionError(
             f"{path}: scheduler-4 firmware virtual slot changed")
 
-    # Native start installs a DPSM software timer after engine admission. Its
-    # only scheduler decision must dispatch through the routed isGpuIdle slot;
-    # the local callback-table endpoint is an exact no-op, not hardware PM.
+    # Native start initializes the DPSM timer field to null, then conditionally
+    # installs a software timer after engine admission.  A non-negative power-
+    # controller result skips construction and is a successful native state;
+    # only a requested timer whose factory returns null takes failure 0x215.
+    # If present, its only scheduler decision must dispatch through the routed
+    # isGpuIdle slot; the local callback-table endpoint is an exact no-op, not
+    # hardware PM.
+    assert image[0x2460d:0x24618] == bytes.fromhex(
+        "49 c7 85 60 14 00 00 00 00 00 00"), \
+        f"{path}: native start no longer initializes the optional DPSM timer to null"
+    assert image[0x2463a:0x2463f] == bytes.fromhex("45 39 27 79 6a") and \
+        0x2463f + struct.unpack_from("b", image, 0x2463e)[0] == 0x246a9, \
+        f"{path}: native start optional DPSM skip edge changed"
     for vtable, idle in ((SCHEDULER4_VTABLE, SCHEDULER4_IS_GPU_IDLE),
                          (SCHEDULER5_VTABLE, SCHEDULER5_IS_GPU_IDLE)):
         idle_slot = struct.unpack_from(
@@ -5679,6 +5689,7 @@ def callback_owner_lifetime_contract(source, path="<source>"):
             "getMember<void*>(accelerator,0x380)",
             "getMember<void*>(accelerator,0x1250)",
             "getMember<IOTimerEventSource*>(accelerator,0x1460)",
+            "if(!workloop||!eventMachine||!scheduler)returnfalse;",
             "getMember<IOInterruptEventSource*>(eventMachine,0xD30)",
             "getMember<OSSet*>(scheduler,0x438)",
             "getMember<IOLock*>(scheduler,0x440)",
@@ -5698,11 +5709,12 @@ def callback_owner_lifetime_contract(source, path="<source>"):
             "periodicRefCount<=1",
             "fallbackRegistered==fallbackActive",
             "periodicRefCount==(fallbackActive?1ULL:0ULL)",
-            "V324:nativecallbackownershipfallback=%llubitmap=%llusecondary=%lluperiodicRefs=%lluperiodicMembers=%uregistered=%dcoherent=%dbindings=%d",
+            "constbooldpsmBindingReady=!dpsmTimer||dpsmTimer->getWorkLoop()==workloop;",
+            "V325:nativecallbackownershipfallback=%llubitmap=%llusecondary=%lluperiodicRefs=%lluperiodicMembers=%uregistered=%dcoherent=%dbindings=%ddpsm=%d",
             "returnperiodicOwnershipCoherent&&sourceBindingsReady;",
             "fallback->getWorkLoop()==workloop",
             "periodicTimer->getWorkLoop()==workloop",
-            "dpsmTimer->getWorkLoop()==workloop"):
+            "dpsmBindingReady"):
         if token not in normalized_ready:
             raise AssertionError(f"{path}: incomplete native callback binding admission: {token}")
 
@@ -5918,6 +5930,9 @@ def callback_owner_lifetime_mutations(path):
     detach = "bool vfDetachNativeCallbackSourcesBeforeBaseStop(void *accelerator)"
     wrapper = "void Gen11::vfBaseAcceleratorStop(void *that, void *provider)"
     mutations = (
+        ("ready optional DPSM root", mutate_function(ready,
+            "if (!workloop || !eventMachine || !scheduler)",
+            "if (!workloop || !eventMachine || !scheduler || !dpsmTimer)")),
         ("ready flag", mutate_function(ready,
             "getMember<uint8_t>(eventMachine, 0xD88) == 1",
             "getMember<uint8_t>(eventMachine, 0xD88) == 0")),
@@ -5936,6 +5951,9 @@ def callback_owner_lifetime_mutations(path):
         ("ready binding", mutate_function(ready,
             "fallback->getWorkLoop() == workloop",
             "fallback->getWorkLoop() != workloop")),
+        ("ready optional DPSM", mutate_function(ready,
+            "!dpsmTimer || dpsmTimer->getWorkLoop() == workloop",
+            "dpsmTimer && dpsmTimer->getWorkLoop() == workloop")),
         ("detach unlock", mutate_function(detach,
             "IOLockUnlock(periodicLock);\n\tif (!callbacksEmpty)",
             "if (!callbacksEmpty)")),
@@ -5990,7 +6008,7 @@ def callback_owner_lifetime_mutations(path):
         except (AssertionError, ValueError):
             continue
         raise AssertionError(f"{path}: escaped callback-owner lifetime mutation: {label}")
-    print("PASS: twenty-three callback-owner binding/drain/trace mutations rejected")
+    print("PASS: twenty-five callback-owner binding/drain/trace mutations rejected")
 
 
 def stop_memory_manager_lifetime_contract(source, path="<source>"):
