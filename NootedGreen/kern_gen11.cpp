@@ -1754,21 +1754,45 @@ bool vfNativeCallbackBindingsReady(void *accelerator)
 	if (!fallback || !periodicSet || !periodicLock || !periodicTimer)
 		return false;
 
-	// No client can reach this unpublished accelerator yet.  The initial
-	// callback collections therefore have to be empty, and all three native
-	// raw-owner sources must already be bound to the one accelerator workloop.
+	// No client can reach this unpublished accelerator yet, but native engine
+	// bootstrap has already enabled its kernel-context stamps.  On the admitted
+	// scheduler-4 path each active fallback stamp owns one bit in eventMachine
+	// +0xd40..0xd7f, while the transition from zero to nonzero fallback users
+	// registers the single +0xd30 source with the scheduler periodic set.  The
+	// scheduler's unchecked +0x450 reference counter therefore equals the set
+	// cardinality (zero or one) here; it does not equal the number of fallback
+	// stamps.  The separate +0xd90 counter also covers hardware-backed stamp
+	// paths and is valid while nonzero.  Empty collections are required only
+	// after finishAllStamps() at the stop boundary below.
 	IOLockLock(periodicLock);
-	const bool callbacksEmpty =
-		getMember<uint64_t>(eventMachine, 0xD80) == 0 &&
-		getMember<uint64_t>(eventMachine, 0xD90) == 0 &&
-		getMember<uint64_t>(scheduler, 0x450) == 0 &&
-		periodicSet->getCount() == 0;
+	const auto fallbackUsers = getMember<uint64_t>(eventMachine, 0xD80);
+	const auto secondaryStampUsers = getMember<uint64_t>(eventMachine, 0xD90);
+	const auto periodicRefCount = getMember<uint64_t>(scheduler, 0x450);
+	const auto periodicMemberCount = periodicSet->getCount();
+	const bool fallbackRegistered = periodicSet->containsObject(fallback);
+	uint64_t fallbackBitmapUsers = 0;
+	for (size_t index = 0; index < 8; index++)
+		fallbackBitmapUsers += __builtin_popcountll(
+			getMember<uint64_t>(eventMachine, 0xD40 + index * sizeof(uint64_t)));
 	IOLockUnlock(periodicLock);
-	return callbacksEmpty &&
-	       getMember<uint8_t>(eventMachine, 0xD88) == 1 &&
-	       fallback->getWorkLoop() == workloop &&
-	       periodicTimer->getWorkLoop() == workloop &&
-	       dpsmTimer->getWorkLoop() == workloop;
+
+	const bool fallbackActive = fallbackUsers != 0;
+	const bool periodicOwnershipCoherent =
+		fallbackUsers == fallbackBitmapUsers &&
+		periodicRefCount == periodicMemberCount &&
+		periodicRefCount <= 1 &&
+		fallbackRegistered == fallbackActive &&
+		periodicRefCount == (fallbackActive ? 1ULL : 0ULL);
+	const bool sourceBindingsReady =
+		getMember<uint8_t>(eventMachine, 0xD88) == 1 &&
+		fallback->getWorkLoop() == workloop &&
+		periodicTimer->getWorkLoop() == workloop &&
+		dpsmTimer->getWorkLoop() == workloop;
+	SYSLOG("ngreen", "V324: native callback ownership fallback=%llu bitmap=%llu secondary=%llu periodicRefs=%llu periodicMembers=%u registered=%d coherent=%d bindings=%d",
+	       fallbackUsers, fallbackBitmapUsers, secondaryStampUsers, periodicRefCount,
+	       periodicMemberCount, fallbackRegistered, periodicOwnershipCoherent,
+	       sourceBindingsReady);
+	return periodicOwnershipCoherent && sourceBindingsReady;
 }
 
 bool vfDetachNativeCallbackSourcesBeforeBaseStop(void *accelerator)

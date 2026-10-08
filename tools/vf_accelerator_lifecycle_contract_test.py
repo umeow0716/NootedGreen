@@ -2680,13 +2680,22 @@ def macho_inventory(path):
         assert len(direct_branches(owner, target)) == 1, f"{path}: changed stamp IRQ graph edge"
 
     accelerator_start = value(ACCELERATOR_START)
-    # Reviewed direct callers, not a complete indirect-call reachability proof.
-    # Event-machine fallback remains relevant to VF type 4; streamer5 callers
-    # must not be mistaken for the admitted scheduler4 implementation.
+    # Complete pinned payload reachability for the non-virtual periodic
+    # producers. Event-machine fallback is the only scheduler4 enable path;
+    # the other enable and both non-fallback disables belong to rejected
+    # streamer5. There are no address-taken or stored-pointer call roots.
     periodic_enable = "__ZN11IGScheduler33enablePeriodicEventTimerInterruptEP22IOInterruptEventSource"
     periodic_disable = "__ZN11IGScheduler34disablePeriodicEventTimerInterruptEP22IOInterruptEventSource"
     assert direct_branches(periodic_enable, periodic_disable) == [], \
         f"{path}: imported periodic unlock placeholder became a fictitious local disable edge"
+    assert text_direct_branches(periodic_enable) == [0x16232, 0x39c76] and \
+        text_direct_branches(periodic_disable) == [0x162de, 0x3a033, 0x3aab4], \
+        f"{path}: periodic producer gained an unreviewed direct branch"
+    assert text_rip_lea_references(periodic_enable) == [] and \
+        text_rip_lea_references(periodic_disable) == [] and \
+        loaded_pointer_references(periodic_enable) == [] and \
+        loaded_pointer_references(periodic_disable) == [], \
+        f"{path}: periodic producer gained an indirect call root"
     for owner, target, address in (
             ("__ZN19IGAccelEventMachine20enableStampInterruptEii", periodic_enable, 0x16232),
             ("__ZN19IGAccelEventMachine21disableStampInterruptEii", periodic_disable, 0x162de),
@@ -5675,13 +5684,22 @@ def callback_owner_lifetime_contract(source, path="<source>"):
             "getMember<IOLock*>(scheduler,0x440)",
             "getMember<IOTimerEventSource*>(scheduler,0x448)",
             "IOLockLock(periodicLock);",
+            "constautofallbackUsers=getMember<uint64_t>(eventMachine,0xD80);",
+            "constautosecondaryStampUsers=getMember<uint64_t>(eventMachine,0xD90);",
+            "constautoperiodicRefCount=getMember<uint64_t>(scheduler,0x450);",
+            "constautoperiodicMemberCount=periodicSet->getCount();",
+            "constboolfallbackRegistered=periodicSet->containsObject(fallback);",
+            "for(size_tindex=0;index<8;index++)",
+            "fallbackBitmapUsers+=__builtin_popcountll(",
             "getMember<uint8_t>(eventMachine,0xD88)==1",
-            "getMember<uint64_t>(eventMachine,0xD80)==0",
-            "getMember<uint64_t>(eventMachine,0xD90)==0",
-            "getMember<uint64_t>(scheduler,0x450)==0",
-            "periodicSet->getCount()==0",
             "IOLockUnlock(periodicLock);",
-            "returncallbacksEmpty&&",
+            "fallbackUsers==fallbackBitmapUsers",
+            "periodicRefCount==periodicMemberCount",
+            "periodicRefCount<=1",
+            "fallbackRegistered==fallbackActive",
+            "periodicRefCount==(fallbackActive?1ULL:0ULL)",
+            "V324:nativecallbackownershipfallback=%llubitmap=%llusecondary=%lluperiodicRefs=%lluperiodicMembers=%uregistered=%dcoherent=%dbindings=%d",
+            "returnperiodicOwnershipCoherent&&sourceBindingsReady;",
             "fallback->getWorkLoop()==workloop",
             "periodicTimer->getWorkLoop()==workloop",
             "dpsmTimer->getWorkLoop()==workloop"):
@@ -5903,8 +5921,18 @@ def callback_owner_lifetime_mutations(path):
         ("ready flag", mutate_function(ready,
             "getMember<uint8_t>(eventMachine, 0xD88) == 1",
             "getMember<uint8_t>(eventMachine, 0xD88) == 0")),
-        ("ready set", mutate_function(ready,
-            "periodicSet->getCount() == 0", "periodicSet->getCount() != 0")),
+        ("ready bitmap", mutate_function(ready,
+            "fallbackUsers == fallbackBitmapUsers",
+            "fallbackUsers != fallbackBitmapUsers")),
+        ("ready set cardinality", mutate_function(ready,
+            "periodicRefCount == periodicMemberCount",
+            "periodicRefCount != periodicMemberCount")),
+        ("ready fallback registration", mutate_function(ready,
+            "fallbackRegistered == fallbackActive",
+            "fallbackRegistered != fallbackActive")),
+        ("ready periodic owner", mutate_function(ready,
+            "periodicRefCount == (fallbackActive ? 1ULL : 0ULL)",
+            "periodicRefCount != (fallbackActive ? 1ULL : 0ULL)")),
         ("ready binding", mutate_function(ready,
             "fallback->getWorkLoop() == workloop",
             "fallback->getWorkLoop() != workloop")),
@@ -5962,7 +5990,7 @@ def callback_owner_lifetime_mutations(path):
         except (AssertionError, ValueError):
             continue
         raise AssertionError(f"{path}: escaped callback-owner lifetime mutation: {label}")
-    print("PASS: twenty callback-owner binding/drain/trace mutations rejected")
+    print("PASS: twenty-three callback-owner binding/drain/trace mutations rejected")
 
 
 def stop_memory_manager_lifetime_contract(source, path="<source>"):
