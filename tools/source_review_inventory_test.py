@@ -108,13 +108,16 @@ EXPECTED_DIRECT_VENDOR_INCLUDES = {
     "MacKernelSDK/Headers/string.h",
 }
 EXPECTED_PRODUCT_SYMBOL_COUNTS = {
-    "undefined": 80,
-    "defined": 651,
+    "undefined": 81,
+    "defined": 652,
     "external": 69,
 }
 EXPECTED_PRODUCT_SYMBOL_DIGESTS = {
-    "undefined": "9d342511dd154eeb9e635fa54e1f6e7986cb85aef42b08f9d271761932a9002f",
-    "defined": "4ec24a0197bfaaaf060f166cddce31cc158964a5fd8fedfcd129d58095217534",
+    # V343 adds one product-internal cross-TU symbol for positive VF identity;
+    # it is defined by kern_gen11 and consumed by kern_green, so the external
+    # kernel/Lilu ABI partition below remains byte-for-byte unchanged.
+    "undefined": "b3386ba5a8de40e8bd6445fc2cae5ffb9791130580d394db248a8a309cac19c6",
+    "defined": "f62ece126672fb9ca62bf9c2629bb07b3228930c717c97c2035adbc9b3144ca3",
     "external": "bb1a795db6ba375b2053c427377088bf2c9853496a28eb182a947788c68bd2c7",
 }
 EXPECTED_EXTERNAL_ABI_PARTITIONS = {

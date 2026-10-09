@@ -8,6 +8,10 @@
 
 // Fail closed for VF or unclassified identity before physical display access.
 bool ngPhysicalGpuAccessAllowed();
+// Positive VF ownership only; unlike the physical-access gate, Unknown is not
+// admitted.  Userspace compatibility patches must never run on an unclassified
+// physical function.
+bool ngVirtualGpuAccessAllowed();
 // PFs may use their complete BAR; VFs may use only i915's fixed MMIO allowlist.
 bool ngGpuRegisterAccessAllowed(unsigned long reg);
 

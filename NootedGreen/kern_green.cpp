@@ -227,6 +227,7 @@ void NGreen::processPatcher(KernelPatcher &patcher) {
 	WIOKit::awaitPublishing(this->iGPU);
 
 	const bool physicalAccess = ngPhysicalGpuAccessAllowed();
+	const bool virtualAccess = ngVirtualGpuAccessAllowed();
 	this->iGPU->setBusMasterEnable(physicalAccess);
 	OSSynchronizeIO();
 	const bool busMasterEnabled =
@@ -242,11 +243,20 @@ void NGreen::processPatcher(KernelPatcher &patcher) {
 	this->isRealTGL = NGGpuCapabilities::useNativeTigerLakePath(this->deviceId, physicalTgl);
 	SYSLOG("ngreen", "V243: GPU=%04x nativeTglPf=%d", this->deviceId, this->isRealTGL);
 
-	// The bridge is for the exact 9a49 VF only.  Registering here, after the
-	// unspoofed identity and PF/VF ownership are known but before Lilu starts its
-	// user patcher, keeps PFs and every other GPU/process completely untouched.
-	if (!physicalAccess && this->deviceId == 0x9A49)
+	// V342 compared deviceId with 0x9a49 here, but deviceId is deliberately the
+	// unspoofed PCI configuration identity captured above.  This host's VF is
+	// therefore 0xa7a8 at this boundary; 0x9a49 exists only in the exact Guest
+	// registry compatibility identity consumed by our later config-read route.
+	// Require all three facts independently so an unclassified/PF function or a
+	// different compatibility personality can never receive the userspace patch.
+	uint32_t compatibilityDeviceId = 0;
+	const bool exactTigerLakeVf = virtualAccess && this->deviceId == 0xA7A8 &&
+		WIOKit::getOSDataValue(this->iGPU, "device-id", compatibilityDeviceId) &&
+		compatibilityDeviceId == 0x9A49;
+	if (exactTigerLakeVf) {
+		SYSLOG("ngreen", "V343: classified AppleGVA bridge VF physical=a7a8 compatibility=9a49");
 		registerV342AppleGvaBridge();
+	}
 
 	const bool routedRead16 = KernelPatcher::routeVirtual(this->iGPU,
 		WIOKit::PCIConfigOffset::ConfigRead16, configRead16, &orgConfigRead16);

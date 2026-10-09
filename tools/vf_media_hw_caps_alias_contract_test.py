@@ -246,6 +246,18 @@ def function_body(source: str, signature: str) -> str:
 
 
 def verify_source(source: str, header: str, label: str) -> None:
+    virtual_identity = function_body(source, "bool ngVirtualGpuAccessAllowed()")
+    expected_virtual_identity = (
+        "bool ngVirtualGpuAccessAllowed()\n"
+        "{\n"
+        "\treturn vfIdentifyDevice() == VfIdentity::Virtual;\n"
+        "}"
+    )
+    if virtual_identity != expected_virtual_identity:
+        raise AssertionError(
+            f"{label}: userspace bridge VF admission is not positive Virtual identity"
+        )
+
     route = (
         '{"__ZN13IGAccelDevice11get_hw_capsEP16_IntelHwCapsInfoS1_yPy",\n'
         "\t\t\t vfGetHwCaps, this->oVfGetHwCaps},"
@@ -501,11 +513,29 @@ def verify_v342_user_bridge(source: str, label: str) -> None:
 
     patcher = function_body(source, "void NGreen::processPatcher(KernelPatcher &patcher)")
     exact_gate = (
-        "if (!physicalAccess && this->deviceId == 0x9A49)\n"
-        "\t\tregisterV342AppleGvaBridge();"
+        "const bool exactTigerLakeVf = virtualAccess && this->deviceId == 0xA7A8 &&\n"
+        "\t\tWIOKit::getOSDataValue(this->iGPU, \"device-id\", compatibilityDeviceId) &&\n"
+        "\t\tcompatibilityDeviceId == 0x9A49;"
     )
-    if patcher.count(exact_gate) != 1:
-        raise AssertionError(f"{label}: AppleGVA bridge escaped exact 9a49 VF gate")
+    for token in (
+        "const bool virtualAccess = ngVirtualGpuAccessAllowed();",
+        "uint32_t compatibilityDeviceId = 0;",
+        exact_gate,
+        "if (exactTigerLakeVf) {",
+        "V343: classified AppleGVA bridge VF physical=a7a8 compatibility=9a49",
+        "registerV342AppleGvaBridge();",
+    ):
+        if patcher.count(token) != 1:
+            raise AssertionError(f"{label}: AppleGVA bridge escaped exact dual-identity VF gate: {token}")
+    gate_order = tuple(patcher.index(token) for token in (
+        "const bool virtualAccess = ngVirtualGpuAccessAllowed();",
+        "uint32_t compatibilityDeviceId = 0;",
+        exact_gate,
+        "if (exactTigerLakeVf) {",
+        "registerV342AppleGvaBridge();",
+    ))
+    if gate_order != tuple(sorted(gate_order)):
+        raise AssertionError(f"{label}: AppleGVA dual-identity VF gate ordering changed")
     init = function_body(source, "void NGreen::init()")
     if "registerV342AppleGvaBridge" in init:
         raise AssertionError(f"{label}: AppleGVA bridge registered before PF/VF classification")
@@ -535,6 +565,11 @@ def main() -> int:
     verify_v342_user_bridge(green, str(green_path))
 
     source_mutations = (
+        replace_once(
+            source,
+            "return vfIdentifyDevice() == VfIdentity::Virtual;",
+            "return vfIdentifyDevice() != VfIdentity::Physical;",
+        ),
         replace_once(source, "0x9A498086U", "0x9A488086U"),
         replace_once(source, "0x9A408086U", "0x9A488086U"),
         replace_once(source, "kHwCapsSize = 0x7C", "kHwCapsSize = 0x80"),
@@ -586,8 +621,12 @@ def main() -> int:
 
     green_mutations = (
         replace_once(green, "UserPatcher::LocalOnly", "0"),
-        replace_once(green, "this->deviceId == 0x9A49",
-                     "this->deviceId == 0x9A40"),
+        replace_once(green, "this->deviceId == 0xA7A8",
+                     "this->deviceId == 0xA7A9"),
+        replace_once(green, "compatibilityDeviceId == 0x9A49",
+                     "compatibilityDeviceId == 0x9A40"),
+        replace_once(green, "virtualAccess && this->deviceId",
+                     "!physicalAccess && this->deviceId"),
         replace_once(green, "&v342AppleGvaBinary, 1",
                      "&v342AppleGvaBinary, 0"),
         replace_once(green,
@@ -629,7 +668,7 @@ def main() -> int:
 
     print(
         "PASS: exact selector 0xb PCI identity producer, VF-only media alias, "
-        "13-site process-local TGL capability bridge, 26 source and "
+        "13-site process-local TGL capability bridge, 27 source and "
         "eighteen payload mutations"
     )
     return 0

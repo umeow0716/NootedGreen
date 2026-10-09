@@ -2387,6 +2387,11 @@ bool ngPhysicalGpuAccessAllowed()
 	return vfIdentifyDevice() == VfIdentity::Physical;
 }
 
+bool ngVirtualGpuAccessAllowed()
+{
+	return vfIdentifyDevice() == VfIdentity::Virtual;
+}
+
 bool ngGpuRegisterAccessAllowed(unsigned long reg)
 {
 	const auto identity = vfIdentifyDevice();

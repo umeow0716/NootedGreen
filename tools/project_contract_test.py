@@ -139,15 +139,18 @@ def main() -> int:
     early_bus_stop = green.index("this->iGPU->setBusMasterEnable(false);", sriov_class)
     memory_enable = green.index("this->iGPU->setMemoryEnable(true);", early_bus_stop)
     identity = green.index("const bool physicalAccess = ngPhysicalGpuAccessAllowed();", memory_enable)
+    virtual_identity = green.index(
+        "const bool virtualAccess = ngVirtualGpuAccessAllowed();", identity)
     identity_bus_state = green.index(
-        "this->iGPU->setBusMasterEnable(physicalAccess);", identity)
+        "this->iGPU->setBusMasterEnable(physicalAccess);", virtual_identity)
     command_readback = green.index(
         "this->iGPU->configRead16(kIOPCIConfigCommand)", identity_bus_state)
     command_check = green.index(
         "busMasterEnabled != physicalAccess", command_readback)
     config_routes = green.index("KernelPatcher::routeVirtual(this->iGPU", command_check)
-    assert pci_id < sriov_class < early_bus_stop < memory_enable < identity < \
+    assert pci_id < sriov_class < early_bus_stop < memory_enable < identity < virtual_identity < \
         identity_bus_state < command_readback < command_check < config_routes
+    assert "bool ngVirtualGpuAccessAllowed();" in green_header
     assert "setBusMasterEnable(true)" not in green
     assert "sriovCapability != NGGpuCapabilities::Sriov::Absent" in \
         green[sriov_class:memory_enable]
