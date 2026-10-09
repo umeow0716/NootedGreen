@@ -21,6 +21,10 @@ METHOD_DESCS = "__ZZN13IGAccelDevice11deviceStartEvE11methodDescs"
 PROBE = "__ZN16IntelAccelerator5probeEP9IOServicePi"
 PROBE_END = "__ZN16IntelAccelerator18encodeFailureStackE15IGFailureReason"
 EXTENDED_READ = "__ZN11IOPCIDevice20extendedConfigRead32Ey"
+VIDEO_GET_ACCEL_ID = "__ZN19IGAccelVideoContext22get_iosurface_accel_idEP37sIntelVideoMethodArgsGetAcceleratorIdPy"
+VIDEO_UPDATE_PERF = "__ZN19IGAccelVideoContext22update_perf_capabilityEP37sIntelVideoMethodArgsPerfCapabilityIny"
+VIDEO_SET_PRIORITY = "__ZN19IGAccelVideoContext20set_context_priorityEP39sIntelVideoMethodArgsSetContextPriorityy"
+VIDEO_CONTEXT_START = "__ZN19IGAccelVideoContext12contextStartEv"
 
 
 def parse_macho(data: bytes, label: str):
@@ -122,6 +126,8 @@ def verify_payload(data: bytes, label: str) -> None:
         for name in (
             GET_HW_CAPS, GET_HW_CAPS_END, DEVICE_START, DEVICE_START_END,
             GET_METHOD, GET_METHOD_END, METHOD_DESCS, PROBE, PROBE_END,
+            VIDEO_GET_ACCEL_ID, VIDEO_UPDATE_PERF, VIDEO_SET_PRIORITY,
+            VIDEO_CONTEXT_START,
         )
     }
     expected_addresses = {
@@ -134,6 +140,10 @@ def verify_payload(data: bytes, label: str) -> None:
         METHOD_DESCS: 0xCB8A0,
         PROBE: 0x238E2,
         PROBE_END: 0x23C94,
+        VIDEO_GET_ACCEL_ID: 0x7712A,
+        VIDEO_UPDATE_PERF: 0x77142,
+        VIDEO_SET_PRIORITY: 0x771AE,
+        VIDEO_CONTEXT_START: 0x771C2,
     }
     if values != expected_addresses:
         raise AssertionError(f"{label}: changed media user-client symbol layout")
@@ -157,6 +167,21 @@ def verify_payload(data: bytes, label: str) -> None:
     for body, expected in expected_hashes:
         if hashlib.sha256(body).hexdigest() != expected:
             raise AssertionError(f"{label}: changed pinned producer body")
+
+    video_methods = (
+        (VIDEO_GET_ACCEL_ID, VIDEO_UPDATE_PERF,
+         "c89b5778b54a4d03c497ec73fcf2ff80243860e8abc2eb39d6497232c054dd30"),
+        (VIDEO_UPDATE_PERF, VIDEO_SET_PRIORITY,
+         "b3bd53a52c19d92c4b8a0959957fa69eb3029b0d959a45f74be86a5b3f88b6aa"),
+        (VIDEO_SET_PRIORITY, VIDEO_CONTEXT_START,
+         "cd2c386e7d65969f73ebeabac67c223c64d0287cd38f42d887fdf10daa4912e1"),
+    )
+    for method, following, expected in video_methods:
+        body = vm_slice(
+            data, sections, values[method], values[following], label
+        )
+        if hashlib.sha256(body).hexdigest() != expected:
+            raise AssertionError(f"{label}: changed pinned video selector body {method}")
 
     if b"\x48\x89\x83\x88\x01\x00\x00" not in device_start:
         raise AssertionError(f"{label}: device no longer stores local method table at +0x188")
@@ -236,6 +261,24 @@ def verify_source(source: str, header: str, label: str) -> None:
     if not 0 <= vf_branch < rollback < requests < route_at < routed:
         raise AssertionError(f"{label}: media alias route escaped VF-only route block")
 
+    video_routes = (
+        (VIDEO_GET_ACCEL_ID, "vfVideoGetIosurfaceAccelId",
+         "oVfVideoGetIosurfaceAccelId"),
+        (VIDEO_UPDATE_PERF, "vfVideoUpdatePerfCapability",
+         "oVfVideoUpdatePerfCapability"),
+        (VIDEO_SET_PRIORITY, "vfVideoSetContextPriority",
+         "oVfVideoSetContextPriority"),
+    )
+    route_positions = []
+    for symbol, wrapper, original in video_routes:
+        token = '{"' + symbol + '",\n\t\t\t ' + wrapper + ", this->" + original + "},"
+        if source.count(token) != 1:
+            raise AssertionError(f"{label}: missing or duplicate video trace route {symbol}")
+        route_positions.append(source.index(token))
+    if not route_at < route_positions[0] < route_positions[1] < \
+            route_positions[2] < routed:
+        raise AssertionError(f"{label}: video trace routes escaped VF-only route table")
+
     expected_header = (
         "static IOReturn vfGetHwCaps(void *that, void *input, void *output,\n"
         "\t                           uint64_t inputSize, uint64_t *outputSize);\n"
@@ -243,6 +286,21 @@ def verify_source(source: str, header: str, label: str) -> None:
     )
     if header.count(expected_header) != 1:
         raise AssertionError(f"{label}: changed media alias ABI/original storage")
+
+    header_contracts = (
+        ("static IOReturn vfVideoGetIosurfaceAccelId(void *that, void *arguments,\n"
+         "\t                                           uint64_t *outputSize);\n"
+         "\tmach_vm_address_t oVfVideoGetIosurfaceAccelId {};"),
+        ("static IOReturn vfVideoUpdatePerfCapability(void *that, void *arguments,\n"
+         "\t                                            uint64_t inputSize);\n"
+         "\tmach_vm_address_t oVfVideoUpdatePerfCapability {};"),
+        ("static IOReturn vfVideoSetContextPriority(void *that, void *arguments,\n"
+         "\t                                         uint64_t inputSize);\n"
+         "\tmach_vm_address_t oVfVideoSetContextPriority {};"),
+    )
+    for contract in header_contracts:
+        if header.count(contract) != 1:
+            raise AssertionError(f"{label}: changed video trace ABI/original storage")
 
     body = function_body(source, "IOReturn Gen11::vfGetHwCaps(")
     required = (
@@ -271,6 +329,38 @@ def verify_source(source: str, header: str, label: str) -> None:
     if source.count("NGVfRuntimePatch::spoofedSkuFind, r3") != 1 or \
             "0x81, 0xff, 0x86, 0x80, 0x49, 0x9a, 0x74, 0x2d" not in source:
         raise AssertionError(f"{label}: exact 0x9a40-to-0x9a49 kernel probe patch changed")
+
+    wrapper_contracts = (
+        ("IOReturn Gen11::vfVideoGetIosurfaceAccelId(",
+         "callback->oVfVideoGetIosurfaceAccelId)(that, arguments, outputSize);",
+         "V337: media selector 0x100"),
+        ("IOReturn Gen11::vfVideoUpdatePerfCapability(",
+         "callback->oVfVideoUpdatePerfCapability)(that, arguments, inputSize);",
+         "V337: media selector 0x101"),
+        ("IOReturn Gen11::vfVideoSetContextPriority(",
+         "callback->oVfVideoSetContextPriority)(that, arguments, inputSize);",
+         "V337: media selector 0x102"),
+    )
+    for signature, native, marker in wrapper_contracts:
+        wrapper = function_body(source, signature)
+        for token in (native, marker + " enter", marker + " return",
+                      "return result;"):
+            if wrapper.count(token) != 1:
+                raise AssertionError(
+                    f"{label}: changed observation-only selector wrapper: {token}"
+                )
+        if wrapper.index(marker + " enter") > wrapper.index(native) or \
+                wrapper.index(native) > wrapper.index(marker + " return"):
+            raise AssertionError(f"{label}: changed selector enter/native/return ordering")
+        if wrapper.count("FunctionCast(") != 1:
+            raise AssertionError(f"{label}: selector wrapper must call native exactly once")
+        for forbidden in (
+                "vfMarkProtocolFault", "kIOReturnUnsupported", "getMember<",
+                "vfIdentifyDevice", "gVfAccelerator"):
+            if forbidden in wrapper:
+                raise AssertionError(
+                    f"{label}: observation wrapper changes behavior via {forbidden}"
+                )
 
 
 def replace_once(value: str, before: str, after: str) -> str:
@@ -311,6 +401,15 @@ def main() -> int:
         replace_once(source, GET_HW_CAPS, GET_HW_CAPS + "_changed"),
         replace_once(source, "NGVfRuntimePatch::spoofedSkuFind, r3",
                      "NGVfRuntimePatch::spoofedSkuFind, r2"),
+        replace_once(source, VIDEO_GET_ACCEL_ID, VIDEO_GET_ACCEL_ID + "_changed"),
+        replace_once(source, VIDEO_UPDATE_PERF, VIDEO_UPDATE_PERF + "_changed"),
+        replace_once(source, VIDEO_SET_PRIORITY, VIDEO_SET_PRIORITY + "_changed"),
+        replace_once(source, "V337: media selector 0x100 return",
+                     "V337: media selector 0x100 exit"),
+        replace_once(source, "V337: media selector 0x101 return",
+                     "V337: media selector 0x101 exit"),
+        replace_once(source, "V337: media selector 0x102 return",
+                     "V337: media selector 0x102 exit"),
     )
     for index, mutation in enumerate(source_mutations):
         try:
@@ -329,7 +428,10 @@ def main() -> int:
     else:
         raise AssertionError("escaped header mutation")
 
-    payload_offsets = (0x9CEE, 0x9D29, 0x9C98, 0xA079, 0xCB8D8, 0x2399E)
+    payload_offsets = (
+        0x9CEE, 0x9D29, 0x9C98, 0xA079, 0xCB8D8, 0x2399E,
+        0x7712A, 0x77142, 0x771AE,
+    )
     for data, label in payloads:
         for index, offset in enumerate(payload_offsets):
             changed = bytearray(data)
@@ -342,7 +444,7 @@ def main() -> int:
 
     print(
         "PASS: exact selector 0xb PCI identity producer, VF-only media alias, "
-        "ten source and twelve payload mutations"
+        "sixteen source and eighteen payload mutations"
     )
     return 0
 

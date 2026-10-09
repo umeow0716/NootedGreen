@@ -109,12 +109,12 @@ EXPECTED_DIRECT_VENDOR_INCLUDES = {
 }
 EXPECTED_PRODUCT_SYMBOL_COUNTS = {
     "undefined": 79,
-    "defined": 642,
+    "defined": 648,
     "external": 68,
 }
 EXPECTED_PRODUCT_SYMBOL_DIGESTS = {
     "undefined": "51be69ce360d74d9623b5a8a667f477b6076645caccff1e0c368be6ee91fe6d5",
-    "defined": "9d1bd1449d91beff2b0078c1713563e670e787b0fa3a60270da2fcb67c8599da",
+    "defined": "7f07825ffed78e23534fedf1ad4cb9dcf1e63cf96187602f7e43bad56fd87daf",
     "external": "d9ee5d44c90fca71af6204bb6c8b8c3b8a37d56b8780a310e7a81669e42c2c63",
 }
 EXPECTED_EXTERNAL_ABI_PARTITIONS = {
@@ -514,7 +514,7 @@ def verify_product_ownership():
     method_names = set(re.findall(
         r"\bGen11::([A-Za-z_][A-Za-z0-9_]*)\s*\(", gen11_cpp
     ))
-    assert len(method_names) == 167, (
+    assert len(method_names) == 170, (
         f"Gen11 definition inventory changed: {len(method_names)}"
     )
     for name in method_names:
@@ -527,7 +527,7 @@ def verify_product_ownership():
     route_fields = re.findall(
         r"\bmach_vm_address_t\s+([A-Za-z_][A-Za-z0-9_]*)\s*\{", gen11_header
     )
-    assert len(route_fields) == 101, (
+    assert len(route_fields) == 104, (
         f"Gen11 route/original field inventory changed: {len(route_fields)}"
     )
     for name in route_fields:

@@ -3311,6 +3311,18 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			// physical-accelerator object.
 			{"__ZN13IGAccelDevice11get_hw_capsEP16_IntelHwCapsInfoS1_yPy",
 			 vfGetHwCaps, this->oVfGetHwCaps},
+			// V337 is observation-only.  The V335 run passed physical-accelerator
+			// admission and then stopped after AppleGVA selected scaler index 1.
+			// Bracket the complete 0x100..0x102 native video-context method table
+			// without changing its arguments, result or any context state.  An enter
+			// without its matching return identifies the exact synchronous selector;
+			// no selector marker keeps the next fault in userspace before IOConnect.
+			{"__ZN19IGAccelVideoContext22get_iosurface_accel_idEP37sIntelVideoMethodArgsGetAcceleratorIdPy",
+			 vfVideoGetIosurfaceAccelId, this->oVfVideoGetIosurfaceAccelId},
+			{"__ZN19IGAccelVideoContext22update_perf_capabilityEP37sIntelVideoMethodArgsPerfCapabilityIny",
+			 vfVideoUpdatePerfCapability, this->oVfVideoUpdatePerfCapability},
+			{"__ZN19IGAccelVideoContext20set_context_priorityEP39sIntelVideoMethodArgsSetContextPriorityy",
+			 vfVideoSetContextPriority, this->oVfVideoSetContextPriority},
 			// V217: Query the media-12 PF-provisioned GGTT range, replace Apple's
 			// zero/stolen-derived allocator ranges, and validate direct BAR0 PTE
 			// mappings plus their required GuC TLB invalidation lifecycle.
@@ -5441,6 +5453,48 @@ IOReturn Gen11::vfGetHwCaps(void *that, void *input, void *output,
 	words[2] = kCanonicalIceLakeIdentity;
 	SYSLOG("ngreen", "V335: exposed canonical ICL media hw-caps identity 8a528086 for exact VF 9a498086");
 	return kIOReturnSuccess;
+}
+
+IOReturn Gen11::vfVideoGetIosurfaceAccelId(void *that, void *arguments,
+	uint64_t *outputSize)
+{
+	PANIC_COND(!callback || !callback->oVfVideoGetIosurfaceAccelId, "ngreen",
+		"Missing native VF video accelerator-id trampoline");
+	SYSLOG("ngreen", "V337: media selector 0x100 enter");
+	const IOReturn result = FunctionCast(
+		vfVideoGetIosurfaceAccelId,
+		callback->oVfVideoGetIosurfaceAccelId)(that, arguments, outputSize);
+	SYSLOG("ngreen", "V337: media selector 0x100 return result=0x%x",
+	       static_cast<unsigned int>(result));
+	return result;
+}
+
+IOReturn Gen11::vfVideoUpdatePerfCapability(void *that, void *arguments,
+	uint64_t inputSize)
+{
+	PANIC_COND(!callback || !callback->oVfVideoUpdatePerfCapability, "ngreen",
+		"Missing native VF video performance-capability trampoline");
+	SYSLOG("ngreen", "V337: media selector 0x101 enter size=%llu", inputSize);
+	const IOReturn result = FunctionCast(
+		vfVideoUpdatePerfCapability,
+		callback->oVfVideoUpdatePerfCapability)(that, arguments, inputSize);
+	SYSLOG("ngreen", "V337: media selector 0x101 return result=0x%x",
+	       static_cast<unsigned int>(result));
+	return result;
+}
+
+IOReturn Gen11::vfVideoSetContextPriority(void *that, void *arguments,
+	uint64_t inputSize)
+{
+	PANIC_COND(!callback || !callback->oVfVideoSetContextPriority, "ngreen",
+		"Missing native VF video context-priority trampoline");
+	SYSLOG("ngreen", "V337: media selector 0x102 enter size=%llu", inputSize);
+	const IOReturn result = FunctionCast(
+		vfVideoSetContextPriority,
+		callback->oVfVideoSetContextPriority)(that, arguments, inputSize);
+	SYSLOG("ngreen", "V337: media selector 0x102 return result=0x%x",
+	       static_cast<unsigned int>(result));
+	return result;
 }
 
 bool Gen11::IGAccelTaskIsKernelGPUTask(const void *that)
