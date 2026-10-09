@@ -211,6 +211,14 @@ if python3 tools/personality_contract_test.py NootedGreen/kern_gen11.cpp \
 else
     failed=1
 fi
+if python3 -B tools/vf_media_hw_caps_alias_contract_test.py \
+    NootedGreen/kern_gen11.cpp NootedGreen/kern_gen11.hpp \
+    sle_Internal/le/AppleIntelTGLGraphics.kext/Contents/MacOS/AppleIntelTGLGraphics \
+    sle_Internal/sle/AppleIntelTGLGraphics.kext/Contents/MacOS/AppleIntelTGLGraphics; then
+    printf 'PASS offline VF media hw-caps identity contract\n'
+else
+    failed=1
+fi
 if python3 -B tools/tgl_media_userspace_installer_contract_test.py; then
     printf 'PASS offline TGL media userspace installer contract\n'
 else

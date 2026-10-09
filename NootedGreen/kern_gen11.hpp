@@ -264,6 +264,9 @@ private:
 	mach_vm_address_t oVfWaitForRingSpace {};
 	static void vfAccelTaskFree(void *that);
 	mach_vm_address_t oVfAccelTaskFree {};
+	static IOReturn vfGetHwCaps(void *that, void *input, void *output,
+	                           uint64_t inputSize, uint64_t *outputSize);
+	mach_vm_address_t oVfGetHwCaps {};
 
 	mach_vm_address_t oIGMappedBuffergetMemory {};
 	static void *getBlit2DContext(void *that, bool create);

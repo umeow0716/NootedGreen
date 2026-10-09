@@ -3302,6 +3302,14 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			SYSLOG("ngreen", "V323: deferred native synchronous VF service publication until callback validation");
 
 			KernelPatcher::RouteRequest requests[] = {
+			// Tahoe's signed TGL VADriver asks selector 0xb for the native
+			// IntelHwCapsInfo and admits only canonical TGL PCI identities. The
+			// SR-IOV VF has a distinct PCI device id even though it executes this
+			// exact TGL ABI. Preserve the kernel's real 0x9a49 identity everywhere;
+			// only canonicalize the successful, fixed-size user-client reply used
+			// to create the media physical-accelerator object.
+			{"__ZN13IGAccelDevice11get_hw_capsEP16_IntelHwCapsInfoS1_yPy",
+			 vfGetHwCaps, this->oVfGetHwCaps},
 			// V217: Query the media-12 PF-provisioned GGTT range, replace Apple's
 			// zero/stolen-derived allocator ranges, and validate direct BAR0 PTE
 			// mappings plus their required GuC TLB invalidation lifecycle.
@@ -5401,6 +5409,37 @@ void Gen11::vfAccelTaskFree(void *that)
 	// returning, so accelerator-list unlink is complete before this transaction
 	// is opened to synchronizeAllTasks or another task factory.
 	IORecursiveLockUnlock(gVfPageTableUpdateLock);
+}
+
+IOReturn Gen11::vfGetHwCaps(void *that, void *input, void *output,
+	uint64_t inputSize, uint64_t *outputSize)
+{
+	PANIC_COND(!callback || !callback->oVfGetHwCaps, "ngreen",
+		"Missing native VF hardware-capability trampoline");
+	const IOReturn result = FunctionCast(
+		vfGetHwCaps, callback->oVfGetHwCaps)(
+			that, input, output, inputSize, outputSize);
+	if (result != kIOReturnSuccess)
+		return result;
+
+	constexpr uint64_t kHwCapsSize = 0x7C;
+	constexpr uint32_t kTigerLakeVfIdentity = 0x9A498086U;
+	constexpr uint32_t kCanonicalTigerLakeIdentity = 0x9A408086U;
+	if (!output || !outputSize || *outputSize != kHwCapsSize) {
+		SYSLOG("ngreen", "V334: rejected changed VF media hw-caps reply shape size=%llu",
+		       outputSize ? *outputSize : 0ULL);
+		return kIOReturnUnsupported;
+	}
+
+	auto *words = static_cast<uint32_t *>(output);
+	if (words[2] != kTigerLakeVfIdentity) {
+		SYSLOG("ngreen", "V334: rejected unexpected VF media hw-caps identity=%08x",
+		       words[2]);
+		return kIOReturnUnsupported;
+	}
+	words[2] = kCanonicalTigerLakeIdentity;
+	SYSLOG("ngreen", "V334: exposed canonical TGL media hw-caps identity 9a408086 for exact VF 9a498086");
+	return kIOReturnSuccess;
 }
 
 bool Gen11::IGAccelTaskIsKernelGPUTask(const void *that)

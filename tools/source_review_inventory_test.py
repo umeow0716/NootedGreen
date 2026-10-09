@@ -36,7 +36,7 @@ def macho_nm_command():
 # This digest covers the sorted, NUL-delimited path inventory, not file
 # contents. Git commit identity already fixes contents; this independent guard
 # prevents a new, removed or renamed path from silently escaping SG-11 review.
-EXPECTED_PATH_DIGEST = "ecb1afb5fea7943a56a1a8d962c35520b6de19e76749761a71a06f077f229795"
+EXPECTED_PATH_DIGEST = "d798f0096af3818547c81abc3d81f653f8e3453d0919ddc026298a12b0176f13"
 EXPECTED_TOP_LEVEL_COUNTS = {
     ".github": 1,
     ".gitignore": 1,
@@ -49,7 +49,7 @@ EXPECTED_TOP_LEVEL_COUNTS = {
     "Release alias": 1,
     "docs": 5,
     "sle_Internal": 109,
-    "tools": 74,
+    "tools": 75,
 }
 
 EXPECTED_DEPENDENCY_DIGEST = (
@@ -109,12 +109,12 @@ EXPECTED_DIRECT_VENDOR_INCLUDES = {
 }
 EXPECTED_PRODUCT_SYMBOL_COUNTS = {
     "undefined": 79,
-    "defined": 641,
+    "defined": 642,
     "external": 68,
 }
 EXPECTED_PRODUCT_SYMBOL_DIGESTS = {
     "undefined": "51be69ce360d74d9623b5a8a667f477b6076645caccff1e0c368be6ee91fe6d5",
-    "defined": "68b0f1a65c75cb77e18170ddf2cc51e0648d4828991fe5ba57d65d4a12db8022",
+    "defined": "9d1bd1449d91beff2b0078c1713563e670e787b0fa3a60270da2fcb67c8599da",
     "external": "d9ee5d44c90fca71af6204bb6c8b8c3b8a37d56b8780a310e7a81669e42c2c63",
 }
 EXPECTED_EXTERNAL_ABI_PARTITIONS = {
@@ -394,7 +394,7 @@ def verify_tool_ledger(paths):
         path for path in paths
         if path.startswith("tools/") and Path(path).suffix in program_suffixes
     }
-    assert len(programs) == 68, f"tool program count changed: {len(programs)}"
+    assert len(programs) == 69, f"tool program count changed: {len(programs)}"
 
     check_static = (ROOT / "tools/check-static.sh").read_text(encoding="utf-8")
     workflow = (ROOT / ".github/workflows/build-kext.yml").read_text(
@@ -514,7 +514,7 @@ def verify_product_ownership():
     method_names = set(re.findall(
         r"\bGen11::([A-Za-z_][A-Za-z0-9_]*)\s*\(", gen11_cpp
     ))
-    assert len(method_names) == 166, (
+    assert len(method_names) == 167, (
         f"Gen11 definition inventory changed: {len(method_names)}"
     )
     for name in method_names:
@@ -527,7 +527,7 @@ def verify_product_ownership():
     route_fields = re.findall(
         r"\bmach_vm_address_t\s+([A-Za-z_][A-Za-z0-9_]*)\s*\{", gen11_header
     )
-    assert len(route_fields) == 100, (
+    assert len(route_fields) == 101, (
         f"Gen11 route/original field inventory changed: {len(route_fields)}"
     )
     for name in route_fields:
