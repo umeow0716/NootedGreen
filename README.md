@@ -345,6 +345,12 @@ For GPU acceleration, the following userspace driver bundles must be installed i
 
 These bundles are loaded by name (via `MetalPluginName`, `IOGLBundleName`, etc.), not by `CFBundleIdentifier`. They are not shipped with NootedGreen and must be sourced separately.
 
+The reviewed TGL VA driver has one inherited Gen11 loader dependency: it opens
+`AppleIntelICLGraphicsVAME.bundle/Contents/MacOS/AppleIntelICLGraphicsVAME`
+from `/Library/GPUBundles` before creating an encoder.  Installers must provide
+that exact path as an unmodified copy or link to the signed TGL VAME executable;
+renaming or patching the executable itself invalidates its Apple signature.
+
 ### Driver path resolution
 
 NootedGreen keeps a strict load-path policy for the reviewed bring-up path:

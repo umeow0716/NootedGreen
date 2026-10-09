@@ -3,8 +3,12 @@
 
 import copy
 import plistlib
+import struct
 import sys
 from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def require(condition: bool, message: str) -> None:
@@ -140,6 +144,62 @@ def verify_personality(personality: dict, label: str) -> None:
             f"{label}: unexpected HEVC encode profiles")
 
 
+def verify_media_engine_loader_contract() -> None:
+    va_driver = (
+        ROOT / "sle_Internal/sle/AppleIntelTGLGraphicsVADriver.bundle/Contents/"
+        "MacOS/AppleIntelTGLGraphicsVADriver"
+    )
+    media_engine = (
+        ROOT / "sle_Internal/sle/AppleIntelTGLGraphicsVAME.bundle/Contents/"
+        "MacOS/AppleIntelTGLGraphicsVAME"
+    )
+    va_bytes = va_driver.read_bytes()
+    loader_target = (
+        b"AppleIntelICLGraphicsVAME.bundle/Contents/MacOS/"
+        b"AppleIntelICLGraphicsVAME"
+    )
+    require(va_bytes.count(loader_target) == 1,
+            "TGL VA driver media-engine loader target changed")
+    for prefix in (b"/Library/GPUBundles/", b"/System/Library/Extensions/"):
+        require(va_bytes.count(prefix) == 1,
+                f"TGL VA driver media-engine search path changed: {prefix!r}")
+
+    me_bytes = media_engine.read_bytes()
+    require(struct.unpack_from("<I", me_bytes)[0] == 0xFEEDFACF,
+            "TGL media-engine payload is not a 64-bit Mach-O")
+    command_count = struct.unpack_from("<I", me_bytes, 16)[0]
+    offset = 32
+    symbol_table = None
+    for _ in range(command_count):
+        command, size = struct.unpack_from("<II", me_bytes, offset)
+        require(size >= 8 and offset + size <= len(me_bytes),
+                "invalid TGL media-engine Mach-O load command")
+        if command == 0x2:  # LC_SYMTAB
+            symbol_table = struct.unpack_from("<IIII", me_bytes, offset + 8)
+        offset += size
+    require(symbol_table is not None,
+            "TGL media-engine payload has no LC_SYMTAB")
+    symoff, nsyms, stroff, strsize = symbol_table
+    require(symoff + nsyms * 16 <= len(me_bytes) and
+            stroff + strsize <= len(me_bytes),
+            "TGL media-engine symbol table is out of bounds")
+    symbols = set()
+    for index in range(nsyms):
+        string_index = struct.unpack_from("<I", me_bytes, symoff + index * 16)[0]
+        if not 0 < string_index < strsize:
+            continue
+        start = stroff + string_index
+        end = me_bytes.find(b"\0", start, stroff + strsize)
+        require(end >= 0, "unterminated TGL media-engine symbol")
+        symbols.add(me_bytes[start:end].decode("ascii"))
+    for symbol in (
+        "_AVD_CreateAVDAccelerator",
+        "_AVD_DestroyAVDAccelerator",
+    ):
+        require(symbol in symbols,
+                f"TGL media-engine payload does not export {symbol}")
+
+
 def verify(path: Path) -> dict:
     personality = load_personality(path)
     verify_personality(personality, str(path))
@@ -161,6 +221,7 @@ def main() -> int:
             "usage: personality_contract_test.py SOURCE INFO.plist ...")
     source = Path(sys.argv[1]).read_text()
     verify_runtime_injection(source, sys.argv[1])
+    verify_media_engine_loader_contract()
     for old, new, label in (
         ("OSNumber::withNumber(50ULL, 32)",
          "OSNumber::withNumber(0ULL, 32)", "wrong runtime quality rating"),
@@ -196,7 +257,8 @@ def main() -> int:
     print(
         "PASS: complete native display/media personality contract in "
         f"{len(personalities)} payloads; "
-        f"{len(personalities) * 2 + 7} source/runtime negative mutations rejected"
+        f"{len(personalities) * 2 + 7} source/runtime negative mutations rejected; "
+        "exact signed TGL VAME ABI satisfies the inherited ICL loader contract"
     )
     return 0
 
