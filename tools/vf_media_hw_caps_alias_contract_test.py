@@ -484,18 +484,26 @@ def verify_v342_user_bridge(source: str, label: str) -> None:
         "/System/Library/PrivateFrameworks/AppleGVA.framework/Versions/A/AppleGVA"
     )
     encoder = (
-        "/System/Library/Frameworks/VideoToolbox.framework/Versions/A/XPCServices/"
-        "VTEncoderXPCService.xpc/Contents/MacOS/VTEncoderXPCService"
+        "/XPCServices/VTEncoderXPCService.xpc/Contents/MacOS/"
+        "VTEncoderXPCService"
     )
     decoder = (
-        "/System/Library/Frameworks/VideoToolbox.framework/Versions/A/XPCServices/"
-        "VTDecoderXPCService.xpc/Contents/MacOS/VTDecoderXPCService"
+        "/XPCServices/VTDecoderXPCService.xpc/Contents/MacOS/"
+        "VTDecoderXPCService"
     )
     if source.count('"' + apple_gva + '"') != 1:
         raise AssertionError(f"{label}: AppleGVA binary path changed")
     for process in (encoder, decoder):
         if source.count('"' + process + '"') != 2:
-            raise AssertionError(f"{label}: canonical VideoToolbox process suffix changed")
+            raise AssertionError(f"{label}: exact VideoToolbox XPC tail changed")
+    for unsafe in (
+        '"/VTEncoderXPCService"',
+        '"/VTDecoderXPCService"',
+        '"VTEncoderXPCService"',
+        '"VTDecoderXPCService"',
+    ):
+        if unsafe in source:
+            raise AssertionError(f"{label}: media admission degraded to basename: {unsafe}")
     if source.count(
             "V342AppleGvaSection, UserPatcher::ProcInfo::MatchSuffix}") != 2:
         raise AssertionError(f"{label}: media process admission is not canonical-suffix only")
@@ -505,7 +513,7 @@ def verify_v342_user_bridge(source: str, label: str) -> None:
         "lilu.onProcLoadForce(",
         "v342MediaProcesses, arrsize(v342MediaProcesses)",
         "&v342AppleGvaBinary, 1",
-        "V344: dispatched suffix-qualified local AppleGVA TGL capability-layout bridge path-len=%lu path=%s",
+        "V345: dispatched XPC-tail-qualified local AppleGVA TGL capability-layout bridge path-len=%lu path=%s",
         "pathLength, path",
         "V342: armed exact Tahoe AppleGVA TGL capability-layout bridge with 13 local-only sites",
     ):
@@ -640,8 +648,11 @@ def main() -> int:
                      "0xE8, 0x1F, 0xBD, 0xFB, 0xFF, 0x41, 0x8B, 0x4F, 0x28, 0x31, 0xD2",
                      "0xE8, 0x1F, 0xBD, 0xFB, 0xFF, 0x41, 0x8B, 0x4F, 0x20, 0x31, 0xD2"),
         replace_once(green,
-                     "V342AppleGvaSection, UserPatcher::ProcInfo::MatchSuffix},\n\t{\"/System/Library/Frameworks/VideoToolbox.framework/Versions/A/XPCServices/VTDecoderXPCService",
-                     "V342AppleGvaSection, UserPatcher::ProcInfo::MatchExact},\n\t{\"/System/Library/Frameworks/VideoToolbox.framework/Versions/A/XPCServices/VTDecoderXPCService"),
+                     "V342AppleGvaSection, UserPatcher::ProcInfo::MatchSuffix},\n\t{\"/XPCServices/VTDecoderXPCService",
+                     "V342AppleGvaSection, UserPatcher::ProcInfo::MatchExact},\n\t{\"/XPCServices/VTDecoderXPCService"),
+        replace_once(green,
+                     "{\"/XPCServices/VTEncoderXPCService.xpc/Contents/MacOS/VTEncoderXPCService\"",
+                     "{\"/VTEncoderXPCService\""),
         replace_once(green,
                      "/System/Library/PrivateFrameworks/AppleGVA.framework/Versions/A/AppleGVA",
                      "/System/Library/PrivateFrameworks/AppleGVA.framework/Versions/B/AppleGVA"),

@@ -154,15 +154,17 @@ static UserPatcher::BinaryModInfo v342AppleGvaBinary {
 };
 
 // Tahoe may expose the executable vnode to KAUTH through a Cryptex-prefixed
-// path even though launchd reports the canonical /System/Library path.  Keep
-// the complete, unique framework/XPC suffix (not merely the executable name)
-// so only the two intended VideoToolbox services are admitted.
+// path or through the framework's top-level XPCServices symlink even though
+// CoreFoundation reports the canonical Versions/A bundle path.  Match the
+// complete XPC bundle/executable tail, not merely the executable basename, so
+// both vnode forms are admitted while the Zonto and unrelated services remain
+// excluded.
 static UserPatcher::ProcInfo v342MediaProcesses[] = {
-	{"/System/Library/Frameworks/VideoToolbox.framework/Versions/A/XPCServices/VTEncoderXPCService.xpc/Contents/MacOS/VTEncoderXPCService",
-	 sizeof("/System/Library/Frameworks/VideoToolbox.framework/Versions/A/XPCServices/VTEncoderXPCService.xpc/Contents/MacOS/VTEncoderXPCService") - 1,
+	{"/XPCServices/VTEncoderXPCService.xpc/Contents/MacOS/VTEncoderXPCService",
+	 sizeof("/XPCServices/VTEncoderXPCService.xpc/Contents/MacOS/VTEncoderXPCService") - 1,
 	 V342AppleGvaSection, UserPatcher::ProcInfo::MatchSuffix},
-	{"/System/Library/Frameworks/VideoToolbox.framework/Versions/A/XPCServices/VTDecoderXPCService.xpc/Contents/MacOS/VTDecoderXPCService",
-	 sizeof("/System/Library/Frameworks/VideoToolbox.framework/Versions/A/XPCServices/VTDecoderXPCService.xpc/Contents/MacOS/VTDecoderXPCService") - 1,
+	{"/XPCServices/VTDecoderXPCService.xpc/Contents/MacOS/VTDecoderXPCService",
+	 sizeof("/XPCServices/VTDecoderXPCService.xpc/Contents/MacOS/VTDecoderXPCService") - 1,
 	 V342AppleGvaSection, UserPatcher::ProcInfo::MatchSuffix},
 };
 
@@ -170,7 +172,7 @@ void registerV342AppleGvaBridge() {
 	lilu.onProcLoadForce(
 		v342MediaProcesses, arrsize(v342MediaProcesses),
 		[](void *, UserPatcher &, vm_map_t, const char *path, size_t pathLength) {
-			SYSLOG("ngreen", "V344: dispatched suffix-qualified local AppleGVA TGL capability-layout bridge path-len=%lu path=%s",
+			SYSLOG("ngreen", "V345: dispatched XPC-tail-qualified local AppleGVA TGL capability-layout bridge path-len=%lu path=%s",
 				pathLength, path);
 		}, nullptr, &v342AppleGvaBinary, 1);
 	SYSLOG("ngreen", "V342: armed exact Tahoe AppleGVA TGL capability-layout bridge with 13 local-only sites");
