@@ -88,8 +88,10 @@ def contract(source, path="<source>"):
         assert token in shared, f"{path}: lost bounded native resource observation: {token}"
     assert shared.count("callback->oVfSharedExternalMethod") == 1, \
         f"{path}: resource observation must call native exactly once"
-    assert shared.count("if (ticket)") == 2, \
+    assert shared.count("if (ticket)") == 3, \
         f"{path}: both resource observation markers must be bounded"
+    assert shared.count("while (used < 8)") == 2, \
+        f"{path}: resource failure and output anomaly budgets must both be bounded"
     for token in ("if (selector == 0 && result != kIOReturnSuccess)",
                   "static volatile UInt32 observedFailures = 0;", "while (used < 8)",
                   "OSCompareAndSwap(used, used + 1, &observedFailures)",
@@ -97,6 +99,18 @@ def contract(source, path="<source>"):
         assert token in shared, f"{path}: lost independent bounded failure observation: {token}"
     assert "static_cast" not in shared.split("const IOReturn result")[0], \
         f"{path}: resource observation must not interpret user arguments"
+    for token in ("if (selector == 0 && result == kIOReturnSuccess && arguments)",
+                  "args->structureOutput && !args->structureOutputDescriptor",
+                  "args->structureOutputSize >= 0x58 && args->structureOutputSize <= 0x1000",
+                  "static_cast<const uint8_t *>(args->structureOutput) + 0x10",
+                  "static_cast<const uint8_t *>(args->structureOutput) + 0x18",
+                  "if (!inlineShape || !ro || !rw)",
+                  "OSCompareAndSwap(used, used + 1, &observedOutputFailures)"):
+        assert token in shared, f"{path}: lost bounded kernel output observation: {token}"
+    assert "structureInput" not in shared and "scalarInput" not in shared, \
+        f"{path}: resource observation must never read user input"
+    assert shared.index("const auto *args") > shared.index("callback->oVfSharedExternalMethod"), \
+        f"{path}: output read before native completion"
 
     gl = function_body(source, "IOReturn Gen11::vfGLContextExternalMethod(")
     for token in ("selector >= 0x100 && selector <= 0x105",
@@ -239,6 +253,10 @@ def contract(source, path="<source>"):
 
 def mutation_contract(source, path):
     mutations = (
+        ("args->structureOutput && !args->structureOutputDescriptor", "args->structureOutput", 1),
+        ("args->structureOutputSize >= 0x58 && args->structureOutputSize <= 0x1000", "true", 1),
+        ("static_cast<const uint8_t *>(args->structureOutput) + 0x10", "static_cast<const uint8_t *>(args->structureOutput) + 0x08", 1),
+        ("if (!inlineShape || !ro || !rw)", "if (ticket && (!inlineShape || !ro || !rw))", 1),
         ("if (selector == 0 && result != kIOReturnSuccess)", "if (ticket && result != kIOReturnSuccess)", 1),
         ("while (used < 8)", "while (true)", 1),
         ("OSCompareAndSwap(used, used + 1, &observedFailures)",

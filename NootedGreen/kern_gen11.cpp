@@ -2,6 +2,7 @@
 //  details.
 #include "kern_gen11.hpp"
 #include <IOKit/IOTimerEventSource.h>
+#include <IOKit/IOUserClient.h>
 #include "kern_guc_ring.hpp"
 #include "kern_gpu_capabilities.hpp"
 #include "kern_ggtt_bounds.hpp"
@@ -5683,6 +5684,38 @@ IOReturn Gen11::vfSharedExternalMethod(void *that, uint32_t selector,
 	if (ticket)
 		SYSLOG("ngreen", "V357: shared resource selector 0 return ticket=%u result=0x%x",
 		       ticket, static_cast<unsigned int>(result));
+	// Tahoe IOAccelResourceCreate copies native output +0x10/+0x18 into
+	// its CF resource's client-shared RO/RW fields. Observe kernel-owned inline
+	// output only after native success; never touch user input or descriptors.
+	if (selector == 0 && result == kIOReturnSuccess && arguments) {
+		static_assert(offsetof(IOExternalMethodArguments, structureOutput) == 0x58 &&
+		              offsetof(IOExternalMethodArguments, structureOutputSize) == 0x60 &&
+		              offsetof(IOExternalMethodArguments, structureOutputDescriptor) == 0x68,
+		              "Tahoe external-method inline output ABI changed");
+		const auto *args = static_cast<const IOExternalMethodArguments *>(arguments);
+		const bool inlineShape = args->structureOutput && !args->structureOutputDescriptor &&
+		                         args->structureOutputSize >= 0x58 && args->structureOutputSize <= 0x1000;
+		uint64_t ro = 0, rw = 0;
+		if (inlineShape) {
+			memcpy(&ro, static_cast<const uint8_t *>(args->structureOutput) + 0x10, sizeof(ro));
+			memcpy(&rw, static_cast<const uint8_t *>(args->structureOutput) + 0x18, sizeof(rw));
+		}
+		if (ticket)
+			SYSLOG("ngreen", "V359: native resource output ticket=%u size=%u inline=%u ro-present=%u rw-present=%u",
+			       ticket, args->structureOutputSize, inlineShape ? 1U : 0U, ro ? 1U : 0U, rw ? 1U : 0U);
+		if (!inlineShape || !ro || !rw) {
+			static volatile UInt32 observedOutputFailures = 0;
+			UInt32 used = observedOutputFailures;
+			while (used < 8) {
+				if (OSCompareAndSwap(used, used + 1, &observedOutputFailures)) {
+					SYSLOG("ngreen", "V359: native resource output anomaly failure=%u size=%u inline=%u ro-present=%u rw-present=%u",
+					       used + 1, args->structureOutputSize, inlineShape ? 1U : 0U, ro ? 1U : 0U, rw ? 1U : 0U);
+					break;
+				}
+				used = observedOutputFailures;
+			}
+		}
+	}
 	// Successful allocations may exhaust the ordinary trace before a later
 	// allocation fails. Give failures an independent, saturating budget.
 	if (selector == 0 && result != kIOReturnSuccess) {

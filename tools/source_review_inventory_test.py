@@ -61,6 +61,7 @@ EXPECTED_DIRECT_VENDOR_INCLUDES = {
     "MacKernelSDK/Headers/IOKit/IOLocks.h",
     "MacKernelSDK/Headers/IOKit/IOReturn.h",
     "MacKernelSDK/Headers/IOKit/IOTimerEventSource.h",
+    "MacKernelSDK/Headers/IOKit/IOUserClient.h",
     "MacKernelSDK/Headers/IOKit/IOWorkLoop.h",
     "MacKernelSDK/Headers/IOKit/pci/IOPCIDevice.h",
     "MacKernelSDK/Headers/i386/machine_routines.h",
