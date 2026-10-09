@@ -19,6 +19,15 @@ static volatile sig_atomic_t captured = 0;
 static thread_t observedThread = MACH_PORT_NULL;
 static x86_debug_state64_t savedDebug{};
 static volatile sig_atomic_t handlerRestore = KERN_FAILURE;
+// XNU dr7d_is_valid enforces Intel's fixed DR7 bits on every set. A thread
+// without allocated debug state initially reads all zeros, not canonical 0x400.
+// Compare the complete control word after that exact normalization, not a mask
+// which could hide enabled breakpoints or changed access/length controls.
+static constexpr uint64_t canonicalDr7(uint64_t value) {
+    return (value | uint64_t(0x400)) & ~uint64_t(0xd800);
+}
+static_assert(canonicalDr7(0) == 0x400);
+static_assert(canonicalDr7(0x400) == 0x400);
 static void hex(uint64_t value) {
     char out[17];
     constexpr char digits[] = "0123456789abcdef";
@@ -102,7 +111,11 @@ int main() {
     bool stateRestored = verified == KERN_SUCCESS && count == x86_DEBUG_STATE64_COUNT &&
         finalState.__dr0 == original.__dr0 && finalState.__dr1 == original.__dr1 &&
         finalState.__dr2 == original.__dr2 && finalState.__dr3 == original.__dr3 &&
-        finalState.__dr7 == original.__dr7;
+        finalState.__dr7 == canonicalDr7(original.__dr7);
+    std::printf("SELF_DEBUG_DR7 original=%llx expected=%llx actual=%llx\n",
+        static_cast<unsigned long long>(original.__dr7),
+        static_cast<unsigned long long>(canonicalDr7(original.__dr7)),
+        static_cast<unsigned long long>(finalState.__dr7));
     std::printf("SELF_DEBUG_SET result=%d hits=%d captured=%d returned=%d restore=%d state=%d handler=%d handler-debug=%d\n",
         set, int(hits), int(captured), result, restored, int(stateRestored), handlerRestored, int(handlerRestore));
     if (set != KERN_SUCCESS || hits != 1 || captured != 0x1357 || result != 0x1357 ||
