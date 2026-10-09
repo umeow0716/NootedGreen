@@ -20,9 +20,12 @@ bool read(uintptr_t address, void *output, size_t length) {
         && copied == length;
 }
 }
-int main() {
+int main(int argc, char **argv) {
+    const bool adapterMode = argc == 2 && std::strcmp(argv[1], "--adapter") == 0;
+    if (argc != 1 && !adapterMode) return 64;
     std::puts("ADAPTER_PROBE_BEGIN factory-only no-physical-init no-text-patch");
-    void *library = dlopen(path, RTLD_NOW | RTLD_LOCAL);
+    const char *selected = adapterMode ? "/Users/umeow/NootedGreenTGLMediaAdapter.bundle/Contents/MacOS/NootedGreenTGLMediaAdapter" : path;
+    void *library = dlopen(selected, RTLD_NOW | RTLD_LOCAL);
     if (!library) { std::fprintf(stderr, "dlopen: %s\n", dlerror()); return 1; }
     using Create = int (*)(void **, const void *, Metadata *);
     using Destroy = int (*)(void *);
@@ -55,16 +58,29 @@ int main() {
                 for (uintptr_t old : addresses) if (old == address) seen = true;
                 if (seen) break;
                 if (addresses.size() == 85) goto cleanup;
-                TglCapabilityAdapter::Native snapshot{};
-                if (!read(address, snapshot.data(), snapshot.size())) goto cleanup;
+                std::array<uint8_t, 0x438> snapshot{};
+                if (!read(address, snapshot.data(), adapterMode ? 0x438 : 0x430)) goto cleanup;
+                if (adapterMode)
+                    for (size_t i = 0x18; i < 0x20; ++i) if (snapshot[i]) goto cleanup;
                 addresses.push_back(address);
                 records.push_back(reinterpret_cast<const TglCapabilityAdapter::Native *>(address));
-                std::memcpy(&address, snapshot.data() + 0x428, sizeof(address));
+                std::memcpy(&address, snapshot.data() + (adapterMode ? 0x430 : 0x428), sizeof(address));
             }
         }
-        if (!adapter.build(records)) goto cleanup;
-        for (size_t i = 0; i < records.size(); ++i)
-            if (adapter.native(adapter.consumer(i)) != records[i]) goto cleanup;
+        if (adapterMode) {
+            std::array<uintptr_t, 17> callbacks{};
+            if (!read(reinterpret_cast<uintptr_t>(table), callbacks.data(), sizeof(callbacks))) goto cleanup;
+            for (size_t i = 1; i < callbacks.size(); ++i) {
+                Dl_info info{};
+                if (!dladdr(reinterpret_cast<void *>(callbacks[i]), &info) ||
+                    !info.dli_fname || std::strcmp(info.dli_fname, path)) goto cleanup;
+            }
+            std::puts("ADAPTER_NATIVE_CALLBACKS_UNCHANGED_OK slots=16");
+        } else {
+            if (!adapter.build(records)) goto cleanup;
+            for (size_t i = 0; i < records.size(); ++i)
+                if (adapter.native(adapter.consumer(i)) != records[i]) goto cleanup;
+        }
         std::printf("ADAPTER_DATA_TRANSLATION_OK roots=%u records=%zu\n", descriptor.count, records.size());
         status = 0;
 cleanup:

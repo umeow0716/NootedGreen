@@ -9733,6 +9733,20 @@ bool Gen11::injectAcceleratorPersonality(const char *bundleId)
 	}
 	SYSLOG("ngreen",
 		"V340: preserved native TGL media userspace with Tahoe renderer slot 0x1080080");
+	// Opt-in changes only the data producer exposed to AppleGVA. The adapter
+	// delegates every execution callback to the hash-pinned signed TGL driver.
+	// This clone is already restricted to the admitted VF; PF is untouched.
+	if (checkKernelArgument("-ngreenmediaadapter")) {
+		auto *mediaAdapter = OSString::withCString("NootedGreenTGLMediaAdapter");
+		const bool adapterReady = mediaAdapter &&
+			dict->setObject("IODVDBundleName", mediaAdapter);
+		OSSafeReleaseNULL(mediaAdapter);
+		if (!adapterReady) {
+			dict->release();
+			return false;
+		}
+		SYSLOG("ngreen", "selected owned-data TGL media adapter without AppleGVA text patches");
+	}
 
 	auto *primaryMatch = OSString::withCString("0x9a498086");
 	const bool matchReady = primaryMatch &&

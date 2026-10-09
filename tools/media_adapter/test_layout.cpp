@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <cstring>
 #include "tgl_capability_adapter.hpp"
+#include "descriptor_bridge.hpp"
 
 // Offline layout hypothesis only: not an ABI-complete or deployable adapter.
 // The pinned consumer sites shift 0x20/0x24/0x228/0x428 by eight bytes.
@@ -41,6 +42,21 @@ int main() {
     assert(!adapter.build({&first, &second})); // cycle
     assert(!adapter.build({nullptr}));
     assert(!adapter.build({}));
+    second.fill(0);
+    std::array<uintptr_t, 35> roots{};
+    roots.fill(reinterpret_cast<uintptr_t>(&first));
+    AvdDescriptor descriptor{3, 0, 0, 35, 0, reinterpret_cast<uintptr_t>(roots.data())};
+    auto read = [](uintptr_t address, void *out, size_t size) {
+        if (!address) return false;
+        std::memcpy(out, reinterpret_cast<const void *>(address), size);
+        return true;
+    };
+    AvdDescriptorBridge bridge;
+    assert(bridge.build(reinterpret_cast<uintptr_t>(&descriptor), read));
+    auto convertedRoots = reinterpret_cast<const uintptr_t *>(bridge.descriptor()->roots);
+    assert(convertedRoots[0] != roots[0]);
+    assert(convertedRoots[0] == convertedRoots[34]);
+    assert(first == saved);
     // Link values are deliberately NOT considered translated here.
     // Pointer mapping, callback ABI, ownership and loader admission remain open.
 }
