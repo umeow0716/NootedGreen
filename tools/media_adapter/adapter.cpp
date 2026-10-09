@@ -1,4 +1,5 @@
 #include "descriptor_bridge.hpp"
+#include "native_return_observer.hpp"
 #include <CommonCrypto/CommonDigest.h>
 #include <dlfcn.h>
 #include <mach/mach.h>
@@ -7,6 +8,11 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <array>
+#include <cstdlib>
+
+extern "C" __attribute__((visibility("default")))
+int NGRN_ObservedCreateContexts(void *context, const void *input);
 
 namespace {
 constexpr const char *nativePath = "/Library/Extensions/AppleIntelTGLGraphicsVADriver.bundle/Contents/MacOS/AppleIntelTGLGraphicsVADriver";
@@ -19,8 +25,15 @@ struct Library { void *handle = nullptr; Create create = nullptr; Destroy destro
 Library library;
 std::once_flag loadOnce;
 std::mutex registryLock;
-std::map<void *, std::unique_ptr<AvdDescriptorBridge>> registry;
-bool read(uintptr_t address, void *output, size_t length) {
+struct Entry {
+    AvdDescriptorBridge bridge;
+    std::array<uintptr_t, 17> callbacks{};
+    void *native = nullptr;
+};
+std::map<void *, std::unique_ptr<Entry>> registry;
+std::atomic<uintptr_t> nativeCreateContexts{0};
+std::atomic_flag observationTried = ATOMIC_FLAG_INIT;
+bool readMemory(uintptr_t address, void *output, size_t length) {
     mach_vm_size_t copied = 0;
     return address && mach_vm_read_overwrite(mach_task_self(), address, length,
         reinterpret_cast<mach_vm_address_t>(output), &copied) == KERN_SUCCESS
@@ -57,6 +70,39 @@ void load() {
 }
 
 extern "C" __attribute__((visibility("default")))
+int NGRN_ObservedCreateContexts(void *context, const void *input) {
+    using Callback = int (*)(void *, const void *);
+    const auto address = nativeCreateContexts.load(std::memory_order_acquire);
+    const auto native = reinterpret_cast<Callback>(address);
+    if (!native) return 10;
+    // Only this owned table slot changes. The native callback receives the
+    // original context/input exactly once, and its result passes through.
+    // Pinned 13e43 -> 14342 constructor -> vtable 75d018+10 = 2338e0;
+    // 14e1f invokes it synchronously. 2340c5 precedes destroy/status-11 conversion.
+    if (std::strcmp(getprogname(), "VTEncoderXPCService") ||
+        observationTried.test_and_set(std::memory_order_relaxed)) return native(context, input);
+    os_log_error(OS_LOG_DEFAULT, "NGRN_NATIVE_CONTEXT_CALLBACK_ENTER scoped-observation-only");
+    Dl_info info{};
+    constexpr uint8_t expected[] = {0x83,0xf8,0x00,0x0f,0x84,0x15,0x00,0x00,0x00};
+    uint8_t bytes[sizeof(expected)]{};
+    if (!dladdr(reinterpret_cast<void *>(address), &info) || !info.dli_fbase ||
+        address != reinterpret_cast<uintptr_t>(info.dli_fbase) + 0x13e43) {
+        os_log_error(OS_LOG_DEFAULT, "NGRN_NATIVE_RETURN_OBSERVER_SKIP callback-identity");
+        return native(context, input);
+    }
+    const uintptr_t site = reinterpret_cast<uintptr_t>(info.dli_fbase) + 0x2340c5;
+    if (!readMemory(site, bytes, sizeof(bytes)) || std::memcmp(bytes, expected, sizeof(bytes))) {
+        os_log_error(OS_LOG_DEFAULT, "NGRN_NATIVE_RETURN_OBSERVER_SKIP site-anchor");
+        return native(context, input);
+    }
+    NativeReturnObserver observer(site);
+    const int result = native(context, input);
+    std::fprintf(stderr, "NGRN_NATIVE_CONTEXT_CALLBACK_RETURN result=%d\n", result);
+    os_log_error(OS_LOG_DEFAULT, "NGRN_NATIVE_CONTEXT_CALLBACK_RETURN result=%{public}d", result);
+    return result;
+}
+
+extern "C" __attribute__((visibility("default")))
 int AVD_CreateAVDAccelerator(void **output, const void *input, AvdMetadata *metadata) {
     if (!output || !input || !metadata) return 5;
     *output = nullptr;
@@ -68,20 +114,33 @@ int AVD_CreateAVDAccelerator(void **output, const void *input, AvdMetadata *meta
         AvdMetadata native{};
         int result = library.create(&table, input, &native);
         if (result) { if (table) library.destroy(table); return result; }
-        auto bridge = std::make_unique<AvdDescriptorBridge>();
-        if (!table || native.renderer != 0x1080080 || !bridge->build(native.descriptor, read)) {
+        auto entry = std::make_unique<Entry>();
+        if (!table || native.renderer != 0x1080080 || !entry->bridge.build(native.descriptor, readMemory) ||
+            !readMemory(reinterpret_cast<uintptr_t>(table), entry->callbacks.data(), sizeof(entry->callbacks))) {
             if (table) library.destroy(table);
             return 10;
         }
-        native.descriptor = reinterpret_cast<uintptr_t>(bridge->descriptor());
+        Dl_info callbackInfo{};
+        const auto callback = entry->callbacks[3];
+        if (!dladdr(reinterpret_cast<void *>(callback), &callbackInfo) || !callbackInfo.dli_fbase ||
+            !callbackInfo.dli_fname || std::strcmp(callbackInfo.dli_fname, nativePath) ||
+            callback != reinterpret_cast<uintptr_t>(callbackInfo.dli_fbase) + 0x13e43) {
+            library.destroy(table);
+            return 10;
+        }
+        nativeCreateContexts.store(callback, std::memory_order_release);
+        entry->native = table;
+        entry->callbacks[3] = reinterpret_cast<uintptr_t>(&NGRN_ObservedCreateContexts);
+        native.descriptor = reinterpret_cast<uintptr_t>(entry->bridge.descriptor());
+        void *ownedTable = entry->callbacks.data();
         {
             std::lock_guard<std::mutex> lock(registryLock);
-            if (registry.count(table)) { library.destroy(table); return 10; }
-            registry.emplace(table, std::move(bridge));
+            if (registry.count(ownedTable)) { library.destroy(table); return 10; }
+            registry.emplace(ownedTable, std::move(entry));
         }
-        // Keep the original 0x88 table and every native callback/context intact.
+        // Owned table keeps all 15 other callbacks and all native contexts intact.
         *metadata = native;
-        *output = table;
+        *output = ownedTable;
         std::fprintf(stderr, "NGRN_ADAPTER_FACTORY_TRANSLATED native=430 consumer=438\n");
         return 0;
     } catch (...) {
@@ -94,15 +153,16 @@ extern "C" __attribute__((visibility("default")))
 int AVD_DestroyAVDAccelerator(void *table) {
     if (!table) return 5;
     try {
-    std::unique_ptr<AvdDescriptorBridge> bridge;
+    std::unique_ptr<Entry> entry;
     {
         std::lock_guard<std::mutex> lock(registryLock);
         auto found = registry.find(table);
         if (found == registry.end()) return 5;
-        bridge = std::move(found->second);
+        entry = std::move(found->second);
         registry.erase(found);
     }
-    bridge.reset();
-    return library.destroy(table);
+    void *native = entry->native;
+    entry.reset();
+    return library.destroy(native);
     } catch (...) { return 7; }
 }

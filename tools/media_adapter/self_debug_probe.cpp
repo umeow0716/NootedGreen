@@ -7,6 +7,7 @@
 #include <unistd.h>
 #include <cstdio>
 #include <cstdint>
+#include "native_return_observer.hpp"
 
 extern "C" int owned_debug_target();
 extern "C" const char owned_debug_site[];
@@ -121,6 +122,19 @@ int main() {
     if (set != KERN_SUCCESS || hits != 1 || captured != 0x1357 || result != 0x1357 ||
         restored != KERN_SUCCESS || !stateRestored || handlerRestored ||
         handlerRestore != KERN_SUCCESS) return 1;
-    std::puts("SELF_DEBUG_OWNED_CODE_OK no-gpu no-apple-text-write");
+    alarm(3);
+    bool scoped = false;
+    {
+        NativeReturnObserver observer(reinterpret_cast<uintptr_t>(owned_debug_site));
+        const int returned = owned_debug_target();
+        scoped = returned == 0x1357 && observer.observed(0x1357);
+    }
+    alarm(0);
+    if (!scoped) return 1;
+    {
+        NativeReturnObserver unhit(reinterpret_cast<uintptr_t>(owned_debug_site));
+        if (!unhit.isArmed() || unhit.observed(0x1357)) return 1;
+    } // Early native returns must restore even when the watched site is absent.
+    std::puts("SELF_DEBUG_OWNED_CODE_OK no-gpu no-apple-text-write scoped-observer=1");
     return 0;
 }
