@@ -88,14 +88,15 @@ int NGRN_ObservedCreateContexts(void *context, const void *input) {
         os_log_error(OS_LOG_DEFAULT, "NGRN_NATIVE_RETURN_OBSERVER_SKIP callback-identity");
         return native(context, input);
     }
-    // Proven live RendererInitialize target=132510. Its factory can leave
-    // default status 31; three following sub-initializers can return failure.
+    // Live 132510 -> 5a620 factory returned NULL, before sub-initializers.
+    // Observe only its exact data-validation rejection edges; presence matters,
+    // not the register value. Unhit sites do not exclude allocation failures.
     struct Site { uintptr_t call; unsigned length, returnOffset; uint8_t bytes[10]; };
     constexpr Site pinned[] = {
-        {0x1326ba, 5, 5, {0xe8,0x61,0x7f,0xf2,0xff}},
-        {0x13283e,10, 3, {0xff,0x51,0x10,0x89,0x45,0xdc,0x83,0x7d,0xdc,0x00}},
-        {0x132880,10, 3, {0xff,0x51,0x10,0x89,0x45,0xdc,0x83,0x7d,0xdc,0x00}},
-        {0x1328c2,10, 3, {0xff,0x51,0x10,0x89,0x45,0xdc,0x83,0x7d,0xdc,0x00}},
+        {0x5acbe, 5, 0, {0xe9,0xa7,0x04,0x00,0x00}}, // zero data length
+        {0x5ace8, 5, 0, {0xe9,0x7d,0x04,0x00,0x00}}, // header != 0x10000
+        {0x5ae46, 5, 0, {0xe9,0x1f,0x03,0x00,0x00}}, // record count mismatch
+        {0x5ae55, 5, 0, {0xe9,0x10,0x03,0x00,0x00}}, // count > 64
     };
     std::array<uintptr_t, 4> sites{};
     for (unsigned i = 0; i != std::size(pinned); ++i) {
@@ -107,8 +108,8 @@ int NGRN_ObservedCreateContexts(void *context, const void *input) {
         }
         sites[i] = call + pinned[i].returnOffset;
     }
-    // Factory pointer is reduced to nonnull in the handler, never logged as an address.
-    NativeReturnObserver observer(sites, 1);
+    // Never log pointer-shaped register values at conditional rejection edges.
+    NativeReturnObserver observer(sites, 15);
     const int result = native(context, input);
     std::fprintf(stderr, "NGRN_NATIVE_CONTEXT_CALLBACK_RETURN result=%d\n", result);
     os_log_error(OS_LOG_DEFAULT, "NGRN_NATIVE_CONTEXT_CALLBACK_RETURN result=%{public}d", result);
