@@ -5495,7 +5495,7 @@ IOReturn Gen11::vfGetHwCaps(void *that, void *input, void *output,
 
 	constexpr uint64_t kHwCapsSize = 0x7C;
 	constexpr uint32_t kTigerLakeVfIdentity = 0x9A498086U;
-	constexpr uint32_t kCanonicalIceLakeIdentity = 0x8A528086U;
+	constexpr uint32_t kCanonicalTigerLakeIdentity = 0x9A408086U;
 	if (!output || !outputSize || *outputSize != kHwCapsSize) {
 		SYSLOG("ngreen", "V335: rejected changed VF media hw-caps reply shape size=%llu",
 		       outputSize ? *outputSize : 0ULL);
@@ -5508,8 +5508,8 @@ IOReturn Gen11::vfGetHwCaps(void *that, void *input, void *output,
 		       words[2]);
 		return kIOReturnUnsupported;
 	}
-	words[2] = kCanonicalIceLakeIdentity;
-	SYSLOG("ngreen", "V335: exposed canonical ICL media hw-caps identity 8a528086 for exact VF 9a498086");
+	words[2] = kCanonicalTigerLakeIdentity;
+	SYSLOG("ngreen", "V340: exposed canonical TGL media hw-caps identity 9a408086 for exact VF 9a498086");
 	return kIOReturnSuccess;
 }
 
@@ -9706,22 +9706,11 @@ bool Gen11::injectAcceleratorPersonality(const char *bundleId)
 
 	// Tahoe 25G229 AppleGVA removed the former TGL renderer slot 0x1080040
 	// from its hard admission set, while retaining the ICL/Gen11 slot
-	// 0x1080080.  Use the sealed-system Tahoe ICL VADriver/VAME pair rather
-	// than the TGL userspace binaries built for macOS 10.16.  Both publish the
-	// same 0x88-byte AppleGVA function table and use the same kernel selectors,
-	// but only the ICL pair is compiled for the current AppleGVA object/callback
-	// ABI.  Metal and GL remain on their native TGL plugins; these two aliases
-	// affect only the private media personality clone.
-	auto *mediaBundleName =
-		OSString::withCString("AppleIntelICLGraphicsVADriver");
-	const bool mediaBundleReady = mediaBundleName &&
-		dict->setObject("IODVDBundleName", mediaBundleName);
-	OSSafeReleaseNULL(mediaBundleName);
-	if (!mediaBundleReady) {
-		dict->release();
-		return false;
-	}
-
+	// 0x1080080.  Keep that admission alias, but preserve the cloned native TGL
+	// IODVDBundleName so the signed TGL VADriver emits commands for TGL hardware.
+	// The ICL userspace experiment reached the same selector ABI but left the
+	// first accepted BCS batch permanently incomplete, proving that selector
+	// topology alone is not a command-stream compatibility contract.
 	auto *rendererId = OSNumber::withNumber(0x1080080ULL, 32);
 	const bool rendererReady = rendererId &&
 		dict->setObject("IOVARendererID", rendererId);
@@ -9731,7 +9720,7 @@ bool Gen11::injectAcceleratorPersonality(const char *bundleId)
 		return false;
 	}
 	SYSLOG("ngreen",
-		"V335: selected exact Tahoe ICL media userspace and renderer slot 0x1080080");
+		"V340: preserved native TGL media userspace with Tahoe renderer slot 0x1080080");
 
 	auto *primaryMatch = OSString::withCString("0x9a498086");
 	const bool matchReady = primaryMatch &&

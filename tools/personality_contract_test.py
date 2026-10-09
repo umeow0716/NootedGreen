@@ -58,10 +58,6 @@ def verify_runtime_injection(source: str, label: str) -> None:
         "OSSafeReleaseNULL(qualityRating)",
         "OSSafeReleaseNULL(h264Encode)",
         "if (!h264EncodeReady)",
-        'OSString::withCString("AppleIntelICLGraphicsVADriver")',
-        'dict->setObject("IODVDBundleName", mediaBundleName)',
-        "OSSafeReleaseNULL(mediaBundleName)",
-        "if (!mediaBundleReady)",
         "OSNumber::withNumber(0x1080080ULL, 32)",
         'dict->setObject("IOVARendererID", rendererId)',
         "OSSafeReleaseNULL(rendererId)",
@@ -72,13 +68,14 @@ def verify_runtime_injection(source: str, label: str) -> None:
         require(token in body, f"{label}: incomplete runtime H.264 injection: {token}")
     require('source->getObject("IOGVAH264EncodeCapabilities")' not in body,
             f"{label}: runtime injection still depends on an unpackaged source plist")
+    require('dict->setObject("IODVDBundleName"' not in body and
+            'OSString::withCString("AppleIntelICLGraphicsVADriver")' not in body,
+            f"{label}: runtime clone overrides native TGL media userspace")
     ordered = (
         "OSDictionary::withDictionary(source)",
         "OSDictionary::withCapacity(2)",
         'dict->setObject("IOGVAH264EncodeCapabilities", h264Encode)',
         "if (!h264EncodeReady)",
-        'dict->setObject("IODVDBundleName", mediaBundleName)',
-        "if (!mediaBundleReady)",
         'dict->setObject("IOVARendererID", rendererId)',
         "if (!rendererReady)",
         "gIOCatalogue->addDrivers(array, true)",
@@ -238,14 +235,11 @@ def main() -> int:
          "wrong runtime capability key"),
         ("if (!h264EncodeReady)", "if (false)",
          "removed runtime capability failure gate"),
-        ('OSString::withCString("AppleIntelICLGraphicsVADriver")',
-         'OSString::withCString("AppleIntelTGLGraphicsVADriver")',
-         "restored pre-Tahoe TGL media userspace"),
-        ('dict->setObject("IODVDBundleName", mediaBundleName)',
-         'dict->setObject("IODVDBundleNameX", mediaBundleName)',
-         "wrong runtime media bundle key"),
-        ("if (!mediaBundleReady)", "if (false)",
-         "removed runtime media bundle failure gate"),
+        ("auto *rendererId = OSNumber::withNumber(0x1080080ULL, 32);",
+         'auto *mediaBundleName = OSString::withCString("AppleIntelICLGraphicsVADriver");\n'
+         '\tdict->setObject("IODVDBundleName", mediaBundleName);\n'
+         '\tauto *rendererId = OSNumber::withNumber(0x1080080ULL, 32);',
+         "reintroduced cross-generation ICL media userspace"),
         ("OSNumber::withNumber(0x1080080ULL, 32)",
          "OSNumber::withNumber(0x1080040ULL, 32)",
          "restored Tahoe-rejected TGL renderer slot"),
@@ -271,9 +265,9 @@ def main() -> int:
     print(
         "PASS: complete native display/media personality contract in "
         f"{len(personalities)} payloads; "
-        f"{len(personalities) * 2 + 10} source/runtime negative mutations rejected; "
-        "runtime media clone selects exact Tahoe ICL userspace while preserving "
-        "the native TGL Metal/GL payload contract"
+        f"{len(personalities) * 2 + 8} source/runtime negative mutations rejected; "
+        "runtime media clone preserves native TGL userspace while applying only "
+        "the Tahoe renderer admission alias"
     )
     return 0
 

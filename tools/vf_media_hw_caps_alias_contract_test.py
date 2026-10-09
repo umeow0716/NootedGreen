@@ -308,11 +308,11 @@ def verify_source(source: str, header: str, label: str) -> None:
         "if (result != kIOReturnSuccess)",
         "constexpr uint64_t kHwCapsSize = 0x7C;",
         "constexpr uint32_t kTigerLakeVfIdentity = 0x9A498086U;",
-        "constexpr uint32_t kCanonicalIceLakeIdentity = 0x8A528086U;",
+        "constexpr uint32_t kCanonicalTigerLakeIdentity = 0x9A408086U;",
         "if (!output || !outputSize || *outputSize != kHwCapsSize)",
         "if (words[2] != kTigerLakeVfIdentity)",
-        "words[2] = kCanonicalIceLakeIdentity;",
-        "V335: exposed canonical ICL media hw-caps identity",
+        "words[2] = kCanonicalTigerLakeIdentity;",
+        "V340: exposed canonical TGL media hw-caps identity",
     )
     positions = []
     for token in required:
@@ -385,12 +385,12 @@ def main() -> int:
 
     source_mutations = (
         replace_once(source, "0x9A498086U", "0x9A488086U"),
-        replace_once(source, "0x8A528086U", "0x8A518086U"),
+        replace_once(source, "0x9A408086U", "0x9A488086U"),
         replace_once(source, "kHwCapsSize = 0x7C", "kHwCapsSize = 0x80"),
         replace_once(source, "words[2] != kTigerLakeVfIdentity",
                      "words[1] != kTigerLakeVfIdentity"),
-        replace_once(source, "words[2] = kCanonicalIceLakeIdentity",
-                     "words[1] = kCanonicalIceLakeIdentity"),
+        replace_once(source, "words[2] = kCanonicalTigerLakeIdentity",
+                     "words[1] = kCanonicalTigerLakeIdentity"),
         replace_once(source, "result != kIOReturnSuccess",
                      "result == kIOReturnSuccess"),
         replace_once(
