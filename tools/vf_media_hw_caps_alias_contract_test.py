@@ -550,7 +550,7 @@ def verify_v342_user_bridge(source: str, label: str) -> None:
         raise AssertionError(f"{label}: AppleGVA bridge registered before PF/VF classification")
 
 
-def verify_v347_path_observer(source: str, label: str) -> None:
+def verify_v348_path_observer(source: str, label: str) -> None:
     disabled_open = "#if 0 // NGRN_V342_RETIRED_APPLEGVA_PATCHES"
     disabled_close = "#endif // NGRN_V342_RETIRED_APPLEGVA_PATCHES"
     if source.count(disabled_open) != 1 or source.count(disabled_close) != 1:
@@ -566,7 +566,7 @@ def verify_v347_path_observer(source: str, label: str) -> None:
         "V342_LOCAL_PATCH",
     ):
         if forbidden in active:
-            raise AssertionError(f"{label}: V347 active source retained binary modification: {forbidden}")
+            raise AssertionError(f"{label}: V348 active source retained binary modification: {forbidden}")
 
     encoder = "VTEncoderXPCService"
     decoder = "VTDecoderXPCService"
@@ -574,22 +574,22 @@ def verify_v347_path_observer(source: str, label: str) -> None:
         if active.count('"' + process + '"') != 2:
             raise AssertionError(f"{label}: exact observation basename changed: {process}")
     if active.count(
-            "V347MediaObservationSection, UserPatcher::ProcInfo::MatchSuffix}") != 2:
-        raise AssertionError(f"{label}: observation admission is not exact-basename suffix only")
-    if "UserPatcher::ProcInfo::MatchAny" in active or \
+            "V348MediaObservationSection, UserPatcher::ProcInfo::MatchAny}") != 2:
+        raise AssertionError(f"{label}: observation admission is not exact-service substring only")
+    if "UserPatcher::ProcInfo::MatchSuffix" in active or \
             "UserPatcher::ProcInfo::MatchPrefix" in active:
-        raise AssertionError(f"{label}: observation admission became broad")
-    if active.count("constexpr uint32_t V347MediaObservationSection = 1;") != 1:
+        raise AssertionError(f"{label}: observation admission is not the proven MatchAny mode")
+    if active.count("constexpr uint32_t V348MediaObservationSection = 1;") != 1:
         raise AssertionError(f"{label}: observation section is absent or disabled")
 
-    register = function_body(active, "void registerV347MediaVnodeObservation()")
+    register = function_body(active, "void registerV348MediaVnodeObservation()")
     for token in (
         "lilu.onProcLoadForce(",
-        "v347MediaObservationProcesses, arrsize(v347MediaObservationProcesses)",
-        "V347: observed VideoToolbox XPC exec vnode path-len=%lu path=%s",
+        "v348MediaObservationProcesses, arrsize(v348MediaObservationProcesses)",
+        "V348: observed substring-qualified VideoToolbox XPC exec vnode path-len=%lu path=%s",
         "pathLength, path",
         "nullptr, nullptr, 0",
-        "V347: armed observation-only VideoToolbox exec vnode path capture with no binary modifications",
+        "V348: armed substring-qualified observation-only VideoToolbox exec vnode path capture with no binary modifications",
     ):
         if register.count(token) != 1:
             raise AssertionError(f"{label}: changed observation-only registration: {token}")
@@ -606,7 +606,7 @@ def verify_v347_path_observer(source: str, label: str) -> None:
         exact_gate,
         "if (exactTigerLakeVf) {",
         "V343: classified AppleGVA bridge VF physical=a7a8 compatibility=9a49",
-        "registerV347MediaVnodeObservation();",
+        "registerV348MediaVnodeObservation();",
     ):
         if patcher.count(token) != 1:
             raise AssertionError(f"{label}: path observer escaped exact dual-identity VF gate: {token}")
@@ -615,12 +615,12 @@ def verify_v347_path_observer(source: str, label: str) -> None:
         "uint32_t compatibilityDeviceId = 0;",
         exact_gate,
         "if (exactTigerLakeVf) {",
-        "registerV347MediaVnodeObservation();",
+        "registerV348MediaVnodeObservation();",
     ))
     if gate_order != tuple(sorted(gate_order)):
         raise AssertionError(f"{label}: observation dual-identity VF gate ordering changed")
     init = function_body(active, "void NGreen::init()")
-    if "registerV347MediaVnodeObservation" in init:
+    if "registerV348MediaVnodeObservation" in init:
         raise AssertionError(f"{label}: observer registered before PF/VF classification")
 
 
@@ -645,7 +645,7 @@ def main() -> int:
     for data, label in payloads:
         verify_payload(data, label)
     verify_source(source, header, f"{source_path}/{header_path}")
-    verify_v347_path_observer(green, str(green_path))
+    verify_v348_path_observer(green, str(green_path))
 
     source_mutations = (
         replace_once(
@@ -716,30 +716,30 @@ def main() -> int:
                      "nullptr, &v342AppleGvaBinary, 1"),
         replace_once(green,
                      '{"VTEncoderXPCService", sizeof("VTEncoderXPCService") - 1,\n'
-                     "\t V347MediaObservationSection, UserPatcher::ProcInfo::MatchSuffix}",
+                     "\t V348MediaObservationSection, UserPatcher::ProcInfo::MatchAny}",
                      '{"VTEncoderXPCService", sizeof("VTEncoderXPCService") - 1,\n'
-                     "\t V347MediaObservationSection, UserPatcher::ProcInfo::MatchAny}"),
+                     "\t V348MediaObservationSection, UserPatcher::ProcInfo::MatchSuffix}"),
         replace_once(green, '{"VTEncoderXPCService",', '{"XPCService",'),
-        replace_once(green, "V347MediaObservationSection = 1",
-                     "V347MediaObservationSection = 0"),
+        replace_once(green, "V348MediaObservationSection = 1",
+                     "V348MediaObservationSection = 0"),
         replace_once(green,
-                     "v347MediaObservationProcesses, arrsize(v347MediaObservationProcesses)",
-                     "v347MediaObservationProcesses, 1"),
+                     "v348MediaObservationProcesses, arrsize(v348MediaObservationProcesses)",
+                     "v348MediaObservationProcesses, 1"),
         replace_once(green,
-                     "V347: observed VideoToolbox XPC exec vnode path-len=%lu path=%s",
-                     "V347: observed VideoToolbox process"),
+                     "V348: observed substring-qualified VideoToolbox XPC exec vnode path-len=%lu path=%s",
+                     "V348: observed VideoToolbox process"),
         replace_once(green,
-                     "V347: armed observation-only VideoToolbox exec vnode path capture with no binary modifications",
-                     "V347: armed VideoToolbox binary patches"),
-        replace_once(green, "registerV347MediaVnodeObservation();",
+                     "V348: armed substring-qualified observation-only VideoToolbox exec vnode path capture with no binary modifications",
+                     "V348: armed VideoToolbox binary patches"),
+        replace_once(green, "registerV348MediaVnodeObservation();",
                      "registerV342AppleGvaBridge();"),
     )
     for index, mutation in enumerate(green_mutations):
         try:
-            verify_v347_path_observer(mutation, f"green-mutation-{index}")
+            verify_v348_path_observer(mutation, f"green-mutation-{index}")
         except (AssertionError, ValueError):
             continue
-        raise AssertionError(f"escaped V347 path-observer mutation {index}")
+        raise AssertionError(f"escaped V348 path-observer mutation {index}")
 
     payload_offsets = (
         0x9CEE, 0x9D29, 0x9C98, 0xA079, 0xCB8D8, 0x2399E,

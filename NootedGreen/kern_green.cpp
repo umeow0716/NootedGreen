@@ -179,27 +179,28 @@ void registerV342AppleGvaBridge() {
 }
 #endif // NGRN_V342_RETIRED_APPLEGVA_PATCHES
 
-// V346 proved that neither the canonical framework path nor the complete
-// bundle tail is the exec vnode path reported by KAUTH_FILEOP_EXEC.  Observe
-// only the two exact executable basenames so the next run can record Lilu's
-// actual path.  No BinaryModInfo is registered in this build: an unexpectedly
-// broad basename match can therefore do nothing except emit this bounded log.
-constexpr uint32_t V347MediaObservationSection = 1;
-static UserPatcher::ProcInfo v347MediaObservationProcesses[] = {
+// V347 proved that the service basename is present neither as the complete
+// vnode path nor as its final suffix.  Lilu 1.7.2 implements MatchAny with a
+// bounded strstr() against the exact KAUTH_FILEOP_EXEC path, so use the two
+// unique service names as observation-only substrings.  No BinaryModInfo is
+// registered in this build: a match can only emit the exact path and cannot
+// modify AppleGVA or any other userspace image.
+constexpr uint32_t V348MediaObservationSection = 1;
+static UserPatcher::ProcInfo v348MediaObservationProcesses[] = {
 	{"VTEncoderXPCService", sizeof("VTEncoderXPCService") - 1,
-	 V347MediaObservationSection, UserPatcher::ProcInfo::MatchSuffix},
+	 V348MediaObservationSection, UserPatcher::ProcInfo::MatchAny},
 	{"VTDecoderXPCService", sizeof("VTDecoderXPCService") - 1,
-	 V347MediaObservationSection, UserPatcher::ProcInfo::MatchSuffix},
+	 V348MediaObservationSection, UserPatcher::ProcInfo::MatchAny},
 };
 
-void registerV347MediaVnodeObservation() {
+void registerV348MediaVnodeObservation() {
 	lilu.onProcLoadForce(
-		v347MediaObservationProcesses, arrsize(v347MediaObservationProcesses),
+		v348MediaObservationProcesses, arrsize(v348MediaObservationProcesses),
 		[](void *, UserPatcher &, vm_map_t, const char *path, size_t pathLength) {
-			SYSLOG("ngreen", "V347: observed VideoToolbox XPC exec vnode path-len=%lu path=%s",
+			SYSLOG("ngreen", "V348: observed substring-qualified VideoToolbox XPC exec vnode path-len=%lu path=%s",
 				pathLength, path);
 		}, nullptr, nullptr, 0);
-	SYSLOG("ngreen", "V347: armed observation-only VideoToolbox exec vnode path capture with no binary modifications");
+	SYSLOG("ngreen", "V348: armed substring-qualified observation-only VideoToolbox exec vnode path capture with no binary modifications");
 }
 } // namespace
 
@@ -286,7 +287,7 @@ void NGreen::processPatcher(KernelPatcher &patcher) {
 		compatibilityDeviceId == 0x9A49;
 	if (exactTigerLakeVf) {
 		SYSLOG("ngreen", "V343: classified AppleGVA bridge VF physical=a7a8 compatibility=9a49");
-		registerV347MediaVnodeObservation();
+		registerV348MediaVnodeObservation();
 	}
 
 	const bool routedRead16 = KernelPatcher::routeVirtual(this->iGPU,
