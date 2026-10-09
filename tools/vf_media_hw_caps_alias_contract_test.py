@@ -333,24 +333,26 @@ def verify_source(source: str, header: str, label: str) -> None:
     wrapper_contracts = (
         ("IOReturn Gen11::vfVideoGetIosurfaceAccelId(",
          "callback->oVfVideoGetIosurfaceAccelId)(that, arguments, outputSize);",
-         "V337: media selector 0x100"),
+         "V337: media selector 0x100 enter",
+         "V341: media selector 0x100 return"),
         ("IOReturn Gen11::vfVideoUpdatePerfCapability(",
          "callback->oVfVideoUpdatePerfCapability)(that, arguments, inputSize);",
-         "V337: media selector 0x101"),
+         "V337: media selector 0x101 enter",
+         "V337: media selector 0x101 return"),
         ("IOReturn Gen11::vfVideoSetContextPriority(",
          "callback->oVfVideoSetContextPriority)(that, arguments, inputSize);",
-         "V337: media selector 0x102"),
+         "V337: media selector 0x102 enter",
+         "V337: media selector 0x102 return"),
     )
-    for signature, native, marker in wrapper_contracts:
+    for signature, native, enter_marker, return_marker in wrapper_contracts:
         wrapper = function_body(source, signature)
-        for token in (native, marker + " enter", marker + " return",
-                      "return result;"):
+        for token in (native, enter_marker, return_marker, "return result;"):
             if wrapper.count(token) != 1:
                 raise AssertionError(
                     f"{label}: changed observation-only selector wrapper: {token}"
                 )
-        if wrapper.index(marker + " enter") > wrapper.index(native) or \
-                wrapper.index(native) > wrapper.index(marker + " return"):
+        if wrapper.index(enter_marker) > wrapper.index(native) or \
+                wrapper.index(native) > wrapper.index(return_marker):
             raise AssertionError(f"{label}: changed selector enter/native/return ordering")
         if wrapper.count("FunctionCast(") != 1:
             raise AssertionError(f"{label}: selector wrapper must call native exactly once")
@@ -361,6 +363,28 @@ def verify_source(source: str, header: str, label: str) -> None:
                 raise AssertionError(
                     f"{label}: observation wrapper changes behavior via {forbidden}"
                 )
+
+    accel_wrapper = function_body(
+        source, "IOReturn Gen11::vfVideoGetIosurfaceAccelId("
+    )
+    accel_observation = (
+        "const uint64_t observedOutputSize = outputSize ? *outputSize : 0;",
+        "const bool readable = result == kIOReturnSuccess && arguments != nullptr;",
+        "const uint32_t acceleratorId = readable ?",
+        "*static_cast<const uint32_t *>(arguments) : 0;",
+        "output-size=%llu accel-id=%u readable=%u",
+    )
+    observation_positions = []
+    for token in accel_observation:
+        if accel_wrapper.count(token) != 1:
+            raise AssertionError(
+                f"{label}: changed selector 0x100 result observation: {token}"
+            )
+        observation_positions.append(accel_wrapper.index(token))
+    if observation_positions != sorted(observation_positions):
+        raise AssertionError(
+            f"{label}: selector 0x100 observation escaped post-native order"
+        )
 
 
 def replace_once(value: str, before: str, after: str) -> str:
@@ -404,12 +428,17 @@ def main() -> int:
         replace_once(source, VIDEO_GET_ACCEL_ID, VIDEO_GET_ACCEL_ID + "_changed"),
         replace_once(source, VIDEO_UPDATE_PERF, VIDEO_UPDATE_PERF + "_changed"),
         replace_once(source, VIDEO_SET_PRIORITY, VIDEO_SET_PRIORITY + "_changed"),
-        replace_once(source, "V337: media selector 0x100 return",
-                     "V337: media selector 0x100 exit"),
+        replace_once(source, "V341: media selector 0x100 return",
+                     "V341: media selector 0x100 exit"),
         replace_once(source, "V337: media selector 0x101 return",
                      "V337: media selector 0x101 exit"),
         replace_once(source, "V337: media selector 0x102 return",
                      "V337: media selector 0x102 exit"),
+        replace_once(source,
+                     "result == kIOReturnSuccess && arguments != nullptr",
+                     "result != kIOReturnSuccess && arguments != nullptr"),
+        replace_once(source, "*static_cast<const uint32_t *>(arguments)",
+                     "*static_cast<const uint16_t *>(arguments)"),
     )
     for index, mutation in enumerate(source_mutations):
         try:
@@ -444,7 +473,7 @@ def main() -> int:
 
     print(
         "PASS: exact selector 0xb PCI identity producer, VF-only media alias, "
-        "sixteen source and eighteen payload mutations"
+        "eighteen source and eighteen payload mutations"
     )
     return 0
 

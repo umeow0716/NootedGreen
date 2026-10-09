@@ -3360,21 +3360,21 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			SYSLOG("ngreen", "V338: admitted sparse VF IOSurface plane through native surface-level fallback");
 
 			KernelPatcher::RouteRequest requests[] = {
-			// Tahoe's native ICL VADriver asks selector 0xb for IntelHwCapsInfo
-			// and admits only canonical ICL PCI identities.  The SR-IOV VF has a
-			// distinct TGL PCI device id while the exact Tahoe ICL userspace ABI
+			// Tahoe's signed TGL VADriver asks selector 0xb for IntelHwCapsInfo
+			// and admits only canonical TGL PCI identities.  The SR-IOV VF has a
+			// distinct TGL PCI device id while the exact Tahoe TGL userspace ABI
 			// uses the same 0xb/0x100/0x101 user-client selector surface.  Preserve
 			// the kernel's real 0x9a49 identity everywhere; only canonicalize the
 			// successful, fixed-size user-client reply used to create the media
 			// physical-accelerator object.
 			{"__ZN13IGAccelDevice11get_hw_capsEP16_IntelHwCapsInfoS1_yPy",
 			 vfGetHwCaps, this->oVfGetHwCaps},
-			// V337 is observation-only.  The V335 run passed physical-accelerator
-			// admission and then stopped after AppleGVA selected scaler index 1.
-			// Bracket the complete 0x100..0x102 native video-context method table
-			// without changing its arguments, result or any context state.  An enter
-			// without its matching return identifies the exact synchronous selector;
-			// no selector marker keeps the next fault in userspace before IOConnect.
+			// V341 remains observation-only.  V340 proved selector 0x100 returns
+			// successfully but userspace never reaches 0x101.  Record the exact
+			// 32-bit accelerator id that the signed TGL VADriver subsequently passes
+			// to IOSurfaceBindAccel, while keeping all arguments, results and context
+			// state unchanged.  The existing 0x101/0x102 brackets stay in place for
+			// the next boundary.
 			{"__ZN19IGAccelVideoContext22get_iosurface_accel_idEP37sIntelVideoMethodArgsGetAcceleratorIdPy",
 			 vfVideoGetIosurfaceAccelId, this->oVfVideoGetIosurfaceAccelId},
 			{"__ZN19IGAccelVideoContext22update_perf_capabilityEP37sIntelVideoMethodArgsPerfCapabilityIny",
@@ -5522,8 +5522,13 @@ IOReturn Gen11::vfVideoGetIosurfaceAccelId(void *that, void *arguments,
 	const IOReturn result = FunctionCast(
 		vfVideoGetIosurfaceAccelId,
 		callback->oVfVideoGetIosurfaceAccelId)(that, arguments, outputSize);
-	SYSLOG("ngreen", "V337: media selector 0x100 return result=0x%x",
-	       static_cast<unsigned int>(result));
+	const uint64_t observedOutputSize = outputSize ? *outputSize : 0;
+	const bool readable = result == kIOReturnSuccess && arguments != nullptr;
+	const uint32_t acceleratorId = readable ?
+		*static_cast<const uint32_t *>(arguments) : 0;
+	SYSLOG("ngreen", "V341: media selector 0x100 return result=0x%x output-size=%llu accel-id=%u readable=%u",
+	       static_cast<unsigned int>(result), observedOutputSize, acceleratorId,
+	       readable ? 1U : 0U);
 	return result;
 }
 
