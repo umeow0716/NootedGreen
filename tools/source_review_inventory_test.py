@@ -106,26 +106,27 @@ EXPECTED_DIRECT_VENDOR_INCLUDES = {
     "MacKernelSDK/Headers/stddef.h",
     "MacKernelSDK/Headers/stdint.h",
     "MacKernelSDK/Headers/string.h",
+    "MacKernelSDK/Headers/sys/kauth.h",
 }
 EXPECTED_PRODUCT_SYMBOL_COUNTS = {
-    "undefined": 81,
-    "defined": 652,
+    "undefined": 82,
+    "defined": 651,
     "external": 69,
 }
 EXPECTED_PRODUCT_SYMBOL_DIGESTS = {
     # V343 adds one product-internal cross-TU symbol for positive VF identity;
     # it is defined by kern_gen11 and consumed by kern_green, so the external
     # kernel/Lilu ABI partition below remains byte-for-byte unchanged.
-    "undefined": "b3386ba5a8de40e8bd6445fc2cae5ffb9791130580d394db248a8a309cac19c6",
-    "defined": "f62ece126672fb9ca62bf9c2629bb07b3228930c717c97c2035adbc9b3144ca3",
-    "external": "bb1a795db6ba375b2053c427377088bf2c9853496a28eb182a947788c68bd2c7",
+    "undefined": "f2203068ae3bb4d232b9628d34e631b385657f5d4134a169521f2ce9c8d343da",
+    "defined": "64b638ce727dd574cee027211a34ce2922792aa3ee605e22d238fd74a208643d",
+    "external": "c9afb4fceb7befaa4347ad8de1e954b2df01ea531380a7c48d74a43321543ab9",
 }
 EXPECTED_EXTERNAL_ABI_PARTITIONS = {
     # V342 adds only LiluAPI::onProcLoad for the process-local AppleGVA bridge;
     # V344 narrows its Cryptex-tolerant admission to two canonical suffixes.
     # The kernel import partition remains unchanged.
-    "Lilu": (17, "8d08e64b8c1b5c788f5fcc360ad6f4a8f8f60c03db0627263171cdfed6fb0cf2"),
-    "kernel": (52, "bd083937eb559b618d306eb88a905a15b21e8fffcae97523019eaafcb153c64f"),
+    "Lilu": (16, "c826042ab195d1496195d180c6b4edf01160cdb5158e43e2f4a6d51eb56eee1a"),
+    "kernel": (53, "dcd5632e265d7acf19fa5d94172a3d08349ee731a56efb7e9d03622c1e07b8f2"),
 }
 
 # These programs require an execution environment deliberately absent from the

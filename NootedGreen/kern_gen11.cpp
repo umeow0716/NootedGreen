@@ -4055,6 +4055,8 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			"com.xxxxx.driver.AppleIntelTGLGraphics";
 		PANIC_COND(!injectAcceleratorPersonality(bundleId), "ngreen",
 			"Cannot publish complete TGL accelerator personality");
+		if (vfActive)
+			ngArmV349MediaExecObservation();
 
 		return true;
 	}

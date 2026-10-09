@@ -10,6 +10,7 @@
 #include <Headers/kern_devinfo.hpp>
 #include <i386/machine_routines.h>
 #include <kern/sched_prim.h>
+#include <sys/kauth.h>
 
 NGreen *NGreen::callback = nullptr;
 
@@ -179,30 +180,51 @@ void registerV342AppleGvaBridge() {
 }
 #endif // NGRN_V342_RETIRED_APPLEGVA_PATCHES
 
-// V347 proved that the service basename is present neither as the complete
-// vnode path nor as its final suffix.  Lilu 1.7.2 implements MatchAny with a
-// bounded strstr() against the exact KAUTH_FILEOP_EXEC path, so use the two
-// unique service names as observation-only substrings.  No BinaryModInfo is
-// registered in this build: a match can only emit the exact path and cannot
-// modify AppleGVA or any other userspace image.
-constexpr uint32_t V348MediaObservationSection = 1;
-static UserPatcher::ProcInfo v348MediaObservationProcesses[] = {
-	{"VTEncoderXPCService", sizeof("VTEncoderXPCService") - 1,
-	 V348MediaObservationSection, UserPatcher::ProcInfo::MatchAny},
-	{"VTDecoderXPCService", sizeof("VTDecoderXPCService") - 1,
-	 V348MediaObservationSection, UserPatcher::ProcInfo::MatchAny},
-};
+// V347/V348 proved that neither the canonical XPC bundle tail nor either
+// service basename occurs in KAUTH_FILEOP_EXEC's actual path.  Register a
+// separate observation-only listener so unmatched paths can be seen without
+// making Lilu inject or patch any userspace process.  The exact TGL payload
+// arms capture only after its routes and personality are complete; a hard cap
+// bounds log volume until the one media trigger starts its encoder service.
+static kauth_listener_t v349MediaExecListener {nullptr};
+static UInt8 v349MediaExecCookie {0};
+static volatile UInt32 v349MediaExecArmed {0};
+static volatile SInt32 v349MediaExecCount {0};
+constexpr SInt32 V349MediaExecLimit = 64;
 
-void registerV348MediaVnodeObservation() {
-	lilu.onProcLoadForce(
-		v348MediaObservationProcesses, arrsize(v348MediaObservationProcesses),
-		[](void *, UserPatcher &, vm_map_t, const char *path, size_t pathLength) {
-			SYSLOG("ngreen", "V348: observed substring-qualified VideoToolbox XPC exec vnode path-len=%lu path=%s",
-				pathLength, path);
-		}, nullptr, nullptr, 0);
-	SYSLOG("ngreen", "V348: armed substring-qualified observation-only VideoToolbox exec vnode path capture with no binary modifications");
+int observeV349MediaExecPath(kauth_cred_t, void *idata, kauth_action_t action,
+	uintptr_t, uintptr_t arg1, uintptr_t, uintptr_t) {
+	if (idata == &v349MediaExecCookie && action == KAUTH_FILEOP_EXEC && arg1 &&
+	    v349MediaExecArmed != 0) {
+		const auto slot = OSIncrementAtomic(&v349MediaExecCount);
+		if (slot < V349MediaExecLimit) {
+			const auto *path = reinterpret_cast<const char *>(arg1);
+			SYSLOG("ngreen", "V349: observed post-TGL exec vnode path slot=%d path-len=%lu path=%s",
+				slot, strlen(path), path);
+		}
+	}
+	return 0;
+}
+
+void registerV349MediaExecObservation() {
+	PANIC_COND(v349MediaExecListener, "ngreen",
+		"V349 media exec observer registered more than once");
+	v349MediaExecListener = kauth_listen_scope(
+		KAUTH_SCOPE_FILEOP, observeV349MediaExecPath, &v349MediaExecCookie);
+	PANIC_COND(!v349MediaExecListener, "ngreen",
+		"Cannot register V349 media exec observer");
+	SYSLOG("ngreen", "V349: registered bounded KAUTH exec observer with no binary modifications");
 }
 } // namespace
+
+void ngArmV349MediaExecObservation() {
+	PANIC_COND(!v349MediaExecListener, "ngreen",
+		"Cannot arm missing V349 media exec observer");
+	PANIC_COND(!OSCompareAndSwap(0, 1, &v349MediaExecArmed), "ngreen",
+		"V349 media exec observer armed more than once");
+	OSSynchronizeIO();
+	SYSLOG("ngreen", "V349: enabled bounded KAUTH exec capture after exact TGL payload publication");
+}
 
 void NGreen::init() {
     callback = this;
@@ -287,7 +309,7 @@ void NGreen::processPatcher(KernelPatcher &patcher) {
 		compatibilityDeviceId == 0x9A49;
 	if (exactTigerLakeVf) {
 		SYSLOG("ngreen", "V343: classified AppleGVA bridge VF physical=a7a8 compatibility=9a49");
-		registerV348MediaVnodeObservation();
+		registerV349MediaExecObservation();
 	}
 
 	const bool routedRead16 = KernelPatcher::routeVirtual(this->iGPU,

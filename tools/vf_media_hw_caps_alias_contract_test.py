@@ -550,7 +550,7 @@ def verify_v342_user_bridge(source: str, label: str) -> None:
         raise AssertionError(f"{label}: AppleGVA bridge registered before PF/VF classification")
 
 
-def verify_v348_path_observer(source: str, label: str) -> None:
+def verify_v349_exec_observer(source: str, gen11: str, label: str) -> None:
     disabled_open = "#if 0 // NGRN_V342_RETIRED_APPLEGVA_PATCHES"
     disabled_close = "#endif // NGRN_V342_RETIRED_APPLEGVA_PATCHES"
     if source.count(disabled_open) != 1 or source.count(disabled_close) != 1:
@@ -566,33 +566,50 @@ def verify_v348_path_observer(source: str, label: str) -> None:
         "V342_LOCAL_PATCH",
     ):
         if forbidden in active:
-            raise AssertionError(f"{label}: V348 active source retained binary modification: {forbidden}")
-
-    encoder = "VTEncoderXPCService"
-    decoder = "VTDecoderXPCService"
-    for process in (encoder, decoder):
-        if active.count('"' + process + '"') != 2:
-            raise AssertionError(f"{label}: exact observation basename changed: {process}")
-    if active.count(
-            "V348MediaObservationSection, UserPatcher::ProcInfo::MatchAny}") != 2:
-        raise AssertionError(f"{label}: observation admission is not exact-service substring only")
-    if "UserPatcher::ProcInfo::MatchSuffix" in active or \
-            "UserPatcher::ProcInfo::MatchPrefix" in active:
-        raise AssertionError(f"{label}: observation admission is not the proven MatchAny mode")
-    if active.count("constexpr uint32_t V348MediaObservationSection = 1;") != 1:
-        raise AssertionError(f"{label}: observation section is absent or disabled")
-
-    register = function_body(active, "void registerV348MediaVnodeObservation()")
+            raise AssertionError(f"{label}: V349 active source retained binary modification: {forbidden}")
+    if "lilu.onProcLoadForce(" in active:
+        raise AssertionError(f"{label}: V349 observer still routes through Lilu process injection")
     for token in (
-        "lilu.onProcLoadForce(",
-        "v348MediaObservationProcesses, arrsize(v348MediaObservationProcesses)",
-        "V348: observed substring-qualified VideoToolbox XPC exec vnode path-len=%lu path=%s",
-        "pathLength, path",
-        "nullptr, nullptr, 0",
-        "V348: armed substring-qualified observation-only VideoToolbox exec vnode path capture with no binary modifications",
+        "#include <sys/kauth.h>",
+        "static kauth_listener_t v349MediaExecListener {nullptr};",
+        "static UInt8 v349MediaExecCookie {0};",
+        "static volatile UInt32 v349MediaExecArmed {0};",
+        "static volatile SInt32 v349MediaExecCount {0};",
+        "constexpr SInt32 V349MediaExecLimit = 64;",
+    ):
+        if source.count(token) != 1:
+            raise AssertionError(f"{label}: changed V349 observer state: {token}")
+
+    callback = function_body(active, "int observeV349MediaExecPath(")
+    for token in (
+        "idata == &v349MediaExecCookie",
+        "action == KAUTH_FILEOP_EXEC",
+        "arg1 &&",
+        "v349MediaExecArmed != 0",
+        "OSIncrementAtomic(&v349MediaExecCount)",
+        "slot < V349MediaExecLimit",
+        "V349: observed post-TGL exec vnode path slot=%d path-len=%lu path=%s",
+        "return 0;",
+    ):
+        if callback.count(token) != 1:
+            raise AssertionError(f"{label}: changed V349 observer callback: {token}")
+
+    register = function_body(active, "void registerV349MediaExecObservation()")
+    for token in (
+        "kauth_listen_scope(",
+        "KAUTH_SCOPE_FILEOP, observeV349MediaExecPath, &v349MediaExecCookie",
+        "V349: registered bounded KAUTH exec observer with no binary modifications",
     ):
         if register.count(token) != 1:
-            raise AssertionError(f"{label}: changed observation-only registration: {token}")
+            raise AssertionError(f"{label}: changed V349 observer registration: {token}")
+
+    arm = function_body(active, "void ngArmV349MediaExecObservation()")
+    for token in (
+        "OSCompareAndSwap(0, 1, &v349MediaExecArmed)",
+        "V349: enabled bounded KAUTH exec capture after exact TGL payload publication",
+    ):
+        if arm.count(token) != 1:
+            raise AssertionError(f"{label}: changed V349 observer arm: {token}")
 
     patcher = function_body(active, "void NGreen::processPatcher(KernelPatcher &patcher)")
     exact_gate = (
@@ -606,7 +623,7 @@ def verify_v348_path_observer(source: str, label: str) -> None:
         exact_gate,
         "if (exactTigerLakeVf) {",
         "V343: classified AppleGVA bridge VF physical=a7a8 compatibility=9a49",
-        "registerV348MediaVnodeObservation();",
+        "registerV349MediaExecObservation();",
     ):
         if patcher.count(token) != 1:
             raise AssertionError(f"{label}: path observer escaped exact dual-identity VF gate: {token}")
@@ -615,13 +632,17 @@ def verify_v348_path_observer(source: str, label: str) -> None:
         "uint32_t compatibilityDeviceId = 0;",
         exact_gate,
         "if (exactTigerLakeVf) {",
-        "registerV348MediaVnodeObservation();",
+        "registerV349MediaExecObservation();",
     ))
     if gate_order != tuple(sorted(gate_order)):
         raise AssertionError(f"{label}: observation dual-identity VF gate ordering changed")
     init = function_body(active, "void NGreen::init()")
-    if "registerV348MediaVnodeObservation" in init:
+    if "registerV349MediaExecObservation" in init:
         raise AssertionError(f"{label}: observer registered before PF/VF classification")
+    publication = gen11.index("injectAcceleratorPersonality(bundleId)")
+    arm_index = gen11.index("ngArmV349MediaExecObservation();")
+    if arm_index <= publication:
+        raise AssertionError(f"{label}: V349 capture armed before TGL personality publication")
 
 
 def replace_once(value: str, before: str, after: str) -> str:
@@ -645,7 +666,7 @@ def main() -> int:
     for data, label in payloads:
         verify_payload(data, label)
     verify_source(source, header, f"{source_path}/{header_path}")
-    verify_v348_path_observer(green, str(green_path))
+    verify_v349_exec_observer(green, source, str(green_path))
 
     source_mutations = (
         replace_once(
@@ -712,31 +733,24 @@ def main() -> int:
                      "compatibilityDeviceId == 0x9A40"),
         replace_once(green, "virtualAccess && this->deviceId",
                      "!physicalAccess && this->deviceId"),
-        replace_once(green, "nullptr, nullptr, 0",
-                     "nullptr, &v342AppleGvaBinary, 1"),
-        replace_once(green,
-                     '{"VTEncoderXPCService", sizeof("VTEncoderXPCService") - 1,\n'
-                     "\t V348MediaObservationSection, UserPatcher::ProcInfo::MatchAny}",
-                     '{"VTEncoderXPCService", sizeof("VTEncoderXPCService") - 1,\n'
-                     "\t V348MediaObservationSection, UserPatcher::ProcInfo::MatchSuffix}"),
-        replace_once(green, '{"VTEncoderXPCService",', '{"XPCService",'),
-        replace_once(green, "V348MediaObservationSection = 1",
-                     "V348MediaObservationSection = 0"),
-        replace_once(green,
-                     "v348MediaObservationProcesses, arrsize(v348MediaObservationProcesses)",
-                     "v348MediaObservationProcesses, 1"),
-        replace_once(green,
-                     "V348: observed substring-qualified VideoToolbox XPC exec vnode path-len=%lu path=%s",
-                     "V348: observed VideoToolbox process"),
-        replace_once(green,
-                     "V348: armed substring-qualified observation-only VideoToolbox exec vnode path capture with no binary modifications",
-                     "V348: armed VideoToolbox binary patches"),
-        replace_once(green, "registerV348MediaVnodeObservation();",
+        replace_once(green, "action == KAUTH_FILEOP_EXEC",
+                     "action != KAUTH_FILEOP_EXEC"),
+        replace_once(green, "v349MediaExecArmed != 0",
+                     "v349MediaExecArmed == 0"),
+        replace_once(green, "slot < V349MediaExecLimit",
+                     "slot <= V349MediaExecLimit"),
+        replace_once(green, "constexpr SInt32 V349MediaExecLimit = 64",
+                     "constexpr SInt32 V349MediaExecLimit = 0"),
+        replace_once(green, "KAUTH_SCOPE_FILEOP, observeV349MediaExecPath",
+                     "KAUTH_SCOPE_PROCESS, observeV349MediaExecPath"),
+        replace_once(green, "OSCompareAndSwap(0, 1, &v349MediaExecArmed)",
+                     "OSCompareAndSwap(1, 0, &v349MediaExecArmed)"),
+        replace_once(green, "registerV349MediaExecObservation();",
                      "registerV342AppleGvaBridge();"),
     )
     for index, mutation in enumerate(green_mutations):
         try:
-            verify_v348_path_observer(mutation, f"green-mutation-{index}")
+            verify_v349_exec_observer(mutation, source, f"green-mutation-{index}")
         except (AssertionError, ValueError):
             continue
         raise AssertionError(f"escaped V348 path-observer mutation {index}")
@@ -757,8 +771,8 @@ def main() -> int:
 
     print(
         "PASS: exact selector 0xb PCI identity producer, VF-only media alias, "
-        "observation-only VideoToolbox vnode capture with no active binary "
-        "modifications, 31 source/header and eighteen payload mutations"
+        "bounded post-TGL KAUTH exec-path capture with no active binary "
+        "modifications and eighteen payload mutations"
     )
     return 0
 

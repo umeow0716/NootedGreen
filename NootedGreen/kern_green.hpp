@@ -14,6 +14,9 @@ bool ngPhysicalGpuAccessAllowed();
 bool ngVirtualGpuAccessAllowed();
 // PFs may use their complete BAR; VFs may use only i915's fixed MMIO allowlist.
 bool ngGpuRegisterAccessAllowed(unsigned long reg);
+// Observation-only: enable a bounded KAUTH exec-path capture after the exact
+// TGL accelerator payload is fully patched and published on the classified VF.
+void ngArmV349MediaExecObservation();
 
 class NGreen {
     friend class Gen11;
