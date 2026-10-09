@@ -28,8 +28,14 @@ int resourceReference() {
     void *library = dlopen(framework, RTLD_NOW | RTLD_LOCAL);
     if (!library) { std::fprintf(stderr, "reference dlopen: %s\n", dlerror()); return 1; }
     int status = 1;
-    for (const char *name : {"IOAccelResourceCreate", "IOAccelResourceGetClientShared"}) {
-        void *symbol = dlsym(library, name);
+    struct Reference { const char *name; const char *symbol; size_t callOffset; };
+    for (const auto &reference : {
+            Reference{"IOAccelResourceCreate", "IOAccelResourceCreate", 0},
+            Reference{"IOAccelResourceGetClientShared", "IOAccelResourceGetClientShared", 0},
+            Reference{"client-shared-generation", "IOAccelResourceGetClientShared", 0x15},
+            Reference{"client-shared-map-setup", "IOAccelResourceGetClientShared", 0x5b}}) {
+        const char *name = reference.name;
+        void *symbol = dlsym(library, reference.symbol);
         Dl_info info{};
         mach_header_64 header{};
         if (!symbol || !dladdr(symbol, &info) || !info.dli_fbase || !info.dli_fname ||
@@ -61,8 +67,25 @@ int resourceReference() {
             offset += command.cmdsize;
         }
         const uintptr_t base = reinterpret_cast<uintptr_t>(info.dli_fbase);
-        const uintptr_t address = reinterpret_cast<uintptr_t>(symbol);
+        uintptr_t address = reinterpret_cast<uintptr_t>(symbol);
         if (!hasUuid || !textAddress || address < base || address - base >= textSize) goto done;
+        if (reference.callOffset) {
+            // Exact sealed 25G229 image and the two previously captured direct
+            // calls only. Read the callees; never execute either mapping helper.
+            constexpr uint8_t expectedUuid[16] = {0x19,0x8a,0x77,0x6a,0xfe,0x03,0x35,0xee,
+                0x8e,0x53,0x7b,0x9f,0x14,0xca,0xab,0xaa};
+            const uintptr_t call = address + reference.callOffset;
+            uint8_t instruction[5]{};
+            int32_t displacement = 0;
+            if (std::memcmp(uuid.uuid, expectedUuid, sizeof(expectedUuid)) ||
+                textSize - (address - base) < reference.callOffset + sizeof(instruction) ||
+                !read(call, instruction, sizeof(instruction)) || instruction[0] != 0xe8) goto done;
+            std::memcpy(&displacement, instruction + 1, sizeof(displacement));
+            const int32_t expected = reference.callOffset == 0x15 ? 0x58ed : 0x56d9;
+            if (displacement != expected) goto done;
+            address = call + sizeof(instruction) + displacement;
+            if (address < base || address - base >= textSize) goto done;
+        }
         const size_t length = std::min<size_t>(1024, textSize - (address - base));
         std::array<uint8_t, 1024> bytes{};
         if (!length || !read(address, bytes.data(), length)) goto done;
