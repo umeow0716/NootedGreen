@@ -23,6 +23,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Record Tahoe runner toolchain
+        run: |
+          sw_vers
+          uname -m
+          xcodebuild -version
+          xcrun --sdk macosx --show-sdk-path
+          xcrun --sdk macosx clang --version
+
       - name: Check all sources and protocol models
         run: |
           SDKROOT="$(xcrun --sdk macosx --show-sdk-path)" \

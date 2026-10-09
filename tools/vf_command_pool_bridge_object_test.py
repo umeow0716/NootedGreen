@@ -65,10 +65,13 @@ def main() -> None:
     assert relative >= 0 and relative + 32 <= section["size"]
     body_offset = section["offset"] + relative
     body = image[body_offset:body_offset + 32]
-    assert body == bytes.fromhex(
+    expected_body = bytes.fromhex(
         "53 48 83 ec 08 48 89 cb 48 8d 44 24 18 50 "
         "e8 00 00 00 00 48 83 c4 10 48 89 df 5b 84 c0 c3 0f 0b"
-    ), "changed command-pool bridge machine ABI"
+    )
+    assert body == expected_body, (
+        "changed command-pool bridge machine ABI: " + body.hex(" ")
+    )
 
     relocations = []
     for index in range(section["reloc_count"]):
