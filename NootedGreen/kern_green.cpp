@@ -153,18 +153,17 @@ static UserPatcher::BinaryModInfo v342AppleGvaBinary {
 	v342AppleGvaPatches, arrsize(v342AppleGvaPatches)
 };
 
-// Tahoe may expose the executable vnode to KAUTH through a Cryptex-prefixed
-// path or through the framework's top-level XPCServices symlink even though
-// CoreFoundation reports the canonical Versions/A bundle path.  Match the
-// complete XPC bundle/executable tail, not merely the executable basename, so
-// both vnode forms are admitted while the Zonto and unrelated services remain
-// excluded.
+// KAUTH_FILEOP_EXEC reports vn_getpath() for the executable vnode, which need
+// not retain the parent XPCServices directory used by the CoreFoundation
+// canonical bundle path.  Keep the complete, unique .xpc/Contents/MacOS tail
+// while removing only that unreliable parent component.  This admits absolute
+// and relative vnode forms without ever degrading to an executable basename.
 static UserPatcher::ProcInfo v342MediaProcesses[] = {
-	{"/XPCServices/VTEncoderXPCService.xpc/Contents/MacOS/VTEncoderXPCService",
-	 sizeof("/XPCServices/VTEncoderXPCService.xpc/Contents/MacOS/VTEncoderXPCService") - 1,
+	{"/VTEncoderXPCService.xpc/Contents/MacOS/VTEncoderXPCService",
+	 sizeof("/VTEncoderXPCService.xpc/Contents/MacOS/VTEncoderXPCService") - 1,
 	 V342AppleGvaSection, UserPatcher::ProcInfo::MatchSuffix},
-	{"/XPCServices/VTDecoderXPCService.xpc/Contents/MacOS/VTDecoderXPCService",
-	 sizeof("/XPCServices/VTDecoderXPCService.xpc/Contents/MacOS/VTDecoderXPCService") - 1,
+	{"/VTDecoderXPCService.xpc/Contents/MacOS/VTDecoderXPCService",
+	 sizeof("/VTDecoderXPCService.xpc/Contents/MacOS/VTDecoderXPCService") - 1,
 	 V342AppleGvaSection, UserPatcher::ProcInfo::MatchSuffix},
 };
 
@@ -172,7 +171,7 @@ void registerV342AppleGvaBridge() {
 	lilu.onProcLoadForce(
 		v342MediaProcesses, arrsize(v342MediaProcesses),
 		[](void *, UserPatcher &, vm_map_t, const char *path, size_t pathLength) {
-			SYSLOG("ngreen", "V345: dispatched XPC-tail-qualified local AppleGVA TGL capability-layout bridge path-len=%lu path=%s",
+			SYSLOG("ngreen", "V346: dispatched bundle-tail-qualified local AppleGVA TGL capability-layout bridge path-len=%lu path=%s",
 				pathLength, path);
 		}, nullptr, &v342AppleGvaBinary, 1);
 	SYSLOG("ngreen", "V342: armed exact Tahoe AppleGVA TGL capability-layout bridge with 13 local-only sites");

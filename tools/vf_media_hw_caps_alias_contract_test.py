@@ -484,11 +484,11 @@ def verify_v342_user_bridge(source: str, label: str) -> None:
         "/System/Library/PrivateFrameworks/AppleGVA.framework/Versions/A/AppleGVA"
     )
     encoder = (
-        "/XPCServices/VTEncoderXPCService.xpc/Contents/MacOS/"
+        "/VTEncoderXPCService.xpc/Contents/MacOS/"
         "VTEncoderXPCService"
     )
     decoder = (
-        "/XPCServices/VTDecoderXPCService.xpc/Contents/MacOS/"
+        "/VTDecoderXPCService.xpc/Contents/MacOS/"
         "VTDecoderXPCService"
     )
     if source.count('"' + apple_gva + '"') != 1:
@@ -513,7 +513,7 @@ def verify_v342_user_bridge(source: str, label: str) -> None:
         "lilu.onProcLoadForce(",
         "v342MediaProcesses, arrsize(v342MediaProcesses)",
         "&v342AppleGvaBinary, 1",
-        "V345: dispatched XPC-tail-qualified local AppleGVA TGL capability-layout bridge path-len=%lu path=%s",
+        "V346: dispatched bundle-tail-qualified local AppleGVA TGL capability-layout bridge path-len=%lu path=%s",
         "pathLength, path",
         "V342: armed exact Tahoe AppleGVA TGL capability-layout bridge with 13 local-only sites",
     ):
@@ -648,10 +648,10 @@ def main() -> int:
                      "0xE8, 0x1F, 0xBD, 0xFB, 0xFF, 0x41, 0x8B, 0x4F, 0x28, 0x31, 0xD2",
                      "0xE8, 0x1F, 0xBD, 0xFB, 0xFF, 0x41, 0x8B, 0x4F, 0x20, 0x31, 0xD2"),
         replace_once(green,
-                     "V342AppleGvaSection, UserPatcher::ProcInfo::MatchSuffix},\n\t{\"/XPCServices/VTDecoderXPCService",
-                     "V342AppleGvaSection, UserPatcher::ProcInfo::MatchExact},\n\t{\"/XPCServices/VTDecoderXPCService"),
+                     "V342AppleGvaSection, UserPatcher::ProcInfo::MatchSuffix},\n\t{\"/VTDecoderXPCService",
+                     "V342AppleGvaSection, UserPatcher::ProcInfo::MatchExact},\n\t{\"/VTDecoderXPCService"),
         replace_once(green,
-                     "{\"/XPCServices/VTEncoderXPCService.xpc/Contents/MacOS/VTEncoderXPCService\"",
+                     "{\"/VTEncoderXPCService.xpc/Contents/MacOS/VTEncoderXPCService\"",
                      "{\"/VTEncoderXPCService\""),
         replace_once(green,
                      "/System/Library/PrivateFrameworks/AppleGVA.framework/Versions/A/AppleGVA",
