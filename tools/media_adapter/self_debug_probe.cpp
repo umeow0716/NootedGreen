@@ -155,6 +155,10 @@ int main() {
         reinterpret_cast<uintptr_t>(owned_debug_site_d)};
     alarm(3);
     {
+        NativeReturnObserver boolean(sites, 1);
+        if (owned_debug_target() != 0x1357 || !boolean.observed(0, 1)) return 1;
+    }
+    {
         NativeReturnObserver all(sites);
         if (owned_debug_target_c() != 0x369c || owned_debug_target() != 0x1357 ||
             owned_debug_target_d() != 0x48ad || owned_debug_target_b() != 0x2468 ||

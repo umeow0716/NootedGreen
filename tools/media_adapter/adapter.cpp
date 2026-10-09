@@ -88,12 +88,14 @@ int NGRN_ObservedCreateContexts(void *context, const void *input) {
         os_log_error(OS_LOG_DEFAULT, "NGRN_NATIVE_RETURN_OBSERVER_SKIP callback-identity");
         return native(context, input);
     }
-    // Proven previous run: GPU context/RenderHal/CreateRenderer return zero;
-    // only RendererInitialize returns 31. Observe its exact indirect target.
+    // Proven live RendererInitialize target=132510. Its factory can leave
+    // default status 31; three following sub-initializers can return failure.
     struct Site { uintptr_t call; unsigned length, returnOffset; uint8_t bytes[10]; };
     constexpr Site pinned[] = {
-        {0x133c36,10, 0, {0xff,0x52,0x20,0x89,0x45,0xcc,0x83,0x7d,0xcc,0x00}},
-        {0x133c36,10, 3, {0xff,0x52,0x20,0x89,0x45,0xcc,0x83,0x7d,0xcc,0x00}},
+        {0x1326ba, 5, 5, {0xe8,0x61,0x7f,0xf2,0xff}},
+        {0x13283e,10, 3, {0xff,0x51,0x10,0x89,0x45,0xdc,0x83,0x7d,0xdc,0x00}},
+        {0x132880,10, 3, {0xff,0x51,0x10,0x89,0x45,0xdc,0x83,0x7d,0xdc,0x00}},
+        {0x1328c2,10, 3, {0xff,0x51,0x10,0x89,0x45,0xdc,0x83,0x7d,0xdc,0x00}},
     };
     std::array<uintptr_t, 4> sites{};
     for (unsigned i = 0; i != std::size(pinned); ++i) {
@@ -105,23 +107,9 @@ int NGRN_ObservedCreateContexts(void *context, const void *input) {
         }
         sites[i] = call + pinned[i].returnOffset;
     }
-    NativeReturnObserver observer(sites);
+    // Factory pointer is reduced to nonnull in the handler, never logged as an address.
+    NativeReturnObserver observer(sites, 1);
     const int result = native(context, input);
-    const auto table = observer.observedRdx(0);
-    uintptr_t target = 0;
-    Dl_info targetInfo{};
-    const auto base = reinterpret_cast<uintptr_t>(info.dli_fbase);
-    // RDX is the immutable vtable at the proven call instruction. Read only
-    // one pointer after native return, outside the signal handler. Never log ASLR addresses.
-    if (table && table <= UINTPTR_MAX - 0x20 &&
-        readMemory(table + 0x20, &target, sizeof(target)) &&
-        dladdr(reinterpret_cast<void *>(target), &targetInfo) && targetInfo.dli_fbase == info.dli_fbase &&
-        target >= base && target - base < 8450544) {
-        os_log_error(OS_LOG_DEFAULT, "NGRN_NATIVE_RENDERER_INITIALIZE_TARGET offset=%{public}llx",
-            static_cast<unsigned long long>(target - base));
-    } else {
-        os_log_error(OS_LOG_DEFAULT, "NGRN_NATIVE_RENDERER_INITIALIZE_TARGET unavailable");
-    }
     std::fprintf(stderr, "NGRN_NATIVE_CONTEXT_CALLBACK_RETURN result=%d\n", result);
     os_log_error(OS_LOG_DEFAULT, "NGRN_NATIVE_CONTEXT_CALLBACK_RETURN result=%{public}d", result);
     return result;

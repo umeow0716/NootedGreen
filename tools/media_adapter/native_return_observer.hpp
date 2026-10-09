@@ -25,7 +25,7 @@ class NativeReturnObserver {
     sig_atomic_t wanted = 0;
     volatile sig_atomic_t hitMask = 0;
     volatile sig_atomic_t values[4]{};
-    volatile uintptr_t capturedRdx[4]{};
+    unsigned booleanSites = 0;
     volatile sig_atomic_t handlerRestore = KERN_FAILURE;
     bool installed = false;
     bool armed = false;
@@ -51,8 +51,9 @@ class NativeReturnObserver {
             raise(SIGTRAP);
             return;
         }
-        self->values[site] = static_cast<sig_atomic_t>(state->uc_mcontext->__ss.__rax);
-        self->capturedRdx[site] = state->uc_mcontext->__ss.__rdx;
+        const auto raw = state->uc_mcontext->__ss.__rax;
+        self->values[site] = self->booleanSites & (1u << site)
+            ? sig_atomic_t(raw != 0) : static_cast<sig_atomic_t>(raw);
         self->hitMask |= 1 << site;
         auto next = self->programmed;
         for (unsigned i = 0; i != 4; ++i)
@@ -66,13 +67,14 @@ class NativeReturnObserver {
 public:
     explicit NativeReturnObserver(uintptr_t site)
         : NativeReturnObserver(std::array<uintptr_t, 4>{site, 0, 0, 0}) {}
-    explicit NativeReturnObserver(const std::array<uintptr_t, 4> &selected) : sites(selected) {
+    explicit NativeReturnObserver(const std::array<uintptr_t, 4> &selected, unsigned booleans = 0)
+        : sites(selected), booleanSites(booleans) {
         for (unsigned i = 0; i != 4; ++i) {
             if (!sites[i]) continue;
             for (unsigned j = 0; j != i; ++j) if (sites[j] == sites[i]) return;
             wanted |= 1 << i;
         }
-        if (!guard.owns_lock() || !wanted) {
+        if (!guard.owns_lock() || !wanted || (booleanSites & ~unsigned(wanted))) {
             os_log_error(OS_LOG_DEFAULT, "NGRN_NATIVE_RETURN_OBSERVER_SKIP busy-or-no-site");
             return;
         }
@@ -124,9 +126,6 @@ public:
     }
     bool observed(int expected) const { return observed(0, expected); }
     bool isArmed() const { return armed; }
-    uintptr_t observedRdx(unsigned site) const {
-        return site < 4 && armed && (hitMask & (1 << site)) ? capturedRdx[site] : 0;
-    }
     ~NativeReturnObserver() {
         if (installed && !armed) {
             if (sigaction(SIGTRAP, &previous, nullptr)) _exit(74);
