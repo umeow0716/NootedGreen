@@ -78,24 +78,36 @@ int NGRN_ObservedCreateContexts(void *context, const void *input) {
     // Only this owned table slot changes. The native callback receives the
     // original context/input exactly once, and its result passes through.
     // Pinned 13e43 -> 14342 constructor -> vtable 75d018+10 = 2338e0;
-    // 14e1f invokes it synchronously. 2340c5 precedes destroy/status-11 conversion.
+    // 14e1f invokes it synchronously. Prior observation at 2340c5 captured raw=31.
     if (std::strcmp(getprogname(), "VTEncoderXPCService") ||
         observationTried.test_and_set(std::memory_order_relaxed)) return native(context, input);
     os_log_error(OS_LOG_DEFAULT, "NGRN_NATIVE_CONTEXT_CALLBACK_ENTER scoped-observation-only");
     Dl_info info{};
-    constexpr uint8_t expected[] = {0x83,0xf8,0x00,0x0f,0x84,0x15,0x00,0x00,0x00};
-    uint8_t bytes[sizeof(expected)]{};
     if (!dladdr(reinterpret_cast<void *>(address), &info) || !info.dli_fbase ||
         address != reinterpret_cast<uintptr_t>(info.dli_fbase) + 0x13e43) {
         os_log_error(OS_LOG_DEFAULT, "NGRN_NATIVE_RETURN_OBSERVER_SKIP callback-identity");
         return native(context, input);
     }
-    const uintptr_t site = reinterpret_cast<uintptr_t>(info.dli_fbase) + 0x2340c5;
-    if (!readMemory(site, bytes, sizeof(bytes)) || std::memcmp(bytes, expected, sizeof(bytes))) {
-        os_log_error(OS_LOG_DEFAULT, "NGRN_NATIVE_RETURN_OBSERVER_SKIP site-anchor");
-        return native(context, input);
+    // Four exact call/return anchors inside the same live VphalAllocate frame:
+    // CreateGpuContext, RenderHalInitialize, CreateRenderer, RendererInitialize.
+    struct Site { uintptr_t call; unsigned length, returnOffset; uint8_t bytes[10]; };
+    constexpr Site pinned[] = {
+        {0x1339b5, 8, 3, {0x41,0xff,0xd1,0x89,0x45,0x8c,0xe9,0x00}},
+        {0x133b99, 9, 2, {0xff,0xd2,0x89,0x45,0xcc,0x83,0x7d,0xcc,0x00}},
+        {0x133c0f,10, 3, {0xff,0x51,0x18,0x89,0x45,0xcc,0x83,0x7d,0xcc,0x00}},
+        {0x133c36,10, 3, {0xff,0x52,0x20,0x89,0x45,0xcc,0x83,0x7d,0xcc,0x00}},
+    };
+    std::array<uintptr_t, 4> sites{};
+    for (unsigned i = 0; i != sites.size(); ++i) {
+        uint8_t bytes[10]{};
+        const uintptr_t call = reinterpret_cast<uintptr_t>(info.dli_fbase) + pinned[i].call;
+        if (!readMemory(call, bytes, pinned[i].length) || std::memcmp(bytes, pinned[i].bytes, pinned[i].length)) {
+            os_log_error(OS_LOG_DEFAULT, "NGRN_NATIVE_RETURN_OBSERVER_SKIP site-anchor index=%{public}u", i);
+            return native(context, input);
+        }
+        sites[i] = call + pinned[i].returnOffset;
     }
-    NativeReturnObserver observer(site);
+    NativeReturnObserver observer(sites);
     const int result = native(context, input);
     std::fprintf(stderr, "NGRN_NATIVE_CONTEXT_CALLBACK_RETURN result=%d\n", result);
     os_log_error(OS_LOG_DEFAULT, "NGRN_NATIVE_CONTEXT_CALLBACK_RETURN result=%{public}d", result);

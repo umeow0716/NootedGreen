@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <cstdint>
 #include <mutex>
+#include <array>
 
 class NativeReturnObserver {
     inline static std::mutex lock;
@@ -18,10 +19,12 @@ class NativeReturnObserver {
     std::unique_lock<std::mutex> guard{lock, std::try_to_lock};
     thread_t thread = MACH_PORT_NULL;
     x86_debug_state64_t saved{};
+    x86_debug_state64_t programmed{};
     struct sigaction previous{};
-    uintptr_t target = 0;
-    volatile sig_atomic_t hits = 0;
-    volatile sig_atomic_t value = 0;
+    std::array<uintptr_t, 4> sites{};
+    sig_atomic_t wanted = 0;
+    volatile sig_atomic_t hitMask = 0;
+    volatile sig_atomic_t values[4]{};
     volatile sig_atomic_t handlerRestore = KERN_FAILURE;
     bool installed = false;
     bool armed = false;
@@ -31,8 +34,13 @@ class NativeReturnObserver {
     static void trap(int signal, siginfo_t *, void *context) {
         auto *self = active.load(std::memory_order_relaxed);
         auto *state = static_cast<ucontext_t *>(context);
-        if (signal != SIGTRAP || !self || self->hits || !state ||
-            !state->uc_mcontext || state->uc_mcontext->__ss.__rip != self->target) {
+        unsigned site = 4;
+        if (signal == SIGTRAP && self && state && state->uc_mcontext) {
+            for (unsigned i = 0; i != 4; ++i)
+                if (self->sites[i] && state->uc_mcontext->__ss.__rip == self->sites[i] &&
+                    !(self->hitMask & (1 << i))) site = i;
+        }
+        if (site == 4) {
             // Admission requires SIG_DFL. Preserve its terminating semantics;
             // never consume another thread's unrelated debugger exception.
             struct sigaction action{};
@@ -42,15 +50,27 @@ class NativeReturnObserver {
             raise(SIGTRAP);
             return;
         }
-        self->value = static_cast<sig_atomic_t>(state->uc_mcontext->__ss.__rax);
-        self->hits = 1;
+        self->values[site] = static_cast<sig_atomic_t>(state->uc_mcontext->__ss.__rax);
+        self->hitMask |= 1 << site;
+        auto next = self->programmed;
+        for (unsigned i = 0; i != 4; ++i)
+            if (self->hitMask & (1 << i)) next.__dr7 &= ~(uint64_t(3) << (2 * i));
+        // Keep only unvisited sites armed. The final hit restores everything.
+        if (self->hitMask == self->wanted) next = self->saved;
         self->handlerRestore = thread_set_state(self->thread, x86_DEBUG_STATE64,
-            reinterpret_cast<thread_state_t>(&self->saved), x86_DEBUG_STATE64_COUNT);
+            reinterpret_cast<thread_state_t>(&next), x86_DEBUG_STATE64_COUNT);
         if (self->handlerRestore != KERN_SUCCESS) _exit(74);
     }
 public:
-    explicit NativeReturnObserver(uintptr_t site) : target(site) {
-        if (!guard.owns_lock() || !target) {
+    explicit NativeReturnObserver(uintptr_t site)
+        : NativeReturnObserver(std::array<uintptr_t, 4>{site, 0, 0, 0}) {}
+    explicit NativeReturnObserver(const std::array<uintptr_t, 4> &selected) : sites(selected) {
+        for (unsigned i = 0; i != 4; ++i) {
+            if (!sites[i]) continue;
+            for (unsigned j = 0; j != i; ++j) if (sites[j] == sites[i]) return;
+            wanted |= 1 << i;
+        }
+        if (!guard.owns_lock() || !wanted) {
             os_log_error(OS_LOG_DEFAULT, "NGRN_NATIVE_RETURN_OBSERVER_SKIP busy-or-no-site");
             return;
         }
@@ -77,18 +97,30 @@ public:
             return;
         }
         installed = true;
-        auto debug = saved;
-        debug.__dr0 = target;
-        debug.__dr7 = (debug.__dr7 & ~uint64_t(0xf0003)) | uint64_t(1);
+        programmed = saved;
+        for (unsigned i = 0; i != 4; ++i) {
+            if (!sites[i]) continue;
+            switch (i) {
+                case 0: programmed.__dr0 = sites[i]; break;
+                case 1: programmed.__dr1 = sites[i]; break;
+                case 2: programmed.__dr2 = sites[i]; break;
+                case 3: programmed.__dr3 = sites[i]; break;
+            }
+            programmed.__dr7 &= ~(uint64_t(0xf) << (16 + 4 * i));
+            programmed.__dr7 |= uint64_t(1) << (2 * i);
+        }
         const kern_return_t result = thread_set_state(thread, x86_DEBUG_STATE64,
-            reinterpret_cast<thread_state_t>(&debug), x86_DEBUG_STATE64_COUNT);
+            reinterpret_cast<thread_state_t>(&programmed), x86_DEBUG_STATE64_COUNT);
         armed = result == KERN_SUCCESS;
         std::fprintf(stderr, "NGRN_NATIVE_RETURN_OBSERVER_ARM result=%d armed=%d\n", result, armed);
         os_log_error(OS_LOG_DEFAULT, "NGRN_NATIVE_RETURN_OBSERVER_ARM result=%{public}d armed=%{public}d", result, int(armed));
     }
     NativeReturnObserver(const NativeReturnObserver &) = delete;
     NativeReturnObserver &operator=(const NativeReturnObserver &) = delete;
-    bool observed(int expected) const { return armed && hits == 1 && value == expected; }
+    bool observed(unsigned site, int expected) const {
+        return site < 4 && armed && (hitMask & (1 << site)) && values[site] == expected;
+    }
+    bool observed(int expected) const { return observed(0, expected); }
     bool isArmed() const { return armed; }
     ~NativeReturnObserver() {
         if (installed && !armed) {
@@ -108,12 +140,22 @@ public:
                 actual.__dr7 == canonical(saved.__dr7);
             const int handler = sigaction(SIGTRAP, &previous, nullptr);
             active = nullptr;
+            int hits = 0;
+            for (unsigned i = 0; i != 4; ++i) {
+                if (hitMask & (1 << i)) ++hits;
+                if (!sites[i]) continue;
+                std::fprintf(stderr, "NGRN_NATIVE_RETURN_SITE site=%u hit=%d raw=%d\n",
+                    i, int(bool(hitMask & (1 << i))), int(values[i]));
+                os_log_error(OS_LOG_DEFAULT,
+                    "NGRN_NATIVE_RETURN_SITE site=%{public}u hit=%{public}d raw=%{public}d",
+                    i, int(bool(hitMask & (1 << i))), int(values[i]));
+            }
             std::fprintf(stderr,
                 "NGRN_NATIVE_RETURN_OBSERVER_DONE armed=%d hits=%d raw=%d restore=%d state=%d handler=%d handler-debug=%d\n",
-                armed, hits, value, restored, same, handler, handlerRestore);
+                armed, hits, int(values[0]), restored, same, handler, handlerRestore);
             os_log_error(OS_LOG_DEFAULT,
                 "NGRN_NATIVE_RETURN_OBSERVER_DONE armed=%{public}d hits=%{public}d raw=%{public}d restore=%{public}d state=%{public}d handler=%{public}d handler-debug=%{public}d",
-                int(armed), int(hits), int(value), restored, int(same), handler, int(handlerRestore));
+                int(armed), hits, int(values[0]), restored, int(same), handler, int(handlerRestore));
             if (restored != KERN_SUCCESS || !same || handler || (hits && handlerRestore != KERN_SUCCESS)) _exit(74);
         }
         if (thread != MACH_PORT_NULL) mach_port_deallocate(mach_task_self(), thread);

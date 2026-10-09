@@ -11,9 +11,22 @@
 
 extern "C" int owned_debug_target();
 extern "C" const char owned_debug_site[];
+extern "C" int owned_debug_target_b();
+extern "C" int owned_debug_target_c();
+extern "C" int owned_debug_target_d();
+extern "C" const char owned_debug_site_b[], owned_debug_site_c[], owned_debug_site_d[];
 asm(".text\n.p2align 4\n.globl _owned_debug_target\n"
     "_owned_debug_target:\nmovl $0x1357, %eax\n"
     ".globl _owned_debug_site\n_owned_debug_site:\nretq\n");
+asm(".text\n.p2align 4\n.globl _owned_debug_target_b\n"
+    "_owned_debug_target_b:\nmovl $0x2468, %eax\n"
+    ".globl _owned_debug_site_b\n_owned_debug_site_b:\nretq\n"
+    ".p2align 4\n.globl _owned_debug_target_c\n"
+    "_owned_debug_target_c:\nmovl $0x369c, %eax\n"
+    ".globl _owned_debug_site_c\n_owned_debug_site_c:\nretq\n"
+    ".p2align 4\n.globl _owned_debug_target_d\n"
+    "_owned_debug_target_d:\nmovl $0x48ad, %eax\n"
+    ".globl _owned_debug_site_d\n_owned_debug_site_d:\nretq\n");
 
 static volatile sig_atomic_t hits = 0;
 static volatile sig_atomic_t captured = 0;
@@ -135,6 +148,25 @@ int main() {
         NativeReturnObserver unhit(reinterpret_cast<uintptr_t>(owned_debug_site));
         if (!unhit.isArmed() || unhit.observed(0x1357)) return 1;
     } // Early native returns must restore even when the watched site is absent.
+    const std::array<uintptr_t, 4> sites = {
+        reinterpret_cast<uintptr_t>(owned_debug_site),
+        reinterpret_cast<uintptr_t>(owned_debug_site_b),
+        reinterpret_cast<uintptr_t>(owned_debug_site_c),
+        reinterpret_cast<uintptr_t>(owned_debug_site_d)};
+    alarm(3);
+    {
+        NativeReturnObserver all(sites);
+        if (owned_debug_target_c() != 0x369c || owned_debug_target() != 0x1357 ||
+            owned_debug_target_d() != 0x48ad || owned_debug_target_b() != 0x2468 ||
+            !all.observed(0, 0x1357) || !all.observed(1, 0x2468) ||
+            !all.observed(2, 0x369c) || !all.observed(3, 0x48ad)) return 1;
+    }
+    {
+        NativeReturnObserver partial(sites);
+        if (owned_debug_target_c() != 0x369c || !partial.observed(2, 0x369c) ||
+            partial.observed(0, 0x1357)) return 1;
+    } // Restore the other three armed slots after an early native failure.
+    alarm(0);
     std::puts("SELF_DEBUG_OWNED_CODE_OK no-gpu no-apple-text-write scoped-observer=1");
     return 0;
 }
