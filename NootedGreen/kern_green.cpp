@@ -17,7 +17,6 @@ NGreen *NGreen::callback = nullptr;
 static Gen11 gen11;
 
 namespace {
-#if 0 // NGRN_V342_RETIRED_APPLEGVA_PATCHES
 // Tahoe 25G229 AppleGVA consumes the native ICL AVD_DriverCapability layout
 // (0x438-byte records), while the signed TGL VADriver that must generate TGL
 // commands returns its native 0x430-byte layout.  The common 0x18-byte header
@@ -155,37 +154,32 @@ static UserPatcher::BinaryModInfo v342AppleGvaBinary {
 	v342AppleGvaPatches, arrsize(v342AppleGvaPatches)
 };
 
-// KAUTH_FILEOP_EXEC reports vn_getpath() for the executable vnode, which need
-// not retain the parent XPCServices directory used by the CoreFoundation
-// canonical bundle path.  Keep the complete, unique .xpc/Contents/MacOS tail
-// while removing only that unreliable parent component.  This admits absolute
-// and relative vnode forms without ever degrading to an executable basename.
-static UserPatcher::ProcInfo v342MediaProcesses[] = {
-	{"/VTEncoderXPCService.xpc/Contents/MacOS/VTEncoderXPCService",
-	 sizeof("/VTEncoderXPCService.xpc/Contents/MacOS/VTEncoderXPCService") - 1,
-	 V342AppleGvaSection, UserPatcher::ProcInfo::MatchSuffix},
-	{"/VTDecoderXPCService.xpc/Contents/MacOS/VTDecoderXPCService",
-	 sizeof("/VTDecoderXPCService.xpc/Contents/MacOS/VTDecoderXPCService") - 1,
-	 V342AppleGvaSection, UserPatcher::ProcInfo::MatchSuffix},
+// V349 captured this exact KAUTH exec path three times in the bounded runtime
+// trace.  Patch only that proven encoder executable.  Decoder remains under
+// the observation-only KAUTH listener until its exact path is observed after
+// encoding crosses the current admission boundary.
+static UserPatcher::ProcInfo v350EncoderProcess[] = {
+    {"/System/Library/Frameworks/VideoToolbox.framework/Versions/A/XPCServices/VTEncoderXPCService.xpc/Contents/MacOS/VTEncoderXPCService",
+     sizeof("/System/Library/Frameworks/VideoToolbox.framework/Versions/A/XPCServices/VTEncoderXPCService.xpc/Contents/MacOS/VTEncoderXPCService") - 1,
+     V342AppleGvaSection, UserPatcher::ProcInfo::MatchExact},
 };
 
-void registerV342AppleGvaBridge() {
+void registerV350AppleGvaEncoderBridge() {
 	lilu.onProcLoadForce(
-		v342MediaProcesses, arrsize(v342MediaProcesses),
+        v350EncoderProcess, arrsize(v350EncoderProcess),
 		[](void *, UserPatcher &, vm_map_t, const char *path, size_t pathLength) {
-			SYSLOG("ngreen", "V346: dispatched bundle-tail-qualified local AppleGVA TGL capability-layout bridge path-len=%lu path=%s",
+            SYSLOG("ngreen", "V350: dispatched proven encoder-only AppleGVA TGL capability-layout bridge path-len=%lu path=%s",
 				pathLength, path);
 		}, nullptr, &v342AppleGvaBinary, 1);
-	SYSLOG("ngreen", "V342: armed exact Tahoe AppleGVA TGL capability-layout bridge with 13 local-only sites");
+    SYSLOG("ngreen", "V350: armed proven encoder-only Tahoe AppleGVA TGL capability-layout bridge with 13 local-only sites");
 }
-#endif // NGRN_V342_RETIRED_APPLEGVA_PATCHES
 
 // V347/V348 proved that neither the canonical XPC bundle tail nor either
 // service basename occurs in KAUTH_FILEOP_EXEC's actual path.  Register a
-// separate observation-only listener so unmatched paths can be seen without
-// making Lilu inject or patch any userspace process.  The exact TGL payload
-// arms capture only after its routes and personality are complete; a hard cap
-// bounds log volume until the one media trigger starts its encoder service.
+// separate observation-only listener so unmatched paths (notably decoder) can
+// be seen independently of any Lilu process patch.  The exact TGL payload arms
+// capture only after its routes and personality are complete; a hard cap bounds
+// log volume until the one media trigger starts its services.
 static kauth_listener_t v349MediaExecListener {nullptr};
 static UInt8 v349MediaExecCookie {0};
 static volatile UInt32 v349MediaExecArmed {0};
@@ -213,7 +207,7 @@ void registerV349MediaExecObservation() {
 		KAUTH_SCOPE_FILEOP, observeV349MediaExecPath, &v349MediaExecCookie);
 	PANIC_COND(!v349MediaExecListener, "ngreen",
 		"Cannot register V349 media exec observer");
-	SYSLOG("ngreen", "V349: registered bounded KAUTH exec observer with no binary modifications");
+	SYSLOG("ngreen", "V349: registered bounded KAUTH exec observer independently of binary modifications");
 }
 } // namespace
 
@@ -309,6 +303,7 @@ void NGreen::processPatcher(KernelPatcher &patcher) {
 		compatibilityDeviceId == 0x9A49;
 	if (exactTigerLakeVf) {
 		SYSLOG("ngreen", "V343: classified AppleGVA bridge VF physical=a7a8 compatibility=9a49");
+		registerV350AppleGvaEncoderBridge();
 		registerV349MediaExecObservation();
 	}
 

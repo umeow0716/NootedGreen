@@ -445,7 +445,7 @@ def cpp_byte_array(source: str, name: str, label: str) -> bytes:
     ))
 
 
-def verify_v342_user_bridge(source: str, label: str) -> None:
+def verify_v350_encoder_bridge(source: str, label: str) -> None:
     for name, expected_find, expected_replace, _ in V342_APPLEGVA_PATCHES:
         find = cpp_byte_array(source, name + "Find", label)
         replace = cpp_byte_array(source, name + "Replace", label)
@@ -484,18 +484,14 @@ def verify_v342_user_bridge(source: str, label: str) -> None:
         "/System/Library/PrivateFrameworks/AppleGVA.framework/Versions/A/AppleGVA"
     )
     encoder = (
-        "/VTEncoderXPCService.xpc/Contents/MacOS/"
+        "/System/Library/Frameworks/VideoToolbox.framework/Versions/A/"
+        "XPCServices/VTEncoderXPCService.xpc/Contents/MacOS/"
         "VTEncoderXPCService"
-    )
-    decoder = (
-        "/VTDecoderXPCService.xpc/Contents/MacOS/"
-        "VTDecoderXPCService"
     )
     if source.count('"' + apple_gva + '"') != 1:
         raise AssertionError(f"{label}: AppleGVA binary path changed")
-    for process in (encoder, decoder):
-        if source.count('"' + process + '"') != 2:
-            raise AssertionError(f"{label}: exact VideoToolbox XPC tail changed")
+    if source.count('"' + encoder + '"') != 2:
+        raise AssertionError(f"{label}: proven encoder vnode path changed")
     for unsafe in (
         '"/VTEncoderXPCService"',
         '"/VTDecoderXPCService"',
@@ -505,17 +501,17 @@ def verify_v342_user_bridge(source: str, label: str) -> None:
         if unsafe in source:
             raise AssertionError(f"{label}: media admission degraded to basename: {unsafe}")
     if source.count(
-            "V342AppleGvaSection, UserPatcher::ProcInfo::MatchSuffix}") != 2:
-        raise AssertionError(f"{label}: media process admission is not canonical-suffix only")
+            "V342AppleGvaSection, UserPatcher::ProcInfo::MatchExact}") != 1:
+        raise AssertionError(f"{label}: encoder admission is not exact-path only")
 
-    register = function_body(source, "void registerV342AppleGvaBridge()")
+    register = function_body(source, "void registerV350AppleGvaEncoderBridge()")
     for token in (
         "lilu.onProcLoadForce(",
-        "v342MediaProcesses, arrsize(v342MediaProcesses)",
+        "v350EncoderProcess, arrsize(v350EncoderProcess)",
         "&v342AppleGvaBinary, 1",
-        "V346: dispatched bundle-tail-qualified local AppleGVA TGL capability-layout bridge path-len=%lu path=%s",
+        "V350: dispatched proven encoder-only AppleGVA TGL capability-layout bridge path-len=%lu path=%s",
         "pathLength, path",
-        "V342: armed exact Tahoe AppleGVA TGL capability-layout bridge with 13 local-only sites",
+        "V350: armed proven encoder-only Tahoe AppleGVA TGL capability-layout bridge with 13 local-only sites",
     ):
         if register.count(token) != 1:
             raise AssertionError(f"{label}: changed user-patcher registration: {token}")
@@ -532,7 +528,7 @@ def verify_v342_user_bridge(source: str, label: str) -> None:
         exact_gate,
         "if (exactTigerLakeVf) {",
         "V343: classified AppleGVA bridge VF physical=a7a8 compatibility=9a49",
-        "registerV342AppleGvaBridge();",
+        "registerV350AppleGvaEncoderBridge();",
     ):
         if patcher.count(token) != 1:
             raise AssertionError(f"{label}: AppleGVA bridge escaped exact dual-identity VF gate: {token}")
@@ -541,34 +537,17 @@ def verify_v342_user_bridge(source: str, label: str) -> None:
         "uint32_t compatibilityDeviceId = 0;",
         exact_gate,
         "if (exactTigerLakeVf) {",
-        "registerV342AppleGvaBridge();",
+        "registerV350AppleGvaEncoderBridge();",
     ))
     if gate_order != tuple(sorted(gate_order)):
         raise AssertionError(f"{label}: AppleGVA dual-identity VF gate ordering changed")
     init = function_body(source, "void NGreen::init()")
-    if "registerV342AppleGvaBridge" in init:
+    if "registerV350AppleGvaEncoderBridge" in init:
         raise AssertionError(f"{label}: AppleGVA bridge registered before PF/VF classification")
 
 
 def verify_v349_exec_observer(source: str, gen11: str, label: str) -> None:
-    disabled_open = "#if 0 // NGRN_V342_RETIRED_APPLEGVA_PATCHES"
-    disabled_close = "#endif // NGRN_V342_RETIRED_APPLEGVA_PATCHES"
-    if source.count(disabled_open) != 1 or source.count(disabled_close) != 1:
-        raise AssertionError(f"{label}: retired V342 patch block is not compile-time disabled")
-    before, active = source.split(disabled_close, 1)
-    if disabled_open not in before or "&v342AppleGvaBinary, 1" not in before:
-        raise AssertionError(f"{label}: retired V342 provenance is incomplete")
-    for forbidden in (
-        "UserPatcher::BinaryModPatch",
-        "UserPatcher::BinaryModInfo",
-        "UserPatcher::LocalOnly",
-        "&v342AppleGvaBinary",
-        "V342_LOCAL_PATCH",
-    ):
-        if forbidden in active:
-            raise AssertionError(f"{label}: V349 active source retained binary modification: {forbidden}")
-    if "lilu.onProcLoadForce(" in active:
-        raise AssertionError(f"{label}: V349 observer still routes through Lilu process injection")
+    active = source
     for token in (
         "#include <sys/kauth.h>",
         "static kauth_listener_t v349MediaExecListener {nullptr};",
@@ -598,7 +577,7 @@ def verify_v349_exec_observer(source: str, gen11: str, label: str) -> None:
     for token in (
         "kauth_listen_scope(",
         "KAUTH_SCOPE_FILEOP, observeV349MediaExecPath, &v349MediaExecCookie",
-        "V349: registered bounded KAUTH exec observer with no binary modifications",
+        "V349: registered bounded KAUTH exec observer independently of binary modifications",
     ):
         if register.count(token) != 1:
             raise AssertionError(f"{label}: changed V349 observer registration: {token}")
@@ -623,6 +602,7 @@ def verify_v349_exec_observer(source: str, gen11: str, label: str) -> None:
         exact_gate,
         "if (exactTigerLakeVf) {",
         "V343: classified AppleGVA bridge VF physical=a7a8 compatibility=9a49",
+        "registerV350AppleGvaEncoderBridge();",
         "registerV349MediaExecObservation();",
     ):
         if patcher.count(token) != 1:
@@ -632,6 +612,7 @@ def verify_v349_exec_observer(source: str, gen11: str, label: str) -> None:
         "uint32_t compatibilityDeviceId = 0;",
         exact_gate,
         "if (exactTigerLakeVf) {",
+        "registerV350AppleGvaEncoderBridge();",
         "registerV349MediaExecObservation();",
     ))
     if gate_order != tuple(sorted(gate_order)):
@@ -666,6 +647,7 @@ def main() -> int:
     for data, label in payloads:
         verify_payload(data, label)
     verify_source(source, header, f"{source_path}/{header_path}")
+    verify_v350_encoder_bridge(green, str(green_path))
     verify_v349_exec_observer(green, source, str(green_path))
 
     source_mutations = (
@@ -724,9 +706,15 @@ def main() -> int:
         raise AssertionError("escaped header mutation")
 
     green_mutations = (
-        replace_once(green,
-                     "#if 0 // NGRN_V342_RETIRED_APPLEGVA_PATCHES",
-                     "#if 1 // NGRN_V342_RETIRED_APPLEGVA_PATCHES"),
+        replace_once(
+            green,
+            "sizeof(\"/System/Library/Frameworks/VideoToolbox.framework/Versions/A/XPCServices",
+            "sizeof(\"/System/Library/Frameworks/VideoToolbox.framework/Versions/B/XPCServices",
+        ),
+        replace_once(green, "UserPatcher::ProcInfo::MatchExact",
+                     "UserPatcher::ProcInfo::MatchSuffix"),
+        replace_once(green, "UserPatcher::LocalOnly",
+                     "UserPatcher::LookupPatch"),
         replace_once(green, "this->deviceId == 0xA7A8",
                      "this->deviceId == 0xA7A9"),
         replace_once(green, "compatibilityDeviceId == 0x9A49",
@@ -750,10 +738,11 @@ def main() -> int:
     )
     for index, mutation in enumerate(green_mutations):
         try:
+            verify_v350_encoder_bridge(mutation, f"green-mutation-{index}")
             verify_v349_exec_observer(mutation, source, f"green-mutation-{index}")
         except (AssertionError, ValueError):
             continue
-        raise AssertionError(f"escaped V348 path-observer mutation {index}")
+        raise AssertionError(f"escaped V350 encoder/observer mutation {index}")
 
     payload_offsets = (
         0x9CEE, 0x9D29, 0x9C98, 0xA079, 0xCB8D8, 0x2399E,
@@ -771,8 +760,8 @@ def main() -> int:
 
     print(
         "PASS: exact selector 0xb PCI identity producer, VF-only media alias, "
-        "bounded post-TGL KAUTH exec-path capture with no active binary "
-        "modifications and eighteen payload mutations"
+        "proven-path encoder-only 13-site AppleGVA bridge, bounded decoder "
+        "exec-path capture and eighteen payload mutations"
     )
     return 0
 
