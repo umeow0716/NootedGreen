@@ -90,6 +90,11 @@ def contract(source, path="<source>"):
         f"{path}: resource observation must call native exactly once"
     assert shared.count("if (ticket)") == 2, \
         f"{path}: both resource observation markers must be bounded"
+    for token in ("if (selector == 0 && result != kIOReturnSuccess)",
+                  "static volatile UInt32 observedFailures = 0;", "while (used < 8)",
+                  "OSCompareAndSwap(used, used + 1, &observedFailures)",
+                  "V358: shared resource create failed"):
+        assert token in shared, f"{path}: lost independent bounded failure observation: {token}"
     assert "static_cast" not in shared.split("const IOReturn result")[0], \
         f"{path}: resource observation must not interpret user arguments"
 
@@ -234,6 +239,10 @@ def contract(source, path="<source>"):
 
 def mutation_contract(source, path):
     mutations = (
+        ("if (selector == 0 && result != kIOReturnSuccess)", "if (ticket && result != kIOReturnSuccess)", 1),
+        ("while (used < 8)", "while (true)", 1),
+        ("OSCompareAndSwap(used, used + 1, &observedFailures)",
+         "OSCompareAndSwap(used, used + 1, &observedCreates)", 1),
         ("0x12C8", "0x12D0"),
         ("selector >= 0x100 && selector <= 0x105", "selector >= 0x100"),
         ("VfExternalProducerGuard guard(accelerator);", "/* lease removed */", 1),

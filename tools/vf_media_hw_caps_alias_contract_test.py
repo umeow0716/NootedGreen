@@ -663,8 +663,8 @@ def main() -> int:
                      "words[1] != kTigerLakeVfIdentity"),
         replace_once(source, "words[2] = kCanonicalTigerLakeIdentity",
                      "words[1] = kCanonicalTigerLakeIdentity"),
-        replace_once(source, "result != kIOReturnSuccess",
-                     "result == kIOReturnSuccess"),
+        replace_once(source, "if (result != kIOReturnSuccess)\n\t\treturn result;",
+                     "if (result == kIOReturnSuccess)\n\t\treturn result;"),
         replace_once(
             source,
             "return kIOReturnUnsupported;\n\t}\n\n\tauto *words",

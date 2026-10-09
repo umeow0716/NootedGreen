@@ -5683,6 +5683,20 @@ IOReturn Gen11::vfSharedExternalMethod(void *that, uint32_t selector,
 	if (ticket)
 		SYSLOG("ngreen", "V357: shared resource selector 0 return ticket=%u result=0x%x",
 		       ticket, static_cast<unsigned int>(result));
+	// Successful allocations may exhaust the ordinary trace before a later
+	// allocation fails. Give failures an independent, saturating budget.
+	if (selector == 0 && result != kIOReturnSuccess) {
+		static volatile UInt32 observedFailures = 0;
+		UInt32 used = observedFailures;
+		while (used < 8) {
+			if (OSCompareAndSwap(used, used + 1, &observedFailures)) {
+				SYSLOG("ngreen", "V358: shared resource create failed failure=%u result=0x%x ordinary-budget-exhausted=%u",
+				       used + 1, static_cast<unsigned int>(result), ticket ? 0U : 1U);
+				break;
+			}
+			used = observedFailures;
+		}
+	}
 	return result;
 }
 
