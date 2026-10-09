@@ -16,6 +16,7 @@ NGreen *NGreen::callback = nullptr;
 static Gen11 gen11;
 
 namespace {
+#if 0 // NGRN_V342_RETIRED_APPLEGVA_PATCHES
 // Tahoe 25G229 AppleGVA consumes the native ICL AVD_DriverCapability layout
 // (0x438-byte records), while the signed TGL VADriver that must generate TGL
 // commands returns its native 0x430-byte layout.  The common 0x18-byte header
@@ -176,6 +177,30 @@ void registerV342AppleGvaBridge() {
 		}, nullptr, &v342AppleGvaBinary, 1);
 	SYSLOG("ngreen", "V342: armed exact Tahoe AppleGVA TGL capability-layout bridge with 13 local-only sites");
 }
+#endif // NGRN_V342_RETIRED_APPLEGVA_PATCHES
+
+// V346 proved that neither the canonical framework path nor the complete
+// bundle tail is the exec vnode path reported by KAUTH_FILEOP_EXEC.  Observe
+// only the two exact executable basenames so the next run can record Lilu's
+// actual path.  No BinaryModInfo is registered in this build: an unexpectedly
+// broad basename match can therefore do nothing except emit this bounded log.
+constexpr uint32_t V347MediaObservationSection = 1;
+static UserPatcher::ProcInfo v347MediaObservationProcesses[] = {
+	{"VTEncoderXPCService", sizeof("VTEncoderXPCService") - 1,
+	 V347MediaObservationSection, UserPatcher::ProcInfo::MatchSuffix},
+	{"VTDecoderXPCService", sizeof("VTDecoderXPCService") - 1,
+	 V347MediaObservationSection, UserPatcher::ProcInfo::MatchSuffix},
+};
+
+void registerV347MediaVnodeObservation() {
+	lilu.onProcLoadForce(
+		v347MediaObservationProcesses, arrsize(v347MediaObservationProcesses),
+		[](void *, UserPatcher &, vm_map_t, const char *path, size_t pathLength) {
+			SYSLOG("ngreen", "V347: observed VideoToolbox XPC exec vnode path-len=%lu path=%s",
+				pathLength, path);
+		}, nullptr, nullptr, 0);
+	SYSLOG("ngreen", "V347: armed observation-only VideoToolbox exec vnode path capture with no binary modifications");
+}
 } // namespace
 
 void NGreen::init() {
@@ -261,7 +286,7 @@ void NGreen::processPatcher(KernelPatcher &patcher) {
 		compatibilityDeviceId == 0x9A49;
 	if (exactTigerLakeVf) {
 		SYSLOG("ngreen", "V343: classified AppleGVA bridge VF physical=a7a8 compatibility=9a49");
-		registerV342AppleGvaBridge();
+		registerV347MediaVnodeObservation();
 	}
 
 	const bool routedRead16 = KernelPatcher::routeVirtual(this->iGPU,
