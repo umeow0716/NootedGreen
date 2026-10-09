@@ -121,8 +121,9 @@ EXPECTED_PRODUCT_SYMBOL_DIGESTS = {
     "external": "bb1a795db6ba375b2053c427377088bf2c9853496a28eb182a947788c68bd2c7",
 }
 EXPECTED_EXTERNAL_ABI_PARTITIONS = {
-    # V342 adds only LiluAPI::onProcLoad for the exact, process-local
-    # AppleGVA bridge; the kernel import partition remains unchanged.
+    # V342 adds only LiluAPI::onProcLoad for the process-local AppleGVA bridge;
+    # V344 narrows its Cryptex-tolerant admission to two canonical suffixes.
+    # The kernel import partition remains unchanged.
     "Lilu": (17, "8d08e64b8c1b5c788f5fcc360ad6f4a8f8f60c03db0627263171cdfed6fb0cf2"),
     "kernel": (52, "bd083937eb559b618d306eb88a905a15b21e8fffcae97523019eaafcb153c64f"),
 }

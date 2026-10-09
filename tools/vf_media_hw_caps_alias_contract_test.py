@@ -495,17 +495,18 @@ def verify_v342_user_bridge(source: str, label: str) -> None:
         raise AssertionError(f"{label}: AppleGVA binary path changed")
     for process in (encoder, decoder):
         if source.count('"' + process + '"') != 2:
-            raise AssertionError(f"{label}: exact VideoToolbox process path changed")
+            raise AssertionError(f"{label}: canonical VideoToolbox process suffix changed")
     if source.count(
-            "V342AppleGvaSection, UserPatcher::ProcInfo::MatchExact}") != 2:
-        raise AssertionError(f"{label}: media process admission is not exact-match only")
+            "V342AppleGvaSection, UserPatcher::ProcInfo::MatchSuffix}") != 2:
+        raise AssertionError(f"{label}: media process admission is not canonical-suffix only")
 
     register = function_body(source, "void registerV342AppleGvaBridge()")
     for token in (
         "lilu.onProcLoadForce(",
         "v342MediaProcesses, arrsize(v342MediaProcesses)",
         "&v342AppleGvaBinary, 1",
-        "V342: dispatched exact local AppleGVA TGL capability-layout bridge",
+        "V344: dispatched suffix-qualified local AppleGVA TGL capability-layout bridge path-len=%lu path=%s",
+        "pathLength, path",
         "V342: armed exact Tahoe AppleGVA TGL capability-layout bridge with 13 local-only sites",
     ):
         if register.count(token) != 1:
@@ -639,8 +640,8 @@ def main() -> int:
                      "0xE8, 0x1F, 0xBD, 0xFB, 0xFF, 0x41, 0x8B, 0x4F, 0x28, 0x31, 0xD2",
                      "0xE8, 0x1F, 0xBD, 0xFB, 0xFF, 0x41, 0x8B, 0x4F, 0x20, 0x31, 0xD2"),
         replace_once(green,
-                     "V342AppleGvaSection, UserPatcher::ProcInfo::MatchExact},\n\t{\"/System/Library/Frameworks/VideoToolbox.framework/Versions/A/XPCServices/VTDecoderXPCService",
-                     "V342AppleGvaSection, UserPatcher::ProcInfo::MatchSuffix},\n\t{\"/System/Library/Frameworks/VideoToolbox.framework/Versions/A/XPCServices/VTDecoderXPCService"),
+                     "V342AppleGvaSection, UserPatcher::ProcInfo::MatchSuffix},\n\t{\"/System/Library/Frameworks/VideoToolbox.framework/Versions/A/XPCServices/VTDecoderXPCService",
+                     "V342AppleGvaSection, UserPatcher::ProcInfo::MatchExact},\n\t{\"/System/Library/Frameworks/VideoToolbox.framework/Versions/A/XPCServices/VTDecoderXPCService"),
         replace_once(green,
                      "/System/Library/PrivateFrameworks/AppleGVA.framework/Versions/A/AppleGVA",
                      "/System/Library/PrivateFrameworks/AppleGVA.framework/Versions/B/AppleGVA"),
