@@ -108,17 +108,19 @@ EXPECTED_DIRECT_VENDOR_INCLUDES = {
     "MacKernelSDK/Headers/string.h",
 }
 EXPECTED_PRODUCT_SYMBOL_COUNTS = {
-    "undefined": 79,
-    "defined": 649,
-    "external": 68,
+    "undefined": 80,
+    "defined": 651,
+    "external": 69,
 }
 EXPECTED_PRODUCT_SYMBOL_DIGESTS = {
-    "undefined": "51be69ce360d74d9623b5a8a667f477b6076645caccff1e0c368be6ee91fe6d5",
-    "defined": "f2795bfdc966e8774d3d6512df31b6e38894b99d6873296d399487675e2445b4",
-    "external": "d9ee5d44c90fca71af6204bb6c8b8c3b8a37d56b8780a310e7a81669e42c2c63",
+    "undefined": "9d342511dd154eeb9e635fa54e1f6e7986cb85aef42b08f9d271761932a9002f",
+    "defined": "4ec24a0197bfaaaf060f166cddce31cc158964a5fd8fedfcd129d58095217534",
+    "external": "bb1a795db6ba375b2053c427377088bf2c9853496a28eb182a947788c68bd2c7",
 }
 EXPECTED_EXTERNAL_ABI_PARTITIONS = {
-    "Lilu": (16, "c826042ab195d1496195d180c6b4edf01160cdb5158e43e2f4a6d51eb56eee1a"),
+    # V342 adds only LiluAPI::onProcLoad for the exact, process-local
+    # AppleGVA bridge; the kernel import partition remains unchanged.
+    "Lilu": (17, "8d08e64b8c1b5c788f5fcc360ad6f4a8f8f60c03db0627263171cdfed6fb0cf2"),
     "kernel": (52, "bd083937eb559b618d306eb88a905a15b21e8fffcae97523019eaafcb153c64f"),
 }
 

@@ -15,6 +15,163 @@ NGreen *NGreen::callback = nullptr;
 
 static Gen11 gen11;
 
+namespace {
+// Tahoe 25G229 AppleGVA consumes the native ICL AVD_DriverCapability layout
+// (0x438-byte records), while the signed TGL VADriver that must generate TGL
+// commands returns its native 0x430-byte layout.  The common 0x18-byte header
+// is unchanged; only the two format arrays and the linked-record pointer are
+// eight bytes earlier in TGL.  Patch the exact H.264 scaler/encoder consumers
+// in the two VideoToolbox services, never the signed file on disk.  Each
+// LocalOnly anchor is unique in the pinned Tahoe AppleGVA __text and changes
+// only one displacement byte.
+constexpr uint32_t V342AppleGvaSection = 1;
+
+static const uint8_t v342ScalerCountFind[] = {
+	0xE8, 0x1F, 0xBD, 0xFB, 0xFF, 0x41, 0x8B, 0x4F, 0x28, 0x31, 0xD2
+};
+static const uint8_t v342ScalerCountReplace[] = {
+	0xE8, 0x1F, 0xBD, 0xFB, 0xFF, 0x41, 0x8B, 0x4F, 0x20, 0x31, 0xD2
+};
+static const uint8_t v342ScalerFirstMatchFind[] = {
+	0x41, 0x39, 0x44, 0xD7, 0x2C
+};
+static const uint8_t v342ScalerFirstMatchReplace[] = {
+	0x41, 0x39, 0x44, 0xD7, 0x24
+};
+static const uint8_t v342ScalerFirstLoadFind[] = {
+	0x4B, 0x8B, 0x44, 0xF7, 0x2C
+};
+static const uint8_t v342ScalerFirstLoadReplace[] = {
+	0x4B, 0x8B, 0x44, 0xF7, 0x24
+};
+static const uint8_t v342ScalerSecondLoadFind[] = {
+	0x49, 0x89, 0x45, 0x28,
+	0x49, 0x8B, 0x87, 0x30, 0x02, 0x00, 0x00,
+	0x49, 0x89, 0x45, 0x30, 0x49, 0xC7, 0x45, 0x38, 0x00, 0x00, 0x00, 0x00,
+	0x49, 0x83, 0xBF, 0x30, 0x04, 0x00, 0x00, 0x00
+};
+static const uint8_t v342ScalerSecondLoadReplace[] = {
+	0x49, 0x89, 0x45, 0x28,
+	0x49, 0x8B, 0x87, 0x28, 0x02, 0x00, 0x00,
+	0x49, 0x89, 0x45, 0x30, 0x49, 0xC7, 0x45, 0x38, 0x00, 0x00, 0x00, 0x00,
+	0x49, 0x83, 0xBF, 0x30, 0x04, 0x00, 0x00, 0x00
+};
+static const uint8_t v342ScalerLinkCheckFind[] = {
+	0x49, 0x83, 0xBF, 0x30, 0x04, 0x00, 0x00, 0x00
+};
+static const uint8_t v342ScalerLinkCheckReplace[] = {
+	0x49, 0x83, 0xBF, 0x28, 0x04, 0x00, 0x00, 0x00
+};
+static const uint8_t v342ScalerLinkLoadFind[] = {
+	0x49, 0x8B, 0x8F, 0x30, 0x04, 0x00, 0x00
+};
+static const uint8_t v342ScalerLinkLoadReplace[] = {
+	0x49, 0x8B, 0x8F, 0x28, 0x04, 0x00, 0x00
+};
+static const uint8_t v342ScalerLinkedFirstFind[] = {
+	0xF2, 0x43, 0x0F, 0x10, 0x44, 0xF7, 0x2C
+};
+static const uint8_t v342ScalerLinkedFirstReplace[] = {
+	0xF2, 0x43, 0x0F, 0x10, 0x44, 0xF7, 0x24
+};
+static const uint8_t v342ScalerLinkedSecondFind[] = {
+	0x49, 0x8B, 0x8F, 0x30, 0x02, 0x00, 0x00
+};
+static const uint8_t v342ScalerLinkedSecondReplace[] = {
+	0x49, 0x8B, 0x8F, 0x28, 0x02, 0x00, 0x00
+};
+static const uint8_t v342EncoderFirstLoadFind[] = {
+	0xF2, 0x0F, 0x10, 0x48, 0x2C
+};
+static const uint8_t v342EncoderFirstLoadReplace[] = {
+	0xF2, 0x0F, 0x10, 0x48, 0x24
+};
+static const uint8_t v342EncoderSecondLoadFind[] = {
+	0x48, 0x8B, 0x80, 0x30, 0x02, 0x00, 0x00,
+	0x48, 0x89, 0x83, 0x20, 0xF1, 0x1E, 0x00
+};
+static const uint8_t v342EncoderSecondLoadReplace[] = {
+	0x48, 0x8B, 0x80, 0x28, 0x02, 0x00, 0x00,
+	0x48, 0x89, 0x83, 0x20, 0xF1, 0x1E, 0x00
+};
+static const uint8_t v342CapabilitySearchLinkFind[] = {
+	0x4C, 0x8B, 0x89, 0x30, 0x04, 0x00, 0x00,
+	0x4D, 0x85, 0xC9, 0x74, 0x06, 0x41, 0x83, 0x39, 0x10
+};
+static const uint8_t v342CapabilitySearchLinkReplace[] = {
+	0x4C, 0x8B, 0x89, 0x28, 0x04, 0x00, 0x00,
+	0x4D, 0x85, 0xC9, 0x74, 0x06, 0x41, 0x83, 0x39, 0x10
+};
+static const uint8_t v342FrameStatLinkCheckFind[] = {
+	0xC7, 0x83, 0xB4, 0x9A, 0x23, 0x00, 0x05, 0x00, 0x00, 0x00,
+	0x44, 0x89, 0xA3, 0xA8, 0x9A, 0x23, 0x00,
+	0x45, 0x31, 0xFF,
+	0x48, 0x83, 0xB8, 0x30, 0x04, 0x00, 0x00, 0x00,
+	0x0F, 0x84, 0x18, 0xFF, 0xFF, 0xFF
+};
+static const uint8_t v342FrameStatLinkCheckReplace[] = {
+	0xC7, 0x83, 0xB4, 0x9A, 0x23, 0x00, 0x05, 0x00, 0x00, 0x00,
+	0x44, 0x89, 0xA3, 0xA8, 0x9A, 0x23, 0x00,
+	0x45, 0x31, 0xFF,
+	0x48, 0x83, 0xB8, 0x28, 0x04, 0x00, 0x00, 0x00,
+	0x0F, 0x84, 0x18, 0xFF, 0xFF, 0xFF
+};
+static const uint8_t v342FrameStatLinkLoadFind[] = {
+	0x48, 0x8B, 0x8B, 0xF8, 0x9B, 0x23, 0x00,
+	0x48, 0x8B, 0x89, 0x30, 0x04, 0x00, 0x00,
+	0x8B, 0x11, 0x89, 0x10, 0x48, 0x8B, 0x51, 0x08
+};
+static const uint8_t v342FrameStatLinkLoadReplace[] = {
+	0x48, 0x8B, 0x8B, 0xF8, 0x9B, 0x23, 0x00,
+	0x48, 0x8B, 0x89, 0x28, 0x04, 0x00, 0x00,
+	0x8B, 0x11, 0x89, 0x10, 0x48, 0x8B, 0x51, 0x08
+};
+
+#define V342_LOCAL_PATCH(name) \
+	{CPU_TYPE_X86_64, UserPatcher::LocalOnly, name##Find, name##Replace, \
+	 arrsize(name##Find), 0, 1, UserPatcher::SegmentTextText, V342AppleGvaSection}
+
+static UserPatcher::BinaryModPatch v342AppleGvaPatches[] = {
+	V342_LOCAL_PATCH(v342ScalerCount),
+	V342_LOCAL_PATCH(v342ScalerFirstMatch),
+	V342_LOCAL_PATCH(v342ScalerFirstLoad),
+	V342_LOCAL_PATCH(v342ScalerSecondLoad),
+	V342_LOCAL_PATCH(v342ScalerLinkCheck),
+	V342_LOCAL_PATCH(v342ScalerLinkLoad),
+	V342_LOCAL_PATCH(v342ScalerLinkedFirst),
+	V342_LOCAL_PATCH(v342ScalerLinkedSecond),
+	V342_LOCAL_PATCH(v342EncoderFirstLoad),
+	V342_LOCAL_PATCH(v342EncoderSecondLoad),
+	V342_LOCAL_PATCH(v342CapabilitySearchLink),
+	V342_LOCAL_PATCH(v342FrameStatLinkCheck),
+	V342_LOCAL_PATCH(v342FrameStatLinkLoad),
+};
+#undef V342_LOCAL_PATCH
+
+static UserPatcher::BinaryModInfo v342AppleGvaBinary {
+	"/System/Library/PrivateFrameworks/AppleGVA.framework/Versions/A/AppleGVA",
+	v342AppleGvaPatches, arrsize(v342AppleGvaPatches)
+};
+
+static UserPatcher::ProcInfo v342MediaProcesses[] = {
+	{"/System/Library/Frameworks/VideoToolbox.framework/Versions/A/XPCServices/VTEncoderXPCService.xpc/Contents/MacOS/VTEncoderXPCService",
+	 sizeof("/System/Library/Frameworks/VideoToolbox.framework/Versions/A/XPCServices/VTEncoderXPCService.xpc/Contents/MacOS/VTEncoderXPCService") - 1,
+	 V342AppleGvaSection, UserPatcher::ProcInfo::MatchExact},
+	{"/System/Library/Frameworks/VideoToolbox.framework/Versions/A/XPCServices/VTDecoderXPCService.xpc/Contents/MacOS/VTDecoderXPCService",
+	 sizeof("/System/Library/Frameworks/VideoToolbox.framework/Versions/A/XPCServices/VTDecoderXPCService.xpc/Contents/MacOS/VTDecoderXPCService") - 1,
+	 V342AppleGvaSection, UserPatcher::ProcInfo::MatchExact},
+};
+
+void registerV342AppleGvaBridge() {
+	lilu.onProcLoadForce(
+		v342MediaProcesses, arrsize(v342MediaProcesses),
+		[](void *, UserPatcher &, vm_map_t, const char *path, size_t) {
+			SYSLOG("ngreen", "V342: dispatched exact local AppleGVA TGL capability-layout bridge for %s", path);
+		}, nullptr, &v342AppleGvaBinary, 1);
+	SYSLOG("ngreen", "V342: armed exact Tahoe AppleGVA TGL capability-layout bridge with 13 local-only sites");
+}
+} // namespace
+
 void NGreen::init() {
     callback = this;
 
@@ -84,6 +241,12 @@ void NGreen::processPatcher(KernelPatcher &patcher) {
 		NGGpuCapabilities::isTigerLake(this->deviceId) && physicalAccess;
 	this->isRealTGL = NGGpuCapabilities::useNativeTigerLakePath(this->deviceId, physicalTgl);
 	SYSLOG("ngreen", "V243: GPU=%04x nativeTglPf=%d", this->deviceId, this->isRealTGL);
+
+	// The bridge is for the exact 9a49 VF only.  Registering here, after the
+	// unspoofed identity and PF/VF ownership are known but before Lilu starts its
+	// user patcher, keeps PFs and every other GPU/process completely untouched.
+	if (!physicalAccess && this->deviceId == 0x9A49)
+		registerV342AppleGvaBridge();
 
 	const bool routedRead16 = KernelPatcher::routeVirtual(this->iGPU,
 		WIOKit::PCIConfigOffset::ConfigRead16, configRead16, &orgConfigRead16);

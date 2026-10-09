@@ -2,6 +2,7 @@
 """Pin the exact Tahoe media hw-caps producer and VF-only identity alias."""
 
 import hashlib
+import re
 import struct
 import sys
 from pathlib import Path
@@ -387,6 +388,129 @@ def verify_source(source: str, header: str, label: str) -> None:
         )
 
 
+V342_APPLEGVA_PATCHES = (
+    ("v342ScalerCount", "e81fbdfbff418b4f2831d2",
+     "e81fbdfbff418b4f2031d2", 0x7C0F2),
+    ("v342ScalerFirstMatch", "413944d72c", "413944d724", 0x7C102),
+    ("v342ScalerFirstLoad", "4b8b44f72c", "4b8b44f724", 0x7C13C),
+    ("v342ScalerSecondLoad",
+     "49894528498b87300200004989453049c74538000000004983bf3004000000",
+     "49894528498b87280200004989453049c74538000000004983bf3004000000",
+     0x7C141),
+    ("v342ScalerLinkCheck", "4983bf3004000000", "4983bf2804000000",
+     0x7C158),
+    ("v342ScalerLinkLoad", "498b8f30040000", "498b8f28040000",
+     0x7C172),
+    ("v342ScalerLinkedFirst", "f2430f1044f72c", "f2430f1044f724",
+     0x7C1A7),
+    ("v342ScalerLinkedSecond", "498b8f30020000", "498b8f28020000",
+     0x7C1BD),
+    ("v342EncoderFirstLoad", "f20f10482c", "f20f104824", 0x1BCA),
+    ("v342EncoderSecondLoad", "488b803002000048898320f11e00",
+     "488b802802000048898320f11e00", 0x1BD9),
+    ("v342CapabilitySearchLink", "4c8b89300400004d85c9740641833910",
+     "4c8b89280400004d85c9740641833910", 0x38349),
+    ("v342FrameStatLinkCheck",
+     "c783b49a2300050000004489a3a89a23004531ff4883b830040000000f8418ffffff",
+     "c783b49a2300050000004489a3a89a23004531ff4883b828040000000f8418ffffff",
+     0x1DB8),
+    ("v342FrameStatLinkLoad",
+     "488b8bf89b2300488b89300400008b118910488b5108",
+     "488b8bf89b2300488b89280400008b118910488b5108", 0x1DED),
+)
+
+
+def cpp_byte_array(source: str, name: str, label: str) -> bytes:
+    pattern = re.compile(
+        rf"static const uint8_t {re.escape(name)}\[\] = \{{(.*?)\n\}};",
+        re.DOTALL,
+    )
+    matches = pattern.findall(source)
+    if len(matches) != 1:
+        raise AssertionError(f"{label}: missing or duplicate byte array {name}")
+    return bytes(int(value, 16) for value in re.findall(
+        r"0x([0-9A-Fa-f]{2})", matches[0]
+    ))
+
+
+def verify_v342_user_bridge(source: str, label: str) -> None:
+    for name, expected_find, expected_replace, _ in V342_APPLEGVA_PATCHES:
+        find = cpp_byte_array(source, name + "Find", label)
+        replace = cpp_byte_array(source, name + "Replace", label)
+        if find != bytes.fromhex(expected_find) or \
+                replace != bytes.fromhex(expected_replace):
+            raise AssertionError(f"{label}: changed exact AppleGVA anchor {name}")
+        differences = [
+            index for index, pair in enumerate(zip(find, replace))
+            if pair[0] != pair[1]
+        ]
+        if len(find) != len(replace) or len(differences) != 1:
+            raise AssertionError(f"{label}: {name} is not a one-byte displacement patch")
+        old, new = find[differences[0]], replace[differences[0]]
+        if (old, new) not in ((0x2C, 0x24), (0x30, 0x28), (0x28, 0x20)):
+            raise AssertionError(f"{label}: {name} changed a non-layout byte")
+
+    table_start = source.index(
+        "static UserPatcher::BinaryModPatch v342AppleGvaPatches[] = {"
+    )
+    table_end = source.index("\n};", table_start)
+    table = source[table_start:table_end]
+    expected_names = [item[0] for item in V342_APPLEGVA_PATCHES]
+    table_names = re.findall(r"V342_LOCAL_PATCH\((v342\w+)\)", table)
+    if table_names != expected_names:
+        raise AssertionError(f"{label}: changed ordered 13-site AppleGVA patch table")
+
+    macro = (
+        "{CPU_TYPE_X86_64, UserPatcher::LocalOnly, name##Find, name##Replace, \\\n"
+        "\t arrsize(name##Find), 0, 1, UserPatcher::SegmentTextText, "
+        "V342AppleGvaSection}"
+    )
+    if source.count(macro) != 1:
+        raise AssertionError(f"{label}: AppleGVA patches are not exact local-only text patches")
+
+    apple_gva = (
+        "/System/Library/PrivateFrameworks/AppleGVA.framework/Versions/A/AppleGVA"
+    )
+    encoder = (
+        "/System/Library/Frameworks/VideoToolbox.framework/Versions/A/XPCServices/"
+        "VTEncoderXPCService.xpc/Contents/MacOS/VTEncoderXPCService"
+    )
+    decoder = (
+        "/System/Library/Frameworks/VideoToolbox.framework/Versions/A/XPCServices/"
+        "VTDecoderXPCService.xpc/Contents/MacOS/VTDecoderXPCService"
+    )
+    if source.count('"' + apple_gva + '"') != 1:
+        raise AssertionError(f"{label}: AppleGVA binary path changed")
+    for process in (encoder, decoder):
+        if source.count('"' + process + '"') != 2:
+            raise AssertionError(f"{label}: exact VideoToolbox process path changed")
+    if source.count(
+            "V342AppleGvaSection, UserPatcher::ProcInfo::MatchExact}") != 2:
+        raise AssertionError(f"{label}: media process admission is not exact-match only")
+
+    register = function_body(source, "void registerV342AppleGvaBridge()")
+    for token in (
+        "lilu.onProcLoadForce(",
+        "v342MediaProcesses, arrsize(v342MediaProcesses)",
+        "&v342AppleGvaBinary, 1",
+        "V342: dispatched exact local AppleGVA TGL capability-layout bridge",
+        "V342: armed exact Tahoe AppleGVA TGL capability-layout bridge with 13 local-only sites",
+    ):
+        if register.count(token) != 1:
+            raise AssertionError(f"{label}: changed user-patcher registration: {token}")
+
+    patcher = function_body(source, "void NGreen::processPatcher(KernelPatcher &patcher)")
+    exact_gate = (
+        "if (!physicalAccess && this->deviceId == 0x9A49)\n"
+        "\t\tregisterV342AppleGvaBridge();"
+    )
+    if patcher.count(exact_gate) != 1:
+        raise AssertionError(f"{label}: AppleGVA bridge escaped exact 9a49 VF gate")
+    init = function_body(source, "void NGreen::init()")
+    if "registerV342AppleGvaBridge" in init:
+        raise AssertionError(f"{label}: AppleGVA bridge registered before PF/VF classification")
+
+
 def replace_once(value: str, before: str, after: str) -> str:
     if value.count(before) != 1:
         raise AssertionError(f"ambiguous mutation anchor: {before}")
@@ -394,18 +518,21 @@ def replace_once(value: str, before: str, after: str) -> str:
 
 
 def main() -> int:
-    if len(sys.argv) != 5:
+    if len(sys.argv) != 6:
         raise SystemExit(
             "usage: vf_media_hw_caps_alias_contract_test.py "
-            "kern_gen11.cpp kern_gen11.hpp accelerator-a accelerator-b"
+            "kern_gen11.cpp kern_gen11.hpp kern_green.cpp "
+            "accelerator-a accelerator-b"
         )
-    source_path, header_path, *payload_paths = map(Path, sys.argv[1:])
+    source_path, header_path, green_path, *payload_paths = map(Path, sys.argv[1:])
     source = source_path.read_text(encoding="utf-8")
     header = header_path.read_text(encoding="utf-8")
+    green = green_path.read_text(encoding="utf-8")
     payloads = [(path.read_bytes(), str(path)) for path in payload_paths]
     for data, label in payloads:
         verify_payload(data, label)
     verify_source(source, header, f"{source_path}/{header_path}")
+    verify_v342_user_bridge(green, str(green_path))
 
     source_mutations = (
         replace_once(source, "0x9A498086U", "0x9A488086U"),
@@ -457,6 +584,35 @@ def main() -> int:
     else:
         raise AssertionError("escaped header mutation")
 
+    green_mutations = (
+        replace_once(green, "UserPatcher::LocalOnly", "0"),
+        replace_once(green, "this->deviceId == 0x9A49",
+                     "this->deviceId == 0x9A40"),
+        replace_once(green, "&v342AppleGvaBinary, 1",
+                     "&v342AppleGvaBinary, 0"),
+        replace_once(green,
+                     "V342_LOCAL_PATCH(v342CapabilitySearchLink)",
+                     "V342_LOCAL_PATCH(v342ScalerLinkLoad)"),
+        replace_once(green,
+                     "V342: armed exact Tahoe AppleGVA TGL capability-layout bridge with 13 local-only sites",
+                     "V342: armed exact Tahoe AppleGVA TGL capability-layout bridge with 12 local-only sites"),
+        replace_once(green,
+                     "0xE8, 0x1F, 0xBD, 0xFB, 0xFF, 0x41, 0x8B, 0x4F, 0x28, 0x31, 0xD2",
+                     "0xE8, 0x1F, 0xBD, 0xFB, 0xFF, 0x41, 0x8B, 0x4F, 0x20, 0x31, 0xD2"),
+        replace_once(green,
+                     "V342AppleGvaSection, UserPatcher::ProcInfo::MatchExact},\n\t{\"/System/Library/Frameworks/VideoToolbox.framework/Versions/A/XPCServices/VTDecoderXPCService",
+                     "V342AppleGvaSection, UserPatcher::ProcInfo::MatchSuffix},\n\t{\"/System/Library/Frameworks/VideoToolbox.framework/Versions/A/XPCServices/VTDecoderXPCService"),
+        replace_once(green,
+                     "/System/Library/PrivateFrameworks/AppleGVA.framework/Versions/A/AppleGVA",
+                     "/System/Library/PrivateFrameworks/AppleGVA.framework/Versions/B/AppleGVA"),
+    )
+    for index, mutation in enumerate(green_mutations):
+        try:
+            verify_v342_user_bridge(mutation, f"green-mutation-{index}")
+        except (AssertionError, ValueError):
+            continue
+        raise AssertionError(f"escaped V342 user-bridge mutation {index}")
+
     payload_offsets = (
         0x9CEE, 0x9D29, 0x9C98, 0xA079, 0xCB8D8, 0x2399E,
         0x7712A, 0x77142, 0x771AE,
@@ -473,7 +629,8 @@ def main() -> int:
 
     print(
         "PASS: exact selector 0xb PCI identity producer, VF-only media alias, "
-        "eighteen source and eighteen payload mutations"
+        "13-site process-local TGL capability bridge, 26 source and "
+        "eighteen payload mutations"
     )
     return 0
 
