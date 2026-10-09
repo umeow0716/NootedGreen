@@ -158,9 +158,9 @@ def main() -> None:
             "fixed TGL start-only deadline")
     require(runner, 'readonly metal_smoke_runtime_seconds=150',
             "fixed Metal-smoke deadline")
-    require(runner, 'readonly media_smoke_runtime_seconds=150',
+    require(runner, 'readonly media_smoke_runtime_seconds=300',
             "fixed media-smoke deadline")
-    require(runner, 'readonly service_runtime_seconds=240',
+    require(runner, 'readonly service_runtime_seconds=390',
             "bounded service runtime")
     require(runner, 'runtime_seconds_for_mode()', "closed runtime-mode selector")
     require(runner, 'trace-only) printf', "trace-only mode allowlist")
