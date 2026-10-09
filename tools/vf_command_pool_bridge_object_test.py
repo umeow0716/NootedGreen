@@ -65,11 +65,16 @@ def main() -> None:
     assert relative >= 0 and relative + 32 <= section["size"]
     body_offset = section["offset"] + relative
     body = image[body_offset:body_offset + 32]
-    expected_body = bytes.fromhex(
+    expected_code = bytes.fromhex(
         "53 48 83 ec 08 48 89 cb 48 8d 44 24 18 50 "
-        "e8 00 00 00 00 48 83 c4 10 48 89 df 5b 84 c0 c3 0f 0b"
+        "e8 00 00 00 00 48 83 c4 10 48 89 df 5b 84 c0 c3"
     )
-    assert body == expected_body, (
+    # Xcode 16 emits UD2 after the naked function's RET, while Xcode 26.6
+    # emits a two-byte NOP.  The bytes are unreachable alignment padding;
+    # keep every executable byte and the relocation below pinned exactly.
+    assert body[:len(expected_code)] == expected_code and body[len(expected_code):] in {
+        bytes.fromhex("0f 0b"), bytes.fromhex("66 90")
+    }, (
         "changed command-pool bridge machine ABI: " + body.hex(" ")
     )
 
