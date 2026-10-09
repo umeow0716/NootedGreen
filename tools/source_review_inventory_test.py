@@ -36,7 +36,7 @@ def macho_nm_command():
 # This digest covers the sorted, NUL-delimited path inventory, not file
 # contents. Git commit identity already fixes contents; this independent guard
 # prevents a new, removed or renamed path from silently escaping SG-11 review.
-EXPECTED_PATH_DIGEST = "d798f0096af3818547c81abc3d81f653f8e3453d0919ddc026298a12b0176f13"
+EXPECTED_PATH_DIGEST = "45eb185f5d5eb095838147e70090e5880b5b490254a8ab9963939a14bff708a0"
 EXPECTED_TOP_LEVEL_COUNTS = {
     ".github": 1,
     ".gitignore": 1,
@@ -49,7 +49,7 @@ EXPECTED_TOP_LEVEL_COUNTS = {
     "Release alias": 1,
     "docs": 5,
     "sle_Internal": 109,
-    "tools": 75,
+    "tools": 76,
 }
 
 EXPECTED_DEPENDENCY_DIGEST = (
@@ -109,12 +109,12 @@ EXPECTED_DIRECT_VENDOR_INCLUDES = {
 }
 EXPECTED_PRODUCT_SYMBOL_COUNTS = {
     "undefined": 79,
-    "defined": 648,
+    "defined": 649,
     "external": 68,
 }
 EXPECTED_PRODUCT_SYMBOL_DIGESTS = {
     "undefined": "51be69ce360d74d9623b5a8a667f477b6076645caccff1e0c368be6ee91fe6d5",
-    "defined": "7f07825ffed78e23534fedf1ad4cb9dcf1e63cf96187602f7e43bad56fd87daf",
+    "defined": "f2795bfdc966e8774d3d6512df31b6e38894b99d6873296d399487675e2445b4",
     "external": "d9ee5d44c90fca71af6204bb6c8b8c3b8a37d56b8780a310e7a81669e42c2c63",
 }
 EXPECTED_EXTERNAL_ABI_PARTITIONS = {
@@ -394,7 +394,7 @@ def verify_tool_ledger(paths):
         path for path in paths
         if path.startswith("tools/") and Path(path).suffix in program_suffixes
     }
-    assert len(programs) == 69, f"tool program count changed: {len(programs)}"
+    assert len(programs) == 70, f"tool program count changed: {len(programs)}"
 
     check_static = (ROOT / "tools/check-static.sh").read_text(encoding="utf-8")
     workflow = (ROOT / ".github/workflows/build-kext.yml").read_text(

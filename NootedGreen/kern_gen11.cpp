@@ -3301,6 +3301,64 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			           "Failed to defer native VF service publication");
 			SYSLOG("ngreen", "V323: deferred native synchronous VF service publication until callback validation");
 
+			// The exact V335 media panic reached Tahoe's native
+			// calculateIOSurfaceDeviceCacheVRAMBytes with a non-zero plane
+			// count but zero bytes-per-element and row-bytes.  The native TGL,
+			// ICL and KBL implementations all divide those two values without a
+			// guard; their existing zero-plane branch is the surface-level
+			// fallback.  Preserve the native calculation byte-for-byte when both
+			// divisors are valid, and classify only this otherwise impossible
+			// sparse-plane shape as the existing fallback.  This patch is inside
+			// the classified-VF block, so PF and non-target devices retain the
+			// untouched Apple implementation.
+			mach_vm_address_t surfaceBytesStart = 0;
+			mach_vm_address_t surfaceBytesEnd = 0;
+			KernelPatcher::SolveRequest surfaceBytesBounds[] = {
+				{"__ZN15IGAccelResource38calculateIOSurfaceDeviceCacheVRAMBytesEPyS0_",
+				 surfaceBytesStart},
+				{"__ZN15IGAccelResource14getLevelOffsetEhhPi", surfaceBytesEnd},
+			};
+			PANIC_COND(!patcher.solveMultiple(
+			               index, surfaceBytesBounds, address, size) ||
+			           surfaceBytesEnd - surfaceBytesStart != 0xb68,
+			           "ngreen", "Changed VF IOSurface cache-size boundary");
+			static const uint8_t surfacePlaneDivisionFind[] = {
+				0x83, 0xbd, 0x24, 0xff, 0xff, 0xff, 0x00,
+				0x89, 0x9d, 0x20, 0xff, 0xff, 0xff,
+				0x74, 0x1b,
+				0x48, 0x8b, 0x4d, 0x80,
+				0x89, 0xc8, 0x31, 0xd2, 0x41, 0xf7, 0xf7,
+				0x41, 0x89, 0xc4,
+				0x89, 0xd8, 0x31, 0xd2, 0xf7, 0xf1,
+				0x89, 0xc3,
+				0xe9, 0xca, 0x00, 0x00, 0x00,
+			};
+			static const uint8_t surfacePlaneDivisionReplace[] = {
+				0x89, 0x9d, 0x20, 0xff, 0xff, 0xff,
+				0x45, 0x85, 0xff,
+				0x74, 0x1f,
+				0x48, 0x8b, 0x4d, 0x80,
+				0x85, 0xc9,
+				0x74, 0x17,
+				0x89, 0xc8, 0x31, 0xd2, 0x41, 0xf7, 0xf7,
+				0x41, 0x89, 0xc4,
+				0x89, 0xd8, 0x31, 0xd2, 0xf7, 0xf1,
+				0x89, 0xc3,
+				0xe9, 0xca, 0x00, 0x00, 0x00,
+			};
+			static_assert(sizeof(surfacePlaneDivisionFind) ==
+			              sizeof(surfacePlaneDivisionReplace),
+			              "V338 plane fallback patch must preserve code size");
+			LookupPatchPlus const surfacePlaneDivisionPatch {
+				activeKext, surfacePlaneDivisionFind,
+				surfacePlaneDivisionReplace, 1,
+			};
+			PANIC_COND(!surfacePlaneDivisionPatch.apply(
+			               patcher, surfaceBytesStart,
+			               surfaceBytesEnd - surfaceBytesStart), "ngreen",
+			           "Failed to guard sparse VF IOSurface plane divisors");
+			SYSLOG("ngreen", "V338: admitted sparse VF IOSurface plane through native surface-level fallback");
+
 			KernelPatcher::RouteRequest requests[] = {
 			// Tahoe's native ICL VADriver asks selector 0xb for IntelHwCapsInfo
 			// and admits only canonical ICL PCI identities.  The SR-IOV VF has a
