@@ -16,11 +16,27 @@ asm(".text\n.p2align 4\n.globl _owned_debug_target\n"
 
 static volatile sig_atomic_t hits = 0;
 static volatile sig_atomic_t captured = 0;
+static void hex(uint64_t value) {
+    char out[17];
+    constexpr char digits[] = "0123456789abcdef";
+    for (unsigned i = 0; i != 16; ++i) out[i] = digits[(value >> (60 - 4 * i)) & 15];
+    out[16] = '\n';
+    (void)write(STDERR_FILENO, out, sizeof(out));
+}
 static void trap(int signal, siginfo_t *, void *context) {
     auto *state = static_cast<ucontext_t *>(context);
     if (signal != SIGTRAP || !state || !state->uc_mcontext || hits ||
         state->uc_mcontext->__ss.__rip != reinterpret_cast<uintptr_t>(owned_debug_site) ||
-        state->uc_mcontext->__ss.__rax != 0x1357) _exit(70);
+        state->uc_mcontext->__ss.__rax != 0x1357) {
+        constexpr char message[] = "SELF_DEBUG_TRAP_REJECT signal/hits/rip/expected/rax:\n";
+        (void)write(STDERR_FILENO, message, sizeof(message) - 1);
+        hex(static_cast<uint64_t>(signal));
+        hex(static_cast<uint64_t>(hits));
+        hex(state && state->uc_mcontext ? state->uc_mcontext->__ss.__rip : 0);
+        hex(reinterpret_cast<uintptr_t>(owned_debug_site));
+        hex(state && state->uc_mcontext ? state->uc_mcontext->__ss.__rax : 0);
+        _exit(70);
+    }
     captured = static_cast<sig_atomic_t>(state->uc_mcontext->__ss.__rax);
     hits = 1;
     // RF resumes the same instruction once; never change RIP or result registers.
@@ -28,6 +44,7 @@ static void trap(int signal, siginfo_t *, void *context) {
 }
 
 int main() {
+    std::setvbuf(stdout, nullptr, _IONBF, 0);
     thread_t thread = mach_thread_self();
     x86_debug_state64_t original{};
     mach_msg_type_number_t count = x86_DEBUG_STATE64_COUNT;
