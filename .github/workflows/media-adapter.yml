@@ -22,12 +22,16 @@ jobs:
           mkdir -p output
           xcrun clang++ -std=c++17 -Wall -Wextra -Werror -arch x86_64 -mmacosx-version-min=26.0 tools/media_adapter/factory_probe.cpp -o output/tgl-capability-factory-probe
           codesign --force --sign - output/tgl-capability-factory-probe
+          xcrun clang++ -std=c++17 -Wall -Wextra -Werror -arch x86_64 -mmacosx-version-min=26.0 tools/media_adapter/self_debug_probe.cpp -o output/self-debug-probe
+          codesign --force --sign - output/self-debug-probe
+          output/self-debug-probe
           bundle=output/NootedGreenTGLMediaAdapter.bundle
           mkdir -p "$bundle/Contents/MacOS"
           cp tools/media_adapter/Info.plist "$bundle/Contents/Info.plist"
           xcrun clang++ -std=c++17 -Wall -Wextra -Werror -arch x86_64 -mmacosx-version-min=26.0 -dynamiclib -fvisibility=hidden tools/media_adapter/adapter.cpp -o "$bundle/Contents/MacOS/NootedGreenTGLMediaAdapter"
           codesign --force --sign - "$bundle"
           shasum -a 256 output/tgl-capability-factory-probe "$bundle/Contents/MacOS/NootedGreenTGLMediaAdapter" > output/sha256.txt
+          shasum -a 256 output/self-debug-probe >> output/sha256.txt
       - uses: actions/upload-artifact@v4
         with:
           name: TGLCapabilityFactoryProbe
