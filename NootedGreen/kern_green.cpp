@@ -166,7 +166,7 @@ static UserPatcher::ProcInfo v350EncoderProcess[] = {
 
 void registerV350AppleGvaEncoderBridge() {
 	if (checkKernelArgument("-ngreenmediaadapter")) {
-		SYSLOG("ngreen", "owned-data media adapter selected; AppleGVA binary patch registration disabled");
+		SYSLOG("ngreen", "V356: owned-data media adapter selected; AppleGVA binary patch registration disabled");
 		return;
 	}
 	lilu.onProcLoadForce(

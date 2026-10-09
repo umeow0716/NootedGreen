@@ -9745,7 +9745,7 @@ bool Gen11::injectAcceleratorPersonality(const char *bundleId)
 			dict->release();
 			return false;
 		}
-		SYSLOG("ngreen", "selected owned-data TGL media adapter without AppleGVA text patches");
+		SYSLOG("ngreen", "V356: selected owned-data TGL media adapter without AppleGVA text patches");
 	}
 
 	auto *primaryMatch = OSString::withCString("0x9a498086");
