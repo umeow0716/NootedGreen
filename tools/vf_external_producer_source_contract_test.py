@@ -90,8 +90,17 @@ def contract(source, path="<source>"):
         f"{path}: resource observation must call native exactly once"
     assert shared.count("if (ticket)") == 3, \
         f"{path}: both resource observation markers must be bounded"
-    assert shared.count("while (used < 8)") == 2, \
-        f"{path}: resource failure and output anomaly budgets must both be bounded"
+    assert shared.count("while (used < 8)") == 3, \
+        f"{path}: create/output/non-create failure budgets must all be bounded"
+    for token in ("if (selector != 0)", "while (used < 16)",
+                  "OSCompareAndSwap(used, used + 1, &observedOtherMethods)",
+                  "if (selector != 0 && result != kIOReturnSuccess)",
+                  "OSCompareAndSwap(used, used + 1, &observedOtherFailures)",
+                  "V360: shared resource method enter", "V360: shared resource method return",
+                  "V360: shared resource method failed"):
+        assert token in shared, f"{path}: lost bounded non-create observation: {token}"
+    assert shared.count("if (otherTicket)") == 2, \
+        f"{path}: non-create enter/return must share one bounded ticket"
     for token in ("if (selector == 0 && result != kIOReturnSuccess)",
                   "static volatile UInt32 observedFailures = 0;", "while (used < 8)",
                   "OSCompareAndSwap(used, used + 1, &observedFailures)",
@@ -253,6 +262,10 @@ def contract(source, path="<source>"):
 
 def mutation_contract(source, path):
     mutations = (
+        ("while (used < 16)", "while (true)", 1),
+        ("if (selector != 0 && result != kIOReturnSuccess)", "if (otherTicket && result != kIOReturnSuccess)", 1),
+        ("OSCompareAndSwap(used, used + 1, &observedOtherFailures)", "OSCompareAndSwap(used, used + 1, &observedOtherMethods)", 1),
+        ("V360: shared resource method return", "REMOVED non-create return", 1),
         ("args->structureOutput && !args->structureOutputDescriptor", "args->structureOutput", 1),
         ("args->structureOutputSize >= 0x58 && args->structureOutputSize <= 0x1000", "true", 1),
         ("static_cast<const uint8_t *>(args->structureOutput) + 0x10", "static_cast<const uint8_t *>(args->structureOutput) + 0x08", 1),

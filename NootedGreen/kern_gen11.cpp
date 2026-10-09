@@ -5678,12 +5678,44 @@ IOReturn Gen11::vfSharedExternalMethod(void *that, uint32_t selector,
 	}
 	if (ticket)
 		SYSLOG("ngreen", "V357: shared resource selector 0 enter ticket=%u", ticket);
+	// Heap setup also invokes non-create resource methods. Observe only the
+	// selector/result, with a separate bound; never inspect their arguments.
+	static volatile UInt32 observedOtherMethods = 0;
+	UInt32 otherTicket = 0;
+	if (selector != 0) {
+		UInt32 used = observedOtherMethods;
+		while (used < 16) {
+			if (OSCompareAndSwap(used, used + 1, &observedOtherMethods)) {
+				otherTicket = used + 1;
+				break;
+			}
+			used = observedOtherMethods;
+		}
+	}
+	if (otherTicket)
+		SYSLOG("ngreen", "V360: shared resource method enter ticket=%u selector=0x%x",
+		       otherTicket, selector);
 	const IOReturn result = FunctionCast(vfSharedExternalMethod,
 	                    callback->oVfSharedExternalMethod)(
 		that, selector, arguments, dispatch, target, reference);
 	if (ticket)
 		SYSLOG("ngreen", "V357: shared resource selector 0 return ticket=%u result=0x%x",
 		       ticket, static_cast<unsigned int>(result));
+	if (otherTicket)
+		SYSLOG("ngreen", "V360: shared resource method return ticket=%u selector=0x%x result=0x%x",
+		       otherTicket, selector, static_cast<unsigned int>(result));
+	if (selector != 0 && result != kIOReturnSuccess) {
+		static volatile UInt32 observedOtherFailures = 0;
+		UInt32 used = observedOtherFailures;
+		while (used < 8) {
+			if (OSCompareAndSwap(used, used + 1, &observedOtherFailures)) {
+				SYSLOG("ngreen", "V360: shared resource method failed failure=%u selector=0x%x result=0x%x",
+				       used + 1, selector, static_cast<unsigned int>(result));
+				break;
+			}
+			used = observedOtherFailures;
+		}
+	}
 	// Tahoe IOAccelResourceCreate copies native output +0x10/+0x18 into
 	// its CF resource's client-shared RO/RW fields. Observe kernel-owned inline
 	// output only after native success; never touch user input or descriptors.
