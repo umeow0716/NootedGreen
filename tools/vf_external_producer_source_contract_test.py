@@ -80,6 +80,19 @@ def contract(source, path="<source>"):
         assert body.index("VfExternalProducerGuard guard") < body.index(original), \
             f"{path}: original entered before lease: {signature}"
 
+    shared = function_body(source, "IOReturn Gen11::vfSharedExternalMethod(")
+    for token in ("if (selector == 0)", "while (used < 32)",
+                  "OSCompareAndSwap(used, used + 1, &observedCreates)",
+                  "const IOReturn result = FunctionCast(vfSharedExternalMethod,",
+                  "return result;"):
+        assert token in shared, f"{path}: lost bounded native resource observation: {token}"
+    assert shared.count("callback->oVfSharedExternalMethod") == 1, \
+        f"{path}: resource observation must call native exactly once"
+    assert shared.count("if (ticket)") == 2, \
+        f"{path}: both resource observation markers must be bounded"
+    assert "static_cast" not in shared.split("const IOReturn result")[0], \
+        f"{path}: resource observation must not interpret user arguments"
+
     gl = function_body(source, "IOReturn Gen11::vfGLContextExternalMethod(")
     for token in ("selector >= 0x100 && selector <= 0x105",
                   "getMember<void *>(that, 0x5A8)",

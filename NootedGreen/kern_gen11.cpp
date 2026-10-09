@@ -5661,9 +5661,29 @@ IOReturn Gen11::vfSharedExternalMethod(void *that, uint32_t selector,
 	VfExternalProducerGuard guard(accelerator);
 	if (!guard)
 		return kIOReturnOffline;
-	return FunctionCast(vfSharedExternalMethod,
+	// Observe the resource-create boundary without reading user arguments or
+	// changing native dispatch. Saturation bounds logging across all clients.
+	static volatile UInt32 observedCreates = 0;
+	UInt32 ticket = 0;
+	if (selector == 0) {
+		UInt32 used = observedCreates;
+		while (used < 32) {
+			if (OSCompareAndSwap(used, used + 1, &observedCreates)) {
+				ticket = used + 1;
+				break;
+			}
+			used = observedCreates;
+		}
+	}
+	if (ticket)
+		SYSLOG("ngreen", "V357: shared resource selector 0 enter ticket=%u", ticket);
+	const IOReturn result = FunctionCast(vfSharedExternalMethod,
 	                    callback->oVfSharedExternalMethod)(
 		that, selector, arguments, dispatch, target, reference);
+	if (ticket)
+		SYSLOG("ngreen", "V357: shared resource selector 0 return ticket=%u result=0x%x",
+		       ticket, static_cast<unsigned int>(result));
+	return result;
 }
 
 IOReturn Gen11::vfGLContextExternalMethod(void *that, uint32_t selector,
