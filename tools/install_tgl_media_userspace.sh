@@ -73,7 +73,7 @@ verify_vame_target() {
 	verify_file "$root/Contents/MacOS/AppleIntelICLGraphicsVAME" "$expected_vame_exec"
 	verify_file "$root/Contents/_CodeSignature/CodeResources" "$expected_code_resources"
 	verify_file "$root/Contents/version.plist" "$expected_version"
-	/bin/cmp -s \
+	/usr/bin/cmp -s \
 		"$root/Contents/MacOS/AppleIntelTGLGraphicsVAME" \
 		"$root/Contents/MacOS/AppleIntelICLGraphicsVAME" || \
 		fail "ICL VAME alias differs from signed TGL executable"

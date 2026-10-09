@@ -28,6 +28,7 @@ def verify(source: str) -> None:
         "/usr/bin/codesign --verify --ignore-resources --verbose=4",
         "/usr/bin/ditto \"$source_va\" \"$stage_va\"",
         "/usr/sbin/chown -R root:wheel \"$stage_va\" \"$stage_vame\"",
+        "/usr/bin/cmp -s",
         "/bin/mv \"$stage_va\" \"$target_va\"",
         "/bin/mv \"$stage_vame\" \"$target_vame\"",
         "/bin/sync",
@@ -51,6 +52,7 @@ def main() -> int:
         ("677d73e17af59813f3254da7a98b81392c61e7f0811e3eb21ea93adf443f3230", "0" * 64),
         ("/usr/bin/codesign --verify --ignore-resources --verbose=4", "true"),
         ("/usr/bin/ditto \"$source_va\" \"$stage_va\"", "true"),
+        ("/usr/bin/cmp -s", "/bin/cmp -s"),
         ("/bin/mv \"$stage_va\" \"$target_va\"", "true"),
         ("/bin/sync", "/usr/bin/true"),
     )
