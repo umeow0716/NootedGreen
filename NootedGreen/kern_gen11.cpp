@@ -9501,7 +9501,6 @@ bool Gen11::injectAcceleratorPersonality(const char *bundleId)
 		OSDynamicCast(OSDictionary, source->getObject("Development")) &&
 		OSDynamicCast(OSDictionary, source->getObject("Debug")) &&
 		OSDynamicCast(OSDictionary, source->getObject("IOAccelDisplayPipeCapabilities")) &&
-		OSDynamicCast(OSDictionary, source->getObject("IOGVAH264EncodeCapabilities")) &&
 		OSDynamicCast(OSDictionary, source->getObject("IOGVAHEVCDecodeCapabilities")) &&
 		OSDynamicCast(OSDictionary, source->getObject("IOGVAHEVCEncodeCapabilities"));
 	auto *dict = complete ? OSDictionary::withDictionary(source) : nullptr;
@@ -9529,6 +9528,30 @@ bool Gen11::injectAcceleratorPersonality(const char *bundleId)
 		return false;
 	}
 
+	// V327 added this exact Tahoe capability to the reviewed source payloads,
+	// but the release/deployment product contains only NootedGreen.kext and
+	// therefore cannot replace the Apple TGL Info.plist already installed in
+	// the Guest.  Build the two-number dictionary on the private catalogue
+	// clone instead of requiring an unpackaged source mutation.  Replacing the
+	// shallow-cloned key is isolated from the native PF personality, while each
+	// allocation and catalogue write remains part of the fail-closed publish
+	// transaction.
+	auto *h264Encode = OSDictionary::withCapacity(2);
+	auto *qualityRating = OSNumber::withNumber(50ULL, 32);
+	auto *videoToolboxRating = OSNumber::withNumber(400ULL, 32);
+	const bool h264EncodeReady = h264Encode && qualityRating &&
+		videoToolboxRating &&
+		h264Encode->setObject("VTQualityRating", qualityRating) &&
+		h264Encode->setObject("VTRating", videoToolboxRating) &&
+		dict->setObject("IOGVAH264EncodeCapabilities", h264Encode);
+	OSSafeReleaseNULL(videoToolboxRating);
+	OSSafeReleaseNULL(qualityRating);
+	OSSafeReleaseNULL(h264Encode);
+	if (!h264EncodeReady) {
+		dict->release();
+		return false;
+	}
+
 	auto *primaryMatch = OSString::withCString("0x9a498086");
 	const bool matchReady = primaryMatch &&
 		dict->setObject("IOPCIPrimaryMatch", primaryMatch);
@@ -9546,7 +9569,7 @@ bool Gen11::injectAcceleratorPersonality(const char *bundleId)
 		return false;
 	}
 
-	SYSLOG("ngreen", "V327: publishing complete %s personality with Tahoe H.264 encode capability",
+	SYSLOG("ngreen", "V328: publishing complete %s personality with runtime Tahoe H.264 encode capability",
 		bundleId);
 	const bool ok = gIOCatalogue->addDrivers(array, true);
 	array->release();

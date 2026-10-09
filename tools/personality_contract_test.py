@@ -23,6 +23,64 @@ def load_personality(path: Path) -> dict:
     return personality
 
 
+def function_body(source: str, signature: str) -> str:
+    start = source.find(signature)
+    require(start >= 0, f"missing function: {signature}")
+    brace = source.find("{", start)
+    require(brace >= 0, f"missing function body: {signature}")
+    depth = 0
+    for index in range(brace, len(source)):
+        if source[index] == "{":
+            depth += 1
+        elif source[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return source[brace:index + 1]
+    raise AssertionError(f"unterminated function: {signature}")
+
+
+def verify_runtime_injection(source: str, label: str) -> None:
+    body = function_body(
+        source, "bool Gen11::injectAcceleratorPersonality(const char *bundleId)")
+    required = (
+        "OSDictionary::withDictionary(source)",
+        "OSDictionary::withCapacity(2)",
+        "OSNumber::withNumber(50ULL, 32)",
+        "OSNumber::withNumber(400ULL, 32)",
+        'h264Encode->setObject("VTQualityRating", qualityRating)',
+        'h264Encode->setObject("VTRating", videoToolboxRating)',
+        'dict->setObject("IOGVAH264EncodeCapabilities", h264Encode)',
+        "OSSafeReleaseNULL(videoToolboxRating)",
+        "OSSafeReleaseNULL(qualityRating)",
+        "OSSafeReleaseNULL(h264Encode)",
+        "if (!h264EncodeReady)",
+        "gIOCatalogue->addDrivers(array, true)",
+    )
+    for token in required:
+        require(token in body, f"{label}: incomplete runtime H.264 injection: {token}")
+    require('source->getObject("IOGVAH264EncodeCapabilities")' not in body,
+            f"{label}: runtime injection still depends on an unpackaged source plist")
+    ordered = (
+        "OSDictionary::withDictionary(source)",
+        "OSDictionary::withCapacity(2)",
+        'dict->setObject("IOGVAH264EncodeCapabilities", h264Encode)',
+        "if (!h264EncodeReady)",
+        "gIOCatalogue->addDrivers(array, true)",
+    )
+    positions = [body.index(token) for token in ordered]
+    require(positions == sorted(positions),
+            f"{label}: runtime H.264 clone/publish transaction is out of order")
+
+
+def reject_source_mutation(source: str, old: str, new: str, label: str) -> None:
+    require(source.count(old) == 1, f"mutation anchor is not unique: {label}")
+    try:
+        verify_runtime_injection(source.replace(old, new, 1), label)
+    except AssertionError:
+        return
+    raise AssertionError(f"accepted runtime injection mutation: {label}")
+
+
 def verify_personality(personality: dict, label: str) -> None:
     dictionary_keys = (
         "Debug",
@@ -93,8 +151,24 @@ def reject_mutation(personality: dict, mutate, label: str) -> None:
 
 
 def main() -> int:
-    require(len(sys.argv) >= 2, "usage: personality_contract_test.py INFO.plist ...")
-    personalities = [verify(Path(argument)) for argument in sys.argv[1:]]
+    require(len(sys.argv) >= 3,
+            "usage: personality_contract_test.py SOURCE INFO.plist ...")
+    source = Path(sys.argv[1]).read_text()
+    verify_runtime_injection(source, sys.argv[1])
+    for old, new, label in (
+        ("OSNumber::withNumber(50ULL, 32)",
+         "OSNumber::withNumber(0ULL, 32)", "wrong runtime quality rating"),
+        ("OSNumber::withNumber(400ULL, 32)",
+         "OSNumber::withNumber(0ULL, 32)", "wrong runtime VT rating"),
+        ('dict->setObject("IOGVAH264EncodeCapabilities", h264Encode)',
+         'dict->setObject("IOGVAH264EncodeCapabilitiesX", h264Encode)',
+         "wrong runtime capability key"),
+        ("if (!h264EncodeReady)", "if (false)",
+         "removed runtime capability failure gate"),
+    ):
+        reject_source_mutation(source, old, new, label)
+
+    personalities = [verify(Path(argument)) for argument in sys.argv[2:]]
     for personality in personalities:
         reject_mutation(
             personality,
@@ -108,7 +182,7 @@ def main() -> int:
     print(
         "PASS: complete native display/media personality contract in "
         f"{len(personalities)} payloads; "
-        f"{len(personalities) * 2} negative mutations rejected"
+        f"{len(personalities) * 2 + 4} source/runtime negative mutations rejected"
     )
     return 0
 

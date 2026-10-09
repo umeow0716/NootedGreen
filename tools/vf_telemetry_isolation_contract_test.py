@@ -406,13 +406,19 @@ def source_contract(path):
     inject = function_body(
         source, "bool Gen11::injectAcceleratorPersonality(const char *bundleId)")
     for token in (
-        'source->getObject("IOGVAH264EncodeCapabilities")',
         "OSDictionary::withDictionary(sourceDevelopment)",
         'development->setObject("TelemetryDisable", telemetryDisabled)',
         'dict->setObject("Development", development)',
         "if (!telemetryReady)",
+        "OSDictionary::withCapacity(2)",
+        "OSNumber::withNumber(50ULL, 32)",
+        "OSNumber::withNumber(400ULL, 32)",
+        'dict->setObject("IOGVAH264EncodeCapabilities", h264Encode)',
+        "if (!h264EncodeReady)",
     ):
         require(token in inject, f"{path}: unsafe shallow personality edit: {token}")
+    require('source->getObject("IOGVAH264EncodeCapabilities")' not in inject,
+            f"{path}: runtime capability depends on an unpackaged plist edit")
 
 
 def plist_contract(path):

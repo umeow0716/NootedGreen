@@ -204,7 +204,7 @@ if "$compiler" --target=x86_64-apple-macos13 -std=c++14 -c \
 else
     failed=1
 fi
-if python3 tools/personality_contract_test.py \
+if python3 tools/personality_contract_test.py NootedGreen/kern_gen11.cpp \
     sle_Internal/le/AppleIntelTGLGraphics.kext/Contents/Info.plist \
     sle_Internal/sle/AppleIntelTGLGraphics.kext/Contents/Info.plist; then
     printf 'PASS offline native personality contract tests\n'
