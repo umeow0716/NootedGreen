@@ -25,6 +25,7 @@ class NativeReturnObserver {
     sig_atomic_t wanted = 0;
     volatile sig_atomic_t hitMask = 0;
     volatile sig_atomic_t values[4]{};
+    volatile uintptr_t capturedRdx[4]{};
     volatile sig_atomic_t handlerRestore = KERN_FAILURE;
     bool installed = false;
     bool armed = false;
@@ -51,6 +52,7 @@ class NativeReturnObserver {
             return;
         }
         self->values[site] = static_cast<sig_atomic_t>(state->uc_mcontext->__ss.__rax);
+        self->capturedRdx[site] = state->uc_mcontext->__ss.__rdx;
         self->hitMask |= 1 << site;
         auto next = self->programmed;
         for (unsigned i = 0; i != 4; ++i)
@@ -122,6 +124,9 @@ public:
     }
     bool observed(int expected) const { return observed(0, expected); }
     bool isArmed() const { return armed; }
+    uintptr_t observedRdx(unsigned site) const {
+        return site < 4 && armed && (hitMask & (1 << site)) ? capturedRdx[site] : 0;
+    }
     ~NativeReturnObserver() {
         if (installed && !armed) {
             if (sigaction(SIGTRAP, &previous, nullptr)) _exit(74);
