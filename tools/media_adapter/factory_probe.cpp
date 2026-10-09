@@ -28,12 +28,14 @@ int resourceReference() {
     void *library = dlopen(framework, RTLD_NOW | RTLD_LOCAL);
     if (!library) { std::fprintf(stderr, "reference dlopen: %s\n", dlerror()); return 1; }
     int status = 1;
-    struct Reference { const char *name; const char *symbol; size_t callOffset; };
+    struct Reference { const char *name; const char *symbol; size_t callOffset; bool block = false; };
     for (const auto &reference : {
             Reference{"IOAccelResourceCreate", "IOAccelResourceCreate", 0},
             Reference{"IOAccelResourceGetClientShared", "IOAccelResourceGetClientShared", 0},
+            Reference{"IOAccelResourceFinishSysMem", "IOAccelResourceFinishSysMem", 0},
             Reference{"client-shared-generation", "IOAccelResourceGetClientShared", 0x15},
-            Reference{"client-shared-map-setup", "IOAccelResourceGetClientShared", 0x5b}}) {
+            Reference{"client-shared-map-setup", "IOAccelResourceGetClientShared", 0x5b},
+            Reference{"client-shared-once-invoke", "IOAccelResourceGetClientShared", 0x5b, true}}) {
         const char *name = reference.name;
         void *symbol = dlsym(library, reference.symbol);
         Dl_info info{};
@@ -86,9 +88,35 @@ int resourceReference() {
             address = call + sizeof(instruction) + displacement;
             if (address < base || address - base >= textSize) goto done;
         }
+        if (reference.block) {
+            // Proven setup LEA addresses its immutable global dispatch block.
+            // Read only the block's invoke pointer, then bound it to this image.
+            uint8_t lea[7]{};
+            int32_t displacement = 0;
+            uintptr_t invoke = 0;
+            if (textSize - (address - base) < 18 ||
+                !read(address + 11, lea, sizeof(lea)) ||
+                std::memcmp(lea, "\x48\x8d\x35\x8a\x64\xd3\x31", sizeof(lea))) goto done;
+            std::memcpy(&displacement, lea + 3, sizeof(displacement));
+            const uintptr_t block = address + 18 + displacement;
+            if (!read(block + 16, &invoke, sizeof(invoke)) ||
+                invoke < base || invoke - base >= textSize) goto done;
+            address = invoke;
+        }
         const size_t length = std::min<size_t>(1024, textSize - (address - base));
         std::array<uint8_t, 1024> bytes{};
         if (!length || !read(address, bytes.data(), length)) goto done;
+        if (length >= 6 && bytes[0] == 0xff && bytes[1] == 0x25) {
+            int32_t displacement = 0;
+            uintptr_t target = 0;
+            Dl_info imported{};
+            std::memcpy(&displacement, bytes.data() + 2, sizeof(displacement));
+            if (!read(address + 6 + displacement, &target, sizeof(target)) ||
+                !target || !dladdr(reinterpret_cast<void *>(target), &imported) ||
+                !imported.dli_fname) goto done;
+            std::printf("RESOURCE_IMPORT reference=%s image=%s symbol=%s\n", name,
+                imported.dli_fname, imported.dli_sname ? imported.dli_sname : "<unavailable>");
+        }
         std::printf("RESOURCE_REFERENCE symbol=%s image=%s uuid=", name, info.dli_fname);
         for (uint8_t byte : uuid.uuid) std::printf("%02x", byte);
         std::printf(" preferred=%llx length=%zu\n",
