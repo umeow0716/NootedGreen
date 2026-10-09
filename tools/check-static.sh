@@ -211,6 +211,11 @@ if python3 tools/personality_contract_test.py NootedGreen/kern_gen11.cpp \
 else
     failed=1
 fi
+if python3 -B tools/tgl_media_userspace_installer_contract_test.py; then
+    printf 'PASS offline TGL media userspace installer contract\n'
+else
+    failed=1
+fi
 if python3 -B tools/telemetry_contract_test.py \
     NootedGreen/kern_telemetry.cpp \
     sle_Internal/le/AppleIntelTGLGraphics.kext/Contents/Info.plist \

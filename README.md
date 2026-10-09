@@ -343,13 +343,15 @@ For GPU acceleration, the following userspace driver bundles must be installed i
 | `AppleIntelTGLGraphicsVAME.bundle` | VA Media Engine |
 | `AppleIntelGraphicsShared.bundle` | Shared graphics library |
 
-These bundles are loaded by name (via `MetalPluginName`, `IOGLBundleName`, etc.), not by `CFBundleIdentifier`. They are not shipped with NootedGreen and must be sourced separately.
+These bundles are loaded by name (via `MetalPluginName`, `IOGLBundleName`, etc.), not by `CFBundleIdentifier`. They are not shipped with NootedGreen and must be sourced separately. Tahoe's AppleGVA loader resolves the named VA driver through the accelerator `/Library/GPUBundles` search path before its sealed-system fallback, so the complete, unmodified `AppleIntelTGLGraphicsVADriver.bundle` must also be mirrored to `/Library/GPUBundles`; a copy only in `/Library/Extensions` is not sufficient for VideoToolbox.
 
 The reviewed TGL VA driver has one inherited Gen11 loader dependency: it opens
 `AppleIntelICLGraphicsVAME.bundle/Contents/MacOS/AppleIntelICLGraphicsVAME`
 from `/Library/GPUBundles` before creating an encoder.  Installers must provide
 that exact path as an unmodified copy or link to the signed TGL VAME executable;
 renaming or patching the executable itself invalidates its Apple signature.
+`tools/install_tgl_media_userspace.sh` performs both exact publications from the
+reviewed `/Library/Extensions` payloads without modifying either signed Mach-O.
 
 ### Driver path resolution
 
