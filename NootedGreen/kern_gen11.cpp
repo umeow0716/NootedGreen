@@ -3302,12 +3302,13 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			SYSLOG("ngreen", "V323: deferred native synchronous VF service publication until callback validation");
 
 			KernelPatcher::RouteRequest requests[] = {
-			// Tahoe's signed TGL VADriver asks selector 0xb for the native
-			// IntelHwCapsInfo and admits only canonical TGL PCI identities. The
-			// SR-IOV VF has a distinct PCI device id even though it executes this
-			// exact TGL ABI. Preserve the kernel's real 0x9a49 identity everywhere;
-			// only canonicalize the successful, fixed-size user-client reply used
-			// to create the media physical-accelerator object.
+			// Tahoe's native ICL VADriver asks selector 0xb for IntelHwCapsInfo
+			// and admits only canonical ICL PCI identities.  The SR-IOV VF has a
+			// distinct TGL PCI device id while the exact Tahoe ICL userspace ABI
+			// uses the same 0xb/0x100/0x101 user-client selector surface.  Preserve
+			// the kernel's real 0x9a49 identity everywhere; only canonicalize the
+			// successful, fixed-size user-client reply used to create the media
+			// physical-accelerator object.
 			{"__ZN13IGAccelDevice11get_hw_capsEP16_IntelHwCapsInfoS1_yPy",
 			 vfGetHwCaps, this->oVfGetHwCaps},
 			// V217: Query the media-12 PF-provisioned GGTT range, replace Apple's
@@ -5424,21 +5425,21 @@ IOReturn Gen11::vfGetHwCaps(void *that, void *input, void *output,
 
 	constexpr uint64_t kHwCapsSize = 0x7C;
 	constexpr uint32_t kTigerLakeVfIdentity = 0x9A498086U;
-	constexpr uint32_t kCanonicalTigerLakeIdentity = 0x9A408086U;
+	constexpr uint32_t kCanonicalIceLakeIdentity = 0x8A528086U;
 	if (!output || !outputSize || *outputSize != kHwCapsSize) {
-		SYSLOG("ngreen", "V334: rejected changed VF media hw-caps reply shape size=%llu",
+		SYSLOG("ngreen", "V335: rejected changed VF media hw-caps reply shape size=%llu",
 		       outputSize ? *outputSize : 0ULL);
 		return kIOReturnUnsupported;
 	}
 
 	auto *words = static_cast<uint32_t *>(output);
 	if (words[2] != kTigerLakeVfIdentity) {
-		SYSLOG("ngreen", "V334: rejected unexpected VF media hw-caps identity=%08x",
+		SYSLOG("ngreen", "V335: rejected unexpected VF media hw-caps identity=%08x",
 		       words[2]);
 		return kIOReturnUnsupported;
 	}
-	words[2] = kCanonicalTigerLakeIdentity;
-	SYSLOG("ngreen", "V334: exposed canonical TGL media hw-caps identity 9a408086 for exact VF 9a498086");
+	words[2] = kCanonicalIceLakeIdentity;
+	SYSLOG("ngreen", "V335: exposed canonical ICL media hw-caps identity 8a528086 for exact VF 9a498086");
 	return kIOReturnSuccess;
 }
 
@@ -9593,12 +9594,22 @@ bool Gen11::injectAcceleratorPersonality(const char *bundleId)
 
 	// Tahoe 25G229 AppleGVA removed the former TGL renderer slot 0x1080040
 	// from its hard admission set, while retaining the ICL/Gen11 slot
-	// 0x1080080.  The native TGL VADriver and its Gen10 kernel ABI remain the
-	// selected media implementation; only the private catalogue clone's
-	// user-space renderer identity is aliased so AppleGVA can reach that
-	// signed bundle.  This publication path is reachable only after the exact
-	// Tahoe IOAcceleratorFamily2 UUID gate, so keep the on-disk source
-	// personality unchanged and make the runtime alias mandatory.
+	// 0x1080080.  Use the sealed-system Tahoe ICL VADriver/VAME pair rather
+	// than the TGL userspace binaries built for macOS 10.16.  Both publish the
+	// same 0x88-byte AppleGVA function table and use the same kernel selectors,
+	// but only the ICL pair is compiled for the current AppleGVA object/callback
+	// ABI.  Metal and GL remain on their native TGL plugins; these two aliases
+	// affect only the private media personality clone.
+	auto *mediaBundleName =
+		OSString::withCString("AppleIntelICLGraphicsVADriver");
+	const bool mediaBundleReady = mediaBundleName &&
+		dict->setObject("IODVDBundleName", mediaBundleName);
+	OSSafeReleaseNULL(mediaBundleName);
+	if (!mediaBundleReady) {
+		dict->release();
+		return false;
+	}
+
 	auto *rendererId = OSNumber::withNumber(0x1080080ULL, 32);
 	const bool rendererReady = rendererId &&
 		dict->setObject("IOVARendererID", rendererId);
@@ -9608,7 +9619,7 @@ bool Gen11::injectAcceleratorPersonality(const char *bundleId)
 		return false;
 	}
 	SYSLOG("ngreen",
-		"V329: aliased Tahoe TGL media renderer to admitted ICL slot 0x1080080");
+		"V335: selected exact Tahoe ICL media userspace and renderer slot 0x1080080");
 
 	auto *primaryMatch = OSString::withCString("0x9a498086");
 	const bool matchReady = primaryMatch &&
