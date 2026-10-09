@@ -88,15 +88,13 @@ int NGRN_ObservedCreateContexts(void *context, const void *input) {
         os_log_error(OS_LOG_DEFAULT, "NGRN_NATIVE_RETURN_OBSERVER_SKIP callback-identity");
         return native(context, input);
     }
-    // Live 132510 -> 5a620 factory returned NULL, before sub-initializers.
-    // Observe only its exact data-validation rejection edges; presence matters,
-    // not the register value. Unhit sites do not exclude allocation failures.
+    // Live factory rejected only the data header != 0x10000 branch.
+    // Capture nonzero length in ECX and the exact DWORD about to be compared.
     struct Site { uintptr_t call; unsigned length, returnOffset; uint8_t bytes[10]; };
     constexpr Site pinned[] = {
-        {0x5acbe, 5, 0, {0xe9,0xa7,0x04,0x00,0x00}}, // zero data length
-        {0x5ace8, 5, 0, {0xe9,0x7d,0x04,0x00,0x00}}, // header != 0x10000
-        {0x5ae46, 5, 0, {0xe9,0x1f,0x03,0x00,0x00}}, // record count mismatch
-        {0x5ae55, 5, 0, {0xe9,0x10,0x03,0x00,0x00}}, // count > 64
+        {0x5acb4, 4, 0, {0x83,0x7d,0x9c,0x00}}, // ECX=data length
+        {0x5acdc, 6, 0, {0x81,0x38,0x00,0x00,0x01,0x00}}, // DWORD [RAX]=header
+        {0x5ace8, 5, 0, {0xe9,0x7d,0x04,0x00,0x00}}, // rejection remains native
     };
     std::array<uintptr_t, 4> sites{};
     for (unsigned i = 0; i != std::size(pinned); ++i) {
@@ -108,8 +106,7 @@ int NGRN_ObservedCreateContexts(void *context, const void *input) {
         }
         sites[i] = call + pinned[i].returnOffset;
     }
-    // Never log pointer-shaped register values at conditional rejection edges.
-    NativeReturnObserver observer(sites, 15);
+    NativeReturnObserver observer(sites, 4, 1, 2);
     const int result = native(context, input);
     std::fprintf(stderr, "NGRN_NATIVE_CONTEXT_CALLBACK_RETURN result=%d\n", result);
     os_log_error(OS_LOG_DEFAULT, "NGRN_NATIVE_CONTEXT_CALLBACK_RETURN result=%{public}d", result);

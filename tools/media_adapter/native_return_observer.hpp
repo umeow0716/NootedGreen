@@ -26,6 +26,8 @@ class NativeReturnObserver {
     volatile sig_atomic_t hitMask = 0;
     volatile sig_atomic_t values[4]{};
     unsigned booleanSites = 0;
+    unsigned rcxSites = 0;
+    unsigned readRax32Sites = 0;
     volatile sig_atomic_t handlerRestore = KERN_FAILURE;
     bool installed = false;
     bool armed = false;
@@ -51,7 +53,12 @@ class NativeReturnObserver {
             raise(SIGTRAP);
             return;
         }
-        const auto raw = state->uc_mcontext->__ss.__rax;
+        auto raw = state->uc_mcontext->__ss.__rax;
+        if (self->rcxSites & (1u << site)) raw = state->uc_mcontext->__ss.__rcx;
+        // Only caller-pinned native DWORD-load sites opt in. Exactly the same
+        // four bytes that the interrupted instruction will read; no RPC/allocation.
+        if (self->readRax32Sites & (1u << site))
+            raw = *reinterpret_cast<const volatile uint32_t *>(raw);
         self->values[site] = self->booleanSites & (1u << site)
             ? sig_atomic_t(raw != 0) : static_cast<sig_atomic_t>(raw);
         self->hitMask |= 1 << site;
@@ -67,14 +74,17 @@ class NativeReturnObserver {
 public:
     explicit NativeReturnObserver(uintptr_t site)
         : NativeReturnObserver(std::array<uintptr_t, 4>{site, 0, 0, 0}) {}
-    explicit NativeReturnObserver(const std::array<uintptr_t, 4> &selected, unsigned booleans = 0)
-        : sites(selected), booleanSites(booleans) {
+    explicit NativeReturnObserver(const std::array<uintptr_t, 4> &selected, unsigned booleans = 0,
+        unsigned rcx = 0, unsigned readRax32 = 0)
+        : sites(selected), booleanSites(booleans), rcxSites(rcx), readRax32Sites(readRax32) {
         for (unsigned i = 0; i != 4; ++i) {
             if (!sites[i]) continue;
             for (unsigned j = 0; j != i; ++j) if (sites[j] == sites[i]) return;
             wanted |= 1 << i;
         }
-        if (!guard.owns_lock() || !wanted || (booleanSites & ~unsigned(wanted))) {
+        if (!guard.owns_lock() || !wanted ||
+            ((booleanSites | rcxSites | readRax32Sites) & ~unsigned(wanted)) ||
+            (rcxSites & readRax32Sites)) {
             os_log_error(OS_LOG_DEFAULT, "NGRN_NATIVE_RETURN_OBSERVER_SKIP busy-or-no-site");
             return;
         }

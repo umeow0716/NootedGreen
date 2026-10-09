@@ -15,6 +15,12 @@ extern "C" int owned_debug_target_b();
 extern "C" int owned_debug_target_c();
 extern "C" int owned_debug_target_d();
 extern "C" const char owned_debug_site_b[], owned_debug_site_c[], owned_debug_site_d[];
+extern "C" uintptr_t owned_debug_data_target();
+extern "C" const char owned_debug_data_site[];
+asm(".text\n.p2align 4\n.globl _owned_debug_data_target\n"
+    "_owned_debug_data_target:\nleaq _owned_debug_data(%rip), %rax\nmovl $0x2468, %ecx\n"
+    ".globl _owned_debug_data_site\n_owned_debug_data_site:\ncmpl $0x10000, (%rax)\nretq\n"
+    ".p2align 2\n_owned_debug_data:\n.long 0x12345678\n");
 asm(".text\n.p2align 4\n.globl _owned_debug_target\n"
     "_owned_debug_target:\nmovl $0x1357, %eax\n"
     ".globl _owned_debug_site\n_owned_debug_site:\nretq\n");
@@ -154,6 +160,14 @@ int main() {
         reinterpret_cast<uintptr_t>(owned_debug_site_c),
         reinterpret_cast<uintptr_t>(owned_debug_site_d)};
     alarm(3);
+    {
+        NativeReturnObserver data({reinterpret_cast<uintptr_t>(owned_debug_data_site), 0, 0, 0}, 0, 0, 1);
+        if (!owned_debug_data_target() || !data.observed(0, 0x12345678)) return 1;
+    }
+    {
+        NativeReturnObserver rcx({reinterpret_cast<uintptr_t>(owned_debug_data_site), 0, 0, 0}, 0, 1);
+        if (!owned_debug_data_target() || !rcx.observed(0, 0x2468)) return 1;
+    }
     {
         NativeReturnObserver boolean(sites, 1);
         if (owned_debug_target() != 0x1357 || !boolean.observed(0, 1)) return 1;
