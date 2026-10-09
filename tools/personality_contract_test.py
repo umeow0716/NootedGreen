@@ -54,6 +54,10 @@ def verify_runtime_injection(source: str, label: str) -> None:
         "OSSafeReleaseNULL(qualityRating)",
         "OSSafeReleaseNULL(h264Encode)",
         "if (!h264EncodeReady)",
+        "OSNumber::withNumber(0x1080080ULL, 32)",
+        'dict->setObject("IOVARendererID", rendererId)',
+        "OSSafeReleaseNULL(rendererId)",
+        "if (!rendererReady)",
         "gIOCatalogue->addDrivers(array, true)",
     )
     for token in required:
@@ -65,6 +69,8 @@ def verify_runtime_injection(source: str, label: str) -> None:
         "OSDictionary::withCapacity(2)",
         'dict->setObject("IOGVAH264EncodeCapabilities", h264Encode)',
         "if (!h264EncodeReady)",
+        'dict->setObject("IOVARendererID", rendererId)',
+        "if (!rendererReady)",
         "gIOCatalogue->addDrivers(array, true)",
     )
     positions = [body.index(token) for token in ordered]
@@ -165,6 +171,14 @@ def main() -> int:
          "wrong runtime capability key"),
         ("if (!h264EncodeReady)", "if (false)",
          "removed runtime capability failure gate"),
+        ("OSNumber::withNumber(0x1080080ULL, 32)",
+         "OSNumber::withNumber(0x1080040ULL, 32)",
+         "restored Tahoe-rejected TGL renderer slot"),
+        ('dict->setObject("IOVARendererID", rendererId)',
+         'dict->setObject("IOVARendererIDX", rendererId)',
+         "wrong runtime renderer key"),
+        ("if (!rendererReady)", "if (false)",
+         "removed runtime renderer failure gate"),
     ):
         reject_source_mutation(source, old, new, label)
 
@@ -182,7 +196,7 @@ def main() -> int:
     print(
         "PASS: complete native display/media personality contract in "
         f"{len(personalities)} payloads; "
-        f"{len(personalities) * 2 + 4} source/runtime negative mutations rejected"
+        f"{len(personalities) * 2 + 7} source/runtime negative mutations rejected"
     )
     return 0
 

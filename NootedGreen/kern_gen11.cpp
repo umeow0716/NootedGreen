@@ -9552,6 +9552,25 @@ bool Gen11::injectAcceleratorPersonality(const char *bundleId)
 		return false;
 	}
 
+	// Tahoe 25G229 AppleGVA removed the former TGL renderer slot 0x1080040
+	// from its hard admission set, while retaining the ICL/Gen11 slot
+	// 0x1080080.  The native TGL VADriver and its Gen10 kernel ABI remain the
+	// selected media implementation; only the private catalogue clone's
+	// user-space renderer identity is aliased so AppleGVA can reach that
+	// signed bundle.  This publication path is reachable only after the exact
+	// Tahoe IOAcceleratorFamily2 UUID gate, so keep the on-disk source
+	// personality unchanged and make the runtime alias mandatory.
+	auto *rendererId = OSNumber::withNumber(0x1080080ULL, 32);
+	const bool rendererReady = rendererId &&
+		dict->setObject("IOVARendererID", rendererId);
+	OSSafeReleaseNULL(rendererId);
+	if (!rendererReady) {
+		dict->release();
+		return false;
+	}
+	SYSLOG("ngreen",
+		"V329: aliased Tahoe TGL media renderer to admitted ICL slot 0x1080080");
+
 	auto *primaryMatch = OSString::withCString("0x9a498086");
 	const bool matchReady = primaryMatch &&
 		dict->setObject("IOPCIPrimaryMatch", primaryMatch);
@@ -9569,7 +9588,8 @@ bool Gen11::injectAcceleratorPersonality(const char *bundleId)
 		return false;
 	}
 
-	SYSLOG("ngreen", "V328: publishing complete %s personality with runtime Tahoe H.264 encode capability",
+	SYSLOG("ngreen",
+		"V329: publishing complete %s personality with runtime Tahoe H.264 capability and renderer admission",
 		bundleId);
 	const bool ok = gIOCatalogue->addDrivers(array, true);
 	array->release();
