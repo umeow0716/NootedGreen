@@ -68,9 +68,19 @@ def verify_runtime_injection(source: str, label: str) -> None:
         require(token in body, f"{label}: incomplete runtime H.264 injection: {token}")
     require('source->getObject("IOGVAH264EncodeCapabilities")' not in body,
             f"{label}: runtime injection still depends on an unpackaged source plist")
-    require('dict->setObject("IODVDBundleName"' not in body and
-            'OSString::withCString("AppleIntelICLGraphicsVADriver")' not in body,
-            f"{label}: runtime clone overrides native TGL media userspace")
+    require('OSString::withCString("AppleIntelICLGraphicsVADriver")' not in body,
+            f"{label}: runtime clone selects cross-generation media userspace")
+    adapter = function_body(body, 'if (checkKernelArgument("-ngreenmediaadapter"))')
+    require(body.count('dict->setObject("IODVDBundleName"') == 1 and
+            'dict->setObject("IODVDBundleName", mediaAdapter)' in adapter,
+            f"{label}: media override is not uniquely opt-in scoped")
+    for token in ('OSString::withCString("NootedGreenTGLMediaAdapter")',
+                  'const bool adapterReady = mediaAdapter &&',
+                  'OSSafeReleaseNULL(mediaAdapter)', 'if (!adapterReady)'):
+        require(token in adapter, f"{label}: incomplete owned adapter gate: {token}")
+    failure = function_body(adapter, 'if (!adapterReady)')
+    require('dict->release();' in failure and 'return false;' in failure,
+            f"{label}: owned adapter allocation/set failure is not closed")
     ordered = (
         "OSDictionary::withDictionary(source)",
         "OSDictionary::withCapacity(2)",
@@ -248,6 +258,13 @@ def main() -> int:
          "wrong runtime renderer key"),
         ("if (!rendererReady)", "if (false)",
          "removed runtime renderer failure gate"),
+        ('if (checkKernelArgument("-ngreenmediaadapter"))', 'if (true)',
+         "unconditional owned adapter override"),
+        ('OSString::withCString("NootedGreenTGLMediaAdapter")',
+         'OSString::withCString("OtherAdapter")', "unapproved adapter name"),
+        ('if (!adapterReady)', 'if (false)', "removed adapter failure gate"),
+        ('dict->setObject("IODVDBundleName", mediaAdapter)',
+         'source->setObject("IODVDBundleName", mediaAdapter)', "source personality mutation"),
     ):
         reject_source_mutation(source, old, new, label)
 

@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
   push:
     branches: [codex/tahoe-sriov-vf]
-    paths: ["tools/media_adapter/**", ".github/workflows/media-adapter.yml"]
+    paths: ["tools/media_adapter/**", "tools/personality_contract_test.py", "NootedGreen/**", ".github/workflows/media-adapter.yml"]
 permissions:
   contents: read
 jobs:
