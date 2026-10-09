@@ -104,6 +104,7 @@ INDIRECT_OR_EXTERNAL_PROGRAMS = {
     "tools/vf_command_pool_native_abi_test.py": "manual pinned payload Unicorn execution",
 }
 EXPECTED_TOOL_DATA = {
+    "tools/media_adapter/tgl_capability_adapter.hpp",
     "tools/linux_mmio_mapper/README.txt",
     "tools/linux_mmio_mapper/approved_auto_renames.json",
     "tools/linux_mmio_mapper/linux_mmio_aliases.h",
@@ -322,10 +323,13 @@ def verify_tool_ledger(paths):
         path for path in paths
         if path.startswith("tools/") and Path(path).suffix in program_suffixes
     }
-    assert len(programs) == 70, f"tool program count changed: {len(programs)}"
+    assert len(programs) == 72, f"tool program count changed: {len(programs)}"
 
     check_static = (ROOT / "tools/check-static.sh").read_text(encoding="utf-8")
     workflow = (ROOT / ".github/workflows/build-kext.yml").read_text(
+        encoding="utf-8"
+    )
+    workflow += (ROOT / ".github/workflows/media-adapter.yml").read_text(
         encoding="utf-8"
     )
     direct = {

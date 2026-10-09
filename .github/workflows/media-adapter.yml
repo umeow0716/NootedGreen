@@ -1,0 +1,29 @@
+name: Native TGL capability adapter probe
+on:
+  workflow_dispatch:
+  push:
+    branches: [codex/tahoe-sriov-vf]
+    paths: ["tools/media_adapter/**", ".github/workflows/media-adapter.yml"]
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: macos-26-intel
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test owned-data bridge and build factory-only probe
+        run: |
+          set -eu
+          test "$(uname -m)" = x86_64
+          case "$(xcrun --sdk macosx --show-sdk-version)" in 26.*) ;; *) exit 1;; esac
+          xcrun clang++ -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined tools/media_adapter/test_layout.cpp -o "$RUNNER_TEMP/adapter-test"
+          "$RUNNER_TEMP/adapter-test"
+          mkdir -p output
+          xcrun clang++ -std=c++17 -Wall -Wextra -Werror -arch x86_64 -mmacosx-version-min=26.0 tools/media_adapter/factory_probe.cpp -o output/tgl-capability-factory-probe
+          codesign --force --sign - output/tgl-capability-factory-probe
+          shasum -a 256 output/tgl-capability-factory-probe > output/sha256.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TGLCapabilityFactoryProbe
+          path: output/
