@@ -67,14 +67,10 @@ verify_vame_target() {
 	local root=$1 count
 	[[ -d $root && ! -L $root ]] || fail "invalid VAME target root: $root"
 	count=$(/usr/bin/find "$root" \( -type f -o -type l \) | /usr/bin/wc -l | /usr/bin/tr -d ' ')
-	[[ $count == 5 ]] || fail "unexpected VAME target file count: $count"
-	verify_file "$root/Contents/Info.plist" "$expected_vame_info"
-	verify_file "$root/Contents/MacOS/AppleIntelTGLGraphicsVAME" "$expected_vame_exec"
+	[[ $count == 1 ]] || fail "unexpected VAME target file count: $count"
 	verify_file "$root/Contents/MacOS/AppleIntelICLGraphicsVAME" "$expected_vame_exec"
-	verify_file "$root/Contents/_CodeSignature/CodeResources" "$expected_code_resources"
-	verify_file "$root/Contents/version.plist" "$expected_version"
 	/usr/bin/cmp -s \
-		"$root/Contents/MacOS/AppleIntelTGLGraphicsVAME" \
+		"$source_vame/Contents/MacOS/AppleIntelTGLGraphicsVAME" \
 		"$root/Contents/MacOS/AppleIntelICLGraphicsVAME" || \
 		fail "ICL VAME alias differs from signed TGL executable"
 }
@@ -97,17 +93,18 @@ for stale in "$stage_va" "$stage_vame"; do
 done
 
 /usr/bin/ditto "$source_va" "$stage_va"
-/usr/bin/ditto "$source_vame" "$stage_vame"
+/bin/mkdir -p "$stage_vame/Contents/MacOS"
 /usr/bin/ditto \
 	"$source_vame/Contents/MacOS/AppleIntelTGLGraphicsVAME" \
 	"$stage_vame/Contents/MacOS/AppleIntelICLGraphicsVAME"
 /usr/sbin/chown -R root:wheel "$stage_va" "$stage_vame"
+/bin/chmod 755 "$stage_vame" "$stage_vame/Contents" \
+	"$stage_vame/Contents/MacOS" \
+	"$stage_vame/Contents/MacOS/AppleIntelICLGraphicsVAME"
 verify_va_tree "$stage_va"
 verify_vame_target "$stage_vame"
 /usr/bin/codesign --verify --ignore-resources --verbose=4 \
 	"$stage_va/Contents/MacOS/AppleIntelTGLGraphicsVADriver"
-/usr/bin/codesign --verify --ignore-resources --verbose=4 \
-	"$stage_vame/Contents/MacOS/AppleIntelICLGraphicsVAME"
 
 if [[ -e $target_va ]]; then
 	[[ ! -e $backup_va ]] || fail "VA backup path already exists"

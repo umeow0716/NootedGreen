@@ -24,9 +24,10 @@ def verify(source: str) -> None:
         "expected_va_exec=d265f2038135c2c5c3649b621d9aea48cf1cb74a1fb36069bb1b3562b3750129",
         "expected_vame_exec=677d73e17af59813f3254da7a98b81392c61e7f0811e3eb21ea93adf443f3230",
         "[[ $count == 4 ]]",
-        "[[ $count == 5 ]]",
+        "[[ $count == 1 ]]",
         "/usr/bin/codesign --verify --ignore-resources --verbose=4",
         "/usr/bin/ditto \"$source_va\" \"$stage_va\"",
+        "/bin/mkdir -p \"$stage_vame/Contents/MacOS\"",
         "/usr/sbin/chown -R root:wheel \"$stage_va\" \"$stage_vame\"",
         "/usr/bin/cmp -s",
         "/bin/mv \"$stage_va\" \"$target_va\"",
@@ -36,6 +37,16 @@ def verify(source: str) -> None:
     )
     for needle in required:
         require(needle in source, f"missing installer invariant: {needle}")
+    require(
+        source.count("/usr/bin/codesign --verify --ignore-resources --verbose=4") == 3,
+        "installer must verify the two signed sources and staged VA driver only",
+    )
+    require(
+        '"$stage_vame/Contents/MacOS/AppleIntelICLGraphicsVAME"' not in source.split(
+            "/usr/bin/codesign --verify --ignore-resources --verbose=4"
+        )[-1],
+        "renamed VAME alias must not be bundle-path codesign verified",
+    )
     forbidden = ("curl ", "wget ", "kmutil", "kextload", "virsh", "sudo ")
     for needle in forbidden:
         require(needle not in source, f"forbidden installer action: {needle}")
@@ -52,6 +63,8 @@ def main() -> int:
         ("677d73e17af59813f3254da7a98b81392c61e7f0811e3eb21ea93adf443f3230", "0" * 64),
         ("/usr/bin/codesign --verify --ignore-resources --verbose=4", "true"),
         ("/usr/bin/ditto \"$source_va\" \"$stage_va\"", "true"),
+        ("/bin/mkdir -p \"$stage_vame/Contents/MacOS\"", "true"),
+        ("[[ $count == 1 ]]", "[[ $count == 5 ]]"),
         ("/usr/bin/cmp -s", "/bin/cmp -s"),
         ("/bin/mv \"$stage_va\" \"$target_va\"", "true"),
         ("/bin/sync", "/usr/bin/true"),
