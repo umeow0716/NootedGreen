@@ -16,6 +16,9 @@ asm(".text\n.p2align 4\n.globl _owned_debug_target\n"
 
 static volatile sig_atomic_t hits = 0;
 static volatile sig_atomic_t captured = 0;
+static thread_t observedThread = MACH_PORT_NULL;
+static x86_debug_state64_t savedDebug{};
+static volatile sig_atomic_t handlerRestore = KERN_FAILURE;
 static void hex(uint64_t value) {
     char out[17];
     constexpr char digits[] = "0123456789abcdef";
@@ -39,8 +42,18 @@ static void trap(int signal, siginfo_t *, void *context) {
     }
     captured = static_cast<sig_atomic_t>(state->uc_mcontext->__ss.__rax);
     hits = 1;
-    // RF resumes the same instruction once; never change RIP or result registers.
-    state->uc_mcontext->__ss.__rflags |= 0x10000;
+    // Darwin signal return did not retain RF in the owned-code CI experiment.
+    // Disarm before resuming instead. The trap site is our RET, outside any MIG
+    // client call, so this same-thread debug-state RPC cannot interrupt itself.
+    // Never change RIP, flags, result registers, or any instruction bytes.
+    handlerRestore = thread_set_state(observedThread, x86_DEBUG_STATE64,
+        reinterpret_cast<thread_state_t>(&savedDebug), x86_DEBUG_STATE64_COUNT);
+    if (handlerRestore != KERN_SUCCESS) {
+        constexpr char message[] = "SELF_DEBUG_HANDLER_RESTORE_FAILED\n";
+        (void)write(STDERR_FILENO, message, sizeof(message) - 1);
+        hex(static_cast<uint64_t>(handlerRestore));
+        _exit(74);
+    }
 }
 
 int main() {
@@ -56,6 +69,8 @@ int main() {
         mach_port_deallocate(mach_task_self(), thread);
         return 1;
     }
+    observedThread = thread;
+    savedDebug = original;
     struct sigaction previous{}, action{};
     if (sigaction(SIGTRAP, nullptr, &previous) || previous.sa_handler != SIG_DFL) {
         mach_port_deallocate(mach_task_self(), thread);
@@ -88,10 +103,11 @@ int main() {
         finalState.__dr0 == original.__dr0 && finalState.__dr1 == original.__dr1 &&
         finalState.__dr2 == original.__dr2 && finalState.__dr3 == original.__dr3 &&
         finalState.__dr7 == original.__dr7;
-    std::printf("SELF_DEBUG_SET result=%d hits=%d captured=%d returned=%d restore=%d state=%d handler=%d\n",
-        set, int(hits), int(captured), result, restored, int(stateRestored), handlerRestored);
+    std::printf("SELF_DEBUG_SET result=%d hits=%d captured=%d returned=%d restore=%d state=%d handler=%d handler-debug=%d\n",
+        set, int(hits), int(captured), result, restored, int(stateRestored), handlerRestored, int(handlerRestore));
     if (set != KERN_SUCCESS || hits != 1 || captured != 0x1357 || result != 0x1357 ||
-        restored != KERN_SUCCESS || !stateRestored || handlerRestored) return 1;
+        restored != KERN_SUCCESS || !stateRestored || handlerRestored ||
+        handlerRestore != KERN_SUCCESS) return 1;
     std::puts("SELF_DEBUG_OWNED_CODE_OK no-gpu no-apple-text-write");
     return 0;
 }
