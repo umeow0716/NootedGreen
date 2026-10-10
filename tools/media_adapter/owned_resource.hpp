@@ -87,6 +87,24 @@ struct TglOwnedVpPairInputs {
     bool firstPresent=false,secondPresent=false,thirdPresent=false;
     uint32_t first130=0,second130=0,third04=0;
 };
+// Exact donor secondary VP address point7940e8, reached by ctor1fcaa0:
+// slot70 thunk1f71f0->1f70a0; slot78 thunk1f7300->1f7220. Translate
+// only their format data; never install the virtual-base-adjusting thunks.
+inline bool tglOwnedVpInputFormat(uint32_t format) noexcept {
+    switch(format) {
+        case 0x19:case 0x15:case 0x53:case 0x52:case 0x17:case 0x13:
+        case 3:case 4:case 1:case 2:case 0xfffffff9u:case 0xd:case 0xe:
+        case 0xf:case 0x10:case 0x11:case 0x12:case 0x14:return true;
+        default:return false;
+    }
+}
+inline bool tglOwnedVpOutputFormat(uint32_t format,uint32_t surfaceE4) noexcept {
+    switch(format) {
+        case 1:case 2:case 3:case 4:case 0x50:case 0x51:case 0xfffffff8u:
+        case 0x19:case 0xd:case 0x10:case 0x15:return true;
+        default:return format==0x53 && surfaceE4==1;
+    }
+}
 // Donor1df050: retain virtual70/78 as separately qualified predicates. No
 // cross-generation function pointer or guessed format support is supplied.
 template<class Qualify70,class Qualify78>

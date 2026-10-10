@@ -5269,6 +5269,24 @@ static void testSfcFrameFields() {
 
 int main() {
     {
+        constexpr std::array<uint32_t,18> inputs{
+            0x19,0x15,0x53,0x52,0x17,0x13,3,4,1,2,0xfffffff9u,
+            0xd,0xe,0xf,0x10,0x11,0x12,0x14};
+        constexpr std::array<uint32_t,11> outputs{
+            1,2,3,4,0x50,0x51,0xfffffff8u,0x19,0xd,0x10,0x15};
+        for(uint32_t format=0;format<256;++format) {
+            const bool in=std::find(inputs.begin(),inputs.end(),format)!=inputs.end();
+            const bool out=std::find(outputs.begin(),outputs.end(),format)!=outputs.end();
+            assert(tglOwnedVpInputFormat(format)==in);
+            for(uint32_t type:{0u,1u,2u,UINT32_MAX})
+                assert(tglOwnedVpOutputFormat(format,type)==(out || (format==0x53 && type==1)));
+        }
+        assert(tglOwnedVpInputFormat(0xfffffff9u));
+        assert(!tglOwnedVpInputFormat(0xfffffff8u) && !tglOwnedVpInputFormat(UINT32_MAX));
+        assert(tglOwnedVpOutputFormat(0xfffffff8u,0));
+        assert(!tglOwnedVpOutputFormat(0xfffffff9u,1) && !tglOwnedVpOutputFormat(UINT32_MAX,1));
+    }
+    {
         TglOwnedVpPairInputs input;
         unsigned calls70=0,calls78=0;bool allow70=true,allow78=true;
         const auto p70=[&]() noexcept {++calls70;return allow70;};
