@@ -52,6 +52,41 @@ static void testVeboxHardwareBinding() {
     sourceFormat = UINT32_MAX;
     assert(!tglVeboxDnSurfaceSupported(0x5000, formatRead));
     assert(!tglVeboxSurfaceSupported(0x5000, formatRead));
+    for (uint32_t src : {0x52u, 0x53u}) {
+        for (uint32_t dst : {3u, 4u, 0x50u}) {
+            assert(tglVeboxRtFormatSupported(0x0b, src, dst));
+            assert(!tglVeboxRtFormatSupported(0, src, dst));
+        }
+    }
+    for (uint32_t dst : {1u, 2u, 5u, 0x51u, UINT32_MAX})
+        assert(!tglVeboxRtFormatSupported(0x0b, 0x53, dst));
+    assert(!tglVeboxRtFormatSupported(0x0b, 0x19, 3));
+    unsigned rtReads = 0;
+    bool rtReadable = true;
+    uint32_t rtFormat = 3;
+    auto rtRead = [&](uintptr_t p, void* out, size_t n) {
+        ++rtReads;
+        assert(n == 4);
+        uint32_t value = p == 0x6130 ? rtFormat : p == 0x5000 ? 0x0b : 0x53;
+        assert(p == 0x6130 || p == 0x5000 || p == 0x5130);
+        if (!rtReadable) return false;
+        std::memcpy(out, &value, n); return true;
+    };
+    assert(!tglVeboxRtSurfaceSupported(0, 0x6000, rtRead));
+    assert(!tglVeboxRtSurfaceSupported(0x5000, UINTPTR_MAX - 0x132, rtRead));
+    assert(rtReads == 0);
+    assert(tglVeboxRtSurfaceSupported(0x5000, 0x6000, rtRead) && rtReads == 3);
+    rtFormat = 0x19; rtReads = 0;
+    assert(tglVeboxRtSurfaceSupported(0x5000, 0x6000, rtRead) && rtReads == 1);
+    rtReadable = false;
+    assert(!tglVeboxRtSurfaceSupported(0x5000, 0x6000, rtRead));
+    rtFormat = 3; rtReadable = true;
+    for (uintptr_t failed : {uintptr_t(0x5000), uintptr_t(0x5130)}) {
+        auto failSourceRead = [&](uintptr_t p, void* out, size_t n) {
+            return p != failed && rtRead(p, out, n);
+        };
+        assert(!tglVeboxRtSurfaceSupported(0x5000, 0x6000, failSourceRead));
+    }
     constexpr uint32_t diExcluded[]{0x15,0x14,0x17,0x03,0x01,0x51,0x50,0x05,0x06};
     for (uint32_t format : diExcluded) assert(!tglVeboxDiFormatSupported(format));
     assert(tglVeboxDiFormatSupported(0x19)); // NV12

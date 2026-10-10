@@ -45,6 +45,27 @@ template<class Read>
 bool tglVeboxSurfaceSupported(uintptr_t surface, Read read) {
     return tglVeboxSurfaceFormatPredicate(surface, read, tglVeboxFormatSupported);
 }
+// Gen12 IsRTFormatSupported: generic YUV/monochrome output, or the intersection
+// of IS_RGB32_FORMAT and IS_RGB_NO_SWAP for BT2020 P010/P016 input.
+// Darwin ICL1fc360 independently pins the two-surface ABI, ColorSpace at +0
+// (BT2020=0xb), and Format at +0x130; do not reuse its older output whitelist.
+constexpr bool tglVeboxRtFormatSupported(uint32_t sourceColorSpace,
+                                       uint32_t sourceFormat, uint32_t targetFormat) {
+    return tglVeboxFormatSupported(targetFormat) ||
+        (sourceColorSpace == 0x0b && (sourceFormat == 0x53 || sourceFormat == 0x52) &&
+         (targetFormat == 0x03 || targetFormat == 0x04 || targetFormat == 0x50));
+}
+template<class Read>
+bool tglVeboxRtSurfaceSupported(uintptr_t source, uintptr_t target, Read read) {
+    constexpr auto max = std::numeric_limits<uintptr_t>::max();
+    if (!source || !target || source > max - 0x133 || target > max - 0x133) return false;
+    uint32_t targetFormat = 0, sourceFormat = 0, sourceColorSpace = 0;
+    if (!read(target + 0x130, &targetFormat, sizeof(targetFormat))) return false;
+    if (tglVeboxFormatSupported(targetFormat)) return true;
+    return read(source, &sourceColorSpace, sizeof(sourceColorSpace)) &&
+        read(source + 0x130, &sourceFormat, sizeof(sourceFormat)) &&
+        tglVeboxRtFormatSupported(sourceColorSpace, sourceFormat, targetFormat);
+}
 template<class Read>
 bool tglVeboxDnSurfaceSupported(uintptr_t surface, Read read) {
     return tglVeboxSurfaceFormatPredicate(surface, read, tglVeboxDnFormatSupported);
