@@ -5733,6 +5733,9 @@ static void testSfcFrameFields() {
             using Context=TglOwnedVpPlatformPacketContext;
             using Callback=TglOwnedVpPlatformPacketCallback<TglOwnedVpSfcResolve<Context>>;
             using Setup=TglOwnedVpPlatformSetupCallback<TglOwnedVpSfcResolve<Context>>;
+            using Send=TglOwnedVpPlatformSendCallback<TglOwnedVpSfcResolve<Context>>;
+            using SendFunction=int(*)(void*,void*,void*,void*,void*,void*) noexcept;
+            const SendFunction send=&Send::send;
             using SetupFunction=int(*)(void*,void*,void*,void*) noexcept;
             const SetupFunction setup=&Setup::setup;
             using Produce=void(*)(void*,void*,void*) noexcept;
@@ -5743,6 +5746,7 @@ static void testSfcFrameFields() {
                 owned=saved;
                 Context context(vp,owned);
                 assert(setup(vp.bytes.data(),nullptr,nullptr,nullptr)==5);
+                assert(send(vp.bytes.data(),nullptr,nullptr,nullptr,nullptr,nullptr)==5);
                 produce(vp.bytes.data(),nullptr,owned.data());
                 assert(context.status()==5 && owned==saved);
                 {
@@ -5752,6 +5756,11 @@ static void testSfcFrameFields() {
                     assert(setup(vp.bytes.data(),owned.data(),foreign.data(),nullptr)==0);
                     assert(setup(nullptr,nullptr,nullptr,nullptr)==5);
                     assert(setup(foreign.data(),nullptr,nullptr,nullptr)==5);
+                    assert(send(vp.bytes.data(),nullptr,nullptr,nullptr,nullptr,nullptr)==0);
+                    assert(send(vp.bytes.data(),owned.data(),foreign.data(),owned.data(),
+                                foreign.data(),owned.data())==0);
+                    assert(send(nullptr,nullptr,nullptr,nullptr,nullptr,nullptr)==5);
+                    assert(send(foreign.data(),nullptr,nullptr,nullptr,nullptr,nullptr)==5);
                     assert(vp.bytes==vpBefore && owned==saved && foreign==other);
                     produce(nullptr,nullptr,owned.data());
                     produce(foreign.data(),nullptr,owned.data());

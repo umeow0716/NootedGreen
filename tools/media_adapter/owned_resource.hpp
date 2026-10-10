@@ -5080,6 +5080,18 @@ template<class Resolve> struct TglOwnedVpPlatformSetupCallback {
         return context && context->owns(child) ? 0 : 5;
     }
 };
+// VP+c8 caller1e0f1e..1e0f43 passes this/MHW/RenderHal+18/OS/output/command,
+// then consumes EAX. Exact target5d2c0..5d2df saves those six arguments,
+// dereferences none and returns0. This owned callback reproduces that ABI;
+// it does not qualify the surrounding ICL object, output or command packets.
+template<class Resolve> struct TglOwnedVpPlatformSendCallback {
+    static int send(void* child,void*,void*,void*,void*,void*) noexcept {
+        static_assert(noexcept(Resolve{}(child)),"VP platform send resolver ABI");
+        auto* context=Resolve{}(child);
+        static_assert(noexcept(context->owns(child)),"VP platform send ownership ABI");
+        return context && context->owns(child) ? 0 : 5;
+    }
+};
 template<class State,class Avs,class Ief>
 int tglSetupOwnedVpSfcStages(const TglOwnedVpFramePreparation& frame,
                             State state,Avs avs,Ief ief) noexcept {
