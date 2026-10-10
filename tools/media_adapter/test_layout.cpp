@@ -6723,6 +6723,30 @@ int main() {
             else assert(result==(failCommand?-failCommand:0) && reads==2 && backend.count);
             assert(parameters.lock==tglPrepareOwnedSfcLockParameters(1,0,0));
         }
+        for(unsigned controlFlag:{0u,1u,2u,3u}) for(unsigned failRead:{0u,1u,2u}) {
+            auto output=shell;output[0xe8]=uint8_t(controlFlag);
+            unsigned reads=0,updates=0,controls=0;
+            auto read=[&](uintptr_t address,void* out,size_t size) noexcept {
+                assert(size==1 && (address==0x1013 || address==0x100b));
+                if(++reads==failRead) return false;
+                *static_cast<uint8_t*>(out)=address==0x100b?1:0;return true;
+            };
+            Backend backend;backend.expected=&parameters;backend.leasedLock=true;backend.lockFlag=1;
+            backend.resource=reinterpret_cast<uintptr_t>(output.data()+0x148);
+            auto update=[&](const void* resource,uint32_t usage,uint32_t flag) noexcept {
+                assert(!backend.count && !updates && !controls && reads==2);
+                assert(resource==output.data()+0x148 && usage==6 && flag==1);++updates;
+            };
+            auto control=[&](const void* resource,uint32_t usage) noexcept {
+                assert(!backend.count && updates==1 && !controls);
+                assert(resource==output.data()+0x148 && usage==6);++controls;
+            };
+            auto platform=[&](auto& descriptor) {descriptor[0]=0xee;return backend.stage(3);};
+            assert(tglSendOwnedSfcWithOutputUsage(backend,parameters,output,
+                0x1000,0,0,0,0,read,update,control,platform)==(failRead?5:0));
+            assert(updates==(failRead?0:1) && controls==(failRead?0:(controlFlag&1)));
+            assert(failRead?!backend.count:backend.count==4);
+        }
     }
     {
         std::array<uint8_t,0x2a8> shell{};

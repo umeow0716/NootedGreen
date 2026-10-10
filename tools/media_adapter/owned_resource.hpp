@@ -5613,6 +5613,29 @@ int tglSendOwnedSfcLeasedCommands(Backend& backend,
     return tglSendOwnedSfcPreparedCommands(backend,parameters,shell,
         scaling,forceAvs,ief,csc,platform,&lock);
 }
+// Native send1e0e56..1e0eb5 uses OS+128(resource,6,1), then optional
+// OS+130(resource,6) when surface+e8 bit0 is set. Neither result is read.
+// This is NOT OS+248 relocation registration. The injected producers must
+// already bind authenticated native entries and retain the OS/output leases.
+template<class Backend,class Platform,class Read,class Update,class Control>
+int tglSendOwnedSfcWithOutputUsage(Backend& backend,
+    const TglOwnedSfcCommandParameters& parameters,
+    const std::array<uint8_t,0x2a8>& shell,uintptr_t settings,
+    uint8_t scaling,uint8_t forceAvs,uint8_t ief,uint8_t csc,
+    Read read,Update update,Control control,Platform& platform) {
+    const void* resource=shell.data()+0x148;
+    static_assert(noexcept(update(resource,uint32_t{},uint32_t{})) &&
+                  noexcept(control(resource,uint32_t{})),"SFC output usage ABI");
+    static_assert(std::is_same_v<decltype(update(resource,uint32_t{},uint32_t{})),void> &&
+                  std::is_same_v<decltype(control(resource,uint32_t{})),void>,
+                  "native SFC usage return values are not consumed");
+    TglOwnedSfcLockParameters lock;
+    if(!tglReadOwnedSfcLockParameters(settings,1,read,lock)) return 5;
+    update(resource,6,1);
+    if(shell[0xe8]&1) control(resource,6);
+    return tglSendOwnedSfcPreparedCommands(backend,parameters,shell,
+        scaling,forceAvs,ief,csc,platform,&lock);
+}
 // ICL 1e0ca0..1e0dcb setup order. Producers operate on owned state;
 // caller binds the closed argument ABI, never an ICL object to TGL code.
 // Qualified native flags are VP base+921/+922/+923 and +9b8, low bit
