@@ -1217,10 +1217,17 @@ template<class Backend, size_t Count> class TglOwnedResourceGroup {
     template<size_t... I>
     TglOwnedResourceGroup(Backend& backend, std::index_sequence<I...>) noexcept
         : resources{(static_cast<void>(I),Resource(backend))...} {}
+    template<size_t... I>
+    TglOwnedResourceGroup(std::array<Backend,Count>& backends, std::index_sequence<I...>) noexcept
+        : resources{Resource(backends[I])...} {}
 public:
     struct Request { bool required = false; TglResourceKey key{}; };
     explicit TglOwnedResourceGroup(Backend& backend) noexcept
         : TglOwnedResourceGroup(backend,std::make_index_sequence<Count>{}) {}
+    // Surface and buffer allocators have different native resource types.
+    // The complete backend array, and its borrowed OS context, outlive this group.
+    explicit TglOwnedResourceGroup(std::array<Backend,Count>& backends) noexcept
+        : TglOwnedResourceGroup(backends,std::make_index_sequence<Count>{}) {}
     TglOwnedResourceGroup(const TglOwnedResourceGroup&) = delete;
     TglOwnedResourceGroup& operator=(const TglOwnedResourceGroup&) = delete;
     template<class Prepare>

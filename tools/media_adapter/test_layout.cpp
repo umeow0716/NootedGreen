@@ -1085,6 +1085,43 @@ static void testVeboxPrefix() {
 
 static void testComposedStatisticsBuffer() {
     {
+        struct Fixture { unsigned allocations = 0, releases = 0; } fixture;
+        auto allocate = +[](void* context, const void* raw, void* out) noexcept {
+            auto& f = *static_cast<Fixture*>(context);
+            const auto* params = static_cast<const uint8_t*>(raw);
+            auto* storage = static_cast<uint8_t*>(out);
+            uint32_t type = 0, width = 0, height = 0, format = 0;
+            std::memcpy(&type,params,4); std::memcpy(&width,params+0x14,4);
+            std::memcpy(&height,params+0x18,4); std::memcpy(&format,params+0x28,4);
+            if (f.allocations++ == 0) assert(type == 1 && width == 1920 && height == 1080 && format == 0x19);
+            else assert(type == 0 && width == 4096 && height == 1 && format == 0x3e);
+            std::memcpy(storage+0x14,&type,4);
+            const uint64_t handle = 1;
+            std::memcpy(storage+(type == 1 ? 0x58 : 0x20),&handle,8);
+            return 0;
+        };
+        auto release = +[](void* context, void* out) noexcept {
+            ++static_cast<Fixture*>(context)->releases;
+            std::memset(out,0,0x148);
+        };
+        std::array<TglNativeResourceBackend,2> backends{
+            TglNativeResourceBackend(&fixture,allocate,release,1),
+            TglNativeResourceBackend(&fixture,allocate,release,0,4096)};
+        {
+            using Group = TglOwnedResourceGroup<TglNativeResourceBackend,2>;
+            Group group(backends);
+            std::array<Group::Request,2> requests{
+                Group::Request{true,{1920,1080,0x19,0,0,false}},
+                Group::Request{true,{4096,1,0x3e,0,0,false}}};
+            auto prepare = [](size_t, const auto&, bool) noexcept { return 0; };
+            assert(!group.ensure(requests,prepare) && fixture.allocations == 2);
+            assert(group.storage(0) && group.storage(1));
+            assert((*group.storage(0))[0x14] == 1 && (*group.storage(1))[0x14] == 0);
+            assert(!group.ensure(requests,prepare) && fixture.allocations == 2);
+        }
+        assert(fixture.releases == 2);
+    }
+    {
         struct Backend {
             unsigned allocations = 0, releases = 0, live = 0;
             unsigned failAt = 99;
