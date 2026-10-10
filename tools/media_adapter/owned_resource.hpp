@@ -1485,6 +1485,14 @@ struct TglOwnedVeboxVtable {
             // +168=12ab10 is void(this,source): source138==3/4 writes
             // execution15; source138==3/5 writes execution16. These are the
             // full source SAMPLE enum, not the unrelated params138 flag.
+            // +160=12a740 is NOT a read-only feature query: 12a929..12a940
+            // releases source90 through436d0 and clears that pointer when
+            // report0b is false.436d0 decrements native7f3218 before its
+            // external release call. A borrowed/owned source90 therefore
+            // needs allocator/accounting qualification, not just a base
+            // lease, before +170 can transitively invoke this native method.
+            // It also calls virtual+a0/+a8 and retains target in report60;
+            // source/target backing must outlive the retained report use.
             candidate[0x160/8] != image+0x12a740 || candidate[0x168/8] != image+0x12ab10 ||
             candidate[0x170/8] != image+0x12aba0 || candidate[0x180/8] != image+0x12b1d0 ||
             candidate[0xd0/8] != image+0x71e80 ||
