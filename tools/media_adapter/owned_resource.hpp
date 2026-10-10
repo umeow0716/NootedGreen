@@ -2482,6 +2482,12 @@ inline bool tglNativeBackingPresent(const std::array<uint8_t, 0x148> &s) noexcep
 // client backing to deferred retirement, separately from TGL aperture220/88.
 // Owned execution still must prove its token type and actual map preparation;
 // allocation alone is not evidence that the GPU backing is mapped or wired.
+// Type0 native63030 writes descriptor DWORD0=0x80 at63118 (not kernel type0),
+// calls IOAccelResourceCreate via23e0a4 at631a9 and gets shared metadata via
+//23e0b0. Family new_resource2b806 accepts low-nibble-zero then exact0x80 at
+//2bc07; branch2bca1 passes args58/40/48/50 to newResourceWithClientBuffer
+//21ab6 at2bcd8. This closes native type0 allocation -> client SysMemory80.
+// Do not apply this proof to native type1 IOSurface planes or borrowed FFDI.
 template<class Writable, class Fill>
 int tglFillBuffer(const std::array<uint8_t, 0x148> &resource, uint32_t bytes,
                   uint8_t value, Writable writable, Fill fill) noexcept {
