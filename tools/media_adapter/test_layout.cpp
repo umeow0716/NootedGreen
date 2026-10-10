@@ -5314,6 +5314,51 @@ static void testSfcFrameFields() {
 
 int main() {
     {
+        constexpr uintptr_t os=0x1000,image=0x100000;
+        uintptr_t slot=image+0x659b0;
+        std::array<uint8_t,20> anchor{
+            0x55,0x48,0x89,0xe5,0x48,0x89,0x7d,0xf8,0x48,0x89,
+            0x75,0xf0,0x89,0x55,0xec,0x89,0x4d,0xe8,0x5d,0xc3};
+        unsigned reads=0,fail=0,invoked=0,used=0;
+        auto read=[&](uintptr_t address,void* out,size_t size) noexcept {
+            if(++reads==fail) return false;
+            if(address==os+0x128 && size==8) {std::memcpy(out,&slot,8);return true;}
+            if(address==image+0x659b0 && size==anchor.size()) {
+                std::memcpy(out,anchor.data(),size);return true;
+            }
+            return false;
+        };
+        auto qualify=[](uintptr_t base) noexcept {return base==image;};
+        auto executable=[](uintptr_t address,size_t size) noexcept {
+            return address==image+0x659b0 && size==20;
+        };
+        std::array<uint8_t,0x2a8> surface{};
+        auto invoke=[&](uintptr_t entry,uintptr_t context,const void* resource,uint32_t usage,uint32_t flag) noexcept {
+            assert(entry==slot && context==os && resource==surface.data()+0x148);
+            assert(usage==6 && flag==1);++invoked;
+        };
+        auto use=[&]() noexcept -> int {assert(invoked==used+1);++used;return -31;};
+        TglNativeSfcOutputUsageBinding binding;
+        assert(binding.withOutput(surface,use,invoke)==5 && !invoked);
+        assert(binding.resolve(os,image,read,qualify,executable));
+        assert(binding.withOutput(surface,use,invoke)==-31 && invoked==1 && used==1);
+        surface[0xe8]=1;
+        assert(binding.withOutput(surface,use,invoke)==5 && invoked==1 && used==1);
+        surface[0xe8]=2;
+        assert(binding.withOutput(surface,use,invoke)==-31 && invoked==2 && used==2);
+        for(fail=1;fail<=2;++fail) {
+            reads=0;assert(!binding.resolve(os,image,read,qualify,executable));
+            assert(binding.withOutput(surface,use,invoke)==5 && invoked==2);
+        }
+        fail=0;++slot;
+        assert(!binding.resolve(os,image,read,qualify,executable));--slot;
+        for(size_t i=0;i<anchor.size();++i) {
+            anchor[i]^=1;assert(!binding.resolve(os,image,read,qualify,executable));anchor[i]^=1;
+        }
+        assert(!binding.resolve(UINTPTR_MAX-3,image,read,qualify,executable));
+        assert(!binding.resolve(os,UINTPTR_MAX-3,read,qualify,executable));
+    }
+    {
         unsigned reads=0,fail=0;uint8_t flag13=0,flag0b=0;
         const auto read=[&](uintptr_t address,void* out,size_t size) noexcept {
             ++reads;if(reads==fail) return false;

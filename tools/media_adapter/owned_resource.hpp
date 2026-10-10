@@ -3245,6 +3245,44 @@ struct TglNativeRegistrationBinding {
     }
 };
 
+struct TglNativeSfcOutputUsageInvoker {
+    void operator()(uintptr_t entry,uintptr_t os,const void* resource,
+                    uint32_t usage,uint32_t flag) const noexcept {
+        using Update=void(*)(void*,const void*,uint32_t,uint32_t);
+        reinterpret_cast<Update>(entry)(reinterpret_cast<void*>(os),resource,usage,flag);
+    }
+};
+// Exact TGL initializer65ea0:66340/66347 installs659b0 at OS+128.
+// Unlike OS+248 relocation registration, this is a four-argument void stub.
+// OS+130 is NOT proved here. Flagged surfaces must remain unsupported until
+// that independent callback is authenticated; no neighboring stub substitute.
+class TglNativeSfcOutputUsageBinding {
+    uintptr_t context_=0,entry_=0;
+public:
+    template<class Read,class Qualify,class Executable>
+    bool resolve(uintptr_t os,uintptr_t image,Read read,Qualify qualify,Executable executable) {
+        context_=entry_=0;
+        constexpr std::array<uint8_t,20> anchor{
+            0x55,0x48,0x89,0xe5,0x48,0x89,0x7d,0xf8,0x48,0x89,
+            0x75,0xf0,0x89,0x55,0xec,0x89,0x4d,0xe8,0x5d,0xc3};
+        uintptr_t entry=0;std::array<uint8_t,20> actual{};
+        if(!os || os>UINTPTR_MAX-0x130 || !image || image>UINTPTR_MAX-0x659c4 ||
+            !qualify(image) || !read(os+0x128,&entry,8) || entry!=image+0x659b0 ||
+            !executable(entry,anchor.size()) || !read(entry,actual.data(),actual.size()) ||
+            actual!=anchor) return false;
+        context_=os;entry_=entry;return true;
+    }
+    // Enclosing caller owns OS/image/surface leases throughout command use.
+    template<class Use,class Invoke=TglNativeSfcOutputUsageInvoker>
+    int withOutput(const std::array<uint8_t,0x2a8>& surface,Use use,Invoke invoke=Invoke{}) const noexcept {
+        static_assert(noexcept(use()) && noexcept(invoke(uintptr_t{},uintptr_t{},
+            static_cast<const void*>(nullptr),uint32_t{},uint32_t{})),"SFC usage scope ABI");
+        if(!context_ || !entry_ || (surface[0xe8]&1)) return 5;
+        invoke(entry_,context_,surface.data()+0x148,6,1);
+        return use();
+    }
+};
+
 // Call native even though the exact TGL implementation is a success stub.
 // Registration does not establish resource backing or GPU completion.
 struct TglNativeRegistrationInvoker {
