@@ -1071,6 +1071,7 @@ static void testOwnedVeboxVtable() {
     original[0] = image+0x12e240; original[1] = image+0x12e250;
     original[0x40/8]=image+0x12e9c0;original[0x48/8]=image+0x12ea30;
     original[0x170/8]=image+0x12aba0;original[0x180/8]=image+0x12b1d0;
+    original[0x160/8]=image+0x12a740;original[0x168/8]=image+0x12ab10;
     original[0xd0/8]=image+0x71e80;
     original[0x1b8/8] = image+0x71e80;
     std::array<uintptr_t,20> hooks{};
@@ -1180,7 +1181,7 @@ static void testOwnedVeboxVtable() {
     original[0x28/8] = image+0x1000; assert(!build()); original[0x28/8] = 0;
     original[0x48/8] = 0; assert(!build()); original[0x48/8] = image+0x12ea30;
     original[0x48/8] = 0x4000; assert(!build()); original[0x48/8] = image+0x12ea30;
-    for(size_t slot:{size_t(0x40/8),size_t(0x48/8),size_t(0xd0/8),size_t(0x170/8),size_t(0x180/8)}) {
+    for(size_t slot:{size_t(0x40/8),size_t(0x48/8),size_t(0xd0/8),size_t(0x160/8),size_t(0x168/8),size_t(0x170/8),size_t(0x180/8)}) {
         const auto native=original[slot];
         original[slot]=image+0x2048;assert(!build() && !table.addressPoint());
         original[slot]=native;
@@ -8432,6 +8433,7 @@ int main() {
                 nativeTable[0]=base+0x12e240;nativeTable[1]=base+0x12e250;
                 nativeTable[0x40/8]=base+0x12e9c0;nativeTable[0x48/8]=base+0x12ea30;
                 nativeTable[0x170/8]=base+0x12aba0;nativeTable[0x180/8]=base+0x12b1d0;
+                nativeTable[0x160/8]=base+0x12a740;nativeTable[0x168/8]=base+0x12ab10;
                 nativeTable[0xd0/8]=base+0x71e80;
                 nativeTable[0x1b8/8]=base+0x71e80;
                 std::array<uintptr_t,20> hooks{};
