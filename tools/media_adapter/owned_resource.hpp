@@ -35,11 +35,19 @@ constexpr bool tglVeboxDnFormatSupported(uint32_t format) {
         default: return false;
     }
 }
-template<class Read>
-bool tglVeboxDnSurfaceSupported(uintptr_t surface, Read read) {
+template<class Read, class Predicate>
+bool tglVeboxSurfaceFormatPredicate(uintptr_t surface, Read read, Predicate predicate) {
     uint32_t format = 0;
     return surface && surface <= std::numeric_limits<uintptr_t>::max() - 0x133 &&
-        read(surface + 0x130, &format, sizeof(format)) && tglVeboxDnFormatSupported(format);
+        read(surface + 0x130, &format, sizeof(format)) && predicate(format);
+}
+template<class Read>
+bool tglVeboxSurfaceSupported(uintptr_t surface, Read read) {
+    return tglVeboxSurfaceFormatPredicate(surface, read, tglVeboxFormatSupported);
+}
+template<class Read>
+bool tglVeboxDnSurfaceSupported(uintptr_t surface, Read read) {
+    return tglVeboxSurfaceFormatPredicate(surface, read, tglVeboxDnFormatSupported);
 }
 // Gen12 g12_base.cpp370, NOT the shorter ICL1fc690 exclusion table.
 // MOS_FORMAT values: AYUV15/Y41614/Y41017/ABGR3/ARGB1/B10..51/R10..50/
@@ -54,9 +62,7 @@ constexpr bool tglVeboxDiFormatSupported(uint32_t format) {
 }
 template<class Read>
 bool tglVeboxDiSurfaceSupported(uintptr_t surface, Read read) {
-    uint32_t format = 0;
-    return surface && surface <= std::numeric_limits<uintptr_t>::max() - 0x133 &&
-        read(surface + 0x130, &format, sizeof(format)) && tglVeboxDiFormatSupported(format);
+    return tglVeboxSurfaceFormatPredicate(surface, read, tglVeboxDiFormatSupported);
 }
 
 // Read-only shape gate for an already-owned native execution object. Identity

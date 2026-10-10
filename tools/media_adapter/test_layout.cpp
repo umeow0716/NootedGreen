@@ -38,8 +38,20 @@ static void testVeboxHardwareBinding() {
     assert(!tglVeboxDnSurfaceSupported(UINTPTR_MAX - 0x132, formatRead));
     assert(formatReads == 0);
     assert(tglVeboxDnSurfaceSupported(0x5000, formatRead) && formatReads == 1);
+    assert(tglVeboxSurfaceSupported(0x5000, formatRead) && formatReads == 2);
+    assert(!tglVeboxSurfaceSupported(0, formatRead) && formatReads == 2);
+    assert(!tglVeboxSurfaceSupported(UINTPTR_MAX - 0x132, formatRead) && formatReads == 2);
+    unsigned predicateCalls = 0;
+    auto countedPredicate = [&](uint32_t) { ++predicateCalls; return true; };
+    formatReadable = false;
+    assert(!tglVeboxSurfaceFormatPredicate(0x5000, formatRead, countedPredicate));
+    assert(predicateCalls == 0); // unreadable data must never reach format policy
+    formatReadable = true;
+    assert(tglVeboxSurfaceFormatPredicate(0x5000, formatRead, countedPredicate));
+    assert(predicateCalls == 1);
     sourceFormat = UINT32_MAX;
     assert(!tglVeboxDnSurfaceSupported(0x5000, formatRead));
+    assert(!tglVeboxSurfaceSupported(0x5000, formatRead));
     constexpr uint32_t diExcluded[]{0x15,0x14,0x17,0x03,0x01,0x51,0x50,0x05,0x06};
     for (uint32_t format : diExcluded) assert(!tglVeboxDiFormatSupported(format));
     assert(tglVeboxDiFormatSupported(0x19)); // NV12
