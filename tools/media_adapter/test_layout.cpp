@@ -197,7 +197,14 @@ static void testOwnedVeboxVtable() {
     std::array<uintptr_t,20> hooks{};
     for (size_t i = 0; i < hooks.size(); ++i) hooks[i] = 0x2000+i*16;
     bool identity = true, rx = true;
+    std::array<uintptr_t,2> metadata{0,image+0x757ed0};
+    bool metadataReadable = true;
     auto read = [&](uintptr_t p, void* out, size_t n) {
+        if (p == image+0x757c88) {
+            assert(n == 16);
+            if (!metadataReadable) return false;
+            std::memcpy(out,metadata.data(),n); return true;
+        }
         assert(p == image+0x757c98 && n == 0x1e8); // never next table metadata
         std::memcpy(out,original.data(),n); return true;
     };
@@ -206,6 +213,13 @@ static void testOwnedVeboxVtable() {
     TglOwnedVeboxVtable table;
     auto build = [&] { return table.build(image,hooks,read,qualify,executable); };
     assert(build());
+    assert(table.addressPoint() == reinterpret_cast<uintptr_t>(table.entries.data()));
+    assert(table.typeInfo == image+0x757ed0 && table.offsetToTop == 0);
+    metadata[0] = 8; assert(!build() && !table.addressPoint()); metadata[0] = 0;
+    metadata[1] = image+0x757ee0; assert(!build() && !table.typeInfo);
+    metadata[1] = image+0x757ed0;
+    metadataReadable = false; assert(!build() && !table.addressPoint());
+    metadataReadable = true; assert(build());
     for (size_t i = 0; i < original.size(); ++i) {
         auto expected = original[i];
         for (size_t j = 0; j < hooks.size(); ++j)

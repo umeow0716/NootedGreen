@@ -343,13 +343,23 @@ struct TglOwnedVeboxVtable {
     static constexpr std::array<size_t,20> required{
         0,8,0x28,0x58,0x60,0x68,0x70,0x78,0x80,0x90,0x98,0xa0,0xa8,0xb0,0xb8,
         0x1b8,0x1c8,0x1d0,0x1d8,0x1e0};
+    // Preserve the primary native-base ABI metadata. This does not invent
+    // derived RTTI or prove a constructed object; owners must retain its lease.
+    intptr_t offsetToTop = 0;
+    uintptr_t typeInfo = 0;
     std::array<uintptr_t,count> entries{};
+    uintptr_t addressPoint() const noexcept {
+        return typeInfo ? reinterpret_cast<uintptr_t>(entries.data()) : 0;
+    }
     template<class Read, class Qualify, class Executable>
     bool build(uintptr_t image, const std::array<uintptr_t,20>& owned,
                Read read, Qualify qualify, Executable executable) {
-        entries = {};
+        offsetToTop = 0; typeInfo = 0; entries = {};
         constexpr auto max = std::numeric_limits<uintptr_t>::max();
-        if (!image || image > max - 0x757e80 || !qualify(image)) return false;
+        if (!image || image > max - 0x757ed0 || !qualify(image)) return false;
+        std::array<uintptr_t,2> metadata{};
+        if (!read(image+0x757c88,metadata.data(),sizeof(metadata)) ||
+            metadata[0] != 0 || metadata[1] != image+0x757ed0) return false;
         std::array<uintptr_t,count> candidate{};
         if (!read(image + 0x757c98, candidate.data(), sizeof(candidate))) return false;
         for (size_t i = 0; i < count; ++i) {
@@ -368,9 +378,11 @@ struct TglOwnedVeboxVtable {
                 !executable(owned[i], 1)) return false;
             candidate[required[i]/8] = owned[i];
         }
-        entries = candidate; return true;
+        entries = candidate; typeInfo = metadata[1]; return true;
     }
 };
+static_assert(offsetof(TglOwnedVeboxVtable, entries) == 16);
+static_assert(sizeof(TglOwnedVeboxVtable) == 16 + 0x1e8);
 
 // Authenticated native CSC entry. This binds code only: invocation also requires
 // a fully constructed owned child with native execution and Gen12 overrides.
