@@ -1737,7 +1737,17 @@ struct TglVeboxHardwareBinding {
     // does not wait on channel stamps. Do not interpret its name as GPU done.
     // TGL IGAccelResource::free(6f59e..6f808) unmaps aux ranges, frees private
     // metadata and forwards to Resource2::free. No direct fence wait appears;
-    // virtual child220/140 remains to resolve before claiming full teardown.
+    // Child220 comes from addToAperture(73576): Memory::createMappingInTask138
+    // (family22ee), then Map::prepare138; published only after success736a6.
+    // Map140=complete(5288c) only decrements prepare countc, not a fence wait.
+    // Map::release(52364) checks last reference and mapped flag, tests event38
+    // via EventMachine190, and on its deferred branch5240c moves task list1e8
+    // to orphan list200 WITHOUT decrementing the final object reference.
+    // Task::prune_orphaned_mappings(393fa) reads that same200 list and releases
+    // only while Map::testEvent(52462) succeeds; first pending event stops it.
+    // This is native deferred mapping ownership, not an owned-layer fence.
+    // Prove the owned allocation reaches this mapping path before relying on
+    // it; external CPU buffers and failed STMM unlock remain separate cases.
     template<class Read,class Qualify,class Executable,class Invoke>
     uint32_t markSubmitted(uintptr_t image,Read read,Qualify qualify,
                            Executable executable,Invoke invoke) const {
