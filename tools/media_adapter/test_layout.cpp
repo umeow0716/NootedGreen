@@ -5269,6 +5269,37 @@ static void testSfcFrameFields() {
 
 int main() {
     {
+        TglOwnedVpSfcCallerStorage storage;
+        storage.bytes[0x925]=0x5a;storage.bytes[0x9b9]=0xa5;
+        const auto original=storage.bytes;
+        TglOwnedVpFramePreparation frame;
+        frame.at920=frame.at922=frame.at924=true;frame.at9a0=3;
+        frame.regions.scale={2.0f,3.0f,true};
+        frame.color={{{5,3,true},true},{1,0x11,0x21},false};
+        unsigned calls=0;
+        const auto use=[&](void* child,const TglOwnedVpColorMetadata& metadata) noexcept {
+            ++calls;assert(child==storage.bytes.data() && metadata.target294==0x21);
+            assert(storage.bytes[0x920]==1 && storage.bytes[0x921]==1 &&
+                   storage.bytes[0x922]==1 && storage.bytes[0x924]==1);
+            float x=0,y=0;uint32_t rotation=0;uintptr_t reference=0;
+            std::memcpy(&x,storage.bytes.data()+0x928,4);
+            std::memcpy(&y,storage.bytes.data()+0x92c,4);
+            std::memcpy(&rotation,storage.bytes.data()+0x9a0,4);
+            std::memcpy(&reference,storage.bytes.data()+0x9c0,8);
+            assert(x==2 && y==3 && rotation==3 && reference==0x7000);
+            const auto live=storage.bytes;
+            assert(tglWithOwnedVpPreparedFrame(storage,frame,0x1000,0x2000,0x3000,0x7000,
+                [](void*,const auto&) noexcept {assert(false);return 0;})==5);
+            assert(storage.bytes==live);return 31;
+        };
+        assert(tglWithOwnedVpPreparedFrame(storage,frame,0x1000,0x2000,0x3000,0x7000,use)==31);
+        assert(calls==1 && storage.bytes==original);
+        assert(tglWithOwnedVpPreparedFrame(storage,frame,0,0x2000,0x3000,0x7000,use)==5);
+        assert(tglWithOwnedVpPreparedFrame(storage,frame,0x1000,0x2000,0,0x7000,use)==5);
+        assert(tglWithOwnedVpPreparedFrame(storage,frame,0x1000,0x2000,0x3000,0,use)==5);
+        assert(calls==1 && storage.bytes==original);
+    }
+    {
         TglOwnedVpFramePreparationInput input;
         auto& geometry=input.geometry;
         geometry.frameWidth=geometry.targetWidth=1920;

@@ -4679,6 +4679,37 @@ inline bool tglPrepareOwnedVpFrame(const TglOwnedVpFramePreparationInput& in,
     candidate.at9a0=in.geometry.rotation;
     output=candidate;return true;
 }
+// One synchronous slot28 view. Leases for source, parameters, target and CSC
+// must enclose this call. Owned target metadata is supplied to use(), not
+// written through the borrowed target. No vtable or object is published here.
+template<class Use>
+int tglWithOwnedVpPreparedFrame(TglOwnedVpSfcCallerStorage& storage,
+    const TglOwnedVpFramePreparation& frame,uintptr_t conditionalSource,
+    uintptr_t parameters,uintptr_t target,uintptr_t sourceA8,Use use) noexcept {
+    static_assert(noexcept(use(static_cast<void*>(nullptr),frame.color.metadata)),"VP frame scope ABI");
+    if(!target || (frame.at920 && !conditionalSource)) return 5;
+    return tglWithOwnedVpFrameReferences(storage,conditionalSource,parameters,target,frame.at920,
+        [&](void*) noexcept {
+            return tglWithOwnedVpFrameColor(storage,frame.color,sourceA8,[&](void* child) noexcept {
+                constexpr std::array<size_t,7> offsets{0x920,0x921,0x922,0x924,0x928,0x92c,0x9a0};
+                constexpr std::array<size_t,7> lengths{1,1,1,1,4,4,4};
+                std::array<std::array<uint8_t,4>,7> saved{};
+                for(size_t i=0;i<offsets.size();++i)
+                    std::memcpy(saved[i].data(),storage.bytes.data()+offsets[i],lengths[i]);
+                storage.bytes[0x920]=frame.at920;
+                storage.bytes[0x921]=frame.regions.scale.scaling;
+                storage.bytes[0x922]=frame.at922;
+                storage.bytes[0x924]=frame.at924;
+                std::memcpy(storage.bytes.data()+0x928,&frame.regions.scale.at928,4);
+                std::memcpy(storage.bytes.data()+0x92c,&frame.regions.scale.at92c,4);
+                std::memcpy(storage.bytes.data()+0x9a0,&frame.at9a0,4);
+                const int result=use(child,frame.color.metadata);
+                for(size_t i=0;i<offsets.size();++i)
+                    std::memcpy(storage.bytes.data()+offsets[i],saved[i].data(),lengths[i]);
+                return result;
+            });
+        });
+}
 // Exact ICL base/Gen12 SFC +c0 slot is 1df3c0: a single DWORD zero
 // at packet+4, not a no-op and not a GPU command producer.
 inline void tglPrepareOwnedSfcPlatformField(std::array<uint8_t,0xb8>& packet) noexcept {
