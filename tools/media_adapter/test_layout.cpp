@@ -31,6 +31,33 @@ struct TestVpCpuView {
 
 static void testTrackedCpuOwner() {
     {
+        using Result=TglVeboxAdmissionPrefixResult;
+        TglVeboxAdmissionPrefixInput input{true,true,true,true,1,uint64_t(1)<<12,64,16};
+        std::array<uint8_t,0x28> pass{};pass.fill(0xa5);
+        const auto original=pass;
+        assert(tglPrepareVeboxAdmissionPrefix(input,pass)==Result::Continue && pass==original);
+        for(unsigned mask=0;mask<15;++mask) {
+            auto missing=input;
+            missing.os=mask&1;missing.renderHal=mask&2;
+            missing.execution=mask&4;missing.source=mask&8;
+            assert(tglPrepareVeboxAdmissionPrefix(missing,pass)==Result::MissingDependencies);
+            assert(pass==original);
+        }
+        for(unsigned failure=0;failure<4;++failure) {
+            auto fallback=input;pass=original;
+            if(failure==0) fallback.params138=2;
+            if(failure==1) fallback.sku0=~(uint64_t(1)<<12);
+            if(failure==2) fallback.sourceWidth=63;
+            if(failure==3) fallback.sourceHeight=15;
+            assert(tglPrepareVeboxAdmissionPrefix(fallback,pass)==Result::CompositionFallback);
+            for(size_t i=0;i<pass.size();++i) assert(pass[i]==(i==8?1:original[i]));
+        }
+        input.params138=0xff;input.sku0=UINT64_MAX;
+        input.sourceWidth=UINT32_MAX;input.sourceHeight=UINT32_MAX;
+        pass=original;
+        assert(tglPrepareVeboxAdmissionPrefix(input,pass)==Result::Continue && pass==original);
+    }
+    {
         int child=0,foreign=0,params=0,pass=0;
         struct Admission {
             void* child;

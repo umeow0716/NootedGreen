@@ -5849,6 +5849,36 @@ template<class Context> using TglOwnedVeboxScopedContext=
 // AL; local status5 writes on prerequisite failure are NOT returned as bool.
 // Thus direct geometry/format predicates cannot stand in for the full policy,
 // and a denied admission need not mean that execution/pass stayed unchanged.
+enum class TglVeboxAdmissionPrefixResult : uint8_t {
+    MissingDependencies, CompositionFallback, Continue
+};
+struct TglVeboxAdmissionPrefixInput {
+    bool os=false,renderHal=false,execution=false,source=false;
+    uint8_t params138=0;
+    uint64_t sku0=0;
+    uint32_t sourceWidth=0,sourceHeight=0;
+};
+// CPU counterpart of donor1fb974..1fba92 only. Field acquisition and exact
+// Gen12 platform qualification remain the enclosing policy's responsibility.
+// source means pass10 (native's a8), not params98. Owned execution must also
+// be leased before entry; this extra safety gate is not a native NULL check.
+// Missing dependencies leave pass untouched; fallback writes the whole byte1
+// just as native1fba35/1fba62/1fba89 (not OR with an old flag). Continue does
+// not clear prior pass state: execution reset/mode selection still follow.
+template<size_t N>
+TglVeboxAdmissionPrefixResult tglPrepareVeboxAdmissionPrefix(
+    const TglVeboxAdmissionPrefixInput& input,std::array<uint8_t,N>& pass) noexcept {
+    static_assert(N>=9,"native admission requires pass08");
+    if(!input.os || !input.renderHal || !input.execution || !input.source)
+        return TglVeboxAdmissionPrefixResult::MissingDependencies;
+    if(!(input.params138&1) || !(input.sku0&(uint64_t(1)<<12)) ||
+       input.sourceWidth<64 || input.sourceHeight<16) {
+        pass[8]=1;
+        return TglVeboxAdmissionPrefixResult::CompositionFallback;
+    }
+    return TglVeboxAdmissionPrefixResult::Continue;
+}
+
 template<class Owner,class Policy> class TglOwnedVeboxAdmissionContext {
     Owner& owner_;
     void* child_;
