@@ -2158,6 +2158,15 @@ struct TglVeboxHardwareBinding {
     // Task::prune_orphaned_mappings(393fa) reads that same200 list and releases
     // only while Map::testEvent(52462) succeeds; first pending event stops it.
     // This is native deferred mapping ownership, not an owned-layer fence.
+    // Family testEventUnlocked30414..3047d tests eight packed events: low
+    // DWORD channel (-1 skips), high DWORD target stamp. It compares signed
+    // target-observed deltas, refreshing EventMachine+f8+24*channel from the
+    // hardware stamp pointer array+28 when needed. Critically30461..3046c
+    // ALSO accepts a still-pending stamp when device+dc8 is nonzero. Thus
+    // native testEvent=true is not alone a reset-free completion certificate;
+    // the owned retirement admission must exclude that device-state branch
+    // and retain exact submission/channel/generation provenance. Do not
+    // reproduce this kernel-private predicate against guessed user pointers.
     // Prove the owned allocation reaches this mapping path before relying on
     // it; external CPU buffers and failed STMM unlock remain separate cases.
     // Release-only CPU capture198a776a... at46268e is a null-guarded import
