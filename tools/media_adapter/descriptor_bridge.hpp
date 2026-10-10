@@ -18,6 +18,11 @@ static_assert(sizeof(AvdDescriptor) == 0x20 && sizeof(AvdMetadata) == 0x20);
 class AvdDescriptorBridge {
 public:
     template<class Read> bool build(uintptr_t address, Read read) {
+        // Invalidate the previous publication before any fallible rebuild.
+        // adapter_.build may release its old consumers even when it fails.
+        descriptor_ = {};
+        roots_.fill(0);
+        adapter_.clear();
         AvdDescriptor source{};
         std::array<uintptr_t, 35> roots{};
         if (!read(address, &source, sizeof(source)) || source.groups != 3 ||

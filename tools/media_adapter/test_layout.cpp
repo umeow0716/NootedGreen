@@ -75,7 +75,10 @@ int main() {
     second.fill(0);
     std::array<uintptr_t, 35> roots{};
     roots.fill(reinterpret_cast<uintptr_t>(&first));
-    AvdDescriptor descriptor{3, 0, 0, 35, 0, reinterpret_cast<uintptr_t>(roots.data())};
+    // Group-list bytes remain native-owned and opaque to the layout bridge.
+    const std::array<uint64_t, 3> groups{{0x11, 0x22, 0x33}};
+    AvdDescriptor descriptor{3, 0, reinterpret_cast<uintptr_t>(groups.data()),
+                             35, 0, reinterpret_cast<uintptr_t>(roots.data())};
     auto read = [](uintptr_t address, void *out, size_t size) {
         if (!address) return false;
         std::memcpy(out, reinterpret_cast<const void *>(address), size);
@@ -83,10 +86,64 @@ int main() {
     };
     AvdDescriptorBridge bridge;
     assert(bridge.build(reinterpret_cast<uintptr_t>(&descriptor), read));
+    assert(bridge.descriptor()->groupList == descriptor.groupList);
+    assert(bridge.descriptor()->groups == descriptor.groups);
+    assert(bridge.descriptor()->count == descriptor.count);
+    assert(bridge.descriptor()->reserved == descriptor.reserved);
+    assert(bridge.descriptor()->reserved2 == descriptor.reserved2);
+    assert((groups == std::array<uint64_t, 3>{{0x11, 0x22, 0x33}}));
     auto convertedRoots = reinterpret_cast<const uintptr_t *>(bridge.descriptor()->roots);
     assert(convertedRoots[0] != roots[0]);
     assert(convertedRoots[0] == convertedRoots[34]);
     assert(first == saved);
-    // Link values are deliberately NOT considered translated here.
-    // Pointer mapping, callback ABI, ownership and loader admission remain open.
+    // Native create matches every linked node and requires simultaneous ends.
+    // Exercise a decoder -> processing -> scaler topology with shared roots.
+    TglCapabilityAdapter::Native decoder{}, processing{}, scaler{};
+    auto header = [](auto &record, uint32_t type, uint64_t usage) {
+        const uint64_t group = 1001;
+        std::memcpy(record.data(), &type, sizeof(type));
+        std::memcpy(record.data() + 8, &usage, sizeof(usage));
+        std::memcpy(record.data() + 16, &group, sizeof(group));
+    };
+    header(decoder, 1, 0x200);
+    header(processing, 0x10, 1);
+    header(scaler, 2, 0x800);
+    link = reinterpret_cast<uintptr_t>(&processing);
+    std::memcpy(decoder.data() + 0x428, &link, sizeof(link));
+    link = reinterpret_cast<uintptr_t>(&scaler);
+    std::memcpy(processing.data() + 0x428, &link, sizeof(link));
+    const auto savedDecoder = decoder, savedProcessing = processing, savedScaler = scaler;
+    roots.fill(reinterpret_cast<uintptr_t>(&decoder));
+    roots[1] = reinterpret_cast<uintptr_t>(&processing);
+    roots[2] = reinterpret_cast<uintptr_t>(&scaler);
+    assert(bridge.build(reinterpret_cast<uintptr_t>(&descriptor), read));
+    convertedRoots = reinterpret_cast<const uintptr_t *>(bridge.descriptor()->roots);
+    uintptr_t next = 0;
+    for (size_t i = 0; i < 3; ++i) {
+        const auto *converted = reinterpret_cast<const uint8_t *>(convertedRoots[i]);
+        const auto *source = reinterpret_cast<const uint8_t *>(roots[i]);
+        assert(std::memcmp(converted, source, 0x18) == 0);
+        assert(std::memcmp(converted + 0x20, source + 0x18, 0x410) == 0);
+        std::memcpy(&next, converted + 0x430, sizeof(next));
+        assert(next == (i == 2 ? 0 : convertedRoots[i + 1]));
+    }
+    assert(convertedRoots[34] == convertedRoots[0]);
+    assert(decoder == savedDecoder && processing == savedProcessing && scaler == savedScaler);
+    auto unpublished = [&] {
+        const AvdDescriptor empty{};
+        assert(std::memcmp(bridge.descriptor(), &empty, sizeof(empty)) == 0);
+    };
+    descriptor.count = 34;
+    assert(!bridge.build(reinterpret_cast<uintptr_t>(&descriptor), read));
+    unpublished();
+    descriptor.count = 35;
+    assert(bridge.build(reinterpret_cast<uintptr_t>(&descriptor), read));
+    auto denyRead = [](uintptr_t, void *, size_t) { return false; };
+    assert(!bridge.build(reinterpret_cast<uintptr_t>(&descriptor), denyRead));
+    unpublished();
+    assert(bridge.build(reinterpret_cast<uintptr_t>(&descriptor), read));
+    link = reinterpret_cast<uintptr_t>(&decoder);
+    std::memcpy(scaler.data() + 0x428, &link, sizeof(link));
+    assert(!bridge.build(reinterpret_cast<uintptr_t>(&descriptor), read));
+    unpublished();
 }
