@@ -1337,6 +1337,28 @@ inline bool tglInitializeDiIecpPacket(TglOwnedDiIecpPacket& output,
     output = candidate;
     return true;
 }
+struct TglNativeDiIecpBinding {
+    uintptr_t context = 0, entry = 0;
+    template<class Read, class Qualify, class Executable>
+    bool resolve(uintptr_t mhw, uintptr_t image, Read read, Qualify qualify,
+                 Executable executable) {
+        *this = {};
+        // Exact image's primary table and consumer, not an interchangeable
+        // ICL callback. The caller leases the borrowed MHW object throughout.
+        if (!mhw || !image || mhw > UINTPTR_MAX-7 ||
+            image > UINTPTR_MAX-0x759550 || !qualify(image)) return false;
+        uintptr_t table=0, native=0;
+        constexpr std::array<uint8_t,11> expected{
+            0x55,0x48,0x89,0xe5,0x48,0x81,0xec,0x40,0x01,0x00,0x00};
+        std::array<uint8_t,11> actual{};
+        if (!read(mhw,&table,sizeof(table)) || table != image+0x759520 ||
+            !read(table+0x28,&native,sizeof(native)) || native != image+0x172080 ||
+            !executable(native,expected.size()) ||
+            !read(native,actual.data(),actual.size()) || actual != expected) return false;
+        context=mhw; entry=native;
+        return true;
+    }
+};
 // Native builder12a14c calls MHW+28 with exactly these three arguments.
 // Binding/image authentication, backing and complete packet admission belong
 // to the caller; this invoker neither creates resources nor changes status.

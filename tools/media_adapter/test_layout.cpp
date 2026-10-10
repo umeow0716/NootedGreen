@@ -2035,6 +2035,46 @@ static void testResourceBinding() {
 // The pinned consumer sites shift 0x20/0x24/0x228/0x428 by eight bytes.
 int main() {
     {
+        constexpr uintptr_t image=0x10000000, mhw=0x20000000;
+        uintptr_t table=image+0x759520, native=image+0x172080;
+        std::array<uint8_t,11> code{
+            0x55,0x48,0x89,0xe5,0x48,0x81,0xec,0x40,0x01,0x00,0x00};
+        size_t denied=0, reads=0;
+        auto read = [&](uintptr_t address,void* out,size_t size) {
+            if (++reads == denied) return false;
+            if (address == mhw && size == 8) std::memcpy(out,&table,8);
+            else if (address == image+0x759548 && size == 8) std::memcpy(out,&native,8);
+            else if (address == image+0x172080 && size == code.size())
+                std::memcpy(out,code.data(),size);
+            else return false;
+            return true;
+        };
+        bool imageOk=true, rx=true;
+        auto qualify = [&](uintptr_t base) { return imageOk && base == image; };
+        auto executable = [&](uintptr_t address,size_t size) {
+            return rx && address == image+0x172080 && size == code.size();
+        };
+        TglNativeDiIecpBinding binding;
+        auto resolve = [&] { reads=0; return binding.resolve(mhw,image,read,qualify,executable); };
+        assert(resolve() && binding.context == mhw && binding.entry == native);
+        auto rejected = [&] {
+            assert(!resolve()); assert(binding.context == 0 && binding.entry == 0);
+        };
+        for (denied=1;denied<=3;++denied) rejected();
+        denied=0;
+        for (auto& byte : code) { byte^=1; rejected(); byte^=1; }
+        ++table; rejected(); --table;
+        ++native; rejected(); --native;
+        imageOk=false; rejected(); imageOk=true;
+        rx=false; rejected(); rx=true;
+        assert(resolve());
+        assert(!binding.resolve(UINTPTR_MAX,image,read,qualify,executable));
+        assert(binding.context == 0 && binding.entry == 0);
+        assert(!binding.resolve(mhw,UINTPTR_MAX,read,qualify,executable));
+        assert(!binding.resolve(0,image,read,qualify,executable));
+        assert(!binding.resolve(mhw,0,read,qualify,executable));
+    }
+    {
         TglOwnedDiIecpPacket packet;
         const std::array<uint8_t,0xa8> zero{};
         assert(std::memcmp(&packet,zero.data(),zero.size()) == 0);
