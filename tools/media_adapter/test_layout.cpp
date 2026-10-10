@@ -4062,6 +4062,40 @@ static void testResourceBinding() {
                     return 31;
                 })==31);
                 unsigned graphCalls=0;
+                // Same real backing graph remains pinned through all five
+                // synchronous stages. No GPU work or completion is simulated.
+                for(unsigned failure=0;failure<=5;++failure) for(unsigned gateMode=0;gateMode<3;++gateMode) {
+                    unsigned calls=0;
+                    auto step=[&](void* actual,unsigned expected) noexcept {
+                        assert(actual==&child && childLease.busy && ++calls==expected);
+                        assert(TglOwnedVeboxScopedContext<Frame>::get(actual)==&frame);
+                        transaction.reset();pair.reset();group.reset();statistics.reset();
+                        assert(api.references==3 && buffer.releases==1);
+                        assert(childLease.withPrivateChild([](void*) noexcept {return 0;})==5);
+                        return failure==expected ? 31 : 0;
+                    };
+                    const int result=transaction.withResources([&](const auto&,const auto&,const auto&,
+                        const auto&,const auto&) noexcept {
+                        return tglWithOwnedVeboxSubmittedFrame(childLease,frame,
+                            [&](void* c) noexcept {return step(c,1);},
+                            [&](void* c) noexcept {return step(c,2);},
+                            [&](void* c) noexcept {
+                                const int status=step(c,3);
+                                if(status) return status;
+                                if(gateMode==2) assert(frame.pass.record(77));
+                                if(gateMode!=1) frame.pass.gate([]() noexcept {return 0;});
+                                return 0;
+                            },
+                            [&](void* c) noexcept {return step(c,4);},
+                            [&](void* c) noexcept {return step(c,5);});
+                    });
+                    const bool early=failure && failure<=3;
+                    const int expected=early ? 31 : gateMode==1 ? 5 : gateMode==2 ? 77 : failure ? 31 : 0;
+                    assert(result==expected);
+                    assert(calls==(early ? failure : gateMode ? 3u : failure ? failure : 5u));
+                    assert(!childLease.busy && api.references==3 && buffer.releases==1);
+                    assert(!TglOwnedVeboxScopedContext<Frame>::get(&child));
+                }
                 auto graph=[&](const auto& views,const auto& a,const auto& b,
                     const auto& stats,const auto& layout) noexcept {
                     ++graphCalls;

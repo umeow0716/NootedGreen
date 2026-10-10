@@ -5406,6 +5406,34 @@ int tglWithOwnedVeboxFrameStages(Owner& owner,Context& context,
     });
 }
 
+// Enclose this in the execution/backing leases. Unlike putting submission in
+// the builder callback, this checks the completed producer latch FIRST. Keep
+// child/context publication through submission and synchronous finish. Finish
+// must report its native status, not silently discard it; zero alone does not
+// authorize resource retirement (reset/skip and hardware stamps need proof).
+// An unresolved submission still requires the enclosing owners to survive
+// this scope; this function does not invent an asynchronous fence owner.
+template<class Owner,class Context,class Prepare,class Setup,class Build,class Submit,class Finish>
+int tglWithOwnedVeboxSubmittedFrame(Owner& owner,Context& context,
+    Prepare prepare,Setup setup,Build build,Submit submit,Finish finish) noexcept {
+    static_assert(noexcept(prepare(nullptr)) && noexcept(setup(nullptr)) &&
+        noexcept(build(nullptr)) && noexcept(submit(nullptr)) && noexcept(finish(nullptr)),
+        "native frame stages report status without throwing");
+    return owner.withPrivateChild([&](void* child) noexcept {
+        TglOwnedVeboxScopedContext<Context> scope(child,context);
+        if(!scope.bound()) return 5;
+        const int built=context.pass.withBuilder([&]() noexcept {
+            const int prepared=prepare(child);
+            if(prepared) return prepared;
+            const int configured=setup(child);
+            return configured ? configured : build(child);
+        });
+        if(built) return built;
+        const int submitted=submit(child);
+        return submitted ? submitted : finish(child);
+    });
+}
+
 // Pin native execution outside child/context stages, so native preparation,
 // DNDI publication and subsequent command construction share its lifetime.
 // This is CPU lifetime serialization, not asynchronous fence ownership.
