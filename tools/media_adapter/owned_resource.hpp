@@ -5527,6 +5527,60 @@ bool tglPrepareOwnedVpCompression(std::array<uint8_t,0xb8>& packet,
     packet=candidate;return true;
 }
 
+// Complete owned +d0 CPU entry. All inputs are identity-bound to an enclosing
+// VP/output/packet lease; raw native arguments cannot select arbitrary memory.
+template<class Surface,class Read,class Invoke=TglNativeVpCompressionInvoker,size_t PacketBytes=0xb8>
+class TglOwnedVpCompressionContext {
+    static_assert(PacketBytes>=0xb8,"compression producer requires complete native prefix");
+    TglOwnedVpSfcCallerStorage& vp_;
+    const Surface& output_;
+    std::array<uint8_t,PacketBytes>& packet_;
+    uintptr_t settings_;
+    const TglNativeVpCompressionBinding& binding_;
+    Read read_;
+    Invoke invoke_;
+    bool busy_=false;
+public:
+    TglOwnedVpCompressionContext(TglOwnedVpSfcCallerStorage& vp,const Surface& output,
+        std::array<uint8_t,PacketBytes>& packet,uintptr_t settings,
+        const TglNativeVpCompressionBinding& binding,Read read,Invoke invoke=Invoke{}) noexcept
+        :vp_(vp),output_(output),packet_(packet),settings_(settings),binding_(binding),
+         read_(read),invoke_(invoke){}
+    TglOwnedVpCompressionContext(const TglOwnedVpCompressionContext&)=delete;
+    TglOwnedVpCompressionContext& operator=(const TglOwnedVpCompressionContext&)=delete;
+    bool owns(void* child) const noexcept {return child==vp_.bytes.data();}
+    int compression(void* settings,void* target,void* packet) noexcept {
+        if(busy_ || !settings_ || reinterpret_cast<uintptr_t>(settings)!=settings_ ||
+           target!=tglOwnedSfcSurfaceBytes(output_) || packet!=packet_.data()) return 5;
+        busy_=true;
+        struct Unlock {bool& busy;~Unlock(){busy=false;}} unlock{busy_};
+        TglOwnedVpCompressionInput input;
+        if(!tglReadOwnedVpCompression(settings_,reinterpret_cast<uintptr_t>(target),read_,input)) return 5;
+        float scaleX=0,scaleY=0;
+        std::memcpy(&scaleX,vp_.bytes.data()+0x928,4);
+        std::memcpy(&scaleY,vp_.bytes.data()+0x92c,4);
+        std::array<uint8_t,0xb8> candidate{};
+        std::memcpy(candidate.data(),packet_.data(),candidate.size());bool invokeOs=false;
+        if(!tglPrepareOwnedSfcCompression(candidate,input.format,input.executionMode,
+            input.mmcEnabled,input.surfaceEnabled,input.surfaceMode,scaleY,scaleX,invokeOs)) return 5;
+        if(invokeOs) {
+            const int status=binding_.withOutput(output_,[&](auto apply) noexcept {
+                uint32_t mode=0;std::memcpy(&mode,candidate.data()+0x8c,4);apply(mode);return 0;
+            },invoke_);
+            if(status) return status;
+        }
+        // Preserve the TGL f8 tail: the donor producer owns only the b8 prefix.
+        std::memcpy(packet_.data(),candidate.data(),candidate.size());return 0;
+    }
+};
+template<class Resolve> struct TglOwnedVpCompressionCallback {
+    static int compression(void* child,void* settings,void* target,void* packet) noexcept {
+        static_assert(noexcept(Resolve{}(child)),"VP compression scoped resolver ABI");
+        auto* context=Resolve{}(child);
+        return context && context->owns(child) ? context->compression(settings,target,packet) : 5;
+    }
+};
+
 struct TglOwnedSfcGeometryInput {
     uint32_t inputFormat=0,outputFormat=0,inputFrameMode=0,rotation=0;
     uint32_t inputHeight=0,inputWidth=0,outputHeight=0,outputWidth=0;

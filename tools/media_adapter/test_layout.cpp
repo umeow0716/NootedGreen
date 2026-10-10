@@ -6292,6 +6292,52 @@ int main() {
         assert(!binding.resolve(os,UINTPTR_MAX,read,qualify,executable));
         assert(binding.resolve(os,image,read,qualify,executable));
         assert(binding.withOutput(surface,use,invoke)==31 && calls==2);
+        TglOwnedVpSfcCallerStorage vp;
+        const float scale=0.25f;
+        std::memcpy(vp.bytes.data()+0x928,&scale,4);std::memcpy(vp.bytes.data()+0x92c,&scale,4);
+        std::array<uint8_t,0xd30> settings{};
+        std::array<uint8_t,0xf8> packet{};packet[0xf7]=0x5a;
+        uint32_t format=0x19,mode=7,tile=1;
+        std::memcpy(surface.prefix.data()+0x130,&format,4);
+        std::memcpy(surface.prefix.data()+0xe4,&tile,4);surface.tail[9]=1;
+        std::memcpy(settings.data()+0xd28,&mode,4);settings[0xd2c]=1;
+        const auto settingsAddress=reinterpret_cast<uintptr_t>(settings.data());
+        const auto targetAddress=reinterpret_cast<uintptr_t>(&surface);
+        bool denyRead=false;
+        auto inputRead=[&](uintptr_t address,void* destination,size_t size) noexcept {
+            if(denyRead) return false;
+            for(auto region:std::array<std::pair<uintptr_t,size_t>,2>{{
+                {settingsAddress,settings.size()},{targetAddress,sizeof(surface)}}})
+                if(address>=region.first && address-region.first<=region.second &&
+                   size<=region.second-(address-region.first)) {
+                    std::memcpy(destination,reinterpret_cast<const void*>(address),size);return true;
+                }
+            return false;
+        };
+        using Context=TglOwnedVpCompressionContext<TglOwnedSurfaceStorage,decltype(inputRead),decltype(invoke),0xf8>;
+        Context context(vp,surface,packet,settingsAddress,binding,inputRead,invoke);
+        using Callback=TglOwnedVpCompressionCallback<TglOwnedVpSfcResolve<Context>>;
+        static_assert(std::is_same_v<decltype(&Callback::compression),int(*)(void*,void*,void*,void*) noexcept>);
+        assert(Callback::compression(vp.bytes.data(),settings.data(),&surface,packet.data())==5);
+        {
+            TglOwnedVpSfcScopedContext<Context> scope(vp.bytes.data(),context);assert(scope.bound());
+            assert(Callback::compression(vp.bytes.data(),settings.data(),&surface,packet.data())==0);
+            assert(calls==3 && packet[0x8b]==1 && packet[0x8c]==2 && packet[0xf7]==0x5a);
+            const auto saved=packet;
+            assert(Callback::compression(&surface,settings.data(),&surface,packet.data())==5);
+            assert(Callback::compression(vp.bytes.data(),nullptr,&surface,packet.data())==5);
+            assert(Callback::compression(vp.bytes.data(),settings.data(),settings.data(),packet.data())==5);
+            assert(Callback::compression(vp.bytes.data(),settings.data(),&surface,settings.data())==5);
+            denyRead=true;
+            assert(Callback::compression(vp.bytes.data(),settings.data(),&surface,packet.data())==5);
+            denyRead=false;
+            assert(calls==3 && packet==saved);
+            // Native format gate skips OS/backing requirements and leaves output unchanged.
+            format=0x50;std::memcpy(surface.prefix.data()+0x130,&format,4);
+            assert(!binding.resolve(0,image,read,qualify,executable));
+            assert(Callback::compression(vp.bytes.data(),settings.data(),&surface,packet.data())==0);
+            assert(calls==3 && packet==saved);
+        }
     }
     {
         TglOwnedVpCompressionInput input{0x19,7,1,1,1};
