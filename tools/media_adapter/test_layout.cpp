@@ -20,6 +20,29 @@ struct TestVeboxChildLease {
 
 static void testTrackedCpuOwner() {
     {
+        struct Allocation {
+            unsigned calls=0;int result=31;
+            int allocate() noexcept {++calls;return result;}
+        } context;
+        int child=0,foreign=0;
+        using Resolve=TglOwnedVeboxScopedContext<Allocation>;
+        using Callback=TglOwnedVeboxAllocationCallbacks<Resolve>;
+        std::array<uintptr_t,20> hooks{};hooks.fill(7);
+        const auto bound=tglBindOwnedVeboxAllocationHook<Resolve>(hooks);
+        for(size_t i=0;i<hooks.size();++i)
+            assert(bound[i]==(i==3?reinterpret_cast<uintptr_t>(&Callback::allocate):hooks[i]));
+        using NativeAllocate=int(*)(void*);
+        auto allocate=reinterpret_cast<NativeAllocate>(bound[3]);
+        assert(allocate(&child)==5 && !context.calls);
+        {Resolve scope(&child,context);assert(scope.bound());
+            assert(allocate(&foreign)==5 && !context.calls);
+            assert(allocate(&child)==31 && context.calls==1);
+            context.result=0;
+            assert(allocate(&child)==0 && context.calls==2);
+        }
+        assert(allocate(&child)==5 && context.calls==2);
+    }
+    {
         struct Frame {TglOwnedVeboxProducerPass pass;} frame;
         struct Child {
             bool leased=true;unsigned writes=0;TglCscCoefficients saved;

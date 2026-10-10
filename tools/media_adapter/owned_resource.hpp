@@ -4196,6 +4196,26 @@ struct TglOwnedVeboxContextDomain {};
 template<class Context> using TglOwnedVeboxScopedContext=
     TglOwnedScopedContext<Context,TglOwnedVeboxContextDomain>;
 
+// TGL mode0 12c1cd calls +58 with only child in RDI and consumes EAX.
+// Allocation precedes builder admission: do not gate it on producer-pass state.
+// Context owns the complete allocation transaction and must unwind failures
+// itself; this native caller returns errors without invoking FreeResources.
+template<class Resolve> struct TglOwnedVeboxAllocationCallbacks {
+    static int allocate(void* child) noexcept {
+        auto* context=Resolve::get(child);
+        if(!context) return 5;
+        static_assert(noexcept(context->allocate()),"allocation reports native status");
+        return context->allocate();
+    }
+};
+template<class Resolve>
+std::array<uintptr_t,20> tglBindOwnedVeboxAllocationHook(
+    std::array<uintptr_t,20> hooks) noexcept {
+    static_assert(TglOwnedVeboxVtable::required[3]==0x58,"exact TGL allocation slot");
+    hooks[3]=reinterpret_cast<uintptr_t>(&TglOwnedVeboxAllocationCallbacks<Resolve>::allocate);
+    return hooks;
+}
+
 // One entry point for an authenticated synchronous native builder invocation.
 // Owner pins child/table/SFC; scope resolves callbacks only on this thread;
 // pass retains ignored producer failures through the checked DI gate.
