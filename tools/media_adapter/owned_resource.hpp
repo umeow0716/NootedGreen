@@ -147,6 +147,23 @@ public:
 struct TglVeboxHardwareBinding {
     uintptr_t interface = 0, os = 0, heap = 0;
     struct StateResource { uintptr_t resource = 0; uint32_t instanceOffset = 0; };
+    // Keep the same external serialization/image lease across all stages.
+    // Publication is atomic, not native-state rollback: assignment may advance
+    // the heap even if the subsequent owned range validation fails.
+    template<class Read, class Qualify, class Executable, class Invoke>
+    uint32_t prepareHeapState(uintptr_t image, bool kernelResource,
+                              uint32_t bytes, uint32_t regionOffset,
+                              Read read, Qualify qualify, Executable executable,
+                              Invoke invoke, StateResource& out) const {
+        out = {};
+        const uint32_t result = assignState(image, read, qualify, executable, invoke);
+        if (result) return result;
+        StateResource candidate;
+        if (!selectStateResource(false, 0, kernelResource, read, candidate) ||
+            !heapStateRange(candidate, bytes, read, regionOffset)) return 5;
+        out = candidate;
+        return 0;
+    }
     // Reuse native refresh/wait/assignment, including OS reset policy and tag
     // wraparound. Caller serializes the borrowed interface and keeps its image
     // lease alive. Do not select a state or emit commands after nonzero result.

@@ -146,6 +146,35 @@ static void testVeboxHardwareBinding() {
     assert(!b.heapStateRange(state, 4096, resourceRead));
     state = {0x9000, 0}; // external CM surface is explicitly not this ABI
     assert(!b.heapStateRange(state, 4096, resourceRead));
+    auto composedRead = [&](uintptr_t p, void* out, size_t n) {
+        if (readHeap(p, out, n)) return true;
+        for (uintptr_t offset : {uintptr_t(0x40), uintptr_t(0x188)}) {
+            const uintptr_t resource = heap + offset;
+            if (n == 4 && (p == resource + 0x10 || p == resource + 0x14)) {
+                std::memcpy(out, p == resource + 0x10 ? &capacity : &type, n); return true;
+            }
+            if (n == 8 && (p == resource + 0x20 || p == resource + 0x50)) {
+                std::memcpy(out, p == resource + 0x20 ? &handle : &address, n); return true;
+            }
+        }
+        return assignRead(p, out, n);
+    };
+    auto assign = [&](uintptr_t entry, uintptr_t object) {
+        current = 1; // simulate native publishing a new current instance
+        return invoke(entry, object);
+    };
+    nativeResult = 0; current = 3;
+    assert(b.prepareHeapState(image, false, 0x800, 0x800, composedRead,
+        qualify, executable, assign, state) == 0);
+    assert(state.resource == heap + 0x40 && state.instanceOffset == 4096);
+    nativeResult = 31;
+    assert(b.prepareHeapState(image, true, 0x800, 0, composedRead,
+        qualify, executable, assign, state) == 31);
+    assert(!state.resource && !state.instanceOffset);
+    nativeResult = 0; capacity = 4096;
+    assert(b.prepareHeapState(image, false, 0x800, 0, composedRead,
+        qualify, executable, assign, state) == 5);
+    assert(!state.resource && !state.instanceOffset);
 }
 
 static void testExecutionBinding() {
