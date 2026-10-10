@@ -6,6 +6,23 @@
 #include "descriptor_bridge.hpp"
 #include "owned_resource.hpp"
 
+static void testVeboxReport() {
+    std::array<uint8_t, 0x26> state{}, report{}, expected{};
+    for (size_t i = 0; i < state.size(); ++i) state[i] = uint8_t(0x80 + i);
+    report.fill(0xa5); expected = report;
+    for (auto i : {0, 2, 0x13, 0x15, 0x17, 0x19, 0x24, 0x25}) expected[i] = state[i] & 1;
+    for (auto i : {4, 5, 6, 7, 0xc, 0xd, 0xe, 0xf, 0x14, 0x16, 0x18, 0x1a})
+        expected[i] = state[i];
+    expected[0x10] = 1;
+    tglExportVeboxReport(state, 0xff, report);
+    assert(report == expected);
+    auto alias = state;
+    expected = state;
+    tglExportVeboxReport(state, 2, expected);
+    tglExportVeboxReport(alias, 2, alias);
+    assert(alias == expected && alias[0x10] == 0);
+}
+
 static void testVeboxPrefix() {
     TglVeboxPrefix prefix;
     prefix.vtable = 7; prefix.os = 9; prefix.slot40 = 11;
@@ -531,6 +548,7 @@ static void testResourceBinding() {
 // Offline layout hypothesis only: not an ABI-complete or deployable adapter.
 // The pinned consumer sites shift 0x20/0x24/0x228/0x428 by eight bytes.
 int main() {
+    testVeboxReport();
     testVeboxPrefix();
     testComposedStatisticsBuffer();
     testBufferFill();

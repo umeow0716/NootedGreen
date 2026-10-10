@@ -48,6 +48,21 @@ static_assert(offsetof(TglVeboxPrefix, flag49) == 0x49);
 static_assert(offsetof(TglVeboxPrefix, parentData) == 0x50);
 static_assert(offsetof(TglVeboxPrefix, sourceValue) == 0x58);
 
+// Exact post-render export12d240 ->12d120/12d1a0. Source is the
+// owned equivalent of child40, not the child object itself. Preserve every
+// destination byte not written by native; source/destination may alias.
+inline void tglExportVeboxReport(const std::array<uint8_t, 0x26>& state,
+                                 uint8_t feature1ba9,
+                                 std::array<uint8_t, 0x26>& report) noexcept {
+    const auto source = state;
+    for (auto offset : {0x00, 0x02, 0x13, 0x15, 0x17, 0x19, 0x24, 0x25})
+        report[offset] = source[offset] & 1;
+    for (auto offset : {0x14, 0x16, 0x18, 0x1a}) report[offset] = source[offset];
+    std::memcpy(report.data() + 4, source.data() + 4, 4);
+    std::memcpy(report.data() + 0xc, source.data() + 0xc, 4);
+    report[0x10] = feature1ba9 & 1;
+}
+
 // Owned lifecycle only. A Darwin backend must separately prove allocation,
 // backing inspection and release ABI; this class never fabricates backing.
 // Native evidence: 4e060 reuse/reallocation; 63720 failure -> 63c00 cleanup.
