@@ -1943,7 +1943,7 @@ TglOwnedBaseConstruction tglConstructOwnedVeboxBaseWithSfc(
 // shells. Storage release is last and must not call native operator delete.
 template<class Cleanup, class Destroy, class Release> class TglVeboxTeardownScope {
     void* object_;
-    bool constructing_=false;
+    bool constructing_=false,tearingDown_=false;
     Cleanup& cleanup_;
     Destroy& destroy_;
     Release& release_;
@@ -1965,7 +1965,7 @@ public:
     template<class Construct>
     TglOwnedBaseConstruction constructPrivate(void* storage,Construct construct) noexcept {
         static_assert(noexcept(construct()),"native construction reports status without throwing");
-        if(!storage || object_ || constructing_) return TglOwnedBaseConstruction::NotCalled;
+        if(!storage || object_ || constructing_ || tearingDown_) return TglOwnedBaseConstruction::NotCalled;
         constructing_=true;
         const auto result=construct();
         constructing_=false;
@@ -1975,12 +1975,17 @@ public:
         return result;
     }
     void reset() noexcept {
+        if(constructing_ || tearingDown_) return;
         void* object = object_;
         object_ = nullptr; // revoke before callbacks, including reentrant reset
         if (!object) return;
+        // Cleanup callbacks may reenter. Do not admit a new construction while
+        // the old native base or its CPU shell storage is being destroyed.
+        tearingDown_=true;
         cleanup_(object);
         destroy_(object);
         release_(object);
+        tearingDown_=false;
     }
 };
 

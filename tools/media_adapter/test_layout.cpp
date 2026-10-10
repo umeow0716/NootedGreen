@@ -2280,6 +2280,36 @@ static void testVeboxPrefix() {
         assert(resolve());
     }
     {
+        int storage=0;unsigned calls=0,constructors=0;
+        void* active=nullptr;void(*reenter)(void*)=nullptr;
+        auto callback=[&](void* p) noexcept {
+            assert(p==&storage);++calls;
+            if(reenter) reenter(active);
+        };
+        using Scope=TglVeboxTeardownScope<decltype(callback),decltype(callback),decltype(callback)>;
+        Scope scope(&storage,callback,callback,callback);active=&scope;
+        // Each teardown stage rejects construction, even after object_ has
+        // been revoked. Reset reentry also cannot recursively destroy it.
+        unsigned* count=&constructors;
+        auto attempt=[&]() noexcept {
+            scope.reset();
+            return scope.constructPrivate(&storage,[&]() noexcept {
+                ++*count;return TglOwnedBaseConstruction::ConstructedSuccess;
+            });
+        };
+        void* attemptPointer=&attempt;
+        using Attempt=decltype(attempt);
+        active=attemptPointer;
+        reenter=[](void* p) {
+            assert((*static_cast<Attempt*>(p))()==TglOwnedBaseConstruction::NotCalled);
+        };
+        scope.reset();
+        assert(calls==3 && !constructors);
+        reenter=nullptr;
+        assert(attempt()==TglOwnedBaseConstruction::ConstructedSuccess && constructors==1);
+        scope.reset();assert(calls==6);
+    }
+    {
         unsigned stage = 0;
         int ownedStorage = 0;
         auto cleanup = [&](void* p) noexcept {
