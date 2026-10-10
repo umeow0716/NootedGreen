@@ -5869,6 +5869,7 @@ template<class Backend,class Api,class Quarantine> class TglOwnedStmmResource {
     TglOwnedResource<Backend> resource_;
     Api& api_;
     Quarantine& quarantine_;
+    TglOwnedStmmInitialization initialization_{};
     bool ready_=false,busy_=false;
 public:
     using Storage=typename TglOwnedResource<Backend>::Storage;
@@ -5891,10 +5892,11 @@ public:
         if(!status && result.state!=State::Backed) status=5;
         if(!status && (result.changed || !ready_ || reinitializeHistory))
             status=resource_.withStorage([&](const Storage& storage) noexcept {
-                return tglInitializeRetainedOwnedStmmResource(storage,api_,quarantine_).status();
+                initialization_=tglInitializeRetainedOwnedStmmResource(storage,api_,quarantine_);
+                return initialization_.status();
             });
         ready_=status==0;
-        if(status) resource_.reset();
+        if(status) {initialization_={};resource_.reset();}
         busy_=false;return status;
     }
     template<class Invoke> int withStorage(Invoke invoke) noexcept {
@@ -5903,9 +5905,17 @@ public:
         const int status=resource_.withStorage(invoke);
         busy_=false;return status;
     }
+    // Revalidate backing and pin this owner while publishing numeric metadata.
+    // No unlocked mapping pointer or ownership-bearing resource copy escapes.
+    template<class Invoke> int withInitializedStorage(Invoke invoke) noexcept {
+        return withStorage([&](const Storage& storage) noexcept {
+            return invoke(storage,initialization_.width,initialization_.height,
+                          initialization_.pitch);
+        });
+    }
     void reset() noexcept {
         if(busy_) return;
-        busy_=true;ready_=false;resource_.reset();busy_=false;
+        busy_=true;ready_=false;initialization_={};resource_.reset();busy_=false;
     }
 };
 struct TglResourceStorageReference { std::array<uint8_t,0x148>& storage; };

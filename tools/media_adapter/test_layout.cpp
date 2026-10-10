@@ -3945,11 +3945,25 @@ static void testResourceBinding() {
                         return 0;
                     });
                     assert(invoked==!expected && borrowed==(expected ? 5 : 0));
+                    bool metadataInvoked=false;
+                    const int metadataStatus=owner.withInitializedStorage(
+                        [&](const auto&,uint32_t width,uint32_t height,uint32_t pitch) noexcept {
+                            metadataInvoked=true;
+                            assert(width==8 && height==3 && pitch==16);
+                            owner.reset();assert(!native.releases);
+                            return 31;
+                        });
+                    assert(metadataInvoked==!expected && metadataStatus==(expected?5:31));
                     if(!expected) {
                         mapped[0]=0x23;
                         assert(!owner.ensure(stmmKey) && api.locks==1 && mapped[0]==0x23);
                         assert(!owner.ensure(stmmKey,true) && api.locks==2 && mapped[0]==0xff);
                         assert(native.allocations==1 && !native.releases);
+                        owner.reset();
+                        assert(owner.withInitializedStorage(
+                            [&](const auto&,uint32_t,uint32_t,uint32_t) noexcept {
+                                assert(false);return 0;
+                            })==5);
                     }
                 }
                 assert(native.allocations==1 && native.releases==1);
