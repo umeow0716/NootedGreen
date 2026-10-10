@@ -4872,6 +4872,33 @@ static void testSfcAvsOwnership() {
         const auto savedHeader=*owner.parameters();
         const auto savedCache=tables;
         auto never=[](const auto&) noexcept {assert(false);return 0;};
+        const auto savedY=commands.y.coefficients;
+        const auto savedUv=commands.uv.coefficients;
+        commands.filtersInUse=true;
+        auto neverSine=[](float) noexcept {assert(false);return 0.f;};
+        assert(tglWithOwnedSfcAvsCommands(commands,owner,tables,0x19,.25f,.25f,
+            0x11,false,true,0.f,0.f,neverSine,never)==5);
+        assert(commands.filtersInUse && commands.y.coefficients==savedY &&
+            commands.uv.coefficients==savedUv);
+        assert(real.bytes==savedBytes && *owner.parameters()==savedHeader);
+        assert(tables.yX==savedCache.yX && tables.uvY==savedCache.uvY &&
+            tables.format==savedCache.format && tables.scaleX==savedCache.scaleX);
+        commands.filtersInUse=false;
+        TglOwnedSfcIefInput disabledIef;
+        TglOwnedIefTables iefTables{};
+        TglOwnedVpCscCache cscCache;
+        auto noRead=[](uintptr_t,void*,size_t) noexcept {assert(false);return false;};
+        auto noCsc=[](TglCscCoefficients&,uint32_t,uint32_t) noexcept {assert(false);return false;};
+        assert(tglWithOwnedSfcFilterCommands(commands,disabledIef,iefTables,cscCache,
+            false,0,0,0,noRead,noCsc,[&](auto& packet) noexcept {
+                assert(packet.filtersInUse);
+                assert(tglWithOwnedSfcAvsCommands(packet,owner,tables,0x19,.25f,.25f,
+                    0x11,false,true,0.f,0.f,neverSine,never)==5);
+                assert(packet.y.coefficients==savedY && packet.uv.coefficients==savedUv);
+                return -37;
+            })==-37);
+        assert(!commands.filtersInUse && real.bytes==savedBytes &&
+            *owner.parameters()==savedHeader && tables.scaleX==savedCache.scaleX);
         assert(tglWithOwnedSfcAvsTables(owner,tables,0x19,0.f,.75f,0x11,
             false,true,0.f,0.f,sine,never)==5);
         assert(real.bytes==savedBytes && *owner.parameters()==savedHeader);

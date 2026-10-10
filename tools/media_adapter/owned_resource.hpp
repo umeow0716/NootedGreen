@@ -6220,6 +6220,9 @@ inline int tglWithOwnedSfcAvsCommands(TglOwnedSfcCommandParameters& parameters,
     uint32_t siting,bool forceFilter,bool symmetric,float sharpening,float window,
     NativeSin&& sine,Generate&& generate) noexcept {
     static_assert(noexcept(generate(parameters)),"AVS command generation status ABI");
+    // The IEF/CSC consumer owns the entire command-input snapshot. Reject
+    // reentrant AVS preparation before changing its cache or CPU backing.
+    if(parameters.filtersInUse) return 5;
     return tglWithOwnedSfcAvsTables(owner,cache,format,scaleX,scaleY,siting,
         forceFilter,symmetric,sharpening,window,sine,
         [&](const TglOwnedSfcAvsTables& ready) noexcept {
