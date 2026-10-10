@@ -43,6 +43,50 @@ inline bool tglBufferSizeFits(uint32_t bytes, uint64_t pageSize) noexcept {
     return rounded != 0 && rounded <= UINT32_MAX;
 }
 
+// Exact 52bf0 surface-to-command descriptor conversion. The +40 pointer
+// borrows shell storage, so shell must outlive every consumer of the result.
+// This converts existing state; it does not create backing or validate formats.
+inline std::array<uint8_t, 0x48> tglSurfaceDescriptor(
+        const std::array<uint8_t, 0x2a8> &shell) noexcept {
+    std::array<uint8_t, 0x48> out{};
+    const auto get = [&](size_t offset) {
+        uint32_t value = 0;
+        std::memcpy(&value, shell.data() + offset, sizeof(value));
+        return value;
+    };
+    const auto put = [&](size_t offset, uint32_t value) {
+        std::memcpy(out.data() + offset, &value, sizeof(value));
+    };
+    put(0, 1);
+    put(8, get(0x130)); put(0xc, get(0xd8)); put(0x10, get(0xdc));
+    put(0x14, get(0xe0)); put(0x18, get(0x13c)); put(0x28, get(0xe4));
+    std::memcpy(out.data() + 0x2c, shell.data() + 0x50, 16);
+    static_assert(sizeof(uintptr_t) == 8, "pinned x86_64 ABI");
+    const uintptr_t resource = reinterpret_cast<uintptr_t>(shell.data() + 0x148);
+    std::memcpy(out.data() + 0x40, &resource, sizeof(resource));
+    out[4] = shell[0x29a] & 1;
+    const uint32_t pitch = get(0xe0);
+    if (pitch) put(0x24, (get(0x100) - get(0xf0)) / pitch + get(0x108));
+    return out;
+}
+
+// 52d60: five optional borrowed shells, no allocation or ownership transfer.
+inline std::array<uint8_t, 0x170> tglSurfaceCommandSet(
+        const std::array<const std::array<uint8_t, 0x2a8> *, 5> &surfaces,
+        uint8_t di) noexcept {
+    std::array<uint8_t, 0x170> out{};
+    out[0x168] = di & 1;
+    for (size_t i = 0; i < surfaces.size(); ++i) {
+        if (!surfaces[i]) continue;
+        const auto descriptor = tglSurfaceDescriptor(*surfaces[i]);
+        std::memcpy(out.data() + i * 0x48, descriptor.data(), descriptor.size());
+        if (i < 2) std::memcpy(out.data() + i * 0x48 + 0x20,
+                               surfaces[i]->data() + 0xf8, 4);
+    }
+    out[0x169] = surfaces[1] ? 1 : 0;
+    return out;
+}
+
 struct TglNativeResourceBinding {
     uintptr_t context = 0, allocate = 0, release = 0;
     // 132ec0..132ed6: renderer stores RenderHal at +2cc0 and borrows

@@ -6,6 +6,49 @@
 #include "descriptor_bridge.hpp"
 #include "owned_resource.hpp"
 
+static void testSurfaceDescriptor() {
+    std::array<uint8_t, 0x2a8> shell{};
+    const auto put = [&](size_t offset, uint32_t value) {
+        std::memcpy(shell.data() + offset, &value, sizeof(value));
+    };
+    put(0x130, 0x19); put(0xd8, 1920); put(0xdc, 1080);
+    put(0xe0, 2048); put(0x13c, 7); put(0xe4, 2);
+    put(0xf0, 4096); put(0x100, 10240); put(0x108, 11);
+    for (size_t i = 0; i < 16; ++i) shell[0x50 + i] = static_cast<uint8_t>(i + 1);
+    shell[0x29a] = 0xfe;
+    std::array<uint8_t, 0x48> expected{};
+    const auto expect = [&](size_t offset, uint32_t value) {
+        std::memcpy(expected.data() + offset, &value, sizeof(value));
+    };
+    expect(0, 1); expect(8, 0x19); expect(0xc, 1920); expect(0x10, 1080);
+    expect(0x14, 2048); expect(0x18, 7); expect(0x24, 14); expect(0x28, 2);
+    std::memcpy(expected.data() + 0x2c, shell.data() + 0x50, 16);
+    const uintptr_t resource = reinterpret_cast<uintptr_t>(shell.data() + 0x148);
+    std::memcpy(expected.data() + 0x40, &resource, sizeof(resource));
+    assert(tglSurfaceDescriptor(shell) == expected);
+    // All optional-slot combinations; only slots 0/1 copy +f8 metadata.
+    put(0xf8, 0x12345678);
+    for (unsigned mask = 0; mask < 32; ++mask) {
+        std::array<const std::array<uint8_t, 0x2a8> *, 5> slots{};
+        std::array<uint8_t, 0x170> command{};
+        for (size_t i = 0; i < slots.size(); ++i) if (mask & (1u << i)) {
+            slots[i] = &shell;
+            std::memcpy(command.data() + i * 0x48, expected.data(), expected.size());
+            if (i < 2) std::memcpy(command.data() + i * 0x48 + 0x20,
+                                   shell.data() + 0xf8, 4);
+        }
+        command[0x168] = 1;
+        command[0x169] = (mask & 2) ? 1 : 0;
+        assert(tglSurfaceCommandSet(slots, 0xff) == command);
+    }
+    shell[0x29a] = 0xff; expected[4] = 1;
+    put(0xe0, 0); expect(0x14, 0); expect(0x24, 0);
+    assert(tglSurfaceDescriptor(shell) == expected); // zero pitch never divides
+    put(0xe0, 1); put(0xf0, 1); put(0x100, 0); put(0x108, 2);
+    expect(0x14, 1); expect(0x24, 1); // native unsigned subtraction/addition wrap
+    assert(tglSurfaceDescriptor(shell) == expected);
+}
+
 static void testOwnedResourceLifecycle() {
     struct Backend {
         int allocations = 0, releases = 0, status = 0;
@@ -247,6 +290,7 @@ static void testResourceBinding() {
 // Offline layout hypothesis only: not an ABI-complete or deployable adapter.
 // The pinned consumer sites shift 0x20/0x24/0x228/0x428 by eight bytes.
 int main() {
+    testSurfaceDescriptor();
     testOwnedResourceLifecycle();
     testNativeResourceBoundary();
     testResourceBinding();
