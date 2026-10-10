@@ -2035,6 +2035,33 @@ static void testResourceBinding() {
 // The pinned consumer sites shift 0x20/0x24/0x228/0x428 by eight bytes.
 int main() {
     {
+        TglOwnedSurfaceStorage surface;
+        surface.tail[0xa]=0xff;
+        uint32_t mode=4;
+        std::memcpy(surface.tail.data()+0xc,&mode,4);
+        auto params=tglSurfaceControlParams(surface);
+        assert(params.compressed == 1 && params.mode == 4);
+        assert((params.padding == std::array<uint8_t,3>{}));
+        struct Context { int calls=0; uint32_t* expected; };
+        uint32_t value=0x1000;
+        Context context{0,&value};
+        auto control = +[](void* raw,const TglSurfaceControlParams* p,uint32_t* out)->int {
+            auto& c=*static_cast<Context*>(raw);
+            ++c.calls;
+            assert(p->compressed == 1 && p->mode == 4 && out == c.expected);
+            *out|=0x180;
+            return 31;
+        };
+        assert(TglNativeSurfaceControlInvoker{}(reinterpret_cast<uintptr_t>(control),
+            reinterpret_cast<uintptr_t>(&context),surface,value) == 31);
+        assert(context.calls == 1 && value == 0x1180);
+        surface.tail[0xa]=0xfe;
+        mode=0xffffffff;
+        std::memcpy(surface.tail.data()+0xc,&mode,4);
+        params=tglSurfaceControlParams(surface);
+        assert(params.compressed == 0 && params.mode == 0xffffffff);
+    }
+    {
         std::array<TglOwnedSurfaceStorage,12> storage{};
         TglDiIecpInputs input;
         input.boundaryWidth=1920; input.di=true; input.referenceValid=true; input.dnNeeded=true;

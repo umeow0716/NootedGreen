@@ -1303,6 +1303,31 @@ struct alignas(8) TglOwnedSurfaceStorage {
 static_assert(offsetof(TglOwnedSurfaceStorage,resource) == 0x148);
 static_assert(offsetof(TglOwnedSurfaceStorage,tail) == 0x290);
 static_assert(sizeof(TglOwnedSurfaceStorage) == 0x2a8);
+// Exact Darwin caller1f9111/26 packs compressed bit0 and mode DWORD into
+// an eight-byte parameter. TGL179530 consumes mode+4 and calls native OS1a0;
+// do not replace the whole callback with a superficially equivalent bit OR.
+struct TglSurfaceControlParams {
+    uint8_t compressed = 0;
+    std::array<uint8_t,3> padding{};
+    uint32_t mode = 0;
+};
+static_assert(offsetof(TglSurfaceControlParams,mode) == 4);
+static_assert(sizeof(TglSurfaceControlParams) == 8);
+inline TglSurfaceControlParams tglSurfaceControlParams(
+        const TglOwnedSurfaceStorage& surface) noexcept {
+    TglSurfaceControlParams params;
+    params.compressed=surface.tail[0xa]&1;
+    std::memcpy(&params.mode,surface.tail.data()+0xc,4);
+    return params;
+}
+struct TglNativeSurfaceControlInvoker {
+    int operator()(uintptr_t entry, uintptr_t mhw,
+            const TglOwnedSurfaceStorage& surface, uint32_t& value) const noexcept {
+        using Control = int (*)(void*,const TglSurfaceControlParams*,uint32_t*);
+        const auto params=tglSurfaceControlParams(surface);
+        return reinterpret_cast<Control>(entry)(reinterpret_cast<void*>(mhw),&params,&value);
+    }
+};
 // Hook78's borrowed surface inputs, not hook70's a8-byte DI/IECP state.
 // Native52d60 consumes five pointers and flag28; builder's stack reserves30.
 struct TglOwnedSurfaceInputs {
