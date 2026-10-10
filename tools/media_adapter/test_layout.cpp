@@ -6,6 +6,32 @@
 #include "descriptor_bridge.hpp"
 #include "owned_resource.hpp"
 
+static void testVeboxHardwareBinding() {
+    constexpr uintptr_t image = 0x1000000, mhw = 0x2000, os = 0x3000;
+    uintptr_t vt = image + 0x759520, actualOs = os, heap = 0x4000;
+    bool identity = true, readable = true;
+    auto read = [&](uintptr_t p, void* out, size_t n) {
+        const auto value = p == mhw ? &vt : p == mhw + 0x18 ? &actualOs :
+                           p == mhw + 0x20 ? &heap : nullptr;
+        if (!readable || !value || n != 8) return false;
+        std::memcpy(out, value, n); return true;
+    };
+    auto qualify = [&](uintptr_t p) { return identity && p == image; };
+    TglVeboxHardwareBinding b;
+    auto resolve = [&] { return b.resolve(mhw, os, image, read, qualify); };
+    assert(resolve() && b.interface == mhw && b.os == os && b.heap == heap);
+    auto empty = [&] { assert(!b.interface && !b.os && !b.heap); };
+    ++vt; assert(!resolve()); empty(); --vt;
+    ++actualOs; assert(!resolve()); empty(); --actualOs;
+    heap = 0; assert(!resolve()); empty(); heap = 0x4000;
+    identity = false; assert(!resolve()); empty(); identity = true;
+    readable = false; assert(!resolve()); empty(); readable = true;
+    assert(!b.resolve(UINTPTR_MAX, os, image, read, qualify)); empty();
+    assert(!b.resolve(mhw, os, UINTPTR_MAX, read, qualify)); empty();
+    assert(!b.resolve(mhw, 0, image, read, qualify)); empty();
+    assert(resolve());
+}
+
 static void testExecutionBinding() {
     constexpr uintptr_t base = 0x1000000;
     constexpr std::array<uintptr_t, 3> offsets{0x12ebc0, 0x12e420, 0x12e3f0};
@@ -764,6 +790,7 @@ static void testResourceBinding() {
 // Offline layout hypothesis only: not an ABI-complete or deployable adapter.
 // The pinned consumer sites shift 0x20/0x24/0x228/0x428 by eight bytes.
 int main() {
+    testVeboxHardwareBinding();
     testExecutionBinding();
     testExecutionShape();
     testExecutionOwner();

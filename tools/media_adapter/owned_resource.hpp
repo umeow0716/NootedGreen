@@ -141,6 +141,27 @@ public:
     uintptr_t get() const noexcept { return object; }
 };
 
+// Borrowed MHW argument from creator1e66ef -> renderer Allocate. The image,
+// interface, OS and heap leases must outlive every child using this snapshot.
+// This authenticates interface identity/presence, NOT heap contents or commands.
+struct TglVeboxHardwareBinding {
+    uintptr_t interface = 0, os = 0, heap = 0;
+    template<class Read, class Qualify>
+    bool resolve(uintptr_t mhw, uintptr_t expectedOs, uintptr_t image,
+                 Read read, Qualify qualify) {
+        *this = {};
+        constexpr auto max = std::numeric_limits<uintptr_t>::max();
+        if (!mhw || mhw > max - 0x28 || !expectedOs || !image ||
+            image > max - 0x7595b0 || !qualify(image)) return false;
+        uintptr_t vt = 0, actualOs = 0, actualHeap = 0;
+        if (!read(mhw, &vt, 8) || vt != image + 0x759520 ||
+            !read(mhw + 0x18, &actualOs, 8) || actualOs != expectedOs ||
+            !read(mhw + 0x20, &actualHeap, 8) || !actualHeap) return false;
+        interface = mhw; os = actualOs; heap = actualHeap;
+        return true;
+    }
+};
+
 // Exact base prefix touched by parent130ea0 -> nonvirtual126520. NOT a
 // complete VEBOX object, not publishable as a native child by itself.
 struct TglVeboxPrefix {
