@@ -1482,6 +1482,9 @@ struct TglOwnedVeboxVtable {
             // owned base90 history/mode state; neither is a donor thunk.
             // +170 calls +160 unconditionally (12ac01), +168 conditionally
             // (12ad14), and writes execution flags through +48's report.
+            // +168=12ab10 is void(this,source): source138==3/4 writes
+            // execution15; source138==3/5 writes execution16. These are the
+            // full source SAMPLE enum, not the unrelated params138 flag.
             candidate[0x160/8] != image+0x12a740 || candidate[0x168/8] != image+0x12ab10 ||
             candidate[0x170/8] != image+0x12aba0 || candidate[0x180/8] != image+0x12b1d0 ||
             candidate[0xd0/8] != image+0x71e80 ||
