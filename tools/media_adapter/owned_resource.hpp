@@ -1767,9 +1767,17 @@ struct TglVeboxHardwareBinding {
     // updates allocation accounting, removes the shared list entry and drops
     // a reference via28; sharedRelease also drops168 and conditional60 without
     // waiting. TGL IGAccelResource vptrd93e0+160 atd9540 has an external
-    // relocation to this SAME sharedRelease, not a TGL override. The userspace
-    // CF finalizer linkage still needs proof before joining this
-    // token-delete path to deferred Map ownership for an owned allocation.
+    // relocation to this SAME sharedRelease, not a TGL override. Joining this
+    // token-delete path to deferred Map ownership for each owned allocation
+    // remains a separate proof obligation from CF finalizer linkage below.
+    // CPU class capture59710ed (25G229, UUID198a776a...) now identifies
+    // className IOAccelResource and class+20=7ff80f4626a5: its first256
+    // bytes match the retained Release+17 cleanup exactly. Apple's
+    // CFRuntimeClass layout names +20 finalize (version/className/init/copy
+    // precede it): https://github.com/apple-oss-distributions/CF/blob/main/CFRuntime.h
+    // Thus the CF finalizer-to-selector1 cleanup linkage has static evidence;
+    // this does NOT establish native mapping ownership for each owned backing,
+    // nor make the finalizer a wait or a reset-free completion certificate.
     template<class Read,class Qualify,class Executable,class Invoke>
     uint32_t markSubmitted(uintptr_t image,Read read,Qualify qualify,
                            Executable executable,Invoke invoke) const {
