@@ -754,7 +754,7 @@ public:
     size_t size() const { return extent; }
 };
 
-// Native Allocate126740 creates eight 0x2a8 CPU shells: 1b0/1b8,
+// Native base helper126740 creates eight 0x2a8 CPU shells: 1b0/1b8,
 // ba8[2],680[4]. This owned transaction publishes none until all exist.
 // It does not install child fields or allocate GPU backing. Backend outlives it.
 template<class Backend> class TglVeboxCpuShells {
@@ -981,6 +981,11 @@ inline int tglOwnedVeboxStatisticsQuery(void* child,uint32_t selector,
 
 // Centralize the proven TGL slots. The other twelve entries remain the
 // caller's derived lifecycle/state/resource producers, not fake fallbacks.
+// Exact TGL caller 12c1c3..12c1dd invokes child vtable+58 with child in
+// RDI and consumes EAX as status; failure returns directly via 12c44e.
+// This caller does NOT prove a FreeResources call on allocation failure.
+// Do not substitute base helper 126740 (which saves RSI/RDX), nor copy
+// ICL's virtual-base-adjusting Allocate/FreeResources thunks into this table.
 template<class Read>
 std::array<uintptr_t,20> tglBindOwnedVeboxQueryHooks(
     std::array<uintptr_t,20> hooks) noexcept {
@@ -5687,8 +5692,11 @@ struct TglSurfaceConversionBinding {
     }
 };
 
-// Gen12 AllocateResources finish calls FreeResources on ANY failure. This
-// composes descriptor owners, not Linux object offsets or feature admission.
+// Owned all-or-nothing allocation, following the reference Gen12 resource
+// transaction, not a claim about TGL's virtual Allocate failure cleanup.
+// TGL mode0 returns a +58 failure directly; this owner must unwind its own
+// partial allocations rather than depend on a subsequent native +60 call.
+// Composes descriptor owners, not Linux object offsets or feature admission.
 // Prepare handles per-resource initialization/metadata and preserves its error.
 // Only a complete backed set is exposed; this proves neither GPU sync nor execution.
 // SFC and app-owned LUT surfaces are separate owners, never adopted by this group.

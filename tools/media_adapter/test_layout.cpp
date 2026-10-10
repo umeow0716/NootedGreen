@@ -2733,11 +2733,24 @@ static void testComposedStatisticsBuffer() {
             assert(group.ensure(requests,prepare) == 31 && !b.live);
             assert(b.releases == failure+1);
             for (size_t i = 0; i < 3; ++i) assert(!group.storage(i));
+            // TGL mode0 forwards Allocate's error without calling +60.
+            // Recovery must work directly, with no caller-side reset/free.
+            auto retry = [](size_t, const auto&, bool changed) noexcept {
+                assert(changed); return 0;
+            };
+            assert(!group.ensure(requests,retry) && b.live == 3);
+            for (size_t i = 0; i < 3; ++i) assert(group.storage(i));
         }
         for (unsigned failure = 0; failure < 3; ++failure) {
             Backend b; Group group(b);
             auto prepare = [&](size_t i, const auto&, bool) noexcept { return i == failure ? 77 : 0; };
             assert(group.ensure(requests,prepare) == 77 && !b.live);
+            const auto released=b.releases;
+            auto retry = [](size_t, const auto&, bool changed) noexcept {
+                assert(changed); return 0;
+            };
+            assert(!group.ensure(requests,retry) && b.live == 3);
+            assert(b.releases == released);
         }
         Backend b;
         {
