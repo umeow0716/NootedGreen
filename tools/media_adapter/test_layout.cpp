@@ -3643,6 +3643,9 @@ static void testResourceBinding() {
                 assert(api.views==unsigned(!lockError) && api.unlocks==unsigned(!lockError));
                 assert(result.initialized==(!lockError&&valid));
                 assert(result.ready()==(!lockError&&valid&&!unlockError));
+                assert(result.width==(result.ready()?8U:0U));
+                assert(result.height==(result.ready()?3U:0U));
+                assert(result.pitch==(result.ready()?16U:0U));
                 assert(result.requiresQuarantine()==(!lockError&&unlockError!=0));
                 if(lockError || !valid) assert(mapped==original);
                 else assert(mapped==filled);
@@ -3650,6 +3653,7 @@ static void testResourceBinding() {
         Api badExtent{{mapped.data(),39,8,3,16}};
         const auto failed=tglInitializeOwnedStmmSurface(1,badExtent);
         assert(!failed.initialized && badExtent.unlocks==1 && !failed.unlockStatus);
+        assert(!failed.width && !failed.height && !failed.pitch);
         struct RetainedApi : Api {
             unsigned references=1,retains=0,releases=0;
             int expected=1;

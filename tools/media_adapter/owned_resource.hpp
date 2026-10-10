@@ -5682,6 +5682,9 @@ struct TglOwnedStmmView {
 struct TglOwnedStmmInitialization {
     int lockStatus=5,unlockStatus=5;
     bool initialized=false;
+    // Numeric snapshot only; never retain the unlocked CPU mapping pointer.
+    // Published only after successful initialization AND unlock.
+    uint32_t width=0,height=0,pitch=0;
     int status() const noexcept {
         return lockStatus ? lockStatus : !initialized ? 5 : unlockStatus;
     }
@@ -5756,6 +5759,9 @@ TglOwnedStmmInitialization tglInitializeOwnedStmmSurface(Surface surface,Api& ap
         result.initialized=tglInitializeOwnedStmmMapping(view.bytes,view.capacity,
             view.width,view.height,view.pitch);
     result.unlockStatus=api.unlock(surface);
+    if(result.ready()) {
+        result.width=view.width;result.height=view.height;result.pitch=view.pitch;
+    }
     return result;
 }
 // Independent surface retention protects a failed writable unlock even when
@@ -5813,6 +5819,10 @@ struct TglDarwinStmmSurfaceApi {
         const size_t capacity=IOSurfaceGetAllocSize(surface);
         const size_t width=IOSurfaceGetWidthOfPlane(surface,0);
         const size_t height=IOSurfaceGetHeightOfPlane(surface,0);
+        // Exact TGL63e9f imports IOSurfaceGetBytesPerRowOfPlane(0), then
+        //63ea8 writes resource+8. STMM12b03b/12b05f publishes that value to
+        //surface+e0 only after OS220 lock returned nonnull. Thus pitch comes
+        //from the locked native surface, never requested allocation width.
         const size_t pitch=IOSurfaceGetBytesPerRowOfPlane(surface,0);
         if(!base || !plane || plane<base || plane-base>capacity ||
            capacity>UINTPTR_MAX-base || width>UINT32_MAX || height>UINT32_MAX ||
