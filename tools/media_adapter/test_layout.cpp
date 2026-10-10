@@ -4431,7 +4431,7 @@ static void testSfcSfdOwnership() {
             unsigned calls=0;
             assert(tglWithOwnedSfcCommandInputs(commands,state,avs,cache,buffers,
                 output,prefix,{},true,false,false,TglOwnedSfcCompressionMode::Disabled,
-                config,sine,pinnedQuery,[&](auto& ready) noexcept {
+                true,config,sine,pinnedQuery,[&](auto& ready) noexcept {
                     ++calls;avs.reset();state.reset();buffers.reset();
                     assert(avsBackend.live && cpu.live && backend.live==3);
                     assert(!avs.initialize() && !state.initialize());
@@ -4490,19 +4490,32 @@ static void testSfcSfdOwnership() {
         };
         assert(tglWithOwnedSfcCommandInputs(commands,state,avs,cache,buffers,
             output,prefix,{},true,false,false,TglOwnedSfcCompressionMode::Disabled,
-            config,sine,pinnedQuery,withCsc)==31);
+            true,config,sine,pinnedQuery,withCsc)==31);
         assert(cscProduced==1 && cscGenerated==1 && commands.ief==originalIef);
         assert(commands.state==cpu.bytes && cscCache.reset());
         queryResult=89;
         assert(tglWithOwnedSfcCommandInputs(commands,state,avs,cache,buffers,
             output,prefix,{},true,false,false,TglOwnedSfcCompressionMode::Disabled,
-            config,sine,pinnedQuery,withCsc)==89);
+            true,config,sine,pinnedQuery,withCsc)==89);
         assert(cscProduced==1 && cscGenerated==1 && commands.ief==originalIef);
         assert(tglWithOwnedSfcCommandInputs(commands,state,avs,cache,buffers,
             output,prefix,{},true,false,false,TglOwnedSfcCompressionMode::Disabled,
-            config,sine,pinnedQuery,[](auto&) noexcept {assert(false);return 0;})==89);
+            true,config,sine,pinnedQuery,[](auto&) noexcept {assert(false);return 0;})==89);
         queryResult=0;
         avs.reset();assert(!avsBackend.live && !avs.parameters());
+        const auto savedY=commands.y.coefficients;
+        const auto savedUv=commands.uv.coefficients;
+        unsigned bypassGenerated=0;
+        assert(tglWithOwnedSfcCommandInputs(commands,state,avs,cache,buffers,
+            output,prefix,{},true,false,false,TglOwnedSfcCompressionMode::Disabled,
+            false,TglOwnedSfcAvsConfiguration{},
+            [](float) noexcept -> float {assert(false);return 0;},pinnedQuery,
+            [&](auto& ready) noexcept -> int {
+                ++bypassGenerated;assert(!avsBackend.live && state.hasParametersLease());
+                assert(ready.y.coefficients==savedY && ready.uv.coefficients==savedUv);
+                return 31;
+            })==31);
+        assert(bypassGenerated==1 && !avs.parameters());
         const auto prepared=commands.state;
         buffers.reset();
         assert(prepare()==5 && queries==2 && commands.state==prepared && cpu.bytes==prepared);

@@ -7432,8 +7432,13 @@ int tglWithOwnedSfcCommandInputs(TglOwnedSfcCommandParameters& parameters,
     TglOwnedSfcLineBuffers<ResourceBackend>& lines,TglOwnedSurfaceStorage& output,
     const std::array<uint8_t,0xb8>& prefix,TglOwnedSfcGen12Tail tail,
     bool rgbAdaptive,bool eightTapChroma,bool compressionEnabled,
-    TglOwnedSfcCompressionMode compressionMode,const TglOwnedSfcAvsConfiguration& config,
+    TglOwnedSfcCompressionMode compressionMode,bool avsEnabled,const TglOwnedSfcAvsConfiguration& config,
     NativeSin sine,Query query,Generate generate) noexcept {
+    // VP +40 only produces AVS when scaling or forced chroma filtering is
+    // active. A bypass pass must not require an AVS allocation or call sine.
+    if(!avsEnabled)
+        return tglWithOwnedSfcPreparedCommands(parameters,state,lines,output,prefix,
+            tail,rgbAdaptive,eightTapChroma,compressionEnabled,compressionMode,query,generate);
     return tglWithOwnedSfcAvsCommands(parameters,avs,cache,config.format,
         config.scaleX,config.scaleY,config.siting,config.forceFilter,
         config.symmetric,config.sharpening,config.window,sine,
