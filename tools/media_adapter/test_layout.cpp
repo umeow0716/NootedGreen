@@ -6,6 +6,31 @@
 #include "descriptor_bridge.hpp"
 #include "owned_resource.hpp"
 
+static void testExecutionShape() {
+    constexpr uintptr_t image = 0x1000000, object = 0x2000;
+    uintptr_t vt = image + 0x757e90, first = 0x4000, second = 0x5000;
+    uintptr_t av = image + 0x757f78, bv = image + 0x757fb8;
+    bool allowed = true, qualified = true;
+    auto read = [&](uintptr_t p, void* out, size_t n) {
+        if (!allowed || n != 8) return false;
+        const uintptr_t* value = p == object ? &vt : p == object + 0xd38 ? &first :
+            p == object + 0xd40 ? &second : p == 0x4000 ? &av : p == 0x5000 ? &bv : nullptr;
+        if (!value) return false;
+        std::memcpy(out, value, n); return true;
+    };
+    auto qualify = [&](uintptr_t p) { return qualified && p == image; };
+    assert(tglExecutionShape(object, image, read, qualify));
+    qualified = false; assert(!tglExecutionShape(object, image, read, qualify)); qualified = true;
+    allowed = false; assert(!tglExecutionShape(object, image, read, qualify)); allowed = true;
+    first = 0; assert(!tglExecutionShape(object, image, read, qualify)); first = second;
+    assert(!tglExecutionShape(object, image, read, qualify)); first = 0x4000;
+    ++av; assert(!tglExecutionShape(object, image, read, qualify)); --av;
+    ++bv; assert(!tglExecutionShape(object, image, read, qualify)); --bv;
+    ++vt; assert(!tglExecutionShape(object, image, read, qualify)); --vt;
+    assert(!tglExecutionShape(UINTPTR_MAX, image, read, qualify));
+    assert(!tglExecutionShape(object, UINTPTR_MAX, read, qualify));
+}
+
 static void testExecutionOwner() {
     struct Backend {
         bool allocation = true, valid = true;
@@ -589,6 +614,7 @@ static void testResourceBinding() {
 // Offline layout hypothesis only: not an ABI-complete or deployable adapter.
 // The pinned consumer sites shift 0x20/0x24/0x228/0x428 by eight bytes.
 int main() {
+    testExecutionShape();
     testExecutionOwner();
     testVeboxReport();
     testVeboxPrefix();

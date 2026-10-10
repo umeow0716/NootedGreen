@@ -11,6 +11,24 @@
 #include <mach/mach_vm.h>
 #endif
 
+// Read-only shape gate for an already-owned native execution object. Identity
+// qualification must authenticate the loaded image; this is NOT proof that
+// mode/state producers or GPU commands are valid. Run under owner's lock.
+template<class Read, class Qualify>
+bool tglExecutionShape(uintptr_t object, uintptr_t image, Read read, Qualify qualify) {
+    constexpr auto max = std::numeric_limits<uintptr_t>::max();
+    if (!object || !image || object > max - 0xd48 || image > max - 0x757fd0 ||
+        !qualify(image)) return false;
+    uintptr_t vt = 0, first = 0, second = 0;
+    if (!read(object, &vt, 8) || vt != image + 0x757e90 ||
+        !read(object + 0xd38, &first, 8) || !read(object + 0xd40, &second, 8) ||
+        !first || !second || first == second || first == object || second == object ||
+        first > max - 0x20 || second > max - 0x48) return false;
+    uintptr_t firstVt = 0, secondVt = 0;
+    return read(first, &firstVt, 8) && firstVt == image + 0x757f78 &&
+           read(second, &secondVt, 8) && secondVt == image + 0x757fb8;
+}
+
 // Integration must bind Create to the constructor factory12ebc0, NOT
 // child factory12e9c0 (which discards Initialize errors). Backend validation
 // must authenticate the image/ABI and nested d38/d40 objects. Their mere
