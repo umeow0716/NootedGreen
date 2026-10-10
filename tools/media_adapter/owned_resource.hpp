@@ -3126,6 +3126,21 @@ inline void tglCopyOwnedSurfaceFrameMetadata(TglOwnedSurfaceStorage& target,
     std::memcpy(target.prefix.data()+0x138,source.prefix.data()+0x138,4);
 }
 enum class TglOwnedFfdnHistoryDecision { Keep, Invalidate, CopyPrevious };
+struct TglOwnedFfdnCompressionSelection {
+    bool compressed;
+    uint32_t mode;
+};
+// ICL1f7eba..1f7fb1 data policy only, not its virtual-base object ABI.
+// Keep field provenance explicit until the TGL allocation caller supplies
+// qualified feature flags. This neither enables MMC nor allocates backing.
+inline TglOwnedFfdnCompressionSelection tglSelectOwnedFfdnCompression(
+    bool child1b89,bool child1b88,bool execution0b,bool source299,
+    bool source29a,bool history29a,bool ffdiCompressed,uint32_t ffdiMode) noexcept {
+    const bool useSource=(child1b89 && !child1b88 && execution0b) ||
+        (!source29a && (ffdiCompressed || !history29a));
+    return useSource ? TglOwnedFfdnCompressionSelection{source299,source29a?1u:0u} :
+        TglOwnedFfdnCompressionSelection{ffdiCompressed,ffdiMode};
+}
 // Complete ICL1f7990 changed-FFDN branch. Source+200 in decompiler output
 // is decimal200 (0xc8), a previous-surface link, NOT resource field0x200.
 // No whole-shell copy or ownership transfer here. CopyPrevious still requires

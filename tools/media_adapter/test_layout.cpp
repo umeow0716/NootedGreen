@@ -562,6 +562,19 @@ static void testTrackedCpuOwner() {
                 valid && flag13 && previous && equal?Decision::CopyPrevious:Decision::Invalidate));
         }
         assert(tglOwnedFfdnHistoryDecision(true,true,true,true,0,0)==Decision::CopyPrevious);
+        for(unsigned mask=0;mask<128;++mask) {
+            const bool a=mask&1,b=mask&2,c=mask&4,d=mask&8,
+                e=mask&16,f=mask&32,g=mask&64;
+            // Follow the native branch sequence independently of the helper.
+            bool source=false;
+            if(a && !b && c) source=true;
+            else if(e) source=false;
+            else if(g) source=true;
+            else if(!f) source=true;
+            const auto selected=tglSelectOwnedFfdnCompression(a,b,c,d,e,f,g,4);
+            assert(selected.compressed==(source?d:g));
+            assert(selected.mode==(source?(e?1u:0u):4u));
+        }
     }
     {
         unsigned calls=0;
