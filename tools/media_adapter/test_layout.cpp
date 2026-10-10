@@ -3426,8 +3426,24 @@ static void testNativeResourceBoundary() {
         auto& fixtureResource=const_cast<TglOwnedSurfaceStorage*>(surface)->resource;
         fixtureResource.fill(0);
         assert(!owner.withSurface([&](const auto&){assert(false);}));
+        assert(!owner.copyFrameMetadata(source));
         fixtureResource=savedResource;
         assert(owner.withSurface([](const auto&){}));
+        {
+            TglOwnedAllocatedSurface destination(backend);
+            assert(!destination.copyFrameMetadataFrom(owner));
+            assert(!destination.ensure(key));
+            assert(destination.copyFrameMetadataFrom(owner));
+            assert(destination.copyFrameMetadataFrom(destination));
+            const auto destinationBefore=*destination.surface();
+            fixtureResource.fill(0);
+            assert(!destination.copyFrameMetadataFrom(owner));
+            assert(destination.surface()->prefix==destinationBefore.prefix);
+            fixtureResource=savedResource;
+            assert(owner.withSurface([&](const auto&) {
+                assert(!destination.copyFrameMetadataFrom(owner));
+            }));
+        }
         uint32_t width=0,height=0,format=0,tile=0;
         std::memcpy(&width,surface->prefix.data()+0xd8,4);
         std::memcpy(&height,surface->prefix.data()+0xdc,4);

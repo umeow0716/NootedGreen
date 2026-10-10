@@ -3200,7 +3200,20 @@ public:
     }
     bool copyFrameMetadata(const TglOwnedSurfaceStorage& source) noexcept {
         if(!ready_ || busy_) return false;
+        busy_=true;
+        struct Unlock {bool& busy;~Unlock(){busy=false;}} unlock{busy_};
+        if(!capture_.backed(surface_.resource)) return false;
         tglCopyOwnedSurfaceFrameMetadata(surface_,source);return true;
+    }
+    // Prefer this over a naked source view: retain all source tokens through
+    // the synchronous copy. No handle transfer or asynchronous history lease.
+    bool copyFrameMetadataFrom(TglOwnedAllocatedSurface& source) noexcept {
+        if(&source==this) return copyFrameMetadata(surface_);
+        bool copied=false;
+        const bool leased=source.withSurface([&](const TglOwnedSurfaceStorage& view) noexcept {
+            copied=copyFrameMetadata(view);
+        });
+        return leased && copied;
     }
     void reset() noexcept {
         if(busy_) return;
