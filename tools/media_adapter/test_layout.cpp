@@ -894,6 +894,59 @@ static void testVeboxReport() {
 }
 
 static void testVeboxPrefix() {
+    {
+        constexpr uintptr_t os = 0x5000, hal = 0x6000;
+        uintptr_t sku = 0x7000, wa = 0x8000;
+        uint32_t platform = 0xdeadbeef, nativePlatform = 12;
+        unsigned calls = 0, failAt = 0;
+        auto readDependencies = [&](uintptr_t p, void* out, size_t n) {
+            if (++calls == failAt) return false;
+            const void* data = nullptr;
+            if (p == hal+0x78 && n == 8) data = &sku;
+            if (p == hal+0x80 && n == 8) data = &wa;
+            if (p == os+8 && n == 4) data = &nativePlatform;
+            assert(data); std::memcpy(out,data,n); return true;
+        };
+        for (unsigned failure = 1; failure <= 3; ++failure) {
+            TglVeboxPrefix empty;
+            calls = 0; failAt = failure;
+            assert(!empty.initializeBorrowed(os,hal,0x9000,platform,readDependencies));
+            assert(!empty.os && !empty.renderHal && !empty.sku && !empty.wa && !empty.slot38);
+            assert(platform == 0xdeadbeef);
+        }
+        failAt = 0; calls = 0;
+        TglVeboxPrefix initialized;
+        assert(initialized.initializeBorrowed(os,hal,0x9000,platform,readDependencies));
+        assert(calls == 3 && platform == 12 && initialized.os == os &&
+               initialized.renderHal == hal && initialized.sku == sku && initialized.wa == wa &&
+               initialized.slot38 == 0x9000 && !initialized.vtable && !initialized.slot40);
+        assert(!initialized.initializeBorrowed(os,hal,0,platform,readDependencies));
+        assert(calls == 3 && initialized.slot38 == 0x9000);
+        uintptr_t configuredSurface = 0xa000;
+        uint32_t kind = 5, sourceValue = 42;
+        uint8_t sourceFlag = 3;
+        auto readConfiguration = [&](uintptr_t p, void* out, size_t n) {
+            const void* data = nullptr;
+            if (p == 0xb098 && n == 8) data = &configuredSurface;
+            if (p == 0xa134 && n == 4) data = &kind;
+            if (p == 0xb110 && n == 1) data = &sourceFlag;
+            if (p == 0xb11c && n == 4) data = &sourceValue;
+            if (!data) return false;
+            std::memcpy(out,data,n); return true;
+        };
+        assert(initialized.configure(0xc000,0xb000,readConfiguration));
+        assert(initialized.flag48 == 1 && initialized.flag49 == 1 &&
+               initialized.sourceValue == 42 && initialized.parentData == 0xc9f0 &&
+               initialized.os == os && initialized.renderHal == hal &&
+               initialized.sku == sku && initialized.wa == wa && initialized.slot38 == 0x9000);
+        TglVeboxPrefix empty;
+        assert(!empty.initializeBorrowed(UINTPTR_MAX,hal,0,platform,readDependencies));
+        assert(!empty.initializeBorrowed(os,UINTPTR_MAX,0,platform,readDependencies));
+        assert(!empty.initializeBorrowed(0,hal,0,platform,readDependencies) && calls == 3);
+        sku = wa = 0; // Native constructor copies these verbatim; later gates decide admission.
+        assert(empty.initializeBorrowed(os,hal,0,platform,readDependencies));
+        assert(!empty.sku && !empty.wa && !empty.slot38);
+    }
     TglVeboxPrefix prefix;
     prefix.vtable = 7; prefix.os = 9; prefix.slot40 = 11;
     uintptr_t surface = 0x2000;

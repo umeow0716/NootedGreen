@@ -662,6 +662,31 @@ struct TglVeboxPrefix {
     std::array<uint8_t, 6> padding4a{};
     uintptr_t parentData = 0;
     uint32_t sourceValue = 0, padding5c = 0;
+    // Constructor-data preparation only. No vtable is installed, no native
+    // object is published, and no report/resource ownership is transferred.
+    // Caller authenticates/leases both borrowed interfaces before this read.
+    // platform belongs at full-child1bb0, NOT inside this 0x60 prefix.
+    template<class Read>
+    bool initializeBorrowed(uintptr_t nativeOs, uintptr_t nativeRenderHal,
+                            uintptr_t performanceData, uint32_t& platform, Read read) {
+        constexpr auto max = std::numeric_limits<uintptr_t>::max();
+        if (!nativeOs || nativeOs > max - 0xb || !nativeRenderHal ||
+            nativeRenderHal > max - 0x87) return false;
+        // Do not overwrite a prefix that could already carry live ownership.
+        if (vtable || slot08 || os || renderHal || sku || wa || slot38 || slot40 ||
+            flag48 || flag49 || parentData || sourceValue) return false;
+        uintptr_t nativeSku = 0, nativeWa = 0;
+        uint32_t nativePlatform = 0;
+        if (!read(nativeRenderHal+0x78,&nativeSku,8) ||
+            !read(nativeRenderHal+0x80,&nativeWa,8) ||
+            !read(nativeOs+8,&nativePlatform,4)) return false;
+        TglVeboxPrefix candidate;
+        candidate.os = nativeOs; candidate.renderHal = nativeRenderHal;
+        candidate.sku = nativeSku; candidate.wa = nativeWa;
+        candidate.slot38 = performanceData;
+        *this = candidate; platform = nativePlatform;
+        return true;
+    }
     template<class Read>
     bool configure(uintptr_t parent, uintptr_t source, Read read) {
         constexpr auto max = std::numeric_limits<uintptr_t>::max();
