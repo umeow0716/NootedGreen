@@ -11,6 +11,42 @@
 #include <mach/mach_vm.h>
 #endif
 
+// Integration must bind Create to the constructor factory12ebc0, NOT
+// child factory12e9c0 (which discards Initialize errors). Backend validation
+// must authenticate the image/ABI and nested d38/d40 objects. Their mere
+// presence is necessary, not sufficient. Backend must outlive this owner.
+template<class Backend> class TglExecutionOwner {
+    Backend& backend;
+    uintptr_t object = 0;
+public:
+    explicit TglExecutionOwner(Backend& b) noexcept : backend(b) {}
+    TglExecutionOwner(const TglExecutionOwner&) = delete;
+    TglExecutionOwner& operator=(const TglExecutionOwner&) = delete;
+    ~TglExecutionOwner() { reset(); }
+    void reset() noexcept {
+        const auto old = object;
+        object = 0;
+        if (old) backend.destroy(old);
+    }
+    int ensure() noexcept {
+        if (object) {
+            if (backend.validate(object)) return 0;
+            reset();
+            return 5;
+        }
+        const auto candidate = backend.create();
+        if (!candidate) return 1;
+        const int result = backend.initialize(candidate);
+        if (result || !backend.validate(candidate)) {
+            backend.destroy(candidate);
+            return result ? result : 5;
+        }
+        object = candidate; // publish only after native result AND validation
+        return 0;
+    }
+    uintptr_t get() const noexcept { return object; }
+};
+
 // Exact base prefix touched by parent130ea0 -> nonvirtual126520. NOT a
 // complete VEBOX object, not publishable as a native child by itself.
 struct TglVeboxPrefix {

@@ -6,6 +6,38 @@
 #include "descriptor_bridge.hpp"
 #include "owned_resource.hpp"
 
+static void testExecutionOwner() {
+    struct Backend {
+        bool allocation = true, valid = true;
+        int result = 0, creates = 0, initializes = 0, destroys = 0;
+        uintptr_t create() noexcept { ++creates; return allocation ? 7 : 0; }
+        int initialize(uintptr_t p) noexcept { assert(p == 7); ++initializes; return result; }
+        bool validate(uintptr_t p) noexcept { assert(p == 7); return valid; }
+        void destroy(uintptr_t p) noexcept { assert(p == 7); ++destroys; }
+    } b;
+    {
+        TglExecutionOwner<Backend> owner(b);
+        b.allocation = false;
+        assert(owner.ensure() == 1 && owner.get() == 0 && b.destroys == 0);
+        b.allocation = true; b.result = 31;
+        assert(owner.ensure() == 31 && owner.get() == 0 && b.destroys == 1);
+        b.result = 0; b.valid = false;
+        assert(owner.ensure() == 5 && owner.get() == 0 && b.destroys == 2);
+        b.valid = true;
+        assert(owner.ensure() == 0 && owner.get() == 7);
+        const auto calls = b.initializes;
+        assert(owner.ensure() == 0 && b.initializes == calls);
+        b.valid = false;
+        assert(owner.ensure() == 5 && owner.get() == 0 && b.destroys == 3);
+        b.valid = true;
+        assert(owner.ensure() == 0);
+        owner.reset(); owner.reset();
+        assert(owner.get() == 0 && b.destroys == 4);
+        assert(owner.ensure() == 0);
+    }
+    assert(b.destroys == 5 && b.creates == 6 && b.initializes == 5);
+}
+
 static void testVeboxReport() {
     TglVeboxReportState storage;
     storage.bytes.fill(0xa5);
@@ -557,6 +589,7 @@ static void testResourceBinding() {
 // Offline layout hypothesis only: not an ABI-complete or deployable adapter.
 // The pinned consumer sites shift 0x20/0x24/0x228/0x428 by eight bytes.
 int main() {
+    testExecutionOwner();
     testVeboxReport();
     testVeboxPrefix();
     testComposedStatisticsBuffer();
