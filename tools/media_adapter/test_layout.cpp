@@ -5269,6 +5269,22 @@ static void testSfcFrameFields() {
 
 int main() {
     {
+        for(unsigned flags=0;flags<16;++flags) for(unsigned failure=0;failure<3;++failure) {
+            TglOwnedVpFramePreparation frame;
+            frame.regions.scale.scaling=flags&1;frame.color.at9b8=flags&2;
+            frame.at922=flags&4;frame.color.modes.state.at923=flags&8;
+            unsigned order=0;bool avsCalled=false,iefCalled=false;
+            const int result=tglSetupOwnedVpSfcStages(frame,
+                [&]() noexcept -> int {assert(order==0);order=1;return failure==1?31:0;},
+                [&]() noexcept -> int {assert(order==1);order=2;avsCalled=true;return failure==2?11:0;},
+                [&]() noexcept {assert(order==((flags&3)?2u:1u));order=3;iefCalled=true;});
+            const bool avsExpected=failure!=1 && (flags&3);
+            const bool iefExpected=failure!=1 && !(failure==2 && avsExpected) && (flags&12);
+            assert(avsCalled==avsExpected && iefCalled==iefExpected);
+            assert(result==(failure==1?31:failure==2 && avsExpected?11:0));
+        }
+    }
+    {
         std::array<uint8_t,0x298> source{},target{};
         std::array<uint8_t,0x1c> mhw{};std::array<uint8_t,0x68> settings{};
         std::array<uint8_t,8> ief{};
@@ -5409,6 +5425,11 @@ int main() {
             std::memcpy(&rotation,storage.bytes.data()+0x9a0,4);
             std::memcpy(&reference,storage.bytes.data()+0x9c0,8);
             assert(x==2 && y==3 && rotation==3 && reference==0x7000);
+            unsigned stages=0;
+            assert(tglSetupOwnedVpSfcStages(frame,
+                [&]() noexcept -> int {assert(storage.bytes[0x923]==1);++stages;return 0;},
+                [&]() noexcept -> int {assert(storage.bytes[0x921]==1);++stages;return 0;},
+                [&]() noexcept {assert(storage.bytes[0x922]==1);++stages;})==0 && stages==3);
             const auto live=storage.bytes;
             assert(tglWithOwnedVpPreparedFrame(storage,frame,0x1000,0x2000,0x3000,0x7000,
                 [](void*,const auto&) noexcept {assert(false);return 0;})==5);

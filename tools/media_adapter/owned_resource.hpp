@@ -4722,6 +4722,25 @@ struct TglOwnedVpFramePreparation {
     uint32_t at9a0=0;
     bool at920=false,at922=false,at924=false;
 };
+// Qualified VP +40=1e0ca0..1e0dcb. Its +a8=1e0c80 is a proven native
+// no-op, not an unresolved hook. +90 failure prevents AVS/IEF; AVS failure
+// prevents IEF. Native +98 is called for its side effect without a status read.
+// Producers execute inside the complete frame/reference scope; this function
+// neither creates resources nor substitutes for any of those producers.
+template<class State,class Avs,class Ief>
+int tglSetupOwnedVpSfcStages(const TglOwnedVpFramePreparation& frame,
+                            State state,Avs avs,Ief ief) noexcept {
+    static_assert(noexcept(state()) && noexcept(avs()) && noexcept(ief()),"VP setup producer ABI");
+    static_assert(std::is_same_v<decltype(state()),int> && std::is_same_v<decltype(avs()),int> &&
+                  std::is_same_v<decltype(ief()),void>,"VP setup result ABI");
+    int result=state();
+    if(result) return result;
+    if(frame.regions.scale.scaling || frame.color.at9b8) {
+        result=avs();if(result) return result;
+    }
+    if(frame.at922 || frame.color.modes.state.at923) ief();
+    return result;
+}
 // Composed slot28 CPU preparation, before scoped references/publication.
 // No resource allocation, borrowed surface writes, vtable or GPU submission.
 inline bool tglPrepareOwnedVpFrame(const TglOwnedVpFramePreparationInput& in,
