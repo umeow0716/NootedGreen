@@ -5269,6 +5269,55 @@ static void testSfcFrameFields() {
 
 int main() {
     {
+        TglOwnedVpExtentAdmission input;
+        input.minWidth=input.minHeight=1;input.maxWidth=input.maxHeight=16384;
+        input.frameWidth=input.sourceWidth=input.destinationWidth=input.targetWidth=1024;
+        input.frameHeight=input.sourceHeight=input.destinationHeight=input.targetHeight=1024;
+        input.source38=input.source3c=1024;input.target130=1;
+        TglOwnedVpScale result;
+        assert(tglPrepareOwnedVpExtentAdmission(input,result) && !result.scaling);
+        const auto baseline=input;
+        for(auto field:{&TglOwnedVpExtentAdmission::frameWidth,&TglOwnedVpExtentAdmission::frameHeight,
+                        &TglOwnedVpExtentAdmission::sourceWidth,&TglOwnedVpExtentAdmission::sourceHeight,
+                        &TglOwnedVpExtentAdmission::destinationWidth,&TglOwnedVpExtentAdmission::destinationHeight,
+                        &TglOwnedVpExtentAdmission::targetWidth,&TglOwnedVpExtentAdmission::targetHeight}) {
+            for(uint32_t invalid:{0u,16385u}) {
+                auto bad=baseline;bad.*field=invalid;result={17,19,true};
+                assert(!tglPrepareOwnedVpExtentAdmission(bad,result));
+                assert(result.at928==17 && result.at92c==19 && result.scaling);
+            }
+        }
+        input.minWidth=16385;assert(!tglPrepareOwnedVpExtentAdmission(input,result));input=baseline;
+        input.minHeight=16385;assert(!tglPrepareOwnedVpExtentAdmission(input,result));input=baseline;
+        input.destinationWidth=16384;input.targetWidth=1024;
+        assert(tglPrepareOwnedVpExtentAdmission(input,result) && result.at928==1.0f);input=baseline;
+        for(uint32_t extent:{127u,128u,8192u,8193u}) {
+            input.destinationWidth=input.targetWidth=extent;
+            const bool valid=extent>=128 && extent<=8192;
+            result={17,19,true};
+            assert(tglPrepareOwnedVpExtentAdmission(input,result)==valid);
+            if(!valid) assert(result.at928==17 && result.at92c==19 && result.scaling);
+        }
+        input.destinationWidth=input.targetWidth=1024;
+        input.source124=1;assert(!tglPrepareOwnedVpExtentAdmission(input,result));input.source124=0;
+        input.target130=0x19;assert(!tglPrepareOwnedVpExtentAdmission(input,result));
+        input.targetE4=1;assert(tglPrepareOwnedVpExtentAdmission(input,result));
+        input.conditionalSource=true;assert(!tglPrepareOwnedVpExtentAdmission(input,result));
+        input.conditionalSource=false;input.target130=1;
+        input.workaroundA4Bit25=true;input.frameHeight=1200;input.source3c=1200;
+        assert(tglPrepareOwnedVpExtentAdmission(input,result));
+        input.source30=1;assert(!tglPrepareOwnedVpExtentAdmission(input,result));input.source30=0;
+        input.source38=1023;assert(!tglPrepareOwnedVpExtentAdmission(input,result));input.source38=1024;
+        input.source3c=1199;assert(!tglPrepareOwnedVpExtentAdmission(input,result));input.source3c=1200;
+        input.source34=1150;assert(!tglPrepareOwnedVpExtentAdmission(input,result));input.source34=0;
+        input.source3c=std::numeric_limits<float>::quiet_NaN();
+        assert(!tglPrepareOwnedVpExtentAdmission(input,result));
+        input.workaroundA4Bit25=false;
+        input.targetWidth=16385;assert(!tglPrepareOwnedVpExtentAdmission(input,result));
+        input.targetWidth=1024;input.sourceWidth=0;
+        assert(!tglPrepareOwnedVpExtentAdmission(input,result));
+    }
+    {
         for(bool conditional:{false,true}) for(float x:{0.0f,-0.0f,1.0f})
         for(float y:{0.0f,-0.0f,1.0f}) for(uint32_t tile:{0u,1u,2u})
         for(uint32_t format:{1u,0x19u,0x52u,0x53u}) {

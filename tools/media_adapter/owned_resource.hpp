@@ -46,6 +46,51 @@ inline bool tglPrepareOwnedVpScale(uint32_t sourceWidth,uint32_t sourceHeight,
     output=candidate;
     return true;
 }
+// VP +18 1de11a..1de4ef, after +20 eligibility and +50/rectangle alignment.
+// Extents are qualified/aligned CPU values, not unchecked user descriptors.
+struct TglOwnedVpExtentAdmission {
+    uint32_t minWidth=0,maxWidth=0,minHeight=0,maxHeight=0;
+    uint32_t frameWidth=0,frameHeight=0,sourceWidth=0,sourceHeight=0;
+    uint32_t destinationWidth=0,destinationHeight=0,targetWidth=0,targetHeight=0;
+    uint32_t rotation=0,source124=0,targetE4=0,target130=0;
+    float source30=0,source34=0,source38=0,source3c=0,source40=0,source44=0;
+    bool workaroundA4Bit25=false,conditionalSource=false;
+};
+inline bool tglPrepareOwnedVpExtentAdmission(const TglOwnedVpExtentAdmission& in,
+                                             TglOwnedVpScale& output) noexcept {
+    if(in.minWidth>in.maxWidth || in.minHeight>in.maxHeight) return false;
+    const auto width=[&](uint32_t value) noexcept {
+        return value>=in.minWidth && value<=in.maxWidth;
+    };
+    const auto height=[&](uint32_t value) noexcept {
+        return value>=in.minHeight && value<=in.maxHeight;
+    };
+    if(!width(in.frameWidth) || !height(in.frameHeight) ||
+       !width(in.sourceWidth) || !height(in.sourceHeight) ||
+       !width(in.destinationWidth) || !height(in.destinationHeight) ||
+       !width(in.targetWidth) || !height(in.targetHeight)) return false;
+    TglOwnedVpScale candidate;
+    if(!tglPrepareOwnedVpScale(in.sourceWidth,in.sourceHeight,
+        std::min(in.destinationWidth,in.targetWidth),
+        std::min(in.destinationHeight,in.targetHeight),in.rotation,candidate)) return false;
+    if(candidate.at928<0.125f || candidate.at928>8.0f ||
+       candidate.at92c<0.125f || candidate.at92c>8.0f) return false;
+    // Authenticated 780788 constant is 1120. Native converts frameHeight
+    // through signed int32 in this workaround; reject an unrepresentable shape.
+    if(in.workaroundA4Bit25 && in.frameHeight>1120) {
+        if(in.frameHeight>uint32_t(std::numeric_limits<int32_t>::max()) ||
+           !std::isfinite(in.source30) || !std::isfinite(in.source34) ||
+           !std::isfinite(in.source38) || !std::isfinite(in.source3c)) return false;
+        const float h=float(int32_t(in.frameHeight));
+        if(in.source30>0 || float(in.frameWidth)-in.source38>0 ||
+           (in.source3c>1120.0f && h>in.source3c) ||
+           (in.source34>1120.0f && h>in.source34) || h>in.source3c) return false;
+    }
+    if(in.source124==1 || !tglOwnedVpFinalAdmission(in.conditionalSource,
+        in.source40,in.source44,in.targetE4,in.target130)) return false;
+    output=candidate;
+    return true;
+}
 // Synchronous callback binding only. Each domain has independent TLS so a VP
 // child cannot resolve through its enclosing VEBOX child's scope.
 template<class Context,class Domain> class TglOwnedScopedContext {
