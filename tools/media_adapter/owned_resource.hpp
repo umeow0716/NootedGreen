@@ -2447,6 +2447,14 @@ inline bool tglNativeBackingPresent(const std::array<uint8_t, 0x148> &s) noexcep
 // 63030 allocates VM at resource+50, registers the resource at+20 and stores
 // shared metadata at+28/+30. Only +50 is the buffer byte address. Caller holds
 // resource lifetime; Writable and Fill must use native policy, not bypass it.
+// Type0 release63c5e calls62fa0: IOAccelResourceRelease(resource20) first,
+// then vm_deallocate(task754128,resource50,resource10); import stubs23e0c8
+// and23e524 resolve those exact symbols. No fence wait intervenes. Native
+//62fa0 ignores vm_deallocate's status and returns its initialized zero, after
+// which63c83 clears the descriptor. Thus release's success/zeroed shell is
+// neither proof of CPU deallocation nor a hardware completion certificate.
+// Native deferred mappings may preserve wired backing, but do not infer that
+// an arbitrary external userspace source has the same lifetime protection.
 template<class Writable, class Fill>
 int tglFillBuffer(const std::array<uint8_t, 0x148> &resource, uint32_t bytes,
                   uint8_t value, Writable writable, Fill fill) noexcept {
