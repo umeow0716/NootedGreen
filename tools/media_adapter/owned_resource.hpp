@@ -5843,6 +5843,51 @@ public:
         busy_=true;ready_=false;resource_.reset();busy_=false;
     }
 };
+struct TglResourceStorageReference { std::array<uint8_t,0x148>& storage; };
+// The native history graph has two STMM surfaces. Allocate/init failure must
+// retire BOTH native tokens without depending on caller FreeResources. A
+// failed-unlock reference stays with the process quarantine independently.
+// The enclosing frame owner excludes GPU users before ensure/reset.
+template<class Backend,class Api,class Quarantine> class TglOwnedStmmPair {
+    using Owner=TglOwnedStmmResource<Backend,Api,Quarantine>;
+    std::array<Owner,2> owners_;
+    bool busy_=false,ready_=false,valid_=false;
+public:
+    using Storage=typename Owner::Storage;
+    TglOwnedStmmPair(std::array<Backend,2>& backends,
+        const std::array<TglResourceStorageReference,2>& storage,
+        Api& api,Quarantine& quarantine) noexcept
+        :owners_{Owner(backends[0],storage[0].storage,api,quarantine),
+                 Owner(backends[1],storage[1].storage,api,quarantine)},
+         valid_(&storage[0].storage!=&storage[1].storage) {}
+    TglOwnedStmmPair(const TglOwnedStmmPair&)=delete;
+    TglOwnedStmmPair& operator=(const TglOwnedStmmPair&)=delete;
+    ~TglOwnedStmmPair(){reset();}
+    int ensure(const std::array<TglResourceKey,2>& keys,bool reinitialize=false) noexcept {
+        if(busy_ || !valid_) return 5;
+        busy_=true;ready_=false;
+        int status=0;
+        for(size_t i=0;i<2 && !status;++i) status=owners_[i].ensure(keys[i],reinitialize);
+        if(status) for(auto& owner:owners_) owner.reset();
+        ready_=status==0;busy_=false;return status;
+    }
+    template<class Invoke> int withStorage(Invoke invoke) noexcept {
+        if(busy_ || !ready_) return 5;
+        busy_=true;
+        const int status=owners_[0].withStorage([&](const Storage& first) noexcept {
+            return owners_[1].withStorage([&](const Storage& second) noexcept {
+                return invoke(first,second);
+            });
+        });
+        busy_=false;return status;
+    }
+    void reset() noexcept {
+        if(busy_) return;
+        busy_=true;ready_=false;
+        for(auto& owner:owners_) owner.reset();
+        busy_=false;
+    }
+};
 #if defined(__APPLE__)
 // Call only under the resource owner's synchronous lease, before GPU use.
 // The pool is process-owned, not a member destroyed by frame-error unwind.
@@ -5854,8 +5899,6 @@ inline TglOwnedStmmInitialization tglInitializeQuarantinedOwnedStmmResource(
     return tglInitializeRetainedOwnedStmmResource(resource,api,reservation);
 }
 #endif
-struct TglResourceStorageReference { std::array<uint8_t,0x148>& storage; };
-
 // Native 52bf0 borrows surface+148 at descriptor+40. Both the surface and its
 // backing owner must outlive every consumer of this descriptor.
 struct TglNativeSurfaceConversionInvoker {

@@ -3771,6 +3771,35 @@ static void testResourceBinding() {
             }
         };
         const TglResourceKey stmmKey{8,3,0x3d,4,0,false};
+        {
+            RetainedApi api;api.references=0;api.mapping={mapped.data(),40,8,3,16};
+            Quarantine sink;
+            std::array<StmmBackend,2> backends{StmmBackend{api},StmmBackend{api}};
+            alignas(8) std::array<uint8_t,0x148> first{},second{};
+            std::array<TglResourceStorageReference,2> shells{{{first},{second}}};
+            TglOwnedStmmPair<StmmBackend,RetainedApi,Quarantine> pair(backends,shells,api,sink);
+            const std::array<TglResourceKey,2> keys{stmmKey,stmmKey};
+            backends[1].fail=true;
+            assert(pair.ensure(keys)==77 && !api.references);
+            assert(backends[0].releases==1 && backends[1].releases==1);
+            bool invoked=false;
+            assert(pair.withStorage([&](const auto&,const auto&) noexcept {
+                invoked=true;return 0;
+            })==5 && !invoked);
+            backends[1].fail=false;
+            assert(pair.ensure(keys)==0 && api.references==2);
+            const auto locks=api.locks;
+            assert(pair.ensure(keys)==0 && api.locks==locks);
+            assert(pair.withStorage([&](const auto& a,const auto& b) noexcept {
+                assert(&a==&first && &b==&second);
+                pair.reset();assert(api.references==2);
+                assert(pair.ensure(keys)==5);return 31;
+            })==31);
+            pair.reset();assert(!api.references);
+            std::array<TglResourceStorageReference,2> alias{{{first},{first}}};
+            TglOwnedStmmPair<StmmBackend,RetainedApi,Quarantine> invalid(backends,alias,api,sink);
+            assert(invalid.ensure(keys)==5 && !api.references);
+        }
         for(int lockError : {0,5}) for(int unlockError : {0,31})
             for(bool valid : {false,true}) {
                 mapped=original;
