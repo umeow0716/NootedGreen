@@ -6,6 +6,51 @@
 #include "descriptor_bridge.hpp"
 #include "owned_resource.hpp"
 
+static void testNativeCscBinding() {
+    constexpr uintptr_t image = 0x1000000, child = 0x2000, vt = 0x3000;
+    std::array<uint8_t,16> code{0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x40,
+        0x48,0x89,0x7d,0xf8,0x48,0x89,0x75,0xf0};
+    std::array<std::pair<uintptr_t,uintptr_t>,11> memory{{
+        {child,vt},{vt+0x48,image+0x12ea30},{vt+0x90,0x4000},{vt+0x1b8,0x5000},
+        {child+0x88,0x6000},{0x6000,image+0x757e90},{0x6d38,0x7000},
+        {0x6d40,0x8000},{0x7000,image+0x757f78},{0x8000,image+0x757fb8},{0x9000,0xb}}};
+    auto read = [&](uintptr_t p, void* out, size_t n) {
+        if (p == image+0x12cfc0 && n == 16) { std::memcpy(out,code.data(),n); return true; }
+        for (const auto& entry : memory) if (p == entry.first && n <= 8) {
+            std::memcpy(out,&entry.second,n); return true;
+        }
+        if (p == 0xa000 && n == 4) { uint32_t cs = 3; std::memcpy(out,&cs,4); return true; }
+        return false;
+    };
+    bool identity = true, rx = true;
+    auto qualify = [&](uintptr_t p) { return identity && p == image; };
+    auto executable = [&](uintptr_t, size_t) { return rx; };
+    TglTwoPassCscBinding binding;
+    assert(binding.resolve(image,read,qualify,executable));
+    unsigned calls = 0; bool nativeResult = false, needed = true;
+    auto invoke = [&](uintptr_t e,uintptr_t c,uintptr_t s,uintptr_t t) {
+        assert(e == image+0x12cfc0 && c == child && s == 0x9000 && t == 0xa000);
+        ++calls; return nativeResult;
+    };
+    auto query = [&] {
+        return tglQueryNativeTwoPassCsc(binding,child,0x9000,0xa000,vt,0x4000,0x5000,
+            needed,read,qualify,executable,invoke);
+    };
+    assert(query() && !needed && calls == 1);
+    nativeResult = true; assert(query() && needed && calls == 2);
+    for (size_t index : {size_t(0),size_t(1),size_t(2),size_t(3),size_t(4),size_t(5),size_t(8)}) {
+        const auto original = memory[index].second; memory[index].second = 0;
+        assert(!query() && needed && calls == 2); memory[index].second = original;
+    }
+    code[0] = 0; assert(!query() && needed && calls == 2); code[0] = 0x55;
+    memory[3].second = image+0x71e80; // inherited base FALSE cannot masquerade as Gen12 hook
+    assert(!query() && needed && calls == 2); memory[3].second = 0x5000;
+    rx = false; assert(!query() && needed && calls == 2); rx = true;
+    identity = false; assert(!query() && needed && calls == 2); identity = true;
+    binding.entry++; assert(!query() && needed && calls == 2); binding.entry--;
+    assert(!binding.resolve(0,read,qualify,executable) && !binding.image && !binding.entry);
+}
+
 static void testDirectVeboxFeasibility() {
     std::array<unsigned char, 0xf8> params{};
     std::array<unsigned char, 0x294> source{};
@@ -1178,6 +1223,7 @@ static void testResourceBinding() {
 // Offline layout hypothesis only: not an ABI-complete or deployable adapter.
 // The pinned consumer sites shift 0x20/0x24/0x228/0x428 by eight bytes.
 int main() {
+    testNativeCscBinding();
     testDirectVeboxFeasibility();
     testVeboxHardwareBinding();
     testExecutionBinding();

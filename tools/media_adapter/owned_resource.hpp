@@ -177,6 +177,24 @@ bool tglDirectVeboxFeasible(uintptr_t params, uintptr_t source, uintptr_t target
     return !alpha || (alpha <= max - 7 && read(alpha + 4, &alphaMode, 4) && alphaMode != 2);
 }
 
+// Authenticated native CSC entry. This binds code only: invocation also requires
+// a fully constructed owned child with native execution and Gen12 overrides.
+struct TglTwoPassCscBinding {
+    uintptr_t image = 0, entry = 0;
+    template<class Read, class Qualify, class Executable>
+    bool resolve(uintptr_t base, Read read, Qualify qualify, Executable executable) {
+        image = entry = 0;
+        constexpr std::array<uint8_t,16> anchor{
+            0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x40,
+            0x48,0x89,0x7d,0xf8,0x48,0x89,0x75,0xf0};
+        std::array<uint8_t,16> bytes{};
+        if (!base || base > std::numeric_limits<uintptr_t>::max() - 0x757fd0 ||
+            !qualify(base) || !executable(base + 0x12cfc0, anchor.size()) ||
+            !read(base + 0x12cfc0, bytes.data(), bytes.size()) || bytes != anchor) return false;
+        image = base; entry = base + 0x12cfc0; return true;
+    }
+};
+
 // Read-only shape gate for an already-owned native execution object. Identity
 // qualification must authenticate the loaded image; this is NOT proof that
 // mode/state producers or GPU commands are valid. Run under owner's lock.
@@ -193,6 +211,38 @@ bool tglExecutionShape(uintptr_t object, uintptr_t image, Read read, Qualify qua
     uintptr_t firstVt = 0, secondVt = 0;
     return read(first, &firstVt, 8) && firstVt == image + 0x757f78 &&
            read(second, &secondVt, 8) && secondVt == image + 0x757fb8;
+}
+
+// trustedVtable/genericHook/cscSupportHook are addresses in our owned subclass,
+// never values learned from an untrusted native object. Hold its owner lock and
+// image lease throughout. Invoke ABI: bool entry(child, source, target).
+template<class Read, class Qualify, class Executable, class Invoke>
+bool tglQueryNativeTwoPassCsc(const TglTwoPassCscBinding& binding,
+                            uintptr_t child, uintptr_t source, uintptr_t target,
+                            uintptr_t trustedVtable, uintptr_t genericHook,
+                            uintptr_t cscSupportHook, bool& needed,
+                            Read read, Qualify qualify, Executable executable, Invoke invoke) {
+    needed = true; // failed query must not admit direct output
+    constexpr auto max = std::numeric_limits<uintptr_t>::max();
+    if (!child || child > max - 0x8f || !source || !target ||
+        !trustedVtable || trustedVtable > max - 0x1bf || !genericHook || !cscSupportHook ||
+        genericHook == cscSupportHook || !binding.image ||
+        binding.image > max - 0x757fd0 || binding.entry != binding.image + 0x12cfc0 ||
+        trustedVtable == binding.image + 0x757c98) return false;
+    TglTwoPassCscBinding verified;
+    if (!verified.resolve(binding.image, read, qualify, executable)) return false;
+    uintptr_t vt = 0, getter = 0, generic = 0, support = 0, execution = 0;
+    uint32_t sourceColor = 0, targetColor = 0;
+    if (!read(child, &vt, 8) || vt != trustedVtable ||
+        !read(vt + 0x48, &getter, 8) || getter != binding.image + 0x12ea30 ||
+        !read(vt + 0x90, &generic, 8) || generic != genericHook ||
+        !read(vt + 0x1b8, &support, 8) || support != cscSupportHook ||
+        !executable(genericHook, 1) || !executable(cscSupportHook, 1) ||
+        !read(child + 0x88, &execution, 8) ||
+        !tglExecutionShape(execution, binding.image, read, qualify) ||
+        !read(source, &sourceColor, 4) || !read(target, &targetColor, 4)) return false;
+    needed = invoke(verified.entry, child, source, target);
+    return true;
 }
 
 struct TglExecutionBinding {
