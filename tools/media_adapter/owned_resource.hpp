@@ -5932,6 +5932,38 @@ public:
     }
 };
 
+// Exact VP+10 thunk1f74e0 reaches void1f7450(this): there is no status ABI.
+// Keep allocation failure separately visible to the enclosing owner before
+// publishing a VP or emitting commands. This lease does not authorize GPU
+// retirement and deliberately leaves938 unpublished until the CPU-view scope.
+template<class Backend> class TglOwnedVpPassInitContext {
+    TglOwnedVpSfcCallerStorage& storage_;
+    TglOwnedSfcStateParameters<Backend>& state_;
+    bool called_=false;
+    int status_=5;
+public:
+    TglOwnedVpPassInitContext(TglOwnedVpSfcCallerStorage& storage,
+        TglOwnedSfcStateParameters<Backend>& state) noexcept :storage_(storage),state_(state) {}
+    TglOwnedVpPassInitContext(const TglOwnedVpPassInitContext&)=delete;
+    TglOwnedVpPassInitContext& operator=(const TglOwnedVpPassInitContext&)=delete;
+    bool owns(void* child) const noexcept {return child==storage_.bytes.data();}
+    void initialize() noexcept {
+        if(called_) {status_=5;return;}
+        called_=true;
+        status_=state_.initializeVpPass(storage_) ? 0 : 5;
+    }
+    int status() const noexcept {return status_;}
+};
+template<class Resolve> struct TglOwnedVpPassInitCallback {
+    static void initialize(void* child) noexcept {
+        static_assert(noexcept(Resolve{}(child)),"VP initialization resolver ABI");
+        auto* context=Resolve{}(child);
+        static_assert(noexcept(context->owns(child)) && noexcept(context->initialize()),
+            "VP initialization context ABI");
+        if(context && context->owns(child)) context->initialize();
+    }
+};
+
 // ICL SFC base+28 uses 4d4d0(400,200): one c00-byte allocation,
 // Y-X/Y-Y/UV-X/UV-Y pointers at 10/18/20/28. Owned header only;
 // never pass it to native 4d600, which would free our tracked allocation.

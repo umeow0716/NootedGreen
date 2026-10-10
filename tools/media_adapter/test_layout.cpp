@@ -4921,6 +4921,47 @@ static void testSfcStateParameterOwnership() {
             assert(storage.bytes[i]==(i>=0x920 && i<0x9c8 ? 0 : original[i]));
         vpBackend.fail=false;
         assert(state.initializeVpPass(storage) && vpBackend.allocations==3);
+        using Context=TglOwnedVpPassInitContext<VpBackend>;
+        using Callback=TglOwnedVpPassInitCallback<TglOwnedVpSfcResolve<Context>>;
+        using Initialize=void(*)(void*) noexcept;
+        const Initialize initialize=&Callback::initialize;
+        for(bool fail:{false,true}) {
+            state.reset();vpBackend.fail=fail;
+            Context context(storage,state);
+            const auto before=storage.bytes;
+            const auto allocations=vpBackend.allocations;
+            initialize(storage.bytes.data());
+            assert(context.status()==5 && storage.bytes==before);
+            {
+                TglOwnedVpSfcScopedContext<Context> scope(storage.bytes.data(),context);
+                assert(scope.bound());
+                initialize(nullptr);initialize(&vpBackend);
+                assert(vpBackend.allocations==allocations && storage.bytes==before);
+                initialize(storage.bytes.data());
+                assert(context.status()==(fail ? 5 : 0));
+                assert(bool(state.data())==!fail);
+                uintptr_t published=1;std::memcpy(&published,storage.bytes.data()+0x938,8);
+                assert(!published);
+                const auto once=vpBackend.allocations;
+                initialize(storage.bytes.data());
+                assert(context.status()==5 && vpBackend.allocations==once);
+            }
+            const auto after=storage.bytes;
+            const auto once=vpBackend.allocations;
+            initialize(storage.bytes.data());
+            assert(storage.bytes==after && vpBackend.allocations==once);
+        }
+        vpBackend.fail=false;assert(state.initializeVpPass(storage));
+        Context busy(storage,state);
+        assert(state.withParameters([&](const uint8_t*) noexcept {
+            const auto before=storage.bytes;
+            const auto allocations=vpBackend.allocations,releases=vpBackend.releases;
+            TglOwnedVpSfcScopedContext<Context> scope(storage.bytes.data(),busy);
+            assert(scope.bound());initialize(storage.bytes.data());
+            assert(busy.status()==5 && storage.bytes==before);
+            assert(vpBackend.allocations==allocations && vpBackend.releases==releases);
+            return 0;
+        })==0);
     }
 }
 
