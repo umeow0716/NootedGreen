@@ -5271,6 +5271,38 @@ static void testSfcFrameFields() {
 
 int main() {
     {
+        TglOwnedVpCscCache cache;
+        unsigned reads=0,produced=0;
+        auto read=[&](uintptr_t,void*,size_t) noexcept {++reads;return false;};
+        auto produce=[&](TglCscCoefficients& out,uint32_t from,uint32_t to) noexcept {
+            ++produced;assert(from==3 && to==5);out.matrix[0]=2.f;return true;
+        };
+        assert(cache.prepare(3,5,0,read,produce));
+        assert(cache.prepare(3,5,UINTPTR_MAX,read,produce));
+        assert(produced==1 && reads==0);
+        std::array<uint8_t,64> ief{};ief[1]=7;
+        std::array<uint8_t,0xb8> state{};state[0x88]=2;
+        const auto originalIef=ief;const auto originalState=state;
+        unsigned calls=0;
+        assert(cache.withParameters(ief,state,[&]() noexcept {
+            ++calls;assert(ief[0x20]==1 && state[0x88]==1 && ief[1]==7);
+            uintptr_t matrix=0;std::memcpy(&matrix,ief.data()+0x28,8);
+            assert(matrix && *reinterpret_cast<const float*>(matrix)==2.f);
+            assert(!cache.reset() && !cache.prepare(3,5,0,read,produce));
+            assert(cache.withParameters(ief,state,[&]() noexcept {++calls;return 0;})==5);
+            return 31;
+        })==31);
+        assert(calls==1 && ief==originalIef && state==originalState);
+        assert(!cache.prepare(4,5,0,read,
+            [](TglCscCoefficients&,uint32_t,uint32_t) noexcept {return false;}));
+        assert(cache.withParameters(ief,state,[]() noexcept {return 0;})==0);
+        ief[0x28]=1;
+        assert(cache.withParameters(ief,state,[&]() noexcept {++calls;return 0;})==5);
+        assert(calls==1 && cache.reset());
+        ief[0x28]=0;
+        assert(cache.withParameters(ief,state,[]() noexcept {return 0;})==5);
+    }
+    {
         std::array<uint8_t,0x34> source{};source[0]=1;
         std::array<float,12> values{};
         for(size_t i=0;i<values.size();++i) values[i]=float(i)+0.25f;

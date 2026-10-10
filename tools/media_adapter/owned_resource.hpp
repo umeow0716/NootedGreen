@@ -1445,6 +1445,54 @@ bool tglReadOwnedVpCscOverride(uint32_t from,uint32_t to,uintptr_t sourceA8,
     // Native override explicitly writes all three output offsets as zero.
     output=candidate;useOverride=true;return true;
 }
+// Serialized owned counterpart of VP+a0's from/to cache and synchronous
+// pointer publication. Native coefficient producer must be authenticated by
+// the caller. No GPU completion/retirement certificate is implied here.
+class TglOwnedVpCscCache {
+    TglCscCoefficients coefficients_{};
+    uint32_t from_=0,to_=0;
+    bool valid_=false,leased_=false,mutating_=false;
+public:
+    TglOwnedVpCscCache()=default;
+    TglOwnedVpCscCache(const TglOwnedVpCscCache&)=delete;
+    TglOwnedVpCscCache& operator=(const TglOwnedVpCscCache&)=delete;
+    bool reset() noexcept {
+        if(leased_ || mutating_) return false;
+        coefficients_={};from_=to_=0;valid_=false;return true;
+    }
+    template<class Read,class Produce>
+    bool prepare(uint32_t from,uint32_t to,uintptr_t sourceA8,Read read,Produce produce) noexcept {
+        static_assert(noexcept(produce(std::declval<TglCscCoefficients&>(),from,to)),
+                      "VP CSC coefficient producer ABI");
+        if(leased_ || mutating_) return false;
+        if(valid_ && from_==from && to_==to) return true;
+        mutating_=true;TglCscCoefficients candidate;bool overridden=false;
+        const bool success=tglReadOwnedVpCscOverride(from,to,sourceA8,read,overridden,candidate) &&
+            (overridden || produce(candidate,from,to));
+        if(success) {coefficients_=candidate;from_=from;to_=to;valid_=true;}
+        mutating_=false;return success;
+    }
+    template<class Use>
+    int withParameters(std::array<uint8_t,64>& ief,std::array<uint8_t,0xb8>& state,
+                       Use use) noexcept {
+        static_assert(noexcept(use()),"VP CSC parameter borrower ABI");
+        if(!valid_ || leased_ || mutating_) return 5;
+        for(size_t offset:{size_t(0x28),size_t(0x30),size_t(0x38)}) {
+            uintptr_t occupied=0;std::memcpy(&occupied,ief.data()+offset,8);
+            if(occupied) return 5;
+        }
+        const auto saved=ief;const uint8_t savedState=state[0x88];
+        const std::array<uintptr_t,3> pointers{{
+            reinterpret_cast<uintptr_t>(coefficients_.matrix.data()),
+            reinterpret_cast<uintptr_t>(coefficients_.inputOffsets.data()),
+            reinterpret_cast<uintptr_t>(coefficients_.outputOffsets.data())}};
+        leased_=true;ief[0x20]=1;state[0x88]=1;
+        std::memcpy(ief.data()+0x28,pointers.data(),sizeof(pointers));
+        const int result=use();
+        ief=saved;state[0x88]=savedState;leased_=false;return result;
+    }
+};
+
 // TGL base constructor12d619/12d65e independently fixes 9+3+3 floats
 // at a0/c4/d0. Only a caller holding the owned base lease may publish.
 inline bool tglPublishOwnedCscFields(void* child,size_t extent,
