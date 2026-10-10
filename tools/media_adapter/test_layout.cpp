@@ -72,10 +72,98 @@ static void testOwnedResourceLifecycle() {
     assert(backend.allocations == backend.releases);
 }
 
+static void testNativeResourceBoundary() {
+    using Backend = TglNativeResourceBackend;
+    Backend::Storage s{};
+    const auto put = [&](size_t offset, auto value) {
+        std::memcpy(s.data() + offset, &value, sizeof(value));
+    };
+    assert(!tglNativeBackingPresent(s));
+    put(0x20, uint64_t{1});
+    assert(tglNativeBackingPresent(s));
+    put(0x20, uint64_t{0});
+    put(0x50, uint64_t{1});
+    assert(tglNativeBackingPresent(s));
+    put(0x14, uint32_t{1});
+    assert(!tglNativeBackingPresent(s)); // buffer token is not a surface
+    put(0x58, uint64_t{1});
+    assert(tglNativeBackingPresent(s));
+    for (uint32_t type : {2u, 3u, UINT32_MAX}) {
+        put(0x14, type);
+        assert(!tglNativeBackingPresent(s));
+    }
+    struct Fixture {
+        int allocations = 0, releases = 0;
+        int status = 31;
+        bool clearsFailure = false;
+        std::array<uint8_t, 0x50> expected{};
+    } fixture;
+    const auto allocate = +[](void *ctx, const void *params, void *output) noexcept -> int {
+        auto &f = *static_cast<Fixture *>(ctx);
+        assert(std::memcmp(params, f.expected.data(), f.expected.size()) == 0);
+        ++f.allocations;
+        uint32_t type = 0;
+        std::memcpy(&type, params, sizeof(type));
+        std::memcpy(static_cast<uint8_t *>(output) + 0x14, &type, sizeof(type));
+        const uint64_t token = 1;
+        std::memcpy(static_cast<uint8_t *>(output) + (type == 1 ? 0x58 : 0x20),
+                    &token, sizeof(token));
+        if (f.status && f.clearsFailure) std::memset(output, 0, 0x148);
+        return f.status;
+    };
+    const auto release = +[](void *ctx, void *output) noexcept {
+        ++static_cast<Fixture *>(ctx)->releases;
+        std::memset(output, 0, 0x148);
+    };
+    const TglResourceKey key{4096, 1, 0x3e, 4, 0, false};
+    const auto set = [&](size_t offset, uint32_t value) {
+        std::memcpy(fixture.expected.data() + offset, &value, sizeof(value));
+    };
+    set(0x14, key.width); set(0x18, key.height);
+    set(0x24, key.tile); set(0x28, key.format);
+    Backend backend(&fixture, allocate, release, 0);
+    TglOwnedResource<Backend> owner(backend);
+    auto result = owner.ensure(key);
+    assert(result.status == 31 && result.state == decltype(owner)::State::Empty);
+    assert(fixture.allocations == 1 && fixture.releases == 1);
+    auto compressed = key;
+    compressed.compressed = true;
+    assert(owner.ensure(compressed).status == 25);
+    compressed = key; compressed.compressionMode = 1;
+    assert(owner.ensure(compressed).status == 25);
+    auto zero = key; zero.width = 0;
+    assert(owner.ensure(zero).status == 5);
+    zero = key; zero.height = 0;
+    assert(owner.ensure(zero).status == 5);
+    Backend unknown(&fixture, allocate, release, 2);
+    TglOwnedResource<Backend> unsupported(unknown);
+    assert(unsupported.ensure(key).status == 25);
+    Backend missing(&fixture, allocate, nullptr, 0);
+    TglOwnedResource<Backend> noRelease(missing);
+    assert(noRelease.ensure(key).status == 5);
+    assert(fixture.allocations == 1 && fixture.releases == 1);
+    fixture.clearsFailure = true;
+    assert(owner.ensure(key).status == 31);
+    assert(fixture.allocations == 2 && fixture.releases == 1); // native already cleaned up
+    fixture.clearsFailure = false;
+    fixture.status = 0;
+    const TglResourceKey surfaceKey{1920, 1080, 0x19, 2, 0, false};
+    set(0, 1); set(0x14, surfaceKey.width); set(0x18, surfaceKey.height);
+    set(0x24, surfaceKey.tile); set(0x28, surfaceKey.format);
+    {
+        Backend surfaceBackend(&fixture, allocate, release, 1);
+        TglOwnedResource<Backend> surface(surfaceBackend);
+        assert(surface.ensure(surfaceKey).state == decltype(surface)::State::Backed);
+        assert(!surface.ensure(surfaceKey).changed);
+    }
+    assert(fixture.allocations == 3 && fixture.releases == 2);
+}
+
 // Offline layout hypothesis only: not an ABI-complete or deployable adapter.
 // The pinned consumer sites shift 0x20/0x24/0x228/0x428 by eight bytes.
 int main() {
     testOwnedResourceLifecycle();
+    testNativeResourceBoundary();
     std::vector<uint8_t> blob(TglKernelMetadataAdapter::blobBytes, 0x5a);
     const uint32_t offsets[] = {344224, 344448};
     std::memcpy(blob.data() + 78 * 4, offsets, sizeof(offsets));

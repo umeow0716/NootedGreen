@@ -2,6 +2,7 @@
 #include <array>
 #include <cstdint>
 #include <utility>
+#include <cstring>
 
 // Owned lifecycle only. A Darwin backend must separately prove allocation,
 // backing inspection and release ABI; this class never fabricates backing.
@@ -13,6 +14,64 @@ struct TglResourceKey {
         return width == b.width && height == b.height && format == b.format &&
             tile == b.tile && compressionMode == b.compressionMode && compressed == b.compressed;
     }
+};
+
+// Pinned native 62a40 predicate, not a GPU execution/completion guarantee.
+inline bool tglNativeBackingPresent(const std::array<uint8_t, 0x148> &s) noexcept {
+    uint32_t type = 0;
+    uint64_t a = 0, b = 0;
+    std::memcpy(&type, s.data() + 0x14, sizeof(type));
+    if (type == 0) {
+        std::memcpy(&a, s.data() + 0x20, sizeof(a));
+        std::memcpy(&b, s.data() + 0x50, sizeof(b));
+        return a != 0 || b != 0;
+    }
+    if (type == 1) {
+        std::memcpy(&a, s.data() + 0x58, sizeof(a));
+        return a != 0;
+    }
+    return false;
+}
+
+// Injection boundary only: no symbol lookup or unproved OS-object construction.
+// Caller must validate native image, entrypoints and context lifetime separately.
+class TglNativeResourceBackend {
+public:
+    using Storage = std::array<uint8_t, 0x148>;
+    using Allocate = int (*)(void *, const void *, void *) noexcept;
+    using Release = void (*)(void *, void *) noexcept;
+    TglNativeResourceBackend(void *context, Allocate allocate, Release release,
+                             uint32_t resourceType) noexcept
+        : context_(context), allocate_(allocate), release_(release), type_(resourceType) {}
+    int allocate(Storage &storage, const TglResourceKey &key) noexcept {
+        if (!context_ || !allocate_ || !release_) return 5;
+        if (type_ > 1 || key.compressed || key.compressionMode) return 25;
+        if (!key.width || !key.height) return 5;
+        // Exact known fields only; compression allocation ABI remains unproved.
+        alignas(8) std::array<uint8_t, 0x50> params{};
+        const auto put = [&](size_t offset, uint32_t value) {
+            std::memcpy(params.data() + offset, &value, sizeof(value));
+        };
+        put(0, type_);
+        put(0x14, key.width); // type0: requested byte count; type1: width
+        put(0x18, key.height);
+        put(0x24, key.tile);
+        put(0x28, key.format);
+        return allocate_(context_, params.data(), storage.data());
+    }
+    bool backed(const Storage &storage) const noexcept { return tglNativeBackingPresent(storage); }
+    void release(Storage &storage) noexcept {
+        if (!context_ || !release_) return;
+        for (auto byte : storage) if (byte != 0) {
+            release_(context_, storage.data());
+            return;
+        }
+    }
+private:
+    void *context_;
+    Allocate allocate_;
+    Release release_;
+    uint32_t type_;
 };
 
 template<class Backend> class TglOwnedResource {
