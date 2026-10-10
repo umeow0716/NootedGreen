@@ -1457,6 +1457,15 @@ static void testVeboxHardwareBinding() {
         uintptr_t tag=77;
         assert(b.heapTagSource(tagRead,tag) && tag==mapped+16384);
         TglOwnedVeboxBuilderScratch scratch;
+        for(uintptr_t invalidHeap:{uintptr_t(0),UINTPTR_MAX-uintptr_t(0x2e3),UINTPTR_MAX}) {
+            auto invalid=b;invalid.heap=invalidHeap;
+            TglVeboxCompletionWriteSnapshot unchanged{77,88,99,111};
+            unsigned reads=0;
+            assert(!tglReadVeboxCompletionWrite(scratch,invalid,
+                [&](uintptr_t,void*,size_t){++reads;return false;},unchanged));
+            assert(!reads && unchanged.resource==77 && unchanged.tagLocation==88 &&
+                unchanged.offset==99 && unchanged.value==111);
+        }
         const uintptr_t resource=heap+0x40;const uint32_t offset=16384;
         std::memcpy(scratch.completion.data(),&resource,8);
         std::memcpy(scratch.completion.data()+8,&offset,4);

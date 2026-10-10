@@ -6560,6 +6560,9 @@ struct TglVeboxCompletionWriteSnapshot {
 template<class Read>
 bool tglReadVeboxCompletionWrite(const TglOwnedVeboxBuilderScratch& scratch,
     const TglVeboxHardwareBinding& binding,Read read,TglVeboxCompletionWriteSnapshot& out) {
+    // heapTagSource authenticates fields through +2d8 only; this reader also
+    // consumes the full DWORD at +2e0. Reject wrapping ranges before reads.
+    if(!binding.heap || binding.heap>UINTPTR_MAX-0x2e4) return false;
     TglVeboxCompletionWriteSnapshot candidate;
     uint32_t offset=0,value=0;
     if(!binding.heapTagSource(read,candidate.tagLocation) ||
