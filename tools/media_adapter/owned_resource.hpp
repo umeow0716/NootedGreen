@@ -3194,6 +3194,7 @@ public:
         if(!ready_ || busy_) return false;
         busy_=true;
         struct Unlock {bool& busy;~Unlock(){busy=false;}} unlock{busy_};
+        if(!capture_.backed(surface_.resource)) return false;
         std::forward<Consume>(consume)(static_cast<const TglOwnedSurfaceStorage&>(surface_));
         return true;
     }

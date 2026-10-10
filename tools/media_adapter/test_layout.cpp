@@ -3420,6 +3420,14 @@ static void testNativeResourceBoundary() {
             assert(fixture.allocations==borrowedAllocations && fixture.releases==borrowedReleases);
         }));
         assert(borrowedCalls==1 && owner.surface()==surface);
+        // A cached ready bit cannot authorize a lease after native token loss.
+        // Corrupt only the test fixture's descriptor, then restore its identity.
+        const auto savedResource=surface->resource;
+        auto& fixtureResource=const_cast<TglOwnedSurfaceStorage*>(surface)->resource;
+        fixtureResource.fill(0);
+        assert(!owner.withSurface([&](const auto&){assert(false);}));
+        fixtureResource=savedResource;
+        assert(owner.withSurface([](const auto&){}));
         uint32_t width=0,height=0,format=0,tile=0;
         std::memcpy(&width,surface->prefix.data()+0xd8,4);
         std::memcpy(&height,surface->prefix.data()+0xdc,4);
