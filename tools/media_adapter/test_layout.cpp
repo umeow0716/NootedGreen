@@ -6,6 +6,60 @@
 #include "descriptor_bridge.hpp"
 #include "owned_resource.hpp"
 
+static void testComposedStatisticsBuffer() {
+    struct Fixture {
+        std::array<uint8_t, 8192> bytes{};
+        unsigned allocations = 0, releases = 0, fills = 0;
+        bool writable = true;
+    } fixture;
+    const auto allocate = +[](void *ctx, const void *params, void *output) noexcept {
+        auto &f = *static_cast<Fixture *>(ctx);
+        const auto *p = static_cast<const uint8_t *>(params);
+        uint32_t size = 0, type = 1;
+        std::memcpy(&size, p + 0x14, 4); std::memcpy(&type, p, 4);
+        assert(type == 0 && size <= f.bytes.size());
+        ++f.allocations; f.bytes.fill(0xa5);
+        auto *s = static_cast<uint8_t *>(output);
+        const uintptr_t address = reinterpret_cast<uintptr_t>(f.bytes.data()), handle = 7;
+        std::memcpy(s + 0x10, &size, 4);
+        std::memcpy(s + 0x20, &handle, 8);
+        std::memcpy(s + 0x50, &address, 8);
+        return 0;
+    };
+    const auto release = +[](void *ctx, void *output) noexcept {
+        ++static_cast<Fixture *>(ctx)->releases;
+        std::memset(output, 0, 0x148);
+    };
+    TglNativeResourceBackend backend(&fixture, allocate, release, 0, 4096);
+    const auto initialize = [&](const std::array<uint8_t, 0x148> &resource,
+                                uint32_t bytes) noexcept {
+        const auto writable = [&](uintptr_t address, uint32_t size) noexcept {
+            return fixture.writable && address == reinterpret_cast<uintptr_t>(fixture.bytes.data())
+                && size <= fixture.bytes.size();
+        };
+        const auto fill = [&](uintptr_t, uint32_t size, uint8_t value) noexcept {
+            ++fixture.fills;
+            std::memset(fixture.bytes.data(), value, size);
+            return 0;
+        };
+        return tglFillBuffer(resource, bytes, 0, writable, fill);
+    };
+    {
+        TglStatisticsResource<TglNativeResourceBackend> statistics(backend);
+        assert(statistics.ensure(64, 16, initialize) == 0);
+        assert(statistics.layout().bytes == 1280 && fixture.fills == 1);
+        for (size_t i = 0; i < fixture.bytes.size(); ++i)
+            assert(fixture.bytes[i] == (i < 1280 ? 0 : 0xa5));
+        assert(statistics.ensure(64, 16, initialize) == 0 && fixture.fills == 1);
+        fixture.writable = false;
+        assert(statistics.ensure(128, 16, initialize) == 5);
+        assert(statistics.layout().bytes == 0 && fixture.allocations == fixture.releases);
+        fixture.writable = true;
+        assert(statistics.ensure(128, 16, initialize) == 0 && fixture.fills == 2);
+    }
+    assert(fixture.allocations == 3 && fixture.releases == 3);
+}
+
 static void testBufferFill() {
     std::array<uint8_t, 0x148> resource{};
     std::array<uint8_t, 32> bytes{};
@@ -445,6 +499,7 @@ static void testResourceBinding() {
 // Offline layout hypothesis only: not an ABI-complete or deployable adapter.
 // The pinned consumer sites shift 0x20/0x24/0x228/0x428 by eight bytes.
 int main() {
+    testComposedStatisticsBuffer();
     testBufferFill();
     testStatisticsLifecycle();
     testSurfaceBoundary();
