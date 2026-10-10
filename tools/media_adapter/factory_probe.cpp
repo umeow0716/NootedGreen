@@ -91,7 +91,7 @@ int cscReference() {
 }
 
 // Read our own loaded, sealed Tahoe framework. Never invoke a GPU/resource API.
-int resourceReference(bool fenceOnly=false,bool releaseOnly=false) {
+int resourceReference(bool fenceOnly=false,bool releaseOnly=false,bool classOnly=false) {
     constexpr const char *framework = "/System/Library/PrivateFrameworks/IOAccelerator.framework/IOAccelerator";
     void *library = dlopen(framework, RTLD_NOW | RTLD_LOCAL);
     if (!library) { std::fprintf(stderr, "reference dlopen: %s\n", dlerror()); return 1; }
@@ -109,6 +109,7 @@ int resourceReference(bool fenceOnly=false,bool releaseOnly=false) {
             Reference{"client-shared-generation", "IOAccelResourceGetClientShared", 0x15},
             Reference{"client-shared-map-setup", "IOAccelResourceGetClientShared", 0x5b},
             Reference{"client-shared-once-invoke", "IOAccelResourceGetClientShared", 0x5b, true}}) {
+        if(classOnly && !reference.block) continue;
         if(fenceOnly && std::strcmp(reference.name,"IOAccelVideoContextFinishFenceEvent") &&
             std::strcmp(reference.name,"IOAccelVideoContextSubmitDataBuffers")) continue;
         if(releaseOnly && std::strcmp(reference.name,"IOAccelResourceRelease")) continue;
@@ -210,6 +211,39 @@ int resourceReference(bool fenceOnly=false,bool releaseOnly=false) {
                 invoke < base || invoke - base >= textSize) goto done;
             address = invoke;
         }
+        if(classOnly) {
+            // Exact captured once-invoke LEA, not a search for callbacks.
+            // Read the class record and same-image text candidates without
+            // assigning finalizer semantics from their position alone.
+            constexpr uint8_t anchor[7]={0x48,0x8d,0x3d,0x9f,0xbc,0xd3,0x31};
+            uint8_t lea[7]{};
+            if(textSize-(address-base)<11 || !read(address+4,lea,7) ||
+                std::memcmp(lea,anchor,7)) goto done;
+            int32_t relative=0;std::memcpy(&relative,lea+3,4);
+            const uintptr_t record=address+11+relative;
+            std::array<uintptr_t,16> entries{};
+            if(!read(record,entries.data(),sizeof(entries))) goto done;
+            std::puts("RESOURCE_CLASS_REFERENCE exact-UUID exact-LEA length=128");
+            for(size_t slot=0;slot<entries.size();++slot) {
+                const uintptr_t entry=entries[slot];
+                const bool text=entry>=base && entry-base<textSize;
+                std::printf("CLASS_SLOT offset=%zx nonnull=%u same-image-text=%u\n",
+                    slot*sizeof(uintptr_t),unsigned(entry!=0),unsigned(text));
+                if(!text) continue;
+                std::array<uint8_t,1024> code{};
+                const size_t count=std::min<size_t>(code.size(),textSize-(entry-base));
+                if(!read(entry,code.data(),count)) goto done;
+                std::printf("CLASS_CALLBACK slot=%zx preferred=%llx length=%zu\n",
+                    slot*sizeof(uintptr_t),
+                    static_cast<unsigned long long>(textAddress+entry-base),count);
+                for(size_t i=0;i<count;i+=32) {
+                    std::printf("%04zx:",i);
+                    for(size_t j=i;j<std::min(i+32,count);++j) std::printf("%02x",code[j]);
+                    std::putchar('\n');
+                }
+            }
+            continue;
+        }
         const size_t length = std::min<size_t>(1024, textSize - (address - base));
         std::array<uint8_t, 1024> bytes{};
         if (!length || !read(address, bytes.data(), length)) goto done;
@@ -234,7 +268,8 @@ int resourceReference(bool fenceOnly=false,bool releaseOnly=false) {
             std::putchar('\n');
         }
     }
-    std::puts(releaseOnly ? "RELEASE_REFERENCE_OK no-resource-call no-GPU no-text-write" :
+    std::puts(classOnly ? "CLASS_REFERENCE_OK no-resource-call no-GPU no-text-write" :
+        releaseOnly ? "RELEASE_REFERENCE_OK no-resource-call no-GPU no-text-write" :
         fenceOnly ? "FENCE_REFERENCE_OK no-resource-call no-GPU no-text-write" :
         "RESOURCE_REFERENCE_OK no-resource-call no-GPU no-text-write");
     status = 0;
@@ -244,6 +279,7 @@ done:
 }
 }
 int main(int argc, char **argv) {
+    if(argc==2 && !std::strcmp(argv[1],"--resource-class-reference")) return resourceReference(false,false,true);
     if(argc==2 && !std::strcmp(argv[1],"--csc-reference")) return cscReference();
     if(argc==2 && !std::strcmp(argv[1],"--fence-reference")) return resourceReference(true);
     if(argc==2 && !std::strcmp(argv[1],"--release-reference")) return resourceReference(false,true);
