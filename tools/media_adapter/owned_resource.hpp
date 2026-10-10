@@ -5786,6 +5786,25 @@ int tglWithOwnedSfcCscCommands(TglOwnedSfcCommandParameters& parameters,
         return generate(parameters);
     });
 }
+struct TglOwnedSfcIefInput {
+    bool enabled=false;
+    float strength=0;
+    uint8_t skinEnable=0,detailEnable=0;
+    std::array<uint16_t,3> thresholds{};
+};
+// VP98 prepares IEF before VPa0 publishes CSC pointers. Keep the actual
+// command consumer inside the coefficient scope instead of returning borrowed
+// pointers from an isolated callback. This is CPU composition, not submission.
+template<class Read,class Produce,class Generate>
+int tglWithOwnedSfcFilterCommands(TglOwnedSfcCommandParameters& parameters,
+    const TglOwnedSfcIefInput& input,const TglOwnedIefTables& tables,
+    TglOwnedVpCscCache& cache,bool csc,uint32_t from,uint32_t to,
+    uintptr_t sourceA8,Read read,Produce produce,Generate generate) noexcept {
+    if(!tglPrepareOwnedSfcIefParameters(parameters,input.enabled,input.strength,
+        input.skinEnable,input.detailEnable,input.thresholds,tables)) return 5;
+    return tglWithOwnedSfcCscCommands(parameters,cache,csc,from,to,sourceA8,
+        read,produce,generate);
+}
 // Compose the prepared CPU arguments with the typed native backend. Resource
 // usage registration must already be complete; shell/owners must remain live.
 // On any failure the caller must discard the partial command buffer, never

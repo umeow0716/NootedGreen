@@ -5846,6 +5846,23 @@ int main() {
                 ++generated;assert(ready.ief==savedIef && ready.state==savedState);return 89;
             })==89);
         assert(generated==2 && reads==0 && produced==1 && cache.reset());
+        TglOwnedSfcIefInput input;
+        input.enabled=true;input.strength=1;input.skinEnable=1;input.detailEnable=1;
+        input.thresholds=compositionThresholds;
+        assert(tglWithOwnedSfcFilterCommands(parameters,input,compositionTables,
+            cache,true,3,5,0,read,produce,generate)==31);
+        assert(generated==3 && produced==2 && parameters.ief==savedIef && parameters.state==savedState);
+        input.strength=NAN;
+        assert(tglWithOwnedSfcFilterCommands(parameters,input,compositionTables,
+            cache,true,3,5,0,read,produce,generate)==5);
+        assert(generated==3 && produced==2 && parameters.ief==savedIef && parameters.state==savedState);
+        input.enabled=false;
+        assert(tglWithOwnedSfcFilterCommands(parameters,input,compositionTables,
+            cache,false,3,5,UINTPTR_MAX,read,produce,
+            [&](TglOwnedSfcCommandParameters& ready) noexcept {
+                ++generated;assert((ready.ief==std::array<uint8_t,64>{}));return 89;
+            })==89);
+        assert(generated==4 && produced==2 && reads==0);
     }
     {
         TglOwnedVpCscCache cache;
