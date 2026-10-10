@@ -5271,6 +5271,36 @@ static void testSfcFrameFields() {
 
 int main() {
     {
+        TglOwnedSfcCommandParameters parameters;
+        parameters.ief[1]=7;parameters.state[0x88]=2;
+        const auto savedIef=parameters.ief;const auto savedState=parameters.state;
+        TglOwnedVpCscCache cache;unsigned reads=0,produced=0,generated=0;
+        auto read=[&](uintptr_t,void*,size_t) noexcept {++reads;return false;};
+        auto produce=[&](TglCscCoefficients& out,uint32_t from,uint32_t to) noexcept {
+            ++produced;assert(from==3 && to==5);out.matrix[0]=2;return true;
+        };
+        auto generate=[&](TglOwnedSfcCommandParameters& ready) noexcept {
+            ++generated;assert(&ready==&parameters);
+            assert(ready.state[0x88]==1 && ready.ief[0x20]==1);
+            for(size_t offset:{size_t(0x28),size_t(0x30),size_t(0x38)}) {
+                uintptr_t pointer=0;std::memcpy(&pointer,ready.ief.data()+offset,8);
+                assert(pointer);
+            }
+            assert(!cache.reset());return 31;
+        };
+        assert(tglWithOwnedSfcCscCommands(parameters,cache,true,3,5,0,read,produce,generate)==31);
+        assert(parameters.ief==savedIef && parameters.state==savedState);
+        assert(produced==1 && generated==1 && reads==0);
+        assert(tglWithOwnedSfcCscCommands(parameters,cache,true,4,5,0,read,
+            [](TglCscCoefficients&,uint32_t,uint32_t) noexcept {return false;},generate)==5);
+        assert(generated==1 && parameters.ief==savedIef && parameters.state==savedState);
+        assert(tglWithOwnedSfcCscCommands(parameters,cache,false,4,5,UINTPTR_MAX,read,produce,
+            [&](TglOwnedSfcCommandParameters& ready) noexcept {
+                ++generated;assert(ready.ief==savedIef && ready.state==savedState);return 89;
+            })==89);
+        assert(generated==2 && reads==0 && produced==1 && cache.reset());
+    }
+    {
         TglOwnedVpCscCache cache;
         unsigned reads=0,produced=0;
         auto read=[&](uintptr_t,void*,size_t) noexcept {++reads;return false;};

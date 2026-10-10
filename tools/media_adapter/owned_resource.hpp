@@ -1472,9 +1472,10 @@ public:
         if(success) {coefficients_=candidate;from_=from;to_=to;valid_=true;}
         mutating_=false;return success;
     }
-    template<class Use>
-    int withParameters(std::array<uint8_t,64>& ief,std::array<uint8_t,0xb8>& state,
+    template<size_t StateSize,class Use>
+    int withParameters(std::array<uint8_t,64>& ief,std::array<uint8_t,StateSize>& state,
                        Use use) noexcept {
+        static_assert(StateSize==0xb8 || StateSize==0xf8,"qualified VP/TGL state extent");
         static_assert(noexcept(use()),"VP CSC parameter borrower ABI");
         if(!valid_ || leased_ || mutating_) return 5;
         for(size_t offset:{size_t(0x28),size_t(0x30),size_t(0x38)}) {
@@ -5503,6 +5504,21 @@ struct TglOwnedSfcCommandParameters {
     TglOwnedSfcYParameters y{};
     TglOwnedSfcUvParameters uv{};
 };
+// Enclose actual CPU command generation in the coefficient lease, rather
+// than storing pointers into a temporary snapshot. Disabled CSC does not
+// inspect its optional source or reset an existing cache. This does not
+// authenticate the TGL pass/backend or certify GPU retirement.
+template<class Read,class Produce,class Generate>
+int tglWithOwnedSfcCscCommands(TglOwnedSfcCommandParameters& parameters,
+    TglOwnedVpCscCache& cache,bool enabled,uint32_t from,uint32_t to,
+    uintptr_t sourceA8,Read read,Produce produce,Generate generate) noexcept {
+    static_assert(noexcept(generate(parameters)),"SFC CSC command generator ABI");
+    if(!enabled) return generate(parameters);
+    if(!cache.prepare(from,to,sourceA8,read,produce)) return 5;
+    return cache.withParameters(parameters.ief,parameters.state,[&]() noexcept {
+        return generate(parameters);
+    });
+}
 // Compose the prepared CPU arguments with the typed native backend. Resource
 // usage registration must already be complete; shell/owners must remain live.
 // On any failure the caller must discard the partial command buffer, never
