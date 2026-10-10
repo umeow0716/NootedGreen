@@ -87,6 +87,32 @@ inline std::array<uint8_t, 0x170> tglSurfaceCommandSet(
     return out;
 }
 
+// 1295c0: query selector5 once, preserve its failure and caller outputs.
+// query's platform implementation remains separately required; do not import
+// ICL's statistics size into the TGL producer.
+template<class Query>
+int tglStatisticsOffsets(uint32_t width, uint32_t height, uint8_t flag1b88,
+                         uint8_t flag1b89, uint32_t &first, uint32_t &second,
+                         Query query) noexcept {
+    static_assert(noexcept(query(uint32_t{5}, std::declval<uint32_t &>())),
+                  "native query must return status without throwing");
+    uint32_t size = 0;
+    const int status = query(5, size);
+    if (status) return status;
+    const uint32_t pixels = width * height; // native 32-bit arithmetic
+    if (flag1b89 & 1) {
+        first = pixels + size;
+        second = pixels + 3u * size;
+    } else if (flag1b88 & 1) {
+        first = pixels;
+        second = pixels + size;
+    } else {
+        first = 0;
+        second = size;
+    }
+    return 0;
+}
+
 struct TglNativeResourceBinding {
     uintptr_t context = 0, allocate = 0, release = 0;
     // 132ec0..132ed6: renderer stores RenderHal at +2cc0 and borrows

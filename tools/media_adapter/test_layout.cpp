@@ -6,6 +6,32 @@
 #include "descriptor_bridge.hpp"
 #include "owned_resource.hpp"
 
+static void testStatisticsOffsets() {
+    unsigned calls = 0;
+    int status = 0;
+    const auto query = [&](uint32_t selector, uint32_t &size) noexcept {
+        ++calls;
+        assert(selector == 5);
+        size = 128; // fixture only, not a TGL platform constant
+        return status;
+    };
+    uint32_t first = 0, second = 0;
+    for (uint8_t a : {uint8_t{0}, uint8_t{1}, uint8_t{0xfe}, uint8_t{0xff}})
+        for (uint8_t b : {uint8_t{0}, uint8_t{1}, uint8_t{0xfe}, uint8_t{0xff}}) {
+            const auto before = calls;
+            assert(tglStatisticsOffsets(64, 16, a, b, first, second, query) == 0);
+            assert(calls == before + 1);
+            assert(first == ((b & 1) ? 1152u : (a & 1) ? 1024u : 0u));
+            assert(second == ((b & 1) ? 1408u : (a & 1) ? 1152u : 128u));
+        }
+    status = 31; first = 7; second = 9;
+    assert(tglStatisticsOffsets(64, 16, 1, 1, first, second, query) == 31);
+    assert(first == 7 && second == 9);
+    status = 0;
+    assert(tglStatisticsOffsets(UINT32_MAX, 2, 1, 1, first, second, query) == 0);
+    assert(first == 126 && second == 382); // exact native wrap, not size validation
+}
+
 static void testSurfaceDescriptor() {
     std::array<uint8_t, 0x2a8> shell{};
     const auto put = [&](size_t offset, uint32_t value) {
@@ -290,6 +316,7 @@ static void testResourceBinding() {
 // Offline layout hypothesis only: not an ABI-complete or deployable adapter.
 // The pinned consumer sites shift 0x20/0x24/0x228/0x428 by eight bytes.
 int main() {
+    testStatisticsOffsets();
     testSurfaceDescriptor();
     testOwnedResourceLifecycle();
     testNativeResourceBoundary();
