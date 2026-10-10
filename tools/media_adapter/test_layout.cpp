@@ -1027,6 +1027,19 @@ static void testVeboxPrefix() {
         std::memcpy(&borrowed,converted.data()+0x40,8);
         assert(convertedWidth == width && convertedPitch == pitch);
         assert(borrowed == reinterpret_cast<uintptr_t>(surface.resource.data()));
+        std::array<TglOwnedSurfaceStorage,5> shells{};
+        std::array<const TglOwnedSurfaceStorage*,5> slots{};
+        for (size_t i=0; i<slots.size(); ++i) slots[i] = &shells[i];
+        const auto command = tglSurfaceCommandSet(slots,0xff);
+        assert(command[0x168] == 1 && command[0x169] == 1);
+        for (size_t i=0; i<slots.size(); ++i) {
+            std::memcpy(&borrowed,command.data()+i*0x48+0x40,8);
+            assert(borrowed == reinterpret_cast<uintptr_t>(shells[i].resource.data()));
+        }
+        slots[1] = nullptr;
+        const auto withoutReference = tglSurfaceCommandSet(slots,0);
+        assert(withoutReference[0x168] == 0 && withoutReference[0x169] == 0);
+        for (size_t i=0x48; i<0x90; ++i) assert(withoutReference[i] == 0);
         constexpr uintptr_t image = 0x100000;
         std::array<uint8_t,16> bytes{
             0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x20,

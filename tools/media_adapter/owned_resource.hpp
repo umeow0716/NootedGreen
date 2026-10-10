@@ -1002,20 +1002,29 @@ inline std::array<uint8_t,0x48> tglSurfaceDescriptor(
 }
 
 // 52d60: five optional borrowed shells, no allocation or ownership transfer.
-inline std::array<uint8_t, 0x170> tglSurfaceCommandSet(
-        const std::array<const std::array<uint8_t, 0x2a8> *, 5> &surfaces,
+inline std::array<uint8_t, 0x170> tglSurfaceCommandSetBytes(
+        const std::array<const uint8_t*,5>& surfaces,
         uint8_t di) noexcept {
     std::array<uint8_t, 0x170> out{};
     out[0x168] = di & 1;
     for (size_t i = 0; i < surfaces.size(); ++i) {
         if (!surfaces[i]) continue;
-        const auto descriptor = tglSurfaceDescriptor(*surfaces[i]);
+        const auto descriptor = tglSurfaceDescriptorBytes(surfaces[i]);
         std::memcpy(out.data() + i * 0x48, descriptor.data(), descriptor.size());
         if (i < 2) std::memcpy(out.data() + i * 0x48 + 0x20,
-                               surfaces[i]->data() + 0xf8, 4);
+                               surfaces[i] + 0xf8, 4);
     }
     out[0x169] = surfaces[1] ? 1 : 0;
     return out;
+}
+
+inline std::array<uint8_t,0x170> tglSurfaceCommandSet(
+        const std::array<const std::array<uint8_t,0x2a8>*,5>& surfaces,
+        uint8_t di) noexcept {
+    std::array<const uint8_t*,5> views{};
+    for (size_t i=0; i<views.size(); ++i)
+        if (surfaces[i]) views[i] = surfaces[i]->data();
+    return tglSurfaceCommandSetBytes(views,di);
 }
 
 // 1295c0: query selector5 once, preserve its failure and caller outputs.
@@ -1265,6 +1274,14 @@ static_assert(sizeof(TglOwnedSurfaceStorage) == 0x2a8);
 inline std::array<uint8_t,0x48> tglSurfaceDescriptor(
         const TglOwnedSurfaceStorage& shell) noexcept {
     return tglSurfaceDescriptorBytes(reinterpret_cast<const uint8_t*>(&shell));
+}
+inline std::array<uint8_t,0x170> tglSurfaceCommandSet(
+        const std::array<const TglOwnedSurfaceStorage*,5>& surfaces,
+        uint8_t di) noexcept {
+    std::array<const uint8_t*,5> views{};
+    for (size_t i=0; i<views.size(); ++i)
+        if (surfaces[i]) views[i] = reinterpret_cast<const uint8_t*>(surfaces[i]);
+    return tglSurfaceCommandSetBytes(views,di);
 }
 struct TglResourceStorageReference { std::array<uint8_t,0x148>& storage; };
 
