@@ -66,3 +66,43 @@ private:
     std::vector<const Native *> native_;
     std::vector<Consumer> consumer_;
 };
+
+// Exact signed TGL blob observed at image+531550. Only entry 78's CPU
+// dependency metadata changes; offsets, lengths and all GPU kernels stay intact.
+struct TglKernelMetadataAdapter {
+    static constexpr size_t blobBytes = 0xf86ec;
+    static constexpr size_t metadataOffset = 0xd30 + 344224;
+    static constexpr std::array<uint32_t, 56> pinned = {{
+        0xd0,13,13,1,
+        1,0x10013,1,0x2001e,1,0x30021,1,0x40022,
+        1,0x50004,1,0x60005,1,0x70036,1,0x80051,
+        1,0x90052,1,0xa0212,1,0xb0280,1,0xc0281,
+        1,6,0,0x10009,0,0x2000a,0,0x3000b,
+        0,0x4000c,0,0x50007,0,0x60008,0,0x7000d,
+        0,0x8000e,0,0x9000f,0,0xa0010,0,0xb0011,
+        0,0xc0012,0,0x169
+    }};
+    static bool translate(std::vector<uint8_t> &owned) {
+        if (owned.size() != blobBytes) return false;
+        uint32_t offsets[2]{};
+        std::memcpy(offsets, owned.data() + 78 * 4, sizeof(offsets));
+        if (offsets[0] != 344224 || offsets[1] != 344448 ||
+            std::memcmp(owned.data() + metadataOffset, pinned.data(), sizeof(pinned))) return false;
+        auto converted = pinned;
+        converted[0] = 0x10000;
+        converted[1] = 0;
+        converted[2] = 13; // native count of flag=0 records
+        converted[3] = 13; // native count of flag=1 records
+        unsigned counts[2]{};
+        for (size_t i = 4; i < converted.size(); i += 2) {
+            const auto flag = pinned[i], descriptor = pinned[i + 1];
+            if (flag > 1 || (descriptor & 0xffff) >= 0x34b) return false;
+            ++counts[flag];
+            converted[i] = descriptor;
+            converted[i + 1] = flag;
+        }
+        if (counts[0] != converted[2] || counts[1] != converted[3]) return false;
+        std::memcpy(owned.data() + metadataOffset, converted.data(), sizeof(converted));
+        return true;
+    }
+};

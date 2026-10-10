@@ -18,6 +18,19 @@ extern "C" const char owned_debug_site_b[], owned_debug_site_c[], owned_debug_si
 extern "C" uintptr_t owned_debug_data_target();
 extern "C" const char owned_debug_data_site[];
 extern "C" const char owned_debug_data[];
+extern "C" uint32_t owned_debug_copy_target(void *, size_t, const void *, size_t);
+extern "C" const char owned_debug_copy_site[];
+extern "C" __attribute__((noinline)) uint32_t owned_debug_copy_impl(
+    void *destination, size_t capacity, const void *source, size_t bytes) {
+    if (capacity < bytes || bytes != sizeof(uint32_t)) return 0;
+    std::memcpy(destination, source, bytes);
+    uint32_t result;
+    std::memcpy(&result, destination, sizeof(result));
+    return result;
+}
+asm(".text\n.p2align 4\n.globl _owned_debug_copy_target\n"
+    "_owned_debug_copy_target:\npushq %rbp\nmovq %rsp, %rbp\n"
+    ".globl _owned_debug_copy_site\n_owned_debug_copy_site:\ncallq _owned_debug_copy_impl\npopq %rbp\nretq\n");
 asm(".text\n.p2align 4\n.globl _owned_debug_data_target\n"
     "_owned_debug_data_target:\nleaq _owned_debug_data(%rip), %rax\nmovq %rax, %rdx\nmovl $0x2468, %ecx\n"
     ".globl _owned_debug_data_site\n_owned_debug_data_site:\ncmpl $0x10000, (%rax)\nretq\n"
@@ -178,6 +191,35 @@ int main() {
         NativeReturnObserver outside({reinterpret_cast<uintptr_t>(owned_debug_data_site), 0, 0, 0},
             0, 0, 0, 1, reinterpret_cast<uintptr_t>(owned_debug_data) + 1, 3);
         if (!owned_debug_data_target() || !outside.observed(0, -1)) return 1;
+    }
+    {
+        const uint32_t source = 0x1234, replacement = 0x5678, other = 0xabcd;
+        uint32_t destination = 0;
+        NativeReturnObserver copy({reinterpret_cast<uintptr_t>(owned_debug_copy_site), 0, 0, 0},
+            0, 0, 0, 0, 0, 0,
+            {reinterpret_cast<uintptr_t>(&source), reinterpret_cast<uintptr_t>(&replacement), 4});
+        if (owned_debug_copy_target(&destination, 4, &source, 4) != replacement ||
+            destination != replacement || source != 0x1234 || !copy.observed(0, 1)) return 1;
+        if (owned_debug_copy_target(&destination, 4, &other, 4) != other) return 1;
+    }
+    {
+        const uint32_t source = 0x1234, replacement = 0x5678, other = 0xabcd;
+        uint32_t destination = 0;
+        NativeReturnObserver mismatch({reinterpret_cast<uintptr_t>(owned_debug_copy_site), 0, 0, 0},
+            0, 0, 0, 0, 0, 0,
+            {reinterpret_cast<uintptr_t>(&source), reinterpret_cast<uintptr_t>(&replacement), 4});
+        if (owned_debug_copy_target(&destination, 4, &other, 4) != other ||
+            !mismatch.observed(0, -1)) return 1;
+    }
+    for (unsigned mismatch = 0; mismatch != 2; ++mismatch) {
+        const uint32_t source = 0x1234, replacement = 0x5678;
+        uint32_t destination = 0;
+        NativeReturnObserver shape({reinterpret_cast<uintptr_t>(owned_debug_copy_site), 0, 0, 0},
+            0, 0, 0, 0, 0, 0,
+            {reinterpret_cast<uintptr_t>(&source), reinterpret_cast<uintptr_t>(&replacement), 4});
+        const size_t capacity = mismatch ? 4 : 3, bytes = mismatch ? 3 : 4;
+        if (owned_debug_copy_target(&destination, capacity, &source, bytes) != 0 ||
+            destination != 0 || !shape.observed(0, -1)) return 1;
     }
     {
         NativeReturnObserver boolean(sites, 1);

@@ -8,6 +8,36 @@
 // Offline layout hypothesis only: not an ABI-complete or deployable adapter.
 // The pinned consumer sites shift 0x20/0x24/0x228/0x428 by eight bytes.
 int main() {
+    std::vector<uint8_t> blob(TglKernelMetadataAdapter::blobBytes, 0x5a);
+    const uint32_t offsets[] = {344224, 344448};
+    std::memcpy(blob.data() + 78 * 4, offsets, sizeof(offsets));
+    std::memcpy(blob.data() + TglKernelMetadataAdapter::metadataOffset,
+        TglKernelMetadataAdapter::pinned.data(), sizeof(TglKernelMetadataAdapter::pinned));
+    const auto originalBlob = blob;
+    assert(TglKernelMetadataAdapter::translate(blob));
+    for (size_t i = 0; i < blob.size(); ++i)
+        if (i < TglKernelMetadataAdapter::metadataOffset ||
+            i >= TglKernelMetadataAdapter::metadataOffset + sizeof(TglKernelMetadataAdapter::pinned))
+            assert(blob[i] == originalBlob[i]);
+    uint32_t converted[56]{};
+    std::memcpy(converted, blob.data() + TglKernelMetadataAdapter::metadataOffset, sizeof(converted));
+    assert(converted[0] == 0x10000 && converted[2] == 13 && converted[3] == 13);
+    for (unsigned i = 4; i < 56; i += 2) {
+        assert(converted[i] == TglKernelMetadataAdapter::pinned[i + 1]);
+        assert(converted[i + 1] == TglKernelMetadataAdapter::pinned[i]);
+    }
+    for (size_t i = 0; i < sizeof(TglKernelMetadataAdapter::pinned); ++i) {
+        auto bad = originalBlob;
+        bad[TglKernelMetadataAdapter::metadataOffset + i] ^= 1;
+        const auto savedBad = bad;
+        assert(!TglKernelMetadataAdapter::translate(bad) && bad == savedBad);
+    }
+    auto badSize = originalBlob;
+    badSize.pop_back();
+    assert(!TglKernelMetadataAdapter::translate(badSize));
+    auto badOffset = originalBlob;
+    badOffset[78 * 4] ^= 1;
+    assert(!TglKernelMetadataAdapter::translate(badOffset));
     std::array<uint8_t, 0x430> native{};
     for (size_t i = 0; i < native.size(); ++i)
         native[i] = static_cast<uint8_t>((i * 17 + i / 256) & 255);

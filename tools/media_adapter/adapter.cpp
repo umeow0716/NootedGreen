@@ -1,4 +1,5 @@
 #include "descriptor_bridge.hpp"
+#include "tgl_capability_adapter.hpp"
 #include "native_return_observer.hpp"
 #include <CommonCrypto/CommonDigest.h>
 #include <dlfcn.h>
@@ -32,7 +33,6 @@ struct Entry {
 };
 std::map<void *, std::unique_ptr<Entry>> registry;
 std::atomic<uintptr_t> nativeCreateContexts{0};
-std::atomic_flag observationTried = ATOMIC_FLAG_INIT;
 bool readMemory(uintptr_t address, void *output, size_t length) {
     mach_vm_size_t copied = 0;
     return address && mach_vm_read_overwrite(mach_task_self(), address, length,
@@ -79,8 +79,7 @@ int NGRN_ObservedCreateContexts(void *context, const void *input) {
     // original context/input exactly once, and its result passes through.
     // Pinned 13e43 -> 14342 constructor -> vtable 75d018+10 = 2338e0;
     // 14e1f invokes it synchronously. Prior observation at 2340c5 captured raw=31.
-    if (std::strcmp(getprogname(), "VTEncoderXPCService") ||
-        observationTried.test_and_set(std::memory_order_relaxed)) return native(context, input);
+    if (std::strcmp(getprogname(), "VTEncoderXPCService")) return native(context, input);
     os_log_error(OS_LOG_DEFAULT, "NGRN_NATIVE_CONTEXT_CALLBACK_ENTER scoped-observation-only");
     Dl_info info{};
     if (!dladdr(reinterpret_cast<void *>(address), &info) || !info.dli_fbase ||
@@ -88,29 +87,25 @@ int NGRN_ObservedCreateContexts(void *context, const void *input) {
         os_log_error(OS_LOG_DEFAULT, "NGRN_NATIVE_RETURN_OBSERVER_SKIP callback-identity");
         return native(context, input);
     }
-    // Live entry 78 has length 0xe0 and header 0xd0, not 0x10000.
-    // Identify its original native blob without exporting an address or changing data.
-    struct Site { uintptr_t call; unsigned length, returnOffset; uint8_t bytes[10]; };
-    constexpr Site pinned[] = {
-        {0x132609, 6, 0, {0x8b,0x88,0xd8,0x09,0x00,0x00}}, // RDX=source before copy
-        {0x13260f, 5, 0, {0xe8,0x9c,0x42,0xf3,0xff}}, // ECX=source byte count
-        {0x5acb4, 4, 0, {0x83,0x7d,0x9c,0x00}}, // ECX=entry 78 byte count
-        {0x5acdc, 6, 0, {0x81,0x38,0x00,0x00,0x01,0x00}}, // DWORD [RAX]=header
-    };
-    std::array<uintptr_t, 4> sites{};
-    for (unsigned i = 0; i != std::size(pinned); ++i) {
-        uint8_t bytes[10]{};
-        const uintptr_t call = reinterpret_cast<uintptr_t>(info.dli_fbase) + pinned[i].call;
-        if (!readMemory(call, bytes, pinned[i].length) || std::memcmp(bytes, pinned[i].bytes, pinned[i].length)) {
-            os_log_error(OS_LOG_DEFAULT, "NGRN_NATIVE_RETURN_OBSERVER_SKIP site-anchor index=%{public}u", i);
-            return native(context, input);
-        }
-        sites[i] = call + pinned[i].returnOffset;
+    const uintptr_t base = reinterpret_cast<uintptr_t>(info.dli_fbase);
+    const uintptr_t site = base + 0x13260f, source = base + 0x531550;
+    constexpr uint8_t anchor[] = {0xe8,0x9c,0x42,0xf3,0xff};
+    uint8_t actual[sizeof(anchor)]{};
+    std::vector<uint8_t> owned;
+    try { owned.resize(TglKernelMetadataAdapter::blobBytes); }
+    catch (...) { return native(context, input); }
+    if (!readMemory(site, actual, sizeof(actual)) || std::memcmp(actual, anchor, sizeof(anchor)) ||
+        !readMemory(source, owned.data(), owned.size()) || !TglKernelMetadataAdapter::translate(owned)) {
+        os_log_error(OS_LOG_DEFAULT, "NGRN_OWNED_KERNEL_METADATA_SKIP exact-data-or-call-anchor");
+        return native(context, input);
     }
-    // Exact signed image __TEXT [0,0x754000), containing the native static blobs.
-    NativeReturnObserver observer(sites, 0, 6, 8, 1,
-        reinterpret_cast<uintptr_t>(info.dli_fbase), 0x754000);
+    // Native thread/debug policy remains authoritative: refusal leaves native untouched.
+    // The single pinned copy consumes our owned CPU metadata; GPU kernel bytes are identical.
+    NativeReturnObserver observer({site, 0, 0, 0}, 0, 0, 0, 0, 0, 0,
+        {source, reinterpret_cast<uintptr_t>(owned.data()), owned.size()});
     const int result = native(context, input);
+    os_log_error(OS_LOG_DEFAULT, "NGRN_OWNED_KERNEL_METADATA_COPY applied=%{public}d result=%{public}d",
+        int(observer.observed(0, 1)), result);
     std::fprintf(stderr, "NGRN_NATIVE_CONTEXT_CALLBACK_RETURN result=%d\n", result);
     os_log_error(OS_LOG_DEFAULT, "NGRN_NATIVE_CONTEXT_CALLBACK_RETURN result=%{public}d", result);
     return result;
