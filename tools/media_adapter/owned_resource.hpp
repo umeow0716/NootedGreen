@@ -5072,6 +5072,28 @@ bool tglPrepareOwnedVpFillAlpha(TglOwnedVpChromaStatePrefix& state,
     state.packet=candidate;cache=candidateCache;return true;
 }
 
+// Complete CPU scalar composition through +d0, BEFORE +58 resource allocation
+// and the final surface query/publication. This is the reference VP packet,
+// NOT a qualified TGL Gen12 pass. In particular, Gen12 MMC modes and filter
+// semantics still require the separate audited Gen12 producer.
+template<class Convert,class Apply>
+bool tglPrepareOwnedVpCpuState(const TglOwnedVpFramePreparation& frame,
+    const TglOwnedVpRegionInput& geometry,bool settings0f,bool settings13,
+    const TglOwnedVpFillAlphaInput& fillAlpha,uint32_t outputColorSpace,
+    uint32_t sourceColorSpace,const TglOwnedVpCompressionInput& compression,
+    TglOwnedSfcFillCache& cache,Convert convert,Apply apply,
+    TglOwnedVpChromaStatePrefix& output) noexcept {
+    // Reject mixed snapshots before any CSC/OS effects.
+    if(compression.format!=geometry.targetFormat) return false;
+    TglOwnedVpChromaStatePrefix candidate;auto candidateCache=cache;
+    if(!tglPrepareOwnedVpStatePrefix(frame,geometry,settings0f,settings13,candidate) ||
+       !tglPrepareOwnedVpFillAlpha(candidate,candidateCache,frame,geometry.targetFormat,
+            outputColorSpace,sourceColorSpace,fillAlpha,convert) ||
+       !tglPrepareOwnedVpCompression(candidate.packet,compression,frame.regions.scale,apply))
+        return false;
+    output=candidate;cache=candidateCache;return true;
+}
+
 // TGL129e3e/129e65 ignore surface/state producer returns;129ec3 (+70)
 // is the first checked status. Owned callbacks must share this per-pass latch
 // so an early failed producer cannot be followed by native command emission.

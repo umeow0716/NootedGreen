@@ -5271,6 +5271,42 @@ static void testSfcFrameFields() {
 
 int main() {
     {
+        TglOwnedVpFramePreparationInput input;
+        input.geometry.frameWidth=1920;input.geometry.frameHeight=1080;
+        input.geometry.targetWidth=960;input.geometry.targetHeight=810;
+        input.geometry.sourceRight=1920;input.geometry.sourceBottom=1080;
+        input.geometry.destinationRight=960;input.geometry.destinationBottom=810;
+        input.geometry.targetFormat=0x19;input.modes.source130=0x19;
+        TglOwnedVpFramePreparation frame;
+        assert(tglPrepareOwnedVpFrame(input,{},frame));
+        TglOwnedVpChromaStatePrefix state;state.packet.fill(0xa5);
+        TglOwnedSfcFillCache cache;TglOwnedVpFillAlphaInput fill;
+        TglOwnedVpCompressionInput compression{0x19,7,1,1,1};
+        unsigned converts=0,applies=0;
+        auto convert=[&](auto& out,const auto& sample,uint32_t,uint32_t) noexcept {
+            ++converts;out=sample;return true;
+        };
+        auto apply=[&](uint32_t mode) noexcept {++applies;assert(mode==1);};
+        assert(tglPrepareOwnedVpCpuState(frame,input.geometry,false,false,fill,0,0,
+            compression,cache,convert,apply,state));
+        assert(converts==0 && applies==1 && state.packet[0x8b]==1);
+        uint32_t height=0,width=0;
+        std::memcpy(&height,state.packet.data()+0x4c,4);
+        std::memcpy(&width,state.packet.data()+0x50,4);
+        assert(height==810 && width==960);
+        const auto saved=state.packet;
+        compression.format=3;
+        assert(!tglPrepareOwnedVpCpuState(frame,input.geometry,false,false,fill,0,0,
+            compression,cache,convert,apply,state));
+        assert(state.packet==saved && converts==0 && applies==1);
+        compression.format=0x19;frame.at920=true;
+        assert(!tglPrepareOwnedVpCpuState(frame,input.geometry,false,false,fill,0,0,
+            compression,cache,
+            [&](auto&,const auto&,uint32_t,uint32_t) noexcept {++converts;return false;},
+            apply,state));
+        assert(state.packet==saved && converts==1 && applies==1);
+    }
+    {
         TglOwnedVpCompressionInput input{0x19,7,1,1,1};
         std::array<uint8_t,0xb8> packet{};
         unsigned calls=0;uint32_t observed=99;
