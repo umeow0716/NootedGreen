@@ -2035,6 +2035,23 @@ static void testResourceBinding() {
 // The pinned consumer sites shift 0x20/0x24/0x228/0x428 by eight bytes.
 int main() {
     {
+        for (bool dn : {false,true}) for (bool di : {false,true})
+            for (bool iecp : {false,true}) for (bool special : {false,true})
+                for (bool exec12 : {false,true}) for (uint32_t type=0;type<4;++type)
+                    for (uint32_t mode : {0u,1u,2u,3u,0xffffffffu}) {
+                        const uint32_t original=0xa5a70000u|(dn?8:0)|(di?16:0)|(iecp?4:0);
+                        uint32_t flags=original;
+                        tglPrepareOwnedStateDnControls(flags,mode,exec12,special,type);
+                        const bool forced=dn&&!di&&(special||type==1||type==2);
+                        uint32_t expected=(original&~0x300c1u)|((mode&3)<<6)|0x10000u;
+                        if (exec12) expected|=1;
+                        if (forced) expected|=0x20004;
+                        assert(flags==expected);
+                        assert(bool(flags&4)==(iecp||forced));
+                        assert((flags&24)==(original&24));
+                    }
+    }
+    {
         for (bool first : {false,true}) for (bool dn : {false,true})
             for (bool di : {false,true}) for (bool suppress : {false,true})
                 for (uint32_t pipe=0;pipe<3;++pipe)

@@ -1410,6 +1410,19 @@ inline bool tglPrepareOwnedStateHistoryAndPipe(uint32_t& flags,
     flags=candidate;
     return true;
 }
+// Darwin1faf78..1fb05f: base+50 return contributes only two bits; exec12
+// contributes bit0. DN-only special input forces IECP, but a false special
+// condition must not clear an IECP bit already chosen by earlier stages.
+inline void tglPrepareOwnedStateDnControls(uint32_t& flags, uint32_t nativeMode,
+                                          bool exec12, bool dnSpecial,
+                                          uint32_t sourceType) noexcept {
+    uint32_t candidate=(flags&~0x300c1u)|((nativeMode&3)<<6)|0x10000u;
+    if (exec12) candidate|=1;
+    const bool special=!(flags&0x10) && (flags&8) &&
+                       (dnSpecial || sourceType==1 || sourceType==2);
+    if (special) candidate|=0x20004;
+    flags=candidate;
+}
 // Exact Darwin caller1f9111/26 packs compressed bit0 and mode DWORD into
 // an eight-byte parameter. TGL179530 consumes mode+4 and calls native OS1a0;
 // do not replace the whole callback with a superficially equivalent bit OR.
