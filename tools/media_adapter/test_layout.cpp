@@ -6,6 +6,46 @@
 #include "descriptor_bridge.hpp"
 #include "owned_resource.hpp"
 
+static void testOwnedVeboxVtable() {
+    constexpr uintptr_t image = 0x1000000;
+    std::array<uintptr_t,TglOwnedVeboxVtable::count> original{};
+    for (size_t i = 0; i < original.size(); ++i) original[i] = image+0x2000+i*8;
+    for (size_t offset : TglOwnedVeboxVtable::missing) original[offset/8] = 0;
+    original[0] = image+0x12e240; original[1] = image+0x12e250;
+    original[0x1b8/8] = image+0x71e80;
+    std::array<uintptr_t,20> hooks{};
+    for (size_t i = 0; i < hooks.size(); ++i) hooks[i] = 0x2000+i*16;
+    bool identity = true, rx = true;
+    auto read = [&](uintptr_t p, void* out, size_t n) {
+        assert(p == image+0x757c98 && n == 0x1e8); // never next table metadata
+        std::memcpy(out,original.data(),n); return true;
+    };
+    auto qualify = [&](uintptr_t p) { return identity && p == image; };
+    auto executable = [&](uintptr_t, size_t n) { assert(n == 1); return rx; };
+    TglOwnedVeboxVtable table;
+    auto build = [&] { return table.build(image,hooks,read,qualify,executable); };
+    assert(build());
+    for (size_t i = 0; i < original.size(); ++i) {
+        auto expected = original[i];
+        for (size_t j = 0; j < hooks.size(); ++j)
+            if (TglOwnedVeboxVtable::required[j]/8 == i) expected = hooks[j];
+        assert(table.entries[i] == expected);
+    }
+    for (size_t i = 0; i < hooks.size(); ++i) {
+        auto saved = hooks[i]; hooks[i] = 0;
+        assert(!build());
+        for (auto value : table.entries) assert(value == 0);
+        hooks[i] = saved;
+    }
+    hooks[0] = image+0x12e240; assert(!build()); hooks[0] = 0x2000;
+    original[0x28/8] = image+0x1000; assert(!build()); original[0x28/8] = 0;
+    original[0x48/8] = 0; assert(!build()); original[0x48/8] = image+0x2048;
+    original[0x48/8] = 0x4000; assert(!build()); original[0x48/8] = image+0x2048;
+    rx = false; assert(!build()); rx = true;
+    identity = false; assert(!build()); identity = true;
+    assert(build());
+}
+
 static void testNativeCscBinding() {
     constexpr uintptr_t image = 0x1000000, child = 0x2000, vt = 0x3000;
     std::array<uint8_t,16> code{0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x40,
@@ -1223,6 +1263,7 @@ static void testResourceBinding() {
 // Offline layout hypothesis only: not an ABI-complete or deployable adapter.
 // The pinned consumer sites shift 0x20/0x24/0x228/0x428 by eight bytes.
 int main() {
+    testOwnedVeboxVtable();
     testNativeCscBinding();
     testDirectVeboxFeasibility();
     testVeboxHardwareBinding();

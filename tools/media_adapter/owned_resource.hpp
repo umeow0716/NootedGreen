@@ -177,6 +177,48 @@ bool tglDirectVeboxFeasible(uintptr_t params, uintptr_t source, uintptr_t target
     return !alpha || (alpha <= max - 7 && read(alpha + 4, &alphaMode, 4) && alphaMode != 2);
 }
 
+// Full VEBOX table, NOT a live child/object replacement. Owned constructor and
+// destructor implementations must exist before this table is installed anywhere.
+// +1e8 belongs to the following execution table's metadata and MUST NOT be copied.
+struct TglOwnedVeboxVtable {
+    static constexpr size_t count = 0x1e8 / 8;
+    static constexpr std::array<size_t,17> missing{
+        0x28,0x58,0x60,0x68,0x70,0x78,0x80,0x90,0x98,0xa0,0xa8,0xb0,0xb8,
+        0x1c8,0x1d0,0x1d8,0x1e0};
+    // Lifecycle slots cannot inherit native delete: owned resources/table need
+    // teardown. +1b8 must implement Gen12 TRUE rather than base FALSE.
+    static constexpr std::array<size_t,20> required{
+        0,8,0x28,0x58,0x60,0x68,0x70,0x78,0x80,0x90,0x98,0xa0,0xa8,0xb0,0xb8,
+        0x1b8,0x1c8,0x1d0,0x1d8,0x1e0};
+    std::array<uintptr_t,count> entries{};
+    template<class Read, class Qualify, class Executable>
+    bool build(uintptr_t image, const std::array<uintptr_t,20>& owned,
+               Read read, Qualify qualify, Executable executable) {
+        entries = {};
+        constexpr auto max = std::numeric_limits<uintptr_t>::max();
+        if (!image || image > max - 0x757e80 || !qualify(image)) return false;
+        std::array<uintptr_t,count> candidate{};
+        if (!read(image + 0x757c98, candidate.data(), sizeof(candidate))) return false;
+        for (size_t i = 0; i < count; ++i) {
+            bool mustBeNull = false;
+            for (size_t offset : missing) mustBeNull |= i * 8 == offset;
+            if (mustBeNull != (candidate[i] == 0)) return false;
+            if (candidate[i] && (candidate[i] < image+0x1160 ||
+                candidate[i] - image >= 0x23e03f || !executable(candidate[i], 1))) return false;
+        }
+        if (candidate[0] != image+0x12e240 || candidate[1] != image+0x12e250 ||
+            candidate[0x1b8/8] != image+0x71e80) return false;
+        for (size_t i = 0; i < required.size(); ++i) {
+            // Owned replacements are trusted compiled addresses, not pointers
+            // discovered in an object. Never substitute another native callback.
+            if (!owned[i] || (owned[i] >= image && owned[i] - image < 0x23e03f) ||
+                !executable(owned[i], 1)) return false;
+            candidate[required[i]/8] = owned[i];
+        }
+        entries = candidate; return true;
+    }
+};
+
 // Authenticated native CSC entry. This binds code only: invocation also requires
 // a fully constructed owned child with native execution and Gen12 overrides.
 struct TglTwoPassCscBinding {
