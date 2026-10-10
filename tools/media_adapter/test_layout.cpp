@@ -2036,6 +2036,26 @@ static void testResourceBinding() {
 int main() {
     {
         const uint32_t sitings[6]={0x21,0x22,0x11,0x12,0x41,0x42};
+        const uint32_t nativeFields[6]={0x80,0xa0,0,0x20,0x100,0x120};
+        for (uint32_t pack=0;pack<4;++pack) for (uint32_t type=0;type<6;++type)
+            for (uint32_t pipe=0;pipe<3;++pipe)
+                for (uint32_t initial : {0u,0xffffffffu,0xa5a55a5au}) {
+                    uint32_t state=initial;
+                    assert(tglPrepareOwnedChromaDownsampling(state,pack,sitings[type],pipe));
+                    const bool active=pipe==2 && (pack==0 || (pack==1 && (type==2 || type==3)));
+                    assert(state==((initial&~0xbe0u)|(active ? nativeFields[type] : 0x800)));
+                }
+        uint32_t state=0xffffffff;
+        assert(tglPrepareOwnedChromaDownsampling(state,0,0x77,2));
+        assert((state&0xbe0)==0x80);
+        const auto saved=state;
+        assert(!tglPrepareOwnedChromaDownsampling(state,4,0x21,2) && state==saved);
+        assert(!tglPrepareOwnedChromaDownsampling(state,0,0x21,3) && state==saved);
+        assert(tglPrepareOwnedChromaDownsampling(state,0,0,2));
+        assert((state&0xbe0)==0x800);
+    }
+    {
+        const uint32_t sitings[6]={0x21,0x22,0x11,0x12,0x41,0x42};
         const uint32_t nativeFields[2][6]={{4,5,0,1,8,9},{8,9,0,1,16,17}};
         for (uint32_t pack=0;pack<4;++pack) for (uint32_t type=0;type<6;++type)
             for (bool needed : {false,true}) for (bool di : {false,true})

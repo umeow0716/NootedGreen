@@ -1353,6 +1353,26 @@ inline bool tglPrepareOwnedChromaUpsampling(uint32_t& state, uint32_t pack,
     state=candidate;
     return true;
 }
+// Exact Darwin1faaa4..1fad78. Darwin enables downsampling only for pipe2;
+// unlike later Linux code this does not add a deinterlace/non-YUY2 condition.
+inline bool tglPrepareOwnedChromaDownsampling(uint32_t& state, uint32_t pack,
+                                            uint32_t siting, uint32_t pipe) noexcept {
+    if (pack > 3 || pipe > 2) return false;
+    uint32_t candidate=(state&~0xbe0u)|0x800u;
+    if (pipe == 2) {
+        const uint32_t masks[6]={0x21,0x22,0x11,0x12,0x41,0x42};
+        for (uint32_t type=0;type<6;++type) {
+            if ((siting&masks[type]) != masks[type]) continue;
+            if (pack==0 || (pack==1 && (type==2 || type==3))) {
+                const uint32_t vertical=type<2 ? 1u : type<4 ? 0u : 2u;
+                candidate=(candidate&~0xbe0u)|((type&1)<<5)|(vertical<<7);
+            }
+            break;
+        }
+    }
+    state=candidate;
+    return true;
+}
 // Exact Darwin caller1f9111/26 packs compressed bit0 and mode DWORD into
 // an eight-byte parameter. TGL179530 consumes mode+4 and calls native OS1a0;
 // do not replace the whole callback with a superficially equivalent bit OR.
