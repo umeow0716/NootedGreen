@@ -1478,6 +1478,9 @@ struct TglOwnedVeboxVtable {
         }
         if (candidate[0] != image+0x12e240 || candidate[1] != image+0x12e250 ||
             candidate[0x40/8] != image+0x12e9c0 || candidate[0x48/8] != image+0x12ea30 ||
+            // Admission retains these native base methods. +180 uses the
+            // owned base90 history/mode state; neither is a donor thunk.
+            candidate[0x170/8] != image+0x12aba0 || candidate[0x180/8] != image+0x12b1d0 ||
             candidate[0xd0/8] != image+0x71e80 ||
             candidate[0x1b8/8] != image+0x71e80) return false;
         for (size_t i = 0; i < required.size(); ++i) {
