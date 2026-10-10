@@ -6103,6 +6103,8 @@ public:
 // TGL's buffer format is 3d (not ICL's 3e); linear tile is 4.
 template<class Backend> class TglOwnedSfcLineBuffers {
     TglOwnedResourceGroup<Backend,3> owners;
+    using Storage=typename TglOwnedResource<Backend>::Storage;
+    std::array<const Storage*,3> leasedViews_{};
     uint32_t inputHeight_=0,scaledHeight_=0;
     bool leased_=false,mutating_=false;
 public:
@@ -6139,11 +6141,15 @@ public:
         static_assert(noexcept(use()),"SFC buffer lease status ABI");
         if(leased_ || mutating_ || !matchesDimensions(inputHeight,scaledHeight)) return 5;
         leased_=true;
-        const int result=use();
+        const int result=owners.withStorage([&](const auto& views) noexcept {
+            leasedViews_=views;
+            const int status=use();
+            leasedViews_={};return status;
+        });
         leased_=false;return result;
     }
     bool matchesDimensions(uint32_t inputHeight,uint32_t scaledHeight) const noexcept {
-        return !mutating_ && owners.storage(0) && owners.storage(1) &&
+        return !mutating_ && storage(0) && storage(1) &&
             inputHeight_==inputHeight && scaledHeight_==scaledHeight;
     }
     // Borrow only until reset/ensure/destruction; caller retains the owner
@@ -6152,13 +6158,14 @@ public:
     bool bindSfdRow(TglOwnedSfcGen12Tail& tail) const noexcept {
         tail.sfdLineBuffer=0;
         if(mutating_) return false;
-        if(!owners.storage(0) || !owners.storage(1)) return false;
-        const auto* sfd=owners.storage(2);
+        if(!storage(0) || !storage(1)) return false;
+        const auto* sfd=storage(2);
         if(sfd) tail.sfdLineBuffer=reinterpret_cast<uintptr_t>(sfd->data());
         return true;
     }
     const typename TglOwnedResource<Backend>::Storage* storage(size_t i) const noexcept {
-        return mutating_ ? nullptr : owners.storage(i);
+        return mutating_ ? nullptr : leased_ ?
+            (i<leasedViews_.size() ? leasedViews_[i] : nullptr) : owners.storage(i);
     }
 };
 

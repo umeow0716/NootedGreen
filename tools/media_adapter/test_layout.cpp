@@ -4075,6 +4075,7 @@ static void testSfcLineBufferOwnership() {
     using Storage=std::array<uint8_t,0x148>;
     struct Backend {
         unsigned allocations=0,releases=0,live=0,failAt=0;
+        uint64_t deniedHandle=0;
         bool descriptorOnly=false;
         void* owner=nullptr;void(*reenter)(void*)=nullptr;
         std::array<uint32_t,16> widths{};
@@ -4094,7 +4095,8 @@ static void testSfcLineBufferOwnership() {
             assert(live); --live; ++releases; s.fill(0);
         }
         bool backed(const Storage& s) noexcept {
-            return !descriptorOnly && tglNativeBackingPresent(s);
+            uint64_t handle=0;std::memcpy(&handle,s.data()+0x20,8);
+            return !descriptorOnly && handle!=deniedHandle && tglNativeBackingPresent(s);
         }
     } backend;
     {
@@ -4115,6 +4117,15 @@ static void testSfcLineBufferOwnership() {
         assert(backend.widths[0]==43200 && backend.widths[1]==11520);
         assert(buffers.storage(0) && buffers.storage(1) && !buffers.storage(2));
         assert(buffers.ensure(1080,720)==0 && backend.allocations==2);
+        backend.descriptorOnly=true;
+        assert(buffers.withBuffers(1080,720,[]() noexcept {assert(false);return 0;})==5);
+        backend.descriptorOnly=false;
+        for(size_t slot=0;slot<2;++slot) {
+            std::memcpy(&backend.deniedHandle,buffers.storage(slot)->data()+0x20,8);
+            assert(buffers.withBuffers(1080,720,[]() noexcept {assert(false);return 0;})==5);
+            backend.deniedHandle=0;
+            assert(buffers.withBuffers(1080,720,[]() noexcept {return 0;})==0);
+        }
         for(int status:{0,31,-7}) {
             const auto allocations=backend.allocations,releases=backend.releases;
             const auto* avs=buffers.storage(0);const auto* ief=buffers.storage(1);
