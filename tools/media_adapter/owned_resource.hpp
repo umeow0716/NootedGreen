@@ -3284,6 +3284,10 @@ struct TglNativeSfcOutputUsageInvoker {
 // Unlike OS+248 relocation registration, this is a four-argument void stub.
 // OS+130 is NOT proved here. Flagged surfaces must remain unsupported until
 // that independent callback is authenticated; no neighboring stub substitute.
+// Bounded initializer65ea0..666da contains no direct OS+130 assignment:
+// 66352/66359 installs659d0 at+178, NOT+130. Its earlier62750 call receives
+// the second (context) argument; neither this search nor the adjacent stubs
+// proves a completion/retirement callback or permission to release resources.
 class TglNativeSfcOutputUsageBinding {
     uintptr_t context_=0,entry_=0;
 public:
