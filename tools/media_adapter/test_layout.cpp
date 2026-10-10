@@ -5516,6 +5516,9 @@ static void testSfcFrameFields() {
             TglOwnedVpSfcCallerStorage vp;
             using Context=TglOwnedVpPlatformPacketContext;
             using Callback=TglOwnedVpPlatformPacketCallback<TglOwnedVpSfcResolve<Context>>;
+            using Setup=TglOwnedVpPlatformSetupCallback<TglOwnedVpSfcResolve<Context>>;
+            using SetupFunction=int(*)(void*,void*,void*,void*) noexcept;
+            const SetupFunction setup=&Setup::setup;
             using Produce=void(*)(void*,void*,void*) noexcept;
             const Produce produce=&Callback::produce;
             std::array<uint8_t,0xb8> owned,foreign;owned.fill(0xa5);foreign.fill(0x5a);
@@ -5523,11 +5526,17 @@ static void testSfcFrameFields() {
             for(bool wrongPacket:{false,true}) {
                 owned=saved;
                 Context context(vp,owned);
+                assert(setup(vp.bytes.data(),nullptr,nullptr,nullptr)==5);
                 produce(vp.bytes.data(),nullptr,owned.data());
                 assert(context.status()==5 && owned==saved);
                 {
                     TglOwnedVpSfcScopedContext<Context> scope(vp.bytes.data(),context);
                     assert(scope.bound());
+                    const auto vpBefore=vp.bytes;
+                    assert(setup(vp.bytes.data(),owned.data(),foreign.data(),nullptr)==0);
+                    assert(setup(nullptr,nullptr,nullptr,nullptr)==5);
+                    assert(setup(foreign.data(),nullptr,nullptr,nullptr)==5);
+                    assert(vp.bytes==vpBefore && owned==saved && foreign==other);
                     produce(nullptr,nullptr,owned.data());
                     produce(foreign.data(),nullptr,owned.data());
                     assert(context.status()==5 && owned==saved);
@@ -5543,6 +5552,7 @@ static void testSfcFrameFields() {
                     }
                 }
                 const auto after=owned;
+                assert(setup(vp.bytes.data(),nullptr,nullptr,nullptr)==5);
                 produce(vp.bytes.data(),nullptr,owned.data());assert(owned==after);
             }
         }

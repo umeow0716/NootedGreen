@@ -4895,6 +4895,17 @@ struct TglOwnedVpFramePreparation {
 // prevents IEF. Native +98 is called for its side effect without a status read.
 // Producers execute inside the complete frame/reference scope; this function
 // neither creates resources nor substitutes for any of those producers.
+// Exact slot+a8 (1e0c80..1e0c9f) saves four pointer arguments and returns
+// zero without dereferencing them. Preserve that ABI only for our leased VP;
+// an unmatched child is not admitted merely because this hook does no work.
+template<class Resolve> struct TglOwnedVpPlatformSetupCallback {
+    static int setup(void* child,void*,void*,void*) noexcept {
+        static_assert(noexcept(Resolve{}(child)),"VP platform setup resolver ABI");
+        auto* context=Resolve{}(child);
+        static_assert(noexcept(context->owns(child)),"VP platform setup ownership ABI");
+        return context && context->owns(child) ? 0 : 5;
+    }
+};
 template<class State,class Avs,class Ief>
 int tglSetupOwnedVpSfcStages(const TglOwnedVpFramePreparation& frame,
                             State state,Avs avs,Ief ief) noexcept {
