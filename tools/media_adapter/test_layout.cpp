@@ -31,6 +31,15 @@ static void testVeboxHardwareBinding() {
     assert(tglVeboxDnSurfaceSupported(0x5000, formatRead) && formatReads == 1);
     sourceFormat = UINT32_MAX;
     assert(!tglVeboxDnSurfaceSupported(0x5000, formatRead));
+    constexpr uint32_t diExcluded[]{0x15,0x14,0x17,0x03,0x01,0x51,0x50,0x05,0x06};
+    for (uint32_t format : diExcluded) assert(!tglVeboxDiFormatSupported(format));
+    assert(tglVeboxDiFormatSupported(0x19)); // NV12
+    assert(tglVeboxDiFormatSupported(0x52) && tglVeboxDiFormatSupported(0x53));
+    assert(!tglVeboxDiSurfaceSupported(0, formatRead));
+    sourceFormat = 0x19; formatReadable = true;
+    assert(tglVeboxDiSurfaceSupported(0x5000, formatRead));
+    sourceFormat = 0x17; assert(!tglVeboxDiSurfaceSupported(0x5000, formatRead));
+    formatReadable = false; assert(!tglVeboxDiSurfaceSupported(0x5000, formatRead));
     sourceFormat = 0x19; formatReadable = false;
     assert(!tglVeboxDnSurfaceSupported(0x5000, formatRead));
     constexpr uintptr_t image = 0x1000000, mhw = 0x2000, os = 0x3000;

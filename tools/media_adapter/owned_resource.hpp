@@ -29,6 +29,23 @@ bool tglVeboxDnSurfaceSupported(uintptr_t surface, Read read) {
     return surface && surface <= std::numeric_limits<uintptr_t>::max() - 0x133 &&
         read(surface + 0x130, &format, sizeof(format)) && tglVeboxDnFormatSupported(format);
 }
+// Gen12 g12_base.cpp370, NOT the shorter ICL1fc690 exclusion table.
+// MOS_FORMAT values: AYUV15/Y41614/Y41017/ABGR3/ARGB1/B10..51/R10..50/
+// ABGR64=5/ARGB64=6. This is the DI predicate only; generic format admission
+// remains mandatory (a format not excluded here is NOT automatically usable).
+constexpr bool tglVeboxDiFormatSupported(uint32_t format) {
+    switch (format) {
+        case 0x15: case 0x14: case 0x17: case 0x03: case 0x01:
+        case 0x51: case 0x50: case 0x05: case 0x06: return false;
+        default: return true;
+    }
+}
+template<class Read>
+bool tglVeboxDiSurfaceSupported(uintptr_t surface, Read read) {
+    uint32_t format = 0;
+    return surface && surface <= std::numeric_limits<uintptr_t>::max() - 0x133 &&
+        read(surface + 0x130, &format, sizeof(format)) && tglVeboxDiFormatSupported(format);
+}
 
 // Read-only shape gate for an already-owned native execution object. Identity
 // qualification must authenticate the loaded image; this is NOT proof that
