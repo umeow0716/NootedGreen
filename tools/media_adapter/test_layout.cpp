@@ -7864,8 +7864,10 @@ int main() {
                 int result=-37;
                 std::array<uintptr_t,128> sequence{};
                 void *expected=nullptr,*buffer=nullptr;
+                void (*onCommand)(void*)=nullptr;void* commandContext=nullptr;
                 int parameters(uintptr_t entry,void *object,void *command,const void *params) {
                     assert(object==expected && command==buffer && params);
+                    if(onCommand) onCommand(commandContext);
                     if(entry==lockEntry) {
                         const auto* lock=static_cast<const uint8_t*>(params);
                         assert(lock[0]==1 && lock[8]==1);
@@ -7884,6 +7886,18 @@ int main() {
             int command=0;commandInvoke.expected=owner.get();commandInvoke.buffer=&command;
             commandInvoke.lockEntry=base+0x1681e0;
             TglOwnedSfcCommandBackend<Invoke,CommandInvoke> commands(mhw,owner,&command,commandInvoke);
+            struct CommandReentry {
+                TglOwnedSfcMhw<Invoke>& owner;
+                decltype(commands)& commands;
+                unsigned count=0;
+            } commandReentry{owner,commands};
+            commandInvoke.commandContext=&commandReentry;
+            commandInvoke.onCommand=[](void* opaque) {
+                auto& c=*static_cast<CommandReentry*>(opaque);++c.count;
+                void* live=c.owner.get();c.owner.reset();assert(c.owner.get()==live);
+                assert(c.commands.frameStart()==5);
+                assert(c.owner.withObject([](void*){assert(false);return 0;})==5);
+            };
             auto lock=tglPrepareOwnedSfcLockParameters(1,0,1);
             std::array<uint8_t,16> avs{};
             std::array<uint8_t,64> ief{};TglOwnedSfcStateParametersPacket state{};
@@ -7898,6 +7912,8 @@ int main() {
             assert(commands.y(y)==-37 && commandInvoke.last==base+0x16b390);
             assert(commands.uv(uv)==-37 && commandInvoke.last==base+0x16b190);
             assert(commands.frameStart()==-37 && commandInvoke.last==base+0x16a770);
+            assert(commandReentry.count==7 && invoke.destroys==0);
+            commandInvoke.onCommand=nullptr;commandInvoke.commandContext=nullptr;
             ++mhw.entries[5];assert(commands.frameStart()==5 && commandInvoke.calls==7);--mhw.entries[5];
             // Exercise the scheduler through the actual typed backend/owner,
             // not the independent scheduler mock. Still no native GPU call.

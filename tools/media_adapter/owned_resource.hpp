@@ -534,6 +534,15 @@ public:
     void *get() noexcept {return ready?storage.data():nullptr;}
     uintptr_t image() const noexcept {return ready?lifetime.image:0;}
     uintptr_t os() const noexcept {return ready?borrowedOs:0;}
+    template<class Use> int withObject(Use use) {
+        if(busy || !ready) return 5;
+        struct Guard {
+            bool& value;
+            explicit Guard(bool& flag) noexcept:value(flag){value=true;}
+            ~Guard(){value=false;}
+        } guard(busy);
+        return use(storage.data());
+    }
     void reset() noexcept {
         if(busy) return;
         busy=true;clear();busy=false;
@@ -722,29 +731,35 @@ template<class SfcInvoker,class Invoke> class TglOwnedSfcCommandBackend {
         return command && owner.get() && binding.image==owner.image() &&
             binding.image && binding.entries[slot/8]==binding.image+offset;
     }
+    template<class Use> int call(size_t slot,uintptr_t offset,Use use) {
+        return owner.withObject([&](void* object) {
+            if(!valid(slot,offset)) return 5;
+            return use(binding.entries[slot/8],object);
+        });
+    }
 public:
     TglOwnedSfcCommandBackend(const TglSfcMhwBinding &b,TglOwnedSfcMhw<SfcInvoker> &o,
                              void *c,Invoke &i):binding(b),owner(o),command(c),invoke(i){}
     int lock(const TglOwnedSfcLockParameters& parameters) {
-        return valid(0x10,0x1681e0)?invoke.parameters(binding.entries[2],owner.get(),command,parameters.data()):5;
+        return call(0x10,0x1681e0,[&](uintptr_t entry,void* object){return invoke.parameters(entry,object,command,parameters.data());});
     }
     int state(const TglOwnedSfcStateParametersPacket& parameters,const std::array<uint8_t,0x38>& output) {
-        return valid(0x18,0x168390)?invoke.state(binding.entries[3],owner.get(),command,parameters.data(),output.data()):5;
+        return call(0x18,0x168390,[&](uintptr_t entry,void* object){return invoke.state(entry,object,command,parameters.data(),output.data());});
     }
     int avs(const std::array<uint8_t,16>& parameters) {
-        return valid(0x20,0x16a580)?invoke.parameters(binding.entries[4],owner.get(),command,parameters.data()):5;
+        return call(0x20,0x16a580,[&](uintptr_t entry,void* object){return invoke.parameters(entry,object,command,parameters.data());});
     }
     int ief(const std::array<uint8_t,64>& parameters) {
-        return valid(0x30,0x16a8a0)?invoke.parameters(binding.entries[6],owner.get(),command,parameters.data()):5;
+        return call(0x30,0x16a8a0,[&](uintptr_t entry,void* object){return invoke.parameters(entry,object,command,parameters.data());});
     }
     int uv(const TglOwnedSfcUvParameters& parameters) {
-        return valid(0x38,0x16b190)?invoke.parameters(binding.entries[7],owner.get(),command,&parameters):5;
+        return call(0x38,0x16b190,[&](uintptr_t entry,void* object){return invoke.parameters(entry,object,command,&parameters);});
     }
     int y(const TglOwnedSfcYParameters& parameters) {
-        return valid(0x40,0x16b390)?invoke.parameters(binding.entries[8],owner.get(),command,&parameters):5;
+        return call(0x40,0x16b390,[&](uintptr_t entry,void* object){return invoke.parameters(entry,object,command,&parameters);});
     }
     int frameStart() {
-        return valid(0x28,0x16a770)?invoke.frame(binding.entries[5],owner.get(),command,uint8_t(1)):5;
+        return call(0x28,0x16a770,[&](uintptr_t entry,void* object){return invoke.frame(entry,object,command,uint8_t(1));});
     }
 };
 template<size_t Dwords>
