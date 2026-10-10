@@ -4017,13 +4017,22 @@ static void testResourceBinding() {
         {
             RetainedApi api;api.references=0;api.mapping={mapped.data(),40,8,3,16};
             StmmBackend native{api};Quarantine sink;
-            alignas(8) std::array<uint8_t,0x148> shell{};
+            TglOwnedSurfaceStorage surface{};
+            auto& shell=surface.resource;
             {
                 TglOwnedStmmResource<StmmBackend,RetainedApi,Quarantine> owner(native,shell,api,sink);
                 assert(!owner.ensure(stmmKey));
                 assert(!owner.withStorage([&](const auto& storage) noexcept {
                     assert(&storage==&shell && api.references==1);return 0;
                 }));
+                TglOwnedSurfaceStorage unrelated{};
+                assert(tglWithOwnedStmmSurface(owner,unrelated,
+                    [](auto&) noexcept {assert(false);return 0;})==5);
+                assert(tglWithOwnedStmmSurface(owner,surface,[&](auto& actual) noexcept {
+                    uint32_t pitch=0;std::memcpy(&pitch,actual.prefix.data()+0xe0,4);
+                    assert(&actual==&surface && pitch==16);
+                    owner.reset();assert(api.references==1);return 31;
+                })==31);
             }
             assert(!api.references && native.releases==1);
             for(auto byte:shell) assert(!byte);

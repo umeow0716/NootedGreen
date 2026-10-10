@@ -5919,6 +5919,19 @@ public:
     }
 };
 struct TglResourceStorageReference { std::array<uint8_t,0x148>& storage; };
+// Native12b05f publishes the locked IOSurface pitch to this exact shell.
+// Bind identity, not equal descriptor bytes: copying tokens cannot establish
+// ownership. The enclosing frame still excludes asynchronous GPU users.
+template<class Owner,class Invoke>
+int tglWithOwnedStmmSurface(Owner& owner,TglOwnedSurfaceStorage& surface,
+                            Invoke invoke) noexcept {
+    return owner.withInitializedStorage([&](const auto& storage,uint32_t,
+                                           uint32_t,uint32_t pitch) noexcept {
+        if(&storage!=&surface.resource || !pitch) return 5;
+        std::memcpy(surface.prefix.data()+0xe0,&pitch,4);
+        return invoke(surface);
+    });
+}
 // The native history graph has two STMM surfaces. Allocate/init failure must
 // retire BOTH native tokens without depending on caller FreeResources. A
 // failed-unlock reference stays with the process quarantine independently.
