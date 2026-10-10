@@ -7,6 +7,15 @@
 #include "owned_resource.hpp"
 
 static void testVeboxHardwareBinding() {
+    constexpr uint32_t genericFormats[]{0x0d,0x0e,0x0f,0x10,0x11,0x12,0x13,
+        0x14,0x15,0x17,0x19,0x52,0x53,0x58,0x59,0x4a,0x4c,0x4d,uint32_t(-7)};
+    for (uint32_t format : genericFormats) assert(tglVeboxFormatSupported(format));
+    assert(!tglVeboxFormatSupported(0x16)); // AUYV is not in Gen12 input rule
+    assert(!tglVeboxFormatSupported(0) && !tglVeboxFormatSupported(UINT32_MAX));
+    assert(!tglVeboxFormatSupported(0x10019));
+    // DI predicate alone permits formats that generic admission must reject.
+    assert(tglVeboxDiFormatSupported(UINT32_MAX));
+    assert(!(tglVeboxFormatSupported(UINT32_MAX) && tglVeboxDiFormatSupported(UINT32_MAX)));
     constexpr uint32_t dnFormats[]{0x0e,0x11,0x0f,0x10,0x0d,0x4a,0x19,
         0x15,0x12,0x13,0x14,0x17,0x59,0x53,0x52,0x03,0x05};
     unsigned supported = 0;

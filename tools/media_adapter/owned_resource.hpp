@@ -11,6 +11,18 @@
 #include <mach/mach_vm.h>
 #endif
 
+// Gen12 g12_base.cpp242 + MOS IS_PA_FORMAT, not DI's exclusion-only rule.
+// Preserve the explicit generic Format_PA=-7 enum; do not truncate unknowns.
+constexpr bool tglVeboxFormatSupported(uint32_t format) {
+    if (format >= 0x0d && format <= 0x15) return true;
+    switch (format) {
+        case uint32_t(-7): case 0x17: case 0x19:
+        case 0x52: case 0x53: case 0x58: case 0x59:
+        case 0x4a: case 0x4c: case 0x4d: return true;
+        default: return false;
+    }
+}
+
 // Intel Gen12 IsDnFormatSupported (pinned g12_base.cpp329), with Darwin format
 // values independently pinned by Tahoe ICL1fc530. Pure format predicate only:
 // does not assert that DN is requested, eligible, allocated or GPU-complete.
