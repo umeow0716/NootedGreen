@@ -3507,7 +3507,9 @@ static void testNativeResourceBoundary() {
             ++borrowedCalls;assert(&borrowed==surface);
             const auto snapshot=borrowed;
             owner.reset();
-            assert(owner.ensure(key)==5 && !owner.copyFrameMetadata(source));
+            bool reentrantChanged=true;
+            assert(owner.ensure(key,&reentrantChanged)==5 && !reentrantChanged);
+            assert(!owner.copyFrameMetadata(source));
             assert(!owner.surface());
             assert(!owner.withSurface([&](const auto&){assert(false);}));
             assert(borrowed.resource==snapshot.resource && borrowed.prefix==snapshot.prefix);

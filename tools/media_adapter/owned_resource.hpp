@@ -3171,10 +3171,10 @@ public:
     TglOwnedAllocatedSurface(const TglOwnedAllocatedSurface&)=delete;
     TglOwnedAllocatedSurface& operator=(const TglOwnedAllocatedSurface&)=delete;
     int ensure(const TglResourceKey& key,bool* changed=nullptr) noexcept {
-        if(busy_) return 5;
         // Native4e060 clears changed before admission/allocation. Only a
         // successfully published backed surface may trigger history rebuild.
         if(changed) *changed=false;
+        if(busy_) return 5;
         const auto type=capture_.native.resourceType();
         if(type>1 || (type==1 && key.format!=0x3d)) return 25;
         busy_=true;
