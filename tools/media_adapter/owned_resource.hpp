@@ -17,6 +17,26 @@
 // native image (741e50..742350), not from a different GPU generation.
 // This is a CPU data producer only; it does not issue an SFC command.
 using TglOwnedIefTables = std::array<std::array<uint32_t,64>,5>;
+// Exact ICL VP +28, 1dea75..1deb5b: ratios published at +928/+92c.
+// Inputs are the already aligned source and destination extents. This owned
+// producer rejects degenerate dimensions rather than publishing infinities.
+struct TglOwnedVpScale {
+    float at928=0,at92c=0;
+    bool scaling=false;
+};
+inline bool tglPrepareOwnedVpScale(uint32_t sourceWidth,uint32_t sourceHeight,
+    uint32_t destinationWidth,uint32_t destinationHeight,uint32_t rotation,
+    TglOwnedVpScale& output) noexcept {
+    if(!sourceWidth || !sourceHeight || !destinationWidth || !destinationHeight)
+        return false;
+    const bool direct=rotation==0 || rotation==2 || rotation==4 || rotation==5;
+    TglOwnedVpScale candidate;
+    candidate.at928=float(direct?destinationWidth:destinationHeight)/float(sourceWidth);
+    candidate.at92c=float(direct?destinationHeight:destinationWidth)/float(sourceHeight);
+    candidate.scaling=candidate.at928!=1.0f || candidate.at92c!=1.0f;
+    output=candidate;
+    return true;
+}
 // Synchronous callback binding only. Each domain has independent TLS so a VP
 // child cannot resolve through its enclosing VEBOX child's scope.
 template<class Context,class Domain> class TglOwnedScopedContext {

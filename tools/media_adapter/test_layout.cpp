@@ -5269,6 +5269,23 @@ static void testSfcFrameFields() {
 
 int main() {
     {
+        for(uint32_t rotation:{0u,1u,2u,3u,4u,5u,6u,7u,0xffffffffu}) {
+            TglOwnedVpScale scale;
+            const bool direct=rotation==0 || rotation==2 || rotation==4 || rotation==5;
+            assert(tglPrepareOwnedVpScale(64,32,128,96,rotation,scale));
+            assert(scale.at928==(direct?2.0f:1.5f));
+            assert(scale.at92c==(direct?3.0f:4.0f) && scale.scaling);
+            assert(tglPrepareOwnedVpScale(64,32,direct?64:32,direct?32:64,rotation,scale));
+            assert(scale.at928==1.0f && scale.at92c==1.0f && !scale.scaling);
+        }
+        for(unsigned missing=0;missing<4;++missing) {
+            uint32_t extents[4]={64,32,128,96};extents[missing]=0;
+            TglOwnedVpScale scale{7.0f,9.0f,true};
+            assert(!tglPrepareOwnedVpScale(extents[0],extents[1],extents[2],extents[3],0,scale));
+            assert(scale.at928==7.0f && scale.at92c==9.0f && scale.scaling);
+        }
+    }
+    {
         TglOwnedVpSfcCallerStorage storage;
         storage.bytes[0x27]=0xa5;storage.bytes[0x9b8]=0x5a;
         const auto original=storage.bytes;
