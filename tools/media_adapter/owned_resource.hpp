@@ -4,6 +4,7 @@
 #include <utility>
 #include <cstring>
 #include <limits>
+#include <cmath>
 
 // Owned lifecycle only. A Darwin backend must separately prove allocation,
 // backing inspection and release ABI; this class never fabricates backing.
@@ -110,6 +111,31 @@ int tglStatisticsOffsets(uint32_t width, uint32_t height, uint8_t flag1b88,
         first = 0;
         second = size;
     }
+    return 0;
+}
+
+// 170ef0 valid-input boundary contract. Reject malformed float conversions
+// and rounding overflow instead of reproducing native truncation hazards.
+inline int tglSurfaceBoundary(uint32_t format, uint32_t width, uint32_t height,
+                              float sourceWidth, float sourceHeight,
+                              bool di, bool alignDi64, uint32_t &outWidth,
+                              uint32_t &outHeight) noexcept {
+    if (!std::isfinite(sourceWidth) || !std::isfinite(sourceHeight) ||
+        sourceWidth < 0 || sourceHeight < 0 ||
+        double(sourceWidth) > UINT32_MAX || double(sourceHeight) > UINT32_MAX)
+        return 5;
+    uint32_t wa = 1, ha = 1;
+    if (format == 0x19) { wa = 2; ha = di ? 4 : 2; }
+    else if (format >= 0xd && format <= 0x13) { wa = 2; ha = di ? 2 : 1; }
+    else if (format == 0x14 || format == 0x15) wa = 2;
+    if (di && alignDi64) wa = 64;
+    const uint32_t sw = static_cast<uint32_t>(sourceWidth);
+    const uint32_t sh = static_cast<uint32_t>(sourceHeight);
+    const uint32_t wc = sw > 64 ? sw : 64, hc = sh > 16 ? sh : 16;
+    const uint64_t w = (uint64_t{width < wc ? width : wc} + wa - 1) & ~uint64_t{wa - 1};
+    const uint64_t h = (uint64_t{height < hc ? height : hc} + ha - 1) & ~uint64_t{ha - 1};
+    if (w > UINT32_MAX || h > UINT32_MAX) return 5;
+    outWidth = static_cast<uint32_t>(w); outHeight = static_cast<uint32_t>(h);
     return 0;
 }
 

@@ -6,6 +6,29 @@
 #include "descriptor_bridge.hpp"
 #include "owned_resource.hpp"
 
+static void testSurfaceBoundary() {
+    uint32_t w = 0, h = 0;
+    for (uint32_t format = 0; format <= 0x33; ++format)
+        for (bool di : {false, true}) for (bool align64 : {false, true}) {
+            assert(tglSurfaceBoundary(format, 101, 103, 200, 200, di, align64, w, h) == 0);
+            const bool two = format == 0x19 || (format >= 0xd && format <= 0x15);
+            assert(w == ((di && align64) ? 128u : two ? 102u : 101u));
+            assert(h == (format == 0x19 ? 104u :
+                   (di && format >= 0xd && format <= 0x13) ? 104u : 103u));
+        }
+    assert(tglSurfaceBoundary(0, 1920, 1080, 0, 0, false, false, w, h) == 0);
+    assert(w == 64 && h == 16);
+    assert(tglSurfaceBoundary(0, 32, 8, 0, 0, false, false, w, h) == 0);
+    assert(w == 32 && h == 8);
+    for (float bad : {-1.0f, INFINITY, NAN, 4294967296.0f}) {
+        w = 7; h = 9;
+        assert(tglSurfaceBoundary(0, 100, 100, bad, 100, false, false, w, h) == 5);
+        assert(w == 7 && h == 9);
+        assert(tglSurfaceBoundary(0, 100, 100, 100, bad, false, false, w, h) == 5);
+        assert(w == 7 && h == 9);
+    }
+}
+
 static void testStatisticsOffsets() {
     unsigned calls = 0;
     int status = 0;
@@ -316,6 +339,7 @@ static void testResourceBinding() {
 // Offline layout hypothesis only: not an ABI-complete or deployable adapter.
 // The pinned consumer sites shift 0x20/0x24/0x228/0x428 by eight bytes.
 int main() {
+    testSurfaceBoundary();
     testStatisticsOffsets();
     testSurfaceDescriptor();
     testOwnedResourceLifecycle();
