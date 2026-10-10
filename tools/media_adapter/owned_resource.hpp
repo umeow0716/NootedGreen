@@ -8499,6 +8499,11 @@ private:
 // Donor ICL1f875f explicitly invokes its virtual18 on allocation failure.
 // This owned transaction supplies equivalent unwind responsibility, not an
 // invocation of ICL virtual18 on the unrelated TGL child vtable.
+// Do NOT publish reset() directly as runtime FreeResources: donor1f87b0
+// releases STMM[0/1] (1f8823), statistics (1f8858), then conditionally
+// VP+30 (1f88a7). It does NOT release the FFDN group here. This transaction's
+// all-owner unwind is for allocation failure/complete teardown, not that
+// selective reuse boundary; runtime retirement admission remains separate.
 template<class Group,class History,class Statistics> class TglOwnedVeboxBackingTransaction {
     Group& group_;
     History& history_;
