@@ -1844,6 +1844,53 @@ static void testExecutionOwner() {
             [](void*) noexcept {assert(false);return 0;},
             [](void*) noexcept {assert(false);return 0;})==5);
         assert(!owner.hasExecutionLease(7) && !childLease.busy);
+        {
+            struct ResourceBackend {
+                unsigned releases=0;
+                int allocate(std::array<uint8_t,0x148>& s,const TglResourceKey&) noexcept {
+                    s[0]=1;return 0;
+                }
+                bool backed(const std::array<uint8_t,0x148>& s) const noexcept {return s[0]==1;}
+                void release(std::array<uint8_t,0x148>&) noexcept {++releases;}
+            } resourceBackend;
+            using Group=TglOwnedResourceGroup<ResourceBackend,3>;
+            Group resources(resourceBackend);
+            std::array<Group::Request,3> requests{{
+                {true,{1920,1080,0x19,0,0,false}},
+                {true,{1920,1080,0x19,0,0,false}},
+                {false,{}}}};
+            const auto initialize=[](size_t,const auto&,bool) noexcept {return 0;};
+            const auto denied=[](void*,const auto&) noexcept {assert(false);return 0;};
+            assert(tglWithOwnedVeboxBackedExecutionFrame(resources,childLease,owner,7,frame,
+                denied,denied,denied)==5);
+            assert(resources.ensure(requests,initialize)==0);
+            for(int p:{0,31,-7}) for(int s:{0,31,-7}) for(int b:{0,31,-7}) {
+                unsigned stages=0;
+                const void* snapshot=nullptr;
+                const auto check=[&](void* child,const auto& views) noexcept {
+                    assert(child==childLease.child && childLease.busy);
+                    assert(owner.hasExecutionLease(7) && Resolve::get(child)==&frame);
+                    assert(views[0] && views[1] && !views[2]);
+                    if(snapshot) assert(snapshot==&views);else snapshot=&views;
+                    resources.reset();assert(resources.ensure(requests,initialize)==5);
+                    assert(!resources.storage(0) && resourceBackend.releases==0);
+                    owner.reset();assert(owner.hasExecutionLease(7));
+                    ++stages;
+                };
+                assert(tglWithOwnedVeboxBackedExecutionFrame(resources,childLease,owner,7,frame,
+                    [&](void* child,const auto& views) noexcept {check(child,views);return p;},
+                    [&](void* child,const auto& views) noexcept {check(child,views);return s;},
+                    [&](void* child,const auto& views) noexcept {
+                        check(child,views);frame.pass.gate([]() noexcept {return 0;});return b;
+                    })==(p?p:s?s:b));
+                assert(stages==unsigned(p?1:s?2:3));
+                assert(!owner.hasExecutionLease(7) && !childLease.busy && !Resolve::get(childLease.child));
+                assert(resources.storage(0) && resourceBackend.releases==0);
+            }
+            assert(tglWithOwnedVeboxBackedExecutionFrame(resources,childLease,owner,8,frame,
+                denied,denied,denied)==5);
+            resources.reset();assert(resourceBackend.releases==2);
+        }
         TglOwnedSurfaceStorage surface;
         uintptr_t dnParams=0x5000;float factor=32;
         std::array<uint8_t,8> dnData{};std::memcpy(dnData.data()+4,&factor,4);
@@ -3126,6 +3173,72 @@ static void testOwnedResourceLifecycle() {
     }
 }
 
+static void testOwnedResourceGroupLifetime() {
+    struct Backend {
+        unsigned allocations=0,releases=0;
+        bool present=true;
+        int allocate(std::array<uint8_t,0x148>& s,const TglResourceKey&) noexcept {
+            ++allocations;s[0]=1;return 0;
+        }
+        bool backed(const std::array<uint8_t,0x148>& s) const noexcept {return present && s[0]==1;}
+        void release(std::array<uint8_t,0x148>&) noexcept {++releases;}
+    } backend;
+    using Owner=TglOwnedResource<Backend>;
+    Owner source(backend),history(backend),missing(backend);
+    const TglResourceKey key{1920,1080,0x19,0,0,false};
+    assert(source.ensure(key).status==0 && history.ensure(key).status==0);
+    unsigned calls=0;
+    for(int status:{0,31,-7}) {
+        const std::array<Owner*,2> group{&source,&history};
+        assert(tglWithOwnedResourceGroupStorage(group,[&](const auto& views) noexcept {
+            ++calls;assert(views[0]==&source.storage() && views[1]==&history.storage());
+            source.reset();history.reset();
+            assert(source.ensure(key).status==5 && history.ensure(key).status==5);
+            assert(backend.releases==0);
+            assert(tglWithOwnedResourceGroupStorage(group,[](const auto&) noexcept {
+                assert(false);return 0;
+            })==5);
+            return status;
+        })==status);
+        assert(backend.releases==0); // success does not authorize retirement
+    }
+    for(const auto group:{std::array<Owner*,2>{&source,&source},
+                          std::array<Owner*,2>{&source,nullptr},
+                          std::array<Owner*,2>{&source,&missing}}) {
+        assert(tglWithOwnedResourceGroupStorage(group,[](const auto&) noexcept {
+            assert(false);return 0;
+        })==5);
+        assert(source.withStorage([](const auto&) noexcept {return 31;})==31);
+    }
+    assert(calls==3 && backend.allocations==2 && backend.releases==0);
+    source.reset();history.reset();assert(backend.releases==2);
+    {
+        using Group=TglOwnedResourceGroup<Backend,3>;
+        Group group(backend);
+        std::array<Group::Request,3> requests{{{true,key},{false,{}},{true,key}}};
+        const auto prepare=[](size_t,const auto&,bool) noexcept {return 0;};
+        assert(group.withStorage([](const auto&) noexcept {assert(false);return 0;})==5);
+        assert(group.ensure(requests,prepare)==0);
+        backend.present=false;
+        assert(group.withStorage([](const auto&) noexcept {assert(false);return 0;})==5);
+        assert(backend.releases==2); // failed query is not retirement permission
+        backend.present=true;
+        for(int status:{0,31,-7}) {
+            assert(group.withStorage([&](const auto& views) noexcept {
+                assert(views[0] && !views[1] && views[2]);
+                assert((*views[0])[0]==1 && (*views[2])[0]==1);
+                group.reset();assert(group.ensure(requests,prepare)==5);
+                assert(!group.storage(0) && backend.releases==2);
+                assert(group.withStorage([](const auto&) noexcept {assert(false);return 0;})==5);
+                return status;
+            })==status);
+            assert(group.storage(0) && group.storage(2) && backend.releases==2);
+        }
+        group.reset();assert(backend.releases==4);
+        assert(group.withStorage([](const auto&) noexcept {assert(false);return 0;})==5);
+    }
+}
+
 static void testNativeResourceBoundary() {
     using Backend = TglNativeResourceBackend;
     Backend::Storage s{};
@@ -3374,6 +3487,7 @@ static void testResourceBinding() {
                 assert(api.views==unsigned(!lockError) && api.unlocks==unsigned(!lockError));
                 assert(result.initialized==(!lockError&&valid));
                 assert(result.ready()==(!lockError&&valid&&!unlockError));
+                assert(result.requiresQuarantine()==(!lockError&&unlockError!=0));
                 if(lockError || !valid) assert(mapped==original);
                 else assert(mapped==filled);
             }
@@ -6890,6 +7004,7 @@ int main() {
     testStatisticsOffsets();
     testSurfaceDescriptor();
     testOwnedResourceLifecycle();
+    testOwnedResourceGroupLifetime();
     testNativeResourceBoundary();
     testResourceBinding();
     std::vector<uint8_t> blob(TglKernelMetadataAdapter::blobBytes, 0x5a);

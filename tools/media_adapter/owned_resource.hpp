@@ -1686,6 +1686,28 @@ struct TglVeboxHardwareBinding {
     // It ignores that IOReturn: even native submit result0 is NOT a verified
     // fence completion. Do not retire sources on that result alone. Ghidra's
     // &UNK_000f4240 is an immediate ECX value, not a timeout pointer.
+    // Exact 25G229 IOAccelerator CPU reference (UUID198a776a...,4634cf):
+    // FinishFenceEvent consumes only context18 and zero-extended ESI index,
+    // sends selector5 with one scalar and no outputs, then returns its status.
+    // Incoming EDX/ECX are not consumed: the apparent timeout above is not
+    // evidence of a timeout enforced by this userspace wrapper. Kernel fence
+    // semantics and actual completion still require independent proof.
+    // TGL IGAccelVideoContext::getTargetAndMethodForIndex at77452 handles
+    // only100..102 locally; selector5 tail-dispatches the parent vtable950.
+    // Consequently the fence contract belongs to exact IOAcceleratorFamily
+    // IOAccelVideoContext2, not to this TGL-specific selector wrapper.
+    // 25G229 KDK family7450 validates the64-byte event index, copies via1b0,
+    // drops accelerator locks, then calls178=finishEventUnlocked(30280).
+    // That polls signed32-bit stamp deltas for eight channels and waits via238;
+    // timeout e00002d6 signalsHardwareError(3) then retries, not bounded return.
+    // It also skips a pending stamp when accelerator+dc8!=0. Thus result0 is
+    // not an independent no-reset hardware-completion certificate. Retain the
+    // associated resource generation until completion AND reset exclusion are
+    // established; do not invent a one-second deadline from the ignored ECX.
+    // Fast table238=IOAccelEventMachine2::waitForStamp(12954): dc8 is
+    // rechecked before/inside its wait loop and the bypass also returns zero.
+    // IOAccelContext2::clientClose(7954) likewise returns zero after invoking
+    // close/finalize dispatch; that return alone is not a drain certificate.
     template<class Read,class Qualify,class Executable,class Invoke>
     uint32_t markSubmitted(uintptr_t image,Read read,Qualify qualify,
                            Executable executable,Invoke invoke) const {
@@ -2858,6 +2880,34 @@ private:
     bool busy_ = false;
 };
 
+// One synchronous command/submit/wait scope over all source/history backing.
+// No implicit release on success OR error, and no GPU-completion claim. The
+// caller retains the owners after return, including on reset/timeout ambiguity.
+// This must not be used to let an asynchronous submission escape its owners.
+template<class Owner,size_t Count,class Invoke>
+int tglWithOwnedResourceGroupStorage(const std::array<Owner*,Count>& owners,
+                                    Invoke invoke) noexcept {
+    static_assert(Count>0 && Count<=16,"bounded owned backing group");
+    using Storage=typename Owner::Storage;
+    using Views=std::array<const Storage*,Count>;
+    static_assert(noexcept(invoke(std::declval<const Views&>())),"group status ABI");
+    for(size_t i=0;i<Count;++i) {
+        if(!owners[i]) return 5;
+        for(size_t j=0;j<i;++j) if(owners[i]==owners[j]) return 5;
+    }
+    Views views{};
+    const auto enter=[&](const auto& self,size_t index) noexcept -> int {
+        if(index==Count) return invoke(static_cast<const Views&>(views));
+        return owners[index]->withStorage([&](const Storage& storage) noexcept {
+            views[index]=&storage;
+            const int result=self(self,index+1);
+            views[index]=nullptr;
+            return result;
+        });
+    };
+    return enter(enter,0);
+}
+
 // Native state consumer may allocate resource30 itself. This owner arms before
 // invocation, retains partial writes on failure, and releases exactly once
 // after caller has discarded/completed every referencing command. Backend/OS
@@ -4028,6 +4078,29 @@ int tglWithOwnedVeboxExecutionFrame(ChildOwner& childOwner,ExecutionOwner& execu
     return executionOwner.withExecution([&](uintptr_t actual) noexcept {
         if(actual!=expectedExecution) return 5;
         return tglWithOwnedVeboxFrameStages(childOwner,context,prepare,setup,invoke);
+    });
+}
+
+// Backing pins enclose execution, child, producer-pass and every frame stage.
+// Each stage receives the SAME borrowed descriptor views; it may not retain
+// them past this scope. No GPU submit/fence or automatic retirement is added.
+template<class Group,class ChildOwner,class ExecutionOwner,class Context,
+         class Prepare,class Setup,class Invoke>
+int tglWithOwnedVeboxBackedExecutionFrame(Group& resources,ChildOwner& childOwner,
+    ExecutionOwner& executionOwner,uintptr_t expectedExecution,Context& context,
+    Prepare prepare,Setup setup,Invoke invoke) noexcept {
+    return resources.withStorage([&](const auto& views) noexcept {
+        return tglWithOwnedVeboxExecutionFrame(childOwner,executionOwner,expectedExecution,context,
+            [&](void* child) noexcept {
+                static_assert(noexcept(prepare(child,views)),"backed preparation status ABI");
+                return prepare(child,views);
+            },[&](void* child) noexcept {
+                static_assert(noexcept(setup(child,views)),"backed setup status ABI");
+                return setup(child,views);
+            },[&](void* child) noexcept {
+                static_assert(noexcept(invoke(child,views)),"backed builder status ABI");
+                return invoke(child,views);
+            });
     });
 }
 
@@ -5378,6 +5451,9 @@ struct TglOwnedStmmInitialization {
         return lockStatus ? lockStatus : !initialized ? 5 : unlockStatus;
     }
     bool ready() const noexcept {return status()==0;}
+    // Distinguish incomplete CPU ownership release from an ordinary prepare
+    // error. Never pass this case to ensure()'s automatic error unwind.
+    bool requiresQuarantine() const noexcept {return lockStatus==0 && unlockStatus!=0;}
 };
 // Surface is borrowed from the resource owner. Lock success is necessary but
 // not a GPU fence: owning caller must first exclude all GPU users of STMM.
@@ -5538,6 +5614,30 @@ public:
             if (status) { retire(); return status; }
         }
         ready = true; return 0;
+    }
+    // Retain every present backing while a frame callback uses the group.
+    // Empty optional resources are represented by null views. This is a CPU
+    // lifetime scope, not permission to release an asynchronously used frame.
+    template<class Invoke> int withStorage(Invoke invoke) noexcept {
+        using Views=std::array<const typename Resource::Storage*,Count>;
+        static_assert(noexcept(invoke(std::declval<const Views&>())),"group borrow ABI");
+        if(busy || !ready || !bindingsValid) return 5;
+        busy=true;
+        Views views{};
+        const auto enter=[&](const auto& self,size_t index) noexcept -> int {
+            if(index==Count) return invoke(static_cast<const Views&>(views));
+            if(resources[index].state()==Resource::State::Empty)
+                return self(self,index+1);
+            return resources[index].withStorage([&](const auto& storage) noexcept {
+                views[index]=&storage;
+                const int result=self(self,index+1);
+                views[index]=nullptr;
+                return result;
+            });
+        };
+        const int result=enter(enter,0);
+        busy=false;
+        return result;
     }
     void reset() noexcept {
         if (busy) return;
