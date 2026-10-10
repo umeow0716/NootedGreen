@@ -4424,6 +4424,68 @@ bool tglReadOwnedVpModes(uintptr_t source,uintptr_t target,uintptr_t settings,Re
     }
     snapshot=candidate;output=result;sourceA8=reference;return true;
 }
+// Frozen, lease-scoped context for the two void mode callbacks. All native
+// descriptor acquisition happens before either callback is admitted. Preserve
+// original private fields on every exit, including a partial b0-only sequence;
+// the source+A8 object remains borrowed under the caller's descriptor lease.
+template<class Read> class TglOwnedVpModeContext {
+    TglOwnedVpSfcCallerStorage& storage_;
+    uintptr_t source_,target_,settings_,reference_=0;
+    TglOwnedVpModeInput input_;
+    TglOwnedVpModeResult result_;
+    std::array<uint8_t,17> saved_{};
+    bool prepared_=false,sampled_=false,formatted_=false,invalid_=false;
+    static constexpr std::array<size_t,4> offsets{0x998,0x99c,0x923,0x9c0};
+    static constexpr std::array<size_t,4> sizes{4,4,1,8};
+public:
+    TglOwnedVpModeContext(TglOwnedVpSfcCallerStorage& storage,uintptr_t source,
+        uintptr_t target,uintptr_t settings,Read read) noexcept
+        :storage_(storage),source_(source),target_(target),settings_(settings) {
+        size_t cursor=0;
+        for(size_t i=0;i<offsets.size();++i) {
+            std::memcpy(saved_.data()+cursor,storage_.bytes.data()+offsets[i],sizes[i]);cursor+=sizes[i];
+        }
+        TglOwnedVpModeState original;
+        std::memcpy(&original.at998,saved_.data(),4);
+        std::memcpy(&original.at99c,saved_.data()+4,4);original.at923=saved_[8]&1;
+        prepared_=tglReadOwnedVpModes(source,target,settings,read,original,input_,result_,reference_);
+        uintptr_t existingReference=0;
+        std::memcpy(&existingReference,saved_.data()+9,8);
+        if(result_.borrowSourceA8 && existingReference) prepared_=false;
+        // result_ will be produced by the ordered callbacks, not prepublished.
+        result_={original,false};
+    }
+    TglOwnedVpModeContext(const TglOwnedVpModeContext&)=delete;
+    TglOwnedVpModeContext& operator=(const TglOwnedVpModeContext&)=delete;
+    ~TglOwnedVpModeContext() {
+        if(!sampled_) return;
+        size_t cursor=0;
+        for(size_t i=0;i<offsets.size();++i) {
+            std::memcpy(storage_.bytes.data()+offsets[i],saved_.data()+cursor,sizes[i]);cursor+=sizes[i];
+        }
+    }
+    bool owns(void* child) const noexcept {
+        return prepared_ && !invalid_ && child==storage_.bytes.data();
+    }
+    int status() const noexcept {return prepared_ && sampled_ && formatted_ && !invalid_ ? 0 : 5;}
+    void sampleMode(void* source,void* target) noexcept {
+        if(!prepared_ || invalid_ || sampled_ || reinterpret_cast<uintptr_t>(source)!=source_ ||
+            reinterpret_cast<uintptr_t>(target)!=target_) {invalid_=true;return;}
+        tglPrepareOwnedVpSampleMode(input_,result_.state,result_);sampled_=true;
+        std::memcpy(storage_.bytes.data()+0x998,&result_.state.at998,4);
+        storage_.bytes[0x923]=result_.state.at923;
+        if(result_.borrowSourceA8) std::memcpy(storage_.bytes.data()+0x9c0,&reference_,8);
+    }
+    void formatMode(void* source,void* settings) noexcept {
+        if(!prepared_ || invalid_ || !sampled_ || formatted_ ||
+            reinterpret_cast<uintptr_t>(source)!=source_ ||
+            reinterpret_cast<uintptr_t>(settings)!=settings_ ||
+            !tglPrepareOwnedVpFormatMode(input_,result_,result_)) {invalid_=true;return;}
+        formatted_=true;
+        std::memcpy(storage_.bytes.data()+0x99c,&result_.state.at99c,4);
+        storage_.bytes[0x923]=result_.state.at923;
+    }
+};
 // VP +9b8, 1def21..1df03a ->4a6d0. Unlike +9a8's classifier,
 // sourcePack is from source+130, not VP+99c. Upsampling is only 420->422/444
 // or 422->444; the force-color branch bypasses the predicate entirely.

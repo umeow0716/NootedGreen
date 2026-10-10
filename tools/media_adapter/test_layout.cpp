@@ -6493,6 +6493,52 @@ int main() {
         assert(tglReadOwnedVpModes(0x1000,0x2000,0x3000,read,{},snapshot,result,reference) && calls==9);
         assert(result.state.at998==5 && result.state.at99c==3 && result.state.at923 &&
                result.borrowSourceA8 && reference==0x5000 && snapshot.sourceA8Present);
+        {
+            TglOwnedVpSfcCallerStorage storage;
+            storage.bytes[0x998]=17;storage.bytes[0x99c]=19;storage.bytes[0x923]=0xa5;
+            const auto saved=storage.bytes;
+            using Context=TglOwnedVpModeContext<decltype(read)>;
+            using Callback=TglOwnedVpModeCallbacks<TglOwnedVpSfcResolve<Context>>;
+            for(unsigned scenario=0;scenario<5;++scenario) {
+                calls=0;
+                {
+                    Context context(storage,0x1000,0x2000,0x3000,read);
+                    TglOwnedVpSfcScopedContext<Context> scope(storage.bytes.data(),context);
+                    assert(scope.bound() && context.status()==5 && calls==9);
+                    if(!scenario) {put(source,0,uint32_t(3));put(source,0x130,uint32_t(1));}
+                    if(scenario==1) context.formatMode(reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x3000));
+                    else {
+                        Callback::sampleMode(storage.bytes.data(),reinterpret_cast<void*>(0x1000),
+                            reinterpret_cast<void*>(scenario==2?0x6000:0x2000));
+                        if(scenario==3) context.sampleMode(reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x2000));
+                        if(scenario!=4) Callback::formatMode(storage.bytes.data(),reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x3000));
+                    }
+                    assert(context.status()==(scenario==0?0:5) && calls==9);
+                    if(!scenario) {
+                        uint32_t mode=0,format=0;uintptr_t ref=0;
+                        std::memcpy(&mode,storage.bytes.data()+0x998,4);
+                        std::memcpy(&format,storage.bytes.data()+0x99c,4);
+                        std::memcpy(&ref,storage.bytes.data()+0x9c0,8);
+                        assert(mode==5 && format==3 && ref==0x5000 && storage.bytes[0x923]==1);
+                    }
+                }
+                assert(storage.bytes==saved);
+                put(source,0,uint32_t(1));put(source,0x130,uint32_t(0x19));
+            }
+            for(fail=1;fail<=9;++fail) {
+                calls=0;
+                Context context(storage,0x1000,0x2000,0x3000,read);
+                assert(!context.owns(storage.bytes.data()) && context.status()==5 && storage.bytes==saved);
+                context.sampleMode(reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x2000));
+                assert(storage.bytes==saved);
+            }
+            fail=0;const uintptr_t borrowed=0x6000;
+            std::memcpy(storage.bytes.data()+0x9c0,&borrowed,8);
+            const auto occupied=storage.bytes;
+            {Context context(storage,0x1000,0x2000,0x3000,read);
+                assert(!context.owns(storage.bytes.data()) && context.status()==5);}
+            assert(storage.bytes==occupied);
+        }
         for(fail=1;fail<=9;++fail) {
             calls=0;snapshot.source00=17;result.state.at998=19;reference=23;
             assert(!tglReadOwnedVpModes(0x1000,0x2000,0x3000,read,{},snapshot,result,reference));
