@@ -1449,6 +1449,41 @@ inline bool tglPrepareOwnedStateLeadingFlags(uint32_t& flags, uint32_t pipe,
     flags=candidate;
     return true;
 }
+struct TglOwnedStateInputs {
+    uint32_t pipe=0;
+    bool primaryIeCp=false, di=false, dn=false, firstFrame=false;
+    bool exec19=false, exec14=false, exec12=false, dnSpecial=false;
+    bool primary70=false, chromaIeCp=false, chromaDi=false, skuSuppressPipe=false;
+    TglOwnedSurfaceStorage* source=nullptr;
+    TglOwnedSurfaceStorage* target=nullptr;
+};
+// Pure owned-data composition of the closed Darwin state producer. Callback
+// semantic results must be supplied by a qualified child binding; this alone
+// is not a live renderer implementation. All unproduced bytes start zero.
+inline bool tglPrepareOwnedStatePacket(std::array<uint8_t,0x188>& output,
+                                      const TglOwnedStateInputs& input) noexcept {
+    if (input.pipe>2) return false;
+    // Native mode selection/DN special can dereference currentSurface.
+    if (!input.source) return false;
+    uint32_t sourceType=0, source138=0;
+    std::memcpy(&sourceType,input.source->prefix.data(),4);
+    std::memcpy(&source138,input.source->prefix.data()+0x138,4);
+    std::array<uint8_t,0x188> candidate{};
+    uint32_t flags=0, mode=0, chroma=0;
+    tglPrepareOwnedStateLeadingFlags(flags,input.pipe,input.primaryIeCp,input.di,input.dn);
+    tglPrepareOwnedStateHistoryAndPipe(flags,input.firstFrame,input.dn,input.di,input.pipe,true);
+    tglSelectOwnedStateMode(mode,input.pipe,input.exec19,input.exec14,flags,source138);
+    tglPrepareOwnedStateDnControls(flags,mode,input.exec12,input.dnSpecial,sourceType);
+    candidate[0xc]=input.primary70 ? 1 : 0;
+    tglPrepareOwnedChromaSampling(chroma,input.source,input.target,
+                                 input.chromaIeCp,input.chromaDi,input.pipe);
+    tglPrepareOwnedStateHistoryAndPipe(flags,input.firstFrame,input.dn,input.di,
+                                     input.pipe,input.skuSuppressPipe);
+    std::memcpy(candidate.data(),&flags,4);
+    std::memcpy(candidate.data()+4,&chroma,4);
+    output=candidate;
+    return true;
+}
 // Exact Darwin caller1f9111/26 packs compressed bit0 and mode DWORD into
 // an eight-byte parameter. TGL179530 consumes mode+4 and calls native OS1a0;
 // do not replace the whole callback with a superficially equivalent bit OR.

@@ -2035,6 +2035,33 @@ static void testResourceBinding() {
 // The pinned consumer sites shift 0x20/0x24/0x228/0x428 by eight bytes.
 int main() {
     {
+        TglOwnedSurfaceStorage source,target;
+        const uint32_t format=0x19,type=1,sample=4;
+        std::memcpy(source.prefix.data(),&type,4);
+        std::memcpy(source.prefix.data()+0x138,&sample,4);
+        std::memcpy(source.prefix.data()+0x130,&format,4);
+        std::memcpy(target.prefix.data()+0x130,&format,4);
+        TglOwnedStateInputs input;
+        input.source=&source; input.target=&target; input.pipe=1;
+        input.dn=true; input.exec12=true; input.primary70=true;
+        input.chromaIeCp=true;
+        std::array<uint8_t,0x188> output;
+        output.fill(0xa5);
+        assert(tglPrepareOwnedStatePacket(output,input));
+        uint32_t flags=0,chroma=0;
+        std::memcpy(&flags,output.data(),4);
+        std::memcpy(&chroma,output.data()+4,4);
+        assert(flags==0xb20adu && chroma==0x804 && output[0xc]==1);
+        for (size_t i=8;i<output.size();++i) if (i!=0xc) assert(output[i]==0);
+        const auto saved=output;
+        const auto savedSource=source.prefix;
+        input.pipe=3;
+        assert(!tglPrepareOwnedStatePacket(output,input) && output==saved);
+        assert(source.prefix==savedSource);
+        input.pipe=0; input.source=nullptr;
+        assert(!tglPrepareOwnedStatePacket(output,input) && output==saved);
+    }
+    {
         for (uint32_t pipe=0;pipe<3;++pipe) for (bool e19 : {false,true})
             for (bool e14 : {false,true}) for (bool history : {false,true})
                 for (uint32_t surface=0;surface<9;++surface) {
