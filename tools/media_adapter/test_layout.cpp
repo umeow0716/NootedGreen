@@ -5400,6 +5400,44 @@ static void testSfcFrameFields() {
     assert(tglOwnedSfcAlignment(1).width==1 && tglOwnedSfcAlignment(1).height==1);
     assert(tglOwnedSfcAlignment(UINT32_MAX).width==1);
     {
+        int child=0,foreign=0;
+        struct Context {
+            void* child;
+            bool owns(void* p) const noexcept {return p==child;}
+        } context{&child};
+        using Callback=TglOwnedVpAlignmentCallbacks<TglOwnedVpSfcResolve<Context>>;
+        using Input=void(*)(void*,uint32_t,uint32_t,uint16_t*,uint16_t*) noexcept;
+        using Output=void(*)(void*,uint32_t,uint16_t*,uint16_t*) noexcept;
+        const Input input=&Callback::input;const Output output=&Callback::output;
+        uint16_t w=77,h=88;
+        input(&child,0x19,0,&w,&h);assert(w==77 && h==88);
+        {
+            TglOwnedVpSfcScopedContext<Context> scope(&child,context);
+            assert(scope.bound());
+            for(uint32_t f=0;f<256;++f) {
+                struct Guarded {uint16_t before=0xa55a,value=77,after=0x5aa5;} width,height;
+                const auto expected=tglOwnedSfcAlignment(f);
+                input(&child,f,UINT32_MAX,&width.value,&height.value);
+                assert(width.value==expected.width && height.value==expected.height);
+                assert(width.before==0xa55a && width.after==0x5aa5 &&
+                    height.before==0xa55a && height.after==0x5aa5);
+                output(&child,f,&w,&h);assert(w==expected.width && h==expected.height);
+                uint16_t aliased=77;
+                input(&child,f,0,&aliased,&aliased);
+                assert(aliased==expected.width);
+                output(&child,f,&aliased,&aliased);assert(aliased==expected.width);
+            }
+            for(void* p:{static_cast<void*>(nullptr),static_cast<void*>(&foreign)}) {
+                w=77;h=88;input(p,0x19,0,&w,&h);output(p,0x19,&w,&h);
+                assert(w==77 && h==88);
+            }
+            w=77;h=88;
+            input(&child,0x19,0,nullptr,&h);output(&child,0x19,&w,nullptr);
+            assert(w==77 && h==88);
+        }
+        output(&child,0x19,&w,&h);assert(w==77 && h==88);
+    }
+    {
         uint32_t h=999,w=888;
         assert(tglAdjustOwnedSfcFrame(1080,1920,1079,1919,false,8,16,h,w));
         assert(h==1080 && w==1920);

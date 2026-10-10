@@ -4197,6 +4197,27 @@ inline TglOwnedSfcAlignment tglOwnedSfcAlignment(uint32_t format) noexcept {
     const auto pack=tglOwnedChromaColorPack(format);
     return {uint16_t(pack==0 || pack==1 ? 2 : 1),uint16_t(pack==0 ? 2 : 1)};
 }
+// Owned VP +80/+88 ABI, from exact ICL1f7330/1df350. +80 receives
+// both formats but consumes only the input format; +88 has no second format.
+// Resolve must admit the currently leased owned VP, never a donor this thunk.
+// Keep native write order, including aliases: 422 writes width=2 LAST, so
+// a shared width/height pointer ends at2 rather than a synthesized height1.
+template<class Resolve> struct TglOwnedVpAlignmentCallbacks {
+    static void input(void* child,uint32_t format,uint32_t,
+        uint16_t* width,uint16_t* height) noexcept {
+        static_assert(noexcept(Resolve{}(child)),"VP alignment resolver ABI");
+        auto* context=Resolve{}(child);
+        static_assert(noexcept(context->owns(child)),"VP alignment ownership ABI");
+        if(!context || !context->owns(child) || !width || !height) return;
+        const auto alignment=tglOwnedSfcAlignment(format);
+        *width=1;*height=1;
+        if(alignment.width==2) *width=2;
+        if(alignment.height==2) *height=2;
+    }
+    static void output(void* child,uint32_t format,uint16_t* width,uint16_t* height) noexcept {
+        input(child,format,0,width,height);
+    }
+};
 
 // Exact Darwin chroma producer1fa603..673. Changes owned surface metadata
 // only, not OS backing or GPU bytes. Color-pack classification is supplied
