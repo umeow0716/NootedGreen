@@ -2035,6 +2035,43 @@ static void testResourceBinding() {
 // The pinned consumer sites shift 0x20/0x24/0x228/0x428 by eight bytes.
 int main() {
     {
+        struct Context { int registrations=0, controls=0; } context;
+        auto registration=+[](void* raw,const void* resource,uint32_t write,uint32_t read)->int {
+            auto& c=*static_cast<Context*>(raw); ++c.registrations;
+            assert(resource && read == 1 && write <= 1); return 0;
+        };
+        auto control=+[](void* raw,const TglSurfaceControlParams*,uint32_t* value)->int {
+            ++static_cast<Context*>(raw)->controls; *value|=0x80; return 0;
+        };
+        TglNativeDiIecpServices services;
+        services.registration={reinterpret_cast<uintptr_t>(&context),reinterpret_cast<uintptr_t>(registration)};
+        services.control={reinterpret_cast<uintptr_t>(&context),reinterpret_cast<uintptr_t>(control)};
+        std::array<TglOwnedSurfaceStorage,3> storage{};
+        TglDiIecpInputs input;
+        input.boundaryWidth=1920; input.pipe=2;
+        input.current=&storage[0]; input.target=&storage[1]; input.statistics=&storage[2];
+        TglOwnedDiIecpPacket packet;
+        auto admit=[](const auto&)->int { return 0; };
+        size_t policyCalls=0;
+        auto policy=[&](const auto& surface,size_t slot,bool direct,bool& enabled)->int {
+            ++policyCalls;
+            assert((slot == 0 && !direct && &surface == input.current) ||
+                   (slot == 5 && direct && &surface == input.target));
+            enabled=direct; return 0;
+        };
+        assert(tglPrepareNativeDiIecpPacket(packet,input,services,admit,policy) == 0);
+        assert(context.registrations == 3 && context.controls == 1 && policyCalls == 2);
+        assert(packet.controls[0] == 0 && packet.controls[5] == 0x80 && packet.controls[7] == 0);
+        const auto saved=packet;
+        auto deny=[](const auto&,size_t,bool,bool&)->int { return 25; };
+        assert(tglPrepareNativeDiIecpPacket(packet,input,services,admit,deny) == 25);
+        assert(std::memcmp(&packet,&saved,sizeof(packet)) == 0 && context.controls == 1);
+        services.control.entry=0;
+        const auto registrations=context.registrations;
+        assert(tglPrepareNativeDiIecpPacket(packet,input,services,admit,policy) == 5);
+        assert(context.registrations == registrations && std::memcmp(&packet,&saved,sizeof(packet)) == 0);
+    }
+    {
         TglOwnedSurfaceStorage surface;
         surface.tail[0xa]=0xff;
         uint32_t mode=4;
@@ -2085,7 +2122,8 @@ int main() {
                     assert(read); order.push_back(&resource); writes.push_back(write);
                     return ++registrations == failRegister ? 31 : 0;
                 },
-                [&](const auto&,uint32_t& value)->int {
+                [&](const auto&,uint32_t& value,size_t slot,bool directTarget)->int {
+                    assert(slot != 7 && !directTarget);
                     value+=0x100; return ++controls == failControl ? 25 : 0;
                 });
         };

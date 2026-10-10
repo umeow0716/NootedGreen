@@ -1485,15 +1485,15 @@ int tglPrepareDiIecpPacket(TglOwnedDiIecpPacket& output,
         !tglSelectDiIecpOutputs(selected,input.pipe,input.di,input.iecp,
             input.indices,input.target,input.ffdi) || !input.current ||
         !input.statistics || (input.referenceValid && !input.previous)) return 5;
-    struct Step { size_t slot; const TglOwnedSurfaceStorage* surface; bool write; };
+    struct Step { size_t slot; const TglOwnedSurfaceStorage* surface; bool write; bool directTarget; };
     std::array<Step,10> steps{};
     size_t count=0;
-    auto add = [&](size_t slot,const TglOwnedSurfaceStorage* surface,bool write) {
-        steps[count++]={slot,surface,write};
+    auto add = [&](size_t slot,const TglOwnedSurfaceStorage* surface,bool write,bool directTarget=false) {
+        steps[count++]={slot,surface,write,directTarget};
     };
     add(0,input.current,false);
     if (input.referenceValid) add(1,input.previous,false);
-    if (selected.current) add(5,selected.current,true);
+    if (selected.current) add(5,selected.current,true,input.pipe == 2);
     if (selected.previous) add(6,selected.previous,true);
     if (input.dnNeeded) {
         if (input.indices.dnOut < 0 || input.indices.dnOut >= 2 ||
@@ -1530,7 +1530,7 @@ int tglPrepareDiIecpPacket(TglOwnedDiIecpPacket& output,
         if (result) return result;
         uint32_t value=input.controls[step.slot];
         if (step.slot != 7) { // native statistics has no compression-control call
-            result=control(*step.surface,value);
+            result=control(*step.surface,value,step.slot,step.directTarget);
             if (result) return result;
         }
         candidate.resources[step.slot]=&step.surface->resource;
@@ -1538,6 +1538,42 @@ int tglPrepareDiIecpPacket(TglOwnedDiIecpPacket& output,
     }
     output=candidate;
     return 0;
+}
+struct TglNativeDiIecpServices {
+    TglNativeRegistrationBinding registration{};
+    TglNativeSurfaceControlBinding control{};
+    template<class Read, class Qualify, class Executable>
+    bool resolve(uintptr_t os, uintptr_t mhw, uintptr_t image, Read read,
+                 Qualify qualify, Executable executable) {
+        *this={};
+        TglNativeDiIecpServices candidate;
+        if (!candidate.registration.resolve(os,image,read,qualify,executable) ||
+            !candidate.control.resolve(mhw,image,read,qualify,executable)) return false;
+        *this=candidate;
+        return true;
+    }
+};
+// The compression policy must distinguish native direct-output predicate80
+// from global MMC policy for intermediate/input/history surfaces. No default
+// "compression disabled" fallback; caller must supply qualified policy.
+template<class Admit, class ControlPolicy>
+int tglPrepareNativeDiIecpPacket(TglOwnedDiIecpPacket& output,
+        const TglDiIecpInputs& input,const TglNativeDiIecpServices& services,
+        Admit admit,ControlPolicy policy) {
+    if (!services.registration.context || !services.registration.entry ||
+        !services.control.context || !services.control.entry) return 5;
+    return tglPrepareDiIecpPacket(output,input,admit,
+        [&](const auto& resource,bool write,bool read) {
+            return TglNativeRegistrationInvoker{}(services.registration.entry,
+                services.registration.context,&resource,write,read);
+        },
+        [&](const auto& surface,uint32_t& value,size_t slot,bool directTarget) {
+            bool enabled=false;
+            const int result=policy(surface,slot,directTarget,enabled);
+            if (result || !enabled) return result;
+            return TglNativeSurfaceControlInvoker{}(services.control.entry,
+                services.control.context,surface,value);
+        });
 }
 // TGL12b9a0 writes these five execution fields. No pointer adoption or state
 // mutation; failed reads/invalid indices preserve the caller's snapshot.
