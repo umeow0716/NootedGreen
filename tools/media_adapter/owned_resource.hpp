@@ -5837,11 +5837,37 @@ template<class Context> using TglOwnedVeboxScopedContext=
 // NOT an int status producer (error5 would be interpreted as TRUE). The scoped
 // context must implement the full platform admission and own params/pass leases;
 // this ABI bridge alone is not a completed admission policy or runtime table.
+template<class Owner,class Policy> class TglOwnedVeboxAdmissionContext {
+    Owner& owner_;
+    void* child_;
+    void* params_;
+    void* pass_;
+    Policy& policy_;
+    bool busy_=false;
+public:
+    TglOwnedVeboxAdmissionContext(Owner& owner,void* child,void* params,void* pass,
+        Policy& policy) noexcept
+        :owner_(owner),child_(child),params_(params),pass_(pass),policy_(policy){}
+    TglOwnedVeboxAdmissionContext(const TglOwnedVeboxAdmissionContext&)=delete;
+    TglOwnedVeboxAdmissionContext& operator=(const TglOwnedVeboxAdmissionContext&)=delete;
+    bool owns(void* child) const noexcept {return child && child==child_;}
+    bool admit(void* params,void* pass) noexcept {
+        static_assert(noexcept(policy_(child_,params_,pass_)) &&
+            std::is_same_v<decltype(policy_(child_,params_,pass_)),bool>,
+            "complete platform policy must report native bool");
+        if(busy_ || !child_ || !params_ || !pass_ || params!=params_ || pass!=pass_ ||
+           !owner_.hasPrivateChildLease(reinterpret_cast<uintptr_t>(child_))) return false;
+        busy_=true;
+        struct Unlock {bool& busy;~Unlock(){busy=false;}} unlock{busy_};
+        return policy_(child_,params_,pass_);
+    }
+};
+
 template<class Resolve> struct TglOwnedVeboxAdmissionCallbacks {
     static bool admit(void* child,void* params,void* pass) noexcept {
         if(!child || !params || !pass) return false;
         auto* context=Resolve::get(child);
-        if(!context) return false;
+        if(!context || !context->owns(child)) return false;
         static_assert(noexcept(context->admit(params,pass)) &&
             std::is_same_v<decltype(context->admit(params,pass)),bool>,
             "VEBOX admission must return native bool, not status");

@@ -33,15 +33,17 @@ static void testTrackedCpuOwner() {
     {
         int child=0,foreign=0,params=0,pass=0;
         struct Admission {
+            void* child;
             void* params;
             void* pass;
             unsigned calls=0;
             bool allowed=false;
+            bool owns(void* p) const noexcept {return p==child;}
             bool admit(void* p,void* q) noexcept {
                 if(p!=params || q!=pass) return false;
                 ++calls;return allowed;
             }
-        } context{&params,&pass};
+        } context{&child,&params,&pass};
         using Resolve=TglOwnedVeboxScopedContext<Admission>;
         using Callback=TglOwnedVeboxAdmissionCallbacks<Resolve>;
         static_assert(std::is_same_v<decltype(&Callback::admit),bool(*)(void*,void*,void*) noexcept>);
@@ -61,6 +63,46 @@ static void testTrackedCpuOwner() {
             assert(admit(&child,&params,&pass) && context.calls==2);
         }
         assert(!admit(&child,&params,&pass) && context.calls==2);
+    }
+    {
+        int child=0,foreign=0,params=0,pass=0;
+        struct Owner {
+            uintptr_t child;
+            bool leased=false;
+            bool hasPrivateChildLease(uintptr_t p) const noexcept {return leased && p==child;}
+        } owner{reinterpret_cast<uintptr_t>(&child)};
+        unsigned calls=0;bool allowed=false;
+        void* nested=nullptr;bool (*reenter)(void*) noexcept=nullptr;
+        auto policy=[&](void* c,void* p,void* q) noexcept {
+            assert(c==&child && p==&params && q==&pass);++calls;
+            if(reenter) assert(!reenter(nested));
+            return allowed;
+        };
+        using Context=TglOwnedVeboxAdmissionContext<Owner,decltype(policy)>;
+        Context context(owner,&child,&params,&pass,policy);
+        using Scope=TglOwnedVeboxScopedContext<Context>;
+        using Callback=TglOwnedVeboxAdmissionCallbacks<Scope>;
+        assert(!context.admit(&params,&pass) && !calls);
+        owner.leased=true;
+        assert(!context.admit(&foreign,&pass) && !calls);
+        assert(!context.admit(&params,&foreign) && !calls);
+        {Scope scope(&foreign,context);assert(scope.bound());
+            assert(!Callback::admit(&foreign,&params,&pass) && !calls);
+        }
+        {Scope scope(&child,context);assert(scope.bound());
+            assert(!Callback::admit(&child,&params,&pass) && calls==1);
+            struct Nested {Context* context;void* params;void* pass;} state{&context,&params,&pass};
+            nested=&state;
+            reenter=[](void* p) noexcept {
+                auto& value=*static_cast<Nested*>(p);
+                return value.context->admit(value.params,value.pass);
+            };
+            allowed=true;
+            assert(Callback::admit(&child,&params,&pass) && calls==2);
+            owner.leased=false;
+            assert(!Callback::admit(&child,&params,&pass) && calls==2);
+        }
+        assert(!Callback::admit(&child,&params,&pass) && calls==2);
     }
     {
         struct Allocation {
