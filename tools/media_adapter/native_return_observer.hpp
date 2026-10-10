@@ -35,6 +35,7 @@ class NativeReturnObserver {
     unsigned rcxSites = 0;
     unsigned readRax32Sites = 0;
     unsigned rdxImageSites = 0;
+    unsigned rcxImageSites = 0;
     uintptr_t imageBase = 0;
     uintptr_t imageBytes = 0;
     NativeOwnedCopy ownedCopy{};
@@ -74,7 +75,7 @@ class NativeReturnObserver {
             return;
         }
         auto raw = state->uc_mcontext->__ss.__rax;
-        if (self->ownedCopy.bytes) {
+        if (self->ownedCopy.bytes && site == 0) {
             // Pinned memcpy_s call arguments only. The owned source remains live
             // until native returns; no Apple code, RIP, flags or result changes.
             const auto &copy = self->ownedCopy;
@@ -97,6 +98,13 @@ class NativeReturnObserver {
             raw = pointer >= self->imageBase && pointer - self->imageBase < self->imageBytes
                 ? pointer - self->imageBase : uintptr_t(-1);
         }
+        if (self->rcxImageSites & (1u << site)) {
+            const uintptr_t pointer = state->uc_mcontext->__ss.__rcx;
+            raw = pointer >= self->imageBase && pointer - self->imageBase < self->imageBytes
+                ? pointer - self->imageBase : uintptr_t(-1);
+        }
+        if ((self->rdxImageSites | self->rcxImageSites) & (1u << site))
+            self->record(4 + site, uint32_t(raw));
         self->values[site] = self->booleanSites & (1u << site)
             ? sig_atomic_t(raw != 0) : static_cast<sig_atomic_t>(raw);
         self->hitMask |= 1 << site;
@@ -115,21 +123,24 @@ public:
         : NativeReturnObserver(std::array<uintptr_t, 4>{site, 0, 0, 0}) {}
     explicit NativeReturnObserver(const std::array<uintptr_t, 4> &selected, unsigned booleans = 0,
         unsigned rcx = 0, unsigned readRax32 = 0, unsigned rdxImage = 0,
-        uintptr_t base = 0, uintptr_t bytes = 0, NativeOwnedCopy copy = {})
+        uintptr_t base = 0, uintptr_t bytes = 0, NativeOwnedCopy copy = {}, unsigned rcxImage = 0)
         : sites(selected), booleanSites(booleans), rcxSites(rcx), readRax32Sites(readRax32),
-          rdxImageSites(rdxImage), imageBase(base), imageBytes(bytes), ownedCopy(copy) {
+          rdxImageSites(rdxImage), rcxImageSites(rcxImage), imageBase(base), imageBytes(bytes), ownedCopy(copy) {
         for (unsigned i = 0; i != 4; ++i) {
             if (!sites[i]) continue;
             for (unsigned j = 0; j != i; ++j) if (sites[j] == sites[i]) return;
             wanted |= 1 << i;
         }
         if (!guard.owns_lock() || !wanted ||
-            ((booleanSites | rcxSites | readRax32Sites | rdxImageSites) & ~unsigned(wanted)) ||
+            ((booleanSites | rcxSites | readRax32Sites | rdxImageSites | rcxImageSites) & ~unsigned(wanted)) ||
             (rcxSites & readRax32Sites) ||
             (rdxImageSites & (booleanSites | rcxSites | readRax32Sites)) ||
-            (rdxImageSites && (!imageBase || !imageBytes || imageBytes > 0x7fffffff ||
+            (rcxImageSites & (booleanSites | rcxSites | readRax32Sites | rdxImageSites)) ||
+            ((rdxImageSites | rcxImageSites) && (!imageBase || !imageBytes || imageBytes > 0x7fffffff ||
                 imageBase + imageBytes < imageBase)) ||
-            (ownedCopy.bytes && (wanted != 1 || booleanSites || rcxSites || readRax32Sites || rdxImageSites ||
+            (ownedCopy.bytes && (!(wanted & 1) || booleanSites || rcxSites || readRax32Sites ||
+                ((rdxImageSites | rcxImageSites) & 1) ||
+                ((unsigned(wanted) & ~1u) != (rdxImageSites | rcxImageSites)) ||
                 !ownedCopy.source || !ownedCopy.replacement || ownedCopy.source == ownedCopy.replacement ||
                 ownedCopy.bytes > 0x7fffffff || ownedCopy.source + ownedCopy.bytes < ownedCopy.source ||
                 ownedCopy.replacement + ownedCopy.bytes < ownedCopy.replacement))) {

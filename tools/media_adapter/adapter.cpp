@@ -90,11 +90,22 @@ int NGRN_ObservedCreateContexts(void *context, const void *input) {
     const uintptr_t base = reinterpret_cast<uintptr_t>(info.dli_fbase);
     const uintptr_t site = base + 0x13260f, source = base + 0x531550;
     constexpr uint8_t anchor[] = {0xe8,0x9c,0x42,0xf3,0xff};
+    // Crash 8734F7ED: native passed the metadata factory, then dereferenced
+    // null renderer+0x910 at 13282a. Capture the two real vtables, not guessed
+    // subclasses. These are registers the following native call dereferences;
+    // no object memory, Apple text or native result is changed.
+    constexpr uint8_t creatorAnchor[] = {0xff,0x51,0x18};
+    constexpr uint8_t rendererAnchor[] = {0xff,0x52,0x20};
+    uint8_t creatorActual[3]{}, rendererActual[3]{};
     uint8_t actual[sizeof(anchor)]{};
     std::vector<uint8_t> owned;
     try { owned.resize(TglKernelMetadataAdapter::blobBytes); }
     catch (...) { return native(context, input); }
-    if (!readMemory(site, actual, sizeof(actual)) || std::memcmp(actual, anchor, sizeof(anchor)) ||
+    if (!readMemory(base + 0x133c0f, creatorActual, sizeof(creatorActual)) ||
+        std::memcmp(creatorActual, creatorAnchor, sizeof(creatorAnchor)) ||
+        !readMemory(base + 0x133c36, rendererActual, sizeof(rendererActual)) ||
+        std::memcmp(rendererActual, rendererAnchor, sizeof(rendererAnchor)) ||
+        !readMemory(site, actual, sizeof(actual)) || std::memcmp(actual, anchor, sizeof(anchor)) ||
         !readMemory(source, owned.data(), owned.size()) || !TglKernelMetadataAdapter::translate(owned)) {
         os_log_error(OS_LOG_DEFAULT, "NGRN_OWNED_KERNEL_METADATA_SKIP exact-data-or-call-anchor");
         return native(context, input);
@@ -122,8 +133,9 @@ int NGRN_ObservedCreateContexts(void *context, const void *input) {
         return native(context, input);
     }
     os_log_error(OS_LOG_DEFAULT, "NGRN_OWNED_COPY_JOURNAL path=%{public}s", journalPath);
-    NativeReturnObserver observer({site, 0, 0, 0}, 0, 0, 0, 0, 0, 0,
-        {source, reinterpret_cast<uintptr_t>(owned.data()), owned.size(), journal.fd});
+    NativeReturnObserver observer({site, base + 0x133c0f, base + 0x133c36, 0},
+        0, 0, 0, 4, base, 8450544,
+        {source, reinterpret_cast<uintptr_t>(owned.data()), owned.size(), journal.fd}, 2);
     const int result = native(context, input);
     os_log_error(OS_LOG_DEFAULT, "NGRN_OWNED_KERNEL_METADATA_COPY applied=%{public}d result=%{public}d",
         int(observer.observed(0, 1)), result);
