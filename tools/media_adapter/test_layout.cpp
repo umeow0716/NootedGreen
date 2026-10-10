@@ -2035,6 +2035,27 @@ static void testResourceBinding() {
 // The pinned consumer sites shift 0x20/0x24/0x228/0x428 by eight bytes.
 int main() {
     {
+        const uint32_t sitings[6]={0x21,0x22,0x11,0x12,0x41,0x42};
+        const uint32_t nativeFields[2][6]={{4,5,0,1,8,9},{8,9,0,1,16,17}};
+        for (uint32_t pack=0;pack<4;++pack) for (uint32_t type=0;type<6;++type)
+            for (bool needed : {false,true}) for (bool di : {false,true})
+                for (uint32_t initial : {0u,0xffffffffu,0xa5a55a5au}) {
+                    uint32_t state=initial;
+                    assert(tglPrepareOwnedChromaUpsampling(state,pack,sitings[type],needed,di));
+                    const bool active=needed && (pack==0 || (pack==1 && (type==2 || type==3)));
+                    const uint32_t fields=active ? nativeFields[di][type] : 0x400;
+                    assert(state == ((initial&~0x41fu)|fields));
+                }
+        uint32_t state=0xffffffff;
+        assert(tglPrepareOwnedChromaUpsampling(state,0,0x77,true,false));
+        assert((state&0x41f)==4); // First matching type wins.
+        const auto saved=state;
+        assert(!tglPrepareOwnedChromaUpsampling(state,4,0x21,true,false));
+        assert(state==saved);
+        assert(tglPrepareOwnedChromaUpsampling(state,0,0,true,false));
+        assert((state&0x41f)==0x400);
+    }
+    {
         // Pinned jump-table targets: -42/-33/-24/-15 => 420/422/444/other.
         const int8_t targets[90]={
             -24,-24,-24,-24,-24,-24,-24,-15,-15,-24,-24,-24,-33,-33,-33,-33,
