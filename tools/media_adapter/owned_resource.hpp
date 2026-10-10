@@ -150,6 +150,10 @@ struct alignas(8) TglOwnedVpSfcCallerStorage {
     // Borrowed constructor inputs follow ICL1dd150 base10/18/20. Authenticate
     // the TGL MHW object independently; callers retain all interface/image
     // leases. This initializes data only, not a callable native object.
+    // Exact ICL1dd150..1ddb58 ends with 4d4d0(this+28,400,200):
+    // zero storage is NOT a complete constructor. The separate owned AVS
+    // owner supplies its invalid-format sentinel and tracked coefficient
+    // allocation under a lease; never publish this storage before binding it.
     template<class Binding,class Read>
     bool initializeBorrowed(uintptr_t os,uintptr_t renderHal,uintptr_t mhw,
         const Binding& binding,Read read) {
