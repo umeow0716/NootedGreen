@@ -1164,7 +1164,14 @@ public:
     enum class State { Empty, DescriptorOnly, Backed };
     struct Result { int status; State state; bool changed; };
 
-    explicit TglOwnedResource(Backend &backend) noexcept : backend_(backend) {}
+    explicit TglOwnedResource(Backend &backend) noexcept : backend_(backend), storage_(localStorage_) {}
+    // Borrow storage, not pre-existing handles. External storage and backend
+    // outlive this owner; caller serializes all native access under its lease.
+    TglOwnedResource(Backend &backend, Storage& emptyStorage) noexcept
+        : backend_(backend), storage_(emptyStorage) {
+        admitted_ = reinterpret_cast<uintptr_t>(storage_.data()) % 8 == 0;
+        for (auto byte : storage_) if (byte) admitted_ = false;
+    }
     ~TglOwnedResource() { reset(); }
     TglOwnedResource(const TglOwnedResource &) = delete;
     TglOwnedResource &operator=(const TglOwnedResource &) = delete;
@@ -1172,6 +1179,9 @@ public:
     TglOwnedResource &operator=(TglOwnedResource &&) = delete;
 
     Result ensure(const TglResourceKey &key) noexcept {
+        if (!admitted_) return {5, State::Empty, false};
+        if (!live_) for (auto byte : storage_)
+            if (byte) return {5, State::Empty, false}; // never erase/adopt foreign handles
         if (live_ && state_ == State::Backed && key_ == key && backend_.backed(storage_))
             return {0, state_, false};
         // Match native ordering: retire old backing before replacement.
@@ -1187,22 +1197,38 @@ public:
         return {0, state_, true}; // native success is NOT proof of GPU backing
     }
     void reset() noexcept {
-        if (live_) backend_.release(storage_);
-        storage_.fill(0);
-        key_ = {};
+        if (!live_) return;
         live_ = false;
         state_ = State::Empty;
+        key_ = {};
+        backend_.release(storage_);
+        storage_.fill(0);
     }
     State state() const noexcept { return state_; }
     const Storage &storage() const noexcept { return storage_; }
 
 private:
     Backend &backend_; // must outlive this owner
-    alignas(8) Storage storage_{};
+    alignas(8) Storage localStorage_{};
+    Storage& storage_;
     TglResourceKey key_{};
     bool live_ = false;
     State state_ = State::Empty;
+    bool admitted_ = true;
 };
+
+// Owned representation of the proven Darwin 0x2a8 surface extent. Native
+// OsResource is at +0x148; rotation and trailing fields start at +0x290.
+// Not a Linux struct transplant and not a cast/adoption of an existing surface.
+struct alignas(8) TglOwnedSurfaceStorage {
+    std::array<uint8_t,0x148> prefix{};
+    std::array<uint8_t,0x148> resource{};
+    std::array<uint8_t,0x18> tail{};
+};
+static_assert(offsetof(TglOwnedSurfaceStorage,resource) == 0x148);
+static_assert(offsetof(TglOwnedSurfaceStorage,tail) == 0x290);
+static_assert(sizeof(TglOwnedSurfaceStorage) == 0x2a8);
+struct TglResourceStorageReference { std::array<uint8_t,0x148>& storage; };
 
 // Gen12 AllocateResources finish calls FreeResources on ANY failure. This
 // composes descriptor owners, not Linux object offsets or feature admission.
@@ -1214,12 +1240,22 @@ template<class Backend, size_t Count> class TglOwnedResourceGroup {
     using Resource = TglOwnedResource<Backend>;
     std::array<Resource,Count> resources;
     bool ready = false;
+    bool bindingsValid = true;
     template<size_t... I>
     TglOwnedResourceGroup(Backend& backend, std::index_sequence<I...>) noexcept
         : resources{(static_cast<void>(I),Resource(backend))...} {}
     template<size_t... I>
     TglOwnedResourceGroup(std::array<Backend,Count>& backends, std::index_sequence<I...>) noexcept
         : resources{Resource(backends[I])...} {}
+    template<size_t... I>
+    TglOwnedResourceGroup(std::array<Backend,Count>& backends,
+                         const std::array<TglResourceStorageReference,Count>& storage,
+                         std::index_sequence<I...>) noexcept
+        : resources{Resource(backends[I],storage[I].storage)...} {
+        for (size_t i = 0; i < Count; ++i)
+            for (size_t j = 0; j < i; ++j)
+                if (&storage[i].storage == &storage[j].storage) bindingsValid = false;
+    }
 public:
     struct Request { bool required = false; TglResourceKey key{}; };
     explicit TglOwnedResourceGroup(Backend& backend) noexcept
@@ -1228,6 +1264,9 @@ public:
     // The complete backend array, and its borrowed OS context, outlive this group.
     explicit TglOwnedResourceGroup(std::array<Backend,Count>& backends) noexcept
         : TglOwnedResourceGroup(backends,std::make_index_sequence<Count>{}) {}
+    TglOwnedResourceGroup(std::array<Backend,Count>& backends,
+                         const std::array<TglResourceStorageReference,Count>& storage) noexcept
+        : TglOwnedResourceGroup(backends,storage,std::make_index_sequence<Count>{}) {}
     TglOwnedResourceGroup(const TglOwnedResourceGroup&) = delete;
     TglOwnedResourceGroup& operator=(const TglOwnedResourceGroup&) = delete;
     template<class Prepare>
@@ -1236,6 +1275,7 @@ public:
             std::declval<const typename Resource::Storage&>(),bool{})),
             "resource initialization must report errors through status");
         ready = false;
+        if (!bindingsValid) return 5;
         for (size_t i = 0; i < Count; ++i) {
             if (!requests[i].required) { resources[i].reset(); continue; }
             const auto result = resources[i].ensure(requests[i].key);

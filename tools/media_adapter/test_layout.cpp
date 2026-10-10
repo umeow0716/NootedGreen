@@ -1083,6 +1083,95 @@ static void testVeboxPrefix() {
     assert(prefix.configure(0x3000, 0x1000, read) && prefix.flag48 == 1 && prefix.flag49 == 0);
 }
 
+static void testExternalResourceStorage() {
+    using Storage = std::array<uint8_t,0x148>;
+    struct Backend {
+        Storage* expected = nullptr;
+        unsigned allocations = 0, releases = 0, live = 0;
+        int status = 0;
+        int allocate(Storage& s, const TglResourceKey&) noexcept {
+            assert(&s == expected && !live);
+            const uint64_t handle = 123;
+            std::memcpy(s.data()+0x20,&handle,8);
+            ++allocations; ++live; return status;
+        }
+        void release(Storage& s) noexcept {
+            assert(&s == expected && live == 1);
+            --live; ++releases; s.fill(0);
+        }
+        bool backed(const Storage& s) noexcept { return tglNativeBackingPresent(s); }
+    } backend;
+    TglOwnedSurfaceStorage surface;
+    surface.prefix.fill(0xa5); surface.tail.fill(0x5a);
+    backend.expected = &surface.resource;
+    TglResourceKey key{64,16,0x19,0,0,false};
+    {
+        TglOwnedResource<Backend> owner(backend,surface.resource);
+        assert(&owner.storage() == &surface.resource);
+        auto result = owner.ensure(key);
+        assert(!result.status && result.changed && backend.live == 1);
+        assert(!owner.ensure(key).changed && backend.allocations == 1);
+        owner.reset(); owner.reset(); assert(!backend.live && backend.releases == 1);
+        for (auto byte : surface.resource) assert(!byte);
+        backend.status = 77;
+        assert(owner.ensure(key).status == 77 && !backend.live && backend.releases == 2);
+        backend.status = 0; assert(!owner.ensure(key).status);
+    }
+    assert(!backend.live && backend.allocations == backend.releases);
+    for (auto byte : surface.prefix) assert(byte == 0xa5);
+    for (auto byte : surface.tail) assert(byte == 0x5a);
+    const auto allocations = backend.allocations, releases = backend.releases;
+    alignas(8) Storage foreign{}; foreign[0x20] = 42;
+    {
+        TglOwnedResource<Backend> denied(backend,foreign);
+        assert(denied.ensure(key).status == 5); denied.reset();
+    }
+    assert(foreign[0x20] == 42);
+    alignas(8) Storage mutated{};
+    {
+        TglOwnedResource<Backend> pristine(backend,mutated);
+        mutated[0x20] = 43;
+        assert(pristine.ensure(key).status == 5); pristine.reset();
+    }
+    assert(mutated[0x20] == 43);
+    struct Misaligned { uint8_t prefix = 0; Storage bytes{}; };
+    static_assert(offsetof(Misaligned,bytes) == 1);
+    alignas(8) Misaligned misaligned;
+    {
+        TglOwnedResource<Backend> denied(backend,misaligned.bytes);
+        assert(denied.ensure(key).status == 5);
+    }
+    assert(backend.allocations == allocations && backend.releases == releases);
+    std::array<TglOwnedSurfaceStorage,2> surfaces{};
+    std::array<Backend,2> backends{};
+    for (size_t i = 0; i < 2; ++i) backends[i].expected = &surfaces[i].resource;
+    using Group = TglOwnedResourceGroup<Backend,2>;
+    std::array<TglResourceStorageReference,2> views{{{surfaces[0].resource},{surfaces[1].resource}}};
+    std::array<Group::Request,2> requests{{{true,key},{true,key}}};
+    auto prepare = [](size_t, const auto&, bool) noexcept { return 0; };
+    {
+        Group group(backends,views);
+        assert(!group.ensure(requests,prepare));
+        for (size_t i = 0; i < 2; ++i) assert(group.storage(i) == &surfaces[i].resource);
+    }
+    for (const auto& b : backends) assert(b.allocations == 1 && b.releases == 1 && !b.live);
+    std::array<TglResourceStorageReference,2> aliases{{{surfaces[0].resource},{surfaces[0].resource}}};
+    {
+        Group denied(backends,aliases);
+        assert(denied.ensure(requests,prepare) == 5 && !denied.storage(0));
+    }
+    for (const auto& b : backends) assert(b.allocations == 1 && b.releases == 1);
+    surfaces[1].resource[0x20] = 99;
+    {
+        Group refused(backends,views);
+        assert(refused.ensure(requests,prepare) == 5);
+        assert(!refused.storage(0) && !refused.storage(1));
+    }
+    assert(backends[0].allocations == 2 && backends[0].releases == 2 && !backends[0].live);
+    assert(backends[1].allocations == 1 && backends[1].releases == 1 && !backends[1].live);
+    assert(surfaces[1].resource[0x20] == 99); // Refusal never frees someone else's handle.
+}
+
 static void testSurfaceStatisticsTransaction() {
     struct Fixture {
         std::array<uint8_t,4096> bytes{};
@@ -1749,6 +1838,7 @@ int main() {
     testExecutionOwner();
     testVeboxReport();
     testVeboxPrefix();
+    testExternalResourceStorage();
     testSurfaceStatisticsTransaction();
     testComposedStatisticsBuffer();
     testBufferFill();
