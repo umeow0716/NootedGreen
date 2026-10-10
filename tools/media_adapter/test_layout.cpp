@@ -1000,6 +1000,48 @@ static void testVeboxPrefix() {
         assert(constructorCalls == 1 && status == 31);
     }
     {
+        TglOwnedSurfaceStorage surface;
+        std::array<uint8_t,0x48> descriptor{};
+        static const void* expectedSurface;
+        expectedSurface = &surface;
+        auto convert = +[](const void* input, void* output) {
+            assert(input == expectedSurface);
+            auto resource = reinterpret_cast<uintptr_t>(input)+0x148;
+            std::memcpy(static_cast<uint8_t*>(output)+0x40,&resource,8);
+            return 31;
+        };
+        assert(TglNativeSurfaceConversionInvoker{}(reinterpret_cast<uintptr_t>(convert),
+                                                   surface,descriptor) == 31);
+        uintptr_t borrowed = 0;
+        std::memcpy(&borrowed,descriptor.data()+0x40,8);
+        assert(borrowed == reinterpret_cast<uintptr_t>(surface.resource.data()));
+        constexpr uintptr_t image = 0x100000;
+        std::array<uint8_t,16> bytes{
+            0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x20,
+            0x48,0x89,0x7d,0xf8,0x48,0x89,0x75,0xf0};
+        bool identity = true, rx = true, readable = true;
+        auto read = [&](uintptr_t p, void* out, size_t n) {
+            assert(p == image+0x52bf0 && n == bytes.size());
+            if (!readable) return false;
+            std::memcpy(out,bytes.data(),n); return true;
+        };
+        auto qualify = [&](uintptr_t p) { return identity && p == image; };
+        auto executable = [&](uintptr_t p, size_t n) {
+            assert(p == image+0x52bf0 && n == 16); return rx;
+        };
+        TglSurfaceConversionBinding binding;
+        auto resolve = [&] { return binding.resolve(image,read,qualify,executable); };
+        assert(resolve() && binding.entry == image+0x52bf0);
+        for (auto& byte : bytes) {
+            byte ^= 1; assert(!resolve() && !binding.entry); byte ^= 1;
+        }
+        identity = false; assert(!resolve()); identity = true;
+        rx = false; assert(!resolve()); rx = true;
+        readable = false; assert(!resolve()); readable = true;
+        assert(!binding.resolve(UINTPTR_MAX,read,qualify,executable));
+        assert(resolve());
+    }
+    {
         unsigned stage = 0;
         int ownedStorage = 0;
         auto cleanup = [&](void* p) noexcept {

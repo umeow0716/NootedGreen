@@ -1260,6 +1260,34 @@ static_assert(offsetof(TglOwnedSurfaceStorage,tail) == 0x290);
 static_assert(sizeof(TglOwnedSurfaceStorage) == 0x2a8);
 struct TglResourceStorageReference { std::array<uint8_t,0x148>& storage; };
 
+// Native 52bf0 borrows surface+148 at descriptor+40. Both the surface and its
+// backing owner must outlive every consumer of this descriptor.
+struct TglNativeSurfaceConversionInvoker {
+    int operator()(uintptr_t entry, const TglOwnedSurfaceStorage& surface,
+                   std::array<uint8_t,0x48>& descriptor) const noexcept {
+        using Convert = int (*)(const void*,void*);
+        return reinterpret_cast<Convert>(entry)(&surface,descriptor.data());
+    }
+};
+
+struct TglSurfaceConversionBinding {
+    uintptr_t entry = 0;
+    template<class Read, class Qualify, class Executable>
+    bool resolve(uintptr_t image, Read read, Qualify qualify, Executable executable) {
+        entry = 0;
+        constexpr std::array<uint8_t,16> expected{
+            0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x20,
+            0x48,0x89,0x7d,0xf8,0x48,0x89,0x75,0xf0};
+        std::array<uint8_t,16> actual{};
+        if (!image || image > UINTPTR_MAX-0x52c00 || !qualify(image) ||
+            !executable(image+0x52bf0,16) ||
+            !read(image+0x52bf0,actual.data(),actual.size()) || actual != expected)
+            return false;
+        entry = image+0x52bf0;
+        return true;
+    }
+};
+
 // Gen12 AllocateResources finish calls FreeResources on ANY failure. This
 // composes descriptor owners, not Linux object offsets or feature admission.
 // Prepare handles per-resource initialization/metadata and preserves its error.
