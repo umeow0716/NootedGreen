@@ -3215,6 +3215,23 @@ public:
         });
         return leased && copied;
     }
+    // Pin two complete token owners for one synchronous producer/builder call.
+    // Aliasing is admitted with one lease, never a recursive acquisition.
+    // References must not escape; pending GPU/history ownership is separate.
+    template<class Consume> bool withPeerSurface(TglOwnedAllocatedSurface& peer,
+                                                Consume&& consume) {
+        bool consumed=false;
+        const bool first=withSurface([&](const TglOwnedSurfaceStorage& own) {
+            if(&peer==this) {
+                std::forward<Consume>(consume)(own,own);consumed=true;
+            } else {
+                consumed=peer.withSurface([&](const TglOwnedSurfaceStorage& other) {
+                    std::forward<Consume>(consume)(own,other);
+                });
+            }
+        });
+        return first && consumed;
+    }
     void reset() noexcept {
         if(busy_) return;
         busy_=true;ready_=false;resource_.reset();

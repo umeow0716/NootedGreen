@@ -3435,9 +3435,30 @@ static void testNativeResourceBoundary() {
             assert(!destination.ensure(key));
             assert(destination.copyFrameMetadataFrom(owner));
             assert(destination.copyFrameMetadataFrom(destination));
+            const auto* destinationSurface=destination.surface();
+            unsigned pairCalls=0;
+            assert(owner.withPeerSurface(destination,[&](const auto& own,const auto& other) {
+                ++pairCalls;
+                assert(&own==surface && &other==destinationSurface);
+                owner.reset();destination.reset();
+                assert(owner.ensure(key)==5 && destination.ensure(key)==5);
+                assert(!owner.surface() && !destination.surface());
+            }));
+            assert(pairCalls==1 && destination.surface());
+            assert(owner.withPeerSurface(owner,[&](const auto& a,const auto& b) {
+                ++pairCalls;assert(&a==&b && &a==surface);
+            }));
+            assert(pairCalls==2);
+            bool caught=false;
+            try {
+                owner.withPeerSurface(destination,[](const auto&,const auto&){throw 31;});
+            } catch(int status) {caught=status==31;}
+            assert(caught && owner.surface() && destination.surface());
             const auto destinationBefore=*destination.surface();
             fixtureResource.fill(0);
             assert(!destination.copyFrameMetadataFrom(owner));
+            assert(!destination.withPeerSurface(owner,[](const auto&,const auto&){assert(false);}));
+            assert(destination.withSurface([](const auto&){}));
             assert(destination.surface()->prefix==destinationBefore.prefix);
             fixtureResource=savedResource;
             assert(owner.withSurface([&](const auto&) {
