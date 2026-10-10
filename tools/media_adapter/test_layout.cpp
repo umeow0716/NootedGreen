@@ -6,6 +6,43 @@
 #include "descriptor_bridge.hpp"
 #include "owned_resource.hpp"
 
+static void testStatisticsLifecycle() {
+    struct Backend {
+        int allocations = 0, releases = 0, status = 0;
+        bool backing = true;
+        int allocate(std::array<uint8_t, 0x148> &s, const TglResourceKey &key) noexcept {
+            ++allocations;
+            assert(key.format == 0x3e && key.height == 1 && !key.compressed);
+            s[0] = 1;
+            return status;
+        }
+        bool backed(const std::array<uint8_t, 0x148> &) noexcept { return backing; }
+        void release(std::array<uint8_t, 0x148> &) noexcept { ++releases; }
+    } backend;
+    unsigned fills = 0;
+    int fillStatus = 0;
+    const auto fill = [&](const std::array<uint8_t, 0x148> &s, uint32_t bytes) noexcept {
+        ++fills; assert(s[0] == 1 && bytes != 0); return fillStatus;
+    };
+    {
+        TglStatisticsResource<Backend> resource(backend);
+        assert(resource.ensure(1920, 1080, fill) == 0 && fills == 1);
+        assert(resource.layout().bytes == 520320);
+        assert(resource.ensure(1920, 1080, fill) == 0 && fills == 1);
+        assert(resource.ensure(0, 1080, fill) == 5 && resource.layout().bytes == 520320);
+        fillStatus = 31;
+        assert(resource.ensure(1280, 720, fill) == 31 && resource.layout().bytes == 0);
+        assert(backend.allocations == 2 && backend.releases == 2);
+        fillStatus = 0; backend.backing = false;
+        assert(resource.ensure(1280, 720, fill) == 5 && fills == 2);
+        backend.backing = true; backend.status = 25;
+        assert(resource.ensure(1280, 720, fill) == 25 && resource.layout().bytes == 0);
+        backend.status = 0;
+        assert(resource.ensure(1280, 720, fill) == 0 && fills == 3);
+    }
+    assert(backend.allocations == 5 && backend.releases == 5);
+}
+
 static void testSurfaceBoundary() {
     uint32_t w = 0, h = 0;
     for (uint32_t format = 0; format <= 0x33; ++format)
@@ -361,6 +398,7 @@ static void testResourceBinding() {
 // Offline layout hypothesis only: not an ABI-complete or deployable adapter.
 // The pinned consumer sites shift 0x20/0x24/0x228/0x428 by eight bytes.
 int main() {
+    testStatisticsLifecycle();
     testSurfaceBoundary();
     testStatisticsOffsets();
     testSurfaceDescriptor();

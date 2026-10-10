@@ -308,6 +308,37 @@ private:
     State state_ = State::Empty;
 };
 
+// Gen12 statistics lifecycle, not a native fill ABI implementation. Backend
+// must allocate a buffer; Fill must validate and initialize actual backing.
+template<class Backend> class TglStatisticsResource {
+public:
+    explicit TglStatisticsResource(Backend &backend) noexcept : owner_(backend) {}
+    template<class Fill>
+    int ensure(uint32_t width, uint32_t height, Fill fill) noexcept {
+        static_assert(noexcept(fill(owner_.storage(), uint32_t{})),
+                      "initialization must report status without throwing");
+        TglStatisticsAllocation candidate;
+        const int shape = tglStatisticsAllocationSize(width, height, candidate);
+        if (shape) return shape; // invalid request does not retire a valid resource
+        const auto result = owner_.ensure({candidate.bytes, 1, 0x3e, 4, 0, false});
+        if (result.status) { layout_ = {}; return result.status; }
+        if (result.state != TglOwnedResource<Backend>::State::Backed) {
+            reset(); return 5;
+        }
+        if (result.changed) {
+            const int status = fill(owner_.storage(), candidate.bytes);
+            if (status) { reset(); return status; }
+        }
+        layout_ = candidate;
+        return 0;
+    }
+    void reset() noexcept { owner_.reset(); layout_ = {}; }
+    const TglStatisticsAllocation &layout() const noexcept { return layout_; }
+private:
+    TglOwnedResource<Backend> owner_;
+    TglStatisticsAllocation layout_{};
+};
+
 // One borrowed-OS resource lifetime. The renderer must close every such scope
 // before retiring RenderHal/OS. Member order guarantees resource destruction
 // while its backend still exists; close is terminal and idempotent.
