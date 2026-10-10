@@ -6,6 +6,53 @@
 #include "descriptor_bridge.hpp"
 #include "owned_resource.hpp"
 
+static void testBufferFill() {
+    std::array<uint8_t, 0x148> resource{};
+    std::array<uint8_t, 32> bytes{};
+    const auto put = [&](size_t offset, auto value) {
+        std::memcpy(resource.data() + offset, &value, sizeof(value));
+    };
+    const uintptr_t address = reinterpret_cast<uintptr_t>(bytes.data());
+    put(0x10, uint32_t{32}); put(0x20, uintptr_t{7}); put(0x50, address);
+    unsigned writes = 0;
+    bool allowed = true;
+    int status = 0;
+    const auto writable = [&](uintptr_t p, uint32_t n) noexcept {
+        return allowed && p == address && n <= bytes.size();
+    };
+    const auto fill = [&](uintptr_t p, uint32_t n, uint8_t value) noexcept {
+        ++writes; assert(p == address);
+        if (!status) std::memset(bytes.data(), value, n);
+        return status;
+    };
+    assert(tglFillBuffer(resource, 16, 0x80, writable, fill) == 0 && writes == 1);
+    for (size_t i = 0; i < bytes.size(); ++i) assert(bytes[i] == (i < 16 ? 0x80 : 0));
+    allowed = false; assert(tglFillBuffer(resource, 16, 0, writable, fill) == 5);
+    allowed = true;
+    for (uint32_t n : {0u, 33u, UINT32_MAX})
+        assert(tglFillBuffer(resource, n, 0, writable, fill) == 5);
+    put(0x14, uint32_t{1}); assert(tglFillBuffer(resource, 16, 0, writable, fill) == 5);
+    put(0x14, uint32_t{0}); put(0x20, uintptr_t{0});
+    assert(tglFillBuffer(resource, 16, 0, writable, fill) == 5);
+    put(0x20, uintptr_t{7}); put(0x50, UINTPTR_MAX);
+    assert(tglFillBuffer(resource, 16, 0, writable, fill) == 5 && writes == 1);
+    put(0x50, address); status = 31;
+    assert(tglFillBuffer(resource, 16, 0, writable, fill) == 31 && writes == 2);
+#if defined(__APPLE__)
+    // Owned CPU memory only; fixture handle is not a GPU resource claim.
+    assert(tglFillBufferNative(resource, 16, 0x55) == 0);
+    for (size_t i = 0; i < 16; ++i) assert(bytes[i] == 0x55);
+    assert(!tglNativeWritableRange(0, 16));
+    mach_vm_address_t ro = 0;
+    assert(mach_vm_allocate(mach_task_self(), &ro, 4096, VM_FLAGS_ANYWHERE) == KERN_SUCCESS);
+    assert(mach_vm_protect(mach_task_self(), ro, 4096, false, VM_PROT_READ) == KERN_SUCCESS);
+    assert(!tglNativeWritableRange(ro, 16));
+    put(0x50, static_cast<uintptr_t>(ro));
+    assert(tglFillBufferNative(resource, 16, 0) == 5);
+    assert(mach_vm_deallocate(mach_task_self(), ro, 4096) == KERN_SUCCESS);
+#endif
+}
+
 static void testStatisticsLifecycle() {
     struct Backend {
         int allocations = 0, releases = 0, status = 0;
@@ -398,6 +445,7 @@ static void testResourceBinding() {
 // Offline layout hypothesis only: not an ABI-complete or deployable adapter.
 // The pinned consumer sites shift 0x20/0x24/0x228/0x428 by eight bytes.
 int main() {
+    testBufferFill();
     testStatisticsLifecycle();
     testSurfaceBoundary();
     testStatisticsOffsets();

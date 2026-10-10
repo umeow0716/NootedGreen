@@ -5,6 +5,10 @@
 #include <cstring>
 #include <limits>
 #include <cmath>
+#if defined(__APPLE__)
+#include <mach/mach.h>
+#include <mach/mach_vm.h>
+#endif
 
 // Owned lifecycle only. A Darwin backend must separately prove allocation,
 // backing inspection and release ABI; this class never fabricates backing.
@@ -34,6 +38,72 @@ inline bool tglNativeBackingPresent(const std::array<uint8_t, 0x148> &s) noexcep
     }
     return false;
 }
+
+// 63030 allocates VM at resource+50, registers the resource at+20 and stores
+// shared metadata at+28/+30. Only +50 is the buffer byte address. Caller holds
+// resource lifetime; Writable and Fill must use native policy, not bypass it.
+template<class Writable, class Fill>
+int tglFillBuffer(const std::array<uint8_t, 0x148> &resource, uint32_t bytes,
+                  uint8_t value, Writable writable, Fill fill) noexcept {
+    static_assert(noexcept(writable(uintptr_t{}, uint32_t{})) &&
+                  noexcept(fill(uintptr_t{}, uint32_t{}, uint8_t{})),
+                  "memory access callbacks must report failure without exceptions");
+    uint32_t type = 0, capacity = 0;
+    uintptr_t address = 0, handle = 0;
+    std::memcpy(&type, resource.data() + 0x14, sizeof(type));
+    std::memcpy(&capacity, resource.data() + 0x10, sizeof(capacity));
+    std::memcpy(&address, resource.data() + 0x50, sizeof(address));
+    std::memcpy(&handle, resource.data() + 0x20, sizeof(handle));
+    if (type || !bytes || bytes > capacity || !handle || !address ||
+        address > std::numeric_limits<uintptr_t>::max() - bytes ||
+        !writable(address, bytes)) return 5;
+    return fill(address, bytes, value);
+}
+
+#if defined(__APPLE__)
+inline bool tglNativeWritableRange(uintptr_t address, uint32_t bytes) noexcept {
+    if (!address || !bytes || address > UINTPTR_MAX - bytes) return false;
+    const mach_vm_address_t end = address + bytes;
+    mach_vm_address_t cursor = address;
+    for (unsigned regions = 0; cursor < end && regions < 64; ++regions) {
+        mach_vm_address_t base = cursor;
+        mach_vm_size_t size = 0;
+        natural_t depth = 0;
+        vm_region_submap_info_data_64_t info{};
+        for (;;) {
+            mach_msg_type_number_t count = VM_REGION_SUBMAP_INFO_COUNT_64;
+            if (mach_vm_region_recurse(mach_task_self(), &base, &size, &depth,
+                reinterpret_cast<vm_region_recurse_info_t>(&info), &count) != KERN_SUCCESS ||
+                count != VM_REGION_SUBMAP_INFO_COUNT_64 || base > cursor || !size ||
+                base > UINT64_MAX - size || cursor >= base + size) return false;
+            if (!info.is_submap) break;
+            if (depth >= 16) return false;
+            ++depth;
+        }
+        if (!(info.protection & VM_PROT_WRITE)) return false;
+        cursor = base + size < end ? base + size : end;
+    }
+    return cursor == end;
+}
+
+// No mprotect/cs_allow_invalid/permission escalation. Mach decides each write.
+inline int tglFillBufferNative(const std::array<uint8_t, 0x148> &resource,
+                               uint32_t bytes, uint8_t value) noexcept {
+    const auto write = [](uintptr_t address, uint32_t length, uint8_t byte) noexcept {
+        std::array<uint8_t, 4096> block;
+        block.fill(byte);
+        for (uint32_t offset = 0; offset < length;) {
+            const uint32_t n = length - offset < block.size() ? length - offset : block.size();
+            const kern_return_t status = mach_vm_write(mach_task_self(), address + offset,
+                reinterpret_cast<vm_offset_t>(block.data()), n);
+            if (status != KERN_SUCCESS) return static_cast<int>(status);
+            offset += n;
+        }
+        return 0;
+    };
+    return tglFillBuffer(resource, bytes, value, tglNativeWritableRange, write);
+}
+#endif
 
 // 637e5..6380d rounds in 64 bits then stores only 32 bits. Require the
 // caller's authenticated native page size; do not assume a host page size.
