@@ -1083,6 +1083,77 @@ static void testVeboxPrefix() {
     assert(prefix.configure(0x3000, 0x1000, read) && prefix.flag48 == 1 && prefix.flag49 == 0);
 }
 
+static void testSurfaceStatisticsTransaction() {
+    struct Fixture {
+        std::array<uint8_t,4096> bytes{};
+        unsigned allocations = 0, releases = 0, live = 0, fills = 0;
+        int fillStatus = 0;
+        bool writable = true;
+    } fixture;
+    auto allocate = +[](void* context, const void* raw, void* out) noexcept {
+        auto& f = *static_cast<Fixture*>(context);
+        const auto* p = static_cast<const uint8_t*>(raw);
+        auto* s = static_cast<uint8_t*>(out);
+        uint32_t type = 0, width = 0, height = 0, format = 0, tile = 0;
+        std::memcpy(&type,p,4); std::memcpy(&width,p+0x14,4);
+        std::memcpy(&height,p+0x18,4); std::memcpy(&format,p+0x28,4);
+        std::memcpy(&tile,p+0x24,4);
+        assert(type <= 1);
+        if (type == 1) assert(width == 64 && height == 16 && format == 0x19);
+        else {
+            assert(width <= f.bytes.size() && height == 1 && format == 0x3e && tile == 4);
+            f.bytes.fill(0xa5);
+            const uintptr_t address = reinterpret_cast<uintptr_t>(f.bytes.data());
+            std::memcpy(s+0x50,&address,8); std::memcpy(s+0x10,&width,4);
+        }
+        const uint64_t handle = 1;
+        std::memcpy(s+0x14,&type,4); std::memcpy(s+(type ? 0x58 : 0x20),&handle,8);
+        ++f.allocations; ++f.live; return 0;
+    };
+    auto release = +[](void* context, void* out) noexcept {
+        auto& f = *static_cast<Fixture*>(context);
+        assert(f.live); --f.live; ++f.releases; std::memset(out,0,0x148);
+    };
+    std::array<TglNativeResourceBackend,2> backends{
+        TglNativeResourceBackend(&fixture,allocate,release,1),
+        TglNativeResourceBackend(&fixture,allocate,release,0,4096)};
+    using Group = TglOwnedResourceGroup<TglNativeResourceBackend,2>;
+    TglStatisticsAllocation layout;
+    assert(!tglStatisticsAllocationSize(64,16,layout));
+    std::array<Group::Request,2> requests{
+        Group::Request{true,{64,16,0x19,0,0,false}},
+        Group::Request{true,{layout.bytes,1,0x3e,4,0,false}}};
+    {
+        Group group(backends);
+        auto prepare = [&](size_t i, const auto& resource, bool changed) noexcept {
+            if (i != 1 || !changed) return 0;
+            auto writable = [&](uintptr_t address, uint32_t bytes) noexcept {
+                return fixture.writable && address == reinterpret_cast<uintptr_t>(fixture.bytes.data())
+                    && bytes <= fixture.bytes.size();
+            };
+            auto fill = [&](uintptr_t address, uint32_t bytes, uint8_t value) noexcept {
+                ++fixture.fills;
+                if (fixture.fillStatus) return fixture.fillStatus;
+                std::memset(reinterpret_cast<void*>(address),value,bytes); return 0;
+            };
+            return tglFillBuffer(resource,layout.bytes,0,writable,fill);
+        };
+        assert(!group.ensure(requests,prepare) && fixture.live == 2 && fixture.fills == 1);
+        assert(fixture.bytes[0] == 0 && fixture.bytes[layout.bytes-1] == 0 && fixture.bytes[layout.bytes] == 0xa5);
+        assert(!group.ensure(requests,prepare) && fixture.allocations == 2 && fixture.fills == 1);
+        assert(!tglStatisticsAllocationSize(64,20,layout)); requests[1].key.width = layout.bytes;
+        fixture.fillStatus = 77;
+        assert(group.ensure(requests,prepare) == 77 && !fixture.live);
+        assert(!group.storage(0) && !group.storage(1));
+        fixture.fillStatus = 0; fixture.writable = false;
+        const auto fills = fixture.fills;
+        assert(group.ensure(requests,prepare) == 5 && !fixture.live && fixture.fills == fills);
+        fixture.writable = true;
+        assert(!group.ensure(requests,prepare) && fixture.live == 2);
+    }
+    assert(!fixture.live && fixture.allocations == fixture.releases);
+}
+
 static void testComposedStatisticsBuffer() {
     {
         struct Fixture { unsigned allocations = 0, releases = 0; } fixture;
@@ -1678,6 +1749,7 @@ int main() {
     testExecutionOwner();
     testVeboxReport();
     testVeboxPrefix();
+    testSurfaceStatisticsTransaction();
     testComposedStatisticsBuffer();
     testBufferFill();
     testStatisticsLifecycle();
