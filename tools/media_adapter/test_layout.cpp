@@ -30,6 +30,28 @@ static void testSurfaceBoundary() {
 }
 
 static void testStatisticsOffsets() {
+    uint32_t queried = 17;
+    for (uint32_t selector = 0; selector < 8; ++selector) {
+        queried = 17;
+        const int result = tglStatisticsQuery(selector, queried);
+        const bool supported = selector == 0 || selector == 2 || selector == 3 || selector == 5;
+        assert(result == (supported ? 0 : 31));
+        if (!supported) assert(queried == 17);
+        else assert(queried == (selector == 0 ? 0u : selector == 2 ? 44u :
+                               selector == 3 ? 68u : 128u));
+    }
+    TglStatisticsAllocation allocation;
+    assert(tglStatisticsAllocationSize(1920, 1080, allocation) == 0);
+    assert(allocation.rowBytes == 1920 && allocation.blockRows == 270 &&
+           allocation.totalRows == 271 && allocation.bytes == 520320);
+    assert(tglStatisticsAllocationSize(1, 1, allocation) == 0);
+    assert(allocation.rowBytes == 64 && allocation.blockRows == 1 &&
+           allocation.totalRows == 17 && allocation.bytes == 1088);
+    for (const auto dims : {std::array<uint32_t, 2>{0, 1}, {1, 0},
+                            {UINT32_MAX, 1}, {1920, UINT32_MAX}}) {
+        assert(tglStatisticsAllocationSize(dims[0], dims[1], allocation) == 5);
+        assert(allocation.bytes == 1088 && allocation.totalRows == 17);
+    }
     unsigned calls = 0;
     int status = 0;
     const auto query = [&](uint32_t selector, uint32_t &size) noexcept {

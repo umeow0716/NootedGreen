@@ -114,6 +114,36 @@ int tglStatisticsOffsets(uint32_t width, uint32_t height, uint8_t flag1b88,
     return 0;
 }
 
+// Intel Gen12 VeboxQueryStatLayout (2a32c7f), enum values independently
+// matched to Darwin's query call. Hardware layout only, no Linux object ABI.
+inline int tglStatisticsQuery(uint32_t selector, uint32_t &value) noexcept {
+    switch (selector) {
+        case 0: value = 0; return 0;
+        case 2: value = 0x2c; return 0;
+        case 3: value = 0x44; return 0;
+        case 5: value = 128; return 0;
+        default: return 31;
+    }
+}
+
+struct TglStatisticsAllocation {
+    uint32_t rowBytes = 0, blockRows = 0, totalRows = 0, bytes = 0;
+};
+// Gen12 allocation: 64-byte rows, ceil(height/4) per-block rows, plus
+// ceil(1024/rowBytes) reserved rows. Publication is atomic on validation.
+inline int tglStatisticsAllocationSize(uint32_t boundaryWidth, uint32_t boundaryHeight,
+                                      TglStatisticsAllocation &out) noexcept {
+    if (!boundaryWidth || !boundaryHeight) return 5;
+    const uint64_t row = (uint64_t{boundaryWidth} + 63) & ~uint64_t{63};
+    const uint64_t blocks = (uint64_t{boundaryHeight} + 3) / 4;
+    const uint64_t total = blocks + (1024 + row - 1) / row;
+    const uint64_t bytes = row * total;
+    if (row > UINT32_MAX || total > UINT32_MAX || bytes > UINT32_MAX) return 5;
+    out = {static_cast<uint32_t>(row), static_cast<uint32_t>(blocks),
+           static_cast<uint32_t>(total), static_cast<uint32_t>(bytes)};
+    return 0;
+}
+
 // 170ef0 valid-input boundary contract. Reject malformed float conversions
 // and rounding overflow instead of reproducing native truncation hazards.
 inline int tglSurfaceBoundary(uint32_t format, uint32_t width, uint32_t height,
