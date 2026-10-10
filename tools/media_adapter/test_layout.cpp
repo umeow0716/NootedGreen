@@ -7498,6 +7498,9 @@ int main() {
                 })==0);
             assert(order==wanted && writes==wantedWrites && admits==wanted.size());
             assert(registrations==wanted.size() && controls+1==registrations);
+            // Match the qualified donor producer, without inventing optional
+            // command resources or treating their absence as universal support.
+            assert(!packet.resources[8] && !packet.resources[9] && !packet.resources[10]);
             // Each published reference was admitted and registered, even when
             // a later native-compatible write replaces the same packet slot.
             for(const auto* resource:packet.resources) if(resource) {

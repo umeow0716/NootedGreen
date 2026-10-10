@@ -5030,6 +5030,15 @@ static_assert(sizeof(TglOwnedSurfaceInputs) == 0x30);
 // resource20..70, paired control78..a0 and final DWORDa4. Preserve unknown
 // prefix as bytes; this is storage, NOT a complete command producer.
 // Resource pointers are borrowed: their owners must outlive native emission.
+// Optional slots8/9/10 are real relocation inputs, not padding: exact native
+// 17281c/1728ba/172958 gate pointers60/68/70 independently, pair controls
+// 98/9c/a0, and patch command bytes48/50/58 (DWORD offsets12/14/16).
+// Each uses relocation usage21 and write=true. The current owned producer
+// leaves these slots absent; do not claim their feature/owner admission from
+// the eight-slot producer tests or populate them without a qualified source.
+// Donor producer1f8f50 clears the entire a8 packet before1f9006..1f9929;
+// its direct resource stores end at58. Thus absent60/68/70 matches that
+// producer, not proof that every native platform/mode omits these features.
 struct TglOwnedDiIecpPacket {
     std::array<uint8_t,0x20> prefix{};
     std::array<const std::array<uint8_t,0x148>*,11> resources{};
