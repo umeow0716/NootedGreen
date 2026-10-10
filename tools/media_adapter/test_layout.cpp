@@ -8468,6 +8468,19 @@ int main() {
                 } modeCleanup{owner.constructedBase()};
                 using ModeCleanupScope=TglOwnedVeboxScopedContext<ModeCleanupContext>;
                 hooks=tglBindOwnedVeboxModeReleaseHook<ModeCleanupScope>(hooks);
+                int admissionParams=0,admissionPass=0;
+                unsigned admissionCalls=0;bool admissionAllowed=false;
+                auto admissionPolicy=[&](void* child,void* params,void* pass) noexcept {
+                    assert(child==owner.constructedBase() && params==&admissionParams && pass==&admissionPass);
+                    ++admissionCalls;owner.reset();
+                    assert(cpu.live && owner.constructedBase()==child && !eventCount);
+                    assert(owner.withPrivateChild([](void*) noexcept {assert(false);return 0;})==5);
+                    return admissionAllowed;
+                };
+                using AdmissionContext=TglOwnedVeboxAdmissionContext<std::remove_reference_t<decltype(owner)>,decltype(admissionPolicy)>;
+                AdmissionContext admission(owner,owner.constructedBase(),&admissionParams,&admissionPass,admissionPolicy);
+                using AdmissionScope=TglOwnedVeboxScopedContext<AdmissionContext>;
+                hooks=tglBindOwnedVeboxAdmissionHook<AdmissionScope>(hooks);
                 const auto unbound=hooks;
                 assert(owner.withPrivateChild([](void*) noexcept {assert(false);return 0;})==5);
                 hooks=tglBindOwnedVeboxQueryHooks<DeniedFormatRead>(hooks);
@@ -8483,6 +8496,22 @@ int main() {
                 std::memcpy(&formatAddress,reinterpret_cast<void*>(address+0x90),8);
                 using SurfaceFormat=bool(*)(void*,uintptr_t) noexcept;
                 assert(!reinterpret_cast<SurfaceFormat>(formatAddress)(owner.constructedBase(),0x5000));
+                uintptr_t admissionAddress=0;
+                std::memcpy(&admissionAddress,reinterpret_cast<void*>(address+0x28),8);
+                const auto admissionCallback=reinterpret_cast<bool(*)(void*,void*,void*) noexcept>(admissionAddress);
+                assert(!admissionCallback(owner.constructedBase(),&admissionParams,&admissionPass) && !admissionCalls);
+                {AdmissionScope scope(owner.constructedBase(),admission);assert(scope.bound());
+                    assert(!admissionCallback(owner.constructedBase(),&admissionParams,&admissionPass) && !admissionCalls);
+                }
+                assert(owner.withPrivateChild([&](void* actual) noexcept {
+                    AdmissionScope scope(actual,admission);assert(scope.bound());
+                    assert(!admissionCallback(actual,&admissionPass,&admissionParams) && !admissionCalls);
+                    assert(!admissionCallback(actual,&admissionParams,&admissionPass) && admissionCalls==1);
+                    admissionAllowed=true;
+                    assert(admissionCallback(actual,&admissionParams,&admissionPass) && admissionCalls==2);
+                    return 0;
+                })==0);
+                assert(!admissionCallback(owner.constructedBase(),&admissionParams,&admissionPass) && admissionCalls==2);
                 uintptr_t cleanupAddress=0;
                 std::memcpy(&cleanupAddress,reinterpret_cast<void*>(address+0x60),8);
                 const auto cleanupCallback=reinterpret_cast<void(*)(void*) noexcept>(cleanupAddress);
