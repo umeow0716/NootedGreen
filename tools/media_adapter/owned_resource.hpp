@@ -64,8 +64,13 @@ template<class Read, class Qualify, class Invoker> class TglExecutionBackend {
     Qualify qualify;
     Invoker invoke;
 public:
-    TglExecutionBackend(TglExecutionBinding b, Read r, Qualify q, Invoker i)
-        : binding(b), read(r), qualify(q), invoke(i) { if (!bound()) binding = {}; }
+    template<class Executable>
+    TglExecutionBackend(TglExecutionBinding b, Read r, Qualify q, Invoker i, Executable rx)
+        : binding(b), read(r), qualify(q), invoke(i) {
+        TglExecutionBinding verified;
+        if (!bound() || !verified.resolve(b.image, read, qualify, rx)) binding = {};
+        else binding = verified;
+    }
     bool bound() const {
         return binding.image && binding.image <= std::numeric_limits<uintptr_t>::max() - 0x757fd0 &&
             binding.create == binding.image + 0x12ebc0 &&

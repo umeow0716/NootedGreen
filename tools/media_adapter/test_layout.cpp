@@ -45,7 +45,20 @@ static void testExecutionShape() {
     uintptr_t vt = image + 0x757e90, first = 0x4000, second = 0x5000;
     uintptr_t av = image + 0x757f78, bv = image + 0x757fb8;
     bool allowed = true, qualified = true;
+    bool codeValid = true, codeRx = true;
+    std::array<std::array<uint8_t, 16>, 3> code{{
+        {0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x40,0x48,0x8b,0x35,0x59,0x54,0x62,0,0xbf},
+        {0x55,0x48,0x89,0xe5,0x48,0x81,0xec,0xb0,9,0,0,0x48,0x8b,5,0x56,0x5c},
+        {0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x10,0x48,0x89,0x7d,0xf8,0x48,0x8b,0x45,0xf8}
+    }};
     auto read = [&](uintptr_t p, void* out, size_t n) {
+        if (n == 16 && codeValid) {
+            const std::array<uintptr_t, 3> offsets{0x12ebc0, 0x12e420, 0x12e3f0};
+            for (size_t i = 0; i < offsets.size(); ++i)
+                if (p == image + offsets[i]) {
+                    std::memcpy(out, code[i].data(), n); return true;
+                }
+        }
         if (!allowed || n != 8) return false;
         const uintptr_t* value = p == object ? &vt : p == object + 0xd38 ? &first :
             p == object + 0xd40 ? &second : p == 0x4000 ? &av : p == 0x5000 ? &bv : nullptr;
@@ -78,7 +91,8 @@ static void testExecutionShape() {
         }
     } invoke{&calls};
     TglExecutionBinding binding{image, image + 0x12ebc0, image + 0x12e420, image + 0x12e3f0};
-    TglExecutionBackend backend(binding, read, qualify, invoke);
+    auto executable = [&](uintptr_t, size_t n) { return codeRx && n == 16; };
+    TglExecutionBackend backend(binding, read, qualify, invoke, executable);
     {
         TglExecutionOwner owner(backend);
         calls.result = 31;
@@ -91,8 +105,22 @@ static void testExecutionShape() {
     }
     assert(calls.destroys == 3 && calls.initializes == 3);
     ++binding.destroy;
-    TglExecutionBackend invalid(binding, read, qualify, invoke);
+    TglExecutionBackend invalid(binding, read, qualify, invoke, executable);
     assert(invalid.create() == 0 && calls.creates == 3);
+    --binding.destroy;
+    codeValid = false;
+    TglExecutionBackend unreadable(binding, read, qualify, invoke, executable);
+    assert(unreadable.create() == 0 && calls.creates == 3);
+    codeValid = true; codeRx = false;
+    TglExecutionBackend nonExecutable(binding, read, qualify, invoke, executable);
+    assert(nonExecutable.create() == 0 && calls.creates == 3);
+    codeRx = true;
+    for (auto& anchor : code) {
+        anchor[15] ^= 1;
+        TglExecutionBackend changedCode(binding, read, qualify, invoke, executable);
+        assert(changedCode.create() == 0 && calls.creates == 3);
+        anchor[15] ^= 1;
+    }
 }
 
 static void testExecutionOwner() {
