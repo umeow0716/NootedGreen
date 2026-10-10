@@ -7871,6 +7871,9 @@ int tglPrepareOwnedSfcCommandState(TglOwnedSfcCommandParameters& parameters,
     const std::array<uint8_t,0xb8>& prefix,TglOwnedSfcGen12Tail tail,
     bool rgbAdaptive,bool eightTapChroma,bool compressionEnabled,
     TglOwnedSfcCompressionMode compressionMode,Query query) noexcept {
+    // A filter consumer may still be reading state and borrowed coefficients.
+    // Reject before Query can mutate output metadata or state can be replaced.
+    if(parameters.filtersInUse) return 5;
     uint32_t inputHeight,scaledHeight;
     // +50 writes height at30; +90 writes scaled height at4c. Widths34/50
     // are not allocation dimensions for the qualified 1df245/1df2c1 policy.

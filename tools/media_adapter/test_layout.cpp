@@ -4561,6 +4561,10 @@ static void testSfcSfdOwnership() {
         const auto originalCommands=commands.state;
         assert(prepare()==5 && !queries && commands.state==originalCommands);
         assert(state.initialize());const auto originalState=cpu.bytes;
+        commands.filtersInUse=true;
+        assert(prepare()==5 && !queries && commands.state==originalCommands && cpu.bytes==originalState);
+        assert(commands.filtersInUse);
+        commands.filtersInUse=false;
         const auto validPrefix=prefix;
         const uint32_t mismatch=1081;std::memcpy(prefix.data()+0x30,&mismatch,4);
         assert(prepare()==5 && !queries && cpu.bytes==originalState);
