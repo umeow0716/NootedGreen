@@ -147,6 +147,27 @@ public:
 struct TglVeboxHardwareBinding {
     uintptr_t interface = 0, os = 0, heap = 0;
     struct StateResource { uintptr_t resource = 0; uint32_t instanceOffset = 0; };
+    // Reuse native refresh/wait/assignment, including OS reset policy and tag
+    // wraparound. Caller serializes the borrowed interface and keeps its image
+    // lease alive. Do not select a state or emit commands after nonzero result.
+    template<class Read, class Qualify, class Executable, class Invoke>
+    uint32_t assignState(uintptr_t image, Read read, Qualify qualify,
+                         Executable executable, Invoke invoke) const {
+        TglVeboxHardwareBinding fresh;
+        if (!fresh.resolve(interface, os, image, read, qualify) || fresh.heap != heap) return 5;
+        uint32_t count = 0, next = 0;
+        if (heap > std::numeric_limits<uintptr_t>::max() - 0x3f ||
+            !read(interface + 0x28, &count, 4) || !count || count > INT32_MAX ||
+            !read(heap + 4, &next, 4) || next >= count) return 5;
+        constexpr std::array<uint8_t, 16> anchor{
+            0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x40,
+            0x48,0x89,0x7d,0xf8,0x48,0x8b,0x45,0xf8};
+        std::array<uint8_t, 16> actual{};
+        const uintptr_t entry = image + 0xfefa0;
+        if (!executable(entry, anchor.size()) ||
+            !read(entry, actual.data(), actual.size()) || actual != anchor) return 5;
+        return invoke(entry, interface);
+    }
     // Heap resources use the proven native buffer layout (resource size148).
     // Not a CM/surface validator. Caller holds the heap/resource lifetime lock;
     // this proves CPU descriptor bounds/backing only, not GPU completion/sync.

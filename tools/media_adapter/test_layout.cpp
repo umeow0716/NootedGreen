@@ -30,6 +30,45 @@ static void testVeboxHardwareBinding() {
     assert(!b.resolve(mhw, os, UINTPTR_MAX, read, qualify)); empty();
     assert(!b.resolve(mhw, 0, image, read, qualify)); empty();
     assert(resolve());
+    std::array<uint8_t, 16> assignAnchor{
+        0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x40,
+        0x48,0x89,0x7d,0xf8,0x48,0x8b,0x45,0xf8};
+    bool rx = true;
+    unsigned calls = 0;
+    uint32_t nativeResult = 0;
+    uint32_t stateCount = 4, nextState = 0;
+    auto assignRead = [&](uintptr_t p, void* out, size_t n) {
+        if (n == 4 && (p == mhw + 0x28 || p == heap + 4)) {
+            std::memcpy(out, p == mhw + 0x28 ? &stateCount : &nextState, 4); return true;
+        }
+        if (p == image + 0xfefa0 && n == assignAnchor.size()) {
+            std::memcpy(out, assignAnchor.data(), n); return true;
+        }
+        return read(p, out, n);
+    };
+    auto executable = [&](uintptr_t p, size_t n) {
+        return rx && p == image + 0xfefa0 && n == assignAnchor.size();
+    };
+    auto invoke = [&](uintptr_t p, uintptr_t object) {
+        assert(p == image + 0xfefa0 && object == mhw); ++calls; return nativeResult;
+    };
+    assert(b.assignState(image, assignRead, qualify, executable, invoke) == 0 && calls == 1);
+    nativeResult = 31;
+    assert(b.assignState(image, assignRead, qualify, executable, invoke) == 31 && calls == 2);
+    rx = false;
+    assert(b.assignState(image, assignRead, qualify, executable, invoke) == 5 && calls == 2);
+    rx = true; assignAnchor[0] ^= 1;
+    assert(b.assignState(image, assignRead, qualify, executable, invoke) == 5 && calls == 2);
+    assignAnchor[0] ^= 1; ++heap;
+    assert(b.assignState(image, assignRead, qualify, executable, invoke) == 5 && calls == 2);
+    --heap;
+    stateCount = 0;
+    assert(b.assignState(image, assignRead, qualify, executable, invoke) == 5 && calls == 2);
+    stateCount = 4; nextState = 4;
+    assert(b.assignState(image, assignRead, qualify, executable, invoke) == 5 && calls == 2);
+    nextState = 0; stateCount = UINT32_MAX;
+    assert(b.assignState(image, assignRead, qualify, executable, invoke) == 5 && calls == 2);
+    stateCount = 4;
     uint32_t instanceBytes = 4096, current = 3;
     auto readHeap = [&](uintptr_t p, void* out, size_t n) {
         const auto value = p == heap ? &current : p == heap + 0x2c ? &instanceBytes : nullptr;
