@@ -1309,10 +1309,18 @@ static void testVeboxHardwareBinding() {
     assert(pipeReads == 0);
     constexpr uintptr_t image = 0x1000000, mhw = 0x2000, os = 0x3000;
     uintptr_t vt = image + 0x759520, actualOs = os, heap = 0x4000;
+    uintptr_t relocation = image + 0x3eae0;
+    uint32_t osMode = 0;
+    bool modeReadable=true,relocationReadable=true;
     bool identity = true, readable = true;
     auto read = [&](uintptr_t p, void* out, size_t n) {
+        if(p == os + 0x8c && n == 4) {
+            if(!readable || !modeReadable) return false;
+            std::memcpy(out,&osMode,4);return true;
+        }
+        if(p == mhw + 8 && !relocationReadable) return false;
         const auto value = p == mhw ? &vt : p == mhw + 0x18 ? &actualOs :
-                           p == mhw + 0x20 ? &heap : nullptr;
+                           p == mhw + 0x20 ? &heap : p == mhw + 8 ? &relocation : nullptr;
         if (!readable || !value || n != 8) return false;
         std::memcpy(out, value, n); return true;
     };
@@ -1321,6 +1329,14 @@ static void testVeboxHardwareBinding() {
     auto resolve = [&] { return b.resolve(mhw, os, image, read, qualify); };
     assert(resolve() && b.interface == mhw && b.os == os && b.heap == heap);
     auto empty = [&] { assert(!b.interface && !b.os && !b.heap); };
+    ++relocation;assert(!resolve());empty();--relocation;
+    osMode=1;assert(!resolve());empty();
+    relocation=image+0x3e6a0;assert(resolve());
+    osMode=UINT32_MAX;assert(resolve()); // native tests the entire DWORD for zero
+    osMode=0;assert(!resolve());empty();relocation=image+0x3eae0;
+    modeReadable=false;assert(!resolve());empty();modeReadable=true;
+    relocationReadable=false;assert(!resolve());empty();relocationReadable=true;
+    assert(!b.resolve(mhw,UINTPTR_MAX,image,read,qualify));empty();
     ++vt; assert(!resolve()); empty(); --vt;
     ++actualOs; assert(!resolve()); empty(); --actualOs;
     heap = 0; assert(!resolve()); empty(); heap = 0x4000;

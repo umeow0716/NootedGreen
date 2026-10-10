@@ -1905,12 +1905,23 @@ struct TglVeboxHardwareBinding {
                  Read read, Qualify qualify) {
         *this = {};
         constexpr auto max = std::numeric_limits<uintptr_t>::max();
-        if (!mhw || mhw > max - 0x28 || !expectedOs || !image ||
+        if (!mhw || mhw > max - 0x28 || !expectedOs || expectedOs > max - 0x8f || !image ||
             image > max - 0x7595b0 || !qualify(image)) return false;
-        uintptr_t vt = 0, actualOs = 0, actualHeap = 0;
+        uintptr_t vt = 0, actualOs = 0, actualHeap = 0, relocation = 0;
+        uint32_t osMode = 0;
+        // Constructor16f140 ->16f3d0 ->ff690 selects this callback from
+        // OS8c: nonzero=3e6a0, zero=3eae0 (ff709..ff735). Consumer172080
+        // calls MHW8 with OS18/command/0x48-byte relocation packet at1721f1.
+        // 3e6a0 gets the address through OS260 at3e807; 3eae0 emits a
+        // 0x40-byte relocation record through OS268 at3ed2a. Initial OS260
+        // is zero stub65060 (6613d); its runtime producer still needs proof.
+        // This validates the producer identity, not kernel admission/completion.
         if (!read(mhw, &vt, 8) || vt != image + 0x759520 ||
             !read(mhw + 0x18, &actualOs, 8) || actualOs != expectedOs ||
-            !read(mhw + 0x20, &actualHeap, 8) || !actualHeap) return false;
+            !read(mhw + 0x20, &actualHeap, 8) || !actualHeap ||
+            !read(expectedOs + 0x8c, &osMode, 4) ||
+            !read(mhw + 8, &relocation, 8) ||
+            relocation != image + (osMode ? 0x3e6a0 : 0x3eae0)) return false;
         interface = mhw; os = actualOs; heap = actualHeap;
         return true;
     }
