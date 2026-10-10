@@ -1069,6 +1069,27 @@ static void testVeboxPrefix() {
         assert(tglReadSurfaceIndices(execution,decoded,readIndex));
         assert(decoded.frame0 == 2 && decoded.frame1 == 3 && decoded.dnOut == 1);
         assert(decoded.historyIn == 0 && decoded.historyOut == 1);
+        std::array<const TglOwnedSurfaceStorage*,2> stmm{&shells[0],&shells[2]};
+        TglOwnedSurfaceInputs produced;
+        assert(tglPrepareSurfaceInputs(produced,&surface,&surface,0,true,false,false,
+                                       decoded,ffdi,ffdn,stmm));
+        assert(produced.surfaces[0] == &surface && produced.surfaces[1] == &shells[2]);
+        assert(produced.surfaces[2] == &shells[0] && produced.surfaces[3] == &shells[4]);
+        assert(!produced.surfaces[4] && produced.di == 1);
+        const auto producedCommand = tglSurfaceCommandSet(produced);
+        std::memcpy(&borrowed,producedCommand.data()+0x48+0x40,8);
+        assert(borrowed == reinterpret_cast<uintptr_t>(shells[2].resource.data()));
+        assert(tglPrepareSurfaceInputs(produced,&surface,nullptr,1,false,false,false,
+                                       decoded,ffdi,ffdn,stmm));
+        assert(!produced.surfaces[1] && !produced.di);
+        const auto before = produced;
+        stmm[0] = nullptr;
+        assert(!tglPrepareSurfaceInputs(produced,&surface,&surface,2,false,false,false,
+                                        decoded,ffdi,ffdn,stmm));
+        assert(produced.surfaces == before.surfaces && produced.di == before.di);
+        stmm[0] = &shells[0];
+        assert(!tglPrepareSurfaceInputs(produced,&surface,nullptr,2,false,false,false,
+                                        decoded,ffdi,ffdn,stmm));
         for (unsigned failure=1; failure<=5; ++failure) {
             reads = 0; failAt = failure;
             assert(!tglReadSurfaceIndices(execution,decoded,readIndex));

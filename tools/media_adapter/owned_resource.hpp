@@ -1330,6 +1330,32 @@ inline TglOutputSurfaceSelection tglSelectOutputSurface(
     }
     return {nullptr,pipe == 1}; // SFC intentionally writes no memory output
 }
+
+// Gen12 SetupSurfaceStates composition. This populates borrowed CPU shell
+// pointers only; allocation/backing/feature admission remain separate gates.
+// STMM and FFDN shells must exist even when that feature's backing is unused.
+inline bool tglPrepareSurfaceInputs(
+        TglOwnedSurfaceInputs& output, const TglOwnedSurfaceStorage* current,
+        const TglOwnedSurfaceStorage* target, uint32_t pipe, bool di, bool iecp,
+        bool denoise, const TglSurfaceIndices& indices,
+        const std::array<const TglOwnedSurfaceStorage*,4>& ffdi,
+        const std::array<const TglOwnedSurfaceStorage*,2>& ffdn,
+        const std::array<const TglOwnedSurfaceStorage*,2>& stmm) noexcept {
+    if (!current || indices.historyIn < 0 || indices.historyIn >= 2 ||
+        indices.dnOut < 0 || indices.dnOut >= 2) return false;
+    const auto selected = tglSelectOutputSurface(pipe,di,iecp,denoise,
+        indices.frame0,indices.dnOut,target,ffdi,ffdn);
+    if (!selected.valid || !stmm[size_t(indices.historyIn)] ||
+        !ffdn[size_t(indices.dnOut)]) return false;
+    // Only SFC without a memory-output feature intentionally selects null.
+    if (!selected.surface && !(pipe == 1 && !di && !iecp && !denoise)) return false;
+    TglOwnedSurfaceInputs candidate;
+    candidate.surfaces = {current,selected.surface,stmm[size_t(indices.historyIn)],
+                          ffdn[size_t(indices.dnOut)],nullptr};
+    candidate.di = di ? 1 : 0;
+    output = candidate;
+    return true;
+}
 inline std::array<uint8_t,0x48> tglSurfaceDescriptor(
         const TglOwnedSurfaceStorage& shell) noexcept {
     return tglSurfaceDescriptorBytes(reinterpret_cast<const uint8_t*>(&shell));
