@@ -4128,6 +4128,43 @@ inline bool tglPrepareOwnedVpModes(const TglOwnedVpModeInput& in,
     output=candidate;
     return true;
 }
+// Acquire mode inputs and an optional CSC borrow only under caller leases.
+// No pointer is dereferenced without Read authorization; all three outputs
+// remain unchanged on failure. The returned reference's lease must enclose use.
+template<class Read>
+bool tglReadOwnedVpModes(uintptr_t source,uintptr_t target,uintptr_t settings,Read read,
+    const TglOwnedVpModeState& original,TglOwnedVpModeInput& snapshot,
+    TglOwnedVpModeResult& output,uintptr_t& sourceA8) noexcept {
+    static_assert(noexcept(read(uintptr_t{},nullptr,size_t{})),"VP mode leased read ABI");
+    if(!source || !target || !settings || source>UINTPTR_MAX-0x134 ||
+       target>UINTPTR_MAX-4 || settings>UINTPTR_MAX-0x68) return false;
+    TglOwnedVpModeInput candidate;std::array<uint8_t,2> flags{};
+    if(!read(source,&candidate.source00,4) || !read(target,&candidate.target00,4) ||
+       !read(source+0x130,&candidate.source130,4) ||
+       !read(settings+0x12,flags.data(),2)) return false;
+    candidate.settings12=flags[0]&1;candidate.settings13=flags[1]&1;
+    if((candidate.source00==1 || candidate.source00==2) &&
+       !(candidate.target00>=3 && candidate.target00<=0xa)) {
+        if(!read(source+0xd8,&candidate.sourceD8,4) ||
+           !read(source+0xdc,&candidate.sourceDc,4)) return false;
+    }
+    if(!tglOwnedVpForceColor(candidate.source130,true) &&
+       !candidate.settings13 && candidate.settings12) {
+        uintptr_t surface=0;
+        if(!read(settings+0x60,&surface,8) || !surface || surface>UINTPTR_MAX-0x134 ||
+           !read(surface+0x130,&candidate.settings60130,4)) return false;
+        candidate.settings60Present=true;
+    }
+    TglOwnedVpModeResult result;
+    if(!tglPrepareOwnedVpModes(candidate,original,result)) return false;
+    uintptr_t reference=0;
+    if(result.state.at998!=candidate.target00) {
+        if(!read(source+0xa8,&reference,8)) return false;
+        candidate.sourceA8Present=reference!=0;
+        result.borrowSourceA8=candidate.sourceA8Present;
+    }
+    snapshot=candidate;output=result;sourceA8=reference;return true;
+}
 // VP +9b8, 1def21..1df03a ->4a6d0. Unlike +9a8's classifier,
 // sourcePack is from source+130, not VP+99c. Upsampling is only 420->422/444
 // or 422->444; the force-color branch bypasses the predicate entirely.

@@ -5269,6 +5269,46 @@ static void testSfcFrameFields() {
 
 int main() {
     {
+        std::array<uint8_t,0x134> source{},selected{};
+        std::array<uint8_t,4> target{};std::array<uint8_t,0x68> settings{};
+        const auto put=[](auto& bytes,size_t offset,auto value) {
+            std::memcpy(bytes.data()+offset,&value,sizeof(value));
+        };
+        put(source,0,uint32_t(1));put(source,0x130,uint32_t(0x19));
+        put(source,0xd8,uint32_t(1920));put(source,0xdc,uint32_t(1080));
+        put(source,0xa8,uintptr_t(0x5000));settings[0x12]=1;
+        put(settings,0x60,uintptr_t(0x4000));put(selected,0x130,uint32_t(1));
+        unsigned calls=0,fail=0;
+        const auto read=[&](uintptr_t address,void* output,size_t size) noexcept {
+            if(++calls==fail) return false;
+            const auto span=[&](uintptr_t base,const auto& bytes) noexcept {
+                if(address<base || address-base>bytes.size() || size>bytes.size()-(address-base)) return false;
+                std::memcpy(output,bytes.data()+address-base,size);return true;
+            };
+            return span(0x1000,source) || span(0x2000,target) || span(0x3000,settings) || span(0x4000,selected);
+        };
+        TglOwnedVpModeInput snapshot;TglOwnedVpModeResult result;uintptr_t reference=0;
+        assert(tglReadOwnedVpModes(0x1000,0x2000,0x3000,read,{},snapshot,result,reference) && calls==9);
+        assert(result.state.at998==5 && result.state.at99c==3 && result.state.at923 &&
+               result.borrowSourceA8 && reference==0x5000 && snapshot.sourceA8Present);
+        for(fail=1;fail<=9;++fail) {
+            calls=0;snapshot.source00=17;result.state.at998=19;reference=23;
+            assert(!tglReadOwnedVpModes(0x1000,0x2000,0x3000,read,{},snapshot,result,reference));
+            assert(snapshot.source00==17 && result.state.at998==19 && reference==23);
+        }
+        fail=0;calls=0;settings[0x13]=1;put(settings,0x60,uintptr_t(0));
+        assert(tglReadOwnedVpModes(0x1000,0x2000,0x3000,read,{},snapshot,result,reference) && calls==7);
+        assert(result.state.at99c==0xd);
+        calls=0;settings[0x13]=0;put(source,0x130,uint32_t(1));
+        assert(tglReadOwnedVpModes(0x1000,0x2000,0x3000,read,{},snapshot,result,reference) && calls==7);
+        assert(result.state.at99c==0x15);
+        put(source,0,uint32_t(3));put(target,0,uint32_t(3));calls=0;
+        assert(tglReadOwnedVpModes(0x1000,0x2000,0x3000,read,{},snapshot,result,reference) && calls==4);
+        assert(!result.borrowSourceA8 && !reference);
+        calls=0;
+        assert(!tglReadOwnedVpModes(0x1000,0x2000,UINTPTR_MAX-8,read,{},snapshot,result,reference) && !calls);
+    }
+    {
         std::array<uint8_t,0x294> source{};std::array<uint8_t,0x134> target{};
         std::array<uint8_t,0x1c> mhw{};
         const auto put=[](auto& data,size_t offset,auto value) {
