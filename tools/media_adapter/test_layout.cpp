@@ -895,6 +895,28 @@ static void testVeboxReport() {
 
 static void testVeboxPrefix() {
     {
+        // Exercise spilled arguments against owned code, never native Apple code.
+        static unsigned constructorCalls = 0;
+        auto ctor = +[](void* object, void* os, void* mhw, void* sfc, void* hal,
+                        void* history, void* perf, const void* cache, int32_t* status) {
+            assert(reinterpret_cast<uintptr_t>(object) == 1);
+            assert(reinterpret_cast<uintptr_t>(os) == 2);
+            assert(reinterpret_cast<uintptr_t>(mhw) == 3);
+            assert(reinterpret_cast<uintptr_t>(sfc) == 4);
+            assert(reinterpret_cast<uintptr_t>(hal) == 5);
+            assert(reinterpret_cast<uintptr_t>(history) == 6);
+            assert(reinterpret_cast<uintptr_t>(perf) == 7);
+            assert(reinterpret_cast<uintptr_t>(cache) == 8);
+            ++constructorCalls; *status = 31;
+        };
+        int32_t status = -1;
+        TglNativeVeboxConstructorInvoker{}(reinterpret_cast<uintptr_t>(ctor),
+            reinterpret_cast<void*>(1),reinterpret_cast<void*>(2),reinterpret_cast<void*>(3),
+            reinterpret_cast<void*>(4),reinterpret_cast<void*>(5),reinterpret_cast<void*>(6),
+            reinterpret_cast<void*>(7),reinterpret_cast<void*>(8),&status);
+        assert(constructorCalls == 1 && status == 31);
+    }
+    {
         constexpr uintptr_t os = 0x5000, hal = 0x6000;
         uintptr_t sku = 0x7000, wa = 0x8000;
         uint32_t platform = 0xdeadbeef, nativePlatform = 12;

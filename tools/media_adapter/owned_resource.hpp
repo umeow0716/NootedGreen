@@ -654,6 +654,20 @@ struct TglVeboxHardwareBinding {
 
 // Exact base prefix touched by parent130ea0 -> nonvirtual126520. NOT a
 // complete VEBOX object, not publishable as a native child by itself.
+// SysV x86_64 native constructor12d4e0: six register arguments including this,
+// followed by performance-data, cache-control reference and status on stack.
+// This is an invocation mechanism, NOT storage qualification/publication.
+// Owner must authenticate entry, complete extent, dependencies and image lease.
+struct TglNativeVeboxConstructorInvoker {
+    void operator()(uintptr_t entry, void* object, void* os, void* mhw,
+                    void* sfc, void* renderHal, void* history,
+                    void* performanceData, const void* cacheControl, int32_t* status) const {
+        using Construct = void (*)(void*,void*,void*,void*,void*,void*,void*,const void*,int32_t*);
+        reinterpret_cast<Construct>(entry)(object,os,mhw,sfc,renderHal,history,
+                                           performanceData,cacheControl,status);
+    }
+};
+
 struct TglVeboxPrefix {
     uintptr_t vtable = 0, slot08 = 0, os = 0, renderHal = 0, sku = 0, wa = 0;
     std::array<uint8_t, 8> slot30{};
