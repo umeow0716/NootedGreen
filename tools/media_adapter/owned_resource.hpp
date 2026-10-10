@@ -1469,6 +1469,32 @@ struct TglDiIecpInputs {
     std::array<const TglOwnedSurfaceStorage*,2> ffdn{}, stmm{};
     std::array<uint32_t,11> controls{};
 };
+// Owned logical policy reconstructed from exact Darwin1f88d0/1f7500.
+// Scalar decisions only; no ICL object offsets, vtables or GPU commands.
+inline bool tglOwnedMmcFormatSupported(uint32_t format) noexcept {
+    switch (format) {
+        case 0x19: case 0xd: case 0xe: case 0x10: case 0xf: case 0x11:
+        case 0x15: case 0x14: case 3: case 5: case 0x53: case 0x13: return true;
+        default: return false;
+    }
+}
+struct TglDiIecpControlPolicy {
+    bool mmcEnabled = false;
+    uint32_t executionMode = 0;
+    const TglOwnedSurfaceStorage* target = nullptr;
+    int operator()(const TglOwnedSurfaceStorage& surface,size_t slot,
+                   bool directTarget,bool& enabled) const noexcept {
+        enabled=false;
+        if (slot > 6 || (directTarget && (slot != 5 || target != &surface))) return 5;
+        if (!directTarget) { enabled=mmcEnabled; return 0; }
+        uint32_t format=0;
+        std::memcpy(&format,surface.prefix.data()+0x130,4);
+        const auto params=tglSurfaceControlParams(surface);
+        enabled=mmcEnabled && tglOwnedMmcFormatSupported(format) &&
+                executionMode == 7 && params.mode == 1;
+        return 0;
+    }
+};
 // Producer orchestration, not native object-layout transplantation. Darwin
 // ICL1f8ec0/1f89a0 supplies the branch/order evidence, TGL172080 the packet ABI.
 // Caller leases every surface. Admit verifies backing/identity; control must

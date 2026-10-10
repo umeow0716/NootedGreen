@@ -2035,6 +2035,32 @@ static void testResourceBinding() {
 // The pinned consumer sites shift 0x20/0x24/0x228/0x428 by eight bytes.
 int main() {
     {
+        TglOwnedSurfaceStorage target, other;
+        const std::array<uint32_t,12> supported{0x19,0xd,0xe,0x10,0xf,0x11,0x15,0x14,3,5,0x53,0x13};
+        for (uint32_t format=0;format<0x60;++format) {
+            bool accepted=false;
+            for (auto allowed : supported) if (allowed == format) accepted=true;
+            assert(tglOwnedMmcFormatSupported(format) == accepted);
+            std::memcpy(target.prefix.data()+0x130,&format,4);
+            for (bool mmc : {false,true}) for (uint32_t execution : {0u,7u,8u})
+                for (uint32_t mode : {0u,1u,4u}) {
+                    std::memcpy(target.tail.data()+0xc,&mode,4);
+                    TglDiIecpControlPolicy policy{mmc,execution,&target};
+                    bool enabled=true;
+                    assert(policy(target,5,true,enabled) == 0);
+                    assert(enabled == (mmc && accepted && execution == 7 && mode == 1));
+                    for (size_t slot=0;slot<=6;++slot) {
+                        assert(policy(other,slot,false,enabled) == 0 && enabled == mmc);
+                    }
+                }
+        }
+        TglDiIecpControlPolicy policy{true,7,&target};
+        bool enabled=true;
+        assert(policy(other,5,true,enabled) == 5 && !enabled);
+        assert(policy(target,4,true,enabled) == 5 && !enabled);
+        assert(policy(target,7,false,enabled) == 5 && !enabled);
+    }
+    {
         struct Context { int registrations=0, controls=0; } context;
         auto registration=+[](void* raw,const void* resource,uint32_t write,uint32_t read)->int {
             auto& c=*static_cast<Context*>(raw); ++c.registrations;
