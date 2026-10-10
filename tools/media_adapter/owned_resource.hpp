@@ -6724,6 +6724,15 @@ struct TglOwnedVeboxBuilderScratch {
 // its thunk); qualify must enforce the pinned framework UUID. Keep its image
 // and context leases alive through finish. Raw success is NOT a retirement
 // certificate: family reset/skip policy and actual stamps remain independent.
+// Exact userspace47-byte body passes scalar selector5/index on context+18.
+// Family finish_fence_event7450 validates fence storage6a8 and index against
+// 6d8>>6, then invokes EventMachine+178. Fast2 vtable78930+10+178 contains
+// 30280 (finishEventUnlocked), NOT30810 (finishEvent). At302ef..302fa,
+// device+dc8!=0 skips a pending stamp; initial EAX0 can survive to return.
+// Outer756e only maps -1 to e00002d6; other results leave success unchanged.
+// Consequently the native API's success also does not distinguish termination
+// from execution. Separately, waitForStamp12954 returns0 immediately when
+// dc8!=0 (12974..1297d->12b78); a wait result is not a live-generation gate.
 struct TglNativeVideoFenceEventInvoker {
     uint32_t operator()(uintptr_t entry,uintptr_t context,uint32_t index) const noexcept {
         using Finish=uint32_t(*)(void*,uint32_t);
