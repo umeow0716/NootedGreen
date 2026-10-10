@@ -6855,15 +6855,19 @@ int main() {
                 [&](uintptr_t value,size_t size){return value==entry && size==20;}));
             for(unsigned flag:{0u,1u,2u}) for(int failure:{0,1,4,9}) {
                 auto output=shell;output[0xe8]=uint8_t(flag);
-                Backend backend;backend.expected=&parameters;backend.leasedLock=true;backend.lockFlag=1;
+                const uintptr_t mockBacking=1;
+                std::memcpy(output.data()+0x168,&mockBacking,8);
+                auto nativeParameters=parameters;
+                Backend backend;backend.expected=&nativeParameters;backend.leasedLock=true;backend.lockFlag=1;
                 backend.failure=failure;backend.resource=reinterpret_cast<uintptr_t>(output.data()+0x148);
+                std::memcpy(nativeParameters.state.data()+0x90,&backend.resource,8);
                 settingReads=invoked=0;
                 auto invoke=[&](uintptr_t function,uintptr_t context,const void* resource,uint32_t u,uint32_t f) noexcept {
                     assert(function==entry && context==os && resource==output.data()+0x148);
                     assert(u==6 && f==1 && settingReads==1 && !backend.count);++invoked;
                 };
                 auto platform=[&](auto& descriptor){assert(invoked==1);descriptor[0]=0xee;return backend.stage(3);};
-                const int result=tglSendOwnedSfcNativeOutputCommands(usage,backend,parameters,
+                const int result=tglSendOwnedSfcNativeOutputCommands(usage,backend,nativeParameters,
                     output,0x2000,0,0,0,0,read,platform,invoke);
                 if(flag&1) assert(result==5 && !invoked && !backend.count);
                 else assert(result==(failure?-failure:0) && invoked==1 && backend.count);
@@ -6871,21 +6875,38 @@ int main() {
             }
             TglOwnedSurfaceStorage typedOutput;
             typedOutput.resource[0]=0x80;
+            const uintptr_t mockBacking=1;
+            std::memcpy(typedOutput.resource.data()+0x20,&mockBacking,8);
             const auto originalResource=typedOutput.resource;
-            Backend backend;backend.expected=&parameters;backend.leasedLock=true;backend.lockFlag=1;
+            auto nativeParameters=parameters;
+            Backend backend;backend.expected=&nativeParameters;backend.leasedLock=true;backend.lockFlag=1;
             backend.resource=reinterpret_cast<uintptr_t>(typedOutput.resource.data());
+            std::memcpy(nativeParameters.state.data()+0x90,&backend.resource,8);
             settingReads=invoked=0;
             auto invoke=[&](uintptr_t function,uintptr_t context,const void* resource,uint32_t u,uint32_t f) noexcept {
                 assert(function==entry && context==os && resource==typedOutput.resource.data());
                 assert(u==6 && f==1 && settingReads==1 && !backend.count);++invoked;
             };
             auto platform=[&](auto& descriptor) {assert(invoked==1);descriptor[0]=0xee;return backend.stage(3);};
-            assert(tglSendOwnedSfcNativeOutputCommands(usage,backend,parameters,typedOutput,
+            assert(tglSendOwnedSfcNativeOutputCommands(usage,backend,nativeParameters,typedOutput,
                 0x2000,0,0,0,0,read,platform,invoke)==0);
             assert(invoked==1 && backend.count==4 && typedOutput.resource==originalResource);
             const auto descriptor=tglOwnedSfcOutputDescriptor(typedOutput);
             uintptr_t resource=0;std::memcpy(&resource,descriptor.data()+0x28,8);
             assert(resource==reinterpret_cast<uintptr_t>(typedOutput.resource.data()));
+            // Shape-only mocks above do not establish real backing lifetime.
+            // Reject missing backing or stale packet identity before any side effect.
+            for(bool missingBacking:{true,false}) {
+                typedOutput.resource=originalResource;
+                std::memcpy(nativeParameters.state.data()+0x90,&backend.resource,8);
+                if(missingBacking) std::memset(typedOutput.resource.data()+0x20,0,8);
+                else std::memset(nativeParameters.state.data()+0x90,0,8);
+                const auto before=typedOutput.resource;
+                backend.count=settingReads=invoked=0;
+                assert(tglSendOwnedSfcNativeOutputCommands(usage,backend,nativeParameters,typedOutput,
+                    0x2000,0,0,0,0,read,platform,invoke)==5);
+                assert(!backend.count && !settingReads && !invoked && typedOutput.resource==before);
+            }
         }
     }
     {

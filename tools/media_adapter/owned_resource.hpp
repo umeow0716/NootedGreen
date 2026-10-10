@@ -5690,6 +5690,16 @@ int tglSendOwnedSfcNativeOutputCommands(const TglNativeSfcOutputUsageBinding& us
     const Surface& shell,uintptr_t settings,
     uint8_t scaling,uint8_t forceAvs,uint8_t ief,uint8_t csc,
     Read read,Platform& platform,Invoke invoke=Invoke{}) {
+    // Recheck at the emission boundary, not only during earlier packet
+    // construction: reject descriptor-only output or a packet bound to a
+    // different resource before any usage callback or command write.
+    const auto* bytes=tglOwnedSfcSurfaceBytes(shell);
+    std::array<uint8_t,0x148> resource{};
+    std::memcpy(resource.data(),bytes+0x148,resource.size());
+    uintptr_t boundOutput=0;
+    std::memcpy(&boundOutput,parameters.state.data()+0x90,8);
+    if(!tglNativeBackingPresent(resource) ||
+       boundOutput!=reinterpret_cast<uintptr_t>(bytes+0x148)) return 5;
     TglOwnedSfcLockParameters lock;
     if(!tglReadOwnedSfcLockParameters(settings,1,read,lock)) return 5;
     return usage.withOutput(shell,[&]() noexcept -> int {
