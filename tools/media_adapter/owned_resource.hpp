@@ -1280,6 +1280,34 @@ struct TglOwnedSurfaceInputs {
 };
 static_assert(offsetof(TglOwnedSurfaceInputs,di) == 0x28);
 static_assert(sizeof(TglOwnedSurfaceInputs) == 0x30);
+// Gen12 GetSurfOutput decision tree, independent of Darwin object offsets.
+// TGL mode2/target60 is pinned separately; mode1 is SFC. Caller must decode
+// and authenticate execution fields, and lease/back the selected surface.
+struct TglOutputSurfaceSelection {
+    const TglOwnedSurfaceStorage* surface = nullptr;
+    bool valid = false;
+};
+inline TglOutputSurfaceSelection tglSelectOutputSurface(
+        uint32_t pipe, bool di, bool iecp, bool denoise,
+        int32_t frame0, int32_t dnOut, const TglOwnedSurfaceStorage* target,
+        const std::array<const TglOwnedSurfaceStorage*,4>& ffdi,
+        const std::array<const TglOwnedSurfaceStorage*,2>& ffdn) noexcept {
+    if (pipe > 2) return {};
+    if (pipe == 2) return {target,true};
+    if (di) {
+        if (frame0 < 0 || size_t(frame0) >= ffdi.size()) return {};
+        return {ffdi[size_t(frame0)],true};
+    }
+    if (iecp) {
+        if (dnOut < 0 || size_t(dnOut) >= ffdi.size()) return {};
+        return {ffdi[size_t(dnOut)],true};
+    }
+    if (denoise) {
+        if (dnOut < 0 || size_t(dnOut) >= ffdn.size()) return {};
+        return {ffdn[size_t(dnOut)],true};
+    }
+    return {nullptr,pipe == 1}; // SFC intentionally writes no memory output
+}
 inline std::array<uint8_t,0x48> tglSurfaceDescriptor(
         const TglOwnedSurfaceStorage& shell) noexcept {
     return tglSurfaceDescriptorBytes(reinterpret_cast<const uint8_t*>(&shell));

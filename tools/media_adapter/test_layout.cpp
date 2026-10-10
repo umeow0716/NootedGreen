@@ -1034,6 +1034,25 @@ static void testVeboxPrefix() {
         TglOwnedSurfaceInputs inputs;
         inputs.surfaces = slots; inputs.di = 0xff;
         assert(tglSurfaceCommandSet(inputs) == command);
+        std::array<const TglOwnedSurfaceStorage*,4> ffdi{
+            &shells[0],&shells[1],&shells[2],&shells[3]};
+        std::array<const TglOwnedSurfaceStorage*,2> ffdn{&shells[3],&shells[4]};
+        auto select = [&](uint32_t pipe, bool di, bool iecp, bool dn,
+                          int32_t frame, int32_t index) {
+            return tglSelectOutputSurface(pipe,di,iecp,dn,frame,index,&surface,ffdi,ffdn);
+        };
+        assert(select(2,true,true,true,-1,-1).surface == &surface);
+        assert(select(0,true,true,true,2,1).surface == &shells[2]);
+        assert(select(0,false,true,true,0,1).surface == &shells[1]);
+        assert(select(0,false,false,true,0,1).surface == &shells[4]);
+        assert(select(1,false,false,false,0,0).valid);
+        assert(!select(1,false,false,false,0,0).surface);
+        assert(!select(0,false,false,false,0,0).valid);
+        assert(!select(3,false,false,false,0,0).valid);
+        assert(!select(0,true,false,false,-1,0).valid);
+        assert(!select(0,true,false,false,4,0).valid);
+        assert(!select(0,false,true,false,0,4).valid);
+        assert(!select(0,false,false,true,0,2).valid);
         assert(command[0x168] == 1 && command[0x169] == 1);
         for (size_t i=0; i<slots.size(); ++i) {
             std::memcpy(&borrowed,command.data()+i*0x48+0x40,8);
