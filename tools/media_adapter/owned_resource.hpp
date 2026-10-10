@@ -7215,8 +7215,10 @@ int tglPrepareOwnedSfcCommandState(TglOwnedSfcCommandParameters& parameters,
     bool rgbAdaptive,bool eightTapChroma,bool compressionEnabled,
     TglOwnedSfcCompressionMode compressionMode,Query query) noexcept {
     uint32_t inputHeight,scaledHeight;
-    std::memcpy(&inputHeight,prefix.data()+0x34,4);
-    std::memcpy(&scaledHeight,prefix.data()+0x50,4);
+    // +50 writes height at30; +90 writes scaled height at4c. Widths34/50
+    // are not allocation dimensions for the qualified 1df245/1df2c1 policy.
+    std::memcpy(&inputHeight,prefix.data()+0x30,4);
+    std::memcpy(&scaledHeight,prefix.data()+0x4c,4);
     if(!state.data() || !lines.matchesDimensions(inputHeight,scaledHeight) ||
        !lines.bindSfdRow(tail)) return 5;
     TglOwnedSfcStateParametersPacket checked{};
@@ -7244,8 +7246,8 @@ int tglWithOwnedSfcPreparedCommands(TglOwnedSfcCommandParameters& parameters,
     TglOwnedSfcCompressionMode compressionMode,Query query,Generate generate) noexcept {
     static_assert(noexcept(generate(parameters)),"native command generation status ABI");
     uint32_t inputHeight=0,scaledHeight=0;
-    std::memcpy(&inputHeight,prefix.data()+0x34,4);
-    std::memcpy(&scaledHeight,prefix.data()+0x50,4);
+    std::memcpy(&inputHeight,prefix.data()+0x30,4);
+    std::memcpy(&scaledHeight,prefix.data()+0x4c,4);
     return lines.withBuffers(inputHeight,scaledHeight,[&]() noexcept {
         const int status=tglPrepareOwnedSfcCommandState(parameters,state,lines,output,
             prefix,tail,rgbAdaptive,eightTapChroma,compressionEnabled,compressionMode,query);

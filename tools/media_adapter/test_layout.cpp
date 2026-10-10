@@ -4352,8 +4352,10 @@ static void testSfcSfdOwnership() {
         for(size_t offset:{size_t(0x24),size_t(0x28),size_t(0x30),size_t(0x34),
                            size_t(0x3c),size_t(0x40),size_t(0x4c),size_t(0x50)})
             std::memcpy(prefix.data()+offset,&dimension,4);
-        std::memcpy(prefix.data()+0x34,&inputHeight,4);
-        std::memcpy(prefix.data()+0x50,&scaledHeight,4);
+        std::memcpy(prefix.data()+0x30,&inputHeight,4);
+        std::memcpy(prefix.data()+0x4c,&scaledHeight,4);
+        // Deliberately non-square: widths34/50 remain1920 while the pinned
+        // allocations require heights1080/4001. Reading widths must fail.
         TglOwnedSurfaceStorage output;const uint64_t handle=1;
         std::memcpy(output.resource.data()+0x20,&handle,8);
         unsigned queries=0;int queryResult=0;
@@ -4368,7 +4370,7 @@ static void testSfcSfdOwnership() {
         assert(prepare()==5 && !queries && commands.state==originalCommands);
         assert(state.initialize());const auto originalState=cpu.bytes;
         const auto validPrefix=prefix;
-        const uint32_t mismatch=1081;std::memcpy(prefix.data()+0x34,&mismatch,4);
+        const uint32_t mismatch=1081;std::memcpy(prefix.data()+0x30,&mismatch,4);
         assert(prepare()==5 && !queries && cpu.bytes==originalState);
         prefix=validPrefix;queryResult=89;
         assert(prepare()==89 && queries==1 && commands.state==originalCommands && cpu.bytes==originalState);
