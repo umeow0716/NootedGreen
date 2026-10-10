@@ -5742,6 +5742,28 @@ struct TglOwnedSfcCommandParameters {
     TglOwnedSfcYParameters y{};
     TglOwnedSfcUvParameters uv{};
 };
+// VP+98 (1e0bb0) clears64 bytes before optional IEF then CSC. Its IEF
+// producer1dcbd0 writes state+67/+68 and the same parameter offsets as our
+// qualified TGL IEF builder. Use TGL tables, never execute the ICL producer.
+// This CPU producer must run before the CSC coefficient lease; never erase
+// pointers already borrowed by a command consumer. Surface/image acquisition
+// and mode admission remain the enclosing owner's responsibility.
+inline bool tglPrepareOwnedSfcIefParameters(TglOwnedSfcCommandParameters& parameters,
+    bool enabled,float strength,uint8_t skinEnable,uint8_t detailEnable,
+    const std::array<uint16_t,3>& thresholds,const TglOwnedIefTables& tables) noexcept {
+    for(size_t offset:{size_t(0x28),size_t(0x30),size_t(0x38)}) {
+        uintptr_t borrowed=0;std::memcpy(&borrowed,parameters.ief.data()+offset,8);
+        if(borrowed) return false;
+    }
+    std::array<uint8_t,64> candidate{};
+    TglOwnedIefSurfaceFlags flags{parameters.state[0x67],parameters.state[0x68]};
+    if(enabled && !tglBuildOwnedIefParameters(candidate,flags,strength,
+        skinEnable,detailEnable,thresholds,tables)) return false;
+    parameters.ief=candidate;
+    if(enabled) {parameters.state[0x67]=flags.enabled;parameters.state[0x68]=flags.skinEnabled;}
+    return true;
+}
+
 // Enclose actual CPU command generation in the coefficient lease, rather
 // than storing pointers into a temporary snapshot. Disabled CSC does not
 // inspect its optional source or reset an existing cache. This does not

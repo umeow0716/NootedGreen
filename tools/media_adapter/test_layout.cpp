@@ -5770,6 +5770,34 @@ int main() {
     {
         TglOwnedSfcCommandParameters parameters;
         parameters.ief[1]=7;parameters.state[0x88]=2;
+        {
+            TglOwnedIefTables tables{};
+            for(size_t row=0;row<tables.size();++row)
+                for(size_t column=0;column<64;++column) tables[row][column]=uint32_t(row*64+column);
+            const std::array<uint16_t,3> thresholds{0x107,0x202,0x308};
+            const auto original=parameters;
+            for(float strength:{0.f,1.f,63.f,64.f,-1.f}) {
+                auto candidate=original;
+                std::array<uint8_t,64> expected{};TglOwnedIefSurfaceFlags flags{};
+                assert(tglBuildOwnedIefParameters(expected,flags,strength,3,2,thresholds,tables));
+                assert(tglPrepareOwnedSfcIefParameters(candidate,true,strength,3,2,thresholds,tables));
+                assert(candidate.ief==expected);
+                auto state=original.state;state[0x67]=1;state[0x68]=1;
+                assert(candidate.state==state);
+            }
+            auto candidate=original;
+            assert(!tglPrepareOwnedSfcIefParameters(candidate,true,NAN,1,1,thresholds,tables));
+            assert(candidate.ief==original.ief && candidate.state==original.state);
+            assert(tglPrepareOwnedSfcIefParameters(candidate,false,NAN,1,1,thresholds,tables));
+            assert((candidate.ief==std::array<uint8_t,64>{} && candidate.state==original.state));
+            for(size_t offset:{size_t(0x28),size_t(0x30),size_t(0x38)}) {
+                candidate=original;const uintptr_t borrowed=1;
+                std::memcpy(candidate.ief.data()+offset,&borrowed,8);
+                const auto saved=candidate;
+                assert(!tglPrepareOwnedSfcIefParameters(candidate,false,0,0,0,thresholds,tables));
+                assert(candidate.ief==saved.ief && candidate.state==saved.state);
+            }
+        }
         const auto savedIef=parameters.ief;const auto savedState=parameters.state;
         TglOwnedVpCscCache cache;unsigned reads=0,produced=0,generated=0;
         auto read=[&](uintptr_t,void*,size_t) noexcept {++reads;return false;};
