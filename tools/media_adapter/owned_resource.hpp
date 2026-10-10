@@ -179,6 +179,57 @@ bool tglReadOwnedVpAdmission(uint8_t child08,uintptr_t first,
     // twice when composing the outer data predicate.
     return tglOwnedVpAdmission(input,[]() noexcept {return true;});
 }
+// Synchronous admission context only: the caller retains storage and every
+// reader-authorized input lease through the enclosing scoped callback. This
+// is not a VP constructor, vtable publisher or GPU submission lifetime.
+template<class Read> class TglOwnedVpAdmissionContext {
+    static_assert(noexcept(std::declval<Read&>()(uintptr_t{},nullptr,size_t{})),"VP leased read ABI");
+    TglOwnedVpSfcCallerStorage& storage_;
+    Read& read_;
+    bool format(void* surface,bool output) noexcept {
+        const uintptr_t address=reinterpret_cast<uintptr_t>(surface);
+        uint32_t value=0,e4=0;
+        if(!address || address>UINTPTR_MAX-0x134 || !read_(address+0x130,&value,4)) return false;
+        if(!output) return tglOwnedVpInputFormat(value);
+        if(value==0x53 && !read_(address+0xe4,&e4,4)) return false;
+        return tglOwnedVpOutputFormat(value,e4);
+    }
+public:
+    TglOwnedVpAdmissionContext(TglOwnedVpSfcCallerStorage& storage,Read& read) noexcept
+        :storage_(storage),read_(read) {}
+    TglOwnedVpAdmissionContext(const TglOwnedVpAdmissionContext&)=delete;
+    TglOwnedVpAdmissionContext& operator=(const TglOwnedVpAdmissionContext&)=delete;
+    bool owns(void* child) const noexcept {return child==storage_.bytes.data();}
+    bool eligible(void* first,void* second,void*) noexcept {
+        return tglReadOwnedVpAdmission(storage_.bytes[8],reinterpret_cast<uintptr_t>(first),
+            reinterpret_cast<uintptr_t>(second),read_);
+    }
+    bool pair(void* first,void* second,void* third) noexcept {
+        return tglReadOwnedVpPairAdmission(reinterpret_cast<uintptr_t>(first),
+            reinterpret_cast<uintptr_t>(second),reinterpret_cast<uintptr_t>(third),read_);
+    }
+    bool input(void* surface) noexcept {return format(surface,false);}
+    bool output(void* surface) noexcept {return format(surface,true);}
+};
+template<class Resolve> struct TglOwnedVpAdmissionCallbacks {
+    static_assert(noexcept(Resolve{}(nullptr)),"VP admission resolver ABI");
+    static bool eligible(void* child,void* first,void* second,void* third) noexcept {
+        auto* context=Resolve{}(child);
+        return context && context->owns(child) && context->eligible(first,second,third);
+    }
+    static bool pair(void* child,void* first,void* second,void* third) noexcept {
+        auto* context=Resolve{}(child);
+        return context && context->owns(child) && context->pair(first,second,third);
+    }
+    static bool input(void* child,void* surface) noexcept {
+        auto* context=Resolve{}(child);
+        return context && context->owns(child) && context->input(surface);
+    }
+    static bool output(void* child,void* surface) noexcept {
+        auto* context=Resolve{}(child);
+        return context && context->owns(child) && context->output(surface);
+    }
+};
 // Caller ABI: TGL12c010 invokes VP+40(this,source,target,renderData),
 // TGL12a120 invokes VP+48(this,renderData,command). Resolve must admit only
 // the exact currently leased owned VP base; no native/foreign object cast.

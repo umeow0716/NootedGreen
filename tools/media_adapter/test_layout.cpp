@@ -5297,6 +5297,35 @@ int main() {
             assert(reads==failAt);
         }
         failAt=reads=0;
+        TglOwnedVpSfcCallerStorage child,foreignChild;
+        TglOwnedVpAdmissionContext context(child,read);
+        using Resolve=TglOwnedVpSfcResolve<decltype(context)>;
+        using Callbacks=TglOwnedVpAdmissionCallbacks<Resolve>;
+        void* frame=reinterpret_cast<void*>(0x1000);
+        void* source=reinterpret_cast<void*>(0x2000);
+        void* target=reinterpret_cast<void*>(0x3000);
+        assert(!Callbacks::eligible(child.bytes.data(),frame,source,nullptr) && !reads);
+        {
+            TglOwnedVpSfcScopedContext<decltype(context)> scope(child.bytes.data(),context);
+            assert(scope.bound());
+            assert(!Callbacks::eligible(foreignChild.bytes.data(),frame,source,nullptr) && !reads);
+            assert(Callbacks::eligible(child.bytes.data(),frame,source,nullptr));
+            assert(Callbacks::pair(child.bytes.data(),source,target,nullptr));
+            assert(Callbacks::input(child.bytes.data(),source));
+            assert(Callbacks::output(child.bytes.data(),target));
+            child.bytes[8]=1;reads=0;
+            assert(!Callbacks::eligible(child.bytes.data(),frame,source,nullptr) && !reads);
+            child.bytes[8]=0;
+        }
+        reads=0;
+        assert(!Callbacks::pair(child.bytes.data(),source,target,nullptr) && !reads);
+        assert(!Callbacks::input(child.bytes.data(),source) && !reads);
+        assert(!Callbacks::output(child.bytes.data(),target) && !reads);
+        {
+            TglOwnedVpSfcScopedContext<decltype(context)> wrong(foreignChild.bytes.data(),context);
+            assert(wrong.bound());
+            assert(!Callbacks::input(foreignChild.bytes.data(),source) && !reads);
+        }
         assert(!tglReadOwnedVpAdmission(1,0x1000,0x2000,read) && !reads);
         assert(!tglReadOwnedVpAdmission(0,UINTPTR_MAX-8,0x2000,read) && !reads);
         assert(!tglReadOwnedVpPairAdmission(0x2000,0x3000,UINTPTR_MAX-3,read) && !reads);
