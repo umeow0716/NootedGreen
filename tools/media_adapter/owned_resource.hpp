@@ -5050,6 +5050,38 @@ inline void tglPrepareOwnedSfcPlatformField(std::array<uint8_t,0xb8>& packet) no
     const uint32_t zero=0;
     std::memcpy(packet.data()+4,&zero,4);
 }
+// A +c0 producer may write only the exact owned packet leased by its caller,
+// not any pointer passed by a native-looking object. Keep this context inside
+// the VP/frame scope; status must be checked before later command emission.
+class TglOwnedVpPlatformPacketContext {
+    TglOwnedVpSfcCallerStorage& storage_;
+    std::array<uint8_t,0xb8>& packet_;
+    bool applied_=false;
+    int error_=0;
+public:
+    TglOwnedVpPlatformPacketContext(TglOwnedVpSfcCallerStorage& storage,
+        std::array<uint8_t,0xb8>& packet) noexcept :storage_(storage),packet_(packet) {}
+    TglOwnedVpPlatformPacketContext(const TglOwnedVpPlatformPacketContext&)=delete;
+    TglOwnedVpPlatformPacketContext& operator=(const TglOwnedVpPlatformPacketContext&)=delete;
+    bool owns(void* child) const noexcept {return child==storage_.bytes.data();}
+    void produce(void* packet) noexcept {
+        if(error_) return;
+        if(packet!=packet_.data()) {error_=5;return;}
+        tglPrepareOwnedSfcPlatformField(packet_);applied_=true;
+    }
+    int status() const noexcept {return error_ ? error_ : applied_ ? 0 : 5;}
+};
+// Exact donor1df3c0 takes this, an ignored surface in RSI, packet in RDX;
+// writes one DWORD at packet+4 and has void ABI. No donor code is invoked.
+template<class Resolve> struct TglOwnedVpPlatformPacketCallback {
+    static void produce(void* child,void*,void* packet) noexcept {
+        static_assert(noexcept(Resolve{}(child)),"VP platform resolver ABI");
+        auto* context=Resolve{}(child);
+        static_assert(noexcept(context->owns(child)) && noexcept(context->produce(packet)),
+            "VP platform producer ABI");
+        if(context && context->owns(child)) context->produce(packet);
+    }
+};
 
 // Darwin 1df6ba..1df72b: scalar fields after the platform +c0 producer.
 // frameWidth/Height are outputs of the separately authenticated +50 adjuster;

@@ -5512,6 +5512,40 @@ static void testSfcFrameFields() {
         auto expected=packet;
         std::fill(expected.begin()+4,expected.begin()+8,0);
         tglPrepareOwnedSfcPlatformField(packet);
+        {
+            TglOwnedVpSfcCallerStorage vp;
+            using Context=TglOwnedVpPlatformPacketContext;
+            using Callback=TglOwnedVpPlatformPacketCallback<TglOwnedVpSfcResolve<Context>>;
+            using Produce=void(*)(void*,void*,void*) noexcept;
+            const Produce produce=&Callback::produce;
+            std::array<uint8_t,0xb8> owned,foreign;owned.fill(0xa5);foreign.fill(0x5a);
+            const auto saved=owned,other=foreign;
+            for(bool wrongPacket:{false,true}) {
+                owned=saved;
+                Context context(vp,owned);
+                produce(vp.bytes.data(),nullptr,owned.data());
+                assert(context.status()==5 && owned==saved);
+                {
+                    TglOwnedVpSfcScopedContext<Context> scope(vp.bytes.data(),context);
+                    assert(scope.bound());
+                    produce(nullptr,nullptr,owned.data());
+                    produce(foreign.data(),nullptr,owned.data());
+                    assert(context.status()==5 && owned==saved);
+                    if(wrongPacket) {
+                        produce(vp.bytes.data(),nullptr,foreign.data());
+                        produce(vp.bytes.data(),nullptr,owned.data());
+                        assert(context.status()==5 && owned==saved && foreign==other);
+                    } else {
+                        produce(vp.bytes.data(),foreign.data(),owned.data());
+                        assert(context.status()==0 && foreign==other);
+                        for(size_t i=0;i<owned.size();++i)
+                            assert(owned[i]==(i>=4 && i<8 ? 0 : saved[i]));
+                    }
+                }
+                const auto after=owned;
+                produce(vp.bytes.data(),nullptr,owned.data());assert(owned==after);
+            }
+        }
         assert(packet==expected);
     }
     for (uint32_t mode : {0u,1u,2u,UINT32_MAX}) {
