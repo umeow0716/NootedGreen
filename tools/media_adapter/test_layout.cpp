@@ -97,10 +97,14 @@ static void testExecutionShape() {
 
 static void testExecutionOwner() {
     struct Backend {
-        bool allocation = true, valid = true;
+        bool allocation = true, valid = true, invalidateOnInit = false;
         int result = 0, creates = 0, initializes = 0, destroys = 0;
         uintptr_t create() noexcept { ++creates; return allocation ? 7 : 0; }
-        int initialize(uintptr_t p) noexcept { assert(p == 7); ++initializes; return result; }
+        int initialize(uintptr_t p) noexcept {
+            assert(p == 7); ++initializes;
+            if (invalidateOnInit) valid = false;
+            return result;
+        }
         bool validate(uintptr_t p) noexcept { assert(p == 7); return valid; }
         void destroy(uintptr_t p) noexcept { assert(p == 7); ++destroys; }
     } b;
@@ -125,6 +129,26 @@ static void testExecutionOwner() {
         assert(owner.ensure() == 0);
     }
     assert(b.destroys == 5 && b.creates == 6 && b.initializes == 5);
+    Backend pass;
+    {
+        TglExecutionOwner<Backend> owner(pass);
+        assert(owner.preparePass() == 0 && pass.initializes == 1);
+        assert(owner.preparePass() == 0 && pass.initializes == 2 && pass.creates == 1);
+        pass.result = 31;
+        assert(owner.preparePass() == 31 && owner.get() == 0 && pass.destroys == 1);
+        pass.result = 0;
+        assert(owner.preparePass() == 0 && pass.creates == 2);
+        pass.valid = false;
+        const auto initialized = pass.initializes;
+        assert(owner.preparePass() == 5 && owner.get() == 0);
+        assert(pass.initializes == initialized && pass.destroys == 2);
+        pass.valid = true;
+        assert(owner.preparePass() == 0);
+        pass.invalidateOnInit = true;
+        assert(owner.preparePass() == 5 && owner.get() == 0 && pass.destroys == 3);
+        owner.reset();
+        assert(pass.destroys == 3); // failed post-Init shape already unwound
+    }
 }
 
 static void testVeboxReport() {

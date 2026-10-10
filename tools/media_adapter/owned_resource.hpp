@@ -120,6 +120,19 @@ public:
         object = candidate; // publish only after native result AND validation
         return 0;
     }
+    // Eligibility initializes execution on each admitted pass. ensure() alone
+    // only supplies lifetime ownership; it must not preserve stale frame flags.
+    // A newly created object is already initialized by ensure(), exactly once.
+    int preparePass() noexcept {
+        if (!object) return ensure();
+        if (!backend.validate(object)) { reset(); return 5; }
+        const int result = backend.initialize(object);
+        if (result || !backend.validate(object)) {
+            reset();
+            return result ? result : 5;
+        }
+        return 0;
+    }
     uintptr_t get() const noexcept { return object; }
 };
 
