@@ -2493,8 +2493,14 @@ inline bool tglNativeBackingPresent(const std::array<uint8_t, 0x148> &s) noexcep
 // Family2b882 resolves descriptor40 via IOSurfaceRoot::lookupSurface(task),
 // validates descriptor44 against getPlaneCount, then2be46 dispatches
 // newResourceWithIOSurface229c2(surface,plane44,options48). These are real
-// IOSurface-backed tokens, not type0 client VM ranges. Their retained surface
-// and plane backing lifecycle must be joined independently before history reuse.
+// IOSurface-backed tokens, not type0 client VM ranges. newResourceWithIOSurface
+// takes device-cache Resource20 as parent, retains it at22b00, stores childe0,
+// plane indexf8 and client-aligned+plane offsetfc. Type82 map26d31 selects
+// parent88, falling back to parent80 at26dee, then the SAME generic Map40
+// construction/deferred release. Type82 free216b8 unlinks the parent's child
+// list and releases parente0 plus parent after the map-release step2157c.
+// Parent device-cache backing creation and borrowed source/history leases
+// remain distinct obligations; do not infer them from userspace IOSurface retain.
 template<class Writable, class Fill>
 int tglFillBuffer(const std::array<uint8_t, 0x148> &resource, uint32_t bytes,
                   uint8_t value, Writable writable, Fill fill) noexcept {
