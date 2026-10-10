@@ -4513,6 +4513,32 @@ static void testSfcSfdOwnership() {
             [&](auto& ready) noexcept -> int {
                 ++bypassGenerated;assert(!avsBackend.live && state.hasParametersLease());
                 assert(ready.y.coefficients==savedY && ready.uv.coefficients==savedUv);
+                TglOwnedVpSfcCallerStorage view;
+                const uintptr_t borrowed=1;
+                for(size_t offset:{size_t(0x10),size_t(0x18),size_t(0x20)})
+                    std::memcpy(view.bytes.data()+offset,&borrowed,8);
+                std::memset(view.bytes.data()+0x28,0xa5,0x30);
+                const auto previous=view.bytes;
+                assert(tglWithOwnedVpSfcCpuView(view,state,avs,
+                    [](void*) noexcept -> int {assert(false);return 0;})==5);
+                assert(tglWithOwnedVpSfcCpuView(view,state,avs,[&](void* child) noexcept -> int {
+                    assert(child==view.bytes.data());
+                    assert(!std::memcmp(view.bytes.data()+0x28,previous.data()+0x28,0x30));
+                    uintptr_t packet=0;std::memcpy(&packet,view.bytes.data()+0x938,8);
+                    const auto& leasedState=state;
+                    assert(packet==reinterpret_cast<uintptr_t>(leasedState.data()));
+                    assert(tglWithOwnedVpSfcCpuView(view,state,avs,
+                        [](void*) noexcept -> int {assert(false);return 0;},false)==5);
+                    return -17;
+                },false)==-17);
+                assert(view.bytes==previous && !avs.parameters());
+                for(size_t offset:{size_t(0x921),size_t(0x9b8)}) {
+                    view.bytes[offset]=1;
+                    assert(tglWithOwnedVpSfcCpuView(view,state,avs,
+                        [](void*) noexcept -> int {assert(false);return 0;},false)==5);
+                    view.bytes[offset]=0;
+                }
+                assert(view.bytes==previous);
                 return 31;
             })==31);
         assert(bypassGenerated==1 && !avs.parameters());

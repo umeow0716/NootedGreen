@@ -5852,9 +5852,12 @@ public:
 template<class CpuBackend,class AvsBackend,class Invoke>
 int tglWithOwnedVpSfcCpuView(TglOwnedVpSfcCallerStorage& storage,
     const TglOwnedSfcStateParameters<CpuBackend>& state,
-    const TglOwnedSfcAvsParameters<AvsBackend>& avs,Invoke invoke) noexcept {
+    const TglOwnedSfcAvsParameters<AvsBackend>& avs,Invoke invoke,bool avsEnabled=true) noexcept {
     static_assert(noexcept(invoke(static_cast<void*>(nullptr))),"VP CPU view borrower must not throw");
-    if(!state.hasParametersLease() || !avs.hasParametersLease()) return 5;
+    // Match the command-input gate: disabled AVS has no parameter borrower.
+    // The caller must use this same gate for actual command scheduling.
+    if(!state.hasParametersLease() || (avsEnabled && !avs.hasParametersLease())) return 5;
+    if(!avsEnabled && ((storage.bytes[0x921]|storage.bytes[0x9b8])&1)) return 5;
     for(size_t offset:{size_t(0x10),size_t(0x18),size_t(0x20)}) {
         uintptr_t borrowed=0;std::memcpy(&borrowed,storage.bytes.data()+offset,8);
         if(!borrowed) return 5;
@@ -5864,12 +5867,16 @@ int tglWithOwnedVpSfcCpuView(TglOwnedVpSfcCallerStorage& storage,
     if(oldState) return 5;
     std::array<uint8_t,0x30> oldHeader;
     std::memcpy(oldHeader.data(),storage.bytes.data()+0x28,oldHeader.size());
-    for(size_t offset:{size_t(0x10),size_t(0x18),size_t(0x20),size_t(0x28)}) {
-        uintptr_t existing=0;std::memcpy(&existing,oldHeader.data()+offset,8);
-        if(existing) return 5;
+    if(avsEnabled) {
+        for(size_t offset:{size_t(0x10),size_t(0x18),size_t(0x20),size_t(0x28)}) {
+            uintptr_t existing=0;std::memcpy(&existing,oldHeader.data()+offset,8);
+            if(existing) return 5;
+        }
     }
     const uintptr_t packet=reinterpret_cast<uintptr_t>(state.data());
-    std::memcpy(storage.bytes.data()+0x28,avs.parameters()->data(),oldHeader.size());
+    if(avsEnabled) {
+        std::memcpy(storage.bytes.data()+0x28,avs.parameters()->data(),oldHeader.size());
+    }
     std::memcpy(storage.bytes.data()+0x938,&packet,8);
     const int result=invoke(storage.bytes.data());
     std::memcpy(storage.bytes.data()+0x28,oldHeader.data(),oldHeader.size());
