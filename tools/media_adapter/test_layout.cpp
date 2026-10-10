@@ -8411,6 +8411,31 @@ int main() {
             const auto beforeFailure=commandInvoke.calls;
             assert(tglSendOwnedSfcPreparedCommands(commands,prepared,shell,1,1,1,1,
                 rejectedPlatform)==91 && commandInvoke.calls==beforeFailure+1);
+            uintptr_t context=0x40000000,query=base+0x62ee0;
+            unsigned environmentReads=0;
+            auto environmentRead=[&](uintptr_t address,void* destination,size_t size) {
+                ++environmentReads;
+                void* live=owner.get();owner.reset();assert(owner.get()==live);
+                assert(commands.frameStart()==5); // qualification holds the same lease
+                if(size==8 && address==os) std::memcpy(destination,&context,8);
+                else if(size==8 && address==os+0x1b0) std::memcpy(destination,&query,8);
+                else return read(address,destination,size);
+                return true;
+            };
+            commandInvoke.result=-43;
+            const auto beforeQualified=commandInvoke.calls;
+            assert(commands.stateQualified(state,output,environmentRead)==-43);
+            assert(commandInvoke.calls==beforeQualified+1 && environmentReads==3);
+            for(unsigned invalid=0;invalid<3;++invalid) {
+                context=invalid==0?0:0x40000000;
+                query=base+0x62ee0+(invalid==1);
+                if(invalid==2) flags={0,0};
+                assert(commands.stateQualified(state,output,environmentRead)==5);
+                assert(commandInvoke.calls==beforeQualified+1);
+            }
+            flags={1,0};context=0x40000000;query=base+0x62ee0;
+            assert(commands.stateQualified(state,output,[](uintptr_t,void*,size_t){return false;})==5);
+            assert(commandInvoke.calls==beforeQualified+1);
             const auto completedCalls=commandInvoke.calls;
             assert(owner.initialize(lifetime,mhw,os,read));
             assert(invoke.constructs==2 && invoke.destroys==1);

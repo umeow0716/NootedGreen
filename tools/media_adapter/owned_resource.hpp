@@ -768,6 +768,24 @@ public:
     int state(const TglOwnedSfcStateParametersPacket& parameters,const std::array<uint8_t,0x38>& output) {
         return call(0x18,0x168390,[&](uintptr_t entry,void* object){return invoke.state(entry,object,command,parameters.data(),output.data());});
     }
+    // Authenticate the leased OS state dependency immediately before native
+    // dispatch. Keep the owner busy across both reader callbacks and dispatch:
+    // a reader must not retire/reinitialize the object it is qualifying.
+    template<class Read>
+    int stateQualified(const TglOwnedSfcStateParametersPacket& parameters,
+                       const std::array<uint8_t,0x38>& output,Read read) {
+        return call(0x18,0x168390,[&](uintptr_t entry,void* object) {
+            const uintptr_t address=reinterpret_cast<uintptr_t>(object);
+            auto objectRead=[&](uintptr_t source,void* destination,size_t size) {
+                if(source==address && size==0x41) {
+                    std::memcpy(destination,object,size);return true;
+                }
+                return read(source,destination,size);
+            };
+            if(!binding.validateStateEnvironment(address,owner.os(),objectRead)) return 5;
+            return invoke.state(entry,object,command,parameters.data(),output.data());
+        });
+    }
     int avs(const std::array<uint8_t,16>& parameters) {
         return call(0x20,0x16a580,[&](uintptr_t entry,void* object){return invoke.parameters(entry,object,command,parameters.data());});
     }
