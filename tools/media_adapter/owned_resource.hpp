@@ -630,6 +630,11 @@ struct TglOwnedSfcGen12Tail {
 // TGL168390 uses the same input offsets but 14-bit command fields, consumes
 // +8a as an additional format flag, and accepts additional format cases.
 // Therefore matching offsets alone must never qualify an ICL-produced pass.
+// TGL168972..1689e5 consumes +5c/+60 as ordered float equality to1.0
+// (constant24ce84): DW4 bit7 is set unless BOTH ratios equal1, including NaN.
+// TGL format19 dispatch16a494 ->16872e emits DW3 format4 and reads the
+// separate output argument+24 as a16-bit plane value. Prefix qualification
+// alone therefore cannot authorize an unqualified output-surface argument.
 // Nonnull resources are borrowed and require registration/lifetime by caller.
 inline bool tglPrepareOwnedSfcGen12State(TglOwnedSfcStateParametersPacket &output,
     const std::array<uint8_t,0xb8> &prefix,const TglOwnedSfcGen12Tail &tail) noexcept {
@@ -3170,6 +3175,9 @@ inline std::array<uint8_t,0x38> tglOwnedSfcOutputDescriptorBytes(const uint8_t* 
     put(8,get(0xd8));put(0xc,get(0xdc));put(0x10,get(0xe0));put(0x14,get(0xe4));
     put(0x1c,get(0xf4));put(0x20,get(0xf8));
     const uint32_t pitch=get(0xe0);
+    // Native TGL168744..16874b consumes this independent output+24 value
+    // through a16-bit temporary for format19. Preserve native arithmetic
+    // here; this descriptor builder is NOT a range/plane qualification gate.
     if(pitch) put(0x24,(get(0x100)-get(0xf0))/pitch+get(0x108));
     const uintptr_t resource=reinterpret_cast<uintptr_t>(shell+0x148);
     std::memcpy(out.data()+0x28,&resource,8);
