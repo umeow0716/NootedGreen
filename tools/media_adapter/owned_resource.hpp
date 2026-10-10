@@ -419,6 +419,48 @@ struct TglTwoPassCscBinding {
     }
 };
 
+// Four-argument native fill converter: output, source, source CS, target CS.
+// Resolution is not execution proof; the caller retains the authenticated image.
+struct TglFillCscBinding {
+    uintptr_t image = 0, entry = 0;
+    template<class Read, class Qualify, class Executable>
+    bool resolve(uintptr_t base, Read read, Qualify qualify, Executable executable) {
+        image = entry = 0;
+        constexpr std::array<uint8_t,16> prologue{
+            0x55,0x48,0x89,0xe5,0x48,0x81,0xec,0xb0,
+            0x00,0x00,0x00,0x48,0x8d,0x45,0xc0,0x45};
+        constexpr std::array<uint8_t,5> matrix{0xe8,0x4f,0x6f,0,0};
+        constexpr std::array<uint8_t,5> convert{0xe8,0xf7,0xf6,0xff,0xff};
+        if (!base || base > std::numeric_limits<uintptr_t>::max()-0x757fd0 ||
+            !qualify(base)) return false;
+        auto matches = [&](uintptr_t offset, const auto& anchor) {
+            auto bytes = anchor;
+            return executable(base+offset,anchor.size()) &&
+                read(base+offset,bytes.data(),bytes.size()) && bytes == anchor;
+        };
+        if (!matches(0x4d970,prologue) || !matches(0x4d9fc,matrix) ||
+            !matches(0x4da74,convert)) return false;
+        image = base; entry = base+0x4d970; return true;
+    }
+};
+
+// Native writes are confined to a private candidate. A false native result or
+// stale image binding cannot publish partially converted fill data.
+template<class Read, class Qualify, class Executable, class Invoke>
+bool tglConvertNativeFill(const TglFillCscBinding& binding,
+    std::array<uint8_t,4>& output, const std::array<uint8_t,4>& source,
+    uint32_t sourceColorSpace, uint32_t targetColorSpace,
+    Read read, Qualify qualify, Executable executable, Invoke invoke) {
+    TglFillCscBinding current;
+    if (!current.resolve(binding.image,read,qualify,executable) ||
+        binding.entry != current.entry) return false;
+    std::array<uint8_t,4> candidate{};
+    if (!invoke(current.entry,candidate.data(),source.data(),
+                sourceColorSpace,targetColorSpace)) return false;
+    output = candidate;
+    return true;
+}
+
 // Read-only shape gate for an already-owned native execution object. Identity
 // qualification must authenticate the loaded image; this is NOT proof that
 // mode/state producers or GPU commands are valid. Run under owner's lock.
@@ -1519,6 +1561,256 @@ inline void tglPrepareOwnedSfcOutputChroma(std::array<uint8_t,0xb8>& packet,
     }
     std::memcpy(packet.data()+0x18,&mode,4);
 }
+// Darwin 1df785..1df81a integer alignment stage only. Offsets are native
+// output height/width and converted source top/left; float conversion is upstream.
+// Alignment units come from authenticated +88/+80 callbacks, not Linux enums.
+inline bool tglPrepareOwnedSfcAlignedGeometry(std::array<uint8_t,0xb8>& packet,
+    uint32_t outputHeight,uint32_t outputWidth,uint32_t sourceTop,uint32_t sourceLeft,
+    uint16_t outputHeightAlign,uint16_t outputWidthAlign,
+    uint16_t inputHeightAlign,uint16_t inputWidthAlign) noexcept {
+    const std::array<uint32_t,4> values{{outputHeight,outputWidth,sourceTop,sourceLeft}};
+    const std::array<uint32_t,4> units{{outputHeightAlign,outputWidthAlign,
+                                      inputHeightAlign,inputWidthAlign}};
+    std::array<uint32_t,4> aligned{};
+    for (size_t i=0;i<4;++i) {
+        const uint32_t unit=units[i];
+        if (!unit || (unit&(unit-1)) ||
+            values[i]>std::numeric_limits<uint32_t>::max()-(unit-1)) return false;
+        aligned[i]=(values[i]+unit-1)&~(unit-1);
+    }
+    const std::array<size_t,4> offsets{{0x24,0x28,0x44,0x48}};
+    for (size_t i=0;i<4;++i) std::memcpy(packet.data()+offsets[i],&aligned[i],4);
+    return true;
+}
+// Darwin 1df81d..1df96f. Preserve single-precision sub/mul/add ordering;
+// 315708 is float 0.5. Inputs bottom/right already underwent native truncation.
+inline bool tglPrepareOwnedSfcRegions(std::array<uint8_t,0xb8>& packet,
+    uint32_t bottom,uint32_t right,float top,float left,
+    uint32_t frameHeight,uint32_t frameWidth,float scaleY,float scaleX,
+    uint16_t inputHeightAlign,uint16_t inputWidthAlign,
+    uint16_t outputHeightAlign,uint16_t outputWidthAlign) noexcept {
+    const std::array<uint32_t,4> units{{inputHeightAlign,inputWidthAlign,
+                                      outputHeightAlign,outputWidthAlign}};
+    for (auto unit:units) if (!unit || (unit&(unit-1))) return false;
+    auto convert=[](float value,uint32_t& result) noexcept {
+        if (!std::isfinite(value) || value<0 || double(value)>double(UINT32_MAX)) return false;
+        result=static_cast<uint32_t>(value); return true;
+    };
+    uint32_t height=0,width=0;
+    if (!convert(float(bottom)-top,height) || !convert(float(right)-left,width)) return false;
+    height=(height<frameHeight?height:frameHeight)&~(units[0]-1);
+    width=(width<frameWidth?width:frameWidth)&~(units[1]-1);
+    // Volatile intermediate prevents contraction into an FMA unlike native mulss/addss.
+    const volatile float productY=scaleY*float(height),productX=scaleX*float(width);
+    uint32_t scaledHeight=0,scaledWidth=0;
+    if (!convert(productY+0.5f,scaledHeight) || !convert(productX+0.5f,scaledWidth) ||
+        scaledHeight>UINT32_MAX-(units[2]-1) || scaledWidth>UINT32_MAX-(units[3]-1)) return false;
+    scaledHeight=(scaledHeight+units[2]-1)&~(units[2]-1);
+    scaledWidth=(scaledWidth+units[3]-1)&~(units[3]-1);
+    const std::array<uint32_t,4> values{{height,width,scaledHeight,scaledWidth}};
+    const std::array<size_t,4> offsets{{0x3c,0x40,0x4c,0x50}};
+    for (size_t i=0;i<4;++i) std::memcpy(packet.data()+offsets[i],&values[i],4);
+    return true;
+}
+// Darwin 1df972..1dfafd: rotation-dependent clipping, resulting scale ratios,
+// and down-aligned destination offsets (already native-truncated upstream).
+inline bool tglPrepareOwnedSfcRotationGeometry(std::array<uint8_t,0xb8>& packet,
+    uint32_t rotation,uint32_t destinationTop,uint32_t destinationLeft,
+    uint16_t outputHeightAlign,uint16_t outputWidthAlign) noexcept {
+    if (!outputHeightAlign || (outputHeightAlign&(outputHeightAlign-1)) ||
+        !outputWidthAlign || (outputWidthAlign&(outputWidthAlign-1))) return false;
+    uint32_t frameH=0,frameW=0,sourceH=0,sourceW=0,scaledH=0,scaledW=0;
+    auto read=[&](size_t offset,uint32_t& value) noexcept {
+        std::memcpy(&value,packet.data()+offset,4);
+    };
+    read(0x24,frameH); read(0x28,frameW); read(0x3c,sourceH);
+    read(0x40,sourceW); read(0x4c,scaledH); read(0x50,scaledW);
+    if (!sourceH || !sourceW) return false; // no manufactured inf/NaN ratios
+    const bool unrotated=rotation==0 || rotation==2 || rotation==4 || rotation==5;
+    const uint32_t limitH=unrotated?frameH:frameW,limitW=unrotated?frameW:frameH;
+    if (scaledH>=limitH) scaledH=limitH;
+    if (scaledW>=limitW) scaledW=limitW;
+    const float ratioX=float(scaledW)/float(sourceW),ratioY=float(scaledH)/float(sourceH);
+    const uint32_t top=destinationTop&~(uint32_t(outputHeightAlign)-1);
+    const uint32_t left=destinationLeft&~(uint32_t(outputWidthAlign)-1);
+    std::memcpy(packet.data()+0x4c,&scaledH,4);
+    std::memcpy(packet.data()+0x50,&scaledW,4);
+    std::memcpy(packet.data()+0x54,&top,4);
+    std::memcpy(packet.data()+0x58,&left,4);
+    std::memcpy(packet.data()+0x5c,&ratioX,4);
+    std::memcpy(packet.data()+0x60,&ratioY,4);
+    return true;
+}
+// Darwin 1dfb00..1dfd48: exact format set, not the chroma classifier.
+// Disable both bypass flags only for these formats when either original scale>1.
+inline bool tglPrepareOwnedSfcBypass(std::array<uint8_t,0xb8>& packet,
+                                     uint32_t inputFormat,float scaleX,float scaleY) noexcept {
+    if (!std::isfinite(scaleX) || !std::isfinite(scaleY) || scaleX<0 || scaleY<0) return false;
+    const bool listed=(inputFormat>=0xd && inputFormat<=0x14) ||
+        (inputFormat>=0x17 && inputFormat<=0x19) || inputFormat==0x1b ||
+        inputFormat==0x1c || inputFormat==0x1e ||
+        (inputFormat>=0x20 && inputFormat<=0x2c) || inputFormat==0x52 ||
+        inputFormat==0x53 || inputFormat==uint32_t(-4) ||
+        inputFormat==uint32_t(-6) || inputFormat==uint32_t(-7);
+    const uint8_t bypass=!(listed && (scaleX>1.0f || scaleY>1.0f));
+    packet[0x64]=bypass; packet[0x65]=bypass;
+    return true;
+}
+// Darwin 1dfd48..1dff21; rotation mapper 1dd080 table at 1dd0f8.
+// Signed native rotation comparisons and conditional no-write at +70 preserved.
+inline void tglPrepareOwnedSfcFilterRotation(std::array<uint8_t,0xb8>& packet,
+    uint32_t inputFormat,uint32_t rotation,uint8_t scaling,uint8_t forceAvs) noexcept {
+    const bool rgb=(inputFormat>=1 && inputFormat<=7) ||
+        (inputFormat>=0xa && inputFormat<=0xc) || inputFormat==0x50 ||
+        inputFormat==0x51 || inputFormat==0x55 || inputFormat==0x5a ||
+        inputFormat==uint32_t(-8) || inputFormat==uint32_t(-9);
+    packet[0x66]=rgb && (packet[0x6a]&1);
+    packet[0x69]=(scaling&1)?1:(forceAvs&1);
+    constexpr std::array<uint32_t,8> mapping{{0,1,2,3,4,5,3,1}};
+    const uint32_t mapped=rotation<8?mapping[rotation]:0;
+    uint32_t mode=0,mirror=0;
+    if (rotation<=3 || rotation>=0x80000000u) {
+        mode=mapped; packet[0x74]=0;
+    } else {
+        if (rotation<=5) mirror=mapped-4;
+        else { mirror=4; mode=mapped; }
+        packet[0x74]=1;
+        std::memcpy(packet.data()+0x70,&mirror,4);
+    }
+    std::memcpy(packet.data()+0x6c,&mode,4);
+}
+// Darwin 1dffc3..1e0331. Converted sample is owned CPU data from the
+// authenticated CSC producer; alpha is the original (unconverted) sample byte.
+// Fill's YUV list additionally includes 15, unlike the bypass predicate.
+inline void tglPrepareOwnedSfcFill(std::array<uint8_t,0xb8>& packet,bool enabled,
+    uint32_t outputFormat,const std::array<uint8_t,4>& converted,uint8_t originalAlpha) noexcept {
+    if (!enabled) return;
+    const bool yuv=(outputFormat>=0xd && outputFormat<=0x15) ||
+        (outputFormat>=0x17 && outputFormat<=0x19) || outputFormat==0x1b ||
+        outputFormat==0x1c || outputFormat==0x1e ||
+        (outputFormat>=0x20 && outputFormat<=0x2c) || outputFormat==0x52 ||
+        outputFormat==0x53 || outputFormat==uint32_t(-4) ||
+        outputFormat==uint32_t(-6) || outputFormat==uint32_t(-7);
+    const bool direct=outputFormat==1 || outputFormat==2 || outputFormat==0x50;
+    const std::array<uint8_t,3> channels=yuv ?
+        std::array<uint8_t,3>{{converted[1],converted[0],converted[2]}} : direct ?
+        std::array<uint8_t,3>{{converted[0],converted[1],converted[2]}} :
+        std::array<uint8_t,3>{{converted[2],converted[1],converted[0]}};
+    packet[0x75]=1;
+    for (size_t i=0;i<3;++i) {
+        const float value=float(channels[i])/255.0f;
+        std::memcpy(packet.data()+0x78+i*4,&value,4);
+    }
+    const float alpha=float(originalAlpha)/255.0f;
+    std::memcpy(packet.data()+0x84,&alpha,4);
+}
+// Owned counterpart of 1dff61..1dffc3 cache and fill output. Converter binds
+// the authenticated native CSC ABI; false is fail-closed rather than cached.
+class TglOwnedSfcFillCache {
+    bool valid=false;
+    std::array<uint8_t,4> original{},converted{};
+    uint32_t sourceSpace=0,targetSpace=0;
+public:
+    void reset() noexcept { valid=false; original.fill(0); converted.fill(0); sourceSpace=targetSpace=0; }
+    template<class Convert>
+    bool prepare(std::array<uint8_t,0xb8>& packet,bool enabled,uint32_t outputFormat,
+        const std::array<uint8_t,4>& sample,uint32_t source,uint32_t target,
+        Convert convert) noexcept {
+        static_assert(noexcept(convert(std::declval<std::array<uint8_t,4>&>(),sample,source,target)),
+                      "CSC converter must report failure without exceptions");
+        if (!enabled) return true;
+        auto result=converted;
+        const bool changed=!valid || original!=sample || sourceSpace!=source || targetSpace!=target;
+        if (changed && !convert(result,sample,source,target)) return false;
+        tglPrepareOwnedSfcFill(packet,true,outputFormat,result,sample[3]);
+        if (changed) {
+            original=sample; converted=result; sourceSpace=source; targetSpace=target; valid=true;
+        }
+        return true;
+    }
+};
+// ICL +50 (1ddc70..1dde0e), after caller's float-to-integer conversion.
+// Surface dc/d8 are height/width; rect 5c/58 are bottom/right, not extents.
+// Native doubles all four for field input, clamps to max(bottom,16) /
+// max(right,64), then aligns UP using SFC interface words +1a/+18.
+// Reject malformed alignment/overflow instead of publishing wrapped geometry.
+inline bool tglAdjustOwnedSfcFrame(uint32_t surfaceHeight,uint32_t surfaceWidth,
+    uint32_t bottom,uint32_t right,bool fieldInput,
+    uint16_t heightAlignment,uint16_t widthAlignment,
+    uint32_t& height,uint32_t& width) noexcept {
+    auto valid=[](uint32_t n) { return n && !(n&(n-1)); };
+    if (!valid(heightAlignment) || !valid(widthAlignment)) return false;
+    if (fieldInput) {
+        for (auto n : {surfaceHeight,surfaceWidth,bottom,right})
+            if (n>UINT32_MAX/2) return false;
+        surfaceHeight*=2; surfaceWidth*=2; bottom*=2; right*=2;
+    }
+    uint32_t h=std::min(surfaceHeight,std::max(bottom,16u));
+    uint32_t w=std::min(surfaceWidth,std::max(right,64u));
+    if (h>UINT32_MAX-(heightAlignment-1u) ||
+        w>UINT32_MAX-(widthAlignment-1u)) return false;
+    height=(h+heightAlignment-1u)&~(heightAlignment-1u);
+    width=(w+widthAlignment-1u)&~(widthAlignment-1u);
+    return true;
+}
+
+// Native 1ddcda/1ddce7 convert float endpoints to int64 then retain low DWORD.
+// Owned geometry admits only finite, nonnegative DWORD-domain endpoints; this
+// avoids native indefinite/negative-wrap results without changing valid truncation.
+inline bool tglAdjustOwnedSfcFloatFrame(uint32_t surfaceHeight,uint32_t surfaceWidth,
+    float bottom,float right,bool fieldInput,
+    uint16_t heightAlignment,uint16_t widthAlignment,
+    uint32_t& height,uint32_t& width) noexcept {
+    auto valid=[](float value) {
+        return std::isfinite(value) && value>=0 && double(value)<=double(UINT32_MAX);
+    };
+    if (!valid(bottom) || !valid(right)) return false;
+    return tglAdjustOwnedSfcFrame(surfaceHeight,surfaceWidth,
+        static_cast<uint32_t>(bottom),static_cast<uint32_t>(right),fieldInput,
+        heightAlignment,widthAlignment,height,width);
+}
+
+// Exact ICL base/Gen12 SFC +c0 slot is 1df3c0: a single DWORD zero
+// at packet+4, not a no-op and not a GPU command producer.
+inline void tglPrepareOwnedSfcPlatformField(std::array<uint8_t,0xb8>& packet) noexcept {
+    const uint32_t zero=0;
+    std::memcpy(packet.data()+4,&zero,4);
+}
+
+// Darwin 1df6ba..1df72b: scalar fields after the platform +c0 producer.
+// frameWidth/Height are outputs of the separately authenticated +50 adjuster;
+// this function neither guesses that geometry nor installs an ICL callback.
+inline void tglPrepareOwnedSfcFrameFields(std::array<uint8_t,0xb8>& packet,
+    uint32_t outputFormat,uint32_t inputFrameMode,
+    uint32_t frameWidth,uint32_t frameHeight) noexcept {
+    const float zero=0.0f;
+    const uint32_t frameMode=inputFrameMode==1 ? 2u : 1u;
+    std::memcpy(packet.data()+0x2c,&outputFormat,4);
+    std::memcpy(packet.data()+0x10,&zero,4);
+    std::memcpy(packet.data()+0x14,&zero,4);
+    std::memcpy(packet.data()+0x38,&frameMode,4);
+    std::memcpy(packet.data()+0x30,&frameWidth,4);
+    std::memcpy(packet.data()+0x34,&frameHeight,4);
+}
+
+// Darwin 1e0339..1e049f, alpha table 1e05f4: mode0 constant,
+// mode2 background; modes1/3/unknown opaque. Fill alpha is produced upstream.
+inline void tglPrepareOwnedSfcAlpha(std::array<uint8_t,0xb8>& packet,
+    uint32_t outputFormat,bool hasAlpha,uint32_t alphaMode,float constantAlpha,
+    bool fillEnabled,uint8_t csc,uint32_t inputColorSpace) noexcept {
+    float alpha=1.0f;
+    if (hasAlpha && (outputFormat==1 || outputFormat==3 || outputFormat==0x15)) {
+        if (alphaMode==0) {
+            alpha=constantAlpha;
+            std::memcpy(packet.data()+0x84,&alpha,4);
+        } else if (alphaMode==2) {
+            if (fillEnabled) std::memcpy(&alpha,packet.data()+0x84,4);
+        } else std::memcpy(packet.data()+0x84,&alpha,4);
+    }
+    std::memcpy(packet.data()+0xc,&alpha,4);
+    packet[0x88]=packet[0x89]=csc&1;
+    packet[0x8a]=inputColorSpace==1 || inputColorSpace==2;
+}
 // ICL 1e0ca0..1e0dcb setup order. Producers operate on owned state;
 // caller binds the closed argument ABI, never an ICL object to TGL code.
 // Flags are native renderData+1/+2/+3 and base+9b8, low bit only.
@@ -2152,6 +2444,33 @@ public:
         return owners.storage(i);
     }
 };
+
+// Darwin 1e04de..1e05de tail. Borrowed resources outlive the submitted packet.
+// Query is the authenticated surface-info producer (native 57ba0 equivalent).
+// It may update owned output metadata, but failed queries never publish a packet.
+template<class Query>
+int tglBindOwnedSfcResources(std::array<uint8_t,0xb8>& packet,
+    TglOwnedSurfaceStorage& output,const std::array<uint8_t,0x148>& avs,
+    const std::array<uint8_t,0x148>& ief,Query query) noexcept {
+    static_assert(noexcept(query(output)),"surface query must report native status");
+    uint32_t avsType=0,iefType=0;
+    std::memcpy(&avsType,avs.data()+0x14,4);
+    std::memcpy(&iefType,ief.data()+0x14,4);
+    if (avsType || iefType || !tglNativeBackingPresent(avs) ||
+        !tglNativeBackingPresent(ief) || !tglNativeBackingPresent(output.resource)) return 5;
+    const int status=query(output);
+    if (status) return status;
+    if (!tglNativeBackingPresent(output.resource)) return 5;
+    auto candidate=packet;
+    const std::array<uint64_t,3> pointers{{reinterpret_cast<uintptr_t>(output.resource.data()),
+        reinterpret_cast<uintptr_t>(avs.data()),reinterpret_cast<uintptr_t>(ief.data())}};
+    for (size_t i=0;i<3;++i) std::memcpy(candidate.data()+0x90+i*8,&pointers[i],8);
+    std::memcpy(candidate.data()+0xa8,output.prefix.data()+0xf0,4);
+    const std::array<size_t,4> sources{{0x104,0x108,0x114,0x118}};
+    for (size_t i=0;i<4;++i) std::memcpy(candidate.data()+0xac+i*2,output.prefix.data()+sources[i],2);
+    packet=candidate;
+    return 0;
+}
 
 // Gen12 statistics lifecycle, not a native fill ABI implementation. Backend
 // must allocate a buffer; Fill must validate and initialize actual backing.

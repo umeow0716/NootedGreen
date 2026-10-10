@@ -2241,7 +2241,403 @@ static void testSfcOutputChroma() {
     }
 }
 
+static void testSfcAlignedGeometry() {
+    const std::array<size_t,4> offsets{{0x24,0x28,0x44,0x48}};
+    for (uint16_t unit:{1,2,4,8,16,64,32768}) {
+        for (uint32_t value:{0u,1u,1079u,1921u,0xffff0000u}) {
+            std::array<uint8_t,0xb8> packet; packet.fill(0xa5);
+            assert(tglPrepareOwnedSfcAlignedGeometry(packet,value,value,value,value,
+                                                     unit,unit,unit,unit));
+            const uint32_t expected=uint32_t(((uint64_t(value)+unit-1)/unit)*unit);
+            for (auto offset:offsets) {
+                uint32_t actual=0; std::memcpy(&actual,packet.data()+offset,4);
+                assert(actual==expected);
+            }
+            for (size_t i=0;i<packet.size();++i) {
+                bool field=false;
+                for (auto offset:offsets) field|=i>=offset && i<offset+4;
+                if (!field) assert(packet[i]==0xa5);
+            }
+        }
+    }
+    std::array<uint8_t,0xb8> packet; packet.fill(0x5a);
+    const auto before=packet;
+    for (uint16_t invalid:{0,3,65535}) {
+        assert(!tglPrepareOwnedSfcAlignedGeometry(packet,1080,1920,0,0,2,2,2,invalid));
+        assert(packet==before);
+    }
+    assert(!tglPrepareOwnedSfcAlignedGeometry(packet,1080,1920,0,UINT32_MAX,2,2,2,2));
+    assert(packet==before);
+    assert(tglPrepareOwnedSfcAlignedGeometry(packet,1080,1920,0,UINT32_MAX,2,2,2,1));
+}
+
+static void testSfcRegions() {
+    std::array<uint8_t,0xb8> packet; packet.fill(0xa5);
+    assert(tglPrepareOwnedSfcRegions(packet,1081,1921,0.75f,0.25f,
+                                    1080,1920,0.5f,0.5f,2,2,2,2));
+    const std::array<size_t,4> offsets{{0x3c,0x40,0x4c,0x50}};
+    const std::array<uint32_t,4> expected{{1080,1920,540,960}};
+    for (size_t i=0;i<4;++i) {
+        uint32_t value=0; std::memcpy(&value,packet.data()+offsets[i],4);
+        assert(value==expected[i]);
+    }
+    for (size_t i=0;i<packet.size();++i) {
+        bool field=false;
+        for (auto offset:offsets) field|=i>=offset && i<offset+4;
+        if (!field) assert(packet[i]==0xa5);
+    }
+    const auto before=packet;
+    for (float invalid:{-1.0f,std::numeric_limits<float>::infinity(),
+                        std::numeric_limits<float>::quiet_NaN(),1.0e30f}) {
+        assert(!tglPrepareOwnedSfcRegions(packet,1080,1920,0,0,1080,1920,
+                                         invalid,1,2,2,2,2));
+        assert(packet==before);
+    }
+    assert(!tglPrepareOwnedSfcRegions(packet,10,10,11,0,10,10,1,1,2,2,2,2));
+    assert(packet==before);
+    assert(!tglPrepareOwnedSfcRegions(packet,10,10,0,0,10,10,1,1,2,2,2,3));
+    assert(packet==before);
+    assert(tglPrepareOwnedSfcRegions(packet,7,9,0,0,7,9,0.5f,0.5f,1,1,2,2));
+    uint32_t h=0,w=0; std::memcpy(&h,packet.data()+0x4c,4); std::memcpy(&w,packet.data()+0x50,4);
+    assert(h==4 && w==6);
+}
+
+static void testSfcRotationGeometry() {
+    for (uint32_t rotation:{0u,1u,2u,3u,4u,5u,6u,7u,UINT32_MAX}) {
+        std::array<uint8_t,0xb8> packet; packet.fill(0xa5);
+        auto put=[&](size_t offset,uint32_t value) { std::memcpy(packet.data()+offset,&value,4); };
+        auto get=[&](size_t offset) { uint32_t value; std::memcpy(&value,packet.data()+offset,4); return value; };
+        put(0x24,1080); put(0x28,1920); put(0x3c,540); put(0x40,960);
+        put(0x4c,1500); put(0x50,2000);
+        const auto before=packet;
+        assert(tglPrepareOwnedSfcRotationGeometry(packet,rotation,7,13,2,4));
+        const bool unrotated=rotation==0 || rotation==2 || rotation==4 || rotation==5;
+        assert(get(0x4c)==(unrotated?1080u:1500u));
+        assert(get(0x50)==(unrotated?1920u:1080u));
+        assert(get(0x54)==6 && get(0x58)==12);
+        float x=0,y=0; std::memcpy(&x,packet.data()+0x5c,4); std::memcpy(&y,packet.data()+0x60,4);
+        assert(x==float(get(0x50))/960.0f && y==float(get(0x4c))/540.0f);
+        for (size_t i=0;i<packet.size();++i)
+            if (i<0x4c || i>=0x64) assert(packet[i]==before[i]);
+        const auto valid=packet;
+        assert(!tglPrepareOwnedSfcRotationGeometry(packet,rotation,0,0,2,3) && packet==valid);
+        put(0x40,0); const auto zero=packet;
+        assert(!tglPrepareOwnedSfcRotationGeometry(packet,rotation,0,0,2,2) && packet==zero);
+    }
+}
+
+static void testSfcBypass() {
+    const std::array<uint32_t,32> listed{{uint32_t(-6),0x19,0x1b,0x1c,0x1e,0x53,0x52,
+        uint32_t(-4),0x20,0x21,0x22,0x23,0x29,0x2a,0x2b,0x2c,0x24,0x25,0x27,
+        0x28,0x26,uint32_t(-7),0xd,0xe,0xf,0x10,0x11,0x13,0x12,0x17,0x14,0x18}};
+    for (uint32_t index=0;index<99;++index) {
+        const uint32_t format=index<92?index:uint32_t(-int(index-91));
+        bool member=false; for (auto value:listed) member|=value==format;
+        for (float x:{0.5f,1.0f,1.0001f,2.0f}) for (float y:{0.5f,1.0f,2.0f}) {
+            std::array<uint8_t,0xb8> packet; packet.fill(0xa5);
+            assert(tglPrepareOwnedSfcBypass(packet,format,x,y));
+            const uint8_t expected=!(member && (x>1 || y>1));
+            assert(packet[0x64]==expected && packet[0x65]==expected);
+            for (size_t i=0;i<packet.size();++i)
+                if (i!=0x64 && i!=0x65) assert(packet[i]==0xa5);
+        }
+    }
+    std::array<uint8_t,0xb8> packet; packet.fill(0xa5); const auto before=packet;
+    for (float invalid:{-1.0f,std::numeric_limits<float>::infinity(),
+                        std::numeric_limits<float>::quiet_NaN()}) {
+        assert(!tglPrepareOwnedSfcBypass(packet,0x19,invalid,1) && packet==before);
+        assert(!tglPrepareOwnedSfcBypass(packet,0x19,1,invalid) && packet==before);
+    }
+}
+
+static void testSfcFilterRotation() {
+    const std::array<uint32_t,16> rgb{{5,6,1,2,3,4,0x50,0x51,uint32_t(-8),7,
+                                    0xa,0xb,0xc,uint32_t(-9),0x55,0x5a}};
+    const std::array<uint32_t,8> modes{{0,1,2,3,0,0,3,1}};
+    for (uint32_t format=0;format<101;++format) {
+        const uint32_t nativeFormat=format<92?format:uint32_t(-int(format-91));
+        bool member=false; for (auto value:rgb) member|=value==nativeFormat;
+        for (uint32_t rotation=0;rotation<8;++rotation) for (unsigned flags=0;flags<8;++flags) {
+            std::array<uint8_t,0xb8> packet; packet.fill(0xa5);
+            packet[0x6a]=(flags&1)?0xff:0xfe;
+            const auto before=packet;
+            tglPrepareOwnedSfcFilterRotation(packet,nativeFormat,rotation,
+                                             (flags&2)?0xff:0xfe,(flags&4)?1:0);
+            uint32_t mode=0,mirror=0;
+            std::memcpy(&mode,packet.data()+0x6c,4); std::memcpy(&mirror,packet.data()+0x70,4);
+            assert(packet[0x66]==uint8_t(member && (flags&1)));
+            assert(packet[0x69]==uint8_t((flags&6)!=0));
+            assert(mode==modes[rotation] && packet[0x74]==uint8_t(rotation>3));
+            assert(mirror==(rotation<=3?0xa5a5a5a5u:rotation<=5?rotation-4:4));
+            for (size_t i=0;i<packet.size();++i)
+                if (i!=0x66 && i!=0x69 && !(i>=0x6c && i<=0x74)) assert(packet[i]==before[i]);
+        }
+    }
+    std::array<uint8_t,0xb8> packet{};
+    tglPrepareOwnedSfcFilterRotation(packet,1,UINT32_MAX,0,0);
+    assert(packet[0x74]==0 && packet[0x6c]==0);
+}
+
+static void testSfcAlpha() {
+    for (uint32_t format:{1u,3u,0x15u,0x19u,UINT32_MAX})
+    for (uint32_t mode:{0u,1u,2u,3u,UINT32_MAX})
+    for (unsigned flags=0;flags<8;++flags) for (uint32_t color=0;color<4;++color) {
+        std::array<uint8_t,0xb8> packet; packet.fill(0xa5);
+        const float background=0.25f; std::memcpy(packet.data()+0x84,&background,4);
+        const auto before=packet;
+        tglPrepareOwnedSfcAlpha(packet,format,flags&1,mode,0.75f,flags&2,
+                               (flags&4)?0xff:0xfe,color);
+        const bool applicable=(flags&1) && (format==1 || format==3 || format==0x15);
+        const float expected=applicable && mode==0?0.75f:
+            applicable && mode==2 && (flags&2)?background:1.0f;
+        const float expectedBackground=!applicable || mode==2?background:mode==0?0.75f:1.0f;
+        float alpha=0,fill=0; std::memcpy(&alpha,packet.data()+0xc,4);
+        std::memcpy(&fill,packet.data()+0x84,4);
+        assert(alpha==expected && fill==expectedBackground);
+        assert(packet[0x88]==uint8_t(bool(flags&4)) && packet[0x89]==packet[0x88]);
+        assert(packet[0x8a]==uint8_t(color==1 || color==2));
+        for (size_t i=0;i<packet.size();++i)
+            if (!(i>=0xc && i<0x10) && !(i>=0x84 && i<=0x8a)) assert(packet[i]==before[i]);
+    }
+}
+
+static void testSfcResourceBinding() {
+    std::array<uint8_t,0xb8> packet; packet.fill(0xa5);
+    const auto before=packet;
+    TglOwnedSurfaceStorage output;
+    std::array<uint8_t,0x148> avs{},ief{};
+    const uint64_t handle=1;
+    for (auto* storage:{&output.resource,&avs,&ief}) std::memcpy(storage->data()+0x20,&handle,8);
+    unsigned calls=0;
+    auto query=[&](TglOwnedSurfaceStorage& surface) noexcept {
+        assert(&surface==&output); ++calls;
+        const uint32_t pitch=7680; std::memcpy(surface.prefix.data()+0xf0,&pitch,4);
+        const std::array<size_t,4> offsets{{0x104,0x108,0x114,0x118}};
+        for (size_t i=0;i<4;++i) {
+            const uint32_t value=0x12340000u+uint32_t(i+1);
+            std::memcpy(surface.prefix.data()+offsets[i],&value,4);
+        }
+        return 0;
+    };
+    assert(tglBindOwnedSfcResources(packet,output,avs,ief,query)==0 && calls==1);
+    const std::array<uintptr_t,3> expected{{reinterpret_cast<uintptr_t>(output.resource.data()),
+        reinterpret_cast<uintptr_t>(avs.data()),reinterpret_cast<uintptr_t>(ief.data())}};
+    for (size_t i=0;i<3;++i) {
+        uint64_t p=0; std::memcpy(&p,packet.data()+0x90+i*8,8); assert(p==expected[i]);
+    }
+    uint32_t pitch=0; std::memcpy(&pitch,packet.data()+0xa8,4); assert(pitch==7680);
+    for (size_t i=0;i<4;++i) {
+        uint16_t value=0; std::memcpy(&value,packet.data()+0xac+i*2,2); assert(value==i+1);
+    }
+    for (size_t i=0;i<packet.size();++i) if (i<0x90 || i>=0xb4) assert(packet[i]==before[i]);
+    const auto valid=packet;
+    auto failed=[&](TglOwnedSurfaceStorage&) noexcept { ++calls; return 77; };
+    assert(tglBindOwnedSfcResources(packet,output,avs,ief,failed)==77 && packet==valid && calls==2);
+    ief.fill(0);
+    assert(tglBindOwnedSfcResources(packet,output,avs,ief,query)==5 && packet==valid && calls==2);
+    std::memcpy(ief.data()+0x20,&handle,8);
+    auto revoked=[](TglOwnedSurfaceStorage& surface) noexcept { surface.resource.fill(0); return 0; };
+    assert(tglBindOwnedSfcResources(packet,output,avs,ief,revoked)==5 && packet==valid);
+}
+
+static void testSfcFill() {
+    const std::array<uint8_t,4> converted{{17,83,211,0}};
+    for (uint32_t format:{0x19u,0x15u,1u,2u,0x50u,3u,UINT32_MAX}) {
+        std::array<uint8_t,0xb8> packet; packet.fill(0xa5); const auto before=packet;
+        tglPrepareOwnedSfcFill(packet,false,format,converted,127);
+        assert(packet==before);
+        tglPrepareOwnedSfcFill(packet,true,format,converted,127);
+        const std::array<uint8_t,3> expected=(format==0x19 || format==0x15)?
+            std::array<uint8_t,3>{{83,17,211}}:(format==1 || format==2 || format==0x50)?
+            std::array<uint8_t,3>{{17,83,211}}:std::array<uint8_t,3>{{211,83,17}};
+        assert(packet[0x75]==1);
+        for (size_t i=0;i<3;++i) {
+            float value=0; std::memcpy(&value,packet.data()+0x78+i*4,4);
+            assert(value==float(expected[i])/255.0f);
+        }
+        float alpha=0; std::memcpy(&alpha,packet.data()+0x84,4);
+        assert(alpha==127.0f/255.0f);
+        for (size_t i=0;i<packet.size();++i)
+            if (i!=0x75 && !(i>=0x78 && i<0x88)) assert(packet[i]==before[i]);
+        tglPrepareOwnedSfcAlpha(packet,1,true,2,0,true,0,0);
+        float selected=0; std::memcpy(&selected,packet.data()+0xc,4);
+        assert(selected==alpha);
+    }
+}
+
+static void testSfcFillCache() {
+    TglOwnedSfcFillCache cache;
+    std::array<uint8_t,0xb8> packet{};
+    std::array<uint8_t,4> sample{{17,83,211,127}};
+    unsigned calls=0; bool allowed=true;
+    auto convert=[&](std::array<uint8_t,4>& out,const std::array<uint8_t,4>& in,
+                     uint32_t source,uint32_t target) noexcept {
+        ++calls; out={{uint8_t(in[0]+source),in[1],uint8_t(in[2]-target),0}};
+        return allowed;
+    };
+    const auto empty=packet;
+    assert(cache.prepare(packet,false,0x19,sample,1,2,convert) && packet==empty && calls==0);
+    assert(cache.prepare(packet,true,0x19,sample,1,2,convert) && calls==1);
+    float value=0; std::memcpy(&value,packet.data()+0x7c,4); assert(value==18.0f/255.0f);
+    std::memcpy(&value,packet.data()+0x84,4); assert(value==127.0f/255.0f);
+    assert(cache.prepare(packet,true,1,sample,1,2,convert) && calls==1);
+    std::memcpy(&value,packet.data()+0x78,4); assert(value==18.0f/255.0f);
+    const auto valid=packet;
+    allowed=false;
+    assert(!cache.prepare(packet,true,1,sample,2,2,convert) && calls==2 && packet==valid);
+    assert(cache.prepare(packet,true,1,sample,1,2,convert) && calls==2);
+    allowed=true;
+    assert(cache.prepare(packet,true,1,sample,2,2,convert) && calls==3);
+    assert(cache.prepare(packet,true,1,sample,2,3,convert) && calls==4);
+    ++sample[3];
+    assert(cache.prepare(packet,true,1,sample,2,3,convert) && calls==5);
+    cache.reset();
+    assert(cache.prepare(packet,true,1,sample,2,3,convert) && calls==6);
+}
+
+static void testFillCscBinding() {
+    TglFillCscBinding binding;
+    constexpr uintptr_t base = 0x100000000;
+    const std::array<uint8_t,16> prologue{0x55,0x48,0x89,0xe5,0x48,0x81,0xec,0xb0,
+        0,0,0,0x48,0x8d,0x45,0xc0,0x45};
+    const std::array<uint8_t,5> matrix{0xe8,0x4f,0x6f,0,0};
+    const std::array<uint8_t,5> convert{0xe8,0xf7,0xf6,0xff,0xff};
+    uintptr_t corrupt = 0; bool identity = true, rx = true, readable = true;
+    auto read = [&](uintptr_t p, void* out, size_t n) {
+        if (!readable) return false;
+        if (p == base+0x4d970 && n == prologue.size()) std::memcpy(out,prologue.data(),n);
+        else if (p == base+0x4d9fc && n == matrix.size()) std::memcpy(out,matrix.data(),n);
+        else if (p == base+0x4da74 && n == convert.size()) std::memcpy(out,convert.data(),n);
+        else return false;
+        if (p == corrupt) static_cast<uint8_t*>(out)[0] ^= 1;
+        return true;
+    };
+    auto qualify = [&](uintptr_t p) { return identity && p == base; };
+    auto executable = [&](uintptr_t,size_t) { return rx; };
+    auto resolve = [&] { return binding.resolve(base,read,qualify,executable); };
+    assert(resolve() && binding.entry == base+0x4d970);
+    for (auto offset : {0x4d970,0x4d9fc,0x4da74}) {
+        corrupt = base+offset; assert(!resolve() && !binding.entry && !binding.image);
+    }
+    corrupt = 0; identity = false; assert(!resolve()); identity = true;
+    rx = false; assert(!resolve()); rx = true;
+    readable = false; assert(!resolve()); readable = true;
+    assert(!binding.resolve(UINTPTR_MAX,read,qualify,executable));
+    assert(resolve());
+    std::array<uint8_t,4> output{{9,8,7,6}}, source{{1,2,3,4}};
+    const auto original = output;
+    unsigned calls = 0; bool nativeResult = false;
+    auto invoke = [&](uintptr_t entry,uint8_t* out,const uint8_t* in,
+                      uint32_t sourceCs,uint32_t targetCs) {
+        assert(entry == base+0x4d970 && sourceCs == 3 && targetCs == 7);
+        assert(std::memcmp(in,source.data(),4) == 0);
+        ++calls; std::memcpy(out,in,4); return nativeResult;
+    };
+    auto convertFill = [&] {
+        return tglConvertNativeFill(binding,output,source,3,7,read,qualify,executable,invoke);
+    };
+    assert(!convertFill() && output == original && calls == 1);
+    nativeResult = true;
+    assert(convertFill() && output == source && calls == 2);
+    output = original;
+    corrupt = base+0x4da74;
+    assert(!convertFill() && output == original && calls == 2); corrupt = 0;
+    ++binding.entry;
+    assert(!convertFill() && output == original && calls == 2); --binding.entry;
+    identity = false;
+    assert(!convertFill() && output == original && calls == 2); identity = true;
+    // Aliased input/output remains safe: publication follows native completion.
+    assert(tglConvertNativeFill(binding,source,source,3,7,read,qualify,executable,invoke));
+    assert(calls == 3);
+    TglOwnedSfcFillCache cache;
+    std::array<uint8_t,0xb8> packet{};
+    auto nativeConvert = [&](std::array<uint8_t,4>& out,
+                             const std::array<uint8_t,4>& in,
+                             uint32_t from,uint32_t to) noexcept {
+        return tglConvertNativeFill(binding,out,in,from,to,
+                                    read,qualify,executable,invoke);
+    };
+    nativeResult = false;
+    const auto empty = packet;
+    assert(!cache.prepare(packet,true,1,source,3,7,nativeConvert));
+    assert(packet == empty && calls == 4);
+    nativeResult = true;
+    assert(cache.prepare(packet,true,1,source,3,7,nativeConvert) && calls == 5);
+    const auto published = packet;
+    assert(cache.prepare(packet,true,1,source,3,7,nativeConvert) && calls == 5);
+    // A reset forces revalidation; revoked image admission must not call native.
+    cache.reset(); identity = false;
+    assert(!cache.prepare(packet,true,1,source,3,7,nativeConvert));
+    assert(packet == published && calls == 5);
+    identity = true;
+    assert(cache.prepare(packet,true,1,source,3,7,nativeConvert) && calls == 6);
+}
+
+static void testSfcFrameFields() {
+    {
+        uint32_t h=999,w=888;
+        assert(tglAdjustOwnedSfcFrame(1080,1920,1079,1919,false,8,16,h,w));
+        assert(h==1080 && w==1920);
+        assert(tglAdjustOwnedSfcFrame(1080,1920,0,0,false,8,16,h,w));
+        assert(h==16 && w==64);
+        assert(tglAdjustOwnedSfcFrame(8,32,0,0,false,8,16,h,w));
+        assert(h==8 && w==32);
+        assert(tglAdjustOwnedSfcFrame(540,960,539,959,true,8,16,h,w));
+        assert(h==1080 && w==1920);
+        const auto oldH=h,oldW=w;
+        for (uint16_t alignment : {uint16_t(0),uint16_t(3),uint16_t(65535)}) {
+            assert(!tglAdjustOwnedSfcFrame(1080,1920,1080,1920,false,alignment,16,h,w));
+            assert(h==oldH && w==oldW);
+        }
+        assert(!tglAdjustOwnedSfcFrame(UINT32_MAX,1920,1080,1920,true,8,16,h,w));
+        assert(!tglAdjustOwnedSfcFrame(UINT32_MAX,1920,UINT32_MAX,1920,false,8,16,h,w));
+        assert(h==oldH && w==oldW);
+        assert(tglAdjustOwnedSfcFloatFrame(1080,1920,1079.9f,1919.9f,false,8,16,h,w));
+        assert(h==1080 && w==1920);
+        assert(tglAdjustOwnedSfcFloatFrame(540,960,539.9f,959.9f,true,8,16,h,w));
+        assert(h==1080 && w==1920);
+        for (float bad : {-1.0f,std::numeric_limits<float>::infinity(),
+                          std::numeric_limits<float>::quiet_NaN(),4294967296.0f}) {
+            assert(!tglAdjustOwnedSfcFloatFrame(1080,1920,bad,1919,false,8,16,h,w));
+            assert(!tglAdjustOwnedSfcFloatFrame(1080,1920,1079,bad,false,8,16,h,w));
+            assert(h==oldH && w==oldW);
+        }
+    }
+    {
+        std::array<uint8_t,0xb8> packet; packet.fill(0xa5);
+        auto expected=packet;
+        std::fill(expected.begin()+4,expected.begin()+8,0);
+        tglPrepareOwnedSfcPlatformField(packet);
+        assert(packet==expected);
+    }
+    for (uint32_t mode : {0u,1u,2u,UINT32_MAX}) {
+        std::array<uint8_t,0xb8> packet; packet.fill(0xa5);
+        auto expected=packet;
+        const uint32_t format=0x19,width=1920,height=1080;
+        const uint32_t frameMode=mode==1 ? 2u : 1u,zero=0;
+        for (size_t offset : {size_t(0x10),size_t(0x14)})
+            std::memcpy(expected.data()+offset,&zero,4);
+        std::memcpy(expected.data()+0x2c,&format,4);
+        std::memcpy(expected.data()+0x30,&width,4);
+        std::memcpy(expected.data()+0x34,&height,4);
+        std::memcpy(expected.data()+0x38,&frameMode,4);
+        tglPrepareOwnedSfcFrameFields(packet,format,mode,width,height);
+        assert(packet==expected);
+    }
+}
+
 int main() {
+    testSfcFrameFields();
+    testFillCscBinding();
+    testSfcFillCache();
+    testSfcFill();
+    testSfcResourceBinding();
+    testSfcAlpha();
+    testSfcFilterRotation();
+    testSfcBypass();
+    testSfcRotationGeometry();
+    testSfcRegions();
+    testSfcAlignedGeometry();
     testSfcOutputChroma();
     testSfcInputChroma();
     testSfcStateParameterOwnership();
