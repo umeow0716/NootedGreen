@@ -1000,6 +1000,47 @@ static void testVeboxPrefix() {
         assert(constructorCalls == 1 && status == 31);
     }
     {
+        static unsigned calls = 0;
+        auto registration = +[](void* os, const void* resource, uint32_t write, uint32_t read) {
+            assert(os == reinterpret_cast<void*>(1) && resource == reinterpret_cast<void*>(2));
+            assert(write == 0 && read == 1); ++calls; return 31;
+        };
+        assert(TglNativeRegistrationInvoker{}(reinterpret_cast<uintptr_t>(registration),1,
+                                              reinterpret_cast<void*>(2),false,true) == 31);
+        assert(calls == 1);
+        constexpr uintptr_t image = 0x100000, os = 0x3000;
+        uintptr_t target = image+0x645e0;
+        std::array<uint8_t,22> anchor{
+            0x55,0x48,0x89,0xe5,0x31,0xc0,0x48,0x89,0x7d,0xf8,0x48,
+            0x89,0x75,0xf0,0x89,0x55,0xec,0x89,0x4d,0xe8,0x5d,0xc3};
+        bool identity = true, rx = true, readable = true;
+        auto read = [&](uintptr_t p, void* out, size_t n) {
+            if (!readable) return false;
+            if (p == os+0x248 && n == 8) std::memcpy(out,&target,8);
+            else {
+                assert(p == image+0x645e0 && n == anchor.size());
+                std::memcpy(out,anchor.data(),n);
+            }
+            return true;
+        };
+        auto qualify = [&](uintptr_t p) { return identity && p == image; };
+        auto executable = [&](uintptr_t p, size_t n) {
+            assert(p == image+0x645e0 && n == anchor.size()); return rx;
+        };
+        TglNativeRegistrationBinding binding;
+        auto resolve = [&] { return binding.resolve(os,image,read,qualify,executable); };
+        assert(resolve() && binding.context == os && binding.entry == target);
+        for (auto& byte : anchor) {
+            byte ^= 1; assert(!resolve() && !binding.entry); byte ^= 1;
+        }
+        ++target; assert(!resolve()); --target;
+        identity = false; assert(!resolve()); identity = true;
+        rx = false; assert(!resolve()); rx = true;
+        readable = false; assert(!resolve()); readable = true;
+        assert(!binding.resolve(UINTPTR_MAX,image,read,qualify,executable));
+        assert(resolve());
+    }
+    {
         TglOwnedSurfaceStorage surface;
         std::array<uint8_t,0x48> descriptor{};
         static const void* expectedSurface;

@@ -1108,6 +1108,38 @@ inline int tglSurfaceBoundary(uint32_t format, uint32_t width, uint32_t height,
     return 0;
 }
 
+struct TglNativeRegistrationBinding {
+    uintptr_t context = 0, entry = 0;
+    template<class Read, class Qualify, class Executable>
+    bool resolve(uintptr_t os, uintptr_t image, Read read, Qualify qualify,
+                 Executable executable) {
+        *this = {};
+        if (!os || !image || os > UINTPTR_MAX-0x24f || image > UINTPTR_MAX-0x645f6 ||
+            !qualify(image)) return false;
+        uintptr_t native = 0;
+        constexpr std::array<uint8_t,22> expected{
+            0x55,0x48,0x89,0xe5,0x31,0xc0,0x48,0x89,0x7d,0xf8,0x48,
+            0x89,0x75,0xf0,0x89,0x55,0xec,0x89,0x4d,0xe8,0x5d,0xc3};
+        std::array<uint8_t,22> actual{};
+        if (!read(os+0x248,&native,sizeof(native)) || native != image+0x645e0 ||
+            !executable(native,expected.size()) ||
+            !read(native,actual.data(),actual.size()) || actual != expected) return false;
+        context = os; entry = native;
+        return true;
+    }
+};
+
+// Call native even though the exact TGL implementation is a success stub.
+// Registration does not establish resource backing or GPU completion.
+struct TglNativeRegistrationInvoker {
+    int operator()(uintptr_t entry, uintptr_t os, const void* resource,
+                   bool write, bool read) const noexcept {
+        using Register = int (*)(void*,const void*,uint32_t,uint32_t);
+        return reinterpret_cast<Register>(entry)(reinterpret_cast<void*>(os),resource,
+                                                 write ? 1u : 0u,read ? 1u : 0u);
+    }
+};
+
 struct TglNativeResourceBinding {
     uintptr_t context = 0, allocate = 0, release = 0;
     // 132ec0..132ed6: renderer stores RenderHal at +2cc0 and borrows
