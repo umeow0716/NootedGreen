@@ -6584,6 +6584,41 @@ public:
         return invoke(entry_,context,index);
     }
 };
+// OS2d0/64df0 calls a9dc(context,2) only after command/sideband bounds demand
+// a flush. a9dc finalizes both buffers, then a893 sets class-used lengths and
+// calls SubmitDataBuffers(context8,flags50,&flags54,&error). Native a893
+// rejects error/flag20000000 and refreshes buffer resources on success. Do
+// not replace this with FinishFenceEvent or call it twice per native flush.
+// Caller owns the native context, writable command/sideband and all resource
+// leases through this call AND subsequent independently verified completion.
+struct TglNativeVideoBufferFlushInvoker {
+    uint32_t operator()(uintptr_t entry,uintptr_t context,uint8_t kind) const noexcept {
+        using Flush=uint32_t(*)(void*,uint8_t);
+        return reinterpret_cast<Flush>(entry)(reinterpret_cast<void*>(context),kind);
+    }
+};
+class TglNativeVideoBufferFlushBinding {
+    uintptr_t entry_=0;
+public:
+    template<class Read,class Qualify,class Executable>
+    bool resolve(uintptr_t image,Read read,Qualify qualify,Executable executable) noexcept {
+        entry_=0;
+        constexpr std::array<uint8_t,21> expected{
+            0x55,0x48,0x89,0xe5,0x41,0x56,0x53,0x48,0x89,0xfb,0x48,0x8b,0x47,0x20,
+            0x48,0x85,0xc0,0x74,0x5c,0xa8,0x07};
+        std::array<uint8_t,21> actual{};
+        if(!image || image>UINTPTR_MAX-0xa9f1 || !qualify(image) ||
+            !executable(image+0xa9dc,expected.size()) ||
+            !read(image+0xa9dc,actual.data(),actual.size()) || actual!=expected) return false;
+        entry_=image+0xa9dc;return true;
+    }
+    template<class Invoke=TglNativeVideoBufferFlushInvoker>
+    uint32_t flush(uintptr_t context,Invoke invoke=Invoke{}) const noexcept {
+        static_assert(noexcept(invoke(uintptr_t{},uintptr_t{},uint8_t{})),"native flush result ABI");
+        if(!entry_ || !context || context>UINTPTR_MAX-0xe4) return 5;
+        return invoke(entry_,context,2);
+    }
+};
 struct TglVeboxCompletionWriteSnapshot {
     uintptr_t resource=0,tagLocation=0;
     uint32_t offset=0,value=0;

@@ -1493,6 +1493,39 @@ static void testVeboxHardwareBinding() {
             assert(!binding.resolve(entry,[](uintptr_t,void*,size_t){return false;},qualified,executable));
             assert(!binding.resolve(UINTPTR_MAX,read,qualified,executable));
         }
+        {
+            constexpr uintptr_t image=0x100000,entry=image+0xa9dc,context=0x2000;
+            std::array<uint8_t,21> code{
+                0x55,0x48,0x89,0xe5,0x41,0x56,0x53,0x48,0x89,0xfb,0x48,0x8b,0x47,0x20,
+                0x48,0x85,0xc0,0x74,0x5c,0xa8,0x07};
+            auto read=[&](uintptr_t p,void* out,size_t n) noexcept {
+                if(p!=entry || n!=code.size()) return false;
+                std::memcpy(out,code.data(),n);return true;
+            };
+            auto qualified=[](uintptr_t p) noexcept {return p==image;};
+            auto executable=[](uintptr_t p,size_t n) noexcept {return p==entry && n==21;};
+            TglNativeVideoBufferFlushBinding binding;
+            unsigned calls=0;
+            for(uint32_t result:{0u,0xe00002e9u,0xffffffffu}) {
+                auto invoke=[&](uintptr_t e,uintptr_t c,uint8_t kind) noexcept {
+                    assert(e==entry && c==context && kind==2);++calls;return result;
+                };
+                assert(binding.flush(context,invoke)==5 && !calls);
+                assert(binding.resolve(image,read,qualified,executable));
+                assert(binding.flush(context,invoke)==result && calls==1);
+                calls=0;
+                assert(binding.flush(0,invoke)==5 && !calls);
+                assert(binding.flush(UINTPTR_MAX,invoke)==5 && !calls);
+                assert(!binding.resolve(image,read,[](uintptr_t){return false;},executable));
+                assert(binding.flush(context,invoke)==5 && !calls);
+            }
+            for(size_t i=0;i<code.size();++i) {
+                code[i]^=1;assert(!binding.resolve(image,read,qualified,executable));code[i]^=1;
+            }
+            assert(!binding.resolve(image,read,qualified,[](uintptr_t,size_t){return false;}));
+            assert(!binding.resolve(image,[](uintptr_t,void*,size_t){return false;},qualified,executable));
+            assert(!binding.resolve(UINTPTR_MAX,read,qualified,executable));
+        }
         TglOwnedVeboxBuilderScratch scratch;
         for(uintptr_t invalidHeap:{uintptr_t(0),UINTPTR_MAX-uintptr_t(0x2e3),UINTPTR_MAX}) {
             auto invalid=b;invalid.heap=invalidHeap;
