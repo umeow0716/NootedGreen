@@ -1719,10 +1719,13 @@ struct TglVeboxHardwareBinding {
     // Shared2::add_orphaned_mappings(2a9ea). With a live shared user client110,
     // that merges into or copies a retained set at client150. Context close is
     // therefore not identical to freeing every mapping. The set's eventual
-    // release is in SharedUserClient2::free(2b25d..2b26f); stopLocked first
-    // invokes slot998 and detaches via678. Resolve those native methods and
-    // accelerator drain order before treating shared-client destruction as
-    // permission to retire an independently owned backing generation.
+    // release is in SharedUserClient2::free(2b25d..2b26f). Table77210 resolves
+    // stopLocked's998 to sharedStop(2d7bc): clear Shared2::client110, release
+    // Shared2, remove from accelerator's shared-client list. Slot678 is native
+    // IOService::detach, not a fence. stop(2b2ec)'s850/858 are DidLock/WillUnlock
+    // trace hooks (42100/4212c), also inherited by TGL tabled1060 slotsd18c0/8.
+    // None supplies a drain certificate. Establish resource-side GPU reference
+    // ownership before retiring an independently owned backing generation.
     template<class Read,class Qualify,class Executable,class Invoke>
     uint32_t markSubmitted(uintptr_t image,Read read,Qualify qualify,
                            Executable executable,Invoke invoke) const {
