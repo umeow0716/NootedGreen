@@ -1053,6 +1053,37 @@ static void testVeboxPrefix() {
         assert(!select(0,true,false,false,4,0).valid);
         assert(!select(0,false,true,false,0,4).valid);
         assert(!select(0,false,false,true,0,2).valid);
+        constexpr uintptr_t execution = 0x2000;
+        std::array<int32_t,5> indices{2,3,1,0,1};
+        constexpr std::array<size_t,5> offsets{0x1c,0x20,0x28,0x2c,0x30};
+        unsigned reads = 0, failAt = 0;
+        auto readIndex = [&](uintptr_t p, void* out, size_t n) {
+            assert(n == 4);
+            if (++reads == failAt) return false;
+            for (size_t i=0; i<offsets.size(); ++i) if (p == execution+offsets[i]) {
+                std::memcpy(out,&indices[i],4); return true;
+            }
+            assert(false); return false;
+        };
+        TglSurfaceIndices decoded;
+        assert(tglReadSurfaceIndices(execution,decoded,readIndex));
+        assert(decoded.frame0 == 2 && decoded.frame1 == 3 && decoded.dnOut == 1);
+        assert(decoded.historyIn == 0 && decoded.historyOut == 1);
+        for (unsigned failure=1; failure<=5; ++failure) {
+            reads = 0; failAt = failure;
+            assert(!tglReadSurfaceIndices(execution,decoded,readIndex));
+            assert(decoded.frame0 == 2 && decoded.historyOut == 1);
+        }
+        failAt = 0;
+        for (size_t i=0; i<indices.size(); ++i) {
+            const int32_t original = indices[i];
+            indices[i] = -1;
+            assert(!tglReadSurfaceIndices(execution,decoded,readIndex));
+            indices[i] = i < 2 ? 4 : 2;
+            assert(!tglReadSurfaceIndices(execution,decoded,readIndex));
+            indices[i] = original;
+        }
+        assert(!tglReadSurfaceIndices(UINTPTR_MAX,decoded,readIndex));
         assert(command[0x168] == 1 && command[0x169] == 1);
         for (size_t i=0; i<slots.size(); ++i) {
             std::memcpy(&borrowed,command.data()+i*0x48+0x40,8);

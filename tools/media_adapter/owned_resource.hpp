@@ -1287,6 +1287,28 @@ struct TglOutputSurfaceSelection {
     const TglOwnedSurfaceStorage* surface = nullptr;
     bool valid = false;
 };
+struct TglSurfaceIndices {
+    int32_t frame0 = 0, frame1 = 0, dnOut = 0, historyIn = 0, historyOut = 0;
+};
+// TGL12b9a0 writes these five execution fields. No pointer adoption or state
+// mutation; failed reads/invalid indices preserve the caller's snapshot.
+template<class Read>
+bool tglReadSurfaceIndices(uintptr_t execution, TglSurfaceIndices& result, Read read) {
+    if (!execution || execution > UINTPTR_MAX-0x33) return false;
+    TglSurfaceIndices candidate;
+    if (!read(execution+0x1c,&candidate.frame0,4) ||
+        !read(execution+0x20,&candidate.frame1,4) ||
+        !read(execution+0x28,&candidate.dnOut,4) ||
+        !read(execution+0x2c,&candidate.historyIn,4) ||
+        !read(execution+0x30,&candidate.historyOut,4)) return false;
+    if (candidate.frame0 < 0 || candidate.frame0 >= 4 ||
+        candidate.frame1 < 0 || candidate.frame1 >= 4 ||
+        candidate.dnOut < 0 || candidate.dnOut >= 2 ||
+        candidate.historyIn < 0 || candidate.historyIn >= 2 ||
+        candidate.historyOut < 0 || candidate.historyOut >= 2) return false;
+    result = candidate;
+    return true;
+}
 inline TglOutputSurfaceSelection tglSelectOutputSurface(
         uint32_t pipe, bool di, bool iecp, bool denoise,
         int32_t frame0, int32_t dnOut, const TglOwnedSurfaceStorage* target,
