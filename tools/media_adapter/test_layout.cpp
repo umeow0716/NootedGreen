@@ -31,6 +31,38 @@ struct TestVpCpuView {
 
 static void testTrackedCpuOwner() {
     {
+        int child=0,foreign=0,params=0,pass=0;
+        struct Admission {
+            void* params;
+            void* pass;
+            unsigned calls=0;
+            bool allowed=false;
+            bool admit(void* p,void* q) noexcept {
+                if(p!=params || q!=pass) return false;
+                ++calls;return allowed;
+            }
+        } context{&params,&pass};
+        using Resolve=TglOwnedVeboxScopedContext<Admission>;
+        using Callback=TglOwnedVeboxAdmissionCallbacks<Resolve>;
+        static_assert(std::is_same_v<decltype(&Callback::admit),bool(*)(void*,void*,void*) noexcept>);
+        std::array<uintptr_t,20> hooks{};hooks.fill(7);
+        const auto bound=tglBindOwnedVeboxAdmissionHook<Resolve>(hooks);
+        for(size_t i=0;i<hooks.size();++i)
+            assert(bound[i]==(i==2?reinterpret_cast<uintptr_t>(&Callback::admit):hooks[i]));
+        auto admit=reinterpret_cast<bool(*)(void*,void*,void*) noexcept>(bound[2]);
+        assert(!admit(&child,&params,&pass) && !context.calls);
+        {Resolve scope(&child,context);assert(scope.bound());
+            assert(!admit(&foreign,&params,&pass) && !context.calls);
+            assert(!admit(&child,nullptr,&pass) && !context.calls);
+            assert(!admit(&child,&params,nullptr) && !context.calls);
+            assert(!admit(&child,&foreign,&pass) && !context.calls);
+            assert(!admit(&child,&params,&pass) && context.calls==1);
+            context.allowed=true;
+            assert(admit(&child,&params,&pass) && context.calls==2);
+        }
+        assert(!admit(&child,&params,&pass) && context.calls==2);
+    }
+    {
         struct Allocation {
             unsigned calls=0;int result=31;
             int allocate() noexcept {++calls;return result;}

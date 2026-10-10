@@ -5832,6 +5832,30 @@ struct TglOwnedVeboxContextDomain {};
 template<class Context> using TglOwnedVeboxScopedContext=
     TglOwnedScopedContext<Context,TglOwnedVeboxContextDomain>;
 
+// Outer12d280 obtains VEBOX child from renderer910[index]. 12d38b..12d39d
+// passes child/params/pass, then12d3a0 tests AL bit0. This is bool admission,
+// NOT an int status producer (error5 would be interpreted as TRUE). The scoped
+// context must implement the full platform admission and own params/pass leases;
+// this ABI bridge alone is not a completed admission policy or runtime table.
+template<class Resolve> struct TglOwnedVeboxAdmissionCallbacks {
+    static bool admit(void* child,void* params,void* pass) noexcept {
+        if(!child || !params || !pass) return false;
+        auto* context=Resolve::get(child);
+        if(!context) return false;
+        static_assert(noexcept(context->admit(params,pass)) &&
+            std::is_same_v<decltype(context->admit(params,pass)),bool>,
+            "VEBOX admission must return native bool, not status");
+        return context->admit(params,pass);
+    }
+};
+template<class Resolve>
+std::array<uintptr_t,20> tglBindOwnedVeboxAdmissionHook(
+    std::array<uintptr_t,20> hooks) noexcept {
+    static_assert(TglOwnedVeboxVtable::required[2]==0x28,"exact VEBOX admission slot");
+    hooks[2]=reinterpret_cast<uintptr_t>(&TglOwnedVeboxAdmissionCallbacks<Resolve>::admit);
+    return hooks;
+}
+
 // TGL mode0 12c1cd calls +58 with only child in RDI and consumes EAX.
 // Allocation precedes builder admission: do not gate it on producer-pass state.
 // Context owns the complete allocation transaction and must unwind failures
