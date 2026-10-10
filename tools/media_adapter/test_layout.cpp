@@ -7977,6 +7977,12 @@ int main() {
                 assert(nativeOs==reinterpret_cast<void*>(os) && nativeSfc==owner.get());
                 assert(!nativeMhw && renderHal==reinterpret_cast<void*>(0x3000) &&
                        !history && !performance && !cache);
+                const auto destroys=invoke.destroys;
+                owner.reset();
+                assert(owner.get()==nativeSfc && invoke.destroys==destroys);
+                assert(!owner.initialize(lifetime,mhw,os,read));
+                bool nested=false;
+                assert(owner.withObject([&](void*){nested=true;return 0;})==5 && !nested);
                 ++calls;*out=result;
             };
             auto construct=[&](size_t capacity,void* hal=reinterpret_cast<void*>(0x3000)) {
@@ -7989,6 +7995,10 @@ int main() {
             assert(construct(child.size(),nullptr)==TglOwnedBaseConstruction::NotCalled && calls==0 && status==77);
             assert(construct(child.size()-1)==TglOwnedBaseConstruction::NotCalled && calls==0);
             assert(construct(child.size())==TglOwnedBaseConstruction::ConstructedSuccess && calls==1);
+            assert(owner.withObject([&](void*) {
+                assert(construct(child.size())==TglOwnedBaseConstruction::NotCalled && calls==1);
+                return 0;
+            })==0);
             result=31;
             assert(construct(child.size())==TglOwnedBaseConstruction::ConstructedFailure && calls==2 && status==31);
             ++baseBinding.image;

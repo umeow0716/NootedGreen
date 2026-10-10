@@ -2444,8 +2444,16 @@ TglOwnedBaseConstruction tglConstructOwnedVeboxBaseWithSfc(
        !renderHal || !privateStorage || (reinterpret_cast<uintptr_t>(privateStorage)&7) ||
        capacity<0x1bc0 || !sfc.get() || sfc.image()!=binding.image ||
        sfc.os()!=reinterpret_cast<uintptr_t>(os)) return TglOwnedBaseConstruction::NotCalled;
-    construct(binding.construct,privateStorage,os,mhw,sfc.get(),renderHal,history,
-              performanceData,cacheControl,&nativeStatus);
+    // Keep the borrowed child+68 dependency alive across the native call.
+    // A raw get() alone permits reentrant reset/reinitialization of its owner.
+    bool called=false;
+    sfc.withObject([&](void* nativeSfc) {
+        called=true;
+        construct(binding.construct,privateStorage,os,mhw,nativeSfc,renderHal,history,
+                  performanceData,cacheControl,&nativeStatus);
+        return 0;
+    });
+    if(!called) return TglOwnedBaseConstruction::NotCalled;
     return nativeStatus==0?TglOwnedBaseConstruction::ConstructedSuccess:
                            TglOwnedBaseConstruction::ConstructedFailure;
 }
