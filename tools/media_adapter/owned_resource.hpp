@@ -149,6 +149,34 @@ bool tglCompositionBypassFeasible(uintptr_t params, uintptr_t source,
         read(params + 0xd8, &constriction, 8) && !constriction;
 }
 
+// Complete Gen12 direct-output feasibility after composition bypass. Caller
+// owns the pass lock/image lease. queryTwoPass must call the authenticated TGL
+// native CSC predicate, returning false if binding/read fails (not "no CSC").
+// No mode/state is published here; SFC and composition remain separate branches.
+template<class Read, class QueryTwoPass>
+bool tglDirectVeboxFeasible(uintptr_t params, uintptr_t source, uintptr_t target,
+                           uint32_t bypassMode, Read read, QueryTwoPass queryTwoPass) {
+    constexpr auto max = std::numeric_limits<uintptr_t>::max();
+    if (!bypassMode || !params || !source || !target || params > max - 0xf7 ||
+        source > max - 0x293 || target > max - 0x133) return false;
+    uint32_t targets = 0, sample = 0, rotation = 0, alphaMode = 0;
+    uintptr_t actualTarget = 0, ief = 0, alpha = 0;
+    uint8_t variance = 0;
+    if (!read(params + 0x90, &targets, 4) || targets != 1 ||
+        !read(params + 0x98, &actualTarget, 8) || actualTarget != target ||
+        !tglDirectVeboxSurfaceGeometry(source, target, read) ||
+        !read(source + 0x78, &ief, 8) || ief || // Gen12 requires NULL, not ICL disabled IEF
+        !read(source + 0x138, &sample, 4) || sample != 0 ||
+        !read(source + 0x290, &rotation, 4) || rotation != 0 ||
+        !read(source + 0x83, &variance, 1) || (variance & 1) ||
+        !tglVeboxSurfaceSupported(source, read) ||
+        !tglVeboxRtSurfaceSupported(source, target, read)) return false;
+    bool needsTwoPass = true;
+    if (!queryTwoPass(source, target, needsTwoPass) || needsTwoPass) return false;
+    if (!read(params + 0xf0, &alpha, 8)) return false;
+    return !alpha || (alpha <= max - 7 && read(alpha + 4, &alphaMode, 4) && alphaMode != 2);
+}
+
 // Read-only shape gate for an already-owned native execution object. Identity
 // qualification must authenticate the loaded image; this is NOT proof that
 // mode/state producers or GPU commands are valid. Run under owner's lock.

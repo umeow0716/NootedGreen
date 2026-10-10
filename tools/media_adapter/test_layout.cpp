@@ -6,6 +6,69 @@
 #include "descriptor_bridge.hpp"
 #include "owned_resource.hpp"
 
+static void testDirectVeboxFeasibility() {
+    std::array<unsigned char, 0xf8> params{};
+    std::array<unsigned char, 0x294> source{};
+    std::array<unsigned char, 0x134> target{};
+    std::array<unsigned char, 8> alpha{};
+    const uint32_t one = 1, nv12 = 0x19;
+    const uintptr_t targetAddress = 0x3000;
+    const TglSurfaceRect rect{0,0,1920,1080};
+    std::memcpy(params.data()+0x90, &one, 4);
+    std::memcpy(params.data()+0x98, &targetAddress, 8);
+    for (size_t offset : {0x30u,0x40u,0x50u}) std::memcpy(source.data()+offset, &rect, 16);
+    std::memcpy(target.data()+0x40, &rect, 16);
+    std::memcpy(source.data()+0x130, &nv12, 4);
+    std::memcpy(target.data()+0x130, &nv12, 4);
+    uintptr_t failed = 0;
+    std::array<uintptr_t,32> reads{};
+    size_t count = 0;
+    auto read = [&](uintptr_t p, void* out, size_t n) {
+        if (count < reads.size()) reads[count++] = p;
+        if (p == failed) return false;
+        auto copy = [&](uintptr_t base, const auto& bytes) {
+            if (p < base || p-base > bytes.size() || n > bytes.size()-(p-base)) return false;
+            std::memcpy(out, bytes.data()+p-base, n); return true;
+        };
+        return copy(0x1000,params) || copy(0x2000,source) || copy(0x3000,target) || copy(0x4000,alpha);
+    };
+    unsigned queries = 0;
+    bool queryOk = true, twoPass = false;
+    auto query = [&](uintptr_t s, uintptr_t t, bool& needed) {
+        assert(s == 0x2000 && t == 0x3000); ++queries;
+        needed = twoPass; return queryOk;
+    };
+    auto feasible = [&] { return tglDirectVeboxFeasible(0x1000,0x2000,0x3000,1,read,query); };
+    assert(feasible() && queries == 1);
+    const auto baselineReads = reads; const auto baselineCount = count;
+    for (size_t i = 0; i < baselineCount; ++i) {
+        failed = baselineReads[i]; count = 0;
+        assert(!feasible());
+    }
+    failed = 0; queries = 0; count = 0;
+    assert(!tglDirectVeboxFeasible(0x1000,0x2000,0x3000,0,read,query));
+    assert(count == 0 && queries == 0);
+    for (size_t offset : {0x78u,0x138u,0x290u,0x83u}) {
+        source[offset] = 1; assert(!feasible()); source[offset] = 0;
+    }
+    queryOk = false; assert(!feasible()); queryOk = true;
+    twoPass = true; assert(!feasible()); twoPass = false;
+    const uintptr_t alphaAddress = 0x4000;
+    std::memcpy(params.data()+0xf0, &alphaAddress, 8);
+    assert(feasible());
+    alpha[4] = 2; assert(!feasible()); alpha[4] = 1; assert(feasible());
+    failed = 0x4004; assert(!feasible()); failed = 0;
+    const uintptr_t overflowingAlpha = UINTPTR_MAX - 6;
+    std::memcpy(params.data()+0xf0, &overflowingAlpha, 8);
+    assert(!feasible());
+    std::memcpy(params.data()+0xf0, &alphaAddress, 8);
+    source[0x130] = 0; queries = 0;
+    assert(!feasible() && queries == 0); source[0x130] = 0x19;
+    target[0x130] = 0; queries = 0;
+    assert(!feasible() && queries == 0); target[0x130] = 0x19;
+    params[0x98] = 1; assert(!feasible()); // caller cannot substitute a different target
+}
+
 static void testVeboxHardwareBinding() {
     const TglSurfaceRect full{0,0,1920,1080};
     const TglSurfaceRect larger{-1,-1,1921,1081};
@@ -1115,6 +1178,7 @@ static void testResourceBinding() {
 // Offline layout hypothesis only: not an ABI-complete or deployable adapter.
 // The pinned consumer sites shift 0x20/0x24/0x228/0x428 by eight bytes.
 int main() {
+    testDirectVeboxFeasibility();
     testVeboxHardwareBinding();
     testExecutionBinding();
     testExecutionShape();
