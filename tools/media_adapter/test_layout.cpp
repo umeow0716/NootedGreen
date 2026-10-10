@@ -129,6 +129,23 @@ static void testExecutionOwner() {
 
 static void testVeboxReport() {
     TglVeboxReportState storage;
+    for (uint32_t mode : {0u, 1u, 2u, UINT32_MAX}) {
+        for (unsigned flag = 0; flag < 256; ++flag) {
+            storage.bytes.fill(0xa5);
+            auto expected = storage.bytes;
+            std::memcpy(expected.data() + 0xc, &mode, 4);
+            expected[0x24] = (flag ^ 1) & 1;
+            expected[0x25] = flag & 1;
+            tglFinalizeVeboxReport(storage, mode, uint8_t(flag), uint8_t(flag));
+            assert(storage.bytes == expected);
+            std::array<uint8_t, 0x26> report{};
+            tglExportVeboxReport(storage, 0, report);
+            uint32_t exportedMode = 0;
+            std::memcpy(&exportedMode, report.data() + 0xc, 4);
+            assert(exportedMode == mode && report[0x24] == expected[0x24] &&
+                   report[0x25] == expected[0x25]);
+        }
+    }
     for (unsigned flags = 0; flags < 32; ++flags) {
         std::array<uint8_t, 0x15> execution{};
         execution[0xf] = uint8_t(0xfe | ((flags >> 0) & 1));

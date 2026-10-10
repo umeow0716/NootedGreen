@@ -183,6 +183,15 @@ inline void tglUpdateVeboxReport(TglVeboxReportState& report,
     }
 }
 
+// Native Render tail12cdcb..12ce07. This exports a decision already made
+// by the platform producer; it must NOT choose or normalize executionMode.
+inline void tglFinalizeVeboxReport(TglVeboxReportState& report, uint32_t executionMode,
+                                   uint8_t execution18, uint8_t execution8f4) noexcept {
+    std::memcpy(report.bytes.data() + 0xc, &executionMode, sizeof(executionMode));
+    report.bytes[0x24] = (execution18 ^ 1) & 1;
+    report.bytes[0x25] = execution8f4 & 1;
+}
+
 // Exact post-render export12d240 ->12d120/12d1a0. Source is the
 // owned equivalent of child40, not the child object itself. Preserve every
 // destination byte not written by native; source/destination may alias.
