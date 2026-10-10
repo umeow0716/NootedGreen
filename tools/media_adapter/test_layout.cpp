@@ -2035,6 +2035,39 @@ static void testResourceBinding() {
 // The pinned consumer sites shift 0x20/0x24/0x228/0x428 by eight bytes.
 int main() {
     {
+        TglOwnedSurfaceStorage source,target;
+        const uint32_t nv12=0x19;
+        std::memcpy(source.prefix.data()+0x130,&nv12,4);
+        std::memcpy(target.prefix.data()+0x130,&nv12,4);
+        uint32_t state=0xffffffff;
+        const auto untouched=target;
+        assert(tglPrepareOwnedChromaSampling(state,nullptr,&target,true,true,2));
+        assert(state==0xfffffc00 && std::memcmp(&target,&untouched,sizeof(target))==0);
+        state=0xffffffff;
+        assert(tglPrepareOwnedChromaSampling(state,&source,nullptr,true,false,2));
+        assert(state==0xfffff804);
+        uint32_t siting=0;
+        std::memcpy(&siting,source.tail.data()+4,4);
+        assert(siting==0x21);
+        state=0xffffffff;
+        assert(tglPrepareOwnedChromaSampling(state,&source,&target,true,true,2));
+        assert(state==0xfffff088);
+        // Same owned surface is legal: native normalizes in source/target order.
+        state=0;
+        assert(tglPrepareOwnedChromaSampling(state,&source,&source,true,false,2));
+        assert(state==0x84);
+        const auto savedSource=source,savedTarget=target;
+        const auto savedState=state;
+        assert(!tglPrepareOwnedChromaSampling(state,&source,&target,true,true,3));
+        assert(state==savedState && std::memcmp(&source,&savedSource,sizeof(source))==0);
+        assert(std::memcmp(&target,&savedTarget,sizeof(target))==0);
+        // Target metadata is normalized even when downsampling is bypassed.
+        target.tail.fill(0);
+        assert(tglPrepareOwnedChromaSampling(state,&source,&target,false,false,0));
+        std::memcpy(&siting,target.tail.data()+4,4);
+        assert(siting==0x21 && (state&0xfff)==0xc00);
+    }
+    {
         const uint32_t sitings[6]={0x21,0x22,0x11,0x12,0x41,0x42};
         const uint32_t nativeFields[6]={0x80,0xa0,0,0x20,0x100,0x120};
         for (uint32_t pack=0;pack<4;++pack) for (uint32_t type=0;type<6;++type)

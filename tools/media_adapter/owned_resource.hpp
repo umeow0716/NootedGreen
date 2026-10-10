@@ -1373,6 +1373,30 @@ inline bool tglPrepareOwnedChromaDownsampling(uint32_t& state, uint32_t pack,
     state=candidate;
     return true;
 }
+// Owns only chroma fields of the state DWORD and metadata of owned surfaces.
+// Native1fa55e initializes both directions before checking source; missing
+// source skips target normalization, missing target preserves completed upsample.
+inline bool tglPrepareOwnedChromaSampling(uint32_t& state,
+                                        TglOwnedSurfaceStorage* source,
+                                        TglOwnedSurfaceStorage* target,
+                                        bool iecp, bool di, uint32_t pipe) noexcept {
+    if (pipe>2) return false;
+    state=(state&~0xfffu)|0xc00u;
+    if (!source) return true;
+    uint32_t format=0, siting=0;
+    std::memcpy(&format,source->prefix.data()+0x130,4);
+    const auto sourcePack=tglOwnedChromaColorPack(format);
+    tglNormalizeOwnedChromaSiting(*source,sourcePack);
+    std::memcpy(&siting,source->tail.data()+4,4);
+    tglPrepareOwnedChromaUpsampling(state,sourcePack,siting,iecp,di);
+    if (!target) return true;
+    std::memcpy(&format,target->prefix.data()+0x130,4);
+    const auto targetPack=tglOwnedChromaColorPack(format);
+    tglNormalizeOwnedChromaSiting(*target,targetPack);
+    std::memcpy(&siting,target->tail.data()+4,4);
+    tglPrepareOwnedChromaDownsampling(state,targetPack,siting,pipe);
+    return true;
+}
 // Exact Darwin caller1f9111/26 packs compressed bit0 and mode DWORD into
 // an eight-byte parameter. TGL179530 consumes mode+4 and calls native OS1a0;
 // do not replace the whole callback with a superficially equivalent bit OR.
