@@ -939,6 +939,45 @@ static void testVeboxReport() {
 
 static void testVeboxPrefix() {
     {
+        constexpr uintptr_t image = 0x1000000;
+        std::array<uint8_t,16> constructor{
+            0x55,0x48,0x89,0xe5,0x53,0x50,0xb8,0x88,
+            0x10,0,0,0xe8,0xd0,0x41,0xef,0xff};
+        std::array<uint8_t,16> destructor{
+            0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x50,
+            0x48,0x8d,0x05,0x49,0x9e,0x62,0,0x48};
+        bool identity = true, rx = true, readable = true;
+        auto read = [&](uintptr_t p, void* out, size_t n) {
+            assert(n == 16);
+            if (!readable) return false;
+            if (p == image+0x12d4e0) std::memcpy(out,constructor.data(),n);
+            else { assert(p == image+0x12de30); std::memcpy(out,destructor.data(),n); }
+            return true;
+        };
+        auto qualify = [&](uintptr_t p) { return identity && p == image; };
+        auto executable = [&](uintptr_t p, size_t n) {
+            assert(n == 16 && (p == image+0x12d4e0 || p == image+0x12de30)); return rx;
+        };
+        TglVeboxLifetimeBinding b;
+        auto resolve = [&] { return b.resolve(image,read,qualify,executable); };
+        assert(resolve() && b.construct == image+0x12d4e0 && b.destroy == image+0x12de30);
+        for (size_t i = 0; i < 16; ++i) {
+            constructor[i] ^= 1; assert(!resolve() && !b.construct && !b.destroy); constructor[i] ^= 1;
+            destructor[i] ^= 1; assert(!resolve() && !b.image); destructor[i] ^= 1;
+        }
+        identity = false; assert(!resolve()); identity = true;
+        rx = false; assert(!resolve()); rx = true;
+        readable = false; assert(!resolve()); readable = true;
+        assert(!b.resolve(UINTPTR_MAX,read,qualify,executable));
+        assert(resolve());
+        static unsigned destroys = 0;
+        auto destroy = +[](void* object) {
+            assert(reinterpret_cast<uintptr_t>(object) == 0x1234); ++destroys;
+        };
+        TglNativeVeboxDestructorInvoker{}(reinterpret_cast<uintptr_t>(destroy),reinterpret_cast<void*>(0x1234));
+        assert(destroys == 1);
+    }
+    {
         // Exercise spilled arguments against owned code, never native Apple code.
         static unsigned constructorCalls = 0;
         auto ctor = +[](void* object, void* os, void* mhw, void* sfc, void* hal,

@@ -679,6 +679,37 @@ struct TglVeboxHardwareBinding {
 // followed by performance-data, cache-control reference and status on stack.
 // This is an invocation mechanism, NOT storage qualification/publication.
 // Owner must authenticate entry, complete extent, dependencies and image lease.
+struct TglVeboxLifetimeBinding {
+    uintptr_t image = 0, construct = 0, destroy = 0;
+    template<class Read, class Qualify, class Executable>
+    bool resolve(uintptr_t base, Read read, Qualify qualify, Executable executable) {
+        image = construct = destroy = 0;
+        constexpr std::array<uint8_t,16> constructor{
+            0x55,0x48,0x89,0xe5,0x53,0x50,0xb8,0x88,
+            0x10,0x00,0x00,0xe8,0xd0,0x41,0xef,0xff};
+        constexpr std::array<uint8_t,16> destructor{
+            0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x50,
+            0x48,0x8d,0x05,0x49,0x9e,0x62,0x00,0x48};
+        std::array<uint8_t,16> c{}, d{};
+        if (!base || base > std::numeric_limits<uintptr_t>::max() - 0x12de40 ||
+            !qualify(base) || !executable(base+0x12d4e0,16) ||
+            !executable(base+0x12de30,16) || !read(base+0x12d4e0,c.data(),16) ||
+            !read(base+0x12de30,d.data(),16) || c != constructor || d != destructor)
+            return false;
+        image = base; construct = base+0x12d4e0; destroy = base+0x12de30;
+        return true;
+    }
+};
+
+// Non-deleting native base teardown only; owned storage release is separate.
+// Owned GPU resources must be cleaned before this resets the native vtable.
+struct TglNativeVeboxDestructorInvoker {
+    void operator()(uintptr_t entry, void* object) const noexcept {
+        using Destroy = void (*)(void*);
+        reinterpret_cast<Destroy>(entry)(object);
+    }
+};
+
 struct TglNativeVeboxConstructorInvoker {
     void operator()(uintptr_t entry, void* object, void* os, void* mhw,
                     void* sfc, void* renderHal, void* history,
