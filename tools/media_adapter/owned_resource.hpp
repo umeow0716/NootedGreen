@@ -48,6 +48,17 @@ static_assert(offsetof(TglVeboxPrefix, flag49) == 0x49);
 static_assert(offsetof(TglVeboxPrefix, parentData) == 0x50);
 static_assert(offsetof(TglVeboxPrefix, sourceValue) == 0x58);
 
+// child40 owns a separate28-byte CPU report (1335c0), NOT execution
+// state child88. Native1338b0 initializes fields, leaving padding untouched.
+struct TglVeboxReportState {
+    std::array<uint8_t, 0x28> bytes{};
+    void reset() noexcept {
+        for (size_t i = 0; i <= 0x1c; ++i) bytes[i] = 0;
+        for (size_t i = 0x20; i <= 0x25; ++i) bytes[i] = 0;
+    }
+};
+static_assert(sizeof(TglVeboxReportState) == 0x28);
+
 // Exact post-render export12d240 ->12d120/12d1a0. Source is the
 // owned equivalent of child40, not the child object itself. Preserve every
 // destination byte not written by native; source/destination may alias.
@@ -61,6 +72,13 @@ inline void tglExportVeboxReport(const std::array<uint8_t, 0x26>& state,
     std::memcpy(report.data() + 4, source.data() + 4, 4);
     std::memcpy(report.data() + 0xc, source.data() + 0xc, 4);
     report[0x10] = feature1ba9 & 1;
+}
+inline void tglExportVeboxReport(const TglVeboxReportState& state,
+                                 uint8_t feature1ba9,
+                                 std::array<uint8_t, 0x26>& report) noexcept {
+    std::array<uint8_t, 0x26> fields{};
+    std::memcpy(fields.data(), state.bytes.data(), fields.size());
+    tglExportVeboxReport(fields, feature1ba9, report);
 }
 
 // Owned lifecycle only. A Darwin backend must separately prove allocation,

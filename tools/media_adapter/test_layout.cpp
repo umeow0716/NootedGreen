@@ -7,6 +7,11 @@
 #include "owned_resource.hpp"
 
 static void testVeboxReport() {
+    TglVeboxReportState storage;
+    storage.bytes.fill(0xa5);
+    storage.reset();
+    for (size_t i = 0; i < storage.bytes.size(); ++i)
+        assert(storage.bytes[i] == ((i <= 0x1c || (i >= 0x20 && i <= 0x25)) ? 0 : 0xa5));
     std::array<uint8_t, 0x26> state{}, report{}, expected{};
     for (size_t i = 0; i < state.size(); ++i) state[i] = uint8_t(0x80 + i);
     report.fill(0xa5); expected = report;
@@ -15,6 +20,10 @@ static void testVeboxReport() {
         expected[i] = state[i];
     expected[0x10] = 1;
     tglExportVeboxReport(state, 0xff, report);
+    assert(report == expected);
+    std::memcpy(storage.bytes.data(), state.data(), state.size());
+    report.fill(0xa5);
+    tglExportVeboxReport(storage, 0xff, report);
     assert(report == expected);
     auto alias = state;
     expected = state;
