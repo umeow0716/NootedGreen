@@ -2300,6 +2300,10 @@ public:
         if(constructed_) {
             constructed_=false;
             void* object=reinterpret_cast<void*>(storage_.get());
+            // Native12de30 overwrites vptr with base757c98 at12de4d, then
+            // frees CPU shells (12de6f etc). Retire bound resource tokens here,
+            // while shell storage is still alive; the native base destructor
+            // cannot dispatch the owned +60 hook to do that cleanup for us.
             cleanup_(object);
             destroy_(destructor_,object);
         }
@@ -5700,13 +5704,26 @@ TglOwnedStmmInitialization tglInitializeRetainedOwnedStmmSurface(
     return result;
 }
 #if defined(__APPLE__)
+inline bool tglPinOwnedStmmQuarantineImage() noexcept {
+    // Hold our own loaded image and its fixed budget across dlclose/reopen.
+    // Native dyld policy decides; failure denies retain and hence writable lock.
+    static const bool pinned=[]() noexcept {
+        Dl_info image{};
+        if(!dladdr(reinterpret_cast<const void*>(&tglPinOwnedStmmQuarantineImage),
+            &image) || !image.dli_fname || !image.dli_fbase) return false;
+        return dlopen(image.dli_fname,RTLD_NOW|RTLD_LOCAL|RTLD_NOLOAD|RTLD_NODELETE)!=nullptr;
+    }();
+    return pinned;
+}
 struct TglDarwinStmmSurfaceApi {
     IOSurfaceRef surface(uintptr_t handle) const noexcept {
         return reinterpret_cast<IOSurfaceRef>(handle);
     }
     int lock(IOSurfaceRef surface) const noexcept {return IOSurfaceLock(surface,0,nullptr);}
     int unlock(IOSurfaceRef surface) const noexcept {return IOSurfaceUnlock(surface,0,nullptr);}
-    bool retain(IOSurfaceRef surface) const noexcept {return surface && CFRetain(surface);}
+    bool retain(IOSurfaceRef surface) const noexcept {
+        return surface && tglPinOwnedStmmQuarantineImage() && CFRetain(surface);
+    }
     void release(IOSurfaceRef surface) const noexcept {CFRelease(surface);}
     bool view(IOSurfaceRef surface,TglOwnedStmmView& output) const noexcept {
         // Native63720 format3d -> IOSurface pixel-format8 at63a41, one plane.
@@ -5756,21 +5773,56 @@ TglOwnedStmmInitialization tglInitializeRetainedOwnedStmmResource(
     if(type!=1 || format!=0x3d || !handle) return {};
     return tglInitializeRetainedOwnedStmmSurface(api.surface(handle),api,quarantine);
 }
+// STMM-specific resource transaction. Backend/API/sink outlive this owner;
+// the sink independently owns failed-unlock references, not native tokens.
+// Before ensure/reset the caller must exclude GPU users (not proven here).
+template<class Backend,class Api,class Quarantine> class TglOwnedStmmResource {
+    TglOwnedResource<Backend> resource_;
+    Api& api_;
+    Quarantine& quarantine_;
+    bool ready_=false,busy_=false;
+public:
+    using Storage=typename TglOwnedResource<Backend>::Storage;
+    TglOwnedStmmResource(Backend& backend,Api& api,Quarantine& quarantine) noexcept
+        :resource_(backend),api_(api),quarantine_(quarantine) {}
+    // Bind an empty native shell's resource bytes without moving/copying handles.
+    // Shell storage, backend, API and sink must all outlive this owner.
+    TglOwnedStmmResource(Backend& backend,Storage& storage,Api& api,Quarantine& quarantine) noexcept
+        :resource_(backend,storage),api_(api),quarantine_(quarantine) {}
+    TglOwnedStmmResource(const TglOwnedStmmResource&)=delete;
+    TglOwnedStmmResource& operator=(const TglOwnedStmmResource&)=delete;
+    ~TglOwnedStmmResource(){reset();}
+    int ensure(const TglResourceKey& key,bool reinitializeHistory=false) noexcept {
+        if(busy_ || key.format!=0x3d) return 5;
+        busy_=true;
+        const auto result=resource_.ensure(key);
+        using State=typename TglOwnedResource<Backend>::State;
+        int status=result.status;
+        if(!status && result.state!=State::Backed) status=5;
+        if(!status && (result.changed || !ready_ || reinitializeHistory))
+            status=resource_.withStorage([&](const Storage& storage) noexcept {
+                return tglInitializeRetainedOwnedStmmResource(storage,api_,quarantine_).status();
+            });
+        ready_=status==0;
+        if(status) resource_.reset();
+        busy_=false;return status;
+    }
+    template<class Invoke> int withStorage(Invoke invoke) noexcept {
+        if(busy_ || !ready_) return 5;
+        busy_=true;
+        const int status=resource_.withStorage(invoke);
+        busy_=false;return status;
+    }
+    void reset() noexcept {
+        if(busy_) return;
+        busy_=true;ready_=false;resource_.reset();busy_=false;
+    }
+};
 #if defined(__APPLE__)
 // Call only under the resource owner's synchronous lease, before GPU use.
 // The pool is process-owned, not a member destroyed by frame-error unwind.
 inline TglOwnedStmmInitialization tglInitializeQuarantinedOwnedStmmResource(
     const std::array<uint8_t,0x148>& resource) noexcept {
-    // Keep the owned image's static budget alive across caller dlclose/reopen.
-    // NOLOAD cannot introduce another library; native dyld policy still decides.
-    // Never start a writable lock if this lifetime guarantee was refused.
-    static const bool pinned=[]() noexcept {
-        Dl_info image{};
-        if(!dladdr(reinterpret_cast<const void*>(&tglInitializeQuarantinedOwnedStmmResource),
-            &image) || !image.dli_fname || !image.dli_fbase) return false;
-        return dlopen(image.dli_fname,RTLD_NOW|RTLD_LOCAL|RTLD_NOLOAD|RTLD_NODELETE)!=nullptr;
-    }();
-    if(!pinned) return {};
     TglDarwinStmmSurfaceApi api;
     using Pool=TglOwnedStmmProcessQuarantine<IOSurfaceRef>;
     Pool::Reservation reservation(Pool::processLifetime());

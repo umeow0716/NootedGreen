@@ -3698,6 +3698,97 @@ static void testResourceBinding() {
         assert(tglInitializeRetainedOwnedStmmResource(malformed,retained,quarantine)
             .requiresQuarantine());
         assert(quarantine.retained==1 && retained.references==2 && !retained.releases);
+        struct StmmBackend {
+            RetainedApi& api;
+            unsigned allocations=0,releases=0;
+            bool fail=false;
+            int allocate(std::array<uint8_t,0x148>& storage,const TglResourceKey&) noexcept {
+                ++allocations;++api.references;
+                const uint32_t type=1,format=0x3d;const uintptr_t handle=1;
+                std::memcpy(storage.data()+0x14,&type,4);
+                std::memcpy(storage.data()+0x18,&format,4);
+                std::memcpy(storage.data()+0x58,&handle,8);
+                return fail ? 77 : 0;
+            }
+            bool backed(const std::array<uint8_t,0x148>& storage) noexcept {
+                return tglNativeBackingPresent(storage);
+            }
+            void release(std::array<uint8_t,0x148>& storage) noexcept {
+                ++releases;api.release(1);storage.fill(0);
+            }
+        };
+        const TglResourceKey stmmKey{8,3,0x3d,4,0,false};
+        for(int lockError : {0,5}) for(int unlockError : {0,31})
+            for(bool valid : {false,true}) {
+                mapped=original;
+                RetainedApi api;api.references=0;
+                api.mapping={mapped.data(),40,8,3,16};api.valid=valid;
+                api.lockResult=lockError;api.unlockResult=unlockError;
+                StmmBackend native{api};Quarantine sink;
+                using Owner=TglOwnedStmmResource<StmmBackend,RetainedApi,Quarantine>;
+                const int expected=lockError ? lockError : !valid ? 5 : unlockError;
+                {
+                    Owner owner(native,api,sink);
+                    assert(owner.ensure(stmmKey)==expected);
+                    bool invoked=false;
+                    const int borrowed=owner.withStorage([&](const auto&) noexcept {
+                        invoked=true;owner.reset();
+                        assert(owner.ensure(stmmKey)==5 && !native.releases);
+                        return 0;
+                    });
+                    assert(invoked==!expected && borrowed==(expected ? 5 : 0));
+                    if(!expected) {
+                        mapped[0]=0x23;
+                        assert(!owner.ensure(stmmKey) && api.locks==1 && mapped[0]==0x23);
+                        assert(!owner.ensure(stmmKey,true) && api.locks==2 && mapped[0]==0xff);
+                        assert(native.allocations==1 && !native.releases);
+                    }
+                }
+                assert(native.allocations==1 && native.releases==1);
+                const bool quarantined=!lockError && unlockError;
+                assert(api.references==unsigned(quarantined));
+                assert(sink.commits==unsigned(quarantined));
+            }
+        {
+            RetainedApi api;api.references=0;StmmBackend native{api};native.fail=true;
+            Quarantine sink;
+            TglOwnedStmmResource<StmmBackend,RetainedApi,Quarantine> owner(native,api,sink);
+            assert(owner.ensure(stmmKey)==77 && !api.references && !api.locks);
+            assert(native.releases==1 && !sink.reservations);
+        }
+        {
+            RetainedApi api;api.references=0;api.mapping={mapped.data(),40,8,3,16};
+            StmmBackend native{api};Quarantine sink;
+            TglOwnedStmmResource<StmmBackend,RetainedApi,Quarantine> owner(native,api,sink);
+            assert(!owner.ensure(stmmKey) && api.references==1);
+            api.unlockResult=31;
+            assert(owner.ensure(stmmKey,true)==31);
+            assert(native.allocations==1 && native.releases==1 && api.references==1);
+            assert(sink.retained==1 && sink.commits==1);
+            bool invoked=false;
+            assert(owner.withStorage([&](const auto&) noexcept {invoked=true;return 0;})==5);
+            assert(!invoked);
+            owner.reset();
+            assert(native.releases==1 && api.references==1);
+            const auto locks=api.locks;
+            assert(owner.ensure(stmmKey)==5); // quarantined handle may not be locked again
+            assert(api.locks==locks && native.allocations==2 && native.releases==2);
+            assert(api.references==1 && sink.commits==1);
+        }
+        {
+            RetainedApi api;api.references=0;api.mapping={mapped.data(),40,8,3,16};
+            StmmBackend native{api};Quarantine sink;
+            alignas(8) std::array<uint8_t,0x148> shell{};
+            {
+                TglOwnedStmmResource<StmmBackend,RetainedApi,Quarantine> owner(native,shell,api,sink);
+                assert(!owner.ensure(stmmKey));
+                assert(!owner.withStorage([&](const auto& storage) noexcept {
+                    assert(&storage==&shell && api.references==1);return 0;
+                }));
+            }
+            assert(!api.references && native.releases==1);
+            for(auto byte:shell) assert(!byte);
+        }
     }
     constexpr uintptr_t os = 0x1000, image = 0x100000, renderHal = 0x2000;
     uintptr_t borrowedOs = os;
