@@ -1788,6 +1788,17 @@ struct TglVeboxHardwareBinding {
     // Remaining obligation: prove each published owned resource acquires the
     // matching map/retained memory and event stamps before GPU submission,
     // especially type80 SysMemory and type82 IOSurface parent generations.
+    // Map::init521e6 stores the supplied IOAccelMemory at18 (52252), retains
+    // it via20 (5225c), then registers this mapping with Memory::add_mapping.
+    // Map::free52508 removes that association and releases memory18 at5252a.
+    // Thus a deferred Map holds its memory independently of Resource2's life.
+    // Resource2::removeFromChannel23f59..23f78 stamps map40+38 when resource
+    // flag e.bit4 is clear and Map10.bit2 is set; the alternate flag uses20.
+    // Channel140=setEventStamp41d8 forwards channel index to EventMachine1d0.
+    // Type82 selects parent e0 at23ff1 and invokes parent198 at2406d;
+    // family vptr766d0+198=23f46, so parent stamps follow the same dispatch.
+    // This closes native retention/stamp relationships, not the separate
+    // proof that our owned registration/prepare reaches them before submit.
     template<class Read,class Qualify,class Executable,class Invoke>
     uint32_t markSubmitted(uintptr_t image,Read read,Qualify qualify,
                            Executable executable,Invoke invoke) const {
