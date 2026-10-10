@@ -4467,7 +4467,37 @@ static void testSfcSfdOwnership() {
                     return result;
                 })==result && calls==1);
         }
+        TglOwnedVpCscCache cscCache;
+        unsigned cscProduced=0,cscGenerated=0;
+        const auto originalIef=commands.ief;
+        auto cscRead=[](uintptr_t,void*,size_t) noexcept {assert(false);return false;};
+        auto cscProduce=[&](TglCscCoefficients& coefficients,uint32_t from,uint32_t to) noexcept {
+            ++cscProduced;assert(from==3 && to==5);coefficients.matrix[0]=2;return true;
+        };
+        auto withCsc=[&](auto& ready) noexcept {
+            return tglWithOwnedSfcCscCommands(ready,cscCache,true,3,5,0,cscRead,cscProduce,
+                [&](auto& bound) noexcept {
+                    ++cscGenerated;
+                    assert(bound.state[0x88]==1 && bound.ief[0x20]==1);
+                    uintptr_t matrix=0;std::memcpy(&matrix,bound.ief.data()+0x28,8);
+                    assert(matrix && *reinterpret_cast<const float*>(matrix)==2);
+                    assert(state.hasParametersLease() && !cscCache.reset());
+                    avs.reset();state.reset();buffers.reset();
+                    assert(avsBackend.live && cpu.live && backend.live==3);
+                    assert(!avs.initialize() && !state.initialize());
+                    return 31;
+                });
+        };
+        assert(tglWithOwnedSfcCommandInputs(commands,state,avs,cache,buffers,
+            output,prefix,{},true,false,false,TglOwnedSfcCompressionMode::Disabled,
+            config,sine,pinnedQuery,withCsc)==31);
+        assert(cscProduced==1 && cscGenerated==1 && commands.ief==originalIef);
+        assert(commands.state==cpu.bytes && cscCache.reset());
         queryResult=89;
+        assert(tglWithOwnedSfcCommandInputs(commands,state,avs,cache,buffers,
+            output,prefix,{},true,false,false,TglOwnedSfcCompressionMode::Disabled,
+            config,sine,pinnedQuery,withCsc)==89);
+        assert(cscProduced==1 && cscGenerated==1 && commands.ief==originalIef);
         assert(tglWithOwnedSfcCommandInputs(commands,state,avs,cache,buffers,
             output,prefix,{},true,false,false,TglOwnedSfcCompressionMode::Disabled,
             config,sine,pinnedQuery,[](auto&) noexcept {assert(false);return 0;})==89);
