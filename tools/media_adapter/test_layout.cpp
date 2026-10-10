@@ -1031,6 +1031,9 @@ static void testVeboxPrefix() {
         std::array<const TglOwnedSurfaceStorage*,5> slots{};
         for (size_t i=0; i<slots.size(); ++i) slots[i] = &shells[i];
         const auto command = tglSurfaceCommandSet(slots,0xff);
+        TglOwnedSurfaceInputs inputs;
+        inputs.surfaces = slots; inputs.di = 0xff;
+        assert(tglSurfaceCommandSet(inputs) == command);
         assert(command[0x168] == 1 && command[0x169] == 1);
         for (size_t i=0; i<slots.size(); ++i) {
             std::memcpy(&borrowed,command.data()+i*0x48+0x40,8);

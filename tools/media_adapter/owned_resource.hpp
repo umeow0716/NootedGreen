@@ -1271,6 +1271,15 @@ struct alignas(8) TglOwnedSurfaceStorage {
 static_assert(offsetof(TglOwnedSurfaceStorage,resource) == 0x148);
 static_assert(offsetof(TglOwnedSurfaceStorage,tail) == 0x290);
 static_assert(sizeof(TglOwnedSurfaceStorage) == 0x2a8);
+// Hook78's borrowed surface inputs, not hook70's a8-byte DI/IECP state.
+// Native52d60 consumes five pointers and flag28; builder's stack reserves30.
+struct TglOwnedSurfaceInputs {
+    std::array<const TglOwnedSurfaceStorage*,5> surfaces{};
+    uint8_t di = 0;
+    std::array<uint8_t,7> padding{};
+};
+static_assert(offsetof(TglOwnedSurfaceInputs,di) == 0x28);
+static_assert(sizeof(TglOwnedSurfaceInputs) == 0x30);
 inline std::array<uint8_t,0x48> tglSurfaceDescriptor(
         const TglOwnedSurfaceStorage& shell) noexcept {
     return tglSurfaceDescriptorBytes(reinterpret_cast<const uint8_t*>(&shell));
@@ -1282,6 +1291,10 @@ inline std::array<uint8_t,0x170> tglSurfaceCommandSet(
     for (size_t i=0; i<views.size(); ++i)
         if (surfaces[i]) views[i] = reinterpret_cast<const uint8_t*>(surfaces[i]);
     return tglSurfaceCommandSetBytes(views,di);
+}
+inline std::array<uint8_t,0x170> tglSurfaceCommandSet(
+        const TglOwnedSurfaceInputs& inputs) noexcept {
+    return tglSurfaceCommandSet(inputs.surfaces,inputs.di);
 }
 struct TglResourceStorageReference { std::array<uint8_t,0x148>& storage; };
 
