@@ -1799,6 +1799,25 @@ struct TglVeboxHardwareBinding {
     // family vptr766d0+198=23f46, so parent stamps follow the same dispatch.
     // This closes native retention/stamp relationships, not the separate
     // proof that our owned registration/prepare reaches them before submit.
+    // Native prepare26efa is distinct from channel admission: it creates map40
+    // through map26c70 only when absent, invokes Map138 at26ffd, and on success
+    // increments resource28, completes Map140, then sets resource e.bit4.
+    // prepareInTask27486 instead returns a task mapping; do not substitute it
+    // for the resource's prepared/channel state merely because both use138.
+    // addToChannel24100 increments a0 and merges usage98 (first admission also
+    // records channel index9c). Type82 forwards parent e0 via190 at24183.
+    // Neither this observed admission prefix nor allocation establishes that
+    // the owned submission actually executes prepare/add/remove in order.
+    // Context::bindResource ac0a now supplies the native ordering proof:
+    // ac85 Resource170=prepare26efa; only AL!=0 reaches ac9f Resource190=
+    // addToChannel24100. unbindResource accc calls Resource198=removeFromChannel
+    // at acde BEFORE tail-calling Resource178=complete27412 at acf0.
+    // These four slots are fixed in family vptr766d0+170..198, not guessed
+    // from method names. prepareResources acf6 is a separate prefix-count
+    // helper: it stops on the first failed prepare and returns successes,
+    // not an IOReturn and not channel admission. For an owned submit using
+    // this bind/unbind path, prove every backing token is registered there;
+    // CPU leases alone do not reproduce stamps or partial-prepare bookkeeping.
     template<class Read,class Qualify,class Executable,class Invoke>
     uint32_t markSubmitted(uintptr_t image,Read read,Qualify qualify,
                            Executable executable,Invoke invoke) const {
