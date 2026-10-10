@@ -7456,6 +7456,44 @@ int main() {
         input.ffdn[1]=nullptr; packet=original;
         assert(prepare() == 5 && admits == 0 && registrations == 0);
         assert(std::memcmp(&packet,&original,sizeof(packet)) == 0);
+        // All supported producer branches must retain every resource occurrence,
+        // including repeated slot5 writes: registration is not deduplicated.
+        input.ffdn[1]=&storage[8];
+        for(uint32_t pipe=0;pipe<3;++pipe) for(uint32_t flags=0;flags<32;++flags) {
+            input.pipe=pipe;input.di=flags&1;input.iecp=flags&2;
+            input.dnNeeded=flags&4;input.stmmNeeded=flags&8;
+            input.referenceValid=flags&16;input.target=&storage[11];
+            std::vector<const void*> wanted{&storage[0].resource};
+            std::vector<bool> wantedWrites{false};
+            auto append=[&](size_t index,bool write) {
+                wanted.push_back(&storage[index].resource);wantedWrites.push_back(write);
+            };
+            if(input.referenceValid) append(1,false);
+            if(pipe==2) append(11,true);
+            else if(input.di) {append(6,true);append(5,true);}
+            else if(input.iecp) append(4,true);
+            if(input.dnNeeded) {append(8,true);if(pipe==1 && !input.di) append(4,true);}
+            if(input.di || input.stmmNeeded) {append(10,false);append(9,true);}
+            append(2,true);
+            admits=registrations=controls=0;order.clear();writes.clear();
+            assert(tglPublishOwnedDiIecpToBuilder(packet,&packet,input,
+                [&](const auto&)->int {++admits;return 0;},
+                [&](const auto& resource,bool write,bool read)->int {
+                    assert(read && admits==wanted.size());
+                    order.push_back(&resource);writes.push_back(write);++registrations;return 0;
+                },
+                [&](const auto&,uint32_t&,size_t slot,bool direct)->int {
+                    assert(slot!=7 && direct==(pipe==2 && slot==5));++controls;return 0;
+                })==0);
+            assert(order==wanted && writes==wantedWrites && admits==wanted.size());
+            assert(registrations==wanted.size() && controls+1==registrations);
+            // Each published reference was admitted and registered, even when
+            // a later native-compatible write replaces the same packet slot.
+            for(const auto* resource:packet.resources) if(resource) {
+                bool found=false;for(const void* registered:order) found|=registered==resource;
+                assert(found);
+            }
+        }
     }
     {
         std::array<TglOwnedSurfaceStorage,5> storage{};
