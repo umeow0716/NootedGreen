@@ -6,6 +6,40 @@
 #include "descriptor_bridge.hpp"
 #include "owned_resource.hpp"
 
+static void testExecutionBinding() {
+    constexpr uintptr_t base = 0x1000000;
+    constexpr std::array<uintptr_t, 3> offsets{0x12ebc0, 0x12e420, 0x12e3f0};
+    std::array<std::array<uint8_t, 16>, 3> bytes{{
+        {0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x40,0x48,0x8b,0x35,0x59,0x54,0x62,0,0xbf},
+        {0x55,0x48,0x89,0xe5,0x48,0x81,0xec,0xb0,9,0,0,0x48,0x8b,5,0x56,0x5c},
+        {0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x10,0x48,0x89,0x7d,0xf8,0x48,0x8b,0x45,0xf8}
+    }};
+    int denied = -1;
+    bool identity = true, rx = true;
+    auto read = [&](uintptr_t p, void* out, size_t n) {
+        for (size_t i = 0; i < offsets.size(); ++i)
+            if (p == base + offsets[i] && n == 16 && int(i) != denied) {
+                std::memcpy(out, bytes[i].data(), n); return true;
+            }
+        return false;
+    };
+    auto qualify = [&](uintptr_t p) { return identity && p == base; };
+    auto executable = [&](uintptr_t, size_t n) { return rx && n == 16; };
+    TglExecutionBinding b;
+    assert(b.resolve(base, read, qualify, executable));
+    assert(b.image == base && b.create == base + offsets[0] &&
+           b.initialize == base + offsets[1] && b.destroy == base + offsets[2]);
+    for (int i = 0; i < 3; ++i) {
+        denied = i; assert(!b.resolve(base, read, qualify, executable));
+        assert(!b.image && !b.create && !b.initialize && !b.destroy); denied = -1;
+        bytes[i][15] ^= 1; assert(!b.resolve(base, read, qualify, executable)); bytes[i][15] ^= 1;
+    }
+    identity = false; assert(!b.resolve(base, read, qualify, executable)); identity = true;
+    rx = false; assert(!b.resolve(base, read, qualify, executable)); rx = true;
+    assert(!b.resolve(UINTPTR_MAX, read, qualify, executable));
+    assert(!b.resolve(0, read, qualify, executable));
+}
+
 static void testExecutionShape() {
     constexpr uintptr_t image = 0x1000000, object = 0x2000;
     uintptr_t vt = image + 0x757e90, first = 0x4000, second = 0x5000;
@@ -614,6 +648,7 @@ static void testResourceBinding() {
 // Offline layout hypothesis only: not an ABI-complete or deployable adapter.
 // The pinned consumer sites shift 0x20/0x24/0x228/0x428 by eight bytes.
 int main() {
+    testExecutionBinding();
     testExecutionShape();
     testExecutionOwner();
     testVeboxReport();

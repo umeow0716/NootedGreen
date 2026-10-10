@@ -29,6 +29,32 @@ bool tglExecutionShape(uintptr_t object, uintptr_t image, Read read, Qualify qua
            read(second, &secondVt, 8) && secondVt == image + 0x757fb8;
 }
 
+struct TglExecutionBinding {
+    uintptr_t image = 0, create = 0, initialize = 0, destroy = 0;
+    // Caller retains the authenticated image for the entire owner lifetime.
+    template<class Read, class Qualify, class Executable>
+    bool resolve(uintptr_t base, Read read, Qualify qualify, Executable executable) {
+        *this = {};
+        constexpr std::array<uintptr_t, 3> offsets{0x12ebc0, 0x12e420, 0x12e3f0};
+        constexpr std::array<std::array<uint8_t, 16>, 3> anchors{{
+            {0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x40,0x48,0x8b,0x35,0x59,0x54,0x62,0x00,0xbf},
+            {0x55,0x48,0x89,0xe5,0x48,0x81,0xec,0xb0,0x09,0x00,0x00,0x48,0x8b,0x05,0x56,0x5c},
+            {0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x10,0x48,0x89,0x7d,0xf8,0x48,0x8b,0x45,0xf8}
+        }};
+        if (!base || base > std::numeric_limits<uintptr_t>::max() - 0x757fd0 ||
+            !qualify(base)) return false;
+        for (size_t i = 0; i < offsets.size(); ++i) {
+            std::array<uint8_t, 16> bytes{};
+            if (!executable(base + offsets[i], bytes.size()) ||
+                !read(base + offsets[i], bytes.data(), bytes.size()) || bytes != anchors[i])
+                return false;
+        }
+        image = base;
+        create = base + offsets[0]; initialize = base + offsets[1]; destroy = base + offsets[2];
+        return true;
+    }
+};
+
 // Integration must bind Create to the constructor factory12ebc0, NOT
 // child factory12e9c0 (which discards Initialize errors). Backend validation
 // must authenticate the image/ABI and nested d38/d40 objects. Their mere
