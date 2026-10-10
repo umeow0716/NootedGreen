@@ -6792,6 +6792,39 @@ int main() {
             assert(updates==(failRead?0:1) && controls==(failRead?0:(controlFlag&1)));
             assert(failRead?!backend.count:backend.count==4);
         }
+        {
+            constexpr uintptr_t os=0x1000,image=0x100000;
+            const uintptr_t entry=image+0x659b0;
+            const std::array<uint8_t,20> anchor{
+                0x55,0x48,0x89,0xe5,0x48,0x89,0x7d,0xf8,0x48,0x89,
+                0x75,0xf0,0x89,0x55,0xec,0x89,0x4d,0xe8,0x5d,0xc3};
+            unsigned settingReads=0,invoked=0;
+            auto read=[&](uintptr_t address,void* out,size_t size) noexcept {
+                if(address==os+0x128 && size==8) {std::memcpy(out,&entry,8);return true;}
+                if(address==entry && size==20) {std::memcpy(out,anchor.data(),20);return true;}
+                if(address==0x2013 && size==1) {++settingReads;*static_cast<uint8_t*>(out)=1;return true;}
+                return false;
+            };
+            TglNativeSfcOutputUsageBinding usage;
+            assert(usage.resolve(os,image,read,[](uintptr_t value){return value==image;},
+                [&](uintptr_t value,size_t size){return value==entry && size==20;}));
+            for(unsigned flag:{0u,1u,2u}) for(int failure:{0,1,4,9}) {
+                auto output=shell;output[0xe8]=uint8_t(flag);
+                Backend backend;backend.expected=&parameters;backend.leasedLock=true;backend.lockFlag=1;
+                backend.failure=failure;backend.resource=reinterpret_cast<uintptr_t>(output.data()+0x148);
+                settingReads=invoked=0;
+                auto invoke=[&](uintptr_t function,uintptr_t context,const void* resource,uint32_t u,uint32_t f) noexcept {
+                    assert(function==entry && context==os && resource==output.data()+0x148);
+                    assert(u==6 && f==1 && settingReads==1 && !backend.count);++invoked;
+                };
+                auto platform=[&](auto& descriptor){assert(invoked==1);descriptor[0]=0xee;return backend.stage(3);};
+                const int result=tglSendOwnedSfcNativeOutputCommands(usage,backend,parameters,
+                    output,0x2000,0,0,0,0,read,platform,invoke);
+                if(flag&1) assert(result==5 && !invoked && !backend.count);
+                else assert(result==(failure?-failure:0) && invoked==1 && backend.count);
+                assert(output[0xe8]==flag && parameters.lock[8]==0);
+            }
+        }
     }
     {
         std::array<uint8_t,0x2a8> shell{};
