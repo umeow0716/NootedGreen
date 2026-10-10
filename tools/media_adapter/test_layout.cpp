@@ -7,6 +7,42 @@
 #include "owned_resource.hpp"
 
 static void testVeboxHardwareBinding() {
+    const TglSurfaceRect full{0,0,1920,1080};
+    const TglSurfaceRect larger{-1,-1,1921,1081};
+    assert(tglDirectVeboxGeometry(full, full, full, full));
+    assert(tglDirectVeboxGeometry(full, full, larger, full)); // containment, not ICL equality
+    assert(!tglDirectVeboxGeometry(full, full, {1,0,1921,1080}, full));
+    assert(!tglDirectVeboxGeometry(full, {0,0,1280,720}, larger, full));
+    assert(!tglDirectVeboxGeometry(full, full, larger, {0,0,1280,720}));
+    assert(!tglDirectVeboxGeometry({1,0,1921,1080}, full, larger, full));
+    assert(!tglDirectVeboxGeometry(full, {1,0,1921,1080}, larger, full));
+    const TglSurfaceRect fractional{0,0,1920.5f,1080.5f};
+    assert(tglDirectVeboxGeometry(fractional, fractional, larger, fractional));
+    uintptr_t failedRect = 0;
+    unsigned rectReads = 0;
+    auto rectRead = [&](uintptr_t p, void* out, size_t n) {
+        ++rectReads;
+        assert(n == 16 && (p == 0xa030 || p == 0xa040 || p == 0xa050 || p == 0xb040));
+        if (p == failedRect) return false;
+        std::memcpy(out, p == 0xa050 ? &larger : &full, n); return true;
+    };
+    assert(tglDirectVeboxSurfaceGeometry(0xa000, 0xb000, rectRead) && rectReads == 4);
+    for (uintptr_t p : {0xa030u,0xa040u,0xa050u,0xb040u}) {
+        failedRect = p;
+        assert(!tglDirectVeboxSurfaceGeometry(0xa000, 0xb000, rectRead));
+    }
+    rectReads = 0;
+    assert(!tglDirectVeboxSurfaceGeometry(0, 0xb000, rectRead));
+    assert(!tglDirectVeboxSurfaceGeometry(UINTPTR_MAX - 0x5e, 0xb000, rectRead));
+    assert(!tglDirectVeboxSurfaceGeometry(0xa000, UINTPTR_MAX - 0x4e, rectRead));
+    assert(rectReads == 0);
+    for (float bad : {std::numeric_limits<float>::infinity(),
+                      std::numeric_limits<float>::quiet_NaN()}) {
+        assert(!tglDirectVeboxGeometry(full, full, {0,0,bad,1080}, full));
+        assert(!tglDirectVeboxGeometry({0,0,bad,1080}, full, larger, full));
+        assert(!tglDirectVeboxGeometry(full, {0,0,bad,1080}, larger, full));
+        assert(!tglDirectVeboxGeometry(full, full, larger, {0,0,bad,1080}));
+    }
     constexpr uint32_t genericFormats[]{0x0d,0x0e,0x0f,0x10,0x11,0x12,0x13,
         0x14,0x15,0x17,0x19,0x52,0x53,0x58,0x59,0x4a,0x4c,0x4d,uint32_t(-7)};
     for (uint32_t format : genericFormats) assert(tglVeboxFormatSupported(format));

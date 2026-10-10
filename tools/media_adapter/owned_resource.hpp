@@ -86,6 +86,48 @@ bool tglVeboxDiSurfaceSupported(uintptr_t surface, Read read) {
     return tglVeboxSurfaceFormatPredicate(surface, read, tglVeboxDiFormatSupported);
 }
 
+struct TglSurfaceRect {
+    float left, top, right, bottom;
+    bool finite() const {
+        return std::isfinite(left) && std::isfinite(top) &&
+            std::isfinite(right) && std::isfinite(bottom);
+    }
+};
+// Geometry portion of Gen12 IS_OUTPUT_PIPE_VEBOX_FEASIBLE. Darwin uses float
+// rectangles at surface+30/+40/+50, not Linux integer RECT storage. Do not
+// copy ICL1fb2ec's max-source SIZE EQUALITY in place of Gen12 containment.
+// This alone is NOT direct-pipe admission: feature/format/CSC/alpha gates remain.
+inline bool tglDirectVeboxGeometry(const TglSurfaceRect& source,
+                                   const TglSurfaceRect& destination,
+                                   const TglSurfaceRect& maximumSource,
+                                   const TglSurfaceRect& targetDestination) {
+    if (!source.finite() || !destination.finite() || !maximumSource.finite() ||
+        !targetDestination.finite()) return false;
+    auto sameSize = [](const TglSurfaceRect& a, const TglSurfaceRect& b) {
+        const float aw = a.right - a.left, ah = a.bottom - a.top;
+        const float bw = b.right - b.left, bh = b.bottom - b.top;
+        return std::isfinite(aw) && std::isfinite(ah) && std::isfinite(bw) &&
+            std::isfinite(bh) && aw == bw && ah == bh;
+    };
+    return sameSize(source, destination) && sameSize(destination, targetDestination) &&
+        maximumSource.left <= source.left && maximumSource.top <= source.top &&
+        maximumSource.right >= source.right && maximumSource.bottom >= source.bottom &&
+        source.top == 0 && source.left == 0 && destination.top == 0 && destination.left == 0;
+}
+
+template<class Read>
+bool tglDirectVeboxSurfaceGeometry(uintptr_t source, uintptr_t target, Read read) {
+    constexpr auto max = std::numeric_limits<uintptr_t>::max();
+    if (!source || !target || source > max - 0x5f || target > max - 0x4f) return false;
+    static_assert(sizeof(TglSurfaceRect) == 16, "Darwin float rectangle ABI");
+    TglSurfaceRect src{}, dst{}, maximum{}, targetDst{};
+    return read(source + 0x30, &src, sizeof(src)) &&
+        read(source + 0x40, &dst, sizeof(dst)) &&
+        read(source + 0x50, &maximum, sizeof(maximum)) &&
+        read(target + 0x40, &targetDst, sizeof(targetDst)) &&
+        tglDirectVeboxGeometry(src, dst, maximum, targetDst);
+}
+
 // Gen12 IS_COMP_BYPASS_FEASIBLE; this is only the first output-pipe gate, not
 // VEBOX/SFC admission. Darwin field reads pinned by ICL1fb16b..1fb205.
 template<class Read>
