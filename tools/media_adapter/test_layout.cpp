@@ -98,6 +98,53 @@ static void testVeboxHardwareBinding() {
     formatReadable = false; assert(!tglVeboxDiSurfaceSupported(0x5000, formatRead));
     sourceFormat = 0x19; formatReadable = false;
     assert(!tglVeboxDnSurfaceSupported(0x5000, formatRead));
+    std::array<unsigned char, 0xe0> pipeParams{};
+    std::array<unsigned char, 0x83> pipeSurface{};
+    uint32_t oneSource = 1;
+    std::memcpy(pipeParams.data(), &oneSource, 4);
+    std::memcpy(pipeParams.data() + 0x90, &oneSource, 4);
+    uint8_t compNeeded = 0;
+    uintptr_t failedPipeRead = 0;
+    unsigned pipeReads = 0;
+    auto pipeRead = [&](uintptr_t p, void* out, size_t n) {
+        ++pipeReads;
+        if (p == failedPipeRead) return false;
+        if (p == 0x9000 && n == 1) { std::memcpy(out, &compNeeded, 1); return true; }
+        if (p >= 0x7000 && p - 0x7000 + n <= pipeParams.size()) {
+            std::memcpy(out, pipeParams.data() + p - 0x7000, n); return true;
+        }
+        if (p >= 0x8000 && p - 0x8000 + n <= pipeSurface.size()) {
+            std::memcpy(out, pipeSurface.data() + p - 0x8000, n); return true;
+        }
+        assert(false); return false;
+    };
+    assert(tglCompositionBypassFeasible(0x7000, 0x8000, 0x9000, pipeRead));
+    assert(pipeReads == 8);
+    for (uintptr_t p : {0x9000u,0x7000u,0x7090u,0x8060u,0x8081u,0x8082u,0x8068u,0x70d8u}) {
+        failedPipeRead = p;
+        assert(!tglCompositionBypassFeasible(0x7000, 0x8000, 0x9000, pipeRead));
+    }
+    failedPipeRead = 0;
+    for (size_t offset : {size_t(0x60),size_t(0x81),size_t(0x82),size_t(0x68)}) {
+        pipeSurface[offset] = 1;
+        assert(!tglCompositionBypassFeasible(0x7000, 0x8000, 0x9000, pipeRead));
+        pipeSurface[offset] = 0;
+    }
+    for (size_t offset : {size_t(0),size_t(0x90),size_t(0xd8)}) {
+        auto original = pipeParams[offset]; pipeParams[offset] = offset == 0xd8 ? 1 : 2;
+        assert(!tglCompositionBypassFeasible(0x7000, 0x8000, 0x9000, pipeRead));
+        pipeParams[offset] = original;
+    }
+    compNeeded = 1;
+    assert(!tglCompositionBypassFeasible(0x7000, 0x8000, 0x9000, pipeRead));
+    compNeeded = 2; pipeSurface[0x81] = 2; pipeSurface[0x82] = 2;
+    assert(tglCompositionBypassFeasible(0x7000, 0x8000, 0x9000, pipeRead)); // native bit0
+    pipeReads = 0;
+    assert(!tglCompositionBypassFeasible(UINTPTR_MAX - 0xde, 0x8000, 0x9000, pipeRead));
+    assert(!tglCompositionBypassFeasible(0x7000, 0, 0x9000, pipeRead));
+    assert(!tglCompositionBypassFeasible(0x7000, UINTPTR_MAX - 0x81, 0x9000, pipeRead));
+    assert(!tglCompositionBypassFeasible(0x7000, 0x8000, 0, pipeRead));
+    assert(pipeReads == 0);
     constexpr uintptr_t image = 0x1000000, mhw = 0x2000, os = 0x3000;
     uintptr_t vt = image + 0x759520, actualOs = os, heap = 0x4000;
     bool identity = true, readable = true;
