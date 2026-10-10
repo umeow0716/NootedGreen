@@ -5,6 +5,17 @@ compiler="${CXX:-clang++}"
 task_output="$(mktemp -d /tmp/ngreen-static.XXXXXX)"
 printf 'Diagnostic directory: %s\n' "$task_output"
 failed=0
+# Native-host CPU-only tests; no driver load or GPU access. The dedicated
+# macos-26-intel workflow also runs these with the real Darwin VM APIs.
+if "$compiler" -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined \
+    tools/media_adapter/test_layout.cpp -o "$task_output/owned-adapter-test" \
+    > "$task_output/owned-adapter-build.log" 2>&1 && \
+    "$task_output/owned-adapter-test" > "$task_output/owned-adapter-test.log" 2>&1; then
+    printf 'PASS owned adapter layout/lifecycle/report tests (ASan/UBSan)\n'
+else
+    printf 'FAIL owned adapter tests (see diagnostic directory)\n'
+    failed=1
+fi
 if bash -n tools/*.sh; then
     printf 'PASS shell syntax: all host/static scripts\n'
 else
