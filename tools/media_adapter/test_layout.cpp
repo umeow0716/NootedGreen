@@ -2034,6 +2034,37 @@ static void testResourceBinding() {
 // Offline layout hypothesis only: not an ABI-complete or deployable adapter.
 // The pinned consumer sites shift 0x20/0x24/0x228/0x428 by eight bytes.
 int main() {
+    {
+        TglOwnedDiIecpPacket packet;
+        const std::array<uint8_t,0xa8> zero{};
+        assert(std::memcmp(&packet,zero.data(),zero.size()) == 0);
+        TglOwnedSurfaceStorage storage;
+        auto* bytes = reinterpret_cast<const uint8_t*>(&packet);
+        for (size_t i=0;i<packet.resources.size();++i) {
+            packet.resources[i] = &storage.resource;
+            uintptr_t value = 0;
+            std::memcpy(&value,bytes+0x20+i*8,8);
+            assert(value == reinterpret_cast<uintptr_t>(&storage.resource));
+        }
+        for (size_t i=0;i<packet.controls.size();++i) {
+            packet.controls[i] = uint32_t(0x100+i);
+            uint32_t value = 0;
+            std::memcpy(&value,bytes+0x78+i*4,4);
+            assert(value == 0x100+i);
+        }
+        struct Context { int calls=0; const TglOwnedDiIecpPacket* expected; void* buffer; };
+        int commandBuffer = 0;
+        Context context{0,&packet,&commandBuffer};
+        auto emit = +[](void* raw,void* buffer,const TglOwnedDiIecpPacket* input)->int {
+            auto& c = *static_cast<Context*>(raw);
+            ++c.calls;
+            assert(input == c.expected && buffer == c.buffer);
+            return 31;
+        };
+        assert(TglNativeDiIecpInvoker{}(reinterpret_cast<uintptr_t>(emit),
+            reinterpret_cast<uintptr_t>(&context),&commandBuffer,packet) == 31);
+        assert(context.calls == 1);
+    }
     testTrackedCpuOwner();
     testOwnedVeboxVtable();
     testNativeCscBinding();

@@ -1312,6 +1312,31 @@ struct TglOwnedSurfaceInputs {
 };
 static_assert(offsetof(TglOwnedSurfaceInputs,di) == 0x28);
 static_assert(sizeof(TglOwnedSurfaceInputs) == 0x30);
+// Hook70 packet: TGL MHW vtable759520+28 ->172080 independently proves
+// resource20..60, paired control78..98 and final DWORDa4. Preserve unknown
+// prefix/gap as bytes; this is storage, NOT a complete command producer.
+// Resource pointers are borrowed: their owners must outlive native emission.
+struct TglOwnedDiIecpPacket {
+    std::array<uint8_t,0x20> prefix{};
+    std::array<const std::array<uint8_t,0x148>*,9> resources{};
+    std::array<uint8_t,0x10> reserved{};
+    std::array<uint32_t,12> controls{};
+};
+static_assert(offsetof(TglOwnedDiIecpPacket,resources) == 0x20);
+static_assert(offsetof(TglOwnedDiIecpPacket,reserved) == 0x68);
+static_assert(offsetof(TglOwnedDiIecpPacket,controls) == 0x78);
+static_assert(sizeof(TglOwnedDiIecpPacket) == 0xa8);
+// Native builder12a14c calls MHW+28 with exactly these three arguments.
+// Binding/image authentication, backing and complete packet admission belong
+// to the caller; this invoker neither creates resources nor changes status.
+struct TglNativeDiIecpInvoker {
+    int operator()(uintptr_t entry, uintptr_t mhw, void* commandBuffer,
+                   const TglOwnedDiIecpPacket& packet) const noexcept {
+        using Emit = int (*)(void*,void*,const TglOwnedDiIecpPacket*);
+        return reinterpret_cast<Emit>(entry)(reinterpret_cast<void*>(mhw),
+                                             commandBuffer,&packet);
+    }
+};
 // Gen12 GetSurfOutput decision tree, independent of Darwin object offsets.
 // TGL mode2/target60 is pinned separately; mode1 is SFC. Caller must decode
 // and authenticate execution fields, and lease/back the selected surface.
