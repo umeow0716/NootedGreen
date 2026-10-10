@@ -7497,6 +7497,17 @@ int main() {
         };
         const TglOwnedSfcCommandParameters parameters{};
         const std::array<uint8_t,0x2a8> shell{};
+        {
+            TglOwnedSfcCommandParameters invalid{};
+            const uint32_t nv12=0x19;
+            std::memcpy(invalid.state.data()+0x2c,&nv12,4);
+            Backend backend;backend.expected=&invalid;
+            unsigned platformCalls=0;
+            auto platform=[&](auto&) {++platformCalls;return 0;};
+            assert(tglSendOwnedSfcPreparedCommands(backend,invalid,shell,
+                0,0,0,0,platform)==5);
+            assert(!backend.count && !platformCalls);
+        }
         for(unsigned flags=0;flags<16;++flags) for(int failure=0;failure<=9;++failure) {
             Backend backend;backend.failure=failure;backend.expected=&parameters;
             backend.resource=reinterpret_cast<uintptr_t>(shell.data()+0x148);
@@ -7661,6 +7672,22 @@ int main() {
         put(0xe0,0);descriptor=tglOwnedSfcOutputDescriptor(shell);assert(get(0x24)==0);
         put(0xe0,1);put(0x100,0);put(0xf0,1);put(0x108,2);
         descriptor=tglOwnedSfcOutputDescriptor(shell);assert(get(0x24)==1);
+        put(0x130,0x19);put(0xe0,2048);put(0xf0,0);put(0x100,2048*1080);
+        put(0x108,0);
+        assert(tglOwnedSfcNv12OutputFits(0x19,shell.data()));
+        put(0x108,0xffff-1080);
+        assert(tglOwnedSfcNv12OutputFits(0x19,shell.data()));
+        put(0x108,0x10000-1080);
+        assert(!tglOwnedSfcNv12OutputFits(0x19,shell.data()));
+        put(0x108,UINT32_MAX); // wrapped descriptor must not pass qualification
+        assert(!tglOwnedSfcNv12OutputFits(0x19,shell.data()));
+        put(0x108,0);put(0xf0,2048*1080+1);
+        assert(!tglOwnedSfcNv12OutputFits(0x19,shell.data()));
+        put(0xf0,0);put(0xe0,0);
+        assert(!tglOwnedSfcNv12OutputFits(0x19,shell.data()));
+        put(0xe0,2048);put(0x130,0x52);
+        assert(!tglOwnedSfcNv12OutputFits(0x19,shell.data()));
+        assert(tglOwnedSfcNv12OutputFits(0x52,shell.data()));
     }
     {
         constexpr uintptr_t base=0x10000000,os=0x20000000;

@@ -3188,6 +3188,19 @@ template<class Surface>
 inline std::array<uint8_t,0x38> tglOwnedSfcOutputDescriptor(const Surface& surface) noexcept {
     return tglOwnedSfcOutputDescriptorBytes(tglOwnedSfcSurfaceBytes(surface));
 }
+// Format19 selects TGL16872e: output+24 is truncated to16 bits. Validate
+// before any command write, not after the descriptor's uint32 arithmetic has
+// already wrapped. Other format branches retain their separate qualification.
+inline bool tglOwnedSfcNv12OutputFits(uint32_t format,const uint8_t* shell) noexcept {
+    if(format!=0x19) return true;
+    const auto get=[&](size_t offset) noexcept {
+        uint32_t value=0;std::memcpy(&value,shell+offset,4);return value;
+    };
+    const uint32_t pitch=get(0xe0),y=get(0xf0),uv=get(0x100);
+    if(get(0x130)!=format || !pitch || uv<y) return false;
+    const uint64_t row=uint64_t(uv-y)/pitch+get(0x108);
+    return row<=0xffff;
+}
 
 inline std::array<uint8_t,0x48> tglSurfaceDescriptor(
         const std::array<uint8_t,0x2a8>& shell) noexcept {
@@ -5980,6 +5993,9 @@ int tglSendOwnedSfcPreparedCommands(Backend &backend,
     const Surface &shell,uint8_t scaling,uint8_t forceAvs,
     uint8_t ief,uint8_t csc,Platform &platform,
     const TglOwnedSfcLockParameters* lockOverride=nullptr) {
+    uint32_t outputFormat=0;
+    std::memcpy(&outputFormat,parameters.state.data()+0x2c,4);
+    if(!tglOwnedSfcNv12OutputFits(outputFormat,tglOwnedSfcSurfaceBytes(shell))) return 5;
     struct Commands {
         Backend &backend;
         const TglOwnedSfcCommandParameters &parameters;
