@@ -4,10 +4,78 @@
 #include <cstring>
 #include "tgl_capability_adapter.hpp"
 #include "descriptor_bridge.hpp"
+#include "owned_resource.hpp"
+
+static void testOwnedResourceLifecycle() {
+    struct Backend {
+        int allocations = 0, releases = 0, status = 0;
+        bool makeBacking = true;
+        int allocate(std::array<uint8_t, 0x148> &s, const TglResourceKey &) noexcept {
+            ++allocations;
+            for (auto byte : s) assert(byte == 0);
+            s[0] = 1; // partially created descriptor even on failure
+            s[1] = makeBacking;
+            return status;
+        }
+        bool backed(const std::array<uint8_t, 0x148> &s) const noexcept { return s[1] != 0; }
+        void release(std::array<uint8_t, 0x148> &s) noexcept {
+            assert(s[0] == 1);
+            ++releases;
+            // Deliberately leave stale data: the owner must clear it itself.
+        }
+    } backend;
+    using Owner = TglOwnedResource<Backend>;
+    const TglResourceKey original{1920, 1080, 0x19, 0, 0, false};
+    {
+        Owner owner(backend);
+        assert(owner.state() == Owner::State::Empty);
+        auto r = owner.ensure(original);
+        assert(r.status == 0 && r.changed && r.state == Owner::State::Backed);
+        r = owner.ensure(original);
+        assert(!r.changed && backend.allocations == 1 && backend.releases == 0);
+        for (unsigned field = 0; field < 6; ++field) {
+            auto key = original;
+            switch (field) {
+                case 0: ++key.width; break;
+                case 1: ++key.height; break;
+                case 2: ++key.format; break;
+                case 3: ++key.tile; break;
+                case 4: ++key.compressionMode; break;
+                case 5: key.compressed = true; break;
+            }
+            r = owner.ensure(key);
+            assert(r.status == 0 && r.changed && r.state == Owner::State::Backed);
+            r = owner.ensure(original);
+            assert(r.changed);
+        }
+        backend.status = 25;
+        auto changed = original;
+        ++changed.width;
+        const int before = backend.releases;
+        r = owner.ensure(changed);
+        assert(r.status == 25 && r.state == Owner::State::Empty && !r.changed);
+        assert(backend.releases == before + 2); // old + partial replacement
+        for (auto byte : owner.storage()) assert(byte == 0);
+        owner.reset();
+        assert(backend.releases == before + 2); // no double release
+        backend.status = 0;
+        backend.makeBacking = false;
+        r = owner.ensure(original);
+        assert(r.status == 0 && r.state == Owner::State::DescriptorOnly && r.changed);
+        const int allocated = backend.allocations;
+        r = owner.ensure(original);
+        assert(r.changed && backend.allocations == allocated + 1); // never reuse absent backing
+        backend.makeBacking = true;
+        r = owner.ensure(original);
+        assert(r.state == Owner::State::Backed);
+    }
+    assert(backend.allocations == backend.releases);
+}
 
 // Offline layout hypothesis only: not an ABI-complete or deployable adapter.
 // The pinned consumer sites shift 0x20/0x24/0x228/0x428 by eight bytes.
 int main() {
+    testOwnedResourceLifecycle();
     std::vector<uint8_t> blob(TglKernelMetadataAdapter::blobBytes, 0x5a);
     const uint32_t offsets[] = {344224, 344448};
     std::memcpy(blob.data() + 78 * 4, offsets, sizeof(offsets));
