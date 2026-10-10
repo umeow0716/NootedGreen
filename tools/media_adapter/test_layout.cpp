@@ -6869,6 +6869,23 @@ int main() {
                 else assert(result==(failure?-failure:0) && invoked==1 && backend.count);
                 assert(output[0xe8]==flag && parameters.lock[8]==0);
             }
+            TglOwnedSurfaceStorage typedOutput;
+            typedOutput.resource[0]=0x80;
+            const auto originalResource=typedOutput.resource;
+            Backend backend;backend.expected=&parameters;backend.leasedLock=true;backend.lockFlag=1;
+            backend.resource=reinterpret_cast<uintptr_t>(typedOutput.resource.data());
+            settingReads=invoked=0;
+            auto invoke=[&](uintptr_t function,uintptr_t context,const void* resource,uint32_t u,uint32_t f) noexcept {
+                assert(function==entry && context==os && resource==typedOutput.resource.data());
+                assert(u==6 && f==1 && settingReads==1 && !backend.count);++invoked;
+            };
+            auto platform=[&](auto& descriptor) {assert(invoked==1);descriptor[0]=0xee;return backend.stage(3);};
+            assert(tglSendOwnedSfcNativeOutputCommands(usage,backend,parameters,typedOutput,
+                0x2000,0,0,0,0,read,platform,invoke)==0);
+            assert(invoked==1 && backend.count==4 && typedOutput.resource==originalResource);
+            const auto descriptor=tglOwnedSfcOutputDescriptor(typedOutput);
+            uintptr_t resource=0;std::memcpy(&resource,descriptor.data()+0x28,8);
+            assert(resource==reinterpret_cast<uintptr_t>(typedOutput.resource.data()));
         }
     }
     {

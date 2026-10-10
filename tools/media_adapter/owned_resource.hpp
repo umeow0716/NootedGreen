@@ -3092,11 +3092,15 @@ inline std::array<uint8_t, 0x48> tglSurfaceDescriptorBytes(const uint8_t* shell)
 // SFC output descriptor ABI (ICL1dcf30), sourced from the already-closed
 // Darwin surface-shell fields. Unlike52bf0 this is0x38 bytes, with the borrowed
 // resource pointer at28, not40. No ICL object or GPU command is reused.
-inline std::array<uint8_t,0x38> tglOwnedSfcOutputDescriptor(
-        const std::array<uint8_t,0x2a8>& shell) noexcept {
+struct TglOwnedSurfaceStorage;
+inline const uint8_t* tglOwnedSfcSurfaceBytes(const TglOwnedSurfaceStorage& surface) noexcept;
+inline const uint8_t* tglOwnedSfcSurfaceBytes(const std::array<uint8_t,0x2a8>& surface) noexcept {
+    return surface.data();
+}
+inline std::array<uint8_t,0x38> tglOwnedSfcOutputDescriptorBytes(const uint8_t* shell) noexcept {
     std::array<uint8_t,0x38> out{};
     const auto get=[&](size_t offset) {
-        uint32_t value=0;std::memcpy(&value,shell.data()+offset,4);return value;
+        uint32_t value=0;std::memcpy(&value,shell+offset,4);return value;
     };
     const auto put=[&](size_t offset,uint32_t value) {
         std::memcpy(out.data()+offset,&value,4);
@@ -3106,10 +3110,14 @@ inline std::array<uint8_t,0x38> tglOwnedSfcOutputDescriptor(
     put(0x1c,get(0xf4));put(0x20,get(0xf8));
     const uint32_t pitch=get(0xe0);
     if(pitch) put(0x24,(get(0x100)-get(0xf0))/pitch+get(0x108));
-    const uintptr_t resource=reinterpret_cast<uintptr_t>(shell.data()+0x148);
+    const uintptr_t resource=reinterpret_cast<uintptr_t>(shell+0x148);
     std::memcpy(out.data()+0x28,&resource,8);
     out[0x30]=shell[0x299]&1;
     return out;
+}
+template<class Surface>
+inline std::array<uint8_t,0x38> tglOwnedSfcOutputDescriptor(const Surface& surface) noexcept {
+    return tglOwnedSfcOutputDescriptorBytes(tglOwnedSfcSurfaceBytes(surface));
 }
 
 inline std::array<uint8_t,0x48> tglSurfaceDescriptor(
@@ -3273,12 +3281,13 @@ public:
         context_=os;entry_=entry;return true;
     }
     // Enclosing caller owns OS/image/surface leases throughout command use.
-    template<class Use,class Invoke=TglNativeSfcOutputUsageInvoker>
-    int withOutput(const std::array<uint8_t,0x2a8>& surface,Use use,Invoke invoke=Invoke{}) const noexcept {
+    template<class Surface,class Use,class Invoke=TglNativeSfcOutputUsageInvoker>
+    int withOutput(const Surface& surface,Use use,Invoke invoke=Invoke{}) const noexcept {
         static_assert(noexcept(use()) && noexcept(invoke(uintptr_t{},uintptr_t{},
             static_cast<const void*>(nullptr),uint32_t{},uint32_t{})),"SFC usage scope ABI");
-        if(!context_ || !entry_ || (surface[0xe8]&1)) return 5;
-        invoke(entry_,context_,surface.data()+0x148,6,1);
+        const auto* bytes=tglOwnedSfcSurfaceBytes(surface);
+        if(!context_ || !entry_ || (bytes[0xe8]&1)) return 5;
+        invoke(entry_,context_,bytes+0x148,6,1);
         return use();
     }
 };
@@ -3592,6 +3601,9 @@ struct alignas(8) TglOwnedSurfaceStorage {
 static_assert(offsetof(TglOwnedSurfaceStorage,resource) == 0x148);
 static_assert(offsetof(TglOwnedSurfaceStorage,tail) == 0x290);
 static_assert(sizeof(TglOwnedSurfaceStorage) == 0x2a8);
+inline const uint8_t* tglOwnedSfcSurfaceBytes(const TglOwnedSurfaceStorage& surface) noexcept {
+    return reinterpret_cast<const uint8_t*>(&surface);
+}
 // Source and its DN parameter allocation are separately leased by the frame
 // owner. Equality checks prevent silently adopting an opaque source+90 pointer.
 // Read only eight parameter bytes; automatic mode does not consume strength.
@@ -5629,17 +5641,17 @@ int tglWithOwnedSfcCscCommands(TglOwnedSfcCommandParameters& parameters,
 // usage registration must already be complete; shell/owners must remain live.
 // On any failure the caller must discard the partial command buffer, never
 // submit it. Platform is an explicit qualified producer, NOT an assumed no-op.
-template<class Backend,class Platform>
+template<class Backend,class Platform,class Surface>
 int tglSendOwnedSfcPreparedCommands(Backend &backend,
     const TglOwnedSfcCommandParameters &parameters,
-    const std::array<uint8_t,0x2a8> &shell,uint8_t scaling,uint8_t forceAvs,
+    const Surface &shell,uint8_t scaling,uint8_t forceAvs,
     uint8_t ief,uint8_t csc,Platform &platform,
     const TglOwnedSfcLockParameters* lockOverride=nullptr) {
     struct Commands {
         Backend &backend;
         const TglOwnedSfcCommandParameters &parameters;
         const TglOwnedSfcLockParameters &lockParameters;
-        const std::array<uint8_t,0x2a8> &shell;
+        const Surface &shell;
         Platform &platformProducer;
         std::array<uint8_t,0x38> descriptor{};
         int lock(){return backend.lock(lockParameters);}
@@ -5659,10 +5671,10 @@ int tglSendOwnedSfcPreparedCommands(Backend &backend,
 // stays live through emission without mutating the reusable parameter owner.
 // Output registration/image/resource leases and discard-on-error remain the
 // enclosing sender's obligations, as for the prepared-command entry above.
-template<class Backend,class Platform,class Read>
+template<class Backend,class Platform,class Read,class Surface>
 int tglSendOwnedSfcLeasedCommands(Backend& backend,
     const TglOwnedSfcCommandParameters& parameters,
-    const std::array<uint8_t,0x2a8>& shell,uintptr_t settings,
+    const Surface& shell,uintptr_t settings,
     uint8_t scaling,uint8_t forceAvs,uint8_t ief,uint8_t csc,
     Read read,Platform& platform) {
     TglOwnedSfcLockParameters lock;
@@ -5672,10 +5684,10 @@ int tglSendOwnedSfcLeasedCommands(Backend& backend,
 }
 // Compose the exact TGL binding with leased settings and owned emission.
 // No use of the generic injected OS+130 path until its binding is proved.
-template<class Backend,class Platform,class Read,class Invoke=TglNativeSfcOutputUsageInvoker>
+template<class Backend,class Platform,class Read,class Surface,class Invoke=TglNativeSfcOutputUsageInvoker>
 int tglSendOwnedSfcNativeOutputCommands(const TglNativeSfcOutputUsageBinding& usage,
     Backend& backend,const TglOwnedSfcCommandParameters& parameters,
-    const std::array<uint8_t,0x2a8>& shell,uintptr_t settings,
+    const Surface& shell,uintptr_t settings,
     uint8_t scaling,uint8_t forceAvs,uint8_t ief,uint8_t csc,
     Read read,Platform& platform,Invoke invoke=Invoke{}) {
     TglOwnedSfcLockParameters lock;
@@ -5689,13 +5701,14 @@ int tglSendOwnedSfcNativeOutputCommands(const TglNativeSfcOutputUsageBinding& us
 // OS+130(resource,6) when surface+e8 bit0 is set. Neither result is read.
 // This is NOT OS+248 relocation registration. The injected producers must
 // already bind authenticated native entries and retain the OS/output leases.
-template<class Backend,class Platform,class Read,class Update,class Control>
+template<class Backend,class Platform,class Read,class Update,class Control,class Surface>
 int tglSendOwnedSfcWithOutputUsage(Backend& backend,
     const TglOwnedSfcCommandParameters& parameters,
-    const std::array<uint8_t,0x2a8>& shell,uintptr_t settings,
+    const Surface& shell,uintptr_t settings,
     uint8_t scaling,uint8_t forceAvs,uint8_t ief,uint8_t csc,
     Read read,Update update,Control control,Platform& platform) {
-    const void* resource=shell.data()+0x148;
+    const auto* bytes=tglOwnedSfcSurfaceBytes(shell);
+    const void* resource=bytes+0x148;
     static_assert(noexcept(update(resource,uint32_t{},uint32_t{})) &&
                   noexcept(control(resource,uint32_t{})),"SFC output usage ABI");
     static_assert(std::is_same_v<decltype(update(resource,uint32_t{},uint32_t{})),void> &&
@@ -5704,7 +5717,7 @@ int tglSendOwnedSfcWithOutputUsage(Backend& backend,
     TglOwnedSfcLockParameters lock;
     if(!tglReadOwnedSfcLockParameters(settings,1,read,lock)) return 5;
     update(resource,6,1);
-    if(shell[0xe8]&1) control(resource,6);
+    if(bytes[0xe8]&1) control(resource,6);
     return tglSendOwnedSfcPreparedCommands(backend,parameters,shell,
         scaling,forceAvs,ief,csc,platform,&lock);
 }
