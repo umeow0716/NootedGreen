@@ -195,12 +195,21 @@ int main() {
     {
         const uint32_t source = 0x1234, replacement = 0x5678, other = 0xabcd;
         uint32_t destination = 0;
+        int journal[2];
+        if (pipe(journal)) return 1;
         NativeReturnObserver copy({reinterpret_cast<uintptr_t>(owned_debug_copy_site), 0, 0, 0},
             0, 0, 0, 0, 0, 0,
-            {reinterpret_cast<uintptr_t>(&source), reinterpret_cast<uintptr_t>(&replacement), 4});
+            {reinterpret_cast<uintptr_t>(&source), reinterpret_cast<uintptr_t>(&replacement), 4, journal[1]});
         if (owned_debug_copy_target(&destination, 4, &source, 4) != replacement ||
             destination != replacement || source != 0x1234 || !copy.observed(0, 1)) return 1;
         if (owned_debug_copy_target(&destination, 4, &other, 4) != other) return 1;
+        close(journal[1]);
+        uint32_t records[12]{};
+        if (read(journal[0], records, sizeof(records)) != sizeof(records)) return 1;
+        close(journal[0]);
+        for (unsigned i = 0; i != 3; ++i)
+            if (records[4*i] != 0x4e47524e || records[4*i+1] != i+1) return 1;
+        if (records[2] != 0 || records[6] != 1 || records[10] != KERN_SUCCESS) return 1;
     }
     {
         const uint32_t source = 0x1234, replacement = 0x5678, other = 0xabcd;

@@ -11,9 +11,11 @@
 #include <cstdint>
 #include <mutex>
 #include <array>
+#include <cerrno>
 
 struct NativeOwnedCopy {
     uintptr_t source = 0, replacement = 0, bytes = 0;
+    int journal = -1;
 };
 
 class NativeReturnObserver {
@@ -39,6 +41,15 @@ class NativeReturnObserver {
     volatile sig_atomic_t handlerRestore = KERN_FAILURE;
     bool installed = false;
     bool armed = false;
+    // Fixed records, no pointers; write is async-signal-safe. Diagnostic failure
+    // must never alter native signal/debug policy or the copy decision.
+    void record(uint32_t stage, uint32_t value) const {
+        if (ownedCopy.journal < 0) return;
+        const int savedErrno = errno;
+        const uint32_t words[] = {0x4e47524e, stage, value, uint32_t(hitMask)};
+        (void)write(ownedCopy.journal, words, sizeof(words));
+        errno = savedErrno;
+    }
     static constexpr uint64_t canonical(uint64_t dr7) {
         return (dr7 | uint64_t(0x400)) & ~uint64_t(0xd800);
     }
@@ -51,6 +62,7 @@ class NativeReturnObserver {
                 if (self->sites[i] && state->uc_mcontext->__ss.__rip == self->sites[i] &&
                     !(self->hitMask & (1 << i))) site = i;
         }
+        if (self) self->record(1, site);
         if (site == 4) {
             // Admission requires SIG_DFL. Preserve its terminating semantics;
             // never consume another thread's unrelated debugger exception.
@@ -72,6 +84,7 @@ class NativeReturnObserver {
                 state->uc_mcontext->__ss.__rdi != 0;
             if (exact) state->uc_mcontext->__ss.__rdx = copy.replacement;
             raw = exact ? 1 : uintptr_t(-1);
+            self->record(2, exact ? 1 : 0);
         }
         if (self->rcxSites & (1u << site)) raw = state->uc_mcontext->__ss.__rcx;
         // Only caller-pinned native DWORD-load sites opt in. Exactly the same
@@ -94,6 +107,7 @@ class NativeReturnObserver {
         if (self->hitMask == self->wanted) next = self->saved;
         self->handlerRestore = thread_set_state(self->thread, x86_DEBUG_STATE64,
             reinterpret_cast<thread_state_t>(&next), x86_DEBUG_STATE64_COUNT);
+        self->record(3, uint32_t(self->handlerRestore));
         if (self->handlerRestore != KERN_SUCCESS) _exit(74);
     }
 public:

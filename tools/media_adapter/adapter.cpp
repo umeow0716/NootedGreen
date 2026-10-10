@@ -101,8 +101,18 @@ int NGRN_ObservedCreateContexts(void *context, const void *input) {
     }
     // Native thread/debug policy remains authoritative: refusal leaves native untouched.
     // The single pinned copy consumes our owned CPU metadata; GPU kernel bytes are identical.
+    char journalPath[] = "/private/tmp/ngreen-owned-copy-XXXXXX";
+    struct Journal {
+        int fd;
+        ~Journal() { if (fd >= 0) close(fd); }
+    } journal{mkstemp(journalPath)};
+    if (journal.fd < 0) {
+        os_log_error(OS_LOG_DEFAULT, "NGRN_OWNED_COPY_JOURNAL_DENIED native-unchanged");
+        return native(context, input);
+    }
+    os_log_error(OS_LOG_DEFAULT, "NGRN_OWNED_COPY_JOURNAL path=%{public}s", journalPath);
     NativeReturnObserver observer({site, 0, 0, 0}, 0, 0, 0, 0, 0, 0,
-        {source, reinterpret_cast<uintptr_t>(owned.data()), owned.size()});
+        {source, reinterpret_cast<uintptr_t>(owned.data()), owned.size(), journal.fd});
     const int result = native(context, input);
     os_log_error(OS_LOG_DEFAULT, "NGRN_OWNED_KERNEL_METADATA_COPY applied=%{public}d result=%{public}d",
         int(observer.observed(0, 1)), result);
