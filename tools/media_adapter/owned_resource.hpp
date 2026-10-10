@@ -3252,6 +3252,10 @@ inline bool tglNativeSfcStateFormatSupported(uint32_t format) noexcept {
         default:return false;
     }
 }
+// TGL1695ef..169617 encodes (output pitch-1) in17 bits at DW29 bits3..19.
+inline bool tglNativeSfcOutputPitchFits(uint32_t pitch) noexcept {
+    return pitch && pitch<=0x20000;
+}
 
 inline std::array<uint8_t,0x48> tglSurfaceDescriptor(
         const std::array<uint8_t,0x2a8>& shell) noexcept {
@@ -6126,11 +6130,20 @@ int tglSendOwnedSfcNativeOutputCommands(const TglNativeSfcOutputUsageBinding& us
        boundOutput!=reinterpret_cast<uintptr_t>(bytes+0x148)) return 5;
     uint32_t format=0;std::memcpy(&format,parameters.state.data()+0x2c,4);
     if(!tglNativeSfcStateFormatSupported(format)) return 31;
+    uint32_t pitch=0;std::memcpy(&pitch,bytes+0xe0,4);
+    if(!tglNativeSfcOutputPitchFits(pitch) ||
+       !tglOwnedSfcPlanarOutputFits(format,bytes)) return 5;
     TglOwnedSfcLockParameters lock;
     if(!tglReadOwnedSfcLockParameters(settings,1,read,lock)) return 5;
     return usage.withOutput(shell,[&]() noexcept -> int {
+        auto checkedPlatform=[&](auto& descriptor) -> int {
+            const int result=platform(descriptor);
+            if(result) return result;
+            uint32_t finalPitch=0;std::memcpy(&finalPitch,descriptor.data()+0x10,4);
+            return tglNativeSfcOutputPitchFits(finalPitch)?0:5;
+        };
         return tglSendOwnedSfcPreparedCommands(backend,parameters,shell,
-            scaling,forceAvs,ief,csc,platform,&lock);
+            scaling,forceAvs,ief,csc,checkedPlatform,&lock);
     },invoke);
 }
 // Native send1e0e56..1e0eb5 uses OS+128(resource,6,1), then optional

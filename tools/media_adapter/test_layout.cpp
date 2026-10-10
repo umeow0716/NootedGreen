@@ -7663,6 +7663,7 @@ int main() {
                 [&](uintptr_t value,size_t size){return value==entry && size==20;}));
             for(unsigned flag:{0u,1u,2u}) for(int failure:{0,1,4,9}) {
                 auto output=shell;output[0xe8]=uint8_t(flag);
+                const uint32_t pitch=2048;std::memcpy(output.data()+0xe0,&pitch,4);
                 const uintptr_t mockBacking=1;
                 std::memcpy(output.data()+0x168,&mockBacking,8);
                 TglOwnedSfcCommandParameters nativeParameters;assert(nativeParameters.snapshotFrom(parameters));
@@ -7688,6 +7689,8 @@ int main() {
             const uintptr_t mockBacking=1;
             std::memcpy(typedOutput.resource.data()+0x20,&mockBacking,8);
             const auto originalResource=typedOutput.resource;
+            const uint32_t validPitch=2048;
+            std::memcpy(typedOutput.prefix.data()+0xe0,&validPitch,4);
             TglOwnedSfcCommandParameters nativeParameters;assert(nativeParameters.snapshotFrom(parameters));
             const uint32_t supportedFormat=0x50;
             std::memcpy(nativeParameters.state.data()+0x2c,&supportedFormat,4);
@@ -7718,6 +7721,26 @@ int main() {
             }
             assert(!tglNativeSfcStateFormatSupported(UINT32_MAX));
             std::memcpy(nativeParameters.state.data()+0x2c,&supportedFormat,4);
+            for(uint32_t pitch:{0u,1u,0x20000u,0x20001u,UINT32_MAX}) {
+                const bool fits=pitch && pitch<=0x20000;
+                assert(tglNativeSfcOutputPitchFits(pitch)==fits);
+                std::memcpy(typedOutput.prefix.data()+0xe0,&pitch,4);
+                backend.count=settingReads=invoked=0;
+                assert(tglSendOwnedSfcNativeOutputCommands(usage,backend,nativeParameters,typedOutput,
+                    0x2000,0,0,0,0,read,platform,invoke)==(fits?0:5));
+                assert(fits ? invoked==1 && backend.count==4 :
+                              !invoked && !backend.count && !settingReads);
+            }
+            std::memcpy(typedOutput.prefix.data()+0xe0,&validPitch,4);
+            for(uint32_t pitch:{0u,0x20001u}) {
+                backend.count=settingReads=invoked=0;
+                auto corruptPitch=[&](auto& d) {
+                    std::memcpy(d.data()+0x10,&pitch,4);return 0;
+                };
+                assert(tglSendOwnedSfcNativeOutputCommands(usage,backend,nativeParameters,typedOutput,
+                    0x2000,0,0,0,0,read,corruptPitch,invoke)==5);
+                assert(invoked==1 && settingReads==1 && backend.count==1);
+            }
             const auto descriptor=tglOwnedSfcOutputDescriptor(typedOutput);
             uintptr_t resource=0;std::memcpy(&resource,descriptor.data()+0x28,8);
             assert(resource==reinterpret_cast<uintptr_t>(typedOutput.resource.data()));
