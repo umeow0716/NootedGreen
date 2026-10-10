@@ -150,12 +150,18 @@ struct TglVeboxHardwareBinding {
     // Keep the same external serialization/image lease across all stages.
     // Publication is atomic, not native-state rollback: assignment may advance
     // the heap even if the subsequent owned range validation fails.
+    // Owned setup ONLY: native1296e0 already calls assignment at1297b7.
+    // Never call this before/after that native setup for the same pass.
     template<class Read, class Qualify, class Executable, class Invoke>
     uint32_t prepareHeapState(uintptr_t image, bool kernelResource,
                               uint32_t bytes, uint32_t regionOffset,
                               Read read, Qualify qualify, Executable executable,
                               Invoke invoke, StateResource& out) const {
         out = {};
+        uint32_t stride = 0;
+        if (!bytes || !heap || heap > std::numeric_limits<uintptr_t>::max() - 0x2c ||
+            !read(heap + 0x2c, &stride, 4) || !stride ||
+            uint64_t(regionOffset) + bytes > stride) return 5;
         const uint32_t result = assignState(image, read, qualify, executable, invoke);
         if (result) return result;
         StateResource candidate;

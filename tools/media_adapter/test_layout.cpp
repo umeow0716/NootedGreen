@@ -164,6 +164,12 @@ static void testVeboxHardwareBinding() {
         return invoke(entry, object);
     };
     nativeResult = 0; current = 3;
+    const unsigned beforeInvalidSize = calls;
+    assert(b.prepareHeapState(image, false, 0, 0, composedRead,
+        qualify, executable, assign, state) == 5);
+    assert(b.prepareHeapState(image, false, 0x800, UINT32_MAX, composedRead,
+        qualify, executable, assign, state) == 5);
+    assert(calls == beforeInvalidSize && current == 3 && !state.resource);
     assert(b.prepareHeapState(image, false, 0x800, 0x800, composedRead,
         qualify, executable, assign, state) == 0);
     assert(state.resource == heap + 0x40 && state.instanceOffset == 4096);
