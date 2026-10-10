@@ -5271,6 +5271,33 @@ static void testSfcFrameFields() {
 
 int main() {
     {
+        std::array<uint8_t,0x34> source{};source[0]=1;
+        std::array<float,12> values{};
+        for(size_t i=0;i<values.size();++i) values[i]=float(i)+0.25f;
+        std::memcpy(source.data()+4,values.data(),sizeof(values));
+        unsigned reads=0,fail=0;
+        auto read=[&](uintptr_t address,void* out,size_t size) noexcept {
+            if(++reads==fail || address<0x1000 || address+size>0x1034) return false;
+            std::memcpy(out,source.data()+address-0x1000,size);return true;
+        };
+        TglCscCoefficients coefficients;bool use=false;
+        assert(tglReadOwnedVpCscOverride(3,5,0x1000,read,use,coefficients));
+        assert(use && reads==3 && coefficients.matrix[8]==values[8]);
+        assert(coefficients.inputOffsets[2]==values[11]);
+        for(auto offset:coefficients.outputOffsets) assert(offset==0);
+        for(fail=1;fail<=3;++fail) {
+            reads=0;use=false;coefficients.matrix[0]=99;
+            assert(!tglReadOwnedVpCscOverride(3,5,0x1000,read,use,coefficients));
+            assert(!use && coefficients.matrix[0]==99);
+        }
+        fail=0;reads=0;use=true;
+        assert(tglReadOwnedVpCscOverride(3,3,UINTPTR_MAX,read,use,coefficients));
+        assert(!use && reads==0 && coefficients.matrix[0]==99);
+        source[0]=0;
+        assert(tglReadOwnedVpCscOverride(3,5,0x1000,read,use,coefficients));
+        assert(!use && reads==1 && coefficients.matrix[0]==99);
+    }
+    {
         TglOwnedVpFramePreparation frame;
         frame.color.modes.state.at99c=3;frame.color.at9b8=true;
         frame.regions.scale.at928=0.5f;frame.regions.scale.at92c=0.75f;

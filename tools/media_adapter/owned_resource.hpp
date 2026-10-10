@@ -1424,6 +1424,27 @@ struct TglCscCoefficients {
     std::array<float,9> matrix{};
     std::array<float,3> inputOffsets{},outputOffsets{};
 };
+// Qualified VP+a0 1e09c7..1e0b1d override branch. +9c0 is a leased
+// flag/matrix/input-offset object, not an executable callback. Equal color
+// spaces or a disabled flag fall back to the native coefficient producer.
+// This only snapshots owned data; it neither publishes pointer fields nor
+// substitutes the VEBOX base's unrelated a0/c4/d0 object offsets.
+template<class Read>
+bool tglReadOwnedVpCscOverride(uint32_t from,uint32_t to,uintptr_t sourceA8,
+    Read read,bool& useOverride,TglCscCoefficients& output) noexcept {
+    static_assert(noexcept(read(uintptr_t{},nullptr,size_t{})),"VP CSC leased read ABI");
+    if(!sourceA8 || from==to) {useOverride=false;return true;}
+    if(sourceA8>UINTPTR_MAX-0x34) return false;
+    uint8_t enabled=0;
+    if(!read(sourceA8,&enabled,1)) return false;
+    if(!(enabled&1)) {useOverride=false;return true;}
+    TglCscCoefficients candidate;
+    if(!read(sourceA8+4,candidate.matrix.data(),sizeof(candidate.matrix)) ||
+       !read(sourceA8+0x28,candidate.inputOffsets.data(),sizeof(candidate.inputOffsets)))
+        return false;
+    // Native override explicitly writes all three output offsets as zero.
+    output=candidate;useOverride=true;return true;
+}
 // TGL base constructor12d619/12d65e independently fixes 9+3+3 floats
 // at a0/c4/d0. Only a caller holding the owned base lease may publish.
 inline bool tglPublishOwnedCscFields(void* child,size_t extent,
