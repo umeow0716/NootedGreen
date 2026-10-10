@@ -177,6 +177,75 @@ bool tglDirectVeboxFeasible(uintptr_t params, uintptr_t source, uintptr_t target
     return !alpha || (alpha <= max - 7 && read(alpha + 4, &alphaMode, 4) && alphaMode != 2);
 }
 
+// Native CPU shell allocator437e0 zeroes storage and increments7f3218 only on
+// success; release436d0 decrements the SAME counter then frees. Not GPU backing.
+struct TglTrackedCpuBinding {
+    uintptr_t image = 0, allocate = 0, release = 0;
+    template<class Read, class Qualify, class Executable>
+    bool resolve(uintptr_t base, Read read, Qualify qualify, Executable executable) {
+        image = allocate = release = 0;
+        constexpr std::array<uint8_t,16> allocBytes{
+            0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x10,
+            0x48,0x89,0x7d,0xf8,0x48,0x8b,0x7d,0xf8};
+        constexpr std::array<uint8_t,16> freeBytes{
+            0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x10,
+            0x48,0x89,0x7d,0xf8,0x48,0x83,0x7d,0xf8};
+        std::array<uint8_t,16> a{}, f{};
+        if (!base || base > std::numeric_limits<uintptr_t>::max() - 0x757e80 ||
+            !qualify(base) || !executable(base+0x437e0,16) || !executable(base+0x436d0,16) ||
+            !read(base+0x437e0,a.data(),16) || a != allocBytes ||
+            !read(base+0x436d0,f.data(),16) || f != freeBytes) return false;
+        image = base; allocate = base+0x437e0; release = base+0x436d0; return true;
+    }
+};
+
+// Invoker ABI: uintptr_t allocate(entry,size_t), void release(entry,pointer).
+// Caller retains the loaded image lease until backend and all owners are gone.
+template<class Invoker> class TglTrackedCpuBackend {
+    TglTrackedCpuBinding binding;
+    Invoker invoke;
+public:
+    template<class Read, class Qualify, class Executable>
+    TglTrackedCpuBackend(uintptr_t image, Read read, Qualify qualify,
+                         Executable executable, Invoker invoker) : invoke(std::move(invoker)) {
+        binding.resolve(image,read,qualify,executable);
+    }
+    bool bound() const { return binding.image != 0; }
+    uintptr_t allocate(size_t bytes) {
+        return bound() && bytes ? invoke.allocate(binding.allocate,bytes) : 0;
+    }
+    void release(uintptr_t pointer) noexcept {
+        if (bound() && pointer) invoke.release(binding.release,pointer);
+    }
+};
+
+// Backend must own the authenticated binding/image lease, call native paired
+// allocate(size_t)/release(pointer), and outlive this non-transferable owner.
+// Never adopt arbitrary pointers: that would corrupt native allocation accounting.
+template<class Backend> class TglTrackedCpuOwner {
+    Backend& backend;
+    uintptr_t storage = 0;
+    size_t extent = 0;
+public:
+    explicit TglTrackedCpuOwner(Backend& b) : backend(b) {}
+    TglTrackedCpuOwner(const TglTrackedCpuOwner&) = delete;
+    TglTrackedCpuOwner& operator=(const TglTrackedCpuOwner&) = delete;
+    ~TglTrackedCpuOwner() { reset(); }
+    bool allocate(size_t bytes) {
+        if (storage || !bytes) return false;
+        auto candidate = backend.allocate(bytes);
+        if (!candidate) return false;
+        storage = candidate; extent = bytes; return true;
+    }
+    void reset() noexcept {
+        if (!storage) return;
+        const auto old = storage; storage = 0; extent = 0;
+        backend.release(old);
+    }
+    uintptr_t get() const { return storage; }
+    size_t size() const { return extent; }
+};
+
 // Full VEBOX table, NOT a live child/object replacement. Owned constructor and
 // destructor implementations must exist before this table is installed anywhere.
 // +1e8 belongs to the following execution table's metadata and MUST NOT be copied.

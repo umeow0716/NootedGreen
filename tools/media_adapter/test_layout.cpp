@@ -6,6 +6,78 @@
 #include "descriptor_bridge.hpp"
 #include "owned_resource.hpp"
 
+static void testTrackedCpuOwner() {
+    struct Backend {
+        std::array<unsigned char,0x2a8> bytes{};
+        unsigned allocations = 0, releases = 0, live = 0;
+        bool fail = false;
+        uintptr_t allocate(size_t n) {
+            ++allocations; assert(n == bytes.size());
+            if (fail) return 0;
+            bytes.fill(0); ++live; return reinterpret_cast<uintptr_t>(bytes.data());
+        }
+        void release(uintptr_t p) {
+            assert(p == reinterpret_cast<uintptr_t>(bytes.data()) && live == 1);
+            ++releases; --live;
+        }
+    } backend;
+    {
+        TglTrackedCpuOwner<Backend> owner(backend);
+        assert(!owner.allocate(0) && backend.allocations == 0);
+        backend.fail = true; assert(!owner.allocate(0x2a8));
+        assert(!owner.get() && !owner.size() && !backend.live && !backend.releases);
+        backend.fail = false; assert(owner.allocate(0x2a8));
+        assert(owner.get() && owner.size() == 0x2a8 && backend.live == 1);
+        const auto attempts = backend.allocations;
+        assert(!owner.allocate(0x2a8) && backend.allocations == attempts);
+        for (auto byte : backend.bytes) assert(byte == 0);
+        owner.reset(); owner.reset();
+        assert(backend.releases == 1 && !backend.live && !owner.get() && !owner.size());
+        assert(owner.allocate(0x2a8));
+    }
+    assert(backend.releases == 2 && backend.live == 0);
+    constexpr uintptr_t image = 0x1000000;
+    std::array<uint8_t,16> alloc{0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x10,
+        0x48,0x89,0x7d,0xf8,0x48,0x8b,0x7d,0xf8};
+    auto freed = alloc; freed[13] = 0x83;
+    bool identity = true, rx = true;
+    auto read = [&](uintptr_t p, void* out, size_t n) {
+        assert(n == 16);
+        if (p != image+0x437e0 && p != image+0x436d0) return false;
+        std::memcpy(out,p == image+0x437e0 ? alloc.data() : freed.data(),n); return true;
+    };
+    auto qualify = [&](uintptr_t p) { return identity && p == image; };
+    auto executable = [&](uintptr_t, size_t) { return rx; };
+    TglTrackedCpuBinding binding;
+    assert(binding.resolve(image,read,qualify,executable));
+    alloc[0] = 0; assert(!binding.resolve(image,read,qualify,executable)); alloc[0] = 0x55;
+    freed[0] = 0; assert(!binding.resolve(image,read,qualify,executable)); freed[0] = 0x55;
+    identity = false; assert(!binding.resolve(image,read,qualify,executable)); identity = true;
+    rx = false; assert(!binding.resolve(image,read,qualify,executable));
+    assert(!binding.image && !binding.allocate && !binding.release);
+    struct Invoke {
+        Backend* backend;
+        uintptr_t allocate(uintptr_t entry, size_t n) {
+            assert(entry == 0x1000000+0x437e0); return backend->allocate(n);
+        }
+        void release(uintptr_t entry, uintptr_t p) {
+            assert(entry == 0x1000000+0x436d0); backend->release(p);
+        }
+    };
+    TglTrackedCpuBackend<Invoke> denied(image,read,qualify,executable,Invoke{&backend});
+    assert(!denied.bound());
+    const auto attempts = backend.allocations;
+    assert(!denied.allocate(0x2a8) && backend.allocations == attempts);
+    rx = true;
+    TglTrackedCpuBackend<Invoke> native(image,read,qualify,executable,Invoke{&backend});
+    assert(native.bound());
+    {
+        TglTrackedCpuOwner<TglTrackedCpuBackend<Invoke>> owner(native);
+        assert(owner.allocate(0x2a8) && backend.live == 1);
+    }
+    assert(backend.live == 0 && backend.releases == 3);
+}
+
 static void testOwnedVeboxVtable() {
     constexpr uintptr_t image = 0x1000000;
     std::array<uintptr_t,TglOwnedVeboxVtable::count> original{};
@@ -1267,6 +1339,7 @@ static void testResourceBinding() {
 // Offline layout hypothesis only: not an ABI-complete or deployable adapter.
 // The pinned consumer sites shift 0x20/0x24/0x228/0x428 by eight bytes.
 int main() {
+    testTrackedCpuOwner();
     testOwnedVeboxVtable();
     testNativeCscBinding();
     testDirectVeboxFeasibility();
