@@ -5269,6 +5269,61 @@ static void testSfcFrameFields() {
 
 int main() {
     {
+        TglOwnedVpFramePreparationInput input;
+        auto& geometry=input.geometry;
+        geometry.frameWidth=geometry.targetWidth=1920;
+        geometry.frameHeight=geometry.targetHeight=1080;
+        geometry.sourceRight=geometry.destinationRight=1920;
+        geometry.sourceBottom=geometry.destinationBottom=1080;
+        geometry.targetFormat=0x15;input.modes.source130=0x19;
+        input.targetDestination={0,0,1920,1080};input.conditionalSourceAvailable=true;
+        input.iefPresent=true;input.iefFlags=1;input.iefStrength=0.5f;
+        TglOwnedVpFramePreparation prepared;
+        assert(tglPrepareOwnedVpFrame(input,{},prepared));
+        assert(!prepared.at920 && prepared.at922 && !prepared.at924 && !prepared.regions.scale.scaling);
+        assert(prepared.color.at9b8 && prepared.color.metadata.at9a8==0x21);
+        input.targetDestination.right=1921;input.modes.settings12=true;
+        input.modes.settings60Present=true;input.modes.settings60130=1;
+        assert(tglPrepareOwnedVpFrame(input,{},prepared));
+        assert(prepared.at920 && prepared.at924 && !prepared.color.at9b8);
+        const auto retained=prepared;input.modes.settings60Present=false;
+        assert(!tglPrepareOwnedVpFrame(input,{},prepared));
+        assert(prepared.at920==retained.at920 && prepared.at924==retained.at924 &&
+               prepared.color.modes.state.at99c==retained.color.modes.state.at99c);
+    }
+    {
+        const TglOwnedVpDestinationRect source{0,0,100,80};
+        assert(!tglOwnedVpConditionalSource(true,source,source));
+        assert(!tglOwnedVpConditionalSource(true,source,{1,1,99,79}));
+        for(auto field:{&TglOwnedVpDestinationRect::left,&TglOwnedVpDestinationRect::top,
+                        &TglOwnedVpDestinationRect::right,&TglOwnedVpDestinationRect::bottom}) {
+            auto target=source;
+            target.*field+=(field==&TglOwnedVpDestinationRect::left ||
+                            field==&TglOwnedVpDestinationRect::top)?-1:1;
+            assert(tglOwnedVpConditionalSource(true,source,target));
+            assert(!tglOwnedVpConditionalSource(false,source,target));
+            target=source;target.*field=std::numeric_limits<float>::quiet_NaN();
+            assert(tglOwnedVpConditionalSource(true,source,target));
+            assert(tglOwnedVpConditionalSource(true,target,source));
+        }
+        unsigned calls=0,fail=0;
+        const auto read=[&](uintptr_t address,void* output,size_t size) noexcept {
+            ++calls;if(calls==fail || size!=16 || (address!=0x1040 && address!=0x2040)) return false;
+            std::memcpy(output,&source,16);return true;
+        };
+        bool output=true;
+        assert(tglReadOwnedVpConditionalSource(false,0,0,read,output) && !output && !calls);
+        assert(tglReadOwnedVpConditionalSource(true,0x1000,0x2000,read,output) && !output && calls==2);
+        for(fail=1;fail<=2;++fail) for(bool original:{false,true}) {
+            calls=0;output=original;
+            assert(!tglReadOwnedVpConditionalSource(true,0x1000,0x2000,read,output));
+            assert(output==original);
+        }
+        calls=0;output=true;
+        assert(!tglReadOwnedVpConditionalSource(true,UINTPTR_MAX-8,0x2000,read,output));
+        assert(output && !calls);
+    }
+    {
         TglOwnedVpRegionInput input;
         input.frameWidth=input.frameHeight=input.targetWidth=input.targetHeight=128;
         input.sourceRight=65.9f;input.sourceBottom=33.9f;

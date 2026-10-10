@@ -24,6 +24,28 @@ struct TglOwnedVpScale {
     float at928=0,at92c=0;
     bool scaling=false;
 };
+struct TglOwnedVpDestinationRect {
+    float left=0,top=0,right=0,bottom=0;
+};
+static_assert(sizeof(TglOwnedVpDestinationRect)==16);
+// +18 1de411..1de4bc and +28 1deb61..1dec07 share this ordered predicate.
+// NaN fails containment and therefore requires the conditional source, just
+// like native ucomiss/jb; geometry admission separately rejects malformed data.
+inline bool tglOwnedVpConditionalSource(bool available,
+    const TglOwnedVpDestinationRect& source,const TglOwnedVpDestinationRect& target) noexcept {
+    return available && !(target.left>=source.left && target.top>=source.top &&
+                          source.right>=target.right && source.bottom>=target.bottom);
+}
+template<class Read>
+bool tglReadOwnedVpConditionalSource(bool available,uintptr_t source,uintptr_t target,
+    Read read,bool& output) noexcept {
+    static_assert(noexcept(read(uintptr_t{},nullptr,size_t{})),"VP rectangle leased read ABI");
+    if(!available) {output=false;return true;}
+    if(!source || !target || source>UINTPTR_MAX-0x50 || target>UINTPTR_MAX-0x50) return false;
+    TglOwnedVpDestinationRect sourceRect,targetRect;
+    if(!read(source+0x40,&sourceRect,16) || !read(target+0x40,&targetRect,16)) return false;
+    output=tglOwnedVpConditionalSource(true,sourceRect,targetRect);return true;
+}
 // Exact VP +68=1ddbe0..1ddc6c, final +18 admission predicate. Ordered
 // equality is intentional: NaN source origins cannot take the zero-origin
 // shortcut. This is a data predicate, not a resource allocation hook.
@@ -4622,6 +4644,39 @@ inline bool tglPrepareOwnedVpRegions(const TglOwnedVpRegionInput& in,
     candidate.destinationHeight=(dh+alignment.height-1u)&~uint32_t(alignment.height-1);
     if(!tglPrepareOwnedVpScale(candidate.sourceWidth,candidate.sourceHeight,
         candidate.destinationWidth,candidate.destinationHeight,in.rotation,candidate.scale)) return false;
+    output=candidate;return true;
+}
+struct TglOwnedVpFramePreparationInput {
+    TglOwnedVpRegionInput geometry;
+    TglOwnedVpModeInput modes;
+    TglOwnedVpDestinationRect targetDestination;
+    uint32_t source120=0,source294=0,target294=0;
+    bool conditionalSourceAvailable=false,iefPresent=false;
+    uint8_t iefFlags=0;
+    float iefStrength=0;
+};
+struct TglOwnedVpFramePreparation {
+    TglOwnedVpRegions regions;
+    TglOwnedVpFrameColor color;
+    uint32_t at9a0=0;
+    bool at920=false,at922=false,at924=false;
+};
+// Composed slot28 CPU preparation, before scoped references/publication.
+// No resource allocation, borrowed surface writes, vtable or GPU submission.
+inline bool tglPrepareOwnedVpFrame(const TglOwnedVpFramePreparationInput& in,
+    const TglOwnedVpModeState& original,TglOwnedVpFramePreparation& output) noexcept {
+    TglOwnedVpFramePreparation candidate;
+    if(!tglPrepareOwnedVpRegions(in.geometry,candidate.regions) ||
+       !tglPrepareOwnedVpFrameColor(in.modes,original,in.source120,in.source294,
+        in.geometry.targetFormat,in.target294,candidate.color)) return false;
+    const TglOwnedVpDestinationRect sourceDestination{
+        in.geometry.destinationLeft,in.geometry.destinationTop,
+        in.geometry.destinationRight,in.geometry.destinationBottom};
+    candidate.at920=tglOwnedVpConditionalSource(in.conditionalSourceAvailable,
+                                               sourceDestination,in.targetDestination);
+    candidate.at922=in.iefPresent && (in.iefFlags&1) && in.iefStrength>0.0f;
+    candidate.at924=in.modes.settings12;
+    candidate.at9a0=in.geometry.rotation;
     output=candidate;return true;
 }
 // Exact ICL base/Gen12 SFC +c0 slot is 1df3c0: a single DWORD zero
