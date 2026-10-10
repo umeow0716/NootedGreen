@@ -54,6 +54,54 @@ static void testVeboxHardwareBinding() {
     auto deny = [](uintptr_t, void*, size_t) { return false; };
     assert(!b.selectStateResource(false, 0, false, deny, state));
     assert(!state.resource && !state.instanceOffset);
+    uint32_t capacity = 16384, type = 0;
+    instanceBytes = 4096;
+    uintptr_t handle = 7, address = 0;
+    state = {heap + 0x40, 12288};
+    auto resourceRead = [&](uintptr_t p, void* out, size_t n) {
+        if (p == heap && n == 4) {
+            std::memcpy(out, &instanceBytes, 4); return true;
+        }
+        if (n == 4 && (p == state.resource + 0x10 || p == state.resource + 0x14)) {
+            std::memcpy(out, p == state.resource + 0x10 ? &capacity : &type, 4); return true;
+        }
+        if (n == 8 && (p == state.resource + 0x20 || p == state.resource + 0x50)) {
+            std::memcpy(out, p == state.resource + 0x20 ? &handle : &address, 8); return true;
+        }
+        return false;
+    };
+    assert(b.heapStateRange(state, 4096, resourceRead));
+    assert(!b.heapStateRange(state, 4097, resourceRead));
+    // Native174cba adds the heap region offset before clearing 0x800 bytes.
+    assert(b.heapStateRange(state, 0x800, resourceRead, 0x800));
+    assert(!b.heapStateRange(state, 0x800, resourceRead, 0x801));
+    assert(!b.heapStateRange(state, 0x800, resourceRead, UINT32_MAX));
+    state.instanceOffset = 0; // plenty of total capacity, but not this instance
+    assert(!b.heapStateRange(state, 4097, resourceRead));
+    state.instanceOffset = 1;
+    assert(!b.heapStateRange(state, 1, resourceRead));
+    state.instanceOffset = 12288;
+    instanceBytes = 0; assert(!b.heapStateRange(state, 1, resourceRead));
+    instanceBytes = 4096;
+    handle = 0; assert(!b.heapStateRange(state, 4096, resourceRead));
+    address = 0x9000; assert(b.heapStateRange(state, 4096, resourceRead));
+    type = 1; assert(!b.heapStateRange(state, 4096, resourceRead)); type = 0;
+    assert(!b.heapStateRange(state, 0, resourceRead));
+    assert(!b.heapStateRange(state, 4096, deny));
+    state = {heap + 0x188, 12288};
+    assert(b.heapStateRange(state, 4096, resourceRead));
+    // Every required descriptor read must succeed; no partial backing proof.
+    for (uintptr_t field : {uintptr_t(0x10), uintptr_t(0x14),
+                            uintptr_t(0x20), uintptr_t(0x50)}) {
+        auto failField = [&](uintptr_t p, void* out, size_t n) {
+            return p != state.resource + field && resourceRead(p, out, n);
+        };
+        assert(!b.heapStateRange(state, 4096, failField));
+    }
+    state.instanceOffset = UINT32_MAX;
+    assert(!b.heapStateRange(state, 4096, resourceRead));
+    state = {0x9000, 0}; // external CM surface is explicitly not this ABI
+    assert(!b.heapStateRange(state, 4096, resourceRead));
 }
 
 static void testExecutionBinding() {

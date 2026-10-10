@@ -147,6 +147,28 @@ public:
 struct TglVeboxHardwareBinding {
     uintptr_t interface = 0, os = 0, heap = 0;
     struct StateResource { uintptr_t resource = 0; uint32_t instanceOffset = 0; };
+    // Heap resources use the proven native buffer layout (resource size148).
+    // Not a CM/surface validator. Caller holds the heap/resource lifetime lock;
+    // this proves CPU descriptor bounds/backing only, not GPU completion/sync.
+    // Include regionOffset (native174cba) as well as the instance base; checking
+    // only the instance base would miss a region that crosses buffer capacity.
+    template<class Read>
+    bool heapStateRange(const StateResource& state, uint32_t bytes, Read read,
+                        uint32_t regionOffset = 0) const {
+        constexpr auto max = std::numeric_limits<uintptr_t>::max();
+        if (!interface || !os || !heap || !bytes || heap > max - 0x2d0 ||
+            (state.resource != heap + 0x40 && state.resource != heap + 0x188)) return false;
+        uint32_t capacity = 0, type = 0, instanceBytes = 0;
+        uintptr_t handle = 0, address = 0;
+        return read(heap, &instanceBytes, 4) && instanceBytes &&
+            uint64_t(regionOffset) + bytes <= instanceBytes &&
+            state.instanceOffset % instanceBytes == 0 &&
+            read(state.resource + 0x10, &capacity, 4) &&
+            read(state.resource + 0x14, &type, 4) && type == 0 &&
+            uint64_t(state.instanceOffset) + regionOffset + bytes <= capacity &&
+            read(state.resource + 0x20, &handle, 8) &&
+            read(state.resource + 0x50, &address, 8) && (handle || address);
+    }
     // Native171351..1713ba. Selection only: no GPU address or command emitted.
     template<class Read>
     bool selectStateResource(bool cmBuffer, uintptr_t parameterSurface,
