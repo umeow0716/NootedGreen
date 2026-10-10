@@ -146,6 +146,27 @@ public:
 // This authenticates interface identity/presence, NOT heap contents or commands.
 struct TglVeboxHardwareBinding {
     uintptr_t interface = 0, os = 0, heap = 0;
+    struct StateResource { uintptr_t resource = 0; uint32_t instanceOffset = 0; };
+    // Native171351..1713ba. Selection only: no GPU address or command emitted.
+    template<class Read>
+    bool selectStateResource(bool cmBuffer, uintptr_t parameterSurface,
+                             bool kernelResource, Read read, StateResource& out) const {
+        out = {};
+        if (!interface || !os || !heap) return false;
+        if (cmBuffer) {
+            if (!parameterSurface) return false;
+            out.resource = parameterSurface;
+            return true;
+        }
+        const uintptr_t resourceOffset = kernelResource ? 0x188 : 0x40;
+        if (heap > std::numeric_limits<uintptr_t>::max() - 0x2d0) return false;
+        uint32_t instanceBytes = 0, current = 0;
+        if (!read(heap, &instanceBytes, 4) || !read(heap + 0x2c, &current, 4)) return false;
+        const uint64_t offset = uint64_t(instanceBytes) * current;
+        if (offset > UINT32_MAX) return false;
+        out = {heap + resourceOffset, uint32_t(offset)};
+        return true; // backing/sync/capacity must be validated before native use
+    }
     template<class Read, class Qualify>
     bool resolve(uintptr_t mhw, uintptr_t expectedOs, uintptr_t image,
                  Read read, Qualify qualify) {

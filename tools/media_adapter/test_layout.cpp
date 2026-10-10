@@ -30,6 +30,30 @@ static void testVeboxHardwareBinding() {
     assert(!b.resolve(mhw, os, UINTPTR_MAX, read, qualify)); empty();
     assert(!b.resolve(mhw, 0, image, read, qualify)); empty();
     assert(resolve());
+    uint32_t instanceBytes = 4096, current = 3;
+    auto readHeap = [&](uintptr_t p, void* out, size_t n) {
+        const auto value = p == heap ? &instanceBytes : p == heap + 0x2c ? &current : nullptr;
+        if (!value || n != 4) return false;
+        std::memcpy(out, value, 4); return true;
+    };
+    TglVeboxHardwareBinding::StateResource state;
+    assert(b.selectStateResource(false, 0, false, readHeap, state));
+    assert(state.resource == heap + 0x40 && state.instanceOffset == 12288);
+    assert(b.selectStateResource(false, 0, true, readHeap, state));
+    assert(state.resource == heap + 0x188 && state.instanceOffset == 12288);
+    assert(b.selectStateResource(true, 0x9000, true, readHeap, state));
+    assert(state.resource == 0x9000 && state.instanceOffset == 0);
+    assert(!b.selectStateResource(true, 0, false, readHeap, state));
+    assert(!state.resource && !state.instanceOffset);
+    instanceBytes = UINT32_MAX; current = 2;
+    assert(!b.selectStateResource(false, 0, false, readHeap, state));
+    assert(!state.resource && !state.instanceOffset);
+    current = 1;
+    assert(b.selectStateResource(false, 0, false, readHeap, state));
+    assert(state.instanceOffset == UINT32_MAX);
+    auto deny = [](uintptr_t, void*, size_t) { return false; };
+    assert(!b.selectStateResource(false, 0, false, deny, state));
+    assert(!state.resource && !state.instanceOffset);
 }
 
 static void testExecutionBinding() {
