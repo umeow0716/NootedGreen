@@ -1410,6 +1410,19 @@ inline bool tglPrepareOwnedStateHistoryAndPipe(uint32_t& flags,
     flags=candidate;
     return true;
 }
+// Exact ICL base+50 target1e6cb0..1e6d92, pure selection (no state writes).
+// Semantic inputs avoid borrowing ICL layout for the owned TGL child.
+inline bool tglSelectOwnedStateMode(uint32_t& mode, uint32_t pipe,
+                                   bool exec19, bool exec14, uint32_t flags,
+                                   uint32_t source138) noexcept {
+    if (pipe>2) return false;
+    const bool history=(flags&0x20)!=0;
+    if (pipe==1 && !exec19)
+        mode=(exec14 || history || source138==6 || source138==3 ||
+              source138==1 || source138==0) ? 2u : 1u;
+    else mode=(pipe==2 || history) ? 2u : 0u;
+    return true;
+}
 // Darwin1faf78..1fb05f: base+50 return contributes only two bits; exec12
 // contributes bit0. DN-only special input forces IECP, but a false special
 // condition must not clear an IECP bit already chosen by earlier stages.

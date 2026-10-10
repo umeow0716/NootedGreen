@@ -2035,6 +2035,25 @@ static void testResourceBinding() {
 // The pinned consumer sites shift 0x20/0x24/0x228/0x428 by eight bytes.
 int main() {
     {
+        for (uint32_t pipe=0;pipe<3;++pipe) for (bool e19 : {false,true})
+            for (bool e14 : {false,true}) for (bool history : {false,true})
+                for (uint32_t surface=0;surface<9;++surface) {
+                    uint32_t mode=99;
+                    const uint32_t flags=0xffff0000u|(history?0x20:0);
+                    assert(tglSelectOwnedStateMode(mode,pipe,e19,e14,flags,surface));
+                    uint32_t expected=0;
+                    if (pipe==2) expected=2;
+                    else if (pipe==1 && !e19) {
+                        expected=1;
+                        for (auto selected : {0u,1u,3u,6u}) if (surface==selected) expected=2;
+                        if (e14||history) expected=2;
+                    } else if (history) expected=2;
+                    assert(mode==expected);
+                }
+        uint32_t mode=99;
+        assert(!tglSelectOwnedStateMode(mode,3,false,false,0,0) && mode==99);
+    }
+    {
         for (uint32_t pipe=0;pipe<3;++pipe) for (bool iecp : {false,true})
             for (bool di : {false,true}) for (bool dn : {false,true})
                 for (uint32_t original : {0u,0xffffffffu,0xa5a55a5au}) {
