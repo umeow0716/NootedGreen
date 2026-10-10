@@ -11,6 +11,25 @@
 #include <mach/mach_vm.h>
 #endif
 
+// Intel Gen12 IsDnFormatSupported (pinned g12_base.cpp329), with Darwin format
+// values independently pinned by Tahoe ICL1fc530. Pure format predicate only:
+// does not assert that DN is requested, eligible, allocated or GPU-complete.
+constexpr bool tglVeboxDnFormatSupported(uint32_t format) {
+    switch (format) {
+        case 0x0e: case 0x11: case 0x0f: case 0x10: case 0x0d:
+        case 0x4a: case 0x19: case 0x15: case 0x12: case 0x13:
+        case 0x14: case 0x17: case 0x59: case 0x53: case 0x52:
+        case 0x03: case 0x05: return true;
+        default: return false;
+    }
+}
+template<class Read>
+bool tglVeboxDnSurfaceSupported(uintptr_t surface, Read read) {
+    uint32_t format = 0;
+    return surface && surface <= std::numeric_limits<uintptr_t>::max() - 0x133 &&
+        read(surface + 0x130, &format, sizeof(format)) && tglVeboxDnFormatSupported(format);
+}
+
 // Read-only shape gate for an already-owned native execution object. Identity
 // qualification must authenticate the loaded image; this is NOT proof that
 // mode/state producers or GPU commands are valid. Run under owner's lock.

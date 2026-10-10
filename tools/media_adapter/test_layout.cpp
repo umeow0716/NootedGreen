@@ -7,6 +7,32 @@
 #include "owned_resource.hpp"
 
 static void testVeboxHardwareBinding() {
+    constexpr uint32_t dnFormats[]{0x0e,0x11,0x0f,0x10,0x0d,0x4a,0x19,
+        0x15,0x12,0x13,0x14,0x17,0x59,0x53,0x52,0x03,0x05};
+    unsigned supported = 0;
+    for (uint32_t format = 0; format < 256; ++format)
+        supported += tglVeboxDnFormatSupported(format);
+    assert(supported == 17);
+    for (uint32_t format : dnFormats) assert(tglVeboxDnFormatSupported(format));
+    assert(!tglVeboxDnFormatSupported(UINT32_MAX));
+    assert(!tglVeboxDnFormatSupported(0x10019)); // no enum truncation to NV12
+    unsigned formatReads = 0;
+    uint32_t sourceFormat = 0x19;
+    bool formatReadable = true;
+    auto formatRead = [&](uintptr_t p, void* out, size_t n) {
+        ++formatReads;
+        assert(p == 0x5130 && n == 4);
+        if (!formatReadable) return false;
+        std::memcpy(out, &sourceFormat, n); return true;
+    };
+    assert(!tglVeboxDnSurfaceSupported(0, formatRead));
+    assert(!tglVeboxDnSurfaceSupported(UINTPTR_MAX - 0x132, formatRead));
+    assert(formatReads == 0);
+    assert(tglVeboxDnSurfaceSupported(0x5000, formatRead) && formatReads == 1);
+    sourceFormat = UINT32_MAX;
+    assert(!tglVeboxDnSurfaceSupported(0x5000, formatRead));
+    sourceFormat = 0x19; formatReadable = false;
+    assert(!tglVeboxDnSurfaceSupported(0x5000, formatRead));
     constexpr uintptr_t image = 0x1000000, mhw = 0x2000, os = 0x3000;
     uintptr_t vt = image + 0x759520, actualOs = os, heap = 0x4000;
     bool identity = true, readable = true;
