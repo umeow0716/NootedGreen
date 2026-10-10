@@ -5269,6 +5269,37 @@ static void testSfcFrameFields() {
 
 int main() {
     {
+        TglOwnedVpFramePreparation frame;
+        frame.color.modes.state.at99c=0x19;
+        frame.color.metadata.at9a8=0x21;frame.color.metadata.target294=0x21;
+        const auto word=[](const auto& bytes,size_t offset) noexcept {
+            uint32_t value=0;std::memcpy(&value,bytes.data()+offset,4);return value;
+        };
+        for(bool iecp:{false,true}) for(bool di:{false,true})
+        for(uint32_t format:{0x19u,0xdu,0x15u}) {
+            frame.color.modes.state.at99c=format;
+            const auto prefix=tglPrepareOwnedVpChromaStatePrefix(frame,0x19,iecp,di);
+            const uint32_t input=iecp?4u:di?2u:format==0x19?1u:format==0xd?2u:4u;
+            assert(prefix.packet[0]==1 && word(prefix.packet,8)==input);
+            assert(prefix.packet[0x6a]==(input==4));
+            assert(prefix.sourceSiting==(iecp?0x11u:0x21u));
+            // Unimplemented state fields remain zero, never a ready marker.
+            assert(word(prefix.packet,0x30)==0 && word(prefix.packet,0x4c)==0);
+        }
+        TglOwnedVpFramePreparationInput input;
+        input.geometry.frameWidth=input.geometry.targetWidth=1920;
+        input.geometry.frameHeight=input.geometry.targetHeight=1080;
+        input.geometry.sourceRight=input.geometry.destinationRight=1920;
+        input.geometry.sourceBottom=input.geometry.destinationBottom=1080;
+        input.geometry.targetFormat=0x19;
+        input.modes.source130=0x19;input.modes.settings12=true;
+        input.modes.settings60Present=true;input.modes.settings60130=1;
+        assert(tglPrepareOwnedVpFrame(input,{},frame));
+        assert(frame.color.modes.state.at99c==3);
+        const auto prefix=tglPrepareOwnedVpChromaStatePrefix(frame,0x19,false,false);
+        assert(word(prefix.packet,8)==4 && prefix.packet[0x6a]==1);
+    }
+    {
         for(unsigned flags=0;flags<16;++flags) for(unsigned failure=0;failure<3;++failure) {
             TglOwnedVpFramePreparation frame;
             frame.regions.scale.scaling=flags&1;frame.color.at9b8=flags&2;

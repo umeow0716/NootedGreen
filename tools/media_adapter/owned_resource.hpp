@@ -4787,6 +4787,23 @@ bool tglReadOwnedVpFramePreparation(uintptr_t source,uintptr_t target,uintptr_t 
     if(!tglPrepareOwnedVpFrame(input,original,candidate)) return false;
     output=candidate;sourceA8=reference;return true;
 }
+struct TglOwnedVpChromaStatePrefix {
+    std::array<uint8_t,0xb8> packet{};
+    uint32_t sourceSiting=0;
+};
+// Qualified +90 1df496..1df6a5: zero the owned packet then compose the
+// existing exact input/output producers. IECP may update the owned siting
+// value consumed by later AVS; this prefix is NOT a complete SFC state packet.
+inline TglOwnedVpChromaStatePrefix tglPrepareOwnedVpChromaStatePrefix(
+    const TglOwnedVpFramePreparation& frame,uint32_t targetFormat,
+    bool settings0f,bool settings13) noexcept {
+    TglOwnedVpChromaStatePrefix result;
+    result.sourceSiting=frame.color.metadata.at9a8;
+    tglPrepareOwnedSfcInputChroma(result.packet,result.sourceSiting,
+                                frame.color.modes.state.at99c,settings0f,settings13);
+    tglPrepareOwnedSfcOutputChroma(result.packet,frame.color.metadata.target294,targetFormat);
+    return result;
+}
 // One synchronous slot28 view. Leases for source, parameters, target and CSC
 // must enclose this call. Owned target metadata is supplied to use(), not
 // written through the borrowed target. No vtable or object is published here.
