@@ -6383,6 +6383,73 @@ int main() {
             assert(sent==(failedStage?0:1) && calls==total);
             assert(scopedStorage.bytes==originalStorage);
         }
+        {
+            struct Cpu {
+                alignas(8) std::array<uint8_t,0xc00> bytes{};
+                bool live=false;
+                uintptr_t allocate(size_t n) {
+                    assert(!live && (n==0xf8 || n==0xc00));live=true;
+                    return reinterpret_cast<uintptr_t>(bytes.data());
+                }
+                void release(uintptr_t p) noexcept {
+                    assert(live && p==reinterpret_cast<uintptr_t>(bytes.data()));live=false;
+                }
+            } stateCpu,avsCpu;
+            struct Binding {
+                uintptr_t image=0x100000;
+                bool validateConstructedObject(uintptr_t,uintptr_t,
+                    bool (*)(uintptr_t,void*,size_t)) const noexcept {return true;}
+            } binding;
+            auto noRead=+[](uintptr_t,void*,size_t) noexcept {return false;};
+            TglOwnedVpSfcCpuGraph<Cpu,Cpu> graph(stateCpu,avsCpu);
+            assert(graph.initialize(0x7000,0x8000,0x3000,binding,noRead,1,0));
+            auto never=[](void*) noexcept {assert(false);return 0;};
+            for(unsigned failure=0;failure<3;++failure) {
+                unsigned stages=0,sends=0;
+                assert(graph.withPreparedPass(prepared,0x6000,0x4000,0x2000,reference,
+                    [&](void*,const auto&,auto& stateOwner) noexcept -> int {
+                        assert(++stages==1 && stateOwner.data());
+                        graph.reset();assert(graph.withView(true,never)==5);
+                        return failure==1?31:0;
+                    },
+                    [&](void*,const auto&,auto& avsOwner) noexcept -> int {
+                        assert(++stages==2 && avsOwner.parameters());return failure==2?11:0;
+                    },
+                    [&](void*,const auto&) noexcept {assert(++stages==3);},
+                    [&](void* child,const auto& frame) noexcept -> int {
+                        ++sends;assert(stages==3 && frame.regions.scale.scaling);
+                        const auto* p=static_cast<const uint8_t*>(child);
+                        uintptr_t stateAddress=0,targetAddress=0,coefficients=0;
+                        std::memcpy(&stateAddress,p+0x938,8);
+                        std::memcpy(&targetAddress,p+0x9b0,8);
+                        std::memcpy(&coefficients,p+0x38,8);
+                        assert(stateAddress==reinterpret_cast<uintptr_t>(stateCpu.bytes.data()) &&
+                            coefficients==reinterpret_cast<uintptr_t>(avsCpu.bytes.data()) && targetAddress==0x2000);
+                        graph.reset();assert(stateCpu.live && avsCpu.live);
+                        return -17;
+                    })==(failure==1?31:failure==2?11:-17));
+                assert(sends==(failure?0:1));
+                assert(graph.prepare([](auto& storage,auto&,auto&) noexcept {
+                    for(size_t off:{size_t(0x938),size_t(0x990),size_t(0x9b0)}) {
+                        uintptr_t p=1;std::memcpy(&p,storage.bytes.data()+off,8);assert(!p);
+                    }
+                    return 0;
+                })==0);
+            }
+            auto disabled=prepared;
+            disabled.regions.scale.scaling=false;disabled.color.at9b8=false;
+            disabled.at922=false;disabled.color.modes.state.at923=false;
+            unsigned sent=0;
+            assert(graph.withPreparedPass(disabled,0x6000,0x4000,0x2000,reference,
+                [](void*,const auto&,auto&) noexcept -> int {return 0;},
+                [](void*,const auto&,auto&) noexcept -> int {assert(false);return 0;},
+                [](void*,const auto&) noexcept {assert(false);},
+                [&](void* child,const auto&) noexcept -> int {
+                    uintptr_t coefficients=1;
+                    std::memcpy(&coefficients,static_cast<uint8_t*>(child)+0x38,8);
+                    assert(!coefficients);++sent;return 89;
+                })==89 && sent==1);
+        }
         for(fail=1;fail<=total;++fail) {
             calls=0;prepared.at9a0=17;reference=19;
             geometrySnapshot.frameWidth=23;

@@ -6247,6 +6247,39 @@ public:
             return avs_.withParameters([&](const auto&) noexcept {return invoke();});
         });
     }
+    // Enclose frame publication, ordered producers and command-input borrowing
+    // in one graph lease. Producers receive the owned backing, not copies of
+    // native pointers. The consumer must emit/discard synchronously; submitting
+    // work still requires the separately proven GPU resource/fence owner.
+    // IEF preparation must not let temporary CSC pointers escape: the consumer
+    // encloses emission in tglWithOwnedSfcFilterCommands' coefficient lease.
+    template<class State,class Avs,class Ief,class Send>
+    int withPreparedPass(const TglOwnedVpFramePreparation& frame,
+        uintptr_t conditionalSource,uintptr_t settings,uintptr_t target,uintptr_t sourceA8,
+        State state,Avs avs,Ief ief,Send send) noexcept {
+        static_assert(noexcept(state(nullptr,frame,state_)) &&
+            noexcept(avs(nullptr,frame,avs_)) && noexcept(ief(nullptr,frame)) &&
+            noexcept(send(nullptr,frame)),"CPU graph pass callback ABI");
+        if(!ready_ || busy_) return 5;
+        Guard guard(busy_);
+        return tglWithOwnedVpPreparedFrame(storage_,frame,conditionalSource,
+            settings,target,sourceA8,[&](void* child,const auto&) noexcept {
+                const int result=tglSetupOwnedVpSfcStages(frame,
+                    [&]() noexcept {return state(child,frame,state_);},
+                    [&]() noexcept {return avs(child,frame,avs_);},
+                    [&]() noexcept {ief(child,frame);});
+                if(result) return result;
+                const bool enabled=frame.regions.scale.scaling || frame.color.at9b8;
+                return state_.withParameters([&](const uint8_t*) noexcept {
+                    auto consume=[&]() noexcept {
+                        return tglWithOwnedVpSfcCpuView(storage_,state_,avs_,
+                            [&](void* view) noexcept {return send(view,frame);},enabled);
+                    };
+                    if(!enabled) return consume();
+                    return avs_.withParameters([&](const auto&) noexcept {return consume();});
+                });
+            });
+    }
 };
 // Hold backing through coefficient generation, publication and synchronous
 // command construction. Cache commits only after backing publication succeeds;
