@@ -2043,7 +2043,7 @@ int main() {
         std::memcpy(target.prefix.data()+0x130,&format,4);
         TglOwnedStateInputs input;
         input.source=&source; input.target=&target; input.pipe=1;
-        input.dn=true; input.exec12=true; input.primary70=true;
+        input.dn=true; input.exec12=true;
         input.chromaIeCp=true;
         std::array<uint8_t,0x188> output;
         output.fill(0xa5);
@@ -2051,7 +2051,7 @@ int main() {
         uint32_t flags=0,chroma=0;
         std::memcpy(&flags,output.data(),4);
         std::memcpy(&chroma,output.data()+4,4);
-        assert(flags==0xb20adu && chroma==0x804 && output[0xc]==1);
+        assert(flags==0xb20adu && chroma==0x804 && output[0xc]==0);
         for (size_t i=8;i<output.size();++i) if (i!=0xc) assert(output[i]==0);
         const auto saved=output;
         const auto savedSource=source.prefix;
@@ -2060,6 +2060,16 @@ int main() {
         assert(source.prefix==savedSource);
         input.pipe=0; input.source=nullptr;
         assert(!tglPrepareOwnedStatePacket(output,input) && output==saved);
+        input.source=&source; input.dn=false; input.exec12=false;
+        input.chromaIeCp=true;
+        assert(tglPrepareOwnedStatePacket(output,input));
+        std::memcpy(&flags,output.data(),4);
+        assert((flags&4)==4); // Same exec0f drives leading IECP and chroma.
+        input.chromaIeCp=false;
+        assert(tglPrepareOwnedStatePacket(output,input));
+        std::memcpy(&flags,output.data(),4);
+        assert((flags&4)==0);
+        assert(source.prefix==savedSource);
     }
     {
         for (uint32_t pipe=0;pipe<3;++pipe) for (bool e19 : {false,true})

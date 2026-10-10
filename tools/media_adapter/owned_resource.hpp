@@ -1451,15 +1451,16 @@ inline bool tglPrepareOwnedStateLeadingFlags(uint32_t& flags, uint32_t pipe,
 }
 struct TglOwnedStateInputs {
     uint32_t pipe=0;
-    bool primaryIeCp=false, di=false, dn=false, firstFrame=false;
+    bool di=false, dn=false, firstFrame=false;
     bool exec19=false, exec14=false, exec12=false, dnSpecial=false;
-    bool primary70=false, chromaIeCp=false, chromaDi=false, skuSuppressPipe=false;
+    bool chromaIeCp=false, chromaDi=false, skuSuppressPipe=false;
     TglOwnedSurfaceStorage* source=nullptr;
     TglOwnedSurfaceStorage* target=nullptr;
 };
-// Pure owned-data composition of the closed Darwin state producer. Callback
-// semantic results must be supplied by a qualified child binding; this alone
-// is not a live renderer implementation. All unproduced bytes start zero.
+// Pure owned-data composition of the closed Darwin state producer. Exact
+// base+c8 (1e8390) reads the same exec0f as chroma IECP; primary+70 (1fa4b0)
+// returns false. Do not expose contradictory duplicate callback inputs.
+// This alone is not a live renderer implementation; other bytes start zero.
 inline bool tglPrepareOwnedStatePacket(std::array<uint8_t,0x188>& output,
                                       const TglOwnedStateInputs& input) noexcept {
     if (input.pipe>2) return false;
@@ -1470,11 +1471,11 @@ inline bool tglPrepareOwnedStatePacket(std::array<uint8_t,0x188>& output,
     std::memcpy(&source138,input.source->prefix.data()+0x138,4);
     std::array<uint8_t,0x188> candidate{};
     uint32_t flags=0, mode=0, chroma=0;
-    tglPrepareOwnedStateLeadingFlags(flags,input.pipe,input.primaryIeCp,input.di,input.dn);
+    tglPrepareOwnedStateLeadingFlags(flags,input.pipe,input.chromaIeCp,input.di,input.dn);
     tglPrepareOwnedStateHistoryAndPipe(flags,input.firstFrame,input.dn,input.di,input.pipe,true);
     tglSelectOwnedStateMode(mode,input.pipe,input.exec19,input.exec14,flags,source138);
     tglPrepareOwnedStateDnControls(flags,mode,input.exec12,input.dnSpecial,sourceType);
-    candidate[0xc]=input.primary70 ? 1 : 0;
+    candidate[0xc]=0; // Exact primary+70 implementation1fa4b0..1fa4bd.
     tglPrepareOwnedChromaSampling(chroma,input.source,input.target,
                                  input.chromaIeCp,input.chromaDi,input.pipe);
     tglPrepareOwnedStateHistoryAndPipe(flags,input.firstFrame,input.dn,input.di,
