@@ -20,6 +20,14 @@ struct TestVeboxChildLease {
 struct TestVeboxExecutionLease {
     template<class Invoke> int withExecution(Invoke invoke) noexcept {return invoke(7);}
 };
+struct TestVpCpuView {
+    std::array<uint8_t,0x9d0> bytes{};
+    bool busy=false,deny=false;
+    template<class Use> int withView(bool,Use use) noexcept {
+        if(busy || deny) return 5;
+        busy=true;const int result=use(bytes.data());busy=false;return result;
+    }
+};
 
 static void testTrackedCpuOwner() {
     {
@@ -8151,6 +8159,37 @@ int main() {
                     })==nativeResult);
                     assert(!owner.publishCsc(leasedCsc));
                 }
+                TestVpCpuView vp;
+                for(int result:{0,31,-7}) {
+                    assert(owner.withBorrowedVpCpuView(vp,true,[&](void* parent,void* child) noexcept {
+                        uintptr_t linked=0;
+                        std::memcpy(&linked,static_cast<uint8_t*>(parent)+0x80,8);
+                        assert(linked==reinterpret_cast<uintptr_t>(child) && vp.busy);
+                        owner.reset();assert(cpu.live && !eventCount);
+                        assert(owner.withBorrowedVpCpuView(vp,true,[](void*,void*) noexcept {
+                            assert(false);return 0;
+                        })==5);
+                        return result;
+                    })==result);
+                    uintptr_t linked=1;std::memcpy(&linked,cpu.bytes.data()+0x80,8);
+                    assert(!linked && !vp.busy);
+                }
+                vp.deny=true;
+                assert(owner.withBorrowedVpCpuView(vp,true,[](void*,void*) noexcept {
+                    assert(false);return 0;
+                })==5);
+                vp.deny=false;
+                const uintptr_t existing=0x1234;
+                std::memcpy(cpu.bytes.data()+0x80,&existing,8);
+                assert(owner.withBorrowedVpCpuView(vp,true,[](void*,void*) noexcept {
+                    assert(false);return 0;
+                })==5);
+                uintptr_t linked=0;std::memcpy(&linked,cpu.bytes.data()+0x80,8);
+                assert(linked==existing);
+                linked=0;std::memcpy(cpu.bytes.data()+0x80,&linked,8);
+                assert(owner.withBorrowedVpCpuView(vp,false,[](void* parent,void*) noexcept {
+                    std::memset(static_cast<uint8_t*>(parent)+0x80,0,8);return -7;
+                })==5);
                 owner.reset();owner.reset();
                 assert(!owner.publishCsc(leasedCsc) && !owner.hasPrivateChildLease(0));
                 assert(!cpu.live && !owner.constructedBase() && eventCount==4);

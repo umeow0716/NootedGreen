@@ -2781,6 +2781,30 @@ public:
         busy_=false;
         return result;
     }
+    // CPU-only composition: keep both owners leased and restore child80
+    // before native base teardown can reach accounting helper12e190.
+    // The VP view is data-only until its complete vtable is independently
+    // qualified. This scope is NOT permission to invoke native VP methods,
+    // transfer ownership, or retain GPU references beyond the enclosing lease.
+    template<class VpOwner,class Use>
+    int withBorrowedVpCpuView(VpOwner& vp,bool avsEnabled,Use use) noexcept {
+        static_assert(noexcept(use(nullptr,nullptr)),"borrowed VP CPU view ABI");
+        return withPrivateChild([&](void* parent) noexcept {
+            return vp.withView(avsEnabled,[&](void* child) noexcept {
+                if(!child || child==parent) return 5;
+                auto* field=static_cast<uint8_t*>(parent)+0x80;
+                uintptr_t previous=0;
+                std::memcpy(&previous,field,8);
+                if(previous) return 5; // never hide an existing native owner
+                const uintptr_t borrowed=reinterpret_cast<uintptr_t>(child);
+                std::memcpy(field,&borrowed,8);
+                const int result=use(parent,child);
+                uintptr_t observed=0;std::memcpy(&observed,field,8);
+                std::memcpy(field,&previous,8);
+                return observed==borrowed ? result : 5;
+            });
+        });
+    }
     template<class ExecutionOwner>
     int setupKernelScratch(ExecutionOwner& execution,int32_t index) noexcept {
         if(!ready_ || !tableInstalled_ || !busy_ ||
