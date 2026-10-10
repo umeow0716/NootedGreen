@@ -1778,6 +1778,16 @@ struct TglVeboxHardwareBinding {
     // Thus the CF finalizer-to-selector1 cleanup linkage has static evidence;
     // this does NOT establish native mapping ownership for each owned backing,
     // nor make the finalizer a wait or a reset-free completion certificate.
+    // Family Resource2::free21478 common path2157c..215a5 loads map40,
+    // calls Map::remove_resource529c2, releases Map via28, then clears40/70/20.
+    // TGL free6f7bf..6f7e1 separately completes140/releases28 aperture map220
+    // before its base free. Both releases reach native Map lifetime policy;
+    // neither call-site itself waits. Family type82 cleanup216b8..2173e
+    // unlinks the child's e8/f0 parent list, releases parent's memorye0 then
+    // parent Resource2. Do not replace these with a shallow descriptor copy.
+    // Remaining obligation: prove each published owned resource acquires the
+    // matching map/retained memory and event stamps before GPU submission,
+    // especially type80 SysMemory and type82 IOSurface parent generations.
     template<class Read,class Qualify,class Executable,class Invoke>
     uint32_t markSubmitted(uintptr_t image,Read read,Qualify qualify,
                            Executable executable,Invoke invoke) const {
