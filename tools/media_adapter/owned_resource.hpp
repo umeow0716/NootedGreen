@@ -3253,6 +3253,9 @@ inline bool tglNativeSfcStateFormatSupported(uint32_t format) noexcept {
     }
 }
 // TGL1695ef..169617 encodes (output pitch-1) in17 bits at DW29 bits3..19.
+// Independent output+14 tile encoding at169567..1695bf sets DW29 bit0
+// iff tile==1 and bit1 iff tile!=4. This is an encoding, NOT evidence of
+// the admissible tile set; do not reject other values from these tests alone.
 inline bool tglNativeSfcOutputPitchFits(uint32_t pitch) noexcept {
     return pitch && pitch<=0x20000;
 }
@@ -3405,6 +3408,9 @@ struct TglNativeSfcOutputUsageInvoker {
 // 66352/66359 installs659d0 at+178, NOT+130. Its earlier62750 call receives
 // the second (context) argument; neither this search nor the adjacent stubs
 // proves a completion/retirement callback or permission to release resources.
+// Bounded62750..628f5 instead initializes16 context records of stride15c0:
+// allocations2f0/10 at record+10/+20, with allocation-failure unwind.
+// These data-pointer stores are NOT OS+130 callback publication.
 class TglNativeSfcOutputUsageBinding {
     uintptr_t context_=0,entry_=0;
 public:
