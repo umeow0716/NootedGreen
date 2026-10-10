@@ -1912,9 +1912,13 @@ struct TglVeboxHardwareBinding {
         // Constructor16f140 ->16f3d0 ->ff690 selects this callback from
         // OS8c: nonzero=3e6a0, zero=3eae0 (ff709..ff735). Consumer172080
         // calls MHW8 with OS18/command/0x48-byte relocation packet at1721f1.
-        // 3e6a0 gets the address through OS260 at3e807; 3eae0 emits a
-        // 0x40-byte relocation record through OS268 at3ed2a. Initial OS260
-        // is zero stub65060 (6613d); its runtime producer still needs proof.
+        // 3e6a0 gets the address through OS260 at3e807; 3eae0 passes a
+        // 0x40-byte input to OS268 at3ed2a. Initializer65ea0 sets OS8c=0
+        // (65f5e), and OS268=641e0 (662a5): default uses real relocation,
+        // NOT zero stub OS260=65060. Follow that selected branch first.
+        // 641e0 emits a 0x14-byte record at6442b..645bf; its token DWORD
+        // comes from640e0: type0 resource38, surface variants80 with b8/f0.
+        // Kernel parser admission and owned token publication remain open.
         // This validates the producer identity, not kernel admission/completion.
         if (!read(mhw, &vt, 8) || vt != image + 0x759520 ||
             !read(mhw + 0x18, &actualOs, 8) || actualOs != expectedOs ||
