@@ -4563,6 +4563,50 @@ bool tglReadOwnedSfcFrame(uintptr_t surface,uintptr_t mhw,Read read,
         heightAlign,widthAlign,candidateHeight,candidateWidth)) return false;
     height=candidateHeight;width=candidateWidth;return true;
 }
+struct TglOwnedVpRegionInput {
+    uint32_t frameWidth=0,frameHeight=0,targetWidth=0,targetHeight=0,targetFormat=0,rotation=0;
+    float sourceLeft=0,sourceTop=0,sourceRight=0,sourceBottom=0;
+    float destinationLeft=0,destinationTop=0,destinationRight=0,destinationBottom=0;
+    bool fieldInput=false;
+};
+struct TglOwnedVpRegions {
+    uint32_t sourceWidth=0,sourceHeight=0,destinationWidth=0,destinationHeight=0;
+    TglOwnedVpScale scale;
+};
+// VP +28 1de86f..1deb5b, frame dimensions already returned by +50.
+// Source endpoint truncation precedes doubling/subtraction; source extent is
+// aligned DOWN, destination extent UP after target clipping. Do not substitute
+// the +18 admission rectangle formula (which has a different truncation order).
+inline bool tglPrepareOwnedVpRegions(const TglOwnedVpRegionInput& in,
+                                     TglOwnedVpRegions& output) noexcept {
+    const auto truncate=[](float value,uint32_t& result) noexcept {
+        if(!std::isfinite(value) || value<0 || double(value)>double(UINT32_MAX)) return false;
+        result=static_cast<uint32_t>(value);return true;
+    };
+    for(float value:{in.sourceLeft,in.sourceTop,in.destinationLeft,in.destinationTop})
+        if(!std::isfinite(value) || value<0) return false;
+    uint32_t right=0,bottom=0,width=0,height=0,dw=0,dh=0;
+    if(!truncate(in.sourceRight,right) || !truncate(in.sourceBottom,bottom)) return false;
+    if(in.fieldInput) {
+        if(right>UINT32_MAX/2 || bottom>UINT32_MAX/2) return false;
+        right*=2;bottom*=2;
+    }
+    if(!truncate(float(right)-in.sourceLeft,width) ||
+       !truncate(float(bottom)-in.sourceTop,height) ||
+       !truncate(in.destinationRight-in.destinationLeft,dw) ||
+       !truncate(in.destinationBottom-in.destinationTop,dh)) return false;
+    const auto alignment=tglOwnedSfcAlignment(in.targetFormat);
+    TglOwnedVpRegions candidate;
+    candidate.sourceWidth=std::min(width,in.frameWidth)&~uint32_t(alignment.width-1);
+    candidate.sourceHeight=std::min(height,in.frameHeight)&~uint32_t(alignment.height-1);
+    dw=std::min(dw,in.targetWidth);dh=std::min(dh,in.targetHeight);
+    if(dw>UINT32_MAX-(alignment.width-1u) || dh>UINT32_MAX-(alignment.height-1u)) return false;
+    candidate.destinationWidth=(dw+alignment.width-1u)&~uint32_t(alignment.width-1);
+    candidate.destinationHeight=(dh+alignment.height-1u)&~uint32_t(alignment.height-1);
+    if(!tglPrepareOwnedVpScale(candidate.sourceWidth,candidate.sourceHeight,
+        candidate.destinationWidth,candidate.destinationHeight,in.rotation,candidate.scale)) return false;
+    output=candidate;return true;
+}
 // Exact ICL base/Gen12 SFC +c0 slot is 1df3c0: a single DWORD zero
 // at packet+4, not a no-op and not a GPU command producer.
 inline void tglPrepareOwnedSfcPlatformField(std::array<uint8_t,0xb8>& packet) noexcept {

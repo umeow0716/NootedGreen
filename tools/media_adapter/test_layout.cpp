@@ -5269,6 +5269,38 @@ static void testSfcFrameFields() {
 
 int main() {
     {
+        TglOwnedVpRegionInput input;
+        input.frameWidth=input.frameHeight=input.targetWidth=input.targetHeight=128;
+        input.sourceRight=65.9f;input.sourceBottom=33.9f;
+        input.sourceLeft=input.sourceTop=0.5f;
+        input.destinationRight=63.9f;input.destinationBottom=31.9f;
+        input.targetFormat=0x19;
+        TglOwnedVpRegions regions;
+        assert(tglPrepareOwnedVpRegions(input,regions));
+        assert(regions.sourceWidth==64 && regions.sourceHeight==32);
+        assert(regions.destinationWidth==64 && regions.destinationHeight==32 && !regions.scale.scaling);
+        input.targetFormat=0xd;
+        assert(tglPrepareOwnedVpRegions(input,regions));
+        assert(regions.destinationWidth==64 && regions.destinationHeight==31);
+        input.fieldInput=true;input.targetFormat=0x19;
+        assert(tglPrepareOwnedVpRegions(input,regions));
+        assert(regions.sourceWidth==128 && regions.sourceHeight==64);
+        input.targetWidth=61;input.targetHeight=29;
+        assert(tglPrepareOwnedVpRegions(input,regions));
+        assert(regions.destinationWidth==62 && regions.destinationHeight==30);
+        const auto valid=input;const auto retained=regions;
+        for(auto field:{&TglOwnedVpRegionInput::sourceLeft,&TglOwnedVpRegionInput::sourceTop,
+                        &TglOwnedVpRegionInput::sourceRight,&TglOwnedVpRegionInput::sourceBottom,
+                        &TglOwnedVpRegionInput::destinationRight,&TglOwnedVpRegionInput::destinationBottom}) {
+            input=valid;input.*field=std::numeric_limits<float>::quiet_NaN();
+            assert(!tglPrepareOwnedVpRegions(input,regions));
+            assert(regions.sourceWidth==retained.sourceWidth && regions.scale.at928==retained.scale.at928);
+        }
+        input=valid;input.sourceLeft=256;assert(!tglPrepareOwnedVpRegions(input,regions));
+        input=valid;input.sourceRight=2147483648.0f;assert(!tglPrepareOwnedVpRegions(input,regions));
+        input=valid;input.frameWidth=0;assert(!tglPrepareOwnedVpRegions(input,regions));
+    }
+    {
         TglOwnedVpSfcCallerStorage storage;
         storage.bytes.fill(0xa5);
         const uintptr_t zero=0;std::memcpy(storage.bytes.data()+0x9c0,&zero,8);
