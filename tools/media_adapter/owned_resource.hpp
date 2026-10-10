@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <utility>
 #include <cstring>
+#include <limits>
 
 // Owned lifecycle only. A Darwin backend must separately prove allocation,
 // backing inspection and release ABI; this class never fabricates backing.
@@ -32,6 +33,36 @@ inline bool tglNativeBackingPresent(const std::array<uint8_t, 0x148> &s) noexcep
     }
     return false;
 }
+
+struct TglNativeResourceBinding {
+    uintptr_t context = 0, allocate = 0, release = 0;
+    // Must run under the owner's lifetime lock. Qualify must authenticate the
+    // loaded native image; anchors alone are not an image identity check.
+    template<class Read, class Qualify, class Executable>
+    bool resolve(uintptr_t os, uintptr_t image, Read read, Qualify qualify,
+                 Executable executable) {
+        *this = {};
+        constexpr auto max = std::numeric_limits<uintptr_t>::max();
+        if (!os || !image || os > max - 0x208 || image > max - 0x63c10 ||
+            !qualify(image)) return false;
+        uintptr_t alloc = 0, free = 0;
+        if (!read(os + 0x1f8, &alloc, sizeof(alloc)) ||
+            !read(os + 0x200, &free, sizeof(free)) ||
+            alloc != image + 0x63720 || free != image + 0x63c00 ||
+            !executable(alloc, 16) || !executable(free, 16)) return false;
+        constexpr std::array<uint8_t, 16> allocAnchor{
+            0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x70,
+            0x48,0x89,0x7d,0xf0,0x48,0x89,0x75,0xe8};
+        constexpr std::array<uint8_t, 16> freeAnchor{
+            0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x20,
+            0x31,0xc0,0x89,0xc1,0x48,0x89,0x7d,0xf8};
+        std::array<uint8_t, 16> a{}, f{};
+        if (!read(alloc, a.data(), a.size()) || !read(free, f.data(), f.size()) ||
+            a != allocAnchor || f != freeAnchor) return false;
+        context = os; allocate = alloc; release = free;
+        return true;
+    }
+};
 
 // Injection boundary only: no symbol lookup or unproved OS-object construction.
 // Caller must validate native image, entrypoints and context lifetime separately.

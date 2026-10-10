@@ -159,11 +159,57 @@ static void testNativeResourceBoundary() {
     assert(fixture.allocations == 3 && fixture.releases == 2);
 }
 
+static void testResourceBinding() {
+    constexpr uintptr_t os = 0x1000, image = 0x100000;
+    uintptr_t allocate = image + 0x63720, release = image + 0x63c00;
+    std::array<uint8_t, 16> allocAnchor{
+        0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x70,
+        0x48,0x89,0x7d,0xf0,0x48,0x89,0x75,0xe8};
+    std::array<uint8_t, 16> freeAnchor{
+        0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x20,
+        0x31,0xc0,0x89,0xc1,0x48,0x89,0x7d,0xf8};
+    bool identity = true, rx = true, readable = true;
+    const auto read = [&](uintptr_t p, void *out, size_t n) {
+        if (!readable) return false;
+        const void *source = nullptr;
+        if (p == os + 0x1f8 && n == sizeof(allocate)) source = &allocate;
+        if (p == os + 0x200 && n == sizeof(release)) source = &release;
+        if (p == image + 0x63720 && n == allocAnchor.size()) source = allocAnchor.data();
+        if (p == image + 0x63c00 && n == freeAnchor.size()) source = freeAnchor.data();
+        if (!source) return false;
+        std::memcpy(out, source, n);
+        return true;
+    };
+    const auto qualify = [&](uintptr_t p) { return identity && p == image; };
+    const auto executable = [&](uintptr_t p, size_t n) {
+        return rx && n == 16 && (p == image + 0x63720 || p == image + 0x63c00);
+    };
+    TglNativeResourceBinding binding;
+    const auto resolve = [&] { return binding.resolve(os, image, read, qualify, executable); };
+    const auto empty = [&] {
+        assert(!binding.context && !binding.allocate && !binding.release);
+    };
+    assert(resolve() && binding.context == os && binding.allocate == allocate && binding.release == release);
+    identity = false; assert(!resolve()); empty(); identity = true;
+    assert(resolve()); rx = false; assert(!resolve()); empty(); rx = true;
+    assert(resolve()); readable = false; assert(!resolve()); empty(); readable = true;
+    ++allocate; assert(!resolve()); empty(); --allocate;
+    ++release; assert(!resolve()); empty(); --release;
+    allocAnchor[15] ^= 1; assert(!resolve()); empty(); allocAnchor[15] ^= 1;
+    freeAnchor[15] ^= 1; assert(!resolve()); empty(); freeAnchor[15] ^= 1;
+    assert(resolve());
+    assert(!binding.resolve(UINTPTR_MAX, image, read, qualify, executable)); empty();
+    assert(!binding.resolve(os, UINTPTR_MAX, read, qualify, executable)); empty();
+    assert(!binding.resolve(0, image, read, qualify, executable)); empty();
+    assert(!binding.resolve(os, 0, read, qualify, executable)); empty();
+}
+
 // Offline layout hypothesis only: not an ABI-complete or deployable adapter.
 // The pinned consumer sites shift 0x20/0x24/0x228/0x428 by eight bytes.
 int main() {
     testOwnedResourceLifecycle();
     testNativeResourceBoundary();
+    testResourceBinding();
     std::vector<uint8_t> blob(TglKernelMetadataAdapter::blobBytes, 0x5a);
     const uint32_t offsets[] = {344224, 344448};
     std::memcpy(blob.data() + 78 * 4, offsets, sizeof(offsets));
