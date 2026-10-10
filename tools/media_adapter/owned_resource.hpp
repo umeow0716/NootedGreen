@@ -1457,6 +1457,30 @@ struct TglOwnedStateInputs {
     TglOwnedSurfaceStorage* source=nullptr;
     TglOwnedSurfaceStorage* target=nullptr;
 };
+// Caller authenticates and retains the native execution object/image lease.
+// Decode only closed scalar fields; preserve owned surface and child policy inputs.
+template<class Read>
+bool tglReadOwnedStateExecution(TglOwnedStateInputs& output, uintptr_t execution,
+                                bool diArgument, Read read) {
+    constexpr auto max=std::numeric_limits<uintptr_t>::max();
+    if (!execution || execution>max-0xa0f) return false;
+    std::array<uint8_t,0x12> bytes{}; // native execution+8..19
+    uint32_t pipe=0;
+    if (!read(execution+8,bytes.data(),bytes.size()) ||
+        !read(execution+0xa0c,&pipe,4) || pipe>2) return false;
+    auto candidate=output;
+    candidate.pipe=pipe;
+    candidate.di=diArgument;
+    candidate.firstFrame=(bytes[0]&1)!=0;
+    candidate.dn=(bytes[3]&1)!=0;
+    candidate.chromaIeCp=(bytes[7]&1)!=0;
+    candidate.exec12=(bytes[0xa]&1)!=0;
+    candidate.chromaDi=(bytes[0xb]&1)!=0;
+    candidate.exec14=(bytes[0xc]&1)!=0;
+    candidate.exec19=(bytes[0x11]&1)!=0;
+    output=candidate;
+    return true;
+}
 // Pure owned-data composition of the closed Darwin state producer. Exact
 // base+c8 (1e8390) reads the same exec0f as chroma IECP; primary+70 (1fa4b0)
 // returns false. Do not expose contradictory duplicate callback inputs.

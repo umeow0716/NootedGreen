@@ -2035,6 +2035,35 @@ static void testResourceBinding() {
 // The pinned consumer sites shift 0x20/0x24/0x228/0x428 by eight bytes.
 int main() {
     {
+        std::array<uint8_t,0xd48> execution{};
+        execution[8]=3; execution[0xb]=0x81; execution[0xf]=1;
+        execution[0x12]=1; execution[0x13]=2; execution[0x14]=1; execution[0x19]=1;
+        uint32_t pipe=2;
+        std::memcpy(execution.data()+0xa0c,&pipe,4);
+        const auto address=reinterpret_cast<uintptr_t>(execution.data());
+        auto read=[&](uintptr_t p,void* out,size_t n) {
+            if (p<address || p-address>execution.size() || n>execution.size()-(p-address)) return false;
+            std::memcpy(out,execution.data()+(p-address),n); return true;
+        };
+        TglOwnedSurfaceStorage source;
+        TglOwnedStateInputs inputs;
+        inputs.source=&source; inputs.dnSpecial=true; inputs.skuSuppressPipe=true;
+        assert(tglReadOwnedStateExecution(inputs,address,true,read));
+        assert(inputs.pipe==2 && inputs.di && inputs.firstFrame && inputs.dn);
+        assert(inputs.chromaIeCp && inputs.exec12 && !inputs.chromaDi && inputs.exec14 && inputs.exec19);
+        assert(inputs.source==&source && inputs.dnSpecial && inputs.skuSuppressPipe);
+        for (int failed=0;failed<2;++failed) {
+            int calls=0;
+            auto fail=[&](uintptr_t p,void* out,size_t n) { return calls++!=failed && read(p,out,n); };
+            assert(!tglReadOwnedStateExecution(inputs,address,false,fail));
+            assert(inputs.di && inputs.pipe==2 && inputs.source==&source);
+        }
+        pipe=3; std::memcpy(execution.data()+0xa0c,&pipe,4);
+        assert(!tglReadOwnedStateExecution(inputs,address,false,read) && inputs.pipe==2);
+        assert(!tglReadOwnedStateExecution(inputs,0,false,read));
+        assert(!tglReadOwnedStateExecution(inputs,UINTPTR_MAX,false,read));
+    }
+    {
         TglOwnedSurfaceStorage source,target;
         const uint32_t format=0x19,type=1,sample=4;
         std::memcpy(source.prefix.data(),&type,4);
