@@ -7666,6 +7666,8 @@ int main() {
                 const uintptr_t mockBacking=1;
                 std::memcpy(output.data()+0x168,&mockBacking,8);
                 TglOwnedSfcCommandParameters nativeParameters;assert(nativeParameters.snapshotFrom(parameters));
+                const uint32_t supportedFormat=0x52;
+                std::memcpy(nativeParameters.state.data()+0x2c,&supportedFormat,4);
                 Backend backend;backend.expected=&nativeParameters;backend.leasedLock=true;backend.lockFlag=1;
                 backend.failure=failure;backend.resource=reinterpret_cast<uintptr_t>(output.data()+0x148);
                 std::memcpy(nativeParameters.state.data()+0x90,&backend.resource,8);
@@ -7687,6 +7689,8 @@ int main() {
             std::memcpy(typedOutput.resource.data()+0x20,&mockBacking,8);
             const auto originalResource=typedOutput.resource;
             TglOwnedSfcCommandParameters nativeParameters;assert(nativeParameters.snapshotFrom(parameters));
+            const uint32_t supportedFormat=0x52;
+            std::memcpy(nativeParameters.state.data()+0x2c,&supportedFormat,4);
             Backend backend;backend.expected=&nativeParameters;backend.leasedLock=true;backend.lockFlag=1;
             backend.resource=reinterpret_cast<uintptr_t>(typedOutput.resource.data());
             std::memcpy(nativeParameters.state.data()+0x90,&backend.resource,8);
@@ -7699,6 +7703,21 @@ int main() {
             assert(tglSendOwnedSfcNativeOutputCommands(usage,backend,nativeParameters,typedOutput,
                 0x2000,0,0,0,0,read,platform,invoke)==0);
             assert(invoked==1 && backend.count==4 && typedOutput.resource==originalResource);
+            const std::array<uint32_t,17> supported{1,2,3,4,7,0xd,0x10,0x12,
+                0x13,0x14,0x15,0x17,0x19,0x50,0x51,0x52,0x53};
+            for(uint32_t format=0;format<=0x54;++format) {
+                bool expected=false;for(auto value:supported) expected|=format==value;
+                assert(tglNativeSfcStateFormatSupported(format)==expected);
+                if(expected) continue;
+                std::memcpy(nativeParameters.state.data()+0x2c,&format,4);
+                backend.count=settingReads=invoked=0;
+                assert(tglSendOwnedSfcNativeOutputCommands(usage,backend,nativeParameters,typedOutput,
+                    0x2000,0,0,0,0,read,platform,invoke)==31);
+                assert(!backend.count && !settingReads && !invoked &&
+                    typedOutput.resource==originalResource);
+            }
+            assert(!tglNativeSfcStateFormatSupported(UINT32_MAX));
+            std::memcpy(nativeParameters.state.data()+0x2c,&supportedFormat,4);
             const auto descriptor=tglOwnedSfcOutputDescriptor(typedOutput);
             uintptr_t resource=0;std::memcpy(&resource,descriptor.data()+0x28,8);
             assert(resource==reinterpret_cast<uintptr_t>(typedOutput.resource.data()));

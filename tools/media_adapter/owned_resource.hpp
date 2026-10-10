@@ -3235,6 +3235,17 @@ inline bool tglOwnedSfcNv12OutputFits(uint32_t format,const uint8_t* shell) noex
     const uint64_t row=uint64_t(uv-y)/pitch+get(0x108);
     return row<=0xffff;
 }
+// Exact TGL16864c..16867f: format-1 indexes83 signed-relative entries
+// at16a434. These17 cases avoid default1688c3 (status31). This proves
+// state-builder format admission only, not backing/plane/scaling eligibility.
+inline bool tglNativeSfcStateFormatSupported(uint32_t format) noexcept {
+    switch(format) {
+        case 1:case 2:case 3:case 4:case 7:case 0xd:case 0x10:
+        case 0x12:case 0x13:case 0x14:case 0x15:case 0x17:case 0x19:
+        case 0x50:case 0x51:case 0x52:case 0x53:return true;
+        default:return false;
+    }
+}
 
 inline std::array<uint8_t,0x48> tglSurfaceDescriptor(
         const std::array<uint8_t,0x2a8>& shell) noexcept {
@@ -6106,6 +6117,8 @@ int tglSendOwnedSfcNativeOutputCommands(const TglNativeSfcOutputUsageBinding& us
     std::memcpy(&boundOutput,parameters.state.data()+0x90,8);
     if(!tglNativeBackingPresent(resource) ||
        boundOutput!=reinterpret_cast<uintptr_t>(bytes+0x148)) return 5;
+    uint32_t format=0;std::memcpy(&format,parameters.state.data()+0x2c,4);
+    if(!tglNativeSfcStateFormatSupported(format)) return 31;
     TglOwnedSfcLockParameters lock;
     if(!tglReadOwnedSfcLockParameters(settings,1,read,lock)) return 5;
     return usage.withOutput(shell,[&]() noexcept -> int {
