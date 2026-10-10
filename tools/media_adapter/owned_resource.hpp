@@ -6006,7 +6006,18 @@ int tglSendOwnedSfcPreparedCommands(Backend &backend,
         int lock(){return backend.lock(lockParameters);}
         int output(){descriptor=tglOwnedSfcOutputDescriptor(shell);return 0;}
         int platform(){return platformProducer(descriptor);}
-        int state(){return backend.state(parameters.state,descriptor);}
+        int state(){
+            // Platform owns a mutable descriptor. Recheck the exact values
+            // consumed by the NV12 branch after that callback, not merely
+            // the original shell before command emission. Failure requires
+            // discarding the already-started command buffer as documented.
+            uint32_t format=0,descriptorFormat=0,plane=0;
+            std::memcpy(&format,parameters.state.data()+0x2c,4);
+            std::memcpy(&descriptorFormat,descriptor.data()+4,4);
+            std::memcpy(&plane,descriptor.data()+0x24,4);
+            if(format==0x19 && (descriptorFormat!=format || plane>0xffff)) return 5;
+            return backend.state(parameters.state,descriptor);
+        }
         int avsState(){return backend.avs(parameters.avs);}
         int yTable(){return backend.y(parameters.y);}
         int uvTable(){return backend.uv(parameters.uv);}

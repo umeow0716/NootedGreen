@@ -7507,6 +7507,21 @@ int main() {
             assert(tglSendOwnedSfcPreparedCommands(backend,invalid,shell,
                 0,0,0,0,platform)==5);
             assert(!backend.count && !platformCalls);
+            auto output=shell;
+            const uint32_t pitch=2048;
+            std::memcpy(output.data()+0x130,&nv12,4);
+            std::memcpy(output.data()+0xe0,&pitch,4);
+            for(unsigned mutate=0;mutate<2;++mutate) {
+                Backend changed;changed.expected=&invalid;
+                auto corrupt=[&](auto& descriptor) {
+                    const uint32_t value=mutate?0x52:0x10000;
+                    std::memcpy(descriptor.data()+(mutate?4:0x24),&value,4);
+                    return 0;
+                };
+                assert(tglSendOwnedSfcPreparedCommands(changed,invalid,output,
+                    0,0,0,0,corrupt)==5);
+                assert(changed.count==1 && changed.order[0]==1);
+            }
         }
         for(unsigned flags=0;flags<16;++flags) for(int failure=0;failure<=9;++failure) {
             Backend backend;backend.failure=failure;backend.expected=&parameters;
