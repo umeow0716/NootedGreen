@@ -6768,6 +6768,14 @@ public:
 // calls SubmitDataBuffers(context8,flags50,&flags54,&error). Native a893
 // rejects error/flag20000000 and refreshes buffer resources on success. Do
 // not replace this with FinishFenceEvent or call it twice per native flush.
+// Family affectedByHardwareReset ae6e sets context638 bits20000000 (affected)
+// and40000000 (always), records644 and increments63c on the affected branch.
+// submit_data_buffers6f74 emits644 at output+4 and, ONLY while device dc8==0,
+// merges638 into output+8 at6f98. It then clears644/648 and masks638 down to
+// 08000000 at6fc5/6fd0. TGL a8eb passes context+54 as that output-flags sink;
+// a903..a912 rejects20000000/error. These are consumable submission reports,
+// not a persistent userspace generation counter: zero flags before/after a
+// fence cannot exclude an intervening reset or the terminated skip branch.
 // Caller owns the native context, writable command/sideband and all resource
 // leases through this call AND subsequent independently verified completion.
 struct TglNativeVideoBufferFlushInvoker {
