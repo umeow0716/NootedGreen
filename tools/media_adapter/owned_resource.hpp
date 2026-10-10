@@ -1432,6 +1432,10 @@ struct TglOwnedVeboxVtable {
         0x1c8,0x1d0,0x1d8,0x1e0};
     // Lifecycle slots cannot inherit native delete: owned resources/table need
     // teardown. +1b8 must implement Gen12 TRUE rather than base FALSE.
+    // Derived table75bba0 +28=131fa0 is NOT a compatible base hook: 131ff2/
+    // 132000 read this+2cc8/+2cc0, beyond our exact1bc0 base allocation. Its
+    // nonnull input98/resource148 gate (132015..132048) does not establish
+    // this-layout compatibility. Keep +28 owned; never reuse that native entry.
     // +1e0 is pointer(this), not status(this): Allocate126998 tests SKU64
     // bit17 and null child80, calls1269ca with RDI=this, then stores RAX at80.
     // NULL becomes allocation error1 at1269e9. Do not bind a generic status
