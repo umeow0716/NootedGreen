@@ -6516,6 +6516,23 @@ public:
         if(busy_ || !bindingsValid_) return;
         busy_=true;retire();busy_=false;
     }
+    // Frame admission includes statistics and every group resource before
+    // publishing either history pitch. All owners remain pinned through the
+    // builder; this is synchronous admission, not asynchronous GPU retirement.
+    template<class Invoke> int withSurfaces(TglOwnedSurfaceStorage& first,
+        TglOwnedSurfaceStorage& second,Invoke invoke) noexcept {
+        if(busy_ || !ready_) return 5;
+        busy_=true;
+        const int result=statistics_.withResource([&](const auto& stats,const auto& layout) noexcept {
+            return group_.withStorage([&](const auto& views) noexcept {
+                return history_.withSurfaces(first,second,[&](const auto& a,const auto& b) noexcept {
+                    static_assert(noexcept(invoke(views,a,b,stats,layout)),"surface graph lease ABI");
+                    return invoke(views,a,b,stats,layout);
+                });
+            });
+        });
+        busy_=false;return result;
+    }
 };
 
 // One borrowed-OS resource lifetime. The renderer must close every such scope

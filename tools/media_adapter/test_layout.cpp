@@ -3966,6 +3966,26 @@ static void testResourceBinding() {
                     assert(transaction.ensure(requests,prepare,keys,false,1920,1080,fill)==5);
                     return 31;
                 })==31);
+                unsigned graphCalls=0;
+                auto graph=[&](const auto& views,const auto& a,const auto& b,
+                    const auto& stats,const auto& layout) noexcept {
+                    ++graphCalls;
+                    assert(views[0] && &a==&firstSurface && &b==&secondSurface);
+                    uint32_t pa=0,pb=0;
+                    std::memcpy(&pa,a.prefix.data()+0xe0,4);
+                    std::memcpy(&pb,b.prefix.data()+0xe0,4);
+                    assert(pa==16 && pb==16 && stats[0]==1 && layout.bytes);
+                    transaction.reset();pair.reset();group.reset();statistics.reset();
+                    assert(api.references==3 && buffer.releases==1);
+                    return 31;
+                };
+                assert(transaction.withSurfaces(firstSurface,wrongSurface,graph)==5 && !graphCalls);
+                for(size_t denied=0;denied<2;++denied) {
+                    backends[denied].backingAllowed=false;
+                    assert(transaction.withSurfaces(firstSurface,secondSurface,graph)==5 && !graphCalls);
+                    backends[denied].backingAllowed=true;
+                }
+                assert(transaction.withSurfaces(firstSurface,secondSurface,graph)==31 && graphCalls==1);
                 transaction.reset();assert(!api.references && buffer.releases==2);
                 backends[1].fail=true;
                 assert(transaction.ensure(requests,prepare,keys,false,1920,1080,fill)==77);
