@@ -7,6 +7,35 @@
 #include "owned_resource.hpp"
 
 static void testTrackedCpuOwner() {
+    struct ShellBackend {
+        size_t calls = 0, failAt = 8, live = 0;
+        uintptr_t allocate(size_t bytes) {
+            assert(bytes == 0x2a8);
+            if (calls++ == failAt) return 0;
+            ++live; return live;
+        }
+        void release(uintptr_t p) { assert(p == live && live); --live; }
+    };
+    for (size_t fail = 0; fail <= 8; ++fail) {
+        ShellBackend b; b.failAt = fail;
+        {
+            TglVeboxCpuShells<ShellBackend> shells(b);
+            assert(shells.allocate() == (fail == 8));
+            assert(!shells.get(8));
+            if (fail < 8) {
+                assert(!b.live);
+                for (size_t i = 0; i < 8; ++i) assert(!shells.get(i));
+                b.calls = 0; b.failAt = 8;
+                assert(shells.allocate());
+            }
+            for (size_t i = 0; i < 8; ++i) assert(shells.get(i) == i+1);
+            const auto calls = b.calls;
+            assert(!shells.allocate() && b.calls == calls);
+            shells.reset(); shells.reset(); assert(!b.live);
+            b.calls = 0; assert(shells.allocate());
+        }
+        assert(!b.live); // Destructor releases the complete unpublished group.
+    }
     // Exercise the real function-pointer ABI only against owned test functions.
     static std::array<unsigned char,0x2a8> abiStorage{};
     static unsigned abiAllocations = 0, abiReleases = 0;

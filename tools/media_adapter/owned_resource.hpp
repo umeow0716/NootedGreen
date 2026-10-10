@@ -259,6 +259,39 @@ public:
     size_t size() const { return extent; }
 };
 
+// Native Allocate126740 creates eight 0x2a8 CPU shells: 1b0/1b8,
+// ba8[2],680[4]. This owned transaction publishes none until all exist.
+// It does not install child fields or allocate GPU backing. Backend outlives it.
+template<class Backend> class TglVeboxCpuShells {
+    Backend& backend;
+    std::array<uintptr_t,8> shells{};
+public:
+    explicit TglVeboxCpuShells(Backend& b) : backend(b) {}
+    TglVeboxCpuShells(const TglVeboxCpuShells&) = delete;
+    TglVeboxCpuShells& operator=(const TglVeboxCpuShells&) = delete;
+    ~TglVeboxCpuShells() { reset(); }
+    bool allocate() {
+        if (shells[0]) return false;
+        std::array<uintptr_t,8> candidate{};
+        for (size_t i = 0; i < candidate.size(); ++i) {
+            candidate[i] = backend.allocate(0x2a8);
+            if (!candidate[i]) {
+                while (i) backend.release(candidate[--i]);
+                return false;
+            }
+        }
+        shells = candidate;
+        return true;
+    }
+    uintptr_t get(size_t i) const { return i < shells.size() ? shells[i] : 0; }
+    void reset() noexcept {
+        const auto old = shells;
+        shells.fill(0);
+        for (size_t i = old.size(); i; --i)
+            if (old[i-1]) backend.release(old[i-1]);
+    }
+};
+
 // Full VEBOX table, NOT a live child/object replacement. Owned constructor and
 // destructor implementations must exist before this table is installed anywhere.
 // +1e8 belongs to the following execution table's metadata and MUST NOT be copied.
