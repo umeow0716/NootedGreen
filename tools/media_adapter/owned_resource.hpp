@@ -6325,8 +6325,15 @@ public:
         if(busy_) return 5;
         busy_=true;ready_=false;
         int status=group_.ensure(requests,prepare);
-        if(!status) status=history_.ensure(historyKeys,reinitialize);
-        if(!status) status=statistics_.ensure(width,height,fill);
+        if(!status) status=group_.withStorage([&](const auto&) noexcept {
+            const int allocated=history_.ensure(historyKeys,reinitialize);
+            if(allocated) return allocated;
+            return history_.withStorage([&](const auto&,const auto&) noexcept {
+                // Later native initialization callbacks cannot revoke backing
+                // already admitted by this same allocation transaction.
+                return statistics_.ensure(width,height,fill);
+            });
+        });
         if(status) retire();else ready_=true;
         busy_=false;return status;
     }

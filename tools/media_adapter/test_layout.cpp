@@ -3862,7 +3862,9 @@ static void testResourceBinding() {
                 TglOwnedVeboxBackingTransaction transaction(group,pair,statistics);
                 int fillStatus=31;unsigned fills=0;
                 auto fill=[&](const auto&,uint32_t bytes) noexcept {
-                    assert(bytes==520320);++fills;return fillStatus;
+                    assert(bytes==520320);++fills;
+                    pair.reset();group.reset();assert(api.references==3);
+                    return fillStatus;
                 };
                 const auto prepare=[](size_t,const auto&,bool) noexcept {return 0;};
                 assert(transaction.ensure(requests,prepare,keys,false,1920,1080,fill)==31);
