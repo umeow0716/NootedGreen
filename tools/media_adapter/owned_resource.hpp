@@ -5815,15 +5815,33 @@ template<class Backend> class TglOwnedSfcStateParameters {
 public:
     explicit TglOwnedSfcStateParameters(Backend& backend) : owner(backend) {}
     ~TglOwnedSfcStateParameters() { reset(); }
-    bool initialize() {
+private:
+    template<class ResetView> bool initializeWithReset(ResetView resetView) {
+        static_assert(noexcept(resetView()),"VP state reset ABI");
         if(leased || mutating) return false;
         mutating=true;
         owner.reset();
+        resetView();
         if (!owner.allocate(sizeof(TglOwnedSfcStateParametersPacket))) {
             mutating=false; return false;
         }
         std::memset(reinterpret_cast<void*>(owner.get()),0,sizeof(TglOwnedSfcStateParametersPacket));
         mutating=false; return true;
+    }
+public:
+    bool initialize() {return initializeWithReset([]() noexcept {});}
+    // ICL slot10: 1f7450 calls1e1080 (release old state, zero920..9c7),
+    // then allocates state. Translate owned data only, never invoke the donor
+    // free against our borrowed938. A nonzero published state rejects the
+    // entire operation. Caller also owns/quiesces the private VP and GPU work;
+    // this CPU reset neither frees borrowed surfaces nor certifies retirement.
+    bool initializeVpPass(TglOwnedVpSfcCallerStorage& storage) {
+        uintptr_t published=0;
+        std::memcpy(&published,storage.bytes.data()+0x938,8);
+        if(published) return false;
+        return initializeWithReset([&]() noexcept {
+            std::memset(storage.bytes.data()+0x920,0,0xa8);
+        });
     }
     bool prepare(const std::array<uint8_t,0xb8>& prefix,
         const TglOwnedSfcGen12Tail& tail,bool rgbAdaptive,bool eightTapChroma,

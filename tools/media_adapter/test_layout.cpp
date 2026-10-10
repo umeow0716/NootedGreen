@@ -4889,6 +4889,39 @@ static void testSfcStateParameterOwnership() {
         assert(readOnly.data()==backend.bytes.data());
     }
     assert(!backend.live && backend.allocations==4 && backend.releases==3);
+    {
+        TglOwnedVpSfcCallerStorage storage;
+        struct VpBackend:Backend {
+            TglOwnedVpSfcCallerStorage* storage=nullptr;
+            uintptr_t allocate(size_t size) {
+                assert(storage && !live);
+                for(size_t i=0x920;i<0x9c8;++i) assert(!storage->bytes[i]);
+                return Backend::allocate(size);
+            }
+        } vpBackend;
+        vpBackend.storage=&storage;
+        TglOwnedSfcStateParameters<VpBackend> state(vpBackend);
+        storage.bytes.fill(0xa5);
+        const auto foreign=storage.bytes;
+        assert(!state.initializeVpPass(storage) && storage.bytes==foreign && !vpBackend.allocations);
+        std::memset(storage.bytes.data()+0x938,0,8);
+        const auto original=storage.bytes;
+        assert(state.initializeVpPass(storage));
+        for(size_t i=0;i<storage.bytes.size();++i)
+            assert(storage.bytes[i]==(i>=0x920 && i<0x9c8 ? 0 : original[i]));
+        storage.bytes[0x920]=1;storage.bytes[0x9c7]=2;
+        const auto leased=storage.bytes;
+        assert(state.withParameters([&](const uint8_t*) noexcept {
+            assert(!state.initializeVpPass(storage) && storage.bytes==leased && !vpBackend.releases);
+            return 0;
+        })==0);
+        vpBackend.fail=true;
+        assert(!state.initializeVpPass(storage) && !state.data() && !vpBackend.live && vpBackend.releases==1);
+        for(size_t i=0;i<storage.bytes.size();++i)
+            assert(storage.bytes[i]==(i>=0x920 && i<0x9c8 ? 0 : original[i]));
+        vpBackend.fail=false;
+        assert(state.initializeVpPass(storage) && vpBackend.allocations==3);
+    }
 }
 
 static void testSfcInputChroma() {
