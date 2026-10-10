@@ -91,7 +91,7 @@ int cscReference() {
 }
 
 // Read our own loaded, sealed Tahoe framework. Never invoke a GPU/resource API.
-int resourceReference(bool fenceOnly=false) {
+int resourceReference(bool fenceOnly=false,bool releaseOnly=false) {
     constexpr const char *framework = "/System/Library/PrivateFrameworks/IOAccelerator.framework/IOAccelerator";
     void *library = dlopen(framework, RTLD_NOW | RTLD_LOCAL);
     if (!library) { std::fprintf(stderr, "reference dlopen: %s\n", dlerror()); return 1; }
@@ -99,6 +99,7 @@ int resourceReference(bool fenceOnly=false) {
     struct Reference { const char *name; const char *symbol; size_t callOffset; bool block = false; };
     for (const auto &reference : {
             Reference{"IOAccelResourceCreate", "IOAccelResourceCreate", 0},
+            Reference{"IOAccelResourceRelease", "IOAccelResourceRelease", 0},
             Reference{"IOAccelResourceGetClientShared", "IOAccelResourceGetClientShared", 0},
             Reference{"IOAccelResourceFinishSysMem", "IOAccelResourceFinishSysMem", 0},
             // Read implementation only: a submit result and the word "Finish"
@@ -110,6 +111,10 @@ int resourceReference(bool fenceOnly=false) {
             Reference{"client-shared-once-invoke", "IOAccelResourceGetClientShared", 0x5b, true}}) {
         if(fenceOnly && std::strcmp(reference.name,"IOAccelVideoContextFinishFenceEvent") &&
             std::strcmp(reference.name,"IOAccelVideoContextSubmitDataBuffers")) continue;
+        if(releaseOnly && std::strcmp(reference.name,"IOAccelResourceRelease")) continue;
+        // Preserve the established resource reference set; release is a
+        // separate bounded capture, not another resource/GPU action.
+        if(!releaseOnly && !std::strcmp(reference.name,"IOAccelResourceRelease")) continue;
         const char *name = reference.name;
         void *symbol = dlsym(library, reference.symbol);
         Dl_info info{};
@@ -229,7 +234,8 @@ int resourceReference(bool fenceOnly=false) {
             std::putchar('\n');
         }
     }
-    std::puts(fenceOnly ? "FENCE_REFERENCE_OK no-resource-call no-GPU no-text-write" :
+    std::puts(releaseOnly ? "RELEASE_REFERENCE_OK no-resource-call no-GPU no-text-write" :
+        fenceOnly ? "FENCE_REFERENCE_OK no-resource-call no-GPU no-text-write" :
         "RESOURCE_REFERENCE_OK no-resource-call no-GPU no-text-write");
     status = 0;
 done:
@@ -240,6 +246,7 @@ done:
 int main(int argc, char **argv) {
     if(argc==2 && !std::strcmp(argv[1],"--csc-reference")) return cscReference();
     if(argc==2 && !std::strcmp(argv[1],"--fence-reference")) return resourceReference(true);
+    if(argc==2 && !std::strcmp(argv[1],"--release-reference")) return resourceReference(false,true);
     if (argc == 2 && !std::strcmp(argv[1], "--resource-reference")) return resourceReference();
     const bool adapterMode = argc == 2 && std::strcmp(argv[1], "--adapter") == 0;
     if (argc != 1 && !adapterMode) return 64;
