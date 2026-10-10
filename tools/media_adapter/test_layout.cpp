@@ -8184,6 +8184,13 @@ int main() {
                 struct DeniedFormatRead {
                     bool operator()(uintptr_t,void*,size_t) const noexcept {return false;}
                 };
+                struct ModeCleanupContext {
+                    void* child;unsigned calls=0;int status=5;
+                    bool owns(void* candidate) const noexcept {return candidate==child;}
+                    void freeResources() noexcept {++calls;status=31;}
+                } modeCleanup{owner.constructedBase()};
+                using ModeCleanupScope=TglOwnedVeboxScopedContext<ModeCleanupContext>;
+                hooks=tglBindOwnedVeboxModeReleaseHook<ModeCleanupScope>(hooks);
                 const auto unbound=hooks;
                 assert(owner.withPrivateChild([](void*) noexcept {assert(false);return 0;})==5);
                 hooks=tglBindOwnedVeboxQueryHooks<DeniedFormatRead>(hooks);
@@ -8199,6 +8206,20 @@ int main() {
                 std::memcpy(&formatAddress,reinterpret_cast<void*>(address+0x90),8);
                 using SurfaceFormat=bool(*)(void*,uintptr_t) noexcept;
                 assert(!reinterpret_cast<SurfaceFormat>(formatAddress)(owner.constructedBase(),0x5000));
+                uintptr_t cleanupAddress=0;
+                std::memcpy(&cleanupAddress,reinterpret_cast<void*>(address+0x60),8);
+                const auto cleanupCallback=reinterpret_cast<void(*)(void*) noexcept>(cleanupAddress);
+                cleanupCallback(owner.constructedBase());assert(!modeCleanup.calls);
+                assert(owner.withPrivateChild([&](void* actual) noexcept {
+                    ModeCleanupScope scope(actual,modeCleanup);assert(scope.bound());
+                    cleanupCallback(nullptr);cleanupCallback(&modeCleanup);
+                    assert(!modeCleanup.calls);
+                    cleanupCallback(actual);
+                    owner.reset();assert(cpu.live && owner.constructedBase()==actual && !eventCount);
+                    return modeCleanup.status;
+                })==31);
+                assert(modeCleanup.calls==1);
+                cleanupCallback(owner.constructedBase());assert(modeCleanup.calls==1);
                 for(size_t i=0;i<hooks.size();++i) {
                     uintptr_t target=0;
                     std::memcpy(&target,reinterpret_cast<void*>(address+TglOwnedVeboxVtable::required[i]),8);
