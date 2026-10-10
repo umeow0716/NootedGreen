@@ -720,6 +720,36 @@ struct TglNativeVeboxConstructorInvoker {
     }
 };
 
+// Arm only after construction of private owned storage has completed. This
+// scope does not infer object size, publish a child, or adopt native storage.
+// Cleanup owns GPU descriptors; native base teardown owns transferred CPU
+// shells. Storage release is last and must not call native operator delete.
+template<class Cleanup, class Destroy, class Release> class TglVeboxTeardownScope {
+    void* object_;
+    Cleanup& cleanup_;
+    Destroy& destroy_;
+    Release& release_;
+public:
+    TglVeboxTeardownScope(void* constructedPrivateObject, Cleanup& cleanup,
+                         Destroy& destroy, Release& release) noexcept
+        : object_(constructedPrivateObject), cleanup_(cleanup),
+          destroy_(destroy), release_(release) {
+        static_assert(noexcept(cleanup_(object_)) && noexcept(destroy_(object_)) &&
+                      noexcept(release_(object_)), "teardown must not throw");
+    }
+    TglVeboxTeardownScope(const TglVeboxTeardownScope&) = delete;
+    TglVeboxTeardownScope& operator=(const TglVeboxTeardownScope&) = delete;
+    ~TglVeboxTeardownScope() { reset(); }
+    void reset() noexcept {
+        void* object = object_;
+        object_ = nullptr; // revoke before callbacks, including reentrant reset
+        if (!object) return;
+        cleanup_(object);
+        destroy_(object);
+        release_(object);
+    }
+};
+
 struct TglVeboxPrefix {
     uintptr_t vtable = 0, slot08 = 0, os = 0, renderHal = 0, sku = 0, wa = 0;
     std::array<uint8_t, 8> slot30{};

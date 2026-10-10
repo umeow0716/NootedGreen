@@ -1000,6 +1000,30 @@ static void testVeboxPrefix() {
         assert(constructorCalls == 1 && status == 31);
     }
     {
+        unsigned stage = 0;
+        int ownedStorage = 0;
+        auto cleanup = [&](void* p) noexcept {
+            assert(p == &ownedStorage && stage == 0); stage = 1;
+        };
+        auto destroy = [&](void* p) noexcept {
+            assert(p == &ownedStorage && stage == 1); stage = 2;
+        };
+        auto release = [&](void* p) noexcept {
+            assert(p == &ownedStorage && stage == 2); stage = 3;
+        };
+        {
+            TglVeboxTeardownScope scope(&ownedStorage,cleanup,destroy,release);
+            scope.reset(); scope.reset();
+            assert(stage == 3);
+        }
+        assert(stage == 3);
+        stage = 0;
+        { TglVeboxTeardownScope scope(&ownedStorage,cleanup,destroy,release); }
+        assert(stage == 3);
+        { TglVeboxTeardownScope scope(nullptr,cleanup,destroy,release); }
+        assert(stage == 3);
+    }
+    {
         constexpr uintptr_t os = 0x5000, hal = 0x6000;
         uintptr_t sku = 0x7000, wa = 0x8000;
         uint32_t platform = 0xdeadbeef, nativePlatform = 12;
