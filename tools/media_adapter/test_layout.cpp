@@ -3825,7 +3825,9 @@ static void testResourceBinding() {
             RetainedApi api;api.references=0;api.mapping={mapped.data(),40,8,3,16};
             Quarantine sink;
             std::array<StmmBackend,2> backends{StmmBackend{api},StmmBackend{api}};
-            alignas(8) std::array<uint8_t,0x148> first{},second{};
+            TglOwnedSurfaceStorage firstSurface{},secondSurface{};
+            auto& first=firstSurface.resource;
+            auto& second=secondSurface.resource;
             std::array<TglResourceStorageReference,2> shells{{{first},{second}}};
             TglOwnedStmmPair<StmmBackend,RetainedApi,Quarantine> pair(backends,shells,api,sink);
             const std::array<TglResourceKey,2> keys{stmmKey,stmmKey};
@@ -3840,6 +3842,19 @@ static void testResourceBinding() {
             assert(pair.ensure(keys)==0 && api.references==2);
             const auto locks=api.locks;
             assert(pair.ensure(keys)==0 && api.locks==locks);
+            TglOwnedSurfaceStorage wrongSurface{};
+            assert(pair.withSurfaces(firstSurface,wrongSurface,
+                [](auto&,auto&) noexcept {assert(false);return 0;})==5);
+            uint32_t before=1;std::memcpy(&before,firstSurface.prefix.data()+0xe0,4);
+            assert(before==0);
+            assert(pair.withSurfaces(firstSurface,secondSurface,
+                [&](auto& a,auto& b) noexcept {
+                    uint32_t p0=0,p1=0;
+                    std::memcpy(&p0,a.prefix.data()+0xe0,4);
+                    std::memcpy(&p1,b.prefix.data()+0xe0,4);
+                    assert(p0==16 && p1==16);
+                    pair.reset();assert(api.references==2);return 31;
+                })==31);
             assert(pair.withInitializedStorage([&](const auto& a,const auto& b,
                 const auto& firstLayout,const auto& secondLayout) noexcept {
                 const std::array<uint32_t,3> expected{8,3,16};

@@ -5985,6 +5985,18 @@ public:
             });
         busy_=false;return status;
     }
+    template<class Invoke> int withSurfaces(TglOwnedSurfaceStorage& first,
+        TglOwnedSurfaceStorage& second,Invoke invoke) noexcept {
+        return withInitializedStorage([&](const Storage& a,const Storage& b,
+            const auto& firstLayout,const auto& secondLayout) noexcept {
+            if(&a!=&first.resource || &b!=&second.resource ||
+                !firstLayout[2] || !secondLayout[2]) return 5;
+            // Both backing leases and identities precede either publication.
+            std::memcpy(first.prefix.data()+0xe0,&firstLayout[2],4);
+            std::memcpy(second.prefix.data()+0xe0,&secondLayout[2],4);
+            return invoke(first,second);
+        });
+    }
     void reset() noexcept {
         if(busy_) return;
         busy_=true;ready_=false;
