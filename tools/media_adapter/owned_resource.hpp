@@ -1423,6 +1423,19 @@ inline void tglPrepareOwnedStateDnControls(uint32_t& flags, uint32_t nativeMode,
     if (special) candidate|=0x20004;
     flags=candidate;
 }
+// Leading flags1faded..1faecd. primaryIeCp is the qualified semantic
+// callback result, not a call through the incompatible TGL base+c8 slot.
+inline bool tglPrepareOwnedStateLeadingFlags(uint32_t& flags, uint32_t pipe,
+                                            bool primaryIeCp, bool di, bool dn) noexcept {
+    if (pipe>2) return false;
+    uint32_t candidate=flags&~0x8001cu;
+    if (pipe==1 || pipe==2 || primaryIeCp) candidate|=4;
+    if (di) candidate|=16;
+    if (dn) candidate|=8;
+    if (pipe==1 && (dn||di)) candidate|=0x80000;
+    flags=candidate;
+    return true;
+}
 // Exact Darwin caller1f9111/26 packs compressed bit0 and mode DWORD into
 // an eight-byte parameter. TGL179530 consumes mode+4 and calls native OS1a0;
 // do not replace the whole callback with a superficially equivalent bit OR.
