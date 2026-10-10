@@ -5798,6 +5798,11 @@ int main() {
                 assert(candidate.ief==saved.ief && candidate.state==saved.state);
             }
         }
+        const TglOwnedIefTables compositionTables{};
+        const std::array<uint16_t,3> compositionThresholds{7,2,8};
+        assert(tglPrepareOwnedSfcIefParameters(parameters,true,1,1,1,
+            compositionThresholds,compositionTables));
+        assert(parameters.state[0x67]==1 && parameters.state[0x68]==1);
         const auto savedIef=parameters.ief;const auto savedState=parameters.state;
         TglOwnedVpCscCache cache;unsigned reads=0,produced=0,generated=0;
         auto read=[&](uintptr_t,void*,size_t) noexcept {++reads;return false;};
@@ -5806,11 +5811,19 @@ int main() {
         };
         auto generate=[&](TglOwnedSfcCommandParameters& ready) noexcept {
             ++generated;assert(&ready==&parameters);
+            assert(ready.state[0x67]==1 && ready.state[0x68]==1);
+            assert(ready.ief[3]==1 && ready.ief[4]==7 && ready.ief[5]==2 && ready.ief[6]==8);
             assert(ready.state[0x88]==1 && ready.ief[0x20]==1);
             for(size_t offset:{size_t(0x28),size_t(0x30),size_t(0x38)}) {
                 uintptr_t pointer=0;std::memcpy(&pointer,ready.ief.data()+offset,8);
                 assert(pointer);
             }
+            const auto leasedIef=ready.ief;const auto leasedState=ready.state;
+            const TglOwnedIefTables unusedTables{};
+            const std::array<uint16_t,3> unusedThresholds{};
+            assert(!tglPrepareOwnedSfcIefParameters(ready,false,0,0,0,
+                unusedThresholds,unusedTables));
+            assert(ready.ief==leasedIef && ready.state==leasedState);
             assert(!cache.reset());return 31;
         };
         assert(tglWithOwnedSfcCscCommands(parameters,cache,true,3,5,0,read,produce,generate)==31);
