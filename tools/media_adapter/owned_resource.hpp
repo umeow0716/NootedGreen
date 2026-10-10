@@ -5,10 +5,48 @@
 #include <cstring>
 #include <limits>
 #include <cmath>
+#include <cstddef>
 #if defined(__APPLE__)
 #include <mach/mach.h>
 #include <mach/mach_vm.h>
 #endif
+
+// Exact base prefix touched by parent130ea0 -> nonvirtual126520. NOT a
+// complete VEBOX object, not publishable as a native child by itself.
+struct TglVeboxPrefix {
+    uintptr_t vtable = 0, slot08 = 0, os = 0, renderHal = 0, sku = 0, wa = 0;
+    std::array<uint8_t, 8> slot30{};
+    uintptr_t slot38 = 0, slot40 = 0;
+    uint8_t flag48 = 0, flag49 = 0;
+    std::array<uint8_t, 6> padding4a{};
+    uintptr_t parentData = 0;
+    uint32_t sourceValue = 0, padding5c = 0;
+    template<class Read>
+    bool configure(uintptr_t parent, uintptr_t source, Read read) {
+        constexpr auto max = std::numeric_limits<uintptr_t>::max();
+        if (!parent || parent > max - 0x9f0 || !source || source > max - 0x120)
+            return false;
+        uintptr_t surface = 0;
+        uint32_t kind = 0, value = 0;
+        uint8_t flag = 0;
+        if (!read(source + 0x98, &surface, sizeof(surface)) || !surface ||
+            surface > max - 0x138 || !read(surface + 0x134, &kind, sizeof(kind)) ||
+            !read(source + 0x110, &flag, sizeof(flag)) ||
+            !read(source + 0x11c, &value, sizeof(value))) return false;
+        flag48 = flag & 1;
+        flag49 = kind == 5;
+        parentData = parent + 0x9f0;
+        sourceValue = value;
+        return true; // all fields borrow parent/source lifetime; no ownership transfer
+    }
+};
+static_assert(sizeof(TglVeboxPrefix) == 0x60);
+static_assert(offsetof(TglVeboxPrefix, os) == 0x10);
+static_assert(offsetof(TglVeboxPrefix, renderHal) == 0x18);
+static_assert(offsetof(TglVeboxPrefix, flag48) == 0x48);
+static_assert(offsetof(TglVeboxPrefix, flag49) == 0x49);
+static_assert(offsetof(TglVeboxPrefix, parentData) == 0x50);
+static_assert(offsetof(TglVeboxPrefix, sourceValue) == 0x58);
 
 // Owned lifecycle only. A Darwin backend must separately prove allocation,
 // backing inspection and release ABI; this class never fabricates backing.

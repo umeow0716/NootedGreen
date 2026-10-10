@@ -6,6 +6,38 @@
 #include "descriptor_bridge.hpp"
 #include "owned_resource.hpp"
 
+static void testVeboxPrefix() {
+    TglVeboxPrefix prefix;
+    prefix.vtable = 7; prefix.os = 9; prefix.slot40 = 11;
+    uintptr_t surface = 0x2000;
+    uint32_t kind = 5, value = 0x12345678;
+    uint8_t flag = 0xfe;
+    bool allowed = true;
+    const auto read = [&](uintptr_t p, void *out, size_t n) {
+        if (!allowed) return false;
+        const void *data = nullptr;
+        if (p == 0x1098 && n == 8) data = &surface;
+        if (p == 0x2134 && n == 4) data = &kind;
+        if (p == 0x1110 && n == 1) data = &flag;
+        if (p == 0x111c && n == 4) data = &value;
+        if (!data) return false;
+        std::memcpy(out, data, n); return true;
+    };
+    assert(prefix.configure(0x3000, 0x1000, read));
+    assert(prefix.flag48 == 0 && prefix.flag49 == 1 && prefix.parentData == 0x39f0 &&
+           prefix.sourceValue == value);
+    assert(prefix.vtable == 7 && prefix.os == 9 && prefix.slot40 == 11);
+    const auto saved = prefix;
+    allowed = false; assert(!prefix.configure(0x3000, 0x1000, read)); allowed = true;
+    surface = UINTPTR_MAX; assert(!prefix.configure(0x3000, 0x1000, read)); surface = 0x2000;
+    assert(!prefix.configure(UINTPTR_MAX, 0x1000, read));
+    assert(!prefix.configure(0x3000, UINTPTR_MAX, read));
+    assert(prefix.flag48 == saved.flag48 && prefix.flag49 == saved.flag49 &&
+           prefix.parentData == saved.parentData && prefix.sourceValue == saved.sourceValue);
+    flag = 0xff; kind = 4;
+    assert(prefix.configure(0x3000, 0x1000, read) && prefix.flag48 == 1 && prefix.flag49 == 0);
+}
+
 static void testComposedStatisticsBuffer() {
     struct Fixture {
         std::array<uint8_t, 8192> bytes{};
@@ -499,6 +531,7 @@ static void testResourceBinding() {
 // Offline layout hypothesis only: not an ABI-complete or deployable adapter.
 // The pinned consumer sites shift 0x20/0x24/0x228/0x428 by eight bytes.
 int main() {
+    testVeboxPrefix();
     testComposedStatisticsBuffer();
     testBufferFill();
     testStatisticsLifecycle();
