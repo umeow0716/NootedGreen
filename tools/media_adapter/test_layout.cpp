@@ -5269,6 +5269,19 @@ static void testSfcFrameFields() {
 
 int main() {
     {
+        for(bool conditional:{false,true}) for(float x:{0.0f,-0.0f,1.0f})
+        for(float y:{0.0f,-0.0f,1.0f}) for(uint32_t tile:{0u,1u,2u})
+        for(uint32_t format:{1u,0x19u,0x52u,0x53u}) {
+            const bool shortcut=!conditional && x==0 && y==0 && tile==1;
+            const bool allowed=format!=0x19 && format!=0x52 && format!=0x53;
+            assert(tglOwnedVpFinalAdmission(conditional,x,y,tile,format)==(shortcut || allowed));
+        }
+        const float nan=std::numeric_limits<float>::quiet_NaN();
+        assert(!tglOwnedVpFinalAdmission(false,nan,0,1,0x19));
+        assert(!tglOwnedVpFinalAdmission(false,0,nan,1,0x53));
+        assert(tglOwnedVpFinalAdmission(false,nan,0,1,1));
+    }
+    {
         for(uint32_t source=0;source<4;++source) for(uint32_t target=0;target<4;++target)
         for(bool setting:{false,true}) for(uint32_t format:{1u,0x19u}) {
             bool output=true;

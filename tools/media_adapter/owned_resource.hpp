@@ -24,6 +24,15 @@ struct TglOwnedVpScale {
     float at928=0,at92c=0;
     bool scaling=false;
 };
+// Exact VP +68=1ddbe0..1ddc6c, final +18 admission predicate. Ordered
+// equality is intentional: NaN source origins cannot take the zero-origin
+// shortcut. This is a data predicate, not a resource allocation hook.
+inline bool tglOwnedVpFinalAdmission(bool conditionalSource,float source40,
+    float source44,uint32_t targetE4,uint32_t target130) noexcept {
+    if(!conditionalSource && source44==0.0f && source40==0.0f && targetE4==1)
+        return true;
+    return target130!=0x19 && target130!=0x53 && target130!=0x52;
+}
 inline bool tglPrepareOwnedVpScale(uint32_t sourceWidth,uint32_t sourceHeight,
     uint32_t destinationWidth,uint32_t destinationHeight,uint32_t rotation,
     TglOwnedVpScale& output) noexcept {
