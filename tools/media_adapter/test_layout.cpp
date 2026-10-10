@@ -5574,6 +5574,38 @@ int main() {
         uint32_t height=17,width=19;
         assert(tglReadOwnedSfcFrame(0x1000,0x2000,read,height,width));
         assert(height==1080 && width==1920 && calls==7);
+        {
+            TglOwnedVpSfcCallerStorage storage;
+            const uintptr_t mhwAddress=0x2000;
+            std::memcpy(storage.bytes.data()+0x20,&mhwAddress,8);
+            TglOwnedVpAdmissionContext context(storage,read);
+            using Context=decltype(context);
+            using Callbacks=TglOwnedVpAdmissionCallbacks<TglOwnedVpSfcResolve<Context>>;
+            width=19;height=17;calls=0;
+            Callbacks::dimensions(storage.bytes.data(),reinterpret_cast<void*>(0x1000),&width,&height);
+            assert(width==19 && height==17 && calls==0);
+            {
+                TglOwnedVpSfcScopedContext<Context> scope(storage.bytes.data(),context);
+                assert(scope.bound());
+                Callbacks::dimensions(storage.bytes.data()+8,reinterpret_cast<void*>(0x1000),&width,&height);
+                assert(width==19 && height==17 && calls==0);
+                Callbacks::dimensions(storage.bytes.data(),reinterpret_cast<void*>(0x1000),&width,&height);
+                assert(width==1920 && height==1080 && calls==7);
+                calls=0;width=19;height=17;
+                Callbacks::dimensions(storage.bytes.data(),reinterpret_cast<void*>(0x1000),&width,&width);
+                Callbacks::dimensions(storage.bytes.data(),reinterpret_cast<void*>(0x1000),nullptr,&height);
+                assert(width==19 && height==17 && calls==0);
+                for(fail=1;fail<=7;++fail) {
+                    calls=0;
+                    Callbacks::dimensions(storage.bytes.data(),reinterpret_cast<void*>(0x1000),&width,&height);
+                    assert(width==19 && height==17);
+                }
+                fail=0;
+            }
+            calls=0;
+            Callbacks::dimensions(storage.bytes.data(),reinterpret_cast<void*>(0x1000),&width,&height);
+            assert(width==19 && height==17 && calls==0);
+        }
         for(fail=1;fail<=7;++fail) {
             calls=0;height=17;width=19;
             assert(!tglReadOwnedSfcFrame(0x1000,0x2000,read,height,width));

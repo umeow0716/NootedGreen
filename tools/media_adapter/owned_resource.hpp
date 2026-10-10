@@ -279,6 +279,9 @@ bool tglReadOwnedVpAdmission(uint8_t child08,uintptr_t first,
 // Synchronous admission context only: the caller retains storage and every
 // reader-authorized input lease through the enclosing scoped callback. This
 // is not a VP constructor, vtable publisher or GPU submission lifetime.
+template<class Read>
+bool tglReadOwnedSfcFrame(uintptr_t surface,uintptr_t mhw,Read read,
+                        uint32_t& height,uint32_t& width) noexcept;
 template<class Read> class TglOwnedVpAdmissionContext {
     static_assert(noexcept(std::declval<Read&>()(uintptr_t{},nullptr,size_t{})),"VP leased read ABI");
     TglOwnedVpSfcCallerStorage& storage_;
@@ -307,6 +310,16 @@ public:
     }
     bool input(void* surface) noexcept {return format(surface,false);}
     bool output(void* surface) noexcept {return format(surface,true);}
+    bool dimensions(void* surface,uint32_t* width,uint32_t* height) noexcept {
+        if(!width || !height || width==height) return false;
+        uintptr_t mhw=0;std::memcpy(&mhw,storage_.bytes.data()+0x20,8);
+        uint32_t candidateHeight=0,candidateWidth=0;
+        if(!tglReadOwnedSfcFrame(reinterpret_cast<uintptr_t>(surface),mhw,read_,
+                                candidateHeight,candidateWidth)) return false;
+        // Native slot50 RDX is width, RCX is height. The CPU helper's API
+        // intentionally names height first; do not forward arguments blindly.
+        *height=candidateHeight;*width=candidateWidth;return true;
+    }
 };
 template<class Resolve> struct TglOwnedVpAdmissionCallbacks {
     static_assert(noexcept(Resolve{}(nullptr)),"VP admission resolver ABI");
@@ -325,6 +338,10 @@ template<class Resolve> struct TglOwnedVpAdmissionCallbacks {
     static bool output(void* child,void* surface) noexcept {
         auto* context=Resolve{}(child);
         return context && context->owns(child) && context->output(surface);
+    }
+    static void dimensions(void* child,void* surface,uint32_t* width,uint32_t* height) noexcept {
+        auto* context=Resolve{}(child);
+        if(context && context->owns(child)) context->dimensions(surface,width,height);
     }
 };
 // Caller ABI: TGL12c010 invokes VP+40(this,source,target,renderData),
