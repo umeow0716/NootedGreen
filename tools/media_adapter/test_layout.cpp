@@ -2035,6 +2035,64 @@ static void testResourceBinding() {
 // The pinned consumer sites shift 0x20/0x24/0x228/0x428 by eight bytes.
 int main() {
     {
+        std::array<TglOwnedSurfaceStorage,12> storage{};
+        TglDiIecpInputs input;
+        input.boundaryWidth=1920; input.di=true; input.referenceValid=true; input.dnNeeded=true;
+        input.current=&storage[0]; input.previous=&storage[1]; input.statistics=&storage[2];
+        input.ffdi={&storage[3],&storage[4],&storage[5],&storage[6]};
+        input.ffdn={&storage[7],&storage[8]}; input.stmm={&storage[9],&storage[10]};
+        input.indices.frame0=2; input.indices.frame1=3; input.indices.dnOut=1;
+        input.indices.historyIn=1; input.indices.historyOut=0;
+        for (size_t i=0;i<input.controls.size();++i) input.controls[i]=uint32_t(100+i);
+        TglOwnedDiIecpPacket packet;
+        packet.controls[11]=0xfeed;
+        auto original=packet;
+        size_t admits=0, registrations=0, controls=0, failAdmit=0, failRegister=0, failControl=0;
+        std::vector<const void*> order;
+        std::vector<bool> writes;
+        auto prepare = [&] {
+            admits=registrations=controls=0; order.clear(); writes.clear();
+            return tglPrepareDiIecpPacket(packet,input,
+                [&](const auto&)->int { return ++admits == failAdmit ? 37 : 0; },
+                [&](const auto& resource,bool write,bool read)->int {
+                    assert(read); order.push_back(&resource); writes.push_back(write);
+                    return ++registrations == failRegister ? 31 : 0;
+                },
+                [&](const auto&,uint32_t& value)->int {
+                    value+=0x100; return ++controls == failControl ? 25 : 0;
+                });
+        };
+        assert(prepare() == 0 && admits == 8 && registrations == 8 && controls == 7);
+        const std::array<size_t,8> expected{0,1,6,5,8,10,9,2};
+        for (size_t i=0;i<expected.size();++i) assert(order[i] == &storage[expected[i]].resource);
+        assert((writes == std::vector<bool>{false,false,true,true,true,false,true,true}));
+        assert(packet.resources[5] == &storage[6].resource && packet.resources[6] == &storage[5].resource);
+        assert(packet.resources[2] == &storage[10].resource && packet.resources[3] == &storage[9].resource);
+        assert(packet.controls[7] == 107 && packet.controls[5] == 0x169 && packet.controls[11] == 0);
+        for (failAdmit=1;failAdmit<=8;++failAdmit) {
+            packet=original; assert(prepare() == 37 && registrations == 0);
+            assert(std::memcmp(&packet,&original,sizeof(packet)) == 0);
+        }
+        failAdmit=0;
+        for (failRegister=1;failRegister<=8;++failRegister) {
+            packet=original; assert(prepare() == 31 && registrations == failRegister);
+            assert(std::memcmp(&packet,&original,sizeof(packet)) == 0);
+        }
+        failRegister=0;
+        for (failControl=1;failControl<=7;++failControl) {
+            packet=original; assert(prepare() == 25 && controls == failControl);
+            assert(std::memcmp(&packet,&original,sizeof(packet)) == 0);
+        }
+        failControl=0;
+        input.di=false; input.referenceValid=false; input.pipe=1;
+        assert(prepare() == 0 && registrations == 4 && controls == 3);
+        assert(packet.resources[4] == &storage[8].resource && packet.resources[5] == &storage[4].resource);
+        assert(!packet.resources[1] && !packet.resources[2] && !packet.resources[6]);
+        input.ffdn[1]=nullptr; packet=original;
+        assert(prepare() == 5 && admits == 0 && registrations == 0);
+        assert(std::memcmp(&packet,&original,sizeof(packet)) == 0);
+    }
+    {
         std::array<TglOwnedSurfaceStorage,5> storage{};
         std::array<const TglOwnedSurfaceStorage*,4> ffdi{
             &storage[0],&storage[1],&storage[2],&storage[3]};

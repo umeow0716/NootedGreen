@@ -1411,6 +1411,89 @@ inline bool tglSelectDiIecpOutputs(TglDiIecpOutputs& output, uint32_t pipe,
     output = candidate;
     return true;
 }
+struct TglDiIecpInputs {
+    uint32_t boundaryWidth = 0, pipe = 0;
+    bool di = false, iecp = false, referenceValid = false;
+    bool dnNeeded = false, stmmNeeded = false;
+    TglSurfaceIndices indices{};
+    const TglOwnedSurfaceStorage* current = nullptr;
+    const TglOwnedSurfaceStorage* previous = nullptr;
+    const TglOwnedSurfaceStorage* target = nullptr;
+    const TglOwnedSurfaceStorage* statistics = nullptr;
+    std::array<const TglOwnedSurfaceStorage*,4> ffdi{};
+    std::array<const TglOwnedSurfaceStorage*,2> ffdn{}, stmm{};
+    std::array<uint32_t,11> controls{};
+};
+// Producer orchestration, not native object-layout transplantation. Darwin
+// ICL1f8ec0/1f89a0 supplies the branch/order evidence, TGL172080 the packet ABI.
+// Caller leases every surface. Admit verifies backing/identity; control must
+// implement qualified native compression policy, never silently omit it.
+// Register/control side effects cannot be rolled back here (native also exits
+// at first error), but no partial packet is published or emitted on failure.
+template<class Admit, class Register, class Control>
+int tglPrepareDiIecpPacket(TglOwnedDiIecpPacket& output,
+        const TglDiIecpInputs& input, Admit admit, Register registerResource,
+        Control control) {
+    TglOwnedDiIecpPacket candidate;
+    TglDiIecpOutputs selected;
+    if (!tglInitializeDiIecpPacket(candidate,input.boundaryWidth) ||
+        !tglSelectDiIecpOutputs(selected,input.pipe,input.di,input.iecp,
+            input.indices,input.target,input.ffdi) || !input.current ||
+        !input.statistics || (input.referenceValid && !input.previous)) return 5;
+    struct Step { size_t slot; const TglOwnedSurfaceStorage* surface; bool write; };
+    std::array<Step,10> steps{};
+    size_t count=0;
+    auto add = [&](size_t slot,const TglOwnedSurfaceStorage* surface,bool write) {
+        steps[count++]={slot,surface,write};
+    };
+    add(0,input.current,false);
+    if (input.referenceValid) add(1,input.previous,false);
+    if (selected.current) add(5,selected.current,true);
+    if (selected.previous) add(6,selected.previous,true);
+    if (input.dnNeeded) {
+        if (input.indices.dnOut < 0 || input.indices.dnOut >= 2 ||
+            !input.ffdn[input.indices.dnOut]) return 5;
+        add(4,input.ffdn[input.indices.dnOut],true);
+        if (input.pipe == 1 && !input.di) {
+            if (!input.ffdi[input.indices.dnOut]) return 5;
+            add(5,input.ffdi[input.indices.dnOut],true);
+        }
+    }
+    if (input.di || input.stmmNeeded) {
+        if (input.indices.historyIn < 0 || input.indices.historyIn >= 2 ||
+            input.indices.historyOut < 0 || input.indices.historyOut >= 2 ||
+            !input.stmm[input.indices.historyIn] || !input.stmm[input.indices.historyOut]) return 5;
+        add(2,input.stmm[input.indices.historyIn],false);
+        add(3,input.stmm[input.indices.historyOut],true);
+    }
+    add(7,input.statistics,true);
+    for (size_t i=0;i<count;++i) {
+        const int result=admit(*steps[i].surface);
+        if (result) return result;
+    }
+    uint32_t offset=0;
+    std::memcpy(&offset,input.current->prefix.data()+0x144,4);
+    std::memcpy(candidate.prefix.data()+8,&offset,4);
+    if (input.referenceValid) {
+        std::memcpy(&offset,input.previous->prefix.data()+0x144,4);
+        std::memcpy(candidate.prefix.data()+0xc,&offset,4);
+    }
+    std::memcpy(candidate.prefix.data()+0x10,&selected.currentOffset,4);
+    for (size_t i=0;i<count;++i) {
+        const auto& step=steps[i];
+        int result=registerResource(step.surface->resource,step.write,true);
+        if (result) return result;
+        uint32_t value=input.controls[step.slot];
+        if (step.slot != 7) { // native statistics has no compression-control call
+            result=control(*step.surface,value);
+            if (result) return result;
+        }
+        candidate.resources[step.slot]=&step.surface->resource;
+        candidate.controls[step.slot]=value;
+    }
+    output=candidate;
+    return 0;
+}
 // TGL12b9a0 writes these five execution fields. No pointer adoption or state
 // mutation; failed reads/invalid indices preserve the caller's snapshot.
 template<class Read>
