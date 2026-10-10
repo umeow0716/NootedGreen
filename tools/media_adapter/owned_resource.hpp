@@ -2993,6 +2993,12 @@ inline bool tglNativeBackingPresent(const std::array<uint8_t, 0x148> &s) noexcep
 //2bc07; branch2bca1 passes args58/40/48/50 to newResourceWithClientBuffer
 //21ab6 at2bcd8. This closes native type0 allocation -> client SysMemory80.
 // Do not apply this proof to native type1 IOSurface planes or borrowed FFDI.
+// Type0 release63c5e calls62fa0:23e0c8 is IOAccelResourceRelease, then
+// 23e524 is vm_deallocate(resource+50, size+10). Both results are ignored;
+// nonnull input returns the local zero at63014, so63c67's success branch
+// does not certify completion. Keep submitted backing generations alive
+// before invoking this release; deferred kernel map references alone do not
+// prove that a userspace virtual allocation cannot be reused prematurely.
 // Type1 allocator63250 instead creates an IOSurface (stub23e152 at6342b),
 // writes descriptor0=0x82 at634b2 and creates a token per plane at6356f.
 // Family2b882 resolves descriptor40 via IOSurfaceRoot::lookupSurface(task),
