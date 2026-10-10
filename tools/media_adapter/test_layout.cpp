@@ -2035,6 +2035,21 @@ static void testResourceBinding() {
 // The pinned consumer sites shift 0x20/0x24/0x228/0x428 by eight bytes.
 int main() {
     {
+        for (bool first : {false,true}) for (bool dn : {false,true})
+            for (bool di : {false,true}) for (bool suppress : {false,true})
+                for (uint32_t pipe=0;pipe<3;++pipe)
+                    for (uint32_t original : {0u,0xffffffffu,0xa5a55a5au}) {
+                        uint32_t flags=original;
+                        assert(tglPrepareOwnedStateHistoryAndPipe(flags,first,dn,di,pipe,suppress));
+                        const uint32_t history=(!first && (dn||di)) ? 0x20 : 0;
+                        const uint32_t pipeBits=(!suppress && pipe==1) ? 0x2000 : 0;
+                        assert(flags==((original&~0x6020u)|history|pipeBits));
+                    }
+        uint32_t flags=0x12345678;
+        assert(!tglPrepareOwnedStateHistoryAndPipe(flags,false,true,true,3,false));
+        assert(flags==0x12345678);
+    }
+    {
         TglOwnedSurfaceStorage source,target;
         const uint32_t nv12=0x19;
         std::memcpy(source.prefix.data()+0x130,&nv12,4);

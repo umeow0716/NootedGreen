@@ -1397,6 +1397,19 @@ inline bool tglPrepareOwnedChromaSampling(uint32_t& state,
     tglPrepareOwnedChromaDownsampling(state,targetPack,siting,pipe);
     return true;
 }
+// Closed state flags from Darwin1faecf..1faf2d and1fb086..1fb0f4.
+// These are scalar inputs, not transplanted ICL object offsets. Other flags
+// remain owned by the enclosing state producer until their sources are closed.
+inline bool tglPrepareOwnedStateHistoryAndPipe(uint32_t& flags,
+                                             bool firstFrame, bool dn, bool di,
+                                             uint32_t pipe, bool skuSuppressPipe) noexcept {
+    if (pipe>2) return false;
+    uint32_t candidate=flags&~0x6020u;
+    if (!firstFrame && (dn || di)) candidate|=0x20;
+    if (!skuSuppressPipe && pipe==1) candidate|=0x2000;
+    flags=candidate;
+    return true;
+}
 // Exact Darwin caller1f9111/26 packs compressed bit0 and mode DWORD into
 // an eight-byte parameter. TGL179530 consumes mode+4 and calls native OS1a0;
 // do not replace the whole callback with a superficially equivalent bit OR.
