@@ -1313,17 +1313,15 @@ struct TglOwnedSurfaceInputs {
 static_assert(offsetof(TglOwnedSurfaceInputs,di) == 0x28);
 static_assert(sizeof(TglOwnedSurfaceInputs) == 0x30);
 // Hook70 packet: TGL MHW vtable759520+28 ->172080 independently proves
-// resource20..60, paired control78..98 and final DWORDa4. Preserve unknown
-// prefix/gap as bytes; this is storage, NOT a complete command producer.
+// resource20..70, paired control78..a0 and final DWORDa4. Preserve unknown
+// prefix as bytes; this is storage, NOT a complete command producer.
 // Resource pointers are borrowed: their owners must outlive native emission.
 struct TglOwnedDiIecpPacket {
     std::array<uint8_t,0x20> prefix{};
-    std::array<const std::array<uint8_t,0x148>*,9> resources{};
-    std::array<uint8_t,0x10> reserved{};
+    std::array<const std::array<uint8_t,0x148>*,11> resources{};
     std::array<uint32_t,12> controls{};
 };
 static_assert(offsetof(TglOwnedDiIecpPacket,resources) == 0x20);
-static_assert(offsetof(TglOwnedDiIecpPacket,reserved) == 0x68);
 static_assert(offsetof(TglOwnedDiIecpPacket,controls) == 0x78);
 static_assert(sizeof(TglOwnedDiIecpPacket) == 0xa8);
 // Native builder12a14c calls MHW+28 with exactly these three arguments.
