@@ -3850,6 +3850,46 @@ static void testResourceBinding() {
                 stages=3;
                 assert(tglWithOwnedVeboxHistoryFrame(pair,group,childLease,execution,8,frame,
                     stage,stage,stage)==5 && stages==3);
+                struct BufferBackend {
+                    unsigned allocations=0,releases=0;
+                    int allocate(std::array<uint8_t,0x148>& storage,const TglResourceKey& key) noexcept {
+                        assert(key.format==0x3e);++allocations;storage[0]=1;return 0;
+                    }
+                    bool backed(const std::array<uint8_t,0x148>& storage) noexcept {return storage[0]==1;}
+                    void release(std::array<uint8_t,0x148>&) noexcept {++releases;}
+                } buffer;
+                TglStatisticsResource<BufferBackend> statistics(buffer);
+                TglOwnedVeboxBackingTransaction transaction(group,pair,statistics);
+                int fillStatus=31;unsigned fills=0;
+                auto fill=[&](const auto&,uint32_t bytes) noexcept {
+                    assert(bytes==520320);++fills;return fillStatus;
+                };
+                const auto prepare=[](size_t,const auto&,bool) noexcept {return 0;};
+                assert(transaction.ensure(requests,prepare,keys,false,1920,1080,fill)==31);
+                assert(!api.references && buffer.releases==1 && !statistics.layout().bytes);
+                fillStatus=0;
+                assert(transaction.ensure(requests,prepare,keys,false,1920,1080,fill)==0);
+                assert(api.references==3 && buffer.allocations==2 && fills==2);
+                assert(transaction.ensure(requests,prepare,keys,false,1920,1080,fill)==0 && fills==2);
+                assert(transaction.withResources([&](const auto& views,const auto& a,const auto& b,
+                    const auto& stats,const auto& layout) noexcept {
+                    assert(views[0] && &a==&first && &b==&second && stats[0]==1 && layout.bytes);
+                    transaction.reset();pair.reset();group.reset();statistics.reset();
+                    assert(api.references==3 && buffer.releases==1);
+                    assert(transaction.ensure(requests,prepare,keys,false,1920,1080,fill)==5);
+                    return 31;
+                })==31);
+                transaction.reset();assert(!api.references && buffer.releases==2);
+                backends[1].fail=true;
+                assert(transaction.ensure(requests,prepare,keys,false,1920,1080,fill)==77);
+                assert(!api.references && buffer.allocations==2 && fills==2);
+                backends[1].fail=false;
+                const auto historyAllocations=backends[0].allocations+backends[1].allocations;
+                extra.fail=true;
+                assert(transaction.ensure(requests,prepare,keys,false,1920,1080,fill)==77);
+                assert(!api.references && buffer.allocations==2 && fills==2);
+                assert(backends[0].allocations+backends[1].allocations==historyAllocations);
+                extra.fail=false;
             }
             pair.reset();assert(!api.references);
             std::array<TglResourceStorageReference,2> alias{{{first},{first}}};

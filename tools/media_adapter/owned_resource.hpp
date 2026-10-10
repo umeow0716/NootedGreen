@@ -6297,6 +6297,58 @@ private:
     bool busy_=false;
 };
 
+// Allocation transaction for a history-enabled frame. The qualified platform
+// planner supplies resource keys and statistics boundary dimensions; this does
+// not infer feature admission or SFC resources. All three owners outlive this
+// coordinator, and GPU users must be excluded before ensure/reset/destruction.
+// In particular, a +58 error cannot leave earlier groups alive waiting for a
+// FreeResources call that TGL's mode0 caller never makes.
+template<class Group,class History,class Statistics> class TglOwnedVeboxBackingTransaction {
+    Group& group_;
+    History& history_;
+    Statistics& statistics_;
+    bool busy_=false,ready_=false;
+    void retire() noexcept {
+        ready_=false;
+        statistics_.reset();history_.reset();group_.reset();
+    }
+public:
+    TglOwnedVeboxBackingTransaction(Group& group,History& history,Statistics& statistics) noexcept
+        :group_(group),history_(history),statistics_(statistics) {}
+    TglOwnedVeboxBackingTransaction(const TglOwnedVeboxBackingTransaction&)=delete;
+    TglOwnedVeboxBackingTransaction& operator=(const TglOwnedVeboxBackingTransaction&)=delete;
+    ~TglOwnedVeboxBackingTransaction(){reset();}
+    template<class Requests,class Prepare,class Fill>
+    int ensure(const Requests& requests,Prepare prepare,
+        const std::array<TglResourceKey,2>& historyKeys,bool reinitialize,
+        uint32_t width,uint32_t height,Fill fill) noexcept {
+        if(busy_) return 5;
+        busy_=true;ready_=false;
+        int status=group_.ensure(requests,prepare);
+        if(!status) status=history_.ensure(historyKeys,reinitialize);
+        if(!status) status=statistics_.ensure(width,height,fill);
+        if(status) retire();else ready_=true;
+        busy_=false;return status;
+    }
+    template<class Invoke> int withResources(Invoke invoke) noexcept {
+        if(busy_ || !ready_) return 5;
+        busy_=true;
+        const int result=statistics_.withResource([&](const auto& stats,const auto& layout) noexcept {
+            return history_.withStorage([&](const auto& first,const auto& second) noexcept {
+                return group_.withStorage([&](const auto& views) noexcept {
+                    static_assert(noexcept(invoke(views,first,second,stats,layout)),"backing graph lease ABI");
+                    return invoke(views,first,second,stats,layout);
+                });
+            });
+        });
+        busy_=false;return result;
+    }
+    void reset() noexcept {
+        if(busy_) return;
+        busy_=true;retire();busy_=false;
+    }
+};
+
 // One borrowed-OS resource lifetime. The renderer must close every such scope
 // before retiring RenderHal/OS. Member order guarantees resource destruction
 // while its backend still exists; close is terminal and idempotent.
