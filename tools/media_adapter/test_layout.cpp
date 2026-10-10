@@ -7551,6 +7551,16 @@ int main() {
                     0,0,0,0,corrupt)==5);
                 assert(changed.count==1 && changed.order[0]==1);
             }
+            for(uint32_t row:{uint32_t(0),uint32_t(0xffff)}) {
+                std::memcpy(output.data()+0x108,&row,4);
+                Backend valid;valid.expected=&invalid;
+                valid.resource=reinterpret_cast<uintptr_t>(output.data()+0x148);
+                auto platform=[](auto& descriptor) {descriptor[0]=0xee;return 0;};
+                assert(tglSendOwnedSfcPreparedCommands(valid,invalid,output,
+                    0,0,0,0,platform)==0);
+                assert(valid.count==3 && valid.order[0]==1 &&
+                    valid.order[1]==4 && valid.order[2]==9);
+            }
         }
         for(unsigned flags=0;flags<16;++flags) for(int failure=0;failure<=9;++failure) {
             Backend backend;backend.failure=failure;backend.expected=&parameters;
