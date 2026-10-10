@@ -4320,10 +4320,14 @@ int tglWithOwnedVeboxBackedExecutionFrame(Group& resources,ChildOwner& childOwne
 // the enclosing frame transaction's responsibility.
 template<class History,class Group,class ChildOwner,class ExecutionOwner,class Context,
          class Prepare,class Setup,class Invoke>
-int tglWithOwnedVeboxHistoryFrame(History& history,Group& resources,ChildOwner& childOwner,
+int tglWithOwnedVeboxHistoryFrame(History& history,TglOwnedSurfaceStorage& firstSurface,
+    TglOwnedSurfaceStorage& secondSurface,Group& resources,ChildOwner& childOwner,
     ExecutionOwner& executionOwner,uintptr_t expectedExecution,Context& context,
     Prepare prepare,Setup setup,Invoke invoke) noexcept {
-    return history.withStorage([&](const auto& first,const auto& second) noexcept {
+    return history.withSurfaces(firstSurface,secondSurface,
+        [&](const auto& firstShell,const auto& secondShell) noexcept {
+        const auto& first=firstShell.resource;
+        const auto& second=secondShell.resource;
         return tglWithOwnedVeboxBackedExecutionFrame(resources,childOwner,executionOwner,
             expectedExecution,context,
             [&](void* child,const auto& views) noexcept {

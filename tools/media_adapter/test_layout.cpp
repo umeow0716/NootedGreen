@@ -3889,6 +3889,10 @@ static void testResourceBinding() {
                 unsigned stages=0,failAt=0;
                 auto stage=[&](void* actual,const auto& views,const auto& a,const auto& b) noexcept {
                     assert(actual==&child && views[0] && &a==&first && &b==&second);
+                    uint32_t p0=0,p1=0;
+                    std::memcpy(&p0,firstSurface.prefix.data()+0xe0,4);
+                    std::memcpy(&p1,secondSurface.prefix.data()+0xe0,4);
+                    assert(p0==16 && p1==16);
                     pair.reset();group.reset();assert(api.references==3);
                     ++stages;
                     if(stages==3) frame.pass.gate([]() noexcept {return 0;});
@@ -3896,13 +3900,19 @@ static void testResourceBinding() {
                 };
                 for(unsigned failure=0;failure<=3;++failure) {
                     stages=0;failAt=failure;
-                    assert(tglWithOwnedVeboxHistoryFrame(pair,group,childLease,execution,7,frame,
+                    assert(tglWithOwnedVeboxHistoryFrame(pair,firstSurface,secondSurface,
+                        group,childLease,execution,7,frame,
                         stage,stage,stage)==(failure?31:0));
                     assert(stages==(failure?failure:3));
                 }
                 stages=3;
-                assert(tglWithOwnedVeboxHistoryFrame(pair,group,childLease,execution,8,frame,
+                assert(tglWithOwnedVeboxHistoryFrame(pair,firstSurface,secondSurface,
+                    group,childLease,execution,8,frame,
                     stage,stage,stage)==5 && stages==3);
+                stages=0;
+                assert(tglWithOwnedVeboxHistoryFrame(pair,firstSurface,wrongSurface,
+                    group,childLease,execution,7,frame,
+                    stage,stage,stage)==5 && stages==0);
                 struct BufferBackend {
                     unsigned allocations=0,releases=0;
                     int allocate(std::array<uint8_t,0x148>& storage,const TglResourceKey& key) noexcept {
