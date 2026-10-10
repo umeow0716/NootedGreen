@@ -1436,6 +1436,13 @@ struct TglOwnedVeboxVtable {
     // 132000 read this+2cc8/+2cc0, beyond our exact1bc0 base allocation. Its
     // nonnull input98/resource148 gate (132015..132048) does not establish
     // this-layout compatibility. Keep +28 owned; never reuse that native entry.
+    // This is the OUTER renderer multi-pass entry, not VEBOX's missing +28:
+    // 1320e2 copies139 bytes of input; 132105 loops input+90 entries through
+    // MOS61b50; 13218f writes MOS+9c, then MOS+300/+318 execute. Platform
+    // +38 at13228f produces the pass count; each pass republishes88 bytes,
+    // re-registers entries and calls renderer+40 (132467). +48 (1324a8) is
+    // reached only after all passes; errors jump1324ab and increment+9ec.
+    // A source-registration/status0 gate alone cannot replace this lifecycle.
     // +1e0 is pointer(this), not status(this): Allocate126998 tests SKU64
     // bit17 and null child80, calls1269ca with RDI=this, then stores RAX at80.
     // NULL becomes allocation error1 at1269e9. Do not bind a generic status
