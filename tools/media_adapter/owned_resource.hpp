@@ -202,10 +202,12 @@ inline void tglUpdateVeboxReport(TglVeboxReportState& report,
 }
 
 // Native Render tail12cdcb..12ce07. This exports a decision already made
-// by the platform producer; it must NOT choose or normalize executionMode.
-inline void tglFinalizeVeboxReport(TglVeboxReportState& report, uint32_t executionMode,
+// by the platform producer; it must NOT choose or normalize outputPipe.
+// execution+a0c is the output-pipe decision, NOT the persistent VEBOX
+// execution/transition state at history+4 (child90). Never exchange them.
+inline void tglFinalizeVeboxReport(TglVeboxReportState& report, uint32_t outputPipe,
                                    uint8_t execution18, uint8_t execution8f4) noexcept {
-    std::memcpy(report.bytes.data() + 0xc, &executionMode, sizeof(executionMode));
+    std::memcpy(report.bytes.data() + 0xc, &outputPipe, sizeof(outputPipe));
     report.bytes[0x24] = (execution18 ^ 1) & 1;
     report.bytes[0x25] = execution8f4 & 1;
 }
