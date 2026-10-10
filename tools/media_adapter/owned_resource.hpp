@@ -2462,7 +2462,17 @@ inline bool tglNativeBackingPresent(const std::array<uint8_t, 0x148> &s) noexcep
 // stores it at SysMemory+d0 (54450), task30, client addressc8 and length40.
 // TGL slotd1980 imports native createMemoryDescriptorWithAddressRange3f32a;
 // there is no TGL-specific descriptor constructor. This establishes descriptor
-// ownership, not yet prepare/wiring duration across deferred Map retirement.
+// ownership. Map::prepare52754 cold57a32 calls Memory148=prepare258e;
+// SysMemory1b0=wire54edc then prepares descriptor+d0 via1f0 at55066.
+// Successful commit_pte527d0 sets map flag4 and calls Memory1d0, resolved
+// in SysMemory vptr80570 to increment_wire_count55420 (counter14).
+// release_pte52488 clears flag4 and calls1d8=decrement_wire_count5542a;
+// unwire1b8 is reached only when counter14 AND getPrepareCount25d4 are zero.
+// SysMemory::complete54e9a uses the same gate. Consequently map complete
+// alone does not unwire a committed pending map: deferred release retains
+// its PTE wire count until actual release_pte. This closes that native mapped
+// backing mechanism, not proof every owned allocation reaches the map or that
+// an independent borrowed source/CPU buffer can be released after submission.
 template<class Writable, class Fill>
 int tglFillBuffer(const std::array<uint8_t, 0x148> &resource, uint32_t bytes,
                   uint8_t value, Writable writable, Fill fill) noexcept {
