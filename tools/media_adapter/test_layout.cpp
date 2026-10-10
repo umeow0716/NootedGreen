@@ -4003,6 +4003,17 @@ static void testResourceBinding() {
                 }
                 assert(transaction.withSurfaces(firstSurface,secondSurface,graph)==31 && graphCalls==1);
                 transaction.reset();assert(!api.references && buffer.releases==2);
+                // A retired graph cannot republish borrowed FF/history views.
+                // Callback success/failure is not a completion certificate;
+                // only this explicit CPU-only reset revokes admission here.
+                unsigned retiredCalls=0;
+                assert(transaction.withResources([&](const auto&,const auto&,const auto&,
+                    const auto&,const auto&) noexcept {++retiredCalls;return 0;})==5);
+                assert(transaction.withSurfaces(firstSurface,secondSurface,
+                    [&](const auto&,const auto&,const auto&,const auto&,const auto&) noexcept {
+                        ++retiredCalls;return 0;
+                    })==5);
+                assert(!retiredCalls && !api.references && buffer.releases==2);
                 backends[1].fail=true;
                 assert(transaction.ensure(requests,prepare,keys,false,1920,1080,fill)==77);
                 assert(!api.references && buffer.allocations==2 && fills==2);
