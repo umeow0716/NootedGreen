@@ -1918,7 +1918,12 @@ struct TglVeboxHardwareBinding {
         // NOT zero stub OS260=65060. Follow that selected branch first.
         // 641e0 emits a 0x14-byte record at6442b..645bf; its token DWORD
         // comes from640e0: type0 resource38, surface variants80 with b8/f0.
-        // Kernel parser admission and owned token publication remain open.
+        // Kernel patch_codechal_command_buffer77a6e reads the 0x14-byte
+        // records at77b97: token low16 from record+4 reaches context b78
+        // at77bd2. TGL vptrda440+b78=77eb8 bind_resource; its a40 call77f1c
+        // uses relocation atdae80 to family bindResource(ac0a), hence native
+        // prepare->channel admission. This closes the static native route,
+        // not completeness of owned token publication or dynamic execution.
         // This validates the producer identity, not kernel admission/completion.
         if (!read(mhw, &vt, 8) || vt != image + 0x759520 ||
             !read(mhw + 0x18, &actualOs, 8) || actualOs != expectedOs ||
