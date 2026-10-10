@@ -2064,6 +2064,21 @@ int main() {
         assert(TglNativeDiIecpInvoker{}(reinterpret_cast<uintptr_t>(emit),
             reinterpret_cast<uintptr_t>(&context),&commandBuffer,packet) == 31);
         assert(context.calls == 1);
+        auto saved = packet;
+        assert(!tglInitializeDiIecpPacket(packet,0));
+        assert(std::memcmp(&packet,&saved,sizeof(packet)) == 0);
+        assert(!tglInitializeDiIecpPacket(packet,0x4001));
+        assert(std::memcmp(&packet,&saved,sizeof(packet)) == 0);
+        for (uint32_t width : {1u,1920u,0x4000u}) {
+            assert(tglInitializeDiIecpPacket(packet,width));
+            uint32_t end=0, start=1;
+            std::memcpy(&end,packet.prefix.data(),4);
+            std::memcpy(&start,packet.prefix.data()+4,4);
+            assert(end == width-1 && start == 0);
+            auto expected = zero;
+            std::memcpy(expected.data(),&end,4);
+            assert(std::memcmp(&packet,expected.data(),expected.size()) == 0);
+        }
     }
     testTrackedCpuOwner();
     testOwnedVeboxVtable();

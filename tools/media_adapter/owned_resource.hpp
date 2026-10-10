@@ -1324,6 +1324,19 @@ struct TglOwnedDiIecpPacket {
 static_assert(offsetof(TglOwnedDiIecpPacket,resources) == 0x20);
 static_assert(offsetof(TglOwnedDiIecpPacket,controls) == 0x78);
 static_assert(sizeof(TglOwnedDiIecpPacket) == 0xa8);
+// ICL producer1f9006/17 emits start=0/end=boundaryWidth-1, independently
+// consumed as fourteen-bit values by TGL172a2e..68. Do not silently wrap
+// malformed dimensions. This initializes storage only; subsequent feature,
+// registration, compression and resource producers are still required.
+inline bool tglInitializeDiIecpPacket(TglOwnedDiIecpPacket& output,
+                                    uint32_t boundaryWidth) noexcept {
+    if (!boundaryWidth || boundaryWidth > 0x4000) return false;
+    TglOwnedDiIecpPacket candidate;
+    const uint32_t end = boundaryWidth-1;
+    std::memcpy(candidate.prefix.data(),&end,sizeof(end));
+    output = candidate;
+    return true;
+}
 // Native builder12a14c calls MHW+28 with exactly these three arguments.
 // Binding/image authentication, backing and complete packet admission belong
 // to the caller; this invoker neither creates resources nor changes status.
