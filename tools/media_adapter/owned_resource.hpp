@@ -5897,6 +5897,28 @@ bool tglPublishVeboxAdmissionMode(std::array<uint8_t,N>& execution,
     return true;
 }
 
+// donor1fbbd6..1fbc11: source124==2 plus unsuccessful feature admission
+// forces pipe0 and composition fallback BEFORE the pipe1 VP+28 dispatch.
+// Other sample types preserve both values. Invalid owned pipe is rejected
+// without modifying either buffer; it is not silently converted to pipe0.
+template<size_t E,size_t P>
+bool tglApplyVeboxAdmissionSampleFallback(std::array<uint8_t,E>& execution,
+    std::array<uint8_t,P>& pass,uint32_t source124,bool admitted) noexcept {
+    static_assert(E>=0xa10 && P>=9,"admission sample field extents");
+    uint32_t pipe=0;std::memcpy(&pipe,execution.data()+0xa0c,4);
+    if(pipe>2) return false;
+    if(source124==2 && !admitted) {
+        pipe=0;std::memcpy(execution.data()+0xa0c,&pipe,4);pass[8]=1;
+    }
+    return true;
+}
+// donor1fbefd..1fbf21. The caller supplies the final admission after any
+// pipe1 work/flag publication. This does not skip that work or authorize SFC.
+constexpr bool tglVeboxAdmissionResult(uint8_t params138,uint8_t pass08,
+    bool admitted) noexcept {
+    return admitted && !((params138&1) && (pass08&1));
+}
+
 template<class Owner,class Policy> class TglOwnedVeboxAdmissionContext {
     Owner& owner_;
     void* child_;

@@ -31,6 +31,44 @@ struct TestVpCpuView {
 
 static void testTrackedCpuOwner() {
     {
+        std::array<uint8_t,0xd30> execution{};
+        std::array<uint8_t,0x28> pass{};
+        for(uint32_t pipe=0;pipe<4;++pipe)
+            for(uint32_t sample=0;sample<4;++sample)
+                for(bool admitted:{false,true}) {
+                    execution.fill(0xa5);pass.fill(0xa4);
+                    std::memcpy(execution.data()+0xa0c,&pipe,4);
+                    const auto oldExecution=execution;const auto oldPass=pass;
+                    const bool valid=tglApplyVeboxAdmissionSampleFallback(execution,pass,sample,admitted);
+                    assert(valid==(pipe<3));
+                    if(!valid || sample!=2 || admitted) {
+                        assert(execution==oldExecution && pass==oldPass);
+                    } else {
+                        uint32_t actual=99;std::memcpy(&actual,execution.data()+0xa0c,4);
+                        assert(actual==0 && pass[8]==1);
+                        for(size_t i=0;i<execution.size();++i)
+                            if(i<0xa0c || i>=0xa10) assert(execution[i]==oldExecution[i]);
+                        for(size_t i=0;i<pass.size();++i)
+                            if(i!=8) assert(pass[i]==oldPass[i]);
+                    }
+                }
+        for(uint8_t params:{uint8_t(0),uint8_t(1),uint8_t(2),uint8_t(0xff)})
+            for(uint8_t fallback:{uint8_t(0),uint8_t(1),uint8_t(2),uint8_t(0xff)}) {
+                assert(!tglVeboxAdmissionResult(params,fallback,false));
+                assert(tglVeboxAdmissionResult(params,fallback,true)==!((params&1)&&(fallback&1)));
+            }
+        // Compose the proven CPU segments: admission starts viable, mode2 is
+        // published, then sample2/feature denial forces pipe0 and final FALSE.
+        TglVeboxAdmissionPrefixInput input{true,true,true,true,1,uint64_t(1)<<12,64,16};
+        pass.fill(0);execution.fill(0);
+        assert(tglPrepareVeboxAdmissionPrefix(input,pass)==TglVeboxAdmissionPrefixResult::Continue);
+        unsigned setup=0;
+        assert(tglPublishVeboxAdmissionMode(execution,2,1,7,[&](auto&) noexcept {++setup;}));
+        assert(tglApplyVeboxAdmissionSampleFallback(execution,pass,2,false));
+        assert(!tglVeboxAdmissionResult(input.params138,pass[8],false) && setup==1);
+        uint32_t pipe=99;std::memcpy(&pipe,execution.data()+0xa0c,4);assert(pipe==0);
+    }
+    {
         std::array<uint8_t,0xd30> execution{};execution.fill(0xa5);
         const auto original=execution;
         unsigned calls=0;
