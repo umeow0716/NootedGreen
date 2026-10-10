@@ -5269,6 +5269,36 @@ static void testSfcFrameFields() {
 
 int main() {
     {
+        TglOwnedVpSfcCallerStorage storage;
+        storage.bytes[0x27]=0xa5;storage.bytes[0x9b8]=0x5a;
+        const auto original=storage.bytes;
+        for(bool enabled:{false,true}) {
+            unsigned calls=0;
+            assert(tglWithOwnedVpFrameReferences(storage,0x1000,0x2000,0x3000,enabled,
+                [&](void* child) noexcept {
+                    ++calls;assert(child==storage.bytes.data());
+                    const auto at=[&](size_t offset) noexcept {
+                        uintptr_t value=0;std::memcpy(&value,storage.bytes.data()+offset,8);return value;
+                    };
+                    assert(at(0x988)==(enabled?0x1000u:0u));
+                    assert(at(0x980)==reinterpret_cast<uintptr_t>(storage.bytes.data()+0x28));
+                    assert(at(0x990)==0x2000 && at(0x9b0)==0x3000);
+                    assert(tglWithOwnedVpFrameReferences(storage,0,0,0,false,
+                        [](void*) noexcept {assert(false);return 0;})==5);
+                    return 31;
+                })==31);
+            assert(calls==1 && storage.bytes==original);
+        }
+        for(size_t offset:{size_t(0x988),size_t(0x980),size_t(0x990),size_t(0x9b0)}) {
+            const uintptr_t foreign=0x4000;
+            std::memcpy(storage.bytes.data()+offset,&foreign,8);
+            const auto retained=storage.bytes;
+            assert(tglWithOwnedVpFrameReferences(storage,0,0,0,false,
+                [](void*) noexcept {assert(false);return 0;})==5);
+            assert(storage.bytes==retained);storage.bytes=original;
+        }
+    }
+    {
         std::array<uint8_t,0xe0> surface{};std::array<uint8_t,0x1c> mhw{};
         const auto put=[](auto& data,size_t offset,auto value) {
             std::memcpy(data.data()+offset,&value,sizeof(value));

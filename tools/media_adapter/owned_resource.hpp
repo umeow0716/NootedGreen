@@ -71,6 +71,29 @@ struct alignas(8) TglOwnedVpSfcCallerStorage {
     }
 };
 static_assert(sizeof(TglOwnedVpSfcCallerStorage)==0x9d0);
+// Exact1dece6/1decf4/1decff/1ded0a borrowed publications from slot28.
+// Input leases and the AVS header lease must enclose this entire scope; this
+// does not initialize remaining VP state or permit references to escape.
+template<class Use>
+int tglWithOwnedVpFrameReferences(TglOwnedVpSfcCallerStorage& storage,
+    uintptr_t conditionalSource,uintptr_t parameters,uintptr_t target,
+    bool sourceEnabled,Use use) noexcept {
+    static_assert(noexcept(use(static_cast<void*>(nullptr))),"VP borrowed frame scope ABI");
+    constexpr std::array<size_t,4> offsets{0x988,0x980,0x990,0x9b0};
+    for(size_t offset:offsets) {
+        uintptr_t existing=0;std::memcpy(&existing,storage.bytes.data()+offset,8);
+        if(existing) return 5; // never overwrite another live frame's references
+    }
+    const std::array<uintptr_t,4> values{
+        sourceEnabled?conditionalSource:0,
+        reinterpret_cast<uintptr_t>(storage.bytes.data()+0x28),parameters,target};
+    for(size_t i=0;i<offsets.size();++i)
+        std::memcpy(storage.bytes.data()+offsets[i],&values[i],8);
+    const int result=use(storage.bytes.data());
+    const uintptr_t zero=0;
+    for(size_t offset:offsets) std::memcpy(storage.bytes.data()+offset,&zero,8);
+    return result;
+}
 // Exact donor1dde10 eligibility data, not an ICL object view or TGL binding.
 // Caller snapshots these fields only under authenticated object leases.
 // Keep offset names until their semantic producer is independently qualified.
