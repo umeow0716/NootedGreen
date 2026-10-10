@@ -8190,6 +8190,44 @@ int main() {
                 assert(owner.withBorrowedVpCpuView(vp,false,[](void* parent,void*) noexcept {
                     std::memset(static_cast<uint8_t*>(parent)+0x80,0,8);return -7;
                 })==5);
+                {
+                    struct GraphCpu {
+                        alignas(8) std::array<uint8_t,0xc00> bytes{};
+                        size_t expected;bool live=false;
+                        uintptr_t allocate(size_t n) {
+                            assert(n==expected && !live);live=true;
+                            return reinterpret_cast<uintptr_t>(bytes.data());
+                        }
+                        void release(uintptr_t p) noexcept {
+                            assert(live && p==reinterpret_cast<uintptr_t>(bytes.data()));live=false;
+                        }
+                    } stateCpu{{},0xf8},avsCpu{{},0xc00};
+                    struct Binding {
+                        uintptr_t image=0x100000;
+                        bool validateConstructedObject(uintptr_t,uintptr_t,
+                            bool (*)(uintptr_t,void*,size_t)) const noexcept {return true;}
+                    } vpBinding;
+                    TglOwnedVpSfcCpuGraph<GraphCpu,GraphCpu> graph(stateCpu,avsCpu);
+                    auto never=[](void*,void*) noexcept {assert(false);return 0;};
+                    assert(owner.withBorrowedVpCpuView(graph,true,never)==5);
+                    auto noRead=+[](uintptr_t,void*,size_t) noexcept {return false;};
+                    assert(graph.initialize(0x1000,0x2000,0x3000,vpBinding,noRead,1,0));
+                    assert(owner.withBorrowedVpCpuView(graph,true,[&](void* parent,void* child) noexcept {
+                        uintptr_t link=0,state=0,avs=0;
+                        std::memcpy(&link,static_cast<uint8_t*>(parent)+0x80,8);
+                        std::memcpy(&state,static_cast<uint8_t*>(child)+0x938,8);
+                        std::memcpy(&avs,static_cast<uint8_t*>(child)+0x38,8);
+                        assert(link==reinterpret_cast<uintptr_t>(child));
+                        assert(state==reinterpret_cast<uintptr_t>(stateCpu.bytes.data()));
+                        assert(avs==reinterpret_cast<uintptr_t>(avsCpu.bytes.data()));
+                        graph.reset();owner.reset();
+                        assert(stateCpu.live && avsCpu.live && cpu.live && !eventCount);
+                        assert(graph.prepare([](auto&,auto&,auto&) noexcept {assert(false);return 0;})==5);
+                        return -43;
+                    })==-43);
+                    std::memcpy(&linked,cpu.bytes.data()+0x80,8);assert(!linked);
+                    graph.reset();assert(!stateCpu.live && !avsCpu.live && cpu.live);
+                }
                 owner.reset();owner.reset();
                 assert(!owner.publishCsc(leasedCsc) && !owner.hasPrivateChildLease(0));
                 assert(!cpu.live && !owner.constructedBase() && eventCount==4);
