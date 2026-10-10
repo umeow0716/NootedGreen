@@ -2473,6 +2473,15 @@ inline bool tglNativeBackingPresent(const std::array<uint8_t, 0x148> &s) noexcep
 // its PTE wire count until actual release_pte. This closes that native mapped
 // backing mechanism, not proof every owned allocation reaches the map or that
 // an independent borrowed source/CPU buffer can be released after submission.
+// Client-buffer creation21bcd publishes SysMemory at Resource80, not88.
+// Generic Resource::map26c70 uses88 when available for type0/a, otherwise80,
+// calls Memory138 and publishes the mapping at Resource40 (26e28), selected
+// Memory70 and event pointer20=Map38. Resource::free2157c removes its map link
+// then calls Map28=release before dropping Memory80 at2162e; Map::free52508
+// independently releases its retained Memory18. This connects generic mapped
+// client backing to deferred retirement, separately from TGL aperture220/88.
+// Owned execution still must prove its token type and actual map preparation;
+// allocation alone is not evidence that the GPU backing is mapped or wired.
 template<class Writable, class Fill>
 int tglFillBuffer(const std::array<uint8_t, 0x148> &resource, uint32_t bytes,
                   uint8_t value, Writable writable, Fill fill) noexcept {
