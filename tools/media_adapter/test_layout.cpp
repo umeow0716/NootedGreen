@@ -5313,6 +5313,24 @@ int main() {
         input.geometry.sourceBottom=std::numeric_limits<float>::infinity();
         assert(!tglPrepareOwnedVpStateGeometry(state,frame,input.geometry));
         assert(state.packet==saved);
+        input.geometry.fieldInput=false;
+        input.geometry.sourceBottom=1080;input.geometry.sourceRight=1920;
+        input.geometry.targetWidth=960;input.geometry.targetHeight=810;
+        frame.regions.scale.at928=0.5f;frame.regions.scale.at92c=0.75f;
+        frame.regions.scale.scaling=true;
+        assert(tglPrepareOwnedVpStatePrefix(frame,input.geometry,false,false,state));
+        assert(word(state.packet,0x4c)==810 && word(state.packet,0x50)==960);
+        assert(state.packet[0x69]==1 && state.packet[0x66]==1);
+        frame.regions.scale.scaling=false;frame.at922=true;frame.color.at9b8=false;
+        assert(tglPrepareOwnedVpStatePrefix(frame,input.geometry,false,false,state));
+        assert(state.packet[0x69]==0); // IEF does not enable AVS.
+        frame.color.at9b8=true;
+        assert(tglPrepareOwnedVpStatePrefix(frame,input.geometry,false,false,state));
+        assert(state.packet[0x69]==1);
+        const auto before=state.packet;
+        frame.regions.scale.at928=std::numeric_limits<float>::quiet_NaN();
+        assert(!tglPrepareOwnedVpStatePrefix(frame,input.geometry,false,false,state));
+        assert(state.packet==before);
     }
     {
         for(unsigned flags=0;flags<16;++flags) for(unsigned failure=0;failure<3;++failure) {

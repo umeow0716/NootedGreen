@@ -4947,6 +4947,23 @@ inline bool tglPrepareOwnedVpStateGeometry(TglOwnedVpChromaStatePrefix& state,
     state.packet=candidate;return true;
 }
 
+// Closed +90 prefix through 1dff21 only. Both format predicates consume
+// effective +99c, and AVS enable is +921 OR +9b8, not the IEF flag +922.
+// Fill/alpha/compression/resource publication remain separate boundaries.
+inline bool tglPrepareOwnedVpStatePrefix(
+    const TglOwnedVpFramePreparation& frame,const TglOwnedVpRegionInput& geometry,
+    bool settings0f,bool settings13,TglOwnedVpChromaStatePrefix& output) noexcept {
+    auto candidate=tglPrepareOwnedVpChromaStatePrefix(frame,geometry.targetFormat,
+                                                     settings0f,settings13);
+    tglPrepareOwnedSfcPlatformField(candidate.packet);
+    if(!tglPrepareOwnedVpStateGeometry(candidate,frame,geometry) ||
+       !tglPrepareOwnedSfcBypass(candidate.packet,frame.color.modes.state.at99c,
+           frame.regions.scale.at928,frame.regions.scale.at92c)) return false;
+    tglPrepareOwnedSfcFilterRotation(candidate.packet,frame.color.modes.state.at99c,
+        frame.at9a0,frame.regions.scale.scaling,frame.color.at9b8);
+    output=candidate;return true;
+}
+
 // Darwin 1e0339..1e049f, alpha table 1e05f4: mode0 constant,
 // mode2 background; modes1/3/unknown opaque. Fill alpha is produced upstream.
 inline void tglPrepareOwnedSfcAlpha(std::array<uint8_t,0xb8>& packet,
