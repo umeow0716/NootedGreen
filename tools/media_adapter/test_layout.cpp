@@ -5259,8 +5259,8 @@ static void testSfcFrameFields() {
         for (size_t offset : {size_t(0x10),size_t(0x14)})
             std::memcpy(expected.data()+offset,&zero,4);
         std::memcpy(expected.data()+0x2c,&format,4);
-        std::memcpy(expected.data()+0x30,&width,4);
-        std::memcpy(expected.data()+0x34,&height,4);
+        std::memcpy(expected.data()+0x30,&height,4);
+        std::memcpy(expected.data()+0x34,&width,4);
         std::memcpy(expected.data()+0x38,&frameMode,4);
         tglPrepareOwnedSfcFrameFields(packet,format,mode,width,height);
         assert(packet==expected);
@@ -5298,6 +5298,21 @@ int main() {
         assert(frame.color.modes.state.at99c==3);
         const auto prefix=tglPrepareOwnedVpChromaStatePrefix(frame,0x19,false,false);
         assert(word(prefix.packet,8)==4 && prefix.packet[0x6a]==1);
+        auto state=prefix;
+        frame.color.metadata.at9a4=1;
+        assert(tglPrepareOwnedVpStateGeometry(state,frame,input.geometry));
+        assert(word(state.packet,0x30)==1080 && word(state.packet,0x34)==1920);
+        assert(word(state.packet,0x38)==2 && word(state.packet,8)==4);
+        input.geometry.fieldInput=true;
+        input.geometry.sourceBottom=540;
+        input.geometry.sourceRight=960;
+        assert(tglPrepareOwnedVpStateGeometry(state,frame,input.geometry));
+        assert(word(state.packet,0x30)==1080 && word(state.packet,0x34)==1920);
+        assert(word(state.packet,0x3c)==1080 && word(state.packet,0x40)==1920);
+        const auto saved=state.packet;
+        input.geometry.sourceBottom=std::numeric_limits<float>::infinity();
+        assert(!tglPrepareOwnedVpStateGeometry(state,frame,input.geometry));
+        assert(state.packet==saved);
     }
     {
         for(unsigned flags=0;flags<16;++flags) for(unsigned failure=0;failure<3;++failure) {

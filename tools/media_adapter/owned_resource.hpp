@@ -4854,8 +4854,8 @@ inline void tglPrepareOwnedSfcFrameFields(std::array<uint8_t,0xb8>& packet,
     std::memcpy(packet.data()+0x10,&zero,4);
     std::memcpy(packet.data()+0x14,&zero,4);
     std::memcpy(packet.data()+0x38,&frameMode,4);
-    std::memcpy(packet.data()+0x30,&frameWidth,4);
-    std::memcpy(packet.data()+0x34,&frameHeight,4);
+    std::memcpy(packet.data()+0x30,&frameHeight,4);
+    std::memcpy(packet.data()+0x34,&frameWidth,4);
 }
 
 // SFC +60 is narrower than VEBOX's MMC predicate:1dd120 admits only
@@ -4912,6 +4912,39 @@ inline bool tglPrepareOwnedSfcGeometry(std::array<uint8_t,0xb8>& packet,
             in.destinationLeft,output.height,output.width)) return false;
     packet=candidate;
     return true;
+}
+
+// +90 geometry after the chroma prefix. frameWidth/Height already came from
+// +50: never run the frame adjuster again (field input would be doubled twice).
+// Native +80 consumes effective VP+99c; packet+38 consumes VP+9a4.
+// This remains a partial state packet, not a publishable SFC command.
+inline bool tglPrepareOwnedVpStateGeometry(TglOwnedVpChromaStatePrefix& state,
+    const TglOwnedVpFramePreparation& frame,const TglOwnedVpRegionInput& in) noexcept {
+    auto truncate=[](float value,uint32_t& out) noexcept {
+        if(!std::isfinite(value) || value<0 || double(value)>double(UINT32_MAX)) return false;
+        out=static_cast<uint32_t>(value);return true;
+    };
+    uint32_t top=0,left=0,bottom=0,right=0,destTop=0,destLeft=0;
+    if(!truncate(in.sourceTop,top) || !truncate(in.sourceLeft,left) ||
+       !truncate(in.sourceBottom,bottom) || !truncate(in.sourceRight,right) ||
+       !truncate(in.destinationTop,destTop) || !truncate(in.destinationLeft,destLeft)) return false;
+    if(in.fieldInput) {
+        if(bottom>UINT32_MAX/2 || right>UINT32_MAX/2) return false;
+        bottom*=2;right*=2;
+    }
+    const auto input=tglOwnedSfcAlignment(frame.color.modes.state.at99c);
+    const auto output=tglOwnedSfcAlignment(in.targetFormat);
+    auto candidate=state.packet;
+    tglPrepareOwnedSfcFrameFields(candidate,in.targetFormat,frame.color.metadata.at9a4,
+                                  in.frameWidth,in.frameHeight);
+    if(!tglPrepareOwnedSfcAlignedGeometry(candidate,in.targetHeight,in.targetWidth,top,left,
+           output.height,output.width,input.height,input.width) ||
+       !tglPrepareOwnedSfcRegions(candidate,bottom,right,in.sourceTop,in.sourceLeft,
+           in.frameHeight,in.frameWidth,frame.regions.scale.at92c,frame.regions.scale.at928,
+           input.height,input.width,output.height,output.width) ||
+       !tglPrepareOwnedSfcRotationGeometry(candidate,frame.at9a0,destTop,destLeft,
+           output.height,output.width)) return false;
+    state.packet=candidate;return true;
 }
 
 // Darwin 1e0339..1e049f, alpha table 1e05f4: mode0 constant,
