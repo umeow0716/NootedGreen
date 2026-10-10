@@ -133,6 +133,52 @@ bool tglOwnedVpAdmission(const TglOwnedVpAdmissionInputs& input,
     if(input.second88Present && (input.second130==1 || input.second130==3)) return false;
     return !(input.second83&1);
 }
+// Read must authorize every span against currently held owned/borrowed
+// object leases, not merely test whether an address is mapped. This evaluator
+// performs no object adoption, writes or native calls.
+template<class Read>
+bool tglReadOwnedVpPairAdmission(uintptr_t first,uintptr_t second,
+                               uintptr_t third,Read read) noexcept {
+    static_assert(noexcept(read(uintptr_t{},nullptr,size_t{})),"VP leased read ABI");
+    if(!first || !second || first>UINTPTR_MAX-0x134 || second>UINTPTR_MAX-0x134 ||
+       (third && third>UINTPTR_MAX-8)) return false;
+    TglOwnedVpPairInputs input;input.firstPresent=input.secondPresent=true;
+    input.thirdPresent=third!=0;
+    if(!read(first+0x130,&input.first130,4) || !tglOwnedVpInputFormat(input.first130) ||
+       !read(second+0x130,&input.second130,4) ||
+       input.second130==0x5a || input.second130==0x55) return false;
+    uint32_t e4=0;
+    if(input.second130==0x53 && !read(second+0xe4,&e4,4)) return false;
+    if(!tglOwnedVpOutputFormat(input.second130,e4)) return false;
+    if(third && !read(third+4,&input.third04,4)) return false;
+    return tglOwnedVpPairAdmission(input,[]() noexcept {return true;},
+        []() noexcept {return true;});
+}
+template<class Read>
+bool tglReadOwnedVpAdmission(uint8_t child08,uintptr_t first,
+                           uintptr_t second,Read read) noexcept {
+    static_assert(noexcept(read(uintptr_t{},nullptr,size_t{})),"VP leased read ABI");
+    if((child08&1) || !first || !second || first>UINTPTR_MAX-0xf8 ||
+       second>UINTPTR_MAX-0x294) return false;
+    TglOwnedVpAdmissionInputs input;input.child08=child08;
+    if(!read(first+0x90,&input.first90,4) || input.first90!=1 ||
+       !read(second+0x290,&input.second290,4) || input.second290>3) return false;
+    uintptr_t surface=0,third=0;
+    if(!read(first+0x98,&surface,8) || !surface || surface>UINTPTR_MAX-0x134) return false;
+    if(input.second290!=0 &&
+       (!read(surface+0xe4,&input.first98_e4,4) || input.first98_e4!=1)) return false;
+    if(!read(first+0xf0,&third,8) || !tglReadOwnedVpPairAdmission(second,surface,third,read))
+        return false;
+    uintptr_t optional=0;
+    if(!read(second+0x88,&optional,8)) return false;
+    input.second88Present=optional!=0;
+    if(optional && (!read(second+0x130,&input.second130,4) ||
+       input.second130==1 || input.second130==3)) return false;
+    if(!read(second+0x83,&input.second83,1)) return false;
+    // The qualified pair was already evaluated once above; never invoke it
+    // twice when composing the outer data predicate.
+    return tglOwnedVpAdmission(input,[]() noexcept {return true;});
+}
 // Caller ABI: TGL12c010 invokes VP+40(this,source,target,renderData),
 // TGL12a120 invokes VP+48(this,renderData,command). Resolve must admit only
 // the exact currently leased owned VP base; no native/foreign object cast.

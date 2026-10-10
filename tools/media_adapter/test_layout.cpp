@@ -5269,6 +5269,50 @@ static void testSfcFrameFields() {
 
 int main() {
     {
+        std::array<uint8_t,0xf8> first{};
+        std::array<uint8_t,0x294> second{};
+        std::array<uint8_t,0x134> surface{};
+        std::array<uint8_t,8> third{};
+        const auto put=[](auto& bytes,size_t offset,auto value) {
+            std::memcpy(bytes.data()+offset,&value,sizeof(value));
+        };
+        put(first,0x90,uint32_t(1));put(first,0x98,uintptr_t(0x3000));
+        put(first,0xf0,uintptr_t(0x4000));
+        put(second,0x130,uint32_t(0x19));put(surface,0x130,uint32_t(1));
+        unsigned reads=0,failAt=0;
+        const auto read=[&](uintptr_t address,void* out,size_t size) noexcept {
+            if(++reads==failAt) return false;
+            const auto span=[&](uintptr_t base,const auto& bytes) noexcept {
+                if(address<base || address-base>bytes.size() || size>bytes.size()-(address-base))
+                    return false;
+                std::memcpy(out,bytes.data()+address-base,size);return true;
+            };
+            return span(0x1000,first) || span(0x2000,second) ||
+                span(0x3000,surface) || span(0x4000,third);
+        };
+        assert(tglReadOwnedVpAdmission(0,0x1000,0x2000,read));
+        const auto total=reads;
+        for(failAt=1;failAt<=total;++failAt) {
+            reads=0;assert(!tglReadOwnedVpAdmission(0,0x1000,0x2000,read));
+            assert(reads==failAt);
+        }
+        failAt=reads=0;
+        assert(!tglReadOwnedVpAdmission(1,0x1000,0x2000,read) && !reads);
+        assert(!tglReadOwnedVpAdmission(0,UINTPTR_MAX-8,0x2000,read) && !reads);
+        assert(!tglReadOwnedVpPairAdmission(0x2000,0x3000,UINTPTR_MAX-3,read) && !reads);
+        put(second,0x290,int32_t(4));
+        assert(!tglReadOwnedVpAdmission(0,0x1000,0x2000,read) && reads==2);
+        put(second,0x290,int32_t(-1));put(surface,0xe4,uint32_t(1));
+        reads=0;assert(tglReadOwnedVpAdmission(0,0x1000,0x2000,read));
+        put(surface,0x130,uint32_t(0x53));
+        reads=0;assert(tglReadOwnedVpAdmission(0,0x1000,0x2000,read));
+        put(surface,0xe4,uint32_t(2));
+        reads=0;assert(!tglReadOwnedVpAdmission(0,0x1000,0x2000,read));
+        put(second,0x290,int32_t(0));put(surface,0xe4,uint32_t(1));
+        put(first,0x98,uintptr_t(0));
+        reads=0;assert(!tglReadOwnedVpAdmission(0,0x1000,0x2000,read));
+    }
+    {
         constexpr std::array<uint32_t,18> inputs{
             0x19,0x15,0x53,0x52,0x17,0x13,3,4,1,2,0xfffffff9u,
             0xd,0xe,0xf,0x10,0x11,0x12,0x14};
