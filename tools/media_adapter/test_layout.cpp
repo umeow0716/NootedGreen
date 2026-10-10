@@ -1859,7 +1859,9 @@ static void testExecutionBinding() {
     int denied = -1;
     bool identity = true, rx = true;
     uint32_t allocationSize=0xd48;
+    uintptr_t resetEntry=base+0x12e420;bool resetReadable=true;
     auto read = [&](uintptr_t p, void* out, size_t n) {
+        if(p==base+0x757ea0 && n==8 && resetReadable) {std::memcpy(out,&resetEntry,8);return true;}
         if(p==base+0x12ebd0 && n==4) {std::memcpy(out,&allocationSize,4);return true;}
         for (size_t i = 0; i < offsets.size(); ++i)
             if (p == base + offsets[i] && n == 16 && int(i) != denied) {
@@ -1880,6 +1882,9 @@ static void testExecutionBinding() {
     }
     identity = false; assert(!b.resolve(base, read, qualify, executable)); identity = true;
     allocationSize=0xd40;assert(!b.resolve(base,read,qualify,executable));allocationSize=0xd48;
+    resetEntry=base+0x12e3f0;assert(!b.resolve(base,read,qualify,executable) && !b.image);
+    resetEntry=base+0x12e420;resetReadable=false;
+    assert(!b.resolve(base,read,qualify,executable) && !b.initialize);resetReadable=true;
     rx = false; assert(!b.resolve(base, read, qualify, executable)); rx = true;
     assert(!b.resolve(UINTPTR_MAX, read, qualify, executable));
     assert(!b.resolve(0, read, qualify, executable));
@@ -1897,6 +1902,9 @@ static void testExecutionShape() {
         {0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x10,0x48,0x89,0x7d,0xf8,0x48,0x8b,0x45,0xf8}
     }};
     auto read = [&](uintptr_t p, void* out, size_t n) {
+        if(p==image+0x757ea0 && n==8 && codeValid) {
+            const uintptr_t reset=image+0x12e420;std::memcpy(out,&reset,8);return true;
+        }
         if(p==image+0x12ebd0 && n==4 && codeValid) {
             const uint32_t allocationSize=0xd48;std::memcpy(out,&allocationSize,4);return true;
         }

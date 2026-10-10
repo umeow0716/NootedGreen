@@ -1855,6 +1855,11 @@ struct TglExecutionBinding {
         uint32_t allocationSize=0;
         if(!executable(base+0x12ebd0,4) ||
             !read(base+0x12ebd0,&allocationSize,4) || allocationSize!=0xd48) return false;
+        // Donor admission resets execution through vtable+10. Exact Tahoe
+        // TGL757e90+10 is the SAME12e420 initializer used by preparePass();
+        // do not invent a second reset or bind destructor/reset by slot alone.
+        uintptr_t resetEntry=0;
+        if(!read(base+0x757ea0,&resetEntry,8) || resetEntry!=base+0x12e420) return false;
         image = base;
         create = base + offsets[0]; initialize = base + offsets[1]; destroy = base + offsets[2];
         return true;
