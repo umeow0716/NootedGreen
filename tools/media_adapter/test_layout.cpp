@@ -5269,6 +5269,67 @@ static void testSfcFrameFields() {
 
 int main() {
     {
+        TglOwnedVpPairInputs input;
+        unsigned calls70=0,calls78=0;bool allow70=true,allow78=true;
+        const auto p70=[&]() noexcept {++calls70;return allow70;};
+        const auto p78=[&]() noexcept {++calls78;return allow78;};
+        assert(!tglOwnedVpPairAdmission(input,p70,p78) && !calls70 && !calls78);
+        input.firstPresent=true;
+        assert(!tglOwnedVpPairAdmission(input,p70,p78) && !calls70 && !calls78);
+        input.secondPresent=true;allow70=false;
+        assert(!tglOwnedVpPairAdmission(input,p70,p78) && calls70==1 && !calls78);
+        allow70=true;
+        for(uint32_t blocked:{0x55u,0x5au}) {
+            input.second130=blocked;calls70=calls78=0;
+            assert(!tglOwnedVpPairAdmission(input,p70,p78) && calls70==1 && !calls78);
+        }
+        input.second130=0;allow78=false;calls70=calls78=0;
+        assert(!tglOwnedVpPairAdmission(input,p70,p78) && calls70==1 && calls78==1);
+        allow78=true;
+        for(bool third:{false,true}) for(uint32_t mode:{0u,1u,3u,4u})
+            for(uint32_t a:{0u,1u,3u,0x15u,0x50u})
+                for(uint32_t b:{0u,1u,3u,0x15u,0x50u,0x51u}) {
+                    input.thirdPresent=third;input.third04=mode;
+                    input.first130=a;input.second130=b;calls70=calls78=0;
+                    const bool blocked=third && (mode==0 || mode==3) &&
+                        (a==1 || a==3 || a==0x15) &&
+                        (b==1 || b==3 || b==0x15 || b==0x50 || b==0x51);
+                    assert(tglOwnedVpPairAdmission(input,p70,p78)==!blocked);
+                    assert(calls70==1 && calls78==1);
+                }
+    }
+    {
+        TglOwnedVpAdmissionInputs input;input.first90=1;
+        unsigned calls=0;bool qualified=true;
+        const auto predicate=[&]() noexcept {++calls;return qualified;};
+        assert(tglOwnedVpAdmission(input,predicate) && calls==1);
+        input.child08=1;calls=0;
+        assert(!tglOwnedVpAdmission(input,predicate) && !calls);
+        input.child08=2;input.first90=0;
+        assert(!tglOwnedVpAdmission(input,predicate) && !calls);
+        input.first90=1;
+        for(int32_t mode:{INT32_MIN,-1,0,1,2,3,4,INT32_MAX}) {
+            input.second290=mode;
+            for(uint32_t format:{0u,1u,2u}) {
+                input.first98_e4=format;calls=0;
+                const bool expected=mode==0 || (mode<=3 && format==1);
+                assert(tglOwnedVpAdmission(input,predicate)==expected);
+                assert(calls==unsigned(expected));
+            }
+        }
+        input.second290=0;qualified=false;calls=0;
+        assert(!tglOwnedVpAdmission(input,predicate) && calls==1);
+        qualified=true;
+        for(bool present:{false,true}) for(uint32_t kind:{0u,1u,2u,3u,4u})
+            for(uint8_t flags:{uint8_t(0),uint8_t(1),uint8_t(2),uint8_t(3)}) {
+                input.second88Present=present;input.second130=kind;input.second83=flags;
+                calls=0;
+                assert(tglOwnedVpAdmission(input,predicate)==
+                    (!(present && (kind==1 || kind==3)) && !(flags&1)));
+                assert(calls==1);
+            }
+    }
+    {
         struct Context {
             void* child;void* source;void* target;void* data;void* command;
             bool leased=false;int result=0;unsigned setups=0,sends=0,frees=0;

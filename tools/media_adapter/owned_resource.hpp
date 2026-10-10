@@ -71,10 +71,60 @@ struct alignas(8) TglOwnedVpSfcCallerStorage {
     }
 };
 static_assert(sizeof(TglOwnedVpSfcCallerStorage)==0x9d0);
+// Exact donor1dde10 eligibility data, not an ICL object view or TGL binding.
+// Caller snapshots these fields only under authenticated object leases.
+// Keep offset names until their semantic producer is independently qualified.
+struct TglOwnedVpAdmissionInputs {
+    uint8_t child08=0;
+    uint32_t first90=0;
+    int32_t second290=0;
+    uint32_t first98_e4=0;
+    bool second88Present=false;
+    uint32_t second130=0;
+    uint8_t second83=0;
+};
+struct TglOwnedVpPairInputs {
+    bool firstPresent=false,secondPresent=false,thirdPresent=false;
+    uint32_t first130=0,second130=0,third04=0;
+};
+// Donor1df050: retain virtual70/78 as separately qualified predicates. No
+// cross-generation function pointer or guessed format support is supplied.
+template<class Qualify70,class Qualify78>
+bool tglOwnedVpPairAdmission(const TglOwnedVpPairInputs& input,
+                            Qualify70 qualify70,Qualify78 qualify78) noexcept {
+    static_assert(noexcept(qualify70()) && noexcept(qualify78()),"VP pair predicate ABI");
+    if(!input.firstPresent || !input.secondPresent || !qualify70()) return false;
+    if(input.second130==0x5a || input.second130==0x55 || !qualify78()) return false;
+    if(input.thirdPresent && (input.third04==0 || input.third04==3)) {
+        const bool second=input.second130==1 || input.second130==3 ||
+            input.second130==0x50 || input.second130==0x51 || input.second130==0x15;
+        const bool first=input.first130==3 || input.first130==1 || input.first130==0x15;
+        if(second && first) return false;
+    }
+    return true;
+}
+template<class Qualify38>
+bool tglOwnedVpAdmission(const TglOwnedVpAdmissionInputs& input,
+                        Qualify38 qualify38) noexcept {
+    static_assert(noexcept(qualify38()),"VP slot38 predicate must not throw");
+    // 38480 reads only child08 bit0. Mode compare at1dde6c is SIGNED;
+    // do not silently turn negative modes into an unsigned >3 rejection.
+    if((input.child08&1) || input.first90!=1 ||
+       (input.second290!=0 && (input.second290>3 || input.first98_e4!=1))) return false;
+    if(!qualify38()) return false;
+    if(input.second88Present && (input.second130==1 || input.second130==3)) return false;
+    return !(input.second83&1);
+}
 // Caller ABI: TGL12c010 invokes VP+40(this,source,target,renderData),
 // TGL12a120 invokes VP+48(this,renderData,command). Resolve must admit only
 // the exact currently leased owned VP base; no native/foreign object cast.
 // These two entries alone are NOT a complete/publishable VP vtable.
+// Exact donor base ctor1dd173 installs7937f0; its slots18/20/28 are
+// 1ddf10/1dde10/1de810, before30=1df1b0 and38=1df050. Slot18 saves
+// three arguments, calls bool20(this,arg3,arg1,arg2), then50 with dimension
+// outputs. Slot20 itself calls bool38 and rejects unsupported surface state.
+// These are donor dependency evidence, NOT callable TGL bindings: complete
+// owned preflight/initialization must precede publication through VEBOX1e0.
 template<class Resolve> struct TglOwnedVpSfcCallbacks {
     // ICL1f88a7 invokes VP+30 as void(this). The enclosing owner must
     // independently authorize GPU retirement; this adapter never invents a
@@ -1020,6 +1070,10 @@ struct TglOwnedVeboxVtable {
         0x1c8,0x1d0,0x1d8,0x1e0};
     // Lifecycle slots cannot inherit native delete: owned resources/table need
     // teardown. +1b8 must implement Gen12 TRUE rather than base FALSE.
+    // +1e0 is pointer(this), not status(this): Allocate126998 tests SKU64
+    // bit17 and null child80, calls1269ca with RDI=this, then stores RAX at80.
+    // NULL becomes allocation error1 at1269e9. Do not bind a generic status
+    // callback or omit the owned VP/SFC object merely to finish this table.
     static constexpr std::array<size_t,20> required{
         0,8,0x28,0x58,0x60,0x68,0x70,0x78,0x80,0x90,0x98,0xa0,0xa8,0xb0,0xb8,
         0x1b8,0x1c8,0x1d0,0x1d8,0x1e0};
