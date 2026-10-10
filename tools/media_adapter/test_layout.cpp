@@ -2046,6 +2046,19 @@ static void testResourceBinding() {
 // The pinned consumer sites shift 0x20/0x24/0x228/0x428 by eight bytes.
 int main() {
     {
+        TglOwnedSfcLineBufferSizes sizes;
+        assert(tglOwnedSfcLineBufferSizes(sizes,1080,1080));
+        assert(sizes.avs==43200 && sizes.ief==17280);
+        const uint32_t max=UINT32_MAX;
+        assert(tglOwnedSfcLineBufferSizes(sizes,max/40,max/16));
+        assert(sizes.avs==(max/40)*40 && sizes.ief==(max/16)*16);
+        const auto saved=sizes;
+        for (const auto dimensions : {std::array<uint32_t,2>{0,1},{1,0},{max/40+1,1},{1,max/16+1}}) {
+            assert(!tglOwnedSfcLineBufferSizes(sizes,dimensions[0],dimensions[1]));
+            assert(sizes.avs==saved.avs && sizes.ief==saved.ief);
+        }
+    }
+    {
         std::array<uint8_t,0xd48> execution{};
         execution[8]=3; execution[0xb]=0x81; execution[0xf]=1;
         execution[0x12]=1; execution[0x13]=2; execution[0x14]=1; execution[0x19]=1;

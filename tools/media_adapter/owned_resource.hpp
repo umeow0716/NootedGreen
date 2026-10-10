@@ -1474,6 +1474,19 @@ struct TglOwnedStateInputs {
     TglOwnedSurfaceStorage* source=nullptr;
     TglOwnedSurfaceStorage* target=nullptr;
 };
+struct TglOwnedSfcLineBufferSizes {
+    uint32_t avs=0, ief=0;
+};
+// Darwin1df245/1df2c1: two linear byte buffers. Scalar dimensions only;
+// do not copy ICL Format_Buffer3e into TGL (native TGL buffer enum3d).
+inline bool tglOwnedSfcLineBufferSizes(TglOwnedSfcLineBufferSizes& output,
+                                     uint32_t inputHeight, uint32_t scaledHeight) noexcept {
+    constexpr auto max=std::numeric_limits<uint32_t>::max();
+    if (!inputHeight || !scaledHeight || inputHeight>max/40 || scaledHeight>max/16)
+        return false;
+    output={inputHeight*40,scaledHeight*16};
+    return true;
+}
 // Caller authenticates and retains the native execution object/image lease.
 // Decode only closed scalar fields; preserve owned surface and child policy inputs.
 template<class Read>
