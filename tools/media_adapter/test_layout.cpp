@@ -5269,6 +5269,41 @@ static void testSfcFrameFields() {
 
 int main() {
     {
+        std::array<uint8_t,0xe0> surface{};std::array<uint8_t,0x1c> mhw{};
+        const auto put=[](auto& data,size_t offset,auto value) {
+            std::memcpy(data.data()+offset,&value,sizeof(value));
+        };
+        put(surface,0xdc,uint32_t(1080));put(surface,0xd8,uint32_t(1920));
+        put(surface,0x5c,1079.5f);put(surface,0x58,1919.5f);
+        put(mhw,0x1a,uint16_t(8));put(mhw,0x18,uint16_t(16));
+        unsigned calls=0,fail=0;
+        const auto read=[&](uintptr_t address,void* output,size_t size) noexcept {
+            if(++calls==fail) return false;
+            const auto span=[&](uintptr_t base,const auto& data) noexcept {
+                if(address<base || address-base>data.size() || size>data.size()-(address-base))
+                    return false;
+                std::memcpy(output,data.data()+address-base,size);return true;
+            };
+            return span(0x1000,surface) || span(0x2000,mhw);
+        };
+        uint32_t height=17,width=19;
+        assert(tglReadOwnedSfcFrame(0x1000,0x2000,read,height,width));
+        assert(height==1080 && width==1920 && calls==7);
+        for(fail=1;fail<=7;++fail) {
+            calls=0;height=17;width=19;
+            assert(!tglReadOwnedSfcFrame(0x1000,0x2000,read,height,width));
+            assert(calls==fail && height==17 && width==19);
+        }
+        fail=calls=0;
+        assert(!tglReadOwnedSfcFrame(UINTPTR_MAX-8,0x2000,read,height,width) && !calls);
+        assert(!tglReadOwnedSfcFrame(0x1000,UINTPTR_MAX-8,read,height,width) && !calls);
+        put(surface,0x84,uint8_t(3));
+        assert(tglReadOwnedSfcFrame(0x1000,0x2000,read,height,width));
+        assert(height==2160 && width==3840);
+        height=17;width=19;put(surface,0x5c,std::numeric_limits<float>::quiet_NaN());
+        assert(!tglReadOwnedSfcFrame(0x1000,0x2000,read,height,width) && height==17 && width==19);
+    }
+    {
         std::array<uint8_t,0xf8> first{};
         std::array<uint8_t,0x294> second{};
         std::array<uint8_t,0x134> surface{};

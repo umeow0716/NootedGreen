@@ -4313,6 +4313,25 @@ inline bool tglAdjustOwnedSfcFloatFrame(uint32_t surfaceHeight,uint32_t surfaceW
         heightAlignment,widthAlignment,height,width);
 }
 
+// Slot50 field acquisition, under the same surface/MHW leases as its caller.
+// Publish both outputs only after every bounded read and geometry gate passes.
+template<class Read>
+bool tglReadOwnedSfcFrame(uintptr_t surface,uintptr_t mhw,Read read,
+                        uint32_t& height,uint32_t& width) noexcept {
+    static_assert(noexcept(read(uintptr_t{},nullptr,size_t{})),"SFC frame leased read ABI");
+    if(!surface || !mhw || surface>UINTPTR_MAX-0xe0 || mhw>UINTPTR_MAX-0x1c) return false;
+    uint32_t sourceHeight=0,sourceWidth=0;
+    float bottom=0,right=0;uint8_t field=0;
+    uint16_t heightAlign=0,widthAlign=0;
+    if(!read(surface+0xdc,&sourceHeight,4) || !read(surface+0xd8,&sourceWidth,4) ||
+       !read(surface+0x5c,&bottom,4) || !read(surface+0x58,&right,4) ||
+       !read(surface+0x84,&field,1) || !read(mhw+0x1a,&heightAlign,2) ||
+       !read(mhw+0x18,&widthAlign,2)) return false;
+    uint32_t candidateHeight=0,candidateWidth=0;
+    if(!tglAdjustOwnedSfcFloatFrame(sourceHeight,sourceWidth,bottom,right,field&1,
+        heightAlign,widthAlign,candidateHeight,candidateWidth)) return false;
+    height=candidateHeight;width=candidateWidth;return true;
+}
 // Exact ICL base/Gen12 SFC +c0 slot is 1df3c0: a single DWORD zero
 // at packet+4, not a no-op and not a GPU command producer.
 inline void tglPrepareOwnedSfcPlatformField(std::array<uint8_t,0xb8>& packet) noexcept {
