@@ -3965,15 +3965,43 @@ inline TglOwnedSfcAlignment tglOwnedSfcAlignment(uint32_t format) noexcept {
 // Exact Darwin chroma producer1fa603..673. Changes owned surface metadata
 // only, not OS backing or GPU bytes. Color-pack classification is supplied
 // by the qualified format classifier:0=420,1=422,2=444,3=other.
-inline bool tglNormalizeOwnedChromaSiting(TglOwnedSurfaceStorage& surface,
-                                        uint32_t colorPack) noexcept {
+inline bool tglNormalizeOwnedChromaSitingValue(uint32_t original,uint32_t colorPack,
+                                             uint32_t& output) noexcept {
     if (colorPack > 3) return false;
-    uint32_t siting=0;
-    std::memcpy(&siting,surface.tail.data()+4,4);
+    uint32_t siting=original;
     if (!siting) siting=0x21;
     if (colorPack == 1) siting=(siting&7)|0x10;
     else if (colorPack == 2) siting=0x11;
+    output=siting;
+    return true;
+}
+inline bool tglNormalizeOwnedChromaSiting(TglOwnedSurfaceStorage& surface,
+                                        uint32_t colorPack) noexcept {
+    uint32_t original=0,siting=0;
+    std::memcpy(&original,surface.tail.data()+4,4);
+    if(!tglNormalizeOwnedChromaSitingValue(original,colorPack,siting)) return false;
     std::memcpy(surface.tail.data()+4,&siting,4);
+    return true;
+}
+// VP +28 1ded25..1def21. Target metadata is returned as owned data, never
+// written through a borrowed target pointer. Pack inputs require qualification
+// by the native format classifier. The later +9b8 callback is not modeled here.
+struct TglOwnedVpColorMetadata {
+    uint32_t at9a4=0,at9a8=0,target294=0;
+};
+inline bool tglPrepareOwnedVpColorMetadata(uint32_t format99c,bool settings12,
+    uint32_t source120,uint32_t source294,uint32_t target294,
+    uint32_t inputPack,uint32_t outputPack,TglOwnedVpColorMetadata& output) noexcept {
+    const bool force=settings12 && ((format99c>=1 && format99c<=7) ||
+        (format99c>=0xa && format99c<=0xc) || format99c==0x50 ||
+        format99c==0x51 || format99c==uint32_t(-8) ||
+        format99c==uint32_t(-9) || format99c==0x55 || format99c==0x5a);
+    TglOwnedVpColorMetadata candidate;
+    candidate.at9a4=force?1:source120;
+    if(!tglNormalizeOwnedChromaSitingValue(source294,inputPack,candidate.at9a8) ||
+       !tglNormalizeOwnedChromaSitingValue(target294,outputPack,candidate.target294))
+        return false;
+    output=candidate;
     return true;
 }
 // Exact Darwin1fa675..1faa18. Input siting has already been normalized.

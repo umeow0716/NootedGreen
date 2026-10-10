@@ -5269,6 +5269,27 @@ static void testSfcFrameFields() {
 
 int main() {
     {
+        for(uint32_t format:{0u,1u,7u,8u,0xau,0xcu,0xdu,0x50u,0x51u,0x55u,0x5au,
+                            uint32_t(-8),uint32_t(-9),uint32_t(-7)}) {
+            const bool listed=(format>=1 && format<=7) || (format>=0xa && format<=0xc) ||
+                format==0x50 || format==0x51 || format==0x55 || format==0x5a ||
+                format==uint32_t(-8) || format==uint32_t(-9);
+            for(bool settings:{false,true}) for(uint32_t pack=0;pack<4;++pack) {
+                TglOwnedVpColorMetadata metadata;
+                assert(tglPrepareOwnedVpColorMetadata(format,settings,0x31,0,0x46,pack,pack,metadata));
+                assert(metadata.at9a4==(settings && listed?1u:0x31u));
+                assert(metadata.at9a8==(pack==1?0x11u:pack==2?0x11u:0x21u));
+                assert(metadata.target294==(pack==1?0x16u:pack==2?0x11u:0x46u));
+            }
+        }
+        for(bool invalidInput:{false,true}) {
+            TglOwnedVpColorMetadata metadata{7,8,9};
+            assert(!tglPrepareOwnedVpColorMetadata(1,true,0,0,0,invalidInput?4:0,
+                                                   invalidInput?0:4,metadata));
+            assert(metadata.at9a4==7 && metadata.at9a8==8 && metadata.target294==9);
+        }
+    }
+    {
         for(uint32_t rotation:{0u,1u,2u,3u,4u,5u,6u,7u,0xffffffffu}) {
             TglOwnedVpScale scale;
             const bool direct=rotation==0 || rotation==2 || rotation==4 || rotation==5;
