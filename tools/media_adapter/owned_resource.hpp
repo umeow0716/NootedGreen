@@ -676,6 +676,29 @@ struct TglNativeSfcCommandInvoker {
 // Typed native command bridge, not the complete SendSfcCmd implementation.
 // Caller owns command capacity, resource registration, platform callback and
 // submission/fence lifetime. No native invocation occurs with a retired owner.
+// Exact TGL168311 reads pipeMode byte0 and168333 reads flag byte8.
+// Twelve owned bytes include both fields plus zeroed padding; eight bytes is
+// the generated GPU command length, NOT the native CPU argument extent.
+using TglOwnedSfcLockParameters=std::array<uint8_t,12>;
+inline TglOwnedSfcLockParameters tglPrepareOwnedSfcLockParameters(
+    uint8_t pipeMode,uint8_t settings13,uint8_t settings0b) noexcept {
+    TglOwnedSfcLockParameters result{};
+    result[0]=pipeMode;
+    // Qualified donor1e0ebf..1e0ed9: either low bit enables the flag.
+    result[8]=(settings13|settings0b)&1;
+    return result;
+}
+template<class Read>
+bool tglReadOwnedSfcLockParameters(uintptr_t settings,uint8_t pipeMode,Read read,
+    TglOwnedSfcLockParameters& output) noexcept {
+    static_assert(noexcept(read(uintptr_t{},nullptr,size_t{})),"SFC lock leased read ABI");
+    if(!settings || settings>UINTPTR_MAX-0x14) return false;
+    uint8_t flag13=0,flag0b=0;
+    if(!read(settings+0x13,&flag13,1)) return false;
+    if(!(flag13&1) && !read(settings+0xb,&flag0b,1)) return false;
+    output=tglPrepareOwnedSfcLockParameters(pipeMode,flag13,flag0b);
+    return true;
+}
 template<class SfcInvoker,class Invoke> class TglOwnedSfcCommandBackend {
     const TglSfcMhwBinding &binding;
     TglOwnedSfcMhw<SfcInvoker> &owner;
@@ -688,7 +711,7 @@ template<class SfcInvoker,class Invoke> class TglOwnedSfcCommandBackend {
 public:
     TglOwnedSfcCommandBackend(const TglSfcMhwBinding &b,TglOwnedSfcMhw<SfcInvoker> &o,
                              void *c,Invoke &i):binding(b),owner(o),command(c),invoke(i){}
-    int lock(const std::array<uint8_t,8>& parameters) {
+    int lock(const TglOwnedSfcLockParameters& parameters) {
         return valid(0x10,0x1681e0)?invoke.parameters(binding.entries[2],owner.get(),command,parameters.data()):5;
     }
     int state(const TglOwnedSfcStateParametersPacket& parameters,const std::array<uint8_t,0x38>& output) {
@@ -5523,7 +5546,7 @@ int tglScheduleOwnedSfcCommands(uint8_t scaling,uint8_t forceAvs,
     return commands.frameStart(); // MHW+28, literal mode1
 }
 struct TglOwnedSfcCommandParameters {
-    std::array<uint8_t,8> lock{{1,0,0,0,0,0,0,0}};
+    TglOwnedSfcLockParameters lock=tglPrepareOwnedSfcLockParameters(1,0,0);
     TglOwnedSfcStateParametersPacket state{};
     std::array<uint8_t,16> avs{};
     std::array<uint8_t,64> ief{};

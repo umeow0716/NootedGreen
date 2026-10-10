@@ -5314,6 +5314,33 @@ static void testSfcFrameFields() {
 
 int main() {
     {
+        unsigned reads=0,fail=0;uint8_t flag13=0,flag0b=0;
+        const auto read=[&](uintptr_t address,void* out,size_t size) noexcept {
+            ++reads;if(reads==fail) return false;
+            assert(size==1 && (address==0x1013 || address==0x100b));
+            *static_cast<uint8_t*>(out)=address==0x1013?flag13:flag0b;
+            return true;
+        };
+        TglOwnedSfcLockParameters lock;lock.fill(0xa5);const auto sentinel=lock;
+        assert(!tglReadOwnedSfcLockParameters(0,1,read,lock) && !reads && lock==sentinel);
+        assert(!tglReadOwnedSfcLockParameters(UINTPTR_MAX-3,1,read,lock) && !reads);
+        for(fail=1;fail<=2;++fail) {
+            reads=0;assert(!tglReadOwnedSfcLockParameters(0x1000,1,read,lock));
+            assert(lock==sentinel);
+        }
+        fail=0;reads=0;flag0b=3;
+        assert(tglReadOwnedSfcLockParameters(0x1000,1,read,lock) && reads==2 && lock[8]==1);
+        reads=0;flag13=1;fail=2;
+        assert(tglReadOwnedSfcLockParameters(0x1000,2,read,lock) && reads==1);
+        assert(lock[0]==2 && lock[8]==1);
+    }
+    for(unsigned a=0;a<256;++a) for(unsigned b=0;b<256;++b) {
+        const auto lock=tglPrepareOwnedSfcLockParameters(1,uint8_t(a),uint8_t(b));
+        static_assert(sizeof(lock)>=9,"native lock reads byte8");
+        assert(lock[0]==1 && lock[8]==((a|b)&1));
+        for(size_t i=1;i<lock.size();++i) if(i!=8) assert(!lock[i]);
+    }
+    {
         TglOwnedSfcCommandParameters parameters;
         parameters.ief[1]=7;parameters.state[0x88]=2;
         const auto savedIef=parameters.ief;const auto savedState=parameters.state;
@@ -6647,7 +6674,7 @@ int main() {
             const TglOwnedSfcCommandParameters *expected=nullptr;
             uintptr_t resource=0;
             int stage(int id){order[count++]=id;return failure==id?-id:0;}
-            int lock(const std::array<uint8_t,8>& p){assert(&p==&expected->lock && p[0]==1);return stage(1);}
+            int lock(const TglOwnedSfcLockParameters& p){assert(&p==&expected->lock && p[0]==1);return stage(1);}
             int state(const TglOwnedSfcStateParametersPacket& p,const std::array<uint8_t,0x38>& d){
                 assert(&p==&expected->state && d[0]==0xee);
                 uintptr_t actual=0;std::memcpy(&actual,d.data()+0x28,8);assert(actual==resource);
@@ -7124,11 +7151,16 @@ int main() {
             for(size_t i=0;i<offsets.size();++i) mhw.entries[i]=base+offsets[i];
             struct CommandInvoke {
                 unsigned calls=0;uintptr_t last=0;
+                uintptr_t lockEntry=0;
                 int result=-37;
                 std::array<uintptr_t,128> sequence{};
                 void *expected=nullptr,*buffer=nullptr;
                 int parameters(uintptr_t entry,void *object,void *command,const void *params) {
                     assert(object==expected && command==buffer && params);
+                    if(entry==lockEntry) {
+                        const auto* lock=static_cast<const uint8_t*>(params);
+                        assert(lock[0]==1 && lock[8]==1);
+                    }
                     sequence.at(calls++)=entry;last=entry;return result;
                 }
                 int state(uintptr_t entry,void *object,void *command,const void *params,const void *out) {
@@ -7141,8 +7173,10 @@ int main() {
                 }
             } commandInvoke;
             int command=0;commandInvoke.expected=owner.get();commandInvoke.buffer=&command;
+            commandInvoke.lockEntry=base+0x1681e0;
             TglOwnedSfcCommandBackend<Invoke,CommandInvoke> commands(mhw,owner,&command,commandInvoke);
-            std::array<uint8_t,8> lock{};std::array<uint8_t,16> avs{};
+            auto lock=tglPrepareOwnedSfcLockParameters(1,0,1);
+            std::array<uint8_t,16> avs{};
             std::array<uint8_t,64> ief{};TglOwnedSfcStateParametersPacket state{};
             static_assert(sizeof(state)==0xf8,"TGL State reads full pointer at f0");
             state[0xf7]=0x5a;
@@ -7159,7 +7193,7 @@ int main() {
             // Exercise the scheduler through the actual typed backend/owner,
             // not the independent scheduler mock. Still no native GPU call.
             commandInvoke.result=0;
-            TglOwnedSfcCommandParameters prepared{};prepared.state=state;
+            TglOwnedSfcCommandParameters prepared{};prepared.state=state;prepared.lock=lock;
             std::array<uint8_t,0x2a8> shell{};
             unsigned platforms=0;
             auto platform=[&](std::array<uint8_t,0x38>& descriptor) {
