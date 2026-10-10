@@ -8654,6 +8654,49 @@ public:
     }
 };
 
+// TGL126d28..126d35 invokes +60 as void(this), without consuming a result.
+// Preserve that ABI and retain admission status in the enclosing owned scope.
+template<class Transaction,class Lines,class Retire> class TglOwnedVeboxModeReleaseContext {
+    void* child_;
+    Transaction& transaction_;
+    Lines& lines_;
+    Retire& retire_;
+    bool releaseSfc_,attempted_=false,reentered_=false;
+    int status_=5;
+public:
+    TglOwnedVeboxModeReleaseContext(void* child,Transaction& transaction,Lines& lines,
+        bool releaseSfc,Retire& retire) noexcept
+        :child_(child),transaction_(transaction),lines_(lines),retire_(retire),releaseSfc_(releaseSfc){}
+    TglOwnedVeboxModeReleaseContext(const TglOwnedVeboxModeReleaseContext&)=delete;
+    TglOwnedVeboxModeReleaseContext& operator=(const TglOwnedVeboxModeReleaseContext&)=delete;
+    bool owns(void* child) const noexcept {return child && child==child_;}
+    void freeResources() noexcept {
+        static_assert(noexcept(retire_()) && std::is_same_v<decltype(retire_()),int>,
+                      "mode retirement evidence must report status without throwing");
+        if(attempted_) {reentered_=true;status_=5;return;}
+        attempted_=true;
+        status_=transaction_.releaseModeResources(lines_,releaseSfc_,[&]() noexcept {
+            const int admission=retire_();
+            return reentered_ ? 5 : admission;
+        });
+        if(reentered_) status_=5;
+    }
+    int status() const noexcept {return status_;}
+};
+template<class Resolve> struct TglOwnedVeboxModeReleaseCallbacks {
+    static void freeResources(void* child) noexcept {
+        static_assert(noexcept(Resolve::get(child)),"mode cleanup scope resolution ABI");
+        auto* context=Resolve::get(child);
+        if(context && context->owns(child)) context->freeResources();
+    }
+};
+template<class Resolve>
+std::array<uintptr_t,20> tglBindOwnedVeboxModeReleaseHook(std::array<uintptr_t,20> hooks) noexcept {
+    static_assert(TglOwnedVeboxVtable::required[4]==0x60,"exact TGL mode cleanup slot");
+    hooks[4]=reinterpret_cast<uintptr_t>(&TglOwnedVeboxModeReleaseCallbacks<Resolve>::freeResources);
+    return hooks;
+}
+
 // One borrowed-OS resource lifetime. The renderer must close every such scope
 // before retiring RenderHal/OS. Member order guarantees resource destruction
 // while its backend still exists; close is terminal and idempotent.

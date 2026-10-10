@@ -4167,8 +4167,37 @@ static void testResourceBinding() {
                 auto denied=[&]() noexcept {++retirementCalls;return 31;};
                 const auto retainedGroup=extra.allocations;
                 const auto initialLineLive=lineBackend.live;
-                assert(transaction.releaseModeResources(lines,true,denied)==31);
+                using DeniedContext=TglOwnedVeboxModeReleaseContext<decltype(transaction),decltype(lines),decltype(denied)>;
+                DeniedContext deniedContext(&child,transaction,lines,true,denied);
+                using DeniedScope=TglOwnedVeboxScopedContext<DeniedContext>;
+                using DeniedCallbacks=TglOwnedVeboxModeReleaseCallbacks<DeniedScope>;
+                static_assert(std::is_same_v<decltype(&DeniedCallbacks::freeResources),void(*)(void*) noexcept>);
+                DeniedCallbacks::freeResources(&child);assert(!retirementCalls);
+                {
+                    DeniedScope scope(&child,deniedContext);assert(scope.bound());
+                    DeniedCallbacks::freeResources(nullptr);DeniedCallbacks::freeResources(&lines);
+                    assert(!retirementCalls);
+                    DeniedCallbacks::freeResources(&child);
+                    assert(deniedContext.status()==31);
+                }
                 assert(retirementCalls==1 && api.references==3 && lineBackend.live==initialLineLive);
+                unsigned reentryAdmissions=0;
+                void(*reenterCleanup)(void*) noexcept=nullptr;
+                auto reentrantAdmission=[&]() noexcept {
+                    ++reentryAdmissions;assert(reenterCleanup);reenterCleanup(&child);return 0;
+                };
+                using ReentryContext=TglOwnedVeboxModeReleaseContext<decltype(transaction),decltype(lines),decltype(reentrantAdmission)>;
+                ReentryContext reentryContext(&child,transaction,lines,true,reentrantAdmission);
+                using ReentryScope=TglOwnedVeboxScopedContext<ReentryContext>;
+                using ReentryCallbacks=TglOwnedVeboxModeReleaseCallbacks<ReentryScope>;
+                reenterCleanup=&ReentryCallbacks::freeResources;
+                {
+                    ReentryScope scope(&child,reentryContext);assert(scope.bound());
+                    ReentryCallbacks::freeResources(&child);
+                    assert(reentryContext.status()==5 && reentryAdmissions==1);
+                    assert(api.references==3 && statistics.layout().bytes &&
+                        lineBackend.live==initialLineLive);
+                }
                 assert(statistics.layout().bytes);
                 // A busy selected owner denies the whole operation BEFORE admission.
                 assert(group.withStorage([&](const auto&) noexcept {
@@ -4195,7 +4224,19 @@ static void testResourceBinding() {
                     assert(transaction.releaseModeResources(lines,true,denied)==5);
                     return 0;
                 };
-                assert(transaction.releaseModeResources(lines,true,allowed)==0);
+                using AllowedContext=TglOwnedVeboxModeReleaseContext<decltype(transaction),decltype(lines),decltype(allowed)>;
+                AllowedContext allowedContext(&child,transaction,lines,true,allowed);
+                using AllowedScope=TglOwnedVeboxScopedContext<AllowedContext>;
+                using AllowedCallbacks=TglOwnedVeboxModeReleaseCallbacks<AllowedScope>;
+                std::array<uintptr_t,20> cleanupHooks{};
+                cleanupHooks=tglBindOwnedVeboxModeReleaseHook<AllowedScope>(cleanupHooks);
+                assert(cleanupHooks[4]==reinterpret_cast<uintptr_t>(&AllowedCallbacks::freeResources));
+                {
+                    AllowedScope scope(&child,allowedContext);assert(scope.bound());
+                    AllowedCallbacks::freeResources(&child);
+                    assert(allowedContext.status()==0);
+                    AllowedCallbacks::freeResources(&child);assert(allowedContext.status()==5);
+                }
                 assert(retirementCalls==2 && api.references==1 && !statistics.layout().bytes);
                 assert(!lineBackend.live && lineBackend.releases==initialLineLive);
                 // FFDN remains live/reusable; next ensure recreates only the retired owners.
