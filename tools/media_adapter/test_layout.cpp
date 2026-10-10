@@ -4960,6 +4960,21 @@ static void testVpSfcCpuGraph() {
             return -37;
         })==-37);
     }
+    using SendEntry=int(*)(void*,void*,void*,void*,void*,void*) noexcept;
+    SendEntry retained=nullptr;void* retainedChild=nullptr;
+    for(bool enabled:{false,true}) {
+        assert(graph.withSendView(enabled,[&](void* child,SendEntry send) noexcept {
+            retained=send;retainedChild=child;
+            assert(send(child,nullptr,nullptr,nullptr,nullptr,nullptr)==0);
+            assert(send(nullptr,nullptr,nullptr,nullptr,nullptr,nullptr)==5);
+            graph.reset();assert(state.live && avs.live);
+            assert(graph.withSendView(enabled,[](void*,SendEntry) noexcept {
+                assert(false);return 0;
+            })==5);
+            return -41;
+        })==-41);
+        assert(retained(retainedChild,nullptr,nullptr,nullptr,nullptr,nullptr)==5);
+    }
     assert(graph.prepare([&](auto& storage,auto&,auto&) noexcept {
         uintptr_t p=1;std::memcpy(&p,storage.bytes.data()+0x938,8);assert(!p);
         for(size_t i=0x28;i<0x58;++i) assert(!storage.bytes[i]);

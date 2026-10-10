@@ -6343,6 +6343,10 @@ template<class StateBackend,class AvsBackend> class TglOwnedVpSfcCpuGraph {
     TglOwnedSfcStateParameters<StateBackend> state_;
     TglOwnedSfcAvsParameters<AvsBackend> avs_;
     bool ready_=false,busy_=false;
+    struct SendContext {
+        void* child;
+        bool owns(void* candidate) const noexcept {return candidate==child;}
+    };
     void clear() noexcept {
         ready_=false;
         state_.reset();avs_.reset();storage_.bytes.fill(0);
@@ -6384,6 +6388,20 @@ public:
             };
             if(!avsEnabled) return invoke();
             return avs_.withParameters([&](const auto&) noexcept {return invoke();});
+        });
+    }
+    // Expose only the qualified platform-send entry during the existing
+    // state/AVS/graph lease, not a partially populated callable VP vtable.
+    // Retaining the function pointer cannot retain its TLS admission context.
+    template<class Use> int withSendView(bool avsEnabled,Use use) noexcept {
+        using Callback=TglOwnedVpPlatformSendCallback<TglOwnedVpSfcResolve<SendContext>>;
+        using Entry=int(*)(void*,void*,void*,void*,void*,void*) noexcept;
+        static_assert(noexcept(use(nullptr,Entry{})),"CPU graph send view ABI");
+        return withView(avsEnabled,[&](void* child) noexcept {
+            SendContext context{child};
+            TglOwnedVpSfcScopedContext<SendContext> scope(child,context);
+            if(!scope.bound()) return 5;
+            return use(child,Entry{&Callback::send});
         });
     }
     // Enclose frame publication, ordered producers and command-input borrowing
