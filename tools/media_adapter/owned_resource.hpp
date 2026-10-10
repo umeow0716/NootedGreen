@@ -1748,6 +1748,17 @@ struct TglVeboxHardwareBinding {
     // This is native deferred mapping ownership, not an owned-layer fence.
     // Prove the owned allocation reaches this mapping path before relying on
     // it; external CPU buffers and failed STMM unlock remain separate cases.
+    // Release-only CPU capture198a776a... at46268e is a null-guarded import
+    // tail call, not a fence. Its adjacent cleanup sends scalar selector1 with
+    // the resource ID, but adjacency alone does NOT prove CF finalizer linkage.
+    // Family delete_resource(2c470) looks up that ID and, except typea, invokes
+    // resource160 with Shared2. Family Resource2 vptr766d0+160 resolves218cc
+    // sharedRelease, NOT databuffer_release(21a10). Both invalidate the ID,
+    // updates allocation accounting, removes the shared list entry and drops
+    // a reference via28; sharedRelease also drops168 and conditional60 without
+    // waiting. The concrete TGL resource override
+    // and userspace CF finalizer linkage still need proof before joining this
+    // token-delete path to deferred Map ownership for an owned allocation.
     template<class Read,class Qualify,class Executable,class Invoke>
     uint32_t markSubmitted(uintptr_t image,Read read,Qualify qualify,
                            Executable executable,Invoke invoke) const {
