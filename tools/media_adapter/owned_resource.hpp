@@ -2835,6 +2835,12 @@ public:
             // frees CPU shells (12de6f etc). Retire bound resource tokens here,
             // while shell storage is still alive; the native base destructor
             // cannot dispatch the owned +60 hook to do that cleanup for us.
+            // VP child80 has an additional ownership boundary: when SKU64
+            // bit17 is set,12e097 calls12e190(&child80), which decrements
+            // native allocation counter7f3218 BEFORE invoking vtable+8.
+            // An owned/borrowed VP must therefore be detached by cleanup,
+            // or have a separately proved native allocation-accounting pair.
+            // Merely providing an owned deleting-destructor slot is NOT enough.
             cleanup_(object);
             destroy_(destructor_,object);
         }
