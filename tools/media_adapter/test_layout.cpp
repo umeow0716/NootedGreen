@@ -5773,15 +5773,19 @@ int main() {
     }
     {
         TglOwnedSfcCommandParameters parameters;
+        static_assert(!std::is_copy_constructible_v<TglOwnedSfcCommandParameters> &&
+            !std::is_copy_assignable_v<TglOwnedSfcCommandParameters> &&
+            !std::is_move_constructible_v<TglOwnedSfcCommandParameters> &&
+            !std::is_move_assignable_v<TglOwnedSfcCommandParameters>);
         parameters.ief[1]=7;parameters.state[0x88]=2;
         {
             TglOwnedIefTables tables{};
             for(size_t row=0;row<tables.size();++row)
                 for(size_t column=0;column<64;++column) tables[row][column]=uint32_t(row*64+column);
             const std::array<uint16_t,3> thresholds{0x107,0x202,0x308};
-            const auto original=parameters;
+            TglOwnedSfcCommandParameters original;assert(original.snapshotFrom(parameters));
             for(float strength:{0.f,1.f,63.f,64.f,-1.f}) {
-                auto candidate=original;
+                TglOwnedSfcCommandParameters candidate;assert(candidate.snapshotFrom(original));
                 std::array<uint8_t,64> expected{};TglOwnedIefSurfaceFlags flags{};
                 assert(tglBuildOwnedIefParameters(expected,flags,strength,3,2,thresholds,tables));
                 assert(tglPrepareOwnedSfcIefParameters(candidate,true,strength,3,2,thresholds,tables));
@@ -5789,17 +5793,19 @@ int main() {
                 auto state=original.state;state[0x67]=1;state[0x68]=1;
                 assert(candidate.state==state);
             }
-            auto candidate=original;
+            TglOwnedSfcCommandParameters candidate;assert(candidate.snapshotFrom(original));
             assert(!tglPrepareOwnedSfcIefParameters(candidate,true,NAN,1,1,thresholds,tables));
             assert(candidate.ief==original.ief && candidate.state==original.state);
             assert(tglPrepareOwnedSfcIefParameters(candidate,false,NAN,1,1,thresholds,tables));
             assert((candidate.ief==std::array<uint8_t,64>{} && candidate.state==original.state));
             for(size_t offset:{size_t(0x28),size_t(0x30),size_t(0x38)}) {
-                candidate=original;const uintptr_t borrowed=1;
-                std::memcpy(candidate.ief.data()+offset,&borrowed,8);
-                const auto saved=candidate;
-                assert(!tglPrepareOwnedSfcIefParameters(candidate,false,0,0,0,thresholds,tables));
-                assert(candidate.ief==saved.ief && candidate.state==saved.state);
+                TglOwnedSfcCommandParameters occupied;assert(occupied.snapshotFrom(original));
+                const uintptr_t borrowed=1;
+                std::memcpy(occupied.ief.data()+offset,&borrowed,8);
+                const auto savedIef=occupied.ief;const auto savedState=occupied.state;
+                assert(!tglPrepareOwnedSfcIefParameters(occupied,false,0,0,0,thresholds,tables));
+                assert(occupied.ief==savedIef && occupied.state==savedState);
+                assert(!candidate.snapshotFrom(occupied) && !occupied.snapshotFrom(original));
             }
         }
         const TglOwnedIefTables compositionTables{};
@@ -5832,6 +5838,8 @@ int main() {
                 for(size_t i=0;i<count;++i) assert(coefficients[i]==float(first+i));
             }
             const auto leasedIef=ready.ief;const auto leasedState=ready.state;
+            TglOwnedSfcCommandParameters escaped;escaped.state[0]=0x55;
+            assert(!escaped.snapshotFrom(ready) && escaped.state[0]==0x55);
             const TglOwnedIefTables unusedTables{};
             const std::array<uint16_t,3> unusedThresholds{};
             assert(!tglPrepareOwnedSfcIefParameters(ready,false,0,0,0,
@@ -5873,6 +5881,9 @@ int main() {
         auto rejectNested=[&]() noexcept {
             const auto oldIef=parameters.ief;const auto oldState=parameters.state;
             assert(parameters.filtersInUse);
+            TglOwnedSfcCommandParameters escaped;
+            assert(!escaped.snapshotFrom(parameters));
+            assert(!parameters.snapshotFrom(escaped));
             assert(tglWithOwnedSfcFilterCommands(parameters,input,compositionTables,
                 cache,false,3,5,0,read,produce,
                 [&](auto&) noexcept {++nested;return 0;})==5);
@@ -7265,7 +7276,7 @@ int main() {
             auto output=shell;output[0xe8]=uint8_t(controlFlag);
             const uintptr_t backing=1,outputResource=reinterpret_cast<uintptr_t>(output.data()+0x148);
             std::memcpy(output.data()+0x168,&backing,8);
-            auto usageParameters=parameters;
+            TglOwnedSfcCommandParameters usageParameters;assert(usageParameters.snapshotFrom(parameters));
             std::memcpy(usageParameters.state.data()+0x90,&outputResource,8);
             unsigned reads=0,updates=0,controls=0;
             auto read=[&](uintptr_t address,void* out,size_t size) noexcept {
@@ -7290,7 +7301,7 @@ int main() {
             assert(failRead?!backend.count:backend.count==4);
         }
         for(bool missingBacking:{false,true}) {
-            auto output=shell;auto rejected=parameters;
+            auto output=shell;TglOwnedSfcCommandParameters rejected;assert(rejected.snapshotFrom(parameters));
             const uintptr_t backing=missingBacking?0:1;
             const uintptr_t wrongOutput=missingBacking?
                 reinterpret_cast<uintptr_t>(output.data()+0x148):0;
@@ -7325,7 +7336,7 @@ int main() {
                 auto output=shell;output[0xe8]=uint8_t(flag);
                 const uintptr_t mockBacking=1;
                 std::memcpy(output.data()+0x168,&mockBacking,8);
-                auto nativeParameters=parameters;
+                TglOwnedSfcCommandParameters nativeParameters;assert(nativeParameters.snapshotFrom(parameters));
                 Backend backend;backend.expected=&nativeParameters;backend.leasedLock=true;backend.lockFlag=1;
                 backend.failure=failure;backend.resource=reinterpret_cast<uintptr_t>(output.data()+0x148);
                 std::memcpy(nativeParameters.state.data()+0x90,&backend.resource,8);
@@ -7346,7 +7357,7 @@ int main() {
             const uintptr_t mockBacking=1;
             std::memcpy(typedOutput.resource.data()+0x20,&mockBacking,8);
             const auto originalResource=typedOutput.resource;
-            auto nativeParameters=parameters;
+            TglOwnedSfcCommandParameters nativeParameters;assert(nativeParameters.snapshotFrom(parameters));
             Backend backend;backend.expected=&nativeParameters;backend.leasedLock=true;backend.lockFlag=1;
             backend.resource=reinterpret_cast<uintptr_t>(typedOutput.resource.data());
             std::memcpy(nativeParameters.state.data()+0x90,&backend.resource,8);

@@ -5750,6 +5750,24 @@ struct TglOwnedSfcCommandParameters {
     TglOwnedSfcUvParameters uv{};
     // CPU owner state, never part of a native command packet. Serialized use.
     bool filtersInUse=false;
+    TglOwnedSfcCommandParameters()=default;
+    TglOwnedSfcCommandParameters(const TglOwnedSfcCommandParameters&)=delete;
+    TglOwnedSfcCommandParameters& operator=(const TglOwnedSfcCommandParameters&)=delete;
+    TglOwnedSfcCommandParameters(TglOwnedSfcCommandParameters&&)=delete;
+    TglOwnedSfcCommandParameters& operator=(TglOwnedSfcCommandParameters&&)=delete;
+    // Explicit CPU snapshot only. Resource addresses still require their
+    // enclosing owner leases; this is not a resource-lifetime certificate.
+    bool snapshotFrom(const TglOwnedSfcCommandParameters& source) noexcept {
+        if(filtersInUse || source.filtersInUse) return false;
+        for(size_t offset:{size_t(0x28),size_t(0x30),size_t(0x38)}) {
+            uintptr_t from=0,to=0;
+            std::memcpy(&from,source.ief.data()+offset,8);
+            std::memcpy(&to,ief.data()+offset,8);
+            if(from || to) return false;
+        }
+        lock=source.lock;state=source.state;avs=source.avs;
+        ief=source.ief;y=source.y;uv=source.uv;return true;
+    }
 };
 // VP+98 (1e0bb0) clears64 bytes before optional IEF then CSC. Its IEF
 // producer1dcbd0 writes state+67/+68 and the same parameter offsets as our
