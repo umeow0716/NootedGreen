@@ -28,6 +28,9 @@ class NativeReturnObserver {
     unsigned booleanSites = 0;
     unsigned rcxSites = 0;
     unsigned readRax32Sites = 0;
+    unsigned rdxImageSites = 0;
+    uintptr_t imageBase = 0;
+    uintptr_t imageBytes = 0;
     volatile sig_atomic_t handlerRestore = KERN_FAILURE;
     bool installed = false;
     bool armed = false;
@@ -59,6 +62,12 @@ class NativeReturnObserver {
         // four bytes that the interrupted instruction will read; no RPC/allocation.
         if (self->readRax32Sites & (1u << site))
             raw = *reinterpret_cast<const volatile uint32_t *>(raw);
+        // Report only a bounded image-relative offset, never the pointer itself.
+        if (self->rdxImageSites & (1u << site)) {
+            const uintptr_t pointer = state->uc_mcontext->__ss.__rdx;
+            raw = pointer >= self->imageBase && pointer - self->imageBase < self->imageBytes
+                ? pointer - self->imageBase : uintptr_t(-1);
+        }
         self->values[site] = self->booleanSites & (1u << site)
             ? sig_atomic_t(raw != 0) : static_cast<sig_atomic_t>(raw);
         self->hitMask |= 1 << site;
@@ -75,16 +84,21 @@ public:
     explicit NativeReturnObserver(uintptr_t site)
         : NativeReturnObserver(std::array<uintptr_t, 4>{site, 0, 0, 0}) {}
     explicit NativeReturnObserver(const std::array<uintptr_t, 4> &selected, unsigned booleans = 0,
-        unsigned rcx = 0, unsigned readRax32 = 0)
-        : sites(selected), booleanSites(booleans), rcxSites(rcx), readRax32Sites(readRax32) {
+        unsigned rcx = 0, unsigned readRax32 = 0, unsigned rdxImage = 0,
+        uintptr_t base = 0, uintptr_t bytes = 0)
+        : sites(selected), booleanSites(booleans), rcxSites(rcx), readRax32Sites(readRax32),
+          rdxImageSites(rdxImage), imageBase(base), imageBytes(bytes) {
         for (unsigned i = 0; i != 4; ++i) {
             if (!sites[i]) continue;
             for (unsigned j = 0; j != i; ++j) if (sites[j] == sites[i]) return;
             wanted |= 1 << i;
         }
         if (!guard.owns_lock() || !wanted ||
-            ((booleanSites | rcxSites | readRax32Sites) & ~unsigned(wanted)) ||
-            (rcxSites & readRax32Sites)) {
+            ((booleanSites | rcxSites | readRax32Sites | rdxImageSites) & ~unsigned(wanted)) ||
+            (rcxSites & readRax32Sites) ||
+            (rdxImageSites & (booleanSites | rcxSites | readRax32Sites)) ||
+            (rdxImageSites && (!imageBase || !imageBytes || imageBytes > 0x7fffffff ||
+                imageBase + imageBytes < imageBase))) {
             os_log_error(OS_LOG_DEFAULT, "NGRN_NATIVE_RETURN_OBSERVER_SKIP busy-or-no-site");
             return;
         }
