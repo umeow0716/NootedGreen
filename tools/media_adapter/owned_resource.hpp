@@ -7,6 +7,7 @@
 #include <limits>
 #include <cmath>
 #include <cstddef>
+#include <type_traits>
 
 // Tahoe TGL Ief 125e90/126210. Tables must come from the authenticated
 // native image (741e50..742350), not from a different GPU generation.
@@ -5618,6 +5619,30 @@ TglOwnedStmmInitialization tglInitializeOwnedStmmSurface(Surface surface,Api& ap
     result.unlockStatus=api.unlock(surface);
     return result;
 }
+// Independent surface retention protects a failed writable unlock even when
+// the enclosing resource transaction unwinds. The sink must reserve durable
+// capacity BEFORE lock, then own the retained reference after commit; cancel
+// releases only the reservation. It must outlive resource/frame owners.
+// No unlock retry, GPU completion inference or automatic quarantine release.
+// Runtime integration still requires an actual persistent sink implementation.
+template<class Surface,class Api,class Quarantine>
+TglOwnedStmmInitialization tglInitializeRetainedOwnedStmmSurface(
+    Surface surface,Api& api,Quarantine& quarantine) noexcept {
+    static_assert(noexcept(api.retain(surface)) && noexcept(api.release(surface)),
+        "surface retention must not throw");
+    static_assert(noexcept(quarantine.reserve()) && noexcept(quarantine.cancel()) &&
+        noexcept(quarantine.commit(surface)),"durable quarantine transaction must not throw");
+    static_assert(std::is_same<decltype(quarantine.reserve()),bool>::value &&
+        std::is_same<decltype(quarantine.commit(surface)),void>::value &&
+        std::is_same<decltype(quarantine.cancel()),void>::value,
+        "reserve reports capacity; commit cannot fail after reservation");
+    if(!surface || !quarantine.reserve()) return {};
+    if(!api.retain(surface)) {quarantine.cancel();return {};}
+    const auto result=tglInitializeOwnedStmmSurface(surface,api);
+    if(result.requiresQuarantine()) quarantine.commit(surface);
+    else {api.release(surface);quarantine.cancel();}
+    return result;
+}
 #if defined(__APPLE__)
 struct TglDarwinStmmSurfaceApi {
     IOSurfaceRef surface(uintptr_t handle) const noexcept {
@@ -5625,6 +5650,8 @@ struct TglDarwinStmmSurfaceApi {
     }
     int lock(IOSurfaceRef surface) const noexcept {return IOSurfaceLock(surface,0,nullptr);}
     int unlock(IOSurfaceRef surface) const noexcept {return IOSurfaceUnlock(surface,0,nullptr);}
+    bool retain(IOSurfaceRef surface) const noexcept {return surface && CFRetain(surface);}
+    void release(IOSurfaceRef surface) const noexcept {CFRelease(surface);}
     bool view(IOSurfaceRef surface,TglOwnedStmmView& output) const noexcept {
         // Native63720 format3d -> IOSurface pixel-format8 at63a41, one plane.
         // SDK explicitly permits plane0 queries on a non-planar (count0) surface.
@@ -5661,6 +5688,17 @@ TglOwnedStmmInitialization tglInitializeOwnedStmmResource(
     std::memcpy(&handle,resource.data()+0x58,8);
     if(type!=1 || format!=0x3d || !handle) return {};
     return tglInitializeOwnedStmmSurface(api.surface(handle),api);
+}
+template<class Api,class Quarantine>
+TglOwnedStmmInitialization tglInitializeRetainedOwnedStmmResource(
+    const std::array<uint8_t,0x148>& resource,Api& api,Quarantine& quarantine) noexcept {
+    uint32_t type=0,format=0;
+    uintptr_t handle=0;
+    std::memcpy(&type,resource.data()+0x14,4);
+    std::memcpy(&format,resource.data()+0x18,4);
+    std::memcpy(&handle,resource.data()+0x58,8);
+    if(type!=1 || format!=0x3d || !handle) return {};
+    return tglInitializeRetainedOwnedStmmSurface(api.surface(handle),api,quarantine);
 }
 struct TglResourceStorageReference { std::array<uint8_t,0x148>& storage; };
 

@@ -3552,6 +3552,61 @@ static void testResourceBinding() {
         Api badExtent{{mapped.data(),39,8,3,16}};
         const auto failed=tglInitializeOwnedStmmSurface(1,badExtent);
         assert(!failed.initialized && badExtent.unlocks==1 && !failed.unlockStatus);
+        struct RetainedApi : Api {
+            unsigned references=1,retains=0,releases=0;
+            bool denyRetain=false;
+            bool retain(int handle) noexcept {
+                assert(handle==1);++retains;
+                if(denyRetain) return false;
+                ++references;return true;
+            }
+            void release(int handle) noexcept {
+                assert(handle==1 && references);--references;++releases;
+            }
+        };
+        struct Quarantine {
+            bool available=true,reserved=false;
+            unsigned reservations=0,cancels=0,commits=0;
+            int retained=0;
+            bool reserve() noexcept {
+                ++reservations;
+                if(!available || reserved || retained) return false;
+                reserved=true;return true;
+            }
+            void cancel() noexcept {assert(reserved);reserved=false;++cancels;}
+            void commit(int handle) noexcept {
+                assert(reserved && !retained);retained=handle;
+                reserved=false;++commits;
+            }
+        };
+        for(int lockError : {0,5}) for(int unlockError : {0,31})
+            for(bool valid : {false,true}) {
+                RetainedApi api;
+                api.mapping={mapped.data(),40,8,3,16};
+                api.lockResult=lockError;api.unlockResult=unlockError;api.valid=valid;
+                Quarantine sink;
+                const auto result=tglInitializeRetainedOwnedStmmSurface(1,api,sink);
+                const bool quarantined=!lockError && unlockError;
+                assert(result.requiresQuarantine()==quarantined);
+                assert(api.retains==1 && api.references==unsigned(1+quarantined));
+                assert(sink.commits==unsigned(quarantined));
+                assert(sink.cancels==unsigned(!quarantined) && !sink.reserved);
+                // Resource-owner unwind must not destroy a still-locked surface.
+                api.release(1);
+                assert(api.references==unsigned(quarantined));
+                if(quarantined) {
+                    const auto locks=api.locks;
+                    assert(!tglInitializeRetainedOwnedStmmSurface(1,api,sink).ready());
+                    assert(api.locks==locks && api.references==1 && sink.retained==1);
+                }
+            }
+        for(bool capacity : {false,true}) {
+            RetainedApi api;api.denyRetain=true;
+            Quarantine sink;sink.available=capacity;
+            assert(!tglInitializeRetainedOwnedStmmSurface(1,api,sink).ready());
+            assert(!api.locks && !api.unlocks && api.references==1 && !sink.commits);
+            assert(api.retains==unsigned(capacity) && sink.cancels==unsigned(capacity));
+        }
         Api absent{};
         assert(!tglInitializeOwnedStmmSurface(0,absent).ready() && !absent.locks);
         struct Backend {
@@ -3588,6 +3643,18 @@ static void testResourceBinding() {
         std::array<uint8_t,0x148> malformed{};
         Api denied{};
         assert(!tglInitializeOwnedStmmResource(malformed,denied).ready() && !denied.locks);
+        RetainedApi retained;
+        Quarantine quarantine;
+        assert(!tglInitializeRetainedOwnedStmmResource(malformed,retained,quarantine).ready());
+        assert(!quarantine.reservations && !retained.retains && !retained.locks);
+        const uint32_t type=1,format=0x3d;const uintptr_t handle=1;
+        std::memcpy(malformed.data()+0x14,&type,4);
+        std::memcpy(malformed.data()+0x18,&format,4);
+        std::memcpy(malformed.data()+0x58,&handle,8);
+        retained.mapping={mapped.data(),40,8,3,16};retained.unlockResult=31;
+        assert(tglInitializeRetainedOwnedStmmResource(malformed,retained,quarantine)
+            .requiresQuarantine());
+        assert(quarantine.retained==1 && retained.references==2 && !retained.releases);
     }
     constexpr uintptr_t os = 0x1000, image = 0x100000, renderHal = 0x2000;
     uintptr_t borrowedOs = os;
