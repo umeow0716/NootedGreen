@@ -5269,6 +5269,51 @@ static void testSfcFrameFields() {
 
 int main() {
     {
+        std::array<uint8_t,0x298> source{},target{};
+        std::array<uint8_t,0x1c> mhw{};std::array<uint8_t,0x68> settings{};
+        std::array<uint8_t,8> ief{};
+        const auto put=[](auto& bytes,size_t offset,auto value) {
+            std::memcpy(bytes.data()+offset,&value,sizeof(value));
+        };
+        const std::array<float,8> rectangles{0,0,1920,1080,0,0,960,540};
+        std::memcpy(source.data()+0x30,rectangles.data(),sizeof(rectangles));
+        const TglOwnedVpDestinationRect targetRect{0,0,960,540};
+        std::memcpy(target.data()+0x40,&targetRect,16);
+        put(source,0,uint32_t(3));put(target,0,uint32_t(3));
+        put(source,0xd8,uint32_t(1920));put(source,0xdc,uint32_t(1080));
+        put(source,0x58,1920.0f);put(source,0x5c,1080.0f);
+        put(source,0x130,uint32_t(0x19));put(source,0x120,uint32_t(0x31));
+        put(source,0x78,uintptr_t(0x5000));ief[0]=1;put(ief,4,0.5f);
+        put(target,0xd8,uint32_t(960));put(target,0xdc,uint32_t(540));put(target,0x130,uint32_t(0x15));
+        put(mhw,0x18,uint16_t(16));put(mhw,0x1a,uint16_t(8));
+        unsigned calls=0,fail=0;
+        const auto read=[&](uintptr_t address,void* output,size_t size) noexcept {
+            if(++calls==fail) return false;
+            const auto span=[&](uintptr_t base,const auto& bytes) noexcept {
+                if(address<base || address-base>bytes.size() || size>bytes.size()-(address-base)) return false;
+                std::memcpy(output,bytes.data()+address-base,size);return true;
+            };
+            return span(0x1000,source) || span(0x2000,target) || span(0x3000,mhw) ||
+                   span(0x4000,settings) || span(0x5000,ief);
+        };
+        TglOwnedVpFramePreparation prepared;uintptr_t reference=0;
+        assert(tglReadOwnedVpFramePreparation(0x1000,0x2000,0x3000,0x4000,true,read,{},prepared,reference));
+        const unsigned total=calls;assert(total==24);
+        assert(prepared.at922 && !prepared.at920 && prepared.regions.scale.at928==0.5f && !reference);
+        assert(prepared.color.at9b8 && prepared.color.metadata.at9a4==0x31);
+        for(fail=1;fail<=total;++fail) {
+            calls=0;prepared.at9a0=17;reference=19;
+            assert(!tglReadOwnedVpFramePreparation(0x1000,0x2000,0x3000,0x4000,true,read,{},prepared,reference));
+            assert(prepared.at9a0==17 && reference==19);
+        }
+        fail=0;calls=0;ief[0]=0;
+        assert(tglReadOwnedVpFramePreparation(0x1000,0x2000,0x3000,0x4000,false,read,{},prepared,reference));
+        assert(calls==total-2 && !prepared.at922 && !prepared.at920);
+        put(source,0x78,uintptr_t(0));calls=0;
+        assert(tglReadOwnedVpFramePreparation(0x1000,0x2000,0x3000,0x4000,false,read,{},prepared,reference));
+        assert(calls==total-3 && !prepared.at922);
+    }
+    {
         std::array<uint8_t,0x134> source{},selected{};
         std::array<uint8_t,4> target{};std::array<uint8_t,0x68> settings{};
         const auto put=[](auto& bytes,size_t offset,auto value) {

@@ -4740,6 +4740,34 @@ inline bool tglPrepareOwnedVpFrame(const TglOwnedVpFramePreparationInput& in,
     candidate.at9a0=in.geometry.rotation;
     output=candidate;return true;
 }
+// One bounded acquisition path for slot28. Optional IEF/conditional fields
+// follow native branch order; Read must authorize pointed-to leases as well as
+// parent descriptors. No partial frame or CSC reference escapes on failure.
+template<class Read>
+bool tglReadOwnedVpFramePreparation(uintptr_t source,uintptr_t target,uintptr_t mhw,
+    uintptr_t settings,bool conditionalAvailable,Read read,const TglOwnedVpModeState& original,
+    TglOwnedVpFramePreparation& output,uintptr_t& sourceA8) noexcept {
+    static_assert(noexcept(read(uintptr_t{},nullptr,size_t{})),"VP frame leased read ABI");
+    if(!source || !target || source>UINTPTR_MAX-0x298 || target>UINTPTR_MAX-0x298) return false;
+    TglOwnedVpFramePreparationInput input;TglOwnedVpRegions regions;
+    TglOwnedVpModeResult modes;uintptr_t reference=0;
+    if(!tglReadOwnedVpRegions(source,target,mhw,read,input.geometry,regions) ||
+       !tglReadOwnedVpModes(source,target,settings,read,original,input.modes,modes,reference) ||
+       !read(source+0x120,&input.source120,4) || !read(source+0x294,&input.source294,4) ||
+       !read(target+0x294,&input.target294,4)) return false;
+    input.conditionalSourceAvailable=conditionalAvailable;
+    if(conditionalAvailable && !read(target+0x40,&input.targetDestination,16)) return false;
+    uintptr_t ief=0;
+    if(!read(source+0x78,&ief,8)) return false;
+    if(ief) {
+        if(ief>UINTPTR_MAX-8 || !read(ief,&input.iefFlags,1)) return false;
+        input.iefPresent=true;
+        if((input.iefFlags&1) && !read(ief+4,&input.iefStrength,4)) return false;
+    }
+    TglOwnedVpFramePreparation candidate;
+    if(!tglPrepareOwnedVpFrame(input,original,candidate)) return false;
+    output=candidate;sourceA8=reference;return true;
+}
 // One synchronous slot28 view. Leases for source, parameters, target and CSC
 // must enclose this call. Owned target metadata is supplied to use(), not
 // written through the borrowed target. No vtable or object is published here.
