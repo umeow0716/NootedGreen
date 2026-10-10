@@ -4835,7 +4835,8 @@ inline bool tglPrepareOwnedVpFrame(const TglOwnedVpFramePreparationInput& in,
 template<class Read>
 bool tglReadOwnedVpFramePreparation(uintptr_t source,uintptr_t target,uintptr_t mhw,
     uintptr_t settings,bool conditionalAvailable,Read read,const TglOwnedVpModeState& original,
-    TglOwnedVpFramePreparation& output,uintptr_t& sourceA8) noexcept {
+    TglOwnedVpFramePreparation& output,uintptr_t& sourceA8,
+    TglOwnedVpRegionInput* geometrySnapshot=nullptr) noexcept {
     static_assert(noexcept(read(uintptr_t{},nullptr,size_t{})),"VP frame leased read ABI");
     if(!source || !target || source>UINTPTR_MAX-0x298 || target>UINTPTR_MAX-0x298) return false;
     TglOwnedVpFramePreparationInput input;TglOwnedVpRegions regions;
@@ -4855,7 +4856,11 @@ bool tglReadOwnedVpFramePreparation(uintptr_t source,uintptr_t target,uintptr_t 
     }
     TglOwnedVpFramePreparation candidate;
     if(!tglPrepareOwnedVpFrame(input,original,candidate)) return false;
-    output=candidate;sourceA8=reference;return true;
+    output=candidate;sourceA8=reference;
+    // Setup and state generation must share the same leased descriptor read,
+    // rather than reread potentially changing source/target geometry.
+    if(geometrySnapshot) *geometrySnapshot=input.geometry;
+    return true;
 }
 struct TglOwnedVpChromaStatePrefix {
     std::array<uint8_t,0xb8> packet{};

@@ -5667,14 +5667,17 @@ int main() {
                    span(0x4000,settings) || span(0x5000,ief);
         };
         TglOwnedVpFramePreparation prepared;uintptr_t reference=0;
-        assert(tglReadOwnedVpFramePreparation(0x1000,0x2000,0x3000,0x4000,true,read,{},prepared,reference));
+        TglOwnedVpRegionInput geometrySnapshot;
+        assert(tglReadOwnedVpFramePreparation(0x1000,0x2000,0x3000,0x4000,true,read,{},prepared,reference,&geometrySnapshot));
         const unsigned total=calls;assert(total==24);
+        assert(geometrySnapshot.frameWidth && geometrySnapshot.frameHeight);
         assert(prepared.at922 && !prepared.at920 && prepared.regions.scale.at928==0.5f && !reference);
         assert(prepared.color.at9b8 && prepared.color.metadata.at9a4==0x31);
         for(fail=1;fail<=total;++fail) {
             calls=0;prepared.at9a0=17;reference=19;
-            assert(!tglReadOwnedVpFramePreparation(0x1000,0x2000,0x3000,0x4000,true,read,{},prepared,reference));
-            assert(prepared.at9a0==17 && reference==19);
+            geometrySnapshot.frameWidth=23;
+            assert(!tglReadOwnedVpFramePreparation(0x1000,0x2000,0x3000,0x4000,true,read,{},prepared,reference,&geometrySnapshot));
+            assert(prepared.at9a0==17 && reference==19 && geometrySnapshot.frameWidth==23);
         }
         fail=0;calls=0;ief[0]=0;
         assert(tglReadOwnedVpFramePreparation(0x1000,0x2000,0x3000,0x4000,false,read,{},prepared,reference));
