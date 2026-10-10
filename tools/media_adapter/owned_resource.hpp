@@ -201,6 +201,19 @@ struct TglTrackedCpuBinding {
 
 // Invoker ABI: uintptr_t allocate(entry,size_t), void release(entry,pointer).
 // Caller retains the loaded image lease until backend and all owners are gone.
+struct TglNativeTrackedCpuInvoker {
+    uintptr_t allocate(uintptr_t entry, size_t bytes) const {
+        if (!entry || !bytes) return 0;
+        using Allocate = void* (*)(size_t);
+        return reinterpret_cast<uintptr_t>(reinterpret_cast<Allocate>(entry)(bytes));
+    }
+    void release(uintptr_t entry, uintptr_t pointer) const noexcept {
+        if (!entry || !pointer) return;
+        using Release = void (*)(void*);
+        reinterpret_cast<Release>(entry)(reinterpret_cast<void*>(pointer));
+    }
+};
+
 template<class Invoker> class TglTrackedCpuBackend {
     TglTrackedCpuBinding binding;
     Invoker invoke;

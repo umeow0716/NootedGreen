@@ -7,6 +7,26 @@
 #include "owned_resource.hpp"
 
 static void testTrackedCpuOwner() {
+    // Exercise the real function-pointer ABI only against owned test functions.
+    static std::array<unsigned char,0x2a8> abiStorage{};
+    static unsigned abiAllocations = 0, abiReleases = 0;
+    auto allocateAbi = +[](size_t bytes) -> void* {
+        assert(bytes == abiStorage.size()); ++abiAllocations;
+        return abiStorage.data();
+    };
+    auto releaseAbi = +[](void* pointer) {
+        assert(pointer == abiStorage.data()); ++abiReleases;
+    };
+    TglNativeTrackedCpuInvoker abi;
+    assert(!abi.allocate(0,0x2a8));
+    assert(!abi.allocate(reinterpret_cast<uintptr_t>(allocateAbi),0));
+    abi.release(0,reinterpret_cast<uintptr_t>(abiStorage.data()));
+    abi.release(reinterpret_cast<uintptr_t>(releaseAbi),0);
+    assert(abiAllocations == 0 && abiReleases == 0);
+    auto pointer = abi.allocate(reinterpret_cast<uintptr_t>(allocateAbi),0x2a8);
+    assert(pointer == reinterpret_cast<uintptr_t>(abiStorage.data()) && abiAllocations == 1);
+    abi.release(reinterpret_cast<uintptr_t>(releaseAbi),pointer);
+    assert(abiReleases == 1);
     struct Backend {
         std::array<unsigned char,0x2a8> bytes{};
         unsigned allocations = 0, releases = 0, live = 0;
