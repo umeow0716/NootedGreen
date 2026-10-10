@@ -171,6 +171,18 @@ struct TglVeboxReportState {
 };
 static_assert(sizeof(TglVeboxReportState) == 0x28);
 
+// 127502..12756c + virtualc8=12eaf0. Offsets are proven; semantic
+// flag names remain unassigned. Do not reset DWORD4 when execution13 is false.
+inline void tglUpdateVeboxReport(TglVeboxReportState& report,
+                                 const std::array<uint8_t, 0x15>& execution) noexcept {
+    report.bytes[0] = execution[0x0f] & 1;
+    report.bytes[2] = execution[0x0b] & 1;
+    if (execution[0x13] & 1) {
+        const uint32_t value = (execution[0x14] & 1) && !(execution[8] & 1) ? 2 : 3;
+        std::memcpy(report.bytes.data() + 4, &value, sizeof(value));
+    }
+}
+
 // Exact post-render export12d240 ->12d120/12d1a0. Source is the
 // owned equivalent of child40, not the child object itself. Preserve every
 // destination byte not written by native; source/destination may alias.
