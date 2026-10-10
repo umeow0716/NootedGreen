@@ -1475,6 +1475,9 @@ bool tglReadOwnedVpCscOverride(uint32_t from,uint32_t to,uintptr_t sourceA8,
 // Serialized owned counterpart of VP+a0's from/to cache and synchronous
 // pointer publication. Native coefficient producer must be authenticated by
 // the caller. No GPU completion/retirement certificate is implied here.
+// Exact 1e0b70..1e0bac publishes this+38c/+3b0/+3bc to packet+28/+30/+38:
+// contiguous 9 matrix, 3 input-offset and 3 output-offset floats. The borrowed
+// pointers below are only valid inside use(), not for deferred GPU consumers.
 class TglOwnedVpCscCache {
     TglCscCoefficients coefficients_{};
     uint32_t from_=0,to_=0;

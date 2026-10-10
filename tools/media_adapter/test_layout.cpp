@@ -5807,7 +5807,12 @@ int main() {
         TglOwnedVpCscCache cache;unsigned reads=0,produced=0,generated=0;
         auto read=[&](uintptr_t,void*,size_t) noexcept {++reads;return false;};
         auto produce=[&](TglCscCoefficients& out,uint32_t from,uint32_t to) noexcept {
-            ++produced;assert(from==3 && to==5);out.matrix[0]=2;return true;
+            ++produced;assert(from==3 && to==5);
+            for(size_t i=0;i<out.matrix.size();++i) out.matrix[i]=float(i+2);
+            for(size_t i=0;i<out.inputOffsets.size();++i) {
+                out.inputOffsets[i]=float(i+20);out.outputOffsets[i]=float(i+30);
+            }
+            return true;
         };
         auto generate=[&](TglOwnedSfcCommandParameters& ready) noexcept {
             ++generated;assert(&ready==&parameters);
@@ -5817,6 +5822,10 @@ int main() {
             for(size_t offset:{size_t(0x28),size_t(0x30),size_t(0x38)}) {
                 uintptr_t pointer=0;std::memcpy(&pointer,ready.ief.data()+offset,8);
                 assert(pointer);
+                const auto* coefficients=reinterpret_cast<const float*>(pointer);
+                const size_t count=offset==0x28 ? 9 : 3;
+                const unsigned first=offset==0x28 ? 2 : (offset==0x30 ? 20 : 30);
+                for(size_t i=0;i<count;++i) assert(coefficients[i]==float(first+i));
             }
             const auto leasedIef=ready.ief;const auto leasedState=ready.state;
             const TglOwnedIefTables unusedTables{};
