@@ -6250,6 +6250,50 @@ int main() {
         assert(state.packet==saved && converts==1 && applies==1);
     }
     {
+        constexpr uintptr_t image=0x100000,os=0x200000;
+        uintptr_t entry=image+0x65d00;
+        std::array<uint8_t,19> body{
+            0x55,0x48,0x89,0xe5,0x31,0xc0,0x48,0x89,0x7d,0xf8,
+            0x48,0x89,0x75,0xf0,0x89,0x55,0xec,0x5d,0xc3};
+        auto read=[&](uintptr_t p,void* out,size_t n) {
+            if(p==os+0x3a8 && n==8) std::memcpy(out,&entry,8);
+            else if(p==image+0x65d00 && n==body.size()) std::memcpy(out,body.data(),n);
+            else return false;
+            return true;
+        };
+        auto qualify=[](uintptr_t p){return p==image;};
+        auto executable=[](uintptr_t p,size_t n){return p==image+0x65d00 && n==19;};
+        TglNativeVpCompressionBinding binding;
+        assert(binding.resolve(os,image,read,qualify,executable));
+        TglOwnedSurfaceStorage surface;
+        const uint64_t backing=0x1234;std::memcpy(surface.resource.data()+0x20,&backing,8);
+        unsigned calls=0;
+        auto invoke=[&](uintptr_t fn,uintptr_t context,const void* resource,uint32_t mode) noexcept {
+            assert(fn==entry && context==os && resource==surface.resource.data() && mode==2);
+            ++calls;
+        };
+        auto use=[&](auto apply) noexcept {
+            std::array<uint8_t,0xb8> packet{};
+            TglOwnedVpCompressionInput input{0x19,7,1,1,1};
+            TglOwnedVpScale scale;scale.at928=scale.at92c=0.25f;
+            return tglPrepareOwnedVpCompression(packet,input,scale,apply)?31:5;
+        };
+        assert(binding.withOutput(surface,use,invoke)==31 && calls==1);
+        surface.resource.fill(0);
+        assert(binding.withOutput(surface,use,invoke)==5 && calls==1);
+        std::memcpy(surface.resource.data()+0x20,&backing,8);
+        for(size_t i=0;i<body.size();++i) {
+            body[i]^=1;assert(!binding.resolve(os,image,read,qualify,executable));
+            assert(binding.withOutput(surface,use,invoke)==5 && calls==1);
+            body[i]^=1;
+        }
+        ++entry;assert(!binding.resolve(os,image,read,qualify,executable));--entry;
+        assert(!binding.resolve(os,image,read,qualify,[](uintptr_t,size_t){return false;}));
+        assert(!binding.resolve(os,UINTPTR_MAX,read,qualify,executable));
+        assert(binding.resolve(os,image,read,qualify,executable));
+        assert(binding.withOutput(surface,use,invoke)==31 && calls==2);
+    }
+    {
         TglOwnedVpCompressionInput input{0x19,7,1,1,1};
         std::array<uint8_t,0xb8> packet{};
         unsigned calls=0;uint32_t observed=99;

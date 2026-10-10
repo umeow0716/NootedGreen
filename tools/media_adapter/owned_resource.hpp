@@ -5445,6 +5445,45 @@ struct TglOwnedVpCompressionInput {
     uint32_t format=0,executionMode=0,surfaceMode=0;
     uint8_t mmcEnabled=0,surfaceEnabled=0;
 };
+struct TglNativeVpCompressionInvoker {
+    void operator()(uintptr_t entry,uintptr_t os,const void* resource,uint32_t mode) const noexcept {
+        using Fn=int(*)(void*,const void*,uint32_t);
+        (void)reinterpret_cast<Fn>(entry)(reinterpret_cast<void*>(os),resource,mode);
+    }
+};
+// TGL66502/66509 installs65d00 at OS+3a8. Its exact19-byte body saves
+// OS/resource/mode and returns0 without dereferencing any argument. Donor
+// 1e0753..1e0779 ignores the result. Bind the TGL entry, never ICL code.
+class TglNativeVpCompressionBinding {
+    uintptr_t os_=0,entry_=0;
+public:
+    template<class Read,class Qualify,class Executable>
+    bool resolve(uintptr_t os,uintptr_t image,Read read,Qualify qualify,Executable executable) {
+        os_=entry_=0;
+        constexpr std::array<uint8_t,19> anchor{
+            0x55,0x48,0x89,0xe5,0x31,0xc0,0x48,0x89,0x7d,0xf8,
+            0x48,0x89,0x75,0xf0,0x89,0x55,0xec,0x5d,0xc3};
+        uintptr_t entry=0;std::array<uint8_t,19> actual{};
+        if(!os || os>UINTPTR_MAX-0x3b0 || !image || image>UINTPTR_MAX-0x65d13 ||
+           !qualify(image) || !read(os+0x3a8,&entry,8) || entry!=image+0x65d00 ||
+           !executable(entry,anchor.size()) || !read(entry,actual.data(),actual.size()) ||
+           actual!=anchor) return false;
+        os_=os;entry_=entry;return true;
+    }
+    // Enclosing caller pins OS/image/output through this synchronous scope.
+    // Backing presence is not GPU completion or asynchronous lifetime evidence.
+    template<class Surface,class Use,class Invoke=TglNativeVpCompressionInvoker>
+    int withOutput(const Surface& surface,Use use,Invoke invoke=Invoke{}) const noexcept {
+        const auto* bytes=tglOwnedSfcSurfaceBytes(surface);
+        std::array<uint8_t,0x148> backing{};
+        std::memcpy(backing.data(),bytes+0x148,backing.size());
+        if(!os_ || !entry_ || !tglNativeBackingPresent(backing)) return 5;
+        auto apply=[&](uint32_t mode) noexcept {invoke(entry_,os_,bytes+0x148,mode);};
+        static_assert(noexcept(use(apply)) && noexcept(invoke(uintptr_t{},uintptr_t{},
+            static_cast<const void*>(nullptr),uint32_t{})),"compression output lease ABI");
+        return use(apply);
+    }
+};
 // +d0 reads the OUTPUT surface, not the effective input format +99c.
 // Short-circuit reads follow 1e0637..1e069c; leases enclose all reads/use.
 template<class Read>
