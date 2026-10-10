@@ -5871,6 +5871,7 @@ public:
     TglOwnedStmmResource(const TglOwnedStmmResource&)=delete;
     TglOwnedStmmResource& operator=(const TglOwnedStmmResource&)=delete;
     ~TglOwnedStmmResource(){reset();}
+    const void* storageBinding() const noexcept {return resource_.storage().data();}
     int ensure(const TglResourceKey& key,bool reinitializeHistory=false) noexcept {
         if(busy_ || key.format!=0x3d) return 5;
         busy_=true;
@@ -5917,6 +5918,9 @@ public:
     TglOwnedStmmPair(const TglOwnedStmmPair&)=delete;
     TglOwnedStmmPair& operator=(const TglOwnedStmmPair&)=delete;
     ~TglOwnedStmmPair(){reset();}
+    template<class Visit> void visitStorageBindings(Visit visit) const noexcept {
+        for(const auto& owner:owners_) visit(owner.storageBinding());
+    }
     int ensure(const std::array<TglResourceKey,2>& keys,bool reinitialize=false) noexcept {
         if(busy_ || !valid_) return 5;
         busy_=true;ready_=false;
@@ -6028,6 +6032,9 @@ public:
         : TglOwnedResourceGroup(backends,storage,std::make_index_sequence<Count>{}) {}
     TglOwnedResourceGroup(const TglOwnedResourceGroup&) = delete;
     TglOwnedResourceGroup& operator=(const TglOwnedResourceGroup&) = delete;
+    template<class Visit> void visitStorageBindings(Visit visit) const noexcept {
+        for(const auto& resource:resources) visit(static_cast<const void*>(resource.storage().data()));
+    }
     template<class Prepare>
     int ensure(const std::array<Request,Count>& requests, Prepare prepare) noexcept {
         static_assert(noexcept(std::declval<Prepare&>()(size_t{},
@@ -6276,6 +6283,9 @@ public:
     TglStatisticsResource(const TglStatisticsResource&)=delete;
     TglStatisticsResource& operator=(const TglStatisticsResource&)=delete;
     ~TglStatisticsResource() {reset();}
+    template<class Visit> void visitStorageBindings(Visit visit) const noexcept {
+        visit(static_cast<const void*>(owner_.storage().data()));
+    }
     template<class Fill>
     int ensure(uint32_t width, uint32_t height, Fill fill) noexcept {
         static_assert(noexcept(fill(owner_.storage(), uint32_t{})),
@@ -6335,14 +6345,31 @@ template<class Group,class History,class Statistics> class TglOwnedVeboxBackingT
     Group& group_;
     History& history_;
     Statistics& statistics_;
-    bool busy_=false,ready_=false;
+    bool busy_=false,ready_=false,bindingsValid_=false;
+    bool distinctBindings() const noexcept {
+        // Bound graph admission, not a handle registry. Keep identities only
+        // on this stack; do not inspect, copy or adopt descriptor contents.
+        std::array<const void*,32> bindings{};size_t count=0;bool valid=true;
+        const auto visit=[&](const void* identity) noexcept {
+            if(!identity || count==bindings.size()) {valid=false;return;}
+            const uintptr_t begin=reinterpret_cast<uintptr_t>(identity);
+            if(begin>UINTPTR_MAX-0x148) {valid=false;return;}
+            for(size_t i=0;i<count;++i) {
+                const uintptr_t other=reinterpret_cast<uintptr_t>(bindings[i]);
+                if(begin<other+0x148 && other<begin+0x148) valid=false;
+            }
+            bindings[count++]=identity;
+        };
+        group_.visitStorageBindings(visit);history_.visitStorageBindings(visit);
+        statistics_.visitStorageBindings(visit);return valid;
+    }
     void retire() noexcept {
         ready_=false;
         statistics_.reset();history_.reset();group_.reset();
     }
 public:
     TglOwnedVeboxBackingTransaction(Group& group,History& history,Statistics& statistics) noexcept
-        :group_(group),history_(history),statistics_(statistics) {}
+        :group_(group),history_(history),statistics_(statistics),bindingsValid_(distinctBindings()) {}
     TglOwnedVeboxBackingTransaction(const TglOwnedVeboxBackingTransaction&)=delete;
     TglOwnedVeboxBackingTransaction& operator=(const TglOwnedVeboxBackingTransaction&)=delete;
     ~TglOwnedVeboxBackingTransaction(){reset();}
@@ -6350,7 +6377,7 @@ public:
     int ensure(const Requests& requests,Prepare prepare,
         const std::array<TglResourceKey,2>& historyKeys,bool reinitialize,
         uint32_t width,uint32_t height,Fill fill) noexcept {
-        if(busy_) return 5;
+        if(busy_ || !bindingsValid_) return 5;
         busy_=true;ready_=false;
         int status=group_.ensure(requests,prepare);
         if(!status) status=group_.withStorage([&](const auto&) noexcept {
@@ -6379,7 +6406,7 @@ public:
         busy_=false;return result;
     }
     void reset() noexcept {
-        if(busy_) return;
+        if(busy_ || !bindingsValid_) return;
         busy_=true;retire();busy_=false;
     }
 };

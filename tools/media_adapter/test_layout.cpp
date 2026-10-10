@@ -3909,6 +3909,13 @@ static void testResourceBinding() {
                 assert(!api.references && buffer.allocations==2 && fills==2);
                 assert(backends[0].allocations+backends[1].allocations==historyAllocations);
                 extra.fail=false;
+                const auto groupAllocations=extra.allocations;
+                TglStatisticsResource<BufferBackend> aliasedStatistics(buffer,first);
+                TglOwnedVeboxBackingTransaction invalidGraph(group,pair,aliasedStatistics);
+                assert(invalidGraph.ensure(requests,prepare,keys,false,1920,1080,fill)==5);
+                invalidGraph.reset();
+                assert(!api.references && buffer.allocations==2 && extra.allocations==groupAllocations);
+                assert(backends[0].allocations+backends[1].allocations==historyAllocations);
             }
             pair.reset();assert(!api.references);
             std::array<TglResourceStorageReference,2> alias{{{first},{first}}};
