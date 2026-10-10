@@ -292,6 +292,35 @@ public:
     }
 };
 
+// Native destructor12dfc8 uses RenderHal+a30, NOT OS+a30. The borrowed
+// RenderHal and image lease must remain live through the last batch release.
+// Qualification is supplied by the owner that authenticated the parent link.
+struct TglBatchReleaseBinding {
+    uintptr_t renderHal = 0, entry = 0;
+    template<class Read, class Qualify, class Executable>
+    bool resolve(uintptr_t object, uintptr_t image, Read read,
+                 Qualify qualify, Executable executable) {
+        renderHal = entry = 0;
+        constexpr auto max = std::numeric_limits<uintptr_t>::max();
+        uintptr_t callback = 0;
+        if (!object || object > max - 0xa37 || !image || image > max - 0x23e03e ||
+            !qualify(object,image) || !read(object+0xa30,&callback,8) ||
+            callback < image+0x1160 || callback > image + 0x23e03e - 16 ||
+            !executable(callback,16)) return false;
+        renderHal = object; entry = callback; return true;
+    }
+};
+
+// Native MOS_STATUS result is preserved; caller owns batch descriptor/backing
+// and decides teardown policy. This alone neither allocates nor owns a buffer.
+struct TglNativeBatchReleaseInvoker {
+    uint32_t operator()(uintptr_t entry, uintptr_t renderHal, uintptr_t batch) const {
+        using Release = uint32_t (*)(void*,void*);
+        return reinterpret_cast<Release>(entry)(reinterpret_cast<void*>(renderHal),
+                                                reinterpret_cast<void*>(batch));
+    }
+};
+
 // Full VEBOX table, NOT a live child/object replacement. Owned constructor and
 // destructor implementations must exist before this table is installed anywhere.
 // +1e8 belongs to the following execution table's metadata and MUST NOT be copied.

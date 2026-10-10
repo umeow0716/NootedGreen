@@ -7,6 +7,36 @@
 #include "owned_resource.hpp"
 
 static void testTrackedCpuOwner() {
+    {
+        constexpr uintptr_t image = 0x100000, renderHal = 0x900000;
+        uintptr_t callback = image+0x1234;
+        bool identity = true, rx = true, readable = true;
+        auto read = [&](uintptr_t p, void* out, size_t n) {
+            assert(p == renderHal+0xa30 && n == 8);
+            if (!readable) return false;
+            std::memcpy(out,&callback,8); return true;
+        };
+        auto qualify = [&](uintptr_t p, uintptr_t base) {
+            return identity && p == renderHal && base == image;
+        };
+        auto executable = [&](uintptr_t p, size_t n) { return rx && p == callback && n == 16; };
+        TglBatchReleaseBinding b;
+        assert(b.resolve(renderHal,image,read,qualify,executable));
+        assert(b.renderHal == renderHal && b.entry == callback);
+        identity = false; assert(!b.resolve(renderHal,image,read,qualify,executable));
+        assert(!b.entry && !b.renderHal); identity = true;
+        rx = false; assert(!b.resolve(renderHal,image,read,qualify,executable)); rx = true;
+        readable = false; assert(!b.resolve(renderHal,image,read,qualify,executable)); readable = true;
+        callback = image; assert(!b.resolve(renderHal,image,read,qualify,executable));
+        callback = image+0x23e03e; assert(!b.resolve(renderHal,image,read,qualify,executable));
+        assert(!b.resolve(UINTPTR_MAX,image,read,qualify,executable));
+        auto release = +[](void* context, void* batch) -> uint32_t {
+            assert(context == reinterpret_cast<void*>(uintptr_t(0x1234)));
+            assert(batch == reinterpret_cast<void*>(uintptr_t(0x5678)));
+            return 31;
+        };
+        assert(TglNativeBatchReleaseInvoker{}(reinterpret_cast<uintptr_t>(release),0x1234,0x5678) == 31);
+    }
     struct ShellBackend {
         size_t calls = 0, failAt = 8, live = 0;
         uintptr_t allocate(size_t bytes) {
