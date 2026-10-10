@@ -5070,12 +5070,23 @@ inline void tglPrepareOwnedSfcFrameFields(std::array<uint8_t,0xb8>& packet,
 // SFC +60 is narrower than VEBOX's MMC predicate:1dd120 admits only
 // 19/10/e. 1e0610 gates mode7, enabled low bit, surface299 low bit and e4==1.
 // This computes metadata only; OS+3a8 invocation remains a separate ABI boundary.
+inline bool tglOwnedVpCompressionFormat(uint32_t format) noexcept {
+    return format==0x19 || format==0x10 || format==0xe;
+}
+template<class Resolve> struct TglOwnedVpCompressionFormatCallback {
+    static bool supported(void* child,uint32_t format) noexcept {
+        static_assert(noexcept(Resolve{}(child)),"VP compression resolver ABI");
+        auto* context=Resolve{}(child);
+        static_assert(noexcept(context->owns(child)),"VP compression ownership ABI");
+        return context && context->owns(child) && tglOwnedVpCompressionFormat(format);
+    }
+};
 inline bool tglPrepareOwnedSfcCompression(std::array<uint8_t,0xb8>& packet,
     uint32_t format,uint32_t executionMode,uint8_t mmcEnabled,
     uint8_t surfaceEnabled,uint32_t surfaceMode,float scaleY,float scaleX,
     bool& invokeOs) noexcept {
     invokeOs=false;
-    if (!(format==0x19 || format==0x10 || format==0xe) || executionMode!=7 ||
+    if (!tglOwnedVpCompressionFormat(format) || executionMode!=7 ||
         !(mmcEnabled&1) || !(surfaceEnabled&1) || surfaceMode!=1) return true;
     if (!std::isfinite(scaleY) || !std::isfinite(scaleX) || scaleY<0 || scaleX<0) return false;
     const uint32_t mode=scaleY>=0.5f && scaleX>=0.5f ? 1u :

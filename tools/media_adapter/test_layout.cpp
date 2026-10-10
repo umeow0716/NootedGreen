@@ -5439,15 +5439,20 @@ static void testSfcFrameFields() {
             bool owns(void* p) const noexcept {return p==child;}
         } context{&child};
         using Callback=TglOwnedVpAlignmentCallbacks<TglOwnedVpSfcResolve<Context>>;
+        using Compression=TglOwnedVpCompressionFormatCallback<TglOwnedVpSfcResolve<Context>>;
+        using Supports=bool(*)(void*,uint32_t) noexcept;
+        const Supports supports=&Compression::supported;
         using Input=void(*)(void*,uint32_t,uint32_t,uint16_t*,uint16_t*) noexcept;
         using Output=void(*)(void*,uint32_t,uint16_t*,uint16_t*) noexcept;
         const Input input=&Callback::input;const Output output=&Callback::output;
         uint16_t w=77,h=88;
         input(&child,0x19,0,&w,&h);assert(w==77 && h==88);
+        assert(!supports(&child,0x19));
         {
             TglOwnedVpSfcScopedContext<Context> scope(&child,context);
             assert(scope.bound());
             for(uint32_t f=0;f<256;++f) {
+                assert(supports(&child,f)==(f==0x19 || f==0x10 || f==0xe));
                 struct Guarded {uint16_t before=0xa55a,value=77,after=0x5aa5;} width,height;
                 const auto expected=tglOwnedSfcAlignment(f);
                 input(&child,f,UINT32_MAX,&width.value,&height.value);
@@ -5461,14 +5466,17 @@ static void testSfcFrameFields() {
                 output(&child,f,&aliased,&aliased);assert(aliased==expected.width);
             }
             for(void* p:{static_cast<void*>(nullptr),static_cast<void*>(&foreign)}) {
+                assert(!supports(p,0x19));
                 w=77;h=88;input(p,0x19,0,&w,&h);output(p,0x19,&w,&h);
                 assert(w==77 && h==88);
             }
             w=77;h=88;
             input(&child,0x19,0,nullptr,&h);output(&child,0x19,&w,nullptr);
             assert(w==77 && h==88);
+            assert(!supports(&child,UINT32_MAX));
         }
         output(&child,0x19,&w,&h);assert(w==77 && h==88);
+        assert(!supports(&child,0x19));
     }
     {
         uint32_t h=999,w=888;
