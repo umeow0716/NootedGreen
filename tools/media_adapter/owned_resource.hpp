@@ -8,6 +8,10 @@
 #include <cmath>
 #include <cstddef>
 #include <type_traits>
+#include <atomic>
+#if defined(__APPLE__)
+#include <dlfcn.h>
+#endif
 
 // Tahoe TGL Ief 125e90/126210. Tables must come from the authenticated
 // native image (741e50..742350), not from a different GPU generation.
@@ -5603,6 +5607,58 @@ struct TglOwnedStmmInitialization {
     // error. Never pass this case to ensure()'s automatic error unwind.
     bool requiresQuarantine() const noexcept {return lockStatus==0 && unlockStatus!=0;}
 };
+// A failed unlock has no proven retry/release authority. Keep its independent
+// retained IOSurface reference until process teardown, with a hard two-slot
+// budget (the STMM pair). No frame-owned destructor can release these slots.
+// This is CPU-lock quarantine, NOT a GPU retirement/fence implementation.
+template<class Surface> class TglOwnedStmmProcessQuarantine {
+    static_assert(std::is_pointer<Surface>::value || std::is_integral<Surface>::value,
+        "quarantine stores native handles, not destructible smart owners");
+    std::array<Surface,2> slots_{};
+    std::atomic_flag gate_=ATOMIC_FLAG_INIT;
+    TglOwnedStmmProcessQuarantine()=default;
+    ~TglOwnedStmmProcessQuarantine()=default;
+public:
+    TglOwnedStmmProcessQuarantine(const TglOwnedStmmProcessQuarantine&)=delete;
+    TglOwnedStmmProcessQuarantine& operator=(const TglOwnedStmmProcessQuarantine&)=delete;
+    static TglOwnedStmmProcessQuarantine& processLifetime() noexcept {
+        static TglOwnedStmmProcessQuarantine storage;
+        return storage;
+    }
+    class Reservation {
+        TglOwnedStmmProcessQuarantine& owner_;
+        size_t index_=2;
+    public:
+        explicit Reservation(TglOwnedStmmProcessQuarantine& owner) noexcept :owner_(owner) {}
+        Reservation(const Reservation&)=delete;
+        Reservation& operator=(const Reservation&)=delete;
+        ~Reservation(){cancel();}
+        bool reserve(Surface surface) noexcept {
+            if(!surface || index_!=2 || owner_.gate_.test_and_set(std::memory_order_acquire)) return false;
+            for(const auto old:owner_.slots_) if(old==surface) {
+                owner_.gate_.clear(std::memory_order_release);return false;
+            }
+            for(size_t i=0;i<2;++i) if(!owner_.slots_[i]) {index_=i;return true;}
+            owner_.gate_.clear(std::memory_order_release);return false;
+        }
+        void cancel() noexcept {
+            if(index_==2) return;
+            index_=2;owner_.gate_.clear(std::memory_order_release);
+        }
+        // Contract: successful reserve and a nonnull independently retained
+        // handle. Assignment cannot allocate/fail; no native call while locked.
+        void commit(Surface surface) noexcept {
+            if(index_==2) return;
+            owner_.slots_[index_]=surface;
+            cancel();
+        }
+    };
+    bool count(size_t& output) noexcept {
+        if(gate_.test_and_set(std::memory_order_acquire)) return false;
+        size_t value=0;for(const auto surface:slots_) if(surface) ++value;
+        gate_.clear(std::memory_order_release);output=value;return true;
+    }
+};
 // Surface is borrowed from the resource owner. Lock success is necessary but
 // not a GPU fence: owning caller must first exclude all GPU users of STMM.
 // Always unlock exactly once after a successful lock, including bad metadata.
@@ -5630,13 +5686,13 @@ TglOwnedStmmInitialization tglInitializeRetainedOwnedStmmSurface(
     Surface surface,Api& api,Quarantine& quarantine) noexcept {
     static_assert(noexcept(api.retain(surface)) && noexcept(api.release(surface)),
         "surface retention must not throw");
-    static_assert(noexcept(quarantine.reserve()) && noexcept(quarantine.cancel()) &&
+    static_assert(noexcept(quarantine.reserve(surface)) && noexcept(quarantine.cancel()) &&
         noexcept(quarantine.commit(surface)),"durable quarantine transaction must not throw");
-    static_assert(std::is_same<decltype(quarantine.reserve()),bool>::value &&
+    static_assert(std::is_same<decltype(quarantine.reserve(surface)),bool>::value &&
         std::is_same<decltype(quarantine.commit(surface)),void>::value &&
         std::is_same<decltype(quarantine.cancel()),void>::value,
         "reserve reports capacity; commit cannot fail after reservation");
-    if(!surface || !quarantine.reserve()) return {};
+    if(!surface || !quarantine.reserve(surface)) return {};
     if(!api.retain(surface)) {quarantine.cancel();return {};}
     const auto result=tglInitializeOwnedStmmSurface(surface,api);
     if(result.requiresQuarantine()) quarantine.commit(surface);
@@ -5700,6 +5756,27 @@ TglOwnedStmmInitialization tglInitializeRetainedOwnedStmmResource(
     if(type!=1 || format!=0x3d || !handle) return {};
     return tglInitializeRetainedOwnedStmmSurface(api.surface(handle),api,quarantine);
 }
+#if defined(__APPLE__)
+// Call only under the resource owner's synchronous lease, before GPU use.
+// The pool is process-owned, not a member destroyed by frame-error unwind.
+inline TglOwnedStmmInitialization tglInitializeQuarantinedOwnedStmmResource(
+    const std::array<uint8_t,0x148>& resource) noexcept {
+    // Keep the owned image's static budget alive across caller dlclose/reopen.
+    // NOLOAD cannot introduce another library; native dyld policy still decides.
+    // Never start a writable lock if this lifetime guarantee was refused.
+    static const bool pinned=[]() noexcept {
+        Dl_info image{};
+        if(!dladdr(reinterpret_cast<const void*>(&tglInitializeQuarantinedOwnedStmmResource),
+            &image) || !image.dli_fname || !image.dli_fbase) return false;
+        return dlopen(image.dli_fname,RTLD_NOW|RTLD_LOCAL|RTLD_NOLOAD|RTLD_NODELETE)!=nullptr;
+    }();
+    if(!pinned) return {};
+    TglDarwinStmmSurfaceApi api;
+    using Pool=TglOwnedStmmProcessQuarantine<IOSurfaceRef>;
+    Pool::Reservation reservation(Pool::processLifetime());
+    return tglInitializeRetainedOwnedStmmResource(resource,api,reservation);
+}
+#endif
 struct TglResourceStorageReference { std::array<uint8_t,0x148>& storage; };
 
 // Native 52bf0 borrows surface+148 at descriptor+40. Both the surface and its

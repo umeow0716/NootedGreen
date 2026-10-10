@@ -3554,21 +3554,23 @@ static void testResourceBinding() {
         assert(!failed.initialized && badExtent.unlocks==1 && !failed.unlockStatus);
         struct RetainedApi : Api {
             unsigned references=1,retains=0,releases=0;
+            int expected=1;
             bool denyRetain=false;
             bool retain(int handle) noexcept {
-                assert(handle==1);++retains;
+                assert(handle==expected);++retains;
                 if(denyRetain) return false;
                 ++references;return true;
             }
             void release(int handle) noexcept {
-                assert(handle==1 && references);--references;++releases;
+                assert(handle==expected && references);--references;++releases;
             }
         };
         struct Quarantine {
             bool available=true,reserved=false;
             unsigned reservations=0,cancels=0,commits=0;
             int retained=0;
-            bool reserve() noexcept {
+            bool reserve(int handle) noexcept {
+                assert(handle==1);
                 ++reservations;
                 if(!available || reserved || retained) return false;
                 reserved=true;return true;
@@ -3606,6 +3608,47 @@ static void testResourceBinding() {
             assert(!tglInitializeRetainedOwnedStmmSurface(1,api,sink).ready());
             assert(!api.locks && !api.unlocks && api.references==1 && !sink.commits);
             assert(api.retains==unsigned(capacity) && sink.cancels==unsigned(capacity));
+        }
+        using Pool=TglOwnedStmmProcessQuarantine<int>;
+        auto& pool=Pool::processLifetime();
+        size_t count=99;
+        assert(pool.count(count) && !count);
+        {
+            Pool::Reservation first(pool),competing(pool);
+            assert(!first.reserve(0) && first.reserve(10));
+            assert(!first.reserve(10) && !competing.reserve(11));
+            count=99;assert(!pool.count(count) && count==99);
+            // Reservation destruction cancels capacity, not committed handles.
+        }
+        assert(pool.count(count) && !count);
+        {
+            RetainedApi api;api.mapping={mapped.data(),40,8,3,16};
+            Pool::Reservation reservation(pool);
+            assert(tglInitializeRetainedOwnedStmmSurface(1,api,reservation).ready());
+            assert(api.references==1 && api.releases==1);
+        }
+        assert(pool.count(count) && !count);
+        for(int handle : {1,2}) {
+            RetainedApi api;api.expected=handle;
+            api.mapping={mapped.data(),40,8,3,16};api.unlockResult=31;
+            {
+                Pool::Reservation reservation(pool);
+                assert(tglInitializeRetainedOwnedStmmSurface(handle,api,reservation)
+                    .requiresQuarantine());
+            }
+            api.release(handle); // independent retained reference survives unwind
+            assert(api.references==1 && pool.count(count) && count==size_t(handle));
+            const auto locks=api.locks,retains=api.retains;
+            Pool::Reservation duplicate(pool);
+            assert(!tglInitializeRetainedOwnedStmmSurface(handle,api,duplicate).ready());
+            assert(api.locks==locks && api.retains==retains && api.references==1);
+        }
+        {
+            RetainedApi api;api.expected=3;
+            Pool::Reservation full(pool);
+            assert(!tglInitializeRetainedOwnedStmmSurface(3,api,full).ready());
+            assert(!api.locks && !api.retains && api.references==1);
+            assert(pool.count(count) && count==2);
         }
         Api absent{};
         assert(!tglInitializeOwnedStmmSurface(0,absent).ready() && !absent.locks);
