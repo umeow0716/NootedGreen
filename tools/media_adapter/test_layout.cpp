@@ -63,6 +63,36 @@ static void testExecutionShape() {
     ++vt; assert(!tglExecutionShape(object, image, read, qualify)); --vt;
     assert(!tglExecutionShape(UINTPTR_MAX, image, read, qualify));
     assert(!tglExecutionShape(object, UINTPTR_MAX, read, qualify));
+    struct Counts { int creates = 0, initializes = 0, destroys = 0, result = 0; } calls;
+    struct Invoker {
+        Counts* calls;
+        uintptr_t create(uintptr_t entry) noexcept {
+            assert(entry == 0x1000000 + 0x12ebc0); ++calls->creates; return 0x2000;
+        }
+        int initialize(uintptr_t entry, uintptr_t p) noexcept {
+            assert(entry == 0x1000000 + 0x12e420 && p == 0x2000);
+            ++calls->initializes; return calls->result;
+        }
+        void destroy(uintptr_t entry, uintptr_t p) noexcept {
+            assert(entry == 0x1000000 + 0x12e3f0 && p == 0x2000); ++calls->destroys;
+        }
+    } invoke{&calls};
+    TglExecutionBinding binding{image, image + 0x12ebc0, image + 0x12e420, image + 0x12e3f0};
+    TglExecutionBackend backend(binding, read, qualify, invoke);
+    {
+        TglExecutionOwner owner(backend);
+        calls.result = 31;
+        assert(owner.ensure() == 31 && owner.get() == 0 && calls.destroys == 1);
+        calls.result = 0; second = 0;
+        assert(owner.ensure() == 5 && owner.get() == 0 && calls.destroys == 2);
+        second = 0x5000;
+        assert(owner.ensure() == 0 && owner.get() == object);
+        assert(owner.ensure() == 0 && calls.creates == 3);
+    }
+    assert(calls.destroys == 3 && calls.initializes == 3);
+    ++binding.destroy;
+    TglExecutionBackend invalid(binding, read, qualify, invoke);
+    assert(invalid.create() == 0 && calls.creates == 3);
 }
 
 static void testExecutionOwner() {

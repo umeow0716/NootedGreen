@@ -55,6 +55,38 @@ struct TglExecutionBinding {
     }
 };
 
+// Invoker is injected for offline tests. Native invoker must use the exact
+// x86_64 signatures: uintptr_t factory(), int Init(uintptr_t), void delete(uintptr_t).
+// Binding/image lease must remain valid until every owned object is destroyed.
+template<class Read, class Qualify, class Invoker> class TglExecutionBackend {
+    TglExecutionBinding binding;
+    Read read;
+    Qualify qualify;
+    Invoker invoke;
+public:
+    TglExecutionBackend(TglExecutionBinding b, Read r, Qualify q, Invoker i)
+        : binding(b), read(r), qualify(q), invoke(i) { if (!bound()) binding = {}; }
+    bool bound() const {
+        return binding.image && binding.image <= std::numeric_limits<uintptr_t>::max() - 0x757fd0 &&
+            binding.create == binding.image + 0x12ebc0 &&
+            binding.initialize == binding.image + 0x12e420 &&
+            binding.destroy == binding.image + 0x12e3f0 && qualify(binding.image);
+    }
+    uintptr_t create() noexcept {
+        return bound() ? invoke.create(binding.create) : 0;
+    }
+    int initialize(uintptr_t object) noexcept {
+        return bound() && object ? invoke.initialize(binding.initialize, object) : 5;
+    }
+    bool validate(uintptr_t object) noexcept {
+        return bound() && tglExecutionShape(object, binding.image, read, qualify);
+    }
+    void destroy(uintptr_t object) noexcept {
+        // Authenticated lease is a lifetime requirement, not reacquired here.
+        if (object && binding.destroy) invoke.destroy(binding.destroy, object);
+    }
+};
+
 // Integration must bind Create to the constructor factory12ebc0, NOT
 // child factory12e9c0 (which discards Initialize errors). Backend validation
 // must authenticate the image/ABI and nested d38/d40 objects. Their mere
