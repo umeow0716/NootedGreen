@@ -491,7 +491,12 @@ template<class Invoker> class TglOwnedSfcMhw {
     Invoker &invoke;
     TglSfcLifetimeBinding lifetime{};
     uintptr_t borrowedOs=0;
-    bool constructed=false,ready=false;
+    bool constructed=false,ready=false,busy=false;
+    void clear() noexcept {
+        ready=false;
+        if(constructed){constructed=false;invoke.destroy(lifetime.destroy,storage.data());}
+        lifetime={};borrowedOs=0;storage.fill(0);
+    }
 public:
     explicit TglOwnedSfcMhw(Invoker &invoker):invoke(invoker){}
     ~TglOwnedSfcMhw(){reset();}
@@ -500,7 +505,13 @@ public:
     template<class Read>
     bool initialize(const TglSfcLifetimeBinding &binding,const TglSfcMhwBinding &mhw,
                     uintptr_t os,Read read) {
+        if(busy) return false;
         reset();
+        struct Guard {
+            bool& value;
+            explicit Guard(bool& flag) noexcept:value(flag){value=true;}
+            ~Guard(){value=false;}
+        } guard(busy);
         if(!binding.image || binding.image!=mhw.image ||
            binding.construct!=binding.image+0x16bdd0 ||
            binding.destroy!=binding.image+0x16bed0 ||
@@ -517,16 +528,15 @@ public:
             }
             return read(address,dst,size);
         };
-        if(!mhw.validateConstructedObject(object,os,objectRead)){reset();return false;}
+        if(!mhw.validateConstructedObject(object,os,objectRead)){clear();return false;}
         borrowedOs=os;ready=true;return true;
     }
     void *get() noexcept {return ready?storage.data():nullptr;}
     uintptr_t image() const noexcept {return ready?lifetime.image:0;}
     uintptr_t os() const noexcept {return ready?borrowedOs:0;}
     void reset() noexcept {
-        ready=false;
-        if(constructed){constructed=false;invoke.destroy(lifetime.destroy,storage.data());}
-        lifetime={};borrowedOs=0;storage.fill(0);
+        if(busy) return;
+        busy=true;clear();busy=false;
     }
 };
 // TGL16b490/16b290 consume Y 0x200 / UV 0x100 bytes at argument+4.

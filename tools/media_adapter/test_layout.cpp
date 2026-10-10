@@ -7411,6 +7411,8 @@ int main() {
         struct Invoke {
             unsigned constructs=0,destroys=0;
             bool corrupt=false;
+            void (*onConstruct)(void*) noexcept=nullptr;
+            void* constructionContext=nullptr;
             void construct(uintptr_t entry,void *object,uintptr_t borrowed) noexcept {
                 assert(entry==base+0x16bdd0 && borrowed==os);
                 ++constructs;
@@ -7419,6 +7421,7 @@ int main() {
                 put(0,uintptr_t(base+0x759420));put(8,uintptr_t(base+0x3eae0));
                 put(0x10,borrowed);put(0x18,uint16_t(16));put(0x1a,uint16_t(4));
                 bytes[0x40]=corrupt?0:1;
+                if(onConstruct) onConstruct(constructionContext);
             }
             void destroy(uintptr_t entry,void *object) noexcept {
                 assert(entry==base+0x16bed0 && object);
@@ -7827,7 +7830,29 @@ int main() {
         {
             TglOwnedSfcMhw<Invoke> owner(invoke);
             assert(!owner.get());
-            assert(owner.initialize(lifetime,mhw,os,read) && owner.get());
+            unsigned reentries=0;
+            struct ConstructionReentry {
+                TglOwnedSfcMhw<Invoke>& owner;
+                TglSfcLifetimeBinding& lifetime;
+                TglSfcMhwBinding& mhw;
+                decltype(read)& reader;
+                unsigned& count;
+            } construction{owner,lifetime,mhw,read,reentries};
+            invoke.constructionContext=&construction;
+            invoke.onConstruct=[](void* opaque) noexcept {
+                auto& c=*static_cast<ConstructionReentry*>(opaque);
+                ++c.count;c.owner.reset();assert(!c.owner.get());
+                assert(!c.owner.initialize(c.lifetime,c.mhw,os,c.reader));
+            };
+            auto reentrantRead=[&](uintptr_t address,void* out,size_t bytes) {
+                ++reentries;owner.reset();
+                assert(!owner.get());
+                assert(!owner.initialize(lifetime,mhw,os,read));
+                return read(address,out,bytes);
+            };
+            assert(owner.initialize(lifetime,mhw,os,reentrantRead) && owner.get());
+            invoke.onConstruct=nullptr;invoke.constructionContext=nullptr;
+            assert(reentries && invoke.destroys==0);
             assert(invoke.constructs==1 && invoke.destroys==0);
             const std::array<uintptr_t,11> offsets{
                 0x16bed0,0x16bef0,0x1681e0,0x168390,0x16a580,0x16a770,
