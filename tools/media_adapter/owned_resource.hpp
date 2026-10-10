@@ -6549,6 +6549,41 @@ struct TglOwnedVeboxBuilderScratch {
     std::array<uint8_t,0x170> surfaceCommands{};
     std::array<uint8_t,0x20> completion{},setup{};
 };
+// Exact 25G229 IOAccelerator FinishFenceEvent implementation at preferred
+// 7ff80f4634cf. Resolve receives the authenticated export implementation (not
+// its thunk); qualify must enforce the pinned framework UUID. Keep its image
+// and context leases alive through finish. Raw success is NOT a retirement
+// certificate: family reset/skip policy and actual stamps remain independent.
+struct TglNativeVideoFenceEventInvoker {
+    uint32_t operator()(uintptr_t entry,uintptr_t context,uint32_t index) const noexcept {
+        using Finish=uint32_t(*)(void*,uint32_t);
+        return reinterpret_cast<Finish>(entry)(reinterpret_cast<void*>(context),index);
+    }
+};
+class TglNativeVideoFenceEventBinding {
+    uintptr_t entry_=0;
+public:
+    template<class Read,class Qualify,class Executable>
+    bool resolve(uintptr_t implementation,Read read,Qualify qualify,Executable executable) noexcept {
+        entry_=0;
+        constexpr std::array<uint8_t,47> expected{
+            0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x10,0x89,0xf0,0x48,0x8d,0x55,0xf8,
+            0x48,0x89,0x02,0x8b,0x7f,0x18,0xbe,0x05,0x00,0x00,0x00,0xb9,0x01,0x00,
+            0x00,0x00,0x45,0x31,0xc0,0x45,0x31,0xc9,0xe8,0x6c,0x42,0x00,0x00,
+            0x48,0x83,0xc4,0x10,0x5d,0xc3};
+        std::array<uint8_t,47> actual{};
+        if(!implementation || implementation>UINTPTR_MAX-expected.size() ||
+            !qualify(implementation) || !executable(implementation,expected.size()) ||
+            !read(implementation,actual.data(),actual.size()) || actual!=expected) return false;
+        entry_=implementation;return true;
+    }
+    template<class Invoke=TglNativeVideoFenceEventInvoker>
+    uint32_t finish(uintptr_t context,uint32_t index,Invoke invoke=Invoke{}) const noexcept {
+        static_assert(noexcept(invoke(uintptr_t{},uintptr_t{},uint32_t{})),"native fence result ABI");
+        if(!entry_ || !context || context>UINTPTR_MAX-0x1c) return 5;
+        return invoke(entry_,context,index);
+    }
+};
 struct TglVeboxCompletionWriteSnapshot {
     uintptr_t resource=0,tagLocation=0;
     uint32_t offset=0,value=0;

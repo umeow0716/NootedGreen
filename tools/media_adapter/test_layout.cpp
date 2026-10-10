@@ -1456,6 +1456,43 @@ static void testVeboxHardwareBinding() {
         };
         uintptr_t tag=77;
         assert(b.heapTagSource(tagRead,tag) && tag==mapped+16384);
+        {
+            constexpr uintptr_t entry=0x1000,context=0x2000;
+            std::array<uint8_t,47> code{
+                0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x10,0x89,0xf0,0x48,0x8d,0x55,0xf8,
+                0x48,0x89,0x02,0x8b,0x7f,0x18,0xbe,0x05,0x00,0x00,0x00,0xb9,0x01,0x00,
+                0x00,0x00,0x45,0x31,0xc0,0x45,0x31,0xc9,0xe8,0x6c,0x42,0x00,0x00,
+                0x48,0x83,0xc4,0x10,0x5d,0xc3};
+            auto read=[&](uintptr_t p,void* out,size_t n) noexcept {
+                if(p!=entry || n!=code.size()) return false;
+                std::memcpy(out,code.data(),n);return true;
+            };
+            auto qualified=[](uintptr_t p) noexcept {return p==entry;};
+            auto executable=[](uintptr_t p,size_t n) noexcept {return p==entry && n==47;};
+            TglNativeVideoFenceEventBinding binding;
+            unsigned calls=0;
+            for(uint32_t result:{0u,0xe00002d6u,0xffffffffu}) {
+                auto invoke=[&](uintptr_t e,uintptr_t c,uint32_t index) noexcept {
+                    assert(e==entry && c==context && index==UINT32_MAX);++calls;return result;
+                };
+                assert(binding.finish(context,UINT32_MAX,invoke)==5 && !calls);
+                assert(binding.resolve(entry,read,qualified,executable));
+                assert(binding.finish(context,UINT32_MAX,invoke)==result && calls==1);
+                calls=0;
+                assert(binding.finish(0,0,invoke)==5 && !calls);
+                assert(binding.finish(UINTPTR_MAX,0,invoke)==5 && !calls);
+                assert(!binding.resolve(entry,read,[](uintptr_t){return false;},executable));
+                assert(binding.finish(context,0,invoke)==5 && !calls);
+            }
+            for(size_t i=0;i<code.size();++i) {
+                code[i]^=1;
+                assert(!binding.resolve(entry,read,qualified,executable));
+                code[i]^=1;
+            }
+            assert(!binding.resolve(entry,read,qualified,[](uintptr_t,size_t){return false;}));
+            assert(!binding.resolve(entry,[](uintptr_t,void*,size_t){return false;},qualified,executable));
+            assert(!binding.resolve(UINTPTR_MAX,read,qualified,executable));
+        }
         TglOwnedVeboxBuilderScratch scratch;
         for(uintptr_t invalidHeap:{uintptr_t(0),UINTPTR_MAX-uintptr_t(0x2e3),UINTPTR_MAX}) {
             auto invalid=b;invalid.heap=invalidHeap;
