@@ -5269,6 +5269,53 @@ static void testSfcFrameFields() {
 
 int main() {
     {
+        TglOwnedVpSfcCallerStorage storage;
+        storage.bytes.fill(0xa5);
+        const uintptr_t zero=0;std::memcpy(storage.bytes.data()+0x9c0,&zero,8);
+        const auto original=storage.bytes;
+        TglOwnedVpFrameColor frame{{{5,0x15,true},true},{1,0x11,0x21},true};
+        unsigned calls=0;
+        assert(tglWithOwnedVpFrameColor(storage,frame,0x1000,[&](void* child) noexcept {
+            ++calls;assert(child==storage.bytes.data());
+            const auto word=[&](size_t offset) noexcept {
+                uint32_t value=0;std::memcpy(&value,storage.bytes.data()+offset,4);return value;
+            };
+            uintptr_t reference=0;std::memcpy(&reference,storage.bytes.data()+0x9c0,8);
+            assert(word(0x998)==5 && word(0x99c)==0x15 && storage.bytes[0x923]==1);
+            assert(word(0x9a4)==1 && word(0x9a8)==0x11 && storage.bytes[0x9b8]==1);
+            assert(reference==0x1000);
+            assert(tglWithOwnedVpFrameColor(storage,frame,0x2000,
+                [](void*) noexcept {assert(false);return 0;})==5);
+            return 31;
+        })==31);
+        assert(calls==1 && storage.bytes==original);
+        assert(tglWithOwnedVpFrameColor(storage,frame,0,
+            [](void*) noexcept {assert(false);return 0;})==5);
+        const uintptr_t foreign=0x3000;std::memcpy(storage.bytes.data()+0x9c0,&foreign,8);
+        const auto occupied=storage.bytes;
+        assert(tglWithOwnedVpFrameColor(storage,frame,0x1000,
+            [](void*) noexcept {assert(false);return 0;})==5 && storage.bytes==occupied);
+        frame.modes.borrowSourceA8=false;
+        assert(tglWithOwnedVpFrameColor(storage,frame,0,[&](void*) noexcept {
+            uintptr_t reference=0;std::memcpy(&reference,storage.bytes.data()+0x9c0,8);
+            assert(reference==foreign);return 0;
+        })==0 && storage.bytes==occupied);
+        storage.bytes.fill(0);frame.modes.borrowSourceA8=true;
+        const auto empty=storage.bytes;
+        assert(tglWithOwnedVpFrameReferences(storage,0x4000,0x5000,0x6000,true,
+            [&](void*) noexcept {
+                const auto outer=storage.bytes;
+                const int status=tglWithOwnedVpFrameColor(storage,frame,0x1000,
+                    [&](void*) noexcept {
+                        uintptr_t parameters=0;
+                        std::memcpy(&parameters,storage.bytes.data()+0x990,8);
+                        assert(parameters==0x5000 && storage.bytes[0x923]==1);
+                        return 31;
+                    });
+                assert(storage.bytes==outer);return status;
+            })==31 && storage.bytes==empty);
+    }
+    {
         TglOwnedVpModeInput input;input.source00=input.target00=3;
         input.source130=0x19;input.settings12=true;input.settings60Present=true;
         input.settings60130=1;

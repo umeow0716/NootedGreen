@@ -4134,6 +4134,36 @@ inline bool tglPrepareOwnedVpFrameColor(const TglOwnedVpModeInput& in,
     output=candidate;
     return true;
 }
+// Private synchronous VP view, not a native constructor or published vtable.
+// Caller retains the exact source+A8 lease through use(). Target294 remains
+// owned output in frame.metadata: never mutate a borrowed target surface here.
+template<class Use>
+int tglWithOwnedVpFrameColor(TglOwnedVpSfcCallerStorage& storage,
+    const TglOwnedVpFrameColor& frame,uintptr_t sourceA8,Use use) noexcept {
+    static_assert(noexcept(use(static_cast<void*>(nullptr))),"VP color scope ABI");
+    uintptr_t previousReference=0;
+    std::memcpy(&previousReference,storage.bytes.data()+0x9c0,8);
+    if(frame.modes.borrowSourceA8 && (!sourceA8 || previousReference)) return 5;
+    constexpr std::array<size_t,6> offsets{0x998,0x99c,0x923,0x9a4,0x9a8,0x9b8};
+    constexpr std::array<size_t,6> lengths{4,4,1,4,4,1};
+    std::array<std::array<uint8_t,4>,6> saved{};
+    for(size_t i=0;i<offsets.size();++i)
+        std::memcpy(saved[i].data(),storage.bytes.data()+offsets[i],lengths[i]);
+    const uint8_t csc=frame.modes.state.at923,upsampling=frame.at9b8;
+    std::memcpy(storage.bytes.data()+0x998,&frame.modes.state.at998,4);
+    std::memcpy(storage.bytes.data()+0x99c,&frame.modes.state.at99c,4);
+    std::memcpy(storage.bytes.data()+0x923,&csc,1);
+    std::memcpy(storage.bytes.data()+0x9a4,&frame.metadata.at9a4,4);
+    std::memcpy(storage.bytes.data()+0x9a8,&frame.metadata.at9a8,4);
+    std::memcpy(storage.bytes.data()+0x9b8,&upsampling,1);
+    if(frame.modes.borrowSourceA8)
+        std::memcpy(storage.bytes.data()+0x9c0,&sourceA8,8);
+    const int result=use(storage.bytes.data());
+    for(size_t i=0;i<offsets.size();++i)
+        std::memcpy(storage.bytes.data()+offsets[i],saved[i].data(),lengths[i]);
+    std::memcpy(storage.bytes.data()+0x9c0,&previousReference,8);
+    return result;
+}
 // Exact Darwin1fa675..1faa18. Input siting has already been normalized.
 // Only upsample fields are owned here; downsample and other state stay intact.
 inline bool tglPrepareOwnedChromaUpsampling(uint32_t& state, uint32_t pack,
