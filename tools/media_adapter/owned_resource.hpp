@@ -6195,6 +6195,59 @@ int tglWithOwnedVpSfcCpuView(TglOwnedVpSfcCallerStorage& storage,
     std::memcpy(storage.bytes.data()+0x938,&oldState,8);
     return result;
 }
+// Unified CPU graph for the caller-visible VP prefix, state and AVS backing.
+// This is deliberately NOT a callable VP object: no vtable/publication/native
+// invocation is authorized. Borrowed interfaces must outlive this owner;
+// asynchronous GPU retention remains a separate prerequisite for integration.
+template<class StateBackend,class AvsBackend> class TglOwnedVpSfcCpuGraph {
+    TglOwnedVpSfcCallerStorage storage_;
+    TglOwnedSfcStateParameters<StateBackend> state_;
+    TglOwnedSfcAvsParameters<AvsBackend> avs_;
+    bool ready_=false,busy_=false;
+    void clear() noexcept {
+        ready_=false;
+        state_.reset();avs_.reset();storage_.bytes.fill(0);
+    }
+    struct Guard {
+        bool& flag;
+        explicit Guard(bool& value) noexcept:flag(value){flag=true;}
+        ~Guard(){flag=false;}
+    };
+public:
+    TglOwnedVpSfcCpuGraph(StateBackend& state,AvsBackend& avs):state_(state),avs_(avs){}
+    TglOwnedVpSfcCpuGraph(const TglOwnedVpSfcCpuGraph&)=delete;
+    TglOwnedVpSfcCpuGraph& operator=(const TglOwnedVpSfcCpuGraph&)=delete;
+    ~TglOwnedVpSfcCpuGraph(){reset();}
+    template<class Binding,class Read>
+    bool initialize(uintptr_t os,uintptr_t renderHal,uintptr_t mhw,
+        const Binding& binding,Read read,uint32_t channel,uintptr_t performance) {
+        if(busy_) return false;
+        Guard guard(busy_);clear();
+        if(!storage_.initializeBorrowed(os,renderHal,mhw,binding,read) ||
+           !avs_.initialize() || !state_.initializeVpPass(storage_)) {
+            clear();return false;
+        }
+        storage_.setCallerFields(channel,performance);ready_=true;return true;
+    }
+    void reset() noexcept {if(!busy_){Guard guard(busy_);clear();}}
+    template<class Prepare> int prepare(Prepare prepare) noexcept {
+        static_assert(noexcept(prepare(storage_,state_,avs_)),"CPU graph preparation ABI");
+        if(!ready_ || busy_) return 5;
+        Guard guard(busy_);return prepare(storage_,state_,avs_);
+    }
+    template<class Use> int withView(bool avsEnabled,Use use) noexcept {
+        static_assert(noexcept(use(static_cast<void*>(nullptr))),"CPU graph view ABI");
+        if(!ready_ || busy_) return 5;
+        Guard guard(busy_);
+        return state_.withParameters([&](const uint8_t*) noexcept {
+            auto invoke=[&]() noexcept {
+                return tglWithOwnedVpSfcCpuView(storage_,state_,avs_,use,avsEnabled);
+            };
+            if(!avsEnabled) return invoke();
+            return avs_.withParameters([&](const auto&) noexcept {return invoke();});
+        });
+    }
+};
 // Hold backing through coefficient generation, publication and synchronous
 // command construction. Cache commits only after backing publication succeeds;
 // command failure preserves that valid CPU cache, not a GPU-completion claim.

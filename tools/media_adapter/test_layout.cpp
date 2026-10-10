@@ -4908,6 +4908,71 @@ static void testSfcAvsOwnership() {
     assert(real.releases==1);
 }
 
+static void testVpSfcCpuGraph() {
+    struct Backend {
+        alignas(8) std::array<uint8_t,0xc00> bytes{};
+        size_t expected;bool live=false,fail=false;unsigned frees=0;
+        uintptr_t allocate(size_t n) {
+            assert(n==expected && !live);
+            if(fail) return 0;
+            live=true;return reinterpret_cast<uintptr_t>(bytes.data());
+        }
+        void release(uintptr_t p) noexcept {
+            assert(live && p==reinterpret_cast<uintptr_t>(bytes.data()));
+            live=false;++frees;
+        }
+    } state{ {},0xf8 },avs{ {},0xc00 };
+    struct Binding {
+        uintptr_t image=0x100000;
+        bool valid=true;
+        bool validateConstructedObject(uintptr_t mhw,uintptr_t os,
+            bool (*)(uintptr_t,void*,size_t)) const noexcept {
+            return valid && mhw==0x3000 && os==0x1000;
+        }
+    } binding;
+    auto read=+[](uintptr_t,void*,size_t) noexcept {return false;};
+    TglOwnedVpSfcCpuGraph<Backend,Backend> graph(state,avs);
+    auto never=[](void*) noexcept {assert(false);return 0;};
+    assert(graph.withView(true,never)==5);
+    auto initialize=[&] {return graph.initialize(0x1000,0x2000,0x3000,binding,read,7,0x4000);};
+    avs.fail=true;assert(!initialize() && !state.live && !avs.live);
+    avs.fail=false;state.fail=true;
+    assert(!initialize() && !state.live && !avs.live && avs.frees==1);
+    state.fail=false;assert(initialize() && state.live && avs.live);
+    assert(graph.prepare([&](auto& storage,auto&,auto&) noexcept {
+        uintptr_t p=0;uint32_t channel=0;
+        std::memcpy(&channel,storage.bytes.data()+0x918,4);
+        std::memcpy(&p,storage.bytes.data()+0x9c8,8);
+        assert(channel==7 && p==0x4000);
+        graph.reset();assert(graph.withView(true,never)==5);
+        return 31;
+    })==31);
+    for(bool enabled:{false,true}) {
+        assert(graph.withView(enabled,[&](void* child) noexcept {
+            const auto* bytes=static_cast<const uint8_t*>(child);
+            uintptr_t packet=0,coefficients=0;
+            std::memcpy(&packet,bytes+0x938,8);
+            std::memcpy(&coefficients,bytes+0x38,8);
+            assert(packet==reinterpret_cast<uintptr_t>(state.bytes.data()));
+            assert(coefficients==(enabled?reinterpret_cast<uintptr_t>(avs.bytes.data()):0));
+            graph.reset();assert(state.live && avs.live);
+            assert(!initialize() && graph.withView(enabled,never)==5);
+            return -37;
+        })==-37);
+    }
+    assert(graph.prepare([&](auto& storage,auto&,auto&) noexcept {
+        uintptr_t p=1;std::memcpy(&p,storage.bytes.data()+0x938,8);assert(!p);
+        for(size_t i=0x28;i<0x58;++i) assert(!storage.bytes[i]);
+        storage.bytes[0x921]=1;
+        return 0;
+    })==0);
+    assert(graph.withView(false,never)==5);
+    assert(graph.withView(true,[](void*) noexcept {return 89;})==89);
+    binding.valid=false;assert(!initialize() && !state.live && !avs.live);
+    assert(graph.withView(true,never)==5);
+    graph.reset();assert(state.frees==1 && avs.frees==2);
+}
+
 static void testSfcSetupOrder() {
     for (unsigned flags=0;flags<16;++flags) {
         for (unsigned failure=0;failure<5;++failure) {
@@ -8646,6 +8711,7 @@ int main() {
     testSfcOutputChroma();
     testSfcInputChroma();
     testSfcStateParameterOwnership();
+    testVpSfcCpuGraph();
     testSfcSetupOrder();
     testSfcAvsOwnership();
     testSfcLineBufferOwnership();
