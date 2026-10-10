@@ -160,7 +160,7 @@ struct TglVeboxHardwareBinding {
             (state.resource != heap + 0x40 && state.resource != heap + 0x188)) return false;
         uint32_t capacity = 0, type = 0, instanceBytes = 0;
         uintptr_t handle = 0, address = 0;
-        return read(heap, &instanceBytes, 4) && instanceBytes &&
+        return read(heap + 0x2c, &instanceBytes, 4) && instanceBytes &&
             uint64_t(regionOffset) + bytes <= instanceBytes &&
             state.instanceOffset % instanceBytes == 0 &&
             read(state.resource + 0x10, &capacity, 4) &&
@@ -183,7 +183,7 @@ struct TglVeboxHardwareBinding {
         const uintptr_t resourceOffset = kernelResource ? 0x188 : 0x40;
         if (heap > std::numeric_limits<uintptr_t>::max() - 0x2d0) return false;
         uint32_t instanceBytes = 0, current = 0;
-        if (!read(heap, &instanceBytes, 4) || !read(heap + 0x2c, &current, 4)) return false;
+        if (!read(heap + 0x2c, &instanceBytes, 4) || !read(heap, &current, 4)) return false;
         const uint64_t offset = uint64_t(instanceBytes) * current;
         if (offset > UINT32_MAX) return false;
         out = {heap + resourceOffset, uint32_t(offset)};

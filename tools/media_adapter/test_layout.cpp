@@ -32,7 +32,7 @@ static void testVeboxHardwareBinding() {
     assert(resolve());
     uint32_t instanceBytes = 4096, current = 3;
     auto readHeap = [&](uintptr_t p, void* out, size_t n) {
-        const auto value = p == heap ? &instanceBytes : p == heap + 0x2c ? &current : nullptr;
+        const auto value = p == heap ? &current : p == heap + 0x2c ? &instanceBytes : nullptr;
         if (!value || n != 4) return false;
         std::memcpy(out, value, 4); return true;
     };
@@ -41,6 +41,10 @@ static void testVeboxHardwareBinding() {
     assert(state.resource == heap + 0x40 && state.instanceOffset == 12288);
     assert(b.selectStateResource(false, 0, true, readHeap, state));
     assert(state.resource == heap + 0x188 && state.instanceOffset == 12288);
+    current = 0;
+    assert(b.selectStateResource(false, 0, false, readHeap, state));
+    assert(state.resource == heap + 0x40 && state.instanceOffset == 0);
+    current = 3;
     assert(b.selectStateResource(true, 0x9000, true, readHeap, state));
     assert(state.resource == 0x9000 && state.instanceOffset == 0);
     assert(!b.selectStateResource(true, 0, false, readHeap, state));
@@ -59,7 +63,7 @@ static void testVeboxHardwareBinding() {
     uintptr_t handle = 7, address = 0;
     state = {heap + 0x40, 12288};
     auto resourceRead = [&](uintptr_t p, void* out, size_t n) {
-        if (p == heap && n == 4) {
+        if (p == heap + 0x2c && n == 4) {
             std::memcpy(out, &instanceBytes, 4); return true;
         }
         if (n == 4 && (p == state.resource + 0x10 || p == state.resource + 0x14)) {
@@ -77,6 +81,7 @@ static void testVeboxHardwareBinding() {
     assert(!b.heapStateRange(state, 0x800, resourceRead, 0x801));
     assert(!b.heapStateRange(state, 0x800, resourceRead, UINT32_MAX));
     state.instanceOffset = 0; // plenty of total capacity, but not this instance
+    assert(b.heapStateRange(state, 4096, resourceRead));
     assert(!b.heapStateRange(state, 4097, resourceRead));
     state.instanceOffset = 1;
     assert(!b.heapStateRange(state, 1, resourceRead));
