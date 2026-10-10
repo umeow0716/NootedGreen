@@ -1,4 +1,5 @@
 #include "tgl_capability_adapter.hpp"
+#include "owned_resource.hpp"
 #include <dlfcn.h>
 #include <mach/mach.h>
 #include <mach/mach_vm.h>
@@ -22,8 +23,75 @@ bool read(uintptr_t address, void *output, size_t length) {
         && copied == length;
 }
 
+// CPU-only signed TGL CSC invocation: no factory/context/resource/GPU calls.
+int cscReference() {
+    void* library=dlopen(path,RTLD_NOW|RTLD_LOCAL);
+    if(!library) return 1;
+    const int status=[&]() {
+        Dl_info info{};mach_header_64 header{};
+        auto* symbol=dlsym(library,"AVD_CreateAVDAccelerator"); // identify only
+        if(!symbol || !dladdr(symbol,&info) || !info.dli_fbase || !info.dli_fname ||
+            std::strcmp(info.dli_fname,path)) return 2;
+        const uintptr_t base=reinterpret_cast<uintptr_t>(info.dli_fbase);
+        if(!read(base,&header,sizeof(header)) || header.magic!=MH_MAGIC_64 ||
+            header.cputype!=CPU_TYPE_X86_64 || header.ncmds>256 ||
+            header.sizeofcmds>32768 || base>UINTPTR_MAX-sizeof(header)-header.sizeofcmds) return 2;
+        std::vector<uint8_t> commands(header.sizeofcmds);
+        if(!read(base+sizeof(header),commands.data(),commands.size())) return 2;
+        constexpr std::array<uint8_t,16> expected{
+            0x2b,0x20,0x8b,0x8f,0xfe,0xb0,0x34,0xfb,0x89,0x66,0x3b,0x40,0xc2,0x47,0x69,0x26};
+        bool identity=false;unsigned uuids=0;size_t offset=0;
+        for(uint32_t i=0;i<header.ncmds;++i) {
+            load_command command{};
+            if(offset>commands.size() || commands.size()-offset<sizeof(command)) return 2;
+            std::memcpy(&command,commands.data()+offset,sizeof(command));
+            if(command.cmdsize<sizeof(command) || command.cmdsize>commands.size()-offset) return 2;
+            if(command.cmd==LC_UUID) {
+                if(command.cmdsize!=sizeof(uuid_command) || ++uuids!=1) return 2;
+                uuid_command uuid{};std::memcpy(&uuid,commands.data()+offset,sizeof(uuid));
+                identity=!std::memcmp(uuid.uuid,expected.data(),expected.size());
+            }
+            offset+=command.cmdsize;
+        }
+        if(!identity || offset!=commands.size()) return 2;
+        auto qualify=[&](uintptr_t image) noexcept {return image==base && identity;};
+        auto rx=[](uintptr_t address,size_t length) noexcept {
+            if(!length || address>UINTPTR_MAX-length) return false;
+            mach_vm_address_t start=address;mach_vm_size_t extent=0;natural_t depth=0;
+            for(unsigned level=0;level<16;++level) {
+                vm_region_submap_info_data_64_t region{};
+                mach_msg_type_number_t count=VM_REGION_SUBMAP_INFO_COUNT_64;
+                if(mach_vm_region_recurse(mach_task_self(),&start,&extent,&depth,
+                    reinterpret_cast<vm_region_recurse_info_t>(&region),&count)!=KERN_SUCCESS) return false;
+                if(region.is_submap) {++depth;continue;}
+                return start<=address && extent<=UINTPTR_MAX-start && address+length<=start+extent &&
+                    (region.protection&7)==(VM_PROT_READ|VM_PROT_EXECUTE);
+            }
+            return false;
+        };
+        auto boundedRead=[](uintptr_t p,void* out,size_t n) noexcept {return n<=64 && read(p,out,n);};
+        TglOwnedCscProducer<decltype(boundedRead),decltype(qualify),decltype(rx)>
+            producer(base,boundedRead,qualify,rx);
+        TglCscCoefficients plain,swapped;
+        if(!producer(plain,3,3,0) || !producer(swapped,3,3,1)) return 3;
+        // Swap consistency alone could accept matching NaN/Inf payloads.
+        // This CPU reference must also produce usable finite coefficients.
+        for(const auto* coefficients : {&plain,&swapped}) {
+            for(float value:coefficients->matrix) if(!std::isfinite(value)) return 4;
+            for(float value:coefficients->inputOffsets) if(!std::isfinite(value)) return 4;
+            for(float value:coefficients->outputOffsets) if(!std::isfinite(value)) return 4;
+        }
+        for(size_t row=0;row<3;++row) for(size_t column=0;column<3;++column)
+            if(std::memcmp(&swapped.matrix[row*3+column],&plain.matrix[row*3+2-column],4)) return 4;
+        if(plain.inputOffsets!=swapped.inputOffsets || plain.outputOffsets!=swapped.outputOffsets) return 4;
+        std::puts("TGL_CSC_CPU_REFERENCE_OK exact-uuid native-matrix offsets format-swap no-gpu");
+        return 0;
+    }();
+    dlclose(library);return status;
+}
+
 // Read our own loaded, sealed Tahoe framework. Never invoke a GPU/resource API.
-int resourceReference() {
+int resourceReference(bool fenceOnly=false) {
     constexpr const char *framework = "/System/Library/PrivateFrameworks/IOAccelerator.framework/IOAccelerator";
     void *library = dlopen(framework, RTLD_NOW | RTLD_LOCAL);
     if (!library) { std::fprintf(stderr, "reference dlopen: %s\n", dlerror()); return 1; }
@@ -33,9 +101,15 @@ int resourceReference() {
             Reference{"IOAccelResourceCreate", "IOAccelResourceCreate", 0},
             Reference{"IOAccelResourceGetClientShared", "IOAccelResourceGetClientShared", 0},
             Reference{"IOAccelResourceFinishSysMem", "IOAccelResourceFinishSysMem", 0},
+            // Read implementation only: a submit result and the word "Finish"
+            // are not proof of completion or resource-retention semantics.
+            Reference{"IOAccelVideoContextFinishFenceEvent", "IOAccelVideoContextFinishFenceEvent", 0},
+            Reference{"IOAccelVideoContextSubmitDataBuffers", "IOAccelVideoContextSubmitDataBuffers", 0},
             Reference{"client-shared-generation", "IOAccelResourceGetClientShared", 0x15},
             Reference{"client-shared-map-setup", "IOAccelResourceGetClientShared", 0x5b},
             Reference{"client-shared-once-invoke", "IOAccelResourceGetClientShared", 0x5b, true}}) {
+        if(fenceOnly && std::strcmp(reference.name,"IOAccelVideoContextFinishFenceEvent") &&
+            std::strcmp(reference.name,"IOAccelVideoContextSubmitDataBuffers")) continue;
         const char *name = reference.name;
         void *symbol = dlsym(library, reference.symbol);
         Dl_info info{};
@@ -71,16 +145,16 @@ int resourceReference() {
         const uintptr_t base = reinterpret_cast<uintptr_t>(info.dli_fbase);
         uintptr_t address = reinterpret_cast<uintptr_t>(symbol);
         if (!hasUuid || !textAddress || address < base || address - base >= textSize) goto done;
+        constexpr uint8_t expectedUuid[16] = {0x19,0x8a,0x77,0x6a,0xfe,0x03,0x35,0xee,
+            0x8e,0x53,0x7b,0x9f,0x14,0xca,0xab,0xaa};
+        if (std::memcmp(uuid.uuid, expectedUuid, sizeof(expectedUuid))) goto done;
         if (reference.callOffset) {
             // Exact sealed 25G229 image and the two previously captured direct
             // calls only. Read the callees; never execute either mapping helper.
-            constexpr uint8_t expectedUuid[16] = {0x19,0x8a,0x77,0x6a,0xfe,0x03,0x35,0xee,
-                0x8e,0x53,0x7b,0x9f,0x14,0xca,0xab,0xaa};
             const uintptr_t call = address + reference.callOffset;
             uint8_t instruction[5]{};
             int32_t displacement = 0;
-            if (std::memcmp(uuid.uuid, expectedUuid, sizeof(expectedUuid)) ||
-                textSize - (address - base) < reference.callOffset + sizeof(instruction) ||
+            if (textSize - (address - base) < reference.callOffset + sizeof(instruction) ||
                 !read(call, instruction, sizeof(instruction)) || instruction[0] != 0xe8) goto done;
             std::memcpy(&displacement, instruction + 1, sizeof(displacement));
             const int32_t expected = reference.callOffset == 0x15 ? 0x58ed : 0x56d9;
@@ -127,7 +201,8 @@ int resourceReference() {
             std::putchar('\n');
         }
     }
-    std::puts("RESOURCE_REFERENCE_OK no-resource-call no-GPU no-text-write");
+    std::puts(fenceOnly ? "FENCE_REFERENCE_OK no-resource-call no-GPU no-text-write" :
+        "RESOURCE_REFERENCE_OK no-resource-call no-GPU no-text-write");
     status = 0;
 done:
     dlclose(library);
@@ -135,6 +210,8 @@ done:
 }
 }
 int main(int argc, char **argv) {
+    if(argc==2 && !std::strcmp(argv[1],"--csc-reference")) return cscReference();
+    if(argc==2 && !std::strcmp(argv[1],"--fence-reference")) return resourceReference(true);
     if (argc == 2 && !std::strcmp(argv[1], "--resource-reference")) return resourceReference();
     const bool adapterMode = argc == 2 && std::strcmp(argv[1], "--adapter") == 0;
     if (argc != 1 && !adapterMode) return 64;
