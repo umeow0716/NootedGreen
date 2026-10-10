@@ -1756,8 +1756,9 @@ struct TglVeboxHardwareBinding {
     // sharedRelease, NOT databuffer_release(21a10). Both invalidate the ID,
     // updates allocation accounting, removes the shared list entry and drops
     // a reference via28; sharedRelease also drops168 and conditional60 without
-    // waiting. The concrete TGL resource override
-    // and userspace CF finalizer linkage still need proof before joining this
+    // waiting. TGL IGAccelResource vptrd93e0+160 atd9540 has an external
+    // relocation to this SAME sharedRelease, not a TGL override. The userspace
+    // CF finalizer linkage still needs proof before joining this
     // token-delete path to deferred Map ownership for an owned allocation.
     template<class Read,class Qualify,class Executable,class Invoke>
     uint32_t markSubmitted(uintptr_t image,Read read,Qualify qualify,
