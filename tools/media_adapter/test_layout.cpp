@@ -5269,6 +5269,66 @@ static void testSfcFrameFields() {
 
 int main() {
     {
+        TglOwnedVpModeInput input;input.source00=input.target00=3;
+        input.source130=0x19;input.settings12=true;input.settings60Present=true;
+        input.settings60130=1;
+        TglOwnedVpFrameColor frame;
+        assert(tglPrepareOwnedVpFrameColor(input,{},0x31,0,0x15,0,frame));
+        assert(frame.modes.state.at99c==3 && frame.modes.state.at923);
+        assert(frame.metadata.at9a4==1 && frame.metadata.at9a8==0x11);
+        assert(frame.metadata.target294==0x11 && !frame.at9b8);
+        input.settings13=true;
+        assert(tglPrepareOwnedVpFrameColor(input,{},0x31,0,0x15,0,frame));
+        assert(frame.modes.state.at99c==0xd && frame.metadata.at9a4==0x31 && frame.at9b8);
+        // Effective 422 metadata does not overwrite original 420 upsample input.
+        assert(frame.metadata.at9a8==0x11);
+        input.settings12=false;input.settings13=false;
+        assert(tglPrepareOwnedVpFrameColor(input,{},0x31,0,0x15,0,frame));
+        assert(frame.modes.state.at99c==0x19 && frame.metadata.at9a8==0x21 && frame.at9b8);
+        const auto retained=frame;
+        input.settings12=true;input.settings60Present=false;
+        assert(!tglPrepareOwnedVpFrameColor(input,{},0,0,0,0,frame));
+        assert(frame.modes.state.at99c==retained.modes.state.at99c &&
+               frame.metadata.at9a8==retained.metadata.at9a8 && frame.at9b8==retained.at9b8);
+    }
+    {
+        for(uint32_t source:{0u,1u,2u,3u}) for(uint32_t target=0;target<12;++target)
+        for(bool large:{false,true}) for(bool setting:{false,true}) {
+            TglOwnedVpModeInput input;
+            input.source00=source;input.target00=target;input.sourceD8=large?769:768;
+            input.sourceDc=576;input.source130=0x19;input.settings12=setting;
+            input.settings60Present=true;input.settings60130=0x19;input.sourceA8Present=true;
+            TglOwnedVpModeResult result;
+            assert(tglPrepareOwnedVpModes(input,{},result));
+            const uint32_t color=(source==1 || source==2)?
+                ((target>=3 && target<=10)?target:(large?5:3)):(setting?target:source);
+            assert(result.state.at998==color && result.state.at99c==0x19);
+            assert(result.state.at923==(color!=target) && result.borrowSourceA8==(color!=target));
+        }
+        TglOwnedVpModeInput input;input.source00=input.target00=3;input.source130=0x19;
+        TglOwnedVpModeResult result;
+        assert(tglPrepareOwnedVpModes(input,{3,0,true},result));
+        assert(result.state.at923 && !result.borrowSourceA8); // preserve sticky state/reference
+        input.settings12=true;result={{7,8,true},true};
+        assert(!tglPrepareOwnedVpModes(input,{},result));
+        assert(result.state.at998==7 && result.state.at99c==8 && result.borrowSourceA8);
+        input.settings13=true;
+        assert(tglPrepareOwnedVpModes(input,{},result) && result.state.at99c==0xd);
+        input.source130=1;
+        assert(tglPrepareOwnedVpModes(input,{},result) && result.state.at99c==0x15);
+        input.source130=0x19;input.settings13=false;input.settings60Present=true;
+        for(uint32_t format:{1u,0x51u,0x19u}) {
+            input.settings60130=format;
+            assert(tglPrepareOwnedVpModes(input,{},result));
+            assert(result.state.at99c==(format==1?3u:format==0x51?0x50u:format));
+            assert(result.state.at923==(format==1));
+        }
+        input.source00=1;input.target00=0;input.sourceD8=768;input.sourceDc=577;
+        input.sourceA8Present=false;
+        assert(tglPrepareOwnedVpModes(input,{},result));
+        assert(result.state.at998==5 && result.state.at923 && !result.borrowSourceA8);
+    }
+    {
         TglOwnedVpExtentAdmission input;
         input.minWidth=input.minHeight=1;input.maxWidth=input.maxHeight=16384;
         input.frameWidth=input.sourceWidth=input.destinationWidth=input.targetWidth=1024;

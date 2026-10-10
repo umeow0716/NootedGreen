@@ -4049,6 +4049,46 @@ inline bool tglOwnedVpForceColor(uint32_t format99c,bool settings12) noexcept {
         format99c==0x51 || format99c==uint32_t(-8) ||
         format99c==uint32_t(-9) || format99c==0x55 || format99c==0x5a);
 }
+struct TglOwnedVpModeState {
+    uint32_t at998=0,at99c=0;
+    bool at923=false;
+};
+struct TglOwnedVpModeInput {
+    uint32_t source00=0,target00=0,sourceD8=0,sourceDc=0,source130=0;
+    uint32_t settings60130=0;
+    bool settings12=false,settings13=false,settings60Present=false,sourceA8Present=false;
+};
+struct TglOwnedVpModeResult {
+    TglOwnedVpModeState state;
+    // A borrow directive, not a saved pointer: the caller must scope the exact
+    // source+A8 reference separately. False means preserve +9c0, not clear it.
+    bool borrowSourceA8=false;
+};
+// VP +b0=1de510..64f, then +b8=1de650..808. These mutate a candidate
+// inherited state; native +923 is sticky and +9c0 is only conditionally written.
+inline bool tglPrepareOwnedVpModes(const TglOwnedVpModeInput& in,
+    const TglOwnedVpModeState& original,TglOwnedVpModeResult& output) noexcept {
+    TglOwnedVpModeResult candidate{original,false};
+    if(in.source00==1 || in.source00==2) {
+        if(in.target00>=3 && in.target00<=0xa) candidate.state.at998=in.target00;
+        else candidate.state.at998=(in.sourceD8>0x300 || in.sourceDc>0x240)?5:3;
+    } else candidate.state.at998=in.settings12?in.target00:in.source00;
+    if(candidate.state.at998!=in.target00) {
+        candidate.state.at923=true;
+        candidate.borrowSourceA8=in.sourceA8Present;
+    }
+    if(tglOwnedVpForceColor(in.source130,true)) candidate.state.at99c=0x15;
+    else if(in.settings13) candidate.state.at99c=0xd;
+    else if(in.settings12) {
+        if(!in.settings60Present) return false;
+        if(in.settings60130==0x51) candidate.state.at99c=0x50;
+        else if(in.settings60130==1) {
+            candidate.state.at99c=3;candidate.state.at923=true;
+        } else candidate.state.at99c=in.settings60130;
+    } else candidate.state.at99c=in.source130;
+    output=candidate;
+    return true;
+}
 // VP +9b8, 1def21..1df03a ->4a6d0. Unlike +9a8's classifier,
 // sourcePack is from source+130, not VP+99c. Upsampling is only 420->422/444
 // or 422->444; the force-color branch bypasses the predicate entirely.
@@ -4069,6 +4109,28 @@ inline bool tglPrepareOwnedVpColorMetadata(uint32_t format99c,bool settings12,
     if(!tglNormalizeOwnedChromaSitingValue(source294,inputPack,candidate.at9a8) ||
        !tglNormalizeOwnedChromaSitingValue(target294,outputPack,candidate.target294))
         return false;
+    output=candidate;
+    return true;
+}
+struct TglOwnedVpFrameColor {
+    TglOwnedVpModeResult modes;
+    TglOwnedVpColorMetadata metadata;
+    bool at9b8=false;
+};
+// Ordered +28 data chain: +b0 -> +b8 -> color metadata -> +9b8.
+// The effective format classifies +9a8; the original source format classifies
+// upsampling. All output is atomic and remains private CPU data.
+inline bool tglPrepareOwnedVpFrameColor(const TglOwnedVpModeInput& in,
+    const TglOwnedVpModeState& original,uint32_t source120,uint32_t source294,
+    uint32_t target130,uint32_t target294,TglOwnedVpFrameColor& output) noexcept {
+    TglOwnedVpFrameColor candidate;
+    if(!tglPrepareOwnedVpModes(in,original,candidate.modes)) return false;
+    const uint32_t effective=candidate.modes.state.at99c;
+    const uint32_t targetPack=tglOwnedChromaColorPack(target130);
+    if(!tglPrepareOwnedVpColorMetadata(effective,in.settings12,source120,source294,
+        target294,tglOwnedChromaColorPack(effective),targetPack,candidate.metadata) ||
+       !tglPrepareOwnedVpChromaUpsampling(effective,in.settings12,
+        tglOwnedChromaColorPack(in.source130),targetPack,candidate.at9b8)) return false;
     output=candidate;
     return true;
 }
