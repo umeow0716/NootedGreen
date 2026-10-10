@@ -3258,6 +3258,34 @@ public:
         effectiveKey_={};
     }
 };
+// Borrow the source owners behind FFDI/FFDN roles without copying their native
+// descriptors. A role may alias another role; acquire each unique owner once.
+// Null roles stay null, but all nonnull roles must have live backing. This is
+// a synchronous frame scope, NOT a retained previous-frame/GPU fence lease.
+template<class Owner,size_t Count,class Invoke>
+int tglWithOwnedSurfaceRoles(const std::array<Owner*,Count>& owners,Invoke invoke) noexcept {
+    static_assert(Count>0 && Count<=16,"bounded surface role set");
+    using Views=std::array<const TglOwnedSurfaceStorage*,Count>;
+    static_assert(noexcept(invoke(std::declval<const Views&>())),"surface role borrow ABI");
+    Views views{};
+    const auto enter=[&](const auto& self,size_t index) noexcept -> int {
+        if(index==Count) return invoke(static_cast<const Views&>(views));
+        if(!owners[index]) return self(self,index+1);
+        for(size_t previous=0;previous<index;++previous) {
+            if(owners[previous]!=owners[index]) continue;
+            views[index]=views[previous];
+            const int result=self(self,index+1);views[index]=nullptr;return result;
+        }
+        int result=5;
+        const bool leased=owners[index]->withSurface([&](const TglOwnedSurfaceStorage& surface) noexcept {
+            views[index]=&surface;
+            result=self(self,index+1);views[index]=nullptr;
+        });
+        return leased ? result : 5;
+    };
+    return enter(enter,0);
+}
+
 // Exact ICL classifier4a500 and its 90-entry relative jump table4a55c.
 // 3 is the native OTHER color pack, not an invalid format admission result.
 inline uint32_t tglOwnedChromaColorPack(uint32_t format) noexcept {

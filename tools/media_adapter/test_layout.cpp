@@ -3543,6 +3543,18 @@ static void testNativeResourceBoundary() {
                 ++pairCalls;assert(&a==&b && &a==surface);
             }));
             assert(pairCalls==2);
+            const std::array roles{&owner,&destination,&owner,
+                static_cast<decltype(&owner)>(nullptr),&destination};
+            unsigned roleCalls=0;
+            assert(tglWithOwnedSurfaceRoles(roles,[&](const auto& views) noexcept {
+                ++roleCalls;
+                assert(views[0]==surface && views[1]==destinationSurface &&
+                    views[2]==views[0] && !views[3] && views[4]==views[1]);
+                owner.reset();destination.reset();
+                assert(owner.ensure(key)==5 && destination.ensure(key)==5);
+                return 31;
+            })==31 && roleCalls==1);
+            assert(owner.surface() && destination.surface());
             bool caught=false;
             try {
                 owner.withPeerSurface(destination,[](const auto&,const auto&){throw 31;});
@@ -3550,6 +3562,11 @@ static void testNativeResourceBoundary() {
             assert(caught && owner.surface() && destination.surface());
             const auto destinationBefore=*destination.surface();
             fixtureResource.fill(0);
+            const std::array reverseRoles{&destination,&owner,&destination};
+            assert(tglWithOwnedSurfaceRoles(reverseRoles,[&](const auto&) noexcept {
+                ++roleCalls;return 0;
+            })==5 && roleCalls==1);
+            assert(destination.surface()); // earlier unique leases were unwound
             assert(!destination.copyFrameMetadataFrom(owner));
             assert(!destination.withPeerSurface(owner,[](const auto&,const auto&){assert(false);}));
             assert(destination.withSurface([](const auto&){}));
