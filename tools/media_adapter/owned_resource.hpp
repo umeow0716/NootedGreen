@@ -5576,14 +5576,16 @@ template<class Backend,class Platform>
 int tglSendOwnedSfcPreparedCommands(Backend &backend,
     const TglOwnedSfcCommandParameters &parameters,
     const std::array<uint8_t,0x2a8> &shell,uint8_t scaling,uint8_t forceAvs,
-    uint8_t ief,uint8_t csc,Platform &platform) {
+    uint8_t ief,uint8_t csc,Platform &platform,
+    const TglOwnedSfcLockParameters* lockOverride=nullptr) {
     struct Commands {
         Backend &backend;
         const TglOwnedSfcCommandParameters &parameters;
+        const TglOwnedSfcLockParameters &lockParameters;
         const std::array<uint8_t,0x2a8> &shell;
         Platform &platformProducer;
         std::array<uint8_t,0x38> descriptor{};
-        int lock(){return backend.lock(parameters.lock);}
+        int lock(){return backend.lock(lockParameters);}
         int output(){descriptor=tglOwnedSfcOutputDescriptor(shell);return 0;}
         int platform(){return platformProducer(descriptor);}
         int state(){return backend.state(parameters.state,descriptor);}
@@ -5592,12 +5594,29 @@ int tglSendOwnedSfcPreparedCommands(Backend &backend,
         int uvTable(){return backend.uv(parameters.uv);}
         int iefState(){return backend.ief(parameters.ief);}
         int frameStart(){return backend.frameStart();}
-    } commands{backend,parameters,shell,platform,{}};
+    } commands{backend,parameters,lockOverride?*lockOverride:parameters.lock,shell,platform,{}};
     return tglScheduleOwnedSfcCommands(scaling,forceAvs,ief,csc,commands);
+}
+// Exact send-time settings snapshot. Acquire before the first command write;
+// read denial cannot leave a partial command buffer. The owned lock argument
+// stays live through emission without mutating the reusable parameter owner.
+// Output registration/image/resource leases and discard-on-error remain the
+// enclosing sender's obligations, as for the prepared-command entry above.
+template<class Backend,class Platform,class Read>
+int tglSendOwnedSfcLeasedCommands(Backend& backend,
+    const TglOwnedSfcCommandParameters& parameters,
+    const std::array<uint8_t,0x2a8>& shell,uintptr_t settings,
+    uint8_t scaling,uint8_t forceAvs,uint8_t ief,uint8_t csc,
+    Read read,Platform& platform) {
+    TglOwnedSfcLockParameters lock;
+    if(!tglReadOwnedSfcLockParameters(settings,1,read,lock)) return 5;
+    return tglSendOwnedSfcPreparedCommands(backend,parameters,shell,
+        scaling,forceAvs,ief,csc,platform,&lock);
 }
 // ICL 1e0ca0..1e0dcb setup order. Producers operate on owned state;
 // caller binds the closed argument ABI, never an ICL object to TGL code.
-// Flags are native renderData+1/+2/+3 and base+9b8, low bit only.
+// Qualified native flags are VP base+921/+922/+923 and +9b8, low bit
+// only; do not confuse them with the settings pointer passed to +40/+48.
 template<class PlatformState, class StateParameters, class Avs, class Ief>
 int tglSetupOwnedSfc(uint8_t scalingFlag,uint8_t forceAvs,
                     uint8_t iefFlag,uint8_t cscFlag,

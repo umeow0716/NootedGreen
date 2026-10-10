@@ -6672,9 +6672,13 @@ int main() {
             std::array<int,8> order{};
             size_t count=0;int failure=0;
             const TglOwnedSfcCommandParameters *expected=nullptr;
+            bool leasedLock=false;uint8_t lockFlag=0;
             uintptr_t resource=0;
             int stage(int id){order[count++]=id;return failure==id?-id:0;}
-            int lock(const TglOwnedSfcLockParameters& p){assert(&p==&expected->lock && p[0]==1);return stage(1);}
+            int lock(const TglOwnedSfcLockParameters& p){
+                assert((&p==&expected->lock)!=leasedLock && p[0]==1);
+                assert(p[8]==lockFlag);return stage(1);
+            }
             int state(const TglOwnedSfcStateParametersPacket& p,const std::array<uint8_t,0x38>& d){
                 assert(&p==&expected->state && d[0]==0xee);
                 uintptr_t actual=0;std::memcpy(&actual,d.data()+0x28,8);assert(actual==resource);
@@ -6702,6 +6706,22 @@ int main() {
                 if(id==failure){expectedStatus=-id;break;}
             }
             assert(status==expectedStatus && backend.count==count && backend.order==expected);
+        }
+        for(unsigned failRead=0;failRead<=2;++failRead) for(int failCommand:{0,1,4,9}) {
+            unsigned reads=0;
+            auto read=[&](uintptr_t address,void* out,size_t size) noexcept {
+                assert(size==1 && (address==0x1013 || address==0x100b));
+                if(++reads==failRead) return false;
+                *static_cast<uint8_t*>(out)=address==0x100b?1:0;return true;
+            };
+            Backend backend;backend.expected=&parameters;backend.leasedLock=true;backend.lockFlag=1;
+            backend.failure=failCommand;backend.resource=reinterpret_cast<uintptr_t>(shell.data()+0x148);
+            auto platform=[&](auto& descriptor) {descriptor[0]=0xee;return backend.stage(3);};
+            const int result=tglSendOwnedSfcLeasedCommands(backend,parameters,shell,
+                0x1000,0,0,0,0,read,platform);
+            if(failRead) assert(result==5 && !backend.count && reads==failRead);
+            else assert(result==(failCommand?-failCommand:0) && reads==2 && backend.count);
+            assert(parameters.lock==tglPrepareOwnedSfcLockParameters(1,0,0));
         }
     }
     {
