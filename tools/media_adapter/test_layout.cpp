@@ -1015,6 +1015,18 @@ static void testVeboxPrefix() {
         uintptr_t borrowed = 0;
         std::memcpy(&borrowed,descriptor.data()+0x40,8);
         assert(borrowed == reinterpret_cast<uintptr_t>(surface.resource.data()));
+        const uint32_t width = 1920, height = 1080, pitch = 2048, format = 0x19;
+        std::memcpy(surface.prefix.data()+0xd8,&width,4);
+        std::memcpy(surface.prefix.data()+0xdc,&height,4);
+        std::memcpy(surface.prefix.data()+0xe0,&pitch,4);
+        std::memcpy(surface.prefix.data()+0x130,&format,4);
+        const auto converted = tglSurfaceDescriptor(surface);
+        uint32_t convertedWidth = 0, convertedPitch = 0;
+        std::memcpy(&convertedWidth,converted.data()+0xc,4);
+        std::memcpy(&convertedPitch,converted.data()+0x14,4);
+        std::memcpy(&borrowed,converted.data()+0x40,8);
+        assert(convertedWidth == width && convertedPitch == pitch);
+        assert(borrowed == reinterpret_cast<uintptr_t>(surface.resource.data()));
         constexpr uintptr_t image = 0x100000;
         std::array<uint8_t,16> bytes{
             0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x20,

@@ -973,12 +973,11 @@ inline bool tglBufferSizeFits(uint32_t bytes, uint64_t pageSize) noexcept {
 // Exact 52bf0 surface-to-command descriptor conversion. The +40 pointer
 // borrows shell storage, so shell must outlive every consumer of the result.
 // This converts existing state; it does not create backing or validate formats.
-inline std::array<uint8_t, 0x48> tglSurfaceDescriptor(
-        const std::array<uint8_t, 0x2a8> &shell) noexcept {
+inline std::array<uint8_t, 0x48> tglSurfaceDescriptorBytes(const uint8_t* shell) noexcept {
     std::array<uint8_t, 0x48> out{};
     const auto get = [&](size_t offset) {
         uint32_t value = 0;
-        std::memcpy(&value, shell.data() + offset, sizeof(value));
+        std::memcpy(&value, shell + offset, sizeof(value));
         return value;
     };
     const auto put = [&](size_t offset, uint32_t value) {
@@ -987,14 +986,19 @@ inline std::array<uint8_t, 0x48> tglSurfaceDescriptor(
     put(0, 1);
     put(8, get(0x130)); put(0xc, get(0xd8)); put(0x10, get(0xdc));
     put(0x14, get(0xe0)); put(0x18, get(0x13c)); put(0x28, get(0xe4));
-    std::memcpy(out.data() + 0x2c, shell.data() + 0x50, 16);
+    std::memcpy(out.data() + 0x2c, shell + 0x50, 16);
     static_assert(sizeof(uintptr_t) == 8, "pinned x86_64 ABI");
-    const uintptr_t resource = reinterpret_cast<uintptr_t>(shell.data() + 0x148);
+    const uintptr_t resource = reinterpret_cast<uintptr_t>(shell + 0x148);
     std::memcpy(out.data() + 0x40, &resource, sizeof(resource));
     out[4] = shell[0x29a] & 1;
     const uint32_t pitch = get(0xe0);
     if (pitch) put(0x24, (get(0x100) - get(0xf0)) / pitch + get(0x108));
     return out;
+}
+
+inline std::array<uint8_t,0x48> tglSurfaceDescriptor(
+        const std::array<uint8_t,0x2a8>& shell) noexcept {
+    return tglSurfaceDescriptorBytes(shell.data());
 }
 
 // 52d60: five optional borrowed shells, no allocation or ownership transfer.
@@ -1258,6 +1262,10 @@ struct alignas(8) TglOwnedSurfaceStorage {
 static_assert(offsetof(TglOwnedSurfaceStorage,resource) == 0x148);
 static_assert(offsetof(TglOwnedSurfaceStorage,tail) == 0x290);
 static_assert(sizeof(TglOwnedSurfaceStorage) == 0x2a8);
+inline std::array<uint8_t,0x48> tglSurfaceDescriptor(
+        const TglOwnedSurfaceStorage& shell) noexcept {
+    return tglSurfaceDescriptorBytes(reinterpret_cast<const uint8_t*>(&shell));
+}
 struct TglResourceStorageReference { std::array<uint8_t,0x148>& storage; };
 
 // Native 52bf0 borrows surface+148 at descriptor+40. Both the surface and its
