@@ -3145,6 +3145,10 @@ inline TglOwnedFfdnCompressionSelection tglSelectOwnedFfdnCompression(
 // is decimal200 (0xc8), a previous-surface link, NOT resource field0x200.
 // No whole-shell copy or ownership transfer here. CopyPrevious still requires
 // an independently retained previous-source lease and a safe copy destination.
+// ICL1f8159..1f8196 passes child+1b8 as destination and source+c8
+// as previous source to its virtual1c0. The newly allocated ba8[index]
+// contributes only the pitch comparison; it is NOT the copy destination.
+// Neither that virtual slot nor the virtual-base adjustment is a TGL ABI.
 inline TglOwnedFfdnHistoryDecision tglOwnedFfdnHistoryDecision(bool changed,
     bool referenceValid,bool executionFlag13,bool hasPrevious,
     uint32_t allocatedPitch,uint32_t previousPitch) noexcept {
@@ -6441,6 +6445,9 @@ private:
 // coordinator, and GPU users must be excluded before ensure/reset/destruction.
 // In particular, a +58 error cannot leave earlier groups alive waiting for a
 // FreeResources call that TGL's mode0 caller never makes.
+// Donor ICL1f875f explicitly invokes its virtual18 on allocation failure.
+// This owned transaction supplies equivalent unwind responsibility, not an
+// invocation of ICL virtual18 on the unrelated TGL child vtable.
 template<class Group,class History,class Statistics> class TglOwnedVeboxBackingTransaction {
     Group& group_;
     History& history_;
