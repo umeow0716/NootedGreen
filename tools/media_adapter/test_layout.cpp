@@ -2035,7 +2035,18 @@ static void testResourceBinding() {
 // The pinned consumer sites shift 0x20/0x24/0x228/0x428 by eight bytes.
 int main() {
     {
-        for (uint32_t pack=0;pack<=2;++pack) for (uint32_t original : {0u,0x21u,0x42u,0xffffffffu}) {
+        // Pinned jump-table targets: -42/-33/-24/-15 => 420/422/444/other.
+        const int8_t targets[90]={
+            -24,-24,-24,-24,-24,-24,-24,-15,-15,-24,-24,-24,-33,-33,-33,-33,
+            -33,-33,-33,-24,-24,-24,-24,-15,-42,-15,-42,-15,-15,-33,-15,-42,
+            -42,-42,-42,-33,-33,-24,-15,-15,-42,-42,-42,-15,-15,-15,-15,-15,
+            -15,-15,-15,-15,-15,-15,-15,-15,-15,-15,-15,-15,-15,-15,-15,-15,
+            -15,-15,-15,-15,-15,-15,-15,-15,-15,-15,-15,-15,-15,-15,-15,-24,
+            -24,-42,-42,-15,-24,-15,-15,-15,-15,-24};
+        for (uint32_t format=1;format<=90;++format)
+            assert(tglOwnedChromaColorPack(format) == uint32_t((targets[format-1]+42)/9));
+        for (uint32_t format : {0u,91u,0xffffffffu}) assert(tglOwnedChromaColorPack(format)==3);
+        for (uint32_t pack=0;pack<=3;++pack) for (uint32_t original : {0u,0x21u,0x42u,0xffffffffu}) {
             TglOwnedSurfaceStorage surface;
             surface.prefix.fill(0x5a); surface.resource.fill(0xa5); surface.tail.fill(0x37);
             std::memcpy(surface.tail.data()+4,&original,4);
@@ -2050,7 +2061,7 @@ int main() {
             for (size_t i=0;i<surface.tail.size();++i)
                 if (i<4 || i>=8) assert(surface.tail[i] == saved.tail[i]);
             const auto normalized=surface;
-            assert(!tglNormalizeOwnedChromaSiting(surface,3));
+            assert(!tglNormalizeOwnedChromaSiting(surface,4));
             assert(std::memcmp(&surface,&normalized,sizeof(surface)) == 0);
         }
     }

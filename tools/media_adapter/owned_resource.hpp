@@ -1303,12 +1303,26 @@ struct alignas(8) TglOwnedSurfaceStorage {
 static_assert(offsetof(TglOwnedSurfaceStorage,resource) == 0x148);
 static_assert(offsetof(TglOwnedSurfaceStorage,tail) == 0x290);
 static_assert(sizeof(TglOwnedSurfaceStorage) == 0x2a8);
+// Exact ICL classifier4a500 and its 90-entry relative jump table4a55c.
+// 3 is the native OTHER color pack, not an invalid format admission result.
+inline uint32_t tglOwnedChromaColorPack(uint32_t format) noexcept {
+    switch (format) {
+        case 0x19: case 0x1b: case 0x20: case 0x21: case 0x22:
+        case 0x23: case 0x29: case 0x2a: case 0x2b: case 0x52: case 0x53: return 0;
+        case 0xd: case 0xe: case 0xf: case 0x10: case 0x11: case 0x12:
+        case 0x13: case 0x1e: case 0x24: case 0x25: return 1;
+        case 1: case 2: case 3: case 4: case 5: case 6: case 7:
+        case 0xa: case 0xb: case 0xc: case 0x14: case 0x15: case 0x16:
+        case 0x17: case 0x26: case 0x50: case 0x51: case 0x55: case 0x5a: return 2;
+        default: return 3;
+    }
+}
 // Exact Darwin chroma producer1fa603..673. Changes owned surface metadata
 // only, not OS backing or GPU bytes. Color-pack classification is supplied
-// by the qualified format classifier:0=420,1=422,2=444. Unknown rejected.
+// by the qualified format classifier:0=420,1=422,2=444,3=other.
 inline bool tglNormalizeOwnedChromaSiting(TglOwnedSurfaceStorage& surface,
                                         uint32_t colorPack) noexcept {
-    if (colorPack > 2) return false;
+    if (colorPack > 3) return false;
     uint32_t siting=0;
     std::memcpy(&siting,surface.tail.data()+4,4);
     if (!siting) siting=0x21;
