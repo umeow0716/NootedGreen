@@ -7285,6 +7285,32 @@ struct TglOwnedSfcAvsConfiguration {
     float scaleX=0.f,scaleY=0.f,sharpening=0.f,window=0.f;
     bool forceFilter=false,symmetric=false;
 };
+// Qualified VP 1e088e..1e0940. AVS consumes effective +99c, X/Y +928/+92c,
+// and the siting AFTER the state producer's IECP adjustment. Optional +9c8
+// contributes float+0c sharpening and UINT32+8 window (not a float load).
+// No native object/table is published by this leased CPU snapshot.
+template<class Read>
+bool tglReadOwnedVpAvsConfiguration(const TglOwnedVpFramePreparation& frame,
+    const TglOwnedVpChromaStatePrefix& state,uintptr_t performance,Read read,
+    TglOwnedSfcAvsConfiguration& output) noexcept {
+    static_assert(noexcept(read(uintptr_t{},nullptr,size_t{})),"VP AVS leased read ABI");
+    TglOwnedSfcAvsConfiguration candidate;
+    candidate.format=frame.color.modes.state.at99c;
+    candidate.scaleX=frame.regions.scale.at928;candidate.scaleY=frame.regions.scale.at92c;
+    candidate.siting=state.sourceSiting ? state.sourceSiting : 0x11;
+    candidate.forceFilter=frame.color.at9b8;candidate.symmetric=true;
+    if(!std::isfinite(candidate.scaleX) || !std::isfinite(candidate.scaleY) ||
+       candidate.scaleX<=0 || candidate.scaleY<=0) return false;
+    if(performance) {
+        uint32_t window=0;
+        if(performance>UINTPTR_MAX-16 ||
+           !read(performance+12,&candidate.sharpening,4) ||
+           !read(performance+8,&window,4)) return false;
+        candidate.window=float(window);
+        if(!std::isfinite(candidate.sharpening)) return false;
+    }
+    output=candidate;return true;
+}
 // Single CPU construction scope for the three distinct owners. No submit,
 // wait, GPU retirement or output-resource ownership is implied here.
 template<class CpuBackend,class AvsBackend,class ResourceBackend,

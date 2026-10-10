@@ -5271,6 +5271,37 @@ static void testSfcFrameFields() {
 
 int main() {
     {
+        TglOwnedVpFramePreparation frame;
+        frame.color.modes.state.at99c=3;frame.color.at9b8=true;
+        frame.regions.scale.at928=0.5f;frame.regions.scale.at92c=0.75f;
+        auto state=tglPrepareOwnedVpChromaStatePrefix(frame,0x19,true,false);
+        std::array<uint8_t,16> performance{};
+        uint32_t window=7;float sharpening=0.25f;
+        std::memcpy(performance.data()+8,&window,4);
+        std::memcpy(performance.data()+12,&sharpening,4);
+        unsigned reads=0,fail=0;
+        auto read=[&](uintptr_t address,void* out,size_t size) noexcept {
+            if(++reads==fail || address<0x1000 || address+size>0x1010) return false;
+            std::memcpy(out,performance.data()+address-0x1000,size);return true;
+        };
+        TglOwnedSfcAvsConfiguration config;
+        assert(tglReadOwnedVpAvsConfiguration(frame,state,0x1000,read,config));
+        assert(reads==2 && config.format==3 && config.scaleX==0.5f && config.scaleY==0.75f);
+        assert(config.window==7.f && config.sharpening==0.25f);
+        assert(config.siting==0x11 && config.forceFilter && config.symmetric);
+        for(fail=1;fail<=2;++fail) {
+            reads=0;config.format=99;
+            assert(!tglReadOwnedVpAvsConfiguration(frame,state,0x1000,read,config));
+            assert(config.format==99);
+        }
+        reads=0;fail=0;
+        assert(tglReadOwnedVpAvsConfiguration(frame,state,0,read,config));
+        assert(reads==0 && config.window==0 && config.sharpening==0);
+        frame.regions.scale.at928=0;
+        assert(!tglReadOwnedVpAvsConfiguration(frame,state,0x1000,read,config));
+        assert(reads==0 && config.scaleX==0.5f);
+    }
+    {
         TglOwnedVpFramePreparationInput input;
         input.geometry.frameWidth=1920;input.geometry.frameHeight=1080;
         input.geometry.targetWidth=960;input.geometry.targetHeight=810;
