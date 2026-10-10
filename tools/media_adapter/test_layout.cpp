@@ -8436,6 +8436,22 @@ int main() {
             flags={1,0};context=0x40000000;query=base+0x62ee0;
             assert(commands.stateQualified(state,output,[](uintptr_t,void*,size_t){return false;})==5);
             assert(commandInvoke.calls==beforeQualified+1);
+            TglStateQualifiedSfcBackend<decltype(commands),decltype(environmentRead)>
+                qualified(commands,environmentRead);
+            commandInvoke.result=0;
+            const auto firstQualifiedPass=commandInvoke.calls;
+            assert(tglSendOwnedSfcPreparedCommands(qualified,prepared,shell,1,1,1,1,platform)==0);
+            const std::array<uintptr_t,7> qualifiedOrder{
+                0x1681e0,0x168390,0x16a580,0x16b390,0x16b190,0x16a8a0,0x16a770};
+            assert(commandInvoke.calls==firstQualifiedPass+qualifiedOrder.size());
+            for(size_t i=0;i<qualifiedOrder.size();++i)
+                assert(commandInvoke.sequence[firstQualifiedPass+i]==base+qualifiedOrder[i]);
+            context=0;
+            const auto failedQualifiedPass=commandInvoke.calls;
+            assert(tglSendOwnedSfcPreparedCommands(qualified,prepared,shell,1,1,1,1,platform)==5);
+            assert(commandInvoke.calls==failedQualifiedPass+1 &&
+                commandInvoke.last==base+0x1681e0); // partial lock only; discard required
+            context=0x40000000;
             const auto completedCalls=commandInvoke.calls;
             assert(owner.initialize(lifetime,mhw,os,read));
             assert(invoke.constructs==2 && invoke.destroys==1);

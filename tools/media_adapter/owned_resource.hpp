@@ -802,6 +802,25 @@ public:
         return call(0x28,0x16a770,[&](uintptr_t entry,void* object){return invoke.frame(entry,object,command,uint8_t(1));});
     }
 };
+// Scheduler-facing view: state cannot accidentally use the unqualified ABI
+// adapter. Backend and the reader's borrowed OS/image leases must outlive this
+// view. Qualification failure after lock means discard the partial command
+// buffer, NOT submission; this view does not own asynchronous resources.
+template<class Backend,class Read> class TglStateQualifiedSfcBackend {
+    Backend& backend_;
+    Read read_;
+public:
+    TglStateQualifiedSfcBackend(Backend& backend,Read read):backend_(backend),read_(read){}
+    int lock(const TglOwnedSfcLockParameters& p){return backend_.lock(p);}
+    int state(const TglOwnedSfcStateParametersPacket& p,const std::array<uint8_t,0x38>& o){
+        return backend_.stateQualified(p,o,read_);
+    }
+    int avs(const std::array<uint8_t,16>& p){return backend_.avs(p);}
+    int ief(const std::array<uint8_t,64>& p){return backend_.ief(p);}
+    int y(const TglOwnedSfcYParameters& p){return backend_.y(p);}
+    int uv(const TglOwnedSfcUvParameters& p){return backend_.uv(p);}
+    int frameStart(){return backend_.frameStart();}
+};
 template<size_t Dwords>
 TglOwnedSfcTableParameters<Dwords> tglOwnedSfcTableParameters(
     uint8_t pipeMode,const std::array<uint32_t,Dwords> &coefficients) noexcept {
