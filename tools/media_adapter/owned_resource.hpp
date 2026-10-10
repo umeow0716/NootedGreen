@@ -5748,6 +5748,8 @@ struct TglOwnedSfcCommandParameters {
     std::array<uint8_t,64> ief{};
     TglOwnedSfcYParameters y{};
     TglOwnedSfcUvParameters uv{};
+    // CPU owner state, never part of a native command packet. Serialized use.
+    bool filtersInUse=false;
 };
 // VP+98 (1e0bb0) clears64 bytes before optional IEF then CSC. Its IEF
 // producer1dcbd0 writes state+67/+68 and the same parameter offsets as our
@@ -5758,6 +5760,7 @@ struct TglOwnedSfcCommandParameters {
 inline bool tglPrepareOwnedSfcIefParameters(TglOwnedSfcCommandParameters& parameters,
     bool enabled,float strength,uint8_t skinEnable,uint8_t detailEnable,
     const std::array<uint16_t,3>& thresholds,const TglOwnedIefTables& tables) noexcept {
+    if(parameters.filtersInUse) return false;
     for(size_t offset:{size_t(0x28),size_t(0x30),size_t(0x38)}) {
         uintptr_t borrowed=0;std::memcpy(&borrowed,parameters.ief.data()+offset,8);
         if(borrowed) return false;
@@ -5802,8 +5805,11 @@ int tglWithOwnedSfcFilterCommands(TglOwnedSfcCommandParameters& parameters,
     uintptr_t sourceA8,Read read,Produce produce,Generate generate) noexcept {
     if(!tglPrepareOwnedSfcIefParameters(parameters,input.enabled,input.strength,
         input.skinEnable,input.detailEnable,input.thresholds,tables)) return 5;
-    return tglWithOwnedSfcCscCommands(parameters,cache,csc,from,to,sourceA8,
+    parameters.filtersInUse=true;
+    const int result=tglWithOwnedSfcCscCommands(parameters,cache,csc,from,to,sourceA8,
         read,produce,generate);
+    parameters.filtersInUse=false;
+    return result;
 }
 // Compose the prepared CPU arguments with the typed native backend. Resource
 // usage registration must already be complete; shell/owners must remain live.

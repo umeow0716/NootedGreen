@@ -5863,6 +5863,27 @@ int main() {
                 ++generated;assert((ready.ief==std::array<uint8_t,64>{}));return 89;
             })==89);
         assert(generated==4 && produced==2 && reads==0);
+        assert(!parameters.filtersInUse && cache.reset());
+        input.enabled=true;input.strength=1;
+        unsigned nested=0;
+        auto rejectNested=[&]() noexcept {
+            const auto oldIef=parameters.ief;const auto oldState=parameters.state;
+            assert(parameters.filtersInUse);
+            assert(tglWithOwnedSfcFilterCommands(parameters,input,compositionTables,
+                cache,false,3,5,0,read,produce,
+                [&](auto&) noexcept {++nested;return 0;})==5);
+            assert(!tglPrepareOwnedSfcIefParameters(parameters,false,0,0,0,
+                compositionThresholds,compositionTables));
+            assert(parameters.ief==oldIef && parameters.state==oldState);
+        };
+        for(bool csc:{false,true}) {
+            assert(tglWithOwnedSfcFilterCommands(parameters,input,compositionTables,
+                cache,csc,3,5,0,read,
+                [&](TglCscCoefficients& out,uint32_t,uint32_t) noexcept {
+                    rejectNested();out={};return true;
+                },[&](auto&) noexcept {rejectNested();return -31;})==-31);
+            assert(!parameters.filtersInUse && !nested && cache.reset());
+        }
     }
     {
         TglOwnedVpCscCache cache;
