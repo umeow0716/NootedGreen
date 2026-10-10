@@ -1477,6 +1477,118 @@ struct TglOwnedStateInputs {
 struct TglOwnedSfcLineBufferSizes {
     uint32_t avs=0, ief=0;
 };
+// Exact Darwin 1df4a4..1df59e prefix, not later Linux enum values.
+// IECP takes priority over DI; only IECP changes the source siting field.
+// Caller initializes the rest of the b8-byte packet and owns both arguments.
+inline void tglPrepareOwnedSfcInputChroma(std::array<uint8_t,0xb8>& packet,
+                                         uint32_t& sourceSiting,uint32_t inputFormat,
+                                         bool iecp,bool di) noexcept {
+    uint32_t subsampling=0;
+    uint8_t eightTap=0;
+    if (iecp) { subsampling=4; eightTap=1; sourceSiting=0x11; }
+    else if (di) subsampling=2;
+    else if (inputFormat==0x19 || inputFormat==0x53 || inputFormat==0x52)
+        subsampling=1;
+    else {
+        const auto pack=tglOwnedChromaColorPack(inputFormat);
+        if (pack==1) subsampling=2;
+        else if (pack==2) { subsampling=4; eightTap=1; }
+    }
+    packet[0]=1;
+    std::memcpy(packet.data()+8,&subsampling,4);
+    packet[0x6a]=eightTap;
+}
+// Darwin 1df5a6..1df6a5: output siting phases and chroma downsampling mode.
+// Preserve conditional no-write branches; full producer starts with zero packet.
+inline void tglPrepareOwnedSfcOutputChroma(std::array<uint8_t,0xb8>& packet,
+                                          uint32_t outputSiting,uint32_t outputFormat) noexcept {
+    const uint32_t vertical=(outputSiting&0x20)?4:(outputSiting&0x40)?8:0;
+    const uint32_t horizontal=(outputSiting&2)?4:(outputSiting&4)?8:0;
+    std::memcpy(packet.data()+0x1c,&vertical,4);
+    std::memcpy(packet.data()+0x20,&horizontal,4);
+    uint32_t input=0,mode=0;
+    std::memcpy(&input,packet.data()+8,4);
+    const auto pack=tglOwnedChromaColorPack(outputFormat);
+    if (input==4) {
+        if (pack==0) mode=1;
+        else if (pack==1) mode=2;
+        else return;
+    } else if (input==2) {
+        if (pack==0) mode=3;
+        else return;
+    }
+    std::memcpy(packet.data()+0x18,&mode,4);
+}
+// ICL 1e0ca0..1e0dcb setup order. Producers operate on owned state;
+// caller binds the closed argument ABI, never an ICL object to TGL code.
+// Flags are native renderData+1/+2/+3 and base+9b8, low bit only.
+template<class PlatformState, class StateParameters, class Avs, class Ief>
+int tglSetupOwnedSfc(uint8_t scalingFlag,uint8_t forceAvs,
+                    uint8_t iefFlag,uint8_t cscFlag,
+                    PlatformState platformState,StateParameters stateParameters,
+                    Avs avs,Ief ief) noexcept {
+    static_assert(noexcept(platformState()) && noexcept(stateParameters()) &&
+                  noexcept(avs()) && noexcept(ief()),"SFC producers must report status");
+    // +a8 platform hook (ICL 1e0c80 no-op), then +90 state producer
+    // (ICL 1df3e0, zeroes b8 bytes at borrowed renderData+18).
+    int status=platformState();
+    if (status) return status;
+    status=stateParameters();
+    if (status) return status;
+    if ((scalingFlag|forceAvs)&1) {
+        status=avs();
+        if (status) return status;
+    }
+    // Native 1e0dbb calls slot98 but does not assign EAX to saved status.
+    if ((iefFlag|cscFlag)&1) (void)ief();
+    return status;
+}
+// ICL derived InitRenderData 1f7450 -> base 1e1080 then alloc(b8).
+// Backend returns writable, CPU-owned native allocation, never a GPU address.
+// Reinitialization deliberately retires the old state even if allocation fails.
+template<class Backend> class TglOwnedSfcStateParameters {
+    TglTrackedCpuOwner<Backend> owner;
+public:
+    explicit TglOwnedSfcStateParameters(Backend& backend) : owner(backend) {}
+    bool initialize() {
+        owner.reset();
+        if (!owner.allocate(0xb8)) return false;
+        std::memset(reinterpret_cast<void*>(owner.get()),0,0xb8);
+        return true;
+    }
+    void reset() noexcept { owner.reset(); }
+    uint8_t* data() noexcept { return reinterpret_cast<uint8_t*>(owner.get()); }
+    const uint8_t* data() const noexcept { return reinterpret_cast<const uint8_t*>(owner.get()); }
+};
+
+// ICL SFC base+28 uses 4d4d0(400,200): one c00-byte allocation,
+// Y-X/Y-Y/UV-X/UV-Y pointers at 10/18/20/28. Owned header only;
+// never pass it to native 4d600, which would free our tracked allocation.
+template<class Backend> class TglOwnedSfcAvsParameters {
+    TglTrackedCpuOwner<Backend> coefficients;
+    std::array<uint8_t,0x30> header{};
+public:
+    explicit TglOwnedSfcAvsParameters(Backend& backend) : coefficients(backend) {}
+    bool initialize() {
+        if (coefficients.get()) return true;
+        if (!coefficients.allocate(0xc00)) return false;
+        const uintptr_t base=coefficients.get();
+        if (base>std::numeric_limits<uintptr_t>::max()-0xc00) {
+            coefficients.reset(); return false;
+        }
+        header.fill(0);
+        const uint32_t invalidFormat=0xffffffff;
+        std::memcpy(header.data(),&invalidFormat,4);
+        const std::array<uint64_t,4> pointers{{base,base+0x600,base+0x400,base+0xa00}};
+        for (size_t i=0;i<pointers.size();++i)
+            std::memcpy(header.data()+0x10+i*8,&pointers[i],8);
+        return true;
+    }
+    void reset() noexcept { header.fill(0); coefficients.reset(); }
+    const std::array<uint8_t,0x30>* parameters() const noexcept {
+        return coefficients.get() ? &header : nullptr;
+    }
+};
 // Darwin1df245/1df2c1: two linear byte buffers. Scalar dimensions only;
 // do not copy ICL Format_Buffer3e into TGL (native TGL buffer enum3d).
 inline bool tglOwnedSfcLineBufferSizes(TglOwnedSfcLineBufferSizes& output,
@@ -2013,6 +2125,31 @@ public:
     const typename Resource::Storage* storage(size_t i) const noexcept {
         return ready && i < Count && resources[i].state() == Resource::State::Backed
             ? &resources[i].storage() : nullptr;
+    }
+};
+
+// Separate SFC owner: Darwin 1df210 allocates AVS then IEF and unwinds both
+// on either failure. Backend must be configured for native resource type 0.
+// TGL's buffer format is 3d (not ICL's 3e); linear tile is 4.
+template<class Backend> class TglOwnedSfcLineBuffers {
+    TglOwnedResourceGroup<Backend,2> owners;
+public:
+    explicit TglOwnedSfcLineBuffers(Backend& backend) noexcept : owners(backend) {}
+    int ensure(uint32_t inputHeight, uint32_t scaledHeight) noexcept {
+        TglOwnedSfcLineBufferSizes sizes;
+        // Invalid dimensions do not retire an already valid allocation.
+        if (!tglOwnedSfcLineBufferSizes(sizes,inputHeight,scaledHeight)) return 5;
+        using Request=typename TglOwnedResourceGroup<Backend,2>::Request;
+        const std::array<Request,2> requests{{
+            {true,{sizes.avs,1,0x3d,4,0,false}},
+            {true,{sizes.ief,1,0x3d,4,0,false}}
+        }};
+        return owners.ensure(requests,[](size_t,
+            const typename TglOwnedResource<Backend>::Storage&,bool) noexcept { return 0; });
+    }
+    void reset() noexcept { owners.reset(); }
+    const typename TglOwnedResource<Backend>::Storage* storage(size_t i) const noexcept {
+        return owners.storage(i);
     }
 };
 

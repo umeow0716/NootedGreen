@@ -2044,7 +2044,210 @@ static void testResourceBinding() {
 
 // Offline layout hypothesis only: not an ABI-complete or deployable adapter.
 // The pinned consumer sites shift 0x20/0x24/0x228/0x428 by eight bytes.
+static void testSfcLineBufferOwnership() {
+    using Storage=std::array<uint8_t,0x148>;
+    struct Backend {
+        unsigned allocations=0,releases=0,live=0,failAt=0;
+        bool descriptorOnly=false;
+        std::array<uint32_t,16> widths{};
+        int allocate(Storage& s,const TglResourceKey& key) noexcept {
+            assert(key.height==1 && key.format==0x3d && key.tile==4 &&
+                   !key.compressed && key.compressionMode==0);
+            widths.at(allocations)=key.width;
+            ++allocations;
+            const uint64_t handle=allocations;
+            std::memcpy(s.data()+0x20,&handle,8);
+            ++live;
+            return allocations==failAt ? 77 : 0;
+        }
+        void release(Storage& s) noexcept {
+            assert(live); --live; ++releases; s.fill(0);
+        }
+        bool backed(const Storage& s) noexcept {
+            return !descriptorOnly && tglNativeBackingPresent(s);
+        }
+    } backend;
+    {
+        TglOwnedSfcLineBuffers<Backend> buffers(backend);
+        assert(!buffers.storage(0));
+        assert(buffers.ensure(1080,720)==0);
+        assert(backend.widths[0]==43200 && backend.widths[1]==11520);
+        assert(buffers.storage(0) && buffers.storage(1) && !buffers.storage(2));
+        assert(buffers.ensure(1080,720)==0 && backend.allocations==2);
+        assert(buffers.ensure(0,720)==5 && backend.live==2 && buffers.storage(0));
+        assert(buffers.ensure(1080,721)==0 && backend.allocations==3 && backend.live==2);
+        buffers.reset();
+        assert(!backend.live && !buffers.storage(0));
+        backend.failAt=backend.allocations+1;
+        assert(buffers.ensure(1080,720)==77 && !backend.live && !buffers.storage(1));
+        backend.failAt=backend.allocations+2;
+        assert(buffers.ensure(1080,720)==77 && !backend.live && !buffers.storage(0));
+        backend.failAt=0;
+        backend.descriptorOnly=true;
+        assert(buffers.ensure(1080,720)==5 && !backend.live);
+        backend.descriptorOnly=false;
+        assert(buffers.ensure(1080,720)==0 && backend.live==2);
+    }
+    assert(!backend.live && backend.allocations==backend.releases);
+}
+
+static void testSfcAvsOwnership() {
+    struct Backend {
+        unsigned allocations=0,releases=0;
+        uintptr_t result=0x10000;
+        uintptr_t allocate(size_t bytes) {
+            assert(bytes==0xc00); ++allocations; return result;
+        }
+        void release(uintptr_t p) noexcept { assert(p==result); ++releases; }
+    } backend;
+    {
+        TglOwnedSfcAvsParameters<Backend> avs(backend);
+        assert(!avs.parameters());
+        backend.result=0;
+        assert(!avs.initialize() && !avs.parameters() && !backend.releases);
+        backend.result=UINTPTR_MAX-0xbff;
+        assert(!avs.initialize() && !avs.parameters() && backend.releases==1);
+        backend.result=0x10000;
+        assert(avs.initialize());
+        const auto& header=*avs.parameters();
+        uint32_t format=0; std::memcpy(&format,header.data(),4);
+        assert(format==0xffffffff);
+        for (size_t i=4;i<0x10;++i) assert(header[i]==0);
+        const std::array<uintptr_t,4> expected{{0x10000,0x10600,0x10400,0x10a00}};
+        for (size_t i=0;i<4;++i) {
+            uintptr_t p=0; std::memcpy(&p,header.data()+0x10+i*8,8);
+            assert(p==expected[i]);
+        }
+        assert(avs.initialize() && backend.allocations==3);
+        avs.reset(); avs.reset();
+        assert(!avs.parameters() && backend.releases==2);
+        assert(avs.initialize());
+    }
+    assert(backend.allocations==4 && backend.releases==3);
+}
+
+static void testSfcSetupOrder() {
+    for (unsigned flags=0;flags<16;++flags) {
+        for (unsigned failure=0;failure<5;++failure) {
+            std::array<unsigned,4> order{};
+            size_t count=0;
+            auto stage=[&](unsigned id) noexcept {
+                order.at(count++)=id; return failure==id ? 70+int(id) : 0;
+            };
+            const int result=tglSetupOwnedSfc(
+                uint8_t((flags&1)?0xff:0xfe),uint8_t((flags&2)?1:0),
+                uint8_t((flags&4)?1:0),uint8_t((flags&8)?1:0),
+                [&]() noexcept { return stage(1); },
+                [&]() noexcept { return stage(2); },
+                [&]() noexcept { return stage(3); },
+                [&]() noexcept { return stage(4); });
+            assert(order[0]==1);
+            if (failure==1) { assert(result==71 && count==1); continue; }
+            assert(order[1]==2);
+            if (failure==2) { assert(result==72 && count==2); continue; }
+            size_t expected=2;
+            if (flags&3) {
+                assert(order[expected++]==3);
+                if (failure==3) { assert(result==73 && count==expected); continue; }
+            }
+            if (flags&12) assert(order[expected++]==4);
+            assert(result==0 && count==expected);
+        }
+    }
+}
+
+static void testSfcStateParameterOwnership() {
+    struct Backend {
+        std::array<uint8_t,0xb8> bytes{};
+        unsigned live=0,allocations=0,releases=0;
+        bool fail=false;
+        uintptr_t allocate(size_t size) {
+            assert(size==bytes.size() && live==0);
+            ++allocations;
+            if (fail) return 0;
+            bytes.fill(0xa5); live=1;
+            return reinterpret_cast<uintptr_t>(bytes.data());
+        }
+        void release(uintptr_t p) noexcept {
+            assert(live==1 && p==reinterpret_cast<uintptr_t>(bytes.data()));
+            live=0; ++releases;
+        }
+    } backend;
+    {
+        TglOwnedSfcStateParameters<Backend> state(backend);
+        assert(!state.data());
+        assert(state.initialize());
+        for (auto byte:backend.bytes) assert(byte==0);
+        state.data()[0xb7]=0x77;
+        assert(state.initialize() && backend.releases==1 && state.data()[0xb7]==0);
+        backend.fail=true;
+        assert(!state.initialize() && !state.data() && !backend.live && backend.releases==2);
+        backend.fail=false;
+        assert(state.initialize());
+        const auto& readOnly=state;
+        assert(readOnly.data()==backend.bytes.data());
+    }
+    assert(!backend.live && backend.allocations==4 && backend.releases==3);
+}
+
+static void testSfcInputChroma() {
+    // Cover the complete pinned classifier domain plus unknown formats.
+    for (uint32_t format=0;format<=91;++format) {
+        for (unsigned flags=0;flags<4;++flags) {
+            std::array<uint8_t,0xb8> packet; packet.fill(0xa5);
+            uint32_t siting=0x42;
+            tglPrepareOwnedSfcInputChroma(packet,siting,format,flags&1,flags&2);
+            uint32_t actual=0; std::memcpy(&actual,packet.data()+8,4);
+            const auto pack=tglOwnedChromaColorPack(format);
+            const bool special=format==0x19 || format==0x52 || format==0x53;
+            const uint32_t expected=(flags&1)?4:(flags&2)?2:
+                special?1:pack==1?2:pack==2?4:0;
+            assert(actual==expected && packet[0]==1);
+            assert(packet[0x6a]==uint8_t(expected==4));
+            assert(siting==((flags&1)?0x11:0x42));
+            for (size_t i=0;i<packet.size();++i)
+                if (i!=0 && !(i>=8 && i<12) && i!=0x6a) assert(packet[i]==0xa5);
+        }
+    }
+    std::array<uint8_t,0xb8> packet{};
+    uint32_t siting=0;
+    tglPrepareOwnedSfcInputChroma(packet,siting,UINT32_MAX,false,false);
+    assert(packet[8]==0 && packet[0x6a]==0 && siting==0);
+}
+
+static void testSfcOutputChroma() {
+    for (uint32_t input:{0u,1u,2u,4u,UINT32_MAX}) {
+        // Independent pinned examples: NV12/422/444/OTHER.
+        const std::array<uint32_t,4> formats{{0x19,0xd,1,UINT32_MAX}};
+        for (unsigned pack=0;pack<4;++pack) {
+            for (uint32_t siting=0;siting<128;++siting) {
+                std::array<uint8_t,0xb8> packet; packet.fill(0xa5);
+                std::memcpy(packet.data()+8,&input,4);
+                const auto before=packet;
+                tglPrepareOwnedSfcOutputChroma(packet,siting,formats[pack]);
+                uint32_t mode=0,v=0,h=0;
+                std::memcpy(&mode,packet.data()+0x18,4);
+                std::memcpy(&v,packet.data()+0x1c,4);
+                std::memcpy(&h,packet.data()+0x20,4);
+                assert(v==((siting&0x20)?4u:(siting&0x40)?8u:0u));
+                assert(h==((siting&2)?4u:(siting&4)?8u:0u));
+                const uint32_t expected=input==4 ? (pack==0?1:pack==1?2:0xa5a5a5a5u):
+                    input==2 ? (pack==0?3:0xa5a5a5a5u):0;
+                assert(mode==expected);
+                for (size_t i=0;i<packet.size();++i)
+                    if (i<0x18 || i>=0x24) assert(packet[i]==before[i]);
+            }
+        }
+    }
+}
+
 int main() {
+    testSfcOutputChroma();
+    testSfcInputChroma();
+    testSfcStateParameterOwnership();
+    testSfcSetupOrder();
+    testSfcAvsOwnership();
+    testSfcLineBufferOwnership();
     {
         TglOwnedSfcLineBufferSizes sizes;
         assert(tglOwnedSfcLineBufferSizes(sizes,1080,1080));
