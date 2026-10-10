@@ -6240,7 +6240,13 @@ int tglWithOwnedSfcCommandInputs(TglOwnedSfcCommandParameters& parameters,
 // must allocate a buffer; Fill must validate and initialize actual backing.
 template<class Backend> class TglStatisticsResource {
 public:
+    using Storage=typename TglOwnedResource<Backend>::Storage;
     explicit TglStatisticsResource(Backend &backend) noexcept : owner_(backend) {}
+    // Bind the resource bytes in an empty native statistics shell. The shell
+    // outlives this owner and is freed only after reset/native-token release.
+    TglStatisticsResource(Backend& backend,Storage& storage) noexcept :owner_(backend,storage) {}
+    TglStatisticsResource(const TglStatisticsResource&)=delete;
+    TglStatisticsResource& operator=(const TglStatisticsResource&)=delete;
     ~TglStatisticsResource() {reset();}
     template<class Fill>
     int ensure(uint32_t width, uint32_t height, Fill fill) noexcept {

@@ -2995,6 +2995,31 @@ static void testStatisticsLifecycle() {
     }
     assert(backend.allocations == 5 && backend.releases == 5);
     {
+        Backend boundBackend;
+        alignas(8) std::array<uint8_t,0x148> shell{};
+        {
+            TglStatisticsResource<Backend> resource(boundBackend,shell);
+            unsigned initializations=0;
+            auto initialize=[&](const auto& storage,uint32_t bytes) noexcept {
+                assert(&storage==&shell && bytes==520320);++initializations;return 0;
+            };
+            assert(!resource.ensure(1920,1080,initialize));
+            assert(!resource.ensure(1920,1080,initialize) && initializations==1);
+            assert(resource.withResource([&](const auto& storage,const auto& layout) noexcept {
+                assert(&storage==&shell && layout.bytes==520320);
+                resource.reset();assert(boundBackend.releases==0);return 31;
+            })==31);
+        }
+        assert(boundBackend.allocations==1 && boundBackend.releases==1);
+        for(auto byte:shell) assert(!byte);
+        shell[0]=1; // never adopt a foreign native descriptor
+        {
+            TglStatisticsResource<Backend> invalid(boundBackend,shell);
+            assert(invalid.ensure(1920,1080,fill)==5 && !invalid.layout().bytes);
+        }
+        assert(shell[0]==1 && boundBackend.allocations==1 && boundBackend.releases==1);
+    }
+    {
         TglStatisticsResource<Backend> resource(backend);
         unsigned nestedFills=0;
         auto nested=[&](const auto&,uint32_t) noexcept {++nestedFills;return 0;};
