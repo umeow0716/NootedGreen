@@ -2167,6 +2167,10 @@ struct TglVeboxHardwareBinding {
     // the owned retirement admission must exclude that device-state branch
     // and retain exact submission/channel/generation provenance. Do not
     // reproduce this kernel-private predicate against guessed user pointers.
+    // deviceTerminatedUnlocked319f4..31a3c independently copies each channel's
+    // submitted stamp at+104+24*i into its hardware stamp pointer, then sfence.
+    // Therefore even stamp equality after termination cannot distinguish real
+    // execution from teardown; a live device/generation gate is indispensable.
     // Prove the owned allocation reaches this mapping path before relying on
     // it; external CPU buffers and failed STMM unlock remain separate cases.
     // Release-only CPU capture198a776a... at46268e is a null-guarded import
