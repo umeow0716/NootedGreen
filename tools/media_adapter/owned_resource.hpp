@@ -2488,6 +2488,13 @@ inline bool tglNativeBackingPresent(const std::array<uint8_t, 0x148> &s) noexcep
 //2bc07; branch2bca1 passes args58/40/48/50 to newResourceWithClientBuffer
 //21ab6 at2bcd8. This closes native type0 allocation -> client SysMemory80.
 // Do not apply this proof to native type1 IOSurface planes or borrowed FFDI.
+// Type1 allocator63250 instead creates an IOSurface (stub23e152 at6342b),
+// writes descriptor0=0x82 at634b2 and creates a token per plane at6356f.
+// Family2b882 resolves descriptor40 via IOSurfaceRoot::lookupSurface(task),
+// validates descriptor44 against getPlaneCount, then2be46 dispatches
+// newResourceWithIOSurface229c2(surface,plane44,options48). These are real
+// IOSurface-backed tokens, not type0 client VM ranges. Their retained surface
+// and plane backing lifecycle must be joined independently before history reuse.
 template<class Writable, class Fill>
 int tglFillBuffer(const std::array<uint8_t, 0x148> &resource, uint32_t bytes,
                   uint8_t value, Writable writable, Fill fill) noexcept {
