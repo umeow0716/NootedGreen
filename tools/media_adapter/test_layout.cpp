@@ -88,6 +88,10 @@ static void testNativeCscBinding() {
     rx = false; assert(!query() && needed && calls == 2); rx = true;
     identity = false; assert(!query() && needed && calls == 2); identity = true;
     binding.entry++; assert(!query() && needed && calls == 2); binding.entry--;
+    assert(!tglQueryNativeTwoPassCsc(binding,child,UINTPTR_MAX-0x132,0xa000,
+        vt,0x4000,0x5000,needed,read,qualify,executable,invoke) && needed && calls == 2);
+    assert(!tglQueryNativeTwoPassCsc(binding,child,0x9000,UINTPTR_MAX-2,
+        vt,0x4000,0x5000,needed,read,qualify,executable,invoke) && needed && calls == 2);
     assert(!binding.resolve(0,read,qualify,executable) && !binding.image && !binding.entry);
 }
 

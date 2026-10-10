@@ -267,6 +267,7 @@ bool tglQueryNativeTwoPassCsc(const TglTwoPassCscBinding& binding,
     needed = true; // failed query must not admit direct output
     constexpr auto max = std::numeric_limits<uintptr_t>::max();
     if (!child || child > max - 0x8f || !source || !target ||
+        source > max - 0x133 || target > max - 3 ||
         !trustedVtable || trustedVtable > max - 0x1bf || !genericHook || !cscSupportHook ||
         genericHook == cscSupportHook || !binding.image ||
         binding.image > max - 0x757fd0 || binding.entry != binding.image + 0x12cfc0 ||
