@@ -3222,11 +3222,17 @@ template<class Surface>
 inline std::array<uint8_t,0x38> tglOwnedSfcOutputDescriptor(const Surface& surface) noexcept {
     return tglOwnedSfcOutputDescriptorBytes(tglOwnedSfcSurfaceBytes(surface));
 }
-// Format19 selects TGL16872e: output+24 is truncated to16 bits. Validate
+// TGL168744/1687a5/1687dd/168810/168848/16887b/1688b3 load output+24
+// into the same16-bit temporary for these seven planar format branches.
+inline bool tglNativeSfcUsesPlaneOffset(uint32_t format) noexcept {
+    return format==0x19 || format==0x53 || format==0x52 || format==0x13 ||
+           format==0x12 || format==0x17 || format==0x14;
+}
+// Planar output+24 is truncated to16 bits. Validate
 // before any command write, not after the descriptor's uint32 arithmetic has
 // already wrapped. Other format branches retain their separate qualification.
-inline bool tglOwnedSfcNv12OutputFits(uint32_t format,const uint8_t* shell) noexcept {
-    if(format!=0x19) return true;
+inline bool tglOwnedSfcPlanarOutputFits(uint32_t format,const uint8_t* shell) noexcept {
+    if(!tglNativeSfcUsesPlaneOffset(format)) return true;
     const auto get=[&](size_t offset) noexcept {
         uint32_t value=0;std::memcpy(&value,shell+offset,4);return value;
     };
@@ -6052,7 +6058,7 @@ int tglSendOwnedSfcPreparedCommands(Backend &backend,
     const TglOwnedSfcLockParameters* lockOverride=nullptr) {
     uint32_t outputFormat=0;
     std::memcpy(&outputFormat,parameters.state.data()+0x2c,4);
-    if(!tglOwnedSfcNv12OutputFits(outputFormat,tglOwnedSfcSurfaceBytes(shell))) return 5;
+    if(!tglOwnedSfcPlanarOutputFits(outputFormat,tglOwnedSfcSurfaceBytes(shell))) return 5;
     struct Commands {
         Backend &backend;
         const TglOwnedSfcCommandParameters &parameters;
@@ -6065,14 +6071,15 @@ int tglSendOwnedSfcPreparedCommands(Backend &backend,
         int platform(){return platformProducer(descriptor);}
         int state(){
             // Platform owns a mutable descriptor. Recheck the exact values
-            // consumed by the NV12 branch after that callback, not merely
+            // consumed by the planar branches after that callback, not merely
             // the original shell before command emission. Failure requires
             // discarding the already-started command buffer as documented.
             uint32_t format=0,descriptorFormat=0,plane=0;
             std::memcpy(&format,parameters.state.data()+0x2c,4);
             std::memcpy(&descriptorFormat,descriptor.data()+4,4);
             std::memcpy(&plane,descriptor.data()+0x24,4);
-            if(format==0x19 && (descriptorFormat!=format || plane>0xffff)) return 5;
+            if(tglNativeSfcUsesPlaneOffset(format) &&
+               (descriptorFormat!=format || plane>0xffff)) return 5;
             return backend.state(parameters.state,descriptor);
         }
         int avsState(){return backend.avs(parameters.avs);}

@@ -7666,7 +7666,7 @@ int main() {
                 const uintptr_t mockBacking=1;
                 std::memcpy(output.data()+0x168,&mockBacking,8);
                 TglOwnedSfcCommandParameters nativeParameters;assert(nativeParameters.snapshotFrom(parameters));
-                const uint32_t supportedFormat=0x52;
+                const uint32_t supportedFormat=0x50;
                 std::memcpy(nativeParameters.state.data()+0x2c,&supportedFormat,4);
                 Backend backend;backend.expected=&nativeParameters;backend.leasedLock=true;backend.lockFlag=1;
                 backend.failure=failure;backend.resource=reinterpret_cast<uintptr_t>(output.data()+0x148);
@@ -7689,7 +7689,7 @@ int main() {
             std::memcpy(typedOutput.resource.data()+0x20,&mockBacking,8);
             const auto originalResource=typedOutput.resource;
             TglOwnedSfcCommandParameters nativeParameters;assert(nativeParameters.snapshotFrom(parameters));
-            const uint32_t supportedFormat=0x52;
+            const uint32_t supportedFormat=0x50;
             std::memcpy(nativeParameters.state.data()+0x2c,&supportedFormat,4);
             Backend backend;backend.expected=&nativeParameters;backend.leasedLock=true;backend.lockFlag=1;
             backend.resource=reinterpret_cast<uintptr_t>(typedOutput.resource.data());
@@ -7755,20 +7755,30 @@ int main() {
         descriptor=tglOwnedSfcOutputDescriptor(shell);assert(get(0x24)==1);
         put(0x130,0x19);put(0xe0,2048);put(0xf0,0);put(0x100,2048*1080);
         put(0x108,0);
-        assert(tglOwnedSfcNv12OutputFits(0x19,shell.data()));
+        assert(tglOwnedSfcPlanarOutputFits(0x19,shell.data()));
         put(0x108,0xffff-1080);
-        assert(tglOwnedSfcNv12OutputFits(0x19,shell.data()));
+        assert(tglOwnedSfcPlanarOutputFits(0x19,shell.data()));
         put(0x108,0x10000-1080);
-        assert(!tglOwnedSfcNv12OutputFits(0x19,shell.data()));
+        assert(!tglOwnedSfcPlanarOutputFits(0x19,shell.data()));
         put(0x108,UINT32_MAX); // wrapped descriptor must not pass qualification
-        assert(!tglOwnedSfcNv12OutputFits(0x19,shell.data()));
+        assert(!tglOwnedSfcPlanarOutputFits(0x19,shell.data()));
         put(0x108,0);put(0xf0,2048*1080+1);
-        assert(!tglOwnedSfcNv12OutputFits(0x19,shell.data()));
+        assert(!tglOwnedSfcPlanarOutputFits(0x19,shell.data()));
         put(0xf0,0);put(0xe0,0);
-        assert(!tglOwnedSfcNv12OutputFits(0x19,shell.data()));
+        assert(!tglOwnedSfcPlanarOutputFits(0x19,shell.data()));
         put(0xe0,2048);put(0x130,0x52);
-        assert(!tglOwnedSfcNv12OutputFits(0x19,shell.data()));
-        assert(tglOwnedSfcNv12OutputFits(0x52,shell.data()));
+        assert(!tglOwnedSfcPlanarOutputFits(0x19,shell.data()));
+        assert(tglOwnedSfcPlanarOutputFits(0x50,shell.data()));
+        put(0xf0,0);put(0x100,0);
+        for(uint32_t format:{0x19u,0x53u,0x52u,0x13u,0x12u,0x17u,0x14u}) {
+            put(0x130,format);put(0x108,0xffff);
+            assert(tglNativeSfcUsesPlaneOffset(format));
+            assert(tglOwnedSfcPlanarOutputFits(format,shell.data()));
+            put(0x108,0x10000);
+            assert(!tglOwnedSfcPlanarOutputFits(format,shell.data()));
+        }
+        for(uint32_t format:{1u,2u,3u,4u,7u,0xdu,0x10u,0x15u,0x50u,0x51u})
+            assert(!tglNativeSfcUsesPlaneOffset(format));
     }
     {
         constexpr uintptr_t base=0x10000000,os=0x20000000;
