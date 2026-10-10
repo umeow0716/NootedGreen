@@ -1303,6 +1303,20 @@ struct alignas(8) TglOwnedSurfaceStorage {
 static_assert(offsetof(TglOwnedSurfaceStorage,resource) == 0x148);
 static_assert(offsetof(TglOwnedSurfaceStorage,tail) == 0x290);
 static_assert(sizeof(TglOwnedSurfaceStorage) == 0x2a8);
+// Exact Darwin chroma producer1fa603..673. Changes owned surface metadata
+// only, not OS backing or GPU bytes. Color-pack classification is supplied
+// by the qualified format classifier:0=420,1=422,2=444. Unknown rejected.
+inline bool tglNormalizeOwnedChromaSiting(TglOwnedSurfaceStorage& surface,
+                                        uint32_t colorPack) noexcept {
+    if (colorPack > 2) return false;
+    uint32_t siting=0;
+    std::memcpy(&siting,surface.tail.data()+4,4);
+    if (!siting) siting=0x21;
+    if (colorPack == 1) siting=(siting&7)|0x10;
+    else if (colorPack == 2) siting=0x11;
+    std::memcpy(surface.tail.data()+4,&siting,4);
+    return true;
+}
 // Exact Darwin caller1f9111/26 packs compressed bit0 and mode DWORD into
 // an eight-byte parameter. TGL179530 consumes mode+4 and calls native OS1a0;
 // do not replace the whole callback with a superficially equivalent bit OR.

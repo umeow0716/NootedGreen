@@ -2035,6 +2035,26 @@ static void testResourceBinding() {
 // The pinned consumer sites shift 0x20/0x24/0x228/0x428 by eight bytes.
 int main() {
     {
+        for (uint32_t pack=0;pack<=2;++pack) for (uint32_t original : {0u,0x21u,0x42u,0xffffffffu}) {
+            TglOwnedSurfaceStorage surface;
+            surface.prefix.fill(0x5a); surface.resource.fill(0xa5); surface.tail.fill(0x37);
+            std::memcpy(surface.tail.data()+4,&original,4);
+            const auto saved=surface;
+            assert(tglNormalizeOwnedChromaSiting(surface,pack));
+            uint32_t actual=0;
+            std::memcpy(&actual,surface.tail.data()+4,4);
+            uint32_t expected=original ? original : 0x21;
+            if (pack == 1) expected=(expected&7)|0x10;
+            if (pack == 2) expected=0x11;
+            assert(actual == expected && surface.prefix == saved.prefix && surface.resource == saved.resource);
+            for (size_t i=0;i<surface.tail.size();++i)
+                if (i<4 || i>=8) assert(surface.tail[i] == saved.tail[i]);
+            const auto normalized=surface;
+            assert(!tglNormalizeOwnedChromaSiting(surface,3));
+            assert(std::memcmp(&surface,&normalized,sizeof(surface)) == 0);
+        }
+    }
+    {
         TglOwnedSurfaceStorage target, other;
         const std::array<uint32_t,12> supported{0x19,0xd,0xe,0x10,0xf,0x11,0x15,0x14,3,5,0x53,0x13};
         for (uint32_t format=0;format<0x60;++format) {
