@@ -1708,6 +1708,21 @@ struct TglVeboxHardwareBinding {
     // rechecked before/inside its wait loop and the bypass also returns zero.
     // IOAccelContext2::clientClose(7954) likewise returns zero after invoking
     // close/finalize dispatch; that return alone is not a drain certificate.
+    // KDK context_finish(ad8a) waits on context5d0 through the SAME178 entry,
+    // maps only -1 to timeout and otherwise returns0: no stronger reset proof.
+    // contextStop(7eea..8064) cancels a fence callback, releases context-side
+    // references/tables, then calls freeAllDataBuffers(8162). No finish wait
+    // occurs in that interval; neither callback cancellation nor dropping a
+    // context-side reference proves the caller's backing generation is idle.
+    // Follow the enclosing finalize/drain order before connecting retirement.
+    // finalize(7988) gathers orphan mappings through context slot990 and calls
+    // Shared2::add_orphaned_mappings(2a9ea). With a live shared user client110,
+    // that merges into or copies a retained set at client150. Context close is
+    // therefore not identical to freeing every mapping. The set's eventual
+    // release is in SharedUserClient2::free(2b25d..2b26f); stopLocked first
+    // invokes slot998 and detaches via678. Resolve those native methods and
+    // accelerator drain order before treating shared-client destruction as
+    // permission to retire an independently owned backing generation.
     template<class Read,class Qualify,class Executable,class Invoke>
     uint32_t markSubmitted(uintptr_t image,Read read,Qualify qualify,
                            Executable executable,Invoke invoke) const {
