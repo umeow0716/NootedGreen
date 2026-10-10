@@ -6169,8 +6169,24 @@ public:
     }
 };
 
+// Exact ICL donor1e052d..1e0566 callback ABI. Its target57ba0 is a three-arg
+// constant-zero stub, NOT a TGL surface-info entry or metadata proof. A TGL
+// adapter must separately authenticate the platform callback and output data.
+struct TglOwnedSfcOutputRequest {uint32_t channel=0,reserved=0,outputTag=0;};
+static_assert(sizeof(TglOwnedSfcOutputRequest)==12);
+template<class Invoke>
+int tglInvokeOwnedSfcOutputCallback(void* os,uint32_t channel,
+    TglOwnedSurfaceStorage& output,Invoke invoke) noexcept {
+    static_assert(noexcept(invoke(os,std::declval<const TglOwnedSfcOutputRequest&>(),output)),
+                  "platform output callback status ABI");
+    if(!os || !tglNativeBackingPresent(output.resource)) return 5;
+    TglOwnedSfcOutputRequest request;request.channel=channel;
+    std::memcpy(&request.outputTag,output.prefix.data()+0x140,4);
+    return invoke(os,static_cast<const TglOwnedSfcOutputRequest&>(request),output);
+}
 // Darwin 1e04de..1e05de tail. Borrowed resources outlive the submitted packet.
-// Query is the authenticated surface-info producer (native 57ba0 equivalent).
+// Query is a separately qualified platform callback closure, including OS and
+// channel/request ABI above. Success does not certify initialized metadata.
 // It may update owned output metadata, but failed queries never publish a packet.
 template<size_t PacketSize,class Query>
 int tglBindOwnedSfcResources(std::array<uint8_t,PacketSize>& packet,

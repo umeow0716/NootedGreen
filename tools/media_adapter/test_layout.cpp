@@ -4787,6 +4787,21 @@ static void testSfcResourceBinding() {
     std::array<uint8_t,0x148> avs{},ief{};
     const uint64_t handle=1;
     for (auto* storage:{&output.resource,&avs,&ief}) std::memcpy(storage->data()+0x20,&handle,8);
+    const uint32_t outputTag=0x12345678;
+    std::memcpy(output.prefix.data()+0x140,&outputTag,4);
+    void* os=reinterpret_cast<void*>(uintptr_t(7));
+    unsigned callbackCalls=0;
+    for(int status:{0,31,-7}) {
+        assert(tglInvokeOwnedSfcOutputCallback(os,13,output,
+            [&](void* actual,const TglOwnedSfcOutputRequest& request,TglOwnedSurfaceStorage& surface) noexcept {
+                assert(actual==os && &surface==&output && request.channel==13 &&
+                    !request.reserved && request.outputTag==outputTag);
+                ++callbackCalls;return status;
+            })==status);
+    }
+    assert(callbackCalls==3);
+    assert(tglInvokeOwnedSfcOutputCallback(nullptr,13,output,
+        [](void*,const auto&,auto&) noexcept {assert(false);return 0;})==5);
     unsigned calls=0;
     auto query=[&](TglOwnedSurfaceStorage& surface) noexcept {
         assert(&surface==&output); ++calls;
