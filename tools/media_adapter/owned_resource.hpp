@@ -1726,6 +1726,18 @@ struct TglVeboxHardwareBinding {
     // trace hooks (42100/4212c), also inherited by TGL tabled1060 slotsd18c0/8.
     // None supplies a drain certificate. Establish resource-side GPU reference
     // ownership before retiring an independently owned backing generation.
+    // Resource2::retain/release(27d04/27d1c) changes refcount2c; last release
+    // dispatches free90. Separately addToChannel(24100) increments activea0
+    // and records channel9c/access98. removeFromChannel(23f46) stamps relevant
+    // backing events through Channel2::setEventStamp(41d8), then decrementsa0;
+    // zero clears98/9c. That is event bookkeeping, NOT a completion wait or
+    // evidence that an independent userspace allocation can now be freed.
+    // Resource2::complete(27412) is another separate counter28: last complete
+    // tears down type1 memory-map references or invokes type3 parent1e8. It
+    // does not wait on channel stamps. Do not interpret its name as GPU done.
+    // TGL IGAccelResource::free(6f59e..6f808) unmaps aux ranges, frees private
+    // metadata and forwards to Resource2::free. No direct fence wait appears;
+    // virtual child220/140 remains to resolve before claiming full teardown.
     template<class Read,class Qualify,class Executable,class Invoke>
     uint32_t markSubmitted(uintptr_t image,Read read,Qualify qualify,
                            Executable executable,Invoke invoke) const {
