@@ -4877,6 +4877,53 @@ inline bool tglPrepareOwnedSfcCompression(std::array<uint8_t,0xb8>& packet,
     return true;
 }
 
+struct TglOwnedVpCompressionInput {
+    uint32_t format=0,executionMode=0,surfaceMode=0;
+    uint8_t mmcEnabled=0,surfaceEnabled=0;
+};
+// +d0 reads the OUTPUT surface, not the effective input format +99c.
+// Short-circuit reads follow 1e0637..1e069c; leases enclose all reads/use.
+template<class Read>
+bool tglReadOwnedVpCompression(uintptr_t settings,uintptr_t target,Read read,
+    TglOwnedVpCompressionInput& output) noexcept {
+    static_assert(noexcept(read(uintptr_t{},nullptr,size_t{})),"VP compression leased read ABI");
+    if(!target || target>UINTPTR_MAX-0x134) return false;
+    TglOwnedVpCompressionInput candidate;
+    if(!read(target+0x130,&candidate.format,4)) return false;
+    if(candidate.format==0x19 || candidate.format==0x10 || candidate.format==0xe) {
+        if(!settings || settings>UINTPTR_MAX-0xd2d ||
+           !read(settings+0xd28,&candidate.executionMode,4)) return false;
+        if(candidate.executionMode==7) {
+            if(!read(settings+0xd2c,&candidate.mmcEnabled,1)) return false;
+            if(candidate.mmcEnabled&1) {
+                if(target>UINTPTR_MAX-0x29a ||
+                   !read(target+0x299,&candidate.surfaceEnabled,1)) return false;
+                if((candidate.surfaceEnabled&1) &&
+                   !read(target+0xe4,&candidate.surfaceMode,4)) return false;
+            }
+        }
+    }
+    output=candidate;return true;
+}
+// Native +d0 ignores OS+3a8's return and returns zero. Bind the authenticated
+// OS/surface+148 ABI upstream as a void callback; even mixed-scale mode0 must
+// call it. Packet publication is atomic, but external OS effects are not undone.
+template<class Apply>
+bool tglPrepareOwnedVpCompression(std::array<uint8_t,0xb8>& packet,
+    const TglOwnedVpCompressionInput& input,const TglOwnedVpScale& scale,
+    Apply apply) noexcept {
+    static_assert(noexcept(apply(uint32_t{})) &&
+                  std::is_same_v<decltype(apply(uint32_t{})),void>,"VP compression OS ABI");
+    auto candidate=packet;bool invoke=false;
+    if(!tglPrepareOwnedSfcCompression(candidate,input.format,input.executionMode,
+           input.mmcEnabled,input.surfaceEnabled,input.surfaceMode,
+           scale.at92c,scale.at928,invoke)) return false;
+    if(invoke) {
+        uint32_t mode=0;std::memcpy(&mode,candidate.data()+0x8c,4);apply(mode);
+    }
+    packet=candidate;return true;
+}
+
 struct TglOwnedSfcGeometryInput {
     uint32_t inputFormat=0,outputFormat=0,inputFrameMode=0,rotation=0;
     uint32_t inputHeight=0,inputWidth=0,outputHeight=0,outputWidth=0;

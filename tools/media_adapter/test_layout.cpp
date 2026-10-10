@@ -5269,6 +5269,52 @@ static void testSfcFrameFields() {
 
 int main() {
     {
+        TglOwnedVpCompressionInput input{0x19,7,1,1,1};
+        std::array<uint8_t,0xb8> packet{};
+        unsigned calls=0;uint32_t observed=99;
+        auto apply=[&](uint32_t mode) noexcept {++calls;observed=mode;};
+        TglOwnedVpScale scale;scale.at928=0.25f;scale.at92c=0.75f;
+        assert(tglPrepareOwnedVpCompression(packet,input,scale,apply));
+        assert(calls==1 && observed==0 && packet[0x8b]==0);
+        scale.at92c=0.25f;
+        assert(tglPrepareOwnedVpCompression(packet,input,scale,apply));
+        assert(calls==2 && observed==2 && packet[0x8b]==1);
+        scale.at928=scale.at92c=0.5f;
+        assert(tglPrepareOwnedVpCompression(packet,input,scale,apply));
+        assert(calls==3 && observed==1);
+        const auto saved=packet;scale.at928=std::numeric_limits<float>::infinity();
+        assert(!tglPrepareOwnedVpCompression(packet,input,scale,apply));
+        assert(packet==saved && calls==3);
+        std::array<uint8_t,0x29a> target{};std::array<uint8_t,0xd2d> settings{};
+        std::memcpy(target.data()+0x130,&input.format,4);
+        std::memcpy(target.data()+0xe4,&input.surfaceMode,4);target[0x299]=1;
+        std::memcpy(settings.data()+0xd28,&input.executionMode,4);settings[0xd2c]=1;
+        unsigned reads=0,fail=0;
+        auto read=[&](uintptr_t address,void* out,size_t size) noexcept {
+            if(++reads==fail) return false;
+            if(address>=0x1000 && address+size<=0x129a)
+                std::memcpy(out,target.data()+address-0x1000,size);
+            else if(address>=0x2000 && address+size<=0x2d2d)
+                std::memcpy(out,settings.data()+address-0x2000,size);
+            else return false;
+            return true;
+        };
+        TglOwnedVpCompressionInput snapshot;
+        assert(tglReadOwnedVpCompression(0x2000,0x1000,read,snapshot));
+        assert(reads==5 && snapshot.surfaceMode==1);
+        for(fail=1;fail<=5;++fail) {
+            reads=0;snapshot.format=99;
+            assert(!tglReadOwnedVpCompression(0x2000,0x1000,read,snapshot));
+            assert(snapshot.format==99);
+        }
+        fail=0;reads=0;const uint32_t rgb=3;
+        std::memcpy(target.data()+0x130,&rgb,4);
+        assert(tglReadOwnedVpCompression(0,0x1000,read,snapshot));
+        assert(reads==1 && snapshot.format==3);
+        assert(tglPrepareOwnedVpCompression(packet,snapshot,scale,apply));
+        assert(calls==3 && packet==saved); // Irrelevant format skips scale/OS.
+    }
+    {
         TglOwnedVpChromaStatePrefix state;
         TglOwnedSfcFillCache cache;
         TglOwnedVpFramePreparation frame;
