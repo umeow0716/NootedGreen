@@ -6428,9 +6428,11 @@ int main() {
             TglOwnedVpSfcCpuGraph<Cpu,Cpu> graph(stateCpu,avsCpu);
             assert(graph.initialize(0x7000,0x8000,0x3000,binding,noRead,1,0));
             auto never=[](void*) noexcept {assert(false);return 0;};
+            using PlatformEntry=int(*)(void*,void*,void*,void*,void*,void*) noexcept;
+            PlatformEntry escaped=nullptr;void* escapedChild=nullptr;
             for(unsigned failure=0;failure<3;++failure) {
                 unsigned stages=0,sends=0;
-                assert(graph.withPreparedPass(prepared,0x6000,0x4000,0x2000,reference,
+                assert(graph.withPreparedSendPass(prepared,0x6000,0x4000,0x2000,reference,
                     [&](void*,const auto&,auto& stateOwner) noexcept -> int {
                         assert(++stages==1 && stateOwner.data());
                         graph.reset();assert(graph.withView(true,never)==5);
@@ -6440,7 +6442,9 @@ int main() {
                         assert(++stages==2 && avsOwner.parameters());return failure==2?11:0;
                     },
                     [&](void*,const auto&) noexcept {assert(++stages==3);},
-                    [&](void* child,const auto& frame) noexcept -> int {
+                    [&](void* child,const auto& frame,PlatformEntry platform) noexcept -> int {
+                        escaped=platform;escapedChild=child;
+                        assert(platform(child,nullptr,nullptr,nullptr,nullptr,nullptr)==0);
                         ++sends;assert(stages==3 && frame.regions.scale.scaling);
                         const auto* p=static_cast<const uint8_t*>(child);
                         uintptr_t stateAddress=0,targetAddress=0,coefficients=0;
@@ -6453,6 +6457,7 @@ int main() {
                         return -17;
                     })==(failure==1?31:failure==2?11:-17));
                 assert(sends==(failure?0:1));
+                assert(escaped && escaped(escapedChild,nullptr,nullptr,nullptr,nullptr,nullptr)==5);
                 assert(graph.prepare([](auto& storage,auto&,auto&) noexcept {
                     for(size_t off:{size_t(0x938),size_t(0x990),size_t(0x9b0)}) {
                         uintptr_t p=1;std::memcpy(&p,storage.bytes.data()+off,8);assert(!p);

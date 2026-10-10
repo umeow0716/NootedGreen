@@ -6347,6 +6347,15 @@ template<class StateBackend,class AvsBackend> class TglOwnedVpSfcCpuGraph {
         void* child;
         bool owns(void* candidate) const noexcept {return candidate==child;}
     };
+    template<class Use> static int withSendAdmission(void* child,Use use) noexcept {
+        using Callback=TglOwnedVpPlatformSendCallback<TglOwnedVpSfcResolve<SendContext>>;
+        using Entry=int(*)(void*,void*,void*,void*,void*,void*) noexcept;
+        static_assert(noexcept(use(nullptr,Entry{})),"CPU graph send admission ABI");
+        SendContext context{child};
+        TglOwnedVpSfcScopedContext<SendContext> scope(child,context);
+        if(!scope.bound()) return 5;
+        return use(child,Entry{&Callback::send});
+    }
     void clear() noexcept {
         ready_=false;
         state_.reset();avs_.reset();storage_.bytes.fill(0);
@@ -6394,14 +6403,8 @@ public:
     // state/AVS/graph lease, not a partially populated callable VP vtable.
     // Retaining the function pointer cannot retain its TLS admission context.
     template<class Use> int withSendView(bool avsEnabled,Use use) noexcept {
-        using Callback=TglOwnedVpPlatformSendCallback<TglOwnedVpSfcResolve<SendContext>>;
-        using Entry=int(*)(void*,void*,void*,void*,void*,void*) noexcept;
-        static_assert(noexcept(use(nullptr,Entry{})),"CPU graph send view ABI");
         return withView(avsEnabled,[&](void* child) noexcept {
-            SendContext context{child};
-            TglOwnedVpSfcScopedContext<SendContext> scope(child,context);
-            if(!scope.bound()) return 5;
-            return use(child,Entry{&Callback::send});
+            return withSendAdmission(child,use);
         });
     }
     // Enclose frame publication, ordered producers and command-input borrowing
@@ -6434,6 +6437,20 @@ public:
                     };
                     if(!enabled) return consume();
                     return avs_.withParameters([&](const auto&) noexcept {return consume();});
+                });
+            });
+    }
+    // The qualified six-argument platform entry exists only in the final
+    // consumer, after successful producers and while all CPU inputs are leased.
+    template<class State,class Avs,class Ief,class Send>
+    int withPreparedSendPass(const TglOwnedVpFramePreparation& frame,
+        uintptr_t conditionalSource,uintptr_t settings,uintptr_t target,uintptr_t sourceA8,
+        State state,Avs avs,Ief ief,Send send) noexcept {
+        return withPreparedPass(frame,conditionalSource,settings,target,sourceA8,
+            state,avs,ief,[&](void* child,const auto& prepared) noexcept {
+                return withSendAdmission(child,[&](void* view,auto entry) noexcept {
+                    static_assert(noexcept(send(view,prepared,entry)),"prepared send ABI");
+                    return send(view,prepared,entry);
                 });
             });
     }
