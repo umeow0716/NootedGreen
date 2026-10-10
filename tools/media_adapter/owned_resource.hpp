@@ -2439,7 +2439,9 @@ TglOwnedBaseConstruction tglConstructOwnedVeboxBaseWithSfc(
     if(!binding.image || binding.image>UINTPTR_MAX-0x12de30 ||
        binding.construct!=binding.image+0x12d4e0 ||
        binding.destroy!=binding.image+0x12de30 ||
-       !privateStorage || (reinterpret_cast<uintptr_t>(privateStorage)&7) ||
+       // Native superclass 126480 unconditionally reads renderHal+78/+80
+       // at 1264f3/126502, before reporting constructor status.
+       !renderHal || !privateStorage || (reinterpret_cast<uintptr_t>(privateStorage)&7) ||
        capacity<0x1bc0 || !sfc.get() || sfc.image()!=binding.image ||
        sfc.os()!=reinterpret_cast<uintptr_t>(os)) return TglOwnedBaseConstruction::NotCalled;
     construct(binding.construct,privateStorage,os,mhw,sfc.get(),renderHal,history,

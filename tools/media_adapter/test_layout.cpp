@@ -7532,7 +7532,7 @@ int main() {
                 reenterReset=[](void* p){static_cast<Owner*>(p)->reset();};
                 auto initialize=[&] {
                     return owner.initialize(baseBinding,lifetime,mhw,reinterpret_cast<void*>(os),
-                        nullptr,nullptr,nullptr,nullptr,nullptr,status,read,construct);
+                        nullptr,reinterpret_cast<void*>(0x3000),nullptr,nullptr,nullptr,status,read,construct);
                 };
                 cpu.fail=true;
                 assert(initialize()==TglOwnedBaseConstruction::NotCalled && !constructors && !cpu.live);
@@ -7975,16 +7975,18 @@ int main() {
                 const void *cache,int32_t *out) {
                 assert(entry==base+0x12d4e0 && storage==child.data());
                 assert(nativeOs==reinterpret_cast<void*>(os) && nativeSfc==owner.get());
-                assert(!nativeMhw && !renderHal && !history && !performance && !cache);
+                assert(!nativeMhw && renderHal==reinterpret_cast<void*>(0x3000) &&
+                       !history && !performance && !cache);
                 ++calls;*out=result;
             };
-            auto construct=[&](size_t capacity) {
+            auto construct=[&](size_t capacity,void* hal=reinterpret_cast<void*>(0x3000)) {
                 return tglConstructOwnedVeboxBaseWithSfc(baseBinding,child.data(),capacity,
-                    owner,reinterpret_cast<void*>(os),nullptr,nullptr,nullptr,nullptr,nullptr,
+                    owner,reinterpret_cast<void*>(os),nullptr,hal,nullptr,nullptr,nullptr,
                     status,ctor);
             };
             assert(construct(child.size())==TglOwnedBaseConstruction::NotCalled && calls==0 && status==77);
             assert(owner.initialize(lifetime,mhw,os,read));
+            assert(construct(child.size(),nullptr)==TglOwnedBaseConstruction::NotCalled && calls==0 && status==77);
             assert(construct(child.size()-1)==TglOwnedBaseConstruction::NotCalled && calls==0);
             assert(construct(child.size())==TglOwnedBaseConstruction::ConstructedSuccess && calls==1);
             result=31;
