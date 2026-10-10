@@ -1084,6 +1084,61 @@ static void testVeboxPrefix() {
 }
 
 static void testComposedStatisticsBuffer() {
+    {
+        struct Backend {
+            unsigned allocations = 0, releases = 0, live = 0;
+            unsigned failAt = 99;
+            bool descriptorOnly = false;
+            int allocate(std::array<uint8_t,0x148>& s, const TglResourceKey&) noexcept {
+                ++live; s[1] = 1; // Failure may still leave partially owned backing.
+                if (allocations++ == failAt) return 31;
+                s[0] = descriptorOnly ? 0 : 1; return 0;
+            }
+            void release(std::array<uint8_t,0x148>& s) noexcept {
+                assert(s[1] && live); --live; ++releases; s.fill(0);
+            }
+            bool backed(const std::array<uint8_t,0x148>& s) noexcept { return s[0] != 0; }
+        };
+        using Group = TglOwnedResourceGroup<Backend,3>;
+        std::array<Group::Request,3> requests{};
+        for (auto& r : requests) { r.required = true; r.key.width = 64; }
+        for (unsigned failure = 0; failure < 3; ++failure) {
+            Backend b; b.failAt = failure;
+            Group group(b);
+            auto prepare = [&](size_t i, const auto&, bool changed) noexcept {
+                assert(changed && i < failure && !group.storage(i)); return 0;
+            };
+            assert(group.ensure(requests,prepare) == 31 && !b.live);
+            assert(b.releases == failure+1);
+            for (size_t i = 0; i < 3; ++i) assert(!group.storage(i));
+        }
+        for (unsigned failure = 0; failure < 3; ++failure) {
+            Backend b; Group group(b);
+            auto prepare = [&](size_t i, const auto&, bool) noexcept { return i == failure ? 77 : 0; };
+            assert(group.ensure(requests,prepare) == 77 && !b.live);
+        }
+        Backend b;
+        {
+            Group group(b);
+            unsigned changedCount = 0;
+            auto prepare = [&](size_t i, const auto&, bool changed) noexcept {
+                assert(!group.storage(i)); changedCount += changed; return 0;
+            };
+            assert(!group.ensure(requests,prepare) && b.live == 3 && changedCount == 3);
+            for (size_t i = 0; i < 3; ++i) assert(group.storage(i));
+            assert(!group.storage(3));
+            assert(!group.ensure(requests,prepare) && b.allocations == 3 && changedCount == 3);
+            requests[1].required = false;
+            assert(!group.ensure(requests,prepare) && b.live == 2 && !group.storage(1));
+            requests[0].key.width = 128; b.failAt = b.allocations;
+            assert(group.ensure(requests,prepare) == 31 && !b.live);
+            b.failAt = 99; b.descriptorOnly = true;
+            assert(group.ensure(requests,prepare) == 5 && !b.live);
+            b.descriptorOnly = false;
+            assert(!group.ensure(requests,prepare) && b.live == 2);
+        }
+        assert(!b.live);
+    }
     struct Fixture {
         std::array<uint8_t, 8192> bytes{};
         unsigned allocations = 0, releases = 0, fills = 0;

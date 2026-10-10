@@ -1204,6 +1204,52 @@ private:
     State state_ = State::Empty;
 };
 
+// Gen12 AllocateResources finish calls FreeResources on ANY failure. This
+// composes descriptor owners, not Linux object offsets or feature admission.
+// Prepare handles per-resource initialization/metadata and preserves its error.
+// Only a complete backed set is exposed; this proves neither GPU sync nor execution.
+// SFC and app-owned LUT surfaces are separate owners, never adopted by this group.
+template<class Backend, size_t Count> class TglOwnedResourceGroup {
+    static_assert(Count > 0);
+    using Resource = TglOwnedResource<Backend>;
+    std::array<Resource,Count> resources;
+    bool ready = false;
+    template<size_t... I>
+    TglOwnedResourceGroup(Backend& backend, std::index_sequence<I...>) noexcept
+        : resources{(static_cast<void>(I),Resource(backend))...} {}
+public:
+    struct Request { bool required = false; TglResourceKey key{}; };
+    explicit TglOwnedResourceGroup(Backend& backend) noexcept
+        : TglOwnedResourceGroup(backend,std::make_index_sequence<Count>{}) {}
+    TglOwnedResourceGroup(const TglOwnedResourceGroup&) = delete;
+    TglOwnedResourceGroup& operator=(const TglOwnedResourceGroup&) = delete;
+    template<class Prepare>
+    int ensure(const std::array<Request,Count>& requests, Prepare prepare) noexcept {
+        static_assert(noexcept(std::declval<Prepare&>()(size_t{},
+            std::declval<const typename Resource::Storage&>(),bool{})),
+            "resource initialization must report errors through status");
+        ready = false;
+        for (size_t i = 0; i < Count; ++i) {
+            if (!requests[i].required) { resources[i].reset(); continue; }
+            const auto result = resources[i].ensure(requests[i].key);
+            if (result.status || result.state != Resource::State::Backed) {
+                reset(); return result.status ? result.status : 5;
+            }
+            const int status = prepare(i,resources[i].storage(),result.changed);
+            if (status) { reset(); return status; }
+        }
+        ready = true; return 0;
+    }
+    void reset() noexcept {
+        ready = false;
+        for (auto& resource : resources) resource.reset();
+    }
+    const typename Resource::Storage* storage(size_t i) const noexcept {
+        return ready && i < Count && resources[i].state() == Resource::State::Backed
+            ? &resources[i].storage() : nullptr;
+    }
+};
+
 // Gen12 statistics lifecycle, not a native fill ABI implementation. Backend
 // must allocate a buffer; Fill must validate and initialize actual backing.
 template<class Backend> class TglStatisticsResource {
