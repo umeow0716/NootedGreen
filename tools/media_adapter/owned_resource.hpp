@@ -146,6 +146,10 @@ template<class Context> struct TglOwnedVpSfcResolve {
 // not a native TGL constructor, complete object size, or callable vtable.
 // Keep this private/unpublished until every VP callback and owner is bound.
 struct alignas(8) TglOwnedVpSfcCallerStorage {
+    // Donor factory1fc790 allocates9d8; ctor1fcaa0 constructs this interface
+    // at object+8. Factory1fc773 applies primary vtable[-18]=8 (793fc0).
+    // Success1fc809 increments829ff8; that is native allocation accounting,
+    // NOT permission to publish this data-only caller storage to native delete.
     std::array<uint8_t,0x9d0> bytes{};
     // Borrowed constructor inputs follow ICL1dd150 base10/18/20. Authenticate
     // the TGL MHW object independently; callers retain all interface/image
