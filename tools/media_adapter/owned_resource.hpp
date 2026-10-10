@@ -5837,6 +5837,18 @@ template<class Context> using TglOwnedVeboxScopedContext=
 // NOT an int status producer (error5 would be interpreted as TRUE). The scoped
 // context must implement the full platform admission and own params/pass leases;
 // this ABI bridge alone is not a completed admission policy or runtime table.
+// Exact donor secondary794508+28=1fbf30 adjusts via vptr[-38] to1fb950.
+// Full native flow (do not transplant ICL this adjustment): prerequisites
+// OS/RenderHal/pass10; params138/SKU bit12/source d8>=64,dc>=16, otherwise
+// pass08=1 and FALSE. Execution+10 reset; optional VP+10 reset; owned+68
+// selects execution a0c, publishes child1ba9->execution d2c and params10c
+// ->execution d28; +180/+170 and feature query can change admission. For
+// pipe1, VP+28 consumes params e0/f0, source,target,execution before format/
+// DN flag publication. sample124==2 plus failed admission forces pipe0 and
+// pass08=1. Final params138 && pass08 forces FALSE. Return1fbf1c normalizes
+// AL; local status5 writes on prerequisite failure are NOT returned as bool.
+// Thus direct geometry/format predicates cannot stand in for the full policy,
+// and a denied admission need not mean that execution/pass stayed unchanged.
 template<class Owner,class Policy> class TglOwnedVeboxAdmissionContext {
     Owner& owner_;
     void* child_;
