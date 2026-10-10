@@ -5959,6 +5959,19 @@ public:
         });
         busy_=false;return status;
     }
+    template<class Invoke> int withInitializedStorage(Invoke invoke) noexcept {
+        if(busy_ || !ready_) return 5;
+        busy_=true;
+        const int status=owners_[0].withInitializedStorage(
+            [&](const Storage& first,uint32_t w0,uint32_t h0,uint32_t p0) noexcept {
+                return owners_[1].withInitializedStorage(
+                    [&](const Storage& second,uint32_t w1,uint32_t h1,uint32_t p1) noexcept {
+                        const std::array<uint32_t,3> a{w0,h0,p0},b{w1,h1,p1};
+                        return invoke(first,second,a,b);
+                    });
+            });
+        busy_=false;return status;
+    }
     void reset() noexcept {
         if(busy_) return;
         busy_=true;ready_=false;

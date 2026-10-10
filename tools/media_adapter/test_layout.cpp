@@ -3804,6 +3804,7 @@ static void testResourceBinding() {
             RetainedApi& api;
             unsigned allocations=0,releases=0;
             bool fail=false;
+            bool backingAllowed=true;
             int allocate(std::array<uint8_t,0x148>& storage,const TglResourceKey&) noexcept {
                 ++allocations;++api.references;
                 const uint32_t type=1,format=0x3d;const uintptr_t handle=1;
@@ -3813,7 +3814,7 @@ static void testResourceBinding() {
                 return fail ? 77 : 0;
             }
             bool backed(const std::array<uint8_t,0x148>& storage) noexcept {
-                return tglNativeBackingPresent(storage);
+                return backingAllowed && tglNativeBackingPresent(storage);
             }
             void release(std::array<uint8_t,0x148>& storage) noexcept {
                 ++releases;api.release(1);storage.fill(0);
@@ -3839,6 +3840,22 @@ static void testResourceBinding() {
             assert(pair.ensure(keys)==0 && api.references==2);
             const auto locks=api.locks;
             assert(pair.ensure(keys)==0 && api.locks==locks);
+            assert(pair.withInitializedStorage([&](const auto& a,const auto& b,
+                const auto& firstLayout,const auto& secondLayout) noexcept {
+                const std::array<uint32_t,3> expected{8,3,16};
+                assert(&a==&first && &b==&second);
+                assert(firstLayout==expected && secondLayout==expected);
+                pair.reset();assert(api.references==2);
+                assert(pair.ensure(keys)==5);return 31;
+            })==31);
+            for(size_t denied=0;denied<2;++denied) {
+                backends[denied].backingAllowed=false;
+                assert(pair.withInitializedStorage(
+                    [&](const auto&,const auto&,const auto&,const auto&) noexcept {
+                        assert(false);return 0;
+                    })==5);
+                backends[denied].backingAllowed=true;
+            }
             assert(pair.withStorage([&](const auto& a,const auto& b) noexcept {
                 assert(&a==&first && &b==&second);
                 pair.reset();assert(api.references==2);
