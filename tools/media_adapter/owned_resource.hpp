@@ -1380,6 +1380,37 @@ struct TglOutputSurfaceSelection {
 struct TglSurfaceIndices {
     int32_t frame0 = 0, frame1 = 0, dnOut = 0, historyIn = 0, historyOut = 0;
 };
+struct TglDiIecpOutputs {
+    const TglOwnedSurfaceStorage* current = nullptr;
+    const TglOwnedSurfaceStorage* previous = nullptr;
+    uint32_t currentOffset = 0;
+};
+// ICL1f89a0 output helper agrees with pinned Gen12 logical policy. Only
+// packet48/50/10 are transported; never copy ICL C++ object offsets/vtables.
+// Compression/control/registration remain separate required producer stages.
+inline bool tglSelectDiIecpOutputs(TglDiIecpOutputs& output, uint32_t pipe,
+        bool di, bool iecp, const TglSurfaceIndices& indices,
+        const TglOwnedSurfaceStorage* target,
+        const std::array<const TglOwnedSurfaceStorage*,4>& ffdi) noexcept {
+    if (pipe > 2) return false;
+    TglDiIecpOutputs candidate;
+    if (pipe == 2) {
+        if (!target) return false;
+        candidate.current = target;
+        std::memcpy(&candidate.currentOffset,target->prefix.data()+0x144,4);
+    } else if (di) {
+        if (indices.frame0 < 0 || indices.frame0 >= 4 ||
+            indices.frame1 < 0 || indices.frame1 >= 4 ||
+            !ffdi[indices.frame0] || !ffdi[indices.frame1]) return false;
+        candidate.current = ffdi[indices.frame1];
+        candidate.previous = ffdi[indices.frame0];
+    } else if (iecp) {
+        if (indices.dnOut < 0 || indices.dnOut >= 2 || !ffdi[indices.dnOut]) return false;
+        candidate.current = ffdi[indices.dnOut];
+    }
+    output = candidate;
+    return true;
+}
 // TGL12b9a0 writes these five execution fields. No pointer adoption or state
 // mutation; failed reads/invalid indices preserve the caller's snapshot.
 template<class Read>

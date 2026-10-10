@@ -2035,6 +2035,37 @@ static void testResourceBinding() {
 // The pinned consumer sites shift 0x20/0x24/0x228/0x428 by eight bytes.
 int main() {
     {
+        std::array<TglOwnedSurfaceStorage,5> storage{};
+        std::array<const TglOwnedSurfaceStorage*,4> ffdi{
+            &storage[0],&storage[1],&storage[2],&storage[3]};
+        uint32_t offset=0x1234;
+        std::memcpy(storage[4].prefix.data()+0x144,&offset,4);
+        TglSurfaceIndices indices; indices.frame0=2; indices.frame1=3; indices.dnOut=1;
+        TglDiIecpOutputs output;
+        assert(tglSelectDiIecpOutputs(output,2,true,true,indices,&storage[4],ffdi));
+        assert(output.current == &storage[4] && !output.previous && output.currentOffset == offset);
+        for (uint32_t pipe : {0u,1u}) {
+            assert(tglSelectDiIecpOutputs(output,pipe,true,true,indices,nullptr,ffdi));
+            assert(output.current == ffdi[3] && output.previous == ffdi[2] && output.currentOffset == 0);
+            assert(tglSelectDiIecpOutputs(output,pipe,false,true,indices,nullptr,ffdi));
+            assert(output.current == ffdi[1] && !output.previous && output.currentOffset == 0);
+            assert(tglSelectDiIecpOutputs(output,pipe,false,false,indices,nullptr,ffdi));
+            assert(!output.current && !output.previous && output.currentOffset == 0);
+        }
+        output={&storage[4],&storage[3],99};
+        auto reject = [&](uint32_t pipe,bool di,bool iecp) {
+            assert(!tglSelectDiIecpOutputs(output,pipe,di,iecp,indices,nullptr,ffdi));
+            assert(output.current == &storage[4] && output.previous == &storage[3] && output.currentOffset == 99);
+        };
+        reject(3,false,false); reject(2,false,false);
+        indices.frame0=-1; reject(0,true,false); indices.frame0=4; reject(0,true,false); indices.frame0=2;
+        indices.frame1=-1; reject(0,true,false); indices.frame1=4; reject(0,true,false); indices.frame1=3;
+        indices.dnOut=-1; reject(0,false,true); indices.dnOut=2; reject(0,false,true); indices.dnOut=1;
+        ffdi[2]=nullptr; reject(0,true,false); ffdi[2]=&storage[2];
+        ffdi[3]=nullptr; reject(0,true,false); ffdi[3]=&storage[3];
+        ffdi[1]=nullptr; reject(0,false,true);
+    }
+    {
         constexpr uintptr_t image=0x10000000, mhw=0x20000000;
         uintptr_t table=image+0x759520, native=image+0x172080;
         std::array<uint8_t,11> code{
