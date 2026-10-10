@@ -4646,6 +4646,30 @@ inline bool tglPrepareOwnedVpRegions(const TglOwnedVpRegionInput& in,
         candidate.destinationWidth,candidate.destinationHeight,in.rotation,candidate.scale)) return false;
     output=candidate;return true;
 }
+// Bounded slot28 geometry acquisition. Read authorizes every surface/MHW
+// span under leases held through the caller's complete preparation/use scope.
+template<class Read>
+bool tglReadOwnedVpRegions(uintptr_t source,uintptr_t target,uintptr_t mhw,Read read,
+    TglOwnedVpRegionInput& snapshot,TglOwnedVpRegions& output) noexcept {
+    static_assert(noexcept(read(uintptr_t{},nullptr,size_t{})),"VP region leased read ABI");
+    if(!source || !target || source>UINTPTR_MAX-0x294 || target>UINTPTR_MAX-0x134) return false;
+    TglOwnedVpRegionInput candidate;
+    std::array<float,8> rectangles{};uint8_t field=0;
+    if(!tglReadOwnedSfcFrame(source,mhw,read,candidate.frameHeight,candidate.frameWidth) ||
+       !read(source+0x30,rectangles.data(),sizeof(rectangles)) ||
+       !read(source+0x84,&field,1) || !read(source+0x290,&candidate.rotation,4) ||
+       !read(target+0xd8,&candidate.targetWidth,4) ||
+       !read(target+0xdc,&candidate.targetHeight,4) ||
+       !read(target+0x130,&candidate.targetFormat,4)) return false;
+    candidate.sourceLeft=rectangles[0];candidate.sourceTop=rectangles[1];
+    candidate.sourceRight=rectangles[2];candidate.sourceBottom=rectangles[3];
+    candidate.destinationLeft=rectangles[4];candidate.destinationTop=rectangles[5];
+    candidate.destinationRight=rectangles[6];candidate.destinationBottom=rectangles[7];
+    candidate.fieldInput=field&1;
+    TglOwnedVpRegions regions;
+    if(!tglPrepareOwnedVpRegions(candidate,regions)) return false;
+    snapshot=candidate;output=regions;return true;
+}
 struct TglOwnedVpFramePreparationInput {
     TglOwnedVpRegionInput geometry;
     TglOwnedVpModeInput modes;

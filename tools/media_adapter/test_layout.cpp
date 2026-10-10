@@ -5269,6 +5269,43 @@ static void testSfcFrameFields() {
 
 int main() {
     {
+        std::array<uint8_t,0x294> source{};std::array<uint8_t,0x134> target{};
+        std::array<uint8_t,0x1c> mhw{};
+        const auto put=[](auto& data,size_t offset,auto value) {
+            std::memcpy(data.data()+offset,&value,sizeof(value));
+        };
+        const std::array<float,8> rectangles{0,0,1920,1080,0,0,960,540};
+        std::memcpy(source.data()+0x30,rectangles.data(),sizeof(rectangles));
+        put(source,0xd8,uint32_t(1920));put(source,0xdc,uint32_t(1080));
+        put(source,0x58,1920.0f);put(source,0x5c,1080.0f);
+        put(target,0xd8,uint32_t(960));put(target,0xdc,uint32_t(540));
+        put(target,0x130,uint32_t(0x19));
+        put(mhw,0x18,uint16_t(16));put(mhw,0x1a,uint16_t(8));
+        unsigned calls=0,fail=0;
+        const auto read=[&](uintptr_t address,void* output,size_t size) noexcept {
+            if(++calls==fail) return false;
+            const auto span=[&](uintptr_t base,const auto& bytes) noexcept {
+                if(address<base || address-base>bytes.size() || size>bytes.size()-(address-base)) return false;
+                std::memcpy(output,bytes.data()+address-base,size);return true;
+            };
+            return span(0x1000,source) || span(0x2000,target) || span(0x3000,mhw);
+        };
+        TglOwnedVpRegionInput snapshot;TglOwnedVpRegions regions;
+        assert(tglReadOwnedVpRegions(0x1000,0x2000,0x3000,read,snapshot,regions) && calls==13);
+        assert(snapshot.frameWidth==1920 && snapshot.frameHeight==1080);
+        assert(regions.sourceWidth==1920 && regions.sourceHeight==1080 &&
+               regions.destinationWidth==960 && regions.destinationHeight==540 &&
+               regions.scale.at928==0.5f && regions.scale.at92c==0.5f);
+        for(fail=1;fail<=13;++fail) {
+            calls=0;snapshot.frameWidth=17;regions.sourceWidth=19;
+            assert(!tglReadOwnedVpRegions(0x1000,0x2000,0x3000,read,snapshot,regions));
+            assert(snapshot.frameWidth==17 && regions.sourceWidth==19);
+        }
+        fail=0;calls=0;
+        assert(!tglReadOwnedVpRegions(UINTPTR_MAX-8,0x2000,0x3000,read,snapshot,regions) && !calls);
+        assert(!tglReadOwnedVpRegions(0x1000,UINTPTR_MAX-8,0x3000,read,snapshot,regions) && !calls);
+    }
+    {
         TglOwnedVpSfcCallerStorage storage;
         storage.bytes[0x925]=0x5a;storage.bytes[0x9b9]=0xa5;
         const auto original=storage.bytes;
