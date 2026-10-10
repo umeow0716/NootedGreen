@@ -284,6 +284,15 @@ public:
         return true;
     }
     uintptr_t get(size_t i) const { return i < shells.size() ? shells[i] : 0; }
+    // Only after installing ALL eight fields into a private constructed child:
+    // native non-deleting destructor12de30 then owns their paired436d0 frees.
+    // Never retain ownership here as well, or native teardown double-frees them.
+    // Caller must hold the child/image lease and handle all returned ownership.
+    std::array<uintptr_t,8> relinquishToNative() noexcept {
+        const auto transferred = shells;
+        shells.fill(0);
+        return transferred;
+    }
     void reset() noexcept {
         const auto old = shells;
         shells.fill(0);

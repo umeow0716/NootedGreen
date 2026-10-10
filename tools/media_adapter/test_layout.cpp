@@ -8,6 +8,36 @@
 
 static void testTrackedCpuOwner() {
     {
+        struct TransferBackend {
+            std::array<bool,8> live{};
+            unsigned allocations = 0, releases = 0;
+            uintptr_t allocate(size_t n) {
+                assert(n == 0x2a8 && allocations < 8);
+                live[allocations] = true; return ++allocations;
+            }
+            void release(uintptr_t p) {
+                assert(p && p <= 8 && live[p-1]);
+                live[p-1] = false; ++releases;
+            }
+        } backend;
+        std::array<uintptr_t,8> nativeFields{};
+        {
+            TglVeboxCpuShells<TransferBackend> shells(backend);
+            assert(shells.allocate());
+            nativeFields = shells.relinquishToNative();
+            for (size_t i = 0; i < 8; ++i) {
+                assert(nativeFields[i] == i+1 && !shells.get(i));
+            }
+            const auto emptyTransfer = shells.relinquishToNative();
+            for (auto p : emptyTransfer) assert(!p);
+            shells.reset(); assert(!backend.releases);
+        }
+        assert(!backend.releases); // Only the native owner now has free authority.
+        for (auto p : nativeFields) backend.release(p); // Native field order, not rollback order.
+        assert(backend.releases == 8);
+        for (auto live : backend.live) assert(!live);
+    }
+    {
         constexpr uintptr_t image = 0x100000, renderHal = 0x900000;
         uintptr_t callback = image+0x1234;
         bool identity = true, rx = true, readable = true;
