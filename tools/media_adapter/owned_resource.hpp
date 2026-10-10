@@ -1151,24 +1151,46 @@ template<class Backend> class TglTrackedCpuOwner {
     Backend& backend;
     uintptr_t storage = 0;
     size_t extent = 0;
+    bool borrowed = false;
 public:
     explicit TglTrackedCpuOwner(Backend& b) : backend(b) {}
     TglTrackedCpuOwner(const TglTrackedCpuOwner&) = delete;
     TglTrackedCpuOwner& operator=(const TglTrackedCpuOwner&) = delete;
     ~TglTrackedCpuOwner() { reset(); }
     bool allocate(size_t bytes) {
-        if (storage || !bytes) return false;
+        if (borrowed || storage || !bytes) return false;
         auto candidate = backend.allocate(bytes);
         if (!candidate) return false;
         storage = candidate; extent = bytes; return true;
     }
     void reset() noexcept {
-        if (!storage) return;
+        if (borrowed || !storage) return;
         const auto old = storage; storage = 0; extent = 0;
         backend.release(old);
     }
     uintptr_t get() const { return storage; }
     size_t size() const { return extent; }
+    // Exact native160 source90 contract: unchanged means still owned; null
+    // means paired native436d0 consumed it. Caller leases the surface slot
+    // and authenticates the native callback/image. Never adopt foreign data.
+    template<class Use>
+    bool withNativeReleaseSlot(uint8_t* slot,Use use) noexcept {
+        static_assert(noexcept(use()),"native consuming callback must not throw");
+        static_assert(std::is_same_v<decltype(use()),void>,"native feature ABI is void");
+        if(borrowed || !storage || !slot) return false;
+        uintptr_t previous=0;std::memcpy(&previous,slot,sizeof(previous));
+        if(previous) return false;
+        const auto published=storage;
+        borrowed=true;
+        std::memcpy(slot,&published,sizeof(published));
+        use();
+        uintptr_t observed=0;std::memcpy(&observed,slot,sizeof(observed));
+        // Detach the borrowed field even on an unexpected native mutation.
+        std::memcpy(slot,&previous,sizeof(previous));
+        if(!observed) { storage=0;extent=0; }
+        borrowed=false;
+        return !observed || observed==published;
+    }
 };
 
 // Native base helper126740 creates eight 0x2a8 CPU shells: 1b0/1b8,

@@ -1048,6 +1048,44 @@ static void testTrackedCpuOwner() {
         assert(owner.allocate(0x2a8) && backend.live == 1);
     }
     assert(backend.live == 0 && backend.releases == 3);
+    {
+        TglTrackedCpuOwner<Backend> owner(backend);
+        std::array<uint8_t,10> field{};
+        field.front()=0xa5;field.back()=0x5a;
+        auto* slot=field.data()+1; // deliberately unaligned source pointer field
+        unsigned calls=0;
+        assert(!owner.withNativeReleaseSlot(slot,[&]() noexcept { ++calls; }));
+        assert(owner.allocate(0x2a8));
+        const auto original=owner.get();
+        uintptr_t foreign=123;
+        std::memcpy(slot,&foreign,8);
+        assert(!owner.withNativeReleaseSlot(slot,[&]() noexcept { ++calls; }));
+        uintptr_t empty=0;std::memcpy(slot,&empty,8);
+        assert(owner.withNativeReleaseSlot(slot,[&]() noexcept {
+            ++calls;
+            uintptr_t published=0;std::memcpy(&published,slot,8);
+            assert(published==original && backend.live==1);
+            owner.reset();assert(owner.get()==original && backend.live==1);
+            assert(!owner.allocate(8));
+            assert(!owner.withNativeReleaseSlot(slot,[&]() noexcept { ++calls; }));
+        }));
+        assert(owner.get()==original && owner.size()==0x2a8 && calls==1);
+        uintptr_t detached=1;std::memcpy(&detached,slot,8);assert(!detached);
+        assert(owner.withNativeReleaseSlot(slot,[&]() noexcept {
+            ++calls;backend.release(original);std::memcpy(slot,&empty,8);
+        }));
+        assert(!owner.get() && !owner.size() && backend.live==0 && calls==2);
+        owner.reset();assert(backend.releases==4);
+        assert(owner.allocate(0x2a8));
+        assert(!owner.withNativeReleaseSlot(slot,[&]() noexcept {
+            std::memcpy(slot,&foreign,8);
+        }));
+        std::memcpy(&detached,slot,8);
+        assert(!detached && owner.get() && backend.live==1);
+        owner.reset();assert(backend.releases==5);
+        assert(field.front()==0xa5 && field.back()==0x5a);
+    }
+    assert(backend.releases==5 && backend.live==0);
 }
 
 static void testOwnedVeboxVtable() {
