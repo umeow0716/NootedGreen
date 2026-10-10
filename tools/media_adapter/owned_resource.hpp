@@ -6860,6 +6860,11 @@ public:
 // a903..a912 rejects20000000/error. These are consumable submission reports,
 // not a persistent userspace generation counter: zero flags before/after a
 // fence cannot exclude an intervening reset or the terminated skip branch.
+// get_data_buffer7144 is not an established reset-generation query either:
+// getDataBuffer a6da..a74e publishes resource+38->100 at output28, shared
+// addresses18/20 and mapped buffer address/size0/8. Its pending-buffer wait
+// a1cb again uses EventMachine+178. None of those examined fields establishes
+// a persistent context reset counter; do not reinterpret output28 as one.
 // Caller owns the native context, writable command/sideband and all resource
 // leases through this call AND subsequent independently verified completion.
 struct TglNativeVideoBufferFlushInvoker {
