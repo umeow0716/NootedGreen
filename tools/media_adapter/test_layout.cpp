@@ -31,6 +31,30 @@ struct TestVpCpuView {
 
 static void testTrackedCpuOwner() {
     {
+        std::array<uint8_t,0xd30> execution{};execution.fill(0xa5);
+        const auto original=execution;
+        unsigned calls=0;
+        uint32_t selected=0;
+        auto setup=[&](auto& storage) noexcept {
+            uint32_t pipe=0,mode=0;
+            std::memcpy(&pipe,storage.data()+0xa0c,4);
+            std::memcpy(&mode,storage.data()+0xd28,4);
+            assert(pipe==selected && mode==0xa5a5a5a5 && storage[0xd2c]==1);
+            ++calls;
+        };
+        assert(!tglPublishVeboxAdmissionMode(execution,3,0xff,7,setup));
+        assert(execution==original && !calls);
+        for(selected=0;selected<3;++selected) {
+            execution=original;
+            assert(tglPublishVeboxAdmissionMode(execution,selected,0xff,7,setup));
+            uint32_t mode=0;std::memcpy(&mode,execution.data()+0xd28,4);assert(mode==7);
+            for(size_t i=0;i<execution.size();++i)
+                if(!(i>=0xa0c && i<0xa10) && !(i>=0xd28 && i<0xd2d))
+                    assert(execution[i]==original[i]);
+        }
+        assert(calls==3);
+    }
+    {
         using Result=TglVeboxAdmissionPrefixResult;
         TglVeboxAdmissionPrefixInput input{true,true,true,true,1,uint64_t(1)<<12,64,16};
         std::array<uint8_t,0x28> pass{};pass.fill(0xa5);

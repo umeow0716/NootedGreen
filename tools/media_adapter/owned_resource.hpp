@@ -5879,6 +5879,24 @@ TglVeboxAdmissionPrefixResult tglPrepareVeboxAdmissionPrefix(
     return TglVeboxAdmissionPrefixResult::Continue;
 }
 
+// Preserve donor1fbb08..1fbb68 ordering: +180 observes the NEW output pipe
+// and MMC flag, but OLD d28. Only after that void stage returns is params10c
+// published at d28. This is metadata, not permission to call an unqualified
+// native +180 or evidence of command completion. Enclosing owner pins storage.
+template<size_t N,class Setup>
+bool tglPublishVeboxAdmissionMode(std::array<uint8_t,N>& execution,
+    uint32_t pipe,uint8_t mmc,uint32_t params10c,Setup setup) noexcept {
+    static_assert(N>=0xd2d,"complete admission metadata extent");
+    static_assert(noexcept(setup(execution)) &&
+        std::is_same_v<decltype(setup(execution)),void>,"native +180 void stage");
+    if(pipe>2) return false;
+    std::memcpy(execution.data()+0xa0c,&pipe,4);
+    execution[0xd2c]=mmc&1;
+    setup(execution);
+    std::memcpy(execution.data()+0xd28,&params10c,4);
+    return true;
+}
+
 template<class Owner,class Policy> class TglOwnedVeboxAdmissionContext {
     Owner& owner_;
     void* child_;
