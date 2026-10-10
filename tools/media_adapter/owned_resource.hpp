@@ -456,6 +456,19 @@ struct TglSfcMhwBinding {
             callback==image+(osFlags[1]?0x3e6a0:0x3eae0) &&
             widthAlign==16 && heightAlign==4 && bytes[0x40]==1;
     }
+    // State168443..168470 calls OS+1b0 and rejects a NULL result. Exact
+    // initializer6603a/66041 binds62ee0;62ee0..62f24 returns *(OS)+15ce4
+    // or NULL for a missing context. Authenticate without invoking the callback.
+    // This is only a state-builder prerequisite, NOT table-content validation,
+    // a resource lease, or permission to submit/retire GPU work.
+    template<class Read>
+    bool validateStateEnvironment(uintptr_t object,uintptr_t os,Read read) const {
+        if(!validateConstructedObject(object,os,read) || os>UINTPTR_MAX-0x1b8)
+            return false;
+        uintptr_t entry=0,context=0;
+        return read(os+0x1b0,&entry,8) && entry==image+0x62ee0 &&
+            read(os,&context,8) && context && context<=UINTPTR_MAX-0x15ce4;
+    }
 };
 struct TglSfcLifetimeBinding {
     uintptr_t image=0,construct=0,destroy=0;

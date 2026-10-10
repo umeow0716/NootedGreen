@@ -8545,6 +8545,32 @@ int main() {
         put(8,uintptr_t(base+0x3e6a0));
         assert(binding.validateConstructedObject(object,os,objectRead));
         assert(!binding.validateConstructedObject(UINTPTR_MAX,os,objectRead));
+        uintptr_t context=0x40000000,stateEntry=base+0x62ee0;
+        bool denyContext=false,denyEntry=false;
+        auto stateRead=[&](uintptr_t address,void* dst,size_t size) {
+            if(address==os && size==8 && !denyContext) std::memcpy(dst,&context,8);
+            else if(address==os+0x1b0 && size==8 && !denyEntry)
+                std::memcpy(dst,&stateEntry,8);
+            else return objectRead(address,dst,size);
+            return true;
+        };
+        assert(binding.validateStateEnvironment(object,os,stateRead));
+        for(uintptr_t invalid:{uintptr_t(0),UINTPTR_MAX}) {
+            context=invalid;
+            assert(!binding.validateStateEnvironment(object,os,stateRead));
+        }
+        context=0x40000000;
+        ++stateEntry;
+        assert(!binding.validateStateEnvironment(object,os,stateRead));
+        --stateEntry;
+        denyContext=true;
+        assert(!binding.validateStateEnvironment(object,os,stateRead));
+        denyContext=false;denyEntry=true;
+        assert(!binding.validateStateEnvironment(object,os,stateRead));
+        denyEntry=false;
+        assert(binding.validateStateEnvironment(object,os,stateRead));
+        bytes[0x40]=0;
+        assert(!binding.validateStateEnvironment(object,os,stateRead));
     }
     {
         struct Commands {
