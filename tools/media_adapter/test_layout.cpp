@@ -5269,6 +5269,62 @@ static void testSfcFrameFields() {
 
 int main() {
     {
+        TglOwnedVpChromaStatePrefix state;
+        TglOwnedSfcFillCache cache;
+        TglOwnedVpFramePreparation frame;
+        TglOwnedVpFillAlphaInput input;
+        input.sample={{10,20,30,64}};input.fillColorSpace=3;
+        input.hasAlpha=true;input.alphaMode=2;
+        frame.at920=true;frame.color.modes.state.at923=true;
+        std::array<uint8_t,12> fill{};std::array<uint8_t,8> alphaObject{};
+        std::memcpy(fill.data()+4,input.sample.data(),4);
+        std::memcpy(fill.data()+8,&input.fillColorSpace,4);
+        std::memcpy(alphaObject.data()+4,&input.alphaMode,4);
+        unsigned reads=0,fail=0;
+        auto read=[&](uintptr_t address,void* out,size_t size) noexcept {
+            if(++reads==fail) return false;
+            if(address>=0x1000 && address+size<=0x100c)
+                std::memcpy(out,fill.data()+address-0x1000,size);
+            else if(address>=0x2000 && address+size<=0x2008)
+                std::memcpy(out,alphaObject.data()+address-0x2000,size);
+            else return false;
+            return true;
+        };
+        TglOwnedVpFillAlphaInput snapshot;
+        assert(tglReadOwnedVpFillAlpha(true,0x1000,0x2000,read,snapshot));
+        assert(reads==3 && snapshot.sample==input.sample && snapshot.alphaMode==2);
+        for(fail=1;fail<=3;++fail) {
+            reads=0;snapshot.fillColorSpace=99;
+            assert(!tglReadOwnedVpFillAlpha(true,0x1000,0x2000,read,snapshot));
+            assert(snapshot.fillColorSpace==99);
+        }
+        reads=0;fail=0;
+        assert(tglReadOwnedVpFillAlpha(false,UINTPTR_MAX,0,read,snapshot));
+        assert(reads==0 && !snapshot.hasAlpha);
+        unsigned calls=0;
+        auto convert=[&](auto& result,const auto& sample,uint32_t source,uint32_t target) noexcept {
+            ++calls;assert(source==3 && target==5);result=sample;return true;
+        };
+        assert(tglPrepareOwnedVpFillAlpha(state,cache,frame,1,5,2,input,convert));
+        float alpha=0;std::memcpy(&alpha,state.packet.data()+0xc,4);
+        assert(alpha==64.0f/255.0f && state.packet[0x75]==1);
+        assert(state.packet[0x88]==1 && state.packet[0x89]==1 && state.packet[0x8a]==1);
+        assert(tglPrepareOwnedVpFillAlpha(state,cache,frame,1,5,2,input,convert));
+        assert(calls==1);
+        const auto saved=state.packet;
+        input.sample[0]=11;
+        assert(!tglPrepareOwnedVpFillAlpha(state,cache,frame,1,5,2,input,
+            [&](auto&,const auto&,uint32_t,uint32_t) noexcept {++calls;return false;}));
+        assert(state.packet==saved);
+        input.sample[0]=10;
+        assert(tglPrepareOwnedVpFillAlpha(state,cache,frame,1,5,2,input,convert));
+        assert(calls==2); // Failed conversion did not poison the cache.
+        frame.at920=false;input.alphaMode=0;input.constantAlpha=0.25f;
+        assert(tglPrepareOwnedVpFillAlpha(state,cache,frame,1,5,0,input,convert));
+        std::memcpy(&alpha,state.packet.data()+0xc,4);
+        assert(alpha==0.25f && calls==2 && state.packet[0x8a]==0);
+    }
+    {
         TglOwnedVpFramePreparation frame;
         frame.color.modes.state.at99c=0x19;
         frame.color.metadata.at9a8=0x21;frame.color.metadata.target294=0x21;

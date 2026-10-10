@@ -4982,6 +4982,49 @@ inline void tglPrepareOwnedSfcAlpha(std::array<uint8_t,0xb8>& packet,
     packet[0x88]=packet[0x89]=csc&1;
     packet[0x8a]=inputColorSpace==1 || inputColorSpace==2;
 }
+// Owned snapshot of the conditional-source +4/+8 fill metadata and optional
+// alpha object. Acquisition/leases and the native CSC binding are upstream;
+// this CPU composition does not authorize resource publication or GPU submit.
+struct TglOwnedVpFillAlphaInput {
+    std::array<uint8_t,4> sample{};
+    uint32_t fillColorSpace=0,alphaMode=0;
+    float constantAlpha=1;
+    bool hasAlpha=false;
+};
+// +988 is the conditional-source object (sample DWORD+4/color space+8),
+// +990 is the optional alpha object (constant float+0/mode DWORD+4).
+// Caller-held leases must enclose both this snapshot and its producer use.
+template<class Read>
+bool tglReadOwnedVpFillAlpha(bool fillEnabled,uintptr_t conditionalSource,
+    uintptr_t alpha,Read read,TglOwnedVpFillAlphaInput& output) noexcept {
+    static_assert(noexcept(read(uintptr_t{},nullptr,size_t{})),"VP fill/alpha leased read ABI");
+    TglOwnedVpFillAlphaInput candidate;
+    if(fillEnabled) {
+        if(!conditionalSource || conditionalSource>UINTPTR_MAX-12 ||
+           !read(conditionalSource+4,candidate.sample.data(),4) ||
+           !read(conditionalSource+8,&candidate.fillColorSpace,4)) return false;
+    }
+    if(alpha) {
+        if(alpha>UINTPTR_MAX-8 || !read(alpha+4,&candidate.alphaMode,4)) return false;
+        candidate.hasAlpha=true;
+        if(candidate.alphaMode==0 && !read(alpha,&candidate.constantAlpha,4)) return false;
+    }
+    output=candidate;return true;
+}
+template<class Convert>
+bool tglPrepareOwnedVpFillAlpha(TglOwnedVpChromaStatePrefix& state,
+    TglOwnedSfcFillCache& cache,const TglOwnedVpFramePreparation& frame,
+    uint32_t outputFormat,uint32_t outputColorSpace,uint32_t sourceColorSpace,
+    const TglOwnedVpFillAlphaInput& input,Convert convert) noexcept {
+    auto candidate=state.packet;
+    auto candidateCache=cache;
+    if(!candidateCache.prepare(candidate,frame.at920,outputFormat,input.sample,
+            input.fillColorSpace,outputColorSpace,convert)) return false;
+    tglPrepareOwnedSfcAlpha(candidate,outputFormat,input.hasAlpha,input.alphaMode,
+        input.constantAlpha,frame.at920,frame.color.modes.state.at923,sourceColorSpace);
+    state.packet=candidate;cache=candidateCache;return true;
+}
+
 // TGL129e3e/129e65 ignore surface/state producer returns;129ec3 (+70)
 // is the first checked status. Owned callbacks must share this per-pass latch
 // so an early failed producer cannot be followed by native command emission.
