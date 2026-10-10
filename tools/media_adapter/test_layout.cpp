@@ -6268,8 +6268,12 @@ int main() {
         TglOwnedSurfaceStorage surface;
         const uint64_t backing=0x1234;std::memcpy(surface.resource.data()+0x20,&backing,8);
         unsigned calls=0;
+        void* reentryContext=nullptr;
+        int (*reenter)(void*) noexcept=nullptr;
+        unsigned reentryHits=0;
         auto invoke=[&](uintptr_t fn,uintptr_t context,const void* resource,uint32_t mode) noexcept {
             assert(fn==entry && context==os && resource==surface.resource.data() && mode==2);
+            if(reenter) {assert(reenter(reentryContext)==5);++reentryHits;}
             ++calls;
         };
         auto use=[&](auto apply) noexcept {
@@ -6306,6 +6310,7 @@ int main() {
         bool denyRead=false;
         auto inputRead=[&](uintptr_t address,void* destination,size_t size) noexcept {
             if(denyRead) return false;
+            if(reenter) {assert(reenter(reentryContext)==5);++reentryHits;}
             for(auto region:std::array<std::pair<uintptr_t,size_t>,2>{{
                 {settingsAddress,settings.size()},{targetAddress,sizeof(surface)}}})
                 if(address>=region.first && address-region.first<=region.second &&
@@ -6316,12 +6321,28 @@ int main() {
         };
         using Context=TglOwnedVpCompressionContext<TglOwnedSurfaceStorage,decltype(inputRead),decltype(invoke),0xf8>;
         Context context(vp,surface,packet,settingsAddress,binding,inputRead,invoke);
+        struct Reentry {
+            Context* context;
+            void* settings;
+            void* target;
+            std::array<uint8_t,0xf8>* packet;
+            std::array<uint8_t,0xf8> expected;
+        } reentry{&context,settings.data(),&surface,&packet,packet};
         using Callback=TglOwnedVpCompressionCallback<TglOwnedVpSfcResolve<Context>>;
         static_assert(std::is_same_v<decltype(&Callback::compression),int(*)(void*,void*,void*,void*) noexcept>);
         assert(Callback::compression(vp.bytes.data(),settings.data(),&surface,packet.data())==5);
         {
             TglOwnedVpSfcScopedContext<Context> scope(vp.bytes.data(),context);assert(scope.bound());
+            reentryContext=&reentry;
+            reenter=[](void* raw) noexcept {
+                auto& value=*static_cast<Reentry*>(raw);
+                assert(*value.packet==value.expected);
+                const int status=value.context->compression(value.settings,value.target,value.packet->data());
+                assert(*value.packet==value.expected);
+                return status;
+            };
             assert(Callback::compression(vp.bytes.data(),settings.data(),&surface,packet.data())==0);
+            assert(reentryHits>1);reenter=nullptr;
             assert(calls==3 && packet[0x8b]==1 && packet[0x8c]==2 && packet[0xf7]==0x5a);
             const auto saved=packet;
             assert(Callback::compression(&surface,settings.data(),&surface,packet.data())==5);
