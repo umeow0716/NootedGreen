@@ -3913,6 +3913,13 @@ static void testResourceBinding() {
                 assert(tglWithOwnedVeboxHistoryFrame(pair,firstSurface,wrongSurface,
                     group,childLease,execution,7,frame,
                     stage,stage,stage)==5 && stages==0);
+                for(size_t denied=0;denied<2;++denied) {
+                    backends[denied].backingAllowed=false;
+                    assert(tglWithOwnedVeboxHistoryFrame(pair,firstSurface,secondSurface,
+                        group,childLease,execution,7,frame,
+                        stage,stage,stage)==5 && stages==0);
+                    backends[denied].backingAllowed=true;
+                }
                 struct BufferBackend {
                     unsigned allocations=0,releases=0;
                     int allocate(std::array<uint8_t,0x148>& storage,const TglResourceKey& key) noexcept {
