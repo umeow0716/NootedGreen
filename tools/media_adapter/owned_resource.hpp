@@ -4334,7 +4334,8 @@ struct TglOwnedVpModeResult {
 };
 // VP +b0=1de510..64f, then +b8=1de650..808. These mutate a candidate
 // inherited state; native +923 is sticky and +9c0 is only conditionally written.
-inline bool tglPrepareOwnedVpModes(const TglOwnedVpModeInput& in,
+// Slot+b0=1de510..64f, called at1dec81 with source/target only.
+inline void tglPrepareOwnedVpSampleMode(const TglOwnedVpModeInput& in,
     const TglOwnedVpModeState& original,TglOwnedVpModeResult& output) noexcept {
     TglOwnedVpModeResult candidate{original,false};
     if(in.source00==1 || in.source00==2) {
@@ -4345,6 +4346,13 @@ inline bool tglPrepareOwnedVpModes(const TglOwnedVpModeInput& in,
         candidate.state.at923=true;
         candidate.borrowSourceA8=in.sourceA8Present;
     }
+    output=candidate;
+}
+// Slot+b8=1de650..808, called at1dec96 with source/settings only.
+// Preserve the preceding b0 result, including its conditional borrow directive.
+inline bool tglPrepareOwnedVpFormatMode(const TglOwnedVpModeInput& in,
+    const TglOwnedVpModeResult& original,TglOwnedVpModeResult& output) noexcept {
+    auto candidate=original;
     if(tglOwnedVpForceColor(in.source130,true)) candidate.state.at99c=0x15;
     else if(in.settings13) candidate.state.at99c=0xd;
     else if(in.settings12) {
@@ -4357,6 +4365,28 @@ inline bool tglPrepareOwnedVpModes(const TglOwnedVpModeInput& in,
     output=candidate;
     return true;
 }
+inline bool tglPrepareOwnedVpModes(const TglOwnedVpModeInput& in,
+    const TglOwnedVpModeState& original,TglOwnedVpModeResult& output) noexcept {
+    TglOwnedVpModeResult sample;
+    tglPrepareOwnedVpSampleMode(in,original,sample);
+    return tglPrepareOwnedVpFormatMode(in,sample,output);
+}
+// Both native callers ignore the result; allocation/admission failure must be
+// retained by the enclosing owned context, not invented as an int callback ABI.
+template<class Resolve> struct TglOwnedVpModeCallbacks {
+    static void sampleMode(void* child,void* source,void* target) noexcept {
+        static_assert(noexcept(Resolve{}(child)),"VP mode resolver ABI");
+        auto* context=Resolve{}(child);
+        static_assert(noexcept(context->owns(child)) && noexcept(context->sampleMode(source,target)));
+        if(context && source && target && context->owns(child)) context->sampleMode(source,target);
+    }
+    static void formatMode(void* child,void* source,void* settings) noexcept {
+        static_assert(noexcept(Resolve{}(child)),"VP mode resolver ABI");
+        auto* context=Resolve{}(child);
+        static_assert(noexcept(context->owns(child)) && noexcept(context->formatMode(source,settings)));
+        if(context && source && settings && context->owns(child)) context->formatMode(source,settings);
+    }
+};
 // Acquire mode inputs and an optional CSC borrow only under caller leases.
 // No pointer is dereferenced without Read authorization; all three outputs
 // remain unchanged on failure. The returned reference's lease must enclose use.

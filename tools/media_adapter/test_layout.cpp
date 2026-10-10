@@ -6749,6 +6749,11 @@ int main() {
             input.settings60Present=true;input.settings60130=0x19;input.sourceA8Present=true;
             TglOwnedVpModeResult result;
             assert(tglPrepareOwnedVpModes(input,{},result));
+            TglOwnedVpModeResult sample,split;
+            tglPrepareOwnedVpSampleMode(input,{},sample);
+            assert(tglPrepareOwnedVpFormatMode(input,sample,split));
+            assert(split.state.at998==result.state.at998 && split.state.at99c==result.state.at99c &&
+                split.state.at923==result.state.at923 && split.borrowSourceA8==result.borrowSourceA8);
             const uint32_t color=(source==1 || source==2)?
                 ((target>=3 && target<=10)?target:(large?5:3)):(setting?target:source);
             assert(result.state.at998==color && result.state.at99c==0x19);
@@ -6776,6 +6781,52 @@ int main() {
         input.sourceA8Present=false;
         assert(tglPrepareOwnedVpModes(input,{},result));
         assert(result.state.at998==5 && result.state.at923 && !result.borrowSourceA8);
+    }
+    {
+        struct Context {
+            void* child;void* source;void* target;void* settings;
+            TglOwnedVpModeInput input;
+            TglOwnedVpModeResult result;
+            bool admitted=true,formatOk=false;unsigned samples=0,formats=0;
+            bool owns(void* p) const noexcept {return admitted && p==child;}
+            void sampleMode(void* a,void* b) noexcept {
+                assert(a==source && b==target);++samples;
+                tglPrepareOwnedVpSampleMode(input,result.state,result);
+            }
+            void formatMode(void* a,void* b) noexcept {
+                assert(a==source && b==settings);++formats;
+                formatOk=tglPrepareOwnedVpFormatMode(input,result,result);
+            }
+        };
+        std::array<uint8_t,4> tokens{};
+        Context context{&tokens[0],&tokens[1],&tokens[2],&tokens[3],{}, {}};
+        context.input.source00=1;context.input.source130=0x19;
+        context.input.sourceA8Present=true;context.input.settings12=true;
+        using Callback=TglOwnedVpModeCallbacks<TglOwnedVpSfcResolve<Context>>;
+        using Scope=TglOwnedVpSfcScopedContext<Context>;
+        static_assert(std::is_same_v<decltype(&Callback::sampleMode),void(*)(void*,void*,void*) noexcept>);
+        static_assert(std::is_same_v<decltype(&Callback::formatMode),void(*)(void*,void*,void*) noexcept>);
+        Callback::sampleMode(context.child,context.source,context.target);assert(!context.samples);
+        {
+            Scope scope(context.child,context);assert(scope.bound());
+            Callback::sampleMode(context.target,context.source,context.target);
+            Callback::sampleMode(context.child,nullptr,context.target);
+            context.admitted=false;
+            Callback::sampleMode(context.child,context.source,context.target);
+            assert(!context.samples);context.admitted=true;
+            Callback::sampleMode(context.child,context.source,context.target);
+            assert(context.samples==1 && context.result.state.at998==3 &&
+                context.result.state.at923 && context.result.borrowSourceA8);
+            Callback::formatMode(context.child,context.source,nullptr);assert(!context.formats);
+            Callback::formatMode(context.child,context.source,context.settings);
+            assert(context.formats==1 && !context.formatOk && context.result.state.at998==3 &&
+                context.result.borrowSourceA8);
+            context.input.settings60Present=true;context.input.settings60130=0x51;
+            Callback::formatMode(context.child,context.source,context.settings);
+            assert(context.formatOk && context.result.state.at99c==0x50 &&
+                context.result.state.at923 && context.result.borrowSourceA8);
+        }
+        Callback::formatMode(context.child,context.source,context.settings);assert(context.formats==2);
     }
     {
         TglOwnedVpExtentAdmission input;
