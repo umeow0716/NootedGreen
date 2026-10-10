@@ -284,6 +284,23 @@ public:
         return true;
     }
     uintptr_t get(size_t i) const { return i < shells.size() ? shells[i] : 0; }
+    // Private native-base storage only, after successful native construction.
+    // No observer may access it during installation. Validate every field first,
+    // then publish all pointers and revoke this owner's release authority.
+    template<size_t N>
+    bool installIntoPrivateBase(std::array<uint8_t,N>& storage) noexcept {
+        if (N<0x1bc0) return false;
+        constexpr size_t offsets[8]={0x1b0,0x1b8,0xba8,0xbb0,0x680,0x688,0x690,0x698};
+        for (size_t i=0;i<8;++i) {
+            uintptr_t existing=0;
+            std::memcpy(&existing,storage.data()+offsets[i],8);
+            if (existing || !shells[i]) return false;
+        }
+        for (size_t i=0;i<8;++i)
+            std::memcpy(storage.data()+offsets[i],&shells[i],8);
+        shells.fill(0);
+        return true;
+    }
     // Only after installing ALL eight fields into a private constructed child:
     // native non-deleting destructor12de30 then owns their paired436d0 frees.
     // Never retain ownership here as well, or native teardown double-frees them.

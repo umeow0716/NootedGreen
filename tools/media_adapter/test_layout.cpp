@@ -24,7 +24,18 @@ static void testTrackedCpuOwner() {
         {
             TglVeboxCpuShells<TransferBackend> shells(backend);
             assert(shells.allocate());
-            nativeFields = shells.relinquishToNative();
+            std::array<uint8_t,0x1bc0> storage{};
+            std::array<uint8_t,0x100> small{};
+            assert(!shells.installIntoPrivateBase(small));
+            storage[0x698]=1;
+            const auto saved=storage;
+            assert(!shells.installIntoPrivateBase(storage) && storage==saved && shells.get(0)==1);
+            storage[0x698]=0;
+            assert(shells.installIntoPrivateBase(storage));
+            constexpr size_t offsets[8]={0x1b0,0x1b8,0xba8,0xbb0,0x680,0x688,0x690,0x698};
+            for (size_t i=0;i<8;++i) std::memcpy(&nativeFields[i],storage.data()+offsets[i],8);
+            const auto installed=storage;
+            assert(!shells.installIntoPrivateBase(storage) && storage==installed);
             for (size_t i = 0; i < 8; ++i) {
                 assert(nativeFields[i] == i+1 && !shells.get(i));
             }
