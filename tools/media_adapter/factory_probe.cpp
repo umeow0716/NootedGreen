@@ -148,6 +148,34 @@ int resourceReference(bool fenceOnly=false) {
         constexpr uint8_t expectedUuid[16] = {0x19,0x8a,0x77,0x6a,0xfe,0x03,0x35,0xee,
             0x8e,0x53,0x7b,0x9f,0x14,0xca,0xab,0xaa};
         if (std::memcmp(uuid.uuid, expectedUuid, sizeof(expectedUuid))) goto done;
+        if (fenceOnly) {
+            // Exact 25G229 bytes captured by the CPU-only fence reference.
+            // Both exports are prologue+jump thunks, not fence implementations.
+            uint8_t thunk[9]{};
+            const bool finish = !std::strcmp(name,"IOAccelVideoContextFinishFenceEvent");
+            const uint8_t finishThunk[9] = {0x55,0x48,0x89,0xe5,0x5d,0xe9,0xc5,0xfa,0xff};
+            const uint8_t submitThunk[9] = {0x55,0x48,0x89,0xe5,0x5d,0xe9,0x00,0x00,0x00};
+            uint8_t last = 0;
+            if (textSize - (address-base) < 10 ||
+                !read(address,thunk,sizeof(thunk)) || !read(address+9,&last,1) ||
+                std::memcmp(thunk,finish?finishThunk:submitThunk,sizeof(thunk)) ||
+                last != (finish?0xff:0x00)) goto done;
+            int32_t relative = 0;
+            if (!read(address+6,&relative,sizeof(relative))) goto done;
+            address = address+10+relative;
+            if (address < base || address-base >= textSize) goto done;
+            if (!finish) {
+                // Submit thunk lands on a wrapper whose one captured E8 calls
+                // the implementation. Follow only this exact instruction.
+                uint8_t call[5]{};
+                constexpr uint8_t expectedCall[5]={0xe8,0x38,0xe5,0xff,0xff};
+                if (textSize-(address-base)<21 || !read(address+16,call,5) ||
+                    std::memcmp(call,expectedCall,5)) goto done;
+                std::memcpy(&relative,call+1,sizeof(relative));
+                address=address+21+relative;
+                if(address<base || address-base>=textSize) goto done;
+            }
+        }
         if (reference.callOffset) {
             // Exact sealed 25G229 image and the two previously captured direct
             // calls only. Read the callees; never execute either mapping helper.
