@@ -4355,6 +4355,7 @@ static void testSfcLineBufferOwnership() {
         backend.owner=&buffers;
         backend.reenter=[](void* pointer) {
             auto& owner=*static_cast<TglOwnedSfcLineBuffers<Backend>*>(pointer);
+            assert(!owner.tryReset());
             owner.reset();
             assert(owner.ensure(1080,720)==5);
             assert(!owner.storage(0) && !owner.storage(1));
@@ -4381,6 +4382,7 @@ static void testSfcLineBufferOwnership() {
             const auto allocations=backend.allocations,releases=backend.releases;
             const auto* avs=buffers.storage(0);const auto* ief=buffers.storage(1);
             assert(buffers.withBuffers(1080,720,[&]() noexcept {
+                assert(!buffers.tryReset());
                 buffers.reset();
                 assert(buffers.ensure(1080,721)==5 && buffers.matchesDimensions(1080,720));
                 assert(buffers.storage(0)==avs && buffers.storage(1)==ief);
@@ -4392,8 +4394,10 @@ static void testSfcLineBufferOwnership() {
         assert(buffers.withBuffers(1080,721,[]() noexcept {assert(false);return 0;})==5);
         assert(buffers.ensure(0,720)==5 && backend.live==2 && buffers.storage(0));
         assert(buffers.ensure(1080,721)==0 && backend.allocations==3 && backend.live==2);
-        buffers.reset();
+        assert(buffers.tryReset());
         assert(!backend.live && !buffers.storage(0));
+        const auto releases=backend.releases;
+        assert(buffers.tryReset() && backend.releases==releases);
         assert(buffers.withBuffers(1080,720,[]() noexcept {assert(false);return 0;})==5);
         backend.failAt=backend.allocations+1;
         assert(buffers.ensure(1080,720)==77 && !backend.live && !buffers.storage(1));

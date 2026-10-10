@@ -7648,12 +7648,17 @@ public:
         mutating_=false;
         return status;
     }
-    void reset() noexcept {
-        if(leased_ || mutating_) return;
+    // ICL VP+30 (1df1b0..1df20b) releases line resources via OS+200;
+    // it neither destroys the VP nor waits for GPU completion. Our Gen12
+    // owner also retains SFD. The caller must establish discard/retirement
+    // before this CPU release; success here is NOT a fence certificate.
+    bool tryReset() noexcept {
+        if(leased_ || mutating_) return false;
         mutating_=true;
         inputHeight_=scaledHeight_=0;owners.reset();
-        mutating_=false;
+        mutating_=false;return true;
     }
+    void reset() noexcept {(void)tryReset();}
     // Pins synchronous CPU preparation only, NOT GPU completion. The enclosing
     // frame still retains this owner through discard or an actual fence.
     template<class Use> int withBuffers(uint32_t inputHeight,uint32_t scaledHeight,Use use) noexcept {
