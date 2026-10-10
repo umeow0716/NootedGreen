@@ -5873,6 +5873,12 @@ int tglSendOwnedSfcWithOutputUsage(Backend& backend,
     static_assert(std::is_same_v<decltype(update(resource,uint32_t{},uint32_t{})),void> &&
                   std::is_same_v<decltype(control(resource,uint32_t{})),void>,
                   "native SFC usage return values are not consumed");
+    std::array<uint8_t,0x148> backing{};
+    std::memcpy(backing.data(),resource,backing.size());
+    uintptr_t boundOutput=0;
+    std::memcpy(&boundOutput,parameters.state.data()+0x90,8);
+    if(!tglNativeBackingPresent(backing) ||
+       boundOutput!=reinterpret_cast<uintptr_t>(resource)) return 5;
     TglOwnedSfcLockParameters lock;
     if(!tglReadOwnedSfcLockParameters(settings,1,read,lock)) return 5;
     update(resource,6,1);

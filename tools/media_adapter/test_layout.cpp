@@ -7221,13 +7221,17 @@ int main() {
         }
         for(unsigned controlFlag:{0u,1u,2u,3u}) for(unsigned failRead:{0u,1u,2u}) {
             auto output=shell;output[0xe8]=uint8_t(controlFlag);
+            const uintptr_t backing=1,outputResource=reinterpret_cast<uintptr_t>(output.data()+0x148);
+            std::memcpy(output.data()+0x168,&backing,8);
+            auto usageParameters=parameters;
+            std::memcpy(usageParameters.state.data()+0x90,&outputResource,8);
             unsigned reads=0,updates=0,controls=0;
             auto read=[&](uintptr_t address,void* out,size_t size) noexcept {
                 assert(size==1 && (address==0x1013 || address==0x100b));
                 if(++reads==failRead) return false;
                 *static_cast<uint8_t*>(out)=address==0x100b?1:0;return true;
             };
-            Backend backend;backend.expected=&parameters;backend.leasedLock=true;backend.lockFlag=1;
+            Backend backend;backend.expected=&usageParameters;backend.leasedLock=true;backend.lockFlag=1;
             backend.resource=reinterpret_cast<uintptr_t>(output.data()+0x148);
             auto update=[&](const void* resource,uint32_t usage,uint32_t flag) noexcept {
                 assert(!backend.count && !updates && !controls && reads==2);
@@ -7238,10 +7242,26 @@ int main() {
                 assert(resource==output.data()+0x148 && usage==6);++controls;
             };
             auto platform=[&](auto& descriptor) {descriptor[0]=0xee;return backend.stage(3);};
-            assert(tglSendOwnedSfcWithOutputUsage(backend,parameters,output,
+            assert(tglSendOwnedSfcWithOutputUsage(backend,usageParameters,output,
                 0x1000,0,0,0,0,read,update,control,platform)==(failRead?5:0));
             assert(updates==(failRead?0:1) && controls==(failRead?0:(controlFlag&1)));
             assert(failRead?!backend.count:backend.count==4);
+        }
+        for(bool missingBacking:{false,true}) {
+            auto output=shell;auto rejected=parameters;
+            const uintptr_t backing=missingBacking?0:1;
+            const uintptr_t wrongOutput=missingBacking?
+                reinterpret_cast<uintptr_t>(output.data()+0x148):0;
+            std::memcpy(output.data()+0x168,&backing,8);
+            std::memcpy(rejected.state.data()+0x90,&wrongOutput,8);
+            Backend backend;
+            auto read=[](uintptr_t,void*,size_t) noexcept {assert(false);return false;};
+            auto update=[](const void*,uint32_t,uint32_t) noexcept {assert(false);};
+            auto control=[](const void*,uint32_t) noexcept {assert(false);};
+            auto platform=[](auto&) {assert(false);return 5;};
+            assert(tglSendOwnedSfcWithOutputUsage(backend,rejected,output,
+                0x1000,0,0,0,0,read,update,control,platform)==5);
+            assert(!backend.count);
         }
         {
             constexpr uintptr_t os=0x1000,image=0x100000;
