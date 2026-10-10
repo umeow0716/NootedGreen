@@ -8004,6 +8004,20 @@ public:
         for(auto& owner:owners_) owner.reset();
         busy_=false;
     }
+    // Reserve before a multi-owner retirement decision. Release is synchronous
+    // and single-use; it must not escape this callback. No GPU proof is inferred.
+    template<class Use> int withReleaseReservation(Use use) noexcept {
+        if(busy_ || !valid_) return 5;
+        busy_=true;bool released=false;
+        auto release=[&]() noexcept {
+            if(released) return;
+            released=true;ready_=false;
+            for(auto& owner:owners_) owner.reset();
+        };
+        static_assert(noexcept(use(release)),"release reservation must not throw");
+        const int result=use(release);
+        busy_=false;return result;
+    }
 };
 #if defined(__APPLE__)
 // Call only under the resource owner's synchronous lease, before GPU use.
@@ -8199,6 +8213,17 @@ public:
         mutating_=false;return true;
     }
     void reset() noexcept {(void)tryReset();}
+    template<class Use> int withReleaseReservation(Use use) noexcept {
+        if(leased_ || mutating_) return 5;
+        mutating_=true;bool released=false;
+        auto release=[&]() noexcept {
+            if(released) return;
+            released=true;inputHeight_=scaledHeight_=0;owners.reset();
+        };
+        static_assert(noexcept(use(release)),"release reservation must not throw");
+        const int result=use(release);
+        mutating_=false;return result;
+    }
     // Pins synchronous CPU preparation only, NOT GPU completion. The enclosing
     // frame still retains this owner through discard or an actual fence.
     template<class Use> int withBuffers(uint32_t inputHeight,uint32_t scaledHeight,Use use) noexcept {
@@ -8470,6 +8495,17 @@ public:
         if(busy_) return;
         busy_=true;retire();busy_=false;
     }
+    template<class Use> int withReleaseReservation(Use use) noexcept {
+        if(busy_) return 5;
+        busy_=true;bool released=false;
+        auto release=[&]() noexcept {
+            if(released) return;
+            released=true;retire();
+        };
+        static_assert(noexcept(use(release)),"release reservation must not throw");
+        const int result=use(release);
+        busy_=false;return result;
+    }
     // Synchronous descriptor/state consumption only. A GPU submission must
     // separately retain this owner until verified completion; never escape
     // resource/layout references from the callback.
@@ -8571,6 +8607,33 @@ public:
     void reset() noexcept {
         if(busy_ || !bindingsValid_) return;
         busy_=true;retire();busy_=false;
+    }
+    // Selective native mode cleanup, not full teardown: retain the FFDN group.
+    // Reserve every selected owner BEFORE invoking external retirement admission
+    // or releasing anything. Caller supplies actual submission/discard evidence;
+    // raw FinishFenceEvent success alone is not valid retirement admission.
+    template<class Lines,class Retire>
+    int releaseModeResources(Lines& lines,bool releaseSfc,Retire retire) noexcept {
+        static_assert(noexcept(retire()) && std::is_same_v<decltype(retire()),int>,
+                      "mode retirement admission status ABI");
+        if(busy_ || !bindingsValid_) return 5;
+        busy_=true;
+        const int result=group_.withStorage([&](const auto&) noexcept {
+          return history_.withReleaseReservation([&](auto releaseHistory) noexcept {
+            return statistics_.withReleaseReservation([&](auto releaseStatistics) noexcept {
+                auto release=[&](auto releaseLines) noexcept {
+                    const int admission=retire();
+                    if(admission) return admission;
+                    ready_=false;
+                    releaseHistory();releaseStatistics();releaseLines();
+                    return 0;
+                };
+                if(releaseSfc) return lines.withReleaseReservation(release);
+                return release([]() noexcept {});
+            });
+          });
+        });
+        busy_=false;return result;
     }
     // Frame admission includes statistics and every group resource before
     // publishing either history pitch. All owners remain pinned through the

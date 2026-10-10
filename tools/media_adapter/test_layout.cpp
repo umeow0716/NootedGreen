@@ -4152,6 +4152,55 @@ static void testResourceBinding() {
                 invalidGraph.reset();
                 assert(!api.references && buffer.allocations==2 && extra.allocations==groupAllocations);
                 assert(backends[0].allocations+backends[1].allocations==historyAllocations);
+                struct LineBackend {
+                    unsigned live=0,releases=0;
+                    int allocate(std::array<uint8_t,0x148>& s,const TglResourceKey&) noexcept {
+                        ++live;s[0]=1;return 0;
+                    }
+                    bool backed(const std::array<uint8_t,0x148>& s) noexcept {return s[0]==1;}
+                    void release(std::array<uint8_t,0x148>&) noexcept {--live;++releases;}
+                } lineBackend;
+                TglOwnedSfcLineBuffers<LineBackend> lines(lineBackend);
+                assert(lines.ensure(1080,720)==0);
+                assert(transaction.ensure(requests,prepare,keys,false,1920,1080,fill)==0);
+                unsigned retirementCalls=0;
+                auto denied=[&]() noexcept {++retirementCalls;return 31;};
+                const auto retainedGroup=extra.allocations;
+                const auto initialLineLive=lineBackend.live;
+                assert(transaction.releaseModeResources(lines,true,denied)==31);
+                assert(retirementCalls==1 && api.references==3 && lineBackend.live==initialLineLive);
+                assert(statistics.layout().bytes);
+                // A busy selected owner denies the whole operation BEFORE admission.
+                assert(pair.withStorage([&](const auto&,const auto&) noexcept {
+                    assert(transaction.releaseModeResources(lines,true,denied)==5);
+                    return 0;
+                })==0);
+                assert(statistics.withResource([&](const auto&,const auto&) noexcept {
+                    assert(transaction.releaseModeResources(lines,true,denied)==5);
+                    return 0;
+                })==0);
+                assert(lines.withBuffers(1080,720,[&]() noexcept {
+                    assert(transaction.releaseModeResources(lines,true,denied)==5);
+                    return 0;
+                })==0);
+                assert(retirementCalls==1 && api.references==3 && lineBackend.live==initialLineLive);
+                auto allowed=[&]() noexcept {
+                    ++retirementCalls;
+                    transaction.reset();group.reset();pair.reset();statistics.reset();lines.reset();
+                    assert(api.references==3 && statistics.layout().bytes && lineBackend.live==initialLineLive);
+                    assert(transaction.releaseModeResources(lines,true,denied)==5);
+                    return 0;
+                };
+                assert(transaction.releaseModeResources(lines,true,allowed)==0);
+                assert(retirementCalls==2 && api.references==1 && !statistics.layout().bytes);
+                assert(!lineBackend.live && lineBackend.releases==initialLineLive);
+                // FFDN remains live/reusable; next ensure recreates only the retired owners.
+                assert(transaction.ensure(requests,prepare,keys,false,1920,1080,fill)==0);
+                assert(extra.allocations==retainedGroup && api.references==3);
+                assert(lines.ensure(1080,720)==0);
+                assert(transaction.releaseModeResources(lines,false,[]() noexcept {return 0;})==0);
+                assert(api.references==1 && lineBackend.live==initialLineLive);
+                transaction.reset();assert(!api.references);
             }
             pair.reset();assert(!api.references);
             std::array<TglResourceStorageReference,2> alias{{{first},{first}}};
