@@ -121,10 +121,24 @@ static void testNativeResourceBoundary() {
     };
     set(0x14, key.width); set(0x18, key.height);
     set(0x24, key.tile); set(0x28, key.format);
-    Backend backend(&fixture, allocate, release, 0);
+    assert(tglBufferSizeFits(1, 4096));
+    assert(tglBufferSizeFits(0xfffff000u, 4096));
+    assert(!tglBufferSizeFits(0xfffff001u, 4096));
+    assert(!tglBufferSizeFits(UINT32_MAX, 4096));
+    assert(!tglBufferSizeFits(4096, 0));
+    assert(!tglBufferSizeFits(4096, 4095));
+    assert(!tglBufferSizeFits(4096, uint64_t{1} << 32));
+    assert(!tglBufferSizeFits(0, 4096));
+    Backend backend(&fixture, allocate, release, 0, 4096);
     TglOwnedResource<Backend> owner(backend);
     auto result = owner.ensure(key);
     assert(result.status == 31 && result.state == decltype(owner)::State::Empty);
+    assert(fixture.allocations == 1 && fixture.releases == 1);
+    auto oversized = key; oversized.width = UINT32_MAX;
+    assert(owner.ensure(oversized).status == 5);
+    Backend unknownPage(&fixture, allocate, release, 0);
+    TglOwnedResource<Backend> noPage(unknownPage);
+    assert(noPage.ensure(key).status == 5);
     assert(fixture.allocations == 1 && fixture.releases == 1);
     auto compressed = key;
     compressed.compressed = true;
@@ -157,10 +171,26 @@ static void testNativeResourceBoundary() {
         assert(!surface.ensure(surfaceKey).changed);
     }
     assert(fixture.allocations == 3 && fixture.releases == 2);
+    {
+        TglNativeResourceScope scope(&fixture, allocate, release, 1);
+        assert(scope.ensure(surfaceKey).status == 0);
+        scope.close();
+        assert(fixture.releases == 3);
+        scope.close();
+        assert(scope.ensure(surfaceKey).status == 5);
+        assert(fixture.allocations == 4 && fixture.releases == 3);
+    }
+    assert(fixture.releases == 3); // closed destructor cannot double-release
+    {
+        TglNativeResourceScope scope(&fixture, allocate, release, 1);
+        assert(scope.ensure(surfaceKey).status == 0);
+    }
+    assert(fixture.allocations == 5 && fixture.releases == 4);
 }
 
 static void testResourceBinding() {
-    constexpr uintptr_t os = 0x1000, image = 0x100000;
+    constexpr uintptr_t os = 0x1000, image = 0x100000, renderHal = 0x2000;
+    uintptr_t borrowedOs = os;
     uintptr_t allocate = image + 0x63720, release = image + 0x63c00;
     std::array<uint8_t, 16> allocAnchor{
         0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x70,
@@ -172,6 +202,7 @@ static void testResourceBinding() {
     const auto read = [&](uintptr_t p, void *out, size_t n) {
         if (!readable) return false;
         const void *source = nullptr;
+        if (p == renderHal && n == sizeof(borrowedOs)) source = &borrowedOs;
         if (p == os + 0x1f8 && n == sizeof(allocate)) source = &allocate;
         if (p == os + 0x200 && n == sizeof(release)) source = &release;
         if (p == image + 0x63720 && n == allocAnchor.size()) source = allocAnchor.data();
@@ -202,6 +233,15 @@ static void testResourceBinding() {
     assert(!binding.resolve(os, UINTPTR_MAX, read, qualify, executable)); empty();
     assert(!binding.resolve(0, image, read, qualify, executable)); empty();
     assert(!binding.resolve(os, 0, read, qualify, executable)); empty();
+    const auto borrowed = [&] {
+        return binding.resolveFromRenderHal(renderHal, image, read, qualify, executable);
+    };
+    assert(borrowed() && binding.context == os);
+    borrowedOs = 0; assert(!borrowed()); empty(); borrowedOs = os;
+    assert(borrowed()); readable = false; assert(!borrowed()); empty(); readable = true;
+    assert(!binding.resolveFromRenderHal(0, image, read, qualify, executable)); empty();
+    assert(!binding.resolveFromRenderHal(UINTPTR_MAX, image, read, qualify, executable)); empty();
+    identity = false; assert(!borrowed()); empty();
 }
 
 // Offline layout hypothesis only: not an ABI-complete or deployable adapter.

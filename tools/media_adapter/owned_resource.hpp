@@ -34,8 +34,29 @@ inline bool tglNativeBackingPresent(const std::array<uint8_t, 0x148> &s) noexcep
     return false;
 }
 
+// 637e5..6380d rounds in 64 bits then stores only 32 bits. Require the
+// caller's authenticated native page size; do not assume a host page size.
+inline bool tglBufferSizeFits(uint32_t bytes, uint64_t pageSize) noexcept {
+    if (!bytes || !pageSize || (pageSize & (pageSize - 1)) ||
+        pageSize > uint64_t{UINT32_MAX}) return false;
+    const uint64_t rounded = (uint64_t{bytes} + pageSize - 1) & ~(pageSize - 1);
+    return rounded != 0 && rounded <= UINT32_MAX;
+}
+
 struct TglNativeResourceBinding {
     uintptr_t context = 0, allocate = 0, release = 0;
+    // 132ec0..132ed6: renderer stores RenderHal at +2cc0 and borrows
+    // RenderHal[0] as OS at +2cc8. Never acquire ownership of either object.
+    // Caller must keep RenderHal alive through all resource destruction.
+    template<class Read, class Qualify, class Executable>
+    bool resolveFromRenderHal(uintptr_t renderHal, uintptr_t image, Read read,
+                              Qualify qualify, Executable executable) {
+        *this = {};
+        uintptr_t os = 0;
+        if (!renderHal || renderHal > std::numeric_limits<uintptr_t>::max() - sizeof(os) ||
+            !read(renderHal, &os, sizeof(os))) return false;
+        return resolve(os, image, read, qualify, executable);
+    }
     // Must run under the owner's lifetime lock. Qualify must authenticate the
     // loaded native image; anchors alone are not an image identity check.
     template<class Read, class Qualify, class Executable>
@@ -72,12 +93,14 @@ public:
     using Allocate = int (*)(void *, const void *, void *) noexcept;
     using Release = void (*)(void *, void *) noexcept;
     TglNativeResourceBackend(void *context, Allocate allocate, Release release,
-                             uint32_t resourceType) noexcept
-        : context_(context), allocate_(allocate), release_(release), type_(resourceType) {}
+                             uint32_t resourceType, uint64_t nativePageSize = 0) noexcept
+        : context_(context), allocate_(allocate), release_(release), type_(resourceType),
+          pageSize_(nativePageSize) {}
     int allocate(Storage &storage, const TglResourceKey &key) noexcept {
         if (!context_ || !allocate_ || !release_) return 5;
         if (type_ > 1 || key.compressed || key.compressionMode) return 25;
         if (!key.width || !key.height) return 5;
+        if (type_ == 0 && !tglBufferSizeFits(key.width, pageSize_)) return 5;
         // Exact known fields only; compression allocation ABI remains unproved.
         alignas(8) std::array<uint8_t, 0x50> params{};
         const auto put = [&](size_t offset, uint32_t value) {
@@ -103,6 +126,7 @@ private:
     Allocate allocate_;
     Release release_;
     uint32_t type_;
+    uint64_t pageSize_;
 };
 
 template<class Backend> class TglOwnedResource {
@@ -156,4 +180,31 @@ private:
     TglResourceKey key_{};
     bool live_ = false;
     State state_ = State::Empty;
+};
+
+// One borrowed-OS resource lifetime. The renderer must close every such scope
+// before retiring RenderHal/OS. Member order guarantees resource destruction
+// while its backend still exists; close is terminal and idempotent.
+class TglNativeResourceScope {
+public:
+    using Owner = TglOwnedResource<TglNativeResourceBackend>;
+    TglNativeResourceScope(void *context, TglNativeResourceBackend::Allocate allocate,
+                           TglNativeResourceBackend::Release release,
+                           uint32_t type, uint64_t nativePageSize = 0) noexcept
+        : backend_(context, allocate, release, type, nativePageSize), owner_(backend_) {}
+    ~TglNativeResourceScope() { close(); }
+    TglNativeResourceScope(const TglNativeResourceScope &) = delete;
+    TglNativeResourceScope &operator=(const TglNativeResourceScope &) = delete;
+    Owner::Result ensure(const TglResourceKey &key) noexcept {
+        if (closed_) return {5, Owner::State::Empty, false};
+        return owner_.ensure(key);
+    }
+    void close() noexcept {
+        owner_.reset();
+        closed_ = true;
+    }
+private:
+    TglNativeResourceBackend backend_;
+    Owner owner_;
+    bool closed_ = false;
 };
