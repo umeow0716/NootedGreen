@@ -5673,11 +5673,47 @@ int main() {
         assert(geometrySnapshot.frameWidth && geometrySnapshot.frameHeight);
         assert(prepared.at922 && !prepared.at920 && prepared.regions.scale.at928==0.5f && !reference);
         assert(prepared.color.at9b8 && prepared.color.metadata.at9a4==0x31);
+        TglOwnedVpSfcCallerStorage scopedStorage;
+        const auto originalStorage=scopedStorage.bytes;
+        for(unsigned failedStage=0;failedStage<3;++failedStage) {
+            unsigned stages=0;calls=0;
+            const auto checkScope=[&](void* child) noexcept {
+                assert(child==scopedStorage.bytes.data());
+                uintptr_t parameters=0,scopedTarget=0;
+                std::memcpy(&parameters,scopedStorage.bytes.data()+0x990,8);
+                std::memcpy(&scopedTarget,scopedStorage.bytes.data()+0x9b0,8);
+                assert(parameters==0x4000 && scopedTarget==0x2000);
+            };
+            const int result=tglSetupOwnedVpLeasedFrame(scopedStorage,
+                0x1000,0x2000,0x3000,0x4000,0x6000,{},read,
+                [&](void* child,const auto& frame,const auto& geometry) noexcept -> int {
+                    checkScope(child);assert(++stages==1);
+                    assert(frame.at922 && geometry.frameWidth==geometrySnapshot.frameWidth);
+                    return failedStage==1?31:0;
+                },
+                [&](void* child,const auto& frame) noexcept -> int {
+                    checkScope(child);assert(++stages==2 && frame.regions.scale.scaling);
+                    return failedStage==2?11:0;
+                },
+                [&](void* child,const auto& frame) noexcept {
+                    checkScope(child);assert(++stages==3 && frame.at922);
+                });
+            assert(result==(failedStage==1?31:failedStage==2?11:0));
+            assert(stages==(failedStage?failedStage:3) && calls==total);
+            assert(scopedStorage.bytes==originalStorage);
+        }
         for(fail=1;fail<=total;++fail) {
             calls=0;prepared.at9a0=17;reference=19;
             geometrySnapshot.frameWidth=23;
             assert(!tglReadOwnedVpFramePreparation(0x1000,0x2000,0x3000,0x4000,true,read,{},prepared,reference,&geometrySnapshot));
             assert(prepared.at9a0==17 && reference==19 && geometrySnapshot.frameWidth==23);
+            calls=0;unsigned producers=0;
+            assert(tglSetupOwnedVpLeasedFrame(scopedStorage,
+                0x1000,0x2000,0x3000,0x4000,0x6000,{},read,
+                [&](void*,const auto&,const auto&) noexcept -> int { ++producers;return 0; },
+                [&](void*,const auto&) noexcept -> int { ++producers;return 0; },
+                [&](void*,const auto&) noexcept { ++producers; })==5);
+            assert(!producers && scopedStorage.bytes==originalStorage);
         }
         fail=0;calls=0;ief[0]=0;
         assert(tglReadOwnedVpFramePreparation(0x1000,0x2000,0x3000,0x4000,false,read,{},prepared,reference));

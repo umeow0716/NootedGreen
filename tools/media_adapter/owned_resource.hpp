@@ -4910,6 +4910,27 @@ int tglWithOwnedVpPreparedFrame(TglOwnedVpSfcCallerStorage& storage,
             });
         });
 }
+// Compose acquisition, owned frame publication and +40 producer ordering.
+// The caller retains all descriptor/image leases for the complete call and
+// supplies an authenticated settings view; this is not a published VP entry.
+// State receives the SAME geometry snapshot used to prepare the frame.
+template<class Read,class State,class Avs,class Ief>
+int tglSetupOwnedVpLeasedFrame(TglOwnedVpSfcCallerStorage& storage,
+    uintptr_t source,uintptr_t target,uintptr_t mhw,uintptr_t settings,
+    uintptr_t conditionalSource,const TglOwnedVpModeState& original,
+    Read read,State state,Avs avs,Ief ief) noexcept {
+    TglOwnedVpFramePreparation frame;TglOwnedVpRegionInput geometry;
+    uintptr_t sourceA8=0;
+    if(!tglReadOwnedVpFramePreparation(source,target,mhw,settings,
+        conditionalSource!=0,read,original,frame,sourceA8,&geometry)) return 5;
+    return tglWithOwnedVpPreparedFrame(storage,frame,conditionalSource,settings,target,sourceA8,
+        [&](void* child,const TglOwnedVpColorMetadata&) noexcept {
+            return tglSetupOwnedVpSfcStages(frame,
+                [&]() noexcept { return state(child,frame,geometry); },
+                [&]() noexcept { return avs(child,frame); },
+                [&]() noexcept { ief(child,frame); });
+        });
+}
 // Exact ICL base/Gen12 SFC +c0 slot is 1df3c0: a single DWORD zero
 // at packet+4, not a no-op and not a GPU command producer.
 inline void tglPrepareOwnedSfcPlatformField(std::array<uint8_t,0xb8>& packet) noexcept {
