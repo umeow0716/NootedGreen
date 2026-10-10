@@ -3985,17 +3985,31 @@ inline bool tglNormalizeOwnedChromaSiting(TglOwnedSurfaceStorage& surface,
 }
 // VP +28 1ded25..1def21. Target metadata is returned as owned data, never
 // written through a borrowed target pointer. Pack inputs require qualification
-// by the native format classifier. The later +9b8 callback is not modeled here.
+// by the native format classifier. The later +9b8 predicate is separate below.
 struct TglOwnedVpColorMetadata {
     uint32_t at9a4=0,at9a8=0,target294=0;
 };
-inline bool tglPrepareOwnedVpColorMetadata(uint32_t format99c,bool settings12,
-    uint32_t source120,uint32_t source294,uint32_t target294,
-    uint32_t inputPack,uint32_t outputPack,TglOwnedVpColorMetadata& output) noexcept {
-    const bool force=settings12 && ((format99c>=1 && format99c<=7) ||
+inline bool tglOwnedVpForceColor(uint32_t format99c,bool settings12) noexcept {
+    return settings12 && ((format99c>=1 && format99c<=7) ||
         (format99c>=0xa && format99c<=0xc) || format99c==0x50 ||
         format99c==0x51 || format99c==uint32_t(-8) ||
         format99c==uint32_t(-9) || format99c==0x55 || format99c==0x5a);
+}
+// VP +9b8, 1def21..1df03a ->4a6d0. Unlike +9a8's classifier,
+// sourcePack is from source+130, not VP+99c. Upsampling is only 420->422/444
+// or 422->444; the force-color branch bypasses the predicate entirely.
+inline bool tglPrepareOwnedVpChromaUpsampling(uint32_t format99c,bool settings12,
+    uint32_t sourcePack,uint32_t targetPack,bool& output) noexcept {
+    if(sourcePack>3 || targetPack>3) return false;
+    output=!tglOwnedVpForceColor(format99c,settings12) &&
+        ((sourcePack==0 && (targetPack==1 || targetPack==2)) ||
+         (sourcePack==1 && targetPack==2));
+    return true;
+}
+inline bool tglPrepareOwnedVpColorMetadata(uint32_t format99c,bool settings12,
+    uint32_t source120,uint32_t source294,uint32_t target294,
+    uint32_t inputPack,uint32_t outputPack,TglOwnedVpColorMetadata& output) noexcept {
+    const bool force=tglOwnedVpForceColor(format99c,settings12);
     TglOwnedVpColorMetadata candidate;
     candidate.at9a4=force?1:source120;
     if(!tglNormalizeOwnedChromaSitingValue(source294,inputPack,candidate.at9a8) ||

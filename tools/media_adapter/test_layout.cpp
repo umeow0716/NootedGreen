@@ -5269,6 +5269,22 @@ static void testSfcFrameFields() {
 
 int main() {
     {
+        for(uint32_t source=0;source<4;++source) for(uint32_t target=0;target<4;++target)
+        for(bool setting:{false,true}) for(uint32_t format:{1u,0x19u}) {
+            bool output=true;
+            assert(tglPrepareOwnedVpChromaUpsampling(format,setting,source,target,output));
+            const bool expected=(source==0 && (target==1 || target==2)) ||
+                                (source==1 && target==2);
+            assert(output==(expected && !(setting && format==1)));
+        }
+        for(bool original:{false,true}) for(bool invalidSource:{false,true}) {
+            bool output=original;
+            assert(!tglPrepareOwnedVpChromaUpsampling(0x19,false,invalidSource?4:0,
+                                                      invalidSource?0:4,output));
+            assert(output==original);
+        }
+    }
+    {
         for(uint32_t format:{0u,1u,7u,8u,0xau,0xcu,0xdu,0x50u,0x51u,0x55u,0x5au,
                             uint32_t(-8),uint32_t(-9),uint32_t(-7)}) {
             const bool listed=(format>=1 && format<=7) || (format>=0xa && format<=0xc) ||
