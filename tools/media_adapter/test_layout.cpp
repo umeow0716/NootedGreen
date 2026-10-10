@@ -4171,6 +4171,10 @@ static void testResourceBinding() {
                 assert(retirementCalls==1 && api.references==3 && lineBackend.live==initialLineLive);
                 assert(statistics.layout().bytes);
                 // A busy selected owner denies the whole operation BEFORE admission.
+                assert(group.withStorage([&](const auto&) noexcept {
+                    assert(transaction.releaseModeResources(lines,true,denied)==5);
+                    return 0;
+                })==0);
                 assert(pair.withStorage([&](const auto&,const auto&) noexcept {
                     assert(transaction.releaseModeResources(lines,true,denied)==5);
                     return 0;
@@ -4198,7 +4202,12 @@ static void testResourceBinding() {
                 assert(transaction.ensure(requests,prepare,keys,false,1920,1080,fill)==0);
                 assert(extra.allocations==retainedGroup && api.references==3);
                 assert(lines.ensure(1080,720)==0);
-                assert(transaction.releaseModeResources(lines,false,[]() noexcept {return 0;})==0);
+                // Disabled SFC cleanup neither reserves nor releases that owner.
+                assert(lines.withBuffers(1080,720,[&]() noexcept {
+                    assert(transaction.releaseModeResources(lines,false,[]() noexcept {return 0;})==0);
+                    assert(lineBackend.live==initialLineLive);
+                    return 0;
+                })==0);
                 assert(api.references==1 && lineBackend.live==initialLineLive);
                 transaction.reset();assert(!api.references);
             }
