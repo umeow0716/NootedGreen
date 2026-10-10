@@ -4285,6 +4285,32 @@ int tglWithOwnedVeboxBackedExecutionFrame(Group& resources,ChildOwner& childOwne
     });
 }
 
+// History backing is pinned before all other frame owners. Native preparation
+// can consume history before setup/builder; acquiring it only in slot78 is too
+// late. Both descriptors are borrowed through every synchronous stage, never
+// copied into independently owned native tokens. Async fence ownership remains
+// the enclosing frame transaction's responsibility.
+template<class History,class Group,class ChildOwner,class ExecutionOwner,class Context,
+         class Prepare,class Setup,class Invoke>
+int tglWithOwnedVeboxHistoryFrame(History& history,Group& resources,ChildOwner& childOwner,
+    ExecutionOwner& executionOwner,uintptr_t expectedExecution,Context& context,
+    Prepare prepare,Setup setup,Invoke invoke) noexcept {
+    return history.withStorage([&](const auto& first,const auto& second) noexcept {
+        return tglWithOwnedVeboxBackedExecutionFrame(resources,childOwner,executionOwner,
+            expectedExecution,context,
+            [&](void* child,const auto& views) noexcept {
+                static_assert(noexcept(prepare(child,views,first,second)),"history preparation ABI");
+                return prepare(child,views,first,second);
+            },[&](void* child,const auto& views) noexcept {
+                static_assert(noexcept(setup(child,views,first,second)),"history setup ABI");
+                return setup(child,views,first,second);
+            },[&](void* child,const auto& views) noexcept {
+                static_assert(noexcept(invoke(child,views,first,second)),"history builder ABI");
+                return invoke(child,views,first,second);
+            });
+    });
+}
+
 // One synchronous lease covers setup128 AND builder138. Match native Submit:
 // a setup error skips the builder entirely, without replacing the raw status.
 // Command cleanup and completion leases remain the enclosing owner's duty.

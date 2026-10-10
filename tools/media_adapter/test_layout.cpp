@@ -17,6 +17,9 @@ struct TestVeboxChildLease {
         busy=true;const int result=invoke(child);busy=false;return result;
     }
 };
+struct TestVeboxExecutionLease {
+    template<class Invoke> int withExecution(Invoke invoke) noexcept {return invoke(7);}
+};
 
 static void testTrackedCpuOwner() {
     {
@@ -3795,6 +3798,34 @@ static void testResourceBinding() {
                 pair.reset();assert(api.references==2);
                 assert(pair.ensure(keys)==5);return 31;
             })==31);
+            {
+                StmmBackend extra{api};TglOwnedResourceGroup<StmmBackend,1> group(extra);
+                using Request=TglOwnedResourceGroup<StmmBackend,1>::Request;
+                std::array<Request,1> requests{Request{true,stmmKey}};
+                assert(group.ensure(requests,[](size_t,const auto&,bool) noexcept {return 0;})==0);
+                int child=0;TestVeboxChildLease childLease{&child};
+                struct Frame {TglOwnedVeboxProducerPass pass;} frame;
+                // Use the same resource lease API for a mock execution handle;
+                // no native context or GPU command is invoked by this test.
+                TestVeboxExecutionLease execution;
+                unsigned stages=0,failAt=0;
+                auto stage=[&](void* actual,const auto& views,const auto& a,const auto& b) noexcept {
+                    assert(actual==&child && views[0] && &a==&first && &b==&second);
+                    pair.reset();group.reset();assert(api.references==3);
+                    ++stages;
+                    if(stages==3) frame.pass.gate([]() noexcept {return 0;});
+                    return stages==failAt ? 31 : 0;
+                };
+                for(unsigned failure=0;failure<=3;++failure) {
+                    stages=0;failAt=failure;
+                    assert(tglWithOwnedVeboxHistoryFrame(pair,group,childLease,execution,7,frame,
+                        stage,stage,stage)==(failure?31:0));
+                    assert(stages==(failure?failure:3));
+                }
+                stages=3;
+                assert(tglWithOwnedVeboxHistoryFrame(pair,group,childLease,execution,8,frame,
+                    stage,stage,stage)==5 && stages==3);
+            }
             pair.reset();assert(!api.references);
             std::array<TglResourceStorageReference,2> alias{{{first},{first}}};
             TglOwnedStmmPair<StmmBackend,RetainedApi,Quarantine> invalid(backends,alias,api,sink);
