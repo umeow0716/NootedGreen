@@ -2455,6 +2455,14 @@ inline bool tglNativeBackingPresent(const std::array<uint8_t, 0x148> &s) noexcep
 // neither proof of CPU deallocation nor a hardware completion certificate.
 // Native deferred mappings may preserve wired backing, but do not infer that
 // an arbitrary external userspace source has the same lifetime protection.
+// Family newResourceWithClientBuffer21ab6 page-aligns the client range and
+// calls Shared2::memory_with_client_buffer29e9a. Cache reuse requires matching
+// address/length AND client_address_persistent(); otherwise withClientBuffer
+//542be validates VM regions, creates a descriptor via accelerator910 and
+// stores it at SysMemory+d0 (54450), task30, client addressc8 and length40.
+// TGL slotd1980 imports native createMemoryDescriptorWithAddressRange3f32a;
+// there is no TGL-specific descriptor constructor. This establishes descriptor
+// ownership, not yet prepare/wiring duration across deferred Map retirement.
 template<class Writable, class Fill>
 int tglFillBuffer(const std::array<uint8_t, 0x148> &resource, uint32_t bytes,
                   uint8_t value, Writable writable, Fill fill) noexcept {
