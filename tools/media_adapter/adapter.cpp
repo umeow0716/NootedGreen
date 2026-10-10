@@ -101,7 +101,18 @@ int NGRN_ObservedCreateContexts(void *context, const void *input) {
     }
     // Native thread/debug policy remains authoritative: refusal leaves native untouched.
     // The single pinned copy consumes our owned CPU metadata; GPU kernel bytes are identical.
-    char journalPath[] = "/private/tmp/ngreen-owned-copy-XXXXXX";
+    // The XPC sandbox rejects global /private/tmp. Ask Darwin for this
+    // service identity's native temporary directory; never expand policy.
+    char temporary[1024]{};
+    char journalPath[1100]{};
+    const size_t temporaryBytes = confstr(_CS_DARWIN_USER_TEMP_DIR, temporary, sizeof(temporary));
+    if (!temporaryBytes || temporaryBytes > sizeof(temporary) || temporary[0] != '/') {
+        os_log_error(OS_LOG_DEFAULT, "NGRN_OWNED_COPY_JOURNAL_DENIED native-temp-directory");
+        return native(context, input);
+    }
+    const int pathBytes = std::snprintf(journalPath, sizeof(journalPath), "%s%sngreen-owned-copy-XXXXXX",
+        temporary, temporary[temporaryBytes - 2] == '/' ? "" : "/");
+    if (pathBytes < 0 || size_t(pathBytes) >= sizeof(journalPath)) return native(context, input);
     struct Journal {
         int fd;
         ~Journal() { if (fd >= 0) close(fd); }
