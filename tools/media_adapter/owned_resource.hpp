@@ -4975,21 +4975,40 @@ int tglWithOwnedVpPreparedFrame(TglOwnedVpSfcCallerStorage& storage,
 // The caller retains all descriptor/image leases for the complete call and
 // supplies an authenticated settings view; this is not a published VP entry.
 // State receives the SAME geometry snapshot used to prepare the frame.
-template<class Read,class State,class Avs,class Ief>
-int tglSetupOwnedVpLeasedFrame(TglOwnedVpSfcCallerStorage& storage,
+template<class Read,class State,class Avs,class Ief,class Send>
+int tglWithOwnedVpLeasedPass(TglOwnedVpSfcCallerStorage& storage,
     uintptr_t source,uintptr_t target,uintptr_t mhw,uintptr_t settings,
     uintptr_t conditionalSource,const TglOwnedVpModeState& original,
-    Read read,State state,Avs avs,Ief ief) noexcept {
+    Read read,State state,Avs avs,Ief ief,Send send) noexcept {
+    static_assert(noexcept(send(static_cast<void*>(nullptr),
+        std::declval<const TglOwnedVpFramePreparation&>(),
+        std::declval<const TglOwnedVpRegionInput&>())),"VP scoped send ABI");
     TglOwnedVpFramePreparation frame;TglOwnedVpRegionInput geometry;
     uintptr_t sourceA8=0;
     if(!tglReadOwnedVpFramePreparation(source,target,mhw,settings,
         conditionalSource!=0,read,original,frame,sourceA8,&geometry)) return 5;
     return tglWithOwnedVpPreparedFrame(storage,frame,conditionalSource,settings,target,sourceA8,
         [&](void* child,const TglOwnedVpColorMetadata&) noexcept {
-            return tglSetupOwnedVpSfcStages(frame,
+            const int result=tglSetupOwnedVpSfcStages(frame,
                 [&]() noexcept { return state(child,frame,geometry); },
                 [&]() noexcept { return avs(child,frame); },
                 [&]() noexcept { ief(child,frame); });
+            if(result) return result;
+            // Send must run before target/settings/CSC references and native
+            // VP flags are restored. GPU resource retirement remains outside
+            // this CPU-emission scope and still requires the actual fence.
+            return send(child,frame,geometry);
+        });
+}
+template<class Read,class State,class Avs,class Ief>
+int tglSetupOwnedVpLeasedFrame(TglOwnedVpSfcCallerStorage& storage,
+    uintptr_t source,uintptr_t target,uintptr_t mhw,uintptr_t settings,
+    uintptr_t conditionalSource,const TglOwnedVpModeState& original,
+    Read read,State state,Avs avs,Ief ief) noexcept {
+    return tglWithOwnedVpLeasedPass(storage,source,target,mhw,settings,
+        conditionalSource,original,read,state,avs,ief,
+        [](void*,const TglOwnedVpFramePreparation&,const TglOwnedVpRegionInput&) noexcept -> int {
+            return 0;
         });
 }
 // Exact ICL base/Gen12 SFC +c0 slot is 1df3c0: a single DWORD zero

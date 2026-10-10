@@ -5786,6 +5786,25 @@ int main() {
             assert(result==(failedStage==1?31:failedStage==2?11:0));
             assert(stages==(failedStage?failedStage:3) && calls==total);
             assert(scopedStorage.bytes==originalStorage);
+            stages=0;calls=0;unsigned sent=0;
+            const int passResult=tglWithOwnedVpLeasedPass(scopedStorage,
+                0x1000,0x2000,0x3000,0x4000,0x6000,{},read,
+                [&](void* child,const auto&,const auto&) noexcept -> int {
+                    checkScope(child);++stages;return failedStage==1?31:0;
+                },
+                [&](void* child,const auto&) noexcept -> int {
+                    checkScope(child);++stages;return failedStage==2?11:0;
+                },
+                [&](void* child,const auto&) noexcept {checkScope(child);++stages;},
+                [&](void* child,const auto& frame,const auto& geometry) noexcept -> int {
+                    checkScope(child);assert(stages==3 && !sent);
+                    assert(scopedStorage.bytes[0x921]==1 && scopedStorage.bytes[0x922]==1);
+                    assert(frame.at922 && geometry.frameWidth==geometrySnapshot.frameWidth);
+                    ++sent;return -17;
+                });
+            assert(passResult==(failedStage==1?31:failedStage==2?11:-17));
+            assert(sent==(failedStage?0:1) && calls==total);
+            assert(scopedStorage.bytes==originalStorage);
         }
         for(fail=1;fail<=total;++fail) {
             calls=0;prepared.at9a0=17;reference=19;
