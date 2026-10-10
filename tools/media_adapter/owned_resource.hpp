@@ -7693,6 +7693,38 @@ public:
     }
 };
 
+// Owned VP+30 void callback context. Retirement is an external, fallible
+// admission operation, not a bool invented from FinishFenceEvent's return.
+// A future runtime owner must qualify that operation against its actual
+// submission/token. This CPU context alone is not GPU completion evidence.
+template<class Backend,class Retire> class TglOwnedVpLineReleaseContext {
+    TglOwnedVpSfcCallerStorage& storage_;
+    TglOwnedSfcLineBuffers<Backend>& lines_;
+    Retire& retire_;
+    bool attempted_=false,reentered_=false;
+    int status_=5;
+public:
+    TglOwnedVpLineReleaseContext(TglOwnedVpSfcCallerStorage& storage,
+        TglOwnedSfcLineBuffers<Backend>& lines,Retire& retire) noexcept
+        :storage_(storage),lines_(lines),retire_(retire) {}
+    TglOwnedVpLineReleaseContext(const TglOwnedVpLineReleaseContext&)=delete;
+    TglOwnedVpLineReleaseContext& operator=(const TglOwnedVpLineReleaseContext&)=delete;
+    bool owns(void* child) const noexcept {return child==storage_.bytes.data();}
+    void freeResources() noexcept {
+        static_assert(noexcept(retire_()) && std::is_same_v<decltype(retire_()),int>,
+            "VP retirement admission status ABI");
+        if(attempted_) {reentered_=true;status_=5;return;}
+        attempted_=true;
+        const int admission=retire_();
+        if(reentered_) return;
+        if(admission) {status_=admission;return;}
+        status_=lines_.tryReset() ? 0 : 5;
+        // Native resource release can itself reenter this callback.
+        if(reentered_) status_=5;
+    }
+    int status() const noexcept {return status_;}
+};
+
 // Exact ICL donor1e052d..1e0566 callback ABI. Its target57ba0 is a three-arg
 // constant-zero stub, NOT a TGL surface-info entry or metadata proof. A TGL
 // adapter must separately authenticate the platform callback and output data.

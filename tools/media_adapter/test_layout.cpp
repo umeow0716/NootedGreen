@@ -4408,6 +4408,81 @@ static void testSfcLineBufferOwnership() {
         assert(buffers.ensure(1080,720)==5 && !backend.live);
         backend.descriptorOnly=false;
         assert(buffers.ensure(1080,720)==0 && backend.live==2);
+        TglOwnedVpSfcCallerStorage vp;
+        for(int admission:{0,31,-7}) {
+            unsigned gates=0;
+            auto retire=[&]() noexcept -> int {++gates;return admission;};
+            using Context=TglOwnedVpLineReleaseContext<Backend,decltype(retire)>;
+            Context context(vp,buffers,retire);
+            using Callback=TglOwnedVpSfcCallbacks<TglOwnedVpSfcResolve<Context>>;
+            const auto releases=backend.releases;
+            Callback::freeResources(vp.bytes.data());
+            assert(context.status()==5 && !gates && backend.releases==releases);
+            {
+                TglOwnedVpSfcScopedContext<Context> scope(vp.bytes.data(),context);
+                assert(scope.bound());
+                Callback::freeResources(nullptr);Callback::freeResources(&backend);
+                assert(!gates && backend.releases==releases);
+                Callback::freeResources(vp.bytes.data());
+                assert(gates==1 && context.status()==admission);
+                assert(backend.live==(admission ? 2u : 0u));
+                const auto after=backend.releases;
+                Callback::freeResources(vp.bytes.data());
+                assert(context.status()==5 && gates==1 && backend.releases==after);
+            }
+            Callback::freeResources(vp.bytes.data());assert(gates==1);
+            assert(buffers.ensure(1080,720)==0);
+        }
+        {
+            unsigned gates=0;
+            void(*reenter)(void*) noexcept=nullptr;
+            auto retire=[&]() noexcept -> int {
+                ++gates;assert(reenter);reenter(vp.bytes.data());return 0;
+            };
+            using Context=TglOwnedVpLineReleaseContext<Backend,decltype(retire)>;
+            Context context(vp,buffers,retire);
+            using Callback=TglOwnedVpSfcCallbacks<TglOwnedVpSfcResolve<Context>>;
+            reenter=&Callback::freeResources;
+            const auto releases=backend.releases;
+            TglOwnedVpSfcScopedContext<Context> scope(vp.bytes.data(),context);
+            assert(scope.bound());Callback::freeResources(vp.bytes.data());
+            assert(context.status()==5 && gates==1 && backend.releases==releases);
+            assert(backend.live==2);
+        }
+        {
+            unsigned gates=0;
+            auto retire=[&]() noexcept -> int {++gates;return 0;};
+            using Context=TglOwnedVpLineReleaseContext<Backend,decltype(retire)>;
+            Context context(vp,buffers,retire);
+            using Callback=TglOwnedVpSfcCallbacks<TglOwnedVpSfcResolve<Context>>;
+            const auto releases=backend.releases;
+            assert(buffers.withBuffers(1080,720,[&]() noexcept {
+                TglOwnedVpSfcScopedContext<Context> scope(vp.bytes.data(),context);
+                assert(scope.bound());Callback::freeResources(vp.bytes.data());
+                assert(context.status()==5 && gates==1 && backend.releases==releases);
+                return 0;
+            })==0);
+        }
+        {
+            unsigned gates=0;
+            auto retire=[&]() noexcept -> int {++gates;return 0;};
+            using Context=TglOwnedVpLineReleaseContext<Backend,decltype(retire)>;
+            Context context(vp,buffers,retire);
+            using Callback=TglOwnedVpSfcCallbacks<TglOwnedVpSfcResolve<Context>>;
+            struct Reentry {void* child;void(*call)(void*) noexcept;};
+            Reentry reentry{vp.bytes.data(),&Callback::freeResources};
+            const auto original=backend.reenter;
+            backend.owner=&reentry;
+            backend.reenter=[](void* pointer) {
+                auto& entry=*static_cast<Reentry*>(pointer);entry.call(entry.child);
+            };
+            const auto releases=backend.releases;
+            TglOwnedVpSfcScopedContext<Context> scope(vp.bytes.data(),context);
+            assert(scope.bound());Callback::freeResources(vp.bytes.data());
+            assert(context.status()==5 && gates==1 && backend.releases==releases+2);
+            assert(!backend.live); // release happened; rejection is not rollback
+            backend.owner=&buffers;backend.reenter=original;
+        }
     }
     assert(!backend.live && backend.allocations==backend.releases);
 }
