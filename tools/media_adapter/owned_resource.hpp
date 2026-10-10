@@ -2499,8 +2499,13 @@ inline bool tglNativeBackingPresent(const std::array<uint8_t, 0x148> &s) noexcep
 // parent88, falling back to parent80 at26dee, then the SAME generic Map40
 // construction/deferred release. Type82 free216b8 unlinks the parent's child
 // list and releases parente0 plus parent after the map-release step2157c.
-// Parent device-cache backing creation and borrowed source/history leases
-// remain distinct obligations; do not infer them from userspace IOSurface retain.
+// deviceCacheForIOSurface3ec58 creates its parent via2277c: getMemoryDescriptor
+// (relocation227c0) -> SysMemory::withMemoryDescriptor54a90 -> parent80 at227dd.
+// That wrapper stores descriptor+d0 at54ae7 and explicitly retains it at54af5.
+// Thus the plane's parent80 fallback reaches the same SysMemory wire-count
+// lifetime described above; parent88 can instead select migrated backing.
+// Borrowed source/history token leases and actual submitted map preparation
+// remain obligations; userspace IOSurface retain alone still proves neither.
 template<class Writable, class Fill>
 int tglFillBuffer(const std::array<uint8_t, 0x148> &resource, uint32_t bytes,
                   uint8_t value, Writable writable, Fill fill) noexcept {
