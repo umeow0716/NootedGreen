@@ -1384,6 +1384,26 @@ struct TglNativeDiIecpBinding {
         return true;
     }
 };
+struct TglNativeSurfaceControlBinding {
+    uintptr_t context = 0, entry = 0;
+    template<class Read, class Qualify, class Executable>
+    bool resolve(uintptr_t mhw, uintptr_t image, Read read, Qualify qualify,
+                 Executable executable) {
+        *this = {};
+        if (image > UINTPTR_MAX-0x759588) return false;
+        TglNativeDiIecpBinding consumer;
+        if (!consumer.resolve(mhw,image,read,qualify,executable)) return false;
+        uintptr_t native=0;
+        constexpr std::array<uint8_t,8> expected{
+            0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x50};
+        std::array<uint8_t,8> actual{};
+        if (!read(image+0x759580,&native,sizeof(native)) || native != image+0x179530 ||
+            !executable(native,expected.size()) ||
+            !read(native,actual.data(),actual.size()) || actual != expected) return false;
+        context=mhw; entry=native;
+        return true;
+    }
+};
 // Native builder12a14c calls MHW+28 with exactly these three arguments.
 // Binding/image authentication, backing and complete packet admission belong
 // to the caller; this invoker neither creates resources nor changes status.

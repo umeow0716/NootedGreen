@@ -2153,6 +2153,8 @@ int main() {
     {
         constexpr uintptr_t image=0x10000000, mhw=0x20000000;
         uintptr_t table=image+0x759520, native=image+0x172080;
+        uintptr_t controlNative=image+0x179530;
+        std::array<uint8_t,8> controlCode{0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x50};
         std::array<uint8_t,11> code{
             0x55,0x48,0x89,0xe5,0x48,0x81,0xec,0x40,0x01,0x00,0x00};
         size_t denied=0, reads=0;
@@ -2162,13 +2164,18 @@ int main() {
             else if (address == image+0x759548 && size == 8) std::memcpy(out,&native,8);
             else if (address == image+0x172080 && size == code.size())
                 std::memcpy(out,code.data(),size);
+            else if (address == image+0x759580 && size == 8)
+                std::memcpy(out,&controlNative,8);
+            else if (address == image+0x179530 && size == controlCode.size())
+                std::memcpy(out,controlCode.data(),size);
             else return false;
             return true;
         };
         bool imageOk=true, rx=true;
         auto qualify = [&](uintptr_t base) { return imageOk && base == image; };
         auto executable = [&](uintptr_t address,size_t size) {
-            return rx && address == image+0x172080 && size == code.size();
+            return rx && ((address == image+0x172080 && size == code.size()) ||
+                          (address == image+0x179530 && size == controlCode.size()));
         };
         TglNativeDiIecpBinding binding;
         auto resolve = [&] { reads=0; return binding.resolve(mhw,image,read,qualify,executable); };
@@ -2189,6 +2196,25 @@ int main() {
         assert(!binding.resolve(mhw,UINTPTR_MAX,read,qualify,executable));
         assert(!binding.resolve(0,image,read,qualify,executable));
         assert(!binding.resolve(mhw,0,read,qualify,executable));
+        TglNativeSurfaceControlBinding controlBinding;
+        auto resolveControl = [&] {
+            reads=0; return controlBinding.resolve(mhw,image,read,qualify,executable);
+        };
+        assert(resolveControl() && controlBinding.context == mhw && controlBinding.entry == controlNative);
+        auto rejectControl = [&] {
+            assert(!resolveControl());
+            assert(controlBinding.context == 0 && controlBinding.entry == 0);
+        };
+        for (denied=1;denied<=5;++denied) rejectControl();
+        denied=0;
+        for (auto& byte : controlCode) { byte^=1; rejectControl(); byte^=1; }
+        ++controlNative; rejectControl(); --controlNative;
+        ++table; rejectControl(); --table;
+        rx=false; rejectControl(); rx=true;
+        imageOk=false; rejectControl(); imageOk=true;
+        assert(resolveControl());
+        assert(!controlBinding.resolve(mhw,UINTPTR_MAX,read,qualify,executable));
+        assert(controlBinding.context == 0 && controlBinding.entry == 0);
     }
     {
         TglOwnedDiIecpPacket packet;
