@@ -4477,14 +4477,18 @@ inline void tglCopyOwnedSurfaceFrameMetadata(TglOwnedSurfaceStorage& target,
     std::memcpy(target.prefix.data()+0x30,source.prefix.data()+0x30,0x30);
     std::memcpy(target.prefix.data()+0x138,source.prefix.data()+0x138,4);
 }
-// FFDI1f7cc8..1f7d6a uses allocation-query+a0's DWORD for target138,
-// not input138. Borrowed handle1a0 and conditional200 belong to a separate
+struct TglOwnedFfdiMetadataQuery {uint32_t surfaceType=0,compression=0;};
+// FFDI1f7cc8..1f7e0a uses query+a0's two DWORDs for target0/138,
+// not input0/138; rotation290 and frame rectangles come from input.
+// Borrowed handle1a0 and conditional200 belong to a separate
 // retained backing lease and must never be copied by this metadata producer.
 inline bool tglPrepareOwnedFfdiFrameMetadata(TglOwnedSurfaceStorage& target,
-    const TglOwnedSurfaceStorage& source,uint32_t queriedCompression) noexcept {
+    const TglOwnedSurfaceStorage& source,TglOwnedFfdiMetadataQuery query) noexcept {
     if(&target==&source) return false;
-    tglCopyOwnedSurfaceFrameMetadata(target,source);
-    std::memcpy(target.prefix.data()+0x138,&queriedCompression,4);
+    std::memcpy(target.prefix.data(),&query.surfaceType,4);
+    std::memcpy(target.prefix.data()+0x30,source.prefix.data()+0x30,0x30);
+    std::memcpy(target.prefix.data()+0x138,&query.compression,4);
+    std::memcpy(target.tail.data(),source.tail.data(),4); // surface290
     return true;
 }
 enum class TglOwnedFfdnHistoryDecision { Keep, Invalidate, CopyPrevious };
@@ -4503,6 +4507,15 @@ TglOwnedFfdiCompressionSelection tglSelectOwnedFfdiCompression(bool followSource
     if(followSource) return {source299,source29a?1u:0u};
     if(child1ba9 && tile==1 && supports(format)) return {true,1};
     return {};
+}
+// ICL1f7e0c..1f7e3d updates execution13/14 only after allocation changed.
+// These are whole-byte assignments, not bit merges or backing admission.
+inline void tglUpdateOwnedFfdiExecutionCompression(bool allocationChanged,
+    TglOwnedFfdiCompressionSelection selected,uint8_t& execution13,
+    uint8_t& execution14) noexcept {
+    if(!allocationChanged) return;
+    execution13=selected.compressed?1u:0u;
+    execution14=static_cast<uint8_t>(selected.mode);
 }
 struct TglOwnedFfdnCompressionSelection {
     bool compressed;
@@ -4757,7 +4770,7 @@ int tglWithOwnedSurfaceRoles(const std::array<Owner*,Count>& owners,Invoke invok
 // retained past the callback or treated as asynchronous GPU ownership.
 template<class Owner,class Use>
 int tglWithOwnedFfdiPreparation(Owner& source,uint32_t format,uint32_t tile,
-    TglOwnedFfdiCompressionSelection compression,uint32_t queriedCompression,Use use) noexcept {
+    TglOwnedFfdiCompressionSelection compression,TglOwnedFfdiMetadataQuery query,Use use) noexcept {
     static_assert(noexcept(use(std::declval<const TglOwnedSurfaceStorage&>(),
         std::declval<const TglOwnedSurfaceStorage&>(),
         std::declval<const TglOwnedFfdiAllocationRequest&>())),"leased FFDI preparation ABI");
@@ -4766,7 +4779,7 @@ int tglWithOwnedFfdiPreparation(Owner& source,uint32_t format,uint32_t tile,
         TglOwnedFfdiAllocationRequest request;
         TglOwnedSurfaceStorage metadata;
         if(!tglPrepareOwnedFfdiAllocationRequest(sourceView,format,tile,compression,request) ||
-           !tglPrepareOwnedFfdiFrameMetadata(metadata,sourceView,queriedCompression)) return;
+           !tglPrepareOwnedFfdiFrameMetadata(metadata,sourceView,query)) return;
         result=use(sourceView,static_cast<const TglOwnedSurfaceStorage&>(metadata),
             static_cast<const TglOwnedFfdiAllocationRequest&>(request));
     });

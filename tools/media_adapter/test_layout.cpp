@@ -1593,6 +1593,13 @@ static void testTrackedCpuOwner() {
             assert(selected.mode==(follow?unsigned(mode):unsigned(queried && supported)));
         }
         TglOwnedSurfaceStorage source;
+        for(bool changed:{false,true}) for(bool compressed:{false,true})
+            for(uint32_t mode:{0u,1u,0x101u}) {
+                uint8_t execution13=0xa5,execution14=0x5a;
+                tglUpdateOwnedFfdiExecutionCompression(changed,{compressed,mode},execution13,execution14);
+                assert(execution13==(changed?(compressed?1:0):0xa5));
+                assert(execution14==(changed?static_cast<uint8_t>(mode):0x5a));
+            }
         const uint32_t width=1920,height=1080;
         std::memcpy(source.prefix.data()+0xd8,&width,4);
         std::memcpy(source.prefix.data()+0xdc,&height,4);
@@ -1601,13 +1608,15 @@ static void testTrackedCpuOwner() {
         std::memcpy(source.prefix.data()+0x138,&sourceCompression,4);
         source.prefix[0]=0x42;source.resource.fill(0xa5);source.tail.fill(0x5a);
         TglOwnedSurfaceStorage metadata;metadata.resource.fill(0x73);metadata.tail.fill(0x31);
-        assert(tglPrepareOwnedFfdiFrameMetadata(metadata,source,queriedCompression));
+        const TglOwnedFfdiMetadataQuery query{0x17,queriedCompression};
+        assert(tglPrepareOwnedFfdiFrameMetadata(metadata,source,query));
         uint32_t selectedCompression=0;std::memcpy(&selectedCompression,metadata.prefix.data()+0x138,4);
-        assert(selectedCompression==queriedCompression && metadata.prefix[0]==0x42);
+        uint32_t surfaceType=0;std::memcpy(&surfaceType,metadata.prefix.data(),4);
+        assert(selectedCompression==queriedCompression && surfaceType==query.surfaceType);
         assert(!std::memcmp(metadata.prefix.data()+0x30,source.prefix.data()+0x30,0x30));
         for(auto byte:metadata.resource) assert(byte==0x73);
-        for(auto byte:metadata.tail) assert(byte==0x31);
-        assert(!tglPrepareOwnedFfdiFrameMetadata(source,source,queriedCompression));
+        for(size_t i=0;i<metadata.tail.size();++i) assert(metadata.tail[i]==(i<4?0x5a:0x31));
+        assert(!tglPrepareOwnedFfdiFrameMetadata(source,source,query));
         std::memcpy(&selectedCompression,source.prefix.data()+0x138,4);
         assert(selectedCompression==sourceCompression);
         source.resource.fill(0);source.tail.fill(0);
@@ -5243,7 +5252,7 @@ static void testNativeResourceBoundary() {
             })==31 && roleCalls==1);
             assert(owner.surface() && destination.surface());
             unsigned preparedFfdi=0;
-            assert(tglWithOwnedFfdiPreparation(owner,0x19,1,{true,1},3,
+            assert(tglWithOwnedFfdiPreparation(owner,0x19,1,{true,1},{8,3},
                 [&](const auto& sourceView,const auto& metadata,const auto& request) noexcept {
                     ++preparedFfdi;assert(&sourceView==surface && request.key.width==2048);
                     assert(request.kind==TglOwnedFfdiAllocationKind::DescriptorOnly);
@@ -5251,7 +5260,7 @@ static void testNativeResourceBoundary() {
                     uint32_t compression=0;std::memcpy(&compression,metadata.prefix.data()+0x138,4);
                     assert(compression==3 && !tglNativeBackingPresent(metadata.resource));
                     owner.reset();assert(owner.ensure(key)==5);
-                    assert(tglWithOwnedFfdiPreparation(owner,0x19,1,{},0,
+                    assert(tglWithOwnedFfdiPreparation(owner,0x19,1,{},{},
                         [](const auto&,const auto&,const auto&) noexcept {assert(false);return 0;})==5);
                     return -17;
                 })==-17 && preparedFfdi==1);
@@ -5263,7 +5272,7 @@ static void testNativeResourceBoundary() {
             assert(caught && owner.surface() && destination.surface());
             const auto destinationBefore=*destination.surface();
             fixtureResource.fill(0);
-            assert(tglWithOwnedFfdiPreparation(owner,0x19,1,{},0,
+            assert(tglWithOwnedFfdiPreparation(owner,0x19,1,{},{},
                 [](const auto&,const auto&,const auto&) noexcept {assert(false);return 0;})==5);
             const std::array reverseRoles{&destination,&owner,&destination};
             assert(tglWithOwnedSurfaceRoles(reverseRoles,[&](const auto&) noexcept {
