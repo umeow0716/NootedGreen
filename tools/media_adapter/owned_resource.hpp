@@ -5237,6 +5237,27 @@ int tglPrepareOwnedDescriptorFfdnPair(std::array<TglOwnedDescriptorOnlySurface,2
         });
 }
 
+// Real type1/format3d target owners. Keep target roles distinct from every
+// source/history role; source roles are already leased by the pair producer.
+// No rollback of an earlier successful target on later allocation failure.
+template<class TargetOwner,class Owner,class Copy>
+int tglPrepareOwnedBackedFfdnPair(const std::array<TargetOwner*,2>& targets,
+    Owner& input,Owner* previous,Owner* copyDestination,
+    TglOwnedFfdnCompressionSelection compression,bool& referenceValid,bool executionFlag13,
+    uint8_t& execution15,uint8_t& execution16,Copy copy) noexcept {
+    if(!targets[0] || !targets[1] || targets[0]==targets[1]) return 5;
+    for(auto* target:targets)
+        for(auto* role:std::array<Owner*,3>{&input,previous,copyDestination})
+            if(static_cast<const void*>(target)==static_cast<const void*>(role)) return 5;
+    return tglWithAllocatedOwnedFfdnPair(input,previous,copyDestination,compression,
+        referenceValid,executionFlag13,execution15,execution16,
+        [&](size_t index,const auto& request,bool& changed,uint32_t& pitch) noexcept {
+            return targets[index]->ensureFfdnBacking(request,changed,pitch);
+        },copy,[&](size_t index,const auto& source,const auto&) noexcept -> int {
+            return targets[index]->publishFfdnFrameFrom(input,source)?0:5;
+        });
+}
+
 // Exact ICL classifier4a500 and its 90-entry relative jump table4a55c.
 // 3 is the native OTHER color pack, not an invalid format admission result.
 inline uint32_t tglOwnedChromaColorPack(uint32_t format) noexcept {

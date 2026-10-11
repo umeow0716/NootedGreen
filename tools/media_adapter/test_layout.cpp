@@ -5727,6 +5727,45 @@ static void testNativeResourceBoundary() {
                     assert(flag==0 && mode==0); // slot0 persisted, slot1 busy
                 }));
             }
+            {
+                struct BackedPairBackend {
+                    unsigned allocations=0,releases=0;
+                    uint32_t resourceType() const noexcept {return 1;}
+                    int allocate(std::array<uint8_t,0x148>& s,const TglResourceKey& k,
+                        uint32_t* width) noexcept {s.fill(0);s[0]=1;*width=k.width;++allocations;return 0;}
+                    bool backed(const std::array<uint8_t,0x148>& s) noexcept {return s[0]==1;}
+                    void release(std::array<uint8_t,0x148>& s) noexcept {s.fill(0);++releases;}
+                } backend;
+                using Surface=TglOwnedAllocatedSurface<BackedPairBackend>;
+                Surface input(backend),first(backend),second(backend);
+                const TglResourceKey request{8,3,0x3d,1,0,false};
+                assert(input.ensure(request)==0);
+                std::array<Surface*,2> targets{&first,&second};
+                bool valid=true;uint8_t flag=0xa5,mode=0x5a;
+                unsigned copies=0;
+                auto copy=[&](const auto&,const auto&) noexcept {++copies;};
+                auto prepare=[&]() noexcept {
+                    return tglPrepareOwnedBackedFfdnPair(targets,input,&input,&input,
+                        {false,0},valid,true,flag,mode,copy);
+                };
+                assert(prepare()==0 && copies==2 && backend.allocations==3 && valid);
+                assert(flag==0 && mode==0 && first.surface() && second.surface());
+                flag=0xa5;mode=0x5a;
+                assert(prepare()==0 && copies==2 && backend.allocations==3);
+                assert(flag==0xa5 && mode==0x5a); // unchanged targets retain flags
+                first.reset();
+                assert(second.withSurface([&](const auto&) noexcept {
+                    assert(prepare()==5 && copies==3 && flag==0 && mode==0);
+                    assert(first.surface()); // no fabricated rollback
+                }));
+                const auto allocated=backend.allocations;
+                targets={&first,&first};assert(prepare()==5);
+                targets={&input,&second};assert(prepare()==5);
+                targets={nullptr,&second};assert(prepare()==5);
+                assert(backend.allocations==allocated);
+                first.reset();second.reset();input.reset();
+                assert(backend.releases==backend.allocations);
+            }
             bool caught=false;
             try {
                 owner.withPeerSurface(destination,[](const auto&,const auto&){throw 31;});
