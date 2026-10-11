@@ -3372,6 +3372,22 @@ public:
             });
         });
     }
+    // Parent80 is borrowed only while the graph's admission/resource entries
+    // are live. Restore it before either owner can enter native teardown.
+    template<class VpOwner,class Read,class Lines,class Retire,class Use>
+    int withBorrowedVpAssemblyView(VpOwner& vp,bool avsEnabled,Read& read,
+        Lines& lines,Retire& retire,Use use) noexcept {
+        return withBorrowedVpCpuScope([&](auto borrow) noexcept {
+            return vp.withAssemblyView(avsEnabled,read,lines,retire,
+                [&](void* child,const auto& entries,auto allocate,auto release) noexcept {
+                    return borrow(child,[&](void* parent,void* borrowed) noexcept {
+                        static_assert(noexcept(use(parent,borrowed,entries,allocate,release)),
+                            "borrowed VP assembly consumer ABI");
+                        return use(parent,borrowed,entries,allocate,release);
+                    });
+                });
+        });
+    }
     template<class ExecutionOwner>
     int setupKernelScratch(ExecutionOwner& execution,int32_t index) noexcept {
         if(!ready_ || !tableInstalled_ || !busy_ ||

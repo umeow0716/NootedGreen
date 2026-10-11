@@ -13010,6 +13010,47 @@ int main() {
                         return -43;
                     })==-43);
                     std::memcpy(&linked,cpu.bytes.data()+0x80,8);assert(!linked);
+                    assert(graph.withResourceOwnerStorage([&](auto& storage) noexcept {
+                        struct Backend {
+                            unsigned live=0;
+                            uint32_t resourceType() const noexcept {return 0;}
+                            int allocate(std::array<uint8_t,0x148>& bytes,const TglResourceKey& key,
+                                uint32_t* width) noexcept {
+                                assert(!live);++live;bytes[0]=bytes[0x20]=1;*width=key.width;return 0;
+                            }
+                            bool backed(const std::array<uint8_t,0x148>& bytes) noexcept {return bytes[0]==1;}
+                            void release(std::array<uint8_t,0x148>& bytes) noexcept {
+                                assert(live==1);--live;bytes.fill(0);
+                            }
+                        };
+                        auto* first=::new(static_cast<void*>(storage.bytes.data()+0x3c8)) TglOwnedSurfaceStorage{};
+                        auto* second=::new(static_cast<void*>(storage.bytes.data()+0x670)) TglOwnedSurfaceStorage{};
+                        std::array<Backend,2> backends{};
+                        TglOwnedVpLineSurfaces<Backend> lines(backends,*first,*second);
+                        const uint32_t height=1080,scaled=720;
+                        std::memcpy(stateCpu.bytes.data()+0x30,&height,4);
+                        std::memcpy(stateCpu.bytes.data()+0x4c,&scaled,4);
+                        auto readFormat=[](uintptr_t address,void* out,size_t size) noexcept {
+                            assert(address==0x2130 && size==4);
+                            const uint32_t format=13;std::memcpy(out,&format,4);return true;
+                        };
+                        unsigned retireCalls=0;
+                        for(int status:{31,0}) {
+                            auto retire=[&]() noexcept {++retireCalls;return status;};
+                            assert(owner.withBorrowedVpAssemblyView(graph,false,readFormat,lines,retire,
+                                [&](void* parent,void* child,const auto& entries,auto allocate,auto release) noexcept {
+                                    uintptr_t link=0;std::memcpy(&link,static_cast<uint8_t*>(parent)+0x80,8);
+                                    assert(link==reinterpret_cast<uintptr_t>(child));
+                                    assert(!graph.tryReset());owner.reset();assert(cpu.live);
+                                    assert(entries.finalAdmission(child,1,reinterpret_cast<void*>(0x1000),
+                                        reinterpret_cast<void*>(0x2000)) && allocate(child)==0);
+                                    release(child);return 0;
+                                })==status);
+                            std::memcpy(&linked,cpu.bytes.data()+0x80,8);assert(!linked);
+                            assert(backends[0].live==unsigned(status!=0) && backends[1].live==unsigned(status!=0));
+                        }
+                        assert(retireCalls==2);return 0;
+                    })==0);
                     graph.reset();assert(!stateCpu.live && !avsCpu.live && cpu.live);
                 }
                 owner.reset();owner.reset();
