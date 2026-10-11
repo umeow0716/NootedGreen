@@ -1304,6 +1304,12 @@ static void testTrackedCpuOwner() {
                 if(address==child.address+0x1b0 && bytes==8) {
                     std::memcpy(output,&sourceAddress,8);return true;
                 }
+                if(bytes==8 && (address==child.address+0x18 || address==child.address+0x20 ||
+                    address==0x4000+0x78 || address==0x5000+0x64)) {
+                    const uintptr_t value=address==child.address+0x18 ? 0x4000 :
+                        (address==0x5000+0x64 ? 0 : 0x5000);
+                    std::memcpy(output,&value,8);return true;
+                }
             }
             uintptr_t value=0;
             if(bytes==8) {
@@ -1465,7 +1471,10 @@ static void testTrackedCpuOwner() {
             // Real packet producer, not Frame's status-return fixture: a stale
             // role snapshot must reach native error writeback and keep ownership.
             unsigned registrations=0;
-            auto admitSurface=[](const TglOwnedSurfaceStorage&,auto) noexcept {return true;};
+            unsigned surfaceAdmissions=0;
+            auto admitSurface=[&](const TglOwnedSurfaceStorage&,size_t) noexcept -> int {
+                ++surfaceAdmissions;return 0;
+            };
             auto admitDi=[](const TglOwnedSurfaceStorage&) noexcept -> int {return 0;};
             auto registerResource=[&](const auto&,bool,bool) noexcept -> int {
                 ++registrations;return 0;
@@ -1483,6 +1492,7 @@ static void testTrackedCpuOwner() {
                     nativeChild,child.installed)));
             TglOwnedVeboxFrameRetention actualRetention;
             bool expectRewind=true;
+            bool fullPackets=false;
             auto makeActualConsumer=[&](TglOwnedVeboxFrameRetention& retained) noexcept {
                 return tglMakeOwnedVeboxNativeFrameConsumer<AuxiliaryResolve,
                 AuxiliaryScope,AuxiliaryScope,AuxiliaryScope,FormatRead>(sourceLease,
@@ -1497,9 +1507,15 @@ static void testTrackedCpuOwner() {
                     std::memcpy(scratch.command.data()+0x158,&offset,4);
                     std::memcpy(scratch.command.data()+0x15c,&left,4);
                     return 0;
-                },[&](uintptr_t,void* object,void*,void* packet,void*,void*,void*,void*,void*) noexcept -> int {
+                },[&](uintptr_t,void* object,void*,void* packet,void* surfacePacket,void*,void* statePacket,void*,void*) noexcept -> int {
                     ++nativeBuilds;
                     using Di=int(*)(void*,bool,void*) noexcept;
+                    if(fullPackets) {
+                        const int surfaceStatus=reinterpret_cast<Di>(child.installed[7])(object,false,surfacePacket);
+                        if(surfaceStatus) return surfaceStatus;
+                        const int stateStatus=reinterpret_cast<Di>(child.installed[18])(object,false,statePacket);
+                        if(stateStatus) return stateStatus;
+                    }
                     return reinterpret_cast<Di>(child.installed[6])(object,false,packet);
                 },[&](uintptr_t,void*,void*) noexcept {
                     uintptr_t cursor=0;int32_t offset=-1,left=-1;
@@ -1520,26 +1536,52 @@ static void testTrackedCpuOwner() {
             const auto stalePending=actualConsumer(actualFrame);
             assert(stalePending.status==5 && !stalePending.acquired && !stalePending.writtenBack);
             assert(nativeSetups==2 && nativeBuilds==2 && nativeWritebacks==2);
-            roleFixture=true;expectRewind=false;
+            roleFixture=true;expectRewind=false;fullPackets=true;
+            leases.renderHal=0x4000;leases.sku=0x5000;
             const uint32_t pipe=2;
             const uintptr_t targetAddress=reinterpret_cast<uintptr_t>(&target);
             std::memcpy(reportBytes.data()+0xa0c,&pipe,4);
             std::memcpy(reportBytes.data()+0x60,&targetAddress,8);
-            TglOwnedSurfaceStorage statistics;
+            TglOwnedSurfaceStorage statistics,inactiveStmm,inactiveFfdn;
             TglDiIecpInputs consistentInput{};
             consistentInput.current=&source;consistentInput.target=&target;
             consistentInput.statistics=&statistics;consistentInput.pipe=2;
             consistentInput.boundaryWidth=1920;
+            consistentInput.stmm[0]=&inactiveStmm;consistentInput.ffdn[0]=&inactiveFfdn;
             ActualFrame consistentFrame{{},leases,consistentInput,false,noRead,admitSurface,
                 admitDi,registerResource,control};
             TglOwnedVeboxFrameRetention consistentRetention;
             auto consistentConsumer=makeActualConsumer(consistentRetention);
             const auto positive=consistentConsumer(consistentFrame);
             assert(positive.status==0 && positive.builderStatus==0 && positive.acquired && positive.writtenBack);
-            assert(consistentRetention() && registrations==3);
+            assert(consistentRetention() && registrations==3 && surfaceAdmissions==4);
+            assert(surfaces.surfaces[0]==&source && surfaces.surfaces[1]==&target &&
+                surfaces.surfaces[2]==&inactiveStmm && surfaces.surfaces[3]==&inactiveFfdn);
+            TglOwnedStateInputs expectedState{};
+            assert(tglReadOwnedStateChildInputs(expectedState,child.address,reportAddress,
+                source,&target,false,noRead));
+            assert(tglReadOwnedStateSingleVeboxSlice(expectedState,child.address,0x4000,0x5000,noRead));
+            std::array<uint8_t,0x188> expectedStateBytes{};
+            assert(tglPrepareOwnedStatePacket(expectedStateBytes,expectedState));
+            assert(std::memcmp(state.data(),expectedStateBytes.data(),expectedStateBytes.size())==0);
             assert(di.resources[0]==&source.resource && di.resources[5]==&target.resource &&
                 di.resources[7]==&statistics.resource);
             assert(nativeSetups==3 && nativeBuilds==3 && nativeWritebacks==3);
+            assert(!ActualProducers::Resolve::get(nativeChild));
+            // State backing is not this producer's property: even a partial
+            // descriptor must stop the same command before DI registration.
+            state.resource[0]=0x71;
+            const auto savedState=state;
+            expectRewind=true;
+            ActualFrame occupiedFrame{{},leases,consistentInput,false,noRead,admitSurface,
+                admitDi,registerResource,control};
+            TglOwnedVeboxFrameRetention occupiedRetention;
+            auto occupiedConsumer=makeActualConsumer(occupiedRetention);
+            const auto occupied=occupiedConsumer(occupiedFrame);
+            assert(occupied.status==5 && occupied.builderStatus==5 && occupied.acquired && occupied.writtenBack);
+            assert(occupiedRetention() && registrations==3 && surfaceAdmissions==8);
+            assert(std::memcmp(&state,&savedState,sizeof(state))==0);
+            assert(nativeSetups==4 && nativeBuilds==4 && nativeWritebacks==4);
             assert(!ActualProducers::Resolve::get(nativeChild));
         }
     }
