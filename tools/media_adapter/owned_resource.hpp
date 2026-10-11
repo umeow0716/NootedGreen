@@ -5845,6 +5845,25 @@ struct TglOwnedVpFramePreparation {
     uint32_t at9a0=0;
     bool at920=false,at922=false,at924=false;
 };
+// VP +28=1de810. Six pointer arguments INCLUDING this, void result.
+// 1decfb publishes RDX at +990; 1ded21 consumes R9 mode flags. They
+// are not interchangeable. RSI is conditional and may be null. Source
+// and target nulls return without preparation (1de83b..1de84e).
+// The scoped owner authenticates all remaining arguments and records any
+// preparation failure; this void entry must never fabricate a status ABI.
+// This entry alone does not publish a complete VP object or retain leases.
+template<class Resolve> struct TglOwnedVpFrameCallback {
+    static void prepare(void* child,void* conditionalSource,void* parameters,
+        void* source,void* target,void* settings) noexcept {
+        static_assert(noexcept(Resolve{}(child)),"VP frame resolver ABI");
+        auto* context=Resolve{}(child);
+        static_assert(noexcept(context->owns(child)) &&
+            noexcept(context->prepare(conditionalSource,parameters,source,target,settings)),
+            "VP frame context ABI");
+        if(context && source && target && context->owns(child))
+            context->prepare(conditionalSource,parameters,source,target,settings);
+    }
+};
 // Qualified VP +40=1e0ca0..1e0dcb. Its +a8=1e0c80 is a proven native
 // no-op, not an unresolved hook. +90 failure prevents AVS/IEF; AVS failure
 // prevents IEF. Native +98 is called for its side effect without a status read.

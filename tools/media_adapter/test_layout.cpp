@@ -7462,6 +7462,45 @@ static void testSfcFrameFields() {
 
 int main() {
     {
+        struct Context {
+            void* child;
+            std::array<void*,5> captured{};
+            unsigned calls=0;
+            bool owns(void* value) const noexcept {return value==child;}
+            void prepare(void* conditional,void* parameters,void* source,
+                void* target,void* settings) noexcept {
+                captured={conditional,parameters,source,target,settings};++calls;
+            }
+        };
+        std::array<int,6> values{};
+        Context context{&values[0]};
+        using Callback=TglOwnedVpFrameCallback<TglOwnedVpSfcResolve<Context>>;
+        using Prepare=void(*)(void*,void*,void*,void*,void*,void*) noexcept;
+        const Prepare prepare=&Callback::prepare;
+        auto call=[&](void* child,void* source,void* target,void* conditional) noexcept {
+            prepare(child,conditional,&values[2],source,target,&values[5]);
+        };
+        call(context.child,&values[3],&values[4],&values[1]);
+        assert(context.calls==0); // No scoped owner, no dispatch.
+        {
+            TglOwnedVpSfcScopedContext<Context> scope(context.child,context);
+            assert(scope.bound());
+            call(nullptr,&values[3],&values[4],&values[1]);
+            call(&values[1],&values[3],&values[4],&values[1]);
+            call(context.child,nullptr,&values[4],&values[1]);
+            call(context.child,&values[3],nullptr,&values[1]);
+            assert(context.calls==0);
+            call(context.child,&values[3],&values[4],&values[1]);
+            assert(context.calls==1);
+            for(size_t i=0;i<5;++i) assert(context.captured[i]==&values[i+1]);
+            call(context.child,&values[3],&values[4],nullptr);
+            assert(context.calls==2 && !context.captured[0]);
+            assert(context.captured[1]==&values[2] && context.captured[4]==&values[5]);
+        }
+        call(context.child,&values[3],&values[4],&values[1]);
+        assert(context.calls==2);
+    }
+    {
         constexpr uintptr_t os=0x1000,image=0x100000;
         uintptr_t slot=image+0x659b0;
         std::array<uint8_t,20> anchor{
