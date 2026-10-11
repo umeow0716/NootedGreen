@@ -11434,6 +11434,17 @@ int main() {
                 assert(source.withMutableSurface([](auto&) noexcept {assert(false);return 0;})==5);
                 return 17;
             })==17);
+            // A producer cannot replace a pinned frontend plane and still
+            // report success. References remain held until scope teardown.
+            assert(source.withMutableSurface([&](auto& original) noexcept {
+                const uintptr_t replaced=0;
+                std::memcpy(original.resource.data()+0x68,&replaced,8);
+                return 0;
+            })==5);
+            assert(!source.storage());
+            for(size_t i=1;i<6;++i) assert(refs[i]==1);
+            std::memcpy(shell.resource.data()+0x68,&restored,8);
+            assert(source.storage()==&shell);
         }
         assert(!owner.borrowed);for(auto ref:refs) assert(!ref);
         {

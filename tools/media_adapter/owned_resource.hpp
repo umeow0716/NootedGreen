@@ -1551,6 +1551,9 @@ struct TglOwnedSurfaceStorage;
 // The132105 registration
 // loop consumes copied target count90 and target pointers98 onward. This is
 // a role snapshot under an existing native input lease, not surface ownership.
+// 130841..130857 writes the collected count back to input0 and an output flag;
+// 1307fa..13081a exports compacted original shell pointers. Capture again after
+// this producer or any input mutation; gathering is NOT GPU registration.
 struct TglNativeOuterSurfaceRoles {
     uint32_t sourceCount=0,targetCount=0;
     std::array<uintptr_t,17> sources{};
