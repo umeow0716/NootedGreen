@@ -10546,11 +10546,20 @@ template<class Backend> class TglOwnedVpPassInitContext {
     TglOwnedSfcStateParameters<Backend>& state_;
     bool called_=false;
     int status_=5;
+    struct Initialized {};
+    TglOwnedVpPassInitContext(TglOwnedVpSfcCallerStorage& storage,
+        TglOwnedSfcStateParameters<Backend>& state,Initialized) noexcept
+        :storage_(storage),state_(state),called_(true),status_(0) {}
 public:
     TglOwnedVpPassInitContext(TglOwnedVpSfcCallerStorage& storage,
         TglOwnedSfcStateParameters<Backend>& state) noexcept :storage_(storage),state_(state) {}
     TglOwnedVpPassInitContext(const TglOwnedVpPassInitContext&)=delete;
     TglOwnedVpPassInitContext& operator=(const TglOwnedVpPassInitContext&)=delete;
+    // Only the graph's verified initialized frame phase may use this entry.
+    static TglOwnedVpPassInitContext initializedFrame(TglOwnedVpSfcCallerStorage& storage,
+        TglOwnedSfcStateParameters<Backend>& state) noexcept {
+        return TglOwnedVpPassInitContext(storage,state,Initialized{});
+    }
     bool owns(void* child) const noexcept {return child==storage_.bytes.data();}
     void initialize() noexcept {
         if(called_) {status_=5;return;}
@@ -10822,6 +10831,25 @@ public:
         static_assert(noexcept(use(child,entries)),"VP initialized frame phase ABI");
         const int result=use(child,static_cast<const TglOwnedVpEntrySet&>(entries));
         // Do not clear acquired backing on a later consumer failure.
+        return result?result:initialization.status();
+    }
+    // Publish the real initialization ABI in an ALREADY initialized frame.
+    // Unlike construction, this accepts resource-bound backing and never
+    // reallocates state. A repeated void initialize fails the enclosing call
+    // without touching live storage. Caller keeps this resolver scope through
+    // all table consumers; no persistent callback is returned.
+    template<class Use> int withLeasedInitializedAssemblyEntries(void* child,
+        const TglOwnedVpEntrySet& base,Use use) noexcept {
+        if(!ready_ || !busy_ || child!=storage_.bytes.data() || base.initialize) return 5;
+        using Context=TglOwnedVpPassInitContext<StateBackend>;
+        using Resolve=TglOwnedVpSfcResolve<Context>;
+        auto initialization=Context::initializedFrame(storage_,state_);
+        TglOwnedVpSfcScopedContext<Context> scope(child,initialization);
+        auto entries=base;
+        if(!scope.bound() || !tglBindOwnedVpInitializeEntry<Resolve>(child,entries)) return 5;
+        static_assert(noexcept(use(child,static_cast<const TglOwnedVpEntrySet&>(entries))) &&
+            std::is_same_v<decltype(use(child,static_cast<const TglOwnedVpEntrySet&>(entries))),int>);
+        const int result=use(child,static_cast<const TglOwnedVpEntrySet&>(entries));
         return result?result:initialization.status();
     }
     // CPU teardown only: the enclosing runtime owner still has to establish

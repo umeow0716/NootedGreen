@@ -17479,6 +17479,23 @@ int main() {
                                             assert(from==3 && to==5);value.matrix[0]=7;return true;
                                         },entries,[&](void* admitted,const auto& combined,uint8_t* state) noexcept {
                                             assert(admitted==child && combined.allocate==entries.allocate);
+                                            const auto initializedState=stateCpu.bytes;
+                                            assert(graph.withLeasedInitializedAssemblyEntries(child,combined,
+                                                [&](void* same,const auto& initialized) noexcept {
+                                                    assert(same==child && initialized.initialize && !combined.initialize);
+                                                    assert(initialized.missingMask()==(combined.missingMask()&~uint32_t{4}));
+                                                    assert(graph.withLeasedInitializedAssemblyEntries(child,initialized,
+                                                        [](void*,const auto&) noexcept {assert(false);return 0;})==5);
+                                                    return 0;
+                                                })==0);
+                                            assert(stateCpu.bytes==initializedState);
+                                            assert(graph.withLeasedInitializedAssemblyEntries(child,combined,
+                                                [&](void* same,const auto& initialized) noexcept {
+                                                    initialized.initialize(same); // forbidden second initialization
+                                                    assert(stateCpu.bytes==initializedState);
+                                                    return 0;
+                                                })==5);
+                                            assert(stateCpu.bytes==initializedState);
                                             // Preserve the fifteen real entries; twelve remaining
                                             // slots are CPU fixtures, not a complete renderer.
                                             TglOwnedVpFlatDispatchTable dispatch;
