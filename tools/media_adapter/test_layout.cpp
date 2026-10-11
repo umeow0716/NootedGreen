@@ -46,16 +46,21 @@ struct TestFeatureExecutionOwner {
 static void testTrackedCpuOwner() {
     {
         struct Backend {
-            std::array<uint8_t,0xd48> bytes{};unsigned creates=0,destroys=0;
+            std::array<uint8_t,0xd48> bytes{};unsigned creates=0,destroys=0,initializes=0;
+            int status=0;
+            bool shape=true,invalidate=false;
             uintptr_t create() noexcept {++creates;return reinterpret_cast<uintptr_t>(bytes.data());}
-            int initialize(uintptr_t p) noexcept {assert(validate(p));bytes.fill(0);return 0;}
-            bool validate(uintptr_t p) noexcept {return p==reinterpret_cast<uintptr_t>(bytes.data());}
-            void destroy(uintptr_t p) noexcept {assert(validate(p));++destroys;}
+            int initialize(uintptr_t p) noexcept {
+                assert(validate(p));++initializes;bytes.fill(0);if(invalidate) shape=false;return status;
+            }
+            bool validate(uintptr_t p) noexcept {return shape && p==reinterpret_cast<uintptr_t>(bytes.data());}
+            void destroy(uintptr_t p) noexcept {assert(p==reinterpret_cast<uintptr_t>(bytes.data()));++destroys;}
         } backend;
         TglExecutionOwner owner(backend);assert(!owner.ensure());
         const auto address=owner.get();
         auto denied=[](auto&) noexcept {assert(false);return 0;};
         assert(owner.withLeasedAdmissionBytes(address,denied)==5);
+        assert(owner.initializeLeasedAdmission(address)==5 && backend.initializes==1);
         assert(owner.withExecution([&](uintptr_t actual) noexcept {
             assert(owner.withLeasedAdmissionBytes(actual+1,denied)==5);
             return owner.withLeasedAdmissionBytes(actual,[&](auto& bytes) noexcept {
@@ -67,17 +72,40 @@ static void testTrackedCpuOwner() {
                 input.pipe=2;input.params10c=71;input.leasedParamsF0=0x1234;
                 std::array<uint8_t,0x28> pass{};
                 const bool admitted=tglRunVeboxAdmissionStages(input,bytes,pass,
-                    []() noexcept {return true;},[](auto&) noexcept {},
+                    [&]() noexcept {return owner.initializeLeasedAdmission(actual)==0;},[](auto&) noexcept {},
                     []() noexcept {return true;},[](auto& view) noexcept {view[0x18]=0;},
                     [](auto&) noexcept {assert(false);return false;});
                 uintptr_t params=0;std::memcpy(&params,backend.bytes.data()+0x9e8,8);
                 uint32_t field=0;std::memcpy(&field,backend.bytes.data()+0xd28,4);
                 assert(admitted && params==0x1234 && field==71);
+                assert(backend.initializes==2 && owner.initializeLeasedAdmission(actual)==5);
                 return 31;
             });
         })==31);
         assert(owner.withLeasedAdmissionBytes(address,denied)==5);
+        backend.status=31;
+        assert(owner.withExecution([&](uintptr_t actual) noexcept {
+            return owner.withLeasedAdmissionBytes(actual,[&](auto&) noexcept {
+                assert(owner.initializeLeasedAdmission(actual)==31);
+                assert(owner.get()==actual && !backend.destroys);
+                assert(!owner.hasExecutionLease(actual));
+                owner.reset();assert(!backend.destroys);
+                return 0; // cannot hide native reset failure
+            });
+        })==31);
+        assert(owner.get()==address && backend.initializes==3 && !backend.destroys);
+        assert(owner.ensure()==5 && owner.preparePass()==5);
+        assert(owner.withExecution([](uintptr_t) noexcept {assert(false);return 0;})==5);
         owner.reset();assert(backend.creates==1 && backend.destroys==1);
+        backend.status=0;assert(!owner.ensure());backend.invalidate=true;
+        assert(owner.withExecution([&](uintptr_t actual) noexcept {
+            return owner.withLeasedAdmissionBytes(actual,[&](auto&) noexcept {
+                assert(owner.initializeLeasedAdmission(actual)==5);
+                assert(owner.get()==actual && backend.destroys==1);return 0;
+            });
+        })==5);
+        assert(owner.ensure()==5 && backend.creates==2 && backend.destroys==1);
+        owner.reset();assert(backend.destroys==2);
     }
     {
         TglVeboxAdmissionStagesInput input;

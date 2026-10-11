@@ -1996,7 +1996,8 @@ template<> struct TglAdmissionExecutionExtent<TglLeasedAdmissionExecution>
 template<class Backend> class TglExecutionOwner {
     Backend& backend;
     uintptr_t object = 0;
-    bool leased_=false,admissionBytesBusy_=false;
+    bool leased_=false,admissionBytesBusy_=false,admissionResetAttempted_=false;
+    int admissionError_=0;
 public:
     explicit TglExecutionOwner(Backend& b) noexcept : backend(b) {}
     TglExecutionOwner(const TglExecutionOwner&) = delete;
@@ -2006,10 +2007,11 @@ public:
         if(leased_) return;
         const auto old = object;
         object = 0;
+        admissionError_=0;
         if (old) backend.destroy(old);
     }
     int ensure() noexcept {
-        if(leased_) return 5;
+        if(leased_ || admissionError_) return 5;
         if (object) {
             if (backend.validate(object)) return 0;
             reset();
@@ -2029,7 +2031,7 @@ public:
     // only supplies lifetime ownership; it must not preserve stale frame flags.
     // A newly created object is already initialized by ensure(), exactly once.
     int preparePass() noexcept {
-        if(leased_) return 5;
+        if(leased_ || admissionError_) return 5;
         if (!object) return ensure();
         if (!backend.validate(object)) { reset(); return 5; }
         const int result = backend.initialize(object);
@@ -2041,34 +2043,45 @@ public:
     }
     uintptr_t get() const noexcept { return object; }
     bool hasExecutionLease(uintptr_t expected) const noexcept {
-        return leased_ && object && object==expected;
+        return leased_ && !admissionError_ && object && object==expected;
     }
     // Synchronous execution-data publication must retain the native object.
     // Reject reset/reinitialize/nested use during the lease. This pins CPU
     // lifetime only: callers still own serialization and GPU fence lifetimes.
     template<class Use> int withExecution(Use use) noexcept {
         static_assert(noexcept(use(uintptr_t{})),"execution lease status ABI");
-        if(leased_ || !object) return 5;
+        if(leased_ || admissionError_ || !object) return 5;
         leased_=true;
         if(!backend.validate(object)) {
             leased_=false;reset();return 5;
         }
         const int status=use(object);
         leased_=false;
-        return status;
+        return admissionError_ ? admissionError_ : status;
     }
     template<class Use> int withLeasedAdmissionBytes(uintptr_t expected,Use use) noexcept {
         static_assert(noexcept(use(std::declval<TglLeasedAdmissionExecution&>())),
                       "admission execution view callback must not throw");
         if(admissionBytesBusy_ || !hasExecutionLease(expected)) return 5;
         admissionBytesBusy_=true;
+        admissionResetAttempted_=false;
         TglLeasedAdmissionExecution view(object);
         const int result=use(view);
         admissionBytesBusy_=false;
-        return result;
+        return admissionError_ ? admissionError_ : result;
+    }
+    // Admission reset12e420 must run inside the execution/frame lease, once.
+    // On failure keep storage alive for outstanding base/report borrows, but
+    // poison further use. Caller detaches those borrows before explicit reset.
+    int initializeLeasedAdmission(uintptr_t expected) noexcept {
+        if(!admissionBytesBusy_ || admissionResetAttempted_ || !hasExecutionLease(expected)) return 5;
+        admissionResetAttempted_=true;
+        const int result=backend.initialize(object);
+        if(result || !backend.validate(object)) admissionError_=result ? result : 5;
+        return admissionError_;
     }
     int commitDndi(uintptr_t address,const TglOwnedDndiState& state) noexcept {
-        if(!leased_ || !object || object>UINTPTR_MAX-0xd48 || address!=object+0x850) return 5;
+        if(!leased_ || admissionError_ || !object || object>UINTPTR_MAX-0xd48 || address!=object+0x850) return 5;
         return backend.commitDndi(object,state);
     }
     int clearKernelScratch(void* child,size_t childExtent,int32_t index) noexcept {
