@@ -6374,7 +6374,12 @@ int tglRunCapturedVeboxFeature(SurfaceOwner& sourceOwner,SurfaceOwner& targetOwn
     uintptr_t linked=0;std::memcpy(&linked,static_cast<uint8_t*>(child)+0x88,8);
     if(linked!=execution) return 5;
     return executionOwner.withLeasedFeatureReport(execution,&target,[&]() noexcept {
-        return invoke(child,source,target);
+        const int status=invoke(child,source,target);
+        std::memcpy(&linked,static_cast<uint8_t*>(child)+0x88,8);
+        if(linked!=execution || !sourceOwner.hasSurfaceLease(source) ||
+           !targetOwner.hasSurfaceLease(target) ||
+           !childOwner.hasPrivateChildLease(reinterpret_cast<uintptr_t>(child))) return 5;
+        return status;
     });
 }
 template<class SurfaceOwner,class ChildOwner,class ExecutionOwner,class Invoke>

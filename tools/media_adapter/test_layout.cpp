@@ -4676,6 +4676,30 @@ static void testNativeResourceBoundary() {
                     })==31);
                     uintptr_t retained=1;std::memcpy(&retained,reportBackend.bytes.data()+0x60,8);
                     assert(!retained && !execution.get());
+                    assert(childOwner.withPrivateChild([&](void* child) noexcept {
+                        return execution.withBorrowedExecution(report,[&](uintptr_t actual) noexcept {
+                            // A foreign output is detached, never silently accepted.
+                            assert(tglRunCapturedVeboxFeature(owner,destination,childOwner,execution,
+                                child,actual,s,t,[&](void*,const auto& src,const auto&) noexcept {
+                                    const uintptr_t wrong=reinterpret_cast<uintptr_t>(&src);
+                                    std::memcpy(reportBackend.bytes.data()+0x60,&wrong,8);return 0;
+                                })==5);
+                            std::memcpy(&retained,reportBackend.bytes.data()+0x60,8);assert(!retained);
+                            // A pre-existing borrow is not hidden or cleared.
+                            const uintptr_t existing=0x1234;
+                            std::memcpy(reportBackend.bytes.data()+0x60,&existing,8);
+                            assert(tglRunCapturedVeboxFeature(owner,destination,childOwner,execution,
+                                child,actual,s,t,[](void*,const auto&,const auto&) noexcept -> int {assert(false);return 0;})==5);
+                            std::memcpy(&retained,reportBackend.bytes.data()+0x60,8);assert(retained==existing);
+                            const uintptr_t zero=0;std::memcpy(reportBackend.bytes.data()+0x60,&zero,8);
+                            assert(tglRunCapturedVeboxFeature(owner,destination,childOwner,execution,
+                                child,actual,s,t,[&](void* base,const auto&,const auto&) noexcept {
+                                    std::memcpy(static_cast<uint8_t*>(base)+0x88,&existing,8);return 0;
+                                })==5);
+                            std::memcpy(baseBytes.data()+0x88,&report,8);
+                            return 0;
+                        });
+                    })==0);
                 }));
                 assert(calls==1 && owner.surface()==surface && destination.surface()==destinationSurface);
             }
