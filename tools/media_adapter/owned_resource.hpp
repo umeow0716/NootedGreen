@@ -15752,11 +15752,18 @@ public:
         const TglNativeResourceBinding& resources,uint64_t pageSize,
         const TglNativeBufferFillBinding& fill,Cpu vpCpu,std::array<Cleanup,2> cleanup,
         std::array<Cpu,2> childCpu,std::array<Sfc,2> sfc,std::array<Destroy,2> destroy,
-        Args&&... args)
+        Args&&... args) noexcept
         :backing_(image,read,qualify,executable,resources,pageSize,fill,vpCpu,
             std::forward<Args>(args)...),
          surfaces_(surfaces,parameters,backing_.retention()),
-         children_(image,read,qualify,executable,std::move(cleanup),childCpu,sfc,destroy) {}
+         children_(image,read,qualify,executable,std::move(cleanup),childCpu,sfc,destroy) {
+        static_assert(std::is_nothrow_constructible_v<Api,Args...> &&
+            std::is_nothrow_copy_constructible_v<Read> && std::is_nothrow_copy_constructible_v<Qualify> &&
+            std::is_nothrow_copy_constructible_v<Executable> && std::is_nothrow_copy_constructible_v<Cpu> &&
+            std::is_nothrow_copy_constructible_v<Sfc> && std::is_nothrow_copy_constructible_v<Destroy> &&
+            std::is_nothrow_copy_constructible_v<Cleanup> && std::is_nothrow_move_constructible_v<Cleanup>,
+            "retained frame construction must not throw; native failures are reported during initialize");
+    }
     TglNativeVeboxRendererFrameStorage(const TglNativeVeboxRendererFrameStorage&)=delete;
     TglNativeVeboxRendererFrameStorage& operator=(const TglNativeVeboxRendererFrameStorage&)=delete;
     auto& backing() noexcept {return backing_;}

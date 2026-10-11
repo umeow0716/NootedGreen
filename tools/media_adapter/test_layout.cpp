@@ -15878,8 +15878,9 @@ int main() {
                         uintptr_t allocate(size_t n) noexcept {auto* p=std::calloc(1,n);if(p) ++live;return reinterpret_cast<uintptr_t>(p);}
                         void release(uintptr_t p) noexcept {assert(live);--live;std::free(reinterpret_cast<void*>(p));}
                     } frameDn;
+                    bool retirementQualified=false;
                     auto pairCleanup=[&](void* object) noexcept {
-                        assert(backingRetention && !(*backingRetention)());
+                        assert(backingRetention && (!(*backingRetention)() || retirementQualified));
                         assert(frameSurfaces.live==2 && frameDn.live==1);
                         ++cleaned[index(object)];
                     };
@@ -15898,12 +15899,15 @@ int main() {
                     using Assembly=TglNativeVeboxRendererFrameStorage<UnusedFrameApi,FrameSurfaceBackend,FrameDnBackend,decltype(pairCleanup),
                         NativeCpu,TrackedSfc,decltype(pairDestroy)>;
                     {
-                        Assembly assembly(frameSurfaces,frameDn,base,allocatorRead,[](uintptr_t image) noexcept {return image==base;},
+                        TglOwnedVeboxRetainedFrames<Assembly,1> frames;
+                        const auto ticket=frames.create(frameSurfaces,frameDn,base,allocatorRead,[](uintptr_t image) noexcept {return image==base;},
                             [](uintptr_t,size_t) noexcept {return true;},
                             TglNativeResourceBinding{},4096,TglNativeBufferFillBinding{},NativeCpu{vpCpu},
-                            {pairCleanup,pairCleanup},{NativeCpu{pairCpu[0]},NativeCpu{pairCpu[1]}},
-                            {TrackedSfc{pairInvoke,pairEvents,pairEventCount},TrackedSfc{pairInvoke,pairEvents,pairEventCount}},
-                            {pairDestroy,pairDestroy});
+                            std::array<decltype(pairCleanup),2>{pairCleanup,pairCleanup},
+                            std::array<NativeCpu,2>{NativeCpu{pairCpu[0]},NativeCpu{pairCpu[1]}},
+                            std::array<TrackedSfc,2>{TrackedSfc{pairInvoke,pairEvents,pairEventCount},TrackedSfc{pairInvoke,pairEvents,pairEventCount}},
+                            std::array<decltype(pairDestroy),2>{pairDestroy,pairDestroy});
+                        const auto submitted=frames.run(ticket,[&](Assembly& assembly) noexcept {
                         auto& pair=assembly.children();
                         backingRetention=&assembly.backing().retention();
                         const TglResourceKey frameKey{8,3,0x3d,1,0,false};
@@ -15934,6 +15938,23 @@ int main() {
                         assert(!pair.publish(renderer.data(),renderer.size(),1,
                             [](void*,uint64_t,uintptr_t,uintptr_t) noexcept {return true;}));
                         assert(renderer==original);
+                        // Ownership fixture only: no native submit is called.
+                        TglOwnedVeboxCommandTransactionResult result{31,31,true,false};
+                        assembly.backing().retention().observe(result);
+                        assert(assembly.surfaces().withSurfaces([](const auto&,const auto&) noexcept {assert(false);return 0;})==5);
+                        return result;
+                        });
+                        assert(submitted.status==31 && submitted.acquired && !submitted.writtenBack);
+                        assert(frameSurfaces.live==2 && frameDn.live==1);
+                        assert(frames.run(ticket,[](Assembly&) noexcept -> TglOwnedVeboxCommandTransactionResult {assert(false);return {};}).status==5);
+                        assert(frames.withQuiescentFrames([]() noexcept -> int {assert(false);return 0;})==5);
+                        assert(frames.retire(ticket,[](const Assembly&,bool pending,const auto& result) noexcept -> int {
+                            assert(pending && result.acquired && result.status==31);return 31;
+                        })==31);
+                        assert(frameSurfaces.live==2 && frameDn.live==1);
+                        assert(frames.retire(ticket,[&](const Assembly&,bool pending,const auto&) noexcept -> int {
+                            assert(pending);retirementQualified=true;return 0;
+                        })==0);
                     }
                     assert(!frameSurfaces.live && frameSurfaces.releases==2 && !frameDn.live);
                     assert(!pairCpu[0].live && !pairCpu[1].live);
