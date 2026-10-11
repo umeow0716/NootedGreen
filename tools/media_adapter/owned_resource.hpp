@@ -4252,6 +4252,31 @@ struct alignas(8) TglOwnedSurfaceStorage {
 static_assert(offsetof(TglOwnedSurfaceStorage,resource) == 0x148);
 static_assert(offsetof(TglOwnedSurfaceStorage,tail) == 0x290);
 static_assert(sizeof(TglOwnedSurfaceStorage) == 0x2a8);
+inline bool tglVeboxMode0NativeSkipPredicate(uint8_t report0b,
+    const TglOwnedSurfaceStorage& current,const TglOwnedSurfaceStorage& previous) noexcept {
+    if(!(report0b&1)) return true;
+    if((current.tail[0xa]&1)!=(previous.tail[0xa]&1) ||
+       (current.tail[9]&1)!=(previous.tail[9]&1)) return false;
+    // Only the six metadata fields are read; never copy/adopt OsResource148.
+    return std::memcmp(current.tail.data()+0xc,previous.tail.data()+0xc,4)==0 &&
+        std::memcmp(current.prefix.data()+0xd8,previous.prefix.data()+0xd8,12)==0;
+}
+template<class CurrentOwner,class PreviousOwner>
+int tglSelectLeasedVeboxMode0Allocation(CurrentOwner& currentOwner,
+    const TglOwnedSurfaceStorage& current,PreviousOwner& previousOwner,
+    const TglOwnedSurfaceStorage* previous,uint8_t report09,uint8_t report0b,
+    uint32_t pipe,TglVeboxMode0Allocation& output) noexcept {
+    if(!currentOwner.hasSurfaceLease(current)) return 5;
+    int failure=0;
+    const auto selected=tglVeboxMode0AllocationDecision(report09,current.prefix[0x86],pipe,
+        [&]() noexcept {
+            if(!(report0b&1)) return true; // native never reads previous here
+            if(!previous || !previousOwner.hasSurfaceLease(*previous)) {failure=5;return false;}
+            return tglVeboxMode0NativeSkipPredicate(report0b,current,*previous);
+        });
+    if(failure || !currentOwner.hasSurfaceLease(current)) return 5;
+    output=selected;return 0;
+}
 inline const uint8_t* tglOwnedSfcSurfaceBytes(const TglOwnedSurfaceStorage& surface) noexcept {
     return reinterpret_cast<const uint8_t*>(&surface);
 }

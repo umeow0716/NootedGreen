@@ -2713,6 +2713,32 @@ static bool executionReleaseFixture(uintptr_t base,uintptr_t p,void* out,size_t 
 }
 static void testVeboxRenderBinding() {
     {
+        TestFeatureSurfaceOwner current;current.busy=true;
+        struct Previous {
+            TglOwnedSurfaceStorage storage{};bool leased=false;unsigned queries=0;
+            bool hasSurfaceLease(const TglOwnedSurfaceStorage& s) noexcept {
+                ++queries;return leased && &s==&storage;
+            }
+        } previous;
+        auto selected=TglVeboxMode0Allocation::Required;
+        assert(tglSelectLeasedVeboxMode0Allocation(current,current.storage,previous,nullptr,
+            1,0,1,selected)==0 && selected==TglVeboxMode0Allocation::Reuse && !previous.queries);
+        assert(tglSelectLeasedVeboxMode0Allocation(current,current.storage,previous,&previous.storage,
+            1,1,1,selected)==5 && selected==TglVeboxMode0Allocation::Reuse && previous.queries==1);
+        previous.leased=true;
+        assert(tglSelectLeasedVeboxMode0Allocation(current,current.storage,previous,&previous.storage,
+            1,1,1,selected)==0 && selected==TglVeboxMode0Allocation::Reuse);
+        previous.storage.prefix[0xe3]=1;
+        assert(tglSelectLeasedVeboxMode0Allocation(current,current.storage,previous,&previous.storage,
+            1,1,1,selected)==0 && selected==TglVeboxMode0Allocation::Required);
+        previous.leased=false;const auto queries=previous.queries;
+        assert(tglSelectLeasedVeboxMode0Allocation(current,current.storage,previous,nullptr,
+            0,1,1,selected)==0 && selected==TglVeboxMode0Allocation::Required && previous.queries==queries);
+        current.busy=false;selected=TglVeboxMode0Allocation::Reuse;
+        assert(tglSelectLeasedVeboxMode0Allocation(current,current.storage,previous,nullptr,
+            0,0,0,selected)==5 && selected==TglVeboxMode0Allocation::Reuse);
+    }
+    {
         std::array<uint8_t,0x2a0> current{},previous{};
         assert(tglVeboxMode0NativeSkipPredicate(1,current,previous));
         for(size_t offset : {size_t(0x29a),size_t(0x299)}) {
