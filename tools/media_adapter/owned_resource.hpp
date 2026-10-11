@@ -4938,6 +4938,16 @@ public:
         std::memcpy(surface_.prefix.data()+0x4c,&bottom,4);
         use(static_cast<const TglOwnedSurfaceStorage&>(surface_));return true;
     }
+    // Publish only the proven FFDN scalars, never source tokens/handles or
+    // DN90. The actual source owner must remain leased through publication.
+    template<class SourceOwner>
+    bool publishFfdnFrameFrom(SourceOwner& owner,const TglOwnedSurfaceStorage& source) noexcept {
+        if(!ready_ || busy_ || &source==&surface_ || !owner.hasSurfaceLease(source)) return false;
+        busy_=true;
+        struct Unlock {bool& busy;~Unlock(){busy=false;}} unlock{busy_};
+        if(!capture_.backed(surface_.resource)) return false;
+        return tglPrepareOwnedFfdnFrameMetadata(surface_,source);
+    }
     bool copyFrameMetadata(const TglOwnedSurfaceStorage& source) noexcept {
         if(!ready_ || busy_) return false;
         busy_=true;

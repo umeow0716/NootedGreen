@@ -5168,6 +5168,24 @@ static void testNativeResourceBoundary() {
             assert(destination.copyFrameMetadataFrom(destination));
             const auto* destinationSurface=destination.surface();
             {
+                const auto before=*destinationSurface;
+                auto expected=before;
+                assert(tglPrepareOwnedFfdnFrameMetadata(expected,*surface));
+                assert(!destination.publishFfdnFrameFrom(owner,*surface)); // no source lease
+                assert(owner.withSurface([&](const auto& actual) noexcept {
+                    assert(destination.publishFfdnFrameFrom(owner,actual));
+                    assert(!owner.publishFfdnFrameFrom(owner,actual)); // no self publication
+                    assert(destination.withSurface([&](const auto&) noexcept {
+                        assert(!destination.publishFfdnFrameFrom(owner,actual)); // busy target
+                    }));
+                }));
+                assert(destinationSurface->prefix==expected.prefix);
+                assert(destinationSurface->resource==before.resource && destinationSurface->tail==before.tail);
+                auto effectiveKey=key;
+                std::memcpy(&effectiveKey.width,destinationSurface->prefix.data()+0xd8,4);
+                bool changed=true;assert(destination.ensure(effectiveKey,&changed)==0 && !changed);
+            }
+            {
                 struct NativeReportBackend {
                     std::array<uint8_t,0xd48> bytes{};
                     uintptr_t pointer() noexcept {return reinterpret_cast<uintptr_t>(bytes.data());}
