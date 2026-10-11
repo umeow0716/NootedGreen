@@ -12512,6 +12512,35 @@ static void testRetainedVeboxFrames() {
         assert(snapshotCallbacks.removeContextsAndReconcileBatch<2>(snapshotPhysical.ticket,0xf100,input,
             reconcileSnapshot,deleteWithSnapshot)==5 && snapshotNative==1 && snapshotReconciled==1);
         assert(!removalRegistry.lookup(image,0xf100).generation);
+        static Registry preparedRegistry;
+        batchContexts={0x46000,0x47000};removalArrayReadable=true;
+        invoke.produced=0xf200;
+        TglOwnedPhysicalCallbackCoordinator preparedCallbacks(preparedRegistry,binding,read,qualify,executable,invoke);
+        const auto preparedPhysical=preparedCallbacks.initialize(&output,input);assert(preparedPhysical.published);
+        unsigned removalStage=0;int prepareStatus=0;
+        auto prepareOwners=[&](uintptr_t physical,const TglNativeRemovedContextBatch<2>& batch) noexcept -> int {
+            assert(physical==0xf200 && batch.valid && batch.contexts==batchContexts && removalStage==0);
+            removalStage=1;
+            assert(preparedCallbacks.withEventObservation(preparedPhysical.ticket,physical,
+                []() noexcept -> int {assert(false);return 0;})==5);
+            return prepareStatus;
+        };
+        auto preparedNative=[&](uintptr_t entry,uintptr_t physical,const void* original) noexcept -> int {
+            assert(removalStage==1 && entry==image+0x15128 && physical==0xf200 && original==input);
+            removalStage=2;return 0;
+        };
+        auto preparedReconcile=[&](uintptr_t physical,const TglNativeRemovedContextBatch<2>& batch) noexcept -> int {
+            assert(removalStage==2 && physical==0xf200 && batch.valid && batch.contexts==batchContexts);
+            removalStage=3;return 0;
+        };
+        assert(preparedCallbacks.removePreparedContextsAndReconcileBatch<2>(preparedPhysical.ticket,0xf200,input,
+            prepareOwners,preparedReconcile,preparedNative)==0 && removalStage==3);
+        removalStage=0;prepareStatus=31;
+        assert(preparedCallbacks.removePreparedContextsAndReconcileBatch<2>(preparedPhysical.ticket,0xf200,input,
+            prepareOwners,preparedReconcile,preparedNative)==31 && removalStage==1);
+        assert(!preparedRegistry.lookup(image,0xf200).generation);
+        assert(preparedCallbacks.removePreparedContextsAndReconcileBatch<2>(preparedPhysical.ticket,0xf200,input,
+            prepareOwners,preparedReconcile,preparedNative)==5 && removalStage==1);
     }
 }
 

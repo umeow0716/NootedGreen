@@ -16796,6 +16796,9 @@ public:
     }
     // Slot4 deletes through each context's ORIGINAL deleting-destructor slot.
     // Keep all table/code/shell owners pinned throughout native invocation.
+    // This bare wrapper is only for contexts without published owned children.
+    // Published compositions must use removePreparedContextsAndReconcileBatch
+    // to detach owned children BEFORE native accounting/deleting destructors.
     // Only aggregate native success permits reconciliation, still inside the
     // same physical gate. Failure is partial teardown, never rollback proof.
     template<class Reconcile,class Native=TglNativeBackingAllocateInvoker>
@@ -16815,6 +16818,29 @@ public:
             const int result=native(binding_.image+0x15128,physical,input);
             return result?result:reconcile(physical,input);
         });
+    }
+    template<size_t Capacity=16,class Prepare,class Reconcile,class Native=TglNativeBackingAllocateInvoker>
+    int removePreparedContextsAndReconcileBatch(typename Registry::Ticket ticket,uintptr_t physical,
+        const void* input,Prepare prepare,Reconcile reconcile,Native native=Native{}) noexcept {
+        using Batch=TglNativeRemovedContextBatch<Capacity>;
+        static_assert(noexcept(prepare(uintptr_t{},std::declval<const Batch&>())) &&
+            std::is_same_v<decltype(prepare(uintptr_t{},std::declval<const Batch&>())),int>);
+        static_assert(noexcept(reconcile(uintptr_t{},std::declval<const Batch&>())) &&
+            std::is_same_v<decltype(reconcile(uintptr_t{},std::declval<const Batch&>())),int>);
+        static_assert(noexcept(native(uintptr_t{},uintptr_t{},input)) &&
+            std::is_same_v<decltype(native(uintptr_t{},uintptr_t{},input)),int>);
+        Batch snapshot;
+        return removeContextsAndReconcile(ticket,physical,input,
+            [&](uintptr_t address,const void*) noexcept -> int {
+                return reconcile(address,static_cast<const Batch&>(snapshot));
+            },[&](uintptr_t entry,uintptr_t address,const void* original) noexcept -> int {
+                if(!snapshot.capture(reinterpret_cast<uintptr_t>(original),read_)) return 5;
+                // Prepare validates all owners, then detaches published children
+                // before native can delete them. Partial failure quarantines;
+                // it does not authorize release or imply rollback.
+                const int prepared=prepare(address,static_cast<const Batch&>(snapshot));
+                return prepared?prepared:native(entry,address,original);
+            });
     }
     template<size_t Capacity=16,class Reconcile,class Native=TglNativeBackingAllocateInvoker>
     int removeContextsAndReconcileBatch(typename Registry::Ticket ticket,uintptr_t physical,
