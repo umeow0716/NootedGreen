@@ -16949,6 +16949,51 @@ int main() {
                         for(unsigned i=0;i<commandInvoke.calls;++i)
                             assert(commandInvoke.sequence[i]==base+sendOrder[i]);
                     }
+                    TglNativeSfcOutputUsageBinding usage;
+                    const uintptr_t usageEntry=base+0x659b0;
+                    const std::array<uint8_t,20> usageAnchor{
+                        0x55,0x48,0x89,0xe5,0x48,0x89,0x7d,0xf8,0x48,0x89,
+                        0x75,0xf0,0x89,0x55,0xec,0x89,0x4d,0xe8,0x5d,0xc3};
+                    auto outputRead=[&](uintptr_t address,void* dst,size_t size) noexcept {
+                        if(address==os+0x128 && size==8) {std::memcpy(dst,&usageEntry,8);return true;}
+                        if(address==usageEntry && size==20) {std::memcpy(dst,usageAnchor.data(),20);return true;}
+                        if(address==0x900013 || address==0x90000b) {
+                            assert(size==1);*static_cast<uint8_t*>(dst)=0;return true;
+                        }
+                        return environmentRead(address,dst,size);
+                    };
+                    assert(usage.resolve(os,base,outputRead,[](uintptr_t image) noexcept {return image==base;},
+                        [&](uintptr_t entry,size_t size) noexcept {return entry==usageEntry && size==20;}));
+                    output.resource[0x20]=1;
+                    const uint32_t format=0x50,pitch=2048;
+                    const auto resource=reinterpret_cast<uintptr_t>(output.resource.data());
+                    std::memcpy(prepared.state.data()+0x2c,&format,4);
+                    std::memcpy(prepared.state.data()+0x90,&resource,8);
+                    std::memcpy(output.prefix.data()+0xe0,&pitch,4);
+                    unsigned usages=0;
+                    auto useOutput=[&](uintptr_t entry,uintptr_t context,const void* resourcePointer,
+                        uint32_t value,uint32_t flag) noexcept {
+                        assert(entry==usageEntry && context==os && resourcePointer==output.resource.data() &&
+                            value==6 && flag==1 && commandInvoke.calls==0);
+                        ++usages;owner.reset();assert(cpu.live && !eventCount);
+                    };
+                    commandInvoke.failureEntry=0;commandInvoke.calls=0;
+                    assert(owner.withPrivateChild([&](void* parent) noexcept {
+                        return tglSendOwnedVeboxSfcNativeOutputCommands(owner,parent,commandBinding,&command,
+                            commandInvoke,usage,prepared,output,0x900000,1,0,1,0,outputRead,platform,useOutput);
+                    })==0);
+                    assert(usages==1 && commandInvoke.calls==7);
+                    for(unsigned invalid=0;invalid<2;++invalid) {
+                        commandInvoke.calls=0;
+                        const auto bound=resource+(invalid==0?8:0);
+                        std::memcpy(prepared.state.data()+0x90,&bound,8);
+                        output.prefix[0xe8]=invalid==1?1:0;
+                        assert(owner.withPrivateChild([&](void* parent) noexcept {
+                            return tglSendOwnedVeboxSfcNativeOutputCommands(owner,parent,commandBinding,&command,
+                                commandInvoke,usage,prepared,output,0x900000,1,0,1,0,outputRead,platform,useOutput);
+                        })==5);
+                        assert(usages==1 && commandInvoke.calls==0);
+                    }
                 }
                 {
                     std::array<uint8_t,16> history{};history[0]=1;
