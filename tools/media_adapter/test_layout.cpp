@@ -13010,6 +13010,23 @@ int main() {
                 AdmissionContext admission(owner,owner.constructedBase(),&admissionParams,&admissionPass,admissionPolicy);
                 using AdmissionScope=TglOwnedVeboxScopedContext<AdmissionContext>;
                 hooks=tglBindOwnedVeboxAdmissionHook<AdmissionScope>(hooks);
+                unsigned installedAllocationCalls=0,installedAllocationUnwinds=0;
+                int installedAllocationStatus=31;
+                auto installedAllocate=[&](void* child) noexcept -> int {
+                    assert(owner.hasPrivateChildLease(reinterpret_cast<uintptr_t>(child)));
+                    ++installedAllocationCalls;owner.reset();
+                    assert(cpu.live && !eventCount);
+                    return installedAllocationStatus;
+                };
+                auto installedUnwind=[&](void* child) noexcept {
+                    assert(owner.hasPrivateChildLease(reinterpret_cast<uintptr_t>(child)));
+                    ++installedAllocationUnwinds;
+                };
+                using InstalledAllocation=TglOwnedVeboxAllocationContext<decltype(owner),
+                    decltype(installedAllocate),decltype(installedUnwind)>;
+                InstalledAllocation installedAllocation(owner,installedAllocate,lifecycleChild,installedUnwind);
+                using InstalledAllocationScope=TglOwnedVeboxScopedContext<InstalledAllocation>;
+                hooks=tglBindOwnedVeboxAllocationHook<InstalledAllocationScope>(hooks);
                 const auto unbound=hooks;
                 assert(owner.withPrivateChild([](void*) noexcept {assert(false);return 0;})==5);
                 hooks=tglBindOwnedVeboxQueryHooks<DeniedFormatRead>(hooks);
@@ -13019,6 +13036,17 @@ int main() {
                     assert(staleAllocation.owns(child) && staleAllocation.allocate()==0);
                     uintptr_t table=0,destroyEntry=0,deleteEntry=0;
                     std::memcpy(&table,child,8);
+                    uintptr_t allocationEntry=0;
+                    std::memcpy(&allocationEntry,reinterpret_cast<const void*>(table+0x58),8);
+                    const auto allocate=reinterpret_cast<int(*)(void*) noexcept>(allocationEntry);
+                    assert(allocate(child)==5 && !installedAllocationCalls && !installedAllocationUnwinds);
+                    {
+                        InstalledAllocationScope scope(child,installedAllocation);assert(scope.bound());
+                        assert(allocate(child)==31 && installedAllocationCalls==1 && installedAllocationUnwinds==1);
+                        installedAllocationStatus=0;
+                        assert(allocate(child)==0 && installedAllocationCalls==2 && installedAllocationUnwinds==1);
+                    }
+                    assert(allocate(child)==5 && installedAllocationCalls==2 && installedAllocationUnwinds==1);
                     std::memcpy(&destroyEntry,reinterpret_cast<const void*>(table),8);
                     std::memcpy(&deleteEntry,reinterpret_cast<const void*>(table+8),8);
                     reinterpret_cast<void(*)(void*) noexcept>(destroyEntry)(child);
