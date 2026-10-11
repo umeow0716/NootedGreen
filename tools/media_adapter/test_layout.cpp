@@ -1596,6 +1596,21 @@ static void testTrackedCpuOwner() {
         const uint32_t width=1920,height=1080;
         std::memcpy(source.prefix.data()+0xd8,&width,4);
         std::memcpy(source.prefix.data()+0xdc,&height,4);
+        for(size_t i=0;i<0x30;++i) source.prefix[0x30+i]=uint8_t(i+1);
+        const uint32_t sourceCompression=7,queriedCompression=3;
+        std::memcpy(source.prefix.data()+0x138,&sourceCompression,4);
+        source.prefix[0]=0x42;source.resource.fill(0xa5);source.tail.fill(0x5a);
+        TglOwnedSurfaceStorage metadata;metadata.resource.fill(0x73);metadata.tail.fill(0x31);
+        assert(tglPrepareOwnedFfdiFrameMetadata(metadata,source,queriedCompression));
+        uint32_t selectedCompression=0;std::memcpy(&selectedCompression,metadata.prefix.data()+0x138,4);
+        assert(selectedCompression==queriedCompression && metadata.prefix[0]==0x42);
+        assert(!std::memcmp(metadata.prefix.data()+0x30,source.prefix.data()+0x30,0x30));
+        for(auto byte:metadata.resource) assert(byte==0x73);
+        for(auto byte:metadata.tail) assert(byte==0x31);
+        assert(!tglPrepareOwnedFfdiFrameMetadata(source,source,queriedCompression));
+        std::memcpy(&selectedCompression,source.prefix.data()+0x138,4);
+        assert(selectedCompression==sourceCompression);
+        source.resource.fill(0);source.tail.fill(0);
         for(uint32_t format:{0x19u,0x15u,0x3du}) {
             TglOwnedFfdiAllocationRequest request;
             assert(tglPrepareOwnedFfdiAllocationRequest(source,format,1,{true,1},request));

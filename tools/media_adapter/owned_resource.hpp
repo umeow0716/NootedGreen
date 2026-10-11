@@ -4477,6 +4477,16 @@ inline void tglCopyOwnedSurfaceFrameMetadata(TglOwnedSurfaceStorage& target,
     std::memcpy(target.prefix.data()+0x30,source.prefix.data()+0x30,0x30);
     std::memcpy(target.prefix.data()+0x138,source.prefix.data()+0x138,4);
 }
+// FFDI1f7cc8..1f7d6a uses allocation-query+a0's DWORD for target138,
+// not input138. Borrowed handle1a0 and conditional200 belong to a separate
+// retained backing lease and must never be copied by this metadata producer.
+inline bool tglPrepareOwnedFfdiFrameMetadata(TglOwnedSurfaceStorage& target,
+    const TglOwnedSurfaceStorage& source,uint32_t queriedCompression) noexcept {
+    if(&target==&source) return false;
+    tglCopyOwnedSurfaceFrameMetadata(target,source);
+    std::memcpy(target.prefix.data()+0x138,&queriedCompression,4);
+    return true;
+}
 enum class TglOwnedFfdnHistoryDecision { Keep, Invalidate, CopyPrevious };
 struct TglOwnedFfdiCompressionSelection {
     bool compressed=false;
