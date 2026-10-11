@@ -1326,6 +1326,22 @@ static void testTrackedCpuOwner() {
                     std::memcpy(output,&value,8);return true;
                 }
             }
+            constexpr std::array<uint8_t,15> cscPrologue{
+                0x55,0x48,0x89,0xe5,0x48,0x81,0xec,0x80,0,0,0,0x48,0x8d,0x45,0xc0};
+            constexpr std::array<uint8_t,5> cscCall{0xe8,0x53,0x6e,0,0};
+            constexpr std::array<uint8_t,35> cscMatrix{
+                0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x20,0x89,0x7d,0xfc,
+                0x89,0x75,0xf8,0x48,0x89,0x55,0xf0,0xc6,0x45,0xef,0,
+                0x8b,0x7d,0xfc,0xbe,0xff,0xff,0xff,0xff,0xe8,0xfd,0xe9,0xff,0xff};
+            if(address==nativeImage+0x4dac0 && bytes==cscPrologue.size()) {
+                std::memcpy(output,cscPrologue.data(),bytes);return true;
+            }
+            if(address==nativeImage+0x4daf8 && bytes==cscCall.size()) {
+                std::memcpy(output,cscCall.data(),bytes);return true;
+            }
+            if(address==nativeImage+0x54950 && bytes==cscMatrix.size()) {
+                std::memcpy(output,cscMatrix.data(),bytes);return true;
+            }
             uintptr_t value=0;
             if(bytes==8) {
                 if(address==child.address) value=privateTable;
@@ -1455,8 +1471,9 @@ static void testTrackedCpuOwner() {
             nativeFixture=true;child.kernelSuccess=true;frame.success=true;
             auto qualify=[](uintptr_t image) noexcept {return image==nativeImage;};
             auto executable=[](uintptr_t entry,size_t bytes) noexcept {
-                return bytes==16 && (entry==nativeImage+0x129a10 || entry==nativeImage+0x129ca0 ||
-                    entry==nativeImage+0x64d60);
+                return (bytes==16 && (entry==nativeImage+0x129a10 || entry==nativeImage+0x129ca0 ||
+                    entry==nativeImage+0x64d60)) || (entry==nativeImage+0x4dac0 && bytes==15) ||
+                    (entry==nativeImage+0x4daf8 && bytes==5) || (entry==nativeImage+0x54950 && bytes==35);
             };
             assert(nativeSetup.resolve(nativeImage,noRead,qualify,executable));
             assert(nativeBuilder.resolve(nativeImage,noRead,qualify,executable));
@@ -1504,8 +1521,23 @@ static void testTrackedCpuOwner() {
             TglDiIecpInputs staleInput{}; // no current role: cannot authorize packets
             ActualFrame actualFrame{{},leases,staleInput,false,noRead,admitSurface,
                 admitDi,registerResource,control};
+            unsigned cscValidations=0,cscInvocations=0;
+            struct CscInvoke {
+                bool& allowed;unsigned& validations;unsigned& invocations;
+                bool matrix(uintptr_t entry,uint32_t from,uint32_t to,float*) noexcept {
+                    assert(entry==nativeImage+0x54950 && from==3 && to==7);
+                    ++validations;return allowed;
+                }
+                void coefficients(uintptr_t entry,uint32_t from,uint32_t to,
+                    float* matrix,float* input,float* output) noexcept {
+                    assert(entry==nativeImage+0x4dac0 && from==3 && to==7);++invocations;
+                    for(size_t i=0;i<9;++i) matrix[i]=42;
+                    for(size_t i=0;i<3;++i) {input[i]=0;output[i]=0;}
+                }
+            } cscInvoke{allowed,cscValidations,cscInvocations};
+            using ImageCsc=TglOwnedCscProducer<decltype(noRead),decltype(qualify),decltype(executable),CscInvoke>;
             using ActualProducers=TglOwnedVeboxFrameProducerTypes<ActualFrame,Child,Execution,
-                decltype(noRead),decltype(noPackets),decltype(produce)>;
+                decltype(noRead),decltype(noPackets),ImageCsc>;
             assert((tglBuildOwnedVeboxCompleteHooks<AuxiliaryResolve,AuxiliaryScope,
                 AuxiliaryScope,typename ActualProducers::Resolve,AuxiliaryScope,FormatRead>(
                     nativeChild,child.installed)));
@@ -1514,10 +1546,10 @@ static void testTrackedCpuOwner() {
             bool fullPackets=false;
             bool requestKernel=false;
             auto makeActualConsumer=[&](TglOwnedVeboxFrameRetention& retained) noexcept {
-                return tglMakeOwnedVeboxNativeFrameConsumer<AuxiliaryResolve,
+                return tglMakeImageBoundVeboxNativeFrameConsumer<AuxiliaryResolve,
                 AuxiliaryScope,AuxiliaryScope,AuxiliaryScope,FormatRead>(sourceLease,
-                child,execution,0,noRead,noPackets,produce,nativeSetup,nativeBuilder,
-                nativeImage,nativeOs,scratch,&state,retained,qualify,executable,
+                child,execution,0,noRead,noPackets,nativeSetup,nativeBuilder,
+                nativeImage,nativeOs,scratch,&state,retained,qualify,executable,cscInvoke,
                 [&](uintptr_t,void*,void*,void*,void*,int32_t* remaining) noexcept -> int {
                     ++nativeSetups;*remaining=128;
                     const uintptr_t base=0x1000,cursor=0x1020;
@@ -1588,6 +1620,7 @@ static void testTrackedCpuOwner() {
             assert(positive.status==0 && positive.builderStatus==0 && positive.acquired && positive.writtenBack);
             assert(consistentRetention() && registrations==3 && surfaceAdmissions==4);
             assert(child.writes==cscBefore+1 && execution.dndiCommits==1);
+            assert(cscValidations==1 && cscInvocations==1);
             assert(surfaces.surfaces[0]==&source && surfaces.surfaces[1]==&target &&
                 surfaces.surfaces[2]==&inactiveStmm && surfaces.surfaces[3]==&inactiveFfdn);
             TglOwnedStateInputs expectedState{};
@@ -1649,6 +1682,7 @@ static void testTrackedCpuOwner() {
             assert(child.writes==cscBefore+2 && execution.dndiCommits==2 &&
                 registrations==3 && surfaceAdmissions==8);
             assert(nativeSetups==6 && nativeBuilds==6 && nativeWritebacks==6);
+            assert(cscValidations==3 && cscInvocations==2);
             assert(!ActualProducers::Resolve::get(nativeChild));
         }
     }

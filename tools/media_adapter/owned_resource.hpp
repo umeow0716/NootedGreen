@@ -16981,6 +16981,30 @@ auto tglMakeOwnedVeboxNativeFrameConsumer(
     };
 }
 
+// Production composition: CSC must be resolved from the same qualified image
+// as native setup/build, never a caller-supplied status-zero coefficient stub.
+// Installer uses this exact producer type in FrameProducerTypes/complete hooks.
+template<class LifetimeResolve,class AdmissionResolve,class AllocationResolve,
+    class ModeResolve,class FormatRead,class SourceOwner,class ChildOwner,
+    class ExecutionOwner,class Read,class PacketAdmit,class Qualify,class Executable,
+    class CscInvoke=TglNativeCscInvoker,class SetupInvoke=TglNativeVeboxSetupInvoker,
+    class BuildInvoke=TglNativeVeboxBuilderInvoker,
+    class WritebackInvoke=TglNativeCommandHeaderWritebackInvoker>
+auto tglMakeImageBoundVeboxNativeFrameConsumer(
+    SourceOwner& sourceOwner,ChildOwner& child,ExecutionOwner& execution,
+    uintptr_t dnParams,Read read,PacketAdmit admitPackets,
+    TglNativeVeboxSetupBinding setup,TglNativeVeboxBuilderBinding builder,
+    uintptr_t image,uintptr_t os,TglOwnedVeboxBuilderScratch& scratch,void* auxiliary,
+    TglOwnedVeboxFrameRetention& retention,Qualify qualify,Executable executable,
+    CscInvoke cscInvoke=CscInvoke{},SetupInvoke setupInvoke=SetupInvoke{},
+    BuildInvoke buildInvoke=BuildInvoke{},WritebackInvoke writebackInvoke=WritebackInvoke{}) noexcept {
+    TglOwnedCscProducer<Read,Qualify,Executable,CscInvoke> csc(image,read,qualify,executable,cscInvoke);
+    return tglMakeOwnedVeboxNativeFrameConsumer<LifetimeResolve,AdmissionResolve,
+        AllocationResolve,ModeResolve,FormatRead>(sourceOwner,child,execution,dnParams,
+        read,admitPackets,csc,setup,builder,image,os,scratch,auxiliary,retention,
+        qualify,executable,setupInvoke,buildInvoke,writebackInvoke);
+}
+
 // One borrowed-OS resource lifetime. The renderer must close every such scope
 // before retiring RenderHal/OS. Member order guarantees resource destruction
 // while its backend still exists; close is terminal and idempotent.
