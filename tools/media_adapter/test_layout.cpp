@@ -5058,6 +5058,30 @@ static void testNativeStatisticsFill() {
     assert(captured(prepare)==5 && fixture.allocations==beforeFrame); // no child lease
     childLease.busy=true;
     assert(!captured(prepare) && statistics.layout().bytes==1664);
+    statistics.reset();
+    unsigned statisticsTailUses=0,statisticsTailPublications=0;
+    auto statisticsTail=[&](auto consume) noexcept {
+        return tglRunCapturedStatisticsFrame(statistics,sourceOwner,childLease,executionLease,
+            childBytes.data(),reportAddress,sourceOwner.storage,read,false,binding,writable,
+            [&](const Storage&,const TglStatisticsAllocation& layout) noexcept -> int {
+                ++statisticsTailPublications;assert(layout.bytes==1664);
+                return tglPublishOwnedStatisticsLayout(childLease,childBytes.data(),layout);
+            },consume);
+    };
+    assert(!statisticsTail([&](const Storage&,const TglStatisticsAllocation& layout) noexcept -> int {
+        ++statisticsTailUses;statistics.reset();assert(statistics.layout().bytes==layout.bytes);
+        return 0;
+    }));
+    assert(statisticsTailUses==1 && statisticsTailPublications==1);
+    assert(statisticsTail([](const Storage&,const TglStatisticsAllocation&) noexcept -> int {return -91;})==-91);
+    assert(!statistics.layout().bytes && statisticsTailPublications==1);
+    const auto beforeRejectedStatistics=fixture.allocations;
+    executionLease.valid=false;
+    assert(statisticsTail([](const Storage&,const TglStatisticsAllocation&) noexcept -> int {
+        assert(false);return 0;
+    })==5);
+    assert(fixture.allocations==beforeRejectedStatistics && statisticsTailPublications==1);
+    executionLease.valid=true;
     const auto fillsBeforeRevoke=fixture.fills;
     auto revokeReport=[&](size_t,const Storage&,bool) noexcept {
         executionLease.valid=false;return 0;

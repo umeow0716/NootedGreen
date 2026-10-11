@@ -13966,6 +13966,58 @@ private:
     bool busy_=false;
 };
 
+// Standalone statistics tail: preceding FFDi/FFDN/STMM scopes remain owned by
+// the caller. Do not allocate those groups again merely to obtain statistics.
+// Synchronous only: the consumer must not submit GPU work without a separate
+// completion-bound owner reservation.
+template<class SourceOwner,class ChildOwner,class ExecutionOwner,class Read,
+    class Writable,class Publish,class Consume>
+int tglRunCapturedStatisticsFrame(TglStatisticsResource<TglNativeResourceBackend>& statistics,
+    SourceOwner& sourceOwner,ChildOwner& childOwner,ExecutionOwner& executionOwner,
+    void* child,uintptr_t execution,const TglOwnedSurfaceStorage& source,Read read,
+    bool alignDi64,const TglNativeBufferFillBinding& binding,Writable writable,
+    Publish publish,Consume consume) noexcept {
+    using Storage=TglStatisticsResource<TglNativeResourceBackend>::Storage;
+    static_assert(noexcept(writable(uintptr_t{},uint32_t{})) &&
+        noexcept(publish(std::declval<const Storage&>(),std::declval<const TglStatisticsAllocation&>())) &&
+        noexcept(consume(std::declval<const Storage&>(),std::declval<const TglStatisticsAllocation&>())) &&
+        std::is_same_v<decltype(publish(std::declval<const Storage&>(),std::declval<const TglStatisticsAllocation&>())),int> &&
+        std::is_same_v<decltype(consume(std::declval<const Storage&>(),std::declval<const TglStatisticsAllocation&>())),int>,
+        "captured statistics tail ABI");
+    bool entered=false;
+    auto guarded=[&](auto invoke) noexcept -> int {
+        return tglRunCapturedVeboxAllocation(sourceOwner,childOwner,executionOwner,
+            child,execution,source,[&](void*,uintptr_t,const auto&) noexcept -> int {
+                return invoke();
+            });
+    };
+    const int status=guarded([&]() noexcept -> int {
+        entered=true;bool di=false;
+        if(!tglReadOwnedBuilderDiArgument(di,reinterpret_cast<uintptr_t>(child),execution,read)) return 5;
+        uint32_t width=0,height=0;
+        return tglPrepareOwnedStatisticsFromLeasedSource(sourceOwner,source,0,
+            [&]() noexcept {return di;},alignDi64,width,height,
+            [&](uint32_t w,uint32_t h) noexcept -> int {
+                const int allocated=statistics.ensureNative(w,h,binding,
+                    [&](uintptr_t address,uint32_t bytes) noexcept {
+                        bool allowed=false;
+                        const int checked=guarded([&]() noexcept -> int {
+                            allowed=writable(address,bytes);return allowed?0:5;
+                        });
+                        return !checked && allowed;
+                    },[&](const auto& storage,const auto& layout) noexcept -> int {
+                        return guarded([&]() noexcept -> int {return publish(storage,layout);});
+                    });
+                if(allocated) return allocated;
+                return statistics.withResource([&](const auto& storage,const auto& layout) noexcept -> int {
+                    return guarded([&]() noexcept -> int {return consume(storage,layout);});
+                });
+            });
+    });
+    if(status && entered) statistics.reset();
+    return status;
+}
+
 // Allocation transaction for a history-enabled frame. The qualified platform
 // planner supplies resource keys and statistics boundary dimensions; this does
 // not infer feature admission or SFC resources. All three owners outlive this
