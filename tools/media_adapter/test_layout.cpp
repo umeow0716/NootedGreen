@@ -13926,9 +13926,11 @@ int main() {
                     uintptr_t restoredLink=0;
                     std::memcpy(&restoredLink,cpu.bytes.data()+0x80,8);assert(!restoredLink);
                     int source=0,data=0,command=0;unsigned producers=0,emissions=0;
+                    for(unsigned passCase=0;passCase<6;++passCase) {
+                    producers=emissions=0;
                     assert(owner.withBorrowedVpCpuScope([&](auto borrow) noexcept {
                         return graph.withPreparedCallbackAssemblyPass({},frame,0,0x4000,0x2000,0,&source,&data,
-                            [&](void*,const auto&,auto&) noexcept -> int {++producers;return 0;},
+                            [&](void*,const auto&,auto&) noexcept -> int {++producers;return passCase==3?31:0;},
                             [](void*,const auto&,auto&) noexcept -> int {assert(false);return 0;},
                             [](void*,const auto&) noexcept {assert(false);},
                             [&](void* child,void*,void*,const TglOwnedVpEntrySet& entries) noexcept -> int {
@@ -13948,7 +13950,9 @@ int main() {
                                         // The catalogue is live, but production is forbidden
                                         // while emission owns this phase.
                                         assert(entries.state(child,nullptr,nullptr,nullptr)==5);
-                                        ++emissions;return -17;
+                                        ++emissions;
+                                        if(passCase==5) assert(entries.send(child,&data,&command)==5);
+                                        return passCase==1?31:passCase==2?-17:0;
                                     });
                                 uintptr_t restored=1;std::memcpy(&restored,child,8);assert(!restored);
                                 std::memcpy(&linked,cpu.bytes.data()+0x80,8);
@@ -13959,14 +13963,17 @@ int main() {
                                 assert(!producers);
                                 return borrow(child,[&](void* parent,void* actual) noexcept -> int {
                                     assert(parent==owner.constructedBase() && actual==child);
-                                    assert(entries.setup(child,&source,reinterpret_cast<void*>(0x2000),&data)==0);
+                                    const int setupResult=entries.setup(child,&source,reinterpret_cast<void*>(0x2000),&data);
+                                    if(setupResult) return setupResult;
+                                    if(passCase==4) return 0; // Missing send must reject yet restore leases.
                                     return entries.send(child,&data,&command);
                                 });
                             });
-                    })==-17);
-                    assert(producers==1 && emissions==1);
+                    })==(passCase==1 || passCase==3?31:passCase==2?-17:passCase>=4?5:0));
+                    assert(producers==1 && emissions==(passCase==3 || passCase==4?0:1));
                     uintptr_t linked=1;std::memcpy(&linked,cpu.bytes.data()+0x80,8);assert(!linked);
                     assert(!owner.hasPrivateChildLease(reinterpret_cast<uintptr_t>(owner.constructedBase())));
+                    }
                     graph.reset();assert(!stateCpu.live && !avsCpu.live);
                 }
                 {
