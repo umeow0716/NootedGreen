@@ -7871,6 +7871,26 @@ static void testNativeResourceBoundary() {
                     TglOwnedVeboxFrameRetention retention;
                     TglOwnedVeboxSurfacePairLease<Surface,Surface> pair(input,first,retention);
                     assert(pair.ready());
+                    struct ChildLease {
+                        int child=0;
+                        bool hasPrivateChildImageLease(uintptr_t p,uintptr_t image) const noexcept {
+                            return p==reinterpret_cast<uintptr_t>(&child) && image==0x100000;
+                        }
+                    } childLease;
+                    TglVeboxRenderBinding renderBinding;
+                    renderBinding.image=0x100000;renderBinding.entry=0x100000+0x12c9d0;
+                    int argument=0;unsigned renderCalls=0;
+                    auto nativeRender=[&](uintptr_t entry,void* child,void* arg,void* descriptor) noexcept -> int {
+                        assert(entry==renderBinding.entry && child==&childLease.child && arg==&argument);
+                        uintptr_t source=0,target=0;
+                        std::memcpy(&source,static_cast<uint8_t*>(descriptor)+0x10,8);
+                        std::memcpy(&target,static_cast<uint8_t*>(descriptor)+0x18,8);
+                        assert(input.hasSurfaceLease(*reinterpret_cast<const TglOwnedSurfaceStorage*>(source)));
+                        assert(first.hasSurfaceLease(*reinterpret_cast<const TglOwnedSurfaceStorage*>(target)));
+                        ++renderCalls;return -17;
+                    };
+                    assert(pair.render(renderBinding,childLease,&childLease.child,nullptr,nativeRender)==5 && !renderCalls);
+                    assert(pair.render(renderBinding,childLease,&childLease.child,&argument,nativeRender)==-17 && renderCalls==1);
                     const auto released=backend.releases;
                     assert(pair.withSurfaces([&](const auto& source,const auto& target) noexcept {
                         assert(input.hasSurfaceLease(source) && first.hasSurfaceLease(target));
@@ -7880,6 +7900,7 @@ static void testNativeResourceBoundary() {
                     })==31);
                     struct Acquired {bool acquired=true,writtenBack=false;} acquired;
                     retention.observe(acquired);
+                    assert(pair.render(renderBinding,childLease,&childLease.child,&argument,nativeRender)==5 && renderCalls==1);
                     assert(pair.withSurfaces([](const auto&,const auto&) noexcept {assert(false);return 0;})==5);
                     input.reset();first.reset();
                     assert(pair.ready() && backend.releases==released);

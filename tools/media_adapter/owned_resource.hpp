@@ -9580,6 +9580,8 @@ struct TglOwnedVeboxFrameNoRetention {bool operator()() const noexcept {return f
 // A retained frame owns this pair until qualified retirement. Owners, their
 // backends and native parent must outlive it; a pending flag is not a fence.
 template<class SourceOwner,class TargetOwner> class TglOwnedVeboxSurfacePairLease {
+    SourceOwner& sourceOwner_;
+    TargetOwner& targetOwner_;
     typename SourceOwner::SurfaceOwnerLease source_;
     typename TargetOwner::SurfaceOwnerLease target_;
     const TglOwnedVeboxFrameRetention& retention_;
@@ -9587,7 +9589,7 @@ template<class SourceOwner,class TargetOwner> class TglOwnedVeboxSurfacePairLeas
 public:
     TglOwnedVeboxSurfacePairLease(SourceOwner& source,TargetOwner& target,
         const TglOwnedVeboxFrameRetention& retention) noexcept
-        :source_(source),target_(target),retention_(retention) {}
+        :sourceOwner_(source),targetOwner_(target),source_(source),target_(target),retention_(retention) {}
     TglOwnedVeboxSurfacePairLease(const TglOwnedVeboxSurfacePairLease&)=delete;
     TglOwnedVeboxSurfacePairLease& operator=(const TglOwnedVeboxSurfacePairLease&)=delete;
     bool ready() const noexcept {return source_.storage() && target_.storage();}
@@ -9598,6 +9600,14 @@ public:
         const bool valid=ready();
         busy_=false;
         return valid?result:5;
+    }
+    template<class ChildOwner,class Invoke>
+    int render(const TglVeboxRenderBinding& binding,ChildOwner& childOwner,
+        void* child,void* argument1,Invoke invoke) noexcept {
+        return withSurfaces([&](const auto& source,const auto& target) noexcept {
+            return tglInvokeLeasedVeboxSurfaceRender(binding,childOwner,child,argument1,
+                sourceOwner_,source,targetOwner_,target,invoke);
+        });
     }
 };
 struct TglOwnedVeboxFrameNoUnwind {
