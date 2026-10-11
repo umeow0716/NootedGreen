@@ -12416,6 +12416,29 @@ static void testRetainedVeboxFrames() {
                 RootOwner readOnly(owners.pin(image,0x8000,success.ticket.generation,0x20000),roots,address,
                     [](uintptr_t,size_t) noexcept {return false;});
                 typename RootOwner::SurfaceOwnerLease noWrite(readOnly);assert(!noWrite.metadataStorage());
+                TglOwnedSurfaceStorage history;
+                const auto historyAddress=reinterpret_cast<uintptr_t>(&history);
+                const uint32_t historyCount=1;
+                std::memcpy(original.prefix.data()+0xb8,&historyCount,4);
+                std::memcpy(original.prefix.data()+0xb4,&historyCount,4);
+                std::memcpy(original.prefix.data()+0xc0,&historyAddress,8);
+                std::memcpy(original.prefix.data()+0xc8,&historyAddress,8);
+                auto admitGraph=[&](uintptr_t p,size_t size) noexcept {
+                    return (p==address || p==historyAddress) && size==0x2a8;
+                };
+                auto readGraph=[&](uintptr_t p,void* bytes,size_t size) noexcept {
+                    for(auto shell:{address,historyAddress}) if(p>=shell && p<=shell+0x2a8 && size<=shell+0x2a8-p) {
+                        std::memcpy(bytes,reinterpret_cast<const void*>(p),size);return true;
+                    }
+                    return false;
+                };
+                TglNativeContextSurfaceProvenance<2> proof;
+                assert(proof.resolve(roots,readGraph,admitGraph) && proof.contains(address) && proof.contains(historyAddress));
+                RootOwner temporal(owners.pin(image,0x8000,success.ticket.generation,0x20000),proof,historyAddress,admitGraph);
+                typename RootOwner::SurfaceOwnerLease historyLease(temporal);assert(historyLease.storage()==&history);
+                TglNativeContextSurfaceProvenance<1> tooSmall;
+                assert(!tooSmall.resolve(roots,readGraph,admitGraph) && !tooSmall.context() && !tooSmall.contains(address));
+                assert(!proof.resolve(roots,[](uintptr_t,void*,size_t) noexcept {return false;},admitGraph) && !proof.context());
                 roots.sources[0]=0;
                 RootOwner foreign(owners.pin(image,0x8000,success.ticket.generation,0x20000),roots,address,writable);
                 typename RootOwner::SurfaceOwnerLease denied(foreign);assert(!denied.storage());

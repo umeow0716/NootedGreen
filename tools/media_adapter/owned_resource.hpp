@@ -1600,6 +1600,55 @@ struct TglNativeContextInputRoots {
         return false;
     }
 };
+// Enumerate the exact1308a0 source registration chains before constructing
+// sidecar owners. Context pin/live physical scope are caller-held throughout.
+// Capacity is an owned work budget, not a claimed native topology limit.
+template<size_t Capacity=64> class TglNativeContextSurfaceProvenance {
+    static_assert(Capacity>0 && Capacity<=256);
+    uintptr_t context_=0;std::array<uintptr_t,Capacity> shells_{};size_t count_=0;
+    bool ready_=false;
+public:
+    uintptr_t context() const noexcept {return ready_?context_:0;}
+    bool contains(uintptr_t shell) const noexcept {
+        if(!ready_ || !shell) return false;
+        for(size_t i=0;i<count_;++i) if(shells_[i]==shell) return true;
+        return false;
+    }
+    template<class Read,class Admit>
+    bool resolve(const TglNativeContextInputRoots& roots,Read read,Admit admit) noexcept {
+        static_assert(noexcept(read(uintptr_t{},static_cast<void*>(nullptr),size_t{})) &&
+            noexcept(admit(uintptr_t{},size_t{})));
+        *this={};TglNativeContextSurfaceProvenance candidate;
+        if(!roots.input || !roots.parent.context) return false;
+        auto add=[&](uintptr_t shell) noexcept {
+            if(!shell) return true;
+            for(size_t i=0;i<candidate.count_;++i) if(candidate.shells_[i]==shell) return true;
+            if((shell&7) || shell>UINTPTR_MAX-0x2a8 || candidate.count_==Capacity ||
+                !admit(shell,size_t{0x2a8})) return false;
+            candidate.shells_[candidate.count_++]=shell;return true;
+        };
+        for(auto root:roots.sources) {
+            if(!add(root)) return false;
+            if(!root) continue;
+            std::array<uint32_t,2> counts{};
+            if(!read(root+0xb4,counts.data(),8)) return false;
+            for(size_t direction=0;direction<2;++direction) {
+                const auto steps=counts[direction?0:1];
+                if(steps>Capacity) return false;
+                uintptr_t current=root;
+                for(uint32_t i=0;i<steps;++i) {
+                    uintptr_t next=0;
+                    if(!read(current+(direction?0xc0:0xc8),&next,8) || !add(next)) return false;
+                    if(!next) break;
+                    current=next;
+                }
+            }
+        }
+        for(auto target:roots.targets) if(!add(target)) return false;
+        candidate.context_=roots.parent.context;candidate.ready_=true;*this=candidate;return true;
+    }
+};
+
 // Borrow only under the enclosing authenticated physical generation/context
 // lifetime. This proves topology and addressability, not image/type or retain.
 struct TglNativeVeboxRendererView {
@@ -13847,7 +13896,7 @@ public:
 // native allocation; native cleanup remains the sole shell deleter. Construct
 // under live physical admission from freshly captured roots, directly in stable
 // enclosing storage; sidecar must outlive all surface leases.
-// This root-only entry deliberately does not infer temporal c0/c8 ownership.
+// Temporal borrowing requires separately qualified registration provenance.
 template<class ContextLease> class TglNativeContextRootSurfaceOwner {
     ContextLease context_;
     TglOwnedSurfaceStorage* shell_=nullptr;
@@ -13861,6 +13910,13 @@ public:
             shell && !(shell&7) && shell<=UINTPTR_MAX-sizeof(TglOwnedSurfaceStorage) &&
             roots.contains(shell) && writable(shell,sizeof(TglOwnedSurfaceStorage)))
             shell_=reinterpret_cast<TglOwnedSurfaceStorage*>(shell);
+    }
+    template<size_t Capacity,class Writable>
+    TglNativeContextRootSurfaceOwner(ContextLease&& lease,const TglNativeContextSurfaceProvenance<Capacity>& proof,
+        uintptr_t shell,Writable writable) noexcept:context_(std::move(lease)) {
+        static_assert(noexcept(writable(uintptr_t{},size_t{})));
+        if(context_.get() && proof.context()==context_.get()->context() && proof.contains(shell) &&
+            writable(shell,sizeof(TglOwnedSurfaceStorage))) shell_=reinterpret_cast<TglOwnedSurfaceStorage*>(shell);
     }
     TglNativeContextRootSurfaceOwner(const TglNativeContextRootSurfaceOwner&)=delete;
     TglNativeContextRootSurfaceOwner& operator=(const TglNativeContextRootSurfaceOwner&)=delete;
