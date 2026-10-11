@@ -4731,6 +4731,25 @@ static void testBufferFill() {
     const auto writable = [&](uintptr_t p, uint32_t n) noexcept {
         return allowed && p == address && n <= bytes.size();
     };
+    struct NativeFillFixture { unsigned calls = 0; } nativeFixture;
+    const auto nativeFill = +[](uintptr_t context, void* descriptor,
+                               uint32_t length, uint8_t value) -> int {
+        ++reinterpret_cast<NativeFillFixture*>(context)->calls;
+        assert(length == 16 && value == 0x55);
+        // Stand-in verifies a mutable bookkeeping update survives the call.
+        static_cast<uint8_t*>(descriptor)[0x48] = 1;
+        return 31;
+    };
+    TglNativeBufferFillBinding nativeBinding{
+        reinterpret_cast<uintptr_t>(&nativeFixture), reinterpret_cast<uintptr_t>(nativeFill)};
+    assert(nativeBinding.fill(resource, 16, 0x55, writable) == 31);
+    assert(nativeFixture.calls == 1 && resource[0x48] == 1);
+    assert(nativeBinding.fill(resource, 33, 0x55, writable) == 5);
+    assert(nativeFixture.calls == 1);
+    allowed = false;
+    assert(nativeBinding.fill(resource, 16, 0x55, writable) == 5);
+    assert(nativeFixture.calls == 1);
+    allowed = true;
     const auto fill = [&](uintptr_t p, uint32_t n, uint8_t value) noexcept {
         ++writes; assert(p == address);
         if (!status) std::memset(bytes.data(), value, n);

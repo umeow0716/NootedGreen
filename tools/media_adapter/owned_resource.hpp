@@ -4319,6 +4319,48 @@ struct TglNativeRegistrationInvoker {
     }
 };
 
+// Statistics donor calls OS+240, not a raw userspace memset: native41440
+// acquires the resource through OS+220 (FinishSysMem for type0), fills, then
+// releases through OS+228. A writable mapping alone is not that protocol.
+// Borrowed OS/image lifetime and exclusion of in-flight GPU users are caller
+// obligations. This binding is not a completion or retirement certificate.
+struct TglNativeBufferFillBinding {
+    uintptr_t context = 0, entry = 0;
+    template<class Read, class Qualify, class Executable>
+    bool resolve(uintptr_t os, uintptr_t image, Read read, Qualify qualify,
+                 Executable executable) {
+        *this = {};
+        if (!os || os > UINTPTR_MAX - 0x248 || !image ||
+            image > UINTPTR_MAX - 0x63f50 || !qualify(image)) return false;
+        uintptr_t lock = 0, unlock = 0, fill = 0;
+        if (!read(os + 0x220, &lock, sizeof(lock)) ||
+            !read(os + 0x228, &unlock, sizeof(unlock)) ||
+            !read(os + 0x240, &fill, sizeof(fill)) ||
+            lock != image + 0x63da0 || unlock != image + 0x63f40 ||
+            fill != image + 0x41440 || !executable(lock, 16) ||
+            !executable(unlock, 16) || !executable(fill, 22)) return false;
+        constexpr std::array<uint8_t, 22> anchor{
+            0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x40,
+            0x48,0x89,0x7d,0xf0,0x48,0x89,0x75,0xe8,
+            0x89,0x55,0xe4,0x88,0x4d,0xe3};
+        std::array<uint8_t, 22> actual{};
+        if (!read(fill, actual.data(), actual.size()) || actual != anchor) return false;
+        context = os; entry = fill; return true;
+    }
+    // Mutable descriptor is deliberate: native lock/unlock updates its CPU
+    // access bookkeeping. Never cast away an owner's const storage lease.
+    template<class Writable>
+    int fill(std::array<uint8_t, 0x148>& resource, uint32_t bytes,
+             uint8_t value, Writable writable) const noexcept {
+        if (!context || !entry) return 5;
+        auto invoke = [&](uintptr_t, uint32_t length, uint8_t byte) noexcept {
+            using Native = int (*)(uintptr_t, void*, uint32_t, uint8_t);
+            return reinterpret_cast<Native>(entry)(context, resource.data(), length, byte);
+        };
+        return tglFillBuffer(resource, bytes, value, writable, invoke);
+    }
+};
+
 struct TglNativeResourceBinding {
     uintptr_t context = 0, allocate = 0, release = 0;
     // 132ec0..132ed6: renderer stores RenderHal at +2cc0 and borrows
@@ -4511,6 +4553,16 @@ public:
     // All native queries and user-supplied callbacks run with reentry blocked.
     template<class Invoke> int withStorage(Invoke invoke) noexcept {
         static_assert(noexcept(invoke(std::declval<const Storage&>())),"resource lease status ABI");
+        if(busy_ || !live_ || state_!=State::Backed) return 5;
+        busy_=true;
+        const int status=backend_.backed(storage_) ? invoke(static_cast<const Storage&>(storage_)) : 5;
+        busy_=false;
+        return status;
+    }
+    // CPU initialization may update native descriptor lock bookkeeping.
+    // Caller must exclude submitted GPU users; this is only a synchronous lease.
+    template<class Invoke> int withMutableStorage(Invoke invoke) noexcept {
+        static_assert(noexcept(invoke(std::declval<Storage&>())),"mutable resource lease status ABI");
         if(busy_ || !live_ || state_!=State::Backed) return 5;
         busy_=true;
         const int status=backend_.backed(storage_) ? invoke(storage_) : 5;
@@ -12597,7 +12649,7 @@ public:
     }
     template<class Fill,class Publish>
     int ensure(uint32_t width,uint32_t height,Fill fill,Publish publish) noexcept {
-        static_assert(noexcept(fill(owner_.storage(), uint32_t{})),
+        static_assert(noexcept(fill(std::declval<Storage&>(), uint32_t{})),
                       "initialization must report status without throwing");
         using PublicationResult=decltype(publish(owner_.storage(),std::declval<const TglStatisticsAllocation&>()));
         static_assert(noexcept(publish(owner_.storage(),std::declval<const TglStatisticsAllocation&>())) &&
@@ -12616,7 +12668,7 @@ public:
             retire(); return 5;
         }
         if (result.changed) {
-            const int status = owner_.withStorage([&](const auto& storage) noexcept {
+            const int status = owner_.withMutableStorage([&](auto& storage) noexcept {
                 const int filled=fill(storage,candidate.bytes);
                 if(!filled) {
                     if constexpr(std::is_same_v<PublicationResult,int>)
