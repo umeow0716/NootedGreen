@@ -2682,6 +2682,7 @@ static void testVeboxHardwareBinding() {
 }
 
 static bool executionReleaseFixture(uintptr_t base,uintptr_t p,void* out,size_t n) {
+    if(p==base+0x12ec2d && n==14) {std::memcpy(out,TglExecutionBinding::createCounter.data(),n);return true;}
     if(p==base+0x12e0ea && n==14) {std::memcpy(out,TglExecutionBinding::releaseCounter.data(),n);return true;}
     if(p==base+0x12e10d && n==13) {std::memcpy(out,TglExecutionBinding::releaseDispatch.data(),n);return true;}
     if(p==base+0x12e11a && n==11) {std::memcpy(out,TglExecutionBinding::releaseClear.data(),n);return true;}
@@ -2710,10 +2711,12 @@ static void testExecutionBinding() {
     bool identity = true, rx = true;
     uint32_t allocationSize=0xd48;
     uintptr_t resetEntry=base+0x12e420;bool resetReadable=true;
+    uintptr_t mutateAccountingSite=0;
     size_t mutateReleaseSize=0,mutateReleaseByte=0;
     auto read = [&](uintptr_t p, void* out, size_t n) {
         if(executionReleaseFixture(base,p,out,n)) {
-            if(n==mutateReleaseSize) static_cast<uint8_t*>(out)[mutateReleaseByte]^=1;
+            if(n==mutateReleaseSize && (!mutateAccountingSite || p==mutateAccountingSite))
+                static_cast<uint8_t*>(out)[mutateReleaseByte]^=1;
             return true;
         }
         if(p==base+0x757ea0 && n==8 && resetReadable) {std::memcpy(out,&resetEntry,8);return true;}
@@ -2732,6 +2735,14 @@ static void testExecutionBinding() {
         assert(!b.resolve(base,read,qualify,executable) && !b.image);
     }
     mutateReleaseSize=0;
+    for(uintptr_t site : {base+0x12ec2d,base+0x12e0ea}) {
+        mutateAccountingSite=site;mutateReleaseSize=14;
+        for(size_t i=0;i<14;++i) {
+            mutateReleaseByte=i;
+            assert(!b.resolve(base,read,qualify,executable) && !b.image);
+        }
+    }
+    mutateAccountingSite=0;mutateReleaseSize=0;
     assert(b.resolve(base, read, qualify, executable));
     assert(b.image == base && b.create == base + offsets[0] &&
            b.initialize == base + offsets[1] && b.destroy == base + offsets[2]);

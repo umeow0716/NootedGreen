@@ -2038,6 +2038,8 @@ bool tglQueryNativeTwoPassCsc(const TglTwoPassCscBinding& binding,
 
 struct TglExecutionBinding {
     uintptr_t image = 0, create = 0, initialize = 0, destroy = 0;
+    inline static constexpr std::array<uint8_t,14> createCounter{
+        0x48,0x8d,0x05,0xe4,0x45,0x6c,0,0x8b,0x08,0x83,0xc1,0x01,0x89,0x08};
     inline static constexpr std::array<uint8_t,14> releaseCounter{
         0x48,0x8d,0x05,0x27,0x51,0x6c,0,0x8b,0x08,0x83,0xc1,0xff,0x89,0x08};
     inline static constexpr std::array<uint8_t,13> releaseDispatch{
@@ -2062,9 +2064,10 @@ struct TglExecutionBinding {
                 !read(base + offsets[i], bytes.data(), bytes.size()) || bytes != anchors[i])
                 return false;
         }
-        std::array<uint8_t,14> counter{};std::array<uint8_t,13> dispatch{};
+        std::array<uint8_t,14> created{},counter{};std::array<uint8_t,13> dispatch{};
         std::array<uint8_t,11> clear{};
-        if(!executable(base+0x12e0ea,counter.size()) || !read(base+0x12e0ea,counter.data(),counter.size()) || counter!=releaseCounter ||
+        if(!executable(base+0x12ec2d,created.size()) || !read(base+0x12ec2d,created.data(),created.size()) || created!=createCounter ||
+           !executable(base+0x12e0ea,counter.size()) || !read(base+0x12e0ea,counter.data(),counter.size()) || counter!=releaseCounter ||
            !executable(base+0x12e10d,dispatch.size()) || !read(base+0x12e10d,dispatch.data(),dispatch.size()) || dispatch!=releaseDispatch ||
            !executable(base+0x12e11a,clear.size()) || !read(base+0x12e11a,clear.data(),clear.size()) || clear!=releaseClear) return false;
         uint32_t allocationSize=0;
