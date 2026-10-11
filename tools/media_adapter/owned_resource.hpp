@@ -16221,14 +16221,26 @@ public:
 // per-item wrapper. This resolves identity only; it never writes a vptr.
 struct TglNativeContextFrameBinding {
     uintptr_t image=0,vtable=0,frame=0;
+    static constexpr size_t callbackCount=13;
+    // Preserve Itanium offset-to-top/RTTI as well as ALL original callbacks.
+    std::array<uintptr_t,callbackCount+2> original{};
     template<class Read,class Qualify,class Executable>
     bool resolve(uintptr_t base,uintptr_t context,Read read,Qualify qualify,
         Executable executable) noexcept {
         *this={};
-        if(!base || base>UINTPTR_MAX-0x75d048 || !context || !qualify(base)) return false;
+        if(!base || base>UINTPTR_MAX-0x75d080 || !context || !qualify(base)) return false;
         uintptr_t table=0,entry=0;
         if(!read(context,&table,sizeof(table)) || table!=base+0x75d018 ||
             !read(table+0x28,&entry,sizeof(entry)) || entry!=base+0x235ab0) return false;
+        constexpr std::array<uintptr_t,callbackCount> offsets{
+            0x233860,0x233880,0x2338e0,0x2341b0,0x235890,0x235ab0,0x125aa0,
+            0x218f2,0x218fa,0x21902,0x218e2,0x218ea,0xb2e80};
+        std::array<uintptr_t,callbackCount+2> snapshot{};
+        for(size_t i=0;i<snapshot.size();++i)
+            if(!read(table-16+i*8,&snapshot[i],8)) return false;
+        if(snapshot[0] || snapshot[1]!=base+0x75d080) return false;
+        for(size_t i=0;i<callbackCount;++i)
+            if(snapshot[i+2]!=base+offsets[i] || !executable(snapshot[i+2],1)) return false;
         constexpr std::array<uint8_t,16> prologue{
             0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x20,0x48,0x89,0x7d,0xf8,0x48,0x89,0x75,0xf0};
         constexpr std::array<uint8_t,5> outputCall{0xe8,0x03,0xbf,0xde,0xff};
@@ -16240,7 +16252,7 @@ struct TglNativeContextFrameBinding {
         };
         if(!matches(0x235ab0,prologue) || !matches(0x235ad6,outputCall) ||
             !matches(0x235aea,prepareCall)) return false;
-        image=base;vtable=table;frame=entry;return true;
+        image=base;vtable=table;frame=entry;original=snapshot;return true;
     }
 };
 

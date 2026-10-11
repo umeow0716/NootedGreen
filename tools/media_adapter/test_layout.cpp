@@ -11733,11 +11733,21 @@ static void testRetainedVeboxFrames() {
     {
         constexpr uintptr_t base=0x100000,context=0x20000;
         uintptr_t vptr=base+0x75d018,entry=base+0x235ab0;
-        bool qualified=true,rx=true,corrupt=false,readable=true;
+        bool qualified=true,rx=true,corrupt=false,readable=true,badTail=false,badHeader=false;
         auto read=[&](uintptr_t address,void* output,size_t size) noexcept {
             if(!readable) return false;
             if(address==context && size==8) {std::memcpy(output,&vptr,8);return true;}
             if(address==base+0x75d040 && size==8) {std::memcpy(output,&entry,8);return true;}
+            constexpr std::array<uintptr_t,15> offsets{
+                0,0x75d080,0x233860,0x233880,0x2338e0,0x2341b0,0x235890,0x235ab0,
+                0x125aa0,0x218f2,0x218fa,0x21902,0x218e2,0x218ea,0xb2e80};
+            if(size==8 && address>=base+0x75d008 && address<base+0x75d080 &&
+                (address-base-0x75d008)%8==0) {
+                const size_t index=(address-base-0x75d008)/8;
+                const uintptr_t value=(index?base+offsets[index]:0)+
+                    ((badTail && index==14) || (badHeader && index==0)?1:0);
+                std::memcpy(output,&value,8);return true;
+            }
             const std::array<uint8_t,16> prologue{
                 0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x20,0x48,0x89,0x7d,0xf8,0x48,0x89,0x75,0xf0};
             const std::array<uint8_t,5> first{0xe8,0x03,0xbf,0xde,0xff},second{0xe8,0x11,0,0,0};
@@ -11752,9 +11762,13 @@ static void testRetainedVeboxFrames() {
         auto executable=[&](uintptr_t,size_t) noexcept {return rx;};
         TglNativeContextFrameBinding binding;
         auto resolve=[&]() noexcept {return binding.resolve(base,context,read,qualify,executable);};
-        assert(resolve() && binding.frame==entry && binding.vtable==vptr);
+        assert(resolve() && binding.frame==entry && binding.vtable==vptr &&
+            binding.original[0]==0 && binding.original[1]==base+0x75d080 &&
+            binding.original[14]==base+0xb2e80);
         vptr++;assert(!resolve() && !binding.image);vptr--;
         entry++;assert(!resolve());entry--;
+        badTail=true;assert(!resolve() && !binding.original[14]);badTail=false;
+        badHeader=true;assert(!resolve());badHeader=false;
         corrupt=true;assert(!resolve());corrupt=false;
         rx=false;assert(!resolve());rx=true;
         qualified=false;assert(!resolve());qualified=true;
