@@ -5702,16 +5702,32 @@ public:
     bool hasSurfaceLease(const TglOwnedSurfaceStorage& expected) noexcept {
         return ready_ && busy_ && &expected==&surface_ && capture_.backed(surface_.resource);
     }
+    // May be a complete retained-frame member, not just a callback local.
+    // The enclosing frame must also keep this owner/backend/native OS alive;
+    // this lease blocks reset/reallocation but does not retain a C++ object.
+    class SurfaceOwnerLease {
+        TglOwnedAllocatedSurface* owner_=nullptr;
+    public:
+        explicit SurfaceOwnerLease(TglOwnedAllocatedSurface& owner) noexcept {
+            if(!owner.ready_ || owner.busy_ || !owner.capture_.backed(owner.surface_.resource)) return;
+            owner.busy_=true;owner_=&owner;
+        }
+        SurfaceOwnerLease(const SurfaceOwnerLease&)=delete;
+        SurfaceOwnerLease& operator=(const SurfaceOwnerLease&)=delete;
+        ~SurfaceOwnerLease() noexcept {if(owner_) owner_->busy_=false;}
+        const TglOwnedSurfaceStorage* storage() const noexcept {
+            return owner_ && owner_->hasSurfaceLease(owner_->surface_)?&owner_->surface_:nullptr;
+        }
+    };
     // Synchronous borrowed access keeps ALL native resource tokens alive by
     // pinning their owner, not by guessing which individual handles to retain.
     // The callback must not escape references or submit asynchronous work;
     // GPU/history retention still requires a completion-bound source lease.
     template<class Consume> bool withSurface(Consume&& consume) {
-        if(!ready_ || busy_) return false;
-        busy_=true;
-        struct Unlock {bool& busy;~Unlock(){busy=false;}} unlock{busy_};
-        if(!capture_.backed(surface_.resource)) return false;
-        std::forward<Consume>(consume)(static_cast<const TglOwnedSurfaceStorage&>(surface_));
+        SurfaceOwnerLease lease(*this);
+        const auto* storage=lease.storage();
+        if(!storage) return false;
+        std::forward<Consume>(consume)(*storage);
         return true;
     }
     // Called only inside this owner's already-active frame lease. Native160

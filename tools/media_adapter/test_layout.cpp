@@ -12320,6 +12320,17 @@ int main() {
             assert(width==164 && height==1 && pitch==0);
             key.width=164;changed=true;
             assert(owner.ensure(key,&changed)==0 && !changed && backend.allocated==1);
+            {
+                using Lease=decltype(owner)::SurfaceOwnerLease;
+                Lease persistent(owner);
+                assert(persistent.storage()==&shell && owner.hasSurfaceLease(shell));
+                Lease duplicate(owner);assert(!duplicate.storage());
+                owner.reset();assert(!backend.released);
+                assert(owner.ensure(key)==5 && backend.allocated==1);
+                assert(!owner.withSurface([](const auto&) noexcept {assert(false);}));
+                assert(persistent.storage()==&shell);
+            }
+            assert(owner.surface()==&shell && !owner.hasSurfaceLease(shell));
             assert(owner.withSurface([&](const auto& surface) noexcept {
                 assert(&surface==&shell && owner.hasSurfaceLease(shell));
                 owner.reset();assert(backend.released==0);
