@@ -6860,6 +6860,44 @@ static void testNativeResourceBoundary() {
                                                 })==-79);
                                         }));
                                         reportBackend.bytes[0xb]=1;reportBackend.bytes[0x13]=1;
+                                        reportBackend.bytes[0x12]=1;
+                                        const uint32_t nativeInputFormat=0x3d,combinedPipe=0;
+                                        std::memcpy(linkedStorage.prefix.data()+0x130,&nativeInputFormat,4);
+                                        std::memcpy(reportBackend.bytes.data()+0xa0c,&combinedPipe,4);
+                                        std::array<uintptr_t,2> savedRoles{};
+                                        std::memcpy(savedRoles.data(),reportBackend.bytes.data()+0x60,16);
+                                        std::memset(reportBackend.bytes.data()+0x60,0,16);
+                                        unsigned combinedUses=0,combinedUnwinds=0;
+                                        assert(linkedInput.withSurface([&](const auto& current) noexcept {
+                                            assert(tglRunCapturedVeboxSurfaceFrame(frameTargets,backedTargets,
+                                                descriptorPair,std::array{&targetA,&targetB},targetA,historyShell,
+                                                linkedInput,static_cast<decltype(&linkedInput)>(nullptr),
+                                                static_cast<decltype(&linkedInput)>(nullptr),&previous,
+                                                childOwner,reportOwner,actualChild,report,current,read,
+                                                noSfc,noSfc,noParameter,[](uint32_t) noexcept {return true;},
+                                                [](void*,uintptr_t,const auto&,const auto&,const auto&) noexcept -> int {assert(false);return 5;},
+                                                [&](void*,uintptr_t,const auto&,const auto& ffdi,const auto& ffdn) noexcept -> int {
+                                                    assert(ffdi.count==2 && ffdn.outputs[0]);
+                                                    assert(!frameTargets[0].withDescriptor([](const auto&) noexcept {assert(false);}));
+                                                    assert(targetA.hasSurfaceLease(*ffdn.outputs[0]));return 0;
+                                                },[&](void*,uintptr_t,const auto&,const auto& ffdi,const auto& ffdn) noexcept -> int {
+                                                    assert(ffdi.inputs[0]==&current && ffdi.count==2);
+                                                    assert(ffdi.outputs[0]==frameTargets[0].surfaceBinding());
+                                                    assert(!frameTargets[1].withDescriptor([](const auto&) noexcept {assert(false);}));
+                                                    assert(targetA.hasSurfaceLease(*ffdn.outputs[0]) && targetB.hasSurfaceLease(*ffdn.outputs[1]));
+                                                    assert(ffdn.previous==previous.surfaceBinding() && ffdn.history);
+                                                    assert(previous.hasSurfaceLease(*ffdn.previous));
+                                                    assert(!historyShell.withDescriptor([](const auto&) noexcept {assert(false);}));
+                                                    ++combinedUses;return -83;
+                                                },[&](void*,uintptr_t,const auto&) noexcept {
+                                                    assert(frameTargets[0].withDescriptor([](const auto&) noexcept {}));
+                                                    assert(targetA.withSurface([](const auto&) noexcept {}));
+                                                    assert(historyShell.withDescriptor([](const auto&) noexcept {}));
+                                                    ++combinedUnwinds;
+                                                })==-83);
+                                        }));
+                                        assert(combinedUses==1 && combinedUnwinds==1);
+                                        std::memcpy(reportBackend.bytes.data()+0x60,savedRoles.data(),16);
                                         std::memcpy(reportBackend.bytes.data()+0xa0c,&savedTailPipe,4);
                                         std::memcpy(child.data()+0x1b0,&sourcePointer,8);
                                     }

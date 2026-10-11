@@ -11305,6 +11305,65 @@ int tglRunCapturedFfdnFrameTail(std::array<TglOwnedDescriptorOnlySurface,2>& des
                 });
         });
 }
+struct TglOwnedFfdiTailViews {
+    std::array<const TglOwnedSurfaceStorage*,3> inputs{};
+    std::array<const TglOwnedSurfaceStorage*,4> outputs{};
+    size_t count{};
+    const TglOwnedSurfaceStorage* secondarySource{};
+    const TglOwnedSurfaceStorage* secondaryTarget{};
+};
+// Actual surface allocation composition, not sequential callbacks with escaped
+// views. The downstream stages execute inside both real pair scopes. This is
+// synchronous ownership only: no submit/completion lifetime is implied.
+template<size_t Count,class TargetOwner,class PriorOwner,class Owner,class ChildOwner,class ExecutionOwner,
+    class Read,class SfcFormat,class SfcColor,class ParameterKind,class Supports,
+    class Rectangle,class Stmm,class Statistics,class Unwind=TglOwnedVeboxFrameNoUnwind>
+int tglRunCapturedVeboxSurfaceFrame(std::array<TglOwnedDescriptorOnlySurface,Count>& ffdiDescriptors,
+    const std::array<TargetOwner*,Count>& ffdiBacked,std::array<TglOwnedDescriptorOnlySurface,2>& ffdnDescriptors,
+    const std::array<TargetOwner*,2>& ffdnBacked,PriorOwner& prior,TglOwnedDescriptorOnlySurface& history,
+    Owner& input,Owner* executionSurface,Owner* secondary,Owner* previous,
+    ChildOwner& childOwner,ExecutionOwner& reportOwner,void* child,uintptr_t report,
+    const TglOwnedSurfaceStorage& source,Read read,SfcFormat sfcFormat,SfcColor sfcColor,
+    ParameterKind parameterKind,Supports supports,Rectangle rectangle,Stmm stmm,Statistics statistics,
+    Unwind unwind={}) noexcept {
+    static_assert(Count>0 && Count<=4,"FFDi frame view capacity");
+    return tglRunCapturedVeboxAllocation(input,childOwner,reportOwner,child,report,source,
+        [&](void* c,uintptr_t e,const auto& s) noexcept -> int {
+            TglOwnedFfdiCompressionSelection selection{};
+            auto next=[&](const TglOwnedFfdiTailViews& ffdi) noexcept -> int {
+                auto bind=[&](auto& invoke) noexcept {
+                    return [&](void* active,uintptr_t execution,const auto& surface,const auto& ffdn) noexcept -> int {
+                        static_assert(noexcept(invoke(active,execution,surface,ffdi,ffdn)) &&
+                            std::is_same_v<decltype(invoke(active,execution,surface,ffdi,ffdn)),int>,
+                            "surface frame consumer ABI");
+                        return invoke(active,execution,surface,ffdi,ffdn);
+                    };
+                };
+                return tglRunCapturedFfdnFrameTail(ffdnDescriptors,ffdnBacked,prior,input,previous,history,
+                    childOwner,reportOwner,c,e,s,selection,read,bind(rectangle),bind(stmm),bind(statistics));
+            };
+            const int status=tglRunCapturedFfdiFrame(ffdiDescriptors,ffdiBacked,input,executionSurface,secondary,
+                childOwner,reportOwner,c,e,s,read,sfcFormat,sfcColor,parameterKind,supports,
+                [&](const auto& inputs,const auto& outputs,size_t count,uint8_t,uint8_t) noexcept -> int {
+                    TglOwnedFfdiTailViews views;views.inputs=inputs;views.count=count;
+                    if(count>views.outputs.size()) return 5;
+                    for(size_t i=0;i<count;++i) views.outputs[i]=outputs[i];
+                    return next(views);
+                },[&](const auto* secondarySource,const auto* secondaryTarget) noexcept -> int {
+                    TglOwnedFfdiTailViews views;views.inputs[0]=&s;
+                    views.secondarySource=secondarySource;views.secondaryTarget=secondaryTarget;
+                    return next(views);
+                },{},&selection);
+            if(!status) return 0;
+            // FFDi, FFDN and history leases have all unwound before cleanup.
+            return tglRunCapturedVeboxAllocation(input,childOwner,reportOwner,c,e,s,
+                [&](void* active,uintptr_t execution,const auto& surface) noexcept -> int {
+                    static_assert(noexcept(unwind(active,execution,surface)) &&
+                        std::is_same_v<decltype(unwind(active,execution,surface)),void>,"surface frame unwind ABI");
+                    unwind(active,execution,surface);return status;
+                });
+        });
+}
 template<class Read>
 bool tglReadOwnedStateExecution(TglOwnedStateInputs& output, uintptr_t execution,
                                 bool diArgument, Read read) {
