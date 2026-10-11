@@ -8307,6 +8307,44 @@ int main() {
                 assert(escapedSetup(callbackChild,&source,reinterpret_cast<void*>(0x2000),&data)==5);
                 assert(escapedSend(callbackChild,&data,&command)==5);
             }
+            // Acquire the native-shaped descriptors through +28 first; all
+            // later callbacks use that single frozen geometry snapshot.
+            for(unsigned mode=0;mode<4;++mode) {
+                calls=0;fail=mode==1?1:0;
+                unsigned produced=0,emitted=0,invoked=0;
+                const int result=graph.withLeasedCallbackPass(0x1000,0x2000,0x3000,
+                    0x4000,0x6000,0x7000,{},&data,
+                    [&](uintptr_t address,void* out,size_t size) noexcept {
+                        graph.reset();assert(stateCpu.live && avsCpu.live);
+                        assert(graph.prepare([](auto&,auto&,auto&) noexcept {return 0;})==5);
+                        return read(address,out,size);
+                    },
+                    [&](void*,const auto&,const auto& snapshot,auto&) noexcept -> int {
+                        ++produced;assert(snapshot.frameWidth==geometrySnapshot.frameWidth);
+                        return mode==2?31:0;
+                    },
+                    [&](void*,const auto&,auto&) noexcept -> int {++produced;return 0;},
+                    [&](void*,const auto&) noexcept {++produced;},
+                    [&](void* child,void* d,void* c) noexcept -> int {
+                        ++emitted;assert(d==&data && c==&command);
+                        uintptr_t parameters=0;
+                        std::memcpy(&parameters,static_cast<uint8_t*>(child)+0x990,8);
+                        assert(parameters==0x7000 && produced==3);
+                        return mode==3?-17:0;
+                    },
+                    [&](void* child,SetupEntry setup,SendEntry send) noexcept -> int {
+                        ++invoked;assert(!produced && !emitted);
+                        const int status=setup(child,reinterpret_cast<void*>(0x1000),
+                            reinterpret_cast<void*>(0x2000),&data);
+                        if(status) return status;
+                        return send(child,&data,&command);
+                    });
+                assert(result==(mode==1?5:mode==2?31:mode==3?-17:0));
+                assert(invoked==(mode==1?0u:1u));
+                assert(produced==(mode==1?0u:mode==2?1u:3u));
+                assert(emitted==((mode==0 || mode==3)?1u:0u));
+            }
+            fail=0;
             // Exercise the VP callback bridge with the real typed scheduler,
             // not the platform no-op. This records CPU emission only.
             struct CallbackCommandBackend {

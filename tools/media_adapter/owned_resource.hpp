@@ -6009,14 +6009,14 @@ int tglWithOwnedVpPreparedFrame(TglOwnedVpSfcCallerStorage& storage,
 // The caller retains all descriptor/image leases for the complete call and
 // supplies an authenticated settings view; this is not a published VP entry.
 // State receives the SAME geometry snapshot used to prepare the frame.
-template<class Read,class State,class Avs,class Ief,class Send>
-int tglWithOwnedVpLeasedPass(TglOwnedVpSfcCallerStorage& storage,
+template<class Read,class Use>
+int tglWithOwnedVpAcquiredFrame(TglOwnedVpSfcCallerStorage& storage,
     uintptr_t source,uintptr_t target,uintptr_t mhw,uintptr_t settings,
     uintptr_t conditionalSource,uintptr_t parameters,const TglOwnedVpModeState& original,
-    Read read,State state,Avs avs,Ief ief,Send send) noexcept {
-    static_assert(noexcept(send(static_cast<void*>(nullptr),
+    Read read,Use use) noexcept {
+    static_assert(noexcept(use(
         std::declval<const TglOwnedVpFramePreparation&>(),
-        std::declval<const TglOwnedVpRegionInput&>())),"VP scoped send ABI");
+        std::declval<const TglOwnedVpRegionInput&>(),uintptr_t{})),"VP acquired frame ABI");
     TglOwnedVpFramePreparation frame;TglOwnedVpRegionInput geometry;
     uintptr_t sourceA8=0;
     auto acquire=[&]() noexcept {
@@ -6051,6 +6051,19 @@ int tglWithOwnedVpLeasedPass(TglOwnedVpSfcCallerStorage& storage,
             reinterpret_cast<void*>(target),reinterpret_cast<void*>(settings));
     }
     if(!context.called || !context.valid) return 5;
+    return use(frame,geometry,sourceA8);
+}
+template<class Read,class State,class Avs,class Ief,class Send>
+int tglWithOwnedVpLeasedPass(TglOwnedVpSfcCallerStorage& storage,
+    uintptr_t source,uintptr_t target,uintptr_t mhw,uintptr_t settings,
+    uintptr_t conditionalSource,uintptr_t parameters,const TglOwnedVpModeState& original,
+    Read read,State state,Avs avs,Ief ief,Send send) noexcept {
+    static_assert(noexcept(send(static_cast<void*>(nullptr),
+        std::declval<const TglOwnedVpFramePreparation&>(),
+        std::declval<const TglOwnedVpRegionInput&>())),"VP scoped send ABI");
+    return tglWithOwnedVpAcquiredFrame(storage,source,target,mhw,settings,
+        conditionalSource,parameters,original,read,[&](const auto& frame,
+            const auto& geometry,uintptr_t sourceA8) noexcept -> int {
     // Native 1decfb..1decff publishes incoming RDX, not the R9 view
     // consumed by the mode producer. Keep these independently leased inputs.
     return tglWithOwnedVpPreparedFrame(storage,frame,conditionalSource,parameters,target,sourceA8,
@@ -6064,6 +6077,7 @@ int tglWithOwnedVpLeasedPass(TglOwnedVpSfcCallerStorage& storage,
             // VP flags are restored. GPU resource retirement remains outside
             // this CPU-emission scope and still requires the actual fence.
             return send(child,frame,geometry);
+        });
         });
 }
 template<class Read,class State,class Avs,class Ief>
@@ -7908,6 +7922,34 @@ public:
     }
     // Bridge setup+40 and send+48 within one prepared-frame lease. Producers
     // execute at setup, not eagerly before the native caller chooses setup.
+    // End-to-end CPU path: +28 acquisition -> deferred +40 setup -> +48
+    // command construction. Keep RDX frame parameters separate from R9 mode
+    // settings. Read callbacks cannot reset/reenter the owner. The caller
+    // retains source/target/settings/interface leases through the whole call.
+    template<class Read,class State,class Avs,class Ief,class Emit,class Invoke>
+    int withLeasedCallbackPass(uintptr_t source,uintptr_t target,uintptr_t mhw,
+        uintptr_t settings,uintptr_t conditionalSource,uintptr_t parameters,
+        const TglOwnedVpModeState& original,void* renderData,Read read,
+        State state,Avs avs,Ief ief,Emit emit,Invoke invoke) noexcept {
+        if(!ready_ || busy_ || !renderData) return 5;
+        TglOwnedVpFramePreparation frame;TglOwnedVpRegionInput geometry;
+        uintptr_t reference=0;
+        {
+            Guard guard(busy_);
+            const int result=tglWithOwnedVpAcquiredFrame(storage_,source,target,mhw,
+                settings,conditionalSource,parameters,original,read,
+                [&](const auto& prepared,const auto& snapshot,uintptr_t sourceA8) noexcept {
+                    frame=prepared;geometry=snapshot;reference=sourceA8;return 0;
+                });
+            if(result) return result;
+        }
+        return withPreparedCallbackPass(frame,conditionalSource,parameters,target,reference,
+            reinterpret_cast<void*>(source),renderData,
+            [&](void* child,const auto& prepared,auto& owner) noexcept -> int {
+                static_assert(noexcept(state(child,prepared,geometry,owner)),"VP leased state ABI");
+                return state(child,prepared,geometry,owner);
+            },avs,ief,emit,invoke);
+    }
     // This is synchronous command construction, not a publishable VP vtable
     // or permission to retire GPU resources. Outer surface leases remain required.
     template<class State,class Avs,class Ief,class Emit,class Invoke>
