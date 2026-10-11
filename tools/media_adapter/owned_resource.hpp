@@ -5947,6 +5947,13 @@ template<class Resolve> struct TglOwnedVpExtentCallback {
 };
 // Named ABI collection, NOT a complete/native-publishable vtable. Keep all
 // admission entries under the same VP/input lease and expire them together.
+// VP18 is the GetOutputPipe(source,target,renderParams) decision, NOT an
+// unconditional prelude to VP28. Intel common/vphal_render_sfc_base.cpp414
+// and gen12/vphal_render_vebox_g12_base.cpp2495 establish this donor role;
+// exact ICL1de4df..1de4f7 returns DWORD composition0/SFC1 after VP68.
+// Do not import the Linux decompression tail: this exact native return has
+// no such call. The enclosing renderer's actual pipe-selection call remains
+// to be qualified before these entries can be published in a full vtable.
 struct TglOwnedVpAdmissionEntries {
     int (*extent)(void*,void*,void*,void*) noexcept=nullptr;
     bool (*eligible)(void*,void*,void*,void*) noexcept=nullptr;
