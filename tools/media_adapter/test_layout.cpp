@@ -11922,6 +11922,20 @@ static void testRetainedVeboxFrames() {
         assert(!alienTable.detach(read,writeVptr,admitVptr) && vptr==0xdeadbeef &&
             vptrWrites==alienWrites && alienTable.requiresRetention());
         vptr=base+0x75d018; // CPU fixture reset only
+        TglOwnedContextFrameVtable unreadableTable;
+        assert(unreadableTable.build(base,context,hook,read,qualify,executable,ownedExecutable));
+        unsigned publicationReads=0;
+        auto lostReadback=[&](uintptr_t address,void* output,size_t size) noexcept {
+            if(++publicationReads==2) return false;
+            return read(address,output,size);
+        };
+        assert(!unreadableTable.publish(lostReadback,writeVptr,admitVptr));
+        assert(publicationReads==2 && unreadableTable.requiresRetention() &&
+            unreadableTable.publication()==TglOwnedContextFrameVtable::Publication::Ambiguous);
+        const auto unreadableWrites=vptrWrites;
+        assert(!unreadableTable.publish(read,writeVptr,admitVptr) &&
+            !unreadableTable.detach(read,writeVptr,admitVptr) && vptrWrites==unreadableWrites);
+        vptr=base+0x75d018; // CPU fixture reset only
         const auto abiTarget=+[](void* ctx,const void* request,void** output) -> int {
             assert(reinterpret_cast<uintptr_t>(ctx)==0x20000 &&
                 reinterpret_cast<uintptr_t>(request)==0x55000 &&

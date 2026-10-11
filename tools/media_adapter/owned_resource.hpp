@@ -16425,6 +16425,8 @@ public:
     // no retained frames, writable context and already-pinned stable table.
     template<class Read,class Write,class Admit>
     bool publish(Read read,Write write,Admit admit) noexcept {
+        static_assert(noexcept(read(uintptr_t{},static_cast<void*>(nullptr),size_t{})) &&
+            noexcept(write(uintptr_t{},uintptr_t{})) && noexcept(admit(uintptr_t{},size_t{})));
         uintptr_t current=0;
         if(!ready_ || publication_!=Publication::Unpublished || !admit(context_,sizeof(uintptr_t)) ||
             !read(context_,&current,sizeof(current)) || current!=originalVptr_) return false;
@@ -16435,6 +16437,8 @@ public:
     }
     template<class Read,class Write,class Admit>
     bool detach(Read read,Write write,Admit admit) noexcept {
+        static_assert(noexcept(read(uintptr_t{},static_cast<void*>(nullptr),size_t{})) &&
+            noexcept(write(uintptr_t{},uintptr_t{})) && noexcept(admit(uintptr_t{},size_t{})));
         if(publication_!=Publication::Published || !admit(context_,sizeof(uintptr_t))) return false;
         uintptr_t current=0;
         publication_=Publication::Ambiguous;
