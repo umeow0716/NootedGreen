@@ -16392,6 +16392,14 @@ int main() {
                                     ==TglOwnedBaseConstruction::ConstructedSuccess);
                             TglNativeOuterSurfaceRoles roles;roles.sourceCount=1;roles.targetCount=1;
                             roles.sources[0]=reinterpret_cast<uintptr_t>(&source);roles.targets[0]=reinterpret_cast<uintptr_t>(&target);
+                            for(uintptr_t foreign:{uintptr_t{0},uintptr_t{0x1234},
+                                reinterpret_cast<uintptr_t>(pairCpu[0].bytes.data())+8}) {
+                                const auto denied=frame.withNativeCommandFrame(roles,0,0,foreign,
+                                    0x1100,0x2200,0x3300,[](auto&,auto&,auto&,auto&) noexcept {
+                                        assert(false);return TglOwnedVeboxCommandTransactionResult{};
+                                    });
+                                assert(!denied.acquired && !frame.backing().retention()());
+                            }
                             return frame.withNativeCommandFrame(roles,0,0,reinterpret_cast<uintptr_t>(pairCpu[0].bytes.data()),
                                 0x1100,0x2200,0x3300,[&](auto& sourceLease,auto& targetLease,auto& dn,auto& packets) noexcept {
                                     assert(sourceLease.hasSurfaceLease(source) && targetLease.hasSurfaceLease(target));

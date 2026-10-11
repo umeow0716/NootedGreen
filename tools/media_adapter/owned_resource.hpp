@@ -16255,7 +16255,12 @@ public:
     TglOwnedVeboxCommandTransactionResult withNativeCommandFrame(
         const TglNativeOuterSurfaceRoles& roles,size_t sourceIndex,size_t targetIndex,
         uintptr_t child,uintptr_t execution,uintptr_t renderHal,uintptr_t sku,Consume consume) noexcept {
-        if(!surfacesReady()) return {};
+        // Packet inputs must name one of THIS frame's constructed children,
+        // never a foreign allocation or a stale/uninitialized child address.
+        // The enclosing sender still holds its private-table command lease.
+        if(!surfacesReady() || !child ||
+           (child!=reinterpret_cast<uintptr_t>(children_.first().owner().constructedBase()) &&
+            child!=reinterpret_cast<uintptr_t>(children_.second().owner().constructedBase()))) return {};
         return backing_.command().withFrontendCommandFrame(roles,sourceIndex,targetIndex,
             source_,target_,child,execution,renderHal,sku,[&](auto& source,auto& target,auto& leases) noexcept {
                 static_assert(noexcept(consume(source,target,parameters_,leases)) &&
