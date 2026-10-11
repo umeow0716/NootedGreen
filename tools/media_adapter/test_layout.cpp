@@ -4596,6 +4596,53 @@ static void testNativeResourceBoundary() {
             assert(destination.copyFrameMetadataFrom(destination));
             const auto* destinationSurface=destination.surface();
             {
+                const auto originalSource=*surface;
+                const auto originalTarget=*destinationSurface;
+                auto sourceMetadata=originalSource,targetMetadata=originalTarget;
+                TglSurfaceRect rect{0,0,1920,1081},targetRect{0,0,1920,1200};
+                for(size_t offset : {0x30u,0x40u,0x50u})
+                    std::memcpy(sourceMetadata.prefix.data()+offset,&rect,sizeof(rect));
+                std::memcpy(targetMetadata.prefix.data()+0x40,&targetRect,sizeof(targetRect));
+                assert(owner.copyFrameMetadata(sourceMetadata) && destination.copyFrameMetadata(targetMetadata));
+                const auto resourcesBefore=destinationSurface->resource;
+                const auto allocations=fixture.allocations,releases=fixture.releases;
+                std::array<uint8_t,0x139> params{};uint32_t ownedColor=0;
+                uintptr_t color=reinterpret_cast<uintptr_t>(&ownedColor);
+                std::memcpy(params.data()+0xe0,&color,sizeof(color));
+                bool fill=false,compressed=false;auto mode=TglOwnedSfcCompressionMode::Disabled;
+                uint32_t compressionFormat=0;int status=99;TglVeboxPipeAcquisition frame;
+                unsigned rechecks=0;
+                assert(owner.withPeerSurface(destination,[&](const auto& s,const auto& t) noexcept {
+                    bool hasColor=false;
+                    assert(tglAcquireOwnedColorFillPresence(params,color,frame,hasColor) && hasColor);
+                    auto recheck=[&]() noexcept {
+                        bool feasible=false;
+                        const bool entered=destination.withTemporaryDestinationBottom(t,rect.bottom,
+                            [&](const auto& actual) noexcept {
+                                ++rechecks;assert(&actual==&t && &s==surface && &t==destinationSurface);
+                                assert(actual.resource==resourcesBefore);
+                                TglSurfaceRect sourceRect,destinationRect,maximum,actualTarget;
+                                std::memcpy(&sourceRect,s.prefix.data()+0x30,16);
+                                std::memcpy(&destinationRect,s.prefix.data()+0x40,16);
+                                std::memcpy(&maximum,s.prefix.data()+0x50,16);
+                                std::memcpy(&actualTarget,actual.prefix.data()+0x40,16);
+                                feasible=tglDirectVeboxGeometry(sourceRect,destinationRect,maximum,actualTarget);
+                                owner.reset();destination.reset();
+                                assert(fixture.allocations==allocations && fixture.releases==releases);
+                            });
+                        if(!entered) frame.fail();
+                        return feasible;
+                    };
+                    assert(tglRunOwnedGen12FastFill(rect,targetRect,hasColor,fill,compressed,mode,
+                        compressionFormat,status,recheck,[]() noexcept -> int {assert(false);return 5;},
+                        [&]() noexcept {return frame.healthy();}));
+                    TglSurfaceRect restored;std::memcpy(&restored,t.prefix.data()+0x40,16);
+                    assert(restored.bottom==1200 && targetRect.bottom==1200 && t.resource==resourcesBefore);
+                }));
+                assert(rechecks==1 && fill && !compressed && status==0 && frame.healthy());
+                assert(owner.copyFrameMetadata(originalSource) && destination.copyFrameMetadata(originalTarget));
+            }
+            {
                 const auto before=destinationSurface->prefix;
                 unsigned calls=0;
                 auto observe=[&](const TglOwnedSurfaceStorage& view) noexcept {
