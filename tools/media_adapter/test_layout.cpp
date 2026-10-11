@@ -11110,6 +11110,22 @@ static void testRetainedVeboxFrames() {
     const auto first=pool.create(allocated,released,destroyed);
     const auto second=pool.create(allocated,released,destroyed);
     assert(first.index<2 && second.index<2 && first.index!=second.index);
+    Pool otherPhysical;
+    unsigned otherAllocated=0,otherReleased=0,otherDestroyed=0;
+    const auto other=otherPhysical.create(otherAllocated,otherReleased,otherDestroyed);
+    assert(other.index==first.index && other.generation==first.generation);
+    assert(otherPhysical.run(first,[](Frame&) noexcept {
+        assert(false);return TglOwnedVeboxCommandTransactionResult{};
+    }).status==5);
+    assert(otherPhysical.retire(first,[](const Frame&,bool,const auto&) noexcept -> int {
+        assert(false);return 0;
+    })==5);
+    assert(otherPhysical.retire(other,[](const Frame&,bool,const auto&) noexcept -> int {
+        return 0;
+    })==0);
+    // Independent physical lifetime can close without closing the first pool.
+    assert(otherPhysical.withQuiescentFrames([]() noexcept -> int {return 0;})==0);
+    assert(otherDestroyed==1 && otherAllocated==0 && otherReleased==0);
     unsigned nativeTeardown=0;
     auto teardown=[&]() noexcept -> int {++nativeTeardown;return 31;};
     assert(pool.withQuiescentFrames(teardown)==5 && !nativeTeardown);
