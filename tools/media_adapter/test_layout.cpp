@@ -1682,18 +1682,36 @@ static void testTrackedCpuOwner() {
             assert(descriptor.prepare(request,changed)==(format!=0x3d));
             assert(changed==(format!=0x3d));
             if(format!=0x3d) {
+                assert(descriptor.publishFfdiFrame(source,{8,3},&source,&source));
                 assert(descriptor.withDescriptor([&](const auto& view) noexcept {
                     uint32_t actualFormat=0,pitch=1,type=0;
                     std::memcpy(&actualFormat,view.prefix.data()+0x130,4);
                     std::memcpy(&pitch,view.prefix.data()+0xe0,4);
                     std::memcpy(&type,view.resource.data()+0x14,4);
                     assert(actualFormat==format && pitch==0 && type==1);
+                    uint32_t frameType=0,compression=0;
+                    std::memcpy(&frameType,view.prefix.data(),4);
+                    std::memcpy(&compression,view.prefix.data()+0x138,4);
+                    assert(frameType==8 && compression==3);
+                    uintptr_t handle=1,dn=1;
+                    std::memcpy(&handle,view.resource.data()+0x1a0-0x148,8);
+                    std::memcpy(&dn,view.prefix.data()+0x90,8);
+                    assert(!handle && !dn);
                     assert(!tglNativeBackingPresent(view.resource));
                     descriptor.reset();bool nestedChanged=false;
                     assert(!descriptor.prepare(request,nestedChanged) && !nestedChanged);
+                    assert(!descriptor.publishFfdiFrame(source,{8,3}));
+                    assert(!descriptor.publishFfdnFrame(source));
                     assert(!descriptor.withDescriptor([](const auto&) noexcept {assert(false);}));
                 }));
                 changed=false;assert(descriptor.prepare(request,changed) && changed);
+                assert(descriptor.publishFfdnFrame(source));
+                assert(descriptor.withDescriptor([&](const auto& view) noexcept {
+                    uint32_t compression=0;std::memcpy(&compression,view.prefix.data()+0x138,4);
+                    assert(compression==sourceCompression);
+                    assert(!std::memcmp(view.prefix.data()+0xb0,source.prefix.data()+0xb0,4));
+                    assert(!tglNativeBackingPresent(view.resource));
+                }));
                 auto invalid=request;invalid.key.width=0;changed=false;
                 assert(!descriptor.prepare(invalid,changed) && !changed);
             }
@@ -5460,6 +5478,36 @@ static void testNativeResourceBoundary() {
                 assert(tglWithAllocatedOwnedFfdiBatch<4>(owner,&owner,&destination,count,0x19,1,{},{},0,0,
                     [](size_t,const auto&,bool&) noexcept {assert(false);return 0;},
                     [](const auto&,const auto&,size_t,uint8_t,uint8_t) noexcept {assert(false);return 0;})==5);
+            {
+                std::array<TglOwnedDescriptorOnlySurface,4> targets;
+                unsigned consumers=0;
+                assert(tglWithOwnedDescriptorFfdiBatch(targets,owner,&owner,&destination,
+                    2,0x19,1,{true,1},{8,3},0xa5,0x5a,
+                    [&](const auto& inputs,const auto& outputs,size_t count,uint8_t flag,uint8_t mode) noexcept {
+                        ++consumers;assert(inputs[0]==surface && inputs[1]==surface && inputs[2]==destinationSurface);
+                        assert(count==2 && flag==1 && mode==1 && outputs[0] && outputs[1] && !outputs[2]);
+                        for(size_t index=0;index<count;++index) {
+                            assert(!tglNativeBackingPresent(outputs[index]->resource));
+                            targets[index].reset();bool changed=false;
+                            TglOwnedFfdiAllocationRequest request;
+                            assert(tglPrepareOwnedFfdiAllocationRequest(*surface,0x19,1,{},request));
+                            assert(!targets[index].prepare(request,changed));
+                        }
+                        owner.reset();destination.reset();
+                        assert(owner.ensure(key)==5 && destination.ensure(key)==5);
+                        return 31;
+                    })==31 && consumers==1);
+                assert(targets[0].withDescriptor([](const auto&) noexcept {}));
+                assert(targets[1].withDescriptor([](const auto&) noexcept {}));
+                assert(targets[1].withDescriptor([&](const auto&) noexcept {
+                    assert(tglWithOwnedDescriptorFfdiBatch(targets,owner,&owner,&destination,
+                        2,0x19,1,{true,1},{8,3},0,0,
+                        [](const auto&,const auto&,size_t,uint8_t,uint8_t) noexcept {
+                            assert(false);return 0;
+                        })==5);
+                }));
+                assert(targets[0].withDescriptor([](const auto&) noexcept {})); // no fabricated rollback
+            }
             for(size_t failAt=0;failAt<=2;++failAt) for(bool equalPitch:{false,true}) {
                 bool valid=true;size_t allocations=0,publications=0,copies=0;
                 uint8_t execution15=0xa5,execution16=0x5a;

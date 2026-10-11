@@ -4639,6 +4639,22 @@ public:
         std::memcpy(storage_.prefix.data()+0xe0,&zero,4);
         ready_=true;changed=true;return true; //4a1af writes1 even on reuse
     }
+    // Persist only qualified frame scalars. Borrowed handle1a0 and DN90
+    // are deliberately absent; owners of those allocations must remain
+    // separately pinned when commands consume this descriptor.
+    bool publishFfdiFrame(const TglOwnedSurfaceStorage& input,TglOwnedFfdiMetadataQuery query,
+        const TglOwnedSurfaceStorage* execution=nullptr,
+        const TglOwnedSurfaceStorage* secondary=nullptr) noexcept {
+        if(!ready_ || busy_ || &input==&storage_ || execution==&storage_ || secondary==&storage_)
+            return false;
+        if(!tglPrepareOwnedFfdiFrameMetadata(storage_,input,query)) return false;
+        if(execution) tglCopyOwnedFfdiPrimaryScalars(storage_,*execution);
+        if(secondary) tglCopyOwnedFfdiSecondaryMetadata(storage_,*secondary);
+        return true;
+    }
+    bool publishFfdnFrame(const TglOwnedSurfaceStorage& input) noexcept {
+        return ready_ && !busy_ && tglPrepareOwnedFfdnFrameMetadata(storage_,input);
+    }
     template<class Use> bool withDescriptor(Use use) noexcept {
         static_assert(noexcept(use(std::declval<const TglOwnedSurfaceStorage&>())) &&
             std::is_same_v<decltype(use(std::declval<const TglOwnedSurfaceStorage&>())),void>,
@@ -5025,6 +5041,39 @@ int tglWithAllocatedOwnedFfdiBatch(Owner& input,Owner* execution,Owner* secondar
         if(views[2]) tglCopyOwnedFfdiSecondaryMetadata(metadata[0],*views[2]);
         return use(views,static_cast<const Metadata&>(metadata),count,flag,mode);
     });
+}
+
+// Concrete descriptor-only FFDI target assembly. Keep every output descriptor
+// leased through the final consumer, alongside the existing input role leases.
+// Does not bind borrowed handle1a0, submit commands, or authenticate a fence.
+template<size_t Count,class Owner,class Use>
+int tglWithOwnedDescriptorFfdiBatch(std::array<TglOwnedDescriptorOnlySurface,Count>& targets,
+    Owner& input,Owner* execution,Owner* secondary,size_t count,uint32_t format,uint32_t tile,
+    TglOwnedFfdiCompressionSelection compression,TglOwnedFfdiMetadataQuery query,
+    uint8_t flag,uint8_t mode,Use use) noexcept {
+    using Outputs=std::array<const TglOwnedSurfaceStorage*,Count>;
+    using Inputs=std::array<const TglOwnedSurfaceStorage*,3>;
+    static_assert(noexcept(use(std::declval<const Inputs&>(),std::declval<const Outputs&>(),
+        size_t{},uint8_t{},uint8_t{})),"descriptor FFDI consumer ABI");
+    return tglWithAllocatedOwnedFfdiBatch<Count>(input,execution,secondary,count,format,tile,
+        compression,query,flag,mode,
+        [&](size_t index,const auto& request,bool& changed) noexcept {
+            return targets[index].prepare(request,changed)?0:5;
+        },[&](const Inputs& inputs,const auto&,size_t active,uint8_t currentFlag,uint8_t currentMode) noexcept {
+            for(size_t index=0;index<active;++index)
+                if(!targets[index].publishFfdiFrame(*inputs[0],query,inputs[1],index==0?inputs[2]:nullptr))
+                    return 5;
+            Outputs outputs{};
+            const auto enter=[&](auto&& self,size_t index) noexcept -> int {
+                if(index==active) return use(inputs,static_cast<const Outputs&>(outputs),active,currentFlag,currentMode);
+                int result=5;
+                const bool leased=targets[index].withDescriptor([&](const auto& descriptor) noexcept {
+                    outputs[index]=&descriptor;result=self(self,index+1);outputs[index]=nullptr;
+                });
+                return leased?result:5;
+            };
+            return enter(enter,0);
+        });
 }
 
 // Two FFDN allocations (1f7fd1), each followed by history handling and
