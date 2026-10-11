@@ -10816,7 +10816,35 @@ int main() {
                                 assert(coefficients && *reinterpret_cast<const float*>(coefficients)==7);
                                 assert(!callbackCsc.reset());
                                 graph.reset();assert(stateCpu.live && avsCpu.live);
-                                return mode==6?-17:0;
+                                struct CscCommands {
+                                    TglOwnedVpCscCache& cache;const uint8_t* nativeState;
+                                    unsigned count=0;bool failIef=false;
+                                    int step(unsigned expected) noexcept {
+                                        assert(++count==expected && nativeState[0x88]==1 && !cache.reset());return 0;
+                                    }
+                                    int lock(const TglOwnedSfcLockParameters&) noexcept {return step(1);}
+                                    int state(const TglOwnedSfcStateParametersPacket& state,
+                                        const std::array<uint8_t,0x38>&) noexcept {
+                                        assert(state[0x88]==1);return step(3);
+                                    }
+                                    int avs(const std::array<uint8_t,16>&) noexcept {assert(false);return 5;}
+                                    int y(const TglOwnedSfcYParameters&) noexcept {assert(false);return 5;}
+                                    int uv(const TglOwnedSfcUvParameters&) noexcept {assert(false);return 5;}
+                                    int ief(const std::array<uint8_t,64>& input) noexcept {
+                                        uintptr_t pointer=0;std::memcpy(&pointer,input.data()+0x28,8);
+                                        assert(input[0x20]==1 && pointer && *reinterpret_cast<const float*>(pointer)==7);
+                                        step(4);return failIef?-17:0;
+                                    }
+                                    int frameStart() noexcept {return step(5);}
+                                } backend{callbackCsc,packet,0,mode==6};
+                                // Marshal the real leased state while the coefficient view is live.
+                                std::memcpy(callbackCommands.state.data(),packet,callbackCommands.state.size());
+                                TglOwnedSurfaceStorage output;
+                                auto platform=[&](auto&) noexcept {return backend.step(2);};
+                                const int built=tglSendOwnedSfcPreparedCommands(backend,callbackCommands,
+                                    output,0,0,0,1,platform);
+                                assert(backend.count==(mode==6?4U:5U));
+                                return built;
                             });
                         assert(stateCpu.bytes[0x88]==beforeCsc);
                         return cscResult;
