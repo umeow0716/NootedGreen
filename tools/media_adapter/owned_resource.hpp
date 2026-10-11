@@ -6900,6 +6900,42 @@ NGRN_VP_SLOT(platformSetup,0xa8);NGRN_VP_SLOT(sampleMode,0xb0);NGRN_VP_SLOT(form
 NGRN_VP_SLOT(platformPacket,0xc0);NGRN_VP_SLOT(platformSend,0xc8);NGRN_VP_SLOT(compression,0xd0);
 #undef NGRN_VP_SLOT
 static_assert(std::is_standard_layout_v<TglOwnedVpEntrySet> && sizeof(TglOwnedVpEntrySet)==0xd8);
+// Stable private dispatch for a FLAT, all-owned VP only. Zero offset-to-top
+// and absent RTTI are deliberate: no donor virtual-base metadata/thunks are
+// transplanted. This does not authorize native RTTI consumers or publication;
+// the object, all resolver scopes and backing owners need separate admission.
+class TglOwnedVpFlatDispatchTable {
+    struct Layout {
+        intptr_t offsetToTop=0;
+        uintptr_t typeInfo=0;
+        TglOwnedVpEntrySet entries;
+    } layout_;
+    static_assert(offsetof(Layout,entries)==16 && sizeof(uintptr_t)==8);
+    bool ready_=false,building_=false;
+public:
+    TglOwnedVpFlatDispatchTable() noexcept=default;
+    TglOwnedVpFlatDispatchTable(const TglOwnedVpFlatDispatchTable&)=delete;
+    TglOwnedVpFlatDispatchTable& operator=(const TglOwnedVpFlatDispatchTable&)=delete;
+    template<class OwnedExecutable>
+    bool build(const TglOwnedVpEntrySet& entries,OwnedExecutable ownedExecutable) noexcept {
+        static_assert(noexcept(ownedExecutable(uintptr_t{},size_t{})),"owned VP code admission ABI");
+        static_assert(std::is_same_v<decltype(ownedExecutable(uintptr_t{},size_t{})),bool>,
+                      "owned VP code admission returns a predicate, not native status");
+        if(ready_ || building_) return false;
+        const auto candidate=entries;
+        if(!candidate.hasAllEntries()) return false;
+        building_=true;
+        struct Unlock {bool& busy;~Unlock(){busy=false;}} unlock{building_};
+        std::array<uintptr_t,27> addresses{};
+        std::memcpy(addresses.data(),&candidate,sizeof(candidate));
+        for(const auto address:addresses)
+            if(!ownedExecutable(address,1)) return false;
+        layout_.entries=candidate;ready_=true;return true;
+    }
+    uintptr_t addressPoint() const noexcept {
+        return ready_ ? reinterpret_cast<uintptr_t>(&layout_.entries) : 0;
+    }
+};
 template<class Resolve>
 bool tglBindOwnedVpModeEntries(void* child,TglOwnedVpEntrySet& target) noexcept {
     static_assert(noexcept(Resolve{}(child)),"VP mode binding resolver ABI");

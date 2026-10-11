@@ -9217,6 +9217,39 @@ int main() {
 #undef NGRN_CONFLICT_VP
 #undef NGRN_TEST_VP_SLOTS
         assert(entries.hasAllEntries());
+        for(unsigned denied=0;denied<27;++denied) {
+            TglOwnedVpFlatDispatchTable table;unsigned checked=0;
+            assert(!table.addressPoint());
+            assert(!table.build(entries,[&](uintptr_t address,size_t size) noexcept {
+                assert(address && size==1);return checked++!=denied;
+            }));
+            assert(!table.addressPoint() && checked==denied+1);
+        }
+        TglOwnedVpFlatDispatchTable table;unsigned checked=0;
+        const auto accept=[&](uintptr_t address,size_t size) noexcept {
+            assert(address && size==1);++checked;return true;
+        };
+        assert(!table.build(TglOwnedVpEntrySet{},accept) && !checked);
+        assert(table.build(entries,accept) && checked==27);
+        const auto address=table.addressPoint();assert(address);
+        std::array<uintptr_t,2> metadata{1,1};
+        std::memcpy(metadata.data(),reinterpret_cast<const void*>(address-16),16);
+        assert(!metadata[0] && !metadata[1]);
+        const auto* typed=reinterpret_cast<const TglOwnedVpEntrySet*>(address);
+        assert(typed->hasAllEntries() && typed->extent==entries.extent);
+        assert(typed->extent(nullptr,nullptr,nullptr,nullptr)==0);
+        assert(!table.build(entries,accept) && checked==27 && table.addressPoint()==address);
+        TglOwnedVpFlatDispatchTable snapshot;
+        auto mutableEntries=entries;unsigned admissions=0;
+        assert(snapshot.build(mutableEntries,[&](uintptr_t,size_t) noexcept {
+            if(!admissions++) {
+                assert(!snapshot.build(entries,accept));
+                mutableEntries.extent=nullptr;
+            }
+            assert(!snapshot.addressPoint());return true;
+        }));
+        const auto* captured=reinterpret_cast<const TglOwnedVpEntrySet*>(snapshot.addressPoint());
+        assert(admissions==27 && captured->hasAllEntries() && captured->extent==entries.extent);
     }
     {
         TglOwnedVpSfcCallerStorage vp;
