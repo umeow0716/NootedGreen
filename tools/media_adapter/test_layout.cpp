@@ -1288,10 +1288,23 @@ static void testTrackedCpuOwner() {
             })==5 && calls==3 && child.writes==2);
         }
         assert(!Resolve::get(nativeChild));
-        bool nativeFixture=false;
+        bool nativeFixture=false,roleFixture=false;
+        std::array<uint8_t,0xa10> reportBytes{};
         constexpr uintptr_t nativeImage=0x100000000,nativeOs=0x8000,privateTable=0x9000;
         auto noRead=[&](uintptr_t address,void* output,size_t bytes) noexcept {
             if(!nativeFixture) return false;
+            if(roleFixture) {
+                if(address>=reportAddress && address-reportAddress<reportBytes.size() &&
+                    bytes<=reportBytes.size()-(address-reportAddress)) {
+                    std::memcpy(output,reportBytes.data()+(address-reportAddress),bytes);return true;
+                }
+                if(address==child.address+0x88 && bytes==8) {
+                    std::memcpy(output,&reportAddress,8);return true;
+                }
+                if(address==child.address+0x1b0 && bytes==8) {
+                    std::memcpy(output,&sourceAddress,8);return true;
+                }
+            }
             uintptr_t value=0;
             if(bytes==8) {
                 if(address==child.address) value=privateTable;
@@ -1469,10 +1482,12 @@ static void testTrackedCpuOwner() {
                 AuxiliaryScope,typename ActualProducers::Resolve,AuxiliaryScope,FormatRead>(
                     nativeChild,child.installed)));
             TglOwnedVeboxFrameRetention actualRetention;
-            auto actualConsumer=tglMakeOwnedVeboxNativeFrameConsumer<AuxiliaryResolve,
+            bool expectRewind=true;
+            auto makeActualConsumer=[&](TglOwnedVeboxFrameRetention& retained) noexcept {
+                return tglMakeOwnedVeboxNativeFrameConsumer<AuxiliaryResolve,
                 AuxiliaryScope,AuxiliaryScope,AuxiliaryScope,FormatRead>(sourceLease,
                 child,execution,0,noRead,noPackets,produce,nativeSetup,nativeBuilder,
-                nativeImage,nativeOs,scratch,&state,actualRetention,qualify,executable,
+                nativeImage,nativeOs,scratch,&state,retained,qualify,executable,
                 [&](uintptr_t,void*,void*,void*,void*,int32_t* remaining) noexcept -> int {
                     ++nativeSetups;*remaining=128;
                     const uintptr_t base=0x1000,cursor=0x1020;
@@ -1491,9 +1506,12 @@ static void testTrackedCpuOwner() {
                     std::memcpy(&cursor,scratch.command.data()+0x150,8);
                     std::memcpy(&offset,scratch.command.data()+0x158,4);
                     std::memcpy(&left,scratch.command.data()+0x15c,4);
-                    assert(cursor==0x1000 && offset==0 && left==128);
+                    if(expectRewind) assert(cursor==0x1000 && offset==0 && left==128);
+                    else assert(cursor==0x1020 && offset==32 && left==96);
                     ++nativeWritebacks;
                 });
+            };
+            auto actualConsumer=makeActualConsumer(actualRetention);
             const auto stale=actualConsumer(actualFrame);
             assert(stale.status==5 && stale.builderStatus==5 && stale.acquired && stale.writtenBack);
             assert(actualRetention() && !registrations);
@@ -1502,6 +1520,27 @@ static void testTrackedCpuOwner() {
             const auto stalePending=actualConsumer(actualFrame);
             assert(stalePending.status==5 && !stalePending.acquired && !stalePending.writtenBack);
             assert(nativeSetups==2 && nativeBuilds==2 && nativeWritebacks==2);
+            roleFixture=true;expectRewind=false;
+            const uint32_t pipe=2;
+            const uintptr_t targetAddress=reinterpret_cast<uintptr_t>(&target);
+            std::memcpy(reportBytes.data()+0xa0c,&pipe,4);
+            std::memcpy(reportBytes.data()+0x60,&targetAddress,8);
+            TglOwnedSurfaceStorage statistics;
+            TglDiIecpInputs consistentInput{};
+            consistentInput.current=&source;consistentInput.target=&target;
+            consistentInput.statistics=&statistics;consistentInput.pipe=2;
+            consistentInput.boundaryWidth=1920;
+            ActualFrame consistentFrame{{},leases,consistentInput,false,noRead,admitSurface,
+                admitDi,registerResource,control};
+            TglOwnedVeboxFrameRetention consistentRetention;
+            auto consistentConsumer=makeActualConsumer(consistentRetention);
+            const auto positive=consistentConsumer(consistentFrame);
+            assert(positive.status==0 && positive.builderStatus==0 && positive.acquired && positive.writtenBack);
+            assert(consistentRetention() && registrations==3);
+            assert(di.resources[0]==&source.resource && di.resources[5]==&target.resource &&
+                di.resources[7]==&statistics.resource);
+            assert(nativeSetups==3 && nativeBuilds==3 && nativeWritebacks==3);
+            assert(!ActualProducers::Resolve::get(nativeChild));
         }
     }
     {
