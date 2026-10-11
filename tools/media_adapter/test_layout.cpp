@@ -12872,6 +12872,7 @@ int main() {
                 hooks[0]=hooks[1]=0;
                 assert(!tglBindOwnedVeboxLifetimeHooks<LifetimeResolve>(&eventCount,hooks));
                 assert(tglBindOwnedVeboxLifetimeHooks<LifetimeResolve>(lifecycleChild,hooks));
+                for(size_t i=2;i<hooks.size();++i) assert(hooks[i]==occupiedHooks[i]);
                 assert(!tglBindOwnedVeboxLifetimeHooks<LifetimeResolve>(lifecycleChild,hooks));
                 bool readable=false;
                 auto tableRead=[&](uintptr_t address,void* out,size_t size) noexcept {
@@ -12994,6 +12995,17 @@ int main() {
                 hooks=tglBindOwnedVeboxQueryHooks<DeniedFormatRead>(hooks);
                 assert(owner.installPrivateVtableWithQueries<DeniedFormatRead>(
                     unbound,tableRead,qualify,executable));
+                assert(owner.withPrivateChild([&](void* child) noexcept {
+                    uintptr_t table=0,destroyEntry=0,deleteEntry=0;
+                    std::memcpy(&table,child,8);
+                    std::memcpy(&destroyEntry,reinterpret_cast<const void*>(table),8);
+                    std::memcpy(&deleteEntry,reinterpret_cast<const void*>(table+8),8);
+                    reinterpret_cast<void(*)(void*) noexcept>(destroyEntry)(child);
+                    assert(lifetime.status()==5 && owner.constructedBase()==child && !eventCount);
+                    reinterpret_cast<void(*)(void*) noexcept>(deleteEntry)(child);
+                    assert(lifetime.status()==5 && owner.constructedBase()==child && cpu.live && !eventCount);
+                    return 0;
+                })==0);
                 {
                     struct BorrowBackend {
                         unsigned destroys=0;
