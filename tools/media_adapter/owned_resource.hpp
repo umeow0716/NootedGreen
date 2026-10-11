@@ -4492,6 +4492,17 @@ inline bool tglPrepareOwnedFfdiFrameMetadata(TglOwnedSurfaceStorage& target,
     return true;
 }
 enum class TglOwnedFfdnHistoryDecision { Keep, Invalidate, CopyPrevious };
+// ICL1f81c1..1f8311: frame rectangles, type0, compression138 and DWORDb0.
+// Native also copies QWORD90; its ownership/classification is not closed, so leave
+// it out of CPU metadata and retain access only through the leased source.
+// No rotation290/resource ownership transfer is proven for this FFDN tail.
+inline bool tglPrepareOwnedFfdnFrameMetadata(TglOwnedSurfaceStorage& target,
+    const TglOwnedSurfaceStorage& source) noexcept {
+    if(&target==&source) return false;
+    tglCopyOwnedSurfaceFrameMetadata(target,source);
+    std::memcpy(target.prefix.data()+0xb0,source.prefix.data()+0xb0,4);
+    return true;
+}
 struct TglOwnedFfdiCompressionSelection {
     bool compressed=false;
     uint32_t mode=0;
@@ -4931,8 +4942,10 @@ int tglWithAllocatedOwnedFfdnPair(Owner& input,Owner* previous,Owner* copyDestin
         std::declval<const TglOwnedSurfaceStorage&>())) &&
         std::is_same_v<decltype(copy(std::declval<const TglOwnedSurfaceStorage&>(),
         std::declval<const TglOwnedSurfaceStorage&>())),void>,"FFDN pair copy ABI");
-    static_assert(noexcept(publish(size_t{},std::declval<const TglOwnedSurfaceStorage&>())) &&
-        std::is_same_v<decltype(publish(size_t{},std::declval<const TglOwnedSurfaceStorage&>())),void>,
+    static_assert(noexcept(publish(size_t{},std::declval<const TglOwnedSurfaceStorage&>(),
+        std::declval<const TglOwnedSurfaceStorage&>())) &&
+        std::is_same_v<decltype(publish(size_t{},std::declval<const TglOwnedSurfaceStorage&>(),
+        std::declval<const TglOwnedSurfaceStorage&>())),void>,
         "FFDN pair metadata ABI");
     const std::array<Owner*,3> roles{&input,previous,copyDestination};
     return tglWithOwnedSurfaceRoles(roles,[&](const auto& views) noexcept {
@@ -4949,7 +4962,9 @@ int tglWithAllocatedOwnedFfdnPair(Owner& input,Owner* previous,Owner* copyDestin
             if(decision==TglOwnedFfdnHistoryDecision::CopyPrevious && !views[2]) return 5;
             tglApplyOwnedFfdnHistory(changed,referenceValid,executionFlag13,views[1]!=nullptr,pitch,
                 previousPitch,[&]() noexcept {copy(*views[2],*views[1]);});
-            publish(index,*views[0]);
+            TglOwnedSurfaceStorage metadata;
+            if(!tglPrepareOwnedFfdnFrameMetadata(metadata,*views[0])) return 5;
+            publish(index,*views[0],static_cast<const TglOwnedSurfaceStorage&>(metadata));
         }
         return 0;
     });

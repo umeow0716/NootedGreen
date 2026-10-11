@@ -1630,6 +1630,19 @@ static void testTrackedCpuOwner() {
         assert(!tglPrepareOwnedFfdiFrameMetadata(source,source,query));
         std::memcpy(&selectedCompression,source.prefix.data()+0x138,4);
         assert(selectedCompression==sourceCompression);
+        {
+            TglOwnedSurfaceStorage target;
+            target.prefix.fill(0x73);target.resource.fill(0x29);target.tail.fill(0x31);
+            auto expected=target;
+            for(size_t i=0;i<target.prefix.size();++i)
+                if(i<4 || (i>=0x30 && i<0x60) || (i>=0xb0 && i<0xb4) || (i>=0x138 && i<0x13c))
+                    expected.prefix[i]=source.prefix[i];
+            assert(tglPrepareOwnedFfdnFrameMetadata(target,source));
+            assert(target.prefix==expected.prefix && target.resource==expected.resource && target.tail==expected.tail);
+            const auto original=source;
+            assert(!tglPrepareOwnedFfdnFrameMetadata(source,source));
+            assert(source.prefix==original.prefix && source.resource==original.resource && source.tail==original.tail);
+        }
         for(uint32_t secondary200:{0u,0xffffffffu,7u}) {
             TglOwnedSurfaceStorage target,secondary;
             target.prefix.fill(0x19);target.resource.fill(0x73);target.tail.fill(0x31);
@@ -5405,8 +5418,10 @@ static void testNativeResourceBoundary() {
                         assert(&target==destinationSurface && &previousView==surface);
                         assert(publications==copies && allocations==copies+1);++copies;
                         owner.reset();assert(owner.ensure(key)==5);
-                    },[&](size_t index,const auto& sourceView) noexcept {
+                    },[&](size_t index,const auto& sourceView,const auto& metadata) noexcept {
                         assert(index==publications++ && &sourceView==surface);
+                        assert(!std::memcmp(metadata.prefix.data()+0xb0,sourceView.prefix.data()+0xb0,4));
+                        assert(!tglNativeBackingPresent(metadata.resource));
                         if(equalPitch) assert(copies==publications);
                         else assert(!valid && copies==0);
                     });
@@ -5425,7 +5440,7 @@ static void testNativeResourceBoundary() {
                     [&](size_t,const auto&,bool& changed,uint32_t& pitch) noexcept {
                         ++allocations;changed=true;pitch=pitchValue;return 0;
                     },[](const auto&,const auto&) noexcept {assert(false);},
-                    [&](size_t,const auto&) noexcept {++publications;})==(hasPrevious?5:0));
+                    [&](size_t,const auto&,const auto&) noexcept {++publications;})==(hasPrevious?5:0));
                 assert(allocations==(hasPrevious?1u:2u) && publications==(hasPrevious?0u:2u));
                 assert(valid==hasPrevious); // missing required destination is not invented history invalidation
             }
