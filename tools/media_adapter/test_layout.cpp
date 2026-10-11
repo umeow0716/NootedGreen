@@ -5324,6 +5324,35 @@ static void testNativeResourceBoundary() {
                     })==5);
             }));
             assert(owner.withSurface([](const auto&) noexcept {})); // failed peer acquisition unwinds input
+            for(size_t failAt=0;failAt<=4;++failAt) {
+                size_t allocations=0;unsigned consumers=0;
+                const int result=tglWithAllocatedOwnedFfdiBatch<4>(owner,&owner,&destination,
+                    4,0x19,1,{true,1},{8,3},0xa5,0x5a,
+                    [&](size_t index,const auto& request,bool& changed) noexcept {
+                        assert(index==allocations++ && request.type==1);
+                        owner.reset();destination.reset();
+                        assert(owner.ensure(key)==5 && destination.ensure(key)==5);
+                        changed=index==1;return index==failAt?77:0;
+                    },[&](const auto& views,const auto& metadata,size_t count,uint8_t flag,uint8_t mode) noexcept {
+                        ++consumers;assert(allocations==4 && count==4 && flag==1 && mode==1);
+                        assert(views[0]==surface && views[1]==surface && views[2]==destinationSurface);
+                        constexpr size_t base=offsetof(TglOwnedSurfaceStorage,resource);
+                        assert(!std::memcmp(metadata[0].resource.data()+0x200-base,
+                            destinationSurface->resource.data()+0x200-base,4));
+                        for(size_t i=1;i<count;++i) assert(!tglNativeBackingPresent(metadata[i].resource));
+                        owner.reset();destination.reset();
+                        assert(owner.ensure(key)==5 && destination.ensure(key)==5);
+                        return -17;
+                    });
+                assert(result==(failAt<4?77:-17));
+                assert(allocations==(failAt<4?failAt+1:4) && consumers==(failAt<4?0u:1u));
+                assert(owner.withSurface([](const auto&) noexcept {}));
+                assert(destination.withSurface([](const auto&) noexcept {}));
+            }
+            for(size_t count:{size_t(0),size_t(5)})
+                assert(tglWithAllocatedOwnedFfdiBatch<4>(owner,&owner,&destination,count,0x19,1,{},{},0,0,
+                    [](size_t,const auto&,bool&) noexcept {assert(false);return 0;},
+                    [](const auto&,const auto&,size_t,uint8_t,uint8_t) noexcept {assert(false);return 0;})==5);
             bool caught=false;
             try {
                 owner.withPeerSurface(destination,[](const auto&,const auto&){throw 31;});

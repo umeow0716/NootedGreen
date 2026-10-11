@@ -4841,6 +4841,40 @@ int tglWithAllocatedOwnedFfdiPreparation(Owner& source,uint32_t format,uint32_t 
         });
 }
 
+// Bounded owned FFDI assembly: all three input roles remain pinned through
+// the native-ordered allocation loop and final consumer. This is not the
+// native zero-count/reused-slot path or an asynchronous submission lease.
+// A failed allocation leaves earlier allocator-owned slots intact for the
+// caller's real retirement policy; no fabricated rollback or handle copies.
+template<size_t Capacity,class Owner,class Allocate,class Use>
+int tglWithAllocatedOwnedFfdiBatch(Owner& input,Owner* execution,Owner* secondary,
+    size_t count,uint32_t format,uint32_t tile,TglOwnedFfdiCompressionSelection compression,
+    TglOwnedFfdiMetadataQuery query,uint8_t flag,uint8_t mode,Allocate allocate,Use use) noexcept {
+    static_assert(Capacity>0 && Capacity<=4,"owned FFDI slot capacity");
+    using Metadata=std::array<TglOwnedSurfaceStorage,Capacity>;
+    using Views=std::array<const TglOwnedSurfaceStorage*,3>;
+    static_assert(noexcept(allocate(size_t{},std::declval<const TglOwnedFfdiAllocationRequest&>(),
+        std::declval<bool&>())),"FFDI batch allocation ABI");
+    static_assert(noexcept(use(std::declval<const Views&>(),std::declval<const Metadata&>(),
+        size_t{},uint8_t{},uint8_t{})),"FFDI batch consumer ABI");
+    if(count==0 || count>Capacity) return 5;
+    const std::array<Owner*,3> roles{&input,execution,secondary};
+    return tglWithOwnedSurfaceRoles(roles,[&](const Views& views) noexcept {
+        TglOwnedFfdiAllocationRequest request;
+        if(!tglPrepareOwnedFfdiAllocationRequest(*views[0],format,tile,compression,request)) return 5;
+        Metadata metadata{};
+        for(size_t index=0;index<count;++index) {
+            bool changed=false;
+            const int result=allocate(index,request,changed);
+            if(result!=0) return result;
+            if(!tglPrepareOwnedFfdiFrameMetadata(metadata[index],*views[0],query)) return 5;
+            tglUpdateOwnedFfdiExecutionCompression(changed,compression,flag,mode);
+        }
+        if(views[2]) tglCopyOwnedFfdiSecondaryMetadata(metadata[0],*views[2]);
+        return use(views,static_cast<const Metadata&>(metadata),count,flag,mode);
+    });
+}
+
 // Exact ICL classifier4a500 and its 90-entry relative jump table4a55c.
 // 3 is the native OTHER color pack, not an invalid format admission result.
 inline uint32_t tglOwnedChromaColorPack(uint32_t format) noexcept {
