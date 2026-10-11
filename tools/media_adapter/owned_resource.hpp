@@ -15192,6 +15192,7 @@ template<class Frame,size_t Capacity=2> class TglOwnedVeboxRetainedFrames {
     std::array<Slot,Capacity> slots_{};
     std::atomic_flag gate_=ATOMIC_FLAG_INIT;
     uint64_t generation_=0;
+    bool physicalTeardownStarted_=false;
     TglOwnedVeboxRetainedFrames()=default;
     // Pointer slots deliberately do not delete unresolved frames at unload.
     // The runtime Frame's owned image lease must also prevent code unloading.
@@ -15208,7 +15209,7 @@ public:
         static_assert(std::is_nothrow_constructible_v<Frame,Args...>,"frame construction reports native failures separately");
         if(gate_.test_and_set(std::memory_order_acquire)) return {};
         Unlock unlock{gate_};
-        if(generation_==UINT64_MAX) return {};
+        if(physicalTeardownStarted_ || generation_==UINT64_MAX) return {};
         for(size_t i=0;i<Capacity;++i) if(!slots_[i].frame) {
             auto* frame=new(std::nothrow) Frame(std::forward<Args>(args)...);
             if(!frame) return {};
@@ -15222,7 +15223,7 @@ public:
             std::is_same_v<decltype(invoke(std::declval<Frame&>())),TglOwnedVeboxCommandTransactionResult>);
         if(gate_.test_and_set(std::memory_order_acquire)) return {};
         Unlock unlock{gate_};
-        if(ticket.index>=Capacity) return {};
+        if(physicalTeardownStarted_ || ticket.index>=Capacity) return {};
         auto& slot=slots_[ticket.index];
         if(!slot.frame || !ticket.generation || slot.generation!=ticket.generation || slot.pending) return {};
         slot.result=invoke(*slot.frame);
@@ -15237,13 +15238,22 @@ public:
     // table lifetime cannot protect it. Serialize the native teardown with
     // create/run/retire and refuse while ANY complete frame is still owned,
     // including frames not submitted yet. No waiting or implicit retirement.
+    // Gate BEFORE entering native destroy:13cc3 can already destroy physical+10
+    // before13ce8 fails metadata cleanup and returns nonzero at13cef. A native
+    // error therefore does not prove an unchanged/reusable physical object;
+    // the enclosing physical registry must quarantine that generation, not
+    // reopen it for create/run or blindly retry destruction.
     // Invoke must authenticate its physical/context generation and detach
     // native child accounting before teardown. This is not native retention.
     template<class Invoke> int withQuiescentFrames(Invoke invoke) noexcept {
         static_assert(noexcept(invoke()) && std::is_same_v<decltype(invoke()),int>);
         if(gate_.test_and_set(std::memory_order_acquire)) return 5;
         Unlock unlock{gate_};
+        if(physicalTeardownStarted_) return 5;
         for(const auto& slot:slots_) if(slot.frame) return 5;
+        // This pool belongs to one physical lifetime. Never reuse it for a
+        // replacement physical object, even when the native call fails.
+        physicalTeardownStarted_=true;
         return invoke();
     }
     // Admission must prove actual command discard or generation-qualified

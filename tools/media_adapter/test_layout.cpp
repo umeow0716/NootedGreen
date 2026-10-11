@@ -11164,7 +11164,13 @@ static void testRetainedVeboxFrames() {
         assert(pool.withQuiescentFrames(teardown)==5 && !nativeTeardown);
         return teardown();
     })==31 && nativeTeardown==1);
-    assert(pool.withQuiescentFrames([]() noexcept -> int {return 0;})==0);
+    assert(pool.withQuiescentFrames([]() noexcept -> int {
+        assert(false);return 0;
+    })==5);
+    assert(pool.create(allocated,released,destroyed).index==2);
+    assert(pool.run(replacement,[](Frame&) noexcept {
+        assert(false);return TglOwnedVeboxCommandTransactionResult{};
+    }).status==5);
 }
 
 int main() {
