@@ -11100,20 +11100,27 @@ int main() {
             storage.bytes[0x998]=17;storage.bytes[0x99c]=19;storage.bytes[0x923]=0xa5;
             const auto saved=storage.bytes;
             using Context=TglOwnedVpModeContext<decltype(read)>;
-            using Callback=TglOwnedVpModeCallbacks<TglOwnedVpSfcResolve<Context>>;
+            using Resolve=TglOwnedVpSfcResolve<Context>;
             for(unsigned scenario=0;scenario<5;++scenario) {
                 calls=0;
+                TglOwnedVpEntrySet modeEntries;
+                assert(!tglBindOwnedVpModeEntries<Resolve>(storage.bytes.data(),modeEntries));
+                assert(modeEntries.missingMask()==0x7ffffffU);
                 {
                     Context context(storage,0x1000,0x2000,0x3000,read);
                     TglOwnedVpSfcScopedContext<Context> scope(storage.bytes.data(),context);
                     assert(scope.bound() && context.status()==5 && calls==9);
+                    assert(!tglBindOwnedVpModeEntries<Resolve>(nullptr,modeEntries));
+                    assert(tglBindOwnedVpModeEntries<Resolve>(storage.bytes.data(),modeEntries));
+                    assert(modeEntries.missingMask()==(0x7ffffffU&~((1U<<22)|(1U<<23))));
+                    assert(!tglBindOwnedVpModeEntries<Resolve>(storage.bytes.data(),modeEntries));
                     if(!scenario) {put(source,0,uint32_t(3));put(source,0x130,uint32_t(1));}
                     if(scenario==1) context.formatMode(reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x3000));
                     else {
-                        Callback::sampleMode(storage.bytes.data(),reinterpret_cast<void*>(0x1000),
+                        modeEntries.sampleMode(storage.bytes.data(),reinterpret_cast<void*>(0x1000),
                             reinterpret_cast<void*>(scenario==2?0x6000:0x2000));
                         if(scenario==3) context.sampleMode(reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x2000));
-                        if(scenario!=4) Callback::formatMode(storage.bytes.data(),reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x3000));
+                        if(scenario!=4) modeEntries.formatMode(storage.bytes.data(),reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x3000));
                     }
                     assert(context.status()==(scenario==0?0:5) && calls==9);
                     if(!scenario) {
@@ -11125,6 +11132,9 @@ int main() {
                     }
                 }
                 assert(storage.bytes==saved);
+                modeEntries.sampleMode(storage.bytes.data(),reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x2000));
+                modeEntries.formatMode(storage.bytes.data(),reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x3000));
+                assert(storage.bytes==saved && calls==9);
                 put(source,0,uint32_t(1));put(source,0x130,uint32_t(0x19));
             }
             for(fail=1;fail<=9;++fail) {

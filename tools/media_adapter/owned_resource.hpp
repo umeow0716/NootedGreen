@@ -6803,6 +6803,17 @@ NGRN_VP_SLOT(platformSetup,0xa8);NGRN_VP_SLOT(sampleMode,0xb0);NGRN_VP_SLOT(form
 NGRN_VP_SLOT(platformPacket,0xc0);NGRN_VP_SLOT(platformSend,0xc8);NGRN_VP_SLOT(compression,0xd0);
 #undef NGRN_VP_SLOT
 static_assert(std::is_standard_layout_v<TglOwnedVpEntrySet> && sizeof(TglOwnedVpEntrySet)==0xd8);
+template<class Resolve>
+bool tglBindOwnedVpModeEntries(void* child,TglOwnedVpEntrySet& target) noexcept {
+    static_assert(noexcept(Resolve{}(child)),"VP mode binding resolver ABI");
+    auto* context=Resolve{}(child);
+    static_assert(noexcept(context->owns(child)),"VP mode binding ownership ABI");
+    if(!context || !context->owns(child) || target.sampleMode || target.formatMode) return false;
+    using Callback=TglOwnedVpModeCallbacks<Resolve>;
+    auto candidate=target;
+    candidate.sampleMode=&Callback::sampleMode;candidate.formatMode=&Callback::formatMode;
+    target=candidate;return true;
+}
 template<class Resolve> struct TglOwnedVpCompressionFormatCallback;
 struct TglOwnedVpAdmissionEntries {
     int (*extent)(void*,void*,void*,void*) noexcept=nullptr;
