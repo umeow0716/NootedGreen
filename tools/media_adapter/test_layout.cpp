@@ -17935,13 +17935,54 @@ int main() {
                         assert(init(pair.second())==(failSecond?TglOwnedBaseConstruction::ConstructedFailure:
                             TglOwnedBaseConstruction::ConstructedSuccess));
                         assert(pairCpu[0].live && pairCpu[1].live==!failSecond);
-                        std::array<uint8_t,0x928> renderer{};
+                        std::array<uint8_t,0x2cb8> renderer{};
                         const uintptr_t native920=0x9876;std::memcpy(renderer.data()+0x920,&native920,8);
                         const auto original=renderer;
                         // Constructed bases are NOT publishable without complete private tables.
                         assert(!pair.publish(renderer.data(),renderer.size(),1,
                             [](void*,uint64_t,uintptr_t,uintptr_t) noexcept {return true;}));
                         assert(renderer==original);
+                        if(!failSecond) {
+                            std::array<uintptr_t,TglOwnedVeboxVtable::count> nativeTable{};
+                            for(size_t i=0;i<nativeTable.size();++i) nativeTable[i]=base+0x2000+i*8;
+                            for(auto offset:TglOwnedVeboxVtable::missing) nativeTable[offset/8]=0;
+                            nativeTable[0]=base+0x12e240;nativeTable[1]=base+0x12e250;
+                            nativeTable[0x40/8]=base+0x12e9c0;nativeTable[0x48/8]=base+0x12ea30;
+                            nativeTable[0x170/8]=base+0x12aba0;nativeTable[0x180/8]=base+0x12b1d0;
+                            nativeTable[0x160/8]=base+0x12a740;nativeTable[0x168/8]=base+0x12ab10;
+                            nativeTable[0x150/8]=base+0x12a730;nativeTable[0x158/8]=base+0x8f380;
+                            nativeTable[0xd0/8]=nativeTable[0x1b8/8]=base+0x71e80;
+                            auto tableRead=[&](uintptr_t address,void* dst,size_t bytes) noexcept {
+                                if(address==base+0x757c88 && bytes==16) {
+                                    const std::array<uintptr_t,2> metadata{0,base+0x757ed0};
+                                    std::memcpy(dst,metadata.data(),bytes);return true;
+                                }
+                                if(address==base+0x757c98 && bytes==sizeof(nativeTable)) {
+                                    std::memcpy(dst,nativeTable.data(),bytes);return true;
+                                }
+                                return false;
+                            };
+                            // Actual child storage, but nonexecuted fixture hook addresses.
+                            std::array<uintptr_t,20> hooks{};
+                            for(size_t i=0;i<hooks.size();++i) hooks[i]=0x3000+i*16;
+                            hooks[15]=reinterpret_cast<uintptr_t>(&tglOwnedVeboxGen12CscSupported);
+                            auto qualify=[](uintptr_t image) noexcept {return image==base;};
+                            auto executable=[](uintptr_t,size_t) noexcept {return true;};
+                            assert(pair.first().owner().installPrivateVtable(hooks,tableRead,qualify,executable));
+                            assert(pair.second().owner().installPrivateVtable(hooks,tableRead,qualify,executable));
+                            const auto rendererAddress=reinterpret_cast<uintptr_t>(renderer.data());
+                            auto admitConfiguration=[&](uintptr_t address,uint64_t generation,uintptr_t config) noexcept {
+                                return address==rendererAddress && generation==1 && config==rendererAddress+0x2cb0;
+                            };
+                            assert(pair.first().owner().bindRendererConfiguration(rendererAddress,1,admitConfiguration));
+                            assert(pair.second().owner().bindRendererConfiguration(rendererAddress,1,admitConfiguration));
+                            auto admit=[](void*,uint64_t,uintptr_t,uintptr_t) noexcept {return true;};
+                            assert(pair.publish(renderer.data(),renderer.size(),1,admit));
+                            const auto published=renderer;
+                            assert(pair.canDetach(renderer.data(),1,admit) && renderer==published);
+                            assert(!pair.canDetach(renderer.data(),2,admit) && renderer==published);
+                            assert(pair.detach(renderer.data(),1,admit) && renderer==original);
+                        }
                         // Ownership fixture only: no native submit is called.
                         const auto result=assembly.withNativeCommandFrame(
                             reinterpret_cast<uintptr_t>(pairCpu[0].bytes.data()),0x1100,0x2200,0x3300,
