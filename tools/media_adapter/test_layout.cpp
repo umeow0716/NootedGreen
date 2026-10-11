@@ -11388,7 +11388,7 @@ int main() {
             void release(uintptr_t value) noexcept {assert(refs[value]);--refs[value];}
         };
         struct Owner {
-            const TglOwnedSurfaceStorage& shell;
+            TglOwnedSurfaceStorage& shell;
             bool borrowed=false;
             bool hasSurfaceLease(const TglOwnedSurfaceStorage& value) noexcept {return &shell==&value;}
             class SurfaceOwnerLease {
@@ -11397,6 +11397,7 @@ int main() {
                 explicit SurfaceOwnerLease(Owner& owner) noexcept {if(!owner.borrowed) {owner.borrowed=true;owner_=&owner;}}
                 ~SurfaceOwnerLease() {if(owner_) owner_->borrowed=false;}
                 const TglOwnedSurfaceStorage* storage() const noexcept {return owner_?&owner_->shell:nullptr;}
+                TglOwnedSurfaceStorage* metadataStorage() noexcept {return owner_?&owner_->shell:nullptr;}
             };
         };
         TglOwnedSurfaceStorage shell;
@@ -11428,6 +11429,11 @@ int main() {
                 assert(source.withSurface([](const auto&) noexcept {assert(false);return 0;})==5);
                 return 31;
             })==31);
+            assert(source.withMutableSurface([&](auto& original) noexcept {
+                assert(&original==&shell);
+                assert(source.withMutableSurface([](auto&) noexcept {assert(false);return 0;})==5);
+                return 17;
+            })==17);
         }
         assert(!owner.borrowed);for(auto ref:refs) assert(!ref);
         {

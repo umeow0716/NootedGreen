@@ -13460,6 +13460,18 @@ public:
         busy_=true;const int result=use(*surface);busy_=false;
         return hasSurfaceLease(*surface)?result:5;
     }
+    // Captured command producers normalize metadata on the ORIGINAL shell.
+    // Never cast away const or substitute allocated backing for frontend data.
+    // Resource identity remains pinned and is revalidated after the producer.
+    template<class Use> int withMutableSurface(Use use) noexcept {
+        static_assert(noexcept(use(std::declval<TglOwnedSurfaceStorage&>())) &&
+            std::is_same_v<decltype(use(std::declval<TglOwnedSurfaceStorage&>())),int>);
+        return withSurface([&](const auto& original) noexcept {
+            auto* metadata=lease_.metadataStorage();
+            if(metadata!=&original) return 5;
+            return use(*metadata);
+        });
+    }
 };
 #if defined(__APPLE__)
 struct TglDarwinTypedCfReferenceApi {
