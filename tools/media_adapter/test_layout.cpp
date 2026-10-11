@@ -7452,9 +7452,24 @@ static void testNativeResourceBoundary() {
                                                             using Callbacks=TglOwnedVeboxProducerCallbacks<Resolve>;
                                                             return tglWithCapturedVeboxCommandTransaction(linkedInput,childOwner,reportOwner,
                                                                 actualChild,report,current,[&](int32_t& remaining) noexcept -> int {
-                                                            return tglWithCapturedVeboxPreparedBuilder(linkedInput,childOwner,reportOwner,
+                                                            // The complete hook consumer owns this binding before
+                                                            // entering native setup/build. It must survive the call.
+                                                            Resolve outerProducer(actualChild,packets);
+                                                            assert(outerProducer.bound());
+                                                            Packets foreign{{},packets.leases,packets.input,
+                                                                packets.disableTemporalDenoise,packets.read,packets.admitSurface,
+                                                                packets.admitDi,packets.registerResource,packets.control};
+                                                            assert(tglWithCapturedVeboxPreparedBuilder(linkedInput,childOwner,reportOwner,
+                                                                actualChild,report,current,foreign,
+                                                                [](void*) noexcept -> int {assert(false);return 0;},
+                                                                [](void*) noexcept -> int {assert(false);return 0;})==5);
+                                                            const int prepared=tglWithCapturedVeboxPreparedBuilder(linkedInput,childOwner,reportOwner,
                                                                 actualChild,report,current,packets,[&](void* active) noexcept -> int {
                                                                     assert(active==actualChild && Resolve::get(active)==&packets);
+                                                                    assert(tglWithCapturedVeboxPreparedBuilder(linkedInput,childOwner,reportOwner,
+                                                                        actualChild,report,current,packets,
+                                                                        [](void*) noexcept -> int {assert(false);return 0;},
+                                                                        [](void*) noexcept -> int {assert(false);return 0;})==5);
                                                                     remaining=128;++setups;return 0;
                                                                 },[&](void* active) noexcept -> int {
                                                                     assert(setups==1);++builds;
@@ -7467,6 +7482,8 @@ static void testNativeResourceBoundary() {
                                                                     assert(linkedInput.hasSurfaceLease(current) && stmmApi.references==2);
                                                                     assert(!statisticsFixture.releases);return 0;
                                                                 });
+                                                            assert(Resolve::get(actualChild)==&packets);
+                                                            return prepared;
                                                                 },[&](int status,int32_t remaining) noexcept -> bool {
                                                                     assert(status==(input.iecp?5:0) && remaining==128);
                                                                     assert(linkedInput.hasSurfaceLease(current) && stmmApi.references==2);

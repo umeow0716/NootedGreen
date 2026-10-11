@@ -15803,12 +15803,20 @@ int tglWithCapturedVeboxPreparedBuilder(SourceOwner& sourceOwner,ChildOwner& chi
             });
     };
     return guarded([&](void* active) noexcept -> int {
-        TglOwnedVeboxScopedContext<Context> scope(active,context);
-        if(!scope.bound()) return 5;
-        return context.pass.withBuilder([&]() noexcept -> int {
-            const int configured=guarded(setup);
-            return configured?configured:guarded(build);
-        });
+        const auto run=[&]() noexcept -> int {
+            return context.pass.withBuilder([&]() noexcept -> int {
+                const int configured=guarded(setup);
+                return configured?configured:guarded(build);
+            });
+        };
+        // Complete frame hooks already bind this exact producer. Borrow that
+        // binding without clearing it on return; the pass still rejects an
+        // active builder. A foreign context/child must never be substituted.
+        using Resolve=TglOwnedVeboxScopedContext<Context>;
+        if(auto* existing=Resolve::get(active))
+            return existing==&context ? run() : 5;
+        Resolve scope(active,context);
+        return scope.bound()?run():5;
     });
 }
 
