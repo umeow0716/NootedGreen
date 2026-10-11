@@ -14200,6 +14200,42 @@ public:
 using TglDarwinVeboxAuxiliaryFrameStorage=TglNativeVeboxAuxiliaryFrameStorage<TglDarwinStmmSurfaceApi>;
 #endif
 
+// Own both native allocation alternatives for each captured FFDi/FFDN slot.
+// Switching format does not destroy the inactive alternative: only enclosing
+// frame retirement may release it. Prior ba8 is selected from the actual held
+// slot binding by the caller; history1b8 remains descriptor-only, not backing.
+template<class Api> class TglNativeVeboxSurfaceFrameStorage {
+    TglNativeVeboxAuxiliaryFrameStorage<Api> auxiliary_;
+    TglNativeResourceBackend backend_;
+    using Surface=TglOwnedAllocatedSurface<TglNativeResourceBackend>;
+    std::array<Surface,4> ffdi_;
+    std::array<Surface,2> ffdn_;
+    std::array<TglOwnedDescriptorOnlySurface,4> ffdiDescriptors_;
+    std::array<TglOwnedDescriptorOnlySurface,2> ffdnDescriptors_;
+    TglOwnedDescriptorOnlySurface history_;
+public:
+    template<class... Args>
+    TglNativeVeboxSurfaceFrameStorage(const TglNativeResourceBinding& binding,
+        uint64_t pageSize,const TglNativeBufferFillBinding& fill,Args&&... args) noexcept
+        :auxiliary_(binding,pageSize,fill,std::forward<Args>(args)...),
+         backend_(binding,1,pageSize),
+         ffdi_{Surface(backend_),Surface(backend_),Surface(backend_),Surface(backend_)},
+         ffdn_{Surface(backend_),Surface(backend_)} {}
+    TglNativeVeboxSurfaceFrameStorage(const TglNativeVeboxSurfaceFrameStorage&)=delete;
+    TglNativeVeboxSurfaceFrameStorage& operator=(const TglNativeVeboxSurfaceFrameStorage&)=delete;
+    auto& auxiliary() noexcept {return auxiliary_;}
+    auto& ffdiDescriptors() noexcept {return ffdiDescriptors_;}
+    auto& ffdnDescriptors() noexcept {return ffdnDescriptors_;}
+    auto& history() noexcept {return history_;}
+    auto ffdiBacked() noexcept {
+        return std::array<Surface*,4>{&ffdi_[0],&ffdi_[1],&ffdi_[2],&ffdi_[3]};
+    }
+    auto ffdnBacked() noexcept {return std::array<Surface*,2>{&ffdn_[0],&ffdn_[1]};}
+};
+#if defined(__APPLE__)
+using TglDarwinVeboxSurfaceFrameStorage=TglNativeVeboxSurfaceFrameStorage<TglDarwinStmmSurfaceApi>;
+#endif
+
 // Standalone statistics tail: preceding FFDi/FFDN/STMM scopes remain owned by
 // the caller. Do not allocate those groups again merely to obtain statistics.
 // Synchronous only: the consumer must not submit GPU work without a separate

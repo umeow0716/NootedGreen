@@ -10946,6 +10946,27 @@ int main() {
         assert(!writableCalls && !publications && !auxiliary.statistics().layout().bytes);
         auxiliary.retention().observe(TglOwnedVeboxCommandTransactionResult{31,31,true,false});
         assert(auxiliary.retention()());
+        using FrameSurfaces=TglNativeVeboxSurfaceFrameStorage<DeniedSurfaceApi>;
+        static_assert(!std::is_move_constructible_v<FrameSurfaces>);
+        FrameSurfaces frame(TglNativeResourceBinding{},4096,TglNativeBufferFillBinding{});
+        const auto ffdi=frame.ffdiBacked();const auto ffdn=frame.ffdnBacked();
+        std::array<const void*,13> addresses{};size_t used=0;
+        auto unique=[&](const void* address) {
+            assert(address);
+            for(size_t i=0;i<used;++i) assert(addresses[i]!=address);
+            assert(used<addresses.size());addresses[used++]=address;
+        };
+        for(auto* owner:ffdi) {
+            unique(owner->surfaceBinding());assert(owner->ensure(keys[0])==5);
+        }
+        for(auto* owner:ffdn) {
+            unique(owner->surfaceBinding());assert(owner->ensure(keys[0])==5);
+        }
+        for(auto& owner:frame.ffdiDescriptors()) unique(owner.surfaceBinding());
+        for(auto& owner:frame.ffdnDescriptors()) unique(owner.surfaceBinding());
+        unique(frame.history().surfaceBinding());assert(used==13);
+        assert(frame.ffdiBacked()==ffdi && frame.ffdnBacked()==ffdn);
+        assert(!frame.auxiliary().retention()());
     }
     {
         std::array<uint8_t,0x12f8> context{};
