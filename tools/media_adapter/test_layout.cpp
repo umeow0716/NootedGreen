@@ -10763,12 +10763,21 @@ int main() {
             using SendEntry=int(*)(void*,void*,void*) noexcept;
             SetupEntry escapedSetup=nullptr;SendEntry escapedSend=nullptr;
             void* callbackChild=nullptr;int source=0,data=0,command=0;
+            auto callbackPrepared=prepared;callbackPrepared.color.modes.state.at923=1;
             for(unsigned mode=0;mode<11;++mode) {
                 unsigned stages=0,emissions=0;
                 TglOwnedSfcStateParameters<decltype(stateCpu)>* observedState=nullptr;
                 TglOwnedVpCscCache callbackCsc;
                 TglOwnedSfcCommandParameters callbackCommands;
-                const int result=graph.withPreparedCallbackPass(prepared,
+                void(*escapedGraphCsc)(void*,void*,void*) noexcept=nullptr;
+                auto rejectCsc=[&](void* child) noexcept {
+                    return graph.withCscProducerEntries(child,callbackCommands.ief,callbackCsc,3,5,0,
+                        [](uintptr_t,void*,size_t) noexcept {assert(false);return false;},
+                        [](TglCscCoefficients&,uint32_t,uint32_t) noexcept {assert(false);return false;},
+                        [](void*,auto,uint8_t*) noexcept {assert(false);return 0;});
+                };
+                assert(rejectCsc(nullptr)==5);
+                const int result=graph.withPreparedCallbackPass(callbackPrepared,
                     0x6000,0x4000,0x2000,reference,&source,&data,
                     [&](void*,const auto&,auto& packet) noexcept -> int {
                         observedState=&packet;assert(!packet.hasParametersLease());
@@ -10789,20 +10798,28 @@ int main() {
                         uintptr_t stateAddress=0;
                         std::memcpy(&stateAddress,static_cast<uint8_t*>(child)+0x938,8);
                         assert(stateAddress==reinterpret_cast<uintptr_t>(stateCpu.bytes.data()));
-                        return tglWithOwnedSfcCscCommands(callbackCommands,callbackCsc,true,3,5,0,
+                        assert(rejectCsc(&command)==5);
+                        const uint8_t beforeCsc=stateCpu.bytes[0x88];
+                        const int cscResult=graph.withCscProducerEntries(child,callbackCommands.ief,callbackCsc,3,5,0,
                             [](uintptr_t,void*,size_t) noexcept {assert(false);return false;},
                             [](TglCscCoefficients& coefficients,uint32_t from,uint32_t to) noexcept {
                                 assert(from==3 && to==5);coefficients.matrix[0]=7;return true;
                             },
-                            [&](auto& packet) noexcept -> int {
+                            [&](void* admitted,auto csc,uint8_t* packet) noexcept -> int {
+                                escapedGraphCsc=csc;
                                 assert(observedState && observedState->hasParametersLease());
+                                assert(admitted==child && packet==stateCpu.bytes.data() && packet[0x88]==beforeCsc);
+                                csc(admitted,packet,callbackCommands.ief.data());
+                                assert(packet[0x88]==1);
                                 uintptr_t coefficients=0;
-                                std::memcpy(&coefficients,packet.ief.data()+0x28,8);
+                                std::memcpy(&coefficients,callbackCommands.ief.data()+0x28,8);
                                 assert(coefficients && *reinterpret_cast<const float*>(coefficients)==7);
                                 assert(!callbackCsc.reset());
                                 graph.reset();assert(stateCpu.live && avsCpu.live);
                                 return mode==6?-17:0;
                             });
+                        assert(stateCpu.bytes[0x88]==beforeCsc);
+                        return cscResult;
                     },
                     [&](void* child,SetupEntry setup,SendEntry send) noexcept -> int {
                         escapedSetup=setup;escapedSend=send;callbackChild=child;
@@ -10838,6 +10855,12 @@ int main() {
                     assert(!escaped);
                 }
                 assert(callbackCsc.reset());
+                assert(rejectCsc(callbackChild)==5);
+                if(escapedGraphCsc) {
+                    const auto savedIef=callbackCommands.ief;const auto savedState=stateCpu.bytes;
+                    escapedGraphCsc(callbackChild,stateCpu.bytes.data(),callbackCommands.ief.data());
+                    assert(callbackCommands.ief==savedIef && stateCpu.bytes==savedState);
+                }
                 assert(escapedSetup(callbackChild,&source,reinterpret_cast<void*>(0x2000),&data)==5);
                 assert(escapedSend(callbackChild,&data,&command)==5);
             }

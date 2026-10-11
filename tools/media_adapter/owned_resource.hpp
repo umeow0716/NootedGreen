@@ -6933,15 +6933,16 @@ template<class Resolve> struct TglOwnedVpCscCallback {
 };
 template<size_t StateSize> class TglOwnedVpCscProducerContext {
     static_assert(StateSize==0xb8 || StateSize==0xf8,"VP CSC state extent");
-    void* child_;std::array<uint8_t,64>& ief_;std::array<uint8_t,StateSize>& state_;
+    void* child_;std::array<uint8_t,64>& ief_;uint8_t* state_;
     const TglCscCoefficients* coefficients_;
     std::array<uint8_t,64> savedIef_;uint8_t savedState_;
     bool valid_=true,called_=false,applied_=false,invalid_=false;
 public:
     TglOwnedVpCscProducerContext(void* child,std::array<uint8_t,64>& ief,
-        std::array<uint8_t,StateSize>& state,const TglCscCoefficients* coefficients) noexcept
+        uint8_t* state,const TglCscCoefficients* coefficients) noexcept
         :child_(child),ief_(ief),state_(state),coefficients_(coefficients),
-         savedIef_(ief),savedState_(state[0x88]) {
+         savedIef_(ief),savedState_(state?state[0x88]:0) {
+        valid_=child && state;
         if(coefficients_) for(size_t offset:{size_t(0x28),size_t(0x30),size_t(0x38)}) {
             uintptr_t occupied=0;std::memcpy(&occupied,ief_.data()+offset,8);
             if(occupied) valid_=false;
@@ -6955,7 +6956,7 @@ public:
     bool valid() const noexcept {return valid_;}
     bool owns(void* child) const noexcept {return valid_ && child && child==child_;}
     void csc(void* state,void* ief) noexcept {
-        if(state!=state_.data() || ief!=ief_.data()) {invalid_=true;return;}
+        if(state!=state_ || ief!=ief_.data()) {invalid_=true;return;}
         called_=true;
         if(!coefficients_ || applied_ || invalid_) return;
         const std::array<uintptr_t,3> pointers{
@@ -6971,9 +6972,10 @@ public:
 // pointers remain borrowed until Use returns, then restoration precedes
 // release of the cache lease. No native object or GPU lifetime is implied.
 template<size_t StateSize,class Read,class Produce,class Use>
-int tglWithOwnedVpCscProducer(TglOwnedVpSfcCallerStorage& vp,std::array<uint8_t,64>& ief,
-    std::array<uint8_t,StateSize>& state,TglOwnedVpCscCache& cache,uint32_t from,uint32_t to,
+int tglWithOwnedVpCscProducerSpan(TglOwnedVpSfcCallerStorage& vp,std::array<uint8_t,64>& ief,
+    uint8_t* state,TglOwnedVpCscCache& cache,uint32_t from,uint32_t to,
     uintptr_t sourceA8,Read read,Produce produce,Use use) noexcept {
+    if(!state || reinterpret_cast<uintptr_t>(state)>UINTPTR_MAX-StateSize) return 5;
     auto invoke=[&](const TglCscCoefficients* coefficients) noexcept {
         using Context=TglOwnedVpCscProducerContext<StateSize>;
         using Entry=TglOwnedVpCscCallback<TglOwnedVpSfcResolve<Context>>;
@@ -6990,6 +6992,13 @@ int tglWithOwnedVpCscProducer(TglOwnedVpSfcCallerStorage& vp,std::array<uint8_t,
     return cache.withCoefficients([&](const TglCscCoefficients& coefficients) noexcept {
         return invoke(&coefficients);
     });
+}
+template<size_t StateSize,class Read,class Produce,class Use>
+int tglWithOwnedVpCscProducer(TglOwnedVpSfcCallerStorage& vp,std::array<uint8_t,64>& ief,
+    std::array<uint8_t,StateSize>& state,TglOwnedVpCscCache& cache,uint32_t from,uint32_t to,
+    uintptr_t sourceA8,Read read,Produce produce,Use use) noexcept {
+    return tglWithOwnedVpCscProducerSpan<StateSize>(vp,ief,state.data(),cache,
+        from,to,sourceA8,read,produce,use);
 }
 // Qualified VP +40=1e0ca0..1e0dcb. Its +a8=1e0c80 is a proven native
 // no-op, not an unresolved hook. +90 failure prevents AVS/IEF; AVS failure
@@ -9278,6 +9287,22 @@ public:
                     static_assert(noexcept(use(child,entries,allocate,release)),
                         "leased VP assembly ABI");
                     return use(child,entries,allocate,release);
+                });
+        });
+    }
+    // Only the actual currently published state packet may receive VP+a0.
+    // The enclosing setup/send owner retains the graph/frame lease; no copy
+    // or unrelated packet is admitted as native state938.
+    template<class Read,class Produce,class Use>
+    int withCscProducerEntries(void* child,std::array<uint8_t,64>& ief,
+        TglOwnedVpCscCache& cache,uint32_t from,uint32_t to,uintptr_t sourceA8,
+        Read read,Produce produce,Use use) noexcept {
+        if(!ready_ || !busy_ || child!=storage_.bytes.data()) return 5;
+        return state_.withPublishedVpParameters(storage_,[&](const uint8_t* state) noexcept {
+            return tglWithOwnedVpCscProducerSpan<0xf8>(storage_,ief,const_cast<uint8_t*>(state),cache,
+                from,to,sourceA8,read,produce,[&](void* admitted,auto csc) noexcept {
+                    static_assert(noexcept(use(admitted,csc,const_cast<uint8_t*>(state))),"VP CSC graph consumer ABI");
+                    return use(admitted,csc,const_cast<uint8_t*>(state));
                 });
         });
     }
