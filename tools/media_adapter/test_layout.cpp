@@ -13292,7 +13292,30 @@ int main() {
                     assert(!frame.vpBound());
                     assert(frame.initializeVp(binding,0x7000,0x8000,0x3000,noRead,1,0)==5);
                     assert(!stateCpu.live && !avsCpu.live);
-                    assert(frame.initializeVp(binding,resources.context,0x8000,0x3000,noRead,1,0)==0);
+                    static uintptr_t parentOsFixture=0;
+                    parentOsFixture=resources.context;
+                    auto parentRead=+[](uintptr_t address,void* output,size_t size) noexcept {
+                        uintptr_t value=0;
+                        if(size!=8) return false;
+                        if(address==0x10000+0x128) value=0x20000;
+                        else if(address==0x10000+0x12f0 || address==0x8000) value=parentOsFixture;
+                        else if(address==0x20000+0x50) value=0x30000;
+                        else if(address==parentOsFixture+8) value=0x30000+0x48;
+                        else return false;
+                        std::memcpy(output,&value,8);return true;
+                    };
+                    auto parentAdmit=[&](uintptr_t address,size_t size) noexcept {
+                        return (address==0x10000 && size==0x12f8) ||
+                            (address==0x20000 && size==0x58) ||
+                            (address==0x30000 && size==0x50) ||
+                            (address==resources.context && size==0x10) ||
+                            (address==0x8000 && size==8);
+                    };
+                    assert(frame.initializeVpFromContext(binding,0x10000,0x20001,0x8000,
+                        0x3000,parentRead,parentAdmit,1,0)==5);
+                    assert(!stateCpu.live && !avsCpu.live);
+                    assert(frame.initializeVpFromContext(binding,0x10000,0x20000,0x8000,
+                        0x3000,parentRead,parentAdmit,1,0)==0);
                     assert(frame.vpBound());
                     assert(frame.initializeVp(binding,resources.context,0x8000,0x3000,noRead,1,0)==5);
                     assert(frame.withVpResources([&](auto& ownerGraph,auto& vp,auto& lines) noexcept {

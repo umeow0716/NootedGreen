@@ -15479,6 +15479,20 @@ public:
     TglNativeVeboxVpFrameBacking(const TglNativeVeboxVpFrameBacking&)=delete;
     TglNativeVeboxVpFrameBacking& operator=(const TglNativeVeboxVpFrameBacking&)=delete;
     auto& command() noexcept {return command_;}
+    // Caller holds this physical/context generation lease through destruction.
+    // Resolving these borrowed addresses does not itself retain native objects.
+    template<class Binding,class Read,class Admit>
+    int initializeVpFromContext(const Binding& binding,uintptr_t nativeContext,
+        uintptr_t physical,uintptr_t renderHal,uintptr_t mhw,Read read,Admit admit,
+        uint32_t channel,uintptr_t performance) {
+        TglNativeVeboxParentView parent;
+        uintptr_t borrowedOs=0;
+        if(!physical || !parent.resolve(nativeContext,read,admit) ||
+           parent.physical!=physical || parent.os!=resources_.context ||
+           !renderHal || renderHal>UINTPTR_MAX-8 || !admit(renderHal,size_t{8}) ||
+           !read(renderHal,&borrowedOs,8) || borrowedOs!=parent.os) return 5;
+        return initializeVp(binding,parent.os,renderHal,mhw,read,channel,performance);
+    }
     template<class Binding,class Read>
     int initializeVp(const Binding& binding,uintptr_t os,uintptr_t renderHal,
         uintptr_t mhw,Read read,uint32_t channel,uintptr_t performance) {
