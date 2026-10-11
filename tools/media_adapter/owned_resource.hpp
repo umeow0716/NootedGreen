@@ -10479,6 +10479,37 @@ bool tglSelectOwnedFfdiCompressionFromReport(TglOwnedFfdiCompressionSelection& o
         child1ba9,format,tile,supports);
     return true;
 }
+// ICL1f76b0 output parameters feed1f7b6c's allocation directly. Keep the
+// exact Darwin format values (3/d), not Linux enum numbers. Pipe1's format
+// producer is supplied by a held owned SFC child; never read ICL child+99c
+// through a TGL object. Publish only after every report/source read succeeds.
+template<class Read,class SfcFormat,class Supports>
+bool tglPrepareOwnedFfdiRequestFromReport(TglOwnedFfdiAllocationRequest& output,
+    const TglOwnedSurfaceStorage& source,uintptr_t child,uintptr_t execution,
+    Read read,SfcFormat sfcFormat,Supports supports) noexcept {
+    static_assert(noexcept(read(uintptr_t{},static_cast<void*>(nullptr),size_t{})) &&
+        noexcept(sfcFormat(std::declval<uint32_t&>())),"allocation producer ABI");
+    if(!child || child>UINTPTR_MAX-0x1ba9 || !execution || execution>UINTPTR_MAX-0xa0f)
+        return false;
+    uintptr_t actualReport=0,actualSource=0;std::array<uint8_t,2> flags{};
+    uint32_t pipe=0,format=0,tile=0;uint8_t compression=0;
+    if(!read(child+0x88,&actualReport,8) || actualReport!=execution ||
+        !read(child+0x1b0,&actualSource,8) || actualSource!=reinterpret_cast<uintptr_t>(&source) ||
+        !read(execution+0x12,flags.data(),flags.size()) ||
+        !read(execution+0xa0c,&pipe,4) || pipe>2 ||
+        !read(child+0x1ba9,&compression,1)) return false;
+    if(flags[0]&1) {format=3;tile=1;}
+    else if(flags[1]&1) {format=0xd;tile=1;}
+    else {
+        if(pipe==1) {if(!sfcFormat(format)) return false;}
+        else std::memcpy(&format,source.prefix.data()+0x130,4);
+        std::memcpy(&tile,source.prefix.data()+0xe4,4);
+    }
+    TglOwnedFfdiCompressionSelection selected;
+    if(!tglSelectOwnedFfdiCompressionFromReport(selected,source,child,execution,
+        (compression&1)!=0,format,tile,read,supports)) return false;
+    return tglPrepareOwnedFfdiAllocationRequest(source,format,tile,selected,output);
+}
 template<class Read>
 bool tglReadOwnedStateExecution(TglOwnedStateInputs& output, uintptr_t execution,
                                 bool diArgument, Read read) {

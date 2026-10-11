@@ -15556,8 +15556,12 @@ int main() {
         {
             constexpr uintptr_t child=0x5000;
             auto linked=address;
+            uintptr_t linkedSource=reinterpret_cast<uintptr_t>(&source);
+            uint8_t childCompression=1;
             auto childRead=[&](uintptr_t p,void* out,size_t n) {
                 if(p==child+0x88 && n==8){std::memcpy(out,&linked,8);return true;}
+                if(p==child+0x1b0 && n==8){std::memcpy(out,&linkedSource,8);return true;}
+                if(p==child+0x1ba9 && n==1){std::memcpy(out,&childCompression,1);return true;}
                 return read(p,out,n);
             };
             bool argument=false;
@@ -15612,6 +15616,44 @@ int main() {
                 true,0x19,1,allocationRead,supports));
             assert(preserved.compressed && preserved.mode==7);
             linked=address;
+            {
+                const uint32_t width=17,height=19,format=0x19,tile=2;
+                std::memcpy(source.prefix.data()+0xd8,&width,4);
+                std::memcpy(source.prefix.data()+0xdc,&height,4);
+                std::memcpy(source.prefix.data()+0x130,&format,4);
+                std::memcpy(source.prefix.data()+0xe4,&tile,4);
+                unsigned sfcCalls=0;bool sfcAllowed=true;
+                auto sfc=[&](uint32_t& value) noexcept {
+                    ++sfcCalls;value=0x3d;return sfcAllowed;
+                };
+                for(unsigned mode=0;mode<4;++mode) for(uint32_t selectedPipe=0;selectedPipe<3;++selectedPipe) {
+                    execution[0x12]=uint8_t(0x80|(mode&1));
+                    execution[0x13]=uint8_t(0x80|((mode>>1)&1));
+                    std::memcpy(execution.data()+0xa0c,&selectedPipe,4);
+                    const unsigned before=sfcCalls;
+                    TglOwnedFfdiAllocationRequest request;
+                    assert(tglPrepareOwnedFfdiRequestFromReport(request,source,child,address,
+                        allocationRead,sfc,supports));
+                    const uint32_t expected=mode&1?3:mode&2?0xd:selectedPipe==1?0x3d:format;
+                    assert(request.key.width==width && request.key.height==height);
+                    assert(request.key.format==expected && request.key.tile==(mode?1u:tile));
+                    assert(request.kind==(expected==0x3d?TglOwnedFfdiAllocationKind::NativeBacking:
+                        TglOwnedFfdiAllocationKind::DescriptorOnly));
+                    assert(sfcCalls-before==unsigned(!mode&&selectedPipe==1));
+                }
+                execution[0x12]=0;execution[0x13]=0;
+                const uint32_t sfcPipe=1;std::memcpy(execution.data()+0xa0c,&sfcPipe,4);
+                TglOwnedFfdiAllocationRequest request;request.key.width=123;
+                sfcAllowed=false;
+                assert(!tglPrepareOwnedFfdiRequestFromReport(request,source,child,address,
+                    allocationRead,sfc,supports) && request.key.width==123);
+                linkedSource=0;
+                assert(!tglPrepareOwnedFfdiRequestFromReport(request,source,child,address,
+                    allocationRead,sfc,supports) && request.key.width==123);
+                linkedSource=reinterpret_cast<uintptr_t>(&source);
+                execution[0x12]=1;
+                std::memcpy(execution.data()+0xa0c,&pipe,4);
+            }
             execution[0xb]=0x81;execution[0x13]=2;execution[0xf]=1;
         }
         assert(tglReadOwnedStateExecution(inputs,address,true,read));
