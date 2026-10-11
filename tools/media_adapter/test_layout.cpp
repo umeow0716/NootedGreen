@@ -7648,6 +7648,39 @@ int main() {
         const auto completedReads=reads;
         assert(escaped.extent(vp.bytes.data(),reinterpret_cast<void*>(0x1000),
             reinterpret_cast<void*>(0x2000),reinterpret_cast<void*>(0x3000))==0 && reads==completedReads);
+        struct PipePolicy {
+            bool directMode=false,available=true,tone=false,fill=false,ok=true;
+            bool bypass() noexcept {return true;}
+            bool rejectDi() noexcept {return false;}
+            bool rejectLut() noexcept {return false;}
+            bool direct() noexcept {return directMode;}
+            bool twoPass() noexcept {return false;}
+            bool sfcAvailable() noexcept {return available;}
+            bool hdr() noexcept {return tone;}
+            bool fastFill() noexcept {return fill;}
+            bool healthy() noexcept {return ok;}
+            // No sfc(): selection must use the actual scoped owned VP18.
+        } pipePolicy;
+        uint8_t comp=0x80;uint32_t pipe=99;
+        auto select=[&]() noexcept {
+            return tglSelectOwnedVpOutputPipe(vp,read,pipePolicy,
+                reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x2000),
+                reinterpret_cast<void*>(0x3000),comp,pipe);
+        };
+        assert(select() && pipe==1 && comp==0 && reads>completedReads);
+        settings[0x90]=0;
+        assert(select() && pipe==0 && comp==1); // native admission rejection, not status failure
+        pipePolicy.fill=true;
+        assert(select() && pipe==2 && comp==0); // enclosing fast-fill after SFC rejection
+        settings[0x90]=1;pipePolicy.fill=false;pipePolicy.directMode=true;
+        unsigned before=reads;
+        assert(select() && pipe==2 && comp==0 && reads==before);
+        pipePolicy.directMode=false;pipePolicy.available=false;
+        assert(select() && pipe==0 && comp==1 && reads==before);
+        pipePolicy.available=true;pipePolicy.tone=true;
+        assert(select() && pipe==0 && comp==1 && reads==before);
+        pipePolicy.ok=false;comp=0x80;pipe=99;
+        assert(!select() && comp==0x80 && pipe==99 && reads==before);
     }
     {
         TglOwnedVpRegionInput in;

@@ -5952,8 +5952,8 @@ template<class Resolve> struct TglOwnedVpExtentCallback {
 // and gen12/vphal_render_vebox_g12_base.cpp2495 establish this donor role;
 // exact ICL1de4df..1de4f7 returns DWORD composition0/SFC1 after VP68.
 // Do not import the Linux decompression tail: this exact native return has
-// no such call. The enclosing renderer's actual pipe-selection call remains
-// to be qualified before these entries can be published in a full vtable.
+// no such call. Caller1fb55e qualifies the pipe-selection edge below;
+// this still does not authorize publication of an incomplete full vtable.
 struct TglOwnedVpAdmissionEntries {
     int (*extent)(void*,void*,void*,void*) noexcept=nullptr;
     bool (*eligible)(void*,void*,void*,void*) noexcept=nullptr;
@@ -5988,6 +5988,42 @@ int tglWithOwnedVpAdmissionEntries(TglOwnedVpSfcCallerStorage& vp,Read& read,Use
     const TglOwnedVpAdmissionEntries entries{&Extent::admit,&Admission::eligible,&Admission::pair,
         &Admission::input,&Admission::output,&Admission::dimensions};
     return use(child,entries);
+}
+
+// ICL primary794210+68=1fb140, caller1fb55e: child80 VP18 receives
+// (source, renderParams98 target, renderParams). Only the SFC branch invokes
+// it; direct/composition/fast-fill remain the enclosing Gen12 policy's job.
+// Owner pins all three inputs and policy dependencies through this scope.
+template<class Policy> struct TglOwnedVpOutputPipePolicy {
+    Policy& policy;
+    const TglOwnedVpAdmissionEntries& entries;
+    void* child;void* source;void* target;void* parameters;
+    bool bypass() noexcept {return policy.bypass();}
+    bool rejectDi() noexcept {return policy.rejectDi();}
+    bool rejectLut() noexcept {return policy.rejectLut();}
+    bool direct() noexcept {return policy.direct();}
+    bool twoPass() noexcept {return policy.twoPass();}
+    bool sfcAvailable() noexcept {return policy.sfcAvailable();}
+    bool hdr() noexcept {return policy.hdr();}
+    bool fastFill() noexcept {return policy.fastFill();}
+    bool healthy() noexcept {return policy.healthy();}
+    uint32_t sfc() noexcept {
+        return static_cast<uint32_t>(entries.extent(child,source,target,parameters));
+    }
+};
+template<class Read,class Policy>
+bool tglSelectOwnedVpOutputPipe(TglOwnedVpSfcCallerStorage& vp,Read& read,Policy& policy,
+    void* source,void* target,void* parameters,uint8_t& compNeeded,uint32_t& output) noexcept {
+    static_assert(noexcept(policy.bypass()) && noexcept(policy.rejectDi()) &&
+        noexcept(policy.rejectLut()) && noexcept(policy.direct()) && noexcept(policy.twoPass()) &&
+        noexcept(policy.sfcAvailable()) && noexcept(policy.hdr()) &&
+        noexcept(policy.fastFill()) && noexcept(policy.healthy()),"owned pipe policy must not throw");
+    if(!source || !target || !parameters) return false;
+    return tglWithOwnedVpAdmissionEntries(vp,read,
+        [&](void* child,const TglOwnedVpAdmissionEntries& entries) noexcept {
+            TglOwnedVpOutputPipePolicy<Policy> scoped{policy,entries,child,source,target,parameters};
+            return tglSelectGen12VeboxOutputPipe(scoped,compNeeded,output)?0:5;
+        })==0;
 }
 
 // Bounded slot28 geometry acquisition. Read authorizes every surface/MHW
