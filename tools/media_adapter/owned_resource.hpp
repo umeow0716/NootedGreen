@@ -8137,6 +8137,45 @@ int tglRunOwnedVeboxAllocationQueriedStages(QueryFfdi ffdiEnabled,QuerySecondary
     if(stmmEnabled() && (status=stmm())) return status;
     return statistics();
 }
+// One source/child/execution frame covers every allocation stage. Revalidate
+// the captured identities around each query and stage, not only at frame exit:
+// a stage must never hand an invalidated child to the next stage. Stage owners
+// still supply qualified allocation policy and explicit captured source views.
+template<class SurfaceOwner,class ChildOwner,class ExecutionOwner,class QueryFfdi,
+    class QuerySecondary,class QueryPipe,class QueryStmm,class Ffdi,class Secondary,
+    class Ffdn,class Rectangle,class Stmm,class Statistics>
+int tglWithOwnedVeboxAllocationStages(SurfaceOwner& sourceOwner,ChildOwner& childOwner,
+    ExecutionOwner& executionOwner,QueryFfdi ffdiEnabled,QuerySecondary hasSecondary,
+    QueryPipe pipe,QueryStmm stmmEnabled,Ffdi ffdi,Secondary secondary,Ffdn ffdn,
+    Rectangle rectangle,Stmm stmm,Statistics statistics) noexcept {
+    return tglWithOwnedVeboxAllocationFrame(sourceOwner,childOwner,executionOwner,
+        [&](void* child,uintptr_t execution,const auto& source) noexcept {
+            const auto stage=[&](auto& invoke) noexcept {
+                return tglRunCapturedVeboxAllocation(sourceOwner,childOwner,executionOwner,
+                    child,execution,source,invoke);
+            };
+            const auto gate=[&](auto& query,auto& value) noexcept {
+                auto read=[&](void* c,uintptr_t e,const auto& s) noexcept {
+                    static_assert(noexcept(query(c,e,s)),"allocation frame query ABI");
+                    static_assert(std::is_same_v<decltype(query(c,e,s)),
+                        std::remove_reference_t<decltype(value)>>,"allocation frame query result ABI");
+                    value=query(c,e,s);return 0;
+                };
+                return stage(read);
+            };
+            bool enabled=false;uint32_t selectedPipe=0;int status=0;
+            if((status=gate(ffdiEnabled,enabled))) return status;
+            if(enabled && (status=stage(ffdi))) return status;
+            if((status=gate(hasSecondary,enabled))) return status;
+            if(enabled && (status=stage(secondary))) return status;
+            if((status=stage(ffdn))) return status;
+            if((status=gate(pipe,selectedPipe))) return status;
+            if(selectedPipe==2 && (status=stage(rectangle))) return status;
+            if((status=gate(stmmEnabled,enabled))) return status;
+            if(enabled && (status=stage(stmm))) return status;
+            return stage(statistics);
+        });
+}
 // Convenience only for immutable, already-qualified policy inputs. Runtime
 // frame producers use the queried form so later gates observe earlier writes.
 template<class Ffdi,class Secondary,class Ffdn,class Rectangle,class Stmm,class Statistics>

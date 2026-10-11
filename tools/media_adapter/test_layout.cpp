@@ -5586,6 +5586,50 @@ static void testNativeResourceBoundary() {
                 uintptr_t allocationSource=reinterpret_cast<uintptr_t>(surface);
                 std::memcpy(child.data()+0x1b0,&allocationSource,8);
                 assert(tglWithOwnedVeboxAllocationFrame(owner,childOwner,execution,allocateFrame)==31 && allocationFrames==1);
+                for(unsigned fail=0;fail<=6;++fail) {
+                    unsigned calls=0;
+                    const auto check=[&](void* c,uintptr_t e,const auto& s) noexcept {
+                        assert(c==child.data() && execution.hasExecutionLease(e));
+                        assert(&s==surface && owner.hasSurfaceLease(s));
+                        assert(childOwner.hasPrivateChildLease(reinterpret_cast<uintptr_t>(c)));
+                    };
+                    const auto yes=[&](void* c,uintptr_t e,const auto& s) noexcept {
+                        check(c,e,s);return true;
+                    };
+                    const auto pipe=[&](void* c,uintptr_t e,const auto& s) noexcept -> uint32_t {
+                        check(c,e,s);return 2;
+                    };
+                    const auto stage=[&](void* c,uintptr_t e,const auto& s) noexcept {
+                        check(c,e,s);++calls;
+                        return calls==fail?31:0;
+                    };
+                    assert(tglWithOwnedVeboxAllocationStages(owner,childOwner,execution,
+                        yes,yes,pipe,yes,stage,stage,stage,stage,stage,stage)==(fail?31:0));
+                    assert(calls==(fail?fail:6));
+                    assert(!childOwner.busy && !execution.busy && owner.surface()==surface);
+                }
+                {
+                    unsigned later=0;
+                    const auto yes=[](void*,uintptr_t,const auto&) noexcept {return true;};
+                    const auto laterQuery=[&](void*,uintptr_t,const auto&) noexcept {
+                        ++later;return true;
+                    };
+                    const auto pipe=[&](void*,uintptr_t,const auto&) noexcept -> uint32_t {
+                        ++later;return 2;
+                    };
+                    const auto invalidates=[&](void* c,uintptr_t,const auto&) noexcept {
+                        uintptr_t zero=0;std::memcpy(static_cast<uint8_t*>(c)+0x88,&zero,8);
+                        return 0;
+                    };
+                    const auto unexpected=[&](void*,uintptr_t,const auto&) noexcept {
+                        ++later;return 0;
+                    };
+                    assert(tglWithOwnedVeboxAllocationStages(owner,childOwner,execution,
+                        yes,laterQuery,pipe,laterQuery,invalidates,unexpected,unexpected,
+                        unexpected,unexpected,unexpected)==5);
+                    assert(later==0 && !childOwner.busy && !execution.busy);
+                    std::memcpy(child.data()+0x88,&report,8);
+                }
                 for(int finishStatus:{0,31}) {
                     uint32_t width=17,height=19;unsigned completed=0;
                     assert(tglWithOwnedVeboxAllocationFrame(owner,childOwner,execution,
