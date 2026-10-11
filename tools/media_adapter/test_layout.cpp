@@ -1582,6 +1582,16 @@ static void testTrackedCpuOwner() {
             assert(selected.compressed==(source?d:g));
             assert(selected.mode==(source?(e?1u:0u):4u));
         }
+        for(unsigned mask=0;mask<32;++mask) for(uint32_t tile:{0u,1u,2u,UINT32_MAX}) {
+            const bool follow=mask&1,compressed=mask&2,mode=mask&4,enabled=mask&8,supported=mask&16;
+            unsigned queries=0;
+            const auto selected=tglSelectOwnedFfdiCompression(follow,compressed,mode,enabled,0x19,tile,
+                [&](uint32_t format) noexcept {assert(format==0x19);++queries;return supported;});
+            const bool queried=!follow && enabled && tile==1;
+            assert(queries==unsigned(queried));
+            assert(selected.compressed==(follow?compressed:queried && supported));
+            assert(selected.mode==(follow?unsigned(mode):unsigned(queried && supported)));
+        }
     }
     {
         unsigned calls=0;

@@ -4478,6 +4478,22 @@ inline void tglCopyOwnedSurfaceFrameMetadata(TglOwnedSurfaceStorage& target,
     std::memcpy(target.prefix.data()+0x138,source.prefix.data()+0x138,4);
 }
 enum class TglOwnedFfdnHistoryDecision { Keep, Invalidate, CopyPrevious };
+struct TglOwnedFfdiCompressionSelection {
+    bool compressed=false;
+    uint32_t mode=0;
+};
+// ICL1f7a50..1f7af2 allocation data policy. +a8 selects source metadata;
+// otherwise child1ba9 and tile==1 gate +90(format). This is not a derived
+// object's ABI, permission to enable MMC, or proof of compressed backing.
+template<class Supports>
+TglOwnedFfdiCompressionSelection tglSelectOwnedFfdiCompression(bool followSource,
+    bool source299,bool source29a,bool child1ba9,uint32_t format,uint32_t tile,
+    Supports supports) noexcept {
+    static_assert(noexcept(supports(format)),"FFDI compression query ABI");
+    if(followSource) return {source299,source29a?1u:0u};
+    if(child1ba9 && tile==1 && supports(format)) return {true,1};
+    return {};
+}
 struct TglOwnedFfdnCompressionSelection {
     bool compressed;
     uint32_t mode;
