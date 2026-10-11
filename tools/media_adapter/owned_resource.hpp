@@ -2062,7 +2062,7 @@ int tglInvokeLeasedVeboxRender(const TglVeboxRenderBinding& binding,Owner& owner
         "native Render status ABI");
     if(!binding.image || binding.image>UINTPTR_MAX-0x12c9e4 ||
        binding.entry!=binding.image+0x12c9d0 || !child || !argument1 || !argument2 ||
-       !owner.hasPrivateChildLease(reinterpret_cast<uintptr_t>(child))) return 5;
+       !owner.hasPrivateChildImageLease(reinterpret_cast<uintptr_t>(child),binding.image)) return 5;
     return invoke(binding.entry,child,argument1,argument2);
 }
 
@@ -3291,6 +3291,9 @@ public:
     }
     bool hasPrivateChildLease(uintptr_t expected) const noexcept {
         return ready_ && tableInstalled_ && busy_ && storage_.get()==expected;
+    }
+    bool hasPrivateChildImageLease(uintptr_t expected,uintptr_t image) const noexcept {
+        return image && image_==image && hasPrivateChildLease(expected);
     }
     template<class FormatRead,class Read,class Qualify,class Executable>
     bool installPrivateVtableWithQueries(const std::array<uintptr_t,20>& hooks,

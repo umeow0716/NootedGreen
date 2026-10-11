@@ -2734,7 +2734,13 @@ static void testVeboxRenderBinding() {
     }
     readable=rx=identity=true;
     assert(binding.resolve(image,read,qualify,executable));
-    int child=0,arg1=0,arg2=0;TestVeboxChildLease owner{&child};unsigned calls=0;
+    struct RenderOwner:TestVeboxChildLease {
+        uintptr_t image=0;
+        bool hasPrivateChildImageLease(uintptr_t p,uintptr_t i) const noexcept {
+            return image && image==i && hasPrivateChildLease(p);
+        }
+    } owner;
+    int child=0,arg1=0,arg2=0;owner.child=&child;owner.image=image;unsigned calls=0;
     auto invoke=[&](uintptr_t p,void* c,void* a,void* b) noexcept -> int {
         assert(p==image+0x12c9d0 && c==&child && a==&arg1 && b==&arg2);
         ++calls;assert(owner.busy);return -7;
@@ -2742,6 +2748,9 @@ static void testVeboxRenderBinding() {
     assert(tglInvokeLeasedVeboxRender(binding,owner,&child,&arg1,&arg2,invoke)==5 && !calls);
     assert(owner.withPrivateChild([&](void* c) noexcept {
         assert(tglInvokeLeasedVeboxRender(binding,owner,c,nullptr,&arg2,invoke)==5 && !calls);
+        owner.image=image+0x1000;
+        assert(tglInvokeLeasedVeboxRender(binding,owner,c,&arg1,&arg2,invoke)==5 && !calls);
+        owner.image=image;
         return tglInvokeLeasedVeboxRender(binding,owner,c,&arg1,&arg2,invoke);
     })==-7 && calls==1);
 }
@@ -9951,6 +9960,18 @@ int main() {
                         const auto beforeCsc=cpu.bytes;
                         assert(owner.hasPrivateChildLease(reinterpret_cast<uintptr_t>(child)));
                         assert(!owner.hasPrivateChildLease(reinterpret_cast<uintptr_t>(child)+8));
+                        assert(owner.hasPrivateChildImageLease(reinterpret_cast<uintptr_t>(child),base));
+                        assert(!owner.hasPrivateChildImageLease(reinterpret_cast<uintptr_t>(child),base+0x1000));
+                        TglVeboxRenderBinding render{base,base+0x12c9d0};
+                        int argument1=0,argument2=0;unsigned renders=0;
+                        const auto invokeRender=[&](uintptr_t entry,void* actual,void* a,void* b) noexcept -> int {
+                            assert(entry==base+0x12c9d0 && actual==child && a==&argument1 && b==&argument2);
+                            ++renders;owner.reset();assert(owner.constructedBase()==child);
+                            return nativeResult;
+                        };
+                        assert(tglInvokeLeasedVeboxRender(render,owner,child,&argument1,&argument2,invokeRender)==nativeResult);
+                        render.image+=0x1000;render.entry+=0x1000;
+                        assert(tglInvokeLeasedVeboxRender(render,owner,child,&argument1,&argument2,invokeRender)==5 && renders==1);
                         assert(owner.publishCsc(leasedCsc));
                         assert(std::memcmp(cpu.bytes.data()+0xa0,leasedCsc.matrix.data(),0x24)==0);
                         assert(std::memcmp(cpu.bytes.data()+0xc4,leasedCsc.inputOffsets.data(),0xc)==0);
