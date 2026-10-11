@@ -1088,18 +1088,30 @@ bool tglDirectVeboxFeasible(uintptr_t params, uintptr_t source, uintptr_t target
     return !alpha || (alpha <= max - 7 && read(alpha + 4, &alphaMode, 4) && alphaMode != 2);
 }
 
+// One acquisition lifetime per pinned frame. There is deliberately no reset:
+// a failed frame cannot become healthy by reusing its reader/selector.
+class TglVeboxPipeAcquisition {
+    bool failed_=false;
+public:
+    TglVeboxPipeAcquisition()=default;
+    TglVeboxPipeAcquisition(const TglVeboxPipeAcquisition&)=delete;
+    TglVeboxPipeAcquisition& operator=(const TglVeboxPipeAcquisition&)=delete;
+    bool healthy() const noexcept {return !failed_;}
+    void fail() noexcept {failed_=true;}
+};
 // Copies passed through existing predicates share the same failure latch.
 // Missing/overflowing named reads are acquisition failure, not format rejection.
 template<class Read> class TglVeboxPipeReadGate {
-    Read& read_;bool& failed_;
+    Read& read_;TglVeboxPipeAcquisition& acquisition_;
 public:
-    TglVeboxPipeReadGate(Read& read,bool& failed) noexcept:read_(read),failed_(failed){}
+    TglVeboxPipeReadGate(Read& read,TglVeboxPipeAcquisition& acquisition) noexcept
+        :read_(read),acquisition_(acquisition){}
     bool operator()(uintptr_t address,void* output,size_t bytes) const noexcept {
         static_assert(noexcept(read_(address,output,bytes)) &&
             std::is_same_v<decltype(read_(address,output,bytes)),bool>,"bounded pipe read ABI");
-        if(failed_) return false;
+        if(!acquisition_.healthy()) return false;
         if(!address || !output || !bytes || address>UINTPTR_MAX-(bytes-1) ||
-           !read_(address,output,bytes)) {failed_=true;return false;}
+           !read_(address,output,bytes)) {acquisition_.fail();return false;}
         return true;
     }
 };

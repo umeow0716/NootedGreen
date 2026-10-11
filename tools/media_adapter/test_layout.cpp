@@ -101,19 +101,37 @@ static void testTrackedCpuOwner() {
         }
     }
     {
-        unsigned reads=0;bool failed=false;
+        unsigned reads=0;TglVeboxPipeAcquisition acquisition;
         auto read=[&](uintptr_t address,void* out,size_t bytes) noexcept {
             ++reads;if(address!=0x100 || bytes!=1) return false;
             *static_cast<uint8_t*>(out)=0x42;return true;
         };
-        TglVeboxPipeReadGate gate(read,failed);auto copied=gate;uint8_t value=0;
-        assert(copied(0x100,&value,1) && value==0x42 && !failed && reads==1);
-        assert(!copied(0x200,&value,1) && failed && reads==2);
+        TglVeboxPipeReadGate gate(read,acquisition);auto copied=gate;uint8_t value=0;
+        assert(copied(0x100,&value,1) && value==0x42 && acquisition.healthy() && reads==1);
+        assert(!copied(0x200,&value,1) && !acquisition.healthy() && reads==2);
         assert(!gate(0x100,&value,1) && reads==2);
-        failed=false;
-        assert(!gate(UINTPTR_MAX,&value,2) && failed && reads==2);
-        failed=false;
-        assert(!tglCompositionBypassFeasible(0x200,0x300,0x100,gate) && failed && reads==4);
+        TglVeboxPipeAcquisition overflowFrame;
+        TglVeboxPipeReadGate overflowGate(read,overflowFrame);
+        assert(!overflowGate(UINTPTR_MAX,&value,2) && !overflowFrame.healthy() && reads==2);
+        TglVeboxPipeAcquisition predicateFrame;
+        TglVeboxPipeReadGate predicateGate(read,predicateFrame);
+        struct Policy {
+            TglVeboxPipeAcquisition& frame;decltype(predicateGate)& gate;
+            bool healthy() const noexcept {return frame.healthy();}
+            bool bypass() noexcept {return tglCompositionBypassFeasible(0x200,0x300,0x100,gate);}
+            bool rejectDi() noexcept {assert(false);return false;}
+            bool rejectLut() noexcept {assert(false);return false;}
+            bool direct() noexcept {assert(false);return false;}
+            bool twoPass() noexcept {assert(false);return false;}
+            bool sfcAvailable() noexcept {assert(false);return false;}
+            bool hdr() noexcept {assert(false);return false;}
+            uint32_t sfc() noexcept {assert(false);return 1;}
+            bool fastFill() noexcept {assert(false);return false;}
+        } policy{predicateFrame,predicateGate};
+        uint8_t comp=0x80;uint32_t mode=0xabcdef;
+        assert(!tglSelectGen12VeboxOutputPipe(policy,comp,mode) && reads==4);
+        assert(!predicateFrame.healthy() && comp==0x80 && mode==0xabcdef);
+        assert(!tglSelectGen12VeboxOutputPipe(policy,comp,mode) && reads==4);
     }
     {
         TglVeboxAdmissionStagesInput input;
