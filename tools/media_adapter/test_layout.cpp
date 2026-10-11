@@ -13122,7 +13122,39 @@ int main() {
                 auto* a=::new(static_cast<void*>(storage->bytes.data()+0x3c8)) TglOwnedSurfaceStorage{};
                 auto* b=::new(static_cast<void*>(storage->bytes.data()+0x670)) TglOwnedSurfaceStorage{};
                 std::array<LineBackend,2> backends{};
-                TglOwnedVpLineSurfaces<LineBackend> lines(backends,*a,*b);
+                struct NativeLines {
+                    std::array<LineBackend,2>& counters;
+                    std::array<void*,2> resources;
+                    size_t index(void* resource) const noexcept {
+                        for(size_t i=0;i<2;++i) if(resources[i]==resource) return i;
+                        assert(false);return 0; // This 1080p pass does not need SFD backing.
+                    }
+                    static int allocate(void* context,const void* parameters,void* resource) noexcept {
+                        auto& self=*static_cast<NativeLines*>(context);
+                        auto* bytes=static_cast<const uint8_t*>(parameters);
+                        uint32_t type=1;TglResourceKey key;
+                        std::memcpy(&type,bytes,4);assert(!type);
+                        std::memcpy(&key.width,bytes+0x14,4);std::memcpy(&key.height,bytes+0x18,4);
+                        std::memcpy(&key.tile,bytes+0x24,4);std::memcpy(&key.format,bytes+0x28,4);
+                        uint32_t width=0;
+                        const int result=self.counters[self.index(resource)].allocate(
+                            *static_cast<std::array<uint8_t,0x148>*>(resource),key,&width);
+                        if(!result) std::memcpy(const_cast<uint8_t*>(bytes)+0x14,&width,4);
+                        return result;
+                    }
+                    static void release(void* context,void* resource) noexcept {
+                        auto& self=*static_cast<NativeLines*>(context);
+                        self.counters[self.index(resource)].release(
+                            *static_cast<std::array<uint8_t,0x148>*>(resource));
+                    }
+                } nativeLines{backends,{&a->resource,&b->resource}};
+                TglNativeResourceBinding nativeLineBinding;
+                nativeLineBinding.context=reinterpret_cast<uintptr_t>(&nativeLines);
+                nativeLineBinding.allocate=reinterpret_cast<uintptr_t>(&NativeLines::allocate);
+                nativeLineBinding.release=reinterpret_cast<uintptr_t>(&NativeLines::release);
+                TglNativeVpLineResourceStorage nativeLineStorage(nativeLineBinding,4096,*a,*b);
+                auto& lines=nativeLineStorage.lines();
+                auto& lineResources=nativeLineStorage.resources();
                 int admission=31;unsigned retired=0,states=0,filters=0;
                 TglOwnedSfcCommandParameters packets;
                 TglOwnedSurfaceStorage output;output.resource[0x20]=1;
@@ -13208,7 +13240,7 @@ int main() {
                       [](void*,const auto&) noexcept {},
                       [&](void* leasedChild,void*,void*,const TglOwnedVpEntrySet& passEntries) noexcept {
                       assert(passStates==1);
-                      return graph.withLeasedModeAssemblyEntries(leasedChild,read,lines,retire,0x1000,0x2000,0x4000,
+                      return graph.withLeasedModeAssemblyEntries(leasedChild,read,lineResources,retire,0x1000,0x2000,0x4000,
                         [&](void* child,const TglOwnedVpEntrySet& modeEntries) noexcept {
                             auto entries=modeEntries;
                             assert(entries.appendDisjoint(passEntries));
@@ -13218,7 +13250,7 @@ int main() {
                                 ++nestedModeReads;return false;
                             };
                             bool nestedModeUse=false;
-                            assert(graph.withLeasedModeAssemblyEntries(child,nestedModeRead,lines,retire,
+                            assert(graph.withLeasedModeAssemblyEntries(child,nestedModeRead,lineResources,retire,
                                 0x1000,0x2000,0x4000,[&](void*,const auto&) noexcept {
                                     nestedModeUse=true;return 0;
                                 })==5);
@@ -13261,9 +13293,9 @@ int main() {
                                         (combined.missingMask()&~((1U<<21)|(1U<<24)|(1U<<25)|(1U<<26))));
                                     assert(packetEntries.missingMask()==0x3U); // Both destructors remain; initialize is live.
                                     auto releaseAllocation=[](void*) noexcept {assert(false);};
-                                    using PassLifetime=TglOwnedVpLifetimeContext<decltype(graph),decltype(lines),
+                                    using PassLifetime=TglOwnedVpLifetimeContext<decltype(graph),decltype(lineResources),
                                         decltype(retire),decltype(releaseAllocation)>;
-                                    PassLifetime lifetime(child,graph,lines,retire,releaseAllocation);
+                                    PassLifetime lifetime(child,graph,lineResources,retire,releaseAllocation);
                                     TglOwnedVpEntrySet expiredLifetime;
                                     const auto beforeLifetimeRetired=retired;
                                     assert(tglWithOwnedVpLifetimeAssemblyEntries(child,lifetime,packetEntries,
@@ -13391,7 +13423,7 @@ int main() {
                                 output,prefix,{},false,false,false,TglOwnedSfcCompressionMode{},allocate,
                                 [](auto&) noexcept {return 0;},
                                 [&](auto&) noexcept {++preparedStates;return 0;},
-                                static_cast<TglOwnedSfcSfdBuffer<LineBackend>*>(nullptr));
+                                static_cast<TglOwnedSfcSfdBuffer<TglNativeResourceBackend>*>(nullptr));
                         },[](void*,const auto&,auto&) noexcept {return 0;},
                         [&](void*,const auto&) noexcept {++filters;},
                         [&](void*,void*,void*) noexcept {
