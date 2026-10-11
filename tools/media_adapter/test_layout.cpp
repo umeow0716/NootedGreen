@@ -5793,6 +5793,18 @@ static void testNativeResourceBoundary() {
                 targets={&first,&first};assert(prepare()==5);
                 targets={&input,&second};assert(prepare()==5);
                 targets={nullptr,&second};assert(prepare()==5);
+                {
+                    TglOwnedSurfaceStorage shared{};
+                    Surface aliasA(backend,shared),aliasB(backend,shared);
+                    assert(aliasA.surfaceBinding()==aliasB.surfaceBinding());
+                    targets={&aliasA,&aliasB};assert(prepare()==5);
+                    // Distinct source/history objects with the same binding
+                    // are not the supported single-owner role alias case.
+                    targets={&first,&second};
+                    assert(tglPrepareOwnedBackedFfdnPair(targets,aliasA,&aliasB,
+                        static_cast<Surface*>(nullptr),{false,0},valid,true,flag,mode,copy)==5);
+                    for(auto byte:shared.resource) assert(!byte);
+                }
                 assert(backend.allocations==allocated && consumers==3);
                 first.reset();second.reset();input.reset();
                 assert(backend.releases==backend.allocations);

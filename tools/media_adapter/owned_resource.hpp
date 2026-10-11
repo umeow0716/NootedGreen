@@ -4827,6 +4827,8 @@ public:
     ~TglOwnedAllocatedSurface() {reset();}
     TglOwnedAllocatedSurface(const TglOwnedAllocatedSurface&)=delete;
     TglOwnedAllocatedSurface& operator=(const TglOwnedAllocatedSurface&)=delete;
+    // Identity only: does not grant access or prove a ready/backed lease.
+    const void* surfaceBinding() const noexcept {return &surface_;}
     int ensure(const TglResourceKey& key,bool* changed=nullptr) noexcept {
         // Native4e060 clears changed before admission/allocation. Only a
         // successfully published backed surface may trigger history rebuild.
@@ -5263,8 +5265,18 @@ int tglPrepareOwnedBackedFfdnPair(const std::array<TargetOwner*,2>& targets,
     TglOwnedFfdnCompressionSelection compression,bool& referenceValid,bool executionFlag13,
     uint8_t& execution15,uint8_t& execution16,Copy copy,Finish finish={}) noexcept {
     if(!targets[0] || !targets[1] || targets[0]==targets[1]) return 5;
+    struct Binding {const void* owner;const void* storage;};
+    std::array<Binding,5> bindings{};
+    bindings[0]={targets[0],targets[0]->surfaceBinding()};
+    bindings[1]={targets[1],targets[1]->surfaceBinding()};
+    const std::array<Owner*,3> roles{&input,previous,copyDestination};
+    for(size_t i=0;i<roles.size();++i)
+        if(roles[i]) bindings[i+2]={roles[i],roles[i]->surfaceBinding()};
+    for(size_t i=0;i<bindings.size();++i) for(size_t j=0;j<i;++j)
+        if(bindings[i].storage && bindings[i].storage==bindings[j].storage &&
+           bindings[i].owner!=bindings[j].owner) return 5;
     for(auto* target:targets)
-        for(auto* role:std::array<Owner*,3>{&input,previous,copyDestination})
+        for(auto* role:roles)
             if(static_cast<const void*>(target)==static_cast<const void*>(role)) return 5;
     return tglWithAllocatedOwnedFfdnPair(input,previous,copyDestination,compression,
         referenceValid,executionFlag13,execution15,execution16,
