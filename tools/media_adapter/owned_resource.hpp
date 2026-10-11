@@ -16120,6 +16120,62 @@ public:
     }
 };
 
+// Renderer assembly for ORIGINAL frontend data, not allocated replacement
+// source/target images. Children detach before DN/graph/target release, while
+// VP/command backing is still live. Enclosing registry owns original owners,
+// physical/context/image generation and qualified GPU retirement admission.
+template<class Api,class SourceOwner,class TargetOwner,class CfApi,class DnBackend,
+    class Cleanup,class Cpu=TglNativeTrackedCpuInvoker,
+    class Sfc=TglNativeSfcLifetimeInvoker,class Destroy=TglNativeVeboxDestructorInvoker>
+class TglNativeVeboxFrontendRendererFrameStorage {
+    TglNativeVeboxVpFrameBacking<Api,Cpu> backing_;
+    TglOwnedFrontendSourceGraph<SourceOwner,CfApi> source_;
+    TglOwnedType1BorrowedSurfaceLease<TargetOwner,CfApi> target_;
+    TglTrackedCpuOwner<DnBackend> parameters_;
+    TglNativeVeboxChildPairStorage<Cleanup,Cpu,Sfc,Destroy> children_;
+public:
+    template<class Resolve,class Read,class Qualify,class Executable,class... Args>
+    TglNativeVeboxFrontendRendererFrameStorage(uintptr_t source,Resolve resolve,
+        TargetOwner& target,CfApi cf,uintptr_t resourceType,uintptr_t surfaceType,
+        DnBackend& parameters,uintptr_t image,Read read,Qualify qualify,Executable executable,
+        const TglNativeResourceBinding& resources,uint64_t pageSize,
+        const TglNativeBufferFillBinding& fill,Cpu vpCpu,std::array<Cleanup,2> cleanup,
+        std::array<Cpu,2> childCpu,std::array<Sfc,2> sfc,std::array<Destroy,2> destroy,
+        Args&&... args) noexcept
+        :backing_(image,read,qualify,executable,resources,pageSize,fill,vpCpu,
+            std::forward<Args>(args)...),source_(cf),target_(target,cf,resourceType,surfaceType),
+         parameters_(parameters),
+         children_(image,read,qualify,executable,std::move(cleanup),childCpu,sfc,destroy) {
+        static_assert(std::is_nothrow_constructible_v<Api,Args...> &&
+            std::is_nothrow_copy_constructible_v<Read> && std::is_nothrow_copy_constructible_v<Qualify> &&
+            std::is_nothrow_copy_constructible_v<Executable> && std::is_nothrow_copy_constructible_v<Cpu> &&
+            std::is_nothrow_copy_constructible_v<Sfc> && std::is_nothrow_copy_constructible_v<Destroy> &&
+            std::is_nothrow_copy_constructible_v<Cleanup> && std::is_nothrow_move_constructible_v<Cleanup>);
+        source_.acquire(source,resolve,resourceType,surfaceType);
+    }
+    TglNativeVeboxFrontendRendererFrameStorage(const TglNativeVeboxFrontendRendererFrameStorage&)=delete;
+    TglNativeVeboxFrontendRendererFrameStorage& operator=(const TglNativeVeboxFrontendRendererFrameStorage&)=delete;
+    auto& backing() noexcept {return backing_;}
+    auto& children() noexcept {return children_;}
+    bool surfacesReady() const noexcept {return source_.storage() && target_.storage();}
+    bool allocateParameters(size_t bytes) noexcept {
+        return surfacesReady() && !backing_.retention()() && parameters_.allocate(bytes);
+    }
+    template<class Consume>
+    TglOwnedVeboxCommandTransactionResult withNativeCommandFrame(
+        const TglNativeOuterSurfaceRoles& roles,size_t sourceIndex,size_t targetIndex,
+        uintptr_t child,uintptr_t execution,uintptr_t renderHal,uintptr_t sku,Consume consume) noexcept {
+        if(!surfacesReady()) return {};
+        return backing_.command().withFrontendCommandFrame(roles,sourceIndex,targetIndex,
+            source_,target_,child,execution,renderHal,sku,[&](auto& source,auto& target,auto& leases) noexcept {
+                static_assert(noexcept(consume(source,target,parameters_,leases)) &&
+                    std::is_same_v<decltype(consume(source,target,parameters_,leases)),
+                        TglOwnedVeboxCommandTransactionResult>);
+                return consume(source,target,parameters_,leases);
+            });
+    }
+};
+
 // Allocation transaction for a history-enabled frame. The qualified platform
 // planner supplies resource keys and statistics boundary dimensions; this does
 // not infer feature admission or SFC resources. All three owners outlive this

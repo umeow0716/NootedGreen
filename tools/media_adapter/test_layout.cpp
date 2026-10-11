@@ -16280,6 +16280,80 @@ int main() {
                     assert(!pairCpu[0].live && !pairCpu[1].live);
                     assert(cleaned[0]==1 && cleaned[1]==1 && destroyed==cleaned);
                     assert(pairInvoke.constructs==2 && pairInvoke.destroys==2);
+                    {
+                        pairEventCount=0;cleaned={};destroyed={};retirementQualified=false;
+                        TglOwnedSurfaceStorage source,target,history;
+                        for(auto* s:{&source,&target,&history}) {
+                            const uint32_t type=1,count=1;const uintptr_t plane=1,surface=5;
+                            std::memcpy(s->resource.data()+0x14,&type,4);
+                            std::memcpy(s->resource.data()+0x60,&count,4);
+                            std::memcpy(s->resource.data()+0x68,&plane,8);
+                            std::memcpy(s->resource.data()+0x58,&surface,8);
+                        }
+                        const uint32_t historyCount=1;const auto hp=reinterpret_cast<uintptr_t>(&history);
+                        std::memcpy(source.prefix.data()+0xb8,&historyCount,4);
+                        std::memcpy(source.prefix.data()+0xc8,&hp,8);
+                        TestFrontendOriginalOwner so{source},to{target},ho{history};
+                        std::array<unsigned,6> refs{};
+                        struct Cf {
+                            std::array<unsigned,6>& refs;
+                            uintptr_t type(uintptr_t h) noexcept {return h==5?12:11;}
+                            bool retain(uintptr_t h) noexcept {assert(h==1 || h==5);++refs[h];return true;}
+                            void release(uintptr_t h) noexcept {assert(refs[h]);--refs[h];}
+                        };
+                        auto frontendCleanup=[&](void* object) noexcept {
+                            assert(retirementQualified && so.borrowed && to.borrowed && ho.borrowed);
+                            assert(frameDn.live==1 && refs[1]==3 && refs[5]==3);
+                            ++cleaned[index(object)];
+                        };
+                        using FrontendAssembly=TglNativeVeboxFrontendRendererFrameStorage<UnusedFrameApi,
+                            TestFrontendOriginalOwner,TestFrontendOriginalOwner,Cf,FrameDnBackend,
+                            decltype(frontendCleanup),NativeCpu,TrackedSfc,decltype(pairDestroy)>;
+                        TglOwnedVeboxRetainedFrames<FrontendAssembly,1> frames;
+                        const auto ticket=frames.create(reinterpret_cast<uintptr_t>(&source),
+                            [&](uintptr_t address) noexcept -> TestFrontendOriginalOwner* {
+                                if(address==reinterpret_cast<uintptr_t>(&source)) return &so;
+                                return address==hp?&ho:nullptr;
+                            },to,Cf{refs},uintptr_t{11},uintptr_t{12},frameDn,base,allocatorRead,
+                            [](uintptr_t image) noexcept {return image==base;},
+                            [](uintptr_t,size_t) noexcept {return true;},TglNativeResourceBinding{},
+                            uint64_t{4096},TglNativeBufferFillBinding{},NativeCpu{vpCpu},
+                            std::array<decltype(frontendCleanup),2>{frontendCleanup,frontendCleanup},
+                            std::array<NativeCpu,2>{NativeCpu{pairCpu[0]},NativeCpu{pairCpu[1]}},
+                            std::array<TrackedSfc,2>{TrackedSfc{pairInvoke,pairEvents,pairEventCount},TrackedSfc{pairInvoke,pairEvents,pairEventCount}},
+                            std::array<decltype(pairDestroy),2>{pairDestroy,pairDestroy});
+                        const auto r=frames.run(ticket,[&](auto& frame) noexcept {
+                            assert(frame.surfacesReady() && frame.allocateParameters(64));
+                            auto constructFrontend=[&](uintptr_t entry,void* object,void* nativeOs,void*,void*,
+                                void*,void*,void*,const void*,int32_t* out) noexcept {
+                                assert(entry==base+0x12d4e0 && nativeOs==reinterpret_cast<void*>(os));
+                                const auto table=base+0x757c98;
+                                std::memcpy(object,&table,8);std::memcpy(static_cast<uint8_t*>(object)+0x10,&os,8);*out=0;
+                            };
+                            int32_t status=77;
+                            for(auto* c:{&frame.children().first(),&frame.children().second()})
+                                assert(c->initialize(baseBinding,lifetime,mhw,reinterpret_cast<void*>(os),nullptr,
+                                    reinterpret_cast<void*>(0x3000),nullptr,nullptr,nullptr,status,read,constructFrontend)
+                                    ==TglOwnedBaseConstruction::ConstructedSuccess);
+                            TglNativeOuterSurfaceRoles roles;roles.sourceCount=1;roles.targetCount=1;
+                            roles.sources[0]=reinterpret_cast<uintptr_t>(&source);roles.targets[0]=reinterpret_cast<uintptr_t>(&target);
+                            return frame.withNativeCommandFrame(roles,0,0,reinterpret_cast<uintptr_t>(pairCpu[0].bytes.data()),
+                                0x1100,0x2200,0x3300,[&](auto& sourceLease,auto& targetLease,auto& dn,auto& packets) noexcept {
+                                    assert(sourceLease.hasSurfaceLease(source) && targetLease.hasSurfaceLease(target));
+                                    assert(&packets.source==&source && packets.target==&target && dn.size()==64);
+                                    assert(ho.borrowed && !frame.backing().vpBound());
+                                    return TglOwnedVeboxCommandTransactionResult{31,31,true,false};
+                                });
+                        });
+                        assert(r.acquired && frameDn.live==1 && refs[1]==3);
+                        assert(frames.retire(ticket,[](const auto&,bool,const auto&) noexcept {return 31;})==31);
+                        assert(ho.borrowed && refs[1]==3);
+                        assert(frames.retire(ticket,[&](const auto&,bool pending,const auto&) noexcept {
+                            assert(pending);retirementQualified=true;return 0;
+                        })==0); // CPU certificate fixture only
+                        assert(!so.borrowed && !to.borrowed && !ho.borrowed && !frameDn.live && !refs[1] && !refs[5]);
+                        assert(cleaned[0]==1 && cleaned[1]==1 && destroyed==cleaned);
+                    }
                 }
                 ChildStorage childStorage(base,allocatorRead,
                     [](uintptr_t image) noexcept {return image==base;},
