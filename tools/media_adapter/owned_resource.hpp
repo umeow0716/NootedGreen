@@ -10367,13 +10367,16 @@ int tglWithOwnedVpSfcCpuView(TglOwnedVpSfcCallerStorage& storage,
 // invocation is authorized. Borrowed interfaces must outlive this owner;
 // asynchronous GPU retention remains a separate prerequisite for integration.
 template<class Lines,class State,class Retire,class Use>
-int tglWithOwnedVpResourceEntries(TglOwnedVpSfcCallerStorage&,Lines&,State&,Retire&,Use) noexcept;
+int tglWithOwnedVpResourceEntries(TglOwnedVpSfcCallerStorage&,Lines&,State&,Retire&,Use,
+    const TglOwnedVeboxFrameRetention* =nullptr) noexcept;
 template<class Read,class Lines,class State,class Retire,class Use>
-int tglWithOwnedVpAssemblyEntries(TglOwnedVpSfcCallerStorage&,Read&,Lines&,State&,Retire&,Use) noexcept;
+int tglWithOwnedVpAssemblyEntries(TglOwnedVpSfcCallerStorage&,Read&,Lines&,State&,Retire&,Use,
+    const TglOwnedVeboxFrameRetention* =nullptr) noexcept;
 template<class StateBackend,class AvsBackend> class TglOwnedVpSfcCpuGraph {
     TglOwnedVpSfcCallerStorage storage_;
     TglOwnedSfcStateParameters<StateBackend> state_;
     TglOwnedSfcAvsParameters<AvsBackend> avs_;
+    const TglOwnedVeboxFrameRetention* retention_=nullptr;
     bool ready_=false,busy_=false,resourcesBound_=false,constructionScope_=false;
     uint64_t generation_=0;
     struct SendContext {
@@ -10404,7 +10407,9 @@ template<class StateBackend,class AvsBackend> class TglOwnedVpSfcCpuGraph {
         ~Guard(){flag=false;}
     };
 public:
-    TglOwnedVpSfcCpuGraph(StateBackend& state,AvsBackend& avs):state_(state),avs_(avs){}
+    TglOwnedVpSfcCpuGraph(StateBackend& state,AvsBackend& avs,
+        const TglOwnedVeboxFrameRetention* retention=nullptr)
+        :state_(state),avs_(avs),retention_(retention){}
     TglOwnedVpSfcCpuGraph(const TglOwnedVpSfcCpuGraph&)=delete;
     TglOwnedVpSfcCpuGraph& operator=(const TglOwnedVpSfcCpuGraph&)=delete;
     ~TglOwnedVpSfcCpuGraph(){reset();}
@@ -10617,7 +10622,7 @@ public:
                     static_assert(noexcept(use(child,static_cast<const TglOwnedVpEntrySet&>(bindings))),
                         "leased VP assembly ABI");
                     return use(child,static_cast<const TglOwnedVpEntrySet&>(bindings));
-                });
+                },retention_);
         });
     }
     template<class Read,class Lines,class Retire,class Use>
@@ -10854,7 +10859,7 @@ public:
                 };
                 return withPreparedCallbackPass(frame,conditionalSource,settings,target,sourceA8,
                     source,renderData,makeState,avs,ief,emit,use);
-            });
+            },retention_);
     }
     // This is synchronous command construction, not a publishable VP vtable
     // or permission to retire GPU resources. Outer surface leases remain required.
@@ -11031,9 +11036,9 @@ template<class Invoker=TglNativeTrackedCpuInvoker> class TglNativeVpCpuStorage {
 public:
     template<class Read,class Qualify,class Executable>
     TglNativeVpCpuStorage(uintptr_t image,Read read,Qualify qualify,Executable executable,
-        Invoker invoke={})
+        Invoker invoke={},const TglOwnedVeboxFrameRetention* retention=nullptr)
         :stateBackend_(image,read,qualify,executable,invoke),
-         avsBackend_(image,read,qualify,executable,invoke),graph_(stateBackend_,avsBackend_) {}
+         avsBackend_(image,read,qualify,executable,invoke),graph_(stateBackend_,avsBackend_,retention) {}
     TglNativeVpCpuStorage(const TglNativeVpCpuStorage&)=delete;
     TglNativeVpCpuStorage& operator=(const TglNativeVpCpuStorage&)=delete;
     bool bound() const noexcept {return stateBackend_.bound() && avsBackend_.bound();}
@@ -13884,8 +13889,9 @@ template<class Lines,class State> class TglOwnedVpLineAllocationContext {
     const TglOwnedVeboxFrameRetention* retention_=nullptr;
     bool busy_=false;
 public:
-    TglOwnedVpLineAllocationContext(TglOwnedVpSfcCallerStorage& vp,Lines& lines,State& state) noexcept
-        :vp_(vp),lines_(lines),state_(state) {}
+    TglOwnedVpLineAllocationContext(TglOwnedVpSfcCallerStorage& vp,Lines& lines,State& state,
+        const TglOwnedVeboxFrameRetention* retention=nullptr) noexcept
+        :vp_(vp),lines_(lines),state_(state),retention_(retention) {}
     TglOwnedVpLineAllocationContext(TglOwnedVpSfcCallerStorage& vp,Lines& lines,State& state,
         const TglOwnedVeboxFrameRetention& retention) noexcept
         :vp_(vp),lines_(lines),state_(state),retention_(&retention) {}
@@ -14081,7 +14087,8 @@ template<class Lines,class State,class Retire> class TglOwnedVpResourceContext {
     TglOwnedVpLineReleaseContext<Lines,Retire> release_;
 public:
     TglOwnedVpResourceContext(TglOwnedVpSfcCallerStorage& vp,Lines& lines,State& state,
-        Retire& retire) noexcept:allocation_(vp,lines,state),release_(vp,lines,retire){}
+        Retire& retire,const TglOwnedVeboxFrameRetention* retention=nullptr) noexcept
+        :allocation_(vp,lines,state,retention),release_(vp,lines,retire){}
     TglOwnedVpResourceContext(TglOwnedVpSfcCallerStorage& vp,Lines& lines,State& state,
         Retire& retire,const TglOwnedVeboxFrameRetention& retention) noexcept
         :allocation_(vp,lines,state,retention),release_(vp,lines,retire){}
@@ -14092,13 +14099,13 @@ public:
 };
 template<class Lines,class State,class Retire,class Use>
 int tglWithOwnedVpResourceEntries(TglOwnedVpSfcCallerStorage& vp,Lines& lines,State& state,
-    Retire& retire,Use use) noexcept {
+    Retire& retire,Use use,const TglOwnedVeboxFrameRetention* retention) noexcept {
     if(!lines.boundToVp(vp)) return 5;
     using Context=TglOwnedVpResourceContext<Lines,State,Retire>;
     using Resolve=TglOwnedVpSfcResolve<Context>;
     using Allocate=TglOwnedVpLineAllocationCallback<Resolve>;
     using Release=TglOwnedVpSfcCallbacks<Resolve>;
-    Context context(vp,lines,state,retire);void* child=vp.bytes.data();
+    Context context(vp,lines,state,retire,retention);void* child=vp.bytes.data();
     TglOwnedVpSfcScopedContext<Context> scope(child,context);
     if(!scope.bound()) return 5;
     static_assert(noexcept(use(child,&Allocate::allocate,&Release::freeResources)),
@@ -14111,7 +14118,8 @@ int tglWithOwnedVpResourceEntries(TglOwnedVpSfcCallerStorage& vp,Lines& lines,St
 // during the consumer. This is not a published vtable or GPU retirement proof.
 template<class Read,class Lines,class State,class Retire,class Use>
 int tglWithOwnedVpAssemblyEntries(TglOwnedVpSfcCallerStorage& vp,Read& read,
-    Lines& lines,State& state,Retire& retire,Use use) noexcept {
+    Lines& lines,State& state,Retire& retire,Use use,
+    const TglOwnedVeboxFrameRetention* retention) noexcept {
     return tglWithOwnedVpAdmissionEntries(vp,read,
         [&](void* admitted,const TglOwnedVpAdmissionEntries& admission) noexcept {
             return tglWithOwnedVpResourceEntries(vp,lines,state,retire,
@@ -14120,7 +14128,7 @@ int tglWithOwnedVpAssemblyEntries(TglOwnedVpSfcCallerStorage& vp,Read& read,
                     static_assert(noexcept(use(child,admission,allocate,release)),
                         "VP assembly-entry consumer ABI");
                     return use(child,admission,allocate,release);
-                });
+                },retention);
         });
 }
 

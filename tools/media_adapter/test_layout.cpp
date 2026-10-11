@@ -11997,6 +11997,7 @@ int main() {
                 for(int expected:{77,0,-17}) {
                     sfdBackend.status=expected==77?77:0;
                     auto retire=[]() noexcept {return 0;};
+                    TglOwnedVeboxFrameRetention frameRetention;
                     unsigned generated=0;
                     TglOwnedSfcStateParametersPacket previous{};
                     std::memcpy(previous.data(),state.data(),previous.size());
@@ -12006,8 +12007,17 @@ int main() {
                                 state,lines,output,prefix,{},false,false,false,
                                 TglOwnedSfcCompressionMode{},allocate,query,
                                 [&](auto&) noexcept {++generated;return expected;},&sfd);
+                            if(expected==0) {
+                                assert(state.withVpParameterPublication(vp,[&](const uint8_t*) noexcept {
+                                    assert(allocate(vp.bytes.data())==0);
+                                    struct Pending {bool acquired,writtenBack;};
+                                    frameRetention.observe(Pending{false,true});
+                                    assert(allocate(vp.bytes.data())==5);
+                                    return 0;
+                                })==0);
+                            }
                             release(vp.bytes.data());return result;
-                        })==expected);
+                        },&frameRetention)==expected);
                     assert(generated==unsigned(expected!=77));
                     if(expected==77) assert(std::memcmp(previous.data(),state.data(),previous.size())==0);
                     uintptr_t publication=1;
