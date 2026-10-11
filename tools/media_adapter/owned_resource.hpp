@@ -10259,7 +10259,7 @@ template<class StateBackend,class AvsBackend> class TglOwnedVpSfcCpuGraph {
     TglOwnedVpSfcCallerStorage storage_;
     TglOwnedSfcStateParameters<StateBackend> state_;
     TglOwnedSfcAvsParameters<AvsBackend> avs_;
-    bool ready_=false,busy_=false,resourcesBound_=false;
+    bool ready_=false,busy_=false,resourcesBound_=false,constructionScope_=false;
     uint64_t generation_=0;
     struct SendContext {
         void* child;
@@ -10298,7 +10298,7 @@ public:
     template<class Binding,class Read>
     bool initialize(uintptr_t os,uintptr_t renderHal,uintptr_t mhw,
         const Binding& binding,Read read,uint32_t channel,uintptr_t performance) {
-        if(busy_ || resourcesBound_ || generation_==UINT64_MAX) return false;
+        if(busy_ || resourcesBound_ || constructionScope_ || generation_==UINT64_MAX) return false;
         Guard guard(busy_);clear();
         if(!storage_.initializeBorrowed(os,renderHal,mhw,binding,read) ||
            !avs_.initialize()) {
@@ -10329,7 +10329,7 @@ public:
         using InitResolve=TglOwnedVpSfcResolve<InitContext>;
         using Entry=void(*)(void*) noexcept;
         static_assert(noexcept(use(nullptr,Entry{})),"VP construction consumer ABI");
-        if(!ready_ || busy_ || resourcesBound_ || generation_==UINT64_MAX) return 5;
+        if(!ready_ || busy_ || resourcesBound_ || constructionScope_ || generation_==UINT64_MAX) return 5;
         Guard guard(busy_);ready_=false;++generation_;
         InitContext initialization(storage_,state_);
         void* child=storage_.bytes.data();
@@ -10355,6 +10355,36 @@ public:
             static_assert(noexcept(use(child,entries)),"VP construction catalogue ABI");
             return use(child,static_cast<const TglOwnedVpEntrySet&>(entries));
         });
+    }
+    // Initialize once, then allow frame/lifecycle scopes while the SAME
+    // initialize resolver remains live. No expired construction pointer is
+    // copied into the frame catalogue. A duplicate void init records failure
+    // without mutating leased state; report that failure after Use returns.
+    template<class Construct,class Use> int withInitializedAssemblyEntries(
+        const TglOwnedVpEntrySet& base,Construct construct,Use use) noexcept {
+        using InitContext=TglOwnedVpPassInitContext<StateBackend>;
+        using InitResolve=TglOwnedVpSfcResolve<InitContext>;
+        if(base.initialize || !ready_ || busy_ || resourcesBound_ ||
+            constructionScope_ || generation_==UINT64_MAX) return 5;
+        const auto retained=base;
+        Guard construction(constructionScope_);
+        InitContext initialization(storage_,state_);
+        void* child=storage_.bytes.data();
+        TglOwnedVpSfcScopedContext<InitContext> scope(child,initialization);
+        auto entries=retained;
+        if(!scope.bound() || !tglBindOwnedVpInitializeEntry<InitResolve>(child,entries)) return 5;
+        {
+            Guard guard(busy_);ready_=false;++generation_;
+            static_assert(noexcept(construct(child,entries)),"VP construction phase ABI");
+            const int result=construct(child,static_cast<const TglOwnedVpEntrySet&>(entries));
+            const int status=result?result:initialization.status();
+            if(status) {clear();return status;}
+            ready_=true;
+        }
+        static_assert(noexcept(use(child,entries)),"VP initialized frame phase ABI");
+        const int result=use(child,static_cast<const TglOwnedVpEntrySet&>(entries));
+        // Do not clear acquired backing on a later consumer failure.
+        return result?result:initialization.status();
     }
     // CPU teardown only: the enclosing runtime owner still has to establish
     // GPU retirement before calling this or releasing the VP allocation.
@@ -13825,15 +13855,14 @@ int tglWithOwnedVpInitializedLifetimeAssembly(Graph& graph,Lines& lines,Retire& 
     Release& release,const TglOwnedVpEntrySet& base,Construct construct,Use use) noexcept {
     if(base.initialize || base.destroy || base.deletingDestroy) return 5;
     const auto retainedBase=base;
-    void* child=nullptr;
-    const int initialized=graph.withInitializationAssemblyEntries(retainedBase,
+    return graph.withInitializedAssemblyEntries(retainedBase,
         [&](void* admitted,const auto& entries) noexcept {
             static_assert(noexcept(construct(admitted,entries)),"VP lifecycle construction ABI");
-            child=admitted;return construct(admitted,entries);
+            return construct(admitted,entries);
+        },[&](void* child,const TglOwnedVpEntrySet& initialized) noexcept {
+            TglOwnedVpLifetimeContext<Graph,Lines,Retire,Release> lifetime(child,graph,lines,retire,release);
+            return tglWithOwnedVpLifetimeAssemblyEntries(child,lifetime,initialized,use);
         });
-    if(initialized) return initialized;
-    TglOwnedVpLifetimeContext<Graph,Lines,Retire,Release> lifetime(child,graph,lines,retire,release);
-    return tglWithOwnedVpLifetimeAssemblyEntries(child,lifetime,retainedBase,use);
 }
 
 // Owned VP+30 void callback context. Retirement is an external, fallible

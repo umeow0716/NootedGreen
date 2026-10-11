@@ -9937,10 +9937,10 @@ static void testVpSfcCpuGraph() {
             assert(child==lifetimeChild && !entries.destroy && !entries.deletingDestroy);
             escapedConstructor=entries;entries.initialize(child);return 0;
         },[&](void* child,const auto& entries) noexcept {
-            assert(graph.generation()==beforeLifecycleGeneration+1 && !entries.initialize);
+            assert(graph.generation()==beforeLifecycleGeneration+1 && entries.initialize==escapedConstructor.initialize);
             escapedDestructor=entries;
             const auto before=state.frees;
-            escapedConstructor.initialize(child);assert(state.frees==before);
+            assert(entries.initialize==escapedConstructor.initialize && state.frees==before);
             int source=0,data=0,command=0;unsigned states=0,emissions=0;
             assert(graph.withPreparedCallbackAssemblyPass(entries,{},0,0x4000,0x2000,0,&source,&data,
                 [&](void*,const auto&,auto&) noexcept -> int {++states;return 0;},
@@ -9948,7 +9948,7 @@ static void testVpSfcCpuGraph() {
                 [](void*,const auto&) noexcept {assert(false);},
                 [&](void* admitted,void*,void*,const auto& pass) noexcept {
                     assert(admitted==child && pass.destroy==entries.destroy &&
-                        pass.deletingDestroy==entries.deletingDestroy && !pass.initialize &&
+                        pass.deletingDestroy==entries.deletingDestroy && pass.initialize==entries.initialize &&
                         pass.setup && pass.send && pass.state && pass.filters);
                     ++emissions;return 0;
                 },[&](void* admitted,const auto& pass) noexcept {
@@ -9960,6 +9960,22 @@ static void testVpSfcCpuGraph() {
         })==31);
     escapedDestructor.destroy(lifetimeChild);escapedDestructor.deletingDestroy(lifetimeChild);
     assert(retirementCalls==2 && allocationReleases==2 && !state.live && !avs.live);
+    const auto afterAssemblyFrees=state.frees;
+    escapedConstructor.initialize(lifetimeChild);
+    assert(state.frees==afterAssemblyFrees && !state.live && !avs.live);
+    assert(initialize());
+    assert(tglWithOwnedVpInitializedLifetimeAssembly(graph,lines,retire,release,{},
+        [](void* child,const auto& entries) noexcept -> int {entries.initialize(child);return 0;},
+        [&](void* child,const auto& entries) noexcept -> int {
+            assert(graph.ownsStorage(child) && entries.initialize && entries.destroy && entries.deletingDestroy);
+            const auto generation=graph.generation();const auto frees=state.frees;
+            assert(graph.withPassInitializationEntry([](void*,auto) noexcept -> int {assert(false);return 0;})==5);
+            assert(graph.generation()==generation && state.frees==frees);
+            entries.initialize(child); // live resolver: duplicate is an error, never a silent success stub
+            assert(state.frees==frees && state.live && avs.live);
+            return 0;
+        })==5);
+    assert(state.live && avs.live && retirementCalls==2 && allocationReleases==2);
     for(unsigned failure=0;failure<3;++failure) {
         assert(initialize());
         const auto generation=graph.generation();
