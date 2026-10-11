@@ -11523,10 +11523,10 @@ inline int tglWithOwnedSfcAvsCommands(TglOwnedSfcCommandParameters& parameters,
     return tglWithOwnedSfcAvsTables(owner,cache,format,scaleX,scaleY,siting,
         forceFilter,symmetric,sharpening,window,sine,
         [&](const TglOwnedSfcAvsTables& ready) noexcept {
-            // Preserve caller-qualified pipe modes/reserved bytes. These are
-            // native CPU arguments, not raw GPU packets or a submission.
-            parameters.y.coefficients=ready.packedY;
-            parameters.uv.coefficients=ready.packedUv;
+            // AVS command phases must describe the same source as these
+            // coefficients; do not leave stale phases from a prior pass.
+            auto sourceSiting=siting;
+            if(!tglPrepareOwnedSfcAvsCommandParameters(parameters,ready,sourceSiting)) return 5;
             return generate(parameters);
         });
 }

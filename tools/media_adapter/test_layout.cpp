@@ -10058,11 +10058,17 @@ static void testSfcAvsOwnership() {
         TglOwnedSfcCommandParameters commands;
         commands.y.pipeMode=1;commands.uv.pipeMode=1;
         commands.y.reserved.fill(0xa5);commands.uv.reserved.fill(0x5a);
+        commands.avs.fill(0xff);
         assert(tglWithOwnedSfcAvsCommands(commands,owner,tables,0x19,.5f,.75f,
             0x11,false,true,0.f,0.f,sine,[&](const auto& packet) noexcept {
                 owner.reset();assert(!owner.initialize());
                 assert(packet.y.coefficients==tables.packedY && packet.uv.coefficients==tables.packedUv);
                 assert(packet.y.pipeMode==1 && packet.uv.pipeMode==1);
+                uint32_t horizontal=1,vertical=1;
+                std::memcpy(&horizontal,packet.avs.data()+4,4);
+                std::memcpy(&vertical,packet.avs.data()+8,4);
+                assert(!horizontal && !vertical);
+                assert(packet.avs[0]==0xff && packet.avs[12]==0xff);
                 for(auto byte:packet.y.reserved) assert(byte==0xa5);
                 for(auto byte:packet.uv.reserved) assert(byte==0x5a);
                 return 31;
