@@ -6383,6 +6383,7 @@ static void testNativeResourceBoundary() {
             {
                 std::array<TglOwnedDescriptorOnlySurface,4> targets;
                 unsigned consumers=0;
+                unsigned reportPublications=0;
                 assert(tglWithOwnedDescriptorFfdiBatch(targets,owner,&owner,&destination,
                     2,0x19,1,{true,1},{8,3},0xa5,0x5a,
                     [&](const auto& inputs,const auto& outputs,size_t count,uint8_t flag,uint8_t mode) noexcept {
@@ -6398,13 +6399,43 @@ static void testNativeResourceBoundary() {
                         owner.reset();destination.reset();
                         assert(owner.ensure(key)==5 && destination.ensure(key)==5);
                         return 31;
-                    })==31 && consumers==1);
+                    },{},[&](uint8_t flag,uint8_t mode) noexcept {
+                        assert(flag==1 && mode==1 && reportPublications<2);
+                        const auto index=reportPublications++;
+                        assert(targets[index].withDescriptor([&](const auto& view) noexcept {
+                            uint32_t color=0,sample=0;
+                            std::memcpy(&color,view.prefix.data(),4);
+                            std::memcpy(&sample,view.prefix.data()+0x138,4);
+                            assert(color==8 && sample==3);
+                        }));
+                        if(!index) assert(!targets[1].withDescriptor([](const auto&) noexcept {assert(false);}));
+                        return 0;
+                    })==31 && consumers==1 && reportPublications==2);
                 assert(targets[0].withDescriptor([](const auto& view) noexcept {
                     assert(!tglNativeBackingPresent(view.resource));
                 }));
                 assert(targets[1].withDescriptor([](const auto& view) noexcept {
                     assert(!tglNativeBackingPresent(view.resource));
                 }));
+                for(unsigned denyAt=0;denyAt<2;++denyAt) {
+                    std::array<TglOwnedDescriptorOnlySurface,4> partial;
+                    unsigned published=0;
+                    assert(tglWithOwnedDescriptorFfdiBatch(partial,owner,&owner,&destination,
+                        2,0x19,1,{true,1},{8,3},0,0,
+                        [](const auto&,const auto&,size_t,uint8_t,uint8_t) noexcept {
+                            assert(false);return 0;
+                        },{},[&](uint8_t,uint8_t) noexcept {return published++==denyAt?91:0;})==91);
+                    assert(published==denyAt+1);
+                    for(unsigned index=0;index<4;++index) {
+                        bool entered=partial[index].withDescriptor([](const auto& view) noexcept {
+                            uint32_t color=0,sample=0;
+                            std::memcpy(&color,view.prefix.data(),4);
+                            std::memcpy(&sample,view.prefix.data()+0x138,4);
+                            assert(color==8 && sample==3);
+                        });
+                        assert(entered==(index<=denyAt));
+                    }
+                }
                 assert(targets[1].withDescriptor([&](const auto&) noexcept {
                     assert(tglWithOwnedDescriptorFfdiBatch(targets,owner,&owner,&destination,
                         2,0x19,1,{true,1},{8,3},0,0,

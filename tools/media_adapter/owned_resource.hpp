@@ -5587,17 +5587,26 @@ int tglWithOwnedDescriptorFfdiBatch(std::array<TglOwnedDescriptorOnlySurface,Cou
     using Inputs=std::array<const TglOwnedSurfaceStorage*,3>;
     static_assert(noexcept(use(std::declval<const Inputs&>(),std::declval<const Outputs&>(),
         size_t{},uint8_t{},uint8_t{})),"descriptor FFDI consumer ABI");
-    return tglWithAllocatedOwnedFfdiBatch<Count>(input,execution,secondary,count,format,tile,
-        compression,query,flag,mode,
-        [&](size_t index,const auto& request,bool& changed) noexcept {
-            return targets[index].prepare(request,changed)?0:5;
-        },[&](const Inputs& inputs,const auto&,size_t active,uint8_t currentFlag,uint8_t currentMode) noexcept {
-            for(size_t index=0;index<active;++index)
-                if(!targets[index].publishFfdiFrame(*inputs[0],query,inputs[1],index==0?inputs[2]:nullptr))
-                    return 5;
+    static_assert(Count>0 && Count<=4,"owned descriptor FFDi capacity");
+    static_assert(noexcept(publish(uint8_t{},uint8_t{})) &&
+        std::is_same_v<decltype(publish(uint8_t{},uint8_t{})),int>,"FFDi report publisher ABI");
+    if(!count || count>Count) return 5;
+    return tglWithCapturedOwnedSurfaceRoles(std::array<Owner*,3>{&input,execution,secondary},captured,
+        [&](const Inputs& inputs) noexcept {
+            TglOwnedFfdiAllocationRequest request;
+            if(!tglPrepareOwnedFfdiAllocationRequest(*inputs[0],format,tile,compression,request)) return 5;
+            for(size_t index=0;index<count;++index) {
+                bool changed=false;
+                if(!targets[index].prepare(request,changed) ||
+                   !targets[index].publishFfdiFrame(*inputs[0],query,inputs[1])) return 5;
+                tglUpdateOwnedFfdiExecutionCompression(changed,compression,flag,mode);
+                if(changed) {const int status=publish(flag,mode);if(status) return status;}
+            }
+            // Native1f7e52 copies secondary only after the complete FFDi loop.
+            if(inputs[2] && !targets[0].publishFfdiSecondaryFrom(*secondary,*inputs[2])) return 5;
             Outputs outputs{};
             const auto enter=[&](auto&& self,size_t index) noexcept -> int {
-                if(index==active) return use(inputs,static_cast<const Outputs&>(outputs),active,currentFlag,currentMode);
+                if(index==count) return use(inputs,static_cast<const Outputs&>(outputs),count,flag,mode);
                 int result=5;
                 const auto consume=[&](const auto& descriptor) noexcept {
                     outputs[index]=&descriptor;result=self(self,index+1);outputs[index]=nullptr;
@@ -5608,7 +5617,7 @@ int tglWithOwnedDescriptorFfdiBatch(std::array<TglOwnedDescriptorOnlySurface,Cou
                 return leased?result:5;
             };
             return enter(enter,0);
-        },captured,publish);
+        });
 }
 
 // Allocation-disabled 1f7b06 -> 1f7e52 edge for an existing descriptor slot0.
