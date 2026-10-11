@@ -5313,6 +5313,30 @@ struct TglNativeDnScalarRequest {
     uint32_t mode=0,word20=0,word24=0,word28=0,word2c=0,word30=0;
     bool mode3NativeDefault=false;
 };
+// Caller holds the native request lease for this synchronous snapshot. This
+// decoder only admits the proven NO nested-payload shape; a nonnull request38
+// must take the separate payload-owning path, never silently lose its data.
+template<class Read>
+bool tglDecodeNativeDnScalarRequest(TglNativeDnScalarRequest& output,
+    uintptr_t address,size_t extent,bool mode3NativeDefault,Read read) noexcept {
+    static_assert(noexcept(read(uintptr_t{},static_cast<void*>(nullptr),size_t{})) &&
+        std::is_same_v<decltype(read(uintptr_t{},static_cast<void*>(nullptr),size_t{})),bool>);
+    constexpr size_t snapshotSize=0x40;
+    if(!address || extent<snapshotSize || address>UINTPTR_MAX-snapshotSize) return false;
+    std::array<uint8_t,snapshotSize> snapshot{};
+    if(!read(address,snapshot.data(),snapshot.size())) return false;
+    uintptr_t nested=0;std::memcpy(&nested,snapshot.data()+0x38,8);
+    if(nested) return false;
+    TglNativeDnScalarRequest candidate;
+    std::memcpy(&candidate.mode,snapshot.data(),4);
+    std::memcpy(&candidate.word20,snapshot.data()+0x20,4);
+    std::memcpy(&candidate.word24,snapshot.data()+0x24,4);
+    std::memcpy(&candidate.word28,snapshot.data()+0x28,4);
+    std::memcpy(&candidate.word2c,snapshot.data()+0x2c,4);
+    std::memcpy(&candidate.word30,snapshot.data()+0x30,4);
+    candidate.mode3NativeDefault=mode3NativeDefault;
+    output=candidate;return true;
+}
 struct TglOwnedDnParameterStorage {
     std::array<uint8_t,0x38> bytes{};
 };
@@ -16436,6 +16460,14 @@ public:
         });
         if(!entered || !initialized) {parameters_.reset();return false;}
         return true;
+    }
+    template<class Read>
+    bool initializeScalarParametersFromNativeRequest(uintptr_t request,size_t extent,
+        bool mode3NativeDefault,Read read) noexcept {
+        if(!surfacesReady() || backing_.retention()()) return false;
+        TglNativeDnScalarRequest decoded;
+        return tglDecodeNativeDnScalarRequest(decoded,request,extent,mode3NativeDefault,read) &&
+            initializeScalarParameters(decoded);
     }
     // Runtime-facing frame entry: select an owned child, then keep its private
     // table/SFC owner leased through frontend borrowing and retention capture.

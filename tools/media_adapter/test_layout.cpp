@@ -11596,6 +11596,32 @@ int main() {
         TglNativeDnScalarRequest request;
         request.word20=7;request.word24=9;request.word28=11;request.word2c=13;
         request.word30=3;
+        std::array<uint8_t,0x40> nativeRequest{};
+        std::memcpy(nativeRequest.data()+0x20,&request.word20,4);
+        std::memcpy(nativeRequest.data()+0x24,&request.word24,4);
+        std::memcpy(nativeRequest.data()+0x28,&request.word28,4);
+        std::memcpy(nativeRequest.data()+0x2c,&request.word2c,4);
+        std::memcpy(nativeRequest.data()+0x30,&request.word30,4);
+        unsigned reads=0;
+        auto requestRead=[&](uintptr_t address,void* out,size_t size) noexcept {
+            ++reads;
+            if(address!=0x1000 || size!=nativeRequest.size()) return false;
+            std::memcpy(out,nativeRequest.data(),size);return true;
+        };
+        TglNativeDnScalarRequest decoded;
+        assert(tglDecodeNativeDnScalarRequest(decoded,0x1000,0x40,true,requestRead));
+        assert(decoded.mode==0 && decoded.word20==7 && decoded.word24==9 &&
+            decoded.word28==11 && decoded.word2c==13 && decoded.word30==3 && decoded.mode3NativeDefault);
+        decoded.mode=77;
+        assert(!tglDecodeNativeDnScalarRequest(decoded,0,0x40,false,requestRead));
+        assert(!tglDecodeNativeDnScalarRequest(decoded,0x1000,0x3f,false,requestRead));
+        assert(!tglDecodeNativeDnScalarRequest(decoded,UINTPTR_MAX-8,0x40,false,requestRead));
+        assert(reads==1 && decoded.mode==77);
+        nativeRequest[0x38]=1;
+        assert(!tglDecodeNativeDnScalarRequest(decoded,0x1000,0x40,false,requestRead));
+        assert(decoded.mode==77);
+        assert(!tglDecodeNativeDnScalarRequest(decoded,0x2000,0x40,false,requestRead));
+        assert(decoded.mode==77);
         for(uint32_t mode: {0u,1u,2u,3u,UINT32_MAX}) {
             request.mode=mode;
             auto parameters=tglProduceOwnedDnScalarParameters(request);
@@ -16772,7 +16798,22 @@ int main() {
                             TglNativeDnScalarRequest dnRequest;
                             dnRequest.mode=0;dnRequest.word24=1;
                             dnRequest.word28=11;dnRequest.word2c=13;
-                            assert(frame.surfacesReady() && frame.initializeScalarParameters(dnRequest));
+                            std::array<uint8_t,0x40> nativeDn{};
+                            std::memcpy(nativeDn.data()+0x24,&dnRequest.word24,4);
+                            std::memcpy(nativeDn.data()+0x28,&dnRequest.word28,4);
+                            std::memcpy(nativeDn.data()+0x2c,&dnRequest.word2c,4);
+                            auto dnRead=[&](uintptr_t address,void* out,size_t bytes) noexcept {
+                                if(address!=reinterpret_cast<uintptr_t>(nativeDn.data()) || bytes!=nativeDn.size())
+                                    return false;
+                                std::memcpy(out,nativeDn.data(),bytes);return true;
+                            };
+                            nativeDn[0x38]=1;
+                            assert(!frame.initializeScalarParametersFromNativeRequest(
+                                reinterpret_cast<uintptr_t>(nativeDn.data()),nativeDn.size(),false,dnRead));
+                            assert(!frameDn.live);
+                            nativeDn[0x38]=0;
+                            assert(frame.surfacesReady() && frame.initializeScalarParametersFromNativeRequest(
+                                reinterpret_cast<uintptr_t>(nativeDn.data()),nativeDn.size(),false,dnRead));
                             assert(!frame.initializeScalarParameters(dnRequest));
                             auto constructFrontend=[&](uintptr_t entry,void* object,void* nativeOs,void*,void*,
                                 void*,void*,void*,const void*,int32_t* out) noexcept {
