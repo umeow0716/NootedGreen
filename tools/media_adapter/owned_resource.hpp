@@ -2036,6 +2036,21 @@ bool tglQueryNativeTwoPassCsc(const TglTwoPassCscBinding& binding,
     return true;
 }
 
+enum class TglVeboxMode0Allocation { Required, Reuse };
+// Exact12c14b..12c1cd decision only. Native tests bit0 of report09/source86,
+// full DWORD reporta0c==1, then calls12bf00. Preserve that short-circuit order:
+// the skip predicate can inspect native DN/history state and is not an eager
+// input. Reuse here does NOT establish backing validity or fence completion.
+template<class SkipPredicate>
+TglVeboxMode0Allocation tglVeboxMode0AllocationDecision(uint8_t report09,
+    uint8_t source86,uint32_t reportA0c,SkipPredicate skipPredicate) noexcept {
+    static_assert(noexcept(skipPredicate()) &&
+        std::is_same_v<decltype(skipPredicate()),bool>,"native mode0 skip predicate ABI");
+    if((report09&1) && !(source86&1) && reportA0c==1 && skipPredicate())
+        return TglVeboxMode0Allocation::Reuse;
+    return TglVeboxMode0Allocation::Required;
+}
+
 // Exact native mode dispatcher, not the outer renderer131fa0. The prologue
 // stores RDI/RSI/RDX and immediately consumes argument2+10/+18. Keep those
 // arguments opaque until their complete producer/backing contract is bound.

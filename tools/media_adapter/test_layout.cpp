@@ -2712,6 +2712,17 @@ static bool executionReleaseFixture(uintptr_t base,uintptr_t p,void* out,size_t 
     return false;
 }
 static void testVeboxRenderBinding() {
+    for(unsigned report=0;report<256;++report)
+      for(unsigned source=0;source<256;++source)
+        for(uint32_t pipe : {0u,1u,2u,0x10001u}) for(bool skip : {false,true}) {
+            unsigned queries=0;
+            const auto result=tglVeboxMode0AllocationDecision(uint8_t(report),uint8_t(source),pipe,
+                [&]() noexcept {++queries;return skip;});
+            const bool candidate=(report&1) && !(source&1) && pipe==1;
+            assert(queries==unsigned(candidate));
+            assert(result==(candidate && skip ? TglVeboxMode0Allocation::Reuse :
+                TglVeboxMode0Allocation::Required));
+        }
     constexpr uintptr_t image=0x1000000;
     auto bytes=TglVeboxRenderBinding::anchor;
     bool readable=true,rx=true,identity=true;
