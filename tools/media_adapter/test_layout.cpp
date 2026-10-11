@@ -12855,6 +12855,24 @@ int main() {
                 nativeTable[0x1b8/8]=base+0x71e80;
                 std::array<uintptr_t,20> hooks{};
                 for(size_t i=0;i<hooks.size();++i) hooks[i]=0x3000+i*16;
+                using Lifetime=TglOwnedVeboxLifetimeContext<decltype(owner)>;
+                Lifetime staleLifetime(owner),lifetime(owner);
+                const auto previousGeneration=owner.allocationGeneration();
+                void* lifecycleChild=owner.constructedBase();
+                using LifetimeScope=TglOwnedVeboxScopedContext<Lifetime>;
+                struct LifetimeResolve {
+                    Lifetime* operator()(void* child) const noexcept {return LifetimeScope::get(child);}
+                };
+                using Lifecycle=TglOwnedVeboxLifetimeCallbacks<LifetimeResolve>;
+                Lifecycle::destroy(lifecycleChild);assert(!eventCount && cpu.live);
+                assert(!tglBindOwnedVeboxLifetimeHooks<LifetimeResolve>(lifecycleChild,hooks));
+                LifetimeScope lifetimeScope(lifecycleChild,lifetime);assert(lifetimeScope.bound());
+                const auto occupiedHooks=hooks;
+                assert(!tglBindOwnedVeboxLifetimeHooks<LifetimeResolve>(lifecycleChild,hooks) && hooks==occupiedHooks);
+                hooks[0]=hooks[1]=0;
+                assert(!tglBindOwnedVeboxLifetimeHooks<LifetimeResolve>(&eventCount,hooks));
+                assert(tglBindOwnedVeboxLifetimeHooks<LifetimeResolve>(lifecycleChild,hooks));
+                assert(!tglBindOwnedVeboxLifetimeHooks<LifetimeResolve>(lifecycleChild,hooks));
                 bool readable=false;
                 auto tableRead=[&](uintptr_t address,void* out,size_t size) noexcept {
                     owner.reset();assert(cpu.live && !eventCount); // admission reentry is inert
@@ -13479,26 +13497,21 @@ int main() {
                     })==0);
                     graph.reset();assert(!stateCpu.live && !avsCpu.live && cpu.live);
                 }
-                using Lifetime=TglOwnedVeboxLifetimeContext<decltype(owner)>;
-                Lifetime staleLifetime(owner);
-                const auto previousGeneration=owner.allocationGeneration();
-                Lifetime lifetime(owner);void* lifecycleChild=owner.constructedBase();
-                using LifetimeScope=TglOwnedVeboxScopedContext<Lifetime>;
-                struct LifetimeResolve {
-                    Lifetime* operator()(void* child) const noexcept {return LifetimeScope::get(child);}
-                };
-                using Lifecycle=TglOwnedVeboxLifetimeCallbacks<LifetimeResolve>;
-                Lifecycle::destroy(lifecycleChild);assert(!eventCount && cpu.live);
                 {
-                    LifetimeScope scope(lifecycleChild,lifetime);assert(scope.bound());
+                    assert(lifetimeScope.bound());
+                    uintptr_t installedTable=0,installedDestroy=0,installedDelete=0;
+                    std::memcpy(&installedTable,cpu.bytes.data(),8);
+                    std::memcpy(&installedDestroy,reinterpret_cast<const void*>(installedTable),8);
+                    std::memcpy(&installedDelete,reinterpret_cast<const void*>(installedTable+8),8);
+                    assert(installedDestroy==hooks[0] && installedDelete==hooks[1]);
                     Lifecycle::deletingDestroy(nullptr);Lifecycle::destroy(&eventCount);
                     assert(!eventCount && cpu.live);
-                    Lifecycle::destroy(lifecycleChild);
+                    reinterpret_cast<void(*)(void*) noexcept>(installedDestroy)(lifecycleChild);
                     assert(lifetime.status()==0 && lifetime.owns(lifecycleChild));
                     assert(cpu.live && !owner.constructedBase());
                     assert(eventCount==3 && events[0]==1 && events[1]==2 && events[2]==4);
                     Lifecycle::destroy(lifecycleChild);assert(lifetime.status()==5 && eventCount==3);
-                    Lifecycle::deletingDestroy(lifecycleChild);
+                    reinterpret_cast<void(*)(void*) noexcept>(installedDelete)(lifecycleChild);
                     assert(lifetime.status()==0 && !lifetime.owns(lifecycleChild) && !cpu.live && eventCount==4);
                     Lifecycle::deletingDestroy(lifecycleChild);assert(eventCount==4);
                 }

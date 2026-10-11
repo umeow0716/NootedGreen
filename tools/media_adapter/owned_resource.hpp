@@ -3532,6 +3532,17 @@ private:
         if(context && context->owns(child)) context->destroy(deleting);
     }
 };
+template<class Resolve>
+bool tglBindOwnedVeboxLifetimeHooks(void* child,std::array<uintptr_t,20>& hooks) noexcept {
+    static_assert(noexcept(Resolve{}(child)),"VEBOX lifecycle hook resolver ABI");
+    auto* context=Resolve{}(child);
+    if(!context || !context->owns(child) || hooks[0] || hooks[1]) return false;
+    using Callback=TglOwnedVeboxLifetimeCallbacks<Resolve>;
+    auto candidate=hooks;
+    candidate[0]=reinterpret_cast<uintptr_t>(&Callback::destroy);
+    candidate[1]=reinterpret_cast<uintptr_t>(&Callback::deletingDestroy);
+    hooks=candidate;return true;
+}
 struct TglVeboxPrefix {
     uintptr_t vtable = 0, slot08 = 0, os = 0, renderHal = 0, sku = 0, wa = 0;
     std::array<uint8_t, 8> slot30{};
