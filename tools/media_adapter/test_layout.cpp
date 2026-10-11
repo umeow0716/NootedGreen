@@ -11756,9 +11756,22 @@ static void testRetainedVeboxFrames() {
         assert(owners.withOwner(0x1000,0x2000,7,0x4000,use)==31 && uses==1);
         TglNativeRemovedContextBatch<2> removed;
         removed.valid=true;removed.count=2;removed.contexts={0x4000,0x6000};
+        unsigned preparations=0;int prepareResult=0;
+        auto prepare=[&](const std::array<ContextOwner*,2>& selected,uint32_t count) noexcept -> int {
+            ++preparations;assert(count==2 && selected[0]==first && selected[1]==second && deaths==1);
+            assert(owners.withOwner(0x1000,0x2000,7,0x4000,use)==5);
+            return prepareResult;
+        };
+        assert(owners.prepareRemoval(0x1000,0x2000,7,removed,prepare)==5 && !preparations && deaths==1);
         assert(owners.reconcileSuccessfulRemoval(0x1000,0x2000,7,removed)==5 && deaths==1);
         removed.contexts={0x4000,0x4000};
         assert(owners.reconcileSuccessfulRemoval(0x1000,0x2000,7,removed)==5 && deaths==1);
+        removed.contexts={0x4000,0x5000};
+        assert(owners.prepareRemoval(0x1000,0x2000,6,removed,prepare)==5 && !preparations);
+        assert(owners.prepareRemoval(0x1000,0x2000,7,removed,prepare)==0 && preparations==1 && deaths==1);
+        prepareResult=31;
+        assert(owners.prepareRemoval(0x1000,0x2000,7,removed,prepare)==31 && preparations==2 && deaths==1);
+        assert(owners.prepareRemoval(0x1000,0x2000,7,removed,prepare)==5 && preparations==2 && deaths==1);
         assert(owners.quarantine(0x1000,0x2000,7));
         assert(owners.withOwner(0x1000,0x2000,7,0x4000,use)==5 && uses==1 && deaths==1);
         // Explicit CPU fixture authority: native removal already succeeded.

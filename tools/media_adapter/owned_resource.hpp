@@ -16593,6 +16593,29 @@ public:
         for(auto& e:entries_) if(matches(e,image,physical,generation)) {e.quarantined=true;found=true;}
         return found;
     }
+    // Used as coordinator's pre-native preparation. Resolve EVERY owner before
+    // exposing any of them; callback must validate all child detach admissions
+    // before mutating. Borrowed pointers may not escape or be deleted. A partial
+    // detach failure quarantines the entire selected set and retains allocation.
+    template<size_t N,class Prepare> int prepareRemoval(uintptr_t image,uintptr_t physical,
+        uint64_t generation,const TglNativeRemovedContextBatch<N>& batch,Prepare prepare) noexcept {
+        static_assert(noexcept(prepare(std::declval<const std::array<Owner*,N>&>(),uint32_t{})) &&
+            std::is_same_v<decltype(prepare(std::declval<const std::array<Owner*,N>&>(),uint32_t{})),int>);
+        if(!image || !physical || !generation || !batch.valid || batch.count>N ||
+            gate_.test_and_set(std::memory_order_acquire)) return 5;
+        Unlock unlock{gate_};std::array<Entry*,N> selected{};std::array<Owner*,N> owners{};
+        for(uint32_t i=0;i<batch.count;++i) {
+            if(!batch.contexts[i]) return 5;
+            for(uint32_t j=0;j<i;++j) if(batch.contexts[j]==batch.contexts[i]) return 5;
+            for(auto& e:entries_) if(matches(e,image,physical,generation) && e.context==batch.contexts[i])
+                selected[i]=&e;
+            if(!selected[i] || selected[i]->quarantined) return 5;
+            owners[i]=selected[i]->owner;
+        }
+        const int result=prepare(static_cast<const std::array<Owner*,N>&>(owners),batch.count);
+        if(result) for(uint32_t i=0;i<batch.count;++i) selected[i]->quarantined=true;
+        return result;
+    }
     // ONLY called by successful-native-removal reconciliation, after all native
     // deleting destructors return and with no retained frames. No native object
     // is read here. Validate the ENTIRE snapshot before releasing any owner.
