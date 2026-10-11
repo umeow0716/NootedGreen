@@ -16452,6 +16452,12 @@ public:
         if(!physical || !valid()) return 5;
         return registry_.withLive(ticket,binding_.image,physical,use);
     }
+    // Observation grants no retirement authority; keep pending work admitted.
+    template<class Observe> int withEventObservation(typename Registry::Ticket ticket,
+        uintptr_t physical,Observe observe) noexcept {
+        static_assert(noexcept(observe()) && std::is_same_v<decltype(observe()),int>);
+        return withFrame(ticket,physical,[&](auto&) noexcept -> int {return observe();});
+    }
     // Enter before EACH native request preparation: withFrame alone does not
     // exclude shells retained by an earlier asynchronous frame. Factory slot11
     // is a batch (15a99..15ac5), not one preparation. An outer batch admission
