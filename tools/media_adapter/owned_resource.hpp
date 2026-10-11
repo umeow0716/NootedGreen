@@ -16019,6 +16019,15 @@ public:
         slot.pending=slot.result.acquired || slot.result.writtenBack;
         return slot.result;
     }
+    // Snapshot only under the enclosing physical registry gate. All runtime
+    // pool access must stay in that gate; this is not a standalone lease.
+    bool emptyForNativeRequest() noexcept {
+        if(gate_.test_and_set(std::memory_order_acquire)) return false;
+        Unlock unlock{gate_};
+        if(physicalTeardownStarted_) return false;
+        for(const auto& slot:slots_) if(slot.frame) return false;
+        return true;
+    }
     // Physical destroy13c8c frees the wrapper borrowed by OS+8. Factory
     // table lifetime cannot protect it. Serialize the native teardown with
     // create/run/retire and refuse while ANY complete frame is still owned,
@@ -16154,6 +16163,18 @@ public:
         Unlock unlock{gate_};auto* entry=resolve(ticket);
         if(!entry || entry->state!=State::Live || entry->image!=image || entry->physical!=physical) return 5;
         return use(entry->frames); // scoped access; never publish this reference
+    }
+    // Guard BEFORE native slot11 changes input shells. Unlike terminal
+    // teardown, release the inner pool gate so synchronous renderer callbacks
+    // can create/run frames using this scoped pool, without registry reentry.
+    template<class Invoke> int withNewRequest(Ticket ticket,uintptr_t image,
+        uintptr_t physical,Invoke invoke) noexcept {
+        static_assert(noexcept(invoke(std::declval<Pool&>())) &&
+            std::is_same_v<decltype(invoke(std::declval<Pool&>())),int>);
+        return withLive(ticket,image,physical,[&](Pool& frames) noexcept -> int {
+            if(!frames.emptyForNativeRequest()) return 5;
+            return invoke(frames);
+        });
     }
     template<class Invoke> int destroy(Ticket ticket,uintptr_t image,uintptr_t physical,Invoke invoke) noexcept {
         static_assert(noexcept(invoke(uintptr_t{})) &&

@@ -11860,8 +11860,9 @@ static void testRetainedVeboxFrames() {
         assert(!registry.publish(duplicate,image,physical));
         assert(registry.cancel(duplicate));
         Pool::Ticket frameTicket;
-        assert(registry.withLive(physicalTicket,image,physical,[&](auto& frames) noexcept -> int {
+        assert(registry.withNewRequest(physicalTicket,image,physical,[&](auto& frames) noexcept -> int {
             assert(registry.withLive(physicalTicket,image,physical,unreachable)==5);
+            assert(registry.withNewRequest(physicalTicket,image,physical,unreachable)==5);
             frameTicket=frames.create(allocated,released,destroyed);
             assert(frameTicket.generation);
             const auto result=frames.run(frameTicket,[](Frame&) noexcept {
@@ -11869,6 +11870,7 @@ static void testRetainedVeboxFrames() {
             });
             assert(result.acquired && result.writtenBack);return 0;
         })==0);
+        assert(registry.withNewRequest(physicalTicket,image,physical,unreachable)==5);
         unsigned destroys=0;
         auto nativeFailure=[&](uintptr_t address) noexcept -> int {
             assert(address==physical);++destroys;return 31;
@@ -11882,7 +11884,12 @@ static void testRetainedVeboxFrames() {
                 assert(pending);return 0; // CPU discard certificate only
             });
         })==0);
+        unsigned requests=0;
+        assert(registry.withNewRequest(physicalTicket,image,physical,[&](auto&) noexcept -> int {
+            ++requests;return 31;
+        })==31 && requests==1);
         assert(registry.destroy(physicalTicket,image,physical,nativeFailure)==31 && destroys==1);
+        assert(registry.withNewRequest(physicalTicket,image,physical,unreachable)==5);
         assert(!registry.lookup(image,physical).generation);
         assert(registry.withLive(physicalTicket,image,physical,unreachable)==5);
         assert(registry.destroy(physicalTicket,image,physical,nativeFailure)==5 && destroys==1);
