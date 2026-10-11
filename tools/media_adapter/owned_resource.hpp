@@ -8077,6 +8077,26 @@ int tglWithOwnedVeboxAllocationFrame(SurfaceOwner& sourceOwner,ChildOwner& child
 // retire only allocation-owned resources with GPU users excluded; this hook
 // must not be substituted with native selective FreeResources.
 struct TglOwnedVeboxNoAllocationUnwind {void operator()(void*) const noexcept {}};
+// Qualified data-policy gates supplied by the owned frame, not donor this
+// offsets. ICL1f7afc..1f875f orders these stages; the enclosing slot58 context
+// owns failure unwind. Each stage retains its exact status and is called once.
+template<class Ffdi,class Secondary,class Ffdn,class Rectangle,class Stmm,class Statistics>
+int tglRunOwnedVeboxAllocationStages(bool ffdiEnabled,bool hasSecondary,uint32_t pipe,
+    bool stmmEnabled,Ffdi ffdi,Secondary secondary,Ffdn ffdn,Rectangle rectangle,
+    Stmm stmm,Statistics statistics) noexcept {
+    static_assert(noexcept(ffdi()) && noexcept(secondary()) && noexcept(ffdn()) &&
+        noexcept(rectangle()) && noexcept(stmm()) && noexcept(statistics()),"allocation stages must not throw");
+    static_assert(std::is_same_v<decltype(ffdi()),int> && std::is_same_v<decltype(secondary()),int> &&
+        std::is_same_v<decltype(ffdn()),int> && std::is_same_v<decltype(rectangle()),int> &&
+        std::is_same_v<decltype(stmm()),int> && std::is_same_v<decltype(statistics()),int>,"allocation stage status ABI");
+    int status=0;
+    if(ffdiEnabled && (status=ffdi())) return status;
+    if(hasSecondary && (status=secondary())) return status;
+    if((status=ffdn())) return status;
+    if(pipe==2 && (status=rectangle())) return status;
+    if(stmmEnabled && (status=stmm())) return status;
+    return statistics();
+}
 template<class Owner,class Allocate,class Unwind=TglOwnedVeboxNoAllocationUnwind>
 class TglOwnedVeboxAllocationContext {
     Owner& owner_;

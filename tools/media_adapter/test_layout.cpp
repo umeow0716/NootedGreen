@@ -1009,6 +1009,26 @@ static void testTrackedCpuOwner() {
         assert(!Callback::admit(&child,&params,&pass) && calls==2);
     }
     {
+        for(unsigned gates=0;gates<8;++gates) for(uint32_t pipe:{0u,1u,2u})
+        for(int failed=-1;failed<6;++failed) {
+            std::array<int,6> observed{};size_t used=0;
+            const auto stage=[&](int id) noexcept {
+                observed[used++]=id;return id==failed?31+id:0;
+            };
+            const int status=tglRunOwnedVeboxAllocationStages(gates&1,gates&2,pipe,gates&4,
+                [&]() noexcept {return stage(0);},[&]() noexcept {return stage(1);},
+                [&]() noexcept {return stage(2);},[&]() noexcept {return stage(3);},
+                [&]() noexcept {return stage(4);},[&]() noexcept {return stage(5);});
+            std::array<int,6> expected{};size_t count=0;int expectedStatus=0;
+            for(int id=0;id<6;++id) {
+                const bool enabled=id==0?bool(gates&1):id==1?bool(gates&2):
+                    id==3?pipe==2:id==4?bool(gates&4):true;
+                if(!enabled) continue;
+                expected[count++]=id;
+                if(id==failed) {expectedStatus=31+id;break;}
+            }
+            assert(status==expectedStatus && used==count && observed==expected);
+        }
         int child=0,foreign=0;
         struct Owner {
             void* child;bool leased=true;
