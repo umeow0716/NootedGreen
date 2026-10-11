@@ -45,6 +45,32 @@ struct TestFeatureExecutionOwner {
 };
 static void testTrackedCpuOwner() {
     {
+        TglVeboxAdmissionStagesInput input;
+        input.prefix={true,true,true,true,1,uint64_t{1}<<12,64,16};
+        input.pipe=0;std::array<uint8_t,0xd48> execution{};
+        uint8_t nativeFlag=0x80;TglVeboxAdmissionPassByte pass(nativeFlag);
+        unsigned order=0;
+        auto reset=[&]() noexcept {assert(order++==0);execution.fill(0);return true;};
+        auto select=[&](uint8_t& flag) noexcept -> uint32_t {
+            assert(order++==1 && &flag==&nativeFlag && flag==0x80);flag=0x82;return 2;
+        };
+        auto setup=[&](auto& bytes) noexcept {
+            uint32_t mode=0;std::memcpy(&mode,bytes.data()+0xa0c,4);
+            assert(order++==2 && mode==2 && nativeFlag==0x82);
+        };
+        auto query=[&]() noexcept {assert(order++==3);return true;};
+        auto feature=[&](auto&) noexcept {assert(order++==4);};
+        auto sfc=[](auto&) noexcept {assert(false);return false;};
+        assert(tglRunSelectedVeboxAdmissionStages(input,execution,pass,reset,select,setup,query,feature,sfc));
+        assert(order==5 && nativeFlag==0x82);
+        order=0;nativeFlag=0x80;
+        auto invalid=[&](uint8_t& flag) noexcept -> uint32_t {
+            assert(order++==1);flag=0x84;return 3;
+        };
+        assert(!tglRunSelectedVeboxAdmissionStages(input,execution,pass,reset,invalid,setup,query,feature,sfc));
+        assert(order==2 && nativeFlag==0x84);
+    }
+    {
         TglVeboxFeatureBinding binding;constexpr uintptr_t image=0x10000000;
         bool exact=true,qualified=true,readable=true;uintptr_t slot=image+0x12aba0;
         auto read=[&](uintptr_t p,void* out,size_t n) noexcept {
