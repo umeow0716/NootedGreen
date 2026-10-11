@@ -17107,6 +17107,34 @@ int main() {
                     setupRead,setupNative,ignoredFailureNative)==31);
                 assert(registrations==priorRegistrations && childLease.busy && !Resolve::get(actualChild));
                 admission=0;
+                for(bool acquired : {false,true}) for(int buildStatus : {0,31})
+                    for(bool publish : {false,true}) {
+                        unsigned builds=0,writes=0;
+                        const auto transaction=tglWithCapturedVeboxCommandTransaction(
+                            sourceLease,childLease,capturedExecution,actualChild,address,source,
+                            [&](int32_t& remaining) noexcept -> int {
+                                ++builds;assert(remaining==-1);
+                                if(acquired) remaining=128;
+                                return buildStatus;
+                            },[&](int status,int32_t remaining) noexcept -> bool {
+                                ++writes;assert(status==buildStatus && remaining==128);
+                                assert(childLease.busy);return publish;
+                            });
+                        assert(builds==1 && writes==unsigned(acquired));
+                        assert(transaction.builderStatus==buildStatus && transaction.acquired==acquired);
+                        assert(transaction.writtenBack==(acquired && publish));
+                        const int expected=acquired?(publish?buildStatus:5):(buildStatus?buildStatus:5);
+                        assert(transaction.status==expected);
+                    }
+                unsigned lostLeaseWrites=0;
+                const auto lostLease=tglWithCapturedVeboxCommandTransaction(
+                    sourceLease,childLease,capturedExecution,actualChild,address,source,
+                    [&](int32_t& remaining) noexcept -> int {
+                        remaining=128;capturedExecution.valid=false;return 31;
+                    },[&](int,int32_t) noexcept -> bool {++lostLeaseWrites;return true;});
+                assert(lostLease.status==5 && lostLease.builderStatus==31 && lostLease.acquired &&
+                    !lostLease.writtenBack && !lostLeaseWrites);
+                capturedExecution.valid=true;
                 capturedExecution.valid=false;
                 const auto rejectedSetup=setupCalls,rejectedBuild=nativeCalls;
                 assert(tglWithCapturedNativeVeboxBuilder(sourceLease,childLease,capturedExecution,

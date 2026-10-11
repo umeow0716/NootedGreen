@@ -14267,6 +14267,70 @@ int tglWithCapturedNativeVeboxBuilder(SourceOwner& sourceOwner,ChildOwner& child
         });
 }
 
+struct TglOwnedVeboxCommandTransactionResult {
+    int status=5;
+    int builderStatus=5;
+    bool acquired=false;
+    bool writtenBack=false;
+};
+
+// The setup output is written only after native command acquisition. Keep a
+// sentinel until then: an acquisition failure must not publish empty scratch.
+// A failed writeback leaves ownership unresolved; this is never a fence result.
+template<class SourceOwner,class ChildOwner,class ExecutionOwner,class Build,class Writeback>
+TglOwnedVeboxCommandTransactionResult tglWithCapturedVeboxCommandTransaction(
+    SourceOwner& sourceOwner,ChildOwner& childOwner,ExecutionOwner& executionOwner,
+    void* child,uintptr_t execution,const TglOwnedSurfaceStorage& source,
+    Build build,Writeback writeback) noexcept {
+    static_assert(noexcept(build(std::declval<int32_t&>())) &&
+        std::is_same_v<decltype(build(std::declval<int32_t&>())),int>);
+    static_assert(noexcept(writeback(0,int32_t{})) &&
+        std::is_same_v<decltype(writeback(0,int32_t{})),bool>);
+    TglOwnedVeboxCommandTransactionResult result;
+    result.status=tglRunCapturedVeboxAllocation(sourceOwner,childOwner,executionOwner,
+        child,execution,source,[&](void*,uintptr_t,const auto&) noexcept -> int {
+            int32_t remainingBeforeSetup=-1;
+            result.builderStatus=build(remainingBeforeSetup);
+            result.acquired=remainingBeforeSetup>=0;
+            if(!result.acquired) return result.builderStatus?result.builderStatus:5;
+            // Revalidate the enclosing leases before any header publication.
+            return tglRunCapturedVeboxAllocation(sourceOwner,childOwner,executionOwner,
+                child,execution,source,[&](void*,uintptr_t,const auto&) noexcept -> int {
+                    result.writtenBack=writeback(result.builderStatus,remainingBeforeSetup);
+                    return result.writtenBack?result.builderStatus:5;
+                });
+        });
+    return result;
+}
+
+template<class SourceOwner,class ChildOwner,class ExecutionOwner,class Context,
+    class Read,class Qualify,class Executable,
+    class SetupInvoke=TglNativeVeboxSetupInvoker,class BuildInvoke=TglNativeVeboxBuilderInvoker,
+    class WritebackInvoke=TglNativeCommandHeaderWritebackInvoker>
+TglOwnedVeboxCommandTransactionResult tglWithCapturedNativeVeboxCommandTransaction(
+    SourceOwner& sourceOwner,ChildOwner& childOwner,ExecutionOwner& executionOwner,
+    void* child,uintptr_t execution,const TglOwnedSurfaceStorage& source,Context& context,
+    const TglNativeVeboxSetupBinding& setup,const TglNativeVeboxBuilderBinding& builder,
+    uintptr_t image,uintptr_t os,TglOwnedVeboxBuilderScratch& scratch,
+    void* auxiliary,Read read,Qualify qualify,Executable executable,
+    SetupInvoke setupInvoke=SetupInvoke{},BuildInvoke buildInvoke=BuildInvoke{},
+    WritebackInvoke writebackInvoke=WritebackInvoke{}) noexcept {
+    const auto sameOs=[&]() noexcept {
+        uintptr_t linked=0;
+        return child && os && read(reinterpret_cast<uintptr_t>(child)+0x10,&linked,sizeof(linked)) && linked==os;
+    };
+    if(!sameOs()) return {};
+    return tglWithCapturedVeboxCommandTransaction(sourceOwner,childOwner,executionOwner,
+        child,execution,source,[&](int32_t& remaining) noexcept -> int {
+            return tglWithCapturedNativeVeboxBuilder(sourceOwner,childOwner,executionOwner,
+                child,execution,source,context,setup,builder,scratch,auxiliary,remaining,
+                read,setupInvoke,buildInvoke);
+        },[&](int status,int32_t remaining) noexcept -> bool {
+            return sameOs() && tglWritebackNativeVeboxCommandResult(image,os,scratch,
+                status,remaining,read,qualify,executable,writebackInvoke);
+        });
+}
+
 // Allocation transaction for a history-enabled frame. The qualified platform
 // planner supplies resource keys and statistics boundary dimensions; this does
 // not infer feature admission or SFC resources. All three owners outlive this
