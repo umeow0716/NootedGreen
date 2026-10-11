@@ -9904,6 +9904,53 @@ int main() {
         assert(tglWithOwnedSfcCscCommands(parameters,cache,true,3,5,0,read,produce,generate)==31);
         assert(parameters.ief==savedIef && parameters.state==savedState);
         assert(produced==1 && generated==1 && reads==0);
+        TglOwnedVpSfcCallerStorage cscVp;
+        void(*escapedCscProducer)(void*,void*,void*) noexcept=nullptr;
+        for(uint8_t enabled:{0,1,2,3}) for(int result:{0,31}) {
+            cscVp.bytes[0x923]=enabled;
+            assert(tglWithOwnedVpCscProducer(cscVp,parameters.ief,parameters.state,cache,
+                3,5,0,read,produce,[&](void* child,auto csc) noexcept {
+                    escapedCscProducer=csc;
+                    assert(parameters.ief==savedIef && parameters.state==savedState);
+                    csc(child,parameters.state.data(),parameters.ief.data());
+                    if(enabled&1) {
+                        assert(!cache.reset() && parameters.state[0x88]==1 && parameters.ief[0x20]==1);
+                        assert(tglWithOwnedVpCscProducer(cscVp,parameters.ief,parameters.state,cache,
+                            3,5,0,read,produce,[](void*,auto) noexcept {assert(false);return 0;})==5);
+                        uintptr_t pointer=0;std::memcpy(&pointer,parameters.ief.data()+0x28,8);
+                        assert(pointer && reinterpret_cast<const float*>(pointer)[0]==2.0f);
+                    } else assert(parameters.ief==savedIef && parameters.state==savedState);
+                    csc(child,parameters.state.data(),parameters.ief.data()); // Idempotent.
+                    return result;
+                })==result);
+            assert(parameters.ief==savedIef && parameters.state==savedState);
+            escapedCscProducer(cscVp.bytes.data(),parameters.state.data(),parameters.ief.data());
+            assert(parameters.ief==savedIef && parameters.state==savedState);
+        }
+        cscVp.bytes[0x923]=1;
+        for(bool reversed:{false,true}) {
+            assert(tglWithOwnedVpCscProducer(cscVp,parameters.ief,parameters.state,cache,
+                3,5,0,read,produce,[&](void* child,auto csc) noexcept {
+                    if(reversed) csc(child,parameters.ief.data(),parameters.state.data());
+                    return 0; // Missing or wrong-order invocation cannot succeed.
+                })==5);
+            assert(parameters.ief==savedIef && parameters.state==savedState);
+        }
+        std::array<uint8_t,0xf8> largeCscState{};
+        std::array<uint8_t,64> largeCscIef{};
+        cscVp.bytes[0x923]=1;
+        assert(tglWithOwnedVpCscProducer(cscVp,largeCscIef,largeCscState,cache,
+            3,5,0,read,produce,[&](void* child,auto csc) noexcept {
+                csc(child,largeCscState.data(),largeCscIef.data());
+                assert(largeCscState[0x88]==1 && largeCscIef[0x20]==1);return 0;
+            })==0);
+        assert((largeCscIef==std::array<uint8_t,64>{}) && (largeCscState==std::array<uint8_t,0xf8>{}));
+        const uintptr_t occupiedCsc=1;std::memcpy(largeCscIef.data()+0x28,&occupiedCsc,8);
+        assert(tglWithOwnedVpCscProducer(cscVp,largeCscIef,largeCscState,cache,
+            3,5,0,read,produce,[](void*,auto) noexcept {assert(false);return 0;})==5);
+        uintptr_t preservedCsc=0;std::memcpy(&preservedCsc,largeCscIef.data()+0x28,8);
+        assert(preservedCsc==occupiedCsc && !largeCscState[0x88]);
+        assert(produced==1 && generated==1 && reads==0);
         assert(tglWithOwnedSfcCscCommands(parameters,cache,true,4,5,0,read,
             [](TglCscCoefficients&,uint32_t,uint32_t) noexcept {return false;},generate)==5);
         assert(generated==1 && parameters.ief==savedIef && parameters.state==savedState);

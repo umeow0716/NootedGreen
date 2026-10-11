@@ -1843,6 +1843,14 @@ public:
         if(success) {coefficients_=candidate;from_=from;to_=to;valid_=true;}
         mutating_=false;return success;
     }
+    template<class Use> int withCoefficients(Use use) noexcept {
+        static_assert(noexcept(use(static_cast<const TglCscCoefficients&>(coefficients_))),
+            "VP CSC coefficient borrower ABI");
+        if(!valid_ || leased_ || mutating_) return 5;
+        leased_=true;
+        const int result=use(static_cast<const TglCscCoefficients&>(coefficients_));
+        leased_=false;return result;
+    }
     template<size_t StateSize,class Use>
     int withParameters(std::array<uint8_t,64>& ief,std::array<uint8_t,StateSize>& state,
                        Use use) noexcept {
@@ -6923,6 +6931,66 @@ template<class Resolve> struct TglOwnedVpCscCallback {
         if(context && ief && state && context->owns(child)) context->csc(state,ief);
     }
 };
+template<size_t StateSize> class TglOwnedVpCscProducerContext {
+    static_assert(StateSize==0xb8 || StateSize==0xf8,"VP CSC state extent");
+    void* child_;std::array<uint8_t,64>& ief_;std::array<uint8_t,StateSize>& state_;
+    const TglCscCoefficients* coefficients_;
+    std::array<uint8_t,64> savedIef_;uint8_t savedState_;
+    bool valid_=true,called_=false,applied_=false,invalid_=false;
+public:
+    TglOwnedVpCscProducerContext(void* child,std::array<uint8_t,64>& ief,
+        std::array<uint8_t,StateSize>& state,const TglCscCoefficients* coefficients) noexcept
+        :child_(child),ief_(ief),state_(state),coefficients_(coefficients),
+         savedIef_(ief),savedState_(state[0x88]) {
+        if(coefficients_) for(size_t offset:{size_t(0x28),size_t(0x30),size_t(0x38)}) {
+            uintptr_t occupied=0;std::memcpy(&occupied,ief_.data()+offset,8);
+            if(occupied) valid_=false;
+        }
+    }
+    TglOwnedVpCscProducerContext(const TglOwnedVpCscProducerContext&)=delete;
+    TglOwnedVpCscProducerContext& operator=(const TglOwnedVpCscProducerContext&)=delete;
+    ~TglOwnedVpCscProducerContext() {
+        if(applied_) {ief_=savedIef_;state_[0x88]=savedState_;}
+    }
+    bool valid() const noexcept {return valid_;}
+    bool owns(void* child) const noexcept {return valid_ && child && child==child_;}
+    void csc(void* state,void* ief) noexcept {
+        if(state!=state_.data() || ief!=ief_.data()) {invalid_=true;return;}
+        called_=true;
+        if(!coefficients_ || applied_ || invalid_) return;
+        const std::array<uintptr_t,3> pointers{
+            reinterpret_cast<uintptr_t>(coefficients_->matrix.data()),
+            reinterpret_cast<uintptr_t>(coefficients_->inputOffsets.data()),
+            reinterpret_cast<uintptr_t>(coefficients_->outputOffsets.data())};
+        state_[0x88]=1;ief_[0x20]=1;
+        std::memcpy(ief_.data()+0x28,pointers.data(),sizeof(pointers));applied_=true;
+    }
+    int status() const noexcept {return valid_ && called_ && !invalid_?0:5;}
+};
+// Caller retains the VP/frame leases. Only callback invocation publishes;
+// pointers remain borrowed until Use returns, then restoration precedes
+// release of the cache lease. No native object or GPU lifetime is implied.
+template<size_t StateSize,class Read,class Produce,class Use>
+int tglWithOwnedVpCscProducer(TglOwnedVpSfcCallerStorage& vp,std::array<uint8_t,64>& ief,
+    std::array<uint8_t,StateSize>& state,TglOwnedVpCscCache& cache,uint32_t from,uint32_t to,
+    uintptr_t sourceA8,Read read,Produce produce,Use use) noexcept {
+    auto invoke=[&](const TglCscCoefficients* coefficients) noexcept {
+        using Context=TglOwnedVpCscProducerContext<StateSize>;
+        using Entry=TglOwnedVpCscCallback<TglOwnedVpSfcResolve<Context>>;
+        Context context(vp.bytes.data(),ief,state,coefficients);
+        if(!context.valid()) return 5;
+        TglOwnedVpSfcScopedContext<Context> scope(vp.bytes.data(),context);
+        if(!scope.bound()) return 5;
+        static_assert(noexcept(use(vp.bytes.data(),&Entry::csc)),"VP CSC entry consumer ABI");
+        const int result=use(vp.bytes.data(),&Entry::csc);
+        return result?result:context.status();
+    };
+    if(!(vp.bytes[0x923]&1)) return invoke(nullptr);
+    if(!cache.prepare(from,to,sourceA8,read,produce)) return 5;
+    return cache.withCoefficients([&](const TglCscCoefficients& coefficients) noexcept {
+        return invoke(&coefficients);
+    });
+}
 // Qualified VP +40=1e0ca0..1e0dcb. Its +a8=1e0c80 is a proven native
 // no-op, not an unresolved hook. +90 failure prevents AVS/IEF; AVS failure
 // prevents IEF. Native +98 is called for its side effect without a status read.
