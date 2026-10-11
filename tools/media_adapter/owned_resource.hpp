@@ -5909,6 +5909,47 @@ inline bool tglVeboxHistoryWithinWindow(uint32_t frame,uint32_t previous,
     std::memcpy(&upper,&radius,4);
     return delta>=lower && delta<=upper;
 }
+struct TglVeboxHistoryState {
+    uint32_t mode=0,previous1b78=0,previous1b7c=0,radius=0,field1b5c=0;
+    uint8_t enabled=0,disabled=0,alternate=0;
+};
+struct TglVeboxHistoryFrame {
+    uint32_t id=0,countB4=0,countB8=0;
+    const uint32_t* linkedC0=nullptr;
+    const uint32_t* linkedC8=nullptr;
+    bool has88=false;
+};
+// Complete CPU transition12b1d0..12b5e4. Inputs are snapshots acquired under
+// frame/history leases, NOT native pointer adoption. Missing required C0
+// fails before publication instead of reproducing the native null dereference.
+inline bool tglUpdateVeboxHistory(TglVeboxHistoryState& state,
+    const TglVeboxHistoryFrame& source,uint32_t pipe) noexcept {
+    auto next=state;
+    if(!(next.enabled&1)) return true;
+    if((next.disabled&1) || pipe!=0) next.mode=0;
+    else if(!source.countB4) {
+        if(next.mode==2) { next.mode=3;next.alternate=(~next.alternate)&1; }
+        if(next.mode==3) next.mode=0;
+    } else if(!next.mode) {
+        next.field1b5c=4;
+        const bool linked=source.countB8 && source.linkedC8;
+        const bool matches=linked &&
+            tglVeboxHistoryWithinWindow(source.id,next.previous1b78,next.radius) &&
+            tglVeboxHistoryWithinWindow(*source.linkedC8,next.previous1b7c,next.radius);
+        const bool discontinuous=linked &&
+            !tglVeboxHistoryWithinWindow(*source.linkedC8,next.previous1b78,next.radius);
+        if(!matches && !discontinuous) next.mode=1;
+    } else {
+        if(!source.linkedC0) return false;
+        const bool matches=
+            tglVeboxHistoryWithinWindow(*source.linkedC0,next.previous1b78,next.radius) &&
+            tglVeboxHistoryWithinWindow(source.id,next.previous1b7c,next.radius);
+        const bool discontinuous=
+            !tglVeboxHistoryWithinWindow(source.id,next.previous1b78,next.radius);
+        if((!matches && discontinuous) || (matches && !source.has88)) next.mode=0;
+    }
+    state=next;return true;
+}
 enum class TglVeboxAdmissionPrefixResult : uint8_t {
     MissingDependencies, CompositionFallback, Continue
 };

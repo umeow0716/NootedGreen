@@ -31,6 +31,35 @@ struct TestVpCpuView {
 
 static void testTrackedCpuOwner() {
     {
+        TglVeboxHistoryState state;
+        state.enabled=1;state.radius=1;state.previous1b78=10;state.previous1b7c=11;
+        TglVeboxHistoryFrame frame;frame.id=10;frame.countB4=1;
+        assert(tglUpdateVeboxHistory(state,frame,0));
+        assert(state.mode==1 && state.field1b5c==4);
+        assert(!tglUpdateVeboxHistory(state,frame,0) && state.mode==1);
+        uint32_t c0=10,c8=11;frame.linkedC0=&c0;frame.linkedC8=&c8;
+        frame.has88=true;
+        assert(tglUpdateVeboxHistory(state,frame,0) && state.mode==1);
+        frame.has88=false;
+        assert(tglUpdateVeboxHistory(state,frame,0) && state.mode==0);
+        frame.countB8=1;
+        assert(tglUpdateVeboxHistory(state,frame,0) && state.mode==0);
+        c8=100;
+        assert(tglUpdateVeboxHistory(state,frame,0) && state.mode==0);
+        for(uint32_t mode=0;mode<4;++mode) {
+            state.mode=mode;state.alternate=0xfe;frame.countB4=0;
+            assert(tglUpdateVeboxHistory(state,frame,0));
+            assert(state.mode==((mode==2 || mode==3)?0:mode));
+            assert(state.alternate==(mode==2?1:0xfe));
+        }
+        state.mode=2;state.enabled=0;
+        assert(tglUpdateVeboxHistory(state,frame,1) && state.mode==2);
+        state.enabled=1;state.disabled=1;
+        assert(tglUpdateVeboxHistory(state,frame,0) && state.mode==0);
+        state.disabled=0;state.mode=2;
+        assert(tglUpdateVeboxHistory(state,frame,2) && state.mode==0);
+    }
+    {
         assert(tglVeboxHistoryWithinWindow(10,10,0));
         assert(!tglVeboxHistoryWithinWindow(11,10,0));
         assert(tglVeboxHistoryWithinWindow(8,10,2));
