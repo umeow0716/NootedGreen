@@ -6533,6 +6533,36 @@ static void testNativeResourceBoundary() {
                                     assert(backingBackend.allocations==2 && !backingBackend.releases);
                                     reportBackend.bytes[0x12]=1;
                                     assert(runEither()==-17 && backingBackend.allocations==2 && !backingBackend.releases);
+                                    const auto secondaryAddress=reinterpret_cast<uintptr_t>(destination.surface());
+                                    assert(secondaryAddress);
+                                    std::memcpy(reportBackend.bytes.data()+0x68,&secondaryAddress,8);
+                                    uintptr_t selectedSlot=0;
+                                    unsigned secondaryUses=0;
+                                    auto runSecondary=[&]() noexcept {
+                                        std::memcpy(child.data()+0x680,&selectedSlot,8);
+                                        return tglRunCapturedFfdiSecondaryFromReport(frameTargets[0],firstBacking,
+                                            owner,destination,childOwner,reportOwner,actualChild,report,source,read,
+                                            [&](const auto& secondaryView,const auto& output) noexcept -> int {
+                                                ++secondaryUses;
+                                                assert(destination.hasSurfaceLease(secondaryView));
+                                                assert(reinterpret_cast<uintptr_t>(&output)==selectedSlot);
+                                                return -29;
+                                            });
+                                    };
+                                    selectedSlot=reinterpret_cast<uintptr_t>(firstBacking.surfaceBinding());
+                                    assert(runSecondary()==-29);
+                                    selectedSlot=reinterpret_cast<uintptr_t>(frameTargets[0].surfaceBinding());
+                                    assert(runSecondary()==-29 && secondaryUses==2);
+                                    selectedSlot=reinterpret_cast<uintptr_t>(&source);
+                                    assert(runSecondary()==5 && secondaryUses==2);
+                                    selectedSlot=reinterpret_cast<uintptr_t>(firstBacking.surfaceBinding());
+                                    const uintptr_t wrongSecondary=reinterpret_cast<uintptr_t>(&source);
+                                    std::memcpy(reportBackend.bytes.data()+0x68,&wrongSecondary,8);
+                                    assert(runSecondary()==5 && secondaryUses==2);
+                                    const uintptr_t absentSecondary=0;
+                                    std::memcpy(reportBackend.bytes.data()+0x68,&absentSecondary,8);
+                                    assert(runSecondary()==5 && secondaryUses==2);
+                                    assert(backingBackend.allocations==2 && !backingBackend.releases);
                                     return run();
                                 });
                             })==-17);

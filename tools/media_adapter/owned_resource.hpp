@@ -5085,6 +5085,7 @@ public:
             });
         return leased && consumed;
     }
+    const void* surfaceBinding() const noexcept {return &storage_;}
     template<class Use> bool withDescriptor(Use use) noexcept {
         static_assert(noexcept(use(std::declval<const TglOwnedSurfaceStorage&>())) &&
             std::is_same_v<decltype(use(std::declval<const TglOwnedSurfaceStorage&>())),void>,
@@ -10839,6 +10840,33 @@ int tglRunCapturedFfdiFromReport(std::array<TglOwnedDescriptorOnlySurface,Count>
                 original[0],original[1],[&](uint8_t flag,uint8_t mode) noexcept {
                     return tglPublishLeasedFfdiCompression(reportOwner,currentReport,flag,mode);
                 },use,captured);
+        });
+}
+// Secondary-only capture: select by actual child680, never new-frame format.
+// report68 is an identity to reconcile with the held secondary owner, not a
+// pointer to dereference. Absent secondary is left to the enclosing frame.
+template<class TargetOwner,class Owner,class ChildOwner,class ExecutionOwner,class Read,class Use>
+int tglRunCapturedFfdiSecondaryFromReport(TglOwnedDescriptorOnlySurface& descriptor,
+    TargetOwner& backed,Owner& input,Owner& secondary,ChildOwner& childOwner,
+    ExecutionOwner& reportOwner,void* child,uintptr_t report,
+    const TglOwnedSurfaceStorage& source,Read read,Use use) noexcept {
+    return tglRunCapturedVeboxAllocation(input,childOwner,reportOwner,child,report,source,
+        [&](void* currentChild,uintptr_t currentReport,const auto&) noexcept -> int {
+            uintptr_t slot=0,secondaryAddress=0;
+            const auto address=reinterpret_cast<uintptr_t>(currentChild);
+            if(address>UINTPTR_MAX-0x687 || currentReport>UINTPTR_MAX-0x6f ||
+                !read(address+0x680,&slot,8) || !slot ||
+                !read(currentReport+0x68,&secondaryAddress,8) || !secondaryAddress) return 5;
+            const auto* held=&secondary==&input ? &source : nullptr;
+            return tglWithCapturedOwnedSurfaceRoles(std::array<Owner*,1>{&secondary},
+                std::array<const TglOwnedSurfaceStorage*,1>{held},[&](const auto& views) noexcept -> int {
+                    if(reinterpret_cast<uintptr_t>(views[0])!=secondaryAddress) return 5;
+                    if(slot==reinterpret_cast<uintptr_t>(descriptor.surfaceBinding()))
+                        return tglWithOwnedDescriptorFfdiSecondary(descriptor,secondary,use,views[0]);
+                    if(slot==reinterpret_cast<uintptr_t>(backed.surfaceBinding()))
+                        return tglWithOwnedBackedFfdiSecondary(backed,secondary,use,views[0]);
+                    return 5;
+                });
         });
 }
 template<class Read>
