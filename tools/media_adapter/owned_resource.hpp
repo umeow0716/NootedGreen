@@ -13858,12 +13858,27 @@ int tglWithOwnedSfcCommandInputs(TglOwnedSfcCommandParameters& parameters,
 // Gen12 statistics lifecycle, not a native fill ABI implementation. Backend
 // must allocate a buffer; Fill must validate and initialize actual backing.
 template<class Backend> class TglStatisticsResource {
+    struct Capture {
+        Backend& backend;uint32_t width=0;
+        int allocate(std::array<uint8_t,0x148>& storage,const TglResourceKey& key) noexcept {
+            if constexpr(TglStmmHasWidthOutput<Backend>::value) return backend.allocate(storage,key,&width);
+            else return backend.allocate(storage,key);
+        }
+        bool backed(const std::array<uint8_t,0x148>& storage) noexcept {return backend.backed(storage);}
+        void release(std::array<uint8_t,0x148>& storage) noexcept {backend.release(storage);width=0;}
+    } capture_;
 public:
-    using Storage=typename TglOwnedResource<Backend>::Storage;
-    explicit TglStatisticsResource(Backend &backend) noexcept : backend_(backend),owner_(backend) {}
+    using Storage=typename TglOwnedResource<Capture>::Storage;
+    explicit TglStatisticsResource(Backend &backend) noexcept : capture_{backend},backend_(backend),owner_(capture_) {}
     // Bind the resource bytes in an empty native statistics shell. The shell
     // outlives this owner and is freed only after reset/native-token release.
-    TglStatisticsResource(Backend& backend,Storage& storage) noexcept :backend_(backend),owner_(backend,storage) {}
+    TglStatisticsResource(Backend& backend,Storage& storage) noexcept :capture_{backend},backend_(backend),owner_(capture_,storage) {}
+    TglStatisticsResource(Backend& backend,TglOwnedSurfaceStorage& shell) noexcept
+        :capture_{backend},backend_(backend),owner_(capture_,shell.resource),shell_(&shell) {
+        static_assert(TglStmmHasWidthOutput<Backend>::value,"statistics shell requires native width capture");
+        const auto* bytes=reinterpret_cast<const uint8_t*>(&shell);
+        for(size_t i=0;i<sizeof(shell);++i) if(bytes[i]) {admitted_=false;break;}
+    }
     TglStatisticsResource(const TglStatisticsResource&)=delete;
     TglStatisticsResource& operator=(const TglStatisticsResource&)=delete;
     ~TglStatisticsResource() {reset();}
@@ -13901,19 +13916,35 @@ public:
         static_assert(noexcept(publish(owner_.storage(),std::declval<const TglStatisticsAllocation&>())) &&
             (std::is_same_v<PublicationResult,void> || std::is_same_v<PublicationResult,int>),
             "statistics changed-layout publication ABI");
-        if(busy_) return 5;
+        if(busy_ || !admitted_) return 5;
         TglStatisticsAllocation candidate;
         const int shape = tglStatisticsAllocationSize(width, height, candidate);
         if (shape) return shape; // invalid request does not retire a valid resource
         busy_=true;
         struct Unlock {bool& busy;~Unlock(){busy=false;}} unlock{busy_};
+        // Native49fe0 reuse compares the effective shell width, not a cached
+        // pre-allocation byte request. A native width change requires reallocation.
+        if(shell_ && layout_.bytes && capture_.width==candidate.bytes) {
+            if(!shellMatches() || !backend_.backed(owner_.storage())) return 5;
+            layout_=candidate;return 0;
+        }
+        if(shell_ && layout_.bytes && capture_.width!=candidate.bytes) owner_.reset();
         layout_={}; // no stale layout publication during allocation/fill callbacks
         const auto result = owner_.ensure({candidate.bytes, 1, 0x3e, 4, 0, false});
         if (result.status) { layout_ = {}; return result.status; }
-        if (result.state != TglOwnedResource<Backend>::State::Backed) {
+        if (result.state != TglOwnedResource<Capture>::State::Backed) {
             retire(); return 5;
         }
         if (result.changed) {
+            if(shell_) {
+                if(!capture_.width) {retire();return 5;}
+                const uint32_t height=1,format=0x3e,tile=0,pitch=0;
+                std::memcpy(shell_->prefix.data()+0xd8,&capture_.width,4);
+                std::memcpy(shell_->prefix.data()+0xdc,&height,4);
+                std::memcpy(shell_->prefix.data()+0x130,&format,4);
+                std::memcpy(shell_->prefix.data()+0xe4,&tile,4);
+                std::memcpy(shell_->prefix.data()+0xe0,&pitch,4);
+            }
             const int status = owner_.withMutableStorage([&](auto& storage) noexcept {
                 const int filled=fill(storage,candidate.bytes);
                 if(!filled) {
@@ -13958,12 +13989,33 @@ public:
         });
     }
     const TglStatisticsAllocation &layout() const noexcept { return layout_; }
+    // Only the active withResource consumer can obtain this view. Never adopt
+    // an unrelated shell or expose handles after the resource lease ends.
+    template<class Consume> int withCapturedSurface(const Storage& storage,
+        const TglStatisticsAllocation& layout,Consume consume) noexcept {
+        static_assert(noexcept(consume(std::declval<const TglOwnedSurfaceStorage&>())) &&
+            std::is_same_v<decltype(consume(std::declval<const TglOwnedSurfaceStorage&>())),int>,
+            "statistics surface consumer ABI");
+        if(!busy_ || !admitted_ || !shell_ || &storage!=&shell_->resource ||
+           &storage!=&owner_.storage() || &layout!=&layout_ || !layout_.bytes ||
+           !backend_.backed(storage) || !shellMatches()) return 5;
+        return consume(static_cast<const TglOwnedSurfaceStorage&>(*shell_));
+    }
 private:
+    bool shellMatches() const noexcept {
+        if(!shell_) return false;
+        const auto field=[&](size_t offset) noexcept {
+            uint32_t value=0;std::memcpy(&value,shell_->prefix.data()+offset,4);return value;
+        };
+        return field(0xd8)==capture_.width && field(0xdc)==1 &&
+            field(0x130)==0x3e && field(0xe4)==0 && field(0xe0)==0;
+    }
     void retire() noexcept { owner_.reset();layout_={}; }
     Backend& backend_;
-    TglOwnedResource<Backend> owner_;
+    TglOwnedResource<Capture> owner_;
     TglStatisticsAllocation layout_{};
-    bool busy_=false;
+    TglOwnedSurfaceStorage* shell_=nullptr;
+    bool busy_=false,admitted_=true;
 };
 
 // Standalone statistics tail: preceding FFDi/FFDN/STMM scopes remain owned by
@@ -14020,7 +14072,7 @@ int tglRunCapturedStatisticsFrame(TglStatisticsResource<TglNativeResourceBackend
 
 // Direct final-stage binding for tglRunCapturedVeboxSurfaceFrame<true>.
 // Retains the existing surface views by nesting, not by copying resource tokens.
-template<class SourceOwner,class ChildOwner,class ExecutionOwner,class Read,
+template<bool Surface=false,class SourceOwner,class ChildOwner,class ExecutionOwner,class Read,
     class Writable,class Consume>
 auto tglMakeCapturedStatisticsFrameTail(TglStatisticsResource<TglNativeResourceBackend>& statistics,
     SourceOwner& sourceOwner,ChildOwner& childOwner,ExecutionOwner& executionOwner,
@@ -14034,10 +14086,19 @@ auto tglMakeCapturedStatisticsFrameTail(TglStatisticsResource<TglNativeResourceB
             [&](const auto&,const TglStatisticsAllocation& layout) noexcept -> int {
                 return tglPublishOwnedStatisticsLayout(childOwner,child,layout);
             },[&](const auto& storage,const auto& layout) noexcept -> int {
+                if constexpr(Surface) {
+                    return statistics.withCapturedSurface(storage,layout,[&](const auto& surface) noexcept -> int {
+                        static_assert(noexcept(consume(child,execution,source,ffdi,ffdn,stmm,storage,layout,surface)) &&
+                            std::is_same_v<decltype(consume(child,execution,source,ffdi,ffdn,stmm,storage,layout,surface)),int>,
+                            "statistics surface-shell consumer ABI");
+                        return consume(child,execution,source,ffdi,ffdn,stmm,storage,layout,surface);
+                    });
+                } else {
                 static_assert(noexcept(consume(child,execution,source,ffdi,ffdn,stmm,storage,layout)) &&
                     std::is_same_v<decltype(consume(child,execution,source,ffdi,ffdn,stmm,storage,layout)),int>,
                     "statistics surface-frame consumer ABI");
                 return consume(child,execution,source,ffdi,ffdn,stmm,storage,layout);
+                }
             });
     };
 }

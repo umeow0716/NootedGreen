@@ -5167,6 +5167,37 @@ static void testStatisticsLifecycle() {
     }
     assert(backend.allocations == 5 && backend.releases == 5);
     {
+        struct ShellBackend {
+            unsigned allocations=0,releases=0;
+            int allocate(std::array<uint8_t,0x148>& storage,const TglResourceKey& key,uint32_t* width) noexcept {
+                ++allocations;storage[0]=1;*width=key.width+64;return 0;
+            }
+            bool backed(const std::array<uint8_t,0x148>& storage) noexcept {return storage[0]==1;}
+            void release(std::array<uint8_t,0x148>& storage) noexcept {++releases;storage.fill(0);}
+        } shellBackend;
+        TglOwnedSurfaceStorage shell{};
+        TglStatisticsResource<ShellBackend> resource(shellBackend,shell);
+        auto initialize=[](const auto&,uint32_t) noexcept {return 0;};
+        assert(!resource.ensure(64,4,initialize)); // 1088 requested, 1152 native
+        uint32_t width=0;std::memcpy(&width,shell.prefix.data()+0xd8,4);assert(width==1152);
+        assert(resource.withCapturedSurface(shell.resource,resource.layout(),[](const auto&) noexcept -> int {
+            assert(false);return 0;
+        })==5); // no resource lease
+        assert(!resource.ensure(128,4,initialize) && shellBackend.allocations==1); // effective-width reuse
+        assert(resource.withResource([&](const auto& storage,const auto& layout) noexcept -> int {
+            auto foreign=storage;
+            assert(resource.withCapturedSurface(foreign,layout,[](const auto&) noexcept -> int {assert(false);return 0;})==5);
+            return resource.withCapturedSurface(storage,layout,[&](const auto& view) noexcept -> int {
+                assert(&view==&shell);resource.reset();assert(!shellBackend.releases);return -97;
+            });
+        })==-97);
+        assert(!resource.ensure(64,4,initialize) && shellBackend.allocations==2 && shellBackend.releases==1);
+        resource.reset();assert(shellBackend.releases==2);
+        shell.prefix[0x10]=1;
+        TglStatisticsResource<ShellBackend> invalid(shellBackend,shell);
+        assert(invalid.ensure(64,4,initialize)==5 && shell.prefix[0x10]==1);
+    }
+    {
         Backend boundBackend;
         alignas(8) std::array<uint8_t,0x148> shell{};
         {
@@ -6987,7 +7018,8 @@ static void testNativeResourceBoundary() {
                                         } statisticsFixture;
                                         TglNativeResourceBackend statisticsBackend(&statisticsFixture,
                                             FrameStatisticsFixture::allocate,FrameStatisticsFixture::release,0,4096);
-                                        TglStatisticsResource<TglNativeResourceBackend> frameStatistics(statisticsBackend);
+                                        TglOwnedSurfaceStorage statisticsShell{};
+                                        TglStatisticsResource<TglNativeResourceBackend> frameStatistics(statisticsBackend,statisticsShell);
                                         TglNativeBufferFillBinding statisticsFill{reinterpret_cast<uintptr_t>(&statisticsFixture),
                                             reinterpret_cast<uintptr_t>(FrameStatisticsFixture::fill)};
                                         unsigned combinedUses=0,combinedUnwinds=0;
@@ -7009,11 +7041,11 @@ static void testNativeResourceBoundary() {
                                                         [&](const auto* a,const auto* b) noexcept -> int {
                                                             return next(TglOwnedStmmTailViews{{a,b}});
                                                         });
-                                                },tglMakeCapturedStatisticsFrameTail(frameStatistics,linkedInput,childOwner,reportOwner,
+                                                },tglMakeCapturedStatisticsFrameTail<true>(frameStatistics,linkedInput,childOwner,reportOwner,
                                                     read,false,statisticsFill,[](uintptr_t address,uint32_t bytes) noexcept {
                                                         return address==0x4000 && bytes>0;
                                                     },[&](void*,uintptr_t,const auto&,const auto& ffdi,const auto& ffdn,const auto& stmm,
-                                                        const auto& statisticsStorage,const auto& statisticsLayout) noexcept -> int {
+                                                        const auto& statisticsStorage,const auto& statisticsLayout,const auto& statisticsSurface) noexcept -> int {
                                                     assert(ffdi.inputs[0]==&current && ffdi.count==2);
                                                     assert(ffdi.outputs[0]==frameTargets[0].surfaceBinding());
                                                     assert(!frameTargets[1].withDescriptor([](const auto&) noexcept {assert(false);}));
@@ -7024,6 +7056,11 @@ static void testNativeResourceBoundary() {
                                                     assert(stmm.surfaces[0]==&stmmFirst && stmm.surfaces[1]==&stmmSecond);
                                                     stmmPair.reset();assert(stmmApi.references==2);
                                                     assert(statisticsStorage[0x48]==1 && statisticsLayout.bytes>0);
+                                                    assert(&statisticsSurface==&statisticsShell && &statisticsSurface.resource==&statisticsStorage);
+                                                    uint32_t statisticsWidth=0,statisticsFormat=0;
+                                                    std::memcpy(&statisticsWidth,statisticsSurface.prefix.data()+0xd8,4);
+                                                    std::memcpy(&statisticsFormat,statisticsSurface.prefix.data()+0x130,4);
+                                                    assert(statisticsWidth==statisticsLayout.bytes && statisticsFormat==0x3e);
                                                     frameStatistics.reset();assert(!statisticsFixture.releases);
                                                     uint32_t publishedRow=0;
                                                     std::memcpy(&publishedRow,child.data()+0x1114,4);
