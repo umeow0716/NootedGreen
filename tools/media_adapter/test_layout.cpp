@@ -6117,7 +6117,7 @@ static void testSfcLineBufferOwnership() {
                 assert(backend.live==2);
                 return admission;
             };
-            using Context=TglOwnedVpLineReleaseContext<Backend,decltype(retire)>;
+            using Context=TglOwnedVpLineReleaseContext<decltype(buffers),decltype(retire)>;
             Context context(vp,buffers,retire);
             using Callback=TglOwnedVpSfcCallbacks<TglOwnedVpSfcResolve<Context>>;
             const auto releases=backend.releases;
@@ -6144,7 +6144,7 @@ static void testSfcLineBufferOwnership() {
             auto retire=[&]() noexcept -> int {
                 ++gates;assert(reenter);reenter(vp.bytes.data());return 0;
             };
-            using Context=TglOwnedVpLineReleaseContext<Backend,decltype(retire)>;
+            using Context=TglOwnedVpLineReleaseContext<decltype(buffers),decltype(retire)>;
             Context context(vp,buffers,retire);
             using Callback=TglOwnedVpSfcCallbacks<TglOwnedVpSfcResolve<Context>>;
             reenter=&Callback::freeResources;
@@ -6157,7 +6157,7 @@ static void testSfcLineBufferOwnership() {
         {
             unsigned gates=0;
             auto retire=[&]() noexcept -> int {++gates;return 0;};
-            using Context=TglOwnedVpLineReleaseContext<Backend,decltype(retire)>;
+            using Context=TglOwnedVpLineReleaseContext<decltype(buffers),decltype(retire)>;
             Context context(vp,buffers,retire);
             using Callback=TglOwnedVpSfcCallbacks<TglOwnedVpSfcResolve<Context>>;
             const auto releases=backend.releases;
@@ -6171,7 +6171,7 @@ static void testSfcLineBufferOwnership() {
         {
             unsigned gates=0;
             auto retire=[&]() noexcept -> int {++gates;return 0;};
-            using Context=TglOwnedVpLineReleaseContext<Backend,decltype(retire)>;
+            using Context=TglOwnedVpLineReleaseContext<decltype(buffers),decltype(retire)>;
             Context context(vp,buffers,retire);
             using Callback=TglOwnedVpSfcCallbacks<TglOwnedVpSfcResolve<Context>>;
             struct Reentry {void* child;void(*call)(void*) noexcept;};
@@ -7551,6 +7551,98 @@ static void testSfcFrameFields() {
 }
 
 int main() {
+    {
+        struct Backend {
+            unsigned allocations=0,releases=0;int status=0;
+            uint32_t resourceType() const noexcept {return 0;}
+            int allocate(std::array<uint8_t,0x148>& resource,
+                const TglResourceKey& key,uint32_t* width) noexcept {
+                ++allocations;resource[0]=1;*width=key.width+64;return status;
+            }
+            bool backed(const std::array<uint8_t,0x148>& r) noexcept {return r[0]==1;}
+            void release(std::array<uint8_t,0x148>& r) noexcept {
+                assert(r[0]);++releases;r.fill(0);
+            }
+        };
+        struct Cpu {
+            alignas(8) TglOwnedSfcStateParametersPacket bytes{};bool live=false;
+            uintptr_t allocate(size_t size) noexcept {
+                assert(!live && size==bytes.size());live=true;
+                return reinterpret_cast<uintptr_t>(bytes.data());
+            }
+            void release(uintptr_t value) noexcept {
+                assert(live && value==reinterpret_cast<uintptr_t>(bytes.data()));live=false;
+            }
+        };
+        for(int failure:{-1,0,1}) {
+            TglOwnedVpSfcCallerStorage vp;
+            // Establish real typed shell lifetimes in the owned byte storage.
+            // Resource owners die before this VP storage; no token memcpy.
+            std::array<TglOwnedSurfaceStorage*,2> shells{
+                ::new(static_cast<void*>(vp.bytes.data()+0x3c8)) TglOwnedSurfaceStorage{},
+                ::new(static_cast<void*>(vp.bytes.data()+0x670)) TglOwnedSurfaceStorage{}};
+            std::array<Backend,2> backends{};
+            if(failure>=0) backends[size_t(failure)].status=77;
+            TglOwnedVpLineSurfaces<Backend> lines(backends,*shells[0],*shells[1]);
+            assert(lines.boundToVp(vp));
+            Cpu cpu;TglOwnedSfcStateParameters<Cpu> state(cpu);
+            assert(state.initializeVpPass(vp));
+            const uint32_t input=1080,scaled=720;
+            std::memcpy(state.data()+0x30,&input,4);std::memcpy(state.data()+0x4c,&scaled,4);
+            using Context=TglOwnedVpLineAllocationContext<decltype(lines),decltype(state)>;
+            using Callback=TglOwnedVpLineAllocationCallback<TglOwnedVpSfcResolve<Context>>;
+            using Allocate=int(*)(void*) noexcept;
+            const Allocate allocate=&Callback::allocate;
+            TglOwnedVpSfcCallerStorage wrongVp;
+            assert(!lines.boundToVp(wrongVp));
+            {
+                Context wrongContext(wrongVp,lines,state);
+                TglOwnedVpSfcScopedContext<Context> wrongScope(wrongVp.bytes.data(),wrongContext);
+                assert(wrongScope.bound() && allocate(wrongVp.bytes.data())==5);
+                assert(!backends[0].allocations && !backends[1].allocations);
+            }
+            Context context(vp,lines,state);
+            assert(allocate(vp.bytes.data())==5);
+            TglOwnedVpSfcScopedContext<Context> scope(vp.bytes.data(),context);assert(scope.bound());
+            assert(allocate(nullptr)==5 && allocate(&cpu)==5 && allocate(vp.bytes.data())==5);
+            assert(!backends[0].allocations);
+            assert(state.withParameters([&](const uint8_t* packet) noexcept {
+                assert(allocate(vp.bytes.data())==5); // Unpublished state is not admitted.
+                const auto address=reinterpret_cast<uintptr_t>(packet);
+                std::memcpy(vp.bytes.data()+0x938,&address,8);
+                const int result=allocate(vp.bytes.data());
+                assert(result==(failure<0?0:77));
+                if(!result) {
+                    assert(lines.withSurfaces([&](const auto& avs,const auto& ief) noexcept {
+                        assert(&avs==shells[0] && &ief==shells[1]);
+                        uint32_t a=0,b=0;
+                        std::memcpy(&a,avs.prefix.data()+0xd8,4);
+                        std::memcpy(&b,ief.prefix.data()+0xd8,4);
+                        assert(a==1080*40+64 && b==720*16+64);
+                        assert(!lines.tryReset() && allocate(vp.bytes.data())==5);
+                        return 0;
+                    })==0);
+                }
+                std::memset(vp.bytes.data()+0x938,0,8);return result;
+            })==(failure<0?0:77));
+            if(failure<0) for(int admission:{31,0}) {
+                auto retire=[&]() noexcept -> int {
+                    assert(!lines.tryReset());return admission;
+                };
+                using ReleaseContext=TglOwnedVpLineReleaseContext<decltype(lines),decltype(retire)>;
+                using Release=TglOwnedVpSfcCallbacks<TglOwnedVpSfcResolve<ReleaseContext>>;
+                ReleaseContext releaseContext(vp,lines,retire);
+                TglOwnedVpSfcScopedContext<ReleaseContext> releaseScope(vp.bytes.data(),releaseContext);
+                assert(releaseScope.bound());Release::freeResources(vp.bytes.data());
+                assert(releaseContext.status()==admission);
+                if(admission) assert(lines.withSurfaces([](const auto&,const auto&) noexcept {return 0;})==0);
+                else assert(lines.withSurfaces([](const auto&,const auto&) noexcept {assert(false);return 0;})==5);
+            }
+            lines.reset();
+            for(const auto& b:backends) assert(b.allocations==b.releases);
+            for(const auto* shell:shells) for(auto byte:shell->resource) assert(!byte);
+        }
+    }
     {
         struct Backend {
             unsigned allocated=0,released=0;

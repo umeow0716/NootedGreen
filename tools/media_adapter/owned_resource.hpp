@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <type_traits>
 #include <atomic>
+#include <new>
 #if defined(__APPLE__)
 #include <dlfcn.h>
 #endif
@@ -7683,6 +7684,14 @@ public:
         return mutating ? nullptr : reinterpret_cast<const uint8_t*>(owner.get());
     }
     bool hasParametersLease() const noexcept {return leased && !mutating && owner.get();}
+    template<class Use> int withPublishedVpParameters(
+        const TglOwnedVpSfcCallerStorage& vp,Use use) const noexcept {
+        static_assert(noexcept(use(static_cast<const uint8_t*>(nullptr))),"VP state view ABI");
+        if(!hasParametersLease()) return 5;
+        uintptr_t published=0;std::memcpy(&published,vp.bytes.data()+0x938,8);
+        if(published!=owner.get()) return 5;
+        return use(reinterpret_cast<const uint8_t*>(published));
+    }
     template<class Use> int withParameters(Use&& use) noexcept {
         static_assert(noexcept(use(static_cast<const uint8_t*>(nullptr))),
             "SFC state borrower must not throw");
@@ -9746,12 +9755,114 @@ public:
     }
 };
 
+// Native VP+58 has two full surfaces (3c8/670), not two copied resource
+// descriptors. Empty caller-owned shells/backends outlive this transaction.
+// SFD is a separate Gen12 resource; this pair does not claim to supply it.
+template<class Backend> class TglOwnedVpLineSurfaces {
+    std::array<Backend,2>& backends_;
+    std::array<TglOwnedAllocatedSurface<Backend>,2> owners_;
+    std::array<uintptr_t,2> bindings_{};
+    bool valid_=false,busy_=false,ready_=false;
+    struct Guard {
+        bool& flag;
+        explicit Guard(bool& value) noexcept:flag(value){flag=true;}
+        ~Guard(){flag=false;}
+    };
+    void clear() noexcept {ready_=false;for(auto& owner:owners_) owner.reset();}
+public:
+    TglOwnedVpLineSurfaces(std::array<Backend,2>& backends,
+        TglOwnedSurfaceStorage& avs,TglOwnedSurfaceStorage& ief) noexcept
+        :backends_(backends),owners_{TglOwnedAllocatedSurface<Backend>(backends[0],avs),
+            TglOwnedAllocatedSurface<Backend>(backends[1],ief)} {
+        const auto a=reinterpret_cast<uintptr_t>(&avs),b=reinterpret_cast<uintptr_t>(&ief);
+        bindings_={a,b};
+        valid_=a<=UINTPTR_MAX-sizeof(avs) && b<=UINTPTR_MAX-sizeof(ief) &&
+            !(a<b+sizeof(ief) && b<a+sizeof(avs));
+    }
+    ~TglOwnedVpLineSurfaces(){reset();}
+    TglOwnedVpLineSurfaces(const TglOwnedVpLineSurfaces&)=delete;
+    TglOwnedVpLineSurfaces& operator=(const TglOwnedVpLineSurfaces&)=delete;
+    bool boundToVp(const TglOwnedVpSfcCallerStorage& vp) const noexcept {
+        const auto base=reinterpret_cast<uintptr_t>(vp.bytes.data());
+        return valid_ && base<=UINTPTR_MAX-0x9d0 &&
+            bindings_[0]==base+0x3c8 && bindings_[1]==base+0x670;
+    }
+    int ensure(uint32_t inputHeight,uint32_t scaledHeight) noexcept {
+        if(!valid_ || busy_) return 5;
+        TglOwnedSfcLineBufferSizes sizes;
+        if(!tglOwnedSfcLineBufferSizes(sizes,inputHeight,scaledHeight)) return 5;
+        if(backends_[0].resourceType()!=0 || backends_[1].resourceType()!=0) return 25;
+        Guard guard(busy_);ready_=false;
+        const std::array<uint32_t,2> widths{sizes.avs,sizes.ief};
+        for(size_t i=0;i<2;++i) {
+            const int status=owners_[i].ensure({widths[i],1,0x3d,4,0,false});
+            if(status) {clear();return status;}
+        }
+        ready_=true;return 0;
+    }
+    template<class Use> int withSurfaces(Use use) noexcept {
+        static_assert(noexcept(use(std::declval<const TglOwnedSurfaceStorage&>(),
+            std::declval<const TglOwnedSurfaceStorage&>())),"VP line surface lease ABI");
+        if(!valid_ || busy_ || !ready_) return 5;
+        Guard guard(busy_);int result=5;
+        owners_[0].withPeerSurface(owners_[1],[&](const auto& avs,const auto& ief) noexcept {
+            result=use(avs,ief);
+        });
+        return result;
+    }
+    template<class Use> int withReleaseReservation(Use use) noexcept {
+        if(!valid_ || busy_) return 5;
+        Guard guard(busy_);bool released=false;
+        auto release=[&]() noexcept {if(!released){released=true;clear();}};
+        static_assert(noexcept(use(release)),"VP line surface retirement ABI");
+        return use(release);
+    }
+    bool tryReset() noexcept {
+        if(busy_) return false;
+        Guard guard(busy_);clear();return true;
+    }
+    void reset() noexcept {(void)tryReset();}
+};
+
+// Exact slot58=1df210 is status(this). State+30/+4c are read only from
+// the actual leased owner already published at VP+938, not arbitrary args.
+template<class Lines,class State> class TglOwnedVpLineAllocationContext {
+    TglOwnedVpSfcCallerStorage& vp_;
+    Lines& lines_;
+    State& state_;
+    bool busy_=false;
+public:
+    TglOwnedVpLineAllocationContext(TglOwnedVpSfcCallerStorage& vp,Lines& lines,State& state) noexcept
+        :vp_(vp),lines_(lines),state_(state) {}
+    bool owns(void* child) const noexcept {return child==vp_.bytes.data();}
+    int allocate() noexcept {
+        if(busy_ || !lines_.boundToVp(vp_)) return 5;
+        busy_=true;
+        const int result=state_.withPublishedVpParameters(vp_,[&](const uint8_t* parameters) noexcept {
+            uint32_t inputHeight=0,scaledHeight=0;
+            std::memcpy(&inputHeight,parameters+0x30,4);
+            std::memcpy(&scaledHeight,parameters+0x4c,4);
+            return lines_.ensure(inputHeight,scaledHeight);
+        });
+        busy_=false;return result;
+    }
+};
+template<class Resolve> struct TglOwnedVpLineAllocationCallback {
+    static int allocate(void* child) noexcept {
+        static_assert(noexcept(Resolve{}(child)),"VP line allocation resolver ABI");
+        auto* context=Resolve{}(child);
+        static_assert(noexcept(context->owns(child)) && noexcept(context->allocate()),
+            "VP line allocation context ABI");
+        return context && context->owns(child) ? context->allocate() : 5;
+    }
+};
+
 // Reserve both owners before asking for retirement. No partial teardown when
 // a CPU/line lease blocks release; a failed retirement leaves both intact.
 // This composes actual tracked line resources with the CPU graph, but does
 // not authenticate a fence or free the enclosing VP allocation itself.
-template<class Graph,class Backend,class Retire>
-int tglRetireOwnedVpResources(Graph& graph,TglOwnedSfcLineBuffers<Backend>& lines,
+template<class Graph,class Lines,class Retire>
+int tglRetireOwnedVpResources(Graph& graph,Lines& lines,
     Retire retire) noexcept {
     static_assert(noexcept(retire()) && std::is_same_v<decltype(retire()),int>,
         "VP retirement admission ABI");
@@ -9768,15 +9879,15 @@ int tglRetireOwnedVpResources(Graph& graph,TglOwnedSfcLineBuffers<Backend>& line
 // admission operation, not a bool invented from FinishFenceEvent's return.
 // A future runtime owner must qualify that operation against its actual
 // submission/token. This CPU context alone is not GPU completion evidence.
-template<class Backend,class Retire> class TglOwnedVpLineReleaseContext {
+template<class Lines,class Retire> class TglOwnedVpLineReleaseContext {
     TglOwnedVpSfcCallerStorage& storage_;
-    TglOwnedSfcLineBuffers<Backend>& lines_;
+    Lines& lines_;
     Retire& retire_;
     bool attempted_=false,reentered_=false;
     int status_=5;
 public:
     TglOwnedVpLineReleaseContext(TglOwnedVpSfcCallerStorage& storage,
-        TglOwnedSfcLineBuffers<Backend>& lines,Retire& retire) noexcept
+        Lines& lines,Retire& retire) noexcept
         :storage_(storage),lines_(lines),retire_(retire) {}
     TglOwnedVpLineReleaseContext(const TglOwnedVpLineReleaseContext&)=delete;
     TglOwnedVpLineReleaseContext& operator=(const TglOwnedVpLineReleaseContext&)=delete;
