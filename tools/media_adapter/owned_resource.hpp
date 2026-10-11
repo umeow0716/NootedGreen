@@ -9768,12 +9768,17 @@ public:
             "VP retirement admission status ABI");
         if(attempted_) {reentered_=true;status_=5;return;}
         attempted_=true;
-        const int admission=retire_();
-        if(reentered_) return;
-        if(admission) {status_=admission;return;}
-        status_=lines_.tryReset() ? 0 : 5;
-        // Native resource release can itself reenter this callback.
-        if(reentered_) status_=5;
+        // Reserve before admission, not after: a line lease must prevent both
+        // the retirement side effect and release. Keep the reservation while
+        // native retirement/release callbacks can reenter this void entry.
+        status_=lines_.withReleaseReservation([&](auto release) noexcept -> int {
+            const int admission=retire_();
+            if(reentered_) return 5;
+            if(admission) return admission;
+            release();
+            // Release may already have happened; this is rejection, not rollback.
+            return reentered_ ? 5 : 0;
+        });
     }
     int status() const noexcept {return status_;}
 };

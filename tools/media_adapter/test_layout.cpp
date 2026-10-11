@@ -6108,7 +6108,15 @@ static void testSfcLineBufferOwnership() {
         TglOwnedVpSfcCallerStorage vp;
         for(int admission:{0,31,-7}) {
             unsigned gates=0;
-            auto retire=[&]() noexcept -> int {++gates;return admission;};
+            auto retire=[&]() noexcept -> int {
+                ++gates;
+                assert(!buffers.tryReset() && buffers.ensure(1080,721)==5);
+                assert(buffers.withBuffers(1080,720,[]() noexcept -> int {
+                    assert(false);return 0;
+                })==5);
+                assert(backend.live==2);
+                return admission;
+            };
             using Context=TglOwnedVpLineReleaseContext<Backend,decltype(retire)>;
             Context context(vp,buffers,retire);
             using Callback=TglOwnedVpSfcCallbacks<TglOwnedVpSfcResolve<Context>>;
@@ -6156,7 +6164,7 @@ static void testSfcLineBufferOwnership() {
             assert(buffers.withBuffers(1080,720,[&]() noexcept {
                 TglOwnedVpSfcScopedContext<Context> scope(vp.bytes.data(),context);
                 assert(scope.bound());Callback::freeResources(vp.bytes.data());
-                assert(context.status()==5 && gates==1 && backend.releases==releases);
+                assert(context.status()==5 && gates==0 && backend.releases==releases);
                 return 0;
             })==0);
         }
