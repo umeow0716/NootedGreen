@@ -2851,6 +2851,35 @@ static void testVeboxRenderBinding() {
         owner.image=image;
         return tglInvokeLeasedVeboxRender(binding,owner,c,&arg1,&arg2,invoke);
     })==-7 && calls==1);
+    TestFeatureSurfaceOwner sourceOwner,targetOwner;
+    unsigned surfaceCalls=0;
+    auto surfaceInvoke=[&](uintptr_t p,void* c,void* a,void* b) noexcept -> int {
+        assert(p==image+0x12c9d0 && c==&child && a==&arg1 && owner.busy);
+        const auto* bytes=static_cast<const uint8_t*>(b);
+        for(size_t i=0;i<0x10;++i) assert(!bytes[i]);
+        uintptr_t source=0,target=0;
+        std::memcpy(&source,bytes+0x10,8);std::memcpy(&target,bytes+0x18,8);
+        assert(source==reinterpret_cast<uintptr_t>(&sourceOwner.storage));
+        assert(target==reinterpret_cast<uintptr_t>(&targetOwner.storage));
+        ++surfaceCalls;return 31;
+    };
+    assert(tglInvokeLeasedVeboxSurfaceRender(binding,owner,&child,&arg1,
+        sourceOwner,sourceOwner.storage,targetOwner,targetOwner.storage,surfaceInvoke)==5);
+    assert(sourceOwner.withPeerSurface(targetOwner,[&](const auto& source,const auto& target) noexcept {
+        assert(owner.withPrivateChild([&](void* c) noexcept {
+            TglOwnedSurfaceStorage foreign{};
+            assert(tglInvokeLeasedVeboxSurfaceRender(binding,owner,c,&arg1,
+                sourceOwner,foreign,targetOwner,target,surfaceInvoke)==5 && !surfaceCalls);
+            assert(tglInvokeLeasedVeboxSurfaceRender(binding,owner,c,&arg1,
+                sourceOwner,source,targetOwner,target,surfaceInvoke)==31 && surfaceCalls==1);
+            auto revoke=[&](uintptr_t,void*,void*,void*) noexcept -> int {
+                targetOwner.deny=true;return 0;
+            };
+            assert(tglInvokeLeasedVeboxSurfaceRender(binding,owner,c,&arg1,
+                sourceOwner,source,targetOwner,target,revoke)==5);
+            targetOwner.deny=false;return 0;
+        })==0);
+    }));
 }
 static void testExecutionBinding() {
     {

@@ -4268,6 +4268,31 @@ struct alignas(8) TglOwnedSurfaceStorage {
 static_assert(offsetof(TglOwnedSurfaceStorage,resource) == 0x148);
 static_assert(offsetof(TglOwnedSurfaceStorage,tail) == 0x290);
 static_assert(sizeof(TglOwnedSurfaceStorage) == 0x2a8);
+// Render12c9ec..12ca00 snapshots argument2+10/+18, then passes those
+// surfaces to mode190/188/198 and tail1a8. The descriptor itself is not
+// retained or otherwise consumed in 12c9d0..12ce18. Keep it stack-owned
+// inside the source/target AND child-image leases. Slot1a0 may select a
+// different source; that callback still needs its own complete owner contract.
+// This closes only the outer descriptor shape, not full Render admission,
+// asynchronous backing retention or permission to publish an incomplete child.
+template<class ChildOwner,class SourceOwner,class TargetOwner,class Invoke>
+int tglInvokeLeasedVeboxSurfaceRender(const TglVeboxRenderBinding& binding,
+    ChildOwner& childOwner,void* child,void* argument1,
+    SourceOwner& sourceOwner,const TglOwnedSurfaceStorage& source,
+    TargetOwner& targetOwner,const TglOwnedSurfaceStorage& target,Invoke invoke) noexcept {
+    if(!sourceOwner.hasSurfaceLease(source) || !targetOwner.hasSurfaceLease(target)) return 5;
+    alignas(8) std::array<uint8_t,0x20> descriptor{};
+    const uintptr_t sourceAddress=reinterpret_cast<uintptr_t>(&source);
+    const uintptr_t targetAddress=reinterpret_cast<uintptr_t>(&target);
+    std::memcpy(descriptor.data()+0x10,&sourceAddress,8);
+    std::memcpy(descriptor.data()+0x18,&targetAddress,8);
+    const int result=tglInvokeLeasedVeboxRender(binding,childOwner,child,
+        argument1,descriptor.data(),invoke);
+    if(!sourceOwner.hasSurfaceLease(source) || !targetOwner.hasSurfaceLease(target) ||
+       !childOwner.hasPrivateChildImageLease(reinterpret_cast<uintptr_t>(child),binding.image))
+        return 5;
+    return result;
+}
 inline bool tglVeboxMode0NativeSkipPredicate(uint8_t report0b,
     const TglOwnedSurfaceStorage& current,const TglOwnedSurfaceStorage& previous) noexcept {
     if(!(report0b&1)) return true;
