@@ -9820,12 +9820,16 @@ template<class Backend> class TglOwnedVpLineSurfaces {
     std::array<TglOwnedAllocatedSurface<Backend>,2> owners_;
     std::array<uintptr_t,2> bindings_{};
     bool valid_=false,busy_=false,ready_=false;
+    uint32_t inputHeight_=0,scaledHeight_=0;
     struct Guard {
         bool& flag;
         explicit Guard(bool& value) noexcept:flag(value){flag=true;}
         ~Guard(){flag=false;}
     };
-    void clear() noexcept {ready_=false;for(auto& owner:owners_) owner.reset();}
+    void clear() noexcept {
+        ready_=false;inputHeight_=scaledHeight_=0;
+        for(auto& owner:owners_) owner.reset();
+    }
 public:
     TglOwnedVpLineSurfaces(std::array<Backend,2>& backends,
         TglOwnedSurfaceStorage& avs,TglOwnedSurfaceStorage& ief) noexcept
@@ -9855,7 +9859,12 @@ public:
             const int status=owners_[i].ensure({widths[i],1,0x3d,4,0,false});
             if(status) {clear();return status;}
         }
+        inputHeight_=inputHeight;scaledHeight_=scaledHeight;
         ready_=true;return 0;
+    }
+    template<class Use> int withDimensions(uint32_t input,uint32_t scaled,Use use) noexcept {
+        if(!input || !scaled || input!=inputHeight_ || scaled!=scaledHeight_) return 5;
+        return withSurfaces(use);
     }
     template<class Use> int withSurfaces(Use use) noexcept {
         static_assert(noexcept(use(std::declval<const TglOwnedSurfaceStorage&>(),
@@ -10069,6 +10078,37 @@ int tglWithOwnedSfcPreparedCommands(TglOwnedSfcCommandParameters& parameters,
         return state.withParameters([&](const uint8_t*) noexcept {
             return generate(parameters);
         });
+    });
+}
+
+// Full VP+58 surfaces feed the same authenticated descriptor fields, without
+// copying tokens into the legacy descriptor-only owner. Both shells stay
+// pinned through query, state preparation and synchronous command emission.
+// Gen12 SFD is a separate owner: this two-surface path admits only dimensions
+// for which the qualified allocation policy needs no SFD, never a raw pointer.
+template<class CpuBackend,class ResourceBackend,class Query,class Generate>
+int tglWithOwnedVpSurfaceCommands(TglOwnedSfcCommandParameters& parameters,
+    TglOwnedSfcStateParameters<CpuBackend>& state,
+    TglOwnedVpLineSurfaces<ResourceBackend>& lines,TglOwnedSurfaceStorage& output,
+    const std::array<uint8_t,0xb8>& prefix,TglOwnedSfcGen12Tail tail,
+    bool rgbAdaptive,bool eightTapChroma,bool compressionEnabled,
+    TglOwnedSfcCompressionMode compressionMode,Query query,Generate generate) noexcept {
+    static_assert(noexcept(generate(parameters)),"VP surface command consumer ABI");
+    if(parameters.filtersInUse || !state.data() || tail.sfdLineBuffer) return 5;
+    uint32_t input=0,scaled=0;
+    std::memcpy(&input,prefix.data()+0x30,4);std::memcpy(&scaled,prefix.data()+0x4c,4);
+    TglOwnedSfcLineBufferSizes sizes;
+    if(!tglOwnedSfcLineBufferSizes(sizes,input,scaled) || sizes.sfd) return 5;
+    return lines.withDimensions(input,scaled,[&](const auto& avs,const auto& ief) noexcept {
+        TglOwnedSfcStateParametersPacket checked{};
+        if(!tglPrepareOwnedSfcGen12Pass(checked,prefix,tail,rgbAdaptive,eightTapChroma,
+            compressionEnabled,compressionMode)) return 5;
+        auto bound=prefix;
+        const int status=tglBindOwnedSfcResources(bound,output,avs.resource,ief.resource,query);
+        if(status) return status;
+        if(!state.prepare(bound,tail,rgbAdaptive,eightTapChroma,compressionEnabled,compressionMode)) return 5;
+        std::memcpy(parameters.state.data(),state.data(),parameters.state.size());
+        return state.withParameters([&](const uint8_t*) noexcept {return generate(parameters);});
     });
 }
 

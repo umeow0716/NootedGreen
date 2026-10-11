@@ -7594,7 +7594,7 @@ int main() {
             uint32_t resourceType() const noexcept {return 0;}
             int allocate(std::array<uint8_t,0x148>& resource,
                 const TglResourceKey& key,uint32_t* width) noexcept {
-                ++allocations;resource[0]=1;*width=key.width+64;return status;
+                ++allocations;resource[0]=1;resource[0x20]=1;*width=key.width+64;return status;
             }
             bool backed(const std::array<uint8_t,0x148>& r) noexcept {return r[0]==1;}
             void release(std::array<uint8_t,0x148>& r) noexcept {
@@ -7662,6 +7662,41 @@ int main() {
                 }
                 std::memset(vp.bytes.data()+0x938,0,8);return result;
             })==(failure<0?0:77));
+            if(failure<0) {
+                TglOwnedSfcCommandParameters commands;
+                TglOwnedSurfaceStorage output;output.resource[0x20]=1;
+                std::array<uint8_t,0xb8> prefix{};prefix[0]=1;
+                const uint32_t width=1920;
+                for(size_t offset:{size_t(0x24),size_t(0x28),size_t(0x34),
+                    size_t(0x3c),size_t(0x40),size_t(0x50)})
+                    std::memcpy(prefix.data()+offset,&width,4);
+                std::memcpy(prefix.data()+0x30,&input,4);std::memcpy(prefix.data()+0x4c,&scaled,4);
+                unsigned queries=0,emitted=0;int queryResult=0;
+                auto query=[&](auto&) noexcept {
+                    ++queries;assert(!lines.tryReset() && lines.ensure(input,scaled)==5);
+                    return queryResult;
+                };
+                auto run=[&](int result,TglOwnedSfcGen12Tail tail={}) noexcept {
+                    return tglWithOwnedVpSurfaceCommands(commands,state,lines,output,prefix,tail,
+                        false,false,false,TglOwnedSfcCompressionMode::Disabled,query,
+                        [&](auto& packet) noexcept -> int {
+                            ++emitted;assert(state.hasParametersLease() && !lines.tryReset());
+                            for(size_t i=0;i<2;++i) {
+                                uintptr_t actual=0;std::memcpy(&actual,packet.state.data()+0x98+i*8,8);
+                                assert(actual==reinterpret_cast<uintptr_t>(shells[i]->resource.data()));
+                            }
+                            return result;
+                        });
+                };
+                for(int result:{0,31,-7}) assert(run(result)==result);
+                assert(queries==3 && emitted==3);
+                const auto saved=commands.state;queryResult=89;
+                assert(run(0)==89 && emitted==3 && commands.state==saved);
+                TglOwnedSfcGen12Tail foreign;foreign.sfdLineBuffer=1;
+                assert(run(0,foreign)==5 && queries==4);
+                const uint32_t wrong=721;std::memcpy(prefix.data()+0x4c,&wrong,4);
+                assert(run(0)==5 && queries==4);
+            }
             if(failure<0) for(int admission:{31,0}) {
                 auto retire=[&]() noexcept -> int {
                     assert(!lines.tryReset());return admission;
