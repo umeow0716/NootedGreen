@@ -16442,6 +16442,16 @@ struct TglNativePhysicalCallbackBinding {
         image=base;initialize=base+0x135d9;destroy=base+0x13c8c;return true;
     }
 };
+struct TglNativeBackingAllocateInvoker {
+    int operator()(uintptr_t entry,uintptr_t physical,const void* input) const noexcept {
+        return reinterpret_cast<int(*)(void*,const void*)>(entry)(reinterpret_cast<void*>(physical),input);
+    }
+};
+struct TglNativeBackingReleaseInvoker {
+    int operator()(uintptr_t entry,uintptr_t physical,uint32_t type) const noexcept {
+        return reinterpret_cast<int(*)(void*,uint32_t)>(entry)(reinterpret_cast<void*>(physical),type);
+    }
+};
 struct TglNativePhysicalCallbackInvoker {
     int initialize(uintptr_t entry,void** output,const void* input) const noexcept {
         return reinterpret_cast<int(*)(void**,const void*)>(entry)(output,input);
@@ -16550,6 +16560,34 @@ public:
         uintptr_t physical,Mutate mutate) noexcept {
         static_assert(noexcept(mutate()) && std::is_same_v<decltype(mutate()),int>);
         return withNewRequest(ticket,physical,[&](auto&) noexcept -> int {return mutate();});
+    }
+    template<class Native=TglNativeBackingAllocateInvoker> int allocateBacking(typename Registry::Ticket ticket,
+        uintptr_t physical,const void* input,Native native=Native{}) noexcept {
+        static_assert(noexcept(native(uintptr_t{},uintptr_t{},input)) &&
+            std::is_same_v<decltype(native(uintptr_t{},uintptr_t{},input)),int>);
+        if(!input) return 5;
+        return withBackingMutation(ticket,physical,[&]() noexcept -> int {
+            constexpr std::array<uint8_t,17> anchor{0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,
+                0x41,0x55,0x41,0x54,0x53,0x48,0x83,0xec,0x18};
+            std::array<uint8_t,17> actual{};
+            if(binding_.image>UINTPTR_MAX-0x155d1-anchor.size() ||
+                !executable_(binding_.image+0x155d1,anchor.size()) ||
+                !read_(binding_.image+0x155d1,actual.data(),actual.size()) || actual!=anchor) return 5;
+            return native(binding_.image+0x155d1,physical,input);
+        });
+    }
+    template<class Native=TglNativeBackingReleaseInvoker> int releaseBacking(typename Registry::Ticket ticket,
+        uintptr_t physical,uint32_t type,Native native=Native{}) noexcept {
+        static_assert(noexcept(native(uintptr_t{},uintptr_t{},uint32_t{})) &&
+            std::is_same_v<decltype(native(uintptr_t{},uintptr_t{},uint32_t{})),int>);
+        return withBackingMutation(ticket,physical,[&]() noexcept -> int {
+            constexpr std::array<uint8_t,11> anchor{0x55,0x48,0x89,0xe5,0x53,0x50,0xff,0xce,0x83,0xfe,0x1a};
+            std::array<uint8_t,11> actual{};
+            if(binding_.image>UINTPTR_MAX-0x1580c-anchor.size() ||
+                !executable_(binding_.image+0x1580c,anchor.size()) ||
+                !read_(binding_.image+0x1580c,actual.data(),actual.size()) || actual!=anchor) return 5;
+            return native(binding_.image+0x1580c,physical,type);
+        });
     }
     template<class Use> int withContextRemoval(typename Registry::Ticket ticket,
         uintptr_t physical,Use use) noexcept {

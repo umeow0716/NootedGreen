@@ -12090,6 +12090,9 @@ static void testRetainedVeboxFrames() {
         const std::array<uint8_t,7> clear{0x48,0xc7,7,0,0,0,0};
         const std::array<uint8_t,16> free{0x55,0x48,0x89,0xe5,0x41,0x56,0x53,0x41,0xbe,5,0,0,0,0x48,0x85,0xff};
         void* output=nullptr;bool readable=true,qualified=true;
+        std::array<uint8_t,17> backingAllocateAnchor{0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,
+            0x41,0x55,0x41,0x54,0x53,0x48,0x83,0xec,0x18};
+        const std::array<uint8_t,11> backingReleaseAnchor{0x55,0x48,0x89,0xe5,0x53,0x50,0xff,0xce,0x83,0xfe,0x1a};
         auto read=[&](uintptr_t address,void* bytes,size_t size) noexcept {
             if(address==reinterpret_cast<uintptr_t>(&output) && size==8) {
                 if(!readable) return false;std::memcpy(bytes,&output,8);return true;
@@ -12097,6 +12100,8 @@ static void testRetainedVeboxFrames() {
             if(address==image+0x135d9 && size==init.size()) std::memcpy(bytes,init.data(),size);
             else if(address==image+0x135f6 && size==clear.size()) std::memcpy(bytes,clear.data(),size);
             else if(address==image+0x13c8c && size==free.size()) std::memcpy(bytes,free.data(),size);
+            else if(address==image+0x155d1 && size==backingAllocateAnchor.size()) std::memcpy(bytes,backingAllocateAnchor.data(),size);
+            else if(address==image+0x1580c && size==backingReleaseAnchor.size()) std::memcpy(bytes,backingReleaseAnchor.data(),size);
             else return false;
             return true;
         };
@@ -12104,6 +12109,7 @@ static void testRetainedVeboxFrames() {
         auto executable=[](uintptr_t address,size_t size) noexcept {
             return (address==image+0x135d9 && size==16) || (address==image+0x135f6 && size==7) ||
                 (address==image+0x13c8c && size==16) ||
+                (address==image+0x155d1 && size==17) || (address==image+0x1580c && size==11) ||
                 ((address==image+0x132510 || address==image+0x131fa0) && size==1);
         };
         TglNativePhysicalCallbackBinding binding;assert(binding.resolve(image,read,qualify,executable));
@@ -12199,7 +12205,13 @@ static void testRetainedVeboxFrames() {
             assert(configurationFrame.generation);return 0;
         })==0);
         const auto pendingReads=parentReads;
-        unsigned backingCalls=0;
+        unsigned backingCalls=0,typedBackingCalls=0;
+        auto typedAllocate=[&](uintptr_t entry,uintptr_t physical,const void* original) noexcept -> int {
+            ++typedBackingCalls;assert(entry==image+0x155d1 && physical==0x8000 && original==input);return 31;};
+        auto typedRelease=[&](uintptr_t entry,uintptr_t physical,uint32_t type) noexcept -> int {
+            ++typedBackingCalls;assert(entry==image+0x1580c && physical==0x8000 && type==25);return 31;};
+        assert(callbacks.allocateBacking(success.ticket,0x8000,input,typedAllocate)==5);
+        assert(callbacks.releaseBacking(success.ticket,0x8000,25,typedRelease)==5 && typedBackingCalls==0);
         auto mutateBacking=[&]() noexcept -> int {
             ++backingCalls;
             assert(callbacks.destroy(0x8000)==5 && invoke.destroyed==0);
@@ -12225,6 +12237,11 @@ static void testRetainedVeboxFrames() {
         })==0);
         assert(callbacks.withBackingMutation(success.ticket,0x8001,mutateBacking)==5 && backingCalls==0);
         assert(callbacks.withBackingMutation(success.ticket,0x8000,mutateBacking)==31 && backingCalls==1);
+        assert(callbacks.allocateBacking(success.ticket,0x8000,input,typedAllocate)==31);
+        assert(callbacks.releaseBacking(success.ticket,0x8000,25,typedRelease)==31 && typedBackingCalls==2);
+        backingAllocateAnchor[0]^=1;
+        assert(callbacks.allocateBacking(success.ticket,0x8000,input,typedAllocate)==5 && typedBackingCalls==2);
+        backingAllocateAnchor[0]^=1;
         contextRenderer=0;
         assert(callbacks.withRendererConfiguration(success.ticket,0x8000,0x20000,parentRead,parentAdmit,configurationUse)==5);
         contextRenderer=0x30000;
