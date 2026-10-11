@@ -16060,6 +16060,108 @@ public:
     }
 };
 
+// Owned registry records, not a retain of native physical memory. Reserve
+// BEFORE native135d9, publish only its successful original output, and route
+// all owned frame access/native13c8c through this same generation gate. The
+// enclosing adapter must keep the qualified image and native callback table
+// alive. No native calls, object layout invention or completion inference here.
+template<class Frame,size_t Capacity=4> class TglOwnedVeboxPhysicalFrameRegistry {
+    static_assert(Capacity>0 && Capacity<=16,"owned physical work budget");
+    using Pool=TglOwnedVeboxRetainedFrames<Frame>;
+    enum class State { Reserved,Live,Quarantined };
+    struct Entry {
+        uintptr_t image;uintptr_t physical=0;uint64_t generation;
+        State state=State::Reserved;Pool frames;
+        Entry(uintptr_t i,uint64_t g) noexcept:image(i),generation(g) {}
+    };
+    std::array<Entry*,Capacity> entries_{};
+    std::atomic_flag gate_=ATOMIC_FLAG_INIT;
+    inline static std::atomic<uint64_t> nextGeneration_{0};
+    struct Unlock {std::atomic_flag& gate;~Unlock(){gate.clear(std::memory_order_release);}};
+public:
+    struct Ticket {size_t index=Capacity;uint64_t generation=0;
+        const TglOwnedVeboxPhysicalFrameRegistry* registry=nullptr;};
+private:
+    Entry* resolve(Ticket ticket) noexcept {
+        if(ticket.registry!=this || ticket.index>=Capacity || !ticket.generation) return nullptr;
+        auto* entry=entries_[ticket.index];
+        return entry && entry->generation==ticket.generation ? entry : nullptr;
+    }
+public:
+    TglOwnedVeboxPhysicalFrameRegistry()=default;
+    TglOwnedVeboxPhysicalFrameRegistry(const TglOwnedVeboxPhysicalFrameRegistry&)=delete;
+    TglOwnedVeboxPhysicalFrameRegistry& operator=(const TglOwnedVeboxPhysicalFrameRegistry&)=delete;
+    // Unresolved native/frame generations must not be implicitly destroyed at
+    // unload. Production registry and qualified image are process-lifetime.
+    ~TglOwnedVeboxPhysicalFrameRegistry()=default;
+    static TglOwnedVeboxPhysicalFrameRegistry& processLifetime() noexcept {
+        static TglOwnedVeboxPhysicalFrameRegistry registry;return registry;
+    }
+    Ticket reserve(uintptr_t image) noexcept {
+        if(!image || gate_.test_and_set(std::memory_order_acquire)) return {};
+        Unlock unlock{gate_};
+        for(size_t i=0;i<Capacity;++i) if(!entries_[i]) {
+            auto generation=nextGeneration_.load(std::memory_order_relaxed);
+            do {if(generation==UINT64_MAX) return {};}
+            while(!nextGeneration_.compare_exchange_weak(generation,generation+1,
+                std::memory_order_relaxed,std::memory_order_relaxed));
+            auto* entry=new(std::nothrow) Entry(image,generation+1);
+            if(!entry) return {};
+            entries_[i]=entry;return {i,generation+1,this};
+        }
+        return {};
+    }
+    bool cancel(Ticket ticket) noexcept {
+        if(gate_.test_and_set(std::memory_order_acquire)) return false;
+        Unlock unlock{gate_};auto* entry=resolve(ticket);
+        if(!entry || entry->state!=State::Reserved) return false;
+        entries_[ticket.index]=nullptr;delete entry;return true;
+    }
+    bool publish(Ticket ticket,uintptr_t image,uintptr_t physical) noexcept {
+        if(!physical || gate_.test_and_set(std::memory_order_acquire)) return false;
+        Unlock unlock{gate_};auto* entry=resolve(ticket);
+        if(!entry || entry->state!=State::Reserved || entry->image!=image) return false;
+        for(const auto* other:entries_) if(other && other->physical==physical) return false;
+        entry->physical=physical;entry->state=State::Live;return true;
+    }
+    // Native callbacks carry physical pointers, not owned tickets. Re-resolve
+    // under the gate; a concurrent teardown between lookup/use rejects the
+    // generation rather than exposing a freed Entry or resurrecting a pool.
+    Ticket lookup(uintptr_t image,uintptr_t physical) noexcept {
+        if(!image || !physical || gate_.test_and_set(std::memory_order_acquire)) return {};
+        Unlock unlock{gate_};
+        for(size_t i=0;i<Capacity;++i) {
+            const auto* entry=entries_[i];
+            if(entry && entry->state==State::Live && entry->image==image && entry->physical==physical)
+                return {i,entry->generation,this};
+        }
+        return {};
+    }
+    template<class Use> int withLive(Ticket ticket,uintptr_t image,uintptr_t physical,Use use) noexcept {
+        static_assert(noexcept(use(std::declval<Pool&>())) &&
+            std::is_same_v<decltype(use(std::declval<Pool&>())),int>);
+        if(gate_.test_and_set(std::memory_order_acquire)) return 5;
+        Unlock unlock{gate_};auto* entry=resolve(ticket);
+        if(!entry || entry->state!=State::Live || entry->image!=image || entry->physical!=physical) return 5;
+        return use(entry->frames); // scoped access; never publish this reference
+    }
+    template<class Invoke> int destroy(Ticket ticket,uintptr_t image,uintptr_t physical,Invoke invoke) noexcept {
+        static_assert(noexcept(invoke(uintptr_t{})) &&
+            std::is_same_v<decltype(invoke(uintptr_t{})),int>);
+        if(gate_.test_and_set(std::memory_order_acquire)) return 5;
+        Unlock unlock{gate_};auto* entry=resolve(ticket);
+        if(!entry || entry->state!=State::Live || entry->image!=image || entry->physical!=physical) return 5;
+        const int result=entry->frames.withQuiescentFrames([&]() noexcept -> int {
+            entry->state=State::Quarantined; // BEFORE native partial teardown
+            return invoke(physical);
+        });
+        if(entry->state==State::Quarantined && !result) {
+            entries_[ticket.index]=nullptr;delete entry;
+        }
+        return result; // nonzero native teardown retains terminal quarantine
+    }
+};
+
 // The setup output is written only after native command acquisition. Keep a
 // sentinel until then: an acquisition failure must not publish empty scratch.
 // A failed writeback leaves ownership unresolved; this is never a fence result.

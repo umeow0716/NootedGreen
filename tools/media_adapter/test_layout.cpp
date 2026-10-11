@@ -11841,6 +11841,69 @@ static void testRetainedVeboxFrames() {
     assert(pool.run(replacement,[](Frame&) noexcept {
         assert(false);return TglOwnedVeboxCommandTransactionResult{};
     }).status==5);
+    {
+        using Registry=TglOwnedVeboxPhysicalFrameRegistry<Frame,2>;
+        static Registry registry; // unresolved native quarantine is process-lifetime
+        constexpr uintptr_t image=0x100000,physical=0x6000;
+        const auto physicalTicket=registry.reserve(image);
+        assert(physicalTicket.generation && physicalTicket.index<2);
+        auto unreachable=[](auto&) noexcept -> int {assert(false);return 0;};
+        assert(registry.withLive(physicalTicket,image,physical,unreachable)==5);
+        assert(!registry.publish(physicalTicket,image+1,physical));
+        assert(!registry.publish(physicalTicket,image,0));
+        assert(registry.publish(physicalTicket,image,physical));
+        assert(registry.lookup(image,physical).generation==physicalTicket.generation);
+        assert(!registry.lookup(image+1,physical).generation);
+        assert(!registry.cancel(physicalTicket));
+        const auto duplicate=registry.reserve(image);
+        assert(!registry.reserve(image).generation);
+        assert(!registry.publish(duplicate,image,physical));
+        assert(registry.cancel(duplicate));
+        Pool::Ticket frameTicket;
+        assert(registry.withLive(physicalTicket,image,physical,[&](auto& frames) noexcept -> int {
+            assert(registry.withLive(physicalTicket,image,physical,unreachable)==5);
+            frameTicket=frames.create(allocated,released,destroyed);
+            assert(frameTicket.generation);
+            const auto result=frames.run(frameTicket,[](Frame&) noexcept {
+                return TglOwnedVeboxCommandTransactionResult{0,0,true,true};
+            });
+            assert(result.acquired && result.writtenBack);return 0;
+        })==0);
+        unsigned destroys=0;
+        auto nativeFailure=[&](uintptr_t address) noexcept -> int {
+            assert(address==physical);++destroys;return 31;
+        };
+        assert(registry.destroy(physicalTicket,image,physical,nativeFailure)==5 && !destroys);
+        assert(registry.withLive(physicalTicket,image+1,physical,unreachable)==5);
+        assert(registry.withLive(physicalTicket,image,physical+1,unreachable)==5);
+        assert(registry.withLive(physicalTicket,image,physical,[&](auto& frames) noexcept -> int {
+            assert(frames.retire(frameTicket,[](const Frame&,bool,const auto&) noexcept -> int {return 31;})==31);
+            return frames.retire(frameTicket,[](const Frame&,bool pending,const auto&) noexcept -> int {
+                assert(pending);return 0; // CPU discard certificate only
+            });
+        })==0);
+        assert(registry.destroy(physicalTicket,image,physical,nativeFailure)==31 && destroys==1);
+        assert(!registry.lookup(image,physical).generation);
+        assert(registry.withLive(physicalTicket,image,physical,unreachable)==5);
+        assert(registry.destroy(physicalTicket,image,physical,nativeFailure)==5 && destroys==1);
+        const auto quarantinedAlias=registry.reserve(image);
+        assert(!registry.publish(quarantinedAlias,image,physical));
+        assert(registry.cancel(quarantinedAlias));
+        const auto success=registry.reserve(image);
+        assert(registry.publish(success,image,0x7000));
+        assert(registry.destroy(success,image,0x7000,[&](uintptr_t address) noexcept -> int {
+            assert(address==0x7000);
+            assert(registry.withLive(success,image,address,unreachable)==5);
+            return 0;
+        })==0);
+        const auto replacementPhysical=registry.reserve(image);
+        assert(replacementPhysical.index==success.index && replacementPhysical.generation!=success.generation);
+        assert(!registry.cancel(success));
+        assert(registry.publish(replacementPhysical,image,0x7000));
+        assert(registry.destroy(success,image,0x7000,[](uintptr_t) noexcept -> int {assert(false);return 0;})==5);
+        assert(registry.lookup(image,0x7000).generation==replacementPhysical.generation);
+        assert(registry.destroy(replacementPhysical,image,0x7000,[](uintptr_t) noexcept -> int {return 0;})==0);
+    }
 }
 
 int main() {
