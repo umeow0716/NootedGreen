@@ -4678,6 +4678,20 @@ public:
         use(static_cast<const TglOwnedSurfaceStorage&>(storage_));
         return owner.hasSurfaceLease(source);
     }
+    // Only a synchronous, non-consuming DN view. The original surface owner
+    // pins all resource tokens; the parameter owner pins the allocation.
+    // Native160 and asynchronous GPU consumers are not admitted here.
+    template<class SourceOwner,class Parameters,class Use>
+    bool withBorrowedDenoiseMetadata(SourceOwner& owner,const TglOwnedSurfaceStorage& source,
+        Parameters& parameters,Use use) noexcept {
+        static_assert(noexcept(use(source,std::declval<const TglOwnedSurfaceStorage&>())) &&
+            std::is_same_v<decltype(use(source,std::declval<const TglOwnedSurfaceStorage&>())),void>,
+            "descriptor DN callback ABI");
+        if(!ready_ || busy_ || !owner.hasSurfaceLease(source)) return false;
+        busy_=true;
+        struct Unlock {bool& busy;~Unlock(){busy=false;}} unlock{busy_};
+        return owner.withBorrowedDenoiseMetadata(source,parameters,storage_,use);
+    }
     template<class Use> bool withDescriptor(Use use) noexcept {
         static_assert(noexcept(use(std::declval<const TglOwnedSurfaceStorage&>())) &&
             std::is_same_v<decltype(use(std::declval<const TglOwnedSurfaceStorage&>())),void>,

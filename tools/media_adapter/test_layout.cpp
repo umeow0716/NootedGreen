@@ -5337,6 +5337,28 @@ static void testNativeResourceBoundary() {
                         assert(!owner.surface() && !destination.surface());
                         assert(fixture.allocations==allocations && fixture.releases==releases);
                         TglOwnedSurfaceStorage dnMetadata;unsigned borrowedCalls=0;
+                        TglOwnedDescriptorOnlySurface dnTarget;
+                        TglOwnedFfdiAllocationRequest dnRequest;bool dnChanged=false;
+                        assert(tglPrepareOwnedFfdiAllocationRequest(s,0x19,1,{},dnRequest));
+                        assert(dnTarget.prepare(dnRequest,dnChanged) && dnChanged);
+                        assert(dnTarget.publishFfdnFrame(s));
+                        unsigned targetCalls=0;
+                        assert(dnTarget.withBorrowedDenoiseMetadata(owner,s,parameters,
+                            [&](const auto& sourceView,const auto& targetView) noexcept {
+                                ++targetCalls;uintptr_t a=0,b=0;
+                                std::memcpy(&a,sourceView.prefix.data()+0x90,8);
+                                std::memcpy(&b,targetView.prefix.data()+0x90,8);
+                                assert(a==parameters.get() && b==a);
+                                dnTarget.reset();parameters.reset();owner.reset();
+                                assert(!dnTarget.prepare(dnRequest,dnChanged));
+                                assert(!dnTarget.withDescriptor([](const auto&) noexcept {assert(false);}));
+                                assert(owner.hasSurfaceLease(s) && parameterBackend.live==1);
+                            }));
+                        assert(targetCalls==1);
+                        assert(dnTarget.withDescriptor([](const auto& view) noexcept {
+                            uintptr_t pointer=1;std::memcpy(&pointer,view.prefix.data()+0x90,8);
+                            assert(!pointer);
+                        }));
                         assert(owner.withBorrowedDenoiseMetadata(s,parameters,dnMetadata,
                             [&](const auto& sourceView,const auto& metadataView) noexcept {
                                 ++borrowedCalls;uintptr_t a=0,b=0;
