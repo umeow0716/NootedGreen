@@ -15463,6 +15463,8 @@ public:
 // physical/context/image, source/target and child pair through GPU retirement.
 template<class Api,class Invoker=TglNativeTrackedCpuInvoker>
 class TglNativeVeboxVpFrameBacking {
+    const TglNativeResourceBinding resources_;
+    const uint64_t pageSize_;
     TglNativeVeboxCommandFrameStorage<Api> command_;
     TglNativeVpBackingStorage<Invoker> vp_;
 public:
@@ -15471,12 +15473,20 @@ public:
         Executable executable,const TglNativeResourceBinding& resources,
         uint64_t pageSize,const TglNativeBufferFillBinding& fill,Invoker invoke,
         Args&&... args)
-        :command_(resources,pageSize,fill,std::forward<Args>(args)...),
+        :resources_(resources),pageSize_(pageSize),
+         command_(resources,pageSize,fill,std::forward<Args>(args)...),
          vp_(image,read,qualify,executable,command_.backing().auxiliary().retention(),invoke) {}
     TglNativeVeboxVpFrameBacking(const TglNativeVeboxVpFrameBacking&)=delete;
     TglNativeVeboxVpFrameBacking& operator=(const TglNativeVeboxVpFrameBacking&)=delete;
     auto& command() noexcept {return command_;}
-    auto& vp() noexcept {return vp_;}
+    template<class Binding,class Read>
+    int initializeVp(const Binding& binding,uintptr_t os,uintptr_t renderHal,
+        uintptr_t mhw,Read read,uint32_t channel,uintptr_t performance) {
+        if(!os || os!=resources_.context) return 5;
+        return vp_.initialize(binding,resources_,pageSize_,os,renderHal,mhw,read,channel,performance);
+    }
+    bool vpBound() const noexcept {return vp_.bound();}
+    template<class Use> int withVpResources(Use use) noexcept {return vp_.withResources(use);}
     auto& retention() noexcept {return command_.backing().auxiliary().retention();}
 };
 

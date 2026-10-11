@@ -13288,21 +13288,22 @@ int main() {
                         [](uintptr_t) noexcept {return true;},
                         [](uintptr_t,size_t) noexcept {return true;},resources,4096,
                         TglNativeBufferFillBinding{},nativeCpu);
-                    auto& owned=frame.vp();
                     assert(&frame.retention()==&frame.command().backing().auxiliary().retention());
-                    assert(!owned.bound());
-                    assert(owned.initialize(binding,resources,4096,0x7000,0x8000,0x3000,noRead,1,0)==0);
-                    assert(owned.bound());
-                    assert(owned.initialize(binding,resources,4096,0x7000,0x8000,0x3000,noRead,1,0)==5);
-                    assert(owned.withResources([&](auto& ownerGraph,auto& vp,auto& lines) noexcept {
+                    assert(!frame.vpBound());
+                    assert(frame.initializeVp(binding,0x7000,0x8000,0x3000,noRead,1,0)==5);
+                    assert(!stateCpu.live && !avsCpu.live);
+                    assert(frame.initializeVp(binding,resources.context,0x8000,0x3000,noRead,1,0)==0);
+                    assert(frame.vpBound());
+                    assert(frame.initializeVp(binding,resources.context,0x8000,0x3000,noRead,1,0)==5);
+                    assert(frame.withVpResources([&](auto& ownerGraph,auto& vp,auto& lines) noexcept {
                         assert(ownerGraph.ownsStorage(vp.bytes.data()) && !ownerGraph.tryReset());
                         assert(lines.resources().ensure(1080,4096)==0 && backing.live==3);
                         return -17;
                     })==-17);
                     assert(backing.live==3 && !backing.releases);
                     frame.retention().observe(TglOwnedVeboxCommandTransactionResult{31,31,true,false});
-                    assert(owned.initialize(binding,resources,4096,0x7000,0x8000,0x3000,noRead,1,0)==5);
-                    assert(owned.withResources([](auto& active,auto&,auto&) noexcept -> int {
+                    assert(frame.initializeVp(binding,resources.context,0x8000,0x3000,noRead,1,0)==5);
+                    assert(frame.withVpResources([](auto& active,auto&,auto&) noexcept -> int {
                         assert(!active.tryReset());return 0;
                     })==0);
                     assert(backing.live==3 && !backing.releases);
