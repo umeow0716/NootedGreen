@@ -9042,6 +9042,7 @@ public:
     TglOwnedVpSfcCpuGraph(const TglOwnedVpSfcCpuGraph&)=delete;
     TglOwnedVpSfcCpuGraph& operator=(const TglOwnedVpSfcCpuGraph&)=delete;
     ~TglOwnedVpSfcCpuGraph(){reset();}
+    bool ownsStorage(const void* child) const noexcept {return ready_ && child==storage_.bytes.data();}
     template<class Binding,class Read>
     bool initialize(uintptr_t os,uintptr_t renderHal,uintptr_t mhw,
         const Binding& binding,Read read,uint32_t channel,uintptr_t performance) {
@@ -11296,6 +11297,60 @@ int tglRetireOwnedVpResources(Graph& graph,Lines& lines,
         });
     });
 }
+
+// Owned lifecycle entries use a flat owned this, never donor adjustment
+// thunks. The context itself must outlive releaseAllocation. Its caller owns
+// the allocation and parent link/accounting; these callbacks do not authorize
+// native parent12e190 to decrement its counter for an owned allocation.
+template<class Graph,class Lines,class Retire,class ReleaseAllocation>
+class TglOwnedVpLifetimeContext {
+    Graph& graph_;Lines& lines_;Retire& retire_;ReleaseAllocation& release_;
+    void* child_;
+    bool valid_=false,busy_=false,reentered_=false,destroyed_=false,deleted_=false;
+    int status_=5;
+public:
+    TglOwnedVpLifetimeContext(void* child,Graph& graph,Lines& lines,Retire& retire,
+        ReleaseAllocation& release) noexcept
+        :graph_(graph),lines_(lines),retire_(retire),release_(release),child_(child),
+         valid_(child && graph.ownsStorage(child)) {}
+    TglOwnedVpLifetimeContext(const TglOwnedVpLifetimeContext&)=delete;
+    TglOwnedVpLifetimeContext& operator=(const TglOwnedVpLifetimeContext&)=delete;
+    bool owns(void* child) const noexcept {return valid_ && child && child==child_ && !deleted_;}
+    void destroy(bool deleting) noexcept {
+        static_assert(noexcept(release_(child_)) &&
+            std::is_same_v<decltype(release_(child_)),void>,"owned VP allocation release ABI");
+        if(busy_) {reentered_=true;status_=5;return;}
+        if(!valid_ || deleted_ || (destroyed_ && !deleting)) {status_=5;return;}
+        busy_=true;
+        struct Unlock {bool& busy;~Unlock(){busy=false;}} unlock{busy_};
+        reentered_=false;
+        if(!destroyed_) {
+            status_=tglRetireOwnedVpResources(graph_,lines_,[&]() noexcept -> int {
+                static_assert(noexcept(retire_()) && std::is_same_v<decltype(retire_()),int>,
+                    "owned VP lifecycle retirement ABI");
+                const int result=retire_();return reentered_?5:result;
+            });
+            if(status_) return;
+            destroyed_=true;
+        }
+        if(deleting) {deleted_=true;release_(child_);}
+        status_=reentered_?5:0;
+    }
+    int status() const noexcept {return status_;}
+    bool destroyed() const noexcept {return destroyed_;}
+    bool deleted() const noexcept {return deleted_;}
+};
+template<class Resolve> struct TglOwnedVpLifetimeCallbacks {
+    static void destroy(void* child) noexcept {
+        static_assert(noexcept(Resolve{}(child)),"owned VP lifecycle resolver ABI");
+        auto* context=Resolve{}(child);
+        if(context && context->owns(child)) context->destroy(false);
+    }
+    static void deletingDestroy(void* child) noexcept {
+        auto* context=Resolve{}(child);
+        if(context && context->owns(child)) context->destroy(true);
+    }
+};
 
 // Owned VP+30 void callback context. Retirement is an external, fallible
 // admission operation, not a bool invented from FinishFenceEvent's return.

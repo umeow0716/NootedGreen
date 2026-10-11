@@ -7488,12 +7488,14 @@ static void testSfcLineBufferOwnership() {
             assert(graph.initialize(0x1000,0x2000,0x3000,binding,noRead,1,0));
             stateCpu.lineLive=avsCpu.lineLive=&backend.live;
             unsigned retired=0;int admission=31;
+            void(*lifecycleReenter)(void*) noexcept=nullptr;void* lifecycleChild=nullptr;
             auto retire=[&]() noexcept -> int {
                 ++retired;assert(!graph.tryReset() && !buffers.tryReset());
                 assert(stateCpu.live && avsCpu.live && backend.live==2);
                 assert(tglRetireOwnedVpResources(graph,buffers,[]() noexcept -> int {
                     assert(false);return 0;
                 })==5);
+                if(lifecycleReenter) lifecycleReenter(lifecycleChild);
                 return admission;
             };
             assert(graph.withView(false,[&](void*) noexcept {
@@ -7509,8 +7511,41 @@ static void testSfcLineBufferOwnership() {
                 assert(backend.releases==releases && backend.live==2);
                 assert(stateCpu.live && avsCpu.live);
             }
-            admission=0;
-            assert(tglRetireOwnedVpResources(graph,buffers,retire)==0 && retired==3);
+            assert(graph.withView(false,[&](void* child) noexcept {
+                lifecycleChild=child;return 0;
+            })==0);
+            unsigned deleted=0;
+            auto releaseAllocation=[&](void* child) noexcept {
+                assert(child==lifecycleChild && !backend.live && !stateCpu.live && !avsCpu.live);
+                ++deleted;
+            };
+            using Lifetime=TglOwnedVpLifetimeContext<decltype(graph),decltype(buffers),
+                decltype(retire),decltype(releaseAllocation)>;
+            Lifetime foreignLifetime(&binding,graph,buffers,retire,releaseAllocation);
+            foreignLifetime.destroy(true);
+            assert(foreignLifetime.status()==5 && retired==2 && !deleted && backend.live==2);
+            Lifetime lifetime(lifecycleChild,graph,buffers,retire,releaseAllocation);
+            using LifetimeResolve=TglOwnedVpSfcResolve<Lifetime>;
+            using Lifecycle=TglOwnedVpLifetimeCallbacks<LifetimeResolve>;
+            TglOwnedVpSfcScopedContext<Lifetime> lifetimeScope(lifecycleChild,lifetime);
+            assert(lifetimeScope.bound());
+            Lifecycle::deletingDestroy(nullptr);Lifecycle::destroy(&binding);
+            assert(retired==2 && !deleted);
+            assert(graph.withView(false,[&](void*) noexcept {
+                Lifecycle::deletingDestroy(lifecycleChild);return 0;
+            })==0 && lifetime.status()==5 && retired==2);
+            admission=31;Lifecycle::deletingDestroy(lifecycleChild);
+            assert(lifetime.status()==31 && retired==3 && !deleted && backend.live==2);
+            admission=0;lifecycleReenter=&Lifecycle::destroy;
+            Lifecycle::deletingDestroy(lifecycleChild);
+            assert(lifetime.status()==5 && retired==4 && !deleted && backend.live==2);
+            lifecycleReenter=nullptr;Lifecycle::destroy(lifecycleChild);
+            assert(lifetime.status()==0 && lifetime.destroyed() && !lifetime.deleted());
+            assert(retired==5 && !deleted);
+            Lifecycle::destroy(lifecycleChild);assert(lifetime.status()==5 && retired==5);
+            Lifecycle::deletingDestroy(lifecycleChild);
+            assert(lifetime.status()==0 && lifetime.deleted() && deleted==1 && retired==5);
+            Lifecycle::deletingDestroy(lifecycleChild);assert(deleted==1 && retired==5);
             assert(!backend.live && !stateCpu.live && !avsCpu.live);
             assert(graph.withView(false,[](void*) noexcept -> int {assert(false);return 0;})==5);
         }
