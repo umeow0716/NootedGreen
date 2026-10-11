@@ -17680,6 +17680,30 @@ public:
         delete frame_;
     }
     bool surfacesReady() const noexcept {return frame_ && frame_->surfacesReady();}
+    // Source/target borrows enclose callback bindings. The consumer installs
+    // its producer/VP scopes and runs the existing native transaction while
+    // all four auxiliary contexts remain live. Return acquisition evidence
+    // unchanged so the enclosing frame captures pending resources on errors.
+    template<class Lifetime,class Admission,class Allocation,class Mode,class Consume>
+    TglOwnedVeboxCommandTransactionResult withScopedCommandFrame(
+        const TglNativeOuterSurfaceRoles& roles,size_t sourceIndex,size_t targetIndex,
+        uintptr_t child,uintptr_t execution,uintptr_t renderHal,uintptr_t sku,
+        Lifetime& lifetime,Admission& admission,Allocation& allocation,Mode& mode,
+        Consume consume) noexcept {
+        return withCommandFrame(roles,sourceIndex,targetIndex,child,execution,renderHal,sku,
+            [&](auto& source,auto& target,auto& packets) noexcept {
+                TglOwnedVeboxCommandTransactionResult result;
+                result.status=tglWithOwnedVeboxAuxiliaryScopes(reinterpret_cast<void*>(child),
+                    lifetime,admission,allocation,mode,
+                    [&](auto&,auto&,auto&,auto&) noexcept -> int {
+                        static_assert(noexcept(consume(source,target,packets)) &&
+                            std::is_same_v<decltype(consume(source,target,packets)),
+                                TglOwnedVeboxCommandTransactionResult>);
+                        result=consume(source,target,packets);return result.status;
+                    });
+                return result;
+            });
+    }
     template<class Consume>
     TglOwnedVeboxCommandTransactionResult withCommandFrame(
         const TglNativeOuterSurfaceRoles& roles,size_t sourceIndex,size_t targetIndex,

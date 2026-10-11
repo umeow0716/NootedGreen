@@ -7640,15 +7640,39 @@ static void testNativeResourceBoundary() {
                                                     TglNativeOuterSurfaceRoles roles;roles.sourceCount=1;roles.targetCount=1;
                                                     roles.sources[0]=reinterpret_cast<uintptr_t>(&source);
                                                     roles.targets[0]=reinterpret_cast<uintptr_t>(&target);
+                                                    struct CallbackContext {
+                                                        bool owns(void* p) const noexcept {return p==reinterpret_cast<void*>(1);}
+                                                    };
+                                                    struct Life:CallbackContext {} life;
+                                                    struct Admission:CallbackContext {} admission;
+                                                    struct Allocation:CallbackContext {} allocation;
+                                                    struct Mode:CallbackContext {} mode;
+                                                    unsigned consumers=0;
                                                     const auto r=pool.run(ticket,[&](auto& frame) noexcept {
                                                         assert(frame.surfacesReady() && refs[1]==3 && refs[5]==3);
-                                                        return frame.withCommandFrame(roles,0,0,1,2,3,4,
+                                                        // Foreign child must not reach the native consumer or
+                                                        // latch acquisition in the otherwise valid frame.
+                                                        assert(frame.withScopedCommandFrame(roles,0,0,9,2,3,4,
+                                                            life,admission,allocation,mode,
+                                                            [](auto&,auto&,auto&) noexcept -> TglOwnedVeboxCommandTransactionResult {
+                                                                assert(false);return {};
+                                                            }).status==5);
+                                                        return frame.withScopedCommandFrame(roles,0,0,1,2,3,4,
+                                                            life,admission,allocation,mode,
                                                             [&](auto&,auto&,auto& leases) noexcept {
+                                                                ++consumers;
+                                                                auto* p=reinterpret_cast<void*>(1);
+                                                                assert(TglOwnedVeboxScopedContext<Life>::get(p)==&life &&
+                                                                    TglOwnedVeboxScopedContext<Admission>::get(p)==&admission &&
+                                                                    TglOwnedVeboxScopedContext<Allocation>::get(p)==&allocation &&
+                                                                    TglOwnedVeboxScopedContext<Mode>::get(p)==&mode);
                                                                 assert(&leases.source==&source && leases.target==&target);
                                                                 return TglOwnedVeboxCommandTransactionResult{31,31,true,false};
                                                             });
                                                     });
-                                                    assert(r.acquired && refs[1]==3 && refs[5]==3);
+                                                    assert(r.status==31 && r.acquired && consumers==1 && refs[1]==3 && refs[5]==3);
+                                                    assert(!TglOwnedVeboxScopedContext<Life>::get(reinterpret_cast<void*>(1)) &&
+                                                        !TglOwnedVeboxScopedContext<Mode>::get(reinterpret_cast<void*>(1)));
                                                     assert(contexts.reconcileSuccessfulRemoval(0x1000,0x8000,7,removed)==5 && !contextDeaths);
                                                     assert(pool.retire(ticket,[](const auto&,bool,const auto&) noexcept {return 31;})==31);
                                                     assert(refs[1]==3 && refs[5]==3);
