@@ -13903,9 +13903,11 @@ int main() {
                     assert(releaseCount==1 && releaseOrder[0]==2);
                     releaseCount=0;releaseOrder.fill(0);return 0;
                 },
-                [&](void* initializedChild,const auto& initializedEntries) noexcept -> int {
-            return graph.withResourceOwnerStorage([&](auto& ownedStorage) noexcept {
-                assert(initializedChild==ownedStorage.bytes.data() && initializedEntries.initialize);
+                [](void*,const auto&) noexcept -> int {return 0;})==0);
+            // Persistent backing outlives construction's initializer resolver.
+            // Reassemble the full table within each prepared frame instead.
+            assert(graph.withResourceOwnerStorage([&](auto& ownedStorage) noexcept {
+                const TglOwnedVpEntrySet initializedEntries{};
                 assert(!graph.tryReset());
                 assert(!graph.initialize(0x7000,0x8000,0x3000,binding,noRead,1,0));
                 assert(graph.prepare([](auto&,auto&,auto&) noexcept {assert(false);return 0;})==5);
@@ -14036,7 +14038,7 @@ int main() {
                     put(source,0,uint32_t(cscEnabled?0:3));
                     int passData=0,passCommand=0;
                     unsigned passStates=0;
-                    assert(graph.withLeasedCallbackAssemblyPass(initializedEntries,0x1000,0x2000,0x3000,0x4000,
+                    assert(graph.withInitializedFrameCallbackAssemblyPass(initializedEntries,0x1000,0x2000,0x3000,0x4000,
                       0,0x4000,{},&passData,read,
                       [&](void*,const auto&,const auto& geometry,auto&) noexcept -> int {
                           assert(geometry.frameWidth==geometrySnapshot.frameWidth);++passStates;return 0;
@@ -14273,7 +14275,6 @@ int main() {
                 assert(backends[0].allocations==assemblyAllocations[0]+3 && backends[1].allocations==assemblyAllocations[1]+2);
                 assert(backends[0].releases==assemblyReleases[0]+3 && backends[1].releases==assemblyReleases[1]+2);
                 return 0;
-            });
             })==0);
             struct GraphPipePolicy {
                 decltype(graph)& owner;bool directMode=true;
