@@ -15522,6 +15522,55 @@ int main() {
                 ++constructors;*out=result;
             };
             {
+                for(bool failSecond:{true,false}) {
+                    std::array<unsigned,16> pairEvents{};size_t pairEventCount=0;
+                    std::array<Cpu,2> pairCpu{Cpu{{},pairEvents,pairEventCount},Cpu{{},pairEvents,pairEventCount}};
+                    Invoke pairInvoke;
+                    std::array<unsigned,2> cleaned{},destroyed{};
+                    auto index=[&](void* object) noexcept -> size_t {
+                        for(size_t i=0;i<2;++i) if(object==pairCpu[i].bytes.data()) return i;
+                        assert(false);return 0;
+                    };
+                    auto pairCleanup=[&](void* object) noexcept {++cleaned[index(object)];};
+                    auto pairDestroy=[&](uintptr_t entry,void* object) noexcept {
+                        assert(entry==base+0x12de30);++destroyed[index(object)];
+                    };
+                    using Pair=TglNativeVeboxChildPairStorage<decltype(pairCleanup),NativeCpu,TrackedSfc,decltype(pairDestroy)>;
+                    {
+                        Pair pair(base,allocatorRead,[](uintptr_t image) noexcept {return image==base;},
+                            [](uintptr_t,size_t) noexcept {return true;},
+                            {pairCleanup,pairCleanup},{NativeCpu{pairCpu[0]},NativeCpu{pairCpu[1]}},
+                            {TrackedSfc{pairInvoke,pairEvents,pairEventCount},TrackedSfc{pairInvoke,pairEvents,pairEventCount}},
+                            {pairDestroy,pairDestroy});
+                        assert(pair.bound());
+                        auto pairConstruct=[&](uintptr_t entry,void* object,void* nativeOs,void*,void*,
+                            void*,void*,void*,const void*,int32_t* out) noexcept {
+                            assert(entry==base+0x12d4e0 && nativeOs==reinterpret_cast<void*>(os));
+                            const uintptr_t table=base+0x757c98;
+                            std::memcpy(object,&table,8);std::memcpy(static_cast<uint8_t*>(object)+0x10,&os,8);
+                            *out=failSecond && index(object)==1 ? 31:0;
+                        };
+                        int32_t pairStatus=77;
+                        auto init=[&](auto& child) {
+                            return child.initialize(baseBinding,lifetime,mhw,reinterpret_cast<void*>(os),
+                                nullptr,reinterpret_cast<void*>(0x3000),nullptr,nullptr,nullptr,pairStatus,read,pairConstruct);
+                        };
+                        assert(init(pair.first())==TglOwnedBaseConstruction::ConstructedSuccess);
+                        assert(init(pair.second())==(failSecond?TglOwnedBaseConstruction::ConstructedFailure:
+                            TglOwnedBaseConstruction::ConstructedSuccess));
+                        assert(pairCpu[0].live && pairCpu[1].live==!failSecond);
+                        std::array<uint8_t,0x928> renderer{};
+                        const uintptr_t native920=0x9876;std::memcpy(renderer.data()+0x920,&native920,8);
+                        const auto original=renderer;
+                        // Constructed bases are NOT publishable without complete private tables.
+                        assert(!pair.publish(renderer.data(),renderer.size(),1,
+                            [](void*,uint64_t,uintptr_t,uintptr_t) noexcept {return true;}));
+                        assert(renderer==original);
+                    }
+                    assert(!pairCpu[0].live && !pairCpu[1].live);
+                    assert(cleaned[0]==1 && cleaned[1]==1 && destroyed==cleaned);
+                    assert(pairInvoke.constructs==2 && pairInvoke.destroys==2);
+                }
                 ChildStorage childStorage(base,allocatorRead,
                     [](uintptr_t image) noexcept {return image==base;},
                     [](uintptr_t address,size_t size) noexcept {

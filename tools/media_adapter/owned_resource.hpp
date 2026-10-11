@@ -3919,6 +3919,38 @@ public:
     }
 };
 
+// Own the two distinct VEBOX child allocations before their paired publication.
+// No automatic publication/detach or retirement: the complete frame must
+// detach under qualified completion before either child is destroyed. Native
+// renderer920 is never owned or replaced by this pair.
+template<class Cleanup,class CpuInvoker=TglNativeTrackedCpuInvoker,
+    class SfcInvoker=TglNativeSfcLifetimeInvoker,class Destroy=TglNativeVeboxDestructorInvoker>
+class TglNativeVeboxChildPairStorage {
+    using Child=TglNativeVeboxCpuChildStorage<Cleanup,CpuInvoker,SfcInvoker,Destroy>;
+    using Owner=std::remove_reference_t<decltype(std::declval<Child&>().owner())>;
+    Child first_,second_;
+    TglOwnedRendererChildPublication<Owner,Owner> publication_;
+public:
+    template<class Read,class Qualify,class Executable>
+    TglNativeVeboxChildPairStorage(uintptr_t image,Read read,Qualify qualify,Executable executable,
+        std::array<Cleanup,2> cleanup,std::array<CpuInvoker,2> cpu={},
+        std::array<SfcInvoker,2> sfc={},std::array<Destroy,2> destroy={})
+        :first_(image,read,qualify,executable,std::move(cleanup[0]),cpu[0],sfc[0],destroy[0]),
+         second_(image,read,qualify,executable,std::move(cleanup[1]),cpu[1],sfc[1],destroy[1]),
+         publication_(first_.owner(),second_.owner()) {}
+    TglNativeVeboxChildPairStorage(const TglNativeVeboxChildPairStorage&)=delete;
+    TglNativeVeboxChildPairStorage& operator=(const TglNativeVeboxChildPairStorage&)=delete;
+    bool bound() const noexcept {return first_.bound() && second_.bound();}
+    auto& first() noexcept {return first_;}
+    auto& second() noexcept {return second_;}
+    template<class Admit> bool publish(void* renderer,size_t extent,uint64_t generation,Admit admit) noexcept {
+        return bound() && publication_.publish(renderer,extent,generation,admit);
+    }
+    template<class Admit> bool detach(void* renderer,uint64_t generation,Admit admit) noexcept {
+        return publication_.detach(renderer,generation,admit);
+    }
+};
+
 // These callbacks are owned lifecycle only, not permission for native
 // allocation accounting or GPU retirement. The context outlives allocation.
 struct TglOwnedVeboxSynchronousTeardown {
