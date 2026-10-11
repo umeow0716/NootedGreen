@@ -13858,10 +13858,11 @@ int main() {
                         unsigned retireCalls=0;
                         for(int status:{31,0}) {
                             auto retire=[&]() noexcept {++retireCalls;return status;};
-                            assert(owner.withBorrowedVpModeAssemblyView(graph,false,readFormat,lines,retire,0x1000,0x2000,0x3000,
-                                [&](void* parent,void* child,const auto& entries) noexcept {
+                            assert(owner.withPrivateChild([&](void* parent) noexcept {
+                              return graph.withModeAssemblyView(false,readFormat,lines,retire,0x1000,0x2000,0x3000,
+                                [&](void* child,const auto& entries) noexcept {
                                     uintptr_t link=0;std::memcpy(&link,static_cast<uint8_t*>(parent)+0x80,8);
-                                    assert(link==reinterpret_cast<uintptr_t>(child));
+                                    assert(!link);
                                     assert(!graph.tryReset() && !owner.destroyInPlace());owner.reset();assert(cpu.live);
                                     entries.sampleMode(child,reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x2000));
                                     entries.formatMode(child,reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x3000));
@@ -13877,16 +13878,37 @@ int main() {
                                             assert(from==3 && to==5);value.matrix[0]=7;return true;
                                         },entries,[&](void* admitted,const auto& combined,uint8_t* state) noexcept {
                                             assert(admitted==child && combined.allocate==entries.allocate);
-                                            combined.csc(child,state,ief.data());assert(state[0x88]==1);
+                                            // Preserve the fifteen real entries; twelve remaining
+                                            // slots are CPU fixtures, not a complete renderer.
+                                            TglOwnedVpFlatDispatchTable dispatch;
+                                            assert(dispatch.build(testVpPresenceEntries(combined),
+                                                [](uintptr_t,size_t) noexcept {return true;}));
+                                            assert(owner.withLeasedBorrowedVpFlatDispatch(parent,graph,child,dispatch,
+                                                [&](void* p,void* c) noexcept {
+                                                    uintptr_t table=0,borrowed=0;
+                                                    std::memcpy(&table,c,8);
+                                                    std::memcpy(&borrowed,static_cast<uint8_t*>(p)+0x80,8);
+                                                    assert(p==parent && c==child && table==dispatch.addressPoint() &&
+                                                        borrowed==reinterpret_cast<uintptr_t>(child));
+                                                    decltype(combined.csc) callback=nullptr;
+                                                    std::memcpy(&callback,reinterpret_cast<const void*>(table+0xa0),sizeof(callback));
+                                                    assert(callback==combined.csc);
+                                                    callback(c,state,ief.data());
+                                                    owner.reset();assert(cpu.live && !graph.tryReset() && !cscCache.reset());
+                                                    return -17;
+                                                })==-17);
+                                            uintptr_t restoredTable=1;std::memcpy(&restoredTable,child,8);
+                                            assert(!restoredTable && state[0x88]==1);
                                             uintptr_t retainedLink=0;
                                             std::memcpy(&retainedLink,static_cast<uint8_t*>(parent)+0x80,8);
-                                            assert(retainedLink==reinterpret_cast<uintptr_t>(child));
+                                            assert(!retainedLink);
                                             owner.reset();assert(cpu.live && !graph.tryReset() && !cscCache.reset());
                                             return 0;
                                         })==0);
                                     assert(ief==beforeIef && stateCpu.bytes==beforeState && cscCache.reset());
                                     entries.freeResources(child);return 0;
-                                })==status);
+                                });
+                            })==status);
                             std::memcpy(&linked,cpu.bytes.data()+0x80,8);assert(!linked);
                             assert(backends[0].live==unsigned(status!=0) && backends[1].live==unsigned(status!=0));
                         }
