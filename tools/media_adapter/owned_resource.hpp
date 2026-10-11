@@ -4480,6 +4480,18 @@ public:
         return status;
     }
     bool backed(const Storage &storage) const noexcept { return tglNativeBackingPresent(storage); }
+    bool nativeFillCompatible(const TglNativeBufferFillBinding& binding) const noexcept {
+        return context_ && allocate_ && release_ && type_ == 0 && binding.entry &&
+            binding.context == reinterpret_cast<uintptr_t>(context_);
+    }
+    template<class Writable>
+    int fillNative(Storage& storage, uint32_t bytes, uint8_t value,
+                   const TglNativeBufferFillBinding& binding, Writable writable) const noexcept {
+        // An authenticated Fill from a different OS cannot initialize a
+        // descriptor allocated by this backend. Never call it on type1 here.
+        if (!nativeFillCompatible(binding)) return 5;
+        return binding.fill(storage, bytes, value, writable);
+    }
     void release(Storage &storage) noexcept {
         if (!context_ || !release_) return;
         for (auto byte : storage) if (byte != 0) {
@@ -12633,10 +12645,10 @@ int tglWithOwnedSfcCommandInputs(TglOwnedSfcCommandParameters& parameters,
 template<class Backend> class TglStatisticsResource {
 public:
     using Storage=typename TglOwnedResource<Backend>::Storage;
-    explicit TglStatisticsResource(Backend &backend) noexcept : owner_(backend) {}
+    explicit TglStatisticsResource(Backend &backend) noexcept : backend_(backend),owner_(backend) {}
     // Bind the resource bytes in an empty native statistics shell. The shell
     // outlives this owner and is freed only after reset/native-token release.
-    TglStatisticsResource(Backend& backend,Storage& storage) noexcept :owner_(backend,storage) {}
+    TglStatisticsResource(Backend& backend,Storage& storage) noexcept :backend_(backend),owner_(backend,storage) {}
     TglStatisticsResource(const TglStatisticsResource&)=delete;
     TglStatisticsResource& operator=(const TglStatisticsResource&)=delete;
     ~TglStatisticsResource() {reset();}
@@ -12646,6 +12658,20 @@ public:
     template<class Fill>
     int ensure(uint32_t width, uint32_t height, Fill fill) noexcept {
         return ensure(width,height,fill,[](const Storage&,const TglStatisticsAllocation&) noexcept {});
+    }
+    // Production initialization path: use the allocator's OS and exact
+    // native Fill; no CPU-only memset substitute and no const-cast. The
+    // caller holds OS/image lifetime and excludes submitted GPU users.
+    template<class Writable,class Publish>
+    int ensureNative(uint32_t width,uint32_t height,
+                     const TglNativeBufferFillBinding& binding,
+                     Writable writable,Publish publish) noexcept {
+        static_assert(std::is_same_v<Backend,TglNativeResourceBackend>,
+                      "native statistics require the native resource backend");
+        if (!backend_.nativeFillCompatible(binding)) return 5;
+        return ensure(width,height,[&](Storage& storage,uint32_t bytes) noexcept {
+            return backend_.fillNative(storage,bytes,0,binding,writable);
+        },publish);
     }
     template<class Fill,class Publish>
     int ensure(uint32_t width,uint32_t height,Fill fill,Publish publish) noexcept {
@@ -12672,8 +12698,10 @@ public:
                 const int filled=fill(storage,candidate.bytes);
                 if(!filled) {
                     if constexpr(std::is_same_v<PublicationResult,int>)
-                        return publish(storage,static_cast<const TglStatisticsAllocation&>(candidate));
-                    else publish(storage,static_cast<const TglStatisticsAllocation&>(candidate));
+                        return publish(static_cast<const Storage&>(storage),
+                            static_cast<const TglStatisticsAllocation&>(candidate));
+                    else publish(static_cast<const Storage&>(storage),
+                        static_cast<const TglStatisticsAllocation&>(candidate));
                 }
                 return filled;
             });
@@ -12712,6 +12740,7 @@ public:
     const TglStatisticsAllocation &layout() const noexcept { return layout_; }
 private:
     void retire() noexcept { owner_.reset();layout_={}; }
+    Backend& backend_;
     TglOwnedResource<Backend> owner_;
     TglStatisticsAllocation layout_{};
     bool busy_=false;

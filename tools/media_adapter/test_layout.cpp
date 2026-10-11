@@ -4783,6 +4783,101 @@ static void testBufferFill() {
 #endif
 }
 
+static void testNativeBufferFillBinding() {
+    constexpr uintptr_t os=0x1000,image=0x100000;
+    uintptr_t lock=image+0x63da0,unlock=image+0x63f40,fill=image+0x41440;
+    std::array<uint8_t,22> anchor{
+        0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x40,
+        0x48,0x89,0x7d,0xf0,0x48,0x89,0x75,0xe8,
+        0x89,0x55,0xe4,0x88,0x4d,0xe3};
+    bool identity=true,rx=true,readable=true;
+    auto read=[&](uintptr_t address,void* out,size_t bytes) {
+        if(!readable) return false;
+        const void* source=nullptr;
+        if(bytes==8) {
+            if(address==os+0x220) source=&lock;
+            if(address==os+0x228) source=&unlock;
+            if(address==os+0x240) source=&fill;
+        }
+        if(address==image+0x41440 && bytes==anchor.size()) source=anchor.data();
+        if(!source) return false;
+        std::memcpy(out,source,bytes);return true;
+    };
+    auto qualify=[&](uintptr_t address) {return identity && address==image;};
+    auto executable=[&](uintptr_t address,size_t bytes) {
+        return rx && ((bytes==16 && (address==image+0x63da0 || address==image+0x63f40)) ||
+                      (bytes==22 && address==image+0x41440));
+    };
+    TglNativeBufferFillBinding binding;
+    auto resolve=[&] {return binding.resolve(os,image,read,qualify,executable);};
+    auto empty=[&] {assert(!binding.context && !binding.entry);};
+    assert(resolve() && binding.context==os && binding.entry==fill);
+    identity=false;assert(!resolve());empty();identity=true;
+    rx=false;assert(!resolve());empty();rx=true;
+    readable=false;assert(!resolve());empty();readable=true;
+    for(auto* pointer : {&lock,&unlock,&fill}) {
+        ++*pointer;assert(!resolve());empty();--*pointer;
+    }
+    anchor[21]^=1;assert(!resolve());empty();anchor[21]^=1;
+    assert(resolve());
+    assert(!binding.resolve(UINTPTR_MAX,image,read,qualify,executable));empty();
+    assert(!binding.resolve(os,UINTPTR_MAX,read,qualify,executable));empty();
+}
+
+static void testNativeStatisticsFill() {
+    using Storage=TglNativeResourceBackend::Storage;
+    struct Fixture {
+        unsigned allocations=0,releases=0,fills=0,publications=0;
+        int status=0;
+    } fixture;
+    auto allocate=+[](void* context,const void* params,void* output) noexcept -> int {
+        auto& f=*static_cast<Fixture*>(context);++f.allocations;
+        uint32_t bytes=0;std::memcpy(&bytes,static_cast<const uint8_t*>(params)+0x14,4);
+        auto* storage=static_cast<uint8_t*>(output);
+        const uintptr_t token=7,mapping=0x4000;
+        std::memcpy(storage+0x10,&bytes,4);
+        std::memcpy(storage+0x20,&token,8);
+        std::memcpy(storage+0x50,&mapping,8);
+        return 0;
+    };
+    auto release=+[](void* context,void*) noexcept {
+        ++static_cast<Fixture*>(context)->releases;
+    };
+    auto fill=+[](uintptr_t context,void* descriptor,uint32_t bytes,uint8_t value) -> int {
+        auto& f=*reinterpret_cast<Fixture*>(context);++f.fills;
+        assert(bytes && !value);
+        static_cast<uint8_t*>(descriptor)[0x48]=1;
+        return f.status;
+    };
+    TglNativeResourceBackend backend(&fixture,allocate,release,0,4096);
+    TglNativeBufferFillBinding binding{reinterpret_cast<uintptr_t>(&fixture),
+        reinterpret_cast<uintptr_t>(fill)};
+    auto writable=[](uintptr_t address,uint32_t bytes) noexcept {
+        return address==0x4000 && bytes>0;
+    };
+    TglStatisticsResource<TglNativeResourceBackend> statistics(backend);
+    auto publish=[&](const Storage& storage,const TglStatisticsAllocation&) noexcept -> int {
+        assert(storage[0x48]==1);++fixture.publications;
+        statistics.reset(); // synchronous initialization still reserves the owner
+        assert(fixture.releases==0);return 0;
+    };
+    assert(!statistics.ensureNative(1920,1080,binding,writable,publish));
+    assert(fixture.allocations==1 && fixture.fills==1 && fixture.publications==1);
+    assert(!statistics.ensureNative(1920,1080,binding,writable,publish));
+    assert(fixture.fills==1 && fixture.publications==1);
+    auto foreign=binding;foreign.context++;
+    assert(statistics.ensureNative(1280,720,foreign,writable,publish)==5);
+    assert(fixture.allocations==1 && statistics.layout().bytes==520320);
+    fixture.status=31;
+    assert(statistics.ensureNative(1280,720,binding,writable,publish)==31);
+    assert(fixture.allocations==2 && fixture.releases==2 && fixture.fills==2);
+    assert(fixture.publications==1 && !statistics.layout().bytes);
+    fixture.status=0;
+    auto denied=[](uintptr_t,uint32_t) noexcept {return false;};
+    assert(statistics.ensureNative(1280,720,binding,denied,publish)==5);
+    assert(fixture.allocations==3 && fixture.releases==3 && fixture.fills==2);
+}
+
 static void testStatisticsLifecycle() {
     struct Backend {
         int allocations = 0, releases = 0, status = 0;
@@ -16214,6 +16309,8 @@ int main() {
     testSurfaceStatisticsTransaction();
     testComposedStatisticsBuffer();
     testBufferFill();
+    testNativeStatisticsFill();
+    testNativeBufferFillBinding();
     testStatisticsLifecycle();
     testSurfaceBoundary();
     testStatisticsOffsets();
