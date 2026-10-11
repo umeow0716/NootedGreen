@@ -6210,6 +6210,34 @@ static void testResourceBinding() {
                 })==0);
                 assert(api.references==1 && lineBackend.live==initialLineLive);
                 transaction.reset();assert(!api.references);
+                // Actual source-owner lease, with CPU-only backing fixtures.
+                // Statistics retains its independent 1920x1080 shape while
+                // STMM uses the source's 8x3 dimensions.
+                struct SourceBackend {
+                    unsigned releases=0;
+                    uint32_t resourceType() const noexcept {return 1;}
+                    int allocate(std::array<uint8_t,0x148>& s,const TglResourceKey& k,
+                        uint32_t* pitch) noexcept {
+                        s.fill(0);s[0]=1;*pitch=k.width;return 0;
+                    }
+                    bool backed(const std::array<uint8_t,0x148>& s) noexcept {return s[0]==1;}
+                    void release(std::array<uint8_t,0x148>& s) noexcept {s.fill(0);++releases;}
+                } sourceBackend;
+                TglOwnedAllocatedSurface<SourceBackend> sourceOwner(sourceBackend);
+                assert(sourceOwner.ensure(stmmKey)==0);
+                assert(sourceOwner.withSurface([&](const auto& source) noexcept {
+                    unsigned prepared=0;
+                    auto pinnedPrepare=[&](size_t,const auto&,bool) noexcept {
+                        ++prepared;sourceOwner.reset();
+                        assert(sourceOwner.hasSurfaceLease(source) && !sourceBackend.releases);
+                        assert(sourceOwner.ensure(stmmKey)==5);return 0;
+                    };
+                    assert(transaction.ensureFromLeasedSource(sourceOwner,source,false,
+                        requests,pinnedPrepare,false,1920,1080,fill)==0);
+                    assert(prepared==1 && statistics.layout().bytes==520320);
+                    transaction.reset();assert(!api.references);
+                }));
+                sourceOwner.reset();assert(sourceBackend.releases==1);
             }
             pair.reset();assert(!api.references);
             std::array<TglResourceStorageReference,2> alias{{{first},{first}}};
