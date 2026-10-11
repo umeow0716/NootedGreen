@@ -7552,6 +7552,43 @@ static void testSfcFrameFields() {
 
 int main() {
     {
+        struct Context {
+            void* child;std::array<void*,3> args{};
+            unsigned states=0,filtersCalled=0;int result=0;
+            bool owns(void* value) const noexcept {return child==value;}
+            int state(void* data,void* source,void* target) noexcept {
+                ++states;args={data,source,target};return result;
+            }
+            void filters(void* state,void* source) noexcept {
+                ++filtersCalled;args={state,source,nullptr};
+            }
+        };
+        std::array<int,5> values{};Context context{&values[0]};
+        using Callback=TglOwnedVpProducerCallbacks<TglOwnedVpSfcResolve<Context>>;
+        using State=int(*)(void*,void*,void*,void*) noexcept;
+        using Filters=void(*)(void*,void*,void*,void*) noexcept;
+        const State state=&Callback::state;const Filters filters=&Callback::filters;
+        assert(state(context.child,&values[1],&values[2],&values[3])==5);
+        filters(context.child,&values[1],&values[4],&values[2]);assert(!context.filtersCalled);
+        {
+            TglOwnedVpSfcScopedContext<Context> scope(context.child,context);assert(scope.bound());
+            assert(state(nullptr,&values[1],&values[2],&values[3])==5);
+            assert(state(context.child,&values[1],nullptr,&values[3])==5);
+            assert(state(context.child,&values[1],&values[2],nullptr)==5);
+            for(int result:{0,31,-7}) {
+                context.result=result;
+                assert(state(context.child,&values[1],&values[2],&values[3])==result);
+                assert((context.args==std::array<void*,3>{&values[1],&values[2],&values[3]}));
+            }
+            filters(context.child,&values[1],nullptr,&values[2]);
+            filters(context.child,&values[1],&values[4],nullptr);
+            filters(&values[1],nullptr,&values[4],&values[2]);assert(!context.filtersCalled);
+            filters(context.child,nullptr,&values[4],&values[2]);
+            assert(context.filtersCalled==1 && context.args[0]==&values[4] && context.args[1]==&values[2]);
+        }
+        filters(context.child,&values[1],&values[4],&values[2]);assert(context.filtersCalled==1);
+    }
+    {
         struct Backend {
             unsigned allocations=0,releases=0;int status=0;
             uint32_t resourceType() const noexcept {return 0;}

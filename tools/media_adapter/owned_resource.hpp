@@ -5875,6 +5875,28 @@ template<class Resolve> struct TglOwnedVpFrameCallback {
             context->prepare(conditionalSource,parameters,source,target,settings);
     }
 };
+// +40 caller 1e0d3b..1e0d4a invokes status90(data,source,target).
+// 1e0da9..1e0dbb instead invokes void98(data,state938,source).
+// Exact98=1e0bb0 ignores RSI and rejects null RDX/RCX before clearing
+// its IEF packet. A scoped context must authenticate/pin the actual state
+// packet and source, and keep producer failure visible outside this void ABI.
+template<class Resolve> struct TglOwnedVpProducerCallbacks {
+    static int state(void* child,void* data,void* source,void* target) noexcept {
+        static_assert(noexcept(Resolve{}(child)),"VP producer resolver ABI");
+        auto* context=Resolve{}(child);
+        static_assert(noexcept(context->owns(child)) && noexcept(context->state(data,source,target)),
+            "VP state producer ABI");
+        return context && source && target && context->owns(child) ?
+            context->state(data,source,target) : 5;
+    }
+    static void filters(void* child,void*,void* state,void* source) noexcept {
+        static_assert(noexcept(Resolve{}(child)),"VP filter resolver ABI");
+        auto* context=Resolve{}(child);
+        static_assert(noexcept(context->owns(child)) && noexcept(context->filters(state,source)),
+            "VP filter producer ABI");
+        if(context && state && source && context->owns(child)) context->filters(state,source);
+    }
+};
 // Qualified VP +40=1e0ca0..1e0dcb. Its +a8=1e0c80 is a proven native
 // no-op, not an unresolved hook. +90 failure prevents AVS/IEF; AVS failure
 // prevents IEF. Native +98 is called for its side effect without a status read.
