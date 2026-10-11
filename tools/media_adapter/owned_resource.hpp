@@ -1088,6 +1088,39 @@ bool tglDirectVeboxFeasible(uintptr_t params, uintptr_t source, uintptr_t target
     return !alpha || (alpha <= max - 7 && read(alpha + 4, &alphaMode, 4) && alphaMode != 2);
 }
 
+// Gen12 GetOutputPipe, intel/media-driver73c8d14 g12_base.cpp2426..2550.
+// Policy owns qualified params/source/target leases and implements complete
+// predicates, SFC selection and fast-fill temporary rectangle/decompression
+// transaction. No ICL this-adjustment or TGL base68 dispatch belongs here.
+// Invalid SFC output fails without publishing mode/comp flags; normal exits
+// overwrite the whole bCompNeeded byte, not OR a stale admission flag.
+template<class Policy>
+bool tglSelectGen12VeboxOutputPipe(Policy& policy,uint8_t& compNeeded,uint32_t& output) noexcept {
+    static_assert(noexcept(policy.bypass()) && noexcept(policy.rejectDi()) &&
+        noexcept(policy.rejectLut()) && noexcept(policy.direct()) && noexcept(policy.twoPass()) &&
+        noexcept(policy.sfcAvailable()) && noexcept(policy.hdr()) && noexcept(policy.sfc()) &&
+        noexcept(policy.fastFill()),"qualified synchronous pipe policy ABI");
+    static_assert(std::is_same_v<decltype(policy.sfc()),uint32_t>,"SFC pipe mode ABI");
+    static_assert(std::is_same_v<decltype(policy.bypass()),bool> &&
+        std::is_same_v<decltype(policy.rejectDi()),bool> && std::is_same_v<decltype(policy.rejectLut()),bool> &&
+        std::is_same_v<decltype(policy.direct()),bool> && std::is_same_v<decltype(policy.twoPass()),bool> &&
+        std::is_same_v<decltype(policy.sfcAvailable()),bool> && std::is_same_v<decltype(policy.hdr()),bool> &&
+        std::is_same_v<decltype(policy.fastFill()),bool>,"pipe predicates must not interpret error status as true");
+    auto finish=[&](uint32_t pipe) noexcept {output=pipe;compNeeded=pipe==0?1:0;return true;};
+    if(!policy.bypass()) return finish(0);
+    if(policy.rejectDi()) return finish(0);
+    if(policy.rejectLut()) return finish(0);
+    if(policy.direct()) return finish(2);
+    if(policy.twoPass()) return finish(0);
+    uint32_t pipe=0;
+    if(policy.sfcAvailable() && !policy.hdr()) {
+        pipe=policy.sfc();
+        if(pipe>2) return false;
+    }
+    if(pipe==0 && policy.fastFill()) pipe=2;
+    return finish(pipe);
+}
+
 // Native CPU shell allocator437e0 zeroes storage and increments7f3218 only on
 // success; release436d0 decrements the SAME counter then frees. Not GPU backing.
 struct TglTrackedCpuBinding {

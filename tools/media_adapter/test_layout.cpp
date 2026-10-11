@@ -45,6 +45,35 @@ struct TestFeatureExecutionOwner {
 };
 static void testTrackedCpuOwner() {
     {
+        struct Policy {
+            unsigned calls=0;unsigned stop=99;uint32_t selected=1;bool fill=false,available=true,tone=false;
+            bool bypass() noexcept {calls|=1;return stop!=0;}
+            bool rejectDi() noexcept {calls|=2;return stop==1;}
+            bool rejectLut() noexcept {calls|=4;return stop==2;}
+            bool direct() noexcept {calls|=8;return stop==3;}
+            bool twoPass() noexcept {calls|=16;return stop==4;}
+            bool sfcAvailable() noexcept {calls|=32;return available;}
+            bool hdr() noexcept {calls|=64;return tone;}
+            uint32_t sfc() noexcept {calls|=128;return selected;}
+            bool fastFill() noexcept {calls|=256;return fill;}
+        } policy;
+        uint8_t comp=0x80;uint32_t mode=0xabcdef;
+        for(unsigned stop=0;stop<5;++stop) {
+            policy.calls=0;policy.stop=stop;comp=0x80;
+            assert(tglSelectGen12VeboxOutputPipe(policy,comp,mode));
+            assert(policy.calls==((1u<<(stop+1))-1) && mode==(stop==3?2u:0u));
+            assert(comp==(stop==3?0:1));
+        }
+        policy.stop=99;policy.calls=0;
+        assert(tglSelectGen12VeboxOutputPipe(policy,comp,mode) && mode==1 && !comp && policy.calls==255);
+        policy.selected=0;policy.fill=true;policy.calls=0;
+        assert(tglSelectGen12VeboxOutputPipe(policy,comp,mode) && mode==2 && !comp && policy.calls==511);
+        policy.tone=true;policy.calls=0;
+        assert(tglSelectGen12VeboxOutputPipe(policy,comp,mode) && mode==2 && !(policy.calls&128));
+        policy.tone=false;policy.selected=3;policy.calls=0;mode=0xabcdef;comp=0x80;
+        assert(!tglSelectGen12VeboxOutputPipe(policy,comp,mode) && mode==0xabcdef && comp==0x80 && !(policy.calls&256));
+    }
+    {
         TglVeboxAdmissionStagesInput input;
         input.prefix={true,true,true,true,1,uint64_t{1}<<12,64,16};
         input.pipe=0;std::array<uint8_t,0xd48> execution{};
