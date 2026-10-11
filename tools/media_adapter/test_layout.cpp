@@ -72,6 +72,25 @@ static void testTrackedCpuOwner() {
         assert(tglSelectGen12VeboxOutputPipe(policy,comp,mode) && mode==2 && !(policy.calls&128));
         policy.tone=false;policy.selected=3;policy.calls=0;mode=0xabcdef;comp=0x80;
         assert(!tglSelectGen12VeboxOutputPipe(policy,comp,mode) && mode==0xabcdef && comp==0x80 && !(policy.calls&256));
+        TglGen12VeboxPipeSelector selector(policy);
+        assert(selector(comp)==UINT32_MAX && comp==0x80);
+        TglVeboxAdmissionStagesInput input;
+        input.prefix={true,true,true,true,1,uint64_t{1}<<12,64,16};
+        std::array<uint8_t,0xd48> execution{};TglVeboxAdmissionPassByte pass(comp);
+        unsigned resets=0,setups=0,queries=0,features=0;
+        auto reset=[&]() noexcept {++resets;execution.fill(0);return true;};
+        auto setup=[&](auto&) noexcept {++setups;};
+        auto query=[&]() noexcept {++queries;return true;};
+        auto feature=[&](auto&) noexcept {++features;};
+        auto sfc=[](auto&) noexcept {assert(false);return false;};
+        assert(!tglRunSelectedVeboxAdmissionStages(input,execution,pass,reset,selector,setup,query,feature,sfc));
+        assert(resets==1 && !setups && !queries && !features && comp==0x80);
+        policy.stop=3;
+        assert(tglRunSelectedVeboxAdmissionStages(input,execution,pass,reset,selector,setup,query,feature,sfc));
+        assert(resets==2 && setups==1 && queries==1 && features==1 && comp==0);
+        policy.stop=0;
+        assert(!tglRunSelectedVeboxAdmissionStages(input,execution,pass,reset,selector,setup,query,feature,sfc));
+        assert(resets==3 && comp==1); // successful composition selection still denies VEBOX admission
     }
     {
         TglVeboxAdmissionStagesInput input;

@@ -1121,6 +1121,19 @@ bool tglSelectGen12VeboxOutputPipe(Policy& policy,uint8_t& compNeeded,uint32_t& 
     return finish(pipe);
 }
 
+// Bridge checked policy to admission's uint32 mode ABI. A failed selector
+// must NOT turn into composition0 (which is a legitimate successful choice).
+// Admission rejects this out-of-domain sentinel before mode/history publication.
+template<class Policy> class TglGen12VeboxPipeSelector {
+    Policy& policy_;
+public:
+    explicit TglGen12VeboxPipeSelector(Policy& policy) noexcept:policy_(policy){}
+    uint32_t operator()(uint8_t& compNeeded) const noexcept {
+        uint32_t mode=UINT32_MAX;
+        return tglSelectGen12VeboxOutputPipe(policy_,compNeeded,mode)?mode:UINT32_MAX;
+    }
+};
+
 // Native CPU shell allocator437e0 zeroes storage and increments7f3218 only on
 // success; release436d0 decrements the SAME counter then frees. Not GPU backing.
 struct TglTrackedCpuBinding {
