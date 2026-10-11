@@ -6019,8 +6019,38 @@ int tglWithOwnedVpLeasedPass(TglOwnedVpSfcCallerStorage& storage,
         std::declval<const TglOwnedVpRegionInput&>())),"VP scoped send ABI");
     TglOwnedVpFramePreparation frame;TglOwnedVpRegionInput geometry;
     uintptr_t sourceA8=0;
-    if(!tglReadOwnedVpFramePreparation(source,target,mhw,settings,
-        conditionalSource!=0,read,original,frame,sourceA8,&geometry)) return 5;
+    auto acquire=[&]() noexcept {
+        return tglReadOwnedVpFramePreparation(source,target,mhw,settings,
+            conditionalSource!=0,read,original,frame,sourceA8,&geometry);
+    };
+    struct FrameContext {
+        void* child;
+        std::array<uintptr_t,5> expected;
+        decltype(acquire)& acquireFrame;
+        bool called=false,valid=false;
+        bool owns(void* value) const noexcept {return value==child;}
+        void prepare(void* conditional,void* parameters,void* source,
+            void* target,void* settings) noexcept {
+            const std::array<uintptr_t,5> actual{
+                reinterpret_cast<uintptr_t>(conditional),reinterpret_cast<uintptr_t>(parameters),
+                reinterpret_cast<uintptr_t>(source),reinterpret_cast<uintptr_t>(target),
+                reinterpret_cast<uintptr_t>(settings)};
+            if(called || actual!=expected) {valid=false;called=true;return;}
+            called=true;valid=acquireFrame();
+        }
+    } context{storage.bytes.data(),{conditionalSource,parameters,source,target,settings},acquire};
+    {
+        // The callback performs acquisition once under the caller's leases.
+        // Do not leave a resolver active during downstream setup/send: those
+        // callbacks bind their own contexts for the same owned child.
+        TglOwnedVpSfcScopedContext<FrameContext> scope(context.child,context);
+        if(!scope.bound()) return 5;
+        using Callback=TglOwnedVpFrameCallback<TglOwnedVpSfcResolve<FrameContext>>;
+        Callback::prepare(context.child,reinterpret_cast<void*>(conditionalSource),
+            reinterpret_cast<void*>(parameters),reinterpret_cast<void*>(source),
+            reinterpret_cast<void*>(target),reinterpret_cast<void*>(settings));
+    }
+    if(!context.called || !context.valid) return 5;
     // Native 1decfb..1decff publishes incoming RDX, not the R9 view
     // consumed by the mode producer. Keep these independently leased inputs.
     return tglWithOwnedVpPreparedFrame(storage,frame,conditionalSource,parameters,target,sourceA8,

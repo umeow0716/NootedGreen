@@ -8379,6 +8379,16 @@ int main() {
                 [&](void*,const auto&) noexcept { ++producers; })==5);
             assert(!producers && scopedStorage.bytes==originalStorage);
         }
+        for(bool missingSource:{false,true}) {
+            calls=0;unsigned producers=0;
+            assert(tglSetupOwnedVpLeasedFrame(scopedStorage,
+                missingSource?0:0x1000,missingSource?0x2000:0,
+                0x3000,0x4000,0x6000,0x7000,{},read,
+                [&](void*,const auto&,const auto&) noexcept -> int {++producers;return 0;},
+                [&](void*,const auto&) noexcept -> int {++producers;return 0;},
+                [&](void*,const auto&) noexcept {++producers;})==5);
+            assert(!calls && !producers && scopedStorage.bytes==originalStorage);
+        }
         fail=0;calls=0;ief[0]=0;
         assert(tglReadOwnedVpFramePreparation(0x1000,0x2000,0x3000,0x4000,false,read,{},prepared,reference));
         assert(calls==total-2 && !prepared.at922 && !prepared.at920);
