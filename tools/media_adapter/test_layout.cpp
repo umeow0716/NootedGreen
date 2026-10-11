@@ -1632,6 +1632,30 @@ static void testTrackedCpuOwner() {
             assert(selected.mode==(follow?unsigned(mode):unsigned(queried && supported)));
         }
         TglOwnedSurfaceStorage source;
+        {
+            TestFeatureSurfaceOwner input,history;
+            constexpr size_t tailBase=offsetof(TglOwnedSurfaceStorage,tail);
+            for(unsigned mask=0;mask<8;++mask) {
+                input.storage.tail[0x299-tailBase]=uint8_t(0xfeu|unsigned(bool(mask&1)));
+                input.storage.tail[0x29a-tailBase]=uint8_t(0xfeu|unsigned(bool(mask&2)));
+                history.storage.tail[0x29a-tailBase]=uint8_t(0xfeu|unsigned(bool(mask&4)));
+                TglOwnedFfdnCompressionSelection selected{true,99};
+                assert(!tglSelectOwnedFfdnCompressionFromLeases(input,input.storage,history,history.storage,
+                    false,false,false,false,4,selected));
+                assert(selected.compressed && selected.mode==99);
+                input.busy=true;history.busy=true;
+                assert(tglSelectOwnedFfdnCompressionFromLeases(input,input.storage,history,history.storage,
+                    false,false,false,false,4,selected));
+                const auto expected=tglSelectOwnedFfdnCompression(false,false,false,
+                    mask&1,mask&2,mask&4,false,4);
+                assert(selected.compressed==expected.compressed && selected.mode==expected.mode);
+                history.deny=true;
+                assert(!tglSelectOwnedFfdnCompressionFromLeases(input,input.storage,history,history.storage,
+                    true,false,true,true,1,selected));
+                assert(selected.compressed==expected.compressed && selected.mode==expected.mode);
+                input.busy=false;history.busy=false;history.deny=false;
+            }
+        }
         for(bool changed:{false,true}) for(bool compressed:{false,true})
             for(uint32_t mode:{0u,1u,0x101u}) {
                 uint8_t execution13=0xa5,execution14=0x5a;

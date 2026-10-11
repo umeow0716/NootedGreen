@@ -4738,6 +4738,20 @@ inline TglOwnedFfdnCompressionSelection tglSelectOwnedFfdnCompression(
     return useSource ? TglOwnedFfdnCompressionSelection{source299,source29a?1u:0u} :
         TglOwnedFfdnCompressionSelection{ffdiCompressed,ffdiMode};
 }
+template<class SourceOwner,class HistoryOwner>
+bool tglSelectOwnedFfdnCompressionFromLeases(SourceOwner& sourceOwner,
+    const TglOwnedSurfaceStorage& source,HistoryOwner& historyOwner,
+    const TglOwnedSurfaceStorage& history,bool child1b89,bool child1b88,
+    bool execution0b,bool ffdiCompressed,uint32_t ffdiMode,
+    TglOwnedFfdnCompressionSelection& output) noexcept {
+    if(!sourceOwner.hasSurfaceLease(source) || !historyOwner.hasSurfaceLease(history)) return false;
+    constexpr size_t tailBase=offsetof(TglOwnedSurfaceStorage,tail);
+    output=tglSelectOwnedFfdnCompression(child1b89,child1b88,execution0b,
+        (source.tail[0x299-tailBase]&1)!=0,(source.tail[0x29a-tailBase]&1)!=0,
+        (history.tail[0x29a-tailBase]&1)!=0,ffdiCompressed,ffdiMode);
+    return true;
+}
+
 // ICL1f800f/1f802b and1f8048/1f8065: FFDN uses the source's format130,
 // tilee4 and dimensionsd8/dc, not the FFDI query98 output. Same allocator
 // type1 contract, including descriptor-only formats; no backing is created.
