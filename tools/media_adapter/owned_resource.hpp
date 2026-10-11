@@ -7828,6 +7828,13 @@ int tglWithOwnedVpPlatformCompressionAssembly(TglOwnedVpSfcCallerStorage& vp,
     const TglNativeVpCompressionBinding& binding,Read read,Invoke invoke,
     const TglOwnedVpEntrySet& base,Use use) noexcept {
     if(base.platformSetup || base.platformPacket || base.platformSend || base.compression) return 5;
+    const uintptr_t packetAddress=reinterpret_cast<uintptr_t>(packet.data());
+    const uintptr_t vpAddress=reinterpret_cast<uintptr_t>(vp.bytes.data());
+    const uintptr_t outputAddress=reinterpret_cast<uintptr_t>(tglOwnedSfcSurfaceBytes(output));
+    if(packetAddress>UINTPTR_MAX-PacketBytes || vpAddress>UINTPTR_MAX-vp.bytes.size() ||
+       outputAddress>UINTPTR_MAX-0x2a8) return 5;
+    if((packetAddress<vpAddress+vp.bytes.size() && vpAddress<packetAddress+PacketBytes) ||
+       (packetAddress<outputAddress+0x2a8 && outputAddress<packetAddress+PacketBytes)) return 5;
     using Compression=TglOwnedVpCompressionContext<Surface,Read,Invoke,PacketBytes>;
     TglOwnedVpPlatformPacketContext platform(vp,packet);
     Compression compression(vp,output,packet,settings,binding,read,invoke);

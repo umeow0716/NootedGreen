@@ -10555,6 +10555,15 @@ int main() {
             const auto before=packet;
             TglOwnedVpEntrySet base,expired;
             base.compressionFormat=+[](void*,uint32_t) noexcept {return true;};
+            std::array<uint8_t,0x2a8> aliasedOutput{};
+            const auto aliasedBefore=aliasedOutput;
+            assert(tglWithOwnedVpPlatformCompressionAssembly(vp,aliasedOutput,aliasedOutput,settingsAddress,
+                binding,inputRead,invoke,base,[](void*,const auto&) noexcept -> int {assert(false);return 0;})==5);
+            assert(aliasedOutput==aliasedBefore);
+            const auto vpBefore=vp.bytes;
+            assert(tglWithOwnedVpPlatformCompressionAssembly(vp,surface,vp.bytes,settingsAddress,
+                binding,inputRead,invoke,base,[](void*,const auto&) noexcept -> int {assert(false);return 0;})==5);
+            assert(vp.bytes==vpBefore);
             assert(tglWithOwnedVpPlatformCompressionAssembly(vp,surface,packet,settingsAddress,
                 binding,inputRead,invoke,base,[&](void* child,const auto& combined) noexcept {
                     assert(combined.compressionFormat==base.compressionFormat &&
