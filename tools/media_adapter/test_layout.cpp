@@ -7062,7 +7062,7 @@ static void testNativeResourceBoundary() {
                                             ownedFrame.auxiliary().retention().observe(
                                                 TglOwnedVeboxCommandTransactionResult{31,31,true,false});
                                             auto deniedStage=[](auto&&...) noexcept -> int {assert(false);return 5;};
-                                            {
+                                            for(const int commandStatus:{0,31}) {
                                                 FrameStatisticsFixture nativeFixture;
                                                 TglNativeResourceBinding nativeBinding{
                                                     reinterpret_cast<uintptr_t>(&nativeFixture),
@@ -7081,7 +7081,7 @@ static void testNativeResourceBoundary() {
                                                 std::memcpy(child.data()+0xba8,&prior,8);
                                                 std::memcpy(child.data()+0x1b8,&history,8);
                                                 unsigned finalUses=0,unwinds=0;
-                                                const int status=tglRunNativeVeboxAllocationFrame(nativeFrame,linkedInput,
+                                                const auto result=tglRunNativeVeboxCommandFrame(nativeFrame,linkedInput,
                                                     static_cast<decltype(&linkedInput)>(nullptr),
                                                     static_cast<decltype(&linkedInput)>(nullptr),&previous,
                                                     childOwner,reportOwner,actualChild,report,current,read,
@@ -7089,17 +7089,20 @@ static void testNativeResourceBoundary() {
                                                     deniedStage,false,false,
                                                     [](uintptr_t address,uint32_t bytes) noexcept {return address==0x4000 && bytes>0;},
                                                     [&](void*,uintptr_t,const auto&,const auto& ffdi,const auto& ffdn,
-                                                        const auto& stmm,const auto& resource,const auto& layout,const auto& shell) noexcept -> int {
+                                                        const auto& stmm,const auto& resource,const auto& layout,const auto& shell) noexcept -> TglOwnedVeboxCommandTransactionResult {
                                                         ++finalUses;assert(ffdi.count==2 && ffdn.outputs[0] && ffdn.outputs[1]);
                                                         assert(!nativeFixture.releases);
                                                         assert(stmm.surfaces[0] && stmm.surfaces[1]);
                                                         assert(resource[0x48]==1 && layout.bytes && &shell.resource==&resource);
                                                         assert(!ffdn.history || ffdn.history==nativeFrame.history().surfaceBinding());
-                                                        return 0; // synchronous allocation only, no command/GPU
+                                                        // Ownership-result fixture only: no real command/GPU.
+                                                        return {commandStatus,commandStatus,true,commandStatus==0};
                                                     },[&](void*,uintptr_t,const auto&) noexcept {++unwinds;});
                                                 std::memcpy(child.data()+0xba8,&savedBindings[0],8);
                                                 std::memcpy(child.data()+0x1b8,&savedBindings[1],8);
-                                                assert(status==0 && finalUses==1 && !unwinds && nativeFixture.fills==1);
+                                                assert(result.status==commandStatus && result.acquired &&
+                                                    result.writtenBack==(commandStatus==0) && nativeFrame.auxiliary().retention()());
+                                                assert(finalUses==1 && !unwinds && nativeFixture.fills==1);
                                                 assert(!nativeFixture.releases);
                                                 }
                                                 assert(nativeFixture.allocations && nativeFixture.releases==nativeFixture.allocations);

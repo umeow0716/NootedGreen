@@ -14588,6 +14588,27 @@ TglOwnedVeboxCommandTransactionResult tglWithNativeVeboxAllocationTransaction(
     return result;
 }
 
+// End-to-end allocation + typed command consumer entry. Resource acquisition
+// is recorded before the statistics/STMM/surface stack can unwind. The whole
+// storage and its parent/image owners must live in the retained-frame pool.
+template<class Api,class Owner,class ChildOwner,class ExecutionOwner,class Read,
+    class SfcFormat,class SfcColor,class ParameterKind,class Supports,
+    class Rectangle,class Writable,class Consume,class Unwind>
+TglOwnedVeboxCommandTransactionResult tglRunNativeVeboxCommandFrame(
+    TglNativeVeboxSurfaceFrameStorage<Api>& storage,
+    Owner& input,Owner* executionSurface,Owner* secondary,Owner* previous,
+    ChildOwner& childOwner,ExecutionOwner& reportOwner,void* child,uintptr_t report,
+    const TglOwnedSurfaceStorage& source,Read read,SfcFormat sfcFormat,SfcColor sfcColor,
+    ParameterKind parameterKind,Supports supports,Rectangle rectangle,
+    bool reinitializeStmm,bool alignDi64,Writable writable,Consume consume,Unwind unwind) noexcept {
+    return tglWithNativeVeboxAllocationTransaction(storage.auxiliary().retention(),
+        [&](auto final) noexcept -> int {
+            return tglRunNativeVeboxAllocationFrame(storage,input,executionSurface,secondary,previous,
+                childOwner,reportOwner,child,report,source,read,sfcFormat,sfcColor,parameterKind,
+                supports,rectangle,reinitializeStmm,alignDi64,writable,final,unwind);
+        },consume);
+}
+
 // Stable-address whole-frame ownership, not a copied descriptor/token list.
 // Frame must OWN its OS/image leases, child, shells, backing and scratch; a
 // collection of borrowed pointers is not a valid runtime Frame. Fixed process
