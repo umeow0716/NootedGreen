@@ -8897,6 +8897,55 @@ int main() {
             auto noRead=+[](uintptr_t,void*,size_t) noexcept {return false;};
             TglOwnedVpSfcCpuGraph<Cpu,Cpu> graph(stateCpu,avsCpu);
             assert(graph.initialize(0x7000,0x8000,0x3000,binding,noRead,1,0));
+            {
+                struct LineBackend {
+                    unsigned allocations=0,releases=0;
+                    uint32_t resourceType() const noexcept {return 0;}
+                    int allocate(std::array<uint8_t,0x148>& r,const TglResourceKey& key,
+                        uint32_t* width) noexcept {
+                        ++allocations;r[0]=r[0x20]=1;*width=key.width;return 0;
+                    }
+                    bool backed(const std::array<uint8_t,0x148>& r) noexcept {return r[0]==1;}
+                    void release(std::array<uint8_t,0x148>& r) noexcept {
+                        assert(r[0]);++releases;r.fill(0);
+                    }
+                };
+                TglOwnedVpSfcCallerStorage* storage=nullptr;
+                assert(graph.prepare([&](auto& vp,auto&,auto&) noexcept {storage=&vp;return 0;})==0);
+                auto* a=::new(static_cast<void*>(storage->bytes.data()+0x3c8)) TglOwnedSurfaceStorage{};
+                auto* b=::new(static_cast<void*>(storage->bytes.data()+0x670)) TglOwnedSurfaceStorage{};
+                std::array<LineBackend,2> backends{};
+                TglOwnedVpLineSurfaces<LineBackend> lines(backends,*a,*b);
+                int admission=31;unsigned retired=0,states=0,filters=0;
+                auto retire=[&]() noexcept {++retired;assert(!graph.tryReset());return admission;};
+                for(int expected:{31,0}) {
+                    admission=expected;
+                    assert(graph.withPreparedResourceCallbackPass(prepared,0x6000,0x4000,0x2000,reference,
+                        reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x9000),lines,retire,
+                        [&](void* child,const auto&,auto& owner,auto allocate) noexcept {
+                            ++states;const uint32_t height=1080,scaled=540;
+                            std::memcpy(owner.data()+0x30,&height,4);
+                            std::memcpy(owner.data()+0x4c,&scaled,4);
+                            assert(allocate(child)==5); // No publication yet.
+                            return owner.withVpParameterPublication(*storage,[&](const uint8_t*) noexcept {
+                                return allocate(child);
+                            });
+                        },[](void*,const auto&,auto&) noexcept {return 0;},
+                        [&](void*,const auto&) noexcept {++filters;},
+                        [](void*,void*,void*) noexcept {return 0;},
+                        [&](void* child,auto setup,auto send,auto release) noexcept {
+                            assert(setup(child,reinterpret_cast<void*>(0x1000),
+                                reinterpret_cast<void*>(0x2000),reinterpret_cast<void*>(0x9000))==0);
+                            assert(send(child,reinterpret_cast<void*>(0x9000),
+                                reinterpret_cast<void*>(0xa000))==0);
+                            release(child);return 0;
+                        })==expected);
+                    assert(backends[0].releases==unsigned(!expected));
+                }
+                assert(states==2 && filters==2 && retired==2);
+                assert(backends[0].allocations==1 && backends[1].allocations==1);
+                assert(backends[0].releases==1 && backends[1].releases==1);
+            }
             struct GraphPipePolicy {
                 decltype(graph)& owner;bool directMode=true;
                 bool bypass() noexcept {assert(!owner.tryReset());return true;}

@@ -8104,6 +8104,8 @@ int tglWithOwnedVpSfcCpuView(TglOwnedVpSfcCallerStorage& storage,
 // This is deliberately NOT a callable VP object: no vtable/publication/native
 // invocation is authorized. Borrowed interfaces must outlive this owner;
 // asynchronous GPU retention remains a separate prerequisite for integration.
+template<class Lines,class State,class Retire,class Use>
+int tglWithOwnedVpResourceEntries(TglOwnedVpSfcCallerStorage&,Lines&,State&,Retire&,Use) noexcept;
 template<class StateBackend,class AvsBackend> class TglOwnedVpSfcCpuGraph {
     TglOwnedVpSfcCallerStorage storage_;
     TglOwnedSfcStateParameters<StateBackend> state_;
@@ -8285,6 +8287,30 @@ public:
                 static_assert(noexcept(state(child,prepared,geometry,owner)),"VP leased state ABI");
                 return state(child,prepared,geometry,owner);
             },avs,ief,emit,invoke);
+    }
+    // One owner for setup +40, allocation +58, send +48 and cleanup +30.
+    // The state producer must publish its prepared packet before invoking the
+    // supplied allocator, matching native +90 ordering. Retirement remains an
+    // explicit external admission, not an inference from synchronous send.
+    template<class Lines,class Retire,class State,class Avs,class Ief,class Emit,class Invoke>
+    int withPreparedResourceCallbackPass(const TglOwnedVpFramePreparation& frame,
+        uintptr_t conditionalSource,uintptr_t settings,uintptr_t target,uintptr_t sourceA8,
+        void* source,void* renderData,Lines& lines,Retire& retire,
+        State state,Avs avs,Ief ief,Emit emit,Invoke invoke) noexcept {
+        if(!ready_ || busy_ || !lines.boundToVp(storage_)) return 5;
+        return tglWithOwnedVpResourceEntries(storage_,lines,state_,retire,
+            [&](void* resourceChild,auto allocate,auto release) noexcept {
+                auto makeState=[&](void* child,const auto& prepared,auto& owner) noexcept {
+                    if(child!=resourceChild) return 5;
+                    return state(child,prepared,owner,allocate);
+                };
+                auto use=[&](void* child,auto setup,auto send) noexcept {
+                    if(child!=resourceChild) return 5;
+                    return invoke(child,setup,send,release);
+                };
+                return withPreparedCallbackPass(frame,conditionalSource,settings,target,sourceA8,
+                    source,renderData,makeState,avs,ief,emit,use);
+            });
     }
     // This is synchronous command construction, not a publishable VP vtable
     // or permission to retire GPU resources. Outer surface leases remain required.
