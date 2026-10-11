@@ -11984,6 +11984,18 @@ static void testRetainedVeboxFrames() {
         };
         assert(callbacks.withFrame(success.ticket,0x8000,frameUse)==31 && frameCalls==1);
         assert(callbacks.withFrame(success.ticket,0x8001,frameUse)==5 && frameCalls==1);
+        unsigned requestCalls=0,removalCalls=0;
+        auto requestUse=[&](auto&) noexcept -> int {
+            ++requestCalls;
+            assert(callbacks.withFrame(success.ticket,0x8000,frameUse)==5);
+            assert(callbacks.destroy(0x8000)==5 && invoke.destroyed==0);
+            return 31;
+        };
+        auto removalUse=[&]() noexcept -> int {++removalCalls;return 0;};
+        assert(callbacks.withNewRequest(success.ticket,0x8001,requestUse)==5 && !requestCalls);
+        assert(callbacks.withNewRequest(success.ticket,0x8000,requestUse)==31 && requestCalls==1);
+        assert(callbacks.withContextRemoval(success.ticket,0x8001,removalUse)==5 && !removalCalls);
+        assert(callbacks.withContextRemoval(success.ticket,0x8000,removalUse)==0 && removalCalls==1);
         unsigned parentReads=0,contextCalls=0;
         uintptr_t contextPhysical=0x8000,embedded=0xa048;
         auto parentRead=[&](uintptr_t address,void* bytes,size_t size) noexcept {

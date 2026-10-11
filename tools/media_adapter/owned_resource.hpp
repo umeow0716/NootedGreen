@@ -16285,6 +16285,18 @@ public:
         if(!physical || !valid()) return 5;
         return registry_.withLive(ticket,binding_.image,physical,use);
     }
+    // Enter before native request preparation: withFrame alone does not
+    // exclude shells retained by an earlier asynchronous frame.
+    template<class Use> int withNewRequest(typename Registry::Ticket ticket,
+        uintptr_t physical,Use use) noexcept {
+        if(!physical || !valid()) return 5;
+        return registry_.withNewRequest(ticket,binding_.image,physical,use);
+    }
+    template<class Use> int withContextRemoval(typename Registry::Ticket ticket,
+        uintptr_t physical,Use use) noexcept {
+        if(!physical || !valid()) return 5;
+        return registry_.withContextRemoval(ticket,binding_.image,physical,use);
+    }
     // Borrow context topology only AFTER holding the initialized generation.
     // The native context lifetime itself must also be held by the caller.
     template<class ParentRead,class Admit,class Use>
