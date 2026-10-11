@@ -16381,6 +16381,9 @@ public:
     template<class Pool,class Read,class Invoke>
     int dispatchItemWithReceipt(Pool& pool,uintptr_t context,uintptr_t request,
         uintptr_t outputSlot,Read read,Invoke invoke,TglNativeFrameOutputReceipt& receipt) noexcept {
+        // Never erase an outstanding association by reusing its receipt. The
+        // owner must retire/discard the old generation explicitly before reset.
+        if(receipt.valid) return 5;
         receipt={};
         return dispatchItem(pool,context,request,outputSlot,read,
             [&](uintptr_t entry,uintptr_t ctx,uintptr_t input,uintptr_t output) noexcept -> int {

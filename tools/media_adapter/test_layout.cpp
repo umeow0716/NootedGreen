@@ -11826,6 +11826,8 @@ static void testRetainedVeboxFrames() {
         auto capture=[&]() noexcept {outputReads=0;return privateTable.dispatchItemWithReceipt(
             items,context,0x55000,0x66000,receiptRead,receiptInvoke,receipt);};
         assert(capture()==0 && receipt.valid && receipt.context==context && receipt.event==publishedEvent && receipt.index==7);
+        assert(capture()==5 && receipt.valid && receipt.index==7 && receiptCalls==1 && outputReads==0);
+        receipt={}; // explicit CPU-only fixture reset; not a GPU retirement
         receiptResult=31;
         assert(capture()==31 && !receipt.valid && outputReads==0);
         receiptResult=0;publishedEvent=UINTPTR_MAX-3;
