@@ -15504,6 +15504,31 @@ public:
     auto& retention() noexcept {return command_.backing().auxiliary().retention();}
 };
 
+// Own child pair and VP/command backing in one stable CPU assembly. Children
+// tear down first, so qualified child cleanup can still detach VP+80 and use
+// backing. Native parent/image/surface leases remain enclosing frame duties;
+// publication must be detached under retirement admission before destruction.
+template<class Api,class Cleanup,class Cpu=TglNativeTrackedCpuInvoker,
+    class Sfc=TglNativeSfcLifetimeInvoker,class Destroy=TglNativeVeboxDestructorInvoker>
+class TglNativeVeboxRendererCpuStorage {
+    TglNativeVeboxVpFrameBacking<Api,Cpu> backing_;
+    TglNativeVeboxChildPairStorage<Cleanup,Cpu,Sfc,Destroy> children_;
+public:
+    template<class Read,class Qualify,class Executable,class... Args>
+    TglNativeVeboxRendererCpuStorage(uintptr_t image,Read read,Qualify qualify,
+        Executable executable,const TglNativeResourceBinding& resources,uint64_t pageSize,
+        const TglNativeBufferFillBinding& fill,Cpu vpCpu,std::array<Cleanup,2> cleanup,
+        std::array<Cpu,2> childCpu,std::array<Sfc,2> sfc,std::array<Destroy,2> destroy,
+        Args&&... args)
+        :backing_(image,read,qualify,executable,resources,pageSize,fill,vpCpu,
+            std::forward<Args>(args)...),
+         children_(image,read,qualify,executable,std::move(cleanup),childCpu,sfc,destroy) {}
+    TglNativeVeboxRendererCpuStorage(const TglNativeVeboxRendererCpuStorage&)=delete;
+    TglNativeVeboxRendererCpuStorage& operator=(const TglNativeVeboxRendererCpuStorage&)=delete;
+    auto& backing() noexcept {return backing_;}
+    auto& children() noexcept {return children_;}
+};
+
 // Allocation transaction for a history-enabled frame. The qualified platform
 // planner supplies resource keys and statistics boundary dimensions; this does
 // not infer feature admission or SFC resources. All three owners outlive this

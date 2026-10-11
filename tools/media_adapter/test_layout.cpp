@@ -15688,17 +15688,35 @@ int main() {
                         for(size_t i=0;i<2;++i) if(object==pairCpu[i].bytes.data()) return i;
                         assert(false);return 0;
                     };
-                    auto pairCleanup=[&](void* object) noexcept {++cleaned[index(object)];};
+                    const TglOwnedVeboxFrameRetention* backingRetention=nullptr;
+                    auto pairCleanup=[&](void* object) noexcept {
+                        assert(backingRetention && !(*backingRetention)());
+                        ++cleaned[index(object)];
+                    };
                     auto pairDestroy=[&](uintptr_t entry,void* object) noexcept {
                         assert(entry==base+0x12de30);++destroyed[index(object)];
                     };
-                    using Pair=TglNativeVeboxChildPairStorage<decltype(pairCleanup),NativeCpu,TrackedSfc,decltype(pairDestroy)>;
+                    struct UnusedFrameApi {
+                        uintptr_t surface(uintptr_t value) noexcept {return value;}
+                        bool retain(uintptr_t) noexcept {assert(false);return false;}
+                        void release(uintptr_t) noexcept {assert(false);}
+                        int lock(uintptr_t) noexcept {assert(false);return 5;}
+                        int unlock(uintptr_t) noexcept {assert(false);return 5;}
+                        bool view(uintptr_t,TglOwnedStmmView&) noexcept {assert(false);return false;}
+                    };
+                    Cpu vpCpu{{},pairEvents,pairEventCount};
+                    using Assembly=TglNativeVeboxRendererCpuStorage<UnusedFrameApi,decltype(pairCleanup),
+                        NativeCpu,TrackedSfc,decltype(pairDestroy)>;
                     {
-                        Pair pair(base,allocatorRead,[](uintptr_t image) noexcept {return image==base;},
+                        Assembly assembly(base,allocatorRead,[](uintptr_t image) noexcept {return image==base;},
                             [](uintptr_t,size_t) noexcept {return true;},
+                            TglNativeResourceBinding{},4096,TglNativeBufferFillBinding{},NativeCpu{vpCpu},
                             {pairCleanup,pairCleanup},{NativeCpu{pairCpu[0]},NativeCpu{pairCpu[1]}},
                             {TrackedSfc{pairInvoke,pairEvents,pairEventCount},TrackedSfc{pairInvoke,pairEvents,pairEventCount}},
                             {pairDestroy,pairDestroy});
+                        auto& pair=assembly.children();
+                        backingRetention=&assembly.backing().retention();
+                        assert(!assembly.backing().vpBound() && !vpCpu.live);
                         assert(pair.bound());
                         auto pairConstruct=[&](uintptr_t entry,void* object,void* nativeOs,void*,void*,
                             void*,void*,void*,const void*,int32_t* out) noexcept {
