@@ -2185,6 +2185,21 @@ static void testTrackedCpuOwner() {
         assert(owner.allocate(0x2a8));
         const auto original=owner.get();
         {
+            unsigned reads=0;uint32_t kind=123;bool allowed=true;
+            auto readKind=[&](uintptr_t p,void* out,size_t n) noexcept {
+                ++reads;assert(p==original && n==4);
+                owner.reset();assert(owner.get()==original && !owner.allocate(4));
+                uint32_t nested=456;
+                assert(!tglReadOwnedFfdiParameterKind(owner,original,nested,
+                    [](uintptr_t,void*,size_t) noexcept {assert(false);return false;}) && nested==456);
+                const uint32_t value=1;std::memcpy(out,&value,4);return allowed;
+            };
+            assert(!tglReadOwnedFfdiParameterKind(owner,original+1,kind,readKind) && kind==123 && !reads);
+            assert(tglReadOwnedFfdiParameterKind(owner,original,kind,readKind) && kind==1 && reads==1);
+            allowed=false;kind=123;
+            assert(!tglReadOwnedFfdiParameterKind(owner,original,kind,readKind) && kind==123 && reads==2);
+        }
+        {
             TglOwnedSurfaceStorage source,metadata;
             std::memcpy(source.prefix.data()+0x90,&original,8);
             unsigned uses=0;
@@ -12162,6 +12177,9 @@ int main() {
                     Context context(storage,0x1000,0x2000,0x3000,read);
                     TglOwnedVpSfcScopedContext<Context> scope(storage.bytes.data(),context);
                     assert(scope.bound() && context.status()==5 && calls==9);
+                    uint32_t exportedColor=123,exportedFormat=456;
+                    assert(!context.outputColorSpace(exportedColor) && exportedColor==123);
+                    assert(!context.outputFormat(exportedFormat) && exportedFormat==456);
                     assert(!tglBindOwnedVpModeEntries<Resolve>(nullptr,modeEntries));
                     assert(tglBindOwnedVpModeEntries<Resolve>(storage.bytes.data(),modeEntries));
                     assert(modeEntries.missingMask()==(0x7ffffffU&~((1U<<22)|(1U<<23))));
@@ -12175,12 +12193,20 @@ int main() {
                         if(scenario!=4) modeEntries.formatMode(storage.bytes.data(),reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x3000));
                     }
                     assert(context.status()==(scenario==0?0:5) && calls==9);
+                    assert(context.outputColorSpace(exportedColor)==(scenario==0));
+                    assert(context.outputFormat(exportedFormat)==(scenario==0));
                     if(!scenario) {
+                        assert(exportedColor==5 && exportedFormat==3);
                         uint32_t mode=0,format=0;uintptr_t ref=0;
                         std::memcpy(&mode,storage.bytes.data()+0x998,4);
                         std::memcpy(&format,storage.bytes.data()+0x99c,4);
                         std::memcpy(&ref,storage.bytes.data()+0x9c0,8);
                         assert(mode==5 && format==3 && ref==0x5000 && storage.bytes[0x923]==1);
+                        const uint32_t foreign=7;
+                        std::memcpy(storage.bytes.data()+0x998,&foreign,4);
+                        std::memcpy(storage.bytes.data()+0x99c,&foreign,4);
+                        assert(!context.outputColorSpace(exportedColor) && exportedColor==5);
+                        assert(!context.outputFormat(exportedFormat) && exportedFormat==3);
                     }
                 }
                 assert(storage.bytes==saved);

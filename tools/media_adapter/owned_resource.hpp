@@ -1422,6 +1422,23 @@ public:
     }
 };
 
+// Metadata1f7570 reads the first DWORD of source88 only while its actual
+// tracked allocation is borrowed. Neither a surface lease nor a matching raw
+// pointer alone permits this read. Preserve output on mismatch/read failure.
+template<class Backend,class Read>
+bool tglReadOwnedFfdiParameterKind(TglTrackedCpuOwner<Backend>& owner,
+    uintptr_t expected,uint32_t& output,Read read) noexcept {
+    static_assert(noexcept(read(uintptr_t{},static_cast<void*>(nullptr),size_t{})),
+        "tracked metadata reader must not throw");
+    if(!expected) return false;
+    bool copied=false;uint32_t candidate=0;
+    const bool entered=owner.withBorrowedAddress([&](uintptr_t pointer,size_t extent) noexcept {
+        if(pointer!=expected || extent<sizeof(candidate) || pointer>UINTPTR_MAX-3) return;
+        copied=read(pointer,&candidate,sizeof(candidate));
+    });
+    if(!entered || !copied) return false;
+    output=candidate;return true;
+}
 // Native base helper126740 creates eight 0x2a8 CPU shells: 1b0/1b8,
 // ba8[2],680[4]. This owned transaction publishes none until all exist.
 // It does not install child fields or allocate GPU backing. Backend outlives it.
@@ -6309,6 +6326,21 @@ public:
         return prepared_ && !invalid_ && child==storage_.bytes.data();
     }
     int status() const noexcept {return prepared_ && sampled_ && formatted_ && !invalid_ ? 0 : 5;}
+    // Exact ICL1f7690/1f77a0 return the VP mode fields998/99c. Here
+    // those bytes belong to this owned, fully prepared scoped context, not
+    // a foreign donor object. Reject an out-of-band overwrite before export.
+    bool outputColorSpace(uint32_t& output) const noexcept {
+        if(status()) return false;
+        uint32_t actual=0;std::memcpy(&actual,storage_.bytes.data()+0x998,4);
+        if(actual!=result_.state.at998) return false;
+        output=actual;return true;
+    }
+    bool outputFormat(uint32_t& output) const noexcept {
+        if(status()) return false;
+        uint32_t actual=0;std::memcpy(&actual,storage_.bytes.data()+0x99c,4);
+        if(actual!=result_.state.at99c) return false;
+        output=actual;return true;
+    }
     void sampleMode(void* source,void* target) noexcept {
         if(!prepared_ || invalid_ || sampled_ || reinterpret_cast<uintptr_t>(source)!=source_ ||
             reinterpret_cast<uintptr_t>(target)!=target_) {invalid_=true;return;}
