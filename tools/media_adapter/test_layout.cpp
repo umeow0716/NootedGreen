@@ -14482,6 +14482,28 @@ int main() {
             assert(commandInvoke.calls==failedQualifiedPass+1 &&
                 commandInvoke.last==base+0x1681e0); // partial lock only; discard required
             context=0x40000000;
+            const auto beforeReservedPass=commandInvoke.calls;
+            assert(commands.withCommandSequence([&]() {
+                auto pinnedPlatform=[&](std::array<uint8_t,0x38>& descriptor) {
+                    descriptor[0x37]=0x99;
+                    void* pinned=owner.get();owner.reset();assert(owner.get()==pinned);
+                    assert(!owner.initialize(lifetime,mhw,os,read));
+                    assert(commands.withCommandSequence([](){assert(false);return 0;})==5);
+                    return 0;
+                };
+                return tglSendOwnedSfcPreparedCommands(qualified,prepared,shell,1,1,1,1,pinnedPlatform);
+            })==0);
+            assert(commandInvoke.calls==beforeReservedPass+qualifiedOrder.size());
+            const auto beforePlatformRetirement=commandInvoke.calls;
+            unsigned retiringPlatforms=0;
+            auto retiringPlatform=[&](std::array<uint8_t,0x38>&) {
+                ++retiringPlatforms;owner.reset();return 0;
+            };
+            assert(tglSendOwnedSfcPreparedCommands(qualified,prepared,shell,1,1,1,1,
+                retiringPlatform)==5);
+            assert(retiringPlatforms==1 && !owner.get() &&
+                commandInvoke.calls==beforePlatformRetirement+1 &&
+                commandInvoke.last==base+0x1681e0);
             const auto completedCalls=commandInvoke.calls;
             assert(owner.initialize(lifetime,mhw,os,read));
             assert(invoke.constructs==2 && invoke.destroys==1);

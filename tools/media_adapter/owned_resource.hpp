@@ -534,7 +534,7 @@ template<class Invoker> class TglOwnedSfcMhw {
     TglSfcLifetimeBinding lifetime{};
     uintptr_t borrowedOs=0;
     uint64_t generation_=0;
-    bool constructed=false,ready=false,busy=false;
+    bool constructed=false,ready=false,busy=false,reserved=false;
     void clear() noexcept {
         if(generation_!=UINT64_MAX) ++generation_;
         ready=false;
@@ -549,7 +549,7 @@ public:
     template<class Read>
     bool initialize(const TglSfcLifetimeBinding &binding,const TglSfcMhwBinding &mhw,
                     uintptr_t os,Read read) {
-        if(busy || generation_==UINT64_MAX) return false;
+        if(busy || reserved || generation_==UINT64_MAX) return false;
         reset();
         if(generation_==UINT64_MAX) return false;
         struct Guard {
@@ -580,6 +580,16 @@ public:
     uintptr_t image() const noexcept {return ready?lifetime.image:0;}
     uintptr_t os() const noexcept {return ready?borrowedOs:0;}
     uint64_t generation() const noexcept {return generation_;}
+    // Pin CPU/native-object lifetime across a multi-command transaction while
+    // retaining the independent per-call reentry guard. Not a GPU fence lease.
+    template<class Use> int withCommandReservation(Use use) {
+        if(busy || reserved || !ready) return 5;
+        struct Guard {
+            bool& flag;explicit Guard(bool& f):flag(f){flag=true;}
+            ~Guard(){flag=false;}
+        } guard(reserved);
+        return use();
+    }
     template<class Use> int withObject(Use use) {
         if(busy || !ready) return 5;
         struct Guard {
@@ -590,7 +600,7 @@ public:
         return use(storage.data());
     }
     void reset() noexcept {
-        if(busy) return;
+        if(busy || reserved) return;
         busy=true;clear();busy=false;
     }
 };
@@ -793,6 +803,12 @@ template<class SfcInvoker,class Invoke> class TglOwnedSfcCommandBackend {
 public:
     TglOwnedSfcCommandBackend(const TglSfcMhwBinding &b,TglOwnedSfcMhw<SfcInvoker> &o,
                              void *c,Invoke &i):binding(b),owner(o),command(c),invoke(i),generation_(o.generation()){}
+    template<class Use> int withCommandSequence(Use use) {
+        return owner.withCommandReservation([&]() -> int {
+            if(!valid(0x10,0x1681e0)) return 5;
+            return use();
+        });
+    }
     int lock(const TglOwnedSfcLockParameters& parameters) {
         return call(0x10,0x1681e0,[&](uintptr_t entry,void* object){return invoke.parameters(entry,object,command,parameters.data());});
     }
