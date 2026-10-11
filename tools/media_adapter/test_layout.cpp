@@ -10059,6 +10059,7 @@ static void testSfcAvsOwnership() {
         commands.y.pipeMode=1;commands.uv.pipeMode=1;
         commands.y.reserved.fill(0xa5);commands.uv.reserved.fill(0x5a);
         commands.avs.fill(0xff);
+        uint32_t phaseSourceSiting=0x11;
         assert(tglWithOwnedSfcAvsCommands(commands,owner,tables,0x19,.5f,.75f,
             0x11,false,true,0.f,0.f,sine,[&](const auto& packet) noexcept {
                 owner.reset();assert(!owner.initialize());
@@ -10072,7 +10073,17 @@ static void testSfcAvsOwnership() {
                 for(auto byte:packet.y.reserved) assert(byte==0xa5);
                 for(auto byte:packet.uv.reserved) assert(byte==0x5a);
                 return 31;
-            })==31);
+            },&phaseSourceSiting)==31);
+        // Coefficient siting is normalized, but native zero-siting 420
+        // must still produce vertical phase4 rather than phase0.
+        phaseSourceSiting=0;
+        assert(tglWithOwnedSfcAvsCommands(commands,owner,tables,0x19,.5f,.75f,
+            0x11,false,true,0.f,0.f,sine,[&](const auto& packet) noexcept {
+                uint32_t vertical=0;
+                std::memcpy(&vertical,packet.avs.data()+8,4);
+                assert(vertical==4 && phaseSourceSiting==0x11);
+                return 0;
+            },&phaseSourceSiting)==0);
         const auto savedHeader=*owner.parameters();
         const auto savedCache=tables;
         auto never=[](const auto&) noexcept {assert(false);return 0;};
@@ -13163,6 +13174,7 @@ int main() {
         assert(reads==2 && config.format==3 && config.scaleX==0.5f && config.scaleY==0.75f);
         assert(config.window==7.f && config.sharpening==0.25f);
         assert(config.siting==0x11 && config.forceFilter && config.symmetric);
+        assert(config.phaseSourceSiting==state.sourceSiting);
         for(fail=1;fail<=2;++fail) {
             reads=0;config.format=99;
             assert(!tglReadOwnedVpAvsConfiguration(frame,state,0x1000,read,config));

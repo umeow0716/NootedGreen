@@ -11515,7 +11515,7 @@ template<class Owner,class NativeSin,class Generate>
 inline int tglWithOwnedSfcAvsCommands(TglOwnedSfcCommandParameters& parameters,
     Owner& owner,TglOwnedSfcAvsTables& cache,uint32_t format,float scaleX,float scaleY,
     uint32_t siting,bool forceFilter,bool symmetric,float sharpening,float window,
-    NativeSin&& sine,Generate&& generate) noexcept {
+    NativeSin&& sine,Generate&& generate,uint32_t* phaseSourceSiting=nullptr) noexcept {
     static_assert(noexcept(generate(parameters)),"AVS command generation status ABI");
     // The IEF/CSC consumer owns the entire command-input snapshot. Reject
     // reentrant AVS preparation before changing its cache or CPU backing.
@@ -11525,8 +11525,13 @@ inline int tglWithOwnedSfcAvsCommands(TglOwnedSfcCommandParameters& parameters,
         [&](const TglOwnedSfcAvsTables& ready) noexcept {
             // AVS command phases must describe the same source as these
             // coefficients; do not leave stale phases from a prior pass.
-            auto sourceSiting=siting;
-            if(!tglPrepareOwnedSfcAvsCommandParameters(parameters,ready,sourceSiting)) return 5;
+            if(phaseSourceSiting) {
+                if(!tglPrepareOwnedSfcAvsCommandParameters(parameters,ready,*phaseSourceSiting)) return 5;
+            } else {
+                // Normalized coefficient siting cannot prove original phases.
+                parameters.y.coefficients=ready.packedY;
+                parameters.uv.coefficients=ready.packedUv;
+            }
             return generate(parameters);
         });
 }
@@ -15112,6 +15117,7 @@ int tglWithAllocatedOwnedVpSurfaceCommands(TglOwnedVpSfcCallerStorage& vp,
 
 struct TglOwnedSfcAvsConfiguration {
     uint32_t format=0xffffffffu,siting=0;
+    uint32_t phaseSourceSiting=0;
     float scaleX=0.f,scaleY=0.f,sharpening=0.f,window=0.f;
     bool forceFilter=false,symmetric=false;
 };
@@ -15128,6 +15134,7 @@ bool tglReadOwnedVpAvsConfiguration(const TglOwnedVpFramePreparation& frame,
     candidate.format=frame.color.modes.state.at99c;
     candidate.scaleX=frame.regions.scale.at928;candidate.scaleY=frame.regions.scale.at92c;
     candidate.siting=state.sourceSiting ? state.sourceSiting : 0x11;
+    candidate.phaseSourceSiting=state.sourceSiting;
     candidate.forceFilter=frame.color.at9b8;candidate.symmetric=true;
     if(!std::isfinite(candidate.scaleX) || !std::isfinite(candidate.scaleY) ||
        candidate.scaleX<=0 || candidate.scaleY<=0) return false;
@@ -15158,6 +15165,7 @@ int tglWithOwnedSfcCommandInputs(TglOwnedSfcCommandParameters& parameters,
     if(!avsEnabled)
         return tglWithOwnedSfcPreparedCommands(parameters,state,lines,output,prefix,
             tail,rgbAdaptive,eightTapChroma,compressionEnabled,compressionMode,query,generate);
+    auto phaseSourceSiting=config.phaseSourceSiting;
     return tglWithOwnedSfcAvsCommands(parameters,avs,cache,config.format,
         config.scaleX,config.scaleY,config.siting,config.forceFilter,
         config.symmetric,config.sharpening,config.window,sine,
@@ -15165,7 +15173,7 @@ int tglWithOwnedSfcCommandInputs(TglOwnedSfcCommandParameters& parameters,
             return tglWithOwnedSfcPreparedCommands(ready,state,lines,output,prefix,
                 tail,rgbAdaptive,eightTapChroma,compressionEnabled,
                 compressionMode,query,generate);
-        });
+        },&phaseSourceSiting);
 }
 
 // Gen12 statistics lifecycle, not a native fill ABI implementation. Backend
