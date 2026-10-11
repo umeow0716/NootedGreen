@@ -8047,6 +8047,26 @@ int main() {
                     if(admission) assert(run(0)==0);
                 }
                 assert(admissions==2 && run(0)==5);
+                for(int expected:{77,0,-17}) {
+                    sfdBackend.status=expected==77?77:0;
+                    auto retire=[]() noexcept {return 0;};
+                    unsigned generated=0;
+                    TglOwnedSfcStateParametersPacket previous{};
+                    std::memcpy(previous.data(),state.data(),previous.size());
+                    assert(tglWithOwnedVpResourceEntries(vp,resources,state,retire,
+                        [&](void*,auto allocate,auto release) noexcept {
+                            const auto result=tglWithAllocatedOwnedVpSurfaceCommands(vp,commands,
+                                state,lines,output,prefix,{},false,false,false,
+                                TglOwnedSfcCompressionMode{},allocate,query,
+                                [&](auto&) noexcept {++generated;return expected;},&sfd);
+                            release(vp.bytes.data());return result;
+                        })==expected);
+                    assert(generated==unsigned(expected!=77));
+                    if(expected==77) assert(std::memcmp(previous.data(),state.data(),previous.size())==0);
+                    uintptr_t publication=1;
+                    std::memcpy(&publication,vp.bytes.data()+0x938,8);assert(!publication);
+                }
+                sfdBackend.status=0;
                 assert(sfdBackend.allocations==sfdBackend.releases);
                 assert(lines.ensure(input,scaled)==0); // Restore fixture for +30 tests below.
             }

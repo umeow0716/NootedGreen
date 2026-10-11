@@ -10608,6 +10608,35 @@ int tglWithOwnedVpSurfaceCommands(TglOwnedSfcCommandParameters& parameters,
     });
 }
 
+// VP90 orders geometry -> VP58 allocation -> resource binding -> final state.
+// Only the two proven allocation dimensions are temporarily published; restore
+// the packet before final validation/binding. Allocation failure is not send.
+template<class CpuBackend,class ResourceBackend,class SfdBackend,class Allocate,class Query,class Generate>
+int tglWithAllocatedOwnedVpSurfaceCommands(TglOwnedVpSfcCallerStorage& vp,
+    TglOwnedSfcCommandParameters& parameters,TglOwnedSfcStateParameters<CpuBackend>& state,
+    TglOwnedVpLineSurfaces<ResourceBackend>& lines,TglOwnedSurfaceStorage& output,
+    const std::array<uint8_t,0xb8>& prefix,TglOwnedSfcGen12Tail tail,
+    bool rgbAdaptive,bool eightTapChroma,bool compressionEnabled,
+    TglOwnedSfcCompressionMode compressionMode,Allocate allocate,Query query,Generate generate,
+    TglOwnedSfcSfdBuffer<SfdBackend>* sfd=nullptr) noexcept {
+    static_assert(noexcept(allocate(vp.bytes.data())),"VP58 allocation status ABI");
+    auto* packet=state.data();
+    if(!packet || parameters.filtersInUse || tail.sfdLineBuffer || !lines.boundToVp(vp)) return 5;
+    uint32_t input=0,scaled=0;
+    std::memcpy(&input,prefix.data()+0x30,4);std::memcpy(&scaled,prefix.data()+0x4c,4);
+    TglOwnedSfcLineBufferSizes sizes;
+    if(!tglOwnedSfcLineBufferSizes(sizes,input,scaled) || (sizes.sfd && !sfd)) return 5;
+    TglOwnedSfcStateParametersPacket saved{};std::memcpy(saved.data(),packet,saved.size());
+    std::memcpy(packet+0x30,&input,4);std::memcpy(packet+0x4c,&scaled,4);
+    const int status=state.withVpParameterPublication(vp,[&](const uint8_t*) noexcept {
+        return allocate(vp.bytes.data());
+    });
+    std::memcpy(packet,saved.data(),saved.size());
+    if(status) return status;
+    return tglWithOwnedVpSurfaceCommands(parameters,state,lines,output,prefix,tail,
+        rgbAdaptive,eightTapChroma,compressionEnabled,compressionMode,query,generate,sfd);
+}
+
 struct TglOwnedSfcAvsConfiguration {
     uint32_t format=0xffffffffu,siting=0;
     float scaleX=0.f,scaleY=0.f,sharpening=0.f,window=0.f;
