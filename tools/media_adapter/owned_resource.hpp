@@ -15855,6 +15855,10 @@ public:
 // Original frontend pins and packet/backing storage share one retained-frame
 // lifetime. Original owners, physical/context and image leases must enclose
 // this object; CF pins do not retain shell memory or the native physical.
+// Root pins are NOT the complete temporal graph: native1308a0 registers each
+// source via61b50, then walks source+c8 up to source+b8 and source+c0 up to
+// source+b4 (130991..130ab3). Every linked shell/token needs its OWN enclosing
+// lease; do not publish this root storage as a complete renderer frame.
 template<class Api,class SourceOwner,class TargetOwner,class CfApi>
 class TglNativeVeboxFrontendFrameStorage {
     TglNativeVeboxCommandFrameStorage<Api> command_;
@@ -15872,14 +15876,14 @@ public:
     }
     TglNativeVeboxFrontendFrameStorage(const TglNativeVeboxFrontendFrameStorage&)=delete;
     TglNativeVeboxFrontendFrameStorage& operator=(const TglNativeVeboxFrontendFrameStorage&)=delete;
-    bool ready() const noexcept {return source_.storage() && target_.storage();}
+    bool rootsReady() const noexcept {return source_.storage() && target_.storage();}
     auto& command() noexcept {return command_;}
     template<class Consume>
     TglOwnedVeboxCommandTransactionResult withCommandFrame(
         const TglNativeOuterSurfaceRoles& roles,size_t sourceIndex,size_t targetIndex,
         uintptr_t child,uintptr_t execution,uintptr_t renderHal,uintptr_t sku,
         Consume consume) noexcept {
-        if(!ready()) return {};
+        if(!rootsReady()) return {};
         return command_.withFrontendCommandFrame(roles,sourceIndex,targetIndex,
             source_,target_,child,execution,renderHal,sku,consume);
     }

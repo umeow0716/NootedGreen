@@ -7230,7 +7230,7 @@ static void testNativeResourceBoundary() {
                                                     roles.sources[0]=reinterpret_cast<uintptr_t>(&source);
                                                     roles.targets[0]=reinterpret_cast<uintptr_t>(&target);
                                                     const auto r=pool.run(ticket,[&](auto& frame) noexcept {
-                                                        assert(frame.ready() && sourceOwner.borrowed && targetOwner.borrowed);
+                                                        assert(frame.rootsReady() && sourceOwner.borrowed && targetOwner.borrowed);
                                                         assert(refs[1]==2 && refs[5]==2);
                                                         return frame.withCommandFrame(roles,0,0,1,2,3,4,
                                                             [&](auto&,auto&,auto& leases) noexcept {
