@@ -1042,15 +1042,15 @@ bool tglDirectVeboxSurfaceGeometry(uintptr_t source, uintptr_t target, Read read
 // Gen12 IS_COMP_BYPASS_FEASIBLE; this is only the first output-pipe gate, not
 // VEBOX/SFC admission. Darwin field reads pinned by ICL1fb16b..1fb205.
 template<class Read>
-bool tglCompositionBypassFeasible(uintptr_t params, uintptr_t source,
-                                  uintptr_t pass, Read read) {
+bool tglCompositionBypassFromLiveFlag(uintptr_t params,uintptr_t source,
+    const uint8_t& compNeeded,Read read) {
     constexpr auto max = std::numeric_limits<uintptr_t>::max();
-    if (!params || !source || !pass || params > max - 0xdf || source > max - 0x82)
+    if (!params || !source || params > max - 0xdf || source > max - 0x82)
         return false;
     uint32_t sources = 0, targets = 0;
     uintptr_t blending = 0, lumaKey = 0, constriction = 0;
-    uint8_t compNeeded = 0, interlaced = 0, weaving = 0;
-    return read(pass, &compNeeded, 1) && !(compNeeded & 1) &&
+    uint8_t interlaced = 0, weaving = 0;
+    return !(compNeeded & 1) &&
         read(params, &sources, 4) && sources == 1 &&
         read(params + 0x90, &targets, 4) && targets == 1 &&
         read(source + 0x60, &blending, 8) && !blending &&
@@ -1058,6 +1058,15 @@ bool tglCompositionBypassFeasible(uintptr_t params, uintptr_t source,
         read(source + 0x82, &weaving, 1) && !(weaving & 1) &&
         read(source + 0x68, &lumaKey, 8) && !lumaKey &&
         read(params + 0xd8, &constriction, 8) && !constriction;
+}
+// Pointer compatibility entry: pass denotes the bCompNeeded BYTE, not the
+// start of an opaque render pass. Admission uses the live-reference entry
+// above with its already-pinned pass08, avoiding address/offset confusion.
+template<class Read>
+bool tglCompositionBypassFeasible(uintptr_t params,uintptr_t source,uintptr_t pass,Read read) {
+    if(!params || !source || !pass || params>UINTPTR_MAX-0xdf || source>UINTPTR_MAX-0x82) return false;
+    uint8_t comp=0;
+    return read(pass,&comp,1) && tglCompositionBypassFromLiveFlag(params,source,comp,read);
 }
 
 // Complete Gen12 direct-output feasibility after composition bypass. Caller

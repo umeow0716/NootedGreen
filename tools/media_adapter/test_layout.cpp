@@ -45,6 +45,24 @@ struct TestFeatureExecutionOwner {
 };
 static void testTrackedCpuOwner() {
     {
+        unsigned reads=0;bool allow=true;uint8_t liveFlag=0x80;
+        auto read=[&](uintptr_t p,void* out,size_t n) noexcept {
+            ++reads;if(!allow) return false;
+            if((p==0x1000 || p==0x1090) && n==4) {uint32_t one=1;std::memcpy(out,&one,4);return true;}
+            if(((p==0x2060 || p==0x2068 || p==0x10d8) && n==8) ||
+               ((p==0x2081 || p==0x2082) && n==1)) {std::memset(out,0,n);return true;}
+            assert(false);return false; // no read of opaque pass or flag address
+        };
+        TglVeboxPipeAcquisition frame;TglVeboxPipeReadGate gate(read,frame);
+        assert(tglCompositionBypassFromLiveFlag(0x1000,0x2000,liveFlag,gate) && reads==7);
+        liveFlag=0x81;
+        assert(!tglCompositionBypassFromLiveFlag(0x1000,0x2000,liveFlag,gate) && reads==7 && frame.healthy());
+        liveFlag=0x80;allow=false;
+        assert(!tglCompositionBypassFromLiveFlag(0x1000,0x2000,liveFlag,gate) && reads==8 && !frame.healthy());
+        allow=true;
+        assert(!tglCompositionBypassFromLiveFlag(0x1000,0x2000,liveFlag,gate) && reads==8);
+    }
+    {
         struct Policy {
             unsigned calls=0;unsigned stop=99;uint32_t selected=1;bool fill=false,available=true,tone=false;
             unsigned failAt=0;
@@ -115,10 +133,12 @@ static void testTrackedCpuOwner() {
         assert(!overflowGate(UINTPTR_MAX,&value,2) && !overflowFrame.healthy() && reads==2);
         TglVeboxPipeAcquisition predicateFrame;
         TglVeboxPipeReadGate predicateGate(read,predicateFrame);
+        uint8_t comp=0x80;uint32_t mode=0xabcdef;
         struct Policy {
             TglVeboxPipeAcquisition& frame;decltype(predicateGate)& gate;
+            uint8_t& comp;
             bool healthy() const noexcept {return frame.healthy();}
-            bool bypass() noexcept {return tglCompositionBypassFeasible(0x200,0x300,0x100,gate);}
+            bool bypass() noexcept {return tglCompositionBypassFromLiveFlag(0x200,0x300,comp,gate);}
             bool rejectDi() noexcept {assert(false);return false;}
             bool rejectLut() noexcept {assert(false);return false;}
             bool direct() noexcept {assert(false);return false;}
@@ -127,11 +147,10 @@ static void testTrackedCpuOwner() {
             bool hdr() noexcept {assert(false);return false;}
             uint32_t sfc() noexcept {assert(false);return 1;}
             bool fastFill() noexcept {assert(false);return false;}
-        } policy{predicateFrame,predicateGate};
-        uint8_t comp=0x80;uint32_t mode=0xabcdef;
-        assert(!tglSelectGen12VeboxOutputPipe(policy,comp,mode) && reads==4);
+        } policy{predicateFrame,predicateGate,comp};
+        assert(!tglSelectGen12VeboxOutputPipe(policy,comp,mode) && reads==3);
         assert(!predicateFrame.healthy() && comp==0x80 && mode==0xabcdef);
-        assert(!tglSelectGen12VeboxOutputPipe(policy,comp,mode) && reads==4);
+        assert(!tglSelectGen12VeboxOutputPipe(policy,comp,mode) && reads==3);
     }
     {
         TglVeboxAdmissionStagesInput input;
