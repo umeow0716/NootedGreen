@@ -7072,7 +7072,19 @@ static void testNativeResourceBoundary() {
                                                     reinterpret_cast<uintptr_t>(&nativeFixture),
                                                     reinterpret_cast<uintptr_t>(FrameStatisticsFixture::fill)};
                                                 {
-                                                TglNativeVeboxSurfaceFrameStorage<FrameStmmApi> nativeFrame(nativeBinding,4096,nativeFill);
+                                                TglNativeVeboxCommandFrameStorage<FrameStmmApi> commandFrame(nativeBinding,4096,nativeFill);
+                                                auto& nativeFrame=commandFrame.backing();
+                                                auto packetStorage=commandFrame.packetLeases(
+                                                    reinterpret_cast<uintptr_t>(actualChild),report,0,0,linkedStorage,nullptr);
+                                                auto samePacketStorage=commandFrame.packetLeases(
+                                                    reinterpret_cast<uintptr_t>(actualChild),report,0,0,linkedStorage,nullptr);
+                                                assert(&packetStorage.source==&linkedStorage && !packetStorage.target);
+                                                assert(&packetStorage.surfaces==&samePacketStorage.surfaces &&
+                                                    &packetStorage.state==&samePacketStorage.state &&
+                                                    &packetStorage.diIecp==&samePacketStorage.diIecp);
+                                                packetStorage.state[0]=0x29;
+                                                assert(samePacketStorage.state[0]==0x29);
+                                                assert(!commandFrame.scratch().command[0]);
                                                 std::array<uintptr_t,2> savedBindings{};
                                                 std::memcpy(&savedBindings[0],child.data()+0xba8,8);
                                                 std::memcpy(&savedBindings[1],child.data()+0x1b8,8);

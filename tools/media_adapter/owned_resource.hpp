@@ -14843,6 +14843,32 @@ auto tglMakeCapturedVeboxAllocationCommandConsumer(
     };
 }
 
+// Stable CPU packet/scratch and GPU-backing storage for one command frame.
+// This is deliberately NOT the complete retained runtime Frame: source/target,
+// child, physical parent and image leases belong to its enclosing owner. Keep
+// that owner alive until authenticated discard/completion, not just writeback.
+template<class Api> class TglNativeVeboxCommandFrameStorage {
+    TglNativeVeboxSurfaceFrameStorage<Api> backing_;
+    TglOwnedVeboxBuilderScratch scratch_{};
+    TglOwnedSurfaceInputs surfaces_{};
+    TglOwnedVeboxStateStorage state_{};
+    TglOwnedDiIecpPacket diIecp_{};
+public:
+    template<class... Args>
+    TglNativeVeboxCommandFrameStorage(const TglNativeResourceBinding& binding,
+        uint64_t pageSize,const TglNativeBufferFillBinding& fill,Args&&... args) noexcept
+        :backing_(binding,pageSize,fill,std::forward<Args>(args)...) {}
+    TglNativeVeboxCommandFrameStorage(const TglNativeVeboxCommandFrameStorage&)=delete;
+    TglNativeVeboxCommandFrameStorage& operator=(const TglNativeVeboxCommandFrameStorage&)=delete;
+    auto& backing() noexcept {return backing_;}
+    auto& scratch() noexcept {return scratch_;}
+    TglOwnedVeboxPacketLeases packetLeases(uintptr_t child,uintptr_t execution,
+        uintptr_t renderHal,uintptr_t sku,TglOwnedSurfaceStorage& source,
+        TglOwnedSurfaceStorage* target) noexcept {
+        return {child,execution,renderHal,sku,source,target,surfaces_,state_,diIecp_};
+    }
+};
+
 // Allocation transaction for a history-enabled frame. The qualified platform
 // planner supplies resource keys and statistics boundary dimensions; this does
 // not infer feature admission or SFC resources. All three owners outlive this
