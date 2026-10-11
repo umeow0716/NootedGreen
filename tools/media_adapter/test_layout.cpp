@@ -8923,7 +8923,8 @@ int main() {
                 } modeCleanup{owner.constructedBase()};
                 using ModeCleanupScope=TglOwnedVeboxScopedContext<ModeCleanupContext>;
                 hooks=tglBindOwnedVeboxModeReleaseHook<ModeCleanupScope>(hooks);
-                int admissionParams=0,admissionPass=0;
+                std::array<uint8_t,0x140> admissionParams{};
+                std::array<uint8_t,0x28> admissionPass{};
                 unsigned admissionCalls=0;bool admissionAllowed=false;
                 struct AdmissionBackend {
                     std::array<uint8_t,0xd48> bytes{};unsigned initializes=0,destroys=0;
@@ -8944,17 +8945,46 @@ int main() {
                     assert(cpu.live && owner.constructedBase()==child && !eventCount);
                     assert(owner.withPrivateChild([](void*) noexcept {assert(false);return 0;})==5);
                     if(runAdmissionStages) {
+                        TglOwnedSurfaceStorage source{},target{};
+                        uint32_t width=64,height=16;
+                        std::memcpy(source.prefix.data()+0xd8,&width,4);
+                        std::memcpy(source.prefix.data()+0xdc,&height,4);
+                        uint64_t sku=uint64_t{1}<<12;
+                        TglVeboxAdmissionBorrowedInterfaces interfaces{
+                            reinterpret_cast<uintptr_t>(&source),reinterpret_cast<uintptr_t>(&target),
+                            reinterpret_cast<uintptr_t>(&sku),0};
+                        auto* baseBytes=static_cast<uint8_t*>(child);
+                        struct RestoreInterfaces {
+                            uint8_t* base;std::array<uint8_t,24> saved{};
+                            explicit RestoreInterfaces(uint8_t* p) noexcept:base(p) {std::memcpy(saved.data(),base+0x10,24);}
+                            ~RestoreInterfaces(){std::memcpy(base+0x10,saved.data(),24);}
+                        } restore(baseBytes);
+                        std::memcpy(baseBytes+0x10,&interfaces.os,8);
+                        std::memcpy(baseBytes+0x18,&interfaces.renderHal,8);
+                        std::memcpy(baseBytes+0x20,&interfaces.sku,8);
+                        uintptr_t sourceLink=reinterpret_cast<uintptr_t>(&source),targetLink=reinterpret_cast<uintptr_t>(&target);
+                        std::memcpy(admissionPass.data()+0x10,&sourceLink,8);
+                        std::memcpy(admissionParams.data()+0x98,&targetLink,8);
+                        admissionParams[0x138]=1;admissionPass[8]=0;
+                        auto read=[&](uintptr_t p,void* out,size_t n) noexcept {
+                            const auto paramsBase=reinterpret_cast<uintptr_t>(admissionParams.data());
+                            const auto passBase=reinterpret_cast<uintptr_t>(admissionPass.data());
+                            const bool valid=(p==passBase+0x10 && n==8) ||
+                                (p==paramsBase+0x98 && n==8) || (p==paramsBase+0xf0 && n==8) ||
+                                (p==paramsBase+0x138 && n==1) || (p==paramsBase+0x10c && n==4) ||
+                                (p==interfaces.sku && n==8);
+                            if(valid) std::memcpy(out,reinterpret_cast<const void*>(p),n);
+                            return valid;
+                        };
                         bool admitted=false;
                         const int status=admissionExecution.withExecution([&](uintptr_t execution) noexcept {
                             uintptr_t linked=0;std::memcpy(&linked,static_cast<uint8_t*>(child)+0x88,8);
                             if(linked!=execution) return 5;
                             return admissionExecution.withLeasedAdmissionBytes(execution,[&](auto& bytes) noexcept {
-                                TglVeboxAdmissionStagesInput input;
-                                input.prefix={true,true,true,true,1,uint64_t{1}<<12,64,16};input.pipe=1;
-                                std::array<uint8_t,0x28> ownedPass{};
-                                admitted=tglRunVeboxAdmissionStages(input,bytes,ownedPass,
+                                admitted=tglRunCapturedVeboxAdmissionStages(owner,admissionExecution,
+                                    child,admissionParams,admissionPass,source,target,interfaces,1,bytes,read,
                                     [&]() noexcept {return !admissionExecution.initializeLeasedAdmission(execution);},
-                                    [](auto&) noexcept {},[]() noexcept {return false;},
+                                    [](auto&) noexcept {},
                                     [](auto&) noexcept {assert(false);},
                                     [](auto& data) noexcept {data[0x17]=1;return true;});
                                 return 0;
