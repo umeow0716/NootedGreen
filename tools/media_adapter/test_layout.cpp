@@ -45,6 +45,17 @@ struct TestFeatureExecutionOwner {
 };
 static void testTrackedCpuOwner() {
     {
+        std::array<uint8_t,0x139> params{};
+        TglVeboxPipeAcquisition frame;bool present=true;
+        assert(tglAcquireOwnedColorFillPresence(params,0,frame,present) && !present);
+        uintptr_t owned=0x1234;
+        std::memcpy(params.data()+0xe0,&owned,sizeof(owned));
+        assert(tglAcquireOwnedColorFillPresence(params,owned,frame,present) && present);
+        present=false;
+        assert(!tglAcquireOwnedColorFillPresence(params,owned+1,frame,present) && !present && !frame.healthy());
+        assert(!tglAcquireOwnedColorFillPresence(params,owned,frame,present) && !present);
+    }
+    {
         struct Policy {
             TglVeboxPipeAcquisition frame;
             TglSurfaceRect source{0,0,1920,1081},target{0,0,1920,1200};

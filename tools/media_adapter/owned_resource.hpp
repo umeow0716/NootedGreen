@@ -1186,6 +1186,20 @@ public:
     }
 };
 
+// ICL1fb581/1fb585 reads render params+e0 before its fast-fill geometry
+// checks; Gen12 GetOutputPipe2503 tests pColorFillParams at the same stage.
+// Only presence is consumed here. The enclosing frame owns that separately
+// leased allocation; no dereference, guessed parameter extent or adoption.
+template<size_t N>
+bool tglAcquireOwnedColorFillPresence(const std::array<uint8_t,N>& params,
+    uintptr_t leasedColorFill,TglVeboxPipeAcquisition& frame,bool& present) noexcept {
+    static_assert(N>=0xe8,"qualified render params color-fill slot extent");
+    if(!frame.healthy()) return false;
+    uintptr_t actual=0;std::memcpy(&actual,params.data()+0xe0,sizeof(actual));
+    if(actual!=leasedColorFill) {frame.fail();return false;}
+    present=actual!=0;return true;
+}
+
 // Gen12 GetOutputPipe, intel/media-driver73c8d14 g12_base.cpp2426..2550.
 // Policy owns qualified params/source/target leases and implements complete
 // predicates, SFC selection and fast-fill temporary rectangle/decompression
