@@ -5620,6 +5620,28 @@ int tglWithOwnedDescriptorFfdiBatch(std::array<TglOwnedDescriptorOnlySurface,Cou
         });
 }
 
+// Concrete execution-owner composition. Caller already holds the native
+// report/frame lease; snapshot13/14 through its bounded byte view, then
+// publish changed slots through that same owner, never a final-only copy.
+template<size_t Count,class Owner,class ExecutionOwner,class Use>
+int tglWithOwnedDescriptorFfdiReportBatch(std::array<TglOwnedDescriptorOnlySurface,Count>& targets,
+    Owner& input,Owner* executionSurface,Owner* secondary,size_t count,
+    uint32_t format,uint32_t tile,TglOwnedFfdiCompressionSelection compression,
+    TglOwnedFfdiMetadataQuery query,ExecutionOwner& reportOwner,uintptr_t report,Use use,
+    std::array<const TglOwnedSurfaceStorage*,3> captured={}) noexcept {
+    std::array<uint8_t,2> original{};
+    const int read=reportOwner.withLeasedAdmissionBytes(report,[&](auto& view) noexcept {
+        static_assert(TglAdmissionExecutionExtent<std::decay_t<decltype(view)>>::value>=0x15,
+            "FFDi report snapshot extent");
+        std::memcpy(original.data(),view.data()+0x13,original.size());return 0;
+    });
+    if(read) return read;
+    return tglWithOwnedDescriptorFfdiBatch(targets,input,executionSurface,secondary,count,
+        format,tile,compression,query,original[0],original[1],use,captured,
+        [&](uint8_t flag,uint8_t mode) noexcept {
+            return tglPublishLeasedFfdiCompression(reportOwner,report,flag,mode);
+        });
+}
 // Allocation-disabled 1f7b06 -> 1f7e52 edge for an existing descriptor slot0.
 // Pin the secondary and destination through the synchronous next stage;
 // do not call prepare, copy the primary frame, or invent execution flags.

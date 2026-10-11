@@ -6384,6 +6384,41 @@ static void testNativeResourceBoundary() {
                 std::array<TglOwnedDescriptorOnlySurface,4> targets;
                 unsigned consumers=0;
                 unsigned reportPublications=0;
+                {
+                    struct ReportBackend {
+                        std::array<uint8_t,0xd48> bytes{};
+                        uintptr_t create() noexcept {return reinterpret_cast<uintptr_t>(bytes.data());}
+                        int initialize(uintptr_t) noexcept {bytes.fill(0);return 0;}
+                        bool validate(uintptr_t p) noexcept {return p==reinterpret_cast<uintptr_t>(bytes.data());}
+                        void destroy(uintptr_t) noexcept {}
+                    } reportBackend;
+                    TglExecutionOwner reportOwner(reportBackend);assert(!reportOwner.ensure());
+                    std::array<TglOwnedDescriptorOnlySurface,2> actualTargets;
+                    auto consume=[&](const auto&,const auto&,size_t count,uint8_t flag,uint8_t mode) noexcept {
+                        assert(count==2 && flag==1 && mode==1);
+                        assert(reportBackend.bytes[0x13]==1 && reportBackend.bytes[0x14]==1);
+                        return -17;
+                    };
+                    assert(tglWithOwnedDescriptorFfdiReportBatch(actualTargets,owner,&owner,&destination,
+                        2,0x19,1,{true,1},{8,3},reportOwner,reportOwner.get(),consume)==5);
+                    assert(reportOwner.withExecution([&](uintptr_t report) noexcept {
+                        reportBackend.bytes[0x13]=0xa5;reportBackend.bytes[0x14]=0x5a;
+                        return tglWithOwnedDescriptorFfdiReportBatch(actualTargets,owner,&owner,&destination,
+                            2,0x19,1,{true,1},{8,3},reportOwner,report,consume);
+                    })==-17);
+                    assert(reportBackend.bytes[0x13]==1 && reportBackend.bytes[0x14]==1);
+                    assert(actualTargets[1].withDescriptor([&](const auto&) noexcept {
+                        assert(reportOwner.withExecution([&](uintptr_t report) noexcept {
+                            reportBackend.bytes[0x13]=0xa5;reportBackend.bytes[0x14]=0x5a;
+                            return tglWithOwnedDescriptorFfdiReportBatch(actualTargets,owner,&owner,&destination,
+                                2,0x19,1,{true,1},{8,3},reportOwner,report,
+                                [](const auto&,const auto&,size_t,uint8_t,uint8_t) noexcept {
+                                    assert(false);return 0;
+                                });
+                        })==5);
+                    }));
+                    assert(reportBackend.bytes[0x13]==1 && reportBackend.bytes[0x14]==1);
+                }
                 assert(tglWithOwnedDescriptorFfdiBatch(targets,owner,&owner,&destination,
                     2,0x19,1,{true,1},{8,3},0xa5,0x5a,
                     [&](const auto& inputs,const auto& outputs,size_t count,uint8_t flag,uint8_t mode) noexcept {
