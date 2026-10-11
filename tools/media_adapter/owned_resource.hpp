@@ -533,8 +533,10 @@ template<class Invoker> class TglOwnedSfcMhw {
     Invoker &invoke;
     TglSfcLifetimeBinding lifetime{};
     uintptr_t borrowedOs=0;
+    uint64_t generation_=0;
     bool constructed=false,ready=false,busy=false;
     void clear() noexcept {
+        if(generation_!=UINT64_MAX) ++generation_;
         ready=false;
         if(constructed){constructed=false;invoke.destroy(lifetime.destroy,storage.data());}
         lifetime={};borrowedOs=0;storage.fill(0);
@@ -547,8 +549,9 @@ public:
     template<class Read>
     bool initialize(const TglSfcLifetimeBinding &binding,const TglSfcMhwBinding &mhw,
                     uintptr_t os,Read read) {
-        if(busy) return false;
+        if(busy || generation_==UINT64_MAX) return false;
         reset();
+        if(generation_==UINT64_MAX) return false;
         struct Guard {
             bool& value;
             explicit Guard(bool& flag) noexcept:value(flag){value=true;}
@@ -576,6 +579,7 @@ public:
     void *get() noexcept {return ready?storage.data():nullptr;}
     uintptr_t image() const noexcept {return ready?lifetime.image:0;}
     uintptr_t os() const noexcept {return ready?borrowedOs:0;}
+    uint64_t generation() const noexcept {return generation_;}
     template<class Use> int withObject(Use use) {
         if(busy || !ready) return 5;
         struct Guard {
@@ -774,8 +778,10 @@ template<class SfcInvoker,class Invoke> class TglOwnedSfcCommandBackend {
     TglOwnedSfcMhw<SfcInvoker> &owner;
     void *command;
     Invoke &invoke;
+    const uint64_t generation_;
     bool valid(size_t slot,uintptr_t offset) const noexcept {
-        return command && owner.get() && binding.image==owner.image() &&
+        return command && owner.get() && generation_==owner.generation() &&
+            generation_!=UINT64_MAX && binding.image==owner.image() &&
             binding.image && binding.entries[slot/8]==binding.image+offset;
     }
     template<class Use> int call(size_t slot,uintptr_t offset,Use use) {
@@ -786,7 +792,7 @@ template<class SfcInvoker,class Invoke> class TglOwnedSfcCommandBackend {
     }
 public:
     TglOwnedSfcCommandBackend(const TglSfcMhwBinding &b,TglOwnedSfcMhw<SfcInvoker> &o,
-                             void *c,Invoke &i):binding(b),owner(o),command(c),invoke(i){}
+                             void *c,Invoke &i):binding(b),owner(o),command(c),invoke(i),generation_(o.generation()){}
     int lock(const TglOwnedSfcLockParameters& parameters) {
         return call(0x10,0x1681e0,[&](uintptr_t entry,void* object){return invoke.parameters(entry,object,command,parameters.data());});
     }

@@ -14485,8 +14485,13 @@ int main() {
             const auto completedCalls=commandInvoke.calls;
             assert(owner.initialize(lifetime,mhw,os,read));
             assert(invoke.constructs==2 && invoke.destroys==1);
-            owner.reset();owner.reset();
+            // Same image/address does not authorize an old command lease after reconstruction.
             assert(commands.frameStart()==5 && commandInvoke.calls==completedCalls);
+            TglOwnedSfcCommandBackend<Invoke,CommandInvoke> refreshed(mhw,owner,&command,commandInvoke);
+            assert(refreshed.frameStart()==0 && commandInvoke.calls==completedCalls+1);
+            owner.reset();owner.reset();
+            assert(commands.frameStart()==5 && refreshed.frameStart()==5 &&
+                commandInvoke.calls==completedCalls+1);
             assert(!owner.get() && invoke.destroys==2);
             invoke.corrupt=true;
             assert(!owner.initialize(lifetime,mhw,os,read));
