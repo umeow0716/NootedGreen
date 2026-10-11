@@ -8159,6 +8159,51 @@ int main() {
                 assert(escapedSetup(callbackChild,&source,reinterpret_cast<void*>(0x2000),&data)==5);
                 assert(escapedSend(callbackChild,&data,&command)==5);
             }
+            // Exercise the VP callback bridge with the real typed scheduler,
+            // not the platform no-op. This records CPU emission only.
+            struct CallbackCommandBackend {
+                unsigned count=0;int failure=0;
+                std::array<int,8> order{};
+                int stage(int id) noexcept {order[count++]=id;return failure==id?-id:0;}
+                int lock(const TglOwnedSfcLockParameters&) noexcept {return stage(1);}
+                int state(const TglOwnedSfcStateParametersPacket&,
+                    const std::array<uint8_t,0x38>&) noexcept {return stage(4);}
+                int avs(const std::array<uint8_t,16>&) noexcept {return stage(5);}
+                int y(const TglOwnedSfcYParameters&) noexcept {return stage(6);}
+                int uv(const TglOwnedSfcUvParameters&) noexcept {return stage(7);}
+                int ief(const std::array<uint8_t,64>&) noexcept {return stage(8);}
+                int frameStart() noexcept {return stage(9);}
+            };
+            for(int failure:{0,1,3,4,5,6,7,8,9}) {
+                CallbackCommandBackend backend;backend.failure=failure;
+                TglOwnedSfcCommandParameters packets{};
+                std::array<uint8_t,0x2a8> output{};
+                unsigned stages=0;
+                const int result=graph.withPreparedCallbackPass(prepared,
+                    0x6000,0x4000,0x2000,reference,&source,&data,
+                    [&](void*,const auto&,auto&) noexcept -> int {++stages;return 0;},
+                    [&](void*,const auto&,auto&) noexcept -> int {++stages;return 0;},
+                    [&](void*,const auto&) noexcept {++stages;},
+                    [&](void*,void*,void*) noexcept -> int {
+                        assert(stages==3 && stateCpu.live && avsCpu.live);
+                        auto platform=[&](auto&) noexcept {return backend.stage(3);};
+                        return tglSendOwnedSfcPreparedCommands(backend,packets,output,
+                            1,1,1,1,platform);
+                    },
+                    [&](void* child,SetupEntry setup,SendEntry send) noexcept -> int {
+                        assert(setup(child,&source,reinterpret_cast<void*>(0x2000),&data)==0);
+                        // Even a caller that ignores the send error cannot turn
+                        // failed/partial command construction into success.
+                        (void)send(child,&data,&command);return 0;
+                    });
+                assert(result==(failure?-failure:0));
+                unsigned expectedCount=0;
+                for(int id:{1,3,4,5,6,7,8,9}) {
+                    assert(backend.order[expectedCount++]==id);
+                    if(id==failure) break;
+                }
+                assert(backend.count==expectedCount);
+            }
             auto disabled=prepared;
             disabled.regions.scale.scaling=false;disabled.color.at9b8=false;
             disabled.at922=false;disabled.color.modes.state.at923=false;
