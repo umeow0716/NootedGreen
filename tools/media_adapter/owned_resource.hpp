@@ -1726,6 +1726,16 @@ public:
         std::memcpy(bytes+0x910,&first,8);std::memcpy(bytes+0x918,&second,8);
         linked_=true;return true;
     }
+    // Read-only preflight; caller must keep the SAME exclusive lifetime scope
+    // through subsequent detach. This does not grant GPU retirement authority.
+    template<class Admit>
+    bool canDetach(void* renderer,uint64_t generation,Admit admit) noexcept {
+        static_assert(noexcept(admit(renderer,generation,first_,second_)));
+        if(busy_ || !linked_ || renderer!=renderer_ || generation!=generation_) return false;
+        busy_=true;Unlock unlock{busy_};
+        return admit(renderer,generation,first_,second_) &&
+            slot(0x910)==first_ && slot(0x918)==second_ && slot(0x920)==native_;
+    }
     template<class Admit>
     bool detach(void* renderer,uint64_t generation,Admit admit) noexcept {
         static_assert(noexcept(admit(renderer,generation,first_,second_)));
@@ -1787,6 +1797,19 @@ public:
                 reinterpret_cast<uintptr_t>(second_),qualified);
         if(!linked_) (void)releasePins(); // failed release remains represented for explicit retry
         return linked_;
+    }
+    template<class Admit> bool canDetach(void* renderer,uint64_t generation,Admit admit) noexcept {
+        static_assert(noexcept(admit(renderer,generation,uintptr_t{},uintptr_t{})));
+        if(busy_ || !renderer_ || renderer!=renderer_ || generation!=generation_) return false;
+        busy_=true;Unlock unlock{busy_};
+        const auto address=reinterpret_cast<uintptr_t>(renderer);
+        auto retirement=[&](void* object,uint64_t gen,uintptr_t a,uintptr_t b) noexcept {
+            return admit(object,gen,a,b) &&
+                (!firstPinned_ || firstOwner_.canUnpinRendererPublication(first_,firstGeneration_,address,generation)) &&
+                (!secondPinned_ || secondOwner_.canUnpinRendererPublication(second_,secondGeneration_,address,generation));
+        };
+        return linked_?links_.canDetach(renderer,generation,retirement):
+            retirement(renderer,generation,reinterpret_cast<uintptr_t>(first_),reinterpret_cast<uintptr_t>(second_));
     }
     template<class Admit> bool detach(void* renderer,uint64_t generation,Admit admit) noexcept {
         static_assert(noexcept(admit(renderer,generation,uintptr_t{},uintptr_t{})));
@@ -4126,6 +4149,9 @@ public:
     bool bound() const noexcept {return first_.bound() && second_.bound();}
     auto& first() noexcept {return first_;}
     auto& second() noexcept {return second_;}
+    template<class Admit> bool canDetach(void* renderer,uint64_t generation,Admit admit) noexcept {
+        return publication_.canDetach(renderer,generation,admit);
+    }
     template<class Admit> bool publish(void* renderer,size_t extent,uint64_t generation,Admit admit) noexcept {
         return bound() && publication_.publish(renderer,extent,generation,admit);
     }

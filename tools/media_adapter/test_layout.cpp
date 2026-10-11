@@ -12921,13 +12921,28 @@ int main() {
         assert(first.renderer && second.renderer);
         const auto published=renderer;
         second.busy=true;
+        assert(!publication.canDetach(renderer.data(),4,admit));
         assert(!publication.detach(renderer.data(),4,admit));
         assert(first.renderer && second.renderer && renderer==published);
         second.busy=false;
+        assert(!publication.canDetach(renderer.data(),5,admit));
+        assert(!publication.canDetach(renderer.data(),4,[](void*,uint64_t,uintptr_t,uintptr_t) noexcept {return false;}));
+        assert(publication.canDetach(renderer.data(),4,admit));
+        assert(first.renderer && second.renderer && renderer==published);
+        uintptr_t alienNative=0x4000;std::memcpy(renderer.data()+0x920,&alienNative,8);
+        assert(!publication.canDetach(renderer.data(),4,admit));
+        std::memcpy(renderer.data()+0x920,&native,8);
+        auto reentrantAdmission=[&](void*,uint64_t,uintptr_t,uintptr_t) noexcept {
+            assert(!publication.canDetach(renderer.data(),4,admit));
+            assert(!publication.detach(renderer.data(),4,admit));return true;
+        };
+        assert(publication.canDetach(renderer.data(),4,reentrantAdmission));
+        assert(first.renderer && second.renderer && renderer==published);
         assert(!publication.detach(renderer.data(),4,[](void*,uint64_t,uintptr_t,uintptr_t) noexcept {return false;}));
         assert(first.renderer && second.renderer && renderer==published);
         assert(publication.detach(renderer.data(),4,admit));
         assert(!first.renderer && !second.renderer && renderer==original);
+        assert(!publication.canDetach(renderer.data(),4,admit));
     }
     {
         std::array<uint8_t,0x928> renderer{};
