@@ -12004,9 +12004,12 @@ static void testRetainedVeboxFrames() {
     };
     struct Frame {
         Backend backend;TglOwnedResource<Backend> resource;TglOwnedVeboxBuilderScratch scratch;
+        TglNativeContextInputRoots roots{};
         unsigned& destroyed;
         Frame(unsigned& allocated,unsigned& released,unsigned& deaths) noexcept
             :backend{allocated,released},resource(backend),destroyed(deaths) {}
+        Frame(const TglNativeContextInputRoots& input,unsigned& allocated,unsigned& released,unsigned& deaths) noexcept
+            :Frame(allocated,released,deaths) {roots=input;}
         ~Frame() noexcept {++destroyed;}
     };
     using Pool=TglOwnedVeboxRetainedFrames<Frame>;
@@ -12346,6 +12349,21 @@ static void testRetainedVeboxFrames() {
         contextPhysical=0x8001;
         assert(callbacks.withContextInputRoots(success.ticket,0x8000,0x20000,rootRead,rootAdmit,rootUse)==5 && rootCalls==1);
         contextPhysical=0x8000;
+        unsigned rootAllocated=0,rootReleased=0,rootDestroyed=0;
+        const auto rootFrame=callbacks.createContextRootFrame(success.ticket,0x8000,0x20000,rootRead,rootAdmit,
+            rootAllocated,rootReleased,rootDestroyed);
+        assert(rootFrame.status==0 && rootFrame.ticket.generation && rootDestroyed==0);
+        const auto pinnedReads=rootReads;
+        assert(callbacks.createContextRootFrame(success.ticket,0x8000,0x20000,rootRead,rootAdmit,
+            rootAllocated,rootReleased,rootDestroyed).status==5 && rootReads==pinnedReads);
+        assert(callbacks.withContextRemoval(success.ticket,0x8000,removalUse)==5);
+        assert(callbacks.withFrame(success.ticket,0x8000,[&](auto& frames) noexcept -> int {
+            // Explicit CPU-only unsubmitted-frame retirement, not a GPU fence.
+            return frames.retire(rootFrame.ticket,[](const Frame& frame,bool pending,const auto&) noexcept -> int {
+                assert(!pending && frame.roots.input==0x40000 && frame.roots.sources[16]==0x50000 &&
+                    frame.roots.parent.physical==0x8000);return 0;
+            });
+        })==0 && rootDestroyed==1 && !rootAllocated && !rootReleased);
         unsigned configurationCalls=0;
         auto configurationUse=[&](auto&,const TglNativeVeboxRendererView& view) noexcept -> int {
             ++configurationCalls;assert(view.parent.physical==0x8000 && view.renderer==0x30000 &&

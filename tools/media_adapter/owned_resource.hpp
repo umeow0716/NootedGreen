@@ -16255,6 +16255,7 @@ template<class Frame,size_t Capacity=4> class TglOwnedVeboxPhysicalFrameRegistry
 public:
     struct Ticket {size_t index=Capacity;uint64_t generation=0;
         const TglOwnedVeboxPhysicalFrameRegistry* registry=nullptr;};
+    using FrameTicket=typename Pool::Ticket;
 private:
     Entry* resolve(Ticket ticket) noexcept {
         if(ticket.registry!=this || ticket.index>=Capacity || !ticket.generation) return nullptr;
@@ -17001,6 +17002,20 @@ public:
                 std::is_same_v<decltype(use(frames,static_cast<const TglNativeContextInputRoots&>(roots))),int>);
             return use(frames,static_cast<const TglNativeContextInputRoots&>(roots));
         });
+    }
+    struct ContextRootFrameResult {int status=5;typename Registry::FrameTicket ticket{};};
+    template<class ParentRead,class Admit,class... Args>
+    ContextRootFrameResult createContextRootFrame(typename Registry::Ticket ticket,uintptr_t physical,
+        uintptr_t context,ParentRead read,Admit admit,Args&&... args) noexcept {
+        ContextRootFrameResult result;
+        result.status=withContextInputRoots(ticket,physical,context,read,admit,
+            [&](auto& frames,const TglNativeContextInputRoots& roots) noexcept -> int {
+                // Runtime Frame must own/copy its root metadata and all actual
+                // leases; never keep a reference to this temporary snapshot.
+                result.ticket=frames.create(roots,std::forward<Args>(args)...);
+                return result.ticket.generation?0:5;
+            });
+        return result;
     }
     // Configuration slot13 is a mutator too. Resolve its renderer only after
     // excluding retained frames and holding the matching physical generation.
