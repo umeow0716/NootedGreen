@@ -4436,6 +4436,21 @@ struct TglNativeBufferFillBinding {
 
 struct TglNativeResourceBinding {
     uintptr_t context = 0, allocate = 0, release = 0;
+    // Complete native-context -> physical -> embedded OS wrapper admission,
+    // composed with the existing exact resource callbacks. A valid RenderHal
+    // from another context is not sufficient. All borrowed generation leases
+    // must remain held through resource destruction, not just this snapshot.
+    template<class Read,class Admit,class Qualify,class Executable>
+    bool resolveFromContext(uintptr_t nativeContext,uintptr_t renderHal,uintptr_t image,
+                            Read read,Admit admit,Qualify qualify,Executable executable) {
+        *this={};
+        TglNativeVeboxParentView parent;
+        uintptr_t borrowedOs=0;
+        if(!parent.resolve(nativeContext,read,admit) || !renderHal ||
+           renderHal>UINTPTR_MAX-8 || !admit(renderHal,size_t{8}) ||
+           !read(renderHal,&borrowedOs,8) || borrowedOs!=parent.os) return false;
+        return resolve(parent.os,image,read,qualify,executable);
+    }
     // 132ec0..132ed6: renderer stores RenderHal at +2cc0 and borrows
     // RenderHal[0] as OS at +2cc8. Never acquire ownership of either object.
     // Caller must keep RenderHal alive through all resource destruction.

@@ -8844,6 +8844,38 @@ static void testResourceBinding() {
     assert(!binding.resolveFromRenderHal(0, image, read, qualify, executable)); empty();
     assert(!binding.resolveFromRenderHal(UINTPTR_MAX, image, read, qualify, executable)); empty();
     identity = false; assert(!borrowed()); empty();
+    identity=true;
+    constexpr uintptr_t nativeContext=0x8000,physical=0xa000,wrapper=0xb000;
+    uintptr_t parentOs=os,embedded=wrapper+0x48;
+    auto graphRead=[&](uintptr_t address,void* output,size_t size) {
+        if(!readable) return false;
+        if(size==8) {
+            const uintptr_t* value=nullptr;
+            if(address==nativeContext+0x128) value=&physical;
+            if(address==nativeContext+0x12f0) value=&parentOs;
+            if(address==physical+0x50) value=&wrapper;
+            if(address==os+8) value=&embedded;
+            if(value) {std::memcpy(output,value,8);return true;}
+        }
+        return read(address,output,size);
+    };
+    bool graphAdmitted=true;
+    auto admitGraph=[&](uintptr_t address,size_t size) {
+        return graphAdmitted && ((address==nativeContext && size==0x12f8) ||
+            (address==physical && size==0x58) || (address==os && size==0x10) ||
+            (address==wrapper && size==0x50) || (address==renderHal && size==8));
+    };
+    auto fromContext=[&] {
+        return binding.resolveFromContext(nativeContext,renderHal,image,graphRead,
+            admitGraph,qualify,executable);
+    };
+    assert(fromContext() && binding.context==os && binding.allocate==allocate);
+    borrowedOs=os+8;assert(!fromContext());empty();borrowedOs=os;
+    embedded=wrapper;assert(!fromContext());empty();embedded=wrapper+0x48;
+    graphAdmitted=false;assert(!fromContext());empty();graphAdmitted=true;
+    identity=false;assert(!fromContext());empty();identity=true;
+    readable=false;assert(!fromContext());empty();readable=true;
+    assert(fromContext());
 }
 
 // Offline layout hypothesis only: not an ABI-complete or deployable adapter.
