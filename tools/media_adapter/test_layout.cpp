@@ -8280,6 +8280,23 @@ static void testVpSfcCpuGraph() {
         entry(child);entry(child);return 0;
     })==5);
     assert(!state.live && !avs.live);
+    assert(initialize());
+    TglOwnedVpEntrySet constructorBase;
+    constructorBase.compressionFormat=&TestVpPresenceStub<decltype(constructorBase.compressionFormat)>::invoke;
+    constructorBase.initialize=expiredInit;
+    const auto beforeConflictGeneration=graph.generation();
+    const auto beforeConflictFrees=state.frees;
+    const auto neverAssembly=[](void*,const TglOwnedVpEntrySet&) noexcept {assert(false);return 0;};
+    assert(graph.withInitializationAssemblyEntries(constructorBase,neverAssembly)==5);
+    assert(graph.generation()==beforeConflictGeneration && state.frees==beforeConflictFrees && state.live);
+    constructorBase.initialize=nullptr;
+    assert(graph.withInitializationAssemblyEntries(constructorBase,
+        [&](void* child,const TglOwnedVpEntrySet& entries) noexcept {
+            assert(entries.missingMask()==(0x7ffffffU&~(4U|(1U<<12))));
+            assert(entries.compressionFormat==constructorBase.compressionFormat);
+            entries.initialize(child);return 0;
+        })==0);
+    graph.reset();assert(!state.live && !avs.live);
 }
 
 static void testSfcSetupOrder() {

@@ -9545,6 +9545,19 @@ public:
         if(status) {clear();return status;}
         ready_=true;return 0;
     }
+    // Construction catalogue only. Base callbacks must retain their own
+    // scopes through Use; the returned subset is never a persistent vtable.
+    template<class Use> int withInitializationAssemblyEntries(
+        const TglOwnedVpEntrySet& base,Use use) noexcept {
+        if(base.initialize) return 5; // reject before changing state/generation
+        return withPassInitializationEntry([&](void* child,auto initialize) noexcept {
+            auto entries=base;
+            TglOwnedVpEntrySet addition;addition.initialize=initialize;
+            if(!entries.appendDisjoint(addition)) return 5;
+            static_assert(noexcept(use(child,entries)),"VP construction catalogue ABI");
+            return use(child,static_cast<const TglOwnedVpEntrySet&>(entries));
+        });
+    }
     // CPU teardown only: the enclosing runtime owner still has to establish
     // GPU retirement before calling this or releasing the VP allocation.
     bool tryReset() noexcept {
