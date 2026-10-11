@@ -8372,6 +8372,22 @@ static void testVpSfcCpuGraph() {
     assert(currentLifetime.status()==0 && retirementCalls==1 && allocationReleases==1);
     assert(!state.live && !avs.live);
     assert(initialize());
+    const auto beforeLifecycleGeneration=graph.generation();
+    TglOwnedVpEntrySet escapedConstructor,escapedDestructor;
+    assert(tglWithOwnedVpInitializedLifetimeAssembly(graph,lines,retire,release,{},
+        [&](void* child,const auto& entries) noexcept {
+            assert(child==lifetimeChild && !entries.destroy && !entries.deletingDestroy);
+            escapedConstructor=entries;entries.initialize(child);return 0;
+        },[&](void* child,const auto& entries) noexcept {
+            assert(graph.generation()==beforeLifecycleGeneration+1 && !entries.initialize);
+            escapedDestructor=entries;
+            const auto before=state.frees;
+            escapedConstructor.initialize(child);assert(state.frees==before);
+            entries.destroy(child);entries.deletingDestroy(child);return 31;
+        })==31);
+    escapedDestructor.destroy(lifetimeChild);escapedDestructor.deletingDestroy(lifetimeChild);
+    assert(retirementCalls==2 && allocationReleases==2 && !state.live && !avs.live);
+    assert(initialize());
     const auto neverAdmission=[](void*,const auto&) noexcept {assert(false);return 0;};
     assert(graph.withLeasedAdmissionEntries(lifetimeChild,read,neverAdmission)==5);
     assert(graph.prepare([&](auto& storage,auto&,auto&) noexcept {

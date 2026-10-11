@@ -12199,6 +12199,25 @@ int tglWithOwnedVpLifetimeAssemblyEntries(void* child,Lifetime& lifetime,
     return lifetime.attempts()!=attempts ? lifetime.status():0;
 }
 
+// CPU construction-to-lifetime transition. Construct must invoke the owned
+// initialization entry exactly once. Only after its lease ends do we capture
+// the new generation for destructor ownership. No GPU retirement is inferred.
+template<class Graph,class Lines,class Retire,class Release,class Construct,class Use>
+int tglWithOwnedVpInitializedLifetimeAssembly(Graph& graph,Lines& lines,Retire& retire,
+    Release& release,const TglOwnedVpEntrySet& base,Construct construct,Use use) noexcept {
+    if(base.initialize || base.destroy || base.deletingDestroy) return 5;
+    const auto retainedBase=base;
+    void* child=nullptr;
+    const int initialized=graph.withInitializationAssemblyEntries(retainedBase,
+        [&](void* admitted,const auto& entries) noexcept {
+            static_assert(noexcept(construct(admitted,entries)),"VP lifecycle construction ABI");
+            child=admitted;return construct(admitted,entries);
+        });
+    if(initialized) return initialized;
+    TglOwnedVpLifetimeContext<Graph,Lines,Retire,Release> lifetime(child,graph,lines,retire,release);
+    return tglWithOwnedVpLifetimeAssemblyEntries(child,lifetime,retainedBase,use);
+}
+
 // Owned VP+30 void callback context. Retirement is an external, fallible
 // admission operation, not a bool invented from FinishFenceEvent's return.
 // A future runtime owner must qualify that operation against its actual
