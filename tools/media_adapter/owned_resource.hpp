@@ -16245,6 +16245,13 @@ public:
         }
         return result;
     }
+    // Keep the generation captured at initialization: resolving by pointer
+    // alone would let a delayed frame attach to a recycled physical address.
+    template<class Use> int withFrame(typename Registry::Ticket ticket,
+        uintptr_t physical,Use use) noexcept {
+        if(!physical || !valid()) return 5;
+        return registry_.withLive(ticket,binding_.image,physical,use);
+    }
     int destroy(uintptr_t physical) noexcept {
         if(!physical || !valid()) return 5;
         const auto ticket=registry_.lookup(binding_.image,physical);

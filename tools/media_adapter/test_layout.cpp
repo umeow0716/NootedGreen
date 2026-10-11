@@ -11951,7 +11951,16 @@ static void testRetainedVeboxFrames() {
         const auto success=callbacks.initialize(&output,input);
         assert(success.status==0 && success.nativeStatus==0 && success.called && success.published && invoke.initialized==1);
         assert(registry.lookup(image,0x8000).generation==success.ticket.generation);
+        unsigned frameCalls=0;
+        auto frameUse=[&](auto&) noexcept -> int {
+            ++frameCalls;
+            assert(callbacks.destroy(0x8000)==5 && invoke.destroyed==0);
+            return 31;
+        };
+        assert(callbacks.withFrame(success.ticket,0x8000,frameUse)==31 && frameCalls==1);
+        assert(callbacks.withFrame(success.ticket,0x8001,frameUse)==5 && frameCalls==1);
         assert(callbacks.destroy(0x8000)==0 && invoke.destroyed==1);
+        assert(callbacks.withFrame(success.ticket,0x8000,frameUse)==5 && frameCalls==1);
         assert(callbacks.destroy(0x8000)==5 && invoke.destroyed==1);
         invoke.produced=0;invoke.status=31;
         const auto failure=callbacks.initialize(&output,input);
@@ -11970,6 +11979,7 @@ static void testRetainedVeboxFrames() {
         init[0]^=1;invoke.produced=0xb000;
         const auto original=callbacks.initialize(&output,input);
         assert(original.published && registry.lookup(image,0xb000).generation==original.ticket.generation);
+        assert(callbacks.withFrame(success.ticket,0xb000,frameUse)==5 && frameCalls==1);
         const auto alias=callbacks.initialize(&output,input);
         assert(alias.called && !alias.published && alias.status==5 && alias.nativeStatus==0);
         assert(!registry.lookup(image,0xb000).generation && callbacks.destroy(0xb000)==5);
