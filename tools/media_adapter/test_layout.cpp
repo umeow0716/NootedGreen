@@ -8010,12 +8010,31 @@ int main() {
                         assert(resources.withReleaseReservation([](auto) noexcept {assert(false);return 0;})==5);
                         return admission;
                     };
-                    using ReleaseContext=TglOwnedVpLineReleaseContext<decltype(resources),decltype(retire)>;
-                    using Release=TglOwnedVpSfcCallbacks<TglOwnedVpSfcResolve<ReleaseContext>>;
-                    ReleaseContext releaseContext(vp,resources,retire);
-                    TglOwnedVpSfcScopedContext<ReleaseContext> releaseScope(vp.bytes.data(),releaseContext);
-                    assert(releaseScope.bound());Release::freeResources(vp.bytes.data());
-                    assert(releaseContext.status()==admission);
+                    using AllocateEntry=int(*)(void*) noexcept;
+                    using ReleaseEntry=void(*)(void*) noexcept;
+                    AllocateEntry expiredAllocate=nullptr;ReleaseEntry expiredRelease=nullptr;
+                    assert(tglWithOwnedVpResourceEntries(wrongVp,resources,state,retire,
+                        [](void*,AllocateEntry,ReleaseEntry) noexcept {assert(false);return 0;})==5);
+                    assert(state.withPublishedVpParameters(vp,[](const uint8_t*) noexcept {
+                        assert(false);return 0;
+                    })==5);
+                    assert(state.withParameters([&](const uint8_t* packet) noexcept {
+                        const uintptr_t address=reinterpret_cast<uintptr_t>(packet);
+                        std::memcpy(vp.bytes.data()+0x938,&address,8);
+                        const int result=tglWithOwnedVpResourceEntries(vp,resources,state,retire,
+                            [&](void* child,AllocateEntry allocate,ReleaseEntry release) noexcept {
+                                expiredAllocate=allocate;expiredRelease=release;
+                                assert(child==vp.bytes.data() && allocate(child)==0);
+                                assert(tglWithOwnedVpResourceEntries(vp,resources,state,retire,
+                                    [](void*,AllocateEntry,ReleaseEntry) noexcept {
+                                        assert(false);return 0;
+                                    })==5);
+                                release(child);return 0; // void failure must propagate outside
+                            });
+                        std::memset(vp.bytes.data()+0x938,0,8);return result;
+                    })==admission);
+                    assert(expiredAllocate(vp.bytes.data())==5);
+                    const auto before=admissions;expiredRelease(vp.bytes.data());assert(admissions==before);
                     if(admission) assert(run(0)==0);
                 }
                 assert(admissions==2 && run(0)==5);

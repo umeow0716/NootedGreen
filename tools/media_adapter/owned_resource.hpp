@@ -10352,7 +10352,40 @@ public:
         });
     }
     int status() const noexcept {return status_;}
+    bool attempted() const noexcept {return attempted_;}
 };
+
+// Assemble the real VP58/VP30 entries on one authenticated resource owner.
+// VP30 remains void; propagate its separate retirement failure to the scoped
+// consumer instead of silently accepting a failed native-shaped cleanup.
+// This does not publish a complete vtable or qualify GPU retirement itself.
+template<class Lines,class State,class Retire> class TglOwnedVpResourceContext {
+    TglOwnedVpLineAllocationContext<Lines,State> allocation_;
+    TglOwnedVpLineReleaseContext<Lines,Retire> release_;
+public:
+    TglOwnedVpResourceContext(TglOwnedVpSfcCallerStorage& vp,Lines& lines,State& state,
+        Retire& retire) noexcept:allocation_(vp,lines,state),release_(vp,lines,retire){}
+    bool owns(void* child) const noexcept {return allocation_.owns(child);}
+    int allocate() noexcept {return allocation_.allocate();}
+    void freeResources() noexcept {release_.freeResources();}
+    int releaseResult() const noexcept {return release_.attempted()?release_.status():0;}
+};
+template<class Lines,class State,class Retire,class Use>
+int tglWithOwnedVpResourceEntries(TglOwnedVpSfcCallerStorage& vp,Lines& lines,State& state,
+    Retire& retire,Use use) noexcept {
+    if(!lines.boundToVp(vp)) return 5;
+    using Context=TglOwnedVpResourceContext<Lines,State,Retire>;
+    using Resolve=TglOwnedVpSfcResolve<Context>;
+    using Allocate=TglOwnedVpLineAllocationCallback<Resolve>;
+    using Release=TglOwnedVpSfcCallbacks<Resolve>;
+    Context context(vp,lines,state,retire);void* child=vp.bytes.data();
+    TglOwnedVpSfcScopedContext<Context> scope(child,context);
+    if(!scope.bound()) return 5;
+    static_assert(noexcept(use(child,&Allocate::allocate,&Release::freeResources)),
+        "VP resource-entry consumer ABI");
+    const int result=use(child,&Allocate::allocate,&Release::freeResources);
+    return result?result:context.releaseResult();
+}
 
 // Exact ICL donor1e052d..1e0566 callback ABI. Its target57ba0 is a three-arg
 // constant-zero stub, NOT a TGL surface-info entry or metadata proof. A TGL
