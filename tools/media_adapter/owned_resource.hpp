@@ -9013,6 +9013,7 @@ template<class StateBackend,class AvsBackend> class TglOwnedVpSfcCpuGraph {
     TglOwnedSfcStateParameters<StateBackend> state_;
     TglOwnedSfcAvsParameters<AvsBackend> avs_;
     bool ready_=false,busy_=false,resourcesBound_=false;
+    uint64_t generation_=0;
     struct SendContext {
         void* child;
         bool owns(void* candidate) const noexcept {return candidate==child;}
@@ -9028,6 +9029,7 @@ template<class StateBackend,class AvsBackend> class TglOwnedVpSfcCpuGraph {
     }
     void clear() noexcept {
         ready_=false;
+        if(generation_!=UINT64_MAX) ++generation_;
         // Donor 1ddb7e..1ddba1 releases AVS before state+938. Use our
         // tracked owners, never its native free/deleting destructor.
         avs_.reset();state_.reset();storage_.bytes.fill(0);
@@ -9043,10 +9045,11 @@ public:
     TglOwnedVpSfcCpuGraph& operator=(const TglOwnedVpSfcCpuGraph&)=delete;
     ~TglOwnedVpSfcCpuGraph(){reset();}
     bool ownsStorage(const void* child) const noexcept {return ready_ && child==storage_.bytes.data();}
+    uint64_t generation() const noexcept {return generation_;}
     template<class Binding,class Read>
     bool initialize(uintptr_t os,uintptr_t renderHal,uintptr_t mhw,
         const Binding& binding,Read read,uint32_t channel,uintptr_t performance) {
-        if(busy_ || resourcesBound_) return false;
+        if(busy_ || resourcesBound_ || generation_==UINT64_MAX) return false;
         Guard guard(busy_);clear();
         if(!storage_.initializeBorrowed(os,renderHal,mhw,binding,read) ||
            !avs_.initialize()) {
@@ -11306,13 +11309,14 @@ template<class Graph,class Lines,class Retire,class ReleaseAllocation>
 class TglOwnedVpLifetimeContext {
     Graph& graph_;Lines& lines_;Retire& retire_;ReleaseAllocation& release_;
     void* child_;
+    uint64_t generation_=0;
     bool valid_=false,busy_=false,reentered_=false,destroyed_=false,deleted_=false;
     int status_=5;
 public:
     TglOwnedVpLifetimeContext(void* child,Graph& graph,Lines& lines,Retire& retire,
         ReleaseAllocation& release) noexcept
         :graph_(graph),lines_(lines),retire_(retire),release_(release),child_(child),
-         valid_(child && graph.ownsStorage(child)) {}
+         generation_(graph.generation()),valid_(child && graph.ownsStorage(child)) {}
     TglOwnedVpLifetimeContext(const TglOwnedVpLifetimeContext&)=delete;
     TglOwnedVpLifetimeContext& operator=(const TglOwnedVpLifetimeContext&)=delete;
     bool owns(void* child) const noexcept {return valid_ && child && child==child_ && !deleted_;}
@@ -11320,7 +11324,8 @@ public:
         static_assert(noexcept(release_(child_)) &&
             std::is_same_v<decltype(release_(child_)),void>,"owned VP allocation release ABI");
         if(busy_) {reentered_=true;status_=5;return;}
-        if(!valid_ || deleted_ || (destroyed_ && !deleting)) {status_=5;return;}
+        if(!valid_ || deleted_ || graph_.generation()!=generation_ ||
+           (destroyed_ && !deleting)) {status_=5;return;}
         busy_=true;
         struct Unlock {bool& busy;~Unlock(){busy=false;}} unlock{busy_};
         reentered_=false;
@@ -11332,6 +11337,7 @@ public:
             });
             if(status_) return;
             destroyed_=true;
+            generation_=graph_.generation();
         }
         if(deleting) {deleted_=true;release_(child_);}
         status_=reentered_?5:0;

@@ -7385,7 +7385,7 @@ static void testSfcLineBufferOwnership() {
         uint64_t deniedHandle=0;
         bool descriptorOnly=false;
         void* owner=nullptr;void(*reenter)(void*)=nullptr;
-        std::array<uint32_t,16> widths{};
+        std::array<uint32_t,32> widths{};
         int allocate(Storage& s,const TglResourceKey& key) noexcept {
             if(reenter) reenter(owner);
             assert(key.height==1 && key.format==0x3d && key.tile==4 &&
@@ -7546,6 +7546,26 @@ static void testSfcLineBufferOwnership() {
             Lifecycle::deletingDestroy(lifecycleChild);
             assert(lifetime.status()==0 && lifetime.deleted() && deleted==1 && retired==5);
             Lifecycle::deletingDestroy(lifecycleChild);assert(deleted==1 && retired==5);
+            assert(!backend.live && !stateCpu.live && !avsCpu.live);
+            assert(graph.initialize(0x1000,0x2000,0x3000,binding,noRead,1,0));
+            assert(buffers.ensure(1080,720)==0);
+            Lifetime stale(lifecycleChild,graph,buffers,retire,releaseAllocation);
+            const auto oldGeneration=graph.generation();
+            buffers.reset();
+            assert(graph.initialize(0x1000,0x2000,0x3000,binding,noRead,1,0));
+            assert(graph.generation()!=oldGeneration && buffers.ensure(1080,720)==0);
+            stale.destroy(true);
+            assert(stale.status()==5 && retired==5 && deleted==1 && backend.live==2);
+            Lifetime nonDeleting(lifecycleChild,graph,buffers,retire,releaseAllocation);
+            nonDeleting.destroy(false);
+            assert(nonDeleting.status()==0 && retired==6 && deleted==1);
+            assert(graph.initialize(0x1000,0x2000,0x3000,binding,noRead,1,0));
+            assert(buffers.ensure(1080,720)==0);
+            nonDeleting.destroy(true);
+            assert(nonDeleting.status()==5 && retired==6 && deleted==1 && backend.live==2);
+            Lifetime finalLifetime(lifecycleChild,graph,buffers,retire,releaseAllocation);
+            finalLifetime.destroy(true);
+            assert(finalLifetime.status()==0 && retired==7 && deleted==2);
             assert(!backend.live && !stateCpu.live && !avsCpu.live);
             assert(graph.withView(false,[](void*) noexcept -> int {assert(false);return 0;})==5);
         }
