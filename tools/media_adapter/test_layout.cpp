@@ -1149,6 +1149,39 @@ static void testTrackedCpuOwner() {
         };
         using Context=TglOwnedVeboxAllocationContext<Owner,decltype(transaction)>;
         Context context(owner,transaction,&child);
+        {
+            struct Bound {void* child=nullptr;bool owns(void* p) const noexcept {return p==child;}};
+            struct Life:Bound {};struct Admit:Bound {};struct Allocate:Bound {};struct Mode:Bound {};
+            int child=0,other=0;Life life;Admit admit;Allocate allocate;Mode mode;
+            life.child=admit.child=allocate.child=mode.child=&child;
+            unsigned calls=0;
+            auto use=[&](auto& l,auto& a,auto& r,auto& m) noexcept {
+                ++calls;
+                using L=std::remove_reference_t<decltype(l)>;
+                using A=std::remove_reference_t<decltype(a)>;
+                using R=std::remove_reference_t<decltype(r)>;
+                using M=std::remove_reference_t<decltype(m)>;
+                assert(L::get(&child)==&life && A::get(&child)==&admit &&
+                    R::get(&child)==&allocate && M::get(&child)==&mode);
+                assert(tglWithOwnedVeboxAuxiliaryScopes(&child,life,admit,allocate,mode,
+                    [](auto&,auto&,auto&,auto&) noexcept -> int {assert(false);return 0;})==5);
+                return 31;
+            };
+            assert(tglWithOwnedVeboxAuxiliaryScopes(&other,life,admit,allocate,mode,use)==5 && !calls);
+            // A later binding failure must unwind earlier bindings, preserving
+            // the caller's already-active scope rather than clearing it.
+            {TglOwnedVeboxScopedContext<Mode> occupied(&child,mode);
+                assert(occupied.bound());
+                assert(tglWithOwnedVeboxAuxiliaryScopes(&child,life,admit,allocate,mode,use)==5 && !calls);
+                assert(TglOwnedVeboxScopedContext<Mode>::get(&child)==&mode);
+                assert(!TglOwnedVeboxScopedContext<Life>::get(&child));
+            }
+            assert(tglWithOwnedVeboxAuxiliaryScopes(&child,life,admit,allocate,mode,use)==31 && calls==1);
+            assert(!TglOwnedVeboxScopedContext<Life>::get(&child) &&
+                !TglOwnedVeboxScopedContext<Admit>::get(&child) &&
+                !TglOwnedVeboxScopedContext<Allocate>::get(&child) &&
+                !TglOwnedVeboxScopedContext<Mode>::get(&child));
+        }
         using Resolve=TglOwnedVeboxScopedContext<Context>;
         using Callback=TglOwnedVeboxAllocationCallbacks<Resolve>;
         std::array<uintptr_t,20> hooks{};hooks.fill(7);
