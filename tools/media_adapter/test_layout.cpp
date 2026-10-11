@@ -8351,6 +8351,20 @@ static void testVpSfcCpuGraph() {
     assert(currentLifetime.status()==0 && retirementCalls==1 && allocationReleases==1);
     assert(!state.live && !avs.live);
     assert(initialize());
+    const auto neverAdmission=[](void*,const auto&) noexcept {assert(false);return 0;};
+    assert(graph.withLeasedAdmissionEntries(lifetimeChild,read,neverAdmission)==5);
+    assert(graph.prepare([&](auto& storage,auto&,auto&) noexcept {
+        assert(graph.withLeasedAdmissionEntries(storage.bytes.data(),read,neverAdmission)==5);
+        return 0;
+    })==0); // Busy alone is insufficient: state938 must actually be leased/published.
+    assert(graph.withView(false,[&](void* child) noexcept {
+        assert(graph.withLeasedAdmissionEntries(&binding,read,neverAdmission)==5);
+        return graph.withLeasedAdmissionEntries(child,read,[&](void* admitted,const auto& entries) noexcept {
+            assert(admitted==child && entries.compressionFormat(child,0x19));
+            assert(graph.withLeasedAdmissionEntries(child,read,neverAdmission)==5);
+            return 31;
+        });
+    })==31);
     TglOwnedVpFlatDispatchTable dispatch,emptyDispatch;
     assert(dispatch.build(testVpPresenceEntries(),[](uintptr_t,size_t) noexcept {return true;}));
     assert(graph.withLeasedFlatDispatch(lifetimeChild,dispatch,never)==5);
@@ -10946,7 +10960,8 @@ int main() {
                 std::memcpy(stateCpu.bytes.data()+0x4c,&scaled,4);
                 for(int cleanup:{31,0}) {
                     admission=cleanup;
-                    assert(graph.withAssemblyView(false,assemblyRead,lines,retire,
+                    assert(graph.withView(false,[&](void* leasedChild) noexcept {
+                      return graph.withLeasedAssemblyEntries(leasedChild,assemblyRead,lines,retire,
                         [&](void* child,const auto& entries) noexcept {
                             expiredAssembly=entries;expiredAssemblyAllocate=entries.allocate;
                             expiredAssemblyRelease=entries.freeResources;
@@ -10962,8 +10977,13 @@ int main() {
                             assert(backends[0].allocations && backends[1].allocations);
                             assert(graph.withAssemblyView(false,assemblyRead,lines,retire,
                                 [](void*,const auto&) noexcept {assert(false);return 0;})==5);
+                            assert(graph.withLeasedAssemblyEntries(child,assemblyRead,lines,retire,
+                                [](void*,const auto&) noexcept {assert(false);return 0;})==5);
+                            assert(graph.withLeasedAssemblyEntries(&fail,assemblyRead,lines,retire,
+                                [](void*,const auto&) noexcept {assert(false);return 0;})==5);
                             entries.freeResources(child);return 0;
-                        })==cleanup);
+                        });
+                    })==cleanup);
                     assert(!expiredAssembly.finalAdmission(storage->bytes.data(),1,
                         reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x2000)));
                     assert(expiredAssemblyAllocate(storage->bytes.data())==5);

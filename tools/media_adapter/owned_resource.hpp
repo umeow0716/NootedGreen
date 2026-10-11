@@ -9688,8 +9688,9 @@ public:
     // Admission entries share the real graph/state/AVS lease. In particular,
     // lifecycle teardown cannot retire this storage while a callback is live.
     template<class Read,class Use>
-    int withAdmissionView(bool avsEnabled,Read& read,Use use) noexcept {
-        return withView(avsEnabled,[&](void* child) noexcept {
+    int withLeasedAdmissionEntries(void* child,Read& read,Use use) noexcept {
+        if(!ready_ || !busy_ || child!=storage_.bytes.data()) return 5;
+        return state_.withPublishedVpParameters(storage_,[&](const uint8_t*) noexcept {
             return tglWithOwnedVpAdmissionEntries(storage_,read,
                 [&](void* admitted,const TglOwnedVpAdmissionEntries& entries) noexcept {
                     if(admitted!=child) return 5;
@@ -9698,11 +9699,18 @@ public:
                 });
         });
     }
+    template<class Read,class Use>
+    int withAdmissionView(bool avsEnabled,Read& read,Use use) noexcept {
+        return withView(avsEnabled,[&](void* child) noexcept {
+            return withLeasedAdmissionEntries(child,read,use);
+        });
+    }
     // Expose the qualified admission/resource subset as typed slots on the
     // same child. Other slots remain NULL; this is not a publishable vtable.
     template<class Read,class Lines,class Retire,class Use>
-    int withAssemblyView(bool avsEnabled,Read& read,Lines& lines,Retire& retire,Use use) noexcept {
-        return withView(avsEnabled,[&](void* child) noexcept {
+    int withLeasedAssemblyEntries(void* child,Read& read,Lines& lines,Retire& retire,Use use) noexcept {
+        if(!ready_ || !busy_ || child!=storage_.bytes.data()) return 5;
+        return state_.withPublishedVpParameters(storage_,[&](const uint8_t*) noexcept {
             return tglWithOwnedVpAssemblyEntries(storage_,read,lines,state_,retire,
                 [&](void* assembled,const TglOwnedVpAdmissionEntries& entries,
                     auto allocate,auto release) noexcept {
@@ -9714,6 +9722,12 @@ public:
                         "leased VP assembly ABI");
                     return use(child,static_cast<const TglOwnedVpEntrySet&>(bindings));
                 });
+        });
+    }
+    template<class Read,class Lines,class Retire,class Use>
+    int withAssemblyView(bool avsEnabled,Read& read,Lines& lines,Retire& retire,Use use) noexcept {
+        return withView(avsEnabled,[&](void* child) noexcept {
+            return withLeasedAssemblyEntries(child,read,lines,retire,use);
         });
     }
     template<class Read,class Lines,class Retire,class Use>
