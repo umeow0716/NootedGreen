@@ -17612,6 +17612,55 @@ public:
     }
 };
 
+// Construct only under a live physical/context scope. The enclosing retained
+// pool, not this storage, supplies completion/retirement authority. Sidecars
+// pin the registry owner; that owner must retain the native context and image.
+template<class Registry,class Api,class CfApi,size_t Capacity=64>
+class TglNativeVeboxContextFrontendFrameStorage {
+    using Sidecars=TglNativeContextSurfaceOwners<Registry,Capacity>;
+    using Owner=typename Sidecars::Owner;
+    using Frontend=TglNativeVeboxFrontendFrameStorage<Api,Owner,Owner,CfApi>;
+    Sidecars sidecars_;
+    Frontend* frame_=nullptr;
+public:
+    template<class Read,class Admit,class Writable,class... Args>
+    TglNativeVeboxContextFrontendFrameStorage(Registry& registry,uintptr_t image,
+        uintptr_t physical,uint64_t generation,const TglNativeContextInputRoots& roots,
+        Read read,Admit admit,Writable writable,const TglNativeResourceBinding& binding,
+        uint64_t pageSize,const TglNativeBufferFillBinding& fill,uintptr_t source,
+        uintptr_t target,CfApi cf,uintptr_t resourceType,uintptr_t surfaceType,
+        Args&&... args) noexcept {
+        bool sourceRoot=false,targetRoot=false;
+        for(auto p:roots.sources) sourceRoot=sourceRoot || (p && p==source);
+        for(auto p:roots.targets) targetRoot=targetRoot || (p && p==target);
+        if(!sourceRoot || !targetRoot) return;
+        if(!sidecars_.initialize(registry,image,physical,generation,roots,read,admit,writable)) return;
+        auto* sourceOwner=sidecars_.resolve(source);
+        auto* targetOwner=sidecars_.resolve(target);
+        if(!sourceOwner || !targetOwner) return;
+        frame_=new(std::nothrow) Frontend(binding,pageSize,fill,source,
+            [this](uintptr_t p) noexcept {return sidecars_.resolve(p);},*targetOwner,
+            cf,resourceType,surfaceType,std::forward<Args>(args)...);
+        if(frame_ && !frame_->surfacesReady()) {delete frame_;frame_=nullptr;}
+    }
+    TglNativeVeboxContextFrontendFrameStorage(const TglNativeVeboxContextFrontendFrameStorage&)=delete;
+    TglNativeVeboxContextFrontendFrameStorage& operator=(const TglNativeVeboxContextFrontendFrameStorage&)=delete;
+    ~TglNativeVeboxContextFrontendFrameStorage() noexcept {
+        // Release shell borrows and typed CF pins BEFORE sidecar context pins.
+        delete frame_;
+    }
+    bool surfacesReady() const noexcept {return frame_ && frame_->surfacesReady();}
+    template<class Consume>
+    TglOwnedVeboxCommandTransactionResult withCommandFrame(
+        const TglNativeOuterSurfaceRoles& roles,size_t sourceIndex,size_t targetIndex,
+        uintptr_t child,uintptr_t execution,uintptr_t renderHal,uintptr_t sku,
+        Consume consume) noexcept {
+        if(!surfacesReady()) return {};
+        return frame_->withCommandFrame(roles,sourceIndex,targetIndex,child,execution,
+            renderHal,sku,consume);
+    }
+};
+
 // CPU backing for one retained native frame. Command storage owns the shared
 // monotonic retention latch; VP resources are destroyed before that storage.
 // This is not the complete renderer: enclosing ownership still retains native

@@ -7581,12 +7581,6 @@ static void testNativeResourceBoundary() {
                                                             }
                                                         return false;
                                                     };
-                                                    using Sidecars=TglNativeContextSurfaceOwners<decltype(contexts),3>;
-                                                    Sidecars sidecars;
-                                                    assert(sidecars.initialize(contexts,0x1000,0x8000,7,roots,readShell,admitShell,admitShell));
-                                                    auto& sourceOwner=*sidecars.resolve(roots.sources[0]);
-                                                    auto& targetOwner=*sidecars.resolve(roots.targets[0]);
-                                                    auto& historyOwner=*sidecars.resolve(historyAddress);
                                                     std::array<unsigned,6> refs{};
                                                     struct Cf {
                                                         std::array<unsigned,6>& refs;
@@ -7594,35 +7588,42 @@ static void testNativeResourceBoundary() {
                                                         bool retain(uintptr_t h) noexcept {assert(h==1 || h==5);++refs[h];return true;}
                                                         void release(uintptr_t h) noexcept {assert(refs[h]);--refs[h];}
                                                     };
-                                                    using FrontendFrame=TglNativeVeboxFrontendFrameStorage<FrameStmmApi,
-                                                        typename Sidecars::Owner,typename Sidecars::Owner,Cf>;
+                                                    using FrontendFrame=TglNativeVeboxContextFrontendFrameStorage<decltype(contexts),FrameStmmApi,Cf,3>;
+                                                    {
+                                                        FrontendFrame wrongTarget(contexts,0x1000,0x8000,7,roots,
+                                                            readShell,admitShell,admitShell,nativeBinding,4096,nativeFill,
+                                                            roots.sources[0],historyAddress,Cf{refs},11,12);
+                                                        assert(!wrongTarget.surfacesReady() && !refs[1] && !refs[5]);
+                                                        auto denied=[](uintptr_t,size_t) noexcept {return false;};
+                                                        FrontendFrame deniedShell(contexts,0x1000,0x8000,7,roots,
+                                                            readShell,admitShell,denied,nativeBinding,4096,nativeFill,
+                                                            roots.sources[0],roots.targets[0],Cf{refs},11,12);
+                                                        assert(!deniedShell.surfacesReady() && !refs[1] && !refs[5]);
+                                                    }
                                                     TglOwnedVeboxRetainedFrames<FrontendFrame,1> pool;
-                                                    const auto ticket=pool.create(nativeBinding,uint64_t{4096},nativeFill,
-                                                        reinterpret_cast<uintptr_t>(&source),
-                                                        [&](uintptr_t p) noexcept {return sidecars.resolve(p);},
-                                                        targetOwner,Cf{refs},uintptr_t{11},uintptr_t{12});
+                                                    const auto ticket=pool.create(contexts,uintptr_t{0x1000},uintptr_t{0x8000},uint64_t{7},roots,
+                                                        readShell,admitShell,admitShell,nativeBinding,uint64_t{4096},nativeFill,
+                                                        roots.sources[0],roots.targets[0],Cf{refs},uintptr_t{11},uintptr_t{12});
                                                     TglNativeOuterSurfaceRoles roles;roles.sourceCount=1;roles.targetCount=1;
                                                     roles.sources[0]=reinterpret_cast<uintptr_t>(&source);
                                                     roles.targets[0]=reinterpret_cast<uintptr_t>(&target);
                                                     const auto r=pool.run(ticket,[&](auto& frame) noexcept {
-                                                        assert(frame.surfacesReady() && sourceOwner.hasSurfaceLease(source) && targetOwner.hasSurfaceLease(target));
-                                                        assert(historyOwner.hasSurfaceLease(history) && refs[1]==3 && refs[5]==3);
+                                                        assert(frame.surfacesReady() && refs[1]==3 && refs[5]==3);
                                                         return frame.withCommandFrame(roles,0,0,1,2,3,4,
                                                             [&](auto&,auto&,auto& leases) noexcept {
                                                                 assert(&leases.source==&source && leases.target==&target);
                                                                 return TglOwnedVeboxCommandTransactionResult{31,31,true,false};
                                                             });
                                                     });
-                                                    assert(r.acquired && sourceOwner.hasSurfaceLease(source) && targetOwner.hasSurfaceLease(target));
+                                                    assert(r.acquired && refs[1]==3 && refs[5]==3);
                                                     assert(contexts.reconcileSuccessfulRemoval(0x1000,0x8000,7,removed)==5 && !contextDeaths);
                                                     assert(pool.retire(ticket,[](const auto&,bool,const auto&) noexcept {return 31;})==31);
-                                                    assert(historyOwner.hasSurfaceLease(history) && refs[1]==3 && refs[5]==3);
+                                                    assert(refs[1]==3 && refs[5]==3);
                                                     // CPU retirement fixture only; NOT a native fence certificate.
                                                     assert(pool.retire(ticket,[](const auto&,bool pending,const auto&) noexcept {
                                                         assert(pending);return 0;
                                                     })==0);
-                                                    assert(!sourceOwner.hasSurfaceLease(source) && !targetOwner.hasSurfaceLease(target) &&
-                                                        !historyOwner.hasSurfaceLease(history) && !refs[1] && !refs[5]);
+                                                    assert(!refs[1] && !refs[5]);
                                                     }
                                                     // CPU authority models successful native removal after all sidecars drop.
                                                     assert(contexts.reconcileSuccessfulRemoval(0x1000,0x8000,7,removed)==0 && contextDeaths==1);
