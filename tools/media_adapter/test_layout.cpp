@@ -1219,9 +1219,12 @@ static void testTrackedCpuOwner() {
         assert(retaining.allocate()==5 && retainedCalls==1 && !retainedUnwinds);
     }
     {
-        struct Execution {bool leased=true;
+        struct Execution {bool leased=true;unsigned dndiCommits=0;TglOwnedDndiState dndiState;
             bool hasExecutionLease(uintptr_t p) const noexcept {return leased && p==9;}
-            bool commitDndi(uintptr_t,const TglOwnedDndiState&) noexcept {return false;}
+            int commitDndi(uintptr_t p,const TglOwnedDndiState& value) noexcept {
+                if(!leased || p!=9+0x850) return 5;
+                ++dndiCommits;dndiState=value;return 0;
+            }
         } execution;
         struct Child {
             bool leased=true;unsigned writes=0;TglCscCoefficients saved;
@@ -1290,10 +1293,18 @@ static void testTrackedCpuOwner() {
         assert(!Resolve::get(nativeChild));
         bool nativeFixture=false,roleFixture=false;
         std::array<uint8_t,0xa10> reportBytes{};
+        alignas(4) std::array<uint8_t,0x30> nativeLuma{};
+        alignas(4) std::array<uint8_t,0x24> nativeChroma{};
         constexpr uintptr_t nativeImage=0x100000000,nativeOs=0x8000,privateTable=0x9000;
         auto noRead=[&](uintptr_t address,void* output,size_t bytes) noexcept {
             if(!nativeFixture) return false;
             if(roleFixture) {
+                if(address==reinterpret_cast<uintptr_t>(nativeLuma.data()) && bytes==nativeLuma.size()) {
+                    std::memcpy(output,nativeLuma.data(),bytes);return true;
+                }
+                if(address==reinterpret_cast<uintptr_t>(nativeChroma.data()) && bytes==nativeChroma.size()) {
+                    std::memcpy(output,nativeChroma.data(),bytes);return true;
+                }
                 if(address>=reportAddress && address-reportAddress<reportBytes.size() &&
                     bytes<=reportBytes.size()-(address-reportAddress)) {
                     std::memcpy(output,reportBytes.data()+(address-reportAddress),bytes);return true;
@@ -1330,7 +1341,11 @@ static void testTrackedCpuOwner() {
             if(!anchor) return false;
             std::memcpy(output,anchor->data(),16);return true;
         };
-        auto noPackets=[](uintptr_t,size_t,uintptr_t,size_t) noexcept {return false;};
+        auto noPackets=[&](uintptr_t luma,size_t ln,uintptr_t chroma,size_t cn) noexcept {
+            return roleFixture && luma==reinterpret_cast<uintptr_t>(nativeLuma.data()) &&
+                ln==nativeLuma.size() && chroma==reinterpret_cast<uintptr_t>(nativeChroma.data()) &&
+                cn==nativeChroma.size();
+        };
         int(*expiredKernel)(void*,int32_t) noexcept=nullptr;
         assert(tglWithOwnedVeboxFrameProducers(frame,child,execution,0,noRead,noPackets,produce,
             [&](void* object,auto& producer) noexcept {
@@ -1511,6 +1526,15 @@ static void testTrackedCpuOwner() {
                     ++nativeBuilds;
                     using Di=int(*)(void*,bool,void*) noexcept;
                     if(fullPackets) {
+                        using Kernel=int(*)(void*,int32_t) noexcept;
+                        using Csc=void(*)(void*,void*,void*) noexcept;
+                        using Dndi=int(*)(void*,void*,void*,void*) noexcept;
+                        const int kernelStatus=reinterpret_cast<Kernel>(child.installed[5])(object,3);
+                        if(kernelStatus) return kernelStatus;
+                        reinterpret_cast<Csc>(child.installed[14])(object,&source,&target);
+                        const int dndiStatus=reinterpret_cast<Dndi>(child.installed[17])(
+                            object,&source,nativeLuma.data(),nativeChroma.data());
+                        if(dndiStatus) return dndiStatus;
                         const int surfaceStatus=reinterpret_cast<Di>(child.installed[7])(object,false,surfacePacket);
                         if(surfaceStatus) return surfaceStatus;
                         const int stateStatus=reinterpret_cast<Di>(child.installed[18])(object,false,statePacket);
@@ -1551,10 +1575,12 @@ static void testTrackedCpuOwner() {
             ActualFrame consistentFrame{{},leases,consistentInput,false,noRead,admitSurface,
                 admitDi,registerResource,control};
             TglOwnedVeboxFrameRetention consistentRetention;
+            const unsigned cscBefore=child.writes;
             auto consistentConsumer=makeActualConsumer(consistentRetention);
             const auto positive=consistentConsumer(consistentFrame);
             assert(positive.status==0 && positive.builderStatus==0 && positive.acquired && positive.writtenBack);
             assert(consistentRetention() && registrations==3 && surfaceAdmissions==4);
+            assert(child.writes==cscBefore+1 && execution.dndiCommits==1);
             assert(surfaces.surfaces[0]==&source && surfaces.surfaces[1]==&target &&
                 surfaces.surfaces[2]==&inactiveStmm && surfaces.surfaces[3]==&inactiveFfdn);
             TglOwnedStateInputs expectedState{};
@@ -1580,8 +1606,23 @@ static void testTrackedCpuOwner() {
             const auto occupied=occupiedConsumer(occupiedFrame);
             assert(occupied.status==5 && occupied.builderStatus==5 && occupied.acquired && occupied.writtenBack);
             assert(occupiedRetention() && registrations==3 && surfaceAdmissions==8);
+            assert(child.writes==cscBefore+2 && execution.dndiCommits==2);
             assert(std::memcmp(&state,&savedState,sizeof(state))==0);
             assert(nativeSetups==4 && nativeBuilds==4 && nativeWritebacks==4);
+            assert(!ActualProducers::Resolve::get(nativeChild));
+            // Void CSC cannot return admission failure to native directly;
+            // the shared pass must block DNDI and all downstream producers.
+            allowed=false;
+            ActualFrame deniedCscFrame{{},leases,consistentInput,false,noRead,admitSurface,
+                admitDi,registerResource,control};
+            TglOwnedVeboxFrameRetention deniedCscRetention;
+            auto deniedCscConsumer=makeActualConsumer(deniedCscRetention);
+            const auto deniedCsc=deniedCscConsumer(deniedCscFrame);
+            assert(deniedCsc.status==5 && deniedCsc.builderStatus==5 &&
+                deniedCsc.acquired && deniedCsc.writtenBack && deniedCscRetention());
+            assert(child.writes==cscBefore+2 && execution.dndiCommits==2 &&
+                registrations==3 && surfaceAdmissions==8);
+            assert(nativeSetups==5 && nativeBuilds==5 && nativeWritebacks==5);
             assert(!ActualProducers::Resolve::get(nativeChild));
         }
     }
