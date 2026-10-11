@@ -5829,7 +5829,7 @@ inline bool tglPrepareOwnedVpAdmissionRegions(const TglOwnedVpRegionInput& in,
     TglOwnedVpRegions& output) noexcept {
     auto extent=[](float first,float last,uint32_t& value) noexcept {
         const float delta=last-first;
-        if(!std::isfinite(first) || !std::isfinite(last) || first<0 ||
+        if(!std::isfinite(first) || !std::isfinite(last) ||
             !std::isfinite(delta) || delta<0 || double(delta)>double(UINT32_MAX)) return false;
         value=static_cast<uint32_t>(delta);return true;
     };
@@ -5869,6 +5869,82 @@ inline bool tglPrepareOwnedVpAdmission(const TglOwnedVpExtentAdmission& policy,
     candidate.source40=input.destinationLeft;candidate.source44=input.destinationTop;
     return tglPrepareOwnedVpExtentAdmission(candidate,output);
 }
+
+// Slot18 leased acquisition. The enclosing owner authenticates/pins MHW,
+// RenderHal, settings and both surfaces. Eligibility uses native20's reordered
+// (settings,source,target) arguments; dimensions is the qualified owned50
+// width-first adjuster, not an arbitrary native function pointer.
+template<class Read,class Eligible,class Dimensions>
+bool tglReadOwnedVpExtentAdmission(const TglOwnedVpSfcCallerStorage& vp,
+    uintptr_t source,uintptr_t target,uintptr_t settings,Read read,
+    Eligible eligible,Dimensions dimensions,TglOwnedVpScale& output) noexcept {
+    static_assert(noexcept(read(uintptr_t{},nullptr,size_t{})) &&
+        noexcept(eligible(settings,source,target)) &&
+        noexcept(dimensions(source,std::declval<uint32_t&>(),std::declval<uint32_t&>())),
+        "VP18 leased acquisition ABI");
+    uintptr_t mhw=0,renderHal=0;
+    std::memcpy(&mhw,vp.bytes.data()+0x20,8);std::memcpy(&renderHal,vp.bytes.data()+0x18,8);
+    if(!source || source>UINTPTR_MAX-0x294 || !target || target>UINTPTR_MAX-0x134 ||
+        !settings || settings>UINTPTR_MAX-0xe8 || !mhw || mhw>UINTPTR_MAX-0x2c ||
+        !renderHal || renderHal>UINTPTR_MAX-0x88) return false;
+    std::array<uint32_t,4> limits{};
+    if(!read(mhw+0x1c,limits.data(),sizeof(limits)) || !eligible(settings,source,target)) return false;
+    TglOwnedVpRegionInput input;
+    if(!dimensions(source,input.frameWidth,input.frameHeight)) return false;
+    std::array<float,8> rectangles{};
+    if(!read(source+0x30,rectangles.data(),sizeof(rectangles)) ||
+        !read(source+0x290,&input.rotation,4) ||
+        !read(target+0xd8,&input.targetWidth,4) || !read(target+0xdc,&input.targetHeight,4) ||
+        !read(target+0x130,&input.targetFormat,4)) return false;
+    input.sourceLeft=rectangles[0];input.sourceTop=rectangles[1];
+    input.sourceRight=rectangles[2];input.sourceBottom=rectangles[3];
+    input.destinationLeft=rectangles[4];input.destinationTop=rectangles[5];
+    input.destinationRight=rectangles[6];input.destinationBottom=rectangles[7];
+    TglOwnedVpExtentAdmission policy;
+    // 1ddf72/7c/86/90 -> 1de11a..1de1c0: maxima precede minima.
+    policy.maxWidth=limits[0];policy.maxHeight=limits[1];
+    policy.minWidth=limits[2];policy.minHeight=limits[3];
+    uintptr_t workaround=0;uint64_t flags=0,available=0;
+    if(!read(renderHal+0x80,&workaround,8) || !workaround || workaround>UINTPTR_MAX-0xac ||
+        !read(workaround+0xa4,&flags,8) || !read(source+0x124,&policy.source124,4) ||
+        !read(target+0xe4,&policy.targetE4,4) || !read(settings+0xe0,&available,8)) return false;
+    policy.workaroundA4Bit25=(flags>>25)&1;
+    if(available) {
+        TglOwnedVpDestinationRect targetRect;
+        if(!read(target+0x40,&targetRect,sizeof(targetRect))) return false;
+        const TglOwnedVpDestinationRect sourceRect{rectangles[4],rectangles[5],rectangles[6],rectangles[7]};
+        policy.conditionalSource=tglOwnedVpConditionalSource(true,sourceRect,targetRect);
+    }
+    return tglPrepareOwnedVpAdmission(policy,input,output);
+}
+
+template<class Read,class Eligible,class Dimensions> class TglOwnedVpExtentContext {
+    TglOwnedVpSfcCallerStorage& vp_;Read& read_;Eligible& eligible_;Dimensions& dimensions_;
+    bool busy_=false;
+public:
+    TglOwnedVpExtentContext(TglOwnedVpSfcCallerStorage& vp,Read& read,
+        Eligible& eligible,Dimensions& dimensions) noexcept
+        :vp_(vp),read_(read),eligible_(eligible),dimensions_(dimensions){}
+    bool owns(void* child) const noexcept {return child==vp_.bytes.data();}
+    int admit(void* source,void* target,void* settings) noexcept {
+        if(busy_) return 0;
+        busy_=true;TglOwnedVpScale scale;
+        const bool admitted=tglReadOwnedVpExtentAdmission(vp_,reinterpret_cast<uintptr_t>(source),
+            reinterpret_cast<uintptr_t>(target),reinterpret_cast<uintptr_t>(settings),
+            read_,eligible_,dimensions_,scale);
+        busy_=false;return admitted?1:0;
+    }
+};
+template<class Resolve> struct TglOwnedVpExtentCallback {
+    static int admit(void* child,void* source,void* target,void* settings) noexcept {
+        static_assert(noexcept(Resolve{}(child)),"VP18 scoped resolver ABI");
+        auto* context=Resolve{}(child);
+        static_assert(noexcept(context->owns(child)) && noexcept(context->admit(source,target,settings)) &&
+            std::is_same_v<decltype(context->admit(source,target,settings)),int>,"VP18 DWORD return ABI");
+        return context && source && target && settings && context->owns(child) ?
+            context->admit(source,target,settings):0;
+    }
+};
 
 // Bounded slot28 geometry acquisition. Read authorizes every surface/MHW
 // span under leases held through the caller's complete preparation/use scope.

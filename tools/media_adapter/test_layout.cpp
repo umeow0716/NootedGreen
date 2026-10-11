@@ -7552,6 +7552,77 @@ static void testSfcFrameFields() {
 
 int main() {
     {
+        TglOwnedVpSfcCallerStorage vp;
+        std::array<uint8_t,0x294> source{};std::array<uint8_t,0x134> target{};
+        std::array<uint8_t,0xe8> settings{};std::array<uint8_t,0x2c> mhw{};
+        std::array<uint8_t,0x88> hal{};std::array<uint8_t,0xac> workaround{};
+        const uintptr_t mhwAddress=0x4000,halAddress=0x5000,waAddress=0x6000;
+        std::memcpy(vp.bytes.data()+0x20,&mhwAddress,8);std::memcpy(vp.bytes.data()+0x18,&halAddress,8);
+        std::memcpy(hal.data()+0x80,&waAddress,8);
+        const std::array<uint32_t,4> limits{100,100,1,1};
+        std::memcpy(mhw.data()+0x1c,limits.data(),sizeof(limits));
+        const std::array<float,8> rectangles{0.5f,0.5f,10.75f,10.75f,0.5f,0.5f,30.75f,30.75f};
+        std::memcpy(source.data()+0x30,rectangles.data(),sizeof(rectangles));
+        std::memcpy(target.data()+0x40,rectangles.data()+4,16);
+        const uint32_t targetSize=8;std::memcpy(target.data()+0xd8,&targetSize,4);
+        std::memcpy(target.data()+0xdc,&targetSize,4);target[0xe4]=1;settings[0xe0]=1;
+        const std::array<uintptr_t,6> bases{0x1000,0x2000,0x3000,0x4000,0x5000,0x6000};
+        const std::array<size_t,6> sizes{source.size(),target.size(),settings.size(),mhw.size(),hal.size(),workaround.size()};
+        const std::array<const uint8_t*,6> bytes{source.data(),target.data(),settings.data(),mhw.data(),hal.data(),workaround.data()};
+        unsigned reads=0,deny=0,eligibleCalls=0,dimensionCalls=0;bool admit=true,dimensionOk=true;
+        using ExtentEntry=int(*)(void*,void*,void*,void*) noexcept;
+        ExtentEntry reenter=nullptr;
+        auto read=[&](uintptr_t address,void* out,size_t count) noexcept {
+            ++reads;if(deny==reads) return false;
+            for(size_t i=0;i<bases.size();++i) if(address>=bases[i] && address-bases[i]<=sizes[i] &&
+                count<=sizes[i]-(address-bases[i])) {
+                std::memcpy(out,bytes[i]+address-bases[i],count);return true;
+            }
+            assert(false);return false;
+        };
+        auto eligible=[&](uintptr_t a,uintptr_t b,uintptr_t c) noexcept {
+            ++eligibleCalls;assert(a==0x3000 && b==0x1000 && c==0x2000 && reads==1);
+            if(reenter) assert(reenter(vp.bytes.data(),reinterpret_cast<void*>(b),
+                reinterpret_cast<void*>(c),reinterpret_cast<void*>(a))==0);
+            return admit;
+        };
+        auto dimensions=[&](uintptr_t s,uint32_t& width,uint32_t& height) noexcept {
+            ++dimensionCalls;assert(s==0x1000 && eligibleCalls);width=height=100;return dimensionOk;
+        };
+        TglOwnedVpScale scale;
+        auto run=[&]() noexcept {
+            reads=eligibleCalls=dimensionCalls=0;
+            return tglReadOwnedVpExtentAdmission(vp,0x1000,0x2000,0x3000,read,eligible,dimensions,scale);
+        };
+        assert(run() && scale.at928==0.8f && scale.at92c==0.8f);
+        const unsigned completeReads=reads;const auto saved=scale;
+        for(deny=1;deny<=completeReads;++deny) {
+            assert(!run() && scale.at928==saved.at928 && scale.at92c==saved.at92c);
+        }
+        deny=0;admit=false;assert(!run() && reads==1 && !dimensionCalls);
+        admit=true;dimensionOk=false;assert(!run() && reads==1 && dimensionCalls==1);
+        reads=0;
+        assert(!tglReadOwnedVpExtentAdmission(vp,UINTPTR_MAX,0x2000,0x3000,read,eligible,dimensions,scale) && !reads);
+        using Context=TglOwnedVpExtentContext<decltype(read),decltype(eligible),decltype(dimensions)>;
+        using Callback=TglOwnedVpExtentCallback<TglOwnedVpSfcResolve<Context>>;
+        const ExtentEntry entry=&Callback::admit;
+        auto invoke=[&](void* child) noexcept {
+            return entry(child,reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x2000),
+                reinterpret_cast<void*>(0x3000));
+        };
+        assert(invoke(vp.bytes.data())==0 && !reads);
+        Context context(vp,read,eligible,dimensions);
+        {
+            TglOwnedVpSfcScopedContext<Context> scope(vp.bytes.data(),context);assert(scope.bound());
+            dimensionOk=true;reads=eligibleCalls=dimensionCalls=0;reenter=entry;
+            assert(invoke(nullptr)==0 && !reads);
+            assert(invoke(vp.bytes.data())==1 && eligibleCalls==1 && dimensionCalls==1);
+            reads=eligibleCalls=dimensionCalls=0;admit=false;
+            assert(invoke(vp.bytes.data())==0 && reads==1 && !dimensionCalls);
+        }
+        assert(invoke(vp.bytes.data())==0);
+    }
+    {
         TglOwnedVpRegionInput in;
         in.frameWidth=in.frameHeight=100;in.targetWidth=in.targetHeight=8;
         in.sourceLeft=in.sourceTop=0.5f;in.sourceRight=in.sourceBottom=10.75f;
@@ -7574,6 +7645,9 @@ int main() {
         assert(!tglPrepareOwnedVpAdmission(policy,in,scale));
         in.fieldInput=true;
         assert(tglPrepareOwnedVpAdmissionRegions(in,admission) && admission.sourceWidth==10);
+        in.sourceLeft=-0.5f;
+        assert(tglPrepareOwnedVpAdmissionRegions(in,admission) && admission.sourceWidth==11);
+        in.sourceLeft=0.5f;
         for(uint32_t format:{0xdu,0x10u,0x19u}) {
             in.targetFormat=format;in.sourceRight=in.sourceBottom=11.75f;
             in.destinationRight=in.destinationBottom=31.75f;
