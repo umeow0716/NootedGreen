@@ -2712,6 +2712,36 @@ static bool executionReleaseFixture(uintptr_t base,uintptr_t p,void* out,size_t 
     return false;
 }
 static void testVeboxRenderBinding() {
+    {
+        std::array<uint8_t,0x2a0> current{},previous{};
+        assert(tglVeboxMode0NativeSkipPredicate(1,current,previous));
+        for(size_t offset : {size_t(0x29a),size_t(0x299)}) {
+            for(unsigned a=0;a<256;++a) for(unsigned b=0;b<256;++b) {
+                current[offset]=uint8_t(a);previous[offset]=uint8_t(b);
+                assert(tglVeboxMode0NativeSkipPredicate(1,current,previous)==((a&1)==(b&1)));
+            }
+            current[offset]=previous[offset]=0;
+        }
+        for(size_t offset : {size_t(0x29c),size_t(0xd8),size_t(0xdc),size_t(0xe0)}) {
+            for(size_t byte=0;byte<4;++byte) for(unsigned bit=0;bit<8;++bit) {
+                current[offset+byte]=uint8_t(1u<<bit);
+                assert(!tglVeboxMode0NativeSkipPredicate(1,current,previous));
+                assert(tglVeboxMode0NativeSkipPredicate(0xfe,current,previous));
+                previous[offset+byte]=current[offset+byte];
+                assert(tglVeboxMode0NativeSkipPredicate(0xff,current,previous));
+                current[offset+byte]=previous[offset+byte]=0;
+            }
+        }
+        previous[0x29b]=0xff;
+        assert(tglVeboxMode0NativeSkipPredicate(1,current,previous));
+        previous[0xe3]=0x80;
+        assert(tglVeboxMode0AllocationDecision(1,0,1,[&]() noexcept {
+            return tglVeboxMode0NativeSkipPredicate(1,current,previous);
+        })==TglVeboxMode0Allocation::Required);
+        assert(tglVeboxMode0AllocationDecision(1,0,1,[&]() noexcept {
+            return tglVeboxMode0NativeSkipPredicate(0,current,previous);
+        })==TglVeboxMode0Allocation::Reuse);
+    }
     for(unsigned report=0;report<256;++report)
       for(unsigned source=0;source<256;++source)
         for(uint32_t pipe : {0u,1u,2u,0x10001u}) for(bool skip : {false,true}) {

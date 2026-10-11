@@ -2037,6 +2037,22 @@ bool tglQueryNativeTwoPassCsc(const TglTwoPassCscBinding& binding,
 }
 
 enum class TglVeboxMode0Allocation { Required, Reuse };
+// Native12bf00: owned-prefix data comparison only. Callers retain both surface
+// leases; equality is NOT proof that their native backing or GPU work retired.
+template<size_t N,size_t M>
+bool tglVeboxMode0NativeSkipPredicate(uint8_t report0b,
+    const std::array<uint8_t,N>& current,const std::array<uint8_t,M>& previous) noexcept {
+    static_assert(N>=0x2a0 && M>=0x2a0,"complete native comparison fields");
+    if(!(report0b&1)) return true;
+    if((current[0x29a]&1)!=(previous[0x29a]&1) ||
+       (current[0x299]&1)!=(previous[0x299]&1)) return false;
+    for(size_t offset : {size_t(0x29c),size_t(0xd8),size_t(0xdc),size_t(0xe0)}) {
+        uint32_t a=0,b=0;
+        std::memcpy(&a,current.data()+offset,4);std::memcpy(&b,previous.data()+offset,4);
+        if(a!=b) return false;
+    }
+    return true;
+}
 // Exact12c14b..12c1cd decision only. Native tests bit0 of report09/source86,
 // full DWORD reporta0c==1, then calls12bf00. Preserve that short-circuit order:
 // the skip predicate can inspect native DN/history state and is not an eager
