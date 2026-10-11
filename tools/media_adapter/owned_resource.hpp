@@ -16653,6 +16653,19 @@ public:
                 return result?result:adopt(address,original);
             });
     }
+    template<size_t Capacity=16,class Adopt,class Native=TglNativeBackingAllocateInvoker>
+    int createContextsAndAdoptBatch(typename Registry::Ticket ticket,uintptr_t physical,
+        const void* input,Adopt adopt,Native native=Native{}) noexcept {
+        using Batch=TglNativeCreatedContextBatch<Capacity>;
+        static_assert(noexcept(adopt(uintptr_t{},std::declval<const Batch&>())) &&
+            std::is_same_v<decltype(adopt(uintptr_t{},std::declval<const Batch&>())),int>);
+        return createContextsAndAdopt(ticket,physical,input,
+            [&](uintptr_t address,const void* original) noexcept -> int {
+                Batch batch;
+                if(!batch.capture(reinterpret_cast<uintptr_t>(original),read_)) return 5;
+                return adopt(address,static_cast<const Batch&>(batch));
+            },native);
+    }
     template<class Use> int withContextRemoval(typename Registry::Ticket ticket,
         uintptr_t physical,Use use) noexcept {
         if(!physical || !valid()) return 5;

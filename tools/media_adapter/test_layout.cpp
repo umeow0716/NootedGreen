@@ -12114,6 +12114,8 @@ static void testRetainedVeboxFrames() {
         const std::array<uint8_t,7> clear{0x48,0xc7,7,0,0,0,0};
         const std::array<uint8_t,16> free{0x55,0x48,0x89,0xe5,0x41,0x56,0x53,0x41,0xbe,5,0,0,0,0x48,0x85,0xff};
         void* output=nullptr;bool readable=true,qualified=true;
+        uintptr_t batchDescriptor=0x44000,batchOutputs=0x45000;
+        uint32_t batchCount=2;std::array<uintptr_t,2> batchContexts{0x46000,0x47000};
         std::array<uint8_t,20> creationAnchor{0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,
             0x41,0x55,0x41,0x54,0x53,0x48,0x81,0xec,0xe8,0x01,0x00,0x00};
         std::array<uint8_t,17> backingAllocateAnchor{0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,
@@ -12129,6 +12131,11 @@ static void testRetainedVeboxFrames() {
             else if(address==image+0x155d1 && size==backingAllocateAnchor.size()) std::memcpy(bytes,backingAllocateAnchor.data(),size);
             else if(address==image+0x1580c && size==backingReleaseAnchor.size()) std::memcpy(bytes,backingReleaseAnchor.data(),size);
             else if(address==image+0x13e43 && size==creationAnchor.size()) std::memcpy(bytes,creationAnchor.data(),size);
+            else if(address==0x3300 && size==8) std::memcpy(bytes,&batchDescriptor,8);
+            else if(address==0x44000 && size==4) std::memcpy(bytes,&batchCount,4);
+            else if(address==0x44010 && size==8) std::memcpy(bytes,&batchOutputs,8);
+            else if((address==0x45000 || address==0x45008) && size==8)
+                std::memcpy(bytes,&batchContexts[(address-0x45000)/8],8);
             else return false;
             return true;
         };
@@ -12350,6 +12357,21 @@ static void testRetainedVeboxFrames() {
         assert(nativeAdoptions==1 && failedAdoptions==1 && !creationRegistry.lookup(image,0xd000).generation);
         assert(adoptionCallbacks.createContextsAndAdopt(adoptionPhysical.ticket,0xd000,input,rejectAdoption,nativeSuccess)==5);
         assert(nativeAdoptions==1 && failedAdoptions==1);
+        invoke.produced=0xe000;
+        TglOwnedPhysicalCallbackCoordinator batchCallbacks(creationRegistry,binding,read,qualify,executable,invoke);
+        const auto batchPhysical=batchCallbacks.initialize(&output,input);assert(batchPhysical.published);
+        unsigned adoptedBatches=0;
+        auto adoptBatch=[&](uintptr_t physical,const TglNativeCreatedContextBatch<2>& batch) noexcept -> int {
+            ++adoptedBatches;assert(physical==0xe000 && batch.valid && batch.count==2 && batch.contexts==batchContexts);
+            assert(batchCallbacks.withEventObservation(batchPhysical.ticket,physical,
+                []() noexcept -> int {assert(false);return 0;})==5);
+            return 0;
+        };
+        assert(batchCallbacks.createContextsAndAdoptBatch<2>(batchPhysical.ticket,0xe000,input,adoptBatch,nativeSuccess)==0);
+        assert(adoptedBatches==1 && nativeAdoptions==2);
+        batchContexts[1]=batchContexts[0];
+        assert(batchCallbacks.createContextsAndAdoptBatch<2>(batchPhysical.ticket,0xe000,input,adoptBatch,nativeSuccess)==5);
+        assert(adoptedBatches==1 && nativeAdoptions==3 && !creationRegistry.lookup(image,0xe000).generation);
     }
 }
 
