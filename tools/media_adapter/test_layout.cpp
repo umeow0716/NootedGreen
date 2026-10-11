@@ -18,6 +18,8 @@ template<class R,class... Args> struct TestVpPresenceStub<R(*)(Args...) noexcept
 struct TestVeboxChildLease {
     void* child;
     bool busy=false;
+    uint64_t generation=1;
+    uint64_t allocationGeneration() const noexcept {return generation;}
     bool hasPrivateChildLease(uintptr_t p) const noexcept {
         return busy && reinterpret_cast<uintptr_t>(child)==p;
     }
@@ -1053,6 +1055,8 @@ static void testTrackedCpuOwner() {
         int child=0,foreign=0;
         struct Owner {
             void* child;bool leased=true;
+            uint64_t generation=1;
+            uint64_t allocationGeneration() const noexcept {return generation;}
             bool hasPrivateChildLease(uintptr_t p) const noexcept {
                 return leased && p==reinterpret_cast<uintptr_t>(child);
             }
@@ -1120,6 +1124,15 @@ static void testTrackedCpuOwner() {
             result=0;assert(UnwindCallbacks::allocate(&child)==0 && unwinds==2);
         }
         assert(UnwindCallbacks::allocate(&child)==5 && unwinds==2);
+        owner.leased=true;
+        const auto oldCalls=calls;
+        ++owner.generation; // Same address and live lease, different allocation.
+        assert(!context.owns(&child) && !owned.owns(&child));
+        assert(context.allocate()==5 && owned.allocate()==5);
+        assert(calls==oldCalls && unwinds==2);
+        Unwinding replacement(owner,transaction,&child,unwind);
+        assert(replacement.owns(&child));
+        result=0;assert(replacement.allocate()==0 && calls==oldCalls+1 && unwinds==2);
     }
     {
         struct Frame {TglOwnedVeboxProducerPass pass;} frame;

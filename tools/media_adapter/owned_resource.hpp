@@ -8635,15 +8635,18 @@ class TglOwnedVeboxAllocationContext {
     Owner& owner_;
     Allocate& allocate_;
     void* child_;
+    uint64_t generation_;
     Unwind unwind_;
     bool busy_=false;
 public:
     TglOwnedVeboxAllocationContext(Owner& owner,Allocate& allocate,void* child,Unwind unwind={}) noexcept
-        :owner_(owner),allocate_(allocate),child_(child),unwind_(unwind) {}
+        :owner_(owner),allocate_(allocate),child_(child),
+         generation_(owner.allocationGeneration()),unwind_(unwind) {}
     TglOwnedVeboxAllocationContext(const TglOwnedVeboxAllocationContext&)=delete;
     TglOwnedVeboxAllocationContext& operator=(const TglOwnedVeboxAllocationContext&)=delete;
     bool owns(void* child) const noexcept {
-        return child && child==child_ &&
+        return child && child==child_ && generation_ &&
+            generation_==owner_.allocationGeneration() &&
             owner_.hasPrivateChildLease(reinterpret_cast<uintptr_t>(child));
     }
     int allocate() noexcept {
