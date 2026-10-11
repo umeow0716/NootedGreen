@@ -981,6 +981,11 @@ bool tglVeboxDiSurfaceSupported(uintptr_t surface, Read read) {
 // hasDi/isBob/hasLut must come from qualified owned parameters; this does NOT
 // assign a Darwin DIMode enum or guess a native LUT pointer offset. These are
 // rejection predicates only, never generic-format or GPU admission proof.
+// Cross-reference: media-driver73c8d14 vp_common_defs.h490 has BOB=0/ADI=1;
+// vphal_render_vebox_base.cpp2401 enables ADI || (SFC && BOB). Tahoe
+// 12a993/12a9a7/12a9d9 implements mode2 || (pipe1 && mode1), supporting
+// a Darwin 2/1 semantic mapping, NOT numeric enum reuse. An owned DI producer
+// and its lifetime/identity qualification are still required before wiring.
 constexpr bool tglRejectGen12BobOutput(bool hasDi,bool isBob,uint32_t height,uint32_t format) noexcept {
     const bool planar420=format==0x19 || format==0x52 || format==0x53;
     return hasDi && isBob && (((height&3) && planar420) || !tglVeboxDiFormatSupported(format));
