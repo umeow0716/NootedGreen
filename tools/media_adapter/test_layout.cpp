@@ -45,6 +45,24 @@ struct TestFeatureExecutionOwner {
 };
 static void testTrackedCpuOwner() {
     {
+        std::array<uint8_t,11> nativePass{};nativePass[7]=0x73;nativePass[9]=0x91;
+        TglVeboxAdmissionPassByte pass(nativePass[8]);
+        TglVeboxAdmissionStagesInput input;
+        input.prefix={true,true,true,true,1,uint64_t{1}<<12,1920,1080};input.pipe=0;
+        std::array<uint8_t,0xd48> execution{};
+        auto reset=[]() noexcept {return true;};
+        auto setup=[](auto&) noexcept {};
+        auto query=[]() noexcept {return true;};
+        auto feature=[&](auto&) noexcept {nativePass[8]=0x80;};
+        auto sfc=[](auto&) noexcept {return false;};
+        assert(tglRunVeboxAdmissionStages(input,execution,pass,reset,setup,query,feature,sfc));
+        assert(nativePass[8]==0x80 && nativePass[7]==0x73 && nativePass[9]==0x91);
+        input.source124=2;
+        auto denied=[](auto& bytes) noexcept {bytes[0x18]=1;};
+        assert(!tglRunVeboxAdmissionStages(input,execution,pass,reset,setup,query,denied,sfc));
+        assert(nativePass[8]==1 && nativePass[7]==0x73 && nativePass[9]==0x91);
+    }
+    {
         std::array<uint8_t,0x1bc0> base{};
         std::array<uint8_t,0x140> params{};std::array<uint8_t,0x28> pass{};
         TglOwnedSurfaceStorage source{},target{};

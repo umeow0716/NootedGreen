@@ -6089,15 +6089,37 @@ struct TglVeboxAdmissionPrefixInput {
 // Missing dependencies leave pass untouched; fallback writes the whole byte1
 // just as native1fba35/1fba62/1fba89 (not OR with an old flag). Continue does
 // not clear prior pass state: execution reset/mode selection still follow.
-template<size_t N>
+// Only pass08 participates in this CPU policy. The enclosing authenticated
+// frame owns and pins this byte; no opaque pass object is copied or adopted.
+class TglVeboxAdmissionPassByte {
+    uint8_t& flags_;
+public:
+    explicit TglVeboxAdmissionPassByte(uint8_t& flags) noexcept:flags_(flags){}
+    TglVeboxAdmissionPassByte(const TglVeboxAdmissionPassByte&)=delete;
+    uint8_t& flags() noexcept {return flags_;}
+};
+inline uint8_t& tglAdmissionPassFlags(TglVeboxAdmissionPassByte& pass) noexcept {
+    return pass.flags();
+}
+template<size_t N> uint8_t& tglAdmissionPassFlags(std::array<uint8_t,N>& pass) noexcept {
+    static_assert(N>=9,"native admission requires pass08");return pass[8];
+}
+template<class Pass> struct TglAdmissionPassExtent;
+template<size_t N> struct TglAdmissionPassExtent<std::array<uint8_t,N>> {
+    static constexpr size_t value=N;
+};
+template<> struct TglAdmissionPassExtent<TglVeboxAdmissionPassByte> {
+    static constexpr size_t value=9;
+};
+template<class Pass>
 TglVeboxAdmissionPrefixResult tglPrepareVeboxAdmissionPrefix(
-    const TglVeboxAdmissionPrefixInput& input,std::array<uint8_t,N>& pass) noexcept {
-    static_assert(N>=9,"native admission requires pass08");
+    const TglVeboxAdmissionPrefixInput& input,Pass& pass) noexcept {
+    static_assert(TglAdmissionPassExtent<Pass>::value>=9,"native admission requires pass08");
     if(!input.os || !input.renderHal || !input.execution || !input.source)
         return TglVeboxAdmissionPrefixResult::MissingDependencies;
     if(!(input.params138&1) || !(input.sku0&(uint64_t(1)<<12)) ||
        input.sourceWidth<64 || input.sourceHeight<16) {
-        pass[8]=1;
+        tglAdmissionPassFlags(pass)=1;
         return TglVeboxAdmissionPrefixResult::CompositionFallback;
     }
     return TglVeboxAdmissionPrefixResult::Continue;
@@ -6125,14 +6147,14 @@ bool tglPublishVeboxAdmissionMode(Execution& execution,
 // forces pipe0 and composition fallback BEFORE the pipe1 VP+28 dispatch.
 // Other sample types preserve both values. Invalid owned pipe is rejected
 // without modifying either buffer; it is not silently converted to pipe0.
-template<class Execution,size_t P>
+template<class Execution,class Pass>
 bool tglApplyVeboxAdmissionSampleFallback(Execution& execution,
-    std::array<uint8_t,P>& pass,uint32_t source124,bool admitted) noexcept {
-    static_assert(TglAdmissionExecutionExtent<Execution>::value>=0xa10 && P>=9,"admission sample field extents");
+    Pass& pass,uint32_t source124,bool admitted) noexcept {
+    static_assert(TglAdmissionExecutionExtent<Execution>::value>=0xa10 && TglAdmissionPassExtent<Pass>::value>=9,"admission sample field extents");
     uint32_t pipe=0;std::memcpy(&pipe,execution.data()+0xa0c,4);
     if(pipe>2) return false;
     if(source124==2 && !admitted) {
-        pipe=0;std::memcpy(execution.data()+0xa0c,&pipe,4);pass[8]=1;
+        pipe=0;std::memcpy(execution.data()+0xa0c,&pipe,4);tglAdmissionPassFlags(pass)=1;
     }
     return true;
 }
@@ -6189,11 +6211,11 @@ bool tglReadLeasedVeboxAdmissionInputs(TglVeboxAdmissionStagesInput& output,
 // Qualified callbacks own reset/optional VP reset, history setup, platform
 // feature query, native170 and complete VP28+flag publication respectively.
 // All frame/report/parameter owners must remain leased across this call.
-template<class Execution,size_t P,class Reset,class Setup,class Query,class Feature,class Sfc>
+template<class Execution,class Pass,class Reset,class Setup,class Query,class Feature,class Sfc>
 bool tglRunVeboxAdmissionStages(const TglVeboxAdmissionStagesInput& input,
-    Execution& execution,std::array<uint8_t,P>& pass,
+    Execution& execution,Pass& pass,
     Reset reset,Setup setup,Query query,Feature feature,Sfc sfc) noexcept {
-    static_assert(TglAdmissionExecutionExtent<Execution>::value>=0xd2d && P>=9,"complete admission field extents");
+    static_assert(TglAdmissionExecutionExtent<Execution>::value>=0xd2d && TglAdmissionPassExtent<Pass>::value>=9,"complete admission field extents");
     static_assert(noexcept(reset()) && std::is_same_v<decltype(reset()),bool>,"checked reset ABI");
     static_assert(noexcept(query()) && std::is_same_v<decltype(query()),bool>,"feature query ABI");
     static_assert(noexcept(feature(execution)) &&
@@ -6219,7 +6241,7 @@ bool tglRunVeboxAdmissionStages(const TglVeboxAdmissionStagesInput& input,
         if(!sfc(execution)) return false;
         admitted=true;
     }
-    return tglVeboxAdmissionResult(input.prefix.params138,pass[8],admitted);
+    return tglVeboxAdmissionResult(input.prefix.params138,tglAdmissionPassFlags(pass),admitted);
 }
 
 // Donor primary794210+48=1fc230 is a surface-format feature query, NOT the
@@ -6227,9 +6249,9 @@ bool tglRunVeboxAdmissionStages(const TglVeboxAdmissionStagesInput& input,
 // independently pinned tglVeboxFormatSupported predicate, not ICL's list.
 // Enclosing feature frame pins this source and its backing through all stages.
 // Derive geometry/sample from that same shell rather than caller snapshots.
-template<class Execution,size_t P,class Reset,class Setup,class Feature,class Sfc>
+template<class Execution,class Pass,class Reset,class Setup,class Feature,class Sfc>
 bool tglRunOwnedVeboxSurfaceAdmissionStages(TglVeboxAdmissionStagesInput input,
-    const TglOwnedSurfaceStorage& source,Execution& execution,std::array<uint8_t,P>& pass,
+    const TglOwnedSurfaceStorage& source,Execution& execution,Pass& pass,
     Reset reset,Setup setup,Feature feature,Sfc sfc) noexcept {
     uint32_t format=0;
     std::memcpy(&input.prefix.sourceWidth,source.prefix.data()+0xd8,4);
