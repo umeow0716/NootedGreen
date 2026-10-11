@@ -7921,14 +7921,20 @@ std::array<uintptr_t,20> tglBindOwnedVeboxAdmissionHook(
 // Allocation precedes builder admission: do not gate it on producer-pass state.
 // Context owns the complete allocation transaction and must unwind failures
 // itself; this native caller returns errors without invoking FreeResources.
-template<class Owner,class Allocate> class TglOwnedVeboxAllocationContext {
+// Legacy callables already own their unwind. Explicit rollback callables must
+// retire only allocation-owned resources with GPU users excluded; this hook
+// must not be substituted with native selective FreeResources.
+struct TglOwnedVeboxNoAllocationUnwind {void operator()(void*) const noexcept {}};
+template<class Owner,class Allocate,class Unwind=TglOwnedVeboxNoAllocationUnwind>
+class TglOwnedVeboxAllocationContext {
     Owner& owner_;
     Allocate& allocate_;
     void* child_;
+    Unwind unwind_;
     bool busy_=false;
 public:
-    TglOwnedVeboxAllocationContext(Owner& owner,Allocate& allocate,void* child) noexcept
-        :owner_(owner),allocate_(allocate),child_(child) {}
+    TglOwnedVeboxAllocationContext(Owner& owner,Allocate& allocate,void* child,Unwind unwind={}) noexcept
+        :owner_(owner),allocate_(allocate),child_(child),unwind_(unwind) {}
     TglOwnedVeboxAllocationContext(const TglOwnedVeboxAllocationContext&)=delete;
     TglOwnedVeboxAllocationContext& operator=(const TglOwnedVeboxAllocationContext&)=delete;
     bool owns(void* child) const noexcept {
@@ -7938,10 +7944,13 @@ public:
     int allocate() noexcept {
         static_assert(noexcept(allocate_(child_)) &&
             std::is_same_v<decltype(allocate_(child_)),int>,"native allocation status ABI");
+        static_assert(noexcept(unwind_(child_)) &&
+            std::is_same_v<decltype(unwind_(child_)),void>,"allocation unwind ABI");
         if(busy_ || !owns(child_)) return 5;
         busy_=true;
         struct Unlock {bool& busy;~Unlock(){busy=false;}} unlock{busy_};
         const int result=allocate_(child_);
+        if(result) unwind_(child_);
         return owns(child_) ? result : 5;
     }
 };

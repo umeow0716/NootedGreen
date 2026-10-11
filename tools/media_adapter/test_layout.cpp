@@ -1051,6 +1051,20 @@ static void testTrackedCpuOwner() {
             assert(allocate(&child)==5 && calls==3);
         }
         assert(allocate(&child)==5 && calls==3);
+        owner.leased=true;invalidate=false;reenter=nullptr;
+        unsigned unwinds=0;
+        int(*cleanupReenter)(void*) noexcept=nullptr;void* cleanupState=nullptr;
+        auto unwind=[&](void* actual) noexcept {
+            assert(actual==&child && owner.leased);++unwinds;
+            assert(cleanupReenter(cleanupState)==5);
+        };
+        using Unwinding=TglOwnedVeboxAllocationContext<Owner,decltype(transaction),decltype(unwind)>;
+        Unwinding owned(owner,transaction,&child,unwind);
+        cleanupState=&owned;
+        cleanupReenter=+[](void* p) noexcept {return static_cast<Unwinding*>(p)->allocate();};
+        result=31;assert(owned.allocate()==31 && unwinds==1);
+        result=0;assert(owned.allocate()==0 && unwinds==1);
+        owner.leased=false;assert(owned.allocate()==5 && unwinds==1);
     }
     {
         struct Frame {TglOwnedVeboxProducerPass pass;} frame;
