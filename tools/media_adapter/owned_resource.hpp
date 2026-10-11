@@ -11110,6 +11110,44 @@ int tglRunCapturedVeboxAllocationWithSelection(Owner& input,ChildOwner& childOwn
             return ffdn(c,e,s,capturedSelection);
         },rectangle,stmm,statistics,unwind);
 }
+// Continue inside the FFDi producer's pinned output scope. Defer unwind until
+// that producer has returned, so cleanup cannot reset still-leased outputs.
+// The producer invokes next exactly once, including its secondary-only edge.
+template<class Owner,class ChildOwner,class ExecutionOwner,class Read,class FfdiScope,
+    class Ffdn,class Rectangle,class Stmm,class Statistics,class Unwind=TglOwnedVeboxFrameNoUnwind>
+int tglRunCapturedVeboxAllocationInFfdiScope(Owner& input,ChildOwner& childOwner,
+    ExecutionOwner& reportOwner,void* child,uintptr_t report,const TglOwnedSurfaceStorage& source,
+    Read read,FfdiScope ffdi,Ffdn ffdn,Rectangle rectangle,Stmm stmm,Statistics statistics,
+    Unwind unwind={}) noexcept {
+    return tglRunCapturedVeboxAllocation(input,childOwner,reportOwner,child,report,source,
+        [&](void* c,uintptr_t e,const auto& s) noexcept -> int {
+            TglOwnedFfdiCompressionSelection selection{};
+            bool entered=false;int downstream=5;
+            auto next=[&]() noexcept -> int {
+                if(entered) {downstream=5;return 5;}
+                entered=true;
+                downstream=tglRunCapturedVeboxAllocationWithSelection(input,childOwner,reportOwner,c,e,s,read,
+                    [&](void*,uintptr_t,const auto&,auto& output) noexcept -> int {
+                        output=selection;return 0;
+                    },ffdn,rectangle,stmm,statistics);
+                return downstream;
+            };
+            static_assert(noexcept(ffdi(c,e,s,selection,next)) &&
+                std::is_same_v<decltype(ffdi(c,e,s,selection,next)),int>,"scoped FFDi producer ABI");
+            int status=ffdi(c,e,s,selection,next);
+            // A producer must neither hide downstream failure nor skip the
+            // tail and claim success. Its own earlier error remains exact.
+            if(!status && (!entered || downstream)) status=entered?downstream:5;
+            if(!status) return 0;
+            return tglRunCapturedVeboxAllocation(input,childOwner,reportOwner,c,e,s,
+                [&](void* activeChild,uintptr_t activeReport,const auto& activeSource) noexcept -> int {
+                    static_assert(noexcept(unwind(activeChild,activeReport,activeSource)) &&
+                        std::is_same_v<decltype(unwind(activeChild,activeReport,activeSource)),void>,
+                        "scoped allocation unwind ABI");
+                    unwind(activeChild,activeReport,activeSource);return status;
+                });
+        });
+}
 // Native1f7f3c reads child.ba8 (old FFDN slot0), NOT source.c8 (previous
 // frame used by history copying). FFDi selection is the pre-loop producer's
 // value, not report13/14 which may remain unchanged when allocation is reused.

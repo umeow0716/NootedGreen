@@ -6647,6 +6647,48 @@ static void testNativeResourceBoundary() {
                                         },[&](void*,uintptr_t,const auto&) noexcept -> int {
                                             assert(order++==3);return 0;
                                         })==0 && order==4);
+                                    // The tail executes inside the real FFDi output lease;
+                                    // failure unwind executes only after that lease ends.
+                                    for(bool descriptor:{true,false}) for(int tailStatus:{0,-71}) {
+                                        reportBackend.bytes[0x12]=descriptor?1:0;reportBackend.bytes[0xb]=1;
+                                        reportBackend.bytes[0x13]=descriptor?1:0;
+                                        reportBackend.bytes[0xf]=1;
+                                        const TglOwnedSurfaceStorage* activeOutput=nullptr;
+                                        unsigned scopedTails=0,scopedUnwinds=0;
+                                        assert(tglRunCapturedVeboxAllocationInFfdiScope(owner,childOwner,reportOwner,
+                                            actualChild,report,source,read,
+                                            [&](void*,uintptr_t,const auto&,auto& selection,auto next) noexcept -> int {
+                                                return tglRunCapturedFfdiFrame(frameTargets,backedTargets,owner,&owner,
+                                                    &destination,childOwner,reportOwner,actualChild,report,source,read,
+                                                    noSfc,noSfc,noParameter,[](uint32_t) noexcept {return true;},
+                                                    [&](const auto&,const auto& outputs,size_t count,uint8_t,uint8_t) noexcept -> int {
+                                                        assert(count==2);activeOutput=outputs[0];
+                                                        const int status=next();activeOutput=nullptr;
+                                                        // A buggy producer hiding failure must not turn
+                                                        // the allocation transaction into success.
+                                                        return status==-71?0:status;
+                                                    },[&](const auto*,const auto*) noexcept -> int {
+                                                        assert(false);return 5;
+                                                    },{},&selection);
+                                            },[&](void*,uintptr_t,const auto&,const auto&) noexcept -> int {
+                                                if(descriptor) {
+                                                    assert(activeOutput==frameTargets[0].surfaceBinding());
+                                                    assert(!frameTargets[0].withDescriptor([](const auto&) noexcept {assert(false);}));
+                                                } else assert(activeOutput && firstBacking.hasSurfaceLease(*activeOutput));
+                                                return 0;
+                                            },unusedTail,[](void*,uintptr_t,const auto&) noexcept -> int {return 0;},
+                                            [&](void*,uintptr_t,const auto&) noexcept -> int {
+                                                assert(activeOutput);
+                                                if(descriptor) assert(!frameTargets[0].withDescriptor([](const auto&) noexcept {assert(false);}));
+                                                else assert(firstBacking.hasSurfaceLease(*activeOutput));
+                                                ++scopedTails;return tailStatus;
+                                            },[&](void*,uintptr_t,const auto&) noexcept {
+                                                assert(!activeOutput);
+                                                assert(frameTargets[0].withDescriptor([](const auto&) noexcept {}));
+                                                ++scopedUnwinds;
+                                            })==tailStatus);
+                                        assert(scopedTails==1 && scopedUnwinds==unsigned(tailStatus!=0));
+                                    }
                                     for(int metadataStatus:{23,0}) {
                                         reportBackend.bytes[8]=0xa5;reportBackend.bytes[9]=0x5a;
                                         reportBackend.bytes[0x15]=0xa5;reportBackend.bytes[0x16]=0x5a;
