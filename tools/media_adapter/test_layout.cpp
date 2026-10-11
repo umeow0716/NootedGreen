@@ -12165,6 +12165,7 @@ static void testRetainedVeboxFrames() {
         std::array<uint8_t,17> backingAllocateAnchor{0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,
             0x41,0x55,0x41,0x54,0x53,0x48,0x83,0xec,0x18};
         const std::array<uint8_t,11> backingReleaseAnchor{0x55,0x48,0x89,0xe5,0x53,0x50,0xff,0xce,0x83,0xfe,0x1a};
+        auto removalAnchor=backingAllocateAnchor;
         auto read=[&](uintptr_t address,void* bytes,size_t size) noexcept {
             if(address==reinterpret_cast<uintptr_t>(&output) && size==8) {
                 if(!readable) return false;std::memcpy(bytes,&output,8);return true;
@@ -12175,6 +12176,7 @@ static void testRetainedVeboxFrames() {
             else if(address==image+0x155d1 && size==backingAllocateAnchor.size()) std::memcpy(bytes,backingAllocateAnchor.data(),size);
             else if(address==image+0x1580c && size==backingReleaseAnchor.size()) std::memcpy(bytes,backingReleaseAnchor.data(),size);
             else if(address==image+0x13e43 && size==creationAnchor.size()) std::memcpy(bytes,creationAnchor.data(),size);
+            else if(address==image+0x15128 && size==removalAnchor.size()) std::memcpy(bytes,removalAnchor.data(),size);
             else if(address==0x3300 && size==8) std::memcpy(bytes,&batchDescriptor,8);
             else if(address==0x44000 && size==4) std::memcpy(bytes,&batchCount,4);
             else if(address==0x44010 && size==8) std::memcpy(bytes,&batchOutputs,8);
@@ -12188,7 +12190,7 @@ static void testRetainedVeboxFrames() {
             return (address==image+0x135d9 && size==16) || (address==image+0x135f6 && size==7) ||
                 (address==image+0x13c8c && size==16) ||
                 (address==image+0x155d1 && size==17) || (address==image+0x1580c && size==11) ||
-                (address==image+0x13e43 && size==20) ||
+                (address==image+0x13e43 && size==20) || (address==image+0x15128 && size==17) ||
                 ((address==image+0x132510 || address==image+0x131fa0) && size==1);
         };
         TglNativePhysicalCallbackBinding binding;assert(binding.resolve(image,read,qualify,executable));
@@ -12387,6 +12389,23 @@ static void testRetainedVeboxFrames() {
         };
         assert(creationCallbacks.createContextsAndAdopt(createdPhysical.ticket,0xc000,input,adopt,create)==0);
         assert(creationCalls==2 && adopted==1);
+        unsigned removals=0,reconciled=0;int removalResult=0;
+        auto remove=[&](uintptr_t entry,uintptr_t physical,const void* original) noexcept -> int {
+            ++removals;assert(entry==image+0x15128 && physical==0xc000 && original==input);
+            return removalResult;
+        };
+        auto reconcile=[&](uintptr_t physical,const void* original) noexcept -> int {
+            ++reconciled;assert(physical==0xc000 && original==input);
+            assert(creationCallbacks.withEventObservation(createdPhysical.ticket,physical,
+                []() noexcept -> int {assert(false);return 0;})==5);
+            return 0;
+        };
+        removalAnchor[0]^=1;
+        assert(creationCallbacks.removeContextsAndReconcile(createdPhysical.ticket,0xc000,input,reconcile,remove)==5);
+        assert(!removals && !reconciled && creationRegistry.lookup(image,0xc000).generation);
+        removalAnchor[0]^=1;
+        assert(creationCallbacks.removeContextsAndReconcile(createdPhysical.ticket,0xc000,input,reconcile,remove)==0);
+        assert(removals==1 && reconciled==1);
         creationResult=31;
         assert(creationCallbacks.createContextsAndAdopt(createdPhysical.ticket,0xc000,input,adopt,create)==31 && creationCalls==3 && adopted==1);
         assert(!creationRegistry.lookup(image,0xc000).generation);
@@ -12416,6 +12435,20 @@ static void testRetainedVeboxFrames() {
         batchContexts[1]=batchContexts[0];
         assert(batchCallbacks.createContextsAndAdoptBatch<2>(batchPhysical.ticket,0xe000,input,adoptBatch,nativeSuccess)==5);
         assert(adoptedBatches==1 && nativeAdoptions==3 && !creationRegistry.lookup(image,0xe000).generation);
+        static Registry removalRegistry;
+        invoke.produced=0xf000;
+        TglOwnedPhysicalCallbackCoordinator removalCallbacks(removalRegistry,binding,read,qualify,executable,invoke);
+        const auto removalPhysical=removalCallbacks.initialize(&output,input);assert(removalPhysical.published);
+        unsigned failedRemovals=0,forbiddenReconciliations=0;
+        auto partialRemoval=[&](uintptr_t entry,uintptr_t physical,const void* original) noexcept -> int {
+            ++failedRemovals;assert(entry==image+0x15128 && physical==0xf000 && original==input);return 31;
+        };
+        auto forbiddenReconcile=[&](uintptr_t,const void*) noexcept -> int {++forbiddenReconciliations;return 0;};
+        assert(removalCallbacks.removeContextsAndReconcile(removalPhysical.ticket,0xf000,input,
+            forbiddenReconcile,partialRemoval)==31);
+        assert(failedRemovals==1 && !forbiddenReconciliations && !removalRegistry.lookup(image,0xf000).generation);
+        assert(removalCallbacks.removeContextsAndReconcile(removalPhysical.ticket,0xf000,input,
+            forbiddenReconcile,partialRemoval)==5 && failedRemovals==1 && !forbiddenReconciliations);
     }
 }
 

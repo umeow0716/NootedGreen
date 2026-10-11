@@ -16700,6 +16700,28 @@ public:
                 return adopt(address,static_cast<const Batch&>(batch));
             },native);
     }
+    // Slot4 deletes through each context's ORIGINAL deleting-destructor slot.
+    // Keep all table/code/shell owners pinned throughout native invocation.
+    // Only aggregate native success permits reconciliation, still inside the
+    // same physical gate. Failure is partial teardown, never rollback proof.
+    template<class Reconcile,class Native=TglNativeBackingAllocateInvoker>
+    int removeContextsAndReconcile(typename Registry::Ticket ticket,uintptr_t physical,
+        const void* input,Reconcile reconcile,Native native=Native{}) noexcept {
+        static_assert(noexcept(native(uintptr_t{},uintptr_t{},input)) &&
+            std::is_same_v<decltype(native(uintptr_t{},uintptr_t{},input)),int>);
+        static_assert(noexcept(reconcile(uintptr_t{},input)) &&
+            std::is_same_v<decltype(reconcile(uintptr_t{},input)),int>);
+        constexpr std::array<uint8_t,17> anchor{0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,
+            0x41,0x55,0x41,0x54,0x53,0x48,0x83,0xec,0x18};
+        std::array<uint8_t,17> actual{};
+        if(!input || !valid() || binding_.image>UINTPTR_MAX-0x15128-anchor.size() ||
+            !executable_(binding_.image+0x15128,anchor.size()) ||
+            !read_(binding_.image+0x15128,actual.data(),actual.size()) || actual!=anchor) return 5;
+        return withContextRemoval(ticket,physical,[&]() noexcept -> int {
+            const int result=native(binding_.image+0x15128,physical,input);
+            return result?result:reconcile(physical,input);
+        });
+    }
     template<class Use> int withContextRemoval(typename Registry::Ticket ticket,
         uintptr_t physical,Use use) noexcept {
         if(!physical || !valid()) return 5;
