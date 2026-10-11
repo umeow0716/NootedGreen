@@ -1666,6 +1666,19 @@ static void testTrackedCpuOwner() {
             assert(target.resource==expected.resource);
         }
         source.resource.fill(0);source.tail.fill(0);
+        for(bool compressed:{false,true}) {
+            std::array<TglResourceKey,2> history{};
+            assert(tglPrepareOwnedStmmHistoryKeys(source,compressed,history));
+            const TglResourceKey expected{width,height,0x3d,1,compressed?1u:0u,compressed};
+            assert(history[0]==expected && history[1]==expected);
+            for(size_t offset:{size_t(0xd8),size_t(0xdc)}) {
+                uint32_t saved=0;std::memcpy(&saved,source.prefix.data()+offset,4);
+                std::memset(source.prefix.data()+offset,0,4);
+                assert(!tglPrepareOwnedStmmHistoryKeys(source,!compressed,history));
+                assert(history[0]==expected && history[1]==expected);
+                std::memcpy(source.prefix.data()+offset,&saved,4);
+            }
+        }
         for(uint32_t format:{0x19u,0x15u,0x3du}) {
             const uint32_t nativeTile=4;
             std::memcpy(source.prefix.data()+0x130,&format,4);

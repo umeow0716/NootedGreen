@@ -4713,6 +4713,18 @@ inline bool tglPrepareOwnedFfdnAllocationRequest(const TglOwnedSurfaceStorage& s
     return tglPrepareOwnedFfdiAllocationRequest(source,format,tile,
         {compression.compressed,compression.mode},output);
 }
+// ICL1f8436..1f84da: two inline STMM resources use source dimensions,
+// format3d/type1/tile1; the already-qualified child1ba9 supplies compression.
+// Produces requests only; neither feature admission nor backing/fence proof.
+inline bool tglPrepareOwnedStmmHistoryKeys(const TglOwnedSurfaceStorage& source,
+    bool child1ba9,std::array<TglResourceKey,2>& output) noexcept {
+    uint32_t width=0,height=0;
+    std::memcpy(&width,source.prefix.data()+0xd8,4);
+    std::memcpy(&height,source.prefix.data()+0xdc,4);
+    if(!width || !height) return false;
+    const TglResourceKey key{width,height,0x3d,1,child1ba9?1u:0u,child1ba9};
+    output={key,key};return true;
+}
 // Complete ICL1f7990 changed-FFDN branch. Source+200 in decompiler output
 // is decimal200 (0xc8), a previous-surface link, NOT resource field0x200.
 // No whole-shell copy or ownership transfer here. CopyPrevious still requires
