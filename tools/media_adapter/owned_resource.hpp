@@ -16589,6 +16589,12 @@ public:
             return native(binding_.image+0x1580c,physical,type);
         });
     }
+    // Context creation13e43 is a batch registry MUTATOR, not merely allocation:
+    // 14e88..14ef5 writes physical+78 entries and updates physical+70 before
+    // the batch finishes. Failure15072 reaches shared-user selector101 and does
+    // not prove the earlier published entries unchanged. Creation must use the
+    // same empty-frame/exclusive admission and ambiguous-failure quarantine as
+    // removal; never adopt output contexts only from aggregate success alone.
     template<class Use> int withContextRemoval(typename Registry::Ticket ticket,
         uintptr_t physical,Use use) noexcept {
         if(!physical || !valid()) return 5;
