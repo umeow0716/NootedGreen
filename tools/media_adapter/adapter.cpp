@@ -27,6 +27,14 @@ Library library;
 std::once_flag loadOnce;
 std::mutex registryLock;
 struct Entry {
+    // Factory table lifetime only, not the native physical context lifetime.
+    // Exact TGL table slots: [0] factory data, [1] 0x135d9 physical init
+    // (void **output, const void *input), [2] 0x13c8c physical destroy,
+    // [3] 0x13e43 context creation (physical context, input).
+    // Init publishes its 0xaac0 allocation only at 0x13ae9 after setup;
+    // context creation consumes physical+0x68/+0x78 at 0x13e78/0x13e83.
+    // Do not attach frame owners here: destroy can partially tear down the
+    // physical context before returning failure (0x13cc3..0x13cef).
     AvdDescriptorBridge bridge;
     std::array<uintptr_t, 17> callbacks{};
     void *native = nullptr;
