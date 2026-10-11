@@ -8152,6 +8152,17 @@ public:
         if(!ready_ || busy_) return 5;
         Guard guard(busy_);return prepare(storage_,state_,avs_);
     }
+    // Native pipe selection and subsequent VP28/40/48 must refer to this
+    // same initialized VP owner, not a separate admission-only storage shell.
+    // Selection itself does not acquire VP28 or allocate/submit resources.
+    template<class Read,class Policy>
+    uint32_t selectOutputPipe(Read& read,Policy& policy,void* source,void* target,
+        void* parameters,uint8_t& compNeeded) noexcept {
+        if(!ready_ || busy_) return UINT32_MAX;
+        Guard guard(busy_);
+        TglOwnedVpPipeSelector selector(storage_,read,policy,source,target,parameters);
+        return selector(compNeeded);
+    }
     template<class Use> int withView(bool avsEnabled,Use use) noexcept {
         static_assert(noexcept(use(static_cast<void*>(nullptr))),"CPU graph view ABI");
         if(!ready_ || busy_) return 5;

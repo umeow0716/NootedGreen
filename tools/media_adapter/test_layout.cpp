@@ -8820,6 +8820,30 @@ int main() {
             auto noRead=+[](uintptr_t,void*,size_t) noexcept {return false;};
             TglOwnedVpSfcCpuGraph<Cpu,Cpu> graph(stateCpu,avsCpu);
             assert(graph.initialize(0x7000,0x8000,0x3000,binding,noRead,1,0));
+            struct GraphPipePolicy {
+                decltype(graph)& owner;bool directMode=true;
+                bool bypass() noexcept {assert(!owner.tryReset());return true;}
+                bool rejectDi() noexcept {return false;}
+                bool rejectLut() noexcept {return false;}
+                bool direct() noexcept {return directMode;}
+                bool twoPass() noexcept {return false;}
+                bool sfcAvailable() noexcept {return true;}
+                bool hdr() noexcept {return false;}
+                bool fastFill() noexcept {return false;}
+                bool healthy() noexcept {return true;}
+            } graphPolicy{graph};
+            uint8_t graphComp=0x80;
+            auto graphSelect=[&]() noexcept {
+                return graph.selectOutputPipe(noRead,graphPolicy,reinterpret_cast<void*>(0x1000),
+                    reinterpret_cast<void*>(0x2000),reinterpret_cast<void*>(0x4000),graphComp);
+            };
+            assert(graphSelect()==2 && graphComp==0 && stateCpu.live && avsCpu.live);
+            graphPolicy.directMode=false;
+            assert(graphSelect()==0 && graphComp==1); // unqualified input cannot select SFC
+            graphComp=0x80;
+            assert(graph.prepare([&](auto&,auto&,auto&) noexcept {
+                assert(graphSelect()==UINT32_MAX && graphComp==0x80);return 0;
+            })==0);
             auto never=[](void*) noexcept {assert(false);return 0;};
             using PlatformEntry=int(*)(void*,void*,void*,void*,void*,void*) noexcept;
             PlatformEntry escaped=nullptr;void* escapedChild=nullptr;
