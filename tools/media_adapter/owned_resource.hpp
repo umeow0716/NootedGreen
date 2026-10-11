@@ -391,21 +391,21 @@ template<class Resolve> struct TglOwnedVpSfcCallbacks {
     static void freeResources(void* child) noexcept {
         static_assert(noexcept(Resolve{}(child)),"VP lease resolution must not throw");
         auto* context=Resolve{}(child);
-        if(!context) return;
+        if(!context || !context->owns(child)) return;
         static_assert(noexcept(context->freeResources()),"VP resource cleanup must not throw");
         context->freeResources();
     }
     static int setup(void* child,void* source,void* target,void* renderData) noexcept {
         static_assert(noexcept(Resolve{}(child)),"VP lease resolution must not throw");
         auto* context=Resolve{}(child);
-        if(!context || !source || !target || !renderData) return 5;
+        if(!context || !context->owns(child) || !source || !target || !renderData) return 5;
         static_assert(noexcept(context->setup(source,target,renderData)),"VP setup status ABI");
         return context->setup(source,target,renderData);
     }
     static int send(void* child,void* renderData,void* command) noexcept {
         static_assert(noexcept(Resolve{}(child)),"VP lease resolution must not throw");
         auto* context=Resolve{}(child);
-        if(!context || !renderData || !command) return 5;
+        if(!context || !context->owns(child) || !renderData || !command) return 5;
         static_assert(noexcept(context->send(renderData,command)),"VP send status ABI");
         return context->send(renderData,command);
     }

@@ -8928,6 +8928,7 @@ int main() {
         struct Context {
             void* child;void* source;void* target;void* data;void* command;
             bool leased=false;int result=0;unsigned setups=0,sends=0,frees=0;
+            bool owns(void* candidate) const noexcept {return leased && candidate==child;}
             void freeResources() noexcept {++frees;}
             int setup(void* a,void* b,void* c) noexcept {
                 assert(a==source && b==target && c==data);++setups;return result;
@@ -8965,6 +8966,14 @@ int main() {
         using Scoped=TglOwnedVpSfcScopedContext<Context>;
         using RealCallbacks=TglOwnedVpSfcCallbacks<TglOwnedVpSfcResolve<Context>>;
         assert(!Scoped::get(context.child));
+        {
+            Scoped wrong(context.target,context);assert(wrong.bound());
+            const auto frees=context.frees,setups=context.setups,sends=context.sends;
+            RealCallbacks::freeResources(context.target);
+            assert(RealCallbacks::setup(context.target,context.source,context.target,context.data)==5);
+            assert(RealCallbacks::send(context.target,context.data,context.command)==5);
+            assert(context.frees==frees && context.setups==setups && context.sends==sends);
+        }
         {
             Scoped invalid(nullptr,context);assert(!invalid.bound());
             Scoped scope(context.child,context);assert(scope.bound());
