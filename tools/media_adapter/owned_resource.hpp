@@ -1571,6 +1571,21 @@ struct TglNativeVeboxParentView {
     }
 };
 
+// Borrow only under the enclosing authenticated physical generation/context
+// lifetime. This proves topology and addressability, not image/type or retain.
+struct TglNativeVeboxRendererView {
+    TglNativeVeboxParentView parent{};
+    uintptr_t renderer=0,configuration=0;
+    template<class Read,class Admit>
+    bool resolve(uintptr_t context,Read read,Admit admit) noexcept {
+        *this={};TglNativeVeboxParentView candidate;uintptr_t object=0;
+        if(!candidate.resolve(context,read,admit) ||
+            !read(context+0x12e0,&object,8) || !object ||
+            object>UINTPTR_MAX-0x2cb8 || !admit(object,size_t{0x2cb8})) return false;
+        parent=candidate;renderer=object;configuration=object+0x2cb0;return true;
+    }
+};
+
 struct TglOwnedSurfaceStorage;
 // Outer131fa0 copies0x139 bytes at1320e2: source count0 <=17, targets90 <=8.
 // Sources begin8; targets begin98 (NOT the source!). Native13076c..13083c

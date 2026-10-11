@@ -12679,17 +12679,19 @@ int main() {
         std::array<uint8_t,0x58> physical{};
         std::array<uint8_t,0x10> os{};
         std::array<uint8_t,0x50> wrapper{};
+        std::array<uint8_t,0x2cb8> renderer{};
         const auto c=reinterpret_cast<uintptr_t>(context.data());
         const auto p=reinterpret_cast<uintptr_t>(physical.data());
         const auto o=reinterpret_cast<uintptr_t>(os.data());
         const auto w=reinterpret_cast<uintptr_t>(wrapper.data());
+        const auto r=reinterpret_cast<uintptr_t>(renderer.data());
         auto put=[](uintptr_t base,size_t offset,uintptr_t value) {
             std::memcpy(reinterpret_cast<void*>(base+offset),&value,8);
         };
-        put(c,0x128,p);put(c,0x12f0,o);put(p,0x50,w);put(o,8,w+0x48);
+        put(c,0x128,p);put(c,0x12f0,o);put(p,0x50,w);put(o,8,w+0x48);put(c,0x12e0,r);
         auto admit=[&](uintptr_t address,size_t size) noexcept {
-            for(const auto& range:std::array<std::pair<uintptr_t,size_t>,4>{{
-                {c,context.size()},{p,physical.size()},{o,os.size()},{w,wrapper.size()}}})
+            for(const auto& range:std::array<std::pair<uintptr_t,size_t>,5>{{
+                {c,context.size()},{p,physical.size()},{o,os.size()},{w,wrapper.size()},{r,renderer.size()}}})
                 if(address>=range.first && address-range.first<=range.second &&
                    size<=range.second-(address-range.first)) return true;
             return false;
@@ -12701,7 +12703,15 @@ int main() {
         TglNativeVeboxParentView view;
         assert(view.resolve(c,read,admit));
         assert(view.context==c && view.physical==p && view.os==o && view.wrapper==w);
+        TglNativeVeboxRendererView rendererView;
+        assert(rendererView.resolve(c,read,admit) && rendererView.parent.physical==p &&
+            rendererView.renderer==r && rendererView.configuration==r+0x2cb0);
+        put(c,0x12e0,0);assert(!rendererView.resolve(c,read,admit) && !rendererView.renderer);
+        put(c,0x12e0,UINTPTR_MAX-8);assert(!rendererView.resolve(c,read,admit));
+        put(c,0x12e0,r+8);assert(!rendererView.resolve(c,read,admit));
+        put(c,0x12e0,r);
         put(o,8,w);assert(!view.resolve(c,read,admit));
+        assert(!rendererView.resolve(c,read,admit) && !rendererView.configuration);
         assert(!view.context && !view.physical && !view.os && !view.wrapper);
         put(o,8,w+0x48);put(p,0x50,0);
         assert(!view.resolve(c,read,admit));
