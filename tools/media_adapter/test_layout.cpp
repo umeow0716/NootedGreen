@@ -80,6 +80,14 @@ static void testTrackedCpuOwner() {
         owner.live=false;assert(!capture() && input.params10c==0xabcdef);owner.live=true;
         execution.live=false;assert(!capture() && input.params10c==0xabcdef);execution.live=true;
         allow=false;assert(!capture() && input.params10c==0xabcdef);allow=true;
+        ++expected.renderHal;assert(!capture() && input.params10c==0xabcdef);--expected.renderHal;
+        ++expected.paramsF0;assert(!capture() && input.params10c==0xabcdef);--expected.paramsF0;
+        assert(!tglReadLeasedVeboxAdmissionInputs(input,owner,execution,base.data(),
+            UINTPTR_MAX,pa,source,target,expected,1,read) && input.params10c==0xabcdef);
+        assert(!tglReadLeasedVeboxAdmissionInputs(input,owner,execution,base.data(),
+            pp,UINTPTR_MAX,source,target,expected,1,read) && input.params10c==0xabcdef);
+        assert(!tglReadLeasedVeboxAdmissionInputs(input,owner,execution,base.data(),
+            pp,pa,source,target,expected,3,read) && input.params10c==0xabcdef);
         p=123;std::memcpy(pass.data()+0x10,&p,8);assert(!capture() && input.params10c==0xabcdef);
         p=reinterpret_cast<uintptr_t>(&source);std::memcpy(pass.data()+0x10,&p,8);
         assert(capture() && input.prefix.sourceWidth==1920 && input.prefix.params138==1);
