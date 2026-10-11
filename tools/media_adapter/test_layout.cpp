@@ -11767,6 +11767,16 @@ static void testRetainedVeboxFrames() {
         removed.contexts={0x4000,0x4000};
         assert(owners.reconcileSuccessfulRemoval(0x1000,0x2000,7,removed)==5 && deaths==1);
         removed.contexts={0x4000,0x5000};
+        {
+            auto lease=owners.pin(0x1000,0x2000,7,0x4000);
+            assert(lease.get()==first && !owners.pin(0x1000,0x2000,6,0x4000).get());
+            auto retained=std::move(lease);assert(!lease.get() && retained.get()==first);
+            assert(owners.prepareRemoval(0x1000,0x2000,7,removed,prepare)==5 && !preparations);
+            assert(owners.reconcileSuccessfulRemoval(0x1000,0x2000,7,removed)==5 && deaths==1);
+            auto secondLease=owners.pin(0x1000,0x2000,7,0x4000);assert(secondLease.get()==first);
+            retained={};assert(!retained.get() && secondLease.get()==first);
+            assert(owners.reconcileSuccessfulRemoval(0x1000,0x2000,7,removed)==5 && deaths==1);
+        }
         assert(owners.prepareRemoval(0x1000,0x2000,6,removed,prepare)==5 && !preparations);
         assert(owners.prepareRemoval(0x1000,0x2000,7,removed,prepare)==0 && preparations==1 && deaths==1);
         prepareResult=31;

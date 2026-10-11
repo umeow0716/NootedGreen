@@ -16702,16 +16702,55 @@ template<class Owner,size_t Capacity=16> class TglOwnedContextOwnerRegistry {
     struct Entry {uintptr_t image=0,physical=0,context=0;uint64_t generation=0;
         Owner* owner=nullptr;bool quarantined=false;};
     std::array<Entry,Capacity> entries_{};
+    std::array<std::atomic<size_t>,Capacity> contextPins_{};
     std::atomic_flag gate_=ATOMIC_FLAG_INIT;
     struct Unlock {std::atomic_flag& gate;~Unlock(){gate.clear(std::memory_order_release);}};
     static bool matches(const Entry& e,uintptr_t image,uintptr_t physical,uint64_t generation) noexcept {
         return e.owner && e.image==image && e.physical==physical && e.generation==generation;
     }
 public:
-    TglOwnedContextOwnerRegistry()=default;
+    // Registry must outlive every lease (production registry is process-lived).
+    // The concrete owner retains its native context and image obligations;
+    // this lease prevents reconciliation from destroying that owner.
+    class ContextLease {
+        friend class TglOwnedContextOwnerRegistry;
+        Owner* owner_=nullptr;std::atomic<size_t>* pins_=nullptr;
+        ContextLease(Owner* owner,std::atomic<size_t>& pins) noexcept:owner_(owner),pins_(&pins) {}
+        void reset() noexcept {if(pins_) pins_->fetch_sub(1,std::memory_order_release);owner_=nullptr;pins_=nullptr;}
+    public:
+        ContextLease()=default;
+        ContextLease(const ContextLease&)=delete;ContextLease& operator=(const ContextLease&)=delete;
+        ContextLease(ContextLease&& other) noexcept:owner_(other.owner_),pins_(other.pins_) {
+            other.owner_=nullptr;other.pins_=nullptr;
+        }
+        ContextLease& operator=(ContextLease&& other) noexcept {
+            if(this!=&other) {reset();owner_=other.owner_;pins_=other.pins_;other.owner_=nullptr;other.pins_=nullptr;}
+            return *this;
+        }
+        ~ContextLease() noexcept {reset();}
+        Owner* get() const noexcept {return owner_;}
+    };
+    TglOwnedContextOwnerRegistry() noexcept {
+        for(auto& pins:contextPins_) pins.store(0,std::memory_order_relaxed);
+    }
     TglOwnedContextOwnerRegistry(const TglOwnedContextOwnerRegistry&)=delete;
     TglOwnedContextOwnerRegistry& operator=(const TglOwnedContextOwnerRegistry&)=delete;
     ~TglOwnedContextOwnerRegistry()=default;
+    // Acquire while holding the enclosing physical-generation scope, BEFORE
+    // publishing work. Move the lease into retained Frame; never just copy get().
+    ContextLease pin(uintptr_t image,uintptr_t physical,uint64_t generation,uintptr_t context) noexcept {
+        if(!context || gate_.test_and_set(std::memory_order_acquire)) return {};
+        Unlock unlock{gate_};
+        for(size_t i=0;i<Capacity;++i) {
+            auto& e=entries_[i];
+            if(!matches(e,image,physical,generation) || e.context!=context || e.quarantined) continue;
+            const auto count=contextPins_[i].load(std::memory_order_acquire);
+            if(count==SIZE_MAX) return {};
+            contextPins_[i].fetch_add(1,std::memory_order_relaxed);
+            return ContextLease(e.owner,contextPins_[i]);
+        }
+        return {};
+    }
     // Takes ownership ONLY on true. Must precede native vptr publication.
     bool adopt(uintptr_t image,uintptr_t physical,uint64_t generation,Owner* owner) noexcept {
         static_assert(noexcept(owner->context()));
@@ -16759,6 +16798,7 @@ public:
             for(auto& e:entries_) if(matches(e,image,physical,generation) && e.context==batch.contexts[i])
                 selected[i]=&e;
             if(!selected[i] || selected[i]->quarantined) return 5;
+            if(contextPins_[size_t(selected[i]-entries_.data())].load(std::memory_order_acquire)) return 5;
             owners[i]=selected[i]->owner;
         }
         const int result=prepare(static_cast<const std::array<Owner*,N>&>(owners),batch.count);
@@ -16779,6 +16819,7 @@ public:
             for(auto& e:entries_) if(matches(e,image,physical,generation) && e.context==batch.contexts[i])
                 selected[i]=&e;
             if(!selected[i]) return 5;
+            if(contextPins_[size_t(selected[i]-entries_.data())].load(std::memory_order_acquire)) return 5;
         }
         for(uint32_t i=0;i<batch.count;++i) {
             auto* owner=selected[i]->owner;*selected[i]={};delete owner;
