@@ -5580,6 +5580,27 @@ static void testNativeResourceBoundary() {
                 assert(owner.withSurface([](const auto&) noexcept {}));
                 assert(destination.withSurface([](const auto&) noexcept {}));
             }
+            // Persistent target publication can reject a busy/malformed target.
+            // Do not advance flags or slot1 after a failed slot0 publication;
+            // a slot1 failure must retain slot0's successful flag updates.
+            for(size_t failAt=0;failAt<=2;++failAt) {
+                bool valid=true;uint8_t flag=0xa5,mode=0x5a;
+                unsigned allocated=0,published=0;
+                const int result=tglWithAllocatedOwnedFfdnPair(owner,
+                    static_cast<decltype(&owner)>(nullptr),static_cast<decltype(&owner)>(nullptr),
+                    {true,1},valid,false,flag,mode,
+                    [&](size_t,const auto&,bool& changed,uint32_t& pitch) noexcept {
+                        ++allocated;changed=true;pitch=0;return 0;
+                    },[](const auto&,const auto&) noexcept {assert(false);},
+                    [&](size_t index,const auto&,const auto&) noexcept -> int {
+                        ++published;owner.reset();assert(owner.ensure(key)==5);
+                        return index==failAt?31:0;
+                    });
+                assert(result==(failAt<2?31:0));
+                assert(allocated==(failAt<2?failAt+1:2) && published==allocated);
+                assert(flag==(failAt==0?0xa5:1) && mode==(failAt==0?0x5a:1));
+                assert(owner.withSurface([](const auto&) noexcept {}));
+            }
             for(bool hasPrevious:{false,true}) {
                 bool valid=true;unsigned allocations=0,publications=0;
                 uint8_t execution15=0xa5,execution16=0x5a;

@@ -5129,10 +5129,11 @@ int tglWithAllocatedOwnedFfdnPair(Owner& input,Owner* previous,Owner* copyDestin
         std::declval<const TglOwnedSurfaceStorage&>())) &&
         std::is_same_v<decltype(copy(std::declval<const TglOwnedSurfaceStorage&>(),
         std::declval<const TglOwnedSurfaceStorage&>())),void>,"FFDN pair copy ABI");
+    using PublicationResult=decltype(publish(size_t{},std::declval<const TglOwnedSurfaceStorage&>(),
+        std::declval<const TglOwnedSurfaceStorage&>()));
     static_assert(noexcept(publish(size_t{},std::declval<const TglOwnedSurfaceStorage&>(),
         std::declval<const TglOwnedSurfaceStorage&>())) &&
-        std::is_same_v<decltype(publish(size_t{},std::declval<const TglOwnedSurfaceStorage&>(),
-        std::declval<const TglOwnedSurfaceStorage&>())),void>,
+        (std::is_same_v<PublicationResult,void> || std::is_same_v<PublicationResult,int>),
         "FFDN pair metadata ABI");
     const std::array<Owner*,3> roles{&input,previous,copyDestination};
     return tglWithOwnedSurfaceRoles(roles,[&](const auto& views) noexcept {
@@ -5151,7 +5152,10 @@ int tglWithAllocatedOwnedFfdnPair(Owner& input,Owner* previous,Owner* copyDestin
                 previousPitch,[&]() noexcept {copy(*views[2],*views[1]);});
             TglOwnedSurfaceStorage metadata;
             if(!tglPrepareOwnedFfdnFrameMetadata(metadata,*views[0])) return 5;
-            publish(index,*views[0],static_cast<const TglOwnedSurfaceStorage&>(metadata));
+            if constexpr(std::is_same_v<PublicationResult,int>) {
+                const int published=publish(index,*views[0],static_cast<const TglOwnedSurfaceStorage&>(metadata));
+                if(published) return published;
+            } else publish(index,*views[0],static_cast<const TglOwnedSurfaceStorage&>(metadata));
             //1f8355..1f8386: after metadata publication, only changed slots
             // update both whole bytes. Preserve previous successful updates
             // if the next allocation fails; unchanged does not restore them.
