@@ -3956,6 +3956,9 @@ inline int tglStatisticsQuery(uint32_t selector, uint32_t &value) noexcept {
 struct TglStatisticsAllocation {
     uint32_t rowBytes = 0, blockRows = 0, totalRows = 0, bytes = 0;
 };
+struct TglOwnedStatisticsNoPublication {
+    template<class Storage> void operator()(const Storage&,const TglStatisticsAllocation&) const noexcept {}
+};
 // Owned TGL child publication, not an ICL virtual-base pointer transplant.
 template<class ChildOwner>
 int tglPublishOwnedStatisticsLayout(ChildOwner& owner,void* child,
@@ -11587,20 +11590,20 @@ public:
     // Caller holds the actual source owner's synchronous surface lease and
     // excludes GPU users. Statistics dimensions are independently calculated;
     // STMM dimensions alone do not establish the statistics allocation shape.
-    template<class SourceOwner,class Requests,class Prepare,class Fill>
+    template<class SourceOwner,class Requests,class Prepare,class Fill,class Publish=TglOwnedStatisticsNoPublication>
     int ensureFromLeasedSource(SourceOwner& owner,const TglOwnedSurfaceStorage& source,
         bool child1ba9,const Requests& requests,Prepare prepare,bool reinitialize,
-        uint32_t statisticsWidth,uint32_t statisticsHeight,Fill fill) noexcept {
+        uint32_t statisticsWidth,uint32_t statisticsHeight,Fill fill,Publish publish={}) noexcept {
         if(!owner.hasSurfaceLease(source)) return 5;
         std::array<TglResourceKey,2> keys{};
         if(!tglPrepareOwnedStmmHistoryKeys(source,child1ba9,keys)) return 5;
         return ensure(requests,prepare,keys,reinitialize,
-                      statisticsWidth,statisticsHeight,fill);
+                      statisticsWidth,statisticsHeight,fill,publish);
     }
-    template<class Requests,class Prepare,class Fill>
+    template<class Requests,class Prepare,class Fill,class Publish=TglOwnedStatisticsNoPublication>
     int ensure(const Requests& requests,Prepare prepare,
         const std::array<TglResourceKey,2>& historyKeys,bool reinitialize,
-        uint32_t width,uint32_t height,Fill fill) noexcept {
+        uint32_t width,uint32_t height,Fill fill,Publish publish={}) noexcept {
         if(busy_ || !bindingsValid_) return 5;
         busy_=true;ready_=false;
         int status=group_.ensure(requests,prepare);
@@ -11610,7 +11613,9 @@ public:
             return history_.withStorage([&](const auto&,const auto&) noexcept {
                 // Later native initialization callbacks cannot revoke backing
                 // already admitted by this same allocation transaction.
-                return statistics_.ensure(width,height,fill);
+                if constexpr(std::is_same_v<Publish,TglOwnedStatisticsNoPublication>)
+                    return statistics_.ensure(width,height,fill);
+                else return statistics_.ensure(width,height,fill,publish);
             });
         });
         if(status) retire();else ready_=true;

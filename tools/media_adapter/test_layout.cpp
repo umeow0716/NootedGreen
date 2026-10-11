@@ -6711,16 +6711,25 @@ static void testResourceBinding() {
                 } sourceBackend;
                 TglOwnedAllocatedSurface<SourceBackend> sourceOwner(sourceBackend);
                 assert(sourceOwner.ensure(stmmKey)==0);
-                assert(sourceOwner.withSurface([&](const auto& source) noexcept {
+                for(bool rejectPublication:{true,false}) assert(sourceOwner.withSurface([&](const auto& source) noexcept {
                     unsigned prepared=0;
+                    unsigned publications=0;
                     auto pinnedPrepare=[&](size_t,const auto&,bool) noexcept {
                         ++prepared;sourceOwner.reset();
                         assert(sourceOwner.hasSurfaceLease(source) && !sourceBackend.releases);
                         assert(sourceOwner.ensure(stmmKey)==5);return 0;
                     };
-                    assert(transaction.ensureFromLeasedSource(sourceOwner,source,false,
-                        requests,pinnedPrepare,false,1920,1080,fill)==0);
-                    assert(prepared==1 && statistics.layout().bytes==520320);
+                    const int status=transaction.ensureFromLeasedSource(sourceOwner,source,false,
+                        requests,pinnedPrepare,false,1920,1080,fill,
+                        [&](const auto&,const TglStatisticsAllocation& layout) noexcept {
+                            ++publications;assert(layout.bytes==520320 && sourceOwner.hasSurfaceLease(source));
+                            transaction.reset();sourceOwner.reset();
+                            assert(api.references==3 && !sourceBackend.releases);
+                            return rejectPublication?31:0;
+                        });
+                    assert(status==(rejectPublication?31:0) && prepared==1 && publications==1);
+                    assert(statistics.layout().bytes==(rejectPublication?0u:520320u));
+                    if(rejectPublication) assert(!api.references);
                     transaction.reset();assert(!api.references);
                 }));
                 sourceOwner.reset();assert(sourceBackend.releases==1);
