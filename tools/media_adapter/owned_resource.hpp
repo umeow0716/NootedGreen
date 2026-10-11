@@ -16498,7 +16498,17 @@ public:
                     static_assert(noexcept(consume(owner,child,source,target,parameters,packets)) &&
                         std::is_same_v<decltype(consume(owner,child,source,target,parameters,packets)),
                             TglOwnedVeboxCommandTransactionResult>);
-                    return consume(owner,child,source,target,parameters,packets);
+                    TglOwnedVeboxCommandTransactionResult command;
+                    // Bind the tracked allocation to the ORIGINAL frontend
+                    // shell while both source and child leases are held. This
+                    // also covers VP consumers delegated through this entry.
+                    const bool reconciled=source.withNativeDenoiseParameters(packets.source,
+                        parameters,[&]() noexcept {
+                            command=consume(owner,child,source,target,parameters,packets);
+                            backing_.retention().observe(command); // before DN slot unwind
+                        });
+                    if(!reconciled) command.status=5;
+                    return command;
                 });
             return result.status;
         });

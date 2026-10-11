@@ -17101,6 +17101,19 @@ int main() {
                             } vpBinding;
                             auto noRead=+[](uintptr_t,void*,size_t) noexcept {return false;};
                             assert(frame.backing().initializeVp(vpBinding,os,0x2200,0x3300,noRead,1,0)==0);
+                            const uintptr_t foreignDn=0xdead;
+                            std::memcpy(source.prefix.data()+0x90,&foreignDn,8);
+                            const auto foreignDnResult=frame.withPrivateChildCommandFrame(0,roles,0,0,
+                                0x1100,0x2200,0x3300,[](auto&,void*,auto&,auto&,auto&,auto&) noexcept {
+                                    assert(false);return TglOwnedVeboxCommandTransactionResult{};
+                                });
+                            uintptr_t preservedDn=0;
+                            std::memcpy(&preservedDn,source.prefix.data()+0x90,8);
+                            assert(foreignDnResult.status==5 && !foreignDnResult.acquired &&
+                                !foreignDnResult.writtenBack && preservedDn==foreignDn &&
+                                !frame.backing().retention()());
+                            const uintptr_t noDn=0;
+                            std::memcpy(source.prefix.data()+0x90,&noDn,8);
                             const auto deniedPass=frame.withPrivateVpCommandFrame(0,roles,0,0,
                                 0x1100,0x2200,0x3300,[](auto&,void*,void*,auto&,auto&,
                                     auto&,auto&,auto&,auto&) noexcept {
@@ -17117,6 +17130,10 @@ int main() {
                                     auto& sourceLease,auto& targetLease,auto& dn,auto& packets) noexcept {
                                     assert(graph.ownsStorage(vp));(void)lines;
                                     assert(dn.size()==sizeof(TglOwnedDnParameterStorage));
+                                    uintptr_t borrowedDn=0;
+                                    std::memcpy(&borrowedDn,packets.source.prefix.data()+0x90,8);
+                                    assert(borrowedDn==dn.get());
+                                    assert(!dn.withBorrowedAddress([](uintptr_t,size_t) noexcept {assert(false);}));
                                     const auto expectedDn=tglProduceOwnedDnScalarParameters(dnRequest);
                                     assert(std::memcmp(reinterpret_cast<const void*>(dn.get()),
                                         expectedDn.bytes.data(),expectedDn.bytes.size())==0);
@@ -17159,6 +17176,9 @@ int main() {
                                 });
                         });
                         assert(r.acquired && frameDn.live==1 && refs[1]==3);
+                        uintptr_t detachedDn=1;
+                        std::memcpy(&detachedDn,source.prefix.data()+0x90,8);
+                        assert(detachedDn==0);
                         assert(frames.retire(ticket,[](const auto&,bool,const auto&) noexcept {return 31;})==31);
                         assert(ho.borrowed && refs[1]==3);
                         assert(vpCpu.live && vpAvsCpu.live);
