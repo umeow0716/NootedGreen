@@ -9604,6 +9604,13 @@ int tglRunOwnedVeboxAllocationQueriedStages(QueryFfdi ffdiEnabled,QuerySecondary
 // Per durable Frame, never a process-global success flag. Once a command has
 // been acquired, all nested status-error unwind must retain that frame until
 // its whole-frame owner admits discard/completion and destroys it.
+struct TglOwnedVeboxCommandTransactionResult {
+    int status=5;
+    int builderStatus=5;
+    bool acquired=false;
+    bool writtenBack=false;
+};
+
 class TglOwnedVeboxFrameRetention {
     bool pending_=false;
 public:
@@ -9676,13 +9683,13 @@ template<class SurfaceBackend,class DnBackend> class TglOwnedVeboxFrameSurfaceSt
     using Pair=TglOwnedVeboxSurfacePairLease<Surface,Surface>;
     Surface source_,target_;
     TglTrackedCpuOwner<DnBackend> parameters_;
-    const TglOwnedVeboxFrameRetention& retention_;
+    TglOwnedVeboxFrameRetention& retention_;
     Pair* pair_=nullptr;
     bool attempted_=false;
     void unwind() noexcept {parameters_.reset();target_.reset();source_.reset();}
 public:
     TglOwnedVeboxFrameSurfaceStorage(SurfaceBackend& surfaces,DnBackend& parameters,
-        const TglOwnedVeboxFrameRetention& retention)
+        TglOwnedVeboxFrameRetention& retention)
         :source_(surfaces),target_(surfaces),parameters_(parameters),retention_(retention) {}
     TglOwnedVeboxFrameSurfaceStorage(const TglOwnedVeboxFrameSurfaceStorage&)=delete;
     TglOwnedVeboxFrameSurfaceStorage& operator=(const TglOwnedVeboxFrameSurfaceStorage&)=delete;
@@ -9706,6 +9713,26 @@ public:
         return 0;
     }
     bool ready() const noexcept {return pair_ && pair_->ready();}
+    // Connect real owner identities to captured command producers. Observe
+    // ownership BEFORE the callback scope returns to any allocation unwind.
+    template<class Consume>
+    TglOwnedVeboxCommandTransactionResult withCommandFrame(Consume consume) noexcept {
+        using Result=TglOwnedVeboxCommandTransactionResult;
+        static_assert(noexcept(consume(source_,target_,parameters_,
+            std::declval<const TglOwnedSurfaceStorage&>(),std::declval<const TglOwnedSurfaceStorage&>())) &&
+            std::is_same_v<decltype(consume(source_,target_,parameters_,
+            std::declval<const TglOwnedSurfaceStorage&>(),std::declval<const TglOwnedSurfaceStorage&>())),Result>);
+        Result result;
+        if(!pair_) return result;
+        const int status=pair_->withSurfaces([&](const auto& source,const auto& target) noexcept {
+            result=consume(source_,target_,parameters_,source,target);
+            if(result.writtenBack && !result.acquired) result.status=5;
+            retention_.observe(result);
+            return result.status;
+        });
+        result.status=status;
+        return result;
+    }
     template<class Use> int withSurfaces(Use use) noexcept {
         return pair_?pair_->withSurfaces(use):5;
     }
@@ -15369,13 +15396,6 @@ int tglWithCapturedNativeVeboxBuilder(SourceOwner& sourceOwner,ChildOwner& child
             return builder.call(context.leases,scratch,read,buildInvoke);
         });
 }
-
-struct TglOwnedVeboxCommandTransactionResult {
-    int status=5;
-    int builderStatus=5;
-    bool acquired=false;
-    bool writtenBack=false;
-};
 
 // Adapt the allocation chain's int consumer ABI to a typed command result.
 // Observe ownership INSIDE its final consumer, before nested error unwind.

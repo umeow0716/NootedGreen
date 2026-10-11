@@ -7951,6 +7951,16 @@ static void testNativeResourceBoundary() {
                             return 0;
                         })==0 && frame.ready());
                         assert(frameBackend.allocations==2 && parameterBackend.live==1);
+                        const auto notAcquired=frame.withCommandFrame([&](auto& sourceOwner,auto& targetOwner,
+                            auto&,const auto& source,const auto& target) noexcept {
+                            assert(sourceOwner.hasSurfaceLease(source) && targetOwner.hasSurfaceLease(target));
+                            const auto nested=frame.withCommandFrame([](auto&,auto&,auto&,const auto&,const auto&) noexcept {
+                                assert(false);return TglOwnedVeboxCommandTransactionResult{};
+                            });
+                            assert(nested.status==5 && !nested.acquired);
+                            return TglOwnedVeboxCommandTransactionResult{-17,31,false,false};
+                        });
+                        assert(notAcquired.status==-17 && notAcquired.builderStatus==31 && !retention());
                         assert(frame.withDenoiseSurfaces([&](const auto& source,const auto& target) noexcept {
                             assert(&source!=&target);
                             uintptr_t parameter=0;std::memcpy(&parameter,source.prefix.data()+0x90,8);
@@ -15968,8 +15978,14 @@ int main() {
                             [](void*,uint64_t,uintptr_t,uintptr_t) noexcept {return true;}));
                         assert(renderer==original);
                         // Ownership fixture only: no native submit is called.
-                        TglOwnedVeboxCommandTransactionResult result{31,31,true,false};
-                        assembly.backing().retention().observe(result);
+                        const auto result=assembly.surfaces().withCommandFrame(
+                            [&](auto& sourceOwner,auto& targetOwner,auto& parameters,const auto& source,const auto& target) noexcept {
+                                assert(sourceOwner.hasSurfaceLease(source) && targetOwner.hasSurfaceLease(target));
+                                assert(parameters.size()==64);
+                                sourceOwner.reset();targetOwner.reset();
+                                assert(frameSurfaces.live==2 && !frameSurfaces.releases);
+                                return TglOwnedVeboxCommandTransactionResult{31,31,true,false};
+                            });
                         assert(assembly.surfaces().withSurfaces([](const auto&,const auto&) noexcept {assert(false);return 0;})==5);
                         return result;
                         });
