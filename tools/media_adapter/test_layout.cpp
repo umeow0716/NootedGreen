@@ -13447,7 +13447,7 @@ int main() {
                                 [&](void* parent,void* child,const auto& entries) noexcept {
                                     uintptr_t link=0;std::memcpy(&link,static_cast<uint8_t*>(parent)+0x80,8);
                                     assert(link==reinterpret_cast<uintptr_t>(child));
-                                    assert(!graph.tryReset());owner.reset();assert(cpu.live);
+                                    assert(!graph.tryReset() && !owner.destroyInPlace());owner.reset();assert(cpu.live);
                                     entries.sampleMode(child,reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x2000));
                                     entries.formatMode(child,reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x3000));
                                     assert(entries.finalAdmission(child,1,reinterpret_cast<void*>(0x1000),
@@ -13479,6 +13479,11 @@ int main() {
                     })==0);
                     graph.reset();assert(!stateCpu.live && !avsCpu.live && cpu.live);
                 }
+                assert(owner.destroyInPlace());
+                assert(cpu.live && !owner.constructedBase());
+                assert(eventCount==3 && events[0]==1 && events[1]==2 && events[2]==4);
+                const auto destroyedEvents=eventCount;
+                assert(owner.destroyInPlace() && eventCount==destroyedEvents);
                 owner.reset();owner.reset();
                 assert(!owner.publishCsc(leasedCsc) && !owner.hasPrivateChildLease(0));
                 assert(!cpu.live && !owner.constructedBase() && eventCount==4);
@@ -13487,7 +13492,7 @@ int main() {
                 assert(reportDestroys==1);
                 assert(owner.withPrivateChild([](void*) noexcept {assert(false);return 0;})==5);
                 assert((std::array<unsigned,4>{events[0],events[1],events[2],events[3]}==
-                        std::array<unsigned,4>{1,2,3,4}));
+                        std::array<unsigned,4>{1,2,4,3})); // Non-deleting lifecycle defers allocation release.
             }
             assert(eventCount==4 && constructors==2);
             invoke.constructs=invoke.destroys=0;

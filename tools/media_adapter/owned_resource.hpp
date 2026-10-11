@@ -3459,8 +3459,13 @@ public:
         busy_=false;
         return valid;
     }
-    void reset() noexcept {
-        if(busy_) return;
+    // Owned non-deleting lifecycle: invalidate callbacks and destroy members,
+    // but retain the enclosing allocation for a later deleting lifecycle.
+    bool destroyInPlace() noexcept {return teardown(false);}
+    void reset() noexcept {(void)teardown(true);}
+private:
+    bool teardown(bool releaseAllocation) noexcept {
+        if(busy_) return false;
         busy_=true;
         ready_=false;
         if(constructed_) {
@@ -3479,9 +3484,12 @@ public:
             cleanup_(object);
             destroy_(destructor_,object);
         }
-        destructor_=image_=0;storage_.reset();sfc_.reset();
+        destructor_=image_=0;
+        if(releaseAllocation) storage_.reset();
+        sfc_.reset();
         tableInstalled_=false;table_.entries={};table_.typeInfo=0;
         busy_=false;
+        return true;
     }
 };
 
