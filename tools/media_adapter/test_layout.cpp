@@ -14185,11 +14185,43 @@ int main() {
                             const auto savedState=stateCpu.bytes;
                             TglOwnedVpEntrySet escapedCscAssembly;
                             unsigned coefficientBuilds=0;
+                            // Native CSC anchors/invoker are explicit CPU fixtures;
+                            // exercise existing product admission, not fabricated cache coefficients.
+                            auto cscRead=[](uintptr_t address,void* out,size_t size) noexcept {
+                                const std::array<uint8_t,15> coefficients{
+                                    0x55,0x48,0x89,0xe5,0x48,0x81,0xec,0x80,0,0,0,0x48,0x8d,0x45,0xc0};
+                                const std::array<uint8_t,5> call{0xe8,0x53,0x6e,0,0};
+                                const std::array<uint8_t,35> matrix{
+                                    0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x20,0x89,0x7d,0xfc,
+                                    0x89,0x75,0xf8,0x48,0x89,0x55,0xf0,0xc6,0x45,0xef,0,
+                                    0x8b,0x7d,0xfc,0xbe,0xff,0xff,0xff,0xff,0xe8,0xfd,0xe9,0xff,0xff};
+                                const auto copy=[&](uintptr_t offset,const auto& anchor) noexcept {
+                                    if(address!=0x100000+offset || size!=anchor.size()) return false;
+                                    std::memcpy(out,anchor.data(),size);return true;
+                                };
+                                return copy(0x4dac0,coefficients) || copy(0x4daf8,call) || copy(0x54950,matrix);
+                            };
+                            auto cscImage=[](uintptr_t image) noexcept {return image==0x100000;};
+                            auto cscRx=[](uintptr_t address,size_t size) noexcept {
+                                return (address==0x100000+0x4dac0 && size==15) ||
+                                    (address==0x100000+0x4daf8 && size==5) ||
+                                    (address==0x100000+0x54950 && size==35);
+                            };
+                            TglCscCoefficientsBinding cscBinding;
+                            assert(cscBinding.resolve(0x100000,cscRead,cscImage,cscRx));
+                            unsigned matrixAdmissions=0;
                             assert(graph.withCscAssemblyEntries(child,assemblyIef,assemblyCsc,3,5,0,
                                 [](uintptr_t,void*,size_t) noexcept {assert(false);return false;},
                                 [&](TglCscCoefficients& coefficients,uint32_t from,uint32_t to) noexcept {
-                                    ++coefficientBuilds;
-                                    assert(from==3 && to==5);coefficients.matrix[0]=7;return true;
+                                    return tglProduceNativeCscCoefficients(cscBinding,coefficients,from,to,
+                                        cscRead,cscImage,cscRx,
+                                        [&](uintptr_t entry,uint32_t a,uint32_t b,float* matrix,float*,float*) noexcept {
+                                            assert(entry==0x100000+0x4dac0 && a==3 && b==5 && matrixAdmissions==1);
+                                            ++coefficientBuilds;matrix[0]=7;
+                                        },[&](uintptr_t entry,uint32_t a,uint32_t b,float*) noexcept {
+                                            assert(entry==0x100000+0x54950 && a==3 && b==5);
+                                            ++matrixAdmissions;return true;
+                                        });
                                 },entries,[&](void* cscChild,const auto& combined,uint8_t* state) noexcept {
                                     assert(cscChild==child && state==stateCpu.bytes.data());
                                     assert(combined.allocate==entries.allocate && combined.freeResources==entries.freeResources &&
@@ -14298,6 +14330,7 @@ int main() {
                                 })==consumerResult);
                             assert(assemblyIef==savedIef && stateCpu.bytes==savedState);
                             assert(coefficientBuilds==unsigned(cscEnabled));
+                            assert(matrixAdmissions==coefficientBuilds);
                             escapedCscAssembly.csc(child,stateCpu.bytes.data(),assemblyIef.data());
                             assert(assemblyIef==savedIef && stateCpu.bytes==savedState);
                             assert(assemblyCsc.reset());
