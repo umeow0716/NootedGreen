@@ -3396,6 +3396,19 @@ public:
                 });
         });
     }
+    template<class VpOwner,class Read,class Lines,class Retire,class Use>
+    int withBorrowedVpModeAssemblyView(VpOwner& vp,bool avsEnabled,Read& read,
+        Lines& lines,Retire& retire,uintptr_t source,uintptr_t target,uintptr_t settings,Use use) noexcept {
+        return withBorrowedVpCpuScope([&](auto borrow) noexcept {
+            return vp.withModeAssemblyView(avsEnabled,read,lines,retire,source,target,settings,
+                [&](void* child,const auto& entries) noexcept {
+                    return borrow(child,[&](void* parent,void* borrowed) noexcept {
+                        static_assert(noexcept(use(parent,borrowed,entries)),"parent VP mode assembly ABI");
+                        return use(parent,borrowed,entries);
+                    });
+                });
+        });
+    }
     template<class ExecutionOwner>
     int setupKernelScratch(ExecutionOwner& execution,int32_t index) noexcept {
         if(!ready_ || !tableInstalled_ || !busy_ ||

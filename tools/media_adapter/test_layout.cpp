@@ -13427,17 +13427,29 @@ int main() {
                         std::memcpy(stateCpu.bytes.data()+0x30,&height,4);
                         std::memcpy(stateCpu.bytes.data()+0x4c,&scaled,4);
                         auto readFormat=[](uintptr_t address,void* out,size_t size) noexcept {
-                            assert(address==0x2130 && size==4);
-                            const uint32_t format=13;std::memcpy(out,&format,4);return true;
+                            if(address==0x2130 && size==4) {
+                                const uint32_t format=13;std::memcpy(out,&format,4);return true;
+                            }
+                            if(size==4 && (address==0x1000 || address==0x2000 || address==0x1130 ||
+                                address==0x10d8 || address==0x10dc)) {
+                                const uint32_t value=address==0x1130?0x19:address==0x10d8?1920:address==0x10dc?1080:3;
+                                std::memcpy(out,&value,4);return true;
+                            }
+                            if((address==0x10a8 && size==8) || (address==0x3012 && size==2)) {
+                                std::memset(out,0,size);return true;
+                            }
+                            assert(false);return false;
                         };
                         unsigned retireCalls=0;
                         for(int status:{31,0}) {
                             auto retire=[&]() noexcept {++retireCalls;return status;};
-                            assert(owner.withBorrowedVpAssemblyView(graph,false,readFormat,lines,retire,
+                            assert(owner.withBorrowedVpModeAssemblyView(graph,false,readFormat,lines,retire,0x1000,0x2000,0x3000,
                                 [&](void* parent,void* child,const auto& entries) noexcept {
                                     uintptr_t link=0;std::memcpy(&link,static_cast<uint8_t*>(parent)+0x80,8);
                                     assert(link==reinterpret_cast<uintptr_t>(child));
                                     assert(!graph.tryReset());owner.reset();assert(cpu.live);
+                                    entries.sampleMode(child,reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x2000));
+                                    entries.formatMode(child,reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x3000));
                                     assert(entries.finalAdmission(child,1,reinterpret_cast<void*>(0x1000),
                                         reinterpret_cast<void*>(0x2000)) && entries.allocate(child)==0);
                                     entries.freeResources(child);return 0;
