@@ -11904,6 +11904,77 @@ static void testRetainedVeboxFrames() {
         assert(registry.lookup(image,0x7000).generation==replacementPhysical.generation);
         assert(registry.destroy(replacementPhysical,image,0x7000,[](uintptr_t) noexcept -> int {return 0;})==0);
     }
+    {
+        using Registry=TglOwnedVeboxPhysicalFrameRegistry<Frame>;
+        static Registry registry;
+        constexpr uintptr_t image=0x100000;
+        std::array<uint8_t,16> init{0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,0x41,0x55,0x41,0x54,0x53,0x50,0x48,0x85};
+        const std::array<uint8_t,7> clear{0x48,0xc7,7,0,0,0,0};
+        const std::array<uint8_t,16> free{0x55,0x48,0x89,0xe5,0x41,0x56,0x53,0x41,0xbe,5,0,0,0,0x48,0x85,0xff};
+        void* output=nullptr;bool readable=true,qualified=true;
+        auto read=[&](uintptr_t address,void* bytes,size_t size) noexcept {
+            if(address==reinterpret_cast<uintptr_t>(&output) && size==8) {
+                if(!readable) return false;std::memcpy(bytes,&output,8);return true;
+            }
+            if(address==image+0x135d9 && size==init.size()) std::memcpy(bytes,init.data(),size);
+            else if(address==image+0x135f6 && size==clear.size()) std::memcpy(bytes,clear.data(),size);
+            else if(address==image+0x13c8c && size==free.size()) std::memcpy(bytes,free.data(),size);
+            else return false;
+            return true;
+        };
+        auto qualify=[&](uintptr_t candidate) noexcept {return qualified && candidate==image;};
+        auto executable=[](uintptr_t address,size_t size) noexcept {
+            return (address==image+0x135d9 && size==16) || (address==image+0x135f6 && size==7) ||
+                (address==image+0x13c8c && size==16);
+        };
+        TglNativePhysicalCallbackBinding binding;assert(binding.resolve(image,read,qualify,executable));
+        struct Invoke {
+            void** original;uintptr_t produced=0x8000;int status=0;
+            unsigned initialized=0,destroyed=0;
+            int initialize(uintptr_t entry,void** out,const void* input) noexcept {
+                assert(entry==image+0x135d9 && out==original && input==reinterpret_cast<const void*>(0x3300));
+                ++initialized;*out=reinterpret_cast<void*>(produced);return status;
+            }
+            int destroy(uintptr_t entry,uintptr_t physical) noexcept {
+                assert(entry==image+0x13c8c && physical==0x8000);++destroyed;return 0;
+            }
+        } invoke{&output};
+        struct InvokeRef {
+            Invoke& native;
+            int initialize(uintptr_t entry,void** out,const void* input) noexcept {return native.initialize(entry,out,input);}
+            int destroy(uintptr_t entry,uintptr_t physical) noexcept {return native.destroy(entry,physical);}
+        } invokeRef{invoke};
+        TglOwnedPhysicalCallbackCoordinator<Registry,decltype(read),decltype(qualify),decltype(executable),InvokeRef>
+            callbacks(registry,binding,read,qualify,executable,invokeRef);
+        const auto input=reinterpret_cast<const void*>(0x3300);
+        assert(!callbacks.initialize(nullptr,input).called && !callbacks.initialize(&output,nullptr).called);
+        const auto success=callbacks.initialize(&output,input);
+        assert(success.status==0 && success.nativeStatus==0 && success.called && success.published && invoke.initialized==1);
+        assert(registry.lookup(image,0x8000).generation==success.ticket.generation);
+        assert(callbacks.destroy(0x8000)==0 && invoke.destroyed==1);
+        assert(callbacks.destroy(0x8000)==5 && invoke.destroyed==1);
+        invoke.produced=0;invoke.status=31;
+        const auto failure=callbacks.initialize(&output,input);
+        assert(failure.called && !failure.published && failure.status==31 && failure.nativeStatus==31);
+        invoke.status=0;
+        const auto nullSuccess=callbacks.initialize(&output,input);
+        assert(nullSuccess.called && !nullSuccess.published && nullSuccess.status==5 && nullSuccess.nativeStatus==0);
+        invoke.produced=0x9000;invoke.status=31;
+        const auto partial=callbacks.initialize(&output,input);
+        assert(partial.called && !partial.published && partial.status==31 && callbacks.destroy(0x9000)==5);
+        invoke.produced=0xa000;invoke.status=0;readable=false;
+        const auto unknown=callbacks.initialize(&output,input);
+        assert(unknown.called && !unknown.published && unknown.status==5 && callbacks.destroy(0xa000)==5);
+        readable=true;init[0]^=1;
+        assert(!callbacks.initialize(&output,input).called && invoke.initialized==5 && invoke.destroyed==1);
+        init[0]^=1;invoke.produced=0xb000;
+        const auto original=callbacks.initialize(&output,input);
+        assert(original.published && registry.lookup(image,0xb000).generation==original.ticket.generation);
+        const auto alias=callbacks.initialize(&output,input);
+        assert(alias.called && !alias.published && alias.status==5 && alias.nativeStatus==0);
+        assert(!registry.lookup(image,0xb000).generation && callbacks.destroy(0xb000)==5);
+        assert(!callbacks.initialize(&output,input).called && invoke.initialized==7 && invoke.destroyed==1);
+    }
 }
 
 int main() {

@@ -16124,6 +16124,16 @@ public:
         for(const auto* other:entries_) if(other && other->physical==physical) return false;
         entry->physical=physical;entry->state=State::Live;return true;
     }
+    bool quarantineReservation(Ticket ticket,uintptr_t image,uintptr_t physical) noexcept {
+        if(gate_.test_and_set(std::memory_order_acquire)) return false;
+        Unlock unlock{gate_};auto* entry=resolve(ticket);
+        if(!entry || entry->state!=State::Reserved || entry->image!=image) return false;
+        // A duplicate native publication makes ownership ambiguous. Freeze
+        // every matching generation; never destroy/adopt the other live pool.
+        if(physical) for(auto* other:entries_)
+            if(other && other->physical==physical) other->state=State::Quarantined;
+        entry->physical=physical;entry->state=State::Quarantined;return true;
+    }
     // Native callbacks carry physical pointers, not owned tickets. Re-resolve
     // under the gate; a concurrent teardown between lookup/use rejects the
     // generation rather than exposing a freed Entry or resurrecting a pool.
@@ -16159,6 +16169,88 @@ public:
             entries_[ticket.index]=nullptr;delete entry;
         }
         return result; // nonzero native teardown retains terminal quarantine
+    }
+};
+
+struct TglNativePhysicalCallbackBinding {
+    uintptr_t image=0,initialize=0,destroy=0;
+    template<class Read,class Qualify,class Executable>
+    bool resolve(uintptr_t base,Read read,Qualify qualify,Executable executable) noexcept {
+        *this={};
+        constexpr std::array<uint8_t,16> init{
+            0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,0x41,0x55,0x41,0x54,0x53,0x50,0x48,0x85};
+        constexpr std::array<uint8_t,16> free{
+            0x55,0x48,0x89,0xe5,0x41,0x56,0x53,0x41,0xbe,5,0,0,0,0x48,0x85,0xff};
+        constexpr std::array<uint8_t,7> clear{0x48,0xc7,7,0,0,0,0};
+        if(!base || base>UINTPTR_MAX-0x13c9c || !qualify(base)) return false;
+        auto matches=[&](uintptr_t offset,const auto& expected) noexcept {
+            auto actual=expected;
+            return executable(base+offset,actual.size()) &&
+                read(base+offset,actual.data(),actual.size()) && actual==expected;
+        };
+        if(!matches(0x135d9,init) || !matches(0x135f6,clear) || !matches(0x13c8c,free)) return false;
+        image=base;initialize=base+0x135d9;destroy=base+0x13c8c;return true;
+    }
+};
+struct TglNativePhysicalCallbackInvoker {
+    int initialize(uintptr_t entry,void** output,const void* input) const noexcept {
+        return reinterpret_cast<int(*)(void**,const void*)>(entry)(output,input);
+    }
+    int destroy(uintptr_t entry,uintptr_t physical) const noexcept {
+        return reinterpret_cast<int(*)(void*)>(entry)(reinterpret_cast<void*>(physical));
+    }
+};
+// Callback ABI coordinator, not adapter publication. No substitute native
+// output/input and no speculative cleanup after a partial/unknown init. The
+// caller qualifies this exact image and original callback table separately.
+template<class Registry,class Read,class Qualify,class Executable,
+    class Invoke=TglNativePhysicalCallbackInvoker>
+class TglOwnedPhysicalCallbackCoordinator {
+    Registry& registry_;TglNativePhysicalCallbackBinding binding_;
+    Read read_;Qualify qualify_;Executable executable_;Invoke invoke_;
+    bool valid() noexcept {
+        TglNativePhysicalCallbackBinding current;
+        return current.resolve(binding_.image,read_,qualify_,executable_) &&
+            current.initialize==binding_.initialize && current.destroy==binding_.destroy;
+    }
+public:
+    struct InitResult {int status=5,nativeStatus=5;bool called=false,published=false;
+        typename Registry::Ticket ticket{};};
+    TglOwnedPhysicalCallbackCoordinator(Registry& registry,TglNativePhysicalCallbackBinding binding,
+        Read read,Qualify qualify,Executable executable,Invoke invoke=Invoke{}) noexcept
+        :registry_(registry),binding_(binding),read_(read),qualify_(qualify),executable_(executable),invoke_(invoke) {}
+    InitResult initialize(void** output,const void* input) noexcept {
+        InitResult result;
+        if(!output || !input || !valid()) return result;
+        result.ticket=registry_.reserve(binding_.image);
+        if(!result.ticket.generation) return result;
+        result.called=true;
+        result.status=result.nativeStatus=invoke_.initialize(binding_.initialize,output,input);
+        uintptr_t physical=0;
+        if(!read_(reinterpret_cast<uintptr_t>(output),&physical,sizeof(physical))) {
+            (void)registry_.quarantineReservation(result.ticket,binding_.image,0);
+            if(!result.status) result.status=5;
+            return result;
+        }
+        if(result.nativeStatus || !physical) {
+            if(physical) (void)registry_.quarantineReservation(result.ticket,binding_.image,physical);
+            else (void)registry_.cancel(result.ticket);
+            if(!result.status) result.status=5;
+            return result;
+        }
+        result.published=registry_.publish(result.ticket,binding_.image,physical);
+        if(!result.published) {
+            (void)registry_.quarantineReservation(result.ticket,binding_.image,physical);
+            result.status=5;
+        }
+        return result;
+    }
+    int destroy(uintptr_t physical) noexcept {
+        if(!physical || !valid()) return 5;
+        const auto ticket=registry_.lookup(binding_.image,physical);
+        return registry_.destroy(ticket,binding_.image,physical,[&](uintptr_t address) noexcept -> int {
+            return invoke_.destroy(binding_.destroy,address);
+        });
     }
 };
 
