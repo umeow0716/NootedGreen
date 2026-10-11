@@ -3310,6 +3310,8 @@ class TglOwnedVeboxBaseOwner {
     Destroy& destroy_;
     uintptr_t destructor_=0,image_=0;
     uint64_t allocationGeneration_=0;
+    uintptr_t publishedRenderer_=0;
+    uint64_t publishedRendererGeneration_=0;
     bool constructed_=false,ready_=false,busy_=false,tableInstalled_=false;
 public:
     TglOwnedVeboxBaseOwner(CpuBackend& cpu,SfcInvoke& sfc,Cleanup& cleanup,Destroy& destroy)
@@ -3327,7 +3329,7 @@ public:
         const void* cache,int32_t& status,Read read,Construct construct) {
         static_assert(noexcept(construct(uintptr_t{},nullptr,nullptr,nullptr,nullptr,
             nullptr,nullptr,nullptr,nullptr,&status)),"constructor reports native status");
-        if(busy_ || allocationGeneration_==UINT64_MAX) return TglOwnedBaseConstruction::NotCalled;
+        if(busy_ || publishedRenderer_ || allocationGeneration_==UINT64_MAX) return TglOwnedBaseConstruction::NotCalled;
         reset();busy_=true;
         if(binding.image!=sfcLifetime.image ||
            !sfc_.initialize(sfcLifetime,sfcBinding,reinterpret_cast<uintptr_t>(os),read)) {
@@ -3352,6 +3354,25 @@ public:
     bool ownsLifecycleAllocation(void* child,uint64_t generation) const noexcept {
         return child && generation && generation==allocationGeneration_ &&
             reinterpret_cast<uintptr_t>(child)==storage_.get();
+    }
+    // Publication prevents reset/reinitialization, NOT ordinary callback use.
+    // Unlike busy_, this spans multiple synchronous callbacks. It is not a
+    // self-retain: the complete enclosing runtime owner must remain alive.
+    // Release only after authenticated retirement and renderer-slot detach.
+    bool pinRendererPublication(void* child,uint64_t allocationGeneration,
+        uintptr_t renderer,uint64_t rendererGeneration) noexcept {
+        if(!ready_ || !tableInstalled_ || busy_ || publishedRenderer_ ||
+            !renderer || !rendererGeneration ||
+            !ownsLifecycleAllocation(child,allocationGeneration)) return false;
+        publishedRenderer_=renderer;publishedRendererGeneration_=rendererGeneration;
+        return true;
+    }
+    bool unpinRendererPublication(void* child,uint64_t allocationGeneration,
+        uintptr_t renderer,uint64_t rendererGeneration) noexcept {
+        if(busy_ || !renderer || publishedRenderer_!=renderer ||
+            publishedRendererGeneration_!=rendererGeneration ||
+            !ownsLifecycleAllocation(child,allocationGeneration)) return false;
+        publishedRenderer_=0;publishedRendererGeneration_=0;return true;
     }
     bool configureAllocationTail(const TglOwnedVeboxAllocationTail& tail) noexcept {
         if(!ready_ || busy_ || tableInstalled_) return false;
@@ -3655,7 +3676,7 @@ public:
     void reset() noexcept {(void)teardown(true);}
 private:
     bool teardown(bool releaseAllocation) noexcept {
-        if(busy_) return false;
+        if(busy_ || publishedRenderer_) return false;
         busy_=true;
         ready_=false;
         if(constructed_) {

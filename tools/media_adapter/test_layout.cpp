@@ -15493,6 +15493,27 @@ int main() {
                 hooks=tglBindOwnedVeboxQueryHooks<DeniedFormatRead>(hooks);
                 assert(owner.installPrivateVtableWithQueries<DeniedFormatRead>(
                     unbound,tableRead,qualify,executable));
+                {
+                    void* published=owner.constructedBase();
+                    const auto generation=owner.allocationGeneration();
+                    const auto beforeEvents=eventCount;
+                    assert(!owner.pinRendererPublication(published,generation+1,0x9000,3));
+                    assert(owner.pinRendererPublication(published,generation,0x9000,3));
+                    assert(!owner.pinRendererPublication(published,generation,0x9000,3));
+                    owner.reset();
+                    assert(!owner.destroyInPlace() && !owner.deleteAllocation());
+                    assert(owner.constructedBase()==published && eventCount==beforeEvents);
+                    assert(owner.withPrivateChild([&](void* child) noexcept -> int {
+                        assert(child==published && owner.hasPrivateChildLease(reinterpret_cast<uintptr_t>(child)));
+                        assert(!owner.unpinRendererPublication(child,generation,0x9000,3));
+                        return 31;
+                    })==31);
+                    assert(!owner.unpinRendererPublication(published,generation,0x9000,4));
+                    assert(!owner.unpinRendererPublication(published,generation,0x9008,3));
+                    assert(owner.unpinRendererPublication(published,generation,0x9000,3));
+                    assert(!owner.unpinRendererPublication(published,generation,0x9000,3));
+                    assert(owner.constructedBase()==published && eventCount==beforeEvents);
+                }
                 assert(owner.withPrivateChild([&](void* child) noexcept {
                     assert(staleAllocation.owns(child) && staleAllocation.allocate()==0);
                     uintptr_t table=0,destroyEntry=0,deleteEntry=0;
