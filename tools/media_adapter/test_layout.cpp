@@ -11020,6 +11020,31 @@ static void testFillCscBinding() {
 }
 
 static void testSfcFrameFields() {
+    {
+        TglNativeSineBinding sine;unsigned reads=0,calls=0;bool corrupt=false;
+        auto read=[&](uintptr_t address,void* out,size_t size) noexcept {
+            ++reads;assert(address==0x100000+0x23e4c4 && size==6);
+            std::array<uint8_t,6> stub{0xff,0x25,0x3e,0x21,0x52,0x00};
+            if(corrupt) stub[2]^=1;
+            std::memcpy(out,stub.data(),size);return true;
+        };
+        auto qualify=[](uintptr_t image) noexcept {return image==0x100000;};
+        auto executable=[](uintptr_t address,size_t size) noexcept {
+            return address==0x100000+0x23e4c4 && size==6;
+        };
+        auto invoke=[&](uintptr_t entry,float value) noexcept {
+            ++calls;assert(entry==0x100000+0x23e4c4 && value==0.5f);return 0.25f;
+        }; // Recording fixture, not Darwin libm execution.
+        assert(std::isnan(sine.evaluate(0.5f,invoke)) && !calls);
+        assert(sine.resolve(0x100000,read,qualify,executable) && sine.bound());
+        assert(sine.evaluate(0.5f,invoke)==0.25f && calls==1);
+        corrupt=true;
+        assert(!sine.resolve(0x100000,read,qualify,executable) && !sine.bound());
+        assert(std::isnan(sine.evaluate(0.5f,invoke)) && calls==1);
+        const auto previousReads=reads;
+        assert(!sine.resolve(UINTPTR_MAX,read,qualify,executable));
+        assert(!sine.resolve(0x200000,read,qualify,executable) && reads==previousReads);
+    }
     for (uint32_t format : {0x19u,0xdu,1u,UINT32_MAX})
     for (uint32_t siting=0;siting<128;++siting) {
         std::array<uint8_t,12> parameters; parameters.fill(0xa5);

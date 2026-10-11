@@ -6581,6 +6581,33 @@ inline bool tglSelectOwnedSfcYWindow(float& output,uint32_t format,uint32_t mode
 // host libm here is not evidence of bit-identical Darwin math. Native
 // stub23e4c4/GOT760608 resolves to_sinf (indirect symbol266). Constants are
 // exact image bits24ce94=40490fdb and24ce98=3089705f.
+struct TglNativeSineInvoker {
+    float operator()(uintptr_t entry,float value) const noexcept {
+        return reinterpret_cast<float (*)(float)>(entry)(value);
+    }
+};
+class TglNativeSineBinding {
+    uintptr_t entry_=0;
+public:
+    template<class Read,class Qualify,class Executable>
+    bool resolve(uintptr_t image,Read read,Qualify qualify,Executable executable) noexcept {
+        entry_=0;
+        static_assert(noexcept(read(uintptr_t{},nullptr,size_t{})) &&
+            noexcept(qualify(image)) && noexcept(executable(image,size_t{})),"native sine admission ABI");
+        constexpr std::array<uint8_t,6> anchor{0xff,0x25,0x3e,0x21,0x52,0x00};
+        std::array<uint8_t,6> actual{};
+        if(!image || image>UINTPTR_MAX-0x760610 || !qualify(image) ||
+           !executable(image+0x23e4c4,anchor.size()) ||
+           !read(image+0x23e4c4,actual.data(),actual.size()) || actual!=anchor) return false;
+        entry_=image+0x23e4c4;return true;
+    }
+    bool bound() const noexcept {return entry_!=0;}
+    template<class Invoke=TglNativeSineInvoker>
+    float evaluate(float value,Invoke invoke={}) const noexcept {
+        static_assert(noexcept(invoke(uintptr_t{},value)),"native sine call ABI");
+        return entry_?invoke(entry_,value):std::numeric_limits<float>::quiet_NaN();
+    }
+};
 template <typename NativeSin>
 inline float tglOwnedSfcSinc(float x,NativeSin&& sine) noexcept {
     const float magnitude=x>0.f ? x : -x;
