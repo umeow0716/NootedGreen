@@ -16180,11 +16180,22 @@ int main() {
             };
             struct NativeCpu {
                 Cpu& cpu;
+                Cpu* avs=nullptr;
                 uintptr_t allocate(uintptr_t entry,size_t size) {
-                    assert(entry==base+0x437e0);return cpu.allocate(size);
+                    assert(entry==base+0x437e0);
+                    if(avs) {
+                        assert(size==0xf8 || size==0xc00);
+                        auto& backing=size==0xc00?*avs:cpu;
+                        assert(!backing.live && size<=backing.bytes.size());
+                        if(backing.fail) return 0;
+                        backing.live=true;return reinterpret_cast<uintptr_t>(backing.bytes.data());
+                    }
+                    return cpu.allocate(size);
                 }
                 void release(uintptr_t entry,uintptr_t pointer) noexcept {
-                    assert(entry==base+0x436d0);cpu.release(pointer);
+                    assert(entry==base+0x436d0);
+                    if(avs && pointer==reinterpret_cast<uintptr_t>(avs->bytes.data())) avs->release(pointer);
+                    else cpu.release(pointer);
                 }
             } nativeCpu{cpu};
             auto allocatorRead=[](uintptr_t address,void* output,size_t size) noexcept {
@@ -16337,6 +16348,7 @@ int main() {
                     assert(pairInvoke.constructs==2 && pairInvoke.destroys==2);
                     {
                         pairEventCount=0;cleaned={};destroyed={};retirementQualified=false;
+                        Cpu vpAvsCpu{{},pairEvents,pairEventCount};
                         TglOwnedSurfaceStorage source,target,history;
                         for(auto* s:{&source,&target,&history}) {
                             const uint32_t type=1,count=1;const uintptr_t plane=1,surface=5;
@@ -16371,8 +16383,8 @@ int main() {
                                 return address==hp?&ho:nullptr;
                             },to,Cf{refs},uintptr_t{11},uintptr_t{12},frameDn,base,allocatorRead,
                             [](uintptr_t image) noexcept {return image==base;},
-                            [](uintptr_t,size_t) noexcept {return true;},TglNativeResourceBinding{},
-                            uint64_t{4096},TglNativeBufferFillBinding{},NativeCpu{vpCpu},
+                            [](uintptr_t,size_t) noexcept {return true;},TglNativeResourceBinding{os,1,2},
+                            uint64_t{4096},TglNativeBufferFillBinding{},NativeCpu{vpCpu,&vpAvsCpu},
                             std::array<decltype(frontendCleanup),2>{frontendCleanup,frontendCleanup},
                             std::array<NativeCpu,2>{NativeCpu{pairCpu[0]},NativeCpu{pairCpu[1]}},
                             std::array<TrackedSfc,2>{TrackedSfc{pairInvoke,pairEvents,pairEventCount},TrackedSfc{pairInvoke,pairEvents,pairEventCount}},
@@ -16440,9 +16452,22 @@ int main() {
                             assert(frame.children().first().owner().installPrivateVtable(hooks,tableRead,
                                 [](uintptr_t image) noexcept {return image==base;},
                                 [](uintptr_t,size_t) noexcept {return true;}));
-                            return frame.withPrivateChildCommandFrame(0,roles,0,0,
+                            // CPU admission fixture only; no native image/resource entry is executed.
+                            struct VpBinding {
+                                uintptr_t image=base;
+                                bool validateConstructedObject(uintptr_t,uintptr_t,
+                                    bool (*)(uintptr_t,void*,size_t)) const noexcept {return true;}
+                            } vpBinding;
+                            auto noRead=+[](uintptr_t,void*,size_t) noexcept {return false;};
+                            assert(frame.backing().initializeVp(vpBinding,os,0x2200,0x3300,noRead,1,0)==0);
+                            return frame.withPrivateVpCommandFrame(0,roles,0,0,
                                 0x1100,0x2200,0x3300,[&](auto& leasedOwner,void* child,
+                                    void* vp,auto& graph,auto& lines,
                                     auto& sourceLease,auto& targetLease,auto& dn,auto& packets) noexcept {
+                                    assert(graph.ownsStorage(vp));(void)lines;
+                                    uintptr_t borrowedVp=0;
+                                    std::memcpy(&borrowedVp,static_cast<uint8_t*>(child)+0x80,8);
+                                    assert(borrowedVp==reinterpret_cast<uintptr_t>(vp));
                                     assert(child==pairCpu[0].bytes.data() &&
                                         leasedOwner.hasPrivateChildLease(reinterpret_cast<uintptr_t>(child)));
                                     leasedOwner.reset();assert(leasedOwner.constructedBase()==child);
@@ -16453,7 +16478,7 @@ int main() {
                                     assert(reentry.status==5 && !reentry.acquired);
                                     assert(sourceLease.hasSurfaceLease(source) && targetLease.hasSurfaceLease(target));
                                     assert(&packets.source==&source && packets.target==&target && dn.size()==64);
-                                    assert(ho.borrowed && !frame.backing().vpBound());
+                                    assert(ho.borrowed && frame.backing().vpBound());
                                     return TglOwnedVeboxCommandTransactionResult{31,31,true,false};
                                 });
                         });
@@ -16465,6 +16490,7 @@ int main() {
                         })==0); // CPU certificate fixture only
                         assert(!so.borrowed && !to.borrowed && !ho.borrowed && !frameDn.live && !refs[1] && !refs[5]);
                         assert(cleaned[0]==1 && cleaned[1]==1 && destroyed==cleaned);
+                        assert(!vpCpu.live && !vpAvsCpu.live);
                     }
                 }
                 ChildStorage childStorage(base,allocatorRead,
