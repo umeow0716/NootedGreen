@@ -45,6 +45,57 @@ struct TestFeatureExecutionOwner {
 };
 static void testTrackedCpuOwner() {
     {
+        // Exercise the real DI acquisition through the whole selector, not
+        // an invented failure callback. No later predicate may run on error.
+        struct Policy {
+            TglVeboxPipeAcquisition frame;
+            TglOwnedSurfaceStorage source{};
+            uintptr_t leased=0x1000;uint32_t mode=1;bool allow=true;
+            unsigned reads=0,later=0;
+            bool healthy() const noexcept {return frame.healthy();}
+            bool bypass() noexcept {return true;}
+            bool rejectDi() noexcept {
+                bool rejected=false;
+                auto read=[&](uintptr_t address,void* out,size_t n) noexcept {
+                    ++reads;assert(address==leased && n==4);
+                    if(!allow) return false;
+                    std::memcpy(out,&mode,4);return true;
+                };
+                const bool acquired=tglRejectLeasedGen12DiOutput(rejected,source,leased,frame,read);
+                assert(acquired==frame.healthy());return rejected;
+            }
+            bool rejectLut() noexcept {++later;return false;}
+            bool direct() noexcept {++later;return true;}
+            bool twoPass() noexcept {assert(false);return false;}
+            bool sfcAvailable() noexcept {assert(false);return false;}
+            bool hdr() noexcept {assert(false);return false;}
+            uint32_t sfc() noexcept {assert(false);return 0;}
+            bool fastFill() noexcept {assert(false);return false;}
+        };
+        for(unsigned scenario=0;scenario<7;++scenario) {
+            Policy p;uint32_t height=1081,format=0x19;
+            if(scenario==0) p.mode=2; // ADI: no BOB rejection
+            if(scenario==2) p.allow=false;
+            if(scenario==3) p.mode=0; // upstream BOB=0 is not Darwin BOB
+            if(scenario==4) p.mode=0x10001;
+            if(scenario==5) p.leased=UINTPTR_MAX-2;
+            std::memcpy(p.source.prefix.data()+0x88,&p.leased,sizeof(p.leased));
+            if(scenario==6) p.leased=0x2000; // foreign source pointer
+            std::memcpy(p.source.prefix.data()+0xdc,&height,4);
+            std::memcpy(p.source.prefix.data()+0x130,&format,4);
+            uint8_t comp=0xa5;uint32_t output=0xdeadbeef;
+            const bool ok=tglSelectGen12VeboxOutputPipe(p,comp,output);
+            if(scenario==0) assert(ok && output==2 && comp==0 && p.later==2);
+            else if(scenario==1) assert(ok && output==0 && comp==1 && p.later==0);
+            else {
+                assert(!ok && output==0xdeadbeef && comp==0xa5 && p.later==0 && !p.healthy());
+                const unsigned reads=p.reads;
+                assert(!tglSelectGen12VeboxOutputPipe(p,comp,output) && p.reads==reads);
+                assert(output==0xdeadbeef && comp==0xa5);
+            }
+        }
+    }
+    {
         TglOwnedSurfaceStorage source{};
         uint32_t mode=1,height=1081,format=0x19;unsigned reads=0;bool allow=true;
         uintptr_t params=0x1000;

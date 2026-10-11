@@ -4050,8 +4050,9 @@ inline const uint8_t* tglOwnedSfcSurfaceBytes(const TglOwnedSurfaceStorage& surf
 template<class Read>
 bool tglRejectLeasedGen12DiOutput(bool& rejected,const TglOwnedSurfaceStorage& source,
     uintptr_t leasedDiParams,TglVeboxPipeAcquisition& frame,Read read) noexcept {
-    static_assert(noexcept(read(uintptr_t{},static_cast<void*>(nullptr),size_t{})),
-                  "DI snapshot reader must not throw");
+    static_assert(noexcept(read(uintptr_t{},static_cast<void*>(nullptr),size_t{})) &&
+        std::is_same_v<decltype(read(uintptr_t{},static_cast<void*>(nullptr),size_t{})),bool>,
+        "DI snapshot reader must return bool without throwing");
     if(!frame.healthy()) return false;
     auto fail=[&]() noexcept {frame.fail();return false;};
     uintptr_t params=0;std::memcpy(&params,source.prefix.data()+0x88,sizeof(params));
