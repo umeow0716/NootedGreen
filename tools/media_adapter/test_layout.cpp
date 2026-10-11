@@ -5393,6 +5393,26 @@ static void testNativeResourceBoundary() {
                         assert(!owner.surface() && !destination.surface());
                         assert(fixture.allocations==allocations && fixture.releases==releases);
                         TglOwnedSurfaceStorage dnMetadata;unsigned borrowedCalls=0;
+                        unsigned allocationCalls=0;
+                        auto allocation=[&](void* c,uintptr_t report,const auto& sourceView) noexcept -> int {
+                            ++allocationCalls;assert(c==actual && &sourceView==&s);
+                            assert(report==reinterpret_cast<uintptr_t>(execution.bytes.data()));
+                            owner.reset();
+                            assert(childOwner.withPrivateChild([](void*) noexcept {assert(false);return 0;})==5);
+                            assert(owner.hasSurfaceLease(s));return 31;
+                        };
+                        assert(tglRunCapturedVeboxAllocation(owner,childOwner,execution,actual,
+                            reinterpret_cast<uintptr_t>(execution.bytes.data()),s,allocation)==5);
+                        uintptr_t sourceLink=reinterpret_cast<uintptr_t>(&s);
+                        std::memcpy(child.data()+0x1b0,&sourceLink,8);
+                        assert(tglRunCapturedVeboxAllocation(owner,childOwner,execution,actual,
+                            reinterpret_cast<uintptr_t>(execution.bytes.data()),s,allocation)==31 && allocationCalls==1);
+                        assert(tglRunCapturedVeboxAllocation(owner,childOwner,execution,actual,
+                            reinterpret_cast<uintptr_t>(execution.bytes.data()),s,
+                            [&](void*,uintptr_t,const auto&) noexcept -> int {
+                                const uintptr_t zero=0;std::memcpy(child.data()+0x1b0,&zero,8);return 0;
+                            })==5); // a changed graph link cannot publish success
+                        sourceLink=0;std::memcpy(child.data()+0x1b0,&sourceLink,8);
                         TglOwnedDescriptorOnlySurface dnTarget;
                         TglOwnedFfdiAllocationRequest dnRequest;bool dnChanged=false;
                         assert(tglPrepareOwnedFfdiAllocationRequest(s,0x19,1,{},dnRequest));

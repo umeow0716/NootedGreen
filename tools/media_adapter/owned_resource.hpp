@@ -7917,6 +7917,29 @@ std::array<uintptr_t,20> tglBindOwnedVeboxAdmissionHook(
     return hooks;
 }
 
+// Allocation input admission, not ICL virtual-base interpretation. Only the
+// already-leased owned TGL child/source/execution may reach the planner.
+// Feature policy is deliberately not inferred from equal donor offsets.
+template<class SurfaceOwner,class ChildOwner,class ExecutionOwner,class Invoke>
+int tglRunCapturedVeboxAllocation(SurfaceOwner& sourceOwner,ChildOwner& childOwner,
+    ExecutionOwner& executionOwner,void* child,uintptr_t execution,
+    const TglOwnedSurfaceStorage& source,Invoke invoke) noexcept {
+    static_assert(noexcept(invoke(child,execution,source)) &&
+        std::is_same_v<decltype(invoke(child,execution,source)),int>,"captured allocation ABI");
+    const auto admitted=[&]() noexcept {
+        if(!child || !sourceOwner.hasSurfaceLease(source) ||
+           !childOwner.hasPrivateChildLease(reinterpret_cast<uintptr_t>(child)) ||
+           !executionOwner.hasExecutionLease(execution)) return false;
+        uintptr_t report=0,input=0;
+        const auto* bytes=static_cast<const uint8_t*>(child);
+        std::memcpy(&report,bytes+0x88,8);std::memcpy(&input,bytes+0x1b0,8);
+        return report==execution && input==reinterpret_cast<uintptr_t>(&source);
+    };
+    if(!admitted()) return 5;
+    const int result=invoke(child,execution,source);
+    return admitted()?result:5;
+}
+
 // TGL mode0 12c1cd calls +58 with only child in RDI and consumes EAX.
 // Allocation precedes builder admission: do not gate it on producer-pass state.
 // Context owns the complete allocation transaction and must unwind failures
