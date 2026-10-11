@@ -6314,8 +6314,9 @@ static void testNativeResourceBoundary() {
                     })==5);
             }));
             assert(owner.withSurface([](const auto&) noexcept {})); // failed peer acquisition unwinds input
-            for(size_t failAt=0;failAt<=4;++failAt) {
+            for(bool denyPublication:{false,true}) for(size_t failAt=0;failAt<=4;++failAt) {
                 size_t allocations=0;unsigned consumers=0;
+                unsigned publications=0;uint8_t reportFlag=0xa5,reportMode=0x5a;
                 const int result=tglWithAllocatedOwnedFfdiBatch<4>(owner,&owner,&destination,
                     4,0x19,1,{true,1},{8,3},0xa5,0x5a,
                     [&](size_t index,const auto& request,bool& changed) noexcept {
@@ -6343,9 +6344,16 @@ static void testNativeResourceBoundary() {
                         owner.reset();destination.reset();
                         assert(owner.ensure(key)==5 && destination.ensure(key)==5);
                         return -17;
+                    },{},[&](uint8_t flag,uint8_t mode) noexcept {
+                        ++publications;assert(allocations==2 && flag==1 && mode==1);
+                        reportFlag=flag;reportMode=mode;return denyPublication?91:0;
                     });
-                assert(result==(failAt<4?77:-17));
-                assert(allocations==(failAt<4?failAt+1:4) && consumers==(failAt<4?0u:1u));
+                const bool stoppedAtPublication=denyPublication && failAt>1;
+                assert(result==(stoppedAtPublication?91:failAt<4?77:-17));
+                assert(publications==unsigned(failAt>1));
+                assert(reportFlag==(failAt>1?1:0xa5) && reportMode==(failAt>1?1:0x5a));
+                assert(allocations==(stoppedAtPublication?2:failAt<4?failAt+1:4) &&
+                    consumers==unsigned(!stoppedAtPublication && failAt==4));
                 assert(owner.withSurface([](const auto&) noexcept {}));
                 assert(destination.withSurface([](const auto&) noexcept {}));
             }

@@ -5515,11 +5515,14 @@ int tglWithAllocatedOwnedFfdiPreparation(Owner& source,uint32_t format,uint32_t 
 // native zero-count/reused-slot path or an asynchronous submission lease.
 // A failed allocation leaves earlier allocator-owned slots intact for the
 // caller's real retirement policy; no fabricated rollback or handle copies.
-template<size_t Capacity,class Owner,class Allocate,class Use>
+struct TglOwnedFfdiNoReportPublication {
+    int operator()(uint8_t,uint8_t) const noexcept {return 0;}
+};
+template<size_t Capacity,class Owner,class Allocate,class Use,class Publish=TglOwnedFfdiNoReportPublication>
 int tglWithAllocatedOwnedFfdiBatch(Owner& input,Owner* execution,Owner* secondary,
     size_t count,uint32_t format,uint32_t tile,TglOwnedFfdiCompressionSelection compression,
     TglOwnedFfdiMetadataQuery query,uint8_t flag,uint8_t mode,Allocate allocate,Use use,
-    std::array<const TglOwnedSurfaceStorage*,3> captured={}) noexcept {
+    std::array<const TglOwnedSurfaceStorage*,3> captured={},Publish publish={}) noexcept {
     static_assert(Capacity>0 && Capacity<=4,"owned FFDI slot capacity");
     using Metadata=std::array<TglOwnedSurfaceStorage,Capacity>;
     using Views=std::array<const TglOwnedSurfaceStorage*,3>;
@@ -5527,6 +5530,8 @@ int tglWithAllocatedOwnedFfdiBatch(Owner& input,Owner* execution,Owner* secondar
         std::declval<bool&>())),"FFDI batch allocation ABI");
     static_assert(noexcept(use(std::declval<const Views&>(),std::declval<const Metadata&>(),
         size_t{},uint8_t{},uint8_t{})),"FFDI batch consumer ABI");
+    static_assert(noexcept(publish(uint8_t{},uint8_t{})) &&
+        std::is_same_v<decltype(publish(uint8_t{},uint8_t{})),int>,"FFDI report publisher ABI");
     if(count==0 || count>Capacity) return 5;
     const std::array<Owner*,3> roles{&input,execution,secondary};
     return tglWithCapturedOwnedSurfaceRoles(roles,captured,[&](const Views& views) noexcept {
@@ -5540,6 +5545,14 @@ int tglWithAllocatedOwnedFfdiBatch(Owner& input,Owner* execution,Owner* secondar
             if(!tglPrepareOwnedFfdiFrameMetadata(metadata[index],*views[0],query)) return 5;
             if(views[1]) tglCopyOwnedFfdiPrimaryScalars(metadata[index],*views[1]);
             tglUpdateOwnedFfdiExecutionCompression(changed,compression,flag,mode);
+            // Native1f7e0c..1f7e3d publishes each changed slot before the
+            // next allocation. A later failure must not erase that update.
+            // The default preserves legacy CPU-only consumers; runtime must
+            // supply its held execution-report owner, not defer to final use.
+            if(changed) {
+                const int published=publish(flag,mode);
+                if(published) return published;
+            }
         }
         if(views[2]) tglCopyOwnedFfdiSecondaryMetadata(metadata[0],*views[2]);
         return use(views,static_cast<const Metadata&>(metadata),count,flag,mode);
