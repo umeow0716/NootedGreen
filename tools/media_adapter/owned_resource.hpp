@@ -16820,6 +16820,8 @@ int tglWithOwnedVeboxFrameHookBindings(Frame& frame,ChildOwner& child,ExecutionO
 // mode/lifecycle and retained-frame scopes. Native setup/build must receive the
 // SAME producer that owns the installed hooks, not the underlying packet-only
 // context. Acquisition/writeback flags survive every native error unchanged.
+// retention must be the enclosing retained frame's monotonic latch; this entry
+// records acquisition before its synchronous producer scopes can unwind.
 // This does not submit, retire frames, or authorize physical destruction.
 template<class LifetimeResolve,class AdmissionResolve,class AllocationResolve,
     class ModeResolve,class FormatRead,class SourceOwner,class Frame,class ChildOwner,
@@ -16832,9 +16834,10 @@ TglOwnedVeboxCommandTransactionResult tglWithOwnedVeboxFrameNativeTransaction(
     uintptr_t dnParams,Read read,PacketAdmit admitPackets,ProduceCsc produceCsc,
     const TglNativeVeboxSetupBinding& setup,const TglNativeVeboxBuilderBinding& builder,
     uintptr_t image,uintptr_t os,TglOwnedVeboxBuilderScratch& scratch,void* auxiliary,
-    Qualify qualify,Executable executable,SetupInvoke setupInvoke=SetupInvoke{},
+    TglOwnedVeboxFrameRetention& retention,Qualify qualify,Executable executable,SetupInvoke setupInvoke=SetupInvoke{},
     BuildInvoke buildInvoke=BuildInvoke{},WritebackInvoke writebackInvoke=WritebackInvoke{}) noexcept {
     TglOwnedVeboxCommandTransactionResult result;
+    if(retention()) return result;
     const int status=tglWithOwnedVeboxFrameHookBindings<LifetimeResolve,AdmissionResolve,
         AllocationResolve,ModeResolve,FormatRead>(frame,child,execution,dnParams,read,
         admitPackets,produceCsc,[&](void* object,const auto&,auto& producer) noexcept -> int {
@@ -16842,6 +16845,7 @@ TglOwnedVeboxCommandTransactionResult tglWithOwnedVeboxFrameNativeTransaction(
                 object,frame.leases.execution,frame.leases.source,producer,setup,builder,
                 image,os,scratch,auxiliary,read,qualify,executable,
                 setupInvoke,buildInvoke,writebackInvoke);
+            retention.observe(result); // before producer/native callback scopes unwind
             return result.status;
         });
     result.status=status;

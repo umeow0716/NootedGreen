@@ -1405,13 +1405,14 @@ static void testTrackedCpuOwner() {
             TglNativeVeboxSetupBinding nativeSetup;
             TglNativeVeboxBuilderBinding nativeBuilder;
             TglOwnedVeboxBuilderScratch scratch;
+            TglOwnedVeboxFrameRetention nativeRetention;
             const auto unqualified=tglWithOwnedVeboxFrameNativeTransaction<AuxiliaryResolve,
                 AuxiliaryScope,AuxiliaryScope,AuxiliaryScope,FormatRead>(sourceLease,frame,
                 child,execution,0,noRead,noPackets,produce,nativeSetup,nativeBuilder,
-                0x100000000,1,scratch,nullptr,
+                0x100000000,1,scratch,nullptr,nativeRetention,
                 [](uintptr_t) noexcept {return false;},
                 [](uintptr_t,size_t) noexcept {return false;});
-            assert(unqualified.status==5 && !unqualified.acquired && !unqualified.writtenBack);
+            assert(unqualified.status==5 && !unqualified.acquired && !unqualified.writtenBack && !nativeRetention());
             assert(setups==2 && builders==2 && writebacks==2);
             nativeFixture=true;child.kernelSuccess=true;frame.success=true;
             auto qualify=[](uintptr_t image) noexcept {return image==nativeImage;};
@@ -1425,7 +1426,7 @@ static void testTrackedCpuOwner() {
             const auto accepted=tglWithOwnedVeboxFrameNativeTransaction<AuxiliaryResolve,
                 AuxiliaryScope,AuxiliaryScope,AuxiliaryScope,FormatRead>(sourceLease,frame,
                 child,execution,0,noRead,noPackets,produce,nativeSetup,nativeBuilder,
-                nativeImage,nativeOs,scratch,&state,qualify,executable,
+                nativeImage,nativeOs,scratch,&state,nativeRetention,qualify,executable,
                 [&](uintptr_t entry,void* object,void* command,void*,void* aux,int32_t* remaining) noexcept -> int {
                     assert(entry==nativeImage+0x129a10 && object==nativeChild &&
                         command==scratch.command.data() && aux==&state);
@@ -1442,6 +1443,13 @@ static void testTrackedCpuOwner() {
                         command==scratch.command.data());++nativeWritebacks;
                 });
             assert(accepted.status==0 && accepted.builderStatus==0 && accepted.acquired && accepted.writtenBack);
+            assert(nativeSetups==1 && nativeBuilds==1 && nativeWritebacks==1);
+            assert(nativeRetention());
+            const auto pending=tglWithOwnedVeboxFrameNativeTransaction<AuxiliaryResolve,
+                AuxiliaryScope,AuxiliaryScope,AuxiliaryScope,FormatRead>(sourceLease,frame,
+                child,execution,0,noRead,noPackets,produce,nativeSetup,nativeBuilder,
+                nativeImage,nativeOs,scratch,&state,nativeRetention,qualify,executable);
+            assert(pending.status==5 && !pending.acquired && !pending.writtenBack && nativeRetention());
             assert(nativeSetups==1 && nativeBuilds==1 && nativeWritebacks==1);
         }
     }
