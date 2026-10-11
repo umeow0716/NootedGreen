@@ -17305,6 +17305,13 @@ int main() {
                     MissingResolve,Resolve,FormatRead>(&context,complete);
                 assert(!missing);
                 for(auto entry:complete) assert(!entry);
+                std::array<uintptr_t,20> construction{};
+                const bool described=tglBuildOwnedVeboxCompleteHooks<LifetimeResolve,Resolve,Resolve,
+                    MissingResolve,Resolve,FormatRead>(&context,construction);
+                assert(described);
+                for(auto entry:construction) assert(entry);
+                using Kernel=int(*)(void*,int32_t) noexcept;
+                assert(reinterpret_cast<Kernel>(construction[5])(&context,3)==5 && !context.calls);
                 assert(build(&context));
                 for(auto entry:complete) assert(entry);
                 assert(complete[6]==hooks[6] && complete[7]==hooks[7] && complete[18]==hooks[18]);

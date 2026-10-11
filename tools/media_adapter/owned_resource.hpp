@@ -12921,6 +12921,14 @@ struct TglOwnedVeboxDndiFrameContext {
     }
 };
 
+template<class Frame,class ChildOwner,class ExecutionOwner,class Read,class PacketAdmit,class ProduceCsc>
+struct TglOwnedVeboxFrameProducerTypes {
+    using Dndi=TglOwnedVeboxDndiFrameContext<Frame,ExecutionOwner,Read,PacketAdmit>;
+    using Kernel=TglOwnedVeboxKernelFrameContext<Dndi,ChildOwner,ExecutionOwner>;
+    using Context=TglOwnedVeboxCscFrameContext<Kernel,ChildOwner,ExecutionOwner,ProduceCsc>;
+    using Resolve=TglOwnedVeboxScopedContext<Context>;
+};
+
 // Compose existing real packet/DNDI/kernel/CSC producers under one resolver
 // scope. No packet/pass/resource copy and no lifetime extension: enclosing
 // captured-frame orchestration retains child/execution/native image leases.
@@ -12932,10 +12940,11 @@ int tglWithOwnedVeboxFrameProducers(Frame& frame,ChildOwner& child,ExecutionOwne
     auto& leases=frame.leases;
     if(!leases.child || !leases.execution || !child.hasPrivateChildLease(leases.child) ||
        !execution.hasExecutionLease(leases.execution)) return 5;
-    TglOwnedVeboxDndiFrameContext dndi(frame,execution,dnParams,read,admitPackets);
-    TglOwnedVeboxKernelFrameContext kernel(dndi,child,execution);
-    TglOwnedVeboxCscFrameContext csc(kernel,leases,child,execution,produceCsc);
-    using Resolve=TglOwnedVeboxScopedContext<decltype(csc)>;
+    using Types=TglOwnedVeboxFrameProducerTypes<Frame,ChildOwner,ExecutionOwner,Read,PacketAdmit,ProduceCsc>;
+    typename Types::Dndi dndi(frame,execution,dnParams,read,admitPackets);
+    typename Types::Kernel kernel(dndi,child,execution);
+    typename Types::Context csc(kernel,leases,child,execution,produceCsc);
+    using Resolve=typename Types::Resolve;
     void* object=reinterpret_cast<void*>(leases.child);
     Resolve scope(object,csc);
     if(!scope.bound()) return 5;
@@ -15724,10 +15733,8 @@ std::array<uintptr_t,20> tglBindOwnedVeboxModeReleaseHook(std::array<uintptr_t,2
 // replace missing producers with presence-only/status-zero table fillers.
 template<class LifetimeResolve,class AdmissionResolve,class AllocationResolve,
     class ProducerResolve,class ModeResolve,class FormatRead>
-bool tglBindOwnedVeboxCompleteHooks(void* child,std::array<uintptr_t,20>& hooks) noexcept {
+bool tglBuildOwnedVeboxCompleteHooks(void* child,std::array<uintptr_t,20>& hooks) noexcept {
     std::array<uintptr_t,20> candidate{};
-    if(!AdmissionResolve::get(child) || !AllocationResolve::get(child) ||
-       !ProducerResolve::get(child) || !ModeResolve::get(child)) return false;
     if(!tglBindOwnedVeboxLifetimeHooks<LifetimeResolve>(child,candidate)) return false;
     candidate=tglBindOwnedVeboxAdmissionHook<AdmissionResolve>(candidate);
     candidate=tglBindOwnedVeboxAllocationHook<AllocationResolve>(candidate);
@@ -15740,6 +15747,19 @@ bool tglBindOwnedVeboxCompleteHooks(void* child,std::array<uintptr_t,20>& hooks)
     candidate[19]=reinterpret_cast<uintptr_t>(&TglOwnedVpFactoryCallback<TglOwnedVpFactoryContext>::create);
     for(auto entry:candidate) if(!entry) return false;
     hooks=candidate;return true;
+}
+
+// Installation precedes the private-child lease used by native execution.
+// Build above only requires the constructed-owner lifecycle scope; the actual
+// callbacks reject missing producer scopes. Bind is the stricter in-frame
+// check, after private table installation and captured lease acquisition.
+template<class LifetimeResolve,class AdmissionResolve,class AllocationResolve,
+    class ProducerResolve,class ModeResolve,class FormatRead>
+bool tglBindOwnedVeboxCompleteHooks(void* child,std::array<uintptr_t,20>& hooks) noexcept {
+    if(!AdmissionResolve::get(child) || !AllocationResolve::get(child) ||
+       !ProducerResolve::get(child) || !ModeResolve::get(child)) return false;
+    return tglBuildOwnedVeboxCompleteHooks<LifetimeResolve,AdmissionResolve,AllocationResolve,
+        ProducerResolve,ModeResolve,FormatRead>(child,hooks);
 }
 
 // One borrowed-OS resource lifetime. The renderer must close every such scope
