@@ -5335,12 +5335,27 @@ static void testResourceBinding() {
                     return fillStatus;
                 };
                 const auto prepare=[](size_t,const auto&,bool) noexcept {return 0;};
-                assert(transaction.ensure(requests,prepare,keys,false,1920,1080,fill)==31);
+                auto allocateBacking=[&]() noexcept {
+                    return childLease.withPrivateChild([&](void* actual) noexcept {
+                        auto allocate=[&](void* c) noexcept -> int {
+                            assert(c==actual && childLease.busy);
+                            return transaction.ensure(requests,prepare,keys,false,1920,1080,fill);
+                        };
+                        using Context=TglOwnedVeboxAllocationContext<TestVeboxChildLease,decltype(allocate)>;
+                        Context context(childLease,allocate,actual);
+                        using Scope=TglOwnedVeboxScopedContext<Context>;
+                        using Callback=TglOwnedVeboxAllocationCallbacks<Scope>;
+                        Scope scope(actual,context);
+                        assert(scope.bound());
+                        return Callback::allocate(actual);
+                    });
+                };
+                assert(allocateBacking()==31);
                 assert(!api.references && buffer.releases==1 && !statistics.layout().bytes);
                 fillStatus=0;
-                assert(transaction.ensure(requests,prepare,keys,false,1920,1080,fill)==0);
+                assert(allocateBacking()==0);
                 assert(api.references==3 && buffer.allocations==2 && fills==2);
-                assert(transaction.ensure(requests,prepare,keys,false,1920,1080,fill)==0 && fills==2);
+                assert(allocateBacking()==0 && fills==2);
                 assert(transaction.withResources([&](const auto& views,const auto& a,const auto& b,
                     const auto& stats,const auto& layout) noexcept {
                     assert(views[0] && &a==&first && &b==&second && stats[0]==1 && layout.bytes);
