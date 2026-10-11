@@ -45,6 +45,46 @@ struct TestFeatureExecutionOwner {
 };
 static void testTrackedCpuOwner() {
     {
+        struct Backend {
+            std::array<uint8_t,0xd48> bytes{};bool valid=true;int status=0;
+            unsigned creates=0,destroys=0,initializes=0;
+            uintptr_t pointer() noexcept {return reinterpret_cast<uintptr_t>(bytes.data());}
+            uintptr_t create() noexcept {++creates;return pointer();}
+            bool validate(uintptr_t p) noexcept {return valid && p==pointer();}
+            int initialize(uintptr_t p) noexcept {assert(p==pointer());++initializes;return status;}
+            void destroy(uintptr_t p) noexcept {assert(p==pointer());++destroys;}
+        } backend;
+        TglExecutionOwner execution(backend);
+        const auto report=backend.pointer();unsigned calls=0;
+        assert(execution.withBorrowedExecution(report,[&](uintptr_t actual) noexcept {
+            ++calls;assert(actual==report && execution.hasExecutionLease(report));
+            execution.reset();assert(execution.get()==report && !backend.destroys);
+            assert(execution.ensure()==5 && !backend.creates);
+            assert(execution.withBorrowedExecution(report,[](uintptr_t) noexcept {assert(false);return 0;})==5);
+            return 31;
+        })==31);
+        assert(calls==1 && !execution.get() && !backend.creates && !backend.destroys);
+        backend.valid=false;
+        assert(execution.withBorrowedExecution(report,[](uintptr_t) noexcept {assert(false);return 0;})==5);
+        assert(!execution.get() && !backend.destroys);
+        backend.valid=true;
+        assert(execution.withBorrowedExecution(report,[](uintptr_t) noexcept {assert(false);return 0;})==5);
+        execution.reset();backend.status=31;
+        assert(execution.withBorrowedExecution(report,[&](uintptr_t actual) noexcept {
+            return execution.withLeasedAdmissionBytes(actual,[&](auto&) noexcept {
+                assert(execution.initializeLeasedAdmission(actual)==31);
+                return 0; // native reset error cannot be hidden
+            });
+        })==31);
+        assert(!execution.get() && backend.initializes==1 && !backend.destroys);
+        assert(execution.withBorrowedExecution(report,[](uintptr_t) noexcept {assert(false);return 0;})==5);
+        execution.reset();
+        backend.status=0;
+        assert(execution.ensure()==0 && backend.creates==1);
+        assert(execution.withBorrowedExecution(report,[](uintptr_t) noexcept {assert(false);return 0;})==5);
+        execution.reset();assert(backend.destroys==1);
+    }
+    {
         std::array<uint8_t,0x139> params{};
         TglVeboxPipeAcquisition frame;bool present=true;
         assert(tglAcquireOwnedColorFillPresence(params,0,frame,present) && !present);
@@ -9488,6 +9528,43 @@ int main() {
                 hooks=tglBindOwnedVeboxQueryHooks<DeniedFormatRead>(hooks);
                 assert(owner.installPrivateVtableWithQueries<DeniedFormatRead>(
                     unbound,tableRead,qualify,executable));
+                {
+                    struct BorrowBackend {
+                        unsigned destroys=0;
+                        uintptr_t create() noexcept {assert(false);return 0;}
+                        bool validate(uintptr_t p) noexcept {return p==0x5678;}
+                        int initialize(uintptr_t) noexcept {assert(false);return 5;}
+                        void destroy(uintptr_t) noexcept {++destroys;assert(false);}
+                    } borrowBackend;
+                    TglExecutionOwner borrowed(borrowBackend);unsigned calls=0;
+                    bool readable=true;
+                    auto readHelper=[&](uintptr_t p,void* out,size_t size) noexcept {
+                        assert(p==reinterpret_cast<uintptr_t>(nativeHelper.data())+0x10 && size==8);
+                        if(!readable) return false;
+                        std::memcpy(out,nativeHelper.data()+0x10,8);return true;
+                    };
+                    auto useReport=[&](void* child,uintptr_t report) noexcept {
+                        ++calls;assert(child==owner.constructedBase() && report==0x5678);
+                        assert(borrowed.hasExecutionLease(report));
+                        owner.reset();borrowed.reset();assert(cpu.live && !eventCount);
+                        return 31;
+                    };
+                    assert(owner.withNativeOwnedExecution(borrowed,readHelper,useReport)==31);
+                    assert(calls==1 && !borrowed.get() && !borrowBackend.destroys);
+                    readable=false;
+                    assert(owner.withNativeOwnedExecution(borrowed,readHelper,useReport)==5 && calls==1);
+                    readable=true;const uintptr_t wrong=0x5679;
+                    std::memcpy(nativeHelper.data()+0x10,&wrong,8);
+                    assert(owner.withNativeOwnedExecution(borrowed,readHelper,useReport)==5 && calls==1);
+                    std::memcpy(nativeHelper.data()+0x10,&helperReport,8);
+                    assert(owner.withNativeOwnedExecution(borrowed,readHelper,
+                        [&](void* child,uintptr_t) noexcept {
+                            std::memcpy(static_cast<uint8_t*>(child)+0x88,&wrong,8);return 0;
+                        })==5);
+                    std::memcpy(cpu.bytes.data()+0x88,&helperReport,8);
+                    uintptr_t stillOwned=0;std::memcpy(&stillOwned,cpu.bytes.data()+0x88,8);
+                    assert(stillOwned==helperReport && helperReport==0x5678 && cpu.live);
+                }
                 std::memcpy(&address,cpu.bytes.data(),8);
                 assert(address!=base+0x757c98 && address);
                 uintptr_t supportAddress=0;

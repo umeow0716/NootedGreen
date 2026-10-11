@@ -2167,7 +2167,7 @@ template<> struct TglAdmissionExecutionExtent<TglLeasedAdmissionExecution>
 template<class Backend> class TglExecutionOwner {
     Backend& backend;
     uintptr_t object = 0;
-    bool leased_=false,admissionBytesBusy_=false,admissionResetAttempted_=false;
+    bool leased_=false,admissionBytesBusy_=false,admissionResetAttempted_=false,borrowed_=false;
     int admissionError_=0;
 public:
     explicit TglExecutionOwner(Backend& b) noexcept : backend(b) {}
@@ -2175,7 +2175,7 @@ public:
     TglExecutionOwner& operator=(const TglExecutionOwner&) = delete;
     ~TglExecutionOwner() { reset(); }
     void reset() noexcept {
-        if(leased_) return;
+        if(leased_ || borrowed_) return;
         const auto old = object;
         object = 0;
         admissionError_=0;
@@ -2213,6 +2213,23 @@ public:
         return 0;
     }
     uintptr_t get() const noexcept { return object; }
+    // Borrow the native base's report only while that base is itself pinned.
+    // No ownership transfer: even validation/reset failure must never call
+    // backend.destroy for this pointer. No mixing with an existing owned
+    // execution. Detach identity on exit, but retain admission failure until
+    // the enclosing native owner rebuilds its report and explicitly resets
+    // this wrapper; scope exit must not silently revive a poisoned report.
+    template<class Use> int withBorrowedExecution(uintptr_t native,Use use) noexcept {
+        static_assert(noexcept(use(uintptr_t{})),"borrowed execution status ABI");
+        if(!native || object || leased_ || borrowed_ || admissionError_) return 5;
+        object=native;borrowed_=true;
+        struct Detach {
+            TglExecutionOwner& owner;
+            ~Detach(){owner.object=0;owner.borrowed_=false;
+                owner.admissionResetAttempted_=false;}
+        } detach{*this};
+        return withExecution(use);
+    }
     bool hasExecutionLease(uintptr_t expected) const noexcept {
         return leased_ && !admissionError_ && object && object==expected;
     }
@@ -2225,6 +2242,7 @@ public:
         leased_=true;
         admissionResetAttempted_=false;
         if(!backend.validate(object)) {
+            if(borrowed_) admissionError_=5;
             leased_=false;reset();return 5;
         }
         const int status=use(object);
@@ -3135,11 +3153,35 @@ public:
         busy_=false;
         return result;
     }
+    // Pin the sole native report owner before borrowing execution logic.
+    template<class ExecutionOwner,class Read,class Use>
+    int withNativeOwnedExecution(ExecutionOwner& execution,Read read,Use use) noexcept {
+        static_assert(noexcept(read(uintptr_t{},static_cast<void*>(nullptr),size_t{})) &&
+            std::is_same_v<decltype(read(uintptr_t{},static_cast<void*>(nullptr),size_t{})),bool> &&
+            noexcept(use(nullptr,uintptr_t{})),"native report borrow ABI");
+        return withPrivateChild([&](void* child) noexcept {
+            uintptr_t report=0,helper=0,helperReport=0;
+            const auto* bytes=static_cast<const uint8_t*>(child);
+            std::memcpy(&report,bytes+0x88,8);std::memcpy(&helper,bytes+0x1bb8,8);
+            if(!report) return 5;
+            if(helper && (helper>UINTPTR_MAX-0x17 ||
+                !read(helper+0x10,&helperReport,8) || helperReport!=report)) return 5;
+            // Native base remains the sole report owner. Neither pointer is
+            // replaced; its helper can continue borrowing the same report.
+            const int status=execution.withBorrowedExecution(report,[&](uintptr_t actual) noexcept {
+                return use(child,actual);
+            });
+            uintptr_t observedReport=0,observedHelper=0;
+            std::memcpy(&observedReport,bytes+0x88,8);std::memcpy(&observedHelper,bytes+0x1bb8,8);
+            if(observedReport!=report || observedHelper!=helper) return 5;
+            if(helper && (!read(helper+0x10,&helperReport,8) || helperReport!=report)) return 5;
+            return status;
+        });
+    }
     // CPU-only composition: keep both owners leased and restore child80
     // before native base teardown can reach accounting helper12e190.
     // The VP view is data-only until its complete vtable is independently
-    // qualified. This scope is NOT permission to invoke native VP methods,
-    // transfer ownership, or retain GPU references beyond the enclosing lease.
+    // qualified. No ownership transfer or asynchronous GPU retention.
     template<class VpOwner,class Use>
     int withBorrowedVpCpuView(VpOwner& vp,bool avsEnabled,Use use) noexcept {
         static_assert(noexcept(use(nullptr,nullptr)),"borrowed VP CPU view ABI");
