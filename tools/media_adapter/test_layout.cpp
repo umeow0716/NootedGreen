@@ -7110,13 +7110,56 @@ static void testNativeResourceBoundary() {
                                                             actualChild,report,renderAddress,skuAddress,linkedStorage,nullptr,false,stateRead,
                                                             [](const auto&) noexcept {assert(false);return false;},consume);
                                                     };
-                                                    assert(stateStage([&](auto& packet) noexcept -> int {
+                                                    auto consumeState=[&](auto& packet) noexcept -> int {
                                                         assert(&packet==&statePacket && linkedInput.hasSurfaceLease(linkedStorage));
                                                         assert(linkedStorage.resource==sourceTokens);
                                                         assert(targetA.hasSurfaceLease(*ffdn.outputs[0]) && stmmApi.references==2);
                                                         for(auto byte:packet.resource) assert(!byte);
-                                                        ++stateUses;return -101;
-                                                    })==-101 && stateUses==1);
+                                                        ++stateUses;
+                                                        return commandInput([&](const TglDiIecpInputs& input) noexcept -> int {
+                                                            TglOwnedSurfaceInputs surfaces;
+                                                            TglOwnedDiIecpPacket diPacket;
+                                                            auto admitted=[&](const auto& surface) noexcept -> int {
+                                                                if(&surface==&statisticsShell || &surface==&stmmFirst || &surface==&stmmSecond) return 0;
+                                                                return linkedInput.hasSurfaceLease(surface) || targetA.hasSurfaceLease(surface) ||
+                                                                    targetB.hasSurfaceLease(surface) || previous.hasSurfaceLease(surface)?0:5;
+                                                            };
+                                                            auto surfaceAdmit=[&](const auto& surface,size_t) noexcept {return admitted(surface);};
+                                                            unsigned registrations=0,setups=0,builds=0;
+                                                            auto registration=[&](const auto&,bool,bool) noexcept -> int {++registrations;return 0;};
+                                                            auto control=[](const auto&,uint32_t&,size_t,bool) noexcept -> int {return 0;};
+                                                            using Packets=TglOwnedVeboxPacketContext<decltype(stateRead),decltype(surfaceAdmit),
+                                                                decltype(admitted),decltype(registration),decltype(control)>;
+                                                            Packets packets{{},{reinterpret_cast<uintptr_t>(actualChild),report,renderAddress,skuAddress,
+                                                                linkedStorage,nullptr,surfaces,statePacket,diPacket},input,false,stateRead,
+                                                                surfaceAdmit,admitted,registration,control};
+                                                            using Resolve=TglOwnedVeboxScopedContext<Packets>;
+                                                            using Callbacks=TglOwnedVeboxProducerCallbacks<Resolve>;
+                                                            const int built=tglWithCapturedVeboxPreparedBuilder(linkedInput,childOwner,reportOwner,
+                                                                actualChild,report,current,packets,[&](void* active) noexcept -> int {
+                                                                    assert(active==actualChild && Resolve::get(active)==&packets);
+                                                                    ++setups;return 0;
+                                                                },[&](void* active) noexcept -> int {
+                                                                    assert(setups==1);++builds;
+                                                                    // IECP selects descriptor-only FFDi in this mixed fixture:
+                                                                    // reject before registration. DN-only selects backed FFDN.
+                                                                    const int expected=input.iecp?5:0;
+                                                                    assert(Callbacks::surfaces(active,input.di,&surfaces)==expected);
+                                                                    assert(Callbacks::state(active,input.di,&statePacket)==expected);
+                                                                    assert(Callbacks::diIecp(active,input.di,&diPacket)==expected);
+                                                                    assert(linkedInput.hasSurfaceLease(current) && stmmApi.references==2);
+                                                                    assert(!statisticsFixture.releases);return 0;
+                                                                });
+                                                            assert(setups==1 && builds==1 && !Resolve::get(actualChild));
+                                                            assert(input.iecp?registrations==0:registrations>0);
+                                                            return built;
+                                                        });
+                                                    };
+                                                    assert(stateStage(consumeState)==5 && stateUses==1);
+                                                    const uint8_t savedIeCp=reportBackend.bytes[0xf];
+                                                    reportBackend.bytes[0xf]=0;
+                                                    assert(stateStage(consumeState)==0 && stateUses==2);
+                                                    reportBackend.bytes[0xf]=savedIeCp;
                                                     frameRenderHal[0x78]^=1;
                                                     const auto preservedState=statePacket;
                                                     assert(stateStage([](auto&) noexcept -> int {assert(false);return 0;})==5);
@@ -16974,6 +17017,43 @@ int main() {
                         nativeCalls==beforeBuilder+unsigned(preparation==0));
                     assert(!childLease.busy && !Resolve::get(actualChild));
                 }
+                struct CapturedSourceLease {
+                    const TglOwnedSurfaceStorage* source;bool valid=true;
+                    bool hasSurfaceLease(const TglOwnedSurfaceStorage& value) noexcept {return valid && &value==source;}
+                } sourceLease{&source};
+                struct CapturedExecutionLease {
+                    uintptr_t execution;bool valid=true;
+                    bool hasExecutionLease(uintptr_t value) noexcept {return valid && value==execution;}
+                } capturedExecution{address};
+                childLease.busy=true; // enclosing frame, not reacquired by builder
+                for(int preparation : {0,31,-7}) for(int result : {0,31,-7}) {
+                    setupResult=preparation;nativeResult=result;
+                    const auto priorSetup=setupCalls,priorBuild=nativeCalls;
+                    assert(tglWithCapturedNativeVeboxBuilder(sourceLease,childLease,capturedExecution,
+                        actualChild,address,source,packets,setupBinding,binding,scratch,&auxiliary,consumed,
+                        setupRead,setupNative,native)==(preparation?preparation:result));
+                    assert(childLease.busy && !Resolve::get(actualChild));
+                    assert(setupCalls==priorSetup+1 && nativeCalls==priorBuild+unsigned(!preparation));
+                }
+                setupResult=0;admission=31;
+                const auto priorRegistrations=registrations;
+                auto ignoredFailureNative=[&](uintptr_t,void* child,void*,void* di,
+                    void* surfaces,void*,void*,void*,void*) noexcept -> int {
+                    assert(Callbacks::surfaces(child,true,surfaces)==31);
+                    assert(Callbacks::diIecp(child,true,di)==31);return 0;
+                };
+                assert(tglWithCapturedNativeVeboxBuilder(sourceLease,childLease,capturedExecution,
+                    actualChild,address,source,packets,setupBinding,binding,scratch,&auxiliary,consumed,
+                    setupRead,setupNative,ignoredFailureNative)==31);
+                assert(registrations==priorRegistrations && childLease.busy && !Resolve::get(actualChild));
+                admission=0;
+                capturedExecution.valid=false;
+                const auto rejectedSetup=setupCalls,rejectedBuild=nativeCalls;
+                assert(tglWithCapturedNativeVeboxBuilder(sourceLease,childLease,capturedExecution,
+                    actualChild,address,source,packets,setupBinding,binding,scratch,&auxiliary,consumed,
+                    setupRead,setupNative,native)==5);
+                assert(setupCalls==rejectedSetup && nativeCalls==rejectedBuild && childLease.busy);
+                capturedExecution.valid=true;childLease.busy=false;
                 const auto beforeSetup=setupCalls,beforeBuilder=nativeCalls;
                 childLease.child=&auxiliary;
                 assert(packets.withNativeBuilder(childLease,setupBinding,binding,scratch,

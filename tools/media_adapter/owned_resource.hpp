@@ -14179,6 +14179,58 @@ int tglRunCapturedStateFrame(TglOwnedVeboxStateStorage& packet,
         });
 }
 
+// Native setup128 already assigns the heap. Enter from the scoped frame tail
+// without reacquiring its child lease or independently calling assignState.
+// No submit occurs here; caller retains command/resource owners on all exits.
+template<class SourceOwner,class ChildOwner,class ExecutionOwner,class Context,
+    class Setup,class Build>
+int tglWithCapturedVeboxPreparedBuilder(SourceOwner& sourceOwner,ChildOwner& childOwner,
+    ExecutionOwner& executionOwner,void* child,uintptr_t execution,
+    const TglOwnedSurfaceStorage& source,Context& context,Setup setup,Build build) noexcept {
+    static_assert(noexcept(setup(static_cast<void*>(nullptr))) &&
+        noexcept(build(static_cast<void*>(nullptr))) &&
+        std::is_same_v<decltype(setup(static_cast<void*>(nullptr))),int> &&
+        std::is_same_v<decltype(build(static_cast<void*>(nullptr))),int>,
+        "captured native builder stage ABI");
+    auto matches=[&]() noexcept {
+        return context.leases.child==reinterpret_cast<uintptr_t>(child) &&
+            context.leases.execution==execution && &context.leases.source==&source;
+    };
+    if(!matches()) return 5;
+    auto guarded=[&](auto invoke) noexcept -> int {
+        return tglRunCapturedVeboxAllocation(sourceOwner,childOwner,executionOwner,
+            child,execution,source,[&](void* active,uintptr_t,const auto&) noexcept -> int {
+                if(!matches()) return 5;
+                const int status=invoke(active);
+                return matches()?status:5;
+            });
+    };
+    return guarded([&](void* active) noexcept -> int {
+        TglOwnedVeboxScopedContext<Context> scope(active,context);
+        if(!scope.bound()) return 5;
+        return context.pass.withBuilder([&]() noexcept -> int {
+            const int configured=guarded(setup);
+            return configured?configured:guarded(build);
+        });
+    });
+}
+
+template<class SourceOwner,class ChildOwner,class ExecutionOwner,class Context,class Read,
+    class SetupInvoke=TglNativeVeboxSetupInvoker,class BuildInvoke=TglNativeVeboxBuilderInvoker>
+int tglWithCapturedNativeVeboxBuilder(SourceOwner& sourceOwner,ChildOwner& childOwner,
+    ExecutionOwner& executionOwner,void* child,uintptr_t execution,
+    const TglOwnedSurfaceStorage& source,Context& context,
+    const TglNativeVeboxSetupBinding& setup,const TglNativeVeboxBuilderBinding& builder,
+    TglOwnedVeboxBuilderScratch& scratch,void* auxiliary,int32_t& consumed,Read read,
+    SetupInvoke setupInvoke=SetupInvoke{},BuildInvoke buildInvoke=BuildInvoke{}) noexcept {
+    return tglWithCapturedVeboxPreparedBuilder(sourceOwner,childOwner,executionOwner,
+        child,execution,source,context,[&](void* active) noexcept -> int {
+            return setup.call(reinterpret_cast<uintptr_t>(active),scratch,auxiliary,consumed,read,setupInvoke);
+        },[&](void*) noexcept -> int {
+            return builder.call(context.leases,scratch,read,buildInvoke);
+        });
+}
+
 // Allocation transaction for a history-enabled frame. The qualified platform
 // planner supplies resource keys and statistics boundary dimensions; this does
 // not infer feature admission or SFC resources. All three owners outlive this
