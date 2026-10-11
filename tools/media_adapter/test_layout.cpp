@@ -9669,6 +9669,17 @@ int main() {
         filters(context.child,&values[1],&values[4],&values[2]);assert(!context.filtersCalled);
         {
             TglOwnedVpSfcScopedContext<Context> scope(context.child,context);assert(scope.bound());
+            // A partially populated catalogue must not be overwritten while
+            // adding this two-entry producer group to other live resolvers.
+            for(bool stateOccupied:{false,true}) {
+                TglOwnedVpEntrySet partial;
+                partial.csc=csc;
+                if(stateOccupied) partial.state=state;else partial.filters=filters;
+                const auto before=partial;
+                assert(!tglBindOwnedVpProducerEntries<ProducerResolve>(context.child,partial));
+                assert(partial.missingMask()==before.missingMask() && partial.csc==before.csc &&
+                    partial.state==before.state && partial.filters==before.filters);
+            }
             assert(!tglBindOwnedVpProducerEntries<ProducerResolve>(&values[4],producerEntries));
             assert(tglBindOwnedVpProducerEntries<ProducerResolve>(context.child,producerEntries));
             assert(producerEntries.state==state && producerEntries.filters==filters);
