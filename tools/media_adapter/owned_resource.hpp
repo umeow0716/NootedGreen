@@ -6171,6 +6171,23 @@ void tglPublishVeboxSfcAdmissionFlags(Execution& execution,uint8_t qualifiedDn,
     execution[0x17]=(sourceType==1 || sourceType==2)?1:0;
     execution[0x0f]=((execution[0x0f]&1) || execution[0x11] || execution[0x17])?1:0;
 }
+// Gen12 DN formats: intel/media-driver73c8d14, g12_base.cpp329.
+// Invoke only after complete qualified VP28. The frame pins source and this
+// owned DN block; a foreign source70 is refused, never dereferenced/adopted.
+// NULL source70 means no request. Format support alone does not request DN.
+template<class Execution,size_t N>
+bool tglPublishOwnedVeboxSfcAdmissionFlags(Execution& execution,
+    const TglOwnedSurfaceStorage& source,const std::array<uint8_t,N>& dn) noexcept {
+    static_assert(N>=1 && TglAdmissionExecutionExtent<Execution>::value>=0xa10,"DN request/pipe extents");
+    uintptr_t linked=0;uint32_t format=0,type=0,pipe=0;
+    std::memcpy(&linked,source.prefix.data()+0x70,8);
+    std::memcpy(&format,source.prefix.data()+0x130,4);
+    std::memcpy(&type,source.prefix.data(),4);
+    std::memcpy(&pipe,execution.data()+0xa0c,4);
+    if(pipe!=1 || (linked && linked!=reinterpret_cast<uintptr_t>(dn.data()))) return false;
+    const uint8_t requested=linked && tglVeboxDnFormatSupported(format)?dn[0]:0;
+    tglPublishVeboxSfcAdmissionFlags(execution,requested,type);return true;
+}
 
 // donor1fbefd..1fbf21. The caller supplies the final admission after any
 // pipe1 work/flag publication. This does not skip that work or authorize SFC.

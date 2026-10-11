@@ -45,6 +45,23 @@ struct TestFeatureExecutionOwner {
 };
 static void testTrackedCpuOwner() {
     {
+        std::array<uint8_t,0xd48> execution{};std::array<uint8_t,8> dn{};
+        TglOwnedSurfaceStorage source{};uint32_t pipe=1,format=0x19;
+        std::memcpy(execution.data()+0xa0c,&pipe,4);std::memcpy(source.prefix.data()+0x130,&format,4);
+        uintptr_t p=reinterpret_cast<uintptr_t>(dn.data());std::memcpy(source.prefix.data()+0x70,&p,8);
+        dn[0]=3;assert(tglPublishOwnedVeboxSfcAdmissionFlags(execution,source,dn));
+        assert(execution[0x11]==1 && execution[0x0f]==1);
+        execution[0x0f]=0;dn[0]=2;
+        assert(tglPublishOwnedVeboxSfcAdmissionFlags(execution,source,dn) && !execution[0x11] && !execution[0x0f]);
+        ++p;std::memcpy(source.prefix.data()+0x70,&p,8);execution[0x11]=0xa3;
+        assert(!tglPublishOwnedVeboxSfcAdmissionFlags(execution,source,dn) && execution[0x11]==0xa3);
+        p=0;std::memcpy(source.prefix.data()+0x70,&p,8);dn[0]=1;
+        assert(tglPublishOwnedVeboxSfcAdmissionFlags(execution,source,dn) && !execution[0x11]);
+        p=reinterpret_cast<uintptr_t>(dn.data());std::memcpy(source.prefix.data()+0x70,&p,8);
+        format=0xffffffff;std::memcpy(source.prefix.data()+0x130,&format,4);
+        assert(tglPublishOwnedVeboxSfcAdmissionFlags(execution,source,dn) && !execution[0x11]);
+    }
+    {
         std::array<uint8_t,0xd48> execution{};
         for(unsigned old=0;old<256;++old) for(unsigned dn=0;dn<256;++dn)
             for(uint32_t type : {0u,1u,2u,3u,0xffffffffu}) {
