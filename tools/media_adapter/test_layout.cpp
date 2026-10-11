@@ -1677,6 +1677,28 @@ static void testTrackedCpuOwner() {
                 TglOwnedFfdiAllocationKind::DescriptorOnly));
             TglOwnedFfdiAllocationRequest request;
             assert(tglPrepareOwnedFfdiAllocationRequest(source,format,1,{true,1},request));
+            TglOwnedDescriptorOnlySurface descriptor;
+            bool changed=false;
+            assert(descriptor.prepare(request,changed)==(format!=0x3d));
+            assert(changed==(format!=0x3d));
+            if(format!=0x3d) {
+                assert(descriptor.withDescriptor([&](const auto& view) noexcept {
+                    uint32_t actualFormat=0,pitch=1,type=0;
+                    std::memcpy(&actualFormat,view.prefix.data()+0x130,4);
+                    std::memcpy(&pitch,view.prefix.data()+0xe0,4);
+                    std::memcpy(&type,view.resource.data()+0x14,4);
+                    assert(actualFormat==format && pitch==0 && type==1);
+                    assert(!tglNativeBackingPresent(view.resource));
+                    descriptor.reset();bool nestedChanged=false;
+                    assert(!descriptor.prepare(request,nestedChanged) && !nestedChanged);
+                    assert(!descriptor.withDescriptor([](const auto&) noexcept {assert(false);}));
+                }));
+                changed=false;assert(descriptor.prepare(request,changed) && changed);
+                auto invalid=request;invalid.key.width=0;changed=false;
+                assert(!descriptor.prepare(invalid,changed) && !changed);
+            }
+            descriptor.reset();
+            assert(!descriptor.withDescriptor([](const auto&) noexcept {assert(false);}));
             assert(request.type==1 && (request.key==TglResourceKey{width,height,format,1,1,true}));
             assert(request.kind==(format==0x3d?TglOwnedFfdiAllocationKind::NativeBacking:
                 TglOwnedFfdiAllocationKind::DescriptorOnly));

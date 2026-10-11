@@ -4615,6 +4615,42 @@ inline bool tglPrepareOwnedFfdiAllocationRequest(const TglOwnedSurfaceStorage& s
         TglOwnedFfdiAllocationKind::DescriptorOnly;
     output=candidate;return true;
 }
+// Private descriptor-only slot: native49fe0/4a14d does not allocate GPU
+// backing for type1/format!=3d. Never expose withSurface()/resource-token
+// ownership: callers must separately retain the borrowed source resource.
+class TglOwnedDescriptorOnlySurface {
+    TglOwnedSurfaceStorage storage_{};
+    bool ready_=false,busy_=false;
+public:
+    TglOwnedDescriptorOnlySurface()=default;
+    TglOwnedDescriptorOnlySurface(const TglOwnedDescriptorOnlySurface&)=delete;
+    TglOwnedDescriptorOnlySurface& operator=(const TglOwnedDescriptorOnlySurface&)=delete;
+    bool prepare(const TglOwnedFfdiAllocationRequest& request,bool& changed) noexcept {
+        if(busy_ || request.type!=1 || request.kind!=TglOwnedFfdiAllocationKind::DescriptorOnly ||
+           request.key.format==0x3d || !request.key.width || !request.key.height) return false;
+        // Preserve unrelated shell metadata, exactly as the descriptor branch.
+        const uint32_t zero=0,one=1;
+        std::memcpy(storage_.prefix.data()+0x134,&zero,4);
+        std::memcpy(storage_.resource.data()+0x14,&one,4); // surface15c
+        std::memcpy(storage_.prefix.data()+0xd8,&request.key.width,4);
+        std::memcpy(storage_.prefix.data()+0xdc,&request.key.height,4);
+        std::memcpy(storage_.prefix.data()+0x130,&request.key.format,4);
+        std::memcpy(storage_.prefix.data()+0xe4,&request.key.tile,4);
+        std::memcpy(storage_.prefix.data()+0xe0,&zero,4);
+        ready_=true;changed=true;return true; //4a1af writes1 even on reuse
+    }
+    template<class Use> bool withDescriptor(Use use) noexcept {
+        static_assert(noexcept(use(std::declval<const TglOwnedSurfaceStorage&>())) &&
+            std::is_same_v<decltype(use(std::declval<const TglOwnedSurfaceStorage&>())),void>,
+            "descriptor-only callback ABI");
+        if(!ready_ || busy_) return false;
+        busy_=true;
+        struct Unlock {bool& busy;~Unlock(){busy=false;}} unlock{busy_};
+        use(static_cast<const TglOwnedSurfaceStorage&>(storage_));return true;
+    }
+    void reset() noexcept {if(!busy_) {storage_={};ready_=false;}}
+};
+
 // ICL1f7eba..1f7fb1 data policy only, not its virtual-base object ABI.
 // Keep field provenance explicit until the TGL allocation caller supplies
 // qualified feature flags. This neither enables MMC nor allocates backing.
