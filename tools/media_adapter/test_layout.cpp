@@ -8125,10 +8125,10 @@ int main() {
                 uintptr_t parameters=0,scopedTarget=0;
                 std::memcpy(&parameters,scopedStorage.bytes.data()+0x990,8);
                 std::memcpy(&scopedTarget,scopedStorage.bytes.data()+0x9b0,8);
-                assert(parameters==0x4000 && scopedTarget==0x2000);
+                assert(parameters==0x7000 && scopedTarget==0x2000);
             };
             const int result=tglSetupOwnedVpLeasedFrame(scopedStorage,
-                0x1000,0x2000,0x3000,0x4000,0x6000,{},read,
+                0x1000,0x2000,0x3000,0x4000,0x6000,0x7000,{},read,
                 [&](void* child,const auto& frame,const auto& geometry) noexcept -> int {
                     checkScope(child);assert(++stages==1);
                     assert(frame.at922 && geometry.frameWidth==geometrySnapshot.frameWidth);
@@ -8146,7 +8146,7 @@ int main() {
             assert(scopedStorage.bytes==originalStorage);
             stages=0;calls=0;unsigned sent=0;
             const int passResult=tglWithOwnedVpLeasedPass(scopedStorage,
-                0x1000,0x2000,0x3000,0x4000,0x6000,{},read,
+                0x1000,0x2000,0x3000,0x4000,0x6000,0x7000,{},read,
                 [&](void* child,const auto&,const auto&) noexcept -> int {
                     checkScope(child);++stages;return failedStage==1?31:0;
                 },
@@ -8334,7 +8334,7 @@ int main() {
             assert(prepared.at9a0==17 && reference==19 && geometrySnapshot.frameWidth==23);
             calls=0;unsigned producers=0;
             assert(tglSetupOwnedVpLeasedFrame(scopedStorage,
-                0x1000,0x2000,0x3000,0x4000,0x6000,{},read,
+                0x1000,0x2000,0x3000,0x4000,0x6000,0x7000,{},read,
                 [&](void*,const auto&,const auto&) noexcept -> int { ++producers;return 0; },
                 [&](void*,const auto&) noexcept -> int { ++producers;return 0; },
                 [&](void*,const auto&) noexcept { ++producers; })==5);

@@ -5993,7 +5993,7 @@ int tglWithOwnedVpPreparedFrame(TglOwnedVpSfcCallerStorage& storage,
 template<class Read,class State,class Avs,class Ief,class Send>
 int tglWithOwnedVpLeasedPass(TglOwnedVpSfcCallerStorage& storage,
     uintptr_t source,uintptr_t target,uintptr_t mhw,uintptr_t settings,
-    uintptr_t conditionalSource,const TglOwnedVpModeState& original,
+    uintptr_t conditionalSource,uintptr_t parameters,const TglOwnedVpModeState& original,
     Read read,State state,Avs avs,Ief ief,Send send) noexcept {
     static_assert(noexcept(send(static_cast<void*>(nullptr),
         std::declval<const TglOwnedVpFramePreparation&>(),
@@ -6002,7 +6002,9 @@ int tglWithOwnedVpLeasedPass(TglOwnedVpSfcCallerStorage& storage,
     uintptr_t sourceA8=0;
     if(!tglReadOwnedVpFramePreparation(source,target,mhw,settings,
         conditionalSource!=0,read,original,frame,sourceA8,&geometry)) return 5;
-    return tglWithOwnedVpPreparedFrame(storage,frame,conditionalSource,settings,target,sourceA8,
+    // Native 1decfb..1decff publishes incoming RDX, not the R9 view
+    // consumed by the mode producer. Keep these independently leased inputs.
+    return tglWithOwnedVpPreparedFrame(storage,frame,conditionalSource,parameters,target,sourceA8,
         [&](void* child,const TglOwnedVpColorMetadata&) noexcept {
             const int result=tglSetupOwnedVpSfcStages(frame,
                 [&]() noexcept { return state(child,frame,geometry); },
@@ -6018,10 +6020,10 @@ int tglWithOwnedVpLeasedPass(TglOwnedVpSfcCallerStorage& storage,
 template<class Read,class State,class Avs,class Ief>
 int tglSetupOwnedVpLeasedFrame(TglOwnedVpSfcCallerStorage& storage,
     uintptr_t source,uintptr_t target,uintptr_t mhw,uintptr_t settings,
-    uintptr_t conditionalSource,const TglOwnedVpModeState& original,
+    uintptr_t conditionalSource,uintptr_t parameters,const TglOwnedVpModeState& original,
     Read read,State state,Avs avs,Ief ief) noexcept {
     return tglWithOwnedVpLeasedPass(storage,source,target,mhw,settings,
-        conditionalSource,original,read,state,avs,ief,
+        conditionalSource,parameters,original,read,state,avs,ief,
         [](void*,const TglOwnedVpFramePreparation&,const TglOwnedVpRegionInput&) noexcept -> int {
             return 0;
         });
