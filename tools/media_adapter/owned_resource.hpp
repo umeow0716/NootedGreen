@@ -4827,7 +4827,7 @@ inline void tglCopyOwnedSurfaceFrameMetadata(TglOwnedSurfaceStorage& target,
     std::memcpy(target.prefix.data()+0x30,source.prefix.data()+0x30,0x30);
     std::memcpy(target.prefix.data()+0x138,source.prefix.data()+0x138,4);
 }
-struct TglOwnedFfdiMetadataQuery {uint32_t surfaceType=0,compression=0;};
+struct TglOwnedFfdiMetadataQuery {uint32_t colorSpace=0,sampleType=0;};
 // FFDI1f7cc8..1f7e0a uses query+a0's two DWORDs for target0/138,
 // not input0/138; rotation290 and frame rectangles come from input.
 // Borrowed handle1a0 and conditional200 belong to a separate
@@ -4835,14 +4835,14 @@ struct TglOwnedFfdiMetadataQuery {uint32_t surfaceType=0,compression=0;};
 inline bool tglPrepareOwnedFfdiFrameMetadata(TglOwnedSurfaceStorage& target,
     const TglOwnedSurfaceStorage& source,TglOwnedFfdiMetadataQuery query) noexcept {
     if(&target==&source) return false;
-    std::memcpy(target.prefix.data(),&query.surfaceType,4);
+    std::memcpy(target.prefix.data(),&query.colorSpace,4);
     std::memcpy(target.prefix.data()+0x30,source.prefix.data()+0x30,0x30);
-    std::memcpy(target.prefix.data()+0x138,&query.compression,4);
+    std::memcpy(target.prefix.data()+0x138,&query.sampleType,4);
     std::memcpy(target.tail.data(),source.tail.data(),4); // surface290
     return true;
 }
 enum class TglOwnedFfdnHistoryDecision { Keep, Invalidate, CopyPrevious };
-// ICL1f81c1..1f8311: frame rectangles, type0, compression138 and DWORDb0.
+// ICL1f81c1..1f8311: frame rectangles, ColorSpace0, SampleType138 and DWORDb0.
 // QWORD90 is the DN parameter pointer (tglAdmitOwnedDndiSource); its copied
 // target lifetime is not closed. Keep it out of CPU metadata: a surface
 // lease alone does not pin the separate tracked parameter owner.
@@ -10509,6 +10509,37 @@ bool tglPrepareOwnedFfdiRequestFromReport(TglOwnedFfdiAllocationRequest& output,
     if(!tglSelectOwnedFfdiCompressionFromReport(selected,source,child,execution,
         (compression&1)!=0,format,tile,read,supports)) return false;
     return tglPrepareOwnedFfdiAllocationRequest(source,format,tile,selected,output);
+}
+// Exact1f7570: primary+a0 produces ColorSpace/SampleType, NOT compression.
+// Parameter88 must be read through its own qualified owner callback; a held
+// surface does not itself prove that separately allocated parameter's lifetime.
+template<class Read,class SfcColor,class Parameter88>
+bool tglPrepareOwnedFfdiMetadataFromReport(TglOwnedFfdiMetadataQuery& output,
+    const TglOwnedSurfaceStorage& source,uintptr_t child,uintptr_t execution,
+    Read read,SfcColor sfcColor,Parameter88 parameter88) noexcept {
+    static_assert(noexcept(read(uintptr_t{},static_cast<void*>(nullptr),size_t{})) &&
+        noexcept(sfcColor(std::declval<uint32_t&>())) &&
+        noexcept(parameter88(uintptr_t{},std::declval<uint32_t&>())),"FFDi metadata producer ABI");
+    if(!child || child>UINTPTR_MAX-0x1b7 || !execution || execution>UINTPTR_MAX-0xa0f)
+        return false;
+    uintptr_t actualReport=0,actualSource=0;uint32_t pipe=0;uint8_t iecp=0;
+    if(!read(child+0x88,&actualReport,8) || actualReport!=execution ||
+        !read(child+0x1b0,&actualSource,8) || actualSource!=reinterpret_cast<uintptr_t>(&source) ||
+        !read(execution+0xf,&iecp,1) || !read(execution+0xa0c,&pipe,4) || pipe>2) return false;
+    TglOwnedFfdiMetadataQuery candidate;
+    if(pipe==1) {if(!sfcColor(candidate.colorSpace)) return false;}
+    else std::memcpy(&candidate.colorSpace,source.prefix.data(),4);
+    bool preserveSample=false;
+    if(iecp&1) {
+        uintptr_t parameter=0;std::memcpy(&parameter,source.prefix.data()+0x88,8);
+        if(parameter) {
+            uint32_t kind=0;if(!parameter88(parameter,kind)) return false;
+            preserveSample=kind==1;
+        }
+    }
+    preserveSample=preserveSample || (source.prefix[0x81]&1)!=0;
+    if(preserveSample) std::memcpy(&candidate.sampleType,source.prefix.data()+0x138,4);
+    output=candidate;return true;
 }
 template<class Read>
 bool tglReadOwnedStateExecution(TglOwnedStateInputs& output, uintptr_t execution,

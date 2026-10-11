@@ -1742,21 +1742,21 @@ static void testTrackedCpuOwner() {
         std::memcpy(source.prefix.data()+0xd8,&width,4);
         std::memcpy(source.prefix.data()+0xdc,&height,4);
         for(size_t i=0;i<0x30;++i) source.prefix[0x30+i]=uint8_t(i+1);
-        const uint32_t sourceCompression=7,queriedCompression=3;
-        std::memcpy(source.prefix.data()+0x138,&sourceCompression,4);
+        const uint32_t sourceSample=7,queriedSample=3;
+        std::memcpy(source.prefix.data()+0x138,&sourceSample,4);
         source.prefix[0]=0x42;source.resource.fill(0xa5);source.tail.fill(0x5a);
         TglOwnedSurfaceStorage metadata;metadata.resource.fill(0x73);metadata.tail.fill(0x31);
-        const TglOwnedFfdiMetadataQuery query{0x17,queriedCompression};
+        const TglOwnedFfdiMetadataQuery query{0x17,queriedSample};
         assert(tglPrepareOwnedFfdiFrameMetadata(metadata,source,query));
-        uint32_t selectedCompression=0;std::memcpy(&selectedCompression,metadata.prefix.data()+0x138,4);
-        uint32_t surfaceType=0;std::memcpy(&surfaceType,metadata.prefix.data(),4);
-        assert(selectedCompression==queriedCompression && surfaceType==query.surfaceType);
+        uint32_t selectedSample=0;std::memcpy(&selectedSample,metadata.prefix.data()+0x138,4);
+        uint32_t colorSpace=0;std::memcpy(&colorSpace,metadata.prefix.data(),4);
+        assert(selectedSample==queriedSample && colorSpace==query.colorSpace);
         assert(!std::memcmp(metadata.prefix.data()+0x30,source.prefix.data()+0x30,0x30));
         for(auto byte:metadata.resource) assert(byte==0x73);
         for(size_t i=0;i<metadata.tail.size();++i) assert(metadata.tail[i]==(i<4?0x5a:0x31));
         assert(!tglPrepareOwnedFfdiFrameMetadata(source,source,query));
-        std::memcpy(&selectedCompression,source.prefix.data()+0x138,4);
-        assert(selectedCompression==sourceCompression);
+        std::memcpy(&selectedSample,source.prefix.data()+0x138,4);
+        assert(selectedSample==sourceSample);
         {
             TglOwnedSurfaceStorage target;
             target.prefix.fill(0x73);target.resource.fill(0x29);target.tail.fill(0x31);
@@ -1848,7 +1848,7 @@ static void testTrackedCpuOwner() {
                 assert(descriptor.publishFfdnFrame(source));
                 assert(descriptor.withDescriptor([&](const auto& view) noexcept {
                     uint32_t compression=0;std::memcpy(&compression,view.prefix.data()+0x138,4);
-                    assert(compression==sourceCompression);
+                    assert(compression==sourceSample);
                     assert(!std::memcmp(view.prefix.data()+0xb0,source.prefix.data()+0xb0,4));
                     assert(!tglNativeBackingPresent(view.resource));
                 }));
@@ -15651,6 +15651,38 @@ int main() {
                 assert(!tglPrepareOwnedFfdiRequestFromReport(request,source,child,address,
                     allocationRead,sfc,supports) && request.key.width==123);
                 linkedSource=reinterpret_cast<uintptr_t>(&source);
+                const uint32_t sourceColor=8,sample=3;const uintptr_t parameter=0x7000;
+                std::memcpy(source.prefix.data(),&sourceColor,4);
+                std::memcpy(source.prefix.data()+0x138,&sample,4);
+                std::memcpy(source.prefix.data()+0x88,&parameter,8);
+                unsigned colorCalls=0,parameterCalls=0;bool parameterAllowed=true;
+                auto color=[&](uint32_t& value) noexcept {++colorCalls;value=9;return true;};
+                auto ownedParameter=[&](uintptr_t p,uint32_t& value) noexcept {
+                    ++parameterCalls;assert(p==parameter);value=1;return parameterAllowed;
+                };
+                for(unsigned mask=0;mask<4;++mask) for(uint32_t selectedPipe:{0u,1u,2u}) {
+                    execution[0xf]=uint8_t(mask&1);source.prefix[0x81]=uint8_t((mask>>1)&1);
+                    std::memcpy(execution.data()+0xa0c,&selectedPipe,4);
+                    const unsigned beforeColor=colorCalls,beforeParameter=parameterCalls;
+                    TglOwnedFfdiMetadataQuery metadata;
+                    assert(tglPrepareOwnedFfdiMetadataFromReport(metadata,source,child,address,
+                        allocationRead,color,ownedParameter));
+                    assert(metadata.colorSpace==(selectedPipe==1?9u:8u));
+                    assert(metadata.sampleType==(mask?3u:0u));
+                    assert(colorCalls-beforeColor==unsigned(selectedPipe==1));
+                    assert(parameterCalls-beforeParameter==unsigned(mask&1));
+                    TglOwnedSurfaceStorage target;
+                    assert(tglPrepareOwnedFfdiFrameMetadata(target,source,metadata));
+                    uint32_t actualColor=0,actualSample=0;
+                    std::memcpy(&actualColor,target.prefix.data(),4);
+                    std::memcpy(&actualSample,target.prefix.data()+0x138,4);
+                    assert(actualColor==metadata.colorSpace && actualSample==metadata.sampleType);
+                }
+                parameterAllowed=false;execution[0xf]=1;
+                TglOwnedFfdiMetadataQuery metadata{123,456};
+                assert(!tglPrepareOwnedFfdiMetadataFromReport(metadata,source,child,address,
+                    allocationRead,color,ownedParameter));
+                assert(metadata.colorSpace==123 && metadata.sampleType==456);
                 execution[0x12]=1;
                 std::memcpy(execution.data()+0xa0c,&pipe,4);
             }
