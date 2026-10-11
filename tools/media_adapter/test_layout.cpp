@@ -10786,6 +10786,35 @@ int main() {
                     expiredAssembly.sampleMode(storage->bytes.data(),reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x2000));
                     assert(expiredAssembly.allocate(storage->bytes.data())==5);
                 }
+                const auto beforeModeFailures=storage->bytes;
+                const auto allocationsBeforeModeFailures=backends[0].allocations+backends[1].allocations;
+                const auto retiredBeforeModeFailures=retired;
+                unsigned modeReadCount=0;
+                auto countedModeRead=[&](uintptr_t address,void* out,size_t size) noexcept {
+                    ++modeReadCount;return read(address,out,size);
+                };
+                assert(graph.withModeAssemblyView(false,countedModeRead,lines,retire,0x1000,0x2000,0x4000,
+                    [](void*,const auto&) noexcept {return 31;})==31);
+                assert(modeReadCount && storage->bytes==beforeModeFailures);
+                for(unsigned denied=1;denied<=modeReadCount;++denied) {
+                    unsigned seen=0;bool invoked=false;
+                    auto faultRead=[&](uintptr_t address,void* out,size_t size) noexcept {
+                        return ++seen!=denied && read(address,out,size);
+                    };
+                    assert(graph.withModeAssemblyView(false,faultRead,lines,retire,0x1000,0x2000,0x4000,
+                        [&](void*,const auto&) noexcept {invoked=true;return 0;})==5);
+                    assert(!invoked && seen==denied && storage->bytes==beforeModeFailures);
+                }
+                for(unsigned completed=0;completed<2;++completed) {
+                    assert(graph.withModeAssemblyView(false,read,lines,retire,0x1000,0x2000,0x4000,
+                        [&](void* child,const auto& entries) noexcept {
+                            if(completed) entries.sampleMode(child,reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x2000));
+                            return 0;
+                        })==5);
+                    assert(storage->bytes==beforeModeFailures);
+                }
+                assert(backends[0].allocations+backends[1].allocations==allocationsBeforeModeFailures &&
+                    retired==retiredBeforeModeFailures && graph.withView(false,[](void*) noexcept {return 0;})==0);
                 retired=0;
                 const std::array<unsigned,2> assemblyAllocations{backends[0].allocations,backends[1].allocations};
                 const std::array<unsigned,2> assemblyReleases{backends[0].releases,backends[1].releases};
