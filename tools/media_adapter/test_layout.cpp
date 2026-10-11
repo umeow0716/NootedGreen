@@ -7931,6 +7931,45 @@ static void testNativeResourceBoundary() {
                 }
                 assert(input.surface() && first.surface());
                 flag=0xa5;mode=0x5a;
+                {
+                    BackedPairBackend frameBackend;
+                    struct ParametersBackend {
+                        unsigned live=0,releases=0;
+                        uintptr_t allocate(size_t n) noexcept {
+                            auto* p=std::calloc(1,n);if(p) ++live;return reinterpret_cast<uintptr_t>(p);
+                        }
+                        void release(uintptr_t p) noexcept {assert(live);--live;++releases;std::free(reinterpret_cast<void*>(p));}
+                    } parameterBackend;
+                    TglOwnedVeboxFrameRetention retention;
+                    using Frame=TglOwnedVeboxFrameSurfaceStorage<BackedPairBackend,ParametersBackend>;
+                    {
+                        Frame frame(frameBackend,parameterBackend,retention);
+                        assert(!frame.ready());
+                        assert(frame.initialize(request,request,64,[&](auto& source,auto& target,auto& dn) noexcept -> int {
+                            assert(source.surface() && target.surface() && dn.size()==64);
+                            assert(dn.withBorrowedAddress([](uintptr_t p,size_t n) noexcept {std::memset(reinterpret_cast<void*>(p),0,n);}));
+                            return 0;
+                        })==0 && frame.ready());
+                        assert(frameBackend.allocations==2 && parameterBackend.live==1);
+                        assert(frame.withDenoiseSurfaces([&](const auto& source,const auto& target) noexcept {
+                            assert(&source!=&target);
+                            uintptr_t parameter=0;std::memcpy(&parameter,source.prefix.data()+0x90,8);
+                            assert(parameter && parameterBackend.live==1);return 31;
+                        })==31);
+                        struct Acquired {bool acquired=true,writtenBack=false;} acquired;
+                        retention.observe(acquired);
+                        assert(frame.withSurfaces([](const auto&,const auto&) noexcept {assert(false);return 0;})==5);
+                        assert(frame.ready() && !frameBackend.releases && parameterBackend.live==1);
+                        // Scope exit represents externally qualified retirement,
+                        // NOT evidence that acquired/writeback is completion.
+                    }
+                    assert(frameBackend.releases==2 && !parameterBackend.live && parameterBackend.releases==1);
+                    TglOwnedVeboxFrameRetention failedRetention;
+                    Frame failed(frameBackend,parameterBackend,failedRetention);
+                    assert(failed.initialize(request,request,64,[](auto&,auto&,auto&) noexcept {return 31;})==31);
+                    assert(!failed.ready() && frameBackend.releases==4 && !parameterBackend.live);
+                    assert(failed.initialize(request,request,64,[](auto&,auto&,auto&) noexcept {assert(false);return 0;})==5);
+                }
                 assert(prepare()==0 && copies==2 && backend.allocations==3);
                 assert(flag==0xa5 && mode==0x5a); // unchanged targets retain flags
                 consumerStatus=31;

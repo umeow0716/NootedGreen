@@ -9628,6 +9628,57 @@ public:
 struct TglOwnedVeboxFrameNoUnwind {
     void operator()(void*,uintptr_t,const TglOwnedSurfaceStorage&) const noexcept {}
 };
+// Resource-owning frame portion, not a physical/image lease or completion
+// oracle. The enclosing retained-frame pool may destroy it only after qualified
+// retirement. Backends/native parent outlive this storage. Pair detaches before
+// DN and surfaces release; no foreign shell or DN allocation is adopted.
+template<class SurfaceBackend,class DnBackend> class TglOwnedVeboxFrameSurfaceStorage {
+    using Surface=TglOwnedAllocatedSurface<SurfaceBackend>;
+    using Pair=TglOwnedVeboxSurfacePairLease<Surface,Surface>;
+    Surface source_,target_;
+    TglTrackedCpuOwner<DnBackend> parameters_;
+    const TglOwnedVeboxFrameRetention& retention_;
+    Pair* pair_=nullptr;
+    bool attempted_=false;
+    void unwind() noexcept {parameters_.reset();target_.reset();source_.reset();}
+public:
+    TglOwnedVeboxFrameSurfaceStorage(SurfaceBackend& surfaces,DnBackend& parameters,
+        const TglOwnedVeboxFrameRetention& retention)
+        :source_(surfaces),target_(surfaces),parameters_(parameters),retention_(retention) {}
+    TglOwnedVeboxFrameSurfaceStorage(const TglOwnedVeboxFrameSurfaceStorage&)=delete;
+    TglOwnedVeboxFrameSurfaceStorage& operator=(const TglOwnedVeboxFrameSurfaceStorage&)=delete;
+    ~TglOwnedVeboxFrameSurfaceStorage() noexcept {delete pair_;}
+    // Initialize is a CPU-only producer; it must neither submit GPU work nor
+    // publish these owners. Publication starts only after the pair is pinned.
+    template<class Initialize>
+    int initialize(const TglResourceKey& source,const TglResourceKey& target,
+        size_t parameterBytes,Initialize initialize) noexcept {
+        static_assert(noexcept(initialize(source_,target_,parameters_)) &&
+            std::is_same_v<decltype(initialize(source_,target_,parameters_)),int>);
+        if(attempted_ || retention_()) return 5;
+        attempted_=true;
+        int result=source_.ensure(source);
+        if(!result) result=target_.ensure(target);
+        if(!result && parameterBytes && !parameters_.allocate(parameterBytes)) result=5;
+        if(!result) result=initialize(source_,target_,parameters_);
+        if(result) {unwind();return result;}
+        pair_=new(std::nothrow) Pair(source_,target_,retention_);
+        if(!pair_ || !pair_->ready()) {delete pair_;pair_=nullptr;unwind();return 5;}
+        return 0;
+    }
+    bool ready() const noexcept {return pair_ && pair_->ready();}
+    template<class Use> int withSurfaces(Use use) noexcept {
+        return pair_?pair_->withSurfaces(use):5;
+    }
+    template<class Use> int withDenoiseSurfaces(Use use) noexcept {
+        return pair_?pair_->withDenoiseSurfaces(parameters_,use):5;
+    }
+    template<class ChildOwner,class Invoke>
+    int render(const TglVeboxRenderBinding& binding,ChildOwner& childOwner,
+        void* child,void* argument1,Invoke invoke) noexcept {
+        return pair_?pair_->render(binding,childOwner,child,argument1,invoke):5;
+    }
+};
 template<class SurfaceOwner,class ChildOwner,class ExecutionOwner,class QueryFfdi,
     class QuerySecondary,class QueryFfdn,class QueryPipe,class QueryStmm,class Ffdi,class Secondary,
     class Ffdn,class Rectangle,class Stmm,class Statistics,class Unwind=TglOwnedVeboxFrameNoUnwind>
