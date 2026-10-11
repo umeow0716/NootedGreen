@@ -16354,6 +16354,32 @@ struct TglNativeContextFrameBinding {
     }
 };
 
+// 13e6c/13e74 and1417d/14199: input->descriptor, DWORD count,
+// descriptor+10 output pointer array. Read only after successful creation and
+// inside its physical generation scope. This snapshot owns NO native contexts.
+template<size_t Capacity=16> struct TglNativeCreatedContextBatch {
+    static_assert(Capacity>0 && Capacity<=128,"owned adoption work budget, not native limit");
+    std::array<uintptr_t,Capacity> contexts{};
+    uint32_t count=0;bool valid=false;
+    template<class Read> bool capture(uintptr_t input,Read read) noexcept {
+        *this={};uintptr_t descriptor=0,outputs=0;uint32_t n=0;
+        if(!input || input>UINTPTR_MAX-8 || !read(input,&descriptor,8) ||
+            !descriptor || descriptor>UINTPTR_MAX-0x18 || !read(descriptor,&n,4) || n>Capacity) return false;
+        TglNativeCreatedContextBatch candidate;
+        if(n) {
+            if(!read(descriptor+0x10,&outputs,8) || !outputs ||
+                outputs>UINTPTR_MAX-size_t(n)*8) return false;
+            for(uint32_t i=0;i<n;++i) {
+                if(!read(outputs+size_t(i)*8,&candidate.contexts[i],8)) return false;
+                // Native permits NULL request entries; their NULL outputs are
+                // not owners. Repeated nonnull contexts cannot be adopted twice.
+                if(candidate.contexts[i]) for(uint32_t j=0;j<i;++j)
+                    if(candidate.contexts[j]==candidate.contexts[i]) return false;
+            }
+        }
+        candidate.count=n;candidate.valid=true;*this=candidate;return true;
+    }
+};
 struct TglNativeContextFrameInvoker {
     int operator()(uintptr_t entry,uintptr_t context,uintptr_t request,
         uintptr_t outputSlot) const noexcept {

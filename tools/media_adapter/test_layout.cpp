@@ -11731,6 +11731,30 @@ static void testGuardedVeboxLifecycle() {
 
 static void testRetainedVeboxFrames() {
     {
+        TglNativeCreatedContextBatch<2> batch;
+        uintptr_t descriptor=0x2000,outputs=0x3000;
+        uint32_t count=2;std::array<uintptr_t,2> contexts{0x4000,0x5000};bool readable=true;
+        auto read=[&](uintptr_t address,void* bytes,size_t size) noexcept {
+            if(!readable) return false;
+            if(address==0x1000 && size==8) std::memcpy(bytes,&descriptor,8);
+            else if(address==0x2000 && size==4) std::memcpy(bytes,&count,4);
+            else if(address==0x2010 && size==8) std::memcpy(bytes,&outputs,8);
+            else if((address==0x3000 || address==0x3008) && size==8)
+                std::memcpy(bytes,&contexts[(address-0x3000)/8],8);
+            else return false;
+            return true;
+        };
+        assert(batch.capture(0x1000,read) && batch.valid && batch.count==2 && batch.contexts==contexts);
+        contexts[1]=contexts[0];
+        assert(!batch.capture(0x1000,read) && !batch.valid && !batch.count && !batch.contexts[0]);
+        contexts[1]=0;assert(batch.capture(0x1000,read) && batch.contexts[1]==0);
+        count=3;assert(!batch.capture(0x1000,read));
+        count=2;outputs=UINTPTR_MAX-8;assert(!batch.capture(0x1000,read));
+        outputs=0x3000;descriptor=UINTPTR_MAX-8;assert(!batch.capture(0x1000,read));
+        descriptor=0x2000;readable=false;assert(!batch.capture(0x1000,read));
+        readable=true;count=0;outputs=0;assert(batch.capture(0x1000,read) && batch.valid && batch.count==0);
+    }
+    {
         struct ReceiptFrame {ReceiptFrame() noexcept=default;};
         TglOwnedVeboxRetainedFrames<ReceiptFrame> pool,foreign;
         auto ticket=pool.create();assert(ticket.generation);
