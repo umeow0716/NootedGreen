@@ -9523,6 +9523,28 @@ public:
         if(initialization.status()) {clear();return false;}
         storage_.setCallerFields(channel,performance);ready_=true;return true;
     }
+    // Separate VP10 construction phase from frame publication. Caller must
+    // exclude GPU users; no resource-owner scope or published state may exist.
+    // Native void initialization has an independently checked owned status.
+    template<class Use> int withPassInitializationEntry(Use use) noexcept {
+        using InitContext=TglOwnedVpPassInitContext<StateBackend>;
+        using InitResolve=TglOwnedVpSfcResolve<InitContext>;
+        using Entry=void(*)(void*) noexcept;
+        static_assert(noexcept(use(nullptr,Entry{})),"VP construction consumer ABI");
+        if(!ready_ || busy_ || resourcesBound_ || generation_==UINT64_MAX) return 5;
+        Guard guard(busy_);ready_=false;++generation_;
+        InitContext initialization(storage_,state_);
+        void* child=storage_.bytes.data();
+        TglOwnedVpSfcScopedContext<InitContext> scope(child,initialization);
+        TglOwnedVpEntrySet entries;
+        if(!scope.bound() || !tglBindOwnedVpInitializeEntry<InitResolve>(child,entries)) {
+            clear();return 5;
+        }
+        const int result=use(child,entries.initialize);
+        const int status=result ? result : initialization.status();
+        if(status) {clear();return status;}
+        ready_=true;return 0;
+    }
     // CPU teardown only: the enclosing runtime owner still has to establish
     // GPU retirement before calling this or releasing the VP allocation.
     bool tryReset() noexcept {

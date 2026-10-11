@@ -8243,6 +8243,43 @@ static void testVpSfcCpuGraph() {
     binding.valid=false;assert(!initialize() && !state.live && !avs.live);
     assert(graph.withView(true,never)==5);
     graph.reset();assert(state.frees==1 && avs.frees==2);
+    binding.valid=true;assert(initialize());
+    using InitEntry=void(*)(void*) noexcept;
+    InitEntry expiredInit=nullptr;void* initChild=nullptr;
+    const auto beforeGeneration=graph.generation();
+    const auto beforeFrees=state.frees;
+    const auto neverInit=[](void*,InitEntry) noexcept {assert(false);return 0;};
+    assert(graph.withPassInitializationEntry([&](void* child,InitEntry entry) noexcept {
+        expiredInit=entry;initChild=child;
+        uintptr_t published=1;std::memcpy(&published,static_cast<uint8_t*>(child)+0x938,8);
+        assert(!published && graph.withView(false,never)==5);
+        assert(graph.withPassInitializationEntry(neverInit)==5);
+        graph.reset();assert(state.live && avs.live);
+        entry(child);return 0;
+    })==0);
+    assert(graph.generation()==beforeGeneration+1 && state.frees==beforeFrees+1);
+    expiredInit(initChild);assert(state.frees==beforeFrees+1);
+    assert(graph.withView(false,[&](void*) noexcept {
+        assert(graph.withPassInitializationEntry(neverInit)==5);return 0;
+    })==0);
+    assert(graph.withResourceOwnerStorage([&](auto&) noexcept {
+        assert(graph.withPassInitializationEntry(neverInit)==5);return 0;
+    })==0);
+    assert(graph.withPassInitializationEntry([](void*,InitEntry) noexcept {return 31;})==31);
+    assert(!state.live && !avs.live && graph.withView(false,never)==5);
+    assert(initialize());state.fail=true;
+    assert(graph.withPassInitializationEntry([](void* child,InitEntry entry) noexcept {
+        entry(child);return 0;
+    })==5);
+    assert(!state.live && !avs.live && graph.withView(false,never)==5);
+    state.fail=false;assert(initialize());
+    assert(graph.withPassInitializationEntry([](void*,InitEntry) noexcept {return 0;})==5);
+    assert(!state.live && !avs.live);
+    assert(initialize());
+    assert(graph.withPassInitializationEntry([](void* child,InitEntry entry) noexcept {
+        entry(child);entry(child);return 0;
+    })==5);
+    assert(!state.live && !avs.live);
 }
 
 static void testSfcSetupOrder() {
