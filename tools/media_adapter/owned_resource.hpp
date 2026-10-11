@@ -13003,6 +13003,7 @@ public:
     TglNativeStmmFrameStorage(const TglNativeStmmFrameStorage&)=delete;
     TglNativeStmmFrameStorage& operator=(const TglNativeStmmFrameStorage&)=delete;
     auto& pair() noexcept {return pair_;}
+    const auto& surfaces() const noexcept {return surfaces_;}
 };
 #if defined(__APPLE__)
 using TglDarwinStmmFrameStorage=TglNativeStmmFrameStorage<TglDarwinStmmSurfaceApi>;
@@ -14192,6 +14193,7 @@ public:
     TglNativeVeboxAuxiliaryFrameStorage(const TglNativeVeboxAuxiliaryFrameStorage&)=delete;
     TglNativeVeboxAuxiliaryFrameStorage& operator=(const TglNativeVeboxAuxiliaryFrameStorage&)=delete;
     auto& stmm() noexcept {return stmm_.pair();}
+    auto& stmmStorage() noexcept {return stmm_;}
     auto& statistics() noexcept {return statistics_;}
     const auto& statisticsFill() const noexcept {return fill_;}
     auto& retention() noexcept {return retention_;}
@@ -14393,6 +14395,38 @@ auto tglMakeCapturedStatisticsFrameTail(TglStatisticsResource<TglNativeResourceB
                 }
         },keep);
     };
+}
+
+// Actual allocation-stage wiring, with no externally supplied STMM/statistics
+// owner graph. Final consume remains inside all surface/backing scopes and
+// must record command acquisition in auxiliary.retention() before returning.
+template<class Api,class Owner,class ChildOwner,class ExecutionOwner,class Read,
+    class SfcFormat,class SfcColor,class ParameterKind,class Supports,
+    class Rectangle,class Writable,class Consume,class Unwind>
+int tglRunNativeVeboxAllocationFrame(TglNativeVeboxSurfaceFrameStorage<Api>& storage,
+    Owner& input,Owner* executionSurface,Owner* secondary,Owner* previous,
+    ChildOwner& childOwner,ExecutionOwner& reportOwner,void* child,uintptr_t report,
+    const TglOwnedSurfaceStorage& source,Read read,SfcFormat sfcFormat,SfcColor sfcColor,
+    ParameterKind parameterKind,Supports supports,Rectangle rectangle,
+    bool reinitializeStmm,bool alignDi64,Writable writable,Consume consume,Unwind unwind) noexcept {
+    auto& auxiliary=storage.auxiliary();
+    auto keep=[&]() noexcept {return auxiliary.retention()();};
+    if(keep()) return 5;
+    auto stmm=[&](void* active,uintptr_t execution,const auto& surface,
+        const auto&,const auto&,auto continuation) noexcept -> int {
+        auto& owned=auxiliary.stmmStorage();const auto& shells=owned.surfaces();
+        return tglRunCapturedStmmSurfacePair(owned.pair(),shells[0],shells[1],
+            input,childOwner,reportOwner,active,execution,surface,read,reinitializeStmm,
+            TglOwnedStmmReportPublisher<ExecutionOwner>{reportOwner,execution},
+            [&](const auto* first,const auto* second) noexcept -> int {
+                return continuation(TglOwnedStmmTailViews{{first,second}});
+            },keep);
+    };
+    auto statistics=tglMakeCapturedStatisticsFrameTail<true>(auxiliary.statistics(),
+        input,childOwner,reportOwner,read,alignDi64,auxiliary.statisticsFill(),writable,consume,keep);
+    return tglRunNativeVeboxSurfaceFrame(storage,input,executionSurface,secondary,previous,
+        childOwner,reportOwner,child,report,source,read,sfcFormat,sfcColor,parameterKind,
+        supports,rectangle,stmm,statistics,unwind);
 }
 
 // Bind command inputs to the already-held frame views. No new owner/handle is
