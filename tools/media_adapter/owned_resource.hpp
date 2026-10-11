@@ -5370,7 +5370,8 @@ template<class Owner,class Copy,class Finish=TglOwnedFfdnNoFinish,
 int tglPrepareOwnedDescriptorFfdnPair(std::array<TglOwnedDescriptorOnlySurface,2>& targets,
     Owner& input,Owner* previous,Owner* copyDestination,
     Compression compression,bool& referenceValid,bool executionFlag13,
-    uint8_t& execution15,uint8_t& execution16,Copy copy,Finish finish={}) noexcept {
+    uint8_t& execution15,uint8_t& execution16,Copy copy,Finish finish={},
+    std::array<const TglOwnedSurfaceStorage*,3> captured={}) noexcept {
     return tglWithAllocatedOwnedFfdnPair(input,previous,copyDestination,compression,
         referenceValid,executionFlag13,execution15,execution16,
         [&](size_t index,const auto& request,bool& changed,uint32_t& pitch) noexcept -> int {
@@ -5390,7 +5391,7 @@ int tglPrepareOwnedDescriptorFfdnPair(std::array<TglOwnedDescriptorOnlySurface,2
                 if(!second) result=5;
             });
             return first?result:5;
-        });
+        },captured);
 }
 
 // Real type1/format3d target owners. Keep target roles distinct from every
@@ -5401,7 +5402,8 @@ template<class TargetOwner,class Owner,class Copy,class Finish=TglOwnedFfdnNoFin
 int tglPrepareOwnedBackedFfdnPair(const std::array<TargetOwner*,2>& targets,
     Owner& input,Owner* previous,Owner* copyDestination,
     Compression compression,bool& referenceValid,bool executionFlag13,
-    uint8_t& execution15,uint8_t& execution16,Copy copy,Finish finish={}) noexcept {
+    uint8_t& execution15,uint8_t& execution16,Copy copy,Finish finish={},
+    std::array<const TglOwnedSurfaceStorage*,3> captured={}) noexcept {
     if(!targets[0] || !targets[1] || targets[0]==targets[1]) return 5;
     struct Binding {const void* owner;const void* storage;};
     std::array<Binding,5> bindings{};
@@ -5433,7 +5435,7 @@ int tglPrepareOwnedBackedFfdnPair(const std::array<TargetOwner*,2>& targets,
                 if(!second) result=5;
             });
             return first?result:5;
-        });
+        },captured);
 }
 
 // Exact ICL classifier4a500 and its 90-entry relative jump table4a55c.

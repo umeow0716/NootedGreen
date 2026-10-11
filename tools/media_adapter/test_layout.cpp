@@ -6071,6 +6071,18 @@ static void testNativeResourceBoundary() {
                         {false,0},valid,false,flag,mode,noCopy)==5);
                     assert(flag==0 && mode==0); // slot0 persisted, slot1 busy
                 }));
+                assert(input.withSurface([&](const auto& source) noexcept {
+                    assert(tglPrepareOwnedDescriptorFfdnPair(targets,input,
+                        static_cast<decltype(&input)>(nullptr),static_cast<decltype(&input)>(nullptr),
+                        {false,0},valid,false,flag,mode,noCopy,
+                        [&](const auto& views,const auto&,const auto&) noexcept {
+                            assert(views[0]==&source && input.hasSurfaceLease(source));
+                            for(auto& target:targets)
+                                assert(!target.withDescriptor([](const auto&) noexcept {}));
+                            return 31;
+                        },{&source,nullptr,nullptr})==31);
+                    assert(input.hasSurfaceLease(source));
+                }));
             }
             {
                 struct BackedPairBackend {
@@ -6145,6 +6157,20 @@ static void testNativeResourceBoundary() {
                     for(auto byte:shared.resource) assert(!byte);
                 }
                 assert(backend.allocations==allocated && consumers==3);
+                targets={&first,&second};
+                assert(input.withSurface([&](const auto& source) noexcept {
+                    assert(tglPrepareOwnedBackedFfdnPair(targets,input,&input,&input,
+                        {false,0},valid,true,flag,mode,copy,
+                        [&](const auto& views,const auto& a,const auto& b) noexcept {
+                            assert(views[0]==&source && views[1]==&source && views[2]==&source);
+                            assert(input.hasSurfaceLease(source) && first.hasSurfaceLease(a) && second.hasSurfaceLease(b));
+                            return 31;
+                        },{&source,nullptr,nullptr})==31);
+                    assert(input.hasSurfaceLease(source));
+                    assert(first.withSurface([](const auto&) noexcept {}));
+                    assert(second.withSurface([](const auto&) noexcept {}));
+                }));
+                assert(backend.allocations==allocated);
                 first.reset();second.reset();input.reset();
                 assert(backend.releases==backend.allocations);
             }
