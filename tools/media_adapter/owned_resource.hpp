@@ -15735,6 +15735,35 @@ public:
     auto& children() noexcept {return children_;}
 };
 
+// Integrated CPU ownership order: children may inspect the real frame surfaces
+// during cleanup, and surface/DN release still has its VP/command backing alive.
+// Parent/image leases and completion admission remain enclosing responsibilities.
+template<class Api,class SurfaceBackend,class DnBackend,class Cleanup,
+    class Cpu=TglNativeTrackedCpuInvoker,class Sfc=TglNativeSfcLifetimeInvoker,
+    class Destroy=TglNativeVeboxDestructorInvoker>
+class TglNativeVeboxRendererFrameStorage {
+    TglNativeVeboxVpFrameBacking<Api,Cpu> backing_;
+    TglOwnedVeboxFrameSurfaceStorage<SurfaceBackend,DnBackend> surfaces_;
+    TglNativeVeboxChildPairStorage<Cleanup,Cpu,Sfc,Destroy> children_;
+public:
+    template<class Read,class Qualify,class Executable,class... Args>
+    TglNativeVeboxRendererFrameStorage(SurfaceBackend& surfaces,DnBackend& parameters,
+        uintptr_t image,Read read,Qualify qualify,Executable executable,
+        const TglNativeResourceBinding& resources,uint64_t pageSize,
+        const TglNativeBufferFillBinding& fill,Cpu vpCpu,std::array<Cleanup,2> cleanup,
+        std::array<Cpu,2> childCpu,std::array<Sfc,2> sfc,std::array<Destroy,2> destroy,
+        Args&&... args)
+        :backing_(image,read,qualify,executable,resources,pageSize,fill,vpCpu,
+            std::forward<Args>(args)...),
+         surfaces_(surfaces,parameters,backing_.retention()),
+         children_(image,read,qualify,executable,std::move(cleanup),childCpu,sfc,destroy) {}
+    TglNativeVeboxRendererFrameStorage(const TglNativeVeboxRendererFrameStorage&)=delete;
+    TglNativeVeboxRendererFrameStorage& operator=(const TglNativeVeboxRendererFrameStorage&)=delete;
+    auto& backing() noexcept {return backing_;}
+    auto& surfaces() noexcept {return surfaces_;}
+    auto& children() noexcept {return children_;}
+};
+
 // Allocation transaction for a history-enabled frame. The qualified platform
 // planner supplies resource keys and statistics boundary dimensions; this does
 // not infer feature admission or SFC resources. All three owners outlive this

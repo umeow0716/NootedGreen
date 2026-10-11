@@ -15863,8 +15863,24 @@ int main() {
                         assert(false);return 0;
                     };
                     const TglOwnedVeboxFrameRetention* backingRetention=nullptr;
+                    struct FrameSurfaceBackend {
+                        unsigned live=0,releases=0;
+                        uint32_t resourceType() const noexcept {return 1;}
+                        int allocate(std::array<uint8_t,0x148>& resource,const TglResourceKey& key,
+                            uint32_t* width) noexcept {resource.fill(0);resource[0]=1;*width=key.width;++live;return 0;}
+                        bool backed(const std::array<uint8_t,0x148>& resource) noexcept {return resource[0]==1;}
+                        void release(std::array<uint8_t,0x148>& resource) noexcept {
+                            assert(live);--live;++releases;resource.fill(0);
+                        }
+                    } frameSurfaces;
+                    struct FrameDnBackend {
+                        unsigned live=0;
+                        uintptr_t allocate(size_t n) noexcept {auto* p=std::calloc(1,n);if(p) ++live;return reinterpret_cast<uintptr_t>(p);}
+                        void release(uintptr_t p) noexcept {assert(live);--live;std::free(reinterpret_cast<void*>(p));}
+                    } frameDn;
                     auto pairCleanup=[&](void* object) noexcept {
                         assert(backingRetention && !(*backingRetention)());
+                        assert(frameSurfaces.live==2 && frameDn.live==1);
                         ++cleaned[index(object)];
                     };
                     auto pairDestroy=[&](uintptr_t entry,void* object) noexcept {
@@ -15879,10 +15895,10 @@ int main() {
                         bool view(uintptr_t,TglOwnedStmmView&) noexcept {assert(false);return false;}
                     };
                     Cpu vpCpu{{},pairEvents,pairEventCount};
-                    using Assembly=TglNativeVeboxRendererCpuStorage<UnusedFrameApi,decltype(pairCleanup),
+                    using Assembly=TglNativeVeboxRendererFrameStorage<UnusedFrameApi,FrameSurfaceBackend,FrameDnBackend,decltype(pairCleanup),
                         NativeCpu,TrackedSfc,decltype(pairDestroy)>;
                     {
-                        Assembly assembly(base,allocatorRead,[](uintptr_t image) noexcept {return image==base;},
+                        Assembly assembly(frameSurfaces,frameDn,base,allocatorRead,[](uintptr_t image) noexcept {return image==base;},
                             [](uintptr_t,size_t) noexcept {return true;},
                             TglNativeResourceBinding{},4096,TglNativeBufferFillBinding{},NativeCpu{vpCpu},
                             {pairCleanup,pairCleanup},{NativeCpu{pairCpu[0]},NativeCpu{pairCpu[1]}},
@@ -15890,6 +15906,9 @@ int main() {
                             {pairDestroy,pairDestroy});
                         auto& pair=assembly.children();
                         backingRetention=&assembly.backing().retention();
+                        const TglResourceKey frameKey{8,3,0x3d,1,0,false};
+                        assert(assembly.surfaces().initialize(frameKey,frameKey,64,
+                            [](auto&,auto&,auto&) noexcept {return 0;})==0);
                         assert(!assembly.backing().vpBound() && !vpCpu.live);
                         assert(pair.bound());
                         auto pairConstruct=[&](uintptr_t entry,void* object,void* nativeOs,void*,void*,
@@ -15916,6 +15935,7 @@ int main() {
                             [](void*,uint64_t,uintptr_t,uintptr_t) noexcept {return true;}));
                         assert(renderer==original);
                     }
+                    assert(!frameSurfaces.live && frameSurfaces.releases==2 && !frameDn.live);
                     assert(!pairCpu[0].live && !pairCpu[1].live);
                     assert(cleaned[0]==1 && cleaned[1]==1 && destroyed==cleaned);
                     assert(pairInvoke.constructs==2 && pairInvoke.destroys==2);
