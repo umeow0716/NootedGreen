@@ -10877,6 +10877,23 @@ int main() {
         assert(prepared.color.at9b8 && prepared.color.metadata.at9a4==0x31);
         TglOwnedVpSfcCallerStorage scopedStorage;
         const auto originalStorage=scopedStorage.bytes;
+        for(unsigned mode=0;mode<5;++mode) {
+            calls=0;bool consumed=false;
+            const int result=tglWithOwnedVpAcquiredFrameEntry(scopedStorage,
+                0x1000,0x2000,0x3000,0x4000,0x6000,0x7000,{},read,
+                [&](void* child,auto prepare) noexcept {
+                    if(mode==1) return 0; // Missing native call.
+                    if(mode==4) return -17; // Caller error remains exact.
+                    prepare(child,reinterpret_cast<void*>(0x6000),reinterpret_cast<void*>(0x7000),
+                        reinterpret_cast<void*>(mode==2?0x1004:0x1000),
+                        reinterpret_cast<void*>(0x2000),reinterpret_cast<void*>(0x4000));
+                    if(mode==3) prepare(child,reinterpret_cast<void*>(0x6000),reinterpret_cast<void*>(0x7000),
+                        reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x2000),reinterpret_cast<void*>(0x4000));
+                    return 0;
+                },[&](const auto&,const auto&,uintptr_t) noexcept {consumed=true;return 31;});
+            assert(result==(mode==0?31:mode==4?-17:5) && consumed==(mode==0));
+            assert(calls==((mode==0 || mode==3)?total:0) && scopedStorage.bytes==originalStorage);
+        }
         for(unsigned failedStage=0;failedStage<3;++failedStage) {
             unsigned stages=0;calls=0;
             const auto checkScope=[&](void* child) noexcept {

@@ -7485,11 +7485,11 @@ int tglWithOwnedVpPreparedFrame(TglOwnedVpSfcCallerStorage& storage,
 // The caller retains all descriptor/image leases for the complete call and
 // supplies an authenticated settings view; this is not a published VP entry.
 // State receives the SAME geometry snapshot used to prepare the frame.
-template<class Read,class Use>
-int tglWithOwnedVpAcquiredFrame(TglOwnedVpSfcCallerStorage& storage,
+template<class Read,class Invoke,class Use>
+int tglWithOwnedVpAcquiredFrameEntry(TglOwnedVpSfcCallerStorage& storage,
     uintptr_t source,uintptr_t target,uintptr_t mhw,uintptr_t settings,
     uintptr_t conditionalSource,uintptr_t parameters,const TglOwnedVpModeState& original,
-    Read read,Use use) noexcept {
+    Read read,Invoke invoke,Use use) noexcept {
     static_assert(noexcept(use(
         std::declval<const TglOwnedVpFramePreparation&>(),
         std::declval<const TglOwnedVpRegionInput&>(),uintptr_t{})),"VP acquired frame ABI");
@@ -7524,12 +7524,24 @@ int tglWithOwnedVpAcquiredFrame(TglOwnedVpSfcCallerStorage& storage,
         using Resolve=TglOwnedVpSfcResolve<FrameContext>;
         TglOwnedVpEntrySet entries;
         if(!tglBindOwnedVpFrameEntry<Resolve>(context.child,entries)) return 5;
-        entries.prepare(context.child,reinterpret_cast<void*>(conditionalSource),
-            reinterpret_cast<void*>(parameters),reinterpret_cast<void*>(source),
-            reinterpret_cast<void*>(target),reinterpret_cast<void*>(settings));
+        static_assert(noexcept(invoke(context.child,entries.prepare)),"VP acquisition invocation ABI");
+        const int result=invoke(context.child,entries.prepare);
+        if(result) return result;
     }
     if(!context.called || !context.valid) return 5;
     return use(frame,geometry,sourceA8);
+}
+template<class Read,class Use>
+int tglWithOwnedVpAcquiredFrame(TglOwnedVpSfcCallerStorage& storage,
+    uintptr_t source,uintptr_t target,uintptr_t mhw,uintptr_t settings,
+    uintptr_t conditionalSource,uintptr_t parameters,const TglOwnedVpModeState& original,
+    Read read,Use use) noexcept {
+    return tglWithOwnedVpAcquiredFrameEntry(storage,source,target,mhw,settings,
+        conditionalSource,parameters,original,read,[&](void* child,auto prepare) noexcept {
+            prepare(child,reinterpret_cast<void*>(conditionalSource),reinterpret_cast<void*>(parameters),
+                reinterpret_cast<void*>(source),reinterpret_cast<void*>(target),reinterpret_cast<void*>(settings));
+            return 0;
+        },use);
 }
 template<class Read,class State,class Avs,class Ief,class Send>
 int tglWithOwnedVpLeasedPass(TglOwnedVpSfcCallerStorage& storage,
