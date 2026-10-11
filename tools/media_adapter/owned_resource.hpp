@@ -11741,8 +11741,13 @@ public:
         if(!owner.hasSurfaceLease(source)) return 5;
         std::array<TglResourceKey,2> keys{};
         if(!tglPrepareOwnedStmmHistoryKeys(source,child1ba9,keys)) return 5;
-        return ensure(requests,prepare,keys,reinitialize,
-                      statisticsWidth,statisticsHeight,fill,publish);
+        const int status=ensure(requests,prepare,keys,reinitialize,
+                                statisticsWidth,statisticsHeight,fill,publish);
+        // Producers may reject or revoke a captured identity. Do not leave
+        // newly allocated graph resources ready after losing that source.
+        // This synchronous allocation API excludes GPU users.
+        if(!owner.hasSurfaceLease(source)) {reset();return 5;}
+        return status;
     }
     template<class Requests,class Prepare,class Fill,class Publish=TglOwnedStatisticsNoPublication>
     int ensure(const Requests& requests,Prepare prepare,

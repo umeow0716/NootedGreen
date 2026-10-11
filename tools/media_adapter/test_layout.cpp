@@ -7015,6 +7015,21 @@ static void testResourceBinding() {
                 } sourceBackend;
                 TglOwnedAllocatedSurface<SourceBackend> sourceOwner(sourceBackend);
                 assert(sourceOwner.ensure(stmmKey)==0);
+                {
+                    TestFeatureSurfaceOwner revoked;
+                    revoked.busy=true;
+                    std::memcpy(revoked.storage.prefix.data()+0xd8,&stmmKey.width,4);
+                    std::memcpy(revoked.storage.prefix.data()+0xdc,&stmmKey.height,4);
+                    unsigned publications=0;
+                    assert(transaction.ensureFromLeasedSource(revoked,revoked.storage,false,
+                        requests,prepare,false,1920,1080,fill,
+                        [&](const auto&,const TglStatisticsAllocation&) noexcept {
+                            ++publications;revoked.busy=false;return 0;
+                        })==5);
+                    assert(publications==1 && !api.references && !statistics.layout().bytes);
+                    assert(transaction.withResources([](const auto&,const auto&,const auto&,
+                        const auto&,const auto&) noexcept {assert(false);return 0;})==5);
+                }
                 for(bool rejectPublication:{true,false}) assert(sourceOwner.withSurface([&](const auto& source) noexcept {
                     unsigned prepared=0;
                     unsigned publications=0;
