@@ -11175,6 +11175,28 @@ int tglRunCapturedBackedFfdnHistoryPair(const std::array<TargetOwner*,2>& target
     return tglRunCapturedFfdnHistoryPair(targets,*targets[0],input,previous,history,childOwner,
         reportOwner,child,report,source,ffdi,read,finish);
 }
+// Select the new pair from the held source format, independently of the old
+// ba8 owner used for compression. A format transition must not substitute the
+// newly selected empty slot for that old owner.
+template<class TargetOwner,class PriorOwner,class Owner,class ChildOwner,class ExecutionOwner,class Read,class Finish>
+int tglRunCapturedFfdnFrame(std::array<TglOwnedDescriptorOnlySurface,2>& descriptors,
+    const std::array<TargetOwner*,2>& backed,PriorOwner& prior,Owner& input,Owner* previous,
+    TglOwnedDescriptorOnlySurface& history,ChildOwner& childOwner,ExecutionOwner& reportOwner,
+    void* child,uintptr_t report,const TglOwnedSurfaceStorage& source,
+    TglOwnedFfdiCompressionSelection ffdi,Read read,Finish finish) noexcept {
+    return tglRunCapturedVeboxAllocation(input,childOwner,reportOwner,child,report,source,
+        [&](void* c,uintptr_t e,const auto& s) noexcept -> int {
+            uint32_t format=0;
+            std::memcpy(&format,s.prefix.data()+0x130,4);
+            if(format==0x3d) {
+                if(!backed[0] || !backed[1]) return 5;
+                return tglRunCapturedFfdnHistoryPair(backed,prior,input,previous,history,
+                    childOwner,reportOwner,c,e,s,ffdi,read,finish);
+            }
+            return tglRunCapturedFfdnHistoryPair(descriptors,prior,input,previous,history,
+                childOwner,reportOwner,c,e,s,ffdi,read,finish);
+        });
+}
 template<class Read>
 bool tglReadOwnedStateExecution(TglOwnedStateInputs& output, uintptr_t execution,
                                 bool diArgument, Read read) {

@@ -6698,6 +6698,7 @@ static void testNativeResourceBoundary() {
                                         TglOwnedAllocatedSurface linkedInput(backingBackend,linkedStorage);
                                         TglOwnedAllocatedSurface previous(backingBackend);
                                         TglOwnedAllocatedSurface targetA(backingBackend),targetB(backingBackend);
+                                        std::array<TglOwnedDescriptorOnlySurface,2> descriptorPair;
                                         const TglResourceKey linkedKey{33,17,0x3d,1,0,false};
                                         assert(!linkedInput.ensure(linkedKey) && !previous.ensure(linkedKey));
                                         const auto previousAddress=reinterpret_cast<uintptr_t>(previous.surfaceBinding());
@@ -6711,7 +6712,7 @@ static void testNativeResourceBoundary() {
                                         auto runHistory=[&]() noexcept -> int {
                                             int result=5;
                                             assert(linkedInput.withSurface([&](const auto& current) noexcept {
-                                                result=tglRunCapturedBackedFfdnHistoryPair(std::array{&targetA,&targetB},
+                                                result=tglRunCapturedFfdnFrame(descriptorPair,std::array{&targetA,&targetB},targetA,
                                                     linkedInput,&previous,historyShell,childOwner,reportOwner,
                                                     actualChild,report,current,{true,1},read,
                                                     [&](const auto& views,const auto& a,const auto& b,const auto* history) noexcept -> int {
@@ -6744,19 +6745,19 @@ static void testNativeResourceBoundary() {
                                                     assert(!views[1] && !history);return -61;
                                                 })==-61);
                                         }));
-                                        std::array<TglOwnedDescriptorOnlySurface,2> descriptorPair;
                                         const uint32_t descriptorFormat=3;
                                         std::memcpy(linkedStorage.prefix.data()+0x130,&descriptorFormat,4);
                                         std::memcpy(linkedStorage.prefix.data()+0xc8,&previousAddress,8);
                                         std::memcpy(child.data()+0x1b8,&shellAddress,8);
-                                        const auto descriptorAddress=reinterpret_cast<uintptr_t>(descriptorPair[0].surfaceBinding());
-                                        std::memcpy(child.data()+0xba8,&descriptorAddress,8);
+                                        const auto priorAddress=reinterpret_cast<uintptr_t>(targetA.surfaceBinding());
+                                        std::memcpy(child.data()+0xba8,&priorAddress,8);
+                                        child[0x1b88]=0;child[0x1b89]=0;
                                         reportBackend.bytes[8]=1;reportBackend.bytes[0x13]=1;
                                         const auto beforeDescriptor=backingBackend.allocations;
                                         assert(linkedInput.withSurface([&](const auto& current) noexcept {
-                                            assert(tglRunCapturedFfdnHistoryPair(descriptorPair,descriptorPair[0],
+                                            assert(tglRunCapturedFfdnFrame(descriptorPair,std::array{&targetA,&targetB},targetA,
                                                 linkedInput,&previous,historyShell,childOwner,reportOwner,
-                                                actualChild,report,current,{true,1},read,
+                                                actualChild,report,current,{false,0},read,
                                                 [&](const auto& views,const auto& a,const auto& b,const auto* history) noexcept -> int {
                                                     assert(history && std::memcmp(history,views[1],sizeof(*history))==0);
                                                     uint32_t fa=0,fb=0;
