@@ -3341,6 +3341,53 @@ static void testExecutionOwner() {
 
 static void testVeboxReport() {
     TglVeboxReportState storage;
+    {
+        constexpr uintptr_t image=0x100000,os=0x200000;
+        auto body=TglNativeVeboxChannelBinding::body;
+        auto publication=TglNativeVeboxChannelBinding::publication;
+        uintptr_t slot=image+0x62cd0;bool readable=true,identity=true,rx=true;
+        auto read=[&](uintptr_t p,void* out,size_t n) noexcept {
+            if(!readable) return false;
+            if(p==os+0xf0 && n==8) {std::memcpy(out,&slot,8);return true;}
+            if(p==image+0x62cd0 && n==body.size()) {std::memcpy(out,body.data(),n);return true;}
+            if(p==image+0x65fbc && n==publication.size()) {std::memcpy(out,publication.data(),n);return true;}
+            return false;
+        };
+        auto qualify=[&](uintptr_t p) noexcept {return identity && p==image;};
+        auto executable=[&](uintptr_t p,size_t n) noexcept {return rx && p==slot && n==body.size();};
+        TglNativeVeboxChannelBinding binding;unsigned calls=0;
+        auto invoke=[&](uintptr_t entry,uintptr_t context,uint32_t channel) noexcept -> int {
+            assert(entry==image+0x62cd0 && context==os && channel==UINT32_MAX);++calls;return 31;
+        };
+        assert(binding.restore(UINT32_MAX,invoke)==5 && !calls);
+        for(size_t i=0;i<body.size();++i) {
+            body[i]^=1;assert(!binding.resolve(image,os,read,qualify,executable));body[i]^=1;
+            assert(binding.restore(UINT32_MAX,invoke)==5 && !calls);
+        }
+        for(size_t i=0;i<publication.size();++i) {
+            publication[i]^=1;assert(!binding.resolve(image,os,read,qualify,executable));publication[i]^=1;
+        }
+        for(unsigned gate=0;gate<4;++gate) {
+            readable=gate!=0;identity=gate!=1;rx=gate!=2;slot=image+0x62cd0+(gate==3);
+            assert(!binding.resolve(image,os,read,qualify,executable));
+        }
+        readable=identity=rx=true;slot=image+0x62cd0;
+        assert(!binding.resolve(UINTPTR_MAX,os,read,qualify,executable));
+        assert(!binding.resolve(image,UINTPTR_MAX,read,qualify,executable));
+        assert(binding.resolve(image,os,read,qualify,executable));
+        assert(binding.restore(UINT32_MAX,invoke)==31 && calls==1);
+    }
+    for(int stageResult:{0,31,-7}) for(int restoreResult:{0,5,31}) {
+        storage.bytes.fill(0xa5);const auto before=storage.bytes;unsigned restores=0;
+        auto restore=[&]() noexcept -> int {
+            assert(storage.bytes==before);++restores;return restoreResult;
+        };
+        assert(tglFinishOwnedVeboxRender(storage,stageResult,2,0xfe,0xff,restore)==stageResult);
+        assert(restores==1 && storage.bytes[0x24]==1 && storage.bytes[0x25]==1);
+        auto expected=before;const uint32_t pipe=2;
+        std::memcpy(expected.data()+0xc,&pipe,4);expected[0x24]=1;expected[0x25]=1;
+        assert(storage.bytes==expected);
+    }
     for(unsigned bits=0;bits<32;++bits) for(uint32_t pipe:{0u,1u,2u,UINT32_MAX})
         for(unsigned answers=0;answers<4;++answers) {
             std::array<uint8_t,0x15> execution{};execution.fill(0xfe);

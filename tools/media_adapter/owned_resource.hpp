@@ -3491,6 +3491,53 @@ inline void tglFinalizeVeboxReport(TglVeboxReportState& report, uint32_t outputP
     report.bytes[0x24] = (execution18 ^ 1) & 1;
     report.bytes[0x25] = execution8f4 & 1;
 }
+struct TglNativeVeboxChannelInvoker {
+    int operator()(uintptr_t entry,uintptr_t os,uint32_t channel) const noexcept {
+        using Restore=int(*)(void*,uint32_t);
+        return reinterpret_cast<Restore>(entry)(reinterpret_cast<void*>(os),channel);
+    }
+};
+class TglNativeVeboxChannelBinding {
+    uintptr_t os_=0,entry_=0;
+public:
+    inline static constexpr std::array<uint8_t,56> body{
+        0x55,0x48,0x89,0xe5,0x48,0x89,0x7d,0xf0,0x89,0x75,0xec,
+        0x48,0x83,0x7d,0xf0,0,0x0f,0x85,0x0c,0,0,0,0xc7,0x45,0xfc,5,0,0,0,
+        0xe9,0x11,0,0,0,0x8b,0x45,0xec,0x48,0x8b,0x4d,0xf0,0x89,0x41,8,
+        0xc7,0x45,0xfc,0,0,0,0,0x8b,0x45,0xfc,0x5d,0xc3};
+    inline static constexpr std::array<uint8_t,14> publication{
+        0x4c,0x8d,0x05,0x0d,0xcd,0xff,0xff,0x4c,0x89,0x87,0xf0,0,0,0};
+    template<class Read,class Qualify,class Executable>
+    bool resolve(uintptr_t image,uintptr_t os,Read read,Qualify qualify,Executable executable) noexcept {
+        os_=entry_=0;uintptr_t entry=0;
+        std::array<uint8_t,body.size()> actual{};
+        std::array<uint8_t,publication.size()> published{};
+        if(!image || image>UINTPTR_MAX-0x65fca || !os || os>UINTPTR_MAX-0xf8 ||
+           !qualify(image) || !read(os+0xf0,&entry,8) || entry!=image+0x62cd0 ||
+           !executable(entry,body.size()) || !read(entry,actual.data(),actual.size()) || actual!=body ||
+           !read(image+0x65fbc,published.data(),published.size()) || published!=publication) return false;
+        os_=os;entry_=entry;return true;
+    }
+    template<class Invoke=TglNativeVeboxChannelInvoker>
+    int restore(uint32_t channel,Invoke invoke=Invoke{}) const noexcept {
+        static_assert(noexcept(invoke(uintptr_t{},uintptr_t{},uint32_t{})),"OS channel ABI");
+        return os_ && entry_ ? invoke(entry_,os_,channel) : 5;
+    }
+};
+// Native12cdac..12ce18 restores OS channel through OS+f0 BEFORE publishing
+// the report, even when a previous Render stage failed. Its return is ignored;
+// EAX at Render return is the saved stage result, not the restore status.
+// Restore must already be qualified against65fbc/65fc3 ->62cd0, whose only
+// mutation is OS+8=channel. This helper is not a fence or an admission gate.
+template<class Restore>
+int tglFinishOwnedVeboxRender(TglVeboxReportState& report,int renderResult,
+    uint32_t outputPipe,uint8_t execution18,uint8_t execution8f4,Restore restore) noexcept {
+    static_assert(noexcept(restore()) && std::is_same_v<decltype(restore()),int>,
+        "native channel restore status ABI");
+    (void)restore();
+    tglFinalizeVeboxReport(report,outputPipe,execution18,execution8f4);
+    return renderResult;
+}
 
 // Native12cccb..12cda6: update the two child statistics-selection flags.
 // report09/pipe1 skips BOTH writes. Slotd0 is lazy and may be called twice;
