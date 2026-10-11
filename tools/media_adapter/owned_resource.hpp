@@ -10019,6 +10019,26 @@ public:
                 return context.setupSeen && context.sendSeen ? 0 : 5;
             });
     }
+    // Compose setup/send only while their pass context is live. Existing
+    // entries retain their outer resolver leases; this does not publish a
+    // complete vtable or extend any callback lifetime beyond the consumer.
+    template<class State,class Avs,class Ief,class Emit,class Use>
+    int withPreparedCallbackAssemblyPass(const TglOwnedVpEntrySet& base,
+        const TglOwnedVpFramePreparation& frame,uintptr_t conditionalSource,
+        uintptr_t settings,uintptr_t target,uintptr_t sourceA8,void* source,void* renderData,
+        State state,Avs avs,Ief ief,Emit emit,Use use) noexcept {
+        if(base.setup || base.send) return 5;
+        const auto retained=base;
+        return withPreparedCallbackPass(frame,conditionalSource,settings,target,sourceA8,
+            source,renderData,state,avs,ief,emit,[&](void* child,auto setup,auto send) noexcept {
+                TglOwnedVpEntrySet additions;
+                additions.setup=setup;additions.send=send;
+                auto combined=retained;
+                if(!combined.appendDisjoint(additions)) return 5;
+                static_assert(noexcept(use(child,combined)),"VP setup/send assembly ABI");
+                return use(child,combined);
+            });
+    }
     // The qualified six-argument platform entry exists only in the final
     // consumer, after successful producers and while all CPU inputs are leased.
     template<class State,class Avs,class Ief,class Send>

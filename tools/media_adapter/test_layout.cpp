@@ -11437,7 +11437,22 @@ int main() {
                 TglOwnedSfcCommandParameters packets{};
                 std::array<uint8_t,0x2a8> output{};
                 unsigned stages=0;
-                const int result=graph.withPreparedCallbackPass(prepared,
+                TglOwnedVpEntrySet assemblyBase;
+                assemblyBase.compressionFormat=+[](void*,uint32_t) noexcept {return true;};
+                for(bool setupConflict:{false,true}) {
+                    auto conflict=assemblyBase;
+                    if(setupConflict) conflict.setup=+[](void*,void*,void*,void*) noexcept {return 0;};
+                    else conflict.send=+[](void*,void*,void*) noexcept {return 0;};
+                    assert(graph.withPreparedCallbackAssemblyPass(conflict,prepared,
+                        0x6000,0x4000,0x2000,reference,&source,&data,
+                        [](void*,const auto&,auto&) noexcept -> int {assert(false);return 0;},
+                        [](void*,const auto&,auto&) noexcept -> int {assert(false);return 0;},
+                        [](void*,const auto&) noexcept {assert(false);},
+                        [](void*,void*,void*) noexcept -> int {assert(false);return 0;},
+                        [](void*,const auto&) noexcept -> int {assert(false);return 0;})==5);
+                    assert(!stages);
+                }
+                const int result=graph.withPreparedCallbackAssemblyPass(assemblyBase,prepared,
                     0x6000,0x4000,0x2000,reference,&source,&data,
                     [&](void*,const auto&,auto&) noexcept -> int {++stages;return 0;},
                     [&](void*,const auto&,auto&) noexcept -> int {++stages;return 0;},
@@ -11448,11 +11463,13 @@ int main() {
                         return tglSendOwnedSfcPreparedCommands(backend,packets,output,
                             1,1,1,1,platform);
                     },
-                    [&](void* child,SetupEntry setup,SendEntry send) noexcept -> int {
-                        assert(setup(child,&source,reinterpret_cast<void*>(0x2000),&data)==0);
+                    [&](void* child,const TglOwnedVpEntrySet& assembled) noexcept -> int {
+                        assert(assembled.compressionFormat==assemblyBase.compressionFormat &&
+                            assembled.missingMask()==(assemblyBase.missingMask()&~((1U<<8)|(1U<<9))));
+                        assert(assembled.setup(child,&source,reinterpret_cast<void*>(0x2000),&data)==0);
                         // Even a caller that ignores the send error cannot turn
                         // failed/partial command construction into success.
-                        (void)send(child,&data,&command);return 0;
+                        (void)assembled.send(child,&data,&command);return 0;
                     });
                 assert(result==(failure?-failure:0));
                 unsigned expectedCount=0;
