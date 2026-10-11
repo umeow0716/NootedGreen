@@ -45,6 +45,39 @@ struct TestFeatureExecutionOwner {
 };
 static void testTrackedCpuOwner() {
     {
+        for(int scenario=0;scenario<8;++scenario) {
+            TglSurfaceRect source{0,0,1920,1081},target{0,0,1920,1200};
+            bool fill=false,compressed=true,healthy=true;uint32_t format=7;
+            auto mode=TglOwnedSfcCompressionMode::Media;
+            int status=99;unsigned checks=0,decompressions=0;
+            if(scenario==2) source.bottom=1080;
+            if(scenario==3) mode=TglOwnedSfcCompressionMode::Render;
+            if(scenario==4) source.bottom=1080.5f;
+            if(scenario==5) target.left=1;
+            auto recheck=[&]() noexcept {
+                ++checks;assert(target.bottom==source.bottom && !fill);
+                if(scenario==7) healthy=false;
+                return scenario!=6;
+            };
+            auto decompress=[&]() noexcept {
+                ++decompressions;assert(fill && target.bottom==source.bottom);
+                return scenario==1?31:0;
+            };
+            const bool selected=tglRunOwnedGen12FastFill(source,target,true,fill,compressed,mode,
+                format,status,recheck,decompress,[&]() noexcept {return healthy;});
+            assert(target.bottom==1200);
+            if(scenario>=4) {
+                assert(!selected && !fill && compressed && format==7 && status==99 && !decompressions);
+                assert(checks==(scenario>=6?1u:0u));
+            } else {
+                assert(selected && fill && checks==1);
+                if(scenario==0) assert(!compressed && mode==TglOwnedSfcCompressionMode::Disabled && format==0 && status==0 && decompressions==1);
+                if(scenario==1) assert(compressed && mode==TglOwnedSfcCompressionMode::Media && format==7 && status==31 && decompressions==1);
+                if(scenario==2 || scenario==3) assert(compressed && format==7 && status==0 && decompressions==0);
+            }
+        }
+    }
+    {
         // Exercise the real DI acquisition through the whole selector, not
         // an invented failure callback. No later predicate may run on error.
         struct Policy {

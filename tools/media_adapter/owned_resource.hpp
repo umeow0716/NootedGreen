@@ -1021,6 +1021,45 @@ struct TglSurfaceRect {
             std::isfinite(right) && std::isfinite(bottom);
     }
 };
+// Gen12 GetOutputPipe2499..2547. These references are owned state, NOT a
+// Darwin surface layout: the caller must bind its qualified frame and native
+// decompression resource. No guessed TGL compression/fast-fill offsets.
+// Recheck observes the temporary live target rectangle. Bottom is restored
+// on every exit. Native decompression failure preserves compressed state
+// but does not cancel fast-fill; expose its exact status to the caller.
+template<class Recheck,class Decompress,class Healthy>
+bool tglRunOwnedGen12FastFill(const TglSurfaceRect& source,TglSurfaceRect& target,
+    bool hasColorFill,bool& fastFill,bool& compressed,TglOwnedSfcCompressionMode& mode,
+    uint32_t& compressionFormat,int& decompressionStatus,
+    Recheck recheck,Decompress decompress,Healthy healthy) noexcept {
+    static_assert(noexcept(recheck()) && noexcept(decompress()) && noexcept(healthy()) &&
+        std::is_same_v<decltype(recheck()),bool> && std::is_same_v<decltype(decompress()),int> &&
+        std::is_same_v<decltype(healthy()),bool>,"fast-fill synchronous resource policy ABI");
+    if(!healthy() || !hasColorFill || !source.finite() || !target.finite() ||
+       source.left!=target.left || source.top!=target.top || source.right!=target.right ||
+       !(source.bottom<target.bottom)) return false;
+    // Gen12 uses integer RECT heights. Darwin float storage must be qualified
+    // before converting; no truncation/undefined float-to-integer conversion.
+    const double height=double(source.bottom)-double(source.top);
+    if(height<=0 || height>double(INT32_MAX) || std::trunc(height)!=height) return false;
+    if(mode!=TglOwnedSfcCompressionMode::Disabled && mode!=TglOwnedSfcCompressionMode::Media &&
+       mode!=TglOwnedSfcCompressionMode::Render) return false;
+    const float original=target.bottom;
+    struct Restore {float& value;float original;~Restore(){value=original;}} restore{target.bottom,original};
+    target.bottom=source.bottom;
+    const bool feasible=recheck();
+    if(!healthy() || !feasible) return false;
+    struct FlagRollback {bool& value;bool original;bool committed=false;
+        ~FlagRollback(){if(!committed) value=original;}} flag{fastFill,fastFill};
+    fastFill=true;
+    int status=0;
+    if(compressed && mode==TglOwnedSfcCompressionMode::Media && (int32_t(height)%8)!=0) {
+        status=decompress();
+        if(!healthy()) return false;
+        if(status==0) {compressed=false;mode=TglOwnedSfcCompressionMode::Disabled;compressionFormat=0;}
+    }
+    flag.committed=true;decompressionStatus=status;return true;
+}
 // Geometry portion of Gen12 IS_OUTPUT_PIPE_VEBOX_FEASIBLE. Darwin uses float
 // rectangles at surface+30/+40/+50, not Linux integer RECT storage. Do not
 // copy ICL1fb2ec's max-source SIZE EQUALITY in place of Gen12 containment.
