@@ -13043,7 +13043,17 @@ int main() {
                 int ief(const std::array<uint8_t,64>&) noexcept {return stage(8);}
                 int frameStart() noexcept {return stage(9);}
             };
-            assert(graph.withResourceOwnerStorage([&](auto& ownedStorage) noexcept {
+            assert(graph.withInitializedAssemblyEntries({},
+                [&](void* child,const auto& entries) noexcept -> int {
+                    entries.initialize(child);
+                    // Construction replaces the earlier state allocation;
+                    // track final teardown ordering separately, without hiding this release.
+                    assert(releaseCount==1 && releaseOrder[0]==2);
+                    releaseCount=0;releaseOrder.fill(0);return 0;
+                },
+                [&](void* initializedChild,const auto& initializedEntries) noexcept -> int {
+            return graph.withResourceOwnerStorage([&](auto& ownedStorage) noexcept {
+                assert(initializedChild==ownedStorage.bytes.data() && initializedEntries.initialize);
                 assert(!graph.tryReset());
                 assert(!graph.initialize(0x7000,0x8000,0x3000,binding,noRead,1,0));
                 assert(graph.prepare([](auto&,auto&,auto&) noexcept {assert(false);return 0;})==5);
@@ -13142,7 +13152,7 @@ int main() {
                     put(source,0,uint32_t(cscEnabled?0:3));
                     int passData=0,passCommand=0;
                     unsigned passStates=0;
-                    assert(graph.withLeasedCallbackAssemblyPass({},0x1000,0x2000,0x3000,0x4000,
+                    assert(graph.withLeasedCallbackAssemblyPass(initializedEntries,0x1000,0x2000,0x3000,0x4000,
                       0,0x4000,{},&passData,read,
                       [&](void*,const auto&,const auto& geometry,auto&) noexcept -> int {
                           assert(geometry.frameWidth==geometrySnapshot.frameWidth);++passStates;return 0;
@@ -13202,7 +13212,7 @@ int main() {
                                         [&](void* packetChild,const auto& packetEntries) noexcept {
                                     assert(packetChild==child && packetEntries.missingMask()==
                                         (combined.missingMask()&~((1U<<21)|(1U<<24)|(1U<<25)|(1U<<26))));
-                                    assert(packetEntries.missingMask()==0x7U); // Only three lifecycle entries remain.
+                                    assert(packetEntries.missingMask()==0x3U); // Both destructors remain; initialize is live.
                                     auto releaseAllocation=[](void*) noexcept {assert(false);};
                                     using PassLifetime=TglOwnedVpLifetimeContext<decltype(graph),decltype(lines),
                                         decltype(retire),decltype(releaseAllocation)>;
@@ -13211,11 +13221,10 @@ int main() {
                                     const auto beforeLifetimeRetired=retired;
                                     assert(tglWithOwnedVpLifetimeAssemblyEntries(child,lifetime,packetEntries,
                                       [&](void*,const auto& liveEntries) noexcept {
-                                    assert(liveEntries.missingMask()==0x4U); // Initialization is supplied by the enclosing construction owner.
-                                    // Twenty-six real scoped entries; one remaining CPU presence fixture.
+                                    assert(liveEntries.hasAllEntries()); // All 27 actual scoped callbacks; no presence fillers.
                                     expiredLifetime=liveEntries;
                                     TglOwnedVpFlatDispatchTable dispatch;
-                                    assert(dispatch.build(testVpPresenceEntries(liveEntries),
+                                    assert(dispatch.build(liveEntries,
                                         [](uintptr_t,size_t) noexcept {return true;}));
                                     assert(graph.withLeasedFlatDispatch(child,dispatch,[&](void* admitted) noexcept {
                                         uintptr_t addressPoint=0;
@@ -13374,6 +13383,7 @@ int main() {
                 assert(backends[0].allocations==assemblyAllocations[0]+3 && backends[1].allocations==assemblyAllocations[1]+2);
                 assert(backends[0].releases==assemblyReleases[0]+3 && backends[1].releases==assemblyReleases[1]+2);
                 return 0;
+            });
             })==0);
             struct GraphPipePolicy {
                 decltype(graph)& owner;bool directMode=true;
