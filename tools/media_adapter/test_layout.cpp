@@ -12093,11 +12093,12 @@ static void testRetainedVeboxFrames() {
         assert(callbacks.withContextRemoval(success.ticket,0x8001,removalUse)==5 && !removalCalls);
         assert(callbacks.withContextRemoval(success.ticket,0x8000,removalUse)==0 && removalCalls==1);
         unsigned parentReads=0,contextCalls=0;
-        uintptr_t contextPhysical=0x8000,embedded=0xa048;
+        uintptr_t contextPhysical=0x8000,embedded=0xa048,contextRenderer=0x30000;
         auto parentRead=[&](uintptr_t address,void* bytes,size_t size) noexcept {
             ++parentReads;if(size!=8) return false;
             uintptr_t value=0;
             if(address==0x20128) value=contextPhysical;
+            else if(address==0x212e0) value=contextRenderer;
             else if(address==0x212f0) value=0x9000;
             else if(address==0x8050) value=0xa000;
             else if(address==0x9008) value=embedded;
@@ -12106,7 +12107,8 @@ static void testRetainedVeboxFrames() {
         };
         auto parentAdmit=[](uintptr_t address,size_t size) noexcept {
             return (address==0x20000 && size==0x12f8) || (address==0x8000 && size==0x58) ||
-                (address==0x9000 && size==0x10) || (address==0xa000 && size==0x50);
+                (address==0x9000 && size==0x10) || (address==0xa000 && size==0x50) ||
+                (address==0x30000 && size==0x2cb8);
         };
         auto contextUse=[&](auto&,const TglNativeVeboxParentView& parent) noexcept -> int {
             ++contextCalls;assert(parent.context==0x20000 && parent.physical==0x8000 &&
@@ -12115,16 +12117,41 @@ static void testRetainedVeboxFrames() {
         };
         assert(callbacks.withContextFrame(success.ticket,0x8000,0x20000,parentRead,parentAdmit,contextUse)==31);
         assert(callbacks.withContextNewRequest(success.ticket,0x8000,0x20000,parentRead,parentAdmit,contextUse)==31);
+        unsigned configurationCalls=0;
+        auto configurationUse=[&](auto&,const TglNativeVeboxRendererView& view) noexcept -> int {
+            ++configurationCalls;assert(view.parent.physical==0x8000 && view.renderer==0x30000 &&
+                view.configuration==0x32cb0);
+            assert(callbacks.destroy(0x8000)==5 && invoke.destroyed==0);return 31;
+        };
+        assert(callbacks.withRendererConfiguration(success.ticket,0x8000,0x20000,parentRead,parentAdmit,configurationUse)==31);
+        Pool::Ticket configurationFrame;
+        assert(callbacks.withFrame(success.ticket,0x8000,[&](auto& frames) noexcept -> int {
+            configurationFrame=frames.create(allocated,released,destroyed);
+            assert(configurationFrame.generation);return 0;
+        })==0);
+        const auto pendingReads=parentReads;
+        assert(callbacks.withRendererConfiguration(success.ticket,0x8000,0x20000,parentRead,parentAdmit,configurationUse)==5);
+        assert(parentReads==pendingReads && configurationCalls==1);
+        assert(callbacks.withFrame(success.ticket,0x8000,[&](auto& frames) noexcept -> int {
+            return frames.retire(configurationFrame,[](const auto&,bool pending,const auto&) noexcept -> int {
+                assert(!pending);return 0;
+            });
+        })==0);
+        contextRenderer=0;
+        assert(callbacks.withRendererConfiguration(success.ticket,0x8000,0x20000,parentRead,parentAdmit,configurationUse)==5);
+        contextRenderer=0x30000;
         embedded=0xa049;
         assert(callbacks.withContextNewRequest(success.ticket,0x8000,0x20000,parentRead,parentAdmit,contextUse)==5);
         assert(callbacks.withContextFrame(success.ticket,0x8000,0x20000,parentRead,parentAdmit,contextUse)==5);
         embedded=0xa048;contextPhysical=0x8001;
+        assert(callbacks.withRendererConfiguration(success.ticket,0x8000,0x20000,parentRead,parentAdmit,configurationUse)==5);
         assert(callbacks.withContextFrame(success.ticket,0x8000,0x20000,parentRead,parentAdmit,contextUse)==5);
         contextPhysical=0x8000;assert(contextCalls==2);
         assert(callbacks.destroy(0x8000)==0 && invoke.destroyed==1);
         const auto readsBefore=parentReads;
         assert(callbacks.withContextFrame(success.ticket,0x8000,0x20000,parentRead,parentAdmit,contextUse)==5);
         assert(callbacks.withContextNewRequest(success.ticket,0x8000,0x20000,parentRead,parentAdmit,contextUse)==5);
+        assert(callbacks.withRendererConfiguration(success.ticket,0x8000,0x20000,parentRead,parentAdmit,configurationUse)==5 && configurationCalls==1);
         assert(parentReads==readsBefore && contextCalls==2);
         assert(callbacks.withFrame(success.ticket,0x8000,frameUse)==5 && frameCalls==1);
         assert(callbacks.destroy(0x8000)==5 && invoke.destroyed==1);
