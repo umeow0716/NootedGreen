@@ -9426,6 +9426,8 @@ int main() {
         using ProducerResolve=TglOwnedVpSfcResolve<Context>;
         TglOwnedVpEntrySet producerEntries;
         assert(!tglBindOwnedVpProducerEntries<ProducerResolve>(context.child,producerEntries));
+        TglOwnedVpEntrySet cscEntries;
+        assert(!tglBindOwnedVpCscEntry<ProducerResolve>(context.child,cscEntries));
         assert(state(context.child,&values[1],&values[2],&values[3])==5);
         filters(context.child,&values[1],&values[4],&values[2]);assert(!context.filtersCalled);
         {
@@ -9435,11 +9437,19 @@ int main() {
             assert(producerEntries.state==state && producerEntries.filters==filters);
             assert(producerEntries.missingMask()==(0x7ffffffU&~((1U<<18)|(1U<<19))));
             assert(!tglBindOwnedVpProducerEntries<ProducerResolve>(context.child,producerEntries));
+            assert(!tglBindOwnedVpCscEntry<ProducerResolve>(&values[4],cscEntries));
+            assert(tglBindOwnedVpCscEntry<ProducerResolve>(context.child,cscEntries));
+            assert(cscEntries.csc==csc && cscEntries.missingMask()==(0x7ffffffU&~(1U<<20)));
+            assert(!tglBindOwnedVpCscEntry<ProducerResolve>(context.child,cscEntries));
+            assert(tglBindOwnedVpCscEntry<ProducerResolve>(context.child,producerEntries));
+            assert(producerEntries.state==state && producerEntries.filters==filters &&
+                producerEntries.csc==csc);
+            assert(producerEntries.missingMask()==(0x7ffffffU&~(7U<<18)));
             csc(nullptr,&values[1],&values[2]);
             csc(&values[4],&values[1],&values[2]);
             csc(context.child,nullptr,&values[2]);
             csc(context.child,&values[1],nullptr);assert(!context.cscCalls);
-            csc(context.child,&values[1],&values[2]);
+            producerEntries.csc(context.child,&values[1],&values[2]);
             assert(context.cscCalls==1 && (context.args==std::array<void*,3>{&values[1],&values[2],nullptr}));
             assert(state(nullptr,&values[1],&values[2],&values[3])==5);
             assert(state(context.child,&values[1],nullptr,&values[3])==5);

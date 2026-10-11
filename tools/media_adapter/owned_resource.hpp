@@ -7065,6 +7065,16 @@ template<class Resolve> struct TglOwnedVpCscCallback {
         if(context && ief && state && context->owns(child)) context->csc(state,ief);
     }
 };
+template<class Resolve>
+bool tglBindOwnedVpCscEntry(void* child,TglOwnedVpEntrySet& target) noexcept {
+    static_assert(noexcept(Resolve{}(child)),"VP CSC binding resolver ABI");
+    auto* context=Resolve{}(child);
+    static_assert(noexcept(context->owns(child)),"VP CSC binding ownership ABI");
+    if(!context || !context->owns(child) || target.csc) return false;
+    auto candidate=target;
+    candidate.csc=&TglOwnedVpCscCallback<Resolve>::csc;
+    target=candidate;return true;
+}
 template<size_t StateSize> class TglOwnedVpCscProducerContext {
     static_assert(StateSize==0xb8 || StateSize==0xf8,"VP CSC state extent");
     void* child_;std::array<uint8_t,64>& ief_;uint8_t* state_;
@@ -7112,13 +7122,15 @@ int tglWithOwnedVpCscProducerSpan(TglOwnedVpSfcCallerStorage& vp,std::array<uint
     if(!state || reinterpret_cast<uintptr_t>(state)>UINTPTR_MAX-StateSize) return 5;
     auto invoke=[&](const TglCscCoefficients* coefficients) noexcept {
         using Context=TglOwnedVpCscProducerContext<StateSize>;
-        using Entry=TglOwnedVpCscCallback<TglOwnedVpSfcResolve<Context>>;
+        using Resolve=TglOwnedVpSfcResolve<Context>;
         Context context(vp.bytes.data(),ief,state,coefficients);
         if(!context.valid()) return 5;
         TglOwnedVpSfcScopedContext<Context> scope(vp.bytes.data(),context);
         if(!scope.bound()) return 5;
-        static_assert(noexcept(use(vp.bytes.data(),&Entry::csc)),"VP CSC entry consumer ABI");
-        const int result=use(vp.bytes.data(),&Entry::csc);
+        TglOwnedVpEntrySet entries;
+        if(!tglBindOwnedVpCscEntry<Resolve>(vp.bytes.data(),entries)) return 5;
+        static_assert(noexcept(use(vp.bytes.data(),entries.csc)),"VP CSC entry consumer ABI");
+        const int result=use(vp.bytes.data(),entries.csc);
         return result?result:context.status();
     };
     if(!(vp.bytes[0x923]&1)) return invoke(nullptr);
