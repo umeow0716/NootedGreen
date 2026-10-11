@@ -14755,6 +14755,29 @@ TglOwnedVeboxCommandTransactionResult tglWithCapturedNativeVeboxCommandTransacti
         });
 }
 
+// Bind the existing native setup/builder/rewind/writeback transaction to the
+// scoped packet-context consumer ABI. Construct and invoke inside the final
+// captured surface scope; every referenced owner/scratch/source outlives it.
+// This creates no new resource owner and does not submit or wait for a fence.
+template<class SourceOwner,class ChildOwner,class ExecutionOwner,class Read,class Qualify,class Executable,
+    class SetupInvoke=TglNativeVeboxSetupInvoker,class BuildInvoke=TglNativeVeboxBuilderInvoker,
+    class WritebackInvoke=TglNativeCommandHeaderWritebackInvoker>
+auto tglMakeCapturedNativeVeboxCommandConsumer(
+    SourceOwner& sourceOwner,ChildOwner& childOwner,ExecutionOwner& executionOwner,
+    void* child,uintptr_t execution,const TglOwnedSurfaceStorage& source,
+    TglNativeVeboxSetupBinding setup,TglNativeVeboxBuilderBinding builder,
+    uintptr_t image,uintptr_t os,TglOwnedVeboxBuilderScratch& scratch,void* auxiliary,
+    Read read,Qualify qualify,Executable executable,SetupInvoke setupInvoke=SetupInvoke{},
+    BuildInvoke buildInvoke=BuildInvoke{},WritebackInvoke writebackInvoke=WritebackInvoke{}) noexcept {
+    return [&sourceOwner,&childOwner,&executionOwner,child,execution,&source,
+        setup,builder,image,os,&scratch,auxiliary,read,qualify,executable,
+        setupInvoke,buildInvoke,writebackInvoke](auto& context) noexcept {
+        return tglWithCapturedNativeVeboxCommandTransaction(sourceOwner,childOwner,executionOwner,
+            child,execution,source,context,setup,builder,image,os,scratch,auxiliary,
+            read,qualify,executable,setupInvoke,buildInvoke,writebackInvoke);
+    };
+}
+
 // Final synchronous consumer of the scoped allocation/statistics frame. This
 // composes real shell normalization, live role capture and packet producers;
 // it does not acquire or copy backing owners. The command consumer must keep

@@ -17572,10 +17572,11 @@ int main() {
                         assert(offset==(emitted?32:96) && available==(emitted?128:64));
                         writeback(entry,os,command);
                     };
-                    const auto transaction=tglWithCapturedNativeVeboxCommandTransaction(
-                        sourceLease,childLease,capturedExecution,actualChild,address,source,packets,
+                    auto nativeConsumer=tglMakeCapturedNativeVeboxCommandConsumer(
+                        sourceLease,childLease,capturedExecution,actualChild,address,source,
                         setupBinding,binding,nativeImage,osAddress,scratch,&auxiliary,
                         transactionRead,qualified,writebackExecutable,acquireCommand,emitCommand,publishCommand);
+                    const auto transaction=nativeConsumer(packets);
                     if(acquire && !publish) --writebackEntry;
                     assert(transaction.status==(acquire?(publish?emitted:5):31));
                     assert(transaction.builderStatus==(acquire?emitted:31) && transaction.acquired==acquire);
