@@ -5384,6 +5384,23 @@ static void testNativeResourceBoundary() {
                 assert(parameters.allocate(8));
                 unsigned parameterCalls=0;
                 assert(!owner.withNativeDenoiseParameters(*surface,parameters,[&]() noexcept {++parameterCalls;}));
+                unsigned allocationFrames=0;
+                auto allocateFrame=[&](void* actual,uintptr_t report,const auto& sourceView) noexcept -> int {
+                    ++allocationFrames;
+                    assert(actual==child.data() && &sourceView==surface && execution.hasExecutionLease(report));
+                    owner.reset();assert(owner.ensure(key)==5 && owner.hasSurfaceLease(sourceView));
+                    assert(childOwner.withPrivateChild([](void*) noexcept {assert(false);return 0;})==5);
+                    assert(execution.withExecution([](uintptr_t) noexcept {assert(false);return 0;})==5);
+                    assert(tglWithOwnedVeboxAllocationFrame(owner,childOwner,execution,
+                        [](void*,uintptr_t,const auto&) noexcept {assert(false);return 0;})==5);
+                    return 31;
+                };
+                assert(tglWithOwnedVeboxAllocationFrame(owner,childOwner,execution,allocateFrame)==5 && !allocationFrames);
+                uintptr_t allocationSource=reinterpret_cast<uintptr_t>(surface);
+                std::memcpy(child.data()+0x1b0,&allocationSource,8);
+                assert(tglWithOwnedVeboxAllocationFrame(owner,childOwner,execution,allocateFrame)==31 && allocationFrames==1);
+                assert(owner.surface()==surface && !childOwner.busy && !execution.busy);
+                allocationSource=0;std::memcpy(child.data()+0x1b0,&allocationSource,8);
                 assert(tglWithOwnedVeboxFeatureFrame(owner,destination,childOwner,execution,
                     [&](void* actual,const auto& s,const auto& t) noexcept {
                         ++featureCalls;

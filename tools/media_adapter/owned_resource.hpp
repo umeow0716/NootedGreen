@@ -7940,6 +7940,21 @@ int tglRunCapturedVeboxAllocation(SurfaceOwner& sourceOwner,ChildOwner& childOwn
     return admitted()?result:5;
 }
 
+template<class SurfaceOwner,class ChildOwner,class ExecutionOwner,class Invoke>
+int tglWithOwnedVeboxAllocationFrame(SurfaceOwner& sourceOwner,ChildOwner& childOwner,
+    ExecutionOwner& executionOwner,Invoke invoke) noexcept {
+    int result=5;
+    const bool sourceLeased=sourceOwner.withSurface([&](const auto& source) noexcept {
+        result=childOwner.withPrivateChild([&](void* child) noexcept {
+            return executionOwner.withExecution([&](uintptr_t execution) noexcept {
+                return tglRunCapturedVeboxAllocation(sourceOwner,childOwner,executionOwner,
+                    child,execution,source,invoke);
+            });
+        });
+    });
+    return sourceLeased?result:5;
+}
+
 // TGL mode0 12c1cd calls +58 with only child in RDI and consumes EAX.
 // Allocation precedes builder admission: do not gate it on producer-pass state.
 // Context owns the complete allocation transaction and must unwind failures
