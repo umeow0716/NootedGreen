@@ -5275,10 +5275,11 @@ int tglWithAllocatedOwnedFfdnPair(Owner& input,Owner* previous,Owner* copyDestin
 // Persistent descriptor-only FFDN targets. Native-backed format3d remains
 // owned by the separate resource path. DN90 is deliberately not retained;
 // this preparation is not asynchronous command admission or retirement.
-template<class Owner,class Copy,class Finish=TglOwnedFfdnNoFinish>
+template<class Owner,class Copy,class Finish=TglOwnedFfdnNoFinish,
+    class Compression=TglOwnedFfdnCompressionSelection>
 int tglPrepareOwnedDescriptorFfdnPair(std::array<TglOwnedDescriptorOnlySurface,2>& targets,
     Owner& input,Owner* previous,Owner* copyDestination,
-    TglOwnedFfdnCompressionSelection compression,bool& referenceValid,bool executionFlag13,
+    Compression compression,bool& referenceValid,bool executionFlag13,
     uint8_t& execution15,uint8_t& execution16,Copy copy,Finish finish={}) noexcept {
     return tglWithAllocatedOwnedFfdnPair(input,previous,copyDestination,compression,
         referenceValid,executionFlag13,execution15,execution16,
@@ -5305,10 +5306,11 @@ int tglPrepareOwnedDescriptorFfdnPair(std::array<TglOwnedDescriptorOnlySurface,2
 // Real type1/format3d target owners. Keep target roles distinct from every
 // source/history role; source roles are already leased by the pair producer.
 // No rollback of an earlier successful target on later allocation failure.
-template<class TargetOwner,class Owner,class Copy,class Finish=TglOwnedFfdnNoFinish>
+template<class TargetOwner,class Owner,class Copy,class Finish=TglOwnedFfdnNoFinish,
+    class Compression=TglOwnedFfdnCompressionSelection>
 int tglPrepareOwnedBackedFfdnPair(const std::array<TargetOwner*,2>& targets,
     Owner& input,Owner* previous,Owner* copyDestination,
-    TglOwnedFfdnCompressionSelection compression,bool& referenceValid,bool executionFlag13,
+    Compression compression,bool& referenceValid,bool executionFlag13,
     uint8_t& execution15,uint8_t& execution16,Copy copy,Finish finish={}) noexcept {
     if(!targets[0] || !targets[1] || targets[0]==targets[1]) return 5;
     struct Binding {const void* owner;const void* storage;};

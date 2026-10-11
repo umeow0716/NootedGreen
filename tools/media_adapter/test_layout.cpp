@@ -5879,7 +5879,10 @@ static void testNativeResourceBoundary() {
                 unsigned consumers=0;
                 assert(tglPrepareOwnedDescriptorFfdnPair(targets,input,
                     static_cast<decltype(&input)>(nullptr),static_cast<decltype(&input)>(nullptr),
-                    {false,0},valid,false,flag,mode,noCopy,
+                    [&](const auto& views,TglOwnedFfdnCompressionSelection& selected) noexcept {
+                        assert(input.hasSurfaceLease(*views[0]) && !views[1]);
+                        selected={false,0};return true;
+                    },valid,false,flag,mode,noCopy,
                     [&](const auto& inputs,const auto& a,const auto& b) noexcept -> int {
                         ++consumers;assert(inputs[0] && !inputs[1] && !inputs[2]);
                         assert(input.hasSurfaceLease(*inputs[0]) && flag==0 && mode==0);
@@ -5924,9 +5927,19 @@ static void testNativeResourceBoundary() {
                 bool valid=true;uint8_t flag=0xa5,mode=0x5a;
                 unsigned copies=0,consumers=0;int consumerStatus=0;
                 auto copy=[&](const auto&,const auto&) noexcept {++copies;};
+                assert(tglPrepareOwnedBackedFfdnPair(targets,input,&input,&input,
+                    [&](const auto& views,TglOwnedFfdnCompressionSelection&) noexcept {
+                        assert(input.hasSurfaceLease(*views[0]));return false;
+                    },valid,true,flag,mode,copy)==5);
+                assert(backend.allocations==1 && copies==0 && valid && flag==0xa5 && mode==0x5a);
+                assert(!first.surface() && !second.surface());
                 auto prepare=[&]() noexcept {
                     return tglPrepareOwnedBackedFfdnPair(targets,input,&input,&input,
-                        {false,0},valid,true,flag,mode,copy,
+                        [&](const auto& views,TglOwnedFfdnCompressionSelection& selected) noexcept {
+                            assert(views[0]==views[1]);
+                            return tglSelectOwnedFfdnCompressionFromLeases(input,*views[0],input,*views[1],
+                                true,false,true,false,4,selected);
+                        },valid,true,flag,mode,copy,
                         [&](const auto& inputs,const auto& a,const auto& b) noexcept -> int {
                             ++consumers;
                             assert(inputs[0]==inputs[1] && inputs[0]==inputs[2]);
