@@ -8297,6 +8297,43 @@ static void testVpSfcCpuGraph() {
             entries.initialize(child);return 0;
         })==0);
     graph.reset();assert(!state.live && !avs.live);
+    struct EmptyLineBackend {
+        int allocate(std::array<uint8_t,0x148>&,const TglResourceKey&) noexcept {assert(false);return 5;}
+        void release(std::array<uint8_t,0x148>&) noexcept {assert(false);}
+        bool backed(const std::array<uint8_t,0x148>&) noexcept {return false;}
+    } lineBackend;
+    TglOwnedSfcLineBuffers<EmptyLineBackend> lines(lineBackend);
+    assert(initialize());
+    void* lifetimeChild=nullptr;
+    assert(graph.withView(false,[&](void* child) noexcept {lifetimeChild=child;return 0;})==0);
+    unsigned retirementCalls=0,allocationReleases=0;
+    auto retire=[&]() noexcept -> int {++retirementCalls;return 0;}; // CPU fixture, no submitted work.
+    auto release=[&](void* child) noexcept {assert(child==lifetimeChild);++allocationReleases;};
+    using Lifetime=TglOwnedVpLifetimeContext<decltype(graph),decltype(lines),decltype(retire),decltype(release)>;
+    using LifetimeResolve=TglOwnedVpSfcResolve<Lifetime>;
+    Lifetime oldLifetime(lifetimeChild,graph,lines,retire,release);
+    {
+        TglOwnedVpSfcScopedContext<Lifetime> scope(lifetimeChild,oldLifetime);assert(scope.bound());
+        TglOwnedVpEntrySet lifecycle;
+        assert(tglBindOwnedVpLifetimeEntries<LifetimeResolve>(lifetimeChild,lifecycle));
+        assert(graph.withInitializationAssemblyEntries(lifecycle,
+            [&](void* child,const TglOwnedVpEntrySet& entries) noexcept {
+                assert(entries.missingMask()==(0x7ffffffU&~7U));
+                entries.destroy(child);entries.initialize(child);entries.deletingDestroy(child);
+                assert(state.live && avs.live && !retirementCalls && !allocationReleases);
+                return 0;
+            })==0);
+        assert(!oldLifetime.owns(lifetimeChild) && !retirementCalls);
+    }
+    Lifetime currentLifetime(lifetimeChild,graph,lines,retire,release);
+    {
+        TglOwnedVpSfcScopedContext<Lifetime> scope(lifetimeChild,currentLifetime);assert(scope.bound());
+        TglOwnedVpEntrySet lifecycle;
+        assert(tglBindOwnedVpLifetimeEntries<LifetimeResolve>(lifetimeChild,lifecycle));
+        lifecycle.destroy(lifetimeChild);lifecycle.deletingDestroy(lifetimeChild);
+    }
+    assert(currentLifetime.status()==0 && retirementCalls==1 && allocationReleases==1);
+    assert(!state.live && !avs.live);
 }
 
 static void testSfcSetupOrder() {
