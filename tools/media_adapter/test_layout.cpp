@@ -5680,6 +5680,21 @@ static void testNativeResourceBoundary() {
                         })==5);
                 }));
                 assert(targets[0].withDescriptor([](const auto&) noexcept {})); // no fabricated rollback
+                TglOwnedSurfaceStorage before{},after{};
+                assert(targets[0].withDescriptor([&](const auto& view) noexcept {before=view;}));
+                assert(!targets[0].publishFfdiSecondaryFrom(owner,*surface));
+                const auto allocationCount=fixture.allocations;
+                assert(owner.withSurface([&](const auto& secondary) noexcept {
+                    assert(targets[0].publishFfdiSecondaryFrom(owner,secondary));
+                    assert(targets[0].withDescriptor([&](const auto& view) noexcept {
+                        after=view;
+                        assert(!targets[0].publishFfdiSecondaryFrom(owner,secondary));
+                    }));
+                }));
+                auto expected=before;
+                tglCopyOwnedFfdiSecondaryMetadata(expected,*surface);
+                assert(after.prefix==expected.prefix && after.resource==expected.resource && after.tail==expected.tail);
+                assert(fixture.allocations==allocationCount);
             }
             for(size_t failAt=0;failAt<=2;++failAt) for(bool equalPitch:{false,true}) {
                 bool valid=true;size_t allocations=0,publications=0,copies=0;

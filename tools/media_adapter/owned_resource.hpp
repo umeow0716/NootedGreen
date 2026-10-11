@@ -4655,6 +4655,14 @@ public:
     bool publishFfdnFrame(const TglOwnedSurfaceStorage& input) noexcept {
         return ready_ && !busy_ && tglPrepareOwnedFfdnFrameMetadata(storage_,input);
     }
+    // ICL1f7e52 executes outside the +b0 FFDI allocation gate. An existing
+    // slot0 can receive execution68's two scalars without another prepare or
+    // primary frame publication. No handle/DN adoption or backing allocation.
+    template<class SourceOwner>
+    bool publishFfdiSecondaryFrom(SourceOwner& owner,const TglOwnedSurfaceStorage& secondary) noexcept {
+        if(!ready_ || busy_ || &secondary==&storage_ || !owner.hasSurfaceLease(secondary)) return false;
+        tglCopyOwnedFfdiSecondaryMetadata(storage_,secondary);return true;
+    }
     // Native execution60->FFDI1a0 is a borrowed IOSurface/resource58, not
     // a separately owned resource. Require the complete actual type1 source
     // owner lease (including its token list), publish only during this call,
