@@ -9477,7 +9477,13 @@ int main() {
                 shellsTransferred=true;
                 assert(shellBackend.live==8 && shellBackend.releases==11 && !eventCount);
                 shellBackend.reenter=nullptr;
+                uint32_t helperAllocationSize=0xa0;
+                bool helperSizeReadable=true;
                 auto helperRead=[&](uintptr_t address,void* output,size_t size) noexcept {
+                    if(address==base+0x126bf0 && size==4) {
+                        if(!helperSizeReadable) return false;
+                        std::memcpy(output,&helperAllocationSize,4);return true;
+                    }
                     assert(address==base+0x126be0 && size==16);
                     constexpr uint8_t bytes[]={0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x40,
                         0x48,0x8b,0x35,0x39,0xd4,0x62,0x00,0xbf};
@@ -9485,7 +9491,8 @@ int main() {
                 };
                 unsigned helperCreates=0;
                 auto helperExecutable=[&](uintptr_t entry,size_t size) noexcept {
-                    return entry==base+0x126be0 && size==16;
+                    return (entry==base+0x126be0 && size==16) ||
+                        (entry==base+0x126bf0 && size==4);
                 };
                 auto createHelper=[&](uintptr_t entry) noexcept -> uintptr_t {
                     assert(entry==base+0x126be0);
@@ -9511,6 +9518,13 @@ int main() {
                 assert(!owner.allocateNativeHelper(helperRead,helperExecutable,createHelper,queryReport));
                 assert(!helperCreates && !reportQueries);
                 queryReport.nativeImage=base;
+                helperAllocationSize=0x10;
+                assert(!owner.allocateNativeHelper(helperRead,helperExecutable,createHelper,queryReport));
+                assert(!helperCreates && !reportQueries);
+                helperAllocationSize=0xa0;helperSizeReadable=false;
+                assert(!owner.allocateNativeHelper(helperRead,helperExecutable,createHelper,queryReport));
+                assert(!helperCreates && !reportQueries);
+                helperSizeReadable=true;
                 assert(!owner.allocateNativeHelper(helperRead,helperExecutable,createHelper,queryReport));
                 assert(!reportQueries);
                 assert(owner.allocateNativeHelper(helperRead,helperExecutable,createHelper,queryReport));

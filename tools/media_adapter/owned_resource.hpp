@@ -3155,17 +3155,20 @@ public:
         std::array<uint8_t,16> bytes{};
         const uintptr_t entry=image_+0x126be0;
         if(!executable(entry,16) || !read(entry,bytes.data(),16) || bytes!=anchor) return false;
+        // Both link writes below require the authenticated 0xa0 allocation,
+        // not merely a matching function prologue.
+        uint32_t allocationSize=0;
+        if(!executable(image_+0x126bf0,4) ||
+           !read(image_+0x126bf0,&allocationSize,4) || allocationSize!=0xa0) return false;
         const uintptr_t helper=create(entry);
         if(!helper) return false;
         // Allocate12696a: helper+8=this, helper+10=virtual48(this).
         // Native+48=12ea30 lazily calls +40=12e9c0 when child88 is null;
         // that creates/initializes the report through12ebc0 and report vtable10.
         // Child owns report88 (base destructor12e00f), helper merely borrows it.
-        // Integration boundary: TglExecutionOwner independently destroys its
-        // object. Its successful lease is NOT permission to overwrite this
-        // native-owned88 or leave helper10 borrowing it after scope exit.
-        // Reconcile a single report owner and both links before connecting
-        // the owned execution/admission chain to this helper lifecycle.
+        // withNativeOwnedExecution borrows this report without transferring
+        // ownership. Never overwrite native-owned88 with an independently
+        // allocated TglExecutionOwner report; helper10 must share its lifetime.
         // Null is preserved exactly as native. Caller binds qualified +48, not
         // a raw pointer getter that skips report construction/initialization.
         const uintptr_t child=storage_.get();
