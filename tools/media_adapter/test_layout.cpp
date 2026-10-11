@@ -6190,6 +6190,37 @@ static void testSfcLineBufferOwnership() {
         }
     }
     assert(!backend.live && backend.allocations==backend.releases);
+    {
+        std::array<Backend,3> backends{};
+        std::array<TglOwnedSurfaceStorage,2> surfaces{};
+        alignas(8) Storage sfd{};
+        surfaces[0].prefix[0x130]=0x3d;surfaces[1].tail[0]=17;
+        const auto prefix=surfaces[0].prefix;
+        const auto tail=surfaces[1].tail;
+        const std::array<TglResourceStorageReference,3> bindings{{
+            {surfaces[0].resource},{surfaces[1].resource},{sfd}}};
+        TglOwnedSfcLineBuffers<Backend> lines(backends,bindings);
+        assert(lines.ensure(1080,5001)==0);
+        assert(lines.storage(0)==&surfaces[0].resource);
+        assert(lines.storage(1)==&surfaces[1].resource && lines.storage(2)==&sfd);
+        assert(surfaces[0].prefix==prefix && surfaces[1].tail==tail);
+        assert(lines.withBuffers(1080,5001,[&]() noexcept {
+            assert(lines.storage(0)==&surfaces[0].resource && !lines.tryReset());
+            return 0;
+        })==0);
+        assert(lines.tryReset());
+        for(const auto& b:backends) assert(!b.live && b.allocations==b.releases);
+        for(auto byte:surfaces[0].resource) assert(!byte);
+        backends[1].failAt=backends[1].allocations+1;
+        assert(lines.ensure(1080,5001)==77);
+        for(const auto& b:backends) assert(!b.live);
+        assert(surfaces[0].prefix==prefix && surfaces[1].tail==tail);
+        const auto allocations=backends[0].allocations;
+        const std::array<TglResourceStorageReference,3> duplicates{{
+            {surfaces[0].resource},{surfaces[0].resource},{sfd}}};
+        TglOwnedSfcLineBuffers<Backend> invalid(backends,duplicates);
+        assert(invalid.ensure(1080,5001)==5 && backends[0].allocations==allocations);
+    }
 }
 
 static void testSfcSfdOwnership() {

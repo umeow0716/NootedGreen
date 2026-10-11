@@ -9652,6 +9652,14 @@ template<class Backend> class TglOwnedSfcLineBuffers {
     bool leased_=false,mutating_=false;
 public:
     explicit TglOwnedSfcLineBuffers(Backend& backend) noexcept : owners(backend) {}
+    // Native +58 1df25a/1df2d5 passes surfaces at VP+3c8/+670;
+    // resource storage is surface+148, not the start of either surface.
+    // Bind empty owned descriptor storage by identity, never copy an existing
+    // native token. The enclosing VP/surface/SFD storage and backend array
+    // outlive this owner; this constructor does not prove native metadata.
+    TglOwnedSfcLineBuffers(std::array<Backend,3>& backends,
+        const std::array<TglResourceStorageReference,3>& storage) noexcept
+        :owners(backends,storage) {}
     ~TglOwnedSfcLineBuffers() { reset(); }
     int ensure(uint32_t inputHeight, uint32_t scaledHeight) noexcept {
         if(leased_ || mutating_) return 5;
