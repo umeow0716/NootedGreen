@@ -5974,13 +5974,27 @@ static void testNativeResourceBoundary() {
                     assert(height==(finishStatus?19u:1080u));
                     assert(!childOwner.busy && !execution.busy && owner.surface()==surface);
                 }
-                for(int nativeStatus:{0,31}) {
+                for(bool changeAfterFfdi:{false,true}) for(int nativeStatus:{0,31,5}) {
                     unsigned allocations=0,stages=0,unwinds=0;
                     assert(tglWithOwnedVeboxAllocationFrame(owner,childOwner,execution,
                         [&](void* capturedChild,uintptr_t capturedExecution,const auto& sourceView) noexcept {
                             const auto disabled=[](void*,uintptr_t,const auto&) noexcept {return false;};
-                            const auto pipe=[](void*,uintptr_t,const auto&) noexcept -> uint32_t {return 0;};
                             const auto unused=[](void*,uintptr_t,const auto&) noexcept {assert(false);return 5;};
+                            std::array<uint8_t,9> reportFlags{};
+                            reportFlags[0]=1;reportFlags[4]=changeAfterFfdi?1:0;
+                            const auto reportRead=[&](uintptr_t p,void* out,size_t n) noexcept {
+                                if(nativeStatus==5) return false;
+                                if(p==reinterpret_cast<uintptr_t>(capturedChild)+0x88 && n==8) {
+                                    std::memcpy(out,&capturedExecution,8);return true;
+                                }
+                                if(p==capturedExecution+0xb && n==9) {
+                                    std::memcpy(out,reportFlags.data(),9);return true;
+                                }
+                                if(p==capturedExecution+0xa0c && n==4) {
+                                    const uint32_t pipe=0;std::memcpy(out,&pipe,4);return true;
+                                }
+                                return false;
+                            };
                             int(*nativeEntry)(void*)=nullptr;
                             const auto ffdn=[&](void* c,uintptr_t e,const auto& s) noexcept {
                                 ++stages;assert(c==capturedChild && e==capturedExecution && &s==&sourceView);
@@ -5989,6 +6003,13 @@ static void testNativeResourceBoundary() {
                             const auto statistics=[&](void*,uintptr_t,const auto&) noexcept {
                                 ++stages;return nativeStatus;
                             };
+                            const auto stmm=[&](void*,uintptr_t,const auto&) noexcept {
+                                ++stages;return 0;
+                            };
+                            const auto ffdi=[&](void*,uintptr_t,const auto&) noexcept {
+                                assert(changeAfterFfdi);++stages;
+                                reportFlags.fill(0);return 0;
+                            };
                             const auto unwind=[&](void* c,uintptr_t e,const auto& s) noexcept {
                                 ++unwinds;assert(owner.hasSurfaceLease(s) && execution.hasExecutionLease(e));
                                 assert(childOwner.hasPrivateChildLease(reinterpret_cast<uintptr_t>(c)));
@@ -5996,10 +6017,9 @@ static void testNativeResourceBoundary() {
                             };
                             auto allocate=[&](void* actual) noexcept {
                                 ++allocations;assert(actual==capturedChild);
-                                return tglRunCapturedVeboxAllocationStages(owner,childOwner,execution,
-                                    actual,capturedExecution,sourceView,disabled,disabled,
-                                    [](void*,uintptr_t,const auto&) noexcept {return true;},pipe,disabled,
-                                    unused,unused,ffdn,unused,unused,statistics,unwind);
+                                return tglRunCapturedVeboxAllocationFromReport(owner,childOwner,execution,
+                                    actual,capturedExecution,sourceView,reportRead,disabled,
+                                    ffdi,unused,ffdn,unused,stmm,statistics,unwind);
                             };
                             using Context=TglOwnedVeboxAllocationContext<TestVeboxChildLease,decltype(allocate)>;
                             Context context(childOwner,allocate,capturedChild);
@@ -6009,7 +6029,8 @@ static void testNativeResourceBoundary() {
                             nativeEntry=reinterpret_cast<int(*)(void*)>(hooks[3]);
                             return nativeEntry(capturedChild);
                         })==nativeStatus);
-                    assert(allocations==1 && stages==2 && unwinds==unsigned(nativeStatus!=0));
+                    assert(allocations==1 && stages==(nativeStatus==5?0u:changeAfterFfdi?2u:3u) &&
+                        unwinds==unsigned(nativeStatus!=0));
                     assert(!childOwner.busy && !execution.busy && owner.surface()==surface);
                 }
                 {
@@ -15567,12 +15588,24 @@ int main() {
                 bool dnOnly=false;
                 assert(tglReadOwnedDnOnly(dnOnly,child,address,allocationRead));
                 assert(dnOnly==(mask==1));
+                for(uint32_t selectedPipe=0;selectedPipe<3;++selectedPipe) {
+                    std::memcpy(execution.data()+0xa0c,&selectedPipe,4);
+                    TglOwnedVeboxAllocationPolicy policy;
+                    assert(tglReadOwnedVeboxAllocationPolicy(policy,child,address,allocationRead));
+                    const bool dn=mask&1,di=mask&2,iecp=mask&4;
+                    assert(policy.ffdi==(di||iecp||(dn&&selectedPipe==1)));
+                    assert(policy.ffdn==dn && policy.stmm==(dn||di) && policy.pipe==selectedPipe);
+                }
+                std::memcpy(execution.data()+0xa0c,&pipe,4);
                 TglOwnedFfdiCompressionSelection selection{};
                 assert(tglSelectOwnedFfdiCompressionFromReport(selection,source,child,address,
                     true,0x19,1,allocationRead,supports));
                 assert(selection.compressed && selection.mode==(dnOnly?0u:1u));
             }
             bool dnOnly=true;linked=address+1;
+            TglOwnedVeboxAllocationPolicy preservedPolicy{true,true,true,2};
+            assert(!tglReadOwnedVeboxAllocationPolicy(preservedPolicy,child,address,allocationRead));
+            assert(preservedPolicy.ffdi && preservedPolicy.ffdn && preservedPolicy.stmm && preservedPolicy.pipe==2);
             assert(!tglReadOwnedDnOnly(dnOnly,child,address,allocationRead) && dnOnly);
             TglOwnedFfdiCompressionSelection preserved{true,7};
             assert(!tglSelectOwnedFfdiCompressionFromReport(preserved,source,child,address,

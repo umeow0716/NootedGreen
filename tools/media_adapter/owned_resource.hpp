@@ -10402,6 +10402,67 @@ bool tglReadOwnedDnOnly(bool& output,uintptr_t child,uintptr_t execution,Read re
     output=(flags[0]&1) && !(flags[8]&1) && !(flags[4]&1);
     return true;
 }
+struct TglOwnedVeboxAllocationPolicy {
+    bool ffdi=false,ffdn=false,stmm=false;
+    uint32_t pipe=0;
+};
+// Exact ICL1f7860/1f78f0/1f7930 data policies, using the owned TGL
+// table's preserved d0=false. Report13 is the allocation DI flag; caller's
+// builder argument or report12 cannot replace it. Higher flag bits are ignored.
+template<class Read>
+bool tglReadOwnedVeboxAllocationPolicy(TglOwnedVeboxAllocationPolicy& output,
+    uintptr_t child,uintptr_t execution,Read read) {
+    if(!child || child>UINTPTR_MAX-0x8f || !execution || execution>UINTPTR_MAX-0xa0f)
+        return false;
+    uintptr_t actual=0;std::array<uint8_t,9> flags{};uint32_t pipe=0;
+    if(!read(child+0x88,&actual,8) || actual!=execution ||
+        !read(execution+0xb,flags.data(),flags.size()) ||
+        !read(execution+0xa0c,&pipe,4) || pipe>2) return false;
+    const bool dn=(flags[0]&1)!=0,di=(flags[8]&1)!=0,iecp=(flags[4]&1)!=0;
+    output={di||iecp||(dn&&pipe==1),dn,dn||di,pipe};
+    return true;
+}
+// Real frame entry: each gate rereads the current report, because FFDi may
+// update report13/14 before FFDN/STMM. A denied read stops all later producers
+// and returns failure through the captured runner's allocation-only unwind.
+template<class SurfaceOwner,class ChildOwner,class ExecutionOwner,class Read,
+    class QuerySecondary,class Ffdi,class Secondary,class Ffdn,class Rectangle,
+    class Stmm,class Statistics,class Unwind=TglOwnedVeboxFrameNoUnwind>
+int tglRunCapturedVeboxAllocationFromReport(SurfaceOwner& sourceOwner,ChildOwner& childOwner,
+    ExecutionOwner& executionOwner,void* child,uintptr_t execution,
+    const TglOwnedSurfaceStorage& source,Read read,QuerySecondary hasSecondary,
+    Ffdi ffdi,Secondary secondary,Ffdn ffdn,Rectangle rectangle,Stmm stmm,
+    Statistics statistics,Unwind unwind={}) noexcept {
+    static_assert(noexcept(read(uintptr_t{},static_cast<void*>(nullptr),size_t{})),
+        "allocation report reader must not throw");
+    bool denied=false;
+    const auto policy=[&](void* c,uintptr_t e,const auto&) noexcept {
+        TglOwnedVeboxAllocationPolicy value;
+        if(!denied && !tglReadOwnedVeboxAllocationPolicy(value,
+            reinterpret_cast<uintptr_t>(c),e,read)) denied=true;
+        return value;
+    };
+    const auto guarded=[&](auto& invoke) noexcept {
+        return [&invoke,&denied](void* c,uintptr_t e,const auto& s) noexcept -> int {
+            static_assert(noexcept(invoke(c,e,s)) && std::is_same_v<decltype(invoke(c,e,s)),int>,
+                "allocation stage must preserve integer status without throwing");
+            return denied?5:invoke(c,e,s);
+        };
+    };
+    return tglRunCapturedVeboxAllocationStages(sourceOwner,childOwner,executionOwner,
+        child,execution,source,
+        [&](void* c,uintptr_t e,const auto& s) noexcept {return policy(c,e,s).ffdi;},
+        [&](void* c,uintptr_t e,const auto& s) noexcept {
+            static_assert(noexcept(hasSecondary(c,e,s)) &&
+                std::is_same_v<decltype(hasSecondary(c,e,s)),bool>,"secondary query ABI");
+            return !denied&&hasSecondary(c,e,s);
+        },
+        [&](void* c,uintptr_t e,const auto& s) noexcept {return policy(c,e,s).ffdn;},
+        [&](void* c,uintptr_t e,const auto& s) noexcept {return policy(c,e,s).pipe;},
+        [&](void* c,uintptr_t e,const auto& s) noexcept {return policy(c,e,s).stmm;},
+        guarded(ffdi),guarded(secondary),guarded(ffdn),guarded(rectangle),
+        guarded(stmm),guarded(statistics),unwind);
+}
 // Connect the real report policy to the existing compression selector. The
 // caller still holds source/child/report leases and qualifies native backing.
 template<class Read,class Supports>
