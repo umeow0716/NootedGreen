@@ -4681,6 +4681,36 @@ struct alignas(8) TglOwnedSurfaceStorage {
 static_assert(offsetof(TglOwnedSurfaceStorage,resource) == 0x148);
 static_assert(offsetof(TglOwnedSurfaceStorage,tail) == 0x290);
 static_assert(sizeof(TglOwnedSurfaceStorage) == 0x2a8);
+// Concrete statistics producer:52bf0 maps format130/widthd8/heightdc and
+// copies source50..5f to info2c..3b. Native170ef0 consumes info34/38 as
+// floats directly (not right-left/bottom-top). Reuse the proven converter
+// and bounded boundary arithmetic; never substitute requested VM dimensions.
+// alignDi64 is the qualified boundary object's2052 bit, NOT a VEBOX-child
+// offset: the1bc0-byte owned child cannot contain that field.
+template<class Owner,class QueryDi,class Finish>
+int tglPrepareOwnedStatisticsFromLeasedSource(Owner& owner,
+    const TglOwnedSurfaceStorage& source,uint8_t execution13,QueryDi queryDi,
+    bool alignDi64,uint32_t& width,uint32_t& height,Finish finish) noexcept {
+    using Info=std::array<uint8_t,0x48>;
+    auto readInfo=[&](const TglOwnedSurfaceStorage& leased,Info& info) noexcept -> int {
+        if(!owner.hasSurfaceLease(leased)) return 5;
+        info=tglSurfaceDescriptorBytes(reinterpret_cast<const uint8_t*>(&leased));
+        return 0;
+    };
+    auto boundary=[&](const Info& info,uint32_t& w,uint32_t& h,bool di) noexcept -> int {
+        uint32_t format=0,nativeWidth=0,nativeHeight=0;
+        float sourceWidth=0,sourceHeight=0;
+        std::memcpy(&format,info.data()+8,4);
+        std::memcpy(&nativeWidth,info.data()+0xc,4);
+        std::memcpy(&nativeHeight,info.data()+0x10,4);
+        std::memcpy(&sourceWidth,info.data()+0x34,4);
+        std::memcpy(&sourceHeight,info.data()+0x38,4);
+        return tglSurfaceBoundary(format,nativeWidth,nativeHeight,sourceWidth,
+            sourceHeight,di,alignDi64,w,h);
+    };
+    return tglPrepareOwnedStatisticsBoundary<Info>(owner,execution13,queryDi,
+        readInfo,boundary,width,height,finish,&source);
+}
 // Render12c9ec..12ca00 snapshots argument2+10/+18, then passes those
 // surfaces to mode190/188/198 and tail1a8. The descriptor itself is not
 // retained or otherwise consumed in 12c9d0..12ce18. Keep it stack-owned
@@ -12867,6 +12897,21 @@ public:
             width,height,binding,writable,publish);
         if(!owner.hasSurfaceLease(source)) {reset();return 5;}
         return status;
+    }
+    // End-to-end statistics input path under the captured source lease:
+    // actual surface metadata -> boundary -> backing transaction -> native
+    // zero-fill -> caller's leased child layout publication.
+    template<class SourceOwner,class QueryDi,class Requests,class Prepare,class Writable,class Publish>
+    int ensureNativeFromSourceBoundary(SourceOwner& owner,const TglOwnedSurfaceStorage& source,
+        uint8_t execution13,QueryDi queryDi,bool alignDi64,bool child1ba9,
+        const Requests& requests,Prepare prepare,bool reinitialize,
+        const TglNativeBufferFillBinding& binding,Writable writable,Publish publish) noexcept {
+        uint32_t width=0,height=0;
+        return tglPrepareOwnedStatisticsFromLeasedSource(owner,source,execution13,
+            queryDi,alignDi64,width,height,[&](uint32_t w,uint32_t h) noexcept {
+                return ensureNativeFromLeasedSource(owner,source,child1ba9,requests,
+                    prepare,reinitialize,w,h,binding,writable,publish);
+            });
     }
     template<class Invoke> int withResources(Invoke invoke) noexcept {
         if(busy_ || !ready_) return 5;

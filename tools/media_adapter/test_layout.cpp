@@ -60,6 +60,10 @@ struct TestVpCpuView {
 
 struct TestFeatureSurfaceOwner {
     TglOwnedSurfaceStorage storage{};bool busy=false,deny=false;
+    template<class Use> bool withSurface(Use use) noexcept {
+        if(busy || deny) return false;
+        busy=true;use(storage);busy=false;return true;
+    }
     bool hasSurfaceLease(const TglOwnedSurfaceStorage& expected) noexcept {
         return busy && !deny && &expected==&storage;
     }
@@ -4942,6 +4946,42 @@ static void testNativeStatisticsFill() {
     TglOwnedSurfaceStorage source{};
     assert(transaction.ensureNativeFromLeasedSource(deniedSource,source,false,requests,
         prepare,false,1920,1080,binding,writable,graphPublish)==5);
+    TestFeatureSurfaceOwner sourceOwner;sourceOwner.busy=true;
+    const auto putSource=[&](size_t offset,auto value) {
+        std::memcpy(sourceOwner.storage.prefix.data()+offset,&value,sizeof(value));
+    };
+    putSource(0xd8,uint32_t{1920});putSource(0xdc,uint32_t{1080});
+    putSource(0x130,uint32_t{0x19});
+    putSource(0x50,float{1000});putSource(0x54,float{1000});
+    putSource(0x58,float{65.75});putSource(0x5c,float{17.75});
+    unsigned queries=0;
+    auto queryDi=[&]() noexcept {++queries;return uint8_t{0};};
+    uint32_t boundaryWidth=777,boundaryHeight=888;
+    auto finish=[](uint32_t w,uint32_t h) noexcept {assert(w==66 && h==18);return 0;};
+    assert(!tglPrepareOwnedStatisticsFromLeasedSource(sourceOwner,sourceOwner.storage,
+        0,queryDi,false,boundaryWidth,boundaryHeight,finish));
+    assert(boundaryWidth==66 && boundaryHeight==18 && queries==1);
+    auto diFinish=[](uint32_t w,uint32_t h) noexcept {assert(w==128 && h==20);return 0;};
+    assert(!tglPrepareOwnedStatisticsFromLeasedSource(sourceOwner,sourceOwner.storage,
+        1,queryDi,true,boundaryWidth,boundaryHeight,diFinish));
+    assert(boundaryWidth==128 && boundaryHeight==20 && queries==1);
+    fixture.status=0;
+    assert(!transaction.ensureNativeFromSourceBoundary(sourceOwner,sourceOwner.storage,
+        0,queryDi,false,false,requests,prepare,false,binding,writable,graphPublish));
+    assert(statistics.layout().rowBytes==128 && statistics.layout().blockRows==5 &&
+        statistics.layout().bytes==1664); // actual metadata, not1920x1080
+    const auto priorAllocations=fixture.allocations;
+    putSource(0x58,std::numeric_limits<float>::quiet_NaN());
+    assert(transaction.ensureNativeFromSourceBoundary(sourceOwner,sourceOwner.storage,
+        0,queryDi,false,false,requests,prepare,false,binding,writable,graphPublish)==5);
+    assert(fixture.allocations==priorAllocations && statistics.layout().bytes==1664);
+    putSource(0x58,float{130}); // forces a statistics replacement
+    auto revoke=[&](const Storage&,const TglStatisticsAllocation&) noexcept {
+        sourceOwner.deny=true;return 0;
+    };
+    assert(transaction.ensureNativeFromSourceBoundary(sourceOwner,sourceOwner.storage,
+        0,queryDi,false,false,requests,prepare,false,binding,writable,revoke)==5);
+    assert(!statistics.layout().bytes && !group.storage(0) && !api.references);
 }
 
 static void testStatisticsLifecycle() {
