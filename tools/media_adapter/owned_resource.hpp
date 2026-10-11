@@ -13843,6 +13843,44 @@ public:
         return ready_ && shell_==&shell && matches(shell);
     }
 };
+// Sidecar for an ORIGINAL context-root shell. It owns a context pin, never the
+// native allocation; native cleanup remains the sole shell deleter. Construct
+// under live physical admission from freshly captured roots, directly in stable
+// enclosing storage; sidecar must outlive all surface leases.
+// This root-only entry deliberately does not infer temporal c0/c8 ownership.
+template<class ContextLease> class TglNativeContextRootSurfaceOwner {
+    ContextLease context_;
+    TglOwnedSurfaceStorage* shell_=nullptr;
+    bool borrowed_=false;
+public:
+    template<class Writable>
+    TglNativeContextRootSurfaceOwner(ContextLease&& lease,const TglNativeContextInputRoots& roots,
+        uintptr_t shell,Writable writable) noexcept:context_(std::move(lease)) {
+        static_assert(noexcept(writable(uintptr_t{},size_t{})));
+        if(context_.get() && roots.input && roots.parent.context==context_.get()->context() &&
+            shell && !(shell&7) && shell<=UINTPTR_MAX-sizeof(TglOwnedSurfaceStorage) &&
+            roots.contains(shell) && writable(shell,sizeof(TglOwnedSurfaceStorage)))
+            shell_=reinterpret_cast<TglOwnedSurfaceStorage*>(shell);
+    }
+    TglNativeContextRootSurfaceOwner(const TglNativeContextRootSurfaceOwner&)=delete;
+    TglNativeContextRootSurfaceOwner& operator=(const TglNativeContextRootSurfaceOwner&)=delete;
+    bool hasSurfaceLease(const TglOwnedSurfaceStorage& shell) const noexcept {
+        return context_.get() && borrowed_ && shell_==&shell;
+    }
+    class SurfaceOwnerLease {
+        TglNativeContextRootSurfaceOwner* owner_=nullptr;
+    public:
+        explicit SurfaceOwnerLease(TglNativeContextRootSurfaceOwner& owner) noexcept {
+            if(owner.context_.get() && owner.shell_ && !owner.borrowed_) {owner.borrowed_=true;owner_=&owner;}
+        }
+        SurfaceOwnerLease(const SurfaceOwnerLease&)=delete;
+        SurfaceOwnerLease& operator=(const SurfaceOwnerLease&)=delete;
+        ~SurfaceOwnerLease() noexcept {if(owner_) owner_->borrowed_=false;}
+        const TglOwnedSurfaceStorage* storage() const noexcept {return owner_?owner_->shell_:nullptr;}
+        TglOwnedSurfaceStorage* metadataStorage() noexcept {return owner_?owner_->shell_:nullptr;}
+    };
+};
+
 // Retain an EXISTING frontend surface without allocating a replacement or
 // copying its resource descriptor. Original owner/parent/image must outlive
 // this frame member. CF references drop before its original shell lease unlocks.

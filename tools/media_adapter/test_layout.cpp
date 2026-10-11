@@ -12398,6 +12398,28 @@ static void testRetainedVeboxFrames() {
             assert(callbacks.withPinnedFrameScope(success.ticket,0x8000,0x20000,owners,pinOwner)==31 && retainedContext.get());
             assert(owners.reconcileSuccessfulRemoval(image,0x8000,success.ticket.generation,removed)==5 && !destroyed);
             retainedContext={};
+            {
+                TglOwnedSurfaceStorage original;
+                const auto address=reinterpret_cast<uintptr_t>(&original);
+                TglNativeContextInputRoots roots;roots.input=0x40000;roots.parent.context=0x20000;roots.sources[0]=address;
+                using RootOwner=TglNativeContextRootSurfaceOwner<decltype(owners)::ContextLease>;
+                auto writable=[&](uintptr_t p,size_t size) noexcept {return p==address && size==sizeof(original);};
+                RootOwner sidecar(owners.pin(image,0x8000,success.ticket.generation,0x20000),roots,address,writable);
+                {
+                    typename RootOwner::SurfaceOwnerLease shell(sidecar);
+                    assert(shell.storage()==&original && shell.metadataStorage()==&original && sidecar.hasSurfaceLease(original));
+                    typename RootOwner::SurfaceOwnerLease nested(sidecar);assert(!nested.storage());
+                    shell.metadataStorage()->prefix[0x86]=1;assert(original.prefix[0x86]==1);
+                }
+                assert(!sidecar.hasSurfaceLease(original));
+                assert(owners.reconcileSuccessfulRemoval(image,0x8000,success.ticket.generation,removed)==5 && !destroyed);
+                RootOwner readOnly(owners.pin(image,0x8000,success.ticket.generation,0x20000),roots,address,
+                    [](uintptr_t,size_t) noexcept {return false;});
+                typename RootOwner::SurfaceOwnerLease noWrite(readOnly);assert(!noWrite.metadataStorage());
+                roots.sources[0]=0;
+                RootOwner foreign(owners.pin(image,0x8000,success.ticket.generation,0x20000),roots,address,writable);
+                typename RootOwner::SurfaceOwnerLease denied(foreign);assert(!denied.storage());
+            }
             struct InnerFrame {
                 unsigned& ownerDestroyed;unsigned& destroyed;
                 InnerFrame(unsigned& owner,unsigned& count) noexcept:ownerDestroyed(owner),destroyed(count) {}
