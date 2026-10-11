@@ -10559,6 +10559,12 @@ int main() {
                 binding,inputRead,invoke,base,[&](void* child,const auto& combined) noexcept {
                     assert(combined.compressionFormat==base.compressionFormat &&
                         combined.missingMask()==(base.missingMask()&~((1U<<21)|(1U<<24)|(1U<<25)|(1U<<26))));
+                    const auto beforeNested=packet;
+                    assert(tglWithOwnedVpPlatformCompressionAssembly(vp,surface,packet,settingsAddress,
+                        binding,inputRead,invoke,base,[](void*,const auto&) noexcept -> int {
+                            assert(false);return 0;
+                        })==5);
+                    assert(packet==beforeNested);
                     combined.platformPacket(child,nullptr,packet.data());
                     assert(combined.compression(child,nullptr,&surface,packet.data())==5);
                     expired=combined;return 31;
@@ -10567,10 +10573,19 @@ int main() {
             const auto after=packet;
             expired.platformPacket(vp.bytes.data(),nullptr,packet.data());
             assert(expired.compression(vp.bytes.data(),settings.data(),&surface,packet.data())==5 && packet==after);
-            assert(tglWithOwnedVpPlatformCompressionAssembly(vp,surface,packet,settingsAddress,
-                binding,inputRead,invoke,expired,[](void*,const auto&) noexcept -> int {
-                    assert(false);return 0;
-                })==5);
+            for(unsigned occupied=0;occupied<4;++occupied) {
+                auto conflict=base;
+                if(occupied==0) conflict.platformSetup=expired.platformSetup;
+                if(occupied==1) conflict.platformPacket=expired.platformPacket;
+                if(occupied==2) conflict.platformSend=expired.platformSend;
+                if(occupied==3) conflict.compression=expired.compression;
+                const auto beforeConflict=packet;
+                assert(tglWithOwnedVpPlatformCompressionAssembly(vp,surface,packet,settingsAddress,
+                    binding,inputRead,invoke,conflict,[](void*,const auto&) noexcept -> int {
+                        assert(false);return 0;
+                    })==5);
+                assert(packet==beforeConflict);
+            }
             packet=before;
         }
         Context context(vp,surface,packet,settingsAddress,binding,inputRead,invoke);
