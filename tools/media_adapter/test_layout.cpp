@@ -8125,11 +8125,11 @@ int main() {
             using SendEntry=int(*)(void*,void*,void*) noexcept;
             SetupEntry escapedSetup=nullptr;SendEntry escapedSend=nullptr;
             void* callbackChild=nullptr;int source=0,data=0,command=0;
-            for(unsigned mode=0;mode<7;++mode) {
+            for(unsigned mode=0;mode<10;++mode) {
                 unsigned stages=0,emissions=0;
                 const int result=graph.withPreparedCallbackPass(prepared,
                     0x6000,0x4000,0x2000,reference,&source,&data,
-                    [&](void*,const auto&,auto&) noexcept -> int {++stages;return 0;},
+                    [&](void*,const auto&,auto&) noexcept -> int {++stages;return mode==9?11:0;},
                     [&](void*,const auto&,auto&) noexcept -> int {++stages;return 0;},
                     [&](void*,const auto&) noexcept {++stages;},
                     [&](void* child,void* d,void* c) noexcept -> int {
@@ -8150,10 +8150,12 @@ int main() {
                         const int sent=send(child,&data,&command);
                         assert(sent==(mode==6?-17:0));
                         if(mode==5) return 31;
+                        if(mode==7) {assert(send(child,&data,&command)==5);return 0;}
+                        if(mode==8) {assert(setup(child,&source,reinterpret_cast<void*>(0x2000),&data)==5);return 0;}
                         return 0;
                     });
-                assert(result==(mode==0?0:mode==5?31:mode==6?-17:5));
-                assert(emissions==(mode==0 || mode>=5?1u:0u));
+                assert(result==(mode==0?0:mode==5?31:mode==6?-17:mode==9?11:5));
+                assert(emissions==(mode==0 || (mode>=5 && mode<=8)?1u:0u));
                 assert(escapedSetup(callbackChild,&source,reinterpret_cast<void*>(0x2000),&data)==5);
                 assert(escapedSend(callbackChild,&data,&command)==5);
             }
