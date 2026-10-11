@@ -14052,6 +14052,7 @@ int main() {
                 }
                 admission=0;fail=0;
                 const auto beforeModes=storage->bytes;
+                put(source,0x78,uintptr_t(0x5000));ief[0]=1;put(ief,4,3.5f);
                 for(bool cscEnabled:{false,true}) for(int consumerResult:{0,31}) {
                     put(source,0,uint32_t(cscEnabled?0:3));
                     int passData=0,passCommand=0;
@@ -14059,10 +14060,15 @@ int main() {
                     bool avsRequired=false;
                     TglOwnedVpChromaStatePrefix producedPrefix;
                     TglOwnedSfcAvsTables passAvsTables;
+                    TglOwnedSfcCommandParameters passFilters;
+                    TglOwnedIefTables passIefTables{}; // Explicit CPU image-table fixture.
+                    bool passIefReady=true,passIefEnabled=false,passIefExpected=false;
+                    unsigned passIefCalls=0;
                     assert(graph.withInitializedFrameCallbackAssemblyPass(initializedEntries,0x1000,0x2000,0x3000,0x4000,
                       0,0x4000,{},&passData,read,
                       [&](void*,const auto& prepared,const auto& geometry,auto& stateOwner) noexcept -> int {
                           assert(geometry.frameWidth==geometrySnapshot.frameWidth);
+                          passIefExpected=prepared.at922 || prepared.color.modes.state.at923;
                           TglOwnedVpChromaStatePrefix prefix;
                           if(!tglPrepareOwnedVpStatePrefix(prepared,geometry,false,false,prefix)) return 5;
                           // Exercise the audited prefix and Gen12 packet producer,
@@ -14088,8 +14094,15 @@ int main() {
                                   ++passAvs;return 0;
                               });
                       },
-                      [](void*,const auto&) noexcept {},
+                      [&](void*,const auto& prepared) noexcept {
+                          ++passIefCalls;passIefEnabled=prepared.at922;
+                          std::memcpy(passFilters.state.data(),stateCpu.bytes.data(),passFilters.state.size());
+                          passIefReady=tglPrepareOwnedVpIefCommandParameters(passFilters,prepared,passIefTables);
+                          if(passIefReady)
+                              std::memcpy(stateCpu.bytes.data(),passFilters.state.data(),passFilters.state.size());
+                      },
                       [&](void* leasedChild,void*,void*,const TglOwnedVpEntrySet& passEntries) noexcept {
+                      if(!passIefReady) return 5; // Native void producer cannot return failure itself.
                       assert(passStates==1);
                       assert(passAvs==unsigned(avsRequired));
                       assert(passAvs==1); // This scaling fixture must actually generate/publish coefficients.
@@ -14113,7 +14126,7 @@ int main() {
                             entries.formatMode(child,reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x4000));
                             assert(entries.allocate(child)==0);
                             TglOwnedVpCscCache assemblyCsc;
-                            std::array<uint8_t,64> assemblyIef{};
+                            auto assemblyIef=passFilters.ief;
                             const auto savedIef=assemblyIef;
                             const auto savedState=stateCpu.bytes;
                             TglOwnedVpEntrySet escapedCscAssembly;
@@ -14198,8 +14211,12 @@ int main() {
                                         CallbackCommandBackend commandBackend;
                                         auto platformDescriptor=[&](auto&) noexcept {return commandBackend.stage(3);};
                                         assert(tglSendOwnedSfcPreparedCommands(commandBackend,emitted,output,
-                                            avsRequired,0,0,cscEnabled,platformDescriptor)==0);
-                                        assert(commandBackend.count==unsigned(cscEnabled?8:7));
+                                            avsRequired,0,passIefEnabled,cscEnabled,platformDescriptor)==0);
+                                        assert(commandBackend.count==unsigned(cscEnabled || passIefEnabled?8:7));
+                                        assert(passIefCalls==unsigned(passIefExpected));
+                                        assert(passIefEnabled && emitted.ief[2]==1 && emitted.ief[3]==1);
+                                        uint32_t iefFactor=0;std::memcpy(&iefFactor,emitted.ief.data()+8,4);
+                                        assert(iefFactor==3);
                                         assert(commandBackend.order[0]==1 && commandBackend.order[1]==3 &&
                                             commandBackend.order[commandBackend.count-1]==9);
                                         if(consumerResult) {
