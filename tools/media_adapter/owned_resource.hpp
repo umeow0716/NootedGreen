@@ -4790,20 +4790,41 @@ int tglWithOwnedFfdiPreparation(Owner& source,uint32_t format,uint32_t tile,
 // lease. Allocate must implement the request kind; success alone is not proof
 // of GPU backing. The consumer owns publication/retirement, not this scope.
 template<class Owner,class Allocate,class Use>
-int tglWithAllocatedOwnedFfdiPreparation(Owner& source,uint32_t format,uint32_t tile,
+int tglWithAllocatedOwnedFfdiRoles(Owner& source,Owner* execution,uint32_t format,uint32_t tile,
     TglOwnedFfdiCompressionSelection compression,TglOwnedFfdiMetadataQuery query,
     uint8_t execution13,uint8_t execution14,Allocate allocate,Use use) noexcept {
     static_assert(noexcept(allocate(std::declval<const TglOwnedFfdiAllocationRequest&>(),
         std::declval<bool&>())),"FFDI allocation ABI");
     static_assert(noexcept(use(std::declval<const TglOwnedSurfaceStorage&>(),
+        static_cast<const TglOwnedSurfaceStorage*>(nullptr),
         std::declval<const TglOwnedSurfaceStorage&>(),uint8_t{},uint8_t{})),"FFDI publication ABI");
-    return tglWithOwnedFfdiPreparation(source,format,tile,compression,query,
-        [&](const auto& sourceView,const auto& metadata,const auto& request) noexcept {
+    // Native source60 is optional. Keep its actual token owner, including
+    // aliases, pinned across allocation/use; never copy its borrowed handle
+    // into CPU metadata or pretend this scope covers asynchronous submission.
+    const std::array<Owner*,2> roles{&source,execution};
+    return tglWithOwnedSurfaceRoles(roles,[&](const auto& views) noexcept {
+            TglOwnedFfdiAllocationRequest request;
+            TglOwnedSurfaceStorage metadata;
+            if(!tglPrepareOwnedFfdiAllocationRequest(*views[0],format,tile,compression,request) ||
+               !tglPrepareOwnedFfdiFrameMetadata(metadata,*views[0],query)) return 5;
             bool changed=false;
             const int result=allocate(request,changed);
             if(result!=0) return result;
             tglUpdateOwnedFfdiExecutionCompression(changed,compression,execution13,execution14);
-            return use(sourceView,metadata,execution13,execution14);
+            return use(*views[0],views[1],static_cast<const TglOwnedSurfaceStorage&>(metadata),
+                execution13,execution14);
+        });
+}
+template<class Owner,class Allocate,class Use>
+int tglWithAllocatedOwnedFfdiPreparation(Owner& source,uint32_t format,uint32_t tile,
+    TglOwnedFfdiCompressionSelection compression,TglOwnedFfdiMetadataQuery query,
+    uint8_t execution13,uint8_t execution14,Allocate allocate,Use use) noexcept {
+    static_assert(noexcept(use(std::declval<const TglOwnedSurfaceStorage&>(),
+        std::declval<const TglOwnedSurfaceStorage&>(),uint8_t{},uint8_t{})),"FFDI publication ABI");
+    return tglWithAllocatedOwnedFfdiRoles(source,static_cast<Owner*>(nullptr),format,tile,
+        compression,query,execution13,execution14,allocate,
+        [&](const auto& input,const auto*,const auto& metadata,uint8_t flag,uint8_t mode) noexcept {
+            return use(input,metadata,flag,mode);
         });
 }
 

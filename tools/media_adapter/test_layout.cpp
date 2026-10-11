@@ -5282,6 +5282,32 @@ static void testNativeResourceBoundary() {
                 assert(result==(allocationResult?allocationResult:-17));
                 assert(allocations==1 && publications==(allocationResult?0u:1u));
             }
+            for(auto* execution:{static_cast<decltype(&owner)>(nullptr),&owner,&destination}) {
+                unsigned allocations=0,uses=0;
+                assert(tglWithAllocatedOwnedFfdiRoles(owner,execution,0x19,1,{true,1},{8,3},0,0,
+                    [&](const auto&,bool& changed) noexcept {
+                        ++allocations;changed=true;
+                        owner.reset();assert(owner.ensure(key)==5);
+                        if(execution) {execution->reset();assert(execution->ensure(key)==5);}
+                        return 0;
+                    },[&](const auto& input,const auto* borrowed,const auto& metadata,
+                          uint8_t flag,uint8_t mode) noexcept {
+                        ++uses;assert(&input==surface && allocations==1 && flag==1 && mode==1);
+                        assert(borrowed==(execution==&owner?surface:
+                            execution==&destination?destinationSurface:nullptr));
+                        assert(!tglNativeBackingPresent(metadata.resource));
+                        if(execution) {execution->reset();assert(execution->ensure(key)==5);}
+                        return 31;
+                    })==31 && allocations==1 && uses==1);
+            }
+            assert(destination.withSurface([&](const auto&) noexcept {
+                assert(tglWithAllocatedOwnedFfdiRoles(owner,&destination,0x19,1,{},{},0,0,
+                    [](const auto&,bool&) noexcept {assert(false);return 0;},
+                    [](const auto&,const auto*,const auto&,uint8_t,uint8_t) noexcept {
+                        assert(false);return 0;
+                    })==5);
+            }));
+            assert(owner.withSurface([](const auto&) noexcept {})); // failed peer acquisition unwinds input
             bool caught=false;
             try {
                 owner.withPeerSurface(destination,[](const auto&,const auto&){throw 31;});
