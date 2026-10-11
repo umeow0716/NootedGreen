@@ -16988,6 +16988,20 @@ public:
             return use(frames,parent);
         });
     }
+    // Capture original shells BEFORE creating the retained frame that will pin
+    // this generation against future request/removal/property mutations. Caller
+    // holds native context lifetime; snapshot/pool references must not escape.
+    template<class ParentRead,class Admit,class Use>
+    int withContextInputRoots(typename Registry::Ticket ticket,uintptr_t physical,
+        uintptr_t context,ParentRead read,Admit admit,Use use) noexcept {
+        return withNewRequest(ticket,physical,[&](auto& frames) noexcept -> int {
+            TglNativeContextInputRoots roots;
+            if(!roots.resolve(context,read,admit) || roots.parent.physical!=physical) return 5;
+            static_assert(noexcept(use(frames,static_cast<const TglNativeContextInputRoots&>(roots))) &&
+                std::is_same_v<decltype(use(frames,static_cast<const TglNativeContextInputRoots&>(roots))),int>);
+            return use(frames,static_cast<const TglNativeContextInputRoots&>(roots));
+        });
+    }
     // Configuration slot13 is a mutator too. Resolve its renderer only after
     // excluding retained frames and holding the matching physical generation.
     // Authenticate image/type here; native context lifetime remains a caller obligation.

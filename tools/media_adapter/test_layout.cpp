@@ -12324,6 +12324,28 @@ static void testRetainedVeboxFrames() {
         };
         assert(callbacks.withContextFrame(success.ticket,0x8000,0x20000,parentRead,parentAdmit,contextUse)==31);
         assert(callbacks.withContextNewRequest(success.ticket,0x8000,0x20000,parentRead,parentAdmit,contextUse)==31);
+        unsigned rootCalls=0,rootReads=0;
+        auto rootRead=[&](uintptr_t address,void* bytes,size_t size) noexcept {
+            ++rootReads;
+            if(address==0x212e8 && size==8) {const uintptr_t value=0x40000;std::memcpy(bytes,&value,8);return true;}
+            if(address>=0x40000 && address<0x400d8 && size==8) {
+                const uintptr_t value=address==0x40088?0x50000:0;std::memcpy(bytes,&value,8);return true;
+            }
+            return parentRead(address,bytes,size);
+        };
+        auto rootAdmit=[&](uintptr_t address,size_t size) noexcept {
+            return parentAdmit(address,size) || (address==0x40000 && size==0xd8) ||
+                (address==0x50000 && size==0x2a8);
+        };
+        auto rootUse=[&](auto&,const TglNativeContextInputRoots& roots) noexcept -> int {
+            ++rootCalls;assert(roots.parent.physical==0x8000 && roots.sources[16]==0x50000 && roots.contains(0x50000));
+            assert(callbacks.withEventObservation(success.ticket,0x8000,
+                []() noexcept -> int {assert(false);return 0;})==5);return 31;
+        };
+        assert(callbacks.withContextInputRoots(success.ticket,0x8000,0x20000,rootRead,rootAdmit,rootUse)==31 && rootCalls==1);
+        contextPhysical=0x8001;
+        assert(callbacks.withContextInputRoots(success.ticket,0x8000,0x20000,rootRead,rootAdmit,rootUse)==5 && rootCalls==1);
+        contextPhysical=0x8000;
         unsigned configurationCalls=0;
         auto configurationUse=[&](auto&,const TglNativeVeboxRendererView& view) noexcept -> int {
             ++configurationCalls;assert(view.parent.physical==0x8000 && view.renderer==0x30000 &&
@@ -12344,6 +12366,9 @@ static void testRetainedVeboxFrames() {
             assert(configurationFrame.generation);return 0;
         })==0);
         const auto pendingReads=parentReads;
+        const auto pendingRootReads=rootReads;
+        assert(callbacks.withContextInputRoots(success.ticket,0x8000,0x20000,rootRead,rootAdmit,rootUse)==5 &&
+            rootReads==pendingRootReads && rootCalls==1);
         unsigned backingCalls=0,typedBackingCalls=0;
         using PropertyOperation=decltype(callbacks)::PropertyOperation;
         unsigned propertyCalls=0;uintptr_t expectedProperty=0;
