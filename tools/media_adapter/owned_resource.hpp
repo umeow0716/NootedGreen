@@ -2036,6 +2036,36 @@ bool tglQueryNativeTwoPassCsc(const TglTwoPassCscBinding& binding,
     return true;
 }
 
+// Exact native mode dispatcher, not the outer renderer131fa0. The prologue
+// stores RDI/RSI/RDX and immediately consumes argument2+10/+18. Keep those
+// arguments opaque until their complete producer/backing contract is bound.
+// This binding does NOT qualify all derived callbacks or GPU retirement.
+struct TglVeboxRenderBinding {
+    uintptr_t image=0,entry=0;
+    inline static constexpr std::array<uint8_t,20> anchor{
+        0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x70,
+        0x48,0x89,0x7d,0xf8,0x48,0x89,0x75,0xf0,0x48,0x89,0x55,0xe8};
+    template<class Read,class Qualify,class Executable>
+    bool resolve(uintptr_t base,Read read,Qualify qualify,Executable executable) noexcept {
+        *this={};std::array<uint8_t,anchor.size()> bytes{};
+        if(!base || base>UINTPTR_MAX-0x12c9e4 || !qualify(base) ||
+           !executable(base+0x12c9d0,bytes.size()) ||
+           !read(base+0x12c9d0,bytes.data(),bytes.size()) || bytes!=anchor) return false;
+        image=base;entry=base+0x12c9d0;return true;
+    }
+};
+template<class Owner,class Invoke>
+int tglInvokeLeasedVeboxRender(const TglVeboxRenderBinding& binding,Owner& owner,
+    void* child,void* argument1,void* argument2,Invoke invoke) noexcept {
+    static_assert(noexcept(invoke(uintptr_t{},nullptr,nullptr,nullptr)) &&
+        std::is_same_v<decltype(invoke(uintptr_t{},nullptr,nullptr,nullptr)),int>,
+        "native Render status ABI");
+    if(!binding.image || binding.image>UINTPTR_MAX-0x12c9e4 ||
+       binding.entry!=binding.image+0x12c9d0 || !child || !argument1 || !argument2 ||
+       !owner.hasPrivateChildLease(reinterpret_cast<uintptr_t>(child))) return 5;
+    return invoke(binding.entry,child,argument1,argument2);
+}
+
 struct TglExecutionBinding {
     uintptr_t image = 0, create = 0, initialize = 0, destroy = 0;
     inline static constexpr std::array<uint8_t,14> createCounter{

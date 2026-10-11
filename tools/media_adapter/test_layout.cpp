@@ -2711,6 +2711,40 @@ static bool executionReleaseFixture(uintptr_t base,uintptr_t p,void* out,size_t 
     if(p==base+0x12e11a && n==11) {std::memcpy(out,TglExecutionBinding::releaseClear.data(),n);return true;}
     return false;
 }
+static void testVeboxRenderBinding() {
+    constexpr uintptr_t image=0x1000000;
+    auto bytes=TglVeboxRenderBinding::anchor;
+    bool readable=true,rx=true,identity=true;
+    auto read=[&](uintptr_t p,void* out,size_t n) noexcept {
+        if(!readable || p!=image+0x12c9d0 || n!=bytes.size()) return false;
+        std::memcpy(out,bytes.data(),n);return true;
+    };
+    auto qualify=[&](uintptr_t p) noexcept {return identity && p==image;};
+    auto executable=[&](uintptr_t p,size_t n) noexcept {
+        return rx && p==image+0x12c9d0 && n==bytes.size();
+    };
+    TglVeboxRenderBinding binding;
+    for(size_t i=0;i<bytes.size();++i) {
+        bytes[i]^=1;assert(!binding.resolve(image,read,qualify,executable));bytes[i]^=1;
+        assert(!binding.image && !binding.entry);
+    }
+    for(unsigned gate=0;gate<3;++gate) {
+        readable=gate!=0;rx=gate!=1;identity=gate!=2;
+        assert(!binding.resolve(image,read,qualify,executable));
+    }
+    readable=rx=identity=true;
+    assert(binding.resolve(image,read,qualify,executable));
+    int child=0,arg1=0,arg2=0;TestVeboxChildLease owner{&child};unsigned calls=0;
+    auto invoke=[&](uintptr_t p,void* c,void* a,void* b) noexcept -> int {
+        assert(p==image+0x12c9d0 && c==&child && a==&arg1 && b==&arg2);
+        ++calls;assert(owner.busy);return -7;
+    };
+    assert(tglInvokeLeasedVeboxRender(binding,owner,&child,&arg1,&arg2,invoke)==5 && !calls);
+    assert(owner.withPrivateChild([&](void* c) noexcept {
+        assert(tglInvokeLeasedVeboxRender(binding,owner,c,nullptr,&arg2,invoke)==5 && !calls);
+        return tglInvokeLeasedVeboxRender(binding,owner,c,&arg1,&arg2,invoke);
+    })==-7 && calls==1);
+}
 static void testExecutionBinding() {
     {
         struct Accounting {unsigned counter=1,deletes=0;} native;
@@ -11834,6 +11868,7 @@ int main() {
     testNativeCscBinding();
     testDirectVeboxFeasibility();
     testVeboxHardwareBinding();
+    testVeboxRenderBinding();
     testExecutionBinding();
     testExecutionShape();
     testExecutionOwner();
