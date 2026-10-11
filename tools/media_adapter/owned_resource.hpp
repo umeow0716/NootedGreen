@@ -8160,6 +8160,15 @@ public:
         void* parameters,uint8_t& compNeeded) noexcept {
         if(!ready_ || busy_) return UINT32_MAX;
         Guard guard(busy_);
+        // ICL1fb51b..1fb557 obtains VP18's target from params98. The public
+        // graph API must not qualify format on that surface but geometry on
+        // a different caller-supplied target. Pin this identity before policy
+        // callbacks; unlike native SFC rejection, a broken frame is an error.
+        const uintptr_t params=reinterpret_cast<uintptr_t>(parameters);
+        uintptr_t actualTarget=0;
+        if(!source || !target || !params || params>UINTPTR_MAX-0xa0 ||
+            !read(params+0x98,&actualTarget,8) ||
+            actualTarget!=reinterpret_cast<uintptr_t>(target)) return UINT32_MAX;
         TglOwnedVpPipeSelector selector(storage_,read,policy,source,target,parameters);
         return selector(compNeeded);
     }

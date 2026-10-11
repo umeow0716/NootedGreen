@@ -7749,10 +7749,15 @@ int main() {
         assert(graphReads>2);
         for(unsigned fault=1;fault<=graphReads;++fault) {
             reads=0;deny=fault;comp=0x80;
-            assert(selectGraph()==0 && comp==1 && stateCpu.live && avsCpu.live);
+            assert(selectGraph()==(fault==1?UINT32_MAX:0) && comp==(fault==1?0x80:1) &&
+                stateCpu.live && avsCpu.live);
         }
         deny=0;reads=0;comp=0x80;
         assert(selectGraph()==1 && comp==0 && reads==graphReads);
+        const uintptr_t wrongTarget=0x1000;
+        std::memcpy(settings.data()+0x98,&wrongTarget,8);comp=0x80;reads=0;
+        assert(selectGraph()==UINT32_MAX && comp==0x80 && reads==1);
+        std::memcpy(settings.data()+0x98,&targetAddress,8);
         assert(graph.tryReset() && !stateCpu.live && !avsCpu.live);
         comp=0x80;before=reads;
         assert(selectGraph()==UINT32_MAX && comp==0x80 && reads==before);
@@ -8877,8 +8882,13 @@ int main() {
                 bool healthy() noexcept {return true;}
             } graphPolicy{graph};
             uint8_t graphComp=0x80;
+            auto graphTargetRead=[&](uintptr_t address,void* output,size_t size) noexcept {
+                assert(!graph.tryReset());
+                if(address!=0x4098 || size!=8) return false;
+                const uintptr_t target=0x2000;std::memcpy(output,&target,8);return true;
+            };
             auto graphSelect=[&]() noexcept {
-                return graph.selectOutputPipe(noRead,graphPolicy,reinterpret_cast<void*>(0x1000),
+                return graph.selectOutputPipe(graphTargetRead,graphPolicy,reinterpret_cast<void*>(0x1000),
                     reinterpret_cast<void*>(0x2000),reinterpret_cast<void*>(0x4000),graphComp);
             };
             assert(graphSelect()==2 && graphComp==0 && stateCpu.live && avsCpu.live);
