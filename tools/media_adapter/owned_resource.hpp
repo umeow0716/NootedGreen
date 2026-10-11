@@ -6745,6 +6745,64 @@ template<class Resolve> struct TglOwnedVpExtentCallback {
 // Do not import the Linux decompression tail: this exact native return has
 // no such call. Caller1fb55e qualifies the pipe-selection edge below;
 // this still does not authorize publication of an incomplete full vtable.
+// ABI catalogue for the complete flat owned VP, NOT a published vtable.
+// Exact ICL7940e8 has 27 slots. Donor adjustment thunks/RTTI are deliberately
+// absent; all entries must be supplied by independently qualified producers.
+// hasAllEntries establishes presence only, not policy/lifetime/GPU readiness.
+struct TglOwnedVpEntrySet {
+    void (*destroy)(void*) noexcept=nullptr;
+    void (*deletingDestroy)(void*) noexcept=nullptr;
+    void (*initialize)(void*) noexcept=nullptr;
+    int (*extent)(void*,void*,void*,void*) noexcept=nullptr;
+    bool (*eligible)(void*,void*,void*,void*) noexcept=nullptr;
+    void (*prepare)(void*,void*,void*,void*,void*,void*) noexcept=nullptr;
+    void (*freeResources)(void*) noexcept=nullptr;
+    bool (*pair)(void*,void*,void*,void*) noexcept=nullptr;
+    int (*setup)(void*,void*,void*,void*) noexcept=nullptr;
+    int (*send)(void*,void*,void*) noexcept=nullptr;
+    void (*dimensions)(void*,void*,uint32_t*,uint32_t*) noexcept=nullptr;
+    int (*allocate)(void*) noexcept=nullptr;
+    bool (*compressionFormat)(void*,uint32_t) noexcept=nullptr;
+    bool (*finalAdmission)(void*,uint8_t,void*,void*) noexcept=nullptr;
+    bool (*inputFormat)(void*,void*) noexcept=nullptr;
+    bool (*outputFormat)(void*,void*) noexcept=nullptr;
+    void (*inputAlignment)(void*,uint32_t,uint32_t,uint16_t*,uint16_t*) noexcept=nullptr;
+    void (*outputAlignment)(void*,uint32_t,uint16_t*,uint16_t*) noexcept=nullptr;
+    int (*state)(void*,void*,void*,void*) noexcept=nullptr;
+    void (*filters)(void*,void*,void*,void*) noexcept=nullptr;
+    void (*csc)(void*,void*,void*) noexcept=nullptr; // state, IEF
+    int (*platformSetup)(void*,void*,void*,void*) noexcept=nullptr;
+    void (*sampleMode)(void*,void*,void*) noexcept=nullptr;
+    void (*formatMode)(void*,void*,void*) noexcept=nullptr;
+    void (*platformPacket)(void*,void*,void*) noexcept=nullptr;
+    int (*platformSend)(void*,void*,void*,void*,void*,void*) noexcept=nullptr;
+    int (*compression)(void*,void*,void*,void*) noexcept=nullptr;
+    uint32_t missingMask() const noexcept {
+        const std::array<bool,27> present{bool(destroy),bool(deletingDestroy),bool(initialize),
+            bool(extent),bool(eligible),bool(prepare),bool(freeResources),bool(pair),bool(setup),
+            bool(send),bool(dimensions),bool(allocate),bool(compressionFormat),bool(finalAdmission),
+            bool(inputFormat),bool(outputFormat),bool(inputAlignment),bool(outputAlignment),bool(state),
+            bool(filters),bool(csc),bool(platformSetup),bool(sampleMode),bool(formatMode),
+            bool(platformPacket),bool(platformSend),bool(compression)};
+        uint32_t missing=0;
+        for(size_t i=0;i<present.size();++i) if(!present[i]) missing|=uint32_t{1}<<i;
+        return missing;
+    }
+    bool hasAllEntries() const noexcept {return missingMask()==0;}
+};
+#define NGRN_VP_SLOT(field,offset) static_assert(offsetof(TglOwnedVpEntrySet,field)==offset,"VP slot ABI")
+NGRN_VP_SLOT(destroy,0);NGRN_VP_SLOT(deletingDestroy,8);NGRN_VP_SLOT(initialize,0x10);
+NGRN_VP_SLOT(extent,0x18);NGRN_VP_SLOT(eligible,0x20);NGRN_VP_SLOT(prepare,0x28);
+NGRN_VP_SLOT(freeResources,0x30);NGRN_VP_SLOT(pair,0x38);NGRN_VP_SLOT(setup,0x40);
+NGRN_VP_SLOT(send,0x48);NGRN_VP_SLOT(dimensions,0x50);NGRN_VP_SLOT(allocate,0x58);
+NGRN_VP_SLOT(compressionFormat,0x60);NGRN_VP_SLOT(finalAdmission,0x68);
+NGRN_VP_SLOT(inputFormat,0x70);NGRN_VP_SLOT(outputFormat,0x78);
+NGRN_VP_SLOT(inputAlignment,0x80);NGRN_VP_SLOT(outputAlignment,0x88);
+NGRN_VP_SLOT(state,0x90);NGRN_VP_SLOT(filters,0x98);NGRN_VP_SLOT(csc,0xa0);
+NGRN_VP_SLOT(platformSetup,0xa8);NGRN_VP_SLOT(sampleMode,0xb0);NGRN_VP_SLOT(formatMode,0xb8);
+NGRN_VP_SLOT(platformPacket,0xc0);NGRN_VP_SLOT(platformSend,0xc8);NGRN_VP_SLOT(compression,0xd0);
+#undef NGRN_VP_SLOT
+static_assert(std::is_standard_layout_v<TglOwnedVpEntrySet> && sizeof(TglOwnedVpEntrySet)==0xd8);
 template<class Resolve> struct TglOwnedVpCompressionFormatCallback;
 struct TglOwnedVpAdmissionEntries {
     int (*extent)(void*,void*,void*,void*) noexcept=nullptr;
@@ -6758,6 +6816,24 @@ struct TglOwnedVpAdmissionEntries {
     void (*inputAlignment)(void*,uint32_t,uint32_t,uint16_t*,uint16_t*) noexcept=nullptr;
     void (*outputAlignment)(void*,uint32_t,uint16_t*,uint16_t*) noexcept=nullptr;
 };
+// Bind only these ten qualified ABI entries, atomically and without replacing
+// another producer. The functions remain subject to their original TLS scope;
+// retaining this catalogue cannot extend admission or publish a VP object.
+inline bool tglBindOwnedVpAdmissionEntries(TglOwnedVpEntrySet& target,
+    const TglOwnedVpAdmissionEntries& source) noexcept {
+    if(!source.extent || !source.eligible || !source.pair || !source.dimensions ||
+       !source.compressionFormat || !source.finalAdmission || !source.input || !source.output ||
+       !source.inputAlignment || !source.outputAlignment) return false;
+    if(target.extent || target.eligible || target.pair || target.dimensions ||
+       target.compressionFormat || target.finalAdmission || target.inputFormat || target.outputFormat ||
+       target.inputAlignment || target.outputAlignment) return false;
+    auto candidate=target;
+    candidate.extent=source.extent;candidate.eligible=source.eligible;candidate.pair=source.pair;
+    candidate.dimensions=source.dimensions;candidate.compressionFormat=source.compressionFormat;
+    candidate.finalAdmission=source.finalAdmission;candidate.inputFormat=source.input;
+    candidate.outputFormat=source.output;candidate.inputAlignment=source.inputAlignment;
+    candidate.outputAlignment=source.outputAlignment;target=candidate;return true;
+}
 template<class Read,class Use>
 int tglWithOwnedVpAdmissionEntries(TglOwnedVpSfcCallerStorage& vp,Read& read,Use use) noexcept {
     static_assert(noexcept(use(nullptr,std::declval<const TglOwnedVpAdmissionEntries&>())),

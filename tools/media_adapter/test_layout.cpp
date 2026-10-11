@@ -7,6 +7,12 @@
 #include "descriptor_bridge.hpp"
 #include "owned_resource.hpp"
 
+// Presence-test functions only; never used as renderer producers or published.
+template<class Signature> struct TestVpPresenceStub;
+template<class R,class... Args> struct TestVpPresenceStub<R(*)(Args...) noexcept> {
+    static R invoke(Args...) noexcept {if constexpr(!std::is_void_v<R>) return R{};}
+};
+
 // Mock only the enclosing synchronous child lease. Packet callbacks and
 // setup/builder argument binding below use their real owned implementations.
 struct TestVeboxChildLease {
@@ -9036,6 +9042,28 @@ static void testSfcFrameFields() {
 
 int main() {
     {
+        TglOwnedVpEntrySet entries;
+        assert(!entries.hasAllEntries() && entries.missingMask()==0x7ffffffU);
+#define NGRN_TEST_VP_SLOTS(X) \
+        X(destroy,0) X(deletingDestroy,1) X(initialize,2) X(extent,3) X(eligible,4) \
+        X(prepare,5) X(freeResources,6) X(pair,7) X(setup,8) X(send,9) X(dimensions,10) \
+        X(allocate,11) X(compressionFormat,12) X(finalAdmission,13) X(inputFormat,14) \
+        X(outputFormat,15) X(inputAlignment,16) X(outputAlignment,17) X(state,18) \
+        X(filters,19) X(csc,20) X(platformSetup,21) X(sampleMode,22) X(formatMode,23) \
+        X(platformPacket,24) X(platformSend,25) X(compression,26)
+#define NGRN_BIND_TEST_VP(field,index) entries.field=&TestVpPresenceStub<decltype(entries.field)>::invoke;
+        NGRN_TEST_VP_SLOTS(NGRN_BIND_TEST_VP)
+#undef NGRN_BIND_TEST_VP
+        assert(entries.hasAllEntries() && !entries.missingMask());
+#define NGRN_REJECT_MISSING_VP(field,index) \
+        {const auto saved=entries.field;entries.field=nullptr; \
+        assert(!entries.hasAllEntries() && entries.missingMask()==(uint32_t{1}<<index));entries.field=saved;}
+        NGRN_TEST_VP_SLOTS(NGRN_REJECT_MISSING_VP)
+#undef NGRN_REJECT_MISSING_VP
+#undef NGRN_TEST_VP_SLOTS
+        assert(entries.hasAllEntries());
+    }
+    {
         TglOwnedVpSfcCallerStorage vp;
         std::array<uint8_t,0x294> source{};std::array<uint8_t,0x134> target{};
         std::array<uint8_t,0xf8> settings{};std::array<uint8_t,0x2c> mhw{};
@@ -9113,8 +9141,17 @@ int main() {
         assert(invoke(vp.bytes.data())==0);
         reenter=nullptr;reads=0;
         TglOwnedVpAdmissionEntries escaped;
+        TglOwnedVpEntrySet boundAdmission;
         assert(tglWithOwnedVpAdmissionEntries(vp,read,[&](void* child,const auto& entries) noexcept {
             escaped=entries;
+            auto incomplete=entries;incomplete.outputAlignment=nullptr;
+            assert(!tglBindOwnedVpAdmissionEntries(boundAdmission,incomplete) && boundAdmission.missingMask()==0x7ffffffU);
+            assert(tglBindOwnedVpAdmissionEntries(boundAdmission,entries) && !boundAdmission.hasAllEntries());
+            constexpr uint32_t admitted=(1U<<3)|(1U<<4)|(1U<<7)|(1U<<10)|(1U<<12)|
+                (1U<<13)|(1U<<14)|(1U<<15)|(1U<<16)|(1U<<17);
+            assert(boundAdmission.missingMask()==(0x7ffffffU&~admitted));
+            assert(!tglBindOwnedVpAdmissionEntries(boundAdmission,entries));
+            assert(boundAdmission.extent==entries.extent && boundAdmission.inputFormat==entries.input);
             void* s=reinterpret_cast<void*>(0x1000);void* t=reinterpret_cast<void*>(0x2000);
             void* p=reinterpret_cast<void*>(0x3000);
             assert(entries.input(child,s) && entries.output(child,t));
@@ -9182,6 +9219,7 @@ int main() {
         })==-17);
         const auto completedReads=reads;
         uint16_t expiredAlignment=99;
+        assert(!boundAdmission.compressionFormat(vp.bytes.data(),0x19));
         escaped.inputAlignment(vp.bytes.data(),0,0,&expiredAlignment,&expiredAlignment);
         escaped.outputAlignment(vp.bytes.data(),0,&expiredAlignment,&expiredAlignment);
         assert(expiredAlignment==99 && !escaped.compressionFormat(vp.bytes.data(),0x19));
