@@ -5306,6 +5306,41 @@ bool tglRejectLeasedGen12DiOutput(bool& rejected,const TglOwnedSurfaceStorage& s
     }
     rejected=candidate;return true;
 }
+// Exact TGL2390b0 /23a067..23a369 scalar portion of the source90 producer.
+// These are caller request DWORD offsets, not guessed DN policy parameters.
+// Nested request38 payload ownership is separate and is NOT published here.
+struct TglNativeDnScalarRequest {
+    uint32_t mode=0,word20=0,word24=0,word28=0,word2c=0,word30=0;
+    bool mode3NativeDefault=false;
+};
+struct TglOwnedDnParameterStorage {
+    std::array<uint8_t,0x38> bytes{};
+};
+static_assert(sizeof(TglOwnedDnParameterStorage)==0x38);
+inline TglOwnedDnParameterStorage tglProduceOwnedDnScalarParameters(
+    const TglNativeDnScalarRequest& request) noexcept {
+    TglOwnedDnParameterStorage output;
+    output.bytes[0]=request.word24!=0;
+    output.bytes[1]=1;
+    output.bytes[0x20]=(request.word30&1)!=0;
+    std::array<float,4> values{};
+    if(request.mode==3 && request.mode3NativeDefault) {
+        // Exact native constant24ce84 is IEEE754 3f800000.
+        values.fill(1.0f);
+        output.bytes[0xc]=1;
+    } else {
+        if(request.mode!=1) {
+            values[0]=static_cast<float>(request.word28);
+            values[1]=static_cast<float>(request.word2c);
+        }
+        if(request.mode!=0) {
+            values[2]=static_cast<float>(request.word20);
+            values[3]=static_cast<float>(request.word24);
+        }
+    }
+    std::memcpy(output.bytes.data()+0x10,values.data(),sizeof(values));
+    return output;
+}
 // Source and its DN parameter allocation are separately leased by the frame
 // owner. Equality checks prevent silently adopting an opaque source+90 pointer.
 // Read only eight parameter bytes; automatic mode does not consume strength.

@@ -11593,6 +11593,34 @@ static void testRetainedVeboxFrames() {
 
 int main() {
     {
+        TglNativeDnScalarRequest request;
+        request.word20=7;request.word24=9;request.word28=11;request.word2c=13;
+        request.word30=3;
+        for(uint32_t mode: {0u,1u,2u,3u,UINT32_MAX}) {
+            request.mode=mode;
+            auto parameters=tglProduceOwnedDnScalarParameters(request);
+            std::array<float,4> values{};
+            std::memcpy(values.data(),parameters.bytes.data()+0x10,16);
+            assert(parameters.bytes[0]==1 && parameters.bytes[1]==1);
+            assert(parameters.bytes[2]==0 && parameters.bytes[0xc]==0);
+            assert(parameters.bytes[0x20]==1 && parameters.bytes[0x21]==0);
+            assert(values[0]==(mode==1?0.0f:11.0f));
+            assert(values[1]==(mode==1?0.0f:13.0f));
+            assert(values[2]==(mode==0?0.0f:7.0f));
+            assert(values[3]==(mode==0?0.0f:9.0f));
+            for(size_t i=0x28;i<0x38;++i) assert(parameters.bytes[i]==0);
+        }
+        request.mode=3;request.mode3NativeDefault=true;
+        auto parameters=tglProduceOwnedDnScalarParameters(request);
+        std::array<float,4> values{};
+        std::memcpy(values.data(),parameters.bytes.data()+0x10,16);
+        assert(parameters.bytes[0xc]==1);
+        for(float value:values) assert(value==1.0f);
+        request.mode=0;request.word24=0;request.word30=2;
+        parameters=tglProduceOwnedDnScalarParameters(request);
+        assert(parameters.bytes[0]==0 && parameters.bytes[0x20]==0);
+    }
+    {
         TglOwnedSurfaceStorage source,target;
         struct Owner {
             const TglOwnedSurfaceStorage& surface;
