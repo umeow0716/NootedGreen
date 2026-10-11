@@ -10899,9 +10899,24 @@ int tglRunCapturedFfdiFrame(std::array<TglOwnedDescriptorOnlySurface,Count>& des
                 TglVeboxHistoryState history;size_t count=0;
                 if(address>UINTPTR_MAX-0x1b5f || !read(address+0x1b5c,&history.field1b5c,4) ||
                     !tglOwnedFfdiCountFromHistory(count,history,Count)) return 5;
-                if(count) return tglRunCapturedFfdiFromReport(descriptors,backed,input,executionSurface,
-                    secondary,childOwner,reportOwner,currentChild,currentReport,source,read,
-                    sfcFormat,sfcColor,parameterKind,supports,use,captured);
+                if(count) {
+                    std::array<uintptr_t,2> actual{};
+                    if(currentReport>UINTPTR_MAX-0x6f ||
+                        !read(currentReport+0x60,actual.data(),16) ||
+                        (actual[0] && !executionSurface) || (actual[1] && !secondary) ||
+                        (captured[0] && captured[0]!=&source) ||
+                        (!actual[0] && captured[1]) || (!actual[1] && captured[2])) return 5;
+                    const std::array<Owner*,3> roles{&input,
+                        actual[0]?executionSurface:nullptr,actual[1]?secondary:nullptr};
+                    captured[0]=&source;
+                    return tglWithCapturedOwnedSurfaceRoles(roles,captured,[&](const auto& views) noexcept -> int {
+                        if(reinterpret_cast<uintptr_t>(views[1])!=actual[0] ||
+                            reinterpret_cast<uintptr_t>(views[2])!=actual[1]) return 5;
+                        return tglRunCapturedFfdiFromReport(descriptors,backed,input,roles[1],roles[2],
+                            childOwner,reportOwner,currentChild,currentReport,source,read,
+                            sfcFormat,sfcColor,parameterKind,supports,use,views);
+                    });
+                }
             }
             return tglRunCapturedFfdiSecondaryFromReport(descriptors[0],backed[0],input,secondary,
                 childOwner,reportOwner,currentChild,currentReport,source,read,next);

@@ -6570,8 +6570,14 @@ static void testNativeResourceBoundary() {
                                         return tglRunCapturedFfdiFrame(frameTargets,backedTargets,owner,&owner,
                                             &destination,childOwner,reportOwner,actualChild,report,source,read,
                                             noSfc,noSfc,noParameter,[](uint32_t) noexcept {return true;},
-                                            [&](const auto&,const auto&,size_t count,uint8_t,uint8_t) noexcept -> int {
-                                                assert(count==2);++frameUses;return -37;
+                                            [&](const auto& roles,const auto&,size_t count,uint8_t,uint8_t) noexcept -> int {
+                                                assert(count==2);
+                                                uintptr_t expectedExecution=0,expectedSecondary=0;
+                                                std::memcpy(&expectedExecution,reportBackend.bytes.data()+0x60,8);
+                                                std::memcpy(&expectedSecondary,reportBackend.bytes.data()+0x68,8);
+                                                assert(reinterpret_cast<uintptr_t>(roles[1])==expectedExecution);
+                                                assert(reinterpret_cast<uintptr_t>(roles[2])==expectedSecondary);
+                                                ++frameUses;return -37;
                                             },[&](const auto* s,const auto* target) noexcept -> int {
                                                 assert(!s && !target);++nextUses;return -41;
                                             });
@@ -6584,6 +6590,15 @@ static void testNativeResourceBoundary() {
                                     assert(runFrame()==-41 && nextUses==2 && !frameUses);
                                     nativeCount=2;std::memcpy(child.data()+0x1b5c,&nativeCount,4);
                                     assert(runFrame()==-37 && nextUses==2 && frameUses==1);
+                                    const uintptr_t actualInput=reinterpret_cast<uintptr_t>(&source);
+                                    std::memcpy(reportBackend.bytes.data()+0x60,&actualInput,8);
+                                    std::memcpy(reportBackend.bytes.data()+0x68,&secondaryAddress,8);
+                                    assert(runFrame()==-37 && frameUses==2);
+                                    std::memcpy(reportBackend.bytes.data()+0x60,&secondaryAddress,8);
+                                    assert(runFrame()==5 && frameUses==2);
+                                    std::memcpy(reportBackend.bytes.data()+0x60,&actualInput,8);
+                                    std::memcpy(reportBackend.bytes.data()+0x68,&actualInput,8);
+                                    assert(runFrame()==5 && frameUses==2);
                                     return run();
                                 });
                             })==-17);
