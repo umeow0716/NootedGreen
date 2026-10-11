@@ -16806,6 +16806,18 @@ public:
         if(!physical || !valid()) return 5;
         return registry_.withScope(ticket,binding_.image,physical,use);
     }
+    // Resolve context ownership under the SAME physical generation gate.
+    // The callback may construct retained frames but must not reenter either
+    // registry or allow borrowed owner/scope references to escape.
+    template<class Owners,class Use>
+    int withOwnedFrameScope(typename Registry::Ticket ticket,uintptr_t physical,
+        uintptr_t context,Owners& owners,Use use) noexcept {
+        if(!context) return 5;
+        return withFrameScope(ticket,physical,[&](auto& scope) noexcept -> int {
+            return owners.withOwner(binding_.image,physical,ticket.generation,context,
+                [&](auto& owner) noexcept -> int {return use(scope,owner);});
+        });
+    }
     // Keep the generation captured at initialization: resolving by pointer
     // alone would let a delayed frame attach to a recycled physical address.
     // Factory slot12 (15b01..15c0d) must remain usable while frames are pending:

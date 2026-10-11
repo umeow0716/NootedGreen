@@ -12335,6 +12335,25 @@ static void testRetainedVeboxFrames() {
         assert(callbacks.withContextRemoval(success.ticket,0x8001,removalUse)==5 && !removalCalls);
         assert(callbacks.withContextRemoval(success.ticket,0x8000,removalUse)==0 && removalCalls==1);
         unsigned parentReads=0,contextCalls=0;
+        {
+            struct NativeContextOwner {
+                uintptr_t value;unsigned& destroyed;
+                uintptr_t context() const noexcept {return value;}
+                ~NativeContextOwner() noexcept {++destroyed;}
+            };
+            unsigned destroyed=0,ownerCalls=0;
+            TglOwnedContextOwnerRegistry<NativeContextOwner> owners;
+            assert(owners.adopt(image,0x8000,success.ticket.generation,new NativeContextOwner{0x20000,destroyed}));
+            auto useOwner=[&](auto& scope,auto& owner) noexcept -> int {
+                ++ownerCalls;assert(owner.context()==0x20000 && !destroyed);
+                return scope.withNativeRequestItem(owner.context(),[](auto&) noexcept -> int {return 31;});
+            };
+            assert(callbacks.withOwnedFrameScope(success.ticket,0x8000,0x20008,owners,useOwner)==5 && !ownerCalls);
+            assert(callbacks.withOwnedFrameScope(success.ticket,0x8000,0x20000,owners,useOwner)==31 && ownerCalls==1);
+            TglNativeRemovedContextBatch<1> removed;removed.valid=true;removed.count=1;removed.contexts[0]=0x20000;
+            // CPU fixture only: models already-successful native removal.
+            assert(owners.reconcileSuccessfulRemoval(image,0x8000,success.ticket.generation,removed)==0 && destroyed==1);
+        }
         uintptr_t contextPhysical=0x8000,embedded=0xa048,contextRenderer=0x30000;
         uintptr_t rendererVptr=image+0x75bba0,rendererInit=image+0x132510,rendererFrame=image+0x131fa0;
         auto parentRead=[&](uintptr_t address,void* bytes,size_t size) noexcept {
