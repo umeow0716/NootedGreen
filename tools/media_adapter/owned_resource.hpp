@@ -11984,6 +11984,30 @@ struct TglOwnedVeboxBuilderScratch {
     std::array<uint8_t,0x170> surfaceCommands{};
     std::array<uint8_t,0x20> completion{},setup{};
 };
+// TGL129af4..129b02 snapshots command15c before setup's child+d8.
+// Submit12a54d..12a5b7 rewinds failed emission before OS+2c8 writeback:
+// delta=snapshot-currentRemaining; offset-=delta; ptr=base+(offset/4)*4.
+// Validate the complete shape first; rejecting corruption leaves header intact.
+// This discards CPU command bytes only, never proves submitted GPU retirement.
+inline bool tglRewindNativeVeboxCommand(TglOwnedVeboxBuilderScratch& scratch,
+    int32_t remainingBeforeSetup) noexcept {
+    uintptr_t base=0,cursor=0;int32_t offset=0,remaining=0;
+    std::memcpy(&base,scratch.command.data()+0x148,8);
+    std::memcpy(&cursor,scratch.command.data()+0x150,8);
+    std::memcpy(&offset,scratch.command.data()+0x158,4);
+    std::memcpy(&remaining,scratch.command.data()+0x15c,4);
+    if(!base || (base&3) || offset<0 || remaining<0 || remainingBeforeSetup<remaining ||
+       uint64_t(uint32_t(offset))+uint32_t(remaining)>INT32_MAX) return false;
+    const uint32_t used=uint32_t(remainingBeforeSetup)-uint32_t(remaining);
+    if(used>uint32_t(offset) || base>UINTPTR_MAX-(uint32_t(offset)&~uint32_t{3}) ||
+       cursor!=base+(uint32_t(offset)&~uint32_t{3})) return false;
+    const int32_t restoredOffset=offset-int32_t(used);
+    const uintptr_t restoredCursor=base+(uint32_t(restoredOffset)&~uint32_t{3});
+    std::memcpy(scratch.command.data()+0x150,&restoredCursor,8);
+    std::memcpy(scratch.command.data()+0x158,&restoredOffset,4);
+    std::memcpy(scratch.command.data()+0x15c,&remainingBeforeSetup,4);
+    return true;
+}
 // Exact 25G229 IOAccelerator FinishFenceEvent implementation at preferred
 // 7ff80f4634cf. Resolve receives the authenticated export implementation (not
 // its thunk); qualify must enforce the pinned framework UUID. Keep its image
@@ -12131,9 +12155,21 @@ struct TglNativeVeboxSetupInvoker {
         return reinterpret_cast<Setup>(entry)(child,command,setup,auxiliary,consumed);
     }
 };
+// Finalize the CPU command header for either native failure or an owned
+// producer-pass failure. False requires the caller to retain/quarantine its
+// command ownership; neither result is a GPU completion certificate.
+template<class Read,class Qualify,class Executable,
+    class Invoke=TglNativeCommandHeaderWritebackInvoker>
+bool tglWritebackNativeVeboxCommandResult(uintptr_t image,uintptr_t os,
+    TglOwnedVeboxBuilderScratch& scratch,int buildStatus,int32_t remainingBeforeSetup,
+    Read read,Qualify qualify,Executable executable,Invoke invoke=Invoke{}) noexcept {
+    if(buildStatus && !tglRewindNativeVeboxCommand(scratch,remainingBeforeSetup)) return false;
+    return tglWritebackNativeCommandHeader(image,os,scratch,read,qualify,executable,invoke);
+}
 // Native slot128 retains its own command acquisition/context bookkeeping.
 // The caller must lease the auxiliary argument and all child/OS dependencies;
 // this binding does not manufacture them or authorize submission.
+// Its int32 output is command15c remaining BEFORE child+d8, not bytes consumed.
 class TglNativeVeboxSetupBinding {
     uintptr_t image_=0,entry_=0;
 public:

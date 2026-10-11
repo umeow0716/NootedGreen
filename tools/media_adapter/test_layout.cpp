@@ -16916,6 +16916,26 @@ int main() {
                 auto executable=[](uintptr_t p,size_t n){return p==nativeImage+0x129ca0 && n==16;};
                 TglNativeVeboxBuilderBinding binding;
                 TglOwnedVeboxBuilderScratch scratch;
+                for(int32_t offset : {0,4,63,256}) for(int32_t remaining : {0,64,4096})
+                    for(int32_t used : {0,4,64,256}) {
+                    scratch.command.fill(0xa5);
+                    const uintptr_t base=0x1000,cursor=base+(uint32_t(offset)&~uint32_t{3});
+                    std::memcpy(scratch.command.data()+0x148,&base,8);
+                    std::memcpy(scratch.command.data()+0x150,&cursor,8);
+                    std::memcpy(scratch.command.data()+0x158,&offset,4);
+                    std::memcpy(scratch.command.data()+0x15c,&remaining,4);
+                    const auto before=scratch.command;
+                    assert(tglRewindNativeVeboxCommand(scratch,remaining+used)==(used<=offset));
+                    if(used>offset) {assert(scratch.command==before);continue;}
+                    uintptr_t restoredCursor=0;int32_t restoredOffset=0,restoredRemaining=0;
+                    std::memcpy(&restoredCursor,scratch.command.data()+0x150,8);
+                    std::memcpy(&restoredOffset,scratch.command.data()+0x158,4);
+                    std::memcpy(&restoredRemaining,scratch.command.data()+0x15c,4);
+                    assert(restoredOffset==offset-used && restoredRemaining==remaining+used);
+                    assert(restoredCursor==base+(uint32_t(offset-used)&~uint32_t{3}));
+                    for(size_t i=0;i<before.size();++i) if(i<0x150 || i>=0x160) assert(scratch.command[i]==before[i]);
+                }
+                scratch.command.fill(0);
                 constexpr uintptr_t osAddress=0x7000;
                 uintptr_t writebackEntry=nativeImage+0x64d60;
                 std::array<uint8_t,16> writebackAnchor{
@@ -16933,6 +16953,8 @@ int main() {
                 };
                 assert(tglWritebackNativeCommandHeader(nativeImage,osAddress,scratch,
                     writebackRead,qualified,writebackExecutable,writeback) && writebacks==1);
+                assert(!tglWritebackNativeVeboxCommandResult(nativeImage,osAddress,scratch,31,64,
+                    writebackRead,qualified,writebackExecutable,writeback) && writebacks==1);
                 ++writebackEntry;
                 assert(!tglWritebackNativeCommandHeader(nativeImage,osAddress,scratch,
                     writebackRead,qualified,writebackExecutable,writeback));--writebackEntry;
@@ -16943,6 +16965,44 @@ int main() {
                     writebackRead,qualified,[](uintptr_t,size_t){return false;},writeback));
                 assert(!tglWritebackNativeCommandHeader(nativeImage,UINTPTR_MAX,scratch,
                     writebackRead,qualified,writebackExecutable,writeback) && writebacks==1);
+                const uintptr_t commandBase=0x1000,commandCursor=0x1060;
+                const int32_t commandOffset=96,commandRemaining=64;
+                std::memcpy(scratch.command.data()+0x148,&commandBase,8);
+                std::memcpy(scratch.command.data()+0x150,&commandCursor,8);
+                std::memcpy(scratch.command.data()+0x158,&commandOffset,4);
+                std::memcpy(scratch.command.data()+0x15c,&commandRemaining,4);
+                auto checkedWriteback=[&](uintptr_t entry,void* os,void* command) noexcept {
+                    uintptr_t cursor=0;int32_t offset=0,remaining=0;
+                    std::memcpy(&cursor,scratch.command.data()+0x150,8);
+                    std::memcpy(&offset,scratch.command.data()+0x158,4);
+                    std::memcpy(&remaining,scratch.command.data()+0x15c,4);
+                    assert(cursor==0x1020 && offset==32 && remaining==128);
+                    writeback(entry,os,command);
+                };
+                assert(tglWritebackNativeVeboxCommandResult(nativeImage,osAddress,scratch,31,128,
+                    writebackRead,qualified,writebackExecutable,checkedWriteback) && writebacks==2);
+                assert(tglWritebackNativeVeboxCommandResult(nativeImage,osAddress,scratch,0,-1,
+                    writebackRead,qualified,writebackExecutable,checkedWriteback) && writebacks==3);
+                struct BadCommandHeader {uintptr_t base,cursor;int32_t offset,remaining,before;};
+                for(const auto& bad : std::array{
+                    BadCommandHeader{0x1001,0x1001,0,64,64},
+                    BadCommandHeader{0x1000,0x1000,-1,64,64},
+                    BadCommandHeader{0x1000,0x1000,0,-1,64},
+                    BadCommandHeader{0x1000,0x1000,0,64,-1},
+                    BadCommandHeader{0x1000,0x1000,0,64,63},
+                    BadCommandHeader{0x1000,0x1004,0,64,64},
+                    BadCommandHeader{UINTPTR_MAX-3,0,4,64,64},
+                    BadCommandHeader{0x1000,0x1000,INT32_MAX,1,1}}) {
+                    std::memcpy(scratch.command.data()+0x148,&bad.base,8);
+                    std::memcpy(scratch.command.data()+0x150,&bad.cursor,8);
+                    std::memcpy(scratch.command.data()+0x158,&bad.offset,4);
+                    std::memcpy(scratch.command.data()+0x15c,&bad.remaining,4);
+                    const auto before=scratch.command;
+                    assert(!tglWritebackNativeVeboxCommandResult(nativeImage,osAddress,scratch,31,bad.before,
+                        writebackRead,qualified,writebackExecutable,writeback));
+                    assert(scratch.command==before && writebacks==3);
+                }
+                scratch.command.fill(0);
                 uintptr_t setupEntry=nativeImage+0x129a10;
                 std::array<uint8_t,16> setupAnchor{
                     0x55,0x48,0x89,0xe5,0x48,0x81,0xec,0x80,0,0,0,0x48,0x89,0x7d,0xf8,0x48};
