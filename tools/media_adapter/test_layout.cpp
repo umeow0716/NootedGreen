@@ -10970,7 +10970,29 @@ int main() {
             } binding;
             auto noRead=+[](uintptr_t,void*,size_t) noexcept {return false;};
             TglOwnedVpSfcCpuGraph<Cpu,Cpu> graph(stateCpu,avsCpu);
+            const auto acquisitionUse=[](const auto&,const auto&,uintptr_t) noexcept {return 31;};
+            calls=0;
+            assert(graph.withFrameAcquisition(0x1000,0x2000,0x3000,0x4000,
+                0x6000,0x7000,{},read,acquisitionUse)==5 && calls==0);
             assert(graph.initialize(0x7000,0x8000,0x3000,binding,noRead,1,0));
+            bool acquisitionConsumed=false;
+            assert(graph.withFrameAcquisitionEntry(0x1000,0x2000,0x3000,0x4000,
+                0x6000,0x7000,{},read,[&](void* child,auto prepare) noexcept {
+                    assert(!graph.tryReset());
+                    assert(graph.withFrameAcquisition(0x1000,0x2000,0x3000,0x4000,
+                        0x6000,0x7000,{},read,acquisitionUse)==5 && calls==0);
+                    prepare(child,reinterpret_cast<void*>(0x6000),reinterpret_cast<void*>(0x7000),
+                        reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x2000),
+                        reinterpret_cast<void*>(0x4000));
+                    return 0;
+                },[&](const auto& frame,const auto& geometry,uintptr_t) noexcept {
+                    assert(!graph.tryReset() && calls==total);
+                    assert(graph.withFrameAcquisition(0x1000,0x2000,0x3000,0x4000,
+                        0x6000,0x7000,{},read,acquisitionUse)==5 && calls==total);
+                    assert(frame.at922 && geometry.frameWidth==geometrySnapshot.frameWidth);
+                    acquisitionConsumed=true;return 31;
+                })==31 && acquisitionConsumed);
+            calls=0;
             struct CallbackCommandBackend {
                 unsigned count=0;int failure=0;
                 std::array<int,8> order{};

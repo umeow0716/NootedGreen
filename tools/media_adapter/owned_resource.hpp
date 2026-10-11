@@ -9904,6 +9904,26 @@ public:
     // command construction. Keep RDX frame parameters separate from R9 mode
     // settings. Read callbacks cannot reset/reenter the owner. The caller
     // retains source/target/settings/interface leases through the whole call.
+    template<class Read,class Invoke,class Use>
+    int withFrameAcquisitionEntry(uintptr_t source,uintptr_t target,uintptr_t mhw,
+        uintptr_t settings,uintptr_t conditionalSource,uintptr_t parameters,
+        const TglOwnedVpModeState& original,Read read,Invoke invoke,Use use) noexcept {
+        if(!ready_ || busy_) return 5;
+        Guard guard(busy_);
+        return tglWithOwnedVpAcquiredFrameEntry(storage_,source,target,mhw,settings,
+            conditionalSource,parameters,original,read,invoke,use);
+    }
+    template<class Read,class Use>
+    int withFrameAcquisition(uintptr_t source,uintptr_t target,uintptr_t mhw,
+        uintptr_t settings,uintptr_t conditionalSource,uintptr_t parameters,
+        const TglOwnedVpModeState& original,Read read,Use use) noexcept {
+        return withFrameAcquisitionEntry(source,target,mhw,settings,conditionalSource,parameters,
+            original,read,[&](void* child,auto prepare) noexcept {
+                prepare(child,reinterpret_cast<void*>(conditionalSource),reinterpret_cast<void*>(parameters),
+                    reinterpret_cast<void*>(source),reinterpret_cast<void*>(target),reinterpret_cast<void*>(settings));
+                return 0;
+            },use);
+    }
     template<class Read,class State,class Avs,class Ief,class Emit,class Invoke>
     int withLeasedCallbackPass(uintptr_t source,uintptr_t target,uintptr_t mhw,
         uintptr_t settings,uintptr_t conditionalSource,uintptr_t parameters,
@@ -9913,8 +9933,7 @@ public:
         TglOwnedVpFramePreparation frame;TglOwnedVpRegionInput geometry;
         uintptr_t reference=0;
         {
-            Guard guard(busy_);
-            const int result=tglWithOwnedVpAcquiredFrame(storage_,source,target,mhw,
+            const int result=withFrameAcquisition(source,target,mhw,
                 settings,conditionalSource,parameters,original,read,
                 [&](const auto& prepared,const auto& snapshot,uintptr_t sourceA8) noexcept {
                     frame=prepared;geometry=snapshot;reference=sourceA8;return 0;
@@ -9937,8 +9956,7 @@ public:
         TglOwnedVpFramePreparation frame;TglOwnedVpRegionInput geometry;
         uintptr_t reference=0;
         {
-            Guard guard(busy_);
-            const int result=tglWithOwnedVpAcquiredFrame(storage_,source,target,mhw,
+            const int result=withFrameAcquisition(source,target,mhw,
                 settings,conditionalSource,parameters,original,read,
                 [&](const auto& prepared,const auto& snapshot,uintptr_t sourceA8) noexcept {
                     frame=prepared;geometry=snapshot;reference=sourceA8;return 0;
