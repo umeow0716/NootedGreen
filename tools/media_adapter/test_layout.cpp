@@ -9042,7 +9042,7 @@ int main() {
                 } admissionBackend;
                 TglExecutionOwner admissionExecution(admissionBackend);
                 assert(!admissionExecution.ensure());
-                bool runAdmissionStages=false;
+                bool runAdmissionStages=false;unsigned admissionSelections=0;
                 auto admissionPolicy=[&](void* child,void* params,void* pass) noexcept {
                     assert(child==owner.constructedBase() && params==&admissionParams && pass==&admissionPass);
                     ++admissionCalls;owner.reset();
@@ -9086,9 +9086,14 @@ int main() {
                             uintptr_t linked=0;std::memcpy(&linked,static_cast<uint8_t*>(child)+0x88,8);
                             if(linked!=execution) return 5;
                             return admissionExecution.withLeasedAdmissionBytes(execution,[&](auto& bytes) noexcept {
-                                admitted=tglRunCapturedVeboxAdmissionStages(owner,admissionExecution,
-                                    child,admissionParams,admissionPass,source,target,interfaces,1,bytes,read,
+                                admitted=tglRunCapturedSelectedVeboxAdmissionStages(owner,admissionExecution,
+                                    child,admissionParams,admissionPass,source,target,interfaces,bytes,read,
                                     [&]() noexcept {return !admissionExecution.initializeLeasedAdmission(execution);},
+                                    [&](uint8_t& flag) noexcept -> uint32_t {
+                                        ++admissionSelections;
+                                        assert(&flag==admissionPass.data()+8 && admissionBackend.initializes==2);
+                                        flag=0x80;return 1;
+                                    },
                                     [](auto&) noexcept {},
                                     [](auto&) noexcept {assert(false);},
                                     [&](auto& data) noexcept {
@@ -9144,10 +9149,10 @@ int main() {
                     const auto execution=admissionExecution.get();std::memcpy(field,&execution,8);
                     AdmissionScope scope(actual,admission);assert(scope.bound());
                     assert(admissionCallback(actual,&admissionParams,&admissionPass));
-                    assert(admissionBackend.initializes==2 && admissionBackend.bytes[0x17]==1);
+                    assert(admissionBackend.initializes==2 && admissionBackend.bytes[0x17]==1 && admissionSelections==1);
                     admissionBackend.status=31;
                     assert(!admissionCallback(actual,&admissionParams,&admissionPass));
-                    assert(admissionBackend.initializes==3 && !admissionBackend.destroys);
+                    assert(admissionBackend.initializes==3 && !admissionBackend.destroys && admissionSelections==1);
                     // Unlink before releasing the poisoned execution owner.
                     std::memcpy(field,&original,8);admissionExecution.reset();
                     assert(admissionBackend.destroys==1);return 0;

@@ -6358,12 +6358,12 @@ bool tglRunOwnedVeboxSurfaceAdmissionStages(TglVeboxAdmissionStagesInput input,
 // caller-editable input or copying opaque pass state. Enclosing feature-frame
 // scope pins surfaces/interfaces; execution is that same owner's leased view.
 template<class ChildOwner,class ExecutionOwner,class Execution,size_t ParamsN,size_t PassN,
-    class Read,class Reset,class Setup,class Feature,class Sfc>
-bool tglRunCapturedVeboxAdmissionStages(ChildOwner& childOwner,ExecutionOwner& executionOwner,
+    class Read,class Reset,class Select,class Setup,class Feature,class Sfc>
+bool tglRunCapturedSelectedVeboxAdmissionStages(ChildOwner& childOwner,ExecutionOwner& executionOwner,
     void* child,std::array<uint8_t,ParamsN>& params,std::array<uint8_t,PassN>& pass,
     const TglOwnedSurfaceStorage& source,const TglOwnedSurfaceStorage& target,
-    const TglVeboxAdmissionBorrowedInterfaces& expected,uint32_t pipe,
-    Execution& execution,Read read,Reset reset,Setup setup,Feature feature,Sfc sfc) noexcept {
+    const TglVeboxAdmissionBorrowedInterfaces& expected,
+    Execution& execution,Read read,Reset reset,Select select,Setup setup,Feature feature,Sfc sfc) noexcept {
     static_assert(ParamsN>=0x139 && PassN>=0x18,"complete named admission input extents");
     if(!child || !childOwner.hasPrivateChildLease(reinterpret_cast<uintptr_t>(child))) return false;
     uintptr_t linked=0;std::memcpy(&linked,static_cast<uint8_t*>(child)+0x88,8);
@@ -6371,10 +6371,25 @@ bool tglRunCapturedVeboxAdmissionStages(ChildOwner& childOwner,ExecutionOwner& e
     TglVeboxAdmissionStagesInput input;
     if(!tglReadLeasedVeboxAdmissionInputs(input,childOwner,executionOwner,child,
         reinterpret_cast<uintptr_t>(params.data()),reinterpret_cast<uintptr_t>(pass.data()),
-        source,target,expected,pipe,read)) return false;
+        source,target,expected,0,read)) return false; // no preselected pipe:68 runs after reset
     TglVeboxAdmissionPassByte flags(pass[8]);
-    return tglRunOwnedVeboxSurfaceAdmissionStages(input,source,execution,flags,
-        reset,setup,feature,sfc);
+    uint32_t format=0;std::memcpy(&format,source.prefix.data()+0x130,4);
+    return tglRunSelectedVeboxAdmissionStages(input,execution,flags,reset,select,setup,
+        [&]() noexcept {return tglVeboxFormatSupported(format);},feature,sfc);
+}
+// Snapshot compatibility entry for CPU fixtures; complete platform policy
+// uses the selected entry so native68 can observe reset and update live flags.
+template<class ChildOwner,class ExecutionOwner,class Execution,size_t ParamsN,size_t PassN,
+    class Read,class Reset,class Setup,class Feature,class Sfc>
+bool tglRunCapturedVeboxAdmissionStages(ChildOwner& childOwner,ExecutionOwner& executionOwner,
+    void* child,std::array<uint8_t,ParamsN>& params,std::array<uint8_t,PassN>& pass,
+    const TglOwnedSurfaceStorage& source,const TglOwnedSurfaceStorage& target,
+    const TglVeboxAdmissionBorrowedInterfaces& expected,uint32_t pipe,
+    Execution& execution,Read read,Reset reset,Setup setup,Feature feature,Sfc sfc) noexcept {
+    if(pipe>2) return false;
+    return tglRunCapturedSelectedVeboxAdmissionStages(childOwner,executionOwner,child,
+        params,pass,source,target,expected,execution,read,reset,
+        [&](uint8_t&) noexcept -> uint32_t {return pipe;},setup,feature,sfc);
 }
 
 template<class Owner,class Policy> class TglOwnedVeboxAdmissionContext {
