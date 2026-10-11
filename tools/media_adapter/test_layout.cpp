@@ -7867,6 +7867,24 @@ static void testNativeResourceBoundary() {
                 };
                 assert(prepare()==0 && copies==2 && backend.allocations==3 && valid);
                 assert(flag==0 && mode==0 && first.surface() && second.surface());
+                {
+                    TglOwnedVeboxFrameRetention retention;
+                    TglOwnedVeboxSurfacePairLease<Surface,Surface> pair(input,first,retention);
+                    assert(pair.ready());
+                    const auto released=backend.releases;
+                    assert(pair.withSurfaces([&](const auto& source,const auto& target) noexcept {
+                        assert(input.hasSurfaceLease(source) && first.hasSurfaceLease(target));
+                        input.reset();first.reset();
+                        assert(pair.withSurfaces([](const auto&,const auto&) noexcept {return 0;})==5);
+                        return 31;
+                    })==31);
+                    struct Acquired {bool acquired=true,writtenBack=false;} acquired;
+                    retention.observe(acquired);
+                    assert(pair.withSurfaces([](const auto&,const auto&) noexcept {assert(false);return 0;})==5);
+                    input.reset();first.reset();
+                    assert(pair.ready() && backend.releases==released);
+                }
+                assert(input.surface() && first.surface());
                 flag=0xa5;mode=0x5a;
                 assert(prepare()==0 && copies==2 && backend.allocations==3);
                 assert(flag==0xa5 && mode==0x5a); // unchanged targets retain flags

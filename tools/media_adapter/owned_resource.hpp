@@ -9577,6 +9577,29 @@ public:
     }
 };
 struct TglOwnedVeboxFrameNoRetention {bool operator()() const noexcept {return false;}};
+// A retained frame owns this pair until qualified retirement. Owners, their
+// backends and native parent must outlive it; a pending flag is not a fence.
+template<class SourceOwner,class TargetOwner> class TglOwnedVeboxSurfacePairLease {
+    typename SourceOwner::SurfaceOwnerLease source_;
+    typename TargetOwner::SurfaceOwnerLease target_;
+    const TglOwnedVeboxFrameRetention& retention_;
+    bool busy_=false;
+public:
+    TglOwnedVeboxSurfacePairLease(SourceOwner& source,TargetOwner& target,
+        const TglOwnedVeboxFrameRetention& retention) noexcept
+        :source_(source),target_(target),retention_(retention) {}
+    TglOwnedVeboxSurfacePairLease(const TglOwnedVeboxSurfacePairLease&)=delete;
+    TglOwnedVeboxSurfacePairLease& operator=(const TglOwnedVeboxSurfacePairLease&)=delete;
+    bool ready() const noexcept {return source_.storage() && target_.storage();}
+    template<class Use> int withSurfaces(Use use) noexcept {
+        if(busy_ || retention_() || !ready()) return 5;
+        busy_=true;
+        const int result=use(*source_.storage(),*target_.storage());
+        const bool valid=ready();
+        busy_=false;
+        return valid?result:5;
+    }
+};
 struct TglOwnedVeboxFrameNoUnwind {
     void operator()(void*,uintptr_t,const TglOwnedSurfaceStorage&) const noexcept {}
 };
