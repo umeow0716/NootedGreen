@@ -16020,9 +16020,29 @@ int main() {
                         uintptr_t parentTable=0,originalFactory=0;
                         std::memcpy(&parentTable,cpu.bytes.data(),8);
                         std::memcpy(&originalFactory,reinterpret_cast<void*>(parentTable+0x1e0),8);
+                        TglVeboxAllocateBinding allocation;
+                        auto allocationRead=[&](uintptr_t address,void* output,size_t size) noexcept {
+                            if(address!=base+0x126740 || size!=allocation.anchor.size()) return false;
+                            std::memcpy(output,allocation.anchor.data(),size);return true;
+                        };
+                        assert(allocation.resolve(base,allocationRead,qualify,executable));
+                        int allocationArgument1=0,allocationArgument2=0;
+                        auto neverAllocate=[](uintptr_t,void*,void*,void*) noexcept -> int {assert(false);return 0;};
+                        assert(tglInvokeLeasedVeboxAllocate(allocation,owner,owner.constructedBase(),
+                            &allocationArgument1,&allocationArgument2,neverAllocate)==5);
                         for(unsigned vtableCase=0;vtableCase<3;++vtableCase) {
                         assert(owner.withVpFactoryVtableDispatch(graph,child,dispatch,
                             [&](void* parent) noexcept {
+                                auto wrong=allocation;wrong.entry+=1;
+                                assert(tglInvokeLeasedVeboxAllocate(wrong,owner,parent,
+                                    &allocationArgument1,&allocationArgument2,neverAllocate)==5);
+                                return tglInvokeLeasedVeboxAllocate(allocation,owner,parent,
+                                    &allocationArgument1,&allocationArgument2,
+                                    [&](uintptr_t nativeEntry,void* active,void* first,void* second) noexcept {
+                                assert(nativeEntry==base+0x126740 && active==parent &&
+                                    first==&allocationArgument1 && second==&allocationArgument2);
+                                // CPU invocation fixture models only the proven factory edge;
+                                // it is not native allocation/GPU execution evidence.
                                 uintptr_t address=0,factoryEntry=0;
                                 std::memcpy(&address,parent,8);
                                 std::memcpy(&factoryEntry,reinterpret_cast<void*>(address+0x1e0),8);
@@ -16039,6 +16059,7 @@ int main() {
                                     std::memcpy(reinterpret_cast<void*>(address+0x1e0),&changed,8);
                                 }
                                 return vtableCase==2 ? -29 : 0;
+                                    });
                             })==(vtableCase==0?0:vtableCase==1?5:-29));
                         uintptr_t restoredFactory=0;
                         std::memcpy(&restoredFactory,reinterpret_cast<void*>(parentTable+0x1e0),8);

@@ -2318,6 +2318,34 @@ TglVeboxMode0Allocation tglVeboxMode0AllocationDecision(uint8_t report09,
 // stores RDI/RSI/RDX and immediately consumes argument2+10/+18. Keep those
 // arguments opaque until their complete producer/backing contract is bound.
 // This binding does NOT qualify all derived callbacks or GPU retirement.
+// Native base slot10=126740 takes this/argument1/argument2 and reaches
+// pointer-return factory1e0 at1269ca. Inputs remain caller-owned and leased.
+struct TglVeboxAllocateBinding {
+    uintptr_t image=0,entry=0;
+    inline static constexpr std::array<uint8_t,23> anchor{
+        0x55,0x48,0x89,0xe5,0x48,0x81,0xec,0x90,0,0,0,
+        0x48,0x89,0x7d,0xf0,0x48,0x89,0x75,0xe8,0x48,0x89,0x55,0xe0};
+    template<class Read,class Qualify,class Executable>
+    bool resolve(uintptr_t base,Read read,Qualify qualify,Executable executable) noexcept {
+        *this={};std::array<uint8_t,anchor.size()> bytes{};
+        if(!base || base>UINTPTR_MAX-0x126757 || !qualify(base) ||
+           !executable(base+0x126740,bytes.size()) ||
+           !read(base+0x126740,bytes.data(),bytes.size()) || bytes!=anchor) return false;
+        image=base;entry=base+0x126740;return true;
+    }
+};
+template<class Owner,class Invoke>
+int tglInvokeLeasedVeboxAllocate(const TglVeboxAllocateBinding& binding,Owner& owner,
+    void* child,void* argument1,void* argument2,Invoke invoke) noexcept {
+    static_assert(noexcept(invoke(uintptr_t{},nullptr,nullptr,nullptr)) &&
+        std::is_same_v<decltype(invoke(uintptr_t{},nullptr,nullptr,nullptr)),int>,
+        "native Allocate status ABI");
+    if(!binding.image || binding.image>UINTPTR_MAX-0x126757 ||
+       binding.entry!=binding.image+0x126740 || !child || !argument1 || !argument2 ||
+       !owner.hasPrivateChildImageLease(reinterpret_cast<uintptr_t>(child),binding.image)) return 5;
+    return invoke(binding.entry,child,argument1,argument2);
+}
+
 struct TglVeboxRenderBinding {
     uintptr_t image=0,entry=0;
     inline static constexpr std::array<uint8_t,20> anchor{
