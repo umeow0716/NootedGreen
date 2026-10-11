@@ -8343,6 +8343,16 @@ static void testVpSfcCpuGraph() {
     }
     Lifetime currentLifetime(lifetimeChild,graph,lines,retire,release);
     const auto neverLifetime=[](void*,const auto&) noexcept {assert(false);return 0;};
+    assert(graph.withView(false,[&](void* child) noexcept {
+        return tglWithOwnedVpLifetimeAssemblyEntries(child,currentLifetime,{},
+            [](void* admitted,const auto& lifecycle) noexcept {
+                lifecycle.destroy(admitted);return 0; // Void callback cannot hide a failed retirement.
+            });
+    })==5);
+    assert(currentLifetime.attempts()==1 && currentLifetime.status()==5 &&
+        !currentLifetime.destroyed() && !retirementCalls && !allocationReleases && state.live && avs.live);
+    assert(tglWithOwnedVpLifetimeAssemblyEntries(lifetimeChild,currentLifetime,{},
+        [](void*,const auto&) noexcept {return 0;})==0); // No new attempt: old failure is not replayed.
     assert(tglWithOwnedVpLifetimeAssemblyEntries(lifetimeChild,oldLifetime,{},neverLifetime)==5);
     for(bool deleting:{false,true}) {
         TglOwnedVpEntrySet conflict;

@@ -12102,6 +12102,7 @@ class TglOwnedVpLifetimeContext {
     void* child_;
     uint64_t generation_=0;
     bool valid_=false,busy_=false,reentered_=false,destroyed_=false,deleted_=false;
+    uint64_t attempts_=0;
     int status_=5;
 public:
     TglOwnedVpLifetimeContext(void* child,Graph& graph,Lines& lines,Retire& retire,
@@ -12116,6 +12117,8 @@ public:
     void destroy(bool deleting) noexcept {
         static_assert(noexcept(release_(child_)) &&
             std::is_same_v<decltype(release_(child_)),void>,"owned VP allocation release ABI");
+        if(attempts_==UINT64_MAX) {status_=5;return;}
+        ++attempts_;
         if(busy_) {reentered_=true;status_=5;return;}
         if(!valid_ || deleted_ || graph_.generation()!=generation_ ||
            (destroyed_ && !deleting)) {status_=5;return;}
@@ -12136,6 +12139,7 @@ public:
         status_=reentered_?5:0;
     }
     int status() const noexcept {return status_;}
+    uint64_t attempts() const noexcept {return attempts_;}
     bool destroyed() const noexcept {return destroyed_;}
     bool deleted() const noexcept {return deleted_;}
 };
@@ -12158,13 +12162,17 @@ template<class Lifetime,class Use>
 int tglWithOwnedVpLifetimeAssemblyEntries(void* child,Lifetime& lifetime,
     const TglOwnedVpEntrySet& base,Use use) noexcept {
     if(!child || !lifetime.owns(child) || base.destroy || base.deletingDestroy) return 5;
+    const auto attempts=lifetime.attempts();
+    if(attempts==UINT64_MAX) return 5;
     TglOwnedVpSfcScopedContext<Lifetime> scope(child,lifetime);
     if(!scope.bound()) return 5;
     auto entries=base;
     using Resolve=TglOwnedVpSfcResolve<Lifetime>;
     if(!tglBindOwnedVpLifetimeEntries<Resolve>(child,entries)) return 5;
     static_assert(noexcept(use(child,entries)),"VP lifecycle assembly consumer ABI");
-    return use(child,entries);
+    const int result=use(child,entries);
+    if(result) return result;
+    return lifetime.attempts()!=attempts ? lifetime.status():0;
 }
 
 // Owned VP+30 void callback context. Retirement is an external, fallible
