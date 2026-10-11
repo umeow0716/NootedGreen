@@ -16285,8 +16285,12 @@ public:
         if(!physical || !valid()) return 5;
         return registry_.withLive(ticket,binding_.image,physical,use);
     }
-    // Enter before native request preparation: withFrame alone does not
-    // exclude shells retained by an earlier asynchronous frame.
+    // Enter before EACH native request preparation: withFrame alone does not
+    // exclude shells retained by an earlier asynchronous frame. Factory slot11
+    // is a batch (15a99..15ac5), not one preparation. An outer batch admission
+    // alone cannot protect its second item after the first retains a frame.
+    // Adapter wiring must recheck before every context vtable+28 invocation;
+    // do not recursively acquire this nonreentrant generation gate.
     template<class Use> int withNewRequest(typename Registry::Ticket ticket,
         uintptr_t physical,Use use) noexcept {
         if(!physical || !valid()) return 5;
