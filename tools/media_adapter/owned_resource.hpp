@@ -2052,6 +2052,7 @@ public:
         static_assert(noexcept(use(uintptr_t{})),"execution lease status ABI");
         if(leased_ || admissionError_ || !object) return 5;
         leased_=true;
+        admissionResetAttempted_=false;
         if(!backend.validate(object)) {
             leased_=false;reset();return 5;
         }
@@ -2064,7 +2065,6 @@ public:
                       "admission execution view callback must not throw");
         if(admissionBytesBusy_ || !hasExecutionLease(expected)) return 5;
         admissionBytesBusy_=true;
-        admissionResetAttempted_=false;
         TglLeasedAdmissionExecution view(object);
         const int result=use(view);
         admissionBytesBusy_=false;

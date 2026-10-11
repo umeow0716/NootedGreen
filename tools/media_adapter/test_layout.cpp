@@ -63,7 +63,7 @@ static void testTrackedCpuOwner() {
         assert(owner.initializeLeasedAdmission(address)==5 && backend.initializes==1);
         assert(owner.withExecution([&](uintptr_t actual) noexcept {
             assert(owner.withLeasedAdmissionBytes(actual+1,denied)==5);
-            return owner.withLeasedAdmissionBytes(actual,[&](auto& bytes) noexcept {
+            const int result=owner.withLeasedAdmissionBytes(actual,[&](auto& bytes) noexcept {
                 assert(bytes.data()==backend.bytes.data());
                 assert(owner.withLeasedAdmissionBytes(actual,denied)==5);
                 owner.reset();assert(owner.get()==actual && !backend.destroys);
@@ -81,6 +81,12 @@ static void testTrackedCpuOwner() {
                 assert(backend.initializes==2 && owner.initializeLeasedAdmission(actual)==5);
                 return 31;
             });
+            const auto before=backend.bytes;
+            assert(owner.withLeasedAdmissionBytes(actual,[&](auto&) noexcept {
+                return owner.initializeLeasedAdmission(actual);
+            })==5);
+            assert(backend.initializes==2 && backend.bytes==before);
+            return result;
         })==31);
         assert(owner.withLeasedAdmissionBytes(address,denied)==5);
         backend.status=31;
