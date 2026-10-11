@@ -7648,6 +7648,10 @@ static void testNativeResourceBoundary() {
                                                     struct Allocation:CallbackContext {} allocation;
                                                     struct Mode:CallbackContext {} mode;
                                                     unsigned consumers=0;
+                                                    TglDiIecpInputs packetInput;packetInput.current=&source;packetInput.target=&target;
+                                                    auto packetRead=[](uintptr_t,void*,size_t) noexcept {return false;};
+                                                    auto deniedPacket=[](auto...) noexcept {return false;};
+                                                    auto deniedRegister=[](auto...) noexcept -> int {return 31;};
                                                     const auto r=pool.run(ticket,[&](auto& frame) noexcept {
                                                         assert(frame.surfacesReady() && refs[1]==3 && refs[5]==3);
                                                         // Foreign child must not reach the native consumer or
@@ -7657,10 +7661,23 @@ static void testNativeResourceBoundary() {
                                                             [](auto&,auto&,auto&) noexcept -> TglOwnedVeboxCommandTransactionResult {
                                                                 assert(false);return {};
                                                             }).status==5);
-                                                        return frame.withScopedCommandFrame(roles,0,0,1,2,3,4,
+                                                        auto foreignInput=packetInput;foreignInput.current=&history;
+                                                        assert(frame.withScopedPacketFrame(roles,0,0,1,2,3,4,
+                                                            life,admission,allocation,mode,foreignInput,false,
+                                                            packetRead,deniedPacket,deniedPacket,deniedRegister,deniedPacket,
+                                                            [](auto&,auto&,auto&,auto&) noexcept -> TglOwnedVeboxCommandTransactionResult {
+                                                                assert(false);return {};
+                                                            }).status==5);
+                                                        return frame.withScopedPacketFrame(roles,0,0,1,2,3,4,
                                                             life,admission,allocation,mode,
-                                                            [&](auto&,auto&,auto& leases) noexcept {
+                                                            packetInput,false,packetRead,deniedPacket,deniedPacket,deniedRegister,deniedPacket,
+                                                            [&](auto& packetFrame,auto& sourceLease,auto&,auto& command) noexcept {
                                                                 ++consumers;
+                                                                auto& leases=packetFrame.leases;
+                                                                assert(packetFrame.input.current==&source && packetFrame.input.target==&target);
+                                                                assert(sourceLease.hasSurfaceLease(source));
+                                                                auto same=command.packetLeases(1,2,3,4,source,&target);
+                                                                assert(&same.state==&leases.state && &same.surfaces==&leases.surfaces);
                                                                 auto* p=reinterpret_cast<void*>(1);
                                                                 assert(TglOwnedVeboxScopedContext<Life>::get(p)==&life &&
                                                                     TglOwnedVeboxScopedContext<Admission>::get(p)==&admission &&

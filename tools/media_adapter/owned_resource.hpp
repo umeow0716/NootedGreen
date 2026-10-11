@@ -17680,6 +17680,32 @@ public:
         delete frame_;
     }
     bool surfacesReady() const noexcept {return frame_ && frame_->surfacesReady();}
+    // Build the existing real packet producer view over THIS frame's retained
+    // packet storage. Input must come from qualified native state/resource
+    // gathering; never rebase foreign source/target pointers to make it fit.
+    // Consumer uses command.scratch()/backing().auxiliary().retention() for
+    // the image-bound native transaction, not temporary command storage.
+    template<class Lifetime,class Admission,class Allocation,class Mode,
+        class Read,class SurfaceAdmit,class DiAdmit,class Register,class Control,class Consume>
+    TglOwnedVeboxCommandTransactionResult withScopedPacketFrame(
+        const TglNativeOuterSurfaceRoles& roles,size_t sourceIndex,size_t targetIndex,
+        uintptr_t child,uintptr_t execution,uintptr_t renderHal,uintptr_t sku,
+        Lifetime& lifetime,Admission& admission,Allocation& allocation,Mode& mode,
+        const TglDiIecpInputs& input,bool disableTemporalDenoise,Read read,
+        SurfaceAdmit admitSurface,DiAdmit admitDi,Register registerResource,
+        Control control,Consume consume) noexcept {
+        return withScopedCommandFrame(roles,sourceIndex,targetIndex,child,execution,renderHal,sku,
+            lifetime,admission,allocation,mode,
+            [&](auto& source,auto& target,auto& packets) noexcept -> TglOwnedVeboxCommandTransactionResult {
+                if(input.current!=&packets.source || input.target!=packets.target) return {};
+                TglOwnedVeboxPacketContext<Read,SurfaceAdmit,DiAdmit,Register,Control> packetFrame{
+                    {},packets,input,disableTemporalDenoise,read,admitSurface,admitDi,registerResource,control};
+                static_assert(noexcept(consume(packetFrame,source,target,frame_->command())) &&
+                    std::is_same_v<decltype(consume(packetFrame,source,target,frame_->command())),
+                        TglOwnedVeboxCommandTransactionResult>);
+                return consume(packetFrame,source,target,frame_->command());
+            });
+    }
     // Source/target borrows enclose callback bindings. The consumer installs
     // its producer/VP scopes and runs the existing native transaction while
     // all four auxiliary contexts remain live. Return acquisition evidence
