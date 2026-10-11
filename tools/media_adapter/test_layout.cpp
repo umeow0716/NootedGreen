@@ -8554,6 +8554,8 @@ int main() {
             for(unsigned mode=0;mode<10;++mode) {
                 unsigned stages=0,emissions=0;
                 TglOwnedSfcStateParameters<decltype(stateCpu)>* observedState=nullptr;
+                TglOwnedVpCscCache callbackCsc;
+                TglOwnedSfcCommandParameters callbackCommands;
                 const int result=graph.withPreparedCallbackPass(prepared,
                     0x6000,0x4000,0x2000,reference,&source,&data,
                     [&](void*,const auto&,auto& packet) noexcept -> int {
@@ -8571,8 +8573,20 @@ int main() {
                         uintptr_t stateAddress=0;
                         std::memcpy(&stateAddress,static_cast<uint8_t*>(child)+0x938,8);
                         assert(stateAddress==reinterpret_cast<uintptr_t>(stateCpu.bytes.data()));
-                        graph.reset();assert(stateCpu.live && avsCpu.live);
-                        return mode==6?-17:0;
+                        return tglWithOwnedSfcCscCommands(callbackCommands,callbackCsc,true,3,5,0,
+                            [](uintptr_t,void*,size_t) noexcept {assert(false);return false;},
+                            [](TglCscCoefficients& coefficients,uint32_t from,uint32_t to) noexcept {
+                                assert(from==3 && to==5);coefficients.matrix[0]=7;return true;
+                            },
+                            [&](auto& packet) noexcept -> int {
+                                assert(observedState && observedState->hasParametersLease());
+                                uintptr_t coefficients=0;
+                                std::memcpy(&coefficients,packet.ief.data()+0x28,8);
+                                assert(coefficients && *reinterpret_cast<const float*>(coefficients)==7);
+                                assert(!callbackCsc.reset());
+                                graph.reset();assert(stateCpu.live && avsCpu.live);
+                                return mode==6?-17:0;
+                            });
                     },
                     [&](void* child,SetupEntry setup,SendEntry send) noexcept -> int {
                         escapedSetup=setup;escapedSend=send;callbackChild=child;
@@ -8598,6 +8612,11 @@ int main() {
                 assert(result==(mode==0?0:mode==5?31:mode==6?-17:mode==9?11:5));
                 assert(emissions==(mode==0 || (mode>=5 && mode<=8)?1u:0u));
                 assert(stages==((mode==1 || mode==2)?0u:mode==9?1u:3u));
+                for(size_t offset:{size_t(0x28),size_t(0x30),size_t(0x38)}) {
+                    uintptr_t escaped=1;std::memcpy(&escaped,callbackCommands.ief.data()+offset,8);
+                    assert(!escaped);
+                }
+                assert(callbackCsc.reset());
                 assert(escapedSetup(callbackChild,&source,reinterpret_cast<void*>(0x2000),&data)==5);
                 assert(escapedSend(callbackChild,&data,&command)==5);
             }
