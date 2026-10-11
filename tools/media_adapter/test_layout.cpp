@@ -5213,6 +5213,30 @@ static void testNativeResourceBoundary() {
         fixtureResource=savedResource;
         assert(owner.withSurface([](const auto&){}));
         {
+            struct Info {uint32_t marker=0;};
+            for(uint8_t flag:{uint8_t(0),uint8_t(1),uint8_t(2),uint8_t(3)})
+            for(uint8_t query:{uint8_t(0),uint8_t(1),uint8_t(2),uint8_t(3)})
+            for(int failure:{0,1,2}) {
+                unsigned queries=0,reads=0,bounds=0;
+                uint32_t width=17,height=19;
+                const int status=tglPrepareOwnedStatisticsBoundary<Info>(owner,flag,
+                    [&]() noexcept {++queries;return query;},
+                    [&](const auto& sourceView,Info& info) noexcept {
+                        ++reads;assert(owner.hasSurfaceLease(sourceView));
+                        assert(queries==unsigned(!(flag&1)));info.marker=0x1234;
+                        owner.reset();assert(owner.ensure(key)==5);return failure==1?31:0;
+                    },[&](const Info& info,uint32_t& w,uint32_t& h,bool di) noexcept {
+                        ++bounds;assert(reads==1 && info.marker==0x1234);
+                        assert(di==bool((flag&1)||(query&1)));
+                        w=1920;h=1080;return failure==2?77:0;
+                    },width,height);
+                assert(status==(failure==1?31:failure==2?77:0));
+                assert(reads==1 && bounds==unsigned(failure!=1));
+                assert(width==(failure?17u:1920u) && height==(failure?19u:1080u));
+                assert(owner.withSurface([](const auto&) noexcept {}));
+            }
+        }
+        {
             TglOwnedAllocatedSurface destination(backend);
             assert(!destination.copyFrameMetadataFrom(owner));
             assert(!destination.ensure(key));

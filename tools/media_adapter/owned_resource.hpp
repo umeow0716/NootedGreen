@@ -3996,6 +3996,33 @@ inline int tglSurfaceBoundary(uint32_t format, uint32_t width, uint32_t height,
     return 0;
 }
 
+// ICL1f8557..1f85fc data-stage order. Qualified producers supply their own
+// surface-info ABI; this does not reinterpret an ICL virtual-base object.
+// Keep source backing pinned and publish boundary dimensions only on success.
+template<class Info,class Owner,class QueryDi,class ReadInfo,class Boundary>
+int tglPrepareOwnedStatisticsBoundary(Owner& owner,uint8_t execution13,
+    QueryDi queryDi,ReadInfo readInfo,Boundary boundary,uint32_t& width,uint32_t& height) noexcept {
+    static_assert(noexcept(queryDi()),"statistics DI query ABI");
+    int result=5;
+    const bool leased=owner.withSurface([&](const auto& source) noexcept {
+        if(!owner.hasSurfaceLease(source)) return;
+        const bool di=(execution13&1)!=0 || (queryDi()&1)!=0;
+        Info info{};
+        static_assert(noexcept(readInfo(source,info)) &&
+            std::is_same_v<decltype(readInfo(source,info)),int>,"statistics source-info ABI");
+        result=readInfo(source,info);
+        if(result) return;
+        uint32_t candidateWidth=0,candidateHeight=0;
+        static_assert(noexcept(boundary(info,candidateWidth,candidateHeight,di)) &&
+            std::is_same_v<decltype(boundary(info,candidateWidth,candidateHeight,di)),int>,
+            "statistics boundary ABI");
+        result=boundary(info,candidateWidth,candidateHeight,di);
+        if(!owner.hasSurfaceLease(source)) {result=5;return;}
+        if(!result) {width=candidateWidth;height=candidateHeight;}
+    });
+    return leased?result:5;
+}
+
 struct TglNativeRegistrationBinding {
     uintptr_t context = 0, entry = 0;
     template<class Read, class Qualify, class Executable>
