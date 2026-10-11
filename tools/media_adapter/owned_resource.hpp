@@ -10844,29 +10844,67 @@ int tglRunCapturedFfdiFromReport(std::array<TglOwnedDescriptorOnlySurface,Count>
 }
 // Secondary-only capture: select by actual child680, never new-frame format.
 // report68 is an identity to reconcile with the held secondary owner, not a
-// pointer to dereference. Absent secondary is left to the enclosing frame.
+// pointer to dereference. Absent secondary bypasses slot0 entirely, as native
+// 1f7e59->1f7eba does; continuation receives two null views, not success stub.
 template<class TargetOwner,class Owner,class ChildOwner,class ExecutionOwner,class Read,class Use>
 int tglRunCapturedFfdiSecondaryFromReport(TglOwnedDescriptorOnlySurface& descriptor,
-    TargetOwner& backed,Owner& input,Owner& secondary,ChildOwner& childOwner,
+    TargetOwner* backed,Owner& input,Owner* secondary,ChildOwner& childOwner,
     ExecutionOwner& reportOwner,void* child,uintptr_t report,
     const TglOwnedSurfaceStorage& source,Read read,Use use) noexcept {
+    static_assert(noexcept(use(static_cast<const TglOwnedSurfaceStorage*>(nullptr),
+        static_cast<const TglOwnedSurfaceStorage*>(nullptr))) &&
+        std::is_same_v<decltype(use(static_cast<const TglOwnedSurfaceStorage*>(nullptr),
+        static_cast<const TglOwnedSurfaceStorage*>(nullptr))),int>,"optional FFDi secondary ABI");
     return tglRunCapturedVeboxAllocation(input,childOwner,reportOwner,child,report,source,
         [&](void* currentChild,uintptr_t currentReport,const auto&) noexcept -> int {
             uintptr_t slot=0,secondaryAddress=0;
             const auto address=reinterpret_cast<uintptr_t>(currentChild);
-            if(address>UINTPTR_MAX-0x687 || currentReport>UINTPTR_MAX-0x6f ||
-                !read(address+0x680,&slot,8) || !slot ||
-                !read(currentReport+0x68,&secondaryAddress,8) || !secondaryAddress) return 5;
-            const auto* held=&secondary==&input ? &source : nullptr;
-            return tglWithCapturedOwnedSurfaceRoles(std::array<Owner*,1>{&secondary},
+            if(currentReport>UINTPTR_MAX-0x6f ||
+                !read(currentReport+0x68,&secondaryAddress,8)) return 5;
+            if(!secondaryAddress) return use(static_cast<const TglOwnedSurfaceStorage*>(nullptr),
+                static_cast<const TglOwnedSurfaceStorage*>(nullptr));
+            if(!secondary || address>UINTPTR_MAX-0x687 ||
+                !read(address+0x680,&slot,8) || !slot) return 5;
+            const auto* held=secondary==&input ? &source : nullptr;
+            auto consume=[&](const auto& s,const auto& target) noexcept -> int {return use(&s,&target);};
+            return tglWithCapturedOwnedSurfaceRoles(std::array<Owner*,1>{secondary},
                 std::array<const TglOwnedSurfaceStorage*,1>{held},[&](const auto& views) noexcept -> int {
                     if(reinterpret_cast<uintptr_t>(views[0])!=secondaryAddress) return 5;
                     if(slot==reinterpret_cast<uintptr_t>(descriptor.surfaceBinding()))
-                        return tglWithOwnedDescriptorFfdiSecondary(descriptor,secondary,use,views[0]);
-                    if(slot==reinterpret_cast<uintptr_t>(backed.surfaceBinding()))
-                        return tglWithOwnedBackedFfdiSecondary(backed,secondary,use,views[0]);
+                        return tglWithOwnedDescriptorFfdiSecondary(descriptor,*secondary,consume,views[0]);
+                    if(backed && slot==reinterpret_cast<uintptr_t>(backed->surfaceBinding()))
+                        return tglWithOwnedBackedFfdiSecondary(*backed,*secondary,consume,views[0]);
                     return 5;
                 });
+        });
+}
+// Full FFDi allocation/secondary branch under one captured frame. +b0 false
+// and nonpositive loop counts still reach secondary handling; neither path
+// fabricates allocation success or suppresses the next-stage result.
+template<size_t Count,class TargetOwner,class Owner,class ChildOwner,class ExecutionOwner,
+    class Read,class SfcFormat,class SfcColor,class ParameterKind,class Supports,class Use,class Continue>
+int tglRunCapturedFfdiFrame(std::array<TglOwnedDescriptorOnlySurface,Count>& descriptors,
+    const std::array<TargetOwner*,Count>& backed,Owner& input,Owner* executionSurface,Owner* secondary,
+    ChildOwner& childOwner,ExecutionOwner& reportOwner,void* child,uintptr_t report,
+    const TglOwnedSurfaceStorage& source,Read read,SfcFormat sfcFormat,SfcColor sfcColor,
+    ParameterKind parameterKind,Supports supports,Use use,Continue next,
+    std::array<const TglOwnedSurfaceStorage*,3> captured={}) noexcept {
+    static_assert(Count>0 && Count<=4,"FFDi bounded frame slots");
+    return tglRunCapturedVeboxAllocation(input,childOwner,reportOwner,child,report,source,
+        [&](void* currentChild,uintptr_t currentReport,const auto&) noexcept -> int {
+            TglOwnedVeboxAllocationPolicy policy;
+            const auto address=reinterpret_cast<uintptr_t>(currentChild);
+            if(!tglReadOwnedVeboxAllocationPolicy(policy,address,currentReport,read)) return 5;
+            if(policy.ffdi) {
+                TglVeboxHistoryState history;size_t count=0;
+                if(address>UINTPTR_MAX-0x1b5f || !read(address+0x1b5c,&history.field1b5c,4) ||
+                    !tglOwnedFfdiCountFromHistory(count,history,Count)) return 5;
+                if(count) return tglRunCapturedFfdiFromReport(descriptors,backed,input,executionSurface,
+                    secondary,childOwner,reportOwner,currentChild,currentReport,source,read,
+                    sfcFormat,sfcColor,parameterKind,supports,use,captured);
+            }
+            return tglRunCapturedFfdiSecondaryFromReport(descriptors[0],backed[0],input,secondary,
+                childOwner,reportOwner,currentChild,currentReport,source,read,next);
         });
 }
 template<class Read>

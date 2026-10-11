@@ -6540,12 +6540,13 @@ static void testNativeResourceBoundary() {
                                     unsigned secondaryUses=0;
                                     auto runSecondary=[&]() noexcept {
                                         std::memcpy(child.data()+0x680,&selectedSlot,8);
-                                        return tglRunCapturedFfdiSecondaryFromReport(frameTargets[0],firstBacking,
-                                            owner,destination,childOwner,reportOwner,actualChild,report,source,read,
-                                            [&](const auto& secondaryView,const auto& output) noexcept -> int {
+                                        return tglRunCapturedFfdiSecondaryFromReport(frameTargets[0],&firstBacking,
+                                            owner,&destination,childOwner,reportOwner,actualChild,report,source,read,
+                                            [&](const auto* secondaryView,const auto* output) noexcept -> int {
                                                 ++secondaryUses;
-                                                assert(destination.hasSurfaceLease(secondaryView));
-                                                assert(reinterpret_cast<uintptr_t>(&output)==selectedSlot);
+                                                if(!secondaryView) {assert(!output);return -31;}
+                                                assert(destination.hasSurfaceLease(*secondaryView));
+                                                assert(reinterpret_cast<uintptr_t>(output)==selectedSlot);
                                                 return -29;
                                             });
                                     };
@@ -6561,8 +6562,28 @@ static void testNativeResourceBoundary() {
                                     assert(runSecondary()==5 && secondaryUses==2);
                                     const uintptr_t absentSecondary=0;
                                     std::memcpy(reportBackend.bytes.data()+0x68,&absentSecondary,8);
-                                    assert(runSecondary()==5 && secondaryUses==2);
+                                    selectedSlot=0; // absent branch must not require an existing output
+                                    assert(runSecondary()==-31 && secondaryUses==3);
                                     assert(backingBackend.allocations==2 && !backingBackend.releases);
+                                    unsigned frameUses=0,nextUses=0;
+                                    auto runFrame=[&]() noexcept {
+                                        return tglRunCapturedFfdiFrame(frameTargets,backedTargets,owner,&owner,
+                                            &destination,childOwner,reportOwner,actualChild,report,source,read,
+                                            noSfc,noSfc,noParameter,[](uint32_t) noexcept {return true;},
+                                            [&](const auto&,const auto&,size_t count,uint8_t,uint8_t) noexcept -> int {
+                                                assert(count==2);++frameUses;return -37;
+                                            },[&](const auto* s,const auto* target) noexcept -> int {
+                                                assert(!s && !target);++nextUses;return -41;
+                                            });
+                                    };
+                                    reportBackend.bytes[0xb]=reportBackend.bytes[0xf]=reportBackend.bytes[0x13]=0;
+                                    nativeCount=3;std::memcpy(child.data()+0x1b5c,&nativeCount,4);
+                                    assert(runFrame()==-41 && nextUses==1 && !frameUses);
+                                    reportBackend.bytes[0xf]=1;
+                                    nativeCount=0;std::memcpy(child.data()+0x1b5c,&nativeCount,4);
+                                    assert(runFrame()==-41 && nextUses==2 && !frameUses);
+                                    nativeCount=2;std::memcpy(child.data()+0x1b5c,&nativeCount,4);
+                                    assert(runFrame()==-37 && nextUses==2 && frameUses==1);
                                     return run();
                                 });
                             })==-17);
