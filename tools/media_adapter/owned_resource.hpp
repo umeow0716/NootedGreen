@@ -14287,6 +14287,27 @@ public:
 using TglDarwinVeboxSurfaceFrameStorage=TglNativeVeboxSurfaceFrameStorage<TglDarwinStmmSurfaceApi>;
 #endif
 
+// Join stable native surface owners to the existing captured allocation chain.
+// STMM/statistics stages must use storage.auxiliary() and its SAME retention;
+// the final typed command consumer records acquisition before error unwind.
+template<class Api,class Owner,class ChildOwner,class ExecutionOwner,class Read,
+    class SfcFormat,class SfcColor,class ParameterKind,class Supports,
+    class Rectangle,class Stmm,class Statistics,class Unwind>
+int tglRunNativeVeboxSurfaceFrame(TglNativeVeboxSurfaceFrameStorage<Api>& storage,
+    Owner& input,Owner* executionSurface,Owner* secondary,Owner* previous,
+    ChildOwner& childOwner,ExecutionOwner& reportOwner,void* child,uintptr_t report,
+    const TglOwnedSurfaceStorage& source,Read read,SfcFormat sfcFormat,SfcColor sfcColor,
+    ParameterKind parameterKind,Supports supports,Rectangle rectangle,Stmm stmm,
+    Statistics statistics,Unwind unwind) noexcept {
+    auto keep=[&]() noexcept {return storage.auxiliary().retention()();};
+    if(keep()) return 5;
+    auto prior=storage.capturedFfdnPrior(reinterpret_cast<uintptr_t>(child),read);
+    return tglRunCapturedVeboxSurfaceFrame<true>(storage.ffdiDescriptors(),storage.ffdiBacked(),
+        storage.ffdnDescriptors(),storage.ffdnBacked(),prior,storage.history(),
+        input,executionSurface,secondary,previous,childOwner,reportOwner,child,report,
+        source,read,sfcFormat,sfcColor,parameterKind,supports,rectangle,stmm,statistics,unwind,keep);
+}
+
 // Standalone statistics tail: preceding FFDi/FFDN/STMM scopes remain owned by
 // the caller. Do not allocate those groups again merely to obtain statistics.
 // Synchronous only: the consumer must not submit GPU work without a separate

@@ -7050,6 +7050,18 @@ static void testNativeResourceBoundary() {
                                         TglOwnedVeboxFrameRetention frameRetention;
                                         auto keepFrame=[&]() noexcept {return frameRetention();};
                                         assert(linkedInput.withSurface([&](const auto& current) noexcept {
+                                            TglNativeVeboxSurfaceFrameStorage<FrameStmmApi> ownedFrame(
+                                                TglNativeResourceBinding{},4096,TglNativeBufferFillBinding{});
+                                            ownedFrame.auxiliary().retention().observe(
+                                                TglOwnedVeboxCommandTransactionResult{31,31,true,false});
+                                            auto deniedStage=[](auto&&...) noexcept -> int {assert(false);return 5;};
+                                            assert(tglRunNativeVeboxSurfaceFrame(ownedFrame,linkedInput,
+                                                static_cast<decltype(&linkedInput)>(nullptr),
+                                                static_cast<decltype(&linkedInput)>(nullptr),&previous,
+                                                childOwner,reportOwner,actualChild,report,current,read,
+                                                noSfc,noSfc,noParameter,[](uint32_t) noexcept {return true;},
+                                                deniedStage,deniedStage,deniedStage,
+                                                [](void*,uintptr_t,const auto&) noexcept {assert(false);})==5);
                                             assert(tglRunCapturedVeboxSurfaceFrame<true>(frameTargets,backedTargets,
                                                 descriptorPair,std::array{&targetA,&targetB},targetA,historyShell,
                                                 linkedInput,static_cast<decltype(&linkedInput)>(nullptr),
