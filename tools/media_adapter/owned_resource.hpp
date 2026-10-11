@@ -135,6 +135,21 @@ public:
     }
 };
 struct TglOwnedVpSfcContextDomain {};
+struct TglOwnedVpFactoryContextDomain {};
+struct TglOwnedVpFactoryContext {
+    void* child=nullptr;
+    bool called=false,valid=true;
+    void* create(void*) noexcept {
+        if(called) {valid=false;return nullptr;}
+        called=true;return child;
+    }
+};
+template<class Context> struct TglOwnedVpFactoryCallback {
+    static void* create(void* parent) noexcept {
+        auto* context=TglOwnedScopedContext<Context,TglOwnedVpFactoryContextDomain>::get(parent);
+        return context ? context->create(parent) : nullptr;
+    }
+};
 template<class Context> using TglOwnedVpSfcScopedContext=
     TglOwnedScopedContext<Context,TglOwnedVpSfcContextDomain>;
 template<class Context> struct TglOwnedVpSfcResolve {
@@ -3623,6 +3638,33 @@ public:
             static_assert(noexcept(scope(borrow)),"borrowed VP scope must not throw");
             return scope(borrow);
         });
+    }
+    // Allocate1269ca calls pointer(this), then stores the returned VP at80.
+    // Unlike the prepublished borrow above, let the native consumer publish it.
+    // Caller must enclose the complete initialized VP callback/table lease.
+    // This synchronous bridge detaches before base cleanup/native accounting;
+    // it does not transfer ownership or permit asynchronous VP use.
+    template<class Use>
+    int withLeasedVpFactory(void* parent,void* child,Use use) noexcept {
+        if(!hasPrivateChildLease(reinterpret_cast<uintptr_t>(parent))) return 5;
+        const uintptr_t p=reinterpret_cast<uintptr_t>(parent);
+        const uintptr_t c=reinterpret_cast<uintptr_t>(child);
+        if(!child || p>UINTPTR_MAX-0x1bc0 || c>UINTPTR_MAX-0x9d0 ||
+           (p<c+0x9d0 && c<p+0x1bc0)) return 5;
+        auto* field=static_cast<uint8_t*>(parent)+0x80;
+        uintptr_t previous=0;std::memcpy(&previous,field,8);
+        if(previous) return 5;
+        using Context=TglOwnedVpFactoryContext;
+        Context context{child};
+        TglOwnedScopedContext<Context,TglOwnedVpFactoryContextDomain> scope(parent,context);
+        if(!scope.bound()) return 5;
+        using Callback=TglOwnedVpFactoryCallback<Context>;
+        static_assert(noexcept(use(parent,&Callback::create)),"VP factory consumer ABI");
+        const int result=use(parent,&Callback::create);
+        uintptr_t observed=0;std::memcpy(&observed,field,8);
+        std::memcpy(field,&previous,8);
+        if(result) return result;
+        return context.called && context.valid && observed==c ? 0 : 5;
     }
     template<class VpOwner,class Use>
     int withBorrowedVpCpuView(VpOwner& vp,bool avsEnabled,Use use) noexcept {

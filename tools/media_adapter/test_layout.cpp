@@ -16042,6 +16042,37 @@ int main() {
                     assert(!leasedBorrowCalled);
                     assert(owner.withPrivateChild([&](void* parent) noexcept {
                         return graph.withView(false,[&](void* child) noexcept {
+                            void* (*escapedFactory)(void*) noexcept=nullptr;
+                            for(unsigned factoryCase=0;factoryCase<5;++factoryCase) {
+                                const int factoryResult=owner.withLeasedVpFactory(parent,child,
+                                    [&](void* active,auto factory) noexcept {
+                                        escapedFactory=factory;
+                                        uintptr_t link=0;std::memcpy(&link,cpu.bytes.data()+0x80,8);
+                                        assert(!link && active==parent);
+                                        assert(factory(static_cast<uint8_t*>(parent)+8)==nullptr);
+                                        assert(owner.withLeasedVpFactory(parent,child,
+                                            [](void*,auto) noexcept {assert(false);return 0;})==5);
+                                        if(factoryCase==4) return 0;
+                                        void* created=factory(parent);assert(created==child);
+                                        if(factoryCase==2) assert(factory(parent)==nullptr);
+                                        if(factoryCase!=3) {
+                                            link=reinterpret_cast<uintptr_t>(created);
+                                            std::memcpy(cpu.bytes.data()+0x80,&link,8);
+                                        }
+                                        return factoryCase==1 ? 31 : 0;
+                                    });
+                                assert(factoryResult==(factoryCase==0?0:factoryCase==1?31:5));
+                                uintptr_t link=1;std::memcpy(&link,cpu.bytes.data()+0x80,8);
+                                assert(!link && escapedFactory(parent)==nullptr);
+                            }
+                            auto neverFactory=[](void*,auto) noexcept {assert(false);return 0;};
+                            assert(owner.withLeasedVpFactory(parent,parent,neverFactory)==5);
+                            uintptr_t occupied=0x1234;
+                            std::memcpy(cpu.bytes.data()+0x80,&occupied,8);
+                            assert(owner.withLeasedVpFactory(parent,child,neverFactory)==5);
+                            uintptr_t unchanged=0;std::memcpy(&unchanged,cpu.bytes.data()+0x80,8);
+                            assert(unchanged==occupied);
+                            occupied=0;std::memcpy(cpu.bytes.data()+0x80,&occupied,8);
                             assert(owner.withLeasedBorrowedVpCpuView(static_cast<uint8_t*>(parent)+8,child,
                                 [](void*,void*) noexcept {assert(false);return 0;})==5);
                             return owner.withLeasedBorrowedVpCpuView(parent,child,
