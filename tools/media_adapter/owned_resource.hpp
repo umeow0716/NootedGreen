@@ -8456,6 +8456,18 @@ struct TglVeboxHistoryState {
     uint32_t mode=0,previous1b78=0,previous1b7c=0,radius=0,field1b5c=0;
     uint8_t enabled=0,disabled=0,alternate=0;
 };
+// ICL1f7b30..1f7b48 compares the zero-based FFDi index against signed
+// base1b5c. Consume the existing history producer, not a fixed fixture count.
+// Native nonpositive counts execute no slots; reject positive counts beyond
+// the caller's real owner capacity without changing its output.
+inline bool tglOwnedFfdiCountFromHistory(size_t& output,
+    const TglVeboxHistoryState& state,size_t capacity) noexcept {
+    int32_t nativeCount=0;
+    std::memcpy(&nativeCount,&state.field1b5c,sizeof(nativeCount));
+    const size_t count=nativeCount>0 ? static_cast<size_t>(nativeCount) : 0;
+    if(count>capacity) return false;
+    output=count;return true;
+}
 // Exact mode0 sample publication12c1e2..12c266, separate from180/history
 // mode selection. allocated means +58 actually returned success, not merely
 // an allocation decision. previousId is an owned, leased snapshot, never a

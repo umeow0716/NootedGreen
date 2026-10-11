@@ -850,6 +850,15 @@ static void testTrackedCpuOwner() {
     }
     {
         TglVeboxHistoryState state;
+        size_t ffdiCount=99;
+        for(uint32_t bits : {0u,1u,4u,0x80000000u,0xffffffffu}) {
+            state.field1b5c=bits;
+            assert(tglOwnedFfdiCountFromHistory(ffdiCount,state,4));
+            assert(ffdiCount==(bits<=4 ? bits : 0));
+        }
+        state.field1b5c=5;ffdiCount=99;
+        assert(!tglOwnedFfdiCountFromHistory(ffdiCount,state,4) && ffdiCount==99);
+        state.field1b5c=0;
         state.enabled=1;state.radius=1;state.previous1b78=10;state.previous1b7c=11;
         TglVeboxHistoryFrame frame;frame.id=10;frame.countB4=1;
         assert(tglUpdateVeboxHistory(state,frame,0));
