@@ -6892,13 +6892,14 @@ static void testNativeResourceBoundary() {
                                         assert(backingBackend.allocations==beforeDescriptor);
                                         reportBackend.bytes[0xb]=0;reportBackend.bytes[0x13]=0;
                                         assert(linkedInput.withSurface([&](const auto& current) noexcept {
-                                            assert(tglRunCapturedFfdnFrameTail(descriptorPair,std::array{&targetA,&targetB},targetA,
+                                            assert(tglRunCapturedFfdnFrameTail<true>(descriptorPair,std::array{&targetA,&targetB},targetA,
                                                 linkedInput,static_cast<decltype(&previous)>(nullptr),historyShell,
                                                 childOwner,reportOwner,actualChild,report,current,{false,0},read,
                                                 [](void*,uintptr_t,const auto&,const auto&) noexcept -> int {assert(false);return 5;},
-                                                [](void*,uintptr_t,const auto&,const auto&) noexcept -> int {assert(false);return 5;},
-                                                [&](void*,uintptr_t,const auto&,const auto& views) noexcept -> int {
+                                                [](void*,uintptr_t,const auto&,const auto&,auto) noexcept -> int {assert(false);return 5;},
+                                                [&](void*,uintptr_t,const auto&,const auto& views,const auto& stmmViews) noexcept -> int {
                                                     assert(!views.outputs[0] && !views.outputs[1] && !views.previous && !views.history);
+                                                    assert(!stmmViews.surfaces[0] && !stmmViews.surfaces[1]);
                                                     assert(descriptorPair[0].withDescriptor([](const auto&) noexcept {}));
                                                     return -79;
                                                 })==-79);
@@ -6911,20 +6912,57 @@ static void testNativeResourceBoundary() {
                                         std::array<uintptr_t,2> savedRoles{};
                                         std::memcpy(savedRoles.data(),reportBackend.bytes.data()+0x60,16);
                                         std::memset(reportBackend.bytes.data()+0x60,0,16);
+                                        struct FrameStmmApi {
+                                            std::array<uint8_t,816> bytes{};unsigned references=0;
+                                            uintptr_t surface(uintptr_t handle) noexcept {return handle;}
+                                            bool retain(uintptr_t) noexcept {++references;return true;}
+                                            void release(uintptr_t) noexcept {--references;}
+                                            int lock(uintptr_t) noexcept {return 0;}
+                                            int unlock(uintptr_t) noexcept {return 0;}
+                                            bool view(uintptr_t,TglOwnedStmmView& output) noexcept {
+                                                output={bytes.data(),bytes.size(),36,17,48};return true;
+                                            }
+                                        } stmmApi;
+                                        struct FrameStmmBackend {
+                                            FrameStmmApi& api;
+                                            int allocate(std::array<uint8_t,0x148>& storage,const TglResourceKey& key,uint32_t* width) noexcept {
+                                                const uint32_t type=1,format=0x3d;const uintptr_t handle=1;
+                                                std::memcpy(storage.data()+0x14,&type,4);std::memcpy(storage.data()+0x18,&format,4);
+                                                std::memcpy(storage.data()+0x58,&handle,8);*width=(key.width+3)&~uint32_t{3};++api.references;return 0;
+                                            }
+                                            bool backed(const std::array<uint8_t,0x148>& storage) noexcept {return tglNativeBackingPresent(storage);}
+                                            void release(std::array<uint8_t,0x148>& storage) noexcept {--api.references;storage.fill(0);}
+                                        };
+                                        struct FrameStmmQuarantine {
+                                            bool reserve(uintptr_t) noexcept {return true;}
+                                            void cancel() noexcept {}
+                                            void commit(uintptr_t) noexcept {assert(false);}
+                                        } stmmQuarantine;
+                                        std::array<FrameStmmBackend,2> stmmBackends{FrameStmmBackend{stmmApi},FrameStmmBackend{stmmApi}};
+                                        TglOwnedSurfaceStorage stmmFirst{},stmmSecond{};
+                                        TglOwnedStmmPair<FrameStmmBackend,FrameStmmApi,FrameStmmQuarantine> stmmPair(stmmBackends,
+                                            std::array<TglStmmSurfaceReference,2>{{{stmmFirst},{stmmSecond}}},stmmApi,stmmQuarantine);
+                                        child[0x1ba9]=0;
                                         unsigned combinedUses=0,combinedUnwinds=0;
                                         assert(linkedInput.withSurface([&](const auto& current) noexcept {
-                                            assert(tglRunCapturedVeboxSurfaceFrame(frameTargets,backedTargets,
+                                            assert(tglRunCapturedVeboxSurfaceFrame<true>(frameTargets,backedTargets,
                                                 descriptorPair,std::array{&targetA,&targetB},targetA,historyShell,
                                                 linkedInput,static_cast<decltype(&linkedInput)>(nullptr),
                                                 static_cast<decltype(&linkedInput)>(nullptr),&previous,
                                                 childOwner,reportOwner,actualChild,report,current,read,
                                                 noSfc,noSfc,noParameter,[](uint32_t) noexcept {return true;},
                                                 [](void*,uintptr_t,const auto&,const auto&,const auto&) noexcept -> int {assert(false);return 5;},
-                                                [&](void*,uintptr_t,const auto&,const auto& ffdi,const auto& ffdn) noexcept -> int {
+                                                [&](void* c,uintptr_t e,const auto& surface,const auto& ffdi,const auto& ffdn,auto next) noexcept -> int {
                                                     assert(ffdi.count==2 && ffdn.outputs[0]);
                                                     assert(!frameTargets[0].withDescriptor([](const auto&) noexcept {assert(false);}));
-                                                    assert(targetA.hasSurfaceLease(*ffdn.outputs[0]));return 0;
-                                                },[&](void*,uintptr_t,const auto&,const auto& ffdi,const auto& ffdn) noexcept -> int {
+                                                    assert(targetA.hasSurfaceLease(*ffdn.outputs[0]));
+                                                    return tglRunCapturedStmmSurfacePair(stmmPair,stmmFirst,stmmSecond,
+                                                        linkedInput,childOwner,reportOwner,c,e,surface,read,false,
+                                                        TglOwnedStmmReportPublisher<decltype(reportOwner)>{reportOwner,e},
+                                                        [&](const auto* a,const auto* b) noexcept -> int {
+                                                            return next(TglOwnedStmmTailViews{{a,b}});
+                                                        });
+                                                },[&](void*,uintptr_t,const auto&,const auto& ffdi,const auto& ffdn,const auto& stmm) noexcept -> int {
                                                     assert(ffdi.inputs[0]==&current && ffdi.count==2);
                                                     assert(ffdi.outputs[0]==frameTargets[0].surfaceBinding());
                                                     assert(!frameTargets[1].withDescriptor([](const auto&) noexcept {assert(false);}));
@@ -6932,11 +6970,14 @@ static void testNativeResourceBoundary() {
                                                     assert(ffdn.previous==previous.surfaceBinding() && ffdn.history);
                                                     assert(previous.hasSurfaceLease(*ffdn.previous));
                                                     assert(!historyShell.withDescriptor([](const auto&) noexcept {assert(false);}));
+                                                    assert(stmm.surfaces[0]==&stmmFirst && stmm.surfaces[1]==&stmmSecond);
+                                                    stmmPair.reset();assert(stmmApi.references==2);
                                                     ++combinedUses;return -83;
                                                 },[&](void*,uintptr_t,const auto&) noexcept {
                                                     assert(frameTargets[0].withDescriptor([](const auto&) noexcept {}));
                                                     assert(targetA.withSurface([](const auto&) noexcept {}));
                                                     assert(historyShell.withDescriptor([](const auto&) noexcept {}));
+                                                    assert(!stmmApi.references);
                                                     ++combinedUnwinds;
                                                 })==-83);
                                         }));

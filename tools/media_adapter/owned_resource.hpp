@@ -11262,7 +11262,8 @@ struct TglOwnedFfdnTailViews {
     const TglOwnedSurfaceStorage* previous{};
     const TglOwnedSurfaceStorage* history{};
 };
-template<class TargetOwner,class PriorOwner,class Owner,class ChildOwner,class ExecutionOwner,
+struct TglOwnedStmmTailViews {std::array<const TglOwnedSurfaceStorage*,2> surfaces{};};
+template<bool ScopedStmm=false,class TargetOwner,class PriorOwner,class Owner,class ChildOwner,class ExecutionOwner,
     class Read,class Rectangle,class Stmm,class Statistics>
 int tglRunCapturedFfdnFrameTail(std::array<TglOwnedDescriptorOnlySurface,2>& descriptors,
     const std::array<TargetOwner*,2>& backed,PriorOwner& prior,Owner& input,Owner* previous,
@@ -11292,8 +11293,35 @@ int tglRunCapturedFfdnFrameTail(std::array<TglOwnedDescriptorOnlySurface,2>& des
                 if(status) return status;
                 if(value.pipe==2 && (status=stage(rectangle))) return status;
                 if((status=policy(value))) return status;
-                if(value.stmm && (status=stage(stmm))) return status;
-                return stage(statistics);
+                if constexpr(ScopedStmm) {
+                    auto finish=[&](const TglOwnedStmmTailViews& historyViews) noexcept -> int {
+                        return tglRunCapturedVeboxAllocation(input,childOwner,reportOwner,c,e,s,
+                            [&](void* active,uintptr_t execution,const auto& surface) noexcept -> int {
+                                static_assert(noexcept(statistics(active,execution,surface,views,historyViews)) &&
+                                    std::is_same_v<decltype(statistics(active,execution,surface,views,historyViews)),int>,
+                                    "STMM pinned statistics ABI");
+                                return statistics(active,execution,surface,views,historyViews);
+                            });
+                    };
+                    if(!value.stmm) return finish({});
+                    bool entered=false;int downstream=5;
+                    auto next=[&](const TglOwnedStmmTailViews& historyViews) noexcept -> int {
+                        if(entered) {downstream=5;return 5;}
+                        entered=true;downstream=finish(historyViews);return downstream;
+                    };
+                    auto scoped=[&](void* active,uintptr_t execution,const auto& surface,const auto& ffdn) noexcept -> int {
+                        static_assert(noexcept(stmm(active,execution,surface,ffdn,next)) &&
+                            std::is_same_v<decltype(stmm(active,execution,surface,ffdn,next)),int>,
+                            "scoped STMM stage ABI");
+                        return stmm(active,execution,surface,ffdn,next);
+                    };
+                    status=stage(scoped);
+                    if(!status && (!entered || downstream)) return entered?downstream:5;
+                    return status;
+                } else {
+                    if(value.stmm && (status=stage(stmm))) return status;
+                    return stage(statistics);
+                }
             };
             TglOwnedVeboxAllocationPolicy value;
             if(!tglReadOwnedVeboxAllocationPolicy(value,reinterpret_cast<uintptr_t>(c),e,read)) return 5;
@@ -11315,7 +11343,7 @@ struct TglOwnedFfdiTailViews {
 // Actual surface allocation composition, not sequential callbacks with escaped
 // views. The downstream stages execute inside both real pair scopes. This is
 // synchronous ownership only: no submit/completion lifetime is implied.
-template<size_t Count,class TargetOwner,class PriorOwner,class Owner,class ChildOwner,class ExecutionOwner,
+template<bool ScopedStmm=false,size_t Count,class TargetOwner,class PriorOwner,class Owner,class ChildOwner,class ExecutionOwner,
     class Read,class SfcFormat,class SfcColor,class ParameterKind,class Supports,
     class Rectangle,class Stmm,class Statistics,class Unwind=TglOwnedVeboxFrameNoUnwind>
 int tglRunCapturedVeboxSurfaceFrame(std::array<TglOwnedDescriptorOnlySurface,Count>& ffdiDescriptors,
@@ -11339,7 +11367,22 @@ int tglRunCapturedVeboxSurfaceFrame(std::array<TglOwnedDescriptorOnlySurface,Cou
                         return invoke(active,execution,surface,ffdi,ffdn);
                     };
                 };
-                return tglRunCapturedFfdnFrameTail(ffdnDescriptors,ffdnBacked,prior,input,previous,history,
+                if constexpr(ScopedStmm) {
+                    auto scopedStmm=[&](void* active,uintptr_t execution,const auto& surface,const auto& ffdn,auto continuation) noexcept -> int {
+                        static_assert(noexcept(stmm(active,execution,surface,ffdi,ffdn,continuation)) &&
+                            std::is_same_v<decltype(stmm(active,execution,surface,ffdi,ffdn,continuation)),int>,
+                            "scoped STMM frame consumer ABI");
+                        return stmm(active,execution,surface,ffdi,ffdn,continuation);
+                    };
+                    auto scopedStatistics=[&](void* active,uintptr_t execution,const auto& surface,const auto& ffdn,const auto& stmmViews) noexcept -> int {
+                        static_assert(noexcept(statistics(active,execution,surface,ffdi,ffdn,stmmViews)) &&
+                            std::is_same_v<decltype(statistics(active,execution,surface,ffdi,ffdn,stmmViews)),int>,
+                            "scoped statistics frame consumer ABI");
+                        return statistics(active,execution,surface,ffdi,ffdn,stmmViews);
+                    };
+                    return tglRunCapturedFfdnFrameTail<true>(ffdnDescriptors,ffdnBacked,prior,input,previous,history,
+                        childOwner,reportOwner,c,e,s,selection,read,bind(rectangle),scopedStmm,scopedStatistics);
+                } else return tglRunCapturedFfdnFrameTail(ffdnDescriptors,ffdnBacked,prior,input,previous,history,
                     childOwner,reportOwner,c,e,s,selection,read,bind(rectangle),bind(stmm),bind(statistics));
             };
             const int status=tglRunCapturedFfdiFrame(ffdiDescriptors,ffdiBacked,input,executionSurface,secondary,
