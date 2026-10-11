@@ -6026,6 +6026,24 @@ bool tglSelectOwnedVpOutputPipe(TglOwnedVpSfcCallerStorage& vp,Read& read,Policy
         })==0;
 }
 
+// Adapter for the selected admission stage's (pass08)->DWORD ABI. Failure
+// must remain outside pipe0..2, not masquerade as composition fallback.
+// References are borrowed from the enclosing leased admission frame.
+template<class Read,class Policy> class TglOwnedVpPipeSelector {
+    TglOwnedVpSfcCallerStorage& vp_;
+    Read& read_;Policy& policy_;
+    void* source_;void* target_;void* parameters_;
+public:
+    TglOwnedVpPipeSelector(TglOwnedVpSfcCallerStorage& vp,Read& read,Policy& policy,
+        void* source,void* target,void* parameters) noexcept:
+        vp_(vp),read_(read),policy_(policy),source_(source),target_(target),parameters_(parameters){}
+    uint32_t operator()(uint8_t& compNeeded) const noexcept {
+        uint32_t pipe=UINT32_MAX;
+        return tglSelectOwnedVpOutputPipe(vp_,read_,policy_,source_,target_,parameters_,
+            compNeeded,pipe)?pipe:UINT32_MAX;
+    }
+};
+
 // Bounded slot28 geometry acquisition. Read authorizes every surface/MHW
 // span under leases held through the caller's complete preparation/use scope.
 template<class Read>

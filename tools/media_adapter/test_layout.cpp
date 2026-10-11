@@ -7681,6 +7681,37 @@ int main() {
         assert(select() && pipe==0 && comp==1 && reads==before);
         pipePolicy.ok=false;comp=0x80;pipe=99;
         assert(!select() && comp==0x80 && pipe==99 && reads==before);
+        TglOwnedVpPipeSelector selected(vp,read,pipePolicy,reinterpret_cast<void*>(0x1000),
+            reinterpret_cast<void*>(0x2000),reinterpret_cast<void*>(0x3000));
+        assert(selected(comp)==UINT32_MAX && comp==0x80);
+        TglVeboxAdmissionStagesInput stage;
+        stage.prefix={true,true,true,true,1,uint64_t{1}<<12,64,16};
+        stage.params10c=17;
+        std::array<uint8_t,0xd48> execution{};TglVeboxAdmissionPassByte pass(comp);
+        unsigned resets=0,setups=0,sfcCalls=0;
+        auto reset=[&]() noexcept {++resets;execution.fill(0);return true;};
+        auto setup=[&](auto& bytes) noexcept {
+            ++setups;uint32_t mode=0;std::memcpy(&mode,bytes.data()+0xa0c,4);
+            assert(mode==1 && comp==0); // selected pipe published before setup
+        };
+        auto query=[]() noexcept {return false;};
+        auto feature=[](auto&) noexcept {assert(false);};
+        auto prepare=[&](auto& bytes) noexcept {
+            ++sfcCalls;uint32_t history=0;std::memcpy(&history,bytes.data()+0xd28,4);
+            assert(history==17);return true; // sequencing only, not GPU work
+        };
+        assert(!tglRunSelectedVeboxAdmissionStages(stage,execution,pass,reset,selected,
+            setup,query,feature,prepare) && resets==1 && !setups && !sfcCalls);
+        pipePolicy.ok=true;pipePolicy.tone=false;
+        assert(tglRunSelectedVeboxAdmissionStages(stage,execution,pass,reset,selected,
+            setup,query,feature,prepare) && resets==2 && setups==1 && sfcCalls==1);
+        settings[0x90]=0;
+        auto compositionSetup=[&](auto& bytes) noexcept {
+            ++setups;uint32_t mode=99;std::memcpy(&mode,bytes.data()+0xa0c,4);
+            assert(mode==0 && comp==1);
+        };
+        assert(!tglRunSelectedVeboxAdmissionStages(stage,execution,pass,reset,selected,
+            compositionSetup,query,feature,prepare) && sfcCalls==1);
     }
     {
         TglOwnedVpRegionInput in;
