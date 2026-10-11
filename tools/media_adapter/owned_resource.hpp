@@ -5950,6 +5950,42 @@ inline bool tglUpdateVeboxHistory(TglVeboxHistoryState& state,
     }
     state=next;return true;
 }
+// Caller holds surface/history owners throughout this synchronous CPU stage.
+// Native links must equal the provided owned shells; never follow opaque C0/C8.
+template<class Owner,size_t N>
+bool tglUpdateOwnedVeboxHistory(Owner& owner,void* child,
+    std::array<uint8_t,N>& history,const TglOwnedSurfaceStorage& source,
+    const TglOwnedSurfaceStorage* c0,const TglOwnedSurfaceStorage* c8,
+    uint32_t pipe) noexcept {
+    static_assert(N>=11,"native history flags through +a");
+    if(!child || !owner.hasPrivateChildLease(reinterpret_cast<uintptr_t>(child))) return false;
+    auto* base=static_cast<uint8_t*>(child);
+    uintptr_t linked=0,p0=0,p8=0;
+    std::memcpy(&linked,base+0x90,8);
+    if(linked!=reinterpret_cast<uintptr_t>(history.data())) return false;
+    std::memcpy(&p0,source.prefix.data()+0xc0,8);
+    std::memcpy(&p8,source.prefix.data()+0xc8,8);
+    if(p0!=reinterpret_cast<uintptr_t>(c0) || p8!=reinterpret_cast<uintptr_t>(c8)) return false;
+    TglVeboxHistoryState state;
+    state.enabled=history[0];state.disabled=history[0xa];state.alternate=history[8];
+    std::memcpy(&state.mode,history.data()+4,4);
+    std::memcpy(&state.radius,base+0x1a8,4);
+    std::memcpy(&state.previous1b78,base+0x1b78,4);
+    std::memcpy(&state.previous1b7c,base+0x1b7c,4);
+    std::memcpy(&state.field1b5c,base+0x1b5c,4);
+    TglVeboxHistoryFrame frame;uint32_t id0=0,id8=0;
+    std::memcpy(&frame.id,source.prefix.data()+0xb0,4);
+    std::memcpy(&frame.countB4,source.prefix.data()+0xb4,4);
+    std::memcpy(&frame.countB8,source.prefix.data()+0xb8,4);
+    uintptr_t feature=0;std::memcpy(&feature,source.prefix.data()+0x88,8);
+    frame.has88=feature!=0;
+    if(c0) { std::memcpy(&id0,c0->prefix.data()+0xb0,4);frame.linkedC0=&id0; }
+    if(c8) { std::memcpy(&id8,c8->prefix.data()+0xb0,4);frame.linkedC8=&id8; }
+    if(!tglUpdateVeboxHistory(state,frame,pipe)) return false;
+    std::memcpy(history.data()+4,&state.mode,4);history[8]=state.alternate;
+    std::memcpy(base+0x1b5c,&state.field1b5c,4);
+    return true;
+}
 enum class TglVeboxAdmissionPrefixResult : uint8_t {
     MissingDependencies, CompositionFallback, Continue
 };

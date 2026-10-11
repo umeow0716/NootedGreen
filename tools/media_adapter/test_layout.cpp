@@ -31,6 +31,37 @@ struct TestVpCpuView {
 
 static void testTrackedCpuOwner() {
     {
+        std::array<uint8_t,0x1bc0> base{};
+        std::array<uint8_t,16> history{};history[0]=1;history[15]=0xa5;
+        TglOwnedSurfaceStorage source{},linked{};
+        struct Owner {
+            uintptr_t child;bool live=false;
+            bool hasPrivateChildLease(uintptr_t p) const noexcept {return live && p==child;}
+        } owner{reinterpret_cast<uintptr_t>(base.data())};
+        uintptr_t historyPointer=reinterpret_cast<uintptr_t>(history.data());
+        std::memcpy(base.data()+0x90,&historyPointer,8);
+        uint32_t count=1;std::memcpy(source.prefix.data()+0xb4,&count,4);
+        const auto originalBase=base;const auto originalHistory=history;
+        assert(!tglUpdateOwnedVeboxHistory(owner,base.data(),history,source,nullptr,nullptr,0));
+        assert(base==originalBase && history==originalHistory);
+        owner.live=true;
+        assert(!tglUpdateOwnedVeboxHistory(owner,base.data(),history,source,&linked,nullptr,0));
+        assert(base==originalBase && history==originalHistory);
+        assert(tglUpdateOwnedVeboxHistory(owner,base.data(),history,source,nullptr,nullptr,0));
+        uint32_t mode=0,field=0;std::memcpy(&mode,history.data()+4,4);
+        std::memcpy(&field,base.data()+0x1b5c,4);
+        assert(mode==1 && field==4 && history[15]==0xa5);
+        const auto beforeBase=base;const auto beforeHistory=history;
+        assert(!tglUpdateOwnedVeboxHistory(owner,base.data(),history,source,nullptr,nullptr,0));
+        assert(base==beforeBase && history==beforeHistory);
+        uintptr_t p=reinterpret_cast<uintptr_t>(&linked);
+        std::memcpy(source.prefix.data()+0xc0,&p,8);
+        assert(tglUpdateOwnedVeboxHistory(owner,base.data(),history,source,&linked,nullptr,0));
+        std::memcpy(&mode,history.data()+4,4);assert(mode==0);
+        ++historyPointer;std::memcpy(base.data()+0x90,&historyPointer,8);
+        assert(!tglUpdateOwnedVeboxHistory(owner,base.data(),history,source,&linked,nullptr,0));
+    }
+    {
         TglVeboxHistoryState state;
         state.enabled=1;state.radius=1;state.previous1b78=10;state.previous1b7c=11;
         TglVeboxHistoryFrame frame;frame.id=10;frame.countB4=1;
