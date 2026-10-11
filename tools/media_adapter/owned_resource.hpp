@@ -4655,6 +4655,29 @@ public:
     bool publishFfdnFrame(const TglOwnedSurfaceStorage& input) noexcept {
         return ready_ && !busy_ && tglPrepareOwnedFfdnFrameMetadata(storage_,input);
     }
+    // Native execution60->FFDI1a0 is a borrowed IOSurface/resource58, not
+    // a separately owned resource. Require the complete actual type1 source
+    // owner lease (including its token list), publish only during this call,
+    // and detach before the caller can release that source owner.
+    template<class SourceOwner,class Use>
+    bool withBorrowedExecutionHandle(SourceOwner& owner,const TglOwnedSurfaceStorage& source,
+        Use use) noexcept {
+        static_assert(noexcept(use(std::declval<const TglOwnedSurfaceStorage&>())) &&
+            std::is_same_v<decltype(use(std::declval<const TglOwnedSurfaceStorage&>())),void>,
+            "borrowed execution handle ABI");
+        if(!ready_ || busy_ || !owner.hasSurfaceLease(source)) return false;
+        uint32_t type=0;uintptr_t pointer=0,existing=0;
+        std::memcpy(&type,source.resource.data()+0x14,4);
+        std::memcpy(&pointer,source.resource.data()+0x58,8);
+        std::memcpy(&existing,storage_.resource.data()+0x58,8);
+        if(type!=1 || !pointer || existing || !tglNativeBackingPresent(source.resource)) return false;
+        busy_=true;
+        struct Restore {uint8_t* slot;bool& busy;
+            ~Restore(){std::memset(slot,0,8);busy=false;}} restore{storage_.resource.data()+0x58,busy_};
+        std::memcpy(storage_.resource.data()+0x58,&pointer,8);
+        use(static_cast<const TglOwnedSurfaceStorage&>(storage_));
+        return owner.hasSurfaceLease(source);
+    }
     template<class Use> bool withDescriptor(Use use) noexcept {
         static_assert(noexcept(use(std::declval<const TglOwnedSurfaceStorage&>())) &&
             std::is_same_v<decltype(use(std::declval<const TglOwnedSurfaceStorage&>())),void>,
@@ -5045,7 +5068,8 @@ int tglWithAllocatedOwnedFfdiBatch(Owner& input,Owner* execution,Owner* secondar
 
 // Concrete descriptor-only FFDI target assembly. Keep every output descriptor
 // leased through the final consumer, alongside the existing input role leases.
-// Does not bind borrowed handle1a0, submit commands, or authenticate a fence.
+// A nonnull execution role must be a leased type1 source; its handle1a0 is
+// borrowed only through the final consumer. No submission/fence is implied.
 template<size_t Count,class Owner,class Use>
 int tglWithOwnedDescriptorFfdiBatch(std::array<TglOwnedDescriptorOnlySurface,Count>& targets,
     Owner& input,Owner* execution,Owner* secondary,size_t count,uint32_t format,uint32_t tile,
@@ -5067,9 +5091,12 @@ int tglWithOwnedDescriptorFfdiBatch(std::array<TglOwnedDescriptorOnlySurface,Cou
             const auto enter=[&](auto&& self,size_t index) noexcept -> int {
                 if(index==active) return use(inputs,static_cast<const Outputs&>(outputs),active,currentFlag,currentMode);
                 int result=5;
-                const bool leased=targets[index].withDescriptor([&](const auto& descriptor) noexcept {
+                const auto consume=[&](const auto& descriptor) noexcept {
                     outputs[index]=&descriptor;result=self(self,index+1);outputs[index]=nullptr;
-                });
+                };
+                const bool leased=inputs[1]
+                    ?targets[index].withBorrowedExecutionHandle(*execution,*inputs[1],consume)
+                    :targets[index].withDescriptor(consume);
                 return leased?result:5;
             };
             return enter(enter,0);

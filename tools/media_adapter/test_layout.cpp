@@ -5091,6 +5091,30 @@ static void testNativeResourceBoundary() {
         assert(!owner.surface() && !owner.ensure(key,&changed) && changed);
         const auto* surface=owner.surface();assert(surface);
         const auto originalSurface=*surface;
+        {
+            TglOwnedDescriptorOnlySurface descriptor;
+            TglOwnedFfdiAllocationRequest request;
+            assert(tglPrepareOwnedFfdiAllocationRequest(*surface,0x19,1,{},request));
+            bool descriptorChanged=false;assert(descriptor.prepare(request,descriptorChanged));
+            assert(!descriptor.withBorrowedExecutionHandle(owner,*surface,
+                [](const auto&) noexcept {assert(false);}));
+            assert(owner.withSurface([&](const auto& actual) noexcept {
+                assert(descriptor.withBorrowedExecutionHandle(owner,actual,[&](const auto& borrowed) noexcept {
+                    uintptr_t sourceHandle=0,targetHandle=0;
+                    std::memcpy(&sourceHandle,actual.resource.data()+0x58,8);
+                    std::memcpy(&targetHandle,borrowed.resource.data()+0x58,8);
+                    assert(sourceHandle && sourceHandle==targetHandle && tglNativeBackingPresent(borrowed.resource));
+                    owner.reset();descriptor.reset();assert(owner.ensure(key)==5);
+                    assert(!descriptor.withDescriptor([](const auto&) noexcept {assert(false);}));
+                    assert(!descriptor.withBorrowedExecutionHandle(owner,actual,
+                        [](const auto&) noexcept {assert(false);}));
+                }));
+            }));
+            assert(descriptor.withDescriptor([](const auto& detached) noexcept {
+                assert(!tglNativeBackingPresent(detached.resource));
+            }));
+            assert(owner.surface()==surface && surface->resource==originalSurface.resource);
+        }
         assert(owner.copyFrameMetadata(source));
         for(size_t i=0;i<surface->prefix.size();++i) {
             const bool copied=i<4 || (i>=0x30 && i<0x60) || (i>=0x138 && i<0x13c);
@@ -5487,7 +5511,7 @@ static void testNativeResourceBoundary() {
                         ++consumers;assert(inputs[0]==surface && inputs[1]==surface && inputs[2]==destinationSurface);
                         assert(count==2 && flag==1 && mode==1 && outputs[0] && outputs[1] && !outputs[2]);
                         for(size_t index=0;index<count;++index) {
-                            assert(!tglNativeBackingPresent(outputs[index]->resource));
+                            assert(tglNativeBackingPresent(outputs[index]->resource)); // borrowed under complete source lease
                             targets[index].reset();bool changed=false;
                             TglOwnedFfdiAllocationRequest request;
                             assert(tglPrepareOwnedFfdiAllocationRequest(*surface,0x19,1,{},request));
@@ -5497,8 +5521,12 @@ static void testNativeResourceBoundary() {
                         assert(owner.ensure(key)==5 && destination.ensure(key)==5);
                         return 31;
                     })==31 && consumers==1);
-                assert(targets[0].withDescriptor([](const auto&) noexcept {}));
-                assert(targets[1].withDescriptor([](const auto&) noexcept {}));
+                assert(targets[0].withDescriptor([](const auto& view) noexcept {
+                    assert(!tglNativeBackingPresent(view.resource));
+                }));
+                assert(targets[1].withDescriptor([](const auto& view) noexcept {
+                    assert(!tglNativeBackingPresent(view.resource));
+                }));
                 assert(targets[1].withDescriptor([&](const auto&) noexcept {
                     assert(tglWithOwnedDescriptorFfdiBatch(targets,owner,&owner,&destination,
                         2,0x19,1,{true,1},{8,3},0,0,
