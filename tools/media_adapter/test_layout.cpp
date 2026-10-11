@@ -6967,6 +6967,29 @@ static void testNativeResourceBoundary() {
                                         TglOwnedStmmPair<FrameStmmBackend,FrameStmmApi,FrameStmmQuarantine> stmmPair(stmmBackends,
                                             std::array<TglStmmSurfaceReference,2>{{{stmmFirst},{stmmSecond}}},stmmApi,stmmQuarantine);
                                         child[0x1ba9]=0;
+                                        struct FrameStatisticsFixture {
+                                            unsigned allocations=0,fills=0,releases=0;
+                                            static int allocate(void* context,const void* params,void* output) noexcept {
+                                                ++static_cast<FrameStatisticsFixture*>(context)->allocations;
+                                                uint32_t bytes=0;std::memcpy(&bytes,static_cast<const uint8_t*>(params)+0x14,4);
+                                                auto* storage=static_cast<uint8_t*>(output);
+                                                const uintptr_t token=7,mapping=0x4000;
+                                                std::memcpy(storage+0x10,&bytes,4);std::memcpy(storage+0x20,&token,8);
+                                                std::memcpy(storage+0x50,&mapping,8);return 0;
+                                            }
+                                            static void release(void* context,void*) noexcept {
+                                                ++static_cast<FrameStatisticsFixture*>(context)->releases;
+                                            }
+                                            static int fill(uintptr_t context,void* descriptor,uint32_t bytes,uint8_t value) {
+                                                ++reinterpret_cast<FrameStatisticsFixture*>(context)->fills;
+                                                assert(bytes && value==0);static_cast<uint8_t*>(descriptor)[0x48]=1;return 0;
+                                            }
+                                        } statisticsFixture;
+                                        TglNativeResourceBackend statisticsBackend(&statisticsFixture,
+                                            FrameStatisticsFixture::allocate,FrameStatisticsFixture::release,0,4096);
+                                        TglStatisticsResource<TglNativeResourceBackend> frameStatistics(statisticsBackend);
+                                        TglNativeBufferFillBinding statisticsFill{reinterpret_cast<uintptr_t>(&statisticsFixture),
+                                            reinterpret_cast<uintptr_t>(FrameStatisticsFixture::fill)};
                                         unsigned combinedUses=0,combinedUnwinds=0;
                                         assert(linkedInput.withSurface([&](const auto& current) noexcept {
                                             assert(tglRunCapturedVeboxSurfaceFrame<true>(frameTargets,backedTargets,
@@ -6986,7 +7009,11 @@ static void testNativeResourceBoundary() {
                                                         [&](const auto* a,const auto* b) noexcept -> int {
                                                             return next(TglOwnedStmmTailViews{{a,b}});
                                                         });
-                                                },[&](void*,uintptr_t,const auto&,const auto& ffdi,const auto& ffdn,const auto& stmm) noexcept -> int {
+                                                },tglMakeCapturedStatisticsFrameTail(frameStatistics,linkedInput,childOwner,reportOwner,
+                                                    read,false,statisticsFill,[](uintptr_t address,uint32_t bytes) noexcept {
+                                                        return address==0x4000 && bytes>0;
+                                                    },[&](void*,uintptr_t,const auto&,const auto& ffdi,const auto& ffdn,const auto& stmm,
+                                                        const auto& statisticsStorage,const auto& statisticsLayout) noexcept -> int {
                                                     assert(ffdi.inputs[0]==&current && ffdi.count==2);
                                                     assert(ffdi.outputs[0]==frameTargets[0].surfaceBinding());
                                                     assert(!frameTargets[1].withDescriptor([](const auto&) noexcept {assert(false);}));
@@ -6996,16 +7023,23 @@ static void testNativeResourceBoundary() {
                                                     assert(!historyShell.withDescriptor([](const auto&) noexcept {assert(false);}));
                                                     assert(stmm.surfaces[0]==&stmmFirst && stmm.surfaces[1]==&stmmSecond);
                                                     stmmPair.reset();assert(stmmApi.references==2);
+                                                    assert(statisticsStorage[0x48]==1 && statisticsLayout.bytes>0);
+                                                    frameStatistics.reset();assert(!statisticsFixture.releases);
+                                                    uint32_t publishedRow=0;
+                                                    std::memcpy(&publishedRow,child.data()+0x1114,4);
+                                                    assert(publishedRow==statisticsLayout.rowBytes);
                                                     ++combinedUses;return -83;
-                                                },[&](void*,uintptr_t,const auto&) noexcept {
+                                                }),[&](void*,uintptr_t,const auto&) noexcept {
                                                     assert(frameTargets[0].withDescriptor([](const auto&) noexcept {}));
                                                     assert(targetA.withSurface([](const auto&) noexcept {}));
                                                     assert(historyShell.withDescriptor([](const auto&) noexcept {}));
                                                     assert(!stmmApi.references);
+                                                    assert(!frameStatistics.layout().bytes && statisticsFixture.releases==1);
                                                     ++combinedUnwinds;
                                                 })==-83);
                                         }));
                                         assert(combinedUses==1 && combinedUnwinds==1);
+                                        assert(statisticsFixture.allocations==1 && statisticsFixture.fills==1);
                                         std::memcpy(reportBackend.bytes.data()+0x60,savedRoles.data(),16);
                                         std::memcpy(reportBackend.bytes.data()+0xa0c,&savedTailPipe,4);
                                         std::memcpy(child.data()+0x1b0,&sourcePointer,8);

@@ -14018,6 +14018,30 @@ int tglRunCapturedStatisticsFrame(TglStatisticsResource<TglNativeResourceBackend
     return status;
 }
 
+// Direct final-stage binding for tglRunCapturedVeboxSurfaceFrame<true>.
+// Retains the existing surface views by nesting, not by copying resource tokens.
+template<class SourceOwner,class ChildOwner,class ExecutionOwner,class Read,
+    class Writable,class Consume>
+auto tglMakeCapturedStatisticsFrameTail(TglStatisticsResource<TglNativeResourceBackend>& statistics,
+    SourceOwner& sourceOwner,ChildOwner& childOwner,ExecutionOwner& executionOwner,
+    Read read,bool alignDi64,TglNativeBufferFillBinding binding,Writable writable,Consume consume) noexcept {
+    return [&statistics,&sourceOwner,&childOwner,&executionOwner,read,alignDi64,binding,writable,consume]
+        (void* child,uintptr_t execution,const TglOwnedSurfaceStorage& source,
+         const TglOwnedFfdiTailViews& ffdi,const TglOwnedFfdnTailViews& ffdn,
+         const TglOwnedStmmTailViews& stmm) noexcept -> int {
+        return tglRunCapturedStatisticsFrame(statistics,sourceOwner,childOwner,executionOwner,
+            child,execution,source,read,alignDi64,binding,writable,
+            [&](const auto&,const TglStatisticsAllocation& layout) noexcept -> int {
+                return tglPublishOwnedStatisticsLayout(childOwner,child,layout);
+            },[&](const auto& storage,const auto& layout) noexcept -> int {
+                static_assert(noexcept(consume(child,execution,source,ffdi,ffdn,stmm,storage,layout)) &&
+                    std::is_same_v<decltype(consume(child,execution,source,ffdi,ffdn,stmm,storage,layout)),int>,
+                    "statistics surface-frame consumer ABI");
+                return consume(child,execution,source,ffdi,ffdn,stmm,storage,layout);
+            });
+    };
+}
+
 // Allocation transaction for a history-enabled frame. The qualified platform
 // planner supplies resource keys and statistics boundary dimensions; this does
 // not infer feature admission or SFC resources. All three owners outlive this
