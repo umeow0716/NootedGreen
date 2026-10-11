@@ -5731,6 +5731,7 @@ int tglWithOwnedBackedFfdiBatch(const std::array<TargetOwner*,Count>& targets,
     });
 }
 // Allocation-disabled 1f7b06 -> 1f7e52 edge for an existing descriptor slot0.
+// Also reached when signed base1b5c is nonpositive (1f7b48 ->1f7e50).
 // Pin the secondary and destination through the synchronous next stage;
 // do not call prepare, copy the primary frame, or invent execution flags.
 template<class Owner,class Use>
