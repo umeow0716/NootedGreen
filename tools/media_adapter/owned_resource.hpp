@@ -1644,6 +1644,14 @@ struct TglNativeOuterSurfaceRoles {
 // Exact TGL226e6 forwards wrapper+10/index to FinishFenceEvent. This exposes
 // its real IOReturn (OS64df0 discards it), NOT a completion certificate: reset
 // and termination can satisfy the kernel predicate without successful work.
+// Producer lineage:235dca..235dff obtains an index from physical+50 via22604
+// and stores wrapper/index in OS+15b8/+10 BEFORE renderer virtual+10 executes.
+// Only after that renderer returns0 does235e49..235e50 publish index to the
+// original output event+4. Thus OS fields alone are not a submitted-frame
+// receipt; retain the exact output event and publish its association only after
+// successful native frame return. Slot12 consumes event+4 at15b79, but can
+// return aggregate0 even for a failed item. The optional physical+60 path also
+// uses OS+9838/+8290; do not confuse that index with the final +50 output index.
 struct TglNativeVideoFenceWaitBinding {
     uintptr_t image=0,entry=0;
     inline static constexpr std::array<uint8_t,26> anchor{
