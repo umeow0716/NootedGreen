@@ -17890,8 +17890,27 @@ int main() {
                     void* published=owner.constructedBase();
                     const auto generation=owner.allocationGeneration();
                     const auto beforeEvents=eventCount;
+                    auto configurationAdmission=[](uintptr_t renderer,uint64_t epoch,uintptr_t configuration) noexcept {
+                        return renderer && epoch==3 && configuration==renderer+0x2cb0;
+                    };
+                    assert(!owner.pinRendererPublication(published,generation,0x9000,3));
+                    assert(!owner.bindRendererConfiguration(0x9000,4,configurationAdmission));
+                    assert(!owner.bindRendererConfiguration(UINTPTR_MAX,3,configurationAdmission));
+                    assert(owner.withPrivateChild([](void* child) noexcept -> int {
+                        const uintptr_t unknown=0x1234;
+                        std::memcpy(static_cast<uint8_t*>(child)+8,&unknown,8);return 0;
+                    })==0);
+                    assert(!owner.bindRendererConfiguration(0x9000,3,configurationAdmission));
+                    assert(owner.withPrivateChild([](void* child) noexcept -> int {
+                        uintptr_t value=0;std::memcpy(&value,static_cast<uint8_t*>(child)+8,8);
+                        assert(value==0x1234);value=0;
+                        std::memcpy(static_cast<uint8_t*>(child)+8,&value,8);return 0;
+                    })==0);
+                    assert(owner.bindRendererConfiguration(0x9000,3,configurationAdmission));
+                    assert(!owner.pinRendererPublication(published,generation,0x9000,4));
                     assert(!owner.pinRendererPublication(published,generation+1,0x9000,3));
                     assert(owner.pinRendererPublication(published,generation,0x9000,3));
+                    assert(!owner.bindRendererConfiguration(0x9008,3,configurationAdmission));
                     assert(!owner.pinRendererPublication(published,generation,0x9000,3));
                     owner.reset();
                     assert(!owner.destroyInPlace() && !owner.deleteAllocation());
@@ -17910,11 +17929,13 @@ int main() {
                     const uintptr_t nativeChild=0x3000;
                     std::memcpy(aliasRenderer.data()+0x920,&nativeChild,8);
                     const auto originalRenderer=aliasRenderer;
+                    assert(owner.bindRendererConfiguration(reinterpret_cast<uintptr_t>(aliasRenderer.data()),3,configurationAdmission));
                     TglOwnedRendererChildPublication aliasPublication(owner,owner);
                     assert(!aliasPublication.publish(aliasRenderer.data(),aliasRenderer.size(),3,
                         [](void*,uint64_t,uintptr_t,uintptr_t) noexcept {return true;}));
                     assert(aliasRenderer==originalRenderer);
                     // The failed second pin must release the first owner's pin.
+                    assert(owner.bindRendererConfiguration(0x9000,3,configurationAdmission));
                     assert(owner.pinRendererPublication(published,generation,0x9000,3));
                     assert(owner.unpinRendererPublication(published,generation,0x9000,3));
                 }

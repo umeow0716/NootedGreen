@@ -3535,6 +3535,8 @@ class TglOwnedVeboxBaseOwner {
     uint64_t allocationGeneration_=0;
     uintptr_t publishedRenderer_=0;
     uint64_t publishedRendererGeneration_=0;
+    uintptr_t configuredRenderer_=0;
+    uint64_t configuredRendererGeneration_=0;
     bool constructed_=false,ready_=false,busy_=false,tableInstalled_=false;
 public:
     TglOwnedVeboxBaseOwner(CpuBackend& cpu,SfcInvoke& sfc,Cleanup& cleanup,Destroy& destroy)
@@ -3578,6 +3580,28 @@ public:
         return child && generation && generation==allocationGeneration_ &&
             reinterpret_cast<uintptr_t>(child)==storage_.get();
     }
+    // Exact133690 establishes child+8=renderer+2cb0. Caller authenticates
+    // renderer lifetime/generation and excludes pending frames before binding.
+    // Never replace an unexplained nonnull native configuration pointer.
+    template<class Admit> bool bindRendererConfiguration(uintptr_t renderer,
+        uint64_t generation,Admit admit) noexcept {
+        static_assert(noexcept(admit(uintptr_t{},uint64_t{},uintptr_t{})) &&
+            std::is_same_v<decltype(admit(uintptr_t{},uint64_t{},uintptr_t{})),bool>);
+        if(!ready_ || busy_ || publishedRenderer_ || !renderer || !generation ||
+            renderer>UINTPTR_MAX-0x2cb0) return false;
+        uintptr_t current=0;
+        auto* slot=reinterpret_cast<uint8_t*>(storage_.get())+8;
+        std::memcpy(&current,slot,8);
+        if(current && (!configuredRenderer_ || current!=configuredRenderer_+0x2cb0)) return false;
+        busy_=true;
+        const bool admitted=admit(renderer,generation,renderer+0x2cb0);
+        if(admitted) {
+            const uintptr_t configuration=renderer+0x2cb0;
+            std::memcpy(slot,&configuration,8);
+            configuredRenderer_=renderer;configuredRendererGeneration_=generation;
+        }
+        busy_=false;return admitted;
+    }
     // Publication prevents reset/reinitialization, NOT ordinary callback use.
     // Unlike busy_, this spans multiple synchronous callbacks. It is not a
     // self-retain: the complete enclosing runtime owner must remain alive.
@@ -3587,6 +3611,10 @@ public:
         if(!ready_ || !tableInstalled_ || busy_ || publishedRenderer_ ||
             !renderer || !rendererGeneration ||
             !ownsLifecycleAllocation(child,allocationGeneration)) return false;
+        uintptr_t configuration=0;
+        std::memcpy(&configuration,reinterpret_cast<const uint8_t*>(child)+8,8);
+        if(configuredRenderer_!=renderer || configuredRendererGeneration_!=rendererGeneration ||
+            configuration!=renderer+0x2cb0) return false;
         publishedRenderer_=renderer;publishedRendererGeneration_=rendererGeneration;
         return true;
     }
@@ -3992,6 +4020,7 @@ private:
             destroy_(destructor_,object);
         }
         destructor_=image_=0;
+        configuredRenderer_=0;configuredRendererGeneration_=0;
         if(releaseAllocation) storage_.reset();
         sfc_.reset();
         tableInstalled_=false;table_.entries={};table_.typeInfo=0;
