@@ -12974,6 +12974,40 @@ public:
         busy_=false;return result;
     }
 };
+// Concrete native-backend STMM storage for an enclosing retained Frame.
+// Declaration order is ownership order: pair dies before its reservation,
+// shells, backends and API. No references to constructor-local shells/API.
+// Binding/page size must be resolved under the enclosing parent/image lease;
+// that lease must outlive this object. No reset/reallocation while GPU-pending.
+template<class Api> class TglNativeStmmFrameStorage {
+    using Handle=decltype(std::declval<Api&>().surface(uintptr_t{}));
+    using Quarantine=TglOwnedStmmProcessQuarantine<Handle>;
+    using Reservation=typename Quarantine::Reservation;
+    Api api_;
+    std::array<TglNativeResourceBackend,2> backends_;
+    std::array<TglOwnedSurfaceStorage,2> surfaces_{};
+    Reservation reservation_;
+    TglOwnedStmmPair<TglNativeResourceBackend,Api,Reservation> pair_;
+public:
+    template<class... Args>
+    TglNativeStmmFrameStorage(const TglNativeResourceBinding& binding,
+                             uint64_t pageSize,Args&&... args) noexcept
+        :api_(std::forward<Args>(args)...),
+         backends_{TglNativeResourceBackend(binding,1,pageSize),
+                   TglNativeResourceBackend(binding,1,pageSize)},
+         reservation_(Quarantine::processLifetime()),
+         pair_(backends_,std::array<TglStmmSurfaceReference,2>{{
+             {surfaces_[0]},{surfaces_[1]}}},api_,reservation_) {
+        static_assert(std::is_nothrow_constructible_v<Api,Args...>);
+    }
+    TglNativeStmmFrameStorage(const TglNativeStmmFrameStorage&)=delete;
+    TglNativeStmmFrameStorage& operator=(const TglNativeStmmFrameStorage&)=delete;
+    auto& pair() noexcept {return pair_;}
+};
+#if defined(__APPLE__)
+using TglDarwinStmmFrameStorage=TglNativeStmmFrameStorage<TglDarwinStmmSurfaceApi>;
+#endif
+
 // Standalone STMM stage for the surface-frame tail. Unlike the combined
 // backing transaction, this does not allocate group/statistics resources or
 // force history allocation when native DN/DI admission is disabled.

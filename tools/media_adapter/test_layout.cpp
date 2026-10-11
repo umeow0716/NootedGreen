@@ -10911,6 +10911,31 @@ static void testRetainedVeboxFrames() {
 
 int main() {
     {
+        struct DeniedSurfaceApi {
+            uintptr_t surface(uintptr_t handle) noexcept {return handle;}
+            bool retain(uintptr_t) noexcept {assert(false);return false;}
+            void release(uintptr_t) noexcept {assert(false);}
+            int lock(uintptr_t) noexcept {assert(false);return 5;}
+            int unlock(uintptr_t) noexcept {assert(false);return 5;}
+            bool view(uintptr_t,TglOwnedStmmView&) noexcept {assert(false);return false;}
+        };
+        using Storage=TglNativeStmmFrameStorage<DeniedSurfaceApi>;
+        static_assert(!std::is_move_constructible_v<Storage>);
+        Storage storage(TglNativeResourceBinding{},4096);
+        std::array<const void*,2> bindings{};size_t count=0;
+        storage.pair().visitStorageBindings([&](const void* address) noexcept {
+            assert(count<2);bindings[count++]=address;
+        });
+        assert(count==2 && bindings[0] && bindings[1] && bindings[0]!=bindings[1]);
+        std::array<TglResourceKey,2> keys{};
+        for(auto& key:keys) {key.width=16;key.height=8;key.format=0x3d;}
+        assert(storage.pair().ensure(keys)==5); // no admitted native binding
+        count=0;storage.pair().visitStorageBindings([&](const void* address) noexcept {
+            assert(bindings[count++]==address);
+        });
+        assert(count==2);
+    }
+    {
         std::array<uint8_t,0x12f8> context{};
         std::array<uint8_t,0x58> physical{};
         std::array<uint8_t,0x10> os{};
