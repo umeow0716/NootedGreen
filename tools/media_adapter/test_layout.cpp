@@ -10770,7 +10770,8 @@ int main() {
                 }
                 admission=0;fail=0;
                 const auto beforeModes=storage->bytes;
-                for(int consumerResult:{0,31}) {
+                for(bool cscEnabled:{false,true}) for(int consumerResult:{0,31}) {
+                    put(source,0,uint32_t(cscEnabled?0:3));
                     assert(graph.withModeAssemblyView(false,read,lines,retire,0x1000,0x2000,0x4000,
                         [&](void* child,const TglOwnedVpEntrySet& entries) noexcept {
                             assert(child==storage->bytes.data() && !graph.tryReset());
@@ -10778,6 +10779,31 @@ int main() {
                             entries.sampleMode(child,reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x2000));
                             entries.formatMode(child,reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x4000));
                             assert(entries.allocate(child)==0);
+                            TglOwnedVpCscCache assemblyCsc;
+                            std::array<uint8_t,64> assemblyIef{};
+                            const auto savedIef=assemblyIef;
+                            const auto savedState=stateCpu.bytes;
+                            TglOwnedVpEntrySet escapedCscAssembly;
+                            unsigned coefficientBuilds=0;
+                            assert(graph.withCscAssemblyEntries(child,assemblyIef,assemblyCsc,3,5,0,
+                                [](uintptr_t,void*,size_t) noexcept {assert(false);return false;},
+                                [&](TglCscCoefficients& coefficients,uint32_t from,uint32_t to) noexcept {
+                                    ++coefficientBuilds;
+                                    assert(from==3 && to==5);coefficients.matrix[0]=7;return true;
+                                },entries,[&](void* cscChild,const auto& combined,uint8_t* state) noexcept {
+                                    assert(cscChild==child && state==stateCpu.bytes.data());
+                                    assert(combined.allocate==entries.allocate && combined.freeResources==entries.freeResources &&
+                                        combined.sampleMode==entries.sampleMode && combined.inputFormat==entries.inputFormat);
+                                    assert(combined.missingMask()==(entries.missingMask()&~(1U<<20)));
+                                    combined.csc(child,state,assemblyIef.data());
+                                    assert(state[0x88]==(cscEnabled?1:savedState[0x88]));
+                                    assert(!graph.tryReset());escapedCscAssembly=combined;return consumerResult;
+                                })==consumerResult);
+                            assert(assemblyIef==savedIef && stateCpu.bytes==savedState);
+                            assert(coefficientBuilds==unsigned(cscEnabled));
+                            escapedCscAssembly.csc(child,stateCpu.bytes.data(),assemblyIef.data());
+                            assert(assemblyIef==savedIef && stateCpu.bytes==savedState);
+                            assert(assemblyCsc.reset());
                             entries.freeResources(child);expiredAssembly=entries;
                             return consumerResult;
                         })==consumerResult);
@@ -10786,6 +10812,7 @@ int main() {
                     expiredAssembly.sampleMode(storage->bytes.data(),reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x2000));
                     assert(expiredAssembly.allocate(storage->bytes.data())==5);
                 }
+                put(source,0,uint32_t(3));
                 const auto beforeModeFailures=storage->bytes;
                 const auto allocationsBeforeModeFailures=backends[0].allocations+backends[1].allocations;
                 const auto retiredBeforeModeFailures=retired;
