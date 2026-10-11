@@ -6866,6 +6866,26 @@ struct TglOwnedVpEntrySet {
         return missing;
     }
     bool hasAllEntries() const noexcept {return missingMask()==0;}
+    // Compose typed, already-leased callback subsets without overwriting any
+    // slot. Atomic on conflict; this neither extends scopes nor qualifies a
+    // complete native object, vtable metadata or GPU resource lifetime.
+    bool appendDisjoint(const TglOwnedVpEntrySet& additions) noexcept {
+        auto candidate=*this;
+#define NGRN_APPEND_VP(field) \
+        if(additions.field) {if(candidate.field) return false;candidate.field=additions.field;}
+        NGRN_APPEND_VP(destroy) NGRN_APPEND_VP(deletingDestroy) NGRN_APPEND_VP(initialize)
+        NGRN_APPEND_VP(extent) NGRN_APPEND_VP(eligible) NGRN_APPEND_VP(prepare)
+        NGRN_APPEND_VP(freeResources) NGRN_APPEND_VP(pair) NGRN_APPEND_VP(setup)
+        NGRN_APPEND_VP(send) NGRN_APPEND_VP(dimensions) NGRN_APPEND_VP(allocate)
+        NGRN_APPEND_VP(compressionFormat) NGRN_APPEND_VP(finalAdmission)
+        NGRN_APPEND_VP(inputFormat) NGRN_APPEND_VP(outputFormat)
+        NGRN_APPEND_VP(inputAlignment) NGRN_APPEND_VP(outputAlignment)
+        NGRN_APPEND_VP(state) NGRN_APPEND_VP(filters) NGRN_APPEND_VP(csc)
+        NGRN_APPEND_VP(platformSetup) NGRN_APPEND_VP(sampleMode) NGRN_APPEND_VP(formatMode)
+        NGRN_APPEND_VP(platformPacket) NGRN_APPEND_VP(platformSend) NGRN_APPEND_VP(compression)
+#undef NGRN_APPEND_VP
+        *this=candidate;return true;
+    }
 };
 #define NGRN_VP_SLOT(field,offset) static_assert(offsetof(TglOwnedVpEntrySet,field)==offset,"VP slot ABI")
 NGRN_VP_SLOT(destroy,0);NGRN_VP_SLOT(deletingDestroy,8);NGRN_VP_SLOT(initialize,0x10);
@@ -9634,7 +9654,9 @@ public:
         if(base.csc) return 5;
         return withCscProducerEntries(child,ief,cache,from,to,sourceA8,read,produce,
             [&](void* admitted,auto csc,uint8_t* state) noexcept {
-                auto entries=base;entries.csc=csc;
+                auto entries=base;
+                TglOwnedVpEntrySet addition;addition.csc=csc;
+                if(!entries.appendDisjoint(addition)) return 5;
                 static_assert(noexcept(use(admitted,entries,state)),"VP CSC assembly consumer ABI");
                 return use(admitted,entries,state);
             });

@@ -9112,6 +9112,18 @@ int main() {
         assert(!entries.hasAllEntries() && entries.missingMask()==(uint32_t{1}<<index));entries.field=saved;}
         NGRN_TEST_VP_SLOTS(NGRN_REJECT_MISSING_VP)
 #undef NGRN_REJECT_MISSING_VP
+        TglOwnedVpEntrySet even,odd;
+#define NGRN_SPLIT_VP(field,index) if(index%2) odd.field=entries.field;else even.field=entries.field;
+        NGRN_TEST_VP_SLOTS(NGRN_SPLIT_VP)
+#undef NGRN_SPLIT_VP
+        assert(even.appendDisjoint(odd) && even.hasAllEntries());
+        assert(even.appendDisjoint(TglOwnedVpEntrySet{}));
+#define NGRN_CONFLICT_VP(field,index) \
+        {TglOwnedVpEntrySet target;target.field=entries.field; \
+        assert(!target.appendDisjoint(entries)); \
+        assert(target.field==entries.field && target.missingMask()==(0x7ffffffU&~(uint32_t{1}<<index)));}
+        NGRN_TEST_VP_SLOTS(NGRN_CONFLICT_VP)
+#undef NGRN_CONFLICT_VP
 #undef NGRN_TEST_VP_SLOTS
         assert(entries.hasAllEntries());
     }
