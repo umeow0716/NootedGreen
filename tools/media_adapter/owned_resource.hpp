@@ -13945,6 +13945,49 @@ public:
     }
 };
 
+// VP backing portion of a complete retained VEBOX frame. Own CPU allocators
+// and graph before the persistent line/shell owner; reverse teardown preserves
+// native resource -> typed shell -> storage lease -> AVS/state ordering.
+// The enclosing frame shares retention with its command producer and retains
+// native image/physical/context interfaces. This is not a callable renderer.
+template<class Invoker=TglNativeTrackedCpuInvoker> class TglNativeVpBackingStorage {
+    const TglOwnedVeboxFrameRetention& retention_;
+    TglNativeVpCpuStorage<Invoker> cpu_;
+    using Graph=std::remove_reference_t<decltype(std::declval<TglNativeVpCpuStorage<Invoker>&>().graph())>;
+    using Resources=TglNativeVpLineResourceOwner<Graph>;
+    alignas(Resources) std::array<uint8_t,sizeof(Resources)> bytes_{};
+    Resources* resources_=nullptr;
+public:
+    template<class Read,class Qualify,class Executable>
+    TglNativeVpBackingStorage(uintptr_t image,Read read,Qualify qualify,Executable executable,
+        const TglOwnedVeboxFrameRetention& retention,Invoker invoke={})
+        :retention_(retention),cpu_(image,read,qualify,executable,invoke,&retention) {}
+    TglNativeVpBackingStorage(const TglNativeVpBackingStorage&)=delete;
+    TglNativeVpBackingStorage& operator=(const TglNativeVpBackingStorage&)=delete;
+    ~TglNativeVpBackingStorage(){if(resources_) resources_->~Resources();}
+    template<class Binding,class Read>
+    int initialize(const Binding& binding,const TglNativeResourceBinding& resourceBinding,
+        uint64_t pageSize,uintptr_t os,uintptr_t renderHal,uintptr_t mhw,Read read,
+        uint32_t channel,uintptr_t performance) {
+        if(resources_ || retention_() || !cpu_.bound() || !resourceBinding.context ||
+           !resourceBinding.allocate || !resourceBinding.release ||
+           !pageSize || (pageSize&(pageSize-1))) return 5;
+        if(!cpu_.graph().initialize(os,renderHal,mhw,binding,read,channel,performance)) return 5;
+        resources_=::new(static_cast<void*>(bytes_.data())) Resources(cpu_.graph(),resourceBinding,pageSize);
+        if(resources_->bound()) return 0;
+        resources_->~Resources();resources_=nullptr;
+        (void)cpu_.graph().tryReset();return 5;
+    }
+    bool bound() const noexcept {return resources_ && resources_->bound();}
+    template<class Use> int withResources(Use use) noexcept {
+        if(!bound()) return 5;
+        return resources_->withResources([&](auto& storage,auto& lines) noexcept {
+            static_assert(noexcept(use(cpu_.graph(),storage,lines)),"VP backing consumer ABI");
+            return use(cpu_.graph(),storage,lines);
+        });
+    }
+};
+
 // Exact slot58=1df210 is status(this). State+30/+4c are read only from
 // the actual leased owner already published at VP+938, not arbitrary args.
 template<class Lines,class State> class TglOwnedVpLineAllocationContext {

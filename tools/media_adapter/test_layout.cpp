@@ -13141,6 +13141,45 @@ int main() {
                 assert(!denied.graph().initialize(0x7000,0x8000,0x3000,binding,noRead,1,0));
                 assert(!stateCpu.live && !avsCpu.live && !releaseCount);
             }
+            {
+                struct NativeBacking {
+                    Cpu& state;Cpu& avs;unsigned live=0,releases=0;
+                    static int allocate(void* context,const void*,void* resource) noexcept {
+                        auto& self=*static_cast<NativeBacking*>(context);++self.live;
+                        assert(self.state.live && self.avs.live);
+                        const uintptr_t token=1;
+                        std::memcpy(static_cast<uint8_t*>(resource)+0x20,&token,8);return 0;
+                    }
+                    static void release(void* context,void* resource) noexcept {
+                        auto& self=*static_cast<NativeBacking*>(context);
+                        assert(self.state.live && self.avs.live && self.live);
+                        --self.live;++self.releases;std::memset(resource,0,0x148);
+                    }
+                } backing{stateCpu,avsCpu};
+                TglNativeResourceBinding resources;
+                resources.context=reinterpret_cast<uintptr_t>(&backing);
+                resources.allocate=reinterpret_cast<uintptr_t>(&NativeBacking::allocate);
+                resources.release=reinterpret_cast<uintptr_t>(&NativeBacking::release);
+                TglOwnedVeboxFrameRetention retention;
+                {
+                    TglNativeVpBackingStorage<NativeCpu> owned(0x100000,allocatorRead,
+                        [](uintptr_t) noexcept {return true;},
+                        [](uintptr_t,size_t) noexcept {return true;},retention,nativeCpu);
+                    assert(!owned.bound());
+                    assert(owned.initialize(binding,resources,4096,0x7000,0x8000,0x3000,noRead,1,0)==0);
+                    assert(owned.bound());
+                    assert(owned.initialize(binding,resources,4096,0x7000,0x8000,0x3000,noRead,1,0)==5);
+                    assert(owned.withResources([&](auto& ownerGraph,auto& vp,auto& lines) noexcept {
+                        assert(ownerGraph.ownsStorage(vp.bytes.data()) && !ownerGraph.tryReset());
+                        assert(lines.resources().ensure(1080,4096)==0 && backing.live==3);
+                        return -17;
+                    })==-17);
+                    assert(backing.live==3 && !backing.releases);
+                }
+                assert(!backing.live && backing.releases==3 && !stateCpu.live && !avsCpu.live);
+                assert(releaseCount==2 && releaseOrder[0]==1 && releaseOrder[1]==2);
+                releaseCount=0;releaseOrder.fill(0);
+            }
             const auto acquisitionUse=[](const auto&,const auto&,uintptr_t) noexcept {return 31;};
             calls=0;
             assert(graph.withFrameAcquisition(0x1000,0x2000,0x3000,0x4000,
