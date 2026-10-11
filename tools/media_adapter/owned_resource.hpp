@@ -5820,6 +5820,56 @@ inline bool tglPrepareOwnedVpRegions(const TglOwnedVpRegionInput& in,
         candidate.destinationWidth,candidate.destinationHeight,in.rotation,candidate.scale)) return false;
     output=candidate;return true;
 }
+// Exact VP18 1de023..1de117: subtract floats BEFORE integer truncation;
+// source clips to the separately qualified slot50 frame then aligns down.
+// Destination aligns up WITHOUT target clipping; scale alone uses min(target).
+// Native18 only special-cases formats d/10 (width2) and19 (width2,height2),
+// and never performs slot28's field-input endpoint doubling.
+inline bool tglPrepareOwnedVpAdmissionRegions(const TglOwnedVpRegionInput& in,
+    TglOwnedVpRegions& output) noexcept {
+    auto extent=[](float first,float last,uint32_t& value) noexcept {
+        const float delta=last-first;
+        if(!std::isfinite(first) || !std::isfinite(last) || first<0 ||
+            !std::isfinite(delta) || delta<0 || double(delta)>double(UINT32_MAX)) return false;
+        value=static_cast<uint32_t>(delta);return true;
+    };
+    uint32_t sw=0,sh=0,dw=0,dh=0;
+    if(!extent(in.sourceLeft,in.sourceRight,sw) || !extent(in.sourceTop,in.sourceBottom,sh) ||
+        !extent(in.destinationLeft,in.destinationRight,dw) ||
+        !extent(in.destinationTop,in.destinationBottom,dh)) return false;
+    const uint32_t widthAlignment=(in.targetFormat==0xd || in.targetFormat==0x10 ||
+        in.targetFormat==0x19)?2:1;
+    const uint32_t heightAlignment=in.targetFormat==0x19?2:1;
+    if(dw>UINT32_MAX-(widthAlignment-1) || dh>UINT32_MAX-(heightAlignment-1)) return false;
+    TglOwnedVpRegions candidate;
+    candidate.sourceWidth=std::min(sw,in.frameWidth)&~(widthAlignment-1);
+    candidate.sourceHeight=std::min(sh,in.frameHeight)&~(heightAlignment-1);
+    candidate.destinationWidth=(dw+widthAlignment-1)&~(widthAlignment-1);
+    candidate.destinationHeight=(dh+heightAlignment-1)&~(heightAlignment-1);
+    if(!tglPrepareOwnedVpScale(candidate.sourceWidth,candidate.sourceHeight,
+        std::min(candidate.destinationWidth,in.targetWidth),
+        std::min(candidate.destinationHeight,in.targetHeight),in.rotation,candidate.scale)) return false;
+    output=candidate;return true;
+}
+// Bind the independently qualified MHW limits/workaround/conditional-source
+// policy to the exact slot18 geometry, rather than accepting caller-invented
+// aligned extents or reusing slot28's different rectangle producer.
+inline bool tglPrepareOwnedVpAdmission(const TglOwnedVpExtentAdmission& policy,
+    const TglOwnedVpRegionInput& input,TglOwnedVpScale& output) noexcept {
+    TglOwnedVpRegions regions;
+    if(!tglPrepareOwnedVpAdmissionRegions(input,regions)) return false;
+    auto candidate=policy;
+    candidate.frameWidth=input.frameWidth;candidate.frameHeight=input.frameHeight;
+    candidate.sourceWidth=regions.sourceWidth;candidate.sourceHeight=regions.sourceHeight;
+    candidate.destinationWidth=regions.destinationWidth;candidate.destinationHeight=regions.destinationHeight;
+    candidate.targetWidth=input.targetWidth;candidate.targetHeight=input.targetHeight;
+    candidate.rotation=input.rotation;candidate.target130=input.targetFormat;
+    candidate.source30=input.sourceLeft;candidate.source34=input.sourceTop;
+    candidate.source38=input.sourceRight;candidate.source3c=input.sourceBottom;
+    candidate.source40=input.destinationLeft;candidate.source44=input.destinationTop;
+    return tglPrepareOwnedVpExtentAdmission(candidate,output);
+}
+
 // Bounded slot28 geometry acquisition. Read authorizes every surface/MHW
 // span under leases held through the caller's complete preparation/use scope.
 template<class Read>

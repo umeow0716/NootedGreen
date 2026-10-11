@@ -7552,6 +7552,44 @@ static void testSfcFrameFields() {
 
 int main() {
     {
+        TglOwnedVpRegionInput in;
+        in.frameWidth=in.frameHeight=100;in.targetWidth=in.targetHeight=8;
+        in.sourceLeft=in.sourceTop=0.5f;in.sourceRight=in.sourceBottom=10.75f;
+        in.destinationLeft=in.destinationTop=0.5f;
+        in.destinationRight=in.destinationBottom=30.75f;
+        TglOwnedVpRegions admission,prepared;
+        assert(tglPrepareOwnedVpAdmissionRegions(in,admission));
+        assert(admission.sourceWidth==10 && admission.sourceHeight==10 &&
+            admission.destinationWidth==30 && admission.destinationHeight==30 &&
+            admission.scale.at928==0.8f && admission.scale.at92c==0.8f);
+        assert(tglPrepareOwnedVpRegions(in,prepared));
+        assert(prepared.sourceWidth==9 && prepared.destinationWidth==8);
+        TglOwnedVpExtentAdmission policy;
+        policy.minWidth=policy.minHeight=1;policy.maxWidth=policy.maxHeight=100;
+        TglOwnedVpScale scale;
+        assert(tglPrepareOwnedVpAdmission(policy,in,scale) && scale.at928==0.8f);
+        policy.maxWidth=20;
+        assert(!tglPrepareOwnedVpAdmission(policy,in,scale) && scale.at928==0.8f);
+        policy.maxWidth=100;policy.source124=1;
+        assert(!tglPrepareOwnedVpAdmission(policy,in,scale));
+        in.fieldInput=true;
+        assert(tglPrepareOwnedVpAdmissionRegions(in,admission) && admission.sourceWidth==10);
+        for(uint32_t format:{0xdu,0x10u,0x19u}) {
+            in.targetFormat=format;in.sourceRight=in.sourceBottom=11.75f;
+            in.destinationRight=in.destinationBottom=31.75f;
+            assert(tglPrepareOwnedVpAdmissionRegions(in,admission));
+            assert(admission.sourceWidth==10 && admission.destinationWidth==32);
+            assert(admission.sourceHeight==(format==0x19?10u:11u));
+            assert(admission.destinationHeight==(format==0x19?32u:31u));
+        }
+        const auto saved=admission;
+        for(float invalid:{NAN,INFINITY,-1.0f,4294967296.0f}) {
+            in.sourceRight=invalid;
+            assert(!tglPrepareOwnedVpAdmissionRegions(in,admission));
+            assert(admission.sourceWidth==saved.sourceWidth && admission.scale.at928==saved.scale.at928);
+        }
+    }
+    {
         struct Context {
             void* child;std::array<void*,3> args{};
             unsigned states=0,filtersCalled=0;int result=0;
