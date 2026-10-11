@@ -10830,19 +10830,26 @@ bool tglPrepareOwnedFfdiMetadataFromReport(TglOwnedFfdiMetadataQuery& output,
 // descriptor owners and execution-owner publication. The platform's held SFC
 // and parameter owners supply only their qualified scalar readers. Count is
 // still caller-qualified; this entry does not invent a platform slot count.
+struct TglOwnedFfdiRequestSnapshot {
+    const TglOwnedSurfaceStorage* source=nullptr;
+    TglOwnedFfdiAllocationRequest request;
+};
 template<class Owner,class ChildOwner,class ExecutionOwner,class Read,
     class SfcFormat,class SfcColor,class ParameterKind,class Supports,class Consume>
 int tglRunCapturedFfdiProducers(Owner& input,ChildOwner& childOwner,ExecutionOwner& reportOwner,
     void* child,uintptr_t report,const TglOwnedSurfaceStorage& source,
     Read read,SfcFormat sfcFormat,SfcColor sfcColor,ParameterKind parameterKind,
-    Supports supports,Consume consume) noexcept {
+    Supports supports,Consume consume,const TglOwnedFfdiRequestSnapshot* prepared=nullptr) noexcept {
     return tglRunCapturedVeboxAllocation(input,childOwner,reportOwner,child,report,source,
         [&](void* currentChild,uintptr_t currentReport,const auto& currentSource) noexcept {
             TglOwnedFfdiAllocationRequest request;TglOwnedFfdiMetadataQuery metadata;
             const auto address=reinterpret_cast<uintptr_t>(currentChild);
-            if(!tglPrepareOwnedFfdiRequestFromReport(request,currentSource,address,currentReport,
-                read,sfcFormat,supports) ||
-               !tglPrepareOwnedFfdiMetadataFromReport(metadata,currentSource,address,currentReport,
+            if(prepared) {
+                if(prepared->source!=&currentSource) return 5;
+                request=prepared->request;
+            } else if(!tglPrepareOwnedFfdiRequestFromReport(request,currentSource,address,currentReport,
+                read,sfcFormat,supports)) return 5;
+            if(!tglPrepareOwnedFfdiMetadataFromReport(metadata,currentSource,address,currentReport,
                 read,sfcColor,parameterKind)) return 5;
             static_assert(noexcept(consume(currentSource,currentReport,request,metadata)) &&
                 std::is_same_v<decltype(consume(currentSource,currentReport,request,metadata)),int>,
@@ -10879,7 +10886,8 @@ int tglRunCapturedFfdiFromReport(std::array<TglOwnedDescriptorOnlySurface,Count>
     ChildOwner& childOwner,ExecutionOwner& reportOwner,void* child,uintptr_t report,
     const TglOwnedSurfaceStorage& source,Read read,SfcFormat sfcFormat,
     SfcColor sfcColor,ParameterKind parameterKind,Supports supports,Use use,
-    std::array<const TglOwnedSurfaceStorage*,3> captured={}) noexcept {
+    std::array<const TglOwnedSurfaceStorage*,3> captured={},
+    const TglOwnedFfdiRequestSnapshot* prepared=nullptr) noexcept {
     return tglRunCapturedFfdiProducers(input,childOwner,reportOwner,child,report,source,
         read,sfcFormat,sfcColor,parameterKind,supports,
         [&](const auto& currentSource,uintptr_t currentReport,const auto& request,const auto& metadata) noexcept {
@@ -10909,7 +10917,7 @@ int tglRunCapturedFfdiFromReport(std::array<TglOwnedDescriptorOnlySurface,Count>
                 original[0],original[1],[&](uint8_t flag,uint8_t mode) noexcept {
                     return tglPublishLeasedFfdiCompression(reportOwner,currentReport,flag,mode);
                 },use,captured);
-        });
+        },prepared);
 }
 // Secondary-only capture: select by actual child680, never new-frame format.
 // report68 is an identity to reconcile with the held secondary owner, not a
@@ -10957,12 +10965,20 @@ int tglRunCapturedFfdiFrame(std::array<TglOwnedDescriptorOnlySurface,Count>& des
     ChildOwner& childOwner,ExecutionOwner& reportOwner,void* child,uintptr_t report,
     const TglOwnedSurfaceStorage& source,Read read,SfcFormat sfcFormat,SfcColor sfcColor,
     ParameterKind parameterKind,Supports supports,Use use,Continue next,
-    std::array<const TglOwnedSurfaceStorage*,3> captured={}) noexcept {
+    std::array<const TglOwnedSurfaceStorage*,3> captured={},
+    TglOwnedFfdiCompressionSelection* selection=nullptr) noexcept {
     static_assert(Count>0 && Count<=4,"FFDi bounded frame slots");
     return tglRunCapturedVeboxAllocation(input,childOwner,reportOwner,child,report,source,
         [&](void* currentChild,uintptr_t currentReport,const auto&) noexcept -> int {
             TglOwnedVeboxAllocationPolicy policy;
             const auto address=reinterpret_cast<uintptr_t>(currentChild);
+            // Native +98/+a8/+90 precede +b0, even when allocation is skipped.
+            // Retain that pre-loop value for FFDN; report13/14 is publication,
+            // not a substitute for this selection on an unchanged allocation.
+            TglOwnedFfdiRequestSnapshot prepared{&source,{}};
+            if(!tglPrepareOwnedFfdiRequestFromReport(prepared.request,source,address,currentReport,
+                read,sfcFormat,supports)) return 5;
+            if(selection) *selection={prepared.request.key.compressed,prepared.request.key.compressionMode};
             if(!tglReadOwnedVeboxAllocationPolicy(policy,address,currentReport,read)) return 5;
             if(policy.ffdi) {
                 TglVeboxHistoryState history;size_t count=0;
@@ -10983,7 +10999,7 @@ int tglRunCapturedFfdiFrame(std::array<TglOwnedDescriptorOnlySurface,Count>& des
                             reinterpret_cast<uintptr_t>(views[2])!=actual[1]) return 5;
                         return tglRunCapturedFfdiFromReport(descriptors,backed,input,roles[1],roles[2],
                             childOwner,reportOwner,currentChild,currentReport,source,read,
-                            sfcFormat,sfcColor,parameterKind,supports,use,views);
+                            sfcFormat,sfcColor,parameterKind,supports,use,views,&prepared);
                     });
                 }
             }

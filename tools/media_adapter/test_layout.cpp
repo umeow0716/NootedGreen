@@ -6568,10 +6568,13 @@ static void testNativeResourceBoundary() {
                                     unsigned frameUses=0,nextUses=0;
                                     int frameStatus=-37,nextStatus=-41;
                                     bool clearDnAfterFrame=false;
+                                    TglOwnedFfdiCompressionSelection preselected{true,99};
+                                    unsigned supportCalls=0;
                                     auto runFrame=[&]() noexcept {
-                                        return tglRunCapturedFfdiFrame(frameTargets,backedTargets,owner,&owner,
+                                        const auto before=supportCalls;
+                                        const int result=tglRunCapturedFfdiFrame(frameTargets,backedTargets,owner,&owner,
                                             &destination,childOwner,reportOwner,actualChild,report,source,read,
-                                            noSfc,noSfc,noParameter,[](uint32_t) noexcept {return true;},
+                                            noSfc,noSfc,noParameter,[&](uint32_t) noexcept {++supportCalls;return true;},
                                             [&](const auto& roles,const auto&,size_t count,uint8_t,uint8_t) noexcept -> int {
                                                 assert(count==2);
                                                 uintptr_t expectedExecution=0,expectedSecondary=0;
@@ -6584,7 +6587,8 @@ static void testNativeResourceBoundary() {
                                                 return frameStatus;
                                             },[&](const auto* s,const auto* target) noexcept -> int {
                                                 assert(!s && !target);++nextUses;return nextStatus;
-                                            });
+                                            },{},&preselected);
+                                        assert(supportCalls-before<=1);return result;
                                     };
                                     reportBackend.bytes[0xb]=reportBackend.bytes[0xf]=reportBackend.bytes[0x13]=0;
                                     nativeCount=3;std::memcpy(child.data()+0x1b5c,&nativeCount,4);
@@ -6711,6 +6715,16 @@ static void testNativeResourceBoundary() {
                                             assert(reportBackend.bytes[8]==0 && reportBackend.bytes[0x15]==0 &&
                                                 reportBackend.bytes[0x16]==0);return -47;
                                         },{&source,nullptr,nullptr})==-47 && selections==1);
+                                    // Backing reuse leaves publication unchanged, but FFDN
+                                    // must still receive the newly computed pre-loop selection.
+                                    child[0x1ba9]=0;reportBackend.bytes[0xb]=0;
+                                    reportBackend.bytes[0xf]=1;reportBackend.bytes[0x12]=0;
+                                    reportBackend.bytes[0x13]=0x80;reportBackend.bytes[0x14]=0xa5;
+                                    assert(runFrame()==0);
+                                    assert(!preselected.compressed && preselected.mode==0);
+                                    assert(reportBackend.bytes[0x13]==0x80 && reportBackend.bytes[0x14]==0xa5);
+                                    assert(compression(preselected)==0 && !selected.compressed && selected.mode==0);
+                                    reportBackend.bytes[0x12]=1;
                                     return run();
                                 });
                             })==-17);
