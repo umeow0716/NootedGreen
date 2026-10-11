@@ -16176,6 +16176,18 @@ public:
             return invoke(frames);
         });
     }
+    // Slot4 can delete earlier contexts before a later batch item fails.
+    // Never reopen an ambiguous partially removed generation on nonzero.
+    template<class Invoke> int withContextRemoval(Ticket ticket,uintptr_t image,
+        uintptr_t physical,Invoke invoke) noexcept {
+        static_assert(noexcept(invoke()) && std::is_same_v<decltype(invoke()),int>);
+        return withLive(ticket,image,physical,[&](Pool& frames) noexcept -> int {
+            if(!frames.emptyForNativeRequest()) return 5;
+            const int result=invoke();
+            if(result) resolve(ticket)->state=State::Quarantined;
+            return result;
+        });
+    }
     template<class Invoke> int destroy(Ticket ticket,uintptr_t image,uintptr_t physical,Invoke invoke) noexcept {
         static_assert(noexcept(invoke(uintptr_t{})) &&
             std::is_same_v<decltype(invoke(uintptr_t{})),int>);

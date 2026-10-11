@@ -11872,6 +11872,9 @@ static void testRetainedVeboxFrames() {
         })==0);
         assert(registry.withNewRequest(physicalTicket,image,physical,unreachable)==5);
         unsigned destroys=0;
+        unsigned removals=0;
+        auto removeSuccess=[&]() noexcept -> int {++removals;return 0;};
+        assert(registry.withContextRemoval(physicalTicket,image,physical,removeSuccess)==5 && !removals);
         auto nativeFailure=[&](uintptr_t address) noexcept -> int {
             assert(address==physical);++destroys;return 31;
         };
@@ -11888,6 +11891,8 @@ static void testRetainedVeboxFrames() {
         assert(registry.withNewRequest(physicalTicket,image,physical,[&](auto&) noexcept -> int {
             ++requests;return 31;
         })==31 && requests==1);
+        assert(registry.withContextRemoval(physicalTicket,image,physical,removeSuccess)==0 && removals==1);
+        assert(registry.lookup(image,physical).generation==physicalTicket.generation);
         assert(registry.destroy(physicalTicket,image,physical,nativeFailure)==31 && destroys==1);
         assert(registry.withNewRequest(physicalTicket,image,physical,unreachable)==5);
         assert(!registry.lookup(image,physical).generation);
@@ -11910,6 +11915,19 @@ static void testRetainedVeboxFrames() {
         assert(registry.destroy(success,image,0x7000,[](uintptr_t) noexcept -> int {assert(false);return 0;})==5);
         assert(registry.lookup(image,0x7000).generation==replacementPhysical.generation);
         assert(registry.destroy(replacementPhysical,image,0x7000,[](uintptr_t) noexcept -> int {return 0;})==0);
+        const auto partialRemoval=registry.reserve(image);
+        assert(registry.publish(partialRemoval,image,0x7100));
+        auto removeFailure=[&]() noexcept -> int {
+            ++removals;
+            assert(registry.withNewRequest(partialRemoval,image,0x7100,unreachable)==5);
+            assert(registry.destroy(partialRemoval,image,0x7100,nativeFailure)==5);
+            return 31;
+        };
+        assert(registry.withContextRemoval(partialRemoval,image,0x7100,removeFailure)==31 && removals==2);
+        assert(!registry.lookup(image,0x7100).generation);
+        assert(registry.withContextRemoval(partialRemoval,image,0x7100,removeFailure)==5 && removals==2);
+        assert(registry.withNewRequest(partialRemoval,image,0x7100,unreachable)==5);
+        assert(registry.destroy(partialRemoval,image,0x7100,nativeFailure)==5 && destroys==1);
     }
     {
         using Registry=TglOwnedVeboxPhysicalFrameRegistry<Frame>;
