@@ -16840,7 +16840,27 @@ int main() {
                                     assert(sourceLease.hasSurfaceLease(source) && targetLease.hasSurfaceLease(target));
                                     assert(&packets.source==&source && packets.target==&target && dn.size()==64);
                                     assert(ho.borrowed && frame.backing().vpBound());
-                                    return TglOwnedVeboxCommandTransactionResult{31,31,true,false};
+                                    // CPU command-acquisition fixture, but use the actual
+                                    // aggregate's captured child/source and transaction gates
+                                    // rather than inventing ownership flags in the consumer.
+                                    struct ExecutionLease {
+                                        uintptr_t report;
+                                        bool hasExecutionLease(uintptr_t value) const noexcept {return value==report;}
+                                    } executionLease{packets.execution};
+                                    const uintptr_t input=reinterpret_cast<uintptr_t>(&packets.source);
+                                    std::memcpy(static_cast<uint8_t*>(child)+0x88,&packets.execution,8);
+                                    std::memcpy(static_cast<uint8_t*>(child)+0x1b0,&input,8);
+                                    unsigned acquired=0,writebacks=0;
+                                    const auto transaction=tglWithCapturedVeboxCommandTransaction(
+                                        sourceLease,leasedOwner,executionLease,child,packets.execution,packets.source,
+                                        [&](int32_t& remaining) noexcept -> int {
+                                            ++acquired;remaining=64;return 31;
+                                        },[&](int status,int32_t remaining) noexcept -> bool {
+                                            ++writebacks;assert(status==31 && remaining==64);return false;
+                                        });
+                                    assert(acquired==1 && writebacks==1 && transaction.status==5 &&
+                                        transaction.builderStatus==31 && transaction.acquired && !transaction.writtenBack);
+                                    return transaction;
                                 });
                         });
                         assert(r.acquired && frameDn.live==1 && refs[1]==3);
