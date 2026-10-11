@@ -16521,6 +16521,12 @@ public:
     // alone cannot protect its second item after the first retains a frame.
     // Adapter wiring must recheck before every context vtable+28 invocation;
     // do not recursively acquire this nonreentrant generation gate.
+    // This is not a complete shell-lifetime barrier until ALL factory mutators
+    // are classified/wrapped. In particular slot9=155d1 is not query-only:
+    // type27 enters156bc, resets physical+9110 via960b, writes9114/9118,
+    // calls9710/98b3 and publishes resource results through caller pointers.
+    // Other admitted types tail-call1aabb/4024/21bad/27a5d/2819d/22a46/22ad6;
+    // their shell/backing effects remain to be audited before owner publication.
     template<class Use> int withNewRequest(typename Registry::Ticket ticket,
         uintptr_t physical,Use use) noexcept {
         if(!physical || !valid()) return 5;
