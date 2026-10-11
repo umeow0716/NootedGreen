@@ -7128,17 +7128,34 @@ static void testNativeResourceBoundary() {
                                                             unsigned registrations=0,setups=0,builds=0;
                                                             auto registration=[&](const auto&,bool,bool) noexcept -> int {++registrations;return 0;};
                                                             auto control=[](const auto&,uint32_t&,size_t,bool) noexcept -> int {return 0;};
-                                                            using Packets=TglOwnedVeboxPacketContext<decltype(stateRead),decltype(surfaceAdmit),
-                                                                decltype(admitted),decltype(registration),decltype(control)>;
-                                                            Packets packets{{},{reinterpret_cast<uintptr_t>(actualChild),report,renderAddress,skuAddress,
-                                                                linkedStorage,nullptr,surfaces,statePacket,diPacket},input,false,stateRead,
-                                                                surfaceAdmit,admitted,registration,control};
+                                                            TglOwnedVeboxPacketLeases packetLeases{
+                                                                reinterpret_cast<uintptr_t>(actualChild),report,renderAddress,skuAddress,
+                                                                linkedStorage,nullptr,surfaces,statePacket,diPacket};
+                                                            auto rejectedLeases=packetLeases;
+                                                            ++rejectedLeases.renderHal;
+                                                            const auto preservedPacket=statePacket;
+                                                            unsigned rejectedConsumers=0;
+                                                            const auto rejected=tglRunCapturedVeboxFrameCommand(linkedInput,childOwner,reportOwner,
+                                                                rejectedLeases,ffdi,ffdn,stmm,statisticsShell,false,false,input.controls,
+                                                                stateRead,surfaceAdmit,admitted,registration,control,[&](auto&) noexcept {
+                                                                    ++rejectedConsumers;return TglOwnedVeboxCommandTransactionResult{};
+                                                                });
+                                                            assert(rejected.status==5 && !rejected.acquired && !rejected.writtenBack &&
+                                                                !rejectedConsumers && !registrations);
+                                                            assert(std::memcmp(&statePacket,&preservedPacket,sizeof(statePacket))==0);
+                                                            unsigned writebacks=0;
+                                                            const auto transaction=tglRunCapturedVeboxFrameCommand(linkedInput,childOwner,reportOwner,
+                                                                packetLeases,ffdi,ffdn,stmm,statisticsShell,false,false,input.controls,
+                                                                stateRead,surfaceAdmit,admitted,registration,control,[&](auto& packets) noexcept {
+                                                            using Packets=std::decay_t<decltype(packets)>;
                                                             using Resolve=TglOwnedVeboxScopedContext<Packets>;
                                                             using Callbacks=TglOwnedVeboxProducerCallbacks<Resolve>;
-                                                            const int built=tglWithCapturedVeboxPreparedBuilder(linkedInput,childOwner,reportOwner,
+                                                            return tglWithCapturedVeboxCommandTransaction(linkedInput,childOwner,reportOwner,
+                                                                actualChild,report,current,[&](int32_t& remaining) noexcept -> int {
+                                                            return tglWithCapturedVeboxPreparedBuilder(linkedInput,childOwner,reportOwner,
                                                                 actualChild,report,current,packets,[&](void* active) noexcept -> int {
                                                                     assert(active==actualChild && Resolve::get(active)==&packets);
-                                                                    ++setups;return 0;
+                                                                    remaining=128;++setups;return 0;
                                                                 },[&](void* active) noexcept -> int {
                                                                     assert(setups==1);++builds;
                                                                     // IECP selects descriptor-only FFDi in this mixed fixture:
@@ -7150,9 +7167,20 @@ static void testNativeResourceBoundary() {
                                                                     assert(linkedInput.hasSurfaceLease(current) && stmmApi.references==2);
                                                                     assert(!statisticsFixture.releases);return 0;
                                                                 });
+                                                                },[&](int status,int32_t remaining) noexcept -> bool {
+                                                                    assert(status==(input.iecp?5:0) && remaining==128);
+                                                                    assert(linkedInput.hasSurfaceLease(current) && stmmApi.references==2);
+                                                                    assert(targetA.hasSurfaceLease(*ffdn.outputs[0]) && !statisticsFixture.releases);
+                                                                    ++writebacks;return true;
+                                                                });
+                                                            });
+                                                            using Packets=TglOwnedVeboxPacketContext<decltype(stateRead),decltype(surfaceAdmit),
+                                                                decltype(admitted),decltype(registration),decltype(control)>;
+                                                            using Resolve=TglOwnedVeboxScopedContext<Packets>;
                                                             assert(setups==1 && builds==1 && !Resolve::get(actualChild));
+                                                            assert(transaction.acquired && transaction.writtenBack && writebacks==1);
                                                             assert(input.iecp?registrations==0:registrations>0);
-                                                            return built;
+                                                            return transaction.status;
                                                         });
                                                     };
                                                     assert(stateStage(consumeState)==5 && stateUses==1);

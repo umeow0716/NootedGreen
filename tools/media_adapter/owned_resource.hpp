@@ -14332,6 +14332,41 @@ TglOwnedVeboxCommandTransactionResult tglWithCapturedNativeVeboxCommandTransacti
         });
 }
 
+// Final synchronous consumer of the scoped allocation/statistics frame. This
+// composes real shell normalization, live role capture and packet producers;
+// it does not acquire or copy backing owners. The command consumer must keep
+// unresolved command/submission ownership outside this stack on every exit.
+template<class SourceOwner,class ChildOwner,class ExecutionOwner,class Read,
+    class SurfaceAdmit,class DiAdmit,class Register,class Control,class Consume>
+TglOwnedVeboxCommandTransactionResult tglRunCapturedVeboxFrameCommand(
+    SourceOwner& sourceOwner,ChildOwner& childOwner,ExecutionOwner& executionOwner,
+    TglOwnedVeboxPacketLeases leases,const TglOwnedFfdiTailViews& ffdi,
+    const TglOwnedFfdnTailViews& ffdn,const TglOwnedStmmTailViews& stmm,
+    const TglOwnedSurfaceStorage& statistics,bool disableTemporalDenoise,bool alignDi64,
+    const std::array<uint32_t,11>& controls,Read read,SurfaceAdmit admitSurface,
+    DiAdmit admitDi,Register registerResource,Control control,Consume consume) noexcept {
+    TglOwnedVeboxCommandTransactionResult result;
+    auto* child=reinterpret_cast<void*>(leases.child);
+    result.status=tglRunCapturedStateFrame(leases.state,sourceOwner,childOwner,executionOwner,
+        child,leases.execution,leases.renderHal,leases.sku,leases.source,leases.target,
+        disableTemporalDenoise,read,[&](const auto& target) noexcept -> bool {
+            return admitDi(target)==0;
+        },[&](auto&) noexcept -> int {
+            return tglRunCapturedDiIecpFrameInput(sourceOwner,childOwner,executionOwner,
+                child,leases.execution,leases.source,ffdi,ffdn,stmm,statistics,read,alignDi64,
+                controls,[&](const TglDiIecpInputs& input) noexcept -> int {
+                    using Context=TglOwnedVeboxPacketContext<Read,SurfaceAdmit,DiAdmit,Register,Control>;
+                    Context context{{},leases,input,disableTemporalDenoise,read,admitSurface,
+                        admitDi,registerResource,control};
+                    static_assert(noexcept(consume(context)) &&
+                        std::is_same_v<decltype(consume(context)),TglOwnedVeboxCommandTransactionResult>,
+                        "captured frame command result ABI");
+                    result=consume(context);return result.status;
+                });
+        });
+    return result;
+}
+
 // Allocation transaction for a history-enabled frame. The qualified platform
 // planner supplies resource keys and statistics boundary dimensions; this does
 // not infer feature admission or SFC resources. All three owners outlive this
