@@ -2491,6 +2491,20 @@ int tglPublishLeasedVeboxMode0Prelude(ExecutionOwner& owner,uintptr_t expected,
     });
 }
 
+// Exact1f7e0c..1f7e3d whole-byte report13/14 publication after a changed
+// FFDi allocation. Reuse the owner's existing bounded byte-view lock: reject
+// unleased/foreign/poisoned report or recursive admission before any write.
+template<class ExecutionOwner>
+int tglPublishLeasedFfdiCompression(ExecutionOwner& owner,uintptr_t expected,
+    uint8_t flag,uint8_t mode) noexcept {
+    return owner.withLeasedAdmissionBytes(expected,[&](auto& view) noexcept {
+        static_assert(TglAdmissionExecutionExtent<std::decay_t<decltype(view)>>::value>=0x15,
+            "FFDi report publication extent");
+        const std::array<uint8_t,2> values{flag,mode};
+        std::memcpy(view.data()+0x13,values.data(),values.size());
+        return 0;
+    });
+}
 // CPU publication under the native execution lifetime lease. Commit must be
 // the serialized allocation owner's all-or-nothing write of this f0 extent;
 // a generic mach_vm_write with potentially partial failure is NOT sufficient.
@@ -5563,11 +5577,12 @@ int tglWithAllocatedOwnedFfdiBatch(Owner& input,Owner* execution,Owner* secondar
 // leased through the final consumer, alongside the existing input role leases.
 // A nonnull execution role must be a leased type1 source; its handle1a0 is
 // borrowed only through the final consumer. No submission/fence is implied.
-template<size_t Count,class Owner,class Use>
+template<size_t Count,class Owner,class Use,class Publish=TglOwnedFfdiNoReportPublication>
 int tglWithOwnedDescriptorFfdiBatch(std::array<TglOwnedDescriptorOnlySurface,Count>& targets,
     Owner& input,Owner* execution,Owner* secondary,size_t count,uint32_t format,uint32_t tile,
     TglOwnedFfdiCompressionSelection compression,TglOwnedFfdiMetadataQuery query,
-    uint8_t flag,uint8_t mode,Use use,std::array<const TglOwnedSurfaceStorage*,3> captured={}) noexcept {
+    uint8_t flag,uint8_t mode,Use use,std::array<const TglOwnedSurfaceStorage*,3> captured={},
+    Publish publish={}) noexcept {
     using Outputs=std::array<const TglOwnedSurfaceStorage*,Count>;
     using Inputs=std::array<const TglOwnedSurfaceStorage*,3>;
     static_assert(noexcept(use(std::declval<const Inputs&>(),std::declval<const Outputs&>(),
@@ -5593,7 +5608,7 @@ int tglWithOwnedDescriptorFfdiBatch(std::array<TglOwnedDescriptorOnlySurface,Cou
                 return leased?result:5;
             };
             return enter(enter,0);
-        },captured);
+        },captured,publish);
 }
 
 // Allocation-disabled 1f7b06 -> 1f7e52 edge for an existing descriptor slot0.

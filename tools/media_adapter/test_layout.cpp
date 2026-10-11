@@ -655,6 +655,25 @@ static void testTrackedCpuOwner() {
         auto denied=[](auto&) noexcept {assert(false);return 0;};
         {
             const auto before=backend.bytes;
+            assert(tglPublishLeasedFfdiCompression(owner,address,1,1)==5 && backend.bytes==before);
+            assert(owner.withExecution([&](uintptr_t actual) noexcept {
+                assert(tglPublishLeasedFfdiCompression(owner,actual+1,1,1)==5 && backend.bytes==before);
+                for(auto values:{std::array<uint8_t,2>{0,0},{1,1},{0xa5,0x5a}}) {
+                    backend.bytes=before;
+                    assert(!tglPublishLeasedFfdiCompression(owner,actual,values[0],values[1]));
+                    auto expected=before;expected[0x13]=values[0];expected[0x14]=values[1];
+                    assert(backend.bytes==expected);
+                    assert(owner.withLeasedAdmissionBytes(actual,[&](auto&) noexcept {
+                        assert(tglPublishLeasedFfdiCompression(owner,actual,0,0)==5);
+                        assert(backend.bytes==expected);return 0;
+                    })==0);
+                }
+                return 0;
+            })==0);
+            backend.bytes=before;
+        }
+        {
+            const auto before=backend.bytes;
             assert(tglPublishLeasedVeboxMode0Prelude(owner,address,77,UINT32_MAX)==5 && backend.bytes==before);
             assert(owner.withExecution([&](uintptr_t actual) noexcept {
                 assert(tglPublishLeasedVeboxMode0Prelude(owner,actual+1,77,0)==5 && backend.bytes==before);
