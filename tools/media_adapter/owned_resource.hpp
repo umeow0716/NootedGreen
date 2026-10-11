@@ -4042,6 +4042,31 @@ static_assert(sizeof(TglOwnedSurfaceStorage) == 0x2a8);
 inline const uint8_t* tglOwnedSfcSurfaceBytes(const TglOwnedSurfaceStorage& surface) noexcept {
     return reinterpret_cast<const uint8_t*>(&surface);
 }
+// Selection-only DI snapshot, inside the caller's source/parameter frame
+// leases. Equality authenticates the separately leased parameter identity;
+// no allocation adoption, publication, or assumption about its total extent.
+// Only the proven first DWORD is read. False means acquisition failure, not
+// "DI allowed": every failure latches the frame so selection cannot publish.
+template<class Read>
+bool tglRejectLeasedGen12DiOutput(bool& rejected,const TglOwnedSurfaceStorage& source,
+    uintptr_t leasedDiParams,TglVeboxPipeAcquisition& frame,Read read) noexcept {
+    static_assert(noexcept(read(uintptr_t{},static_cast<void*>(nullptr),size_t{})),
+                  "DI snapshot reader must not throw");
+    if(!frame.healthy()) return false;
+    auto fail=[&]() noexcept {frame.fail();return false;};
+    uintptr_t params=0;std::memcpy(&params,source.prefix.data()+0x88,sizeof(params));
+    if(params!=leasedDiParams) return fail();
+    bool candidate=false;
+    if(params) {
+        if(params>UINTPTR_MAX-3) return fail();
+        uint32_t mode=0,height=0,format=0;
+        if(!read(params,&mode,4) || (mode!=1 && mode!=2)) return fail();
+        std::memcpy(&height,source.prefix.data()+0xdc,4);
+        std::memcpy(&format,source.prefix.data()+0x130,4);
+        candidate=tglRejectGen12BobOutput(true,mode==1,height,format);
+    }
+    rejected=candidate;return true;
+}
 // Source and its DN parameter allocation are separately leased by the frame
 // owner. Equality checks prevent silently adopting an opaque source+90 pointer.
 // Read only eight parameter bytes; automatic mode does not consume strength.

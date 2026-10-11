@@ -45,6 +45,39 @@ struct TestFeatureExecutionOwner {
 };
 static void testTrackedCpuOwner() {
     {
+        TglOwnedSurfaceStorage source{};
+        uint32_t mode=1,height=1081,format=0x19;unsigned reads=0;bool allow=true;
+        uintptr_t params=0x1000;
+        std::memcpy(source.prefix.data()+0xdc,&height,4);
+        std::memcpy(source.prefix.data()+0x130,&format,4);
+        auto read=[&](uintptr_t p,void* out,size_t n) noexcept {
+            ++reads;assert(p==params && n==4);
+            if(!allow) return false;
+            std::memcpy(out,&mode,4);return true;
+        };
+        bool rejected=true;
+        TglVeboxPipeAcquisition frame,mismatch;
+        assert(tglRejectLeasedGen12DiOutput(rejected,source,0,frame,read) && !rejected && reads==0);
+        assert(!tglRejectLeasedGen12DiOutput(rejected,source,params,mismatch,read) && reads==0 && !mismatch.healthy());
+        std::memcpy(source.prefix.data()+0x88,&params,sizeof(params));
+        assert(tglRejectLeasedGen12DiOutput(rejected,source,params,frame,read) && rejected && reads==1);
+        mode=2;
+        assert(tglRejectLeasedGen12DiOutput(rejected,source,params,frame,read) && !rejected);
+        for(uint32_t invalid : {0u,3u,0x10001u,0xffffffffu}) {
+            mode=invalid;rejected=true;
+            TglVeboxPipeAcquisition invalidFrame;
+            assert(!tglRejectLeasedGen12DiOutput(rejected,source,params,invalidFrame,read) && rejected && !invalidFrame.healthy());
+            mode=1;const unsigned failedReads=reads;
+            assert(!tglRejectLeasedGen12DiOutput(rejected,source,params,invalidFrame,read) && reads==failedReads);
+        }
+        mode=1;allow=false;rejected=false;
+        assert(!tglRejectLeasedGen12DiOutput(rejected,source,params,frame,read) && !rejected && !frame.healthy());
+        const unsigned before=reads;params=UINTPTR_MAX-2;
+        std::memcpy(source.prefix.data()+0x88,&params,sizeof(params));
+        TglVeboxPipeAcquisition overflow;
+        assert(!tglRejectLeasedGen12DiOutput(rejected,source,params,overflow,read) && reads==before && !overflow.healthy());
+    }
+    {
         for(bool hasDi : {false,true}) for(bool bob : {false,true})
             for(uint32_t height : {0u,1u,2u,3u,4u,1080u,1081u,0xffffffffu})
                 for(uint32_t format : {0x19u,0x52u,0x53u,0x15u,0x0eu,0x10019u}) {
