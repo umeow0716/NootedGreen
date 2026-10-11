@@ -16392,6 +16392,11 @@ int main() {
                                     ==TglOwnedBaseConstruction::ConstructedSuccess);
                             TglNativeOuterSurfaceRoles roles;roles.sourceCount=1;roles.targetCount=1;
                             roles.sources[0]=reinterpret_cast<uintptr_t>(&source);roles.targets[0]=reinterpret_cast<uintptr_t>(&target);
+                            const auto noVp=frame.withPrivateVpCommandFrame(0,roles,0,0,
+                                0x1100,0x2200,0x3300,[](auto&,void*,void*,auto&,auto&,auto&,auto&,auto&,auto&) noexcept {
+                                    assert(false);return TglOwnedVeboxCommandTransactionResult{};
+                                });
+                            assert(noVp.status==5 && !noVp.acquired && !frame.backing().retention()());
                             // Construction alone is insufficient for the runtime sender:
                             // these fixture children have no installed private tables.
                             for(size_t selected:{size_t{0},size_t{1},size_t{2}}) {

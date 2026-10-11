@@ -16275,6 +16275,33 @@ public:
         result.status=status;
         return result;
     }
+    // Use this frame's persistent VP backing, never an external VP allocation.
+    // Parent80 is borrowed only while frontend, child and VP resource owners
+    // are all live. Consumer may run the prepared full-table pass without
+    // recursively acquiring a graph view; it must not let any callback escape.
+    template<class Consume>
+    TglOwnedVeboxCommandTransactionResult withPrivateVpCommandFrame(
+        size_t childIndex,const TglNativeOuterSurfaceRoles& roles,size_t sourceIndex,size_t targetIndex,
+        uintptr_t execution,uintptr_t renderHal,uintptr_t sku,Consume consume) noexcept {
+        if(!backing_.vpBound()) return {};
+        return withPrivateChildCommandFrame(childIndex,roles,sourceIndex,targetIndex,
+            execution,renderHal,sku,
+            [&](auto& owner,void* child,auto& source,auto& target,auto& parameters,auto& packets) noexcept {
+                TglOwnedVeboxCommandTransactionResult result;
+                const int status=backing_.withVpResources([&](auto& graph,auto& storage,auto& lines) noexcept {
+                    return owner.withLeasedBorrowedVpCpuView(child,storage.bytes.data(),
+                        [&](void* parent,void* vp) noexcept {
+                            static_assert(noexcept(consume(owner,parent,vp,graph,lines,source,target,parameters,packets)) &&
+                                std::is_same_v<decltype(consume(owner,parent,vp,graph,lines,source,target,parameters,packets)),
+                                    TglOwnedVeboxCommandTransactionResult>);
+                            result=consume(owner,parent,vp,graph,lines,source,target,parameters,packets);
+                            return result.status;
+                        });
+                });
+                result.status=status;
+                return result;
+            });
+    }
     template<class Consume>
     TglOwnedVeboxCommandTransactionResult withNativeCommandFrame(
         const TglNativeOuterSurfaceRoles& roles,size_t sourceIndex,size_t targetIndex,
