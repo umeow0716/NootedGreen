@@ -4861,6 +4861,17 @@ public:
         if(changed) *changed=result.changed;
         ready_=true;busy_=false;return 0;
     }
+    // FFDN's type1/format3d branch requires real backing. The allocator writes
+    // surface e0=0 on changed allocation; preserve that exact shell value for
+    // the subsequent native history comparison, not inferred IOSurface pitch.
+    int ensureFfdnBacking(const TglOwnedFfdnAllocationRequest& request,
+        bool& changed,uint32_t& pitch) noexcept {
+        if(request.type!=1 || request.kind!=TglOwnedFfdiAllocationKind::NativeBacking ||
+           request.key.format!=0x3d || capture_.native.resourceType()!=1) return 5;
+        const int result=ensure(request.key,&changed);
+        if(result) return result;
+        std::memcpy(&pitch,surface_.prefix.data()+0xe0,4);return 0;
+    }
     const TglOwnedSurfaceStorage* surface() const noexcept {return ready_ && !busy_ ? &surface_ : nullptr;}
     bool hasSurfaceLease(const TglOwnedSurfaceStorage& expected) noexcept {
         return ready_ && busy_ && &expected==&surface_ && capture_.backed(surface_.resource);

@@ -5184,6 +5184,16 @@ static void testNativeResourceBoundary() {
                 auto effectiveKey=key;
                 std::memcpy(&effectiveKey.width,destinationSurface->prefix.data()+0xd8,4);
                 bool changed=true;assert(destination.ensure(effectiveKey,&changed)==0 && !changed);
+                TglOwnedFfdnAllocationRequest request;
+                assert(tglPrepareOwnedFfdnAllocationRequest(*surface,{false,0},request));
+                uint32_t pitch=0xa5a5a5a5;
+                assert(destination.ensureFfdnBacking(request,changed,pitch)==0 && !changed && pitch==0);
+                auto denied=request;denied.kind=TglOwnedFfdiAllocationKind::DescriptorOnly;
+                pitch=0xa5a5a5a5;changed=true;
+                assert(destination.ensureFfdnBacking(denied,changed,pitch)==5 && changed && pitch==0xa5a5a5a5);
+                assert(destination.withSurface([&](const auto&) noexcept {
+                    assert(destination.ensureFfdnBacking(request,changed,pitch)==5 && !changed && pitch==0xa5a5a5a5);
+                }));
             }
             {
                 struct NativeReportBackend {
