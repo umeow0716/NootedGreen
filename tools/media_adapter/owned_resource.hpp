@@ -1681,6 +1681,34 @@ struct TglNativeVeboxRendererView {
     }
 };
 
+// Exact creator-return boundary133c24..133c36, before RendererInitialize.
+// Unlike resolveQualified above this does NOT require an already-published
+// context. It is a read-only snapshot under the creator/physical lifetime;
+// it grants neither child publication nor native-init/cleanup authority.
+struct TglNativeCreatedVeboxRendererView {
+    uintptr_t image=0,creator=0,renderer=0,configuration=0;
+    std::array<uintptr_t,3> originalChildren{}; // 910/918/native920
+    template<class Read,class Admit,class Qualify,class Executable>
+    bool resolve(uintptr_t base,uintptr_t object,Read read,Admit admit,
+        Qualify qualify,Executable executable) noexcept {
+        *this={};
+        uintptr_t creatorTable=0,create=0,result=0,rendererTable=0,init=0,frame=0;
+        std::array<uintptr_t,3> children{};
+        if(!base || base>UINTPTR_MAX-0x75bbd0 || !qualify(base) ||
+           !object || (object&7) || object>UINTPTR_MAX-0x70 || !admit(object,0x70) ||
+           !read(object,&creatorTable,8) || creatorTable!=base+0x75bb58 ||
+           !read(creatorTable+0x18,&create,8) || create!=base+0x1e6610 || !executable(create,1) ||
+           !read(object+0x68,&result,8) || !result || (result&7) ||
+           result>UINTPTR_MAX-0x2cb8 || !admit(result,0x2cb8) ||
+           !read(result,&rendererTable,8) || rendererTable!=base+0x75bba0 ||
+           !read(rendererTable+0x20,&init,8) || init!=base+0x132510 || !executable(init,1) ||
+           !read(rendererTable+0x28,&frame,8) || frame!=base+0x131fa0 || !executable(frame,1) ||
+           !read(result+0x910,children.data(),sizeof(children))) return false;
+        image=base;creator=object;renderer=result;configuration=result+0x2cb0;
+        originalChildren=children;return true;
+    }
+};
+
 struct TglOwnedSurfaceStorage;
 // Outer131fa0 copies0x139 bytes at1320e2: source count0 <=17, targets90 <=8.
 // Sources begin8; targets begin98 (NOT the source!). Native13076c..13083c

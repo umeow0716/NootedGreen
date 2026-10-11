@@ -13601,6 +13601,43 @@ int main() {
         imageAllowed=false;assert(!qualified());imageAllowed=true;
         executableAllowed=false;assert(!qualified());executableAllowed=true;
         assert(qualified());
+        {
+            alignas(8) std::array<uint8_t,0x70> creator{};
+            const auto creatorAddress=reinterpret_cast<uintptr_t>(creator.data());
+            uintptr_t creatorTable=image+0x75bb58,create=image+0x1e6610;
+            put(creatorAddress,0,creatorTable);put(creatorAddress,0x68,r);
+            put(r,0x920,0x12345678);
+            auto creatorRead=[&](uintptr_t address,void* bytes,size_t size) noexcept {
+                if(address>=creatorAddress && address-creatorAddress<=creator.size() &&
+                    size<=creator.size()-(address-creatorAddress)) {
+                    std::memcpy(bytes,reinterpret_cast<const void*>(address),size);return true;
+                }
+                if(address==image+0x75bb70 && size==8) {std::memcpy(bytes,&create,8);return true;}
+                return qualifiedRead(address,bytes,size);
+            };
+            bool creatorAllowed=true;
+            auto creatorAdmit=[&](uintptr_t address,size_t size) noexcept {
+                return (creatorAllowed && address==creatorAddress && size==creator.size()) || admit(address,size);
+            };
+            auto creatorExecutable=[&](uintptr_t address,size_t size) noexcept {
+                return (executableAllowed && address==image+0x1e6610 && size==1) || executable(address,size);
+            };
+            TglNativeCreatedVeboxRendererView created;
+            auto resolveCreated=[&]() noexcept {
+                return created.resolve(image,creatorAddress,creatorRead,creatorAdmit,qualify,creatorExecutable);
+            };
+            assert(resolveCreated() && created.renderer==r && created.configuration==r+0x2cb0);
+            assert(!created.originalChildren[0] && !created.originalChildren[1] &&
+                created.originalChildren[2]==0x12345678);
+            creatorAllowed=false;assert(!resolveCreated() && !created.renderer);creatorAllowed=true;
+            create++;assert(!resolveCreated());create--;
+            put(creatorAddress,0,image+0x75bb60);assert(!resolveCreated());
+            put(creatorAddress,0,creatorTable);
+            put(creatorAddress,0x68,0);assert(!resolveCreated());put(creatorAddress,0x68,r);
+            put(r,0,image+0x758158);assert(!resolveCreated());put(r,0,image+0x75bba0);
+            assert(resolveCreated());
+            put(r,0x920,0); // Snapshot never modifies native child slots.
+        }
         put(c,0x12e0,0);assert(!rendererView.resolve(c,read,admit) && !rendererView.renderer);
         put(c,0x12e0,UINTPTR_MAX-8);assert(!rendererView.resolve(c,read,admit));
         put(c,0x12e0,r+8);assert(!rendererView.resolve(c,read,admit));
