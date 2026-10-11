@@ -70,8 +70,8 @@ static void testTrackedCpuOwner() {
         struct Child {uintptr_t p;bool live=true;
             bool hasPrivateChildLease(uintptr_t value) const noexcept {return live && p==value;}
         } owner{child};
-        struct Execution {bool live=true;
-            bool hasExecutionLease(uintptr_t value) const noexcept {return live && value==7;}
+        struct Execution {bool live=true;uintptr_t identity=7;
+            bool hasExecutionLease(uintptr_t value) const noexcept {return live && value==identity;}
         } execution;
         TglVeboxAdmissionBorrowedInterfaces expected{0x100,0x200,0x300,0};
         std::memcpy(base.data()+0x10,&expected.os,8);
@@ -110,6 +110,25 @@ static void testTrackedCpuOwner() {
         p=reinterpret_cast<uintptr_t>(&source);std::memcpy(pass.data()+0x10,&p,8);
         assert(capture() && input.prefix.sourceWidth==1920 && input.prefix.params138==1);
         assert(input.prefix.sku0==(uint64_t{1}<<12) && input.mmc==1 && input.pipe==1);
+        std::array<uint8_t,0xd48> nativeExecution{};
+        execution.identity=reinterpret_cast<uintptr_t>(nativeExecution.data());
+        std::memcpy(base.data()+0x88,&execution.identity,8);
+        uint32_t height=1080;std::memcpy(source.prefix.data()+0xdc,&height,4);
+        unsigned resets=0,sfcCalls=0;
+        auto reset=[&]() noexcept {++resets;nativeExecution.fill(0);return true;};
+        auto setup=[](auto&) noexcept {};
+        auto feature=[](auto&) noexcept {assert(false);}; // unknown source format
+        auto sfc=[&](auto&) noexcept {++sfcCalls;pass[8]=0x80;return true;};
+        auto run=[&]() noexcept {
+            return tglRunCapturedVeboxAdmissionStages(owner,execution,base.data(),params,pass,
+                source,target,expected,1,nativeExecution,read,reset,setup,feature,sfc);
+        };
+        assert(run() && resets==1 && sfcCalls==1 && pass[8]==0x80);
+        ++execution.identity;
+        assert(!run() && resets==1 && sfcCalls==1 && pass[8]==0x80);
+        --execution.identity;
+        p=123;std::memcpy(params.data()+0x98,&p,8);
+        assert(!run() && resets==1 && sfcCalls==1 && pass[8]==0x80);
     }
     {
         TglVeboxAdmissionStagesInput input;

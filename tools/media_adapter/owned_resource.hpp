@@ -6262,6 +6262,29 @@ bool tglRunOwnedVeboxSurfaceAdmissionStages(TglVeboxAdmissionStagesInput input,
         [&]() noexcept {return tglVeboxFormatSupported(format);},feature,sfc);
 }
 
+// Join input capture to the stage chain without publishing an intermediate
+// caller-editable input or copying opaque pass state. Enclosing feature-frame
+// scope pins surfaces/interfaces; execution is that same owner's leased view.
+template<class ChildOwner,class ExecutionOwner,class Execution,size_t ParamsN,size_t PassN,
+    class Read,class Reset,class Setup,class Feature,class Sfc>
+bool tglRunCapturedVeboxAdmissionStages(ChildOwner& childOwner,ExecutionOwner& executionOwner,
+    void* child,std::array<uint8_t,ParamsN>& params,std::array<uint8_t,PassN>& pass,
+    const TglOwnedSurfaceStorage& source,const TglOwnedSurfaceStorage& target,
+    const TglVeboxAdmissionBorrowedInterfaces& expected,uint32_t pipe,
+    Execution& execution,Read read,Reset reset,Setup setup,Feature feature,Sfc sfc) noexcept {
+    static_assert(ParamsN>=0x139 && PassN>=0x18,"complete named admission input extents");
+    if(!child || !childOwner.hasPrivateChildLease(reinterpret_cast<uintptr_t>(child))) return false;
+    uintptr_t linked=0;std::memcpy(&linked,static_cast<uint8_t*>(child)+0x88,8);
+    if(linked!=reinterpret_cast<uintptr_t>(execution.data())) return false;
+    TglVeboxAdmissionStagesInput input;
+    if(!tglReadLeasedVeboxAdmissionInputs(input,childOwner,executionOwner,child,
+        reinterpret_cast<uintptr_t>(params.data()),reinterpret_cast<uintptr_t>(pass.data()),
+        source,target,expected,pipe,read)) return false;
+    TglVeboxAdmissionPassByte flags(pass[8]);
+    return tglRunOwnedVeboxSurfaceAdmissionStages(input,source,execution,flags,
+        reset,setup,feature,sfc);
+}
+
 template<class Owner,class Policy> class TglOwnedVeboxAdmissionContext {
     Owner& owner_;
     void* child_;
