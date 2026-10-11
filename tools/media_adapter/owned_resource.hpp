@@ -5945,6 +5945,43 @@ template<class Resolve> struct TglOwnedVpExtentCallback {
             context->admit(source,target,settings):0;
     }
 };
+// Named ABI collection, NOT a complete/native-publishable vtable. Keep all
+// admission entries under the same VP/input lease and expire them together.
+struct TglOwnedVpAdmissionEntries {
+    int (*extent)(void*,void*,void*,void*) noexcept=nullptr;
+    bool (*eligible)(void*,void*,void*,void*) noexcept=nullptr;
+    bool (*pair)(void*,void*,void*,void*) noexcept=nullptr;
+    bool (*input)(void*,void*) noexcept=nullptr;
+    bool (*output)(void*,void*) noexcept=nullptr;
+    void (*dimensions)(void*,void*,uint32_t*,uint32_t*) noexcept=nullptr;
+};
+template<class Read,class Use>
+int tglWithOwnedVpAdmissionEntries(TglOwnedVpSfcCallerStorage& vp,Read& read,Use use) noexcept {
+    static_assert(noexcept(use(nullptr,std::declval<const TglOwnedVpAdmissionEntries&>())),
+        "VP admission entry consumer ABI");
+    using AdmissionContext=TglOwnedVpAdmissionContext<Read>;
+    using Admission=TglOwnedVpAdmissionCallbacks<TglOwnedVpSfcResolve<AdmissionContext>>;
+    AdmissionContext admission(vp,read);void* child=vp.bytes.data();
+    TglOwnedVpSfcScopedContext<AdmissionContext> admissionScope(child,admission);
+    if(!admissionScope.bound()) return 5;
+    auto eligible=[&](uintptr_t settings,uintptr_t source,uintptr_t target) noexcept {
+        return Admission::eligible(child,reinterpret_cast<void*>(settings),
+            reinterpret_cast<void*>(source),reinterpret_cast<void*>(target));
+    };
+    auto dimensions=[&](uintptr_t source,uint32_t& width,uint32_t& height) noexcept {
+        width=height=0;
+        Admission::dimensions(child,reinterpret_cast<void*>(source),&width,&height);
+        return width!=0 && height!=0;
+    };
+    using ExtentContext=TglOwnedVpExtentContext<Read,decltype(eligible),decltype(dimensions)>;
+    using Extent=TglOwnedVpExtentCallback<TglOwnedVpSfcResolve<ExtentContext>>;
+    ExtentContext extent(vp,read,eligible,dimensions);
+    TglOwnedVpSfcScopedContext<ExtentContext> extentScope(child,extent);
+    if(!extentScope.bound()) return 5;
+    const TglOwnedVpAdmissionEntries entries{&Extent::admit,&Admission::eligible,&Admission::pair,
+        &Admission::input,&Admission::output,&Admission::dimensions};
+    return use(child,entries);
+}
 
 // Bounded slot28 geometry acquisition. Read authorizes every surface/MHW
 // span under leases held through the caller's complete preparation/use scope.

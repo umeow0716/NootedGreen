@@ -7554,7 +7554,7 @@ int main() {
     {
         TglOwnedVpSfcCallerStorage vp;
         std::array<uint8_t,0x294> source{};std::array<uint8_t,0x134> target{};
-        std::array<uint8_t,0xe8> settings{};std::array<uint8_t,0x2c> mhw{};
+        std::array<uint8_t,0xf8> settings{};std::array<uint8_t,0x2c> mhw{};
         std::array<uint8_t,0x88> hal{};std::array<uint8_t,0xac> workaround{};
         const uintptr_t mhwAddress=0x4000,halAddress=0x5000,waAddress=0x6000;
         std::memcpy(vp.bytes.data()+0x20,&mhwAddress,8);std::memcpy(vp.bytes.data()+0x18,&halAddress,8);
@@ -7566,6 +7566,12 @@ int main() {
         std::memcpy(target.data()+0x40,rectangles.data()+4,16);
         const uint32_t targetSize=8;std::memcpy(target.data()+0xd8,&targetSize,4);
         std::memcpy(target.data()+0xdc,&targetSize,4);target[0xe4]=1;settings[0xe0]=1;
+        source[0x130]=target[0x130]=0xd;settings[0x90]=1;
+        const uintptr_t targetAddress=0x2000;std::memcpy(settings.data()+0x98,&targetAddress,8);
+        const uint32_t frameSize=100;const float frameExtent=100;
+        std::memcpy(source.data()+0xd8,&frameSize,4);std::memcpy(source.data()+0xdc,&frameSize,4);
+        std::memcpy(source.data()+0x58,&frameExtent,4);std::memcpy(source.data()+0x5c,&frameExtent,4);
+        mhw[0x18]=mhw[0x1a]=1;
         const std::array<uintptr_t,6> bases{0x1000,0x2000,0x3000,0x4000,0x5000,0x6000};
         const std::array<size_t,6> sizes{source.size(),target.size(),settings.size(),mhw.size(),hal.size(),workaround.size()};
         const std::array<const uint8_t*,6> bytes{source.data(),target.data(),settings.data(),mhw.data(),hal.data(),workaround.data()};
@@ -7621,6 +7627,27 @@ int main() {
             assert(invoke(vp.bytes.data())==0 && reads==1 && !dimensionCalls);
         }
         assert(invoke(vp.bytes.data())==0);
+        reenter=nullptr;reads=0;
+        TglOwnedVpAdmissionEntries escaped;
+        assert(tglWithOwnedVpAdmissionEntries(vp,read,[&](void* child,const auto& entries) noexcept {
+            escaped=entries;
+            void* s=reinterpret_cast<void*>(0x1000);void* t=reinterpret_cast<void*>(0x2000);
+            void* p=reinterpret_cast<void*>(0x3000);
+            assert(entries.input(child,s) && entries.output(child,t));
+            assert(entries.pair(child,s,t,nullptr) && entries.eligible(child,p,s,t));
+            uint32_t width=0,height=0;entries.dimensions(child,s,&width,&height);
+            assert(width==100 && height==100 && entries.extent(child,s,t,p)==1);
+            settings[0x90]=0;const unsigned beforeReject=reads;
+            assert(entries.extent(child,s,t,p)==0 && reads==beforeReject+2);
+            settings[0x90]=1;
+            assert(tglWithOwnedVpAdmissionEntries(vp,read,[](void*,const auto&) noexcept {
+                assert(false);return 0;
+            })==5);
+            return -17;
+        })==-17);
+        const auto completedReads=reads;
+        assert(escaped.extent(vp.bytes.data(),reinterpret_cast<void*>(0x1000),
+            reinterpret_cast<void*>(0x2000),reinterpret_cast<void*>(0x3000))==0 && reads==completedReads);
     }
     {
         TglOwnedVpRegionInput in;
