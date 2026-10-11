@@ -16816,6 +16816,38 @@ int tglWithOwnedVeboxFrameHookBindings(Frame& frame,ChildOwner& child,ExecutionO
         });
 }
 
+// Complete synchronous command entry under the caller's allocation/admission/
+// mode/lifecycle and retained-frame scopes. Native setup/build must receive the
+// SAME producer that owns the installed hooks, not the underlying packet-only
+// context. Acquisition/writeback flags survive every native error unchanged.
+// This does not submit, retire frames, or authorize physical destruction.
+template<class LifetimeResolve,class AdmissionResolve,class AllocationResolve,
+    class ModeResolve,class FormatRead,class SourceOwner,class Frame,class ChildOwner,
+    class ExecutionOwner,class Read,class PacketAdmit,class ProduceCsc,class Qualify,
+    class Executable,class SetupInvoke=TglNativeVeboxSetupInvoker,
+    class BuildInvoke=TglNativeVeboxBuilderInvoker,
+    class WritebackInvoke=TglNativeCommandHeaderWritebackInvoker>
+TglOwnedVeboxCommandTransactionResult tglWithOwnedVeboxFrameNativeTransaction(
+    SourceOwner& sourceOwner,Frame& frame,ChildOwner& child,ExecutionOwner& execution,
+    uintptr_t dnParams,Read read,PacketAdmit admitPackets,ProduceCsc produceCsc,
+    const TglNativeVeboxSetupBinding& setup,const TglNativeVeboxBuilderBinding& builder,
+    uintptr_t image,uintptr_t os,TglOwnedVeboxBuilderScratch& scratch,void* auxiliary,
+    Qualify qualify,Executable executable,SetupInvoke setupInvoke=SetupInvoke{},
+    BuildInvoke buildInvoke=BuildInvoke{},WritebackInvoke writebackInvoke=WritebackInvoke{}) noexcept {
+    TglOwnedVeboxCommandTransactionResult result;
+    const int status=tglWithOwnedVeboxFrameHookBindings<LifetimeResolve,AdmissionResolve,
+        AllocationResolve,ModeResolve,FormatRead>(frame,child,execution,dnParams,read,
+        admitPackets,produceCsc,[&](void* object,const auto&,auto& producer) noexcept -> int {
+            result=tglWithCapturedNativeVeboxCommandTransaction(sourceOwner,child,execution,
+                object,frame.leases.execution,frame.leases.source,producer,setup,builder,
+                image,os,scratch,auxiliary,read,qualify,executable,
+                setupInvoke,buildInvoke,writebackInvoke);
+            return result.status;
+        });
+    result.status=status;
+    return result;
+}
+
 // One borrowed-OS resource lifetime. The renderer must close every such scope
 // before retiring RenderHal/OS. Member order guarantees resource destruction
 // while its backend still exists; close is terminal and idempotent.

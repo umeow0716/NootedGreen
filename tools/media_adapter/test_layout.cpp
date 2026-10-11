@@ -1378,6 +1378,17 @@ static void testTrackedCpuOwner() {
             child.installed[5]^=1;
             assert(run()==5 && consumed==2 && setups==2 && builders==2 && writebacks==2);
             child.installed[5]^=1;
+            TglNativeVeboxSetupBinding nativeSetup;
+            TglNativeVeboxBuilderBinding nativeBuilder;
+            TglOwnedVeboxBuilderScratch scratch;
+            const auto unqualified=tglWithOwnedVeboxFrameNativeTransaction<AuxiliaryResolve,
+                AuxiliaryScope,AuxiliaryScope,AuxiliaryScope,FormatRead>(sourceLease,frame,
+                child,execution,0,noRead,noPackets,produce,nativeSetup,nativeBuilder,
+                0x100000000,1,scratch,nullptr,
+                [](uintptr_t) noexcept {return false;},
+                [](uintptr_t,size_t) noexcept {return false;});
+            assert(unqualified.status==5 && !unqualified.acquired && !unqualified.writtenBack);
+            assert(setups==2 && builders==2 && writebacks==2);
         }
     }
     {
