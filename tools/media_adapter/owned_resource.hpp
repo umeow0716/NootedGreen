@@ -6149,6 +6149,42 @@ struct TglVeboxAdmissionStagesInput {
     uint8_t mmc=0;
     uintptr_t leasedParamsF0=0;
 };
+struct TglVeboxAdmissionBorrowedInterfaces {
+    uintptr_t os=0,renderHal=0,sku=0,paramsF0=0;
+};
+// Read only named admission inputs. Context authenticates params/pass and
+// retains their owners; source/target and interfaces are the same frame's
+// leased identities. No arbitrary pointer traversal or donor this adjustment.
+template<class ChildOwner,class ExecutionOwner,class Read>
+bool tglReadLeasedVeboxAdmissionInputs(TglVeboxAdmissionStagesInput& output,
+    ChildOwner& childOwner,ExecutionOwner& executionOwner,void* child,
+    uintptr_t params,uintptr_t pass,const TglOwnedSurfaceStorage& source,
+    const TglOwnedSurfaceStorage& target,const TglVeboxAdmissionBorrowedInterfaces& expected,
+    uint32_t pipe,Read read) noexcept {
+    static_assert(noexcept(read(uintptr_t{},nullptr,size_t{})),"admission bounded read ABI");
+    if(!child || !childOwner.hasPrivateChildLease(reinterpret_cast<uintptr_t>(child)) ||
+       !params || params>UINTPTR_MAX-0x139 || !pass || pass>UINTPTR_MAX-0x18 ||
+       !expected.os || !expected.renderHal || !expected.sku || pipe>2) return false;
+    const auto* base=static_cast<const uint8_t*>(child);
+    uintptr_t os=0,renderHal=0,sku=0,execution=0,sourceLink=0,targetLink=0,f0=0;
+    std::memcpy(&os,base+0x10,8);std::memcpy(&renderHal,base+0x18,8);
+    std::memcpy(&sku,base+0x20,8);std::memcpy(&execution,base+0x88,8);
+    if(os!=expected.os || renderHal!=expected.renderHal || sku!=expected.sku ||
+       !executionOwner.hasExecutionLease(execution)) return false;
+    TglVeboxAdmissionStagesInput candidate;
+    if(!read(pass+0x10,&sourceLink,8) || sourceLink!=reinterpret_cast<uintptr_t>(&source) ||
+       !read(params+0x98,&targetLink,8) || targetLink!=reinterpret_cast<uintptr_t>(&target) ||
+       !read(params+0xf0,&f0,8) || f0!=expected.paramsF0 ||
+       !read(params+0x138,&candidate.prefix.params138,1) ||
+       !read(params+0x10c,&candidate.params10c,4) || !read(sku,&candidate.prefix.sku0,8)) return false;
+    candidate.prefix.os=candidate.prefix.renderHal=candidate.prefix.execution=candidate.prefix.source=true;
+    candidate.mmc=base[0x1ba9];candidate.pipe=pipe;candidate.leasedParamsF0=f0;
+    std::memcpy(&candidate.prefix.sourceWidth,source.prefix.data()+0xd8,4);
+    std::memcpy(&candidate.prefix.sourceHeight,source.prefix.data()+0xdc,4);
+    std::memcpy(&candidate.source124,source.prefix.data()+0x124,4);
+    output=candidate;return true;
+}
+
 // CPU sequencing of1fb950, not a substitute for Gen12 policy/context.
 // Qualified callbacks own reset/optional VP reset, history setup, platform
 // feature query, native170 and complete VP28+flag publication respectively.

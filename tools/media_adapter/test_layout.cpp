@@ -45,6 +45,47 @@ struct TestFeatureExecutionOwner {
 };
 static void testTrackedCpuOwner() {
     {
+        std::array<uint8_t,0x1bc0> base{};
+        std::array<uint8_t,0x140> params{};std::array<uint8_t,0x28> pass{};
+        TglOwnedSurfaceStorage source{},target{};
+        const auto child=reinterpret_cast<uintptr_t>(base.data());
+        struct Child {uintptr_t p;bool live=true;
+            bool hasPrivateChildLease(uintptr_t value) const noexcept {return live && p==value;}
+        } owner{child};
+        struct Execution {bool live=true;
+            bool hasExecutionLease(uintptr_t value) const noexcept {return live && value==7;}
+        } execution;
+        TglVeboxAdmissionBorrowedInterfaces expected{0x100,0x200,0x300,0};
+        std::memcpy(base.data()+0x10,&expected.os,8);
+        std::memcpy(base.data()+0x18,&expected.renderHal,8);
+        std::memcpy(base.data()+0x20,&expected.sku,8);
+        uintptr_t p=7;std::memcpy(base.data()+0x88,&p,8);base[0x1ba9]=1;
+        p=reinterpret_cast<uintptr_t>(&source);std::memcpy(pass.data()+0x10,&p,8);
+        p=reinterpret_cast<uintptr_t>(&target);std::memcpy(params.data()+0x98,&p,8);
+        params[0x138]=1;uint32_t width=1920;std::memcpy(source.prefix.data()+0xd8,&width,4);
+        bool allow=true;
+        const uintptr_t pp=reinterpret_cast<uintptr_t>(params.data()),pa=reinterpret_cast<uintptr_t>(pass.data());
+        auto read=[&](uintptr_t address,void* out,size_t n) noexcept {
+            if(!allow) return false;
+            if(address==0x300 && n==8) {uint64_t sku=uint64_t{1}<<12;std::memcpy(out,&sku,8);return true;}
+            if((address==pa+0x10 && n==8) || (address==pp+0x98 && n==8) ||
+               (address==pp+0xf0 && n==8) || (address==pp+0x138 && n==1) ||
+               (address==pp+0x10c && n==4)) {std::memcpy(out,reinterpret_cast<void*>(address),n);return true;}
+            assert(false);return false;
+        };
+        TglVeboxAdmissionStagesInput input;input.params10c=0xabcdef;
+        auto capture=[&]() noexcept {
+            return tglReadLeasedVeboxAdmissionInputs(input,owner,execution,base.data(),pp,pa,source,target,expected,1,read);
+        };
+        owner.live=false;assert(!capture() && input.params10c==0xabcdef);owner.live=true;
+        execution.live=false;assert(!capture() && input.params10c==0xabcdef);execution.live=true;
+        allow=false;assert(!capture() && input.params10c==0xabcdef);allow=true;
+        p=123;std::memcpy(pass.data()+0x10,&p,8);assert(!capture() && input.params10c==0xabcdef);
+        p=reinterpret_cast<uintptr_t>(&source);std::memcpy(pass.data()+0x10,&p,8);
+        assert(capture() && input.prefix.sourceWidth==1920 && input.prefix.params138==1);
+        assert(input.prefix.sku0==(uint64_t{1}<<12) && input.mmc==1 && input.pipe==1);
+    }
+    {
         TglVeboxAdmissionStagesInput input;
         input.prefix={true,true,true,true,1,uint64_t{1}<<12,0,0};input.pipe=2;
         TglOwnedSurfaceStorage source{};
