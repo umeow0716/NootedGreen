@@ -5712,6 +5712,22 @@ static void testNativeResourceBoundary() {
                     static_cast<decltype(&input)>(nullptr),static_cast<decltype(&input)>(nullptr),
                     {true,1},valid,false,flag,mode,noCopy)==0);
                 assert(!valid && flag==1 && mode==1);
+                unsigned consumers=0;
+                assert(tglPrepareOwnedDescriptorFfdnPair(targets,input,
+                    static_cast<decltype(&input)>(nullptr),static_cast<decltype(&input)>(nullptr),
+                    {false,0},valid,false,flag,mode,noCopy,
+                    [&](const auto& inputs,const auto& a,const auto& b) noexcept -> int {
+                        ++consumers;assert(inputs[0] && !inputs[1] && !inputs[2]);
+                        assert(input.hasSurfaceLease(*inputs[0]) && flag==0 && mode==0);
+                        assert(!tglNativeBackingPresent(a.resource) && !tglNativeBackingPresent(b.resource));
+                        input.reset();assert(input.ensure(inputKey)==5);
+                        for(auto& target:targets) {
+                            target.reset();
+                            assert(!target.withDescriptor([](const auto&) noexcept {assert(false);}));
+                        }
+                        return 31;
+                    })==31 && consumers==1);
+                assert(input.surface());
                 for(auto& target:targets) assert(target.withDescriptor([](const auto& view) noexcept {
                     uint32_t width=0,format=0;uintptr_t dn=1;
                     std::memcpy(&width,view.prefix.data()+0xd8,4);

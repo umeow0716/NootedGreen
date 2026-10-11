@@ -5227,11 +5227,11 @@ int tglWithAllocatedOwnedFfdnPair(Owner& input,Owner* previous,Owner* copyDestin
 // Persistent descriptor-only FFDN targets. Native-backed format3d remains
 // owned by the separate resource path. DN90 is deliberately not retained;
 // this preparation is not asynchronous command admission or retirement.
-template<class Owner,class Copy>
+template<class Owner,class Copy,class Finish=TglOwnedFfdnNoFinish>
 int tglPrepareOwnedDescriptorFfdnPair(std::array<TglOwnedDescriptorOnlySurface,2>& targets,
     Owner& input,Owner* previous,Owner* copyDestination,
     TglOwnedFfdnCompressionSelection compression,bool& referenceValid,bool executionFlag13,
-    uint8_t& execution15,uint8_t& execution16,Copy copy) noexcept {
+    uint8_t& execution15,uint8_t& execution16,Copy copy,Finish finish={}) noexcept {
     return tglWithAllocatedOwnedFfdnPair(input,previous,copyDestination,compression,
         referenceValid,executionFlag13,execution15,execution16,
         [&](size_t index,const auto& request,bool& changed,uint32_t& pitch) noexcept -> int {
@@ -5240,6 +5240,17 @@ int tglPrepareOwnedDescriptorFfdnPair(std::array<TglOwnedDescriptorOnlySurface,2
             return 0;
         },copy,[&](size_t index,const auto& source,const auto&) noexcept -> int {
             return targets[index].publishFfdnFrame(source)?0:5;
+        },[&](const auto& inputs) noexcept -> int {
+            int result=5;
+            const bool first=targets[0].withDescriptor([&](const auto& a) noexcept {
+                const bool second=targets[1].withDescriptor([&](const auto& b) noexcept {
+                    static_assert(noexcept(finish(inputs,a,b)) &&
+                        std::is_same_v<decltype(finish(inputs,a,b)),int>,"descriptor FFDN frame consumer ABI");
+                    result=finish(inputs,a,b);
+                });
+                if(!second) result=5;
+            });
+            return first?result:5;
         });
 }
 
