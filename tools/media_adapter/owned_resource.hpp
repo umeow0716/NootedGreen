@@ -15970,6 +15970,7 @@ template<class Frame,size_t Capacity=2> class TglOwnedVeboxRetainedFrames {
     // reconstructed at the same address must not resurrect an old ticket.
     inline static std::atomic<uint64_t> nextGeneration_{0};
     bool physicalTeardownStarted_=false;
+    bool nativeRequestItemActive_=false; // protected by enclosing registry gate
     struct Unlock {std::atomic_flag& gate;~Unlock(){gate.clear(std::memory_order_release);}};
 public:
     // Embed in a stable-address per-physical registry entry. Keep that entry
@@ -16027,6 +16028,17 @@ public:
         if(physicalTeardownStarted_) return false;
         for(const auto& slot:slots_) if(slot.frame) return false;
         return true;
+    }
+    // Call only within the enclosing registry generation scope, once per
+    // native batch item BEFORE235ab0 prepares any shells. Release the pool
+    // snapshot lock before invocation so the synchronous renderer can create
+    // its retained frame, while the outer registry gate excludes other work.
+    template<class Invoke> int withNativeRequestItem(Invoke invoke) noexcept {
+        static_assert(noexcept(invoke()) && std::is_same_v<decltype(invoke()),int>);
+        if(nativeRequestItemActive_ || !emptyForNativeRequest()) return 5;
+        nativeRequestItemActive_=true;
+        struct Reset {bool& active;~Reset(){active=false;}} reset{nativeRequestItemActive_};
+        return invoke();
     }
     // Physical destroy13c8c frees the wrapper borrowed by OS+8. Factory
     // table lifetime cannot protect it. Serialize the native teardown with

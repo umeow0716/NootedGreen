@@ -11863,12 +11863,19 @@ static void testRetainedVeboxFrames() {
         assert(registry.withNewRequest(physicalTicket,image,physical,[&](auto& frames) noexcept -> int {
             assert(registry.withLive(physicalTicket,image,physical,unreachable)==5);
             assert(registry.withNewRequest(physicalTicket,image,physical,unreachable)==5);
-            frameTicket=frames.create(allocated,released,destroyed);
-            assert(frameTicket.generation);
-            const auto result=frames.run(frameTicket,[](Frame&) noexcept {
-                return TglOwnedVeboxCommandTransactionResult{0,0,true,true};
-            });
-            assert(result.acquired && result.writtenBack);return 0;
+            auto forbiddenItem=[]() noexcept -> int {assert(false);return 0;};
+            assert(frames.withNativeRequestItem([&]() noexcept -> int {
+                assert(frames.withNativeRequestItem(forbiddenItem)==5);
+                frameTicket=frames.create(allocated,released,destroyed);
+                assert(frameTicket.generation);
+                const auto result=frames.run(frameTicket,[](Frame&) noexcept {
+                    return TglOwnedVeboxCommandTransactionResult{0,0,true,true};
+                });
+                assert(result.acquired && result.writtenBack);return 0;
+            })==0);
+            // Same outer batch, next item must not mutate the retained shells.
+            assert(frames.withNativeRequestItem(forbiddenItem)==5);
+            return 0;
         })==0);
         assert(registry.withNewRequest(physicalTicket,image,physical,unreachable)==5);
         unsigned destroys=0;
@@ -11888,8 +11895,8 @@ static void testRetainedVeboxFrames() {
             });
         })==0);
         unsigned requests=0;
-        assert(registry.withNewRequest(physicalTicket,image,physical,[&](auto&) noexcept -> int {
-            ++requests;return 31;
+        assert(registry.withNewRequest(physicalTicket,image,physical,[&](auto& frames) noexcept -> int {
+            return frames.withNativeRequestItem([&]() noexcept -> int {++requests;return 31;});
         })==31 && requests==1);
         assert(registry.withContextRemoval(physicalTicket,image,physical,removeSuccess)==0 && removals==1);
         assert(registry.lookup(image,physical).generation==physicalTicket.generation);
