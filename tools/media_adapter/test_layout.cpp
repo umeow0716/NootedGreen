@@ -11537,6 +11537,9 @@ int main() {
                         assert(emittedChild==expiredPassChild && emissionEntries.setup==expiredPassEntries.setup &&
                             emissionEntries.send==expiredPassEntries.send &&
                             emissionEntries.compressionFormat==assemblyBase.compressionFormat);
+                        assert(emissionEntries.state(emittedChild,&data,&source,reinterpret_cast<void*>(0x2000))==5);
+                        emissionEntries.filters(emittedChild,&data,stateCpu.bytes.data(),&source);
+                        assert(stages==3);
                         auto platform=[&](auto&) noexcept {return backend.stage(3);};
                         TglOwnedSurfaceStorage targetSurface;
                         TglNativeVpCompressionBinding compressionBinding;
@@ -11548,7 +11551,7 @@ int main() {
                                 assert(packetChild==emittedChild && combined.setup==emissionEntries.setup &&
                                     combined.send==emissionEntries.send);
                                 TglOwnedVpFlatDispatchTable dispatch;
-                                // Six real pass/platform entries; other slots are CPU fixtures.
+                                // Eight real pass/platform entries; other slots are CPU fixtures.
                                 assert(dispatch.build(testVpPresenceEntries(combined),
                                     [](uintptr_t,size_t) noexcept {return true;}));
                                 return graph.withLeasedFlatDispatch(packetChild,dispatch,[&](void* admitted) noexcept {
@@ -11566,7 +11569,10 @@ int main() {
                     [&](void* child,const TglOwnedVpEntrySet& assembled) noexcept -> int {
                         expiredPassChild=child;expiredPassEntries=assembled;
                         assert(assembled.compressionFormat==assemblyBase.compressionFormat &&
-                            assembled.missingMask()==(assemblyBase.missingMask()&~((1U<<8)|(1U<<9))));
+                            assembled.missingMask()==(assemblyBase.missingMask()&~((1U<<8)|(1U<<9)|(1U<<18)|(1U<<19))));
+                        assert(assembled.state(child,&data,&source,reinterpret_cast<void*>(0x2000))==5);
+                        assembled.filters(child,&data,stateCpu.bytes.data(),&source);
+                        assert(!stages);
                         assert(assembled.setup(child,&source,reinterpret_cast<void*>(0x2000),&data)==0);
                         // Even a caller that ignores the send error cannot turn
                         // failed/partial command construction into success.
@@ -11579,6 +11585,8 @@ int main() {
                 assert(expiredPassEntries.setup(expiredPassChild,&source,
                     reinterpret_cast<void*>(0x2000),&data)==5);
                 assert(expiredPassEntries.send(expiredPassChild,&data,&command)==5);
+                assert(expiredPassEntries.state(expiredPassChild,&data,&source,reinterpret_cast<void*>(0x2000))==5);
+                expiredPassEntries.filters(expiredPassChild,&data,stateCpu.bytes.data(),&source);
                 assert(stages==stagesAfterPass && backend.count==commandsAfterPass);
                 unsigned expectedCount=0;
                 for(int id:{1,3,4,5,6,7,8,9}) {

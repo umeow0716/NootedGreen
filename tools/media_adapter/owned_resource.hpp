@@ -9971,7 +9971,6 @@ public:
         Guard guard(busy_);
         return tglWithOwnedVpPreparedFrame(storage_,frame,conditionalSource,
             settings,target,sourceA8,[&](void* child,const auto&) noexcept {
-                auto produce=[&]() noexcept -> int {
                     auto produceState=[&]() noexcept {return state(child,frame,state_);};
                     auto produceFilters=[&]() noexcept {ief(child,frame);};
                     struct ProducerContext {
@@ -9979,14 +9978,16 @@ public:
                         decltype(produceState)& makeState;
                         decltype(produceFilters)& makeFilters;
                         const uint8_t* leasedState=nullptr;
-                        bool stateSeen=false,filtersSeen=false;int error=0;
+                        bool active=false,stateSeen=false,filtersSeen=false;int error=0;
                         bool owns(void* value) const noexcept {return value==child;}
                         int state(void* d,void* s,void* t) noexcept {
+                            if(!active) return 5;
                             if(error) return error;
                             if(stateSeen || d!=data || s!=source || t!=target) return error=5;
                             stateSeen=true;return error=makeState();
                         }
                         void filters(void* packet,void* s) noexcept {
+                            if(!active) return;
                             if(error) return;
                             if(!stateSeen || filtersSeen || !leasedState ||
                                 packet!=leasedState || s!=source) {error=5;return;}
@@ -9997,16 +9998,19 @@ public:
                     using ProducerResolve=TglOwnedVpSfcResolve<ProducerContext>;
                     TglOwnedVpSfcScopedContext<ProducerContext> producerScope(child,producer);
                     if(!producerScope.bound()) return 5;
-                    TglOwnedVpEntrySet entries;
-                    if(!tglBindOwnedVpProducerEntries<ProducerResolve>(child,entries)) return 5;
+                    TglOwnedVpEntrySet producerEntries;
+                    if(!tglBindOwnedVpProducerEntries<ProducerResolve>(child,producerEntries)) return 5;
+                auto produce=[&]() noexcept -> int {
+                    if(producer.active) return 5;
+                    Guard productionGuard(producer.active);
                     const int result=tglSetupOwnedVpSfcStages(frame,
-                        [&]() noexcept {return entries.state(child,renderData,source,
+                        [&]() noexcept {return producerEntries.state(child,renderData,source,
                             reinterpret_cast<void*>(target));},
                         [&]() noexcept {return avs(child,frame,avs_);},
                         [&]() noexcept {
                             const int filterResult=state_.withVpParameterPublication(storage_,[&](const uint8_t* packet) noexcept {
                                 producer.leasedState=packet;
-                                entries.filters(child,renderData,const_cast<uint8_t*>(packet),source);
+                                producerEntries.filters(child,renderData,const_cast<uint8_t*>(packet),source);
                                 producer.leasedState=nullptr;
                                 return producer.error;
                             });
@@ -10055,15 +10059,21 @@ public:
                 if(!scope.bound()) return 5;
                 TglOwnedVpEntrySet entries;
                 if(!tglBindOwnedVpSetupSendEntries<SetupResolve>(child,entries)) return 5;
-                static_assert(noexcept(invoke(child,entries.setup,entries.send)),
-                    "VP callback invocation ABI");
-                const int result=invoke(child,entries.setup,entries.send);
+                const int result=[&]() noexcept {
+                    if constexpr(std::is_nothrow_invocable_r_v<int,Invoke,void*,decltype(entries.setup),
+                        decltype(entries.send),const TglOwnedVpEntrySet&>)
+                        return invoke(child,entries.setup,entries.send,producerEntries);
+                    else {
+                        static_assert(noexcept(invoke(child,entries.setup,entries.send)),"VP callback invocation ABI");
+                        return invoke(child,entries.setup,entries.send);
+                    }
+                }();
                 if(result) return result;
                 if(context.error) return context.error;
                 return context.setupSeen && context.sendSeen ? 0 : 5;
             });
     }
-    // Compose setup/send only while their pass context is live. Existing
+    // Compose setup/send and phase-gated state/filter while the pass is live. Existing
     // entries retain their outer resolver leases; this does not publish a
     // complete vtable or extend any callback lifetime beyond the consumer.
     template<class State,class Avs,class Ief,class Emit,class Use>
@@ -10071,7 +10081,7 @@ public:
         const TglOwnedVpFramePreparation& frame,uintptr_t conditionalSource,
         uintptr_t settings,uintptr_t target,uintptr_t sourceA8,void* source,void* renderData,
         State state,Avs avs,Ief ief,Emit emit,Use use) noexcept {
-        if(base.setup || base.send) return 5;
+        if(base.setup || base.send || base.state || base.filters) return 5;
         const auto retained=base;
         const TglOwnedVpEntrySet* active=nullptr;
         auto emitAssembly=[&](void* child,void* data,void* command) noexcept -> int {
@@ -10084,8 +10094,9 @@ public:
             }
         };
         return withPreparedCallbackPass(frame,conditionalSource,settings,target,sourceA8,
-            source,renderData,state,avs,ief,emitAssembly,[&](void* child,auto setup,auto send) noexcept {
-                TglOwnedVpEntrySet additions;
+            source,renderData,state,avs,ief,emitAssembly,[&](void* child,auto setup,auto send,
+                const TglOwnedVpEntrySet& producerEntries) noexcept {
+                auto additions=producerEntries;
                 additions.setup=setup;additions.send=send;
                 auto combined=retained;
                 if(!combined.appendDisjoint(additions)) return 5;
