@@ -3608,21 +3608,33 @@ private:
 
 // These callbacks are owned lifecycle only, not permission for native
 // allocation accounting or GPU retirement. The context outlives allocation.
-template<class Owner> class TglOwnedVeboxLifetimeContext {
+struct TglOwnedVeboxSynchronousTeardown {
+    int operator()() const noexcept {return 0;}
+};
+// The default is ONLY for an unsubmitted synchronous owner. Runtime frames
+// supply fallible discard/completion admission; these callbacks cannot infer it.
+template<class Owner,class Retire=TglOwnedVeboxSynchronousTeardown> class TglOwnedVeboxLifetimeContext {
     Owner& owner_;void* child_;uint64_t generation_;
-    bool destroyed_=false,deleted_=false;
+    Retire retire_;
+    bool destroyed_=false,deleted_=false,busy_=false,reentered_=false;
     int status_=5;
 public:
-    explicit TglOwnedVeboxLifetimeContext(Owner& owner) noexcept
-        :owner_(owner),child_(owner.constructedBase()),generation_(owner.allocationGeneration()) {}
+    explicit TglOwnedVeboxLifetimeContext(Owner& owner,Retire retire={}) noexcept
+        :owner_(owner),child_(owner.constructedBase()),generation_(owner.allocationGeneration()),retire_(retire) {}
     bool owns(void* child) const noexcept {
         return !deleted_ && child==child_ && owner_.ownsLifecycleAllocation(child,generation_);
     }
     void destroy(bool deleting) noexcept {
+        static_assert(noexcept(retire_()) && std::is_same_v<decltype(retire_()),int>);
+        if(busy_) {reentered_=true;status_=5;return;}
         if(!owns(child_) || (destroyed_ && !deleting)) {status_=5;return;}
+        busy_=true;reentered_=false;
+        struct Unlock {bool& busy;~Unlock(){busy=false;}} unlock{busy_};
+        const int admitted=retire_();
+        if(admitted || reentered_ || !owns(child_)) {status_=admitted?admitted:5;return;}
         const bool done=deleting?owner_.deleteAllocation():owner_.destroyInPlace();
-        status_=done?0:5;
         if(done) {destroyed_=true;deleted_=deleting;}
+        status_=done && !reentered_?0:5;
     }
     int status() const noexcept {return status_;}
 };
@@ -9255,18 +9267,20 @@ int tglRunOwnedVeboxAllocationStages(bool ffdiEnabled,bool hasSecondary,bool ffd
         [=]() noexcept {return ffdnEnabled;},[=]() noexcept {return pipe;},[=]() noexcept {return stmmEnabled;},
         ffdi,secondary,ffdn,rectangle,stmm,statistics);
 }
-template<class Owner,class Allocate,class Unwind=TglOwnedVeboxNoAllocationUnwind>
+template<class Owner,class Allocate,class Unwind=TglOwnedVeboxNoAllocationUnwind,
+    class Keep=TglOwnedVeboxFrameNoRetention>
 class TglOwnedVeboxAllocationContext {
     Owner& owner_;
     Allocate& allocate_;
     void* child_;
     uint64_t generation_;
     Unwind unwind_;
+    Keep keep_;
     bool busy_=false;
 public:
-    TglOwnedVeboxAllocationContext(Owner& owner,Allocate& allocate,void* child,Unwind unwind={}) noexcept
+    TglOwnedVeboxAllocationContext(Owner& owner,Allocate& allocate,void* child,Unwind unwind={},Keep keep={}) noexcept
         :owner_(owner),allocate_(allocate),child_(child),
-         generation_(owner.allocationGeneration()),unwind_(unwind) {}
+         generation_(owner.allocationGeneration()),unwind_(unwind),keep_(keep) {}
     TglOwnedVeboxAllocationContext(const TglOwnedVeboxAllocationContext&)=delete;
     TglOwnedVeboxAllocationContext& operator=(const TglOwnedVeboxAllocationContext&)=delete;
     bool owns(void* child) const noexcept {
@@ -9279,11 +9293,12 @@ public:
             std::is_same_v<decltype(allocate_(child_)),int>,"native allocation status ABI");
         static_assert(noexcept(unwind_(child_)) &&
             std::is_same_v<decltype(unwind_(child_)),void>,"allocation unwind ABI");
-        if(busy_ || !owns(child_)) return 5;
+        static_assert(noexcept(keep_()) && std::is_same_v<decltype(keep_()),bool>);
+        if(busy_ || !owns(child_) || keep_()) return 5;
         busy_=true;
         struct Unlock {bool& busy;~Unlock(){busy=false;}} unlock{busy_};
         const int result=allocate_(child_);
-        if(result) unwind_(child_);
+        if(result && !keep_()) unwind_(child_);
         return owns(child_) ? result : 5;
     }
 };

@@ -1182,6 +1182,18 @@ static void testTrackedCpuOwner() {
         Unwinding replacement(owner,transaction,&child,unwind);
         assert(replacement.owns(&child));
         result=0;assert(replacement.allocate()==0 && calls==oldCalls+1 && unwinds==2);
+        TglOwnedVeboxFrameRetention retained;
+        unsigned retainedUnwinds=0,retainedCalls=0;
+        auto retainingAllocate=[&](void* actual) noexcept -> int {
+            assert(actual==&child);++retainedCalls;
+            retained.observe(TglOwnedVeboxCommandTransactionResult{31,31,true,false});return 31;
+        };
+        auto retainedUnwind=[&](void*) noexcept {++retainedUnwinds;};
+        auto keep=[&]() noexcept {return retained();};
+        using Retaining=TglOwnedVeboxAllocationContext<Owner,decltype(retainingAllocate),decltype(retainedUnwind),decltype(keep)>;
+        Retaining retaining(owner,retainingAllocate,&child,retainedUnwind,keep);
+        assert(retaining.allocate()==31 && retainedCalls==1 && !retainedUnwinds);
+        assert(retaining.allocate()==5 && retainedCalls==1 && !retainedUnwinds);
     }
     {
         struct Frame {TglOwnedVeboxProducerPass pass;} frame;
@@ -10749,6 +10761,43 @@ static void testSfcFrameFields() {
     }
 }
 
+static void testGuardedVeboxLifecycle() {
+    struct Owner {
+        int child=0;uint64_t generation=1;unsigned destroyed=0,deleted=0;
+        void* constructedBase() noexcept {return &child;}
+        uint64_t allocationGeneration() const noexcept {return generation;}
+        bool ownsLifecycleAllocation(void* value,uint64_t stamp) const noexcept {
+            return value==&child && stamp==generation && !deleted;
+        }
+        bool destroyInPlace() noexcept {assert(!destroyed);++destroyed;return true;}
+        bool deleteAllocation() noexcept {if(!destroyed) ++destroyed;++deleted;return true;}
+    } owner;
+    int admission=31;bool revoke=false;
+    void(*reenter)(void*) noexcept=nullptr;void* context=nullptr;
+    auto retire=[&]() noexcept -> int {
+        if(reenter) reenter(context);
+        if(revoke) ++owner.generation;
+        return admission;
+    };
+    using Context=TglOwnedVeboxLifetimeContext<Owner,decltype(retire)>;
+    Context lifetime(owner,retire);context=&lifetime;
+    lifetime.destroy(true);
+    assert(lifetime.status()==31 && !owner.destroyed && !owner.deleted);
+    admission=0;reenter=+[](void* value) noexcept {static_cast<Context*>(value)->destroy(true);};
+    lifetime.destroy(true);
+    assert(lifetime.status()==5 && !owner.destroyed && !owner.deleted);
+    reenter=nullptr;revoke=true;lifetime.destroy(true);
+    assert(lifetime.status()==5 && !owner.destroyed && !owner.deleted);
+    revoke=false;
+    Context current(owner,retire);
+    current.destroy(false);assert(current.status()==0 && owner.destroyed==1 && !owner.deleted);
+    admission=31;current.destroy(true);
+    assert(current.status()==31 && owner.destroyed==1 && !owner.deleted);
+    admission=0;current.destroy(true);
+    assert(current.status()==0 && owner.destroyed==1 && owner.deleted==1);
+    current.destroy(true);assert(current.status()==5 && owner.deleted==1);
+}
+
 static void testRetainedVeboxFrames() {
     struct Backend {
         unsigned& allocated;unsigned& released;
@@ -10816,6 +10865,7 @@ static void testRetainedVeboxFrames() {
 }
 
 int main() {
+    testGuardedVeboxLifecycle();
     testRetainedVeboxFrames();
     {
         TglOwnedVpEntrySet entries;
