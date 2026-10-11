@@ -1437,9 +1437,21 @@ public:
     bool withNativeReleaseSlot(uint8_t* slot,Use use) noexcept {
         static_assert(noexcept(use()),"native consuming callback must not throw");
         static_assert(std::is_same_v<decltype(use()),void>,"native feature ABI is void");
-        if(borrowed || !storage || !slot) return false;
+        if(borrowed || !slot) return false;
         uintptr_t previous=0;std::memcpy(&previous,slot,sizeof(previous));
         if(previous) return false;
+        // Native12a844..12a854 explicitly admits NULL source90. An empty
+        // owner therefore represents absent DN, not a missing allocation.
+        // Still block recursive allocation and reject unexpected publication.
+        if(!storage) {
+            if(extent) return false;
+            borrowed=true;
+            use();
+            uintptr_t observed=0;std::memcpy(&observed,slot,sizeof(observed));
+            std::memcpy(slot,&previous,sizeof(previous));
+            borrowed=false;
+            return observed==0;
+        }
         const auto published=storage;
         borrowed=true;
         std::memcpy(slot,&published,sizeof(published));

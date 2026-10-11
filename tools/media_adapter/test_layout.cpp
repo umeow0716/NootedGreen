@@ -2430,7 +2430,7 @@ static void testTrackedCpuOwner() {
         field.front()=0xa5;field.back()=0x5a;
         auto* slot=field.data()+1; // deliberately unaligned source pointer field
         unsigned calls=0;
-        assert(!owner.withNativeReleaseSlot(slot,[&]() noexcept { ++calls; }));
+        assert(owner.withNativeReleaseSlot(slot,[]() noexcept {})); // native absent-DN frame
         assert(owner.allocate(0x2a8));
         const auto original=owner.get();
         {
@@ -8139,7 +8139,10 @@ static void testNativeResourceBoundary() {
                             std::memcpy(const_cast<uint8_t*>(source.prefix.data())+0x90,&cleared,8);
                             return 31;
                         })==31 && !parameters.get());
-                        assert(pair.withDenoiseSurfaces(parameters,[](const auto&,const auto&) noexcept {assert(false);return 0;})==5);
+                        assert(pair.withDenoiseSurfaces(parameters,[](const auto& source,const auto&) noexcept {
+                            uintptr_t slot=1;std::memcpy(&slot,source.prefix.data()+0x90,8);
+                            assert(!slot);return 0;
+                        })==0); // native consuming clear leaves a legitimate absent-DN frame
                     }
                     assert(dnBackend.releases==1);
                     const auto released=backend.releases;
@@ -11592,6 +11595,31 @@ static void testRetainedVeboxFrames() {
 }
 
 int main() {
+    {
+        struct EmptyDnBackend {
+            unsigned allocations=0,releases=0;
+            uintptr_t allocate(size_t) noexcept {++allocations;return 0;}
+            void release(uintptr_t) noexcept {++releases;}
+        } backend;
+        TglTrackedCpuOwner<EmptyDnBackend> owner(backend);
+        std::array<uint8_t,8> slot{};
+        unsigned callbacks=0;
+        assert(owner.withNativeReleaseSlot(slot.data(),[&]() noexcept {
+            ++callbacks;
+            assert(!owner.allocate(0x38));
+            assert(!owner.withNativeReleaseSlot(slot.data(),[]() noexcept {assert(false);}));
+        }));
+        assert(callbacks==1 && !backend.allocations && !backend.releases);
+        assert(!owner.withNativeReleaseSlot(slot.data(),[&]() noexcept {
+            ++callbacks;
+            const uintptr_t foreign=0x1234;std::memcpy(slot.data(),&foreign,8);
+        }));
+        uintptr_t restored=1;std::memcpy(&restored,slot.data(),8);
+        assert(!restored && !owner.get() && !owner.size() && callbacks==2);
+        const uintptr_t foreign=0x1234;std::memcpy(slot.data(),&foreign,8);
+        assert(!owner.withNativeReleaseSlot(slot.data(),[]() noexcept {assert(false);}));
+        assert(!backend.allocations && !backend.releases);
+    }
     {
         TglNativeDnScalarRequest request;
         request.word20=7;request.word24=9;request.word28=11;request.word2c=13;
