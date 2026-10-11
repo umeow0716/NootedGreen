@@ -3989,6 +3989,37 @@ static void testNativeResourceBoundary() {
             assert(destination.copyFrameMetadataFrom(owner));
             assert(destination.copyFrameMetadataFrom(destination));
             const auto* destinationSurface=destination.surface();
+            {
+                TestFeatureExecutionOwner execution;
+                std::array<uint8_t,0x1bc0> child{};
+                TestVeboxChildLease childOwner{child.data()};
+                uintptr_t report=reinterpret_cast<uintptr_t>(execution.bytes.data());
+                std::memcpy(child.data()+0x88,&report,8);
+                const auto allocations=fixture.allocations,releases=fixture.releases;
+                unsigned featureCalls=0;
+                assert(tglWithOwnedVeboxFeatureFrame(owner,destination,childOwner,execution,
+                    [&](void* actual,const auto& s,const auto& t) noexcept {
+                        ++featureCalls;
+                        assert(actual==child.data() && &s==surface && &t==destinationSurface);
+                        owner.reset();destination.reset();
+                        assert(owner.ensure(key)==5 && destination.ensure(key)==5);
+                        assert(!owner.surface() && !destination.surface());
+                        assert(fixture.allocations==allocations && fixture.releases==releases);
+                        uintptr_t retained=reinterpret_cast<uintptr_t>(&t);
+                        std::memcpy(execution.bytes.data()+0x60,&retained,8);
+                        return 31;
+                    })==31 && featureCalls==1);
+                uintptr_t retained=1;std::memcpy(&retained,execution.bytes.data()+0x60,8);
+                assert(!retained && owner.surface()==surface && destination.surface()==destinationSurface);
+                const auto resource=destinationSurface->resource;
+                auto& invalid=const_cast<TglOwnedSurfaceStorage*>(destinationSurface)->resource;
+                invalid.fill(0);
+                assert(tglWithOwnedVeboxFeatureFrame(owner,destination,childOwner,execution,
+                    [&](void*,const auto&,const auto&) noexcept {++featureCalls;return 0;})==5);
+                assert(featureCalls==1 && !childOwner.busy && !execution.busy);
+                assert(owner.surface()==surface && fixture.releases==releases);
+                invalid=resource;
+            }
             unsigned pairCalls=0;
             assert(owner.withPeerSurface(destination,[&](const auto& own,const auto& other) {
                 ++pairCalls;
