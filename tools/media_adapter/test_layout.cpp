@@ -31,6 +31,21 @@ struct TestVpCpuView {
 
 static void testTrackedCpuOwner() {
     {
+        assert(tglVeboxHistoryWithinWindow(10,10,0));
+        assert(!tglVeboxHistoryWithinWindow(11,10,0));
+        assert(tglVeboxHistoryWithinWindow(8,10,2));
+        assert(tglVeboxHistoryWithinWindow(12,10,2));
+        assert(!tglVeboxHistoryWithinWindow(7,10,2));
+        assert(!tglVeboxHistoryWithinWindow(13,10,2));
+        assert(tglVeboxHistoryWithinWindow(0,UINT32_MAX,1));
+        assert(tglVeboxHistoryWithinWindow(UINT32_MAX,0,1));
+        assert(!tglVeboxHistoryWithinWindow(1,UINT32_MAX,1));
+        assert(!tglVeboxHistoryWithinWindow(0x80000000,0,0x7fffffff));
+        assert(tglVeboxHistoryWithinWindow(0x80000000,0,0x80000000));
+        assert(!tglVeboxHistoryWithinWindow(0,0,0x80000000));
+        assert(!tglVeboxHistoryWithinWindow(0,0,UINT32_MAX));
+    }
+    {
         std::array<uint8_t,0xd30> execution{};
         std::array<uint8_t,0x28> pass{};
         for(uint32_t pipe=0;pipe<4;++pipe)

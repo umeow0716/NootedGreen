@@ -5893,6 +5893,22 @@ template<class Context> using TglOwnedVeboxScopedContext=
 // AL; local status5 writes on prerequisite failure are NOT returned as bool.
 // Thus direct geometry/format predicates cannot stand in for the full policy,
 // and a denied admission need not mean that execution/pass stayed unchanged.
+// Native12b1d0..12b5e4 (+180) uses base90 mode/history, base1a8 radius,
+// base1b78/1b7c previous frame IDs and source b0/b4/b8/c0/c8 links.
+// It makes no calls: it mutates history+4/+8 and sometimes base1b5c=4.
+// Nonzero history mode at12b498 dereferences source c0 unconditionally;
+// count/pointer validation must precede any retained native invocation.
+// Its signed comparisons follow 32-bit SUB, not widened signed arithmetic.
+// This helper is only that comparison, NOT the complete history transition.
+inline bool tglVeboxHistoryWithinWindow(uint32_t frame,uint32_t previous,
+                                       uint32_t radius) noexcept {
+    const uint32_t deltaBits=frame-previous,lowerBits=uint32_t{0}-radius;
+    int32_t delta=0,lower=0,upper=0;
+    std::memcpy(&delta,&deltaBits,4);
+    std::memcpy(&lower,&lowerBits,4);
+    std::memcpy(&upper,&radius,4);
+    return delta>=lower && delta<=upper;
+}
 enum class TglVeboxAdmissionPrefixResult : uint8_t {
     MissingDependencies, CompositionFallback, Continue
 };
