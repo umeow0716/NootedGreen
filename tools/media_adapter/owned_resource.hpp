@@ -7949,6 +7949,24 @@ public:
         const int result=use(reinterpret_cast<const uint8_t*>(owner.get()));
         leased=false; return result;
     }
+    // State-producing VP90 reaches VP58 at ICL1e04cd before binding line
+    // resources into the packet. Publish this exact state only under its
+    // parameters lease; no ad-hoc pointer store or foreign owner adoption.
+    template<class Use> int withVpParameterPublication(TglOwnedVpSfcCallerStorage& vp,
+        Use use) noexcept {
+        static_assert(noexcept(use(static_cast<const uint8_t*>(nullptr))),
+            "VP state publication consumer ABI");
+        uintptr_t previous=0;std::memcpy(&previous,vp.bytes.data()+0x938,8);
+        if(previous) return 5;
+        return withParameters([&](const uint8_t* packet) noexcept -> int {
+            const uintptr_t published=reinterpret_cast<uintptr_t>(packet);
+            std::memcpy(vp.bytes.data()+0x938,&published,8);
+            const int result=use(packet);
+            uintptr_t observed=0;std::memcpy(&observed,vp.bytes.data()+0x938,8);
+            std::memcpy(vp.bytes.data()+0x938,&previous,8);
+            return observed==published ? result : 5;
+        });
+    }
 };
 
 // Exact VP+10 thunk1f74e0 reaches void1f7450(this): there is no status ABI.

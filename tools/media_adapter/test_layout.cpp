@@ -7988,12 +7988,12 @@ int main() {
                     SetContext setContext(vp,resources,state);
                     TglOwnedVpSfcScopedContext<SetContext> setScope(vp.bytes.data(),setContext);
                     assert(setScope.bound() && SetAllocate::allocate(vp.bytes.data())==5);
-                    return state.withParameters([&](const uint8_t* packet) noexcept {
-                        assert(SetAllocate::allocate(vp.bytes.data())==5);
-                        const uintptr_t address=reinterpret_cast<uintptr_t>(packet);
-                        std::memcpy(vp.bytes.data()+0x938,&address,8);
-                        const int result=SetAllocate::allocate(vp.bytes.data());
-                        std::memset(vp.bytes.data()+0x938,0,8);return result;
+                    return state.withVpParameterPublication(vp,[&](const uint8_t*) noexcept {
+                        assert(state.hasParametersLease() && !state.initializeVpPass(vp));
+                        assert(state.withVpParameterPublication(vp,[](const uint8_t*) noexcept {
+                            assert(false);return 0;
+                        })==5);
+                        return SetAllocate::allocate(vp.bytes.data());
                     });
                 };
                 for(unsigned failed=0;failed<3;++failed) {
@@ -8004,6 +8004,18 @@ int main() {
                     if(failed<2) backends[failed].status=0;else sfdBackend.status=0;
                     assert(allocateSet(input,tall)==0 && run(0)==0);
                 }
+                const uintptr_t foreignState=1;
+                std::memcpy(vp.bytes.data()+0x938,&foreignState,8);
+                assert(state.withVpParameterPublication(vp,[](const uint8_t*) noexcept {
+                    assert(false);return 0;
+                })==5);
+                uintptr_t observed=0;std::memcpy(&observed,vp.bytes.data()+0x938,8);assert(observed==foreignState);
+                std::memset(vp.bytes.data()+0x938,0,8);
+                assert(state.withVpParameterPublication(vp,[&](const uint8_t*) noexcept {
+                    std::memset(vp.bytes.data()+0x938,0,8);return 0;
+                })==5);
+                assert(state.withVpParameterPublication(vp,[](const uint8_t*) noexcept {return -17;})==-17);
+                std::memcpy(&observed,vp.bytes.data()+0x938,8);assert(!observed);
                 for(int admission:{31,0}) {
                     auto retire=[&]() noexcept {
                         ++admissions;assert(!lines.tryReset() && !sfd.tryReset());
@@ -8018,10 +8030,8 @@ int main() {
                     assert(state.withPublishedVpParameters(vp,[](const uint8_t*) noexcept {
                         assert(false);return 0;
                     })==5);
-                    assert(state.withParameters([&](const uint8_t* packet) noexcept {
-                        const uintptr_t address=reinterpret_cast<uintptr_t>(packet);
-                        std::memcpy(vp.bytes.data()+0x938,&address,8);
-                        const int result=tglWithOwnedVpResourceEntries(vp,resources,state,retire,
+                    assert(state.withVpParameterPublication(vp,[&](const uint8_t*) noexcept {
+                        return tglWithOwnedVpResourceEntries(vp,resources,state,retire,
                             [&](void* child,AllocateEntry allocate,ReleaseEntry release) noexcept {
                                 expiredAllocate=allocate;expiredRelease=release;
                                 assert(child==vp.bytes.data() && allocate(child)==0);
@@ -8031,7 +8041,6 @@ int main() {
                                     })==5);
                                 release(child);return 0; // void failure must propagate outside
                             });
-                        std::memset(vp.bytes.data()+0x938,0,8);return result;
                     })==admission);
                     assert(expiredAllocate(vp.bytes.data())==5);
                     const auto before=admissions;expiredRelease(vp.bytes.data());assert(admissions==before);
