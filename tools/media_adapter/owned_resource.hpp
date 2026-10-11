@@ -9848,12 +9848,12 @@ public:
         return valid_ && base<=UINTPTR_MAX-0x9d0 &&
             bindings_[0]==base+0x3c8 && bindings_[1]==base+0x670;
     }
-    int ensure(uint32_t inputHeight,uint32_t scaledHeight) noexcept {
-        if(!valid_ || busy_) return 5;
+private:
+    int allocateReserved(uint32_t inputHeight,uint32_t scaledHeight) noexcept {
         TglOwnedSfcLineBufferSizes sizes;
         if(!tglOwnedSfcLineBufferSizes(sizes,inputHeight,scaledHeight)) return 5;
         if(backends_[0].resourceType()!=0 || backends_[1].resourceType()!=0) return 25;
-        Guard guard(busy_);ready_=false;
+        ready_=false;
         const std::array<uint32_t,2> widths{sizes.avs,sizes.ief};
         for(size_t i=0;i<2;++i) {
             const int status=owners_[i].ensure({widths[i],1,0x3d,4,0,false});
@@ -9861,6 +9861,22 @@ public:
         }
         inputHeight_=inputHeight;scaledHeight_=scaledHeight;
         ready_=true;return 0;
+    }
+public:
+    template<class Use> int withAllocationReservation(Use use) noexcept {
+        if(!valid_ || busy_) return 5;
+        Guard guard(busy_);
+        auto allocate=[&](uint32_t input,uint32_t scaled) noexcept {
+            return allocateReserved(input,scaled);
+        };
+        auto release=[&]() noexcept {clear();};
+        static_assert(noexcept(use(allocate,release)),"VP line allocation reservation ABI");
+        return use(allocate,release);
+    }
+    int ensure(uint32_t inputHeight,uint32_t scaledHeight) noexcept {
+        return withAllocationReservation([&](auto allocate,auto) noexcept {
+            return allocate(inputHeight,scaledHeight);
+        });
     }
     template<class Use> int withDimensions(uint32_t input,uint32_t scaled,Use use) noexcept {
         if(!input || !scaled || input!=inputHeight_ || scaled!=scaledHeight_) return 5;
@@ -9900,17 +9916,30 @@ template<class Backend> class TglOwnedSfcSfdBuffer {
     bool busy_=false;
 public:
     explicit TglOwnedSfcSfdBuffer(Backend& backend) noexcept:backend_(backend),owner_(backend){}
-    int ensure(uint32_t height) noexcept {
-        if(busy_ || !height) return 5;
+private:
+    int allocateReserved(uint32_t height) noexcept {
+        if(!height) return 5;
         TglOwnedSfcLineBufferSizes sizes;
         if(!tglOwnedSfcLineBufferSizes(sizes,1,height)) return 5;
         if(backend_.resourceType()!=0) return 25;
-        busy_=true;height_=0;
+        height_=0;
         int status=0;
         if(sizes.sfd) status=owner_.ensure({sizes.sfd,1,0x3d,4,0,false});
         else owner_.reset();
         if(!status) height_=height;
-        busy_=false;return status;
+        return status;
+    }
+public:
+    template<class Use> int withAllocationReservation(Use use) noexcept {
+        if(busy_) return 5;
+        busy_=true;
+        auto allocate=[&](uint32_t height) noexcept {return allocateReserved(height);};
+        auto release=[&]() noexcept {height_=0;owner_.reset();};
+        static_assert(noexcept(use(allocate,release)),"SFD allocation reservation ABI");
+        const int result=use(allocate,release);busy_=false;return result;
+    }
+    int ensure(uint32_t height) noexcept {
+        return withAllocationReservation([&](auto allocate,auto) noexcept {return allocate(height);});
     }
     template<class Use> int withBuffer(uint32_t height,Use use) noexcept {
         using Storage=std::array<uint8_t,0x148>;
@@ -9949,6 +9978,19 @@ template<class Lines,class Sfd> class TglOwnedVpLineResourceSet {
     Lines& lines_;Sfd& sfd_;
 public:
     TglOwnedVpLineResourceSet(Lines& lines,Sfd& sfd) noexcept:lines_(lines),sfd_(sfd){}
+    bool boundToVp(const TglOwnedVpSfcCallerStorage& vp) const noexcept {return lines_.boundToVp(vp);}
+    int ensure(uint32_t input,uint32_t scaled) noexcept {
+        TglOwnedSfcLineBufferSizes sizes;
+        if(!tglOwnedSfcLineBufferSizes(sizes,input,scaled)) return 5;
+        return lines_.withAllocationReservation([&](auto allocateLines,auto releaseLines) noexcept {
+            return sfd_.withAllocationReservation([&](auto allocateSfd,auto releaseSfd) noexcept {
+                int status=allocateLines(input,scaled);
+                if(!status) status=allocateSfd(scaled);
+                if(status) {releaseLines();releaseSfd();}
+                return status;
+            });
+        });
+    }
     template<class Use> int withReleaseReservation(Use use) noexcept {
         return lines_.withReleaseReservation([&](auto releaseLines) noexcept {
             return sfd_.withReleaseReservation([&](auto releaseSfd) noexcept {

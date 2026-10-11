@@ -7674,6 +7674,7 @@ int main() {
                 unsigned queries=0,emitted=0;int queryResult=0;
                 Backend sfdBackend;TglOwnedSfcSfdBuffer<Backend> sfd(sfdBackend);
                 TglOwnedSfcSfdBuffer<Backend>* sfdOwner=nullptr;
+                TglOwnedVpLineResourceSet<decltype(lines),decltype(sfd)> resources(lines,sfd);
                 auto query=[&](auto&) noexcept {
                     ++queries;assert(!lines.tryReset() && lines.ensure(input,scaled)==5);
                     return queryResult;
@@ -7712,18 +7713,29 @@ int main() {
                 sfdBackend.status=0;assert(sfd.ensure(tall)==0);
                 for(int result:{0,31,-7}) assert(run(result)==result);
                 assert(queries==7 && emitted==6);
-                TglOwnedVpLineResourceSet<decltype(lines),decltype(sfd)> resources(lines,sfd);
                 unsigned admissions=0;
                 assert(sfd.withBuffer(tall,[&](const auto*) noexcept {
+                    const auto allocated=backends[0].allocations;
+                    assert(resources.ensure(input+1,tall+1)==5 && backends[0].allocations==allocated);
                     return resources.withReleaseReservation([&](auto) noexcept {
                         ++admissions;return 0;
                     });
                 })==5 && !admissions);
                 assert(lines.withSurfaces([&](const auto&,const auto&) noexcept {
+                    assert(resources.ensure(input+1,tall+1)==5);
                     return resources.withReleaseReservation([&](auto) noexcept {
                         ++admissions;return 0;
                     });
                 })==5 && !admissions);
+                assert(resources.ensure(0,tall)==5 && run(0)==0);
+                for(unsigned failed=0;failed<3;++failed) {
+                    if(failed<2) backends[failed].status=77;else sfdBackend.status=77;
+                    assert(resources.ensure(input+1,tall+1)==77);
+                    assert(lines.withSurfaces([](const auto&,const auto&) noexcept {assert(false);return 0;})==5);
+                    assert(sfd.withBuffer(tall,[](const auto*) noexcept {assert(false);return 0;})==5);
+                    if(failed<2) backends[failed].status=0;else sfdBackend.status=0;
+                    assert(resources.ensure(input,tall)==0 && run(0)==0);
+                }
                 for(int admission:{31,0}) {
                     auto retire=[&]() noexcept {
                         ++admissions;assert(!lines.tryReset() && !sfd.tryReset());
