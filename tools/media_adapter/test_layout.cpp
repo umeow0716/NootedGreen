@@ -16021,6 +16021,13 @@ int main() {
                         std::memcpy(&parentTable,cpu.bytes.data(),8);
                         std::memcpy(&originalFactory,reinterpret_cast<void*>(parentTable+0x1e0),8);
                         TglVeboxAllocateBinding allocation;
+                        auto ownedNativeStage=+[](void* object,void* first,void* second) noexcept -> int {
+                            assert(object && first && second && object!=first && first!=second);
+                            return -31;
+                        };
+                        int abiObject=0,abiFirst=0,abiSecond=0;
+                        assert(TglNativeVeboxStageInvoker{}(reinterpret_cast<uintptr_t>(ownedNativeStage),
+                            &abiObject,&abiFirst,&abiSecond)==-31);
                         auto allocationRead=[&](uintptr_t address,void* output,size_t size) noexcept {
                             if(address!=base+0x126740 || size!=allocation.anchor.size()) return false;
                             std::memcpy(output,allocation.anchor.data(),size);return true;
@@ -16030,6 +16037,10 @@ int main() {
                         auto neverAllocate=[](uintptr_t,void*,void*,void*) noexcept -> int {assert(false);return 0;};
                         assert(tglInvokeLeasedVeboxAllocate(allocation,owner,owner.constructedBase(),
                             &allocationArgument1,&allocationArgument2,neverAllocate)==5);
+                        assert(tglInvokeLeasedVeboxAllocate(allocation,owner,owner.constructedBase(),
+                            &allocationArgument1,&allocationArgument2)==5);
+                        assert(tglInvokeLeasedVeboxRender(TglVeboxRenderBinding{base,base+0x12c9d0},
+                            owner,owner.constructedBase(),&allocationArgument1,&allocationArgument2)==5);
                         for(unsigned vtableCase=0;vtableCase<3;++vtableCase) {
                         assert(owner.withVpFactoryVtableDispatch(graph,child,dispatch,
                             [&](void* parent) noexcept {

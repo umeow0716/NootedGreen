@@ -2320,6 +2320,12 @@ TglVeboxMode0Allocation tglVeboxMode0AllocationDecision(uint8_t report09,
 // This binding does NOT qualify all derived callbacks or GPU retirement.
 // Native base slot10=126740 takes this/argument1/argument2 and reaches
 // pointer-return factory1e0 at1269ca. Inputs remain caller-owned and leased.
+struct TglNativeVeboxStageInvoker {
+    int operator()(uintptr_t entry,void* child,void* argument1,void* argument2) const noexcept {
+        using Native=int(*)(void*,void*,void*);
+        return reinterpret_cast<Native>(entry)(child,argument1,argument2);
+    }
+};
 struct TglVeboxAllocateBinding {
     uintptr_t image=0,entry=0;
     inline static constexpr std::array<uint8_t,23> anchor{
@@ -2334,9 +2340,9 @@ struct TglVeboxAllocateBinding {
         image=base;entry=base+0x126740;return true;
     }
 };
-template<class Owner,class Invoke>
+template<class Owner,class Invoke=TglNativeVeboxStageInvoker>
 int tglInvokeLeasedVeboxAllocate(const TglVeboxAllocateBinding& binding,Owner& owner,
-    void* child,void* argument1,void* argument2,Invoke invoke) noexcept {
+    void* child,void* argument1,void* argument2,Invoke invoke={}) noexcept {
     static_assert(noexcept(invoke(uintptr_t{},nullptr,nullptr,nullptr)) &&
         std::is_same_v<decltype(invoke(uintptr_t{},nullptr,nullptr,nullptr)),int>,
         "native Allocate status ABI");
@@ -2360,9 +2366,9 @@ struct TglVeboxRenderBinding {
         image=base;entry=base+0x12c9d0;return true;
     }
 };
-template<class Owner,class Invoke>
+template<class Owner,class Invoke=TglNativeVeboxStageInvoker>
 int tglInvokeLeasedVeboxRender(const TglVeboxRenderBinding& binding,Owner& owner,
-    void* child,void* argument1,void* argument2,Invoke invoke) noexcept {
+    void* child,void* argument1,void* argument2,Invoke invoke={}) noexcept {
     static_assert(noexcept(invoke(uintptr_t{},nullptr,nullptr,nullptr)) &&
         std::is_same_v<decltype(invoke(uintptr_t{},nullptr,nullptr,nullptr)),int>,
         "native Render status ABI");
