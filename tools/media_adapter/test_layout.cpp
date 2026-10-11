@@ -10820,10 +10820,14 @@ static void testRetainedVeboxFrames() {
     const auto first=pool.create(allocated,released,destroyed);
     const auto second=pool.create(allocated,released,destroyed);
     assert(first.index<2 && second.index<2 && first.index!=second.index);
+    unsigned nativeTeardown=0;
+    auto teardown=[&]() noexcept -> int {++nativeTeardown;return 31;};
+    assert(pool.withQuiescentFrames(teardown)==5 && !nativeTeardown);
     assert(pool.create(allocated,released,destroyed).index==2);
     const Frame* address=nullptr;
     const auto failed=pool.run(first,[&](Frame& frame) noexcept {
         ++calls;address=&frame;TglResourceKey key{};key.width=16;key.height=1;
+        assert(pool.withQuiescentFrames(teardown)==5 && !nativeTeardown);
         assert(frame.resource.ensure(key).status==0);
         frame.scratch.command[0]=0x71;
         assert(pool.run(second,[&](Frame&) noexcept {assert(false);return TglOwnedVeboxCommandTransactionResult{};}).status==5);
@@ -10842,6 +10846,7 @@ static void testRetainedVeboxFrames() {
         return TglOwnedVeboxCommandTransactionResult{0,0,true,true};
     });
     assert(success.writtenBack && !released && !destroyed);
+    assert(pool.withQuiescentFrames(teardown)==5 && !nativeTeardown);
     assert(pool.run(second,[](Frame&) noexcept {
         assert(false);return TglOwnedVeboxCommandTransactionResult{};
     }).status==5);
@@ -10862,6 +10867,14 @@ static void testRetainedVeboxFrames() {
         assert(false);return TglOwnedVeboxCommandTransactionResult{};
     }).status==5);
     assert(pool.retire(inconsistent,admit)==0 && destroyed==4);
+    assert(pool.withQuiescentFrames([&]() noexcept -> int {
+        // The native call stays inside the same gate: no frame can appear
+        // between the emptiness check and destruction of its borrowed parent.
+        assert(pool.create(allocated,released,destroyed).index==2);
+        assert(pool.withQuiescentFrames(teardown)==5 && !nativeTeardown);
+        return teardown();
+    })==31 && nativeTeardown==1);
+    assert(pool.withQuiescentFrames([]() noexcept -> int {return 0;})==0);
 }
 
 int main() {

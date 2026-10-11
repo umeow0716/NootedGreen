@@ -14400,6 +14400,19 @@ public:
         slot.pending=slot.result.acquired || slot.result.writtenBack;
         return slot.result;
     }
+    // Physical destroy13c8c frees the wrapper borrowed by OS+8. Factory
+    // table lifetime cannot protect it. Serialize the native teardown with
+    // create/run/retire and refuse while ANY complete frame is still owned,
+    // including frames not submitted yet. No waiting or implicit retirement.
+    // Invoke must authenticate its physical/context generation and detach
+    // native child accounting before teardown. This is not native retention.
+    template<class Invoke> int withQuiescentFrames(Invoke invoke) noexcept {
+        static_assert(noexcept(invoke()) && std::is_same_v<decltype(invoke()),int>);
+        if(gate_.test_and_set(std::memory_order_acquire)) return 5;
+        Unlock unlock{gate_};
+        for(const auto& slot:slots_) if(slot.frame) return 5;
+        return invoke();
+    }
     // Admission must prove actual command discard or generation-qualified
     // completion, including any attempted submit. No result/status implies it.
     // Rejection retains the SAME complete object at the SAME address.
