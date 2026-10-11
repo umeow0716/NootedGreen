@@ -7065,7 +7065,31 @@ static void testNativeResourceBoundary() {
                                                     uint32_t publishedRow=0;
                                                     std::memcpy(&publishedRow,child.data()+0x1114,4);
                                                     assert(publishedRow==statisticsLayout.rowBytes);
-                                                    ++combinedUses;return -83;
+                                                    auto commandInput=[&](auto consume) noexcept {
+                                                        return tglRunCapturedDiIecpFrameInput(linkedInput,childOwner,reportOwner,
+                                                            actualChild,report,current,ffdi,ffdn,stmm,statisticsSurface,
+                                                            read,false,std::array<uint32_t,11>{},consume);
+                                                    };
+                                                    assert(commandInput([&](const TglDiIecpInputs& input) noexcept -> int {
+                                                        assert(input.current==&current && input.statistics==&statisticsSurface);
+                                                        assert(input.dnNeeded && input.stmmNeeded);
+                                                        assert(input.di==bool(reportBackend.bytes[0x13]&1));
+                                                        assert(!input.referenceValid || input.previous==ffdn.previous);
+                                                        assert(input.ffdi==ffdi.outputs && input.ffdn==ffdn.outputs && input.stmm==stmm.surfaces);
+                                                        TglOwnedSurfaceInputs packet;
+                                                        assert(!tglPublishOwnedSurfacesToBuilder(packet,&packet,input.current,input.target,
+                                                            input.pipe,input.di,input.iecp,input.dnNeeded,input.indices,
+                                                            input.ffdi,input.ffdn,input.stmm,
+                                                            [](const auto&,size_t) noexcept -> int {return 0;}));
+                                                        assert(packet.surfaces[0]==&current && packet.surfaces[2]==&stmmFirst);
+                                                        ++combinedUses;return -83;
+                                                    })==-83);
+                                                    int32_t savedIndex=0,invalidIndex=-1;
+                                                    std::memcpy(&savedIndex,reportBackend.bytes.data()+0x2c,4);
+                                                    std::memcpy(reportBackend.bytes.data()+0x2c,&invalidIndex,4);
+                                                    assert(commandInput([](const auto&) noexcept -> int {assert(false);return 0;})==5);
+                                                    std::memcpy(reportBackend.bytes.data()+0x2c,&savedIndex,4);
+                                                    return -83;
                                                 }),[&](void*,uintptr_t,const auto&) noexcept {
                                                     assert(frameTargets[0].withDescriptor([](const auto&) noexcept {}));
                                                     assert(targetA.withSurface([](const auto&) noexcept {}));

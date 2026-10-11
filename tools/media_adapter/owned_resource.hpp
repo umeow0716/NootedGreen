@@ -14103,6 +14103,50 @@ auto tglMakeCapturedStatisticsFrameTail(TglStatisticsResource<TglNativeResourceB
     };
 }
 
+// Bind command inputs to the already-held frame views. No new owner/handle is
+// created here; native registration and command emission remain downstream.
+// Call only from the scoped statistics-shell consumer: these borrowed groups
+// are not admission certificates when copied out of their owner scopes.
+template<class SourceOwner,class ChildOwner,class ExecutionOwner,class Read,class Consume>
+int tglRunCapturedDiIecpFrameInput(SourceOwner& sourceOwner,ChildOwner& childOwner,
+    ExecutionOwner& executionOwner,void* child,uintptr_t execution,
+    const TglOwnedSurfaceStorage& source,const TglOwnedFfdiTailViews& ffdi,
+    const TglOwnedFfdnTailViews& ffdn,const TglOwnedStmmTailViews& stmm,
+    const TglOwnedSurfaceStorage& statistics,Read read,bool alignDi64,
+    const std::array<uint32_t,11>& controls,Consume consume) noexcept {
+    return tglRunCapturedVeboxAllocation(sourceOwner,childOwner,executionOwner,
+        child,execution,source,[&](void* active,uintptr_t report,const auto& surface) noexcept -> int {
+            bool di=false;TglOwnedStateInputs state;TglSurfaceIndices indices;
+            if(ffdi.inputs[0]!=&surface ||
+               !tglReadOwnedBuilderDiArgument(di,reinterpret_cast<uintptr_t>(active),report,read) ||
+               !tglReadOwnedStateExecution(state,report,di,read) ||
+               !tglReadSurfaceIndices(report,indices,read)) return 5;
+            uintptr_t target=0,previous=0;
+            if(!read(report+0x60,&target,8) || target!=reinterpret_cast<uintptr_t>(ffdi.inputs[1])) return 5;
+            if(state.referenceValid) {
+                std::memcpy(&previous,surface.prefix.data()+0xc8,8);
+                if(!previous || previous!=reinterpret_cast<uintptr_t>(ffdn.previous)) return 5;
+            }
+            uint32_t width=0,height=0;
+            return tglPrepareOwnedStatisticsFromLeasedSource(sourceOwner,surface,0,
+                [&]() noexcept {return di;},alignDi64,width,height,
+                [&](uint32_t boundaryWidth,uint32_t) noexcept -> int {
+                    TglDiIecpInputs input;
+                    input.boundaryWidth=boundaryWidth;input.pipe=state.pipe;input.di=di;
+                    input.iecp=state.chromaIeCp;input.referenceValid=state.referenceValid;
+                    input.dnNeeded=state.dn;input.stmmNeeded=state.dn||di;input.indices=indices;
+                    input.current=&surface;input.previous=state.referenceValid?ffdn.previous:nullptr;
+                    input.target=ffdi.inputs[1];input.statistics=&statistics;
+                    input.ffdi=ffdi.outputs;input.ffdn=ffdn.outputs;input.stmm=stmm.surfaces;
+                    input.controls=controls;
+                    static_assert(noexcept(consume(std::declval<const TglDiIecpInputs&>())) &&
+                        std::is_same_v<decltype(consume(std::declval<const TglDiIecpInputs&>())),int>,
+                        "captured DI/IECP input consumer ABI");
+                    return consume(static_cast<const TglDiIecpInputs&>(input));
+                });
+        });
+}
+
 // Allocation transaction for a history-enabled frame. The qualified platform
 // planner supplies resource keys and statistics boundary dimensions; this does
 // not infer feature admission or SFC resources. All three owners outlive this
