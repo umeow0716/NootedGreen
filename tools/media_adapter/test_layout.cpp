@@ -11811,6 +11811,27 @@ static void testRetainedVeboxFrames() {
             assert(!pending);return 0; // CPU-only unsubmitted frame disposal
         })==0);
         assert(dispatch()==31 && invoked==2);
+        TglNativeFrameOutputReceipt receipt;
+        uintptr_t publishedEvent=0x77000;uint32_t publishedIndex=7;
+        unsigned outputReads=0,receiptCalls=0;int receiptResult=0;
+        auto receiptRead=[&](uintptr_t address,void* bytes,size_t size) noexcept {
+            if(address==0x66000 && size==8) {++outputReads;std::memcpy(bytes,&publishedEvent,8);return true;}
+            if(address==0x77004 && size==4) {++outputReads;std::memcpy(bytes,&publishedIndex,4);return true;}
+            return read(address,bytes,size);
+        };
+        auto receiptInvoke=[&](uintptr_t target,uintptr_t ctx,uintptr_t input,uintptr_t output) noexcept -> int {
+            ++receiptCalls;assert(target==entry && ctx==context && input==0x55000 && output==0x66000);
+            assert(outputReads==0);return receiptResult;
+        };
+        auto capture=[&]() noexcept {outputReads=0;return privateTable.dispatchItemWithReceipt(
+            items,context,0x55000,0x66000,receiptRead,receiptInvoke,receipt);};
+        assert(capture()==0 && receipt.valid && receipt.context==context && receipt.event==publishedEvent && receipt.index==7);
+        receiptResult=31;
+        assert(capture()==31 && !receipt.valid && outputReads==0);
+        receiptResult=0;publishedEvent=UINTPTR_MAX-3;
+        assert(capture()==0 && !receipt.valid && outputReads==1);
+        publishedEvent=0;
+        assert(capture()==0 && !receipt.valid && outputReads==1 && receiptCalls==4);
         const auto abiTarget=+[](void* ctx,const void* request,void** output) -> int {
             assert(reinterpret_cast<uintptr_t>(ctx)==0x20000 &&
                 reinterpret_cast<uintptr_t>(request)==0x55000 &&

@@ -16331,6 +16331,13 @@ struct TglNativeContextFrameInvoker {
             reinterpret_cast<void**>(outputSlot));
     }
 };
+// Successful native output publication only, NOT GPU completion/retirement.
+// Enclosing owner must associate this snapshot with its physical/frame generation.
+struct TglNativeFrameOutputReceipt {
+    uintptr_t context=0,event=0;
+    uint32_t index=0;
+    bool valid=false;
+};
 // Stable owned data only. No context mutation or native image modification.
 // Its enclosing context owner must retain this object and both code images
 // until all calls end; copying/moving or rebuilding a published table is unsafe.
@@ -16370,6 +16377,21 @@ public:
                 actual!=reinterpret_cast<uintptr_t>(addressPoint())) return 5;
             return invoke(nativeFrame_,context,request,outputSlot);
         });
+    }
+    template<class Pool,class Read,class Invoke>
+    int dispatchItemWithReceipt(Pool& pool,uintptr_t context,uintptr_t request,
+        uintptr_t outputSlot,Read read,Invoke invoke,TglNativeFrameOutputReceipt& receipt) noexcept {
+        receipt={};
+        return dispatchItem(pool,context,request,outputSlot,read,
+            [&](uintptr_t entry,uintptr_t ctx,uintptr_t input,uintptr_t output) noexcept -> int {
+                const int result=invoke(entry,ctx,input,output);
+                uintptr_t event=0;uint32_t index=0;
+                if(result==0 && read(output,&event,sizeof(event)) && event &&
+                    event<=UINTPTR_MAX-8 && read(event+4,&index,sizeof(index)))
+                    receipt={ctx,event,index,true};
+                // A snapshot failure must not rewrite a native result or free work.
+                return result;
+            });
     }
 };
 
