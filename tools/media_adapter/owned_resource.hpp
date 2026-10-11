@@ -1571,6 +1571,35 @@ struct TglNativeVeboxParentView {
     }
 };
 
+// Native cleanup4ef90 walks ALL17 source and ALL8 target slots, not merely
+// active counts. Snapshot their ORIGINAL identities under the same context
+// generation/frame scope; never adopt a copied shell or infer CF ownership.
+struct TglNativeContextInputRoots {
+    TglNativeVeboxParentView parent{};
+    uintptr_t input=0;
+    std::array<uintptr_t,17> sources{};
+    std::array<uintptr_t,8> targets{};
+    template<class Read,class Admit> bool resolve(uintptr_t context,Read read,Admit admit) noexcept {
+        *this={};TglNativeContextInputRoots candidate;
+        if(!candidate.parent.resolve(context,read,admit) ||
+            !read(context+0x12e8,&candidate.input,8) || !candidate.input ||
+            candidate.input>UINTPTR_MAX-0xd8 || !admit(candidate.input,size_t{0xd8})) return false;
+        auto capture=[&](auto& roots,size_t offset) noexcept {
+            for(size_t i=0;i<roots.size();++i)
+                if(!read(candidate.input+offset+i*8,&roots[i],8) ||
+                    (roots[i] && (roots[i]>UINTPTR_MAX-0x2a8 || !admit(roots[i],size_t{0x2a8})))) return false;
+            return true;
+        };
+        if(!capture(candidate.sources,8) || !capture(candidate.targets,0x98)) return false;
+        *this=candidate;return true;
+    }
+    bool contains(uintptr_t shell) const noexcept {
+        if(!input || !shell) return false;
+        for(auto p:sources) if(p==shell) return true;
+        for(auto p:targets) if(p==shell) return true;
+        return false;
+    }
+};
 // Borrow only under the enclosing authenticated physical generation/context
 // lifetime. This proves topology and addressability, not image/type or retain.
 struct TglNativeVeboxRendererView {

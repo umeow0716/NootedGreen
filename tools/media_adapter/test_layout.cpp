@@ -13144,6 +13144,32 @@ int main() {
         TglNativeVeboxParentView view;
         assert(view.resolve(c,read,admit));
         assert(view.context==c && view.physical==p && view.os==o && view.wrapper==w);
+        std::array<uint8_t,0xd8> nativeInput{};
+        const auto inputAddress=reinterpret_cast<uintptr_t>(nativeInput.data());
+        constexpr uintptr_t originalSource=0x500000,originalTarget=0x600000;
+        put(inputAddress,8+16*8,originalSource);put(inputAddress,0x98+7*8,originalTarget);
+        uintptr_t inputPointer=inputAddress;bool allowShells=true;
+        auto inputAdmit=[&](uintptr_t address,size_t size) noexcept {
+            return admit(address,size) || (address>=inputAddress && address-inputAddress<=nativeInput.size() &&
+                size<=nativeInput.size()-(address-inputAddress)) ||
+                (allowShells && size==0x2a8 && (address==originalSource || address==originalTarget));
+        };
+        auto inputRead=[&](uintptr_t address,void* bytes,size_t size) noexcept {
+            if(address==c+0x12e8 && size==8) {std::memcpy(bytes,&inputPointer,8);return true;}
+            if(address>=inputAddress && address-inputAddress<=nativeInput.size() &&
+                size<=nativeInput.size()-(address-inputAddress)) {
+                std::memcpy(bytes,reinterpret_cast<const void*>(address),size);return true;
+            }
+            return read(address,bytes,size);
+        };
+        TglNativeContextInputRoots roots;
+        assert(roots.resolve(c,inputRead,inputAdmit) && roots.parent.physical==p && roots.input==inputAddress);
+        assert(roots.sources[16]==originalSource && roots.targets[7]==originalTarget &&
+            roots.contains(originalSource) && roots.contains(originalTarget) && !roots.contains(0x700000));
+        allowShells=false;
+        assert(!roots.resolve(c,inputRead,inputAdmit) && !roots.input && !roots.contains(originalSource));
+        allowShells=true;inputPointer=UINTPTR_MAX-4;
+        assert(!roots.resolve(c,inputRead,inputAdmit) && !roots.input);
         TglNativeVeboxRendererView rendererView;
         assert(rendererView.resolve(c,read,admit) && rendererView.parent.physical==p &&
             rendererView.renderer==r && rendererView.configuration==r+0x2cb0);
