@@ -12217,6 +12217,8 @@ static void testRetainedVeboxFrames() {
             0x41,0x55,0x41,0x54,0x53,0x48,0x83,0xec,0x18};
         const std::array<uint8_t,11> backingReleaseAnchor{0x55,0x48,0x89,0xe5,0x53,0x50,0xff,0xce,0x83,0xfe,0x1a};
         auto removalAnchor=backingAllocateAnchor;
+        auto propertySetAnchor=creationAnchor;propertySetAnchor[16]=0x88;
+        auto propertyQueryAnchor=creationAnchor;propertyQueryAnchor[16]=0x98;
         auto read=[&](uintptr_t address,void* bytes,size_t size) noexcept {
             if(address==reinterpret_cast<uintptr_t>(&output) && size==8) {
                 if(!readable) return false;std::memcpy(bytes,&output,8);return true;
@@ -12228,6 +12230,8 @@ static void testRetainedVeboxFrames() {
             else if(address==image+0x1580c && size==backingReleaseAnchor.size()) std::memcpy(bytes,backingReleaseAnchor.data(),size);
             else if(address==image+0x13e43 && size==creationAnchor.size()) std::memcpy(bytes,creationAnchor.data(),size);
             else if(address==image+0x15128 && size==removalAnchor.size()) std::memcpy(bytes,removalAnchor.data(),size);
+            else if(address==image+0x15f96 && size==20) std::memcpy(bytes,propertySetAnchor.data(),size);
+            else if(address==image+0x161c3 && size==20) std::memcpy(bytes,propertyQueryAnchor.data(),size);
             else if(address==0x3300 && size==8) std::memcpy(bytes,&batchDescriptor,8);
             else if(address==0x3300 && size==4) std::memcpy(bytes,&batchCount,4);
             else if(address==0x3308 && size==8) std::memcpy(bytes,&batchOutputs,8);
@@ -12244,6 +12248,7 @@ static void testRetainedVeboxFrames() {
                 (address==image+0x13c8c && size==16) ||
                 (address==image+0x155d1 && size==17) || (address==image+0x1580c && size==11) ||
                 (address==image+0x13e43 && size==20) || (address==image+0x15128 && size==17) ||
+                ((address==image+0x15f96 || address==image+0x161c3) && size==20) ||
                 ((address==image+0x132510 || address==image+0x131fa0) && size==1);
         };
         TglNativePhysicalCallbackBinding binding;assert(binding.resolve(image,read,qualify,executable));
@@ -12340,6 +12345,15 @@ static void testRetainedVeboxFrames() {
         })==0);
         const auto pendingReads=parentReads;
         unsigned backingCalls=0,typedBackingCalls=0;
+        using PropertyOperation=decltype(callbacks)::PropertyOperation;
+        unsigned propertyCalls=0;uintptr_t expectedProperty=0;
+        auto nativeProperty=[&](uintptr_t entry,uintptr_t physical,const void* original) noexcept -> int {
+            ++propertyCalls;assert(entry==image+expectedProperty && physical==0x8000 && original==input);
+            assert(callbacks.withEventObservation(success.ticket,physical,
+                []() noexcept -> int {assert(false);return 0;})==5);return 31;
+        };
+        assert(callbacks.physicalProperties(success.ticket,0x8000,input,PropertyOperation::Set,nativeProperty)==5);
+        assert(callbacks.physicalProperties(success.ticket,0x8000,input,PropertyOperation::Query,nativeProperty)==5 && !propertyCalls);
         auto typedAllocate=[&](uintptr_t entry,uintptr_t physical,const void* original) noexcept -> int {
             ++typedBackingCalls;assert(entry==image+0x155d1 && physical==0x8000 && original==input);return 31;};
         auto typedRelease=[&](uintptr_t entry,uintptr_t physical,uint32_t type) noexcept -> int {
@@ -12372,6 +12386,14 @@ static void testRetainedVeboxFrames() {
         })==0);
         assert(callbacks.withBackingMutation(success.ticket,0x8001,mutateBacking)==5 && backingCalls==0);
         assert(callbacks.withBackingMutation(success.ticket,0x8000,mutateBacking)==31 && backingCalls==1);
+        expectedProperty=0x15f96;
+        assert(callbacks.physicalProperties(success.ticket,0x8000,input,PropertyOperation::Set,nativeProperty)==31 && propertyCalls==1);
+        expectedProperty=0x161c3;
+        assert(callbacks.physicalProperties(success.ticket,0x8000,input,PropertyOperation::Query,nativeProperty)==31 && propertyCalls==2);
+        propertyQueryAnchor[16]^=1;
+        assert(callbacks.physicalProperties(success.ticket,0x8000,input,PropertyOperation::Query,nativeProperty)==5 && propertyCalls==2);
+        propertyQueryAnchor[16]^=1;
+        assert(callbacks.physicalProperties(success.ticket,0x8000,input,static_cast<PropertyOperation>(99),nativeProperty)==5 && propertyCalls==2);
         assert(callbacks.allocateBacking(success.ticket,0x8000,input,typedAllocate)==31);
         assert(callbacks.releaseBacking(success.ticket,0x8000,25,typedRelease)==31 && typedBackingCalls==2);
         backingAllocateAnchor[0]^=1;

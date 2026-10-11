@@ -16792,6 +16792,28 @@ public:
             return native(binding_.image+0x1580c,physical,type);
         });
     }
+    // Slot15 sets physical+a858/shared-wrapper+130; slot16 queries can lazily
+    // initialize physical+8/+10 and call external property callbacks. Neither
+    // may run through pending-frame-safe event/query admission.
+    enum class PropertyOperation { Set,Query };
+    template<class Native=TglNativeBackingAllocateInvoker> int physicalProperties(
+        typename Registry::Ticket ticket,uintptr_t physical,const void* input,
+        PropertyOperation operation,Native native=Native{}) noexcept {
+        static_assert(noexcept(native(uintptr_t{},uintptr_t{},input)) &&
+            std::is_same_v<decltype(native(uintptr_t{},uintptr_t{},input)),int>);
+        if(!input || (operation!=PropertyOperation::Set && operation!=PropertyOperation::Query)) return 5;
+        const bool query=operation==PropertyOperation::Query;
+        const uintptr_t offset=query?0x161c3:0x15f96;
+        const std::array<uint8_t,20> anchor{0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,
+            0x41,0x55,0x41,0x54,0x53,0x48,0x81,0xec,static_cast<uint8_t>(query?0x98:0x88),0x01,0,0};
+        return withBackingMutation(ticket,physical,[&]() noexcept -> int {
+            std::array<uint8_t,20> actual{};
+            if(binding_.image>UINTPTR_MAX-offset-anchor.size() ||
+                !executable_(binding_.image+offset,anchor.size()) ||
+                !read_(binding_.image+offset,actual.data(),actual.size()) || actual!=anchor) return 5;
+            return native(binding_.image+offset,physical,input);
+        });
+    }
     // Context creation13e43 is a batch registry MUTATOR, not merely allocation:
     // 14e88..14ef5 writes physical+78 entries and updates physical+70 before
     // the batch finishes. Failure15072 reaches shared-user selector101 and does
