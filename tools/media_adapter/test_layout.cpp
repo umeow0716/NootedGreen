@@ -15488,7 +15488,28 @@ int main() {
                     std::memset(cpu.bytes.data()+0x1bb8,0,8);
                 }
             };
-            using Owner=TglOwnedVeboxBaseOwner<Cpu,TrackedSfc,decltype(cleanup),decltype(destroy)>;
+            struct NativeCpu {
+                Cpu& cpu;
+                uintptr_t allocate(uintptr_t entry,size_t size) {
+                    assert(entry==base+0x437e0);return cpu.allocate(size);
+                }
+                void release(uintptr_t entry,uintptr_t pointer) noexcept {
+                    assert(entry==base+0x436d0);cpu.release(pointer);
+                }
+            } nativeCpu{cpu};
+            auto allocatorRead=[](uintptr_t address,void* output,size_t size) noexcept {
+                const std::array<uint8_t,16> allocate{0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x10,
+                    0x48,0x89,0x7d,0xf8,0x48,0x8b,0x7d,0xf8};
+                const std::array<uint8_t,16> release{0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x10,
+                    0x48,0x89,0x7d,0xf8,0x48,0x83,0x7d,0xf8};
+                if(size!=16) return false;
+                if(address==base+0x437e0) std::memcpy(output,allocate.data(),16);
+                else if(address==base+0x436d0) std::memcpy(output,release.data(),16);
+                else return false;
+                return true;
+            };
+            using ChildStorage=TglNativeVeboxCpuChildStorage<decltype(cleanup),NativeCpu,TrackedSfc,decltype(destroy)>;
+            using Owner=std::remove_reference_t<decltype(std::declval<ChildStorage&>().owner())>;
             TglVeboxLifetimeBinding baseBinding{base,base+0x12d4e0,base+0x12de30};
             int32_t status=77,result=0;unsigned constructors=0;
             auto construct=[&](uintptr_t entry,void* object,void* nativeOs,void*,void* nativeSfc,
@@ -15501,10 +15522,16 @@ int main() {
                 ++constructors;*out=result;
             };
             {
-                Owner owner(cpu,tracked,cleanup,destroy);activeOwner=&owner;
+                ChildStorage childStorage(base,allocatorRead,
+                    [](uintptr_t image) noexcept {return image==base;},
+                    [](uintptr_t address,size_t size) noexcept {
+                        return size==16 && (address==base+0x437e0 || address==base+0x436d0);
+                    },cleanup,nativeCpu,tracked,destroy);
+                assert(childStorage.bound());
+                auto& owner=childStorage.owner();activeOwner=&owner;
                 reenterReset=[](void* p){static_cast<Owner*>(p)->reset();};
                 auto initialize=[&] {
-                    return owner.initialize(baseBinding,lifetime,mhw,reinterpret_cast<void*>(os),
+                    return childStorage.initialize(baseBinding,lifetime,mhw,reinterpret_cast<void*>(os),
                         nullptr,reinterpret_cast<void*>(0x3000),nullptr,nullptr,nullptr,status,read,construct);
                 };
                 cpu.fail=true;

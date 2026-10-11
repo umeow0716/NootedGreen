@@ -3884,6 +3884,41 @@ private:
     }
 };
 
+// CPU/native-SFC backing portion of one owned910/918 child. Keep allocator,
+// invokers and cleanup closure alive before the base owner that borrows them.
+// Cleanup is mandatory: it must detach owned VP80 and retire resource tokens
+// before native base teardown. The enclosing retained frame still owns all
+// borrowed native interfaces and prevents destruction while published/pending.
+template<class Cleanup,class CpuInvoker=TglNativeTrackedCpuInvoker,
+    class SfcInvoker=TglNativeSfcLifetimeInvoker,class Destroy=TglNativeVeboxDestructorInvoker>
+class TglNativeVeboxCpuChildStorage {
+    uintptr_t image_;
+    Cleanup cleanup_;
+    TglTrackedCpuBackend<CpuInvoker> cpu_;
+    SfcInvoker sfc_;
+    Destroy destroy_;
+    TglOwnedVeboxBaseOwner<decltype(cpu_),SfcInvoker,Cleanup,Destroy> owner_;
+public:
+    template<class Read,class Qualify,class Executable>
+    TglNativeVeboxCpuChildStorage(uintptr_t image,Read read,Qualify qualify,Executable executable,
+        Cleanup cleanup,CpuInvoker cpu={},SfcInvoker sfc={},Destroy destroy={})
+        :image_(image),cleanup_(std::move(cleanup)),cpu_(image,read,qualify,executable,cpu),
+         sfc_(std::move(sfc)),destroy_(std::move(destroy)),owner_(cpu_,sfc_,cleanup_,destroy_) {}
+    TglNativeVeboxCpuChildStorage(const TglNativeVeboxCpuChildStorage&)=delete;
+    TglNativeVeboxCpuChildStorage& operator=(const TglNativeVeboxCpuChildStorage&)=delete;
+    bool bound() const noexcept {return cpu_.bound();}
+    auto& owner() noexcept {return owner_;}
+    template<class Read,class Construct=TglNativeVeboxConstructorInvoker>
+    TglOwnedBaseConstruction initialize(const TglVeboxLifetimeBinding& binding,
+        const TglSfcLifetimeBinding& lifetime,const TglSfcMhwBinding& sfc,
+        void* os,void* mhw,void* renderHal,void* history,void* performance,
+        const void* cache,int32_t& status,Read read,Construct construct={}) {
+        if(!bound() || binding.image!=image_) return TglOwnedBaseConstruction::NotCalled;
+        return owner_.initialize(binding,lifetime,sfc,os,mhw,renderHal,history,
+            performance,cache,status,read,construct);
+    }
+};
+
 // These callbacks are owned lifecycle only, not permission for native
 // allocation accounting or GPU retirement. The context outlives allocation.
 struct TglOwnedVeboxSynchronousTeardown {
