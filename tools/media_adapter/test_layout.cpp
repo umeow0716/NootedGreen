@@ -45,6 +45,39 @@ struct TestFeatureExecutionOwner {
 };
 static void testTrackedCpuOwner() {
     {
+        TglVeboxAdmissionStagesInput input;
+        input.prefix={true,true,true,true,1,uint64_t{1}<<12,64,16};
+        input.pipe=1;input.params10c=42;input.mmc=3;
+        std::array<uint8_t,0xd48> execution{};
+        std::array<uint8_t,0x28> pass{};
+        unsigned order=0;bool eligible=true,denyFeature=true,sfcReady=true;
+        auto reset=[&]() noexcept {assert(order++==0);execution.fill(0);return true;};
+        auto setup=[&](auto& bytes) noexcept {
+            assert(order++==1 && bytes[0xd2c]==1);
+            uint32_t d28=1;std::memcpy(&d28,bytes.data()+0xd28,4);assert(d28==0);
+        };
+        auto query=[&]() noexcept {assert(order++==2);return eligible;};
+        auto feature=[&](auto& bytes) noexcept {
+            assert(order++==3);bytes[0x18]=denyFeature;
+            uint32_t d28=0;std::memcpy(&d28,bytes.data()+0xd28,4);assert(d28==42);
+        };
+        auto sfc=[&](auto&) noexcept {assert(order++==(eligible?4u:3u));return sfcReady;};
+        assert(tglRunVeboxAdmissionStages(input,execution,pass,reset,setup,query,feature,sfc));
+        assert(order==5); // feature denial must NOT bypass pipe1 SFC
+        order=0;input.source124=2;
+        assert(!tglRunVeboxAdmissionStages(input,execution,pass,reset,setup,query,feature,sfc));
+        assert(order==4 && pass[8]==1); // fallback pipe0 skips SFC
+        order=0;pass[8]=0;input.source124=0;eligible=false;
+        assert(tglRunVeboxAdmissionStages(input,execution,pass,reset,setup,query,feature,sfc));
+        assert(order==4);
+        order=0;sfcReady=false;
+        assert(!tglRunVeboxAdmissionStages(input,execution,pass,reset,setup,query,feature,sfc));
+        assert(order==4);
+        order=0;input.prefix.sourceWidth=63;
+        assert(!tglRunVeboxAdmissionStages(input,execution,pass,reset,setup,query,feature,sfc));
+        assert(!order && pass[8]==1);
+    }
+    {
         TestFeatureSurfaceOwner source,target;
         TestFeatureExecutionOwner execution;
         std::array<uint8_t,0x1bc0> base{};

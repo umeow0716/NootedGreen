@@ -6099,6 +6099,49 @@ constexpr bool tglVeboxAdmissionResult(uint8_t params138,uint8_t pass08,
     return admitted && !((params138&1) && (pass08&1));
 }
 
+struct TglVeboxAdmissionStagesInput {
+    TglVeboxAdmissionPrefixInput prefix;
+    uint32_t pipe=0,params10c=0,source124=0;
+    uint8_t mmc=0;
+    uintptr_t leasedParamsF0=0;
+};
+// CPU sequencing of1fb950, not a substitute for Gen12 policy/context.
+// Qualified callbacks own reset/optional VP reset, history setup, platform
+// feature query, native170 and complete VP28+flag publication respectively.
+// All frame/report/parameter owners must remain leased across this call.
+template<size_t E,size_t P,class Reset,class Setup,class Query,class Feature,class Sfc>
+bool tglRunVeboxAdmissionStages(const TglVeboxAdmissionStagesInput& input,
+    std::array<uint8_t,E>& execution,std::array<uint8_t,P>& pass,
+    Reset reset,Setup setup,Query query,Feature feature,Sfc sfc) noexcept {
+    static_assert(E>=0xd2d && P>=9,"complete admission field extents");
+    static_assert(noexcept(reset()) && std::is_same_v<decltype(reset()),bool>,"checked reset ABI");
+    static_assert(noexcept(query()) && std::is_same_v<decltype(query()),bool>,"feature query ABI");
+    static_assert(noexcept(feature(execution)) &&
+        std::is_same_v<decltype(feature(execution)),void>,"native170 void ABI");
+    static_assert(noexcept(sfc(execution)) && std::is_same_v<decltype(sfc(execution)),bool>,
+        "checked complete SFC stage ABI");
+    if(input.pipe>2) return false;
+    if(tglPrepareVeboxAdmissionPrefix(input.prefix,pass)!=TglVeboxAdmissionPrefixResult::Continue)
+        return false;
+    if(!reset()) return false;
+    if(!tglPublishVeboxAdmissionMode(execution,input.pipe,input.mmc,input.params10c,setup)) return false;
+    bool admitted=false;
+    if(query()) {
+        uint32_t currentPipe=0;std::memcpy(&currentPipe,execution.data()+0xa0c,4);
+        if(currentPipe>2) return false;
+        if(currentPipe==2) std::memcpy(execution.data()+0x9e8,&input.leasedParamsF0,8);
+        feature(execution);
+        admitted=!(execution[0x18]&1);
+    }
+    if(!tglApplyVeboxAdmissionSampleFallback(execution,pass,input.source124,admitted)) return false;
+    uint32_t pipe=0;std::memcpy(&pipe,execution.data()+0xa0c,4);
+    if(pipe==1) {
+        if(!sfc(execution)) return false;
+        admitted=true;
+    }
+    return tglVeboxAdmissionResult(input.prefix.params138,pass[8],admitted);
+}
+
 template<class Owner,class Policy> class TglOwnedVeboxAdmissionContext {
     Owner& owner_;
     void* child_;
