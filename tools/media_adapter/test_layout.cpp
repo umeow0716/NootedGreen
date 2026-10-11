@@ -8968,7 +8968,7 @@ int main() {
             using SendEntry=int(*)(void*,void*,void*) noexcept;
             SetupEntry escapedSetup=nullptr;SendEntry escapedSend=nullptr;
             void* callbackChild=nullptr;int source=0,data=0,command=0;
-            for(unsigned mode=0;mode<10;++mode) {
+            for(unsigned mode=0;mode<11;++mode) {
                 unsigned stages=0,emissions=0;
                 TglOwnedSfcStateParameters<decltype(stateCpu)>* observedState=nullptr;
                 TglOwnedVpCscCache callbackCsc;
@@ -8980,9 +8980,13 @@ int main() {
                         ++stages;return mode==9?11:0;
                     },
                     [&](void*,const auto&,auto&) noexcept -> int {++stages;return 0;},
-                    [&](void*,const auto&) noexcept {
+                    [&](void* child,const auto&) noexcept {
                         assert(observedState && observedState->hasParametersLease());
                         assert(observedState->withParameters([](const uint8_t*) noexcept {return 0;})==5);
+                        uintptr_t published=0;
+                        std::memcpy(&published,static_cast<uint8_t*>(child)+0x938,8);
+                        assert(published==reinterpret_cast<uintptr_t>(stateCpu.bytes.data()));
+                        if(mode==10) std::memset(static_cast<uint8_t*>(child)+0x938,0,8);
                         ++stages;
                     },
                     [&](void* child,void* d,void* c) noexcept -> int {
@@ -9014,6 +9018,11 @@ int main() {
                             assert(setup(child,&source,reinterpret_cast<void*>(0x2000),&data)==11);
                             assert(send(child,&data,&command)==11);
                             assert(stages==1);return 0;
+                        }
+                        if(mode==10) {
+                            assert(setup(child,&source,reinterpret_cast<void*>(0x2000),&data)==5);
+                            assert(send(child,&data,&command)==5);
+                            assert(stages==3);return 0;
                         }
                         assert(setup(child,&source,reinterpret_cast<void*>(0x2000),&data)==0);
                         assert(stages==3);

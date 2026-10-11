@@ -8330,7 +8330,7 @@ public:
                             reinterpret_cast<void*>(target));},
                         [&]() noexcept {return avs(child,frame,avs_);},
                         [&]() noexcept {
-                            const int filterResult=state_.withParameters([&](const uint8_t* packet) noexcept {
+                            const int filterResult=state_.withVpParameterPublication(storage_,[&](const uint8_t* packet) noexcept {
                                 producer.leasedState=packet;
                                 Producers::filters(child,renderData,const_cast<uint8_t*>(packet),source);
                                 producer.leasedState=nullptr;
