@@ -9929,6 +9929,39 @@ public:
         if(busy_) return false;
         busy_=true;height_=0;owner_.reset();busy_=false;return true;
     }
+    template<class Use> int withReleaseReservation(Use use) noexcept {
+        if(busy_) return 5;
+        busy_=true;bool released=false;
+        auto release=[&]() noexcept {
+            if(released) return;
+            released=true;height_=0;owner_.reset();
+        };
+        static_assert(noexcept(use(release)),"SFD release reservation ABI");
+        const int result=use(release);busy_=false;return result;
+    }
+};
+
+// Feed the existing VP retirement/void-release contexts the entire line
+// resource set. Neither native admission nor any release runs until BOTH
+// reservations succeed. Failed admission retains all resources; this does
+// not turn a CPU reservation into proof of native GPU completion.
+template<class Lines,class Sfd> class TglOwnedVpLineResourceSet {
+    Lines& lines_;Sfd& sfd_;
+public:
+    TglOwnedVpLineResourceSet(Lines& lines,Sfd& sfd) noexcept:lines_(lines),sfd_(sfd){}
+    template<class Use> int withReleaseReservation(Use use) noexcept {
+        return lines_.withReleaseReservation([&](auto releaseLines) noexcept {
+            return sfd_.withReleaseReservation([&](auto releaseSfd) noexcept {
+                bool released=false;
+                auto release=[&]() noexcept {
+                    if(released) return;
+                    released=true;releaseLines();releaseSfd();
+                };
+                static_assert(noexcept(use(release)),"VP line resource-set retirement ABI");
+                return use(release);
+            });
+        });
+    }
 };
 
 // Exact slot58=1df210 is status(this). State+30/+4c are read only from

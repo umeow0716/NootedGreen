@@ -7712,7 +7712,35 @@ int main() {
                 sfdBackend.status=0;assert(sfd.ensure(tall)==0);
                 for(int result:{0,31,-7}) assert(run(result)==result);
                 assert(queries==7 && emitted==6);
-                assert(sfd.tryReset() && sfdBackend.allocations==sfdBackend.releases);
+                TglOwnedVpLineResourceSet<decltype(lines),decltype(sfd)> resources(lines,sfd);
+                unsigned admissions=0;
+                assert(sfd.withBuffer(tall,[&](const auto*) noexcept {
+                    return resources.withReleaseReservation([&](auto) noexcept {
+                        ++admissions;return 0;
+                    });
+                })==5 && !admissions);
+                assert(lines.withSurfaces([&](const auto&,const auto&) noexcept {
+                    return resources.withReleaseReservation([&](auto) noexcept {
+                        ++admissions;return 0;
+                    });
+                })==5 && !admissions);
+                for(int admission:{31,0}) {
+                    auto retire=[&]() noexcept {
+                        ++admissions;assert(!lines.tryReset() && !sfd.tryReset());
+                        assert(resources.withReleaseReservation([](auto) noexcept {assert(false);return 0;})==5);
+                        return admission;
+                    };
+                    using ReleaseContext=TglOwnedVpLineReleaseContext<decltype(resources),decltype(retire)>;
+                    using Release=TglOwnedVpSfcCallbacks<TglOwnedVpSfcResolve<ReleaseContext>>;
+                    ReleaseContext releaseContext(vp,resources,retire);
+                    TglOwnedVpSfcScopedContext<ReleaseContext> releaseScope(vp.bytes.data(),releaseContext);
+                    assert(releaseScope.bound());Release::freeResources(vp.bytes.data());
+                    assert(releaseContext.status()==admission);
+                    if(admission) assert(run(0)==0);
+                }
+                assert(admissions==2 && run(0)==5);
+                assert(sfdBackend.allocations==sfdBackend.releases);
+                assert(lines.ensure(input,scaled)==0); // Restore fixture for +30 tests below.
             }
             if(failure<0) for(int admission:{31,0}) {
                 auto retire=[&]() noexcept -> int {
