@@ -10982,6 +10982,28 @@ int main() {
         assert(priorCalls==4);
         assert(frame.withFfdnPrior(reinterpret_cast<uintptr_t>(ffdi[0]->surfaceBinding()),consumePrior)==5);
         assert(frame.withFfdnPrior(0,consumePrior)==5 && priorCalls==4);
+        constexpr uintptr_t capturedChild=0xc000;
+        uintptr_t priorBinding=reinterpret_cast<uintptr_t>(ffdn[1]->surfaceBinding());
+        unsigned priorReads=0;bool priorReadable=true;
+        auto priorRead=[&](uintptr_t address,void* output,size_t length) noexcept {
+            ++priorReads;
+            if(!priorReadable || address!=capturedChild+0xba8 || length!=8) return false;
+            std::memcpy(output,&priorBinding,8);return true;
+        };
+        auto lazyPrior=frame.capturedFfdnPrior(capturedChild,priorRead);
+        assert(!priorReads); // a branch not consuming prior needs no ba8 access
+        assert(lazyPrior.surfaceBinding()==ffdn[1]->surfaceBinding());
+        bool priorCompression=true;
+        assert(lazyPrior.readFfdnPriorCompression(priorCompression) && !priorCompression);
+        priorBinding=reinterpret_cast<uintptr_t>(frame.ffdnDescriptors()[0].surfaceBinding());
+        priorCompression=true;
+        assert(!lazyPrior.readFfdnPriorCompression(priorCompression) && priorCompression);
+        assert(lazyPrior.surfaceBinding()==frame.ffdnDescriptors()[0].surfaceBinding());
+        assert(lazyPrior.readFfdnPriorCompression(priorCompression) && !priorCompression);
+        priorReadable=false;
+        assert(!lazyPrior.surfaceBinding());priorCompression=true;
+        assert(!lazyPrior.readFfdnPriorCompression(priorCompression) && priorCompression);
+        priorReadable=true;
         frame.auxiliary().retention().observe(TglOwnedVeboxCommandTransactionResult{0,0,true,true});
         assert(frame.withFfdnPrior(reinterpret_cast<uintptr_t>(ffdn[0]->surfaceBinding()),consumePrior)==5);
         assert(priorCalls==4);

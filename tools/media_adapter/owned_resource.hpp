@@ -14249,6 +14249,39 @@ public:
             return use(prior);
         return 5;
     }
+    // Synchronous prior interface consumed by tglProduceCapturedFfdnCompression.
+    // No ba8 read at construction: native forced/source-compressed branches
+    // do not require a prior. Calls must stay inside captured child admission.
+    template<class Read> class CapturedFfdnPrior {
+        TglNativeVeboxSurfaceFrameStorage& frame_;
+        uintptr_t child_,binding_=0;
+        Read read_;
+    public:
+        CapturedFfdnPrior(TglNativeVeboxSurfaceFrameStorage& frame,uintptr_t child,Read read)
+            :frame_(frame),child_(child),read_(read) {}
+        const void* surfaceBinding() noexcept {
+            binding_=0;
+            uintptr_t candidate=0;
+            if(!child_ || child_>UINTPTR_MAX-0xbb0 || frame_.auxiliary_.retention()() ||
+               !read_(child_+0xba8,&candidate,8)) return nullptr;
+            binding_=candidate;
+            return reinterpret_cast<const void*>(binding_);
+        }
+        bool readFfdnPriorCompression(bool& output) noexcept {
+            uintptr_t current=0;
+            if(!binding_ || !child_ || child_>UINTPTR_MAX-0xbb0 ||
+               !read_(child_+0xba8,&current,8) || current!=binding_) return false;
+            bool candidate=false;
+            const int result=frame_.withFfdnPrior(binding_,[&](auto& prior) noexcept -> int {
+                return prior.readFfdnPriorCompression(candidate)?0:5;
+            });
+            if(result) return false;
+            output=candidate;return true;
+        }
+    };
+    template<class Read> auto capturedFfdnPrior(uintptr_t child,Read read) {
+        return CapturedFfdnPrior<Read>(*this,child,read);
+    }
 };
 #if defined(__APPLE__)
 using TglDarwinVeboxSurfaceFrameStorage=TglNativeVeboxSurfaceFrameStorage<TglDarwinStmmSurfaceApi>;
