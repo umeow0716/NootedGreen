@@ -1972,10 +1972,31 @@ public:
 // child factory12e9c0 (which discards Initialize errors). Backend validation
 // must authenticate the image/ABI and nested d38/d40 objects. Their mere
 // presence is necessary, not sufficient. Backend must outlive this owner.
+template<class Backend> class TglExecutionOwner;
+// Non-owning native execution bytes, constructible only by its leased owner.
+// Never reinterpret a native allocation as a std::array object. The view and
+// all pointers/references derived from it must remain inside the callback.
+class TglLeasedAdmissionExecution {
+    template<class Backend> friend class TglExecutionOwner;
+    uint8_t* bytes_;
+    explicit TglLeasedAdmissionExecution(uintptr_t object) noexcept
+        :bytes_(reinterpret_cast<uint8_t*>(object)){}
+public:
+    TglLeasedAdmissionExecution(const TglLeasedAdmissionExecution&)=delete;
+    TglLeasedAdmissionExecution& operator=(const TglLeasedAdmissionExecution&)=delete;
+    uint8_t* data() noexcept {return bytes_;}
+    uint8_t& operator[](size_t index) noexcept {return bytes_[index];}
+};
+template<class T> struct TglAdmissionExecutionExtent;
+template<size_t N> struct TglAdmissionExecutionExtent<std::array<uint8_t,N>>
+    :std::integral_constant<size_t,N>{};
+template<> struct TglAdmissionExecutionExtent<TglLeasedAdmissionExecution>
+    :std::integral_constant<size_t,0xd48>{};
+
 template<class Backend> class TglExecutionOwner {
     Backend& backend;
     uintptr_t object = 0;
-    bool leased_=false;
+    bool leased_=false,admissionBytesBusy_=false;
 public:
     explicit TglExecutionOwner(Backend& b) noexcept : backend(b) {}
     TglExecutionOwner(const TglExecutionOwner&) = delete;
@@ -2035,6 +2056,16 @@ public:
         const int status=use(object);
         leased_=false;
         return status;
+    }
+    template<class Use> int withLeasedAdmissionBytes(uintptr_t expected,Use use) noexcept {
+        static_assert(noexcept(use(std::declval<TglLeasedAdmissionExecution&>())),
+                      "admission execution view callback must not throw");
+        if(admissionBytesBusy_ || !hasExecutionLease(expected)) return 5;
+        admissionBytesBusy_=true;
+        TglLeasedAdmissionExecution view(object);
+        const int result=use(view);
+        admissionBytesBusy_=false;
+        return result;
     }
     int commitDndi(uintptr_t address,const TglOwnedDndiState& state) noexcept {
         if(!leased_ || !object || object>UINTPTR_MAX-0xd48 || address!=object+0x850) return 5;
@@ -6063,10 +6094,10 @@ TglVeboxAdmissionPrefixResult tglPrepareVeboxAdmissionPrefix(
 // and MMC flag, but OLD d28. Only after that void stage returns is params10c
 // published at d28. This is metadata, not permission to call an unqualified
 // native +180 or evidence of command completion. Enclosing owner pins storage.
-template<size_t N,class Setup>
-bool tglPublishVeboxAdmissionMode(std::array<uint8_t,N>& execution,
+template<class Execution,class Setup>
+bool tglPublishVeboxAdmissionMode(Execution& execution,
     uint32_t pipe,uint8_t mmc,uint32_t params10c,Setup setup) noexcept {
-    static_assert(N>=0xd2d,"complete admission metadata extent");
+    static_assert(TglAdmissionExecutionExtent<Execution>::value>=0xd2d,"complete admission metadata extent");
     static_assert(noexcept(setup(execution)) &&
         std::is_same_v<decltype(setup(execution)),void>,"native +180 void stage");
     if(pipe>2) return false;
@@ -6081,10 +6112,10 @@ bool tglPublishVeboxAdmissionMode(std::array<uint8_t,N>& execution,
 // forces pipe0 and composition fallback BEFORE the pipe1 VP+28 dispatch.
 // Other sample types preserve both values. Invalid owned pipe is rejected
 // without modifying either buffer; it is not silently converted to pipe0.
-template<size_t E,size_t P>
-bool tglApplyVeboxAdmissionSampleFallback(std::array<uint8_t,E>& execution,
+template<class Execution,size_t P>
+bool tglApplyVeboxAdmissionSampleFallback(Execution& execution,
     std::array<uint8_t,P>& pass,uint32_t source124,bool admitted) noexcept {
-    static_assert(E>=0xa10 && P>=9,"admission sample field extents");
+    static_assert(TglAdmissionExecutionExtent<Execution>::value>=0xa10 && P>=9,"admission sample field extents");
     uint32_t pipe=0;std::memcpy(&pipe,execution.data()+0xa0c,4);
     if(pipe>2) return false;
     if(source124==2 && !admitted) {
@@ -6109,11 +6140,11 @@ struct TglVeboxAdmissionStagesInput {
 // Qualified callbacks own reset/optional VP reset, history setup, platform
 // feature query, native170 and complete VP28+flag publication respectively.
 // All frame/report/parameter owners must remain leased across this call.
-template<size_t E,size_t P,class Reset,class Setup,class Query,class Feature,class Sfc>
+template<class Execution,size_t P,class Reset,class Setup,class Query,class Feature,class Sfc>
 bool tglRunVeboxAdmissionStages(const TglVeboxAdmissionStagesInput& input,
-    std::array<uint8_t,E>& execution,std::array<uint8_t,P>& pass,
+    Execution& execution,std::array<uint8_t,P>& pass,
     Reset reset,Setup setup,Query query,Feature feature,Sfc sfc) noexcept {
-    static_assert(E>=0xd2d && P>=9,"complete admission field extents");
+    static_assert(TglAdmissionExecutionExtent<Execution>::value>=0xd2d && P>=9,"complete admission field extents");
     static_assert(noexcept(reset()) && std::is_same_v<decltype(reset()),bool>,"checked reset ABI");
     static_assert(noexcept(query()) && std::is_same_v<decltype(query()),bool>,"feature query ABI");
     static_assert(noexcept(feature(execution)) &&

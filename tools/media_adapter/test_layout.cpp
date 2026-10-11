@@ -45,6 +45,41 @@ struct TestFeatureExecutionOwner {
 };
 static void testTrackedCpuOwner() {
     {
+        struct Backend {
+            std::array<uint8_t,0xd48> bytes{};unsigned creates=0,destroys=0;
+            uintptr_t create() noexcept {++creates;return reinterpret_cast<uintptr_t>(bytes.data());}
+            int initialize(uintptr_t p) noexcept {assert(validate(p));bytes.fill(0);return 0;}
+            bool validate(uintptr_t p) noexcept {return p==reinterpret_cast<uintptr_t>(bytes.data());}
+            void destroy(uintptr_t p) noexcept {assert(validate(p));++destroys;}
+        } backend;
+        TglExecutionOwner owner(backend);assert(!owner.ensure());
+        const auto address=owner.get();
+        auto denied=[](auto&) noexcept {assert(false);return 0;};
+        assert(owner.withLeasedAdmissionBytes(address,denied)==5);
+        assert(owner.withExecution([&](uintptr_t actual) noexcept {
+            assert(owner.withLeasedAdmissionBytes(actual+1,denied)==5);
+            return owner.withLeasedAdmissionBytes(actual,[&](auto& bytes) noexcept {
+                assert(bytes.data()==backend.bytes.data());
+                assert(owner.withLeasedAdmissionBytes(actual,denied)==5);
+                owner.reset();assert(owner.get()==actual && !backend.destroys);
+                TglVeboxAdmissionStagesInput input;
+                input.prefix={true,true,true,true,1,uint64_t{1}<<12,64,16};
+                input.pipe=2;input.params10c=71;input.leasedParamsF0=0x1234;
+                std::array<uint8_t,0x28> pass{};
+                const bool admitted=tglRunVeboxAdmissionStages(input,bytes,pass,
+                    []() noexcept {return true;},[](auto&) noexcept {},
+                    []() noexcept {return true;},[](auto& view) noexcept {view[0x18]=0;},
+                    [](auto&) noexcept {assert(false);return false;});
+                uintptr_t params=0;std::memcpy(&params,backend.bytes.data()+0x9e8,8);
+                uint32_t field=0;std::memcpy(&field,backend.bytes.data()+0xd28,4);
+                assert(admitted && params==0x1234 && field==71);
+                return 31;
+            });
+        })==31);
+        assert(owner.withLeasedAdmissionBytes(address,denied)==5);
+        owner.reset();assert(backend.creates==1 && backend.destroys==1);
+    }
+    {
         TglVeboxAdmissionStagesInput input;
         input.prefix={true,true,true,true,1,uint64_t{1}<<12,64,16};
         input.pipe=1;input.params10c=42;input.mmc=3;
