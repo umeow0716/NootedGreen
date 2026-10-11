@@ -4496,6 +4496,19 @@ struct TglOwnedFfdiCompressionSelection {
     bool compressed=false;
     uint32_t mode=0;
 };
+// ICL1f7e52..1f7eb4, after the allocation loop: execution68 overrides
+// only slot0's scalar fields1c8/200. Unlike execution60, field200 is copied
+// even when zero/-1. No IOSurface handle1a0 or other resource bytes transfer.
+// Caller must hold the secondary owner lease; this is not backing adoption.
+inline void tglCopyOwnedFfdiSecondaryMetadata(TglOwnedSurfaceStorage& target,
+    const TglOwnedSurfaceStorage& secondary) noexcept {
+    if(&target==&secondary) return;
+    constexpr size_t resourceOffset=offsetof(TglOwnedSurfaceStorage,resource);
+    std::memcpy(target.resource.data()+0x1c8-resourceOffset,
+        secondary.resource.data()+0x1c8-resourceOffset,4);
+    std::memcpy(target.resource.data()+0x200-resourceOffset,
+        secondary.resource.data()+0x200-resourceOffset,4);
+}
 // ICL1f7a50..1f7af2 allocation data policy. +a8 selects source metadata;
 // otherwise child1ba9 and tile==1 gate +90(format). This is not a derived
 // object's ABI, permission to enable MMC, or proof of compressed backing.
