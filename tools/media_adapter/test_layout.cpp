@@ -1629,6 +1629,12 @@ static void testTrackedCpuOwner() {
             std::memcpy(secondary.resource.data()+0x200-base,&secondary200,4);
             auto expected=target;
             std::memcpy(expected.resource.data()+0x1c8-base,&secondary1c8,4);
+            if(secondary200!=0 && secondary200!=0xffffffffu)
+                std::memcpy(expected.resource.data()+0x200-base,&secondary200,4);
+            tglCopyOwnedFfdiPrimaryScalars(target,secondary);
+            assert(target.prefix==expected.prefix && target.resource==expected.resource && target.tail==expected.tail);
+            tglCopyOwnedFfdiPrimaryScalars(target,target);
+            assert(target.resource==expected.resource);
             std::memcpy(expected.resource.data()+0x200-base,&secondary200,4);
             tglCopyOwnedFfdiSecondaryMetadata(target,secondary);
             assert(target.prefix==expected.prefix && target.resource==expected.resource && target.tail==expected.tail);
@@ -5339,7 +5345,17 @@ static void testNativeResourceBoundary() {
                         constexpr size_t base=offsetof(TglOwnedSurfaceStorage,resource);
                         assert(!std::memcmp(metadata[0].resource.data()+0x200-base,
                             destinationSurface->resource.data()+0x200-base,4));
-                        for(size_t i=1;i<count;++i) assert(!tglNativeBackingPresent(metadata[i].resource));
+                        assert(!std::memcmp(metadata[0].resource.data()+0x1c8-base,
+                            destinationSurface->resource.data()+0x1c8-base,4));
+                        for(size_t i=1;i<count;++i) {
+                            assert(!tglNativeBackingPresent(metadata[i].resource));
+                            assert(!std::memcmp(metadata[i].resource.data()+0x1c8-base,
+                                surface->resource.data()+0x1c8-base,4));
+                            uint32_t input200=0,output200=0;
+                            std::memcpy(&input200,surface->resource.data()+0x200-base,4);
+                            std::memcpy(&output200,metadata[i].resource.data()+0x200-base,4);
+                            assert(output200==((input200 && input200!=0xffffffffu)?input200:0u));
+                        }
                         owner.reset();destination.reset();
                         assert(owner.ensure(key)==5 && destination.ensure(key)==5);
                         return -17;

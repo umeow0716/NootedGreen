@@ -4496,6 +4496,19 @@ struct TglOwnedFfdiCompressionSelection {
     bool compressed=false;
     uint32_t mode=0;
 };
+// ICL1f7c14..1f7cc0: scalar subset of execution60 metadata. The borrowed
+// handle1a0 is deliberately excluded and remains available only via its
+// actual leased owner view. No token/reference is retained by this copy.
+inline void tglCopyOwnedFfdiPrimaryScalars(TglOwnedSurfaceStorage& target,
+    const TglOwnedSurfaceStorage& execution) noexcept {
+    if(&target==&execution) return;
+    constexpr size_t base=offsetof(TglOwnedSurfaceStorage,resource);
+    std::memcpy(target.resource.data()+0x1c8-base,execution.resource.data()+0x1c8-base,4);
+    uint32_t field200=0;
+    std::memcpy(&field200,execution.resource.data()+0x200-base,4);
+    if(field200!=0 && field200!=0xffffffffu)
+        std::memcpy(target.resource.data()+0x200-base,&field200,4);
+}
 // ICL1f7e52..1f7eb4, after the allocation loop: execution68 overrides
 // only slot0's scalar fields1c8/200. Unlike execution60, field200 is copied
 // even when zero/-1. No IOSurface handle1a0 or other resource bytes transfer.
@@ -4823,6 +4836,7 @@ int tglWithAllocatedOwnedFfdiRoles(Owner& source,Owner* execution,uint32_t forma
             bool changed=false;
             const int result=allocate(request,changed);
             if(result!=0) return result;
+            if(views[1]) tglCopyOwnedFfdiPrimaryScalars(metadata,*views[1]);
             tglUpdateOwnedFfdiExecutionCompression(changed,compression,execution13,execution14);
             return use(*views[0],views[1],static_cast<const TglOwnedSurfaceStorage&>(metadata),
                 execution13,execution14);
@@ -4868,6 +4882,7 @@ int tglWithAllocatedOwnedFfdiBatch(Owner& input,Owner* execution,Owner* secondar
             const int result=allocate(index,request,changed);
             if(result!=0) return result;
             if(!tglPrepareOwnedFfdiFrameMetadata(metadata[index],*views[0],query)) return 5;
+            if(views[1]) tglCopyOwnedFfdiPrimaryScalars(metadata[index],*views[1]);
             tglUpdateOwnedFfdiExecutionCompression(changed,compression,flag,mode);
         }
         if(views[2]) tglCopyOwnedFfdiSecondaryMetadata(metadata[0],*views[2]);
