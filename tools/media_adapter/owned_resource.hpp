@@ -5215,7 +5215,8 @@ int tglWithAllocatedOwnedFfdiPreparation(Owner& source,uint32_t format,uint32_t 
 template<size_t Capacity,class Owner,class Allocate,class Use>
 int tglWithAllocatedOwnedFfdiBatch(Owner& input,Owner* execution,Owner* secondary,
     size_t count,uint32_t format,uint32_t tile,TglOwnedFfdiCompressionSelection compression,
-    TglOwnedFfdiMetadataQuery query,uint8_t flag,uint8_t mode,Allocate allocate,Use use) noexcept {
+    TglOwnedFfdiMetadataQuery query,uint8_t flag,uint8_t mode,Allocate allocate,Use use,
+    std::array<const TglOwnedSurfaceStorage*,3> captured={}) noexcept {
     static_assert(Capacity>0 && Capacity<=4,"owned FFDI slot capacity");
     using Metadata=std::array<TglOwnedSurfaceStorage,Capacity>;
     using Views=std::array<const TglOwnedSurfaceStorage*,3>;
@@ -5225,7 +5226,7 @@ int tglWithAllocatedOwnedFfdiBatch(Owner& input,Owner* execution,Owner* secondar
         size_t{},uint8_t{},uint8_t{})),"FFDI batch consumer ABI");
     if(count==0 || count>Capacity) return 5;
     const std::array<Owner*,3> roles{&input,execution,secondary};
-    return tglWithOwnedSurfaceRoles(roles,[&](const Views& views) noexcept {
+    return tglWithCapturedOwnedSurfaceRoles(roles,captured,[&](const Views& views) noexcept {
         TglOwnedFfdiAllocationRequest request;
         if(!tglPrepareOwnedFfdiAllocationRequest(*views[0],format,tile,compression,request)) return 5;
         Metadata metadata{};
@@ -5250,7 +5251,7 @@ template<size_t Count,class Owner,class Use>
 int tglWithOwnedDescriptorFfdiBatch(std::array<TglOwnedDescriptorOnlySurface,Count>& targets,
     Owner& input,Owner* execution,Owner* secondary,size_t count,uint32_t format,uint32_t tile,
     TglOwnedFfdiCompressionSelection compression,TglOwnedFfdiMetadataQuery query,
-    uint8_t flag,uint8_t mode,Use use) noexcept {
+    uint8_t flag,uint8_t mode,Use use,std::array<const TglOwnedSurfaceStorage*,3> captured={}) noexcept {
     using Outputs=std::array<const TglOwnedSurfaceStorage*,Count>;
     using Inputs=std::array<const TglOwnedSurfaceStorage*,3>;
     static_assert(noexcept(use(std::declval<const Inputs&>(),std::declval<const Outputs&>(),
@@ -5276,7 +5277,7 @@ int tglWithOwnedDescriptorFfdiBatch(std::array<TglOwnedDescriptorOnlySurface,Cou
                 return leased?result:5;
             };
             return enter(enter,0);
-        });
+        },captured);
 }
 
 // Allocation-disabled 1f7b06 -> 1f7e52 edge for an existing descriptor slot0.

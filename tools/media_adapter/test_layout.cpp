@@ -5878,6 +5878,25 @@ static void testNativeResourceBoundary() {
                 }
                 assert(fixture.allocations==allocationCount);
                 unsigned secondaryConsumers=0;
+                assert(owner.withSurface([&](const auto& source) noexcept {
+                    assert(tglWithOwnedDescriptorFfdiBatch(targets,owner,&owner,&destination,
+                        2,0x19,1,{true,1},{8,3},0,0,
+                        [&](const auto& inputs,const auto& outputs,size_t active,uint8_t,uint8_t) noexcept {
+                            assert(inputs[0]==&source && inputs[1]==&source && active==2);
+                            assert(owner.hasSurfaceLease(source) && destination.hasSurfaceLease(*inputs[2]));
+                            for(size_t i=0;i<active;++i) {
+                                assert(tglNativeBackingPresent(outputs[i]->resource));
+                                targets[i].reset();
+                                assert(!targets[i].withDescriptor([](const auto&) noexcept {}));
+                            }
+                            return 31;
+                        },{&source,nullptr,nullptr})==31);
+                    assert(owner.hasSurfaceLease(source));
+                }));
+                for(size_t i=0;i<2;++i) assert(targets[i].withDescriptor([](const auto& view) noexcept {
+                    assert(!tglNativeBackingPresent(view.resource));
+                }));
+                assert(fixture.allocations==allocationCount);
                 assert(tglWithOwnedDescriptorFfdiSecondary(targets[0],owner,
                     [&](const auto& source,const auto& output) noexcept {
                         ++secondaryConsumers;
