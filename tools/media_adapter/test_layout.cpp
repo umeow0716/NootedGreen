@@ -10768,6 +10768,24 @@ int main() {
                     const auto before=retired;expiredAssemblyRelease(storage->bytes.data());
                     assert(retired==before);
                 }
+                admission=0;fail=0;
+                const auto beforeModes=storage->bytes;
+                for(int consumerResult:{0,31}) {
+                    assert(graph.withModeAssemblyView(false,read,lines,retire,0x1000,0x2000,0x4000,
+                        [&](void* child,const TglOwnedVpEntrySet& entries) noexcept {
+                            assert(child==storage->bytes.data() && !graph.tryReset());
+                            assert(entries.inputFormat(child,reinterpret_cast<void*>(0x1000)));
+                            entries.sampleMode(child,reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x2000));
+                            entries.formatMode(child,reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x4000));
+                            assert(entries.allocate(child)==0);
+                            entries.freeResources(child);expiredAssembly=entries;
+                            return consumerResult;
+                        })==consumerResult);
+                    for(size_t offset:{size_t(0x923),size_t(0x998),size_t(0x99c),size_t(0x9c0)})
+                        assert(std::memcmp(storage->bytes.data()+offset,beforeModes.data()+offset,offset==0x923?1:offset==0x9c0?8:4)==0);
+                    expiredAssembly.sampleMode(storage->bytes.data(),reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x2000));
+                    assert(expiredAssembly.allocate(storage->bytes.data())==5);
+                }
                 retired=0;
                 const std::array<unsigned,2> assemblyAllocations{backends[0].allocations,backends[1].allocations};
                 const std::array<unsigned,2> assemblyReleases{backends[0].releases,backends[1].releases};

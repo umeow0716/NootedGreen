@@ -9516,6 +9516,19 @@ public:
                 });
         });
     }
+    template<class Read,class Lines,class Retire,class Use>
+    int withModeAssemblyView(bool avsEnabled,Read& read,Lines& lines,Retire& retire,
+        uintptr_t source,uintptr_t target,uintptr_t settings,Use use) noexcept {
+        return withAssemblyView(avsEnabled,read,lines,retire,
+            [&](void* child,const TglOwnedVpEntrySet& entries) noexcept {
+                return tglWithOwnedVpModeAssembly(storage_,source,target,settings,read,entries,
+                    [&](void* modeChild,const TglOwnedVpEntrySet& complete) noexcept {
+                        if(modeChild!=child) return 5;
+                        static_assert(noexcept(use(child,complete)),"VP graph mode assembly ABI");
+                        return use(child,complete);
+                    });
+            });
+    }
     // Only the actual currently published state packet may receive VP+a0.
     // The enclosing setup/send owner retains the graph/frame lease; no copy
     // or unrelated packet is admitted as native state938.
