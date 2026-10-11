@@ -9083,8 +9083,24 @@ static void testSfcLineBufferOwnership() {
                 TglOwnedVpSfcCpuGraph<Cpu,Cpu> retainedGraph(retainedState,retainedAvs,&frameRetention);
                 assert(retainedGraph.initialize(0x1000,0x2000,0x3000,binding,noRead,1,0));
                 const auto generation=retainedGraph.generation();
+                {
+                    using Lease=decltype(retainedGraph)::ResourceOwnerLease;
+                    Lease frameLease(retainedGraph);
+                    assert(frameLease.storage() && retainedGraph.ownsStorage(frameLease.storage()->bytes.data()));
+                    Lease duplicate(retainedGraph);assert(!duplicate.storage());
+                    assert(!retainedGraph.tryReset());
+                    assert(!retainedGraph.initialize(0x1000,0x2000,0x3000,binding,noRead,1,0));
+                    assert(retainedGraph.withResourceOwnerStorage([](auto&) noexcept {
+                        assert(false);return 0;
+                    })==5);
+                    assert(retainedGraph.withView(false,[&](void* child) noexcept {
+                        assert(child==frameLease.storage()->bytes.data());return 0;
+                    })==0);
+                }
                 struct Pending {bool acquired,writtenBack;};
                 frameRetention.observe(Pending{true,false});
+                decltype(retainedGraph)::ResourceOwnerLease lateLease(retainedGraph);
+                assert(!lateLease.storage());
                 assert(!retainedGraph.tryReset());
                 assert(!retainedGraph.initialize(0x1000,0x2000,0x3000,binding,noRead,1,0));
                 assert(retainedGraph.withPassInitializationEntry([](void*,auto) noexcept {

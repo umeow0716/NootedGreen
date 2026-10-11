@@ -10529,14 +10529,35 @@ public:
         if(!ready_ || busy_ || resourcesBound_) return 5;
         Guard guard(busy_);return prepare(storage_,state_,avs_);
     }
+    // A complete retained frame may hold this lease as a member, constructed
+    // after the graph and destroyed after its line owners. It pins the SAME
+    // VP storage against reset/reinitialization without holding busy_, so
+    // native-shaped setup/send callbacks remain usable. The enclosing frame
+    // must outlive GPU use; a lease is not a fence or a physical retain.
+    class ResourceOwnerLease {
+        TglOwnedVpSfcCpuGraph* graph_=nullptr;
+    public:
+        explicit ResourceOwnerLease(TglOwnedVpSfcCpuGraph& graph) noexcept {
+            if(!graph.ready_ || graph.busy_ || graph.resourcesBound_ ||
+               (graph.retention_ && (*graph.retention_)())) return;
+            graph.resourcesBound_=true;graph_=&graph;
+        }
+        ResourceOwnerLease(const ResourceOwnerLease&)=delete;
+        ResourceOwnerLease& operator=(const ResourceOwnerLease&)=delete;
+        ~ResourceOwnerLease(){if(graph_) graph_->resourcesBound_=false;}
+        TglOwnedVpSfcCallerStorage* storage() const noexcept {
+            return graph_ ? &graph_->storage_:nullptr;
+        }
+    };
     // Construct resource owners inside this callback and destroy them before
     // returning. Their typed shells live in this VP storage, which must not
     // be zeroed/reinitialized until those owners are gone. Frame/setup/send
     // operations remain available; this is not an asynchronous fence lease.
     template<class Use> int withResourceOwnerStorage(Use use) noexcept {
         static_assert(noexcept(use(storage_)),"VP resource owner lifetime ABI");
-        if(!ready_ || busy_ || resourcesBound_) return 5;
-        Guard guard(resourcesBound_);return use(storage_);
+        ResourceOwnerLease lease(*this);
+        auto* storage=lease.storage();
+        return storage ? use(*storage):5;
     }
     // Native pipe selection and subsequent VP28/40/48 must refer to this
     // same initialized VP owner, not a separate admission-only storage shell.
