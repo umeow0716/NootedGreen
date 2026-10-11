@@ -1449,6 +1449,59 @@ static void testTrackedCpuOwner() {
             const auto pending=nativeConsumer(frame);
             assert(pending.status==5 && !pending.acquired && !pending.writtenBack && nativeRetention());
             assert(nativeSetups==1 && nativeBuilds==1 && nativeWritebacks==1);
+            // Real packet producer, not Frame's status-return fixture: a stale
+            // role snapshot must reach native error writeback and keep ownership.
+            unsigned registrations=0;
+            auto admitSurface=[](const TglOwnedSurfaceStorage&,auto) noexcept {return true;};
+            auto admitDi=[](const TglOwnedSurfaceStorage&) noexcept -> int {return 0;};
+            auto registerResource=[&](const auto&,bool,bool) noexcept -> int {
+                ++registrations;return 0;
+            };
+            auto control=[](const TglOwnedSurfaceStorage&,uint32_t&,auto,bool) noexcept -> int {return 0;};
+            using ActualFrame=TglOwnedVeboxPacketContext<decltype(noRead),decltype(admitSurface),
+                decltype(admitDi),decltype(registerResource),decltype(control)>;
+            TglDiIecpInputs staleInput{}; // no current role: cannot authorize packets
+            ActualFrame actualFrame{{},leases,staleInput,false,noRead,admitSurface,
+                admitDi,registerResource,control};
+            using ActualProducers=TglOwnedVeboxFrameProducerTypes<ActualFrame,Child,Execution,
+                decltype(noRead),decltype(noPackets),decltype(produce)>;
+            assert((tglBuildOwnedVeboxCompleteHooks<AuxiliaryResolve,AuxiliaryScope,
+                AuxiliaryScope,typename ActualProducers::Resolve,AuxiliaryScope,FormatRead>(
+                    nativeChild,child.installed)));
+            TglOwnedVeboxFrameRetention actualRetention;
+            auto actualConsumer=tglMakeOwnedVeboxNativeFrameConsumer<AuxiliaryResolve,
+                AuxiliaryScope,AuxiliaryScope,AuxiliaryScope,FormatRead>(sourceLease,
+                child,execution,0,noRead,noPackets,produce,nativeSetup,nativeBuilder,
+                nativeImage,nativeOs,scratch,&state,actualRetention,qualify,executable,
+                [&](uintptr_t,void*,void*,void*,void*,int32_t* remaining) noexcept -> int {
+                    ++nativeSetups;*remaining=128;
+                    const uintptr_t base=0x1000,cursor=0x1020;
+                    const int32_t offset=32,left=96;
+                    std::memcpy(scratch.command.data()+0x148,&base,8);
+                    std::memcpy(scratch.command.data()+0x150,&cursor,8);
+                    std::memcpy(scratch.command.data()+0x158,&offset,4);
+                    std::memcpy(scratch.command.data()+0x15c,&left,4);
+                    return 0;
+                },[&](uintptr_t,void* object,void*,void* packet,void*,void*,void*,void*,void*) noexcept -> int {
+                    ++nativeBuilds;
+                    using Di=int(*)(void*,bool,void*) noexcept;
+                    return reinterpret_cast<Di>(child.installed[6])(object,false,packet);
+                },[&](uintptr_t,void*,void*) noexcept {
+                    uintptr_t cursor=0;int32_t offset=-1,left=-1;
+                    std::memcpy(&cursor,scratch.command.data()+0x150,8);
+                    std::memcpy(&offset,scratch.command.data()+0x158,4);
+                    std::memcpy(&left,scratch.command.data()+0x15c,4);
+                    assert(cursor==0x1000 && offset==0 && left==128);
+                    ++nativeWritebacks;
+                });
+            const auto stale=actualConsumer(actualFrame);
+            assert(stale.status==5 && stale.builderStatus==5 && stale.acquired && stale.writtenBack);
+            assert(actualRetention() && !registrations);
+            assert(nativeSetups==2 && nativeBuilds==2 && nativeWritebacks==2);
+            assert(!ActualProducers::Resolve::get(nativeChild));
+            const auto stalePending=actualConsumer(actualFrame);
+            assert(stalePending.status==5 && !stalePending.acquired && !stalePending.writtenBack);
+            assert(nativeSetups==2 && nativeBuilds==2 && nativeWritebacks==2);
         }
     }
     {
