@@ -12921,6 +12921,28 @@ struct TglOwnedVeboxDndiFrameContext {
     }
 };
 
+// Compose existing real packet/DNDI/kernel/CSC producers under one resolver
+// scope. No packet/pass/resource copy and no lifetime extension: enclosing
+// captured-frame orchestration retains child/execution/native image leases.
+// Caller begins/closes the SAME pass latch; this must not erase prior errors.
+template<class Frame,class ChildOwner,class ExecutionOwner,class Read,
+    class PacketAdmit,class ProduceCsc,class Use>
+int tglWithOwnedVeboxFrameProducers(Frame& frame,ChildOwner& child,ExecutionOwner& execution,
+    uintptr_t dnParams,Read read,PacketAdmit admitPackets,ProduceCsc produceCsc,Use use) noexcept {
+    auto& leases=frame.leases;
+    if(!leases.child || !leases.execution || !child.hasPrivateChildLease(leases.child) ||
+       !execution.hasExecutionLease(leases.execution)) return 5;
+    TglOwnedVeboxDndiFrameContext dndi(frame,execution,dnParams,read,admitPackets);
+    TglOwnedVeboxKernelFrameContext kernel(dndi,child,execution);
+    TglOwnedVeboxCscFrameContext csc(kernel,leases,child,execution,produceCsc);
+    using Resolve=TglOwnedVeboxScopedContext<decltype(csc)>;
+    void* object=reinterpret_cast<void*>(leases.child);
+    Resolve scope(object,csc);
+    if(!scope.bound()) return 5;
+    static_assert(noexcept(use(object,csc)),"complete VEBOX producer consumer ABI");
+    return use(object,csc);
+}
+
 inline std::array<uint8_t,0x48> tglSurfaceDescriptor(
         const TglOwnedSurfaceStorage& shell) noexcept {
     return tglSurfaceDescriptorBytes(reinterpret_cast<const uint8_t*>(&shell));

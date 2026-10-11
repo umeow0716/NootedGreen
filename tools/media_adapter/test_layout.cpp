@@ -1196,21 +1196,31 @@ static void testTrackedCpuOwner() {
         assert(retaining.allocate()==5 && retainedCalls==1 && !retainedUnwinds);
     }
     {
-        struct Frame {TglOwnedVeboxProducerPass pass;} frame;
+        struct Execution {bool leased=true;
+            bool hasExecutionLease(uintptr_t p) const noexcept {return leased && p==9;}
+            bool commitDndi(uintptr_t,const TglOwnedDndiState&) noexcept {return false;}
+        } execution;
         struct Child {
             bool leased=true;unsigned writes=0;TglCscCoefficients saved;
             bool hasPrivateChildLease(uintptr_t p) const noexcept {return leased && p==7;}
             bool publishCsc(const TglCscCoefficients& value) noexcept {
                 if(!leased) return false; ++writes;saved=value;return true;
             }
+            int setupKernelScratch(Execution& execution,int32_t index) noexcept {
+                return leased && execution.hasExecutionLease(9) && index==3 ? -17:5;
+            }
         } child;
-        struct Execution {bool leased=true;
-            bool hasExecutionLease(uintptr_t p) const noexcept {return leased && p==9;}
-        } execution;
         TglOwnedSurfaceStorage source,target,foreign;
         TglOwnedSurfaceInputs surfaces{};TglOwnedVeboxStateStorage state{};
         TglOwnedDiIecpPacket di{};
         TglOwnedVeboxPacketLeases leases{7,9,0,0,source,&target,surfaces,state,di};
+        struct Frame {
+            TglOwnedVeboxProducerPass pass;
+            TglOwnedVeboxPacketLeases& leases;
+            int surfaces(bool,void* packet) noexcept {return packet==&leases.surfaces ? 31:5;}
+            int state(bool,void* packet) noexcept {return packet==&leases.state ? -19:5;}
+            int diIecp(bool,void* packet) noexcept {return packet==&leases.diIecp ? -23:5;}
+        } frame{{},leases};
         uint32_t from=3,to=7,format=2;
         std::memcpy(source.prefix.data(),&from,4);std::memcpy(target.prefix.data(),&to,4);
         std::memcpy(source.prefix.data()+0x130,&format,4);
@@ -1243,6 +1253,35 @@ static void testTrackedCpuOwner() {
             })==5 && calls==3 && child.writes==2);
         }
         assert(!Resolve::get(nativeChild));
+        auto noRead=[](uintptr_t,void*,size_t) noexcept {return false;};
+        auto noPackets=[](uintptr_t,size_t,uintptr_t,size_t) noexcept {return false;};
+        int(*expiredKernel)(void*,int32_t) noexcept=nullptr;
+        assert(tglWithOwnedVeboxFrameProducers(frame,child,execution,0,noRead,noPackets,produce,
+            [&](void* object,auto& producer) noexcept {
+                using Scoped=TglOwnedVeboxScopedContext<std::remove_reference_t<decltype(producer)>>;
+                using Entries=TglOwnedVeboxProducerCallbacks<Scoped>;
+                assert(object==nativeChild && &producer.pass==&frame.pass);
+                expiredKernel=&Entries::setupKernel;
+                return producer.pass.withBuilder([&]() noexcept {
+                    Entries::csc(object,&source,&target);
+                    return Entries::setupKernel(object,3);
+                });
+            })==-17);
+        assert(calls==4 && child.writes==3 && expiredKernel(nativeChild,3)==5);
+        assert(tglWithOwnedVeboxFrameProducers(frame,child,execution,0,noRead,noPackets,produce,
+            [&](void* object,auto& producer) noexcept {
+                using Scoped=TglOwnedVeboxScopedContext<std::remove_reference_t<decltype(producer)>>;
+                using Entries=TglOwnedVeboxProducerCallbacks<Scoped>;
+                return producer.pass.withBuilder([&]() noexcept {
+                    assert(Entries::surfaces(object,false,&surfaces)==31);
+                    assert(Entries::state(object,false,&state)==31); // Same latch, not a copied pass.
+                    return Entries::diIecp(object,false,&di);
+                });
+            })==31);
+        execution.leased=false;
+        assert(tglWithOwnedVeboxFrameProducers(frame,child,execution,0,noRead,noPackets,produce,
+            [](void*,auto&) noexcept {assert(false);return 0;})==5);
+        execution.leased=true;
     }
     {
         std::array<uint8_t,0x200> child;child.fill(0xa5);
