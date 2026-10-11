@@ -14040,8 +14040,16 @@ int main() {
                     unsigned passStates=0;
                     assert(graph.withInitializedFrameCallbackAssemblyPass(initializedEntries,0x1000,0x2000,0x3000,0x4000,
                       0,0x4000,{},&passData,read,
-                      [&](void*,const auto&,const auto& geometry,auto&) noexcept -> int {
-                          assert(geometry.frameWidth==geometrySnapshot.frameWidth);++passStates;return 0;
+                      [&](void*,const auto& prepared,const auto& geometry,auto& stateOwner) noexcept -> int {
+                          assert(geometry.frameWidth==geometrySnapshot.frameWidth);
+                          TglOwnedVpChromaStatePrefix prefix;
+                          if(!tglPrepareOwnedVpStatePrefix(prepared,geometry,false,false,prefix)) return 5;
+                          // Exercise the audited prefix and Gen12 packet producer,
+                          // rather than accepting setup with an untouched zero state.
+                          // Tail/resource/fill inputs remain explicit CPU fixtures.
+                          if(!stateOwner.prepare(prefix.packet,{},false,false,false,
+                              TglOwnedSfcCompressionMode::Disabled)) return 5;
+                          ++passStates;return 0;
                       },
                       [](void*,const auto&,auto&) noexcept -> int {return 0;},
                       [](void*,const auto&) noexcept {},
