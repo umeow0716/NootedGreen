@@ -12913,6 +12913,66 @@ public:
                     prepare,reinitialize,w,h,binding,writable,publish);
             });
     }
+    // Slot58/frame integration: capture actual child/report/source identities
+    // before consuming metadata. The private table preserves d0=71e80 FALSE,
+    // so DI comes from the exact leased report13, not an injected policy stub.
+    template<class SourceOwner,class ChildOwner,class ExecutionOwner,class Read,
+        class Requests,class Prepare,class Writable,class Publish>
+    int ensureNativeFromCapturedFrame(SourceOwner& sourceOwner,ChildOwner& childOwner,
+        ExecutionOwner& executionOwner,void* child,uintptr_t execution,
+        const TglOwnedSurfaceStorage& source,Read read,bool alignDi64,
+        const Requests& requests,Prepare prepare,bool reinitialize,
+        const TglNativeBufferFillBinding& binding,Writable writable,Publish publish) noexcept {
+        using Storage=typename Statistics::Storage;
+        using Publication=decltype(publish(std::declval<const Storage&>(),
+            std::declval<const TglStatisticsAllocation&>()));
+        static_assert(noexcept(read(uintptr_t{},static_cast<void*>(nullptr),size_t{})) &&
+            noexcept(prepare(size_t{},std::declval<const Storage&>(),bool{})) &&
+            noexcept(writable(uintptr_t{},uint32_t{})) &&
+            noexcept(publish(std::declval<const Storage&>(),
+                std::declval<const TglStatisticsAllocation&>())) &&
+            (std::is_same_v<Publication,int> || std::is_same_v<Publication,void>),
+            "captured allocation callbacks must preserve their nonthrowing ABI");
+        bool entered=false;
+        const int status=tglRunCapturedVeboxAllocation(sourceOwner,childOwner,executionOwner,
+            child,execution,source,[&](void* captured,uintptr_t report,const auto& surface) noexcept {
+                entered=true;
+                auto frameStage=[&](auto invoke) noexcept {
+                    return tglRunCapturedVeboxAllocation(sourceOwner,childOwner,executionOwner,
+                        captured,report,surface,[&](void*,uintptr_t,const auto&) noexcept {
+                            return invoke();
+                        });
+                };
+                bool di=false;uint8_t historyCompression=0;
+                const uintptr_t address=reinterpret_cast<uintptr_t>(captured);
+                if(address>UINTPTR_MAX-0x1baa ||
+                   !tglReadOwnedBuilderDiArgument(di,address,report,read) ||
+                   !read(address+0x1ba9,&historyCompression,1) || historyCompression>1) return 5;
+                if(frameStage([]() noexcept {return 0;})) return 5;
+                auto guardedPrepare=[&](size_t index,const auto& storage,bool changed) noexcept {
+                    return frameStage([&]() noexcept {return prepare(index,storage,changed);});
+                };
+                auto guardedWritable=[&](uintptr_t mapping,uint32_t bytes) noexcept {
+                    bool allowed=false;
+                    const int checked=frameStage([&]() noexcept {
+                        allowed=writable(mapping,bytes);return allowed?0:5;
+                    });
+                    return !checked && allowed;
+                };
+                auto guardedPublish=[&](const auto& storage,const auto& layout) noexcept -> int {
+                    return frameStage([&]() noexcept -> int {
+                        if constexpr(std::is_same_v<decltype(publish(storage,layout)),void>) {
+                            publish(storage,layout);return 0;
+                        } else return publish(storage,layout);
+                    });
+                };
+                return ensureNativeFromSourceBoundary(sourceOwner,surface,di?1u:0u,
+                    []() noexcept {return uint8_t{0};},alignDi64,historyCompression!=0,
+                    requests,guardedPrepare,reinitialize,binding,guardedWritable,guardedPublish);
+            });
+        if(entered && status) reset();
+        return status;
+    }
     template<class Invoke> int withResources(Invoke invoke) noexcept {
         if(busy_ || !ready_) return 5;
         busy_=true;

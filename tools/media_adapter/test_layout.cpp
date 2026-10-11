@@ -4982,6 +4982,48 @@ static void testNativeStatisticsFill() {
     assert(transaction.ensureNativeFromSourceBoundary(sourceOwner,sourceOwner.storage,
         0,queryDi,false,false,requests,prepare,false,binding,writable,revoke)==5);
     assert(!statistics.layout().bytes && !group.storage(0) && !api.references);
+    sourceOwner.deny=false;putSource(0x58,float{65.75});
+    alignas(8) std::array<uint8_t,0x1bc0> childBytes{};
+    std::array<uint8_t,0x20> reportBytes{};reportBytes[0x13]=1;
+    const uintptr_t reportAddress=reinterpret_cast<uintptr_t>(reportBytes.data());
+    const uintptr_t sourceAddress=reinterpret_cast<uintptr_t>(&sourceOwner.storage);
+    std::memcpy(childBytes.data()+0x88,&reportAddress,8);
+    std::memcpy(childBytes.data()+0x1b0,&sourceAddress,8);
+    TestVeboxChildLease childLease{childBytes.data()};
+    struct ExecutionLease {
+        uintptr_t address;bool valid=true;
+        bool hasExecutionLease(uintptr_t value) noexcept {return valid && value==address;}
+    } executionLease{reportAddress};
+    bool readable=true;
+    auto read=[&](uintptr_t address,void* out,size_t count) noexcept {
+        if(!readable) return false;
+        const auto in=[&](const auto& bytes) noexcept {
+            const uintptr_t base=reinterpret_cast<uintptr_t>(bytes.data());
+            return address>=base && address-base<=bytes.size() &&
+                count<=bytes.size()-size_t(address-base);
+        };
+        if(!in(childBytes) && !in(reportBytes)) return false;
+        std::memcpy(out,reinterpret_cast<const void*>(address),count);return true;
+    };
+    auto captured=[&](auto prepareStage) noexcept {
+        return transaction.ensureNativeFromCapturedFrame(sourceOwner,childLease,executionLease,
+            childBytes.data(),reportAddress,sourceOwner.storage,read,false,requests,
+            prepareStage,false,binding,writable,graphPublish);
+    };
+    const auto beforeFrame=fixture.allocations;
+    assert(captured(prepare)==5 && fixture.allocations==beforeFrame); // no child lease
+    childLease.busy=true;
+    assert(!captured(prepare) && statistics.layout().bytes==1664);
+    const auto fillsBeforeRevoke=fixture.fills;
+    auto revokeReport=[&](size_t,const Storage&,bool) noexcept {
+        executionLease.valid=false;return 0;
+    };
+    assert(captured(revokeReport)==5 && fixture.fills==fillsBeforeRevoke);
+    assert(!statistics.layout().bytes && !group.storage(0) && !api.references);
+    executionLease.valid=true;readable=false;
+    assert(captured(prepare)==5 && fixture.fills==fillsBeforeRevoke);
+    readable=true;childBytes[0x1ba9]=2;
+    assert(captured(prepare)==5 && fixture.fills==fillsBeforeRevoke);
 }
 
 static void testStatisticsLifecycle() {
