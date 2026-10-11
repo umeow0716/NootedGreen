@@ -16533,6 +16533,12 @@ public:
     // 9628 (resource create/map). These are backing mutators, not demonstrated
     // frees of frontend2a8 shells. Do not invent a shell alias from adjacency;
     // classify actual resource references before choosing a narrower barrier.
+    // Paired slot10=1580c is destructive:25->22bf6(+30b0),26->22c13
+    // (+60e0),27->158b3(+9110), all reaching98b3. That helper walks32-byte
+    // entries, invokes23e0c8 on entry+18 then clears it, invokes23e524 on
+    // entry+10 then clears it, and resets group+0c. No fence wait precedes
+    // this cleanup loop. Holding physical memory alive does NOT retain those
+    // resource entries; relevant slot10 calls must also obey frame exclusion.
     template<class Use> int withNewRequest(typename Registry::Ticket ticket,
         uintptr_t physical,Use use) noexcept {
         if(!physical || !valid()) return 5;
