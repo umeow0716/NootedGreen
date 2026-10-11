@@ -1592,6 +1592,26 @@ static void testTrackedCpuOwner() {
             assert(selected.compressed==(follow?compressed:queried && supported));
             assert(selected.mode==(follow?unsigned(mode):unsigned(queried && supported)));
         }
+        TglOwnedSurfaceStorage source;
+        const uint32_t width=1920,height=1080;
+        std::memcpy(source.prefix.data()+0xd8,&width,4);
+        std::memcpy(source.prefix.data()+0xdc,&height,4);
+        for(uint32_t format:{0x19u,0x15u,0x3du}) {
+            TglOwnedFfdiAllocationRequest request;
+            assert(tglPrepareOwnedFfdiAllocationRequest(source,format,1,{true,1},request));
+            assert(request.type==1 && (request.key==TglResourceKey{width,height,format,1,1,true}));
+            assert(request.kind==(format==0x3d?TglOwnedFfdiAllocationKind::NativeBacking:
+                TglOwnedFfdiAllocationKind::DescriptorOnly));
+            for(auto byte:source.resource) assert(!byte); // No backing fabricated.
+            const auto previous=request;
+            for(size_t offset:{size_t(0xd8),size_t(0xdc)}) {
+                std::array<uint8_t,4> saved{};std::memcpy(saved.data(),source.prefix.data()+offset,4);
+                std::memset(source.prefix.data()+offset,0,4);
+                assert(!tglPrepareOwnedFfdiAllocationRequest(source,0x3d,4,{},request));
+                assert(request.key==previous.key && request.type==previous.type && request.kind==previous.kind);
+                std::memcpy(source.prefix.data()+offset,saved.data(),4);
+            }
+        }
     }
     {
         unsigned calls=0;

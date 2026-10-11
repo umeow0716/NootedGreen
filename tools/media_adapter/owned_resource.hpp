@@ -4498,6 +4498,29 @@ struct TglOwnedFfdnCompressionSelection {
     bool compressed;
     uint32_t mode;
 };
+enum class TglOwnedFfdiAllocationKind { DescriptorOnly, NativeBacking };
+struct TglOwnedFfdiAllocationRequest {
+    TglResourceKey key{};
+    uint32_t type=1;
+    TglOwnedFfdiAllocationKind kind=TglOwnedFfdiAllocationKind::DescriptorOnly;
+};
+// ICL1f7b6c..1f7be4 passes queried format/tile, type1, and source d8/dc.
+// Its allocator49fe0 distinguishes type1/format3d at4a0a8..4a0c2; other
+// type1 formats take descriptor-only4a14d. A request is never backing proof
+// or a resource-token adoption. Borrowed source/history leases remain required.
+inline bool tglPrepareOwnedFfdiAllocationRequest(const TglOwnedSurfaceStorage& source,
+    uint32_t format,uint32_t tile,TglOwnedFfdiCompressionSelection compression,
+    TglOwnedFfdiAllocationRequest& output) noexcept {
+    uint32_t width=0,height=0;
+    std::memcpy(&width,source.prefix.data()+0xd8,4);
+    std::memcpy(&height,source.prefix.data()+0xdc,4);
+    if(!width || !height) return false;
+    TglOwnedFfdiAllocationRequest candidate;
+    candidate.key={width,height,format,tile,compression.mode,compression.compressed};
+    candidate.kind=format==0x3d?TglOwnedFfdiAllocationKind::NativeBacking:
+        TglOwnedFfdiAllocationKind::DescriptorOnly;
+    output=candidate;return true;
+}
 // ICL1f7eba..1f7fb1 data policy only, not its virtual-base object ABI.
 // Keep field provenance explicit until the TGL allocation caller supplies
 // qualified feature flags. This neither enables MMC nor allocates backing.
