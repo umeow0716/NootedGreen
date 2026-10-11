@@ -14213,6 +14213,7 @@ template<class Api> class TglNativeVeboxSurfaceFrameStorage {
     std::array<TglOwnedDescriptorOnlySurface,4> ffdiDescriptors_;
     std::array<TglOwnedDescriptorOnlySurface,2> ffdnDescriptors_;
     TglOwnedDescriptorOnlySurface history_;
+    bool priorBusy_=false;
 public:
     template<class... Args>
     TglNativeVeboxSurfaceFrameStorage(const TglNativeResourceBinding& binding,
@@ -14231,6 +14232,23 @@ public:
         return std::array<Surface*,4>{&ffdi_[0],&ffdi_[1],&ffdi_[2],&ffdi_[3]};
     }
     auto ffdnBacked() noexcept {return std::array<Surface*,2>{&ffdn_[0],&ffdn_[1]};}
+    // binding is read from child+ba8 under captured child/report admission.
+    // The existing captured FFDN producer rechecks that exact binding before
+    // reading compression. Do not infer which owner it names from new format.
+    template<class Use> int withFfdnPrior(uintptr_t binding,Use use) noexcept {
+        static_assert(noexcept(use(std::declval<Surface&>())) &&
+            noexcept(use(std::declval<TglOwnedDescriptorOnlySurface&>())) &&
+            std::is_same_v<decltype(use(std::declval<Surface&>())),int> &&
+            std::is_same_v<decltype(use(std::declval<TglOwnedDescriptorOnlySurface&>())),int>);
+        if(!binding || priorBusy_ || auxiliary_.retention()()) return 5;
+        priorBusy_=true;
+        struct Unlock {bool& busy;~Unlock(){busy=false;}} unlock{priorBusy_};
+        for(auto& prior:ffdn_) if(binding==reinterpret_cast<uintptr_t>(prior.surfaceBinding()))
+            return use(prior);
+        for(auto& prior:ffdnDescriptors_) if(binding==reinterpret_cast<uintptr_t>(prior.surfaceBinding()))
+            return use(prior);
+        return 5;
+    }
 };
 #if defined(__APPLE__)
 using TglDarwinVeboxSurfaceFrameStorage=TglNativeVeboxSurfaceFrameStorage<TglDarwinStmmSurfaceApi>;

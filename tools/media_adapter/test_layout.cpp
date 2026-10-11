@@ -10967,6 +10967,24 @@ int main() {
         unique(frame.history().surfaceBinding());assert(used==13);
         assert(frame.ffdiBacked()==ffdi && frame.ffdnBacked()==ffdn);
         assert(!frame.auxiliary().retention()());
+        unsigned priorCalls=0;
+        auto consumePrior=[&](auto& prior) noexcept -> int {
+            ++priorCalls;bool compression=true;
+            assert(prior.readFfdnPriorCompression(compression) && !compression);
+            assert(frame.withFfdnPrior(reinterpret_cast<uintptr_t>(prior.surfaceBinding()),
+                [](auto&) noexcept -> int {assert(false);return 0;})==5);
+            return 31;
+        };
+        for(auto* prior:ffdn)
+            assert(frame.withFfdnPrior(reinterpret_cast<uintptr_t>(prior->surfaceBinding()),consumePrior)==31);
+        for(auto& prior:frame.ffdnDescriptors())
+            assert(frame.withFfdnPrior(reinterpret_cast<uintptr_t>(prior.surfaceBinding()),consumePrior)==31);
+        assert(priorCalls==4);
+        assert(frame.withFfdnPrior(reinterpret_cast<uintptr_t>(ffdi[0]->surfaceBinding()),consumePrior)==5);
+        assert(frame.withFfdnPrior(0,consumePrior)==5 && priorCalls==4);
+        frame.auxiliary().retention().observe(TglOwnedVeboxCommandTransactionResult{0,0,true,true});
+        assert(frame.withFfdnPrior(reinterpret_cast<uintptr_t>(ffdn[0]->surfaceBinding()),consumePrior)==5);
+        assert(priorCalls==4);
     }
     {
         std::array<uint8_t,0x12f8> context{};
