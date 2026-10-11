@@ -10934,6 +10934,18 @@ int main() {
             assert(bindings[count++]==address);
         });
         assert(count==2);
+        using Auxiliary=TglNativeVeboxAuxiliaryFrameStorage<DeniedSurfaceApi>;
+        static_assert(!std::is_move_constructible_v<Auxiliary>);
+        Auxiliary auxiliary(TglNativeResourceBinding{},4096,TglNativeBufferFillBinding{});
+        assert(!auxiliary.retention()());
+        assert(auxiliary.stmm().ensure(keys)==5);
+        unsigned writableCalls=0,publications=0;
+        assert(auxiliary.statistics().ensureNative(16,8,auxiliary.statisticsFill(),
+            [&](uintptr_t,uint32_t) noexcept {++writableCalls;return false;},
+            [&](const auto&,const auto&) noexcept -> int {++publications;return 0;})==5);
+        assert(!writableCalls && !publications && !auxiliary.statistics().layout().bytes);
+        auxiliary.retention().observe(TglOwnedVeboxCommandTransactionResult{31,31,true,false});
+        assert(auxiliary.retention()());
     }
     {
         std::array<uint8_t,0x12f8> context{};

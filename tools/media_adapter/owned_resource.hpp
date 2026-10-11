@@ -14171,6 +14171,35 @@ private:
     bool busy_=false,admitted_=true;
 };
 
+// Actual auxiliary owners kept together by the enclosing retained Frame.
+// Statistics uses native type0 (not the STMM type1 backend), a full shell and
+// the qualified native Fill binding. All releases precede backend destruction.
+// Parent/image/child ownership and GPU retirement remain enclosing duties.
+template<class Api> class TglNativeVeboxAuxiliaryFrameStorage {
+    TglOwnedVeboxFrameRetention retention_;
+    TglNativeStmmFrameStorage<Api> stmm_;
+    TglNativeResourceBackend statisticsBackend_;
+    TglOwnedSurfaceStorage statisticsShell_{};
+    TglNativeBufferFillBinding fill_;
+    TglStatisticsResource<TglNativeResourceBackend> statistics_;
+public:
+    template<class... Args>
+    TglNativeVeboxAuxiliaryFrameStorage(const TglNativeResourceBinding& resource,
+        uint64_t pageSize,const TglNativeBufferFillBinding& fill,Args&&... args) noexcept
+        :stmm_(resource,pageSize,std::forward<Args>(args)...),
+         statisticsBackend_(resource,0,pageSize),fill_(fill),
+         statistics_(statisticsBackend_,statisticsShell_) {}
+    TglNativeVeboxAuxiliaryFrameStorage(const TglNativeVeboxAuxiliaryFrameStorage&)=delete;
+    TglNativeVeboxAuxiliaryFrameStorage& operator=(const TglNativeVeboxAuxiliaryFrameStorage&)=delete;
+    auto& stmm() noexcept {return stmm_.pair();}
+    auto& statistics() noexcept {return statistics_;}
+    const auto& statisticsFill() const noexcept {return fill_;}
+    auto& retention() noexcept {return retention_;}
+};
+#if defined(__APPLE__)
+using TglDarwinVeboxAuxiliaryFrameStorage=TglNativeVeboxAuxiliaryFrameStorage<TglDarwinStmmSurfaceApi>;
+#endif
+
 // Standalone statistics tail: preceding FFDi/FFDN/STMM scopes remain owned by
 // the caller. Do not allocate those groups again merely to obtain statistics.
 // Synchronous only: the consumer must not submit GPU work without a separate
