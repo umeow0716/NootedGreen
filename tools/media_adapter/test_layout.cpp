@@ -7084,6 +7084,44 @@ static void testNativeResourceBoundary() {
                                                         assert(packet.surfaces[0]==&current && packet.surfaces[2]==&stmmFirst);
                                                         ++combinedUses;return -83;
                                                     })==-83);
+                                                    std::array<uint8_t,0x80> frameRenderHal{};
+                                                    std::array<uint8_t,0x70> frameSku{};
+                                                    const uintptr_t renderAddress=reinterpret_cast<uintptr_t>(frameRenderHal.data());
+                                                    const uintptr_t skuAddress=reinterpret_cast<uintptr_t>(frameSku.data());
+                                                    std::array<uint8_t,16> savedStateLinks{};
+                                                    std::memcpy(savedStateLinks.data(),child.data()+0x18,16);
+                                                    std::memcpy(child.data()+0x18,&renderAddress,8);
+                                                    std::memcpy(child.data()+0x20,&skuAddress,8);
+                                                    std::memcpy(frameRenderHal.data()+0x78,&skuAddress,8);
+                                                    auto stateRead=[&](uintptr_t address,void* output,size_t size) noexcept {
+                                                        if(read(address,output,size)) return true;
+                                                        const auto within=[&](const auto& bytes) noexcept {
+                                                            const uintptr_t base=reinterpret_cast<uintptr_t>(bytes.data());
+                                                            if(address<base || address-base>bytes.size() || size>bytes.size()-size_t(address-base)) return false;
+                                                            std::memcpy(output,bytes.data()+(address-base),size);return true;
+                                                        };
+                                                        return within(frameRenderHal)||within(frameSku);
+                                                    };
+                                                    TglOwnedVeboxStateStorage statePacket{};
+                                                    const auto sourceTokens=linkedStorage.resource;
+                                                    unsigned stateUses=0;
+                                                    auto stateStage=[&](auto consume) noexcept {
+                                                        return tglRunCapturedStateFrame(statePacket,linkedInput,childOwner,reportOwner,
+                                                            actualChild,report,renderAddress,skuAddress,linkedStorage,nullptr,false,stateRead,
+                                                            [](const auto&) noexcept {assert(false);return false;},consume);
+                                                    };
+                                                    assert(stateStage([&](auto& packet) noexcept -> int {
+                                                        assert(&packet==&statePacket && linkedInput.hasSurfaceLease(linkedStorage));
+                                                        assert(linkedStorage.resource==sourceTokens);
+                                                        assert(targetA.hasSurfaceLease(*ffdn.outputs[0]) && stmmApi.references==2);
+                                                        for(auto byte:packet.resource) assert(!byte);
+                                                        ++stateUses;return -101;
+                                                    })==-101 && stateUses==1);
+                                                    frameRenderHal[0x78]^=1;
+                                                    const auto preservedState=statePacket;
+                                                    assert(stateStage([](auto&) noexcept -> int {assert(false);return 0;})==5);
+                                                    assert(!std::memcmp(&preservedState,&statePacket,sizeof(statePacket)));
+                                                    std::memcpy(child.data()+0x18,savedStateLinks.data(),16);
                                                     int32_t savedIndex=0,invalidIndex=-1;
                                                     std::memcpy(&savedIndex,reportBackend.bytes.data()+0x2c,4);
                                                     std::memcpy(reportBackend.bytes.data()+0x2c,&invalidIndex,4);

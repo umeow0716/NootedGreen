@@ -14147,6 +14147,38 @@ int tglRunCapturedDiIecpFrameInput(SourceOwner& sourceOwner,ChildOwner& childOwn
         });
 }
 
+// State normalization intentionally writes source/target chroma siting. Supply
+// the actual mutable shells owned by the caller, never const-cast borrowed
+// frame views or copy their resource descriptors into a temporary surface.
+// Packet storage and any native inline allocation remain caller-owned until
+// command discard/completion; this producer does not clear them on failure.
+template<class SourceOwner,class ChildOwner,class ExecutionOwner,class Read,
+    class TargetAdmit,class Consume>
+int tglRunCapturedStateFrame(TglOwnedVeboxStateStorage& packet,
+    SourceOwner& sourceOwner,ChildOwner& childOwner,ExecutionOwner& executionOwner,
+    void* child,uintptr_t execution,uintptr_t renderHal,uintptr_t sku,
+    TglOwnedSurfaceStorage& source,TglOwnedSurfaceStorage* target,
+    bool disableTemporalDenoise,Read read,TargetAdmit admitTarget,Consume consume) noexcept {
+    static_assert(noexcept(admitTarget(std::declval<const TglOwnedSurfaceStorage&>())) &&
+        std::is_same_v<decltype(admitTarget(std::declval<const TglOwnedSurfaceStorage&>())),bool> &&
+        noexcept(consume(std::declval<TglOwnedVeboxStateStorage&>())) &&
+        std::is_same_v<decltype(consume(std::declval<TglOwnedVeboxStateStorage&>())),int>,
+        "captured state frame ABI");
+    if(target && !admitTarget(*target)) return 5;
+    return tglRunCapturedVeboxAllocation(sourceOwner,childOwner,executionOwner,
+        child,execution,source,[&](void* active,uintptr_t report,const auto&) noexcept -> int {
+            bool di=false;
+            if((target && !admitTarget(*target)) ||
+               !tglReadOwnedBuilderDiArgument(di,reinterpret_cast<uintptr_t>(active),report,read)) return 5;
+            const int produced=tglPublishOwnedStateToBuilder(packet,&packet,
+                reinterpret_cast<uintptr_t>(active),report,renderHal,sku,source,target,
+                di,disableTemporalDenoise,read);
+            if(produced || (target && !admitTarget(*target))) return produced?produced:5;
+            const int status=consume(packet);
+            return target && !admitTarget(*target)?5:status;
+        });
+}
+
 // Allocation transaction for a history-enabled frame. The qualified platform
 // planner supplies resource keys and statistics boundary dimensions; this does
 // not infer feature admission or SFC resources. All three owners outlive this
