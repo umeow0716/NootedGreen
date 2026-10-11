@@ -7205,8 +7205,8 @@ static void testNativeResourceBoundary() {
                                                         1,2,3,4,consume).status==5 && uses==1);
                                                 }
                                                 {
-                                                    TglOwnedSurfaceStorage source,target;
-                                                    for(auto* shell:{&source,&target}) {
+                                                    TglOwnedSurfaceStorage source,target,history;
+                                                    for(auto* shell:{&source,&target,&history}) {
                                                         const uint32_t type=1,count=1;const uintptr_t plane=1,surface=5;
                                                         std::memcpy(shell->resource.data()+0x14,&type,4);
                                                         std::memcpy(shell->resource.data()+0x60,&count,4);
@@ -7214,6 +7214,11 @@ static void testNativeResourceBoundary() {
                                                         std::memcpy(shell->resource.data()+0x58,&surface,8);
                                                     }
                                                     TestFrontendOriginalOwner sourceOwner{source},targetOwner{target};
+                                                    TestFrontendOriginalOwner historyOwner{history};
+                                                    const uint32_t historyCount=1;
+                                                    const auto historyAddress=reinterpret_cast<uintptr_t>(&history);
+                                                    std::memcpy(source.prefix.data()+0xb8,&historyCount,4);
+                                                    std::memcpy(source.prefix.data()+0xc8,&historyAddress,8);
                                                     std::array<unsigned,6> refs{};
                                                     struct Cf {
                                                         std::array<unsigned,6>& refs;
@@ -7225,13 +7230,17 @@ static void testNativeResourceBoundary() {
                                                         TestFrontendOriginalOwner,TestFrontendOriginalOwner,Cf>;
                                                     TglOwnedVeboxRetainedFrames<FrontendFrame,1> pool;
                                                     const auto ticket=pool.create(nativeBinding,uint64_t{4096},nativeFill,
-                                                        sourceOwner,targetOwner,Cf{refs},uintptr_t{11},uintptr_t{12});
+                                                        reinterpret_cast<uintptr_t>(&source),
+                                                        [&](uintptr_t p) noexcept -> TestFrontendOriginalOwner* {
+                                                            if(p==reinterpret_cast<uintptr_t>(&source)) return &sourceOwner;
+                                                            return p==historyAddress?&historyOwner:nullptr;
+                                                        },targetOwner,Cf{refs},uintptr_t{11},uintptr_t{12});
                                                     TglNativeOuterSurfaceRoles roles;roles.sourceCount=1;roles.targetCount=1;
                                                     roles.sources[0]=reinterpret_cast<uintptr_t>(&source);
                                                     roles.targets[0]=reinterpret_cast<uintptr_t>(&target);
                                                     const auto r=pool.run(ticket,[&](auto& frame) noexcept {
-                                                        assert(frame.rootsReady() && sourceOwner.borrowed && targetOwner.borrowed);
-                                                        assert(refs[1]==2 && refs[5]==2);
+                                                        assert(frame.surfacesReady() && sourceOwner.borrowed && targetOwner.borrowed);
+                                                        assert(historyOwner.borrowed && refs[1]==3 && refs[5]==3);
                                                         return frame.withCommandFrame(roles,0,0,1,2,3,4,
                                                             [&](auto&,auto&,auto& leases) noexcept {
                                                                 assert(&leases.source==&source && leases.target==&target);
@@ -7240,12 +7249,13 @@ static void testNativeResourceBoundary() {
                                                     });
                                                     assert(r.acquired && sourceOwner.borrowed && targetOwner.borrowed);
                                                     assert(pool.retire(ticket,[](const auto&,bool,const auto&) noexcept {return 31;})==31);
-                                                    assert(refs[1]==2 && refs[5]==2);
+                                                    assert(historyOwner.borrowed && refs[1]==3 && refs[5]==3);
                                                     // CPU retirement fixture only; NOT a native fence certificate.
                                                     assert(pool.retire(ticket,[](const auto&,bool pending,const auto&) noexcept {
                                                         assert(pending);return 0;
                                                     })==0);
-                                                    assert(!sourceOwner.borrowed && !targetOwner.borrowed && !refs[1] && !refs[5]);
+                                                    assert(!sourceOwner.borrowed && !targetOwner.borrowed &&
+                                                        !historyOwner.borrowed && !refs[1] && !refs[5]);
                                                 }
                                                 auto& nativeFrame=commandFrame.backing();
                                                 auto packetStorage=commandFrame.packetLeases(
@@ -11541,6 +11551,48 @@ int main() {
             assert(source.storage()==&shell);
         }
         assert(!owner.borrowed);for(auto ref:refs) assert(!ref);
+        {
+            TglOwnedSurfaceStorage root=shell,previous=shell,older=shell;
+            const uint32_t backward=2,forward=1;
+            const auto p=reinterpret_cast<uintptr_t>(&previous),o=reinterpret_cast<uintptr_t>(&older);
+            std::memcpy(root.prefix.data()+0xb8,&backward,4);
+            std::memcpy(root.prefix.data()+0xb4,&forward,4);
+            std::memcpy(root.prefix.data()+0xc8,&p,8);
+            std::memcpy(previous.prefix.data()+0xc8,&o,8);
+            std::memcpy(root.prefix.data()+0xc0,&o,8);
+            TestFrontendOriginalOwner ro{root},po{previous},oo{older};
+            auto resolve=[&](uintptr_t address) noexcept -> TestFrontendOriginalOwner* {
+                for(auto* candidate:{&ro,&po,&oo})
+                    if(address==reinterpret_cast<uintptr_t>(&candidate->shell)) return candidate;
+                return nullptr;
+            };
+            {
+                TglOwnedFrontendSourceGraph<TestFrontendOriginalOwner,Api,3> graph(Api{refs});
+                assert(graph.acquire(reinterpret_cast<uintptr_t>(&root),resolve,11,12));
+                assert(graph.storage()==&root && ro.borrowed && po.borrowed && oo.borrowed);
+                for(size_t i=1;i<6;++i) assert(refs[i]==3); // shared older node pinned once
+                assert(graph.withMutableSurface([&](auto& original) noexcept {
+                    assert(&original==&root && graph.hasSurfaceLease(root));
+                    assert(graph.withMutableSurface([](auto&) noexcept {assert(false);return 0;})==5);
+                    return 31;
+                })==31);
+                const uintptr_t absent=0;
+                std::memcpy(previous.prefix.data()+0xc8,&absent,8);
+                assert(!graph.valid() && !graph.storage());
+                std::memcpy(previous.prefix.data()+0xc8,&o,8);
+                assert(graph.valid());
+            }
+            assert(!ro.borrowed && !po.borrowed && !oo.borrowed);
+            for(auto ref:refs) assert(!ref);
+            {
+                TglOwnedFrontendSourceGraph<TestFrontendOriginalOwner,Api,2> bounded(Api{refs});
+                assert(!bounded.acquire(reinterpret_cast<uintptr_t>(&root),resolve,11,12));
+                assert(!bounded.valid() && ro.borrowed && po.borrowed && !oo.borrowed);
+                assert(!bounded.acquire(reinterpret_cast<uintptr_t>(&root),resolve,11,12));
+            }
+            assert(!ro.borrowed && !po.borrowed && !oo.borrowed);
+            for(auto ref:refs) assert(!ref);
+        }
         {
             TglOwnedType1BorrowedSurfaceLease<Owner,Api> rejected(owner,Api{refs,3},11,12);
             assert(owner.borrowed && !rejected.storage());

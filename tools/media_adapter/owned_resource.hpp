@@ -13476,6 +13476,84 @@ public:
         });
     }
 };
+// Exact1308a0 temporal registration graph. Capacity is an OWNED retention/work
+// budget, not a claimed native count limit. Resolve returns an existing stable
+// owner under the enclosing physical/generation registry lease; no raw shell
+// adoption or resource allocation is permitted here. Graph links must not be
+// rewired by a command producer while this frame is in use.
+template<class Owner,class Api,size_t Capacity=32> class TglOwnedFrontendSourceGraph {
+    static_assert(Capacity>0 && Capacity<=64);
+    using Lease=TglOwnedType1BorrowedSurfaceLease<Owner,Api>;
+    struct Slot {Lease* lease=nullptr;std::array<uint8_t,24> links{};};
+    Api api_;std::array<Slot,Capacity> slots_{};
+    size_t count_=0;bool attempted_=false,ready_=false,busy_=false;
+    static std::array<uint8_t,24> links(const TglOwnedSurfaceStorage& shell) noexcept {
+        std::array<uint8_t,24> out{};
+        std::memcpy(out.data(),shell.prefix.data()+0xb4,8);
+        std::memcpy(out.data()+8,shell.prefix.data()+0xc0,16);return out;
+    }
+    template<class Resolve> size_t pin(uintptr_t address,Resolve resolve,
+        uintptr_t resourceType,uintptr_t surfaceType) noexcept {
+        for(size_t i=0;i<count_;++i)
+            if(reinterpret_cast<uintptr_t>(slots_[i].lease->storage())==address) return i;
+        if(!address || count_==Capacity) return Capacity;
+        static_assert(noexcept(resolve(address)) && std::is_same_v<decltype(resolve(address)),Owner*>);
+        auto* owner=resolve(address);if(!owner) return Capacity;
+        auto* lease=new(std::nothrow) Lease(*owner,api_,resourceType,surfaceType);
+        if(!lease) return Capacity;
+        const auto index=count_++;slots_[index].lease=lease;
+        const auto* shell=lease->storage();
+        if(reinterpret_cast<uintptr_t>(shell)!=address) return Capacity;
+        slots_[index].links=links(*shell);return index;
+    }
+public:
+    explicit TglOwnedFrontendSourceGraph(Api api) noexcept :api_(api) {
+        static_assert(std::is_nothrow_copy_constructible_v<Api>);
+    }
+    ~TglOwnedFrontendSourceGraph() noexcept {while(count_) delete slots_[--count_].lease;}
+    TglOwnedFrontendSourceGraph(const TglOwnedFrontendSourceGraph&)=delete;
+    TglOwnedFrontendSourceGraph& operator=(const TglOwnedFrontendSourceGraph&)=delete;
+    template<class Resolve> bool acquire(uintptr_t root,Resolve resolve,
+        uintptr_t resourceType,uintptr_t surfaceType) noexcept {
+        if(attempted_) return false;attempted_=true;
+        if(pin(root,resolve,resourceType,surfaceType)!=0) return false;
+        for(size_t direction=0;direction<2;++direction) {
+            uint32_t steps=0;
+            // Native order: b8/c8 first, then b4/c0. Counts belong to ROOT.
+            std::memcpy(&steps,slots_[0].links.data()+(direction?0:4),4);
+            if(steps>Capacity) return false;
+            size_t current=0;
+            for(uint32_t step=0;step<steps;++step) {
+                uintptr_t next=0;
+                std::memcpy(&next,slots_[current].links.data()+(direction?8:16),8);
+                if(!next) break; // native remaining NULL iterations have no effect
+                current=pin(next,resolve,resourceType,surfaceType);
+                if(current==Capacity) return false;
+            }
+        }
+        ready_=true;return valid();
+    }
+    bool valid() const noexcept {
+        if(!ready_) return false;
+        for(size_t i=0;i<count_;++i) {
+            const auto* shell=slots_[i].lease->storage();
+            if(!shell || !slots_[i].lease->hasSurfaceLease(*shell) ||
+               links(*shell)!=slots_[i].links) return false;
+        }
+        return true;
+    }
+    const TglOwnedSurfaceStorage* storage() const noexcept {
+        return valid()?slots_[0].lease->storage():nullptr;
+    }
+    bool hasSurfaceLease(const TglOwnedSurfaceStorage& shell) const noexcept {
+        return storage()==&shell && slots_[0].lease->hasSurfaceLease(shell);
+    }
+    template<class Use> int withMutableSurface(Use use) noexcept {
+        if(busy_ || !valid()) return 5;
+        busy_=true;const int result=slots_[0].lease->withMutableSurface(use);busy_=false;
+        return valid()?result:5;
+    }
+};
 #if defined(__APPLE__)
 struct TglDarwinTypedCfReferenceApi {
     uintptr_t type(uintptr_t handle) const noexcept {
@@ -15855,35 +15933,35 @@ public:
 // Original frontend pins and packet/backing storage share one retained-frame
 // lifetime. Original owners, physical/context and image leases must enclose
 // this object; CF pins do not retain shell memory or the native physical.
-// Root pins are NOT the complete temporal graph: native1308a0 registers each
-// source via61b50, then walks source+c8 up to source+b8 and source+c0 up to
-// source+b4 (130991..130ab3). Every linked shell/token needs its OWN enclosing
-// lease; do not publish this root storage as a complete renderer frame.
+// Source includes the bounded1308a0 temporal graph, target is the original
+// target root. This is frontend retention, NOT a complete renderer or physical
+// lifetime owner; registry/source-owner/image leases must still enclose it.
 template<class Api,class SourceOwner,class TargetOwner,class CfApi>
 class TglNativeVeboxFrontendFrameStorage {
     TglNativeVeboxCommandFrameStorage<Api> command_;
-    TglOwnedType1BorrowedSurfaceLease<SourceOwner,CfApi> source_;
+    TglOwnedFrontendSourceGraph<SourceOwner,CfApi> source_;
     TglOwnedType1BorrowedSurfaceLease<TargetOwner,CfApi> target_;
 public:
-    template<class... Args>
+    template<class Resolve,class... Args>
     TglNativeVeboxFrontendFrameStorage(const TglNativeResourceBinding& binding,
         uint64_t pageSize,const TglNativeBufferFillBinding& fill,
-        SourceOwner& source,TargetOwner& target,CfApi cf,uintptr_t resourceType,
+        uintptr_t source,Resolve resolve,TargetOwner& target,CfApi cf,uintptr_t resourceType,
         uintptr_t surfaceType,Args&&... args) noexcept
         :command_(binding,pageSize,fill,std::forward<Args>(args)...),
-         source_(source,cf,resourceType,surfaceType),target_(target,cf,resourceType,surfaceType) {
+         source_(cf),target_(target,cf,resourceType,surfaceType) {
         static_assert(std::is_nothrow_constructible_v<Api,Args...>);
+        source_.acquire(source,resolve,resourceType,surfaceType);
     }
     TglNativeVeboxFrontendFrameStorage(const TglNativeVeboxFrontendFrameStorage&)=delete;
     TglNativeVeboxFrontendFrameStorage& operator=(const TglNativeVeboxFrontendFrameStorage&)=delete;
-    bool rootsReady() const noexcept {return source_.storage() && target_.storage();}
+    bool surfacesReady() const noexcept {return source_.storage() && target_.storage();}
     auto& command() noexcept {return command_;}
     template<class Consume>
     TglOwnedVeboxCommandTransactionResult withCommandFrame(
         const TglNativeOuterSurfaceRoles& roles,size_t sourceIndex,size_t targetIndex,
         uintptr_t child,uintptr_t execution,uintptr_t renderHal,uintptr_t sku,
         Consume consume) noexcept {
-        if(!rootsReady()) return {};
+        if(!surfacesReady()) return {};
         return command_.withFrontendCommandFrame(roles,sourceIndex,targetIndex,
             source_,target_,child,execution,renderHal,sku,consume);
     }
