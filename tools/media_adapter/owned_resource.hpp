@@ -8147,11 +8147,13 @@ struct TglOwnedVeboxFrameNoUnwind {
 template<class SurfaceOwner,class ChildOwner,class ExecutionOwner,class QueryFfdi,
     class QuerySecondary,class QueryPipe,class QueryStmm,class Ffdi,class Secondary,
     class Ffdn,class Rectangle,class Stmm,class Statistics,class Unwind=TglOwnedVeboxFrameNoUnwind>
-int tglWithOwnedVeboxAllocationStages(SurfaceOwner& sourceOwner,ChildOwner& childOwner,
-    ExecutionOwner& executionOwner,QueryFfdi ffdiEnabled,QuerySecondary hasSecondary,
+int tglRunCapturedVeboxAllocationStages(SurfaceOwner& sourceOwner,ChildOwner& childOwner,
+    ExecutionOwner& executionOwner,void* capturedChild,uintptr_t capturedExecution,
+    const TglOwnedSurfaceStorage& capturedSource,QueryFfdi ffdiEnabled,QuerySecondary hasSecondary,
     QueryPipe pipe,QueryStmm stmmEnabled,Ffdi ffdi,Secondary secondary,Ffdn ffdn,
     Rectangle rectangle,Stmm stmm,Statistics statistics,Unwind unwind={}) noexcept {
-    return tglWithOwnedVeboxAllocationFrame(sourceOwner,childOwner,executionOwner,
+    return tglRunCapturedVeboxAllocation(sourceOwner,childOwner,executionOwner,
+        capturedChild,capturedExecution,capturedSource,
         [&](void* child,uintptr_t execution,const auto& source) noexcept {
             const auto stage=[&](auto& invoke) noexcept {
                 return tglRunCapturedVeboxAllocation(sourceOwner,childOwner,executionOwner,
@@ -8190,6 +8192,22 @@ int tglWithOwnedVeboxAllocationStages(SurfaceOwner& sourceOwner,ChildOwner& chil
                 unwind(c,e,s);return result;
             };
             return stage(rollback);
+        });
+}
+// Standalone entry acquires the frame. Native slot58 already runs inside the
+// child lease: it must use the captured entry above rather than reacquire it.
+template<class SurfaceOwner,class ChildOwner,class ExecutionOwner,class QueryFfdi,
+    class QuerySecondary,class QueryPipe,class QueryStmm,class Ffdi,class Secondary,
+    class Ffdn,class Rectangle,class Stmm,class Statistics,class Unwind=TglOwnedVeboxFrameNoUnwind>
+int tglWithOwnedVeboxAllocationStages(SurfaceOwner& sourceOwner,ChildOwner& childOwner,
+    ExecutionOwner& executionOwner,QueryFfdi ffdiEnabled,QuerySecondary hasSecondary,
+    QueryPipe pipe,QueryStmm stmmEnabled,Ffdi ffdi,Secondary secondary,Ffdn ffdn,
+    Rectangle rectangle,Stmm stmm,Statistics statistics,Unwind unwind={}) noexcept {
+    return tglWithOwnedVeboxAllocationFrame(sourceOwner,childOwner,executionOwner,
+        [&](void* child,uintptr_t execution,const auto& source) noexcept {
+            return tglRunCapturedVeboxAllocationStages(sourceOwner,childOwner,executionOwner,
+                child,execution,source,ffdiEnabled,hasSecondary,pipe,stmmEnabled,
+                ffdi,secondary,ffdn,rectangle,stmm,statistics,unwind);
         });
 }
 // Convenience only for immutable, already-qualified policy inputs. Runtime

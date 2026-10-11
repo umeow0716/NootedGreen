@@ -5662,6 +5662,43 @@ static void testNativeResourceBoundary() {
                     assert(height==(finishStatus?19u:1080u));
                     assert(!childOwner.busy && !execution.busy && owner.surface()==surface);
                 }
+                for(int nativeStatus:{0,31}) {
+                    unsigned allocations=0,stages=0,unwinds=0;
+                    assert(tglWithOwnedVeboxAllocationFrame(owner,childOwner,execution,
+                        [&](void* capturedChild,uintptr_t capturedExecution,const auto& sourceView) noexcept {
+                            const auto disabled=[](void*,uintptr_t,const auto&) noexcept {return false;};
+                            const auto pipe=[](void*,uintptr_t,const auto&) noexcept -> uint32_t {return 0;};
+                            const auto unused=[](void*,uintptr_t,const auto&) noexcept {assert(false);return 5;};
+                            int(*nativeEntry)(void*)=nullptr;
+                            const auto ffdn=[&](void* c,uintptr_t e,const auto& s) noexcept {
+                                ++stages;assert(c==capturedChild && e==capturedExecution && &s==&sourceView);
+                                assert(nativeEntry(c)==5);return 0;
+                            };
+                            const auto statistics=[&](void*,uintptr_t,const auto&) noexcept {
+                                ++stages;return nativeStatus;
+                            };
+                            const auto unwind=[&](void* c,uintptr_t e,const auto& s) noexcept {
+                                ++unwinds;assert(owner.hasSurfaceLease(s) && execution.hasExecutionLease(e));
+                                assert(childOwner.hasPrivateChildLease(reinterpret_cast<uintptr_t>(c)));
+                                assert(nativeEntry(c)==5);
+                            };
+                            auto allocate=[&](void* actual) noexcept {
+                                ++allocations;assert(actual==capturedChild);
+                                return tglRunCapturedVeboxAllocationStages(owner,childOwner,execution,
+                                    actual,capturedExecution,sourceView,disabled,disabled,pipe,disabled,
+                                    unused,unused,ffdn,unused,unused,statistics,unwind);
+                            };
+                            using Context=TglOwnedVeboxAllocationContext<TestVeboxChildLease,decltype(allocate)>;
+                            Context context(childOwner,allocate,capturedChild);
+                            using Scope=TglOwnedVeboxScopedContext<Context>;
+                            Scope scope(capturedChild,context);assert(scope.bound());
+                            const auto hooks=tglBindOwnedVeboxAllocationHook<Scope>(std::array<uintptr_t,20>{});
+                            nativeEntry=reinterpret_cast<int(*)(void*)>(hooks[3]);
+                            return nativeEntry(capturedChild);
+                        })==nativeStatus);
+                    assert(allocations==1 && stages==2 && unwinds==unsigned(nativeStatus!=0));
+                    assert(!childOwner.busy && !execution.busy && owner.surface()==surface);
+                }
                 {
                     TglOwnedDescriptorOnlySurface secondarySlot;
                     TglOwnedFfdiAllocationRequest request;
