@@ -4626,6 +4626,20 @@ static void testComposedStatisticsBuffer() {
         TglStatisticsAllocation initialLayout;
         assert(tglStatisticsAllocationSize(64,16,initialLayout)==0);
         assert(tglPublishOwnedStatisticsLayout(childOwner,childBytes.data(),initialLayout)==5);
+        assert(childOwner.withPrivateChild([&](void* child) noexcept {
+            const auto before=childBytes;
+            for(int adjustment:{-1,1}) {
+                auto malformed=initialLayout;
+                malformed.totalRows=uint32_t(int(malformed.totalRows)+adjustment);
+                malformed.bytes=malformed.rowBytes*malformed.totalRows;
+                assert(tglPublishOwnedStatisticsLayout(childOwner,child,malformed)==5);
+                assert(childBytes==before);
+            }
+            auto overflow=initialLayout;
+            overflow.blockRows=UINT32_MAX;overflow.totalRows=15;overflow.bytes=960;
+            assert(tglPublishOwnedStatisticsLayout(childOwner,child,overflow)==5);
+            assert(childBytes==before);return 0;
+        })==0);
         struct Info {uint32_t width=0,height=0;};
         uint32_t publishedWidth=7,publishedHeight=9;
         assert(tglPrepareOwnedStatisticsBoundary<Info>(source,1,

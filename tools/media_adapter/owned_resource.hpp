@@ -3965,7 +3965,8 @@ int tglPublishOwnedStatisticsLayout(ChildOwner& owner,void* child,
     const TglStatisticsAllocation& layout) noexcept {
     if(!child || !owner.hasPrivateChildLease(reinterpret_cast<uintptr_t>(child)) ||
        !layout.rowBytes || (layout.rowBytes&63) || !layout.blockRows ||
-       layout.totalRows<layout.blockRows ||
+       uint64_t{layout.totalRows}!=uint64_t{layout.blockRows}+
+           (uint64_t{1024}+layout.rowBytes-1)/layout.rowBytes ||
        uint64_t{layout.rowBytes}*layout.totalRows!=layout.bytes) return 5;
     auto* bytes=static_cast<uint8_t*>(child);
     std::memcpy(bytes+0x1114,&layout.rowBytes,4);
