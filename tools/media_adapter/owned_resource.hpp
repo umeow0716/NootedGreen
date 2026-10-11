@@ -8108,6 +8108,11 @@ struct TglOwnedVpFramePreparation {
     TglOwnedVpFrameColor color;
     uint32_t at9a0=0;
     bool at920=false,at922=false,at924=false;
+    // Owned snapshot from the same leased source+78 acquisition. The later
+    // IEF producer must not reread a mutable/expired source descriptor.
+    bool iefPresent=false;
+    uint8_t iefFlags=0;
+    float iefStrength=0;
 };
 // VP +28=1de810. Six pointer arguments INCLUDING this, void result.
 // 1decfb publishes RDX at +990; 1ded21 consumes R9 mode flags. They
@@ -8345,6 +8350,9 @@ inline bool tglPrepareOwnedVpFrame(const TglOwnedVpFramePreparationInput& in,
     candidate.at920=tglOwnedVpConditionalSource(in.conditionalSourceAvailable,
                                                sourceDestination,in.targetDestination);
     candidate.at922=in.iefPresent && (in.iefFlags&1) && in.iefStrength>0.0f;
+    candidate.iefPresent=in.iefPresent;
+    candidate.iefFlags=in.iefFlags;
+    candidate.iefStrength=in.iefStrength;
     candidate.at924=in.modes.settings12;
     candidate.at9a0=in.geometry.rotation;
     output=candidate;return true;

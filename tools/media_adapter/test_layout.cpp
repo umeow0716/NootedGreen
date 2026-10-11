@@ -14953,15 +14953,21 @@ int main() {
         TglOwnedVpFramePreparation prepared;
         assert(tglPrepareOwnedVpFrame(input,{},prepared));
         assert(!prepared.at920 && prepared.at922 && !prepared.at924 && !prepared.regions.scale.scaling);
+        assert(prepared.iefPresent && prepared.iefFlags==1 && prepared.iefStrength==0.5f);
         assert(prepared.color.at9b8 && prepared.color.metadata.at9a8==0x21);
         input.targetDestination.right=1921;input.modes.settings12=true;
         input.modes.settings60Present=true;input.modes.settings60130=1;
         assert(tglPrepareOwnedVpFrame(input,{},prepared));
         assert(prepared.at920 && prepared.at924 && !prepared.color.at9b8);
         const auto retained=prepared;input.modes.settings60Present=false;
+        input.iefFlags=0;input.iefStrength=9.f;
         assert(!tglPrepareOwnedVpFrame(input,{},prepared));
         assert(prepared.at920==retained.at920 && prepared.at924==retained.at924 &&
                prepared.color.modes.state.at99c==retained.color.modes.state.at99c);
+        assert(prepared.iefFlags==retained.iefFlags && prepared.iefStrength==retained.iefStrength);
+        input.modes.settings60Present=true;
+        assert(tglPrepareOwnedVpFrame(input,{},prepared));
+        assert(!prepared.at922 && prepared.iefFlags==0 && prepared.iefStrength==9.f);
     }
     {
         const TglOwnedVpDestinationRect source{0,0,100,80};
