@@ -14130,7 +14130,7 @@ int main() {
                                     auto duplicateInitializer=packetEntries;
                                     duplicateInitializer.initialize=nullptr;
                                     // Removing a catalogue slot does not release the enclosing
-                                    // construction resolver. Do not shadow its live init context.
+                                    // emission resolver. Do not shadow its live init context.
                                     assert(graph.withLeasedInitializedAssemblyEntries(child,duplicateInitializer,
                                         [](void*,const auto&) noexcept {assert(false);return 0;})==5);
                                     auto releaseAllocation=[](void*) noexcept {assert(false);};
@@ -14158,6 +14158,25 @@ int main() {
                                         assert(platform==packetEntries.platformPacket);
                                         platform(admitted,nullptr,state);
                                         assert(packetEntries.compression(admitted,nullptr,&output,state)==5);
+                                        // Consume the SAME live state/CSC and generated AVS
+                                        // tables through the existing command scheduler. Backend
+                                        // records CPU arguments only; no native registration/submit.
+                                        TglOwnedSfcCommandParameters emitted;
+                                        std::memcpy(emitted.state.data(),state,emitted.state.size());
+                                        emitted.ief=assemblyIef;
+                                        emitted.y.coefficients=passAvsTables.packedY;
+                                        emitted.uv.coefficients=passAvsTables.packedUv;
+                                        std::array<uint8_t,12> phases{};
+                                        auto siting=producedPrefix.sourceSiting;
+                                        tglPrepareOwnedSfcAvsPhases(phases,siting,passAvsTables.format);
+                                        std::memcpy(emitted.avs.data(),phases.data(),phases.size());
+                                        CallbackCommandBackend commandBackend;
+                                        auto platformDescriptor=[&](auto&) noexcept {return commandBackend.stage(3);};
+                                        assert(tglSendOwnedSfcPreparedCommands(commandBackend,emitted,output,
+                                            avsRequired,0,0,cscEnabled,platformDescriptor)==0);
+                                        assert(commandBackend.count==unsigned(cscEnabled?8:7));
+                                        assert(commandBackend.order[0]==1 && commandBackend.order[1]==3 &&
+                                            commandBackend.order[commandBackend.count-1]==9);
                                         if(consumerResult) {
                                             liveEntries.destroy(admitted);liveEntries.deletingDestroy(admitted);
                                             assert(lifetime.attempts()==2 && lifetime.status()==5 &&
