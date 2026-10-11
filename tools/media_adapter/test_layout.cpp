@@ -10520,6 +10520,40 @@ int main() {
                 std::memcpy(prefix.data()+0x30,&input,4);std::memcpy(prefix.data()+0x4c,&scaled,4);
                 unsigned preparedStates=0,sent=0;
                 auto retire=[&]() noexcept {++retired;assert(!graph.tryReset());return admission;};
+                auto assemblyRead=[](uintptr_t address,void* out,size_t size) noexcept {
+                    assert(address==0x2130 && size==4);
+                    const uint32_t value=13;std::memcpy(out,&value,4);return true;
+                };
+                TglOwnedVpAdmissionEntries expiredAssembly;
+                int(*expiredAssemblyAllocate)(void*) noexcept=nullptr;
+                void(*expiredAssemblyRelease)(void*) noexcept=nullptr;
+                std::memcpy(stateCpu.bytes.data()+0x30,&input,4);
+                std::memcpy(stateCpu.bytes.data()+0x4c,&scaled,4);
+                for(int cleanup:{31,0}) {
+                    admission=cleanup;
+                    assert(graph.withAssemblyView(false,assemblyRead,lines,retire,
+                        [&](void* child,const auto& entries,auto allocate,auto release) noexcept {
+                            expiredAssembly=entries;expiredAssemblyAllocate=allocate;
+                            expiredAssemblyRelease=release;
+                            assert(child==storage->bytes.data() && !graph.tryReset());
+                            assert(entries.finalAdmission(child,1,reinterpret_cast<void*>(0x1000),
+                                reinterpret_cast<void*>(0x2000)));
+                            assert(allocate(child)==0); // Exact leased state published by withView.
+                            assert(backends[0].allocations && backends[1].allocations);
+                            assert(graph.withAssemblyView(false,assemblyRead,lines,retire,
+                                [](void*,const auto&,auto,auto) noexcept {assert(false);return 0;})==5);
+                            release(child);return 0;
+                        })==cleanup);
+                    assert(!expiredAssembly.finalAdmission(storage->bytes.data(),1,
+                        reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x2000)));
+                    assert(expiredAssemblyAllocate(storage->bytes.data())==5);
+                    const auto before=retired;expiredAssemblyRelease(storage->bytes.data());
+                    assert(retired==before);
+                }
+                retired=0;
+                const std::array<unsigned,2> assemblyAllocations{backends[0].allocations,backends[1].allocations};
+                const std::array<unsigned,2> assemblyReleases{backends[0].releases,backends[1].releases};
+                assert(assemblyAllocations==assemblyReleases);
                 for(int expected:{31,0,5,77,-4}) {
                     CallbackCommandBackend commands;
                     unsigned usageCalls=0;
@@ -10564,7 +10598,7 @@ int main() {
                                 reinterpret_cast<void*>(0xa000));
                             release(child);return 0;
                         })==expected);
-                    assert(backends[0].releases==(expected==31?0u:expected==77?2u:expected==-4?3u:1u));
+                    assert(backends[0].releases==assemblyReleases[0]+(expected==31?0u:expected==77?2u:expected==-4?3u:1u));
                     if(expected==31 || expected==0)
                         assert((commands.order==std::array<int,8>{1,3,4,5,6,7,8,9}) && commands.count==8);
                     else if(expected==-4)
@@ -10575,8 +10609,8 @@ int main() {
                 }
                 fail=0;
                 assert(states==4 && filters==3 && retired==3 && preparedStates==3 && sent==3);
-                assert(backends[0].allocations==3 && backends[1].allocations==2);
-                assert(backends[0].releases==3 && backends[1].releases==2);
+                assert(backends[0].allocations==assemblyAllocations[0]+3 && backends[1].allocations==assemblyAllocations[1]+2);
+                assert(backends[0].releases==assemblyReleases[0]+3 && backends[1].releases==assemblyReleases[1]+2);
                 return 0;
             })==0);
             struct GraphPipePolicy {

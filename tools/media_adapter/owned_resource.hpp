@@ -9030,6 +9030,8 @@ int tglWithOwnedVpSfcCpuView(TglOwnedVpSfcCallerStorage& storage,
 // asynchronous GPU retention remains a separate prerequisite for integration.
 template<class Lines,class State,class Retire,class Use>
 int tglWithOwnedVpResourceEntries(TglOwnedVpSfcCallerStorage&,Lines&,State&,Retire&,Use) noexcept;
+template<class Read,class Lines,class State,class Retire,class Use>
+int tglWithOwnedVpAssemblyEntries(TglOwnedVpSfcCallerStorage&,Read&,Lines&,State&,Retire&,Use) noexcept;
 template<class StateBackend,class AvsBackend> class TglOwnedVpSfcCpuGraph {
     TglOwnedVpSfcCallerStorage storage_;
     TglOwnedSfcStateParameters<StateBackend> state_;
@@ -9164,6 +9166,19 @@ public:
                     if(admitted!=child) return 5;
                     static_assert(noexcept(use(child,entries)),"leased VP admission ABI");
                     return use(child,entries);
+                });
+        });
+    }
+    template<class Read,class Lines,class Retire,class Use>
+    int withAssemblyView(bool avsEnabled,Read& read,Lines& lines,Retire& retire,Use use) noexcept {
+        return withView(avsEnabled,[&](void* child) noexcept {
+            return tglWithOwnedVpAssemblyEntries(storage_,read,lines,state_,retire,
+                [&](void* assembled,const TglOwnedVpAdmissionEntries& entries,
+                    auto allocate,auto release) noexcept {
+                    if(assembled!=child) return 5;
+                    static_assert(noexcept(use(child,entries,allocate,release)),
+                        "leased VP assembly ABI");
+                    return use(child,entries,allocate,release);
                 });
         });
     }
