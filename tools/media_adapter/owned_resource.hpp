@@ -13393,6 +13393,37 @@ public:
         return ready_ && shell_==&shell && matches(shell);
     }
 };
+// Retain an EXISTING frontend surface without allocating a replacement or
+// copying its resource descriptor. Original owner/parent/image must outlive
+// this frame member. CF references drop before its original shell lease unlocks.
+template<class Owner,class Api> class TglOwnedType1BorrowedSurfaceLease {
+    Owner& owner_;
+    typename Owner::SurfaceOwnerLease lease_;
+    TglOwnedType1SurfaceReferences<Api> references_;
+    bool busy_=false;
+public:
+    TglOwnedType1BorrowedSurfaceLease(Owner& owner,Api api,uintptr_t resourceType,
+        uintptr_t surfaceType) noexcept :owner_(owner),lease_(owner),references_(api) {
+        const auto* surface=lease_.storage();
+        if(surface) references_.acquire(owner_,*surface,resourceType,surfaceType);
+    }
+    TglOwnedType1BorrowedSurfaceLease(const TglOwnedType1BorrowedSurfaceLease&)=delete;
+    TglOwnedType1BorrowedSurfaceLease& operator=(const TglOwnedType1BorrowedSurfaceLease&)=delete;
+    const TglOwnedSurfaceStorage* storage() const noexcept {
+        const auto* surface=lease_.storage();
+        return surface && references_.ownsBackingOf(*surface)?surface:nullptr;
+    }
+    bool hasSurfaceLease(const TglOwnedSurfaceStorage& surface) const noexcept {
+        return storage()==&surface && owner_.hasSurfaceLease(surface);
+    }
+    template<class Use> int withSurface(Use use) noexcept {
+        static_assert(noexcept(use(std::declval<const TglOwnedSurfaceStorage&>())) &&
+            std::is_same_v<decltype(use(std::declval<const TglOwnedSurfaceStorage&>())),int>);
+        const auto* surface=storage();if(busy_ || !surface) return 5;
+        busy_=true;const int result=use(*surface);busy_=false;
+        return hasSurfaceLease(*surface)?result:5;
+    }
+};
 #if defined(__APPLE__)
 struct TglDarwinTypedCfReferenceApi {
     uintptr_t type(uintptr_t handle) const noexcept {

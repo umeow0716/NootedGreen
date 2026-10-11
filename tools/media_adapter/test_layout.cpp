@@ -11354,7 +11354,15 @@ int main() {
         };
         struct Owner {
             const TglOwnedSurfaceStorage& shell;
+            bool borrowed=false;
             bool hasSurfaceLease(const TglOwnedSurfaceStorage& value) noexcept {return &shell==&value;}
+            class SurfaceOwnerLease {
+                Owner* owner_=nullptr;
+            public:
+                explicit SurfaceOwnerLease(Owner& owner) noexcept {if(!owner.borrowed) {owner.borrowed=true;owner_=&owner;}}
+                ~SurfaceOwnerLease() {if(owner_) owner_->borrowed=false;}
+                const TglOwnedSurfaceStorage* storage() const noexcept {return owner_?&owner_->shell:nullptr;}
+            };
         };
         TglOwnedSurfaceStorage shell;
         const uint32_t type=1,count=4;const uintptr_t surface=5;
@@ -11374,6 +11382,25 @@ int main() {
         }
         for(auto ref:refs) assert(!ref);
         const uintptr_t restored=1;std::memcpy(shell.resource.data()+0x68,&restored,8);
+        {
+            TglOwnedType1BorrowedSurfaceLease<Owner,Api> source(owner,Api{refs},11,12);
+            assert(owner.borrowed && source.storage()==&shell && source.hasSurfaceLease(shell));
+            for(size_t i=1;i<6;++i) assert(refs[i]==1);
+            TglOwnedType1BorrowedSurfaceLease<Owner,Api> duplicate(owner,Api{refs},11,12);
+            assert(!duplicate.storage());
+            assert(source.withSurface([&](const auto& original) noexcept {
+                assert(&original==&shell);
+                assert(source.withSurface([](const auto&) noexcept {assert(false);return 0;})==5);
+                return 31;
+            })==31);
+        }
+        assert(!owner.borrowed);for(auto ref:refs) assert(!ref);
+        {
+            TglOwnedType1BorrowedSurfaceLease<Owner,Api> rejected(owner,Api{refs,3},11,12);
+            assert(owner.borrowed && !rejected.storage());
+            assert(rejected.withSurface([](const auto&) noexcept {assert(false);return 0;})==5);
+        }
+        assert(!owner.borrowed);for(auto ref:refs) assert(!ref);
         {
             TglOwnedType1SurfaceReferences<Api> partial(Api{refs,3});
             assert(!partial.acquire(owner,shell,11,12) && !partial.ownsBackingOf(shell));
