@@ -11020,6 +11020,26 @@ public:
             });
     }
 };
+// Own paired native CPU allocator backends before the VP graph that borrows
+// them. Graph teardown releases AVS before state; backends outlive both.
+// Enclosing runtime owner still retains the exact native image/OS interfaces
+// and all GPU-pending resource owners. This aggregate is not a physical retain.
+template<class Invoker=TglNativeTrackedCpuInvoker> class TglNativeVpCpuStorage {
+    using Backend=TglTrackedCpuBackend<Invoker>;
+    Backend stateBackend_,avsBackend_;
+    TglOwnedVpSfcCpuGraph<Backend,Backend> graph_;
+public:
+    template<class Read,class Qualify,class Executable>
+    TglNativeVpCpuStorage(uintptr_t image,Read read,Qualify qualify,Executable executable,
+        Invoker invoke={})
+        :stateBackend_(image,read,qualify,executable,invoke),
+         avsBackend_(image,read,qualify,executable,invoke),graph_(stateBackend_,avsBackend_) {}
+    TglNativeVpCpuStorage(const TglNativeVpCpuStorage&)=delete;
+    TglNativeVpCpuStorage& operator=(const TglNativeVpCpuStorage&)=delete;
+    bool bound() const noexcept {return stateBackend_.bound() && avsBackend_.bound();}
+    auto& graph() noexcept {return graph_;}
+};
+
 // Hold backing through coefficient generation, publication and synchronous
 // command construction. Cache commits only after backing publication succeeds;
 // command failure preserves that valid CPU cache, not a GPU-completion claim.

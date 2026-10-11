@@ -13004,13 +13004,52 @@ int main() {
             stateCpu.releaseOrder=avsCpu.releaseOrder=&releaseOrder;
             stateCpu.releaseCount=avsCpu.releaseCount=&releaseCount;
             stateCpu.releaseId=2;avsCpu.releaseId=1;
+            struct NativeCpu {
+                Cpu& state;Cpu& avs;
+                uintptr_t allocate(uintptr_t entry,size_t size) {
+                    assert(entry==0x100000+0x437e0);
+                    return size==0xc00 ? avs.allocate(size):state.allocate(size);
+                }
+                void release(uintptr_t entry,uintptr_t pointer) noexcept {
+                    assert(entry==0x100000+0x436d0);
+                    if(pointer==reinterpret_cast<uintptr_t>(avs.bytes.data())) avs.release(pointer);
+                    else state.release(pointer);
+                }
+            } nativeCpu{stateCpu,avsCpu};
+            auto allocatorRead=[](uintptr_t address,void* output,size_t size) noexcept {
+                const std::array<uint8_t,16> allocate{
+                    0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x10,
+                    0x48,0x89,0x7d,0xf8,0x48,0x8b,0x7d,0xf8};
+                const std::array<uint8_t,16> release{
+                    0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x10,
+                    0x48,0x89,0x7d,0xf8,0x48,0x83,0x7d,0xf8};
+                if(size!=16) return false;
+                if(address==0x100000+0x437e0) std::memcpy(output,allocate.data(),16);
+                else if(address==0x100000+0x436d0) std::memcpy(output,release.data(),16);
+                else return false;
+                return true;
+            };
+            TglNativeVpCpuStorage<NativeCpu> nativeVp(0x100000,allocatorRead,
+                [](uintptr_t image) noexcept {return image==0x100000;},
+                [](uintptr_t address,size_t size) noexcept {
+                    return size==16 && (address==0x100000+0x437e0 || address==0x100000+0x436d0);
+                },nativeCpu);
+            assert(nativeVp.bound());
             struct Binding {
                 uintptr_t image=0x100000;
                 bool validateConstructedObject(uintptr_t,uintptr_t,
                     bool (*)(uintptr_t,void*,size_t)) const noexcept {return true;}
             } binding;
             auto noRead=+[](uintptr_t,void*,size_t) noexcept {return false;};
-            TglOwnedVpSfcCpuGraph<Cpu,Cpu> graph(stateCpu,avsCpu);
+            auto& graph=nativeVp.graph();
+            {
+                TglNativeVpCpuStorage<NativeCpu> denied(0x100000,noRead,
+                    [](uintptr_t) noexcept {return true;},
+                    [](uintptr_t,size_t) noexcept {return true;},nativeCpu);
+                assert(!denied.bound());
+                assert(!denied.graph().initialize(0x7000,0x8000,0x3000,binding,noRead,1,0));
+                assert(!stateCpu.live && !avsCpu.live && !releaseCount);
+            }
             const auto acquisitionUse=[](const auto&,const auto&,uintptr_t) noexcept {return 31;};
             calls=0;
             assert(graph.withFrameAcquisition(0x1000,0x2000,0x3000,0x4000,
@@ -13538,7 +13577,7 @@ int main() {
             auto callbackPrepared=prepared;callbackPrepared.color.modes.state.at923=1;
             for(unsigned mode=0;mode<11;++mode) {
                 unsigned stages=0,emissions=0;
-                TglOwnedSfcStateParameters<decltype(stateCpu)>* observedState=nullptr;
+                TglOwnedSfcStateParameters<TglTrackedCpuBackend<NativeCpu>>* observedState=nullptr;
                 TglOwnedVpCscCache callbackCsc;
                 TglOwnedSfcCommandParameters callbackCommands;
                 void(*escapedGraphCsc)(void*,void*,void*) noexcept=nullptr;
