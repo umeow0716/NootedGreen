@@ -12662,13 +12662,18 @@ public:
     // Production initialization path: use the allocator's OS and exact
     // native Fill; no CPU-only memset substitute and no const-cast. The
     // caller holds OS/image lifetime and excludes submitted GPU users.
+    bool nativeFillCompatible(const TglNativeBufferFillBinding& binding) const noexcept {
+        static_assert(std::is_same_v<Backend,TglNativeResourceBackend>,
+                      "native statistics require the native resource backend");
+        return backend_.nativeFillCompatible(binding);
+    }
     template<class Writable,class Publish>
     int ensureNative(uint32_t width,uint32_t height,
                      const TglNativeBufferFillBinding& binding,
                      Writable writable,Publish publish) noexcept {
         static_assert(std::is_same_v<Backend,TglNativeResourceBackend>,
                       "native statistics require the native resource backend");
-        if (!backend_.nativeFillCompatible(binding)) return 5;
+        if (!nativeFillCompatible(binding)) return 5;
         return ensure(width,height,[&](Storage& storage,uint32_t bytes) noexcept {
             return backend_.fillNative(storage,bytes,0,binding,writable);
         },publish);
@@ -12786,6 +12791,24 @@ template<class Group,class History,class Statistics> class TglOwnedVeboxBackingT
         ready_=false;
         statistics_.reset();history_.reset();group_.reset();
     }
+    template<class Requests,class Prepare,class InitializeStatistics>
+    int ensureWithStatistics(const Requests& requests,Prepare prepare,
+        const std::array<TglResourceKey,2>& historyKeys,bool reinitialize,
+        InitializeStatistics initialize) noexcept {
+        static_assert(noexcept(initialize()),"statistics initialization status ABI");
+        if(busy_ || !bindingsValid_) return 5;
+        busy_=true;ready_=false;
+        int status=group_.ensure(requests,prepare);
+        if(!status) status=group_.withStorage([&](const auto&) noexcept {
+            const int allocated=history_.ensure(historyKeys,reinitialize);
+            if(allocated) return allocated;
+            return history_.withStorage([&](const auto&,const auto&) noexcept {
+                return initialize();
+            });
+        });
+        if(status) retire();else ready_=true;
+        busy_=false;return status;
+    }
 public:
     TglOwnedVeboxBackingTransaction(Group& group,History& history,Statistics& statistics) noexcept
         :group_(group),history_(history),statistics_(statistics),bindingsValid_(distinctBindings()) {}
@@ -12814,22 +12837,36 @@ public:
     int ensure(const Requests& requests,Prepare prepare,
         const std::array<TglResourceKey,2>& historyKeys,bool reinitialize,
         uint32_t width,uint32_t height,Fill fill,Publish publish={}) noexcept {
-        if(busy_ || !bindingsValid_) return 5;
-        busy_=true;ready_=false;
-        int status=group_.ensure(requests,prepare);
-        if(!status) status=group_.withStorage([&](const auto&) noexcept {
-            const int allocated=history_.ensure(historyKeys,reinitialize);
-            if(allocated) return allocated;
-            return history_.withStorage([&](const auto&,const auto&) noexcept {
-                // Later native initialization callbacks cannot revoke backing
-                // already admitted by this same allocation transaction.
-                if constexpr(std::is_same_v<Publish,TglOwnedStatisticsNoPublication>)
-                    return statistics_.ensure(width,height,fill);
-                else return statistics_.ensure(width,height,fill,publish);
-            });
+        return ensureWithStatistics(requests,prepare,historyKeys,reinitialize,[&]() noexcept {
+            if constexpr(std::is_same_v<Publish,TglOwnedStatisticsNoPublication>)
+                return statistics_.ensure(width,height,fill);
+            else return statistics_.ensure(width,height,fill,publish);
         });
-        if(status) retire();else ready_=true;
-        busy_=false;return status;
+    }
+    // Same allocation/unwind transaction, with native statistics initialization
+    // selected explicitly. Reject a foreign OS before allocating any group.
+    template<class Requests,class Prepare,class Writable,class Publish>
+    int ensureNative(const Requests& requests,Prepare prepare,
+        const std::array<TglResourceKey,2>& historyKeys,bool reinitialize,
+        uint32_t width,uint32_t height,const TglNativeBufferFillBinding& binding,
+        Writable writable,Publish publish) noexcept {
+        if(!statistics_.nativeFillCompatible(binding)) return 5;
+        return ensureWithStatistics(requests,prepare,historyKeys,reinitialize,[&]() noexcept {
+            return statistics_.ensureNative(width,height,binding,writable,publish);
+        });
+    }
+    template<class SourceOwner,class Requests,class Prepare,class Writable,class Publish>
+    int ensureNativeFromLeasedSource(SourceOwner& owner,const TglOwnedSurfaceStorage& source,
+        bool child1ba9,const Requests& requests,Prepare prepare,bool reinitialize,
+        uint32_t width,uint32_t height,const TglNativeBufferFillBinding& binding,
+        Writable writable,Publish publish) noexcept {
+        if(!owner.hasSurfaceLease(source)) return 5;
+        std::array<TglResourceKey,2> keys{};
+        if(!tglPrepareOwnedStmmHistoryKeys(source,child1ba9,keys)) return 5;
+        const int status=ensureNative(requests,prepare,keys,reinitialize,
+            width,height,binding,writable,publish);
+        if(!owner.hasSurfaceLease(source)) {reset();return 5;}
+        return status;
     }
     template<class Invoke> int withResources(Invoke invoke) noexcept {
         if(busy_ || !ready_) return 5;

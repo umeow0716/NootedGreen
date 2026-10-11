@@ -4876,6 +4876,72 @@ static void testNativeStatisticsFill() {
     auto denied=[](uintptr_t,uint32_t) noexcept {return false;};
     assert(statistics.ensureNative(1280,720,binding,denied,publish)==5);
     assert(fixture.allocations==3 && fixture.releases==3 && fixture.fills==2);
+    // Compose the real owner/transaction classes. These CPU backends do NOT
+    // certify native STMM/GPU behavior; they exercise native Fill selection
+    // and full graph unwind rather than a second allocation implementation.
+    struct HistoryBackend {
+        int allocate(Storage& storage,const TglResourceKey&) noexcept {
+            const uint32_t type=1,format=0x3d;const uintptr_t handle=7;
+            std::memcpy(storage.data()+0x14,&type,4);
+            std::memcpy(storage.data()+0x18,&format,4);
+            std::memcpy(storage.data()+0x58,&handle,8);return 0;
+        }
+        bool backed(const Storage& storage) noexcept {return tglNativeBackingPresent(storage);}
+        void release(Storage&) noexcept {}
+    };
+    struct Api {
+        std::array<uint8_t,64> bytes{};
+        unsigned references=0;
+        uintptr_t surface(uintptr_t handle) noexcept {return handle;}
+        bool retain(uintptr_t) noexcept {++references;return true;}
+        void release(uintptr_t) noexcept {--references;}
+        int lock(uintptr_t) noexcept {return 0;}
+        int unlock(uintptr_t) noexcept {return 0;}
+        bool view(uintptr_t,TglOwnedStmmView& output) noexcept {
+            output={bytes.data(),bytes.size(),16,4,16};return true;
+        }
+    } api;
+    struct Quarantine {
+        bool reserve(uintptr_t) noexcept {return true;}
+        void cancel() noexcept {}
+        void commit(uintptr_t) noexcept {assert(false);}
+    } quarantine;
+    std::array<HistoryBackend,2> historyBackends{};
+    std::array<Storage,2> historyStorage{};
+    TglOwnedStmmPair history(historyBackends,
+        std::array<TglResourceStorageReference,2>{{{historyStorage[0]},{historyStorage[1]}}},
+        api,quarantine);
+    TglOwnedResourceGroup<TglNativeResourceBackend,1> group(backend);
+    TglOwnedVeboxBackingTransaction transaction(group,history,statistics);
+    using Group=decltype(group);
+    std::array<Group::Request,1> requests{};
+    requests[0].required=true;requests[0].key={64,1,0x3e,4,0,false};
+    std::array<TglResourceKey,2> keys{};
+    for(auto& key:keys) key={16,4,0x3d,4,0,false};
+    auto prepare=[](size_t,const Storage&,bool) noexcept {return 0;};
+    auto graphPublish=[](const Storage& storage,const TglStatisticsAllocation&) noexcept {
+        assert(storage[0x48]==1);return 0;
+    };
+    const auto allocations=fixture.allocations;
+    assert(transaction.ensureNative(requests,prepare,keys,false,1920,1080,
+        foreign,writable,graphPublish)==5 && fixture.allocations==allocations);
+    assert(!transaction.ensureNative(requests,prepare,keys,false,1920,1080,
+        binding,writable,graphPublish));
+    assert(transaction.withResources([](const auto& views,const Storage&,
+        const Storage&,const Storage& stats,const TglStatisticsAllocation& layout) noexcept {
+        assert(views[0] && stats[0x48]==1 && layout.bytes==520320);return 0;
+    })==0);
+    fixture.status=31;
+    assert(transaction.ensureNative(requests,prepare,keys,false,1280,720,
+        binding,writable,graphPublish)==31);
+    assert(!group.storage(0) && !statistics.layout().bytes && !api.references);
+    for(const auto& storage:historyStorage) for(auto byte:storage) assert(!byte);
+    struct DeniedSource {
+        bool hasSurfaceLease(const TglOwnedSurfaceStorage&) noexcept {return false;}
+    } deniedSource;
+    TglOwnedSurfaceStorage source{};
+    assert(transaction.ensureNativeFromLeasedSource(deniedSource,source,false,requests,
+        prepare,false,1920,1080,binding,writable,graphPublish)==5);
 }
 
 static void testStatisticsLifecycle() {
