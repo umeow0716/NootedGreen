@@ -6899,6 +6899,30 @@ static void testNativeResourceBoundary() {
                     assert(second.withSurface([](const auto&) noexcept {}));
                 }));
                 assert(backend.allocations==allocated);
+                {
+                    TglOwnedFfdiAllocationRequest ffdi;
+                    assert(tglPrepareOwnedFfdiAllocationRequest(*input.surface(),0x3d,1,{},ffdi));
+                    unsigned publications=0,uses=0;
+                    auto publish=[&](uint8_t,uint8_t) noexcept {++publications;return 0;};
+                    assert(tglWithOwnedBackedFfdiBatch(targets,input,&input,&input,2,ffdi,{8,3},0xa5,0x5a,
+                        publish,[&](const auto& views,const auto& outputs,size_t count,uint8_t f,uint8_t m) noexcept {
+                            ++uses;assert(count==2 && f==0xa5 && m==0x5a);
+                            assert(input.hasSurfaceLease(*views[0]) && first.hasSurfaceLease(*outputs[0]) &&
+                                second.hasSurfaceLease(*outputs[1]));
+                            const auto released=backend.releases;
+                            first.reset();second.reset();input.reset();assert(backend.releases==released);
+                            return -17;
+                        })==-17);
+                    assert(!publications && uses==1);
+                    first.reset();second.reset();
+                    assert(tglWithOwnedBackedFfdiBatch(targets,input,&input,&input,2,ffdi,{8,3},0,0,
+                        [](uint8_t,uint8_t) noexcept {return 91;},
+                        [](const auto&,const auto&,size_t,uint8_t,uint8_t) noexcept {assert(false);return 0;})==91);
+                    assert(first.surface() && !second.surface());
+                    targets={&input,&second};
+                    assert(tglWithOwnedBackedFfdiBatch(targets,input,&input,&input,2,ffdi,{8,3},0,0,publish,
+                        [](const auto&,const auto&,size_t,uint8_t,uint8_t) noexcept {assert(false);return 0;})==5);
+                }
                 first.reset();second.reset();input.reset();
                 assert(backend.releases==backend.allocations);
             }

@@ -5365,6 +5365,15 @@ public:
         if(execution) tglCopyOwnedFfdiPrimaryScalars(surface_,*execution);
         return capture_.backed(surface_.resource);
     }
+    template<class SourceOwner>
+    bool publishFfdiSecondaryFrom(SourceOwner& owner,const TglOwnedSurfaceStorage& source) noexcept {
+        if(!ready_ || busy_ || &source==&surface_ || !owner.hasSurfaceLease(source)) return false;
+        busy_=true;
+        struct Unlock {bool& busy;~Unlock(){busy=false;}} unlock{busy_};
+        if(!capture_.backed(surface_.resource)) return false;
+        tglCopyOwnedFfdiSecondaryMetadata(surface_,source);
+        return capture_.backed(surface_.resource);
+    }
     // Publish only the proven FFDN scalars, never source tokens/handles or
     // DN90. The actual source owner must remain leased through publication.
     template<class SourceOwner>
@@ -5663,6 +5672,62 @@ int tglWithOwnedDescriptorFfdiReportBatch(std::array<TglOwnedDescriptorOnlySurfa
         [&](uint8_t flag,uint8_t mode) noexcept {
             return tglPublishLeasedFfdiCompression(reportOwner,report,flag,mode);
         });
+}
+// Native-backed counterpart of the descriptor batch. Pin every input role
+// across allocation/metadata/report and every output across the final use.
+// This is synchronous CPU lifetime only, not a GPU completion lease.
+template<size_t Count,class TargetOwner,class Owner,class Publish,class Use>
+int tglWithOwnedBackedFfdiBatch(const std::array<TargetOwner*,Count>& targets,
+    Owner& input,Owner* execution,Owner* secondary,size_t count,
+    const TglOwnedFfdiAllocationRequest& request,TglOwnedFfdiMetadataQuery query,
+    uint8_t flag,uint8_t mode,Publish publish,Use use,
+    std::array<const TglOwnedSurfaceStorage*,3> captured={}) noexcept {
+    static_assert(Count>0 && Count<=4,"FFDi backing capacity");
+    static_assert(noexcept(publish(uint8_t{},uint8_t{})) &&
+        std::is_same_v<decltype(publish(uint8_t{},uint8_t{})),int>,"FFDi publisher ABI");
+    if(!count || count>Count || request.kind!=TglOwnedFfdiAllocationKind::NativeBacking ||
+       request.type!=1 || request.key.format!=0x3d) return 5;
+    const std::array<Owner*,3> roles{&input,execution,secondary};
+    for(size_t i=0;i<roles.size();++i) for(size_t j=0;j<i;++j)
+        if(roles[i] && roles[j] && roles[i]!=roles[j] &&
+           roles[i]->surfaceBinding()==roles[j]->surfaceBinding()) return 5;
+    for(size_t i=0;i<count;++i) {
+        if(!targets[i]) return 5;
+        for(size_t j=0;j<i;++j)
+            if(targets[i]==targets[j] || targets[i]->surfaceBinding()==targets[j]->surfaceBinding()) return 5;
+        for(auto* role:roles) if(role &&
+            (static_cast<const void*>(targets[i])==static_cast<const void*>(role) ||
+             targets[i]->surfaceBinding()==role->surfaceBinding())) return 5;
+    }
+    return tglWithCapturedOwnedSurfaceRoles(roles,captured,[&](const auto& inputs) noexcept {
+        uint32_t width=0,height=0;
+        std::memcpy(&width,inputs[0]->prefix.data()+0xd8,4);
+        std::memcpy(&height,inputs[0]->prefix.data()+0xdc,4);
+        if(request.key.width!=width || request.key.height!=height) return 5;
+        for(size_t i=0;i<count;++i) {
+            bool changed=false;
+            const int result=targets[i]->ensureFfdiBacking(request,changed);
+            if(result) return result;
+            if(!targets[i]->publishFfdiFrameFrom(input,*inputs[0],query,execution,inputs[1])) return 5;
+            tglUpdateOwnedFfdiExecutionCompression(changed,
+                {request.key.compressed,request.key.compressionMode},flag,mode);
+            if(changed) {const int status=publish(flag,mode);if(status) return status;}
+        }
+        if(inputs[2] && !targets[0]->publishFfdiSecondaryFrom(*secondary,*inputs[2])) return 5;
+        std::array<const TglOwnedSurfaceStorage*,Count> outputs{};
+        const auto enter=[&](auto&& self,size_t i) noexcept -> int {
+            if(i==count) {
+                static_assert(noexcept(use(inputs,outputs,count,flag,mode)),"FFDi backed consumer ABI");
+                return use(inputs,static_cast<const decltype(outputs)&>(outputs),count,flag,mode);
+            }
+            int result=5;
+            const bool leased=targets[i]->withSurface([&](const auto& output) noexcept {
+                outputs[i]=&output;result=self(self,i+1);outputs[i]=nullptr;
+            });
+            return leased?result:5;
+        };
+        return enter(enter,0);
+    });
 }
 // Allocation-disabled 1f7b06 -> 1f7e52 edge for an existing descriptor slot0.
 // Pin the secondary and destination through the synchronous next stage;
