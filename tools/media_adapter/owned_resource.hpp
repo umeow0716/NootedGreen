@@ -3161,6 +3161,7 @@ class TglOwnedVeboxBaseOwner {
     Cleanup& cleanup_;
     Destroy& destroy_;
     uintptr_t destructor_=0,image_=0;
+    uint64_t allocationGeneration_=0;
     bool constructed_=false,ready_=false,busy_=false,tableInstalled_=false;
 public:
     TglOwnedVeboxBaseOwner(CpuBackend& cpu,SfcInvoke& sfc,Cleanup& cleanup,Destroy& destroy)
@@ -3178,13 +3179,14 @@ public:
         const void* cache,int32_t& status,Read read,Construct construct) {
         static_assert(noexcept(construct(uintptr_t{},nullptr,nullptr,nullptr,nullptr,
             nullptr,nullptr,nullptr,nullptr,&status)),"constructor reports native status");
-        if(busy_) return TglOwnedBaseConstruction::NotCalled;
+        if(busy_ || allocationGeneration_==UINT64_MAX) return TglOwnedBaseConstruction::NotCalled;
         reset();busy_=true;
         if(binding.image!=sfcLifetime.image ||
            !sfc_.initialize(sfcLifetime,sfcBinding,reinterpret_cast<uintptr_t>(os),read)) {
             busy_=false;reset();return TglOwnedBaseConstruction::NotCalled;
         }
         if(!storage_.allocate(0x1bc0)){busy_=false;reset();return TglOwnedBaseConstruction::NotCalled;}
+        ++allocationGeneration_;
         const auto result=tglConstructOwnedVeboxBaseWithSfc(binding,
             reinterpret_cast<void*>(storage_.get()),storage_.size(),sfc_,os,mhw,
             renderHal,history,performance,cache,status,construct);
@@ -3197,6 +3199,11 @@ public:
     }
     void* constructedBase() const noexcept {
         return ready_ ? reinterpret_cast<void*>(storage_.get()) : nullptr;
+    }
+    uint64_t allocationGeneration() const noexcept {return allocationGeneration_;}
+    bool ownsLifecycleAllocation(void* child,uint64_t generation) const noexcept {
+        return child && generation && generation==allocationGeneration_ &&
+            reinterpret_cast<uintptr_t>(child)==storage_.get();
     }
     bool configureAllocationTail(const TglOwnedVeboxAllocationTail& tail) noexcept {
         if(!ready_ || busy_ || tableInstalled_) return false;
@@ -3462,6 +3469,7 @@ public:
     // Owned non-deleting lifecycle: invalidate callbacks and destroy members,
     // but retain the enclosing allocation for a later deleting lifecycle.
     bool destroyInPlace() noexcept {return teardown(false);}
+    bool deleteAllocation() noexcept {return teardown(true);}
     void reset() noexcept {(void)teardown(true);}
 private:
     bool teardown(bool releaseAllocation) noexcept {
@@ -3493,6 +3501,37 @@ private:
     }
 };
 
+// These callbacks are owned lifecycle only, not permission for native
+// allocation accounting or GPU retirement. The context outlives allocation.
+template<class Owner> class TglOwnedVeboxLifetimeContext {
+    Owner& owner_;void* child_;uint64_t generation_;
+    bool destroyed_=false,deleted_=false;
+    int status_=5;
+public:
+    explicit TglOwnedVeboxLifetimeContext(Owner& owner) noexcept
+        :owner_(owner),child_(owner.constructedBase()),generation_(owner.allocationGeneration()) {}
+    bool owns(void* child) const noexcept {
+        return !deleted_ && child==child_ && owner_.ownsLifecycleAllocation(child,generation_);
+    }
+    void destroy(bool deleting) noexcept {
+        if(!owns(child_) || (destroyed_ && !deleting)) {status_=5;return;}
+        const bool done=deleting?owner_.deleteAllocation():owner_.destroyInPlace();
+        status_=done?0:5;
+        if(done) {destroyed_=true;deleted_=deleting;}
+    }
+    int status() const noexcept {return status_;}
+};
+template<class Resolve> struct TglOwnedVeboxLifetimeCallbacks {
+    static void destroy(void* child) noexcept {invoke(child,false);}
+    static void deletingDestroy(void* child) noexcept {invoke(child,true);}
+private:
+    static void invoke(void* child,bool deleting) noexcept {
+        static_assert(noexcept(Resolve{}(child)),"VEBOX lifetime resolver ABI");
+        auto* context=Resolve{}(child);
+        static_assert(noexcept(context->owns(child)) && noexcept(context->destroy(deleting)),"VEBOX lifecycle ABI");
+        if(context && context->owns(child)) context->destroy(deleting);
+    }
+};
 struct TglVeboxPrefix {
     uintptr_t vtable = 0, slot08 = 0, os = 0, renderHal = 0, sku = 0, wa = 0;
     std::array<uint8_t, 8> slot30{};

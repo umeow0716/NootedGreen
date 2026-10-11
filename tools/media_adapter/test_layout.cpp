@@ -13479,11 +13479,28 @@ int main() {
                     })==0);
                     graph.reset();assert(!stateCpu.live && !avsCpu.live && cpu.live);
                 }
-                assert(owner.destroyInPlace());
-                assert(cpu.live && !owner.constructedBase());
-                assert(eventCount==3 && events[0]==1 && events[1]==2 && events[2]==4);
-                const auto destroyedEvents=eventCount;
-                assert(owner.destroyInPlace() && eventCount==destroyedEvents);
+                using Lifetime=TglOwnedVeboxLifetimeContext<decltype(owner)>;
+                Lifetime lifetime(owner);void* lifecycleChild=owner.constructedBase();
+                using LifetimeScope=TglOwnedVeboxScopedContext<Lifetime>;
+                struct LifetimeResolve {
+                    Lifetime* operator()(void* child) const noexcept {return LifetimeScope::get(child);}
+                };
+                using Lifecycle=TglOwnedVeboxLifetimeCallbacks<LifetimeResolve>;
+                Lifecycle::destroy(lifecycleChild);assert(!eventCount && cpu.live);
+                {
+                    LifetimeScope scope(lifecycleChild,lifetime);assert(scope.bound());
+                    Lifecycle::deletingDestroy(nullptr);Lifecycle::destroy(&eventCount);
+                    assert(!eventCount && cpu.live);
+                    Lifecycle::destroy(lifecycleChild);
+                    assert(lifetime.status()==0 && lifetime.owns(lifecycleChild));
+                    assert(cpu.live && !owner.constructedBase());
+                    assert(eventCount==3 && events[0]==1 && events[1]==2 && events[2]==4);
+                    Lifecycle::destroy(lifecycleChild);assert(lifetime.status()==5 && eventCount==3);
+                    Lifecycle::deletingDestroy(lifecycleChild);
+                    assert(lifetime.status()==0 && !lifetime.owns(lifecycleChild) && !cpu.live && eventCount==4);
+                    Lifecycle::deletingDestroy(lifecycleChild);assert(eventCount==4);
+                }
+                Lifecycle::destroy(lifecycleChild);assert(eventCount==4);
                 owner.reset();owner.reset();
                 assert(!owner.publishCsc(leasedCsc) && !owner.hasPrivateChildLease(0));
                 assert(!cpu.live && !owner.constructedBase() && eventCount==4);
