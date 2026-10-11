@@ -3298,11 +3298,15 @@ public:
     // before native base teardown can reach accounting helper12e190.
     // The VP view is data-only until its complete vtable is independently
     // qualified. No ownership transfer or asynchronous GPU retention.
-    template<class VpOwner,class Use>
-    int withBorrowedVpCpuView(VpOwner& vp,bool avsEnabled,Use use) noexcept {
-        static_assert(noexcept(use(nullptr,nullptr)),"borrowed VP CPU view ABI");
+    // Scope supplies an already-leased child and its synchronous consumer.
+    // This permits prepared setup->send to span the parent80 borrow without
+    // recursively acquiring the VP graph. Scope must pin the entire9d0 view;
+    // no callable-vtable or asynchronous lifetime claim is made here.
+    template<class Scope>
+    int withBorrowedVpCpuScope(Scope scope) noexcept {
         return withPrivateChild([&](void* parent) noexcept {
-            return vp.withView(avsEnabled,[&](void* child) noexcept {
+            auto borrow=[&](void* child,auto use) noexcept -> int {
+                static_assert(noexcept(use(nullptr,nullptr)),"borrowed VP CPU view ABI");
                 const uintptr_t p=reinterpret_cast<uintptr_t>(parent);
                 const uintptr_t c=reinterpret_cast<uintptr_t>(child);
                 // Exact base extents: parent1bc0 and VP9d0. Distinct starting
@@ -3319,6 +3323,16 @@ public:
                 uintptr_t observed=0;std::memcpy(&observed,field,8);
                 std::memcpy(field,&previous,8);
                 return observed==borrowed ? result : 5;
+            };
+            static_assert(noexcept(scope(borrow)),"borrowed VP scope must not throw");
+            return scope(borrow);
+        });
+    }
+    template<class VpOwner,class Use>
+    int withBorrowedVpCpuView(VpOwner& vp,bool avsEnabled,Use use) noexcept {
+        return withBorrowedVpCpuScope([&](auto borrow) noexcept {
+            return vp.withView(avsEnabled,[&](void* child) noexcept {
+                return borrow(child,use);
             });
         });
     }
