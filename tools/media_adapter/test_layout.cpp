@@ -6693,6 +6693,59 @@ static void testNativeResourceBoundary() {
                                     assert(historyShell.withDescriptor([&](const auto& view) noexcept {
                                         assert(std::memcmp(&view,&savedShell,sizeof(view))==0);
                                     }));
+                                    {
+                                        TglOwnedSurfaceStorage linkedStorage;
+                                        TglOwnedAllocatedSurface linkedInput(backingBackend,linkedStorage);
+                                        TglOwnedAllocatedSurface previous(backingBackend);
+                                        TglOwnedAllocatedSurface targetA(backingBackend),targetB(backingBackend);
+                                        const TglResourceKey linkedKey{33,17,0x3d,1,0,false};
+                                        assert(!linkedInput.ensure(linkedKey) && !previous.ensure(linkedKey));
+                                        const auto previousAddress=reinterpret_cast<uintptr_t>(previous.surfaceBinding());
+                                        std::memcpy(linkedStorage.prefix.data()+0xc8,&previousAddress,8);
+                                        const auto inputAddress=reinterpret_cast<uintptr_t>(&linkedStorage);
+                                        const auto shellAddress=reinterpret_cast<uintptr_t>(historyShell.surfaceBinding());
+                                        std::memcpy(child.data()+0x1b0,&inputAddress,8);
+                                        std::memcpy(child.data()+0x1b8,&shellAddress,8);
+                                        reportBackend.bytes[8]=1;reportBackend.bytes[0x13]=1;
+                                        unsigned finished=0;
+                                        auto runHistory=[&]() noexcept -> int {
+                                            int result=5;
+                                            assert(linkedInput.withSurface([&](const auto& current) noexcept {
+                                                result=tglRunCapturedBackedFfdnHistoryPair(std::array{&targetA,&targetB},
+                                                    linkedInput,&previous,historyShell,childOwner,reportOwner,
+                                                    actualChild,report,current,{true,1},read,
+                                                    [&](const auto& views,const auto& a,const auto& b,const auto* history) noexcept -> int {
+                                                        ++finished;assert(history && views[1]);
+                                                        assert(std::memcmp(history,views[1],sizeof(*history))==0);
+                                                        assert(previous.hasSurfaceLease(*views[1]));
+                                                        assert(targetA.hasSurfaceLease(a) && targetB.hasSurfaceLease(b));
+                                                        assert(reportBackend.bytes[8]==1);return -59;
+                                                    });
+                                            }));
+                                            return result;
+                                        };
+                                        assert(runHistory()==-59 && finished==1);
+                                        assert(historyShell.withDescriptor([&](const auto& view) noexcept {
+                                            assert(std::memcmp(&view,&savedShell,sizeof(view))==0);
+                                        }));
+                                        std::memcpy(child.data()+0x1b8,&inputAddress,8);
+                                        assert(runHistory()==5 && finished==1);
+                                        std::memcpy(child.data()+0x1b8,&shellAddress,8);
+                                        std::memcpy(linkedStorage.prefix.data()+0xc8,&inputAddress,8);
+                                        assert(runHistory()==5 && finished==1);
+                                        const uintptr_t noPrevious=0;
+                                        std::memcpy(linkedStorage.prefix.data()+0xc8,&noPrevious,8);
+                                        std::memcpy(child.data()+0x1b8,&inputAddress,8); // not consumed without previous
+                                        assert(linkedInput.withSurface([&](const auto& current) noexcept {
+                                            assert(tglRunCapturedBackedFfdnHistoryPair(std::array{&targetA,&targetB},
+                                                linkedInput,static_cast<decltype(&linkedInput)>(nullptr),historyShell,
+                                                childOwner,reportOwner,actualChild,report,current,{true,1},read,
+                                                [](const auto& views,const auto&,const auto&,const auto* history) noexcept -> int {
+                                                    assert(!views[1] && !history);return -61;
+                                                })==-61);
+                                        }));
+                                        std::memcpy(child.data()+0x1b0,&sourcePointer,8);
+                                    }
                                     reportBackend.bytes[8]=0xa5;reportBackend.bytes[0x13]=0;
                                     assert(tglPrepareOwnedBackedFfdnReportPair(backedTargets,owner,
                                         static_cast<decltype(&owner)>(nullptr),static_cast<decltype(&owner)>(nullptr),

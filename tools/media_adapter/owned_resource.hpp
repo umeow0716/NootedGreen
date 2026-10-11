@@ -5851,10 +5851,9 @@ int tglWithAllocatedOwnedFfdnPair(Owner& input,Owner* previous,Owner* copyDestin
     Finish finish={},std::array<const TglOwnedSurfaceStorage*,3> captured={},Report report={}) noexcept {
     static_assert(noexcept(allocate(size_t{},std::declval<const TglOwnedFfdnAllocationRequest&>(),
         std::declval<bool&>(),std::declval<uint32_t&>())),"FFDN pair allocation ABI");
-    static_assert(noexcept(copy(std::declval<const TglOwnedSurfaceStorage&>(),
-        std::declval<const TglOwnedSurfaceStorage&>())) &&
-        std::is_same_v<decltype(copy(std::declval<const TglOwnedSurfaceStorage&>(),
-        std::declval<const TglOwnedSurfaceStorage&>())),void>,"FFDN pair copy ABI");
+    constexpr bool scopedCopy=std::is_nothrow_invocable_r_v<void,Copy,const TglOwnedSurfaceStorage&>;
+    static_assert(scopedCopy || std::is_nothrow_invocable_r_v<void,Copy,
+        const TglOwnedSurfaceStorage&,const TglOwnedSurfaceStorage&>,"FFDN pair copy ABI");
     using PublicationResult=decltype(publish(size_t{},std::declval<const TglOwnedSurfaceStorage&>(),
         std::declval<const TglOwnedSurfaceStorage&>()));
     static_assert(noexcept(publish(size_t{},std::declval<const TglOwnedSurfaceStorage&>(),
@@ -5880,9 +5879,17 @@ int tglWithAllocatedOwnedFfdnPair(Owner& input,Owner* previous,Owner* copyDestin
             if(result!=0) return result;
             const auto decision=tglOwnedFfdnHistoryDecision(changed,referenceValid,executionFlag13,
                 views[1]!=nullptr,pitch,previousPitch);
-            if(decision==TglOwnedFfdnHistoryDecision::CopyPrevious && !views[2]) return 5;
+            if(!scopedCopy && decision==TglOwnedFfdnHistoryDecision::CopyPrevious && !views[2]) return 5;
             tglApplyOwnedFfdnHistory(changed,referenceValid,executionFlag13,views[1]!=nullptr,pitch,
-                previousPitch,[&]() noexcept {copy(*views[2],*views[1]);});
+                previousPitch,[&]() noexcept {
+                    if constexpr(scopedCopy) {
+                        static_assert(std::is_same_v<decltype(copy(*views[1])),void>,"scoped history copy result ABI");
+                        copy(*views[1]);
+                    } else {
+                        static_assert(std::is_same_v<decltype(copy(*views[2],*views[1])),void>,"history copy result ABI");
+                        copy(*views[2],*views[1]);
+                    }
+                });
             if(decision==TglOwnedFfdnHistoryDecision::Invalidate) {
                 static_assert(noexcept(report.invalidateReference()) &&
                     std::is_same_v<decltype(report.invalidateReference()),int>,"FFDN invalidation publication ABI");
@@ -11099,6 +11106,51 @@ int tglProduceCapturedFfdnCompression(TglOwnedFfdnCompressionSelection& output,
         });
     if(!status) output=candidate;
     return status;
+}
+// Real backing pair with a non-owning history shell. Keep source.c8's owner
+// across both per-slot copy decisions and the final synchronous consumer.
+// child1b8 identifies the shell; ba8 remains the separate compression source.
+template<class TargetOwner,class Owner,class ChildOwner,class ExecutionOwner,class Read,class Finish>
+int tglRunCapturedBackedFfdnHistoryPair(const std::array<TargetOwner*,2>& targets,
+    Owner& input,Owner* previous,TglOwnedDescriptorOnlySurface& history,
+    ChildOwner& childOwner,ExecutionOwner& reportOwner,void* child,uintptr_t report,
+    const TglOwnedSurfaceStorage& source,TglOwnedFfdiCompressionSelection ffdi,
+    Read read,Finish finish) noexcept {
+    if(!targets[0] || !targets[1]) return 5;
+    return tglRunCapturedVeboxAllocation(input,childOwner,reportOwner,child,report,source,
+        [&](void* c,uintptr_t e,const auto& s) noexcept -> int {
+            uintptr_t linkedPrevious=0,copyShell=0;
+            std::memcpy(&linkedPrevious,s.prefix.data()+0xc8,8);
+            if(linkedPrevious && !previous) return 5;
+            const std::array<Owner*,2> roles{&input,linkedPrevious?previous:nullptr};
+            return tglWithCapturedOwnedSurfaceRoles(roles,
+                std::array<const TglOwnedSurfaceStorage*,2>{&s,nullptr},[&](const auto& views) noexcept -> int {
+                    if(reinterpret_cast<uintptr_t>(views[1])!=linkedPrevious) return 5;
+                    auto selection=[&](const auto&,TglOwnedFfdnCompressionSelection& value) noexcept {
+                        return tglProduceCapturedFfdnCompression(value,input,*targets[0],childOwner,
+                            reportOwner,c,e,s,ffdi,read)==0;
+                    };
+                    auto run=[&](auto copy,auto historyView) noexcept -> int {
+                        return tglPrepareOwnedBackedFfdnReportPair(targets,input,roles[1],
+                            static_cast<Owner*>(nullptr),selection,reportOwner,e,copy,
+                            [&](const auto& inputs,const auto& a,const auto& b) noexcept -> int {
+                                static_assert(noexcept(finish(inputs,a,b,historyView())) &&
+                                    std::is_same_v<decltype(finish(inputs,a,b,historyView())),int>,
+                                    "captured FFDN history consumer ABI");
+                                return finish(inputs,a,b,historyView());
+                            },{&s,views[1],nullptr});
+                    };
+                    if(!views[1]) return run([](const TglOwnedSurfaceStorage&) noexcept {},
+                        []() noexcept -> const TglOwnedSurfaceStorage* {return nullptr;});
+                    const auto address=reinterpret_cast<uintptr_t>(c);
+                    if(address>UINTPTR_MAX-0x1bf || !read(address+0x1b8,&copyShell,8) ||
+                        copyShell!=reinterpret_cast<uintptr_t>(history.surfaceBinding())) return 5;
+                    return history.withBorrowedHistoryCopyScope(*roles[1],*views[1],
+                        [&](auto copy,auto view) noexcept -> int {
+                            return run([&](const TglOwnedSurfaceStorage&) noexcept {copy();},view);
+                        });
+                });
+        });
 }
 template<class Read>
 bool tglReadOwnedStateExecution(TglOwnedStateInputs& output, uintptr_t execution,
