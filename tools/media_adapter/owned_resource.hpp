@@ -9195,8 +9195,8 @@ bool tglUpdateOwnedVeboxHistory(Owner& owner,void* child,
 // surface owner unlocks. This is not permission for asynchronous GPU submission.
 // Callback supplies the qualified native/owned stages; this scope alone is
 // neither complete admission nor authorization to call an incomplete vtable.
-template<class SurfaceOwner,class ChildOwner,class ExecutionOwner,class Invoke>
-int tglRunCapturedVeboxFeature(SurfaceOwner& sourceOwner,SurfaceOwner& targetOwner,
+template<class SourceOwner,class TargetOwner,class ChildOwner,class ExecutionOwner,class Invoke>
+int tglRunCapturedVeboxFeature(SourceOwner& sourceOwner,TargetOwner& targetOwner,
     ChildOwner& childOwner,ExecutionOwner& executionOwner,void* child,uintptr_t execution,
     const TglOwnedSurfaceStorage& source,const TglOwnedSurfaceStorage& target,Invoke invoke) noexcept {
     static_assert(noexcept(invoke(child,source,target)) &&
@@ -9215,8 +9215,8 @@ int tglRunCapturedVeboxFeature(SurfaceOwner& sourceOwner,SurfaceOwner& targetOwn
         return status;
     });
 }
-template<class SurfaceOwner,class ChildOwner,class ExecutionOwner,class Invoke>
-int tglWithOwnedVeboxFeatureFrame(SurfaceOwner& sourceOwner,SurfaceOwner& targetOwner,
+template<class SourceOwner,class TargetOwner,class ChildOwner,class ExecutionOwner,class Invoke>
+int tglWithOwnedVeboxFeatureFrame(SourceOwner& sourceOwner,TargetOwner& targetOwner,
     ChildOwner& childOwner,ExecutionOwner& executionOwner,Invoke invoke) noexcept {
     static_assert(noexcept(invoke(nullptr,std::declval<const TglOwnedSurfaceStorage&>(),
         std::declval<const TglOwnedSurfaceStorage&>())),"feature frame callback ABI");
@@ -9236,8 +9236,8 @@ int tglWithOwnedVeboxFeatureFrame(SurfaceOwner& sourceOwner,SurfaceOwner& target
 // source90, and160 retains target in report60. Reconcile source90 while both
 // surface owners are still pinned; detach report60 before either owner unlocks.
 // Invoke must include all synchronous report consumers, not an async submit.
-template<class SurfaceOwner,class ChildOwner,class ExecutionOwner,class Parameters,class Invoke>
-int tglWithOwnedVeboxDenoiseFeatureFrame(SurfaceOwner& sourceOwner,SurfaceOwner& targetOwner,
+template<class SourceOwner,class TargetOwner,class ChildOwner,class ExecutionOwner,class Parameters,class Invoke>
+int tglWithOwnedVeboxDenoiseFeatureFrame(SourceOwner& sourceOwner,TargetOwner& targetOwner,
     ChildOwner& childOwner,ExecutionOwner& executionOwner,Parameters& parameters,Invoke invoke) noexcept {
     static_assert(noexcept(invoke(nullptr,std::declval<const TglOwnedSurfaceStorage&>(),
         std::declval<const TglOwnedSurfaceStorage&>())) &&
@@ -13475,6 +13475,15 @@ public:
             return use(*metadata);
         });
     }
+    // Existing tracked source90 producer, only inside this retained shell's
+    // active scope. Never adopt or overwrite an already-populated native slot.
+    template<class Parameters,class Use>
+    bool withNativeDenoiseParameters(const TglOwnedSurfaceStorage& expected,
+        Parameters& parameters,Use use) noexcept {
+        auto* metadata=lease_.metadataStorage();
+        if(!busy_ || metadata!=&expected || !hasSurfaceLease(expected)) return false;
+        return parameters.withNativeReleaseSlot(metadata->prefix.data()+0x90,use);
+    }
 };
 // Exact1308a0 temporal registration graph. Capacity is an OWNED retention/work
 // budget, not a claimed native count limit. Resolve returns an existing stable
@@ -13552,6 +13561,28 @@ public:
         if(busy_ || !valid()) return 5;
         busy_=true;const int result=slots_[0].lease->withMutableSurface(use);busy_=false;
         return valid()?result:5;
+    }
+    template<class Use> bool withSurface(Use use) noexcept {
+        static_assert(noexcept(use(std::declval<const TglOwnedSurfaceStorage&>())) &&
+            std::is_same_v<decltype(use(std::declval<const TglOwnedSurfaceStorage&>())),void>);
+        return withMutableSurface([&](auto& root) noexcept -> int {use(std::as_const(root));return 0;})==0;
+    }
+    template<class Target,class Use> bool withPeerSurface(Target& target,Use use) noexcept {
+        static_assert(noexcept(use(std::declval<const TglOwnedSurfaceStorage&>(),
+            std::declval<const TglOwnedSurfaceStorage&>())) &&
+            std::is_same_v<decltype(use(std::declval<const TglOwnedSurfaceStorage&>(),
+            std::declval<const TglOwnedSurfaceStorage&>())),void>);
+        return withMutableSurface([&](auto& root) noexcept -> int {
+            return target.withMutableSurface([&](auto& peer) noexcept -> int {
+                use(std::as_const(root),std::as_const(peer));return 0;
+            });
+        })==0;
+    }
+    template<class Parameters,class Use>
+    bool withNativeDenoiseParameters(const TglOwnedSurfaceStorage& expected,
+        Parameters& parameters,Use use) noexcept {
+        return busy_ && hasSurfaceLease(expected) &&
+            slots_[0].lease->withNativeDenoiseParameters(expected,parameters,use) && valid();
     }
 };
 #if defined(__APPLE__)

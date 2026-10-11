@@ -11571,6 +11571,46 @@ int main() {
                 assert(graph.acquire(reinterpret_cast<uintptr_t>(&root),resolve,11,12));
                 assert(graph.storage()==&root && ro.borrowed && po.borrowed && oo.borrowed);
                 for(size_t i=1;i<6;++i) assert(refs[i]==3); // shared older node pinned once
+                {
+                    TestFrontendOriginalOwner targetOwner{shell};
+                    TglOwnedType1BorrowedSurfaceLease<TestFrontendOriginalOwner,Api> target(
+                        targetOwner,Api{refs},11,12);
+                    TestFeatureExecutionOwner execution;
+                    std::array<uint8_t,0x1bc0> childBytes{};
+                    TestVeboxChildLease child{childBytes.data()};
+                    const auto report=reinterpret_cast<uintptr_t>(execution.bytes.data());
+                    const auto sourceAddress=reinterpret_cast<uintptr_t>(&root);
+                    std::memcpy(childBytes.data()+0x88,&report,8);
+                    std::memcpy(childBytes.data()+0x1b0,&sourceAddress,8);
+                    struct Cpu {
+                        uintptr_t allocate(size_t n) noexcept {return reinterpret_cast<uintptr_t>(std::calloc(1,n));}
+                        void release(uintptr_t p) noexcept {std::free(reinterpret_cast<void*>(p));}
+                    } cpu;
+                    TglTrackedCpuOwner<Cpu> parameters(cpu);assert(parameters.allocate(64));
+                    const auto parameterAddress=parameters.get();
+                    const uintptr_t foreignParameters=0x555;
+                    std::memcpy(root.prefix.data()+0x90,&foreignParameters,8);
+                    assert(tglWithOwnedVeboxDenoiseFeatureFrame(graph,target,child,execution,parameters,
+                        [](void*,const auto&,const auto&) noexcept {assert(false);return 0;})==5);
+                    uintptr_t untouched=0;std::memcpy(&untouched,root.prefix.data()+0x90,8);
+                    assert(untouched==foreignParameters && parameters.get()==parameterAddress);
+                    untouched=0;std::memcpy(root.prefix.data()+0x90,&untouched,8);
+                    assert(tglWithOwnedVeboxDenoiseFeatureFrame(graph,target,child,execution,parameters,
+                        [&](void* c,const auto& s,const auto& t) noexcept {
+                            assert(c==childBytes.data() && &s==&root && &t==&shell);
+                            uintptr_t published=0;std::memcpy(&published,s.prefix.data()+0x90,8);
+                            assert(published==parameterAddress && po.borrowed && oo.borrowed);
+                            return 31;
+                        })==31);
+                    uintptr_t detached=1;std::memcpy(&detached,root.prefix.data()+0x90,8);
+                    assert(!detached && parameters.get()==parameterAddress);
+                    assert(tglWithOwnedVeboxAllocationFrame(graph,child,execution,
+                        [&](void* c,uintptr_t e,const auto& s) noexcept {
+                            assert(c==childBytes.data() && e==report && &s==&root);
+                            return 17;
+                        })==17);
+                }
+                for(size_t i=1;i<6;++i) assert(refs[i]==3);
                 assert(graph.withMutableSurface([&](auto& original) noexcept {
                     assert(&original==&root && graph.hasSurfaceLease(root));
                     assert(graph.withMutableSurface([](auto&) noexcept {assert(false);return 0;})==5);
