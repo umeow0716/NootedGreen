@@ -12733,6 +12733,31 @@ int main() {
         TglNativeVeboxRendererView rendererView;
         assert(rendererView.resolve(c,read,admit) && rendererView.parent.physical==p &&
             rendererView.renderer==r && rendererView.configuration==r+0x2cb0);
+        constexpr uintptr_t image=0x10000000;
+        uintptr_t nativeInit=image+0x132510,nativeFrame=image+0x131fa0;
+        put(r,0,image+0x75bba0);
+        auto qualifiedRead=[&](uintptr_t address,void* output,size_t size) noexcept {
+            if(size==8 && (address==image+0x75bbc0 || address==image+0x75bbc8)) {
+                const uintptr_t value=address==image+0x75bbc0?nativeInit:nativeFrame;
+                std::memcpy(output,&value,8);return true;
+            }
+            return read(address,output,size);
+        };
+        bool imageAllowed=true,executableAllowed=true;
+        auto qualify=[&](uintptr_t base) noexcept {return imageAllowed && base==image;};
+        auto executable=[&](uintptr_t address,size_t size) noexcept {
+            return executableAllowed && size==1 && (address==image+0x132510 || address==image+0x131fa0);
+        };
+        auto qualified=[&]() noexcept {
+            return rendererView.resolveQualified(image,c,qualifiedRead,admit,qualify,executable);
+        };
+        assert(qualified() && rendererView.image==image && rendererView.frame==nativeFrame);
+        put(r,0,image+0x758158);assert(!qualified() && !rendererView.renderer);
+        put(r,0,image+0x75bba0);nativeFrame++;assert(!qualified());nativeFrame--;
+        nativeInit++;assert(!qualified());nativeInit--;
+        imageAllowed=false;assert(!qualified());imageAllowed=true;
+        executableAllowed=false;assert(!qualified());executableAllowed=true;
+        assert(qualified());
         put(c,0x12e0,0);assert(!rendererView.resolve(c,read,admit) && !rendererView.renderer);
         put(c,0x12e0,UINTPTR_MAX-8);assert(!rendererView.resolve(c,read,admit));
         put(c,0x12e0,r+8);assert(!rendererView.resolve(c,read,admit));

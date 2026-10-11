@@ -1576,6 +1576,7 @@ struct TglNativeVeboxParentView {
 struct TglNativeVeboxRendererView {
     TglNativeVeboxParentView parent{};
     uintptr_t renderer=0,configuration=0;
+    uintptr_t image=0,vtable=0,initialize=0,frame=0;
     template<class Read,class Admit>
     bool resolve(uintptr_t context,Read read,Admit admit) noexcept {
         *this={};TglNativeVeboxParentView candidate;uintptr_t object=0;
@@ -1583,6 +1584,20 @@ struct TglNativeVeboxRendererView {
             !read(context+0x12e0,&object,8) || !object ||
             object>UINTPTR_MAX-0x2cb8 || !admit(object,size_t{0x2cb8})) return false;
         parent=candidate;renderer=object;configuration=object+0x2cb0;return true;
+    }
+    // Retained stage6 journals prove G12Tgllp vptr75bba0, not the abstract
+    // VphalRenderer base. Image qualification authenticates exact file bytes.
+    template<class Read,class Admit,class Qualify,class Executable>
+    bool resolveQualified(uintptr_t base,uintptr_t context,Read read,Admit admit,
+        Qualify qualify,Executable executable) noexcept {
+        *this={};TglNativeVeboxRendererView candidate;
+        uintptr_t table=0,init=0,render=0;
+        if(!base || base>UINTPTR_MAX-0x75bbd0 || !qualify(base) ||
+            !candidate.resolve(context,read,admit) || !read(candidate.renderer,&table,8) ||
+            table!=base+0x75bba0 || !read(table+0x20,&init,8) || init!=base+0x132510 ||
+            !read(table+0x28,&render,8) || render!=base+0x131fa0 ||
+            !executable(init,1) || !executable(render,1)) return false;
+        *this=candidate;image=base;vtable=table;initialize=init;frame=render;return true;
     }
 };
 
