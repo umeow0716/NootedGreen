@@ -8141,13 +8141,16 @@ int tglRunOwnedVeboxAllocationQueriedStages(QueryFfdi ffdiEnabled,QuerySecondary
 // the captured identities around each query and stage, not only at frame exit:
 // a stage must never hand an invalidated child to the next stage. Stage owners
 // still supply qualified allocation policy and explicit captured source views.
+struct TglOwnedVeboxFrameNoUnwind {
+    void operator()(void*,uintptr_t,const TglOwnedSurfaceStorage&) const noexcept {}
+};
 template<class SurfaceOwner,class ChildOwner,class ExecutionOwner,class QueryFfdi,
     class QuerySecondary,class QueryPipe,class QueryStmm,class Ffdi,class Secondary,
-    class Ffdn,class Rectangle,class Stmm,class Statistics>
+    class Ffdn,class Rectangle,class Stmm,class Statistics,class Unwind=TglOwnedVeboxFrameNoUnwind>
 int tglWithOwnedVeboxAllocationStages(SurfaceOwner& sourceOwner,ChildOwner& childOwner,
     ExecutionOwner& executionOwner,QueryFfdi ffdiEnabled,QuerySecondary hasSecondary,
     QueryPipe pipe,QueryStmm stmmEnabled,Ffdi ffdi,Secondary secondary,Ffdn ffdn,
-    Rectangle rectangle,Stmm stmm,Statistics statistics) noexcept {
+    Rectangle rectangle,Stmm stmm,Statistics statistics,Unwind unwind={}) noexcept {
     return tglWithOwnedVeboxAllocationFrame(sourceOwner,childOwner,executionOwner,
         [&](void* child,uintptr_t execution,const auto& source) noexcept {
             const auto stage=[&](auto& invoke) noexcept {
@@ -8163,6 +8166,7 @@ int tglWithOwnedVeboxAllocationStages(SurfaceOwner& sourceOwner,ChildOwner& chil
                 };
                 return stage(read);
             };
+            const auto run=[&]() noexcept -> int {
             bool enabled=false;uint32_t selectedPipe=0;int status=0;
             if((status=gate(ffdiEnabled,enabled))) return status;
             if(enabled && (status=stage(ffdi))) return status;
@@ -8174,6 +8178,18 @@ int tglWithOwnedVeboxAllocationStages(SurfaceOwner& sourceOwner,ChildOwner& chil
             if((status=gate(stmmEnabled,enabled))) return status;
             if(enabled && (status=stage(stmm))) return status;
             return stage(statistics);
+            };
+            const int result=run();
+            if(!result) return 0;
+            // Only allocation-owned resources, with GPU users excluded. Never
+            // replace this with native selective FreeResources. Do not invoke
+            // cleanup through a revoked child/source/execution identity.
+            auto rollback=[&](void* c,uintptr_t e,const auto& s) noexcept {
+                static_assert(noexcept(unwind(c,e,s)) &&
+                    std::is_same_v<decltype(unwind(c,e,s)),void>,"allocation frame unwind ABI");
+                unwind(c,e,s);return result;
+            };
+            return stage(rollback);
         });
 }
 // Convenience only for immutable, already-qualified policy inputs. Runtime

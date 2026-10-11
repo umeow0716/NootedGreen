@@ -5587,7 +5587,7 @@ static void testNativeResourceBoundary() {
                 std::memcpy(child.data()+0x1b0,&allocationSource,8);
                 assert(tglWithOwnedVeboxAllocationFrame(owner,childOwner,execution,allocateFrame)==31 && allocationFrames==1);
                 for(unsigned fail=0;fail<=6;++fail) {
-                    unsigned calls=0;
+                    unsigned calls=0,unwinds=0;
                     const auto check=[&](void* c,uintptr_t e,const auto& s) noexcept {
                         assert(c==child.data() && execution.hasExecutionLease(e));
                         assert(&s==surface && owner.hasSurfaceLease(s));
@@ -5603,9 +5603,15 @@ static void testNativeResourceBoundary() {
                         check(c,e,s);++calls;
                         return calls==fail?31:0;
                     };
+                    const auto unwind=[&](void* c,uintptr_t e,const auto& s) noexcept {
+                        check(c,e,s);++unwinds;
+                        owner.reset();assert(owner.ensure(key)==5);
+                        assert(childOwner.withPrivateChild([](void*) noexcept {assert(false);return 0;})==5);
+                        assert(execution.withExecution([](uintptr_t) noexcept {assert(false);return 0;})==5);
+                    };
                     assert(tglWithOwnedVeboxAllocationStages(owner,childOwner,execution,
-                        yes,yes,pipe,yes,stage,stage,stage,stage,stage,stage)==(fail?31:0));
-                    assert(calls==(fail?fail:6));
+                        yes,yes,pipe,yes,stage,stage,stage,stage,stage,stage,unwind)==(fail?31:0));
+                    assert(calls==(fail?fail:6) && unwinds==unsigned(fail!=0));
                     assert(!childOwner.busy && !execution.busy && owner.surface()==surface);
                 }
                 {
@@ -5624,9 +5630,10 @@ static void testNativeResourceBoundary() {
                     const auto unexpected=[&](void*,uintptr_t,const auto&) noexcept {
                         ++later;return 0;
                     };
+                    const auto deniedUnwind=[](void*,uintptr_t,const auto&) noexcept {assert(false);};
                     assert(tglWithOwnedVeboxAllocationStages(owner,childOwner,execution,
                         yes,laterQuery,pipe,laterQuery,invalidates,unexpected,unexpected,
-                        unexpected,unexpected,unexpected)==5);
+                        unexpected,unexpected,unexpected,deniedUnwind)==5);
                     assert(later==0 && !childOwner.busy && !execution.busy);
                     std::memcpy(child.data()+0x88,&report,8);
                 }
@@ -5694,12 +5701,19 @@ static void testNativeResourceBoundary() {
                                     return finishStatus;
                                 },&s);
                         };
+                        unsigned unwinds=0;
+                        const auto unwind=[&](void* c,uintptr_t e,const auto& s) noexcept {
+                            ++unwinds;assert(owner.hasSurfaceLease(s) && execution.hasExecutionLease(e));
+                            assert(childOwner.hasPrivateChildLease(reinterpret_cast<uintptr_t>(c)));
+                            secondarySlot.reset();
+                        };
                         assert(tglWithOwnedVeboxAllocationStages(owner,childOwner,execution,
                             disabled,enabled,pipe,disabled,unused,secondary,ffdn,rectangle,unused,
-                            statistics)==finishStatus);
+                            statistics,unwind)==finishStatus);
                         assert(secondaryCalls==1 && rectangleCalls==1 && statisticsCalls==1);
                         assert(width==(finishStatus?17u:1920u) && height==(finishStatus?19u:1080u));
-                        assert(secondarySlot.withDescriptor([](const auto&) noexcept {}));
+                        assert(unwinds==unsigned(finishStatus!=0));
+                        assert(secondarySlot.withDescriptor([](const auto&) noexcept {})==!finishStatus);
                         assert(owner.withSurface([](const auto&) noexcept {}));
                         assert(destination.withSurface([](const auto&) noexcept {}));
                         assert(!childOwner.busy && !execution.busy);
