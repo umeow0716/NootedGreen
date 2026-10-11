@@ -2004,6 +2004,26 @@ static void testTrackedCpuOwner() {
         assert(!owner.withNativeReleaseSlot(slot,[&]() noexcept { ++calls; }));
         assert(owner.allocate(0x2a8));
         const auto original=owner.get();
+        {
+            TglOwnedSurfaceStorage source,metadata;
+            std::memcpy(source.prefix.data()+0x90,&original,8);
+            unsigned uses=0;
+            assert(tglWithOwnedFfdnDnMetadata(metadata,source,owner,[&](const auto& view) noexcept {
+                ++uses;uintptr_t pointer=0;std::memcpy(&pointer,view.prefix.data()+0x90,8);
+                assert(pointer==original);owner.reset();assert(owner.get()==original);
+                assert(!owner.allocate(8));
+                assert(!owner.withBorrowedAddress([](uintptr_t,size_t) noexcept {assert(false);}));
+                return -17;
+            })==-17 && uses==1);
+            uintptr_t detached=1;std::memcpy(&detached,metadata.prefix.data()+0x90,8);
+            assert(!detached && owner.get()==original);
+            uintptr_t foreignPointer=123;std::memcpy(source.prefix.data()+0x90,&foreignPointer,8);
+            assert(tglWithOwnedFfdnDnMetadata(metadata,source,owner,
+                [](const auto&) noexcept {assert(false);return 0;})==5);
+            assert(owner.withBorrowedAddress([&](uintptr_t pointer,size_t extent) noexcept {
+                assert(pointer==original && extent==0x2a8);
+            }));
+        }
         uintptr_t foreign=123;
         std::memcpy(slot,&foreign,8);
         assert(!owner.withNativeReleaseSlot(slot,[&]() noexcept { ++calls; }));

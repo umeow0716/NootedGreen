@@ -1345,6 +1345,17 @@ public:
     }
     uintptr_t get() const { return storage; }
     size_t size() const { return extent; }
+    // Non-consuming synchronous borrow. No native release/ownership transfer
+    // is permitted; reset, reallocation and consuming-slot entry stay blocked.
+    template<class Use>
+    bool withBorrowedAddress(Use use) noexcept {
+        static_assert(noexcept(use(uintptr_t{},size_t{})) &&
+            std::is_same_v<decltype(use(uintptr_t{},size_t{})),void>,"tracked CPU borrow ABI");
+        if(borrowed || !storage) return false;
+        borrowed=true;
+        struct Restore {bool& borrowed;~Restore(){borrowed=false;}} restore{borrowed};
+        use(storage,extent);return true;
+    }
     // Exact native160 source90 contract: unchanged means still owned; null
     // means paired native436d0 consumed it. Caller leases the surface slot
     // and authenticates the native callback/image. Never adopt foreign data.
@@ -4508,6 +4519,28 @@ struct TglOwnedFfdiCompressionSelection {
     bool compressed=false;
     uint32_t mode=0;
 };
+// Scope the FFDN90 DN pointer separately from scalar metadata. Source must
+// already be leased and identify this actual tracked allocation. Publication
+// into stack-owned metadata is restored before the parameter lease ends.
+// This permits no consuming native160 callback or asynchronous pointer use.
+template<class Parameters,class Use>
+int tglWithOwnedFfdnDnMetadata(TglOwnedSurfaceStorage& metadata,
+    const TglOwnedSurfaceStorage& source,Parameters& parameters,Use use) noexcept {
+    static_assert(noexcept(use(std::declval<const TglOwnedSurfaceStorage&>())),"FFDN DN metadata ABI");
+    if(&metadata==&source) return 5;
+    uintptr_t existing=0,expected=0;
+    std::memcpy(&existing,metadata.prefix.data()+0x90,8);
+    std::memcpy(&expected,source.prefix.data()+0x90,8);
+    if(existing || !expected) return 5;
+    int result=5;
+    const bool leased=parameters.withBorrowedAddress([&](uintptr_t pointer,size_t extent) noexcept {
+        if(pointer!=expected || extent<8) return;
+        std::memcpy(metadata.prefix.data()+0x90,&pointer,8);
+        struct Restore {uint8_t* slot;~Restore(){std::memset(slot,0,8);}} restore{metadata.prefix.data()+0x90};
+        result=use(static_cast<const TglOwnedSurfaceStorage&>(metadata));
+    });
+    return leased?result:5;
+}
 // ICL1f7c14..1f7cc0: scalar subset of execution60 metadata. The borrowed
 // handle1a0 is deliberately excluded and remains available only via its
 // actual leased owner view. No token/reference is retained by this copy.
