@@ -8917,6 +8917,19 @@ int main() {
             auto noRead=+[](uintptr_t,void*,size_t) noexcept {return false;};
             TglOwnedVpSfcCpuGraph<Cpu,Cpu> graph(stateCpu,avsCpu);
             assert(graph.initialize(0x7000,0x8000,0x3000,binding,noRead,1,0));
+            struct CallbackCommandBackend {
+                unsigned count=0;int failure=0;
+                std::array<int,8> order{};
+                int stage(int id) noexcept {order[count++]=id;return failure==id?-id:0;}
+                int lock(const TglOwnedSfcLockParameters&) noexcept {return stage(1);}
+                int state(const TglOwnedSfcStateParametersPacket&,
+                    const std::array<uint8_t,0x38>&) noexcept {return stage(4);}
+                int avs(const std::array<uint8_t,16>&) noexcept {return stage(5);}
+                int y(const TglOwnedSfcYParameters&) noexcept {return stage(6);}
+                int uv(const TglOwnedSfcUvParameters&) noexcept {return stage(7);}
+                int ief(const std::array<uint8_t,64>&) noexcept {return stage(8);}
+                int frameStart() noexcept {return stage(9);}
+            };
             assert(graph.withResourceOwnerStorage([&](auto& ownedStorage) noexcept {
                 assert(!graph.tryReset());
                 assert(!graph.initialize(0x7000,0x8000,0x3000,binding,noRead,1,0));
@@ -8924,11 +8937,11 @@ int main() {
                 assert(graph.withTeardownReservation([](auto) noexcept {assert(false);return 0;})==5);
                 assert(graph.withResourceOwnerStorage([](auto&) noexcept {assert(false);return 0;})==5);
                 struct LineBackend {
-                    unsigned allocations=0,releases=0;
+                    unsigned allocations=0,releases=0;int status=0;
                     uint32_t resourceType() const noexcept {return 0;}
                     int allocate(std::array<uint8_t,0x148>& r,const TglResourceKey& key,
                         uint32_t* width) noexcept {
-                        ++allocations;r[0]=r[0x20]=1;*width=key.width;return 0;
+                        ++allocations;r[0]=r[0x20]=1;*width=key.width;return status;
                     }
                     bool backed(const std::array<uint8_t,0x148>& r) noexcept {return r[0]==1;}
                     void release(std::array<uint8_t,0x148>& r) noexcept {
@@ -8941,9 +8954,21 @@ int main() {
                 std::array<LineBackend,2> backends{};
                 TglOwnedVpLineSurfaces<LineBackend> lines(backends,*a,*b);
                 int admission=31;unsigned retired=0,states=0,filters=0;
+                TglOwnedSfcCommandParameters packets;
+                TglOwnedSurfaceStorage output;output.resource[0x20]=1;
+                std::array<uint8_t,0xb8> prefix{};prefix[0]=1;
+                const uint32_t width=1920,input=1080,scaled=540;
+                for(size_t offset:{size_t(0x24),size_t(0x28),size_t(0x34),
+                    size_t(0x3c),size_t(0x40),size_t(0x50)})
+                    std::memcpy(prefix.data()+offset,&width,4);
+                std::memcpy(prefix.data()+0x30,&input,4);std::memcpy(prefix.data()+0x4c,&scaled,4);
+                unsigned preparedStates=0,sent=0;
                 auto retire=[&]() noexcept {++retired;assert(!graph.tryReset());return admission;};
-                for(int expected:{31,0,5}) {
-                    admission=expected;calls=0;fail=expected==5?1:0;
+                for(int expected:{31,0,5,77,-4}) {
+                    CallbackCommandBackend commands;
+                    commands.failure=expected==-4?4:0;
+                    admission=expected==31?31:0;calls=0;fail=expected==5?1:0;
+                    backends[0].status=expected==77?77:0;
                     assert(graph.withLeasedResourceCallbackPass(0x1000,0x2000,0x3000,
                         0x4000,0x6000,0x7000,{},reinterpret_cast<void*>(0x9000),
                         [&](uintptr_t address,void* out,size_t size) noexcept {
@@ -8951,29 +8976,43 @@ int main() {
                         },lines,retire,
                         [&](void* child,const auto&,const auto& snapshot,auto& owner,auto allocate) noexcept {
                             assert(snapshot.frameWidth==geometrySnapshot.frameWidth);
-                            ++states;const uint32_t height=1080,scaled=540;
-                            std::memcpy(owner.data()+0x30,&height,4);
-                            std::memcpy(owner.data()+0x4c,&scaled,4);
+                            ++states;
                             assert(allocate(child)==5); // No publication yet.
-                            return owner.withVpParameterPublication(*storage,[&](const uint8_t*) noexcept {
-                                return allocate(child);
-                            });
+                            return tglWithAllocatedOwnedVpSurfaceCommands(*storage,packets,owner,lines,
+                                output,prefix,{},false,false,false,TglOwnedSfcCompressionMode{},allocate,
+                                [](auto&) noexcept {return 0;},
+                                [&](auto&) noexcept {++preparedStates;return 0;},
+                                static_cast<TglOwnedSfcSfdBuffer<LineBackend>*>(nullptr));
                         },[](void*,const auto&,auto&) noexcept {return 0;},
                         [&](void*,const auto&) noexcept {++filters;},
-                        [](void*,void*,void*) noexcept {return 0;},
+                        [&](void*,void*,void*) noexcept {
+                            ++sent;assert(std::memcmp(packets.state.data(),stateCpu.bytes.data(),
+                                packets.state.size())==0);
+                            auto platform=[&](auto&) noexcept {return commands.stage(3);};
+                            return tglSendOwnedSfcPreparedCommands(commands,packets,output,1,1,1,1,platform);
+                        },
                         [&](void* child,auto setup,auto send,auto release) noexcept {
-                            assert(setup(child,reinterpret_cast<void*>(0x1000),
-                                reinterpret_cast<void*>(0x2000),reinterpret_cast<void*>(0x9000))==0);
-                            assert(send(child,reinterpret_cast<void*>(0x9000),
-                                reinterpret_cast<void*>(0xa000))==0);
+                            const int status=setup(child,reinterpret_cast<void*>(0x1000),
+                                reinterpret_cast<void*>(0x2000),reinterpret_cast<void*>(0x9000));
+                            if(status) return status;
+                            // Ignoring send's result must not erase a partial
+                            // command-construction error after cleanup.
+                            (void)send(child,reinterpret_cast<void*>(0x9000),
+                                reinterpret_cast<void*>(0xa000));
                             release(child);return 0;
                         })==expected);
-                    assert(backends[0].releases==unsigned(expected!=31));
+                    assert(backends[0].releases==(expected==31?0u:expected==77?2u:expected==-4?3u:1u));
+                    if(expected==31 || expected==0)
+                        assert((commands.order==std::array<int,8>{1,3,4,5,6,7,8,9}) && commands.count==8);
+                    else if(expected==-4)
+                        assert(commands.count==3 && commands.order[0]==1 && commands.order[1]==3 &&
+                            commands.order[2]==4);
+                    else assert(!commands.count);
                 }
                 fail=0;
-                assert(states==2 && filters==2 && retired==2);
-                assert(backends[0].allocations==1 && backends[1].allocations==1);
-                assert(backends[0].releases==1 && backends[1].releases==1);
+                assert(states==4 && filters==3 && retired==3 && preparedStates==3 && sent==3);
+                assert(backends[0].allocations==3 && backends[1].allocations==2);
+                assert(backends[0].releases==3 && backends[1].releases==2);
                 return 0;
             })==0);
             struct GraphPipePolicy {
@@ -9166,19 +9205,6 @@ int main() {
             fail=0;
             // Exercise the VP callback bridge with the real typed scheduler,
             // not the platform no-op. This records CPU emission only.
-            struct CallbackCommandBackend {
-                unsigned count=0;int failure=0;
-                std::array<int,8> order{};
-                int stage(int id) noexcept {order[count++]=id;return failure==id?-id:0;}
-                int lock(const TglOwnedSfcLockParameters&) noexcept {return stage(1);}
-                int state(const TglOwnedSfcStateParametersPacket&,
-                    const std::array<uint8_t,0x38>&) noexcept {return stage(4);}
-                int avs(const std::array<uint8_t,16>&) noexcept {return stage(5);}
-                int y(const TglOwnedSfcYParameters&) noexcept {return stage(6);}
-                int uv(const TglOwnedSfcUvParameters&) noexcept {return stage(7);}
-                int ief(const std::array<uint8_t,64>&) noexcept {return stage(8);}
-                int frameStart() noexcept {return stage(9);}
-            };
             for(int failure:{0,1,3,4,5,6,7,8,9}) {
                 CallbackCommandBackend backend;backend.failure=failure;
                 TglOwnedSfcCommandParameters packets{};
