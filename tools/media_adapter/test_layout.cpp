@@ -8810,11 +8810,43 @@ int main() {
                 hooks=tglBindOwnedVeboxModeReleaseHook<ModeCleanupScope>(hooks);
                 int admissionParams=0,admissionPass=0;
                 unsigned admissionCalls=0;bool admissionAllowed=false;
+                struct AdmissionBackend {
+                    std::array<uint8_t,0xd48> bytes{};unsigned initializes=0,destroys=0;
+                    int status=0;
+                    uintptr_t create() noexcept {return reinterpret_cast<uintptr_t>(bytes.data());}
+                    bool validate(uintptr_t p) noexcept {return p==reinterpret_cast<uintptr_t>(bytes.data());}
+                    int initialize(uintptr_t p) noexcept {
+                        assert(validate(p));++initializes;bytes.fill(0);return status;
+                    }
+                    void destroy(uintptr_t p) noexcept {assert(validate(p));++destroys;}
+                } admissionBackend;
+                TglExecutionOwner admissionExecution(admissionBackend);
+                assert(!admissionExecution.ensure());
+                bool runAdmissionStages=false;
                 auto admissionPolicy=[&](void* child,void* params,void* pass) noexcept {
                     assert(child==owner.constructedBase() && params==&admissionParams && pass==&admissionPass);
                     ++admissionCalls;owner.reset();
                     assert(cpu.live && owner.constructedBase()==child && !eventCount);
                     assert(owner.withPrivateChild([](void*) noexcept {assert(false);return 0;})==5);
+                    if(runAdmissionStages) {
+                        bool admitted=false;
+                        const int status=admissionExecution.withExecution([&](uintptr_t execution) noexcept {
+                            uintptr_t linked=0;std::memcpy(&linked,static_cast<uint8_t*>(child)+0x88,8);
+                            if(linked!=execution) return 5;
+                            return admissionExecution.withLeasedAdmissionBytes(execution,[&](auto& bytes) noexcept {
+                                TglVeboxAdmissionStagesInput input;
+                                input.prefix={true,true,true,true,1,uint64_t{1}<<12,64,16};input.pipe=1;
+                                std::array<uint8_t,0x28> ownedPass{};
+                                admitted=tglRunVeboxAdmissionStages(input,bytes,ownedPass,
+                                    [&]() noexcept {return !admissionExecution.initializeLeasedAdmission(execution);},
+                                    [](auto&) noexcept {},[]() noexcept {return false;},
+                                    [](auto&) noexcept {assert(false);},
+                                    [](auto& data) noexcept {data[0x17]=1;return true;});
+                                return 0;
+                            });
+                        });
+                        return !status && admitted;
+                    }
                     return admissionAllowed;
                 };
                 using AdmissionContext=TglOwnedVeboxAdmissionContext<std::remove_reference_t<decltype(owner)>,decltype(admissionPolicy)>;
@@ -8852,6 +8884,22 @@ int main() {
                     return 0;
                 })==0);
                 assert(!admissionCallback(owner.constructedBase(),&admissionParams,&admissionPass) && admissionCalls==2);
+                runAdmissionStages=true;
+                assert(owner.withPrivateChild([&](void* actual) noexcept {
+                    auto* field=static_cast<uint8_t*>(actual)+0x88;
+                    uintptr_t original=0;std::memcpy(&original,field,8);
+                    const auto execution=admissionExecution.get();std::memcpy(field,&execution,8);
+                    AdmissionScope scope(actual,admission);assert(scope.bound());
+                    assert(admissionCallback(actual,&admissionParams,&admissionPass));
+                    assert(admissionBackend.initializes==2 && admissionBackend.bytes[0x17]==1);
+                    admissionBackend.status=31;
+                    assert(!admissionCallback(actual,&admissionParams,&admissionPass));
+                    assert(admissionBackend.initializes==3 && !admissionBackend.destroys);
+                    // Unlink before releasing the poisoned execution owner.
+                    std::memcpy(field,&original,8);admissionExecution.reset();
+                    assert(admissionBackend.destroys==1);return 0;
+                })==0);
+                runAdmissionStages=false;
                 {
                     std::array<uint8_t,16> history{};history[0]=1;
                     TglOwnedSurfaceStorage source{};
