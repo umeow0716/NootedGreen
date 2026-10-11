@@ -6665,6 +6665,34 @@ static void testNativeResourceBoundary() {
                                         if(metadataStatus) assert(reportBackend.bytes[0x15]==0xa5 &&
                                             reportBackend.bytes[0x16]==0x5a);
                                     }
+                                    TglOwnedDescriptorOnlySurface historyShell;
+                                    assert(historyShell.withBorrowedHistoryCopyScope(owner,source,
+                                        [&](auto copy,auto view) noexcept -> int {
+                                            assert(!view());copy();
+                                            assert(view() && std::memcmp(view(),&source,sizeof(source))==0);
+                                            historyShell.reset();
+                                            assert(view() && std::memcmp(view(),&source,sizeof(source))==0);
+                                            assert(historyShell.withBorrowedHistoryCopyScope(owner,source,
+                                                [](auto,auto) noexcept -> int {assert(false);return 0;})==5);
+                                            copy();assert(owner.hasSurfaceLease(source));return -53;
+                                        })==-53);
+                                    assert(!historyShell.withDescriptor([](const auto&) noexcept {assert(false);}));
+                                    TglOwnedFfdiAllocationRequest shellRequest;
+                                    assert(tglPrepareOwnedFfdiAllocationRequest(source,3,1,{},shellRequest));
+                                    bool shellChanged=false;
+                                    assert(historyShell.prepare(shellRequest,shellChanged));
+                                    TglOwnedSurfaceStorage savedShell;
+                                    assert(historyShell.withDescriptor([&](const auto& view) noexcept {savedShell=view;}));
+                                    assert(historyShell.withBorrowedHistoryCopyScope(firstBacking,source,
+                                        [](auto,auto) noexcept -> int {assert(false);return 0;})==5);
+                                    assert(historyShell.withBorrowedHistoryCopyScope(owner,source,
+                                        [&](auto copy,auto view) noexcept -> int {
+                                            assert(view() && std::memcmp(view(),&savedShell,sizeof(savedShell))==0);
+                                            copy();assert(std::memcmp(view(),&source,sizeof(source))==0);return 17;
+                                        })==17);
+                                    assert(historyShell.withDescriptor([&](const auto& view) noexcept {
+                                        assert(std::memcmp(&view,&savedShell,sizeof(view))==0);
+                                    }));
                                     reportBackend.bytes[8]=0xa5;reportBackend.bytes[0x13]=0;
                                     assert(tglPrepareOwnedBackedFfdnReportPair(backedTargets,owner,
                                         static_cast<decltype(&owner)>(nullptr),static_cast<decltype(&owner)>(nullptr),

@@ -5085,6 +5085,33 @@ public:
             });
         return leased && consumed;
     }
+    // TGL757c98+1c0=12eb40 calls memcpy(destination,source,0x2a8).
+    // A descriptor shell may borrow those token bytes, never own/release them.
+    // Keep the actual source owner pinned across every copy and downstream
+    // synchronous consumer; restore the previous shell before leaving scope.
+    template<class SourceOwner,class Use>
+    int withBorrowedHistoryCopyScope(SourceOwner& owner,const TglOwnedSurfaceStorage& source,
+        Use use) noexcept {
+        if(busy_ || &source==&storage_ || !owner.hasSurfaceLease(source)) return 5;
+        const auto saved=storage_;const bool wasReady=ready_;
+        busy_=true;
+        struct Restore {
+            TglOwnedDescriptorOnlySurface& self;const TglOwnedSurfaceStorage& saved;bool ready;
+            ~Restore(){self.storage_=saved;self.ready_=ready;self.busy_=false;}
+        } restore{*this,saved,wasReady};
+        bool valid=true;
+        auto copy=[&]() noexcept {
+            if(!owner.hasSurfaceLease(source)) {valid=false;return;}
+            storage_=source;ready_=true;
+        };
+        auto view=[&]() noexcept -> const TglOwnedSurfaceStorage* {
+            return valid && ready_ && owner.hasSurfaceLease(source)?&storage_:nullptr;
+        };
+        static_assert(noexcept(use(copy,view)) && std::is_same_v<decltype(use(copy,view)),int>,
+            "borrowed history copy scope ABI");
+        const int result=use(copy,view);
+        return valid && owner.hasSurfaceLease(source)?result:5;
+    }
     const void* surfaceBinding() const noexcept {return &storage_;}
     bool readFfdnPriorCompression(bool& output) const noexcept {
         if(busy_) return false;
