@@ -6158,6 +6158,20 @@ bool tglApplyVeboxAdmissionSampleFallback(Execution& execution,
     }
     return true;
 }
+// donor1fbe8f..1fbef6, after qualified VP28 and DN eligibility acquisition.
+// The caller supplies platform-qualified DN request (not an ICL format list).
+// Source type is its first DWORD, NOT source124 sample or params138 flags.
+// Preserve native low-bit normalization and overwrite whole destination bytes.
+// This tail alone neither invokes VP28 nor admits an unfinished SFC stage.
+template<class Execution>
+void tglPublishVeboxSfcAdmissionFlags(Execution& execution,uint8_t qualifiedDn,
+    uint32_t sourceType) noexcept {
+    static_assert(TglAdmissionExecutionExtent<Execution>::value>=0x18,"SFC admission flag extents");
+    execution[0x11]=qualifiedDn&1;
+    execution[0x17]=(sourceType==1 || sourceType==2)?1:0;
+    execution[0x0f]=((execution[0x0f]&1) || execution[0x11] || execution[0x17])?1:0;
+}
+
 // donor1fbefd..1fbf21. The caller supplies the final admission after any
 // pipe1 work/flag publication. This does not skip that work or authorize SFC.
 constexpr bool tglVeboxAdmissionResult(uint8_t params138,uint8_t pass08,

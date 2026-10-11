@@ -45,6 +45,19 @@ struct TestFeatureExecutionOwner {
 };
 static void testTrackedCpuOwner() {
     {
+        std::array<uint8_t,0xd48> execution{};
+        for(unsigned old=0;old<256;++old) for(unsigned dn=0;dn<256;++dn)
+            for(uint32_t type : {0u,1u,2u,3u,0xffffffffu}) {
+                execution[0x0e]=0x93;execution[0x10]=0x74;execution[0x12]=0x51;execution[0x18]=0xa5;
+                execution[0x0f]=static_cast<uint8_t>(old);execution[0x11]=0xff;execution[0x17]=0xff;
+                tglPublishVeboxSfcAdmissionFlags(execution,static_cast<uint8_t>(dn),type);
+                const bool classified=type==1 || type==2;
+                assert(execution[0x11]==(dn&1) && execution[0x17]==classified);
+                assert(execution[0x0f]==bool((old&1)||(dn&1)||classified));
+                assert(execution[0x0e]==0x93 && execution[0x10]==0x74 && execution[0x12]==0x51 && execution[0x18]==0xa5);
+            }
+    }
+    {
         std::array<uint8_t,11> nativePass{};nativePass[7]=0x73;nativePass[9]=0x91;
         TglVeboxAdmissionPassByte pass(nativePass[8]);
         TglVeboxAdmissionStagesInput input;
@@ -8947,6 +8960,7 @@ int main() {
                     if(runAdmissionStages) {
                         TglOwnedSurfaceStorage source{},target{};
                         uint32_t width=64,height=16;
+                        const uint32_t sourceType=1;std::memcpy(source.prefix.data(),&sourceType,4);
                         std::memcpy(source.prefix.data()+0xd8,&width,4);
                         std::memcpy(source.prefix.data()+0xdc,&height,4);
                         uint64_t sku=uint64_t{1}<<12;
@@ -8986,7 +9000,10 @@ int main() {
                                     [&]() noexcept {return !admissionExecution.initializeLeasedAdmission(execution);},
                                     [](auto&) noexcept {},
                                     [](auto&) noexcept {assert(false);},
-                                    [](auto& data) noexcept {data[0x17]=1;return true;});
+                                    [&](auto& data) noexcept {
+                                        uint32_t type=0;std::memcpy(&type,source.prefix.data(),4);
+                                        tglPublishVeboxSfcAdmissionFlags(data,0,type);return true;
+                                    });
                                 return 0;
                             });
                         });
