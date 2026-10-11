@@ -7820,6 +7820,32 @@ bool tglBindOwnedVpCompressionEntry(void* child,TglOwnedVpEntrySet& target) noex
     candidate.compression=&TglOwnedVpCompressionCallback<Resolve>::compression;
     target=candidate;return true;
 }
+// Caller retains VP, output and packet backing throughout this CPU-only
+// assembly. Both resolver scopes expire before returning to that caller.
+template<class Surface,size_t PacketBytes,class Read,class Invoke,class Use>
+int tglWithOwnedVpPlatformCompressionAssembly(TglOwnedVpSfcCallerStorage& vp,
+    const Surface& output,std::array<uint8_t,PacketBytes>& packet,uintptr_t settings,
+    const TglNativeVpCompressionBinding& binding,Read read,Invoke invoke,
+    const TglOwnedVpEntrySet& base,Use use) noexcept {
+    if(base.platformSetup || base.platformPacket || base.platformSend || base.compression) return 5;
+    using Compression=TglOwnedVpCompressionContext<Surface,Read,Invoke,PacketBytes>;
+    TglOwnedVpPlatformPacketContext platform(vp,packet);
+    Compression compression(vp,output,packet,settings,binding,read,invoke);
+    void* child=vp.bytes.data();
+    using PlatformResolve=TglOwnedVpSfcResolve<TglOwnedVpPlatformPacketContext>;
+    using CompressionResolve=TglOwnedVpSfcResolve<Compression>;
+    TglOwnedVpSfcScopedContext<TglOwnedVpPlatformPacketContext> platformScope(child,platform);
+    TglOwnedVpSfcScopedContext<Compression> compressionScope(child,compression);
+    if(!platformScope.bound() || !compressionScope.bound()) return 5;
+    TglOwnedVpEntrySet additions;
+    if(!tglBindOwnedVpPlatformAdmissionEntries<PlatformResolve>(child,additions) ||
+       !tglBindOwnedVpPlatformPacketEntry<PlatformResolve>(child,additions) ||
+       !tglBindOwnedVpCompressionEntry<CompressionResolve>(child,additions)) return 5;
+    auto combined=base;
+    if(!combined.appendDisjoint(additions)) return 5;
+    static_assert(noexcept(use(child,combined)),"VP platform/compression assembly ABI");
+    return use(child,combined);
+}
 struct TglOwnedSfcGeometryInput {
     uint32_t inputFormat=0,outputFormat=0,inputFrameMode=0,rotation=0;
     uint32_t inputHeight=0,inputWidth=0,outputHeight=0,outputWidth=0;

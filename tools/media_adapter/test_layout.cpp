@@ -10551,6 +10551,28 @@ int main() {
             return false;
         };
         using Context=TglOwnedVpCompressionContext<TglOwnedSurfaceStorage,decltype(inputRead),decltype(invoke),0xf8>;
+        {
+            const auto before=packet;
+            TglOwnedVpEntrySet base,expired;
+            base.compressionFormat=+[](void*,uint32_t) noexcept {return true;};
+            assert(tglWithOwnedVpPlatformCompressionAssembly(vp,surface,packet,settingsAddress,
+                binding,inputRead,invoke,base,[&](void* child,const auto& combined) noexcept {
+                    assert(combined.compressionFormat==base.compressionFormat &&
+                        combined.missingMask()==(base.missingMask()&~((1U<<21)|(1U<<24)|(1U<<25)|(1U<<26))));
+                    combined.platformPacket(child,nullptr,packet.data());
+                    assert(combined.compression(child,nullptr,&surface,packet.data())==5);
+                    expired=combined;return 31;
+                })==31);
+            for(size_t i=0;i<packet.size();++i) assert(packet[i]==((i>=4 && i<8)?0:before[i]));
+            const auto after=packet;
+            expired.platformPacket(vp.bytes.data(),nullptr,packet.data());
+            assert(expired.compression(vp.bytes.data(),settings.data(),&surface,packet.data())==5 && packet==after);
+            assert(tglWithOwnedVpPlatformCompressionAssembly(vp,surface,packet,settingsAddress,
+                binding,inputRead,invoke,expired,[](void*,const auto&) noexcept -> int {
+                    assert(false);return 0;
+                })==5);
+            packet=before;
+        }
         Context context(vp,surface,packet,settingsAddress,binding,inputRead,invoke);
         struct Reentry {
             Context* context;
