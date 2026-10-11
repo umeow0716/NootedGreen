@@ -16888,6 +16888,20 @@ public:
                 [&](auto& owner) noexcept -> int {return use(scope,owner);});
         });
     }
+    // Pin before entering the consumer, so it can move ownership into Frame
+    // without recursively locking the context registry. Scope never escapes.
+    template<class Owners,class Use>
+    int withPinnedFrameScope(typename Registry::Ticket ticket,uintptr_t physical,
+        uintptr_t context,Owners& owners,Use use) noexcept {
+        if(!context) return 5;
+        return withFrameScope(ticket,physical,[&](auto& scope) noexcept -> int {
+            auto lease=owners.pin(binding_.image,physical,ticket.generation,context);
+            static_assert(noexcept(use(scope,std::move(lease))) &&
+                std::is_same_v<decltype(use(scope,std::move(lease))),int>);
+            if(!lease.get()) return 5;
+            return use(scope,std::move(lease));
+        });
+    }
     // Keep the generation captured at initialization: resolving by pointer
     // alone would let a delayed frame attach to a recycled physical address.
     // Factory slot12 (15b01..15c0d) must remain usable while frames are pending:

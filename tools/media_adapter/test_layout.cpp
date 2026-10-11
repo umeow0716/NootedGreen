@@ -12387,6 +12387,17 @@ static void testRetainedVeboxFrames() {
             assert(callbacks.withOwnedFrameScope(success.ticket,0x8000,0x20008,owners,useOwner)==5 && !ownerCalls);
             assert(callbacks.withOwnedFrameScope(success.ticket,0x8000,0x20000,owners,useOwner)==31 && ownerCalls==1);
             TglNativeRemovedContextBatch<1> removed;removed.valid=true;removed.count=1;removed.contexts[0]=0x20000;
+            decltype(owners)::ContextLease retainedContext;
+            auto pinOwner=[&](auto& scope,auto&& lease) noexcept -> int {
+                assert(lease.get() && lease.get()->context()==0x20000);
+                return scope.withNativeRequestItem(lease.get()->context(),[&](auto&) noexcept -> int {
+                    retainedContext=std::move(lease);return 31;
+                });
+            };
+            assert(callbacks.withPinnedFrameScope(success.ticket,0x8000,0x20008,owners,pinOwner)==5 && !retainedContext.get());
+            assert(callbacks.withPinnedFrameScope(success.ticket,0x8000,0x20000,owners,pinOwner)==31 && retainedContext.get());
+            assert(owners.reconcileSuccessfulRemoval(image,0x8000,success.ticket.generation,removed)==5 && !destroyed);
+            retainedContext={};
             // CPU fixture only: models already-successful native removal.
             assert(owners.reconcileSuccessfulRemoval(image,0x8000,success.ticket.generation,removed)==0 && destroyed==1);
         }
