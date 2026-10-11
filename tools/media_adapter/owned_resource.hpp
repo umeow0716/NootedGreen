@@ -5175,6 +5175,22 @@ int tglWithOwnedDescriptorFfdiBatch(std::array<TglOwnedDescriptorOnlySurface,Cou
         });
 }
 
+// Allocation-disabled 1f7b06 -> 1f7e52 edge for an existing descriptor slot0.
+// Pin the secondary and destination through the synchronous next stage;
+// do not call prepare, copy the primary frame, or invent execution flags.
+template<class Owner,class Use>
+int tglWithOwnedDescriptorFfdiSecondary(TglOwnedDescriptorOnlySurface& target,
+    Owner& secondary,Use use) noexcept {
+    static_assert(noexcept(use(std::declval<const TglOwnedSurfaceStorage&>(),
+        std::declval<const TglOwnedSurfaceStorage&>())),"FFDI secondary consumer ABI");
+    int result=5;
+    const bool sourceLeased=secondary.withSurface([&](const auto& source) noexcept {
+        if(!target.publishFfdiSecondaryFrom(secondary,source)) return;
+        target.withDescriptor([&](const auto& output) noexcept {result=use(source,output);});
+    });
+    return sourceLeased?result:5;
+}
+
 // Two FFDN allocations (1f7fd1), each followed by history handling and
 // per-slot metadata publication. Earlier successful allocations/publications
 // are not rolled back on a later failure. Copy destination is child1b8,

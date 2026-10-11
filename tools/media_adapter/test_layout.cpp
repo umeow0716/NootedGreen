@@ -5712,6 +5712,27 @@ static void testNativeResourceBoundary() {
                     }));
                 }
                 assert(fixture.allocations==allocationCount);
+                unsigned secondaryConsumers=0;
+                assert(tglWithOwnedDescriptorFfdiSecondary(targets[0],owner,
+                    [&](const auto& source,const auto& output) noexcept {
+                        ++secondaryConsumers;
+                        assert(&source==surface && owner.hasSurfaceLease(source));
+                        owner.reset();assert(owner.ensure(key)==5);
+                        targets[0].reset();
+                        assert(!targets[0].withDescriptor([](const auto&) noexcept {}));
+                        assert(tglWithOwnedDescriptorFfdiSecondary(targets[0],owner,
+                            [](const auto&,const auto&) noexcept {assert(false);return 0;})==5);
+                        uint32_t actual=0,wanted=0;
+                        std::memcpy(&actual,output.resource.data()+0x200-resourceBase,4);
+                        std::memcpy(&wanted,source.resource.data()+0x200-resourceBase,4);
+                        assert(actual==wanted);return 31;
+                    })==31 && secondaryConsumers==1);
+                TglOwnedDescriptorOnlySurface unprepared;
+                assert(tglWithOwnedDescriptorFfdiSecondary(unprepared,owner,
+                    [](const auto&,const auto&) noexcept {assert(false);return 0;})==5);
+                assert(owner.withSurface([](const auto&) noexcept {}));
+                assert(targets[0].withDescriptor([](const auto&) noexcept {}));
+                assert(fixture.allocations==allocationCount);
             }
             for(size_t failAt=0;failAt<=2;++failAt) for(bool equalPitch:{false,true}) {
                 bool valid=true;size_t allocations=0,publications=0,copies=0;
