@@ -8126,9 +8126,22 @@ public:
         if(busy_) return false;
         Guard guard(busy_);clear();
         if(!storage_.initializeBorrowed(os,renderHal,mhw,binding,read) ||
-           !avs_.initialize() || !state_.initializeVpPass(storage_)) {
+           !avs_.initialize()) {
             clear();return false;
         }
+        // Use the same void VP10 entry as the eventual owned table. Native
+        // initialization has no return status; the scoped owner keeps that
+        // separate and must verify it before marking the graph ready.
+        using InitContext=TglOwnedVpPassInitContext<StateBackend>;
+        using Init=TglOwnedVpPassInitCallback<TglOwnedVpSfcResolve<InitContext>>;
+        InitContext initialization(storage_,state_);
+        {
+            void* child=storage_.bytes.data();
+            TglOwnedVpSfcScopedContext<InitContext> scope(child,initialization);
+            if(!scope.bound()) {clear();return false;}
+            Init::initialize(child);
+        }
+        if(initialization.status()) {clear();return false;}
         storage_.setCallerFields(channel,performance);ready_=true;return true;
     }
     // CPU teardown only: the enclosing runtime owner still has to establish
