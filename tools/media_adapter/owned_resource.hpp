@@ -1543,6 +1543,45 @@ struct TglNativeVeboxParentView {
     }
 };
 
+// Exact TGL226e6 forwards wrapper+10/index to FinishFenceEvent. This exposes
+// its real IOReturn (OS64df0 discards it), NOT a completion certificate: reset
+// and termination can satisfy the kernel predicate without successful work.
+struct TglNativeVideoFenceWaitBinding {
+    uintptr_t image=0,entry=0;
+    inline static constexpr std::array<uint8_t,26> anchor{
+        0x55,0x48,0x89,0xe5,0x48,0x83,0x7f,0x28,0x00,0x74,0x0f,
+        0x39,0x77,0x40,0x76,0x0a,0x48,0x8b,0x7f,0x10,0x5d,
+        0xe9,0xda,0xb9,0x21,0x00};
+    template<class Read,class Qualify,class Executable>
+    bool resolve(uintptr_t candidate,Read read,Qualify qualify,Executable executable) noexcept {
+        *this={};std::array<uint8_t,anchor.size()> actual{};
+        if(!candidate || candidate>UINTPTR_MAX-0x226e6-anchor.size() || !qualify(candidate) ||
+           !executable(candidate+0x226e6,anchor.size()) ||
+           !read(candidate+0x226e6,actual.data(),actual.size()) || actual!=anchor) return false;
+        image=candidate;entry=candidate+0x226e6;return true;
+    }
+    // Caller holds wrapper/context/image leases and serialization throughout.
+    // No synthetic timeout: the export ignores the apparent EDX/ECX timeout.
+    template<class Read,class Invoke>
+    int wait(uintptr_t wrapper,uint32_t index,Read read,Invoke invoke) const noexcept {
+        static_assert(noexcept(invoke(uintptr_t{},uintptr_t{},uint32_t{})) &&
+            std::is_same_v<decltype(invoke(uintptr_t{},uintptr_t{},uint32_t{})),int>);
+        uintptr_t events=0,context=0;uint32_t count=0;
+        if(!image || image>UINTPTR_MAX-0x226e6 || entry!=image+0x226e6 ||
+           !wrapper || wrapper>UINTPTR_MAX-0x44 ||
+           !read(wrapper+0x28,&events,8) || !events ||
+           !read(wrapper+0x40,&count,4) || index>=count ||
+           !read(wrapper+0x10,&context,8) || !context) return 5;
+        return invoke(entry,wrapper,index);
+    }
+};
+struct TglNativeVideoFenceWaitInvoker {
+    int operator()(uintptr_t entry,uintptr_t wrapper,uint32_t index) const noexcept {
+        using Native=int(*)(void*,uint32_t);
+        return reinterpret_cast<Native>(entry)(reinterpret_cast<void*>(wrapper),index);
+    }
+};
+
 // Native132a15 calls virtual18 then132bb0 for each of renderer910/918/920.
 // 132bb0 decrements native7f3218 BEFORE dispatching virtual08: an owned
 // deleter alone cannot make that accounting safe. Publish only into the two

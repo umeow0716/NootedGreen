@@ -11306,6 +11306,35 @@ static void testRetainedVeboxFrames() {
 
 int main() {
     {
+        constexpr uintptr_t image=0x100000,wrapper=0x300000;
+        auto bytes=TglNativeVideoFenceWaitBinding::anchor;
+        uintptr_t events=0x400000,context=0x500000;uint32_t count=2;
+        auto read=[&](uintptr_t p,void* out,size_t n) noexcept {
+            if(p==image+0x226e6 && n==bytes.size()) {std::memcpy(out,bytes.data(),n);return true;}
+            if(p==wrapper+0x28 && n==8) {std::memcpy(out,&events,n);return true;}
+            if(p==wrapper+0x10 && n==8) {std::memcpy(out,&context,n);return true;}
+            if(p==wrapper+0x40 && n==4) {std::memcpy(out,&count,n);return true;}
+            return false;
+        };
+        auto qualify=[](uintptr_t p) noexcept {return p==image;};
+        auto executable=[](uintptr_t p,size_t n) noexcept {return p==image+0x226e6 && n==26;};
+        TglNativeVideoFenceWaitBinding binding;
+        for(size_t i=0;i<bytes.size();++i) {
+            bytes[i]^=1;assert(!binding.resolve(image,read,qualify,executable));bytes[i]^=1;
+        }
+        assert(binding.resolve(image,read,qualify,executable));
+        unsigned calls=0;int status=-17;
+        auto invoke=[&](uintptr_t entry,uintptr_t owner,uint32_t index) noexcept -> int {
+            assert(entry==image+0x226e6 && owner==wrapper && index==1);++calls;return status;
+        };
+        assert(binding.wait(wrapper,2,read,invoke)==5 && !calls);
+        events=0;assert(binding.wait(wrapper,1,read,invoke)==5 && !calls);events=0x400000;
+        context=0;assert(binding.wait(wrapper,1,read,invoke)==5 && !calls);context=0x500000;
+        assert(binding.wait(wrapper,1,read,invoke)==-17 && calls==1);
+        status=0;assert(binding.wait(wrapper,1,read,invoke)==0 && calls==2);
+        // Neither result retires a frame; no native/GPU operation in this test.
+    }
+    {
         struct Api {
             std::array<unsigned,6>& refs;
             uintptr_t denied=0;
