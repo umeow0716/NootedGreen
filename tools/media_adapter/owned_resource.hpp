@@ -4493,8 +4493,9 @@ inline bool tglPrepareOwnedFfdiFrameMetadata(TglOwnedSurfaceStorage& target,
 }
 enum class TglOwnedFfdnHistoryDecision { Keep, Invalidate, CopyPrevious };
 // ICL1f81c1..1f8311: frame rectangles, type0, compression138 and DWORDb0.
-// Native also copies QWORD90; its ownership/classification is not closed, so leave
-// it out of CPU metadata and retain access only through the leased source.
+// QWORD90 is the DN parameter pointer (tglAdmitOwnedDndiSource); its copied
+// target lifetime is not closed. Keep it out of CPU metadata: a surface
+// lease alone does not pin the separate tracked parameter owner.
 // No rotation290/resource ownership transfer is proven for this FFDN tail.
 inline bool tglPrepareOwnedFfdnFrameMetadata(TglOwnedSurfaceStorage& target,
     const TglOwnedSurfaceStorage& source) noexcept {
@@ -4935,7 +4936,7 @@ int tglWithAllocatedOwnedFfdiBatch(Owner& input,Owner* execution,Owner* secondar
 template<class Owner,class Allocate,class Copy,class Publish>
 int tglWithAllocatedOwnedFfdnPair(Owner& input,Owner* previous,Owner* copyDestination,
     TglOwnedFfdnCompressionSelection compression,bool& referenceValid,bool executionFlag13,
-    Allocate allocate,Copy copy,Publish publish) noexcept {
+    uint8_t& execution15,uint8_t& execution16,Allocate allocate,Copy copy,Publish publish) noexcept {
     static_assert(noexcept(allocate(size_t{},std::declval<const TglOwnedFfdnAllocationRequest&>(),
         std::declval<bool&>(),std::declval<uint32_t&>())),"FFDN pair allocation ABI");
     static_assert(noexcept(copy(std::declval<const TglOwnedSurfaceStorage&>(),
@@ -4965,6 +4966,13 @@ int tglWithAllocatedOwnedFfdnPair(Owner& input,Owner* previous,Owner* copyDestin
             TglOwnedSurfaceStorage metadata;
             if(!tglPrepareOwnedFfdnFrameMetadata(metadata,*views[0])) return 5;
             publish(index,*views[0],static_cast<const TglOwnedSurfaceStorage&>(metadata));
+            //1f8355..1f8386: after metadata publication, only changed slots
+            // update both whole bytes. Preserve previous successful updates
+            // if the next allocation fails; unchanged does not restore them.
+            if(changed) {
+                execution15=compression.compressed?1u:0u;
+                execution16=static_cast<uint8_t>(compression.mode);
+            }
         }
         return 0;
     });

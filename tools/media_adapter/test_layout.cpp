@@ -5406,8 +5406,10 @@ static void testNativeResourceBoundary() {
                     [](const auto&,const auto&,size_t,uint8_t,uint8_t) noexcept {assert(false);return 0;})==5);
             for(size_t failAt=0;failAt<=2;++failAt) for(bool equalPitch:{false,true}) {
                 bool valid=true;size_t allocations=0,publications=0,copies=0;
+                uint8_t execution15=0xa5,execution16=0x5a;
                 uint32_t previousPitch=0;std::memcpy(&previousPitch,surface->prefix.data()+0xe0,4);
                 const int result=tglWithAllocatedOwnedFfdnPair(owner,&owner,&destination,{true,1},valid,true,
+                    execution15,execution16,
                     [&](size_t index,const auto& request,bool& changed,uint32_t& pitch) noexcept {
                         assert(index==allocations++ && request.type==1 && publications==index);
                         changed=true;pitch=equalPitch?previousPitch:previousPitch^1u;
@@ -5429,20 +5431,35 @@ static void testNativeResourceBoundary() {
                 assert(result==(failAt<2?77:0) && allocations==(failAt<2?failAt+1:2));
                 assert(publications==completed && copies==(equalPitch?completed:0));
                 assert(valid==(equalPitch || completed==0));
+                assert(execution15==(completed?1:0xa5) && execution16==(completed?1:0x5a));
                 assert(owner.withSurface([](const auto&) noexcept {}));
                 assert(destination.withSurface([](const auto&) noexcept {}));
             }
             for(bool hasPrevious:{false,true}) {
                 bool valid=true;unsigned allocations=0,publications=0;
+                uint8_t execution15=0xa5,execution16=0x5a;
                 uint32_t pitchValue=0;std::memcpy(&pitchValue,surface->prefix.data()+0xe0,4);
                 assert(tglWithAllocatedOwnedFfdnPair(owner,hasPrevious?&owner:nullptr,
-                    static_cast<decltype(&owner)>(nullptr),{false,0},valid,true,
+                    static_cast<decltype(&owner)>(nullptr),{false,0},valid,true,execution15,execution16,
                     [&](size_t,const auto&,bool& changed,uint32_t& pitch) noexcept {
                         ++allocations;changed=true;pitch=pitchValue;return 0;
                     },[](const auto&,const auto&) noexcept {assert(false);},
                     [&](size_t,const auto&,const auto&) noexcept {++publications;})==(hasPrevious?5:0));
                 assert(allocations==(hasPrevious?1u:2u) && publications==(hasPrevious?0u:2u));
                 assert(valid==hasPrevious); // missing required destination is not invented history invalidation
+                assert(execution15==(hasPrevious?0xa5:0) && execution16==(hasPrevious?0x5a:0));
+            }
+            {
+                bool valid=true;uint8_t flag=0xa5,mode=0x5a;unsigned published=0;
+                assert(tglWithAllocatedOwnedFfdnPair(owner,static_cast<decltype(&owner)>(nullptr),
+                    static_cast<decltype(&owner)>(nullptr),{true,0x101},valid,false,flag,mode,
+                    [](size_t,const auto&,bool& changed,uint32_t& pitch) noexcept {
+                        changed=false;pitch=0;return 0;
+                    },[](const auto&,const auto&) noexcept {assert(false);},
+                    [&](size_t,const auto&,const auto&) noexcept {
+                        ++published;assert(flag==0xa5 && mode==0x5a);
+                    })==0);
+                assert(published==2 && valid && flag==0xa5 && mode==0x5a);
             }
             bool caught=false;
             try {
