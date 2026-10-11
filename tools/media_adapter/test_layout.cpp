@@ -8207,14 +8207,25 @@ int main() {
             struct Cpu {
                 alignas(8) std::array<uint8_t,0xc00> bytes{};
                 bool live=false;
+                std::array<unsigned,2>* releaseOrder=nullptr;
+                unsigned* releaseCount=nullptr;
+                unsigned releaseId=0;
                 uintptr_t allocate(size_t n) {
                     assert(!live && (n==0xf8 || n==0xc00));live=true;
                     return reinterpret_cast<uintptr_t>(bytes.data());
                 }
                 void release(uintptr_t p) noexcept {
                     assert(live && p==reinterpret_cast<uintptr_t>(bytes.data()));live=false;
+                    if(releaseOrder) {
+                        assert(releaseCount && *releaseCount<releaseOrder->size());
+                        (*releaseOrder)[(*releaseCount)++]=releaseId;
+                    }
                 }
             } stateCpu,avsCpu;
+            std::array<unsigned,2> releaseOrder{};unsigned releaseCount=0;
+            stateCpu.releaseOrder=avsCpu.releaseOrder=&releaseOrder;
+            stateCpu.releaseCount=avsCpu.releaseCount=&releaseCount;
+            stateCpu.releaseId=2;avsCpu.releaseId=1;
             struct Binding {
                 uintptr_t image=0x100000;
                 bool validateConstructedObject(uintptr_t,uintptr_t,
@@ -8315,6 +8326,7 @@ int main() {
                 const int result=graph.withLeasedCallbackPass(0x1000,0x2000,0x3000,
                     0x4000,0x6000,0x7000,{},&data,
                     [&](uintptr_t address,void* out,size_t size) noexcept {
+                        assert(!graph.tryReset());
                         graph.reset();assert(stateCpu.live && avsCpu.live);
                         assert(graph.prepare([](auto&,auto&,auto&) noexcept {return 0;})==5);
                         return read(address,out,size);
@@ -8403,6 +8415,10 @@ int main() {
                     std::memcpy(&coefficients,static_cast<uint8_t*>(child)+0x38,8);
                     assert(!coefficients);++sent;return 89;
                 })==89 && sent==1);
+            assert(graph.tryReset());
+            assert(!stateCpu.live && !avsCpu.live && releaseCount==2);
+            assert((releaseOrder==std::array<unsigned,2>{1,2}));
+            assert(graph.tryReset() && releaseCount==2); // Idempotent teardown.
         }
         for(fail=1;fail<=total;++fail) {
             calls=0;prepared.at9a0=17;reference=19;

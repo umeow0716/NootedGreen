@@ -7838,7 +7838,9 @@ template<class StateBackend,class AvsBackend> class TglOwnedVpSfcCpuGraph {
     }
     void clear() noexcept {
         ready_=false;
-        state_.reset();avs_.reset();storage_.bytes.fill(0);
+        // Donor 1ddb7e..1ddba1 releases AVS before state+938. Use our
+        // tracked owners, never its native free/deleting destructor.
+        avs_.reset();state_.reset();storage_.bytes.fill(0);
     }
     struct Guard {
         bool& flag;
@@ -7861,7 +7863,13 @@ public:
         }
         storage_.setCallerFields(channel,performance);ready_=true;return true;
     }
-    void reset() noexcept {if(!busy_){Guard guard(busy_);clear();}}
+    // CPU teardown only: the enclosing runtime owner still has to establish
+    // GPU retirement before calling this or releasing the VP allocation.
+    bool tryReset() noexcept {
+        if(busy_) return false;
+        Guard guard(busy_);clear();return true;
+    }
+    void reset() noexcept {(void)tryReset();}
     template<class Prepare> int prepare(Prepare prepare) noexcept {
         static_assert(noexcept(prepare(storage_,state_,avs_)),"CPU graph preparation ABI");
         if(!ready_ || busy_) return 5;
