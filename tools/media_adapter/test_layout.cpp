@@ -5307,6 +5307,28 @@ static void testNativeResourceBoundary() {
         assert(owner.withSurface([](const auto&){}));
         {
             struct Info {uint32_t marker=0;};
+            assert(owner.withSurface([&](const auto& captured) noexcept {
+                uint32_t w=17,h=19;unsigned reads=0;
+                const auto read=[&](const auto& view,Info&) noexcept {
+                    ++reads;assert(&view==&captured);
+                    owner.reset();assert(owner.ensure(key)==5);return 0;
+                };
+                const auto boundary=[](const Info&,uint32_t& width,uint32_t& height,bool) noexcept {
+                    width=1920;height=1080;return 0;
+                };
+                assert(tglPrepareOwnedStatisticsBoundary<Info>(owner,1,
+                    []() noexcept {assert(false);return 0;},read,boundary,w,h)==5);
+                assert(reads==0 && w==17 && h==19);
+                assert(tglPrepareOwnedStatisticsBoundary<Info>(owner,1,
+                    []() noexcept {assert(false);return 0;},read,boundary,w,h,
+                    TglOwnedStatisticsBoundaryNoFinish{},&captured)==0);
+                assert(reads==1 && w==1920 && h==1080 && owner.hasSurfaceLease(captured));
+                TglOwnedSurfaceStorage foreign{};
+                assert(tglPrepareOwnedStatisticsBoundary<Info>(owner,1,
+                    []() noexcept {assert(false);return 0;},read,boundary,w,h,
+                    TglOwnedStatisticsBoundaryNoFinish{},&foreign)==5);
+                assert(reads==1 && owner.hasSurfaceLease(captured));
+            }));
             for(uint8_t flag:{uint8_t(0),uint8_t(1),uint8_t(2),uint8_t(3)})
             for(uint8_t query:{uint8_t(0),uint8_t(1),uint8_t(2),uint8_t(3)})
             for(int failure:{0,1,2,3}) {
@@ -5564,6 +5586,31 @@ static void testNativeResourceBoundary() {
                 uintptr_t allocationSource=reinterpret_cast<uintptr_t>(surface);
                 std::memcpy(child.data()+0x1b0,&allocationSource,8);
                 assert(tglWithOwnedVeboxAllocationFrame(owner,childOwner,execution,allocateFrame)==31 && allocationFrames==1);
+                for(int finishStatus:{0,31}) {
+                    uint32_t width=17,height=19;unsigned completed=0;
+                    assert(tglWithOwnedVeboxAllocationFrame(owner,childOwner,execution,
+                        [&](void* actual,uintptr_t executionView,const auto& sourceView) noexcept {
+                            struct Info {uint32_t width=0,height=0;};
+                            return tglPrepareOwnedStatisticsBoundary<Info>(owner,1,
+                                []() noexcept {assert(false);return 0;},
+                                [&](const auto& view,Info& info) noexcept {
+                                    assert(&view==&sourceView && actual==child.data());
+                                    assert(execution.hasExecutionLease(executionView));
+                                    info={1920,1080};return 0;
+                                },[](const Info& info,uint32_t& w,uint32_t& h,bool di) noexcept {
+                                    assert(di);w=info.width;h=info.height;return 0;
+                                },width,height,[&](uint32_t,uint32_t) noexcept {
+                                    ++completed;
+                                    assert(owner.hasSurfaceLease(sourceView));
+                                    assert(childOwner.hasPrivateChildLease(reinterpret_cast<uintptr_t>(actual)));
+                                    assert(execution.hasExecutionLease(executionView));
+                                    return finishStatus;
+                                },&sourceView);
+                        })==finishStatus);
+                    assert(completed==1 && width==(finishStatus?17u:1920u));
+                    assert(height==(finishStatus?19u:1080u));
+                    assert(!childOwner.busy && !execution.busy && owner.surface()==surface);
+                }
                 assert(owner.surface()==surface && !childOwner.busy && !execution.busy);
                 allocationSource=0;std::memcpy(child.data()+0x1b0,&allocationSource,8);
                 assert(tglWithOwnedVeboxFeatureFrame(owner,destination,childOwner,execution,

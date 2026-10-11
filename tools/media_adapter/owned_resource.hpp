@@ -4022,10 +4022,10 @@ template<class Info,class Owner,class QueryDi,class ReadInfo,class Boundary,
     class Finish=TglOwnedStatisticsBoundaryNoFinish>
 int tglPrepareOwnedStatisticsBoundary(Owner& owner,uint8_t execution13,
     QueryDi queryDi,ReadInfo readInfo,Boundary boundary,uint32_t& width,uint32_t& height,
-    Finish finish={}) noexcept {
+    Finish finish={},const TglOwnedSurfaceStorage* captured=nullptr) noexcept {
     static_assert(noexcept(queryDi()),"statistics DI query ABI");
     int result=5;
-    const bool leased=owner.withSurface([&](const auto& source) noexcept {
+    const auto consume=[&](const auto& source) noexcept {
         if(!owner.hasSurfaceLease(source)) return;
         const bool di=(execution13&1)!=0 || (queryDi()&1)!=0;
         Info info{};
@@ -4045,7 +4045,13 @@ int tglPrepareOwnedStatisticsBoundary(Owner& owner,uint8_t execution13,
         result=finish(candidateWidth,candidateHeight);
         if(!owner.hasSurfaceLease(source)) {result=5;return;}
         if(!result) {width=candidateWidth;height=candidateHeight;}
-    });
+    };
+    if(captured) {
+        if(!owner.hasSurfaceLease(*captured)) return 5;
+        consume(*captured);
+        return owner.hasSurfaceLease(*captured)?result:5;
+    }
+    const bool leased=owner.withSurface(consume);
     return leased?result:5;
 }
 
