@@ -3849,6 +3849,15 @@ public:
         busy_=false;
         return valid;
     }
+    bool matchesPrivateVtableHooks(const std::array<uintptr_t,20>& hooks) const noexcept {
+        if(!ready_ || !tableInstalled_) return false;
+        uintptr_t current=0;
+        std::memcpy(&current,reinterpret_cast<const void*>(storage_.get()),sizeof(current));
+        if(current!=table_.addressPoint()) return false;
+        for(size_t i=0;i<hooks.size();++i)
+            if(table_.entries[TglOwnedVeboxVtable::required[i]/8]!=hooks[i]) return false;
+        return true;
+    }
     // Owned non-deleting lifecycle: invalidate callbacks and destroy members,
     // but retain the enclosing allocation for a later deleting lifecycle.
     bool destroyInPlace() noexcept {return teardown(false);}
@@ -15760,6 +15769,28 @@ bool tglBindOwnedVeboxCompleteHooks(void* child,std::array<uintptr_t,20>& hooks)
        !ProducerResolve::get(child) || !ModeResolve::get(child)) return false;
     return tglBuildOwnedVeboxCompleteHooks<LifetimeResolve,AdmissionResolve,AllocationResolve,
         ProducerResolve,ModeResolve,FormatRead>(child,hooks);
+}
+
+// Execution half of the two-phase catalogue. The caller installed Build's
+// same typed addresses and now holds native child/report leases. Keep every
+// producer resolver alive through the native consumer, and verify that the
+// actual private table still names this complete frame's callbacks.
+template<class LifetimeResolve,class AdmissionResolve,class AllocationResolve,
+    class ModeResolve,class FormatRead,class Frame,class ChildOwner,class ExecutionOwner,
+    class Read,class PacketAdmit,class ProduceCsc,class Use>
+int tglWithOwnedVeboxFrameHookBindings(Frame& frame,ChildOwner& child,ExecutionOwner& execution,
+    uintptr_t dnParams,Read read,PacketAdmit admitPackets,ProduceCsc produceCsc,Use use) noexcept {
+    return tglWithOwnedVeboxFrameProducers(frame,child,execution,dnParams,read,admitPackets,produceCsc,
+        [&](void* object,auto& producer) noexcept {
+            using ProducerResolve=TglOwnedVeboxScopedContext<std::remove_reference_t<decltype(producer)>>;
+            std::array<uintptr_t,20> hooks{};
+            if(!tglBindOwnedVeboxCompleteHooks<LifetimeResolve,AdmissionResolve,AllocationResolve,
+                ProducerResolve,ModeResolve,FormatRead>(object,hooks) ||
+               !child.matchesPrivateVtableHooks(hooks)) return 5;
+            static_assert(noexcept(use(object,static_cast<const std::array<uintptr_t,20>&>(hooks),producer)),
+                "complete VEBOX native frame hook consumer ABI");
+            return use(object,static_cast<const std::array<uintptr_t,20>&>(hooks),producer);
+        });
 }
 
 // One borrowed-OS resource lifetime. The renderer must close every such scope

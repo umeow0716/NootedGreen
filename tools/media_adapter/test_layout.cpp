@@ -1202,6 +1202,10 @@ static void testTrackedCpuOwner() {
         } execution;
         struct Child {
             bool leased=true;unsigned writes=0;TglCscCoefficients saved;
+            std::array<uintptr_t,20> installed{};bool tableReady=false;
+            bool matchesPrivateVtableHooks(const std::array<uintptr_t,20>& hooks) const noexcept {
+                return tableReady && installed==hooks;
+            }
             bool hasPrivateChildLease(uintptr_t p) const noexcept {return leased && p==7;}
             bool publishCsc(const TglCscCoefficients& value) noexcept {
                 if(!leased) return false; ++writes;saved=value;return true;
@@ -1282,6 +1286,43 @@ static void testTrackedCpuOwner() {
         assert(tglWithOwnedVeboxFrameProducers(frame,child,execution,0,noRead,noPackets,produce,
             [](void*,auto&) noexcept {assert(false);return 0;})==5);
         execution.leased=true;
+        {
+            struct Auxiliary {
+                bool owns(void* object) const noexcept {return object==reinterpret_cast<void*>(7);}
+                void destroy(bool) noexcept {}
+                bool admit(void*,void*) noexcept {return false;}
+                int allocate() noexcept {return 31;}
+                void freeResources() noexcept {}
+            } auxiliary;
+            using AuxiliaryScope=TglOwnedVeboxScopedContext<Auxiliary>;
+            struct AuxiliaryResolve {
+                Auxiliary* operator()(void* object) const noexcept {return AuxiliaryScope::get(object);}
+            };
+            struct FormatRead {bool operator()(uintptr_t,void*,size_t) const noexcept {return false;}};
+            using Producers=TglOwnedVeboxFrameProducerTypes<Frame,Child,Execution,
+                decltype(noRead),decltype(noPackets),decltype(produce)>;
+            AuxiliaryScope auxiliaryScope(nativeChild,auxiliary);assert(auxiliaryScope.bound());
+            const bool built=tglBuildOwnedVeboxCompleteHooks<AuxiliaryResolve,AuxiliaryScope,
+                AuxiliaryScope,typename Producers::Resolve,AuxiliaryScope,FormatRead>(nativeChild,child.installed);
+            assert(built);child.tableReady=true;
+            unsigned consumed=0;
+            auto consume=[&](void* object,const auto& hooks,auto& producer) noexcept {
+                ++consumed;assert(object==nativeChild && hooks==child.installed && &producer.pass==&frame.pass);
+                return producer.pass.withBuilder([&]() noexcept {
+                    using Kernel=int(*)(void*,int32_t) noexcept;
+                    return reinterpret_cast<Kernel>(hooks[5])(object,3);
+                });
+            };
+            const auto run=[&]() noexcept {
+                return tglWithOwnedVeboxFrameHookBindings<AuxiliaryResolve,AuxiliaryScope,
+                    AuxiliaryScope,AuxiliaryScope,FormatRead>(frame,child,execution,0,
+                        noRead,noPackets,produce,consume);
+            };
+            assert(run()==-17 && consumed==1);
+            child.installed[5]^=1;
+            assert(run()==5 && consumed==1);
+            child.installed[5]^=1;
+        }
     }
     {
         std::array<uint8_t,0x200> child;child.fill(0xa5);
@@ -15930,8 +15971,12 @@ int main() {
                 const auto unbound=hooks;
                 assert(owner.withPrivateChild([](void*) noexcept {assert(false);return 0;})==5);
                 hooks=tglBindOwnedVeboxQueryHooks<DeniedFormatRead>(hooks);
+                assert(!owner.matchesPrivateVtableHooks(hooks));
                 assert(owner.installPrivateVtableWithQueries<DeniedFormatRead>(
                     unbound,tableRead,qualify,executable));
+                assert(owner.matchesPrivateVtableHooks(hooks));
+                auto wrongHooks=hooks;wrongHooks[5]^=1;
+                assert(!owner.matchesPrivateVtableHooks(wrongHooks));
                 {
                     void* published=owner.constructedBase();
                     const auto generation=owner.allocationGeneration();
