@@ -11013,6 +11013,32 @@ int main() {
                     assert(frame.at922 && geometry.frameWidth==geometrySnapshot.frameWidth);
                     acquisitionConsumed=true;return 31;
                 })==31 && acquisitionConsumed);
+            for(unsigned stageFailure=0;stageFailure<7;++stageFailure) {
+                calls=0;unsigned states=0,emits=0;int data=0,command=0;
+                TglOwnedVpEntrySet base;
+                if(stageFailure==3) base.setup=+[](void*,void*,void*,void*) noexcept {return 0;};
+                if(stageFailure==4) base.send=+[](void*,void*,void*) noexcept {return 0;};
+                if(stageFailure==5) base.state=+[](void*,void*,void*,void*) noexcept {return 0;};
+                if(stageFailure==6) base.filters=+[](void*,void*,void*,void*) noexcept {};
+                assert(graph.withLeasedCallbackAssemblyPass(base,0x1000,0x2000,0x3000,0x4000,
+                    0x6000,0x7000,{},&data,read,
+                    [&](void*,const auto& frame,const auto& geometry,auto&) noexcept {
+                        assert(calls==total && !graph.tryReset() && frame.at922 &&
+                            geometry.frameWidth==geometrySnapshot.frameWidth);
+                        ++states;return stageFailure==1?31:0;
+                    },[](void*,const auto&,auto&) noexcept -> int {return 0;},
+                    [](void*,const auto&) noexcept {},
+                    [&](void*,void*,void*,const auto& entries) noexcept {
+                        assert(entries.setup && entries.send && entries.state && entries.filters);
+                        ++emits;return stageFailure==2?-17:0;
+                    },[&](void* child,const auto& entries) noexcept {
+                        const int result=entries.setup(child,reinterpret_cast<void*>(0x1000),
+                            reinterpret_cast<void*>(0x2000),&data);
+                        return result?result:entries.send(child,&data,&command);
+                    })==(stageFailure>=3?5:stageFailure==1?31:stageFailure==2?-17:0));
+                assert(states==(stageFailure>=3?0U:1U) && emits==(stageFailure==1 || stageFailure>=3?0U:1U));
+                assert(calls==(stageFailure>=3?0U:total));
+            }
             calls=0;
             struct CallbackCommandBackend {
                 unsigned count=0;int failure=0;

@@ -9947,6 +9947,29 @@ public:
                 return state(child,prepared,geometry,owner);
             },avs,ief,emit,invoke);
     }
+    // Acquire snapshots under a separate lease before publishing the pass
+    // catalogue. No acquisition resolver survives into setup/emission.
+    template<class Read,class State,class Avs,class Ief,class Emit,class Use>
+    int withLeasedCallbackAssemblyPass(const TglOwnedVpEntrySet& base,
+        uintptr_t source,uintptr_t target,uintptr_t mhw,uintptr_t settings,
+        uintptr_t conditionalSource,uintptr_t parameters,const TglOwnedVpModeState& original,
+        void* renderData,Read read,State state,Avs avs,Ief ief,Emit emit,Use use) noexcept {
+        if(!ready_ || busy_ || !renderData || base.setup || base.send || base.state || base.filters) return 5;
+        TglOwnedVpFramePreparation frame;TglOwnedVpRegionInput geometry;
+        uintptr_t reference=0;
+        const int acquired=withFrameAcquisition(source,target,mhw,settings,
+            conditionalSource,parameters,original,read,
+            [&](const auto& prepared,const auto& snapshot,uintptr_t sourceA8) noexcept {
+                frame=prepared;geometry=snapshot;reference=sourceA8;return 0;
+            });
+        if(acquired) return acquired;
+        return withPreparedCallbackAssemblyPass(base,frame,conditionalSource,parameters,target,reference,
+            reinterpret_cast<void*>(source),renderData,
+            [&](void* child,const auto& prepared,auto& owner) noexcept -> int {
+                static_assert(noexcept(state(child,prepared,geometry,owner)),"VP assembly state ABI");
+                return state(child,prepared,geometry,owner);
+            },avs,ief,emit,use);
+    }
     template<class Read,class Lines,class Retire,class State,class Avs,class Ief,class Emit,class Invoke>
     int withLeasedResourceCallbackPass(uintptr_t source,uintptr_t target,uintptr_t mhw,
         uintptr_t settings,uintptr_t conditionalSource,uintptr_t parameters,
