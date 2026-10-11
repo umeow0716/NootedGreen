@@ -16876,6 +16876,8 @@ int main() {
                         int parameters(uintptr_t entry,void* object,void* command,const void* p) noexcept {
                             assert(entry==base+0x1681e0 && object && command && p);++calls;return 31;
                         }
+                        int state(uintptr_t,void*,void*,const void*,const void*) noexcept {assert(false);return 5;}
+                        int frame(uintptr_t,void*,void*,uint8_t) noexcept {assert(false);return 5;}
                     } commandInvoke;
                     auto commandBinding=mhw;commandBinding.entries[2]=base+0x1681e0;
                     int command=0;
@@ -16895,6 +16897,20 @@ int main() {
                             });
                     })==-17);
                     assert(commandInvoke.calls==1 && cpu.live && !eventCount);
+                    TglOwnedSfcCommandParameters prepared;
+                    TglOwnedSurfaceStorage output;
+                    auto deniedRead=[](uintptr_t,void*,size_t) noexcept {assert(false);return false;};
+                    auto deniedPlatform=[](auto&) noexcept -> int {assert(false);return 5;};
+                    assert(tglSendOwnedVeboxSfcPreparedCommands(owner,owner.constructedBase(),commandBinding,
+                        &command,commandInvoke,prepared,output,0,0,0,0,deniedRead,deniedPlatform)==5);
+                    assert(owner.withPrivateChild([&](void* parent) noexcept {
+                        assert(tglSendOwnedVeboxSfcPreparedCommands(owner,static_cast<uint8_t*>(parent)+8,
+                            commandBinding,&command,commandInvoke,prepared,output,0,0,0,0,
+                            deniedRead,deniedPlatform)==5);
+                        return tglSendOwnedVeboxSfcPreparedCommands(owner,parent,commandBinding,&command,
+                            commandInvoke,prepared,output,0,0,0,0,deniedRead,deniedPlatform);
+                    })==31); // Exact native lock error survives the parent/reservation bridge.
+                    assert(commandInvoke.calls==2 && cpu.live && !eventCount);
                 }
                 {
                     std::array<uint8_t,16> history{};history[0]=1;

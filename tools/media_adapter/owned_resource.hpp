@@ -10335,6 +10335,23 @@ int tglSendOwnedSfcPreparedCommands(Backend &backend,
     } commands{backend,parameters,lockOverride?*lockOverride:parameters.lock,shell,platform,{}};
     return tglScheduleOwnedSfcCommands(scaling,forceAvs,ief,csc,commands);
 }
+// Bridge an already leased private VEBOX child to its authenticated native
+// SFC owner. Preserve parent/image generation and command reservation through
+// the entire scheduler; state always uses OS-environment qualification.
+// Caller still owns output registration and discards partial commands on error.
+template<class Owner,class CommandInvoke,class Read,class Platform,class Surface>
+int tglSendOwnedVeboxSfcPreparedCommands(Owner& owner,void* parent,
+    const TglSfcMhwBinding& binding,void* command,CommandInvoke& invoke,
+    const TglOwnedSfcCommandParameters& parameters,const Surface& shell,
+    uint8_t scaling,uint8_t forceAvs,uint8_t ief,uint8_t csc,
+    Read read,Platform& platform) noexcept {
+    return owner.withLeasedSfcCommandSequence(parent,binding,command,invoke,
+        [&](auto& native) noexcept {
+            TglStateQualifiedSfcBackend<decltype(native),Read> qualified(native,read);
+            return tglSendOwnedSfcPreparedCommands(qualified,parameters,shell,
+                scaling,forceAvs,ief,csc,platform);
+        });
+}
 // Exact send-time settings snapshot. Acquire before the first command write;
 // read denial cannot leave a partial command buffer. The owned lock argument
 // stays live through emission without mutating the reusable parameter owner.
