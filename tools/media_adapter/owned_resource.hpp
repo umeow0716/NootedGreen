@@ -16545,6 +16545,18 @@ public:
         if(!write(context_,owned) || !read(context_,&current,sizeof(current)) || current!=owned) return false;
         publication_=Publication::Published;return true;
     }
+    // Prevalidate table and child detach together before changing either.
+    // This grants no lifetime authority: caller keeps the same exclusive
+    // context/physical scope until the actual detach completes.
+    template<class Read,class Admit>
+    bool canDetach(Read read,Admit admit) const noexcept {
+        static_assert(noexcept(read(uintptr_t{},static_cast<void*>(nullptr),size_t{})) &&
+            noexcept(admit(uintptr_t{},size_t{})));
+        uintptr_t current=0;
+        return ready_ && publication_==Publication::Published &&
+            admit(context_,sizeof(uintptr_t)) && read(context_,&current,sizeof(current)) &&
+            current==reinterpret_cast<uintptr_t>(addressPoint());
+    }
     template<class Read,class Write,class Admit>
     bool detach(Read read,Write write,Admit admit) noexcept {
         static_assert(noexcept(read(uintptr_t{},static_cast<void*>(nullptr),size_t{})) &&

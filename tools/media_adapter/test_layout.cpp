@@ -11917,6 +11917,13 @@ static void testRetainedVeboxFrames() {
         assert(!privateTable.publish(read,writeVptr,[](uintptr_t,size_t) noexcept {return false;}) && !vptrWrites);
         assert(privateTable.publish(read,writeVptr,admitVptr) && vptrWrites==1 && privateTable.requiresRetention());
         assert(!privateTable.publish(read,writeVptr,admitVptr) && vptrWrites==1);
+        assert(privateTable.canDetach(read,admitVptr) && vptrWrites==1);
+        assert(!privateTable.canDetach(read,[](uintptr_t,size_t) noexcept {return false;}) && vptrWrites==1);
+        {
+            const auto installed=vptr;vptr=binding.vtable;
+            assert(!privateTable.canDetach(read,admitVptr) && vptrWrites==1);
+            vptr=installed;
+        }
         assert(dispatch()==31 && invoked==1);
         {
             TglOwnedVeboxPhysicalFrameRegistry<ItemFrame> scopedRegistry;
