@@ -5255,6 +5255,11 @@ public:
         if(changed) *changed=result.changed;
         ready_=true;busy_=false;return 0;
     }
+    int ensureFfdiBacking(const TglOwnedFfdiAllocationRequest& request,bool& changed) noexcept {
+        if(request.type!=1 || request.kind!=TglOwnedFfdiAllocationKind::NativeBacking ||
+           request.key.format!=0x3d || capture_.native.resourceType()!=1) return 5;
+        return ensure(request.key,&changed);
+    }
     // FFDN's type1/format3d branch requires real backing. The allocator writes
     // surface e0=0 on changed allocation; preserve that exact shell value for
     // the subsequent native history comparison, not inferred IOSurface pitch.
@@ -5342,6 +5347,23 @@ public:
         } restore{surface_.prefix.data()+0x4c,original,rectangleBusy_};
         std::memcpy(surface_.prefix.data()+0x4c,&bottom,4);
         use(static_cast<const TglOwnedSurfaceStorage&>(surface_));return true;
+    }
+    // Native-backed FFDi metadata never adopts input resource tokens. Source
+    // and optional execution surface stay pinned by their real owners; target
+    // backing and unrelated bytes survive the scalar-only publication.
+    template<class SourceOwner>
+    bool publishFfdiFrameFrom(SourceOwner& owner,const TglOwnedSurfaceStorage& source,
+        TglOwnedFfdiMetadataQuery query,SourceOwner* executionOwner=nullptr,
+        const TglOwnedSurfaceStorage* execution=nullptr) noexcept {
+        if(!ready_ || busy_ || &source==&surface_ || !owner.hasSurfaceLease(source) ||
+           bool(executionOwner)!=bool(execution) || execution==&surface_ ||
+           (execution && !executionOwner->hasSurfaceLease(*execution))) return false;
+        busy_=true;
+        struct Unlock {bool& busy;~Unlock(){busy=false;}} unlock{busy_};
+        if(!capture_.backed(surface_.resource) ||
+           !tglPrepareOwnedFfdiFrameMetadata(surface_,source,query)) return false;
+        if(execution) tglCopyOwnedFfdiPrimaryScalars(surface_,*execution);
+        return capture_.backed(surface_.resource);
     }
     // Publish only the proven FFDN scalars, never source tokens/handles or
     // DN90. The actual source owner must remain leased through publication.

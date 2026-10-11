@@ -5755,6 +5755,26 @@ static void testNativeResourceBoundary() {
                 assert(destination.withSurface([&](const auto&) noexcept {
                     assert(destination.ensureFfdnBacking(request,changed,pitch)==5 && !changed && pitch==0xa5a5a5a5);
                 }));
+                TglOwnedFfdiAllocationRequest ffdi;
+                assert(tglPrepareOwnedFfdiAllocationRequest(*surface,request.key.format,request.key.tile,
+                    {request.key.compressed,request.key.compressionMode},ffdi));
+                assert(!destination.ensureFfdiBacking(ffdi,changed) && !changed);
+                auto invalidFfdi=ffdi;invalidFfdi.key.format=0x19;
+                assert(destination.ensureFfdiBacking(invalidFfdi,changed)==5);
+                const auto resources=destinationSurface->resource;
+                assert(!destination.publishFfdiFrameFrom(owner,*surface,{8,3}));
+                assert(owner.withSurface([&](const auto& source) noexcept {
+                    assert(!owner.publishFfdiFrameFrom(owner,source,{8,3}));
+                    assert(destination.publishFfdiFrameFrom(owner,source,{8,3}));
+                    assert(destinationSurface->resource==resources);
+                    assert(destination.withSurface([&](const auto& target) noexcept {
+                        assert(!destination.publishFfdiFrameFrom(owner,source,{1,2}));
+                        uint32_t color=0,sample=0;
+                        std::memcpy(&color,target.prefix.data(),4);
+                        std::memcpy(&sample,target.prefix.data()+0x138,4);
+                        assert(color==8 && sample==3 && tglNativeBackingPresent(target.resource));
+                    }));
+                }));
             }
             {
                 struct NativeReportBackend {
