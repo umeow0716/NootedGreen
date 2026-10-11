@@ -11731,6 +11731,43 @@ static void testGuardedVeboxLifecycle() {
 
 static void testRetainedVeboxFrames() {
     {
+        struct ContextOwner {
+            uintptr_t identity;unsigned& deaths;
+            uintptr_t context() const noexcept {return identity;}
+            ~ContextOwner() noexcept {++deaths;}
+        };
+        unsigned deaths=0,uses=0;
+        TglOwnedContextOwnerRegistry<ContextOwner,2> owners;
+        auto* first=new ContextOwner{0x4000,deaths};
+        auto* second=new ContextOwner{0x5000,deaths};
+        assert(owners.adopt(0x1000,0x2000,7,first));
+        assert(!owners.adopt(0x1000,0x3000,8,first));
+        assert(owners.adopt(0x1000,0x2000,7,second));
+        auto* duplicate=new ContextOwner{0x4000,deaths};
+        assert(!owners.adopt(0x1000,0x2000,7,duplicate));delete duplicate;
+        assert(deaths==1);
+        auto use=[&](ContextOwner& owner) noexcept -> int {
+            ++uses;assert(&owner==first);
+            assert(owners.withOwner(0x1000,0x2000,7,0x4000,
+                [](ContextOwner&) noexcept -> int {assert(false);return 0;})==5);
+            return 31;
+        };
+        assert(owners.withOwner(0x1000,0x2000,6,0x4000,use)==5 && !uses);
+        assert(owners.withOwner(0x1000,0x2000,7,0x4000,use)==31 && uses==1);
+        TglNativeRemovedContextBatch<2> removed;
+        removed.valid=true;removed.count=2;removed.contexts={0x4000,0x6000};
+        assert(owners.reconcileSuccessfulRemoval(0x1000,0x2000,7,removed)==5 && deaths==1);
+        removed.contexts={0x4000,0x4000};
+        assert(owners.reconcileSuccessfulRemoval(0x1000,0x2000,7,removed)==5 && deaths==1);
+        assert(owners.quarantine(0x1000,0x2000,7));
+        assert(owners.withOwner(0x1000,0x2000,7,0x4000,use)==5 && uses==1 && deaths==1);
+        // Explicit CPU fixture authority: native removal already succeeded.
+        removed.contexts={0x4000,0x5000};
+        assert(owners.reconcileSuccessfulRemoval(0x1000,0x2000,8,removed)==5 && deaths==1);
+        assert(owners.reconcileSuccessfulRemoval(0x1000,0x2000,7,removed)==0 && deaths==3);
+        assert(owners.reconcileSuccessfulRemoval(0x1000,0x2000,7,removed)==5 && deaths==3);
+    }
+    {
         TglNativeCreatedContextBatch<2> batch;
         uintptr_t descriptor=0x2000,outputs=0x3000;
         uint32_t count=2;std::array<uintptr_t,2> contexts{0x4000,0x5000};bool readable=true;

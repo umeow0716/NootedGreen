@@ -16541,6 +16541,79 @@ struct TglNativePhysicalCallbackInvoker {
         return reinterpret_cast<int(*)(void*)>(entry)(reinterpret_cast<void*>(physical));
     }
 };
+// Stable heap owners for native context data. The composite Owner must retain
+// its private table, children, original shells and both code-image lifetimes.
+// Every operation additionally requires the caller's SAME physical-generation
+// scope. This gate prevents registry reentry; it does not replace that scope.
+// Unresolved owners deliberately survive registry destruction, like retained
+// frame pools: unload/aggregate error is not native destruction evidence.
+template<class Owner,size_t Capacity=16> class TglOwnedContextOwnerRegistry {
+    static_assert(Capacity>0 && Capacity<=128,"owned context work budget");
+    static_assert(std::is_nothrow_destructible_v<Owner>);
+    struct Entry {uintptr_t image=0,physical=0,context=0;uint64_t generation=0;
+        Owner* owner=nullptr;bool quarantined=false;};
+    std::array<Entry,Capacity> entries_{};
+    std::atomic_flag gate_=ATOMIC_FLAG_INIT;
+    struct Unlock {std::atomic_flag& gate;~Unlock(){gate.clear(std::memory_order_release);}};
+    static bool matches(const Entry& e,uintptr_t image,uintptr_t physical,uint64_t generation) noexcept {
+        return e.owner && e.image==image && e.physical==physical && e.generation==generation;
+    }
+public:
+    TglOwnedContextOwnerRegistry()=default;
+    TglOwnedContextOwnerRegistry(const TglOwnedContextOwnerRegistry&)=delete;
+    TglOwnedContextOwnerRegistry& operator=(const TglOwnedContextOwnerRegistry&)=delete;
+    ~TglOwnedContextOwnerRegistry()=default;
+    // Takes ownership ONLY on true. Must precede native vptr publication.
+    bool adopt(uintptr_t image,uintptr_t physical,uint64_t generation,Owner* owner) noexcept {
+        static_assert(noexcept(owner->context()));
+        if(!image || !physical || !generation || !owner || !owner->context() ||
+            gate_.test_and_set(std::memory_order_acquire)) return false;
+        Unlock unlock{gate_};Entry* available=nullptr;
+        for(auto& e:entries_) {
+            if(!e.owner) {if(!available) available=&e;continue;}
+            // One native context/owned allocation cannot belong to two scopes.
+            if(e.owner==owner || e.context==owner->context()) return false;
+        }
+        if(!available) return false;
+        *available={image,physical,owner->context(),generation,owner,false};return true;
+    }
+    template<class Use> int withOwner(uintptr_t image,uintptr_t physical,uint64_t generation,
+        uintptr_t context,Use use) noexcept {
+        static_assert(noexcept(use(std::declval<Owner&>())) &&
+            std::is_same_v<decltype(use(std::declval<Owner&>())),int>);
+        if(!context || gate_.test_and_set(std::memory_order_acquire)) return 5;
+        Unlock unlock{gate_};
+        for(auto& e:entries_) if(matches(e,image,physical,generation) && e.context==context)
+            return e.quarantined?5:use(*e.owner);
+        return 5;
+    }
+    bool quarantine(uintptr_t image,uintptr_t physical,uint64_t generation) noexcept {
+        if(gate_.test_and_set(std::memory_order_acquire)) return false;
+        Unlock unlock{gate_};bool found=false;
+        for(auto& e:entries_) if(matches(e,image,physical,generation)) {e.quarantined=true;found=true;}
+        return found;
+    }
+    // ONLY called by successful-native-removal reconciliation, after all native
+    // deleting destructors return and with no retained frames. No native object
+    // is read here. Validate the ENTIRE snapshot before releasing any owner.
+    template<size_t N> int reconcileSuccessfulRemoval(uintptr_t image,uintptr_t physical,
+        uint64_t generation,const TglNativeRemovedContextBatch<N>& batch) noexcept {
+        if(!image || !physical || !generation || !batch.valid || batch.count>N ||
+            gate_.test_and_set(std::memory_order_acquire)) return 5;
+        Unlock unlock{gate_};std::array<Entry*,N> selected{};
+        for(uint32_t i=0;i<batch.count;++i) {
+            if(!batch.contexts[i]) return 5;
+            for(uint32_t j=0;j<i;++j) if(batch.contexts[j]==batch.contexts[i]) return 5;
+            for(auto& e:entries_) if(matches(e,image,physical,generation) && e.context==batch.contexts[i])
+                selected[i]=&e;
+            if(!selected[i]) return 5;
+        }
+        for(uint32_t i=0;i<batch.count;++i) {
+            auto* owner=selected[i]->owner;*selected[i]={};delete owner;
+        }
+        return 0;
+    }
+};
 // Callback ABI coordinator, not adapter publication. No substitute native
 // output/input and no speculative cleanup after a partial/unknown init. The
 // caller qualifies this exact image and original callback table separately.
