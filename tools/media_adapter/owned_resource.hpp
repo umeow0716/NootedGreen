@@ -16595,6 +16595,22 @@ public:
     // not prove the earlier published entries unchanged. Creation must use the
     // same empty-frame/exclusive admission and ambiguous-failure quarantine as
     // removal; never adopt output contexts only from aggregate success alone.
+    template<class Native=TglNativeBackingAllocateInvoker> int createContexts(
+        typename Registry::Ticket ticket,uintptr_t physical,const void* input,Native native=Native{}) noexcept {
+        static_assert(noexcept(native(uintptr_t{},uintptr_t{},input)) &&
+            std::is_same_v<decltype(native(uintptr_t{},uintptr_t{},input)),int>);
+        constexpr std::array<uint8_t,20> anchor{0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,
+            0x41,0x55,0x41,0x54,0x53,0x48,0x81,0xec,0xe8,0x01,0x00,0x00};
+        std::array<uint8_t,20> actual{};
+        // Validate before entering ambiguous-native-failure quarantine: failure
+        // here means native was never called, not a partially created batch.
+        if(!input || !valid() || binding_.image>UINTPTR_MAX-0x13e43-anchor.size() ||
+            !executable_(binding_.image+0x13e43,anchor.size()) ||
+            !read_(binding_.image+0x13e43,actual.data(),actual.size()) || actual!=anchor) return 5;
+        return withContextRemoval(ticket,physical,[&]() noexcept -> int {
+            return native(binding_.image+0x13e43,physical,input);
+        });
+    }
     template<class Use> int withContextRemoval(typename Registry::Ticket ticket,
         uintptr_t physical,Use use) noexcept {
         if(!physical || !valid()) return 5;

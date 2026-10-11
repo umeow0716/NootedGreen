@@ -12090,6 +12090,8 @@ static void testRetainedVeboxFrames() {
         const std::array<uint8_t,7> clear{0x48,0xc7,7,0,0,0,0};
         const std::array<uint8_t,16> free{0x55,0x48,0x89,0xe5,0x41,0x56,0x53,0x41,0xbe,5,0,0,0,0x48,0x85,0xff};
         void* output=nullptr;bool readable=true,qualified=true;
+        std::array<uint8_t,20> creationAnchor{0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,
+            0x41,0x55,0x41,0x54,0x53,0x48,0x81,0xec,0xe8,0x01,0x00,0x00};
         std::array<uint8_t,17> backingAllocateAnchor{0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,
             0x41,0x55,0x41,0x54,0x53,0x48,0x83,0xec,0x18};
         const std::array<uint8_t,11> backingReleaseAnchor{0x55,0x48,0x89,0xe5,0x53,0x50,0xff,0xce,0x83,0xfe,0x1a};
@@ -12102,6 +12104,7 @@ static void testRetainedVeboxFrames() {
             else if(address==image+0x13c8c && size==free.size()) std::memcpy(bytes,free.data(),size);
             else if(address==image+0x155d1 && size==backingAllocateAnchor.size()) std::memcpy(bytes,backingAllocateAnchor.data(),size);
             else if(address==image+0x1580c && size==backingReleaseAnchor.size()) std::memcpy(bytes,backingReleaseAnchor.data(),size);
+            else if(address==image+0x13e43 && size==creationAnchor.size()) std::memcpy(bytes,creationAnchor.data(),size);
             else return false;
             return true;
         };
@@ -12110,6 +12113,7 @@ static void testRetainedVeboxFrames() {
             return (address==image+0x135d9 && size==16) || (address==image+0x135f6 && size==7) ||
                 (address==image+0x13c8c && size==16) ||
                 (address==image+0x155d1 && size==17) || (address==image+0x1580c && size==11) ||
+                (address==image+0x13e43 && size==20) ||
                 ((address==image+0x132510 || address==image+0x131fa0) && size==1);
         };
         TglNativePhysicalCallbackBinding binding;assert(binding.resolve(image,read,qualify,executable));
@@ -12212,6 +12216,7 @@ static void testRetainedVeboxFrames() {
             ++typedBackingCalls;assert(entry==image+0x1580c && physical==0x8000 && type==25);return 31;};
         assert(callbacks.allocateBacking(success.ticket,0x8000,input,typedAllocate)==5);
         assert(callbacks.releaseBacking(success.ticket,0x8000,25,typedRelease)==5 && typedBackingCalls==0);
+        assert(callbacks.createContexts(success.ticket,0x8000,input,typedAllocate)==5 && typedBackingCalls==0);
         auto mutateBacking=[&]() noexcept -> int {
             ++backingCalls;
             assert(callbacks.destroy(0x8000)==5 && invoke.destroyed==0);
@@ -12284,6 +12289,24 @@ static void testRetainedVeboxFrames() {
         assert(alias.called && !alias.published && alias.status==5 && alias.nativeStatus==0);
         assert(!registry.lookup(image,0xb000).generation && callbacks.destroy(0xb000)==5);
         assert(!callbacks.initialize(&output,input).called && invoke.initialized==7 && invoke.destroyed==1);
+        static Registry creationRegistry;
+        invoke.produced=0xc000;
+        TglOwnedPhysicalCallbackCoordinator creationCallbacks(creationRegistry,binding,read,qualify,executable,invoke);
+        const auto createdPhysical=creationCallbacks.initialize(&output,input);assert(createdPhysical.published);
+        unsigned creationCalls=0;int creationResult=0;
+        auto create=[&](uintptr_t entry,uintptr_t physical,const void* originalInput) noexcept -> int {
+            ++creationCalls;assert(entry==image+0x13e43 && physical==0xc000 && originalInput==input);
+            return creationResult;
+        };
+        creationAnchor[0]^=1;
+        assert(creationCallbacks.createContexts(createdPhysical.ticket,0xc000,input,create)==5 && creationCalls==0);
+        assert(creationRegistry.lookup(image,0xc000).generation==createdPhysical.ticket.generation);
+        creationAnchor[0]^=1;
+        assert(creationCallbacks.createContexts(createdPhysical.ticket,0xc000,input,create)==0 && creationCalls==1);
+        creationResult=31;
+        assert(creationCallbacks.createContexts(createdPhysical.ticket,0xc000,input,create)==31 && creationCalls==2);
+        assert(!creationRegistry.lookup(image,0xc000).generation);
+        assert(creationCallbacks.createContexts(createdPhysical.ticket,0xc000,input,create)==5 && creationCalls==2);
     }
 }
 
