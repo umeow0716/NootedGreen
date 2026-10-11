@@ -1609,6 +1609,8 @@ template<size_t Capacity=64> class TglNativeContextSurfaceProvenance {
     bool ready_=false;
 public:
     uintptr_t context() const noexcept {return ready_?context_:0;}
+    size_t size() const noexcept {return ready_?count_:0;}
+    uintptr_t at(size_t index) const noexcept {return ready_ && index<count_?shells_[index]:0;}
     bool contains(uintptr_t shell) const noexcept {
         if(!ready_ || !shell) return false;
         for(size_t i=0;i<count_;++i) if(shells_[i]==shell) return true;
@@ -13920,6 +13922,8 @@ public:
     }
     TglNativeContextRootSurfaceOwner(const TglNativeContextRootSurfaceOwner&)=delete;
     TglNativeContextRootSurfaceOwner& operator=(const TglNativeContextRootSurfaceOwner&)=delete;
+    bool ready() const noexcept {return context_.get() && shell_;}
+    bool canDestroy() const noexcept {return !borrowed_;}
     bool hasSurfaceLease(const TglOwnedSurfaceStorage& shell) const noexcept {
         return context_.get() && borrowed_ && shell_==&shell;
     }
@@ -13935,6 +13939,50 @@ public:
         const TglOwnedSurfaceStorage* storage() const noexcept {return owner_?owner_->shell_:nullptr;}
         TglOwnedSurfaceStorage* metadataStorage() noexcept {return owner_?owner_->shell_:nullptr;}
     };
+};
+
+// Own stable sidecars BEFORE constructing frontend graph/frame members. Those
+// members must be destroyed first. A wrongly ordered active borrow retains its
+// sidecar/context pin rather than releasing native lifetime underneath it.
+template<class Registry,size_t Capacity=64> class TglNativeContextSurfaceOwners {
+public:
+    using Owner=TglNativeContextRootSurfaceOwner<typename Registry::ContextLease>;
+private:
+    TglNativeContextSurfaceProvenance<Capacity> proof_;
+    std::array<Owner*,Capacity> owners_{};
+    bool attempted_=false,ready_=false;
+    void clear() noexcept {
+        for(auto*& owner:owners_) {
+            if(owner && owner->canDestroy()) delete owner;
+            owner=nullptr;
+        }
+        ready_=false;
+    }
+public:
+    TglNativeContextSurfaceOwners()=default;
+    TglNativeContextSurfaceOwners(const TglNativeContextSurfaceOwners&)=delete;
+    TglNativeContextSurfaceOwners& operator=(const TglNativeContextSurfaceOwners&)=delete;
+    ~TglNativeContextSurfaceOwners() noexcept {clear();}
+    template<class Read,class Admit,class Writable>
+    bool initialize(Registry& registry,uintptr_t image,uintptr_t physical,uint64_t generation,
+        const TglNativeContextInputRoots& roots,Read read,Admit admit,Writable writable) noexcept {
+        if(attempted_) return false;
+        attempted_=true;
+        if(!image || !physical || !generation || roots.parent.physical!=physical ||
+            !proof_.resolve(roots,read,admit)) return false;
+        for(size_t i=0;i<proof_.size();++i) {
+            auto lease=registry.pin(image,physical,generation,proof_.context());
+            if(!lease.get()) {clear();return false;}
+            owners_[i]=new(std::nothrow) Owner(std::move(lease),proof_,proof_.at(i),writable);
+            if(!owners_[i] || !owners_[i]->ready()) {clear();return false;}
+        }
+        ready_=true;return true;
+    }
+    Owner* resolve(uintptr_t shell) noexcept {
+        if(!ready_ || !shell) return nullptr;
+        for(size_t i=0;i<proof_.size();++i) if(proof_.at(i)==shell) return owners_[i];
+        return nullptr;
+    }
 };
 
 // Retain an EXISTING frontend surface without allocating a replacement or

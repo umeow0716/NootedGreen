@@ -12438,6 +12438,38 @@ static void testRetainedVeboxFrames() {
                 typename RootOwner::SurfaceOwnerLease historyLease(temporal);assert(historyLease.storage()==&history);
                 TglNativeContextSurfaceProvenance<1> tooSmall;
                 assert(!tooSmall.resolve(roots,readGraph,admitGraph) && !tooSmall.context() && !tooSmall.contains(address));
+                roots.parent.physical=0x8000;
+                const uint32_t type1=1;const uintptr_t resource=100,surface=200;
+                for(auto* shell:{&original,&history}) {
+                    std::memcpy(shell->resource.data()+0x14,&type1,4);
+                    std::memcpy(shell->resource.data()+0x60,&type1,4);
+                    std::memcpy(shell->resource.data()+0x68,&resource,8);
+                    std::memcpy(shell->resource.data()+0x58,&surface,8);
+                }
+                struct CfApi {
+                    unsigned& refs;
+                    uintptr_t type(uintptr_t handle) noexcept {return handle==100?1:handle==200?2:0;}
+                    bool retain(uintptr_t) noexcept {++refs;return true;}
+                    void release(uintptr_t) noexcept {assert(refs);--refs;}
+                };
+                unsigned refs=0;
+                using Sidecars=TglNativeContextSurfaceOwners<decltype(owners),2>;
+                {
+                    Sidecars set;
+                    assert(set.initialize(owners,image,0x8000,success.ticket.generation,roots,readGraph,admitGraph,admitGraph));
+                    assert(set.resolve(address) && set.resolve(historyAddress) && !set.resolve(0x1234));
+                    {
+                        TglOwnedFrontendSourceGraph<typename Sidecars::Owner,CfApi,2> graph(CfApi{refs});
+                        assert(graph.acquire(address,[&](uintptr_t p) noexcept {return set.resolve(p);},1,2));
+                        assert(graph.valid() && graph.storage()==&original && refs==4);
+                    }
+                    assert(!refs);
+                }
+                {
+                    Sidecars failed;
+                    assert(!failed.initialize(owners,image,0x8000,success.ticket.generation,roots,readGraph,admitGraph,writable));
+                    assert(!failed.resolve(address) && !failed.resolve(historyAddress));
+                }
                 assert(!proof.resolve(roots,[](uintptr_t,void*,size_t) noexcept {return false;},admitGraph) && !proof.context());
                 roots.sources[0]=0;
                 RootOwner foreign(owners.pin(image,0x8000,success.ticket.generation,0x20000),roots,address,writable);
