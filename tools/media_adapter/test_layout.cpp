@@ -45,6 +45,40 @@ struct TestFeatureExecutionOwner {
 };
 static void testTrackedCpuOwner() {
     {
+        TglVeboxFeatureBinding binding;constexpr uintptr_t image=0x10000000;
+        bool exact=true,qualified=true,readable=true;uintptr_t slot=image+0x12aba0;
+        auto read=[&](uintptr_t p,void* out,size_t n) noexcept {
+            if(!readable) return false;
+            if(p==image+0x12aba0 && n==16) {
+                std::array<uint8_t,16> bytes{0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x50,
+                    0x48,0x89,0x7d,0xf8,0x48,0x89,0x75,0xf0};
+                if(!exact) bytes[7]^=1;
+                std::memcpy(out,bytes.data(),16);return true;
+            }
+            if(p==image+0x757e08 && n==8) {std::memcpy(out,&slot,8);return true;}
+            assert(false);return false;
+        };
+        auto qualify=[&](uintptr_t p) noexcept {return qualified && p==image;};
+        auto executable=[](uintptr_t p,size_t n) noexcept {return p==image+0x12aba0 && n==16;};
+        assert(binding.resolve(image,read,qualify,executable) && binding.entry==slot);
+        exact=false;assert(!binding.resolve(image,read,qualify,executable) && !binding.entry);exact=true;
+        ++slot;assert(!binding.resolve(image,read,qualify,executable) && !binding.image);--slot;
+        qualified=false;assert(!binding.resolve(image,read,qualify,executable));qualified=true;
+        readable=false;assert(!binding.resolve(image,read,qualify,executable));
+        assert(!binding.resolve(UINTPTR_MAX,read,qualify,executable));
+        TglOwnedSurfaceStorage source{},target{};
+        struct Call {
+            const void* source;const void* target;unsigned calls=0;
+            static void prepare(void* self,const void* s,const void* t) noexcept {
+                auto& call=*static_cast<Call*>(self);
+                assert(s==call.source && t==call.target);++call.calls;
+            }
+        } call{&source,&target};
+        TglNativeVeboxFeaturePreparationInvoker{}(
+            reinterpret_cast<uintptr_t>(&Call::prepare),&call,source,target);
+        assert(call.calls==1);
+    }
+    {
         std::array<uint8_t,0xd48> execution{};std::array<uint8_t,8> dn{};
         TglOwnedSurfaceStorage source{};uint32_t pipe=1,format=0x19;
         std::memcpy(execution.data()+0xa0c,&pipe,4);std::memcpy(source.prefix.data()+0x130,&format,4);

@@ -2543,6 +2543,35 @@ struct TglVeboxHardwareBinding {
 // followed by performance-data, cache-control reference and status on stack.
 // This is an invocation mechanism, NOT storage qualification/publication.
 // Owner must authenticate entry, complete extent, dependencies and image lease.
+// TGL primary757c98+170 ->12aba0. Native takes this/source/target and
+// returns void; it transitively calls160 and may consume tracked source90.
+// Binding code is NOT complete object/platform qualification or permission
+// to invoke without the denoise-feature frame transaction and all callbacks.
+struct TglVeboxFeatureBinding {
+    uintptr_t image=0,entry=0;
+    template<class Read,class Qualify,class Executable>
+    bool resolve(uintptr_t base,Read read,Qualify qualify,Executable executable) {
+        image=entry=0;
+        constexpr std::array<uint8_t,16> anchor{
+            0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x50,
+            0x48,0x89,0x7d,0xf8,0x48,0x89,0x75,0xf0};
+        std::array<uint8_t,16> actual{};uintptr_t slot=0;
+        if(!base || base>UINTPTR_MAX-0x757e10 || !qualify(base) ||
+           !executable(base+0x12aba0,anchor.size()) ||
+           !read(base+0x12aba0,actual.data(),actual.size()) || actual!=anchor ||
+           !read(base+0x757c98+0x170,&slot,8) || slot!=base+0x12aba0) return false;
+        image=base;entry=slot;return true;
+    }
+};
+struct TglOwnedSurfaceStorage;
+struct TglNativeVeboxFeaturePreparationInvoker {
+    void operator()(uintptr_t entry,void* child,const TglOwnedSurfaceStorage& source,
+        const TglOwnedSurfaceStorage& target) const noexcept {
+        using Prepare=void(*)(void*,const void*,const void*);
+        reinterpret_cast<Prepare>(entry)(child,&source,&target);
+    }
+};
+
 struct TglVeboxLifetimeBinding {
     uintptr_t image = 0, construct = 0, destroy = 0;
     template<class Read, class Qualify, class Executable>
