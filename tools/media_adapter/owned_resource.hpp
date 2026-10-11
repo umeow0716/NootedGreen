@@ -11278,6 +11278,19 @@ public:
     TglOwnedVeboxBackingTransaction(const TglOwnedVeboxBackingTransaction&)=delete;
     TglOwnedVeboxBackingTransaction& operator=(const TglOwnedVeboxBackingTransaction&)=delete;
     ~TglOwnedVeboxBackingTransaction(){reset();}
+    // Caller holds the actual source owner's synchronous surface lease and
+    // excludes GPU users. Statistics dimensions are independently calculated;
+    // STMM dimensions alone do not establish the statistics allocation shape.
+    template<class SourceOwner,class Requests,class Prepare,class Fill>
+    int ensureFromLeasedSource(SourceOwner& owner,const TglOwnedSurfaceStorage& source,
+        bool child1ba9,const Requests& requests,Prepare prepare,bool reinitialize,
+        uint32_t statisticsWidth,uint32_t statisticsHeight,Fill fill) noexcept {
+        if(!owner.hasSurfaceLease(source)) return 5;
+        std::array<TglResourceKey,2> keys{};
+        if(!tglPrepareOwnedStmmHistoryKeys(source,child1ba9,keys)) return 5;
+        return ensure(requests,prepare,keys,reinitialize,
+                      statisticsWidth,statisticsHeight,fill);
+    }
     template<class Requests,class Prepare,class Fill>
     int ensure(const Requests& requests,Prepare prepare,
         const std::array<TglResourceKey,2>& historyKeys,bool reinitialize,

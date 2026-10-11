@@ -5990,6 +5990,15 @@ static void testResourceBinding() {
                     return fillStatus;
                 };
                 const auto prepare=[](size_t,const auto&,bool) noexcept {return 0;};
+                // Admission-only fixture: rejection must not touch the backing
+                // graph. This is not evidence of a real resource-owner lease.
+                TestFeatureSurfaceOwner deniedSource;
+                assert(transaction.ensureFromLeasedSource(deniedSource,deniedSource.storage,
+                    false,requests,prepare,false,1920,1080,fill)==5);
+                deniedSource.busy=true; // Admitted fixture, but zero source shape.
+                assert(transaction.ensureFromLeasedSource(deniedSource,deniedSource.storage,
+                    false,requests,prepare,false,1920,1080,fill)==5);
+                assert(!fills && !buffer.allocations);
                 auto allocateBacking=[&]() noexcept {
                     return childLease.withPrivateChild([&](void* actual) noexcept {
                         auto allocate=[&](void* c) noexcept -> int {
