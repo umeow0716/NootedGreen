@@ -5285,15 +5285,17 @@ int tglWithOwnedDescriptorFfdiBatch(std::array<TglOwnedDescriptorOnlySurface,Cou
 // do not call prepare, copy the primary frame, or invent execution flags.
 template<class Owner,class Use>
 int tglWithOwnedDescriptorFfdiSecondary(TglOwnedDescriptorOnlySurface& target,
-    Owner& secondary,Use use) noexcept {
+    Owner& secondary,Use use,const TglOwnedSurfaceStorage* captured=nullptr) noexcept {
     static_assert(noexcept(use(std::declval<const TglOwnedSurfaceStorage&>(),
         std::declval<const TglOwnedSurfaceStorage&>())),"FFDI secondary consumer ABI");
-    int result=5;
-    const bool sourceLeased=secondary.withSurface([&](const auto& source) noexcept {
-        if(!target.publishFfdiSecondaryFrom(secondary,source)) return;
+    return tglWithCapturedOwnedSurfaceRoles(std::array<Owner*,1>{&secondary},
+        std::array<const TglOwnedSurfaceStorage*,1>{captured},[&](const auto& views) noexcept {
+        const auto& source=*views[0];
+        if(!target.publishFfdiSecondaryFrom(secondary,source)) return 5;
+        int result=5;
         target.withDescriptor([&](const auto& output) noexcept {result=use(source,output);});
+        return result;
     });
-    return sourceLeased?result:5;
 }
 
 // Two FFDN allocations (1f7fd1), each followed by history handling and

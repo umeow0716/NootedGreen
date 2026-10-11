@@ -5912,6 +5912,17 @@ static void testNativeResourceBoundary() {
                         assert(actual==wanted);return 31;
                     })==31 && secondaryConsumers==1);
                 TglOwnedDescriptorOnlySurface unprepared;
+                assert(owner.withSurface([&](const auto& captured) noexcept {
+                    assert(tglWithOwnedDescriptorFfdiSecondary(targets[0],owner,
+                        [](const auto&,const auto&) noexcept {assert(false);return 0;})==5);
+                    assert(tglWithOwnedDescriptorFfdiSecondary(targets[0],owner,
+                        [&](const auto& source,const auto&) noexcept {
+                            assert(&source==&captured && owner.hasSurfaceLease(source));
+                            owner.reset();assert(owner.ensure(key)==5);
+                            return 31;
+                        },&captured)==31);
+                    assert(owner.hasSurfaceLease(captured));
+                }));
                 assert(tglWithOwnedDescriptorFfdiSecondary(unprepared,owner,
                     [](const auto&,const auto&) noexcept {assert(false);return 0;})==5);
                 assert(owner.withSurface([](const auto&) noexcept {}));
