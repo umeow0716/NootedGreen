@@ -11074,10 +11074,17 @@ int main() {
                                     assert(combined.allocate==entries.allocate && combined.freeResources==entries.freeResources &&
                                         combined.sampleMode==entries.sampleMode && combined.inputFormat==entries.inputFormat);
                                     assert(combined.missingMask()==(entries.missingMask()&~(1U<<20)));
-                                    // Fifteen real entries retain their resolver leases; the
-                                    // remaining twelve are explicitly CPU-test presence stubs.
+                                    TglNativeVpCompressionBinding compressionBinding;
+                                    auto forbiddenNative=[](uintptr_t,uintptr_t,const void*,uint32_t) noexcept {assert(false);};
+                                    assert(tglWithOwnedVpPlatformCompressionAssembly(*storage,output,stateCpu.bytes,
+                                        0x4000,compressionBinding,read,forbiddenNative,combined,
+                                        [&](void* packetChild,const auto& packetEntries) noexcept {
+                                    assert(packetChild==child && packetEntries.missingMask()==
+                                        (combined.missingMask()&~((1U<<21)|(1U<<24)|(1U<<25)|(1U<<26))));
+                                    // Nineteen real entries retain resolver leases. Eight
+                                    // remaining entries are explicit CPU presence fixtures.
                                     TglOwnedVpFlatDispatchTable dispatch;
-                                    assert(dispatch.build(testVpPresenceEntries(combined),
+                                    assert(dispatch.build(testVpPresenceEntries(packetEntries),
                                         [](uintptr_t,size_t) noexcept {return true;}));
                                     assert(graph.withLeasedFlatDispatch(child,dispatch,[&](void* admitted) noexcept {
                                         uintptr_t addressPoint=0;
@@ -11086,8 +11093,15 @@ int main() {
                                         std::memcpy(&csc,reinterpret_cast<const void*>(addressPoint+0xa0),sizeof(csc));
                                         assert(csc==combined.csc);
                                         csc(admitted,state,assemblyIef.data());
+                                        decltype(packetEntries.platformPacket) platform=nullptr;
+                                        std::memcpy(&platform,reinterpret_cast<const void*>(addressPoint+0xc0),sizeof(platform));
+                                        assert(platform==packetEntries.platformPacket);
+                                        platform(admitted,nullptr,state);
+                                        assert(packetEntries.compression(admitted,nullptr,&output,state)==5);
                                         return consumerResult;
                                     })==consumerResult);
+                                    return consumerResult;
+                                        })==consumerResult);
                                     assert(state[0x88]==(cscEnabled?1:savedState[0x88]));
                                     const auto beforeRetirement=retired;
                                     const auto beforeReleases=backends[0].releases+backends[1].releases;
