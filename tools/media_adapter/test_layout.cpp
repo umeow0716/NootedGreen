@@ -9077,6 +9077,30 @@ static void testSfcLineBufferOwnership() {
                     bool(*)(uintptr_t,void*,size_t)) const noexcept {return true;}
             } binding;
             auto noRead=+[](uintptr_t,void*,size_t) noexcept {return false;};
+            {
+                Cpu retainedState,retainedAvs;
+                TglOwnedVeboxFrameRetention frameRetention;
+                TglOwnedVpSfcCpuGraph<Cpu,Cpu> retainedGraph(retainedState,retainedAvs,&frameRetention);
+                assert(retainedGraph.initialize(0x1000,0x2000,0x3000,binding,noRead,1,0));
+                const auto generation=retainedGraph.generation();
+                struct Pending {bool acquired,writtenBack;};
+                frameRetention.observe(Pending{true,false});
+                assert(!retainedGraph.tryReset());
+                assert(!retainedGraph.initialize(0x1000,0x2000,0x3000,binding,noRead,1,0));
+                assert(retainedGraph.withPassInitializationEntry([](void*,auto) noexcept {
+                    assert(false);return 0;
+                })==5);
+                assert(retainedGraph.withInitializedAssemblyEntries(TglOwnedVpEntrySet{},
+                    [](void*,const auto&) noexcept {assert(false);return 0;},
+                    [](void*,const auto&) noexcept {assert(false);return 0;})==5);
+                assert(retainedGraph.generation()==generation && retainedState.live && retainedAvs.live);
+                // Only the separate retirement-reservation consumer may clear
+                // backing; pending is deliberately never reset for frame reuse.
+                assert(retainedGraph.withTeardownReservation([](auto release) noexcept {
+                    release();return 0;
+                })==0);
+                assert(!retainedState.live && !retainedAvs.live && frameRetention());
+            }
             TglOwnedVpSfcCpuGraph<Cpu,Cpu> graph(stateCpu,avsCpu);
             assert(graph.initialize(0x1000,0x2000,0x3000,binding,noRead,1,0));
             stateCpu.lineLive=avsCpu.lineLive=&backend.live;

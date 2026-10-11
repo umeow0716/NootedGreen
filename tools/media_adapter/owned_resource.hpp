@@ -10418,7 +10418,8 @@ public:
     template<class Binding,class Read>
     bool initialize(uintptr_t os,uintptr_t renderHal,uintptr_t mhw,
         const Binding& binding,Read read,uint32_t channel,uintptr_t performance) {
-        if(busy_ || resourcesBound_ || constructionScope_ || generation_==UINT64_MAX) return false;
+        if(busy_ || resourcesBound_ || constructionScope_ ||
+           (retention_ && (*retention_)()) || generation_==UINT64_MAX) return false;
         Guard guard(busy_);clear();
         if(!storage_.initializeBorrowed(os,renderHal,mhw,binding,read) ||
            !avs_.initialize()) {
@@ -10449,7 +10450,8 @@ public:
         using InitResolve=TglOwnedVpSfcResolve<InitContext>;
         using Entry=void(*)(void*) noexcept;
         static_assert(noexcept(use(nullptr,Entry{})),"VP construction consumer ABI");
-        if(!ready_ || busy_ || resourcesBound_ || constructionScope_ || generation_==UINT64_MAX) return 5;
+        if(!ready_ || busy_ || resourcesBound_ || constructionScope_ ||
+           (retention_ && (*retention_)()) || generation_==UINT64_MAX) return 5;
         Guard guard(busy_);ready_=false;++generation_;
         InitContext initialization(storage_,state_);
         void* child=storage_.bytes.data();
@@ -10485,7 +10487,7 @@ public:
         using InitContext=TglOwnedVpPassInitContext<StateBackend>;
         using InitResolve=TglOwnedVpSfcResolve<InitContext>;
         if(base.initialize || !ready_ || busy_ || resourcesBound_ ||
-            constructionScope_ || generation_==UINT64_MAX) return 5;
+            constructionScope_ || (retention_ && (*retention_)()) || generation_==UINT64_MAX) return 5;
         const auto retained=base;
         Guard construction(constructionScope_);
         InitContext initialization(storage_,state_);
@@ -10509,7 +10511,7 @@ public:
     // CPU teardown only: the enclosing runtime owner still has to establish
     // GPU retirement before calling this or releasing the VP allocation.
     bool tryReset() noexcept {
-        if(busy_ || resourcesBound_) return false;
+        if(busy_ || resourcesBound_ || (retention_ && (*retention_)())) return false;
         Guard guard(busy_);clear();return true;
     }
     void reset() noexcept {(void)tryReset();}
