@@ -9159,6 +9159,21 @@ int tglRunOwnedVeboxAllocationQueriedStages(QueryFfdi ffdiEnabled,QuerySecondary
 // the captured identities around each query and stage, not only at frame exit:
 // a stage must never hand an invalidated child to the next stage. Stage owners
 // still supply qualified allocation policy and explicit captured source views.
+// Per durable Frame, never a process-global success flag. Once a command has
+// been acquired, all nested status-error unwind must retain that frame until
+// its whole-frame owner admits discard/completion and destroys it.
+class TglOwnedVeboxFrameRetention {
+    bool pending_=false;
+public:
+    TglOwnedVeboxFrameRetention()=default;
+    TglOwnedVeboxFrameRetention(const TglOwnedVeboxFrameRetention&)=delete;
+    TglOwnedVeboxFrameRetention& operator=(const TglOwnedVeboxFrameRetention&)=delete;
+    bool operator()() const noexcept {return pending_;}
+    template<class Result> void observe(const Result& result) noexcept {
+        pending_=pending_ || result.acquired || result.writtenBack;
+    }
+};
+struct TglOwnedVeboxFrameNoRetention {bool operator()() const noexcept {return false;}};
 struct TglOwnedVeboxFrameNoUnwind {
     void operator()(void*,uintptr_t,const TglOwnedSurfaceStorage&) const noexcept {}
 };
@@ -11350,7 +11365,8 @@ struct TglOwnedFfdiTailViews {
 // synchronous ownership only: no submit/completion lifetime is implied.
 template<bool ScopedStmm=false,size_t Count,class TargetOwner,class PriorOwner,class Owner,class ChildOwner,class ExecutionOwner,
     class Read,class SfcFormat,class SfcColor,class ParameterKind,class Supports,
-    class Rectangle,class Stmm,class Statistics,class Unwind=TglOwnedVeboxFrameNoUnwind>
+    class Rectangle,class Stmm,class Statistics,class Unwind=TglOwnedVeboxFrameNoUnwind,
+    class Keep=TglOwnedVeboxFrameNoRetention>
 int tglRunCapturedVeboxSurfaceFrame(std::array<TglOwnedDescriptorOnlySurface,Count>& ffdiDescriptors,
     const std::array<TargetOwner*,Count>& ffdiBacked,std::array<TglOwnedDescriptorOnlySurface,2>& ffdnDescriptors,
     const std::array<TargetOwner*,2>& ffdnBacked,PriorOwner& prior,TglOwnedDescriptorOnlySurface& history,
@@ -11358,8 +11374,9 @@ int tglRunCapturedVeboxSurfaceFrame(std::array<TglOwnedDescriptorOnlySurface,Cou
     ChildOwner& childOwner,ExecutionOwner& reportOwner,void* child,uintptr_t report,
     const TglOwnedSurfaceStorage& source,Read read,SfcFormat sfcFormat,SfcColor sfcColor,
     ParameterKind parameterKind,Supports supports,Rectangle rectangle,Stmm stmm,Statistics statistics,
-    Unwind unwind={}) noexcept {
+    Unwind unwind={},Keep keep={}) noexcept {
     static_assert(Count>0 && Count<=4,"FFDi frame view capacity");
+    if(keep()) return 5; // never mutate/reuse an already pending frame
     return tglRunCapturedVeboxAllocation(input,childOwner,reportOwner,child,report,source,
         [&](void* c,uintptr_t e,const auto& s) noexcept -> int {
             TglOwnedFfdiCompressionSelection selection{};
@@ -11403,6 +11420,8 @@ int tglRunCapturedVeboxSurfaceFrame(std::array<TglOwnedDescriptorOnlySurface,Cou
                     return next(views);
                 },{},&selection);
             if(!status) return 0;
+            static_assert(noexcept(keep()) && std::is_same_v<decltype(keep()),bool>);
+            if(keep()) return status;
             // FFDi, FFDN and history leases have all unwound before cleanup.
             return tglRunCapturedVeboxAllocation(input,childOwner,reportOwner,c,e,s,
                 [&](void* active,uintptr_t execution,const auto& surface) noexcept -> int {
@@ -12918,11 +12937,13 @@ template<class ExecutionOwner> struct TglOwnedStmmReportPublisher {
         });
     }
 };
-template<class Pair,class SourceOwner,class ChildOwner,class ExecutionOwner,class Read,class Publish,class Use>
+template<class Pair,class SourceOwner,class ChildOwner,class ExecutionOwner,class Read,class Publish,class Use,
+    class Keep=TglOwnedVeboxFrameNoRetention>
 int tglRunCapturedStmmPair(Pair& pair,SourceOwner& sourceOwner,ChildOwner& childOwner,
     ExecutionOwner& executionOwner,void* child,uintptr_t execution,
-    const TglOwnedSurfaceStorage& source,Read read,bool reinitialize,Publish publish,Use use) noexcept {
+    const TglOwnedSurfaceStorage& source,Read read,bool reinitialize,Publish publish,Use use,Keep keep={}) noexcept {
     using Storage=typename Pair::Storage;
+    if(keep()) return 5;
     bool allocated=false;
     const int result=tglRunCapturedVeboxAllocation(sourceOwner,childOwner,executionOwner,child,execution,source,
         [&](void* c,uintptr_t e,const auto& s) noexcept -> int {
@@ -12964,14 +12985,16 @@ int tglRunCapturedStmmPair(Pair& pair,SourceOwner& sourceOwner,ChildOwner& child
                 return consume(&first,&second);
             });
         });
-    if(result && allocated) pair.reset(); // every STMM lease has ended
+    static_assert(noexcept(keep()) && std::is_same_v<decltype(keep()),bool>);
+    if(result && allocated && !keep()) pair.reset(); // every STMM lease has ended
     return result;
 }
-template<class Pair,class SourceOwner,class ChildOwner,class ExecutionOwner,class Read,class Publish,class Use>
+template<class Pair,class SourceOwner,class ChildOwner,class ExecutionOwner,class Read,class Publish,class Use,
+    class Keep=TglOwnedVeboxFrameNoRetention>
 int tglRunCapturedStmmSurfacePair(Pair& pair,const TglOwnedSurfaceStorage& firstShell,
     const TglOwnedSurfaceStorage& secondShell,SourceOwner& sourceOwner,ChildOwner& childOwner,
     ExecutionOwner& executionOwner,void* child,uintptr_t execution,
-    const TglOwnedSurfaceStorage& source,Read read,bool reinitialize,Publish publish,Use use) noexcept {
+    const TglOwnedSurfaceStorage& source,Read read,bool reinitialize,Publish publish,Use use,Keep keep={}) noexcept {
     return tglRunCapturedStmmPair(pair,sourceOwner,childOwner,executionOwner,child,execution,source,
         read,reinitialize,publish,[&](const auto* first,const auto* second) noexcept -> int {
             using Surface=TglOwnedSurfaceStorage;
@@ -12983,7 +13006,7 @@ int tglRunCapturedStmmSurfacePair(Pair& pair,const TglOwnedSurfaceStorage& first
                         "captured STMM surface stage ABI");
                     return use(&a,&b);
                 });
-        });
+        },keep);
 }
 #if defined(__APPLE__)
 // Call only under the resource owner's synchronous lease, before GPU use.
@@ -14064,13 +14087,14 @@ private:
 // Synchronous only: the consumer must not submit GPU work without a separate
 // completion-bound owner reservation.
 template<class SourceOwner,class ChildOwner,class ExecutionOwner,class Read,
-    class Writable,class Publish,class Consume>
+    class Writable,class Publish,class Consume,class Keep=TglOwnedVeboxFrameNoRetention>
 int tglRunCapturedStatisticsFrame(TglStatisticsResource<TglNativeResourceBackend>& statistics,
     SourceOwner& sourceOwner,ChildOwner& childOwner,ExecutionOwner& executionOwner,
     void* child,uintptr_t execution,const TglOwnedSurfaceStorage& source,Read read,
     bool alignDi64,const TglNativeBufferFillBinding& binding,Writable writable,
-    Publish publish,Consume consume) noexcept {
+    Publish publish,Consume consume,Keep keep={}) noexcept {
     using Storage=TglStatisticsResource<TglNativeResourceBackend>::Storage;
+    if(keep()) return 5;
     static_assert(noexcept(writable(uintptr_t{},uint32_t{})) &&
         noexcept(publish(std::declval<const Storage&>(),std::declval<const TglStatisticsAllocation&>())) &&
         noexcept(consume(std::declval<const Storage&>(),std::declval<const TglStatisticsAllocation&>())) &&
@@ -14107,18 +14131,19 @@ int tglRunCapturedStatisticsFrame(TglStatisticsResource<TglNativeResourceBackend
                 });
             });
     });
-    if(status && entered) statistics.reset();
+    static_assert(noexcept(keep()) && std::is_same_v<decltype(keep()),bool>);
+    if(status && entered && !keep()) statistics.reset();
     return status;
 }
 
 // Direct final-stage binding for tglRunCapturedVeboxSurfaceFrame<true>.
 // Retains the existing surface views by nesting, not by copying resource tokens.
 template<bool Surface=false,class SourceOwner,class ChildOwner,class ExecutionOwner,class Read,
-    class Writable,class Consume>
+    class Writable,class Consume,class Keep=TglOwnedVeboxFrameNoRetention>
 auto tglMakeCapturedStatisticsFrameTail(TglStatisticsResource<TglNativeResourceBackend>& statistics,
     SourceOwner& sourceOwner,ChildOwner& childOwner,ExecutionOwner& executionOwner,
-    Read read,bool alignDi64,TglNativeBufferFillBinding binding,Writable writable,Consume consume) noexcept {
-    return [&statistics,&sourceOwner,&childOwner,&executionOwner,read,alignDi64,binding,writable,consume]
+    Read read,bool alignDi64,TglNativeBufferFillBinding binding,Writable writable,Consume consume,Keep keep={}) noexcept {
+    return [&statistics,&sourceOwner,&childOwner,&executionOwner,read,alignDi64,binding,writable,consume,keep]
         (void* child,uintptr_t execution,const TglOwnedSurfaceStorage& source,
          const TglOwnedFfdiTailViews& ffdi,const TglOwnedFfdnTailViews& ffdn,
          const TglOwnedStmmTailViews& stmm) noexcept -> int {
@@ -14140,7 +14165,7 @@ auto tglMakeCapturedStatisticsFrameTail(TglStatisticsResource<TglNativeResourceB
                     "statistics surface-frame consumer ABI");
                 return consume(child,execution,source,ffdi,ffdn,stmm,storage,layout);
                 }
-            });
+        },keep);
     };
 }
 
@@ -14424,8 +14449,10 @@ TglOwnedVeboxCommandTransactionResult tglRunCapturedVeboxFrameCommand(
     const TglOwnedFfdnTailViews& ffdn,const TglOwnedStmmTailViews& stmm,
     const TglOwnedSurfaceStorage& statistics,bool disableTemporalDenoise,bool alignDi64,
     const std::array<uint32_t,11>& controls,Read read,SurfaceAdmit admitSurface,
-    DiAdmit admitDi,Register registerResource,Control control,Consume consume) noexcept {
+    DiAdmit admitDi,Register registerResource,Control control,
+    TglOwnedVeboxFrameRetention& retention,Consume consume) noexcept {
     TglOwnedVeboxCommandTransactionResult result;
+    if(retention()) return result;
     auto* child=reinterpret_cast<void*>(leases.child);
     result.status=tglRunCapturedStateFrame(leases.state,sourceOwner,childOwner,executionOwner,
         child,leases.execution,leases.renderHal,leases.sku,leases.source,leases.target,
@@ -14441,7 +14468,9 @@ TglOwnedVeboxCommandTransactionResult tglRunCapturedVeboxFrameCommand(
                     static_assert(noexcept(consume(context)) &&
                         std::is_same_v<decltype(consume(context)),TglOwnedVeboxCommandTransactionResult>,
                         "captured frame command result ABI");
-                    result=consume(context);return result.status;
+                    result=consume(context);
+                    retention.observe(result); // BEFORE any enclosing error unwind
+                    return result.status;
                 });
         });
     return result;

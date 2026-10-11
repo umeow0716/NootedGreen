@@ -5062,13 +5062,14 @@ static void testNativeStatisticsFill() {
     assert(!captured(prepare) && statistics.layout().bytes==1664);
     statistics.reset();
     unsigned statisticsTailUses=0,statisticsTailPublications=0;
+    bool keepStatistics=false;
     auto statisticsTail=[&](auto consume) noexcept {
         return tglRunCapturedStatisticsFrame(statistics,sourceOwner,childLease,executionLease,
             childBytes.data(),reportAddress,sourceOwner.storage,read,false,binding,writable,
             [&](const Storage&,const TglStatisticsAllocation& layout) noexcept -> int {
                 ++statisticsTailPublications;assert(layout.bytes==1664);
                 return tglPublishOwnedStatisticsLayout(childLease,childBytes.data(),layout);
-            },consume);
+            },consume,[&]() noexcept {return keepStatistics;});
     };
     assert(!statisticsTail([&](const Storage&,const TglStatisticsAllocation& layout) noexcept -> int {
         ++statisticsTailUses;statistics.reset();assert(statistics.layout().bytes==layout.bytes);
@@ -5077,6 +5078,15 @@ static void testNativeStatisticsFill() {
     assert(statisticsTailUses==1 && statisticsTailPublications==1);
     assert(statisticsTail([](const Storage&,const TglStatisticsAllocation&) noexcept -> int {return -91;})==-91);
     assert(!statistics.layout().bytes && statisticsTailPublications==1);
+    assert(statisticsTail([&](const Storage&,const TglStatisticsAllocation&) noexcept -> int {
+        keepStatistics=true;return -92;
+    })==-92 && statistics.layout().bytes==1664);
+    const auto retainedPublications=statisticsTailPublications;
+    assert(statisticsTail([](const Storage&,const TglStatisticsAllocation&) noexcept -> int {
+        assert(false);return 0;
+    })==5 && statistics.layout().bytes==1664 && statisticsTailPublications==retainedPublications);
+    // CPU fixture has no submitted work: explicitly release its retained owner.
+    keepStatistics=false;statistics.reset();statisticsTailPublications=1;
     const auto beforeRejectedStatistics=fixture.allocations;
     executionLease.valid=false;
     assert(statisticsTail([](const Storage&,const TglStatisticsAllocation&) noexcept -> int {
@@ -7025,6 +7035,8 @@ static void testNativeResourceBoundary() {
                                         TglNativeBufferFillBinding statisticsFill{reinterpret_cast<uintptr_t>(&statisticsFixture),
                                             reinterpret_cast<uintptr_t>(FrameStatisticsFixture::fill)};
                                         unsigned combinedUses=0,combinedUnwinds=0;
+                                        TglOwnedVeboxFrameRetention frameRetention;
+                                        auto keepFrame=[&]() noexcept {return frameRetention();};
                                         assert(linkedInput.withSurface([&](const auto& current) noexcept {
                                             assert(tglRunCapturedVeboxSurfaceFrame<true>(frameTargets,backedTargets,
                                                 descriptorPair,std::array{&targetA,&targetB},targetA,historyShell,
@@ -7042,7 +7054,7 @@ static void testNativeResourceBoundary() {
                                                         TglOwnedStmmReportPublisher<decltype(reportOwner)>{reportOwner,e},
                                                         [&](const auto* a,const auto* b) noexcept -> int {
                                                             return next(TglOwnedStmmTailViews{{a,b}});
-                                                        });
+                                                        },keepFrame);
                                                 },tglMakeCapturedStatisticsFrameTail<true>(frameStatistics,linkedInput,childOwner,reportOwner,
                                                     read,false,statisticsFill,[](uintptr_t address,uint32_t bytes) noexcept {
                                                         return address==0x4000 && bytes>0;
@@ -7134,21 +7146,22 @@ static void testNativeResourceBoundary() {
                                                                 reinterpret_cast<uintptr_t>(actualChild),report,renderAddress,skuAddress,
                                                                 linkedStorage,nullptr,surfaces,statePacket,diPacket};
                                                             auto rejectedLeases=packetLeases;
+                                                            TglOwnedVeboxFrameRetention retention;
                                                             ++rejectedLeases.renderHal;
                                                             const auto preservedPacket=statePacket;
                                                             unsigned rejectedConsumers=0;
                                                             const auto rejected=tglRunCapturedVeboxFrameCommand(linkedInput,childOwner,reportOwner,
                                                                 rejectedLeases,ffdi,ffdn,stmm,statisticsShell,false,false,input.controls,
-                                                                stateRead,surfaceAdmit,admitted,registration,control,[&](auto&) noexcept {
+                                                                stateRead,surfaceAdmit,admitted,registration,control,retention,[&](auto&) noexcept {
                                                                     ++rejectedConsumers;return TglOwnedVeboxCommandTransactionResult{};
                                                                 });
                                                             assert(rejected.status==5 && !rejected.acquired && !rejected.writtenBack &&
-                                                                !rejectedConsumers && !registrations);
+                                                                !rejectedConsumers && !registrations && !retention());
                                                             assert(std::memcmp(&statePacket,&preservedPacket,sizeof(statePacket))==0);
                                                             unsigned writebacks=0;
                                                             const auto transaction=tglRunCapturedVeboxFrameCommand(linkedInput,childOwner,reportOwner,
                                                                 packetLeases,ffdi,ffdn,stmm,statisticsShell,false,false,input.controls,
-                                                                stateRead,surfaceAdmit,admitted,registration,control,[&](auto& packets) noexcept {
+                                                                stateRead,surfaceAdmit,admitted,registration,control,retention,[&](auto& packets) noexcept {
                                                             using Packets=std::decay_t<decltype(packets)>;
                                                             using Resolve=TglOwnedVeboxScopedContext<Packets>;
                                                             using Callbacks=TglOwnedVeboxProducerCallbacks<Resolve>;
@@ -7180,7 +7193,7 @@ static void testNativeResourceBoundary() {
                                                                 decltype(admitted),decltype(registration),decltype(control)>;
                                                             using Resolve=TglOwnedVeboxScopedContext<Packets>;
                                                             assert(setups==1 && builds==1 && !Resolve::get(actualChild));
-                                                            assert(transaction.acquired && transaction.writtenBack && writebacks==1);
+                                                            assert(transaction.acquired && transaction.writtenBack && writebacks==1 && retention());
                                                             assert(input.iecp?registrations==0:registrations>0);
                                                             return transaction.status;
                                                         });
@@ -7200,17 +7213,22 @@ static void testNativeResourceBoundary() {
                                                     std::memcpy(reportBackend.bytes.data()+0x2c,&invalidIndex,4);
                                                     assert(commandInput([](const auto&) noexcept -> int {assert(false);return 0;})==5);
                                                     std::memcpy(reportBackend.bytes.data()+0x2c,&savedIndex,4);
+                                                    frameRetention.observe(TglOwnedVeboxCommandTransactionResult{-83,31,true,false});
                                                     return -83;
-                                                }),[&](void*,uintptr_t,const auto&) noexcept {
+                                                },keepFrame),[&](void*,uintptr_t,const auto&) noexcept {
                                                     assert(frameTargets[0].withDescriptor([](const auto&) noexcept {}));
                                                     assert(targetA.withSurface([](const auto&) noexcept {}));
                                                     assert(historyShell.withDescriptor([](const auto&) noexcept {}));
                                                     assert(!stmmApi.references);
                                                     assert(!frameStatistics.layout().bytes && statisticsFixture.releases==1);
                                                     ++combinedUnwinds;
-                                                })==-83);
+                                                },keepFrame)==-83);
                                         }));
-                                        assert(combinedUses==1 && combinedUnwinds==1);
+                                        assert(combinedUses==1 && combinedUnwinds==0 && frameRetention());
+                                        assert(stmmApi.references==2 && frameStatistics.layout().bytes && !statisticsFixture.releases);
+                                        // CPU fixture never submitted; explicit discard ends retained backing.
+                                        frameStatistics.reset();stmmPair.reset();
+                                        assert(!stmmApi.references && !frameStatistics.layout().bytes && statisticsFixture.releases==1);
                                         assert(statisticsFixture.allocations==1 && statisticsFixture.fills==1);
                                         std::memcpy(reportBackend.bytes.data()+0x60,savedRoles.data(),16);
                                         std::memcpy(reportBackend.bytes.data()+0xa0c,&savedTailPipe,4);
@@ -8070,12 +8088,13 @@ static void testResourceBinding() {
                 if(!contains(child) && !contains(report)) return false;
                 std::memcpy(out,reinterpret_cast<const void*>(address),count);return true;
             };
+            bool keepPair=false;
             auto run=[&](const auto& a,const auto& b,auto use) noexcept {
                 return tglRunCapturedStmmSurfacePair(pair,a,b,input,childLease,reportLease,
                     child.data(),reportAddress,input.storage,read,false,
                     [&](size_t,const auto& key) noexcept -> int {
                         report[0x17]=key.compressed?1:0;report[0x18]=uint8_t(key.compressionMode);return 0;
-                    },use);
+                    },use,[&]() noexcept {return keepPair;});
             };
             for(int status:{0,-101}) {
                 assert(run(first,second,[&](const auto* a,const auto* b) noexcept -> int {
@@ -8086,6 +8105,14 @@ static void testResourceBinding() {
                     [](const auto&,const auto&) noexcept -> int {assert(false);return 0;})==5);
             }
             assert(!api.references);
+            assert(run(first,second,[&](const auto* a,const auto* b) noexcept -> int {
+                assert(a==&first && b==&second && api.references==2);
+                keepPair=true;return -102;
+            })==-102 && api.references==2);
+            assert(run(first,second,[](const auto*,const auto*) noexcept -> int {
+                assert(false);return 0;
+            })==5 && api.references==2);
+            keepPair=false;pair.reset();assert(!api.references); // CPU-only explicit discard
             TglOwnedSurfaceStorage foreign{};
             assert(run(foreign,second,[](const auto*,const auto*) noexcept -> int {assert(false);return 0;})==5);
             assert(!api.references);
