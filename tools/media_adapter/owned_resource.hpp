@@ -1746,6 +1746,11 @@ struct TglOwnedVeboxVtable {
         }
         if (candidate[0] != image+0x12e240 || candidate[1] != image+0x12e250 ||
             candidate[0x40/8] != image+0x12e9c0 || candidate[0x48/8] != image+0x12ea30 ||
+            // Submit12a5dc/12a61b retains these post-writeback callbacks.
+            // Exact TGL150=12a730 and158=8f380 are int(this) no-ops, not
+            // discard, resource cleanup or completion. Do not admit another
+            // executable callback merely because it lies in the image.
+            candidate[0x150/8] != image+0x12a730 || candidate[0x158/8] != image+0x8f380 ||
             // Admission retains these native base methods. +180 uses the
             // owned base90 history/mode state; neither is a donor thunk.
             // +170 calls +160 unconditionally (12ac01), +168 conditionally
