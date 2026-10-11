@@ -10722,7 +10722,74 @@ static void testSfcFrameFields() {
     }
 }
 
+static void testRetainedVeboxFrames() {
+    struct Backend {
+        unsigned& allocated;unsigned& released;
+        int allocate(std::array<uint8_t,0x148>& bytes,const TglResourceKey&) noexcept {
+            ++allocated;bytes[0]=1;return 0;
+        }
+        bool backed(const std::array<uint8_t,0x148>& bytes) noexcept {return bytes[0]==1;}
+        void release(std::array<uint8_t,0x148>& bytes) noexcept {assert(bytes[0]==1);++released;}
+    };
+    struct Frame {
+        Backend backend;TglOwnedResource<Backend> resource;TglOwnedVeboxBuilderScratch scratch;
+        unsigned& destroyed;
+        Frame(unsigned& allocated,unsigned& released,unsigned& deaths) noexcept
+            :backend{allocated,released},resource(backend),destroyed(deaths) {}
+        ~Frame() noexcept {++destroyed;}
+    };
+    using Pool=TglOwnedVeboxRetainedFrames<Frame>;
+    auto& pool=Pool::processLifetime();
+    unsigned allocated=0,released=0,destroyed=0,calls=0;
+    const auto first=pool.create(allocated,released,destroyed);
+    const auto second=pool.create(allocated,released,destroyed);
+    assert(first.index<2 && second.index<2 && first.index!=second.index);
+    assert(pool.create(allocated,released,destroyed).index==2);
+    const Frame* address=nullptr;
+    const auto failed=pool.run(first,[&](Frame& frame) noexcept {
+        ++calls;address=&frame;TglResourceKey key{};key.width=16;key.height=1;
+        assert(frame.resource.ensure(key).status==0);
+        frame.scratch.command[0]=0x71;
+        assert(pool.run(second,[&](Frame&) noexcept {assert(false);return TglOwnedVeboxCommandTransactionResult{};}).status==5);
+        return TglOwnedVeboxCommandTransactionResult{31,31,true,false};
+    });
+    assert(failed.status==31 && allocated==1 && !released && !destroyed);
+    assert(pool.run(first,[&](Frame&) noexcept {++calls;return TglOwnedVeboxCommandTransactionResult{};}).status==5 && calls==1);
+    assert(pool.retire(first,[&](const Frame& frame,bool pending,const auto& result) noexcept -> int {
+        assert(&frame==address && pending && result.status==31 && !result.writtenBack);
+        assert(frame.scratch.command[0]==0x71 && frame.resource.state()==TglOwnedResource<Backend>::State::Backed);
+        return 31;
+    })==31 && !released && !destroyed);
+    const auto success=pool.run(second,[&](Frame& frame) noexcept {
+        TglResourceKey key{};key.width=32;key.height=1;
+        assert(frame.resource.ensure(key).status==0);
+        return TglOwnedVeboxCommandTransactionResult{0,0,true,true};
+    });
+    assert(success.writtenBack && !released && !destroyed);
+    assert(pool.run(second,[](Frame&) noexcept {
+        assert(false);return TglOwnedVeboxCommandTransactionResult{};
+    }).status==5);
+    auto admit=[](const Frame&,bool pending,const auto&) noexcept -> int {assert(pending);return 0;};
+    assert(pool.retire(first,admit)==0 && released==1 && destroyed==1);
+    const auto replacement=pool.create(allocated,released,destroyed);
+    assert(replacement.index==first.index && replacement.generation!=first.generation);
+    assert(pool.retire(first,admit)==5 && destroyed==1);
+    assert(pool.retire(second,admit)==0 && released==2 && destroyed==2);
+    assert(pool.retire(replacement,[](const Frame&,bool pending,const auto&) noexcept -> int {
+        assert(!pending);return 0;
+    })==0 && released==2 && destroyed==3);
+    const auto inconsistent=pool.create(allocated,released,destroyed);
+    assert(pool.run(inconsistent,[](Frame&) noexcept {
+        return TglOwnedVeboxCommandTransactionResult{0,31,false,true};
+    }).status==5);
+    assert(pool.run(inconsistent,[](Frame&) noexcept {
+        assert(false);return TglOwnedVeboxCommandTransactionResult{};
+    }).status==5);
+    assert(pool.retire(inconsistent,admit)==0 && destroyed==4);
+}
+
 int main() {
+    testRetainedVeboxFrames();
     {
         TglOwnedVpEntrySet entries;
         assert(!entries.hasAllEntries() && entries.missingMask()==0x7ffffffU);

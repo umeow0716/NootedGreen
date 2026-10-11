@@ -14279,6 +14279,81 @@ struct TglOwnedVeboxCommandTransactionResult {
     bool writtenBack=false;
 };
 
+// Stable-address whole-frame ownership, not a copied descriptor/token list.
+// Frame must OWN its OS/image leases, child, shells, backing and scratch; a
+// collection of borrowed pointers is not a valid runtime Frame. Fixed process
+// capacity is reserved before command acquisition. Pending slots never run or
+// destruct implicitly, even after successful writeback (which is not a fence).
+// Legacy status-error allocation unwind must not reset Frame members inside
+// run(); use a typed final consumer and explicit retirement instead.
+template<class Frame,size_t Capacity=2> class TglOwnedVeboxRetainedFrames {
+    static_assert(Capacity>0 && Capacity<=2,"bounded pending-frame budget");
+    static_assert(std::is_nothrow_destructible_v<Frame>,"frame cleanup must not throw");
+    struct Slot {Frame* frame=nullptr;uint64_t generation=0;
+        bool pending=false;TglOwnedVeboxCommandTransactionResult result{};};
+    std::array<Slot,Capacity> slots_{};
+    std::atomic_flag gate_=ATOMIC_FLAG_INIT;
+    uint64_t generation_=0;
+    TglOwnedVeboxRetainedFrames()=default;
+    // Pointer slots deliberately do not delete unresolved frames at unload.
+    // The runtime Frame's owned image lease must also prevent code unloading.
+    ~TglOwnedVeboxRetainedFrames()=default;
+    struct Unlock {std::atomic_flag& gate;~Unlock(){gate.clear(std::memory_order_release);}};
+public:
+    struct Ticket {size_t index=Capacity;uint64_t generation=0;};
+    TglOwnedVeboxRetainedFrames(const TglOwnedVeboxRetainedFrames&)=delete;
+    TglOwnedVeboxRetainedFrames& operator=(const TglOwnedVeboxRetainedFrames&)=delete;
+    static TglOwnedVeboxRetainedFrames& processLifetime() noexcept {
+        static TglOwnedVeboxRetainedFrames pool;return pool;
+    }
+    template<class... Args> Ticket create(Args&&... args) noexcept {
+        static_assert(std::is_nothrow_constructible_v<Frame,Args...>,"frame construction reports native failures separately");
+        if(gate_.test_and_set(std::memory_order_acquire)) return {};
+        Unlock unlock{gate_};
+        if(generation_==UINT64_MAX) return {};
+        for(size_t i=0;i<Capacity;++i) if(!slots_[i].frame) {
+            auto* frame=new(std::nothrow) Frame(std::forward<Args>(args)...);
+            if(!frame) return {};
+            slots_[i]={frame,++generation_,false,{}};
+            return {i,generation_};
+        }
+        return {};
+    }
+    template<class Invoke> TglOwnedVeboxCommandTransactionResult run(Ticket ticket,Invoke invoke) noexcept {
+        static_assert(noexcept(invoke(std::declval<Frame&>())) &&
+            std::is_same_v<decltype(invoke(std::declval<Frame&>())),TglOwnedVeboxCommandTransactionResult>);
+        if(gate_.test_and_set(std::memory_order_acquire)) return {};
+        Unlock unlock{gate_};
+        if(ticket.index>=Capacity) return {};
+        auto& slot=slots_[ticket.index];
+        if(!slot.frame || !ticket.generation || slot.generation!=ticket.generation || slot.pending) return {};
+        slot.result=invoke(*slot.frame);
+        // A contradictory consumer result is not permission to reuse storage.
+        // Retain it conservatively and expose the protocol failure unchanged
+        // from the original builder result.
+        if(slot.result.writtenBack && !slot.result.acquired) slot.result.status=5;
+        slot.pending=slot.result.acquired || slot.result.writtenBack;
+        return slot.result;
+    }
+    // Admission must prove actual command discard or generation-qualified
+    // completion, including any attempted submit. No result/status implies it.
+    // Rejection retains the SAME complete object at the SAME address.
+    template<class Admit> int retire(Ticket ticket,Admit admit) noexcept {
+        static_assert(noexcept(admit(std::declval<const Frame&>(),bool{},
+            std::declval<const TglOwnedVeboxCommandTransactionResult&>())) &&
+            std::is_same_v<decltype(admit(std::declval<const Frame&>(),bool{},
+                std::declval<const TglOwnedVeboxCommandTransactionResult&>())),int>);
+        if(gate_.test_and_set(std::memory_order_acquire)) return 5;
+        Unlock unlock{gate_};
+        if(ticket.index>=Capacity) return 5;
+        auto& slot=slots_[ticket.index];
+        if(!slot.frame || !ticket.generation || slot.generation!=ticket.generation) return 5;
+        const int status=admit(static_cast<const Frame&>(*slot.frame),slot.pending,slot.result);
+        if(status) return status;
+        auto* frame=slot.frame;slot={};delete frame;return 0;
+    }
+};
+
 // The setup output is written only after native command acquisition. Keep a
 // sentinel until then: an acquisition failure must not publish empty scratch.
 // A failed writeback leaves ownership unresolved; this is never a fence result.
