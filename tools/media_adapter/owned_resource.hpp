@@ -9955,6 +9955,7 @@ public:
         uintptr_t conditionalSource,uintptr_t parameters,const TglOwnedVpModeState& original,
         void* renderData,Read read,State state,Avs avs,Ief ief,Emit emit,Use use) noexcept {
         if(!ready_ || busy_ || !renderData || base.setup || base.send || base.state || base.filters) return 5;
+        const auto retainedBase=base; // Reader callbacks must not change the admitted catalogue.
         TglOwnedVpFramePreparation frame;TglOwnedVpRegionInput geometry;
         uintptr_t reference=0;
         const int acquired=withFrameAcquisition(source,target,mhw,settings,
@@ -9963,7 +9964,7 @@ public:
                 frame=prepared;geometry=snapshot;reference=sourceA8;return 0;
             });
         if(acquired) return acquired;
-        return withPreparedCallbackAssemblyPass(base,frame,conditionalSource,parameters,target,reference,
+        return withPreparedCallbackAssemblyPass(retainedBase,frame,conditionalSource,parameters,target,reference,
             reinterpret_cast<void*>(source),renderData,
             [&](void* child,const auto& prepared,auto& owner) noexcept -> int {
                 static_assert(noexcept(state(child,prepared,geometry,owner)),"VP assembly state ABI");

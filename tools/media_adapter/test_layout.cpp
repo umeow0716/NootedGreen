@@ -11016,12 +11016,19 @@ int main() {
             for(unsigned stageFailure=0;stageFailure<7;++stageFailure) {
                 calls=0;unsigned states=0,emits=0;int data=0,command=0;
                 TglOwnedVpEntrySet base;
+                const auto admittedFormat=+[](void*,uint32_t) noexcept {return true;};
+                base.compressionFormat=admittedFormat;
+                auto mutatingRead=[&](uintptr_t address,void* out,size_t size) noexcept {
+                    assert(!graph.tryReset());
+                    base.compressionFormat=+[](void*,uint32_t) noexcept {return false;};
+                    return read(address,out,size);
+                };
                 if(stageFailure==3) base.setup=+[](void*,void*,void*,void*) noexcept {return 0;};
                 if(stageFailure==4) base.send=+[](void*,void*,void*) noexcept {return 0;};
                 if(stageFailure==5) base.state=+[](void*,void*,void*,void*) noexcept {return 0;};
                 if(stageFailure==6) base.filters=+[](void*,void*,void*,void*) noexcept {};
                 assert(graph.withLeasedCallbackAssemblyPass(base,0x1000,0x2000,0x3000,0x4000,
-                    0x6000,0x7000,{},&data,read,
+                    0x6000,0x7000,{},&data,mutatingRead,
                     [&](void*,const auto& frame,const auto& geometry,auto&) noexcept {
                         assert(calls==total && !graph.tryReset() && frame.at922 &&
                             geometry.frameWidth==geometrySnapshot.frameWidth);
@@ -11032,6 +11039,7 @@ int main() {
                         assert(entries.setup && entries.send && entries.state && entries.filters);
                         ++emits;return stageFailure==2?-17:0;
                     },[&](void* child,const auto& entries) noexcept {
+                        assert(entries.compressionFormat==admittedFormat);
                         const int result=entries.setup(child,reinterpret_cast<void*>(0x1000),
                             reinterpret_cast<void*>(0x2000),&data);
                         return result?result:entries.send(child,&data,&command);
