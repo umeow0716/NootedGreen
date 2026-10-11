@@ -6744,6 +6744,28 @@ static void testNativeResourceBoundary() {
                                                     assert(!views[1] && !history);return -61;
                                                 })==-61);
                                         }));
+                                        std::array<TglOwnedDescriptorOnlySurface,2> descriptorPair;
+                                        const uint32_t descriptorFormat=3;
+                                        std::memcpy(linkedStorage.prefix.data()+0x130,&descriptorFormat,4);
+                                        std::memcpy(linkedStorage.prefix.data()+0xc8,&previousAddress,8);
+                                        std::memcpy(child.data()+0x1b8,&shellAddress,8);
+                                        const auto descriptorAddress=reinterpret_cast<uintptr_t>(descriptorPair[0].surfaceBinding());
+                                        std::memcpy(child.data()+0xba8,&descriptorAddress,8);
+                                        reportBackend.bytes[8]=1;reportBackend.bytes[0x13]=1;
+                                        const auto beforeDescriptor=backingBackend.allocations;
+                                        assert(linkedInput.withSurface([&](const auto& current) noexcept {
+                                            assert(tglRunCapturedFfdnHistoryPair(descriptorPair,descriptorPair[0],
+                                                linkedInput,&previous,historyShell,childOwner,reportOwner,
+                                                actualChild,report,current,{true,1},read,
+                                                [&](const auto& views,const auto& a,const auto& b,const auto* history) noexcept -> int {
+                                                    assert(history && std::memcmp(history,views[1],sizeof(*history))==0);
+                                                    uint32_t fa=0,fb=0;
+                                                    std::memcpy(&fa,a.prefix.data()+0x130,4);
+                                                    std::memcpy(&fb,b.prefix.data()+0x130,4);
+                                                    assert(fa==3 && fb==3 && reportBackend.bytes[8]==1);return -67;
+                                                })==-67);
+                                        }));
+                                        assert(backingBackend.allocations==beforeDescriptor);
                                         std::memcpy(child.data()+0x1b0,&sourcePointer,8);
                                     }
                                     reportBackend.bytes[8]=0xa5;reportBackend.bytes[0x13]=0;

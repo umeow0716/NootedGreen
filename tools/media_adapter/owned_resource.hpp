@@ -5997,12 +5997,12 @@ int tglPrepareOwnedBackedFfdnPair(const std::array<TargetOwner*,2>& targets,
         },captured,report);
 }
 
-// Bind real type1 FFDN owners to the actual execution report. Snapshot only
+// Bind descriptor or real type1 FFDN owners to the actual execution report. Snapshot only
 // under its held lease; partial reference/compression writes publish at their
 // native positions inside the pair, not after a successful whole-frame return.
-template<class TargetOwner,class Owner,class ExecutionOwner,class Copy,class Finish,
+template<class Targets,class Owner,class ExecutionOwner,class Copy,class Finish,
     class Compression=TglOwnedFfdnCompressionSelection>
-int tglPrepareOwnedBackedFfdnReportPair(const std::array<TargetOwner*,2>& targets,
+int tglPrepareOwnedFfdnReportPair(Targets& targets,
     Owner& input,Owner* previous,Owner* copyDestination,Compression compression,
     ExecutionOwner& reportOwner,uintptr_t report,Copy copy,Finish finish,
     std::array<const TglOwnedSurfaceStorage*,3> captured={}) noexcept {
@@ -6014,9 +6014,23 @@ int tglPrepareOwnedBackedFfdnReportPair(const std::array<TargetOwner*,2>& target
         flag=view.data()[0x15];mode=view.data()[0x16];return 0;
     });
     if(status) return status;
-    return tglPrepareOwnedBackedFfdnPair(targets,input,previous,copyDestination,compression,
+    static_assert(std::tuple_size<std::decay_t<Targets>>::value==2,"FFDN pair extent");
+    if constexpr(std::is_pointer_v<typename std::decay_t<Targets>::value_type>)
+        return tglPrepareOwnedBackedFfdnPair(targets,input,previous,copyDestination,compression,
+            reference,di,flag,mode,copy,finish,captured,
+            TglOwnedFfdnReportPublisher<ExecutionOwner>{reportOwner,report});
+    else return tglPrepareOwnedDescriptorFfdnPair(targets,input,previous,copyDestination,compression,
         reference,di,flag,mode,copy,finish,captured,
         TglOwnedFfdnReportPublisher<ExecutionOwner>{reportOwner,report});
+}
+template<class TargetOwner,class Owner,class ExecutionOwner,class Copy,class Finish,
+    class Compression=TglOwnedFfdnCompressionSelection>
+int tglPrepareOwnedBackedFfdnReportPair(const std::array<TargetOwner*,2>& targets,
+    Owner& input,Owner* previous,Owner* copyDestination,Compression compression,
+    ExecutionOwner& reportOwner,uintptr_t report,Copy copy,Finish finish,
+    std::array<const TglOwnedSurfaceStorage*,3> captured={}) noexcept {
+    return tglPrepareOwnedFfdnReportPair(targets,input,previous,copyDestination,compression,
+        reportOwner,report,copy,finish,captured);
 }
 
 // Exact ICL classifier4a500 and its 90-entry relative jump table4a55c.
@@ -11107,16 +11121,15 @@ int tglProduceCapturedFfdnCompression(TglOwnedFfdnCompressionSelection& output,
     if(!status) output=candidate;
     return status;
 }
-// Real backing pair with a non-owning history shell. Keep source.c8's owner
+// Descriptor/backing pair with a non-owning history shell. Keep source.c8's owner
 // across both per-slot copy decisions and the final synchronous consumer.
 // child1b8 identifies the shell; ba8 remains the separate compression source.
-template<class TargetOwner,class Owner,class ChildOwner,class ExecutionOwner,class Read,class Finish>
-int tglRunCapturedBackedFfdnHistoryPair(const std::array<TargetOwner*,2>& targets,
+template<class Targets,class PriorOwner,class Owner,class ChildOwner,class ExecutionOwner,class Read,class Finish>
+int tglRunCapturedFfdnHistoryPair(Targets& targets,PriorOwner& prior,
     Owner& input,Owner* previous,TglOwnedDescriptorOnlySurface& history,
     ChildOwner& childOwner,ExecutionOwner& reportOwner,void* child,uintptr_t report,
     const TglOwnedSurfaceStorage& source,TglOwnedFfdiCompressionSelection ffdi,
     Read read,Finish finish) noexcept {
-    if(!targets[0] || !targets[1]) return 5;
     return tglRunCapturedVeboxAllocation(input,childOwner,reportOwner,child,report,source,
         [&](void* c,uintptr_t e,const auto& s) noexcept -> int {
             uintptr_t linkedPrevious=0,copyShell=0;
@@ -11127,11 +11140,11 @@ int tglRunCapturedBackedFfdnHistoryPair(const std::array<TargetOwner*,2>& target
                 std::array<const TglOwnedSurfaceStorage*,2>{&s,nullptr},[&](const auto& views) noexcept -> int {
                     if(reinterpret_cast<uintptr_t>(views[1])!=linkedPrevious) return 5;
                     auto selection=[&](const auto&,TglOwnedFfdnCompressionSelection& value) noexcept {
-                        return tglProduceCapturedFfdnCompression(value,input,*targets[0],childOwner,
+                        return tglProduceCapturedFfdnCompression(value,input,prior,childOwner,
                             reportOwner,c,e,s,ffdi,read)==0;
                     };
                     auto run=[&](auto copy,auto historyView) noexcept -> int {
-                        return tglPrepareOwnedBackedFfdnReportPair(targets,input,roles[1],
+                        return tglPrepareOwnedFfdnReportPair(targets,input,roles[1],
                             static_cast<Owner*>(nullptr),selection,reportOwner,e,copy,
                             [&](const auto& inputs,const auto& a,const auto& b) noexcept -> int {
                                 static_assert(noexcept(finish(inputs,a,b,historyView())) &&
@@ -11151,6 +11164,16 @@ int tglRunCapturedBackedFfdnHistoryPair(const std::array<TargetOwner*,2>& target
                         });
                 });
         });
+}
+template<class TargetOwner,class Owner,class ChildOwner,class ExecutionOwner,class Read,class Finish>
+int tglRunCapturedBackedFfdnHistoryPair(const std::array<TargetOwner*,2>& targets,
+    Owner& input,Owner* previous,TglOwnedDescriptorOnlySurface& history,
+    ChildOwner& childOwner,ExecutionOwner& reportOwner,void* child,uintptr_t report,
+    const TglOwnedSurfaceStorage& source,TglOwnedFfdiCompressionSelection ffdi,
+    Read read,Finish finish) noexcept {
+    if(!targets[0] || !targets[1]) return 5;
+    return tglRunCapturedFfdnHistoryPair(targets,*targets[0],input,previous,history,childOwner,
+        reportOwner,child,report,source,ffdi,read,finish);
 }
 template<class Read>
 bool tglReadOwnedStateExecution(TglOwnedStateInputs& output, uintptr_t execution,
