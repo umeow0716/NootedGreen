@@ -6637,6 +6637,42 @@ static void testNativeResourceBoundary() {
                                         },[&](void*,uintptr_t,const auto&) noexcept -> int {
                                             assert(order++==3);return 0;
                                         })==0 && order==4);
+                                    for(int metadataStatus:{23,0}) {
+                                        reportBackend.bytes[8]=0xa5;reportBackend.bytes[9]=0x5a;
+                                        reportBackend.bytes[0x15]=0xa5;reportBackend.bytes[0x16]=0x5a;
+                                        bool valid=true;uint8_t flag=0xa5,mode=0x5a;
+                                        unsigned pairAllocations=0;
+                                        const int status=tglWithAllocatedOwnedFfdnPair(owner,
+                                            static_cast<decltype(&owner)>(nullptr),static_cast<decltype(&owner)>(nullptr),
+                                            TglOwnedFfdnCompressionSelection{true,1},valid,false,flag,mode,
+                                            [&](size_t,const auto&,bool& changed,uint32_t& pitch) noexcept -> int {
+                                                ++pairAllocations;changed=true;pitch=0;return 0;
+                                            },[](const auto&,const auto&) noexcept {assert(false);},
+                                            [&](size_t,const auto&,const auto&) noexcept -> int {
+                                                assert(!valid && reportBackend.bytes[8]==0);
+                                                assert(reportBackend.bytes[9]==0x5a);return metadataStatus;
+                                            },[&](const auto&) noexcept -> int {
+                                                assert(reportBackend.bytes[0x15]==1 && reportBackend.bytes[0x16]==1);
+                                                return -31;
+                                            },{&source,nullptr,nullptr},
+                                            TglOwnedFfdnReportPublisher<decltype(reportOwner)>{reportOwner,report});
+                                        assert(status==(metadataStatus?23:-31));
+                                        assert(pairAllocations==(metadataStatus?1u:2u));
+                                        if(metadataStatus) assert(reportBackend.bytes[0x15]==0xa5 &&
+                                            reportBackend.bytes[0x16]==0x5a);
+                                    }
+                                    reportBackend.bytes[8]=0xa5;reportBackend.bytes[0x13]=0;
+                                    assert(tglPrepareOwnedBackedFfdnReportPair(backedTargets,owner,
+                                        static_cast<decltype(&owner)>(nullptr),static_cast<decltype(&owner)>(nullptr),
+                                        TglOwnedFfdnCompressionSelection{true,1},reportOwner,report,
+                                        [](const auto&,const auto&) noexcept {assert(false);},
+                                        [&](const auto& inputs,const auto& a,const auto& b) noexcept -> int {
+                                            assert(inputs[0]==&source);
+                                            assert(firstBacking.hasSurfaceLease(a) && secondBacking.hasSurfaceLease(b));
+                                            assert(reportBackend.bytes[8]==0);
+                                            assert(reportBackend.bytes[0x15]==1 && reportBackend.bytes[0x16]==1);
+                                            return -43;
+                                        },{&source,nullptr,nullptr})==-43);
                                     return run();
                                 });
                             })==-17);

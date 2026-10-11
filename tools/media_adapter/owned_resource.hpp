@@ -5780,12 +5780,35 @@ int tglWithOwnedBackedFfdiSecondary(TargetOwner& target,Owner& secondary,
 struct TglOwnedFfdnNoFinish {
     template<class... Views> int operator()(const Views&...) const noexcept {return 0;}
 };
+// CPU-only callers may keep local flag snapshots. Runtime assembly must use
+// the leased report publisher so partial native side effects are visible.
+struct TglOwnedFfdnNoReportPublication {
+    int invalidateReference() const noexcept {return 0;}
+    int compression(uint8_t,uint8_t) const noexcept {return 0;}
+};
+template<class ExecutionOwner> struct TglOwnedFfdnReportPublisher {
+    ExecutionOwner& owner;uintptr_t report;
+    int invalidateReference() noexcept {
+        return owner.withLeasedAdmissionBytes(report,[](auto& view) noexcept -> int {
+            static_assert(TglAdmissionExecutionExtent<std::decay_t<decltype(view)>>::value>=0x17,
+                "FFDN report extent");
+            view.data()[8]=0;return 0;
+        });
+    }
+    int compression(uint8_t flag,uint8_t mode) noexcept {
+        return owner.withLeasedAdmissionBytes(report,[&](auto& view) noexcept -> int {
+            static_assert(TglAdmissionExecutionExtent<std::decay_t<decltype(view)>>::value>=0x17,
+                "FFDN report extent");
+            view.data()[0x15]=flag;view.data()[0x16]=mode;return 0;
+        });
+    }
+};
 template<class Owner,class Allocate,class Copy,class Publish,class Finish=TglOwnedFfdnNoFinish,
-    class Compression=TglOwnedFfdnCompressionSelection>
+    class Compression=TglOwnedFfdnCompressionSelection,class Report=TglOwnedFfdnNoReportPublication>
 int tglWithAllocatedOwnedFfdnPair(Owner& input,Owner* previous,Owner* copyDestination,
     Compression selection,bool& referenceValid,bool executionFlag13,
     uint8_t& execution15,uint8_t& execution16,Allocate allocate,Copy copy,Publish publish,
-    Finish finish={},std::array<const TglOwnedSurfaceStorage*,3> captured={}) noexcept {
+    Finish finish={},std::array<const TglOwnedSurfaceStorage*,3> captured={},Report report={}) noexcept {
     static_assert(noexcept(allocate(size_t{},std::declval<const TglOwnedFfdnAllocationRequest&>(),
         std::declval<bool&>(),std::declval<uint32_t&>())),"FFDN pair allocation ABI");
     static_assert(noexcept(copy(std::declval<const TglOwnedSurfaceStorage&>(),
@@ -5820,6 +5843,12 @@ int tglWithAllocatedOwnedFfdnPair(Owner& input,Owner* previous,Owner* copyDestin
             if(decision==TglOwnedFfdnHistoryDecision::CopyPrevious && !views[2]) return 5;
             tglApplyOwnedFfdnHistory(changed,referenceValid,executionFlag13,views[1]!=nullptr,pitch,
                 previousPitch,[&]() noexcept {copy(*views[2],*views[1]);});
+            if(decision==TglOwnedFfdnHistoryDecision::Invalidate) {
+                static_assert(noexcept(report.invalidateReference()) &&
+                    std::is_same_v<decltype(report.invalidateReference()),int>,"FFDN invalidation publication ABI");
+                const int status=report.invalidateReference();
+                if(status) return status;
+            }
             TglOwnedSurfaceStorage metadata;
             if(!tglPrepareOwnedFfdnFrameMetadata(metadata,*views[0])) return 5;
             if constexpr(std::is_same_v<PublicationResult,int>) {
@@ -5832,6 +5861,11 @@ int tglWithAllocatedOwnedFfdnPair(Owner& input,Owner* previous,Owner* copyDestin
             if(changed) {
                 execution15=compression.compressed?1u:0u;
                 execution16=static_cast<uint8_t>(compression.mode);
+                static_assert(noexcept(report.compression(execution15,execution16)) &&
+                    std::is_same_v<decltype(report.compression(execution15,execution16)),int>,
+                    "FFDN compression publication ABI");
+                const int status=report.compression(execution15,execution16);
+                if(status) return status;
             }
         }
         static_assert(noexcept(finish(views)) && std::is_same_v<decltype(finish(views)),int>,
@@ -5844,12 +5878,12 @@ int tglWithAllocatedOwnedFfdnPair(Owner& input,Owner* previous,Owner* copyDestin
 // owned by the separate resource path. DN90 is deliberately not retained;
 // this preparation is not asynchronous command admission or retirement.
 template<class Owner,class Copy,class Finish=TglOwnedFfdnNoFinish,
-    class Compression=TglOwnedFfdnCompressionSelection>
+    class Compression=TglOwnedFfdnCompressionSelection,class Report=TglOwnedFfdnNoReportPublication>
 int tglPrepareOwnedDescriptorFfdnPair(std::array<TglOwnedDescriptorOnlySurface,2>& targets,
     Owner& input,Owner* previous,Owner* copyDestination,
     Compression compression,bool& referenceValid,bool executionFlag13,
     uint8_t& execution15,uint8_t& execution16,Copy copy,Finish finish={},
-    std::array<const TglOwnedSurfaceStorage*,3> captured={}) noexcept {
+    std::array<const TglOwnedSurfaceStorage*,3> captured={},Report report={}) noexcept {
     return tglWithAllocatedOwnedFfdnPair(input,previous,copyDestination,compression,
         referenceValid,executionFlag13,execution15,execution16,
         [&](size_t index,const auto& request,bool& changed,uint32_t& pitch) noexcept -> int {
@@ -5869,19 +5903,19 @@ int tglPrepareOwnedDescriptorFfdnPair(std::array<TglOwnedDescriptorOnlySurface,2
                 if(!second) result=5;
             });
             return first?result:5;
-        },captured);
+        },captured,report);
 }
 
 // Real type1/format3d target owners. Keep target roles distinct from every
 // source/history role; source roles are already leased by the pair producer.
 // No rollback of an earlier successful target on later allocation failure.
 template<class TargetOwner,class Owner,class Copy,class Finish=TglOwnedFfdnNoFinish,
-    class Compression=TglOwnedFfdnCompressionSelection>
+    class Compression=TglOwnedFfdnCompressionSelection,class Report=TglOwnedFfdnNoReportPublication>
 int tglPrepareOwnedBackedFfdnPair(const std::array<TargetOwner*,2>& targets,
     Owner& input,Owner* previous,Owner* copyDestination,
     Compression compression,bool& referenceValid,bool executionFlag13,
     uint8_t& execution15,uint8_t& execution16,Copy copy,Finish finish={},
-    std::array<const TglOwnedSurfaceStorage*,3> captured={}) noexcept {
+    std::array<const TglOwnedSurfaceStorage*,3> captured={},Report report={}) noexcept {
     if(!targets[0] || !targets[1] || targets[0]==targets[1]) return 5;
     struct Binding {const void* owner;const void* storage;};
     std::array<Binding,5> bindings{};
@@ -5913,7 +5947,29 @@ int tglPrepareOwnedBackedFfdnPair(const std::array<TargetOwner*,2>& targets,
                 if(!second) result=5;
             });
             return first?result:5;
-        },captured);
+        },captured,report);
+}
+
+// Bind real type1 FFDN owners to the actual execution report. Snapshot only
+// under its held lease; partial reference/compression writes publish at their
+// native positions inside the pair, not after a successful whole-frame return.
+template<class TargetOwner,class Owner,class ExecutionOwner,class Copy,class Finish,
+    class Compression=TglOwnedFfdnCompressionSelection>
+int tglPrepareOwnedBackedFfdnReportPair(const std::array<TargetOwner*,2>& targets,
+    Owner& input,Owner* previous,Owner* copyDestination,Compression compression,
+    ExecutionOwner& reportOwner,uintptr_t report,Copy copy,Finish finish,
+    std::array<const TglOwnedSurfaceStorage*,3> captured={}) noexcept {
+    bool reference=false,di=false;uint8_t flag=0,mode=0;
+    const int status=reportOwner.withLeasedAdmissionBytes(report,[&](auto& view) noexcept -> int {
+        static_assert(TglAdmissionExecutionExtent<std::decay_t<decltype(view)>>::value>=0x17,
+            "FFDN report snapshot extent");
+        reference=(view.data()[8]&1)!=0;di=(view.data()[0x13]&1)!=0;
+        flag=view.data()[0x15];mode=view.data()[0x16];return 0;
+    });
+    if(status) return status;
+    return tglPrepareOwnedBackedFfdnPair(targets,input,previous,copyDestination,compression,
+        reference,di,flag,mode,copy,finish,captured,
+        TglOwnedFfdnReportPublisher<ExecutionOwner>{reportOwner,report});
 }
 
 // Exact ICL classifier4a500 and its 90-entry relative jump table4a55c.
