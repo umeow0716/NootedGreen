@@ -6508,7 +6508,29 @@ static void testNativeResourceBoundary() {
                                     assert(runEither()==5 && !used && !backingBackend.allocations);
                                     nativeCount=2;
                                     std::memcpy(child.data()+0x1b5c,&nativeCount,4);
+                                    auto neverSecondary=[](const auto&,const auto&) noexcept -> int {
+                                        assert(false);return 0;
+                                    };
+                                    assert(tglWithOwnedBackedFfdiSecondary(firstBacking,destination,neverSecondary)==5);
                                     assert(runEither()==-17 && backingBackend.allocations==2);
+                                    assert(tglWithOwnedBackedFfdiSecondary(firstBacking,destination,neverSecondary,&source)==5);
+                                    assert(tglWithOwnedBackedFfdiSecondary(firstBacking,firstBacking,neverSecondary)==5);
+                                    assert(tglWithOwnedBackedFfdiSecondary(firstBacking,destination,
+                                        [&](const auto& secondaryView,const auto& output) noexcept -> int {
+                                            assert(destination.hasSurfaceLease(secondaryView));
+                                            assert(firstBacking.hasSurfaceLease(output));
+                                            assert(!firstBacking.publishFfdiSecondaryFrom(destination,secondaryView));
+                                            assert(std::memcmp(output.resource.data()+0x1c8-
+                                                offsetof(TglOwnedSurfaceStorage,resource),
+                                                secondaryView.resource.data()+0x1c8-
+                                                offsetof(TglOwnedSurfaceStorage,resource),4)==0);
+                                            assert(std::memcmp(output.resource.data()+0x200-
+                                                offsetof(TglOwnedSurfaceStorage,resource),
+                                                secondaryView.resource.data()+0x200-
+                                                offsetof(TglOwnedSurfaceStorage,resource),4)==0);
+                                            return -23;
+                                        })==-23);
+                                    assert(backingBackend.allocations==2 && !backingBackend.releases);
                                     reportBackend.bytes[0x12]=1;
                                     assert(runEither()==-17 && backingBackend.allocations==2 && !backingBackend.releases);
                                     return run();

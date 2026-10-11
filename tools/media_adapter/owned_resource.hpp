@@ -5749,6 +5749,29 @@ int tglWithOwnedDescriptorFfdiSecondary(TglOwnedDescriptorOnlySurface& target,
     });
 }
 
+// Same secondary-only edge when slot0 already has native backing. The caller
+// must select the actual slot owner, not infer it from a new frame's format.
+// No ensure/allocate/release: retain the existing backing and borrow both
+// surfaces until the synchronous consumer returns.
+template<class TargetOwner,class Owner,class Use>
+int tglWithOwnedBackedFfdiSecondary(TargetOwner& target,Owner& secondary,
+    Use use,const TglOwnedSurfaceStorage* captured=nullptr) noexcept {
+    static_assert(noexcept(use(std::declval<const TglOwnedSurfaceStorage&>(),
+        std::declval<const TglOwnedSurfaceStorage&>())) &&
+        std::is_same_v<decltype(use(std::declval<const TglOwnedSurfaceStorage&>(),
+        std::declval<const TglOwnedSurfaceStorage&>())),int>,"FFDi backed secondary ABI");
+    return tglWithCapturedOwnedSurfaceRoles(std::array<Owner*,1>{&secondary},
+        std::array<const TglOwnedSurfaceStorage*,1>{captured},[&](const auto& views) noexcept {
+        const auto& source=*views[0];
+        if(!target.publishFfdiSecondaryFrom(secondary,source)) return 5;
+        int result=5;
+        const bool leased=target.withSurface([&](const auto& output) noexcept {
+            result=use(source,output);
+        });
+        return leased?result:5;
+    });
+}
+
 // Two FFDN allocations (1f7fd1), each followed by history handling and
 // per-slot metadata publication. Earlier successful allocations/publications
 // are not rolled back on a later failure. Copy destination is child1b8,
