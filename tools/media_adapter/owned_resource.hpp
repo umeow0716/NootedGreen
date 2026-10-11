@@ -905,6 +905,19 @@ bool tglReadOwnedIefTables(TglOwnedIefTables &output, ReadImage readImage) {
     output=candidate;
     return true;
 }
+// Caller authenticates the exact TGL image/generation before reading data.
+// TGL741e50 five tables match the retained donor scalar producer's tables;
+// matching data never authorizes executing donor code or publishing a renderer.
+template<class Read,class Qualify>
+bool tglReadQualifiedOwnedIefTables(TglOwnedIefTables& output,uintptr_t image,
+    Read read,Qualify qualify) noexcept {
+    static_assert(noexcept(read(uintptr_t{},nullptr,size_t{})) && noexcept(qualify(image)),
+        "qualified IEF image read ABI");
+    if(!image || image>UINTPTR_MAX-(0x741e50+0x500) || !qualify(image)) return false;
+    return tglReadOwnedIefTables(output,[&](size_t offset,void* bytes,size_t size) noexcept {
+        return read(image+offset,bytes,size);
+    });
+}
 struct TglOwnedIefSurfaceFlags {
     uint8_t enabled = 0; // native surface+0x67
     uint8_t skinEnabled = 0; // native surface+0x68

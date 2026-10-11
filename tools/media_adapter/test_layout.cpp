@@ -18530,6 +18530,18 @@ int main() {
             return ++reads!=3;
         }));
         assert(reads==3 && copied==saved);
+        unsigned qualified=0;reads=0;
+        auto exactImage=[&](uintptr_t image) noexcept {++qualified;return image==0x100000;};
+        auto imageRead=[&](uintptr_t address,void* dst,size_t size) noexcept {
+            assert(address==0x100000+0x741e50+reads*0x100 && size==0x100);
+            std::memcpy(dst,tables[reads++].data(),size);return true;
+        };
+        assert(!tglReadQualifiedOwnedIefTables(copied,0x200000,imageRead,exactImage));
+        assert(!reads && qualified==1 && copied==saved);
+        assert(!tglReadQualifiedOwnedIefTables(copied,UINTPTR_MAX,imageRead,exactImage));
+        assert(!reads && qualified==1);
+        assert(tglReadQualifiedOwnedIefTables(copied,0x100000,imageRead,exactImage));
+        assert(reads==5 && qualified==2 && copied==tables);
         const auto unchanged=out;
         assert(!tglBuildOwnedIefParameters(out,enable,
             std::numeric_limits<float>::infinity(),0,0,{0,0,0},tables));
