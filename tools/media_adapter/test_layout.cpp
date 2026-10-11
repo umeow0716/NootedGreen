@@ -11731,6 +11731,40 @@ static void testGuardedVeboxLifecycle() {
 
 static void testRetainedVeboxFrames() {
     {
+        struct ReceiptFrame {ReceiptFrame() noexcept=default;};
+        TglOwnedVeboxRetainedFrames<ReceiptFrame> pool,foreign;
+        auto ticket=pool.create();assert(ticket.generation);
+        TglNativeFrameOutputReceipt receipt{0x20000,0x77000,7,true};
+        assert(!pool.bindOutputReceipt(ticket,receipt)); // no command acquired yet
+        const auto command=pool.run(ticket,[](auto&) noexcept {
+            TglOwnedVeboxCommandTransactionResult result;result.status=0;result.acquired=true;return result;
+        });
+        assert(command.acquired && !foreign.bindOutputReceipt(ticket,receipt));
+        assert(pool.bindOutputReceipt(ticket,receipt) && !pool.bindOutputReceipt(ticket,receipt));
+        const auto second=pool.create();assert(second.generation);
+        pool.run(second,[](auto&) noexcept {
+            TglOwnedVeboxCommandTransactionResult result;result.acquired=true;return result;
+        });
+        assert(!pool.bindOutputReceipt(second,receipt));
+        auto distinct=receipt;distinct.event+=8;
+        assert(pool.bindOutputReceipt(second,distinct));
+        assert(pool.retire(second,[](const auto&,bool,const auto&) noexcept -> int {return 0;})==0); // CPU fixture only
+        unsigned observed=0;
+        auto observe=[&](const auto& snapshot) noexcept -> int {
+            ++observed;assert(snapshot.context==receipt.context && snapshot.event==receipt.event && snapshot.index==7);
+            assert(!pool.emptyForNativeRequest());return 31;
+        };
+        assert(pool.withOutputReceipt(ticket,observe)==31 && observed==1);
+        auto stale=ticket;++stale.generation;
+        assert(pool.withOutputReceipt(stale,observe)==5 && observed==1);
+        assert(pool.retire(ticket,[](const auto&,bool pending,const auto&) noexcept -> int {
+            assert(pending);return 31; // no real completion certificate
+        })==31);
+        assert(pool.withOutputReceipt(ticket,observe)==31 && observed==2);
+        assert(pool.retire(ticket,[](const auto&,bool,const auto&) noexcept -> int {return 0;})==0); // CPU fixture cleanup only
+        assert(pool.withOutputReceipt(ticket,observe)==5 && observed==2);
+    }
+    {
         constexpr uintptr_t base=0x100000,context=0x20000;
         uintptr_t vptr=base+0x75d018,entry=base+0x235ab0;
         bool qualified=true,rx=true,corrupt=false,readable=true,badTail=false,badHeader=false;

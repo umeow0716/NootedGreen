@@ -16026,11 +16026,18 @@ TglOwnedVeboxCommandTransactionResult tglRunNativeVeboxCommandFrame(
 // destruct implicitly, even after successful writeback (which is not a fence).
 // Legacy status-error allocation unwind must not reset Frame members inside
 // run(); use a typed final consumer and explicit retirement instead.
+// Successful output publication only, never completion/retirement authority.
+struct TglNativeFrameOutputReceipt {
+    uintptr_t context=0,event=0;
+    uint32_t index=0;
+    bool valid=false;
+};
 template<class Frame,size_t Capacity=2> class TglOwnedVeboxRetainedFrames {
     static_assert(Capacity>0 && Capacity<=2,"bounded pending-frame budget");
     static_assert(std::is_nothrow_destructible_v<Frame>,"frame cleanup must not throw");
     struct Slot {Frame* frame=nullptr;uint64_t generation=0;
-        bool pending=false;TglOwnedVeboxCommandTransactionResult result{};};
+        bool pending=false;TglOwnedVeboxCommandTransactionResult result{};
+        TglNativeFrameOutputReceipt receipt{};};
     std::array<Slot,Capacity> slots_{};
     std::atomic_flag gate_=ATOMIC_FLAG_INIT;
     // Shared across physical lifetimes of this pool type: a registry entry
@@ -16066,7 +16073,7 @@ public:
                 std::memory_order_relaxed,std::memory_order_relaxed));
             auto* frame=new(std::nothrow) Frame(std::forward<Args>(args)...);
             if(!frame) return {};
-            slots_[i]={frame,generation+1,false,{}};
+            slots_[i]={frame,generation+1,false,{}, {}};
             return {i,generation+1,this};
         }
         return {};
@@ -16086,6 +16093,30 @@ public:
         if(slot.result.writtenBack && !slot.result.acquired) slot.result.status=5;
         slot.pending=slot.result.acquired || slot.result.writtenBack;
         return slot.result;
+    }
+    // Bind only to the exact retained frame ticket, under its physical scope.
+    // Duplicate event identities are ambiguous even if their index changed.
+    bool bindOutputReceipt(Ticket ticket,const TglNativeFrameOutputReceipt& receipt) noexcept {
+        if(gate_.test_and_set(std::memory_order_acquire)) return false;
+        Unlock unlock{gate_};
+        if(physicalTeardownStarted_ || ticket.pool!=this || ticket.index>=Capacity ||
+            !ticket.generation || !receipt.valid || !receipt.context || !receipt.event ||
+            receipt.event>UINTPTR_MAX-8) return false;
+        auto& slot=slots_[ticket.index];
+        if(!slot.frame || slot.generation!=ticket.generation || !slot.pending || slot.receipt.valid) return false;
+        for(const auto& other:slots_)
+            if(other.receipt.valid && other.receipt.event==receipt.event) return false;
+        slot.receipt=receipt;return true;
+    }
+    template<class Use> int withOutputReceipt(Ticket ticket,Use use) noexcept {
+        static_assert(noexcept(use(std::declval<const TglNativeFrameOutputReceipt&>())) &&
+            std::is_same_v<decltype(use(std::declval<const TglNativeFrameOutputReceipt&>())),int>);
+        if(gate_.test_and_set(std::memory_order_acquire)) return 5;
+        Unlock unlock{gate_};
+        if(physicalTeardownStarted_ || ticket.pool!=this || ticket.index>=Capacity || !ticket.generation) return 5;
+        const auto& slot=slots_[ticket.index];
+        if(!slot.frame || slot.generation!=ticket.generation || !slot.pending || !slot.receipt.valid) return 5;
+        return use(slot.receipt);
     }
     // Snapshot only under the enclosing physical registry gate. All runtime
     // pool access must stay in that gate; this is not a standalone lease.
@@ -16330,13 +16361,6 @@ struct TglNativeContextFrameInvoker {
             reinterpret_cast<void*>(context),reinterpret_cast<const void*>(request),
             reinterpret_cast<void**>(outputSlot));
     }
-};
-// Successful native output publication only, NOT GPU completion/retirement.
-// Enclosing owner must associate this snapshot with its physical/frame generation.
-struct TglNativeFrameOutputReceipt {
-    uintptr_t context=0,event=0;
-    uint32_t index=0;
-    bool valid=false;
 };
 // Stable owned data only. No context mutation or native image modification.
 // Its enclosing context owner must retain this object and both code images
