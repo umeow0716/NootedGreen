@@ -58,6 +58,15 @@ struct TestVpCpuView {
     }
 };
 
+// Scope fixture; typed-CF frontend retention is tested separately.
+struct TestFrontendMutableScope {
+    TglOwnedSurfaceStorage& shell;bool busy=false;
+    bool hasSurfaceLease(const TglOwnedSurfaceStorage& s) noexcept {return busy && &s==&shell;}
+    template<class Use> int withMutableSurface(Use use) noexcept {
+        if(busy) return 5;
+        busy=true;const int r=use(shell);busy=false;return r;
+    }
+};
 struct TestFeatureSurfaceOwner {
     TglOwnedSurfaceStorage storage{};bool busy=false,deny=false;
     template<class Use> bool withSurface(Use use) noexcept {
@@ -7152,7 +7161,35 @@ static void testNativeResourceBoundary() {
                                                     reinterpret_cast<uintptr_t>(&nativeFixture),
                                                     reinterpret_cast<uintptr_t>(FrameStatisticsFixture::fill)};
                                                 {
+                                                    TglNativeVeboxCommandFrameStorage<FrameStmmApi> frontendCommandFrame(nativeBinding,4096,nativeFill);
                                                 TglNativeVeboxCommandFrameStorage<FrameStmmApi> commandFrame(nativeBinding,4096,nativeFill);
+                                                {
+                                                    TglOwnedSurfaceStorage frontendTarget;
+                                                    TestFrontendMutableScope sourceScope{linkedStorage},targetScope{frontendTarget};
+                                                    TglNativeOuterSurfaceRoles roles;
+                                                    roles.sourceCount=1;roles.targetCount=1;
+                                                    roles.sources[5]=reinterpret_cast<uintptr_t>(&linkedStorage);
+                                                    roles.targets[0]=reinterpret_cast<uintptr_t>(&frontendTarget);
+                                                    auto& frontendRetention=frontendCommandFrame.backing().auxiliary().retention();
+                                                    unsigned uses=0;
+                                                    auto consume=[&](auto& so,auto& to,auto& leases) noexcept {
+                                                        ++uses;
+                                                        assert(so.hasSurfaceLease(leases.source) && to.hasSurfaceLease(*leases.target));
+                                                        assert(&leases.source==&linkedStorage && leases.target==&frontendTarget);
+                                                        auto same=frontendCommandFrame.packetLeases(leases.child,leases.execution,
+                                                            leases.renderHal,leases.sku,linkedStorage,&frontendTarget);
+                                                        assert(&same.state==&leases.state && &same.surfaces==&leases.surfaces);
+                                                        return TglOwnedVeboxCommandTransactionResult{31,31,true,false};
+                                                    };
+                                                    assert(frontendCommandFrame.withFrontendCommandFrame(roles,0,0,sourceScope,targetScope,
+                                                        1,2,3,4,consume).status==5 && !uses);
+                                                    const auto joined=frontendCommandFrame.withFrontendCommandFrame(roles,5,0,sourceScope,targetScope,
+                                                        1,2,3,4,consume);
+                                                    assert(joined.status==31 && joined.acquired && frontendRetention() && uses==1);
+                                                    assert(!sourceScope.busy && !targetScope.busy);
+                                                    assert(frontendCommandFrame.withFrontendCommandFrame(roles,5,0,sourceScope,targetScope,
+                                                        1,2,3,4,consume).status==5 && uses==1);
+                                                }
                                                 auto& nativeFrame=commandFrame.backing();
                                                 auto packetStorage=commandFrame.packetLeases(
                                                     reinterpret_cast<uintptr_t>(actualChild),report,0,0,linkedStorage,nullptr);

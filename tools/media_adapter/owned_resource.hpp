@@ -15817,6 +15817,34 @@ public:
     TglNativeVeboxCommandFrameStorage& operator=(const TglNativeVeboxCommandFrameStorage&)=delete;
     auto& backing() noexcept {return backing_;}
     auto& scratch() noexcept {return scratch_;}
+    // Frontend owners/pins and this storage are retained-frame members, not
+    // temporaries: unresolved native acquisition must keep ALL of them alive.
+    // Roles are captured after native source gathering under the input lease.
+    template<class SourceLease,class TargetLease,class Consume>
+    TglOwnedVeboxCommandTransactionResult withFrontendCommandFrame(
+        const TglNativeOuterSurfaceRoles& roles,size_t sourceIndex,size_t targetIndex,
+        SourceLease& sourceLease,TargetLease& targetLease,
+        uintptr_t child,uintptr_t execution,
+        uintptr_t renderHal,uintptr_t sku,Consume consume) noexcept {
+        TglOwnedVeboxCommandTransactionResult result;
+        auto& retention=backing_.auxiliary().retention();
+        if(retention()) return result;
+        result.status=sourceLease.withMutableSurface([&](auto& source) noexcept -> int {
+            if(!roles.sourceMatches(sourceIndex,sourceLease,source)) return 5;
+            return targetLease.withMutableSurface([&](auto& target) noexcept -> int {
+                if(!roles.targetMatches(targetIndex,targetLease,target)) return 5;
+                auto leases=packetLeases(child,execution,renderHal,sku,source,&target);
+                static_assert(noexcept(consume(sourceLease,targetLease,leases)) &&
+                    std::is_same_v<decltype(consume(sourceLease,targetLease,leases)),
+                        TglOwnedVeboxCommandTransactionResult>);
+                result=consume(sourceLease,targetLease,leases);
+                if(result.writtenBack && !result.acquired) result.status=5;
+                retention.observe(result); // before either frontend scope unwinds
+                return result.status;
+            });
+        });
+        return result;
+    }
     TglOwnedVeboxPacketLeases packetLeases(uintptr_t child,uintptr_t execution,
         uintptr_t renderHal,uintptr_t sku,TglOwnedSurfaceStorage& source,
         TglOwnedSurfaceStorage* target) noexcept {
