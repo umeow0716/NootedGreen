@@ -45,6 +45,18 @@ struct TestFeatureExecutionOwner {
 };
 static void testTrackedCpuOwner() {
     {
+        for(bool hasDi : {false,true}) for(bool bob : {false,true})
+            for(uint32_t height : {0u,1u,2u,3u,4u,1080u,1081u,0xffffffffu})
+                for(uint32_t format : {0x19u,0x52u,0x53u,0x15u,0x0eu,0x10019u}) {
+                    const bool planar=format==0x19 || format==0x52 || format==0x53;
+                    const bool unsupported=format==0x15;
+                    assert(tglRejectGen12BobOutput(hasDi,bob,height,format)==
+                        (hasDi && bob && ((planar && height%4!=0)||unsupported)));
+                }
+        for(bool lut : {false,true}) for(uint32_t format : {0x52u,0x53u,0x19u,0x10052u,0xffffffffu})
+            assert(tglRejectGen12LutOutput(lut,format)==(lut && (format==0x52 || format==0x53)));
+    }
+    {
         unsigned reads=0;bool allow=true;uint8_t liveFlag=0x80;
         auto read=[&](uintptr_t p,void* out,size_t n) noexcept {
             ++reads;if(!allow) return false;

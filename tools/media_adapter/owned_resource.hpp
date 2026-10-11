@@ -977,6 +977,18 @@ bool tglVeboxDiSurfaceSupported(uintptr_t surface, Read read) {
     return tglVeboxSurfaceFormatPredicate(surface, read, tglVeboxDiFormatSupported);
 }
 
+// Gen12 GetOutputPipe2456..2476 (media-driver73c8d14), before direct/SFC.
+// hasDi/isBob/hasLut must come from qualified owned parameters; this does NOT
+// assign a Darwin DIMode enum or guess a native LUT pointer offset. These are
+// rejection predicates only, never generic-format or GPU admission proof.
+constexpr bool tglRejectGen12BobOutput(bool hasDi,bool isBob,uint32_t height,uint32_t format) noexcept {
+    const bool planar420=format==0x19 || format==0x52 || format==0x53;
+    return hasDi && isBob && (((height&3) && planar420) || !tglVeboxDiFormatSupported(format));
+}
+constexpr bool tglRejectGen12LutOutput(bool hasLut,uint32_t targetFormat) noexcept {
+    return hasLut && (targetFormat==0x52 || targetFormat==0x53);
+}
+
 // Darwin method signatures (ICL1fc360/1fc530/1fc690), with Gen12 predicates
 // above rather than the older ICL whitelists. These are callbacks only; they
 // do not allocate resources or establish mode feasibility. TGL12a882/12a95e
