@@ -11184,11 +11184,20 @@ int main() {
                                         [&](void* packetChild,const auto& packetEntries) noexcept {
                                     assert(packetChild==child && packetEntries.missingMask()==
                                         (combined.missingMask()&~((1U<<21)|(1U<<24)|(1U<<25)|(1U<<26))));
-                                    assert(packetEntries.missingMask()==0x27U); // lifecycle 0/8/10 and frame28 remain separate
-                                    // Twenty-three real entries retain resolver leases. Four
-                                    // remaining entries are explicit CPU presence fixtures.
+                                    assert(packetEntries.missingMask()==0x27U);
+                                    auto releaseAllocation=[](void*) noexcept {assert(false);};
+                                    using PassLifetime=TglOwnedVpLifetimeContext<decltype(graph),decltype(lines),
+                                        decltype(retire),decltype(releaseAllocation)>;
+                                    PassLifetime lifetime(child,graph,lines,retire,releaseAllocation);
+                                    TglOwnedVpEntrySet expiredLifetime;
+                                    const auto beforeLifetimeRetired=retired;
+                                    assert(tglWithOwnedVpLifetimeAssemblyEntries(child,lifetime,packetEntries,
+                                      [&](void*,const auto& liveEntries) noexcept {
+                                    assert(liveEntries.missingMask()==0x24U); // Only init10/frame28 remain separate.
+                                    // Twenty-five real scoped entries; only two CPU presence fixtures.
+                                    expiredLifetime=liveEntries;
                                     TglOwnedVpFlatDispatchTable dispatch;
-                                    assert(dispatch.build(testVpPresenceEntries(packetEntries),
+                                    assert(dispatch.build(testVpPresenceEntries(liveEntries),
                                         [](uintptr_t,size_t) noexcept {return true;}));
                                     assert(graph.withLeasedFlatDispatch(child,dispatch,[&](void* admitted) noexcept {
                                         uintptr_t addressPoint=0;
@@ -11202,8 +11211,19 @@ int main() {
                                         assert(platform==packetEntries.platformPacket);
                                         platform(admitted,nullptr,state);
                                         assert(packetEntries.compression(admitted,nullptr,&output,state)==5);
+                                        if(consumerResult) {
+                                            liveEntries.destroy(admitted);liveEntries.deletingDestroy(admitted);
+                                            assert(lifetime.attempts()==2 && lifetime.status()==5 &&
+                                                !lifetime.destroyed() && !lifetime.deleted());
+                                        }
                                         return consumerResult;
                                     })==consumerResult);
+                                    return consumerResult;
+                                      })==consumerResult);
+                                    // Expired lifetime entries must not act on the still-borrowed graph.
+                                    expiredLifetime.destroy(child);expiredLifetime.deletingDestroy(child);
+                                    assert(lifetime.attempts()==unsigned(consumerResult?2:0) && retired==beforeLifetimeRetired &&
+                                        !lifetime.destroyed() && !lifetime.deleted());
                                     return consumerResult;
                                         })==consumerResult);
                                     assert(state[0x88]==(cscEnabled?1:savedState[0x88]));
