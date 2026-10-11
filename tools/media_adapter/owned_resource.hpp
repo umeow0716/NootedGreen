@@ -13881,13 +13881,20 @@ template<class Lines,class State> class TglOwnedVpLineAllocationContext {
     TglOwnedVpSfcCallerStorage& vp_;
     Lines& lines_;
     State& state_;
+    const TglOwnedVeboxFrameRetention* retention_=nullptr;
     bool busy_=false;
 public:
     TglOwnedVpLineAllocationContext(TglOwnedVpSfcCallerStorage& vp,Lines& lines,State& state) noexcept
         :vp_(vp),lines_(lines),state_(state) {}
+    TglOwnedVpLineAllocationContext(TglOwnedVpSfcCallerStorage& vp,Lines& lines,State& state,
+        const TglOwnedVeboxFrameRetention& retention) noexcept
+        :vp_(vp),lines_(lines),state_(state),retention_(&retention) {}
     bool owns(void* child) const noexcept {return child==vp_.bytes.data();}
     int allocate() noexcept {
-        if(busy_ || !lines_.boundToVp(vp_)) return 5;
+        // Share the command frame's monotonic retention state. Even an equal
+        // geometry ensure may unwind backing on failure; do not enter it once
+        // command acquisition/writeback has made these resources GPU-visible.
+        if(busy_ || (retention_ && (*retention_)()) || !lines_.boundToVp(vp_)) return 5;
         busy_=true;
         const int result=state_.withPublishedVpParameters(vp_,[&](const uint8_t* parameters) noexcept {
             uint32_t inputHeight=0,scaledHeight=0;
@@ -14075,6 +14082,9 @@ template<class Lines,class State,class Retire> class TglOwnedVpResourceContext {
 public:
     TglOwnedVpResourceContext(TglOwnedVpSfcCallerStorage& vp,Lines& lines,State& state,
         Retire& retire) noexcept:allocation_(vp,lines,state),release_(vp,lines,retire){}
+    TglOwnedVpResourceContext(TglOwnedVpSfcCallerStorage& vp,Lines& lines,State& state,
+        Retire& retire,const TglOwnedVeboxFrameRetention& retention) noexcept
+        :allocation_(vp,lines,state,retention),release_(vp,lines,retire){}
     bool owns(void* child) const noexcept {return allocation_.owns(child);}
     int allocate() noexcept {return allocation_.allocate();}
     void freeResources() noexcept {release_.freeResources();}

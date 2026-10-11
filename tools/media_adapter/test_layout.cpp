@@ -11819,6 +11819,16 @@ int main() {
                 const int result=allocate(vp.bytes.data());
                 assert(result==(failure<0?0:77));
                 if(!result) {
+                    TglOwnedVeboxFrameRetention retention;
+                    Context retainedContext(vp,lines,state,retention);
+                    assert(retainedContext.allocate()==0);
+                    const auto before0=backends[0].allocations;
+                    const auto before1=backends[1].allocations;
+                    struct Pending {bool acquired,writtenBack;};
+                    retention.observe(Pending{true,false});
+                    retention.observe(Pending{false,false});
+                    assert(retainedContext.allocate()==5);
+                    assert(backends[0].allocations==before0 && backends[1].allocations==before1);
                     assert(lines.withSurfaces([&](const auto& avs,const auto& ief) noexcept {
                         assert(&avs==shells[0] && &ief==shells[1]);
                         uint32_t a=0,b=0;
