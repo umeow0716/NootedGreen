@@ -2648,6 +2648,12 @@ struct TglVeboxHardwareBinding {
     // not an independent no-reset hardware-completion certificate. Retain the
     // associated resource generation until completion AND reset exclusion are
     // established; do not invent a one-second deadline from the ignored ECX.
+    // Separate successful work from safe failure disposal: local i915-sriov
+    // 2026.03.05.7 i915_request_mark_eio sets fence.error=-EIO then marks the
+    // request complete; i915_request_retire may retire that failed request.
+    // This is not a Tahoe ABI or a reset-quiescence certificate. A future
+    // owned retire path must distinguish verified success from independently
+    // proved drained discard, preserving the failure rather than returning0.
     // Fast table238=IOAccelEventMachine2::waitForStamp(12954): dc8 is
     // rechecked before/inside its wait loop and the bypass also returns zero.
     // IOAccelContext2::clientClose(7954) likewise returns zero after invoking
