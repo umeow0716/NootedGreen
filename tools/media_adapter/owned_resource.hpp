@@ -7619,6 +7619,16 @@ template<class Resolve> struct TglOwnedVpCompressionCallback {
     }
 };
 
+template<class Resolve>
+bool tglBindOwnedVpCompressionEntry(void* child,TglOwnedVpEntrySet& target) noexcept {
+    static_assert(noexcept(Resolve{}(child)),"VP compression binding resolver ABI");
+    auto* context=Resolve{}(child);
+    static_assert(noexcept(context->owns(child)),"VP compression binding ownership ABI");
+    if(!context || !context->owns(child) || target.compression) return false;
+    auto candidate=target;
+    candidate.compression=&TglOwnedVpCompressionCallback<Resolve>::compression;
+    target=candidate;return true;
+}
 struct TglOwnedSfcGeometryInput {
     uint32_t inputFormat=0,outputFormat=0,inputFrameMode=0,rotation=0;
     uint32_t inputHeight=0,inputWidth=0,outputHeight=0,outputWidth=0;
@@ -9200,6 +9210,16 @@ template<class Resolve> struct TglOwnedVpPassInitCallback {
     }
 };
 
+template<class Resolve>
+bool tglBindOwnedVpInitializeEntry(void* child,TglOwnedVpEntrySet& target) noexcept {
+    static_assert(noexcept(Resolve{}(child)),"VP initialize binding resolver ABI");
+    auto* context=Resolve{}(child);
+    static_assert(noexcept(context->owns(child)),"VP initialize binding ownership ABI");
+    if(!context || !context->owns(child) || target.initialize) return false;
+    auto candidate=target;
+    candidate.initialize=&TglOwnedVpPassInitCallback<Resolve>::initialize;
+    target=candidate;return true;
+}
 // ICL SFC base+28 uses 4d4d0(400,200): one c00-byte allocation,
 // Y-X/Y-Y/UV-X/UV-Y pointers at 10/18/20/28. Owned header only;
 // never pass it to native 4d600, which would free our tracked allocation.
@@ -9360,13 +9380,15 @@ public:
         // initialization has no return status; the scoped owner keeps that
         // separate and must verify it before marking the graph ready.
         using InitContext=TglOwnedVpPassInitContext<StateBackend>;
-        using Init=TglOwnedVpPassInitCallback<TglOwnedVpSfcResolve<InitContext>>;
+        using InitResolve=TglOwnedVpSfcResolve<InitContext>;
         InitContext initialization(storage_,state_);
         {
             void* child=storage_.bytes.data();
             TglOwnedVpSfcScopedContext<InitContext> scope(child,initialization);
             if(!scope.bound()) {clear();return false;}
-            Init::initialize(child);
+            TglOwnedVpEntrySet entries;
+            if(!tglBindOwnedVpInitializeEntry<InitResolve>(child,entries)) {clear();return false;}
+            entries.initialize(child);
         }
         if(initialization.status()) {clear();return false;}
         storage_.setCallerFields(channel,performance);ready_=true;return true;

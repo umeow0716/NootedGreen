@@ -8362,6 +8362,9 @@ static void testSfcStateParameterOwnership() {
         for(bool fail:{false,true}) {
             state.reset();vpBackend.fail=fail;
             Context context(storage,state);
+            using InitResolve=TglOwnedVpSfcResolve<Context>;
+            TglOwnedVpEntrySet initEntries;
+            assert(!tglBindOwnedVpInitializeEntry<InitResolve>(storage.bytes.data(),initEntries));
             const auto before=storage.bytes;
             const auto allocations=vpBackend.allocations;
             initialize(storage.bytes.data());
@@ -8369,9 +8372,13 @@ static void testSfcStateParameterOwnership() {
             {
                 TglOwnedVpSfcScopedContext<Context> scope(storage.bytes.data(),context);
                 assert(scope.bound());
+                assert(!tglBindOwnedVpInitializeEntry<InitResolve>(&vpBackend,initEntries));
+                assert(tglBindOwnedVpInitializeEntry<InitResolve>(storage.bytes.data(),initEntries));
+                assert(initEntries.initialize==initialize && initEntries.missingMask()==(0x7ffffffU&~4U));
+                assert(!tglBindOwnedVpInitializeEntry<InitResolve>(storage.bytes.data(),initEntries));
                 initialize(nullptr);initialize(&vpBackend);
                 assert(vpBackend.allocations==allocations && storage.bytes==before);
-                initialize(storage.bytes.data());
+                initEntries.initialize(storage.bytes.data());
                 assert(context.status()==(fail ? 5 : 0));
                 assert(bool(state.data())==!fail);
                 uintptr_t published=1;std::memcpy(&published,storage.bytes.data()+0x938,8);
@@ -10318,10 +10325,18 @@ int main() {
             std::array<uint8_t,0xf8> expected;
         } reentry{&context,settings.data(),&surface,&packet,packet};
         using Callback=TglOwnedVpCompressionCallback<TglOwnedVpSfcResolve<Context>>;
+        using CompressionResolve=TglOwnedVpSfcResolve<Context>;
+        TglOwnedVpEntrySet compressionEntries;
+        assert(!tglBindOwnedVpCompressionEntry<CompressionResolve>(vp.bytes.data(),compressionEntries));
         static_assert(std::is_same_v<decltype(&Callback::compression),int(*)(void*,void*,void*,void*) noexcept>);
         assert(Callback::compression(vp.bytes.data(),settings.data(),&surface,packet.data())==5);
         {
             TglOwnedVpSfcScopedContext<Context> scope(vp.bytes.data(),context);assert(scope.bound());
+            assert(!tglBindOwnedVpCompressionEntry<CompressionResolve>(&surface,compressionEntries));
+            assert(tglBindOwnedVpCompressionEntry<CompressionResolve>(vp.bytes.data(),compressionEntries));
+            assert(compressionEntries.compression==&Callback::compression &&
+                compressionEntries.missingMask()==(0x7ffffffU&~(1U<<26)));
+            assert(!tglBindOwnedVpCompressionEntry<CompressionResolve>(vp.bytes.data(),compressionEntries));
             reentryContext=&reentry;
             reenter=[](void* raw) noexcept {
                 auto& value=*static_cast<Reentry*>(raw);
@@ -10330,7 +10345,7 @@ int main() {
                 assert(*value.packet==value.expected);
                 return status;
             };
-            assert(Callback::compression(vp.bytes.data(),settings.data(),&surface,packet.data())==0);
+            assert(compressionEntries.compression(vp.bytes.data(),settings.data(),&surface,packet.data())==0);
             assert(reentryHits>1);reenter=nullptr;
             assert(calls==3 && packet[0x8b]==1 && packet[0x8c]==2 && packet[0xf7]==0x5a);
             const auto saved=packet;
