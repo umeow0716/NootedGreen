@@ -1567,7 +1567,18 @@ static void testTrackedCpuOwner() {
                 128,equal?128:256);
             assert(decision==(!changed?Decision::Keep:
                 valid && flag13 && previous && equal?Decision::CopyPrevious:Decision::Invalidate));
+            bool referenceValid=valid;unsigned copies=0;
+            assert(tglApplyOwnedFfdnHistory(changed,referenceValid,flag13,previous,128,equal?128:256,
+                [&]() noexcept {++copies;})==decision);
+            assert(copies==(decision==Decision::CopyPrevious?1u:0u));
+            assert(referenceValid==(valid && decision!=Decision::Invalidate));
         }
+        bool referenceValid=true;unsigned copies=0;
+        assert(tglApplyOwnedFfdnHistory(true,referenceValid,true,true,128,256,
+            [&]() noexcept {++copies;})==Decision::Invalidate);
+        assert(tglApplyOwnedFfdnHistory(true,referenceValid,true,true,128,128,
+            [&]() noexcept {++copies;})==Decision::Invalidate);
+        assert(!referenceValid && copies==0); // first slot invalidation remains sticky for second
         assert(tglOwnedFfdnHistoryDecision(true,true,true,true,0,0)==Decision::CopyPrevious);
         for(unsigned mask=0;mask<128;++mask) {
             const bool a=mask&1,b=mask&2,c=mask&4,d=mask&8,

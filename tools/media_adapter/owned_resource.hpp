@@ -4608,6 +4608,21 @@ inline TglOwnedFfdnHistoryDecision tglOwnedFfdnHistoryDecision(bool changed,
     return referenceValid && executionFlag13 && hasPrevious && allocatedPitch==previousPitch
         ? TglOwnedFfdnHistoryDecision::CopyPrevious : TglOwnedFfdnHistoryDecision::Invalidate;
 }
+// ICL1f80b6..1f81a9: consume the decision in native order. The copy's
+// return register is not tested at1f819c; require a void callback rather
+// than inventing an error return contract. Caller supplies leased child1b8
+// and previous sourcec8 to that callback, never the newly allocated slot.
+template<class Copy>
+TglOwnedFfdnHistoryDecision tglApplyOwnedFfdnHistory(bool changed,bool& referenceValid,
+    bool executionFlag13,bool hasPrevious,uint32_t allocatedPitch,uint32_t previousPitch,
+    Copy copy) noexcept {
+    static_assert(noexcept(copy()) && std::is_same_v<decltype(copy()),void>,"FFDN history copy ABI");
+    const auto decision=tglOwnedFfdnHistoryDecision(changed,referenceValid,executionFlag13,
+        hasPrevious,allocatedPitch,previousPitch);
+    if(decision==TglOwnedFfdnHistoryDecision::CopyPrevious) copy();
+    else if(decision==TglOwnedFfdnHistoryDecision::Invalidate) referenceValid=false;
+    return decision;
+}
 // Backed subset of native4e060: type0 or type1/format3d. Other combinations
 // must not be promoted from native's descriptor-only branch to a GPU surface.
 // This owns the embedded resource and captures each allocation's effective
