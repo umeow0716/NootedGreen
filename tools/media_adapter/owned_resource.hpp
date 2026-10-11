@@ -8794,15 +8794,15 @@ struct TglOwnedVeboxNoAllocationUnwind {void operator()(void*) const noexcept {}
 // Qualified data-policy gates supplied by the owned frame, not donor this
 // offsets. ICL1f7afc..1f875f orders these stages; the enclosing slot58 context
 // owns failure unwind. Each stage retains its exact status and is called once.
-template<class QueryFfdi,class QuerySecondary,class QueryPipe,class QueryStmm,
+template<class QueryFfdi,class QuerySecondary,class QueryFfdn,class QueryPipe,class QueryStmm,
     class Ffdi,class Secondary,class Ffdn,class Rectangle,class Stmm,class Statistics>
 int tglRunOwnedVeboxAllocationQueriedStages(QueryFfdi ffdiEnabled,QuerySecondary hasSecondary,
-    QueryPipe pipe,QueryStmm stmmEnabled,Ffdi ffdi,Secondary secondary,Ffdn ffdn,Rectangle rectangle,
+    QueryFfdn ffdnEnabled,QueryPipe pipe,QueryStmm stmmEnabled,Ffdi ffdi,Secondary secondary,Ffdn ffdn,Rectangle rectangle,
     Stmm stmm,Statistics statistics) noexcept {
-    static_assert(noexcept(ffdiEnabled()) && noexcept(hasSecondary()) && noexcept(pipe()) && noexcept(stmmEnabled()),
+    static_assert(noexcept(ffdiEnabled()) && noexcept(hasSecondary()) && noexcept(ffdnEnabled()) && noexcept(pipe()) && noexcept(stmmEnabled()),
         "allocation gate queries must not throw");
     static_assert(std::is_same_v<decltype(ffdiEnabled()),bool> && std::is_same_v<decltype(hasSecondary()),bool> &&
-        std::is_same_v<decltype(pipe()),uint32_t> && std::is_same_v<decltype(stmmEnabled()),bool>,"allocation gate ABI");
+        std::is_same_v<decltype(ffdnEnabled()),bool> && std::is_same_v<decltype(pipe()),uint32_t> && std::is_same_v<decltype(stmmEnabled()),bool>,"allocation gate ABI");
     static_assert(noexcept(ffdi()) && noexcept(secondary()) && noexcept(ffdn()) &&
         noexcept(rectangle()) && noexcept(stmm()) && noexcept(statistics()),"allocation stages must not throw");
     static_assert(std::is_same_v<decltype(ffdi()),int> && std::is_same_v<decltype(secondary()),int> &&
@@ -8811,7 +8811,8 @@ int tglRunOwnedVeboxAllocationQueriedStages(QueryFfdi ffdiEnabled,QuerySecondary
     int status=0;
     if(ffdiEnabled() && (status=ffdi())) return status;
     if(hasSecondary() && (status=secondary())) return status;
-    if((status=ffdn())) return status;
+    // Exact Darwin1f7fbb queries primary+b8; false skips to1f839b.
+    if(ffdnEnabled() && (status=ffdn())) return status;
     if(pipe()==2 && (status=rectangle())) return status;
     if(stmmEnabled() && (status=stmm())) return status;
     return statistics();
@@ -8824,12 +8825,12 @@ struct TglOwnedVeboxFrameNoUnwind {
     void operator()(void*,uintptr_t,const TglOwnedSurfaceStorage&) const noexcept {}
 };
 template<class SurfaceOwner,class ChildOwner,class ExecutionOwner,class QueryFfdi,
-    class QuerySecondary,class QueryPipe,class QueryStmm,class Ffdi,class Secondary,
+    class QuerySecondary,class QueryFfdn,class QueryPipe,class QueryStmm,class Ffdi,class Secondary,
     class Ffdn,class Rectangle,class Stmm,class Statistics,class Unwind=TglOwnedVeboxFrameNoUnwind>
 int tglRunCapturedVeboxAllocationStages(SurfaceOwner& sourceOwner,ChildOwner& childOwner,
     ExecutionOwner& executionOwner,void* capturedChild,uintptr_t capturedExecution,
     const TglOwnedSurfaceStorage& capturedSource,QueryFfdi ffdiEnabled,QuerySecondary hasSecondary,
-    QueryPipe pipe,QueryStmm stmmEnabled,Ffdi ffdi,Secondary secondary,Ffdn ffdn,
+    QueryFfdn ffdnEnabled,QueryPipe pipe,QueryStmm stmmEnabled,Ffdi ffdi,Secondary secondary,Ffdn ffdn,
     Rectangle rectangle,Stmm stmm,Statistics statistics,Unwind unwind={}) noexcept {
     return tglRunCapturedVeboxAllocation(sourceOwner,childOwner,executionOwner,
         capturedChild,capturedExecution,capturedSource,
@@ -8853,7 +8854,8 @@ int tglRunCapturedVeboxAllocationStages(SurfaceOwner& sourceOwner,ChildOwner& ch
             if(enabled && (status=stage(ffdi))) return status;
             if((status=gate(hasSecondary,enabled))) return status;
             if(enabled && (status=stage(secondary))) return status;
-            if((status=stage(ffdn))) return status;
+            if((status=gate(ffdnEnabled,enabled))) return status;
+            if(enabled && (status=stage(ffdn))) return status;
             if((status=gate(pipe,selectedPipe))) return status;
             if(selectedPipe==2 && (status=stage(rectangle))) return status;
             if((status=gate(stmmEnabled,enabled))) return status;
@@ -8876,28 +8878,28 @@ int tglRunCapturedVeboxAllocationStages(SurfaceOwner& sourceOwner,ChildOwner& ch
 // Standalone entry acquires the frame. Native slot58 already runs inside the
 // child lease: it must use the captured entry above rather than reacquire it.
 template<class SurfaceOwner,class ChildOwner,class ExecutionOwner,class QueryFfdi,
-    class QuerySecondary,class QueryPipe,class QueryStmm,class Ffdi,class Secondary,
+    class QuerySecondary,class QueryFfdn,class QueryPipe,class QueryStmm,class Ffdi,class Secondary,
     class Ffdn,class Rectangle,class Stmm,class Statistics,class Unwind=TglOwnedVeboxFrameNoUnwind>
 int tglWithOwnedVeboxAllocationStages(SurfaceOwner& sourceOwner,ChildOwner& childOwner,
     ExecutionOwner& executionOwner,QueryFfdi ffdiEnabled,QuerySecondary hasSecondary,
-    QueryPipe pipe,QueryStmm stmmEnabled,Ffdi ffdi,Secondary secondary,Ffdn ffdn,
+    QueryFfdn ffdnEnabled,QueryPipe pipe,QueryStmm stmmEnabled,Ffdi ffdi,Secondary secondary,Ffdn ffdn,
     Rectangle rectangle,Stmm stmm,Statistics statistics,Unwind unwind={}) noexcept {
     return tglWithOwnedVeboxAllocationFrame(sourceOwner,childOwner,executionOwner,
         [&](void* child,uintptr_t execution,const auto& source) noexcept {
             return tglRunCapturedVeboxAllocationStages(sourceOwner,childOwner,executionOwner,
-                child,execution,source,ffdiEnabled,hasSecondary,pipe,stmmEnabled,
+                child,execution,source,ffdiEnabled,hasSecondary,ffdnEnabled,pipe,stmmEnabled,
                 ffdi,secondary,ffdn,rectangle,stmm,statistics,unwind);
         });
 }
 // Convenience only for immutable, already-qualified policy inputs. Runtime
 // frame producers use the queried form so later gates observe earlier writes.
 template<class Ffdi,class Secondary,class Ffdn,class Rectangle,class Stmm,class Statistics>
-int tglRunOwnedVeboxAllocationStages(bool ffdiEnabled,bool hasSecondary,uint32_t pipe,
+int tglRunOwnedVeboxAllocationStages(bool ffdiEnabled,bool hasSecondary,bool ffdnEnabled,uint32_t pipe,
     bool stmmEnabled,Ffdi ffdi,Secondary secondary,Ffdn ffdn,Rectangle rectangle,
     Stmm stmm,Statistics statistics) noexcept {
     return tglRunOwnedVeboxAllocationQueriedStages(
         [=]() noexcept {return ffdiEnabled;},[=]() noexcept {return hasSecondary;},
-        [=]() noexcept {return pipe;},[=]() noexcept {return stmmEnabled;},
+        [=]() noexcept {return ffdnEnabled;},[=]() noexcept {return pipe;},[=]() noexcept {return stmmEnabled;},
         ffdi,secondary,ffdn,rectangle,stmm,statistics);
 }
 template<class Owner,class Allocate,class Unwind=TglOwnedVeboxNoAllocationUnwind>

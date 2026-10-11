@@ -1037,20 +1037,20 @@ static void testTrackedCpuOwner() {
         assert(!Callback::admit(&child,&params,&pass) && calls==2);
     }
     {
-        for(unsigned gates=0;gates<8;++gates) for(uint32_t pipe:{0u,1u,2u})
+        for(unsigned gates=0;gates<16;++gates) for(uint32_t pipe:{0u,1u,2u})
         for(int failed=-1;failed<6;++failed) {
             std::array<int,6> observed{};size_t used=0;
             const auto stage=[&](int id) noexcept {
                 observed[used++]=id;return id==failed?31+id:0;
             };
-            const int status=tglRunOwnedVeboxAllocationStages(gates&1,gates&2,pipe,gates&4,
+            const int status=tglRunOwnedVeboxAllocationStages(gates&1,gates&2,gates&8,pipe,gates&4,
                 [&]() noexcept {return stage(0);},[&]() noexcept {return stage(1);},
                 [&]() noexcept {return stage(2);},[&]() noexcept {return stage(3);},
                 [&]() noexcept {return stage(4);},[&]() noexcept {return stage(5);});
             std::array<int,6> expected{};size_t count=0;int expectedStatus=0;
             for(int id=0;id<6;++id) {
                 const bool enabled=id==0?bool(gates&1):id==1?bool(gates&2):
-                    id==3?pipe==2:id==4?bool(gates&4):true;
+                    id==2?bool(gates&8):id==3?pipe==2:id==4?bool(gates&4):true;
                 if(!enabled) continue;
                 expected[count++]=id;
                 if(id==failed) {expectedStatus=31+id;break;}
@@ -1062,15 +1062,16 @@ static void testTrackedCpuOwner() {
             const int status=tglRunOwnedVeboxAllocationQueriedStages(
                 [&]() noexcept {assert(order++==0);return true;},
                 [&]() noexcept {assert(order++==2 && secondaryReady);return secondaryReady;},
-                [&]() noexcept -> uint32_t {assert(order++==5 && pipe==2);return pipe;},
-                [&]() noexcept {assert(order++==7 && stmmReady);return stmmReady;},
+                [&]() noexcept {assert(order++==4);return true;},
+                [&]() noexcept -> uint32_t {assert(order++==6 && pipe==2);return pipe;},
+                [&]() noexcept {assert(order++==8 && stmmReady);return stmmReady;},
                 [&]() noexcept {assert(order++==1);secondaryReady=true;return 0;},
                 [&]() noexcept {assert(order++==3);return 0;},
-                [&]() noexcept {assert(order++==4);pipe=2;return failFfdn?31:0;},
-                [&]() noexcept {assert(order++==6);stmmReady=true;return 0;},
-                [&]() noexcept {assert(order++==8);return 0;},
-                [&]() noexcept {assert(order++==9);return 0;});
-            assert(status==(failFfdn?31:0) && order==(failFfdn?5u:10u));
+                [&]() noexcept {assert(order++==5);pipe=2;return failFfdn?31:0;},
+                [&]() noexcept {assert(order++==7);stmmReady=true;return 0;},
+                [&]() noexcept {assert(order++==9);return 0;},
+                [&]() noexcept {assert(order++==10);return 0;});
+            assert(status==(failFfdn?31:0) && order==(failFfdn?6u:11u));
         }
         int child=0,foreign=0;
         struct Owner {
@@ -5921,7 +5922,7 @@ static void testNativeResourceBoundary() {
                         assert(execution.withExecution([](uintptr_t) noexcept {assert(false);return 0;})==5);
                     };
                     assert(tglWithOwnedVeboxAllocationStages(owner,childOwner,execution,
-                        yes,yes,pipe,yes,stage,stage,stage,stage,stage,stage,unwind)==(fail?31:0));
+                        yes,yes,yes,pipe,yes,stage,stage,stage,stage,stage,stage,unwind)==(fail?31:0));
                     assert(calls==(fail?fail:6) && unwinds==unsigned(fail!=0));
                     assert(!childOwner.busy && !execution.busy && owner.surface()==surface);
                 }
@@ -5943,7 +5944,7 @@ static void testNativeResourceBoundary() {
                     };
                     const auto deniedUnwind=[](void*,uintptr_t,const auto&) noexcept {assert(false);};
                     assert(tglWithOwnedVeboxAllocationStages(owner,childOwner,execution,
-                        yes,laterQuery,pipe,laterQuery,invalidates,unexpected,unexpected,
+                        yes,laterQuery,laterQuery,pipe,laterQuery,invalidates,unexpected,unexpected,
                         unexpected,unexpected,unexpected,deniedUnwind)==5);
                     assert(later==0 && !childOwner.busy && !execution.busy);
                     std::memcpy(child.data()+0x88,&report,8);
@@ -5996,7 +5997,8 @@ static void testNativeResourceBoundary() {
                             auto allocate=[&](void* actual) noexcept {
                                 ++allocations;assert(actual==capturedChild);
                                 return tglRunCapturedVeboxAllocationStages(owner,childOwner,execution,
-                                    actual,capturedExecution,sourceView,disabled,disabled,pipe,disabled,
+                                    actual,capturedExecution,sourceView,disabled,disabled,
+                                    [](void*,uintptr_t,const auto&) noexcept {return true;},pipe,disabled,
                                     unused,unused,ffdn,unused,unused,statistics,unwind);
                             };
                             using Context=TglOwnedVeboxAllocationContext<TestVeboxChildLease,decltype(allocate)>;
@@ -6056,7 +6058,7 @@ static void testNativeResourceBoundary() {
                             secondarySlot.reset();
                         };
                         assert(tglWithOwnedVeboxAllocationStages(owner,childOwner,execution,
-                            disabled,enabled,pipe,disabled,unused,secondary,ffdn,rectangle,unused,
+                            disabled,enabled,enabled,pipe,disabled,unused,secondary,ffdn,rectangle,unused,
                             statistics,unwind)==finishStatus);
                         assert(secondaryCalls==1 && rectangleCalls==1 && statisticsCalls==1);
                         assert(width==(finishStatus?17u:1920u) && height==(finishStatus?19u:1080u));
@@ -7474,7 +7476,7 @@ static void testResourceBinding() {
                         assert(!api.references && !statistics.layout().bytes && !lineBackend.live);
                     };
                     assert(tglWithOwnedVeboxAllocationStages(sourceOwner,allocationChildOwner,allocationExecution,
-                        disabled,disabled,pipe,disabled,unused,unused,noFfdn,unused,unused,
+                        disabled,disabled,disabled,pipe,disabled,unused,unused,noFfdn,unused,unused,
                         allocate,unwind)==later);
                     assert(publications==1 && unwinds==unsigned(later!=0));
                     assert(api.references==(later?0u:3u));
