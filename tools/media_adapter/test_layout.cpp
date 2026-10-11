@@ -6732,6 +6732,38 @@ static void testResourceBinding() {
                     if(rejectPublication) assert(!api.references);
                     transaction.reset();assert(!api.references);
                 }));
+                {
+                    struct Info {uint32_t marker=0;};
+                    const TglOwnedSurfaceStorage* captured=nullptr;
+                    std::array<uint8_t,0x1bc0> frameChild{};
+                    TestVeboxChildLease frameChildOwner{frameChild.data()};
+                    uint32_t width=7,height=9;unsigned stages=0;
+                    assert(tglPrepareOwnedStatisticsBoundary<Info>(sourceOwner,1,
+                        []() noexcept -> uint8_t {assert(false);return 0;},
+                        [&](const auto& view,Info& info) noexcept {
+                            assert(stages++==0);captured=&view;info.marker=0x1234;return 0;
+                        },[&](const Info& info,uint32_t& w,uint32_t& h,bool di) noexcept {
+                            assert(stages++==1 && info.marker==0x1234 && di);
+                            w=1920;h=1080;return 0;
+                        },width,height,[&](uint32_t w,uint32_t h) noexcept {
+                            assert(stages++==2 && captured && sourceOwner.hasSurfaceLease(*captured));
+                            return frameChildOwner.withPrivateChild([&](void* ownedChild) noexcept {
+                                return transaction.ensureFromLeasedSource(sourceOwner,*captured,false,
+                                    requests,prepare,false,w,h,fill,
+                                    [&](const auto&,const TglStatisticsAllocation& layout) noexcept {
+                                        assert(stages++==3 && sourceOwner.hasSurfaceLease(*captured));
+                                        return tglPublishOwnedStatisticsLayout(frameChildOwner,ownedChild,layout);
+                                    });
+                            });
+                        })==0);
+                    assert(stages==4 && width==1920 && height==1080 && api.references==3);
+                    uint32_t row=0,blocks=0;
+                    std::memcpy(&row,frameChild.data()+0x1114,4);
+                    std::memcpy(&blocks,frameChild.data()+0x1118,4);
+                    assert(row==1920 && blocks==270 && statistics.layout().bytes==520320);
+                    assert(!frameChildOwner.busy);
+                    transaction.reset();assert(!api.references);
+                }
                 sourceOwner.reset();assert(sourceBackend.releases==1);
                 // Exercise slot58 unwind with the actual backing coordinator,
                 // after backing succeeds but a later CPU stage rejects.
