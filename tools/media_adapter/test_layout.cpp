@@ -12160,6 +12160,7 @@ static void testRetainedVeboxFrames() {
         void* output=nullptr;bool readable=true,qualified=true;
         uintptr_t batchDescriptor=0x44000,batchOutputs=0x45000;
         uint32_t batchCount=2;std::array<uintptr_t,2> batchContexts{0x46000,0x47000};
+        bool removalArrayReadable=true;
         std::array<uint8_t,20> creationAnchor{0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,
             0x41,0x55,0x41,0x54,0x53,0x48,0x81,0xec,0xe8,0x01,0x00,0x00};
         std::array<uint8_t,17> backingAllocateAnchor{0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,
@@ -12178,9 +12179,11 @@ static void testRetainedVeboxFrames() {
             else if(address==image+0x13e43 && size==creationAnchor.size()) std::memcpy(bytes,creationAnchor.data(),size);
             else if(address==image+0x15128 && size==removalAnchor.size()) std::memcpy(bytes,removalAnchor.data(),size);
             else if(address==0x3300 && size==8) std::memcpy(bytes,&batchDescriptor,8);
+            else if(address==0x3300 && size==4) std::memcpy(bytes,&batchCount,4);
+            else if(address==0x3308 && size==8) std::memcpy(bytes,&batchOutputs,8);
             else if(address==0x44000 && size==4) std::memcpy(bytes,&batchCount,4);
             else if(address==0x44010 && size==8) std::memcpy(bytes,&batchOutputs,8);
-            else if((address==0x45000 || address==0x45008) && size==8)
+            else if((address==0x45000 || address==0x45008) && size==8 && removalArrayReadable)
                 std::memcpy(bytes,&batchContexts[(address-0x45000)/8],8);
             else return false;
             return true;
@@ -12449,6 +12452,29 @@ static void testRetainedVeboxFrames() {
         assert(failedRemovals==1 && !forbiddenReconciliations && !removalRegistry.lookup(image,0xf000).generation);
         assert(removalCallbacks.removeContextsAndReconcile(removalPhysical.ticket,0xf000,input,
             forbiddenReconcile,partialRemoval)==5 && failedRemovals==1 && !forbiddenReconciliations);
+        batchContexts={0x46000,0x47000};
+        invoke.produced=0xf100;
+        TglOwnedPhysicalCallbackCoordinator snapshotCallbacks(removalRegistry,binding,read,qualify,executable,invoke);
+        const auto snapshotPhysical=snapshotCallbacks.initialize(&output,input);assert(snapshotPhysical.published);
+        unsigned snapshotNative=0,snapshotReconciled=0;
+        auto deleteWithSnapshot=[&](uintptr_t entry,uintptr_t physical,const void* original) noexcept -> int {
+            ++snapshotNative;assert(entry==image+0x15128 && physical==0xf100 && original==input);
+            removalArrayReadable=false; // original request storage unavailable after native call
+            return 0;
+        };
+        auto reconcileSnapshot=[&](uintptr_t physical,const TglNativeRemovedContextBatch<2>& batch) noexcept -> int {
+            ++snapshotReconciled;assert(physical==0xf100 && batch.valid && batch.count==2 &&
+                batch.contexts==batchContexts && !removalArrayReadable);
+            assert(snapshotCallbacks.withEventObservation(snapshotPhysical.ticket,physical,
+                []() noexcept -> int {assert(false);return 0;})==5);
+            return 0;
+        };
+        assert(snapshotCallbacks.removeContextsAndReconcileBatch<2>(snapshotPhysical.ticket,0xf100,input,
+            reconcileSnapshot,deleteWithSnapshot)==0 && snapshotNative==1 && snapshotReconciled==1);
+        removalArrayReadable=true;batchContexts[1]=batchContexts[0];
+        assert(snapshotCallbacks.removeContextsAndReconcileBatch<2>(snapshotPhysical.ticket,0xf100,input,
+            reconcileSnapshot,deleteWithSnapshot)==5 && snapshotNative==1 && snapshotReconciled==1);
+        assert(!removalRegistry.lookup(image,0xf100).generation);
     }
 }
 

@@ -16380,6 +16380,27 @@ template<size_t Capacity=16> struct TglNativeCreatedContextBatch {
         candidate.count=n;candidate.valid=true;*this=candidate;return true;
     }
 };
+// Slot4 differs from creation: direct DWORD count and pointer-array at+8.
+// Capture before native deletion. Values are identities only, never retained
+// object references and never permission to dereference a deleted context.
+template<size_t Capacity=16> struct TglNativeRemovedContextBatch {
+    static_assert(Capacity>0 && Capacity<=128,"owned removal work budget");
+    std::array<uintptr_t,Capacity> contexts{};
+    uint32_t count=0;bool valid=false;
+    template<class Read> bool capture(uintptr_t input,Read read) noexcept {
+        *this={};uint32_t n=0;uintptr_t array=0;
+        if(!input || input>UINTPTR_MAX-16 || !read(input,&n,4) || n>Capacity) return false;
+        TglNativeRemovedContextBatch candidate;
+        if(n) {
+            if(!read(input+8,&array,8) || !array || array>UINTPTR_MAX-size_t(n)*8) return false;
+            for(uint32_t i=0;i<n;++i) {
+                if(!read(array+size_t(i)*8,&candidate.contexts[i],8) || !candidate.contexts[i]) return false;
+                for(uint32_t j=0;j<i;++j) if(candidate.contexts[j]==candidate.contexts[i]) return false;
+            }
+        }
+        candidate.count=n;candidate.valid=true;*this=candidate;return true;
+    }
+};
 struct TglNativeContextFrameInvoker {
     int operator()(uintptr_t entry,uintptr_t context,uintptr_t request,
         uintptr_t outputSlot) const noexcept {
@@ -16721,6 +16742,25 @@ public:
             const int result=native(binding_.image+0x15128,physical,input);
             return result?result:reconcile(physical,input);
         });
+    }
+    template<size_t Capacity=16,class Reconcile,class Native=TglNativeBackingAllocateInvoker>
+    int removeContextsAndReconcileBatch(typename Registry::Ticket ticket,uintptr_t physical,
+        const void* input,Reconcile reconcile,Native native=Native{}) noexcept {
+        using Batch=TglNativeRemovedContextBatch<Capacity>;
+        static_assert(noexcept(native(uintptr_t{},uintptr_t{},input)) &&
+            std::is_same_v<decltype(native(uintptr_t{},uintptr_t{},input)),int>);
+        static_assert(noexcept(reconcile(uintptr_t{},std::declval<const Batch&>())) &&
+            std::is_same_v<decltype(reconcile(uintptr_t{},std::declval<const Batch&>())),int>);
+        Batch snapshot;
+        return removeContextsAndReconcile(ticket,physical,input,
+            [&](uintptr_t address,const void*) noexcept -> int {
+                return reconcile(address,static_cast<const Batch&>(snapshot));
+            },[&](uintptr_t entry,uintptr_t address,const void* original) noexcept -> int {
+                // This runs under the same exclusive scope, BEFORE deletion.
+                // Invalid shape conservatively quarantines without native call.
+                if(!snapshot.capture(reinterpret_cast<uintptr_t>(original),read_)) return 5;
+                return native(entry,address,original);
+            });
     }
     template<class Use> int withContextRemoval(typename Registry::Ticket ticket,
         uintptr_t physical,Use use) noexcept {
