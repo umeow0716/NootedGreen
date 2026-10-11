@@ -3956,6 +3956,19 @@ inline int tglStatisticsQuery(uint32_t selector, uint32_t &value) noexcept {
 struct TglStatisticsAllocation {
     uint32_t rowBytes = 0, blockRows = 0, totalRows = 0, bytes = 0;
 };
+// Owned TGL child publication, not an ICL virtual-base pointer transplant.
+template<class ChildOwner>
+int tglPublishOwnedStatisticsLayout(ChildOwner& owner,void* child,
+    const TglStatisticsAllocation& layout) noexcept {
+    if(!child || !owner.hasPrivateChildLease(reinterpret_cast<uintptr_t>(child)) ||
+       !layout.rowBytes || (layout.rowBytes&63) || !layout.blockRows ||
+       layout.totalRows<layout.blockRows ||
+       uint64_t{layout.rowBytes}*layout.totalRows!=layout.bytes) return 5;
+    auto* bytes=static_cast<uint8_t*>(child);
+    std::memcpy(bytes+0x1114,&layout.rowBytes,4);
+    std::memcpy(bytes+0x1118,&layout.blockRows,4);
+    return 0;
+}
 // Gen12 allocation: 64-byte rows, ceil(height/4) per-block rows, plus
 // ceil(1024/rowBytes) reserved rows. Publication is atomic on validation.
 inline int tglStatisticsAllocationSize(uint32_t boundaryWidth, uint32_t boundaryHeight,
@@ -11459,8 +11472,9 @@ public:
     int ensure(uint32_t width,uint32_t height,Fill fill,Publish publish) noexcept {
         static_assert(noexcept(fill(owner_.storage(), uint32_t{})),
                       "initialization must report status without throwing");
+        using PublicationResult=decltype(publish(owner_.storage(),std::declval<const TglStatisticsAllocation&>()));
         static_assert(noexcept(publish(owner_.storage(),std::declval<const TglStatisticsAllocation&>())) &&
-            std::is_same_v<decltype(publish(owner_.storage(),std::declval<const TglStatisticsAllocation&>())),void>,
+            (std::is_same_v<PublicationResult,void> || std::is_same_v<PublicationResult,int>),
             "statistics changed-layout publication ABI");
         if(busy_) return 5;
         TglStatisticsAllocation candidate;
@@ -11477,7 +11491,11 @@ public:
         if (result.changed) {
             const int status = owner_.withStorage([&](const auto& storage) noexcept {
                 const int filled=fill(storage,candidate.bytes);
-                if(!filled) publish(storage,static_cast<const TglStatisticsAllocation&>(candidate));
+                if(!filled) {
+                    if constexpr(std::is_same_v<PublicationResult,int>)
+                        return publish(storage,static_cast<const TglStatisticsAllocation&>(candidate));
+                    else publish(storage,static_cast<const TglStatisticsAllocation&>(candidate));
+                }
                 return filled;
             });
             if (status) { retire(); return status; }

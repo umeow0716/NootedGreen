@@ -4573,7 +4573,9 @@ static void testComposedStatisticsBuffer() {
         assert(source.ensure(sourceKey)==0);
         unsigned publications=0;
         std::array<uint32_t,2> childLayout{99,99};
-        const auto publish=[&](const auto& resource,const TglStatisticsAllocation& layout) noexcept {
+        std::array<uint8_t,0x1bc0> childBytes{};
+        TestVeboxChildLease childOwner{childBytes.data()};
+        const auto publish=[&](const auto& resource,const TglStatisticsAllocation& layout) noexcept -> int {
             ++publications;assert(fixture.fills==publications);
             assert(tglNativeBackingPresent(resource));
             for(size_t i=0;i<layout.bytes;++i) assert(fixture.bytes[i]==0);
@@ -4581,7 +4583,14 @@ static void testComposedStatisticsBuffer() {
             statistics.reset();assert(fixture.releases==released);
             assert(statistics.ensure(64,16,initialize)==5);
             childLayout={layout.rowBytes,layout.blockRows};
+            return tglPublishOwnedStatisticsLayout(childOwner,childBytes.data(),layout);
         };
+        const auto ensureStatistics=[&](uint32_t w,uint32_t h) noexcept {
+            return childOwner.withPrivateChild([&](void*) noexcept {return statistics.ensure(w,h,initialize,publish);});
+        };
+        TglStatisticsAllocation initialLayout;
+        assert(tglStatisticsAllocationSize(64,16,initialLayout)==0);
+        assert(tglPublishOwnedStatisticsLayout(childOwner,childBytes.data(),initialLayout)==5);
         struct Info {uint32_t width=0,height=0;};
         uint32_t publishedWidth=7,publishedHeight=9;
         assert(tglPrepareOwnedStatisticsBoundary<Info>(source,1,
@@ -4593,10 +4602,14 @@ static void testComposedStatisticsBuffer() {
             },publishedWidth,publishedHeight,
             [&](uint32_t width,uint32_t height) noexcept {
                 source.reset();assert(source.ensure(sourceKey)==5);
-                return statistics.ensure(width,height,initialize,publish);
+                return ensureStatistics(width,height);
             })==0);
         assert(publishedWidth==64 && publishedHeight==16);
         assert(publications==1 && childLayout[0]==64 && childLayout[1]==4);
+        uint32_t nativeRow=0,nativeBlocks=0;
+        std::memcpy(&nativeRow,childBytes.data()+0x1114,4);
+        std::memcpy(&nativeBlocks,childBytes.data()+0x1118,4);
+        assert(nativeRow==64 && nativeBlocks==4);
         assert(statistics.layout().bytes == 1280 && fixture.fills == 1);
         for (size_t i = 0; i < fixture.bytes.size(); ++i)
             assert(fixture.bytes[i] == (i < 1280 ? 0 : 0xa5));
@@ -4608,10 +4621,16 @@ static void testComposedStatisticsBuffer() {
         assert(publications==1 && childLayout[0]==77 && childLayout[1]==88);
         assert(statistics.layout().bytes == 0 && fixture.allocations == fixture.releases);
         fixture.writable = true;
-        assert(statistics.ensure(128, 16, initialize,publish) == 0 && fixture.fills == 2);
+        assert(ensureStatistics(128,16) == 0 && fixture.fills == 2);
         assert(publications==2 && childLayout[0]==128 && childLayout[1]==4);
+        std::memcpy(&nativeRow,childBytes.data()+0x1114,4);
+        assert(nativeRow==128);
+        assert(statistics.ensure(64,16,initialize,publish)==5); // changed publication without child lease
+        assert(statistics.layout().bytes==0 && fixture.allocations==fixture.releases);
+        std::memcpy(&nativeRow,childBytes.data()+0x1114,4);
+        assert(nativeRow==128); // rejected publication does not mutate the child
     }
-    assert(fixture.allocations == 3 && fixture.releases == 3);
+    assert(fixture.allocations == 4 && fixture.releases == 4);
 }
 
 static void testBufferFill() {
