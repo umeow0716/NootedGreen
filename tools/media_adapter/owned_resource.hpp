@@ -1543,6 +1543,43 @@ struct TglNativeVeboxParentView {
     }
 };
 
+struct TglOwnedSurfaceStorage;
+// Outer131fa0 copies0x139 bytes at1320e2: source count0 <=17, targets90 <=8.
+// Sources begin8; targets begin98 (NOT the source!). Native13076c..13083c
+// scans up to17 source slots, skipping NULLs until sourceCount nonnull entries;
+// sourceCount is therefore NOT an upper bound on the selected slot index.
+// The132105 registration
+// loop consumes copied target count90 and target pointers98 onward. This is
+// a role snapshot under an existing native input lease, not surface ownership.
+struct TglNativeOuterSurfaceRoles {
+    uint32_t sourceCount=0,targetCount=0;
+    std::array<uintptr_t,17> sources{};
+    std::array<uintptr_t,8> targets{};
+    template<class Read> bool capture(uintptr_t input,Read read) noexcept {
+        *this={};std::array<uint8_t,0x139> bytes{};
+        if(!input || input>UINTPTR_MAX-bytes.size() || !read(input,bytes.data(),bytes.size())) return false;
+        uint32_t sc=0,tc=0;
+        std::memcpy(&sc,bytes.data(),4);std::memcpy(&tc,bytes.data()+0x90,4);
+        if(sc>sources.size() || tc>targets.size()) return false;
+        std::memcpy(sources.data(),bytes.data()+8,sizeof(sources));
+        std::memcpy(targets.data(),bytes.data()+0x98,sizeof(targets));
+        sourceCount=sc;targetCount=tc;return true;
+    }
+    template<class Owner> bool sourceMatches(size_t index,Owner& owner,
+        const TglOwnedSurfaceStorage& surface) const noexcept {
+        if(index>=sources.size() || !sourceCount ||
+           sources[index]!=reinterpret_cast<uintptr_t>(&surface)) return false;
+        uint32_t ordinal=0;
+        for(size_t i=0;i<=index;++i) if(sources[i]) ++ordinal;
+        return ordinal<=sourceCount && owner.hasSurfaceLease(surface);
+    }
+    template<class Owner> bool targetMatches(size_t index,Owner& owner,
+        const TglOwnedSurfaceStorage& surface) const noexcept {
+        return index<targetCount && targets[index]==reinterpret_cast<uintptr_t>(&surface) &&
+            owner.hasSurfaceLease(surface);
+    }
+};
+
 // Exact TGL226e6 forwards wrapper+10/index to FinishFenceEvent. This exposes
 // its real IOReturn (OS64df0 discards it), NOT a completion certificate: reset
 // and termination can satisfy the kernel predicate without successful work.

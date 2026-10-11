@@ -11316,6 +11316,41 @@ static void testRetainedVeboxFrames() {
 
 int main() {
     {
+        TglOwnedSurfaceStorage source,target;
+        struct Owner {
+            const TglOwnedSurfaceStorage& surface;
+            bool held=true;
+            bool hasSurfaceLease(const TglOwnedSurfaceStorage& value) const noexcept {return held && &surface==&value;}
+        } sourceOwner{source},targetOwner{target};
+        std::array<uint8_t,0x139> input{};
+        const uint32_t one=1;
+        const uintptr_t sp=reinterpret_cast<uintptr_t>(&source),tp=reinterpret_cast<uintptr_t>(&target);
+        std::memcpy(input.data(),&one,4);std::memcpy(input.data()+0x90,&one,4);
+        std::memcpy(input.data()+8,&sp,8);std::memcpy(input.data()+0x98,&tp,8);
+        auto read=[&](uintptr_t p,void* out,size_t n) noexcept {
+            if(p!=0x1000 || n!=input.size()) return false;
+            std::memcpy(out,input.data(),n);return true;
+        };
+        TglNativeOuterSurfaceRoles roles;
+        assert(roles.capture(0x1000,read));
+        assert(roles.sourceMatches(0,sourceOwner,source) && roles.targetMatches(0,targetOwner,target));
+        assert(!roles.sourceMatches(0,targetOwner,target) && !roles.targetMatches(0,sourceOwner,source));
+        sourceOwner.held=false;assert(!roles.sourceMatches(0,sourceOwner,source));sourceOwner.held=true;
+        assert(!roles.sourceMatches(1,sourceOwner,source));
+        const uintptr_t none=0;
+        std::memcpy(input.data()+8,&none,8);
+        std::memcpy(input.data()+8+5*8,&sp,8);
+        std::memcpy(input.data()+8+6*8,&tp,8);
+        assert(roles.capture(0x1000,read));
+        assert(roles.sourceMatches(5,sourceOwner,source));
+        assert(!roles.sourceMatches(6,targetOwner,target)); // beyond first nonnull sourceCount entries
+        uint32_t tooMany=18;std::memcpy(input.data(),&tooMany,4);
+        assert(!roles.capture(0x1000,read) && !roles.sourceCount && !roles.targets[0]);
+        std::memcpy(input.data(),&one,4);tooMany=9;std::memcpy(input.data()+0x90,&tooMany,4);
+        assert(!roles.capture(0x1000,read) && !roles.targetCount && !roles.sources[0]);
+        assert(!roles.capture(UINTPTR_MAX,read));
+    }
+    {
         constexpr uintptr_t image=0x100000,wrapper=0x300000;
         auto bytes=TglNativeVideoFenceWaitBinding::anchor;
         uintptr_t events=0x400000,context=0x500000;uint32_t count=2;
