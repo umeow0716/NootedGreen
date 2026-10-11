@@ -13432,7 +13432,7 @@ int main() {
                             }
                             if(size==4 && (address==0x1000 || address==0x2000 || address==0x1130 ||
                                 address==0x10d8 || address==0x10dc)) {
-                                const uint32_t value=address==0x1130?0x19:address==0x10d8?1920:address==0x10dc?1080:3;
+                                const uint32_t value=address==0x1130?0x19:address==0x10d8?1920:address==0x10dc?1080:address==0x1000?0:3;
                                 std::memcpy(out,&value,4);return true;
                             }
                             if((address==0x10a8 && size==8) || (address==0x3012 && size==2)) {
@@ -13452,6 +13452,24 @@ int main() {
                                     entries.formatMode(child,reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x3000));
                                     assert(entries.finalAdmission(child,1,reinterpret_cast<void*>(0x1000),
                                         reinterpret_cast<void*>(0x2000)) && entries.allocate(child)==0);
+                                    TglOwnedVpCscCache cscCache;
+                                    std::array<uint8_t,64> ief{};
+                                    const auto beforeIef=ief;const auto beforeState=stateCpu.bytes;
+                                    assert(storage.bytes[0x923]&1);
+                                    assert(graph.withCscAssemblyEntries(child,ief,cscCache,3,5,0,
+                                        [](uintptr_t,void*,size_t) noexcept {assert(false);return false;},
+                                        [](TglCscCoefficients& value,uint32_t from,uint32_t to) noexcept {
+                                            assert(from==3 && to==5);value.matrix[0]=7;return true;
+                                        },entries,[&](void* admitted,const auto& combined,uint8_t* state) noexcept {
+                                            assert(admitted==child && combined.allocate==entries.allocate);
+                                            combined.csc(child,state,ief.data());assert(state[0x88]==1);
+                                            uintptr_t retainedLink=0;
+                                            std::memcpy(&retainedLink,static_cast<uint8_t*>(parent)+0x80,8);
+                                            assert(retainedLink==reinterpret_cast<uintptr_t>(child));
+                                            owner.reset();assert(cpu.live && !graph.tryReset() && !cscCache.reset());
+                                            return 0;
+                                        })==0);
+                                    assert(ief==beforeIef && stateCpu.bytes==beforeState && cscCache.reset());
                                     entries.freeResources(child);return 0;
                                 })==status);
                             std::memcpy(&linked,cpu.bytes.data()+0x80,8);assert(!linked);
