@@ -10315,6 +10315,15 @@ struct TglOwnedSfcIefInput {
     uint8_t skinEnable=0,detailEnable=0;
     std::array<uint16_t,3> thresholds{};
 };
+// Consume the original leased frame snapshot, not a second source+78 read.
+// Scalar donor inputs feed the qualified owned TGL producer; no donor call.
+inline bool tglPrepareOwnedVpIefCommandParameters(TglOwnedSfcCommandParameters& parameters,
+    const TglOwnedVpFramePreparation& frame,const TglOwnedIefTables& tables) noexcept {
+    const bool enabled=frame.iefPresent && (frame.iefFlags&1) && frame.iefStrength>0.f;
+    if(enabled!=frame.at922) return false;
+    return tglPrepareOwnedSfcIefParameters(parameters,enabled,frame.iefStrength,
+        frame.iefSkin,frame.iefDetail,frame.iefThresholds,tables);
+}
 // VP98 prepares IEF before VPa0 publishes CSC pointers. Keep the actual
 // command consumer inside the coefficient scope instead of returning borrowed
 // pointers from an isolated callback. This is CPU composition, not submission.

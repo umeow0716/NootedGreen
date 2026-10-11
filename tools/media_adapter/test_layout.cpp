@@ -14973,6 +14973,28 @@ int main() {
         assert(!prepared.at920 && prepared.at922 && !prepared.at924 && !prepared.regions.scale.scaling);
         assert(prepared.iefPresent && prepared.iefFlags==1 && prepared.iefStrength==0.5f);
         assert(prepared.iefSkin==3 && prepared.iefDetail==2 && prepared.iefThresholds==thresholds);
+        TglOwnedIefTables iefTables{};
+        TglOwnedSfcCommandParameters filterPacket;
+        assert(tglPrepareOwnedVpIefCommandParameters(filterPacket,prepared,iefTables));
+        assert(filterPacket.state[0x67]==1 && filterPacket.state[0x68]==1);
+        assert(filterPacket.ief[1]==0 && filterPacket.ief[4]==7 &&
+            filterPacket.ief[5]==2 && filterPacket.ief[6]==8);
+        auto strongIef=prepared;strongIef.iefStrength=3.5f;
+        for(size_t i=0;i<iefTables.size();++i) iefTables[i][3]=uint32_t(100+i);
+        assert(tglPrepareOwnedVpIefCommandParameters(filterPacket,strongIef,iefTables));
+        uint32_t factor=0;std::memcpy(&factor,filterPacket.ief.data()+8,4);assert(factor==3);
+        for(size_t i=0;i<iefTables.size();++i) {
+            uint32_t coefficient=0;
+            std::memcpy(&coefficient,filterPacket.ief.data()+12+i*4,4);
+            assert(coefficient==100+i);
+        }
+        const auto savedFilter=filterPacket.ief;
+        auto inconsistent=prepared;inconsistent.at922=false;
+        assert(!tglPrepareOwnedVpIefCommandParameters(filterPacket,inconsistent,iefTables));
+        assert(filterPacket.ief==savedFilter);
+        filterPacket.filtersInUse=true;
+        assert(!tglPrepareOwnedVpIefCommandParameters(filterPacket,prepared,iefTables));
+        assert(filterPacket.ief==savedFilter);
         auto disabledInput=input;descriptor[0]=0;reads=0;
         assert(tglReadOwnedVpIefSnapshot(0x1000,readIef,disabledInput) && reads==1);
         assert(!disabledInput.iefStrength && !disabledInput.iefSkin && !disabledInput.iefDetail);
