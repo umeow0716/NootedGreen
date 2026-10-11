@@ -3107,6 +3107,11 @@ public:
         // Native+48=12ea30 lazily calls +40=12e9c0 when child88 is null;
         // that creates/initializes the report through12ebc0 and report vtable10.
         // Child owns report88 (base destructor12e00f), helper merely borrows it.
+        // Integration boundary: TglExecutionOwner independently destroys its
+        // object. Its successful lease is NOT permission to overwrite this
+        // native-owned88 or leave helper10 borrowing it after scope exit.
+        // Reconcile a single report owner and both links before connecting
+        // the owned execution/admission chain to this helper lifecycle.
         // Null is preserved exactly as native. Caller binds qualified +48, not
         // a raw pointer getter that skips report construction/initialization.
         const uintptr_t child=storage_.get();
