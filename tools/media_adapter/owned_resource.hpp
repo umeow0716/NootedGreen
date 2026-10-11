@@ -9545,6 +9545,20 @@ public:
                 });
         });
     }
+    // Extend a caller-leased catalogue while the real state938 and CSC cache
+    // remain pinned. Base resolver lifetimes are still the caller's obligation.
+    template<class Read,class Produce,class Use>
+    int withCscAssemblyEntries(void* child,std::array<uint8_t,64>& ief,
+        TglOwnedVpCscCache& cache,uint32_t from,uint32_t to,uintptr_t sourceA8,
+        Read read,Produce produce,const TglOwnedVpEntrySet& base,Use use) noexcept {
+        if(base.csc) return 5;
+        return withCscProducerEntries(child,ief,cache,from,to,sourceA8,read,produce,
+            [&](void* admitted,auto csc,uint8_t* state) noexcept {
+                auto entries=base;entries.csc=csc;
+                static_assert(noexcept(use(admitted,entries,state)),"VP CSC assembly consumer ABI");
+                return use(admitted,entries,state);
+            });
+    }
     // Expose only the qualified platform-send entry during the existing
     // state/AVS/graph lease, not a partially populated callable VP vtable.
     // Retaining the function pointer cannot retain its TLS admission context.

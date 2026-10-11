@@ -10986,12 +10986,23 @@ int main() {
                         assert(stateAddress==reinterpret_cast<uintptr_t>(stateCpu.bytes.data()));
                         assert(rejectCsc(&command)==5);
                         const uint8_t beforeCsc=stateCpu.bytes[0x88];
-                        const int cscResult=graph.withCscProducerEntries(child,callbackCommands.ief,callbackCsc,3,5,0,
+                        TglOwnedVpEntrySet baseEntries;
+                        baseEntries.setup=escapedSetup;baseEntries.send=escapedSend;
+                        auto occupiedEntries=baseEntries;
+                        occupiedEntries.csc=+[](void*,void*,void*) noexcept {};
+                        assert(graph.withCscAssemblyEntries(child,callbackCommands.ief,callbackCsc,3,5,0,
+                            [](uintptr_t,void*,size_t) noexcept {assert(false);return false;},
+                            [](TglCscCoefficients&,uint32_t,uint32_t) noexcept {assert(false);return false;},
+                            occupiedEntries,[](void*,const auto&,uint8_t*) noexcept {assert(false);return 0;})==5);
+                        const int cscResult=graph.withCscAssemblyEntries(child,callbackCommands.ief,callbackCsc,3,5,0,
                             [](uintptr_t,void*,size_t) noexcept {assert(false);return false;},
                             [](TglCscCoefficients& coefficients,uint32_t from,uint32_t to) noexcept {
                                 assert(from==3 && to==5);coefficients.matrix[0]=7;return true;
                             },
-                            [&](void* admitted,auto csc,uint8_t* packet) noexcept -> int {
+                            baseEntries,[&](void* admitted,const TglOwnedVpEntrySet& entries,uint8_t* packet) noexcept -> int {
+                                assert(entries.setup==baseEntries.setup && entries.send==baseEntries.send && entries.csc);
+                                assert(!baseEntries.csc);
+                                const auto csc=entries.csc;
                                 escapedGraphCsc=csc;
                                 assert(observedState && observedState->hasParametersLease());
                                 assert(admitted==child && packet==stateCpu.bytes.data() && packet[0x88]==beforeCsc);
