@@ -13721,6 +13721,32 @@ int main() {
                 })==0);
                 runAdmissionStages=false;
                 {
+                    struct CommandInvoke {
+                        unsigned calls=0;
+                        int parameters(uintptr_t entry,void* object,void* command,const void* p) noexcept {
+                            assert(entry==base+0x1681e0 && object && command && p);++calls;return 31;
+                        }
+                    } commandInvoke;
+                    auto commandBinding=mhw;commandBinding.entries[2]=base+0x1681e0;
+                    int command=0;
+                    const auto neverCommands=[](auto&) noexcept -> int {assert(false);return 0;};
+                    assert(owner.withLeasedSfcCommandSequence(owner.constructedBase(),commandBinding,
+                        &command,commandInvoke,neverCommands)==5);
+                    assert(owner.withPrivateChild([&](void* parent) noexcept {
+                        assert(owner.withLeasedSfcCommandSequence(static_cast<uint8_t*>(parent)+8,
+                            commandBinding,&command,commandInvoke,neverCommands)==5);
+                        return owner.withLeasedSfcCommandSequence(parent,commandBinding,&command,commandInvoke,
+                            [&](auto& commands) noexcept {
+                                owner.reset();assert(cpu.live && !eventCount);
+                                assert(owner.withLeasedSfcCommandSequence(parent,commandBinding,
+                                    &command,commandInvoke,neverCommands)==5);
+                                assert(commands.lock(tglPrepareOwnedSfcLockParameters(1,0,0))==31);
+                                return -17;
+                            });
+                    })==-17);
+                    assert(commandInvoke.calls==1 && cpu.live && !eventCount);
+                }
+                {
                     std::array<uint8_t,16> history{};history[0]=1;
                     TglOwnedSurfaceStorage source{};
                     uint32_t count=1;std::memcpy(source.prefix.data()+0xb4,&count,4);

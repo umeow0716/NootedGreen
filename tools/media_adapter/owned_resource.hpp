@@ -3486,6 +3486,18 @@ public:
     bool hasPrivateChildImageLease(uintptr_t expected,uintptr_t image) const noexcept {
         return image && image_==image && hasPrivateChildLease(expected);
     }
+    // Parent CPU lease and native SFC reservation cover the same command
+    // sequence. Never expose a persistent backend or transfer SFC ownership.
+    template<class CommandInvoke,class Use>
+    int withLeasedSfcCommandSequence(void* parent,const TglSfcMhwBinding& binding,
+        void* command,CommandInvoke& invoke,Use use) noexcept {
+        if(!command || !hasPrivateChildImageLease(reinterpret_cast<uintptr_t>(parent),binding.image)) return 5;
+        TglOwnedSfcCommandBackend<SfcInvoke,CommandInvoke> commands(binding,sfc_,command,invoke);
+        return commands.withCommandSequence([&]() noexcept -> int {
+            static_assert(noexcept(use(commands)),"parent SFC command consumer ABI");
+            return use(commands);
+        });
+    }
     template<class FormatRead,class Read,class Qualify,class Executable>
     bool installPrivateVtableWithQueries(const std::array<uintptr_t,20>& hooks,
         Read read,Qualify qualify,Executable executable) noexcept {
