@@ -6186,6 +6186,24 @@ bool tglRunVeboxAdmissionStages(const TglVeboxAdmissionStagesInput& input,
     return tglVeboxAdmissionResult(input.prefix.params138,pass[8],admitted);
 }
 
+// Donor primary794210+48=1fc230 is a surface-format feature query, NOT the
+// VP48 command callback or virtual-base48 report getter. Gen12 uses the
+// independently pinned tglVeboxFormatSupported predicate, not ICL's list.
+// Enclosing feature frame pins this source and its backing through all stages.
+// Derive geometry/sample from that same shell rather than caller snapshots.
+template<class Execution,size_t P,class Reset,class Setup,class Feature,class Sfc>
+bool tglRunOwnedVeboxSurfaceAdmissionStages(TglVeboxAdmissionStagesInput input,
+    const TglOwnedSurfaceStorage& source,Execution& execution,std::array<uint8_t,P>& pass,
+    Reset reset,Setup setup,Feature feature,Sfc sfc) noexcept {
+    uint32_t format=0;
+    std::memcpy(&input.prefix.sourceWidth,source.prefix.data()+0xd8,4);
+    std::memcpy(&input.prefix.sourceHeight,source.prefix.data()+0xdc,4);
+    std::memcpy(&input.source124,source.prefix.data()+0x124,4);
+    std::memcpy(&format,source.prefix.data()+0x130,4);
+    return tglRunVeboxAdmissionStages(input,execution,pass,reset,setup,
+        [&]() noexcept {return tglVeboxFormatSupported(format);},feature,sfc);
+}
+
 template<class Owner,class Policy> class TglOwnedVeboxAdmissionContext {
     Owner& owner_;
     void* child_;

@@ -45,6 +45,35 @@ struct TestFeatureExecutionOwner {
 };
 static void testTrackedCpuOwner() {
     {
+        TglVeboxAdmissionStagesInput input;
+        input.prefix={true,true,true,true,1,uint64_t{1}<<12,0,0};input.pipe=2;
+        TglOwnedSurfaceStorage source{};
+        uint32_t width=64,height=16,format=0x19,sample=0;
+        std::memcpy(source.prefix.data()+0xd8,&width,4);
+        std::memcpy(source.prefix.data()+0xdc,&height,4);
+        std::memcpy(source.prefix.data()+0x130,&format,4);
+        std::array<uint8_t,0xd48> execution{};std::array<uint8_t,0x28> pass{};
+        unsigned resets=0,features=0,sfcs=0;
+        auto reset=[&]() noexcept {++resets;execution.fill(0);return true;};
+        auto setup=[](auto&) noexcept {};
+        auto feature=[&](auto& bytes) noexcept {++features;bytes[0x18]=0;};
+        auto sfc=[&](auto&) noexcept {++sfcs;return true;};
+        assert(tglRunOwnedVeboxSurfaceAdmissionStages(input,source,execution,pass,reset,setup,feature,sfc));
+        assert(resets==1 && features==1 && !sfcs);
+        format=0xdead;std::memcpy(source.prefix.data()+0x130,&format,4);
+        assert(!tglRunOwnedVeboxSurfaceAdmissionStages(input,source,execution,pass,reset,setup,feature,sfc));
+        assert(resets==2 && features==1 && !sfcs);
+        input.pipe=1;
+        assert(tglRunOwnedVeboxSurfaceAdmissionStages(input,source,execution,pass,reset,setup,feature,sfc));
+        assert(resets==3 && features==1 && sfcs==1);
+        sample=2;std::memcpy(source.prefix.data()+0x124,&sample,4);
+        assert(!tglRunOwnedVeboxSurfaceAdmissionStages(input,source,execution,pass,reset,setup,feature,sfc));
+        assert(resets==4 && features==1 && sfcs==1 && pass[8]==1);
+        width=63;std::memcpy(source.prefix.data()+0xd8,&width,4);
+        assert(!tglRunOwnedVeboxSurfaceAdmissionStages(input,source,execution,pass,reset,setup,feature,sfc));
+        assert(resets==4);
+    }
+    {
         struct Backend {
             std::array<uint8_t,0xd48> bytes{};unsigned creates=0,destroys=0,initializes=0;
             int status=0;
