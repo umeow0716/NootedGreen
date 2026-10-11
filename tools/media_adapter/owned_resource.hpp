@@ -818,6 +818,9 @@ template<class SfcInvoker,class Invoke> class TglOwnedSfcCommandBackend {
 public:
     TglOwnedSfcCommandBackend(const TglSfcMhwBinding &b,TglOwnedSfcMhw<SfcInvoker> &o,
                              void *c,Invoke &i):binding(b),owner(o),command(c),invoke(i),generation_(o.generation()){}
+    template<class Usage> bool matchesOutputUsage(const Usage& usage) const noexcept {
+        return valid(0x10,0x1681e0) && usage.matches(binding.image,owner.os());
+    }
     template<class Use> int withCommandSequence(Use use) {
         return owner.withCommandReservation([&]() -> int {
             if(!valid(0x10,0x1681e0)) return 5;
@@ -4764,6 +4767,10 @@ struct TglNativeSfcOutputUsageInvoker {
 class TglNativeSfcOutputUsageBinding {
     uintptr_t context_=0,entry_=0;
 public:
+    bool matches(uintptr_t image,uintptr_t os) const noexcept {
+        return image && image<=UINTPTR_MAX-0x659b0 && os &&
+            context_==os && entry_==image+0x659b0;
+    }
     template<class Read,class Qualify,class Executable>
     bool resolve(uintptr_t os,uintptr_t image,Read read,Qualify qualify,Executable executable) {
         context_=entry_=0;
@@ -10416,6 +10423,7 @@ int tglSendOwnedVeboxSfcNativeOutputCommands(Owner& owner,void* parent,
     uint8_t ief,uint8_t csc,Read read,Platform& platform,UsageInvoke usageInvoke=UsageInvoke{}) noexcept {
     return owner.withLeasedSfcCommandSequence(parent,binding,command,invoke,
         [&](auto& native) noexcept {
+            if(!native.matchesOutputUsage(usage)) return 5;
             TglStateQualifiedSfcBackend<decltype(native),Read> qualified(native,read);
             return tglSendOwnedSfcNativeOutputCommands(usage,qualified,parameters,shell,
                 settings,scaling,forceAvs,ief,csc,read,platform,usageInvoke);

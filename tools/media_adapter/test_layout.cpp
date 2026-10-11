@@ -16983,14 +16983,26 @@ int main() {
                             commandInvoke,usage,prepared,output,0x900000,1,0,1,0,outputRead,platform,useOutput);
                     })==0);
                     assert(usages==1 && commandInvoke.calls==7);
-                    for(unsigned invalid=0;invalid<2;++invalid) {
+                    TglNativeSfcOutputUsageBinding foreignUsage;
+                    const auto foreignOs=os+0x1000;
+                    auto foreignRead=[&](uintptr_t address,void* dst,size_t size) noexcept {
+                        if(address==foreignOs+0x128) return outputRead(os+0x128,dst,size);
+                        return outputRead(address,dst,size);
+                    };
+                    assert(foreignUsage.resolve(foreignOs,base,foreignRead,
+                        [](uintptr_t image) noexcept {return image==base;},
+                        [&](uintptr_t entry,size_t size) noexcept {return entry==usageEntry && size==20;}));
+                    assert(usage.matches(base,os) && !foreignUsage.matches(base,os) &&
+                        !usage.matches(base+1,os));
+                    for(unsigned invalid=0;invalid<3;++invalid) {
                         commandInvoke.calls=0;
                         const auto bound=resource+(invalid==0?8:0);
                         std::memcpy(prepared.state.data()+0x90,&bound,8);
                         output.prefix[0xe8]=invalid==1?1:0;
                         assert(owner.withPrivateChild([&](void* parent) noexcept {
                             return tglSendOwnedVeboxSfcNativeOutputCommands(owner,parent,commandBinding,&command,
-                                commandInvoke,usage,prepared,output,0x900000,1,0,1,0,outputRead,platform,useOutput);
+                                commandInvoke,invalid==2?foreignUsage:usage,prepared,output,0x900000,
+                                1,0,1,0,outputRead,platform,useOutput);
                         })==5);
                         assert(usages==1 && commandInvoke.calls==0);
                     }
