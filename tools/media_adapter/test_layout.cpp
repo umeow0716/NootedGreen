@@ -11213,11 +11213,13 @@ int main() {
                     put(source,0,uint32_t(cscEnabled?0:3));
                     int passData=0,passCommand=0;
                     unsigned passStates=0;
-                    const TglOwnedVpFramePreparation passFrame{};
-                    assert(graph.withPreparedCallbackAssemblyPass({},passFrame,0,0x4000,0x2000,0,&source,&passData,
-                      [&](void*,const auto&,auto&) noexcept -> int {++passStates;return 0;},
-                      [](void*,const auto&,auto&) noexcept -> int {assert(false);return 0;},
-                      [](void*,const auto&) noexcept {assert(false);},
+                    assert(graph.withLeasedCallbackAssemblyPass({},0x1000,0x2000,0x3000,0x4000,
+                      0,0x4000,{},&passData,read,
+                      [&](void*,const auto&,const auto& geometry,auto&) noexcept -> int {
+                          assert(geometry.frameWidth==geometrySnapshot.frameWidth);++passStates;return 0;
+                      },
+                      [](void*,const auto&,auto&) noexcept -> int {return 0;},
+                      [](void*,const auto&) noexcept {},
                       [&](void* leasedChild,void*,void*,const TglOwnedVpEntrySet& passEntries) noexcept {
                       assert(passStates==1);
                       return graph.withLeasedModeAssemblyEntries(leasedChild,read,lines,retire,0x1000,0x2000,0x4000,
@@ -11330,7 +11332,8 @@ int main() {
                             return consumerResult;
                         });
                       },[&](void* child,const TglOwnedVpEntrySet& passEntries) noexcept {
-                        assert(passEntries.setup(child,&source,reinterpret_cast<void*>(0x2000),&passData)==0);
+                        assert(passEntries.setup(child,reinterpret_cast<void*>(0x1000),
+                            reinterpret_cast<void*>(0x2000),&passData)==0);
                         return passEntries.send(child,&passData,&passCommand);
                       })==consumerResult);
                     for(size_t offset:{size_t(0x923),size_t(0x998),size_t(0x99c),size_t(0x9c0)})
