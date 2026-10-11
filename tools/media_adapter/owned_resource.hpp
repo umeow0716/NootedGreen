@@ -12601,7 +12601,8 @@ public:
     TglOwnedStmmResource& operator=(const TglOwnedStmmResource&)=delete;
     ~TglOwnedStmmResource(){reset();}
     const void* storageBinding() const noexcept {return resource_.storage().data();}
-    int ensure(const TglResourceKey& key,bool reinitializeHistory=false) noexcept {
+    int ensure(const TglResourceKey& key,bool reinitializeHistory=false,bool* changed=nullptr) noexcept {
+        if(changed) *changed=false;
         if(busy_ || key.format!=0x3d) return 5;
         busy_=true;
         const auto result=resource_.ensure(key);
@@ -12614,6 +12615,7 @@ public:
                 return initialization_.status();
             });
         ready_=status==0;
+        if(changed && !status) *changed=result.changed;
         if(status) {initialization_={};resource_.reset();}
         busy_=false;return status;
     }
@@ -12672,13 +12674,24 @@ public:
     template<class Visit> void visitStorageBindings(Visit visit) const noexcept {
         for(const auto& owner:owners_) visit(owner.storageBinding());
     }
-    int ensure(const std::array<TglResourceKey,2>& keys,bool reinitialize=false) noexcept {
+    template<class Publish>
+    int ensurePublished(const std::array<TglResourceKey,2>& keys,bool reinitialize,Publish publish) noexcept {
         if(busy_ || !valid_) return 5;
         busy_=true;ready_=false;
         int status=0;
-        for(size_t i=0;i<2 && !status;++i) status=owners_[i].ensure(keys[i],reinitialize);
+        for(size_t i=0;i<2 && !status;++i) {
+            bool changed=false;status=owners_[i].ensure(keys[i],reinitialize,&changed);
+            if(!status && changed) {
+                static_assert(noexcept(publish(i,keys[i])) &&
+                    std::is_same_v<decltype(publish(i,keys[i])),int>,"STMM changed publication ABI");
+                status=publish(i,keys[i]);
+            }
+        }
         if(status) for(auto& owner:owners_) owner.reset();
         ready_=status==0;busy_=false;return status;
+    }
+    int ensure(const std::array<TglResourceKey,2>& keys,bool reinitialize=false) noexcept {
+        return ensurePublished(keys,reinitialize,[](size_t,const TglResourceKey&) noexcept -> int {return 0;});
     }
     template<class Invoke> int withStorage(Invoke invoke) noexcept {
         if(busy_ || !ready_) return 5;
@@ -12741,10 +12754,23 @@ public:
 // force history allocation when native DN/DI admission is disabled.
 // Caller excludes asynchronous GPU users before ensure/reset; these storage
 // leases protect synchronous consumers, not submitted command completion.
-template<class Pair,class SourceOwner,class ChildOwner,class ExecutionOwner,class Read,class Use>
+// Exact ICL1f8530/1f8542: publication follows successful changed-slot init,
+// not successful completion of the entire two-slot/frame transaction.
+template<class ExecutionOwner> struct TglOwnedStmmReportPublisher {
+    ExecutionOwner& owner;uintptr_t execution;
+    int operator()(size_t,const TglResourceKey& key) const noexcept {
+        return owner.withLeasedAdmissionBytes(execution,[&](auto& view) noexcept -> int {
+            static_assert(TglAdmissionExecutionExtent<std::decay_t<decltype(view)>>::value>=0x19,
+                "STMM report publication extent");
+            view.data()[0x17]=key.compressed?1:0;
+            view.data()[0x18]=static_cast<uint8_t>(key.compressionMode);return 0;
+        });
+    }
+};
+template<class Pair,class SourceOwner,class ChildOwner,class ExecutionOwner,class Read,class Publish,class Use>
 int tglRunCapturedStmmPair(Pair& pair,SourceOwner& sourceOwner,ChildOwner& childOwner,
     ExecutionOwner& executionOwner,void* child,uintptr_t execution,
-    const TglOwnedSurfaceStorage& source,Read read,bool reinitialize,Use use) noexcept {
+    const TglOwnedSurfaceStorage& source,Read read,bool reinitialize,Publish publish,Use use) noexcept {
     using Storage=typename Pair::Storage;
     bool allocated=false;
     const int result=tglRunCapturedVeboxAllocation(sourceOwner,childOwner,executionOwner,child,execution,source,
@@ -12773,7 +12799,15 @@ int tglRunCapturedStmmPair(Pair& pair,SourceOwner& sourceOwner,ChildOwner& child
                 [](void*,uintptr_t,const auto&) noexcept -> int {return 0;});
             if(admission) return admission;
             allocated=true;
-            const int status=pair.ensure(keys,reinitialize);
+            const int status=pair.ensurePublished(keys,reinitialize,
+                [&](size_t index,const TglResourceKey& key) noexcept -> int {
+                    return tglRunCapturedVeboxAllocation(sourceOwner,childOwner,executionOwner,c,e,s,
+                        [&](void*,uintptr_t,const auto&) noexcept -> int {
+                            static_assert(noexcept(publish(index,key)) &&
+                                std::is_same_v<decltype(publish(index,key)),int>,"captured STMM publisher ABI");
+                            return publish(index,key);
+                        });
+                });
             if(status) return status;
             return pair.withStorage([&](const Storage& first,const Storage& second) noexcept -> int {
                 return consume(&first,&second);

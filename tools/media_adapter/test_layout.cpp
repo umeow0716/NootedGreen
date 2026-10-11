@@ -5070,10 +5070,14 @@ static void testNativeStatisticsFill() {
     assert(captured(prepare)==5 && fixture.fills==fillsBeforeRevoke);
     childBytes[0x1ba9]=0;
     putSource(0xd8,uint32_t{16});putSource(0xdc,uint32_t{4});
-    unsigned stmmUses=0;
+    unsigned stmmUses=0,stmmPublications=0;
     auto stmmStage=[&](auto use) noexcept {
         return tglRunCapturedStmmPair(history,sourceOwner,childLease,executionLease,
-            childBytes.data(),reportAddress,sourceOwner.storage,read,false,use);
+            childBytes.data(),reportAddress,sourceOwner.storage,read,false,
+            [&](size_t,const TglResourceKey& key) noexcept -> int {
+                ++stmmPublications;reportBytes[0x17]=key.compressed?1:0;
+                reportBytes[0x18]=static_cast<uint8_t>(key.compressionMode);return 0;
+            },use);
     };
     assert(stmmStage([&](const auto* first,const auto* second) noexcept -> int {
         assert(first==&historyStorage[0] && second==&historyStorage[1]);
@@ -5081,7 +5085,11 @@ static void testNativeStatisticsFill() {
         history.reset();
         assert(history.withStorage([](const auto&,const auto&) noexcept -> int {assert(false);return 0;})==5);
         ++stmmUses;return 0;
-    })==0 && stmmUses==1);
+    })==0 && stmmUses==1 && stmmPublications==2);
+    reportBytes[0x17]=0xa5;reportBytes[0x18]=0x5a;
+    assert(stmmStage([](const auto* first,const auto* second) noexcept -> int {
+        assert(first && second);return 0;
+    })==0 && stmmPublications==2 && reportBytes[0x17]==0xa5 && reportBytes[0x18]==0x5a);
     reportBytes[0x13]=0;
     const auto historyReferences=api.references;
     assert(stmmStage([&](const auto* first,const auto* second) noexcept -> int {
@@ -6595,6 +6603,13 @@ static void testNativeResourceBoundary() {
                                     assert(runSecondary()==-31 && secondaryUses==3);
                                     assert(backingBackend.allocations==2 && !backingBackend.releases);
                                     unsigned frameUses=0,nextUses=0;
+                                    {
+                                        const auto flag=reportBackend.bytes[0x17],mode=reportBackend.bytes[0x18];
+                                        TglOwnedStmmReportPublisher<decltype(reportOwner)> publish{reportOwner,report};
+                                        assert(publish(0,TglResourceKey{16,4,0x3d,1,1,true})==0);
+                                        assert(reportBackend.bytes[0x17]==1 && reportBackend.bytes[0x18]==1);
+                                        reportBackend.bytes[0x17]=flag;reportBackend.bytes[0x18]=mode;
+                                    }
                                     int frameStatus=-37,nextStatus=-41;
                                     bool clearDnAfterFrame=false;
                                     TglOwnedFfdiCompressionSelection preselected{true,99};
@@ -7729,7 +7744,10 @@ static void testResourceBinding() {
             TglOwnedStmmPair<StmmBackend,RetainedApi,Quarantine> pair(backends,shells,api,sink);
             const std::array<TglResourceKey,2> keys{stmmKey,stmmKey};
             backends[1].fail=true;
-            assert(pair.ensure(keys)==77 && !api.references);
+            unsigned partialPublications=0;
+            assert(pair.ensurePublished(keys,false,[&](size_t index,const auto& key) noexcept -> int {
+                assert(index==0 && key==stmmKey);++partialPublications;return 0;
+            })==77 && !api.references && partialPublications==1);
             assert(backends[0].releases==1 && backends[1].releases==1);
             bool invoked=false;
             assert(pair.withStorage([&](const auto&,const auto&) noexcept {
