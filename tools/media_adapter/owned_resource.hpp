@@ -3393,6 +3393,17 @@ public:
             });
         });
     }
+    // Synchronous private dispatch: VP graph/resolver leases enclose this
+    // call. Restore parent80 before removing VP's temporary dispatch table.
+    // No factory ownership transfer, RTTI admission or GPU retention implied.
+    template<class VpOwner,class Table,class Use>
+    int withBorrowedVpFlatDispatch(VpOwner& vp,void* child,const Table& table,Use use) noexcept {
+        return withBorrowedVpCpuScope([&](auto borrow) noexcept {
+            return vp.withLeasedFlatDispatch(child,table,[&](void* admitted) noexcept {
+                return borrow(admitted,use);
+            });
+        });
+    }
     // Parent80 is borrowed only while the graph's admission/resource entries
     // are live. Restore it before either owner can enter native teardown.
     template<class VpOwner,class Read,class Lines,class Retire,class Use>

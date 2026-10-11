@@ -13568,6 +13568,46 @@ int main() {
                     auto noRead=+[](uintptr_t,void*,size_t) noexcept {return false;};
                     TglOwnedVpSfcCpuGraph<Cpu,Cpu> graph(stateCpu,avsCpu);
                     assert(graph.initialize(0x7000,0x8000,0x3000,binding,noRead,1,0));
+                    assert(graph.withAdmissionView(false,noRead,[&](void* child,const auto& admission) noexcept {
+                        auto complete=testVpPresenceEntries();
+                        complete.compressionFormat=admission.compressionFormat; // Other entries are fixture-only.
+                        TglOwnedVpFlatDispatchTable dispatch;
+                        assert(dispatch.build(complete,[](uintptr_t,size_t) noexcept {return true;}));
+                        const auto neverBorrow=[](void*,void*) noexcept {assert(false);return 0;};
+                        assert(owner.withBorrowedVpFlatDispatch(graph,child,dispatch,
+                            [&](void* parent,void* borrowed) noexcept {
+                                uintptr_t linked=0,address=0,entry=0;
+                                std::memcpy(&linked,static_cast<uint8_t*>(parent)+0x80,8);
+                                std::memcpy(&address,borrowed,8);
+                                assert(borrowed==child && linked==reinterpret_cast<uintptr_t>(child));
+                                assert(address==dispatch.addressPoint());
+                                std::memcpy(&entry,reinterpret_cast<const void*>(address+0x60),8);
+                                assert(reinterpret_cast<bool(*)(void*,uint32_t) noexcept>(entry)(borrowed,0x19));
+                                owner.reset();graph.reset();assert(cpu.live && stateCpu.live && avsCpu.live);
+                                assert(owner.withBorrowedVpFlatDispatch(graph,child,dispatch,neverBorrow)==5);
+                                return 31;
+                            })==31);
+                        uintptr_t linked=1,address=1;
+                        std::memcpy(&linked,cpu.bytes.data()+0x80,8);std::memcpy(&address,child,8);
+                        assert(!linked && !address && !eventCount);
+                        for(bool damageParent:{false,true}) {
+                            assert(owner.withBorrowedVpFlatDispatch(graph,child,dispatch,
+                                [&](void* parent,void* borrowed) noexcept {
+                                    const uintptr_t zero=0;
+                                    auto* field=damageParent?static_cast<uint8_t*>(parent)+0x80:
+                                        static_cast<uint8_t*>(borrowed);
+                                    std::memcpy(field,&zero,8);return 0;
+                                })==5);
+                            std::memcpy(&linked,cpu.bytes.data()+0x80,8);std::memcpy(&address,child,8);
+                            assert(!linked && !address && !eventCount);
+                        }
+                        linked=0x1234;std::memcpy(cpu.bytes.data()+0x80,&linked,8);
+                        assert(owner.withBorrowedVpFlatDispatch(graph,child,dispatch,neverBorrow)==5);
+                        std::memcpy(&linked,cpu.bytes.data()+0x80,8);std::memcpy(&address,child,8);
+                        assert(linked==0x1234 && !address);
+                        linked=0;std::memcpy(cpu.bytes.data()+0x80,&linked,8);
+                        return 0;
+                    })==0);
                     TglOwnedVpFramePreparation frame{};
                     int source=0,data=0,command=0;unsigned producers=0,emissions=0;
                     assert(owner.withBorrowedVpCpuScope([&](auto borrow) noexcept {
