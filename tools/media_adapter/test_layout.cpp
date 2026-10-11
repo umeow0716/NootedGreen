@@ -8918,11 +8918,15 @@ int main() {
                 TglOwnedVpLineSurfaces<LineBackend> lines(backends,*a,*b);
                 int admission=31;unsigned retired=0,states=0,filters=0;
                 auto retire=[&]() noexcept {++retired;assert(!graph.tryReset());return admission;};
-                for(int expected:{31,0}) {
-                    admission=expected;
-                    assert(graph.withPreparedResourceCallbackPass(prepared,0x6000,0x4000,0x2000,reference,
-                        reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x9000),lines,retire,
-                        [&](void* child,const auto&,auto& owner,auto allocate) noexcept {
+                for(int expected:{31,0,5}) {
+                    admission=expected;calls=0;fail=expected==5?1:0;
+                    assert(graph.withLeasedResourceCallbackPass(0x1000,0x2000,0x3000,
+                        0x4000,0x6000,0x7000,{},reinterpret_cast<void*>(0x9000),
+                        [&](uintptr_t address,void* out,size_t size) noexcept {
+                            assert(!graph.tryReset());return read(address,out,size);
+                        },lines,retire,
+                        [&](void* child,const auto&,const auto& snapshot,auto& owner,auto allocate) noexcept {
+                            assert(snapshot.frameWidth==geometrySnapshot.frameWidth);
                             ++states;const uint32_t height=1080,scaled=540;
                             std::memcpy(owner.data()+0x30,&height,4);
                             std::memcpy(owner.data()+0x4c,&scaled,4);
@@ -8940,8 +8944,9 @@ int main() {
                                 reinterpret_cast<void*>(0xa000))==0);
                             release(child);return 0;
                         })==expected);
-                    assert(backends[0].releases==unsigned(!expected));
+                    assert(backends[0].releases==unsigned(expected!=31));
                 }
+                fail=0;
                 assert(states==2 && filters==2 && retired==2);
                 assert(backends[0].allocations==1 && backends[1].allocations==1);
                 assert(backends[0].releases==1 && backends[1].releases==1);

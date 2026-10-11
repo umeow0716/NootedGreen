@@ -8288,6 +8288,31 @@ public:
                 return state(child,prepared,geometry,owner);
             },avs,ief,emit,invoke);
     }
+    template<class Read,class Lines,class Retire,class State,class Avs,class Ief,class Emit,class Invoke>
+    int withLeasedResourceCallbackPass(uintptr_t source,uintptr_t target,uintptr_t mhw,
+        uintptr_t settings,uintptr_t conditionalSource,uintptr_t parameters,
+        const TglOwnedVpModeState& original,void* renderData,Read read,
+        Lines& lines,Retire& retire,State state,Avs avs,Ief ief,Emit emit,Invoke invoke) noexcept {
+        if(!ready_ || busy_ || !renderData || !lines.boundToVp(storage_)) return 5;
+        TglOwnedVpFramePreparation frame;TglOwnedVpRegionInput geometry;
+        uintptr_t reference=0;
+        {
+            Guard guard(busy_);
+            const int result=tglWithOwnedVpAcquiredFrame(storage_,source,target,mhw,
+                settings,conditionalSource,parameters,original,read,
+                [&](const auto& prepared,const auto& snapshot,uintptr_t sourceA8) noexcept {
+                    frame=prepared;geometry=snapshot;reference=sourceA8;return 0;
+                });
+            if(result) return result;
+        }
+        return withPreparedResourceCallbackPass(frame,conditionalSource,parameters,target,reference,
+            reinterpret_cast<void*>(source),renderData,lines,retire,
+            [&](void* child,const auto& prepared,auto& owner,auto allocate) noexcept -> int {
+                static_assert(noexcept(state(child,prepared,geometry,owner,allocate)),
+                    "VP leased resource state ABI");
+                return state(child,prepared,geometry,owner,allocate);
+            },avs,ief,emit,invoke);
+    }
     // One owner for setup +40, allocation +58, send +48 and cleanup +30.
     // The state producer must publish its prepared packet before invoking the
     // supplied allocator, matching native +90 ordering. Retirement remains an
