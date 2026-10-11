@@ -1528,6 +1528,58 @@ struct TglNativeVeboxParentView {
     }
 };
 
+// Native132a15 calls virtual18 then132bb0 for each of renderer910/918/920.
+// 132bb0 decrements native7f3218 BEFORE dispatching virtual08: an owned
+// deleter alone cannot make that accounting safe. Publish only into the two
+// missing child slots and detach them before native renderer cleanup, leaving
+// native920 untouched. Caller holds exclusive renderer/generation/image and
+// complete child ownership; this link object is NOT an owner or GPU fence.
+class TglOwnedRendererChildLinks {
+    uint8_t* renderer_=nullptr;
+    uintptr_t first_=0,second_=0,native_=0;
+    uint64_t generation_=0;
+    bool linked_=false,busy_=false;
+    struct Unlock {bool& busy;~Unlock(){busy=false;}};
+    uintptr_t slot(size_t offset) const noexcept {
+        uintptr_t value=0;std::memcpy(&value,renderer_+offset,8);return value;
+    }
+public:
+    TglOwnedRendererChildLinks()=default;
+    TglOwnedRendererChildLinks(const TglOwnedRendererChildLinks&)=delete;
+    TglOwnedRendererChildLinks& operator=(const TglOwnedRendererChildLinks&)=delete;
+    // No implicit detach: destructor cannot authenticate lifetime/retirement.
+    template<class Admit>
+    bool publish(void* renderer,size_t extent,uint64_t generation,
+        uintptr_t first,uintptr_t second,Admit admit) noexcept {
+        static_assert(noexcept(admit(renderer,generation,first,second)));
+        const uintptr_t address=reinterpret_cast<uintptr_t>(renderer);
+        if(busy_ || linked_ || !renderer || extent<0x928 || address>UINTPTR_MAX-0x928 ||
+            !generation || !first || !second || first==second) return false;
+        busy_=true;Unlock unlock{busy_};
+        if(!admit(renderer,generation,first,second)) return false;
+        auto* bytes=static_cast<uint8_t*>(renderer);
+        uintptr_t a=0,b=0,c=0;
+        std::memcpy(&a,bytes+0x910,8);std::memcpy(&b,bytes+0x918,8);
+        std::memcpy(&c,bytes+0x920,8);
+        if(a || b || !c || c==first || c==second) return false;
+        renderer_=bytes;generation_=generation;first_=first;second_=second;native_=c;
+        std::memcpy(bytes+0x910,&first,8);std::memcpy(bytes+0x918,&second,8);
+        linked_=true;return true;
+    }
+    template<class Admit>
+    bool detach(void* renderer,uint64_t generation,Admit admit) noexcept {
+        static_assert(noexcept(admit(renderer,generation,first_,second_)));
+        if(busy_ || !linked_ || renderer!=renderer_ || generation!=generation_) return false;
+        busy_=true;Unlock unlock{busy_};
+        if(!admit(renderer,generation,first_,second_) ||
+            slot(0x910)!=first_ || slot(0x918)!=second_ || slot(0x920)!=native_) return false;
+        const uintptr_t zero=0;
+        std::memcpy(renderer_+0x910,&zero,8);std::memcpy(renderer_+0x918,&zero,8);
+        linked_=false;renderer_=nullptr;first_=second_=native_=0;generation_=0;
+        return true;
+    }
+};
+
 // Native destructor12dfc8 uses RenderHal+a30, NOT OS+a30. The borrowed
 // RenderHal and image lease must remain live through the last batch release.
 // Qualification is supplied by the owner that authenticated the parent link.

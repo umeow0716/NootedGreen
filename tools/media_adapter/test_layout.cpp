@@ -11002,6 +11002,36 @@ static void testRetainedVeboxFrames() {
 
 int main() {
     {
+        std::array<uint8_t,0x928> renderer{};
+        uintptr_t native=0x3000,first=0x1000,second=0x2000;
+        std::memcpy(renderer.data()+0x920,&native,8);
+        TglOwnedRendererChildLinks links;
+        bool retired=false;
+        auto live=[&](void* object,uint64_t generation,uintptr_t a,uintptr_t b) noexcept {
+            return object==renderer.data() && generation==7 && a==first && b==second;
+        };
+        auto retirement=[&](void* object,uint64_t generation,uintptr_t a,uintptr_t b) noexcept {
+            if(retired) assert(!links.detach(object,generation,live));
+            return retired && live(object,generation,a,b);
+        };
+        const auto original=renderer;
+        assert(!links.publish(renderer.data(),renderer.size()-1,7,first,second,live));
+        assert(!links.publish(renderer.data(),renderer.size(),8,first,second,live));
+        assert(renderer==original);
+        assert(links.publish(renderer.data(),renderer.size(),7,first,second,live));
+        const auto published=renderer;
+        assert(!links.publish(renderer.data(),renderer.size(),7,first,second,live));
+        assert(!links.detach(renderer.data(),7,retirement) && renderer==published);
+        retired=true;
+        assert(!links.detach(renderer.data(),8,retirement) && renderer==published);
+        uintptr_t changed=0x4000;
+        std::memcpy(renderer.data()+0x920,&changed,8);
+        assert(!links.detach(renderer.data(),7,retirement));
+        std::memcpy(renderer.data()+0x920,&native,8);
+        assert(links.detach(renderer.data(),7,retirement) && renderer==original);
+        assert(!links.detach(renderer.data(),7,retirement));
+    }
+    {
         TglOwnedVeboxFrameRetention retention;
         unsigned commands=0;
         const auto result=tglWithNativeVeboxAllocationTransaction(retention,
