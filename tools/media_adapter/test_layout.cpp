@@ -11113,7 +11113,7 @@ static void testRetainedVeboxFrames() {
     Pool otherPhysical;
     unsigned otherAllocated=0,otherReleased=0,otherDestroyed=0;
     const auto other=otherPhysical.create(otherAllocated,otherReleased,otherDestroyed);
-    assert(other.index==first.index && other.generation==first.generation);
+    assert(other.index==first.index && other.generation!=first.generation);
     assert(otherPhysical.run(first,[](Frame&) noexcept {
         assert(false);return TglOwnedVeboxCommandTransactionResult{};
     }).status==5);
@@ -11126,6 +11126,19 @@ static void testRetainedVeboxFrames() {
     // Independent physical lifetime can close without closing the first pool.
     assert(otherPhysical.withQuiescentFrames([]() noexcept -> int {return 0;})==0);
     assert(otherDestroyed==1 && otherAllocated==0 && otherReleased==0);
+    alignas(Pool) unsigned char reusedStorage[sizeof(Pool)];
+    auto* reused=new(reusedStorage) Pool;
+    const auto stale=reused->create(otherAllocated,otherReleased,otherDestroyed);
+    auto discard=[](const Frame&,bool,const auto&) noexcept -> int {return 0;};
+    assert(reused->retire(stale,discard)==0);
+    reused->~Pool();
+    reused=new(reusedStorage) Pool;
+    const auto fresh=reused->create(otherAllocated,otherReleased,otherDestroyed);
+    assert(stale.pool==fresh.pool && stale.index==fresh.index &&
+        stale.generation!=fresh.generation);
+    assert(reused->retire(stale,discard)==5);
+    assert(reused->retire(fresh,discard)==0);
+    reused->~Pool();
     unsigned nativeTeardown=0;
     auto teardown=[&]() noexcept -> int {++nativeTeardown;return 31;};
     assert(pool.withQuiescentFrames(teardown)==5 && !nativeTeardown);

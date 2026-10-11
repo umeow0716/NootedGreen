@@ -15191,7 +15191,9 @@ template<class Frame,size_t Capacity=2> class TglOwnedVeboxRetainedFrames {
         bool pending=false;TglOwnedVeboxCommandTransactionResult result{};};
     std::array<Slot,Capacity> slots_{};
     std::atomic_flag gate_=ATOMIC_FLAG_INIT;
-    uint64_t generation_=0;
+    // Shared across physical lifetimes of this pool type: a registry entry
+    // reconstructed at the same address must not resurrect an old ticket.
+    inline static std::atomic<uint64_t> nextGeneration_{0};
     bool physicalTeardownStarted_=false;
     struct Unlock {std::atomic_flag& gate;~Unlock(){gate.clear(std::memory_order_release);}};
 public:
@@ -15212,12 +15214,17 @@ public:
         static_assert(std::is_nothrow_constructible_v<Frame,Args...>,"frame construction reports native failures separately");
         if(gate_.test_and_set(std::memory_order_acquire)) return {};
         Unlock unlock{gate_};
-        if(physicalTeardownStarted_ || generation_==UINT64_MAX) return {};
+        if(physicalTeardownStarted_) return {};
         for(size_t i=0;i<Capacity;++i) if(!slots_[i].frame) {
+            auto generation=nextGeneration_.load(std::memory_order_relaxed);
+            do {
+                if(generation==UINT64_MAX) return {};
+            } while(!nextGeneration_.compare_exchange_weak(generation,generation+1,
+                std::memory_order_relaxed,std::memory_order_relaxed));
             auto* frame=new(std::nothrow) Frame(std::forward<Args>(args)...);
             if(!frame) return {};
-            slots_[i]={frame,++generation_,false,{}};
-            return {i,generation_,this};
+            slots_[i]={frame,generation+1,false,{}};
+            return {i,generation+1,this};
         }
         return {};
     }
