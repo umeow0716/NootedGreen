@@ -13927,22 +13927,40 @@ int main() {
                     std::memcpy(&restoredLink,cpu.bytes.data()+0x80,8);assert(!restoredLink);
                     int source=0,data=0,command=0;unsigned producers=0,emissions=0;
                     assert(owner.withBorrowedVpCpuScope([&](auto borrow) noexcept {
-                        return graph.withPreparedCallbackPass(frame,0,0x4000,0x2000,0,&source,&data,
+                        return graph.withPreparedCallbackAssemblyPass({},frame,0,0x4000,0x2000,0,&source,&data,
                             [&](void*,const auto&,auto&) noexcept -> int {++producers;return 0;},
                             [](void*,const auto&,auto&) noexcept -> int {assert(false);return 0;},
                             [](void*,const auto&) noexcept {assert(false);},
-                            [&](void* child,void*,void*) noexcept -> int {
+                            [&](void* child,void*,void*,const TglOwnedVpEntrySet& entries) noexcept -> int {
                                 uintptr_t linked=0;std::memcpy(&linked,cpu.bytes.data()+0x80,8);
                                 assert(linked==reinterpret_cast<uintptr_t>(child) && producers==1);
-                                graph.reset();owner.reset();assert(cpu.live && stateCpu.live && avsCpu.live);
-                                ++emissions;return -17;
+                                assert(entries.missingMask()==(0x7ffffffU&
+                                    ~((1U<<8)|(1U<<9)|(1U<<18)|(1U<<19))));
+                                TglOwnedVpFlatDispatchTable passDispatch;
+                                assert(passDispatch.build(testVpPresenceEntries(entries),
+                                    [](uintptr_t,size_t) noexcept {return true;}));
+                                const int result=graph.withLeasedFlatDispatch(child,passDispatch,
+                                    [&](void* dispatched) noexcept {
+                                        uintptr_t table=0;std::memcpy(&table,dispatched,8);
+                                        assert(dispatched==child && table==passDispatch.addressPoint());
+                                        graph.reset();owner.reset();
+                                        assert(cpu.live && stateCpu.live && avsCpu.live);
+                                        // The catalogue is live, but production is forbidden
+                                        // while emission owns this phase.
+                                        assert(entries.state(child,nullptr,nullptr,nullptr)==5);
+                                        ++emissions;return -17;
+                                    });
+                                uintptr_t restored=1;std::memcpy(&restored,child,8);assert(!restored);
+                                std::memcpy(&linked,cpu.bytes.data()+0x80,8);
+                                assert(linked==reinterpret_cast<uintptr_t>(child));
+                                return result;
                             },
-                            [&](void* child,auto setup,auto send) noexcept -> int {
+                            [&](void* child,const TglOwnedVpEntrySet& entries) noexcept -> int {
                                 assert(!producers);
                                 return borrow(child,[&](void* parent,void* actual) noexcept -> int {
                                     assert(parent==owner.constructedBase() && actual==child);
-                                    assert(setup(child,&source,reinterpret_cast<void*>(0x2000),&data)==0);
-                                    return send(child,&data,&command);
+                                    assert(entries.setup(child,&source,reinterpret_cast<void*>(0x2000),&data)==0);
+                                    return entries.send(child,&data,&command);
                                 });
                             });
                     })==-17);
