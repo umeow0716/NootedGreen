@@ -16827,6 +16827,36 @@ public:
         return 0;
     }
 };
+// Context lease encloses the actual retained frame and its surface leases.
+// Destruction is inner frame FIRST, context pin LAST. Native/context/image
+// ownership remains in the concrete registry owner, not in copied roots.
+template<class ContextLease,class Frame> class TglOwnedContextPinnedFrame {
+    ContextLease context_;
+    TglNativeContextInputRoots roots_;
+    Frame* frame_=nullptr;
+public:
+    template<class... Args>
+    TglOwnedContextPinnedFrame(const TglNativeContextInputRoots& roots,ContextLease&& context,
+        Args&&... args) noexcept:context_(std::move(context)),roots_(roots) {
+        static_assert(std::is_nothrow_constructible_v<Frame,Args...> &&
+            std::is_nothrow_destructible_v<Frame>);
+        if(context_.get() && roots_.input && roots_.parent.context==context_.get()->context())
+            frame_=new(std::nothrow) Frame(std::forward<Args>(args)...);
+    }
+    TglOwnedContextPinnedFrame(const TglOwnedContextPinnedFrame&)=delete;
+    TglOwnedContextPinnedFrame& operator=(const TglOwnedContextPinnedFrame&)=delete;
+    ~TglOwnedContextPinnedFrame() noexcept {delete frame_;}
+    bool ready() const noexcept {return frame_ && context_.get();}
+    const TglNativeContextInputRoots& roots() const noexcept {return roots_;}
+    // Use only under the enclosing live physical scope. ready() is storage
+    // validity, not permission to execute quarantined work or retire resources.
+    template<class Use> int withFrame(Use use) noexcept {
+        static_assert(noexcept(use(std::declval<Frame&>())) &&
+            std::is_same_v<decltype(use(std::declval<Frame&>())),int>);
+        return ready()?use(*frame_):5;
+    }
+};
+
 // Callback ABI coordinator, not adapter publication. No substitute native
 // output/input and no speculative cleanup after a partial/unknown init. The
 // caller qualifies this exact image and original callback table separately.

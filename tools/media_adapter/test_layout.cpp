@@ -12398,6 +12398,35 @@ static void testRetainedVeboxFrames() {
             assert(callbacks.withPinnedFrameScope(success.ticket,0x8000,0x20000,owners,pinOwner)==31 && retainedContext.get());
             assert(owners.reconcileSuccessfulRemoval(image,0x8000,success.ticket.generation,removed)==5 && !destroyed);
             retainedContext={};
+            struct InnerFrame {
+                unsigned& ownerDestroyed;unsigned& destroyed;
+                InnerFrame(unsigned& owner,unsigned& count) noexcept:ownerDestroyed(owner),destroyed(count) {}
+                ~InnerFrame() noexcept {assert(!ownerDestroyed);++destroyed;}
+            };
+            using PinnedFrame=TglOwnedContextPinnedFrame<decltype(owners)::ContextLease,InnerFrame>;
+            TglOwnedVeboxRetainedFrames<PinnedFrame,1> pinnedFrames;
+            decltype(pinnedFrames)::Ticket pinnedTicket;
+            unsigned innerDestroyed=0;
+            TglNativeContextInputRoots roots;roots.input=0x40000;roots.parent.context=0x20000;
+            {
+                auto wrong=roots;wrong.parent.context=0x20008;
+                PinnedFrame denied(wrong,owners.pin(image,0x8000,success.ticket.generation,0x20000),destroyed,innerDestroyed);
+                assert(!denied.ready() && !innerDestroyed);
+                assert(denied.withFrame([](auto&) noexcept -> int {assert(false);return 0;})==5);
+            }
+            {
+                PinnedFrame denied(roots,decltype(owners)::ContextLease{},destroyed,innerDestroyed);
+                assert(!denied.ready() && !innerDestroyed);
+            }
+            assert(callbacks.withPinnedFrameScope(success.ticket,0x8000,0x20000,owners,
+                [&](auto&,auto&& lease) noexcept -> int {
+                    pinnedTicket=pinnedFrames.create(roots,std::move(lease),destroyed,innerDestroyed);
+                    return pinnedTicket.generation?0:5;
+                })==0);
+            assert(owners.reconcileSuccessfulRemoval(image,0x8000,success.ticket.generation,removed)==5 && !destroyed);
+            assert(pinnedFrames.retire(pinnedTicket,[](const auto& frame,bool pending,const auto&) noexcept -> int {
+                assert(frame.ready() && frame.roots().parent.context==0x20000 && !pending);return 0;
+            })==0 && innerDestroyed==1 && !destroyed); // CPU-only, unsubmitted retirement
             // CPU fixture only: models already-successful native removal.
             assert(owners.reconcileSuccessfulRemoval(image,0x8000,success.ticket.generation,removed)==0 && destroyed==1);
         }
