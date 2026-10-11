@@ -16256,6 +16256,32 @@ public:
     struct Ticket {size_t index=Capacity;uint64_t generation=0;
         const TglOwnedVeboxPhysicalFrameRegistry* registry=nullptr;};
     using FrameTicket=typename Pool::Ticket;
+    class Scope {
+        friend class TglOwnedVeboxPhysicalFrameRegistry;
+        Pool& frames_;uintptr_t physical_,context_=0;
+        explicit Scope(Pool& frames,uintptr_t physical) noexcept:frames_(frames),physical_(physical) {}
+    public:
+        Scope(const Scope&)=delete;Scope& operator=(const Scope&)=delete;
+        // Pass this exact scope through synchronous owned renderer dispatch;
+        // never reenter the enclosing registry gate or retain Scope references.
+        template<class Invoke> int withNativeRequestItem(uintptr_t context,Invoke invoke) noexcept {
+            static_assert(noexcept(invoke(std::declval<Scope&>())) &&
+                std::is_same_v<decltype(invoke(std::declval<Scope&>())),int>);
+            if(!context || context_) return 5;
+            return frames_.withNativeRequestItem([&]() noexcept -> int {
+                context_=context;
+                struct Reset {uintptr_t& value;~Reset(){value=0;}} reset{context_};
+                return invoke(*this);
+            });
+        }
+        template<class Read,class Admit,class... Args>
+        FrameTicket createContextRootFrame(Read read,Admit admit,Args&&... args) noexcept {
+            if(!context_ || !frames_.emptyForNativeRequest()) return {};
+            TglNativeContextInputRoots roots;
+            if(!roots.resolve(context_,read,admit) || roots.parent.physical!=physical_) return {};
+            return frames_.create(static_cast<const TglNativeContextInputRoots&>(roots),std::forward<Args>(args)...);
+        }
+    };
 private:
     Entry* resolve(Ticket ticket) noexcept {
         if(ticket.registry!=this || ticket.index>=Capacity || !ticket.generation) return nullptr;
@@ -16329,6 +16355,13 @@ public:
         Unlock unlock{gate_};auto* entry=resolve(ticket);
         if(!entry || entry->state!=State::Live || entry->image!=image || entry->physical!=physical) return 5;
         return use(entry->frames); // scoped access; never publish this reference
+    }
+    template<class Use> int withScope(Ticket ticket,uintptr_t image,uintptr_t physical,Use use) noexcept {
+        static_assert(noexcept(use(std::declval<Scope&>())) &&
+            std::is_same_v<decltype(use(std::declval<Scope&>())),int>);
+        return withLive(ticket,image,physical,[&](Pool& frames) noexcept -> int {
+            Scope scope(frames,physical);return use(scope);
+        });
     }
     // Guard BEFORE native slot11 changes input shells. Unlike terminal
     // teardown, release the inner pool gate so synchronous renderer callbacks
@@ -16737,6 +16770,10 @@ public:
             result.status=5;
         }
         return result;
+    }
+    template<class Use> int withFrameScope(typename Registry::Ticket ticket,uintptr_t physical,Use use) noexcept {
+        if(!physical || !valid()) return 5;
+        return registry_.withScope(ticket,binding_.image,physical,use);
     }
     // Keep the generation captured at initialization: resolving by pointer
     // alone would let a delayed frame attach to a recycled physical address.

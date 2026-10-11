@@ -12364,6 +12364,25 @@ static void testRetainedVeboxFrames() {
                     frame.roots.parent.physical==0x8000);return 0;
             });
         })==0 && rootDestroyed==1 && !rootAllocated && !rootReleased);
+        Pool::Ticket synchronousRootFrame;
+        unsigned synchronousCalls=0;
+        assert(callbacks.withFrameScope(success.ticket,0x8000,[&](auto& scope) noexcept -> int {
+            assert(!scope.createContextRootFrame(rootRead,rootAdmit,rootAllocated,rootReleased,rootDestroyed).generation);
+            return scope.withNativeRequestItem(0x20000,[&](auto& active) noexcept -> int {
+                ++synchronousCalls;
+                assert(callbacks.withFrameScope(success.ticket,0x8000,[](auto&) noexcept -> int {assert(false);return 0;})==5);
+                assert(active.withNativeRequestItem(0x20000,[](auto&) noexcept -> int {assert(false);return 0;})==5);
+                synchronousRootFrame=active.createContextRootFrame(rootRead,rootAdmit,rootAllocated,rootReleased,rootDestroyed);
+                assert(synchronousRootFrame.generation);
+                assert(!active.createContextRootFrame(rootRead,rootAdmit,rootAllocated,rootReleased,rootDestroyed).generation);
+                return 31;
+            });
+        })==31 && synchronousCalls==1 && rootDestroyed==1);
+        assert(callbacks.withFrame(success.ticket,0x8000,[&](auto& frames) noexcept -> int {
+            return frames.retire(synchronousRootFrame,[](const Frame& frame,bool pending,const auto&) noexcept -> int {
+                assert(!pending && frame.roots.sources[16]==0x50000);return 0;
+            });
+        })==0 && rootDestroyed==2);
         unsigned configurationCalls=0;
         auto configurationUse=[&](auto&,const TglNativeVeboxRendererView& view) noexcept -> int {
             ++configurationCalls;assert(view.parent.physical==0x8000 && view.renderer==0x30000 &&
