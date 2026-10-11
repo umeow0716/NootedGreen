@@ -12986,8 +12986,9 @@ int main() {
                     assert(frame.at922 && geometry.frameWidth==geometrySnapshot.frameWidth);
                     acquisitionConsumed=true;return 31;
                 })==31 && acquisitionConsumed);
-            for(unsigned stageFailure=0;stageFailure<7;++stageFailure) {
+            for(unsigned stageFailure=0;stageFailure<9;++stageFailure) {
                 calls=0;unsigned states=0,emits=0;int data=0,command=0;
+                const bool conflict=stageFailure>=3 && stageFailure<=7;
                 TglOwnedVpEntrySet base;
                 const auto admittedFormat=+[](void*,uint32_t) noexcept {return true;};
                 base.compressionFormat=admittedFormat;
@@ -13000,6 +13001,7 @@ int main() {
                 if(stageFailure==4) base.send=+[](void*,void*,void*) noexcept {return 0;};
                 if(stageFailure==5) base.state=+[](void*,void*,void*,void*) noexcept {return 0;};
                 if(stageFailure==6) base.filters=+[](void*,void*,void*,void*) noexcept {};
+                if(stageFailure==7) base.prepare=+[](void*,void*,void*,void*,void*,void*) noexcept {};
                 assert(graph.withLeasedCallbackAssemblyPass(base,0x1000,0x2000,0x3000,0x4000,
                     0x6000,0x7000,{},&data,mutatingRead,
                     [&](void*,const auto& frame,const auto& geometry,auto&) noexcept {
@@ -13009,16 +13011,23 @@ int main() {
                     },[](void*,const auto&,auto&) noexcept -> int {return 0;},
                     [](void*,const auto&) noexcept {},
                     [&](void*,void*,void*,const auto& entries) noexcept {
-                        assert(entries.setup && entries.send && entries.state && entries.filters);
+                        assert(entries.prepare && entries.setup && entries.send && entries.state && entries.filters);
                         ++emits;return stageFailure==2?-17:0;
                     },[&](void* child,const auto& entries) noexcept {
                         assert(entries.compressionFormat==admittedFormat);
                         const int result=entries.setup(child,reinterpret_cast<void*>(0x1000),
                             reinterpret_cast<void*>(0x2000),&data);
-                        return result?result:entries.send(child,&data,&command);
-                    })==(stageFailure>=3?5:stageFailure==1?31:stageFailure==2?-17:0));
-                assert(states==(stageFailure>=3?0U:1U) && emits==(stageFailure==1 || stageFailure>=3?0U:1U));
-                assert(calls==(stageFailure>=3?0U:total));
+                        const int sent=result?result:entries.send(child,&data,&command);
+                        if(stageFailure==8) {
+                            const auto before=calls;
+                            entries.prepare(child,reinterpret_cast<void*>(0x6000),reinterpret_cast<void*>(0x7000),
+                                reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x2000),reinterpret_cast<void*>(0x4000));
+                            assert(calls==before); // duplicate cannot reacquire the frame snapshot
+                        }
+                        return sent;
+                    })==(conflict || stageFailure==8?5:stageFailure==1?31:stageFailure==2?-17:0));
+                assert(states==(conflict?0U:1U) && emits==(stageFailure==1 || conflict?0U:1U));
+                assert(calls==(conflict?0U:total));
             }
             calls=0;
             struct CallbackCommandBackend {
@@ -13193,7 +13202,7 @@ int main() {
                                         [&](void* packetChild,const auto& packetEntries) noexcept {
                                     assert(packetChild==child && packetEntries.missingMask()==
                                         (combined.missingMask()&~((1U<<21)|(1U<<24)|(1U<<25)|(1U<<26))));
-                                    assert(packetEntries.missingMask()==0x27U);
+                                    assert(packetEntries.missingMask()==0x7U); // Only three lifecycle entries remain.
                                     auto releaseAllocation=[](void*) noexcept {assert(false);};
                                     using PassLifetime=TglOwnedVpLifetimeContext<decltype(graph),decltype(lines),
                                         decltype(retire),decltype(releaseAllocation)>;
@@ -13202,8 +13211,8 @@ int main() {
                                     const auto beforeLifetimeRetired=retired;
                                     assert(tglWithOwnedVpLifetimeAssemblyEntries(child,lifetime,packetEntries,
                                       [&](void*,const auto& liveEntries) noexcept {
-                                    assert(liveEntries.missingMask()==0x24U); // Only init10/frame28 remain separate.
-                                    // Twenty-five real scoped entries; only two CPU presence fixtures.
+                                    assert(liveEntries.missingMask()==0x4U); // Initialization is supplied by the enclosing construction owner.
+                                    // Twenty-six real scoped entries; one remaining CPU presence fixture.
                                     expiredLifetime=liveEntries;
                                     TglOwnedVpFlatDispatchTable dispatch;
                                     assert(dispatch.build(testVpPresenceEntries(liveEntries),

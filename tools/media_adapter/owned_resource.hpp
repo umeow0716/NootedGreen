@@ -8142,14 +8142,11 @@ int tglWithOwnedVpPreparedFrame(TglOwnedVpSfcCallerStorage& storage,
 // The caller retains all descriptor/image leases for the complete call and
 // supplies an authenticated settings view; this is not a published VP entry.
 // State receives the SAME geometry snapshot used to prepare the frame.
-template<class Read,class Invoke,class Use>
+template<bool RetainPrepare=false,class Read,class Invoke,class Use>
 int tglWithOwnedVpAcquiredFrameEntry(TglOwnedVpSfcCallerStorage& storage,
     uintptr_t source,uintptr_t target,uintptr_t mhw,uintptr_t settings,
     uintptr_t conditionalSource,uintptr_t parameters,const TglOwnedVpModeState& original,
     Read read,Invoke invoke,Use use) noexcept {
-    static_assert(noexcept(use(
-        std::declval<const TglOwnedVpFramePreparation&>(),
-        std::declval<const TglOwnedVpRegionInput&>(),uintptr_t{})),"VP acquired frame ABI");
     TglOwnedVpFramePreparation frame;TglOwnedVpRegionInput geometry;
     uintptr_t sourceA8=0;
     auto acquire=[&]() noexcept {
@@ -8174,8 +8171,8 @@ int tglWithOwnedVpAcquiredFrameEntry(TglOwnedVpSfcCallerStorage& storage,
     } context{storage.bytes.data(),{conditionalSource,parameters,source,target,settings},acquire};
     {
         // The callback performs acquisition once under the caller's leases.
-        // Do not leave a resolver active during downstream setup/send: those
-        // callbacks bind their own contexts for the same owned child.
+        // Legacy consumers finish acquisition here. Catalogue assembly keeps
+        // this distinct typed resolver live alongside setup/send contexts.
         TglOwnedVpSfcScopedContext<FrameContext> scope(context.child,context);
         if(!scope.bound()) return 5;
         using Resolve=TglOwnedVpSfcResolve<FrameContext>;
@@ -8184,9 +8181,18 @@ int tglWithOwnedVpAcquiredFrameEntry(TglOwnedVpSfcCallerStorage& storage,
         static_assert(noexcept(invoke(context.child,entries.prepare)),"VP acquisition invocation ABI");
         const int result=invoke(context.child,entries.prepare);
         if(result) return result;
+        if constexpr(RetainPrepare) {
+            if(!context.called || !context.valid) return 5;
+            static_assert(noexcept(use(frame,geometry,sourceA8,entries)),"VP retained prepare consumer ABI");
+            const int consumed=use(frame,geometry,sourceA8,static_cast<const TglOwnedVpEntrySet&>(entries));
+            return consumed?consumed:(context.valid?0:5);
+        }
     }
-    if(!context.called || !context.valid) return 5;
-    return use(frame,geometry,sourceA8);
+    if constexpr(!RetainPrepare) {
+        static_assert(noexcept(use(frame,geometry,sourceA8)),"VP acquired frame ABI");
+        if(!context.called || !context.valid) return 5;
+        return use(frame,geometry,sourceA8);
+    }
 }
 template<class Read,class Use>
 int tglWithOwnedVpAcquiredFrame(TglOwnedVpSfcCallerStorage& storage,
@@ -10667,28 +10673,31 @@ public:
             },avs,ief,emit,invoke);
     }
     // Acquire snapshots under a separate lease before publishing the pass
-    // catalogue. No acquisition resolver survives into setup/emission.
+    // catalogue. Retain the one-shot prepare resolver through setup/emission;
+    // it must not reacquire/mutate the snapshot after preparation succeeds.
     template<class Read,class State,class Avs,class Ief,class Emit,class Use>
     int withLeasedCallbackAssemblyPass(const TglOwnedVpEntrySet& base,
         uintptr_t source,uintptr_t target,uintptr_t mhw,uintptr_t settings,
         uintptr_t conditionalSource,uintptr_t parameters,const TglOwnedVpModeState& original,
         void* renderData,Read read,State state,Avs avs,Ief ief,Emit emit,Use use) noexcept {
-        if(!ready_ || busy_ || !renderData || base.setup || base.send || base.state || base.filters) return 5;
+        if(!ready_ || busy_ || !renderData || base.prepare || base.setup || base.send || base.state || base.filters) return 5;
         const auto retainedBase=base; // Reader callbacks must not change the admitted catalogue.
-        TglOwnedVpFramePreparation frame;TglOwnedVpRegionInput geometry;
-        uintptr_t reference=0;
-        const int acquired=withFrameAcquisition(source,target,mhw,settings,
-            conditionalSource,parameters,original,read,
-            [&](const auto& prepared,const auto& snapshot,uintptr_t sourceA8) noexcept {
-                frame=prepared;geometry=snapshot;reference=sourceA8;return 0;
+        return tglWithOwnedVpAcquiredFrameEntry<true>(storage_,source,target,mhw,settings,
+            conditionalSource,parameters,original,read,[&](void* child,auto prepare) noexcept -> int {
+                Guard guard(busy_);
+                prepare(child,reinterpret_cast<void*>(conditionalSource),reinterpret_cast<void*>(parameters),
+                    reinterpret_cast<void*>(source),reinterpret_cast<void*>(target),reinterpret_cast<void*>(settings));
+                return 0;
+            },[&](const auto& frame,const auto& geometry,uintptr_t reference,const auto& acquisition) noexcept {
+                auto entries=retainedBase;
+                if(!entries.appendDisjoint(acquisition)) return 5;
+                return withPreparedCallbackAssemblyPass(entries,frame,conditionalSource,parameters,target,reference,
+                    reinterpret_cast<void*>(source),renderData,
+                    [&](void* child,const auto& prepared,auto& owner) noexcept -> int {
+                        static_assert(noexcept(state(child,prepared,geometry,owner)),"VP assembly state ABI");
+                        return state(child,prepared,geometry,owner);
+                    },avs,ief,emit,use);
             });
-        if(acquired) return acquired;
-        return withPreparedCallbackAssemblyPass(retainedBase,frame,conditionalSource,parameters,target,reference,
-            reinterpret_cast<void*>(source),renderData,
-            [&](void* child,const auto& prepared,auto& owner) noexcept -> int {
-                static_assert(noexcept(state(child,prepared,geometry,owner)),"VP assembly state ABI");
-                return state(child,prepared,geometry,owner);
-            },avs,ief,emit,use);
     }
     template<class Read,class Lines,class Retire,class State,class Avs,class Ief,class Emit,class Invoke>
     int withLeasedResourceCallbackPass(uintptr_t source,uintptr_t target,uintptr_t mhw,
