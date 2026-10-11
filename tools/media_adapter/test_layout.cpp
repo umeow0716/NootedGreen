@@ -11711,6 +11711,53 @@ int main() {
         csc(context.child,&values[1],&values[2]);assert(context.cscCalls==1);
     }
     {
+        // Actual native resource backend/owner composition, with CPU ABI
+        // callbacks only; this test does not allocate GPU resources.
+        struct Native {
+            unsigned allocations=0,releases=0,live=0,failAt=99;
+            static int allocate(void* context,const void* parameters,void* resource) noexcept {
+                auto& self=*static_cast<Native*>(context);
+                uint32_t type=1,width=0;const auto* bytes=static_cast<const uint8_t*>(parameters);
+                std::memcpy(&type,bytes,4);std::memcpy(&width,bytes+0x14,4);
+                assert(type==0 && width);
+                if(self.allocations++==self.failAt) return 77;
+                const uintptr_t token=++self.live;
+                std::memcpy(static_cast<uint8_t*>(resource)+0x20,&token,8);return 0;
+            }
+            static void release(void* context,void* resource) noexcept {
+                auto& self=*static_cast<Native*>(context);assert(self.live);
+                --self.live;++self.releases;std::memset(resource,0,0x148);
+            }
+        };
+        for(unsigned failure:{0u,1u,2u,99u}) {
+            Native native;native.failAt=failure;
+            TglOwnedVpSfcCallerStorage vp;
+            auto* avs=::new(static_cast<void*>(vp.bytes.data()+0x3c8)) TglOwnedSurfaceStorage{};
+            auto* ief=::new(static_cast<void*>(vp.bytes.data()+0x670)) TglOwnedSurfaceStorage{};
+            TglNativeResourceBinding binding;
+            binding.context=reinterpret_cast<uintptr_t>(&native);
+            binding.allocate=reinterpret_cast<uintptr_t>(&Native::allocate);
+            binding.release=reinterpret_cast<uintptr_t>(&Native::release);
+            {
+                TglNativeVpLineResourceStorage storage(binding,4096,*avs,*ief);
+                assert(storage.resources().boundToVp(vp));
+                assert(storage.resources().ensure(1080,4096)==(failure==99?0:77));
+                if(failure==99) {
+                    assert(native.live==3);
+                    assert(storage.lines().withDimensions(1080,4096,[&](const auto& a,const auto& b) noexcept {
+                        assert(&a==avs && &b==ief && !storage.lines().tryReset());
+                        return storage.sfd().withBuffer(4096,[&](const auto* descriptor) noexcept {
+                            assert(descriptor && !storage.sfd().tryReset());return 31;
+                        });
+                    })==31);
+                    assert(native.live==3);
+                } else assert(!native.live && native.releases==failure);
+            }
+            assert(!native.live && native.releases==(failure==99?3:failure));
+            avs->~TglOwnedSurfaceStorage();ief->~TglOwnedSurfaceStorage();
+        }
+    }
+    {
         struct Backend {
             unsigned allocations=0,releases=0;int status=0;
             uint32_t resourceType() const noexcept {return 0;}

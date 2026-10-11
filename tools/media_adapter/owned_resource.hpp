@@ -13831,6 +13831,30 @@ public:
     }
 };
 
+// Concrete native backing graph for VP AVS/IEF and Gen12 SFD. The enclosing
+// whole-frame owner retains the authenticated OS/image binding and VP storage
+// through retirement. AVS/IEF shells must already be constructed at VP3c8/670;
+// this owner neither invents those shells nor adopts a native physical object.
+class TglNativeVpLineResourceStorage {
+    std::array<TglNativeResourceBackend,2> backends_;
+    TglNativeResourceBackend sfdBackend_;
+    TglOwnedVpLineSurfaces<TglNativeResourceBackend> lines_;
+    TglOwnedSfcSfdBuffer<TglNativeResourceBackend> sfd_;
+    TglOwnedVpLineResourceSet<decltype(lines_),decltype(sfd_)> resources_;
+public:
+    TglNativeVpLineResourceStorage(const TglNativeResourceBinding& binding,uint64_t pageSize,
+        TglOwnedSurfaceStorage& avs,TglOwnedSurfaceStorage& ief) noexcept
+        :backends_{TglNativeResourceBackend(binding,0,pageSize),
+                   TglNativeResourceBackend(binding,0,pageSize)},
+         sfdBackend_(binding,0,pageSize),lines_(backends_,avs,ief),
+         sfd_(sfdBackend_),resources_(lines_,sfd_) {}
+    TglNativeVpLineResourceStorage(const TglNativeVpLineResourceStorage&)=delete;
+    TglNativeVpLineResourceStorage& operator=(const TglNativeVpLineResourceStorage&)=delete;
+    auto& lines() noexcept {return lines_;}
+    auto& sfd() noexcept {return sfd_;}
+    auto& resources() noexcept {return resources_;}
+};
+
 // Exact slot58=1df210 is status(this). State+30/+4c are read only from
 // the actual leased owner already published at VP+938, not arbitrary args.
 template<class Lines,class State> class TglOwnedVpLineAllocationContext {
