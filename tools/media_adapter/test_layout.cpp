@@ -4561,7 +4561,30 @@ static void testComposedStatisticsBuffer() {
     };
     {
         TglStatisticsResource<TglNativeResourceBackend> statistics(backend);
-        assert(statistics.ensure(64, 16, initialize) == 0);
+        struct SourceBackend {
+            uint32_t resourceType() const noexcept {return 0;}
+            int allocate(std::array<uint8_t,0x148>& resource,const TglResourceKey& key,
+                uint32_t* width) noexcept {resource[0]=1;*width=key.width;return 0;}
+            bool backed(const std::array<uint8_t,0x148>& resource) const noexcept {return resource[0]==1;}
+            void release(std::array<uint8_t,0x148>& resource) noexcept {resource.fill(0);}
+        } sourceBackend;
+        TglOwnedAllocatedSurface<SourceBackend> source(sourceBackend);
+        const TglResourceKey sourceKey{64,16,0x19,1,0,false};
+        assert(source.ensure(sourceKey)==0);
+        struct Info {uint32_t width=0,height=0;};
+        uint32_t publishedWidth=7,publishedHeight=9;
+        assert(tglPrepareOwnedStatisticsBoundary<Info>(source,1,
+            []() noexcept -> uint8_t {assert(false);return 0;},
+            [&](const auto& view,Info& info) noexcept {
+                assert(source.hasSurfaceLease(view));info={64,16};return 0;
+            },[](const Info& info,uint32_t& w,uint32_t& h,bool di) noexcept {
+                assert(di);w=info.width;h=info.height;return 0;
+            },publishedWidth,publishedHeight,
+            [&](uint32_t width,uint32_t height) noexcept {
+                source.reset();assert(source.ensure(sourceKey)==5);
+                return statistics.ensure(width,height,initialize);
+            })==0);
+        assert(publishedWidth==64 && publishedHeight==16);
         assert(statistics.layout().bytes == 1280 && fixture.fills == 1);
         for (size_t i = 0; i < fixture.bytes.size(); ++i)
             assert(fixture.bytes[i] == (i < 1280 ? 0 : 0xa5));
@@ -5216,8 +5239,8 @@ static void testNativeResourceBoundary() {
             struct Info {uint32_t marker=0;};
             for(uint8_t flag:{uint8_t(0),uint8_t(1),uint8_t(2),uint8_t(3)})
             for(uint8_t query:{uint8_t(0),uint8_t(1),uint8_t(2),uint8_t(3)})
-            for(int failure:{0,1,2}) {
-                unsigned queries=0,reads=0,bounds=0;
+            for(int failure:{0,1,2,3}) {
+                unsigned queries=0,reads=0,bounds=0,finishes=0;
                 uint32_t width=17,height=19;
                 const int status=tglPrepareOwnedStatisticsBoundary<Info>(owner,flag,
                     [&]() noexcept {++queries;return query;},
@@ -5229,9 +5252,13 @@ static void testNativeResourceBoundary() {
                         ++bounds;assert(reads==1 && info.marker==0x1234);
                         assert(di==bool((flag&1)||(query&1)));
                         w=1920;h=1080;return failure==2?77:0;
-                    },width,height);
-                assert(status==(failure==1?31:failure==2?77:0));
+                    },width,height,[&](uint32_t w,uint32_t h) noexcept {
+                        ++finishes;assert(w==1920 && h==1080);
+                        owner.reset();assert(owner.ensure(key)==5);return failure==3?93:0;
+                    });
+                assert(status==(failure==1?31:failure==2?77:failure==3?93:0));
                 assert(reads==1 && bounds==unsigned(failure!=1));
+                assert(finishes==unsigned(failure==0 || failure==3));
                 assert(width==(failure?17u:1920u) && height==(failure?19u:1080u));
                 assert(owner.withSurface([](const auto&) noexcept {}));
             }
