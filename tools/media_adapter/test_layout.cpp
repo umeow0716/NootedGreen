@@ -5220,6 +5220,26 @@ static void testNativeResourceBoundary() {
             assert(destination.copyFrameMetadataFrom(destination));
             const auto* destinationSurface=destination.surface();
             {
+                TestFeatureSurfaceOwner rectangleSource;
+                for(size_t i=0;i<16;++i) rectangleSource.storage.prefix[0x50+i]=uint8_t(0x80+i);
+                const auto before=*destinationSurface;
+                for(uint32_t pipe:{0u,1u,3u,UINT32_MAX}) {
+                    assert(destination.publishPipe2RectangleFrom(pipe,rectangleSource,rectangleSource.storage));
+                    assert(destinationSurface->prefix==before.prefix);
+                }
+                assert(!destination.publishPipe2RectangleFrom(2,rectangleSource,rectangleSource.storage));
+                rectangleSource.busy=true;
+                assert(destination.withSurface([&](const auto&) noexcept {
+                    assert(!destination.publishPipe2RectangleFrom(2,rectangleSource,rectangleSource.storage));
+                }));
+                assert(destination.publishPipe2RectangleFrom(2,rectangleSource,rectangleSource.storage));
+                rectangleSource.busy=false;
+                auto expected=before;
+                std::memcpy(expected.prefix.data()+0x50,rectangleSource.storage.prefix.data()+0x50,16);
+                assert(destinationSurface->prefix==expected.prefix && destinationSurface->resource==before.resource &&
+                    destinationSurface->tail==before.tail);
+            }
+            {
                 const auto before=*destinationSurface;
                 auto expected=before;
                 assert(tglPrepareOwnedFfdnFrameMetadata(expected,*surface));

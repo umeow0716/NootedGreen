@@ -4983,6 +4983,19 @@ public:
         if(!capture_.backed(surface_.resource)) return false;
         return tglPrepareOwnedFfdnFrameMetadata(surface_,source);
     }
+    // ICL1f839b..1f83d8: after the FFDN pair, pipe2 alone copies the
+    // source's two rectangle qwords into execution60. No resource adoption.
+    template<class SourceOwner>
+    bool publishPipe2RectangleFrom(uint32_t pipe,SourceOwner& owner,
+        const TglOwnedSurfaceStorage& source) noexcept {
+        if(pipe!=2) return true; // native skip does not access either surface
+        if(!ready_ || busy_ || &source==&surface_ || !owner.hasSurfaceLease(source)) return false;
+        busy_=true;
+        struct Unlock {bool& busy;~Unlock(){busy=false;}} unlock{busy_};
+        if(!capture_.backed(surface_.resource)) return false;
+        std::memcpy(surface_.prefix.data()+0x50,source.prefix.data()+0x50,16);
+        return true;
+    }
     bool copyFrameMetadata(const TglOwnedSurfaceStorage& source) noexcept {
         if(!ready_ || busy_) return false;
         busy_=true;
