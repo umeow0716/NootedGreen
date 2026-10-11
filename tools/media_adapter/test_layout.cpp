@@ -13586,7 +13586,7 @@ int main() {
     {
         std::array<uint8_t,0x298> source{},target{};
         std::array<uint8_t,0x1c> mhw{};std::array<uint8_t,0x68> settings{};
-        std::array<uint8_t,8> ief{};
+        std::array<uint8_t,14> ief{};
         const auto put=[](auto& bytes,size_t offset,auto value) {
             std::memcpy(bytes.data()+offset,&value,sizeof(value));
         };
@@ -13614,7 +13614,7 @@ int main() {
         TglOwnedVpFramePreparation prepared;uintptr_t reference=0;
         TglOwnedVpRegionInput geometrySnapshot;
         assert(tglReadOwnedVpFramePreparation(0x1000,0x2000,0x3000,0x4000,true,read,{},prepared,reference,&geometrySnapshot));
-        const unsigned total=calls;assert(total==24);
+        const unsigned total=calls;assert(total==29);
         assert(geometrySnapshot.frameWidth && geometrySnapshot.frameHeight);
         assert(prepared.at922 && !prepared.at920 && prepared.regions.scale.at928==0.5f && !reference);
         assert(prepared.color.at9b8 && prepared.color.metadata.at9a4==0x31);
@@ -14736,10 +14736,10 @@ int main() {
         }
         fail=0;calls=0;ief[0]=0;
         assert(tglReadOwnedVpFramePreparation(0x1000,0x2000,0x3000,0x4000,false,read,{},prepared,reference));
-        assert(calls==total-2 && !prepared.at922 && !prepared.at920);
+        assert(calls==total-7 && !prepared.at922 && !prepared.at920);
         put(source,0x78,uintptr_t(0));calls=0;
         assert(tglReadOwnedVpFramePreparation(0x1000,0x2000,0x3000,0x4000,false,read,{},prepared,reference));
-        assert(calls==total-3 && !prepared.at922);
+        assert(calls==total-8 && !prepared.at922);
     }
     {
         std::array<uint8_t,0x134> source{},selected{};
@@ -14950,10 +14950,35 @@ int main() {
         geometry.targetFormat=0x15;input.modes.source130=0x19;
         input.targetDestination={0,0,1920,1080};input.conditionalSourceAvailable=true;
         input.iefPresent=true;input.iefFlags=1;input.iefStrength=0.5f;
+        std::array<uint8_t,14> descriptor{};
+        descriptor[0]=1;descriptor[2]=3;descriptor[3]=2;
+        std::memcpy(descriptor.data()+4,&input.iefStrength,4);
+        const std::array<uint16_t,3> thresholds{0x107,0x202,0x308};
+        std::memcpy(descriptor.data()+8,thresholds.data(),6);
+        unsigned reads=0,failRead=0;
+        auto readIef=[&](uintptr_t address,void* out,size_t size) noexcept {
+            if(++reads==failRead || address<0x1000 || address>0x100e || size>0x100e - address) return false;
+            std::memcpy(out,descriptor.data()+address-0x1000,size);return true;
+        };
+        for(failRead=1;failRead<=7;++failRead) {
+            reads=0;input.iefSkin=99;
+            assert(!tglReadOwnedVpIefSnapshot(0x1000,readIef,input));
+            assert(input.iefSkin==99);
+        }
+        failRead=0;reads=0;
+        assert(tglReadOwnedVpIefSnapshot(0x1000,readIef,input) && reads==7);
+        assert(input.iefSkin==3 && input.iefDetail==2 && input.iefThresholds==thresholds);
         TglOwnedVpFramePreparation prepared;
         assert(tglPrepareOwnedVpFrame(input,{},prepared));
         assert(!prepared.at920 && prepared.at922 && !prepared.at924 && !prepared.regions.scale.scaling);
         assert(prepared.iefPresent && prepared.iefFlags==1 && prepared.iefStrength==0.5f);
+        assert(prepared.iefSkin==3 && prepared.iefDetail==2 && prepared.iefThresholds==thresholds);
+        auto disabledInput=input;descriptor[0]=0;reads=0;
+        assert(tglReadOwnedVpIefSnapshot(0x1000,readIef,disabledInput) && reads==1);
+        assert(!disabledInput.iefStrength && !disabledInput.iefSkin && !disabledInput.iefDetail);
+        reads=0;
+        assert(tglReadOwnedVpIefSnapshot(0,readIef,disabledInput) && !reads && !disabledInput.iefPresent);
+        assert(!tglReadOwnedVpIefSnapshot(UINTPTR_MAX-7,readIef,disabledInput) && !reads);
         assert(prepared.color.at9b8 && prepared.color.metadata.at9a8==0x21);
         input.targetDestination.right=1921;input.modes.settings12=true;
         input.modes.settings60Present=true;input.modes.settings60130=1;

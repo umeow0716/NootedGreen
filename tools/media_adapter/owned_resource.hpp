@@ -8102,6 +8102,8 @@ struct TglOwnedVpFramePreparationInput {
     bool conditionalSourceAvailable=false,iefPresent=false;
     uint8_t iefFlags=0;
     float iefStrength=0;
+    uint8_t iefSkin=0,iefDetail=0;
+    std::array<uint16_t,3> iefThresholds{};
 };
 struct TglOwnedVpFramePreparation {
     TglOwnedVpRegions regions;
@@ -8113,6 +8115,8 @@ struct TglOwnedVpFramePreparation {
     bool iefPresent=false;
     uint8_t iefFlags=0;
     float iefStrength=0;
+    uint8_t iefSkin=0,iefDetail=0;
+    std::array<uint16_t,3> iefThresholds{};
 };
 // VP +28=1de810. Six pointer arguments INCLUDING this, void result.
 // 1decfb publishes RDX at +990; 1ded21 consumes R9 mode flags. They
@@ -8353,6 +8357,8 @@ inline bool tglPrepareOwnedVpFrame(const TglOwnedVpFramePreparationInput& in,
     candidate.iefPresent=in.iefPresent;
     candidate.iefFlags=in.iefFlags;
     candidate.iefStrength=in.iefStrength;
+    candidate.iefSkin=in.iefSkin;candidate.iefDetail=in.iefDetail;
+    candidate.iefThresholds=in.iefThresholds;
     candidate.at924=in.modes.settings12;
     candidate.at9a0=in.geometry.rotation;
     output=candidate;return true;
@@ -8360,6 +8366,29 @@ inline bool tglPrepareOwnedVpFrame(const TglOwnedVpFramePreparationInput& in,
 // One bounded acquisition path for slot28. Optional IEF/conditional fields
 // follow native branch order; Read must authorize pointed-to leases as well as
 // parent descriptors. No partial frame or CSC reference escapes on failure.
+// Scalar donor layout1dcc89..1dccdb only; never invokes an ICL helper.
+template<class Read>
+bool tglReadOwnedVpIefSnapshot(uintptr_t descriptor,Read read,
+    TglOwnedVpFramePreparationInput& output) noexcept {
+    static_assert(noexcept(read(uintptr_t{},nullptr,size_t{})),"IEF snapshot read ABI");
+    auto candidate=output;
+    candidate.iefPresent=false;candidate.iefFlags=0;candidate.iefStrength=0;
+    candidate.iefSkin=0;candidate.iefDetail=0;candidate.iefThresholds={};
+    if(descriptor) {
+        if(descriptor>UINTPTR_MAX-14 || !read(descriptor,&candidate.iefFlags,1)) return false;
+        candidate.iefPresent=true;
+        if(candidate.iefFlags&1) {
+            if(!read(descriptor+4,&candidate.iefStrength,4)) return false;
+            if(candidate.iefStrength>0.f) {
+                if(!read(descriptor+2,&candidate.iefSkin,1) ||
+                   !read(descriptor+3,&candidate.iefDetail,1)) return false;
+                for(size_t i=0;i<3;++i)
+                    if(!read(descriptor+8+i*2,&candidate.iefThresholds[i],2)) return false;
+            }
+        }
+    }
+    output=candidate;return true;
+}
 template<class Read>
 bool tglReadOwnedVpFramePreparation(uintptr_t source,uintptr_t target,uintptr_t mhw,
     uintptr_t settings,bool conditionalAvailable,Read read,const TglOwnedVpModeState& original,
@@ -8377,11 +8406,7 @@ bool tglReadOwnedVpFramePreparation(uintptr_t source,uintptr_t target,uintptr_t 
     if(conditionalAvailable && !read(target+0x40,&input.targetDestination,16)) return false;
     uintptr_t ief=0;
     if(!read(source+0x78,&ief,8)) return false;
-    if(ief) {
-        if(ief>UINTPTR_MAX-8 || !read(ief,&input.iefFlags,1)) return false;
-        input.iefPresent=true;
-        if((input.iefFlags&1) && !read(ief+4,&input.iefStrength,4)) return false;
-    }
+    if(!tglReadOwnedVpIefSnapshot(ief,read,input)) return false;
     TglOwnedVpFramePreparation candidate;
     if(!tglPrepareOwnedVpFrame(input,original,candidate)) return false;
     output=candidate;sourceA8=reference;
