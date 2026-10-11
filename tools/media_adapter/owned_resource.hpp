@@ -16440,6 +16440,13 @@ public:
     }
     // Keep the generation captured at initialization: resolving by pointer
     // alone would let a delayed frame attach to a recycled physical address.
+    // Factory slot12 (15b01..15c0d) must remain usable while frames are pending:
+    // it selects physical+50/+58/+60, calls native event wait226e6/test226bc,
+    // and writes per-item status. Route it through live-generation admission,
+    // NOT withNewRequest's empty-pool gate, or completion cannot make progress.
+    // Its aggregate return0 is not a per-frame completion certificate (items
+    // can contain status3 after native wait failure); retirement must separately
+    // validate the exact event/item result and retained frame identity.
     template<class Use> int withFrame(typename Registry::Ticket ticket,
         uintptr_t physical,Use use) noexcept {
         if(!physical || !valid()) return 5;
