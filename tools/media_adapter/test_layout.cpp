@@ -14164,12 +14164,19 @@ int main() {
                                         TglOwnedSfcCommandParameters emitted;
                                         std::memcpy(emitted.state.data(),state,emitted.state.size());
                                         emitted.ief=assemblyIef;
-                                        emitted.y.coefficients=passAvsTables.packedY;
-                                        emitted.uv.coefficients=passAvsTables.packedUv;
-                                        std::array<uint8_t,12> phases{};
                                         auto siting=producedPrefix.sourceSiting;
-                                        tglPrepareOwnedSfcAvsPhases(phases,siting,passAvsTables.format);
-                                        std::memcpy(emitted.avs.data(),phases.data(),phases.size());
+                                        emitted.avs[0]=0x71;emitted.avs[12]=0x93;
+                                        const auto originalAvs=emitted.avs;
+                                        auto deniedTables=passAvsTables;deniedTables.scaleX=0;
+                                        assert(!tglPrepareOwnedSfcAvsCommandParameters(emitted,deniedTables,siting));
+                                        assert(emitted.avs==originalAvs && siting==producedPrefix.sourceSiting);
+                                        emitted.filtersInUse=true;
+                                        assert(!tglPrepareOwnedSfcAvsCommandParameters(emitted,passAvsTables,siting));
+                                        emitted.filtersInUse=false;
+                                        assert(tglPrepareOwnedSfcAvsCommandParameters(emitted,passAvsTables,siting));
+                                        assert(emitted.y.coefficients==passAvsTables.packedY &&
+                                            emitted.uv.coefficients==passAvsTables.packedUv);
+                                        assert(emitted.avs[0]==0x71 && emitted.avs[12]==0x93);
                                         CallbackCommandBackend commandBackend;
                                         auto platformDescriptor=[&](auto&) noexcept {return commandBackend.stage(3);};
                                         assert(tglSendOwnedSfcPreparedCommands(commandBackend,emitted,output,

@@ -11493,6 +11493,24 @@ inline int tglWithOwnedSfcAvsTables(Owner& owner,TglOwnedSfcAvsTables& cache,
         return generate(static_cast<const TglOwnedSfcAvsTables&>(cache));
     });
 }
+// Publish coefficients and phases from the SAME prepared AVS snapshot.
+// Siting is returned only after admission; preserve pipe/reserved bytes.
+// This consumes CPU tables, not an image/physical-generation certificate.
+inline bool tglPrepareOwnedSfcAvsCommandParameters(TglOwnedSfcCommandParameters& parameters,
+    const TglOwnedSfcAvsTables& tables,uint32_t& sourceSiting) noexcept {
+    if(parameters.filtersInUse || tables.format==0xffffffffu ||
+       !std::isfinite(tables.scaleX) || !std::isfinite(tables.scaleY) ||
+       tables.scaleX<=0.f || tables.scaleY<=0.f) return false;
+    std::array<uint8_t,12> phases{};
+    std::memcpy(phases.data(),parameters.avs.data(),phases.size());
+    auto siting=sourceSiting;
+    tglPrepareOwnedSfcAvsPhases(phases,siting,tables.format);
+    parameters.y.coefficients=tables.packedY;
+    parameters.uv.coefficients=tables.packedUv;
+    std::memcpy(parameters.avs.data(),phases.data(),phases.size());
+    sourceSiting=siting;
+    return true;
+}
 template<class Owner,class NativeSin,class Generate>
 inline int tglWithOwnedSfcAvsCommands(TglOwnedSfcCommandParameters& parameters,
     Owner& owner,TglOwnedSfcAvsTables& cache,uint32_t format,float scaleX,float scaleY,
