@@ -3997,6 +3997,21 @@ static void testNativeResourceBoundary() {
                 std::memcpy(child.data()+0x88,&report,8);
                 const auto allocations=fixture.allocations,releases=fixture.releases;
                 unsigned featureCalls=0;
+                struct ParametersBackend {
+                    std::array<uint8_t,8> bytes{};unsigned live=0,releases=0;
+                    uintptr_t allocate(size_t n) noexcept {
+                        assert(n==bytes.size() && !live);live=1;
+                        return reinterpret_cast<uintptr_t>(bytes.data());
+                    }
+                    void release(uintptr_t p) noexcept {
+                        assert(p==reinterpret_cast<uintptr_t>(bytes.data()) && live);
+                        live=0;++releases;
+                    }
+                } parameterBackend;
+                TglTrackedCpuOwner parameters(parameterBackend);
+                assert(parameters.allocate(8));
+                unsigned parameterCalls=0;
+                assert(!owner.withNativeDenoiseParameters(*surface,parameters,[&]() noexcept {++parameterCalls;}));
                 assert(tglWithOwnedVeboxFeatureFrame(owner,destination,childOwner,execution,
                     [&](void* actual,const auto& s,const auto& t) noexcept {
                         ++featureCalls;
@@ -4005,12 +4020,27 @@ static void testNativeResourceBoundary() {
                         assert(owner.ensure(key)==5 && destination.ensure(key)==5);
                         assert(!owner.surface() && !destination.surface());
                         assert(fixture.allocations==allocations && fixture.releases==releases);
+                        assert(!destination.withNativeDenoiseParameters(s,parameters,[&]() noexcept {++parameterCalls;}));
+                        assert(owner.withNativeDenoiseParameters(s,parameters,[&]() noexcept {
+                            ++parameterCalls;uintptr_t p=0;
+                            std::memcpy(&p,s.prefix.data()+0x90,8);
+                            assert(p==parameters.get() && parameterBackend.live==1);
+                            parameters.reset();assert(parameterBackend.live==1);
+                            assert(!owner.withNativeDenoiseParameters(s,parameters,
+                                [&]() noexcept {++parameterCalls;}));
+                            uintptr_t retained=reinterpret_cast<uintptr_t>(&t);
+                            std::memcpy(execution.bytes.data()+0x60,&retained,8);
+                        }));
+                        uintptr_t detached=1;std::memcpy(&detached,s.prefix.data()+0x90,8);
+                        assert(!detached && parameters.get() && parameterCalls==1);
                         uintptr_t retained=reinterpret_cast<uintptr_t>(&t);
                         std::memcpy(execution.bytes.data()+0x60,&retained,8);
                         return 31;
                     })==31 && featureCalls==1);
                 uintptr_t retained=1;std::memcpy(&retained,execution.bytes.data()+0x60,8);
                 assert(!retained && owner.surface()==surface && destination.surface()==destinationSurface);
+                assert(parameterBackend.live==1 && !parameterBackend.releases);
+                parameters.reset();assert(!parameterBackend.live && parameterBackend.releases==1);
                 const auto resource=destinationSurface->resource;
                 auto& invalid=const_cast<TglOwnedSurfaceStorage*>(destinationSurface)->resource;
                 invalid.fill(0);

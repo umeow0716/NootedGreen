@@ -4004,6 +4004,18 @@ public:
         std::forward<Consume>(consume)(static_cast<const TglOwnedSurfaceStorage&>(surface_));
         return true;
     }
+    // Called only inside this owner's already-active frame lease. Native160
+    // may consume source90 via tracked436d0; the parameter owner reconciles
+    // that exact release contract before the frame unlocks. No const-cast or
+    // foreign shell/pointer adoption is exposed to the enclosing policy.
+    template<class Parameters,class Use>
+    bool withNativeDenoiseParameters(const TglOwnedSurfaceStorage& expected,
+        Parameters& parameters,Use use) noexcept {
+        static_assert(noexcept(use()),"native DN parameter callback ABI");
+        if(!ready_ || !busy_ || &expected!=&surface_ ||
+           !capture_.backed(surface_.resource)) return false;
+        return parameters.withNativeReleaseSlot(surface_.prefix.data()+0x90,use);
+    }
     bool copyFrameMetadata(const TglOwnedSurfaceStorage& source) noexcept {
         if(!ready_ || busy_) return false;
         busy_=true;
