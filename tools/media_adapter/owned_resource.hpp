@@ -7028,6 +7028,28 @@ template<class Resolve> struct TglOwnedVpProducerCallbacks {
         if(context && state && source && context->owns(child)) context->filters(state,source);
     }
 };
+template<class Resolve>
+bool tglBindOwnedVpProducerEntries(void* child,TglOwnedVpEntrySet& target) noexcept {
+    static_assert(noexcept(Resolve{}(child)),"VP producer binding resolver ABI");
+    auto* context=Resolve{}(child);
+    static_assert(noexcept(context->owns(child)),"VP producer binding ownership ABI");
+    if(!context || !context->owns(child) || target.state || target.filters) return false;
+    using Callback=TglOwnedVpProducerCallbacks<Resolve>;
+    auto candidate=target;
+    candidate.state=&Callback::state;candidate.filters=&Callback::filters;
+    target=candidate;return true;
+}
+template<class Resolve>
+bool tglBindOwnedVpSetupSendEntries(void* child,TglOwnedVpEntrySet& target) noexcept {
+    static_assert(noexcept(Resolve{}(child)),"VP setup binding resolver ABI");
+    auto* context=Resolve{}(child);
+    static_assert(noexcept(context->owns(child)),"VP setup binding ownership ABI");
+    if(!context || !context->owns(child) || target.setup || target.send) return false;
+    using Callback=TglOwnedVpSfcCallbacks<Resolve>;
+    auto candidate=target;
+    candidate.setup=&Callback::setup;candidate.send=&Callback::send;
+    target=candidate;return true;
+}
 // Exact ICL donor VP+a0=1e0960 saves RSI=state and RDX=IEF, returns
 // void:1e0991 writes RSI+88,1e099c writes RDX+20. Both are pointers,
 // so function-pointer type checking alone cannot detect their reversal.
@@ -9579,17 +9601,19 @@ public:
                         }
                     } producer{child,renderData,source,reinterpret_cast<void*>(target),
                         produceState,produceFilters};
-                    using Producers=TglOwnedVpProducerCallbacks<TglOwnedVpSfcResolve<ProducerContext>>;
+                    using ProducerResolve=TglOwnedVpSfcResolve<ProducerContext>;
                     TglOwnedVpSfcScopedContext<ProducerContext> producerScope(child,producer);
                     if(!producerScope.bound()) return 5;
+                    TglOwnedVpEntrySet entries;
+                    if(!tglBindOwnedVpProducerEntries<ProducerResolve>(child,entries)) return 5;
                     const int result=tglSetupOwnedVpSfcStages(frame,
-                        [&]() noexcept {return Producers::state(child,renderData,source,
+                        [&]() noexcept {return entries.state(child,renderData,source,
                             reinterpret_cast<void*>(target));},
                         [&]() noexcept {return avs(child,frame,avs_);},
                         [&]() noexcept {
                             const int filterResult=state_.withVpParameterPublication(storage_,[&](const uint8_t* packet) noexcept {
                                 producer.leasedState=packet;
-                                Producers::filters(child,renderData,const_cast<uint8_t*>(packet),source);
+                                entries.filters(child,renderData,const_cast<uint8_t*>(packet),source);
                                 producer.leasedState=nullptr;
                                 return producer.error;
                             });
@@ -9633,12 +9657,14 @@ public:
                         return error;
                     }
                 } context{child,source,reinterpret_cast<void*>(target),renderData,produce,consume};
-                using Callbacks=TglOwnedVpSfcCallbacks<TglOwnedVpSfcResolve<Context>>;
+                using SetupResolve=TglOwnedVpSfcResolve<Context>;
                 TglOwnedVpSfcScopedContext<Context> scope(child,context);
                 if(!scope.bound()) return 5;
-                static_assert(noexcept(invoke(child,&Callbacks::setup,&Callbacks::send)),
+                TglOwnedVpEntrySet entries;
+                if(!tglBindOwnedVpSetupSendEntries<SetupResolve>(child,entries)) return 5;
+                static_assert(noexcept(invoke(child,entries.setup,entries.send)),
                     "VP callback invocation ABI");
-                const int result=invoke(child,&Callbacks::setup,&Callbacks::send);
+                const int result=invoke(child,entries.setup,entries.send);
                 if(result) return result;
                 if(context.error) return context.error;
                 return context.setupSeen && context.sendSeen ? 0 : 5;

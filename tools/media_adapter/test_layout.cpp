@@ -9423,10 +9423,18 @@ int main() {
         using State=int(*)(void*,void*,void*,void*) noexcept;
         using Filters=void(*)(void*,void*,void*,void*) noexcept;
         const State state=&Callback::state;const Filters filters=&Callback::filters;
+        using ProducerResolve=TglOwnedVpSfcResolve<Context>;
+        TglOwnedVpEntrySet producerEntries;
+        assert(!tglBindOwnedVpProducerEntries<ProducerResolve>(context.child,producerEntries));
         assert(state(context.child,&values[1],&values[2],&values[3])==5);
         filters(context.child,&values[1],&values[4],&values[2]);assert(!context.filtersCalled);
         {
             TglOwnedVpSfcScopedContext<Context> scope(context.child,context);assert(scope.bound());
+            assert(!tglBindOwnedVpProducerEntries<ProducerResolve>(&values[4],producerEntries));
+            assert(tglBindOwnedVpProducerEntries<ProducerResolve>(context.child,producerEntries));
+            assert(producerEntries.state==state && producerEntries.filters==filters);
+            assert(producerEntries.missingMask()==(0x7ffffffU&~((1U<<18)|(1U<<19))));
+            assert(!tglBindOwnedVpProducerEntries<ProducerResolve>(context.child,producerEntries));
             csc(nullptr,&values[1],&values[2]);
             csc(&values[4],&values[1],&values[2]);
             csc(context.child,nullptr,&values[2]);
@@ -11915,6 +11923,9 @@ int main() {
         assert(Callbacks::send(context.child,context.data,context.command)==5);
         using Scoped=TglOwnedVpSfcScopedContext<Context>;
         using RealCallbacks=TglOwnedVpSfcCallbacks<TglOwnedVpSfcResolve<Context>>;
+        using SetupResolve=TglOwnedVpSfcResolve<Context>;
+        TglOwnedVpEntrySet setupEntries;
+        assert(!tglBindOwnedVpSetupSendEntries<SetupResolve>(context.child,setupEntries));
         assert(!Scoped::get(context.child));
         {
             Scoped wrong(context.target,context);assert(wrong.bound());
@@ -11928,6 +11939,11 @@ int main() {
             Scoped invalid(nullptr,context);assert(!invalid.bound());
             Scoped scope(context.child,context);assert(scope.bound());
             Scoped nested(context.target,context);assert(!nested.bound());
+            assert(!tglBindOwnedVpSetupSendEntries<SetupResolve>(context.target,setupEntries));
+            assert(tglBindOwnedVpSetupSendEntries<SetupResolve>(context.child,setupEntries));
+            assert(setupEntries.setup==&RealCallbacks::setup && setupEntries.send==&RealCallbacks::send);
+            assert(setupEntries.missingMask()==(0x7ffffffU&~((1U<<8)|(1U<<9))));
+            assert(!tglBindOwnedVpSetupSendEntries<SetupResolve>(context.child,setupEntries));
             assert(!Scoped::get(context.target) && Scoped::get(context.child)==&context);
             TglOwnedVeboxScopedContext<Context> enclosing(context.target,context);
             assert(enclosing.bound()); // Different child domains do not alias.
