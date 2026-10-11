@@ -6908,17 +6908,19 @@ template<class Resolve> struct TglOwnedVpProducerCallbacks {
         if(context && state && source && context->owns(child)) context->filters(state,source);
     }
 };
-// Exact ICL donor VP+a0=1e0960 saves RSI=IEF and RDX=state, returns
-// void, and gates mutation on child923 low bit. The scoped producer owns
+// Exact ICL donor VP+a0=1e0960 saves RSI=state and RDX=IEF, returns
+// void:1e0991 writes RSI+88,1e099c writes RDX+20. Both are pointers,
+// so function-pointer type checking alone cannot detect their reversal.
+// Mutation is gated on child923 low bit. The scoped producer owns
 // that policy/cache and must keep coefficient publication leased through
 // command emission; this ABI entry does not invent or shorten that lease.
 template<class Resolve> struct TglOwnedVpCscCallback {
-    static void csc(void* child,void* ief,void* state) noexcept {
+    static void csc(void* child,void* state,void* ief) noexcept {
         static_assert(noexcept(Resolve{}(child)),"VP CSC resolver ABI");
         auto* context=Resolve{}(child);
-        static_assert(noexcept(context->owns(child)) && noexcept(context->csc(ief,state)),
+        static_assert(noexcept(context->owns(child)) && noexcept(context->csc(state,ief)),
             "VP CSC producer ABI");
-        if(context && ief && state && context->owns(child)) context->csc(ief,state);
+        if(context && ief && state && context->owns(child)) context->csc(state,ief);
     }
 };
 // Qualified VP +40=1e0ca0..1e0dcb. Its +a8=1e0c80 is a proven native

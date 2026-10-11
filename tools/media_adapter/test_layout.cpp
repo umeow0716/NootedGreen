@@ -9332,8 +9332,8 @@ int main() {
             void filters(void* state,void* source) noexcept {
                 ++filtersCalled;args={state,source,nullptr};
             }
-            void csc(void* ief,void* state) noexcept {
-                ++cscCalls;args={ief,state,nullptr};
+            void csc(void* state,void* ief) noexcept {
+                ++cscCalls;args={state,ief,nullptr};
             }
         };
         std::array<int,5> values{};Context context{&values[0]};
@@ -9864,6 +9864,25 @@ int main() {
             assert(ready.state[0x67]==1 && ready.state[0x68]==1);
             assert(ready.ief[3]==1 && ready.ief[4]==7 && ready.ief[5]==2 && ready.ief[6]==8);
             assert(ready.state[0x88]==1 && ready.ief[0x20]==1);
+            struct CscLeaseContext {
+                void* child;TglOwnedVpCscCache& cache;
+                TglOwnedSfcCommandParameters& parameters;unsigned calls=0,rejected=0;
+                bool owns(void* candidate) const noexcept {return candidate==child;}
+                void csc(void* state,void* ief) noexcept {
+                    if(state!=parameters.state.data() || ief!=parameters.ief.data()) {++rejected;return;}
+                    ++calls;assert(!cache.reset());
+                    assert(static_cast<uint8_t*>(state)[0x88]==1 && static_cast<uint8_t*>(ief)[0x20]==1);
+                }
+            } cscContext{&ready,cache,ready};
+            using Entry=TglOwnedVpCscCallback<TglOwnedVpSfcResolve<CscLeaseContext>>;
+            Entry::csc(&ready,ready.state.data(),ready.ief.data());assert(!cscContext.calls);
+            {
+                TglOwnedVpSfcScopedContext<CscLeaseContext> scope(&ready,cscContext);assert(scope.bound());
+                Entry::csc(&ready,ready.ief.data(),ready.state.data());
+                assert(!cscContext.calls && cscContext.rejected==1);
+                Entry::csc(&ready,ready.state.data(),ready.ief.data());assert(cscContext.calls==1);
+            }
+            Entry::csc(&ready,ready.state.data(),ready.ief.data());assert(cscContext.calls==1);
             for(size_t offset:{size_t(0x28),size_t(0x30),size_t(0x38)}) {
                 uintptr_t pointer=0;std::memcpy(&pointer,ready.ief.data()+offset,8);
                 assert(pointer);
