@@ -16611,6 +16611,22 @@ public:
             return native(binding_.image+0x13e43,physical,input);
         });
     }
+    // Adoption runs before releasing the SAME physical-generation gate. It
+    // must validate all outputs and retain any partially published owned state
+    // on failure; quarantine is not permission to destroy native contexts.
+    template<class Adopt,class Native=TglNativeBackingAllocateInvoker>
+    int createContextsAndAdopt(typename Registry::Ticket ticket,uintptr_t physical,
+        const void* input,Adopt adopt,Native native=Native{}) noexcept {
+        static_assert(noexcept(adopt(uintptr_t{},input)) &&
+            std::is_same_v<decltype(adopt(uintptr_t{},input)),int>);
+        static_assert(noexcept(native(uintptr_t{},uintptr_t{},input)) &&
+            std::is_same_v<decltype(native(uintptr_t{},uintptr_t{},input)),int>);
+        return createContexts(ticket,physical,input,
+            [&](uintptr_t entry,uintptr_t address,const void* original) noexcept -> int {
+                const int result=native(entry,address,original);
+                return result?result:adopt(address,original);
+            });
+    }
     template<class Use> int withContextRemoval(typename Registry::Ticket ticket,
         uintptr_t physical,Use use) noexcept {
         if(!physical || !valid()) return 5;

@@ -12303,10 +12303,29 @@ static void testRetainedVeboxFrames() {
         assert(creationRegistry.lookup(image,0xc000).generation==createdPhysical.ticket.generation);
         creationAnchor[0]^=1;
         assert(creationCallbacks.createContexts(createdPhysical.ticket,0xc000,input,create)==0 && creationCalls==1);
+        unsigned adopted=0;
+        auto adopt=[&](uintptr_t physical,const void* originalInput) noexcept -> int {
+            ++adopted;assert(physical==0xc000 && originalInput==input);
+            assert(creationCallbacks.withEventObservation(createdPhysical.ticket,physical,
+                []() noexcept -> int {assert(false);return 0;})==5);
+            return 0;
+        };
+        assert(creationCallbacks.createContextsAndAdopt(createdPhysical.ticket,0xc000,input,adopt,create)==0);
+        assert(creationCalls==2 && adopted==1);
         creationResult=31;
-        assert(creationCallbacks.createContexts(createdPhysical.ticket,0xc000,input,create)==31 && creationCalls==2);
+        assert(creationCallbacks.createContextsAndAdopt(createdPhysical.ticket,0xc000,input,adopt,create)==31 && creationCalls==3 && adopted==1);
         assert(!creationRegistry.lookup(image,0xc000).generation);
-        assert(creationCallbacks.createContexts(createdPhysical.ticket,0xc000,input,create)==5 && creationCalls==2);
+        assert(creationCallbacks.createContexts(createdPhysical.ticket,0xc000,input,create)==5 && creationCalls==3);
+        invoke.produced=0xd000;
+        TglOwnedPhysicalCallbackCoordinator adoptionCallbacks(creationRegistry,binding,read,qualify,executable,invoke);
+        const auto adoptionPhysical=adoptionCallbacks.initialize(&output,input);assert(adoptionPhysical.published);
+        unsigned failedAdoptions=0,nativeAdoptions=0;
+        auto nativeSuccess=[&](uintptr_t,uintptr_t,const void*) noexcept -> int {++nativeAdoptions;return 0;};
+        auto rejectAdoption=[&](uintptr_t,const void*) noexcept -> int {++failedAdoptions;return 31;};
+        assert(adoptionCallbacks.createContextsAndAdopt(adoptionPhysical.ticket,0xd000,input,rejectAdoption,nativeSuccess)==31);
+        assert(nativeAdoptions==1 && failedAdoptions==1 && !creationRegistry.lookup(image,0xd000).generation);
+        assert(adoptionCallbacks.createContextsAndAdopt(adoptionPhysical.ticket,0xd000,input,rejectAdoption,nativeSuccess)==5);
+        assert(nativeAdoptions==1 && failedAdoptions==1);
     }
 }
 
