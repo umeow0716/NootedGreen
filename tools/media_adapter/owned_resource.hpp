@@ -5212,9 +5212,10 @@ int tglWithOwnedDescriptorFfdiSecondary(TglOwnedDescriptorOnlySurface& target,
 struct TglOwnedFfdnNoFinish {
     template<class... Views> int operator()(const Views&...) const noexcept {return 0;}
 };
-template<class Owner,class Allocate,class Copy,class Publish,class Finish=TglOwnedFfdnNoFinish>
+template<class Owner,class Allocate,class Copy,class Publish,class Finish=TglOwnedFfdnNoFinish,
+    class Compression=TglOwnedFfdnCompressionSelection>
 int tglWithAllocatedOwnedFfdnPair(Owner& input,Owner* previous,Owner* copyDestination,
-    TglOwnedFfdnCompressionSelection compression,bool& referenceValid,bool executionFlag13,
+    Compression selection,bool& referenceValid,bool executionFlag13,
     uint8_t& execution15,uint8_t& execution16,Allocate allocate,Copy copy,Publish publish,
     Finish finish={}) noexcept {
     static_assert(noexcept(allocate(size_t{},std::declval<const TglOwnedFfdnAllocationRequest&>(),
@@ -5231,6 +5232,13 @@ int tglWithAllocatedOwnedFfdnPair(Owner& input,Owner* previous,Owner* copyDestin
         "FFDN pair metadata ABI");
     const std::array<Owner*,3> roles{&input,previous,copyDestination};
     return tglWithOwnedSurfaceRoles(roles,[&](const auto& views) noexcept {
+        TglOwnedFfdnCompressionSelection compression{};
+        if constexpr(std::is_same_v<Compression,TglOwnedFfdnCompressionSelection>) compression=selection;
+        else {
+            static_assert(noexcept(selection(views,compression)) &&
+                std::is_same_v<decltype(selection(views,compression)),bool>,"leased FFDN selection ABI");
+            if(!selection(views,compression)) return 5;
+        }
         TglOwnedFfdnAllocationRequest request;
         if(!tglPrepareOwnedFfdnAllocationRequest(*views[0],compression,request)) return 5;
         uint32_t previousPitch=0;

@@ -5758,6 +5758,28 @@ static void testNativeResourceBoundary() {
                 assert(targets[0].withDescriptor([](const auto&) noexcept {}));
                 assert(fixture.allocations==allocationCount);
             }
+            for(bool admit:{false,true}) {
+                bool valid=false;uint8_t flag=0xa5,mode=0x5a;
+                unsigned selections=0,allocations=0,publications=0;
+                const int result=tglWithAllocatedOwnedFfdnPair(owner,&owner,&destination,
+                    [&](const auto& views,TglOwnedFfdnCompressionSelection& selected) noexcept {
+                        ++selections;assert(views[0]==surface && views[1]==surface);
+                        assert(owner.hasSurfaceLease(*views[0]));
+                        if(!admit) return false;
+                        return tglSelectOwnedFfdnCompressionFromLeases(owner,*views[0],owner,*views[1],
+                            true,false,true,false,4,selected);
+                    },valid,false,flag,mode,
+                    [&](size_t,const auto&,bool& changed,uint32_t& pitch) noexcept {
+                        ++allocations;changed=false;pitch=0;
+                        assert(selections==1 && owner.hasSurfaceLease(*surface));return 0;
+                    },[](const auto&,const auto&) noexcept {assert(false);},
+                    [&](size_t,const auto&,const auto&) noexcept {++publications;},
+                    [&](const auto&) noexcept {assert(publications==2);return 31;});
+                assert(result==(admit?31:5) && selections==1);
+                assert(allocations==(admit?2u:0u) && publications==allocations);
+                assert(flag==0xa5 && mode==0x5a);
+                assert(owner.withSurface([](const auto&) noexcept {}));
+            }
             for(size_t failAt=0;failAt<=2;++failAt) for(bool equalPitch:{false,true}) {
                 bool valid=true;size_t allocations=0,publications=0,copies=0;
                 uint8_t execution15=0xa5,execution16=0x5a;
