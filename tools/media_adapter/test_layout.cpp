@@ -8635,6 +8635,29 @@ int main() {
                     return 0;
                 })==0);
                 assert(!admissionCallback(owner.constructedBase(),&admissionParams,&admissionPass) && admissionCalls==2);
+                {
+                    std::array<uint8_t,16> history{};history[0]=1;
+                    TglOwnedSurfaceStorage source{};
+                    uint32_t count=1;std::memcpy(source.prefix.data()+0xb4,&count,4);
+                    auto* child=static_cast<uint8_t*>(owner.constructedBase());
+                    uintptr_t originalHistory=0;
+                    uint32_t originalField=0;
+                    std::memcpy(&originalHistory,child+0x90,8);
+                    std::memcpy(&originalField,child+0x1b5c,4);
+                    assert(!tglUpdateOwnedVeboxHistory(owner,child,history,source,nullptr,nullptr,0));
+                    assert(owner.withPrivateChild([&](void* actual) noexcept {
+                        uintptr_t borrowed=reinterpret_cast<uintptr_t>(history.data());
+                        std::memcpy(child+0x90,&borrowed,8);
+                        assert(tglUpdateOwnedVeboxHistory(owner,actual,history,source,nullptr,nullptr,0));
+                        uint32_t mode=0,field=0;std::memcpy(&mode,history.data()+4,4);
+                        std::memcpy(&field,child+0x1b5c,4);assert(mode==1 && field==4);
+                        owner.reset();assert(owner.constructedBase()==actual && cpu.live);
+                        std::memcpy(child+0x90,&originalHistory,8);
+                        std::memcpy(child+0x1b5c,&originalField,4);
+                        return 0;
+                    })==0);
+                    assert(!tglUpdateOwnedVeboxHistory(owner,child,history,source,nullptr,nullptr,0));
+                }
                 uintptr_t cleanupAddress=0;
                 std::memcpy(&cleanupAddress,reinterpret_cast<void*>(address+0x60),8);
                 const auto cleanupCallback=reinterpret_cast<void(*)(void*) noexcept>(cleanupAddress);
