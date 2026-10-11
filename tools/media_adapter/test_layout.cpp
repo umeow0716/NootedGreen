@@ -8342,12 +8342,23 @@ static void testVpSfcCpuGraph() {
         assert(!oldLifetime.owns(lifetimeChild) && !retirementCalls);
     }
     Lifetime currentLifetime(lifetimeChild,graph,lines,retire,release);
-    {
-        TglOwnedVpSfcScopedContext<Lifetime> scope(lifetimeChild,currentLifetime);assert(scope.bound());
-        TglOwnedVpEntrySet lifecycle;
-        assert(tglBindOwnedVpLifetimeEntries<LifetimeResolve>(lifetimeChild,lifecycle));
-        lifecycle.destroy(lifetimeChild);lifecycle.deletingDestroy(lifetimeChild);
+    const auto neverLifetime=[](void*,const auto&) noexcept {assert(false);return 0;};
+    assert(tglWithOwnedVpLifetimeAssemblyEntries(lifetimeChild,oldLifetime,{},neverLifetime)==5);
+    for(bool deleting:{false,true}) {
+        TglOwnedVpEntrySet conflict;
+        if(deleting) conflict.deletingDestroy=+[](void*) noexcept {};
+        else conflict.destroy=+[](void*) noexcept {};
+        assert(tglWithOwnedVpLifetimeAssemblyEntries(lifetimeChild,currentLifetime,conflict,neverLifetime)==5);
     }
+    TglOwnedVpEntrySet expiredLifetime;
+    assert(tglWithOwnedVpLifetimeAssemblyEntries(lifetimeChild,currentLifetime,{},
+        [&](void* child,const auto& lifecycle) noexcept {
+            assert(tglWithOwnedVpLifetimeAssemblyEntries(child,currentLifetime,{},neverLifetime)==5);
+            expiredLifetime=lifecycle;
+            lifecycle.destroy(child);lifecycle.deletingDestroy(child);
+            return 31;
+        })==31);
+    expiredLifetime.destroy(lifetimeChild);expiredLifetime.deletingDestroy(lifetimeChild);
     assert(currentLifetime.status()==0 && retirementCalls==1 && allocationReleases==1);
     assert(!state.live && !avs.live);
     assert(initialize());
@@ -11576,10 +11587,13 @@ int main() {
                 TglOwnedVpEntrySet expiredPassEntries;
                 void* expiredPassChild=nullptr;
                 assemblyBase.compressionFormat=+[](void*,uint32_t) noexcept {return true;};
-                for(bool setupConflict:{false,true}) {
+                for(unsigned occupied=0;occupied<4;++occupied) {
                     auto conflict=assemblyBase;
-                    if(setupConflict) conflict.setup=+[](void*,void*,void*,void*) noexcept {return 0;};
-                    else conflict.send=+[](void*,void*,void*) noexcept {return 0;};
+                    if(occupied==0) conflict.setup=+[](void*,void*,void*,void*) noexcept {return 0;};
+                    if(occupied==1) conflict.send=+[](void*,void*,void*) noexcept {return 0;};
+                    if(occupied==2) conflict.state=+[](void*,void*,void*,void*) noexcept {return 0;};
+                    if(occupied==3) conflict.filters=+[](void*,void*,void*,void*) noexcept {};
+                    const auto originalMask=conflict.missingMask();
                     assert(graph.withPreparedCallbackAssemblyPass(conflict,prepared,
                         0x6000,0x4000,0x2000,reference,&source,&data,
                         [](void*,const auto&,auto&) noexcept -> int {assert(false);return 0;},
@@ -11587,7 +11601,7 @@ int main() {
                         [](void*,const auto&) noexcept {assert(false);},
                         [](void*,void*,void*) noexcept -> int {assert(false);return 0;},
                         [](void*,const auto&) noexcept -> int {assert(false);return 0;})==5);
-                    assert(!stages);
+                    assert(!stages && conflict.missingMask()==originalMask);
                 }
                 const int result=graph.withPreparedCallbackAssemblyPass(assemblyBase,prepared,
                     0x6000,0x4000,0x2000,reference,&source,&data,

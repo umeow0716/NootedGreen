@@ -12151,6 +12151,22 @@ template<class Resolve> struct TglOwnedVpLifetimeCallbacks {
     }
 };
 
+// The lifetime owner outlives each phase catalogue. In particular initialization
+// may advance the graph generation: never silently refresh an old destructor
+// context to make its entries usable again.
+template<class Lifetime,class Use>
+int tglWithOwnedVpLifetimeAssemblyEntries(void* child,Lifetime& lifetime,
+    const TglOwnedVpEntrySet& base,Use use) noexcept {
+    if(!child || !lifetime.owns(child) || base.destroy || base.deletingDestroy) return 5;
+    TglOwnedVpSfcScopedContext<Lifetime> scope(child,lifetime);
+    if(!scope.bound()) return 5;
+    auto entries=base;
+    using Resolve=TglOwnedVpSfcResolve<Lifetime>;
+    if(!tglBindOwnedVpLifetimeEntries<Resolve>(child,entries)) return 5;
+    static_assert(noexcept(use(child,entries)),"VP lifecycle assembly consumer ABI");
+    return use(child,entries);
+}
+
 // Owned VP+30 void callback context. Retirement is an external, fallible
 // admission operation, not a bool invented from FinishFenceEvent's return.
 // A future runtime owner must qualify that operation against its actual
