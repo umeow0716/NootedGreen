@@ -8383,11 +8383,48 @@ static void testVpSfcCpuGraph() {
             escapedDestructor=entries;
             const auto before=state.frees;
             escapedConstructor.initialize(child);assert(state.frees==before);
+            int source=0,data=0,command=0;unsigned states=0,emissions=0;
+            assert(graph.withPreparedCallbackAssemblyPass(entries,{},0,0x4000,0x2000,0,&source,&data,
+                [&](void*,const auto&,auto&) noexcept -> int {++states;return 0;},
+                [](void*,const auto&,auto&) noexcept -> int {assert(false);return 0;},
+                [](void*,const auto&) noexcept {assert(false);},
+                [&](void* admitted,void*,void*,const auto& pass) noexcept {
+                    assert(admitted==child && pass.destroy==entries.destroy &&
+                        pass.deletingDestroy==entries.deletingDestroy && !pass.initialize &&
+                        pass.setup && pass.send && pass.state && pass.filters);
+                    ++emissions;return 0;
+                },[&](void* admitted,const auto& pass) noexcept {
+                    const int setup=pass.setup(admitted,&source,reinterpret_cast<void*>(0x2000),&data);
+                    return setup?setup:pass.send(admitted,&data,&command);
+                })==0);
+            assert(states==1 && emissions==1 && state.live && avs.live);
             entries.destroy(child);entries.deletingDestroy(child);return 31;
         })==31);
     escapedDestructor.destroy(lifetimeChild);escapedDestructor.deletingDestroy(lifetimeChild);
     assert(retirementCalls==2 && allocationReleases==2 && !state.live && !avs.live);
+    for(unsigned failure=0;failure<3;++failure) {
+        assert(initialize());
+        const auto generation=graph.generation();
+        assert(tglWithOwnedVpInitializedLifetimeAssembly(graph,lines,retire,release,{},
+            [&](void* child,const auto& entries) noexcept {
+                if(failure==0) return 0; // Missing initialize.
+                if(failure==1) return -17; // Exact caller failure.
+                entries.initialize(child);entries.initialize(child);return 0;
+            },neverLifetime)==(failure==1?-17:5));
+        assert(graph.generation()>generation && !state.live && !avs.live &&
+            retirementCalls==2 && allocationReleases==2);
+    }
     assert(initialize());
+    for(unsigned conflictSlot=0;conflictSlot<3;++conflictSlot) {
+        TglOwnedVpEntrySet conflict;
+        if(conflictSlot==0) conflict.initialize=+[](void*) noexcept {};
+        if(conflictSlot==1) conflict.destroy=+[](void*) noexcept {};
+        if(conflictSlot==2) conflict.deletingDestroy=+[](void*) noexcept {};
+        const auto generation=graph.generation();const auto frees=state.frees;
+        assert(tglWithOwnedVpInitializedLifetimeAssembly(graph,lines,retire,release,conflict,
+            neverLifetime,neverLifetime)==5);
+        assert(graph.generation()==generation && state.frees==frees && state.live && avs.live);
+    }
     const auto neverAdmission=[](void*,const auto&) noexcept {assert(false);return 0;};
     assert(graph.withLeasedAdmissionEntries(lifetimeChild,read,neverAdmission)==5);
     assert(graph.prepare([&](auto& storage,auto&,auto&) noexcept {
