@@ -5717,7 +5717,8 @@ int tglWithOwnedBackedFfdiBatch(const std::array<TargetOwner*,Count>& targets,
         std::array<const TglOwnedSurfaceStorage*,Count> outputs{};
         const auto enter=[&](auto&& self,size_t i) noexcept -> int {
             if(i==count) {
-                static_assert(noexcept(use(inputs,outputs,count,flag,mode)),"FFDi backed consumer ABI");
+                static_assert(noexcept(use(inputs,outputs,count,flag,mode)) &&
+                    std::is_same_v<decltype(use(inputs,outputs,count,flag,mode)),int>,"FFDi backed consumer ABI");
                 return use(inputs,static_cast<const decltype(outputs)&>(outputs),count,flag,mode);
             }
             int result=5;
@@ -10723,14 +10724,12 @@ bool tglPrepareOwnedFfdiMetadataFromReport(TglOwnedFfdiMetadataQuery& output,
 // descriptor owners and execution-owner publication. The platform's held SFC
 // and parameter owners supply only their qualified scalar readers. Count is
 // still caller-qualified; this entry does not invent a platform slot count.
-template<size_t Count,class Owner,class ChildOwner,class ExecutionOwner,class Read,
-    class SfcFormat,class SfcColor,class ParameterKind,class Supports,class Use>
-int tglRunCapturedDescriptorFfdiFromReport(
-    std::array<TglOwnedDescriptorOnlySurface,Count>& targets,Owner& input,
-    Owner* executionSurface,Owner* secondary,ChildOwner& childOwner,ExecutionOwner& reportOwner,
-    void* child,uintptr_t report,const TglOwnedSurfaceStorage& source,size_t count,
+template<class Owner,class ChildOwner,class ExecutionOwner,class Read,
+    class SfcFormat,class SfcColor,class ParameterKind,class Supports,class Consume>
+int tglRunCapturedFfdiProducers(Owner& input,ChildOwner& childOwner,ExecutionOwner& reportOwner,
+    void* child,uintptr_t report,const TglOwnedSurfaceStorage& source,
     Read read,SfcFormat sfcFormat,SfcColor sfcColor,ParameterKind parameterKind,
-    Supports supports,Use use,std::array<const TglOwnedSurfaceStorage*,3> captured={}) noexcept {
+    Supports supports,Consume consume) noexcept {
     return tglRunCapturedVeboxAllocation(input,childOwner,reportOwner,child,report,source,
         [&](void* currentChild,uintptr_t currentReport,const auto& currentSource) noexcept {
             TglOwnedFfdiAllocationRequest request;TglOwnedFfdiMetadataQuery metadata;
@@ -10739,12 +10738,64 @@ int tglRunCapturedDescriptorFfdiFromReport(
                 read,sfcFormat,supports) ||
                !tglPrepareOwnedFfdiMetadataFromReport(metadata,currentSource,address,currentReport,
                 read,sfcColor,parameterKind)) return 5;
+            static_assert(noexcept(consume(currentSource,currentReport,request,metadata)) &&
+                std::is_same_v<decltype(consume(currentSource,currentReport,request,metadata)),int>,
+                "FFDi producer consumer ABI");
+            return consume(currentSource,currentReport,request,metadata);
+        });
+}
+template<size_t Count,class Owner,class ChildOwner,class ExecutionOwner,class Read,
+    class SfcFormat,class SfcColor,class ParameterKind,class Supports,class Use>
+int tglRunCapturedDescriptorFfdiFromReport(
+    std::array<TglOwnedDescriptorOnlySurface,Count>& targets,Owner& input,
+    Owner* executionSurface,Owner* secondary,ChildOwner& childOwner,ExecutionOwner& reportOwner,
+    void* child,uintptr_t report,const TglOwnedSurfaceStorage& source,size_t count,
+    Read read,SfcFormat sfcFormat,SfcColor sfcColor,ParameterKind parameterKind,
+    Supports supports,Use use,std::array<const TglOwnedSurfaceStorage*,3> captured={}) noexcept {
+    return tglRunCapturedFfdiProducers(input,childOwner,reportOwner,child,report,source,
+        read,sfcFormat,sfcColor,parameterKind,supports,
+        [&](const auto& currentSource,uintptr_t currentReport,const auto& request,const auto& metadata) noexcept {
             if(captured[0] && captured[0]!=&currentSource) return 5;
             captured[0]=&currentSource;
             return tglWithOwnedDescriptorFfdiReportBatch(targets,input,executionSurface,secondary,
                 count,request.key.format,request.key.tile,
                 {request.key.compressed,request.key.compressionMode},metadata,
                 reportOwner,currentReport,use,captured);
+        });
+}
+// Dispatch only on the native request's allocation kind. Both paths share
+// the same frame/producers and report owner; backing is never represented by
+// descriptor-only storage, and an inactive path is neither allocated nor reset.
+template<size_t Count,class TargetOwner,class Owner,class ChildOwner,class ExecutionOwner,class Read,
+    class SfcFormat,class SfcColor,class ParameterKind,class Supports,class Use>
+int tglRunCapturedFfdiFromReport(std::array<TglOwnedDescriptorOnlySurface,Count>& descriptors,
+    const std::array<TargetOwner*,Count>& backed,Owner& input,Owner* executionSurface,Owner* secondary,
+    ChildOwner& childOwner,ExecutionOwner& reportOwner,void* child,uintptr_t report,
+    const TglOwnedSurfaceStorage& source,size_t count,Read read,SfcFormat sfcFormat,
+    SfcColor sfcColor,ParameterKind parameterKind,Supports supports,Use use,
+    std::array<const TglOwnedSurfaceStorage*,3> captured={}) noexcept {
+    if(!count || count>Count) return 5;
+    return tglRunCapturedFfdiProducers(input,childOwner,reportOwner,child,report,source,
+        read,sfcFormat,sfcColor,parameterKind,supports,
+        [&](const auto& currentSource,uintptr_t currentReport,const auto& request,const auto& metadata) noexcept {
+            if(captured[0] && captured[0]!=&currentSource) return 5;
+            captured[0]=&currentSource;
+            if(request.kind==TglOwnedFfdiAllocationKind::DescriptorOnly)
+                return tglWithOwnedDescriptorFfdiReportBatch(descriptors,input,executionSurface,secondary,
+                    count,request.key.format,request.key.tile,
+                    {request.key.compressed,request.key.compressionMode},metadata,
+                    reportOwner,currentReport,use,captured);
+            std::array<uint8_t,2> original{};
+            const int status=reportOwner.withLeasedAdmissionBytes(currentReport,[&](auto& view) noexcept {
+                static_assert(TglAdmissionExecutionExtent<std::decay_t<decltype(view)>>::value>=0x15,
+                    "FFDi report snapshot extent");
+                std::memcpy(original.data(),view.data()+0x13,2);return 0;
+            });
+            if(status) return status;
+            return tglWithOwnedBackedFfdiBatch(backed,input,executionSurface,secondary,count,request,metadata,
+                original[0],original[1],[&](uint8_t flag,uint8_t mode) noexcept {
+                    return tglPublishLeasedFfdiCompression(reportOwner,currentReport,flag,mode);
+                },use,captured);
         });
 }
 template<class Read>

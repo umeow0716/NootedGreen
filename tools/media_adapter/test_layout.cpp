@@ -6431,6 +6431,16 @@ static void testNativeResourceBoundary() {
                         std::array<uint8_t,0x1bc0> child{};
                         TestVeboxChildLease childOwner{child.data()};
                         std::array<TglOwnedDescriptorOnlySurface,2> frameTargets;
+                        struct BackingBackend {
+                            unsigned allocations=0,releases=0;
+                            uint32_t resourceType() const noexcept {return 1;}
+                            int allocate(std::array<uint8_t,0x148>& bytes,const TglResourceKey& key,
+                                uint32_t* width) noexcept {bytes.fill(0);bytes[0]=1;*width=key.width;++allocations;return 0;}
+                            bool backed(const std::array<uint8_t,0x148>& bytes) noexcept {return bytes[0]==1;}
+                            void release(std::array<uint8_t,0x148>& bytes) noexcept {bytes.fill(0);++releases;}
+                        } backingBackend;
+                        TglOwnedAllocatedSurface firstBacking(backingBackend),secondBacking(backingBackend);
+                        std::array backedTargets{&firstBacking,&secondBacking};
                         unsigned used=0;
                         assert(owner.withSurface([&](const auto& source) noexcept {
                             assert(childOwner.withPrivateChild([&](void* actualChild) noexcept {
@@ -6465,11 +6475,29 @@ static void testNativeResourceBoundary() {
                                     reportBackend.bytes[0x12]=0;
                                     assert(run()==5 && !used); // source3d requires real backing, not a descriptor
                                     assert(!frameTargets[0].withDescriptor([](const auto&) noexcept {assert(false);}));
+                                    auto runEither=[&]() noexcept {
+                                        return tglRunCapturedFfdiFromReport(frameTargets,backedTargets,owner,&owner,&destination,
+                                            childOwner,reportOwner,actualChild,report,source,2,read,noSfc,noSfc,noParameter,
+                                            [](uint32_t) noexcept {return true;},
+                                            [&](const auto& inputs,const auto& outputs,size_t count,uint8_t,uint8_t) noexcept {
+                                                ++used;assert(inputs[0]==&source && count==2);
+                                                uint32_t format=0;std::memcpy(&format,outputs[0]->prefix.data()+0x130,4);
+                                                assert(format==(reportBackend.bytes[0x12]?3u:0x3du));
+                                                if(format==0x3d) {
+                                                    assert(firstBacking.hasSurfaceLease(*outputs[0]));
+                                                    assert(secondBacking.hasSurfaceLease(*outputs[1]));
+                                                    assert(!frameTargets[0].withDescriptor([](const auto&) noexcept {assert(false);}));
+                                                }
+                                                return -17;
+                                            });
+                                    };
+                                    assert(runEither()==-17 && backingBackend.allocations==2);
                                     reportBackend.bytes[0x12]=1;
+                                    assert(runEither()==-17 && backingBackend.allocations==2 && !backingBackend.releases);
                                     return run();
                                 });
                             })==-17);
-                        }) && used==1);
+                        }) && used==3);
                     }
                     assert(actualTargets[1].withDescriptor([&](const auto&) noexcept {
                         assert(reportOwner.withExecution([&](uintptr_t report) noexcept {
