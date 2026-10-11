@@ -11523,8 +11523,11 @@ int main() {
                     [&](void*,const auto&,auto&) noexcept -> int {++stages;return 0;},
                     [&](void*,const auto&,auto&) noexcept -> int {++stages;return 0;},
                     [&](void*,const auto&) noexcept {++stages;},
-                    [&](void*,void*,void*) noexcept -> int {
+                    [&](void* emittedChild,void*,void*,const TglOwnedVpEntrySet& emissionEntries) noexcept -> int {
                         assert(stages==3 && stateCpu.live && avsCpu.live);
+                        assert(emittedChild==expiredPassChild && emissionEntries.setup==expiredPassEntries.setup &&
+                            emissionEntries.send==expiredPassEntries.send &&
+                            emissionEntries.compressionFormat==assemblyBase.compressionFormat);
                         auto platform=[&](auto&) noexcept {return backend.stage(3);};
                         return tglSendOwnedSfcPreparedCommands(backend,packets,output,
                             1,1,1,1,platform);

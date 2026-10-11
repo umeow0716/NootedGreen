@@ -10061,14 +10061,27 @@ public:
         State state,Avs avs,Ief ief,Emit emit,Use use) noexcept {
         if(base.setup || base.send) return 5;
         const auto retained=base;
+        const TglOwnedVpEntrySet* active=nullptr;
+        auto emitAssembly=[&](void* child,void* data,void* command) noexcept -> int {
+            if(!active) return 5;
+            if constexpr(std::is_nothrow_invocable_r_v<int,Emit,void*,void*,void*,const TglOwnedVpEntrySet&>)
+                return emit(child,data,command,*active);
+            else {
+                static_assert(std::is_nothrow_invocable_r_v<int,Emit,void*,void*,void*>,"VP emission ABI");
+                return emit(child,data,command);
+            }
+        };
         return withPreparedCallbackPass(frame,conditionalSource,settings,target,sourceA8,
-            source,renderData,state,avs,ief,emit,[&](void* child,auto setup,auto send) noexcept {
+            source,renderData,state,avs,ief,emitAssembly,[&](void* child,auto setup,auto send) noexcept {
                 TglOwnedVpEntrySet additions;
                 additions.setup=setup;additions.send=send;
                 auto combined=retained;
                 if(!combined.appendDisjoint(additions)) return 5;
                 static_assert(noexcept(use(child,combined)),"VP setup/send assembly ABI");
-                return use(child,combined);
+                active=&combined;
+                const int result=use(child,combined);
+                active=nullptr;
+                return result;
             });
     }
     // The qualified six-argument platform entry exists only in the final
