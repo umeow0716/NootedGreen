@@ -18449,6 +18449,37 @@ auto tglMakeImageBoundVeboxNativeFrameConsumer(
         qualify,executable,setupInvoke,buildInvoke,writebackInvoke);
 }
 
+// Packet-frame consumer for retained frontend storage. Invoked INSIDE
+// withScopedPacketFrame, after child/execution/auxiliary contexts are leased.
+// Both scratch and retention come from the same retained command object;
+// callers cannot accidentally pair a temporary scratch with another frame's
+// pending-resource latch. Native CSC/setup/build/writeback remain unchanged.
+template<class LifetimeResolve,class AdmissionResolve,class AllocationResolve,
+    class ModeResolve,class FormatRead,class Frame,class SourceOwner,class ChildOwner,
+    class ExecutionOwner,class Command,class Read,class PacketAdmit,class Qualify,class Executable,
+    class CscInvoke=TglNativeCscInvoker,class SetupInvoke=TglNativeVeboxSetupInvoker,
+    class BuildInvoke=TglNativeVeboxBuilderInvoker,
+    class WritebackInvoke=TglNativeCommandHeaderWritebackInvoker>
+TglOwnedVeboxCommandTransactionResult tglRunImageBoundVeboxPacketFrame(
+    Frame& frame,SourceOwner& source,ChildOwner& child,ExecutionOwner& execution,
+    Command& command,uintptr_t dnParams,Read read,PacketAdmit admitPackets,
+    TglNativeVeboxSetupBinding setup,TglNativeVeboxBuilderBinding builder,
+    uintptr_t image,uintptr_t os,void* auxiliary,Qualify qualify,Executable executable,
+    CscInvoke cscInvoke=CscInvoke{},SetupInvoke setupInvoke=SetupInvoke{},
+    BuildInvoke buildInvoke=BuildInvoke{},WritebackInvoke writebackInvoke=WritebackInvoke{}) noexcept {
+    const auto& leases=frame.leases;
+    auto same=command.packetLeases(leases.child,leases.execution,leases.renderHal,
+        leases.sku,leases.source,leases.target);
+    if(&same.surfaces!=&leases.surfaces || &same.state!=&leases.state ||
+       &same.diIecp!=&leases.diIecp) return {};
+    auto consumer=tglMakeImageBoundVeboxNativeFrameConsumer<LifetimeResolve,AdmissionResolve,
+        AllocationResolve,ModeResolve,FormatRead>(source,child,execution,dnParams,read,
+        admitPackets,setup,builder,image,os,command.scratch(),auxiliary,
+        command.backing().auxiliary().retention(),qualify,executable,cscInvoke,
+        setupInvoke,buildInvoke,writebackInvoke);
+    return consumer(frame);
+}
+
 // One borrowed-OS resource lifetime. The renderer must close every such scope
 // before retiring RenderHal/OS. Member order guarantees resource destruction
 // while its backend still exists; close is terminal and idempotent.

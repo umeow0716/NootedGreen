@@ -1583,11 +1583,31 @@ static void testTrackedCpuOwner() {
             bool expectRewind=true;
             bool fullPackets=false;
             bool requestKernel=false;
+            bool foreignCommandPackets=false;
+            TglOwnedVeboxStateStorage foreignCommandState{};
             auto makeActualConsumer=[&](TglOwnedVeboxFrameRetention& retained) noexcept {
-                return tglMakeImageBoundVeboxNativeFrameConsumer<AuxiliaryResolve,
-                AuxiliaryScope,AuxiliaryScope,AuxiliaryScope,FormatRead>(sourceLease,
-                child,execution,0,noRead,noPackets,nativeSetup,nativeBuilder,
-                nativeImage,nativeOs,scratch,&state,retained,qualify,executable,cscInvoke,
+                return [&,retainedPtr=&retained](auto& packetFrame) noexcept {
+                // Fixture command owner: exercise the production packet entry
+                // with the existing qualified CSC/setup/builder argument tests.
+                struct Command {
+                    TglOwnedVeboxBuilderScratch& bytes;TglOwnedVeboxFrameRetention& pending;
+                    TglOwnedVeboxPacketLeases& packets;
+                    TglOwnedVeboxStateStorage* foreign;
+                    auto& scratch() noexcept {return bytes;}
+                    auto& backing() noexcept {return *this;}
+                    auto& auxiliary() noexcept {return *this;}
+                    auto& retention() noexcept {return pending;}
+                    auto packetLeases(uintptr_t,uintptr_t,uintptr_t,uintptr_t,
+                        TglOwnedSurfaceStorage&,TglOwnedSurfaceStorage*) noexcept {
+                        return TglOwnedVeboxPacketLeases{packets.child,packets.execution,packets.renderHal,
+                            packets.sku,packets.source,packets.target,packets.surfaces,
+                            foreign?*foreign:packets.state,packets.diIecp};
+                    }
+                } command{scratch,*retainedPtr,leases,foreignCommandPackets?&foreignCommandState:nullptr};
+                return tglRunImageBoundVeboxPacketFrame<AuxiliaryResolve,
+                AuxiliaryScope,AuxiliaryScope,AuxiliaryScope,FormatRead>(packetFrame,sourceLease,
+                child,execution,command,0,noRead,noPackets,nativeSetup,nativeBuilder,
+                nativeImage,nativeOs,&state,qualify,executable,cscInvoke,
                 [&](uintptr_t,void*,void*,void*,void*,int32_t* remaining) noexcept -> int {
                     ++nativeSetups;*remaining=128;
                     const uintptr_t base=0x1000,cursor=0x1020;
@@ -1627,8 +1647,15 @@ static void testTrackedCpuOwner() {
                     else assert(cursor==0x1020 && offset==32 && left==96);
                     ++nativeWritebacks;
                 });
+                };
             };
             auto actualConsumer=makeActualConsumer(actualRetention);
+            foreignCommandPackets=true;
+            const auto setupsBeforeForeign=nativeSetups,buildsBeforeForeign=nativeBuilds;
+            const auto foreignCommand=actualConsumer(actualFrame);
+            assert(foreignCommand.status==5 && !foreignCommand.acquired && !actualRetention());
+            assert(nativeSetups==setupsBeforeForeign && nativeBuilds==buildsBeforeForeign);
+            foreignCommandPackets=false;
             const auto stale=actualConsumer(actualFrame);
             assert(stale.status==5 && stale.builderStatus==5 && stale.acquired && stale.writtenBack);
             assert(actualRetention() && !registrations);
