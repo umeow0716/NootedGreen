@@ -12872,6 +12872,12 @@ int main() {
                 Lifetime staleLifetime(owner),lifetime(owner);
                 const auto previousGeneration=owner.allocationGeneration();
                 void* lifecycleChild=owner.constructedBase();
+                unsigned generationAllocationCalls=0;
+                auto generationAllocate=[&](void* child) noexcept -> int {
+                    assert(child==lifecycleChild);++generationAllocationCalls;return 0;
+                };
+                using GenerationAllocation=TglOwnedVeboxAllocationContext<decltype(owner),decltype(generationAllocate)>;
+                GenerationAllocation staleAllocation(owner,generationAllocate,lifecycleChild);
                 using LifetimeScope=TglOwnedVeboxScopedContext<Lifetime>;
                 struct LifetimeResolve {
                     Lifetime* operator()(void* child) const noexcept {return LifetimeScope::get(child);}
@@ -12889,7 +12895,8 @@ int main() {
                 assert(!tglBindOwnedVeboxLifetimeHooks<LifetimeResolve>(lifecycleChild,hooks));
                 bool readable=false;
                 auto tableRead=[&](uintptr_t address,void* out,size_t size) noexcept {
-                    owner.reset();assert(cpu.live && !eventCount); // admission reentry is inert
+                    const auto beforeEvents=eventCount;
+                    owner.reset();assert(cpu.live && eventCount==beforeEvents); // admission reentry is inert
                     if(!readable) return false;
                     if(address==base+0x757c88 && size==16) {
                         const std::array<uintptr_t,2> metadata{0,base+0x757ed0};
@@ -13009,6 +13016,7 @@ int main() {
                 assert(owner.installPrivateVtableWithQueries<DeniedFormatRead>(
                     unbound,tableRead,qualify,executable));
                 assert(owner.withPrivateChild([&](void* child) noexcept {
+                    assert(staleAllocation.owns(child) && staleAllocation.allocate()==0);
                     uintptr_t table=0,destroyEntry=0,deleteEntry=0;
                     std::memcpy(&table,child,8);
                     std::memcpy(&destroyEntry,reinterpret_cast<const void*>(table),8);
@@ -13555,6 +13563,19 @@ int main() {
                 assert(!staleLifetime.owns(lifecycleChild));
                 staleLifetime.destroy(true);
                 assert(staleLifetime.status()==5 && cpu.live && eventCount==4);
+                // Reinstall a CPU-only table so rejection cannot be explained
+                // by a missing table/lease. No stale lifecycle entry is called.
+                assert(owner.installPrivateVtableWithQueries<DeniedFormatRead>(
+                    unbound,tableRead,qualify,executable));
+                GenerationAllocation currentAllocation(owner,generationAllocate,lifecycleChild);
+                assert(owner.withPrivateChild([&](void* child) noexcept {
+                    assert(owner.hasPrivateChildLease(reinterpret_cast<uintptr_t>(child)));
+                    assert(!staleAllocation.owns(child) && staleAllocation.allocate()==5);
+                    assert(generationAllocationCalls==1);
+                    assert(currentAllocation.owns(child) && currentAllocation.allocate()==0);
+                    return 0;
+                })==0);
+                assert(generationAllocationCalls==2);
                 owner.reset();assert(!cpu.live && eventCount==8);
                 assert((std::array<unsigned,4>{events[4],events[5],events[6],events[7]}==
                     std::array<unsigned,4>{1,2,3,4}));
