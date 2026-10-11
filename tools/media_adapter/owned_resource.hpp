@@ -6398,6 +6398,21 @@ struct TglVeboxHistoryState {
     uint32_t mode=0,previous1b78=0,previous1b7c=0,radius=0,field1b5c=0;
     uint8_t enabled=0,disabled=0,alternate=0;
 };
+// Exact mode0 sample publication12c1e2..12c266, separate from180/history
+// mode selection. allocated means +58 actually returned success, not merely
+// an allocation decision. previousId is an owned, leased snapshot, never a
+// native linked surface pointer. Preserve the native partial side effect:
+// missing required previous returns5 AFTER updating current when allocated.
+inline int tglPublishVeboxMode0SampleIds(TglVeboxHistoryState& state,bool allocated,
+    uint32_t currentId,uint8_t report08,uint8_t report09,uint32_t pipe,
+    const uint32_t* previousId) noexcept {
+    if(allocated) state.previous1b78=currentId;
+    if(report08&1) {
+        if(!previousId) return 5;
+        state.previous1b7c=*previousId;
+    } else if(!(report09&1) || pipe!=1) state.previous1b7c=UINT32_MAX;
+    return 0;
+}
 struct TglVeboxHistoryFrame {
     uint32_t id=0,countB4=0,countB8=0;
     const uint32_t* linkedC0=nullptr;

@@ -2712,6 +2712,19 @@ static bool executionReleaseFixture(uintptr_t base,uintptr_t p,void* out,size_t 
     return false;
 }
 static void testVeboxRenderBinding() {
+    for(bool allocated : {false,true}) for(uint8_t report08 : {uint8_t(0xfe),uint8_t(0xff)})
+      for(uint8_t report09 : {uint8_t(0xfe),uint8_t(0xff)})
+        for(uint32_t pipe : {0u,1u,0x10001u}) for(bool present : {false,true}) {
+            TglVeboxHistoryState state;state.previous1b78=11;state.previous1b7c=22;
+            const uint32_t previous=44;
+            const int result=tglPublishVeboxMode0SampleIds(state,allocated,33,report08,report09,
+                pipe,present?&previous:nullptr);
+            assert(result==((report08&1) && !present ? 5 : 0));
+            assert(state.previous1b78==(allocated?33u:11u));
+            const uint32_t expected=(report08&1) ? (present?44u:22u) :
+                ((report09&1) && pipe==1 ? 22u : UINT32_MAX);
+            assert(state.previous1b7c==expected && !state.mode && !state.radius && !state.field1b5c);
+        }
     {
         TestFeatureSurfaceOwner current;current.busy=true;
         struct Previous {
