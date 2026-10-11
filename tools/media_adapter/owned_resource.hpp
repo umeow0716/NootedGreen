@@ -4786,6 +4786,27 @@ int tglWithOwnedFfdiPreparation(Owner& source,uint32_t format,uint32_t tile,
     return leased?result:5;
 }
 
+// Keep allocation and its post-success metadata consumer under the source
+// lease. Allocate must implement the request kind; success alone is not proof
+// of GPU backing. The consumer owns publication/retirement, not this scope.
+template<class Owner,class Allocate,class Use>
+int tglWithAllocatedOwnedFfdiPreparation(Owner& source,uint32_t format,uint32_t tile,
+    TglOwnedFfdiCompressionSelection compression,TglOwnedFfdiMetadataQuery query,
+    uint8_t execution13,uint8_t execution14,Allocate allocate,Use use) noexcept {
+    static_assert(noexcept(allocate(std::declval<const TglOwnedFfdiAllocationRequest&>(),
+        std::declval<bool&>())),"FFDI allocation ABI");
+    static_assert(noexcept(use(std::declval<const TglOwnedSurfaceStorage&>(),
+        std::declval<const TglOwnedSurfaceStorage&>(),uint8_t{},uint8_t{})),"FFDI publication ABI");
+    return tglWithOwnedFfdiPreparation(source,format,tile,compression,query,
+        [&](const auto& sourceView,const auto& metadata,const auto& request) noexcept {
+            bool changed=false;
+            const int result=allocate(request,changed);
+            if(result!=0) return result;
+            tglUpdateOwnedFfdiExecutionCompression(changed,compression,execution13,execution14);
+            return use(sourceView,metadata,execution13,execution14);
+        });
+}
+
 // Exact ICL classifier4a500 and its 90-entry relative jump table4a55c.
 // 3 is the native OTHER color pack, not an invalid format admission result.
 inline uint32_t tglOwnedChromaColorPack(uint32_t format) noexcept {

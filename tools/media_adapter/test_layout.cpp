@@ -5265,6 +5265,23 @@ static void testNativeResourceBoundary() {
                     return -17;
                 })==-17 && preparedFfdi==1);
             assert(owner.surface()==surface);
+            for(int allocationResult:{0,77}) for(bool changed:{false,true}) {
+                unsigned allocations=0,publications=0;
+                const int result=tglWithAllocatedOwnedFfdiPreparation(owner,0x19,1,
+                    {true,1},{8,3},0xa5,0x5a,
+                    [&](const auto& request,bool& didChange) noexcept {
+                        ++allocations;assert(request.kind==TglOwnedFfdiAllocationKind::DescriptorOnly);
+                        owner.reset();assert(owner.ensure(key)==5);
+                        didChange=changed;return allocationResult;
+                    },[&](const auto& view,const auto& metadata,uint8_t flag,uint8_t mode) noexcept {
+                        ++publications;assert(allocations==1 && &view==surface);
+                        assert(!tglNativeBackingPresent(metadata.resource));
+                        assert(flag==(changed?1:0xa5) && mode==(changed?1:0x5a));
+                        owner.reset();assert(owner.ensure(key)==5);return -17;
+                    });
+                assert(result==(allocationResult?allocationResult:-17));
+                assert(allocations==1 && publications==(allocationResult?0u:1u));
+            }
             bool caught=false;
             try {
                 owner.withPeerSurface(destination,[](const auto&,const auto&){throw 31;});
