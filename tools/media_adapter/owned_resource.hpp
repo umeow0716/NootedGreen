@@ -16421,8 +16421,21 @@ public:
     auto& backing() noexcept {return backing_;}
     auto& children() noexcept {return children_;}
     bool surfacesReady() const noexcept {return source_.storage() && target_.storage();}
-    bool allocateParameters(size_t bytes) noexcept {
-        return surfacesReady() && !backing_.retention()() && parameters_.allocate(bytes);
+    // Scalar-only request (no nested request38 payload). Publish through the
+    // existing native-release slot only after this exact tracked allocation
+    // has been initialized; do not infer layout from an arbitrary byte count.
+    bool initializeScalarParameters(const TglNativeDnScalarRequest& request) noexcept {
+        if(!surfacesReady() || backing_.retention()() ||
+            !parameters_.allocate(sizeof(TglOwnedDnParameterStorage))) return false;
+        const auto candidate=tglProduceOwnedDnScalarParameters(request);
+        bool initialized=false;
+        const bool entered=parameters_.withBorrowedAddress([&](uintptr_t address,size_t extent) noexcept {
+            if(extent!=sizeof(candidate) || address>UINTPTR_MAX-sizeof(candidate)) return;
+            std::memcpy(reinterpret_cast<void*>(address),candidate.bytes.data(),sizeof(candidate));
+            initialized=true;
+        });
+        if(!entered || !initialized) {parameters_.reset();return false;}
+        return true;
     }
     // Runtime-facing frame entry: select an owned child, then keep its private
     // table/SFC owner leased through frontend borrowing and retention capture.

@@ -16769,7 +16769,11 @@ int main() {
                             std::array<TrackedSfc,2>{TrackedSfc{pairInvoke,pairEvents,pairEventCount},TrackedSfc{pairInvoke,pairEvents,pairEventCount}},
                             std::array<decltype(pairDestroy),2>{pairDestroy,pairDestroy});
                         const auto r=frames.run(ticket,[&](auto& frame) noexcept {
-                            assert(frame.surfacesReady() && frame.allocateParameters(64));
+                            TglNativeDnScalarRequest dnRequest;
+                            dnRequest.mode=0;dnRequest.word24=1;
+                            dnRequest.word28=11;dnRequest.word2c=13;
+                            assert(frame.surfacesReady() && frame.initializeScalarParameters(dnRequest));
+                            assert(!frame.initializeScalarParameters(dnRequest));
                             auto constructFrontend=[&](uintptr_t entry,void* object,void* nativeOs,void*,void*,
                                 void*,void*,void*,const void*,int32_t* out) noexcept {
                                 assert(entry==base+0x12d4e0 && nativeOs==reinterpret_cast<void*>(os));
@@ -16854,6 +16858,10 @@ int main() {
                                     void* vp,auto& graph,auto& lines,
                                     auto& sourceLease,auto& targetLease,auto& dn,auto& packets) noexcept {
                                     assert(graph.ownsStorage(vp));(void)lines;
+                                    assert(dn.size()==sizeof(TglOwnedDnParameterStorage));
+                                    const auto expectedDn=tglProduceOwnedDnScalarParameters(dnRequest);
+                                    assert(std::memcmp(reinterpret_cast<const void*>(dn.get()),
+                                        expectedDn.bytes.data(),expectedDn.bytes.size())==0);
                                     uintptr_t borrowedVp=0;
                                     std::memcpy(&borrowedVp,static_cast<uint8_t*>(child)+0x80,8);
                                     assert(borrowedVp==reinterpret_cast<uintptr_t>(vp));
@@ -16866,7 +16874,8 @@ int main() {
                                         });
                                     assert(reentry.status==5 && !reentry.acquired);
                                     assert(sourceLease.hasSurfaceLease(source) && targetLease.hasSurfaceLease(target));
-                                    assert(&packets.source==&source && packets.target==&target && dn.size()==64);
+                                    assert(&packets.source==&source && packets.target==&target &&
+                                        dn.size()==sizeof(TglOwnedDnParameterStorage));
                                     assert(ho.borrowed && frame.backing().vpBound());
                                     // CPU command-acquisition fixture, but use the actual
                                     // aggregate's captured child/source and transaction gates
