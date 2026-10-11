@@ -7028,6 +7028,13 @@ static void testNativeResourceBoundary() {
                                                 ++static_cast<FrameStatisticsFixture*>(context)->allocations;
                                                 uint32_t bytes=0;std::memcpy(&bytes,static_cast<const uint8_t*>(params)+0x14,4);
                                                 auto* storage=static_cast<uint8_t*>(output);
+                                                uint32_t type=0;std::memcpy(&type,params,4);
+                                                if(type==1) {
+                                                    const uint32_t format=0x3d;const uintptr_t handle=1;
+                                                    std::memcpy(storage+0x14,&type,4);
+                                                    std::memcpy(storage+0x18,&format,4);
+                                                    std::memcpy(storage+0x58,&handle,8);return 0;
+                                                }
                                                 const uintptr_t token=7,mapping=0x4000;
                                                 std::memcpy(storage+0x10,&bytes,4);std::memcpy(storage+0x20,&token,8);
                                                 std::memcpy(storage+0x50,&mapping,8);return 0;
@@ -7055,6 +7062,48 @@ static void testNativeResourceBoundary() {
                                             ownedFrame.auxiliary().retention().observe(
                                                 TglOwnedVeboxCommandTransactionResult{31,31,true,false});
                                             auto deniedStage=[](auto&&...) noexcept -> int {assert(false);return 5;};
+                                            {
+                                                FrameStatisticsFixture nativeFixture;
+                                                TglNativeResourceBinding nativeBinding{
+                                                    reinterpret_cast<uintptr_t>(&nativeFixture),
+                                                    reinterpret_cast<uintptr_t>(FrameStatisticsFixture::allocate),
+                                                    reinterpret_cast<uintptr_t>(FrameStatisticsFixture::release)};
+                                                TglNativeBufferFillBinding nativeFill{
+                                                    reinterpret_cast<uintptr_t>(&nativeFixture),
+                                                    reinterpret_cast<uintptr_t>(FrameStatisticsFixture::fill)};
+                                                {
+                                                TglNativeVeboxSurfaceFrameStorage<FrameStmmApi> nativeFrame(nativeBinding,4096,nativeFill);
+                                                std::array<uintptr_t,2> savedBindings{};
+                                                std::memcpy(&savedBindings[0],child.data()+0xba8,8);
+                                                std::memcpy(&savedBindings[1],child.data()+0x1b8,8);
+                                                const auto prior=reinterpret_cast<uintptr_t>(nativeFrame.ffdnBacked()[0]->surfaceBinding());
+                                                const auto history=reinterpret_cast<uintptr_t>(nativeFrame.history().surfaceBinding());
+                                                std::memcpy(child.data()+0xba8,&prior,8);
+                                                std::memcpy(child.data()+0x1b8,&history,8);
+                                                unsigned finalUses=0,unwinds=0;
+                                                const int status=tglRunNativeVeboxAllocationFrame(nativeFrame,linkedInput,
+                                                    static_cast<decltype(&linkedInput)>(nullptr),
+                                                    static_cast<decltype(&linkedInput)>(nullptr),&previous,
+                                                    childOwner,reportOwner,actualChild,report,current,read,
+                                                    noSfc,noSfc,noParameter,[](uint32_t) noexcept {return true;},
+                                                    deniedStage,false,false,
+                                                    [](uintptr_t address,uint32_t bytes) noexcept {return address==0x4000 && bytes>0;},
+                                                    [&](void*,uintptr_t,const auto&,const auto& ffdi,const auto& ffdn,
+                                                        const auto& stmm,const auto& resource,const auto& layout,const auto& shell) noexcept -> int {
+                                                        ++finalUses;assert(ffdi.count==2 && ffdn.outputs[0] && ffdn.outputs[1]);
+                                                        assert(!nativeFixture.releases);
+                                                        assert(stmm.surfaces[0] && stmm.surfaces[1]);
+                                                        assert(resource[0x48]==1 && layout.bytes && &shell.resource==&resource);
+                                                        assert(!ffdn.history || ffdn.history==nativeFrame.history().surfaceBinding());
+                                                        return 0; // synchronous allocation only, no command/GPU
+                                                    },[&](void*,uintptr_t,const auto&) noexcept {++unwinds;});
+                                                std::memcpy(child.data()+0xba8,&savedBindings[0],8);
+                                                std::memcpy(child.data()+0x1b8,&savedBindings[1],8);
+                                                assert(status==0 && finalUses==1 && !unwinds && nativeFixture.fills==1);
+                                                assert(!nativeFixture.releases);
+                                                }
+                                                assert(nativeFixture.allocations && nativeFixture.releases==nativeFixture.allocations);
+                                            }
                                             assert(tglRunNativeVeboxAllocationFrame(ownedFrame,linkedInput,
                                                 static_cast<decltype(&linkedInput)>(nullptr),
                                                 static_cast<decltype(&linkedInput)>(nullptr),&previous,
