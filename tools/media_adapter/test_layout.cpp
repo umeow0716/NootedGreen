@@ -5259,6 +5259,20 @@ static void testNativeResourceBoundary() {
                         assert(owner.ensure(key)==5 && destination.ensure(key)==5);
                         assert(!owner.surface() && !destination.surface());
                         assert(fixture.allocations==allocations && fixture.releases==releases);
+                        TglOwnedSurfaceStorage dnMetadata;unsigned borrowedCalls=0;
+                        assert(owner.withBorrowedDenoiseMetadata(s,parameters,dnMetadata,
+                            [&](const auto& sourceView,const auto& metadataView) noexcept {
+                                ++borrowedCalls;uintptr_t a=0,b=0;
+                                std::memcpy(&a,sourceView.prefix.data()+0x90,8);
+                                std::memcpy(&b,metadataView.prefix.data()+0x90,8);
+                                assert(a==parameters.get() && b==a && &sourceView==&s);
+                                owner.reset();parameters.reset();assert(owner.ensure(key)==5 && parameters.get()==a);
+                                assert(!owner.withNativeDenoiseParameters(s,parameters,[]() noexcept {assert(false);}));
+                            }));
+                        uintptr_t sourceDn=1,metadataDn=1;
+                        std::memcpy(&sourceDn,s.prefix.data()+0x90,8);
+                        std::memcpy(&metadataDn,dnMetadata.prefix.data()+0x90,8);
+                        assert(!sourceDn && !metadataDn && borrowedCalls==1 && parameterBackend.live==1);
                         assert(!destination.withNativeDenoiseParameters(s,parameters,[&]() noexcept {++parameterCalls;}));
                         assert(owner.withNativeDenoiseParameters(s,parameters,[&]() noexcept {
                             ++parameterCalls;uintptr_t p=0;

@@ -4773,6 +4773,35 @@ public:
            !capture_.backed(surface_.resource)) return false;
         return parameters.withNativeReleaseSlot(surface_.prefix.data()+0x90,use);
     }
+    // Synchronous non-consuming FFDN90 publication from the actual parameter
+    // owner. Both source and CPU metadata are detached before its lease ends.
+    // Not valid for native160 (which can consume/free DN parameters), nor GPU
+    // work retaining either pointer after this callback.
+    template<class Parameters,class Use>
+    bool withBorrowedDenoiseMetadata(const TglOwnedSurfaceStorage& expected,
+        Parameters& parameters,TglOwnedSurfaceStorage& metadata,Use use) noexcept {
+        static_assert(noexcept(use(expected,static_cast<const TglOwnedSurfaceStorage&>(metadata))) &&
+            std::is_same_v<decltype(use(expected,static_cast<const TglOwnedSurfaceStorage&>(metadata))),void>,
+            "borrowed DN metadata ABI");
+        if(!ready_ || !busy_ || &expected!=&surface_ || &metadata==&surface_ ||
+           !capture_.backed(surface_.resource)) return false;
+        uintptr_t sourcePointer=0,targetPointer=0;
+        std::memcpy(&sourcePointer,surface_.prefix.data()+0x90,8);
+        std::memcpy(&targetPointer,metadata.prefix.data()+0x90,8);
+        if(sourcePointer || targetPointer) return false;
+        bool consumed=false;
+        const bool leased=parameters.withBorrowedAddress([&](uintptr_t pointer,size_t extent) noexcept {
+            if(extent<8) return;
+            auto* sourceSlot=surface_.prefix.data()+0x90;
+            auto* targetSlot=metadata.prefix.data()+0x90;
+            struct Restore {uint8_t* source;uint8_t* target;
+                ~Restore(){std::memset(source,0,8);std::memset(target,0,8);}} restore{sourceSlot,targetSlot};
+            std::memcpy(sourceSlot,&pointer,8);std::memcpy(targetSlot,&pointer,8);
+            use(expected,static_cast<const TglOwnedSurfaceStorage&>(metadata));
+            consumed=true;
+        });
+        return leased && consumed;
+    }
     // Fast-fill recheck must observe the actual leased target, not a detached
     // rectangle copy. Only its proven +4c bottom is borrowed; retain every
     // resource token and restore original bytes before releasing the frame.
