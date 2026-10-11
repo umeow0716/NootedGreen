@@ -625,6 +625,24 @@ static void testTrackedCpuOwner() {
         TglExecutionOwner owner(backend);assert(!owner.ensure());
         const auto address=owner.get();
         auto denied=[](auto&) noexcept {assert(false);return 0;};
+        {
+            const auto before=backend.bytes;
+            assert(tglPublishLeasedVeboxMode0Prelude(owner,address,77,UINT32_MAX)==5 && backend.bytes==before);
+            assert(owner.withExecution([&](uintptr_t actual) noexcept {
+                assert(tglPublishLeasedVeboxMode0Prelude(owner,actual+1,77,0)==5 && backend.bytes==before);
+                for(uint32_t index : {0u,1u,2u,UINT32_MAX}) {
+                    backend.bytes.fill(0xcc);
+                    assert(!tglPublishLeasedVeboxMode0Prelude(owner,actual,77,index));
+                    auto expected=before;expected.fill(0xcc);
+                    constexpr size_t offsets[]={0x28,0x1c,0x20,0x2c,0x30};
+                    const uint32_t values[]={77,0,1,index&1,(index+1)&1};
+                    for(size_t i=0;i<5;++i) std::memcpy(expected.data()+offsets[i],&values[i],4);
+                    assert(backend.bytes==expected);
+                }
+                return 0;
+            })==0);
+            backend.bytes=before;
+        }
         assert(owner.withLeasedAdmissionBytes(address,denied)==5);
         assert(owner.initializeLeasedAdmission(address)==5 && backend.initializes==1);
         assert(owner.withExecution([&](uintptr_t actual) noexcept {

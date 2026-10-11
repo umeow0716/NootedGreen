@@ -2392,6 +2392,22 @@ inline uint32_t tglOwnedDnStrength(float value) noexcept {
     const uint32_t low=static_cast<uint32_t>(static_cast<int64_t>(d));
     return low>64 ? 64 : low;
 }
+// Mode0 report prelude12c0c2..12c120. Inputs are snapshots of owned child
+// fields1b58/1b60 under its lease. This does not advance the child history,
+// allocate resources, reset admission or certify a reusable GPU submission.
+template<class ExecutionOwner>
+int tglPublishLeasedVeboxMode0Prelude(ExecutionOwner& owner,uintptr_t expected,
+    uint32_t child1b58,uint32_t child1b60) noexcept {
+    return owner.withLeasedAdmissionBytes(expected,[&](auto& view) noexcept {
+        static_assert(TglAdmissionExecutionExtent<std::decay_t<decltype(view)>>::value>=0x34,
+            "mode0 report prelude extent");
+        constexpr std::array<size_t,5> offsets{0x28,0x1c,0x20,0x2c,0x30};
+        const std::array<uint32_t,5> values{child1b58,0,1,child1b60&1,(child1b60+1)&1};
+        for(size_t i=0;i<offsets.size();++i) std::memcpy(view.data()+offsets[i],&values[i],4);
+        return 0;
+    });
+}
+
 // CPU publication under the native execution lifetime lease. Commit must be
 // the serialized allocation owner's all-or-nothing write of this f0 extent;
 // a generic mach_vm_write with potentially partial failure is NOT sufficient.
