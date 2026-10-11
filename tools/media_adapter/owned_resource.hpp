@@ -7571,7 +7571,9 @@ int tglSetupOwnedVpLeasedFrame(TglOwnedVpSfcCallerStorage& storage,
 }
 // Exact ICL base/Gen12 SFC +c0 slot is 1df3c0: a single DWORD zero
 // at packet+4, not a no-op and not a GPU command producer.
-inline void tglPrepareOwnedSfcPlatformField(std::array<uint8_t,0xb8>& packet) noexcept {
+template<size_t PacketBytes>
+inline void tglPrepareOwnedSfcPlatformField(std::array<uint8_t,PacketBytes>& packet) noexcept {
+    static_assert(PacketBytes>=0xb8,"platform packet requires complete native prefix");
     const uint32_t zero=0;
     std::memcpy(packet.data()+4,&zero,4);
 }
@@ -7580,19 +7582,23 @@ inline void tglPrepareOwnedSfcPlatformField(std::array<uint8_t,0xb8>& packet) no
 // the VP/frame scope; status must be checked before later command emission.
 class TglOwnedVpPlatformPacketContext {
     TglOwnedVpSfcCallerStorage& storage_;
-    std::array<uint8_t,0xb8>& packet_;
+    uint8_t* const packet_;
     bool applied_=false;
     int error_=0;
 public:
+    template<size_t PacketBytes>
     TglOwnedVpPlatformPacketContext(TglOwnedVpSfcCallerStorage& storage,
-        std::array<uint8_t,0xb8>& packet) noexcept :storage_(storage),packet_(packet) {}
+        std::array<uint8_t,PacketBytes>& packet) noexcept :storage_(storage),packet_(packet.data()) {
+        static_assert(PacketBytes>=0xb8,"platform packet requires complete native prefix");
+    }
     TglOwnedVpPlatformPacketContext(const TglOwnedVpPlatformPacketContext&)=delete;
     TglOwnedVpPlatformPacketContext& operator=(const TglOwnedVpPlatformPacketContext&)=delete;
     bool owns(void* child) const noexcept {return child==storage_.bytes.data();}
     void produce(void* packet) noexcept {
         if(error_) return;
-        if(packet!=packet_.data()) {error_=5;return;}
-        tglPrepareOwnedSfcPlatformField(packet_);applied_=true;
+        if(packet!=packet_) {error_=5;return;}
+        const uint32_t zero=0;
+        std::memcpy(packet_+4,&zero,4);applied_=true;
     }
     int status() const noexcept {return error_ ? error_ : applied_ ? 0 : 5;}
 };

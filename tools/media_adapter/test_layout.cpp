@@ -10572,6 +10572,19 @@ int main() {
             assert(compressionEntries.compression==&Callback::compression &&
                 compressionEntries.missingMask()==(0x7ffffffU&~(1U<<26)));
             assert(!tglBindOwnedVpCompressionEntry<CompressionResolve>(vp.bytes.data(),compressionEntries));
+            TglOwnedVpPlatformPacketContext platformContext(vp,packet);
+            using PlatformResolve=TglOwnedVpSfcResolve<TglOwnedVpPlatformPacketContext>;
+            TglOwnedVpSfcScopedContext<TglOwnedVpPlatformPacketContext> platformScope(vp.bytes.data(),platformContext);
+            assert(platformScope.bound());
+            assert(tglBindOwnedVpPlatformAdmissionEntries<PlatformResolve>(vp.bytes.data(),compressionEntries));
+            assert(tglBindOwnedVpPlatformPacketEntry<PlatformResolve>(vp.bytes.data(),compressionEntries));
+            assert(compressionEntries.missingMask()==(0x7ffffffU&~((1U<<21)|(1U<<24)|(1U<<25)|(1U<<26))));
+            const auto beforePlatform=packet;
+            compressionEntries.platformPacket(vp.bytes.data(),nullptr,packet.data());
+            assert(platformContext.status()==0);
+            for(size_t i=0;i<packet.size();++i)
+                assert(packet[i]==((i>=4 && i<8)?0:beforePlatform[i]));
+            reentry.expected=packet;
             reentryContext=&reentry;
             reenter=[](void* raw) noexcept {
                 auto& value=*static_cast<Reentry*>(raw);
