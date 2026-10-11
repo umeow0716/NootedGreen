@@ -10387,6 +10387,35 @@ bool tglReadOwnedBuilderDiArgument(bool& output,uintptr_t child,
         !read(execution+0x13,&flags,1)) return false;
     output=(flags&1)!=0;return true;
 }
+// ICL1f77c0 IsDNOnly reads report0b/13 and base d0/c8. The owned TGL
+// table preserves d0=71e80 (false) and c8=12eaf0 (report0f bit0).
+// Resolve the report through the held child, not an ICL primary-vtable slot.
+template<class Read>
+bool tglReadOwnedDnOnly(bool& output,uintptr_t child,uintptr_t execution,Read read) {
+    if(!child || child>UINTPTR_MAX-0x8f || !execution || execution>UINTPTR_MAX-0x13)
+        return false;
+    uintptr_t actual=0;std::array<uint8_t,9> flags{};
+    if(!read(child+0x88,&actual,8) || actual!=execution ||
+        !read(execution+0xb,flags.data(),flags.size())) return false;
+    output=(flags[0]&1) && !(flags[8]&1) && !(flags[4]&1);
+    return true;
+}
+// Connect the real report policy to the existing compression selector. The
+// caller still holds source/child/report leases and qualifies native backing.
+template<class Read,class Supports>
+bool tglSelectOwnedFfdiCompressionFromReport(TglOwnedFfdiCompressionSelection& output,
+    const TglOwnedSurfaceStorage& source,uintptr_t child,uintptr_t execution,
+    bool child1ba9,uint32_t format,uint32_t tile,Read read,Supports supports) noexcept {
+    static_assert(noexcept(read(uintptr_t{},static_cast<void*>(nullptr),size_t{})),
+        "allocation report reader must not throw");
+    bool followSource=false;
+    if(!tglReadOwnedDnOnly(followSource,child,execution,read)) return false;
+    constexpr size_t base=offsetof(TglOwnedSurfaceStorage,resource);
+    output=tglSelectOwnedFfdiCompression(followSource,
+        (source.resource[0x299-base]&1)!=0,(source.resource[0x29a-base]&1)!=0,
+        child1ba9,format,tile,supports);
+    return true;
+}
 template<class Read>
 bool tglReadOwnedStateExecution(TglOwnedStateInputs& output, uintptr_t execution,
                                 bool diArgument, Read read) {

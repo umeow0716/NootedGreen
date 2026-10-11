@@ -15551,6 +15551,33 @@ int main() {
             assert(!tglReadOwnedBuilderDiArgument(argument,0,address,childRead));
             assert(!tglReadOwnedBuilderDiArgument(argument,UINTPTR_MAX,address,childRead));
             assert(!tglReadOwnedBuilderDiArgument(argument,child,UINTPTR_MAX,childRead));
+            linked=address;
+            auto allocationRead=[&](uintptr_t p,void* out,size_t n) noexcept {
+                return childRead(p,out,n);
+            };
+            auto supports=[](uint32_t format) noexcept {return format==0x19;};
+            constexpr size_t base=offsetof(TglOwnedSurfaceStorage,resource);
+            source.resource[0x299-base]=1;source.resource[0x29a-base]=0;
+            for(unsigned mask=0;mask<8;++mask) {
+                execution[0xb]=uint8_t(0x80|(mask&1));
+                execution[0x13]=uint8_t(0x80|((mask>>1)&1));
+                execution[0xf]=uint8_t(0x80|((mask>>2)&1));
+                bool dnOnly=false;
+                assert(tglReadOwnedDnOnly(dnOnly,child,address,allocationRead));
+                assert(dnOnly==(mask==1));
+                TglOwnedFfdiCompressionSelection selection{};
+                assert(tglSelectOwnedFfdiCompressionFromReport(selection,source,child,address,
+                    true,0x19,1,allocationRead,supports));
+                assert(selection.compressed && selection.mode==(dnOnly?0u:1u));
+            }
+            bool dnOnly=true;linked=address+1;
+            assert(!tglReadOwnedDnOnly(dnOnly,child,address,allocationRead) && dnOnly);
+            TglOwnedFfdiCompressionSelection preserved{true,7};
+            assert(!tglSelectOwnedFfdiCompressionFromReport(preserved,source,child,address,
+                true,0x19,1,allocationRead,supports));
+            assert(preserved.compressed && preserved.mode==7);
+            linked=address;
+            execution[0xb]=0x81;execution[0x13]=2;execution[0xf]=1;
         }
         assert(tglReadOwnedStateExecution(inputs,address,true,read));
         assert(inputs.pipe==2 && inputs.di && inputs.referenceValid && inputs.dn);
