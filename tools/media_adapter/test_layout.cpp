@@ -16409,8 +16409,43 @@ int main() {
                                     });
                                 assert(!denied.acquired && !frame.backing().retention()());
                             }
-                            return frame.withNativeCommandFrame(roles,0,0,reinterpret_cast<uintptr_t>(pairCpu[0].bytes.data()),
-                                0x1100,0x2200,0x3300,[&](auto& sourceLease,auto& targetLease,auto& dn,auto& packets) noexcept {
+                            std::array<uintptr_t,TglOwnedVeboxVtable::count> nativeTable{};
+                            for(size_t i=0;i<nativeTable.size();++i) nativeTable[i]=base+0x2000+i*8;
+                            for(auto offset:TglOwnedVeboxVtable::missing) nativeTable[offset/8]=0;
+                            nativeTable[0]=base+0x12e240;nativeTable[1]=base+0x12e250;
+                            nativeTable[0x40/8]=base+0x12e9c0;nativeTable[0x48/8]=base+0x12ea30;
+                            nativeTable[0x170/8]=base+0x12aba0;nativeTable[0x180/8]=base+0x12b1d0;
+                            nativeTable[0x160/8]=base+0x12a740;nativeTable[0x168/8]=base+0x12ab10;
+                            nativeTable[0x150/8]=base+0x12a730;nativeTable[0x158/8]=base+0x8f380;
+                            nativeTable[0xd0/8]=nativeTable[0x1b8/8]=base+0x71e80;
+                            auto tableRead=[&](uintptr_t address,void* dst,size_t bytes) noexcept {
+                                if(address==base+0x757c88 && bytes==16) {
+                                    const std::array<uintptr_t,2> metadata{0,base+0x757ed0};
+                                    std::memcpy(dst,metadata.data(),bytes);return true;
+                                }
+                                if(address==base+0x757c98 && bytes==sizeof(nativeTable)) {
+                                    std::memcpy(dst,nativeTable.data(),bytes);return true;
+                                }
+                                return false;
+                            };
+                            // Hook addresses are nonexecuted CPU fixtures, not a runtime renderer.
+                            std::array<uintptr_t,20> hooks{};
+                            for(size_t i=0;i<hooks.size();++i) hooks[i]=0x3000+i*16;
+                            hooks[15]=reinterpret_cast<uintptr_t>(&tglOwnedVeboxGen12CscSupported);
+                            assert(frame.children().first().owner().installPrivateVtable(hooks,tableRead,
+                                [](uintptr_t image) noexcept {return image==base;},
+                                [](uintptr_t,size_t) noexcept {return true;}));
+                            return frame.withPrivateChildCommandFrame(0,roles,0,0,
+                                0x1100,0x2200,0x3300,[&](auto& leasedOwner,void* child,
+                                    auto& sourceLease,auto& targetLease,auto& dn,auto& packets) noexcept {
+                                    assert(child==pairCpu[0].bytes.data() &&
+                                        leasedOwner.hasPrivateChildLease(reinterpret_cast<uintptr_t>(child)));
+                                    leasedOwner.reset();assert(leasedOwner.constructedBase()==child);
+                                    const auto reentry=frame.withPrivateChildCommandFrame(0,roles,0,0,
+                                        0x1100,0x2200,0x3300,[](auto&,void*,auto&,auto&,auto&,auto&) noexcept {
+                                            assert(false);return TglOwnedVeboxCommandTransactionResult{};
+                                        });
+                                    assert(reentry.status==5 && !reentry.acquired);
                                     assert(sourceLease.hasSurfaceLease(source) && targetLease.hasSurfaceLease(target));
                                     assert(&packets.source==&source && packets.target==&target && dn.size()==64);
                                     assert(ho.borrowed && !frame.backing().vpBound());
