@@ -11215,6 +11215,25 @@ int main() {
                 assert(storage.bytes==saved && calls==9);
                 put(source,0,uint32_t(1));put(source,0x130,uint32_t(0x19));
             }
+            calls=0;
+            TglOwnedVpEntrySet escapedAssembly;
+            assert(tglWithOwnedVpAdmissionEntries(storage,read,
+                [&](void* child,const auto& admission) noexcept {
+                    TglOwnedVpEntrySet base;
+                    assert(tglBindOwnedVpAdmissionEntries(base,admission));
+                    return tglWithOwnedVpModeAssembly(storage,0x1000,0x2000,0x3000,read,base,
+                        [&](void* modeChild,const TglOwnedVpEntrySet& entries) noexcept {
+                            assert(modeChild==child && entries.inputFormat==base.inputFormat);
+                            assert(entries.inputFormat(child,reinterpret_cast<void*>(0x1000)));
+                            entries.sampleMode(child,reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x2000));
+                            entries.formatMode(child,reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x3000));
+                            escapedAssembly=entries;return 0;
+                        });
+                })==0);
+            assert(storage.bytes==saved && calls==10);
+            assert(!escapedAssembly.inputFormat(storage.bytes.data(),reinterpret_cast<void*>(0x1000)));
+            escapedAssembly.sampleMode(storage.bytes.data(),reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x2000));
+            assert(storage.bytes==saved && calls==10);
             for(fail=1;fail<=9;++fail) {
                 calls=0;
                 Context context(storage,0x1000,0x2000,0x3000,read);

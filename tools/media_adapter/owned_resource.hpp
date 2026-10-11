@@ -6814,6 +6814,24 @@ bool tglBindOwnedVpModeEntries(void* child,TglOwnedVpEntrySet& target) noexcept 
     candidate.sampleMode=&Callback::sampleMode;candidate.formatMode=&Callback::formatMode;
     target=candidate;return true;
 }
+// Extend an already leased catalogue without exporting the mode context.
+// The caller retains every base entry's resolver/inputs through Use.
+template<class Read,class Use>
+int tglWithOwnedVpModeAssembly(TglOwnedVpSfcCallerStorage& storage,
+    uintptr_t source,uintptr_t target,uintptr_t settings,Read& read,
+    const TglOwnedVpEntrySet& base,Use use) noexcept {
+    using Context=TglOwnedVpModeContext<Read>;
+    using Resolve=TglOwnedVpSfcResolve<Context>;
+    Context context(storage,source,target,settings,read);
+    void* child=storage.bytes.data();
+    TglOwnedVpSfcScopedContext<Context> scope(child,context);
+    if(!scope.bound()) return 5;
+    auto entries=base;
+    if(!tglBindOwnedVpModeEntries<Resolve>(child,entries)) return 5;
+    static_assert(noexcept(use(child,entries)),"VP mode assembly consumer ABI");
+    const int result=use(child,entries);
+    return result ? result : context.status();
+}
 template<class Resolve> struct TglOwnedVpLifetimeCallbacks;
 template<class Resolve>
 bool tglBindOwnedVpLifetimeEntries(void* child,TglOwnedVpEntrySet& target) noexcept {
