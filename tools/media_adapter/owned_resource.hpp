@@ -9794,6 +9794,18 @@ public:
             return withLeasedModeAssemblyEntries(child,read,lines,retire,source,target,settings,use);
         });
     }
+    template<class Surface,size_t PacketBytes,class Read,class Invoke,class Use>
+    int withLeasedPlatformCompressionAssemblyEntries(void* child,const Surface& output,
+        std::array<uint8_t,PacketBytes>& packet,uintptr_t settings,
+        const TglNativeVpCompressionBinding& binding,Read read,Invoke invoke,
+        const TglOwnedVpEntrySet& base,Use use) noexcept {
+        if(!ready_ || !busy_ || child!=storage_.bytes.data()) return 5;
+        return state_.withPublishedVpParameters(storage_,[&](const uint8_t* state) noexcept {
+            if(state!=packet.data()) return 5;
+            return tglWithOwnedVpPlatformCompressionAssembly(storage_,output,packet,settings,
+                binding,read,invoke,base,use);
+        });
+    }
     // Only the actual currently published state packet may receive VP+a0.
     // The enclosing setup/send owner retains the graph/frame lease; no copy
     // or unrelated packet is admitted as native state938.

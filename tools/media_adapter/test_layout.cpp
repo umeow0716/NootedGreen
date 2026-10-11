@@ -11091,7 +11091,16 @@ int main() {
                                     assert(combined.missingMask()==(entries.missingMask()&~(1U<<20)));
                                     TglNativeVpCompressionBinding compressionBinding;
                                     auto forbiddenNative=[](uintptr_t,uintptr_t,const void*,uint32_t) noexcept {assert(false);};
-                                    assert(tglWithOwnedVpPlatformCompressionAssembly(*storage,output,stateCpu.bytes,
+                                    std::array<uint8_t,0xf8> foreignPacket{};
+                                    const auto foreignBefore=foreignPacket;
+                                    assert(graph.withLeasedPlatformCompressionAssemblyEntries(child,output,foreignPacket,
+                                        0x4000,compressionBinding,read,forbiddenNative,combined,
+                                        [](void*,const auto&) noexcept -> int {assert(false);return 0;})==5);
+                                    assert(foreignPacket==foreignBefore);
+                                    assert(graph.withLeasedPlatformCompressionAssemblyEntries(static_cast<uint8_t*>(child)+8,
+                                        output,stateCpu.bytes,0x4000,compressionBinding,read,forbiddenNative,combined,
+                                        [](void*,const auto&) noexcept -> int {assert(false);return 0;})==5);
+                                    assert(graph.withLeasedPlatformCompressionAssemblyEntries(child,output,stateCpu.bytes,
                                         0x4000,compressionBinding,read,forbiddenNative,combined,
                                         [&](void* packetChild,const auto& packetEntries) noexcept {
                                     assert(packetChild==child && packetEntries.missingMask()==
