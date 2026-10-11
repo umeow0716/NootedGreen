@@ -13,6 +13,22 @@ template<class R,class... Args> struct TestVpPresenceStub<R(*)(Args...) noexcept
     static R invoke(Args...) noexcept {if constexpr(!std::is_void_v<R>) return R{};}
 };
 
+static TglOwnedVpEntrySet testVpPresenceEntries() noexcept {
+    TglOwnedVpEntrySet entries;
+#define NGRN_PRESENCE(field) entries.field=&TestVpPresenceStub<decltype(entries.field)>::invoke;
+    NGRN_PRESENCE(destroy) NGRN_PRESENCE(deletingDestroy) NGRN_PRESENCE(initialize)
+    NGRN_PRESENCE(extent) NGRN_PRESENCE(eligible) NGRN_PRESENCE(prepare)
+    NGRN_PRESENCE(freeResources) NGRN_PRESENCE(pair) NGRN_PRESENCE(setup)
+    NGRN_PRESENCE(send) NGRN_PRESENCE(dimensions) NGRN_PRESENCE(allocate)
+    NGRN_PRESENCE(compressionFormat) NGRN_PRESENCE(finalAdmission)
+    NGRN_PRESENCE(inputFormat) NGRN_PRESENCE(outputFormat)
+    NGRN_PRESENCE(inputAlignment) NGRN_PRESENCE(outputAlignment)
+    NGRN_PRESENCE(state) NGRN_PRESENCE(filters) NGRN_PRESENCE(csc)
+    NGRN_PRESENCE(platformSetup) NGRN_PRESENCE(sampleMode) NGRN_PRESENCE(formatMode)
+    NGRN_PRESENCE(platformPacket) NGRN_PRESENCE(platformSend) NGRN_PRESENCE(compression)
+#undef NGRN_PRESENCE
+    return entries;
+}
 // Mock only the enclosing synchronous child lease. Packet callbacks and
 // setup/builder argument binding below use their real owned implementations.
 struct TestVeboxChildLease {
@@ -8334,6 +8350,45 @@ static void testVpSfcCpuGraph() {
     }
     assert(currentLifetime.status()==0 && retirementCalls==1 && allocationReleases==1);
     assert(!state.live && !avs.live);
+    assert(initialize());
+    TglOwnedVpFlatDispatchTable dispatch,emptyDispatch;
+    assert(dispatch.build(testVpPresenceEntries(),[](uintptr_t,size_t) noexcept {return true;}));
+    assert(graph.withLeasedFlatDispatch(lifetimeChild,dispatch,never)==5);
+    assert(graph.withView(false,[&](void* child) noexcept {
+        assert(graph.withLeasedFlatDispatch(&binding,dispatch,never)==5);
+        assert(graph.withLeasedFlatDispatch(child,emptyDispatch,never)==5);
+        assert(graph.withLeasedFlatDispatch(child,dispatch,[&](void* admitted) noexcept {
+            assert(admitted==child && !graph.tryReset());
+            assert(graph.withLeasedFlatDispatch(child,dispatch,never)==5);
+            uintptr_t address=0,entry=0;std::memcpy(&address,child,8);
+            assert(address==dispatch.addressPoint());
+            std::memcpy(&entry,reinterpret_cast<const void*>(address+0x18),8);
+            assert(reinterpret_cast<int(*)(void*,void*,void*,void*) noexcept>(entry)(child,nullptr,nullptr,nullptr)==0);
+            return 31;
+        })==31);
+        uintptr_t restored=1;std::memcpy(&restored,child,8);assert(!restored);
+        assert(graph.withLeasedFlatDispatch(child,dispatch,[](void* admitted) noexcept {
+            const uintptr_t zero=0;std::memcpy(admitted,&zero,8);return 0;
+        })==5);
+        std::memcpy(&restored,child,8);assert(!restored);
+        return 0;
+    })==0);
+    TglOwnedVpFlatDispatchTable admittedDispatch;
+    bool(*escapedCompression)(void*,uint32_t) noexcept=nullptr;
+    assert(graph.withAdmissionView(false,read,[&](void* child,const auto& admission) noexcept {
+        auto complete=testVpPresenceEntries();
+        complete.compressionFormat=admission.compressionFormat; // Other slots are CPU fixture stubs.
+        assert(admittedDispatch.build(complete,[](uintptr_t,size_t) noexcept {return true;}));
+        return graph.withLeasedFlatDispatch(child,admittedDispatch,[&](void* admitted) noexcept {
+            uintptr_t address=0,entry=0;std::memcpy(&address,admitted,8);
+            std::memcpy(&entry,reinterpret_cast<const void*>(address+0x60),8);
+            escapedCompression=reinterpret_cast<bool(*)(void*,uint32_t) noexcept>(entry);
+            assert(escapedCompression(admitted,0x19));
+            assert(!escapedCompression(nullptr,0x19));return 0;
+        });
+    })==0);
+    assert(escapedCompression && !escapedCompression(lifetimeChild,0x19));
+    graph.reset();assert(!state.live && !avs.live);
 }
 
 static void testSfcSetupOrder() {
@@ -9194,9 +9249,7 @@ int main() {
         X(outputFormat,15) X(inputAlignment,16) X(outputAlignment,17) X(state,18) \
         X(filters,19) X(csc,20) X(platformSetup,21) X(sampleMode,22) X(formatMode,23) \
         X(platformPacket,24) X(platformSend,25) X(compression,26)
-#define NGRN_BIND_TEST_VP(field,index) entries.field=&TestVpPresenceStub<decltype(entries.field)>::invoke;
-        NGRN_TEST_VP_SLOTS(NGRN_BIND_TEST_VP)
-#undef NGRN_BIND_TEST_VP
+        entries=testVpPresenceEntries();
         assert(entries.hasAllEntries() && !entries.missingMask());
 #define NGRN_REJECT_MISSING_VP(field,index) \
         {const auto saved=entries.field;entries.field=nullptr; \

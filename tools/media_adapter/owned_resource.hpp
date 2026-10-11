@@ -9656,6 +9656,24 @@ public:
             return avs_.withParameters([&](const auto&) noexcept {return invoke();});
         });
     }
+    // Private flat dispatch only, inside an existing graph/state lease. Caller
+    // retains all callback resolver scopes. Not native RTTI or persistent
+    // parent publication; restore the data-only view before releasing owners.
+    template<class Use> int withLeasedFlatDispatch(void* child,
+        const TglOwnedVpFlatDispatchTable& table,Use use) noexcept {
+        static_assert(noexcept(use(child)),"VP private dispatch consumer ABI");
+        if(!ready_ || !busy_ || child!=storage_.bytes.data() || !table.addressPoint()) return 5;
+        return state_.withPublishedVpParameters(storage_,[&](const uint8_t*) noexcept {
+            uintptr_t previous=0;std::memcpy(&previous,storage_.bytes.data(),8);
+            if(previous) return 5;
+            const auto address=table.addressPoint();
+            std::memcpy(storage_.bytes.data(),&address,8);
+            const int result=use(child);
+            uintptr_t observed=0;std::memcpy(&observed,storage_.bytes.data(),8);
+            std::memcpy(storage_.bytes.data(),&previous,8);
+            return observed==address ? result : 5;
+        });
+    }
     // Admission entries share the real graph/state/AVS lease. In particular,
     // lifecycle teardown cannot retire this storage while a callback is live.
     template<class Read,class Use>
