@@ -45,6 +45,54 @@ struct TestFeatureExecutionOwner {
 };
 static void testTrackedCpuOwner() {
     {
+        struct Policy {
+            TglVeboxPipeAcquisition frame;
+            TglSurfaceRect source{0,0,1920,1081},target{0,0,1920,1200};
+            bool fill=false,compressed=true;uint32_t format=7;
+            TglOwnedSfcCompressionMode mode=TglOwnedSfcCompressionMode::Media;
+            int scenario=0,status=99;unsigned directCalls=0,decompressions=0;
+            bool healthy() const noexcept {return frame.healthy();}
+            bool bypass() noexcept {return true;}
+            bool rejectDi() noexcept {return false;}
+            bool rejectLut() noexcept {return false;}
+            bool direct() noexcept {
+                ++directCalls;
+                if(directCalls==1) {assert(target.bottom==1200);return false;}
+                assert(target.bottom==source.bottom);
+                if(scenario==3) frame.fail();
+                return scenario!=2;
+            }
+            bool twoPass() noexcept {return false;}
+            bool sfcAvailable() noexcept {return false;}
+            bool hdr() noexcept {assert(false);return false;}
+            uint32_t sfc() noexcept {assert(false);return 0;}
+            bool fastFill() noexcept {
+                return tglRunOwnedGen12FastFill(source,target,true,fill,compressed,mode,format,status,
+                    [&]() noexcept {return direct();},[&]() noexcept {
+                        ++decompressions;assert(fill && target.bottom==1081);
+                        if(scenario==4) frame.fail();
+                        return scenario==1?31:0;
+                    },[&]() noexcept {return healthy();});
+            }
+        };
+        for(int scenario=0;scenario<5;++scenario) {
+            Policy p;p.scenario=scenario;uint8_t comp=0xa5;uint32_t output=77;
+            const bool ok=tglSelectGen12VeboxOutputPipe(p,comp,output);
+            assert(p.target.bottom==1200 && p.directCalls==2);
+            if(scenario<2) {
+                assert(ok && output==2 && comp==0 && p.fill && p.decompressions==1);
+                assert(p.status==(scenario==1?31:0));
+                assert(p.compressed==(scenario==1) && p.format==(scenario==1?7u:0u));
+            } else if(scenario==2) {
+                assert(ok && output==0 && comp==1 && !p.fill && p.decompressions==0 && p.status==99);
+            } else {
+                assert(!ok && output==77 && comp==0xa5 && !p.fill && p.compressed && p.format==7 && p.status==99);
+                assert(p.decompressions==(scenario==4?1u:0u));
+                assert(!p.healthy());
+            }
+        }
+    }
+    {
         for(int scenario=0;scenario<8;++scenario) {
             TglSurfaceRect source{0,0,1920,1081},target{0,0,1920,1200};
             bool fill=false,compressed=true,healthy=true;uint32_t format=7;
