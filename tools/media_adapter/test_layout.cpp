@@ -5695,6 +5695,23 @@ static void testNativeResourceBoundary() {
                 tglCopyOwnedFfdiSecondaryMetadata(expected,*surface);
                 assert(after.prefix==expected.prefix && after.resource==expected.resource && after.tail==expected.tail);
                 assert(fixture.allocations==allocationCount);
+                TestFeatureSurfaceOwner scalarOwner;
+                constexpr size_t resourceBase=offsetof(TglOwnedSurfaceStorage,resource);
+                for(uint32_t value:{0x12345678u,0u,0xffffffffu}) {
+                    std::memcpy(scalarOwner.storage.resource.data()+0x1c8-resourceBase,&value,4);
+                    std::memcpy(scalarOwner.storage.resource.data()+0x200-resourceBase,&value,4);
+                    assert(targets[0].withDescriptor([&](const auto& view) noexcept {before=view;}));
+                    scalarOwner.busy=true;
+                    assert(targets[0].publishFfdiSecondaryFrom(scalarOwner,scalarOwner.storage));
+                    scalarOwner.busy=false;
+                    expected=before;
+                    std::memcpy(expected.resource.data()+0x1c8-resourceBase,&value,4);
+                    std::memcpy(expected.resource.data()+0x200-resourceBase,&value,4);
+                    assert(targets[0].withDescriptor([&](const auto& view) noexcept {
+                        assert(view.prefix==expected.prefix && view.resource==expected.resource && view.tail==expected.tail);
+                    }));
+                }
+                assert(fixture.allocations==allocationCount);
             }
             for(size_t failAt=0;failAt<=2;++failAt) for(bool equalPitch:{false,true}) {
                 bool valid=true;size_t allocations=0,publications=0,copies=0;
