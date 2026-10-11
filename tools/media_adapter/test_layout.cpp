@@ -8897,7 +8897,12 @@ int main() {
             auto noRead=+[](uintptr_t,void*,size_t) noexcept {return false;};
             TglOwnedVpSfcCpuGraph<Cpu,Cpu> graph(stateCpu,avsCpu);
             assert(graph.initialize(0x7000,0x8000,0x3000,binding,noRead,1,0));
-            {
+            assert(graph.withResourceOwnerStorage([&](auto& ownedStorage) noexcept {
+                assert(!graph.tryReset());
+                assert(!graph.initialize(0x7000,0x8000,0x3000,binding,noRead,1,0));
+                assert(graph.prepare([](auto&,auto&,auto&) noexcept {assert(false);return 0;})==5);
+                assert(graph.withTeardownReservation([](auto) noexcept {assert(false);return 0;})==5);
+                assert(graph.withResourceOwnerStorage([](auto&) noexcept {assert(false);return 0;})==5);
                 struct LineBackend {
                     unsigned allocations=0,releases=0;
                     uint32_t resourceType() const noexcept {return 0;}
@@ -8910,8 +8915,7 @@ int main() {
                         assert(r[0]);++releases;r.fill(0);
                     }
                 };
-                TglOwnedVpSfcCallerStorage* storage=nullptr;
-                assert(graph.prepare([&](auto& vp,auto&,auto&) noexcept {storage=&vp;return 0;})==0);
+                auto* storage=&ownedStorage;
                 auto* a=::new(static_cast<void*>(storage->bytes.data()+0x3c8)) TglOwnedSurfaceStorage{};
                 auto* b=::new(static_cast<void*>(storage->bytes.data()+0x670)) TglOwnedSurfaceStorage{};
                 std::array<LineBackend,2> backends{};
@@ -8950,7 +8954,8 @@ int main() {
                 assert(states==2 && filters==2 && retired==2);
                 assert(backends[0].allocations==1 && backends[1].allocations==1);
                 assert(backends[0].releases==1 && backends[1].releases==1);
-            }
+                return 0;
+            })==0);
             struct GraphPipePolicy {
                 decltype(graph)& owner;bool directMode=true;
                 bool bypass() noexcept {assert(!owner.tryReset());return true;}

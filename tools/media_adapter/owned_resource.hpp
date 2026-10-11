@@ -8110,7 +8110,7 @@ template<class StateBackend,class AvsBackend> class TglOwnedVpSfcCpuGraph {
     TglOwnedVpSfcCallerStorage storage_;
     TglOwnedSfcStateParameters<StateBackend> state_;
     TglOwnedSfcAvsParameters<AvsBackend> avs_;
-    bool ready_=false,busy_=false;
+    bool ready_=false,busy_=false,resourcesBound_=false;
     struct SendContext {
         void* child;
         bool owns(void* candidate) const noexcept {return candidate==child;}
@@ -8143,7 +8143,7 @@ public:
     template<class Binding,class Read>
     bool initialize(uintptr_t os,uintptr_t renderHal,uintptr_t mhw,
         const Binding& binding,Read read,uint32_t channel,uintptr_t performance) {
-        if(busy_) return false;
+        if(busy_ || resourcesBound_) return false;
         Guard guard(busy_);clear();
         if(!storage_.initializeBorrowed(os,renderHal,mhw,binding,read) ||
            !avs_.initialize()) {
@@ -8167,12 +8167,12 @@ public:
     // CPU teardown only: the enclosing runtime owner still has to establish
     // GPU retirement before calling this or releasing the VP allocation.
     bool tryReset() noexcept {
-        if(busy_) return false;
+        if(busy_ || resourcesBound_) return false;
         Guard guard(busy_);clear();return true;
     }
     void reset() noexcept {(void)tryReset();}
     template<class Use> int withTeardownReservation(Use use) noexcept {
-        if(busy_) return 5;
+        if(busy_ || resourcesBound_) return 5;
         Guard guard(busy_);bool cleared=false;
         auto releaseCpu=[&]() noexcept {
             if(!cleared) {cleared=true;clear();}
@@ -8182,8 +8182,17 @@ public:
     }
     template<class Prepare> int prepare(Prepare prepare) noexcept {
         static_assert(noexcept(prepare(storage_,state_,avs_)),"CPU graph preparation ABI");
-        if(!ready_ || busy_) return 5;
+        if(!ready_ || busy_ || resourcesBound_) return 5;
         Guard guard(busy_);return prepare(storage_,state_,avs_);
+    }
+    // Construct resource owners inside this callback and destroy them before
+    // returning. Their typed shells live in this VP storage, which must not
+    // be zeroed/reinitialized until those owners are gone. Frame/setup/send
+    // operations remain available; this is not an asynchronous fence lease.
+    template<class Use> int withResourceOwnerStorage(Use use) noexcept {
+        static_assert(noexcept(use(storage_)),"VP resource owner lifetime ABI");
+        if(!ready_ || busy_ || resourcesBound_) return 5;
+        Guard guard(resourcesBound_);return use(storage_);
     }
     // Native pipe selection and subsequent VP28/40/48 must refer to this
     // same initialized VP owner, not a separate admission-only storage shell.
