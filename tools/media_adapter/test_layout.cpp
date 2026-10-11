@@ -13480,6 +13480,8 @@ int main() {
                     graph.reset();assert(!stateCpu.live && !avsCpu.live && cpu.live);
                 }
                 using Lifetime=TglOwnedVeboxLifetimeContext<decltype(owner)>;
+                Lifetime staleLifetime(owner);
+                const auto previousGeneration=owner.allocationGeneration();
                 Lifetime lifetime(owner);void* lifecycleChild=owner.constructedBase();
                 using LifetimeScope=TglOwnedVeboxScopedContext<Lifetime>;
                 struct LifetimeResolve {
@@ -13510,8 +13512,16 @@ int main() {
                 assert(owner.withPrivateChild([](void*) noexcept {assert(false);return 0;})==5);
                 assert((std::array<unsigned,4>{events[0],events[1],events[2],events[3]}==
                         std::array<unsigned,4>{1,2,4,3})); // Non-deleting lifecycle defers allocation release.
+                assert(initialize()==TglOwnedBaseConstruction::ConstructedSuccess);
+                assert(owner.constructedBase()==lifecycleChild && owner.allocationGeneration()==previousGeneration+1);
+                assert(!staleLifetime.owns(lifecycleChild));
+                staleLifetime.destroy(true);
+                assert(staleLifetime.status()==5 && cpu.live && eventCount==4);
+                owner.reset();assert(!cpu.live && eventCount==8);
+                assert((std::array<unsigned,4>{events[4],events[5],events[6],events[7]}==
+                    std::array<unsigned,4>{1,2,3,4}));
             }
-            assert(eventCount==4 && constructors==2);
+            assert(eventCount==8 && constructors==3);
             invoke.constructs=invoke.destroys=0;
         }
         {
