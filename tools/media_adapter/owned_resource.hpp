@@ -4692,6 +4692,21 @@ public:
         struct Unlock {bool& busy;~Unlock(){busy=false;}} unlock{busy_};
         return owner.withBorrowedDenoiseMetadata(source,parameters,storage_,use);
     }
+    // Compose the two independently qualified roles without recursively
+    // acquiring this descriptor. Caller must already pin both actual owners;
+    // no inference that input and execution are the same surface is made.
+    template<class SourceOwner,class Parameters,class ExecutionOwner,class Use>
+    bool withBorrowedExecutionAndDenoise(SourceOwner& owner,const TglOwnedSurfaceStorage& source,
+        Parameters& parameters,ExecutionOwner& executionOwner,
+        const TglOwnedSurfaceStorage& execution,Use use) noexcept {
+        if(!owner.hasSurfaceLease(source)) return false;
+        bool consumed=false;
+        const bool leased=withBorrowedExecutionHandle(executionOwner,execution,
+            [&](const auto&) noexcept {
+                consumed=owner.withBorrowedDenoiseMetadata(source,parameters,storage_,use);
+            });
+        return leased && consumed;
+    }
     template<class Use> bool withDescriptor(Use use) noexcept {
         static_assert(noexcept(use(std::declval<const TglOwnedSurfaceStorage&>())) &&
             std::is_same_v<decltype(use(std::declval<const TglOwnedSurfaceStorage&>())),void>,

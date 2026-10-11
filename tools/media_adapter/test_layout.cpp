@@ -5355,9 +5355,26 @@ static void testNativeResourceBoundary() {
                                 assert(owner.hasSurfaceLease(s) && parameterBackend.live==1);
                             }));
                         assert(targetCalls==1);
+                        assert(dnTarget.withBorrowedExecutionAndDenoise(owner,s,parameters,owner,s,
+                            [&](const auto& sourceView,const auto& targetView) noexcept {
+                                ++targetCalls;uintptr_t dn=0,handle=0,expectedHandle=0;
+                                std::memcpy(&dn,targetView.prefix.data()+0x90,8);
+                                std::memcpy(&handle,targetView.resource.data()+0x58,8);
+                                std::memcpy(&expectedHandle,sourceView.resource.data()+0x58,8);
+                                assert(dn==parameters.get() && handle==expectedHandle && handle);
+                                dnTarget.reset();parameters.reset();owner.reset();
+                                assert(owner.hasSurfaceLease(s) && parameterBackend.live==1);
+                                assert(!dnTarget.prepare(dnRequest,dnChanged));
+                            }));
+                        assert(targetCalls==2);
+                        assert(parameters.withBorrowedAddress([&](uintptr_t,size_t) noexcept {
+                            assert(!dnTarget.withBorrowedExecutionAndDenoise(owner,s,parameters,owner,s,
+                                [](const auto&,const auto&) noexcept {assert(false);}));
+                        })); // DN admission failure must also detach the handle.
                         assert(dnTarget.withDescriptor([](const auto& view) noexcept {
                             uintptr_t pointer=1;std::memcpy(&pointer,view.prefix.data()+0x90,8);
                             assert(!pointer);
+                            std::memcpy(&pointer,view.resource.data()+0x58,8);assert(!pointer);
                         }));
                         assert(owner.withBorrowedDenoiseMetadata(s,parameters,dnMetadata,
                             [&](const auto& sourceView,const auto& metadataView) noexcept {
