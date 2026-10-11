@@ -8121,6 +8121,42 @@ int main() {
                     return 0;
                 })==0);
             }
+            using SetupEntry=int(*)(void*,void*,void*,void*) noexcept;
+            using SendEntry=int(*)(void*,void*,void*) noexcept;
+            SetupEntry escapedSetup=nullptr;SendEntry escapedSend=nullptr;
+            void* callbackChild=nullptr;int source=0,data=0,command=0;
+            for(unsigned mode=0;mode<7;++mode) {
+                unsigned stages=0,emissions=0;
+                const int result=graph.withPreparedCallbackPass(prepared,
+                    0x6000,0x4000,0x2000,reference,&source,&data,
+                    [&](void*,const auto&,auto&) noexcept -> int {++stages;return 0;},
+                    [&](void*,const auto&,auto&) noexcept -> int {++stages;return 0;},
+                    [&](void*,const auto&) noexcept {++stages;},
+                    [&](void* child,void* d,void* c) noexcept -> int {
+                        assert(stages==3 && d==&data && c==&command);++emissions;
+                        uintptr_t stateAddress=0;
+                        std::memcpy(&stateAddress,static_cast<uint8_t*>(child)+0x938,8);
+                        assert(stateAddress==reinterpret_cast<uintptr_t>(stateCpu.bytes.data()));
+                        graph.reset();assert(stateCpu.live && avsCpu.live);
+                        return mode==6?-17:0;
+                    },
+                    [&](void* child,SetupEntry setup,SendEntry send) noexcept -> int {
+                        escapedSetup=setup;escapedSend=send;callbackChild=child;
+                        if(mode==1) {assert(send(child,&data,&command)==5);return 0;}
+                        if(mode==2) {assert(setup(child,&command,reinterpret_cast<void*>(0x2000),&data)==5);return 0;}
+                        assert(setup(child,&source,reinterpret_cast<void*>(0x2000),&data)==0);
+                        if(mode==3) return 0;
+                        if(mode==4) {assert(setup(child,&source,reinterpret_cast<void*>(0x2000),&data)==5);return 0;}
+                        const int sent=send(child,&data,&command);
+                        assert(sent==(mode==6?-17:0));
+                        if(mode==5) return 31;
+                        return 0;
+                    });
+                assert(result==(mode==0?0:mode==5?31:mode==6?-17:5));
+                assert(emissions==(mode==0 || mode>=5?1u:0u));
+                assert(escapedSetup(callbackChild,&source,reinterpret_cast<void*>(0x2000),&data)==5);
+                assert(escapedSend(callbackChild,&data,&command)==5);
+            }
             auto disabled=prepared;
             disabled.regions.scale.scaling=false;disabled.color.at9b8=false;
             disabled.at922=false;disabled.color.modes.state.at923=false;

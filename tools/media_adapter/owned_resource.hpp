@@ -7741,6 +7741,49 @@ public:
                 });
             });
     }
+    // Bridge setup+40 and send+48 within the same completed producer lease.
+    // This is synchronous command construction, not a publishable VP vtable
+    // or permission to retire GPU resources. Outer surface leases remain required.
+    template<class State,class Avs,class Ief,class Emit,class Invoke>
+    int withPreparedCallbackPass(const TglOwnedVpFramePreparation& frame,
+        uintptr_t conditionalSource,uintptr_t settings,uintptr_t target,uintptr_t sourceA8,
+        void* source,void* renderData,State state,Avs avs,Ief ief,Emit emit,Invoke invoke) noexcept {
+        if(!source || !renderData || !target) return 5;
+        return withPreparedPass(frame,conditionalSource,settings,target,sourceA8,
+            state,avs,ief,[&](void* child,const auto&) noexcept {
+                struct Context {
+                    void* child;void* source;void* target;void* data;Emit& emit;
+                    bool setupSeen=false,sendSeen=false,busy=false;int error=0;
+                    bool owns(void* candidate) const noexcept {return candidate==child;}
+                    int setup(void* s,void* t,void* d) noexcept {
+                        if(error || setupSeen || busy || s!=source || t!=target || d!=data)
+                            return error=5;
+                        // State/AVS/IEF producers already completed successfully
+                        // in withPreparedPass; setup admits exactly that frame.
+                        setupSeen=true;return 0;
+                    }
+                    int send(void* d,void* command) noexcept {
+                        if(error || !setupSeen || sendSeen || busy || d!=data || !command)
+                            return error=5;
+                        static_assert(noexcept(emit(child,d,command)),"VP emitter ABI");
+                        sendSeen=true;busy=true;
+                        const int result=emit(child,d,command);
+                        busy=false;
+                        if(!error) error=result;
+                        return error;
+                    }
+                } context{child,source,reinterpret_cast<void*>(target),renderData,emit};
+                using Callbacks=TglOwnedVpSfcCallbacks<TglOwnedVpSfcResolve<Context>>;
+                TglOwnedVpSfcScopedContext<Context> scope(child,context);
+                if(!scope.bound()) return 5;
+                static_assert(noexcept(invoke(child,&Callbacks::setup,&Callbacks::send)),
+                    "VP callback invocation ABI");
+                const int result=invoke(child,&Callbacks::setup,&Callbacks::send);
+                if(result) return result;
+                if(context.error) return context.error;
+                return context.setupSeen && context.sendSeen ? 0 : 5;
+            });
+    }
     // The qualified six-argument platform entry exists only in the final
     // consumer, after successful producers and while all CPU inputs are leased.
     template<class State,class Avs,class Ief,class Send>
