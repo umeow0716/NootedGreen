@@ -3691,6 +3691,18 @@ public:
             return withLeasedBorrowedVpFlatDispatch(parent,vp,child,table,use);
         });
     }
+    // Factory publication is nested inside both owners' leases and the actual
+    // callable table lease. Detach80 before restoring VP's vptr, then release
+    // the parent lease. Consumer supplies the native allocation call; this is
+    // not a persistent +1e0 installation or an asynchronous ownership claim.
+    template<class VpOwner,class Table,class Use>
+    int withVpFactoryFlatDispatch(VpOwner& vp,void* child,const Table& table,Use use) noexcept {
+        return withPrivateChild([&](void* parent) noexcept {
+            return vp.withLeasedFlatDispatch(child,table,[&](void* admitted) noexcept {
+                return withLeasedVpFactory(parent,admitted,use);
+            });
+        });
+    }
     // Parent80 is borrowed only while the graph's admission/resource entries
     // are live. Restore it before either owner can enter native teardown.
     template<class VpOwner,class Read,class Lines,class Retire,class Use>

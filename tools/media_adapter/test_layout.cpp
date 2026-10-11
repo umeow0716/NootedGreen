@@ -16001,6 +16001,22 @@ int main() {
                         std::memcpy(&restoredParent,cpu.bytes.data()+0x80,8);
                         std::memcpy(&restoredVptr,child,8);
                         assert(!restoredParent && !restoredVptr);
+                        assert(owner.withVpFactoryFlatDispatch(graph,child,dispatch,
+                            [&](void* parent,auto factory) noexcept {
+                                void* created=factory(parent);assert(created==child);
+                                uintptr_t link=reinterpret_cast<uintptr_t>(created),vptr=0,entry=0;
+                                std::memcpy(static_cast<uint8_t*>(parent)+0x80,&link,8);
+                                std::memcpy(&vptr,created,8);assert(vptr==dispatch.addressPoint());
+                                std::memcpy(&entry,reinterpret_cast<const void*>(vptr+0x60),8);
+                                assert(reinterpret_cast<bool(*)(void*,uint32_t) noexcept>(entry)(created,0x19));
+                                owner.reset();graph.reset();assert(cpu.live && stateCpu.live && avsCpu.live);
+                                assert(owner.withVpFactoryFlatDispatch(graph,child,dispatch,
+                                    [](void*,auto) noexcept {assert(false);return 0;})==5);
+                                return -23;
+                            })==-23);
+                        std::memcpy(&restoredParent,cpu.bytes.data()+0x80,8);
+                        std::memcpy(&restoredVptr,child,8);
+                        assert(!restoredParent && !restoredVptr);
                         assert(owner.withBorrowedVpFlatDispatch(graph,child,dispatch,
                             [&](void* parent,void* borrowed) noexcept {
                                 uintptr_t linked=0,address=0,entry=0;
