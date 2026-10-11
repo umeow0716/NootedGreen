@@ -7776,6 +7776,54 @@ static void testResourceBinding() {
             assert(pair.withSurfaces(first,second,[](const auto&,const auto&) noexcept -> int {assert(false);return 0;})==5);
             pair.reset();assert(!api.references);
             backends[1].fail=false;
+            TestFeatureSurfaceOwner input;input.busy=true;
+            const uint32_t inputWidth=12,inputHeight=3;
+            std::memcpy(input.storage.prefix.data()+0xd8,&inputWidth,4);
+            std::memcpy(input.storage.prefix.data()+0xdc,&inputHeight,4);
+            std::array<uint8_t,0x1bc0> child{};
+            std::array<uint8_t,0xa10> report{};report[0x13]=1;
+            const uintptr_t reportAddress=reinterpret_cast<uintptr_t>(report.data());
+            const uintptr_t inputAddress=reinterpret_cast<uintptr_t>(&input.storage);
+            std::memcpy(child.data()+0x88,&reportAddress,8);
+            std::memcpy(child.data()+0x1b0,&inputAddress,8);
+            TestVeboxChildLease childLease{child.data()};childLease.busy=true;
+            struct ReportLease {
+                uintptr_t address;
+                bool hasExecutionLease(uintptr_t value) noexcept {return value==address;}
+            } reportLease{reportAddress};
+            auto read=[&](uintptr_t address,void* out,size_t count) noexcept {
+                const auto contains=[&](const auto& bytes) noexcept {
+                    const auto base=reinterpret_cast<uintptr_t>(bytes.data());
+                    return address>=base && address-base<=bytes.size() && count<=bytes.size()-(address-base);
+                };
+                if(!contains(child) && !contains(report)) return false;
+                std::memcpy(out,reinterpret_cast<const void*>(address),count);return true;
+            };
+            auto run=[&](const auto& a,const auto& b,auto use) noexcept {
+                return tglRunCapturedStmmSurfacePair(pair,a,b,input,childLease,reportLease,
+                    child.data(),reportAddress,input.storage,read,false,
+                    [&](size_t,const auto& key) noexcept -> int {
+                        report[0x17]=key.compressed?1:0;report[0x18]=uint8_t(key.compressionMode);return 0;
+                    },use);
+            };
+            for(int status:{0,-101}) {
+                assert(run(first,second,[&](const auto* a,const auto* b) noexcept -> int {
+                    assert(a==&first && b==&second && api.references==2);
+                    pair.reset();assert(api.references==2);return status;
+                })==status);
+                assert(pair.withCapturedSurfaces(first.resource,second.resource,first,second,
+                    [](const auto&,const auto&) noexcept -> int {assert(false);return 0;})==5);
+            }
+            assert(!api.references);
+            TglOwnedSurfaceStorage foreign{};
+            assert(run(foreign,second,[](const auto*,const auto*) noexcept -> int {assert(false);return 0;})==5);
+            assert(!api.references);
+            report[0x13]=0;
+            const auto beforeDisabled=backends[0].allocations+backends[1].allocations;
+            assert(run(foreign,second,[](const auto* a,const auto* b) noexcept -> int {
+                assert(!a && !b);return 0;
+            })==0);
+            assert(backends[0].allocations+backends[1].allocations==beforeDisabled);
             TglOwnedSurfaceStorage deniedFirst{},deniedSecond{};deniedFirst.prefix[0x30]=1;
             TglOwnedStmmPair<StmmBackend,RetainedApi,Quarantine> denied(backends,
                 std::array<TglStmmSurfaceReference,2>{{{deniedFirst},{deniedSecond}}},api,sink);
@@ -7812,6 +7860,10 @@ static void testResourceBinding() {
                 [](auto&,auto&) noexcept {assert(false);return 0;})==5);
             uint32_t before=1;std::memcpy(&before,firstSurface.prefix.data()+0xe0,4);
             assert(before==0);
+            assert(pair.withStorage([&](const auto& a,const auto& b) noexcept -> int {
+                return pair.withCapturedSurfaces(a,b,firstSurface,secondSurface,
+                    [](const auto&,const auto&) noexcept -> int {assert(false);return 0;});
+            })==5); // resource-only construction cannot grant a full-shell lease
             assert(pair.withSurfaces(firstSurface,secondSurface,
                 [&](auto& a,auto& b) noexcept {
                     uint32_t p0=0,p1=0;

@@ -12623,6 +12623,10 @@ public:
     TglOwnedStmmResource& operator=(const TglOwnedStmmResource&)=delete;
     ~TglOwnedStmmResource(){reset();}
     const void* storageBinding() const noexcept {return resource_.storage().data();}
+    bool hasShellLease(const Storage& storage,const TglOwnedSurfaceStorage& shell) noexcept {
+        return admitted_ && ready_ && busy_ && shell_==&shell &&
+            &storage==&shell.resource && capture_.backed(storage);
+    }
     int ensure(const TglResourceKey& key,bool reinitializeHistory=false,bool* changed=nullptr) noexcept {
         if(changed) *changed=false;
         if(busy_ || !admitted_ || key.format!=0x3d) return 5;
@@ -12781,6 +12785,16 @@ public:
             return invoke(first,second);
         });
     }
+    // Reuse the two already-held storage leases; never reacquire a busy pair.
+    // Only full-shell construction can grant this identity-bound view.
+    template<class Use> int withCapturedSurfaces(const Storage& first,const Storage& second,
+        const TglOwnedSurfaceStorage& a,const TglOwnedSurfaceStorage& b,Use use) noexcept {
+        if(!busy_ || !ready_ || !owners_[0].hasShellLease(first,a) ||
+            !owners_[1].hasShellLease(second,b)) return 5;
+        static_assert(noexcept(use(a,b)) && std::is_same_v<decltype(use(a,b)),int>,
+            "STMM captured shell consumer ABI");
+        return use(a,b);
+    }
     void reset() noexcept {
         if(busy_) return;
         busy_=true;ready_=false;
@@ -12868,6 +12882,24 @@ int tglRunCapturedStmmPair(Pair& pair,SourceOwner& sourceOwner,ChildOwner& child
         });
     if(result && allocated) pair.reset(); // every STMM lease has ended
     return result;
+}
+template<class Pair,class SourceOwner,class ChildOwner,class ExecutionOwner,class Read,class Publish,class Use>
+int tglRunCapturedStmmSurfacePair(Pair& pair,const TglOwnedSurfaceStorage& firstShell,
+    const TglOwnedSurfaceStorage& secondShell,SourceOwner& sourceOwner,ChildOwner& childOwner,
+    ExecutionOwner& executionOwner,void* child,uintptr_t execution,
+    const TglOwnedSurfaceStorage& source,Read read,bool reinitialize,Publish publish,Use use) noexcept {
+    return tglRunCapturedStmmPair(pair,sourceOwner,childOwner,executionOwner,child,execution,source,
+        read,reinitialize,publish,[&](const auto* first,const auto* second) noexcept -> int {
+            using Surface=TglOwnedSurfaceStorage;
+            if(!first && !second) return use(static_cast<const Surface*>(nullptr),static_cast<const Surface*>(nullptr));
+            if(!first || !second) return 5;
+            return pair.withCapturedSurfaces(*first,*second,firstShell,secondShell,
+                [&](const Surface& a,const Surface& b) noexcept -> int {
+                    static_assert(noexcept(use(&a,&b)) && std::is_same_v<decltype(use(&a,&b)),int>,
+                        "captured STMM surface stage ABI");
+                    return use(&a,&b);
+                });
+        });
 }
 #if defined(__APPLE__)
 // Call only under the resource owner's synchronous lease, before GPU use.
