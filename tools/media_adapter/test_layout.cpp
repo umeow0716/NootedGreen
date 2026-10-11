@@ -7728,13 +7728,29 @@ int main() {
                     });
                 })==5 && !admissions);
                 assert(resources.ensure(0,tall)==5 && run(0)==0);
+                using SetContext=TglOwnedVpLineAllocationContext<decltype(resources),decltype(state)>;
+                using SetAllocate=TglOwnedVpLineAllocationCallback<TglOwnedVpSfcResolve<SetContext>>;
+                auto allocateSet=[&](uint32_t in,uint32_t out) noexcept {
+                    assert(resources.boundToVp(vp) && !resources.boundToVp(wrongVp));
+                    std::memcpy(cpu.bytes.data()+0x30,&in,4);std::memcpy(cpu.bytes.data()+0x4c,&out,4);
+                    SetContext setContext(vp,resources,state);
+                    TglOwnedVpSfcScopedContext<SetContext> setScope(vp.bytes.data(),setContext);
+                    assert(setScope.bound() && SetAllocate::allocate(vp.bytes.data())==5);
+                    return state.withParameters([&](const uint8_t* packet) noexcept {
+                        assert(SetAllocate::allocate(vp.bytes.data())==5);
+                        const uintptr_t address=reinterpret_cast<uintptr_t>(packet);
+                        std::memcpy(vp.bytes.data()+0x938,&address,8);
+                        const int result=SetAllocate::allocate(vp.bytes.data());
+                        std::memset(vp.bytes.data()+0x938,0,8);return result;
+                    });
+                };
                 for(unsigned failed=0;failed<3;++failed) {
                     if(failed<2) backends[failed].status=77;else sfdBackend.status=77;
-                    assert(resources.ensure(input+1,tall+1)==77);
+                    assert(allocateSet(input+1,tall+1)==77);
                     assert(lines.withSurfaces([](const auto&,const auto&) noexcept {assert(false);return 0;})==5);
                     assert(sfd.withBuffer(tall,[](const auto*) noexcept {assert(false);return 0;})==5);
                     if(failed<2) backends[failed].status=0;else sfdBackend.status=0;
-                    assert(resources.ensure(input,tall)==0 && run(0)==0);
+                    assert(allocateSet(input,tall)==0 && run(0)==0);
                 }
                 for(int admission:{31,0}) {
                     auto retire=[&]() noexcept {

@@ -383,6 +383,9 @@ template<class Resolve> struct TglOwnedVpAdmissionCallbacks {
 // 1ddf10/1dde10/1de810, before30=1df1b0 and38=1df050. Slot18 saves
 // three arguments, calls bool20(this,arg3,arg1,arg2), then50 with dimension
 // outputs. Slot20 itself calls bool38 and rejects unsupported surface state.
+// Slot18 is NOT bool ABI: 1ddf33 initializes a DWORD result and
+// 1de4df/1de4e8 store1/0; 1de4f1..1de4f7 returns the full EAX. The future
+// complete table must use int(this,arg1,arg2,arg3), unlike bool20/bool38.
 // These are donor dependency evidence, NOT callable TGL bindings: complete
 // owned preflight/initialization must precede publication through VEBOX1e0.
 template<class Resolve> struct TglOwnedVpSfcCallbacks {
