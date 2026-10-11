@@ -1580,6 +1580,73 @@ public:
     }
 };
 
+// Compose actual child-owner publication pins with renderer links. Enclosing
+// complete owner holds both children/parent/image alive and serializes access;
+// this coordinator neither destroys children nor invents retirement evidence.
+template<class FirstOwner,class SecondOwner> class TglOwnedRendererChildPublication {
+    FirstOwner& firstOwner_;SecondOwner& secondOwner_;
+    TglOwnedRendererChildLinks links_;
+    void* renderer_=nullptr;void* first_=nullptr;void* second_=nullptr;
+    uint64_t generation_=0,firstGeneration_=0,secondGeneration_=0;
+    bool firstPinned_=false,secondPinned_=false,linked_=false,busy_=false;
+    struct Unlock {bool& busy;~Unlock(){busy=false;}};
+    bool releasePins() noexcept {
+        const auto address=reinterpret_cast<uintptr_t>(renderer_);
+        if(firstPinned_ && firstOwner_.unpinRendererPublication(first_,firstGeneration_,address,generation_))
+            firstPinned_=false;
+        if(secondPinned_ && secondOwner_.unpinRendererPublication(second_,secondGeneration_,address,generation_))
+            secondPinned_=false;
+        if(firstPinned_ || secondPinned_) return false;
+        renderer_=first_=second_=nullptr;generation_=firstGeneration_=secondGeneration_=0;
+        return true;
+    }
+public:
+    TglOwnedRendererChildPublication(FirstOwner& first,SecondOwner& second) noexcept
+        :firstOwner_(first),secondOwner_(second) {}
+    TglOwnedRendererChildPublication(const TglOwnedRendererChildPublication&)=delete;
+    TglOwnedRendererChildPublication& operator=(const TglOwnedRendererChildPublication&)=delete;
+    // Destructor deliberately does not detach or authorize native cleanup.
+    template<class Admit> bool publish(void* renderer,size_t extent,uint64_t generation,Admit admit) noexcept {
+        if(busy_ || renderer_ || !renderer || !generation) return false;
+        busy_=true;Unlock unlock{busy_};
+        first_=firstOwner_.constructedBase();second_=secondOwner_.constructedBase();
+        firstGeneration_=firstOwner_.allocationGeneration();secondGeneration_=secondOwner_.allocationGeneration();
+        renderer_=renderer;generation_=generation;
+        const auto address=reinterpret_cast<uintptr_t>(renderer);
+        firstPinned_=firstOwner_.pinRendererPublication(first_,firstGeneration_,address,generation);
+        if(firstPinned_)
+            secondPinned_=secondOwner_.pinRendererPublication(second_,secondGeneration_,address,generation);
+        auto qualified=[&](void* object,uint64_t gen,uintptr_t a,uintptr_t b) noexcept {
+            static_assert(noexcept(admit(object,gen,a,b)));
+            return admit(object,gen,a,b) &&
+                firstOwner_.canUnpinRendererPublication(first_,firstGeneration_,address,generation) &&
+                secondOwner_.canUnpinRendererPublication(second_,secondGeneration_,address,generation);
+        };
+        if(firstPinned_ && secondPinned_)
+            linked_=links_.publish(renderer,extent,generation,reinterpret_cast<uintptr_t>(first_),
+                reinterpret_cast<uintptr_t>(second_),qualified);
+        if(!linked_) (void)releasePins(); // failed release remains represented for explicit retry
+        return linked_;
+    }
+    template<class Admit> bool detach(void* renderer,uint64_t generation,Admit admit) noexcept {
+        static_assert(noexcept(admit(renderer,generation,uintptr_t{},uintptr_t{})));
+        if(busy_ || !renderer_ || renderer!=renderer_ || generation!=generation_) return false;
+        busy_=true;Unlock unlock{busy_};
+        const auto address=reinterpret_cast<uintptr_t>(renderer);
+        auto retirement=[&](void* object,uint64_t gen,uintptr_t a,uintptr_t b) noexcept {
+            return admit(object,gen,a,b) &&
+                (!firstPinned_ || firstOwner_.canUnpinRendererPublication(first_,firstGeneration_,address,generation)) &&
+                (!secondPinned_ || secondOwner_.canUnpinRendererPublication(second_,secondGeneration_,address,generation));
+        };
+        if(linked_) {
+            if(!links_.detach(renderer,generation,retirement)) return false;
+            linked_=false;
+        } else if(!retirement(renderer,generation,reinterpret_cast<uintptr_t>(first_),
+            reinterpret_cast<uintptr_t>(second_))) return false;
+        return releasePins(); // only AFTER both slots are detached
+    }
+};
+
 // Native destructor12dfc8 uses RenderHal+a30, NOT OS+a30. The borrowed
 // RenderHal and image lease must remain live through the last batch release.
 // Qualification is supplied by the owner that authenticated the parent link.
@@ -3369,10 +3436,14 @@ public:
     }
     bool unpinRendererPublication(void* child,uint64_t allocationGeneration,
         uintptr_t renderer,uint64_t rendererGeneration) noexcept {
-        if(busy_ || !renderer || publishedRenderer_!=renderer ||
-            publishedRendererGeneration_!=rendererGeneration ||
-            !ownsLifecycleAllocation(child,allocationGeneration)) return false;
+        if(!canUnpinRendererPublication(child,allocationGeneration,renderer,rendererGeneration)) return false;
         publishedRenderer_=0;publishedRendererGeneration_=0;return true;
+    }
+    bool canUnpinRendererPublication(void* child,uint64_t allocationGeneration,
+        uintptr_t renderer,uint64_t rendererGeneration) const noexcept {
+        return !busy_ && renderer && publishedRenderer_==renderer &&
+            publishedRendererGeneration_==rendererGeneration &&
+            ownsLifecycleAllocation(child,allocationGeneration);
     }
     bool configureAllocationTail(const TglOwnedVeboxAllocationTail& tail) noexcept {
         if(!ready_ || busy_ || tableInstalled_) return false;

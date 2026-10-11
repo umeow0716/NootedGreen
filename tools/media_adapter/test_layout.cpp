@@ -11002,6 +11002,47 @@ static void testRetainedVeboxFrames() {
 
 int main() {
     {
+        struct PublicationOwner {
+            unsigned char child=0;uintptr_t renderer=0;uint64_t generation=0;
+            bool denied=false,busy=false;
+            void* constructedBase() noexcept {return &child;}
+            uint64_t allocationGeneration() const noexcept {return 9;}
+            bool pinRendererPublication(void* value,uint64_t allocation,uintptr_t parent,uint64_t epoch) noexcept {
+                if(denied || renderer || value!=&child || allocation!=9) return false;
+                renderer=parent;generation=epoch;return true;
+            }
+            bool canUnpinRendererPublication(void* value,uint64_t allocation,uintptr_t parent,uint64_t epoch) const noexcept {
+                return !busy && value==&child && allocation==9 && renderer==parent && generation==epoch;
+            }
+            bool unpinRendererPublication(void* value,uint64_t allocation,uintptr_t parent,uint64_t epoch) noexcept {
+                if(!canUnpinRendererPublication(value,allocation,parent,epoch)) return false;
+                renderer=0;generation=0;return true;
+            }
+        } first,second;
+        std::array<uint8_t,0x928> renderer{};
+        uintptr_t native=0x3000;std::memcpy(renderer.data()+0x920,&native,8);
+        const auto original=renderer;
+        TglOwnedRendererChildPublication publication(first,second);
+        auto admit=[](void*,uint64_t,uintptr_t,uintptr_t) noexcept {return true;};
+        second.denied=true;
+        assert(!publication.publish(renderer.data(),renderer.size(),4,admit));
+        assert(!first.renderer && !second.renderer && renderer==original);
+        second.denied=false;
+        assert(!publication.publish(renderer.data(),renderer.size()-1,4,admit));
+        assert(!first.renderer && !second.renderer && renderer==original);
+        assert(publication.publish(renderer.data(),renderer.size(),4,admit));
+        assert(first.renderer && second.renderer);
+        const auto published=renderer;
+        second.busy=true;
+        assert(!publication.detach(renderer.data(),4,admit));
+        assert(first.renderer && second.renderer && renderer==published);
+        second.busy=false;
+        assert(!publication.detach(renderer.data(),4,[](void*,uint64_t,uintptr_t,uintptr_t) noexcept {return false;}));
+        assert(first.renderer && second.renderer && renderer==published);
+        assert(publication.detach(renderer.data(),4,admit));
+        assert(!first.renderer && !second.renderer && renderer==original);
+    }
+    {
         std::array<uint8_t,0x928> renderer{};
         uintptr_t native=0x3000,first=0x1000,second=0x2000;
         std::memcpy(renderer.data()+0x920,&native,8);
@@ -15513,6 +15554,17 @@ int main() {
                     assert(owner.unpinRendererPublication(published,generation,0x9000,3));
                     assert(!owner.unpinRendererPublication(published,generation,0x9000,3));
                     assert(owner.constructedBase()==published && eventCount==beforeEvents);
+                    std::array<uint8_t,0x928> aliasRenderer{};
+                    const uintptr_t nativeChild=0x3000;
+                    std::memcpy(aliasRenderer.data()+0x920,&nativeChild,8);
+                    const auto originalRenderer=aliasRenderer;
+                    TglOwnedRendererChildPublication aliasPublication(owner,owner);
+                    assert(!aliasPublication.publish(aliasRenderer.data(),aliasRenderer.size(),3,
+                        [](void*,uint64_t,uintptr_t,uintptr_t) noexcept {return true;}));
+                    assert(aliasRenderer==originalRenderer);
+                    // The failed second pin must release the first owner's pin.
+                    assert(owner.pinRendererPublication(published,generation,0x9000,3));
+                    assert(owner.unpinRendererPublication(published,generation,0x9000,3));
                 }
                 assert(owner.withPrivateChild([&](void* child) noexcept {
                     assert(staleAllocation.owns(child) && staleAllocation.allocate()==0);
