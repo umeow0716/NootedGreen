@@ -10998,6 +10998,16 @@ int main() {
                       return graph.withLeasedModeAssemblyEntries(leasedChild,read,lines,retire,0x1000,0x2000,0x4000,
                         [&](void* child,const TglOwnedVpEntrySet& entries) noexcept {
                             assert(child==storage->bytes.data() && !graph.tryReset());
+                            unsigned nestedModeReads=0;
+                            auto nestedModeRead=[&](uintptr_t,void*,size_t) noexcept {
+                                ++nestedModeReads;return false;
+                            };
+                            bool nestedModeUse=false;
+                            assert(graph.withLeasedModeAssemblyEntries(child,nestedModeRead,lines,retire,
+                                0x1000,0x2000,0x4000,[&](void*,const auto&) noexcept {
+                                    nestedModeUse=true;return 0;
+                                })==5);
+                            assert(!nestedModeReads && !nestedModeUse);
                             assert(entries.inputFormat(child,reinterpret_cast<void*>(0x1000)));
                             entries.sampleMode(child,reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x2000));
                             entries.formatMode(child,reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x4000));
