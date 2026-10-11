@@ -9827,16 +9827,24 @@ int main() {
         std::array<int,6> values{};
         Context context{&values[0]};
         using Callback=TglOwnedVpFrameCallback<TglOwnedVpSfcResolve<Context>>;
+        using FrameResolve=TglOwnedVpSfcResolve<Context>;
+        TglOwnedVpEntrySet frameEntries;
+        assert(!tglBindOwnedVpFrameEntry<FrameResolve>(context.child,frameEntries));
         using Prepare=void(*)(void*,void*,void*,void*,void*,void*) noexcept;
         const Prepare prepare=&Callback::prepare;
         auto call=[&](void* child,void* source,void* target,void* conditional) noexcept {
-            prepare(child,conditional,&values[2],source,target,&values[5]);
+            const auto entry=frameEntries.prepare ? frameEntries.prepare : prepare;
+            entry(child,conditional,&values[2],source,target,&values[5]);
         };
         call(context.child,&values[3],&values[4],&values[1]);
         assert(context.calls==0); // No scoped owner, no dispatch.
         {
             TglOwnedVpSfcScopedContext<Context> scope(context.child,context);
             assert(scope.bound());
+            assert(!tglBindOwnedVpFrameEntry<FrameResolve>(&values[1],frameEntries));
+            assert(tglBindOwnedVpFrameEntry<FrameResolve>(context.child,frameEntries));
+            assert(frameEntries.prepare==prepare && frameEntries.missingMask()==(0x7ffffffU&~(1U<<5)));
+            assert(!tglBindOwnedVpFrameEntry<FrameResolve>(context.child,frameEntries));
             call(nullptr,&values[3],&values[4],&values[1]);
             call(&values[1],&values[3],&values[4],&values[1]);
             call(context.child,nullptr,&values[4],&values[1]);

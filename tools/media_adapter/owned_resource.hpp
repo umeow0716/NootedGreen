@@ -7006,6 +7006,16 @@ template<class Resolve> struct TglOwnedVpFrameCallback {
             context->prepare(conditionalSource,parameters,source,target,settings);
     }
 };
+template<class Resolve>
+bool tglBindOwnedVpFrameEntry(void* child,TglOwnedVpEntrySet& target) noexcept {
+    static_assert(noexcept(Resolve{}(child)),"VP frame binding resolver ABI");
+    auto* context=Resolve{}(child);
+    static_assert(noexcept(context->owns(child)),"VP frame binding ownership ABI");
+    if(!context || !context->owns(child) || target.prepare) return false;
+    auto candidate=target;
+    candidate.prepare=&TglOwnedVpFrameCallback<Resolve>::prepare;
+    target=candidate;return true;
+}
 // +40 caller 1e0d3b..1e0d4a invokes status90(data,source,target).
 // 1e0da9..1e0dbb instead invokes void98(data,state938,source).
 // Exact98=1e0bb0 ignores RSI and rejects null RDX/RCX before clearing
@@ -7338,8 +7348,10 @@ int tglWithOwnedVpAcquiredFrame(TglOwnedVpSfcCallerStorage& storage,
         // callbacks bind their own contexts for the same owned child.
         TglOwnedVpSfcScopedContext<FrameContext> scope(context.child,context);
         if(!scope.bound()) return 5;
-        using Callback=TglOwnedVpFrameCallback<TglOwnedVpSfcResolve<FrameContext>>;
-        Callback::prepare(context.child,reinterpret_cast<void*>(conditionalSource),
+        using Resolve=TglOwnedVpSfcResolve<FrameContext>;
+        TglOwnedVpEntrySet entries;
+        if(!tglBindOwnedVpFrameEntry<Resolve>(context.child,entries)) return 5;
+        entries.prepare(context.child,reinterpret_cast<void*>(conditionalSource),
             reinterpret_cast<void*>(parameters),reinterpret_cast<void*>(source),
             reinterpret_cast<void*>(target),reinterpret_cast<void*>(settings));
     }
