@@ -16587,6 +16587,22 @@ public:
             return invoke(nativeFrame_,context,request,outputSlot,active);
         });
     }
+    template<class Scope,class Read,class Invoke>
+    int dispatchScopedItemWithReceipt(Scope& scope,uintptr_t context,uintptr_t request,
+        uintptr_t outputSlot,Read read,Invoke invoke,TglNativeFrameOutputReceipt& receipt) noexcept {
+        if(receipt.valid) return 5;
+        receipt={};
+        return dispatchScopedItem(scope,context,request,outputSlot,read,
+            [&](uintptr_t entry,uintptr_t ctx,uintptr_t input,uintptr_t output,Scope& active) noexcept -> int {
+                const int result=invoke(entry,ctx,input,output,active);
+                uintptr_t event=0;uint32_t index=0;
+                if(result==0 && read(output,&event,sizeof(event)) && event &&
+                    event<=UINTPTR_MAX-8 && read(event+4,&index,sizeof(index)))
+                    receipt={ctx,event,index,true};
+                // Output lineage is not completion or permission to retire.
+                return result;
+            });
+    }
     template<class Pool,class Read,class Invoke>
     int dispatchItemWithReceipt(Pool& pool,uintptr_t context,uintptr_t request,
         uintptr_t outputSlot,Read read,Invoke invoke,TglNativeFrameOutputReceipt& receipt) noexcept {

@@ -11935,6 +11935,21 @@ static void testRetainedVeboxFrames() {
                 assert(privateTable.dispatchScopedItem(scope,context+8,0x55000,0x66000,read,call)==5);
                 return privateTable.dispatchScopedItem(scope,context,0x55000,0x66000,read,call);
             })==31 && scopedCalls==1);
+            TglNativeFrameOutputReceipt scopedReceipt;
+            auto scopedRead=[&](uintptr_t address,void* bytes,size_t size) noexcept {
+                if(address==0x66000 && size==8) {const uintptr_t event=0x77000;std::memcpy(bytes,&event,8);return true;}
+                if(address==0x77004 && size==4) {const uint32_t index=9;std::memcpy(bytes,&index,4);return true;}
+                return read(address,bytes,size);
+            };
+            assert(scopedRegistry.withScope(ticket,base,0x8000,[&](auto& scope) noexcept -> int {
+                auto call=[&](uintptr_t target,uintptr_t ctx,uintptr_t request,uintptr_t output,auto& active) noexcept -> int {
+                    ++scopedCalls;assert(target==entry && ctx==context && request==0x55000 && output==0x66000 && &active==&scope);
+                    return 0;
+                };
+                assert(privateTable.dispatchScopedItemWithReceipt(scope,context,0x55000,0x66000,scopedRead,call,scopedReceipt)==0);
+                assert(scopedReceipt.valid && scopedReceipt.context==context && scopedReceipt.event==0x77000 && scopedReceipt.index==9);
+                return privateTable.dispatchScopedItemWithReceipt(scope,context,0x55000,0x66000,scopedRead,call,scopedReceipt);
+            })==5 && scopedCalls==2);
             assert(scopedRegistry.destroy(ticket,base,0x8000,[](uintptr_t physical) noexcept -> int {
                 assert(physical==0x8000);return 0;
             })==0);
