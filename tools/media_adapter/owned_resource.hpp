@@ -10783,13 +10783,20 @@ template<size_t Count,class TargetOwner,class Owner,class ChildOwner,class Execu
 int tglRunCapturedFfdiFromReport(std::array<TglOwnedDescriptorOnlySurface,Count>& descriptors,
     const std::array<TargetOwner*,Count>& backed,Owner& input,Owner* executionSurface,Owner* secondary,
     ChildOwner& childOwner,ExecutionOwner& reportOwner,void* child,uintptr_t report,
-    const TglOwnedSurfaceStorage& source,size_t count,Read read,SfcFormat sfcFormat,
+    const TglOwnedSurfaceStorage& source,Read read,SfcFormat sfcFormat,
     SfcColor sfcColor,ParameterKind parameterKind,Supports supports,Use use,
     std::array<const TglOwnedSurfaceStorage*,3> captured={}) noexcept {
-    if(!count || count>Count) return 5;
     return tglRunCapturedFfdiProducers(input,childOwner,reportOwner,child,report,source,
         read,sfcFormat,sfcColor,parameterKind,supports,
         [&](const auto& currentSource,uintptr_t currentReport,const auto& request,const auto& metadata) noexcept {
+            // Read the history-produced count only inside captured child/report
+            // admission. Zero-slot secondary-only assembly is not implemented;
+            // refuse it rather than silently skip its native metadata work.
+            TglVeboxHistoryState history;size_t count=0;
+            const auto address=reinterpret_cast<uintptr_t>(child);
+            if(address>UINTPTR_MAX-0x1b5f ||
+                !read(address+0x1b5c,&history.field1b5c,4) ||
+                !tglOwnedFfdiCountFromHistory(count,history,Count) || !count) return 5;
             if(captured[0] && captured[0]!=&currentSource) return 5;
             captured[0]=&currentSource;
             if(request.kind==TglOwnedFfdiAllocationKind::DescriptorOnly)

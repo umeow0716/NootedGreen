@@ -6486,7 +6486,7 @@ static void testNativeResourceBoundary() {
                                     assert(!frameTargets[0].withDescriptor([](const auto&) noexcept {assert(false);}));
                                     auto runEither=[&]() noexcept {
                                         return tglRunCapturedFfdiFromReport(frameTargets,backedTargets,owner,&owner,&destination,
-                                            childOwner,reportOwner,actualChild,report,source,2,read,noSfc,noSfc,noParameter,
+                                            childOwner,reportOwner,actualChild,report,source,read,noSfc,noSfc,noParameter,
                                             [](uint32_t) noexcept {return true;},
                                             [&](const auto& inputs,const auto& outputs,size_t count,uint8_t,uint8_t) noexcept {
                                                 ++used;assert(inputs[0]==&source && count==2);
@@ -6500,6 +6500,14 @@ static void testNativeResourceBoundary() {
                                                 return -17;
                                             });
                                     };
+                                    uint32_t nativeCount=3;
+                                    std::memcpy(child.data()+0x1b5c,&nativeCount,4);
+                                    assert(runEither()==5 && !used && !backingBackend.allocations);
+                                    nativeCount=0;
+                                    std::memcpy(child.data()+0x1b5c,&nativeCount,4);
+                                    assert(runEither()==5 && !used && !backingBackend.allocations);
+                                    nativeCount=2;
+                                    std::memcpy(child.data()+0x1b5c,&nativeCount,4);
                                     assert(runEither()==-17 && backingBackend.allocations==2);
                                     reportBackend.bytes[0x12]=1;
                                     assert(runEither()==-17 && backingBackend.allocations==2 && !backingBackend.releases);
