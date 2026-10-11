@@ -10197,6 +10197,54 @@ int main() {
                             return nativeResult;
                         };
                         assert(tglInvokeLeasedVeboxRender(render,owner,child,&argument1,&argument2,invokeRender)==nativeResult);
+                        // Actual tracked surface owners plus the actual child
+                        // owner, with a CPU allocation fixture (not GPU proof).
+                        struct SurfaceBackend {
+                            unsigned allocated=0,released=0;
+                            uint32_t resourceType() const noexcept {return 1;}
+                            int allocate(std::array<uint8_t,0x148>& storage,
+                                const TglResourceKey& key,uint32_t* width) noexcept {
+                                storage.fill(0);storage[0]=1;*width=key.width;
+                                ++allocated;return 0;
+                            }
+                            bool backed(const std::array<uint8_t,0x148>& storage) noexcept {
+                                return storage[0]==1;
+                            }
+                            void release(std::array<uint8_t,0x148>& storage) noexcept {
+                                assert(storage[0]==1);storage.fill(0);++released;
+                            }
+                        } surfaceBackend;
+                        {
+                            TglOwnedAllocatedSurface<SurfaceBackend> sourceOwner(surfaceBackend);
+                            TglOwnedAllocatedSurface<SurfaceBackend> targetOwner(surfaceBackend);
+                            TglResourceKey key{};key.width=1920;key.height=1080;key.format=0x3d;
+                            assert(sourceOwner.ensure(key)==0 && targetOwner.ensure(key)==0);
+                            assert(sourceOwner.withSurface([&](const auto& source) noexcept {
+                                assert(targetOwner.withSurface([&](const auto& target) noexcept {
+                                    unsigned calls=0;
+                                    auto surfaceRender=[&](uintptr_t entry,void* c,void* a,void* b) noexcept -> int {
+                                        assert(entry==render.entry && c==child && a==&argument1);
+                                        uintptr_t input=0,output=0;
+                                        const auto* descriptor=static_cast<uint8_t*>(b);
+                                        std::memcpy(&input,descriptor+0x10,8);
+                                        std::memcpy(&output,descriptor+0x18,8);
+                                        assert(input==reinterpret_cast<uintptr_t>(&source) &&
+                                            output==reinterpret_cast<uintptr_t>(&target));
+                                        sourceOwner.reset();targetOwner.reset();owner.reset();
+                                        assert(!surfaceBackend.released && cpu.live);
+                                        assert(sourceOwner.hasSurfaceLease(source) && targetOwner.hasSurfaceLease(target));
+                                        assert(!sourceOwner.withSurface([](const auto&) noexcept {assert(false);}));
+                                        ++calls;return nativeResult;
+                                    };
+                                    assert(tglInvokeLeasedVeboxSurfaceRender(render,owner,child,&argument1,
+                                        sourceOwner,source,targetOwner,target,surfaceRender)==nativeResult);
+                                    assert(calls==1 && !surfaceBackend.released);
+                                }));
+                            }));
+                            sourceOwner.reset();targetOwner.reset();
+                            assert(surfaceBackend.allocated==2 && surfaceBackend.released==2);
+                        }
+                        assert(surfaceBackend.released==2); // no destructor double release
                         render.image+=0x1000;render.entry+=0x1000;
                         assert(tglInvokeLeasedVeboxRender(render,owner,child,&argument1,&argument2,invokeRender)==5 && renders==1);
                         assert(owner.publishCsc(leasedCsc));
