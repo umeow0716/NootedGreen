@@ -13275,11 +13275,21 @@ int main() {
                 resources.context=reinterpret_cast<uintptr_t>(&backing);
                 resources.allocate=reinterpret_cast<uintptr_t>(&NativeBacking::allocate);
                 resources.release=reinterpret_cast<uintptr_t>(&NativeBacking::release);
-                TglOwnedVeboxFrameRetention retention;
+                struct UnusedStmmApi {
+                    uintptr_t surface(uintptr_t value) noexcept {return value;}
+                    bool retain(uintptr_t) noexcept {assert(false);return false;}
+                    void release(uintptr_t) noexcept {assert(false);}
+                    int lock(uintptr_t) noexcept {assert(false);return 5;}
+                    int unlock(uintptr_t) noexcept {assert(false);return 5;}
+                    bool view(uintptr_t,TglOwnedStmmView&) noexcept {assert(false);return false;}
+                };
                 {
-                    TglNativeVpBackingStorage<NativeCpu> owned(0x100000,allocatorRead,
+                    TglNativeVeboxVpFrameBacking<UnusedStmmApi,NativeCpu> frame(0x100000,allocatorRead,
                         [](uintptr_t) noexcept {return true;},
-                        [](uintptr_t,size_t) noexcept {return true;},retention,nativeCpu);
+                        [](uintptr_t,size_t) noexcept {return true;},resources,4096,
+                        TglNativeBufferFillBinding{},nativeCpu);
+                    auto& owned=frame.vp();
+                    assert(&frame.retention()==&frame.command().backing().auxiliary().retention());
                     assert(!owned.bound());
                     assert(owned.initialize(binding,resources,4096,0x7000,0x8000,0x3000,noRead,1,0)==0);
                     assert(owned.bound());
@@ -13290,6 +13300,14 @@ int main() {
                         return -17;
                     })==-17);
                     assert(backing.live==3 && !backing.releases);
+                    frame.retention().observe(TglOwnedVeboxCommandTransactionResult{31,31,true,false});
+                    assert(owned.initialize(binding,resources,4096,0x7000,0x8000,0x3000,noRead,1,0)==5);
+                    assert(owned.withResources([](auto& active,auto&,auto&) noexcept -> int {
+                        assert(!active.tryReset());return 0;
+                    })==0);
+                    assert(backing.live==3 && !backing.releases);
+                    // CPU fixture now supplies retirement by ending the scope;
+                    // runtime must keep the complete frame until a real fence.
                 }
                 assert(!backing.live && backing.releases==3 && !stateCpu.live && !avsCpu.live);
                 assert(releaseCount==2 && releaseOrder[0]==1 && releaseOrder[1]==2);

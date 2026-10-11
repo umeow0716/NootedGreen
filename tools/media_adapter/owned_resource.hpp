@@ -15457,6 +15457,29 @@ public:
     }
 };
 
+// CPU backing for one retained native frame. Command storage owns the shared
+// monotonic retention latch; VP resources are destroyed before that storage.
+// This is not the complete renderer: enclosing ownership still retains native
+// physical/context/image, source/target and child pair through GPU retirement.
+template<class Api,class Invoker=TglNativeTrackedCpuInvoker>
+class TglNativeVeboxVpFrameBacking {
+    TglNativeVeboxCommandFrameStorage<Api> command_;
+    TglNativeVpBackingStorage<Invoker> vp_;
+public:
+    template<class Read,class Qualify,class Executable,class... Args>
+    TglNativeVeboxVpFrameBacking(uintptr_t image,Read read,Qualify qualify,
+        Executable executable,const TglNativeResourceBinding& resources,
+        uint64_t pageSize,const TglNativeBufferFillBinding& fill,Invoker invoke,
+        Args&&... args)
+        :command_(resources,pageSize,fill,std::forward<Args>(args)...),
+         vp_(image,read,qualify,executable,command_.backing().auxiliary().retention(),invoke) {}
+    TglNativeVeboxVpFrameBacking(const TglNativeVeboxVpFrameBacking&)=delete;
+    TglNativeVeboxVpFrameBacking& operator=(const TglNativeVeboxVpFrameBacking&)=delete;
+    auto& command() noexcept {return command_;}
+    auto& vp() noexcept {return vp_;}
+    auto& retention() noexcept {return command_.backing().auxiliary().retention();}
+};
+
 // Allocation transaction for a history-enabled frame. The qualified platform
 // planner supplies resource keys and statistics boundary dimensions; this does
 // not infer feature admission or SFC resources. All three owners outlive this
