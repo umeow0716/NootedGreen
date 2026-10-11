@@ -11453,8 +11453,15 @@ public:
     }
     template<class Fill>
     int ensure(uint32_t width, uint32_t height, Fill fill) noexcept {
+        return ensure(width,height,fill,[](const Storage&,const TglStatisticsAllocation&) noexcept {});
+    }
+    template<class Fill,class Publish>
+    int ensure(uint32_t width,uint32_t height,Fill fill,Publish publish) noexcept {
         static_assert(noexcept(fill(owner_.storage(), uint32_t{})),
                       "initialization must report status without throwing");
+        static_assert(noexcept(publish(owner_.storage(),std::declval<const TglStatisticsAllocation&>())) &&
+            std::is_same_v<decltype(publish(owner_.storage(),std::declval<const TglStatisticsAllocation&>())),void>,
+            "statistics changed-layout publication ABI");
         if(busy_) return 5;
         TglStatisticsAllocation candidate;
         const int shape = tglStatisticsAllocationSize(width, height, candidate);
@@ -11469,7 +11476,9 @@ public:
         }
         if (result.changed) {
             const int status = owner_.withStorage([&](const auto& storage) noexcept {
-                return fill(storage,candidate.bytes);
+                const int filled=fill(storage,candidate.bytes);
+                if(!filled) publish(storage,static_cast<const TglStatisticsAllocation&>(candidate));
+                return filled;
             });
             if (status) { retire(); return status; }
         }

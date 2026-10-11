@@ -4571,6 +4571,17 @@ static void testComposedStatisticsBuffer() {
         TglOwnedAllocatedSurface<SourceBackend> source(sourceBackend);
         const TglResourceKey sourceKey{64,16,0x19,1,0,false};
         assert(source.ensure(sourceKey)==0);
+        unsigned publications=0;
+        std::array<uint32_t,2> childLayout{99,99};
+        const auto publish=[&](const auto& resource,const TglStatisticsAllocation& layout) noexcept {
+            ++publications;assert(fixture.fills==publications);
+            assert(tglNativeBackingPresent(resource));
+            for(size_t i=0;i<layout.bytes;++i) assert(fixture.bytes[i]==0);
+            const auto released=fixture.releases;
+            statistics.reset();assert(fixture.releases==released);
+            assert(statistics.ensure(64,16,initialize)==5);
+            childLayout={layout.rowBytes,layout.blockRows};
+        };
         struct Info {uint32_t width=0,height=0;};
         uint32_t publishedWidth=7,publishedHeight=9;
         assert(tglPrepareOwnedStatisticsBoundary<Info>(source,1,
@@ -4582,18 +4593,23 @@ static void testComposedStatisticsBuffer() {
             },publishedWidth,publishedHeight,
             [&](uint32_t width,uint32_t height) noexcept {
                 source.reset();assert(source.ensure(sourceKey)==5);
-                return statistics.ensure(width,height,initialize);
+                return statistics.ensure(width,height,initialize,publish);
             })==0);
         assert(publishedWidth==64 && publishedHeight==16);
+        assert(publications==1 && childLayout[0]==64 && childLayout[1]==4);
         assert(statistics.layout().bytes == 1280 && fixture.fills == 1);
         for (size_t i = 0; i < fixture.bytes.size(); ++i)
             assert(fixture.bytes[i] == (i < 1280 ? 0 : 0xa5));
-        assert(statistics.ensure(64, 16, initialize) == 0 && fixture.fills == 1);
+        childLayout={77,88};
+        assert(statistics.ensure(64, 16, initialize,publish) == 0 && fixture.fills == 1);
+        assert(publications==1 && childLayout[0]==77 && childLayout[1]==88); // native unchanged skips publication
         fixture.writable = false;
-        assert(statistics.ensure(128, 16, initialize) == 5);
+        assert(statistics.ensure(128, 16, initialize,publish) == 5);
+        assert(publications==1 && childLayout[0]==77 && childLayout[1]==88);
         assert(statistics.layout().bytes == 0 && fixture.allocations == fixture.releases);
         fixture.writable = true;
-        assert(statistics.ensure(128, 16, initialize) == 0 && fixture.fills == 2);
+        assert(statistics.ensure(128, 16, initialize,publish) == 0 && fixture.fills == 2);
+        assert(publications==2 && childLayout[0]==128 && childLayout[1]==4);
     }
     assert(fixture.allocations == 3 && fixture.releases == 3);
 }
