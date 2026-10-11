@@ -2038,17 +2038,23 @@ bool tglQueryNativeTwoPassCsc(const TglTwoPassCscBinding& binding,
 
 struct TglExecutionBinding {
     uintptr_t image = 0, create = 0, initialize = 0, destroy = 0;
+    inline static constexpr std::array<uint8_t,14> releaseCounter{
+        0x48,0x8d,0x05,0x27,0x51,0x6c,0,0x8b,0x08,0x83,0xc1,0xff,0x89,0x08};
+    inline static constexpr std::array<uint8_t,13> releaseDispatch{
+        0x48,0x8b,0x45,0xf0,0x48,0x8b,0x08,0x48,0x89,0xc7,0xff,0x51,0x08};
+    inline static constexpr std::array<uint8_t,11> releaseClear{
+        0x48,0x8b,0x45,0xf8,0x48,0xc7,0,0,0,0,0};
     // Caller retains the authenticated image for the entire owner lifetime.
     template<class Read, class Qualify, class Executable>
     bool resolve(uintptr_t base, Read read, Qualify qualify, Executable executable) {
         *this = {};
-        constexpr std::array<uintptr_t, 3> offsets{0x12ebc0, 0x12e420, 0x12e3f0};
+        constexpr std::array<uintptr_t, 3> offsets{0x12ebc0, 0x12e420, 0x12e0d0};
         constexpr std::array<std::array<uint8_t, 16>, 3> anchors{{
             {0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x40,0x48,0x8b,0x35,0x59,0x54,0x62,0x00,0xbf},
             {0x55,0x48,0x89,0xe5,0x48,0x81,0xec,0xb0,0x09,0x00,0x00,0x48,0x8b,0x05,0x56,0x5c},
             {0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x10,0x48,0x89,0x7d,0xf8,0x48,0x8b,0x45,0xf8}
         }};
-        if (!base || base > std::numeric_limits<uintptr_t>::max() - 0x757fd0 ||
+        if (!base || base > std::numeric_limits<uintptr_t>::max() - 0x7f321c ||
             !qualify(base)) return false;
         for (size_t i = 0; i < offsets.size(); ++i) {
             std::array<uint8_t, 16> bytes{};
@@ -2056,6 +2062,11 @@ struct TglExecutionBinding {
                 !read(base + offsets[i], bytes.data(), bytes.size()) || bytes != anchors[i])
                 return false;
         }
+        std::array<uint8_t,14> counter{};std::array<uint8_t,13> dispatch{};
+        std::array<uint8_t,11> clear{};
+        if(!executable(base+0x12e0ea,counter.size()) || !read(base+0x12e0ea,counter.data(),counter.size()) || counter!=releaseCounter ||
+           !executable(base+0x12e10d,dispatch.size()) || !read(base+0x12e10d,dispatch.data(),dispatch.size()) || dispatch!=releaseDispatch ||
+           !executable(base+0x12e11a,clear.size()) || !read(base+0x12e11a,clear.data(),clear.size()) || clear!=releaseClear) return false;
         uint32_t allocationSize=0;
         if(!executable(base+0x12ebd0,4) ||
             !read(base+0x12ebd0,&allocationSize,4) || allocationSize!=0xd48) return false;
@@ -2071,7 +2082,9 @@ struct TglExecutionBinding {
 };
 
 // Invoker is injected for offline tests. Native invoker must use the exact
-// x86_64 signatures: uintptr_t factory(), int Init(uintptr_t), void delete(uintptr_t).
+// x86_64 signatures: uintptr_t factory(), int Init(uintptr_t), void Release(uintptr_t*).
+// Release12e0d0 pairs factory accounting before virtual deleting destruction;
+// direct12e3f0 would free storage but leak the native allocation counter.
 // Binding/image lease must remain valid until every owned object is destroyed.
 struct TglNativeExecutionInvoker {
     uintptr_t create(uintptr_t entry) const noexcept {
@@ -2081,7 +2094,8 @@ struct TglNativeExecutionInvoker {
         return reinterpret_cast<int(*)(uintptr_t)>(entry)(object);
     }
     void destroy(uintptr_t entry,uintptr_t object) const noexcept {
-        reinterpret_cast<void(*)(uintptr_t)>(entry)(object);
+        uintptr_t slot=object;
+        reinterpret_cast<void(*)(uintptr_t*)>(entry)(&slot);
     }
     int commitDndi(uintptr_t object,const TglOwnedDndiState& state) const noexcept {
         // Factory12ebcf allocates d48 bytes. Owner retains that allocation and
@@ -2112,10 +2126,10 @@ public:
         else binding = verified;
     }
     bool bound() const {
-        return binding.image && binding.image <= std::numeric_limits<uintptr_t>::max() - 0x757fd0 &&
+        return binding.image && binding.image <= std::numeric_limits<uintptr_t>::max() - 0x7f321c &&
             binding.create == binding.image + 0x12ebc0 &&
             binding.initialize == binding.image + 0x12e420 &&
-            binding.destroy == binding.image + 0x12e3f0 && qualify(binding.image);
+            binding.destroy == binding.image + 0x12e0d0 && qualify(binding.image);
     }
     uintptr_t create() noexcept {
         return bound() ? invoke.create(binding.create) : 0;

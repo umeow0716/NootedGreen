@@ -2681,9 +2681,26 @@ static void testVeboxHardwareBinding() {
     assert(!state.resource && !state.instanceOffset);
 }
 
+static bool executionReleaseFixture(uintptr_t base,uintptr_t p,void* out,size_t n) {
+    if(p==base+0x12e0ea && n==14) {std::memcpy(out,TglExecutionBinding::releaseCounter.data(),n);return true;}
+    if(p==base+0x12e10d && n==13) {std::memcpy(out,TglExecutionBinding::releaseDispatch.data(),n);return true;}
+    if(p==base+0x12e11a && n==11) {std::memcpy(out,TglExecutionBinding::releaseClear.data(),n);return true;}
+    return false;
+}
 static void testExecutionBinding() {
+    {
+        struct Accounting {unsigned counter=1,deletes=0;} native;
+        auto release=+[](uintptr_t* slot) {
+            assert(slot && *slot);
+            auto& object=*reinterpret_cast<Accounting*>(*slot);
+            assert(object.counter==1);--object.counter;++object.deletes;*slot=0;
+        };
+        TglNativeExecutionInvoker{}.destroy(reinterpret_cast<uintptr_t>(release),
+            reinterpret_cast<uintptr_t>(&native));
+        assert(!native.counter && native.deletes==1);
+    }
     constexpr uintptr_t base = 0x1000000;
-    constexpr std::array<uintptr_t, 3> offsets{0x12ebc0, 0x12e420, 0x12e3f0};
+    constexpr std::array<uintptr_t, 3> offsets{0x12ebc0, 0x12e420, 0x12e0d0};
     std::array<std::array<uint8_t, 16>, 3> bytes{{
         {0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x40,0x48,0x8b,0x35,0x59,0x54,0x62,0,0xbf},
         {0x55,0x48,0x89,0xe5,0x48,0x81,0xec,0xb0,9,0,0,0x48,0x8b,5,0x56,0x5c},
@@ -2693,7 +2710,12 @@ static void testExecutionBinding() {
     bool identity = true, rx = true;
     uint32_t allocationSize=0xd48;
     uintptr_t resetEntry=base+0x12e420;bool resetReadable=true;
+    size_t mutateReleaseSize=0,mutateReleaseByte=0;
     auto read = [&](uintptr_t p, void* out, size_t n) {
+        if(executionReleaseFixture(base,p,out,n)) {
+            if(n==mutateReleaseSize) static_cast<uint8_t*>(out)[mutateReleaseByte]^=1;
+            return true;
+        }
         if(p==base+0x757ea0 && n==8 && resetReadable) {std::memcpy(out,&resetEntry,8);return true;}
         if(p==base+0x12ebd0 && n==4) {std::memcpy(out,&allocationSize,4);return true;}
         for (size_t i = 0; i < offsets.size(); ++i)
@@ -2703,8 +2725,13 @@ static void testExecutionBinding() {
         return false;
     };
     auto qualify = [&](uintptr_t p) { return identity && p == base; };
-    auto executable = [&](uintptr_t, size_t n) { return rx && (n == 16 || n==4); };
+    auto executable = [&](uintptr_t, size_t n) { return rx && (n == 16 || n==4 || n==14 || n==13 || n==11); };
     TglExecutionBinding b;
+    for(size_t n : {14u,13u,11u}) for(size_t i=0;i<n;++i) {
+        mutateReleaseSize=n;mutateReleaseByte=i;
+        assert(!b.resolve(base,read,qualify,executable) && !b.image);
+    }
+    mutateReleaseSize=0;
     assert(b.resolve(base, read, qualify, executable));
     assert(b.image == base && b.create == base + offsets[0] &&
            b.initialize == base + offsets[1] && b.destroy == base + offsets[2]);
@@ -2735,6 +2762,7 @@ static void testExecutionShape() {
         {0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x10,0x48,0x89,0x7d,0xf8,0x48,0x8b,0x45,0xf8}
     }};
     auto read = [&](uintptr_t p, void* out, size_t n) {
+        if(codeValid && executionReleaseFixture(image,p,out,n)) return true;
         if(p==image+0x757ea0 && n==8 && codeValid) {
             const uintptr_t reset=image+0x12e420;std::memcpy(out,&reset,8);return true;
         }
@@ -2742,7 +2770,7 @@ static void testExecutionShape() {
             const uint32_t allocationSize=0xd48;std::memcpy(out,&allocationSize,4);return true;
         }
         if (n == 16 && codeValid) {
-            const std::array<uintptr_t, 3> offsets{0x12ebc0, 0x12e420, 0x12e3f0};
+            const std::array<uintptr_t, 3> offsets{0x12ebc0, 0x12e420, 0x12e0d0};
             for (size_t i = 0; i < offsets.size(); ++i)
                 if (p == image + offsets[i]) {
                     std::memcpy(out, code[i].data(), n); return true;
@@ -2776,11 +2804,11 @@ static void testExecutionShape() {
             ++calls->initializes; return calls->result;
         }
         void destroy(uintptr_t entry, uintptr_t p) noexcept {
-            assert(entry == 0x1000000 + 0x12e3f0 && p == 0x2000); ++calls->destroys;
+            assert(entry == 0x1000000 + 0x12e0d0 && p == 0x2000); ++calls->destroys;
         }
     } invoke{&calls};
-    TglExecutionBinding binding{image, image + 0x12ebc0, image + 0x12e420, image + 0x12e3f0};
-    auto executable = [&](uintptr_t, size_t n) { return codeRx && (n == 16 || n==4); };
+    TglExecutionBinding binding{image, image + 0x12ebc0, image + 0x12e420, image + 0x12e0d0};
+    auto executable = [&](uintptr_t, size_t n) { return codeRx && (n == 16 || n==4 || n==14 || n==13 || n==11); };
     TglExecutionBackend backend(binding, read, qualify, invoke, executable);
     {
         TglExecutionOwner owner(backend);
