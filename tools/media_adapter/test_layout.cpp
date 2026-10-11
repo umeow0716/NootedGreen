@@ -6407,6 +6407,50 @@ static void testNativeResourceBoundary() {
                             2,0x19,1,{true,1},{8,3},reportOwner,report,consume);
                     })==-17);
                     assert(reportBackend.bytes[0x13]==1 && reportBackend.bytes[0x14]==1);
+                    {
+                        std::array<uint8_t,0x1bc0> child{};
+                        TestVeboxChildLease childOwner{child.data()};
+                        std::array<TglOwnedDescriptorOnlySurface,2> frameTargets;
+                        unsigned used=0;
+                        assert(owner.withSurface([&](const auto& source) noexcept {
+                            assert(childOwner.withPrivateChild([&](void* actualChild) noexcept {
+                                return reportOwner.withExecution([&](uintptr_t report) noexcept {
+                                    reportBackend.bytes.fill(0);reportBackend.bytes[0x12]=1;
+                                    child[0x1ba9]=1;
+                                    const auto sourcePointer=reinterpret_cast<uintptr_t>(&source);
+                                    std::memcpy(child.data()+0x88,&report,8);
+                                    std::memcpy(child.data()+0x1b0,&sourcePointer,8);
+                                    auto read=[&](uintptr_t p,void* out,size_t n) noexcept {
+                                        const auto c=reinterpret_cast<uintptr_t>(child.data());
+                                        if(p>=c && p-c<=child.size() && n<=child.size()-(p-c)) {
+                                            std::memcpy(out,child.data()+(p-c),n);return true;
+                                        }
+                                        if(p>=report && p-report<=reportBackend.bytes.size() &&
+                                            n<=reportBackend.bytes.size()-(p-report)) {
+                                            std::memcpy(out,reportBackend.bytes.data()+(p-report),n);return true;
+                                        }
+                                        return false;
+                                    };
+                                    auto noSfc=[](uint32_t&) noexcept {assert(false);return false;};
+                                    auto noParameter=[](uintptr_t,uint32_t&) noexcept {assert(false);return false;};
+                                    auto run=[&]() noexcept {
+                                    return tglRunCapturedDescriptorFfdiFromReport(frameTargets,owner,&owner,&destination,
+                                        childOwner,reportOwner,actualChild,report,source,2,read,noSfc,noSfc,noParameter,
+                                        [](uint32_t) noexcept {return true;},
+                                        [&](const auto& inputs,const auto& outputs,size_t count,uint8_t,uint8_t) noexcept {
+                                            ++used;assert(inputs[0]==&source && count==2 && outputs[0] && outputs[1]);
+                                            return -17;
+                                        });
+                                    };
+                                    reportBackend.bytes[0x12]=0;
+                                    assert(run()==5 && !used); // source3d requires real backing, not a descriptor
+                                    assert(!frameTargets[0].withDescriptor([](const auto&) noexcept {assert(false);}));
+                                    reportBackend.bytes[0x12]=1;
+                                    return run();
+                                });
+                            })==-17);
+                        }) && used==1);
+                    }
                     assert(actualTargets[1].withDescriptor([&](const auto&) noexcept {
                         assert(reportOwner.withExecution([&](uintptr_t report) noexcept {
                             reportBackend.bytes[0x13]=0xa5;reportBackend.bytes[0x14]=0x5a;

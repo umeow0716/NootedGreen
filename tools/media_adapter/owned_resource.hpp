@@ -10632,6 +10632,34 @@ bool tglPrepareOwnedFfdiMetadataFromReport(TglOwnedFfdiMetadataQuery& output,
     if(preserveSample) std::memcpy(&candidate.sampleType,source.prefix.data()+0x138,4);
     output=candidate;return true;
 }
+// One captured frame composes report-derived request/metadata with concrete
+// descriptor owners and execution-owner publication. The platform's held SFC
+// and parameter owners supply only their qualified scalar readers. Count is
+// still caller-qualified; this entry does not invent a platform slot count.
+template<size_t Count,class Owner,class ChildOwner,class ExecutionOwner,class Read,
+    class SfcFormat,class SfcColor,class ParameterKind,class Supports,class Use>
+int tglRunCapturedDescriptorFfdiFromReport(
+    std::array<TglOwnedDescriptorOnlySurface,Count>& targets,Owner& input,
+    Owner* executionSurface,Owner* secondary,ChildOwner& childOwner,ExecutionOwner& reportOwner,
+    void* child,uintptr_t report,const TglOwnedSurfaceStorage& source,size_t count,
+    Read read,SfcFormat sfcFormat,SfcColor sfcColor,ParameterKind parameterKind,
+    Supports supports,Use use,std::array<const TglOwnedSurfaceStorage*,3> captured={}) noexcept {
+    return tglRunCapturedVeboxAllocation(input,childOwner,reportOwner,child,report,source,
+        [&](void* currentChild,uintptr_t currentReport,const auto& currentSource) noexcept {
+            TglOwnedFfdiAllocationRequest request;TglOwnedFfdiMetadataQuery metadata;
+            const auto address=reinterpret_cast<uintptr_t>(currentChild);
+            if(!tglPrepareOwnedFfdiRequestFromReport(request,currentSource,address,currentReport,
+                read,sfcFormat,supports) ||
+               !tglPrepareOwnedFfdiMetadataFromReport(metadata,currentSource,address,currentReport,
+                read,sfcColor,parameterKind)) return 5;
+            if(captured[0] && captured[0]!=&currentSource) return 5;
+            captured[0]=&currentSource;
+            return tglWithOwnedDescriptorFfdiReportBatch(targets,input,executionSurface,secondary,
+                count,request.key.format,request.key.tile,
+                {request.key.compressed,request.key.compressionMode},metadata,
+                reportOwner,currentReport,use,captured);
+        });
+}
 template<class Read>
 bool tglReadOwnedStateExecution(TglOwnedStateInputs& output, uintptr_t execution,
                                 bool diArgument, Read read) {
