@@ -10865,6 +10865,44 @@ static void testRetainedVeboxFrames() {
 }
 
 int main() {
+    {
+        std::array<uint8_t,0x12f8> context{};
+        std::array<uint8_t,0x58> physical{};
+        std::array<uint8_t,0x10> os{};
+        std::array<uint8_t,0x50> wrapper{};
+        const auto c=reinterpret_cast<uintptr_t>(context.data());
+        const auto p=reinterpret_cast<uintptr_t>(physical.data());
+        const auto o=reinterpret_cast<uintptr_t>(os.data());
+        const auto w=reinterpret_cast<uintptr_t>(wrapper.data());
+        auto put=[](uintptr_t base,size_t offset,uintptr_t value) {
+            std::memcpy(reinterpret_cast<void*>(base+offset),&value,8);
+        };
+        put(c,0x128,p);put(c,0x12f0,o);put(p,0x50,w);put(o,8,w+0x48);
+        auto admit=[&](uintptr_t address,size_t size) noexcept {
+            for(const auto& range:std::array<std::pair<uintptr_t,size_t>,4>{{
+                {c,context.size()},{p,physical.size()},{o,os.size()},{w,wrapper.size()}}})
+                if(address>=range.first && address-range.first<=range.second &&
+                   size<=range.second-(address-range.first)) return true;
+            return false;
+        };
+        auto read=[&](uintptr_t address,void* output,size_t size) noexcept {
+            if(!admit(address,size)) return false;
+            std::memcpy(output,reinterpret_cast<const void*>(address),size);return true;
+        };
+        TglNativeVeboxParentView view;
+        assert(view.resolve(c,read,admit));
+        assert(view.context==c && view.physical==p && view.os==o && view.wrapper==w);
+        put(o,8,w);assert(!view.resolve(c,read,admit));
+        assert(!view.context && !view.physical && !view.os && !view.wrapper);
+        put(o,8,w+0x48);put(p,0x50,0);
+        assert(!view.resolve(c,read,admit));
+        assert(!view.resolve(UINTPTR_MAX-8,read,admit));
+        put(p,0x50,w);
+        assert(!view.resolve(c,read,[](uintptr_t,size_t) noexcept {return false;}));
+        assert(!view.resolve(c,[](uintptr_t,void*,size_t) noexcept {return false;},admit));
+        put(p,0x50,UINTPTR_MAX-0x40);
+        assert(!view.resolve(c,read,admit));
+    }
     testGuardedVeboxLifecycle();
     testRetainedVeboxFrames();
     {

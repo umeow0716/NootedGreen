@@ -1503,6 +1503,31 @@ public:
     }
 };
 
+// Exact2339db stores physical into context128;233b18 stores the address
+// returned by2281d0 (physical50 wrapper +48) into context12f0's OS+8.
+// This is a borrowed graph, NOT a retain operation. Caller must hold the
+// context/physical/image generation lease throughout resolve and consumption.
+// Do not confuse factory-table metadata0 or physical entries-array78 with OS.
+struct TglNativeVeboxParentView {
+    uintptr_t context=0,physical=0,os=0,wrapper=0;
+    template<class Read,class Admit>
+    bool resolve(uintptr_t candidate,Read read,Admit admit) noexcept {
+        *this={};
+        uintptr_t parent=0,storage=0,owner=0,embedded=0;
+        if(!candidate || candidate>UINTPTR_MAX-0x12f8 ||
+           !admit(candidate,size_t{0x12f8}) ||
+           !read(candidate+0x128,&parent,8) || !parent ||
+           !read(candidate+0x12f0,&storage,8) || !storage ||
+           parent>UINTPTR_MAX-0x58 || storage>UINTPTR_MAX-0x10 ||
+           !admit(parent,size_t{0x58}) || !admit(storage,size_t{0x10}) ||
+           !read(parent+0x50,&owner,8) || !owner || owner>UINTPTR_MAX-0x50 ||
+           !admit(owner,size_t{0x50}) ||
+           !read(storage+8,&embedded,8) || embedded!=owner+0x48) return false;
+        context=candidate;physical=parent;os=storage;wrapper=owner;
+        return true;
+    }
+};
+
 // Native destructor12dfc8 uses RenderHal+a30, NOT OS+a30. The borrowed
 // RenderHal and image lease must remain live through the last batch release.
 // Qualification is supplied by the owner that authenticated the parent link.
