@@ -4527,13 +4527,23 @@ template<class NativeBackend=TglNativeResourceBackend> class TglOwnedAllocatedSu
         bool backed(const Storage& storage) noexcept {return native.backed(storage);}
         void release(Storage& storage) noexcept {native.release(storage);width=0;}
     } capture_;
-    TglOwnedSurfaceStorage surface_{};
+    TglOwnedSurfaceStorage localSurface_{};
+    TglOwnedSurfaceStorage& surface_;
     TglOwnedResource<Capture> resource_;
     TglResourceKey effectiveKey_{};
-    bool ready_=false,busy_=false,rectangleBusy_=false;
+    bool ready_=false,busy_=false,rectangleBusy_=false,admitted_=true;
 public:
     explicit TglOwnedAllocatedSurface(NativeBackend& native) noexcept
-        :capture_{native},resource_(capture_,surface_.resource) {}
+        :capture_{native},surface_(localSurface_),resource_(capture_,surface_.resource) {}
+    // The caller owns the complete empty surface shell and retains it through
+    // this owner's destruction/retirement. Bind resource identity in place;
+    // never adopt tokens or overwrite a foreign prefix/tail on failed admission.
+    TglOwnedAllocatedSurface(NativeBackend& native,TglOwnedSurfaceStorage& empty) noexcept
+        :capture_{native},surface_(empty),resource_(capture_,surface_.resource) {
+        for(auto byte:surface_.prefix) if(byte) admitted_=false;
+        for(auto byte:surface_.resource) if(byte) admitted_=false;
+        for(auto byte:surface_.tail) if(byte) admitted_=false;
+    }
     ~TglOwnedAllocatedSurface() {reset();}
     TglOwnedAllocatedSurface(const TglOwnedAllocatedSurface&)=delete;
     TglOwnedAllocatedSurface& operator=(const TglOwnedAllocatedSurface&)=delete;
@@ -4541,7 +4551,7 @@ public:
         // Native4e060 clears changed before admission/allocation. Only a
         // successfully published backed surface may trigger history rebuild.
         if(changed) *changed=false;
-        if(busy_) return 5;
+        if(!admitted_ || busy_) return 5;
         const auto type=capture_.native.resourceType();
         if(type>1 || (type==1 && key.format!=0x3d)) return 25;
         busy_=true;
@@ -4654,7 +4664,7 @@ public:
         return first && consumed;
     }
     void reset() noexcept {
-        if(busy_) return;
+        if(!admitted_ || busy_) return;
         busy_=true;ready_=false;resource_.reset();
         surface_.prefix.fill(0);surface_.tail.fill(0);busy_=false;
         effectiveKey_={};

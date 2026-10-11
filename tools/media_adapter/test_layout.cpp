@@ -7552,6 +7552,62 @@ static void testSfcFrameFields() {
 
 int main() {
     {
+        struct Backend {
+            unsigned allocated=0,released=0;
+            int result=0;
+            bool descriptorOnly=false;
+            uint32_t resourceType() const noexcept {return 0;}
+            int allocate(std::array<uint8_t,0x148>& resource,
+                const TglResourceKey& key,uint32_t* width) noexcept {
+                ++allocated;resource[0]=descriptorOnly?2:1;*width=key.width+64;
+                return result;
+            }
+            bool backed(const std::array<uint8_t,0x148>& r) noexcept {return r[0]==1;}
+            void release(std::array<uint8_t,0x148>& r) noexcept {
+                assert(r[0]);++released;r.fill(0);
+            }
+        } backend;
+        TglOwnedSurfaceStorage shell{};
+        {
+            TglOwnedAllocatedSurface<Backend> owner(backend,shell);
+            TglResourceKey key{100,1,0x3d,4,0,false};bool changed=false;
+            assert(owner.ensure(key,&changed)==0 && changed && owner.surface()==&shell);
+            uint32_t width=0,height=0,pitch=1;
+            std::memcpy(&width,shell.prefix.data()+0xd8,4);
+            std::memcpy(&height,shell.prefix.data()+0xdc,4);
+            std::memcpy(&pitch,shell.prefix.data()+0xe0,4);
+            assert(width==164 && height==1 && pitch==0);
+            key.width=164;changed=true;
+            assert(owner.ensure(key,&changed)==0 && !changed && backend.allocated==1);
+            assert(owner.withSurface([&](const auto& surface) noexcept {
+                assert(&surface==&shell && owner.hasSurfaceLease(shell));
+                owner.reset();assert(backend.released==0);
+                assert(owner.ensure(key)==5);
+            }));
+            owner.reset();assert(backend.released==1 && !owner.surface());
+            for(auto byte:shell.prefix) assert(!byte);
+            backend.result=77;
+            assert(owner.ensure(key)==77 && backend.released==2 && !owner.surface());
+            backend.result=0;backend.descriptorOnly=true;
+            assert(owner.ensure(key)==5 && backend.released==3);
+        }
+        for(unsigned field=0;field<3;++field) {
+            shell={};
+            if(field==0) shell.prefix[0]=7;
+            if(field==1) shell.resource[0]=7;
+            if(field==2) shell.tail[0]=7;
+            const auto saved=shell;const auto allocated=backend.allocated,released=backend.released;
+            {
+                TglOwnedAllocatedSurface<Backend> rejected(backend,shell);
+                bool changed=true;
+                assert(rejected.ensure({100,1,0x3d,4,0,false},&changed)==5 && !changed);
+                rejected.reset();assert(!rejected.surface());
+            }
+            assert(shell.prefix==saved.prefix && shell.resource==saved.resource && shell.tail==saved.tail);
+            assert(backend.allocated==allocated && backend.released==released);
+        }
+    }
+    {
         struct Context {
             void* child;
             std::array<void*,5> captured{};
