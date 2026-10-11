@@ -13111,7 +13111,41 @@ TglOwnedStmmInitialization tglInitializeRetainedOwnedStmmSurface(
     else {api.release(surface);quarantine.cancel();}
     return result;
 }
+// A single additional CF reference, NOT ownership of an OsResource shell,
+// sysmem or DN allocation. Caller already holds a valid handle lease and
+// supplies the exact type established by an authenticated native producer.
+// Keep this owner in the complete retained frame until qualified retirement.
+template<class Api> class TglOwnedTypedCfReference {
+    Api api_;
+    uintptr_t handle_=0;
+public:
+    explicit TglOwnedTypedCfReference(Api api) noexcept :api_(std::move(api)) {
+        static_assert(std::is_nothrow_move_constructible_v<Api>);
+    }
+    TglOwnedTypedCfReference(const TglOwnedTypedCfReference&)=delete;
+    TglOwnedTypedCfReference& operator=(const TglOwnedTypedCfReference&)=delete;
+    ~TglOwnedTypedCfReference() noexcept {
+        static_assert(noexcept(api_.release(uintptr_t{})));
+        if(handle_) api_.release(handle_);
+    }
+    bool acquire(uintptr_t handle,uintptr_t expectedType) noexcept {
+        static_assert(noexcept(api_.type(uintptr_t{})) && noexcept(api_.retain(uintptr_t{})));
+        if(handle_ || !handle || !expectedType || api_.type(handle)!=expectedType ||
+           !api_.retain(handle)) return false;
+        handle_=handle;return true;
+    }
+    bool owns(uintptr_t handle) const noexcept {return handle_ && handle_==handle;}
+};
 #if defined(__APPLE__)
+struct TglDarwinTypedCfReferenceApi {
+    uintptr_t type(uintptr_t handle) const noexcept {
+        return CFGetTypeID(reinterpret_cast<CFTypeRef>(handle));
+    }
+    bool retain(uintptr_t handle) const noexcept {
+        return CFRetain(reinterpret_cast<CFTypeRef>(handle))==reinterpret_cast<CFTypeRef>(handle);
+    }
+    void release(uintptr_t handle) const noexcept {CFRelease(reinterpret_cast<CFTypeRef>(handle));}
+};
 inline bool tglPinOwnedStmmQuarantineImage() noexcept {
     // Hold our own loaded image and its fixed budget across dlclose/reopen.
     // Native dyld policy decides; failure denies retain and hence writable lock.

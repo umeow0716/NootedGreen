@@ -11204,6 +11204,23 @@ static void testRetainedVeboxFrames() {
 
 int main() {
     {
+        struct CfApi {
+            unsigned& held;
+            uintptr_t type(uintptr_t value) noexcept {assert(value==7);return 11;}
+            bool retain(uintptr_t value) noexcept {assert(value==7);++held;return true;}
+            void release(uintptr_t value) noexcept {assert(value==7 && held==1);--held;}
+        };
+        unsigned held=0;
+        {
+            TglOwnedTypedCfReference<CfApi> pin(CfApi{held});
+            assert(!pin.acquire(0,11) && !pin.acquire(7,0));
+            assert(!pin.acquire(7,12) && !held);
+            assert(pin.acquire(7,11) && held==1 && pin.owns(7));
+            assert(!pin.acquire(7,11) && held==1 && !pin.owns(8));
+        }
+        assert(!held);
+    }
+    {
         struct PublicationOwner {
             unsigned char child=0;uintptr_t renderer=0;uint64_t generation=0;
             bool denied=false,busy=false;
