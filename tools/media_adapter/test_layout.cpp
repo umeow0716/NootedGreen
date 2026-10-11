@@ -7717,12 +7717,15 @@ static void testResourceBinding() {
             unsigned allocations=0,releases=0;
             bool fail=false;
             bool backingAllowed=true;
-            int allocate(std::array<uint8_t,0x148>& storage,const TglResourceKey&) noexcept {
+            uint32_t nativeWidth=0;
+            int allocate(std::array<uint8_t,0x148>& storage,const TglResourceKey& key,
+                uint32_t* width=nullptr) noexcept {
                 ++allocations;++api.references;
                 const uint32_t type=1,format=0x3d;const uintptr_t handle=1;
                 std::memcpy(storage.data()+0x14,&type,4);
                 std::memcpy(storage.data()+0x18,&format,4);
                 std::memcpy(storage.data()+0x58,&handle,8);
+                if(!fail && width) *width=nativeWidth?nativeWidth:key.width;
                 return fail ? 77 : 0;
             }
             bool backed(const std::array<uint8_t,0x148>& storage) noexcept {
@@ -7733,6 +7736,53 @@ static void testResourceBinding() {
             }
         };
         const TglResourceKey stmmKey{8,3,0x3d,4,0,false};
+        {
+            RetainedApi api;api.references=0;api.mapping={mapped.data(),40,8,3,16};
+            Quarantine sink;
+            std::array<StmmBackend,2> backends{StmmBackend{api},StmmBackend{api}};
+            backends[0].nativeWidth=backends[1].nativeWidth=12;
+            TglOwnedSurfaceStorage first{},second{};
+            TglOwnedStmmPair<StmmBackend,RetainedApi,Quarantine> pair(backends,
+                std::array<TglStmmSurfaceReference,2>{{{first},{second}}},api,sink);
+            first.prefix[0x30]=0x5c;
+            unsigned publications=0;
+            auto publish=[&](size_t index,const auto&) noexcept -> int {
+                const auto& surface=index?second:first;
+                uint32_t width=0,height=0,format=0,tile=0,pitch=0;
+                std::memcpy(&width,surface.prefix.data()+0xd8,4);
+                std::memcpy(&height,surface.prefix.data()+0xdc,4);
+                std::memcpy(&format,surface.prefix.data()+0x130,4);
+                std::memcpy(&tile,surface.prefix.data()+0xe4,4);
+                std::memcpy(&pitch,surface.prefix.data()+0xe0,4);
+                assert(width==12 && height==3 && format==0x3d && tile==4 && pitch==16);
+                if(!publications) assert(index==0 && !backends[1].allocations);
+                ++publications;return 0;
+            };
+            const std::array<TglResourceKey,2> requested{stmmKey,stmmKey};
+            assert(!pair.ensurePublished(requested,false,publish) && publications==2);
+            assert(first.prefix[0x30]==0x5c);
+            // Native compares effective shell width: requested8 must allocate
+            // again, but a subsequent request12 reuses post-call width12.
+            assert(!pair.ensurePublished(requested,false,publish) && publications==4);
+            auto effective=requested;effective[0].width=effective[1].width=12;
+            assert(!pair.ensurePublished(effective,false,publish) && publications==4);
+            assert(backends[0].allocations==2 && backends[1].allocations==2);
+            assert(pair.withSurfaces(first,second,[&](const auto& a,const auto& b) noexcept -> int {
+                assert(&a==&first && &b==&second);pair.reset();assert(api.references==2);return -97;
+            })==-97);
+            backends[1].fail=true;
+            assert(pair.ensurePublished(requested,false,publish)==77 && publications==5);
+            assert(!api.references && first.prefix[0x30]==0x5c);
+            assert(pair.withSurfaces(first,second,[](const auto&,const auto&) noexcept -> int {assert(false);return 0;})==5);
+            pair.reset();assert(!api.references);
+            backends[1].fail=false;
+            TglOwnedSurfaceStorage deniedFirst{},deniedSecond{};deniedFirst.prefix[0x30]=1;
+            TglOwnedStmmPair<StmmBackend,RetainedApi,Quarantine> denied(backends,
+                std::array<TglStmmSurfaceReference,2>{{{deniedFirst},{deniedSecond}}},api,sink);
+            const auto allocations=backends[0].allocations+backends[1].allocations;
+            assert(denied.ensure(requested)==5 && deniedFirst.prefix[0x30]==1);
+            assert(backends[0].allocations+backends[1].allocations==allocations);
+        }
         {
             RetainedApi api;api.references=0;api.mapping={mapped.data(),40,8,3,16};
             Quarantine sink;

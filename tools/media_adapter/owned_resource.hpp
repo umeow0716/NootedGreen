@@ -12583,37 +12583,84 @@ TglOwnedStmmInitialization tglInitializeRetainedOwnedStmmResource(
 // STMM-specific resource transaction. Backend/API/sink outlive this owner;
 // the sink independently owns failed-unlock references, not native tokens.
 // Before ensure/reset the caller must exclude GPU users (not proven here).
+template<class Backend,class=void> struct TglStmmHasWidthOutput:std::false_type {};
+template<class Backend> struct TglStmmHasWidthOutput<Backend,std::void_t<decltype(
+    std::declval<Backend&>().allocate(std::declval<std::array<uint8_t,0x148>&>(),
+        std::declval<const TglResourceKey&>(),static_cast<uint32_t*>(nullptr)))>>:std::true_type {};
 template<class Backend,class Api,class Quarantine> class TglOwnedStmmResource {
-    TglOwnedResource<Backend> resource_;
+    struct Capture {
+        Backend& backend;uint32_t width=0;
+        int allocate(std::array<uint8_t,0x148>& storage,const TglResourceKey& key) noexcept {
+            if constexpr(TglStmmHasWidthOutput<Backend>::value) return backend.allocate(storage,key,&width);
+            else return backend.allocate(storage,key);
+        }
+        bool backed(const std::array<uint8_t,0x148>& storage) noexcept {return backend.backed(storage);}
+        void release(std::array<uint8_t,0x148>& storage) noexcept {backend.release(storage);width=0;}
+    } capture_;
+    TglOwnedResource<Capture> resource_;
     Api& api_;
     Quarantine& quarantine_;
     TglOwnedStmmInitialization initialization_{};
-    bool ready_=false,busy_=false;
+    TglOwnedSurfaceStorage* shell_=nullptr;
+    TglResourceKey effectiveKey_{};
+    bool ready_=false,busy_=false,admitted_=true;
 public:
-    using Storage=typename TglOwnedResource<Backend>::Storage;
+    using Storage=typename TglOwnedResource<Capture>::Storage;
     TglOwnedStmmResource(Backend& backend,Api& api,Quarantine& quarantine) noexcept
-        :resource_(backend),api_(api),quarantine_(quarantine) {}
+        :capture_{backend},resource_(capture_),api_(api),quarantine_(quarantine) {}
     // Bind an empty native shell's resource bytes without moving/copying handles.
     // Shell storage, backend, API and sink must all outlive this owner.
     TglOwnedStmmResource(Backend& backend,Storage& storage,Api& api,Quarantine& quarantine) noexcept
-        :resource_(backend,storage),api_(api),quarantine_(quarantine) {}
+        :capture_{backend},resource_(capture_,storage),api_(api),quarantine_(quarantine) {}
+    TglOwnedStmmResource(Backend& backend,TglOwnedSurfaceStorage& shell,Api& api,Quarantine& quarantine) noexcept
+        :capture_{backend},resource_(capture_,shell.resource),api_(api),quarantine_(quarantine),shell_(&shell) {
+        static_assert(TglStmmHasWidthOutput<Backend>::value,"STMM shell requires native effective-width output");
+        for(auto byte:shell.prefix) if(byte) admitted_=false;
+        for(auto byte:shell.resource) if(byte) admitted_=false;
+        for(auto byte:shell.tail) if(byte) admitted_=false;
+    }
     TglOwnedStmmResource(const TglOwnedStmmResource&)=delete;
     TglOwnedStmmResource& operator=(const TglOwnedStmmResource&)=delete;
     ~TglOwnedStmmResource(){reset();}
     const void* storageBinding() const noexcept {return resource_.storage().data();}
     int ensure(const TglResourceKey& key,bool reinitializeHistory=false,bool* changed=nullptr) noexcept {
         if(changed) *changed=false;
-        if(busy_ || key.format!=0x3d) return 5;
+        if(busy_ || !admitted_ || key.format!=0x3d) return 5;
         busy_=true;
-        const auto result=resource_.ensure(key);
-        using State=typename TglOwnedResource<Backend>::State;
-        int status=result.status;
-        if(!status && result.state!=State::Backed) status=5;
-        if(!status && (result.changed || !ready_ || reinitializeHistory))
-            status=resource_.withStorage([&](const Storage& storage) noexcept {
+        auto initialize=[&]() noexcept {
+            return resource_.withStorage([&](const Storage& storage) noexcept {
                 initialization_=tglInitializeRetainedOwnedStmmResource(storage,api_,quarantine_);
                 return initialization_.status();
             });
+        };
+        if(shell_ && ready_ && effectiveKey_==key && capture_.backed(resource_.storage())) {
+            const int status=reinitializeHistory?initialize():0;
+            if(status) {initialization_={};ready_=false;resource_.reset();}
+            else std::memcpy(shell_->prefix.data()+0xe0,&initialization_.pitch,4);
+            busy_=false;return status;
+        }
+        if(shell_) {resource_.reset();ready_=false;}
+        const auto result=resource_.ensure(key);
+        using State=typename TglOwnedResource<Capture>::State;
+        int status=result.status;
+        if(!status && result.state!=State::Backed) status=5;
+        if(!status && result.changed && shell_) {
+            if(!capture_.width) status=5;
+            else {
+                // Native allocator4a13e..4a1a1: width is post-call params14,
+                // not requested width or the later IOSurface view width.
+                effectiveKey_=key;effectiveKey_.width=capture_.width;
+                const uint32_t zero=0;
+                std::memcpy(shell_->prefix.data()+0xd8,&capture_.width,4);
+                std::memcpy(shell_->prefix.data()+0xdc,&key.height,4);
+                std::memcpy(shell_->prefix.data()+0x130,&key.format,4);
+                std::memcpy(shell_->prefix.data()+0xe4,&key.tile,4);
+                std::memcpy(shell_->prefix.data()+0xe0,&zero,4);
+            }
+        }
+        if(!status && (result.changed || !ready_ || reinitializeHistory))
+            status=initialize();
+        if(!status && shell_) std::memcpy(shell_->prefix.data()+0xe0,&initialization_.pitch,4);
         ready_=status==0;
         if(changed && !status) *changed=result.changed;
         if(status) {initialization_={};resource_.reset();}
@@ -12639,6 +12686,7 @@ public:
     }
 };
 struct TglResourceStorageReference { std::array<uint8_t,0x148>& storage; };
+struct TglStmmSurfaceReference {TglOwnedSurfaceStorage& surface;};
 // Native12b05f publishes the locked IOSurface pitch to this exact shell.
 // Bind identity, not equal descriptor bytes: copying tokens cannot establish
 // ownership. The enclosing frame still excludes asynchronous GPU users.
@@ -12668,6 +12716,11 @@ public:
         :owners_{Owner(backends[0],storage[0].storage,api,quarantine),
                  Owner(backends[1],storage[1].storage,api,quarantine)},
          valid_(&storage[0].storage!=&storage[1].storage) {}
+    TglOwnedStmmPair(std::array<Backend,2>& backends,
+        const std::array<TglStmmSurfaceReference,2>& surfaces,Api& api,Quarantine& quarantine) noexcept
+        :owners_{Owner(backends[0],surfaces[0].surface,api,quarantine),
+                 Owner(backends[1],surfaces[1].surface,api,quarantine)},
+         valid_(&surfaces[0].surface!=&surfaces[1].surface) {}
     TglOwnedStmmPair(const TglOwnedStmmPair&)=delete;
     TglOwnedStmmPair& operator=(const TglOwnedStmmPair&)=delete;
     ~TglOwnedStmmPair(){reset();}
