@@ -8022,10 +8022,45 @@ public:
         return tglWithOwnedVpPreparedFrame(storage_,frame,conditionalSource,
             settings,target,sourceA8,[&](void* child,const auto&) noexcept {
                 auto produce=[&]() noexcept -> int {
-                    return tglSetupOwnedVpSfcStages(frame,
-                        [&]() noexcept {return state(child,frame,state_);},
+                    auto produceState=[&]() noexcept {return state(child,frame,state_);};
+                    auto produceFilters=[&]() noexcept {ief(child,frame);};
+                    struct ProducerContext {
+                        void* child;void* data;void* source;void* target;
+                        decltype(produceState)& makeState;
+                        decltype(produceFilters)& makeFilters;
+                        const uint8_t* leasedState=nullptr;
+                        bool stateSeen=false,filtersSeen=false;int error=0;
+                        bool owns(void* value) const noexcept {return value==child;}
+                        int state(void* d,void* s,void* t) noexcept {
+                            if(error) return error;
+                            if(stateSeen || d!=data || s!=source || t!=target) return error=5;
+                            stateSeen=true;return error=makeState();
+                        }
+                        void filters(void* packet,void* s) noexcept {
+                            if(error) return;
+                            if(!stateSeen || filtersSeen || !leasedState ||
+                                packet!=leasedState || s!=source) {error=5;return;}
+                            filtersSeen=true;makeFilters();
+                        }
+                    } producer{child,renderData,source,reinterpret_cast<void*>(target),
+                        produceState,produceFilters};
+                    using Producers=TglOwnedVpProducerCallbacks<TglOwnedVpSfcResolve<ProducerContext>>;
+                    TglOwnedVpSfcScopedContext<ProducerContext> producerScope(child,producer);
+                    if(!producerScope.bound()) return 5;
+                    const int result=tglSetupOwnedVpSfcStages(frame,
+                        [&]() noexcept {return Producers::state(child,renderData,source,
+                            reinterpret_cast<void*>(target));},
                         [&]() noexcept {return avs(child,frame,avs_);},
-                        [&]() noexcept {ief(child,frame);});
+                        [&]() noexcept {
+                            const int filterResult=state_.withParameters([&](const uint8_t* packet) noexcept {
+                                producer.leasedState=packet;
+                                Producers::filters(child,renderData,const_cast<uint8_t*>(packet),source);
+                                producer.leasedState=nullptr;
+                                return producer.error;
+                            });
+                            if(filterResult && !producer.error) producer.error=filterResult;
+                        });
+                    return result ? result : producer.error;
                 };
                 auto consume=[&](void* d,void* command) noexcept -> int {
                     return state_.withParameters([&](const uint8_t*) noexcept {

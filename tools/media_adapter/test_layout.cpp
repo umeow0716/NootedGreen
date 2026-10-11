@@ -8553,11 +8553,19 @@ int main() {
             void* callbackChild=nullptr;int source=0,data=0,command=0;
             for(unsigned mode=0;mode<10;++mode) {
                 unsigned stages=0,emissions=0;
+                TglOwnedSfcStateParameters<decltype(stateCpu)>* observedState=nullptr;
                 const int result=graph.withPreparedCallbackPass(prepared,
                     0x6000,0x4000,0x2000,reference,&source,&data,
-                    [&](void*,const auto&,auto&) noexcept -> int {++stages;return mode==9?11:0;},
+                    [&](void*,const auto&,auto& packet) noexcept -> int {
+                        observedState=&packet;assert(!packet.hasParametersLease());
+                        ++stages;return mode==9?11:0;
+                    },
                     [&](void*,const auto&,auto&) noexcept -> int {++stages;return 0;},
-                    [&](void*,const auto&) noexcept {++stages;},
+                    [&](void*,const auto&) noexcept {
+                        assert(observedState && observedState->hasParametersLease());
+                        assert(observedState->withParameters([](const uint8_t*) noexcept {return 0;})==5);
+                        ++stages;
+                    },
                     [&](void* child,void* d,void* c) noexcept -> int {
                         assert(stages==3 && d==&data && c==&command);++emissions;
                         uintptr_t stateAddress=0;
