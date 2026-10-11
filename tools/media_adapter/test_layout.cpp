@@ -12199,6 +12199,14 @@ static void testRetainedVeboxFrames() {
             assert(configurationFrame.generation);return 0;
         })==0);
         const auto pendingReads=parentReads;
+        unsigned backingCalls=0;
+        auto mutateBacking=[&]() noexcept -> int {
+            ++backingCalls;
+            assert(callbacks.destroy(0x8000)==5 && invoke.destroyed==0);
+            assert(callbacks.withBackingMutation(success.ticket,0x8000,[]() noexcept -> int {assert(false);return 0;})==5);
+            return 31;
+        };
+        assert(callbacks.withBackingMutation(success.ticket,0x8000,mutateBacking)==5 && backingCalls==0);
         unsigned eventCalls=0;
         auto observeEvent=[&]() noexcept -> int {
             ++eventCalls;
@@ -12215,6 +12223,8 @@ static void testRetainedVeboxFrames() {
                 assert(!pending);return 0;
             });
         })==0);
+        assert(callbacks.withBackingMutation(success.ticket,0x8001,mutateBacking)==5 && backingCalls==0);
+        assert(callbacks.withBackingMutation(success.ticket,0x8000,mutateBacking)==31 && backingCalls==1);
         contextRenderer=0;
         assert(callbacks.withRendererConfiguration(success.ticket,0x8000,0x20000,parentRead,parentAdmit,configurationUse)==5);
         contextRenderer=0x30000;
@@ -12227,6 +12237,7 @@ static void testRetainedVeboxFrames() {
         contextPhysical=0x8000;assert(contextCalls==2);
         assert(callbacks.destroy(0x8000)==0 && invoke.destroyed==1);
         assert(callbacks.withEventObservation(success.ticket,0x8000,observeEvent)==5 && eventCalls==1);
+        assert(callbacks.withBackingMutation(success.ticket,0x8000,mutateBacking)==5 && backingCalls==1);
         const auto readsBefore=parentReads;
         assert(callbacks.withContextFrame(success.ticket,0x8000,0x20000,parentRead,parentAdmit,contextUse)==5);
         assert(callbacks.withContextNewRequest(success.ticket,0x8000,0x20000,parentRead,parentAdmit,contextUse)==5);

@@ -16544,6 +16544,13 @@ public:
         if(!physical || !valid()) return 5;
         return registry_.withNewRequest(ticket,binding_.image,physical,use);
     }
+    // Resource allocation/release callbacks must not invalidate retained backing.
+    // No pool escapes into native; caller authenticates the selected callback ABI.
+    template<class Mutate> int withBackingMutation(typename Registry::Ticket ticket,
+        uintptr_t physical,Mutate mutate) noexcept {
+        static_assert(noexcept(mutate()) && std::is_same_v<decltype(mutate()),int>);
+        return withNewRequest(ticket,physical,[&](auto&) noexcept -> int {return mutate();});
+    }
     template<class Use> int withContextRemoval(typename Registry::Ticket ticket,
         uintptr_t physical,Use use) noexcept {
         if(!physical || !valid()) return 5;
