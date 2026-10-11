@@ -6566,6 +6566,8 @@ static void testNativeResourceBoundary() {
                                     assert(runSecondary()==-31 && secondaryUses==3);
                                     assert(backingBackend.allocations==2 && !backingBackend.releases);
                                     unsigned frameUses=0,nextUses=0;
+                                    int frameStatus=-37,nextStatus=-41;
+                                    bool clearDnAfterFrame=false;
                                     auto runFrame=[&]() noexcept {
                                         return tglRunCapturedFfdiFrame(frameTargets,backedTargets,owner,&owner,
                                             &destination,childOwner,reportOwner,actualChild,report,source,read,
@@ -6577,9 +6579,11 @@ static void testNativeResourceBoundary() {
                                                 std::memcpy(&expectedSecondary,reportBackend.bytes.data()+0x68,8);
                                                 assert(reinterpret_cast<uintptr_t>(roles[1])==expectedExecution);
                                                 assert(reinterpret_cast<uintptr_t>(roles[2])==expectedSecondary);
-                                                ++frameUses;return -37;
+                                                ++frameUses;
+                                                if(clearDnAfterFrame) reportBackend.bytes[0xb]=reportBackend.bytes[0x13]=0;
+                                                return frameStatus;
                                             },[&](const auto* s,const auto* target) noexcept -> int {
-                                                assert(!s && !target);++nextUses;return -41;
+                                                assert(!s && !target);++nextUses;return nextStatus;
                                             });
                                     };
                                     reportBackend.bytes[0xb]=reportBackend.bytes[0xf]=reportBackend.bytes[0x13]=0;
@@ -6599,6 +6603,40 @@ static void testNativeResourceBoundary() {
                                     std::memcpy(reportBackend.bytes.data()+0x60,&actualInput,8);
                                     std::memcpy(reportBackend.bytes.data()+0x68,&actualInput,8);
                                     assert(runFrame()==5 && frameUses==2);
+                                    std::memcpy(reportBackend.bytes.data()+0x68,&secondaryAddress,8);
+                                    frameStatus=0;clearDnAfterFrame=true;
+                                    unsigned tailStages=0,unwinds=0;
+                                    auto unusedTail=[](void*,uintptr_t,const auto&) noexcept -> int {
+                                        assert(false);return 5;
+                                    };
+                                    auto chain=[&]() noexcept {
+                                        reportBackend.bytes[0xb]=1;
+                                        return tglRunCapturedVeboxAllocationWithFfdiFrame(owner,childOwner,reportOwner,
+                                            actualChild,report,source,read,
+                                            [&](void*,uintptr_t,const auto&) noexcept {return runFrame();},
+                                            unusedTail,unusedTail,unusedTail,
+                                            [&](void*,uintptr_t,const auto&) noexcept -> int {++tailStages;return 19;},
+                                            [&](void*,uintptr_t,const auto& s) noexcept {
+                                                assert(owner.hasSurfaceLease(s));++unwinds;
+                                            });
+                                    };
+                                    assert(chain()==19 && tailStages==1 && unwinds==1);
+                                    frameStatus=23;
+                                    assert(chain()==23 && tailStages==1 && unwinds==2);
+                                    frameStatus=0;clearDnAfterFrame=false;
+                                    reportBackend.bytes[0xb]=1;
+                                    unsigned order=0;
+                                    assert(tglRunCapturedVeboxAllocationWithFfdiFrame(owner,childOwner,reportOwner,
+                                        actualChild,report,source,read,
+                                        [&](void*,uintptr_t,const auto&) noexcept -> int {
+                                            assert(order++==0);return runFrame();
+                                        },[&](void*,uintptr_t,const auto&) noexcept -> int {
+                                            assert(order++==1);return 0;
+                                        },unusedTail,[&](void*,uintptr_t,const auto&) noexcept -> int {
+                                            assert(order++==2);return 0;
+                                        },[&](void*,uintptr_t,const auto&) noexcept -> int {
+                                            assert(order++==3);return 0;
+                                        })==0 && order==4);
                                     return run();
                                 });
                             })==-17);

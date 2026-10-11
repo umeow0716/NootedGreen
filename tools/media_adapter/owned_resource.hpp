@@ -10922,6 +10922,41 @@ int tglRunCapturedFfdiFrame(std::array<TglOwnedDescriptorOnlySurface,Count>& des
                 childOwner,reportOwner,currentChild,currentReport,source,read,next);
         });
 }
+// A composed FFDi frame already includes its secondary edge. Run it once,
+// then reread the report for FFDN/rectangle/STMM instead of replaying the old
+// runner's separate secondary stage or freezing pre-FFDi feature flags.
+template<class Owner,class ChildOwner,class ExecutionOwner,class Read,class FfdiFrame,
+    class Ffdn,class Rectangle,class Stmm,class Statistics,class Unwind=TglOwnedVeboxFrameNoUnwind>
+int tglRunCapturedVeboxAllocationWithFfdiFrame(Owner& input,ChildOwner& childOwner,
+    ExecutionOwner& reportOwner,void* child,uintptr_t report,const TglOwnedSurfaceStorage& source,
+    Read read,FfdiFrame ffdi,Ffdn ffdn,Rectangle rectangle,Stmm stmm,Statistics statistics,
+    Unwind unwind={}) noexcept {
+    static_assert(noexcept(read(uintptr_t{},static_cast<void*>(nullptr),size_t{})),
+        "composed allocation report reader ABI");
+    bool denied=false;
+    const auto policy=[&](void* c,uintptr_t e,const auto&) noexcept {
+        TglOwnedVeboxAllocationPolicy value;
+        if(!denied && !tglReadOwnedVeboxAllocationPolicy(value,reinterpret_cast<uintptr_t>(c),e,read))
+            denied=true;
+        return value;
+    };
+    const auto guarded=[&](auto& callback) noexcept {
+        return [&callback,&denied](void* c,uintptr_t e,const auto& s) noexcept -> int {
+            static_assert(noexcept(callback(c,e,s)) &&
+                std::is_same_v<decltype(callback(c,e,s)),int>,"composed allocation stage ABI");
+            return denied?5:callback(c,e,s);
+        };
+    };
+    const auto enter=[](void*,uintptr_t,const auto&) noexcept {return true;};
+    const auto noSecondary=[](void*,uintptr_t,const auto&) noexcept {return false;};
+    const auto unreachable=[](void*,uintptr_t,const auto&) noexcept -> int {return 5;};
+    return tglRunCapturedVeboxAllocationStages(input,childOwner,reportOwner,child,report,source,
+        enter,noSecondary,
+        [&](void* c,uintptr_t e,const auto& s) noexcept {return policy(c,e,s).ffdn;},
+        [&](void* c,uintptr_t e,const auto& s) noexcept {return policy(c,e,s).pipe;},
+        [&](void* c,uintptr_t e,const auto& s) noexcept {return policy(c,e,s).stmm;},
+        guarded(ffdi),unreachable,guarded(ffdn),guarded(rectangle),guarded(stmm),guarded(statistics),unwind);
+}
 template<class Read>
 bool tglReadOwnedStateExecution(TglOwnedStateInputs& output, uintptr_t execution,
                                 bool diArgument, Read read) {
