@@ -2167,7 +2167,7 @@ template<> struct TglAdmissionExecutionExtent<TglLeasedAdmissionExecution>
 template<class Backend> class TglExecutionOwner {
     Backend& backend;
     uintptr_t object = 0;
-    bool leased_=false,admissionBytesBusy_=false,admissionResetAttempted_=false,borrowed_=false;
+    bool leased_=false,admissionBytesBusy_=false,admissionResetAttempted_=false,borrowed_=false,featureBusy_=false;
     int admissionError_=0;
 public:
     explicit TglExecutionOwner(Backend& b) noexcept : backend(b) {}
@@ -2258,6 +2258,25 @@ public:
         const int result=use(view);
         admissionBytesBusy_=false;
         return admissionError_ ? admissionError_ : result;
+    }
+    // Share the existing execution lease without recursively acquiring it.
+    // Native170's report60 target borrow must not outlive the source/target
+    // frame. This lock is separate from admission's live byte-view lock.
+    template<class Use> int withLeasedFeatureReport(uintptr_t expected,const void* target,Use use) noexcept {
+        static_assert(noexcept(use()) && std::is_same_v<decltype(use()),int>,"feature report status ABI");
+        if(featureBusy_ || !target || !hasExecutionLease(expected)) return 5;
+        auto* field=reinterpret_cast<uint8_t*>(object)+0x60;
+        uintptr_t previous=0;std::memcpy(&previous,field,8);
+        if(previous) return 5;
+        featureBusy_=true;
+        struct Detach {
+            uint8_t* field;bool& busy;
+            ~Detach(){const uintptr_t zero=0;std::memcpy(field,&zero,8);busy=false;}
+        } detach{field,featureBusy_};
+        const int status=use();
+        uintptr_t observed=0;std::memcpy(&observed,field,8);
+        if(observed && observed!=reinterpret_cast<uintptr_t>(target)) return 5;
+        return admissionError_?admissionError_:status;
     }
     // Admission reset12e420 must run inside the execution/frame lease, once.
     // On failure keep storage alive for outstanding base/report borrows, but
@@ -4309,6 +4328,9 @@ public:
         ready_=true;busy_=false;return 0;
     }
     const TglOwnedSurfaceStorage* surface() const noexcept {return ready_ && !busy_ ? &surface_ : nullptr;}
+    bool hasSurfaceLease(const TglOwnedSurfaceStorage& expected) noexcept {
+        return ready_ && busy_ && &expected==&surface_ && capture_.backed(surface_.resource);
+    }
     // Synchronous borrowed access keeps ALL native resource tokens alive by
     // pinning their owner, not by guessing which individual handles to retain.
     // The callback must not escape references or submit asynchronous work;
@@ -6340,6 +6362,21 @@ bool tglUpdateOwnedVeboxHistory(Owner& owner,void* child,
 // surface owner unlocks. This is not permission for asynchronous GPU submission.
 // Callback supplies the qualified native/owned stages; this scope alone is
 // neither complete admission nor authorization to call an incomplete vtable.
+template<class SurfaceOwner,class ChildOwner,class ExecutionOwner,class Invoke>
+int tglRunCapturedVeboxFeature(SurfaceOwner& sourceOwner,SurfaceOwner& targetOwner,
+    ChildOwner& childOwner,ExecutionOwner& executionOwner,void* child,uintptr_t execution,
+    const TglOwnedSurfaceStorage& source,const TglOwnedSurfaceStorage& target,Invoke invoke) noexcept {
+    static_assert(noexcept(invoke(child,source,target)) &&
+        std::is_same_v<decltype(invoke(child,source,target)),int>,"captured feature status ABI");
+    if(!child || !sourceOwner.hasSurfaceLease(source) || !targetOwner.hasSurfaceLease(target) ||
+       !childOwner.hasPrivateChildLease(reinterpret_cast<uintptr_t>(child)) ||
+       !executionOwner.hasExecutionLease(execution)) return 5;
+    uintptr_t linked=0;std::memcpy(&linked,static_cast<uint8_t*>(child)+0x88,8);
+    if(linked!=execution) return 5;
+    return executionOwner.withLeasedFeatureReport(execution,&target,[&]() noexcept {
+        return invoke(child,source,target);
+    });
+}
 template<class SurfaceOwner,class ChildOwner,class ExecutionOwner,class Invoke>
 int tglWithOwnedVeboxFeatureFrame(SurfaceOwner& sourceOwner,SurfaceOwner& targetOwner,
     ChildOwner& childOwner,ExecutionOwner& executionOwner,Invoke invoke) noexcept {

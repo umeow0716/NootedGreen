@@ -12,6 +12,9 @@
 struct TestVeboxChildLease {
     void* child;
     bool busy=false;
+    bool hasPrivateChildLease(uintptr_t p) const noexcept {
+        return busy && reinterpret_cast<uintptr_t>(child)==p;
+    }
     template<class Invoke> int withPrivateChild(Invoke invoke) noexcept {
         if(busy || !child) return 5;
         busy=true;const int result=invoke(child);busy=false;return result;
@@ -4635,6 +4638,47 @@ static void testNativeResourceBoundary() {
             assert(destination.copyFrameMetadataFrom(owner));
             assert(destination.copyFrameMetadataFrom(destination));
             const auto* destinationSurface=destination.surface();
+            {
+                struct NativeReportBackend {
+                    std::array<uint8_t,0xd48> bytes{};
+                    uintptr_t pointer() noexcept {return reinterpret_cast<uintptr_t>(bytes.data());}
+                    uintptr_t create() noexcept {assert(false);return 0;}
+                    bool validate(uintptr_t p) noexcept {return p==pointer();}
+                    int initialize(uintptr_t) noexcept {assert(false);return 5;}
+                    void destroy(uintptr_t) noexcept {assert(false);}
+                } reportBackend;
+                TglExecutionOwner execution(reportBackend);
+                std::array<uint8_t,0x1bc0> baseBytes{};
+                TestVeboxChildLease childOwner{baseBytes.data()};
+                const uintptr_t report=reportBackend.pointer();
+                std::memcpy(baseBytes.data()+0x88,&report,8);
+                unsigned calls=0;
+                auto native=[&](void* child,const auto& s,const auto& t) noexcept -> int {
+                    ++calls;assert(child==baseBytes.data() && &s==surface && &t==destinationSurface);
+                    owner.reset();destination.reset();execution.reset();
+                    const uintptr_t target=reinterpret_cast<uintptr_t>(&t);
+                    assert(tglRunCapturedVeboxFeature(owner,destination,childOwner,execution,
+                        child,report,s,t,[](void*,const auto&,const auto&) noexcept -> int {assert(false);return 0;})==5);
+                    std::memcpy(reportBackend.bytes.data()+0x60,&target,8);
+                    return 31;
+                };
+                assert(tglRunCapturedVeboxFeature(owner,destination,childOwner,execution,
+                    baseBytes.data(),report,*surface,*destinationSurface,native)==5 && !calls);
+                assert(owner.withPeerSurface(destination,[&](const auto& s,const auto& t) noexcept {
+                    assert(childOwner.withPrivateChild([&](void* child) noexcept {
+                        return execution.withBorrowedExecution(report,[&](uintptr_t actual) noexcept {
+                            // Admission's live byte view may already be active.
+                            return execution.withLeasedAdmissionBytes(actual,[&](auto&) noexcept {
+                                return tglRunCapturedVeboxFeature(owner,destination,childOwner,execution,
+                                    child,actual,s,t,native);
+                            });
+                        });
+                    })==31);
+                    uintptr_t retained=1;std::memcpy(&retained,reportBackend.bytes.data()+0x60,8);
+                    assert(!retained && !execution.get());
+                }));
+                assert(calls==1 && owner.surface()==surface && destination.surface()==destinationSurface);
+            }
             {
                 const auto originalSource=*surface;
                 const auto originalTarget=*destinationSurface;
