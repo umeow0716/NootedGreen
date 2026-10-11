@@ -17086,6 +17086,54 @@ int main() {
                     bool hasExecutionLease(uintptr_t value) noexcept {return valid && value==execution;}
                 } capturedExecution{address};
                 childLease.busy=true; // enclosing frame, not reacquired by builder
+                auto transactionRead=[&](uintptr_t p,void* out,size_t n) {
+                    if(p==childAddress+0x10 && n==8) {std::memcpy(out,&osAddress,8);return true;}
+                    return writebackRead(p,out,n) || setupRead(p,out,n);
+                };
+                for(bool acquire : {false,true}) for(int emitted : {0,31}) for(bool publish : {false,true}) {
+                    unsigned transactionSetups=0,transactionBuilds=0,transactionWrites=0;
+                    auto acquireCommand=[&](uintptr_t,void*,void* command,void*,void*,int32_t* remaining) noexcept -> int {
+                        ++transactionSetups;assert(*remaining==-1 && command==scratch.command.data());
+                        if(!acquire) return 31;
+                        scratch.command.fill(0);
+                        const uintptr_t base=0x1000,cursor=0x1020;
+                        const int32_t offset=32,available=128;
+                        std::memcpy(scratch.command.data()+0x148,&base,8);
+                        std::memcpy(scratch.command.data()+0x150,&cursor,8);
+                        std::memcpy(scratch.command.data()+0x158,&offset,4);
+                        std::memcpy(scratch.command.data()+0x15c,&available,4);
+                        *remaining=available;return 0;
+                    };
+                    auto emitCommand=[&](uintptr_t entry,void* child,void* command,void* di,
+                        void* surfaces,void* commands,void* state,void* completion,void* setup) noexcept -> int {
+                        ++transactionBuilds;nativeResult=emitted;
+                        const uintptr_t cursor=0x1060;const int32_t offset=96,available=64;
+                        std::memcpy(scratch.command.data()+0x150,&cursor,8);
+                        std::memcpy(scratch.command.data()+0x158,&offset,4);
+                        std::memcpy(scratch.command.data()+0x15c,&available,4);
+                        const int result=native(entry,child,command,di,surfaces,commands,state,completion,setup);
+                        if(!publish) ++writebackEntry;
+                        return result;
+                    };
+                    auto publishCommand=[&](uintptr_t entry,void* os,void* command) noexcept {
+                        ++transactionWrites;assert(childLease.busy);
+                        int32_t offset=0,available=0;
+                        std::memcpy(&offset,scratch.command.data()+0x158,4);
+                        std::memcpy(&available,scratch.command.data()+0x15c,4);
+                        assert(offset==(emitted?32:96) && available==(emitted?128:64));
+                        writeback(entry,os,command);
+                    };
+                    const auto transaction=tglWithCapturedNativeVeboxCommandTransaction(
+                        sourceLease,childLease,capturedExecution,actualChild,address,source,packets,
+                        setupBinding,binding,nativeImage,osAddress,scratch,&auxiliary,
+                        transactionRead,qualified,writebackExecutable,acquireCommand,emitCommand,publishCommand);
+                    if(acquire && !publish) --writebackEntry;
+                    assert(transaction.status==(acquire?(publish?emitted:5):31));
+                    assert(transaction.builderStatus==(acquire?emitted:31) && transaction.acquired==acquire);
+                    assert(transaction.writtenBack==(acquire && publish) && transactionSetups==1 &&
+                        transactionBuilds==unsigned(acquire) && transactionWrites==unsigned(acquire && publish));
+                    assert(childLease.busy && !Resolve::get(actualChild));
+                }
                 for(int preparation : {0,31,-7}) for(int result : {0,31,-7}) {
                     setupResult=preparation;nativeResult=result;
                     const auto priorSetup=setupCalls,priorBuild=nativeCalls;

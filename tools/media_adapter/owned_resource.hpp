@@ -14316,8 +14316,9 @@ TglOwnedVeboxCommandTransactionResult tglWithCapturedNativeVeboxCommandTransacti
     SetupInvoke setupInvoke=SetupInvoke{},BuildInvoke buildInvoke=BuildInvoke{},
     WritebackInvoke writebackInvoke=WritebackInvoke{}) noexcept {
     const auto sameOs=[&]() noexcept {
-        uintptr_t linked=0;
-        return child && os && read(reinterpret_cast<uintptr_t>(child)+0x10,&linked,sizeof(linked)) && linked==os;
+        uintptr_t linked=0;const uintptr_t address=reinterpret_cast<uintptr_t>(child);
+        return address && address<=UINTPTR_MAX-0x18 && os &&
+            read(address+0x10,&linked,sizeof(linked)) && linked==os;
     };
     if(!sameOs()) return {};
     return tglWithCapturedVeboxCommandTransaction(sourceOwner,childOwner,executionOwner,
