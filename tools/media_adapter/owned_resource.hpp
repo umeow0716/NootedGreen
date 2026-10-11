@@ -16388,12 +16388,17 @@ struct TglNativeContextFrameInvoker {
             reinterpret_cast<void**>(outputSlot));
     }
 };
-// Stable owned data only. No context mutation or native image modification.
+// Stable owned table data; publication changes only the native context vptr.
+// No native image modification. Caller must pin this owner before publication.
 // Its enclosing context owner must retain this object and both code images
 // until all calls end; copying/moving or rebuilding a published table is unsafe.
 class TglOwnedContextFrameVtable {
     std::array<uintptr_t,TglNativeContextFrameBinding::callbackCount+2> table_{};
-    uintptr_t context_=0,nativeFrame_=0;bool attempted_=false,ready_=false;
+    uintptr_t context_=0,nativeFrame_=0,originalVptr_=0;bool attempted_=false,ready_=false;
+public:
+    enum class Publication { Unpublished,Published,Detached,Ambiguous };
+private:
+    Publication publication_=Publication::Unpublished;
 public:
     TglOwnedContextFrameVtable()=default;
     TglOwnedContextFrameVtable(const TglOwnedContextFrameVtable&)=delete;
@@ -16408,10 +16413,35 @@ public:
             !native.resolve(image,context,read,qualify,executable)) return false;
         table_=native.original;
         table_[2+0x28/8]=hook;
-        context_=context;nativeFrame_=native.frame;ready_=true;return true;
+        context_=context;nativeFrame_=native.frame;originalVptr_=native.vtable;ready_=true;return true;
     }
     const uintptr_t* addressPoint() const noexcept {return ready_?table_.data()+2:nullptr;}
     uintptr_t nativeFrame() const noexcept {return ready_?nativeFrame_:0;}
+    Publication publication() const noexcept {return publication_;}
+    bool requiresRetention() const noexcept {
+        return publication_==Publication::Published || publication_==Publication::Ambiguous;
+    }
+    // Admit must prove matching physical/context generation, exclusive scope,
+    // no retained frames, writable context and already-pinned stable table.
+    template<class Read,class Write,class Admit>
+    bool publish(Read read,Write write,Admit admit) noexcept {
+        uintptr_t current=0;
+        if(!ready_ || publication_!=Publication::Unpublished || !admit(context_,sizeof(uintptr_t)) ||
+            !read(context_,&current,sizeof(current)) || current!=originalVptr_) return false;
+        publication_=Publication::Ambiguous; // native data may change even on write failure
+        const auto owned=reinterpret_cast<uintptr_t>(addressPoint());
+        if(!write(context_,owned) || !read(context_,&current,sizeof(current)) || current!=owned) return false;
+        publication_=Publication::Published;return true;
+    }
+    template<class Read,class Write,class Admit>
+    bool detach(Read read,Write write,Admit admit) noexcept {
+        if(publication_!=Publication::Published || !admit(context_,sizeof(uintptr_t))) return false;
+        uintptr_t current=0;
+        publication_=Publication::Ambiguous;
+        if(!read(context_,&current,sizeof(current)) || current!=reinterpret_cast<uintptr_t>(addressPoint()) ||
+            !write(context_,originalVptr_) || !read(context_,&current,sizeof(current)) || current!=originalVptr_) return false;
+        publication_=Publication::Detached;return true;
+    }
     // Caller holds the enclosing physical generation scope and native context
     // lifetime. The pool is that SAME generation's pool, not a standalone one.
     // Never read request contents or substitute the original output slot.
@@ -16420,7 +16450,7 @@ public:
         uintptr_t outputSlot,Read read,Invoke invoke) noexcept {
         static_assert(noexcept(invoke(uintptr_t{},uintptr_t{},uintptr_t{},uintptr_t{})) &&
             std::is_same_v<decltype(invoke(uintptr_t{},uintptr_t{},uintptr_t{},uintptr_t{})),int>);
-        if(!ready_ || context!=context_ || !request || !outputSlot) return 5;
+        if(!ready_ || publication_!=Publication::Published || context!=context_ || !request || !outputSlot) return 5;
         return pool.withNativeRequestItem([&]() noexcept -> int {
             uintptr_t actual=0;
             if(!read(context,&actual,sizeof(actual)) ||

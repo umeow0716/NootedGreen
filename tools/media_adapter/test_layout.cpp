@@ -11859,7 +11859,14 @@ static void testRetainedVeboxFrames() {
         };
         auto dispatch=[&]() noexcept {return privateTable.dispatchItem(items,context,0x55000,0x66000,read,native);};
         assert(dispatch()==5 && !invoked); // original vptr is not installed ownership
-        vptr=reinterpret_cast<uintptr_t>(addressPoint);
+        unsigned vptrWrites=0;
+        auto writeVptr=[&](uintptr_t address,uintptr_t value) noexcept {
+            ++vptrWrites;assert(address==context);vptr=value;return true;
+        };
+        auto admitVptr=[](uintptr_t address,size_t size) noexcept {return address==context && size==8;};
+        assert(!privateTable.publish(read,writeVptr,[](uintptr_t,size_t) noexcept {return false;}) && !vptrWrites);
+        assert(privateTable.publish(read,writeVptr,admitVptr) && vptrWrites==1 && privateTable.requiresRetention());
+        assert(!privateTable.publish(read,writeVptr,admitVptr) && vptrWrites==1);
         assert(dispatch()==31 && invoked==1);
         assert(privateTable.dispatchItem(items,context+8,0x55000,0x66000,read,native)==5);
         assert(privateTable.dispatchItem(items,context,0,0x66000,read,native)==5 && invoked==1);
@@ -11892,6 +11899,29 @@ static void testRetainedVeboxFrames() {
         assert(capture()==0 && !receipt.valid && outputReads==1);
         publishedEvent=0;
         assert(capture()==0 && !receipt.valid && outputReads==1 && receiptCalls==4);
+        assert(!privateTable.detach(read,writeVptr,[](uintptr_t,size_t) noexcept {return false;}) && vptrWrites==1);
+        assert(privateTable.detach(read,writeVptr,admitVptr) && vptrWrites==2 && !privateTable.requiresRetention());
+        assert(vptr==base+0x75d018 && dispatch()==5 && !privateTable.publish(read,writeVptr,admitVptr));
+        TglOwnedContextFrameVtable ambiguousTable;
+        assert(ambiguousTable.build(base,context,hook,read,qualify,executable,ownedExecutable));
+        auto uncertainWrite=[&](uintptr_t address,uintptr_t value) noexcept {
+            writeVptr(address,value);return false; // data changed despite reported failure
+        };
+        assert(!ambiguousTable.publish(read,uncertainWrite,admitVptr));
+        assert(ambiguousTable.publication()==TglOwnedContextFrameVtable::Publication::Ambiguous &&
+            ambiguousTable.requiresRetention());
+        const auto uncertainWrites=vptrWrites;
+        assert(!ambiguousTable.publish(read,writeVptr,admitVptr) &&
+            !ambiguousTable.detach(read,writeVptr,admitVptr) && vptrWrites==uncertainWrites);
+        vptr=base+0x75d018; // CPU fixture reset only; not production ambiguity recovery
+        TglOwnedContextFrameVtable alienTable;
+        assert(alienTable.build(base,context,hook,read,qualify,executable,ownedExecutable));
+        assert(alienTable.publish(read,writeVptr,admitVptr));
+        vptr=0xdeadbeef; // another publisher replaced the vptr
+        const auto alienWrites=vptrWrites;
+        assert(!alienTable.detach(read,writeVptr,admitVptr) && vptr==0xdeadbeef &&
+            vptrWrites==alienWrites && alienTable.requiresRetention());
+        vptr=base+0x75d018; // CPU fixture reset only
         const auto abiTarget=+[](void* ctx,const void* request,void** output) -> int {
             assert(reinterpret_cast<uintptr_t>(ctx)==0x20000 &&
                 reinterpret_cast<uintptr_t>(request)==0x55000 &&
