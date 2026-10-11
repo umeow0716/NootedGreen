@@ -11255,6 +11255,56 @@ int tglRunCapturedFfdnFrame(std::array<TglOwnedDescriptorOnlySurface,2>& descrip
                 childOwner,reportOwner,c,e,s,ffdi,read,finish);
         });
 }
+// Non-owning views are valid only inside the tail callback: both allocated
+// outputs and the borrowed full-history shell remain pinned by the FFDN pair.
+struct TglOwnedFfdnTailViews {
+    std::array<const TglOwnedSurfaceStorage*,2> outputs{};
+    const TglOwnedSurfaceStorage* previous{};
+    const TglOwnedSurfaceStorage* history{};
+};
+template<class TargetOwner,class PriorOwner,class Owner,class ChildOwner,class ExecutionOwner,
+    class Read,class Rectangle,class Stmm,class Statistics>
+int tglRunCapturedFfdnFrameTail(std::array<TglOwnedDescriptorOnlySurface,2>& descriptors,
+    const std::array<TargetOwner*,2>& backed,PriorOwner& prior,Owner& input,Owner* previous,
+    TglOwnedDescriptorOnlySurface& history,ChildOwner& childOwner,ExecutionOwner& reportOwner,
+    void* child,uintptr_t report,const TglOwnedSurfaceStorage& source,
+    TglOwnedFfdiCompressionSelection ffdi,Read read,Rectangle rectangle,Stmm stmm,Statistics statistics) noexcept {
+    return tglRunCapturedVeboxAllocation(input,childOwner,reportOwner,child,report,source,
+        [&](void* c,uintptr_t e,const auto& s) noexcept -> int {
+            auto tail=[&](const TglOwnedFfdnTailViews& views) noexcept -> int {
+                auto policy=[&](TglOwnedVeboxAllocationPolicy& value) noexcept {
+                    return tglRunCapturedVeboxAllocation(input,childOwner,reportOwner,c,e,s,
+                        [&](void* active,uintptr_t execution,const auto&) noexcept -> int {
+                            return tglReadOwnedVeboxAllocationPolicy(value,
+                                reinterpret_cast<uintptr_t>(active),execution,read)?0:5;
+                        });
+                };
+                auto stage=[&](auto& invoke) noexcept -> int {
+                    return tglRunCapturedVeboxAllocation(input,childOwner,reportOwner,c,e,s,
+                        [&](void* active,uintptr_t execution,const auto& surface) noexcept -> int {
+                            static_assert(noexcept(invoke(active,execution,surface,views)) &&
+                                std::is_same_v<decltype(invoke(active,execution,surface,views)),int>,
+                                "FFDN pinned tail ABI");
+                            return invoke(active,execution,surface,views);
+                        });
+                };
+                TglOwnedVeboxAllocationPolicy value;int status=policy(value);
+                if(status) return status;
+                if(value.pipe==2 && (status=stage(rectangle))) return status;
+                if((status=policy(value))) return status;
+                if(value.stmm && (status=stage(stmm))) return status;
+                return stage(statistics);
+            };
+            TglOwnedVeboxAllocationPolicy value;
+            if(!tglReadOwnedVeboxAllocationPolicy(value,reinterpret_cast<uintptr_t>(c),e,read)) return 5;
+            if(!value.ffdn) return tail({});
+            return tglRunCapturedFfdnFrame(descriptors,backed,prior,input,previous,history,
+                childOwner,reportOwner,c,e,s,ffdi,read,
+                [&](const auto& inputs,const auto& a,const auto& b,const auto* copied) noexcept -> int {
+                    return tail({{&a,&b},inputs[1],copied});
+                });
+        });
+}
 template<class Read>
 bool tglReadOwnedStateExecution(TglOwnedStateInputs& output, uintptr_t execution,
                                 bool diArgument, Read read) {

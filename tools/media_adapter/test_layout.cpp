@@ -6756,18 +6756,21 @@ static void testNativeResourceBoundary() {
                                         std::memcpy(child.data()+0x1b0,&inputAddress,8);
                                         std::memcpy(child.data()+0x1b8,&shellAddress,8);
                                         reportBackend.bytes[8]=1;reportBackend.bytes[0x13]=1;
+                                        reportBackend.bytes[0xb]=1;
                                         unsigned finished=0;
                                         auto runHistory=[&]() noexcept -> int {
                                             int result=5;
                                             assert(linkedInput.withSurface([&](const auto& current) noexcept {
-                                                result=tglRunCapturedFfdnFrame(descriptorPair,std::array{&targetA,&targetB},targetA,
+                                                result=tglRunCapturedFfdnFrameTail(descriptorPair,std::array{&targetA,&targetB},targetA,
                                                     linkedInput,&previous,historyShell,childOwner,reportOwner,
                                                     actualChild,report,current,{true,1},read,
-                                                    [&](const auto& views,const auto& a,const auto& b,const auto* history) noexcept -> int {
-                                                        ++finished;assert(history && views[1]);
-                                                        assert(std::memcmp(history,views[1],sizeof(*history))==0);
-                                                        assert(previous.hasSurfaceLease(*views[1]));
-                                                        assert(targetA.hasSurfaceLease(a) && targetB.hasSurfaceLease(b));
+                                                    [](void*,uintptr_t,const auto&,const auto&) noexcept -> int {assert(false);return 5;},
+                                                    [](void*,uintptr_t,const auto&,const auto&) noexcept -> int {return 0;},
+                                                    [&](void*,uintptr_t,const auto&,const auto& views) noexcept -> int {
+                                                        ++finished;assert(views.history && views.previous);
+                                                        assert(std::memcmp(views.history,views.previous,sizeof(*views.history))==0);
+                                                        assert(previous.hasSurfaceLease(*views.previous));
+                                                        assert(targetA.hasSurfaceLease(*views.outputs[0]) && targetB.hasSurfaceLease(*views.outputs[1]));
                                                         assert(reportBackend.bytes[8]==1);return -59;
                                                     });
                                             }));
@@ -6815,6 +6818,49 @@ static void testNativeResourceBoundary() {
                                                 })==-67);
                                         }));
                                         assert(backingBackend.allocations==beforeDescriptor);
+                                        reportBackend.bytes[0xb]=1;
+                                        uint32_t savedTailPipe=0;
+                                        std::memcpy(&savedTailPipe,reportBackend.bytes.data()+0xa0c,4);
+                                        const uint32_t tailPipe=1;
+                                        std::memcpy(reportBackend.bytes.data()+0xa0c,&tailPipe,4);
+                                        unsigned ffdnTails=0;
+                                        assert(linkedInput.withSurface([&](const auto& current) noexcept {
+                                            assert(tglRunCapturedFfdnFrameTail(descriptorPair,std::array{&targetA,&targetB},targetA,
+                                                linkedInput,&previous,historyShell,childOwner,reportOwner,
+                                                actualChild,report,current,{false,0},read,
+                                                [](void*,uintptr_t,const auto&,const auto&) noexcept -> int {assert(false);return 5;},
+                                                [&](void*,uintptr_t,const auto&,const auto& views) noexcept -> int {
+                                                    assert(views.outputs[0]==descriptorPair[0].surfaceBinding());
+                                                    assert(views.previous==previous.surfaceBinding() && views.history);
+                                                    assert(previous.hasSurfaceLease(*views.previous));
+                                                    assert(!descriptorPair[0].withDescriptor([](const auto&) noexcept {assert(false);}));
+                                                    assert(!historyShell.withDescriptor([](const auto&) noexcept {assert(false);}));
+                                                    return 0;
+                                                },[&](void*,uintptr_t,const auto&,const auto& views) noexcept -> int {
+                                                    assert(views.outputs[1]==descriptorPair[1].surfaceBinding());
+                                                    assert(!descriptorPair[1].withDescriptor([](const auto&) noexcept {assert(false);}));
+                                                    assert(views.history && previous.hasSurfaceLease(*views.previous));
+                                                    ++ffdnTails;return -73;
+                                                })==-73);
+                                        }));
+                                        assert(ffdnTails==1 && historyShell.withDescriptor([](const auto&) noexcept {}));
+                                        assert(descriptorPair[0].withDescriptor([](const auto&) noexcept {}));
+                                        assert(backingBackend.allocations==beforeDescriptor);
+                                        reportBackend.bytes[0xb]=0;reportBackend.bytes[0x13]=0;
+                                        assert(linkedInput.withSurface([&](const auto& current) noexcept {
+                                            assert(tglRunCapturedFfdnFrameTail(descriptorPair,std::array{&targetA,&targetB},targetA,
+                                                linkedInput,static_cast<decltype(&previous)>(nullptr),historyShell,
+                                                childOwner,reportOwner,actualChild,report,current,{false,0},read,
+                                                [](void*,uintptr_t,const auto&,const auto&) noexcept -> int {assert(false);return 5;},
+                                                [](void*,uintptr_t,const auto&,const auto&) noexcept -> int {assert(false);return 5;},
+                                                [&](void*,uintptr_t,const auto&,const auto& views) noexcept -> int {
+                                                    assert(!views.outputs[0] && !views.outputs[1] && !views.previous && !views.history);
+                                                    assert(descriptorPair[0].withDescriptor([](const auto&) noexcept {}));
+                                                    return -79;
+                                                })==-79);
+                                        }));
+                                        reportBackend.bytes[0xb]=1;reportBackend.bytes[0x13]=1;
+                                        std::memcpy(reportBackend.bytes.data()+0xa0c,&savedTailPipe,4);
                                         std::memcpy(child.data()+0x1b0,&sourcePointer,8);
                                     }
                                     reportBackend.bytes[8]=0xa5;reportBackend.bytes[0x13]=0;
