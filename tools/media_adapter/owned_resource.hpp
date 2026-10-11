@@ -16635,6 +16635,23 @@ public:
     }
 };
 
+// Pre-native context removal only, under the same empty-frame physical and
+// context-owner gates. Neither validation nor success certifies GPU retirement.
+// Caller quarantines the composite owner on ANY failure, retaining its images,
+// table and children; never invoke native deletion after a partial detach.
+template<class Children,class Read,class Write,class TableAdmit,class ChildAdmit>
+int tglPrepareOwnedContextRemoval(TglOwnedContextFrameVtable& table,Children& children,
+    void* renderer,uint64_t generation,Read read,Write write,
+    TableAdmit tableAdmit,ChildAdmit childAdmit) noexcept {
+    static_assert(noexcept(children.canDetach(renderer,generation,childAdmit)) &&
+        noexcept(children.detach(renderer,generation,childAdmit)));
+    if(!renderer || !generation || !table.canDetach(read,tableAdmit) ||
+        !children.canDetach(renderer,generation,childAdmit)) return 5;
+    // Native deleting destructors must never see owned 910/918 pointers.
+    if(!children.detach(renderer,generation,childAdmit)) return 5;
+    return table.detach(read,write,tableAdmit)?0:5;
+}
+
 struct TglNativePhysicalCallbackBinding {
     uintptr_t image=0,initialize=0,destroy=0;
     template<class Read,class Qualify,class Executable>

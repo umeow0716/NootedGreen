@@ -11993,7 +11993,26 @@ static void testRetainedVeboxFrames() {
         publishedEvent=0;
         assert(capture()==0 && !receipt.valid && outputReads==1 && receiptCalls==4);
         assert(!privateTable.detach(read,writeVptr,[](uintptr_t,size_t) noexcept {return false;}) && vptrWrites==1);
-        assert(privateTable.detach(read,writeVptr,admitVptr) && vptrWrites==2 && !privateTable.requiresRetention());
+        struct ChildDetachFixture {
+            unsigned checks=0,detaches=0;bool allowed=false,detachOk=false;
+            bool canDetach(void* renderer,uint64_t generation,int) noexcept {
+                ++checks;assert(renderer==reinterpret_cast<void*>(0x30000) && generation==7);return allowed;
+            }
+            bool detach(void*,uint64_t,int) noexcept {++detaches;return detachOk;}
+        } children;
+        auto prepare=[&](auto write) noexcept {
+            return tglPrepareOwnedContextRemoval(privateTable,children,reinterpret_cast<void*>(0x30000),7,
+                read,write,admitVptr,0);
+        };
+        assert(prepare(writeVptr)==5 && children.checks==1 && !children.detaches && vptrWrites==1);
+        children.allowed=true;
+        assert(prepare(writeVptr)==5 && children.detaches==1 && vptrWrites==1 && privateTable.requiresRetention());
+        // Fixture-only reset after simulated failure; production quarantines.
+        children.detachOk=true;
+        auto orderedWrite=[&](uintptr_t address,uintptr_t value) noexcept {
+            assert(children.detaches==2);return writeVptr(address,value);
+        };
+        assert(prepare(orderedWrite)==0 && vptrWrites==2 && !privateTable.requiresRetention());
         assert(vptr==base+0x75d018 && dispatch()==5 && !privateTable.publish(read,writeVptr,admitVptr));
         TglOwnedContextFrameVtable ambiguousTable;
         assert(ambiguousTable.build(base,context,hook,read,qualify,executable,ownedExecutable));
