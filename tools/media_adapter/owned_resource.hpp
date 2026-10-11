@@ -3387,11 +3387,11 @@ public:
         Lines& lines,Retire& retire,Use use) noexcept {
         return withBorrowedVpCpuScope([&](auto borrow) noexcept {
             return vp.withAssemblyView(avsEnabled,read,lines,retire,
-                [&](void* child,const auto& entries,auto allocate,auto release) noexcept {
+                [&](void* child,const auto& entries) noexcept {
                     return borrow(child,[&](void* parent,void* borrowed) noexcept {
-                        static_assert(noexcept(use(parent,borrowed,entries,allocate,release)),
+                        static_assert(noexcept(use(parent,borrowed,entries)),
                             "borrowed VP assembly consumer ABI");
-                        return use(parent,borrowed,entries,allocate,release);
+                        return use(parent,borrowed,entries);
                     });
                 });
         });
@@ -6845,6 +6845,12 @@ inline bool tglBindOwnedVpAdmissionEntries(TglOwnedVpEntrySet& target,
     candidate.outputFormat=source.output;candidate.inputAlignment=source.inputAlignment;
     candidate.outputAlignment=source.outputAlignment;target=candidate;return true;
 }
+inline bool tglBindOwnedVpResourceEntries(TglOwnedVpEntrySet& target,
+    int(*allocate)(void*) noexcept,void(*freeResources)(void*) noexcept) noexcept {
+    if(!allocate || !freeResources || target.allocate || target.freeResources) return false;
+    auto candidate=target;candidate.allocate=allocate;candidate.freeResources=freeResources;
+    target=candidate;return true;
+}
 template<class Read,class Use>
 int tglWithOwnedVpAdmissionEntries(TglOwnedVpSfcCallerStorage& vp,Read& read,Use use) noexcept {
     static_assert(noexcept(use(nullptr,std::declval<const TglOwnedVpAdmissionEntries&>())),
@@ -9371,6 +9377,8 @@ public:
                 });
         });
     }
+    // Expose the qualified admission/resource subset as typed slots on the
+    // same child. Other slots remain NULL; this is not a publishable vtable.
     template<class Read,class Lines,class Retire,class Use>
     int withAssemblyView(bool avsEnabled,Read& read,Lines& lines,Retire& retire,Use use) noexcept {
         return withView(avsEnabled,[&](void* child) noexcept {
@@ -9378,9 +9386,12 @@ public:
                 [&](void* assembled,const TglOwnedVpAdmissionEntries& entries,
                     auto allocate,auto release) noexcept {
                     if(assembled!=child) return 5;
-                    static_assert(noexcept(use(child,entries,allocate,release)),
+                    TglOwnedVpEntrySet bindings;
+                    if(!tglBindOwnedVpAdmissionEntries(bindings,entries) ||
+                       !tglBindOwnedVpResourceEntries(bindings,allocate,release)) return 5;
+                    static_assert(noexcept(use(child,static_cast<const TglOwnedVpEntrySet&>(bindings))),
                         "leased VP assembly ABI");
-                    return use(child,entries,allocate,release);
+                    return use(child,static_cast<const TglOwnedVpEntrySet&>(bindings));
                 });
         });
     }

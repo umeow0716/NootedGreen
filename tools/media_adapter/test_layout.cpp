@@ -10664,7 +10664,7 @@ int main() {
                     assert(address==0x2130 && size==4);
                     const uint32_t value=13;std::memcpy(out,&value,4);return true;
                 };
-                TglOwnedVpAdmissionEntries expiredAssembly;
+                TglOwnedVpEntrySet expiredAssembly;
                 int(*expiredAssemblyAllocate)(void*) noexcept=nullptr;
                 void(*expiredAssemblyRelease)(void*) noexcept=nullptr;
                 std::memcpy(stateCpu.bytes.data()+0x30,&input,4);
@@ -10672,17 +10672,22 @@ int main() {
                 for(int cleanup:{31,0}) {
                     admission=cleanup;
                     assert(graph.withAssemblyView(false,assemblyRead,lines,retire,
-                        [&](void* child,const auto& entries,auto allocate,auto release) noexcept {
-                            expiredAssembly=entries;expiredAssemblyAllocate=allocate;
-                            expiredAssemblyRelease=release;
+                        [&](void* child,const auto& entries) noexcept {
+                            expiredAssembly=entries;expiredAssemblyAllocate=entries.allocate;
+                            expiredAssemblyRelease=entries.freeResources;
+                            auto unchanged=entries;
+                            assert(!tglBindOwnedVpResourceEntries(unchanged,nullptr,entries.freeResources));
+                            assert(!tglBindOwnedVpResourceEntries(unchanged,entries.allocate,nullptr));
+                            assert(!tglBindOwnedVpResourceEntries(unchanged,entries.allocate,entries.freeResources));
+                            assert(unchanged.missingMask()==entries.missingMask() && !entries.hasAllEntries());
                             assert(child==storage->bytes.data() && !graph.tryReset());
                             assert(entries.finalAdmission(child,1,reinterpret_cast<void*>(0x1000),
                                 reinterpret_cast<void*>(0x2000)));
-                            assert(allocate(child)==0); // Exact leased state published by withView.
+                            assert(entries.allocate(child)==0); // Exact leased state published by withView.
                             assert(backends[0].allocations && backends[1].allocations);
                             assert(graph.withAssemblyView(false,assemblyRead,lines,retire,
-                                [](void*,const auto&,auto,auto) noexcept {assert(false);return 0;})==5);
-                            release(child);return 0;
+                                [](void*,const auto&) noexcept {assert(false);return 0;})==5);
+                            entries.freeResources(child);return 0;
                         })==cleanup);
                     assert(!expiredAssembly.finalAdmission(storage->bytes.data(),1,
                         reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x2000)));
@@ -13239,13 +13244,13 @@ int main() {
                         for(int status:{31,0}) {
                             auto retire=[&]() noexcept {++retireCalls;return status;};
                             assert(owner.withBorrowedVpAssemblyView(graph,false,readFormat,lines,retire,
-                                [&](void* parent,void* child,const auto& entries,auto allocate,auto release) noexcept {
+                                [&](void* parent,void* child,const auto& entries) noexcept {
                                     uintptr_t link=0;std::memcpy(&link,static_cast<uint8_t*>(parent)+0x80,8);
                                     assert(link==reinterpret_cast<uintptr_t>(child));
                                     assert(!graph.tryReset());owner.reset();assert(cpu.live);
                                     assert(entries.finalAdmission(child,1,reinterpret_cast<void*>(0x1000),
-                                        reinterpret_cast<void*>(0x2000)) && allocate(child)==0);
-                                    release(child);return 0;
+                                        reinterpret_cast<void*>(0x2000)) && entries.allocate(child)==0);
+                                    entries.freeResources(child);return 0;
                                 })==status);
                             std::memcpy(&linked,cpu.bytes.data()+0x80,8);assert(!linked);
                             assert(backends[0].live==unsigned(status!=0) && backends[1].live==unsigned(status!=0));
