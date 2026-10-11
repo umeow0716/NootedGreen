@@ -3492,6 +3492,34 @@ inline void tglFinalizeVeboxReport(TglVeboxReportState& report, uint32_t outputP
     report.bytes[0x25] = execution8f4 & 1;
 }
 
+// Native12cccb..12cda6: update the two child statistics-selection flags.
+// report09/pipe1 skips BOTH writes. Slotd0 is lazy and may be called twice;
+// do not memoize it across the independent native branches. These flags
+// describe layout selection, not submission success or GPU completion.
+template<class Query>
+void tglUpdateVeboxRenderStatisticsFlags(uint8_t& flag1b88,uint8_t& flag1b89,
+    const std::array<uint8_t,0x15>& execution,uint32_t outputPipe,Query query) noexcept {
+    static_assert(noexcept(query()) && std::is_same_v<decltype(query()),bool>,
+        "native slotd0 bool ABI");
+    if((execution[9]&1) && outputPipe==1) return;
+    bool first=(execution[0xb]&1) || (execution[0xc]&1);
+    if(!first) first=((execution[0x13]&1) || query()) && !(execution[8]&1);
+    flag1b88=first;
+    flag1b89=((execution[0x13]&1) || query()) && (execution[8]&1);
+}
+template<class Owner,class Query>
+int tglPublishLeasedVeboxRenderStatisticsFlags(Owner& owner,void* child,
+    const std::array<uint8_t,0x15>& execution,uint32_t outputPipe,Query query) noexcept {
+    const uintptr_t address=reinterpret_cast<uintptr_t>(child);
+    if(!child || !owner.hasPrivateChildLease(address)) return 5;
+    if((execution[9]&1) && outputPipe==1) return 0;
+    auto* bytes=static_cast<uint8_t*>(child);
+    // Native publishes1b88 before the second independent slotd0 call.
+    // Preserve that visibility rather than staging both writes atomically.
+    tglUpdateVeboxRenderStatisticsFlags(bytes[0x1b88],bytes[0x1b89],execution,outputPipe,query);
+    return owner.hasPrivateChildLease(address) ? 0 : 5;
+}
+
 // Exact post-render export12d240 ->12d120/12d1a0. Source is the
 // owned equivalent of child40, not the child object itself. Preserve every
 // destination byte not written by native; source/destination may alias.

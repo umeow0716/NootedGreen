@@ -3341,6 +3341,31 @@ static void testExecutionOwner() {
 
 static void testVeboxReport() {
     TglVeboxReportState storage;
+    for(unsigned bits=0;bits<32;++bits) for(uint32_t pipe:{0u,1u,2u,UINT32_MAX})
+        for(unsigned answers=0;answers<4;++answers) {
+            std::array<uint8_t,0x15> execution{};execution.fill(0xfe);
+            for(unsigned i=0;i<5;++i)
+                execution[std::array<size_t,5>{8,9,0xb,0xc,0x13}[i]]|=(bits>>i)&1;
+            uint8_t first=0xa5,second=0x5a;unsigned calls=0;
+            auto query=[&]() noexcept -> bool {assert(calls<2);return (answers>>calls++)&1;};
+            tglUpdateVeboxRenderStatisticsFlags(first,second,execution,pipe,query);
+            if((bits&2) && pipe==1) {
+                assert(first==0xa5 && second==0x5a && !calls);continue;
+            }
+            unsigned expectedCalls=0;
+            auto next=[&]() {return (answers>>expectedCalls++)&1;};
+            // Independent branch-by-branch model of the captured native edges.
+            uint8_t expectedFirst=1;
+            if(!(bits&4) && !(bits&8)) {
+                bool enabled=true;
+                if(!(bits&16)) enabled=next();
+                expectedFirst=enabled ? !(bits&1) : 0;
+            }
+            uint8_t expectedSecond=0;bool enabled=true;
+            if(!(bits&16)) enabled=next();
+            if(enabled) expectedSecond=bits&1;
+            assert(first==expectedFirst && second==expectedSecond && calls==expectedCalls);
+        }
     for (uint32_t mode : {0u, 1u, 2u, UINT32_MAX}) {
         for (unsigned flag = 0; flag < 256; ++flag) {
             storage.bytes.fill(0xa5);
@@ -10189,6 +10214,23 @@ int main() {
                         assert(!owner.hasPrivateChildLease(reinterpret_cast<uintptr_t>(child)+8));
                         assert(owner.hasPrivateChildImageLease(reinterpret_cast<uintptr_t>(child),base));
                         assert(!owner.hasPrivateChildImageLease(reinterpret_cast<uintptr_t>(child),base+0x1000));
+                        {
+                            const auto snapshot=cpu.bytes;
+                            std::array<uint8_t,0x15> execution{};
+                            unsigned queries=0;
+                            auto query=[&]() noexcept -> bool {
+                                if(queries==1) assert(cpu.bytes[0x1b88]==1);
+                                ++queries;owner.reset();assert(cpu.live);return true;
+                            };
+                            assert(tglPublishLeasedVeboxRenderStatisticsFlags(owner,child,execution,0,query)==0);
+                            assert(queries==2 && cpu.bytes[0x1b88]==1 && cpu.bytes[0x1b89]==0);
+                            for(size_t i=0;i<cpu.bytes.size();++i)
+                                if(i!=0x1b88 && i!=0x1b89) assert(cpu.bytes[i]==snapshot[i]);
+                            execution[9]=1;const auto skipped=cpu.bytes;
+                            assert(tglPublishLeasedVeboxRenderStatisticsFlags(owner,child,execution,1,query)==0);
+                            assert(queries==2 && cpu.bytes==skipped);
+                            cpu.bytes[0x1b88]=snapshot[0x1b88];cpu.bytes[0x1b89]=snapshot[0x1b89];
+                        }
                         TglVeboxRenderBinding render{base,base+0x12c9d0};
                         int argument1=0,argument2=0;unsigned renders=0;
                         const auto invokeRender=[&](uintptr_t entry,void* actual,void* a,void* b) noexcept -> int {
