@@ -7234,17 +7234,22 @@ static void testNativeResourceBoundary() {
                                                             ++rejectedLeases.renderHal;
                                                             const auto preservedPacket=statePacket;
                                                             unsigned rejectedConsumers=0;
-                                                            const auto rejected=tglRunCapturedVeboxFrameCommand(linkedInput,childOwner,reportOwner,
-                                                                rejectedLeases,ffdi,ffdn,stmm,statisticsShell,false,false,input.controls,
+                                                            auto allocationConsumer=tglMakeCapturedVeboxAllocationCommandConsumer(linkedInput,childOwner,reportOwner,
+                                                                rejectedLeases,false,false,input.controls,
                                                                 stateRead,surfaceAdmit,admitted,registration,control,retention,[&](auto&) noexcept {
                                                                     ++rejectedConsumers;return TglOwnedVeboxCommandTransactionResult{};
                                                                 });
+                                                            const auto wrongFrame=allocationConsumer(actualChild,report+1,linkedStorage,
+                                                                ffdi,ffdn,stmm,statisticsShell.resource,statisticsLayout,statisticsShell);
+                                                            assert(wrongFrame.status==5 && !rejectedConsumers && !registrations);
+                                                            const auto rejected=allocationConsumer(actualChild,report,linkedStorage,
+                                                                ffdi,ffdn,stmm,statisticsShell.resource,statisticsLayout,statisticsShell);
                                                             assert(rejected.status==5 && !rejected.acquired && !rejected.writtenBack &&
                                                                 !rejectedConsumers && !registrations && !retention());
                                                             assert(std::memcmp(&statePacket,&preservedPacket,sizeof(statePacket))==0);
                                                             unsigned writebacks=0;
-                                                            const auto transaction=tglRunCapturedVeboxFrameCommand(linkedInput,childOwner,reportOwner,
-                                                                packetLeases,ffdi,ffdn,stmm,statisticsShell,false,false,input.controls,
+                                                            auto commandConsumer=tglMakeCapturedVeboxAllocationCommandConsumer(linkedInput,childOwner,reportOwner,
+                                                                packetLeases,false,false,input.controls,
                                                                 stateRead,surfaceAdmit,admitted,registration,control,retention,[&](auto& packets) noexcept {
                                                             using Packets=std::decay_t<decltype(packets)>;
                                                             using Resolve=TglOwnedVeboxScopedContext<Packets>;
@@ -7273,6 +7278,8 @@ static void testNativeResourceBoundary() {
                                                                     ++writebacks;return true;
                                                                 });
                                                             });
+                                                            const auto transaction=commandConsumer(actualChild,report,linkedStorage,
+                                                                ffdi,ffdn,stmm,statisticsShell.resource,statisticsLayout,statisticsShell);
                                                             using Packets=TglOwnedVeboxPacketContext<decltype(stateRead),decltype(surfaceAdmit),
                                                                 decltype(admitted),decltype(registration),decltype(control)>;
                                                             using Resolve=TglOwnedVeboxScopedContext<Packets>;

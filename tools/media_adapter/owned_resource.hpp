@@ -14817,6 +14817,32 @@ TglOwnedVeboxCommandTransactionResult tglRunCapturedVeboxFrameCommand(
     return result;
 }
 
+// Bridge the allocation frame's final full-shell scope to packet production.
+// Leases are borrowed from the enclosing retained Frame, not retained by this
+// callable. Never store it past that Frame or replace the captured identities
+// with a later frame's shells. Consume may be the native transaction consumer.
+template<class SourceOwner,class ChildOwner,class ExecutionOwner,class Read,
+    class SurfaceAdmit,class DiAdmit,class Register,class Control,class Consume>
+auto tglMakeCapturedVeboxAllocationCommandConsumer(
+    SourceOwner& sourceOwner,ChildOwner& childOwner,ExecutionOwner& executionOwner,
+    TglOwnedVeboxPacketLeases leases,bool disableTemporalDenoise,bool alignDi64,
+    std::array<uint32_t,11> controls,Read read,SurfaceAdmit admitSurface,
+    DiAdmit admitDi,Register registerResource,Control control,
+    TglOwnedVeboxFrameRetention& retention,Consume consume) noexcept {
+    return [&sourceOwner,&childOwner,&executionOwner,leases,disableTemporalDenoise,
+        alignDi64,controls,read,admitSurface,admitDi,registerResource,control,
+        &retention,consume](void* child,uintptr_t execution,const auto& source,
+        const auto& ffdi,const auto& ffdn,const auto& stmm,const auto& statistics,
+        const auto& statisticsLayout,const auto& statisticsSurface) noexcept {
+        (void)statistics;(void)statisticsLayout;
+        if(reinterpret_cast<uintptr_t>(child)!=leases.child || execution!=leases.execution ||
+            &source!=&leases.source) return TglOwnedVeboxCommandTransactionResult{};
+        return tglRunCapturedVeboxFrameCommand(sourceOwner,childOwner,executionOwner,
+            leases,ffdi,ffdn,stmm,statisticsSurface,disableTemporalDenoise,alignDi64,
+            controls,read,admitSurface,admitDi,registerResource,control,retention,consume);
+    };
+}
+
 // Allocation transaction for a history-enabled frame. The qualified platform
 // planner supplies resource keys and statistics boundary dimensions; this does
 // not infer feature admission or SFC resources. All three owners outlive this
