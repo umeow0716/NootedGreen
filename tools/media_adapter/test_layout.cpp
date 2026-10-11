@@ -10055,6 +10055,14 @@ static void testSfcAvsOwnership() {
                 })==status && generated==1);
         }
         const auto savedBytes=real.bytes;
+        TglNativeSineBinding missingMath;
+        const auto nativeCacheBefore=tables;
+        assert(tglWithOwnedSfcNativeAvsTables(owner,tables,0x19,.5f,.75f,0x11,
+            false,true,0.f,0.f,missingMath,
+            [](const auto&) noexcept {assert(false);return 0;},
+            [](uintptr_t,float) noexcept {assert(false);return 0.f;})==5);
+        assert(real.bytes==savedBytes && tables.packedY==nativeCacheBefore.packedY &&
+            tables.packedUv==nativeCacheBefore.packedUv);
         TglOwnedSfcCommandParameters commands;
         commands.y.pipeMode=1;commands.uv.pipeMode=1;
         commands.y.reserved.fill(0xa5);commands.uv.reserved.fill(0x5a);
@@ -14089,6 +14097,17 @@ int main() {
                     TglOwnedIefTables passIefTables{}; // Explicit CPU image-table fixture.
                     bool passIefReady=true,passIefEnabled=false,passIefExpected=false;
                     unsigned passIefCalls=0;
+                    TglNativeSineBinding nativeMath;
+                    assert(nativeMath.resolve(0x100000,
+                        [](uintptr_t address,void* out,size_t size) noexcept {
+                            assert(address==0x100000+0x23e4c4 && size==6);
+                            const std::array<uint8_t,6> stub{0xff,0x25,0x3e,0x21,0x52,0x00};
+                            std::memcpy(out,stub.data(),size);return true;
+                        },[](uintptr_t image) noexcept {return image==0x100000;},
+                        [](uintptr_t address,size_t size) noexcept {
+                            return address==0x100000+0x23e4c4 && size==6;
+                        }));
+                    unsigned nativeMathCalls=0;
                     assert(graph.withInitializedFrameCallbackAssemblyPass(initializedEntries,0x1000,0x2000,0x3000,0x4000,
                       0,0x4000,{},&passData,read,
                       [&](void*,const auto& prepared,const auto& geometry,auto& stateOwner) noexcept -> int {
@@ -14109,14 +14128,17 @@ int main() {
                           assert(passStates==1 && avsRequired);
                           TglOwnedSfcAvsConfiguration config;
                           if(!tglReadOwnedVpAvsConfiguration(prepared,producedPrefix,0,read,config)) return 5;
-                          return tglWithOwnedSfcAvsTables(avsOwner,passAvsTables,config.format,
+                          return tglWithOwnedSfcNativeAvsTables(avsOwner,passAvsTables,config.format,
                               config.scaleX,config.scaleY,config.siting,config.forceFilter,
                               config.symmetric,config.sharpening,config.window,
-                              [](float value) noexcept {return std::sin(value);},
+                              nativeMath,
                               [&](const auto& tables) noexcept {
                                   assert(tables.format==config.format && tables.scaleX==config.scaleX &&
                                       tables.scaleY==config.scaleY);
                                   ++passAvs;return 0;
+                              },[&](uintptr_t entry,float value) noexcept {
+                                  assert(entry==0x100000+0x23e4c4);++nativeMathCalls;
+                                  return std::sin(value); // CPU recording fixture, NOT Darwin libm proof.
                               });
                       },
                       [&](void*,const auto& prepared) noexcept {
@@ -14137,6 +14159,7 @@ int main() {
                       assert(passStates==1);
                       assert(passAvs==unsigned(avsRequired));
                       assert(passAvs==1); // This scaling fixture must actually generate/publish coefficients.
+                      assert(nativeMathCalls); // Must not bypass bound math with a fixture/cache shortcut.
                       return graph.withLeasedModeAssemblyEntries(leasedChild,read,lineResources,retire,0x1000,0x2000,0x4000,
                         [&](void* child,const TglOwnedVpEntrySet& modeEntries) noexcept {
                             auto entries=modeEntries;

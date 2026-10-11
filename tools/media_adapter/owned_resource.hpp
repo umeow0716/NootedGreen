@@ -11585,6 +11585,18 @@ inline int tglWithOwnedSfcAvsTables(Owner& owner,TglOwnedSfcAvsTables& cache,
         return generate(static_cast<const TglOwnedSfcAvsTables&>(cache));
     });
 }
+// Native math admission precedes cache hit/publication, so stale CPU cache
+// cannot bypass missing native math. Image-generation lease is held by caller.
+template<class Owner,class Generate,class Invoke=TglNativeSineInvoker>
+int tglWithOwnedSfcNativeAvsTables(Owner& owner,TglOwnedSfcAvsTables& cache,
+    uint32_t format,float scaleX,float scaleY,uint32_t siting,bool forceFilter,
+    bool symmetric,float sharpening,float window,const TglNativeSineBinding& sine,
+    Generate generate,Invoke invoke={}) noexcept {
+    if(!sine.bound()) return 5;
+    return tglWithOwnedSfcAvsTables(owner,cache,format,scaleX,scaleY,siting,
+        forceFilter,symmetric,sharpening,window,
+        [&](float value) noexcept {return sine.evaluate(value,invoke);},generate);
+}
 // Publish coefficients and phases from the SAME prepared AVS snapshot.
 // Siting is returned only after admission; preserve pipe/reserved bytes.
 // This consumes CPU tables, not an image/physical-generation certificate.
