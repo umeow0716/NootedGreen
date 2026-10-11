@@ -16371,6 +16371,9 @@ int main() {
                         auto frontendCleanup=[&](void* object) noexcept {
                             assert(retirementQualified && so.borrowed && to.borrowed && ho.borrowed);
                             assert(frameDn.live==1 && refs[1]==3 && refs[5]==3);
+                            uintptr_t restoredVp=1;
+                            std::memcpy(&restoredVp,static_cast<uint8_t*>(object)+0x80,8);
+                            assert(restoredVp==0 && vpCpu.live && vpAvsCpu.live);
                             ++cleaned[index(object)];
                         };
                         using FrontendAssembly=TglNativeVeboxFrontendRendererFrameStorage<UnusedFrameApi,
@@ -16460,6 +16463,16 @@ int main() {
                             } vpBinding;
                             auto noRead=+[](uintptr_t,void*,size_t) noexcept {return false;};
                             assert(frame.backing().initializeVp(vpBinding,os,0x2200,0x3300,noRead,1,0)==0);
+                            const auto deniedPass=frame.withPrivateVpCommandFrame(0,roles,0,0,
+                                0x1100,0x2200,0x3300,[](auto&,void*,void*,auto&,auto&,
+                                    auto&,auto&,auto&,auto&) noexcept {
+                                    return TglOwnedVeboxCommandTransactionResult{-17,-17,false,false};
+                                });
+                            assert(deniedPass.status==-17 && !deniedPass.acquired &&
+                                !frame.backing().retention()());
+                            uintptr_t restoredVp=1;
+                            std::memcpy(&restoredVp,pairCpu[0].bytes.data()+0x80,8);
+                            assert(restoredVp==0 && vpCpu.live && vpAvsCpu.live);
                             return frame.withPrivateVpCommandFrame(0,roles,0,0,
                                 0x1100,0x2200,0x3300,[&](auto& leasedOwner,void* child,
                                     void* vp,auto& graph,auto& lines,
@@ -16485,6 +16498,7 @@ int main() {
                         assert(r.acquired && frameDn.live==1 && refs[1]==3);
                         assert(frames.retire(ticket,[](const auto&,bool,const auto&) noexcept {return 31;})==31);
                         assert(ho.borrowed && refs[1]==3);
+                        assert(vpCpu.live && vpAvsCpu.live);
                         assert(frames.retire(ticket,[&](const auto&,bool pending,const auto&) noexcept {
                             assert(pending);retirementQualified=true;return 0;
                         })==0); // CPU certificate fixture only
