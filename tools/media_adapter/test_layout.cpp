@@ -11792,6 +11792,32 @@ static void testRetainedVeboxFrames() {
         assert(!deniedTable.build(base,context,hook+1,read,qualify,executable,ownedExecutable));
         assert(!deniedTable.addressPoint() && !deniedTable.nativeFrame());
         assert(!deniedTable.build(base,context,hook,read,qualify,executable,ownedExecutable));
+        struct ItemFrame {ItemFrame() noexcept=default;};
+        TglOwnedVeboxRetainedFrames<ItemFrame> items;
+        unsigned invoked=0;
+        auto native=[&](uintptr_t target,uintptr_t ctx,uintptr_t request,uintptr_t output) noexcept -> int {
+            ++invoked;assert(target==entry && ctx==context && request==0x55000 && output==0x66000);
+            return 31;
+        };
+        auto dispatch=[&]() noexcept {return privateTable.dispatchItem(items,context,0x55000,0x66000,read,native);};
+        assert(dispatch()==5 && !invoked); // original vptr is not installed ownership
+        vptr=reinterpret_cast<uintptr_t>(addressPoint);
+        assert(dispatch()==31 && invoked==1);
+        assert(privateTable.dispatchItem(items,context+8,0x55000,0x66000,read,native)==5);
+        assert(privateTable.dispatchItem(items,context,0,0x66000,read,native)==5 && invoked==1);
+        const auto retained=items.create();assert(retained.generation);
+        assert(dispatch()==5 && invoked==1);
+        assert(items.retire(retained,[](const auto&,bool pending,const auto&) noexcept -> int {
+            assert(!pending);return 0; // CPU-only unsubmitted frame disposal
+        })==0);
+        assert(dispatch()==31 && invoked==2);
+        const auto abiTarget=+[](void* ctx,const void* request,void** output) -> int {
+            assert(reinterpret_cast<uintptr_t>(ctx)==0x20000 &&
+                reinterpret_cast<uintptr_t>(request)==0x55000 &&
+                reinterpret_cast<uintptr_t>(output)==0x66000);return 31;
+        };
+        assert(TglNativeContextFrameInvoker{}(reinterpret_cast<uintptr_t>(abiTarget),
+            context,0x55000,0x66000)==31);
     }
     struct Backend {
         unsigned& allocated;unsigned& released;

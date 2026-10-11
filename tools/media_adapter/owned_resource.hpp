@@ -16256,12 +16256,20 @@ struct TglNativeContextFrameBinding {
     }
 };
 
+struct TglNativeContextFrameInvoker {
+    int operator()(uintptr_t entry,uintptr_t context,uintptr_t request,
+        uintptr_t outputSlot) const noexcept {
+        return reinterpret_cast<int(*)(void*,const void*,void**)>(entry)(
+            reinterpret_cast<void*>(context),reinterpret_cast<const void*>(request),
+            reinterpret_cast<void**>(outputSlot));
+    }
+};
 // Stable owned data only. No context mutation or native image modification.
 // Its enclosing context owner must retain this object and both code images
 // until all calls end; copying/moving or rebuilding a published table is unsafe.
 class TglOwnedContextFrameVtable {
     std::array<uintptr_t,TglNativeContextFrameBinding::callbackCount+2> table_{};
-    uintptr_t nativeFrame_=0;bool attempted_=false,ready_=false;
+    uintptr_t context_=0,nativeFrame_=0;bool attempted_=false,ready_=false;
 public:
     TglOwnedContextFrameVtable()=default;
     TglOwnedContextFrameVtable(const TglOwnedContextFrameVtable&)=delete;
@@ -16276,10 +16284,26 @@ public:
             !native.resolve(image,context,read,qualify,executable)) return false;
         table_=native.original;
         table_[2+0x28/8]=hook;
-        nativeFrame_=native.frame;ready_=true;return true;
+        context_=context;nativeFrame_=native.frame;ready_=true;return true;
     }
     const uintptr_t* addressPoint() const noexcept {return ready_?table_.data()+2:nullptr;}
     uintptr_t nativeFrame() const noexcept {return ready_?nativeFrame_:0;}
+    // Caller holds the enclosing physical generation scope and native context
+    // lifetime. The pool is that SAME generation's pool, not a standalone one.
+    // Never read request contents or substitute the original output slot.
+    template<class Pool,class Read,class Invoke>
+    int dispatchItem(Pool& pool,uintptr_t context,uintptr_t request,
+        uintptr_t outputSlot,Read read,Invoke invoke) noexcept {
+        static_assert(noexcept(invoke(uintptr_t{},uintptr_t{},uintptr_t{},uintptr_t{})) &&
+            std::is_same_v<decltype(invoke(uintptr_t{},uintptr_t{},uintptr_t{},uintptr_t{})),int>);
+        if(!ready_ || context!=context_ || !request || !outputSlot) return 5;
+        return pool.withNativeRequestItem([&]() noexcept -> int {
+            uintptr_t actual=0;
+            if(!read(context,&actual,sizeof(actual)) ||
+                actual!=reinterpret_cast<uintptr_t>(addressPoint())) return 5;
+            return invoke(nativeFrame_,context,request,outputSlot);
+        });
+    }
 };
 
 struct TglNativePhysicalCallbackBinding {
