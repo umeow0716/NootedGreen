@@ -9004,6 +9004,10 @@ static void testSfcFrameFields() {
             for(bool wrongPacket:{false,true}) {
                 owned=saved;
                 Context context(vp,owned);
+                using PlatformResolve=TglOwnedVpSfcResolve<Context>;
+                TglOwnedVpEntrySet entries;
+                assert(!tglBindOwnedVpPlatformAdmissionEntries<PlatformResolve>(vp.bytes.data(),entries));
+                assert(!tglBindOwnedVpPlatformPacketEntry<PlatformResolve>(vp.bytes.data(),entries));
                 assert(setup(vp.bytes.data(),nullptr,nullptr,nullptr)==5);
                 assert(send(vp.bytes.data(),nullptr,nullptr,nullptr,nullptr,nullptr)==5);
                 produce(vp.bytes.data(),nullptr,owned.data());
@@ -9012,6 +9016,14 @@ static void testSfcFrameFields() {
                     TglOwnedVpSfcScopedContext<Context> scope(vp.bytes.data(),context);
                     assert(scope.bound());
                     const auto vpBefore=vp.bytes;
+                    assert(!tglBindOwnedVpPlatformAdmissionEntries<PlatformResolve>(foreign.data(),entries));
+                    assert(tglBindOwnedVpPlatformAdmissionEntries<PlatformResolve>(vp.bytes.data(),entries));
+                    assert(!tglBindOwnedVpPlatformPacketEntry<PlatformResolve>(foreign.data(),entries));
+                    assert(tglBindOwnedVpPlatformPacketEntry<PlatformResolve>(vp.bytes.data(),entries));
+                    assert(entries.platformSetup==setup && entries.platformSend==send && entries.platformPacket==produce);
+                    assert(entries.missingMask()==(0x7ffffffU&~((1U<<21)|(1U<<24)|(1U<<25))));
+                    assert(!tglBindOwnedVpPlatformAdmissionEntries<PlatformResolve>(vp.bytes.data(),entries));
+                    assert(!tglBindOwnedVpPlatformPacketEntry<PlatformResolve>(vp.bytes.data(),entries));
                     assert(setup(vp.bytes.data(),owned.data(),foreign.data(),nullptr)==0);
                     assert(setup(nullptr,nullptr,nullptr,nullptr)==5);
                     assert(setup(foreign.data(),nullptr,nullptr,nullptr)==5);
@@ -9029,13 +9041,15 @@ static void testSfcFrameFields() {
                         produce(vp.bytes.data(),nullptr,owned.data());
                         assert(context.status()==5 && owned==saved && foreign==other);
                     } else {
-                        produce(vp.bytes.data(),foreign.data(),owned.data());
+                        entries.platformPacket(vp.bytes.data(),foreign.data(),owned.data());
                         assert(context.status()==0 && foreign==other);
                         for(size_t i=0;i<owned.size();++i)
                             assert(owned[i]==(i>=4 && i<8 ? 0 : saved[i]));
                     }
                 }
                 const auto after=owned;
+                assert(entries.platformSend(vp.bytes.data(),nullptr,nullptr,nullptr,nullptr,nullptr)==5);
+                entries.platformPacket(vp.bytes.data(),nullptr,owned.data());assert(owned==after);
                 assert(setup(vp.bytes.data(),nullptr,nullptr,nullptr)==5);
                 produce(vp.bytes.data(),nullptr,owned.data());assert(owned==after);
             }

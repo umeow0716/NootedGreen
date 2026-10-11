@@ -7174,6 +7174,17 @@ template<class Resolve> struct TglOwnedVpPlatformSendCallback {
         return context && context->owns(child) ? 0 : 5;
     }
 };
+template<class Resolve>
+bool tglBindOwnedVpPlatformAdmissionEntries(void* child,TglOwnedVpEntrySet& target) noexcept {
+    static_assert(noexcept(Resolve{}(child)),"VP platform binding resolver ABI");
+    auto* context=Resolve{}(child);
+    static_assert(noexcept(context->owns(child)),"VP platform binding ownership ABI");
+    if(!context || !context->owns(child) || target.platformSetup || target.platformSend) return false;
+    auto candidate=target;
+    candidate.platformSetup=&TglOwnedVpPlatformSetupCallback<Resolve>::setup;
+    candidate.platformSend=&TglOwnedVpPlatformSendCallback<Resolve>::send;
+    target=candidate;return true;
+}
 template<class State,class Avs,class Ief>
 int tglSetupOwnedVpSfcStages(const TglOwnedVpFramePreparation& frame,
                             State state,Avs avs,Ief ief) noexcept {
@@ -7412,6 +7423,16 @@ template<class Resolve> struct TglOwnedVpPlatformPacketCallback {
     }
 };
 
+template<class Resolve>
+bool tglBindOwnedVpPlatformPacketEntry(void* child,TglOwnedVpEntrySet& target) noexcept {
+    static_assert(noexcept(Resolve{}(child)),"VP platform packet binding resolver ABI");
+    auto* context=Resolve{}(child);
+    static_assert(noexcept(context->owns(child)),"VP platform packet binding ownership ABI");
+    if(!context || !context->owns(child) || target.platformPacket) return false;
+    auto candidate=target;
+    candidate.platformPacket=&TglOwnedVpPlatformPacketCallback<Resolve>::produce;
+    target=candidate;return true;
+}
 // Darwin 1df6ba..1df72b: scalar fields after the platform +c0 producer.
 // frameWidth/Height are outputs of the separately authenticated +50 adjuster;
 // this function neither guesses that geometry nor installs an ICL callback.
@@ -9297,13 +9318,15 @@ template<class StateBackend,class AvsBackend> class TglOwnedVpSfcCpuGraph {
         bool owns(void* candidate) const noexcept {return candidate==child;}
     };
     template<class Use> static int withSendAdmission(void* child,Use use) noexcept {
-        using Callback=TglOwnedVpPlatformSendCallback<TglOwnedVpSfcResolve<SendContext>>;
+        using Resolve=TglOwnedVpSfcResolve<SendContext>;
         using Entry=int(*)(void*,void*,void*,void*,void*,void*) noexcept;
         static_assert(noexcept(use(nullptr,Entry{})),"CPU graph send admission ABI");
         SendContext context{child};
         TglOwnedVpSfcScopedContext<SendContext> scope(child,context);
         if(!scope.bound()) return 5;
-        return use(child,Entry{&Callback::send});
+        TglOwnedVpEntrySet entries;
+        if(!tglBindOwnedVpPlatformAdmissionEntries<Resolve>(child,entries)) return 5;
+        return use(child,entries.platformSend);
     }
     void clear() noexcept {
         ready_=false;
