@@ -1226,6 +1226,7 @@ static void testTrackedCpuOwner() {
         struct Child {
             bool leased=true;unsigned writes=0;TglCscCoefficients saved;
             uintptr_t address=0;
+            bool kernelSuccess=false;
             std::array<uintptr_t,20> installed{};bool tableReady=false;
             bool matchesPrivateVtableHooks(const std::array<uintptr_t,20>& hooks) const noexcept {
                 return tableReady && installed==hooks;
@@ -1235,7 +1236,7 @@ static void testTrackedCpuOwner() {
                 if(!leased) return false; ++writes;saved=value;return true;
             }
             int setupKernelScratch(Execution& execution,int32_t index) noexcept {
-                return leased && execution.hasExecutionLease(9) && index==3 ? -17:5;
+                return leased && execution.hasExecutionLease(9) && index==3 ? (kernelSuccess?0:-17):5;
             }
         } child;
         TglOwnedSurfaceStorage source,target,foreign;
@@ -1250,9 +1251,10 @@ static void testTrackedCpuOwner() {
         struct Frame {
             TglOwnedVeboxProducerPass pass;
             TglOwnedVeboxPacketLeases& leases;
+            bool success=false;
             int surfaces(bool,void* packet) noexcept {return packet==&leases.surfaces ? 31:5;}
             int state(bool,void* packet) noexcept {return packet==&leases.state ? -19:5;}
-            int diIecp(bool,void* packet) noexcept {return packet==&leases.diIecp ? -23:5;}
+            int diIecp(bool,void* packet) noexcept {return packet==&leases.diIecp ? (success?0:-23):5;}
         } frame{{},leases};
         uint32_t from=3,to=7,format=2;
         std::memcpy(source.prefix.data(),&from,4);std::memcpy(target.prefix.data(),&to,4);
@@ -1286,7 +1288,29 @@ static void testTrackedCpuOwner() {
             })==5 && calls==3 && child.writes==2);
         }
         assert(!Resolve::get(nativeChild));
-        auto noRead=[](uintptr_t,void*,size_t) noexcept {return false;};
+        bool nativeFixture=false;
+        constexpr uintptr_t nativeImage=0x100000000,nativeOs=0x8000,privateTable=0x9000;
+        auto noRead=[&](uintptr_t address,void* output,size_t bytes) noexcept {
+            if(!nativeFixture) return false;
+            uintptr_t value=0;
+            if(bytes==8) {
+                if(address==child.address) value=privateTable;
+                else if(address==child.address+0x10) value=nativeOs;
+                else if(address==privateTable+0x128 || address==nativeImage+0x757dc0) value=nativeImage+0x129a10;
+                else if(address==privateTable+0x138 || address==nativeImage+0x757dd0) value=nativeImage+0x129ca0;
+                else if(address==nativeOs+0x2c8) value=nativeImage+0x64d60;
+                else return false;
+                std::memcpy(output,&value,8);return true;
+            }
+            if(bytes!=16) return false;
+            constexpr std::array<uint8_t,16> setup{0x55,0x48,0x89,0xe5,0x48,0x81,0xec,0x80,0,0,0,0x48,0x89,0x7d,0xf8,0x48};
+            constexpr std::array<uint8_t,16> build{0x55,0x48,0x89,0xe5,0x48,0x81,0xec,0xe0,0,0,0,0x48,0x8b,0x45,0x18,0x4c};
+            constexpr std::array<uint8_t,16> writeback{0x55,0x48,0x89,0xe5,0x48,0x89,0x7d,0xf8,0x48,0x89,0x75,0xf0,0x89,0x55,0xec,0x48};
+            const auto* anchor=address==nativeImage+0x129a10?&setup:
+                address==nativeImage+0x129ca0?&build:address==nativeImage+0x64d60?&writeback:nullptr;
+            if(!anchor) return false;
+            std::memcpy(output,anchor->data(),16);return true;
+        };
         auto noPackets=[](uintptr_t,size_t,uintptr_t,size_t) noexcept {return false;};
         int(*expiredKernel)(void*,int32_t) noexcept=nullptr;
         assert(tglWithOwnedVeboxFrameProducers(frame,child,execution,0,noRead,noPackets,produce,
@@ -1389,6 +1413,36 @@ static void testTrackedCpuOwner() {
                 [](uintptr_t,size_t) noexcept {return false;});
             assert(unqualified.status==5 && !unqualified.acquired && !unqualified.writtenBack);
             assert(setups==2 && builders==2 && writebacks==2);
+            nativeFixture=true;child.kernelSuccess=true;frame.success=true;
+            auto qualify=[](uintptr_t image) noexcept {return image==nativeImage;};
+            auto executable=[](uintptr_t entry,size_t bytes) noexcept {
+                return bytes==16 && (entry==nativeImage+0x129a10 || entry==nativeImage+0x129ca0 ||
+                    entry==nativeImage+0x64d60);
+            };
+            assert(nativeSetup.resolve(nativeImage,noRead,qualify,executable));
+            assert(nativeBuilder.resolve(nativeImage,noRead,qualify,executable));
+            unsigned nativeSetups=0,nativeBuilds=0,nativeWritebacks=0;
+            const auto accepted=tglWithOwnedVeboxFrameNativeTransaction<AuxiliaryResolve,
+                AuxiliaryScope,AuxiliaryScope,AuxiliaryScope,FormatRead>(sourceLease,frame,
+                child,execution,0,noRead,noPackets,produce,nativeSetup,nativeBuilder,
+                nativeImage,nativeOs,scratch,&state,qualify,executable,
+                [&](uintptr_t entry,void* object,void* command,void*,void* aux,int32_t* remaining) noexcept -> int {
+                    assert(entry==nativeImage+0x129a10 && object==nativeChild &&
+                        command==scratch.command.data() && aux==&state);
+                    ++nativeSetups;*remaining=128;return 0;
+                },[&](uintptr_t entry,void* object,void*,void* diPacket,void*,void*,void*,void*,void*) noexcept -> int {
+                    assert(entry==nativeImage+0x129ca0 && object==nativeChild && diPacket==&di);
+                    ++nativeBuilds;
+                    using Kernel=int(*)(void*,int32_t) noexcept;
+                    using Di=int(*)(void*,bool,void*) noexcept;
+                    assert(reinterpret_cast<Kernel>(child.installed[5])(object,3)==0);
+                    return reinterpret_cast<Di>(child.installed[6])(object,false,diPacket);
+                },[&](uintptr_t entry,void* os,void* command) noexcept {
+                    assert(entry==nativeImage+0x64d60 && os==reinterpret_cast<void*>(nativeOs) &&
+                        command==scratch.command.data());++nativeWritebacks;
+                });
+            assert(accepted.status==0 && accepted.builderStatus==0 && accepted.acquired && accepted.writtenBack);
+            assert(nativeSetups==1 && nativeBuilds==1 && nativeWritebacks==1);
         }
     }
     {
