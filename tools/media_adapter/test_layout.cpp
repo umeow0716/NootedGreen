@@ -1029,6 +1029,21 @@ static void testTrackedCpuOwner() {
             }
             assert(status==expectedStatus && used==count && observed==expected);
         }
+        for(bool failFfdn:{false,true}) {
+            unsigned order=0;bool secondaryReady=false,stmmReady=false;uint32_t pipe=0;
+            const int status=tglRunOwnedVeboxAllocationQueriedStages(
+                [&]() noexcept {assert(order++==0);return true;},
+                [&]() noexcept {assert(order++==2 && secondaryReady);return secondaryReady;},
+                [&]() noexcept -> uint32_t {assert(order++==5 && pipe==2);return pipe;},
+                [&]() noexcept {assert(order++==7 && stmmReady);return stmmReady;},
+                [&]() noexcept {assert(order++==1);secondaryReady=true;return 0;},
+                [&]() noexcept {assert(order++==3);return 0;},
+                [&]() noexcept {assert(order++==4);pipe=2;return failFfdn?31:0;},
+                [&]() noexcept {assert(order++==6);stmmReady=true;return 0;},
+                [&]() noexcept {assert(order++==8);return 0;},
+                [&]() noexcept {assert(order++==9);return 0;});
+            assert(status==(failFfdn?31:0) && order==(failFfdn?5u:10u));
+        }
         int child=0,foreign=0;
         struct Owner {
             void* child;bool leased=true;
