@@ -11438,6 +11438,8 @@ int main() {
                 std::array<uint8_t,0x2a8> output{};
                 unsigned stages=0;
                 TglOwnedVpEntrySet assemblyBase;
+                TglOwnedVpEntrySet expiredPassEntries;
+                void* expiredPassChild=nullptr;
                 assemblyBase.compressionFormat=+[](void*,uint32_t) noexcept {return true;};
                 for(bool setupConflict:{false,true}) {
                     auto conflict=assemblyBase;
@@ -11464,6 +11466,7 @@ int main() {
                             1,1,1,1,platform);
                     },
                     [&](void* child,const TglOwnedVpEntrySet& assembled) noexcept -> int {
+                        expiredPassChild=child;expiredPassEntries=assembled;
                         assert(assembled.compressionFormat==assemblyBase.compressionFormat &&
                             assembled.missingMask()==(assemblyBase.missingMask()&~((1U<<8)|(1U<<9))));
                         assert(assembled.setup(child,&source,reinterpret_cast<void*>(0x2000),&data)==0);
@@ -11472,6 +11475,13 @@ int main() {
                         (void)assembled.send(child,&data,&command);return 0;
                     });
                 assert(result==(failure?-failure:0));
+                const auto stagesAfterPass=stages;
+                const auto commandsAfterPass=backend.count;
+                assert(expiredPassChild && expiredPassEntries.setup && expiredPassEntries.send);
+                assert(expiredPassEntries.setup(expiredPassChild,&source,
+                    reinterpret_cast<void*>(0x2000),&data)==5);
+                assert(expiredPassEntries.send(expiredPassChild,&data,&command)==5);
+                assert(stages==stagesAfterPass && backend.count==commandsAfterPass);
                 unsigned expectedCount=0;
                 for(int id:{1,3,4,5,6,7,8,9}) {
                     assert(backend.order[expectedCount++]==id);
