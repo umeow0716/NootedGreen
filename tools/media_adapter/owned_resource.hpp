@@ -13136,6 +13136,63 @@ public:
     }
     bool owns(uintptr_t handle) const noexcept {return handle_ && handle_==handle;}
 };
+// Native63c99..63d20 releases up to four plane IOAccelResource references
+// at resource+68/stride38 and the CF surface at+58. Extra references preserve
+// those objects only, not shell bytes, DN90, physical or native accounting.
+// Acquisition runs under the original owner's exclusive surface lease.
+template<class Api> class TglOwnedType1SurfaceReferences {
+    using Pin=TglOwnedTypedCfReference<Api>;
+    std::array<Pin,5> pins_;
+    std::array<uintptr_t,5> handles_{};
+    const TglOwnedSurfaceStorage* shell_=nullptr;
+    uint32_t count_=0;
+    bool attempted_=false,ready_=false;
+    bool matches(const TglOwnedSurfaceStorage& shell) const noexcept {
+        uint32_t type=0,count=0;uintptr_t surface=0;
+        std::memcpy(&type,shell.resource.data()+0x14,4);
+        std::memcpy(&count,shell.resource.data()+0x60,4);
+        std::memcpy(&surface,shell.resource.data()+0x58,8);
+        if(type!=1 || count!=count_ || surface!=handles_[4]) return false;
+        for(size_t i=0;i<count_;++i) {
+            uintptr_t plane=0;std::memcpy(&plane,shell.resource.data()+0x68+i*0x38,8);
+            if(plane!=handles_[i]) return false;
+        }
+        return true;
+    }
+public:
+    explicit TglOwnedType1SurfaceReferences(Api api) noexcept
+        :pins_{Pin(api),Pin(api),Pin(api),Pin(api),Pin(api)} {
+        static_assert(std::is_nothrow_copy_constructible_v<Api>);
+    }
+    TglOwnedType1SurfaceReferences(const TglOwnedType1SurfaceReferences&)=delete;
+    TglOwnedType1SurfaceReferences& operator=(const TglOwnedType1SurfaceReferences&)=delete;
+    template<class Owner>
+    bool acquire(Owner& owner,const TglOwnedSurfaceStorage& shell,
+        uintptr_t resourceType,uintptr_t surfaceType) noexcept {
+        if(attempted_ || !resourceType || !surfaceType || resourceType==surfaceType ||
+           !owner.hasSurfaceLease(shell)) return false;
+        attempted_=true;
+        uint32_t type=0;std::memcpy(&type,shell.resource.data()+0x14,4);
+        std::memcpy(&count_,shell.resource.data()+0x60,4);
+        if(type!=1 || !count_ || count_>4) return false;
+        std::memcpy(&handles_[4],shell.resource.data()+0x58,8);
+        for(size_t i=0;i<count_;++i)
+            std::memcpy(&handles_[i],shell.resource.data()+0x68+i*0x38,8);
+        for(size_t i=0;i<count_;++i) {
+            if(!owner.hasSurfaceLease(shell) || !matches(shell) ||
+               !pins_[i].acquire(handles_[i],resourceType)) return false;
+        }
+        if(!owner.hasSurfaceLease(shell) || !matches(shell) ||
+           !pins_[4].acquire(handles_[4],surfaceType) ||
+           !owner.hasSurfaceLease(shell) || !matches(shell)) return false;
+        shell_=&shell;ready_=true;return true;
+    }
+    // Partial failure keeps acquired references until this owner's destruction;
+    // no failed acquisition exposes a usable lease or permits another attempt.
+    bool ownsBackingOf(const TglOwnedSurfaceStorage& shell) const noexcept {
+        return ready_ && shell_==&shell && matches(shell);
+    }
+};
 #if defined(__APPLE__)
 struct TglDarwinTypedCfReferenceApi {
     uintptr_t type(uintptr_t handle) const noexcept {

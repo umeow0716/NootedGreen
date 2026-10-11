@@ -11204,6 +11204,50 @@ static void testRetainedVeboxFrames() {
 
 int main() {
     {
+        struct Api {
+            std::array<unsigned,6>& refs;
+            uintptr_t denied=0;
+            uintptr_t type(uintptr_t value) noexcept {assert(value>=1 && value<=5);return value==5?12:11;}
+            bool retain(uintptr_t value) noexcept {if(value==denied) return false;++refs[value];return true;}
+            void release(uintptr_t value) noexcept {assert(refs[value]);--refs[value];}
+        };
+        struct Owner {
+            const TglOwnedSurfaceStorage& shell;
+            bool hasSurfaceLease(const TglOwnedSurfaceStorage& value) noexcept {return &shell==&value;}
+        };
+        TglOwnedSurfaceStorage shell;
+        const uint32_t type=1,count=4;const uintptr_t surface=5;
+        std::memcpy(shell.resource.data()+0x14,&type,4);
+        std::memcpy(shell.resource.data()+0x60,&count,4);
+        std::memcpy(shell.resource.data()+0x58,&surface,8);
+        for(uintptr_t i=0;i<4;++i) {const auto handle=i+1;
+            std::memcpy(shell.resource.data()+0x68+i*0x38,&handle,8);}
+        Owner owner{shell};std::array<unsigned,6> refs{};
+        {
+            TglOwnedType1SurfaceReferences<Api> pins(Api{refs});
+            assert(pins.acquire(owner,shell,11,12) && pins.ownsBackingOf(shell));
+            for(size_t i=1;i<6;++i) assert(refs[i]==1);
+            assert(!pins.acquire(owner,shell,11,12));
+            const uintptr_t changed=0;std::memcpy(shell.resource.data()+0x68,&changed,8);
+            assert(!pins.ownsBackingOf(shell));
+        }
+        for(auto ref:refs) assert(!ref);
+        const uintptr_t restored=1;std::memcpy(shell.resource.data()+0x68,&restored,8);
+        {
+            TglOwnedType1SurfaceReferences<Api> partial(Api{refs,3});
+            assert(!partial.acquire(owner,shell,11,12) && !partial.ownsBackingOf(shell));
+            assert(refs[1]==1 && refs[2]==1 && !refs[3] && !refs[4] && !refs[5]);
+            assert(!partial.acquire(owner,shell,11,12));
+        }
+        for(auto ref:refs) assert(!ref);
+        const uint32_t overflow=5;std::memcpy(shell.resource.data()+0x60,&overflow,4);
+        {
+            TglOwnedType1SurfaceReferences<Api> invalid(Api{refs});
+            assert(!invalid.acquire(owner,shell,11,12));
+        }
+        for(auto ref:refs) assert(!ref);
+    }
+    {
         struct CfApi {
             unsigned& held;
             uintptr_t type(uintptr_t value) noexcept {assert(value==7);return 11;}
