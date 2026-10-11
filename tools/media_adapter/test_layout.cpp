@@ -11055,9 +11055,19 @@ int main() {
                 const auto beforeModes=storage->bytes;
                 for(bool cscEnabled:{false,true}) for(int consumerResult:{0,31}) {
                     put(source,0,uint32_t(cscEnabled?0:3));
-                    assert(graph.withView(false,[&](void* leasedChild) noexcept {
+                    int passData=0,passCommand=0;
+                    unsigned passStates=0;
+                    const TglOwnedVpFramePreparation passFrame{};
+                    assert(graph.withPreparedCallbackAssemblyPass({},passFrame,0,0x4000,0x2000,0,&source,&passData,
+                      [&](void*,const auto&,auto&) noexcept -> int {++passStates;return 0;},
+                      [](void*,const auto&,auto&) noexcept -> int {assert(false);return 0;},
+                      [](void*,const auto&) noexcept {assert(false);},
+                      [&](void* leasedChild,void*,void*,const TglOwnedVpEntrySet& passEntries) noexcept {
+                      assert(passStates==1);
                       return graph.withLeasedModeAssemblyEntries(leasedChild,read,lines,retire,0x1000,0x2000,0x4000,
-                        [&](void* child,const TglOwnedVpEntrySet& entries) noexcept {
+                        [&](void* child,const TglOwnedVpEntrySet& modeEntries) noexcept {
+                            auto entries=modeEntries;
+                            assert(entries.appendDisjoint(passEntries));
                             assert(child==storage->bytes.data() && !graph.tryReset());
                             unsigned nestedModeReads=0;
                             auto nestedModeRead=[&](uintptr_t,void*,size_t) noexcept {
@@ -11105,7 +11115,8 @@ int main() {
                                         [&](void* packetChild,const auto& packetEntries) noexcept {
                                     assert(packetChild==child && packetEntries.missingMask()==
                                         (combined.missingMask()&~((1U<<21)|(1U<<24)|(1U<<25)|(1U<<26))));
-                                    // Nineteen real entries retain resolver leases. Eight
+                                    assert(packetEntries.missingMask()==0x27U); // lifecycle 0/8/10 and frame28 remain separate
+                                    // Twenty-three real entries retain resolver leases. Four
                                     // remaining entries are explicit CPU presence fixtures.
                                     TglOwnedVpFlatDispatchTable dispatch;
                                     assert(dispatch.build(testVpPresenceEntries(packetEntries),
@@ -11142,7 +11153,10 @@ int main() {
                             entries.freeResources(child);expiredAssembly=entries;
                             return consumerResult;
                         });
-                    })==consumerResult);
+                      },[&](void* child,const TglOwnedVpEntrySet& passEntries) noexcept {
+                        assert(passEntries.setup(child,&source,reinterpret_cast<void*>(0x2000),&passData)==0);
+                        return passEntries.send(child,&passData,&passCommand);
+                      })==consumerResult);
                     for(size_t offset:{size_t(0x923),size_t(0x998),size_t(0x99c),size_t(0x9c0)})
                         assert(std::memcmp(storage->bytes.data()+offset,beforeModes.data()+offset,offset==0x923?1:offset==0x9c0?8:4)==0);
                     expiredAssembly.sampleMode(storage->bytes.data(),reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x2000));
