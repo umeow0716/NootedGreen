@@ -11538,8 +11538,30 @@ int main() {
                             emissionEntries.send==expiredPassEntries.send &&
                             emissionEntries.compressionFormat==assemblyBase.compressionFormat);
                         auto platform=[&](auto&) noexcept {return backend.stage(3);};
-                        return tglSendOwnedSfcPreparedCommands(backend,packets,output,
-                            1,1,1,1,platform);
+                        TglOwnedSurfaceStorage targetSurface;
+                        TglNativeVpCompressionBinding compressionBinding;
+                        auto noPacketRead=[](uintptr_t,void*,size_t) noexcept {assert(false);return false;};
+                        auto noNative=[](uintptr_t,uintptr_t,const void*,uint32_t) noexcept {assert(false);};
+                        return graph.withLeasedPlatformCompressionAssemblyEntries(emittedChild,targetSurface,
+                            stateCpu.bytes,0x4000,compressionBinding,noPacketRead,noNative,emissionEntries,
+                            [&](void* packetChild,const auto& combined) noexcept {
+                                assert(packetChild==emittedChild && combined.setup==emissionEntries.setup &&
+                                    combined.send==emissionEntries.send);
+                                TglOwnedVpFlatDispatchTable dispatch;
+                                // Six real pass/platform entries; other slots are CPU fixtures.
+                                assert(dispatch.build(testVpPresenceEntries(combined),
+                                    [](uintptr_t,size_t) noexcept {return true;}));
+                                return graph.withLeasedFlatDispatch(packetChild,dispatch,[&](void* admitted) noexcept {
+                                    uintptr_t table=0;std::memcpy(&table,admitted,8);
+                                    decltype(combined.platformPacket) produce=nullptr;
+                                    std::memcpy(&produce,reinterpret_cast<const void*>(table+0xc0),sizeof(produce));
+                                    assert(produce==combined.platformPacket);
+                                    produce(admitted,nullptr,stateCpu.bytes.data());
+                                    assert(combined.compression(admitted,nullptr,&targetSurface,stateCpu.bytes.data())==5);
+                                    return tglSendOwnedSfcPreparedCommands(backend,packets,output,
+                                        1,1,1,1,platform);
+                                });
+                            });
                     },
                     [&](void* child,const TglOwnedVpEntrySet& assembled) noexcept -> int {
                         expiredPassChild=child;expiredPassEntries=assembled;
