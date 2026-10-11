@@ -3359,27 +3359,32 @@ public:
     // This permits prepared setup->send to span the parent80 borrow without
     // recursively acquiring the VP graph. Scope must pin the entire9d0 view;
     // no callable-vtable or asynchronous lifetime claim is made here.
+    template<class Use>
+    int withLeasedBorrowedVpCpuView(void* parent,void* child,Use use) noexcept {
+        if(!hasPrivateChildLease(reinterpret_cast<uintptr_t>(parent))) return 5;
+        static_assert(noexcept(use(nullptr,nullptr)),"borrowed VP CPU view ABI");
+        const uintptr_t p=reinterpret_cast<uintptr_t>(parent);
+        const uintptr_t c=reinterpret_cast<uintptr_t>(child);
+        // Exact base extents: parent1bc0 and VP9d0. Distinct starting
+        // addresses alone do not establish independent allocations.
+        if(!child || p>UINTPTR_MAX-0x1bc0 || c>UINTPTR_MAX-0x9d0 ||
+           (p<c+0x9d0 && c<p+0x1bc0)) return 5;
+        auto* field=static_cast<uint8_t*>(parent)+0x80;
+        uintptr_t previous=0;
+        std::memcpy(&previous,field,8);
+        if(previous) return 5; // never hide an existing native owner
+        const uintptr_t borrowed=reinterpret_cast<uintptr_t>(child);
+        std::memcpy(field,&borrowed,8);
+        const int result=use(parent,child);
+        uintptr_t observed=0;std::memcpy(&observed,field,8);
+        std::memcpy(field,&previous,8);
+        return observed==borrowed ? result : 5;
+    }
     template<class Scope>
     int withBorrowedVpCpuScope(Scope scope) noexcept {
         return withPrivateChild([&](void* parent) noexcept {
             auto borrow=[&](void* child,auto use) noexcept -> int {
-                static_assert(noexcept(use(nullptr,nullptr)),"borrowed VP CPU view ABI");
-                const uintptr_t p=reinterpret_cast<uintptr_t>(parent);
-                const uintptr_t c=reinterpret_cast<uintptr_t>(child);
-                // Exact base extents: parent1bc0 and VP9d0. Distinct starting
-                // addresses alone do not establish independent allocations.
-                if(!child || p>UINTPTR_MAX-0x1bc0 || c>UINTPTR_MAX-0x9d0 ||
-                   (p<c+0x9d0 && c<p+0x1bc0)) return 5;
-                auto* field=static_cast<uint8_t*>(parent)+0x80;
-                uintptr_t previous=0;
-                std::memcpy(&previous,field,8);
-                if(previous) return 5; // never hide an existing native owner
-                const uintptr_t borrowed=reinterpret_cast<uintptr_t>(child);
-                std::memcpy(field,&borrowed,8);
-                const int result=use(parent,child);
-                uintptr_t observed=0;std::memcpy(&observed,field,8);
-                std::memcpy(field,&previous,8);
-                return observed==borrowed ? result : 5;
+                return withLeasedBorrowedVpCpuView(parent,child,use);
             };
             static_assert(noexcept(scope(borrow)),"borrowed VP scope must not throw");
             return scope(borrow);
@@ -3397,11 +3402,17 @@ public:
     // call. Restore parent80 before removing VP's temporary dispatch table.
     // No factory ownership transfer, RTTI admission or GPU retention implied.
     template<class VpOwner,class Table,class Use>
+    int withLeasedBorrowedVpFlatDispatch(void* parent,VpOwner& vp,void* child,
+        const Table& table,Use use) noexcept {
+        if(!hasPrivateChildLease(reinterpret_cast<uintptr_t>(parent))) return 5;
+        return vp.withLeasedFlatDispatch(child,table,[&](void* admitted) noexcept {
+            return withLeasedBorrowedVpCpuView(parent,admitted,use);
+        });
+    }
+    template<class VpOwner,class Table,class Use>
     int withBorrowedVpFlatDispatch(VpOwner& vp,void* child,const Table& table,Use use) noexcept {
-        return withBorrowedVpCpuScope([&](auto borrow) noexcept {
-            return vp.withLeasedFlatDispatch(child,table,[&](void* admitted) noexcept {
-                return borrow(admitted,use);
-            });
+        return withPrivateChild([&](void* parent) noexcept {
+            return withLeasedBorrowedVpFlatDispatch(parent,vp,child,table,use);
         });
     }
     // Parent80 is borrowed only while the graph's admission/resource entries
