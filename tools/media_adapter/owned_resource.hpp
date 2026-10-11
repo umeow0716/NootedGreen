@@ -4751,6 +4751,28 @@ int tglWithOwnedSurfaceRoles(const std::array<Owner*,Count>& owners,Invoke invok
     return enter(enter,0);
 }
 
+// Hold the real source owner across request/metadata preparation and its
+// consumer. Metadata is CPU-only and contains no borrowed resource tokens;
+// only sourceView may supply backing under this lease. Neither view can be
+// retained past the callback or treated as asynchronous GPU ownership.
+template<class Owner,class Use>
+int tglWithOwnedFfdiPreparation(Owner& source,uint32_t format,uint32_t tile,
+    TglOwnedFfdiCompressionSelection compression,uint32_t queriedCompression,Use use) noexcept {
+    static_assert(noexcept(use(std::declval<const TglOwnedSurfaceStorage&>(),
+        std::declval<const TglOwnedSurfaceStorage&>(),
+        std::declval<const TglOwnedFfdiAllocationRequest&>())),"leased FFDI preparation ABI");
+    int result=5;
+    const bool leased=source.withSurface([&](const TglOwnedSurfaceStorage& sourceView) noexcept {
+        TglOwnedFfdiAllocationRequest request;
+        TglOwnedSurfaceStorage metadata;
+        if(!tglPrepareOwnedFfdiAllocationRequest(sourceView,format,tile,compression,request) ||
+           !tglPrepareOwnedFfdiFrameMetadata(metadata,sourceView,queriedCompression)) return;
+        result=use(sourceView,static_cast<const TglOwnedSurfaceStorage&>(metadata),
+            static_cast<const TglOwnedFfdiAllocationRequest&>(request));
+    });
+    return leased?result:5;
+}
+
 // Exact ICL classifier4a500 and its 90-entry relative jump table4a55c.
 // 3 is the native OTHER color pack, not an invalid format admission result.
 inline uint32_t tglOwnedChromaColorPack(uint32_t format) noexcept {

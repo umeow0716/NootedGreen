@@ -5242,6 +5242,20 @@ static void testNativeResourceBoundary() {
                 return 31;
             })==31 && roleCalls==1);
             assert(owner.surface() && destination.surface());
+            unsigned preparedFfdi=0;
+            assert(tglWithOwnedFfdiPreparation(owner,0x19,1,{true,1},3,
+                [&](const auto& sourceView,const auto& metadata,const auto& request) noexcept {
+                    ++preparedFfdi;assert(&sourceView==surface && request.key.width==2048);
+                    assert(request.kind==TglOwnedFfdiAllocationKind::DescriptorOnly);
+                    assert(request.key.compressed && request.key.compressionMode==1);
+                    uint32_t compression=0;std::memcpy(&compression,metadata.prefix.data()+0x138,4);
+                    assert(compression==3 && !tglNativeBackingPresent(metadata.resource));
+                    owner.reset();assert(owner.ensure(key)==5);
+                    assert(tglWithOwnedFfdiPreparation(owner,0x19,1,{},0,
+                        [](const auto&,const auto&,const auto&) noexcept {assert(false);return 0;})==5);
+                    return -17;
+                })==-17 && preparedFfdi==1);
+            assert(owner.surface()==surface);
             bool caught=false;
             try {
                 owner.withPeerSurface(destination,[](const auto&,const auto&){throw 31;});
@@ -5249,6 +5263,8 @@ static void testNativeResourceBoundary() {
             assert(caught && owner.surface() && destination.surface());
             const auto destinationBefore=*destination.surface();
             fixtureResource.fill(0);
+            assert(tglWithOwnedFfdiPreparation(owner,0x19,1,{},0,
+                [](const auto&,const auto&,const auto&) noexcept {assert(false);return 0;})==5);
             const std::array reverseRoles{&destination,&owner,&destination};
             assert(tglWithOwnedSurfaceRoles(reverseRoles,[&](const auto&) noexcept {
                 ++roleCalls;return 0;
