@@ -11918,6 +11918,27 @@ static void testRetainedVeboxFrames() {
         assert(privateTable.publish(read,writeVptr,admitVptr) && vptrWrites==1 && privateTable.requiresRetention());
         assert(!privateTable.publish(read,writeVptr,admitVptr) && vptrWrites==1);
         assert(dispatch()==31 && invoked==1);
+        {
+            TglOwnedVeboxPhysicalFrameRegistry<ItemFrame> scopedRegistry;
+            const auto ticket=scopedRegistry.reserve(base);
+            assert(scopedRegistry.publish(ticket,base,0x8000));
+            unsigned scopedCalls=0;
+            assert(scopedRegistry.withScope(ticket,base,0x8000,[&](auto& scope) noexcept -> int {
+                auto call=[&](uintptr_t target,uintptr_t ctx,uintptr_t request,uintptr_t output,auto& active) noexcept -> int {
+                    ++scopedCalls;
+                    assert(target==entry && ctx==context && request==0x55000 && output==0x66000);
+                    assert(&active==&scope);
+                    assert(privateTable.dispatchScopedItem(active,context,request,output,read,
+                        [](uintptr_t,uintptr_t,uintptr_t,uintptr_t,auto&) noexcept -> int {assert(false);return 0;})==5);
+                    return 31;
+                };
+                assert(privateTable.dispatchScopedItem(scope,context+8,0x55000,0x66000,read,call)==5);
+                return privateTable.dispatchScopedItem(scope,context,0x55000,0x66000,read,call);
+            })==31 && scopedCalls==1);
+            assert(scopedRegistry.destroy(ticket,base,0x8000,[](uintptr_t physical) noexcept -> int {
+                assert(physical==0x8000);return 0;
+            })==0);
+        }
         assert(privateTable.dispatchItem(items,context+8,0x55000,0x66000,read,native)==5);
         assert(privateTable.dispatchItem(items,context,0,0x66000,read,native)==5 && invoked==1);
         const auto retained=items.create();assert(retained.generation);

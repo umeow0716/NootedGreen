@@ -16572,6 +16572,21 @@ public:
             return invoke(nativeFrame_,context,request,outputSlot);
         });
     }
+    // Enter the item guard exactly once and pass the active generation scope
+    // onward to synchronous renderer code; do not nest dispatchItem here.
+    template<class Scope,class Read,class Invoke>
+    int dispatchScopedItem(Scope& scope,uintptr_t context,uintptr_t request,
+        uintptr_t outputSlot,Read read,Invoke invoke) noexcept {
+        static_assert(noexcept(invoke(uintptr_t{},uintptr_t{},uintptr_t{},uintptr_t{},std::declval<Scope&>())) &&
+            std::is_same_v<decltype(invoke(uintptr_t{},uintptr_t{},uintptr_t{},uintptr_t{},std::declval<Scope&>())),int>);
+        if(!ready_ || publication_!=Publication::Published || context!=context_ || !request || !outputSlot) return 5;
+        return scope.withNativeRequestItem(context,[&](Scope& active) noexcept -> int {
+            uintptr_t actual=0;
+            if(!read(context,&actual,sizeof(actual)) ||
+                actual!=reinterpret_cast<uintptr_t>(addressPoint())) return 5;
+            return invoke(nativeFrame_,context,request,outputSlot,active);
+        });
+    }
     template<class Pool,class Read,class Invoke>
     int dispatchItemWithReceipt(Pool& pool,uintptr_t context,uintptr_t request,
         uintptr_t outputSlot,Read read,Invoke invoke,TglNativeFrameOutputReceipt& receipt) noexcept {
