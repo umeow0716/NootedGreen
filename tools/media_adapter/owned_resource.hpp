@@ -6908,6 +6908,19 @@ template<class Resolve> struct TglOwnedVpProducerCallbacks {
         if(context && state && source && context->owns(child)) context->filters(state,source);
     }
 };
+// Exact ICL donor VP+a0=1e0960 saves RSI=IEF and RDX=state, returns
+// void, and gates mutation on child923 low bit. The scoped producer owns
+// that policy/cache and must keep coefficient publication leased through
+// command emission; this ABI entry does not invent or shorten that lease.
+template<class Resolve> struct TglOwnedVpCscCallback {
+    static void csc(void* child,void* ief,void* state) noexcept {
+        static_assert(noexcept(Resolve{}(child)),"VP CSC resolver ABI");
+        auto* context=Resolve{}(child);
+        static_assert(noexcept(context->owns(child)) && noexcept(context->csc(ief,state)),
+            "VP CSC producer ABI");
+        if(context && ief && state && context->owns(child)) context->csc(ief,state);
+    }
+};
 // Qualified VP +40=1e0ca0..1e0dcb. Its +a8=1e0c80 is a proven native
 // no-op, not an unresolved hook. +90 failure prevents AVS/IEF; AVS failure
 // prevents IEF. Native +98 is called for its side effect without a status read.

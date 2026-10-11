@@ -9324,7 +9324,7 @@ int main() {
     {
         struct Context {
             void* child;std::array<void*,3> args{};
-            unsigned states=0,filtersCalled=0;int result=0;
+            unsigned states=0,filtersCalled=0,cscCalls=0;int result=0;
             bool owns(void* value) const noexcept {return child==value;}
             int state(void* data,void* source,void* target) noexcept {
                 ++states;args={data,source,target};return result;
@@ -9332,9 +9332,15 @@ int main() {
             void filters(void* state,void* source) noexcept {
                 ++filtersCalled;args={state,source,nullptr};
             }
+            void csc(void* ief,void* state) noexcept {
+                ++cscCalls;args={ief,state,nullptr};
+            }
         };
         std::array<int,5> values{};Context context{&values[0]};
         using Callback=TglOwnedVpProducerCallbacks<TglOwnedVpSfcResolve<Context>>;
+        using Csc=TglOwnedVpCscCallback<TglOwnedVpSfcResolve<Context>>;
+        const auto csc=static_cast<void(*)(void*,void*,void*) noexcept>(&Csc::csc);
+        csc(context.child,&values[1],&values[2]);assert(!context.cscCalls);
         using State=int(*)(void*,void*,void*,void*) noexcept;
         using Filters=void(*)(void*,void*,void*,void*) noexcept;
         const State state=&Callback::state;const Filters filters=&Callback::filters;
@@ -9342,6 +9348,12 @@ int main() {
         filters(context.child,&values[1],&values[4],&values[2]);assert(!context.filtersCalled);
         {
             TglOwnedVpSfcScopedContext<Context> scope(context.child,context);assert(scope.bound());
+            csc(nullptr,&values[1],&values[2]);
+            csc(&values[4],&values[1],&values[2]);
+            csc(context.child,nullptr,&values[2]);
+            csc(context.child,&values[1],nullptr);assert(!context.cscCalls);
+            csc(context.child,&values[1],&values[2]);
+            assert(context.cscCalls==1 && (context.args==std::array<void*,3>{&values[1],&values[2],nullptr}));
             assert(state(nullptr,&values[1],&values[2],&values[3])==5);
             assert(state(context.child,&values[1],nullptr,&values[3])==5);
             assert(state(context.child,&values[1],&values[2],nullptr)==5);
@@ -9357,6 +9369,7 @@ int main() {
             assert(context.filtersCalled==1 && context.args[0]==&values[4] && context.args[1]==&values[2]);
         }
         filters(context.child,&values[1],&values[4],&values[2]);assert(context.filtersCalled==1);
+        csc(context.child,&values[1],&values[2]);assert(context.cscCalls==1);
     }
     {
         struct Backend {
