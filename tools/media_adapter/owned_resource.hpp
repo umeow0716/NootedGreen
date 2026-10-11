@@ -5095,14 +5095,33 @@ public:
 // Null roles stay null, but all nonnull roles must have live backing. This is
 // a synchronous frame scope, NOT a retained previous-frame/GPU fence lease.
 template<class Owner,size_t Count,class Invoke>
-int tglWithOwnedSurfaceRoles(const std::array<Owner*,Count>& owners,Invoke invoke) noexcept {
+int tglWithCapturedOwnedSurfaceRoles(const std::array<Owner*,Count>& owners,
+    const std::array<const TglOwnedSurfaceStorage*,Count>& captured,Invoke invoke) noexcept {
     static_assert(Count>0 && Count<=16,"bounded surface role set");
     using Views=std::array<const TglOwnedSurfaceStorage*,Count>;
     static_assert(noexcept(invoke(std::declval<const Views&>())),"surface role borrow ABI");
-    Views views{};
+    Views seeds=captured,views{};
+    for(size_t i=0;i<Count;++i) {
+        if(seeds[i] && (!owners[i] || !owners[i]->hasSurfaceLease(*seeds[i]))) return 5;
+        for(size_t j=0;j<i;++j)
+            if(owners[i] && owners[i]==owners[j] && seeds[i] && seeds[j] && seeds[i]!=seeds[j]) return 5;
+    }
+    for(size_t i=0;i<Count;++i) if(owners[i] && !seeds[i])
+        for(size_t j=0;j<Count;++j) if(owners[i]==owners[j] && seeds[j]) {seeds[i]=seeds[j];break;}
+    const auto valid=[&]() noexcept {
+        for(size_t i=0;i<Count;++i) if(seeds[i] && !owners[i]->hasSurfaceLease(*seeds[i])) return false;
+        return true;
+    };
     const auto enter=[&](const auto& self,size_t index) noexcept -> int {
-        if(index==Count) return invoke(static_cast<const Views&>(views));
+        if(index==Count) {
+            if(!valid()) return 5;
+            const int result=invoke(static_cast<const Views&>(views));
+            return valid()?result:5;
+        }
         if(!owners[index]) return self(self,index+1);
+        if(seeds[index]) {
+            views[index]=seeds[index];const int result=self(self,index+1);views[index]=nullptr;return result;
+        }
         for(size_t previous=0;previous<index;++previous) {
             if(owners[previous]!=owners[index]) continue;
             views[index]=views[previous];
@@ -5116,6 +5135,11 @@ int tglWithOwnedSurfaceRoles(const std::array<Owner*,Count>& owners,Invoke invok
         return leased ? result : 5;
     };
     return enter(enter,0);
+}
+template<class Owner,size_t Count,class Invoke>
+int tglWithOwnedSurfaceRoles(const std::array<Owner*,Count>& owners,Invoke invoke) noexcept {
+    return tglWithCapturedOwnedSurfaceRoles(owners,
+        std::array<const TglOwnedSurfaceStorage*,Count>{},invoke);
 }
 
 // Hold the real source owner across request/metadata preparation and its
@@ -5283,7 +5307,7 @@ template<class Owner,class Allocate,class Copy,class Publish,class Finish=TglOwn
 int tglWithAllocatedOwnedFfdnPair(Owner& input,Owner* previous,Owner* copyDestination,
     Compression selection,bool& referenceValid,bool executionFlag13,
     uint8_t& execution15,uint8_t& execution16,Allocate allocate,Copy copy,Publish publish,
-    Finish finish={}) noexcept {
+    Finish finish={},std::array<const TglOwnedSurfaceStorage*,3> captured={}) noexcept {
     static_assert(noexcept(allocate(size_t{},std::declval<const TglOwnedFfdnAllocationRequest&>(),
         std::declval<bool&>(),std::declval<uint32_t&>())),"FFDN pair allocation ABI");
     static_assert(noexcept(copy(std::declval<const TglOwnedSurfaceStorage&>(),
@@ -5297,7 +5321,7 @@ int tglWithAllocatedOwnedFfdnPair(Owner& input,Owner* previous,Owner* copyDestin
         (std::is_same_v<PublicationResult,void> || std::is_same_v<PublicationResult,int>),
         "FFDN pair metadata ABI");
     const std::array<Owner*,3> roles{&input,previous,copyDestination};
-    return tglWithOwnedSurfaceRoles(roles,[&](const auto& views) noexcept {
+    return tglWithCapturedOwnedSurfaceRoles(roles,captured,[&](const auto& views) noexcept {
         TglOwnedFfdnCompressionSelection compression{};
         if constexpr(std::is_same_v<Compression,TglOwnedFfdnCompressionSelection>) compression=selection;
         else {

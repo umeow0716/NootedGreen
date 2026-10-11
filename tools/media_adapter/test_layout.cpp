@@ -5899,6 +5899,27 @@ static void testNativeResourceBoundary() {
                 assert(targets[0].withDescriptor([](const auto&) noexcept {}));
                 assert(fixture.allocations==allocationCount);
             }
+            assert(owner.withSurface([&](const auto& capturedSource) noexcept {
+                unsigned allocations=0;
+                bool valid=false;uint8_t flag=0,mode=0;
+                const auto run=[&](std::array<const TglOwnedSurfaceStorage*,3> captured) noexcept {
+                    return tglWithAllocatedOwnedFfdnPair(owner,&owner,&destination,{false,0},valid,false,flag,mode,
+                        [&](size_t,const auto&,bool& changed,uint32_t& pitch) noexcept {
+                            ++allocations;changed=false;pitch=0;
+                            owner.reset();assert(owner.ensure(key)==5);return 0;
+                        },[](const auto&,const auto&) noexcept {assert(false);},
+                        [](size_t,const auto&,const auto&) noexcept {},
+                        [&](const auto& views) noexcept {
+                            assert(views[0]==&capturedSource && views[1]==views[0]);
+                            assert(destination.hasSurfaceLease(*views[2]));return 31;
+                        },captured);
+                };
+                assert(run({})==5 && !allocations); // no implicit borrowing of a busy owner
+                assert(run({&capturedSource,nullptr,&capturedSource})==5 && !allocations);
+                assert(run({&capturedSource,nullptr,nullptr})==31 && allocations==2);
+                assert(owner.hasSurfaceLease(capturedSource)); // inner scope must not release outer lease
+                assert(destination.withSurface([](const auto&) noexcept {}));
+            }));
             for(bool admit:{false,true}) {
                 bool valid=false;uint8_t flag=0xa5,mode=0x5a;
                 unsigned selections=0,allocations=0,publications=0;
