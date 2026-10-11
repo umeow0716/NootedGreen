@@ -10797,6 +10797,11 @@ int main() {
                                     assert(combined.missingMask()==(entries.missingMask()&~(1U<<20)));
                                     combined.csc(child,state,assemblyIef.data());
                                     assert(state[0x88]==(cscEnabled?1:savedState[0x88]));
+                                    const auto beforeRetirement=retired;
+                                    const auto beforeReleases=backends[0].releases+backends[1].releases;
+                                    assert(tglRetireOwnedVpResources(graph,lines,retire)==5);
+                                    assert(retired==beforeRetirement &&
+                                        backends[0].releases+backends[1].releases==beforeReleases);
                                     assert(!graph.tryReset());escapedCscAssembly=combined;return consumerResult;
                                 })==consumerResult);
                             assert(assemblyIef==savedIef && stateCpu.bytes==savedState);
