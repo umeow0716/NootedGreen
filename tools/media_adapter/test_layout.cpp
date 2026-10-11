@@ -8142,9 +8142,16 @@ int main() {
                     },
                     [&](void* child,SetupEntry setup,SendEntry send) noexcept -> int {
                         escapedSetup=setup;escapedSend=send;callbackChild=child;
+                        assert(stages==0); // Native setup is the producer boundary.
                         if(mode==1) {assert(send(child,&data,&command)==5);return 0;}
                         if(mode==2) {assert(setup(child,&command,reinterpret_cast<void*>(0x2000),&data)==5);return 0;}
+                        if(mode==9) {
+                            assert(setup(child,&source,reinterpret_cast<void*>(0x2000),&data)==11);
+                            assert(send(child,&data,&command)==11);
+                            assert(stages==1);return 0;
+                        }
                         assert(setup(child,&source,reinterpret_cast<void*>(0x2000),&data)==0);
+                        assert(stages==3);
                         if(mode==3) return 0;
                         if(mode==4) {assert(setup(child,&source,reinterpret_cast<void*>(0x2000),&data)==5);return 0;}
                         const int sent=send(child,&data,&command);
@@ -8156,6 +8163,7 @@ int main() {
                     });
                 assert(result==(mode==0?0:mode==5?31:mode==6?-17:mode==9?11:5));
                 assert(emissions==(mode==0 || (mode>=5 && mode<=8)?1u:0u));
+                assert(stages==((mode==1 || mode==2)?0u:mode==9?1u:3u));
                 assert(escapedSetup(callbackChild,&source,reinterpret_cast<void*>(0x2000),&data)==5);
                 assert(escapedSend(callbackChild,&data,&command)==5);
             }

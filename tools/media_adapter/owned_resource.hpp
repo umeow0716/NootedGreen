@@ -7741,38 +7741,63 @@ public:
                 });
             });
     }
-    // Bridge setup+40 and send+48 within the same completed producer lease.
+    // Bridge setup+40 and send+48 within one prepared-frame lease. Producers
+    // execute at setup, not eagerly before the native caller chooses setup.
     // This is synchronous command construction, not a publishable VP vtable
     // or permission to retire GPU resources. Outer surface leases remain required.
     template<class State,class Avs,class Ief,class Emit,class Invoke>
     int withPreparedCallbackPass(const TglOwnedVpFramePreparation& frame,
         uintptr_t conditionalSource,uintptr_t settings,uintptr_t target,uintptr_t sourceA8,
         void* source,void* renderData,State state,Avs avs,Ief ief,Emit emit,Invoke invoke) noexcept {
-        if(!source || !renderData || !target) return 5;
-        return withPreparedPass(frame,conditionalSource,settings,target,sourceA8,
-            state,avs,ief,[&](void* child,const auto&) noexcept {
+        static_assert(noexcept(state(nullptr,frame,state_)) &&
+            noexcept(avs(nullptr,frame,avs_)) && noexcept(ief(nullptr,frame)) &&
+            noexcept(emit(nullptr,nullptr,nullptr)),"VP callback producer ABI");
+        if(!ready_ || busy_ || !source || !renderData || !target) return 5;
+        Guard guard(busy_);
+        return tglWithOwnedVpPreparedFrame(storage_,frame,conditionalSource,
+            settings,target,sourceA8,[&](void* child,const auto&) noexcept {
+                auto produce=[&]() noexcept -> int {
+                    return tglSetupOwnedVpSfcStages(frame,
+                        [&]() noexcept {return state(child,frame,state_);},
+                        [&]() noexcept {return avs(child,frame,avs_);},
+                        [&]() noexcept {ief(child,frame);});
+                };
+                auto consume=[&](void* d,void* command) noexcept -> int {
+                    return state_.withParameters([&](const uint8_t*) noexcept {
+                        auto view=[&]() noexcept -> int {
+                            return tglWithOwnedVpSfcCpuView(storage_,state_,avs_,
+                                [&](void* leased) noexcept {return emit(leased,d,command);},
+                                frame.regions.scale.scaling || frame.color.at9b8);
+                        };
+                        if(!(frame.regions.scale.scaling || frame.color.at9b8)) return view();
+                        return avs_.withParameters([&](const auto&) noexcept {return view();});
+                    });
+                };
                 struct Context {
-                    void* child;void* source;void* target;void* data;Emit& emit;
+                    void* child;void* source;void* target;void* data;
+                    decltype(produce)& produce;decltype(consume)& consume;
                     bool setupSeen=false,sendSeen=false,busy=false;int error=0;
                     bool owns(void* candidate) const noexcept {return candidate==child;}
                     int setup(void* s,void* t,void* d) noexcept {
-                        if(error || setupSeen || busy || s!=source || t!=target || d!=data)
+                        if(error) return error;
+                        if(setupSeen || busy || s!=source || t!=target || d!=data)
                             return error=5;
-                        // State/AVS/IEF producers already completed successfully
-                        // in withPreparedPass; setup admits exactly that frame.
-                        setupSeen=true;return 0;
+                        setupSeen=true;busy=true;
+                        const int result=produce();busy=false;
+                        if(!error) error=result;
+                        return error;
                     }
                     int send(void* d,void* command) noexcept {
-                        if(error || !setupSeen || sendSeen || busy || d!=data || !command)
+                        if(error) return error;
+                        if(!setupSeen || sendSeen || busy || d!=data || !command)
                             return error=5;
-                        static_assert(noexcept(emit(child,d,command)),"VP emitter ABI");
                         sendSeen=true;busy=true;
-                        const int result=emit(child,d,command);
+                        const int result=consume(d,command);
                         busy=false;
                         if(!error) error=result;
                         return error;
                     }
-                } context{child,source,reinterpret_cast<void*>(target),renderData,emit};
+                } context{child,source,reinterpret_cast<void*>(target),renderData,produce,consume};
                 using Callbacks=TglOwnedVpSfcCallbacks<TglOwnedVpSfcResolve<Context>>;
                 TglOwnedVpSfcScopedContext<Context> scope(child,context);
                 if(!scope.bound()) return 5;
