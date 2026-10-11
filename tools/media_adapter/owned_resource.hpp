@@ -6761,10 +6761,34 @@ std::array<uintptr_t,20> tglBindOwnedVeboxAdmissionHook(
 // Allocation precedes builder admission: do not gate it on producer-pass state.
 // Context owns the complete allocation transaction and must unwind failures
 // itself; this native caller returns errors without invoking FreeResources.
+template<class Owner,class Allocate> class TglOwnedVeboxAllocationContext {
+    Owner& owner_;
+    Allocate& allocate_;
+    void* child_;
+    bool busy_=false;
+public:
+    TglOwnedVeboxAllocationContext(Owner& owner,Allocate& allocate,void* child) noexcept
+        :owner_(owner),allocate_(allocate),child_(child) {}
+    TglOwnedVeboxAllocationContext(const TglOwnedVeboxAllocationContext&)=delete;
+    TglOwnedVeboxAllocationContext& operator=(const TglOwnedVeboxAllocationContext&)=delete;
+    bool owns(void* child) const noexcept {
+        return child && child==child_ &&
+            owner_.hasPrivateChildLease(reinterpret_cast<uintptr_t>(child));
+    }
+    int allocate() noexcept {
+        static_assert(noexcept(allocate_(child_)) &&
+            std::is_same_v<decltype(allocate_(child_)),int>,"native allocation status ABI");
+        if(busy_ || !owns(child_)) return 5;
+        busy_=true;
+        struct Unlock {bool& busy;~Unlock(){busy=false;}} unlock{busy_};
+        const int result=allocate_(child_);
+        return owns(child_) ? result : 5;
+    }
+};
 template<class Resolve> struct TglOwnedVeboxAllocationCallbacks {
     static int allocate(void* child) noexcept {
         auto* context=Resolve::get(child);
-        if(!context) return 5;
+        if(!context || !context->owns(child)) return 5;
         static_assert(noexcept(context->allocate()),"allocation reports native status");
         return context->allocate();
     }
