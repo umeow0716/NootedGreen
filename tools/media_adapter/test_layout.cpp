@@ -6054,6 +6054,57 @@ static void testSfcLineBufferOwnership() {
         assert(buffers.ensure(1080,720)==5 && !backend.live);
         backend.descriptorOnly=false;
         assert(buffers.ensure(1080,720)==0 && backend.live==2);
+        {
+            struct Cpu {
+                alignas(8) std::array<uint8_t,0xc00> bytes{};
+                bool live=false;
+                unsigned* lineLive=nullptr;
+                uintptr_t allocate(size_t n) noexcept {
+                    assert(!live && (n==0xf8 || n==0xc00));live=true;
+                    return reinterpret_cast<uintptr_t>(bytes.data());
+                }
+                void release(uintptr_t value) noexcept {
+                    assert(live && value==reinterpret_cast<uintptr_t>(bytes.data()));
+                    assert(!lineLive || !*lineLive);live=false;
+                }
+            } stateCpu,avsCpu;
+            struct Binding {
+                uintptr_t image=0x100000;
+                bool validateConstructedObject(uintptr_t,uintptr_t,
+                    bool(*)(uintptr_t,void*,size_t)) const noexcept {return true;}
+            } binding;
+            auto noRead=+[](uintptr_t,void*,size_t) noexcept {return false;};
+            TglOwnedVpSfcCpuGraph<Cpu,Cpu> graph(stateCpu,avsCpu);
+            assert(graph.initialize(0x1000,0x2000,0x3000,binding,noRead,1,0));
+            stateCpu.lineLive=avsCpu.lineLive=&backend.live;
+            unsigned retired=0;int admission=31;
+            auto retire=[&]() noexcept -> int {
+                ++retired;assert(!graph.tryReset() && !buffers.tryReset());
+                assert(stateCpu.live && avsCpu.live && backend.live==2);
+                assert(tglRetireOwnedVpResources(graph,buffers,[]() noexcept -> int {
+                    assert(false);return 0;
+                })==5);
+                return admission;
+            };
+            assert(graph.withView(false,[&](void*) noexcept {
+                return tglRetireOwnedVpResources(graph,buffers,retire);
+            })==5 && !retired);
+            assert(buffers.withBuffers(1080,720,[&]() noexcept {
+                return tglRetireOwnedVpResources(graph,buffers,retire);
+            })==5 && !retired);
+            const auto releases=backend.releases;
+            for(int failure:{31,-7}) {
+                admission=failure;
+                assert(tglRetireOwnedVpResources(graph,buffers,retire)==failure);
+                assert(backend.releases==releases && backend.live==2);
+                assert(stateCpu.live && avsCpu.live);
+            }
+            admission=0;
+            assert(tglRetireOwnedVpResources(graph,buffers,retire)==0 && retired==3);
+            assert(!backend.live && !stateCpu.live && !avsCpu.live);
+            assert(graph.withView(false,[](void*) noexcept -> int {assert(false);return 0;})==5);
+        }
+        assert(buffers.ensure(1080,720)==0 && backend.live==2);
         TglOwnedVpSfcCallerStorage vp;
         for(int admission:{0,31,-7}) {
             unsigned gates=0;

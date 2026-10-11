@@ -7870,6 +7870,15 @@ public:
         Guard guard(busy_);clear();return true;
     }
     void reset() noexcept {(void)tryReset();}
+    template<class Use> int withTeardownReservation(Use use) noexcept {
+        if(busy_) return 5;
+        Guard guard(busy_);bool cleared=false;
+        auto releaseCpu=[&]() noexcept {
+            if(!cleared) {cleared=true;clear();}
+        };
+        static_assert(noexcept(use(releaseCpu)),"VP teardown reservation ABI");
+        return use(releaseCpu);
+    }
     template<class Prepare> int prepare(Prepare prepare) noexcept {
         static_assert(noexcept(prepare(storage_,state_,avs_)),"CPU graph preparation ABI");
         if(!ready_ || busy_) return 5;
@@ -9718,6 +9727,24 @@ public:
             (i<leasedViews_.size() ? leasedViews_[i] : nullptr) : owners.storage(i);
     }
 };
+
+// Reserve both owners before asking for retirement. No partial teardown when
+// a CPU/line lease blocks release; a failed retirement leaves both intact.
+// This composes actual tracked line resources with the CPU graph, but does
+// not authenticate a fence or free the enclosing VP allocation itself.
+template<class Graph,class Backend,class Retire>
+int tglRetireOwnedVpResources(Graph& graph,TglOwnedSfcLineBuffers<Backend>& lines,
+    Retire retire) noexcept {
+    static_assert(noexcept(retire()) && std::is_same_v<decltype(retire()),int>,
+        "VP retirement admission ABI");
+    return graph.withTeardownReservation([&](auto releaseCpu) noexcept -> int {
+        return lines.withReleaseReservation([&](auto releaseLines) noexcept -> int {
+            const int status=retire();
+            if(status) return status;
+            releaseLines();releaseCpu();return 0;
+        });
+    });
+}
 
 // Owned VP+30 void callback context. Retirement is an external, fallible
 // admission operation, not a bool invented from FinishFenceEvent's return.
