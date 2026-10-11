@@ -17220,11 +17220,25 @@ int main() {
             TglOwnedVeboxProducerPass pass;
             int failure=0;
             unsigned calls=0;
+            bool owns(void* child) const noexcept {return child==this;}
+            void destroy(bool) noexcept {++calls;}
+            bool admit(void*,void*) noexcept {return false;}
+            int allocate() noexcept {return 31;}
+            void freeResources() noexcept {++calls;}
+            int csc(void*,void*) noexcept {++calls;return failure;}
+            int setupKernel(int32_t) noexcept {++calls;return failure;}
+            int dndi(void*,void*,void*) noexcept {++calls;return failure;}
             int surfaces(bool enabled,void*) noexcept {++calls;return enabled?failure:5;}
             int state(bool enabled,void*) noexcept {++calls;return enabled?0:5;}
             int diIecp(bool enabled,void*) noexcept {++calls;return enabled?0:5;}
         };
         using Resolve=TglOwnedVeboxScopedContext<Context>;
+        struct LifetimeResolve {
+            Context* operator()(void* child) const noexcept {return Resolve::get(child);}
+        };
+        struct FormatRead {
+            bool operator()(uintptr_t,void*,size_t) const noexcept {return false;}
+        };
         std::array<uintptr_t,20> original{};
         original.fill(123);
         const auto hooks=tglBindOwnedVeboxProducerHooks<Resolve>(original);
@@ -17239,6 +17253,28 @@ int main() {
             Context context;context.failure=failure;
             assert(!Resolve::get(&context));
             Resolve scope(&context,context);assert(scope.bound() && Resolve::get(&context)==&context);
+            {
+                std::array<uintptr_t,20> complete{};
+                const auto build=[&](void* child) noexcept {
+                    return tglBindOwnedVeboxCompleteHooks<LifetimeResolve,Resolve,Resolve,Resolve,Resolve,FormatRead>(child,complete);
+                };
+                assert(!build(nullptr));
+                for(auto entry:complete) assert(!entry);
+                struct MissingProducer:Context {};
+                using MissingResolve=TglOwnedVeboxScopedContext<MissingProducer>;
+                const bool missing=tglBindOwnedVeboxCompleteHooks<LifetimeResolve,Resolve,Resolve,
+                    MissingResolve,Resolve,FormatRead>(&context,complete);
+                assert(!missing);
+                for(auto entry:complete) assert(!entry);
+                assert(build(&context));
+                for(auto entry:complete) assert(entry);
+                assert(complete[6]==hooks[6] && complete[7]==hooks[7] && complete[18]==hooks[18]);
+                assert(complete[15]==reinterpret_cast<uintptr_t>(&tglOwnedVeboxGen12CscSupported));
+                using Factory=void*(*)(void*) noexcept;
+                assert(!reinterpret_cast<Factory>(complete[19])(&context)); // No qualified VP factory scope.
+                const auto saved=complete;
+                assert(!build(&packet) && complete==saved && !context.calls);
+            }
             {
                 Context other;
                 Resolve nested(&other,other);assert(!nested.bound());

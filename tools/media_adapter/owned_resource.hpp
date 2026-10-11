@@ -15695,6 +15695,31 @@ std::array<uintptr_t,20> tglBindOwnedVeboxModeReleaseHook(std::array<uintptr_t,2
     return hooks;
 }
 
+// Complete owned callback catalogue, not a publication or a context lifetime.
+// Every resolver scope must cover the native Allocate/Render consumer. The VP
+// factory additionally requires withVpFactoryVtableDispatch's qualified scope;
+// outside it the actual pointer-return callback rejects with NULL. Do not
+// replace missing producers with presence-only/status-zero table fillers.
+template<class LifetimeResolve,class AdmissionResolve,class AllocationResolve,
+    class ProducerResolve,class ModeResolve,class FormatRead>
+bool tglBindOwnedVeboxCompleteHooks(void* child,std::array<uintptr_t,20>& hooks) noexcept {
+    std::array<uintptr_t,20> candidate{};
+    if(!AdmissionResolve::get(child) || !AllocationResolve::get(child) ||
+       !ProducerResolve::get(child) || !ModeResolve::get(child)) return false;
+    if(!tglBindOwnedVeboxLifetimeHooks<LifetimeResolve>(child,candidate)) return false;
+    candidate=tglBindOwnedVeboxAdmissionHook<AdmissionResolve>(candidate);
+    candidate=tglBindOwnedVeboxAllocationHook<AllocationResolve>(candidate);
+    candidate=tglBindOwnedVeboxModeReleaseHook<ModeResolve>(candidate);
+    candidate=tglBindOwnedVeboxKernelSetupHook<ProducerResolve>(candidate);
+    candidate=tglBindOwnedVeboxProducerHooks<ProducerResolve>(candidate);
+    candidate=tglBindOwnedVeboxQueryHooks<FormatRead>(candidate);
+    candidate=tglBindOwnedVeboxCscHook<ProducerResolve>(candidate);
+    candidate=tglBindOwnedVeboxDndiHook<ProducerResolve>(candidate);
+    candidate[19]=reinterpret_cast<uintptr_t>(&TglOwnedVpFactoryCallback<TglOwnedVpFactoryContext>::create);
+    for(auto entry:candidate) if(!entry) return false;
+    hooks=candidate;return true;
+}
+
 // One borrowed-OS resource lifetime. The renderer must close every such scope
 // before retiring RenderHal/OS. Member order guarantees resource destruction
 // while its backend still exists; close is terminal and idempotent.
