@@ -5757,6 +5757,11 @@ public:
         const TglOwnedSurfaceStorage* storage() const noexcept {
             return owner_ && owner_->hasSurfaceLease(owner_->surface_)?&owner_->surface_:nullptr;
         }
+        // Trusted captured producers normalize this original shell's metadata.
+        // Resource tokens are not transferable; allocation/release stay owned.
+        TglOwnedSurfaceStorage* metadataStorage() noexcept {
+            return owner_ && owner_->hasSurfaceLease(owner_->surface_)?&owner_->surface_:nullptr;
+        }
     };
     // Synchronous borrowed access keeps ALL native resource tokens alive by
     // pinning their owner, not by guessing which individual handles to retain.
@@ -9655,6 +9660,18 @@ public:
                 sourceOwner_,source,targetOwner_,target,invoke);
         });
     }
+    template<class Use> int withMutableSurfaces(Use use) noexcept {
+        static_assert(noexcept(use(std::declval<TglOwnedSurfaceStorage&>(),
+            std::declval<TglOwnedSurfaceStorage&>())) &&
+            std::is_same_v<decltype(use(std::declval<TglOwnedSurfaceStorage&>(),
+            std::declval<TglOwnedSurfaceStorage&>())),int>);
+        return withSurfaces([&](const auto& source,const auto& target) noexcept {
+            auto* mutableSource=source_.metadataStorage();
+            auto* mutableTarget=target_.metadataStorage();
+            if(mutableSource!=&source || mutableTarget!=&target) return 5;
+            return use(*mutableSource,*mutableTarget);
+        });
+    }
     // Parameters must be a retained-frame member too. Reuse the exact native
     // source90 consuming-slot contract; never retain a raw DN pointer instead.
     template<class Parameters,class Use>
@@ -9678,6 +9695,8 @@ struct TglOwnedVeboxFrameNoUnwind {
 // oracle. The enclosing retained-frame pool may destroy it only after qualified
 // retirement. Backends/native parent outlive this storage. Pair detaches before
 // DN and surfaces release; no foreign shell or DN allocation is adopted.
+// Allocating these surfaces does not import application NV12 pixels. The real
+// frontend/content producer remains mandatory before any native publication.
 template<class SurfaceBackend,class DnBackend> class TglOwnedVeboxFrameSurfaceStorage {
     using Surface=TglOwnedAllocatedSurface<SurfaceBackend>;
     using Pair=TglOwnedVeboxSurfacePairLease<Surface,Surface>;
@@ -9719,12 +9738,12 @@ public:
     TglOwnedVeboxCommandTransactionResult withCommandFrame(Consume consume) noexcept {
         using Result=TglOwnedVeboxCommandTransactionResult;
         static_assert(noexcept(consume(source_,target_,parameters_,
-            std::declval<const TglOwnedSurfaceStorage&>(),std::declval<const TglOwnedSurfaceStorage&>())) &&
+            std::declval<TglOwnedSurfaceStorage&>(),std::declval<TglOwnedSurfaceStorage&>())) &&
             std::is_same_v<decltype(consume(source_,target_,parameters_,
-            std::declval<const TglOwnedSurfaceStorage&>(),std::declval<const TglOwnedSurfaceStorage&>())),Result>);
+            std::declval<TglOwnedSurfaceStorage&>(),std::declval<TglOwnedSurfaceStorage&>())),Result>);
         Result result;
         if(!pair_) return result;
-        const int status=pair_->withSurfaces([&](const auto& source,const auto& target) noexcept {
+        const int status=pair_->withMutableSurfaces([&](auto& source,auto& target) noexcept {
             result=consume(source_,target_,parameters_,source,target);
             if(result.writtenBack && !result.acquired) result.status=5;
             retention_.observe(result);
@@ -15828,6 +15847,20 @@ public:
     auto& backing() noexcept {return backing_;}
     auto& surfaces() noexcept {return surfaces_;}
     auto& children() noexcept {return children_;}
+    // Called under the native child/report/parent/image leases. Capture the
+    // ORIGINAL frame shells into this same frame's actual packet storage.
+    template<class Consume>
+    TglOwnedVeboxCommandTransactionResult withNativeCommandFrame(uintptr_t child,
+        uintptr_t execution,uintptr_t renderHal,uintptr_t sku,Consume consume) noexcept {
+        return surfaces_.withCommandFrame([&](auto& sourceOwner,auto& targetOwner,
+            auto& parameters,auto& source,auto& target) noexcept {
+            auto leases=backing_.command().packetLeases(child,execution,renderHal,sku,source,&target);
+            static_assert(noexcept(consume(sourceOwner,targetOwner,parameters,leases)) &&
+                std::is_same_v<decltype(consume(sourceOwner,targetOwner,parameters,leases)),
+                    TglOwnedVeboxCommandTransactionResult>);
+            return consume(sourceOwner,targetOwner,parameters,leases);
+        });
+    }
 };
 
 // Allocation transaction for a history-enabled frame. The qualified platform

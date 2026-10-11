@@ -15978,10 +15978,20 @@ int main() {
                             [](void*,uint64_t,uintptr_t,uintptr_t) noexcept {return true;}));
                         assert(renderer==original);
                         // Ownership fixture only: no native submit is called.
-                        const auto result=assembly.surfaces().withCommandFrame(
-                            [&](auto& sourceOwner,auto& targetOwner,auto& parameters,const auto& source,const auto& target) noexcept {
+                        const auto result=assembly.withNativeCommandFrame(
+                            reinterpret_cast<uintptr_t>(pairCpu[0].bytes.data()),0x1100,0x2200,0x3300,
+                            [&](auto& sourceOwner,auto& targetOwner,auto& parameters,auto& leases) noexcept {
+                                auto& source=leases.source;auto& target=*leases.target;
                                 assert(sourceOwner.hasSurfaceLease(source) && targetOwner.hasSurfaceLease(target));
                                 assert(parameters.size()==64);
+                                assert(leases.child==reinterpret_cast<uintptr_t>(pairCpu[0].bytes.data()) &&
+                                    leases.execution==0x1100 && leases.renderHal==0x2200 && leases.sku==0x3300);
+                                source.prefix[0x86]=1;target.tail[0]=2;
+                                auto samePackets=assembly.backing().command().packetLeases(
+                                    leases.child,leases.execution,leases.renderHal,leases.sku,source,&target);
+                                assert(&samePackets.source==&source && samePackets.target==&target &&
+                                    &samePackets.state==&leases.state && &samePackets.diIecp==&leases.diIecp &&
+                                    &samePackets.surfaces==&leases.surfaces);
                                 sourceOwner.reset();targetOwner.reset();
                                 assert(frameSurfaces.live==2 && !frameSurfaces.releases);
                                 return TglOwnedVeboxCommandTransactionResult{31,31,true,false};
