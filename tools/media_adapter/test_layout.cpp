@@ -16036,7 +16036,7 @@ int main() {
                                 auto wrong=allocation;wrong.entry+=1;
                                 assert(tglInvokeLeasedVeboxAllocate(wrong,owner,parent,
                                     &allocationArgument1,&allocationArgument2,neverAllocate)==5);
-                                return tglInvokeLeasedVeboxAllocate(allocation,owner,parent,
+                                const int allocated=tglInvokeLeasedVeboxAllocate(allocation,owner,parent,
                                     &allocationArgument1,&allocationArgument2,
                                     [&](uintptr_t nativeEntry,void* active,void* first,void* second) noexcept {
                                 assert(nativeEntry==base+0x126740 && active==parent &&
@@ -16059,6 +16059,24 @@ int main() {
                                     std::memcpy(reinterpret_cast<void*>(address+0x1e0),&changed,8);
                                 }
                                 return vtableCase==2 ? -29 : 0;
+                                    });
+                                if(allocated) return allocated;
+                                // Native Initialize returns before later Render uses child80.
+                                // Keep both stages inside the same factory/table scope.
+                                TglVeboxRenderBinding rendering{base,base+0x12c9d0};
+                                return tglInvokeLeasedVeboxRender(rendering,owner,parent,
+                                    &allocationArgument1,&allocationArgument2,
+                                    [&](uintptr_t nativeEntry,void* active,void* first,void* second) noexcept {
+                                        assert(nativeEntry==base+0x12c9d0 && active==parent &&
+                                            first==&allocationArgument1 && second==&allocationArgument2);
+                                        uintptr_t link=0,vptr=0,entry=0;
+                                        std::memcpy(&link,static_cast<uint8_t*>(parent)+0x80,8);
+                                        assert(link==reinterpret_cast<uintptr_t>(child));
+                                        std::memcpy(&vptr,child,8);assert(vptr==dispatch.addressPoint());
+                                        std::memcpy(&entry,reinterpret_cast<void*>(vptr+0x60),8);
+                                        assert(reinterpret_cast<bool(*)(void*,uint32_t) noexcept>(entry)(child,0x19));
+                                        owner.reset();graph.reset();assert(cpu.live && stateCpu.live && avsCpu.live);
+                                        return 0;
                                     });
                             })==(vtableCase==0?0:vtableCase==1?5:-29));
                         uintptr_t restoredFactory=0;
