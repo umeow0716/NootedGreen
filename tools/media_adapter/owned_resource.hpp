@@ -6745,6 +6745,7 @@ template<class Resolve> struct TglOwnedVpExtentCallback {
 // Do not import the Linux decompression tail: this exact native return has
 // no such call. Caller1fb55e qualifies the pipe-selection edge below;
 // this still does not authorize publication of an incomplete full vtable.
+template<class Resolve> struct TglOwnedVpCompressionFormatCallback;
 struct TglOwnedVpAdmissionEntries {
     int (*extent)(void*,void*,void*,void*) noexcept=nullptr;
     bool (*eligible)(void*,void*,void*,void*) noexcept=nullptr;
@@ -6753,6 +6754,9 @@ struct TglOwnedVpAdmissionEntries {
     bool (*output)(void*,void*) noexcept=nullptr;
     void (*dimensions)(void*,void*,uint32_t*,uint32_t*) noexcept=nullptr;
     bool (*finalAdmission)(void*,uint8_t,void*,void*) noexcept=nullptr;
+    bool (*compressionFormat)(void*,uint32_t) noexcept=nullptr;
+    void (*inputAlignment)(void*,uint32_t,uint32_t,uint16_t*,uint16_t*) noexcept=nullptr;
+    void (*outputAlignment)(void*,uint32_t,uint16_t*,uint16_t*) noexcept=nullptr;
 };
 template<class Read,class Use>
 int tglWithOwnedVpAdmissionEntries(TglOwnedVpSfcCallerStorage& vp,Read& read,Use use) noexcept {
@@ -6760,6 +6764,8 @@ int tglWithOwnedVpAdmissionEntries(TglOwnedVpSfcCallerStorage& vp,Read& read,Use
         "VP admission entry consumer ABI");
     using AdmissionContext=TglOwnedVpAdmissionContext<Read>;
     using Admission=TglOwnedVpAdmissionCallbacks<TglOwnedVpSfcResolve<AdmissionContext>>;
+    using Compression=TglOwnedVpCompressionFormatCallback<TglOwnedVpSfcResolve<AdmissionContext>>;
+    using Alignment=TglOwnedVpAlignmentCallbacks<TglOwnedVpSfcResolve<AdmissionContext>>;
     AdmissionContext admission(vp,read);void* child=vp.bytes.data();
     TglOwnedVpSfcScopedContext<AdmissionContext> admissionScope(child,admission);
     if(!admissionScope.bound()) return 5;
@@ -6778,7 +6784,8 @@ int tglWithOwnedVpAdmissionEntries(TglOwnedVpSfcCallerStorage& vp,Read& read,Use
     TglOwnedVpSfcScopedContext<ExtentContext> extentScope(child,extent);
     if(!extentScope.bound()) return 5;
     const TglOwnedVpAdmissionEntries entries{&Extent::admit,&Admission::eligible,&Admission::pair,
-        &Admission::input,&Admission::output,&Admission::dimensions,&Admission::finalAdmission};
+        &Admission::input,&Admission::output,&Admission::dimensions,&Admission::finalAdmission,
+        &Compression::supported,&Alignment::input,&Alignment::output};
     return use(child,entries);
 }
 

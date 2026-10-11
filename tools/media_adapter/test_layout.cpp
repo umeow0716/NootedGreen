@@ -9118,6 +9118,25 @@ int main() {
             void* s=reinterpret_cast<void*>(0x1000);void* t=reinterpret_cast<void*>(0x2000);
             void* p=reinterpret_cast<void*>(0x3000);
             assert(entries.input(child,s) && entries.output(child,t));
+            const auto beforeMetadata=reads;
+            for(uint32_t format=0;format<256;++format) {
+                assert(entries.compressionFormat(child,format)==tglOwnedVpCompressionFormat(format));
+                uint16_t width=99,height=99;
+                const auto expected=tglOwnedSfcAlignment(format);
+                entries.inputAlignment(child,format,UINT32_MAX,&width,&height);
+                assert(width==expected.width && height==expected.height);
+                width=height=99;entries.outputAlignment(child,format,&width,&height);
+                assert(width==expected.width && height==expected.height);
+                uint16_t alias=99;entries.inputAlignment(child,format,0,&alias,&alias);
+                assert(alias==(expected.width==2 || expected.height==2?2:1));
+            }
+            assert(reads==beforeMetadata);
+            uint16_t untouched=99;
+            entries.inputAlignment(nullptr,0,0,&untouched,&untouched);
+            entries.outputAlignment(p,0,&untouched,&untouched);
+            entries.inputAlignment(child,0,0,nullptr,&untouched);
+            entries.outputAlignment(child,0,&untouched,nullptr);
+            assert(untouched==99 && !entries.compressionFormat(nullptr,0x19));
             assert(entries.pair(child,s,t,nullptr) && entries.eligible(child,p,s,t));
             uint32_t width=0,height=0;entries.dimensions(child,s,&width,&height);
             assert(width==100 && height==100 && entries.extent(child,s,t,p)==1);
@@ -9162,6 +9181,10 @@ int main() {
             return -17;
         })==-17);
         const auto completedReads=reads;
+        uint16_t expiredAlignment=99;
+        escaped.inputAlignment(vp.bytes.data(),0,0,&expiredAlignment,&expiredAlignment);
+        escaped.outputAlignment(vp.bytes.data(),0,&expiredAlignment,&expiredAlignment);
+        assert(expiredAlignment==99 && !escaped.compressionFormat(vp.bytes.data(),0x19));
         assert(!escaped.finalAdmission(vp.bytes.data(),0,reinterpret_cast<void*>(0x1000),
             reinterpret_cast<void*>(0x2000)) && reads==completedReads);
         assert(escaped.extent(vp.bytes.data(),reinterpret_cast<void*>(0x1000),
