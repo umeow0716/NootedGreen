@@ -25,10 +25,12 @@ struct TestVeboxExecutionLease {
 };
 struct TestVpCpuView {
     std::array<uint8_t,0x9d0> bytes{};
+    uintptr_t overrideAddress=0;
     bool busy=false,deny=false;
     template<class Use> int withView(bool,Use use) noexcept {
         if(busy || deny) return 5;
-        busy=true;const int result=use(bytes.data());busy=false;return result;
+        busy=true;const int result=use(overrideAddress ? reinterpret_cast<void*>(overrideAddress) : bytes.data());
+        busy=false;return result;
     }
 };
 
@@ -9930,6 +9932,19 @@ int main() {
                     assert(!owner.publishCsc(leasedCsc));
                 }
                 TestVpCpuView vp;
+                {
+                    const auto before=cpu.bytes;
+                    const uintptr_t parent=reinterpret_cast<uintptr_t>(cpu.bytes.data());
+                    for(uintptr_t address : {parent,parent+1,parent+0x1bbf,parent-0x9cf,
+                        UINTPTR_MAX-0x9cf}) {
+                        vp.overrideAddress=address;
+                        assert(owner.withBorrowedVpCpuView(vp,true,[](void*,void*) noexcept {
+                            assert(false);return 0;
+                        })==5);
+                        assert(cpu.bytes==before && !vp.busy);
+                    }
+                    vp.overrideAddress=0;
+                }
                 for(int result:{0,31,-7}) {
                     assert(owner.withBorrowedVpCpuView(vp,true,[&](void* parent,void* child) noexcept {
                         uintptr_t linked=0;

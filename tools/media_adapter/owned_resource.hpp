@@ -3226,7 +3226,12 @@ public:
         static_assert(noexcept(use(nullptr,nullptr)),"borrowed VP CPU view ABI");
         return withPrivateChild([&](void* parent) noexcept {
             return vp.withView(avsEnabled,[&](void* child) noexcept {
-                if(!child || child==parent) return 5;
+                const uintptr_t p=reinterpret_cast<uintptr_t>(parent);
+                const uintptr_t c=reinterpret_cast<uintptr_t>(child);
+                // Exact base extents: parent1bc0 and VP9d0. Distinct starting
+                // addresses alone do not establish independent allocations.
+                if(!child || p>UINTPTR_MAX-0x1bc0 || c>UINTPTR_MAX-0x9d0 ||
+                   (p<c+0x9d0 && c<p+0x1bc0)) return 5;
                 auto* field=static_cast<uint8_t*>(parent)+0x80;
                 uintptr_t previous=0;
                 std::memcpy(&previous,field,8);
