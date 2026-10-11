@@ -1088,6 +1088,22 @@ bool tglDirectVeboxFeasible(uintptr_t params, uintptr_t source, uintptr_t target
     return !alpha || (alpha <= max - 7 && read(alpha + 4, &alphaMode, 4) && alphaMode != 2);
 }
 
+// Copies passed through existing predicates share the same failure latch.
+// Missing/overflowing named reads are acquisition failure, not format rejection.
+template<class Read> class TglVeboxPipeReadGate {
+    Read& read_;bool& failed_;
+public:
+    TglVeboxPipeReadGate(Read& read,bool& failed) noexcept:read_(read),failed_(failed){}
+    bool operator()(uintptr_t address,void* output,size_t bytes) const noexcept {
+        static_assert(noexcept(read_(address,output,bytes)) &&
+            std::is_same_v<decltype(read_(address,output,bytes)),bool>,"bounded pipe read ABI");
+        if(failed_) return false;
+        if(!address || !output || !bytes || address>UINTPTR_MAX-(bytes-1) ||
+           !read_(address,output,bytes)) {failed_=true;return false;}
+        return true;
+    }
+};
+
 // Gen12 GetOutputPipe, intel/media-driver73c8d14 g12_base.cpp2426..2550.
 // Policy owns qualified params/source/target leases and implements complete
 // predicates, SFC selection and fast-fill temporary rectangle/decompression
@@ -1099,25 +1115,38 @@ bool tglSelectGen12VeboxOutputPipe(Policy& policy,uint8_t& compNeeded,uint32_t& 
     static_assert(noexcept(policy.bypass()) && noexcept(policy.rejectDi()) &&
         noexcept(policy.rejectLut()) && noexcept(policy.direct()) && noexcept(policy.twoPass()) &&
         noexcept(policy.sfcAvailable()) && noexcept(policy.hdr()) && noexcept(policy.sfc()) &&
-        noexcept(policy.fastFill()),"qualified synchronous pipe policy ABI");
+        noexcept(policy.fastFill()) && noexcept(policy.healthy()),"qualified synchronous pipe policy ABI");
     static_assert(std::is_same_v<decltype(policy.sfc()),uint32_t>,"SFC pipe mode ABI");
     static_assert(std::is_same_v<decltype(policy.bypass()),bool> &&
         std::is_same_v<decltype(policy.rejectDi()),bool> && std::is_same_v<decltype(policy.rejectLut()),bool> &&
         std::is_same_v<decltype(policy.direct()),bool> && std::is_same_v<decltype(policy.twoPass()),bool> &&
         std::is_same_v<decltype(policy.sfcAvailable()),bool> && std::is_same_v<decltype(policy.hdr()),bool> &&
-        std::is_same_v<decltype(policy.fastFill()),bool>,"pipe predicates must not interpret error status as true");
+        std::is_same_v<decltype(policy.fastFill()),bool> && std::is_same_v<decltype(policy.healthy()),bool>,
+        "pipe predicates must not interpret error status as true");
     auto finish=[&](uint32_t pipe) noexcept {output=pipe;compNeeded=pipe==0?1:0;return true;};
-    if(!policy.bypass()) return finish(0);
-    if(policy.rejectDi()) return finish(0);
-    if(policy.rejectLut()) return finish(0);
-    if(policy.direct()) return finish(2);
-    if(policy.twoPass()) return finish(0);
+    if(!policy.healthy()) return false;
+    bool value=policy.bypass();if(!policy.healthy()) return false;
+    if(!value) return finish(0);
+    value=policy.rejectDi();if(!policy.healthy()) return false;
+    if(value) return finish(0);
+    value=policy.rejectLut();if(!policy.healthy()) return false;
+    if(value) return finish(0);
+    value=policy.direct();if(!policy.healthy()) return false;
+    if(value) return finish(2);
+    value=policy.twoPass();if(!policy.healthy()) return false;
+    if(value) return finish(0);
     uint32_t pipe=0;
-    if(policy.sfcAvailable() && !policy.hdr()) {
+    const bool available=policy.sfcAvailable();if(!policy.healthy()) return false;
+    bool hdr=false;
+    if(available) {hdr=policy.hdr();if(!policy.healthy()) return false;}
+    if(available && !hdr) {
         pipe=policy.sfc();
-        if(pipe>2) return false;
+        if(!policy.healthy() || pipe>2) return false;
     }
-    if(pipe==0 && policy.fastFill()) pipe=2;
+    if(pipe==0) {
+        value=policy.fastFill();if(!policy.healthy()) return false;
+        if(value) pipe=2;
+    }
     return finish(pipe);
 }
 

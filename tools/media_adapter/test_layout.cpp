@@ -47,6 +47,8 @@ static void testTrackedCpuOwner() {
     {
         struct Policy {
             unsigned calls=0;unsigned stop=99;uint32_t selected=1;bool fill=false,available=true,tone=false;
+            unsigned failAt=0;
+            bool healthy() const noexcept {return !(calls&failAt);}
             bool bypass() noexcept {calls|=1;return stop!=0;}
             bool rejectDi() noexcept {calls|=2;return stop==1;}
             bool rejectLut() noexcept {calls|=4;return stop==2;}
@@ -91,6 +93,27 @@ static void testTrackedCpuOwner() {
         policy.stop=0;
         assert(!tglRunSelectedVeboxAdmissionStages(input,execution,pass,reset,selector,setup,query,feature,sfc));
         assert(resets==3 && comp==1); // successful composition selection still denies VEBOX admission
+        for(unsigned fault : {1u,2u,4u,8u,16u,32u,64u,128u,256u}) {
+            policy.stop=99;policy.selected=0;policy.fill=true;policy.calls=0;policy.failAt=fault;
+            mode=0xabcdef;comp=0x80;
+            assert(!tglSelectGen12VeboxOutputPipe(policy,comp,mode));
+            assert(mode==0xabcdef && comp==0x80 && policy.calls==(fault*2-1));
+        }
+    }
+    {
+        unsigned reads=0;bool failed=false;
+        auto read=[&](uintptr_t address,void* out,size_t bytes) noexcept {
+            ++reads;if(address!=0x100 || bytes!=1) return false;
+            *static_cast<uint8_t*>(out)=0x42;return true;
+        };
+        TglVeboxPipeReadGate gate(read,failed);auto copied=gate;uint8_t value=0;
+        assert(copied(0x100,&value,1) && value==0x42 && !failed && reads==1);
+        assert(!copied(0x200,&value,1) && failed && reads==2);
+        assert(!gate(0x100,&value,1) && reads==2);
+        failed=false;
+        assert(!gate(UINTPTR_MAX,&value,2) && failed && reads==2);
+        failed=false;
+        assert(!tglCompositionBypassFeasible(0x200,0x300,0x100,gate) && failed && reads==4);
     }
     {
         TglVeboxAdmissionStagesInput input;
