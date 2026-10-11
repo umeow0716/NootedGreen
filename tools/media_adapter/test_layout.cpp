@@ -7533,9 +7533,16 @@ static void testSfcLineBufferOwnership() {
             Lifetime lifetime(lifecycleChild,graph,buffers,retire,releaseAllocation);
             using LifetimeResolve=TglOwnedVpSfcResolve<Lifetime>;
             using Lifecycle=TglOwnedVpLifetimeCallbacks<LifetimeResolve>;
+            TglOwnedVpEntrySet lifecycleEntries;
+            assert(!tglBindOwnedVpLifetimeEntries<LifetimeResolve>(lifecycleChild,lifecycleEntries));
+            {
             TglOwnedVpSfcScopedContext<Lifetime> lifetimeScope(lifecycleChild,lifetime);
             assert(lifetimeScope.bound());
-            Lifecycle::deletingDestroy(nullptr);Lifecycle::destroy(&binding);
+            assert(!tglBindOwnedVpLifetimeEntries<LifetimeResolve>(nullptr,lifecycleEntries));
+            assert(tglBindOwnedVpLifetimeEntries<LifetimeResolve>(lifecycleChild,lifecycleEntries));
+            assert(lifecycleEntries.missingMask()==(0x7ffffffU&~3U));
+            assert(!tglBindOwnedVpLifetimeEntries<LifetimeResolve>(lifecycleChild,lifecycleEntries));
+            lifecycleEntries.deletingDestroy(nullptr);lifecycleEntries.destroy(&binding);
             assert(retired==2 && !deleted);
             TglOwnedVpAdmissionEntries escapedGraphAdmission;
             unsigned graphAdmissionReads=0;
@@ -7551,36 +7558,47 @@ static void testSfcLineBufferOwnership() {
                 assert(graph.withAdmissionView(false,noRead,[](void*,const auto&) noexcept {
                     assert(false);return 0;
                 })==5);
-                Lifecycle::deletingDestroy(lifecycleChild);return 0;
+                lifecycleEntries.deletingDestroy(lifecycleChild);return 0;
             })==0 && lifetime.status()==5 && retired==2);
             assert(!escapedGraphAdmission.finalAdmission(lifecycleChild,1,
                 reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x2000)));
             assert(graphAdmissionReads==1);
-            admission=31;Lifecycle::deletingDestroy(lifecycleChild);
+            admission=31;lifecycleEntries.deletingDestroy(lifecycleChild);
             assert(lifetime.status()==31 && retired==3 && !deleted && backend.live==2);
             admission=0;lifecycleReenter=&Lifecycle::destroy;
-            Lifecycle::deletingDestroy(lifecycleChild);
+            lifecycleEntries.deletingDestroy(lifecycleChild);
             assert(lifetime.status()==5 && retired==4 && !deleted && backend.live==2);
-            lifecycleReenter=nullptr;Lifecycle::destroy(lifecycleChild);
+            lifecycleReenter=nullptr;lifecycleEntries.destroy(lifecycleChild);
             assert(lifetime.status()==0 && lifetime.destroyed() && !lifetime.deleted());
             assert(retired==5 && !deleted);
-            Lifecycle::destroy(lifecycleChild);assert(lifetime.status()==5 && retired==5);
-            Lifecycle::deletingDestroy(lifecycleChild);
+            lifecycleEntries.destroy(lifecycleChild);assert(lifetime.status()==5 && retired==5);
+            lifecycleEntries.deletingDestroy(lifecycleChild);
             assert(lifetime.status()==0 && lifetime.deleted() && deleted==1 && retired==5);
-            Lifecycle::deletingDestroy(lifecycleChild);assert(deleted==1 && retired==5);
+            lifecycleEntries.deletingDestroy(lifecycleChild);assert(deleted==1 && retired==5);
             assert(!backend.live && !stateCpu.live && !avsCpu.live);
             assert(graph.withAdmissionView(false,noRead,[](void*,const auto&) noexcept {
                 assert(false);return 0;
             })==5);
+            }
+            lifecycleEntries.destroy(lifecycleChild);lifecycleEntries.deletingDestroy(lifecycleChild);
+            assert(deleted==1 && retired==5);
             assert(graph.initialize(0x1000,0x2000,0x3000,binding,noRead,1,0));
             assert(buffers.ensure(1080,720)==0);
             Lifetime stale(lifecycleChild,graph,buffers,retire,releaseAllocation);
+            {
+            TglOwnedVpSfcScopedContext<Lifetime> staleScope(lifecycleChild,stale);
+            assert(staleScope.bound() && stale.owns(lifecycleChild));
             const auto oldGeneration=graph.generation();
             buffers.reset();
             assert(graph.initialize(0x1000,0x2000,0x3000,binding,noRead,1,0));
             assert(graph.generation()!=oldGeneration && buffers.ensure(1080,720)==0);
+            assert(!stale.owns(lifecycleChild));
+            TglOwnedVpEntrySet rejectedStale;
+            assert(!tglBindOwnedVpLifetimeEntries<LifetimeResolve>(lifecycleChild,rejectedStale));
+            assert(rejectedStale.missingMask()==0x7ffffffU);
             stale.destroy(true);
             assert(stale.status()==5 && retired==5 && deleted==1 && backend.live==2);
+            }
             Lifetime nonDeleting(lifecycleChild,graph,buffers,retire,releaseAllocation);
             nonDeleting.destroy(false);
             assert(nonDeleting.status()==0 && retired==6 && deleted==1);

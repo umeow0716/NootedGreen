@@ -6814,6 +6814,18 @@ bool tglBindOwnedVpModeEntries(void* child,TglOwnedVpEntrySet& target) noexcept 
     candidate.sampleMode=&Callback::sampleMode;candidate.formatMode=&Callback::formatMode;
     target=candidate;return true;
 }
+template<class Resolve> struct TglOwnedVpLifetimeCallbacks;
+template<class Resolve>
+bool tglBindOwnedVpLifetimeEntries(void* child,TglOwnedVpEntrySet& target) noexcept {
+    static_assert(noexcept(Resolve{}(child)),"VP lifecycle binding resolver ABI");
+    auto* context=Resolve{}(child);
+    static_assert(noexcept(context->owns(child)),"VP lifecycle binding ownership ABI");
+    if(!context || !context->owns(child) || target.destroy || target.deletingDestroy) return false;
+    using Callback=TglOwnedVpLifetimeCallbacks<Resolve>;
+    auto candidate=target;
+    candidate.destroy=&Callback::destroy;candidate.deletingDestroy=&Callback::deletingDestroy;
+    target=candidate;return true;
+}
 template<class Resolve> struct TglOwnedVpCompressionFormatCallback;
 struct TglOwnedVpAdmissionEntries {
     int (*extent)(void*,void*,void*,void*) noexcept=nullptr;
@@ -11598,7 +11610,9 @@ public:
          generation_(graph.generation()),valid_(child && graph.ownsStorage(child)) {}
     TglOwnedVpLifetimeContext(const TglOwnedVpLifetimeContext&)=delete;
     TglOwnedVpLifetimeContext& operator=(const TglOwnedVpLifetimeContext&)=delete;
-    bool owns(void* child) const noexcept {return valid_ && child && child==child_ && !deleted_;}
+    bool owns(void* child) const noexcept {
+        return valid_ && child && child==child_ && !deleted_ && graph_.generation()==generation_;
+    }
     void destroy(bool deleting) noexcept {
         static_assert(noexcept(release_(child_)) &&
             std::is_same_v<decltype(release_(child_)),void>,"owned VP allocation release ABI");
