@@ -9731,10 +9731,11 @@ public:
         });
     }
     template<class Read,class Lines,class Retire,class Use>
-    int withModeAssemblyView(bool avsEnabled,Read& read,Lines& lines,Retire& retire,
+    int withLeasedModeAssemblyEntries(void* child,Read& read,Lines& lines,Retire& retire,
         uintptr_t source,uintptr_t target,uintptr_t settings,Use use) noexcept {
-        return withAssemblyView(avsEnabled,read,lines,retire,
-            [&](void* child,const TglOwnedVpEntrySet& entries) noexcept {
+        return withLeasedAssemblyEntries(child,read,lines,retire,
+            [&](void* assemblyChild,const TglOwnedVpEntrySet& entries) noexcept {
+                if(assemblyChild!=child) return 5;
                 return tglWithOwnedVpModeAssembly(storage_,source,target,settings,read,entries,
                     [&](void* modeChild,const TglOwnedVpEntrySet& complete) noexcept {
                         if(modeChild!=child) return 5;
@@ -9742,6 +9743,13 @@ public:
                         return use(child,complete);
                     });
             });
+    }
+    template<class Read,class Lines,class Retire,class Use>
+    int withModeAssemblyView(bool avsEnabled,Read& read,Lines& lines,Retire& retire,
+        uintptr_t source,uintptr_t target,uintptr_t settings,Use use) noexcept {
+        return withView(avsEnabled,[&](void* child) noexcept {
+            return withLeasedModeAssemblyEntries(child,read,lines,retire,source,target,settings,use);
+        });
     }
     // Only the actual currently published state packet may receive VP+a0.
     // The enclosing setup/send owner retains the graph/frame lease; no copy

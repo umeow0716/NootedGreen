@@ -13,9 +13,9 @@ template<class R,class... Args> struct TestVpPresenceStub<R(*)(Args...) noexcept
     static R invoke(Args...) noexcept {if constexpr(!std::is_void_v<R>) return R{};}
 };
 
-static TglOwnedVpEntrySet testVpPresenceEntries() noexcept {
-    TglOwnedVpEntrySet entries;
-#define NGRN_PRESENCE(field) entries.field=&TestVpPresenceStub<decltype(entries.field)>::invoke;
+static TglOwnedVpEntrySet testVpPresenceEntries(const TglOwnedVpEntrySet& qualified={}) noexcept {
+    TglOwnedVpEntrySet entries=qualified;
+#define NGRN_PRESENCE(field) if(!entries.field) entries.field=&TestVpPresenceStub<decltype(entries.field)>::invoke;
     NGRN_PRESENCE(destroy) NGRN_PRESENCE(deletingDestroy) NGRN_PRESENCE(initialize)
     NGRN_PRESENCE(extent) NGRN_PRESENCE(eligible) NGRN_PRESENCE(prepare)
     NGRN_PRESENCE(freeResources) NGRN_PRESENCE(pair) NGRN_PRESENCE(setup)
@@ -10994,7 +10994,8 @@ int main() {
                 const auto beforeModes=storage->bytes;
                 for(bool cscEnabled:{false,true}) for(int consumerResult:{0,31}) {
                     put(source,0,uint32_t(cscEnabled?0:3));
-                    assert(graph.withModeAssemblyView(false,read,lines,retire,0x1000,0x2000,0x4000,
+                    assert(graph.withView(false,[&](void* leasedChild) noexcept {
+                      return graph.withLeasedModeAssemblyEntries(leasedChild,read,lines,retire,0x1000,0x2000,0x4000,
                         [&](void* child,const TglOwnedVpEntrySet& entries) noexcept {
                             assert(child==storage->bytes.data() && !graph.tryReset());
                             assert(entries.inputFormat(child,reinterpret_cast<void*>(0x1000)));
@@ -11017,7 +11018,20 @@ int main() {
                                     assert(combined.allocate==entries.allocate && combined.freeResources==entries.freeResources &&
                                         combined.sampleMode==entries.sampleMode && combined.inputFormat==entries.inputFormat);
                                     assert(combined.missingMask()==(entries.missingMask()&~(1U<<20)));
-                                    combined.csc(child,state,assemblyIef.data());
+                                    // Fifteen real entries retain their resolver leases; the
+                                    // remaining twelve are explicitly CPU-test presence stubs.
+                                    TglOwnedVpFlatDispatchTable dispatch;
+                                    assert(dispatch.build(testVpPresenceEntries(combined),
+                                        [](uintptr_t,size_t) noexcept {return true;}));
+                                    assert(graph.withLeasedFlatDispatch(child,dispatch,[&](void* admitted) noexcept {
+                                        uintptr_t addressPoint=0;
+                                        std::memcpy(&addressPoint,admitted,sizeof(addressPoint));
+                                        decltype(combined.csc) csc=nullptr;
+                                        std::memcpy(&csc,reinterpret_cast<const void*>(addressPoint+0xa0),sizeof(csc));
+                                        assert(csc==combined.csc);
+                                        csc(admitted,state,assemblyIef.data());
+                                        return consumerResult;
+                                    })==consumerResult);
                                     assert(state[0x88]==(cscEnabled?1:savedState[0x88]));
                                     const auto beforeRetirement=retired;
                                     const auto beforeReleases=backends[0].releases+backends[1].releases;
@@ -11033,7 +11047,8 @@ int main() {
                             assert(assemblyCsc.reset());
                             entries.freeResources(child);expiredAssembly=entries;
                             return consumerResult;
-                        })==consumerResult);
+                        });
+                    })==consumerResult);
                     for(size_t offset:{size_t(0x923),size_t(0x998),size_t(0x99c),size_t(0x9c0)})
                         assert(std::memcmp(storage->bytes.data()+offset,beforeModes.data()+offset,offset==0x923?1:offset==0x9c0?8:4)==0);
                     expiredAssembly.sampleMode(storage->bytes.data(),reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x2000));
@@ -11047,6 +11062,18 @@ int main() {
                 auto countedModeRead=[&](uintptr_t address,void* out,size_t size) noexcept {
                     ++modeReadCount;return read(address,out,size);
                 };
+                bool leasedModeInvoked=false;
+                auto unexpectedModeUse=[&](void*,const auto&) noexcept {
+                    leasedModeInvoked=true;return 0;
+                };
+                assert(graph.withLeasedModeAssemblyEntries(storage->bytes.data(),countedModeRead,
+                    lines,retire,0x1000,0x2000,0x4000,unexpectedModeUse)==5);
+                assert(graph.withView(false,[&](void* child) noexcept {
+                    assert(graph.withLeasedModeAssemblyEntries(static_cast<uint8_t*>(child)+8,
+                        countedModeRead,lines,retire,0x1000,0x2000,0x4000,unexpectedModeUse)==5);
+                    return 0;
+                })==0);
+                assert(!leasedModeInvoked && modeReadCount==0 && storage->bytes==beforeModeFailures);
                 assert(graph.withModeAssemblyView(false,countedModeRead,lines,retire,0x1000,0x2000,0x4000,
                     [](void*,const auto&) noexcept {return 31;})==31);
                 assert(modeReadCount && storage->bytes==beforeModeFailures);
