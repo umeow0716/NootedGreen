@@ -70,12 +70,12 @@ static void testTrackedCpuOwner() {
                 return tglRunOwnedGen12FastFill(source,target,true,fill,compressed,mode,format,status,
                     [&]() noexcept {return direct();},[&]() noexcept {
                         ++decompressions;assert(fill && target.bottom==1081);
-                        if(scenario==4) frame.fail();
-                        return scenario==1?31:0;
+                        if(scenario==4 || scenario==5) frame.fail();
+                        return scenario==1 || scenario==5?31:0;
                     },[&]() noexcept {return healthy();});
             }
         };
-        for(int scenario=0;scenario<5;++scenario) {
+        for(int scenario=0;scenario<6;++scenario) {
             Policy p;p.scenario=scenario;uint8_t comp=0xa5;uint32_t output=77;
             const bool ok=tglSelectGen12VeboxOutputPipe(p,comp,output);
             assert(p.target.bottom==1200 && p.directCalls==2);
@@ -86,8 +86,11 @@ static void testTrackedCpuOwner() {
             } else if(scenario==2) {
                 assert(ok && output==0 && comp==1 && !p.fill && p.decompressions==0 && p.status==99);
             } else {
-                assert(!ok && output==77 && comp==0xa5 && !p.fill && p.compressed && p.format==7 && p.status==99);
-                assert(p.decompressions==(scenario==4?1u:0u));
+                assert(!ok && output==77 && comp==0xa5 && !p.fill && p.status==(scenario==4?0:scenario==5?31:99));
+                assert(p.decompressions==(scenario>=4?1u:0u));
+                if(scenario==4) {
+                    assert(!p.compressed && p.format==0 && p.mode==TglOwnedSfcCompressionMode::Disabled);
+                } else assert(p.compressed && p.format==7 && p.mode==TglOwnedSfcCompressionMode::Media);
                 assert(!p.healthy());
             }
         }

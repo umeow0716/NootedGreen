@@ -1055,8 +1055,13 @@ bool tglRunOwnedGen12FastFill(const TglSurfaceRect& source,TglSurfaceRect& targe
     int status=0;
     if(compressed && mode==TglOwnedSfcCompressionMode::Media && (int32_t(height)%8)!=0) {
         status=decompress();
-        if(!healthy()) return false;
+        decompressionStatus=status; // completed native call, even on frame abort
+        // Decompression is an irreversible resource operation, not a pending
+        // selector publication. Reflect native success even if acquisition
+        // became invalid during the call; do not reuse stale compression
+        // metadata on a later frame. Pipe/fast-fill publication still aborts.
         if(status==0) {compressed=false;mode=TglOwnedSfcCompressionMode::Disabled;compressionFormat=0;}
+        if(!healthy()) return false;
     }
     flag.committed=true;decompressionStatus=status;return true;
 }
