@@ -5168,6 +5168,25 @@ int tglWithAllocatedOwnedFfdnPair(Owner& input,Owner* previous,Owner* copyDestin
     });
 }
 
+// Persistent descriptor-only FFDN targets. Native-backed format3d remains
+// owned by the separate resource path. DN90 is deliberately not retained;
+// this preparation is not asynchronous command admission or retirement.
+template<class Owner,class Copy>
+int tglPrepareOwnedDescriptorFfdnPair(std::array<TglOwnedDescriptorOnlySurface,2>& targets,
+    Owner& input,Owner* previous,Owner* copyDestination,
+    TglOwnedFfdnCompressionSelection compression,bool& referenceValid,bool executionFlag13,
+    uint8_t& execution15,uint8_t& execution16,Copy copy) noexcept {
+    return tglWithAllocatedOwnedFfdnPair(input,previous,copyDestination,compression,
+        referenceValid,executionFlag13,execution15,execution16,
+        [&](size_t index,const auto& request,bool& changed,uint32_t& pitch) noexcept -> int {
+            if(!targets[index].prepare(request,changed)) return 5;
+            pitch=0; // exact descriptor-only allocator branch
+            return 0;
+        },copy,[&](size_t index,const auto& source,const auto&) noexcept -> int {
+            return targets[index].publishFfdnFrame(source)?0:5;
+        });
+}
+
 // Exact ICL classifier4a500 and its 90-entry relative jump table4a55c.
 // 3 is the native OTHER color pack, not an invalid format admission result.
 inline uint32_t tglOwnedChromaColorPack(uint32_t format) noexcept {

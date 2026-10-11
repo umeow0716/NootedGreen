@@ -5627,6 +5627,39 @@ static void testNativeResourceBoundary() {
                     })==0);
                 assert(published==2 && valid && flag==0xa5 && mode==0x5a);
             }
+            {
+                struct DescriptorSourceBackend {
+                    uint32_t resourceType() const noexcept {return 0;}
+                    int allocate(std::array<uint8_t,0x148>& s,const TglResourceKey& k,
+                        uint32_t* pitch) noexcept {s.fill(0);s[0]=1;*pitch=k.width;return 0;}
+                    bool backed(const std::array<uint8_t,0x148>& s) noexcept {return s[0]==1;}
+                    void release(std::array<uint8_t,0x148>& s) noexcept {s.fill(0);}
+                } backend;
+                TglOwnedAllocatedSurface<DescriptorSourceBackend> input(backend);
+                const TglResourceKey inputKey{8,3,0x19,1,0,false};
+                assert(input.ensure(inputKey)==0);
+                std::array<TglOwnedDescriptorOnlySurface,2> targets;
+                bool valid=true;uint8_t flag=0xa5,mode=0x5a;
+                auto noCopy=[](const auto&,const auto&) noexcept {assert(false);};
+                assert(tglPrepareOwnedDescriptorFfdnPair(targets,input,
+                    static_cast<decltype(&input)>(nullptr),static_cast<decltype(&input)>(nullptr),
+                    {true,1},valid,false,flag,mode,noCopy)==0);
+                assert(!valid && flag==1 && mode==1);
+                for(auto& target:targets) assert(target.withDescriptor([](const auto& view) noexcept {
+                    uint32_t width=0,format=0;uintptr_t dn=1;
+                    std::memcpy(&width,view.prefix.data()+0xd8,4);
+                    std::memcpy(&format,view.prefix.data()+0x130,4);
+                    std::memcpy(&dn,view.prefix.data()+0x90,8);
+                    assert(width==8 && format==0x19 && !dn && !tglNativeBackingPresent(view.resource));
+                }));
+                assert(targets[1].withDescriptor([&](const auto&) noexcept {
+                    flag=0xa5;mode=0x5a;
+                    assert(tglPrepareOwnedDescriptorFfdnPair(targets,input,
+                        static_cast<decltype(&input)>(nullptr),static_cast<decltype(&input)>(nullptr),
+                        {false,0},valid,false,flag,mode,noCopy)==5);
+                    assert(flag==0 && mode==0); // slot0 persisted, slot1 busy
+                }));
+            }
             bool caught=false;
             try {
                 owner.withPeerSurface(destination,[](const auto&,const auto&){throw 31;});
