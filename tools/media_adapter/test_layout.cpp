@@ -7712,6 +7712,50 @@ int main() {
         };
         assert(!tglRunSelectedVeboxAdmissionStages(stage,execution,pass,reset,selected,
             compositionSetup,query,feature,prepare) && sfcCalls==1);
+        // Same initialized graph owner, actual bounded admission callbacks.
+        // These are CPU decisions only, not a fake successful GPU emitter.
+        struct GraphCpu {
+            alignas(8) std::array<uint8_t,0xc00> bytes{};bool live=false;
+            uintptr_t allocate(size_t size) {
+                assert(!live && (size==0xf8 || size==0xc00));live=true;
+                return reinterpret_cast<uintptr_t>(bytes.data());
+            }
+            void release(uintptr_t address) noexcept {
+                assert(live && address==reinterpret_cast<uintptr_t>(bytes.data()));live=false;
+            }
+        } stateCpu,avsCpu;
+        struct Binding {
+            uintptr_t image=0x100000;
+            bool validateConstructedObject(uintptr_t mhw,uintptr_t os,
+                bool (*)(uintptr_t,void*,size_t)) const noexcept {
+                return mhw==0x4000 && os==0x7000;
+            }
+        } binding;
+        TglOwnedVpSfcCpuGraph<GraphCpu,GraphCpu> graph(stateCpu,avsCpu);
+        auto noRead=+[](uintptr_t,void*,size_t) noexcept {assert(false);return false;};
+        auto guardedRead=[&](uintptr_t address,void* out,size_t size) noexcept {
+            assert(!graph.tryReset());return read(address,out,size);
+        };
+        auto selectGraph=[&]() noexcept {
+            return graph.selectOutputPipe(guardedRead,pipePolicy,reinterpret_cast<void*>(0x1000),
+                reinterpret_cast<void*>(0x2000),reinterpret_cast<void*>(0x3000),comp);
+        };
+        comp=0x80;before=reads;
+        assert(selectGraph()==UINT32_MAX && comp==0x80 && reads==before);
+        assert(graph.initialize(0x7000,0x5000,0x4000,binding,noRead,1,0));
+        settings[0x90]=1;reads=0;deny=0;
+        assert(selectGraph()==1 && comp==0 && stateCpu.live && avsCpu.live);
+        const unsigned graphReads=reads;
+        assert(graphReads>2);
+        for(unsigned fault=1;fault<=graphReads;++fault) {
+            reads=0;deny=fault;comp=0x80;
+            assert(selectGraph()==0 && comp==1 && stateCpu.live && avsCpu.live);
+        }
+        deny=0;reads=0;comp=0x80;
+        assert(selectGraph()==1 && comp==0 && reads==graphReads);
+        assert(graph.tryReset() && !stateCpu.live && !avsCpu.live);
+        comp=0x80;before=reads;
+        assert(selectGraph()==UINT32_MAX && comp==0x80 && reads==before);
     }
     {
         TglOwnedVpRegionInput in;
