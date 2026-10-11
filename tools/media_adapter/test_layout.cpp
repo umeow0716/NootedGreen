@@ -7531,9 +7531,25 @@ static void testSfcLineBufferOwnership() {
             assert(lifetimeScope.bound());
             Lifecycle::deletingDestroy(nullptr);Lifecycle::destroy(&binding);
             assert(retired==2 && !deleted);
-            assert(graph.withView(false,[&](void*) noexcept {
+            TglOwnedVpAdmissionEntries escapedGraphAdmission;
+            unsigned graphAdmissionReads=0;
+            auto graphAdmissionRead=[&](uintptr_t address,void* output,size_t size) noexcept {
+                ++graphAdmissionReads;assert(address==0x2130 && size==4);
+                const uint32_t format=13;std::memcpy(output,&format,4);return true;
+            };
+            assert(graph.withAdmissionView(false,graphAdmissionRead,[&](void* child,const auto& entries) noexcept {
+                escapedGraphAdmission=entries;
+                assert(child==lifecycleChild && !graph.tryReset());
+                assert(entries.finalAdmission(child,1,reinterpret_cast<void*>(0x1000),
+                    reinterpret_cast<void*>(0x2000)));
+                assert(graph.withAdmissionView(false,noRead,[](void*,const auto&) noexcept {
+                    assert(false);return 0;
+                })==5);
                 Lifecycle::deletingDestroy(lifecycleChild);return 0;
             })==0 && lifetime.status()==5 && retired==2);
+            assert(!escapedGraphAdmission.finalAdmission(lifecycleChild,1,
+                reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x2000)));
+            assert(graphAdmissionReads==1);
             admission=31;Lifecycle::deletingDestroy(lifecycleChild);
             assert(lifetime.status()==31 && retired==3 && !deleted && backend.live==2);
             admission=0;lifecycleReenter=&Lifecycle::destroy;
@@ -7547,6 +7563,9 @@ static void testSfcLineBufferOwnership() {
             assert(lifetime.status()==0 && lifetime.deleted() && deleted==1 && retired==5);
             Lifecycle::deletingDestroy(lifecycleChild);assert(deleted==1 && retired==5);
             assert(!backend.live && !stateCpu.live && !avsCpu.live);
+            assert(graph.withAdmissionView(false,noRead,[](void*,const auto&) noexcept {
+                assert(false);return 0;
+            })==5);
             assert(graph.initialize(0x1000,0x2000,0x3000,binding,noRead,1,0));
             assert(buffers.ensure(1080,720)==0);
             Lifetime stale(lifecycleChild,graph,buffers,retire,releaseAllocation);

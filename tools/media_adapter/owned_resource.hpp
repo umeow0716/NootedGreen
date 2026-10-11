@@ -9154,6 +9154,19 @@ public:
             return avs_.withParameters([&](const auto&) noexcept {return invoke();});
         });
     }
+    // Admission entries share the real graph/state/AVS lease. In particular,
+    // lifecycle teardown cannot retire this storage while a callback is live.
+    template<class Read,class Use>
+    int withAdmissionView(bool avsEnabled,Read& read,Use use) noexcept {
+        return withView(avsEnabled,[&](void* child) noexcept {
+            return tglWithOwnedVpAdmissionEntries(storage_,read,
+                [&](void* admitted,const TglOwnedVpAdmissionEntries& entries) noexcept {
+                    if(admitted!=child) return 5;
+                    static_assert(noexcept(use(child,entries)),"leased VP admission ABI");
+                    return use(child,entries);
+                });
+        });
+    }
     // Expose only the qualified platform-send entry during the existing
     // state/AVS/graph lease, not a partially populated callable VP vtable.
     // Retaining the function pointer cannot retain its TLS admission context.
