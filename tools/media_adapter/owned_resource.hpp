@@ -16485,13 +16485,14 @@ public:
     }
     // Configuration slot13 is a mutator too. Resolve its renderer only after
     // excluding retained frames and holding the matching physical generation.
-    // Image/type and native context lifetime remain caller obligations.
+    // Authenticate image/type here; native context lifetime remains a caller obligation.
     template<class ParentRead,class Admit,class Use>
     int withRendererConfiguration(typename Registry::Ticket ticket,uintptr_t physical,
         uintptr_t context,ParentRead read,Admit admit,Use use) noexcept {
         return withNewRequest(ticket,physical,[&](auto& frames) noexcept -> int {
             TglNativeVeboxRendererView view;
-            if(!view.resolve(context,read,admit) || view.parent.physical!=physical) return 5;
+            if(!view.resolveQualified(binding_.image,context,read,admit,qualify_,executable_) ||
+                view.parent.physical!=physical) return 5;
             return use(frames,view);
         });
     }

@@ -12046,7 +12046,8 @@ static void testRetainedVeboxFrames() {
         auto qualify=[&](uintptr_t candidate) noexcept {return qualified && candidate==image;};
         auto executable=[](uintptr_t address,size_t size) noexcept {
             return (address==image+0x135d9 && size==16) || (address==image+0x135f6 && size==7) ||
-                (address==image+0x13c8c && size==16);
+                (address==image+0x13c8c && size==16) ||
+                ((address==image+0x132510 || address==image+0x131fa0) && size==1);
         };
         TglNativePhysicalCallbackBinding binding;assert(binding.resolve(image,read,qualify,executable));
         struct Invoke {
@@ -12094,6 +12095,7 @@ static void testRetainedVeboxFrames() {
         assert(callbacks.withContextRemoval(success.ticket,0x8000,removalUse)==0 && removalCalls==1);
         unsigned parentReads=0,contextCalls=0;
         uintptr_t contextPhysical=0x8000,embedded=0xa048,contextRenderer=0x30000;
+        uintptr_t rendererVptr=image+0x75bba0,rendererInit=image+0x132510,rendererFrame=image+0x131fa0;
         auto parentRead=[&](uintptr_t address,void* bytes,size_t size) noexcept {
             ++parentReads;if(size!=8) return false;
             uintptr_t value=0;
@@ -12102,6 +12104,9 @@ static void testRetainedVeboxFrames() {
             else if(address==0x212f0) value=0x9000;
             else if(address==0x8050) value=0xa000;
             else if(address==0x9008) value=embedded;
+            else if(address==0x30000) value=rendererVptr;
+            else if(address==image+0x75bbc0) value=rendererInit;
+            else if(address==image+0x75bbc8) value=rendererFrame;
             else return false;
             std::memcpy(bytes,&value,8);return true;
         };
@@ -12120,10 +12125,17 @@ static void testRetainedVeboxFrames() {
         unsigned configurationCalls=0;
         auto configurationUse=[&](auto&,const TglNativeVeboxRendererView& view) noexcept -> int {
             ++configurationCalls;assert(view.parent.physical==0x8000 && view.renderer==0x30000 &&
-                view.configuration==0x32cb0);
+                view.configuration==0x32cb0 && view.image==image &&
+                view.initialize==rendererInit && view.frame==rendererFrame);
             assert(callbacks.destroy(0x8000)==5 && invoke.destroyed==0);return 31;
         };
         assert(callbacks.withRendererConfiguration(success.ticket,0x8000,0x20000,parentRead,parentAdmit,configurationUse)==31);
+        rendererVptr=image+0x758158;
+        assert(callbacks.withRendererConfiguration(success.ticket,0x8000,0x20000,parentRead,parentAdmit,configurationUse)==5);
+        rendererVptr=image+0x75bba0;rendererInit+=1;
+        assert(callbacks.withRendererConfiguration(success.ticket,0x8000,0x20000,parentRead,parentAdmit,configurationUse)==5);
+        rendererInit=image+0x132510;
+        assert(configurationCalls==1);
         Pool::Ticket configurationFrame;
         assert(callbacks.withFrame(success.ticket,0x8000,[&](auto& frames) noexcept -> int {
             configurationFrame=frames.create(allocated,released,destroyed);
