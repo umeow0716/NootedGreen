@@ -16527,6 +16527,12 @@ public:
     // calls9710/98b3 and publishes resource results through caller pointers.
     // Other admitted types tail-call1aabb/4024/21bad/27a5d/2819d/22a46/22ad6;
     // their shell/backing effects remain to be audited before owner publication.
+    // Proven25/26 targets22a46/22ad6 mutate separate physical buffer groups
+    // +30b0/+60e0:960b receives length1010 via import23e2ea;9710 validates
+    // group count1..128/size/noninitialized state and allocates each entry via
+    // 9628 (resource create/map). These are backing mutators, not demonstrated
+    // frees of frontend2a8 shells. Do not invent a shell alias from adjacency;
+    // classify actual resource references before choosing a narrower barrier.
     template<class Use> int withNewRequest(typename Registry::Ticket ticket,
         uintptr_t physical,Use use) noexcept {
         if(!physical || !valid()) return 5;
