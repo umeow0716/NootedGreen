@@ -7120,6 +7120,72 @@ static void testResourceBinding() {
                     assert(bool(lineBackend.live)==!expected);
                 }
                 lines.reset();transaction.reset();assert(!api.references);
+                // Integrate the real CPU-backed graph with a complete captured
+                // allocation frame. This tests ownership, not a native feature
+                // policy: the graph fixture is allocated as one terminal stage.
+                assert(sourceOwner.ensure(stmmKey)==0);
+                std::array<uint8_t,0x1bc0> allocationChild{};
+                TestVeboxChildLease allocationChildOwner{allocationChild.data()};
+                TestFeatureExecutionOwner allocationExecution;
+                const uintptr_t executionAddress=reinterpret_cast<uintptr_t>(allocationExecution.bytes.data());
+                const uintptr_t sourceAddress=reinterpret_cast<uintptr_t>(sourceOwner.surface());
+                std::memcpy(allocationChild.data()+0x88,&executionAddress,8);
+                std::memcpy(allocationChild.data()+0x1b0,&sourceAddress,8);
+                for(int later:{31,0}) {
+                    unsigned unwinds=0,publications=0;
+                    const auto disabled=[](void*,uintptr_t,const auto&) noexcept {return false;};
+                    const auto pipe=[](void*,uintptr_t,const auto&) noexcept -> uint32_t {return 0;};
+                    const auto unused=[](void*,uintptr_t,const auto&) noexcept {assert(false);return 5;};
+                    const auto noFfdn=[](void*,uintptr_t,const auto&) noexcept {return 0;};
+                    const auto verifyFrame=[&](void* c,uintptr_t e,const auto& s) noexcept {
+                        assert(c==allocationChild.data() && sourceOwner.hasSurfaceLease(s));
+                        assert(allocationChildOwner.hasPrivateChildLease(reinterpret_cast<uintptr_t>(c)));
+                        assert(allocationExecution.hasExecutionLease(e));
+                        sourceOwner.reset();assert(sourceOwner.ensure(stmmKey)==5);
+                    };
+                    const auto allocate=[&](void* c,uintptr_t e,const auto& s) noexcept {
+                        verifyFrame(c,e,s);
+                        const int status=transaction.ensureFromLeasedSource(sourceOwner,s,false,
+                            requests,prepare,false,1920,1080,fill,
+                            [&](const auto&,const TglStatisticsAllocation& layout) noexcept {
+                                ++publications;verifyFrame(c,e,s);
+                                return tglPublishOwnedStatisticsLayout(allocationChildOwner,c,layout);
+                            });
+                        if(status) return status;
+                        const int lineStatus=lines.ensure(1080,720);
+                        if(lineStatus) return lineStatus;
+                        assert(api.references==3 && statistics.layout().bytes==520320);
+                        return later;
+                    };
+                    const auto unwind=[&](void* c,uintptr_t e,const auto& s) noexcept {
+                        ++unwinds;verifyFrame(c,e,s);
+                        lines.reset();transaction.reset();
+                        assert(!api.references && !statistics.layout().bytes && !lineBackend.live);
+                    };
+                    assert(tglWithOwnedVeboxAllocationStages(sourceOwner,allocationChildOwner,allocationExecution,
+                        disabled,disabled,pipe,disabled,unused,unused,noFfdn,unused,unused,
+                        allocate,unwind)==later);
+                    assert(publications==1 && unwinds==unsigned(later!=0));
+                    assert(api.references==(later?0u:3u));
+                    assert(!allocationChildOwner.busy && !allocationExecution.busy);
+                    assert(sourceOwner.withSurface([](const auto&) noexcept {}));
+                    if(!later) {
+                        uint32_t row=0,blocks=0;
+                        std::memcpy(&row,allocationChild.data()+0x1114,4);
+                        std::memcpy(&blocks,allocationChild.data()+0x1118,4);
+                        assert(row==1920 && blocks==270);
+                        assert(transaction.withResources([&](const auto& views,const auto& a,const auto& b,
+                            const auto&,const auto& layout) noexcept {
+                            assert(views[0] && &a==&first && &b==&second && layout.bytes==520320);
+                            transaction.reset();assert(api.references==3);
+                            return lines.withBuffers(1080,720,[&]() noexcept {
+                                lines.reset();assert(lineBackend.live);return 31;
+                            });
+                        })==31);
+                        assert(api.references==3 && lineBackend.live);
+                    }
+                }
+                lines.reset();transaction.reset();sourceOwner.reset();assert(!api.references);
             }
             pair.reset();assert(!api.references);
             std::array<TglResourceStorageReference,2> alias{{{first},{first}}};
