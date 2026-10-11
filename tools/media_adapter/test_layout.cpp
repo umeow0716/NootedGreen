@@ -1220,6 +1220,7 @@ static void testTrackedCpuOwner() {
     }
     {
         struct Execution {bool leased=true;unsigned dndiCommits=0;TglOwnedDndiState dndiState;
+            std::array<uint8_t,0xd48> kernelBytes{};
             bool hasExecutionLease(uintptr_t p) const noexcept {return leased && p==9;}
             int commitDndi(uintptr_t p,const TglOwnedDndiState& value) noexcept {
                 if(!leased || p!=9+0x850) return 5;
@@ -1229,7 +1230,7 @@ static void testTrackedCpuOwner() {
         struct Child {
             bool leased=true;unsigned writes=0;TglCscCoefficients saved;
             uintptr_t address=0;
-            bool kernelSuccess=false;
+            bool kernelSuccess=false,nativeKernel=false;
             std::array<uintptr_t,20> installed{};bool tableReady=false;
             bool matchesPrivateVtableHooks(const std::array<uintptr_t,20>& hooks) const noexcept {
                 return tableReady && installed==hooks;
@@ -1239,6 +1240,9 @@ static void testTrackedCpuOwner() {
                 if(!leased) return false; ++writes;saved=value;return true;
             }
             int setupKernelScratch(Execution& execution,int32_t index) noexcept {
+                if(nativeKernel && leased && execution.hasExecutionLease(9))
+                    return tglClearOwnedVeboxKernelScratch(reinterpret_cast<void*>(address),0x1b8,
+                        execution.kernelBytes.data(),execution.kernelBytes.size(),index);
                 return leased && execution.hasExecutionLease(9) && index==3 ? (kernelSuccess?0:-17):5;
             }
         } child;
@@ -1508,6 +1512,7 @@ static void testTrackedCpuOwner() {
             TglOwnedVeboxFrameRetention actualRetention;
             bool expectRewind=true;
             bool fullPackets=false;
+            bool requestKernel=false;
             auto makeActualConsumer=[&](TglOwnedVeboxFrameRetention& retained) noexcept {
                 return tglMakeOwnedVeboxNativeFrameConsumer<AuxiliaryResolve,
                 AuxiliaryScope,AuxiliaryScope,AuxiliaryScope,FormatRead>(sourceLease,
@@ -1529,8 +1534,10 @@ static void testTrackedCpuOwner() {
                         using Kernel=int(*)(void*,int32_t) noexcept;
                         using Csc=void(*)(void*,void*,void*) noexcept;
                         using Dndi=int(*)(void*,void*,void*,void*) noexcept;
-                        const int kernelStatus=reinterpret_cast<Kernel>(child.installed[5])(object,3);
-                        if(kernelStatus) return kernelStatus;
+                        if(requestKernel) {
+                            const int kernelStatus=reinterpret_cast<Kernel>(child.installed[5])(object,3);
+                            if(kernelStatus) return kernelStatus;
+                        }
                         reinterpret_cast<Csc>(child.installed[14])(object,&source,&target);
                         const int dndiStatus=reinterpret_cast<Dndi>(child.installed[17])(
                             object,&source,nativeLuma.data(),nativeChroma.data());
@@ -1623,6 +1630,25 @@ static void testTrackedCpuOwner() {
             assert(child.writes==cscBefore+2 && execution.dndiCommits==2 &&
                 registrations==3 && surfaceAdmissions==8);
             assert(nativeSetups==5 && nativeBuilds==5 && nativeWritebacks==5);
+            assert(!ActualProducers::Resolve::get(nativeChild));
+            // Native scratch setup is unsupported, not a successful kernel.
+            // Preserve its exact cleanup/status and stop downstream callbacks.
+            allowed=true;requestKernel=true;child.nativeKernel=true;
+            execution.kernelBytes.fill(0x5a);
+            std::memset(childBytes.data()+0x118,0x6b,0x90);
+            ActualFrame unsupportedKernelFrame{{},leases,consistentInput,false,noRead,admitSurface,
+                admitDi,registerResource,control};
+            TglOwnedVeboxFrameRetention unsupportedKernelRetention;
+            auto unsupportedKernelConsumer=makeActualConsumer(unsupportedKernelRetention);
+            const auto unsupportedKernel=unsupportedKernelConsumer(unsupportedKernelFrame);
+            assert(unsupportedKernel.status==31 && unsupportedKernel.builderStatus==31 &&
+                unsupportedKernel.acquired && unsupportedKernel.writtenBack && unsupportedKernelRetention());
+            for(size_t i=0x118;i<0x1a8;++i) assert(!childBytes[i]);
+            for(size_t i=0;i<execution.kernelBytes.size();++i)
+                assert(execution.kernelBytes[i]==(i>=0xa50+3*0x58 && i<0xa50+4*0x58 ? 0 : 0x5a));
+            assert(child.writes==cscBefore+2 && execution.dndiCommits==2 &&
+                registrations==3 && surfaceAdmissions==8);
+            assert(nativeSetups==6 && nativeBuilds==6 && nativeWritebacks==6);
             assert(!ActualProducers::Resolve::get(nativeChild));
         }
     }
