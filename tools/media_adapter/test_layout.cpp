@@ -6570,7 +6570,7 @@ static void testNativeResourceBoundary() {
                                     bool clearDnAfterFrame=false;
                                     TglOwnedFfdiCompressionSelection preselected{true,99};
                                     unsigned supportCalls=0;
-                                    auto runFrame=[&]() noexcept {
+                                    auto runFrame=[&](TglOwnedFfdiCompressionSelection* transported=nullptr) noexcept {
                                         const auto before=supportCalls;
                                         const int result=tglRunCapturedFfdiFrame(frameTargets,backedTargets,owner,&owner,
                                             &destination,childOwner,reportOwner,actualChild,report,source,read,
@@ -6587,7 +6587,7 @@ static void testNativeResourceBoundary() {
                                                 return frameStatus;
                                             },[&](const auto* s,const auto* target) noexcept -> int {
                                                 assert(!s && !target);++nextUses;return nextStatus;
-                                            },{},&preselected);
+                                            },{},transported?transported:&preselected);
                                         assert(supportCalls-before<=1);return result;
                                     };
                                     reportBackend.bytes[0xb]=reportBackend.bytes[0xf]=reportBackend.bytes[0x13]=0;
@@ -6615,10 +6615,13 @@ static void testNativeResourceBoundary() {
                                     };
                                     auto chain=[&]() noexcept {
                                         reportBackend.bytes[0xb]=1;
-                                        return tglRunCapturedVeboxAllocationWithFfdiFrame(owner,childOwner,reportOwner,
+                                        return tglRunCapturedVeboxAllocationWithSelection(owner,childOwner,reportOwner,
                                             actualChild,report,source,read,
-                                            [&](void*,uintptr_t,const auto&) noexcept {return runFrame();},
-                                            unusedTail,unusedTail,unusedTail,
+                                            [&](void*,uintptr_t,const auto&,auto& selection) noexcept {
+                                                return runFrame(&selection);
+                                            },[&](void* c,uintptr_t e,const auto& s,const auto&) noexcept {
+                                                return unusedTail(c,e,s);
+                                            },unusedTail,unusedTail,
                                             [&](void*,uintptr_t,const auto&) noexcept -> int {++tailStages;return 19;},
                                             [&](void*,uintptr_t,const auto& s) noexcept {
                                                 assert(owner.hasSurfaceLease(s));++unwinds;
@@ -6630,12 +6633,15 @@ static void testNativeResourceBoundary() {
                                     frameStatus=0;clearDnAfterFrame=false;
                                     reportBackend.bytes[0xb]=1;
                                     unsigned order=0;
-                                    assert(tglRunCapturedVeboxAllocationWithFfdiFrame(owner,childOwner,reportOwner,
+                                    assert(tglRunCapturedVeboxAllocationWithSelection(owner,childOwner,reportOwner,
                                         actualChild,report,source,read,
-                                        [&](void*,uintptr_t,const auto&) noexcept -> int {
-                                            assert(order++==0);return runFrame();
-                                        },[&](void*,uintptr_t,const auto&) noexcept -> int {
-                                            assert(order++==1);return 0;
+                                        [&](void*,uintptr_t,const auto&,auto& selection) noexcept -> int {
+                                            assert(order++==0);
+                                            return runFrame(&selection);
+                                        },[&](void*,uintptr_t,const auto&,const auto& selection) noexcept -> int {
+                                            assert(order++==1);
+                                            assert(selection.compressed==preselected.compressed && selection.mode==preselected.mode);
+                                            return 0;
                                         },unusedTail,[&](void*,uintptr_t,const auto&) noexcept -> int {
                                             assert(order++==2);return 0;
                                         },[&](void*,uintptr_t,const auto&) noexcept -> int {

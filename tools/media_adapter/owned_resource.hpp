@@ -11090,6 +11090,26 @@ int tglRunCapturedVeboxAllocationWithFfdiFrame(Owner& input,ChildOwner& childOwn
         [&](void* c,uintptr_t e,const auto& s) noexcept {return policy(c,e,s).stmm;},
         guarded(ffdi),unreachable,guarded(ffdn),guarded(rectangle),guarded(stmm),guarded(statistics),unwind);
 }
+// Keep +98/+a8's selection in this allocation invocation, separate from the
+// report's changed-only publication. The FFDi producer must populate it before
+// returning success; a failed FFDi never reaches the FFDN consumer.
+template<class Owner,class ChildOwner,class ExecutionOwner,class Read,class FfdiFrame,
+    class Ffdn,class Rectangle,class Stmm,class Statistics,class Unwind=TglOwnedVeboxFrameNoUnwind>
+int tglRunCapturedVeboxAllocationWithSelection(Owner& input,ChildOwner& childOwner,
+    ExecutionOwner& reportOwner,void* child,uintptr_t report,const TglOwnedSurfaceStorage& source,
+    Read read,FfdiFrame ffdi,Ffdn ffdn,Rectangle rectangle,Stmm stmm,Statistics statistics,
+    Unwind unwind={}) noexcept {
+    TglOwnedFfdiCompressionSelection selection{};
+    return tglRunCapturedVeboxAllocationWithFfdiFrame(input,childOwner,reportOwner,child,report,source,read,
+        [&](void* c,uintptr_t e,const auto& s) noexcept -> int {
+            static_assert(noexcept(ffdi(c,e,s,selection)),"FFDi selection producer ABI");
+            return ffdi(c,e,s,selection);
+        },[&](void* c,uintptr_t e,const auto& s) noexcept -> int {
+            const auto& capturedSelection=selection;
+            static_assert(noexcept(ffdn(c,e,s,capturedSelection)),"FFDN selection consumer ABI");
+            return ffdn(c,e,s,capturedSelection);
+        },rectangle,stmm,statistics,unwind);
+}
 // Native1f7f3c reads child.ba8 (old FFDN slot0), NOT source.c8 (previous
 // frame used by history copying). FFDi selection is the pre-loop producer's
 // value, not report13/14 which may remain unchanged when allocation is reused.
