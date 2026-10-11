@@ -10337,6 +10337,16 @@ inline bool tglPrepareOwnedVpIefCommandParameters(TglOwnedSfcCommandParameters& 
     return tglPrepareOwnedSfcIefParameters(parameters,enabled,frame.iefStrength,
         frame.iefSkin,frame.iefDetail,frame.iefThresholds,tables);
 }
+template<class Read,class Qualify>
+bool tglPrepareQualifiedOwnedVpIefCommandParameters(TglOwnedSfcCommandParameters& parameters,
+    const TglOwnedVpFramePreparation& frame,uintptr_t image,Read read,Qualify qualify) noexcept {
+    if(parameters.filtersInUse) return false;
+    const bool enabled=frame.iefPresent && (frame.iefFlags&1) && frame.iefStrength>0.f;
+    if(enabled!=frame.at922) return false;
+    TglOwnedIefTables tables{};
+    if(enabled && !tglReadQualifiedOwnedIefTables(tables,image,read,qualify)) return false;
+    return tglPrepareOwnedVpIefCommandParameters(parameters,frame,tables);
+}
 // VP98 prepares IEF before VPa0 publishes CSC pointers. Keep the actual
 // command consumer inside the coefficient scope instead of returning borrowed
 // pointers from an isolated callback. This is CPU composition, not submission.

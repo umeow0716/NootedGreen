@@ -14097,7 +14097,13 @@ int main() {
                       [&](void*,const auto& prepared) noexcept {
                           ++passIefCalls;passIefEnabled=prepared.at922;
                           std::memcpy(passFilters.state.data(),stateCpu.bytes.data(),passFilters.state.size());
-                          passIefReady=tglPrepareOwnedVpIefCommandParameters(passFilters,prepared,passIefTables);
+                          unsigned tableReads=0;
+                          passIefReady=tglPrepareQualifiedOwnedVpIefCommandParameters(passFilters,prepared,0x100000,
+                              [&](uintptr_t address,void* out,size_t size) noexcept {
+                                  assert(address==0x100000+0x741e50+tableReads*0x100 && size==0x100);
+                                  std::memcpy(out,passIefTables[tableReads++].data(),size);return true;
+                              },[](uintptr_t image) noexcept {return image==0x100000;});
+                          assert(tableReads==unsigned(prepared.at922?5:0));
                           if(passIefReady)
                               std::memcpy(stateCpu.bytes.data(),passFilters.state.data(),passFilters.state.size());
                       },
@@ -15006,9 +15012,34 @@ int main() {
             assert(coefficient==100+i);
         }
         const auto savedFilter=filterPacket.ief;
+        const auto savedFilterState=filterPacket.state;
+        unsigned tableReads=0,deniedTable=0;
+        auto tableRead=[&](uintptr_t address,void* out,size_t size) noexcept {
+            assert(address==0x100000+0x741e50+tableReads*0x100 && size==0x100);
+            if(++tableReads==deniedTable) return false;
+            std::memcpy(out,iefTables[tableReads-1].data(),size);return true;
+        };
+        auto qualifyTable=[](uintptr_t image) noexcept {return image==0x100000;};
+        assert(!tglPrepareQualifiedOwnedVpIefCommandParameters(filterPacket,strongIef,
+            0x200000,tableRead,qualifyTable) && !tableReads);
+        for(deniedTable=1;deniedTable<=5;++deniedTable) {
+            tableReads=0;
+            assert(!tglPrepareQualifiedOwnedVpIefCommandParameters(filterPacket,strongIef,
+                0x100000,tableRead,qualifyTable));
+            assert(tableReads==deniedTable && filterPacket.ief==savedFilter && filterPacket.state==savedFilterState);
+        }
+        deniedTable=0;tableReads=0;
+        assert(tglPrepareQualifiedOwnedVpIefCommandParameters(filterPacket,strongIef,
+            0x100000,tableRead,qualifyTable) && tableReads==5);
         auto inconsistent=prepared;inconsistent.at922=false;
         assert(!tglPrepareOwnedVpIefCommandParameters(filterPacket,inconsistent,iefTables));
         assert(filterPacket.ief==savedFilter);
+        auto bypassIef=prepared;bypassIef.at922=false;bypassIef.iefFlags=0;
+        TglOwnedSfcCommandParameters bypassPacket;bypassPacket.ief[0]=0xa5;
+        assert(tglPrepareQualifiedOwnedVpIefCommandParameters(bypassPacket,bypassIef,0,
+            [](uintptr_t,void*,size_t) noexcept {assert(false);return false;},
+            [](uintptr_t) noexcept {assert(false);return false;}));
+        assert((bypassPacket.ief==std::array<uint8_t,64>{}));
         filterPacket.filtersInUse=true;
         assert(!tglPrepareOwnedVpIefCommandParameters(filterPacket,prepared,iefTables));
         assert(filterPacket.ief==savedFilter);
