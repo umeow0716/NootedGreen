@@ -7891,6 +7891,30 @@ static void testNativeResourceBoundary() {
                     };
                     assert(pair.render(renderBinding,childLease,&childLease.child,nullptr,nativeRender)==5 && !renderCalls);
                     assert(pair.render(renderBinding,childLease,&childLease.child,&argument,nativeRender)==-17 && renderCalls==1);
+                    struct DnBackend {
+                        unsigned releases=0;
+                        uintptr_t allocate(size_t n) noexcept {return reinterpret_cast<uintptr_t>(std::calloc(1,n));}
+                        void release(uintptr_t p) noexcept {++releases;std::free(reinterpret_cast<void*>(p));}
+                    } dnBackend;
+                    {
+                        TglTrackedCpuOwner<DnBackend> parameters(dnBackend);
+                        assert(parameters.allocate(64));
+                        assert(pair.withDenoiseSurfaces(parameters,[&](const auto& source,const auto&) noexcept {
+                            uintptr_t slot=0;std::memcpy(&slot,source.prefix.data()+0x90,8);
+                            assert(slot==parameters.get());parameters.reset();assert(parameters.get()==slot);
+                            return -17;
+                        })==-17 && parameters.get());
+                        assert(pair.withDenoiseSurfaces(parameters,[&](const auto& source,const auto&) noexcept {
+                            uintptr_t slot=0;std::memcpy(&slot,source.prefix.data()+0x90,8);
+                            dnBackend.release(slot);
+                            const uintptr_t cleared=0;
+                            // CPU fixture for native160's proven source90 clear.
+                            std::memcpy(const_cast<uint8_t*>(source.prefix.data())+0x90,&cleared,8);
+                            return 31;
+                        })==31 && !parameters.get());
+                        assert(pair.withDenoiseSurfaces(parameters,[](const auto&,const auto&) noexcept {assert(false);return 0;})==5);
+                    }
+                    assert(dnBackend.releases==1);
                     const auto released=backend.releases;
                     assert(pair.withSurfaces([&](const auto& source,const auto& target) noexcept {
                         assert(input.hasSurfaceLease(source) && first.hasSurfaceLease(target));

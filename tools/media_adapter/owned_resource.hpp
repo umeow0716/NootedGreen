@@ -9609,6 +9609,21 @@ public:
                 sourceOwner_,source,targetOwner_,target,invoke);
         });
     }
+    // Parameters must be a retained-frame member too. Reuse the exact native
+    // source90 consuming-slot contract; never retain a raw DN pointer instead.
+    template<class Parameters,class Use>
+    int withDenoiseSurfaces(Parameters& parameters,Use use) noexcept {
+        static_assert(noexcept(use(std::declval<const TglOwnedSurfaceStorage&>(),
+            std::declval<const TglOwnedSurfaceStorage&>())) &&
+            std::is_same_v<decltype(use(std::declval<const TglOwnedSurfaceStorage&>(),
+            std::declval<const TglOwnedSurfaceStorage&>())),int>,"native DN consumer status ABI");
+        return withSurfaces([&](const auto& source,const auto& target) noexcept {
+            int result=5;
+            const bool reconciled=sourceOwner_.withNativeDenoiseParameters(source,parameters,
+                [&]() noexcept {result=use(source,target);});
+            return reconciled?result:5;
+        });
+    }
 };
 struct TglOwnedVeboxFrameNoUnwind {
     void operator()(void*,uintptr_t,const TglOwnedSurfaceStorage&) const noexcept {}
