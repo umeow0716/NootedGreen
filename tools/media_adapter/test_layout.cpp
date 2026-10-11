@@ -34,6 +34,9 @@ struct TestVpCpuView {
 
 struct TestFeatureSurfaceOwner {
     TglOwnedSurfaceStorage storage{};bool busy=false,deny=false;
+    bool hasSurfaceLease(const TglOwnedSurfaceStorage& expected) noexcept {
+        return busy && !deny && &expected==&storage;
+    }
     template<class Use> bool withPeerSurface(TestFeatureSurfaceOwner& peer,Use use) noexcept {
         if(busy || deny || peer.deny || (&peer!=this && peer.busy)) return false;
         busy=true;peer.busy=true;use(storage,peer.storage);peer.busy=false;busy=false;return true;
@@ -41,9 +44,23 @@ struct TestFeatureSurfaceOwner {
 };
 struct TestFeatureExecutionOwner {
     std::array<uint8_t,0xd48> bytes{};bool busy=false;
+    struct Backend {
+        std::array<uint8_t,0xd48>& bytes;
+        uintptr_t create() noexcept {assert(false);return 0;}
+        int initialize(uintptr_t) noexcept {assert(false);return 5;}
+        bool validate(uintptr_t p) noexcept {return p==reinterpret_cast<uintptr_t>(bytes.data());}
+        void destroy(uintptr_t) noexcept {assert(false);}
+    } backend{bytes};
+    TglExecutionOwner<Backend> owner{backend};
+    bool hasExecutionLease(uintptr_t expected) const noexcept {return owner.hasExecutionLease(expected);}
+    template<class Use> int withLeasedFeatureReport(uintptr_t expected,const void* target,Use use) noexcept {
+        return owner.withLeasedFeatureReport(expected,target,use);
+    }
     template<class Use> int withExecution(Use use) noexcept {
         if(busy) return 5;
-        busy=true;const int status=use(reinterpret_cast<uintptr_t>(bytes.data()));busy=false;return status;
+        busy=true;
+        const int status=owner.withBorrowedExecution(reinterpret_cast<uintptr_t>(bytes.data()),use);
+        busy=false;return status;
     }
 };
 static void testTrackedCpuOwner() {

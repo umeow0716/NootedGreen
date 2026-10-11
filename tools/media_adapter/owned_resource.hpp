@@ -6392,17 +6392,8 @@ int tglWithOwnedVeboxFeatureFrame(SurfaceOwner& sourceOwner,SurfaceOwner& target
         [&](const TglOwnedSurfaceStorage& source,const TglOwnedSurfaceStorage& target) noexcept {
         result=childOwner.withPrivateChild([&](void* child) noexcept {
             return executionOwner.withExecution([&](uintptr_t execution) noexcept {
-                if(!child || !execution) return 5;
-                uintptr_t linked=0,previous=0;
-                std::memcpy(&linked,static_cast<uint8_t*>(child)+0x88,8);
-                if(linked!=execution) return 5;
-                auto* field=reinterpret_cast<uint8_t*>(execution)+0x60;
-                std::memcpy(&previous,field,8);
-                if(previous) return 5; // never hide a previous frame borrow
-                const int status=invoke(child,source,target);
-                uintptr_t observed=0;std::memcpy(&observed,field,8);
-                std::memcpy(field,&previous,8);
-                return !observed || observed==reinterpret_cast<uintptr_t>(&target) ? status : 5;
+                return tglRunCapturedVeboxFeature(sourceOwner,targetOwner,childOwner,executionOwner,
+                    child,execution,source,target,invoke);
             });
         });
     });
