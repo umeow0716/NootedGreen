@@ -14209,6 +14209,24 @@ int main() {
                             };
                             TglCscCoefficientsBinding cscBinding;
                             assert(cscBinding.resolve(0x100000,cscRead,cscImage,cscRx));
+                            if(cscEnabled) {
+                                TglOwnedVpCscCache deniedCache;
+                                unsigned deniedMatrices=0;
+                                assert(graph.withCscAssemblyEntries(child,assemblyIef,deniedCache,3,5,0,
+                                    [](uintptr_t,void*,size_t) noexcept {assert(false);return false;},
+                                    [&](TglCscCoefficients& coefficients,uint32_t from,uint32_t to) noexcept {
+                                        return tglProduceNativeCscCoefficients(cscBinding,coefficients,from,to,
+                                            cscRead,cscImage,cscRx,
+                                            [](uintptr_t,uint32_t,uint32_t,float*,float*,float*) noexcept {assert(false);},
+                                            [&](uintptr_t entry,uint32_t a,uint32_t b,float*) noexcept {
+                                                assert(entry==0x100000+0x54950 && a==3 && b==5);
+                                                ++deniedMatrices;return false;
+                                            });
+                                    },entries,[](void*,const auto&,uint8_t*) noexcept {
+                                        assert(false);return 0;
+                                    })==5);
+                                assert(deniedMatrices==1 && assemblyIef==savedIef && stateCpu.bytes==savedState);
+                            }
                             unsigned matrixAdmissions=0;
                             assert(graph.withCscAssemblyEntries(child,assemblyIef,assemblyCsc,3,5,0,
                                 [](uintptr_t,void*,size_t) noexcept {assert(false);return false;},
