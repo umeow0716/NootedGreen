@@ -9890,6 +9890,47 @@ public:
     void reset() noexcept {(void)tryReset();}
 };
 
+// Separate Gen12 SFD backing; never alias the AVS/IEF surface descriptors.
+// Caller establishes retirement/discard before ensure/reset. The lease below
+// protects CPU emission only, not asynchronous GPU completion.
+template<class Backend> class TglOwnedSfcSfdBuffer {
+    Backend& backend_;
+    TglOwnedAllocatedSurface<Backend> owner_;
+    uint32_t height_=0;
+    bool busy_=false;
+public:
+    explicit TglOwnedSfcSfdBuffer(Backend& backend) noexcept:backend_(backend),owner_(backend){}
+    int ensure(uint32_t height) noexcept {
+        if(busy_ || !height) return 5;
+        TglOwnedSfcLineBufferSizes sizes;
+        if(!tglOwnedSfcLineBufferSizes(sizes,1,height)) return 5;
+        if(backend_.resourceType()!=0) return 25;
+        busy_=true;height_=0;
+        int status=0;
+        if(sizes.sfd) status=owner_.ensure({sizes.sfd,1,0x3d,4,0,false});
+        else owner_.reset();
+        if(!status) height_=height;
+        busy_=false;return status;
+    }
+    template<class Use> int withBuffer(uint32_t height,Use use) noexcept {
+        using Storage=std::array<uint8_t,0x148>;
+        static_assert(noexcept(use(static_cast<const Storage*>(nullptr))),"SFD descriptor lease ABI");
+        if(busy_ || !height || height!=height_) return 5;
+        TglOwnedSfcLineBufferSizes sizes;
+        if(!tglOwnedSfcLineBufferSizes(sizes,1,height)) return 5;
+        busy_=true;int result=5;
+        if(!sizes.sfd) result=use(static_cast<const Storage*>(nullptr));
+        else owner_.withSurface([&](const auto& surface) noexcept {
+            result=use(&surface.resource);
+        });
+        busy_=false;return result;
+    }
+    bool tryReset() noexcept {
+        if(busy_) return false;
+        busy_=true;height_=0;owner_.reset();busy_=false;return true;
+    }
+};
+
 // Exact slot58=1df210 is status(this). State+30/+4c are read only from
 // the actual leased owner already published at VP+938, not arbitrary args.
 template<class Lines,class State> class TglOwnedVpLineAllocationContext {
@@ -10084,22 +10125,25 @@ int tglWithOwnedSfcPreparedCommands(TglOwnedSfcCommandParameters& parameters,
 // Full VP+58 surfaces feed the same authenticated descriptor fields, without
 // copying tokens into the legacy descriptor-only owner. Both shells stay
 // pinned through query, state preparation and synchronous command emission.
-// Gen12 SFD is a separate owner: this two-surface path admits only dimensions
-// for which the qualified allocation policy needs no SFD, never a raw pointer.
-template<class CpuBackend,class ResourceBackend,class Query,class Generate>
+// Gen12 SFD is a separate optional owner, pinned around the same consumer.
+// A caller-supplied raw SFD pointer is never admitted.
+template<class CpuBackend,class ResourceBackend,class Query,class Generate,
+    class SfdBackend=ResourceBackend>
 int tglWithOwnedVpSurfaceCommands(TglOwnedSfcCommandParameters& parameters,
     TglOwnedSfcStateParameters<CpuBackend>& state,
     TglOwnedVpLineSurfaces<ResourceBackend>& lines,TglOwnedSurfaceStorage& output,
     const std::array<uint8_t,0xb8>& prefix,TglOwnedSfcGen12Tail tail,
     bool rgbAdaptive,bool eightTapChroma,bool compressionEnabled,
-    TglOwnedSfcCompressionMode compressionMode,Query query,Generate generate) noexcept {
+    TglOwnedSfcCompressionMode compressionMode,Query query,Generate generate,
+    TglOwnedSfcSfdBuffer<SfdBackend>* sfd=nullptr) noexcept {
     static_assert(noexcept(generate(parameters)),"VP surface command consumer ABI");
     if(parameters.filtersInUse || !state.data() || tail.sfdLineBuffer) return 5;
     uint32_t input=0,scaled=0;
     std::memcpy(&input,prefix.data()+0x30,4);std::memcpy(&scaled,prefix.data()+0x4c,4);
     TglOwnedSfcLineBufferSizes sizes;
-    if(!tglOwnedSfcLineBufferSizes(sizes,input,scaled) || sizes.sfd) return 5;
-    return lines.withDimensions(input,scaled,[&](const auto& avs,const auto& ief) noexcept {
+    if(!tglOwnedSfcLineBufferSizes(sizes,input,scaled) || (sizes.sfd && !sfd)) return 5;
+    auto consume=[&]() noexcept {
+      return lines.withDimensions(input,scaled,[&](const auto& avs,const auto& ief) noexcept {
         TglOwnedSfcStateParametersPacket checked{};
         if(!tglPrepareOwnedSfcGen12Pass(checked,prefix,tail,rgbAdaptive,eightTapChroma,
             compressionEnabled,compressionMode)) return 5;
@@ -10109,6 +10153,12 @@ int tglWithOwnedVpSurfaceCommands(TglOwnedSfcCommandParameters& parameters,
         if(!state.prepare(bound,tail,rgbAdaptive,eightTapChroma,compressionEnabled,compressionMode)) return 5;
         std::memcpy(parameters.state.data(),state.data(),parameters.state.size());
         return state.withParameters([&](const uint8_t*) noexcept {return generate(parameters);});
+      });
+    };
+    if(!sfd) return consume();
+    return sfd->withBuffer(scaled,[&](const auto* descriptor) noexcept {
+        tail.sfdLineBuffer=descriptor ? reinterpret_cast<uintptr_t>(descriptor->data()) : 0;
+        return consume();
     });
 }
 

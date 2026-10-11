@@ -7672,6 +7672,8 @@ int main() {
                     std::memcpy(prefix.data()+offset,&width,4);
                 std::memcpy(prefix.data()+0x30,&input,4);std::memcpy(prefix.data()+0x4c,&scaled,4);
                 unsigned queries=0,emitted=0;int queryResult=0;
+                Backend sfdBackend;TglOwnedSfcSfdBuffer<Backend> sfd(sfdBackend);
+                TglOwnedSfcSfdBuffer<Backend>* sfdOwner=nullptr;
                 auto query=[&](auto&) noexcept {
                     ++queries;assert(!lines.tryReset() && lines.ensure(input,scaled)==5);
                     return queryResult;
@@ -7685,8 +7687,13 @@ int main() {
                                 uintptr_t actual=0;std::memcpy(&actual,packet.state.data()+0x98+i*8,8);
                                 assert(actual==reinterpret_cast<uintptr_t>(shells[i]->resource.data()));
                             }
+                            if(sfdOwner) {
+                                assert(!sfd.tryReset() && sfd.ensure(720)==5);
+                                uintptr_t descriptor=0;std::memcpy(&descriptor,packet.state.data()+0xe0,8);
+                                assert(descriptor);
+                            }
                             return result;
-                        });
+                        },sfdOwner);
                 };
                 for(int result:{0,31,-7}) assert(run(result)==result);
                 assert(queries==3 && emitted==3);
@@ -7696,6 +7703,16 @@ int main() {
                 assert(run(0,foreign)==5 && queries==4);
                 const uint32_t wrong=721;std::memcpy(prefix.data()+0x4c,&wrong,4);
                 assert(run(0)==5 && queries==4);
+                const uint32_t tall=4001;std::memcpy(prefix.data()+0x4c,&tall,4);
+                assert(run(0)==5 && queries==4); // No SFD owner, never omit required backing.
+                assert(lines.ensure(input,tall)==0);sfdOwner=&sfd;queryResult=0;
+                assert(run(0)==5 && queries==4); // Owner not initialized.
+                sfdBackend.status=77;assert(sfd.ensure(tall)==77);
+                assert(run(0)==5 && queries==4);
+                sfdBackend.status=0;assert(sfd.ensure(tall)==0);
+                for(int result:{0,31,-7}) assert(run(result)==result);
+                assert(queries==7 && emitted==6);
+                assert(sfd.tryReset() && sfdBackend.allocations==sfdBackend.releases);
             }
             if(failure<0) for(int admission:{31,0}) {
                 auto retire=[&]() noexcept -> int {
