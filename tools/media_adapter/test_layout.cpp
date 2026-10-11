@@ -8957,6 +8957,24 @@ int main() {
                 TglOwnedSfcCommandParameters packets;
                 TglOwnedSurfaceStorage output;output.resource[0x20]=1;
                 std::array<uint8_t,0xb8> prefix{};prefix[0]=1;
+                const uint32_t format=0x50,pitch=2048;
+                std::memcpy(prefix.data()+0x2c,&format,4);
+                std::memcpy(output.prefix.data()+0xe0,&pitch,4);
+                constexpr uintptr_t usageImage=0x100000,usageOs=0x7000,usageEntry=usageImage+0x659b0;
+                const std::array<uint8_t,20> usageAnchor{
+                    0x55,0x48,0x89,0xe5,0x48,0x89,0x7d,0xf8,0x48,0x89,
+                    0x75,0xf0,0x89,0x55,0xec,0x89,0x4d,0xe8,0x5d,0xc3};
+                auto usageRead=[&](uintptr_t address,void* out,size_t size) noexcept {
+                    if(address==usageOs+0x128 && size==8) {std::memcpy(out,&usageEntry,8);return true;}
+                    if(address==usageEntry && size==usageAnchor.size()) {
+                        std::memcpy(out,usageAnchor.data(),size);return true;
+                    }
+                    return false;
+                };
+                TglNativeSfcOutputUsageBinding usage;
+                assert(usage.resolve(usageOs,usageImage,usageRead,
+                    [](uintptr_t image) noexcept {return image==usageImage;},
+                    [](uintptr_t entry,size_t size) noexcept {return entry==usageEntry && size==20;}));
                 const uint32_t width=1920,input=1080,scaled=540;
                 for(size_t offset:{size_t(0x24),size_t(0x28),size_t(0x34),
                     size_t(0x3c),size_t(0x40),size_t(0x50)})
@@ -8966,6 +8984,7 @@ int main() {
                 auto retire=[&]() noexcept {++retired;assert(!graph.tryReset());return admission;};
                 for(int expected:{31,0,5,77,-4}) {
                     CallbackCommandBackend commands;
+                    unsigned usageCalls=0;
                     commands.failure=expected==-4?4:0;
                     admission=expected==31?31:0;calls=0;fail=expected==5?1:0;
                     backends[0].status=expected==77?77:0;
@@ -8989,7 +9008,13 @@ int main() {
                             ++sent;assert(std::memcmp(packets.state.data(),stateCpu.bytes.data(),
                                 packets.state.size())==0);
                             auto platform=[&](auto&) noexcept {return commands.stage(3);};
-                            return tglSendOwnedSfcPreparedCommands(commands,packets,output,1,1,1,1,platform);
+                            auto invokeUsage=[&](uintptr_t entry,uintptr_t os,const void* resource,
+                                uint32_t value,uint32_t flag) noexcept {
+                                assert(entry==usageEntry && os==usageOs && resource==output.resource.data());
+                                assert(value==6 && flag==1 && !commands.count);++usageCalls;
+                            };
+                            return tglSendOwnedSfcNativeOutputCommands(usage,commands,packets,output,
+                                0x4000,1,1,1,1,read,platform,invokeUsage);
                         },
                         [&](void* child,auto setup,auto send,auto release) noexcept {
                             const int status=setup(child,reinterpret_cast<void*>(0x1000),
@@ -9008,6 +9033,7 @@ int main() {
                         assert(commands.count==3 && commands.order[0]==1 && commands.order[1]==3 &&
                             commands.order[2]==4);
                     else assert(!commands.count);
+                    assert(usageCalls==unsigned(expected==31 || expected==0 || expected==-4));
                 }
                 fail=0;
                 assert(states==4 && filters==3 && retired==3 && preparedStates==3 && sent==3);
