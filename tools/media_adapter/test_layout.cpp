@@ -11730,6 +11730,38 @@ static void testGuardedVeboxLifecycle() {
 }
 
 static void testRetainedVeboxFrames() {
+    {
+        constexpr uintptr_t base=0x100000,context=0x20000;
+        uintptr_t vptr=base+0x75d018,entry=base+0x235ab0;
+        bool qualified=true,rx=true,corrupt=false,readable=true;
+        auto read=[&](uintptr_t address,void* output,size_t size) noexcept {
+            if(!readable) return false;
+            if(address==context && size==8) {std::memcpy(output,&vptr,8);return true;}
+            if(address==base+0x75d040 && size==8) {std::memcpy(output,&entry,8);return true;}
+            const std::array<uint8_t,16> prologue{
+                0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x20,0x48,0x89,0x7d,0xf8,0x48,0x89,0x75,0xf0};
+            const std::array<uint8_t,5> first{0xe8,0x03,0xbf,0xde,0xff},second{0xe8,0x11,0,0,0};
+            if(address==base+0x235ab0 && size==16) std::memcpy(output,prologue.data(),size);
+            else if(address==base+0x235ad6 && size==5) std::memcpy(output,first.data(),size);
+            else if(address==base+0x235aea && size==5) std::memcpy(output,second.data(),size);
+            else return false;
+            if(corrupt) static_cast<uint8_t*>(output)[0]^=1;
+            return true;
+        };
+        auto qualify=[&](uintptr_t image) noexcept {return qualified && image==base;};
+        auto executable=[&](uintptr_t,size_t) noexcept {return rx;};
+        TglNativeContextFrameBinding binding;
+        auto resolve=[&]() noexcept {return binding.resolve(base,context,read,qualify,executable);};
+        assert(resolve() && binding.frame==entry && binding.vtable==vptr);
+        vptr++;assert(!resolve() && !binding.image);vptr--;
+        entry++;assert(!resolve());entry--;
+        corrupt=true;assert(!resolve());corrupt=false;
+        rx=false;assert(!resolve());rx=true;
+        qualified=false;assert(!resolve());qualified=true;
+        readable=false;assert(!resolve());readable=true;
+        assert(!binding.resolve(UINTPTR_MAX,context,read,qualify,executable));
+        assert(resolve());
+    }
     struct Backend {
         unsigned& allocated;unsigned& released;
         int allocate(std::array<uint8_t,0x148>& bytes,const TglResourceKey&) noexcept {

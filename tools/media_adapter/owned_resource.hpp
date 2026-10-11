@@ -16217,6 +16217,33 @@ public:
     }
 };
 
+// Qualify the original context frame virtual before installing any owned
+// per-item wrapper. This resolves identity only; it never writes a vptr.
+struct TglNativeContextFrameBinding {
+    uintptr_t image=0,vtable=0,frame=0;
+    template<class Read,class Qualify,class Executable>
+    bool resolve(uintptr_t base,uintptr_t context,Read read,Qualify qualify,
+        Executable executable) noexcept {
+        *this={};
+        if(!base || base>UINTPTR_MAX-0x75d048 || !context || !qualify(base)) return false;
+        uintptr_t table=0,entry=0;
+        if(!read(context,&table,sizeof(table)) || table!=base+0x75d018 ||
+            !read(table+0x28,&entry,sizeof(entry)) || entry!=base+0x235ab0) return false;
+        constexpr std::array<uint8_t,16> prologue{
+            0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x20,0x48,0x89,0x7d,0xf8,0x48,0x89,0x75,0xf0};
+        constexpr std::array<uint8_t,5> outputCall{0xe8,0x03,0xbf,0xde,0xff};
+        constexpr std::array<uint8_t,5> prepareCall{0xe8,0x11,0,0,0};
+        auto matches=[&](uintptr_t offset,const auto& expected) noexcept {
+            auto actual=expected;
+            return executable(base+offset,actual.size()) &&
+                read(base+offset,actual.data(),actual.size()) && actual==expected;
+        };
+        if(!matches(0x235ab0,prologue) || !matches(0x235ad6,outputCall) ||
+            !matches(0x235aea,prepareCall)) return false;
+        image=base;vtable=table;frame=entry;return true;
+    }
+};
+
 struct TglNativePhysicalCallbackBinding {
     uintptr_t image=0,initialize=0,destroy=0;
     template<class Read,class Qualify,class Executable>
