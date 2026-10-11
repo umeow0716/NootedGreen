@@ -1643,6 +1643,14 @@ static void testTrackedCpuOwner() {
         }
         source.resource.fill(0);source.tail.fill(0);
         for(uint32_t format:{0x19u,0x15u,0x3du}) {
+            const uint32_t nativeTile=4;
+            std::memcpy(source.prefix.data()+0x130,&format,4);
+            std::memcpy(source.prefix.data()+0xe4,&nativeTile,4);
+            TglOwnedFfdnAllocationRequest ffdn;
+            assert(tglPrepareOwnedFfdnAllocationRequest(source,{true,1},ffdn));
+            assert(ffdn.type==1 && (ffdn.key==TglResourceKey{width,height,format,nativeTile,1,true}));
+            assert(ffdn.kind==(format==0x3d?TglOwnedFfdiAllocationKind::NativeBacking:
+                TglOwnedFfdiAllocationKind::DescriptorOnly));
             TglOwnedFfdiAllocationRequest request;
             assert(tglPrepareOwnedFfdiAllocationRequest(source,format,1,{true,1},request));
             assert(request.type==1 && (request.key==TglResourceKey{width,height,format,1,1,true}));
@@ -1654,6 +1662,9 @@ static void testTrackedCpuOwner() {
                 std::array<uint8_t,4> saved{};std::memcpy(saved.data(),source.prefix.data()+offset,4);
                 std::memset(source.prefix.data()+offset,0,4);
                 assert(!tglPrepareOwnedFfdiAllocationRequest(source,0x3d,4,{},request));
+                const auto previousFfdn=ffdn;
+                assert(!tglPrepareOwnedFfdnAllocationRequest(source,{false,0},ffdn));
+                assert(ffdn.key==previousFfdn.key && ffdn.type==previousFfdn.type && ffdn.kind==previousFfdn.kind);
                 assert(request.key==previous.key && request.type==previous.type && request.kind==previous.kind);
                 std::memcpy(source.prefix.data()+offset,saved.data(),4);
             }

@@ -4581,6 +4581,18 @@ inline TglOwnedFfdnCompressionSelection tglSelectOwnedFfdnCompression(
     return useSource ? TglOwnedFfdnCompressionSelection{source299,source29a?1u:0u} :
         TglOwnedFfdnCompressionSelection{ffdiCompressed,ffdiMode};
 }
+// ICL1f800f/1f802b and1f8048/1f8065: FFDN uses the source's format130,
+// tilee4 and dimensionsd8/dc, not the FFDI query98 output. Same allocator
+// type1 contract, including descriptor-only formats; no backing is created.
+using TglOwnedFfdnAllocationRequest=TglOwnedFfdiAllocationRequest;
+inline bool tglPrepareOwnedFfdnAllocationRequest(const TglOwnedSurfaceStorage& source,
+    TglOwnedFfdnCompressionSelection compression,TglOwnedFfdnAllocationRequest& output) noexcept {
+    uint32_t format=0,tile=0;
+    std::memcpy(&format,source.prefix.data()+0x130,4);
+    std::memcpy(&tile,source.prefix.data()+0xe4,4);
+    return tglPrepareOwnedFfdiAllocationRequest(source,format,tile,
+        {compression.compressed,compression.mode},output);
+}
 // Complete ICL1f7990 changed-FFDN branch. Source+200 in decompiler output
 // is decimal200 (0xc8), a previous-surface link, NOT resource field0x200.
 // No whole-shell copy or ownership transfer here. CopyPrevious still requires
