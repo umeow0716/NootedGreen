@@ -1065,6 +1065,20 @@ static void testTrackedCpuOwner() {
         result=31;assert(owned.allocate()==31 && unwinds==1);
         result=0;assert(owned.allocate()==0 && unwinds==1);
         owner.leased=false;assert(owned.allocate()==5 && unwinds==1);
+        using UnwindScope=TglOwnedVeboxScopedContext<Unwinding>;
+        using UnwindCallbacks=TglOwnedVeboxAllocationCallbacks<UnwindScope>;
+        const auto beforeCalls=calls;
+        assert(UnwindCallbacks::allocate(&child)==5 && unwinds==1);
+        {
+            UnwindScope scope(&child,owned);assert(scope.bound());
+            assert(UnwindCallbacks::allocate(&foreign)==5);
+            assert(UnwindCallbacks::allocate(nullptr)==5);
+            assert(UnwindCallbacks::allocate(&child)==5 && calls==beforeCalls && unwinds==1);
+            owner.leased=true;
+            result=31;assert(UnwindCallbacks::allocate(&child)==31 && unwinds==2);
+            result=0;assert(UnwindCallbacks::allocate(&child)==0 && unwinds==2);
+        }
+        assert(UnwindCallbacks::allocate(&child)==5 && unwinds==2);
     }
     {
         struct Frame {TglOwnedVeboxProducerPass pass;} frame;
