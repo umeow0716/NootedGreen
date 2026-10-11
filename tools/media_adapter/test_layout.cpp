@@ -10980,6 +10980,27 @@ static void testRetainedVeboxFrames() {
 
 int main() {
     {
+        TglOwnedVeboxFrameRetention retention;
+        unsigned commands=0;
+        const auto result=tglWithNativeVeboxAllocationTransaction(retention,
+            [&](auto final) noexcept -> int {
+                const int status=final(17);
+                assert(status==31 && retention()); // before allocation unwind
+                return status;
+            },[&](int value) noexcept {
+                assert(value==17);++commands;
+                return TglOwnedVeboxCommandTransactionResult{31,31,true,false};
+            });
+        assert(result.status==31 && result.acquired && commands==1);
+        assert(tglWithNativeVeboxAllocationTransaction(retention,
+            [](auto) noexcept -> int {assert(false);return 0;},
+            []() noexcept {return TglOwnedVeboxCommandTransactionResult{};}).status==5);
+        TglOwnedVeboxFrameRetention empty;
+        assert(tglWithNativeVeboxAllocationTransaction(empty,
+            [](auto) noexcept -> int {return 0;},
+            []() noexcept {assert(false);return TglOwnedVeboxCommandTransactionResult{};}).status==5);
+    }
+    {
         struct DeniedSurfaceApi {
             uintptr_t surface(uintptr_t handle) noexcept {return handle;}
             bool retain(uintptr_t) noexcept {assert(false);return false;}

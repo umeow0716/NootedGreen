@@ -14564,6 +14564,30 @@ struct TglOwnedVeboxCommandTransactionResult {
     bool writtenBack=false;
 };
 
+// Adapt the allocation chain's int consumer ABI to a typed command result.
+// Observe ownership INSIDE its final consumer, before nested error unwind.
+template<class Allocate,class Consume>
+TglOwnedVeboxCommandTransactionResult tglWithNativeVeboxAllocationTransaction(
+    TglOwnedVeboxFrameRetention& retention,Allocate allocate,Consume consume) noexcept {
+    TglOwnedVeboxCommandTransactionResult result;
+    if(retention()) return result;
+    bool entered=false,duplicate=false;
+    auto final=[&](auto&&... args) noexcept -> int {
+        static_assert(noexcept(consume(std::forward<decltype(args)>(args)...)) &&
+            std::is_same_v<decltype(consume(std::forward<decltype(args)>(args)...)),
+                           TglOwnedVeboxCommandTransactionResult>);
+        if(entered) {duplicate=true;return 5;}
+        entered=true;result=consume(std::forward<decltype(args)>(args)...);
+        if(result.writtenBack && !result.acquired) result.status=5;
+        retention.observe(result);
+        return result.status;
+    };
+    static_assert(noexcept(allocate(final)) && std::is_same_v<decltype(allocate(final)),int>);
+    const int status=allocate(final);
+    result.status=duplicate?5:(!entered?(status?status:5):(status?status:result.status));
+    return result;
+}
+
 // Stable-address whole-frame ownership, not a copied descriptor/token list.
 // Frame must OWN its OS/image leases, child, shells, backing and scratch; a
 // collection of borrowed pointers is not a valid runtime Frame. Fixed process
