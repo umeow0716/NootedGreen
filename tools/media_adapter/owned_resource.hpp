@@ -11450,6 +11450,23 @@ int tglWithOwnedVpResourceEntries(TglOwnedVpSfcCallerStorage& vp,Lines& lines,St
     return result?result:context.releaseResult();
 }
 
+// One owned child, with both admission and allocation/free entries alive only
+// during the consumer. This is not a published vtable or GPU retirement proof.
+template<class Read,class Lines,class State,class Retire,class Use>
+int tglWithOwnedVpAssemblyEntries(TglOwnedVpSfcCallerStorage& vp,Read& read,
+    Lines& lines,State& state,Retire& retire,Use use) noexcept {
+    return tglWithOwnedVpAdmissionEntries(vp,read,
+        [&](void* admitted,const TglOwnedVpAdmissionEntries& admission) noexcept {
+            return tglWithOwnedVpResourceEntries(vp,lines,state,retire,
+                [&](void* child,auto allocate,auto release) noexcept {
+                    if(child!=admitted) return 5;
+                    static_assert(noexcept(use(child,admission,allocate,release)),
+                        "VP assembly-entry consumer ABI");
+                    return use(child,admission,allocate,release);
+                });
+        });
+}
+
 // Exact ICL donor1e052d..1e0566 callback ABI. Its target57ba0 is a three-arg
 // constant-zero stub, NOT a TGL surface-info entry or metadata proof. A TGL
 // adapter must separately authenticate the platform callback and output data.

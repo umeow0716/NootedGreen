@@ -9524,16 +9524,34 @@ int main() {
                     using AllocateEntry=int(*)(void*) noexcept;
                     using ReleaseEntry=void(*)(void*) noexcept;
                     AllocateEntry expiredAllocate=nullptr;ReleaseEntry expiredRelease=nullptr;
+                    TglOwnedVpAdmissionEntries expiredAdmission;
+                    unsigned admissionReads=0;
+                    auto admissionRead=[&](uintptr_t address,void* out,size_t count) noexcept {
+                        ++admissionReads;assert(address==0x2130 && count==4);
+                        const uint32_t format=13;std::memcpy(out,&format,4);return true;
+                    };
+                    assert(tglWithOwnedVpAssemblyEntries(wrongVp,admissionRead,resources,state,retire,
+                        [](void*,const auto&,AllocateEntry,ReleaseEntry) noexcept {
+                            assert(false);return 0;
+                        })==5 && !admissionReads);
                     assert(tglWithOwnedVpResourceEntries(wrongVp,resources,state,retire,
                         [](void*,AllocateEntry,ReleaseEntry) noexcept {assert(false);return 0;})==5);
                     assert(state.withPublishedVpParameters(vp,[](const uint8_t*) noexcept {
                         assert(false);return 0;
                     })==5);
                     assert(state.withVpParameterPublication(vp,[&](const uint8_t*) noexcept {
-                        return tglWithOwnedVpResourceEntries(vp,resources,state,retire,
-                            [&](void* child,AllocateEntry allocate,ReleaseEntry release) noexcept {
+                        return tglWithOwnedVpAssemblyEntries(vp,admissionRead,resources,state,retire,
+                            [&](void* child,const TglOwnedVpAdmissionEntries& entry,
+                                AllocateEntry allocate,ReleaseEntry release) noexcept {
+                                expiredAdmission=entry;
+                                assert(entry.finalAdmission(child,1,reinterpret_cast<void*>(0x1000),
+                                    reinterpret_cast<void*>(0x2000)) && admissionReads==1);
                                 expiredAllocate=allocate;expiredRelease=release;
                                 assert(child==vp.bytes.data() && allocate(child)==0);
+                                assert(tglWithOwnedVpAssemblyEntries(vp,admissionRead,resources,state,retire,
+                                    [](void*,const auto&,AllocateEntry,ReleaseEntry) noexcept {
+                                        assert(false);return 0;
+                                    })==5 && admissionReads==1);
                                 assert(tglWithOwnedVpResourceEntries(vp,resources,state,retire,
                                     [](void*,AllocateEntry,ReleaseEntry) noexcept {
                                         assert(false);return 0;
@@ -9542,6 +9560,8 @@ int main() {
                             });
                     })==admission);
                     assert(expiredAllocate(vp.bytes.data())==5);
+                    assert(!expiredAdmission.finalAdmission(vp.bytes.data(),1,
+                        reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x2000)) && admissionReads==1);
                     const auto before=admissions;expiredRelease(vp.bytes.data());assert(admissions==before);
                     if(admission) assert(run(0)==0);
                 }
