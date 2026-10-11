@@ -29,7 +29,61 @@ struct TestVpCpuView {
     }
 };
 
+struct TestFeatureSurfaceOwner {
+    TglOwnedSurfaceStorage storage{};bool busy=false,deny=false;
+    template<class Use> bool withPeerSurface(TestFeatureSurfaceOwner& peer,Use use) noexcept {
+        if(busy || deny || peer.deny || (&peer!=this && peer.busy)) return false;
+        busy=true;peer.busy=true;use(storage,peer.storage);peer.busy=false;busy=false;return true;
+    }
+};
+struct TestFeatureExecutionOwner {
+    std::array<uint8_t,0xd48> bytes{};bool busy=false;
+    template<class Use> int withExecution(Use use) noexcept {
+        if(busy) return 5;
+        busy=true;const int status=use(reinterpret_cast<uintptr_t>(bytes.data()));busy=false;return status;
+    }
+};
 static void testTrackedCpuOwner() {
+    {
+        TestFeatureSurfaceOwner source,target;
+        TestFeatureExecutionOwner execution;
+        std::array<uint8_t,0x1bc0> base{};
+        TestVeboxChildLease owner{base.data()};
+        uintptr_t report=reinterpret_cast<uintptr_t>(execution.bytes.data());
+        std::memcpy(base.data()+0x88,&report,8);
+        unsigned calls=0;
+        auto callback=[&](void* child,const auto& s,const auto& t) noexcept {
+            ++calls;assert(child==base.data() && &s==&source.storage && &t==&target.storage);
+            assert(source.busy && target.busy && owner.busy && execution.busy);
+            uintptr_t p=reinterpret_cast<uintptr_t>(&t);
+            std::memcpy(execution.bytes.data()+0x60,&p,8);return 31;
+        };
+        assert(tglWithOwnedVeboxFeatureFrame(source,target,owner,execution,callback)==31);
+        uintptr_t p=1;std::memcpy(&p,execution.bytes.data()+0x60,8);
+        assert(!p && calls==1 && !source.busy && !target.busy && !owner.busy && !execution.busy);
+        target.deny=true;
+        assert(tglWithOwnedVeboxFeatureFrame(source,target,owner,execution,callback)==5 && calls==1);
+        target.deny=false;p=123;std::memcpy(execution.bytes.data()+0x60,&p,8);
+        assert(tglWithOwnedVeboxFeatureFrame(source,target,owner,execution,callback)==5 && calls==1);
+        uintptr_t observed=0;std::memcpy(&observed,execution.bytes.data()+0x60,8);assert(observed==123);
+        p=0;std::memcpy(execution.bytes.data()+0x60,&p,8);
+        assert(tglWithOwnedVeboxFeatureFrame(source,target,owner,execution,
+            [&](void*,const auto&,const auto&) noexcept {
+                uintptr_t bad=123;std::memcpy(execution.bytes.data()+0x60,&bad,8);return 0;
+            })==5);
+        std::memcpy(&observed,execution.bytes.data()+0x60,8);assert(!observed);
+        assert(tglWithOwnedVeboxFeatureFrame(source,source,owner,execution,
+            [&](void*,const auto& s,const auto& t) noexcept {
+                assert(&s==&t && source.busy && owner.busy && execution.busy);
+                assert(tglWithOwnedVeboxFeatureFrame(source,target,owner,execution,callback)==5);
+                uintptr_t retained=reinterpret_cast<uintptr_t>(&t);
+                std::memcpy(execution.bytes.data()+0x60,&retained,8);return -7;
+            })==-7);
+        std::memcpy(&observed,execution.bytes.data()+0x60,8);
+        assert(!observed && calls==1 && !source.busy && !owner.busy && !execution.busy);
+        p=0;std::memcpy(base.data()+0x88,&p,8);
+        assert(tglWithOwnedVeboxFeatureFrame(source,target,owner,execution,callback)==5 && calls==1);
+    }
     {
         std::array<uint8_t,0x1bc0> base{};
         std::array<uint8_t,16> history{};history[0]=1;history[15]=0xa5;

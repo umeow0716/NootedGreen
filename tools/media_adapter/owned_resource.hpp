@@ -5986,6 +5986,37 @@ bool tglUpdateOwnedVeboxHistory(Owner& owner,void* child,
     std::memcpy(base+0x1b5c,&state.field1b5c,4);
     return true;
 }
+// Enclose feature preparation AND every synchronous consumer of report60 in
+// one frame lease. Native160 retains target there; clear it before either
+// surface owner unlocks. This is not permission for asynchronous GPU submission.
+// Callback supplies the qualified native/owned stages; this scope alone is
+// neither complete admission nor authorization to call an incomplete vtable.
+template<class SurfaceOwner,class ChildOwner,class ExecutionOwner,class Invoke>
+int tglWithOwnedVeboxFeatureFrame(SurfaceOwner& sourceOwner,SurfaceOwner& targetOwner,
+    ChildOwner& childOwner,ExecutionOwner& executionOwner,Invoke invoke) noexcept {
+    static_assert(noexcept(invoke(nullptr,std::declval<const TglOwnedSurfaceStorage&>(),
+        std::declval<const TglOwnedSurfaceStorage&>())),"feature frame callback ABI");
+    int result=5;
+    const bool leased=sourceOwner.withPeerSurface(targetOwner,
+        [&](const TglOwnedSurfaceStorage& source,const TglOwnedSurfaceStorage& target) noexcept {
+        result=childOwner.withPrivateChild([&](void* child) noexcept {
+            return executionOwner.withExecution([&](uintptr_t execution) noexcept {
+                if(!child || !execution) return 5;
+                uintptr_t linked=0,previous=0;
+                std::memcpy(&linked,static_cast<uint8_t*>(child)+0x88,8);
+                if(linked!=execution) return 5;
+                auto* field=reinterpret_cast<uint8_t*>(execution)+0x60;
+                std::memcpy(&previous,field,8);
+                if(previous) return 5; // never hide a previous frame borrow
+                const int status=invoke(child,source,target);
+                uintptr_t observed=0;std::memcpy(&observed,field,8);
+                std::memcpy(field,&previous,8);
+                return !observed || observed==reinterpret_cast<uintptr_t>(&target) ? status : 5;
+            });
+        });
+    });
+    return leased ? result : 5;
+}
 enum class TglVeboxAdmissionPrefixResult : uint8_t {
     MissingDependencies, CompositionFallback, Continue
 };
