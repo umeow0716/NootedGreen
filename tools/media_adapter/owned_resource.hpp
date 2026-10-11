@@ -3181,6 +3181,13 @@ struct TglOwnedVeboxAllocationTail {
     }
 };
 
+// This is the OUTER renderer child interface, not the inner VP interface.
+// Exact TGL base table757c98: slot10=126740 (Allocate), slot18=126cf0
+// (cleanup, gated through virtual60). Renderer132818 calls child.virtual10;
+// renderer132a46 calls child.virtual18 before132bb0 performs native-counted
+// deleting destruction. The owned VP27 table belongs under this child's80,
+// never directly at renderer910/918. Owned allocation must remain outside
+// native132bb0 accounting; a borrowed publication must be detached first.
 template<class CpuBackend,class SfcInvoke,class Cleanup,class Destroy>
 class TglOwnedVeboxBaseOwner {
     TglTrackedCpuOwner<CpuBackend> storage_;
