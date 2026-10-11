@@ -6673,6 +6673,44 @@ static void testNativeResourceBoundary() {
                                             assert(reportBackend.bytes[0x15]==1 && reportBackend.bytes[0x16]==1);
                                             return -43;
                                         },{&source,nullptr,nullptr})==-43);
+                                    constexpr size_t tailBase=offsetof(TglOwnedSurfaceStorage,tail);
+                                    assert(!(source.tail[0x29a-tailBase]&1));
+                                    uintptr_t priorSlot=reinterpret_cast<uintptr_t>(firstBacking.surfaceBinding());
+                                    std::memcpy(child.data()+0xba8,&priorSlot,8);
+                                    child[0x1b88]=child[0x1b89]=0;
+                                    TglOwnedFfdnCompressionSelection selected{true,99};
+                                    auto compression=[&](TglOwnedFfdiCompressionSelection ffdi) noexcept {
+                                        return tglProduceCapturedFfdnCompression(selected,owner,firstBacking,childOwner,
+                                            reportOwner,actualChild,report,source,ffdi,read);
+                                    };
+                                    assert(compression({false,7})==0);
+                                    assert(!selected.compressed && selected.mode==0);
+                                    assert(firstBacking.withSurface([&](const auto&) noexcept {
+                                        selected={true,99};assert(compression({false,7})==5);
+                                        assert(selected.compressed && selected.mode==99);
+                                    }));
+                                    priorSlot=reinterpret_cast<uintptr_t>(&source);
+                                    std::memcpy(child.data()+0xba8,&priorSlot,8);
+                                    assert(compression({false,7})==5 && selected.mode==99);
+                                    assert(compression({true,7})==0); // short-circuit does not consume old slot
+                                    child[0x1b89]=1;reportBackend.bytes[0xb]=1;
+                                    assert(compression({false,7})==0); // forced-source branch also skips old slot
+                                    priorSlot=reinterpret_cast<uintptr_t>(firstBacking.surfaceBinding());
+                                    std::memcpy(child.data()+0xba8,&priorSlot,8);child[0x1b89]=0;
+                                    reportBackend.bytes[8]=1;reportBackend.bytes[0x13]=0;
+                                    unsigned selections=0;
+                                    assert(tglPrepareOwnedBackedFfdnReportPair(backedTargets,owner,
+                                        static_cast<decltype(&owner)>(nullptr),static_cast<decltype(&owner)>(nullptr),
+                                        [&](const auto& views,TglOwnedFfdnCompressionSelection& value) noexcept {
+                                            ++selections;
+                                            return tglProduceCapturedFfdnCompression(value,owner,firstBacking,childOwner,
+                                                reportOwner,actualChild,report,*views[0],{false,7},read)==0;
+                                        },reportOwner,report,[](const auto&,const auto&) noexcept {assert(false);},
+                                        [&](const auto&,const auto& a,const auto& b) noexcept -> int {
+                                            assert(firstBacking.hasSurfaceLease(a) && secondBacking.hasSurfaceLease(b));
+                                            assert(reportBackend.bytes[8]==0 && reportBackend.bytes[0x15]==0 &&
+                                                reportBackend.bytes[0x16]==0);return -47;
+                                        },{&source,nullptr,nullptr})==-47 && selections==1);
                                     return run();
                                 });
                             })==-17);

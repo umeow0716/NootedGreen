@@ -5086,6 +5086,11 @@ public:
         return leased && consumed;
     }
     const void* surfaceBinding() const noexcept {return &storage_;}
+    bool readFfdnPriorCompression(bool& output) const noexcept {
+        if(busy_) return false;
+        constexpr size_t base=offsetof(TglOwnedSurfaceStorage,tail);
+        output=(storage_.tail[0x29a-base]&1)!=0;return true;
+    }
     template<class Use> bool withDescriptor(Use use) noexcept {
         static_assert(noexcept(use(std::declval<const TglOwnedSurfaceStorage&>())) &&
             std::is_same_v<decltype(use(std::declval<const TglOwnedSurfaceStorage&>())),void>,
@@ -5222,6 +5227,14 @@ public:
     TglOwnedAllocatedSurface& operator=(const TglOwnedAllocatedSurface&)=delete;
     // Identity only: does not grant access or prove a ready/backed lease.
     const void* surfaceBinding() const noexcept {return &surface_;}
+    // Native FFDN selection reads its old slot0 shell before allocation;
+    // constructor-zero metadata is valid even without GPU backing. Refuse
+    // active owner mutation, and export only this scalar, never resource tokens.
+    bool readFfdnPriorCompression(bool& output) const noexcept {
+        if(busy_) return false;
+        constexpr size_t base=offsetof(TglOwnedSurfaceStorage,tail);
+        output=(surface_.tail[0x29a-base]&1)!=0;return true;
+    }
     int ensure(const TglResourceKey& key,bool* changed=nullptr) noexcept {
         // Native4e060 clears changed before admission/allocation. Only a
         // successfully published backed surface may trigger history rebuild.
@@ -11012,6 +11025,37 @@ int tglRunCapturedVeboxAllocationWithFfdiFrame(Owner& input,ChildOwner& childOwn
         [&](void* c,uintptr_t e,const auto& s) noexcept {return policy(c,e,s).pipe;},
         [&](void* c,uintptr_t e,const auto& s) noexcept {return policy(c,e,s).stmm;},
         guarded(ffdi),unreachable,guarded(ffdn),guarded(rectangle),guarded(stmm),guarded(statistics),unwind);
+}
+// Native1f7f3c reads child.ba8 (old FFDN slot0), NOT source.c8 (previous
+// frame used by history copying). FFDi selection is the pre-loop producer's
+// value, not report13/14 which may remain unchanged when allocation is reused.
+template<class Owner,class PriorOwner,class ChildOwner,class ExecutionOwner,class Read>
+int tglProduceCapturedFfdnCompression(TglOwnedFfdnCompressionSelection& output,
+    Owner& input,PriorOwner& prior,ChildOwner& childOwner,ExecutionOwner& reportOwner,
+    void* child,uintptr_t report,const TglOwnedSurfaceStorage& source,
+    TglOwnedFfdiCompressionSelection ffdi,Read read) noexcept {
+    TglOwnedFfdnCompressionSelection candidate;
+    const int status=tglRunCapturedVeboxAllocation(input,childOwner,reportOwner,child,report,source,
+        [&](void* c,uintptr_t e,const auto& s) noexcept -> int {
+            const auto address=reinterpret_cast<uintptr_t>(c);
+            std::array<uint8_t,2> flags{};uint8_t dn=0;
+            if(address>UINTPTR_MAX-0x1b89 || e>UINTPTR_MAX-0xb ||
+                !read(address+0x1b88,flags.data(),2) || !read(e+0xb,&dn,1)) return 5;
+            constexpr size_t base=offsetof(TglOwnedSurfaceStorage,tail);
+            const bool sourceMode=(s.tail[0x29a-base]&1)!=0;
+            const bool forced=(flags[1]&1) && !(flags[0]&1) && (dn&1);
+            bool priorMode=false;
+            if(!forced && !sourceMode && !ffdi.compressed) {
+                uintptr_t slot=0;
+                if(!read(address+0xba8,&slot,8) || slot!=reinterpret_cast<uintptr_t>(prior.surfaceBinding()) ||
+                    !prior.readFfdnPriorCompression(priorMode)) return 5;
+            }
+            candidate=tglSelectOwnedFfdnCompression((flags[1]&1)!=0,(flags[0]&1)!=0,(dn&1)!=0,
+                (s.tail[0x299-base]&1)!=0,sourceMode,priorMode,ffdi.compressed,ffdi.mode);
+            return 0;
+        });
+    if(!status) output=candidate;
+    return status;
 }
 template<class Read>
 bool tglReadOwnedStateExecution(TglOwnedStateInputs& output, uintptr_t execution,
