@@ -1423,8 +1423,8 @@ static void testTrackedCpuOwner() {
             assert(nativeSetup.resolve(nativeImage,noRead,qualify,executable));
             assert(nativeBuilder.resolve(nativeImage,noRead,qualify,executable));
             unsigned nativeSetups=0,nativeBuilds=0,nativeWritebacks=0;
-            const auto accepted=tglWithOwnedVeboxFrameNativeTransaction<AuxiliaryResolve,
-                AuxiliaryScope,AuxiliaryScope,AuxiliaryScope,FormatRead>(sourceLease,frame,
+            const auto nativeConsumer=tglMakeOwnedVeboxNativeFrameConsumer<AuxiliaryResolve,
+                AuxiliaryScope,AuxiliaryScope,AuxiliaryScope,FormatRead>(sourceLease,
                 child,execution,0,noRead,noPackets,produce,nativeSetup,nativeBuilder,
                 nativeImage,nativeOs,scratch,&state,nativeRetention,qualify,executable,
                 [&](uintptr_t entry,void* object,void* command,void*,void* aux,int32_t* remaining) noexcept -> int {
@@ -1442,13 +1442,11 @@ static void testTrackedCpuOwner() {
                     assert(entry==nativeImage+0x64d60 && os==reinterpret_cast<void*>(nativeOs) &&
                         command==scratch.command.data());++nativeWritebacks;
                 });
+            const auto accepted=nativeConsumer(frame);
             assert(accepted.status==0 && accepted.builderStatus==0 && accepted.acquired && accepted.writtenBack);
             assert(nativeSetups==1 && nativeBuilds==1 && nativeWritebacks==1);
             assert(nativeRetention());
-            const auto pending=tglWithOwnedVeboxFrameNativeTransaction<AuxiliaryResolve,
-                AuxiliaryScope,AuxiliaryScope,AuxiliaryScope,FormatRead>(sourceLease,frame,
-                child,execution,0,noRead,noPackets,produce,nativeSetup,nativeBuilder,
-                nativeImage,nativeOs,scratch,&state,nativeRetention,qualify,executable);
+            const auto pending=nativeConsumer(frame);
             assert(pending.status==5 && !pending.acquired && !pending.writtenBack && nativeRetention());
             assert(nativeSetups==1 && nativeBuilds==1 && nativeWritebacks==1);
         }

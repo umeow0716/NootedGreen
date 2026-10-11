@@ -16944,6 +16944,33 @@ TglOwnedVeboxCommandTransactionResult tglWithOwnedVeboxFrameNativeTransaction(
     return result;
 }
 
+// Allocation consumers supply the actual captured frame here. Keep all hook
+// qualification and retention in the complete entry above, not in the caller.
+// Referenced owners, scratch and retention must outlive synchronous invocation.
+template<class LifetimeResolve,class AdmissionResolve,class AllocationResolve,
+    class ModeResolve,class FormatRead,class SourceOwner,class ChildOwner,
+    class ExecutionOwner,class Read,class PacketAdmit,class ProduceCsc,class Qualify,
+    class Executable,class SetupInvoke=TglNativeVeboxSetupInvoker,
+    class BuildInvoke=TglNativeVeboxBuilderInvoker,
+    class WritebackInvoke=TglNativeCommandHeaderWritebackInvoker>
+auto tglMakeOwnedVeboxNativeFrameConsumer(
+    SourceOwner& sourceOwner,ChildOwner& child,ExecutionOwner& execution,
+    uintptr_t dnParams,Read read,PacketAdmit admitPackets,ProduceCsc produceCsc,
+    TglNativeVeboxSetupBinding setup,TglNativeVeboxBuilderBinding builder,
+    uintptr_t image,uintptr_t os,TglOwnedVeboxBuilderScratch& scratch,void* auxiliary,
+    TglOwnedVeboxFrameRetention& retention,Qualify qualify,Executable executable,
+    SetupInvoke setupInvoke=SetupInvoke{},BuildInvoke buildInvoke=BuildInvoke{},
+    WritebackInvoke writebackInvoke=WritebackInvoke{}) noexcept {
+    return [&sourceOwner,&child,&execution,dnParams,read,admitPackets,produceCsc,
+        setup,builder,image,os,&scratch,auxiliary,&retention,qualify,executable,
+        setupInvoke,buildInvoke,writebackInvoke](auto& frame) noexcept {
+        return tglWithOwnedVeboxFrameNativeTransaction<LifetimeResolve,AdmissionResolve,
+            AllocationResolve,ModeResolve,FormatRead>(sourceOwner,frame,child,execution,
+            dnParams,read,admitPackets,produceCsc,setup,builder,image,os,scratch,auxiliary,
+            retention,qualify,executable,setupInvoke,buildInvoke,writebackInvoke);
+    };
+}
+
 // One borrowed-OS resource lifetime. The renderer must close every such scope
 // before retiring RenderHal/OS. Member order guarantees resource destruction
 // while its backend still exists; close is terminal and idempotent.
