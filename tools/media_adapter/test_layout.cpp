@@ -14096,6 +14096,12 @@ int main() {
                                     assert(packetChild==child && packetEntries.missingMask()==
                                         (combined.missingMask()&~((1U<<21)|(1U<<24)|(1U<<25)|(1U<<26))));
                                     assert(packetEntries.missingMask()==0x3U); // Both destructors remain; initialize is live.
+                                    auto duplicateInitializer=packetEntries;
+                                    duplicateInitializer.initialize=nullptr;
+                                    // Removing a catalogue slot does not release the enclosing
+                                    // construction resolver. Do not shadow its live init context.
+                                    assert(graph.withLeasedInitializedAssemblyEntries(child,duplicateInitializer,
+                                        [](void*,const auto&) noexcept {assert(false);return 0;})==5);
                                     auto releaseAllocation=[](void*) noexcept {assert(false);};
                                     using PassLifetime=TglOwnedVpLifetimeContext<decltype(graph),decltype(lineResources),
                                         decltype(retire),decltype(releaseAllocation)>;
