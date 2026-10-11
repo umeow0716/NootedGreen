@@ -16256,6 +16256,32 @@ struct TglNativeContextFrameBinding {
     }
 };
 
+// Stable owned data only. No context mutation or native image modification.
+// Its enclosing context owner must retain this object and both code images
+// until all calls end; copying/moving or rebuilding a published table is unsafe.
+class TglOwnedContextFrameVtable {
+    std::array<uintptr_t,TglNativeContextFrameBinding::callbackCount+2> table_{};
+    uintptr_t nativeFrame_=0;bool attempted_=false,ready_=false;
+public:
+    TglOwnedContextFrameVtable()=default;
+    TglOwnedContextFrameVtable(const TglOwnedContextFrameVtable&)=delete;
+    TglOwnedContextFrameVtable& operator=(const TglOwnedContextFrameVtable&)=delete;
+    template<class Read,class Qualify,class Executable,class OwnedExecutable>
+    bool build(uintptr_t image,uintptr_t context,uintptr_t hook,Read read,
+        Qualify qualify,Executable executable,OwnedExecutable ownedExecutable) noexcept {
+        if(attempted_) return false;
+        attempted_=true;
+        TglNativeContextFrameBinding native;
+        if(!hook || !ownedExecutable(hook,1) ||
+            !native.resolve(image,context,read,qualify,executable)) return false;
+        table_=native.original;
+        table_[2+0x28/8]=hook;
+        nativeFrame_=native.frame;ready_=true;return true;
+    }
+    const uintptr_t* addressPoint() const noexcept {return ready_?table_.data()+2:nullptr;}
+    uintptr_t nativeFrame() const noexcept {return ready_?nativeFrame_:0;}
+};
+
 struct TglNativePhysicalCallbackBinding {
     uintptr_t image=0,initialize=0,destroy=0;
     template<class Read,class Qualify,class Executable>

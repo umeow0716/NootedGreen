@@ -11775,6 +11775,23 @@ static void testRetainedVeboxFrames() {
         readable=false;assert(!resolve());readable=true;
         assert(!binding.resolve(UINTPTR_MAX,context,read,qualify,executable));
         assert(resolve());
+        constexpr uintptr_t hook=0x44000;
+        auto ownedExecutable=[](uintptr_t p,size_t size) noexcept {return p==hook && size==1;};
+        TglOwnedContextFrameVtable privateTable;
+        static_assert(!std::is_copy_constructible_v<TglOwnedContextFrameVtable> &&
+            !std::is_move_constructible_v<TglOwnedContextFrameVtable>);
+        assert(!privateTable.addressPoint() && !privateTable.nativeFrame());
+        assert(privateTable.build(base,context,hook,read,qualify,executable,ownedExecutable));
+        const auto* addressPoint=privateTable.addressPoint();
+        assert(addressPoint && privateTable.nativeFrame()==entry);
+        for(size_t i=0;i<binding.original.size();++i)
+            assert(addressPoint[static_cast<ptrdiff_t>(i)-2]==(i==7?hook:binding.original[i]));
+        assert(!privateTable.build(base,context,hook+1,read,qualify,executable,ownedExecutable));
+        assert(privateTable.addressPoint()==addressPoint && addressPoint[5]==hook);
+        TglOwnedContextFrameVtable deniedTable;
+        assert(!deniedTable.build(base,context,hook+1,read,qualify,executable,ownedExecutable));
+        assert(!deniedTable.addressPoint() && !deniedTable.nativeFrame());
+        assert(!deniedTable.build(base,context,hook,read,qualify,executable,ownedExecutable));
     }
     struct Backend {
         unsigned& allocated;unsigned& released;
