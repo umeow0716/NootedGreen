@@ -16251,6 +16251,30 @@ public:
     bool allocateParameters(size_t bytes) noexcept {
         return surfacesReady() && !backing_.retention()() && parameters_.allocate(bytes);
     }
+    // Runtime-facing frame entry: select an owned child, then keep its private
+    // table/SFC owner leased through frontend borrowing and retention capture.
+    // Consumer receives that SAME owner for the reserved native sender.
+    template<class Consume>
+    TglOwnedVeboxCommandTransactionResult withPrivateChildCommandFrame(
+        size_t childIndex,const TglNativeOuterSurfaceRoles& roles,size_t sourceIndex,size_t targetIndex,
+        uintptr_t execution,uintptr_t renderHal,uintptr_t sku,Consume consume) noexcept {
+        TglOwnedVeboxCommandTransactionResult result;
+        if(childIndex>1 || !surfacesReady() || backing_.retention()()) return result;
+        auto& owner=childIndex?children_.second().owner():children_.first().owner();
+        const int status=owner.withPrivateChild([&](void* child) noexcept {
+            result=withNativeCommandFrame(roles,sourceIndex,targetIndex,
+                reinterpret_cast<uintptr_t>(child),execution,renderHal,sku,
+                [&](auto& source,auto& target,auto& parameters,auto& packets) noexcept {
+                    static_assert(noexcept(consume(owner,child,source,target,parameters,packets)) &&
+                        std::is_same_v<decltype(consume(owner,child,source,target,parameters,packets)),
+                            TglOwnedVeboxCommandTransactionResult>);
+                    return consume(owner,child,source,target,parameters,packets);
+                });
+            return result.status;
+        });
+        result.status=status;
+        return result;
+    }
     template<class Consume>
     TglOwnedVeboxCommandTransactionResult withNativeCommandFrame(
         const TglNativeOuterSurfaceRoles& roles,size_t sourceIndex,size_t targetIndex,
