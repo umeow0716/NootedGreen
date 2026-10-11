@@ -1225,11 +1225,12 @@ static void testTrackedCpuOwner() {
         } execution;
         struct Child {
             bool leased=true;unsigned writes=0;TglCscCoefficients saved;
+            uintptr_t address=0;
             std::array<uintptr_t,20> installed{};bool tableReady=false;
             bool matchesPrivateVtableHooks(const std::array<uintptr_t,20>& hooks) const noexcept {
                 return tableReady && installed==hooks;
             }
-            bool hasPrivateChildLease(uintptr_t p) const noexcept {return leased && p==7;}
+            bool hasPrivateChildLease(uintptr_t p) const noexcept {return leased && p==address;}
             bool publishCsc(const TglCscCoefficients& value) noexcept {
                 if(!leased) return false; ++writes;saved=value;return true;
             }
@@ -1238,9 +1239,14 @@ static void testTrackedCpuOwner() {
             }
         } child;
         TglOwnedSurfaceStorage source,target,foreign;
+        std::array<uint8_t,0x1b8> childBytes{};
+        child.address=reinterpret_cast<uintptr_t>(childBytes.data());
+        const uintptr_t reportAddress=9,sourceAddress=reinterpret_cast<uintptr_t>(&source);
+        std::memcpy(childBytes.data()+0x88,&reportAddress,8);
+        std::memcpy(childBytes.data()+0x1b0,&sourceAddress,8);
         TglOwnedSurfaceInputs surfaces{};TglOwnedVeboxStateStorage state{};
         TglOwnedDiIecpPacket di{};
-        TglOwnedVeboxPacketLeases leases{7,9,0,0,source,&target,surfaces,state,di};
+        TglOwnedVeboxPacketLeases leases{child.address,9,0,0,source,&target,surfaces,state,di};
         struct Frame {
             TglOwnedVeboxProducerPass pass;
             TglOwnedVeboxPacketLeases& leases;
@@ -1311,12 +1317,13 @@ static void testTrackedCpuOwner() {
         execution.leased=true;
         {
             struct Auxiliary {
-                bool owns(void* object) const noexcept {return object==reinterpret_cast<void*>(7);}
+                void* child=nullptr;
+                bool owns(void* object) const noexcept {return object==child;}
                 void destroy(bool) noexcept {}
                 bool admit(void*,void*) noexcept {return false;}
                 int allocate() noexcept {return 31;}
                 void freeResources() noexcept {}
-            } auxiliary;
+            } auxiliary{nativeChild};
             using AuxiliaryScope=TglOwnedVeboxScopedContext<Auxiliary>;
             struct AuxiliaryResolve {
                 Auxiliary* operator()(void* object) const noexcept {return AuxiliaryScope::get(object);}
@@ -1329,12 +1336,20 @@ static void testTrackedCpuOwner() {
                 AuxiliaryScope,typename Producers::Resolve,AuxiliaryScope,FormatRead>(nativeChild,child.installed);
             assert(built);child.tableReady=true;
             unsigned consumed=0;
+            struct SourceLease {
+                const TglOwnedSurfaceStorage* source;
+                bool hasSurfaceLease(const TglOwnedSurfaceStorage& value) const noexcept {
+                    return &value==source;
+                }
+            } sourceLease{&source};
             auto consume=[&](void* object,const auto& hooks,auto& producer) noexcept {
                 ++consumed;assert(object==nativeChild && hooks==child.installed && &producer.pass==&frame.pass);
-                return producer.pass.withBuilder([&]() noexcept {
-                    using Kernel=int(*)(void*,int32_t) noexcept;
-                    return reinterpret_cast<Kernel>(hooks[5])(object,3);
-                });
+                return tglWithCapturedVeboxPreparedBuilder(sourceLease,child,execution,
+                    object,9,source,producer,[](void*) noexcept -> int {return 0;},
+                    [&](void* active) noexcept -> int {
+                        using Kernel=int(*)(void*,int32_t) noexcept;
+                        return reinterpret_cast<Kernel>(hooks[5])(active,3);
+                    });
             };
             const auto run=[&]() noexcept {
                 return tglWithOwnedVeboxFrameHookBindings<AuxiliaryResolve,AuxiliaryScope,
