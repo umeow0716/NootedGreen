@@ -12736,6 +12736,52 @@ public:
         busy_=false;return result;
     }
 };
+// Standalone STMM stage for the surface-frame tail. Unlike the combined
+// backing transaction, this does not allocate group/statistics resources or
+// force history allocation when native DN/DI admission is disabled.
+// Caller excludes asynchronous GPU users before ensure/reset; these storage
+// leases protect synchronous consumers, not submitted command completion.
+template<class Pair,class SourceOwner,class ChildOwner,class ExecutionOwner,class Read,class Use>
+int tglRunCapturedStmmPair(Pair& pair,SourceOwner& sourceOwner,ChildOwner& childOwner,
+    ExecutionOwner& executionOwner,void* child,uintptr_t execution,
+    const TglOwnedSurfaceStorage& source,Read read,bool reinitialize,Use use) noexcept {
+    using Storage=typename Pair::Storage;
+    bool allocated=false;
+    const int result=tglRunCapturedVeboxAllocation(sourceOwner,childOwner,executionOwner,child,execution,source,
+        [&](void* c,uintptr_t e,const auto& s) noexcept -> int {
+            auto consume=[&](const Storage* first,const Storage* second) noexcept -> int {
+                return tglRunCapturedVeboxAllocation(sourceOwner,childOwner,executionOwner,c,e,s,
+                    [&](void*,uintptr_t,const auto&) noexcept -> int {
+                        static_assert(noexcept(use(first,second)) &&
+                            std::is_same_v<decltype(use(first,second)),int>,"STMM stage consumer ABI");
+                        return use(first,second);
+                    });
+            };
+            TglOwnedVeboxAllocationPolicy policy;
+            if(!tglReadOwnedVeboxAllocationPolicy(policy,reinterpret_cast<uintptr_t>(c),e,read)) return 5;
+            if(!policy.stmm) return consume(nullptr,nullptr);
+            uint8_t compression=0;const auto address=reinterpret_cast<uintptr_t>(c);
+            if(address>UINTPTR_MAX-0x1ba9 || !read(address+0x1ba9,&compression,1) || compression>1) return 5;
+            std::array<TglResourceKey,2> keys{};
+            if(!tglPrepareOwnedStmmHistoryKeys(s,compression!=0,keys)) return 5;
+            bool distinct=true;
+            pair.visitStorageBindings([&](const void* binding) noexcept {
+                if(binding==&s.resource) distinct=false;
+            });
+            if(!distinct) return 5;
+            const int admission=tglRunCapturedVeboxAllocation(sourceOwner,childOwner,executionOwner,c,e,s,
+                [](void*,uintptr_t,const auto&) noexcept -> int {return 0;});
+            if(admission) return admission;
+            allocated=true;
+            const int status=pair.ensure(keys,reinitialize);
+            if(status) return status;
+            return pair.withStorage([&](const Storage& first,const Storage& second) noexcept -> int {
+                return consume(&first,&second);
+            });
+        });
+    if(result && allocated) pair.reset(); // every STMM lease has ended
+    return result;
+}
 #if defined(__APPLE__)
 // Call only under the resource owner's synchronous lease, before GPU use.
 // The pool is process-owned, not a member destroyed by frame-error unwind.

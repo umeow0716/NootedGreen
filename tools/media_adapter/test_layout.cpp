@@ -5028,7 +5028,7 @@ static void testNativeStatisticsFill() {
     assert(!statistics.layout().bytes && !group.storage(0) && !api.references);
     sourceOwner.deny=false;putSource(0x58,float{65.75});
     alignas(8) std::array<uint8_t,0x1bc0> childBytes{};
-    std::array<uint8_t,0x20> reportBytes{};reportBytes[0x13]=1;
+    std::array<uint8_t,0xa10> reportBytes{};reportBytes[0x13]=1;
     const uintptr_t reportAddress=reinterpret_cast<uintptr_t>(reportBytes.data());
     const uintptr_t sourceAddress=reinterpret_cast<uintptr_t>(&sourceOwner.storage);
     std::memcpy(childBytes.data()+0x88,&reportAddress,8);
@@ -5068,6 +5068,35 @@ static void testNativeStatisticsFill() {
     assert(captured(prepare)==5 && fixture.fills==fillsBeforeRevoke);
     readable=true;childBytes[0x1ba9]=2;
     assert(captured(prepare)==5 && fixture.fills==fillsBeforeRevoke);
+    childBytes[0x1ba9]=0;
+    putSource(0xd8,uint32_t{16});putSource(0xdc,uint32_t{4});
+    unsigned stmmUses=0;
+    auto stmmStage=[&](auto use) noexcept {
+        return tglRunCapturedStmmPair(history,sourceOwner,childLease,executionLease,
+            childBytes.data(),reportAddress,sourceOwner.storage,read,false,use);
+    };
+    assert(stmmStage([&](const auto* first,const auto* second) noexcept -> int {
+        assert(first==&historyStorage[0] && second==&historyStorage[1]);
+        assert(tglNativeBackingPresent(*first) && tglNativeBackingPresent(*second));
+        history.reset();
+        assert(history.withStorage([](const auto&,const auto&) noexcept -> int {assert(false);return 0;})==5);
+        ++stmmUses;return 0;
+    })==0 && stmmUses==1);
+    reportBytes[0x13]=0;
+    const auto historyReferences=api.references;
+    assert(stmmStage([&](const auto* first,const auto* second) noexcept -> int {
+        assert(!first && !second && api.references==historyReferences);++stmmUses;return 0;
+    })==0 && stmmUses==2 && tglNativeBackingPresent(historyStorage[0]));
+    reportBytes[0x13]=1;childBytes[0x1ba9]=2;
+    assert(stmmStage([](const auto*,const auto*) noexcept -> int {assert(false);return 0;})==5);
+    assert(tglNativeBackingPresent(historyStorage[0]));childBytes[0x1ba9]=0;
+    assert(stmmStage([&](const auto* first,const auto* second) noexcept -> int {
+        assert(first && second && tglNativeBackingPresent(*first));return -89;
+    })==-89 && !api.references && !tglNativeBackingPresent(historyStorage[0]));
+    assert(stmmStage([&](const auto* first,const auto* second) noexcept -> int {
+        assert(first && second);sourceOwner.deny=true;return 0;
+    })==5 && !api.references);
+    sourceOwner.deny=false;
 }
 
 static void testStatisticsLifecycle() {
