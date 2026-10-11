@@ -6455,6 +6455,42 @@ static void testResourceBinding() {
                     transaction.reset();assert(!api.references);
                 }));
                 sourceOwner.reset();assert(sourceBackend.releases==1);
+                // Exercise slot58 unwind with the actual backing coordinator,
+                // after backing succeeds but a later CPU stage rejects.
+                // GPU users remain excluded; this is not runtime retirement.
+                int laterStatus=31;unsigned unwindCalls=0;
+                auto allocateGraph=[&](void* actual) noexcept -> int {
+                    assert(actual==&child && childLease.busy);
+                    const int allocated=transaction.ensure(requests,prepare,keys,false,1920,1080,fill);
+                    if(allocated) return allocated;
+                    const int lineStatus=lines.ensure(1080,720);
+                    if(lineStatus) return lineStatus;
+                    assert(api.references==3 && statistics.layout().bytes);
+                    return laterStatus;
+                };
+                auto unwindGraph=[&](void* actual) noexcept {
+                    assert(actual==&child && childLease.busy);++unwindCalls;
+                    lines.reset();
+                    transaction.reset();
+                    assert(!api.references && !statistics.layout().bytes && !lineBackend.live);
+                };
+                using GraphContext=TglOwnedVeboxAllocationContext<TestVeboxChildLease,
+                    decltype(allocateGraph),decltype(unwindGraph)>;
+                GraphContext graphContext(childLease,allocateGraph,&child,unwindGraph);
+                using GraphScope=TglOwnedVeboxScopedContext<GraphContext>;
+                using GraphCallbacks=TglOwnedVeboxAllocationCallbacks<GraphScope>;
+                for(int expected:{31,0}) {
+                    laterStatus=expected;
+                    assert(childLease.withPrivateChild([&](void* actual) noexcept {
+                        GraphScope scope(actual,graphContext);assert(scope.bound());
+                        return GraphCallbacks::allocate(actual);
+                    })==expected);
+                    assert(unwindCalls==1);
+                    assert(api.references==(expected?0u:3u));
+                    assert(bool(statistics.layout().bytes)==!expected);
+                    assert(bool(lineBackend.live)==!expected);
+                }
+                lines.reset();transaction.reset();assert(!api.references);
             }
             pair.reset();assert(!api.references);
             std::array<TglResourceStorageReference,2> alias{{{first},{first}}};
