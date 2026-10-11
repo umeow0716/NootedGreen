@@ -1342,14 +1342,26 @@ static void testTrackedCpuOwner() {
                     return &value==source;
                 }
             } sourceLease{&source};
+            TglOwnedVeboxCommandTransactionResult transaction;
+            unsigned setups=0,builders=0,writebacks=0;
+            bool allowWriteback=true;
             auto consume=[&](void* object,const auto& hooks,auto& producer) noexcept {
                 ++consumed;assert(object==nativeChild && hooks==child.installed && &producer.pass==&frame.pass);
-                return tglWithCapturedVeboxPreparedBuilder(sourceLease,child,execution,
-                    object,9,source,producer,[](void*) noexcept -> int {return 0;},
-                    [&](void* active) noexcept -> int {
-                        using Kernel=int(*)(void*,int32_t) noexcept;
-                        return reinterpret_cast<Kernel>(hooks[5])(active,3);
+                transaction=tglWithCapturedVeboxCommandTransaction(sourceLease,child,execution,
+                    object,9,source,[&](int32_t& remaining) noexcept -> int {
+                        return tglWithCapturedVeboxPreparedBuilder(sourceLease,child,execution,
+                            object,9,source,producer,[&](void*) noexcept -> int {
+                                ++setups;remaining=128;return 0;
+                            },[&](void* active) noexcept -> int {
+                                ++builders;
+                                using Kernel=int(*)(void*,int32_t) noexcept;
+                                return reinterpret_cast<Kernel>(hooks[5])(active,3);
+                            });
+                    },[&](int status,int32_t remaining) noexcept -> bool {
+                        ++writebacks;assert(status==-17 && remaining==128);
+                        return allowWriteback;
                     });
+                return transaction.status;
             };
             const auto run=[&]() noexcept {
                 return tglWithOwnedVeboxFrameHookBindings<AuxiliaryResolve,AuxiliaryScope,
@@ -1357,8 +1369,14 @@ static void testTrackedCpuOwner() {
                         noRead,noPackets,produce,consume);
             };
             assert(run()==-17 && consumed==1);
+            assert(transaction.builderStatus==-17 && transaction.acquired && transaction.writtenBack &&
+                setups==1 && builders==1 && writebacks==1);
+            allowWriteback=false;
+            assert(run()==5 && consumed==2 && transaction.builderStatus==-17 &&
+                transaction.acquired && !transaction.writtenBack &&
+                setups==2 && builders==2 && writebacks==2);
             child.installed[5]^=1;
-            assert(run()==5 && consumed==1);
+            assert(run()==5 && consumed==2 && setups==2 && builders==2 && writebacks==2);
             child.installed[5]^=1;
         }
     }
