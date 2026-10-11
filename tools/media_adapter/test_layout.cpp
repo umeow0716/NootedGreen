@@ -14037,7 +14037,10 @@ int main() {
                 for(bool cscEnabled:{false,true}) for(int consumerResult:{0,31}) {
                     put(source,0,uint32_t(cscEnabled?0:3));
                     int passData=0,passCommand=0;
-                    unsigned passStates=0;
+                    unsigned passStates=0,passAvs=0;
+                    bool avsRequired=false;
+                    TglOwnedVpChromaStatePrefix producedPrefix;
+                    TglOwnedSfcAvsTables passAvsTables;
                     assert(graph.withInitializedFrameCallbackAssemblyPass(initializedEntries,0x1000,0x2000,0x3000,0x4000,
                       0,0x4000,{},&passData,read,
                       [&](void*,const auto& prepared,const auto& geometry,auto& stateOwner) noexcept -> int {
@@ -14049,12 +14052,29 @@ int main() {
                           // Tail/resource/fill inputs remain explicit CPU fixtures.
                           if(!stateOwner.prepare(prefix.packet,{},false,false,false,
                               TglOwnedSfcCompressionMode::Disabled)) return 5;
+                          producedPrefix=prefix;
+                          avsRequired=prepared.regions.scale.scaling || prepared.color.at9b8;
                           ++passStates;return 0;
                       },
-                      [](void*,const auto&,auto&) noexcept -> int {return 0;},
+                      [&](void*,const auto& prepared,auto& avsOwner) noexcept -> int {
+                          assert(passStates==1 && avsRequired);
+                          TglOwnedSfcAvsConfiguration config;
+                          if(!tglReadOwnedVpAvsConfiguration(prepared,producedPrefix,0,read,config)) return 5;
+                          return tglWithOwnedSfcAvsTables(avsOwner,passAvsTables,config.format,
+                              config.scaleX,config.scaleY,config.siting,config.forceFilter,
+                              config.symmetric,config.sharpening,config.window,
+                              [](float value) noexcept {return std::sin(value);},
+                              [&](const auto& tables) noexcept {
+                                  assert(tables.format==config.format && tables.scaleX==config.scaleX &&
+                                      tables.scaleY==config.scaleY);
+                                  ++passAvs;return 0;
+                              });
+                      },
                       [](void*,const auto&) noexcept {},
                       [&](void* leasedChild,void*,void*,const TglOwnedVpEntrySet& passEntries) noexcept {
                       assert(passStates==1);
+                      assert(passAvs==unsigned(avsRequired));
+                      assert(passAvs==1); // This scaling fixture must actually generate/publish coefficients.
                       return graph.withLeasedModeAssemblyEntries(leasedChild,read,lineResources,retire,0x1000,0x2000,0x4000,
                         [&](void* child,const TglOwnedVpEntrySet& modeEntries) noexcept {
                             auto entries=modeEntries;
