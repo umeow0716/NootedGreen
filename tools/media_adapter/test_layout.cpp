@@ -5391,6 +5391,44 @@ static void testNativeResourceBoundary() {
                 assert(tglWithAllocatedOwnedFfdiBatch<4>(owner,&owner,&destination,count,0x19,1,{},{},0,0,
                     [](size_t,const auto&,bool&) noexcept {assert(false);return 0;},
                     [](const auto&,const auto&,size_t,uint8_t,uint8_t) noexcept {assert(false);return 0;})==5);
+            for(size_t failAt=0;failAt<=2;++failAt) for(bool equalPitch:{false,true}) {
+                bool valid=true;size_t allocations=0,publications=0,copies=0;
+                uint32_t previousPitch=0;std::memcpy(&previousPitch,surface->prefix.data()+0xe0,4);
+                const int result=tglWithAllocatedOwnedFfdnPair(owner,&owner,&destination,{true,1},valid,true,
+                    [&](size_t index,const auto& request,bool& changed,uint32_t& pitch) noexcept {
+                        assert(index==allocations++ && request.type==1 && publications==index);
+                        changed=true;pitch=equalPitch?previousPitch:previousPitch^1u;
+                        owner.reset();destination.reset();
+                        assert(owner.ensure(key)==5 && destination.ensure(key)==5);
+                        return index==failAt?77:0;
+                    },[&](const auto& target,const auto& previousView) noexcept {
+                        assert(&target==destinationSurface && &previousView==surface);
+                        assert(publications==copies && allocations==copies+1);++copies;
+                        owner.reset();assert(owner.ensure(key)==5);
+                    },[&](size_t index,const auto& sourceView) noexcept {
+                        assert(index==publications++ && &sourceView==surface);
+                        if(equalPitch) assert(copies==publications);
+                        else assert(!valid && copies==0);
+                    });
+                const size_t completed=failAt<2?failAt:2;
+                assert(result==(failAt<2?77:0) && allocations==(failAt<2?failAt+1:2));
+                assert(publications==completed && copies==(equalPitch?completed:0));
+                assert(valid==(equalPitch || completed==0));
+                assert(owner.withSurface([](const auto&) noexcept {}));
+                assert(destination.withSurface([](const auto&) noexcept {}));
+            }
+            for(bool hasPrevious:{false,true}) {
+                bool valid=true;unsigned allocations=0,publications=0;
+                uint32_t pitchValue=0;std::memcpy(&pitchValue,surface->prefix.data()+0xe0,4);
+                assert(tglWithAllocatedOwnedFfdnPair(owner,hasPrevious?&owner:nullptr,
+                    static_cast<decltype(&owner)>(nullptr),{false,0},valid,true,
+                    [&](size_t,const auto&,bool& changed,uint32_t& pitch) noexcept {
+                        ++allocations;changed=true;pitch=pitchValue;return 0;
+                    },[](const auto&,const auto&) noexcept {assert(false);},
+                    [&](size_t,const auto&) noexcept {++publications;})==(hasPrevious?5:0));
+                assert(allocations==(hasPrevious?1u:2u) && publications==(hasPrevious?0u:2u));
+                assert(valid==hasPrevious); // missing required destination is not invented history invalidation
+            }
             bool caught=false;
             try {
                 owner.withPeerSurface(destination,[](const auto&,const auto&){throw 31;});

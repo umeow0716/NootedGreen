@@ -4917,6 +4917,44 @@ int tglWithAllocatedOwnedFfdiBatch(Owner& input,Owner* execution,Owner* secondar
     });
 }
 
+// Two FFDN allocations (1f7fd1), each followed by history handling and
+// per-slot metadata publication. Earlier successful allocations/publications
+// are not rolled back on a later failure. Copy destination is child1b8,
+// NOT the allocated ba8[index]. All borrowed roles remain synchronous leases.
+template<class Owner,class Allocate,class Copy,class Publish>
+int tglWithAllocatedOwnedFfdnPair(Owner& input,Owner* previous,Owner* copyDestination,
+    TglOwnedFfdnCompressionSelection compression,bool& referenceValid,bool executionFlag13,
+    Allocate allocate,Copy copy,Publish publish) noexcept {
+    static_assert(noexcept(allocate(size_t{},std::declval<const TglOwnedFfdnAllocationRequest&>(),
+        std::declval<bool&>(),std::declval<uint32_t&>())),"FFDN pair allocation ABI");
+    static_assert(noexcept(copy(std::declval<const TglOwnedSurfaceStorage&>(),
+        std::declval<const TglOwnedSurfaceStorage&>())) &&
+        std::is_same_v<decltype(copy(std::declval<const TglOwnedSurfaceStorage&>(),
+        std::declval<const TglOwnedSurfaceStorage&>())),void>,"FFDN pair copy ABI");
+    static_assert(noexcept(publish(size_t{},std::declval<const TglOwnedSurfaceStorage&>())) &&
+        std::is_same_v<decltype(publish(size_t{},std::declval<const TglOwnedSurfaceStorage&>())),void>,
+        "FFDN pair metadata ABI");
+    const std::array<Owner*,3> roles{&input,previous,copyDestination};
+    return tglWithOwnedSurfaceRoles(roles,[&](const auto& views) noexcept {
+        TglOwnedFfdnAllocationRequest request;
+        if(!tglPrepareOwnedFfdnAllocationRequest(*views[0],compression,request)) return 5;
+        uint32_t previousPitch=0;
+        if(views[1]) std::memcpy(&previousPitch,views[1]->prefix.data()+0xe0,4);
+        for(size_t index=0;index<2;++index) {
+            bool changed=false;uint32_t pitch=0;
+            const int result=allocate(index,request,changed,pitch);
+            if(result!=0) return result;
+            const auto decision=tglOwnedFfdnHistoryDecision(changed,referenceValid,executionFlag13,
+                views[1]!=nullptr,pitch,previousPitch);
+            if(decision==TglOwnedFfdnHistoryDecision::CopyPrevious && !views[2]) return 5;
+            tglApplyOwnedFfdnHistory(changed,referenceValid,executionFlag13,views[1]!=nullptr,pitch,
+                previousPitch,[&]() noexcept {copy(*views[2],*views[1]);});
+            publish(index,*views[0]);
+        }
+        return 0;
+    });
+}
+
 // Exact ICL classifier4a500 and its 90-entry relative jump table4a55c.
 // 3 is the native OTHER color pack, not an invalid format admission result.
 inline uint32_t tglOwnedChromaColorPack(uint32_t format) noexcept {
