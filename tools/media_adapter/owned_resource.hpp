@@ -16308,6 +16308,17 @@ public:
             return use(frames,parent);
         });
     }
+    // Request topology must be resolved under the EMPTY retained-frame gate,
+    // not merely a live generation: preparation mutates the original shells.
+    template<class ParentRead,class Admit,class Use>
+    int withContextNewRequest(typename Registry::Ticket ticket,uintptr_t physical,
+        uintptr_t context,ParentRead read,Admit admit,Use use) noexcept {
+        return withNewRequest(ticket,physical,[&](auto& frames) noexcept -> int {
+            TglNativeVeboxParentView parent;
+            if(!parent.resolve(context,read,admit) || parent.physical!=physical) return 5;
+            return use(frames,parent);
+        });
+    }
     int destroy(uintptr_t physical) noexcept {
         if(!physical || !valid()) return 5;
         const auto ticket=registry_.lookup(binding_.image,physical);
