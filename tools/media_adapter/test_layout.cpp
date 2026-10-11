@@ -16017,6 +16017,35 @@ int main() {
                         std::memcpy(&restoredParent,cpu.bytes.data()+0x80,8);
                         std::memcpy(&restoredVptr,child,8);
                         assert(!restoredParent && !restoredVptr);
+                        uintptr_t parentTable=0,originalFactory=0;
+                        std::memcpy(&parentTable,cpu.bytes.data(),8);
+                        std::memcpy(&originalFactory,reinterpret_cast<void*>(parentTable+0x1e0),8);
+                        for(unsigned vtableCase=0;vtableCase<3;++vtableCase) {
+                        assert(owner.withVpFactoryVtableDispatch(graph,child,dispatch,
+                            [&](void* parent) noexcept {
+                                uintptr_t address=0,factoryEntry=0;
+                                std::memcpy(&address,parent,8);
+                                std::memcpy(&factoryEntry,reinterpret_cast<void*>(address+0x1e0),8);
+                                assert(factoryEntry && factoryEntry!=originalFactory);
+                                auto factory=reinterpret_cast<void*(*)(void*) noexcept>(factoryEntry);
+                                void* created=factory(parent);assert(created==child);
+                                uintptr_t link=reinterpret_cast<uintptr_t>(created),vpTable=0,entry=0;
+                                std::memcpy(static_cast<uint8_t*>(parent)+0x80,&link,8);
+                                std::memcpy(&vpTable,created,8);
+                                std::memcpy(&entry,reinterpret_cast<void*>(vpTable+0x60),8);
+                                assert(reinterpret_cast<bool(*)(void*,uint32_t) noexcept>(entry)(created,0x19));
+                                if(vtableCase==1) {
+                                    uintptr_t changed=0;
+                                    std::memcpy(reinterpret_cast<void*>(address+0x1e0),&changed,8);
+                                }
+                                return vtableCase==2 ? -29 : 0;
+                            })==(vtableCase==0?0:vtableCase==1?5:-29));
+                        uintptr_t restoredFactory=0;
+                        std::memcpy(&restoredFactory,reinterpret_cast<void*>(parentTable+0x1e0),8);
+                        std::memcpy(&restoredParent,cpu.bytes.data()+0x80,8);
+                        std::memcpy(&restoredVptr,child,8);
+                        assert(restoredFactory==originalFactory && !restoredParent && !restoredVptr);
+                        }
                         assert(owner.withBorrowedVpFlatDispatch(graph,child,dispatch,
                             [&](void* parent,void* borrowed) noexcept {
                                 uintptr_t linked=0,address=0,entry=0;

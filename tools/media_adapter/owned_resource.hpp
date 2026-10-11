@@ -3703,6 +3703,27 @@ public:
             });
         });
     }
+    // Install only in our writable private table, never native image text/data.
+    // The whole native synchronous call is enclosed by the factory resolver
+    // and VP table leases; restore +1e0 before either resolver can expire.
+    template<class VpOwner,class Table,class Use>
+    int withVpFactoryVtableDispatch(VpOwner& vp,void* child,const Table& table,Use use) noexcept {
+        return withVpFactoryFlatDispatch(vp,child,table,
+            [&](void* parent,auto factory) noexcept {
+                uintptr_t vptr=0;std::memcpy(&vptr,parent,8);
+                if(vptr!=table_.addressPoint()) return 5;
+                auto& slot=table_.entries[0x1e0/8];
+                const uintptr_t previous=slot;
+                const uintptr_t installed=reinterpret_cast<uintptr_t>(factory);
+                slot=installed;
+                static_assert(noexcept(use(parent)),"native VP factory dispatch ABI");
+                const int result=use(parent);
+                uintptr_t observed=0;std::memcpy(&observed,parent,8);
+                const bool intact=observed==vptr && slot==installed;
+                slot=previous;
+                return result ? result : intact ? 0 : 5;
+            });
+    }
     // Parent80 is borrowed only while the graph's admission/resource entries
     // are live. Restore it before either owner can enter native teardown.
     template<class VpOwner,class Read,class Lines,class Retire,class Use>
