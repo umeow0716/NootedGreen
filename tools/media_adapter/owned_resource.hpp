@@ -6073,6 +6073,26 @@ int tglWithOwnedVeboxFeatureFrame(SurfaceOwner& sourceOwner,SurfaceOwner& target
     });
     return leased ? result : 5;
 }
+// Unified synchronous feature transaction. Native170 may consume tracked
+// source90, and160 retains target in report60. Reconcile source90 while both
+// surface owners are still pinned; detach report60 before either owner unlocks.
+// Invoke must include all synchronous report consumers, not an async submit.
+template<class SurfaceOwner,class ChildOwner,class ExecutionOwner,class Parameters,class Invoke>
+int tglWithOwnedVeboxDenoiseFeatureFrame(SurfaceOwner& sourceOwner,SurfaceOwner& targetOwner,
+    ChildOwner& childOwner,ExecutionOwner& executionOwner,Parameters& parameters,Invoke invoke) noexcept {
+    static_assert(noexcept(invoke(nullptr,std::declval<const TglOwnedSurfaceStorage&>(),
+        std::declval<const TglOwnedSurfaceStorage&>())) &&
+        std::is_same_v<decltype(invoke(nullptr,std::declval<const TglOwnedSurfaceStorage&>(),
+        std::declval<const TglOwnedSurfaceStorage&>())),int>,"complete synchronous feature status ABI");
+    return tglWithOwnedVeboxFeatureFrame(sourceOwner,targetOwner,childOwner,executionOwner,
+        [&](void* child,const auto& source,const auto& target) noexcept {
+            int result=5;
+            const bool reconciled=sourceOwner.withNativeDenoiseParameters(source,parameters,
+                [&]() noexcept {result=invoke(child,source,target);});
+            return reconciled?result:5;
+        });
+}
+
 enum class TglVeboxAdmissionPrefixResult : uint8_t {
     MissingDependencies, CompositionFallback, Continue
 };

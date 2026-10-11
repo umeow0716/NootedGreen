@@ -4287,6 +4287,20 @@ static void testNativeResourceBoundary() {
                 uintptr_t retained=1;std::memcpy(&retained,execution.bytes.data()+0x60,8);
                 assert(!retained && owner.surface()==surface && destination.surface()==destinationSurface);
                 assert(parameterBackend.live==1 && !parameterBackend.releases);
+                assert(tglWithOwnedVeboxDenoiseFeatureFrame(owner,destination,childOwner,execution,parameters,
+                    [&](void* actual,const auto& s,const auto& t) noexcept -> int {
+                        assert(actual==child.data() && &s==surface && &t==destinationSurface);
+                        uintptr_t borrowed=0;std::memcpy(&borrowed,s.prefix.data()+0x90,8);
+                        assert(borrowed==parameters.get());
+                        owner.reset();destination.reset();parameters.reset();
+                        assert(parameterBackend.live==1 && fixture.releases==releases);
+                        borrowed=reinterpret_cast<uintptr_t>(&t);
+                        std::memcpy(execution.bytes.data()+0x60,&borrowed,8);
+                        return -7;
+                    })==-7);
+                uintptr_t detached=1;std::memcpy(&detached,surface->prefix.data()+0x90,8);
+                std::memcpy(&retained,execution.bytes.data()+0x60,8);
+                assert(!detached && !retained && parameters.get() && !parameterBackend.releases);
                 parameters.reset();assert(!parameterBackend.live && parameterBackend.releases==1);
                 const auto resource=destinationSurface->resource;
                 auto& invalid=const_cast<TglOwnedSurfaceStorage*>(destinationSurface)->resource;
