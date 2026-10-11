@@ -16872,12 +16872,21 @@ int main() {
                 runAdmissionStages=false;
                 {
                     struct CommandInvoke {
-                        unsigned calls=0;
-                        int parameters(uintptr_t entry,void* object,void* command,const void* p) noexcept {
-                            assert(entry==base+0x1681e0 && object && command && p);++calls;return 31;
+                        unsigned calls=0;int result=31;uintptr_t failureEntry=0;
+                        std::array<uintptr_t,32> sequence{};
+                        int record(uintptr_t entry) noexcept {
+                            sequence.at(calls++)=entry;
+                            return failureEntry && entry==failureEntry?-43:result;
                         }
-                        int state(uintptr_t,void*,void*,const void*,const void*) noexcept {assert(false);return 5;}
-                        int frame(uintptr_t,void*,void*,uint8_t) noexcept {assert(false);return 5;}
+                        int parameters(uintptr_t entry,void* object,void* command,const void* p) noexcept {
+                            assert(object && command && p);return record(entry);
+                        }
+                        int state(uintptr_t entry,void* object,void* command,const void* p,const void* output) noexcept {
+                            assert(object && command && p && output);return record(entry);
+                        }
+                        int frame(uintptr_t entry,void* object,void* command,uint8_t mode) noexcept {
+                            assert(object && command && mode==1);return record(entry);
+                        }
                     } commandInvoke;
                     auto commandBinding=mhw;commandBinding.entries[2]=base+0x1681e0;
                     int command=0;
@@ -16911,6 +16920,35 @@ int main() {
                             commandInvoke,prepared,output,0,0,0,0,deniedRead,deniedPlatform);
                     })==31); // Exact native lock error survives the parent/reservation bridge.
                     assert(commandInvoke.calls==2 && cpu.live && !eventCount);
+                    const std::array<uintptr_t,7> sendOrder{
+                        0x1681e0,0x168390,0x16a580,0x16b390,0x16b190,0x16a8a0,0x16a770};
+                    for(size_t slot=0;slot<7;++slot) {
+                        constexpr std::array<size_t,7> indices{2,3,4,8,7,6,5};
+                        commandBinding.entries[indices[slot]]=base+sendOrder[slot];
+                    }
+                    uintptr_t context=0x40000000,query=base+0x62ee0;
+                    unsigned environmentReads=0,platformCalls=0;
+                    auto environmentRead=[&](uintptr_t address,void* dst,size_t size) noexcept {
+                        ++environmentReads;owner.reset();assert(cpu.live && !eventCount);
+                        if(address==os && size==8) {std::memcpy(dst,&context,8);return true;}
+                        if(address==os+0x1b0 && size==8) {std::memcpy(dst,&query,8);return true;}
+                        return read(address,dst,size);
+                    };
+                    auto platform=[&](auto&) noexcept -> int {++platformCalls;return 0;};
+                    commandInvoke.result=0;
+                    for(unsigned failure=0;failure<3;++failure) {
+                        commandInvoke.calls=0;platformCalls=0;environmentReads=0;
+                        context=failure==1?0:0x40000000;
+                        commandInvoke.failureEntry=failure==2?base+0x168390:0;
+                        assert(owner.withPrivateChild([&](void* parent) noexcept {
+                            return tglSendOwnedVeboxSfcPreparedCommands(owner,parent,commandBinding,&command,
+                                commandInvoke,prepared,output,1,0,1,0,environmentRead,platform);
+                        })==(failure==1?5:failure==2?-43:0));
+                        assert(platformCalls==1 && environmentReads==3);
+                        assert(commandInvoke.calls==(failure==1?1u:failure==2?2u:7u));
+                        for(unsigned i=0;i<commandInvoke.calls;++i)
+                            assert(commandInvoke.sequence[i]==base+sendOrder[i]);
+                    }
                 }
                 {
                     std::array<uint8_t,16> history{};history[0]=1;
