@@ -341,6 +341,23 @@ public:
     }
     bool input(void* surface) noexcept {return format(surface,false);}
     bool output(void* surface) noexcept {return format(surface,true);}
+    bool finalAdmission(uint8_t conditional,void* source,void* target) noexcept {
+        const auto s=reinterpret_cast<uintptr_t>(source),t=reinterpret_cast<uintptr_t>(target);
+        if(!s || !t || s>UINTPTR_MAX-0x48 || t>UINTPTR_MAX-0x134) return false;
+        if(!(conditional&1)) {
+            float top=0,left=0;uint32_t tile=0;
+            if(!read_(s+0x44,&top,4)) return false;
+            if(top==0.0f) {
+                if(!read_(s+0x40,&left,4)) return false;
+                if(left==0.0f) {
+                    if(!read_(t+0xe4,&tile,4)) return false;
+                    if(tile==1) return true;
+                }
+            }
+        }
+        uint32_t value=0;
+        return read_(t+0x130,&value,4) && tglOwnedVpFinalAdmission(true,0,0,0,value);
+    }
     bool dimensions(void* surface,uint32_t* width,uint32_t* height) noexcept {
         if(!width || !height || width==height) return false;
         uintptr_t mhw=0;std::memcpy(&mhw,storage_.bytes.data()+0x20,8);
@@ -369,6 +386,10 @@ template<class Resolve> struct TglOwnedVpAdmissionCallbacks {
     static bool output(void* child,void* surface) noexcept {
         auto* context=Resolve{}(child);
         return context && context->owns(child) && context->output(surface);
+    }
+    static bool finalAdmission(void* child,uint8_t conditional,void* source,void* target) noexcept {
+        auto* context=Resolve{}(child);
+        return context && context->owns(child) && context->finalAdmission(conditional,source,target);
     }
     static void dimensions(void* child,void* surface,uint32_t* width,uint32_t* height) noexcept {
         auto* context=Resolve{}(child);
@@ -6707,6 +6728,7 @@ struct TglOwnedVpAdmissionEntries {
     bool (*input)(void*,void*) noexcept=nullptr;
     bool (*output)(void*,void*) noexcept=nullptr;
     void (*dimensions)(void*,void*,uint32_t*,uint32_t*) noexcept=nullptr;
+    bool (*finalAdmission)(void*,uint8_t,void*,void*) noexcept=nullptr;
 };
 template<class Read,class Use>
 int tglWithOwnedVpAdmissionEntries(TglOwnedVpSfcCallerStorage& vp,Read& read,Use use) noexcept {
@@ -6732,7 +6754,7 @@ int tglWithOwnedVpAdmissionEntries(TglOwnedVpSfcCallerStorage& vp,Read& read,Use
     TglOwnedVpSfcScopedContext<ExtentContext> extentScope(child,extent);
     if(!extentScope.bound()) return 5;
     const TglOwnedVpAdmissionEntries entries{&Extent::admit,&Admission::eligible,&Admission::pair,
-        &Admission::input,&Admission::output,&Admission::dimensions};
+        &Admission::input,&Admission::output,&Admission::dimensions,&Admission::finalAdmission};
     return use(child,entries);
 }
 

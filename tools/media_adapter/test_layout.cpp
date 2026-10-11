@@ -9105,12 +9105,46 @@ int main() {
             settings[0x90]=0;const unsigned beforeReject=reads;
             assert(entries.extent(child,s,t,p)==0 && reads==beforeReject+2);
             settings[0x90]=1;
+            uint32_t savedFormat=0,savedTile=0;float savedLeft=0,savedTop=0;
+            std::memcpy(&savedFormat,target.data()+0x130,4);
+            std::memcpy(&savedTile,target.data()+0xe4,4);
+            std::memcpy(&savedLeft,source.data()+0x40,4);
+            std::memcpy(&savedTop,source.data()+0x44,4);
+            for(uint8_t flag:{0,1,2,3}) for(float left:{0.0f,-0.0f,0.5f,NAN})
+                for(float top:{0.0f,-0.0f,0.5f,NAN}) for(uint32_t tile:{0U,1U})
+                    for(uint32_t format:{19U,53U,52U,13U}) {
+                        std::memcpy(source.data()+0x40,&left,4);
+                        std::memcpy(source.data()+0x44,&top,4);
+                        std::memcpy(target.data()+0xe4,&tile,4);
+                        std::memcpy(target.data()+0x130,&format,4);
+                        reads=0;
+                        assert(entries.finalAdmission(child,flag,s,t)==
+                            tglOwnedVpFinalAdmission((flag&1)!=0,left,top,tile,format));
+                        const unsigned expected=(flag&1)?1:top!=0.0f?2:left!=0.0f?3:tile==1?3:4;
+                        assert(reads==expected);
+                        for(unsigned failed=1;failed<=expected;++failed) {
+                            reads=0;deny=failed;
+                            assert(!entries.finalAdmission(child,flag,s,t) && reads==failed);
+                        }
+                        deny=0;
+                    }
+            reads=0;
+            assert(!entries.finalAdmission(nullptr,0,s,t));
+            assert(!entries.finalAdmission(child,0,nullptr,t));
+            assert(!entries.finalAdmission(child,0,s,reinterpret_cast<void*>(UINTPTR_MAX)));
+            assert(reads==0);
+            std::memcpy(target.data()+0x130,&savedFormat,4);
+            std::memcpy(target.data()+0xe4,&savedTile,4);
+            std::memcpy(source.data()+0x40,&savedLeft,4);
+            std::memcpy(source.data()+0x44,&savedTop,4);
             assert(tglWithOwnedVpAdmissionEntries(vp,read,[](void*,const auto&) noexcept {
                 assert(false);return 0;
             })==5);
             return -17;
         })==-17);
         const auto completedReads=reads;
+        assert(!escaped.finalAdmission(vp.bytes.data(),0,reinterpret_cast<void*>(0x1000),
+            reinterpret_cast<void*>(0x2000)) && reads==completedReads);
         assert(escaped.extent(vp.bytes.data(),reinterpret_cast<void*>(0x1000),
             reinterpret_cast<void*>(0x2000),reinterpret_cast<void*>(0x3000))==0 && reads==completedReads);
         struct PipePolicy {
