@@ -11180,6 +11180,26 @@ public:
                     },avs,ief,emit,use);
             });
     }
+    // Resource-bound graphs are already initialized. Bind their initialization
+    // ABI only during final emission, alongside the prepared pass resolvers;
+    // never retain a construction resolver or reinitialize live backing.
+    template<class Read,class State,class Avs,class Ief,class Emit,class Use>
+    int withInitializedFrameCallbackAssemblyPass(const TglOwnedVpEntrySet& base,
+        uintptr_t source,uintptr_t target,uintptr_t mhw,uintptr_t settings,
+        uintptr_t conditionalSource,uintptr_t parameters,const TglOwnedVpModeState& original,
+        void* renderData,Read read,State state,Avs avs,Ief ief,Emit emit,Use use) noexcept {
+        if(base.initialize) return 5;
+        return withLeasedCallbackAssemblyPass(base,source,target,mhw,settings,
+            conditionalSource,parameters,original,renderData,read,state,avs,ief,
+            [&](void* child,void* data,void* command,const TglOwnedVpEntrySet& entries) noexcept {
+                return withLeasedInitializedAssemblyEntries(child,entries,
+                    [&](void* admitted,const TglOwnedVpEntrySet& initialized) noexcept {
+                        static_assert(std::is_nothrow_invocable_r_v<int,Emit,void*,void*,void*,const TglOwnedVpEntrySet&>,
+                            "Initialized VP frame emission ABI");
+                        return emit(admitted,data,command,initialized);
+                    });
+            },use);
+    }
     template<class Read,class Lines,class Retire,class State,class Avs,class Ief,class Emit,class Invoke>
     int withLeasedResourceCallbackPass(uintptr_t source,uintptr_t target,uintptr_t mhw,
         uintptr_t settings,uintptr_t conditionalSource,uintptr_t parameters,
