@@ -4201,7 +4201,7 @@ template<class NativeBackend=TglNativeResourceBackend> class TglOwnedAllocatedSu
     TglOwnedSurfaceStorage surface_{};
     TglOwnedResource<Capture> resource_;
     TglResourceKey effectiveKey_{};
-    bool ready_=false,busy_=false;
+    bool ready_=false,busy_=false,rectangleBusy_=false;
 public:
     explicit TglOwnedAllocatedSurface(NativeBackend& native) noexcept
         :capture_{native},resource_(capture_,surface_.resource) {}
@@ -4266,6 +4266,26 @@ public:
         if(!ready_ || !busy_ || &expected!=&surface_ ||
            !capture_.backed(surface_.resource)) return false;
         return parameters.withNativeReleaseSlot(surface_.prefix.data()+0x90,use);
+    }
+    // Fast-fill recheck must observe the actual leased target, not a detached
+    // rectangle copy. Only its proven +4c bottom is borrowed; retain every
+    // resource token and restore original bytes before releasing the frame.
+    // This does not bind compression callbacks or publish a TGL fast-fill bit.
+    template<class Use>
+    bool withTemporaryDestinationBottom(const TglOwnedSurfaceStorage& expected,
+        float bottom,Use use) noexcept {
+        static_assert(noexcept(use(expected)),"temporary rectangle callback must not throw");
+        if(!ready_ || !busy_ || rectangleBusy_ || &expected!=&surface_ ||
+           !std::isfinite(bottom) || !capture_.backed(surface_.resource)) return false;
+        std::array<uint8_t,4> original{};
+        std::memcpy(original.data(),surface_.prefix.data()+0x4c,4);
+        rectangleBusy_=true;
+        struct Restore {
+            uint8_t* slot;std::array<uint8_t,4> original;bool& busy;
+            ~Restore(){std::memcpy(slot,original.data(),4);busy=false;}
+        } restore{surface_.prefix.data()+0x4c,original,rectangleBusy_};
+        std::memcpy(surface_.prefix.data()+0x4c,&bottom,4);
+        use(static_cast<const TglOwnedSurfaceStorage&>(surface_));return true;
     }
     bool copyFrameMetadata(const TglOwnedSurfaceStorage& source) noexcept {
         if(!ready_ || busy_) return false;

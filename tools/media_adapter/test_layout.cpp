@@ -4582,6 +4582,32 @@ static void testNativeResourceBoundary() {
             assert(destination.copyFrameMetadataFrom(destination));
             const auto* destinationSurface=destination.surface();
             {
+                const auto before=destinationSurface->prefix;
+                unsigned calls=0;
+                auto observe=[&](const TglOwnedSurfaceStorage& view) noexcept {
+                    ++calls;assert(&view==destinationSurface && !destination.surface());
+                    float bottom=0;std::memcpy(&bottom,view.prefix.data()+0x4c,4);
+                    assert(bottom==1081);
+                    for(size_t i=0;i<before.size();++i)
+                        if(i<0x4c || i>=0x50) assert(view.prefix[i]==before[i]);
+                    assert(!destination.withTemporaryDestinationBottom(view,1080,
+                        [](const auto&) noexcept {assert(false);}));
+                    destination.reset(); // active frame keeps backing alive
+                    assert(!destination.surface());
+                };
+                assert(!destination.withTemporaryDestinationBottom(*destinationSurface,1081,observe));
+                assert(destination.withSurface([&](const auto& target) noexcept {
+                    assert(!destination.withTemporaryDestinationBottom(*surface,1081,observe));
+                    assert(!destination.withTemporaryDestinationBottom(target,
+                        std::numeric_limits<float>::infinity(),observe));
+                    assert(destination.withTemporaryDestinationBottom(target,1081,observe));
+                    assert(target.prefix==before);
+                    assert(destination.withTemporaryDestinationBottom(target,1081,observe));
+                    assert(target.prefix==before);
+                }));
+                assert(calls==2 && destination.surface()==destinationSurface && destinationSurface->prefix==before);
+            }
+            {
                 TestFeatureExecutionOwner execution;
                 std::array<uint8_t,0x1bc0> child{};
                 TestVeboxChildLease childOwner{child.data()};
