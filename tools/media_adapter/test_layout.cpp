@@ -5742,17 +5742,32 @@ static void testNativeResourceBoundary() {
                 assert(input.ensure(request)==0);
                 std::array<Surface*,2> targets{&first,&second};
                 bool valid=true;uint8_t flag=0xa5,mode=0x5a;
-                unsigned copies=0;
+                unsigned copies=0,consumers=0;int consumerStatus=0;
                 auto copy=[&](const auto&,const auto&) noexcept {++copies;};
                 auto prepare=[&]() noexcept {
                     return tglPrepareOwnedBackedFfdnPair(targets,input,&input,&input,
-                        {false,0},valid,true,flag,mode,copy);
+                        {false,0},valid,true,flag,mode,copy,
+                        [&](const auto& inputs,const auto& a,const auto& b) noexcept -> int {
+                            ++consumers;
+                            assert(inputs[0]==inputs[1] && inputs[0]==inputs[2]);
+                            assert(input.hasSurfaceLease(*inputs[0]) && first.hasSurfaceLease(a) && second.hasSurfaceLease(b));
+                            const auto released=backend.releases;
+                            input.reset();first.reset();second.reset();
+                            assert(backend.releases==released);
+                            assert(input.ensure(request)==5 && first.ensure(request)==5 && second.ensure(request)==5);
+                            if(consumers==1) assert(flag==0 && mode==0); // flags updated before consumer
+                            return consumerStatus;
+                        });
                 };
                 assert(prepare()==0 && copies==2 && backend.allocations==3 && valid);
                 assert(flag==0 && mode==0 && first.surface() && second.surface());
                 flag=0xa5;mode=0x5a;
                 assert(prepare()==0 && copies==2 && backend.allocations==3);
                 assert(flag==0xa5 && mode==0x5a); // unchanged targets retain flags
+                consumerStatus=31;
+                assert(prepare()==31 && consumers==3 && backend.allocations==3);
+                assert(input.surface() && first.surface() && second.surface());
+                consumerStatus=0;
                 first.reset();
                 assert(second.withSurface([&](const auto&) noexcept {
                     assert(prepare()==5 && copies==3 && flag==0 && mode==0);
@@ -5762,7 +5777,7 @@ static void testNativeResourceBoundary() {
                 targets={&first,&first};assert(prepare()==5);
                 targets={&input,&second};assert(prepare()==5);
                 targets={nullptr,&second};assert(prepare()==5);
-                assert(backend.allocations==allocated);
+                assert(backend.allocations==allocated && consumers==3);
                 first.reset();second.reset();input.reset();
                 assert(backend.releases==backend.allocations);
             }

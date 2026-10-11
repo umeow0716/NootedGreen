@@ -5169,10 +5169,14 @@ int tglWithOwnedDescriptorFfdiBatch(std::array<TglOwnedDescriptorOnlySurface,Cou
 // per-slot metadata publication. Earlier successful allocations/publications
 // are not rolled back on a later failure. Copy destination is child1b8,
 // NOT the allocated ba8[index]. All borrowed roles remain synchronous leases.
-template<class Owner,class Allocate,class Copy,class Publish>
+struct TglOwnedFfdnNoFinish {
+    template<class... Views> int operator()(const Views&...) const noexcept {return 0;}
+};
+template<class Owner,class Allocate,class Copy,class Publish,class Finish=TglOwnedFfdnNoFinish>
 int tglWithAllocatedOwnedFfdnPair(Owner& input,Owner* previous,Owner* copyDestination,
     TglOwnedFfdnCompressionSelection compression,bool& referenceValid,bool executionFlag13,
-    uint8_t& execution15,uint8_t& execution16,Allocate allocate,Copy copy,Publish publish) noexcept {
+    uint8_t& execution15,uint8_t& execution16,Allocate allocate,Copy copy,Publish publish,
+    Finish finish={}) noexcept {
     static_assert(noexcept(allocate(size_t{},std::declval<const TglOwnedFfdnAllocationRequest&>(),
         std::declval<bool&>(),std::declval<uint32_t&>())),"FFDN pair allocation ABI");
     static_assert(noexcept(copy(std::declval<const TglOwnedSurfaceStorage&>(),
@@ -5214,7 +5218,9 @@ int tglWithAllocatedOwnedFfdnPair(Owner& input,Owner* previous,Owner* copyDestin
                 execution16=static_cast<uint8_t>(compression.mode);
             }
         }
-        return 0;
+        static_assert(noexcept(finish(views)) && std::is_same_v<decltype(finish(views)),int>,
+            "FFDN pair final consumer ABI");
+        return finish(views);
     });
 }
 
@@ -5240,11 +5246,11 @@ int tglPrepareOwnedDescriptorFfdnPair(std::array<TglOwnedDescriptorOnlySurface,2
 // Real type1/format3d target owners. Keep target roles distinct from every
 // source/history role; source roles are already leased by the pair producer.
 // No rollback of an earlier successful target on later allocation failure.
-template<class TargetOwner,class Owner,class Copy>
+template<class TargetOwner,class Owner,class Copy,class Finish=TglOwnedFfdnNoFinish>
 int tglPrepareOwnedBackedFfdnPair(const std::array<TargetOwner*,2>& targets,
     Owner& input,Owner* previous,Owner* copyDestination,
     TglOwnedFfdnCompressionSelection compression,bool& referenceValid,bool executionFlag13,
-    uint8_t& execution15,uint8_t& execution16,Copy copy) noexcept {
+    uint8_t& execution15,uint8_t& execution16,Copy copy,Finish finish={}) noexcept {
     if(!targets[0] || !targets[1] || targets[0]==targets[1]) return 5;
     for(auto* target:targets)
         for(auto* role:std::array<Owner*,3>{&input,previous,copyDestination})
@@ -5255,6 +5261,17 @@ int tglPrepareOwnedBackedFfdnPair(const std::array<TargetOwner*,2>& targets,
             return targets[index]->ensureFfdnBacking(request,changed,pitch);
         },copy,[&](size_t index,const auto& source,const auto&) noexcept -> int {
             return targets[index]->publishFfdnFrameFrom(input,source)?0:5;
+        },[&](const auto& inputs) noexcept -> int {
+            int result=5;
+            const bool first=targets[0]->withSurface([&](const auto& a) noexcept {
+                const bool second=targets[1]->withSurface([&](const auto& b) noexcept {
+                    static_assert(noexcept(finish(inputs,a,b)) &&
+                        std::is_same_v<decltype(finish(inputs,a,b)),int>,"backed FFDN frame consumer ABI");
+                    result=finish(inputs,a,b);
+                });
+                if(!second) result=5;
+            });
+            return first?result:5;
         });
 }
 
