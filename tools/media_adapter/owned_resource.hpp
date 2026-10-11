@@ -13903,6 +13903,48 @@ public:
     auto& resources() noexcept {return resources_;}
 };
 
+// Stable-address line backing plus its actual VP storage pin. The enclosing
+// retained frame owns the graph BEFORE this member and keeps the native image,
+// OS/context and this entire object alive until qualified retirement. This
+// owner cannot turn a borrowed graph or native binding into a physical retain.
+template<class Graph> class TglNativeVpLineResourceOwner {
+    typename Graph::ResourceOwnerLease lease_;
+    alignas(TglNativeVpLineResourceStorage)
+        std::array<uint8_t,sizeof(TglNativeVpLineResourceStorage)> bytes_{};
+    TglNativeVpLineResourceStorage* lines_=nullptr;
+    TglOwnedSurfaceStorage* avs_=nullptr;
+    TglOwnedSurfaceStorage* ief_=nullptr;
+    bool busy_=false;
+public:
+    TglNativeVpLineResourceOwner(Graph& graph,const TglNativeResourceBinding& binding,
+        uint64_t pageSize) noexcept:lease_(graph) {
+        auto* vp=lease_.storage();
+        if(!vp || !binding.context || !binding.allocate || !binding.release ||
+           !pageSize || (pageSize&(pageSize-1))) return;
+        avs_=::new(static_cast<void*>(vp->bytes.data()+0x3c8)) TglOwnedSurfaceStorage{};
+        ief_=::new(static_cast<void*>(vp->bytes.data()+0x670)) TglOwnedSurfaceStorage{};
+        lines_=::new(static_cast<void*>(bytes_.data()))
+            TglNativeVpLineResourceStorage(binding,pageSize,*avs_,*ief_);
+    }
+    TglNativeVpLineResourceOwner(const TglNativeVpLineResourceOwner&)=delete;
+    TglNativeVpLineResourceOwner& operator=(const TglNativeVpLineResourceOwner&)=delete;
+    ~TglNativeVpLineResourceOwner() {
+        // Resource release precedes typed shell destruction, then lease ends.
+        if(lines_) lines_->~TglNativeVpLineResourceStorage();
+        if(ief_) ief_->~TglOwnedSurfaceStorage();
+        if(avs_) avs_->~TglOwnedSurfaceStorage();
+    }
+    bool bound() const noexcept {return lines_!=nullptr;}
+    template<class Use> int withResources(Use use) noexcept {
+        static_assert(noexcept(use(std::declval<TglOwnedVpSfcCallerStorage&>(),
+            std::declval<TglNativeVpLineResourceStorage&>())),"native VP resource owner ABI");
+        if(!lines_ || busy_) return 5;
+        busy_=true;
+        const int result=use(*lease_.storage(),*lines_);
+        busy_=false;return result;
+    }
+};
+
 // Exact slot58=1df210 is status(this). State+30/+4c are read only from
 // the actual leased owner already published at VP+938, not arbitrary args.
 template<class Lines,class State> class TglOwnedVpLineAllocationContext {

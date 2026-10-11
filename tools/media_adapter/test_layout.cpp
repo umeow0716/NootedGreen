@@ -9083,6 +9083,37 @@ static void testSfcLineBufferOwnership() {
                 TglOwnedVpSfcCpuGraph<Cpu,Cpu> retainedGraph(retainedState,retainedAvs,&frameRetention);
                 assert(retainedGraph.initialize(0x1000,0x2000,0x3000,binding,noRead,1,0));
                 const auto generation=retainedGraph.generation();
+                struct NativeBacking {
+                    unsigned live=0,released=0;
+                    static int allocate(void* context,const void*,void* resource) noexcept {
+                        auto& self=*static_cast<NativeBacking*>(context);++self.live;
+                        const uintptr_t token=1;
+                        std::memcpy(static_cast<uint8_t*>(resource)+0x20,&token,8);return 0;
+                    }
+                    static void release(void* context,void* resource) noexcept {
+                        auto& self=*static_cast<NativeBacking*>(context);
+                        assert(self.live);--self.live;++self.released;
+                        std::memset(resource,0,0x148);
+                    }
+                } nativeBacking;
+                TglNativeResourceBinding nativeBinding;
+                nativeBinding.context=reinterpret_cast<uintptr_t>(&nativeBacking);
+                nativeBinding.allocate=reinterpret_cast<uintptr_t>(&NativeBacking::allocate);
+                nativeBinding.release=reinterpret_cast<uintptr_t>(&NativeBacking::release);
+                {
+                    TglNativeVpLineResourceOwner<decltype(retainedGraph)> resources(retainedGraph,nativeBinding,4096);
+                    assert(resources.bound());
+                    TglNativeVpLineResourceOwner<decltype(retainedGraph)> duplicate(retainedGraph,nativeBinding,4096);
+                    assert(!duplicate.bound() && !retainedGraph.tryReset());
+                    assert(resources.withResources([&](auto& vp,auto& lines) noexcept {
+                        assert(retainedGraph.ownsStorage(vp.bytes.data()) && lines.resources().boundToVp(vp));
+                        assert(lines.resources().ensure(1080,4096)==0 && nativeBacking.live==3);
+                        assert(resources.withResources([](auto&,auto&) noexcept {assert(false);return 0;})==5);
+                        return -17;
+                    })==-17);
+                    assert(nativeBacking.live==3 && !nativeBacking.released);
+                }
+                assert(!nativeBacking.live && nativeBacking.released==3);
                 {
                     using Lease=decltype(retainedGraph)::ResourceOwnerLease;
                     Lease frameLease(retainedGraph);
