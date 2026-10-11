@@ -67,6 +67,20 @@ struct TestFrontendMutableScope {
         busy=true;const int r=use(shell);busy=false;return r;
     }
 };
+struct TestFrontendOriginalOwner {
+    TglOwnedSurfaceStorage& shell;bool borrowed=false;
+    bool hasSurfaceLease(const TglOwnedSurfaceStorage& s) noexcept {return borrowed && &s==&shell;}
+    class SurfaceOwnerLease {
+        TestFrontendOriginalOwner* owner_=nullptr;
+    public:
+        explicit SurfaceOwnerLease(TestFrontendOriginalOwner& owner) noexcept {
+            if(!owner.borrowed) {owner.borrowed=true;owner_=&owner;}
+        }
+        ~SurfaceOwnerLease() {if(owner_) owner_->borrowed=false;}
+        const TglOwnedSurfaceStorage* storage() const noexcept {return owner_?&owner_->shell:nullptr;}
+        TglOwnedSurfaceStorage* metadataStorage() noexcept {return owner_?&owner_->shell:nullptr;}
+    };
+};
 struct TestFeatureSurfaceOwner {
     TglOwnedSurfaceStorage storage{};bool busy=false,deny=false;
     template<class Use> bool withSurface(Use use) noexcept {
@@ -7189,6 +7203,49 @@ static void testNativeResourceBoundary() {
                                                     assert(!sourceScope.busy && !targetScope.busy);
                                                     assert(frontendCommandFrame.withFrontendCommandFrame(roles,5,0,sourceScope,targetScope,
                                                         1,2,3,4,consume).status==5 && uses==1);
+                                                }
+                                                {
+                                                    TglOwnedSurfaceStorage source,target;
+                                                    for(auto* shell:{&source,&target}) {
+                                                        const uint32_t type=1,count=1;const uintptr_t plane=1,surface=5;
+                                                        std::memcpy(shell->resource.data()+0x14,&type,4);
+                                                        std::memcpy(shell->resource.data()+0x60,&count,4);
+                                                        std::memcpy(shell->resource.data()+0x68,&plane,8);
+                                                        std::memcpy(shell->resource.data()+0x58,&surface,8);
+                                                    }
+                                                    TestFrontendOriginalOwner sourceOwner{source},targetOwner{target};
+                                                    std::array<unsigned,6> refs{};
+                                                    struct Cf {
+                                                        std::array<unsigned,6>& refs;
+                                                        uintptr_t type(uintptr_t h) noexcept {return h==5?12:11;}
+                                                        bool retain(uintptr_t h) noexcept {assert(h==1 || h==5);++refs[h];return true;}
+                                                        void release(uintptr_t h) noexcept {assert(refs[h]);--refs[h];}
+                                                    };
+                                                    using FrontendFrame=TglNativeVeboxFrontendFrameStorage<FrameStmmApi,
+                                                        TestFrontendOriginalOwner,TestFrontendOriginalOwner,Cf>;
+                                                    TglOwnedVeboxRetainedFrames<FrontendFrame,1> pool;
+                                                    const auto ticket=pool.create(nativeBinding,uint64_t{4096},nativeFill,
+                                                        sourceOwner,targetOwner,Cf{refs},uintptr_t{11},uintptr_t{12});
+                                                    TglNativeOuterSurfaceRoles roles;roles.sourceCount=1;roles.targetCount=1;
+                                                    roles.sources[0]=reinterpret_cast<uintptr_t>(&source);
+                                                    roles.targets[0]=reinterpret_cast<uintptr_t>(&target);
+                                                    const auto r=pool.run(ticket,[&](auto& frame) noexcept {
+                                                        assert(frame.ready() && sourceOwner.borrowed && targetOwner.borrowed);
+                                                        assert(refs[1]==2 && refs[5]==2);
+                                                        return frame.withCommandFrame(roles,0,0,1,2,3,4,
+                                                            [&](auto&,auto&,auto& leases) noexcept {
+                                                                assert(&leases.source==&source && leases.target==&target);
+                                                                return TglOwnedVeboxCommandTransactionResult{31,31,true,false};
+                                                            });
+                                                    });
+                                                    assert(r.acquired && sourceOwner.borrowed && targetOwner.borrowed);
+                                                    assert(pool.retire(ticket,[](const auto&,bool,const auto&) noexcept {return 31;})==31);
+                                                    assert(refs[1]==2 && refs[5]==2);
+                                                    // CPU retirement fixture only; NOT a native fence certificate.
+                                                    assert(pool.retire(ticket,[](const auto&,bool pending,const auto&) noexcept {
+                                                        assert(pending);return 0;
+                                                    })==0);
+                                                    assert(!sourceOwner.borrowed && !targetOwner.borrowed && !refs[1] && !refs[5]);
                                                 }
                                                 auto& nativeFrame=commandFrame.backing();
                                                 auto packetStorage=commandFrame.packetLeases(

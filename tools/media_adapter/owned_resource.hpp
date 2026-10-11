@@ -15852,6 +15852,39 @@ public:
     }
 };
 
+// Original frontend pins and packet/backing storage share one retained-frame
+// lifetime. Original owners, physical/context and image leases must enclose
+// this object; CF pins do not retain shell memory or the native physical.
+template<class Api,class SourceOwner,class TargetOwner,class CfApi>
+class TglNativeVeboxFrontendFrameStorage {
+    TglNativeVeboxCommandFrameStorage<Api> command_;
+    TglOwnedType1BorrowedSurfaceLease<SourceOwner,CfApi> source_;
+    TglOwnedType1BorrowedSurfaceLease<TargetOwner,CfApi> target_;
+public:
+    template<class... Args>
+    TglNativeVeboxFrontendFrameStorage(const TglNativeResourceBinding& binding,
+        uint64_t pageSize,const TglNativeBufferFillBinding& fill,
+        SourceOwner& source,TargetOwner& target,CfApi cf,uintptr_t resourceType,
+        uintptr_t surfaceType,Args&&... args) noexcept
+        :command_(binding,pageSize,fill,std::forward<Args>(args)...),
+         source_(source,cf,resourceType,surfaceType),target_(target,cf,resourceType,surfaceType) {
+        static_assert(std::is_nothrow_constructible_v<Api,Args...>);
+    }
+    TglNativeVeboxFrontendFrameStorage(const TglNativeVeboxFrontendFrameStorage&)=delete;
+    TglNativeVeboxFrontendFrameStorage& operator=(const TglNativeVeboxFrontendFrameStorage&)=delete;
+    bool ready() const noexcept {return source_.storage() && target_.storage();}
+    auto& command() noexcept {return command_;}
+    template<class Consume>
+    TglOwnedVeboxCommandTransactionResult withCommandFrame(
+        const TglNativeOuterSurfaceRoles& roles,size_t sourceIndex,size_t targetIndex,
+        uintptr_t child,uintptr_t execution,uintptr_t renderHal,uintptr_t sku,
+        Consume consume) noexcept {
+        if(!ready()) return {};
+        return command_.withFrontendCommandFrame(roles,sourceIndex,targetIndex,
+            source_,target_,child,execution,renderHal,sku,consume);
+    }
+};
+
 // CPU backing for one retained native frame. Command storage owns the shared
 // monotonic retention latch; VP resources are destroyed before that storage.
 // This is not the complete renderer: enclosing ownership still retains native
