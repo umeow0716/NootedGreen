@@ -17515,13 +17515,19 @@ int tglWithOwnedVpPairedAcquiredFrameCore(Graph& firstGraph,TglOwnedVpSfcCallerS
                             };
                             return tglWithOwnedVpPairedPreparedFrameCore(firstGraph,first,firstLines,
                                 secondGraph,second,secondLines,prepared,read,retire,release,acquiredState,avs,ief,emit,
-                                [&](void* x,const auto& xe,void* y,const auto& ye) noexcept -> int {
+                                [&](void* x,const auto& xe,void* y,const auto& ye,auto& setupA,auto& setupB) noexcept -> int {
                                     auto firstEntries=xe,secondEntries=ye;
                                     if(!firstEntries.appendDisjoint(ea) || !secondEntries.appendDisjoint(eb)) return 5;
                                     // Setup-to-send resource scopes need the original acquired
                                     // dimensions BEFORE entering setup. Borrow these snapshots;
                                     // never reacquire descriptors or adjust field geometry twice.
-                                    if constexpr(std::is_invocable_r_v<int,Use,void*,decltype(firstEntries)&,
+                                    if constexpr(std::is_nothrow_invocable_r_v<int,Use,void*,decltype(firstEntries)&,
+                                        void*,decltype(secondEntries)&,decltype(prepared)&,decltype(ga),decltype(gb),
+                                        decltype(setupA),decltype(setupB)>) {
+                                        // Readers bound here must outlive the complete prepared
+                                        // scope, including its post-consumer completion checks.
+                                        return use(x,firstEntries,y,secondEntries,prepared,ga,gb,setupA,setupB);
+                                    } else if constexpr(std::is_invocable_r_v<int,Use,void*,decltype(firstEntries)&,
                                         void*,decltype(secondEntries)&,decltype(prepared)&,decltype(ga),decltype(gb)>) {
                                         static_assert(noexcept(use(x,firstEntries,y,secondEntries,prepared,ga,gb)));
                                         return use(x,firstEntries,y,secondEntries,prepared,ga,gb);

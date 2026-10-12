@@ -21548,7 +21548,10 @@ int main() {
                                                             });
                                                     },
                                                     [&](void* a,const auto& baseA,void* b,const auto& baseB,
-                                                        const auto& acquired,const auto& geometryA,const auto& geometryB) noexcept -> int {
+                                                        const auto& acquired,const auto& geometryA,const auto& geometryB,
+                                                        auto& setupA,auto& setupB) noexcept -> int {
+                                                        assert(setupA.owns(a) && setupB.owns(b) &&
+                                                            setupA.data==acquired[0].renderData && setupB.data==acquired[1].renderData);
                                                         assert(!states && acquired[0].source==args[0].source &&
                                                             acquired[1].target==args[1].target);
                                                         acquiredGeometry={&geometryA,&geometryB};
