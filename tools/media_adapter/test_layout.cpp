@@ -19504,7 +19504,21 @@ int main() {
                                 return owner.context()==view.parent && view.os==os && view.hardware.interface==0x6000;
                             }));
                         assert(!preparedParent.get() && preparedMhw.binding() && removeParent()==5);
+                        bool allowPageImport=true,allowFill=true;
                             auto resourceRead=[&](uintptr_t address,void* out,size_t bytes) noexcept {
+                                if(bytes==8 && (address==base+0x754130 || address==0xdead000 ||
+                                    address==os+0x220 || address==os+0x228 || address==os+0x240)) {
+                                    if((address==base+0x754130 || address==0xdead000) && !allowPageImport) return false;
+                                    const uintptr_t value=address==base+0x754130?0xdead000:address==0xdead000?4096:
+                                        base+(address==os+0x220?0x63da0:address==os+0x228?0x63f40:0x41440);
+                                    std::memcpy(out,&value,8);return true;
+                                }
+                                if(address==base+0x41440 && bytes==22) {
+                                    if(!allowFill) return false;
+                                    const std::array<uint8_t,22> anchor{0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x40,
+                                        0x48,0x89,0x7d,0xf0,0x48,0x89,0x75,0xe8,0x89,0x55,0xe4,0x88,0x4d,0xe3};
+                                    std::memcpy(out,anchor.data(),bytes);return true;
+                                }
                                 if(bytes==8 && (address==os+0x1f8 || address==os+0x200 || address==0x3000)) {
                                     const uintptr_t value=address==0x3000?os:
                                         base+(address==os+0x1f8?0x63720:0x63c00);
@@ -19519,16 +19533,25 @@ int main() {
                                 }
                                 return borrowedRead(address,out,bytes);
                             };
-                        TglNativeResourceBinding preparedResources;
-                        assert(preparedResources.resolveFromBorrowedVphal(preparedMhw,resourceRead,qualifyMhw,executableMhw));
+                        TglNativeVphalResourceEnvironment environment;
+                        assert(environment.resolve(preparedMhw,resourceRead,qualifyMhw,executableMhw));
+                        allowPageImport=false;
+                        assert(!environment.resolve(preparedMhw,resourceRead,qualifyMhw,executableMhw) &&
+                            !environment.resources.context && !environment.fill.entry && !environment.pageSize);
+                        allowPageImport=true;allowFill=false;
+                        assert(!environment.resolve(preparedMhw,resourceRead,qualifyMhw,executableMhw) &&
+                            !environment.resources.context && !environment.fill.entry && !environment.pageSize);
+                        allowFill=true;
+                        assert(environment.resolve(preparedMhw,resourceRead,qualifyMhw,executableMhw));
+                        assert(environment.resources.context==os && environment.fill.context==os && environment.pageSize==4096);
                         const auto ticket=frames.create(reinterpret_cast<uintptr_t>(&source),
                             [&](uintptr_t address) noexcept -> TestFrontendOriginalOwner* {
                                 if(address==reinterpret_cast<uintptr_t>(&source)) return &so;
                                 return address==hp?&ho:nullptr;
                             },to,Cf{refs},uintptr_t{11},uintptr_t{12},frameDn,base,allocatorRead,
                             [](uintptr_t image) noexcept {return image==base;},
-                            [](uintptr_t,size_t) noexcept {return true;},preparedResources,
-                            uint64_t{4096},TglNativeBufferFillBinding{},NativeCpu{vpCpu,&vpAvsCpu},
+                            [](uintptr_t,size_t) noexcept {return true;},environment.resources,
+                            environment.pageSize,environment.fill,NativeCpu{vpCpu,&vpAvsCpu},
                             std::array<decltype(frontendCleanup),2>{frontendCleanup,frontendCleanup},
                             std::array<NativeCpu,2>{NativeCpu{pairCpu[0]},NativeCpu{pairCpu[1]}},
                             std::array<TrackedSfc,2>{TrackedSfc{pairInvoke,pairEvents,pairEventCount},TrackedSfc{pairInvoke,pairEvents,pairEventCount}},

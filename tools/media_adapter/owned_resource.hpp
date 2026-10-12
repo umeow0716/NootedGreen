@@ -6098,6 +6098,25 @@ bool tglReadNativeResourcePageSize(uint64_t& output,uintptr_t image,
        (candidate&(candidate-1))) return false;
     output=candidate;return true;
 }
+// One pre-construction snapshot under the retained VPHAL generation lease.
+// Publish NONE of the inputs unless callbacks, native page-size import and
+// fill/lock/unlock identities all resolve against that SAME OS/image.
+struct TglNativeVphalResourceEnvironment {
+    TglNativeResourceBinding resources{};
+    TglNativeBufferFillBinding fill{};
+    uint64_t pageSize=0;
+    template<class ParentLease,class Read,class Qualify,class Executable>
+    bool resolve(const TglNativeBorrowedVphalMhwLease<ParentLease>& lease,
+        Read read,Qualify qualify,Executable executable) {
+        *this={};const auto* view=lease.view();
+        TglNativeVphalResourceEnvironment candidate;
+        if(!view || !candidate.resources.resolveFromBorrowedVphal(lease,read,qualify,executable) ||
+           !tglReadNativeResourcePageSize(candidate.pageSize,view->renderer.image,read,qualify) ||
+           !candidate.fill.resolve(candidate.resources.context,view->renderer.image,read,qualify,executable)) return false;
+        *this=candidate;return true;
+    }
+};
+
 // Injection boundary only: no symbol lookup or unproved OS-object construction.
 // Caller must validate native image, entrypoints and context lifetime separately.
 class TglNativeResourceBackend {
