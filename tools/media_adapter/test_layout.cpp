@@ -8825,7 +8825,7 @@ static void testNativeResourceBoundary() {
                                             ownedFrame.auxiliary().retention().observe(
                                                 TglOwnedVeboxCommandTransactionResult{31,31,true,false});
                                             auto deniedStage=[](auto&&...) noexcept -> int {assert(false);return 5;};
-                                            for(const int commandStatus:{0,31}) {
+                                            for(const int commandStatus:{0,31,-89}) {
                                                 FrameStatisticsFixture nativeFixture;
                                                 TglNativeResourceBinding nativeBinding{
                                                     reinterpret_cast<uintptr_t>(&nativeFixture),
@@ -9005,7 +9005,33 @@ static void testNativeResourceBoundary() {
                                                 std::memcpy(child.data()+0xba8,&prior,8);
                                                 std::memcpy(child.data()+0x1b8,&history,8);
                                                 unsigned finalUses=0,unwinds=0;
-                                                const auto result=tglRunNativeVeboxCommandFrame(nativeFrame,linkedInput,
+                                                const auto result=[&]() noexcept -> TglOwnedVeboxCommandTransactionResult {
+                                                    if(commandStatus==-89) {
+                                                        auto prepare=[&](void* active) noexcept -> int {
+                                                            assert(active==actualChild);
+                                                            return tglRunNativeVeboxAllocationFrame(nativeFrame,linkedInput,
+                                                                static_cast<decltype(&linkedInput)>(nullptr),
+                                                                static_cast<decltype(&linkedInput)>(nullptr),&previous,
+                                                                childOwner,reportOwner,active,report,current,read,
+                                                                noSfc,noSfc,noParameter,[](uint32_t) noexcept {return true;},
+                                                                deniedStage,false,false,
+                                                                [](uintptr_t address,uint32_t bytes) noexcept {return address==0x4000 && bytes>0;},
+                                                                [&](auto&&...) noexcept -> int {++finalUses;return 0;},
+                                                                [&](void*,uintptr_t,const auto&) noexcept {++unwinds;});
+                                                        };
+                                                        using Prepare=TglOwnedVeboxAllocationContext<
+                                                            std::decay_t<decltype(childOwner)>,decltype(prepare)>;
+                                                        Prepare context(childOwner,prepare,actualChild);
+                                                        using Scope=TglOwnedVeboxScopedContext<Prepare>;
+                                                        Scope scope(actualChild,context);assert(scope.bound());
+                                                        const auto hooks=tglBindOwnedVeboxAllocationHook<Scope>(std::array<uintptr_t,20>{});
+                                                        const int status=reinterpret_cast<int(*)(void*)>(hooks[3])(actualChild);
+                                                        assert(status==0 && !nativeFrame.auxiliary().retention()());
+                                                        assert(nativeFrame.withPreparedSelection(linkedInput,current,
+                                                            [](size_t count,auto,bool,bool) noexcept -> int {assert(count==2);return 0;})==0);
+                                                        return {status,status,false,false}; // allocation only; no submission
+                                                    }
+                                                    return tglRunNativeVeboxCommandFrame(nativeFrame,linkedInput,
                                                     static_cast<decltype(&linkedInput)>(nullptr),
                                                     static_cast<decltype(&linkedInput)>(nullptr),&previous,
                                                     childOwner,reportOwner,actualChild,report,current,read,
@@ -9022,9 +9048,12 @@ static void testNativeResourceBoundary() {
                                                         // Ownership-result fixture only: no real command/GPU.
                                                         return {commandStatus,commandStatus,true,commandStatus==0};
                                                     },[&](void*,uintptr_t,const auto&) noexcept {++unwinds;});
+                                                }();
                                                 std::memcpy(child.data()+0xba8,&savedBindings[0],8);
                                                 std::memcpy(child.data()+0x1b8,&savedBindings[1],8);
-                                                assert(result.status==commandStatus && result.acquired &&
+                                                if(commandStatus==-89) assert(result.status==0 && !result.acquired &&
+                                                    !result.writtenBack && !nativeFrame.auxiliary().retention()());
+                                                else assert(result.status==commandStatus && result.acquired &&
                                                     result.writtenBack==(commandStatus==0) && nativeFrame.auxiliary().retention()());
                                                 assert(finalUses==1 && !unwinds && nativeFixture.fills==1);
                                                 assert(!nativeFixture.releases);
