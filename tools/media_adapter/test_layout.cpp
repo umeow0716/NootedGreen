@@ -7971,16 +7971,19 @@ static void testNativeResourceBoundary() {
                                         })==-53);
                                     assert(!historyShell.withDescriptor([](const auto&) noexcept {assert(false);}));
                                     TglOwnedFfdnHistorySnapshot historySnapshot;
+                                    TglOwnedFfdnHistoryRecorder historyRecorder{&historySnapshot};
                                     TglOwnedSurfaceStorage snapshotSource;
                                     TglOwnedAllocatedSurface snapshotOwner(backingBackend,snapshotSource);
                                     assert(snapshotOwner.ensure({8,3,0x3d,1,0,false})==0);
                                     assert(snapshotOwner.withSurface([&](const auto& pinned) noexcept {
-                                        assert(historySnapshot.capture(snapshotOwner,pinned));
+                                        assert(historyRecorder(0,TglOwnedFfdnHistoryDecision::CopyPrevious,
+                                            &snapshotOwner,&pinned)==0);
                                     }));
                                     uint32_t originalWidth=0;std::memcpy(&originalWidth,snapshotSource.prefix.data()+0xd8,4);
                                     const uint32_t changedWidth=originalWidth+1;
                                     std::memcpy(snapshotSource.prefix.data()+0xd8,&changedWidth,4);
                                     assert(snapshotOwner.withSurface([&](const auto& pinned) noexcept {
+                                    assert(historyRecorder(1,TglOwnedFfdnHistoryDecision::Keep,&snapshotOwner,&pinned)==0);
                                     assert(historyShell.withBorrowedHistorySnapshotScope(historySnapshot,snapshotOwner,pinned,
                                         [&](const auto& view) noexcept -> int {
                                             uint32_t width=0;std::memcpy(&width,view.prefix.data()+0xd8,4);
@@ -7998,6 +8001,36 @@ static void testNativeResourceBoundary() {
                                         [](const auto&) noexcept -> int {assert(false);return 0;})==5);
                                     }));
                                     snapshotSource.resource[0x40]^=1;
+                                    assert(historyRecorder(1,TglOwnedFfdnHistoryDecision::Invalidate,
+                                        &snapshotOwner,&snapshotSource)==0);
+                                    assert(snapshotOwner.withSurface([&](const auto& pinned) noexcept {
+                                        assert(historyShell.withBorrowedHistorySnapshotScope(historySnapshot,snapshotOwner,pinned,
+                                            [](const auto&) noexcept -> int {assert(false);return 0;})==5);
+                                    }));
+                                    bool historyReference=true;uint8_t historyFlag=0,historyMode=0;
+                                    uint32_t historyPitch=0;std::memcpy(&historyPitch,snapshotSource.prefix.data()+0xe0,4);
+                                    unsigned historyCopies=0;
+                                    const auto runRecordedPair=[&](bool changed,uint32_t pitch) noexcept -> int {
+                                        return tglWithAllocatedOwnedFfdnPair(snapshotOwner,&snapshotOwner,
+                                            static_cast<decltype(&snapshotOwner)>(nullptr),TglOwnedFfdnCompressionSelection{},
+                                            historyReference,true,historyFlag,historyMode,
+                                            [&](size_t,const auto&,bool& changedOut,uint32_t& pitchOut) noexcept -> int {
+                                                changedOut=changed;pitchOut=pitch;return 0;
+                                            },[&](const TglOwnedSurfaceStorage& previousView) noexcept {
+                                                ++historyCopies;
+                                                assert(historySnapshot.withView(snapshotOwner,previousView,
+                                                    [](const auto&) noexcept -> int {return 31;})==31);
+                                            },[](size_t,const auto&,const auto&) noexcept {},
+                                            TglOwnedFfdnNoFinish{},std::array<const TglOwnedSurfaceStorage*,3>{},
+                                            TglOwnedFfdnNoReportPublication{},historyRecorder);
+                                    };
+                                    assert(runRecordedPair(true,historyPitch)==0 && historyCopies==2 && historyReference);
+                                    assert(runRecordedPair(false,historyPitch)==0 && historyCopies==2 && historyReference);
+                                    assert(runRecordedPair(true,historyPitch+1)==0 && historyCopies==2 && !historyReference);
+                                    assert(snapshotOwner.withSurface([&](const auto& pinned) noexcept {
+                                        assert(historySnapshot.withView(snapshotOwner,pinned,
+                                            [](const auto&) noexcept -> int {assert(false);return 0;})==5);
+                                    }));
                                     TglOwnedFfdiAllocationRequest shellRequest;
                                     assert(tglPrepareOwnedFfdiAllocationRequest(source,3,1,{},shellRequest));
                                     bool shellChanged=false;
