@@ -7702,7 +7702,12 @@ static void testNativeResourceBoundary() {
                             unsigned allocations=0,releases=0;
                             uint32_t resourceType() const noexcept {return 1;}
                             int allocate(std::array<uint8_t,0x148>& bytes,const TglResourceKey& key,
-                                uint32_t* width) noexcept {bytes.fill(0);bytes[0]=1;*width=key.width;++allocations;return 0;}
+                                uint32_t* width) noexcept {
+                                bytes.fill(0);bytes[0]=1;
+                                const uint32_t type=1;const uintptr_t handle=1;
+                                std::memcpy(bytes.data()+0x14,&type,4);std::memcpy(bytes.data()+0x58,&handle,8);
+                                *width=key.width;++allocations;return 0;
+                            }
                             bool backed(const std::array<uint8_t,0x148>& bytes) noexcept {return bytes[0]==1;}
                             void release(std::array<uint8_t,0x148>& bytes) noexcept {bytes.fill(0);++releases;}
                         } backingBackend;
@@ -8694,7 +8699,7 @@ static void testNativeResourceBoundary() {
                                                     auto& registrations=serviceTrace.registrations;
                                                     auto admitResource=[](const TglOwnedSurfaceStorage&) noexcept -> int {return 0;};
                                                     TglNativeDiIecpRegistration registerResource{nativeServices};
-                                                    auto compressionPolicy=[](const auto&,size_t,bool,bool& enabled) noexcept -> int {enabled=true;return 0;};
+                                                    const TglDiIecpControlPolicy compressionPolicy{true,7,&linkedStorage};
                                                     TglNativeDiIecpControl<decltype(compressionPolicy)> resourceControl{nativeServices,compressionPolicy};
                                                     using FullTypes=TglRetainedVeboxLiveFrameTypes<FrameStmmApi,decltype(linkedInput),
                                                         std::decay_t<decltype(childOwner)>,std::decay_t<decltype(reportOwner)>,decltype(fullRead),
@@ -26613,6 +26618,27 @@ int main() {
         TglDiIecpInputs input;
         input.boundaryWidth=1920; input.pipe=2;
         input.current=&storage[0]; input.target=&storage[1]; input.statistics=&storage[2];
+        {
+            auto resources=storage;
+            const uintptr_t token=1;
+            for(auto& resource:resources) std::memcpy(resource.resource.data()+0x20,&token,8);
+            auto roles=input;roles.current=&resources[0];roles.target=&resources[1];roles.statistics=&resources[2];
+            unsigned admitted=0;
+            auto backing=[&](const auto&) noexcept -> int {++admitted;return -87;};
+            TglDiIecpLiveResourceAdmission<decltype(backing)> admission{roles,backing};
+            assert(admission(resources[0])==-87 && admitted==1);
+            auto foreign=resources[0];
+            assert(admission(foreign)==5 && admitted==1); // Equal bytes are not identity.
+            roles.pipe=1;roles.dnNeeded=false;roles.ffdn[0]=&resources[1];
+            assert(admission(resources[1])==5 && admitted==1); // Inactive output is not a DI resource.
+            roles.dnNeeded=true;roles.ffdi[0]=&foreign;
+            assert(admission(foreign)==-87 && admitted==2); // DN-only SFC intermediate is selected.
+            roles.dnNeeded=false;roles.ffdn[0]=nullptr;
+            roles.di=true;roles.stmm[0]=&resources[1];roles.stmm[1]=&resources[2];
+            assert(admission(resources[1])==-87 && admitted==3);
+            resources[1].resource.fill(0);
+            assert(admission(resources[1])==5 && admitted==3); // Identity cannot substitute for backing.
+        }
         TglOwnedDiIecpPacket packet;
         auto admit=[](const auto&)->int { return 0; };
         size_t policyCalls=0;

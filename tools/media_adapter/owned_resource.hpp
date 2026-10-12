@@ -15434,6 +15434,31 @@ struct TglDiIecpControlPolicy {
         return 0;
     }
 };
+// Lives only inside the captured-input consumer. Identity and resource shape
+// supplement, never replace, the caller's backing/ownership admission.
+template<class Admit> struct TglDiIecpLiveResourceAdmission {
+    const TglDiIecpInputs& input;
+    Admit admit;
+    int operator()(const TglOwnedSurfaceStorage& surface) noexcept(noexcept(admit(surface))) {
+        TglDiIecpOutputs selected;
+        if(!tglSelectDiIecpOutputs(selected,input.pipe,input.di,input.iecp,
+            input.indices,input.target,input.ffdi)) return 5;
+        bool known=&surface==input.current || &surface==input.statistics ||
+            (input.referenceValid && &surface==input.previous) ||
+            &surface==selected.current || &surface==selected.previous;
+        if(input.dnNeeded && input.indices.dnOut>=0 && input.indices.dnOut<2) {
+            known=known || &surface==input.ffdn[size_t(input.indices.dnOut)];
+            if(input.pipe==1 && !input.di)
+                known=known || &surface==input.ffdi[size_t(input.indices.dnOut)];
+        }
+        if((input.di || input.stmmNeeded) && input.indices.historyIn>=0 && input.indices.historyIn<2 &&
+            input.indices.historyOut>=0 && input.indices.historyOut<2)
+            known=known || &surface==input.stmm[size_t(input.indices.historyIn)] ||
+                &surface==input.stmm[size_t(input.indices.historyOut)];
+        if(!known || !tglNativeBackingPresent(surface.resource)) return 5;
+        return admit(surface);
+    }
+};
 // Producer orchestration, not native object-layout transplantation. Darwin
 // ICL1f8ec0/1f89a0 supplies the branch/order evidence, TGL172080 the packet ABI.
 // Caller leases every surface. Admit verifies backing/identity; control must
@@ -16022,8 +16047,9 @@ struct TglOwnedVeboxLivePacketContext {
             if(entered) {duplicate=true;return 5;}
             entered=true;
             if(input.current!=&leases.source || input.target!=leases.target) return result;
-            TglOwnedVeboxPacketContext<Read,SurfaceAdmit,DiAdmit,Register,Control> view{
-                {},leases,input,disableTemporalDenoise,read,admitSurface,admitDi,registerResource,control};
+            TglDiIecpLiveResourceAdmission<DiAdmit> resourceAdmission{input,admitDi};
+            TglOwnedVeboxPacketContext<Read,SurfaceAdmit,decltype(resourceAdmission),Register,Control> view{
+                {},leases,input,disableTemporalDenoise,read,admitSurface,resourceAdmission,registerResource,control};
             result=use(view);return result;
         });
         if(duplicate) return 5;
