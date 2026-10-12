@@ -8703,7 +8703,8 @@ static void testNativeResourceBoundary() {
                                                     TglOwnedDiIecpControlPolicyReader<decltype(fullRead)> compressionPolicy{
                                                         renderLeases.child,renderLeases.execution,&linkedStorage,fullRead};
                                                     TglNativeDiIecpControl<decltype(compressionPolicy)> resourceControl{nativeServices,compressionPolicy};
-                                                    using FullTypes=TglRetainedVeboxLiveFrameTypes<FrameStmmApi,decltype(linkedInput),
+                                                    TglHeldOwnedSurfaceRole heldInput(linkedInput,linkedStorage);
+                                                    using FullTypes=TglRetainedVeboxLiveFrameTypes<FrameStmmApi,TglHeldOwnedSurfaceRole,
                                                         std::decay_t<decltype(childOwner)>,std::decay_t<decltype(reportOwner)>,decltype(fullRead),
                                                         decltype(liveSurfaceAdmission),decltype(admitResource),decltype(registerResource),decltype(resourceControl)>;
                                                     using FullProducers=typename FullTypes::template Producers<decltype(rejectPackets),decltype(rejectCsc)>;
@@ -8712,8 +8713,8 @@ static void testNativeResourceBoundary() {
                                                     auto fullLeases=renderLeases;fullLeases.renderHal=hal;fullLeases.sku=sku;
                                                     TglOwnedVeboxFrameRetention fullRetention;
                                                     const auto runFullPass=[&]() noexcept {
-                                                        return tglWithRetainedLiveVeboxPacketFrame(retained,linkedInput,&linkedInput,
-                                                        static_cast<decltype(&linkedInput)>(nullptr),static_cast<decltype(&linkedInput)>(nullptr),
+                                                        return tglWithRetainedLiveVeboxPacketFrame(retained,heldInput,&heldInput,
+                                                        static_cast<TglHeldOwnedSurfaceRole*>(nullptr),static_cast<TglHeldOwnedSurfaceRole*>(nullptr),
                                                         childOwner,reportOwner,fullLeases,false,false,{},fullRead,liveSurfaceAdmission,
                                                         admitResource,registerResource,resourceControl,fullRetention,
                                                         [&](auto& frame) noexcept -> TglOwnedVeboxCommandTransactionResult {
@@ -8760,6 +8761,32 @@ static void testNativeResourceBoundary() {
                                                     assert(std::memcmp(stateBeforeStale.data(),statePacket.data(),stateBeforeStale.size())==0);
                                                     assert(!FullProducers::Resolve::get(actualChild));
                                                     std::memcpy(halBytes.data()+0x78,&sku,8);
+                                                    // Complete native-Render entry with a CPU recording
+                                                    // invoker: no Apple entry/GPU commands execute here.
+                                                    unsigned recordedRenders=0;
+                                                    const auto wholeRender=tglWithRetainedVeboxFrameNativeRender<
+                                                        RetainedResolve,RetainedScope,RetainedScope,RetainedScope,RetainedFormatRead>(
+                                                        retained,heldInput,heldInput,static_cast<TglHeldOwnedSurfaceRole*>(nullptr),
+                                                        static_cast<TglHeldOwnedSurfaceRole*>(nullptr),childOwner,reportOwner,
+                                                        fullLeases,false,false,{},0,fullRead,liveSurfaceAdmission,admitResource,
+                                                        registerResource,resourceControl,rejectPackets,rejectCsc,entryBinding,nullptr,fullRetention,
+                                                        static_cast<TglOwnedFfdnNoDenoiseBorrow*>(nullptr),
+                                                        [&](uintptr_t entry,void* object,void* argument,void* pair) noexcept -> int {
+                                                            ++recordedRenders;
+                                                            assert(entry==entryBinding.entry && object==actualChild && !argument && pair);
+                                                            assert(FullProducers::Resolve::get(object));
+                                                            using Callback=int(*)(void*,bool,void*) noexcept;
+                                                            int status=reinterpret_cast<Callback>(childOwner.renderHooks[7])(object,false,&surfacePacket);
+                                                            if(status) return status;
+                                                            status=reinterpret_cast<Callback>(childOwner.renderHooks[18])(object,false,statePacket.data());
+                                                            if(status) return status;
+                                                            return reinterpret_cast<Callback>(childOwner.renderHooks[6])(object,false,&diPacket);
+                                                        });
+                                                    assert(wholeRender.status==0 && wholeRender.nativeEntered && recordedRenders==1 && fullRetention());
+                                                    assert(!FullProducers::Resolve::get(actualChild));
+                                                    const auto deniedPending=runFullPass();
+                                                    assert(deniedPending.status==5 && recordedRenders==1 && fullRetention());
+                                                    // Pending is deliberately NOT cleared or called GPU completion.
                                                     std::memcpy(child.data()+0x18,oldParents.data(),16);
                                                     child[0x1ba9]=oldMmc;
                                                     assert(borrowFixture.allocations==packetAllocations && borrowFixture.fills==packetFills);

@@ -7891,15 +7891,15 @@ public:
 // and never invokes a foreign owner's incompatible withSurface callback ABI.
 // Keep the original owner alive; reuse the same view for aliased roles.
 class TglHeldOwnedSurfaceRole {
-    const void* owner_;
+    void* owner_;
     const TglOwnedSurfaceStorage* surface_;
-    bool (*held_)(const void*,const TglOwnedSurfaceStorage&) noexcept;
+    bool (*held_)(void*,const TglOwnedSurfaceStorage&) noexcept;
 public:
     template<class Owner>
-    TglHeldOwnedSurfaceRole(const Owner& owner,const TglOwnedSurfaceStorage& surface) noexcept
-        :owner_(&owner),surface_(&surface),held_([](const void* raw,const auto& expected) noexcept {
-            static_assert(noexcept(std::declval<const Owner&>().hasSurfaceLease(expected)));
-            return static_cast<const Owner*>(raw)->hasSurfaceLease(expected);
+    TglHeldOwnedSurfaceRole(Owner& owner,const TglOwnedSurfaceStorage& surface) noexcept
+        :owner_(&owner),surface_(&surface),held_([](void* raw,const auto& expected) noexcept {
+            static_assert(noexcept(std::declval<Owner&>().hasSurfaceLease(expected)));
+            return static_cast<Owner*>(raw)->hasSurfaceLease(expected);
         }) {}
     TglHeldOwnedSurfaceRole(const TglHeldOwnedSurfaceRole&)=delete;
     TglHeldOwnedSurfaceRole& operator=(const TglHeldOwnedSurfaceRole&)=delete;
