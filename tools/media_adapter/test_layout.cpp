@@ -16921,6 +16921,42 @@ int main() {
             assert(result==(mode==0?31:mode==4?-17:5) && consumed==(mode==0));
             assert(calls==((mode==0 || mode==3)?total:0) && scopedStorage.bytes==originalStorage);
         }
+        TglOwnedVpSfcCallerStorage secondStorage;
+        for(unsigned mode=0;mode<5;++mode) {
+            calls=0;TglOwnedVpEntrySet escaped;
+            assert(tglWithOwnedVpFrameAcquisitionContext(scopedStorage,
+                0x1000,0x2000,0x3000,0x4000,0x6000,0x7000,{},read,
+                [&](auto& first,const auto& frame0,const auto& geometry0,uintptr_t) noexcept -> int {
+                    return tglWithOwnedVpFrameAcquisitionContext(secondStorage,
+                        0x1000,0x2000,0x3000,0x4000,0x6000,0x7000,{},read,
+                        [&](auto& second,const auto& frame1,const auto& geometry1,uintptr_t) noexcept -> int {
+                            const std::array<TglOwnedVpEntrySet,2> base{};
+                            return tglWithOwnedVpPairedFrameEntries(first,second,base,
+                                [&](void* a,const auto& ea,void* b,const auto& eb) noexcept -> int {
+                                    escaped=eb;
+                                    if(mode==4) return -17;
+                                    ea.prepare(a,reinterpret_cast<void*>(0x6000),reinterpret_cast<void*>(0x7000),
+                                        reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x2000),
+                                        reinterpret_cast<void*>(0x4000));
+                                    if(mode==1) return 0;
+                                    eb.prepare(b,reinterpret_cast<void*>(0x6000),reinterpret_cast<void*>(0x7000),
+                                        reinterpret_cast<void*>(mode==3?0x1004:0x1000),
+                                        reinterpret_cast<void*>(0x2000),reinterpret_cast<void*>(0x4000));
+                                    if(mode==2) eb.prepare(b,reinterpret_cast<void*>(0x6000),
+                                        reinterpret_cast<void*>(0x7000),reinterpret_cast<void*>(0x1000),
+                                        reinterpret_cast<void*>(0x2000),reinterpret_cast<void*>(0x4000));
+                                    if(mode==0) assert(first.valid && second.valid && frame0.at922 && frame1.at922 &&
+                                        geometry0.frameWidth==geometry1.frameWidth);
+                                    return 0;
+                                });
+                        });
+                })==(mode==0?0:mode==4?-17:5));
+            assert(calls==total*(mode==4?0:(mode==1 || mode==3)?1:2));
+            escaped.prepare(secondStorage.bytes.data(),reinterpret_cast<void*>(0x6000),
+                reinterpret_cast<void*>(0x7000),reinterpret_cast<void*>(0x1000),
+                reinterpret_cast<void*>(0x2000),reinterpret_cast<void*>(0x4000));
+            assert(scopedStorage.bytes==originalStorage);
+        }
         for(unsigned failedStage=0;failedStage<3;++failedStage) {
             unsigned stages=0;calls=0;
             const auto checkScope=[&](void* child) noexcept {

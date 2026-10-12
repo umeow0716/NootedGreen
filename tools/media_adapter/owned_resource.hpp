@@ -10344,6 +10344,36 @@ template<class Acquire> struct TglOwnedVpFrameAcquisitionContext {
     }
 };
 
+struct TglOwnedVpFrameAcquisitionView {
+    void* child;void* context;
+    void(*prepareCall)(void*,void*,void*,void*,void*,void*) noexcept;
+    template<class Context> explicit TglOwnedVpFrameAcquisitionView(Context& value) noexcept
+        :child(value.child),context(&value),prepareCall(
+            [](void* c,void* conditional,void* parameters,void* source,void* target,void* settings) noexcept {
+                static_cast<Context*>(c)->prepare(conditional,parameters,source,target,settings);
+            }) {}
+    bool owns(void* value) const noexcept {return child==value;}
+    void prepare(void* conditional,void* parameters,void* source,void* target,void* settings) noexcept {
+        prepareCall(context,conditional,parameters,source,target,settings);
+    }
+};
+template<class First,class Second,class Use>
+int tglWithOwnedVpPairedFrameEntries(First& first,Second& second,
+    const std::array<TglOwnedVpEntrySet,2>& base,Use use) noexcept {
+    if(first.called || second.called) return 5;
+    TglOwnedVpFrameAcquisitionView a(first),b(second);
+    using Context=TglOwnedVpFrameAcquisitionView;
+    typename TglOwnedVpSfcScopedContext<Context>::Pair scope(a.child,a,b.child,b);
+    if(!scope.bound()) return 5;
+    auto entries=base;
+    using Resolve=TglOwnedVpSfcResolve<Context>;
+    if(!tglBindOwnedVpFrameEntry<Resolve>(a.child,entries[0]) ||
+        !tglBindOwnedVpFrameEntry<Resolve>(b.child,entries[1])) return 5;
+    static_assert(noexcept(use(a.child,entries[0],b.child,entries[1])),"paired acquisition consumer ABI");
+    const int result=use(a.child,entries[0],b.child,entries[1]);
+    return result?result:(first.called && first.valid && second.called && second.valid?0:5);
+}
+
 template<class Read,class Use>
 int tglWithOwnedVpFrameAcquisitionContext(TglOwnedVpSfcCallerStorage& storage,
     uintptr_t source,uintptr_t target,uintptr_t mhw,uintptr_t settings,
