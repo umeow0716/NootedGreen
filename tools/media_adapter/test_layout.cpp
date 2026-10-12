@@ -12312,6 +12312,12 @@ static void testRetainedVeboxFrames() {
                 static Registry*& registry() noexcept {static Registry* value=nullptr;return value;}
                 static unsigned& misses() noexcept {static unsigned value=0;return value;}
                 static unsigned& retentions() noexcept {static unsigned value=0;return value;}
+                static TglOwnedVphalPendingDestruction<4>& pending() noexcept {
+                    static TglOwnedVphalPendingDestruction<4> value;return value;
+                }
+                static bool record(uintptr_t object,TglOwnedVphalDestructionState::Kind kind) noexcept {
+                    return pending().record(object,kind);
+                }
                 static Registry::ExclusiveOwnerLease pin(uintptr_t object) noexcept {
                     return registry()?registry()->pinExclusive(0x1000,0x2000,7,object):Registry::ExclusiveOwnerLease{};
                 }
@@ -12330,18 +12336,42 @@ static void testRetainedVeboxFrames() {
             };
             call(Hooks::destroyEntry(),0x4000);
             assert(first->destructorRequests==1 && first->lastKind==TglOwnedVphalDestructionState::Kind::Destroy);
-            first->allowDestructor=false;
-            call(Hooks::deletingDestroyEntry(),0x4000);
-            assert(first->destructorRequests==2 && Routing::retentions()==1 &&
-                first->lastKind==TglOwnedVphalDestructionState::Kind::DeletingDestroy);
+            second->allowDestructor=false;
+            call(Hooks::deletingDestroyEntry(),0x5000);
+            assert(second->destructorRequests==1 && Routing::retentions()==1 &&
+                second->lastKind==TglOwnedVphalDestructionState::Kind::DeletingDestroy);
             call(Hooks::deletingDestroyEntry(),0x6000);assert(Routing::misses()==1);
             {
                 auto pinned=owners.pin(0x1000,0x2000,7,0x4000);
                 call(Hooks::destroyEntry(),0x4000);
-                assert(pinned.get()==first && Routing::misses()==2 && first->destructorRequests==2);
+                assert(pinned.get()==first && Routing::misses()==2 && first->destructorRequests==1);
             }
+            auto kind=TglOwnedVphalDestructionState::Kind::DeletingDestroy;
+            assert(Routing::pending().pending(0x4000,kind) && kind==TglOwnedVphalDestructionState::Kind::Destroy);
+            assert(Routing::pending().pending(0x5000,kind) && kind==TglOwnedVphalDestructionState::Kind::DeletingDestroy);
+            assert(Routing::pending().pending(0x6000,kind) && !Routing::pending().faulted());
             assert(owners.pinExclusive(0x1000,0x2000,7,0x4000).get()==first);
-            first->allowDestructor=true;Routing::registry()=nullptr;
+            second->allowDestructor=true;Routing::registry()=nullptr;
+        }
+        {
+            using Kind=TglOwnedVphalDestructionState::Kind;
+            TglOwnedVphalPendingDestruction<2> pending;
+            assert(pending.record(0x4000,Kind::DeletingDestroy));
+            assert(pending.record(0x4000,Kind::DeletingDestroy));
+            assert(!pending.eraseRetired(0x4000,Kind::Destroy,[](uintptr_t,Kind) noexcept {assert(false);return true;}));
+            assert(!pending.eraseRetired(0x4000,Kind::DeletingDestroy,[](uintptr_t,Kind) noexcept {return false;}));
+            assert(pending.eraseRetired(0x4000,Kind::DeletingDestroy,[](uintptr_t object,Kind kind) noexcept {
+                assert(object==0x4000 && kind==Kind::DeletingDestroy);return true;
+            }));
+            assert(pending.record(0x4000,Kind::Destroy));
+            assert(!pending.record(0x4000,Kind::DeletingDestroy) && pending.faulted());
+            assert(!pending.eraseRetired(0x4000,Kind::Destroy,[](uintptr_t,Kind) noexcept {assert(false);return true;}));
+            TglOwnedVphalPendingDestruction<1> full;
+            assert(full.record(0x4000,Kind::Destroy) && !full.record(0x5000,Kind::Destroy) && full.faulted());
+            Kind kind=Kind::DeletingDestroy;
+            assert(full.pending(0x4000,kind) && kind==Kind::Destroy);
+            TglOwnedVphalPendingDestruction<1> invalid;
+            assert(!invalid.record(0x4001,Kind::Destroy) && invalid.faulted());
         }
         auto use=[&](ContextOwner& owner) noexcept -> int {
             ++uses;assert(&owner==first);

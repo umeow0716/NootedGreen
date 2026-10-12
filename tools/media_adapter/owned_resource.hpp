@@ -1878,6 +1878,77 @@ public:
     }
 };
 
+// Bounded, allocation-free request journal. Object addresses are keys only,
+// never dereferenced. Registry ownership MUST prevent object-address reuse
+// until its request is erased. Erasure requires exclusive quiescence (no other
+// callback/record), complete native destruction and retained owner/generation
+// authentication; queue admission itself grants none of those authorities.
+template<size_t Capacity=128> class TglOwnedVphalPendingDestruction {
+    static_assert(Capacity>0 && Capacity<=128);
+    using Kind=TglOwnedVphalDestructionState::Kind;
+    std::array<std::atomic<uintptr_t>,Capacity> entries_{};
+    std::atomic<bool> faulted_{false};
+    static constexpr uintptr_t keyMask=~uintptr_t{3};
+public:
+    TglOwnedVphalPendingDestruction() noexcept {
+        for(auto& entry:entries_) entry.store(0,std::memory_order_relaxed);
+    }
+    TglOwnedVphalPendingDestruction(const TglOwnedVphalPendingDestruction&)=delete;
+    TglOwnedVphalPendingDestruction& operator=(const TglOwnedVphalPendingDestruction&)=delete;
+    bool faulted() const noexcept {return faulted_.load(std::memory_order_acquire);}
+    bool record(uintptr_t object,Kind kind) noexcept {
+        if(faulted()) return false;
+        if(!object || (object&7) || object>UINTPTR_MAX-0x70 ||
+            (kind!=Kind::Destroy && kind!=Kind::DeletingDestroy)) {
+            faulted_.store(true,std::memory_order_release);return false;
+        }
+        const uintptr_t word=object|(kind==Kind::DeletingDestroy?1:0);
+        // Full rescan after CAS contention: never insert a duplicate behind a
+        // concurrently inserted same-object request. No erasure may race this.
+        for(size_t attempt=0;attempt<Capacity;++attempt) {
+            size_t empty=Capacity;
+            for(size_t i=0;i<Capacity;++i) {
+                auto current=entries_[i].load(std::memory_order_acquire);
+                if(!current) {if(empty==Capacity) empty=i;continue;}
+                if((current&keyMask)!=object) continue;
+                if(current==word) return true;
+                entries_[i].fetch_or(2,std::memory_order_acq_rel);
+                faulted_.store(true,std::memory_order_release);return false;
+            }
+            if(empty==Capacity) break;
+            uintptr_t vacant=0;
+            if(entries_[empty].compare_exchange_strong(vacant,word,
+                std::memory_order_acq_rel,std::memory_order_acquire)) return true;
+            if(vacant==word) return true;
+        }
+        // Capacity/contention failure is sticky: retain ALL associated owners
+        // for explicit audit, never silently resume automatic cleanup.
+        faulted_.store(true,std::memory_order_release);return false;
+    }
+    bool pending(uintptr_t object,Kind& kind) const noexcept {
+        for(const auto& entry:entries_) {
+            const auto word=entry.load(std::memory_order_acquire);
+            if(word && (word&keyMask)==object && !(word&2)) {
+                kind=(word&1)?Kind::DeletingDestroy:Kind::Destroy;return true;
+            }
+        }
+        return false;
+    }
+    template<class Admit> bool eraseRetired(uintptr_t object,Kind kind,Admit admit) noexcept {
+        static_assert(noexcept(admit(object,kind)));
+        if(faulted() || !object || (object&7) ||
+            (kind!=Kind::Destroy && kind!=Kind::DeletingDestroy)) return false;
+        const uintptr_t expected=object|(kind==Kind::DeletingDestroy?1:0);
+        for(auto& entry:entries_) {
+            auto word=entry.load(std::memory_order_acquire);
+            if(word!=expected) continue;
+            if(!admit(object,kind)) return false;
+            return entry.compare_exchange_strong(word,0,std::memory_order_acq_rel,std::memory_order_acquire);
+        }
+        return false;
+    }
+};
+
 // Resolve is process-lived routing policy, not a TLS creator scope: native
 // destruction can occur on a later callback/thread. pin() returns the exact
 // registry's exclusive owner lease. Before production enable, unresolved MUST
@@ -1889,8 +1960,10 @@ template<class Resolve> struct TglOwnedVphalDestructorCallbacks {
 private:
     static void dispatch(void* object,TglOwnedVphalDestructionState::Kind kind) noexcept {
         static_assert(noexcept(Resolve::pin(uintptr_t{})) &&
-            noexcept(Resolve::unresolved(uintptr_t{},kind)));
+            noexcept(Resolve::unresolved(uintptr_t{},kind)) &&
+            noexcept(Resolve::record(uintptr_t{},kind)));
         const auto address=reinterpret_cast<uintptr_t>(object);
+        if(!Resolve::record(address,kind)) {Resolve::unresolved(address,kind);return;}
         auto lease=Resolve::pin(address);
         auto* owner=lease.get();
         if(!owner) {Resolve::unresolved(address,kind);return;}
