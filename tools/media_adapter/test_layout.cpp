@@ -5391,6 +5391,13 @@ static void testSurfaceStatisticsTransaction() {
             assert(rejected==before && !fixture.allocations);
         }
         TglNativeResourceBackend unknownPage(&fixture,allocate,release,1);
+        uint32_t effectiveWidth=0xabcdef01;
+        for(uint32_t format : {0u,0x15u,0x53u,0x3eu,UINT32_MAX}) {
+            assert(backends[0].allocate(rejected,{64,16,format,0,0,false},
+                                        &effectiveWidth)==25);
+            assert(rejected==before && !fixture.allocations &&
+                   effectiveWidth==0xabcdef01);
+        }
         assert(unknownPage.allocate(rejected,{64,16,0x19,0,0,false})==5);
         assert(rejected==before && !fixture.allocations);
     }

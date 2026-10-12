@@ -6381,6 +6381,11 @@ public:
         if (!context_ || !allocate_ || !release_) return 5;
         if (type_ > 1 || key.compressed || key.compressionMode) return 25;
         if (!key.width || !key.height) return 5;
+        // This backend promises backing for the requested pixel format, not
+        // merely native's success status.63720 silently substitutes L008 for
+        // other type1 formats; those need a separately qualified producer.
+        if(type_==1 && key.format!=0xd && key.format!=0x10 &&
+           key.format!=0x19 && key.format!=0x3d) return 25;
         if (type_ == 0 && !tglBufferSizeFits(key.width, pageSize_)) return 5;
         // Native638ed multiplies width*height in 32 bits;638fd rounds the
         // result in 32 bits. Reject both wraps before native mutates storage.
