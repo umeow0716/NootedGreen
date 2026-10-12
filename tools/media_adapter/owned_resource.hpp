@@ -3562,6 +3562,56 @@ struct TglVeboxHardwareBinding {
     }
 };
 
+// Complete native G12 MHW lifetime for externally owned, stable storage.
+// Enclosing owner retains storage/OS/image and serializes all operations;
+// no native factory accounting/deleting destructor is used for this storage.
+struct TglVeboxMhwLifetimeBinding {
+    uintptr_t image=0,construct=0,destroy=0;
+    template<class Read,class Qualify,class Executable>
+    bool resolve(uintptr_t base,Read read,Qualify qualify,Executable executable) {
+        *this={};
+        constexpr std::array<uint8_t,16> ctor{
+            0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x40,
+            0x48,0x89,0x7d,0xf8,0x48,0x89,0x75,0xf0};
+        constexpr std::array<uint8_t,16> dtor{
+            0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x10,
+            0x48,0x89,0x7d,0xf8,0x48,0x8b,0x7d,0xf8};
+        auto c=ctor,d=dtor;
+        if(!base || base>UINTPTR_MAX-0x759528 || !qualify(base) ||
+           !executable(base+0x16f140,16) || !executable(base+0x179cf0,16) ||
+           !read(base+0x16f140,c.data(),16) || c!=ctor ||
+           !read(base+0x179cf0,d.data(),16) || d!=dtor) return false;
+        image=base;construct=base+0x16f140;destroy=base+0x179cf0;
+        return true;
+    }
+    template<class Invoke>
+    bool constructStorage(void* storage,size_t extent,uintptr_t os,Invoke invoke) const {
+        const auto p=reinterpret_cast<uintptr_t>(storage);
+        if(!image || construct!=image+0x16f140 || !storage || (p&7) ||
+           extent!=TglVeboxHardwareBinding::objectExtent ||
+           p>UINTPTR_MAX-extent || !os || os>UINTPTR_MAX-0x1c0) return false;
+        // Only the enclosing owner may call this once for fresh storage.
+        invoke(construct,storage,os);
+        uintptr_t vt=0,actualOs=0,heap=0;
+        auto* bytes=static_cast<uint8_t*>(storage);
+        std::memcpy(&vt,bytes,8);std::memcpy(&actualOs,bytes+0x18,8);
+        std::memcpy(&heap,bytes+0x20,8);
+        return vt==image+0x759520 && actualOs==os && !heap;
+    }
+    template<class Invoke>
+    bool destroyHeapFreeStorage(void* storage,size_t extent,Invoke invoke) const {
+        const auto p=reinterpret_cast<uintptr_t>(storage);
+        if(!image || destroy!=image+0x179cf0 || !storage || (p&7) ||
+           extent!=TglVeboxHardwareBinding::objectExtent || p>UINTPTR_MAX-extent) return false;
+        uintptr_t vt=0,heap=0;
+        auto* bytes=static_cast<uint8_t*>(storage);
+        std::memcpy(&vt,bytes,8);std::memcpy(&heap,bytes+0x20,8);
+        if(vt!=image+0x759520 || heap) return false;
+        // Caller has detached all consumers; heap retirement occurs BEFORE here.
+        invoke(destroy,storage);return true;
+    }
+};
+
 // Exact base prefix touched by parent130ea0 -> nonvirtual126520. NOT a
 // complete VEBOX object, not publishable as a native child by itself.
 // SysV x86_64 native constructor12d4e0: six register arguments including this,

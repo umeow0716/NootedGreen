@@ -3449,6 +3449,38 @@ static void testVeboxHardwareBinding() {
     };
     auto qualify = [&](uintptr_t p) { return identity && p == image; };
     TglVeboxHardwareBinding b;
+    {
+        TglVeboxMhwLifetimeBinding life;
+        std::array<uint8_t,16> ctor{0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x40,
+            0x48,0x89,0x7d,0xf8,0x48,0x89,0x75,0xf0};
+        std::array<uint8_t,16> dtor{0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x10,
+            0x48,0x89,0x7d,0xf8,0x48,0x8b,0x7d,0xf8};
+        auto lifeRead=[&](uintptr_t p,void* out,size_t n) {
+            if(n!=16) return false;
+            if(p==image+0x16f140) {std::memcpy(out,ctor.data(),n);return true;}
+            if(p==image+0x179cf0) {std::memcpy(out,dtor.data(),n);return true;}
+            return false;
+        };
+        assert(life.resolve(image,lifeRead,qualify,[](uintptr_t,size_t){return true;}));
+        alignas(8) std::array<uint8_t,TglVeboxHardwareBinding::objectExtent> storage{};
+        unsigned constructs=0,destroys=0;
+        auto construct=[&](uintptr_t entry,void* object,uintptr_t ownerOs) {
+            assert(entry==image+0x16f140 && object==storage.data() && ownerOs==os);
+            ++constructs;std::memcpy(storage.data(),&vt,8);
+            std::memcpy(storage.data()+0x18,&ownerOs,8);
+        };
+        auto destroy=[&](uintptr_t entry,void* object) {
+            assert(entry==image+0x179cf0 && object==storage.data());++destroys;
+        };
+        assert(!life.constructStorage(storage.data(),storage.size()-1,os,construct));
+        assert(constructs==0 && life.constructStorage(storage.data(),storage.size(),os,construct));
+        std::memcpy(storage.data()+0x20,&heap,8);
+        assert(!life.destroyHeapFreeStorage(storage.data(),storage.size(),destroy) && !destroys);
+        uintptr_t zero=0;std::memcpy(storage.data()+0x20,&zero,8);
+        assert(life.destroyHeapFreeStorage(storage.data(),storage.size(),destroy) && destroys==1);
+        ctor[0]=0;assert(!life.resolve(image,lifeRead,qualify,[](uintptr_t,size_t){return true;}));
+        assert(!life.constructStorage(storage.data(),storage.size(),os,construct) && constructs==1);
+    }
     auto resolve = [&] { return b.resolve(mhw, os, image, read, qualify); };
     assert(resolve() && b.interface == mhw && b.os == os && b.heap == heap);
     {
