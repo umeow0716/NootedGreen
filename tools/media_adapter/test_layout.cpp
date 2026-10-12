@@ -18736,6 +18736,9 @@ int main() {
                     })==-17);
                     assert(backing.live==3 && !backing.releases);
                     frame.retention().observe(TglOwnedVeboxCommandTransactionResult{31,31,true,false});
+                    assert(frame.reinitializeVpPass(0,[]() noexcept -> int {
+                        assert(false);return 0;
+                    })==5);
                     assert(frame.initializeVp(binding,resources.context,0x8000,0x3000,noRead,1,0)==5);
                     assert(frame.withVpResources([](auto& active,auto&,auto&) noexcept -> int {
                         assert(!active.tryReset());return 0;
@@ -22177,6 +22180,32 @@ int main() {
                                         return paired.withVpResources(1,[&](auto&,auto& second,auto&) noexcept -> int {
                                             assert(first.bytes.data()!=second.bytes.data());return 0;
                                         });
+                                    })==0);
+                                    uint64_t passGeneration=0;
+                                    assert(paired.withVpResources(1,[&](auto& graph,auto&,auto&) noexcept {
+                                        passGeneration=graph.generation();
+                                        assert(paired.reinitializeVpPass(1,[]() noexcept -> int {
+                                            assert(false);return 0;
+                                        })==5);
+                                        return 0;
+                                    })==0);
+                                    unsigned retireCalls=0;
+                                    assert(paired.reinitializeVpPass(1,[&]() noexcept -> int {
+                                        ++retireCalls;return 31;
+                                    })==31 && paired.vpBound(1));
+                                    assert(paired.withVpResources(1,[&](auto& graph,auto&,auto&) noexcept {
+                                        assert(graph.generation()==passGeneration);return 0;
+                                    })==0);
+                                    assert(paired.reinitializeVpPass(1,[&]() noexcept -> int {
+                                        ++retireCalls;
+                                        assert(!paired.vpBound(1));
+                                        assert(paired.reinitializeVpPass(1,[]() noexcept -> int {
+                                            assert(false);return 0;
+                                        })==5);
+                                        return 0;
+                                    })==0 && retireCalls==2 && paired.vpBound(1));
+                                    assert(paired.withVpResources(1,[&](auto& graph,auto&,auto&) noexcept {
+                                        assert(graph.generation()==passGeneration+1);return 0;
                                     })==0);
                                     assert(paired.initializeVp(1,nativeSfc,os,creatorView->renderHal,
                                         parentSfcAddress,parentSfcRead,0,0)==5);

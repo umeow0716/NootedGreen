@@ -18092,6 +18092,20 @@ public:
         if(avs_) avs_->~TglOwnedSurfaceStorage();
     }
     bool bound() const noexcept {return lines_ && lease_.storage();}
+    template<class Retire> int retireForReinitialization(Retire retire) noexcept {
+        static_assert(noexcept(retire()) && std::is_same_v<decltype(retire()),int>);
+        auto* vp=lease_.storage();
+        if(!lines_ || !vp || busy_) return 5;
+        const auto generation=lease_.generation();
+        busy_=true;
+        const int result=lines_->resources().withReleaseReservation([&](auto release) noexcept -> int {
+            const int status=retire();
+            if(status) return status;
+            if(!lease_.ownsStorage(vp->bytes.data(),generation)) return 5;
+            release();return 0;
+        });
+        busy_=false;return result;
+    }
     template<class Use> int withResources(Use use) noexcept {
         static_assert(noexcept(use(std::declval<TglOwnedVpSfcCallerStorage&>(),
             std::declval<TglNativeVpLineResourceStorage&>())),"native VP resource owner ABI");
@@ -18146,6 +18160,8 @@ template<class Invoker=TglNativeTrackedCpuInvoker> class TglNativeVpBackingStora
     alignas(Resources) std::array<uint8_t,sizeof(Resources)> bytes_{};
     Resources* resources_=nullptr;
     bool preparing_=false;
+    TglNativeResourceBinding resourceBinding_{};
+    uint64_t pageSize_=0;
 public:
     template<class Read,class Qualify,class Executable>
     TglNativeVpBackingStorage(uintptr_t image,Read read,Qualify qualify,Executable executable,
@@ -18177,12 +18193,35 @@ public:
         if(!cpu_.graph().initialize(os,renderHal,mhw,binding,read,channel,performance)) return 5;
         const int prepared=prepare(cpu_.graph());
         if(prepared) {(void)cpu_.graph().tryReset();return prepared;}
-        resources_=::new(static_cast<void*>(bytes_.data())) Resources(cpu_.graph(),resourceBinding,pageSize);
+        resourceBinding_=resourceBinding;pageSize_=pageSize;
+        resources_=::new(static_cast<void*>(bytes_.data())) Resources(cpu_.graph(),resourceBinding_,pageSize_);
         if(resources_->bound()) return 0;
         resources_->~Resources();resources_=nullptr;
         (void)cpu_.graph().tryReset();return 5;
     }
-    bool bound() const noexcept {return resources_ && resources_->bound();}
+    bool bound() const noexcept {return !preparing_ && resources_ && resources_->bound();}
+    // Qualified retirement is mandatory even before any accepted GPU work.
+    // A latched native submission remains blocked until completion ownership
+    // is implemented; never use this path to clear the retention latch.
+    template<class Retire> int reinitializePass(Retire retire) noexcept {
+        if(!bound() || retention_()) return 5;
+        preparing_=true;
+        struct EndPreparation {bool& active;~EndPreparation(){active=false;}} end{preparing_};
+        const int retired=resources_->retireForReinitialization([&]() noexcept -> int {
+            const int status=retire();
+            return status?status:(retention_()?5:0);
+        });
+        if(retired) return retired;
+        resources_->~Resources();resources_=nullptr;
+        const int initialized=cpu_.graph().withPassInitializationEntry([](void* child,auto initialize) noexcept {
+            initialize(child);return 0;
+        });
+        if(initialized) return initialized;
+        resources_=::new(static_cast<void*>(bytes_.data())) Resources(cpu_.graph(),resourceBinding_,pageSize_);
+        if(resources_->bound()) return 0;
+        resources_->~Resources();resources_=nullptr;
+        (void)cpu_.graph().tryReset();return 5;
+    }
     template<class Read,class Retire,class Use>
     int withAssemblyView(bool avsEnabled,Read& read,Retire& retire,Use use) noexcept {
         return bound()?resources_->withAssemblyView(avsEnabled,read,retire,use):5;
@@ -21949,6 +21988,9 @@ public:
     }
     template<class Use> int withVpResources(size_t index,Use use) noexcept {
         auto* vp=selectVp(index);return vp?vp->withResources(use):5;
+    }
+    template<class Retire> int reinitializeVpPass(size_t index,Retire retire) noexcept {
+        auto* vp=selectVp(index);return vp?vp->reinitializePass(retire):5;
     }
     template<class Use> int withVpResources(Use use) noexcept {return vp_.withResources(use);}
     template<class Read,class Retire,class Use>
