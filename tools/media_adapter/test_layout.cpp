@@ -23159,10 +23159,22 @@ int main() {
                             };
                             unsigned creatorFrameUses=0;
                             auto useCreatorFrame=[&](auto& owner,void* child,void* vp,auto& graph,auto&,
-                                auto&,auto&,auto&,auto& live) noexcept {
+                                auto& sourceOwner,auto& targetOwner,auto&,auto& live) noexcept {
                                 ++creatorFrameUses;
                                 assert(owner.hasPrivateChildLease(reinterpret_cast<uintptr_t>(child)) &&
                                     graph.ownsStorage(vp) && removeParent()==5 && !parentDeaths);
+                                // Actual heterogeneous frontend source/target,
+                                // not allocated-surface stand-ins. Both scopes
+                                // are already held by the enclosing frame.
+                                TglHeldOwnedSurfaceRole sourceRole(sourceOwner,live.leases.source);
+                                TglHeldOwnedSurfaceRole targetRole(targetOwner,*live.leases.target);
+                                const std::array<TglHeldOwnedSurfaceRole*,3> roles{&sourceRole,&targetRole,&sourceRole};
+                                const std::array<const TglOwnedSurfaceStorage*,3> seeds{
+                                    &live.leases.source,live.leases.target,&live.leases.source};
+                                assert(tglWithCapturedOwnedSurfaceRoles(roles,seeds,[&](const auto& views) noexcept -> int {
+                                    assert(views==seeds && targetRole.surfaceBinding()==live.leases.target);
+                                    return -89;
+                                })==-89);
                                 assert(&live.registerResource.services==&live.control.services &&
                                     tglNativeDiIecpServicesReady(live.registerResource.services));
                                 assert(live.registerResource.services.registration.context==os &&
@@ -26730,6 +26742,25 @@ int main() {
         services.registration={reinterpret_cast<uintptr_t>(&context),reinterpret_cast<uintptr_t>(registration)};
         services.control={reinterpret_cast<uintptr_t>(&context),reinterpret_cast<uintptr_t>(control)};
         std::array<TglOwnedSurfaceStorage,3> storage{};
+        {
+            struct HeldOwner {
+                const TglOwnedSurfaceStorage* storage;bool held=false;
+                bool hasSurfaceLease(const TglOwnedSurfaceStorage& expected) const noexcept {
+                    return held && &expected==storage;
+                }
+            } owner{&storage[0]};
+            TglHeldOwnedSurfaceRole role(owner,storage[0]);
+            unsigned uses=0;
+            assert(!role.surfaceBinding() && !role.withSurface([&](const auto&) noexcept {++uses;}));
+            owner.held=true;
+            assert(role.surfaceBinding()==&storage[0] && !role.hasSurfaceLease(storage[1]));
+            assert(role.withSurface([&](const auto& surface) noexcept {assert(&surface==&storage[0]);++uses;}));
+            assert(!role.withSurface([&](const auto&) noexcept {++uses;owner.held=false;}));
+            assert(uses==2 && !role.surfaceBinding());
+            assert(tglWithCapturedOwnedSurfaceRoles(std::array<TglHeldOwnedSurfaceRole*,1>{&role},
+                std::array<const TglOwnedSurfaceStorage*,1>{&storage[0]},
+                [](const auto&) noexcept -> int {assert(false);return 0;})==5);
+        }
         {
             uint8_t mmc=3;uint32_t mode=7,format=0x19;
             uintptr_t report=0x4000,target=reinterpret_cast<uintptr_t>(&storage[1]);

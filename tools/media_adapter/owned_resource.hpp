@@ -7886,6 +7886,37 @@ public:
         effectiveKey_={};
     }
 };
+// Normalize heterogeneous frontend owners ONLY while their original scopes
+// already hold the exact shell. This view acquires nothing, retains nothing,
+// and never invokes a foreign owner's incompatible withSurface callback ABI.
+// Keep the original owner alive; reuse the same view for aliased roles.
+class TglHeldOwnedSurfaceRole {
+    const void* owner_;
+    const TglOwnedSurfaceStorage* surface_;
+    bool (*held_)(const void*,const TglOwnedSurfaceStorage&) noexcept;
+public:
+    template<class Owner>
+    TglHeldOwnedSurfaceRole(const Owner& owner,const TglOwnedSurfaceStorage& surface) noexcept
+        :owner_(&owner),surface_(&surface),held_([](const void* raw,const auto& expected) noexcept {
+            static_assert(noexcept(std::declval<const Owner&>().hasSurfaceLease(expected)));
+            return static_cast<const Owner*>(raw)->hasSurfaceLease(expected);
+        }) {}
+    TglHeldOwnedSurfaceRole(const TglHeldOwnedSurfaceRole&)=delete;
+    TglHeldOwnedSurfaceRole& operator=(const TglHeldOwnedSurfaceRole&)=delete;
+    bool hasSurfaceLease(const TglOwnedSurfaceStorage& surface) const noexcept {
+        return &surface==surface_ && held_(owner_,surface);
+    }
+    const TglOwnedSurfaceStorage* surfaceBinding() const noexcept {
+        return hasSurfaceLease(*surface_)?surface_:nullptr;
+    }
+    template<class Use> bool withSurface(Use use) noexcept {
+        static_assert(noexcept(use(std::declval<const TglOwnedSurfaceStorage&>())) &&
+            std::is_same_v<decltype(use(std::declval<const TglOwnedSurfaceStorage&>())),void>);
+        if(!hasSurfaceLease(*surface_)) return false;
+        use(*surface_);
+        return hasSurfaceLease(*surface_);
+    }
+};
 // Borrow the source owners behind FFDI/FFDN roles without copying their native
 // descriptors. A role may alias another role; acquire each unique owner once.
 // Null roles stay null, but all nonnull roles must have live backing. This is
