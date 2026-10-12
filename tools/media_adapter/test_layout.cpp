@@ -15761,6 +15761,23 @@ int main() {
                             return -31;
                         })==-31);
                     assert(queries==1 && native.live==3);
+                    unsigned consumers=0;
+                    auto query=[&](auto&) noexcept {++queries;return 0;};
+                    for(int result:{0,-31}) {
+                        assert(tglWithOwnedVpResourceBoundState(commands,state,storage.resources(),output,
+                            prefix,{},false,false,false,TglOwnedSfcCompressionMode::Disabled,query,
+                            [&](auto& prepared) noexcept -> int {
+                                ++consumers;assert(&prepared==&commands && !state.hasParametersLease());
+                                assert(native.live==3 && !storage.lines().tryReset() && !storage.sfd().tryReset());
+                                assert(storage.resources().ensure(input+1,scaled)==5);
+                                return result;
+                            })==result);
+                    }
+                    auto denied=TglOwnedSfcGen12Tail{};denied.sfdLineBuffer=1;
+                    assert(tglWithOwnedVpResourceBoundState(commands,state,storage.resources(),output,
+                        prefix,denied,false,false,false,TglOwnedSfcCompressionMode::Disabled,query,
+                        [&](auto&) noexcept -> int {++consumers;return 0;})==5);
+                    assert(queries==3 && consumers==2 && native.live==3);
                 } else assert(!native.live && native.releases==failure);
             }
             assert(!native.live && native.releases==(failure==99?3:failure));

@@ -17771,6 +17771,31 @@ int tglPrepareOwnedVpLeasedSurfaceState(TglOwnedSfcCommandParameters& parameters
     std::memcpy(parameters.state.data(),state.data(),parameters.state.size());
     return 0;
 }
+// Setup-to-send scope: output is already leased by the frame. Allocate once,
+// pin the line owners, prepare state, then allow AVS/IEF production and send.
+// Do not hold the state parameter lease while those producers update it.
+template<class CpuBackend,class Resources,class Query,class Use>
+int tglWithOwnedVpResourceBoundState(TglOwnedSfcCommandParameters& parameters,
+    TglOwnedSfcStateParameters<CpuBackend>& state,Resources& resources,
+    TglOwnedSurfaceStorage& output,const std::array<uint8_t,0xb8>& prefix,
+    TglOwnedSfcGen12Tail tail,bool rgbAdaptive,bool eightTapChroma,bool compressionEnabled,
+    TglOwnedSfcCompressionMode compressionMode,Query query,Use use) noexcept {
+    static_assert(noexcept(use(parameters)),"VP resource-bound state consumer ABI");
+    if(parameters.filtersInUse || !state.data() || state.hasParametersLease() || tail.sfdLineBuffer) return 5;
+    TglOwnedSfcStateParametersPacket checked{};
+    if(!tglPrepareOwnedSfcGen12Pass(checked,prefix,tail,rgbAdaptive,eightTapChroma,
+        compressionEnabled,compressionMode)) return 5;
+    uint32_t input=0,scaled=0;
+    std::memcpy(&input,prefix.data()+0x30,4);std::memcpy(&scaled,prefix.data()+0x4c,4);
+    const int allocated=resources.ensure(input,scaled);
+    if(allocated) return allocated;
+    return resources.withCommandResources(input,scaled,
+        [&](const auto& avs,const auto& ief,const auto* sfd) noexcept -> int {
+            const int prepared=tglPrepareOwnedVpLeasedSurfaceState(parameters,state,output,
+                avs,ief,sfd,prefix,tail,rgbAdaptive,eightTapChroma,compressionEnabled,compressionMode,query);
+            return prepared?prepared:use(parameters);
+        });
+}
 // Full VP+58 surfaces feed the same authenticated descriptor fields, without
 // copying tokens into the legacy descriptor-only owner. Both shells stay
 // pinned through query, state preparation and synchronous command emission.
