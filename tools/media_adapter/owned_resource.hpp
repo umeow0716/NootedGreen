@@ -15490,6 +15490,7 @@ public:
 // OS/context and this entire object alive until qualified retirement. This
 // owner cannot turn a borrowed graph or native binding into a physical retain.
 template<class Graph> class TglNativeVpLineResourceOwner {
+    Graph& graph_;
     typename Graph::ResourceOwnerLease lease_;
     alignas(TglNativeVpLineResourceStorage)
         std::array<uint8_t,sizeof(TglNativeVpLineResourceStorage)> bytes_{};
@@ -15499,7 +15500,7 @@ template<class Graph> class TglNativeVpLineResourceOwner {
     bool busy_=false;
 public:
     TglNativeVpLineResourceOwner(Graph& graph,const TglNativeResourceBinding& binding,
-        uint64_t pageSize) noexcept:lease_(graph) {
+        uint64_t pageSize) noexcept:graph_(graph),lease_(graph) {
         auto* vp=lease_.storage();
         if(!vp || !binding.context || !binding.allocate || !binding.release ||
            !pageSize || (pageSize&(pageSize-1))) return;
@@ -15530,6 +15531,21 @@ public:
         // Keep native failures exact; success cannot certify a foreign or
         // retired VP allocation after a nested callback.
         return result ? result : (retained ? 0 : 5);
+    }
+    // Recreate callable admission/resource scopes on the SAME persistently
+    // pinned VP and line owners. Entries are borrowed only for this callback;
+    // they remain an incomplete subset, never a publishable native vtable.
+    template<class Read,class Retire,class Use>
+    int withAssemblyView(bool avsEnabled,Read& read,Retire& retire,Use use) noexcept {
+        return withResources([&](auto& storage,auto& lines) noexcept {
+            return graph_.withAssemblyView(avsEnabled,read,lines.resources(),retire,
+                [&](void* child,const auto& entries) noexcept {
+                    if(child!=storage.bytes.data() ||
+                       !lease_.ownsStorage(child,lease_.generation())) return 5;
+                    static_assert(noexcept(use(child,entries)),"retained VP assembly consumer ABI");
+                    return use(child,entries);
+                });
+        });
     }
 };
 
@@ -15567,6 +15583,10 @@ public:
         (void)cpu_.graph().tryReset();return 5;
     }
     bool bound() const noexcept {return resources_ && resources_->bound();}
+    template<class Read,class Retire,class Use>
+    int withAssemblyView(bool avsEnabled,Read& read,Retire& retire,Use use) noexcept {
+        return bound()?resources_->withAssemblyView(avsEnabled,read,retire,use):5;
+    }
     template<class Use> int withResources(Use use) noexcept {
         if(!bound()) return 5;
         return resources_->withResources([&](auto& storage,auto& lines) noexcept {
@@ -18208,6 +18228,10 @@ public:
     }
     bool vpBound() const noexcept {return vp_.bound();}
     template<class Use> int withVpResources(Use use) noexcept {return vp_.withResources(use);}
+    template<class Read,class Retire,class Use>
+    int withVpAssemblyView(bool avsEnabled,Read& read,Retire& retire,Use use) noexcept {
+        return vp_.withAssemblyView(avsEnabled,read,retire,use);
+    }
     auto& retention() noexcept {return command_.backing().auxiliary().retention();}
 };
 

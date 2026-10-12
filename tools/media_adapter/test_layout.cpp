@@ -10116,6 +10116,18 @@ static void testSfcLineBufferOwnership() {
                         return -17;
                     })==-17);
                     assert(nativeBacking.live==3 && !nativeBacking.released);
+                    auto retire=[]() noexcept {return 0;};
+                    assert(resources.withAssemblyView(false,noRead,retire,
+                        [&](void* child,const auto& entries) noexcept {
+                            assert(retainedGraph.ownsStorage(child) && !retainedGraph.tryReset());
+                            uintptr_t state=0;
+                            std::memcpy(&state,static_cast<uint8_t*>(child)+0x938,8);
+                            assert(state && entries.allocate && entries.freeResources);
+                            assert(!entries.hasAllEntries());
+                            assert(resources.withAssemblyView(false,noRead,retire,
+                                [](void*,const auto&) noexcept {assert(false);return 0;})==5);
+                            return -17;
+                        })==-17);
                 }
                 assert(!nativeBacking.live && nativeBacking.released==3);
                 {
