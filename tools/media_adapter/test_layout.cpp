@@ -18592,8 +18592,60 @@ int main() {
                         bool view(uintptr_t,TglOwnedStmmView&) noexcept {assert(false);return false;}
                     };
                     Cpu vpCpu{{},pairEvents,pairEventCount};
+                    struct FrameMhwInvoke {
+                        uintptr_t backingHeap=0;unsigned cleanups=0,removes=0;
+                        uintptr_t create(uintptr_t entry,uintptr_t ownerOs) noexcept {
+                            assert(entry==base+0x1b52f0 && ownerOs==os);return 0x6000;
+                        }
+                        uint32_t heap(uintptr_t entry,uintptr_t object) noexcept {
+                            assert(object==0x6000);
+                            if(entry==base+0xff290) {backingHeap=0x7000;return 0;}
+                            assert(entry==base+0xff550);++cleanups;backingHeap=0;return 0;
+                        }
+                        void remove(uintptr_t entry,uintptr_t& object) noexcept {
+                            assert(entry==base+0x132bb0 && object==0x6000 && !backingHeap);
+                            ++removes;object=0;
+                        }
+                    } frameMhwInvoke;
+                    auto frameMhwRead=[&](uintptr_t p,void* out,size_t n) noexcept {
+                        const std::array<uint8_t,16> factory{0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x40,
+                            0x48,0x8b,0x35,0x29,0xed,0x59,0,0x48};
+                        const std::array<uint8_t,16> deletion{0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x10,
+                            0x48,0x89,0x7d,0xf8,0x48,0x8b,0x45,0xf8};
+                        const std::array<uint8_t,16> init{0x55,0x48,0x89,0xe5,0x48,0x81,0xec,0x90,
+                            0,0,0,0x48,0x89,0x7d,0xf8,0x48};
+                        const std::array<uint8_t,16> cleanup{0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x20,
+                            0x48,0x89,0x7d,0xf8,0x48,0x8b,0x45,0xf8};
+                        const std::array<uint32_t,10> layout{16,128,4096,4096,8192,4096,4096,8192,0,0};
+                        if(n==16) {
+                            const auto* bytes=p==base+0x1b52f0?&factory:p==base+0x132bb0?&deletion:
+                                p==base+0xff290?&init:p==base+0xff550?&cleanup:nullptr;
+                            if(bytes) {std::memcpy(out,bytes->data(),n);return true;}
+                        }
+                        if(p==0x6028 && n==sizeof(layout)) {std::memcpy(out,layout.data(),n);return true;}
+                        if(p==os+0x8c && n==4) {const uint32_t mode=0;std::memcpy(out,&mode,n);return true;}
+                        if(n==8) {
+                            uintptr_t value=0;
+                            if(p==0x6000) value=base+0x759520;
+                            else if(p==0x6008) value=base+0x3eae0;
+                            else if(p==0x6018) value=os;
+                            else if(p==0x6020) value=frameMhwInvoke.backingHeap;
+                            else if(p==base+0x759528) value=base+0x179d10;
+                            else return read(p,out,n) || allocatorRead(p,out,n);
+                            std::memcpy(out,&value,n);return true;
+                        }
+                        return read(p,out,n) || allocatorRead(p,out,n);
+                    };
+                    auto qualifyMhw=[](uintptr_t image) noexcept {return image==base;};
+                    auto executableMhw=[](uintptr_t,size_t) noexcept {return true;};
+                    TglNativeVeboxMhwAllocationBinding frameMhwAllocation;
+                    assert(frameMhwAllocation.resolve(base,frameMhwRead,qualifyMhw,executableMhw));
+                    TglNativeVeboxMhwOwner frameMhwOwner(frameMhwInvoke);
+                    assert(frameMhwOwner.initialize(frameMhwAllocation,os,frameMhwRead,qualifyMhw,executableMhw)==0);
+                    auto retireFrameMhw=[&] {return frameMhwOwner.retire(frameMhwRead,qualifyMhw,executableMhw,
+                        [](uintptr_t,uintptr_t,uintptr_t,uint64_t) noexcept {return true;});};
                     using Assembly=TglNativeVeboxRendererFrameStorage<UnusedFrameApi,FrameSurfaceBackend,FrameDnBackend,decltype(pairCleanup),
-                        NativeCpu,TrackedSfc,decltype(pairDestroy)>;
+                        NativeCpu,TrackedSfc,decltype(pairDestroy),FrameMhwInvoke>;
                     {
                         TglOwnedVeboxRetainedFrames<Assembly,1> frames;
                         using Pair=std::remove_reference_t<decltype(std::declval<Assembly&>().children())>;
@@ -18615,28 +18667,30 @@ int main() {
                             [](auto&,auto&,auto&) noexcept {return 0;})==0);
                         assert(!assembly.backing().vpBound() && !vpCpu.live);
                         assert(pair.bound());
-                        auto pairConstruct=[&](uintptr_t entry,void* object,void* nativeOs,void*,void*,
+                        auto pairConstruct=[&](uintptr_t entry,void* object,void* nativeOs,void* nativeMhw,void*,
                             void*,void*,void*,const void*,int32_t* out) noexcept {
                             assert(entry==base+0x12d4e0 && nativeOs==reinterpret_cast<void*>(os));
+                            assert(nativeMhw==reinterpret_cast<void*>(0x6000));
                             const uintptr_t table=base+0x757c98;
                             std::memcpy(object,&table,8);std::memcpy(static_cast<uint8_t*>(object)+0x10,&os,8);
                             *out=failSecond && index(object)==1 ? 31:0;
                         };
                         int32_t pairStatus=77;
-                        TglNativeVeboxMhwAllocationInvoker nativeMhwInvoke;
-                        TglNativeVeboxMhwOwner<> emptyMhw(nativeMhwInvoke);
+                        TglNativeVeboxMhwOwner emptyMhw(frameMhwInvoke);
                         assert(!assembly.retainedMhw() && !assembly.retainMhw(emptyMhw));
                         assert(assembly.initializeQualifiedChild(0,baseBinding,lifetime,mhw,
                             reinterpret_cast<void*>(os),reinterpret_cast<void*>(0x3000),
                             nullptr,nullptr,nullptr,pairStatus,allocatorRead,
                             [](uintptr_t image){return image==base;},pairConstruct)==
                             TglOwnedBaseConstruction::NotCalled && pairStatus==77);
-                        auto init=[&](auto& child) {
-                            return child.initialize(baseBinding,lifetime,mhw,reinterpret_cast<void*>(os),
-                                nullptr,reinterpret_cast<void*>(0x3000),nullptr,nullptr,nullptr,pairStatus,read,pairConstruct);
+                        assert(assembly.retainMhw(frameMhwOwner) && !assembly.retainMhw(frameMhwOwner));
+                        assert(assembly.retainedMhw() && retireFrameMhw()==5 && !frameMhwInvoke.cleanups);
+                        auto init=[&](size_t child) {
+                            return assembly.initializeQualifiedChild(child,baseBinding,lifetime,mhw,reinterpret_cast<void*>(os),
+                                reinterpret_cast<void*>(0x3000),nullptr,nullptr,nullptr,pairStatus,frameMhwRead,qualifyMhw,pairConstruct);
                         };
-                        assert(init(pair.first())==TglOwnedBaseConstruction::ConstructedSuccess);
-                        assert(init(pair.second())==(failSecond?TglOwnedBaseConstruction::ConstructedFailure:
+                        assert(init(0)==TglOwnedBaseConstruction::ConstructedSuccess);
+                        assert(init(1)==(failSecond?TglOwnedBaseConstruction::ConstructedFailure:
                             TglOwnedBaseConstruction::ConstructedSuccess));
                         assert(pairCpu[0].live && pairCpu[1].live==!failSecond);
                         const uintptr_t native920=0x9876;std::memcpy(renderer.data()+0x920,&native920,8);
@@ -18763,6 +18817,8 @@ int main() {
                     assert(!frameSurfaces.live && frameSurfaces.releases==2 && !frameDn.live);
                     assert(!pairCpu[0].live && !pairCpu[1].live);
                     assert(cleaned[0]==1 && cleaned[1]==1 && destroyed==cleaned);
+                    assert(!frameMhwInvoke.cleanups && !frameMhwInvoke.removes);
+                    assert(retireFrameMhw()==0 && frameMhwInvoke.cleanups==1 && frameMhwInvoke.removes==1);
                     assert(pairInvoke.constructs==2 && pairInvoke.destroys==2);
                     {
                         pairEventCount=0;cleaned={};destroyed={};retirementQualified=false;
