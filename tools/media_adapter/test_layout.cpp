@@ -13730,7 +13730,27 @@ static void testRetainedVeboxFrames() {
     }
 }
 
+static void testActualNv12LayoutSnapshot() {
+    TglOwnedNv12Layout layout;
+    constexpr uintptr_t base=0x10000;
+    assert(tglCaptureOwnedNv12Layout(layout,base,4096,{base+128,base+2176},
+                                     64,32,{64,64},{32,16}));
+    assert(layout.offset[0]==128 && layout.offset[1]==2176 && layout.pitch[0]==64);
+    for(unsigned bad=0;bad<6;++bad) {
+        auto planes=std::array<uintptr_t,2>{base+128,base+2176};
+        auto pitch=std::array<size_t,2>{64,64};size_t capacity=4096,width=64;
+        if(bad==0) planes[1]=base+127;
+        if(bad==1) planes[1]=base+2048;
+        if(bad==2) pitch[1]=0;
+        if(bad==3) capacity=3000;
+        if(bad==4) width=63;
+        if(bad==5) planes[0]=base-1;
+        assert(!tglCaptureOwnedNv12Layout(layout,base,capacity,planes,width,32,pitch,{32,16}));
+        assert(layout.offset[0]==128 && layout.offset[1]==2176);
+    }
+}
 int main() {
+    testActualNv12LayoutSnapshot();
     {
         int children[2]{},packet=0;
         const std::array<TglOwnedVpEntrySet,2> base{};

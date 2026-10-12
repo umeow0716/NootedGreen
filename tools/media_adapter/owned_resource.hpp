@@ -16240,7 +16240,48 @@ public:
             slots_[0].lease->withNativeDenoiseParameters(expected,parameters,use) && valid();
     }
 };
+// Actual IOSurface layout snapshot, not native shell-field publication. Caller
+// retains the original resource and holds a successful CPU lock throughout.
+struct TglOwnedNv12Layout {
+    uint32_t width=0,height=0;
+    std::array<uint32_t,2> pitch{},offset{},planeHeight{};
+};
+inline bool tglCaptureOwnedNv12Layout(TglOwnedNv12Layout& output,
+    uintptr_t base,size_t capacity,const std::array<uintptr_t,2>& planes,
+    size_t width,size_t height,const std::array<size_t,2>& pitches,
+    const std::array<size_t,2>& heights) noexcept {
+    if(!base || !capacity || capacity>UINTPTR_MAX-base || !width || !height ||
+       width>UINT32_MAX || height>UINT32_MAX || (width&1) || (height&1) ||
+       heights[0]!=height || heights[1]!=height/2) return false;
+    TglOwnedNv12Layout candidate;candidate.width=uint32_t(width);candidate.height=uint32_t(height);
+    std::array<uint64_t,2> ends{};
+    for(size_t i=0;i<2;++i) {
+        if(planes[i]<base || planes[i]-base>capacity ||
+           planes[i]-base>UINT32_MAX || pitches[i]<width || pitches[i]>UINT32_MAX ||
+           heights[i]>UINT32_MAX || heights[i]>(capacity-size_t(planes[i]-base))/pitches[i])
+            return false;
+        candidate.pitch[i]=uint32_t(pitches[i]);candidate.offset[i]=uint32_t(planes[i]-base);
+        candidate.planeHeight[i]=uint32_t(heights[i]);
+        ends[i]=uint64_t(candidate.offset[i])+uint64_t(pitches[i])*heights[i];
+    }
+    if(candidate.offset[1]<ends[0] && candidate.offset[0]<ends[1]) return false;
+    output=candidate;return true;
+}
 #if defined(__APPLE__)
+// Native63720 format19 creates exact 'v420', two plane dictionaries. Do not
+// reinterpret any other pixel format or native lock's plane0 as a UV query.
+inline bool tglReadLockedDarwinNv12Layout(IOSurfaceRef surface,
+    TglOwnedNv12Layout& output) noexcept {
+    if(!surface || IOSurfaceGetPixelFormat(surface)!=0x34323076 ||
+       IOSurfaceGetPlaneCount(surface)!=2) return false;
+    return tglCaptureOwnedNv12Layout(output,
+        reinterpret_cast<uintptr_t>(IOSurfaceGetBaseAddress(surface)),IOSurfaceGetAllocSize(surface),
+        {reinterpret_cast<uintptr_t>(IOSurfaceGetBaseAddressOfPlane(surface,0)),
+         reinterpret_cast<uintptr_t>(IOSurfaceGetBaseAddressOfPlane(surface,1))},
+        IOSurfaceGetWidth(surface),IOSurfaceGetHeight(surface),
+        {IOSurfaceGetBytesPerRowOfPlane(surface,0),IOSurfaceGetBytesPerRowOfPlane(surface,1)},
+        {IOSurfaceGetHeightOfPlane(surface,0),IOSurfaceGetHeightOfPlane(surface,1)});
+}
 struct TglDarwinTypedCfReferenceApi {
     uintptr_t type(uintptr_t handle) const noexcept {
         return CFGetTypeID(reinterpret_cast<CFTypeRef>(handle));
