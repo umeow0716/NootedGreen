@@ -8349,6 +8349,19 @@ static void testNativeResourceBoundary() {
                                                     result.writtenBack==(commandStatus==0) && nativeFrame.auxiliary().retention()());
                                                 assert(finalUses==1 && !unwinds && nativeFixture.fills==1);
                                                 assert(!nativeFixture.releases);
+                                                const auto allocationsBeforeBorrow=nativeFixture.allocations;
+                                                unsigned auxiliaryBorrows=0;
+                                                assert(nativeFrame.auxiliary().withPreparedViews(true,
+                                                    [&](const auto& stmm,const auto& statistics) noexcept -> int {
+                                                        ++auxiliaryBorrows;
+                                                        assert(stmm.surfaces[0] && stmm.surfaces[1]);
+                                                        assert(statistics.resource[0x48]==1);
+                                                        assert(nativeFrame.auxiliary().withPreparedViews(true,
+                                                            [](const auto&,const auto&) noexcept -> int {assert(false);return 0;})==5);
+                                                        return 31;
+                                                    })==31 && auxiliaryBorrows==1);
+                                                assert(nativeFixture.allocations==allocationsBeforeBorrow &&
+                                                    nativeFixture.fills==1 && !nativeFixture.releases);
                                                 }
                                                 assert(nativeFixture.allocations && nativeFixture.releases==nativeFixture.allocations);
                                             }
@@ -14922,6 +14935,10 @@ int main() {
             [&](uintptr_t,uint32_t) noexcept {++writableCalls;return false;},
             [&](const auto&,const auto&) noexcept -> int {++publications;return 0;})==5);
         assert(!writableCalls && !publications && !auxiliary.statistics().layout().bytes);
+        assert(auxiliary.withPreparedViews(false,
+            [](const auto&,const auto&) noexcept -> int {assert(false);return 0;})==5);
+        assert(auxiliary.withPreparedViews(true,
+            [](const auto&,const auto&) noexcept -> int {assert(false);return 0;})==5);
         auxiliary.retention().observe(TglOwnedVeboxCommandTransactionResult{31,31,true,false});
         assert(auxiliary.retention()());
         using FrameSurfaces=TglNativeVeboxSurfaceFrameStorage<DeniedSurfaceApi>;

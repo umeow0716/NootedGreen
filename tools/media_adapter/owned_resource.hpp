@@ -18491,6 +18491,31 @@ public:
     auto& statistics() noexcept {return statistics_;}
     const auto& statisticsFill() const noexcept {return fill_;}
     auto& retention() noexcept {return retention_;}
+    // Reborrow only: native allocation/publication must already have completed.
+    // Caller derives useStmm from the current admitted DN/DI report. Pending
+    // retention does not prohibit reading retained backing; no reset/ensure,
+    // Fill or report publication is permitted here.
+    template<class Use>
+    int withPreparedViews(bool useStmm,Use use) noexcept {
+        const auto statistics=[&](const TglOwnedStmmTailViews& views) noexcept -> int {
+            return statistics_.withResource([&](const auto& storage,const auto& layout) noexcept -> int {
+                return statistics_.withCapturedSurface(storage,layout,
+                    [&](const TglOwnedSurfaceStorage& surface) noexcept -> int {
+                        static_assert(noexcept(use(views,surface)) &&
+                            std::is_same_v<decltype(use(views,surface)),int>);
+                        return use(views,surface);
+                    });
+            });
+        };
+        if(!useStmm) return statistics(TglOwnedStmmTailViews{});
+        return stmm_.pair().withStorage([&](const auto& first,const auto& second) noexcept -> int {
+            const auto& shells=stmm_.surfaces();
+            return stmm_.pair().withCapturedSurfaces(first,second,shells[0],shells[1],
+                [&](const auto& a,const auto& b) noexcept -> int {
+                    return statistics(TglOwnedStmmTailViews{{&a,&b}});
+                });
+        });
+    }
 };
 #if defined(__APPLE__)
 using TglDarwinVeboxAuxiliaryFrameStorage=TglNativeVeboxAuxiliaryFrameStorage<TglDarwinStmmSurfaceApi>;
