@@ -8128,6 +8128,19 @@ static void testNativeResourceBoundary() {
                                             TglTrackedCpuOwner nativeDn(nativeDnBackend);
                                             assert(nativeDn.allocate(8));unsigned dnCalls=0;
                                             assert(linkedInput.withSurface([&](const auto& current) noexcept {
+                                                assert(previous.withSurface([&](const auto& priorView) noexcept {
+                                                    assert(tglWithPreparedFfdnHistoryViews(std::array{&targetA,&targetB},
+                                                        linkedInput,current,&previous,&priorView,true,historyShell,backedHistory,
+                                                        [&](const auto& views) noexcept -> int {
+                                                            assert(views.history==historyShell.surfaceBinding());
+                                                            for(auto* output:views.outputs) {uintptr_t pointer=0;
+                                                                std::memcpy(&pointer,output->prefix.data()+0x90,8);
+                                                                assert(pointer==nativeDn.get());}
+                                                            nativeDn.reset();assert(nativeDnBackend.live==1);
+                                                            assert(!historyShell.withDescriptor([](const auto&) noexcept {assert(false);}));
+                                                            return -73;
+                                                        },&nativeDn)==-73);
+                                                }));
                                                 assert(targetA.withBorrowedFfdnDenoisePair(targetB,linkedInput,current,nativeDn,
                                                     [&](const auto& sourceView,const auto& views) noexcept {
                                                         ++dnCalls;

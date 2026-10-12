@@ -14800,13 +14800,14 @@ struct TglOwnedFfdnTailViews {
 };
 // Producer-time descriptor/backed branches. Original owners are already leased;
 // do not recreate outputs or infer reference validity from snapshot presence.
-// DN parameter borrowing and asynchronous retention remain outer duties.
-template<class Targets,class Owner,class Use>
+// Optional DN owner is borrowed once; asynchronous retention remains outer.
+struct TglOwnedFfdnNoDenoiseBorrow {};
+template<class Targets,class Owner,class Use,class Parameters=TglOwnedFfdnNoDenoiseBorrow>
 int tglWithPreparedFfdnHistoryViews(Targets&& targets,Owner& input,
     const TglOwnedSurfaceStorage& source,Owner* previous,
     const TglOwnedSurfaceStorage* previousView,bool referenceValid,
     TglOwnedDescriptorOnlySurface& history,TglOwnedFfdnHistorySnapshot& snapshot,
-    Use use) noexcept {
+    Use use,Parameters* parameters=nullptr) noexcept {
     if((previous==nullptr)!=(previousView==nullptr) ||
        (previous && !previous->hasSurfaceLease(*previousView)) ||
        (referenceValid && !previous)) return 5;
@@ -14821,7 +14822,19 @@ int tglWithPreparedFfdnHistoryViews(Targets&& targets,Owner& input,
             return history.withBorrowedHistorySnapshotScope(snapshot,*previous,*previousView,
                 [&](const auto& copied) noexcept -> int {return consume(&copied);});
         };
-    if constexpr(std::is_pointer_v<typename std::decay_t<Targets>::value_type>)
+    if constexpr(!std::is_same_v<Parameters,TglOwnedFfdnNoDenoiseBorrow>) {
+        if(!parameters) return 5;
+        int result=5;
+        auto consume=[&](const auto&,const auto& views) noexcept {
+            result=borrowed(*views[0],*views[1]);
+        };
+        bool leased=false;
+        if constexpr(std::is_pointer_v<typename std::decay_t<Targets>::value_type>) {
+            if(!targets[0] || !targets[1]) return 5;
+            leased=targets[0]->withBorrowedFfdnDenoisePair(*targets[1],input,source,*parameters,consume);
+        } else leased=targets[0].withBorrowedFfdnDenoisePair(targets[1],input,source,*parameters,consume);
+        return leased && input.hasSurfaceLease(source)?result:5;
+    } else if constexpr(std::is_pointer_v<typename std::decay_t<Targets>::value_type>)
         return tglWithPreparedBackedFfdnPair(targets,input,source,borrowed);
     else return tglWithPreparedDescriptorFfdnPair(targets,input,source,borrowed);
 }
