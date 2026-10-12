@@ -3473,7 +3473,11 @@ static void testVeboxHardwareBinding() {
             assert(entry==image+0x179cf0 && object==storage.data());++destroys;
         };
         assert(!life.constructStorage(storage.data(),storage.size()-1,os,construct));
+        storage.back()=1;
+        assert(!life.constructStorage(storage.data(),storage.size(),os,construct) && !constructs);
+        storage.back()=0;
         assert(constructs==0 && life.constructStorage(storage.data(),storage.size(),os,construct));
+        assert(!life.constructStorage(storage.data(),storage.size(),os,construct) && constructs==1);
         std::memcpy(storage.data()+0x20,&heap,8);
         assert(!life.destroyHeapFreeStorage(storage.data(),storage.size(),destroy) && !destroys);
         uintptr_t zero=0;std::memcpy(storage.data()+0x20,&zero,8);

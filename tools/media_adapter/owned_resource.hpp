@@ -3590,10 +3590,13 @@ struct TglVeboxMhwLifetimeBinding {
         if(!image || construct!=image+0x16f140 || !storage || (p&7) ||
            extent!=TglVeboxHardwareBinding::objectExtent ||
            p>UINTPTR_MAX-extent || !os || os>UINTPTR_MAX-0x1c0) return false;
-        // Only the enclosing owner may call this once for fresh storage.
+        // Reject re-construction before native can overwrite a live heap/OS.
+        // Owned allocation is zero-initialized; native factory memory need not
+        // be, and is intentionally not admitted through this owned entry.
+        auto* bytes=static_cast<uint8_t*>(storage);
+        for(size_t i=0;i<extent;++i) if(bytes[i]) return false;
         invoke(construct,storage,os);
         uintptr_t vt=0,actualOs=0,heap=0;
-        auto* bytes=static_cast<uint8_t*>(storage);
         std::memcpy(&vt,bytes,8);std::memcpy(&actualOs,bytes+0x18,8);
         std::memcpy(&heap,bytes+0x20,8);
         return vt==image+0x759520 && actualOs==os && !heap;
