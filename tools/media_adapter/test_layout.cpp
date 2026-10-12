@@ -12152,9 +12152,15 @@ static void testRetainedVeboxFrames() {
             }
             bool detach(void*,uint64_t,int) noexcept {++detaches;return detachOk;}
         } children;
+        unsigned cleanupCalls=0;
+        auto cleanupChildren=[&](void* renderer,uint64_t generation) noexcept {
+            assert(renderer==reinterpret_cast<void*>(0x30000) && generation==7);
+            assert(children.detaches==2 && vptrWrites==1 && privateTable.requiresRetention());
+            ++cleanupCalls;return true;
+        };
         auto prepare=[&](auto write) noexcept {
             return tglPrepareOwnedContextRemoval(privateTable,children,reinterpret_cast<void*>(0x30000),7,
-                read,write,admitVptr,0);
+                read,write,admitVptr,0,cleanupChildren);
         };
         assert(prepare(writeVptr)==5 && children.checks==1 && !children.detaches && vptrWrites==1);
         children.allowed=true;
@@ -12162,7 +12168,7 @@ static void testRetainedVeboxFrames() {
         // Fixture-only reset after simulated failure; production quarantines.
         children.detachOk=true;
         auto orderedWrite=[&](uintptr_t address,uintptr_t value) noexcept {
-            assert(children.detaches==2);return writeVptr(address,value);
+            assert(children.detaches==2 && cleanupCalls==1);return writeVptr(address,value);
         };
         assert(prepare(orderedWrite)==0 && vptrWrites==2 && !privateTable.requiresRetention());
         assert(vptr==base+0x75d018 && dispatch()==5 && !privateTable.publish(read,writeVptr,admitVptr));

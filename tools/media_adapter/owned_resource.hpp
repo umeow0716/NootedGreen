@@ -16882,16 +16882,23 @@ public:
 // context-owner gates. Neither validation nor success certifies GPU retirement.
 // Caller quarantines the composite owner on ANY failure, retaining its images,
 // table and children; never invoke native deletion after a partial detach.
-template<class Children,class Read,class Write,class TableAdmit,class ChildAdmit>
+template<class Children,class Read,class Write,class TableAdmit,class ChildAdmit,class Cleanup>
 int tglPrepareOwnedContextRemoval(TglOwnedContextFrameVtable& table,Children& children,
     void* renderer,uint64_t generation,Read read,Write write,
-    TableAdmit tableAdmit,ChildAdmit childAdmit) noexcept {
+    TableAdmit tableAdmit,ChildAdmit childAdmit,Cleanup cleanup) noexcept {
     static_assert(noexcept(children.canDetach(renderer,generation,childAdmit)) &&
         noexcept(children.detach(renderer,generation,childAdmit)));
+    static_assert(noexcept(cleanup(renderer,generation)) &&
+        std::is_same_v<decltype(cleanup(renderer,generation)),bool>);
     if(!renderer || !generation || !table.canDetach(read,tableAdmit) ||
         !children.canDetach(renderer,generation,childAdmit)) return 5;
     // Native deleting destructors must never see owned 910/918 pointers.
     if(!children.detach(renderer,generation,childAdmit)) return 5;
+    // Native1329c0 destroys children before freeing metadata9c8. Detachment
+    // alone must not authorize native context deletion while owned children
+    // still reference that metadata. Caller holds retirement/renderer leases;
+    // failed cleanup leaves the private context table installed/quarantined.
+    if(!cleanup(renderer,generation)) return 5;
     return table.detach(read,write,tableAdmit)?0:5;
 }
 
