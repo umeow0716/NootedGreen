@@ -19508,6 +19508,11 @@ int main() {
                         int32_t pairStatus=77;
                         TglNativeVeboxMhwOwner emptyMhw(frameMhwInvoke);
                         assert(!assembly.retainedMhw() && !assembly.retainMhw(emptyMhw));
+                        assert(assembly.initializeChildFromCreator(0,TglNativeVphalMhwView{},
+                            baseBinding,lifetime,nullptr,nullptr,nullptr,pairStatus,allocatorRead,
+                            [](uintptr_t image){return image==base;},
+                            [](uintptr_t,size_t){return true;},pairConstruct)==
+                            TglOwnedBaseConstruction::NotCalled && pairStatus==77);
                         assert(assembly.initializeQualifiedChild(0,baseBinding,lifetime,mhw,
                             reinterpret_cast<void*>(os),reinterpret_cast<void*>(0x3000),
                             nullptr,nullptr,nullptr,pairStatus,allocatorRead,

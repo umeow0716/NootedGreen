@@ -19582,6 +19582,27 @@ public:
 // tear down first, so qualified child cleanup can still detach VP+80 and use
 // backing. Native parent/image/surface leases remain enclosing frame duties;
 // publication must be detached under retirement admission before destruction.
+template<class Backing,class Read,class Qualify,class Executable>
+bool tglValidateRendererCreatorEnvironment(Backing& backing,const TglNativeVphalMhwView& view,
+    Read read,Qualify qualify,Executable executable,TglVeboxHardwareBinding& hardware) noexcept {
+    const auto image=view.renderer.image;
+    uintptr_t os=0,rh=0,mhw=0,renderer=0,rendererOs=0,rendererRh=0;
+    if(!view.parent || view.parent!=view.renderer.creator || view.parent>UINTPTR_MAX-0x70 ||
+        !view.renderer.renderer || view.renderer.renderer>UINTPTR_MAX-0x2cd0 ||
+        !read(view.parent+0x40,&os,8) || os!=view.os ||
+        !read(view.parent+0x48,&rh,8) || rh!=view.renderHal ||
+        !read(view.parent+0x50,&mhw,8) || mhw!=view.hardware.interface ||
+        !read(view.parent+0x68,&renderer,8) || renderer!=view.renderer.renderer ||
+        !read(renderer+0x2cc0,&rendererRh,8) || rendererRh!=rh ||
+        !read(renderer+0x2cc8,&rendererOs,8) || rendererOs!=os ||
+        !hardware.resolve(mhw,os,image,read,qualify)) return false;
+    TglNativeVphalResourceEnvironment environment;
+    return environment.resources.resolveFromRenderHal(rh,image,read,qualify,executable) &&
+        environment.resources.context==os &&
+        tglReadNativeResourcePageSize(environment.pageSize,image,read,qualify) &&
+        environment.fill.resolve(os,image,read,qualify,executable) &&
+        backing.matchesResourceEnvironment(environment);
+}
 template<class Api,class Cleanup,class Cpu=TglNativeTrackedCpuInvoker,
     class Sfc=TglNativeSfcLifetimeInvoker,class Destroy=TglNativeVeboxDestructorInvoker>
 class TglNativeVeboxRendererCpuStorage {
@@ -19592,23 +19613,7 @@ class TglNativeVeboxRendererCpuStorage {
     template<class Read,class Qualify,class Executable>
     bool creatorEnvironment(const TglNativeVphalMhwView& view,Read read,Qualify qualify,
         Executable executable,TglVeboxHardwareBinding& hardware) noexcept {
-        const auto image=view.renderer.image;
-        uintptr_t os=0,rh=0,mhw=0,renderer=0,rendererOs=0,rendererRh=0;
-        if(!view.parent || view.parent!=view.renderer.creator || view.parent>UINTPTR_MAX-0x70 ||
-            !view.renderer.renderer || view.renderer.renderer>UINTPTR_MAX-0x2cd0 ||
-            !read(view.parent+0x40,&os,8) || os!=view.os ||
-            !read(view.parent+0x48,&rh,8) || rh!=view.renderHal ||
-            !read(view.parent+0x50,&mhw,8) || mhw!=view.hardware.interface ||
-            !read(view.parent+0x68,&renderer,8) || renderer!=view.renderer.renderer ||
-            !read(renderer+0x2cc0,&rendererRh,8) || rendererRh!=rh ||
-            !read(renderer+0x2cc8,&rendererOs,8) || rendererOs!=os ||
-            !hardware.resolve(mhw,os,image,read,qualify)) return false;
-        TglNativeVphalResourceEnvironment environment;
-        return environment.resources.resolveFromRenderHal(rh,image,read,qualify,executable) &&
-            environment.resources.context==os &&
-            tglReadNativeResourcePageSize(environment.pageSize,image,read,qualify) &&
-            environment.fill.resolve(os,image,read,qualify,executable) &&
-            backing_.matchesResourceEnvironment(environment);
+        return tglValidateRendererCreatorEnvironment(backing_,view,read,qualify,executable,hardware);
     }
 public:
     template<class Read,class Qualify,class Executable,class... Args>
@@ -19683,6 +19688,8 @@ template<class Api,class SurfaceBackend,class DnBackend,class Cleanup,
     class Destroy=TglNativeVeboxDestructorInvoker,class MhwInvoke=TglNativeVeboxMhwAllocationInvoker,
     class MhwDependency=typename TglNativeVeboxMhwOwner<MhwInvoke>::DependencyLease>
 class TglNativeVeboxRendererFrameStorage {
+    // Outlives both children and all frame cleanup using the parent SFC.
+    std::atomic_flag sharedSfcGate_=ATOMIC_FLAG_INIT;
     // First member, LAST destroyed: surface/VP/command cleanup also uses OS
     // and native resource callbacks, not just the child destructors.
     MhwDependency mhwLease_;
@@ -19719,6 +19726,27 @@ public:
         return mhwLease_.acquire(owner);
     }
     const TglVeboxHardwareBinding* retainedMhw() const noexcept {return mhwLease_.binding();}
+    template<class Read,class Qualify,class Executable,class Construct=TglNativeVeboxConstructorInvoker>
+    TglOwnedBaseConstruction initializeChildFromCreator(size_t index,const TglNativeVphalMhwView& view,
+        const TglVeboxLifetimeBinding& binding,const TglSfcLifetimeBinding& lifetime,
+        void* history,void* performance,const void* cache,int32_t& status,
+        Read read,Qualify qualify,Executable executable,Construct construct={}) {
+        const auto* retained=mhwLease_.binding();
+        TglVeboxHardwareBinding hardware;
+        TglSfcMhwBinding sfc;
+        uintptr_t object=0;
+        if(index>1 || !retained || retained->interface!=view.hardware.interface ||
+            backing_.retention()() ||
+            !tglValidateRendererCreatorEnvironment(backing_,view,read,qualify,executable,hardware) ||
+            !read(view.parent+0x60,&object,8) || !object || object==hardware.interface ||
+            !sfc.resolve(view.renderer.image,read,qualify,executable) ||
+            !sfc.validateConstructedObject(object,view.os,read))
+            return TglOwnedBaseConstruction::NotCalled;
+        auto& child=index?children_.second():children_.first();
+        return child.initializeQualified(binding,lifetime,sfc,reinterpret_cast<void*>(view.os),hardware,
+            reinterpret_cast<void*>(view.renderHal),history,performance,cache,status,read,qualify,
+            construct,object,&sharedSfcGate_);
+    }
     template<class ParentLease,class... Args>
     bool retainBorrowedMhw(ParentLease&& parent,Args&&... args) noexcept {
         if(backing_.retention()() || children_.first().owner().constructedBase() ||
