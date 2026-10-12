@@ -14676,7 +14676,7 @@ int tglRunCapturedFfdnHistoryPair(Targets& targets,PriorOwner& prior,
     Owner& input,Owner* previous,TglOwnedDescriptorOnlySurface& history,
     ChildOwner& childOwner,ExecutionOwner& reportOwner,void* child,uintptr_t report,
     const TglOwnedSurfaceStorage& source,TglOwnedFfdiCompressionSelection ffdi,
-    Read read,Finish finish) noexcept {
+    Read read,Finish finish,TglOwnedFfdnHistoryRecorder historyRecorder={}) noexcept {
     return tglRunCapturedVeboxAllocation(input,childOwner,reportOwner,child,report,source,
         [&](void* c,uintptr_t e,const auto& s) noexcept -> int {
             uintptr_t linkedPrevious=0,copyShell=0;
@@ -14698,7 +14698,7 @@ int tglRunCapturedFfdnHistoryPair(Targets& targets,PriorOwner& prior,
                                     std::is_same_v<decltype(finish(inputs,a,b,historyView())),int>,
                                     "captured FFDN history consumer ABI");
                                 return finish(inputs,a,b,historyView());
-                            },{&s,views[1],nullptr});
+                            },{&s,views[1],nullptr},historyRecorder);
                     };
                     if(!views[1]) return run([](const TglOwnedSurfaceStorage&) noexcept {},
                         []() noexcept -> const TglOwnedSurfaceStorage* {return nullptr;});
@@ -14717,10 +14717,10 @@ int tglRunCapturedBackedFfdnHistoryPair(const std::array<TargetOwner*,2>& target
     Owner& input,Owner* previous,TglOwnedDescriptorOnlySurface& history,
     ChildOwner& childOwner,ExecutionOwner& reportOwner,void* child,uintptr_t report,
     const TglOwnedSurfaceStorage& source,TglOwnedFfdiCompressionSelection ffdi,
-    Read read,Finish finish) noexcept {
+    Read read,Finish finish,TglOwnedFfdnHistoryRecorder historyRecorder={}) noexcept {
     if(!targets[0] || !targets[1]) return 5;
     return tglRunCapturedFfdnHistoryPair(targets,*targets[0],input,previous,history,childOwner,
-        reportOwner,child,report,source,ffdi,read,finish);
+        reportOwner,child,report,source,ffdi,read,finish,historyRecorder);
 }
 // Select the new pair from the held source format, independently of the old
 // ba8 owner used for compression. A format transition must not substitute the
@@ -14730,7 +14730,8 @@ int tglRunCapturedFfdnFrame(std::array<TglOwnedDescriptorOnlySurface,2>& descrip
     const std::array<TargetOwner*,2>& backed,PriorOwner& prior,Owner& input,Owner* previous,
     TglOwnedDescriptorOnlySurface& history,ChildOwner& childOwner,ExecutionOwner& reportOwner,
     void* child,uintptr_t report,const TglOwnedSurfaceStorage& source,
-    TglOwnedFfdiCompressionSelection ffdi,Read read,Finish finish) noexcept {
+    TglOwnedFfdiCompressionSelection ffdi,Read read,Finish finish,
+    TglOwnedFfdnHistoryRecorder historyRecorder={}) noexcept {
     return tglRunCapturedVeboxAllocation(input,childOwner,reportOwner,child,report,source,
         [&](void* c,uintptr_t e,const auto& s) noexcept -> int {
             uint32_t format=0;
@@ -14738,10 +14739,10 @@ int tglRunCapturedFfdnFrame(std::array<TglOwnedDescriptorOnlySurface,2>& descrip
             if(format==0x3d) {
                 if(!backed[0] || !backed[1]) return 5;
                 return tglRunCapturedFfdnHistoryPair(backed,prior,input,previous,history,
-                    childOwner,reportOwner,c,e,s,ffdi,read,finish);
+                    childOwner,reportOwner,c,e,s,ffdi,read,finish,historyRecorder);
             }
             return tglRunCapturedFfdnHistoryPair(descriptors,prior,input,previous,history,
-                childOwner,reportOwner,c,e,s,ffdi,read,finish);
+                childOwner,reportOwner,c,e,s,ffdi,read,finish,historyRecorder);
         });
 }
 // Non-owning views are valid only inside the tail callback: both allocated

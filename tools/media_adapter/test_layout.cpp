@@ -8111,6 +8111,7 @@ static void testNativeResourceBoundary() {
                                         child[0x1b88]=0;child[0x1b89]=0;
                                         reportBackend.bytes[8]=1;reportBackend.bytes[0x13]=1;
                                         const auto beforeDescriptor=backingBackend.allocations;
+                                        TglOwnedFfdnHistorySnapshot capturedHistory;
                                         assert(linkedInput.withSurface([&](const auto& current) noexcept {
                                             assert(tglRunCapturedFfdnFrame(descriptorPair,std::array{&targetA,&targetB},targetA,
                                                 linkedInput,&previous,historyShell,childOwner,reportOwner,
@@ -8121,7 +8122,14 @@ static void testNativeResourceBoundary() {
                                                     std::memcpy(&fa,a.prefix.data()+0x130,4);
                                                     std::memcpy(&fb,b.prefix.data()+0x130,4);
                                                     assert(fa==3 && fb==3 && reportBackend.bytes[8]==1);return -67;
-                                                })==-67);
+                                                },TglOwnedFfdnHistoryRecorder{&capturedHistory})==-67);
+                                        }));
+                                        assert(previous.withSurface([&](const auto& priorView) noexcept {
+                                            assert(capturedHistory.withView(previous,priorView,
+                                                [&](const auto& saved) noexcept -> int {
+                                                    assert(std::memcmp(saved.resource.data(),priorView.resource.data(),
+                                                        saved.resource.size())==0);return -68;
+                                                })==-68);
                                         }));
                                         assert(backingBackend.allocations==beforeDescriptor);
                                         reportBackend.bytes[0xb]=1;
