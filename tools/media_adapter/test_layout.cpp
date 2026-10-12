@@ -21118,7 +21118,9 @@ int main() {
                                             {0x1000,0x2000,0x3000,0x4000,0,0x8000,{},data+1}}};
                                         auto releaseCpu=[](void*) noexcept {assert(false);};
                                         for(int expected:{0,-31}) {
-                                            unsigned states=0,emissions=0;
+                                            unsigned states=0,emissions=0,avsProduced=0;
+                                            std::array<TglOwnedVpChromaStatePrefix,2> statePrefixes{};
+                                            std::array<TglOwnedSfcAvsTables,2> avsTables{};
                                             std::array<TglOwnedVpCscCache,2> cscCaches;
                                             std::array<std::array<uint8_t,64>,2> iefPackets{};
                                             TglOwnedVpCscDispatchContext* phases[2]{};
@@ -21128,14 +21130,28 @@ int main() {
                                             assert(firstGraph.withPairedProducerReservation(secondGraph,[&](void*,void*) noexcept -> int {
                                                 return tglWithOwnedVpPairedAcquiredFrameCore(firstGraph,first,firstLines.resources(),
                                                     secondGraph,second,secondLines.resources(),args,read,modeRetire,releaseCpu,
-                                                    [&](void*,const auto& snapshot,const auto& geometry,auto& packet) noexcept -> int {
+                                                    [&](void* child,const auto& snapshot,const auto& geometry,auto& packet) noexcept -> int {
                                                         assert(snapshot.regions.scale.scaling && !packet.hasParametersLease());
                                                         TglOwnedVpChromaStatePrefix prefix;
                                                         if(!tglPrepareOwnedVpStatePrefix(snapshot,geometry,false,false,prefix) ||
                                                            !packet.prepare(prefix.packet,{},false,false,false,
                                                                TglOwnedSfcCompressionMode::Disabled)) return 5;
+                                                        statePrefixes[child==first.bytes.data()?0:1]=prefix;
                                                         ++states;return 0;
-                                                    },[](void*,const auto&,auto&) noexcept -> int {return 0;},
+                                                    },[&](void* child,const auto& snapshot,auto& owner) noexcept -> int {
+                                                        const size_t index=child==first.bytes.data()?0:1;
+                                                        TglOwnedSfcAvsConfiguration config;
+                                                        if(!tglReadOwnedVpAvsConfiguration(snapshot,statePrefixes[index],0,read,config)) return 5;
+                                                        return tglWithOwnedSfcAvsTables(owner,avsTables[index],config.format,
+                                                            config.scaleX,config.scaleY,config.siting,config.forceFilter,
+                                                            config.symmetric,config.sharpening,config.window,
+                                                            [](float value) noexcept {return std::sin(value);}, // CPU math fixture, not native libm admission.
+                                                            [&](const auto& generated) noexcept -> int {
+                                                                assert(generated.format==config.format && generated.scaleX==config.scaleX &&
+                                                                    generated.scaleY==config.scaleY);
+                                                                ++avsProduced;return 0;
+                                                            });
+                                                    },
                                                     [](void*,const auto&) noexcept {},
                                                     [&](void* child,void*,void*) noexcept -> int {
                                                         const size_t index=child==first.bytes.data()?0:1;
@@ -21214,7 +21230,7 @@ int main() {
                                                         });
                                                     });
                                             })==expected);
-                                            assert(states==2 && emissions==2);
+                                            assert(states==2 && emissions==2 && avsProduced==2);
                                         }
                                     }
                                     for(int expected:{0,-31}) {
