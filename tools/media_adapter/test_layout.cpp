@@ -20606,6 +20606,18 @@ int main() {
                             putNative(nativeCreator,0x60,frontendSfc);
                             assert(frame.initializeVpFromCreator(frontendCreatorView,
                                 frontendRead,qualifyMhw,executableMhw)==0);
+                            assert(frame.initializeVpFromCreator(1,frontendCreatorView,
+                                frontendRead,qualifyMhw,executableMhw)==5);
+                            assert(frame.initializeVpFromCreator(2,frontendCreatorView,
+                                frontendRead,qualifyMhw,executableMhw)==5);
+                            for(size_t missingIndex: {size_t{1},size_t{2}}) {
+                                const auto absent=frame.withPrivateVpCommandFrame(missingIndex,roles,0,0,
+                                    0x1100,0x2200,0x3300,[](auto&,void*,void*,auto&,auto&,
+                                        auto&,auto&,auto&,auto&) noexcept {
+                                        assert(false);return TglOwnedVeboxCommandTransactionResult{};
+                                    });
+                                assert(absent.status==5 && !absent.acquired && !frame.backing().retention()());
+                            }
                             assert(frame.backing().withVpResources([&](auto&,auto& storage,auto&) noexcept {
                                 uintptr_t vpOs=0,vpRh=0,vpSfc=0;
                                 std::memcpy(&vpOs,storage.bytes.data()+0x10,8);

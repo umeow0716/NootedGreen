@@ -20145,12 +20145,12 @@ class TglNativeVeboxFrontendRendererFrameStorage {
     // Original frontend surfaces must outlive child cleanup.
     TglNativeVeboxChildPairStorage<Cleanup,Cpu,Sfc,Destroy> children_;
 public:
-    template<class Resolve,class Read,class Qualify,class Executable,class... Args>
+    template<class Resolve,class Read,class Qualify,class Executable,class VpInvoke,class... Args>
     TglNativeVeboxFrontendRendererFrameStorage(uintptr_t source,Resolve resolve,
         TargetOwner& target,CfApi cf,uintptr_t resourceType,uintptr_t surfaceType,
         DnBackend& parameters,uintptr_t image,Read read,Qualify qualify,Executable executable,
         const TglNativeResourceBinding& resources,uint64_t pageSize,
-        const TglNativeBufferFillBinding& fill,Cpu vpCpu,std::array<Cleanup,2> cleanup,
+        const TglNativeBufferFillBinding& fill,VpInvoke vpCpu,std::array<Cleanup,2> cleanup,
         std::array<Cpu,2> childCpu,std::array<Sfc,2> sfc,std::array<Destroy,2> destroy,
         Args&&... args) noexcept
         :backing_(image,read,qualify,executable,resources,pageSize,fill,vpCpu,
@@ -20247,16 +20247,21 @@ public:
     template<class Read,class Qualify,class Executable>
     int initializeVpFromCreator(const TglNativeVphalMhwView& view,
         Read read,Qualify qualify,Executable executable) {
+        return initializeVpFromCreator(0,view,read,qualify,executable);
+    }
+    template<class Read,class Qualify,class Executable>
+    int initializeVpFromCreator(size_t index,const TglNativeVphalMhwView& view,
+        Read read,Qualify qualify,Executable executable) {
         const auto* retained=mhwLease_.binding();
         TglVeboxHardwareBinding hardware;
         TglSfcMhwBinding sfc;
         uintptr_t object=0;
-        if(!retained || retained->interface!=view.hardware.interface || backing_.retention()() ||
+        if(index>1 || !retained || retained->interface!=view.hardware.interface || backing_.retention()() ||
             !tglValidateRendererCreatorEnvironment(backing_,view,read,qualify,executable,hardware) ||
             !read(view.parent+0x60,&object,8) || !object || object==hardware.interface ||
             !sfc.resolve(view.renderer.image,read,qualify,executable) ||
             !sfc.validateConstructedObject(object,view.os,read)) return 5;
-        return backing_.initializeVp(sfc,view.os,view.renderHal,object,read,0,0);
+        return backing_.initializeVp(index,sfc,view.os,view.renderHal,object,read,0,0);
     }
     // Scalar-only request (no nested request38 payload). Publish through the
     // existing native-release slot only after this exact tracked allocation
@@ -20324,12 +20329,12 @@ public:
     TglOwnedVeboxCommandTransactionResult withPrivateVpCommandFrame(
         size_t childIndex,const TglNativeOuterSurfaceRoles& roles,size_t sourceIndex,size_t targetIndex,
         uintptr_t execution,uintptr_t renderHal,uintptr_t sku,Consume consume) noexcept {
-        if(!backing_.vpBound()) return {};
+        if(!backing_.vpBound(childIndex)) return {};
         return withPrivateChildCommandFrame(childIndex,roles,sourceIndex,targetIndex,
             execution,renderHal,sku,
             [&](auto& owner,void* child,auto& source,auto& target,auto& parameters,auto& packets) noexcept {
                 TglOwnedVeboxCommandTransactionResult result;
-                const int status=backing_.withVpResources([&](auto& graph,auto& storage,auto& lines) noexcept {
+                const int status=backing_.withVpResources(childIndex,[&](auto& graph,auto& storage,auto& lines) noexcept {
                     return owner.withLeasedBorrowedVpCpuView(child,storage.bytes.data(),
                         [&](void* parent,void* vp) noexcept {
                             static_assert(noexcept(consume(owner,parent,vp,graph,lines,source,target,parameters,packets)) &&
