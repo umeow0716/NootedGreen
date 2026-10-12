@@ -55,16 +55,21 @@ static TglOwnedVpEntrySet testVpPresenceEntries(const TglOwnedVpEntrySet& qualif
 struct TestVeboxChildLease {
     void* child;
     bool busy=false;
+    uintptr_t renderImage=0;
+    std::array<uintptr_t,20> renderHooks{};
     uint64_t generation=1;
     uint64_t allocationGeneration() const noexcept {return generation;}
     bool hasPrivateChildLease(uintptr_t p) const noexcept {
         return busy && reinterpret_cast<uintptr_t>(child)==p;
     }
-    // This allocation-only fixture never installs a producer vtable.
-    bool matchesPrivateVtableHooks(const std::array<uintptr_t,20>&) const noexcept {
-        return false;
+    // Default allocation-only use rejects Render; focused entry tests install
+    // an explicit CPU hook catalogue and image qualification.
+    bool matchesPrivateVtableHooks(const std::array<uintptr_t,20>& hooks) const noexcept {
+        return busy && renderImage && renderHooks==hooks;
     }
-    bool hasPrivateChildImageLease(uintptr_t,uintptr_t) const noexcept {return false;}
+    bool hasPrivateChildImageLease(uintptr_t p,uintptr_t image) const noexcept {
+        return renderImage && image==renderImage && hasPrivateChildLease(p);
+    }
     template<class Execution> int setupKernelScratch(Execution&,int32_t) noexcept {return 5;}
     bool publishCsc(const TglCscCoefficients&) noexcept {return false;}
     template<class Invoke> int withPrivateChild(Invoke invoke) noexcept {
@@ -8462,7 +8467,8 @@ static void testNativeResourceBoundary() {
                                                     // pre-native missing-target rejection path. This checks
                                                     // the real hook catalogue/owner APIs, not header parsing.
                                                     struct RetainedAuxiliary {
-                                                        bool owns(void*) const noexcept {return false;}
+                                                        void* object=nullptr;
+                                                        bool owns(void* p) const noexcept {return p==object;}
                                                         void destroy(bool) noexcept {}
                                                         bool admit(void*,void*) noexcept {return false;}
                                                         int allocate() noexcept {return 31;}
@@ -8490,6 +8496,40 @@ static void testNativeResourceBoundary() {
                                                         [&](uintptr_t,void*,void*,void*) noexcept -> int {++renderEntries;return 0;});
                                                     assert(missingTarget.status==5 && !missingTarget.nativeEntered &&
                                                         !readerRetention() && renderEntries==0);
+                                                    using EntryProducers=typename Types::template Producers<
+                                                        decltype(rejectPackets),decltype(rejectCsc)>;
+                                                    RetainedAuxiliary auxiliary{actualChild};
+                                                    RetainedScope auxiliaryScope(actualChild,auxiliary);
+                                                    assert(auxiliaryScope.bound());
+                                                    childOwner.renderImage=0x100000000;
+                                                    assert((tglBuildOwnedVeboxCompleteHooks<RetainedResolve,RetainedScope,
+                                                        RetainedScope,typename EntryProducers::Resolve,RetainedScope,RetainedFormatRead>(
+                                                        actualChild,childOwner.renderHooks)));
+                                                    auto renderLeases=leases;renderLeases.target=&linkedStorage;
+                                                    TglVeboxRenderBinding entryBinding;
+                                                    entryBinding.image=childOwner.renderImage;
+                                                    entryBinding.entry=entryBinding.image+0x12c9d0;
+                                                    const auto entered=tglWithRetainedVeboxFrameNativeRender<
+                                                        RetainedResolve,RetainedScope,RetainedScope,RetainedScope,RetainedFormatRead>(
+                                                        retained,linkedInput,linkedInput,static_cast<decltype(&linkedInput)>(nullptr),
+                                                        static_cast<decltype(&linkedInput)>(nullptr),childOwner,reportOwner,
+                                                        renderLeases,false,false,{},0,read,unused,unused,unused,unused,
+                                                        rejectPackets,rejectCsc,entryBinding,nullptr,readerRetention,
+                                                        static_cast<TglOwnedFfdnNoDenoiseBorrow*>(nullptr),
+                                                        [&](uintptr_t entry,void* object,void* argument,void* descriptor) noexcept -> int {
+                                                            ++renderEntries;
+                                                            assert(entry==entryBinding.entry && object==actualChild && !argument);
+                                                            uintptr_t first=0,last=0;
+                                                            std::memcpy(&first,static_cast<uint8_t*>(descriptor)+0x10,8);
+                                                            std::memcpy(&last,static_cast<uint8_t*>(descriptor)+0x18,8);
+                                                            assert(first==reinterpret_cast<uintptr_t>(&linkedStorage) && last==first);
+                                                            auto* producer=EntryProducers::Resolve::get(object);
+                                                            assert(producer);
+                                                            return -81; // CPU native-entry stand-in, not GPU execution.
+                                                        });
+                                                    assert(entered.status==-81 && entered.nativeEntered && readerRetention() && renderEntries==1);
+                                                    assert(!EntryProducers::Resolve::get(actualChild));
+                                                    childOwner.renderImage=0;childOwner.renderHooks.fill(0);
                                                     reportBackend.bytes=savedReport;
                                                 }
                                                 retained.publishPreparedSelection(false);
