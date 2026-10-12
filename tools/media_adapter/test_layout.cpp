@@ -8408,9 +8408,13 @@ static void testNativeResourceBoundary() {
                                                         assert(!stmm.surfaces[0] && statistics.resource[0x48]==1);
                                                         assert(retained.ffdiBacked()[0]->hasSurfaceLease(*ffdi.outputs[0]));
                                                         assert(retained.ffdnBacked()[0]->hasSurfaceLease(*ffdn.outputs[0]));
-                                                        return -76;
+                                                        assert(retained.capturePreparedSelection(linkedInput,current,ffdi,ffdn,stmm));
+                                                        assert(retained.withPreparedSelection(linkedInput,current,
+                                                            [](size_t,auto,bool,bool) noexcept -> int {assert(false);return 0;})==5);
+                                                        return 0;
                                                     },static_cast<TglOwnedFfdnNoDenoiseBorrow*>(nullptr),
-                                                    {&current,nullptr,nullptr,nullptr})==-76);
+                                                    {&current,nullptr,nullptr,nullptr})==0);
+                                                retained.publishPreparedSelection(true);
                                                 assert(borrowFixture.allocations==graphAllocations && borrowFixture.fills==1);
                                                 {
                                                     const auto savedReport=reportBackend.bytes;
@@ -8420,7 +8424,7 @@ static void testNativeResourceBoundary() {
                                                     assert(tglRunRetainedDiIecpFrameInput(retained,linkedInput,
                                                         static_cast<decltype(&linkedInput)>(nullptr),static_cast<decltype(&linkedInput)>(nullptr),
                                                         static_cast<decltype(&linkedInput)>(nullptr),childOwner,reportOwner,actualChild,report,
-                                                        current,2,TglOwnedFfdiAllocationKind::NativeBacking,true,false,read,false,{},
+                                                        current,read,false,{},
                                                         [&](const TglDiIecpInputs& live) noexcept -> int {
                                                             assert(live.current==&current && !live.dnNeeded && !live.referenceValid);
                                                             assert(live.ffdi[0] && live.ffdi[1] && live.ffdn[0] && live.statistics);
@@ -8428,6 +8432,10 @@ static void testNativeResourceBoundary() {
                                                         })==-79);
                                                     reportBackend.bytes=savedReport;
                                                 }
+                                                retained.publishPreparedSelection(false);
+                                                retained.publishPreparedSelection(true); // cannot revive a failed handoff
+                                                assert(retained.withPreparedSelection(linkedInput,current,
+                                                    [](size_t,auto,bool,bool) noexcept -> int {assert(false);return 0;})==5);
                                                 assert(retained.withPreparedSurfaceViews(linkedInput,
                                                     static_cast<decltype(&linkedInput)>(nullptr),static_cast<decltype(&linkedInput)>(nullptr),
                                                     static_cast<decltype(&linkedInput)>(nullptr),0,TglOwnedFfdiAllocationKind::NativeBacking,

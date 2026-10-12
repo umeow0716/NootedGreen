@@ -7408,6 +7408,9 @@ public:
         return valid && owner.hasSurfaceLease(source)?result:5;
     }
     const void* surfaceBinding() const noexcept {return &storage_;}
+    bool hasDescriptorLease(const TglOwnedSurfaceStorage& view) const noexcept {
+        return ready_ && busy_ && &view==&storage_;
+    }
     template<class Owner,class Use>
     int withBorrowedHistorySnapshotScope(TglOwnedFfdnHistorySnapshot& snapshot,
         Owner& owner,const TglOwnedSurfaceStorage& source,Use use) noexcept {
@@ -18816,6 +18819,13 @@ template<class Api> class TglNativeVeboxSurfaceFrameStorage {
     // Metadata only; original previous owner must still be leased at use.
     // This does not extend backing lifetime or certify GPU completion.
     TglOwnedFfdnHistorySnapshot historySnapshot_;
+    struct PreparedSelection {
+        const TglOwnedSurfaceStorage* source=nullptr;
+        size_t count=0;
+        TglOwnedFfdiAllocationKind kind=TglOwnedFfdiAllocationKind::DescriptorOnly;
+        bool ffdn=false,stmm=false;
+    } selection_;
+    bool selectionCaptured_=false,selectionReady_=false;
     bool priorBusy_=false;
 public:
     template<class... Args>
@@ -18832,6 +18842,40 @@ public:
     auto& ffdnDescriptors() noexcept {return ffdnDescriptors_;}
     auto& history() noexcept {return history_;}
     auto& historySnapshot() noexcept {return historySnapshot_;}
+    void discardPreparedSelection() noexcept {selection_={};selectionCaptured_=false;selectionReady_=false;}
+    void publishPreparedSelection(bool success) noexcept {
+        if(!success) {discardPreparedSelection();return;}
+        selectionReady_=selectionCaptured_;
+    }
+    template<class Owner>
+    bool capturePreparedSelection(Owner& owner,const TglOwnedSurfaceStorage& source,
+        const TglOwnedFfdiTailViews& ffdi,const TglOwnedFfdnTailViews& ffdn,const TglOwnedStmmTailViews& stmm) noexcept {
+        discardPreparedSelection();
+        if(!owner.hasSurfaceLease(source) || ffdi.inputs[0]!=&source || ffdi.count>4) return false;
+        PreparedSelection candidate;candidate.source=&source;candidate.count=ffdi.count;
+        auto kindOf=[&](size_t i,const TglOwnedSurfaceStorage* view,TglOwnedFfdiAllocationKind& kind) noexcept {
+            if(view && ffdi_[i].hasSurfaceLease(*view)) {kind=TglOwnedFfdiAllocationKind::NativeBacking;return true;}
+            if(view && ffdiDescriptors_[i].hasDescriptorLease(*view)) {kind=TglOwnedFfdiAllocationKind::DescriptorOnly;return true;}
+            return false;
+        };
+        if(ffdi.count) {
+            if(!kindOf(0,ffdi.outputs[0],candidate.kind)) return false;
+            for(size_t i=1;i<ffdi.count;++i) {auto kind=candidate.kind;
+                if(!kindOf(i,ffdi.outputs[i],kind) || kind!=candidate.kind) return false;}
+        } else if(ffdi.secondaryTarget && !kindOf(0,ffdi.secondaryTarget,candidate.kind)) return false;
+        if(bool(ffdn.outputs[0])!=bool(ffdn.outputs[1]) || bool(stmm.surfaces[0])!=bool(stmm.surfaces[1])) return false;
+        candidate.ffdn=ffdn.outputs[0]!=nullptr;candidate.stmm=stmm.surfaces[0]!=nullptr;
+        if(candidate.ffdn) for(size_t i=0;i<2;++i)
+            if(!ffdn_[i].hasSurfaceLease(*ffdn.outputs[i]) && !ffdnDescriptors_[i].hasDescriptorLease(*ffdn.outputs[i])) return false;
+        selection_=candidate;selectionCaptured_=true;return true;
+    }
+    template<class Owner,class Use>
+    int withPreparedSelection(Owner& owner,const TglOwnedSurfaceStorage& source,Use use) noexcept {
+        static_assert(noexcept(use(size_t{},TglOwnedFfdiAllocationKind{},bool{},bool{})) &&
+            std::is_same_v<decltype(use(size_t{},TglOwnedFfdiAllocationKind{},bool{},bool{})),int>);
+        if(!selectionReady_ || auxiliary_.retention()() || selection_.source!=&source || !owner.hasSurfaceLease(source)) return 5;
+        return use(selection_.count,selection_.kind,selection_.ffdn,selection_.stmm);
+    }
     auto ffdiBacked() noexcept {
         return std::array<Surface*,4>{&ffdi_[0],&ffdi_[1],&ffdi_[2],&ffdi_[3]};
     }
@@ -18971,12 +19015,19 @@ int tglRunNativeVeboxSurfaceFrame(TglNativeVeboxSurfaceFrameStorage<Api>& storag
     Statistics statistics,Unwind unwind) noexcept {
     auto keep=[&]() noexcept {return storage.auxiliary().retention()();};
     if(keep()) return 5;
+    storage.discardPreparedSelection();
     auto prior=storage.capturedFfdnPrior(reinterpret_cast<uintptr_t>(child),read);
-    return tglRunCapturedVeboxSurfaceFrame<true>(storage.ffdiDescriptors(),storage.ffdiBacked(),
+    auto capture=[&](void* active,uintptr_t execution,const auto& current,const auto& ffdi,
+        const auto& ffdn,const auto& stmmViews) noexcept -> int {
+        if(!storage.capturePreparedSelection(input,current,ffdi,ffdn,stmmViews)) return 5;
+        return statistics(active,execution,current,ffdi,ffdn,stmmViews);
+    };
+    const int status=tglRunCapturedVeboxSurfaceFrame<true>(storage.ffdiDescriptors(),storage.ffdiBacked(),
         storage.ffdnDescriptors(),storage.ffdnBacked(),prior,storage.history(),
         input,executionSurface,secondary,previous,childOwner,reportOwner,child,report,
-        source,read,sfcFormat,sfcColor,parameterKind,supports,rectangle,stmm,statistics,unwind,keep,
+        source,read,sfcFormat,sfcColor,parameterKind,supports,rectangle,stmm,capture,unwind,keep,
         TglOwnedFfdnHistoryRecorder{&storage.historySnapshot()});
+    storage.publishPreparedSelection(status==0);return status;
 }
 
 // Standalone statistics tail: preceding FFDi/FFDN/STMM scopes remain owned by
@@ -19165,6 +19216,21 @@ int tglRunRetainedDiIecpFrameInput(TglNativeVeboxSurfaceFrameStorage<Api>& stora
                     return tglRunCapturedDiIecpFrameInput(sourceOwner,childOwner,executionOwner,active,report,
                         current,ffdi,ffdn,stmm,statistics,read,alignDi64,controls,consume);
                 },parameters,{&current,nullptr,nullptr,nullptr});
+        });
+}
+
+template<class Api,class Owner,class ChildOwner,class ExecutionOwner,class Read,class Consume,
+    class Parameters=TglOwnedFfdnNoDenoiseBorrow>
+int tglRunRetainedDiIecpFrameInput(TglNativeVeboxSurfaceFrameStorage<Api>& storage,
+    Owner& sourceOwner,Owner* targetOwner,Owner* secondaryOwner,Owner* previousOwner,
+    ChildOwner& childOwner,ExecutionOwner& executionOwner,void* child,uintptr_t execution,
+    const TglOwnedSurfaceStorage& source,Read read,bool alignDi64,
+    const std::array<uint32_t,11>& controls,Consume consume,Parameters* parameters=nullptr) noexcept {
+    return storage.withPreparedSelection(sourceOwner,source,
+        [&](size_t count,TglOwnedFfdiAllocationKind kind,bool ffdn,bool stmm) noexcept -> int {
+            return tglRunRetainedDiIecpFrameInput(storage,sourceOwner,targetOwner,secondaryOwner,previousOwner,
+                childOwner,executionOwner,child,execution,source,count,kind,ffdn,stmm,
+                read,alignDi64,controls,consume,parameters);
         });
 }
 
