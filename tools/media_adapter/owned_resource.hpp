@@ -18235,8 +18235,15 @@ class TglOwnedVphalRendererOwner {
             uintptr_t actual=0;
             return object<=UINTPTR_MAX-0x70 && read(object+0x68,&actual,sizeof(actual)) && actual==renderer;
         }
+        bool boundPhysicalOs() noexcept {
+            uintptr_t os=0,wrapper=0,embedded=0;
+            return object<=UINTPTR_MAX-0x70 && physical<=UINTPTR_MAX-0x58 &&
+                read(object+0x40,&os,8) && os && os<=UINTPTR_MAX-0x10 &&
+                read(physical+0x50,&wrapper,8) && wrapper && wrapper<=UINTPTR_MAX-0x50 &&
+                read(os+0x8,&embedded,8) && embedded==wrapper+0x48;
+        }
         int prepare() noexcept {
-            if(!physicalLease.matches(image,physical,generation) || !boundRenderer()) return 5;
+            if(!physicalLease.matches(image,physical,generation) || !boundRenderer() || !boundPhysicalOs()) return 5;
             return tglPrepareOwnedVphalStorageRemoval(table,storage,reinterpret_cast<void*>(renderer),
                 generation,read,write,tableAdmit,childAdmit);
         }
@@ -18273,12 +18280,15 @@ public:
     }
     uintptr_t context() const noexcept {return state_?state_->object:0;}
     const TglOwnedVphalLifetimeTable& lifetime() const noexcept {return state_->table;}
-    template<class ImageRead,class Qualify,class Executable,class OwnedExecutable>
+    template<class ImageRead,class Qualify,class Executable,class OwnedExecutable,class CreatorAdmit>
     bool publishLifetime(uintptr_t destroy,uintptr_t deletingDestroy,ImageRead imageRead,
-        Qualify qualify,Executable executable,OwnedExecutable ownedExecutable) noexcept {
-        if(!state_ || !state_->storage || !state_->boundRenderer() ||
+        Qualify qualify,Executable executable,OwnedExecutable ownedExecutable,CreatorAdmit creatorAdmit) noexcept {
+        if(!state_ || !state_->storage || !state_->boundRenderer() || !state_->boundPhysicalOs() ||
             !state_->physicalLease.matches(state_->image,state_->physical,state_->generation) ||
             state_->destruction.phase()!=TglOwnedVphalDestructionState::Phase::Idle) return false;
+        TglNativeCreatedVeboxRendererView created;
+        if(!created.resolve(state_->image,state_->object,state_->read,creatorAdmit,qualify,executable) ||
+            created.renderer!=state_->renderer) return false;
         return state_->table.build(state_->image,destroy,deletingDestroy,imageRead,qualify,
             executable,ownedExecutable) && state_->table.publish(state_->object,
                 state_->read,state_->write,state_->tableAdmit);

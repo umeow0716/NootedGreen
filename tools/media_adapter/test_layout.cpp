@@ -14368,8 +14368,9 @@ int main() {
                     struct VphalChildren {
                         bool allow=false,detached=false,destroyed=false;
                         uint64_t expectedGeneration=7;
+                        uintptr_t expectedRenderer=0x30000;
                         bool canDetach(void* object,uint64_t generation,int) noexcept {
-                            assert(object==reinterpret_cast<void*>(0x30000) && generation==expectedGeneration);return allow;
+                            assert(object==reinterpret_cast<void*>(expectedRenderer) && generation==expectedGeneration);return allow;
                         }
                         bool detach(void*,uint64_t,int) noexcept {detached=true;return true;}
                         bool destroyDetached(void*,uint64_t) noexcept {assert(detached);destroyed=true;return true;}
@@ -14434,16 +14435,23 @@ int main() {
                         const auto ticket=physicalOwners.reserve(image);
                         assert(physicalOwners.publish(ticket,image,0x90000));
                         auto dependency=physicalOwners.pinDependency(ticket,image,0x90000);
-                        children={};children.expectedGeneration=ticket.generation;backingReleased=false;
+                        children={};children.expectedGeneration=ticket.generation;children.expectedRenderer=r;backingReleased=false;
                         auto* ownedStorage=new RendererStorage{children,backingReleased};
                         unsigned ownedNativeCalls=0;
-                        uintptr_t actualRenderer=0x30000;bool rendererReadable=true;
+                        uintptr_t actualRenderer=r;bool rendererReadable=true;
+                        uintptr_t embeddedOs=0x91048;
                         auto ownerRead=[&](uintptr_t address,void* bytes,size_t size) noexcept {
                             if(address==creatorAddress+0x68 && size==8) {
                                 if(!rendererReadable) return false;
                                 std::memcpy(bytes,&actualRenderer,8);return true;
                             }
-                            return readObject(address,bytes,size);
+                            if(size==8 && (address==creatorAddress+0x40 || address==0x90050 ||
+                                address==0x93008)) {
+                                const uintptr_t value=address==creatorAddress+0x40?0x93000:
+                                    address==0x90050?0x91000:embeddedOs;
+                                std::memcpy(bytes,&value,8);return true;
+                            }
+                            return readObject(address,bytes,size) || creatorRead(address,bytes,size);
                         };
                         auto ownerWrite=[&](uintptr_t address,uintptr_t value) noexcept {
                             // Publication precedes cleanup; restoring native vptr follows children.
@@ -14460,19 +14468,27 @@ int main() {
                         using Owner=TglOwnedVphalRendererOwner<RendererStorage,
                             PhysicalRegistry::DependencyLease,decltype(ownerRead),decltype(ownerWrite),
                             decltype(admitObject),int,decltype(ownedNative)>;
-                        assert(!Owner::create(image,0x90000,ticket.generation+1,creatorAddress,0x30000,
+                        assert(!Owner::create(image,0x90000,ticket.generation+1,creatorAddress,r,
                             dependency,ownedStorage,ownerRead,ownerWrite,admitObject,0,ownedNative));
                         assert(dependency.live() && ownedStorage);
-                        auto* owner=Owner::create(image,0x90000,ticket.generation,creatorAddress,0x30000,
+                        auto* owner=Owner::create(image,0x90000,ticket.generation,creatorAddress,r,
                             dependency,ownedStorage,ownerRead,ownerWrite,admitObject,0,ownedNative);
                         assert(owner && !ownedStorage && !dependency.live());
                         assert(owner->context()==creatorAddress && !owner->nativeDestructionComplete());
+                        auto ownerExecutable=[&](uintptr_t address,size_t size) noexcept {
+                            return execLifetime(address,size) || creatorExecutable(address,size);
+                        };
                         actualRenderer+=8;
-                        assert(!owner->publishLifetime(0xf000,0xf100,readLifetime,qualify,execLifetime,ownedLifetime));
+                        assert(!owner->publishLifetime(0xf000,0xf100,readLifetime,qualify,ownerExecutable,ownedLifetime,creatorAdmit));
                         actualRenderer-=8;rendererReadable=false;
-                        assert(!owner->publishLifetime(0xf000,0xf100,readLifetime,qualify,execLifetime,ownedLifetime));
+                        assert(!owner->publishLifetime(0xf000,0xf100,readLifetime,qualify,ownerExecutable,ownedLifetime,creatorAdmit));
                         rendererReadable=true;
-                        assert(owner->publishLifetime(0xf000,0xf100,readLifetime,qualify,execLifetime,ownedLifetime));
+                        embeddedOs+=8;
+                        assert(!owner->publishLifetime(0xf000,0xf100,readLifetime,qualify,ownerExecutable,ownedLifetime,creatorAdmit));
+                        embeddedOs-=8;nativeInit++;
+                        assert(!owner->publishLifetime(0xf000,0xf100,readLifetime,qualify,ownerExecutable,ownedLifetime,creatorAdmit));
+                        nativeInit--;
+                        assert(owner->publishLifetime(0xf000,0xf100,readLifetime,qualify,ownerExecutable,ownedLifetime,creatorAdmit));
                         assert(!owner->requestDestruction(TglOwnedVphalDestructionState::Kind::DeletingDestroy));
                         assert(!backingReleased && !ownedNativeCalls);
                         children.allow=true;
