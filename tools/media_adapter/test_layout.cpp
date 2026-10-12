@@ -8497,10 +8497,18 @@ static void testNativeResourceBoundary() {
                                                     assert(missingTarget.status==5 && !missingTarget.nativeEntered &&
                                                         !readerRetention() && renderEntries==0);
                                                     unsigned liveAdmissions=0;
+                                                    bool allowSurfacePacket=false;
                                                     auto liveSurfaceAdmission=[&](const TglOwnedSurfaceStorage& surface,size_t role) noexcept -> int {
-                                                        assert(&surface==&linkedStorage && role==0);
-                                                        assert(linkedInput.hasSurfaceLease(surface));
-                                                        ++liveAdmissions;return -82;
+                                                        if(role==0) {
+                                                            assert(&surface==&linkedStorage && linkedInput.hasSurfaceLease(surface));
+                                                        } else if(role==2) {
+                                                            const auto& inactive=retained.auxiliary().stmmStorage().surfaces();
+                                                            assert(&surface==&inactive[0] || &surface==&inactive[1]);
+                                                        } else if(role==3) {
+                                                            assert(retained.ffdnBacked()[0]->hasSurfaceLease(surface) ||
+                                                                retained.ffdnBacked()[1]->hasSurfaceLease(surface));
+                                                        }
+                                                        ++liveAdmissions;return allowSurfacePacket ? 0 : -82;
                                                     };
                                                     using EntryTypes=TglRetainedVeboxLiveFrameTypes<FrameStmmApi,decltype(linkedInput),
                                                         std::decay_t<decltype(childOwner)>,std::decay_t<decltype(reportOwner)>,decltype(read),
@@ -8571,7 +8579,8 @@ static void testNativeResourceBoundary() {
                                                     TglOwnedVeboxFrameRetention packetRetention;
                                                     const auto packetAllocations=borrowFixture.allocations;
                                                     const auto packetFills=borrowFixture.fills;
-                                                    const auto packets=tglWithRetainedLiveVeboxPacketFrame(retained,linkedInput,&linkedInput,
+                                                    const auto runPacket=[&]() noexcept {
+                                                        return tglWithRetainedLiveVeboxPacketFrame(retained,linkedInput,&linkedInput,
                                                         static_cast<decltype(&linkedInput)>(nullptr),static_cast<decltype(&linkedInput)>(nullptr),
                                                         childOwner,reportOwner,renderLeases,false,false,{},read,liveSurfaceAdmission,
                                                         unused,unused,unused,packetRetention,
@@ -8589,14 +8598,23 @@ static void testNativeResourceBoundary() {
                                                                 [&](void* object,const auto& hooks,auto& producer) noexcept -> int {
                                                                     return producer.pass.withBuilder([&]() noexcept -> int {
                                                                         using SurfaceCallback=int(*)(void*,bool,void*) noexcept;
-                                                                        return reinterpret_cast<SurfaceCallback>(hooks[7])(object,false,&surfacePacket);
+                                                                        const int status=reinterpret_cast<SurfaceCallback>(hooks[7])(object,false,&surfacePacket);
+                                                                        if(status) return status;
+                                                                        assert(surfacePacket.surfaces[0]==&linkedStorage && surfacePacket.surfaces[2] &&
+                                                                            surfacePacket.surfaces[3]);
+                                                                        return -84; // End CPU surface-only pass, not a successful native builder.
                                                                     });
                                                                 });
                                                             return value;
                                                         });
+                                                    };
+                                                    const auto packets=runPacket();
                                                     // Inactive STMM shells now reach packet admission, without
                                                     // allocating backing. Admission's exact rejection survives.
                                                     assert(packets.status==-82 && liveAdmissions==1 && !packetRetention());
+                                                    allowSurfacePacket=true;
+                                                    const auto publishedPacket=runPacket();
+                                                    assert(publishedPacket.status==-84 && liveAdmissions>=4 && !packetRetention());
                                                     assert(borrowFixture.allocations==packetAllocations && borrowFixture.fills==packetFills);
                                                     assert(!EntryProducers::Resolve::get(actualChild));
                                                     childOwner.renderImage=0;childOwner.renderHooks.fill(0);
