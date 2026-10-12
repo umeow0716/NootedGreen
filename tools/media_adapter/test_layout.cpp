@@ -21124,6 +21124,15 @@ int main() {
                                             unsigned states=0,emissions=0,avsProduced=0,iefProduced=0;
                                             std::array<TglOwnedVpChromaStatePrefix,2> statePrefixes{};
                                             std::array<TglOwnedSfcAvsTables,2> avsTables{};
+                                            std::array<TglOwnedSfcCommandParameters,2> commandInputs;
+                                            TglNativeSineBinding sineBinding;
+                                            assert(sineBinding.resolve(0x100000,
+                                                [](uintptr_t address,void* output,size_t size) noexcept {
+                                                    assert(address==0x100000+0x23e4c4 && size==6);
+                                                    const std::array<uint8_t,6> anchor{0xff,0x25,0x3e,0x21,0x52,0x00};
+                                                    std::memcpy(output,anchor.data(),size);return true;
+                                                },[](uintptr_t image) noexcept {return image==0x100000;},
+                                                [](uintptr_t address,size_t size) noexcept {return address==0x100000+0x23e4c4 && size==6;}));
                                             std::array<TglOwnedVpCscCache,2> cscCaches;
                                             std::array<std::array<uint8_t,64>,2> iefPackets{};
                                             TglOwnedVpCscDispatchContext* phases[2]{};
@@ -21145,20 +21154,31 @@ int main() {
                                                         const size_t index=child==first.bytes.data()?0:1;
                                                         TglOwnedSfcAvsConfiguration config;
                                                         if(!tglReadOwnedVpAvsConfiguration(snapshot,statePrefixes[index],0,read,config)) return 5;
-                                                        return tglWithOwnedSfcAvsTables(owner,avsTables[index],config.format,
+                                                        TglNativeSineBinding missingSine;
+                                                        assert(tglWithOwnedSfcNativeAvsTables(owner,avsTables[index],config.format,
                                                             config.scaleX,config.scaleY,config.siting,config.forceFilter,
-                                                            config.symmetric,config.sharpening,config.window,
-                                                            [](float value) noexcept {return std::sin(value);}, // CPU math fixture, not native libm admission.
+                                                            config.symmetric,config.sharpening,config.window,missingSine,
+                                                            [](const auto&) noexcept -> int {assert(false);return 0;})==5);
+                                                        return tglWithOwnedSfcNativeAvsTables(owner,avsTables[index],config.format,
+                                                            config.scaleX,config.scaleY,config.siting,config.forceFilter,
+                                                            config.symmetric,config.sharpening,config.window,sineBinding,
                                                             [&](const auto& generated) noexcept -> int {
                                                                 assert(generated.format==config.format && generated.scaleX==config.scaleX &&
                                                                     generated.scaleY==config.scaleY);
+                                                                auto siting=config.phaseSourceSiting;
+                                                                if(!tglPrepareOwnedSfcAvsCommandParameters(commandInputs[index],generated,siting)) return 5;
+                                                                assert(commandInputs[index].y.coefficients==generated.packedY &&
+                                                                    commandInputs[index].uv.coefficients==generated.packedUv);
                                                                 ++avsProduced;return 0;
+                                                            },[](uintptr_t entry,float value) noexcept {
+                                                                assert(entry==0x100000+0x23e4c4);
+                                                                return std::sin(value); // Native-call recording fixture, not runtime proof.
                                                             });
                                                     },
                                                     [&](void* child,const auto& snapshot,uint8_t* statePacket) noexcept {
                                                         assert(statePacket);
                                                         const size_t index=child==first.bytes.data()?0:1;
-                                                        TglOwnedSfcCommandParameters parameters;
+                                                        auto& parameters=commandInputs[index];
                                                         std::memcpy(parameters.state.data(),statePacket,parameters.state.size());
                                                         unsigned imageReads=0;
                                                         auto imageRead=[&](uintptr_t address,void* output,size_t size) noexcept {
