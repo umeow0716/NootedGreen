@@ -3451,6 +3451,28 @@ static void testVeboxHardwareBinding() {
     TglVeboxHardwareBinding b;
     auto resolve = [&] { return b.resolve(mhw, os, image, read, qualify); };
     assert(resolve() && b.interface == mhw && b.os == os && b.heap == heap);
+    {
+        std::array<uint32_t,10> layout{16,128,4096,4096,8192,4096,4096,8192,0,0};
+        std::array<uint8_t,16> anchor{0x55,0x48,0x89,0xe5,0x48,0x81,0xec,0x90,
+            0,0,0,0x48,0x89,0x7d,0xf8,0x48};
+        unsigned initialized=0;uint32_t result=0;bool executable=true;
+        auto initRead=[&](uintptr_t p,void* out,size_t n) {
+            if(p==mhw+0x28 && n==sizeof(layout)) {std::memcpy(out,layout.data(),n);return true;}
+            if(p==image+0xff290 && n==anchor.size()) {std::memcpy(out,anchor.data(),n);return true;}
+            return read(p,out,n);
+        };
+        auto init=[&] {return b.initializeHeap(mhw,os,image,initRead,qualify,
+            [&](uintptr_t,size_t){return executable;},[&](uintptr_t entry,uintptr_t object) {
+                assert(entry==image+0xff290 && object==mhw);++initialized;
+                if(!result) heap=0x4000;return result;
+            });};
+        assert(init()==5 && initialized==0); // refuse duplicate initialization
+        heap=0;layout[0]=0;assert(init()==5 && initialized==0);layout[0]=16;
+        executable=false;assert(init()==5 && initialized==0);executable=true;
+        anchor[0]=0;assert(init()==5 && initialized==0);anchor[0]=0x55;
+        result=31;assert(init()==31 && initialized==1 && !heap && !b.interface);
+        result=0;assert(init()==0 && initialized==2 && b.heap==heap);
+    }
     auto empty = [&] { assert(!b.interface && !b.os && !b.heap); };
     ++relocation;assert(!resolve());empty();--relocation;
     osMode=1;assert(!resolve());empty();

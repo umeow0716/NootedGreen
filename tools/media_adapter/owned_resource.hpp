@@ -3134,6 +3134,37 @@ inline TglVeboxSlotReuseReason tglVeboxSlotReuseReason(uint8_t pending,
 
 struct TglVeboxHardwareBinding {
     uintptr_t interface = 0, os = 0, heap = 0;
+    // Called only by the enclosing, serialized MHW owner before publication.
+    // Retain that owner even if post-call admission fails: native may already
+    // own resources. Never infer retirement or invoke cleanup from this status.
+    template<class Read,class Qualify,class Executable,class Invoke>
+    uint32_t initializeHeap(uintptr_t mhw,uintptr_t expectedOs,uintptr_t image,
+                            Read read,Qualify qualify,Executable executable,Invoke invoke) {
+        *this={};
+        constexpr auto max=std::numeric_limits<uintptr_t>::max();
+        if(!mhw || mhw>max-0x50 || !expectedOs || !image ||
+           image>max-0x759520 || !qualify(image)) return 5;
+        uintptr_t vt=0,actualOs=0,existing=0,relocation=0;
+        uint32_t mode=0;
+        constexpr std::array<uint32_t,10> defaults{
+            16,128,4096,4096,8192,4096,4096,8192,0,0};
+        auto layout=defaults;
+        constexpr std::array<uint8_t,16> anchor{
+            0x55,0x48,0x89,0xe5,0x48,0x81,0xec,0x90,
+            0,0,0,0x48,0x89,0x7d,0xf8,0x48};
+        auto bytes=anchor;
+        if(expectedOs>max-0x90 || !read(mhw,&vt,8) || vt!=image+0x759520 ||
+           !read(mhw+0x18,&actualOs,8) || actualOs!=expectedOs ||
+           !read(mhw+0x20,&existing,8) || existing ||
+           !read(mhw+0x28,layout.data(),sizeof(layout)) || layout!=defaults ||
+           !read(expectedOs+0x8c,&mode,4) || !read(mhw+8,&relocation,8) ||
+           relocation!=image+(mode?0x3e6a0:0x3eae0) ||
+           !executable(image+0xff290,anchor.size()) ||
+           !read(image+0xff290,bytes.data(),bytes.size()) || bytes!=anchor) return 5;
+        const uint32_t result=invoke(image+0xff290,mhw);
+        if(result) return result; // ff290 performs its own failure unwind
+        return resolve(mhw,expectedOs,image,read,qualify)?0:5;
+    }
     // Native129ca0 passes argument6 to MHW+18 (171240), with ECX=0.
     // Caller must have completed state/resource validation and heap assignment,
     // and owns command capacity/discard on failure. No implicit submit/retry.
@@ -3403,7 +3434,22 @@ struct TglVeboxHardwareBinding {
             read(state.resource + 0x20, &handle, 8) &&
             read(state.resource + 0x50, &address, 8) && (handle || address);
     }
-    // ff290 locks DriverResource40 and publishes heap2d8=heap2d0+heap8.
+    // ff290 is the separate heap initializer, not merely a tag mapper:
+    // CPU allocation437e0(count*8+0x2e8) -> MHW20, heap38 points to
+    // the trailing per-instance records. MHW30..4c cumulative sizes form
+    // heap10..2c; heap8=stride*count, heap30=heap8+MHW2c.
+    // Exact G12 ctor16f140 copies ten DWORDs from744ac0 to MHW28:
+    // {16,128,4096,4096,8192,4096,4096,8192,0,0}. Thus the native
+    // defaults produce CPU extent368, stride8000, resource bytes80080.
+    // These are constructor-produced inputs, not arbitrary fixture values;
+    // any caller override still needs checked count/sum/product admission.
+    // OS1f8 allocates BOTH DriverResources40/188, OS220 locks resource40,
+    // and heap2d8=heap2d0+heap8. Every failure calls ff550 to unwind.
+    // Paired ff550: if resource40 is valid (62a40 returns0), unlock via
+    // OS228 when heap2d0 exists, then OS200 frees it; independently free
+    // valid resource188 via OS200; release CPU allocation436d0 and clear
+    // MHW20. The C++ destructor chain does NOT perform this cleanup.
+    // Caller must prove retirement before ff550; it does not wait for GPU.
     // Authenticate only the mapped CPU tag location for OS68==0. The caller
     // retains the native lock/resource lease; this does not read a completion
     // value, establish cache visibility or permit source-resource retirement.
@@ -3454,6 +3500,11 @@ struct TglVeboxHardwareBinding {
             image > max - 0x7595b0 || !qualify(image)) return false;
         uintptr_t vt = 0, actualOs = 0, actualHeap = 0, relocation = 0;
         uint32_t osMode = 0;
+        // Constructor16f140 ->16f3d0 ->ff690 leaves MHW20 (heap) NULL;
+        // ff690 only initializes the base prefix and relocation callback.
+        // Destructor17a330 ->16f460 ->17a7b0 only restores base vptrs,
+        // with no heap release. Construction alone therefore cannot satisfy
+        // this binding: the separate heap producer/retirement owner is required.
         // Constructor16f140 ->16f3d0 ->ff690 selects this callback from
         // OS8c: nonzero=3e6a0, zero=3eae0 (ff709..ff735). Consumer172080
         // calls MHW8 with OS18/command/0x48-byte relocation packet at1721f1.
