@@ -1539,6 +1539,32 @@ static void testTrackedCpuOwner() {
                 !renderRetention() && renderCalls==0);
             TglVeboxRenderBinding renderBinding;
             renderBinding.image=0x100000000;renderBinding.entry=renderBinding.image+0x12c9d0;
+            SourceLease foreignLease{&foreign};
+            const auto runQualified=[&](SourceLease& selected,const TglOwnedSurfaceStorage& surface,
+                TglOwnedVeboxFrameRetention& retained) noexcept {
+                return tglWithOwnedVeboxFrameNativeRender<AuxiliaryResolve,AuxiliaryScope,
+                    AuxiliaryScope,AuxiliaryScope,FormatRead>(selected,surface,targetLease,target,
+                    frame,child,execution,0,noRead,noPackets,produce,renderBinding,nullptr,retained,
+                    [&](uintptr_t,void* object,void*,void* pair) noexcept -> int {
+                        ++renderCalls;uintptr_t actualSource=0,actualTarget=0;
+                        std::memcpy(&actualSource,static_cast<uint8_t*>(pair)+0x10,8);
+                        std::memcpy(&actualTarget,static_cast<uint8_t*>(pair)+0x18,8);
+                        assert(actualSource==reinterpret_cast<uintptr_t>(&source) &&
+                            actualTarget==reinterpret_cast<uintptr_t>(&target));
+                        auto* producer=Producers::Resolve::get(object);assert(producer);
+                        return producer->pass.gate([]() noexcept {return 0;});
+                    });
+            };
+            const auto foreignRender=runQualified(foreignLease,foreign,renderRetention);
+            assert(foreignRender.status==5 && !foreignRender.nativeEntered &&
+                renderCalls==0 && !renderRetention());
+            TglOwnedVeboxFrameRetention successfulRetention;
+            const auto successfulRender=runQualified(sourceLease,source,successfulRetention);
+            assert(successfulRender.status==0 && successfulRender.nativeEntered &&
+                successfulRetention() && renderCalls==1);
+            const auto pendingRender=runQualified(sourceLease,source,successfulRetention);
+            assert(pendingRender.status==5 && !pendingRender.nativeEntered && renderCalls==1);
+            renderCalls=0;
             const auto enteredRender=tglWithOwnedVeboxFrameNativeRender<AuxiliaryResolve,
                 AuxiliaryScope,AuxiliaryScope,AuxiliaryScope,FormatRead>(sourceLease,source,
                 targetLease,target,frame,child,execution,0,noRead,noPackets,produce,

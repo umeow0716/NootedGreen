@@ -21873,7 +21873,8 @@ TglOwnedVeboxCommandTransactionResult tglWithOwnedVeboxFrameNativeRender(
     const TglVeboxRenderBinding& binding,void* argument1,
     TglOwnedVeboxFrameRetention& retention,Invoke invoke={}) noexcept {
     TglOwnedVeboxCommandTransactionResult result;
-    if(retention()) return result;
+    if(retention() || &source!=&frame.leases.source || &target!=frame.leases.target)
+        return result;
     result.status=tglWithOwnedVeboxFrameHookBindings<LifetimeResolve,AdmissionResolve,
         AllocationResolve,ModeResolve,FormatRead>(frame,child,execution,dnParams,read,
         admitPackets,produceCsc,[&](void* object,const auto&,auto& producer) noexcept -> int {
