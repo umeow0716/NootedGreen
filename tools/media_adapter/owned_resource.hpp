@@ -4022,6 +4022,13 @@ public:
     TglNativeBorrowedVphalMhwLease()=default;
     TglNativeBorrowedVphalMhwLease(const TglNativeBorrowedVphalMhwLease&)=delete;
     TglNativeBorrowedVphalMhwLease& operator=(const TglNativeBorrowedVphalMhwLease&)=delete;
+    // Allows binding/backing construction BEFORE transferring this SAME pin
+    // into a stable frame. Never overwrite a live dependency or reacquire it.
+    bool transferFrom(TglNativeBorrowedVphalMhwLease&& other) noexcept {
+        static_assert(std::is_nothrow_move_assignable_v<ParentLease>);
+        if(this==&other || parent_.get() || !other.parent_.get()) return false;
+        parent_=std::move(other.parent_);view_=other.view_;other.view_={};return true;
+    }
     template<class Read,class Admit,class Qualify,class Executable,class ParentAdmit>
     bool acquire(ParentLease&& parent,uintptr_t image,uintptr_t vphal,uintptr_t creator,
         Read read,Admit admit,Qualify qualify,Executable executable,ParentAdmit parentAdmit) noexcept {
@@ -19323,6 +19330,11 @@ public:
     auto& backing() noexcept {return backing_;}
     auto& children() noexcept {return children_;}
     bool surfacesReady() const noexcept {return source_.storage() && target_.storage();}
+    bool retainPreparedBorrowedMhw(MhwDependency&& dependency) noexcept {
+        if(backing_.retention()() || children_.first().owner().constructedBase() ||
+            children_.second().owner().constructedBase()) return false;
+        return mhwLease_.transferFrom(std::move(dependency));
+    }
     template<class Read,class Qualify,class Executable>
     bool resolveBorrowedResources(TglNativeResourceBinding& binding,Read read,
         Qualify qualify,Executable executable) const {

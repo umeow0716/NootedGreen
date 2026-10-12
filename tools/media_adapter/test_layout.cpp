@@ -19495,19 +19495,15 @@ int main() {
                             decltype(frontendCleanup),NativeCpu,TrackedSfc,decltype(pairDestroy),FrameMhwInvoke,
                             TglNativeBorrowedVphalMhwLease<decltype(parents)::ContextLease>>;
                         TglOwnedVeboxRetainedFrames<FrontendAssembly,1> frames;
-                        const auto ticket=frames.create(reinterpret_cast<uintptr_t>(&source),
-                            [&](uintptr_t address) noexcept -> TestFrontendOriginalOwner* {
-                                if(address==reinterpret_cast<uintptr_t>(&source)) return &so;
-                                return address==hp?&ho:nullptr;
-                            },to,Cf{refs},uintptr_t{11},uintptr_t{12},frameDn,base,allocatorRead,
-                            [](uintptr_t image) noexcept {return image==base;},
-                            [](uintptr_t,size_t) noexcept {return true;},TglNativeResourceBinding{os,1,2},
-                            uint64_t{4096},TglNativeBufferFillBinding{},NativeCpu{vpCpu,&vpAvsCpu},
-                            std::array<decltype(frontendCleanup),2>{frontendCleanup,frontendCleanup},
-                            std::array<NativeCpu,2>{NativeCpu{pairCpu[0]},NativeCpu{pairCpu[1]}},
-                            std::array<TrackedSfc,2>{TrackedSfc{pairInvoke,pairEvents,pairEventCount},TrackedSfc{pairInvoke,pairEvents,pairEventCount}},
-                            std::array<decltype(pairDestroy),2>{pairDestroy,pairDestroy});
-                        const auto r=frames.run(ticket,[&](auto& frame) noexcept {
+                        using BorrowedMhw=TglNativeBorrowedVphalMhwLease<decltype(parents)::ContextLease>;
+                        BorrowedMhw preparedMhw;
+                        auto preparedParent=parents.pin(base,0x8000,1,parentAddress);
+                        assert(preparedMhw.acquireOwned(std::move(preparedParent),base,parentAddress,creatorAddress,
+                            parentLifetime,borrowedRead,borrowedAdmit,qualifyMhw,executableMhw,
+                            [&](const auto& owner,const auto& view) noexcept {
+                                return owner.context()==view.parent && view.os==os && view.hardware.interface==0x6000;
+                            }));
+                        assert(!preparedParent.get() && preparedMhw.binding() && removeParent()==5);
                             auto resourceRead=[&](uintptr_t address,void* out,size_t bytes) noexcept {
                                 if(bytes==8 && (address==os+0x1f8 || address==os+0x200 || address==0x3000)) {
                                     const uintptr_t value=address==0x3000?os:
@@ -19523,15 +19519,28 @@ int main() {
                                 }
                                 return borrowedRead(address,out,bytes);
                             };
+                        TglNativeResourceBinding preparedResources;
+                        assert(preparedResources.resolveFromBorrowedVphal(preparedMhw,resourceRead,qualifyMhw,executableMhw));
+                        const auto ticket=frames.create(reinterpret_cast<uintptr_t>(&source),
+                            [&](uintptr_t address) noexcept -> TestFrontendOriginalOwner* {
+                                if(address==reinterpret_cast<uintptr_t>(&source)) return &so;
+                                return address==hp?&ho:nullptr;
+                            },to,Cf{refs},uintptr_t{11},uintptr_t{12},frameDn,base,allocatorRead,
+                            [](uintptr_t image) noexcept {return image==base;},
+                            [](uintptr_t,size_t) noexcept {return true;},preparedResources,
+                            uint64_t{4096},TglNativeBufferFillBinding{},NativeCpu{vpCpu,&vpAvsCpu},
+                            std::array<decltype(frontendCleanup),2>{frontendCleanup,frontendCleanup},
+                            std::array<NativeCpu,2>{NativeCpu{pairCpu[0]},NativeCpu{pairCpu[1]}},
+                            std::array<TrackedSfc,2>{TrackedSfc{pairInvoke,pairEvents,pairEventCount},TrackedSfc{pairInvoke,pairEvents,pairEventCount}},
+                            std::array<decltype(pairDestroy),2>{pairDestroy,pairDestroy});
+                        const auto r=frames.run(ticket,[&](auto& frame) noexcept {
                             TglNativeResourceBinding borrowedResources;
                             assert(!frame.resolveBorrowedResources(borrowedResources,resourceRead,qualifyMhw,executableMhw));
-                            auto parentPin=parents.pin(base,0x8000,1,parentAddress);
-                            assert(!frame.retainedMhw() && frame.retainBorrowedMhwOwned(std::move(parentPin),
-                                base,parentAddress,creatorAddress,parentLifetime,borrowedRead,borrowedAdmit,qualifyMhw,executableMhw,
-                                [&](const auto& owner,const auto& view) noexcept {
-                                    return owner.context()==view.parent && view.os==os && view.hardware.interface==0x6000;
-                                }));
-                            assert(!parentPin.get() && frame.retainedMhw()->interface==0x6000 && removeParent()==5);
+                            assert(borrowedResources.resolveFromBorrowedVphal(preparedMhw,resourceRead,qualifyMhw,executableMhw));
+                            assert(!frame.retainedMhw() && frame.retainPreparedBorrowedMhw(std::move(preparedMhw)));
+                            assert(!preparedMhw.binding() && !preparedMhw.view() &&
+                                frame.retainedMhw()->interface==0x6000 && removeParent()==5);
+                            assert(!frame.retainPreparedBorrowedMhw(std::move(preparedMhw)));
                             assert(frame.resolveBorrowedResources(borrowedResources,resourceRead,qualifyMhw,executableMhw));
                             assert(borrowedResources.context==os && borrowedResources.allocate==base+0x63720 &&
                                 borrowedResources.release==base+0x63c00);
