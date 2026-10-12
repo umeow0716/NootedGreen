@@ -20870,15 +20870,21 @@ int main() {
                             std::array<NativeCpu,2>{NativeCpu{pairCpu[0]},NativeCpu{pairCpu[1]}},
                             std::array<TrackedSfc,2>{TrackedSfc{pairInvoke,pairEvents,pairEventCount},TrackedSfc{pairInvoke,pairEvents,pairEventCount}},
                             std::array<decltype(pairDestroy),2>{pairDestroy,pairDestroy});
-                        // Borrowed native report backing outlives pending frame retirement,
+                        // Recording report backing outlives pending frame retirement,
                         // not merely the synchronous command callback below.
-                        struct BorrowedExecutionBackend {
+                        struct RecordingExecutionBackend {
                             std::array<uint8_t,0xa10> bytes{};
+                            unsigned destroyed=0;
+                            uintptr_t create() noexcept {return reinterpret_cast<uintptr_t>(bytes.data());}
+                            int initialize(uintptr_t object) noexcept {return validate(object)?0:5;}
                             bool validate(uintptr_t object) const noexcept {
                                 return object==reinterpret_cast<uintptr_t>(bytes.data());
                             }
-                            void destroy(uintptr_t) noexcept {assert(false);}
+                            void destroy(uintptr_t object) noexcept {assert(validate(object));++destroyed;}
                         } executionBackend;
+                        TglExecutionOwner<RecordingExecutionBackend> executionLease(executionBackend);
+                        assert(executionLease.ensure()==0);
+                        const uintptr_t report=reinterpret_cast<uintptr_t>(executionBackend.bytes.data());
                         const auto r=frames.run(ticket,[&](auto& frame) noexcept {
                             TglNativeResourceBinding borrowedResources;
                             assert(!frame.resolveBorrowedResources(borrowedResources,resourceRead,qualifyMhw,executableMhw));
@@ -21852,13 +21858,9 @@ int main() {
                             uintptr_t restoredVp=1;
                             std::memcpy(&restoredVp,pairCpu[0].bytes.data()+0x80,8);
                             assert(restoredVp==0 && vpCpu.live && vpAvsCpu.live);
-                            TglExecutionOwner<BorrowedExecutionBackend> executionLease(executionBackend);
                             TglOwnedVeboxCommandTransactionResult executionResult;
-                            const uintptr_t report=reinterpret_cast<uintptr_t>(executionBackend.bytes.data());
-                            const int executionStatus=executionLease.withBorrowedExecution(report,
-                                [&](uintptr_t execution) noexcept -> int {
                             executionResult=frame.withPrivateVpCommandFrame(0,roles,0,0,
-                                execution,0x2200,0x3300,[&](auto& leasedOwner,void* child,
+                                executionLease,0x2200,0x3300,[&](auto& leasedOwner,void* child,
                                     void* vp,auto& graph,auto& lines,
                                     auto& sourceLease,auto& targetLease,auto& dn,auto& packets) noexcept {
                                     assert(graph.ownsStorage(vp));(void)lines;
@@ -21909,10 +21911,8 @@ int main() {
                                         transaction.builderStatus==31 && transaction.acquired && !transaction.writtenBack);
                                     return transaction;
                                 });
-                            return executionResult.status;
-                            });
                             assert(!executionLease.hasExecutionLease(report));
-                            executionResult.status=executionStatus;
+                            assert(executionBackend.destroyed==0);
                             return executionResult;
                         });
                         assert(r.acquired && frameDn.live==1 && refs[1]==3);

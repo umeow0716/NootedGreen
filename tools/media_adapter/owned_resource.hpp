@@ -21204,6 +21204,25 @@ public:
                 return result;
             });
     }
+    // Runtime owner entry. Keep the original execution lease through private
+    // child, surface, DN and VP callbacks; no report copy or implicit ensure.
+    // The durable frame still retains executionOwner/backing until admitted
+    // retirement; this synchronous lease is not asynchronous fence ownership.
+    template<class ExecutionOwner,class Consume,
+        std::enable_if_t<std::is_class_v<ExecutionOwner>,int> =0>
+    TglOwnedVeboxCommandTransactionResult withPrivateVpCommandFrame(size_t childIndex,
+        const TglNativeOuterSurfaceRoles& roles,size_t sourceIndex,size_t targetIndex,
+        ExecutionOwner& executionOwner,uintptr_t renderHal,uintptr_t sku,Consume consume) noexcept {
+        TglOwnedVeboxCommandTransactionResult result;
+        const int status=executionOwner.withExecution([&](uintptr_t execution) noexcept -> int {
+            if(!executionOwner.hasExecutionLease(execution)) return 5;
+            result=withPrivateVpCommandFrame(childIndex,roles,sourceIndex,targetIndex,
+                execution,renderHal,sku,consume);
+            if(!executionOwner.hasExecutionLease(execution)) result.status=5;
+            return result.status;
+        });
+        result.status=status;return result;
+    }
     template<class Consume>
     TglOwnedVeboxCommandTransactionResult withNativeCommandFrame(
         const TglNativeOuterSurfaceRoles& roles,size_t sourceIndex,size_t targetIndex,
