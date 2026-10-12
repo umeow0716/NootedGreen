@@ -8130,6 +8130,28 @@ static void testNativeResourceBoundary() {
                                                     assert(std::memcmp(saved.resource.data(),priorView.resource.data(),
                                                         saved.resource.size())==0);return -68;
                                                 })==-68);
+                                            assert(linkedInput.withSurface([&](const auto& current) noexcept {
+                                                auto consume=[&](const TglOwnedFfdnTailViews& views) noexcept -> int {
+                                                    assert(views.outputs[0] && views.outputs[1] &&
+                                                        views.previous==&priorView && views.history);
+                                                    assert(views.history==historyShell.surfaceBinding());
+                                                    assert(!descriptorPair[0].withDescriptor(
+                                                        [](const auto&) noexcept {assert(false);}));
+                                                    assert(tglWithPreparedDescriptorFfdnHistoryViews(
+                                                        descriptorPair,linkedInput,current,&previous,&priorView,true,
+                                                        historyShell,capturedHistory,
+                                                        [](const auto&) noexcept -> int {assert(false);return 0;})==5);
+                                                    return -69;
+                                                };
+                                                assert(tglWithPreparedDescriptorFfdnHistoryViews(descriptorPair,
+                                                    linkedInput,current,&previous,&priorView,true,historyShell,
+                                                    capturedHistory,consume)==-69);
+                                                assert(tglWithPreparedDescriptorFfdnHistoryViews(descriptorPair,
+                                                    linkedInput,current,&previous,&priorView,false,historyShell,
+                                                    capturedHistory,[](const auto& views) noexcept -> int {
+                                                        assert(!views.history && views.previous);return -70;
+                                                    })==-70);
+                                            }));
                                         }));
                                         assert(backingBackend.allocations==beforeDescriptor);
                                         reportBackend.bytes[0xb]=1;

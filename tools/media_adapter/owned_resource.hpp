@@ -14752,6 +14752,30 @@ struct TglOwnedFfdnTailViews {
     const TglOwnedSurfaceStorage* previous{};
     const TglOwnedSurfaceStorage* history{};
 };
+// Producer-time descriptor branch. Both original owners are already leased;
+// do not recreate outputs or infer reference validity from snapshot presence.
+// DN parameter borrowing and asynchronous retention remain outer duties.
+template<class Owner,class Use>
+int tglWithPreparedDescriptorFfdnHistoryViews(
+    std::array<TglOwnedDescriptorOnlySurface,2>& targets,Owner& input,
+    const TglOwnedSurfaceStorage& source,Owner* previous,
+    const TglOwnedSurfaceStorage* previousView,bool referenceValid,
+    TglOwnedDescriptorOnlySurface& history,TglOwnedFfdnHistorySnapshot& snapshot,
+    Use use) noexcept {
+    if((previous==nullptr)!=(previousView==nullptr) ||
+       (previous && !previous->hasSurfaceLease(*previousView)) ||
+       (referenceValid && !previous)) return 5;
+    return tglWithPreparedDescriptorFfdnPair(targets,input,source,
+        [&](const auto& a,const auto& b) noexcept -> int {
+            auto consume=[&](const TglOwnedSurfaceStorage* copied) noexcept -> int {
+                const int result=use(TglOwnedFfdnTailViews{{&a,&b},previousView,copied});
+                return previous && !previous->hasSurfaceLease(*previousView)?5:result;
+            };
+            if(!referenceValid) return consume(nullptr);
+            return history.withBorrowedHistorySnapshotScope(snapshot,*previous,*previousView,
+                [&](const auto& copied) noexcept -> int {return consume(&copied);});
+        });
+}
 struct TglOwnedStmmTailViews {std::array<const TglOwnedSurfaceStorage*,2> surfaces{};};
 template<bool ScopedStmm=false,class TargetOwner,class PriorOwner,class Owner,class ChildOwner,class ExecutionOwner,
     class Read,class Rectangle,class Stmm,class Statistics>
