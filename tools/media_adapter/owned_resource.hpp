@@ -20506,7 +20506,8 @@ TglOwnedVeboxCommandTransactionResult tglRunCapturedVeboxFrameCommand(
     DiAdmit admitDi,Register registerResource,Control control,
     TglOwnedVeboxFrameRetention& retention,Consume consume) noexcept {
     TglOwnedVeboxCommandTransactionResult result;
-    if(retention()) return result;
+    if(retention() || ffdi.inputs[0]!=&leases.source || ffdi.inputs[1]!=leases.target)
+        return result;
     auto* child=reinterpret_cast<void*>(leases.child);
     result.status=tglRunCapturedStateFrame(leases.state,sourceOwner,childOwner,executionOwner,
         child,leases.execution,leases.renderHal,leases.sku,leases.source,leases.target,

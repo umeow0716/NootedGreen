@@ -8447,6 +8447,18 @@ static void testNativeResourceBoundary() {
                                                                 !rejectedConsumers && !registrations && !retention());
                                                             assert(std::memcmp(&statePacket,&preservedPacket,sizeof(statePacket))==0);
                                                             unsigned writebacks=0;
+                                                            auto mismatchedFfdi=ffdi;
+                                                            mismatchedFfdi.inputs[1]=&linkedStorage;
+                                                            auto mismatchConsumer=tglMakeCapturedVeboxAllocationCommandConsumer(linkedInput,childOwner,reportOwner,
+                                                                packetLeases,false,false,input.controls,
+                                                                stateRead,surfaceAdmit,admitted,registration,control,retention,[&](auto&) noexcept {
+                                                                    ++rejectedConsumers;return TglOwnedVeboxCommandTransactionResult{};
+                                                                });
+                                                            const auto mismatched=mismatchConsumer(actualChild,report,linkedStorage,mismatchedFfdi,
+                                                                ffdn,stmm,statisticsShell.resource,statisticsLayout,statisticsShell);
+                                                            assert(mismatched.status==5 && !mismatched.requiresRetention() &&
+                                                                !rejectedConsumers && !registrations && !retention());
+                                                            assert(std::memcmp(&statePacket,&preservedPacket,sizeof(statePacket))==0);
                                                             auto commandConsumer=tglMakeCapturedVeboxAllocationCommandConsumer(linkedInput,childOwner,reportOwner,
                                                                 packetLeases,false,false,input.controls,
                                                                 stateRead,surfaceAdmit,admitted,registration,control,retention,[&](auto& packets) noexcept {
