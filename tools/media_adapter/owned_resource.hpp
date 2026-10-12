@@ -3642,9 +3642,12 @@ public:
         TglNativeVeboxMhwOwner* owner_=nullptr;
         uint64_t generation_=0;
     public:
-        explicit DependencyLease(TglNativeVeboxMhwOwner& owner) noexcept {
-            if(owner.busy_ || owner.pinned_ || !owner.ready_) return;
+        DependencyLease()=default;
+        explicit DependencyLease(TglNativeVeboxMhwOwner& owner) noexcept {acquire(owner);}
+        bool acquire(TglNativeVeboxMhwOwner& owner) noexcept {
+            if(owner_ || owner.busy_ || owner.pinned_ || !owner.ready_) return false;
             owner.pinned_=true;owner_=&owner;generation_=owner.generation_;
+            return true;
         }
         DependencyLease(const DependencyLease&)=delete;
         DependencyLease& operator=(const DependencyLease&)=delete;
@@ -18621,10 +18624,14 @@ public:
 // Parent/image leases and completion admission remain enclosing responsibilities.
 template<class Api,class SurfaceBackend,class DnBackend,class Cleanup,
     class Cpu=TglNativeTrackedCpuInvoker,class Sfc=TglNativeSfcLifetimeInvoker,
-    class Destroy=TglNativeVeboxDestructorInvoker>
+    class Destroy=TglNativeVeboxDestructorInvoker,class MhwInvoke=TglNativeVeboxMhwAllocationInvoker>
 class TglNativeVeboxRendererFrameStorage {
     TglNativeVeboxVpFrameBacking<Api,Cpu> backing_;
     TglOwnedVeboxFrameSurfaceStorage<SurfaceBackend,DnBackend> surfaces_;
+    // Declared BEFORE children: their native cleanup/destruction finishes
+    // before this persistent MHW pin is dropped. External owner/OS/image
+    // remain registry-owned through qualified frame retirement.
+    typename TglNativeVeboxMhwOwner<MhwInvoke>::DependencyLease mhwLease_;
     TglNativeVeboxChildPairStorage<Cleanup,Cpu,Sfc,Destroy> children_;
 public:
     template<class Read,class Qualify,class Executable,class... Args>
@@ -18650,6 +18657,22 @@ public:
     auto& backing() noexcept {return backing_;}
     auto& surfaces() noexcept {return surfaces_;}
     auto& children() noexcept {return children_;}
+    bool retainMhw(TglNativeVeboxMhwOwner<MhwInvoke>& owner) noexcept {
+        if(children_.first().owner().constructedBase() || children_.second().owner().constructedBase()) return false;
+        return mhwLease_.acquire(owner);
+    }
+    const TglVeboxHardwareBinding* retainedMhw() const noexcept {return mhwLease_.binding();}
+    template<class Read,class Qualify,class Construct=TglNativeVeboxConstructorInvoker>
+    TglOwnedBaseConstruction initializeQualifiedChild(size_t index,
+        const TglVeboxLifetimeBinding& binding,const TglSfcLifetimeBinding& lifetime,
+        const TglSfcMhwBinding& sfc,void* os,void* renderHal,void* history,void* performance,
+        const void* cache,int32_t& status,Read read,Qualify qualify,Construct construct={}) {
+        const auto* mhw=mhwLease_.binding();
+        if(index>1 || !mhw) return TglOwnedBaseConstruction::NotCalled;
+        auto& child=index?children_.second():children_.first();
+        return child.initializeQualified(binding,lifetime,sfc,os,*mhw,renderHal,history,
+            performance,cache,status,read,qualify,construct);
+    }
     // Called under the native child/report/parent/image leases. Capture the
     // ORIGINAL frame shells into this same frame's actual packet storage.
     template<class Consume>

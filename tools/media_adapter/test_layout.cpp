@@ -3573,7 +3573,9 @@ static void testVeboxHardwareBinding() {
             assert(retireOwner()==5 && !native.cleanups && !native.removes);
             approved=true;
             {
-                typename decltype(owner)::DependencyLease lease(owner);
+                typename decltype(owner)::DependencyLease lease;
+                assert(!lease.binding() && lease.acquire(owner));
+                assert(!lease.acquire(owner));
                 assert(lease.binding() && lease.binding()->heap==0x4000);
                 assert(retireOwner()==5 && !native.cleanups);
                 typename decltype(owner)::DependencyLease duplicate(owner);
@@ -18621,6 +18623,14 @@ int main() {
                             *out=failSecond && index(object)==1 ? 31:0;
                         };
                         int32_t pairStatus=77;
+                        TglNativeVeboxMhwAllocationInvoker nativeMhwInvoke;
+                        TglNativeVeboxMhwOwner<> emptyMhw(nativeMhwInvoke);
+                        assert(!assembly.retainedMhw() && !assembly.retainMhw(emptyMhw));
+                        assert(assembly.initializeQualifiedChild(0,baseBinding,lifetime,mhw,
+                            reinterpret_cast<void*>(os),reinterpret_cast<void*>(0x3000),
+                            nullptr,nullptr,nullptr,pairStatus,allocatorRead,
+                            [](uintptr_t image){return image==base;},pairConstruct)==
+                            TglOwnedBaseConstruction::NotCalled && pairStatus==77);
                         auto init=[&](auto& child) {
                             return child.initialize(baseBinding,lifetime,mhw,reinterpret_cast<void*>(os),
                                 nullptr,reinterpret_cast<void*>(0x3000),nullptr,nullptr,nullptr,pairStatus,read,pairConstruct);
