@@ -21548,27 +21548,24 @@ public:
                 return withLeasedVpCommandResources(childIndex,owner,child,source,target,parameters,packets,consume);
             });
     }
-    // Build the actual packet producer over this aggregate's retained VP/DN/
-    // surface backing. Gathering happens under the original owners, not over
-    // a caller-rebased surface pair. Native preparation still belongs to Render;
-    // gather must only read qualified resource/state inputs, never run slot118.
-    template<class ExecutionOwner,class NativeRead,class Gather,class Read,
+    // Build a deferred packet reader over this aggregate's retained VP/DN/
+    // surface backing. Factory only borrows these owners/resource views; input
+    // capture happens at producer use, AFTER Render's native preparation. No
+    // early report snapshot, duplicate slot118, or escaping continuation.
+    template<class ExecutionOwner,class NativeRead,class CaptureFactory,class Read,
         class SurfaceAdmit,class DiAdmit,class Register,class Control,class Consume>
-    TglOwnedVeboxCommandTransactionResult withNativeOwnedVpPacketFrame(
+    TglOwnedVeboxCommandTransactionResult withNativeOwnedVpLivePacketFrame(
         size_t childIndex,const TglNativeOuterSurfaceRoles& roles,size_t sourceIndex,size_t targetIndex,
         ExecutionOwner& executionOwner,uintptr_t renderHal,uintptr_t sku,NativeRead nativeRead,
-        Gather gather,bool disableTemporalDenoise,Read read,SurfaceAdmit admitSurface,
+        CaptureFactory makeCapture,bool disableTemporalDenoise,Read read,SurfaceAdmit admitSurface,
         DiAdmit admitDi,Register registerResource,Control control,Consume consume) noexcept {
         return withNativeOwnedVpCommandFrame(childIndex,roles,sourceIndex,targetIndex,
             executionOwner,renderHal,sku,nativeRead,
             [&](auto& owner,void* child,void* vp,auto& graph,auto& lines,
                 auto& source,auto& target,auto& dn,auto& packets) noexcept {
-                TglDiIecpInputs input{};
-                if(!gather(owner,child,vp,graph,lines,source,target,dn,packets,input) ||
-                   input.current!=&packets.source || input.target!=packets.target)
-                    return TglOwnedVeboxCommandTransactionResult{};
-                TglOwnedVeboxPacketContext<Read,SurfaceAdmit,DiAdmit,Register,Control> frame{
-                    {},packets,input,disableTemporalDenoise,read,admitSurface,admitDi,
+                auto capture=makeCapture(owner,child,vp,graph,lines,source,target,dn,packets);
+                TglOwnedVeboxLivePacketContext<decltype(capture),Read,SurfaceAdmit,DiAdmit,Register,Control> frame{
+                    {},packets,disableTemporalDenoise,capture,read,admitSurface,admitDi,
                     registerResource,control};
                 static_assert(noexcept(consume(owner,child,vp,graph,lines,source,target,dn,frame)) &&
                     std::is_same_v<decltype(consume(owner,child,vp,graph,lines,source,target,dn,frame)),

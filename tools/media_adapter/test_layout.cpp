@@ -22310,31 +22310,40 @@ int main() {
                                 std::memcpy(output,&report,8);return true;
                             };
                             unsigned packetGathers=0;
-                            auto gatherPacket=[&](auto&,void*,void* vp,auto& graph,auto&,
-                                auto& source,auto& target,auto&,auto& packets,TglDiIecpInputs& input) noexcept {
-                                ++packetGathers;
-                                assert(graph.ownsStorage(vp) && source.hasSurfaceLease(packets.source) &&
-                                    packets.target && target.hasSurfaceLease(*packets.target));
-                                input.current=&packets.source;input.target=packets.target;return true;
+                            auto capturePacket=[&](auto&,void*,void* vp,auto& graph,auto&,
+                                auto& source,auto& target,auto&,auto& packets) noexcept {
+                                return [&,vp](auto use) noexcept -> int {
+                                    ++packetGathers;
+                                    assert(graph.ownsStorage(vp) && source.hasSurfaceLease(packets.source) &&
+                                        packets.target && target.hasSurfaceLease(*packets.target));
+                                    TglDiIecpInputs input{};
+                                    input.current=&packets.source;input.target=packets.target;
+                                    return use(static_cast<const TglDiIecpInputs&>(input));
+                                };
                             };
                             auto rejectPacket=[](auto&&...) noexcept {return false;};
-                            const auto missingPair=frame.withNativeOwnedVpPacketFrame(0,roles,0,0,
+                            const auto missingPair=frame.withNativeOwnedVpLivePacketFrame(0,roles,0,0,
                                 executionLease,0x2200,0x3300,readReportHelper,
-                                [](auto&&...) noexcept {return true;},false,
+                                [](auto&&...) noexcept {
+                                    return [](auto use) noexcept -> int {
+                                        const TglDiIecpInputs input{};return use(input);
+                                    };
+                                },false,
                                 readReportHelper,rejectPacket,rejectPacket,rejectPacket,rejectPacket,
-                                [](auto&&...) noexcept -> TglOwnedVeboxCommandTransactionResult {
-                                    assert(false);return {};
+                                [](auto&,void*,void*,auto&,auto&,auto&,auto&,auto&,auto& live) noexcept {
+                                    TglOwnedVeboxCommandTransactionResult result;
+                                    result.status=live.withInput([](auto&) noexcept -> int {assert(false);return 0;});
+                                    return result;
                                 });
                             assert(missingPair.status==5 && !missingPair.requiresRetention());
-                            executionResult=frame.withNativeOwnedVpPacketFrame(0,roles,0,0,
-                                executionLease,0x2200,0x3300,readReportHelper,gatherPacket,false,
+                            executionResult=frame.withNativeOwnedVpLivePacketFrame(0,roles,0,0,
+                                executionLease,0x2200,0x3300,readReportHelper,capturePacket,false,
                                 readReportHelper,rejectPacket,rejectPacket,rejectPacket,rejectPacket,
                                 [&](auto& leasedOwner,void* child,
                                     void* vp,auto& graph,auto& lines,
                                     auto& sourceLease,auto& targetLease,auto& dn,auto& packetFrame) noexcept {
                                     auto& packets=packetFrame.leases;
-                                    assert(packetGathers==1 && packetFrame.input.current==&packets.source &&
-                                        packetFrame.input.target==packets.target);
+                                    assert(packetGathers==0);
                                     assert(graph.ownsStorage(vp));(void)lines;
                                     const TglVeboxRenderBinding renderBinding{base,base+0x12c9d0};
                                     const auto nestedRender=frame.renderNativeOwnedVpFrame(renderBinding,roles,0,0,0,
@@ -22386,6 +22395,11 @@ int main() {
                                         [&](uintptr_t entry,void* actual,void* argument,void* pair) noexcept -> int {
                                             ++renderCalls;
                                             assert(entry==renderBinding.entry && actual==child && argument==&packets);
+                                            assert(packetGathers==0);
+                                            assert(packetFrame.withInput([&](auto& view) noexcept -> int {
+                                                assert(view.input.current==&packets.source && view.input.target==packets.target);
+                                                return 0;
+                                            })==0 && packetGathers==1);
                                             uintptr_t originalSource=0,originalTarget=0;
                                             std::memcpy(&originalSource,static_cast<uint8_t*>(pair)+0x10,8);
                                             std::memcpy(&originalTarget,static_cast<uint8_t*>(pair)+0x18,8);
