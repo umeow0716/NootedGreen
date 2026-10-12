@@ -17731,7 +17731,7 @@ template<class Frame,size_t Capacity=4> class TglOwnedVeboxPhysicalFrameRegistry
     enum class State { Reserved,Live,Quarantined };
     struct Entry {
         uintptr_t image;uintptr_t physical=0;uint64_t generation;
-        State state=State::Reserved;Pool frames;
+        State state=State::Reserved;Pool frames;std::atomic<size_t> dependencies{0};
         Entry(uintptr_t i,uint64_t g) noexcept:image(i),generation(g) {}
     };
     std::array<Entry*,Capacity> entries_{};
@@ -17742,12 +17742,43 @@ public:
     struct Ticket {size_t index=Capacity;uint64_t generation=0;
         const TglOwnedVeboxPhysicalFrameRegistry* registry=nullptr;};
     using FrameTicket=typename Pool::Ticket;
+    // Native physical allocation is kept by the coordinator, not refcounted
+    // by Apple. This lease prevents our coordinator from invoking its teardown.
+    class DependencyLease {
+        friend class TglOwnedVeboxPhysicalFrameRegistry;
+        std::atomic<size_t>* count_=nullptr;
+        explicit DependencyLease(std::atomic<size_t>& count) noexcept:count_(&count) {}
+    public:
+        DependencyLease()=default;
+        DependencyLease(const DependencyLease&)=delete;
+        DependencyLease& operator=(const DependencyLease&)=delete;
+        DependencyLease(DependencyLease&& other) noexcept:count_(other.count_) {other.count_=nullptr;}
+        DependencyLease& operator=(DependencyLease&& other) noexcept {
+            if(this!=&other) {reset();count_=other.count_;other.count_=nullptr;}return *this;
+        }
+        ~DependencyLease() noexcept {reset();}
+        bool live() const noexcept {return count_!=nullptr;}
+        void reset() noexcept {
+            if(count_) {count_->fetch_sub(1,std::memory_order_release);count_=nullptr;}
+        }
+    };
+private:
+    static DependencyLease retainDependency(std::atomic<size_t>& count) noexcept {
+        auto value=count.load(std::memory_order_relaxed);
+        do {if(value==SIZE_MAX) return {};}
+        while(!count.compare_exchange_weak(value,value+1,std::memory_order_acquire,std::memory_order_relaxed));
+        return DependencyLease(count);
+    }
+public:
     class Scope {
         friend class TglOwnedVeboxPhysicalFrameRegistry;
-        Pool& frames_;uintptr_t physical_,context_=0;
-        explicit Scope(Pool& frames,uintptr_t physical) noexcept:frames_(frames),physical_(physical) {}
+        Pool& frames_;uintptr_t physical_,context_=0;std::atomic<size_t>& dependencies_;
+        explicit Scope(Pool& frames,uintptr_t physical,std::atomic<size_t>& dependencies) noexcept
+            :frames_(frames),physical_(physical),dependencies_(dependencies) {}
     public:
         Scope(const Scope&)=delete;Scope& operator=(const Scope&)=delete;
+        // Called while the enclosing physical gate is held; no recursive lookup.
+        DependencyLease retainPhysicalDependency() noexcept {return retainDependency(dependencies_);}
         // Pass this exact scope through synchronous owned renderer dispatch;
         // never reenter the enclosing registry gate or retain Scope references.
         template<class Invoke> int withNativeRequestItem(uintptr_t context,Invoke invoke) noexcept {
@@ -17834,6 +17865,12 @@ public:
         }
         return {};
     }
+    DependencyLease pinDependency(Ticket ticket,uintptr_t image,uintptr_t physical) noexcept {
+        if(gate_.test_and_set(std::memory_order_acquire)) return {};
+        Unlock unlock{gate_};auto* entry=resolve(ticket);
+        if(!entry || entry->state!=State::Live || entry->image!=image || entry->physical!=physical) return {};
+        return retainDependency(entry->dependencies);
+    }
     template<class Use> int withLive(Ticket ticket,uintptr_t image,uintptr_t physical,Use use) noexcept {
         static_assert(noexcept(use(std::declval<Pool&>())) &&
             std::is_same_v<decltype(use(std::declval<Pool&>())),int>);
@@ -17846,7 +17883,7 @@ public:
         static_assert(noexcept(use(std::declval<Scope&>())) &&
             std::is_same_v<decltype(use(std::declval<Scope&>())),int>);
         return withLive(ticket,image,physical,[&](Pool& frames) noexcept -> int {
-            Scope scope(frames,physical);return use(scope);
+            Scope scope(frames,physical,resolve(ticket)->dependencies);return use(scope);
         });
     }
     // Guard BEFORE native slot11 changes input shells. Unlike terminal
@@ -17879,6 +17916,7 @@ public:
         if(gate_.test_and_set(std::memory_order_acquire)) return 5;
         Unlock unlock{gate_};auto* entry=resolve(ticket);
         if(!entry || entry->state!=State::Live || entry->image!=image || entry->physical!=physical) return 5;
+        if(entry->dependencies.load(std::memory_order_acquire)) return 5;
         const int result=entry->frames.withQuiescentFrames([&]() noexcept -> int {
             entry->state=State::Quarantined; // BEFORE native partial teardown
             return invoke(physical);

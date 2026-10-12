@@ -12968,6 +12968,24 @@ static void testRetainedVeboxFrames() {
         assert(registry.publish(physicalTicket,image,physical));
         assert(registry.lookup(image,physical).generation==physicalTicket.generation);
         assert(!registry.lookup(image+1,physical).generation);
+        {
+            assert(!registry.pinDependency(physicalTicket,image+1,physical).live());
+            auto stale=physicalTicket;++stale.generation;
+            assert(!registry.pinDependency(stale,image,physical).live());
+            auto dependency=registry.pinDependency(physicalTicket,image,physical);
+            assert(dependency.live());
+            auto moved=std::move(dependency);
+            assert(moved.live() && !dependency.live());
+            auto noTeardown=[](uintptr_t) noexcept -> int {assert(false);return 0;};
+            assert(registry.destroy(physicalTicket,image,physical,noTeardown)==5);
+            Registry::DependencyLease scoped;
+            assert(registry.withScope(physicalTicket,image,physical,[&](auto& scope) noexcept -> int {
+                scoped=scope.retainPhysicalDependency();return scoped.live()?0:5;
+            })==0);
+            moved.reset();
+            assert(registry.destroy(physicalTicket,image,physical,noTeardown)==5);
+            scoped.reset(); // final physical dependency; later native teardown may proceed
+        }
         assert(!registry.cancel(physicalTicket));
         const auto duplicate=registry.reserve(image);
         assert(!registry.reserve(image).generation);
