@@ -10128,6 +10128,21 @@ static void testSfcLineBufferOwnership() {
                                 [](void*,const auto&) noexcept {assert(false);return 0;})==5);
                             return -17;
                         })==-17);
+                    auto modeRead=[](uintptr_t address,void* out,size_t size) noexcept {
+                        if(!((size==4 && (address==0x1000 || address==0x2000 || address==0x1130)) ||
+                             (size==2 && address==0x3012))) return false;
+                        std::memset(out,0,size);return true;
+                    };
+                    assert(resources.withModeAssemblyView(false,modeRead,retire,0x1000,0x2000,0x3000,
+                        [&](void* child,const auto& entries) noexcept {
+                            assert(retainedGraph.ownsStorage(child));
+                            assert(entries.sampleMode && entries.formatMode && entries.allocate);
+                            assert(!entries.hasAllEntries());return -19;
+                        })==-19);
+                    assert(resources.withModeAssemblyView(false,noRead,retire,0x1000,0x2000,0x3000,
+                        [](void*,const auto&) noexcept {assert(false);return 0;})==5);
+                    assert(resources.withModeAssemblyView(false,noRead,retire,0,0x2000,0x3000,
+                        [](void*,const auto&) noexcept {assert(false);return 0;})==5);
                 }
                 assert(!nativeBacking.live && nativeBacking.released==3);
                 {

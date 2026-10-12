@@ -15547,6 +15547,16 @@ public:
                 });
         });
     }
+    template<class Read,class Retire,class Use>
+    int withModeAssemblyView(bool avsEnabled,Read& read,Retire& retire,
+        uintptr_t source,uintptr_t target,uintptr_t settings,Use use) noexcept {
+        if(!source || !target || !settings) return 5;
+        return withAssemblyView(avsEnabled,read,retire,[&](void* child,const auto& base) noexcept {
+            auto* storage=lease_.storage();
+            if(!storage || child!=storage->bytes.data()) return 5;
+            return tglWithOwnedVpModeAssembly(*storage,source,target,settings,read,base,use);
+        });
+    }
 };
 
 // VP backing portion of a complete retained VEBOX frame. Own CPU allocators
@@ -15586,6 +15596,12 @@ public:
     template<class Read,class Retire,class Use>
     int withAssemblyView(bool avsEnabled,Read& read,Retire& retire,Use use) noexcept {
         return bound()?resources_->withAssemblyView(avsEnabled,read,retire,use):5;
+    }
+    template<class Read,class Retire,class Use>
+    int withModeAssemblyView(bool avsEnabled,Read& read,Retire& retire,
+        uintptr_t source,uintptr_t target,uintptr_t settings,Use use) noexcept {
+        return bound()?resources_->withModeAssemblyView(avsEnabled,read,retire,
+            source,target,settings,use):5;
     }
     template<class Use> int withResources(Use use) noexcept {
         if(!bound()) return 5;
@@ -18231,6 +18247,11 @@ public:
     template<class Read,class Retire,class Use>
     int withVpAssemblyView(bool avsEnabled,Read& read,Retire& retire,Use use) noexcept {
         return vp_.withAssemblyView(avsEnabled,read,retire,use);
+    }
+    template<class Read,class Retire,class Use>
+    int withVpModeAssemblyView(bool avsEnabled,Read& read,Retire& retire,
+        uintptr_t source,uintptr_t target,uintptr_t settings,Use use) noexcept {
+        return vp_.withModeAssemblyView(avsEnabled,read,retire,source,target,settings,use);
     }
     auto& retention() noexcept {return command_.backing().auxiliary().retention();}
 };
