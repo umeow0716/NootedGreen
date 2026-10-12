@@ -18821,6 +18821,7 @@ int main() {
                     assert(retireFrameMhw()==0 && frameMhwInvoke.cleanups==1 && frameMhwInvoke.removes==1);
                     assert(pairInvoke.constructs==2 && pairInvoke.destroys==2);
                     {
+                        assert(frameMhwOwner.initialize(frameMhwAllocation,os,frameMhwRead,qualifyMhw,executableMhw)==0);
                         pairEventCount=0;cleaned={};destroyed={};retirementQualified=false;
                         Cpu vpAvsCpu{{},pairEvents,pairEventCount};
                         TglOwnedSurfaceStorage source,target,history;
@@ -18852,7 +18853,7 @@ int main() {
                         };
                         using FrontendAssembly=TglNativeVeboxFrontendRendererFrameStorage<UnusedFrameApi,
                             TestFrontendOriginalOwner,TestFrontendOriginalOwner,Cf,FrameDnBackend,
-                            decltype(frontendCleanup),NativeCpu,TrackedSfc,decltype(pairDestroy)>;
+                            decltype(frontendCleanup),NativeCpu,TrackedSfc,decltype(pairDestroy),FrameMhwInvoke>;
                         TglOwnedVeboxRetainedFrames<FrontendAssembly,1> frames;
                         const auto ticket=frames.create(reinterpret_cast<uintptr_t>(&source),
                             [&](uintptr_t address) noexcept -> TestFrontendOriginalOwner* {
@@ -18867,6 +18868,8 @@ int main() {
                             std::array<TrackedSfc,2>{TrackedSfc{pairInvoke,pairEvents,pairEventCount},TrackedSfc{pairInvoke,pairEvents,pairEventCount}},
                             std::array<decltype(pairDestroy),2>{pairDestroy,pairDestroy});
                         const auto r=frames.run(ticket,[&](auto& frame) noexcept {
+                            assert(!frame.retainedMhw() && frame.retainMhw(frameMhwOwner));
+                            assert(!frame.retainMhw(frameMhwOwner) && retireFrameMhw()==5);
                             TglNativeDnScalarRequest dnRequest;
                             dnRequest.mode=0;dnRequest.word24=1;
                             dnRequest.word28=11;dnRequest.word2c=13;
@@ -18887,16 +18890,17 @@ int main() {
                             assert(frame.surfacesReady() && frame.initializeScalarParametersFromNativeRequest(
                                 reinterpret_cast<uintptr_t>(nativeDn.data()),nativeDn.size(),false,dnRead));
                             assert(!frame.initializeScalarParameters(dnRequest));
-                            auto constructFrontend=[&](uintptr_t entry,void* object,void* nativeOs,void*,void*,
+                            auto constructFrontend=[&](uintptr_t entry,void* object,void* nativeOs,void* nativeMhw,void*,
                                 void*,void*,void*,const void*,int32_t* out) noexcept {
                                 assert(entry==base+0x12d4e0 && nativeOs==reinterpret_cast<void*>(os));
+                                assert(nativeMhw==reinterpret_cast<void*>(0x6000));
                                 const auto table=base+0x757c98;
                                 std::memcpy(object,&table,8);std::memcpy(static_cast<uint8_t*>(object)+0x10,&os,8);*out=0;
                             };
                             int32_t status=77;
-                            for(auto* c:{&frame.children().first(),&frame.children().second()})
-                                assert(c->initialize(baseBinding,lifetime,mhw,reinterpret_cast<void*>(os),nullptr,
-                                    reinterpret_cast<void*>(0x3000),nullptr,nullptr,nullptr,status,read,constructFrontend)
+                            for(size_t child=0;child<2;++child)
+                                assert(frame.initializeQualifiedChild(child,baseBinding,lifetime,mhw,reinterpret_cast<void*>(os),
+                                    reinterpret_cast<void*>(0x3000),nullptr,nullptr,nullptr,status,frameMhwRead,qualifyMhw,constructFrontend)
                                     ==TglOwnedBaseConstruction::ConstructedSuccess);
                             TglNativeOuterSurfaceRoles roles;roles.sourceCount=1;roles.targetCount=1;
                             roles.sources[0]=reinterpret_cast<uintptr_t>(&source);roles.targets[0]=reinterpret_cast<uintptr_t>(&target);
@@ -19037,12 +19041,14 @@ int main() {
                         assert(frames.retire(ticket,[](const auto&,bool,const auto&) noexcept {return 31;})==31);
                         assert(ho.borrowed && refs[1]==3);
                         assert(vpCpu.live && vpAvsCpu.live);
+                        assert(retireFrameMhw()==5 && frameMhwInvoke.cleanups==1);
                         assert(frames.retire(ticket,[&](const auto&,bool pending,const auto&) noexcept {
                             assert(pending);retirementQualified=true;return 0;
                         })==0); // CPU certificate fixture only
                         assert(!so.borrowed && !to.borrowed && !ho.borrowed && !frameDn.live && !refs[1] && !refs[5]);
                         assert(cleaned[0]==1 && cleaned[1]==1 && destroyed==cleaned);
                         assert(!vpCpu.live && !vpAvsCpu.live);
+                        assert(retireFrameMhw()==0 && frameMhwInvoke.cleanups==2 && frameMhwInvoke.removes==2);
                     }
                 }
                 ChildStorage childStorage(base,allocatorRead,

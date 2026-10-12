@@ -18695,12 +18695,15 @@ public:
 // physical/context/image generation and qualified GPU retirement admission.
 template<class Api,class SourceOwner,class TargetOwner,class CfApi,class DnBackend,
     class Cleanup,class Cpu=TglNativeTrackedCpuInvoker,
-    class Sfc=TglNativeSfcLifetimeInvoker,class Destroy=TglNativeVeboxDestructorInvoker>
+    class Sfc=TglNativeSfcLifetimeInvoker,class Destroy=TglNativeVeboxDestructorInvoker,
+    class MhwInvoke=TglNativeVeboxMhwAllocationInvoker>
 class TglNativeVeboxFrontendRendererFrameStorage {
     TglNativeVeboxVpFrameBacking<Api,Cpu> backing_;
     TglOwnedFrontendSourceGraph<SourceOwner,CfApi> source_;
     TglOwnedType1BorrowedSurfaceLease<TargetOwner,CfApi> target_;
     TglTrackedCpuOwner<DnBackend> parameters_;
+    // Original frontend surfaces and MHW must outlive child cleanup.
+    typename TglNativeVeboxMhwOwner<MhwInvoke>::DependencyLease mhwLease_;
     TglNativeVeboxChildPairStorage<Cleanup,Cpu,Sfc,Destroy> children_;
 public:
     template<class Resolve,class Read,class Qualify,class Executable,class... Args>
@@ -18727,6 +18730,22 @@ public:
     auto& backing() noexcept {return backing_;}
     auto& children() noexcept {return children_;}
     bool surfacesReady() const noexcept {return source_.storage() && target_.storage();}
+    bool retainMhw(TglNativeVeboxMhwOwner<MhwInvoke>& owner) noexcept {
+        if(children_.first().owner().constructedBase() || children_.second().owner().constructedBase()) return false;
+        return mhwLease_.acquire(owner);
+    }
+    const TglVeboxHardwareBinding* retainedMhw() const noexcept {return mhwLease_.binding();}
+    template<class Read,class Qualify,class Construct=TglNativeVeboxConstructorInvoker>
+    TglOwnedBaseConstruction initializeQualifiedChild(size_t index,
+        const TglVeboxLifetimeBinding& binding,const TglSfcLifetimeBinding& lifetime,
+        const TglSfcMhwBinding& sfc,void* os,void* renderHal,void* history,void* performance,
+        const void* cache,int32_t& status,Read read,Qualify qualify,Construct construct={}) {
+        const auto* mhw=mhwLease_.binding();
+        if(index>1 || !mhw) return TglOwnedBaseConstruction::NotCalled;
+        auto& child=index?children_.second():children_.first();
+        return child.initializeQualified(binding,lifetime,sfc,os,*mhw,renderHal,history,
+            performance,cache,status,read,qualify,construct);
+    }
     // Scalar-only request (no nested request38 payload). Publish through the
     // existing native-release slot only after this exact tracked allocation
     // has been initialized; do not infer layout from an arbitrary byte count.
