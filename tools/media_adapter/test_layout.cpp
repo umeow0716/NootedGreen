@@ -23497,6 +23497,36 @@ int main() {
                                 assert(prepareFeature()==5 && featureInvocations==1);
                                 featureCode=true;feature.entry++;
                                 assert(prepareFeature()==5 && featureInvocations==1);feature.entry--;
+                                const auto savedFeatureReport=executionBackend.bytes;
+                                TglVeboxAdmissionStagesInput checkedInput;
+                                checkedInput.prefix={true,true,true,true,1,uint64_t{1}<<12,64,16};
+                                checkedInput.params10c=0x1357;
+                                uint8_t composition=0;TglVeboxAdmissionPassByte checkedPass(composition);
+                                unsigned checkedSfc=0,checkedHistory=0;
+                                bool historyAllowed=true;
+                                auto runCheckedFeature=[&]() noexcept {
+                                    return tglRunSelectedVeboxAdmissionStages(checkedInput,executionBackend.bytes,checkedPass,
+                                        []() noexcept {return true;},
+                                        [](uint8_t&) noexcept -> uint32_t {return 1;},
+                                        [&](auto&) noexcept {++checkedHistory;return historyAllowed;},
+                                        []() noexcept {return true;},
+                                        [&](auto&) noexcept {return prepareFeature()==0;},
+                                        [&](auto&) noexcept {++checkedSfc;return true;});
+                                };
+                                featureCode=false;
+                                assert(!runCheckedFeature() && featureInvocations==1 && checkedSfc==0);
+                                featureCode=true;historyAllowed=false;
+                                const uint32_t oldParams=0x2468;
+                                std::memcpy(executionBackend.bytes.data()+0xd28,&oldParams,4);
+                                assert(!runCheckedFeature() && featureInvocations==1 && checkedSfc==0);
+                                uint32_t afterParams=0;
+                                std::memcpy(&afterParams,executionBackend.bytes.data()+0xd28,4);
+                                assert(afterParams==oldParams);
+                                historyAllowed=true;
+                                assert(runCheckedFeature() && featureInvocations==2 && checkedSfc==1 && checkedHistory==3);
+                                std::memcpy(&afterParams,executionBackend.bytes.data()+0xd28,4);
+                                assert(afterParams==checkedInput.params10c);
+                                executionBackend.bytes=savedFeatureReport;
                                 bool enabled=true;childBytes[0x1ba9]=2;
                                 assert(live.control.policy(live.leases.source,0,false,enabled)==0 && !enabled);
                                 childBytes[0x1ba9]=1;

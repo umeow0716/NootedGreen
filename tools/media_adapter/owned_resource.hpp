@@ -11831,11 +11831,14 @@ bool tglPublishVeboxAdmissionMode(Execution& execution,
     uint32_t pipe,uint8_t mmc,uint32_t params10c,Setup setup) noexcept {
     static_assert(TglAdmissionExecutionExtent<Execution>::value>=0xd2d,"complete admission metadata extent");
     static_assert(noexcept(setup(execution)) &&
-        std::is_same_v<decltype(setup(execution)),void>,"native +180 void stage");
+        (std::is_same_v<decltype(setup(execution)),void> || std::is_same_v<decltype(setup(execution)),bool>),
+        "native +180 void or owned checked bool stage (not integer status)");
     if(pipe>2) return false;
     std::memcpy(execution.data()+0xa0c,&pipe,4);
     execution[0xd2c]=mmc&1;
-    setup(execution);
+    if constexpr(std::is_same_v<decltype(setup(execution)),bool>) {
+        if(!setup(execution)) return false;
+    } else setup(execution);
     std::memcpy(execution.data()+0xd28,&params10c,4);
     return true;
 }
@@ -11949,7 +11952,8 @@ bool tglRunSelectedVeboxAdmissionStages(const TglVeboxAdmissionStagesInput& inpu
         std::is_same_v<decltype(select(tglAdmissionPassFlags(pass))),uint32_t>,"owned output-pipe policy ABI");
     static_assert(noexcept(query()) && std::is_same_v<decltype(query()),bool>,"feature query ABI");
     static_assert(noexcept(feature(execution)) &&
-        std::is_same_v<decltype(feature(execution)),void>,"native170 void ABI");
+        (std::is_same_v<decltype(feature(execution)),void> || std::is_same_v<decltype(feature(execution)),bool>),
+        "native170 void or owned checked bool stage (not integer status)");
     static_assert(noexcept(sfc(execution)) && std::is_same_v<decltype(sfc(execution)),bool>,
         "checked complete SFC stage ABI");
     if(tglPrepareVeboxAdmissionPrefix(input.prefix,pass)!=TglVeboxAdmissionPrefixResult::Continue)
@@ -11965,7 +11969,9 @@ bool tglRunSelectedVeboxAdmissionStages(const TglVeboxAdmissionStagesInput& inpu
         uint32_t currentPipe=0;std::memcpy(&currentPipe,execution.data()+0xa0c,4);
         if(currentPipe>2) return false;
         if(currentPipe==2) std::memcpy(execution.data()+0x9e8,&input.leasedParamsF0,8);
-        feature(execution);
+        if constexpr(std::is_same_v<decltype(feature(execution)),bool>) {
+            if(!feature(execution)) return false;
+        } else feature(execution);
         admitted=!(execution[0x18]&1);
     }
     if(!tglApplyVeboxAdmissionSampleFallback(execution,pass,input.source124,admitted)) return false;
