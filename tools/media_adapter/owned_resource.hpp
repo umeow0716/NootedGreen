@@ -22505,8 +22505,18 @@ public:
                         TglOwnedVeboxLivePacketContext<decltype(capture),Read,SurfaceAdmit,DiAdmit,
                             decltype(registration),decltype(control)> live{
                             {},packets,disableTemporalDenoise,capture,read,admitSurface,admitDi,registration,control};
-                        return consume(owner,child,vp,graph,lines,source,target,dn,live,csc,admitDndi,
-                            sourceRole,targetRole);
+                        TglOwnedVeboxCommandTransactionResult consumed;
+                        const int status=executionOwner.withLeasedFeatureReport(packets.execution,packets.target,
+                            [&]() noexcept -> int {
+                                consumed=consume(owner,child,vp,graph,lines,source,target,dn,live,csc,admitDndi,
+                                    sourceRole,targetRole);
+                                // Record native entry/acquisition before report60 or
+                                // any outer DN/VP/frontend scope can detach. This
+                                // synchronous borrow is not GPU retirement evidence.
+                                backing_.retention().observe(consumed);
+                                return consumed.status;
+                            });
+                        consumed.status=status;return consumed;
                     });
                 return result.status;
             });

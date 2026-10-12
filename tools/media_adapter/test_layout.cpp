@@ -23453,6 +23453,7 @@ int main() {
                                 const uint8_t originalMmc=childBytes[0x1ba9];
                                 uintptr_t originalTarget=0;
                                 std::memcpy(&originalTarget,executionBackend.bytes.data()+0x60,8);
+                                assert(!originalTarget);
                                 const auto targetAddress=reinterpret_cast<uintptr_t>(live.leases.target);
                                 std::memcpy(executionBackend.bytes.data()+0x60,&targetAddress,8);
                                 bool enabled=true;childBytes[0x1ba9]=2;
@@ -23460,7 +23461,8 @@ int main() {
                                 childBytes[0x1ba9]=1;
                                 assert(live.control.policy(live.leases.source,0,false,enabled)==0 && enabled);
                                 childBytes[0x1ba9]=originalMmc;
-                                std::memcpy(executionBackend.bytes.data()+0x60,&originalTarget,8);
+                                // Leave native-style target publication in place;
+                                // the enclosing report scope must detach it itself.
                                 TglOwnedVeboxCommandTransactionResult result;
                                 result.status=live.withInput([](auto&) noexcept -> int {return -87;});
                                 return result;
@@ -23470,6 +23472,9 @@ int main() {
                                 captureCreator,false,creatorFrameRead,rejectPacket,rejectPacket,useCreatorFrame,DeniedCreatorCsc{});
                             assert(creatorFrame.status==-87 && !creatorFrame.requiresRetention() &&
                                 creatorFrameUses==1 && packetGathers==1);
+                            uintptr_t detachedTarget=1;
+                            std::memcpy(&detachedTarget,executionBackend.bytes.data()+0x60,8);
+                            assert(!detachedTarget);
                             bool admitCscAnchors=true;
                             auto qualifiedCreatorRead=[&](uintptr_t address,void* output,size_t size) noexcept {
                                 constexpr std::array<uint8_t,15> prologue{
@@ -23567,6 +23572,20 @@ int main() {
                                 });
                             assert(retainedCreatorFrame.status==5 && retainedCreatorUses==1 &&
                                 !retainedCreatorFrame.requiresRetention() && packetGathers==1);
+                            unsigned foreignReportUses=0;
+                            const auto foreignReport=frame.withNativeOwnedVpCreatorRetainedPacketFrame(0,roles,0,0,
+                                executionLease,frontendCreatorView,0x3300,creatorFrameRead,qualifyMhw,executableMhw,
+                                false,false,{},creatorFrameRead,rejectPacket,rejectPacket,
+                                [&](auto&,void*,void*,auto&,auto&,auto&,auto&,auto&,auto&,auto&,auto&,
+                                    auto&,auto&) noexcept {
+                                    ++foreignReportUses;
+                                    const uintptr_t foreign=1;
+                                    std::memcpy(executionBackend.bytes.data()+0x60,&foreign,8);
+                                    return TglOwnedVeboxCommandTransactionResult{-91,-91,false,false};
+                                });
+                            std::memcpy(&detachedTarget,executionBackend.bytes.data()+0x60,8);
+                            assert(foreignReport.status==5 && foreignReportUses==1 && !detachedTarget &&
+                                !foreignReport.requiresRetention());
                             admitDiControl=false;
                             const auto rejectedCreatorFrame=frame.withNativeOwnedVpCreatorLivePacketFrame(0,roles,0,0,
                                 executionLease,frontendCreatorView,0x3300,creatorFrameRead,qualifyMhw,executableMhw,
