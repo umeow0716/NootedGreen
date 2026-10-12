@@ -12792,6 +12792,25 @@ public:
         return result?result:initialization.status();
     }
     // Publish the real initialization ABI in an ALREADY initialized frame.
+    template<class Use>
+    int withLeasedPairedInitializedAssemblyEntries(TglOwnedVpSfcCpuGraph& other,
+        const std::array<TglOwnedVpEntrySet,2>& base,Use use) noexcept {
+        if(this==&other || !ready_ || !busy_ || !other.ready_ || !other.busy_ ||
+            retention_!=other.retention_ || base[0].initialize || base[1].initialize) return 5;
+        using Context=TglOwnedVpPassInitContext<StateBackend>;
+        using Resolve=TglOwnedVpSfcResolve<Context>;
+        auto first=Context::initializedFrame(storage_,state_);
+        auto second=Context::initializedFrame(other.storage_,other.state_);
+        void* a=storage_.bytes.data();void* b=other.storage_.bytes.data();
+        typename TglOwnedVpSfcScopedContext<Context>::Pair scope(a,first,b,second);
+        auto entries=base;
+        if(!scope.bound() || !tglBindOwnedVpInitializeEntry<Resolve>(a,entries[0]) ||
+            !tglBindOwnedVpInitializeEntry<Resolve>(b,entries[1])) return 5;
+        static_assert(noexcept(use(a,entries[0],b,entries[1])),"paired initialized VP consumer ABI");
+        const int result=use(a,entries[0],b,entries[1]);
+        return result?result:(first.status()?first.status():second.status());
+    }
+    // Publish the real initialization ABI in an ALREADY initialized frame.
     // Unlike construction, this accepts resource-bound backing and never
     // reallocates state. A repeated void initialize fails the enclosing call
     // without touching live storage. Caller keeps this resolver scope through

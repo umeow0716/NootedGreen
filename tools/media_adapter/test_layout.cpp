@@ -20769,6 +20769,19 @@ int main() {
                                                 assert(!firstGraph.tryReset() && !secondGraph.tryReset());
                                                 assert(ae.allocate && be.allocate && ae.freeResources && be.freeResources);
                                                 std::array<TglOwnedVpEntrySet,2> baseEntries{ae,be};
+                                                assert(firstGraph.withLeasedPairedInitializedAssemblyEntries(secondGraph,baseEntries,
+                                                    [&](void* x,const auto& xe,void* y,const auto& ye) noexcept -> int {
+                                                        assert(x==a && y==b && xe.initialize && ye.initialize);
+                                                        assert(xe.allocate==ae.allocate && ye.allocate==be.allocate);
+                                                        return expected;
+                                                    })==expected);
+                                                for(size_t repeated=0;repeated<2;++repeated) {
+                                                    assert(firstGraph.withLeasedPairedInitializedAssemblyEntries(secondGraph,baseEntries,
+                                                        [&](void* x,const auto& xe,void* y,const auto& ye) noexcept -> int {
+                                                            if(repeated) ye.initialize(y);else xe.initialize(x);
+                                                            return 0;
+                                                        })==5);
+                                                }
                                                 return tglWithOwnedVpPairedModeAssembly(first,second,
                                                     {0x1000,0x1000},{0x2000,0x2000},{0x3000,0x3000},modeRead,baseEntries,
                                                     [&](void* x,const auto& xe,void* y,const auto& ye) noexcept -> int {
