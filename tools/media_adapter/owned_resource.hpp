@@ -19600,7 +19600,9 @@ public:
     // factory1fc790 and ctor1fcaa0 to base1dd150. Native renderer1fcf10 passes
     // its SAME third argument to both children910/918 via factory1fd250;
     // ctor1fc900->base1e7290 stores that value at child-base68 (1e7335).
-    // Resolve that renderer argument and borrowing lifetime before joining VP;
+    // TGL creator1e6610 supplies VPHAL50/60 to renderer slot18; native
+    // VPHAL135020 destroys renderer68 before counted helper1352c0 frees60.
+    // Resolve the VPHAL60 producer and borrowing lifetime before joining VP;
     // this child-base68 is NOT VPHAL renderer68. Do not substitute an aggregate
     // or assume a child-owned SFC solely because the C++ validator accepts it.
     template<class Read,class Qualify,class Executable,class Construct=TglNativeVeboxConstructorInvoker>
