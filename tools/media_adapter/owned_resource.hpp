@@ -12924,10 +12924,19 @@ template<class Produce,class Consume> struct TglOwnedVpPreparedSetupContext {
     void* child;void* source;void* target;void* data;
     Produce& produce;Consume& consume;
     bool setupSeen=false,sendSeen=false,busy=false;int error=0;
+    // Explicit caller admission, not inferred from absent callbacks. Default
+    // remains a complete setup/send pass; inactive objects reject both calls.
+    bool participates=true;
+    int completionStatus() const noexcept {
+        if(error) return error;
+        if(busy) return 5;
+        return participates ? (setupSeen && sendSeen ? 0 : 5) :
+            (!setupSeen && !sendSeen ? 0 : 5);
+    }
     bool owns(void* candidate) const noexcept {return candidate==child;}
     int setup(void* s,void* t,void* d) noexcept {
         if(error) return error;
-        if(setupSeen || busy || s!=source || t!=target || d!=data) return error=5;
+        if(!participates || setupSeen || busy || s!=source || t!=target || d!=data) return error=5;
         setupSeen=true;busy=true;
         const int result=produce();busy=false;
         if(!error) error=result;
@@ -12935,7 +12944,7 @@ template<class Produce,class Consume> struct TglOwnedVpPreparedSetupContext {
     }
     int send(void* d,void* command) noexcept {
         if(error) return error;
-        if(!setupSeen || sendSeen || busy || d!=data || !command) return error=5;
+        if(!participates || !setupSeen || sendSeen || busy || d!=data || !command) return error=5;
         sendSeen=true;busy=true;
         const int result=consume(d,command);busy=false;
         if(!error) error=result;
@@ -13711,7 +13720,8 @@ public:
     template<class State,class Avs,class Ief,class Emit,class Use>
     int withLeasedPreparedContexts(const TglOwnedVpFramePreparation& frame,
         uintptr_t conditionalSource,uintptr_t settings,uintptr_t target,uintptr_t sourceA8,
-        void* source,void* renderData,State state,Avs avs,Ief ief,Emit emit,Use use) noexcept {
+        void* source,void* renderData,State state,Avs avs,Ief ief,Emit emit,Use use,
+        bool participates=true) noexcept {
         auto invokeIef=[&](void* child,uint8_t* packet) noexcept {
             if constexpr(std::is_invocable_v<Ief,void*,decltype(frame),uint8_t*>) {
                 static_assert(std::is_nothrow_invocable_v<Ief,void*,decltype(frame),uint8_t*>,"leased IEF packet ABI");
@@ -13769,11 +13779,11 @@ public:
                 };
                 using Context=TglOwnedVpPreparedSetupContext<decltype(produce),decltype(consume)>;
                 Context context{child,source,reinterpret_cast<void*>(target),renderData,produce,consume};
+                context.participates=participates;
                 static_assert(noexcept(use(producer,context)),"prepared context consumer ABI");
                 const int result=use(producer,context);
                 if(result) return result;
-                if(context.error) return context.error;
-                return context.setupSeen && context.sendSeen ? 0 : 5;
+                return context.completionStatus();
             });
     }
     // Compose setup/send and phase-gated state/filter while the pass is live. Existing
@@ -17400,7 +17410,8 @@ template<class Graph,class Lines,class Read,class Retire,class Release,
 int tglWithOwnedVpPairedPreparedFrameCore(Graph& firstGraph,TglOwnedVpSfcCallerStorage& first,Lines& firstLines,
     Graph& secondGraph,TglOwnedVpSfcCallerStorage& second,Lines& secondLines,
     const std::array<TglOwnedVpPreparedFrameArguments,2>& args,
-    Read& read,Retire& retire,Release& release,State state,Avs avs,Ief ief,Emit emit,Use use) noexcept {
+    Read& read,Retire& retire,Release& release,State state,Avs avs,Ief ief,Emit emit,Use use,
+    const std::array<bool,2>& participates={true,true}) noexcept {
     return tglWithOwnedVpPairedFrameCore(firstGraph,first,firstLines,secondGraph,second,secondLines,
         {args[0].source,args[1].source},{args[0].target,args[1].target},
         {args[0].settings,args[1].settings},read,retire,release,
@@ -17413,8 +17424,8 @@ int tglWithOwnedVpPairedPreparedFrameCore(Graph& firstGraph,TglOwnedVpSfcCallerS
                         args[1].renderData,state,avs,ief,emit,[&](auto& p1,auto& s1) noexcept -> int {
                             const std::array<TglOwnedVpEntrySet,2> base{firstEntries,secondEntries};
                             return tglWithOwnedVpPairedPreparedEntries(p0,s0,p1,s1,base,use);
-                        });
-                });
+                        },participates[1]);
+                },participates[0]);
         });
 }
 

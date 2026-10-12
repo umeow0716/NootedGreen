@@ -13793,6 +13793,22 @@ int main() {
         auto otherConsume=[&](void*,void*) noexcept -> int {++consumed;return 0;};
         using P=TglOwnedVpPreparedProducerContext<decltype(state),decltype(filter)>;
         using S=TglOwnedVpPreparedSetupContext<decltype(produce),decltype(consume)>;
+        {
+            S selected{children,source,target,data,produce,consume};
+            S inactive{children+1,source+1,target+1,data+1,produce,consume};
+            inactive.participates=false;
+            assert(selected.completionStatus()==5 && inactive.completionStatus()==0);
+            assert(selected.setup(source,target,data)==0 && selected.completionStatus()==5);
+            assert(selected.send(data,&command)==0 && selected.completionStatus()==0);
+            const auto beforeProduced=produced,beforeConsumed=consumed;
+            assert(inactive.setup(source+1,target+1,data+1)==5 && inactive.completionStatus()==5);
+            assert(produced==beforeProduced && consumed==beforeConsumed);
+            S unexpectedSend{children+1,source+1,target+1,data+1,produce,consume};
+            unexpectedSend.participates=false;
+            assert(unexpectedSend.send(data+1,&command)==5 && unexpectedSend.completionStatus()==5);
+            assert(produced==beforeProduced && consumed==beforeConsumed);
+            produced=consumed=0;
+        }
         P p0{children,data,source,target,state,filter};
         TglOwnedVpPreparedProducerContext<decltype(otherState),decltype(otherFilter)>
             p1{children+1,data+1,source+1,target+1,otherState,otherFilter};
