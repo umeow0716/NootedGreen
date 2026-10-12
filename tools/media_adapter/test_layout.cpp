@@ -26699,6 +26699,38 @@ int main() {
         services.registration={reinterpret_cast<uintptr_t>(&context),reinterpret_cast<uintptr_t>(registration)};
         services.control={reinterpret_cast<uintptr_t>(&context),reinterpret_cast<uintptr_t>(control)};
         std::array<TglOwnedSurfaceStorage,3> storage{};
+        {
+            uint8_t mmc=3;uint32_t mode=7,format=0x19;
+            uintptr_t report=0x4000,target=reinterpret_cast<uintptr_t>(&storage[1]);
+            bool modeReadable=true;unsigned modeReads=0;
+            std::memcpy(storage[1].prefix.data()+0x130,&format,4);
+            auto readPolicy=[&](uintptr_t address,void* out,size_t bytes) noexcept {
+                if(address==0x1088 && bytes==8){std::memcpy(out,&report,8);return true;}
+                if(address==0x4060 && bytes==8){std::memcpy(out,&target,8);return true;}
+                if(address==0x2ba9 && bytes==1){std::memcpy(out,&mmc,1);return true;}
+                if(address==0x4d28 && bytes==4){++modeReads;if(!modeReadable)return false;
+                    std::memcpy(out,&mode,4);return true;}
+                return false;
+            };
+            TglDiIecpControlPolicy policy;
+            assert(tglReadOwnedDiIecpControlPolicy(policy,0x1000,0x4000,&storage[1],readPolicy) &&
+                policy.mmcEnabled && policy.executionMode==7 && policy.target==&storage[1] && modeReads==1);
+            modeReadable=false;
+            assert(!tglReadOwnedDiIecpControlPolicy(policy,0x1000,0x4000,&storage[1],readPolicy) &&
+                policy.mmcEnabled && policy.executionMode==7 && modeReads==2);
+            mmc=2;
+            assert(tglReadOwnedDiIecpControlPolicy(policy,0x1000,0x4000,&storage[1],readPolicy) &&
+                !policy.mmcEnabled && !policy.executionMode && modeReads==2);
+            report+=8;
+            assert(!tglReadOwnedDiIecpControlPolicy(policy,0x1000,0x4000,&storage[1],readPolicy));
+            report-=8;target+=8;
+            assert(!tglReadOwnedDiIecpControlPolicy(policy,0x1000,0x4000,&storage[1],readPolicy));
+            target-=8;format=0xffffffff;mmc=1;
+            std::memcpy(storage[1].prefix.data()+0x130,&format,4);
+            assert(tglReadOwnedDiIecpControlPolicy(policy,0x1000,0x4000,&storage[1],readPolicy) &&
+                policy.mmcEnabled && !policy.executionMode && modeReads==2);
+            storage[1]={};
+        }
         TglDiIecpInputs input;
         input.boundaryWidth=1920; input.pipe=2;
         input.current=&storage[0]; input.target=&storage[1]; input.statistics=&storage[2];
