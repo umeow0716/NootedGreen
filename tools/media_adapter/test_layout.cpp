@@ -20626,11 +20626,16 @@ int main() {
                             TglOwnedVpFlatDispatchTable persistentTable0,persistentTable1;
                             assert(persistentTable0.build(testVpPresenceEntries(),[](uintptr_t,size_t) noexcept {return true;}));
                             assert(persistentTable1.build(testVpPresenceEntries(),[](uintptr_t,size_t) noexcept {return true;}));
+                            TglOwnedVpFlatDispatchTable missingTable;
+                            assert(frame.withPersistentPairedVpFactories(persistentTable0,missingTable,
+                                [](void*,void*) noexcept -> int {assert(false);return 0;})==5);
                             for(int nativeStatus:{-31,0}) {
                                 unsigned nativeCalls=0;
                                 assert(frame.withPersistentPairedVpFactories(persistentTable0,persistentTable1,
                                     [&](void* firstParent,void* secondParent) noexcept -> int {
                                         ++nativeCalls;void* previous=nullptr;
+                                        assert(frame.withPersistentPairedVpFactories(persistentTable0,persistentTable1,
+                                            [](void*,void*) noexcept -> int {assert(false);return 0;})==5);
                                         for(void* parent:{firstParent,secondParent}) {
                                             uintptr_t table=0,entry=0;
                                             std::memcpy(&table,parent,8);
