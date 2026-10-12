@@ -12644,6 +12644,49 @@ template<class Read,class Lines,class State,class Retire,class Use>
 int tglWithOwnedVpPairedAssemblyEntries(TglOwnedVpSfcCallerStorage&,Lines&,State&,
     TglOwnedVpSfcCallerStorage&,Lines&,State&,Read&,Retire&,Use,
     const TglOwnedVeboxFrameRetention* =nullptr) noexcept;
+template<class MakeState,class MakeFilters> struct TglOwnedVpPreparedProducerContext {
+    void* child;void* data;void* source;void* target;
+    MakeState& makeState;MakeFilters& makeFilters;
+    const uint8_t* leasedState=nullptr;
+    bool active=false,stateSeen=false,filtersSeen=false;int error=0;
+    bool owns(void* value) const noexcept {return value==child;}
+    int state(void* d,void* s,void* t) noexcept {
+        if(!active) return 5;
+        if(error) return error;
+        if(stateSeen || d!=data || s!=source || t!=target) return error=5;
+        stateSeen=true;return error=makeState();
+    }
+    void filters(void* packet,void* s) noexcept {
+        if(!active || error) return;
+        if(!stateSeen || filtersSeen || !leasedState ||
+            packet!=leasedState || s!=source) {error=5;return;}
+        filtersSeen=true;makeFilters();
+    }
+};
+
+template<class Produce,class Consume> struct TglOwnedVpPreparedSetupContext {
+    void* child;void* source;void* target;void* data;
+    Produce& produce;Consume& consume;
+    bool setupSeen=false,sendSeen=false,busy=false;int error=0;
+    bool owns(void* candidate) const noexcept {return candidate==child;}
+    int setup(void* s,void* t,void* d) noexcept {
+        if(error) return error;
+        if(setupSeen || busy || s!=source || t!=target || d!=data) return error=5;
+        setupSeen=true;busy=true;
+        const int result=produce();busy=false;
+        if(!error) error=result;
+        return error;
+    }
+    int send(void* d,void* command) noexcept {
+        if(error) return error;
+        if(!setupSeen || sendSeen || busy || d!=data || !command) return error=5;
+        sendSeen=true;busy=true;
+        const int result=consume(d,command);busy=false;
+        if(!error) error=result;
+        return error;
+    }
+};
+
 template<class StateBackend,class AvsBackend> class TglOwnedVpSfcCpuGraph {
     TglOwnedVpSfcCallerStorage storage_;
     TglOwnedSfcStateParameters<StateBackend> state_;
@@ -13292,27 +13335,9 @@ public:
             settings,target,sourceA8,[&](void* child,const auto&) noexcept {
                     auto produceState=[&]() noexcept {return state(child,frame,state_);};
                     auto produceFilters=[&]() noexcept {ief(child,frame);};
-                    struct ProducerContext {
-                        void* child;void* data;void* source;void* target;
-                        decltype(produceState)& makeState;
-                        decltype(produceFilters)& makeFilters;
-                        const uint8_t* leasedState=nullptr;
-                        bool active=false,stateSeen=false,filtersSeen=false;int error=0;
-                        bool owns(void* value) const noexcept {return value==child;}
-                        int state(void* d,void* s,void* t) noexcept {
-                            if(!active) return 5;
-                            if(error) return error;
-                            if(stateSeen || d!=data || s!=source || t!=target) return error=5;
-                            stateSeen=true;return error=makeState();
-                        }
-                        void filters(void* packet,void* s) noexcept {
-                            if(!active) return;
-                            if(error) return;
-                            if(!stateSeen || filtersSeen || !leasedState ||
-                                packet!=leasedState || s!=source) {error=5;return;}
-                            filtersSeen=true;makeFilters();
-                        }
-                    } producer{child,renderData,source,reinterpret_cast<void*>(target),
+                    using ProducerContext=TglOwnedVpPreparedProducerContext<
+                        decltype(produceState),decltype(produceFilters)>;
+                    ProducerContext producer{child,renderData,source,reinterpret_cast<void*>(target),
                         produceState,produceFilters};
                     using ProducerResolve=TglOwnedVpSfcResolve<ProducerContext>;
                     TglOwnedVpSfcScopedContext<ProducerContext> producerScope(child,producer);
@@ -13348,31 +13373,8 @@ public:
                         return avs_.withParameters([&](const auto&) noexcept {return view();});
                     });
                 };
-                struct Context {
-                    void* child;void* source;void* target;void* data;
-                    decltype(produce)& produce;decltype(consume)& consume;
-                    bool setupSeen=false,sendSeen=false,busy=false;int error=0;
-                    bool owns(void* candidate) const noexcept {return candidate==child;}
-                    int setup(void* s,void* t,void* d) noexcept {
-                        if(error) return error;
-                        if(setupSeen || busy || s!=source || t!=target || d!=data)
-                            return error=5;
-                        setupSeen=true;busy=true;
-                        const int result=produce();busy=false;
-                        if(!error) error=result;
-                        return error;
-                    }
-                    int send(void* d,void* command) noexcept {
-                        if(error) return error;
-                        if(!setupSeen || sendSeen || busy || d!=data || !command)
-                            return error=5;
-                        sendSeen=true;busy=true;
-                        const int result=consume(d,command);
-                        busy=false;
-                        if(!error) error=result;
-                        return error;
-                    }
-                } context{child,source,reinterpret_cast<void*>(target),renderData,produce,consume};
+                using Context=TglOwnedVpPreparedSetupContext<decltype(produce),decltype(consume)>;
+                Context context{child,source,reinterpret_cast<void*>(target),renderData,produce,consume};
                 using SetupResolve=TglOwnedVpSfcResolve<Context>;
                 TglOwnedVpSfcScopedContext<Context> scope(child,context);
                 if(!scope.bound()) return 5;
