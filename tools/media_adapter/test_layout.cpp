@@ -8679,10 +8679,23 @@ static void testNativeResourceBoundary() {
                                                         }
                                                         return false;
                                                     };
-                                                    unsigned registrations=0;
+                                                    struct NativeServiceTrace {unsigned registrations=0,controls=0;} serviceTrace;
+                                                    auto registrationEntry=+[](void* raw,const void* resource,uint32_t write,uint32_t readFlag) noexcept -> int {
+                                                        assert(resource && write<=1 && readFlag==1);
+                                                        ++static_cast<NativeServiceTrace*>(raw)->registrations;return 0;
+                                                    };
+                                                    auto controlEntry=+[](void* raw,const TglSurfaceControlParams* params,uint32_t* value) noexcept -> int {
+                                                        assert(params && value);++static_cast<NativeServiceTrace*>(raw)->controls;
+                                                        *value|=0x80;return 0;
+                                                    };
+                                                    TglNativeDiIecpServices nativeServices;
+                                                    nativeServices.registration={reinterpret_cast<uintptr_t>(&serviceTrace),reinterpret_cast<uintptr_t>(registrationEntry)};
+                                                    nativeServices.control={reinterpret_cast<uintptr_t>(&serviceTrace),reinterpret_cast<uintptr_t>(controlEntry)};
+                                                    auto& registrations=serviceTrace.registrations;
                                                     auto admitResource=[](const TglOwnedSurfaceStorage&) noexcept -> int {return 0;};
-                                                    auto registerResource=[&](const auto&,bool,bool) noexcept -> int {++registrations;return 0;};
-                                                    auto resourceControl=[](const auto&,uint32_t&,size_t,bool) noexcept -> int {return 0;};
+                                                    TglNativeDiIecpRegistration registerResource{nativeServices};
+                                                    auto compressionPolicy=[](const auto&,size_t,bool,bool& enabled) noexcept -> int {enabled=true;return 0;};
+                                                    TglNativeDiIecpControl<decltype(compressionPolicy)> resourceControl{nativeServices,compressionPolicy};
                                                     using FullTypes=TglRetainedVeboxLiveFrameTypes<FrameStmmApi,decltype(linkedInput),
                                                         std::decay_t<decltype(childOwner)>,std::decay_t<decltype(reportOwner)>,decltype(fullRead),
                                                         decltype(liveSurfaceAdmission),decltype(admitResource),decltype(registerResource),decltype(resourceControl)>;
@@ -8714,8 +8727,17 @@ static void testNativeResourceBoundary() {
                                                         });
                                                     };
                                                     const auto fullPass=runFullPass();
-                                                    assert(fullPass.status==0 && registrations>=2 && !fullRetention());
+                                                    assert(fullPass.status==0 && registrations>=2 && serviceTrace.controls && !fullRetention());
                                                     assert(!FullProducers::Resolve::get(actualChild));
+                                                    const auto savedDi=diPacket;
+                                                    const auto registrationsBeforeMissing=registrations;
+                                                    const auto controlsBeforeMissing=serviceTrace.controls;
+                                                    nativeServices.control.entry=0;
+                                                    const auto missingService=runFullPass();
+                                                    assert(missingService.status==5 && registrations==registrationsBeforeMissing &&
+                                                        serviceTrace.controls==controlsBeforeMissing && !fullRetention());
+                                                    assert(std::memcmp(&diPacket,&savedDi,sizeof(diPacket))==0);
+                                                    nativeServices.control.entry=reinterpret_cast<uintptr_t>(controlEntry);
                                                     const auto registeredBeforeStale=registrations;
                                                     std::array<uint8_t,0x188> stateBeforeStale{};
                                                     std::memcpy(stateBeforeStale.data(),statePacket.data(),stateBeforeStale.size());

@@ -15533,24 +15533,41 @@ struct TglNativeDiIecpServices {
 // The compression policy must distinguish native direct-output predicate80
 // from global MMC policy for intermediate/input/history surfaces. No default
 // "compression disabled" fallback; caller must supply qualified policy.
+inline bool tglNativeDiIecpServicesReady(const TglNativeDiIecpServices& services) noexcept {
+    return services.registration.context && services.registration.entry &&
+        services.control.context && services.control.entry;
+}
+// Named services can be installed in the retained frame's typed catalogue.
+// Borrow the already resolved service bundle; enclosing OS/MHW/image leases
+// remain required. Neither service grants resource ownership or completion.
+struct TglNativeDiIecpRegistration {
+    const TglNativeDiIecpServices& services;
+    template<class Resource> int operator()(const Resource& resource,bool write,bool read) const noexcept {
+        if(!tglNativeDiIecpServicesReady(services)) return 5;
+        return TglNativeRegistrationInvoker{}(services.registration.entry,
+            services.registration.context,&resource,write,read);
+    }
+};
+template<class Policy> struct TglNativeDiIecpControl {
+    const TglNativeDiIecpServices& services;
+    Policy policy;
+    int operator()(const TglOwnedSurfaceStorage& surface,uint32_t& value,size_t slot,bool directTarget)
+        noexcept(noexcept(policy(surface,slot,directTarget,std::declval<bool&>()))) {
+        if(!tglNativeDiIecpServicesReady(services)) return 5;
+        bool enabled=false;
+        const int result=policy(surface,slot,directTarget,enabled);
+        if(result || !enabled) return result;
+        return TglNativeSurfaceControlInvoker{}(services.control.entry,
+            services.control.context,surface,value);
+    }
+};
 template<class Admit, class ControlPolicy>
 int tglPrepareNativeDiIecpPacket(TglOwnedDiIecpPacket& output,
         const TglDiIecpInputs& input,const TglNativeDiIecpServices& services,
         Admit admit,ControlPolicy policy) {
-    if (!services.registration.context || !services.registration.entry ||
-        !services.control.context || !services.control.entry) return 5;
+    if (!tglNativeDiIecpServicesReady(services)) return 5;
     return tglPrepareDiIecpPacket(output,input,admit,
-        [&](const auto& resource,bool write,bool read) {
-            return TglNativeRegistrationInvoker{}(services.registration.entry,
-                services.registration.context,&resource,write,read);
-        },
-        [&](const auto& surface,uint32_t& value,size_t slot,bool directTarget) {
-            bool enabled=false;
-            const int result=policy(surface,slot,directTarget,enabled);
-            if (result || !enabled) return result;
-            return TglNativeSurfaceControlInvoker{}(services.control.entry,
-                services.control.context,surface,value);
-        });
+        TglNativeDiIecpRegistration{services},TglNativeDiIecpControl<ControlPolicy>{services,policy});
 }
 // TGL12b9a0 writes these five execution fields. No pointer adoption or state
 // mutation; failed reads/invalid indices preserve the caller's snapshot.
