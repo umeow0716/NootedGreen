@@ -5555,6 +5555,9 @@ inline const uint8_t* tglOwnedSfcSurfaceBytes(const TglOwnedSurfaceStorage& surf
 // no allocation adoption, publication, or assumption about its total extent.
 // Only the proven first DWORD is read. False means acquisition failure, not
 // "DI allowed": every failure latches the frame so selection cannot publish.
+// Revalidated against exact TGL12a976..12a9d9: DI is surface88, NOT
+// composition-bypass source68; native mode2=ADI and mode1=BOB. Reuse
+// this identity-qualified snapshot in the production pipe policy.
 template<class Read>
 bool tglRejectLeasedGen12DiOutput(bool& rejected,const TglOwnedSurfaceStorage& source,
     uintptr_t leasedDiParams,TglVeboxPipeAcquisition& frame,Read read) noexcept {
