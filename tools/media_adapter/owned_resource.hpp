@@ -5670,6 +5670,18 @@ public:
         return actual!=0;
     }
     bool hdr() noexcept {return features() && hdrPresent_;}
+    bool admitVpOutputInvocation(void* vpChild,void* source,void* target,void* parameters,
+        bool sfcCall) noexcept {
+        if(!healthy()) return false;
+        if(source!=static_cast<const void*>(&source_) || target!=static_cast<const void*>(&target_) ||
+           reinterpret_cast<uintptr_t>(parameters)!=parameters_) {frame_.fail();return false;}
+        if(sfcCall) {
+            uintptr_t linked=0;
+            if(!vp_ || reinterpret_cast<uintptr_t>(vpChild)!=vp_ ||
+               !gate_(child_+0x80,&linked,8) || linked!=vp_) {frame_.fail();return false;}
+        }
+        return healthy();
+    }
     uint32_t sfc() noexcept {frame_.fail();return UINT32_MAX;}
     // Read the original leased target, not requested allocation-key values.
     // These fields are independently consumed by52bf0/native surface control.
@@ -8697,8 +8709,14 @@ template<class Policy> struct TglOwnedVpOutputPipePolicy {
     bool sfcAvailable() noexcept {return policy.sfcAvailable();}
     bool hdr() noexcept {return policy.hdr();}
     bool fastFill() noexcept {return policy.fastFill();}
-    bool healthy() noexcept {return policy.healthy();}
+    bool healthy() noexcept {
+        static_assert(noexcept(policy.admitVpOutputInvocation(child,source,target,parameters,false)) &&
+            std::is_same_v<decltype(policy.admitVpOutputInvocation(child,source,target,parameters,false)),bool>,
+            "scoped VP inputs must match the enclosing frame policy");
+        return policy.healthy() && policy.admitVpOutputInvocation(child,source,target,parameters,false);
+    }
     uint32_t sfc() noexcept {
+        if(!policy.admitVpOutputInvocation(child,source,target,parameters,true)) return UINT32_MAX;
         return static_cast<uint32_t>(entries.extent(child,source,target,parameters));
     }
 };

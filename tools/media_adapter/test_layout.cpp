@@ -3078,7 +3078,7 @@ static void testLeasedGen12PlatformPolicy() {
     struct SfcFixture {
         static int extent(void* vp,void*,void*,void*) noexcept {++*static_cast<unsigned*>(vp);return 1;}
     };
-    for(unsigned scenario=0;scenario<29;++scenario) {
+    for(unsigned scenario=0;scenario<33;++scenario) {
         TglOwnedSurfaceStorage source{},target{};
         std::array<uint8_t,0x1bc0> child{};
         std::array<uint8_t,0x139> parameters{};
@@ -3090,6 +3090,7 @@ static void testLeasedGen12PlatformPolicy() {
         const uint32_t one=1,format=0x19,targetFormat=scenario==3?0x52:0x19;
         const uint32_t direct=scenario==0 || scenario==10 || scenario==12 || scenario==14 || scenario==15 || scenario>=16?1:0;
         uintptr_t actualVp=scenario==10 || scenario==11 || scenario>=16?0:vpAddress;
+        if(scenario==32) actualVp=vpAddress;
         if(scenario==8) actualVp=0x567800;
         uintptr_t actualTarget=scenario==7?sourceAddress:targetAddress;
         uintptr_t actualFill=scenario==10 || scenario>=16?colorFill:scenario==11?0x567800:0;
@@ -3170,14 +3171,17 @@ static void testLeasedGen12PlatformPolicy() {
         TglLeasedGen12VeboxOutputPolicy policy(read,childOwner,childOwner.image,childAddress,paramsAddress,
             vpAddress,0,scenario==10 || scenario>=16?colorFill:0,sourceOwner,source,a,targetOwner,target,b,comp,frame,query,fill);
         TglOwnedVpAdmissionEntries entries;entries.extent=&SfcFixture::extent;
-        TglOwnedVpOutputPipePolicy<decltype(policy)> scoped{policy,entries,&sfcCalls,&source,&target,parameters.data()};
+        TglOwnedVpOutputPipePolicy<decltype(policy)> scoped{policy,entries,
+            scenario==32?static_cast<void*>(&queries):static_cast<void*>(&sfcCalls),
+            scenario==29?&target:&source,scenario==30?&source:&target,
+            scenario==31?static_cast<void*>(child.data()):static_cast<void*>(parameters.data())};
         const bool ok=scenario==9?tglSelectGen12VeboxOutputPipe(policy,comp,output):
             tglSelectGen12VeboxOutputPipe(scoped,comp,output);
         if(scenario==0 || scenario==1 || scenario==2 || scenario==3 || scenario==10 || scenario==13 || scenario==17) {
             const uint32_t expected=scenario==0 || scenario==10 || scenario==17?2:scenario==1?1:0;
             assert(ok && output==expected && comp==(expected?0:1) && frame.healthy());
         } else assert(!ok && output==0xdeadbeef && comp==0xa4 && !frame.healthy());
-        assert(sfcCalls==(scenario==1?1u:0u) && fills==(scenario==10 || scenario>=16?1u:0u));
+        assert(sfcCalls==(scenario==1?1u:0u) && fills==(scenario==10 || (scenario>=16 && scenario<=28)?1u:0u));
         if(scenario==10 || scenario>=16) {
             float bottom=0;std::memcpy(&bottom,target.prefix.data()+0x4c,4);
             assert(bottom==1120 && target.prefix[0x85]==(scenario==10 || scenario==17?1:0));
@@ -14109,6 +14113,10 @@ int main() {
             bool hdr() noexcept {return tone;}
             bool fastFill() noexcept {return fill;}
             bool healthy() noexcept {return ok;}
+            bool admitVpOutputInvocation(void* child,void* source,void* target,void* parameters,bool) noexcept {
+                return child && source==reinterpret_cast<void*>(0x1000) &&
+                    target==reinterpret_cast<void*>(0x2000) && parameters==reinterpret_cast<void*>(0x3000);
+            }
             // No sfc(): selection must use the actual scoped owned VP18.
         } pipePolicy;
         uint8_t comp=0x80;uint32_t pipe=99;
@@ -16391,6 +16399,10 @@ int main() {
             })==0);
             struct GraphPipePolicy {
                 decltype(graph)& owner;bool directMode=true;
+                bool admitVpOutputInvocation(void* child,void* source,void* target,void* parameters,bool) noexcept {
+                    return child && source==reinterpret_cast<void*>(0x1000) &&
+                        target==reinterpret_cast<void*>(0x2000) && parameters==reinterpret_cast<void*>(0x4000);
+                }
                 bool bypass() noexcept {assert(!owner.tryReset());return true;}
                 bool rejectDi() noexcept {return false;}
                 bool rejectLut() noexcept {return false;}
