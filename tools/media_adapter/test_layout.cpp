@@ -23825,6 +23825,14 @@ int main() {
                                 assert(!historyStage(foreignReport));
                                 const uint32_t initialHistoryMode=1;
                                 std::memcpy(admissionHistory.data()+4,&initialHistoryMode,4);
+                                TglOwnedVeboxFeatureAdmissionStage<std::decay_t<decltype(sourceOwner)>,
+                                    std::decay_t<decltype(targetOwner)>,std::decay_t<decltype(owner)>,
+                                    std::decay_t<decltype(executionLease)>,std::decay_t<decltype(parameters)>,
+                                    decltype(featureRead),decltype(qualifyMhw),decltype(featureExecutable),
+                                    decltype(invokeFeature)> featureStage{feature,sourceOwner,targetOwner,owner,
+                                        executionLease,parameters,child,live.leases.execution,live.leases.source,
+                                        *live.leases.target,featureRead,qualifyMhw,featureExecutable,invokeFeature};
+                                assert(!featureStage(foreignReport) && featureInvocations==1);
                                 auto runCheckedFeature=[&]() noexcept {
                                     return tglRunSelectedVeboxAdmissionStages(checkedInput,executionBackend.bytes,checkedPass,
                                         []() noexcept {return true;},
@@ -23834,7 +23842,7 @@ int main() {
                                             return historyStage(report);
                                         },
                                         []() noexcept {return true;},
-                                        [&](auto&) noexcept {return prepareFeature()==0;},
+                                        featureStage,
                                         [&](auto&) noexcept {++checkedSfc;return true;});
                                 };
                                 featureCode=false;

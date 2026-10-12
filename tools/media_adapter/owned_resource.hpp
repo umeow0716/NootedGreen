@@ -11714,6 +11714,25 @@ int tglInvokePreboundVeboxFeaturePreparation(const TglVeboxFeatureBinding& bindi
     return linked==execution && leased()?0:5;
 }
 
+// Admission continuation over the already-held frame. Do not reacquire the
+// report or source DN slot here: both belong to the enclosing command frame.
+template<class SourceOwner,class TargetOwner,class ChildOwner,class ExecutionOwner,class Parameters,
+    class Read,class Qualify,class Executable,class Invoke=TglNativeVeboxFeaturePreparationInvoker>
+struct TglOwnedVeboxFeatureAdmissionStage {
+    const TglVeboxFeatureBinding& binding;
+    SourceOwner& sourceOwner;TargetOwner& targetOwner;ChildOwner& childOwner;
+    ExecutionOwner& executionOwner;Parameters& parameters;
+    void* child;uintptr_t execution;
+    const TglOwnedSurfaceStorage& source;const TglOwnedSurfaceStorage& target;
+    Read read;Qualify qualify;Executable executable;Invoke invoke{};
+    template<class Report> bool operator()(Report& report) noexcept {
+        if(reinterpret_cast<uintptr_t>(report.data())!=execution) return false;
+        return tglInvokePreboundVeboxFeaturePreparation(binding,sourceOwner,targetOwner,
+            childOwner,executionOwner,parameters,child,execution,source,target,
+            read,qualify,executable,invoke)==0;
+    }
+};
+
 template<class SourceOwner,class TargetOwner,class ChildOwner,class ExecutionOwner,class Invoke>
 int tglRunCapturedVeboxFeature(SourceOwner& sourceOwner,TargetOwner& targetOwner,
     ChildOwner& childOwner,ExecutionOwner& executionOwner,void* child,uintptr_t execution,
