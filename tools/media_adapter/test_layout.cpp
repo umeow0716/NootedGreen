@@ -21009,14 +21009,17 @@ int main() {
                                         snapshots[0].at922=true;snapshots[1].at922=true;
                                         int renderData[2]{},command=0;
                                         const std::array<TglOwnedVpPreparedFrameArguments,2> args{{
-                                            {snapshots[0],0x1000,0x2000,0x3000,0,0,renderData},
-                                            {snapshots[1],0x1000,0x2000,0x3000,0,0,renderData+1}}};
+                                            {snapshots[0],0x1000,0x2000,0x3000,0x7000,0,0,renderData},
+                                            {snapshots[1],0x1000,0x2000,0x3000,0x8000,0,0,renderData+1}}};
                                         unsigned stateCount=0,avsCount=0,filterCount=0,emitCount=0;
                                         auto releaseCpu=[](void*) noexcept {assert(false);};
                                         assert(firstGraph.withPairedProducerReservation(secondGraph,[&](void*,void*) noexcept -> int {
                                             return tglWithOwnedVpPairedPreparedFrameCore(firstGraph,first,firstLines.resources(),
                                                 secondGraph,second,secondLines.resources(),args,modeRead,modeRetire,releaseCpu,
-                                                [&](void*,const auto&,auto& packet) noexcept -> int {
+                                                [&](void* child,const auto&,auto& packet) noexcept -> int {
+                                                    uintptr_t parameters=0;
+                                                    std::memcpy(&parameters,static_cast<uint8_t*>(child)+0x990,8);
+                                                    assert(parameters==(child==first.bytes.data()?0x7000:0x8000));
                                                     assert(!packet.hasParametersLease());++stateCount;return 0;
                                                 },[&](void*,const auto&,auto&) noexcept -> int {++avsCount;return 0;},
                                                 [&](void*,const auto&) noexcept {++filterCount;},
