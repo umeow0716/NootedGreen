@@ -1713,6 +1713,44 @@ struct TglNativeCreatedVeboxRendererView {
     }
 };
 
+// Owned table for the ONE creator+18 call at133c0f (ff 51 18).
+// Never publish this truncated table as an object's vptr. All four source
+// slots are copied, only+18 is replaced; the owned callback must call native
+//1e6610(creator) exactly once and perform handoff on the normal call stack.
+// This type installs neither a breakpoint nor an adapter callback.
+class TglOwnedCreatorCallTable {
+    std::array<uintptr_t,4> entries_{};
+    uintptr_t source_=0,native_=0;
+public:
+    TglOwnedCreatorCallTable()=default;
+    TglOwnedCreatorCallTable(const TglOwnedCreatorCallTable&)=delete;
+    TglOwnedCreatorCallTable& operator=(const TglOwnedCreatorCallTable&)=delete;
+    template<class Read,class Qualify,class Executable,class OwnedAdmit>
+    bool build(uintptr_t image,uintptr_t callback,Read read,Qualify qualify,
+        Executable executable,OwnedAdmit ownedAdmit) noexcept {
+        // Once exposed, its storage must remain immutable until the call ends.
+        if(source_ || !image || image>UINTPTR_MAX-0x75bb78 || !qualify(image) ||
+            !callback || callback==image+0x1e6610 || !ownedAdmit(callback,1)) return false;
+        std::array<uintptr_t,4> native{};
+        constexpr std::array<uint8_t,3> anchor{0xff,0x51,0x18};
+        auto actual=anchor;
+        if(!read(image+0x75bb58,native.data(),sizeof(native)) || native[3]!=image+0x1e6610 ||
+            !executable(native[3],1) || !executable(image+0x133c0f,anchor.size()) ||
+            !read(image+0x133c0f,actual.data(),actual.size()) || actual!=anchor) return false;
+        entries_=native;entries_[3]=callback;source_=image+0x75bb58;native_=native[3];return true;
+    }
+    uintptr_t addressPoint() const noexcept {return source_?reinterpret_cast<uintptr_t>(entries_.data()):0;}
+    uintptr_t source() const noexcept {return source_;}
+    uintptr_t nativeCreate() const noexcept {return native_;}
+    // Register-only selector for that exact call boundary. No memory read,
+    // allocation or native call is allowed in a signal handler. The normal
+    // callback must subsequently authenticate creator/object ownership.
+    bool selectCallArgument(uintptr_t& table,uintptr_t creator) const noexcept {
+        if(!source_ || table!=source_ || !creator || (creator&7) || creator>UINTPTR_MAX-0x70) return false;
+        table=addressPoint();return true;
+    }
+};
+
 struct TglOwnedSurfaceStorage;
 // Outer131fa0 copies0x139 bytes at1320e2: source count0 <=17, targets90 <=8.
 // Sources begin8; targets begin98 (NOT the source!). Native13076c..13083c

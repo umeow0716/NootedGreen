@@ -14050,6 +14050,7 @@ int main() {
             alignas(8) std::array<uint8_t,0x70> creator{};
             const auto creatorAddress=reinterpret_cast<uintptr_t>(creator.data());
             uintptr_t creatorTable=image+0x75bb58,create=image+0x1e6610;
+            std::array<uint8_t,3> creatorCallAnchor{0xff,0x51,0x18};
             put(creatorAddress,0,creatorTable);put(creatorAddress,0x68,r);
             put(r,0x920,0x12345678);
             auto creatorRead=[&](uintptr_t address,void* bytes,size_t size) noexcept {
@@ -14058,6 +14059,13 @@ int main() {
                     std::memcpy(bytes,reinterpret_cast<const void*>(address),size);return true;
                 }
                 if(address==image+0x75bb70 && size==8) {std::memcpy(bytes,&create,8);return true;}
+                if(address==image+0x75bb58 && size==32) {
+                    const std::array<uintptr_t,4> table{11,22,33,create};
+                    std::memcpy(bytes,table.data(),size);return true;
+                }
+                if(address==image+0x133c0f && size==3) {
+                    std::memcpy(bytes,creatorCallAnchor.data(),size);return true;
+                }
                 return qualifiedRead(address,bytes,size);
             };
             bool creatorAllowed=true;
@@ -14067,6 +14075,34 @@ int main() {
             auto creatorExecutable=[&](uintptr_t address,size_t size) noexcept {
                 return (executableAllowed && address==image+0x1e6610 && size==1) || executable(address,size);
             };
+            {
+                TglOwnedCreatorCallTable callTable;
+                auto callExecutable=[&](uintptr_t address,size_t size) noexcept {
+                    return (address==image+0x133c0f && size==3) || creatorExecutable(address,size);
+                };
+                auto ownedAdmit=[](uintptr_t address,size_t size) noexcept {return address==0xf000 && size==1;};
+                auto buildCall=[&](uintptr_t replacement) {
+                    return callTable.build(image,replacement,creatorRead,qualify,callExecutable,ownedAdmit);
+                };
+                assert(!callTable.addressPoint() && !buildCall(0) && !buildCall(image+0x1e6610));
+                creatorCallAnchor[0]=0;assert(!buildCall(0xf000) && !callTable.addressPoint());
+                creatorCallAnchor[0]=0xff;create++;assert(!buildCall(0xf000));create--;
+                assert(buildCall(0xf000) && callTable.source()==image+0x75bb58 && callTable.nativeCreate()==create);
+                std::array<uintptr_t,4> slots{};
+                std::memcpy(slots.data(),reinterpret_cast<void*>(callTable.addressPoint()),sizeof(slots));
+                assert((slots==std::array<uintptr_t,4>{11,22,33,0xf000}));
+                uintptr_t callArgument=callTable.source()+8;
+                assert(!callTable.selectCallArgument(callArgument,creatorAddress) && callArgument==callTable.source()+8);
+                callArgument=callTable.source();
+                assert(!callTable.selectCallArgument(callArgument,0) && callArgument==callTable.source());
+                assert(!callTable.selectCallArgument(callArgument,creatorAddress+1));
+                assert(!callTable.selectCallArgument(callArgument,UINTPTR_MAX-7));
+                assert(callTable.selectCallArgument(callArgument,creatorAddress) && callArgument==callTable.addressPoint());
+                assert(!callTable.selectCallArgument(callArgument,creatorAddress));
+                const auto address=callTable.addressPoint();
+                assert(!buildCall(0xf000) && callTable.addressPoint()==address);
+                assert(creatorTable==image+0x75bb58 && create==image+0x1e6610);
+            }
             TglNativeCreatedVeboxRendererView created;
             auto resolveCreated=[&]() noexcept {
                 return created.resolve(image,creatorAddress,creatorRead,creatorAdmit,qualify,creatorExecutable);
