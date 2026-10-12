@@ -8505,6 +8505,7 @@ static void testNativeResourceBoundary() {
                                                         !readerRetention() && renderEntries==0);
                                                     unsigned liveAdmissions=0;
                                                     bool allowSurfacePacket=false;
+                                                    bool inactiveFfdnPacket=false;
                                                     auto liveSurfaceAdmission=[&](const TglOwnedSurfaceStorage& surface,size_t role) noexcept -> int {
                                                         if(role==0) {
                                                             assert(&surface==&linkedStorage && linkedInput.hasSurfaceLease(surface));
@@ -8512,7 +8513,8 @@ static void testNativeResourceBoundary() {
                                                             const auto& inactive=retained.auxiliary().stmmStorage().surfaces();
                                                             assert(&surface==&inactive[0] || &surface==&inactive[1]);
                                                         } else if(role==3) {
-                                                            assert(retained.ffdnBacked()[0]->hasSurfaceLease(surface) ||
+                                                            if(inactiveFfdnPacket) assert(!tglNativeBackingPresent(surface.resource));
+                                                            else assert(retained.ffdnBacked()[0]->hasSurfaceLease(surface) ||
                                                                 retained.ffdnBacked()[1]->hasSurfaceLease(surface));
                                                         }
                                                         ++liveAdmissions;return allowSurfacePacket ? 0 : -82;
@@ -8635,6 +8637,28 @@ static void testNativeResourceBoundary() {
                                                             })==5);
                                                             return -86;
                                                         })==-86);
+                                                    // Publish a genuine no-FFDN allocation selection, not a
+                                                    // caller-side flag that bypasses the recorded reader.
+                                                    assert(retained.withPreparedSurfaceViews(linkedInput,&linkedInput,
+                                                        static_cast<decltype(&linkedInput)>(nullptr),static_cast<decltype(&linkedInput)>(nullptr),
+                                                        2,TglOwnedFfdiAllocationKind::NativeBacking,false,false,false,
+                                                        [&](const auto& ffdi,const auto& ffdn,const auto& stmm,const auto&) noexcept -> int {
+                                                            assert(!ffdn.outputs[0] && !ffdn.outputs[1]);
+                                                            assert(retained.capturePreparedSelection(linkedInput,current,ffdi,ffdn,stmm));return 0;
+                                                        },static_cast<TglOwnedFfdnNoDenoiseBorrow*>(nullptr),
+                                                        {&current,&current,nullptr,nullptr})==0);
+                                                    retained.publishPreparedSelection(true);
+                                                    inactiveFfdnPacket=true;
+                                                    const auto inactivePacket=runPacket();
+                                                    assert(inactivePacket.status==-84 && !packetRetention());
+                                                    reportBackend.bytes[0xb]=1; // Current DN needs real allocation.
+                                                    unsigned deniedConsumers=0;
+                                                    assert(tglRunRetainedDiIecpFrameInput(retained,linkedInput,&linkedInput,
+                                                        static_cast<decltype(&linkedInput)>(nullptr),static_cast<decltype(&linkedInput)>(nullptr),
+                                                        childOwner,reportOwner,actualChild,report,current,read,false,{},
+                                                        [&](const TglDiIecpInputs&) noexcept -> int {++deniedConsumers;return 0;})==5);
+                                                    assert(!deniedConsumers);
+                                                    reportBackend.bytes[0xb]=0;
                                                     assert(borrowFixture.allocations==packetAllocations && borrowFixture.fills==packetFills);
                                                     assert(!EntryProducers::Resolve::get(actualChild));
                                                     childOwner.renderImage=0;childOwner.renderHooks.fill(0);
