@@ -23613,7 +23613,7 @@ int main() {
                                 std::memcpy(source.prefix.data()+0xd8,&admissionWidth,4);
                                 std::memcpy(source.prefix.data()+0xdc,&admissionHeight,4);
                                 unsigned admissionResets=0,admissionConsumes=0,admissionFeatures=0;
-                                bool fixtureDependencies=false,admissionFeatureCode=true;
+                                bool fixtureDependencies=false,admissionFeatureCode=true,usePlatformPolicy=false;
                                 auto admitFrame=[&](auto& owner,void* child,auto& sourceOwner,auto& targetOwner,auto& parameters,auto& packets,
                                     auto& backing,auto enterResources) noexcept -> bool {
                                     std::array<uint8_t,0x139> params{};params[0x138]=1;
@@ -23621,6 +23621,7 @@ int main() {
                                     const uintptr_t root=reinterpret_cast<uintptr_t>(&packets.source);
                                     const uintptr_t peer=reinterpret_cast<uintptr_t>(packets.target);
                                     std::memcpy(pass.data()+0x10,&root,8);std::memcpy(params.data()+0x98,&peer,8);
+                                    std::memcpy(params.data()+8,&root,8);
                                     TglVeboxAdmissionBorrowedInterfaces interfaces;
                                     auto* bytes=static_cast<uint8_t*>(child);
                                     std::array<uint8_t,16> savedDependencies{};
@@ -23708,10 +23709,25 @@ int main() {
                                         featureStage{feature,sourceOwner,targetOwner,owner,executionLease,parameters,
                                             child,packets.execution,packets.source,*packets.target,
                                             featureRead,qualifyMhw,featureExecutable,invokeFeature};
+                                    auto selectPipe=[&](uint8_t& comp) noexcept -> uint32_t {
+                                        if(!usePlatformPolicy) return 1; // separate SFC recording case
+                                        TglVeboxPipeAcquisition acquisition;
+                                        TglOwnedGen12SurfaceFeatures sourceFeatures{&packets.source,&acquisition};
+                                        TglOwnedGen12SurfaceFeatures targetFeatures{packets.target,&acquisition};
+                                        // No producer evidence for LUT/HDR/CSC/decompression: keep unknown
+                                        // metadata and deny those dependencies, never invent absence/success.
+                                        auto query=[](uintptr_t,uintptr_t,bool&) noexcept {return false;};
+                                        auto fill=[](auto&) noexcept {return false;};
+                                        TglLeasedGen12VeboxOutputPolicy policy(readInput,owner,base,
+                                            reinterpret_cast<uintptr_t>(child),reinterpret_cast<uintptr_t>(params.data()),
+                                            0,0,0,sourceOwner,packets.source,sourceFeatures,targetOwner,*packets.target,
+                                            targetFeatures,comp,acquisition,query,fill);
+                                        return TglGen12VeboxPipeSelector<decltype(policy)>{policy}(comp);
+                                    };
                                     const int status=executionLease.withLeasedAdmissionBytes(packets.execution,[&](auto& reportBytes) noexcept {
                                         return tglRunCapturedSelectedVeboxAdmissionStages(owner,executionLease,child,
                                             params,pass,packets.source,*packets.target,interfaces,reportBytes,readInput,reset,
-                                            [](uint8_t&) noexcept -> uint32_t {return 1;},historyStage,
+                                            selectPipe,historyStage,
                                             featureStage,[](auto&) noexcept {return true;},enterResources)?0:5;
                                     });
                                     std::memcpy(bytes+0x90,&savedHistory,8);
@@ -23741,10 +23757,17 @@ int main() {
                                 std::memcpy(&detachedTarget,executionBackend.bytes.data()+0x60,8);
                                 assert(!detachedTarget);
                                 admissionFeatureCode=true;
+                                usePlatformPolicy=true;
+                                const auto composition=frame.withNativeOwnedVpAdmissionCommandFrame(0,roles,0,0,
+                                    executionLease,0x2200,0x3300,readReportHelper,admitFrame,consumeAdmitted);
+                                assert(composition.status==5 && admissionResets==3 && admissionConsumes==1 && admissionFeatures==2);
+                                uint32_t selectedPipe=UINT32_MAX;
+                                std::memcpy(&selectedPipe,executionBackend.bytes.data()+0xa0c,4);
+                                assert(selectedPipe==0); // composition fallback must NOT consume a VEBOX-only request
                                 admissionWidth=63;std::memcpy(source.prefix.data()+0xd8,&admissionWidth,4);
                                 const auto denied=frame.withNativeOwnedVpAdmissionCommandFrame(0,roles,0,0,
                                     executionLease,0x2200,0x3300,readReportHelper,admitFrame,consumeAdmitted);
-                                assert(denied.status==5 && admissionResets==2 && admissionConsumes==1 && admissionFeatures==1);
+                                assert(denied.status==5 && admissionResets==3 && admissionConsumes==1 && admissionFeatures==2);
                                 std::memcpy(source.prefix.data()+0xd8,savedDimensions.data(),8);
                                 std::memcpy(source.prefix.data()+0x130,&savedFormat,4);
                             }
