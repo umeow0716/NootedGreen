@@ -2599,7 +2599,11 @@ TglVeboxMode0Allocation tglVeboxMode0AllocationDecision(uint8_t report09,
 // arguments opaque until their complete producer/backing contract is bound.
 // This binding does NOT qualify all derived callbacks or GPU retirement.
 // Native base slot10=126740 takes this/argument1/argument2 and reaches
-// pointer-return factory1e0 at1269ca. Inputs remain caller-owned and leased.
+// pointer-return factory1e0 at1269ca. Exact renderer132510 passes its init
+// request and metadata object renderer9c8 to both children. Native126740
+// copies request+8/+c/+10 scalars, but RETAINS argument2 in child70.
+// The request needs a synchronous readable lease; metadata needs the owning
+// renderer/context lifetime, not merely this invocation's stack lifetime.
 struct TglNativeVeboxStageInvoker {
     int operator()(uintptr_t entry,void* child,void* argument1,void* argument2) const noexcept {
         using Native=int(*)(void*,void*,void*);
