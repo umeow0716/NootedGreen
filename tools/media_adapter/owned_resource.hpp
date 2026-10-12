@@ -13205,6 +13205,18 @@ public:
     // Expose the qualified admission/resource subset as typed slots on the
     // same child. Other slots remain NULL; this is not a publishable vtable.
     template<class Read,class Lines,class Retire,class Use>
+    int withLeasedPairedAssemblyEntries(TglOwnedVpSfcCpuGraph& other,
+        Read& read,Lines& firstLines,Lines& secondLines,Retire& retire,Use use) noexcept {
+        if(this==&other || !ready_ || !other.ready_ || !busy_ || !other.busy_ ||
+            retention_!=other.retention_ || state_.hasParametersLease() ||
+            other.state_.hasParametersLease() || avs_.hasParametersLease() ||
+            other.avs_.hasParametersLease()) return 5;
+        // Bind resources now; their actual invocation still authenticates the
+        // phase's published state packet. Binding must not lock state before VP90.
+        return tglWithOwnedVpPairedAssemblyEntries(storage_,firstLines,state_,
+            other.storage_,secondLines,other.state_,read,retire,use,retention_);
+    }
+    template<class Read,class Lines,class Retire,class Use>
     int withPairedAssemblyView(TglOwnedVpSfcCpuGraph& other,bool avsEnabled,
         Read& read,Lines& firstLines,Lines& secondLines,Retire& retire,Use use) noexcept {
         if(this==&other || retention_!=other.retention_) return 5;
