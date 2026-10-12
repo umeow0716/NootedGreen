@@ -19586,6 +19586,38 @@ public:
 // setup packet by 1b1bc0. Query must be admitted to OS+d8 by the enclosing
 // native owner; this CPU producer grants no callback/image authority.
 struct TglNativeRendererCacheSettings {std::array<uint8_t,0x68> bytes{};};
+struct TglNativeRendererCacheBinding {
+    uintptr_t image=0,os=0,entry=0;
+    template<class Read,class Qualify,class Executable>
+    bool resolve(uintptr_t base,uintptr_t context,Read read,Qualify qualify,Executable executable) {
+        *this={};
+        constexpr std::array<uint8_t,18> anchor{0x55,0x48,0x89,0xe5,0x48,0x81,0xec,
+            0x20,0x02,0x00,0x00,0x48,0x8d,0x05,0x3e,0x09,0x6d,0x00};
+        uintptr_t callback=0;auto actual=anchor;
+        if(!base || base>UINTPTR_MAX-0x65d82 || !qualify(base) ||
+            !context || context>UINTPTR_MAX-0xe0 || !read(context+0xd8,&callback,8) ||
+            callback!=base+0x65d70 || !executable(callback,anchor.size()) ||
+            !read(callback,actual.data(),actual.size()) || actual!=anchor) return false;
+        image=base;os=context;entry=callback;return true;
+    }
+    template<class Read,class Invoke>
+    bool query(uint32_t policy,uint32_t& output,Read read,Invoke invoke) const {
+        uintptr_t current=0;
+        // Native65d70 indexes a 0x1fc-byte table without a bounds check.
+        // Only the two proven renderer policies may reach that entry.
+        if((policy!=0x70 && policy!=0x71) || !image || image>UINTPTR_MAX-0x65d82 ||
+            entry!=image+0x65d70 || !os || os>UINTPTR_MAX-0xe0 ||
+            !read(os+0xd8,&current,8) || current!=entry) return false;
+        uint32_t candidate=0;
+        if(!invoke(entry,policy,candidate)) return false;
+        output=candidate;return true;
+    }
+};
+struct TglNativeRendererCacheInvoker {
+    bool operator()(uintptr_t entry,uint32_t policy,uint32_t& output) const noexcept {
+        output=reinterpret_cast<uint32_t(*)(uint32_t)>(entry)(policy);return true;
+    }
+};
 template<class Query>
 bool tglProduceNativeRendererCacheSettings(TglNativeRendererCacheSettings& output,
     bool vebox,bool render,bool extended,Query query) {

@@ -19215,6 +19215,34 @@ int main() {
         TglSfcLifetimeBinding lifetime{base,base+0x16bdd0,base+0x16bed0};
         {
             TglNativeRendererCacheSettings settings;
+            uintptr_t cacheEntry=base+0x65d70;
+            bool cacheAnchor=true;
+            auto cacheRead=[&](uintptr_t address,void* destination,size_t size){
+                if(address==os+0xd8 && size==8){std::memcpy(destination,&cacheEntry,8);return true;}
+                if(address==base+0x65d70 && size==18 && cacheAnchor){
+                    const std::array<uint8_t,18> bytes{0x55,0x48,0x89,0xe5,0x48,0x81,0xec,
+                        0x20,0x02,0x00,0x00,0x48,0x8d,0x05,0x3e,0x09,0x6d,0x00};
+                    std::memcpy(destination,bytes.data(),size);return true;
+                }
+                return false;
+            };
+            TglNativeRendererCacheBinding cacheBinding;
+            auto imageAdmit=[](uintptr_t image){return image==base;};
+            auto codeAdmit=[](uintptr_t,size_t){return true;};
+            assert(cacheBinding.resolve(base,os,cacheRead,imageAdmit,codeAdmit));
+            unsigned invoked=0;uint32_t policyOutput=99;
+            auto invokeCache=[&](uintptr_t entry,uint32_t policy,uint32_t& value){
+                assert(entry==base+0x65d70 && (policy==0x70 || policy==0x71));
+                ++invoked;value=42;return true;
+            };
+            assert(!cacheBinding.query(0xffffffff,policyOutput,cacheRead,invokeCache) &&
+                !invoked && policyOutput==99);
+            assert(cacheBinding.query(0x71,policyOutput,cacheRead,invokeCache) && invoked==1 && policyOutput==42);
+            ++cacheEntry;
+            assert(!cacheBinding.query(0x70,policyOutput,cacheRead,invokeCache) && invoked==1);
+            assert(!cacheBinding.resolve(base,os,cacheRead,imageAdmit,codeAdmit) && !cacheBinding.entry);
+            --cacheEntry;cacheAnchor=false;
+            assert(!cacheBinding.resolve(base,os,cacheRead,imageAdmit,codeAdmit));
             unsigned calls=0;
             auto query=[&](uint32_t policy,uint32_t& value){
                 assert(policy==(calls<3?0x70u:0x71u));value=++calls;return true;
