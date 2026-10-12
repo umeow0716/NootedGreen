@@ -13794,6 +13794,36 @@ int main() {
         using P=TglOwnedVpPreparedProducerContext<decltype(state),decltype(filter)>;
         using S=TglOwnedVpPreparedSetupContext<decltype(produce),decltype(consume)>;
         {
+            std::array<uint8_t,0x90> caller{};
+            std::array<uint8_t,0xa10> report{};
+            const uintptr_t c=reinterpret_cast<uintptr_t>(caller.data());
+            const uintptr_t r=reinterpret_cast<uintptr_t>(report.data());
+            const uintptr_t v=reinterpret_cast<uintptr_t>(children);
+            std::memcpy(caller.data()+0x80,&v,8);std::memcpy(caller.data()+0x88,&r,8);
+            auto read=[&](uintptr_t address,void* out,size_t size) noexcept {
+                if((address==c+0x80 || address==c+0x88) && size==8) {
+                    std::memcpy(out,reinterpret_cast<const void*>(address),size);return true;
+                }
+                if(address==r+0xa0c && size==4) {std::memcpy(out,report.data()+0xa0c,4);return true;}
+                return false;
+            };
+            bool admitted=true;
+            auto admit=[&](uintptr_t a,uintptr_t b,uintptr_t d) noexcept {
+                return admitted && a==c && b==r && d==v;
+            };
+            for(uint32_t pipe=0;pipe<4;++pipe) {
+                std::memcpy(report.data()+0xa0c,&pipe,4);bool selected=true;
+                assert(tglReadOwnedVpNativeParticipation(selected,c,r,v,read,admit)==(pipe<3));
+                assert(selected==(pipe==1 || pipe==3)); // rejection preserves output
+            }
+            bool selected=true;admitted=false;
+            assert(!tglReadOwnedVpNativeParticipation(selected,c,r,v,read,admit) && selected);
+            admitted=true;const uintptr_t zero=0;std::memcpy(caller.data()+0x88,&zero,8);
+            assert(!tglReadOwnedVpNativeParticipation(selected,c,r,v,read,admit) && selected);
+            std::memcpy(caller.data()+0x88,&r,8);std::memcpy(caller.data()+0x80,&zero,8);
+            assert(!tglReadOwnedVpNativeParticipation(selected,c,r,v,read,admit) && selected);
+        }
+        {
             S selected{children,source,target,data,produce,consume};
             S inactive{children+1,source+1,target+1,data+1,produce,consume};
             inactive.participates=false;

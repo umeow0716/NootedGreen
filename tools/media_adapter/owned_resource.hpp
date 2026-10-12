@@ -13976,6 +13976,19 @@ struct TglOwnedVeboxAllocationPolicy {
     bool ffdi=false,ffdn=false,stmm=false;
     uint32_t pipe=0;
 };
+// Native129ca0 selects VP+48 only for outputPipe==1. Read the original
+// leased child/report/VP links; never derive participation from missing calls.
+template<class Read,class Admit>
+bool tglReadOwnedVpNativeParticipation(bool& output,uintptr_t child,
+    uintptr_t execution,uintptr_t vp,Read read,Admit admit) noexcept {
+    if(!child || child>UINTPTR_MAX-0x8f || !execution ||
+       execution>UINTPTR_MAX-0xa0f || !vp || !admit(child,execution,vp)) return false;
+    uintptr_t actualVp=0,actualReport=0;uint32_t pipe=0;
+    if(!read(child+0x80,&actualVp,8) || actualVp!=vp ||
+       !read(child+0x88,&actualReport,8) || actualReport!=execution ||
+       !read(execution+0xa0c,&pipe,4) || pipe>2) return false;
+    output=pipe==1;return true;
+}
 // Exact ICL1f7860/1f78f0/1f7930 data policies, using the owned TGL
 // table's preserved d0=false. Report13 is the allocation DI flag; caller's
 // builder argument or report12 cannot replace it. Higher flag bits are ignored.
