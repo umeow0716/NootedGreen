@@ -2601,6 +2601,11 @@ struct TglOwnedVeboxVtable {
                 candidate[i] - image >= 0x23e03f || !executable(candidate[i], 1))) return false;
         }
         if (candidate[0] != image+0x12e240 || candidate[1] != image+0x12e250 ||
+            // Renderer132510 invokes both children+10 before frame allocation.
+            // Native126740 creates shell/helper state and conditionally calls
+            // owned VP factory+1e0 (SKU64 bit17). Its consumer MUST enclose the
+            // qualified VP factory scope; frame slot58 is a different phase.
+            candidate[0x10/8] != image+0x126740 ||
             candidate[0x40/8] != image+0x12e9c0 || candidate[0x48/8] != image+0x12ea30 ||
             // Native12c010 -> +118 performs +e8, +110, +120 before VP40.
             // E8 assigns the MHW heap and consumes native helper1bb8;

@@ -2862,6 +2862,7 @@ static void testOwnedVeboxVtable() {
     for (size_t i = 0; i < original.size(); ++i) original[i] = image+0x2000+i*8;
     for (size_t offset : TglOwnedVeboxVtable::missing) original[offset/8] = 0;
     original[0] = image+0x12e240; original[1] = image+0x12e250;
+    original[0x10/8] = image+0x126740;
     original[0x40/8]=image+0x12e9c0;original[0x48/8]=image+0x12ea30;
     original[0xe8/8]=image+0x1296e0;original[0x110/8]=image+0x1295b0;
     original[0x118/8]=image+0x12b5f0;original[0x120/8]=image+0x1296d0;original[0x148/8]=image+0x12a230;
@@ -2977,7 +2978,7 @@ static void testOwnedVeboxVtable() {
     original[0x28/8] = image+0x1000; assert(!build()); original[0x28/8] = 0;
     original[0x48/8] = 0; assert(!build()); original[0x48/8] = image+0x12ea30;
     original[0x48/8] = 0x4000; assert(!build()); original[0x48/8] = image+0x12ea30;
-    for(size_t offset:{size_t(0xe8),size_t(0x110),size_t(0x118),size_t(0x120),size_t(0x148)}) {
+    for(size_t offset:{size_t(0x10),size_t(0xe8),size_t(0x110),size_t(0x118),size_t(0x120),size_t(0x148)}) {
         const auto native=original[offset/8];original[offset/8]=image+0x2048;
         assert(!build() && !table.addressPoint());original[offset/8]=native;
     }
@@ -19707,6 +19708,7 @@ int main() {
                             for(size_t i=0;i<nativeTable.size();++i) nativeTable[i]=base+0x2000+i*8;
                             for(auto offset:TglOwnedVeboxVtable::missing) nativeTable[offset/8]=0;
                             nativeTable[0]=base+0x12e240;nativeTable[1]=base+0x12e250;
+                            nativeTable[0x10/8]=base+0x126740;
                             nativeTable[0x40/8]=base+0x12e9c0;nativeTable[0x48/8]=base+0x12ea30;
                             nativeTable[0xe8/8]=base+0x1296e0;nativeTable[0x110/8]=base+0x1295b0;
                             nativeTable[0x118/8]=base+0x12b5f0;nativeTable[0x120/8]=base+0x1296d0;nativeTable[0x148/8]=base+0x12a230;
@@ -20392,6 +20394,7 @@ int main() {
                             for(size_t i=0;i<nativeTable.size();++i) nativeTable[i]=base+0x2000+i*8;
                             for(auto offset:TglOwnedVeboxVtable::missing) nativeTable[offset/8]=0;
                             nativeTable[0]=base+0x12e240;nativeTable[1]=base+0x12e250;
+                            nativeTable[0x10/8]=base+0x126740;
                             nativeTable[0x40/8]=base+0x12e9c0;nativeTable[0x48/8]=base+0x12ea30;
                             nativeTable[0x170/8]=base+0x12aba0;nativeTable[0x180/8]=base+0x12b1d0;
                             nativeTable[0xe8/8]=base+0x1296e0;nativeTable[0x110/8]=base+0x1295b0;
@@ -20792,6 +20795,7 @@ int main() {
                 for(size_t i=0;i<nativeTable.size();++i) nativeTable[i]=base+0x2000+i*8;
                 for(auto offset:TglOwnedVeboxVtable::missing) nativeTable[offset/8]=0;
                 nativeTable[0]=base+0x12e240;nativeTable[1]=base+0x12e250;
+                nativeTable[0x10/8]=base+0x126740;
                 nativeTable[0x40/8]=base+0x12e9c0;nativeTable[0x48/8]=base+0x12ea30;
                 nativeTable[0xe8/8]=base+0x1296e0;nativeTable[0x110/8]=base+0x1295b0;
                 nativeTable[0x118/8]=base+0x12b5f0;nativeTable[0x120/8]=base+0x1296d0;nativeTable[0x148/8]=base+0x12a230;
