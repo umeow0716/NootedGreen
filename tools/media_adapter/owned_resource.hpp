@@ -3562,6 +3562,16 @@ struct TglVeboxHardwareBinding {
     }
 };
 
+// Native-owned alternative:1b52f0 creates/counts the complete2190 allocation.
+// Its argument is a pointer to the OS pointer:1b6b40 is an identity getter,
+// and the factory dereferences its return before invoking16f490->16f140.
+// After ff550 has retired/freed the heap,132bb0 takes a pointer-slot, decrements
+// 7f3218, invokes vptr+8 deleting destructor179d10 and clears that slot.
+// Unlike owned CPU storage, ONLY a pointer obtained from that counted factory
+// may use this deletion path. Native destructor alone never releases the heap.
+// Retain the complete native allocation/image/OS via the context owner registry
+// until retirement; a constructor-time identity check is not a persistent pin.
+
 // Complete native G12 MHW lifetime for externally owned, stable storage.
 // Enclosing owner retains storage/OS/image and serializes all operations;
 // no native factory accounting/deleting destructor is used for this storage.
