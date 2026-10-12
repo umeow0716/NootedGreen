@@ -5671,6 +5671,41 @@ public:
     }
     bool hdr() noexcept {return features() && hdrPresent_;}
     uint32_t sfc() noexcept {frame_.fail();return UINT32_MAX;}
+    // Mutable access must come from the enclosing owned target lease. The
+    // compression references/decompressor still require resource provenance;
+    // they are not inferred from undocumented Darwin surface offsets.
+    template<class Decompress>
+    bool runFastFillTransaction(TglOwnedSurfaceStorage& writableTarget,bool& compressed,
+        TglOwnedSfcCompressionMode& mode,uint32_t& compressionFormat,
+        int& decompressionStatus,Decompress& decompress) noexcept {
+        static_assert(noexcept(decompress()) && std::is_same_v<decltype(decompress()),int>,
+            "native decompression must preserve exact status without throwing");
+        if(!healthy()) return false;
+        if(&writableTarget!=&target_) {frame_.fail();return false;}
+        uintptr_t actualFill=0;
+        if(!gate_(parameters_+0xe0,&actualFill,8)) return false;
+        if(actualFill!=colorFill_) {frame_.fail();return false;}
+        if(!actualFill) return false;
+        TglSurfaceRect sourceRect{},targetRect{};
+        if(!gate_(reinterpret_cast<uintptr_t>(&source_)+0x40,&sourceRect,sizeof(sourceRect)) ||
+           !gate_(reinterpret_cast<uintptr_t>(&target_)+0x40,&targetRect,sizeof(targetRect))) return false;
+        std::array<uint8_t,4> original{};
+        std::memcpy(original.data(),writableTarget.prefix.data()+0x4c,4);
+        struct Restore {
+            uint8_t* destination;std::array<uint8_t,4> bytes;
+            ~Restore(){std::memcpy(destination,bytes.data(),4);}
+        } restore{writableTarget.prefix.data()+0x4c,original};
+        bool selected=false;
+        const bool success=tglRunOwnedGen12FastFill(sourceRect,targetRect,true,selected,
+            compressed,mode,compressionFormat,decompressionStatus,
+            [&]() noexcept {
+                std::memcpy(writableTarget.prefix.data()+0x4c,&targetRect.bottom,4);
+                return direct();
+            },[&]() noexcept {return decompress();},[&]() noexcept {return healthy();});
+        if(!success || !healthy()) return false;
+        // Native donor1fb140 writes target85 only after successful recheck.
+        writableTarget.prefix[0x85]=1;return selected;
+    }
     bool fastFill() noexcept {
         uintptr_t actual=0;
         if(!healthy() || !gate_(parameters_+0xe0,&actual,8)) return false;

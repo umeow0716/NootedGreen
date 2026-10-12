@@ -3078,7 +3078,7 @@ static void testLeasedGen12PlatformPolicy() {
     struct SfcFixture {
         static int extent(void* vp,void*,void*,void*) noexcept {++*static_cast<unsigned*>(vp);return 1;}
     };
-    for(unsigned scenario=0;scenario<16;++scenario) {
+    for(unsigned scenario=0;scenario<20;++scenario) {
         TglOwnedSurfaceStorage source{},target{};
         std::array<uint8_t,0x1bc0> child{};
         std::array<uint8_t,0x139> parameters{};
@@ -3088,11 +3088,11 @@ static void testLeasedGen12PlatformPolicy() {
         const uintptr_t sourceAddress=reinterpret_cast<uintptr_t>(&source),targetAddress=reinterpret_cast<uintptr_t>(&target);
         const uintptr_t vpAddress=reinterpret_cast<uintptr_t>(&sfcCalls),colorFill=0x123400;
         const uint32_t one=1,format=0x19,targetFormat=scenario==3?0x52:0x19;
-        const uint32_t direct=scenario==0 || scenario==12 || scenario==14 || scenario==15?1:0;
-        uintptr_t actualVp=scenario==10 || scenario==11?0:vpAddress;
+        const uint32_t direct=scenario==0 || scenario==10 || scenario==12 || scenario==14 || scenario==15 || scenario>=16?1:0;
+        uintptr_t actualVp=scenario==10 || scenario==11 || scenario>=16?0:vpAddress;
         if(scenario==8) actualVp=0x567800;
         uintptr_t actualTarget=scenario==7?sourceAddress:targetAddress;
-        uintptr_t actualFill=scenario==10?colorFill:scenario==11?0x567800:0;
+        uintptr_t actualFill=scenario==10 || scenario>=16?colorFill:scenario==11?0x567800:0;
         std::memcpy(child.data()+0x80,&actualVp,8);std::memcpy(child.data()+0x1b9c,&direct,4);
         std::memcpy(parameters.data(),&one,4);std::memcpy(parameters.data()+8,&sourceAddress,8);
         std::memcpy(parameters.data()+0x90,&one,4);std::memcpy(parameters.data()+0x98,&actualTarget,8);
@@ -3101,9 +3101,10 @@ static void testLeasedGen12PlatformPolicy() {
             const uintptr_t invalidAlpha=UINTPTR_MAX-2;
             std::memcpy(parameters.data()+0xf0,&invalidAlpha,8);
         }
-        const TglSurfaceRect rect{0,0,1920,1080};
+        const TglSurfaceRect rect{0,0,1920,scenario==17 || scenario==18?1084.0f:1080.0f};
         for(size_t offset : {0x30u,0x40u,0x50u}) std::memcpy(source.prefix.data()+offset,&rect,16);
         std::memcpy(target.prefix.data()+0x40,&rect,16);
+        if(scenario==10 || scenario>=16) {const float bottom=1120;std::memcpy(target.prefix.data()+0x4c,&bottom,4);}
         std::memcpy(source.prefix.data()+0x130,&format,4);std::memcpy(target.prefix.data()+0x130,&targetFormat,4);
         ChildOwner childOwner{childAddress,0x100000};SurfaceOwner sourceOwner{&source},targetOwner{&target};
         if(scenario==6) targetOwner.allow=false;
@@ -3124,21 +3125,41 @@ static void testLeasedGen12PlatformPolicy() {
         auto query=[&](uintptr_t s,uintptr_t t,bool& needed) noexcept {
             assert(s==sourceAddress && t==targetAddress);++queries;needed=scenario==13;
             if(scenario==14) sourceOwner.allow=false;
+            if(scenario==16 && queries==2) sourceOwner.allow=false;
             return scenario!=5;
         };
-        auto fill=[&](auto&) noexcept {++fills;return true;}; // selection fixture, not a producer
+        auto fill=[&](auto& active) noexcept {
+            ++fills;bool compressed=scenario==17 || scenario==18;
+            auto mode=compressed?TglOwnedSfcCompressionMode::Media:TglOwnedSfcCompressionMode::Disabled;
+            uint32_t compressionFormat=compressed?7:0;int status=-1;unsigned decompressions=0;
+            auto decompress=[&]() noexcept {
+                ++decompressions;
+                if(scenario==18) sourceOwner.allow=false;
+                return scenario==17?31:0;
+            };
+            const bool result=active.runFastFillTransaction(scenario==19?source:target,
+                compressed,mode,compressionFormat,status,decompress);
+            assert(decompressions==(scenario==17 || scenario==18?1u:0u));
+            if(scenario==17) assert(result && status==31 && compressed && compressionFormat==7);
+            if(scenario==18) assert(!result && status==0 && !compressed && compressionFormat==0);
+            return result;
+        };
         uint8_t comp=0xa4;uint32_t output=0xdeadbeef;
         TglLeasedGen12VeboxOutputPolicy policy(read,childOwner,childOwner.image,childAddress,paramsAddress,
-            vpAddress,0,scenario==10?colorFill:0,sourceOwner,source,a,targetOwner,target,b,comp,frame,query,fill);
+            vpAddress,0,scenario==10 || scenario>=16?colorFill:0,sourceOwner,source,a,targetOwner,target,b,comp,frame,query,fill);
         TglOwnedVpAdmissionEntries entries;entries.extent=&SfcFixture::extent;
         TglOwnedVpOutputPipePolicy<decltype(policy)> scoped{policy,entries,&sfcCalls,&source,&target,parameters.data()};
         const bool ok=scenario==9?tglSelectGen12VeboxOutputPipe(policy,comp,output):
             tglSelectGen12VeboxOutputPipe(scoped,comp,output);
-        if(scenario==0 || scenario==1 || scenario==2 || scenario==3 || scenario==10 || scenario==13) {
-            const uint32_t expected=scenario==0 || scenario==10?2:scenario==1?1:0;
+        if(scenario==0 || scenario==1 || scenario==2 || scenario==3 || scenario==10 || scenario==13 || scenario==17) {
+            const uint32_t expected=scenario==0 || scenario==10 || scenario==17?2:scenario==1?1:0;
             assert(ok && output==expected && comp==(expected?0:1) && frame.healthy());
         } else assert(!ok && output==0xdeadbeef && comp==0xa4 && !frame.healthy());
-        assert(sfcCalls==(scenario==1?1u:0u) && fills==(scenario==10?1u:0u));
+        assert(sfcCalls==(scenario==1?1u:0u) && fills==(scenario==10 || scenario>=16?1u:0u));
+        if(scenario==10 || scenario>=16) {
+            float bottom=0;std::memcpy(&bottom,target.prefix.data()+0x4c,4);
+            assert(bottom==1120 && target.prefix[0x85]==(scenario==10 || scenario==17?1:0));
+        }
         if(scenario==2 || scenario==3 || scenario==4 || scenario==6 || scenario==7 || scenario==12) {
             if(scenario!=2) assert(queries==0);
         }
