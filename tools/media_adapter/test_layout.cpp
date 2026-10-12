@@ -14579,6 +14579,34 @@ static void testRetainedVeboxFrames() {
                     assert(shell.storage()==&original && shell.metadataStorage()==&original && sidecar.hasSurfaceLease(original));
                     typename RootOwner::SurfaceOwnerLease nested(sidecar);assert(!nested.storage());
                     shell.metadataStorage()->prefix[0x86]=1;assert(original.prefix[0x86]==1);
+                    std::array<uint8_t,0x70> conversion{};
+                    const uintptr_t metadata=reinterpret_cast<uintptr_t>(conversion.data()),nestedSurface=0x334400;
+                    const uint32_t mode=2;
+                    std::memcpy(conversion.data()+0x64,&mode,4);
+                    std::memcpy(conversion.data()+0x68,&nestedSurface,8);
+                    std::memcpy(original.prefix.data()+0xa8,&metadata,8);
+                    unsigned metadataReads=0;
+                    auto readMetadata=[&](uintptr_t at,void* output,size_t size) noexcept {
+                        ++metadataReads;
+                        assert(at>=metadata && at-metadata<conversion.size() && size<=conversion.size()-(at-metadata));
+                        std::memcpy(output,conversion.data()+at-metadata,size);return true;
+                    };
+                    auto useMetadata=[&](uintptr_t actual,auto read) noexcept -> int {
+                        assert(actual==metadata);
+                        TglOwnedFeaturePresence presence=TglOwnedFeaturePresence::Unknown;
+                        assert(tglReadLeasedConversion3dLutPresence(sidecar,original,actual,read,presence) &&
+                            presence==TglOwnedFeaturePresence::Present);
+                        uint8_t byte=0;const unsigned before=metadataReads;
+                        assert(!read(metadata-1,&byte,1) && !read(metadata+0x70,&byte,1) && metadataReads==before);
+                        return -94;
+                    };
+                    assert(sidecar.withLeasedConversionMetadata(original,readMetadata,[&](uintptr_t p,auto read) noexcept -> int {
+                        assert(sidecar.withLeasedConversionMetadata(original,readMetadata,useMetadata)==5);
+                        return useMetadata(p,read);
+                    })==-94);
+                    assert(metadataReads==2);
+                    const uintptr_t zero=0;std::memcpy(original.prefix.data()+0xa8,&zero,8);
+                    assert(sidecar.withLeasedConversionMetadata(original,readMetadata,useMetadata)==5 && metadataReads==2);
                 }
                 assert(!sidecar.hasSurfaceLease(original));
                 assert(owners.reconcileSuccessfulRemoval(image,0x8000,success.ticket.generation,removed)==5 && !destroyed);
@@ -14631,6 +14659,28 @@ static void testRetainedVeboxFrames() {
                         TglOwnedFrontendSourceGraph<typename Sidecars::Owner,CfApi,2> graph(CfApi{refs});
                         assert(graph.acquire(address,[&](uintptr_t p) noexcept {return set.resolve(p);},1,2));
                         assert(graph.valid() && graph.storage()==&original && refs==4);
+                        std::array<uint8_t,0x70> conversion{};
+                        const uintptr_t metadata=reinterpret_cast<uintptr_t>(conversion.data()),nested=0x667700;
+                        const uint32_t cube=2;
+                        std::memcpy(conversion.data()+0x64,&cube,4);std::memcpy(conversion.data()+0x68,&nested,8);
+                        std::memcpy(original.prefix.data()+0xa8,&metadata,8);
+                        unsigned reads=0;
+                        auto readMetadata=[&](uintptr_t at,void* out,size_t size) noexcept {
+                            ++reads;assert(at>=metadata && at-metadata<conversion.size() && size<=conversion.size()-(at-metadata));
+                            std::memcpy(out,conversion.data()+at-metadata,size);return true;
+                        };
+                        auto useMetadata=[&](uintptr_t p,auto read) noexcept -> int {
+                            TglOwnedFeaturePresence presence=TglOwnedFeaturePresence::Unknown;
+                            assert(tglReadLeasedConversion3dLutPresence(graph,original,p,read,presence) &&
+                                presence==TglOwnedFeaturePresence::Present);
+                            return -95;
+                        };
+                        assert(graph.withLeasedConversionMetadata(original,readMetadata,useMetadata)==5 && !reads);
+                        assert(graph.withMutableSurface([&](auto& actual) noexcept -> int {
+                            assert(&actual==&original);
+                            return graph.withLeasedConversionMetadata(actual,readMetadata,useMetadata);
+                        })==-95 && reads==2);
+                        const uintptr_t zero=0;std::memcpy(original.prefix.data()+0xa8,&zero,8);
                     }
                     assert(!refs);
                 }

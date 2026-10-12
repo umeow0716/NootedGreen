@@ -16848,7 +16848,7 @@ public:
 template<class ContextLease> class TglNativeContextRootSurfaceOwner {
     ContextLease context_;
     TglOwnedSurfaceStorage* shell_=nullptr;
-    bool borrowed_=false;
+    bool borrowed_=false,conversionBorrowed_=false;
 public:
     template<class Writable>
     TglNativeContextRootSurfaceOwner(ContextLease&& lease,const TglNativeContextInputRoots& roots,
@@ -16872,6 +16872,31 @@ public:
     bool canDestroy() const noexcept {return !borrowed_;}
     bool hasSurfaceLease(const TglOwnedSurfaceStorage& shell) const noexcept {
         return context_.get() && borrowed_ && shell_==&shell;
+    }
+    // The retained context/frame excludes native reconfiguration/destruction;
+    // the original shell owns this native237730 0x70 allocation. Borrow it,
+    // never copy/adopt/free it, and never dereference its nested surface here.
+    template<class Read,class Use> int withLeasedConversionMetadata(
+        const TglOwnedSurfaceStorage& expected,Read read,Use use) noexcept {
+        if(conversionBorrowed_ || !hasSurfaceLease(expected)) return 5;
+        uintptr_t metadata=0;std::memcpy(&metadata,expected.prefix.data()+0xa8,8);
+        if(!metadata || metadata>UINTPTR_MAX-0x70) return 5;
+        auto valid=[&]() noexcept {
+            uintptr_t current=0;std::memcpy(&current,expected.prefix.data()+0xa8,8);
+            return current==metadata && hasSurfaceLease(expected);
+        };
+        auto bounded=[&](uintptr_t address,void* output,size_t size) noexcept -> bool {
+            static_assert(noexcept(read(address,output,size)) &&
+                std::is_same_v<decltype(read(address,output,size)),bool>);
+            return valid() && output && size && address>=metadata && address-metadata<0x70 &&
+                size<=0x70-(address-metadata) && read(address,output,size) && valid();
+        };
+        static_assert(noexcept(use(metadata,bounded)) &&
+            std::is_same_v<decltype(use(metadata,bounded)),int>);
+        conversionBorrowed_=true;
+        struct Reset {bool& busy;~Reset(){busy=false;}} reset{conversionBorrowed_};
+        const int status=use(metadata,bounded);
+        return valid()?status:5;
     }
     class SurfaceOwnerLease {
         TglNativeContextRootSurfaceOwner* owner_=nullptr;
@@ -16981,6 +17006,11 @@ public:
         auto* metadata=lease_.metadataStorage();
         if(!busy_ || metadata!=&expected || !hasSurfaceLease(expected)) return false;
         return parameters.withNativeReleaseSlot(metadata->prefix.data()+0x90,use);
+    }
+    template<class Read,class Use> int withLeasedConversionMetadata(
+        const TglOwnedSurfaceStorage& expected,Read read,Use use) noexcept {
+        if(!busy_ || !hasSurfaceLease(expected)) return 5;
+        return owner_.withLeasedConversionMetadata(expected,read,use);
     }
 };
 // Exact1308a0 temporal registration graph. Capacity is an OWNED retention/work
@@ -17093,6 +17123,12 @@ public:
         Parameters& parameters,Use use) noexcept {
         return busy_ && hasSurfaceLease(expected) &&
             slots_[0].lease->withNativeDenoiseParameters(expected,parameters,use) && valid();
+    }
+    template<class Read,class Use> int withLeasedConversionMetadata(
+        const TglOwnedSurfaceStorage& expected,Read read,Use use) noexcept {
+        if(!busy_ || !hasSurfaceLease(expected)) return 5;
+        const int status=slots_[0].lease->withLeasedConversionMetadata(expected,read,use);
+        return valid()?status:5;
     }
 };
 // Actual IOSurface layout snapshot, not native shell-field publication. Caller
