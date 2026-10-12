@@ -17697,6 +17697,14 @@ int main() {
             SetupEntry escapedSetup=nullptr;SendEntry escapedSend=nullptr;
             void* callbackChild=nullptr;int source=0,data=0,command=0;
             auto callbackPrepared=prepared;callbackPrepared.color.modes.state.at923=1;
+            Cpu peerState,peerAvs;NativeCpu peerCpu{peerState,peerAvs};
+            TglNativeVpCpuStorage<NativeCpu> peerVp(0x100000,allocatorRead,
+                [](uintptr_t image) noexcept {return image==0x100000;},
+                [](uintptr_t address,size_t size) noexcept {
+                    return size==16 && (address==0x100000+0x437e0 || address==0x100000+0x436d0);
+                },peerCpu);
+            auto& peerGraph=peerVp.graph();
+            assert(peerGraph.initialize(0x7000,0x8000,0x3000,binding,noRead,1,0));
             for(unsigned mode=0;mode<11;++mode) {
                 unsigned stages=0,emissions=0;
                 TglOwnedSfcStateParameters<TglTrackedCpuBackend<NativeCpu>>* observedState=nullptr;
@@ -17710,7 +17718,9 @@ int main() {
                         [](void*,auto,uint8_t*) noexcept {assert(false);return 0;});
                 };
                 assert(rejectCsc(nullptr)==5);
-                const int result=graph.withPreparedCallbackPass(callbackPrepared,
+                const int result=graph.withPairedProducerReservation(peerGraph,[&](void*,void*) noexcept -> int {
+                  assert(!graph.tryReset() && !peerGraph.tryReset());
+                  return graph.withLeasedPreparedCallbackPass(callbackPrepared,
                     0x6000,0x4000,0x2000,reference,&source,&data,
                     [&](void*,const auto&,auto& packet) noexcept -> int {
                         observedState=&packet;assert(!packet.hasParametersLease());
@@ -17819,6 +17829,7 @@ int main() {
                         if(mode==8) {assert(setup(child,&source,reinterpret_cast<void*>(0x2000),&data)==5);return 0;}
                         return 0;
                     });
+                });
                 assert(result==(mode==0?0:mode==5?31:mode==6?-17:mode==9?11:5));
                 assert(emissions==(mode==0 || (mode>=5 && mode<=8)?1u:0u));
                 assert(stages==((mode==1 || mode==2)?0u:mode==9?1u:3u));
@@ -17836,6 +17847,29 @@ int main() {
                 assert(escapedSetup(callbackChild,&source,reinterpret_cast<void*>(0x2000),&data)==5);
                 assert(escapedSend(callbackChild,&data,&command)==5);
             }
+            unsigned peerStages=0,peerEmissions=0;
+            assert(graph.withPairedProducerReservation(peerGraph,[&](void*,void*) noexcept -> int {
+                return peerGraph.withLeasedPreparedCallbackPass(callbackPrepared,
+                    0x6000,0x4000,0x2000,reference,&source,&data,
+                    [&](void*,const auto&,auto& packet) noexcept -> int {
+                        assert(!packet.hasParametersLease());++peerStages;return 0;
+                    },[&](void*,const auto&,auto&) noexcept -> int {++peerStages;return 0;},
+                    [&](void* child,const auto&) noexcept {
+                        uintptr_t address=0;std::memcpy(&address,static_cast<uint8_t*>(child)+0x938,8);
+                        assert(address==reinterpret_cast<uintptr_t>(peerState.bytes.data()));++peerStages;
+                    },[&](void* child,void* d,void* c) noexcept -> int {
+                        assert(peerStages==3 && d==&data && c==&command);
+                        uintptr_t address=0;std::memcpy(&address,static_cast<uint8_t*>(child)+0x938,8);
+                        assert(address==reinterpret_cast<uintptr_t>(peerState.bytes.data()) &&
+                            address!=reinterpret_cast<uintptr_t>(stateCpu.bytes.data()));
+                        ++peerEmissions;return 0;
+                    },[&](void* child,auto setup,auto send) noexcept -> int {
+                        const int status=setup(child,&source,reinterpret_cast<void*>(0x2000),&data);
+                        return status?status:send(child,&data,&command);
+                    });
+            })==0);
+            assert(peerStages==3 && peerEmissions==1);
+            peerGraph.reset();assert(!peerState.live && !peerAvs.live);
             // Acquire the native-shaped descriptors through +28 first; all
             // later callbacks use that single frozen geometry snapshot.
             for(unsigned mode=0;mode<4;++mode) {
