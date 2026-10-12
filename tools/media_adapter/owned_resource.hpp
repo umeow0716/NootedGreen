@@ -17456,7 +17456,14 @@ int tglWithOwnedVpPairedAcquiredFrameCore(Graph& firstGraph,TglOwnedVpSfcCallerS
                                 [&](void* x,const auto& xe,void* y,const auto& ye) noexcept -> int {
                                     auto firstEntries=xe,secondEntries=ye;
                                     if(!firstEntries.appendDisjoint(ea) || !secondEntries.appendDisjoint(eb)) return 5;
-                                    return use(x,firstEntries,y,secondEntries);
+                                    // Setup-to-send resource scopes need the original acquired
+                                    // dimensions BEFORE entering setup. Borrow these snapshots;
+                                    // never reacquire descriptors or adjust field geometry twice.
+                                    if constexpr(std::is_invocable_r_v<int,Use,void*,decltype(firstEntries)&,
+                                        void*,decltype(secondEntries)&,decltype(prepared)&,decltype(ga),decltype(gb)>) {
+                                        static_assert(noexcept(use(x,firstEntries,y,secondEntries,prepared,ga,gb)));
+                                        return use(x,firstEntries,y,secondEntries,prepared,ga,gb);
+                                    } else return use(x,firstEntries,y,secondEntries);
                                 });
                         });
                 });

@@ -21262,6 +21262,7 @@ int main() {
                                             const TglOwnedVpEntrySet* catalogues[2]{};
                                             void* commandParents[2]{};
                                             std::array<TglOwnedSurfaceStorage*,2> leasedOutputs{};
+                                            std::array<const void*,2> acquiredGeometry{};
                                             TglSfcMhwBinding commandBinding;
                                             assert(commandBinding.resolve(base,frontendRead,qualifyMhw,executableMhw));
                                             auto commandRead=[&](uintptr_t address,void* output,size_t size) noexcept {
@@ -21290,6 +21291,7 @@ int main() {
                                                     [&](void* child,const auto& snapshot,const auto& geometry,auto& packet) noexcept -> int {
                                                         assert(snapshot.regions.scale.scaling && !packet.hasParametersLease());
                                                         assert(leasedOutputs[child==first.bytes.data()?0:1]);
+                                                        assert(acquiredGeometry[child==first.bytes.data()?0:1]==&geometry);
                                                         TglOwnedVpChromaStatePrefix prefix;
                                                         if(!tglPrepareOwnedVpStatePrefix(snapshot,geometry,false,false,prefix) ||
                                                            !packet.prepare(prefix.packet,{},false,false,false,
@@ -21397,7 +21399,11 @@ int main() {
                                                                 });
                                                             });
                                                     },
-                                                    [&](void* a,const auto& baseA,void* b,const auto& baseB) noexcept -> int {
+                                                    [&](void* a,const auto& baseA,void* b,const auto& baseB,
+                                                        const auto& acquired,const auto& geometryA,const auto& geometryB) noexcept -> int {
+                                                        assert(!states && acquired[0].source==args[0].source &&
+                                                            acquired[1].target==args[1].target);
+                                                        acquiredGeometry={&geometryA,&geometryB};
                                                         const std::array<TglOwnedVpEntrySet,2> base{baseA,baseB};
                                                         return tglWithOwnedVpPairedCscDispatchEntries(a,b,base,
                                                             [&](void*,const auto& cscA,auto& pa,void*,const auto& cscB,auto& pb) noexcept -> int {
