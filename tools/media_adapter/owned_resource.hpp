@@ -19936,11 +19936,11 @@ public:
         return child.initializeQualified(binding,lifetime,sfc,os,*mhw,renderHal,history,
             performance,cache,status,read,qualify,construct);
     }
-    template<class Read,class Qualify,class Executable,class Construct=TglNativeVeboxConstructorInvoker>
+    template<class Read,class Qualify,class Executable,class Construct=TglNativeVeboxConstructorInvoker,
+        class Query=TglNativeRendererCacheInvoker>
     TglOwnedBaseConstruction initializeChildFromCreator(size_t index,const TglNativeVphalMhwView& view,
         const TglVeboxLifetimeBinding& binding,const TglSfcLifetimeBinding& lifetime,
-        const void* cache,int32_t& status,
-        Read read,Qualify qualify,Executable executable,Construct construct={}) {
+        int32_t& status,Read read,Qualify qualify,Executable executable,Construct construct={},Query query={}) {
         const auto* retained=mhwLease_.binding();
         TglVeboxHardwareBinding hardware;
         TglSfcMhwBinding sfc;
@@ -19960,8 +19960,19 @@ public:
         if(view.renderer.renderer>UINTPTR_MAX-0x2cf0) return TglOwnedBaseConstruction::NotCalled;
         auto* history=reinterpret_cast<void*>(view.renderer.renderer+(index?0x904:0x8f8));
         auto* performance=reinterpret_cast<void*>(view.renderer.renderer+0x2ce8);
+        uintptr_t capabilities=0;uint32_t flags=0;
+        TglNativeRendererCacheBinding cacheBinding;
+        TglNativeRendererCacheSettings settings;
+        if(!read(view.renderer.renderer+0x2cd0,&capabilities,8) || !capabilities ||
+            capabilities>UINTPTR_MAX-0x68 || !read(capabilities+0x64,&flags,4) ||
+            !cacheBinding.resolve(view.renderer.image,view.os,read,qualify,executable) ||
+            !tglProduceNativeRendererCacheSettings(settings,true,true,(flags&(1u<<22))!=0,
+                [&](uint32_t policy,uint32_t& value){return cacheBinding.query(policy,value,read,query);}))
+            return TglOwnedBaseConstruction::NotCalled;
+        // Exact12d4e0 synchronously memcpy's 0x34 bytes from this argument
+        // into child111c; no pointer to this local setup packet is retained.
         return child.initializeQualified(binding,lifetime,sfc,reinterpret_cast<void*>(view.os),hardware,
-            reinterpret_cast<void*>(view.renderHal),history,performance,cache,status,read,qualify,
+            reinterpret_cast<void*>(view.renderHal),history,performance,settings.bytes.data()+4,status,read,qualify,
             construct,object,&sharedSfcGate_);
     }
     template<class Read,class Qualify,class Executable>

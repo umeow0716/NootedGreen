@@ -20118,6 +20118,18 @@ int main() {
                             frontendParentSfc[0x40]=1;
                             putNative(nativeCreator,0x60,frontendSfc);
                             auto frontendRead=[&](uintptr_t address,void* output,size_t bytes) noexcept {
+                                if(bytes==8 && (address==rendererAddress+0x2cd0 || address==os+0xd8)){
+                                    const uintptr_t value=address==os+0xd8?base+0x65d70:0x90000;
+                                    std::memcpy(output,&value,8);return true;
+                                }
+                                if(address==0x90064 && bytes==4){
+                                    const uint32_t flags=0;std::memcpy(output,&flags,4);return true;
+                                }
+                                if(address==base+0x65d70 && bytes==18){
+                                    const std::array<uint8_t,18> anchor{0x55,0x48,0x89,0xe5,0x48,0x81,0xec,
+                                        0x20,0x02,0x00,0x00,0x48,0x8d,0x05,0x3e,0x09,0x6d,0x00};
+                                    std::memcpy(output,anchor.data(),bytes);return true;
+                                }
                                 if(address==frontendSfc && bytes==0x41){
                                     std::memcpy(output,frontendParentSfc.data(),bytes);return true;
                                 }
@@ -20135,13 +20147,17 @@ int main() {
                                 return resourceRead(address,output,bytes);
                             };
                             auto constructFrontend=[&](uintptr_t entry,void* object,void* nativeOs,void* nativeMhw,void* nativeSfc,
-                                void*,void* history,void* performance,const void*,int32_t* out) noexcept {
+                                void*,void* history,void* performance,const void* cache,int32_t* out) noexcept {
                                 assert(entry==base+0x12d4e0 && nativeOs==reinterpret_cast<void*>(os));
                                 assert(nativeMhw==reinterpret_cast<void*>(0x6000));
                                 assert(nativeSfc==frontendParentSfc.data());
                                 const auto historyOffset=object==pairCpu[0].bytes.data()?0x8f8:0x904;
                                 assert(history==reinterpret_cast<void*>(rendererAddress+historyOffset));
                                 assert(performance==reinterpret_cast<void*>(rendererAddress+0x2ce8));
+                                assert(cache && static_cast<const uint8_t*>(cache)[0]==1);
+                                uint32_t policyValue=0;std::memcpy(&policyValue,static_cast<const uint8_t*>(cache)+4,4);
+                                assert(policyValue==0xe2);
+                                std::memcpy(static_cast<uint8_t*>(object)+0x111c,cache,0x34);
                                 const auto table=base+0x757c98;
                                 const uintptr_t noConfiguration=0;
                                 std::memcpy(object,&table,8);
@@ -20150,21 +20166,32 @@ int main() {
                                 std::memcpy(static_cast<uint8_t*>(object)+0x68,&frontendSfc,8);*out=0;
                             };
                             int32_t status=77;
+                            unsigned cacheQueries=0;
+                            auto queryFrontend=[&](uintptr_t entry,uint32_t policy,uint32_t& value){
+                                assert(entry==base+0x65d70 && (policy==0x70 || policy==0x71));
+                                ++cacheQueries;value=policy<<1;return true;
+                            };
                             auto staleCreator=frontendCreatorView;staleCreator.os+=8;
                             assert(frame.initializeChildFromCreator(0,staleCreator,baseBinding,lifetime,
-                                nullptr,status,frontendRead,qualifyMhw,executableMhw,
-                                constructFrontend)==TglOwnedBaseConstruction::NotCalled && status==77);
+                                status,frontendRead,qualifyMhw,executableMhw,
+                                constructFrontend,queryFrontend)==TglOwnedBaseConstruction::NotCalled && status==77);
                             putNative(nativeCreator,0x60,0);
                             assert(frame.initializeChildFromCreator(0,frontendCreatorView,baseBinding,lifetime,
-                                nullptr,status,frontendRead,qualifyMhw,executableMhw,
-                                constructFrontend)==TglOwnedBaseConstruction::NotCalled && status==77);
+                                status,frontendRead,qualifyMhw,executableMhw,
+                                constructFrontend,queryFrontend)==TglOwnedBaseConstruction::NotCalled && status==77);
                             putNative(nativeCreator,0x60,frontendSfc);
                             const auto frontendSfcConstructs=pairInvoke.constructs;
+                            assert(!cacheQueries);
+                            assert(frame.initializeChildFromCreator(0,frontendCreatorView,baseBinding,lifetime,
+                                status,frontendRead,qualifyMhw,executableMhw,constructFrontend,
+                                [](uintptr_t,uint32_t,uint32_t&){return false;})==
+                                TglOwnedBaseConstruction::NotCalled && status==77);
                             for(size_t child=0;child<2;++child)
                                 assert(frame.initializeChildFromCreator(child,frontendCreatorView,baseBinding,lifetime,
-                                    nullptr,status,frontendRead,qualifyMhw,executableMhw,constructFrontend)
+                                    status,frontendRead,qualifyMhw,executableMhw,constructFrontend,queryFrontend)
                                     ==TglOwnedBaseConstruction::ConstructedSuccess);
                             assert(pairInvoke.constructs==frontendSfcConstructs);
+                            assert(cacheQueries==30);
                             TglNativeOuterSurfaceRoles roles;roles.sourceCount=1;roles.targetCount=1;
                             roles.sources[0]=reinterpret_cast<uintptr_t>(&source);roles.targets[0]=reinterpret_cast<uintptr_t>(&target);
                             const auto noVp=frame.withPrivateVpCommandFrame(0,roles,0,0,
