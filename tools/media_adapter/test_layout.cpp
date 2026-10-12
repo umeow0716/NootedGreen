@@ -21576,6 +21576,19 @@ int main() {
                                                         const size_t index=child==first.bytes.data()?0:1;
                                                         const auto& prefix=statePrefixes[index];
                                                         assert(leasedAvs[index] && leasedIef[index]);
+                                                        auto wrongFormat=prefix.packet;
+                                                        const uint32_t packedFormat=0x15;
+                                                        std::memcpy(wrongFormat.data()+0x2c,&packedFormat,4);
+                                                        const auto originalOutputPrefix=leasedOutputs[index]->prefix;
+                                                        const auto originalState=commandInputs[index].state;
+                                                        const unsigned originalReads=layoutApi.reads;
+                                                        assert(tglPrepareOwnedVpLeasedNv12State(commandInputs[index],packet,
+                                                            *leasedOutputs[index],*leasedAvs[index],*leasedIef[index],leasedSfd[index],
+                                                            wrongFormat,{},false,false,false,TglOwnedSfcCompressionMode::Disabled,
+                                                            outputOwners[index],layoutApi,layoutSink)==5);
+                                                        assert(layoutApi.reads==originalReads &&
+                                                            leasedOutputs[index]->prefix==originalOutputPrefix &&
+                                                            commandInputs[index].state==originalState);
                                                         const int bound=tglPrepareOwnedVpLeasedNv12State(commandInputs[index],packet,
                                                             *leasedOutputs[index],*leasedAvs[index],*leasedIef[index],leasedSfd[index],
                                                             prefix.packet,{},false,false,false,TglOwnedSfcCompressionMode::Disabled,

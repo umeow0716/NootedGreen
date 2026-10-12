@@ -18008,7 +18008,9 @@ int tglPrepareOwnedVpLeasedNv12State(TglOwnedSfcCommandParameters& parameters,
     const std::array<uint8_t,0x148>* sfd,const std::array<uint8_t,0xb8>& prefix,
     TglOwnedSfcGen12Tail tail,bool rgbAdaptive,bool eightTapChroma,bool compressionEnabled,
     TglOwnedSfcCompressionMode compressionMode,Owner& owner,Api& api,Quarantine& quarantine) noexcept {
-    if(!owner.hasSurfaceLease(output)) return 5;
+    uint32_t outputFormat=0;
+    std::memcpy(&outputFormat,prefix.data()+0x2c,4);
+    if(outputFormat!=0x19 || !owner.hasSurfaceLease(output)) return 5;
     return tglPrepareOwnedVpLeasedSurfaceState(parameters,state,output,avs,ief,sfd,prefix,
         tail,rgbAdaptive,eightTapChroma,compressionEnabled,compressionMode,
         [&](auto& original) noexcept -> int {
