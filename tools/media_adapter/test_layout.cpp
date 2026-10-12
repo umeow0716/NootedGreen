@@ -8083,6 +8083,24 @@ static void testNativeResourceBoundary() {
                                             return result;
                                         };
                                         assert(runHistory()==-59 && finished==1);
+                                        const auto beforeBackedBorrow=backingBackend.allocations;
+                                        assert(linkedInput.withSurface([&](const auto& current) noexcept {
+                                            assert(tglWithPreparedBackedFfdnPair(std::array{&targetA,&targetB},
+                                                linkedInput,current,[&](const auto& a,const auto& b) noexcept -> int {
+                                                    assert(targetA.hasSurfaceLease(a) && targetB.hasSurfaceLease(b));
+                                                    assert(tglWithPreparedBackedFfdnPair(std::array{&targetA,&targetB},
+                                                        linkedInput,current,[](const auto&,const auto&) noexcept -> int {
+                                                            assert(false);return 0;
+                                                        })==5);
+                                                    return -71;
+                                                })==-71);
+                                            auto foreign=current;
+                                            assert(tglWithPreparedBackedFfdnPair(std::array{&targetA,&targetB},
+                                                linkedInput,foreign,[](const auto&,const auto&) noexcept -> int {
+                                                    assert(false);return 0;
+                                                })==5);
+                                        }));
+                                        assert(backingBackend.allocations==beforeBackedBorrow);
                                         assert(historyShell.withDescriptor([&](const auto& view) noexcept {
                                             assert(std::memcmp(&view,&savedShell,sizeof(view))==0);
                                         }));

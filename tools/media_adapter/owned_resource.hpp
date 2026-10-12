@@ -7545,6 +7545,7 @@ template<class NativeBackend=TglNativeResourceBackend> class TglOwnedAllocatedSu
     TglOwnedResource<Capture> resource_;
     TglResourceKey effectiveKey_{};
     bool ready_=false,busy_=false,rectangleBusy_=false,admitted_=true;
+    const TglOwnedSurfaceStorage* ffdnSource_=nullptr;
 public:
     explicit TglOwnedAllocatedSurface(NativeBackend& native) noexcept
         :capture_{native},surface_(localSurface_),resource_(capture_,surface_.resource) {}
@@ -7575,6 +7576,7 @@ public:
         // successfully published backed surface may trigger history rebuild.
         if(changed) *changed=false;
         if(!admitted_ || busy_) return 5;
+        ffdnSource_=nullptr;
         const auto type=capture_.native.resourceType();
         if(type>1 || (type==1 && key.format!=0x3d)) return 25;
         busy_=true;
@@ -7748,6 +7750,7 @@ public:
            bool(executionOwner)!=bool(execution) || execution==&surface_ ||
            (execution && !executionOwner->hasSurfaceLease(*execution))) return false;
         busy_=true;
+        ffdnSource_=nullptr;
         struct Unlock {bool& busy;~Unlock(){busy=false;}} unlock{busy_};
         if(!capture_.backed(surface_.resource) ||
            !tglPrepareOwnedFfdiFrameMetadata(surface_,source,query)) return false;
@@ -7758,6 +7761,7 @@ public:
     bool publishFfdiSecondaryFrom(SourceOwner& owner,const TglOwnedSurfaceStorage& source) noexcept {
         if(!ready_ || busy_ || &source==&surface_ || !owner.hasSurfaceLease(source)) return false;
         busy_=true;
+        ffdnSource_=nullptr;
         struct Unlock {bool& busy;~Unlock(){busy=false;}} unlock{busy_};
         if(!capture_.backed(surface_.resource)) return false;
         tglCopyOwnedFfdiSecondaryMetadata(surface_,source);
@@ -7769,9 +7773,14 @@ public:
     bool publishFfdnFrameFrom(SourceOwner& owner,const TglOwnedSurfaceStorage& source) noexcept {
         if(!ready_ || busy_ || &source==&surface_ || !owner.hasSurfaceLease(source)) return false;
         busy_=true;
+        ffdnSource_=nullptr;
         struct Unlock {bool& busy;~Unlock(){busy=false;}} unlock{busy_};
         if(!capture_.backed(surface_.resource)) return false;
-        return tglPrepareOwnedFfdnFrameMetadata(surface_,source);
+        if(!tglPrepareOwnedFfdnFrameMetadata(surface_,source)) return false;
+        ffdnSource_=&source;return true;
+    }
+    bool matchesPreparedFfdnSource(const TglOwnedSurfaceStorage& source) noexcept {
+        return ready_ && !busy_ && ffdnSource_==&source && capture_.backed(surface_.resource);
     }
     // ICL1f839b..1f83d8: after the FFDN pair, pipe2 alone copies the
     // source's two rectangle qwords into execution60. No resource adoption.
@@ -7789,6 +7798,7 @@ public:
     bool copyFrameMetadata(const TglOwnedSurfaceStorage& source) noexcept {
         if(!ready_ || busy_) return false;
         busy_=true;
+        ffdnSource_=nullptr;
         struct Unlock {bool& busy;~Unlock(){busy=false;}} unlock{busy_};
         if(!capture_.backed(surface_.resource)) return false;
         tglCopyOwnedSurfaceFrameMetadata(surface_,source);return true;
@@ -7822,7 +7832,7 @@ public:
     }
     void reset() noexcept {
         if(!admitted_ || busy_) return;
-        busy_=true;ready_=false;resource_.reset();
+        busy_=true;ready_=false;ffdnSource_=nullptr;resource_.reset();
         surface_.prefix.fill(0);surface_.tail.fill(0);busy_=false;
         effectiveKey_={};
     }
@@ -8316,6 +8326,26 @@ int tglWithPreparedDescriptorFfdnPair(std::array<TglOwnedDescriptorOnlySurface,2
     int result=5;
     const bool first=targets[0].withDescriptor([&](const auto& a) noexcept {
         const bool second=targets[1].withDescriptor([&](const auto& b) noexcept {
+            result=use(a,b);
+            if(!input.hasSurfaceLease(source)) result=5;
+        });
+        if(!second) result=5;
+    });
+    return first && input.hasSurfaceLease(source)?result:5;
+}
+
+// Reborrow actual type1 backing without allocation or metadata publication.
+template<class TargetOwner,class Owner,class Use>
+int tglWithPreparedBackedFfdnPair(const std::array<TargetOwner*,2>& targets,
+    Owner& input,const TglOwnedSurfaceStorage& source,Use use) noexcept {
+    if(!targets[0] || !targets[1] || targets[0]==targets[1] ||
+       !input.hasSurfaceLease(source) ||
+       !targets[0]->matchesPreparedFfdnSource(source) ||
+       !targets[1]->matchesPreparedFfdnSource(source)) return 5;
+    int result=5;
+    const bool first=targets[0]->withSurface([&](const auto& a) noexcept {
+        const bool second=targets[1]->withSurface([&](const auto& b) noexcept {
+            static_assert(noexcept(use(a,b)) && std::is_same_v<decltype(use(a,b)),int>);
             result=use(a,b);
             if(!input.hasSurfaceLease(source)) result=5;
         });
