@@ -8791,12 +8791,24 @@ static void testNativeResourceBoundary() {
                         return 0;
                     })==31 && consumers==1 && reportPublications==2);
                 unsigned reborrowed=0;
+                std::array<TglOwnedDescriptorOnlySurface,4> unpreparedOutputs;
+                auto forbiddenReborrow=[](const auto&,const auto&,size_t) noexcept -> int {
+                    assert(false);return 0;
+                };
+                assert(tglWithPreparedDescriptorFfdiViews(unpreparedOutputs,owner,&owner,&destination,2,
+                    forbiddenReborrow)==5);
+                assert(tglWithPreparedDescriptorFfdiViews(targets,owner,&owner,&destination,0,
+                    forbiddenReborrow)==5);
+                assert(tglWithPreparedDescriptorFfdiViews(targets,owner,&owner,&destination,5,
+                    forbiddenReborrow)==5);
                 assert(tglWithPreparedDescriptorFfdiViews(targets,owner,&owner,&destination,2,
                     [&](const auto& inputs,const auto& outputs,size_t count) noexcept -> int {
                         ++reborrowed;
                         assert(inputs[0]==surface && inputs[1]==surface && inputs[2]==destinationSurface);
                         assert(count==2 && outputs[0] && outputs[1] && !outputs[2]);
                         for(size_t i=0;i<count;++i) assert(tglNativeBackingPresent(outputs[i]->resource));
+                        assert(tglWithPreparedDescriptorFfdiViews(targets,owner,&owner,&destination,2,
+                            forbiddenReborrow,inputs)==5);
                         return 31;
                     })==31 && reborrowed==1 && reportPublications==2);
                 assert(targets[0].withDescriptor([](const auto& view) noexcept {

@@ -7948,19 +7948,10 @@ int tglWithOwnedDescriptorFfdiBatch(std::array<TglOwnedDescriptorOnlySurface,Cou
             }
             // Native1f7e52 copies secondary only after the complete FFDi loop.
             if(inputs[2] && !targets[0].publishFfdiSecondaryFrom(*secondary,*inputs[2])) return 5;
-            Outputs outputs{};
-            const auto enter=[&](auto&& self,size_t index) noexcept -> int {
-                if(index==count) return use(inputs,static_cast<const Outputs&>(outputs),count,flag,mode);
-                int result=5;
-                const auto consume=[&](const auto& descriptor) noexcept {
-                    outputs[index]=&descriptor;result=self(self,index+1);outputs[index]=nullptr;
-                };
-                const bool leased=inputs[1]
-                    ?targets[index].withBorrowedExecutionHandle(*execution,*inputs[1],consume)
-                    :targets[index].withDescriptor(consume);
-                return leased?result:5;
-            };
-            return enter(enter,0);
+            return tglWithPreparedDescriptorFfdiViews(targets,input,execution,secondary,count,
+                [&](const Inputs& active,const Outputs& outputs,size_t activeCount) noexcept -> int {
+                    return use(active,outputs,activeCount,flag,mode);
+                },inputs);
         });
 }
 
