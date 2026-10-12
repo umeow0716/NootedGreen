@@ -21582,6 +21582,12 @@ int main() {
                                                             outputOwners[index],layoutApi,layoutSink);
                                                         assert(bound==0);
                                                         if(bound) return bound;
+                                                        const auto descriptor=tglOwnedSfcOutputDescriptorBytes(
+                                                            tglOwnedSfcSurfaceBytes(*leasedOutputs[index]));
+                                                        uint32_t descriptorPitch=0,descriptorUvRow=0;
+                                                        std::memcpy(&descriptorPitch,descriptor.data()+0x10,4);
+                                                        std::memcpy(&descriptorUvRow,descriptor.data()+0x24,4);
+                                                        assert(descriptorPitch==960 && descriptorUvRow==576);
                                                         ++states;return 0;
                                                     },[&](void* child,const auto& snapshot,auto& owner) noexcept -> int {
                                                         const size_t index=child==first.bytes.data()?0:1;
