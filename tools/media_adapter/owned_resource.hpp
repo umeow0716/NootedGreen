@@ -18719,6 +18719,31 @@ int tglRunCapturedDiIecpFrameInput(SourceOwner& sourceOwner,ChildOwner& childOwn
         });
 }
 
+// Named borrowed reader: hook installation and runtime resolution must use
+// the same capture type. No report is read until the producer invokes it.
+template<class SourceOwner,class ChildOwner,class ExecutionOwner,class Read>
+struct TglCapturedVeboxLiveInputReader {
+    SourceOwner& sourceOwner;
+    ChildOwner& childOwner;
+    ExecutionOwner& executionOwner;
+    void* child;
+    uintptr_t execution;
+    const TglOwnedSurfaceStorage& source;
+    const TglOwnedFfdiTailViews& ffdi;
+    const TglOwnedFfdnTailViews& ffdn;
+    const TglOwnedStmmTailViews& stmm;
+    const TglOwnedSurfaceStorage& statistics;
+    Read read;
+    bool alignDi64;
+    std::array<uint32_t,11> controls;
+
+    template<class Consume>
+    int operator()(Consume consume) noexcept {
+        return tglRunCapturedDiIecpFrameInput(sourceOwner,childOwner,executionOwner,
+            child,execution,source,ffdi,ffdn,stmm,statistics,read,alignDi64,controls,consume);
+    }
+};
+
 // Deferred live reader while the allocation-stage resource groups are still
 // owned by the caller. It only composes existing admission/input capture and
 // packet publication; it neither allocates nor normalizes nor calls slot118.
@@ -18739,10 +18764,9 @@ TglOwnedVeboxCommandTransactionResult tglWithCapturedLiveVeboxPacketFrame(
     result.status=tglRunCapturedVeboxAllocation(sourceOwner,childOwner,executionOwner,
         reinterpret_cast<void*>(leases.child),leases.execution,leases.source,
         [&](void* child,uintptr_t execution,const auto&) noexcept -> int {
-            auto capture=[&](auto use) noexcept -> int {
-                return tglRunCapturedDiIecpFrameInput(sourceOwner,childOwner,executionOwner,
-                    child,execution,leases.source,ffdi,ffdn,stmm,statistics,read,alignDi64,controls,use);
-            };
+            TglCapturedVeboxLiveInputReader<SourceOwner,ChildOwner,ExecutionOwner,Read>
+                capture{sourceOwner,childOwner,executionOwner,child,execution,
+                    leases.source,ffdi,ffdn,stmm,statistics,read,alignDi64,controls};
             TglOwnedVeboxLivePacketContext<decltype(capture),Read,SurfaceAdmit,DiAdmit,Register,Control>
                 frame{{},leases,disableTemporalDenoise,capture,read,admitSurface,admitDi,registerResource,control};
             static_assert(noexcept(consume(frame)) &&
