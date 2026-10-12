@@ -15516,14 +15516,20 @@ public:
         if(ief_) ief_->~TglOwnedSurfaceStorage();
         if(avs_) avs_->~TglOwnedSurfaceStorage();
     }
-    bool bound() const noexcept {return lines_!=nullptr;}
+    bool bound() const noexcept {return lines_ && lease_.storage();}
     template<class Use> int withResources(Use use) noexcept {
         static_assert(noexcept(use(std::declval<TglOwnedVpSfcCallerStorage&>(),
             std::declval<TglNativeVpLineResourceStorage&>())),"native VP resource owner ABI");
-        if(!lines_ || busy_) return 5;
+        auto* vp=lease_.storage();
+        if(!lines_ || !vp || busy_) return 5;
+        const auto generation=lease_.generation();
         busy_=true;
-        const int result=use(*lease_.storage(),*lines_);
-        busy_=false;return result;
+        const int result=use(*vp,*lines_);
+        const bool retained=lease_.ownsStorage(vp->bytes.data(),generation);
+        busy_=false;
+        // Keep native failures exact; success cannot certify a foreign or
+        // retired VP allocation after a nested callback.
+        return result ? result : (retained ? 0 : 5);
     }
 };
 
