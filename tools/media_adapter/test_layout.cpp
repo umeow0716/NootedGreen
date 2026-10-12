@@ -8507,9 +8507,18 @@ static void testNativeResourceBoundary() {
                                                             assert(std::memcmp(&statePacket,&preservedPacket,sizeof(statePacket))==0);
                                                             TglOwnedVeboxFrameRetention liveInputRetention;
                                                             unsigned liveInputReads=0;
+                                                            TglOwnedSurfaceInputs liveSurfaces{};
+                                                            TglOwnedVeboxStateStorage liveState{};
+                                                            TglOwnedDiIecpPacket liveDi{};
+                                                            TglOwnedVeboxPacketLeases liveLeases{packetLeases.child,report,renderAddress,skuAddress,
+                                                                linkedStorage,nullptr,liveSurfaces,liveState,liveDi};
+                                                            unsigned liveRegistrations=0;
+                                                            auto liveRegistration=[&](const auto&,bool,bool) noexcept -> int {
+                                                                ++liveRegistrations;return 0;
+                                                            };
                                                             auto liveConsumer=tglMakeCapturedVeboxAllocationCommandConsumer<true>(linkedInput,childOwner,reportOwner,
-                                                                packetLeases,false,false,input.controls,
-                                                                stateRead,surfaceAdmit,admitted,registration,control,liveInputRetention,
+                                                                liveLeases,false,false,input.controls,
+                                                                stateRead,surfaceAdmit,admitted,liveRegistration,control,liveInputRetention,
                                                                 [&](auto& live) noexcept {
                                                                     assert(liveInputReads==0 && !liveInputRetention());
                                                                     TglOwnedVeboxCommandTransactionResult result;
@@ -8521,6 +8530,14 @@ static void testNativeResourceBoundary() {
                                                                             view.input.controls==input.controls);
                                                                         return view.matches(input.di)?0:5;
                                                                     });
+                                                                    if(result.status) return result;
+                                                                    result.status=live.state(input.di,&liveState);
+                                                                    assert(result.status==0);
+                                                                    const int diStatus=live.diIecp(input.di,&liveDi);
+                                                                    assert(diStatus==(input.iecp?5:0));
+                                                                    if(!diStatus) {
+                                                                        assert(liveRegistrations>0 && liveDi.resources[0]==&linkedStorage.resource);
+                                                                    }
                                                                     return result;
                                                                 });
                                                             assert(liveInputReads==0);
