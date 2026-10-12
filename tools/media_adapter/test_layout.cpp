@@ -20875,7 +20875,7 @@ int main() {
                         struct RecordingExecutionBackend {
                             std::array<uint8_t,0xa10> bytes{};
                             unsigned destroyed=0;
-                            uintptr_t create() noexcept {return reinterpret_cast<uintptr_t>(bytes.data());}
+                            uintptr_t create() noexcept {assert(false);return 0;}
                             int initialize(uintptr_t object) noexcept {return validate(object)?0:5;}
                             bool validate(uintptr_t object) const noexcept {
                                 return object==reinterpret_cast<uintptr_t>(bytes.data());
@@ -20883,7 +20883,6 @@ int main() {
                             void destroy(uintptr_t object) noexcept {assert(validate(object));++destroyed;}
                         } executionBackend;
                         TglExecutionOwner<RecordingExecutionBackend> executionLease(executionBackend);
-                        assert(executionLease.ensure()==0);
                         const uintptr_t report=reinterpret_cast<uintptr_t>(executionBackend.bytes.data());
                         const auto r=frames.run(ticket,[&](auto& frame) noexcept {
                             TglNativeResourceBinding borrowedResources;
@@ -21892,8 +21891,17 @@ int main() {
                                 std::memcpy(pairCpu[0].bytes.data()+0x88,&oldReport,8);
                             }
                             TglOwnedVeboxCommandTransactionResult executionResult;
-                            executionResult=frame.withPrivateVpCommandFrame(0,roles,0,0,
-                                executionLease,0x2200,0x3300,[&](auto& leasedOwner,void* child,
+                            // Recording native constructor publication; the entry only
+                            // borrows this existing child-owned report, never allocates one.
+                            std::memcpy(pairCpu[0].bytes.data()+0x88,&report,8);
+                            uintptr_t reportHelper=0;
+                            std::memcpy(&reportHelper,pairCpu[0].bytes.data()+0x1bb8,8);
+                            auto readReportHelper=[&](uintptr_t address,void* output,size_t size) noexcept {
+                                if(!reportHelper || address!=reportHelper+0x10 || size!=8) return false;
+                                std::memcpy(output,&report,8);return true;
+                            };
+                            executionResult=frame.withNativeOwnedVpCommandFrame(0,roles,0,0,
+                                executionLease,0x2200,0x3300,readReportHelper,[&](auto& leasedOwner,void* child,
                                     void* vp,auto& graph,auto& lines,
                                     auto& sourceLease,auto& targetLease,auto& dn,auto& packets) noexcept {
                                     assert(graph.ownsStorage(vp));(void)lines;
@@ -21930,7 +21938,9 @@ int main() {
                                         assert(false);return 0;
                                     })==5);
                                     const uintptr_t input=reinterpret_cast<uintptr_t>(&packets.source);
-                                    std::memcpy(static_cast<uint8_t*>(child)+0x88,&packets.execution,8);
+                                    uintptr_t originalReport=0;
+                                    std::memcpy(&originalReport,static_cast<uint8_t*>(child)+0x88,8);
+                                    assert(originalReport==packets.execution);
                                     std::memcpy(static_cast<uint8_t*>(child)+0x1b0,&input,8);
                                     unsigned acquired=0,writebacks=0;
                                     const auto transaction=tglWithCapturedVeboxCommandTransaction(
