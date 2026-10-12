@@ -21258,13 +21258,23 @@ int main() {
                                                                                         assert(ready.y.coefficients==avsTables[index].packedY && ready.uv.coefficients==avsTables[index].packedUv);
                                                                                         assert(tglWithOwnedSfcLiveCommandInputs(inputs,packet,inputs.state.size(),iefPackets[index],
                                                                                             [](const auto&) noexcept -> int {assert(false);return 0;})==5);
-                                                                                        TglOwnedSurfaceStorage output;
                                                                                         auto platform=[](auto&) noexcept -> int {return 0;}; // Descriptor producer fixture.
-                                                                                        const int built=index?
-                                                                                            tglSendOwnedVeboxSfcPreparedCommands(frame.children().second().owner(),commandParents[index],
-                                                                                                commandBinding,&command,commandInvoke,ready,output,1,0,1,0,commandRead,platform):
-                                                                                            tglSendOwnedVeboxSfcPreparedCommands(frame.children().first().owner(),commandParents[index],
-                                                                                                commandBinding,&command,commandInvoke,ready,output,1,0,1,0,commandRead,platform);
+                                                                                        const auto transaction=frame.withNativeCommandFrame(roles,0,0,
+                                                                                            reinterpret_cast<uintptr_t>(commandParents[index]),0x1100,
+                                                                                            frontendCreatorView.renderHal,0x3300,
+                                                                                            [&](auto& sourceOwner,auto& targetOwner,auto&,auto& leases) noexcept {
+                                                                                                assert(leases.target && sourceOwner.hasSurfaceLease(leases.source) &&
+                                                                                                    targetOwner.hasSurfaceLease(*leases.target));
+                                                                                                const int status=index?
+                                                                                                    tglSendOwnedVeboxSfcPreparedCommands(frame.children().second().owner(),commandParents[index],
+                                                                                                        commandBinding,&command,commandInvoke,ready,*leases.target,1,0,1,0,commandRead,platform):
+                                                                                                    tglSendOwnedVeboxSfcPreparedCommands(frame.children().first().owner(),commandParents[index],
+                                                                                                        commandBinding,&command,commandInvoke,ready,*leases.target,1,0,1,0,commandRead,platform);
+                                                                                                // CPU recording only: no command acquisition/writeback/submission.
+                                                                                                return TglOwnedVeboxCommandTransactionResult{status,0,false,false};
+                                                                                            });
+                                                                                        assert(!transaction.acquired && !transaction.writtenBack);
+                                                                                        const int built=transaction.status;
                                                                                         assert(built==(scenario>0?-17:0));
                                                                                         if(!built) ++emissions;return built;
                                                                                     });
