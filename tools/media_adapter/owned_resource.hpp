@@ -12123,6 +12123,26 @@ struct TglOwnedVeboxHistoryAdmissionStage {
 // snapshot the selected pipe before reset, or adopt caller-supplied pointers.
 // Optional VP reset must be supplied as an authenticated owned stage; this
 // callback does not grant permission to call an arbitrary native vtable slot.
+template<class ChildOwner,class Graph>
+struct TglOwnedVeboxVpAdmissionReset {
+    ChildOwner& childOwner;Graph& graph;void* child;void* expectedVp;
+    bool operator()() noexcept {
+        auto linkedVp=[&]() noexcept {
+            if(!child || !childOwner.hasPrivateChildLease(reinterpret_cast<uintptr_t>(child))) return false;
+            uintptr_t linked=0;std::memcpy(&linked,static_cast<uint8_t*>(child)+0x80,8);
+            return linked==reinterpret_cast<uintptr_t>(expectedVp);
+        };
+        if(!linkedVp()) return false;
+        if(!expectedVp) return true; // native optional VP branch
+        if(!graph.ownsStorage(expectedVp)) return false;
+        const int status=graph.withPassInitializationEntry([&](void* actual,auto initialize) noexcept -> int {
+            if(actual!=expectedVp || !linkedVp()) return 5;
+            initialize(actual);return 0; // void ABI; graph checks owned status
+        });
+        return !status && linkedVp() && graph.ownsStorage(expectedVp);
+    }
+};
+
 template<class ChildOwner,class ExecutionOwner,class VpReset>
 struct TglOwnedVeboxAdmissionResetStage {
     ChildOwner& childOwner;ExecutionOwner& executionOwner;

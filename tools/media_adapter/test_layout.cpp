@@ -12447,7 +12447,34 @@ static void testVpSfcCpuGraph() {
     })==0);
     assert(graph.withPassInitializationEntry([](void*,InitEntry) noexcept {return 31;})==31);
     assert(!state.live && !avs.live && graph.withView(false,never)==5);
-    assert(initialize());state.fail=true;
+    assert(initialize());
+    {
+        void* vp=nullptr;
+        assert(graph.withView(false,[&](void* actual) noexcept {vp=actual;return 0;})==0);
+        std::array<uint8_t,0x88> base{};
+        struct BaseOwner {
+            void* child;bool live=true;
+            bool hasPrivateChildLease(uintptr_t p) const noexcept {
+                return live && p==reinterpret_cast<uintptr_t>(child);
+            }
+        } baseOwner{base.data()};
+        TglOwnedVeboxVpAdmissionReset<BaseOwner,std::decay_t<decltype(graph)>> resetVp{
+            baseOwner,graph,base.data(),vp};
+        const auto generation=graph.generation();
+        assert(!resetVp() && graph.generation()==generation);
+        std::memcpy(base.data()+0x80,&vp,8);
+        assert(graph.withResourceOwnerStorage([&](auto&) noexcept {
+            assert(!resetVp() && graph.generation()==generation);return 0;
+        })==0);
+        baseOwner.live=false;assert(!resetVp() && graph.generation()==generation);
+        baseOwner.live=true;
+        assert(resetVp() && graph.generation()==generation+1 && graph.ownsStorage(vp));
+        resetVp.expectedVp=nullptr;
+        assert(!resetVp());
+        const uintptr_t zero=0;std::memcpy(base.data()+0x80,&zero,8);
+        assert(resetVp() && graph.generation()==generation+1);
+    }
+    state.fail=true;
     assert(graph.withPassInitializationEntry([](void* child,InitEntry entry) noexcept {
         entry(child);return 0;
     })==5);
