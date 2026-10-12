@@ -19863,11 +19863,12 @@ public:
         return mhwLease_.acquire(owner);
     }
     const TglVeboxHardwareBinding* retainedMhw() const noexcept {return mhwLease_.binding();}
-    template<class Read,class Qualify,class Executable,class Construct=TglNativeVeboxConstructorInvoker>
+    template<class Read,class Qualify,class Executable,class Construct=TglNativeVeboxConstructorInvoker,
+        class Query=TglNativeRendererCacheInvoker>
     TglOwnedBaseConstruction initializeChildFromCreator(size_t index,const TglNativeVphalMhwView& view,
         const TglVeboxLifetimeBinding& binding,const TglSfcLifetimeBinding& lifetime,
-        void* history,void* performance,const void* cache,int32_t& status,
-        Read read,Qualify qualify,Executable executable,Construct construct={}) {
+        int32_t& status,Read read,Qualify qualify,Executable executable,
+        Construct construct={},Query query={}) {
         const auto* retained=mhwLease_.binding();
         TglVeboxHardwareBinding hardware;
         TglSfcMhwBinding sfc;
@@ -19879,9 +19880,13 @@ public:
             !sfc.resolve(view.renderer.image,read,qualify,executable) ||
             !sfc.validateConstructedObject(object,view.os,read))
             return TglOwnedBaseConstruction::NotCalled;
+        TglNativeRendererChildParameters parameters;
+        if(!tglProduceRendererChildParameters(parameters,index,view,read,qualify,executable,query))
+            return TglOwnedBaseConstruction::NotCalled;
         auto& child=index?children_.second():children_.first();
         return child.initializeQualified(binding,lifetime,sfc,reinterpret_cast<void*>(view.os),hardware,
-            reinterpret_cast<void*>(view.renderHal),history,performance,cache,status,read,qualify,
+            reinterpret_cast<void*>(view.renderHal),reinterpret_cast<void*>(parameters.history),
+            reinterpret_cast<void*>(parameters.performance),parameters.cache.bytes.data()+4,status,read,qualify,
             construct,object,&sharedSfcGate_);
     }
     template<class ParentLease,class... Args>
