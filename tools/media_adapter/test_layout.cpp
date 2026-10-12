@@ -13690,6 +13690,38 @@ static void testRetainedVeboxFrames() {
 
 int main() {
     {
+        int parent0=0,parent1=0,vp0=0,vp1=0,foreign=0;
+        const std::array<void*,2> parents{&parent0,&parent1},vps{&vp0,&vp1};
+        bool allow=true,reenter=false;unsigned admissions=0;
+        void*(*callback)(void*) noexcept=nullptr;
+        auto admit=[&](void* parent,void* vp) noexcept {
+            ++admissions;
+            assert((parent==parents[0] && vp==vps[0]) || (parent==parents[1] && vp==vps[1]));
+            if(reenter) assert(!callback(parent));
+            return allow;
+        };
+        using PairScope=TglOwnedVpFactoryPairScope<decltype(admit)>;
+        callback=reinterpret_cast<void*(*)(void*) noexcept>(PairScope::callbackAddress());
+        assert(!callback(parents[0]));
+        {PairScope alias(parents,{vps[0],vps[0]},admit);assert(!alias.bound());}
+        {
+            PairScope scope(parents,vps,admit);assert(scope.bound());
+            PairScope nested(parents,vps,admit);assert(!nested.bound());
+            auto other=[](void*,void*) noexcept {return true;};
+            TglOwnedVpFactoryPairScope<decltype(other)> otherNested(parents,vps,other);
+            assert(!otherNested.bound());
+            assert(callback(parents[0])==vps[0] && callback(parents[1])==vps[1]);
+            assert(scope.valid() && scope.called(0) && scope.called(1));
+            assert(!callback(parents[0]) && !scope.valid());
+        }
+        assert(admissions==2 && !callback(parents[0]));
+        {PairScope scope(parents,vps,admit);assert(!callback(&foreign) && !scope.valid());}
+        allow=false;
+        {PairScope scope(parents,vps,admit);assert(!callback(parents[1]) && !scope.called(1) && !scope.valid());}
+        allow=true;reenter=true;
+        {PairScope scope(parents,vps,admit);assert(!callback(parents[0]) && !scope.called(0) && !scope.valid());}
+    }
+    {
         TglOwnedVpSfcCallerStorage vp;
         std::array<uint8_t,0x1bb0> caller{};
         std::array<uint8_t,0xa10> state{};

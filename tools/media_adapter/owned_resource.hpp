@@ -135,6 +135,55 @@ public:
     }
 };
 struct TglOwnedVpSfcContextDomain {};
+// Whole RendererInitialize calls BOTH child factories synchronously. This
+// stack-only dispatch is not a registry or an allocator: the caller retains
+// both distinct VP objects/private tables and both parent leases throughout.
+// A single-parent factory scope cannot cover that native call chain.
+inline thread_local const void* tglOwnedVpFactoryPairActive=nullptr;
+template<class Admit> class TglOwnedVpFactoryPairScope {
+    inline static thread_local TglOwnedVpFactoryPairScope* active_=nullptr;
+    std::array<void*,2> parents_,children_;
+    std::array<bool,2> called_{};
+    Admit& admit_;
+    bool bound_=false,valid_=true,busy_=false;
+    static void* create(void* parent) noexcept {
+        auto* self=active_;
+        if(!self) return nullptr;
+        if(self->busy_) {self->valid_=false;return nullptr;}
+        self->busy_=true;
+        struct Unlock {bool& busy;~Unlock(){busy=false;}} unlock{self->busy_};
+        for(size_t index=0;index<2;++index) {
+            if(parent!=self->parents_[index]) continue;
+            if(!self->valid_ || self->called_[index] ||
+               !self->admit_(parent,self->children_[index])) {
+                self->valid_=false;return nullptr;
+            }
+            // Admission may reenter this callback. Never publish after that.
+            if(!self->valid_) return nullptr;
+            self->called_[index]=true;return self->children_[index];
+        }
+        self->valid_=false;return nullptr;
+    }
+public:
+    TglOwnedVpFactoryPairScope(std::array<void*,2> parents,std::array<void*,2> children,Admit& admit) noexcept
+        :parents_(parents),children_(children),admit_(admit) {
+        static_assert(noexcept(admit(nullptr,nullptr)) &&
+            std::is_same_v<decltype(admit(nullptr,nullptr)),bool>);
+        if(tglOwnedVpFactoryPairActive || !parents[0] || !parents[1] || !children[0] || !children[1] ||
+           parents[0]==parents[1] || children[0]==children[1]) return;
+        for(auto parent:parents) for(auto child:children) if(parent==child) return;
+        active_=this;tglOwnedVpFactoryPairActive=this;bound_=true;
+    }
+    ~TglOwnedVpFactoryPairScope() noexcept {
+        if(bound_) {active_=nullptr;tglOwnedVpFactoryPairActive=nullptr;}
+    }
+    TglOwnedVpFactoryPairScope(const TglOwnedVpFactoryPairScope&)=delete;
+    TglOwnedVpFactoryPairScope& operator=(const TglOwnedVpFactoryPairScope&)=delete;
+    bool bound() const noexcept {return bound_;}
+    bool valid() const noexcept {return bound_ && valid_;}
+    bool called(size_t index) const noexcept {return bound_ && index<2 && called_[index];}
+    static uintptr_t callbackAddress() noexcept {return reinterpret_cast<uintptr_t>(&create);}
+};
 struct TglOwnedVpFactoryContextDomain {};
 struct TglOwnedVpFactoryContext {
     void* child=nullptr;
