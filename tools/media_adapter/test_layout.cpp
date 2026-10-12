@@ -2588,10 +2588,17 @@ static void testTrackedCpuOwner() {
             TglOwnedFfdiAllocationRequest request;
             assert(tglPrepareOwnedFfdiAllocationRequest(source,format,1,{true,1},request));
             TglOwnedDescriptorOnlySurface descriptor;
+            assert(descriptor.withInactiveDescriptor([&](const auto& inactive) noexcept -> int {
+                assert(!descriptor.hasDescriptorLease(inactive) && !tglNativeBackingPresent(inactive.resource));
+                assert(descriptor.withInactiveDescriptor([](const auto&) noexcept -> int {assert(false);return 0;})==5);
+                descriptor.reset(); // Must not invalidate an active borrow.
+                return -85;
+            })==-85);
             bool changed=false;
             assert(descriptor.prepare(request,changed)==(format!=0x3d));
             assert(changed==(format!=0x3d));
             if(format!=0x3d) {
+                assert(descriptor.withInactiveDescriptor([](const auto&) noexcept -> int {assert(false);return 0;})==5);
                 assert(descriptor.publishFfdiFrame(source,{8,3},&source,&source));
                 assert(descriptor.withDescriptor([&](const auto& view) noexcept {
                     uint32_t actualFormat=0,pitch=1,type=0;
@@ -8615,6 +8622,19 @@ static void testNativeResourceBoundary() {
                                                     allowSurfacePacket=true;
                                                     const auto publishedPacket=runPacket();
                                                     assert(publishedPacket.status==-84 && liveAdmissions>=4 && !packetRetention());
+                                                    assert(tglRunRetainedDiIecpFrameInput(retained,linkedInput,&linkedInput,
+                                                        static_cast<decltype(&linkedInput)>(nullptr),static_cast<decltype(&linkedInput)>(nullptr),
+                                                        childOwner,reportOwner,actualChild,report,current,2,
+                                                        TglOwnedFfdiAllocationKind::NativeBacking,false,false,read,false,{},
+                                                        [&](const TglDiIecpInputs& live) noexcept -> int {
+                                                            assert(!live.dnNeeded && live.ffdn[0] && live.ffdn[1] && live.ffdn[0]!=live.ffdn[1]);
+                                                            assert(!tglNativeBackingPresent(live.ffdn[0]->resource) &&
+                                                                !tglNativeBackingPresent(live.ffdn[1]->resource));
+                                                            assert(retained.withInactiveFfdnViews([](const auto&) noexcept -> int {
+                                                                assert(false);return 0;
+                                                            })==5);
+                                                            return -86;
+                                                        })==-86);
                                                     assert(borrowFixture.allocations==packetAllocations && borrowFixture.fills==packetFills);
                                                     assert(!EntryProducers::Resolve::get(actualChild));
                                                     childOwner.renderImage=0;childOwner.renderHooks.fill(0);

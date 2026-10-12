@@ -7433,6 +7433,16 @@ public:
         constexpr size_t base=offsetof(TglOwnedSurfaceStorage,tail);
         output=(storage_.tail[0x29a-base]&1)!=0;return true;
     }
+    // An unprepared shell may appear in an inactive surface-state packet.
+    // It is NOT a prepared descriptor lease and cannot authorize GPU use.
+    template<class Use> int withInactiveDescriptor(Use use) noexcept {
+        static_assert(noexcept(use(std::declval<const TglOwnedSurfaceStorage&>())) &&
+            std::is_same_v<decltype(use(std::declval<const TglOwnedSurfaceStorage&>())),int>);
+        if(ready_ || busy_) return 5;
+        busy_=true;
+        struct Unlock {bool& busy;~Unlock(){busy=false;}} unlock{busy_};
+        return use(static_cast<const TglOwnedSurfaceStorage&>(storage_));
+    }
     template<class Use> bool withDescriptor(Use use) noexcept {
         static_assert(noexcept(use(std::declval<const TglOwnedSurfaceStorage&>())) &&
             std::is_same_v<decltype(use(std::declval<const TglOwnedSurfaceStorage&>())),void>,
@@ -18880,6 +18890,15 @@ public:
         return std::array<Surface*,4>{&ffdi_[0],&ffdi_[1],&ffdi_[2],&ffdi_[3]};
     }
     auto ffdnBacked() noexcept {return std::array<Surface*,2>{&ffdn_[0],&ffdn_[1]};}
+    template<class Use> int withInactiveFfdnViews(Use use) noexcept {
+        if(auxiliary_.retention()()) return 5;
+        return ffdnDescriptors_[0].withInactiveDescriptor([&](const auto& first) noexcept -> int {
+            return ffdnDescriptors_[1].withInactiveDescriptor([&](const auto& second) noexcept -> int {
+                TglOwnedFfdnTailViews views;views.outputs={&first,&second};
+                return use(static_cast<const TglOwnedFfdnTailViews&>(views));
+            });
+        });
+    }
     // Kind/count must come from the admitted native FFDi selection; source
     // format alone cannot identify an SFC-selected output allocation kind.
     template<class Owner,class Use>
@@ -19222,8 +19241,11 @@ int tglRunRetainedDiIecpFrameInput(TglNativeVeboxSurfaceFrameStorage<Api>& stora
                         const auto& shells=storage.auxiliary().stmmStorage().surfaces();
                         packetStmm.surfaces={&shells[0],&shells[1]};
                     }
-                    return tglRunCapturedDiIecpFrameInput(sourceOwner,childOwner,executionOwner,active,report,
-                        current,ffdi,ffdn,packetStmm,statistics,read,alignDi64,controls,consume);
+                    auto capture=[&](const TglOwnedFfdnTailViews& packetFfdn) noexcept -> int {
+                        return tglRunCapturedDiIecpFrameInput(sourceOwner,childOwner,executionOwner,active,report,
+                            current,ffdi,packetFfdn,packetStmm,statistics,read,alignDi64,controls,consume);
+                    };
+                    return allocatedFfdn ? capture(ffdn) : storage.withInactiveFfdnViews(capture);
                 },parameters,{&current,nullptr,nullptr,nullptr});
         });
 }
