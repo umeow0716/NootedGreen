@@ -1259,6 +1259,36 @@ static void testTrackedCpuOwner() {
                 !TglOwnedVeboxScopedContext<Admit>::get(&child) &&
                 !TglOwnedVeboxScopedContext<Allocate>::get(&child) &&
                 !TglOwnedVeboxScopedContext<Mode>::get(&child));
+            Life second,foreign;second.child=&other;foreign.child=&child;
+            using LifeScope=TglOwnedVeboxScopedContext<Life>;
+            auto prebound=[&](auto& a,auto& r,auto& m) noexcept -> int {
+                ++calls;
+                assert(LifeScope::get(&child)==&life && LifeScope::get(&other)==&second);
+                assert(std::decay_t<decltype(a)>::get(&child)==&admit &&
+                    std::decay_t<decltype(r)>::get(&child)==&allocate &&
+                    std::decay_t<decltype(m)>::get(&child)==&mode);
+                assert(tglWithOwnedVeboxPreboundLifetimeAuxiliaryScopes(&child,life,admit,allocate,mode,
+                    [](auto&,auto&,auto&) noexcept -> int {assert(false);return 0;})==5);
+                return 31;
+            };
+            assert(tglWithOwnedVeboxPreboundLifetimeAuxiliaryScopes(&child,life,admit,allocate,mode,prebound)==5);
+            {
+                LifeScope::Pair pair(&child,life,&other,second);assert(pair.bound());
+                assert(tglWithOwnedVeboxPreboundLifetimeAuxiliaryScopes(&child,foreign,admit,allocate,mode,prebound)==5);
+                {TglOwnedVeboxScopedContext<Mode> occupied(&child,mode);
+                    assert(occupied.bound());
+                    assert(tglWithOwnedVeboxPreboundLifetimeAuxiliaryScopes(&child,life,admit,allocate,mode,prebound)==5);
+                    assert(!TglOwnedVeboxScopedContext<Admit>::get(&child) &&
+                        !TglOwnedVeboxScopedContext<Allocate>::get(&child));
+                }
+                assert(calls==1);
+                assert(tglWithOwnedVeboxPreboundLifetimeAuxiliaryScopes(&child,life,admit,allocate,mode,prebound)==31 && calls==2);
+                assert(LifeScope::get(&child)==&life && LifeScope::get(&other)==&second);
+                assert(!TglOwnedVeboxScopedContext<Admit>::get(&child) &&
+                    !TglOwnedVeboxScopedContext<Allocate>::get(&child) &&
+                    !TglOwnedVeboxScopedContext<Mode>::get(&child));
+            }
+            assert(!LifeScope::get(&child) && !LifeScope::get(&other));
         }
         using Resolve=TglOwnedVeboxScopedContext<Context>;
         using Callback=TglOwnedVeboxAllocationCallbacks<Resolve>;

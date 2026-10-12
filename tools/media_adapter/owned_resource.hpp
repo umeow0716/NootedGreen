@@ -11495,7 +11495,7 @@ template<class Context> struct TglOwnedVeboxScopedLifetimeResolve {
 // Owners/context/frame leases must already be held; binding supplies no such
 // authority. Failed or reentrant binding must never invoke native code.
 template<class Lifetime,class Admission,class Allocation,class Mode,class Use>
-int tglWithOwnedVeboxAuxiliaryScopes(void* child,Lifetime& lifetime,
+int tglWithOwnedVeboxPreboundLifetimeAuxiliaryScopes(void* child,Lifetime& lifetime,
     Admission& admission,Allocation& allocation,Mode& mode,Use use) noexcept {
     using L=TglOwnedVeboxScopedContext<Lifetime>;
     using A=TglOwnedVeboxScopedContext<Admission>;
@@ -11503,15 +11503,29 @@ int tglWithOwnedVeboxAuxiliaryScopes(void* child,Lifetime& lifetime,
     using M=TglOwnedVeboxScopedContext<Mode>;
     static_assert(noexcept(lifetime.owns(child)) && noexcept(admission.owns(child)) &&
         noexcept(allocation.owns(child)) && noexcept(mode.owns(child)));
-    static_assert(noexcept(use(std::declval<L&>(),std::declval<A&>(),
-        std::declval<R&>(),std::declval<M&>())));
-    if(!child || !lifetime.owns(child) || !admission.owns(child) ||
+    static_assert(noexcept(use(std::declval<A&>(),std::declval<R&>(),std::declval<M&>())));
+    if(!child || L::get(child)!=&lifetime || !lifetime.owns(child) || !admission.owns(child) ||
        !allocation.owns(child) || !mode.owns(child)) return 5;
-    L l(child,lifetime);if(!l.bound()) return 5;
     A a(child,admission);if(!a.bound()) return 5;
     R r(child,allocation);if(!r.bound()) return 5;
     M m(child,mode);if(!m.bound()) return 5;
-    return use(l,a,r,m);
+    // The caller holds a single or explicit paired lifecycle scope; do not
+    // create a second binding that could hide that lease.
+    return use(a,r,m);
+}
+
+template<class Lifetime,class Admission,class Allocation,class Mode,class Use>
+int tglWithOwnedVeboxAuxiliaryScopes(void* child,Lifetime& lifetime,
+    Admission& admission,Allocation& allocation,Mode& mode,Use use) noexcept {
+    using L=TglOwnedVeboxScopedContext<Lifetime>;
+    using A=TglOwnedVeboxScopedContext<Admission>;
+    using R=TglOwnedVeboxScopedContext<Allocation>;
+    using M=TglOwnedVeboxScopedContext<Mode>;
+    static_assert(noexcept(use(std::declval<L&>(),std::declval<A&>(),
+        std::declval<R&>(),std::declval<M&>())));
+    L l(child,lifetime);if(!l.bound()) return 5;
+    return tglWithOwnedVeboxPreboundLifetimeAuxiliaryScopes(child,lifetime,admission,allocation,mode,
+        [&](auto& a,auto& r,auto& m) noexcept -> int {return use(l,a,r,m);});
 }
 
 // Outer12d280 obtains VEBOX child from renderer910[index]. 12d38b..12d39d
