@@ -19414,9 +19414,14 @@ int main() {
                         std::array<unsigned,6> refs{};
                         struct Cf {
                             std::array<unsigned,6>& refs;
+                            void* releaseContext=nullptr;
+                            void (*onRelease)(void*) noexcept=nullptr;
                             uintptr_t type(uintptr_t h) noexcept {return h==5?12:11;}
                             bool retain(uintptr_t h) noexcept {assert(h==1 || h==5);++refs[h];return true;}
-                            void release(uintptr_t h) noexcept {assert(refs[h]);--refs[h];}
+                            void release(uintptr_t h) noexcept {
+                                if(onRelease) onRelease(releaseContext);
+                                assert(refs[h]);--refs[h];
+                            }
                         };
                         alignas(8) std::array<uint8_t,0x70> nativeCreator{};
                         alignas(8) std::array<uint8_t,0x2d50> nativeRenderer{};
@@ -19504,6 +19509,12 @@ int main() {
                                 return owner.context()==view.parent && view.os==os && view.hardware.interface==0x6000;
                             }));
                         assert(!preparedParent.get() && preparedMhw.binding() && removeParent()==5);
+                        unsigned pinnedReleases=0;
+                        auto assertReleasePin=[&]() noexcept {
+                            ++pinnedReleases;
+                            assert(removeParent()==5 && !parentDeaths);
+                            assert(!parents.pinExclusive(base,0x8000,1,parentAddress).get());
+                        };
                         bool allowPageImport=true,allowFill=true;
                             auto resourceRead=[&](uintptr_t address,void* out,size_t bytes) noexcept {
                                 if(bytes==8 && (address==base+0x754130 || address==0xdead000 ||
@@ -19548,7 +19559,9 @@ int main() {
                             [&](uintptr_t address) noexcept -> TestFrontendOriginalOwner* {
                                 if(address==reinterpret_cast<uintptr_t>(&source)) return &so;
                                 return address==hp?&ho:nullptr;
-                            },to,Cf{refs},uintptr_t{11},uintptr_t{12},frameDn,base,allocatorRead,
+                            },to,Cf{refs,&assertReleasePin,+[](void* pointer) noexcept {
+                                (*static_cast<decltype(assertReleasePin)*>(pointer))();
+                            }},uintptr_t{11},uintptr_t{12},frameDn,base,allocatorRead,
                             [](uintptr_t image) noexcept {return image==base;},
                             [](uintptr_t,size_t) noexcept {return true;},environment.resources,
                             environment.pageSize,environment.fill,NativeCpu{vpCpu,&vpAvsCpu},
@@ -19788,6 +19801,7 @@ int main() {
                             return 0;
                         })==0); // CPU certificate fixture only
                         assert(prepareCalls==2);
+                        assert(pinnedReleases>0);
                         assert(!so.borrowed && !to.borrowed && !ho.borrowed && !frameDn.live && !refs[1] && !refs[5]);
                         assert(cleaned[0]==1 && cleaned[1]==1 && destroyed==cleaned);
                         assert(!vpCpu.live && !vpAvsCpu.live);

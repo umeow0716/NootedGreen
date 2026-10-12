@@ -19231,12 +19231,11 @@ template<class Api,class SurfaceBackend,class DnBackend,class Cleanup,
     class Destroy=TglNativeVeboxDestructorInvoker,class MhwInvoke=TglNativeVeboxMhwAllocationInvoker,
     class MhwDependency=typename TglNativeVeboxMhwOwner<MhwInvoke>::DependencyLease>
 class TglNativeVeboxRendererFrameStorage {
+    // First member, LAST destroyed: surface/VP/command cleanup also uses OS
+    // and native resource callbacks, not just the child destructors.
+    MhwDependency mhwLease_;
     TglNativeVeboxVpFrameBacking<Api,Cpu> backing_;
     TglOwnedVeboxFrameSurfaceStorage<SurfaceBackend,DnBackend> surfaces_;
-    // Declared BEFORE children: their native cleanup/destruction finishes
-    // before this persistent MHW pin is dropped. External owner/OS/image
-    // remain registry-owned through qualified frame retirement.
-    MhwDependency mhwLease_;
     TglNativeVeboxChildPairStorage<Cleanup,Cpu,Sfc,Destroy> children_;
 public:
     template<class Read,class Qualify,class Executable,class... Args>
@@ -19317,12 +19316,13 @@ template<class Api,class SourceOwner,class TargetOwner,class CfApi,class DnBacke
     class MhwInvoke=TglNativeVeboxMhwAllocationInvoker,
     class MhwDependency=typename TglNativeVeboxMhwOwner<MhwInvoke>::DependencyLease>
 class TglNativeVeboxFrontendRendererFrameStorage {
+    // Retain parent/OS through ALL backing, frontend and child destruction.
+    MhwDependency mhwLease_;
     TglNativeVeboxVpFrameBacking<Api,Cpu> backing_;
     TglOwnedFrontendSourceGraph<SourceOwner,CfApi> source_;
     TglOwnedType1BorrowedSurfaceLease<TargetOwner,CfApi> target_;
     TglTrackedCpuOwner<DnBackend> parameters_;
-    // Original frontend surfaces and MHW must outlive child cleanup.
-    MhwDependency mhwLease_;
+    // Original frontend surfaces must outlive child cleanup.
     TglNativeVeboxChildPairStorage<Cleanup,Cpu,Sfc,Destroy> children_;
 public:
     template<class Resolve,class Read,class Qualify,class Executable,class... Args>
