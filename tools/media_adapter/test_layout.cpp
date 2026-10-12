@@ -13748,6 +13748,39 @@ static void testActualNv12LayoutSnapshot() {
         assert(!tglCaptureOwnedNv12Layout(layout,base,capacity,planes,width,32,pitch,{32,16}));
         assert(layout.offset[0]==128 && layout.offset[1]==2176);
     }
+    struct Api {
+        unsigned mode=0,locks=0,unlocks=0,retains=0,releases=0;
+        uintptr_t surface(uintptr_t h) noexcept {return h;}
+        bool retain(uintptr_t) noexcept {++retains;return mode!=4;}
+        void release(uintptr_t) noexcept {++releases;}
+        int lock(uintptr_t) noexcept {++locks;return mode==1?31:0;}
+        int unlock(uintptr_t) noexcept {++unlocks;return mode==3?17:0;}
+        bool readLayout(uintptr_t,TglOwnedNv12Layout& out) noexcept {
+            if(mode==2) return false;
+            out.width=960;return true;
+        }
+    };
+    struct Sink {
+        bool deny=false;unsigned reservations=0,cancels=0,commits=0;
+        bool reserve(uintptr_t) noexcept {++reservations;return !deny;}
+        void cancel() noexcept {++cancels;}
+        void commit(uintptr_t) noexcept {++commits;}
+    };
+    std::array<uint8_t,0x148> resource{};
+    uint32_t type=1,format=0x19;uintptr_t handle=1;
+    std::memcpy(resource.data()+0x14,&type,4);std::memcpy(resource.data()+0x18,&format,4);
+    std::memcpy(resource.data()+0x58,&handle,8);
+    for(unsigned mode=0;mode<6;++mode) {
+        Api api;api.mode=mode;Sink sink;sink.deny=mode==5;
+        TglOwnedNv12Layout out;out.width=77;
+        const auto result=tglReadRetainedOwnedNv12Layout(resource,api,sink,out);
+        assert(result.ready()==(mode==0) && out.width==(mode==0?960u:77u));
+        assert(result.requiresQuarantine()==(mode==3));
+        assert(sink.commits==(mode==3?1u:0u));
+        assert(api.releases==((mode==4 || mode==5 || mode==3)?0u:1u));
+        assert(api.locks==((mode==4 || mode==5)?0u:1u));
+        assert(api.unlocks==((mode==1 || mode==4 || mode==5)?0u:1u));
+    }
 }
 int main() {
     testActualNv12LayoutSnapshot();

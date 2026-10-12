@@ -16267,6 +16267,43 @@ inline bool tglCaptureOwnedNv12Layout(TglOwnedNv12Layout& output,
     if(candidate.offset[1]<ends[0] && candidate.offset[0]<ends[1]) return false;
     output=candidate;return true;
 }
+struct TglOwnedNv12LayoutRead {
+    int lockStatus=5,unlockStatus=5;
+    bool captured=false;
+    bool ready() const noexcept {return !lockStatus && !unlockStatus && captured;}
+    bool requiresQuarantine() const noexcept {return !lockStatus && unlockStatus!=0;}
+};
+// Original owner/exclusion lease is mandatory; a CF retain alone does not pin
+// the descriptor/tokens against release or prove exclusion of GPU writers.
+// Reuse the existing reserve-before-lock durable quarantine protocol.
+template<class Api,class Quarantine>
+TglOwnedNv12LayoutRead tglReadRetainedOwnedNv12Layout(
+    const std::array<uint8_t,0x148>& resource,Api& api,Quarantine& quarantine,
+    TglOwnedNv12Layout& output) noexcept {
+    uint32_t type=0,format=0;uintptr_t handle=0;
+    std::memcpy(&type,resource.data()+0x14,4);
+    std::memcpy(&format,resource.data()+0x18,4);
+    std::memcpy(&handle,resource.data()+0x58,8);
+    TglOwnedNv12LayoutRead result;
+    if(type!=1 || format!=0x19 || !handle) return result;
+    const auto surface=api.surface(handle);
+    static_assert(noexcept(api.retain(surface)) && noexcept(api.release(surface)) &&
+        noexcept(api.lock(surface)) && noexcept(api.unlock(surface)) &&
+        noexcept(api.readLayout(surface,output)) && noexcept(quarantine.reserve(surface)) &&
+        noexcept(quarantine.cancel()) && noexcept(quarantine.commit(surface)));
+    if(!surface || !quarantine.reserve(surface)) return result;
+    if(!api.retain(surface)) {quarantine.cancel();return result;}
+    result.lockStatus=api.lock(surface);
+    TglOwnedNv12Layout candidate;
+    if(!result.lockStatus) {
+        result.captured=api.readLayout(surface,candidate);
+        result.unlockStatus=api.unlock(surface);
+    }
+    if(result.requiresQuarantine()) quarantine.commit(surface);
+    else {api.release(surface);quarantine.cancel();}
+    if(result.ready()) output=candidate;
+    return result;
+}
 #if defined(__APPLE__)
 // Native63720 format19 creates exact 'v420', two plane dictionaries. Do not
 // reinterpret any other pixel format or native lock's plane0 as a UV query.
@@ -16332,6 +16369,11 @@ struct TglDarwinStmmSurfaceApi {
         output={reinterpret_cast<uint8_t*>(plane),capacity-size_t(plane-base),
             uint32_t(width),uint32_t(height),uint32_t(pitch)};
         return true;
+    }
+};
+struct TglDarwinNv12LayoutApi:TglDarwinStmmSurfaceApi {
+    bool readLayout(IOSurfaceRef surface,TglOwnedNv12Layout& output) const noexcept {
+        return tglReadLockedDarwinNv12Layout(surface,output);
     }
 };
 #endif
