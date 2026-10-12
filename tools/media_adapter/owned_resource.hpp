@@ -3133,6 +3133,12 @@ inline TglVeboxSlotReuseReason tglVeboxSlotReuseReason(uint8_t pending,
 }
 
 struct TglVeboxHardwareBinding {
+    // Native aggregate1c9270, request bit3, calls1b52f0 and stores the
+    // returned MHW at aggregate30. Factory1b52f0 allocates exactly2190
+    // via nothrow new, gets OS through1b6b40, then calls16f490->16f140.
+    // It increments global7f3218 only for a nonnull result. Owned storage
+    // must not use the native accounted-delete path without that accounting.
+    static constexpr size_t objectExtent=0x2190;
     uintptr_t interface = 0, os = 0, heap = 0;
     // Called only by the enclosing, serialized MHW owner before publication.
     // Retain that owner even if post-call admission fails: native may already
