@@ -17204,6 +17204,32 @@ int tglWithOwnedVpLifetimeAssemblyEntries(void* child,Lifetime& lifetime,
     return lifetime.attempts()!=attempts ? lifetime.status():0;
 }
 
+// Frame catalogue core for two already-initialized, reserved graphs. No state
+// lease is acquired here: prepare/state production must precede consumption.
+template<class Graph,class Lines,class Read,class Retire,class Release,class Use>
+int tglWithOwnedVpPairedFrameCore(Graph& firstGraph,TglOwnedVpSfcCallerStorage& first,Lines& firstLines,
+    Graph& secondGraph,TglOwnedVpSfcCallerStorage& second,Lines& secondLines,
+    const std::array<uintptr_t,2>& sources,const std::array<uintptr_t,2>& targets,
+    const std::array<uintptr_t,2>& settings,Read& read,Retire& retire,Release& release,Use use) noexcept {
+    return firstGraph.withLeasedPairedAssemblyEntries(secondGraph,read,firstLines,secondLines,retire,
+        [&](void* a,const auto& ae,void* b,const auto& be) noexcept -> int {
+            if(a!=first.bytes.data() || b!=second.bytes.data()) return 5;
+            using Lifetime=TglOwnedVpLifetimeContext<Graph,Lines,Retire,Release>;
+            Lifetime firstLifetime(a,firstGraph,firstLines,retire,release);
+            Lifetime secondLifetime(b,secondGraph,secondLines,retire,release);
+            const std::array<TglOwnedVpEntrySet,2> resources{ae,be};
+            return firstGraph.withLeasedPairedInitializedAssemblyEntries(secondGraph,resources,
+                [&](void*,const auto& ai,void*,const auto& bi) noexcept -> int {
+                    const std::array<TglOwnedVpEntrySet,2> initialized{ai,bi};
+                    return tglWithOwnedVpPairedModeAssembly(first,second,sources,targets,settings,read,initialized,
+                        [&](void*,const auto& am,void*,const auto& bm) noexcept -> int {
+                            const std::array<TglOwnedVpEntrySet,2> modes{am,bm};
+                            return tglWithOwnedVpPairedLifetimeAssemblyEntries(a,firstLifetime,b,secondLifetime,modes,use);
+                        });
+                });
+        });
+}
+
 // CPU construction-to-lifetime transition. Construct must invoke the owned
 template<class Lifetime,class Use>
 int tglWithOwnedVpPairedLifetimeAssemblyEntries(void* first,Lifetime& firstLifetime,

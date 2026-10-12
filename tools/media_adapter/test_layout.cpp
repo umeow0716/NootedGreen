@@ -20982,30 +20982,23 @@ int main() {
                                                 assert(!sa && !sb);
                                                 assert(firstGraph.withPairedProducerReservation(secondGraph,
                                                     [](void*,void*) noexcept -> int {assert(false);return 0;})==5);
-                                                return firstGraph.withLeasedPairedAssemblyEntries(secondGraph,modeRead,
-                                                    firstLines.resources(),secondLines.resources(),modeRetire,
+                                                auto releaseCpu=[](void*) noexcept {assert(false);};
+                                                return tglWithOwnedVpPairedFrameCore(firstGraph,first,firstLines.resources(),
+                                                    secondGraph,second,secondLines.resources(),
+                                                    {0x1000,0x1000},{0x2000,0x2000},{0x3000,0x3000},
+                                                    modeRead,modeRetire,releaseCpu,
                                                     [&](void* x,const auto& xe,void* y,const auto& ye) noexcept -> int {
                                                         assert(x==a && y==b && xe.allocate && ye.allocate &&
-                                                            xe.freeResources && ye.freeResources && xe.inputFormat && ye.extent);
-                                                        const std::array<TglOwnedVpEntrySet,2> bases{xe,ye};
-                                                        return tglWithOwnedVpPairedModeAssembly(first,second,
-                                                            {0x1000,0x1000},{0x2000,0x2000},{0x3000,0x3000},modeRead,bases,
-                                                            [&](void* p,const auto& pe,void* q,const auto& qe) noexcept -> int {
-                                                                assert(p==a && q==b && pe.allocate==xe.allocate &&
-                                                                    qe.inputFormat==ye.inputFormat && pe.sampleMode && qe.formatMode);
-                                                                pe.sampleMode(p,reinterpret_cast<void*>(0x1000),
-                                                                    reinterpret_cast<void*>(0x2000));
-                                                                pe.formatMode(p,reinterpret_cast<void*>(0x1000),
-                                                                    reinterpret_cast<void*>(0x3000));
-                                                                qe.sampleMode(q,reinterpret_cast<void*>(0x1000),
-                                                                    reinterpret_cast<void*>(0x2000));
-                                                                qe.formatMode(q,reinterpret_cast<void*>(0x1000),
-                                                                    reinterpret_cast<void*>(0x3000));
-                                                                std::memcpy(&sa,first.bytes.data()+0x938,8);
-                                                                std::memcpy(&sb,second.bytes.data()+0x938,8);
-                                                                assert(!sa && !sb);
-                                                                return expected;
-                                                            });
+                                                            xe.freeResources && ye.freeResources && xe.inputFormat && ye.extent &&
+                                                            xe.initialize && ye.initialize && xe.destroy && ye.deletingDestroy);
+                                                        xe.sampleMode(x,reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x2000));
+                                                        xe.formatMode(x,reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x3000));
+                                                        ye.sampleMode(y,reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x2000));
+                                                        ye.formatMode(y,reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x3000));
+                                                        std::memcpy(&sa,first.bytes.data()+0x938,8);
+                                                        std::memcpy(&sb,second.bytes.data()+0x938,8);
+                                                        assert(!sa && !sb && !xe.hasAllEntries() && !ye.hasAllEntries());
+                                                        return expected;
                                                     });
                                             })==expected);
                                     }
