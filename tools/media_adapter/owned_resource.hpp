@@ -1751,6 +1751,43 @@ public:
     }
 };
 
+// Object-vptr table, unlike the call-only creator table above. Its enclosing
+// VPHAL owner must pin stable storage and both code images before publication.
+// Destructor hooks must detach/destroy children and restore the native vptr
+// before invoking the saved destructor. Failed retirement quarantines the
+// owner; a hook must never repeat the accounting already consumed by235e80.
+class TglOwnedVphalLifetimeTable {
+    std::array<uintptr_t,6> entries_{};
+    uintptr_t source_=0;
+public:
+    TglOwnedVphalLifetimeTable()=default;
+    TglOwnedVphalLifetimeTable(const TglOwnedVphalLifetimeTable&)=delete;
+    TglOwnedVphalLifetimeTable& operator=(const TglOwnedVphalLifetimeTable&)=delete;
+    template<class Read,class Qualify,class Executable,class OwnedAdmit>
+    bool build(uintptr_t image,uintptr_t destroy,uintptr_t deletingDestroy,
+        Read read,Qualify qualify,Executable executable,OwnedAdmit ownedAdmit) noexcept {
+        if(source_ || !image || image>UINTPTR_MAX-0x75bb78 || !qualify(image) ||
+            !destroy || !deletingDestroy || destroy==deletingDestroy ||
+            !ownedAdmit(destroy,1) || !ownedAdmit(deletingDestroy,1)) return false;
+        std::array<uintptr_t,6> original{};
+        if(!read(image+0x75bb48,original.data(),sizeof(original)) || original[0]!=0 ||
+            original[1]!=image+0x75bb78) return false;
+        constexpr std::array<uintptr_t,4> offsets{0x1c8e80,0x1c8ea0,0x133cb0,0x1e6610};
+        for(size_t i=0;i<offsets.size();++i) {
+            if(original[i+2]!=image+offsets[i] || !executable(original[i+2],1) ||
+                destroy==original[i+2] || deletingDestroy==original[i+2]) return false;
+        }
+        entries_=original;entries_[2]=destroy;entries_[3]=deletingDestroy;
+        source_=image+0x75bb58;return true;
+    }
+    uintptr_t addressPoint() const noexcept {
+        return source_?reinterpret_cast<uintptr_t>(entries_.data()+2):0;
+    }
+    uintptr_t source() const noexcept {return source_;}
+    uintptr_t nativeDestroy() const noexcept {return source_?source_-0x75bb58+0x1c8e80:0;}
+    uintptr_t nativeDeletingDestroy() const noexcept {return source_?source_-0x75bb58+0x1c8ea0:0;}
+};
+
 struct TglNativeCreatorCallInvoker {
     int operator()(uintptr_t entry,void* creator) const noexcept {
         using Fn=int(*)(void*);return reinterpret_cast<Fn>(entry)(creator);

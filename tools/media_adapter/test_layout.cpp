@@ -14076,6 +14076,39 @@ int main() {
                 return (executableAllowed && address==image+0x1e6610 && size==1) || executable(address,size);
             };
             {
+                {
+                    TglOwnedVphalLifetimeTable lifetime;
+                    std::array<uintptr_t,6> original{0,image+0x75bb78,image+0x1c8e80,
+                        image+0x1c8ea0,image+0x133cb0,image+0x1e6610};
+                    auto readLifetime=[&](uintptr_t address,void* bytes,size_t size) noexcept {
+                        if(address!=image+0x75bb48 || size!=sizeof(original)) return false;
+                        std::memcpy(bytes,original.data(),size);return true;
+                    };
+                    auto execLifetime=[&](uintptr_t address,size_t size) noexcept {
+                        return size==1 && (address==image+0x1c8e80 || address==image+0x1c8ea0 ||
+                            address==image+0x133cb0 || address==image+0x1e6610);
+                    };
+                    auto ownedLifetime=[](uintptr_t address,size_t size) noexcept {
+                        return size==1 && (address==0xf000 || address==0xf100);
+                    };
+                    auto buildLifetime=[&](uintptr_t a,uintptr_t b) {
+                        return lifetime.build(image,a,b,readLifetime,qualify,execLifetime,ownedLifetime);
+                    };
+                    assert(!lifetime.addressPoint() && !buildLifetime(0,0xf100));
+                    assert(!buildLifetime(0xf000,0xf000));
+                    for(size_t i=0;i<original.size();++i) {
+                        original[i]^=1;assert(!buildLifetime(0xf000,0xf100));original[i]^=1;
+                    }
+                    assert(buildLifetime(0xf000,0xf100));
+                    const auto* slots=reinterpret_cast<const uintptr_t*>(lifetime.addressPoint());
+                    assert(slots[-2]==0 && slots[-1]==image+0x75bb78);
+                    assert(slots[0]==0xf000 && slots[1]==0xf100 &&
+                        slots[2]==original[4] && slots[3]==original[5]);
+                    assert(lifetime.nativeDestroy()==image+0x1c8e80 &&
+                        lifetime.nativeDeletingDestroy()==image+0x1c8ea0);
+                    const auto stable=lifetime.addressPoint();
+                    assert(!buildLifetime(0xf000,0xf100) && lifetime.addressPoint()==stable);
+                }
                 TglOwnedCreatorCallTable callTable;
                 auto callExecutable=[&](uintptr_t address,size_t size) noexcept {
                     return (address==image+0x133c0f && size==3) || creatorExecutable(address,size);
