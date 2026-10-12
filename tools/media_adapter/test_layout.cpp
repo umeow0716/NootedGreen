@@ -3399,8 +3399,41 @@ static void testLeasedGen12PlatformPolicy() {
             scenario==32?static_cast<void*>(&queries):static_cast<void*>(&sfcCalls),
             scenario==29?&target:&source,scenario==30?&source:&target,
             scenario==31?static_cast<void*>(child.data()):static_cast<void*>(parameters.data())};
-        const bool ok=scenario==9?tglSelectGen12VeboxOutputPipe(policy,comp,output):
-            tglSelectGen12VeboxOutputPipe(scoped,comp,output);
+        // Exercise the existing policy matrix THROUGH the selected admission
+        // stages, rather than only calling a selector in isolation. These
+        // downstream stage callbacks record CPU sequencing, not native GPU work.
+        TglVeboxAdmissionStagesInput admissionInput;
+        admissionInput.prefix={true,true,true,true,1,uint64_t{1}<<12,64,16};
+        admissionInput.params10c=0x1357;admissionInput.mmc=1;
+        std::array<uint8_t,0xd48> report{};
+        TglVeboxAdmissionPassByte pass(comp);
+        unsigned resets=0,historyStages=0,featureStages=0,sfcStages=0;
+        bool ok=false;
+        const bool admitted=tglRunSelectedVeboxAdmissionStages(admissionInput,report,pass,
+            [&]() noexcept {++resets;report.fill(0);return true;},
+            [&](uint8_t& flags) noexcept -> uint32_t {
+                assert(resets==1 && &flags==&comp);
+                ok=scenario==9?tglSelectGen12VeboxOutputPipe(policy,flags,output):
+                    tglSelectGen12VeboxOutputPipe(scoped,flags,output);
+                return ok?output:UINT32_MAX;
+            },
+            [&](auto& bytes) noexcept {
+                ++historyStages;uint32_t mode=99,priorParams=99;
+                std::memcpy(&mode,bytes.data()+0xa0c,4);
+                std::memcpy(&priorParams,bytes.data()+0xd28,4);
+                assert(mode==output && priorParams==0 && bytes[0xd2c]==1);
+            },
+            []() noexcept {return true;},
+            [&](auto&) noexcept {++featureStages;assert(historyStages==1);},
+            [&](auto&) noexcept {++sfcStages;assert(output==1 && featureStages==1);return true;});
+        assert(resets==1 && historyStages==unsigned(ok) && featureStages==unsigned(ok));
+        assert(sfcStages==unsigned(ok && output==1) && admitted==(ok && output!=0));
+        if(ok) {
+            uint32_t mode=99,publishedParams=0;
+            std::memcpy(&mode,report.data()+0xa0c,4);
+            std::memcpy(&publishedParams,report.data()+0xd28,4);
+            assert(mode==output && publishedParams==0x1357);
+        }
         if(scenario==0 || scenario==1 || scenario==2 || scenario==3 || scenario==10 || scenario==13 || scenario==17) {
             const uint32_t expected=scenario==0 || scenario==10 || scenario==17?2:scenario==1?1:0;
             assert(ok && output==expected && comp==(expected?0:1) && frame.healthy());
