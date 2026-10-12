@@ -6407,6 +6407,10 @@ public:
         // Exact TGL OS+218 (63d80) is also a constant-success no-op, not a
         // surface metadata query. Neither allocation nor that callback proves
         // pitch/plane offsets ready for the output-state consumer.
+        // Exact63720 type1 allocation maps formats0d/10/19/3d to yuv2/syuv/
+        // v420/8 respectively; only19 requests two planes. Other formats use
+        // single-plane L008, NOT their SFC state-format encoding. State support
+        // alone must never qualify an allocation as matching its pixel layout.
         const int status=allocate_(context_, params.data(), storage.data());
         // Caller-owned per-allocation output, never backend-global state shared
         // between resources. Failure preserves it, even if native changed params.
