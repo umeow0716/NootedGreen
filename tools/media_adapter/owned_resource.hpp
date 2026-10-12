@@ -19582,6 +19582,36 @@ public:
 // tear down first, so qualified child cleanup can still detach VP+80 and use
 // backing. Native parent/image/surface leases remain enclosing frame duties;
 // publication must be detached under retirement admission before destruction.
+// Exact native TGL renderer slot10 (1b17a0), called with a zeroed 0x68
+// setup packet by 1b1bc0. Query must be admitted to OS+d8 by the enclosing
+// native owner; this CPU producer grants no callback/image authority.
+struct TglNativeRendererCacheSettings {std::array<uint8_t,0x68> bytes{};};
+template<class Query>
+bool tglProduceNativeRendererCacheSettings(TglNativeRendererCacheSettings& output,
+    bool vebox,bool render,bool extended,Query query) {
+    TglNativeRendererCacheSettings candidate;
+    candidate.bytes[0]=vebox;candidate.bytes[1]=render;candidate.bytes[2]=extended;
+    auto put=[&](size_t offset,uint32_t policy){
+        uint32_t value=0;
+        if(!query(policy,value)) return false;
+        std::memcpy(candidate.bytes.data()+offset,&value,4);return true;
+    };
+    if(render){
+        candidate.bytes[0x38]=1;
+        for(size_t offset:{size_t{0x3c},size_t{0x40},size_t{0x44}})
+            if(!put(offset,0x70)) return false;
+    }
+    if(vebox){
+        candidate.bytes[4]=1;
+        for(size_t offset:{size_t{8},size_t{0xc},size_t{0x10},size_t{0x14},size_t{0x18},
+            size_t{0x1c},size_t{0x20},size_t{0x28},size_t{0x24},size_t{0x2c},size_t{0x30},size_t{0x34}})
+            if(!put(offset,0x71)) return false;
+    }
+    if(extended)
+        for(size_t offset:{size_t{0x4c},size_t{0x50},size_t{0x54},size_t{0x58},size_t{0x5c},size_t{0x60}})
+            if(!put(offset,0x71)) return false;
+    output=candidate;return true;
+}
 template<class Backing,class Read,class Qualify,class Executable>
 bool tglValidateRendererCreatorEnvironment(Backing& backing,const TglNativeVphalMhwView& view,
     Read read,Qualify qualify,Executable executable,TglVeboxHardwareBinding& hardware) noexcept {

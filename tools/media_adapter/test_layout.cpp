@@ -19213,6 +19213,25 @@ int main() {
             }
         } invoke;
         TglSfcLifetimeBinding lifetime{base,base+0x16bdd0,base+0x16bed0};
+        {
+            TglNativeRendererCacheSettings settings;
+            unsigned calls=0;
+            auto query=[&](uint32_t policy,uint32_t& value){
+                assert(policy==(calls<3?0x70u:0x71u));value=++calls;return true;
+            };
+            assert(tglProduceNativeRendererCacheSettings(settings,true,true,true,query) && calls==21);
+            auto word=[&](size_t offset){uint32_t value=0;
+                std::memcpy(&value,settings.bytes.data()+offset,4);return value;};
+            assert(settings.bytes[4]==1 && settings.bytes[0x38]==1);
+            assert(word(0x3c)==1 && word(0x44)==3 && word(8)==4);
+            assert(word(0x28)==11 && word(0x24)==12 && word(0x34)==15 && word(0x60)==21);
+            const auto saved=settings.bytes;
+            assert(!tglProduceNativeRendererCacheSettings(settings,true,true,true,
+                [](uint32_t,uint32_t&){return false;}) && settings.bytes==saved);
+            assert(tglProduceNativeRendererCacheSettings(settings,false,false,false,
+                [](uint32_t,uint32_t&){assert(false);return false;}));
+            assert(settings.bytes==TglNativeRendererCacheSettings{}.bytes);
+        }
         TglSfcMhwBinding mhw;
         mhw.image=base;
         std::array<uint32_t,2> flags{1,0};
