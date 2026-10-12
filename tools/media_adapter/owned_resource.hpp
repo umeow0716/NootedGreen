@@ -22611,6 +22611,37 @@ TglOwnedVeboxCommandTransactionResult tglWithOwnedVeboxFrameNativeRender(
     return result;
 }
 
+// Retained catalogue entry for the existing complete-hook/native-Render path.
+// Construction does not read an allocation selection: native Render's +58
+// allocation must publish it before preparation/build invokes live producers.
+// No allocation-tail view escapes into these preinstalled hook scopes.
+template<class LifetimeResolve,class AdmissionResolve,class AllocationResolve,
+    class ModeResolve,class FormatRead,class Api,class Owner,class ChildOwner,
+    class ExecutionOwner,class Read,class SurfaceAdmit,class DiAdmit,class Register,
+    class Control,class PacketAdmit,class ProduceCsc,
+    class Parameters=TglOwnedFfdnNoDenoiseBorrow,class Invoke=TglNativeVeboxStageInvoker>
+TglOwnedVeboxCommandTransactionResult tglWithRetainedVeboxFrameNativeRender(
+    TglNativeVeboxSurfaceFrameStorage<Api>& storage,Owner& sourceOwner,Owner& targetOwner,
+    Owner* secondaryOwner,Owner* previousOwner,ChildOwner& child,ExecutionOwner& execution,
+    TglOwnedVeboxPacketLeases leases,bool disableTemporalDenoise,bool alignDi64,
+    const std::array<uint32_t,11>& controls,uintptr_t dnParams,Read read,
+    SurfaceAdmit admitSurface,DiAdmit admitDi,Register registerResource,Control control,
+    PacketAdmit admitPackets,ProduceCsc produceCsc,const TglVeboxRenderBinding& binding,
+    void* argument1,TglOwnedVeboxFrameRetention& retention,
+    Parameters* parameters=nullptr,Invoke invoke={}) noexcept {
+    if(!leases.target || targetOwner.surfaceBinding()!=leases.target)
+        return TglOwnedVeboxCommandTransactionResult{};
+    return tglWithRetainedLiveVeboxPacketFrame(storage,sourceOwner,&targetOwner,
+        secondaryOwner,previousOwner,child,execution,leases,disableTemporalDenoise,
+        alignDi64,controls,read,admitSurface,admitDi,registerResource,control,retention,
+        [&](auto& frame) noexcept -> TglOwnedVeboxCommandTransactionResult {
+            return tglWithOwnedVeboxFrameNativeRender<LifetimeResolve,AdmissionResolve,
+                AllocationResolve,ModeResolve,FormatRead>(sourceOwner,leases.source,
+                targetOwner,*leases.target,frame,child,execution,dnParams,read,
+                admitPackets,produceCsc,binding,argument1,retention,invoke);
+        },parameters);
+}
+
 // Complete synchronous command entry under the caller's allocation/admission/
 // mode/lifecycle and retained-frame scopes. Native setup/build must receive the
 // SAME producer that owns the installed hooks, not the underlying packet-only
