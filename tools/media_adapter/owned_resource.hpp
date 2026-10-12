@@ -20458,8 +20458,13 @@ std::array<uintptr_t,20> tglBindOwnedVeboxModeReleaseHook(std::array<uintptr_t,2
 }
 
 // Complete owned callback catalogue, not a publication or a context lifetime.
-// Every resolver scope must cover the native Allocate/Render consumer. The VP
-// factory additionally requires withVpFactoryVtableDispatch's qualified scope;
+// Every resolver scope must cover the native Allocate/Render consumer.
+// In particular inherited118 -> E8 -> conditional F0(1284f0) invokes owned
+// 1d0 inside the SAME producer scope; F0 keeps native stack packets and F8/100
+// publication. Do not pre-call DNDI outside this scope or replace F0 with a
+// success stub. E8's optional1286a0 also borrows source+A0/A8 color metadata;
+// enclosing frame admission must retain their backing, not only source shell.
+// The VP factory additionally requires withVpFactoryVtableDispatch's qualified scope;
 // outside it the actual pointer-return callback rejects with NULL. Do not
 // replace missing producers with presence-only/status-zero table fillers.
 template<class LifetimeResolve,class AdmissionResolve,class AllocationResolve,
