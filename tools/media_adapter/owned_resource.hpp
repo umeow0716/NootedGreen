@@ -19713,6 +19713,13 @@ class TglNativeVeboxVpFrameBacking {
     const TglNativeBufferFillBinding fill_;
     TglNativeVeboxCommandFrameStorage<Api> command_;
     TglNativeVpBackingStorage<Invoker> vp_;
+    // Optional second native VP owner, destroyed before the shared command
+    // retention latch. Explicit invokers keep fixture allocators disjoint;
+    // native allocators still create separate allocations per VP.
+    TglNativeVpBackingStorage<Invoker>* secondVp_=nullptr;
+    TglNativeVpBackingStorage<Invoker>* selectVp(size_t index) noexcept {
+        return index==0?&vp_:index==1?secondVp_:nullptr;
+    }
 public:
     template<class Read,class Qualify,class Executable,class... Args>
     TglNativeVeboxVpFrameBacking(uintptr_t image,Read read,Qualify qualify,
@@ -19722,8 +19729,19 @@ public:
         :resources_(resources),pageSize_(pageSize),fill_(fill),
          command_(resources,pageSize,fill,std::forward<Args>(args)...),
          vp_(image,read,qualify,executable,command_.backing().auxiliary().retention(),invoke) {}
+    template<class Read,class Qualify,class Executable,class... Args>
+    TglNativeVeboxVpFrameBacking(uintptr_t image,Read read,Qualify qualify,
+        Executable executable,const TglNativeResourceBinding& resources,
+        uint64_t pageSize,const TglNativeBufferFillBinding& fill,std::array<Invoker,2> invokes,
+        Args&&... args)
+        :resources_(resources),pageSize_(pageSize),fill_(fill),
+         command_(resources,pageSize,fill,std::forward<Args>(args)...),
+         vp_(image,read,qualify,executable,command_.backing().auxiliary().retention(),invokes[0]),
+         secondVp_(new(std::nothrow) TglNativeVpBackingStorage<Invoker>(image,read,qualify,
+             executable,command_.backing().auxiliary().retention(),invokes[1])) {}
     TglNativeVeboxVpFrameBacking(const TglNativeVeboxVpFrameBacking&)=delete;
     TglNativeVeboxVpFrameBacking& operator=(const TglNativeVeboxVpFrameBacking&)=delete;
+    ~TglNativeVeboxVpFrameBacking() noexcept {delete secondVp_;}
     auto& command() noexcept {return command_;}
     bool matchesResourceEnvironment(const TglNativeVphalResourceEnvironment& environment) const noexcept {
         return resources_.context && resources_.allocate && resources_.release && pageSize_ && fill_.entry &&
@@ -19748,11 +19766,27 @@ public:
     template<class Binding,class Read>
     int initializeVp(const Binding& binding,uintptr_t os,uintptr_t renderHal,
         uintptr_t mhw,Read read,uint32_t channel,uintptr_t performance) {
-        if(!os || os!=resources_.context) return 5;
-        return vp_.initialize(binding,resources_,pageSize_,os,renderHal,mhw,read,channel,performance);
+        return initializeVp(0,binding,os,renderHal,mhw,read,channel,performance);
+    }
+    template<class Binding,class Read>
+    int initializeVp(size_t index,const Binding& binding,uintptr_t os,uintptr_t renderHal,
+        uintptr_t mhw,Read read,uint32_t channel,uintptr_t performance) {
+        auto* vp=selectVp(index);
+        if(!vp || !os || os!=resources_.context) return 5;
+        return vp->initialize(binding,resources_,pageSize_,os,renderHal,mhw,read,channel,performance);
     }
     bool vpBound() const noexcept {return vp_.bound();}
+    bool vpBound(size_t index) const noexcept {
+        return index==0?vp_.bound():index==1 && secondVp_ && secondVp_->bound();
+    }
+    template<class Use> int withVpResources(size_t index,Use use) noexcept {
+        auto* vp=selectVp(index);return vp?vp->withResources(use):5;
+    }
     template<class Use> int withVpResources(Use use) noexcept {return vp_.withResources(use);}
+    template<class Read,class Retire,class Use>
+    int withVpAssemblyView(size_t index,bool avsEnabled,Read& read,Retire& retire,Use use) noexcept {
+        auto* vp=selectVp(index);return vp?vp->withAssemblyView(avsEnabled,read,retire,use):5;
+    }
     template<class Read,class Retire,class Use>
     int withVpAssemblyView(bool avsEnabled,Read& read,Retire& retire,Use use) noexcept {
         return vp_.withAssemblyView(avsEnabled,read,retire,use);
@@ -19904,10 +19938,10 @@ class TglNativeVeboxRendererCpuStorage {
         return tglValidateRendererCreatorEnvironment(backing_,view,read,qualify,executable,hardware);
     }
 public:
-    template<class Read,class Qualify,class Executable,class... Args>
+    template<class Read,class Qualify,class Executable,class VpInvoke,class... Args>
     TglNativeVeboxRendererCpuStorage(uintptr_t image,Read read,Qualify qualify,
         Executable executable,const TglNativeResourceBinding& resources,uint64_t pageSize,
-        const TglNativeBufferFillBinding& fill,Cpu vpCpu,std::array<Cleanup,2> cleanup,
+        const TglNativeBufferFillBinding& fill,VpInvoke vpCpu,std::array<Cleanup,2> cleanup,
         std::array<Cpu,2> childCpu,std::array<Sfc,2> sfc,std::array<Destroy,2> destroy,
         Args&&... args)
         :backing_(image,read,qualify,executable,resources,pageSize,fill,vpCpu,
@@ -19924,16 +19958,21 @@ public:
     template<class Read,class Qualify,class Executable>
     int initializeVpFromCreator(const TglNativeVphalMhwView& view,
         Read read,Qualify qualify,Executable executable) {
+        return initializeVpFromCreator(0,view,read,qualify,executable);
+    }
+    template<class Read,class Qualify,class Executable>
+    int initializeVpFromCreator(size_t index,const TglNativeVphalMhwView& view,
+        Read read,Qualify qualify,Executable executable) {
         TglVeboxHardwareBinding hardware;
         TglSfcMhwBinding sfc;
         uintptr_t object=0;
-        if(backing_.retention()() || !creatorEnvironment(view,read,qualify,executable,hardware) ||
+        if(index>1 || backing_.retention()() || !creatorEnvironment(view,read,qualify,executable,hardware) ||
             !read(view.parent+0x60,&object,8) || !object || object==hardware.interface ||
             !sfc.resolve(view.renderer.image,read,qualify,executable) ||
             !sfc.validateConstructedObject(object,view.os,read)) return 5;
         // Donor1dd150 initializes VP918/9c8 to zero. Native TGL12c010
         // supplies dispatch values later; creator has no authenticated frame.
-        return backing_.initializeVp(sfc,view.os,view.renderHal,object,read,0,0);
+        return backing_.initializeVp(index,sfc,view.os,view.renderHal,object,read,0,0);
     }
     // Source-free creator handoff; enclosing owner holds physical/image and
     // exclusive VPHAL admission through initialization AND eventual teardown.

@@ -20179,6 +20179,53 @@ int main() {
                                 childStatus,resourceRead,qualifyMhw,executableMhw,neverConstruct)
                                 ==TglOwnedBaseConstruction::NotCalled && childStatus==77);
                             allowPageImport=true;
+                            {
+                                std::array<unsigned,16> vpEvents{};size_t vpEventCount=0;
+                                Cpu state0{{},vpEvents,vpEventCount},avs0{{},vpEvents,vpEventCount};
+                                Cpu state1{{},vpEvents,vpEventCount},avs1{{},vpEvents,vpEventCount};
+                                {
+                                    using PairedCpuStorage=TglNativeVeboxRendererCpuStorage<UnusedFrameApi,
+                                        decltype(sourceFreeCleanup),NativeCpu,TrackedSfc,decltype(sourceFreeDestroy)>;
+                                    PairedCpuStorage pairedStorage(
+                                        base,allocatorRead,qualifyMhw,executableMhw,environment.resources,
+                                        environment.pageSize,environment.fill,
+                                        std::array<NativeCpu,2>{NativeCpu{state0,&avs0},NativeCpu{state1,&avs1}},
+                                        std::array<decltype(sourceFreeCleanup),2>{sourceFreeCleanup,sourceFreeCleanup},
+                                        std::array<NativeCpu,2>{NativeCpu{pairCpu[0]},NativeCpu{pairCpu[1]}},
+                                        std::array<TrackedSfc,2>{TrackedSfc{pairInvoke,pairEvents,pairEventCount},
+                                            TrackedSfc{pairInvoke,pairEvents,pairEventCount}},
+                                        std::array<decltype(sourceFreeDestroy),2>{sourceFreeDestroy,sourceFreeDestroy});
+                                    auto& paired=pairedStorage.backing();
+                                    TglSfcMhwBinding nativeSfc;
+                                    assert(nativeSfc.resolve(base,parentSfcRead,qualifyMhw,executableMhw));
+                                    for(size_t index=0;index<2;++index) {
+                                        assert(!paired.vpBound(index));
+                                        if(index==1) {
+                                            avs1.fail=true;
+                                            assert(pairedStorage.initializeVpFromCreator(index,*creatorView,
+                                                parentSfcRead,qualifyMhw,executableMhw)==5);
+                                            assert(paired.vpBound(0) && !paired.vpBound(1) &&
+                                                state0.live && avs0.live && !state1.live && !avs1.live);
+                                            avs1.fail=false;
+                                        }
+                                        assert(pairedStorage.initializeVpFromCreator(index,*creatorView,
+                                            parentSfcRead,qualifyMhw,executableMhw)==0 && paired.vpBound(index));
+                                    }
+                                    assert(state0.live && state1.live && avs0.live && avs1.live);
+                                    assert(paired.withVpResources(0,[&](auto&,auto& first,auto&) noexcept {
+                                        return paired.withVpResources(1,[&](auto&,auto& second,auto&) noexcept -> int {
+                                            assert(first.bytes.data()!=second.bytes.data());return 0;
+                                        });
+                                    })==0);
+                                    assert(paired.initializeVp(1,nativeSfc,os,creatorView->renderHal,
+                                        parentSfcAddress,parentSfcRead,0,0)==5);
+                                    assert(!paired.vpBound(2) && paired.withVpResources(2,
+                                        [](auto&,auto&,auto&) noexcept -> int {assert(false);return 0;})==5);
+                                    assert(pairedStorage.initializeVpFromCreator(2,*creatorView,
+                                        parentSfcRead,qualifyMhw,executableMhw)==5);
+                                }
+                                assert(!state0.live && !state1.live && !avs0.live && !avs1.live);
+                            }
                             bool failSourceFreeConstructor=true;
                             unsigned sourceFreeConstructorCalls=0;
                             auto constructSourceFree=[&](uintptr_t entry,void* object,void* nativeOs,void* nativeMhw,void* nativeSfc,
