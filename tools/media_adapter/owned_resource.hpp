@@ -22977,6 +22977,38 @@ TglOwnedVeboxCommandTransactionResult tglWithAllocatedRetainedVeboxFrameNativeRe
         retention,parameters,invoke);
 }
 
+// Join an ALREADY constructed retained frontend live frame to its named +58
+// planner. Do not acquire another frontend frame or create another capture.
+template<class LifetimeResolve,class AdmissionResolve,class ModeResolve,class FormatRead,
+    class Frame,class Planner,class ChildOwner,class ExecutionOwner,class Read,
+    class PacketAdmit,class ProduceCsc,class Invoke=TglNativeVeboxStageInvoker>
+TglOwnedVeboxCommandTransactionResult tglRunAllocatedRetainedVeboxLiveRender(
+    Frame& frame,Planner& planner,ChildOwner& child,ExecutionOwner& execution,
+    uintptr_t dnParams,Read read,PacketAdmit admitPackets,ProduceCsc produceCsc,
+    const TglVeboxRenderBinding& binding,void* argument1,
+    TglOwnedVeboxFrameRetention& retention,Invoke invoke={}) noexcept {
+    auto& captured=frame.capture;
+    if(!frame.leases.target || !planner.target || &planner.storage!=&captured.storage ||
+        &planner.input!=&captured.sourceOwner || planner.target!=captured.targetOwner ||
+        planner.secondary!=captured.secondaryOwner || planner.previous!=captured.previousOwner ||
+        &planner.childOwner!=&child || &planner.executionOwner!=&execution ||
+        &captured.childOwner!=&child || &captured.executionOwner!=&execution ||
+        planner.child!=captured.child || reinterpret_cast<uintptr_t>(planner.child)!=frame.leases.child ||
+        planner.execution!=captured.execution || planner.execution!=frame.leases.execution ||
+        &planner.source!=&captured.source || &planner.source!=&frame.leases.source ||
+        planner.alignDi64!=captured.alignDi64) return {};
+    TglOwnedVeboxAllocationRenderRetention keep{retention,planner.storage.auxiliary().retention()};
+    if(keep()) return {};
+    using Allocation=TglOwnedVeboxRenderAllocationContext<ChildOwner,Planner>;
+    Allocation allocation(child,planner,planner.child,{},keep);
+    using Scope=TglOwnedVeboxScopedContext<Allocation>;
+    Scope scope(planner.child,allocation);
+    if(!scope.bound() || !allocation.owns(planner.child)) return {};
+    return tglWithOwnedVeboxFrameNativeRender<LifetimeResolve,AdmissionResolve,Scope,ModeResolve,FormatRead>(
+        planner.input,planner.source,*planner.target,*frame.leases.target,frame,child,execution,
+        dnParams,read,admitPackets,produceCsc,binding,argument1,retention,invoke);
+}
+
 // Complete synchronous command entry under the caller's allocation/admission/
 // mode/lifecycle and retained-frame scopes. Native setup/build must receive the
 // SAME producer that owns the installed hooks, not the underlying packet-only

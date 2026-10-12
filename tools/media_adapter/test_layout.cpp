@@ -8791,13 +8791,39 @@ static void testNativeResourceBoundary() {
                                                         allocationEntryRetention() && !fullRetention());
                                                     childOwner.renderHooks=savedAllocationHooks;
                                                     // Entry ownership is conservative, not a GPU completion.
-                                                    const auto wholeRender=tglWithRetainedVeboxFrameNativeRender<
-                                                        RetainedResolve,RetainedScope,RetainedScope,RetainedScope,RetainedFormatRead>(
-                                                        retained,heldInput,heldInput,static_cast<TglHeldOwnedSurfaceRole*>(nullptr),
-                                                        static_cast<TglHeldOwnedSurfaceRole*>(nullptr),childOwner,reportOwner,
-                                                        fullLeases,false,false,{},0,fullRead,liveSurfaceAdmission,admitResource,
-                                                        registerResource,resourceControl,rejectPackets,rejectCsc,entryBinding,nullptr,fullRetention,
-                                                        static_cast<TglOwnedFfdnNoDenoiseBorrow*>(nullptr),
+                                                    const auto wholeRender=tglWithRetainedLiveVeboxPacketFrame(
+                                                        retained,heldInput,&heldInput,static_cast<TglHeldOwnedSurfaceRole*>(nullptr),
+                                                        static_cast<TglHeldOwnedSurfaceRole*>(nullptr),childOwner,reportOwner,fullLeases,
+                                                        false,false,{},fullRead,liveSurfaceAdmission,admitResource,registerResource,resourceControl,
+                                                        fullRetention,[&](auto& live) noexcept -> TglOwnedVeboxCommandTransactionResult {
+                                                        auto supports=[](uint32_t) noexcept {return true;};
+                                                        auto rectangle=[](auto&&...) noexcept -> int {assert(false);return 5;};
+                                                        auto writable=[](uintptr_t,uint32_t) noexcept {assert(false);return false;};
+                                                        auto unwind=[](void*,uintptr_t,const auto&) noexcept {assert(false);};
+                                                        using Plan=TglOwnedVeboxAllocationFramePlanner<FrameStmmApi,TglHeldOwnedSurfaceRole,
+                                                            std::decay_t<decltype(childOwner)>,std::decay_t<decltype(reportOwner)>,
+                                                            decltype(fullRead),decltype(noSfc),decltype(noSfc),decltype(noParameter),
+                                                            decltype(supports),decltype(rectangle),decltype(writable),decltype(unwind)>;
+                                                        Plan plan{retained,heldInput,&heldInput,nullptr,nullptr,childOwner,reportOwner,
+                                                            actualChild,report,fullLeases.source,fullRead,noSfc,noSfc,noParameter,
+                                                            supports,rectangle,false,false,writable,unwind};
+                                                        using Context=TglOwnedVeboxRenderAllocationContext<std::decay_t<decltype(childOwner)>,Plan>;
+                                                        using Scope=TglOwnedVeboxScopedContext<Context>;
+                                                        const auto savedHooks=childOwner.renderHooks;
+                                                        childOwner.renderHooks=tglBindOwnedVeboxAllocationHook<Scope>(savedHooks);
+                                                        plan.execution=report+8;
+                                                        const auto wrongReport=tglRunAllocatedRetainedVeboxLiveRender<
+                                                            RetainedResolve,RetainedScope,RetainedScope,RetainedFormatRead>(
+                                                            live,plan,childOwner,reportOwner,0,fullRead,rejectPackets,rejectCsc,
+                                                            entryBinding,nullptr,fullRetention,
+                                                            [](uintptr_t,void*,void*,void*) noexcept -> int {assert(false);return 0;});
+                                                        assert(wrongReport.status==5 && !wrongReport.nativeEntered &&
+                                                            !fullRetention() && !recordedRenders);
+                                                        plan.execution=report;
+                                                        const auto render=tglRunAllocatedRetainedVeboxLiveRender<
+                                                            RetainedResolve,RetainedScope,RetainedScope,RetainedFormatRead>(
+                                                        live,plan,childOwner,reportOwner,0,fullRead,rejectPackets,rejectCsc,
+                                                        entryBinding,nullptr,fullRetention,
                                                         [&](uintptr_t entry,void* object,void* argument,void* pair) noexcept -> int {
                                                             ++recordedRenders;
                                                             assert(entry==entryBinding.entry && object==actualChild && !argument && pair);
@@ -8809,6 +8835,8 @@ static void testNativeResourceBoundary() {
                                                             if(status) return status;
                                                             return reinterpret_cast<Callback>(childOwner.renderHooks[6])(object,false,&diPacket);
                                                         });
+                                                        childOwner.renderHooks=savedHooks;return render;
+                                                    });
                                                     assert(wholeRender.status==0 && wholeRender.nativeEntered && recordedRenders==1 && fullRetention());
                                                     assert(!FullProducers::Resolve::get(actualChild));
                                                     const auto deniedPending=runFullPass();
