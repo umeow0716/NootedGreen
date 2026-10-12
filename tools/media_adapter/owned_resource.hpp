@@ -11649,13 +11649,14 @@ inline bool tglUpdateVeboxHistory(TglVeboxHistoryState& state,
 }
 // Caller holds surface/history owners throughout this synchronous CPU stage.
 // Native links must equal the provided owned shells; never follow opaque C0/C8.
-template<class Owner,size_t N>
+template<class Owner,class History>
 bool tglUpdateOwnedVeboxHistory(Owner& owner,void* child,
-    std::array<uint8_t,N>& history,const TglOwnedSurfaceStorage& source,
+    History& history,const TglOwnedSurfaceStorage& source,
     const TglOwnedSurfaceStorage* c0,const TglOwnedSurfaceStorage* c8,
     uint32_t pipe) noexcept {
-    static_assert(N>=11,"native history flags through +a");
-    if(!child || !owner.hasPrivateChildLease(reinterpret_cast<uintptr_t>(child))) return false;
+    static_assert(std::is_same_v<decltype(history.data()),uint8_t*>);
+    if(!history.data() || history.size()<11 || !child ||
+        !owner.hasPrivateChildLease(reinterpret_cast<uintptr_t>(child))) return false;
     auto* base=static_cast<uint8_t*>(child);
     uintptr_t linked=0,p0=0,p8=0;
     std::memcpy(&linked,base+0x90,8);
@@ -12054,17 +12055,19 @@ bool tglRunCapturedVeboxAdmissionStages(ChildOwner& childOwner,ExecutionOwner& e
 // Borrow original outer packets without copying opaque native state. Region
 // admission is supplied under the caller's packet lifetime lease; this view
 // neither retains memory nor authorizes a pointer on its own.
-template<size_t Extent,size_t WriteOffset=Extent>
-class TglBorrowedVeboxAdmissionPacketView {
+template<size_t Extent,size_t WriteOffset=Extent,size_t WriteBytes=1>
+class TglBorrowedVeboxByteView {
     uint8_t* bytes_=nullptr;
 public:
     template<class Readable,class Writable>
     bool bind(uintptr_t address,size_t size,Readable readable,Writable writable) noexcept {
         bytes_=nullptr;
+        static_assert(Extent>0);
+        static_assert(WriteOffset>=Extent || (WriteBytes>0 && WriteBytes<=Extent-WriteOffset));
         static_assert(noexcept(readable(address,Extent)) && noexcept(writable(address,size_t{1})));
         if(!address || size<Extent || address>UINTPTR_MAX-Extent || !readable(address,Extent)) return false;
         if constexpr(WriteOffset<Extent) {
-            if(!writable(address+WriteOffset,1)) return false;
+            if(!writable(address+WriteOffset,WriteBytes)) return false;
         }
         bytes_=reinterpret_cast<uint8_t*>(address);return true;
     }
@@ -12072,6 +12075,8 @@ public:
     size_t size() const noexcept {return bytes_?Extent:0;}
     uint8_t& operator[](size_t index) const noexcept {return bytes_[index];}
 };
+template<size_t Extent,size_t WriteOffset=Extent>
+using TglBorrowedVeboxAdmissionPacketView=TglBorrowedVeboxByteView<Extent,WriteOffset>;
 
 // Named installation-time policy type for the SAME already-leased native
 // report used by the frontend frame. Do not recursively acquire execution,

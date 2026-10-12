@@ -935,12 +935,26 @@ static void testTrackedCpuOwner() {
         std::memcpy(base.data()+0x90,&historyPointer,8);
         uint32_t count=1;std::memcpy(source.prefix.data()+0xb4,&count,4);
         const auto originalBase=base;const auto originalHistory=history;
+        TglBorrowedVeboxByteView<11,4,5> historyView;
+        auto readableHistory=[&](uintptr_t address,size_t size) noexcept {
+            return address==historyPointer && size==11;
+        };
+        auto writableHistory=[&](uintptr_t address,size_t size) noexcept {
+            return address==historyPointer+4 && size==5;
+        };
+        assert(!historyView.bind(historyPointer,10,readableHistory,writableHistory));
+        assert(!tglUpdateOwnedVeboxHistory(owner,base.data(),historyView,source,nullptr,nullptr,0));
+        assert(!historyView.bind(historyPointer,history.size(),readableHistory,
+            [](uintptr_t,size_t) noexcept {return false;}));
+        assert(base==originalBase && history==originalHistory);
+        assert(historyView.bind(historyPointer,history.size(),readableHistory,writableHistory));
+        assert(historyView.data()==history.data());
         assert(!tglUpdateOwnedVeboxHistory(owner,base.data(),history,source,nullptr,nullptr,0));
         assert(base==originalBase && history==originalHistory);
         owner.live=true;
         assert(!tglUpdateOwnedVeboxHistory(owner,base.data(),history,source,&linked,nullptr,0));
         assert(base==originalBase && history==originalHistory);
-        assert(tglUpdateOwnedVeboxHistory(owner,base.data(),history,source,nullptr,nullptr,0));
+        assert(tglUpdateOwnedVeboxHistory(owner,base.data(),historyView,source,nullptr,nullptr,0));
         uint32_t mode=0,field=0;std::memcpy(&mode,history.data()+4,4);
         std::memcpy(&field,base.data()+0x1b5c,4);
         assert(mode==1 && field==4 && history[15]==0xa5);
@@ -949,10 +963,10 @@ static void testTrackedCpuOwner() {
         assert(base==beforeBase && history==beforeHistory);
         uintptr_t p=reinterpret_cast<uintptr_t>(&linked);
         std::memcpy(source.prefix.data()+0xc0,&p,8);
-        assert(tglUpdateOwnedVeboxHistory(owner,base.data(),history,source,&linked,nullptr,0));
+        assert(tglUpdateOwnedVeboxHistory(owner,base.data(),historyView,source,&linked,nullptr,0));
         std::memcpy(&mode,history.data()+4,4);assert(mode==0);
         ++historyPointer;std::memcpy(base.data()+0x90,&historyPointer,8);
-        assert(!tglUpdateOwnedVeboxHistory(owner,base.data(),history,source,&linked,nullptr,0));
+        assert(!tglUpdateOwnedVeboxHistory(owner,base.data(),historyView,source,&linked,nullptr,0));
     }
     {
         TglVeboxHistoryState state;
