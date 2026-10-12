@@ -15710,6 +15710,57 @@ int main() {
                         });
                     })==31);
                     assert(native.live==3);
+                    // Exercise executable allocation callbacks, not image-offset fixtures.
+                    struct StateCpu {
+                        alignas(8) TglOwnedSfcStateParametersPacket bytes{};
+                        bool live=false;
+                        uintptr_t allocate(size_t size) noexcept {
+                            assert(!live && size==bytes.size());live=true;
+                            return reinterpret_cast<uintptr_t>(bytes.data());
+                        }
+                        void release(uintptr_t address) noexcept {
+                            assert(live && address==reinterpret_cast<uintptr_t>(bytes.data()));live=false;
+                        }
+                    } cpu;
+                    TglOwnedSfcStateParameters<StateCpu> state(cpu);
+                    assert(state.initializeVpPass(vp));
+                    TglOwnedSfcCommandParameters commands;
+                    TglOwnedSurfaceStorage output;
+                    output.resource[0x20]=1;
+                    std::array<uint8_t,0xb8> prefix{};
+                    const uint32_t input=1080,scaled=4096;
+                    prefix[0]=1;
+                    const uint32_t width=1920;
+                    for(size_t offset:{size_t(0x24),size_t(0x28),size_t(0x34),
+                        size_t(0x3c),size_t(0x40),size_t(0x50)})
+                        std::memcpy(prefix.data()+offset,&width,4);
+                    std::memcpy(prefix.data()+0x30,&input,4);
+                    std::memcpy(prefix.data()+0x4c,&scaled,4);
+                    unsigned queries=0;
+                    assert(storage.resources().withCommandResources(input,scaled,
+                        [&](const auto& a,const auto& b,const auto* sfd) noexcept -> int {
+                            assert(sfd && native.live==3);
+                            auto query=[&](auto&) noexcept {
+                                ++queries;
+                                assert(!storage.lines().tryReset() && !storage.sfd().tryReset());
+                                return 0;
+                            };
+                            assert(tglPrepareOwnedVpLeasedSurfaceState(commands,state,output,a,b,sfd,
+                                prefix,{},false,false,false,TglOwnedSfcCompressionMode::Disabled,query)==0);
+                            assert(!state.hasParametersLease());
+                            const std::array<uintptr_t,4> expected{
+                                reinterpret_cast<uintptr_t>(output.resource.data()),
+                                reinterpret_cast<uintptr_t>(a.resource.data()),
+                                reinterpret_cast<uintptr_t>(b.resource.data()),
+                                reinterpret_cast<uintptr_t>(sfd->data())};
+                            const std::array<size_t,4> offsets{0x90,0x98,0xa0,0xe0};
+                            for(size_t i=0;i<expected.size();++i) {
+                                uintptr_t actual=0;std::memcpy(&actual,commands.state.data()+offsets[i],8);
+                                assert(actual==expected[i]);
+                            }
+                            return -31;
+                        })==-31);
+                    assert(queries==1 && native.live==3);
                 } else assert(!native.live && native.releases==failure);
             }
             assert(!native.live && native.releases==(failure==99?3:failure));
