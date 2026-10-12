@@ -3637,6 +3637,33 @@ struct TglNativeVphalMhwView {
     }
 };
 
+// Borrowing transfers a real parent pin, never just a copied MHW address. The
+// enclosing owner must attest the exact VPHAL/OS/image-generation association;
+// a native context's removal status alone cannot supply that association.
+template<class ParentLease> class TglNativeBorrowedVphalMhwLease {
+    ParentLease parent_;
+    TglNativeVphalMhwView view_;
+public:
+    TglNativeBorrowedVphalMhwLease()=default;
+    TglNativeBorrowedVphalMhwLease(const TglNativeBorrowedVphalMhwLease&)=delete;
+    TglNativeBorrowedVphalMhwLease& operator=(const TglNativeBorrowedVphalMhwLease&)=delete;
+    template<class Read,class Admit,class Qualify,class Executable,class ParentAdmit>
+    bool acquire(ParentLease&& parent,uintptr_t image,uintptr_t vphal,uintptr_t creator,
+        Read read,Admit admit,Qualify qualify,Executable executable,ParentAdmit parentAdmit) noexcept {
+        static_assert(std::is_nothrow_move_assignable_v<ParentLease>);
+        if(parent_.get() || !parent.get()) return false;
+        TglNativeVphalMhwView candidate;
+        if(!candidate.resolve(image,vphal,creator,read,admit,qualify,executable) ||
+            !parentAdmit(*parent.get(),candidate)) return false;
+        parent_=std::move(parent);view_=candidate;return true;
+    }
+    const TglVeboxHardwareBinding* binding() const noexcept {
+        return parent_.get()?&view_.hardware:nullptr;
+    }
+    // Default destruction releases ONLY the parent pin. The original native
+    // VPHAL remains sole MHW owner; no heap cleanup/delete is performed here.
+};
+
 // Retained by the context registry, which must quarantine rather than destroy
 // an owner with a live allocation/lease. No destructor-side native deletion:
 // unproven GPU retirement must never become a free through stack unwinding.
@@ -18685,14 +18712,15 @@ public:
 // Parent/image leases and completion admission remain enclosing responsibilities.
 template<class Api,class SurfaceBackend,class DnBackend,class Cleanup,
     class Cpu=TglNativeTrackedCpuInvoker,class Sfc=TglNativeSfcLifetimeInvoker,
-    class Destroy=TglNativeVeboxDestructorInvoker,class MhwInvoke=TglNativeVeboxMhwAllocationInvoker>
+    class Destroy=TglNativeVeboxDestructorInvoker,class MhwInvoke=TglNativeVeboxMhwAllocationInvoker,
+    class MhwDependency=typename TglNativeVeboxMhwOwner<MhwInvoke>::DependencyLease>
 class TglNativeVeboxRendererFrameStorage {
     TglNativeVeboxVpFrameBacking<Api,Cpu> backing_;
     TglOwnedVeboxFrameSurfaceStorage<SurfaceBackend,DnBackend> surfaces_;
     // Declared BEFORE children: their native cleanup/destruction finishes
     // before this persistent MHW pin is dropped. External owner/OS/image
     // remain registry-owned through qualified frame retirement.
-    typename TglNativeVeboxMhwOwner<MhwInvoke>::DependencyLease mhwLease_;
+    MhwDependency mhwLease_;
     TglNativeVeboxChildPairStorage<Cleanup,Cpu,Sfc,Destroy> children_;
 public:
     template<class Read,class Qualify,class Executable,class... Args>
@@ -18724,6 +18752,12 @@ public:
         return mhwLease_.acquire(owner);
     }
     const TglVeboxHardwareBinding* retainedMhw() const noexcept {return mhwLease_.binding();}
+    template<class ParentLease,class... Args>
+    bool retainBorrowedMhw(ParentLease&& parent,Args&&... args) noexcept {
+        if(backing_.retention()() || children_.first().owner().constructedBase() ||
+            children_.second().owner().constructedBase()) return false;
+        return mhwLease_.acquire(std::forward<ParentLease>(parent),std::forward<Args>(args)...);
+    }
     template<class Read,class Qualify,class Construct=TglNativeVeboxConstructorInvoker>
     TglOwnedBaseConstruction initializeQualifiedChild(size_t index,
         const TglVeboxLifetimeBinding& binding,const TglSfcLifetimeBinding& lifetime,
@@ -18758,14 +18792,15 @@ public:
 template<class Api,class SourceOwner,class TargetOwner,class CfApi,class DnBackend,
     class Cleanup,class Cpu=TglNativeTrackedCpuInvoker,
     class Sfc=TglNativeSfcLifetimeInvoker,class Destroy=TglNativeVeboxDestructorInvoker,
-    class MhwInvoke=TglNativeVeboxMhwAllocationInvoker>
+    class MhwInvoke=TglNativeVeboxMhwAllocationInvoker,
+    class MhwDependency=typename TglNativeVeboxMhwOwner<MhwInvoke>::DependencyLease>
 class TglNativeVeboxFrontendRendererFrameStorage {
     TglNativeVeboxVpFrameBacking<Api,Cpu> backing_;
     TglOwnedFrontendSourceGraph<SourceOwner,CfApi> source_;
     TglOwnedType1BorrowedSurfaceLease<TargetOwner,CfApi> target_;
     TglTrackedCpuOwner<DnBackend> parameters_;
     // Original frontend surfaces and MHW must outlive child cleanup.
-    typename TglNativeVeboxMhwOwner<MhwInvoke>::DependencyLease mhwLease_;
+    MhwDependency mhwLease_;
     TglNativeVeboxChildPairStorage<Cleanup,Cpu,Sfc,Destroy> children_;
 public:
     template<class Resolve,class Read,class Qualify,class Executable,class... Args>
@@ -18798,6 +18833,12 @@ public:
         return mhwLease_.acquire(owner);
     }
     const TglVeboxHardwareBinding* retainedMhw() const noexcept {return mhwLease_.binding();}
+    template<class ParentLease,class... Args>
+    bool retainBorrowedMhw(ParentLease&& parent,Args&&... args) noexcept {
+        if(backing_.retention()() || children_.first().owner().constructedBase() ||
+            children_.second().owner().constructedBase()) return false;
+        return mhwLease_.acquire(std::forward<ParentLease>(parent),std::forward<Args>(args)...);
+    }
     template<class Read,class Qualify,class Construct=TglNativeVeboxConstructorInvoker>
     TglOwnedBaseConstruction initializeQualifiedChild(size_t index,
         const TglVeboxLifetimeBinding& binding,const TglSfcLifetimeBinding& lifetime,

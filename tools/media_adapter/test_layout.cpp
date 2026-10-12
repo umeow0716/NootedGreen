@@ -14115,6 +14115,41 @@ int main() {
                 put(r,0x2cc8,nativeOs+8);assert(!resolveBorrowed());put(r,0x2cc8,nativeOs);
                 put(r,0x2cc0,nativeRenderHal+8);assert(!resolveBorrowed());put(r,0x2cc0,nativeRenderHal);
                 assert(resolveBorrowed());
+                struct ParentOwner {
+                    uintptr_t value;unsigned& deaths;
+                    uintptr_t context() const noexcept {return value;}
+                    ~ParentOwner() noexcept {++deaths;}
+                };
+                unsigned parentDeaths=0;
+                TglOwnedContextOwnerRegistry<ParentOwner,1> parents;
+                assert(parents.adopt(image,0xb000,1,new ParentOwner{parent,parentDeaths}));
+                TglNativeRemovedContextBatch<1> removed;
+                removed.valid=true;removed.count=1;removed.contexts[0]=parent;
+                const auto originalMhw=mhw;
+                {
+                    TglNativeBorrowedVphalMhwLease<decltype(parents)::ContextLease> lease;
+                    auto pin=parents.pin(image,0xb000,1,parent);
+                    assert(pin.get() && !lease.binding());
+                    auto parentAdmit=[&](const ParentOwner& owner,const TglNativeVphalMhwView& candidate) noexcept {
+                        return owner.context()==candidate.parent && candidate.renderer.image==image &&
+                            candidate.os==nativeOs && candidate.hardware.interface==nativeMhw;
+                    };
+                    assert(!lease.acquire(std::move(pin),image,parent,creatorAddress,borrowedRead,
+                        borrowedAdmit,qualify,creatorExecutable,
+                        [](const auto&,const auto&) noexcept {return false;}));
+                    assert(pin.get() && !lease.binding());
+                    writeWord(mhw,0x20,0);
+                    assert(!lease.acquire(std::move(pin),image,parent,creatorAddress,borrowedRead,
+                        borrowedAdmit,qualify,creatorExecutable,parentAdmit));
+                    assert(pin.get() && !lease.binding());writeWord(mhw,0x20,0xa000);
+                    assert(lease.acquire(std::move(pin),image,parent,creatorAddress,borrowedRead,
+                        borrowedAdmit,qualify,creatorExecutable,parentAdmit));
+                    assert(!pin.get() && lease.binding()->interface==nativeMhw);
+                    assert(!lease.acquire(std::move(pin),image,parent,creatorAddress,borrowedRead,
+                        borrowedAdmit,qualify,creatorExecutable,parentAdmit));
+                    assert(parents.reconcileSuccessfulRemoval(image,0xb000,1,removed)==5 && !parentDeaths);
+                }
+                assert(mhw==originalMhw && parents.reconcileSuccessfulRemoval(image,0xb000,1,removed)==0 && parentDeaths==1);
                 assert(!borrowed.resolve(image,UINTPTR_MAX-7,creatorAddress,
                     borrowedRead,borrowedAdmit,qualify,creatorExecutable));
             }
