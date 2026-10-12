@@ -21150,6 +21150,23 @@ private:
                 return command;
             });
     }
+    template<class ChildOwner,class Source,class Target,class Parameters,class Packets,class Consume>
+    TglOwnedVeboxCommandTransactionResult withLeasedVpCommandResources(size_t childIndex,
+        ChildOwner& owner,void* child,Source& source,Target& target,Parameters& parameters,
+        Packets& packets,Consume consume) noexcept {
+        TglOwnedVeboxCommandTransactionResult result;
+        const int status=backing_.withVpResources(childIndex,[&](auto& graph,auto& storage,auto& lines) noexcept {
+            return owner.withLeasedBorrowedVpCpuView(child,storage.bytes.data(),
+                [&](void* parent,void* vp) noexcept {
+                    static_assert(noexcept(consume(owner,parent,vp,graph,lines,source,target,parameters,packets)) &&
+                        std::is_same_v<decltype(consume(owner,parent,vp,graph,lines,source,target,parameters,packets)),
+                            TglOwnedVeboxCommandTransactionResult>);
+                    result=consume(owner,parent,vp,graph,lines,source,target,parameters,packets);
+                    return result.status;
+                });
+        });
+        result.status=status;return result;
+    }
 public:
     // Runtime-facing frame entry: select an owned child, then keep its private
     // table/SFC owner leased through frontend borrowing and retention capture.
@@ -21215,19 +21232,18 @@ public:
         return withPrivateChildCommandFrame(childIndex,roles,sourceIndex,targetIndex,
             execution,renderHal,sku,
             [&](auto& owner,void* child,auto& source,auto& target,auto& parameters,auto& packets) noexcept {
-                TglOwnedVeboxCommandTransactionResult result;
-                const int status=backing_.withVpResources(childIndex,[&](auto& graph,auto& storage,auto& lines) noexcept {
-                    return owner.withLeasedBorrowedVpCpuView(child,storage.bytes.data(),
-                        [&](void* parent,void* vp) noexcept {
-                            static_assert(noexcept(consume(owner,parent,vp,graph,lines,source,target,parameters,packets)) &&
-                                std::is_same_v<decltype(consume(owner,parent,vp,graph,lines,source,target,parameters,packets)),
-                                    TglOwnedVeboxCommandTransactionResult>);
-                            result=consume(owner,parent,vp,graph,lines,source,target,parameters,packets);
-                            return result.status;
-                        });
-                });
-                result.status=status;
-                return result;
+                return withLeasedVpCommandResources(childIndex,owner,child,source,target,parameters,packets,consume);
+            });
+    }
+    template<class ExecutionOwner,class Read,class Consume>
+    TglOwnedVeboxCommandTransactionResult withNativeOwnedVpCommandFrame(size_t childIndex,
+        const TglNativeOuterSurfaceRoles& roles,size_t sourceIndex,size_t targetIndex,
+        ExecutionOwner& executionOwner,uintptr_t renderHal,uintptr_t sku,Read read,Consume consume) noexcept {
+        if(!backing_.vpBound(childIndex)) return {};
+        return withNativeOwnedChildCommandFrame(childIndex,roles,sourceIndex,targetIndex,
+            executionOwner,renderHal,sku,read,
+            [&](auto& owner,void* child,auto& source,auto& target,auto& parameters,auto& packets) noexcept {
+                return withLeasedVpCommandResources(childIndex,owner,child,source,target,parameters,packets,consume);
             });
     }
     // Explicit-owner composition entry, not native report construction.

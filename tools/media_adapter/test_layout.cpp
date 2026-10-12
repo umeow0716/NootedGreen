@@ -21869,11 +21869,16 @@ int main() {
                                     std::memcpy(output,&report,8);return true;
                                 };
                                 unsigned uses=0;
-                                const auto nativeFrame=frame.withNativeOwnedChildCommandFrame(0,roles,0,0,
+                                const auto nativeFrame=frame.withNativeOwnedVpCommandFrame(0,roles,0,0,
                                     nativeBorrow,0x2200,0x3300,reportRead,
-                                    [&](auto& childOwner,void* child,auto& originalSource,auto& originalTarget,
+                                    [&](auto& childOwner,void* child,void* vp,auto& graph,auto&,
+                                        auto& originalSource,auto& originalTarget,
                                         auto&,auto& packets) noexcept {
                                         ++uses;
+                                        assert(graph.ownsStorage(vp));
+                                        uintptr_t originalVp=0;
+                                        std::memcpy(&originalVp,static_cast<uint8_t*>(child)+0x80,8);
+                                        assert(originalVp==reinterpret_cast<uintptr_t>(vp));
                                         assert(child==pairCpu[0].bytes.data() && packets.execution==report &&
                                             nativeBorrow.hasExecutionLease(report) &&
                                             childOwner.hasPrivateChildLease(reinterpret_cast<uintptr_t>(child)) &&
