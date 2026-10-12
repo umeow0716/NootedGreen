@@ -18183,6 +18183,24 @@ int tglPrepareOwnedContextRemoval(Table& table,Children& children,
     return table.detach(read,write,tableAdmit)?0:5;
 }
 
+// Source-free renderer owner cleanup. Backing contains native OS callbacks:
+// it MUST die after owned children but BEFORE the saved native VPHAL destructor
+// frees RenderHal/MHW/OS. The enclosing owner retains physical/image leases.
+// Admission is the caller's actual quiescence/retirement proof, never a status
+// returned by frame submission. Failure preserves storage for quarantine.
+template<class Storage,class Read,class Write,class TableAdmit,class ChildAdmit>
+int tglPrepareOwnedVphalStorageRemoval(TglOwnedVphalLifetimeTable& table,Storage*& storage,
+    void* renderer,uint64_t generation,Read read,Write write,
+    TableAdmit tableAdmit,ChildAdmit childAdmit) noexcept {
+    static_assert(std::is_nothrow_destructible_v<Storage>);
+    if(!storage) return 5;
+    const int status=tglPrepareOwnedContextRemoval(table,storage->children(),renderer,generation,
+        read,write,tableAdmit,childAdmit);
+    if(status) return status;
+    delete storage;storage=nullptr;
+    return 0;
+}
+
 // Single composition used by a registry-resolved VPHAL destructor callback.
 // Caller holds an exclusive owner lease (not the registry mutation lock), and
 // supplies the concrete frame/fence retirement admission to both detach gates.

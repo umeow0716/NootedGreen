@@ -14366,17 +14366,27 @@ int main() {
                         bool detach(void*,uint64_t,int) noexcept {detached=true;return true;}
                         bool destroyDetached(void*,uint64_t) noexcept {assert(detached);destroyed=true;return true;}
                     } children;
+                    bool backingReleased=false;
+                    struct RendererStorage {
+                        VphalChildren& pair;bool& released;
+                        auto& children() noexcept {return pair;}
+                        ~RendererStorage() noexcept {
+                            assert(pair.detached && pair.destroyed);released=true;
+                        }
+                    };
+                    auto* rendererStorage=new RendererStorage{children,backingReleased};
                     auto orderedWrite=[&](uintptr_t address,uintptr_t value) noexcept {
                         assert(children.detached && children.destroyed);return writeObject(address,value);
                     };
-                    auto remove=[&]() noexcept {return tglPrepareOwnedContextRemoval(lifetime,children,
+                    auto remove=[&]() noexcept {return tglPrepareOwnedVphalStorageRemoval(lifetime,rendererStorage,
                         reinterpret_cast<void*>(0x30000),7,readObject,orderedWrite,admitObject,0);};
-                    assert(remove()==5 && !children.detached && writes==1);
+                    assert(remove()==5 && !children.detached && writes==1 && rendererStorage && !backingReleased);
                     TglOwnedVphalDestructionState destruction;
                     unsigned nativeDestructors=0;
                     auto invokeDestructor=[&](uintptr_t entry,uintptr_t object) noexcept {
                         assert(entry==lifetime.nativeDeletingDestroy() && object==creatorAddress);
                         assert(children.destroyed && vptr==lifetime.source() && writes==2);
+                        assert(backingReleased && !rendererStorage); // native OS still alive during backing release
                         assert(destruction.phase()==TglOwnedVphalDestructionState::Phase::Invoking);
                         ++nativeDestructors;
                         assert(!destruction.request(lifetime,object,TglOwnedVphalDestructionState::Kind::Destroy,
@@ -14400,6 +14410,7 @@ int main() {
                     },remove,invokeDestructor));
                     assert(nativeDestructors==1 && !destruction.requiresRetention() &&
                         destruction.phase()==TglOwnedVphalDestructionState::Phase::Complete);
+                    assert(remove()==5); // cannot delete backing twice or authorize another native call
                     assert(!destruction.recover(lifetime,[](uintptr_t) noexcept {return true;},remove,invokeDestructor));
                     assert(writes==2 && vptr==lifetime.source());
                     assert(!lifetime.requiresRetention() && !lifetime.canDetach(readObject,admitObject));
