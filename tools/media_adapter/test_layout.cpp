@@ -8412,6 +8412,22 @@ static void testNativeResourceBoundary() {
                                                     },static_cast<TglOwnedFfdnNoDenoiseBorrow*>(nullptr),
                                                     {&current,nullptr,nullptr,nullptr})==-76);
                                                 assert(borrowFixture.allocations==graphAllocations && borrowFixture.fills==1);
+                                                {
+                                                    const auto savedReport=reportBackend.bytes;
+                                                    reportBackend.bytes[8]=0;reportBackend.bytes[0xb]=0;
+                                                    reportBackend.bytes[0x12]=0;reportBackend.bytes[0x13]=0;
+                                                    std::memset(reportBackend.bytes.data()+0x60,0,16);
+                                                    assert(tglRunRetainedDiIecpFrameInput(retained,linkedInput,
+                                                        static_cast<decltype(&linkedInput)>(nullptr),static_cast<decltype(&linkedInput)>(nullptr),
+                                                        static_cast<decltype(&linkedInput)>(nullptr),childOwner,reportOwner,actualChild,report,
+                                                        current,2,TglOwnedFfdiAllocationKind::NativeBacking,true,false,read,false,{},
+                                                        [&](const TglDiIecpInputs& live) noexcept -> int {
+                                                            assert(live.current==&current && !live.dnNeeded && !live.referenceValid);
+                                                            assert(live.ffdi[0] && live.ffdi[1] && live.ffdn[0] && live.statistics);
+                                                            assert(retained.ffdiBacked()[0]->hasSurfaceLease(*live.ffdi[0]));return -79;
+                                                        })==-79);
+                                                    reportBackend.bytes=savedReport;
+                                                }
                                                 assert(retained.withPreparedSurfaceViews(linkedInput,
                                                     static_cast<decltype(&linkedInput)>(nullptr),static_cast<decltype(&linkedInput)>(nullptr),
                                                     static_cast<decltype(&linkedInput)>(nullptr),0,TglOwnedFfdiAllocationKind::NativeBacking,

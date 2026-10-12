@@ -19142,6 +19142,32 @@ int tglRunCapturedDiIecpFrameInput(SourceOwner& sourceOwner,ChildOwner& childOwn
         });
 }
 
+// Reenter retained allocation owners at producer time, then read current
+// prepared execution state. Allocation count/kind/resource choices must be
+// supplied from allocation, never reconstructed from modified report flags.
+template<class Api,class Owner,class ChildOwner,class ExecutionOwner,class Read,class Consume,
+    class Parameters=TglOwnedFfdnNoDenoiseBorrow>
+int tglRunRetainedDiIecpFrameInput(TglNativeVeboxSurfaceFrameStorage<Api>& storage,
+    Owner& sourceOwner,Owner* targetOwner,Owner* secondaryOwner,Owner* previousOwner,
+    ChildOwner& childOwner,ExecutionOwner& executionOwner,void* child,uintptr_t execution,
+    const TglOwnedSurfaceStorage& source,size_t count,TglOwnedFfdiAllocationKind kind,
+    bool allocatedFfdn,bool allocatedStmm,Read read,bool alignDi64,
+    const std::array<uint32_t,11>& controls,Consume consume,Parameters* parameters=nullptr) noexcept {
+    return tglRunCapturedVeboxAllocation(sourceOwner,childOwner,executionOwner,child,execution,source,
+        [&](void* active,uintptr_t report,const auto& current) noexcept -> int {
+            bool di=false;TglOwnedStateInputs state;
+            if(!tglReadOwnedBuilderDiArgument(di,reinterpret_cast<uintptr_t>(active),report,read) ||
+               !tglReadOwnedStateExecution(state,report,di,read) ||
+               (state.dn && !allocatedFfdn) || ((state.dn || di) && !allocatedStmm)) return 5;
+            return storage.withPreparedSurfaceViews(sourceOwner,targetOwner,secondaryOwner,previousOwner,
+                count,kind,allocatedFfdn,state.referenceValid,allocatedStmm,
+                [&](const auto& ffdi,const auto& ffdn,const auto& stmm,const auto& statistics) noexcept -> int {
+                    return tglRunCapturedDiIecpFrameInput(sourceOwner,childOwner,executionOwner,active,report,
+                        current,ffdi,ffdn,stmm,statistics,read,alignDi64,controls,consume);
+                },parameters,{&current,nullptr,nullptr,nullptr});
+        });
+}
+
 // Named borrowed reader: hook installation and runtime resolution must use
 // the same capture type. No report is read until the producer invokes it.
 template<class SourceOwner,class ChildOwner,class ExecutionOwner,class Read>
