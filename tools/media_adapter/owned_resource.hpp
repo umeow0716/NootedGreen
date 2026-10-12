@@ -13359,6 +13359,35 @@ public:
     int withLeasedPreparedCallbackPass(const TglOwnedVpFramePreparation& frame,
         uintptr_t conditionalSource,uintptr_t settings,uintptr_t target,uintptr_t sourceA8,
         void* source,void* renderData,State state,Avs avs,Ief ief,Emit emit,Invoke invoke) noexcept {
+        return withLeasedPreparedContexts(frame,conditionalSource,settings,target,sourceA8,
+            source,renderData,state,avs,ief,emit,[&](auto& producer,auto& context) noexcept -> int {
+                using ProducerContext=std::remove_reference_t<decltype(producer)>;
+                using Context=std::remove_reference_t<decltype(context)>;
+                void* child=producer.child;
+                TglOwnedVpSfcScopedContext<ProducerContext> producerScope(child,producer);
+                if(!producerScope.bound()) return 5;
+                TglOwnedVpEntrySet producerEntries;
+                if(!tglBindOwnedVpProducerEntries<TglOwnedVpSfcResolve<ProducerContext>>(
+                    child,producerEntries)) return 5;
+                TglOwnedVpSfcScopedContext<Context> scope(child,context);
+                if(!scope.bound()) return 5;
+                TglOwnedVpEntrySet entries;
+                if(!tglBindOwnedVpSetupSendEntries<TglOwnedVpSfcResolve<Context>>(child,entries)) return 5;
+                if constexpr(std::is_nothrow_invocable_r_v<int,Invoke,void*,decltype(entries.setup),
+                    decltype(entries.send),const TglOwnedVpEntrySet&>)
+                    return invoke(child,entries.setup,entries.send,producerEntries);
+                else {
+                    static_assert(noexcept(invoke(child,entries.setup,entries.send)),"VP callback invocation ABI");
+                    return invoke(child,entries.setup,entries.send);
+                }
+            });
+    }
+    // Borrow real graph-backed producers without binding single-object TLS slots.
+    // A caller may hold two such contexts and bind them through explicit Pair.
+    template<class State,class Avs,class Ief,class Emit,class Use>
+    int withLeasedPreparedContexts(const TglOwnedVpFramePreparation& frame,
+        uintptr_t conditionalSource,uintptr_t settings,uintptr_t target,uintptr_t sourceA8,
+        void* source,void* renderData,State state,Avs avs,Ief ief,Emit emit,Use use) noexcept {
         static_assert(noexcept(state(nullptr,frame,state_)) && noexcept(avs(nullptr,frame,avs_)) &&
             noexcept(ief(nullptr,frame)) && noexcept(emit(nullptr,nullptr,nullptr)),"leased producer ABI");
         if(!ready_ || !busy_ || state_.hasParametersLease() || avs_.hasParametersLease() ||
@@ -13371,22 +13400,17 @@ public:
                         decltype(produceState),decltype(produceFilters)>;
                     ProducerContext producer{child,renderData,source,reinterpret_cast<void*>(target),
                         produceState,produceFilters};
-                    using ProducerResolve=TglOwnedVpSfcResolve<ProducerContext>;
-                    TglOwnedVpSfcScopedContext<ProducerContext> producerScope(child,producer);
-                    if(!producerScope.bound()) return 5;
-                    TglOwnedVpEntrySet producerEntries;
-                    if(!tglBindOwnedVpProducerEntries<ProducerResolve>(child,producerEntries)) return 5;
                 auto produce=[&]() noexcept -> int {
                     if(producer.active) return 5;
                     Guard productionGuard(producer.active);
                     const int result=tglSetupOwnedVpSfcStages(frame,
-                        [&]() noexcept {return producerEntries.state(child,renderData,source,
+                        [&]() noexcept {return producer.state(renderData,source,
                             reinterpret_cast<void*>(target));},
                         [&]() noexcept {return avs(child,frame,avs_);},
                         [&]() noexcept {
                             const int filterResult=state_.withVpParameterPublication(storage_,[&](const uint8_t* packet) noexcept {
                                 producer.leasedState=packet;
-                                producerEntries.filters(child,renderData,const_cast<uint8_t*>(packet),source);
+                                producer.filters(const_cast<uint8_t*>(packet),source);
                                 producer.leasedState=nullptr;
                                 return producer.error;
                             });
@@ -13407,20 +13431,8 @@ public:
                 };
                 using Context=TglOwnedVpPreparedSetupContext<decltype(produce),decltype(consume)>;
                 Context context{child,source,reinterpret_cast<void*>(target),renderData,produce,consume};
-                using SetupResolve=TglOwnedVpSfcResolve<Context>;
-                TglOwnedVpSfcScopedContext<Context> scope(child,context);
-                if(!scope.bound()) return 5;
-                TglOwnedVpEntrySet entries;
-                if(!tglBindOwnedVpSetupSendEntries<SetupResolve>(child,entries)) return 5;
-                const int result=[&]() noexcept {
-                    if constexpr(std::is_nothrow_invocable_r_v<int,Invoke,void*,decltype(entries.setup),
-                        decltype(entries.send),const TglOwnedVpEntrySet&>)
-                        return invoke(child,entries.setup,entries.send,producerEntries);
-                    else {
-                        static_assert(noexcept(invoke(child,entries.setup,entries.send)),"VP callback invocation ABI");
-                        return invoke(child,entries.setup,entries.send);
-                    }
-                }();
+                static_assert(noexcept(use(producer,context)),"prepared context consumer ABI");
+                const int result=use(producer,context);
                 if(result) return result;
                 if(context.error) return context.error;
                 return context.setupSeen && context.sendSeen ? 0 : 5;
