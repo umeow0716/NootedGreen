@@ -19595,9 +19595,11 @@ public:
     // exclusive VPHAL admission through initialization AND eventual teardown.
     // Revalidate current native links and exact backing snapshot, never use a
     // separately supplied OS/RenderHal or require completed codec context12e0.
-    // VP initialization additionally needs the child-owned SFC object, NOT
-    // hardware.interface (VEBOX aggregate). Keep that separate until its
-    // borrow lifetime is joined through VP cleanup and child SFC teardown.
+    // VP provenance is not established by its current SFC binding type.
+    // Exact ICL wrapper1fc720 passes adjusted-parent fields10/18/68 through
+    // factory1fc790 and ctor1fcaa0 to base1dd150. Resolve the field68 producer
+    // and borrowing lifetime before joining VP; do not substitute an aggregate
+    // or assume a child-owned SFC solely because the C++ validator accepts it.
     template<class Read,class Qualify,class Executable,class Construct=TglNativeVeboxConstructorInvoker>
     TglOwnedBaseConstruction initializeChildFromCreator(size_t index,const TglNativeVphalMhwView& view,
         const TglVeboxLifetimeBinding& binding,const TglSfcLifetimeBinding& lifetime,
