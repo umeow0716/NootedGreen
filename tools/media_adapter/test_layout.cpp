@@ -19826,6 +19826,7 @@ int main() {
                             TestFrontendOriginalOwner,TestFrontendOriginalOwner,Cf,FrameDnBackend,
                             decltype(frontendCleanup),NativeCpu,TrackedSfc,decltype(pairDestroy),FrameMhwInvoke,
                             TglNativeBorrowedVphalMhwLease<decltype(parents)::ContextLease>>;
+                        alignas(8) std::array<uint8_t,0x48> frontendParentSfc{};
                         TglOwnedVeboxRetainedFrames<FrontendAssembly,1> frames;
                         using BorrowedMhw=TglNativeBorrowedVphalMhwLease<decltype(parents)::ContextLease>;
                         BorrowedMhw preparedMhw;
@@ -19836,6 +19837,7 @@ int main() {
                                 return owner.context()==view.parent && view.os==os && view.hardware.interface==0x6000;
                             }));
                         assert(!preparedParent.get() && preparedMhw.binding() && removeParent()==5);
+                        const auto frontendCreatorView=*preparedMhw.view();
                         unsigned pinnedReleases=0;
                         auto assertReleasePin=[&]() noexcept {
                             ++pinnedReleases;
@@ -20059,21 +20061,60 @@ int main() {
                             assert(frame.surfacesReady() && frame.initializeScalarParametersFromNativeRequest(
                                 reinterpret_cast<uintptr_t>(nativeDn.data()),nativeDn.size(),false,dnRead));
                             assert(!frame.initializeScalarParameters(dnRequest));
-                            auto constructFrontend=[&](uintptr_t entry,void* object,void* nativeOs,void* nativeMhw,void*,
+                            const auto frontendSfc=reinterpret_cast<uintptr_t>(frontendParentSfc.data());
+                            putNative(frontendParentSfc,0,base+0x759420);
+                            putNative(frontendParentSfc,8,base+0x3eae0);
+                            putNative(frontendParentSfc,0x10,os);
+                            const uint16_t alignWidth=16,alignHeight=4;
+                            std::memcpy(frontendParentSfc.data()+0x18,&alignWidth,2);
+                            std::memcpy(frontendParentSfc.data()+0x1a,&alignHeight,2);
+                            frontendParentSfc[0x40]=1;
+                            putNative(nativeCreator,0x60,frontendSfc);
+                            auto frontendRead=[&](uintptr_t address,void* output,size_t bytes) noexcept {
+                                if(address==frontendSfc && bytes==0x41){
+                                    std::memcpy(output,frontendParentSfc.data(),bytes);return true;
+                                }
+                                if(address==base+0x759410 && bytes==16){
+                                    const std::array<uintptr_t,2> metadata{0,base+0x759490};
+                                    std::memcpy(output,metadata.data(),bytes);return true;
+                                }
+                                if(address==base+0x759420 && bytes==88){
+                                    const std::array<uintptr_t,11> offsets{0x16bed0,0x16bef0,0x1681e0,0x168390,
+                                        0x16a580,0x16a770,0x16a8a0,0x16b190,0x16b390,0x16b590,0xfe6c0};
+                                    std::array<uintptr_t,11> entries{};
+                                    for(size_t i=0;i<entries.size();++i) entries[i]=base+offsets[i];
+                                    std::memcpy(output,entries.data(),bytes);return true;
+                                }
+                                return resourceRead(address,output,bytes);
+                            };
+                            auto constructFrontend=[&](uintptr_t entry,void* object,void* nativeOs,void* nativeMhw,void* nativeSfc,
                                 void*,void*,void*,const void*,int32_t* out) noexcept {
                                 assert(entry==base+0x12d4e0 && nativeOs==reinterpret_cast<void*>(os));
                                 assert(nativeMhw==reinterpret_cast<void*>(0x6000));
+                                assert(nativeSfc==frontendParentSfc.data());
                                 const auto table=base+0x757c98;
                                 const uintptr_t noConfiguration=0;
                                 std::memcpy(object,&table,8);
                                 std::memcpy(static_cast<uint8_t*>(object)+8,&noConfiguration,8);
-                                std::memcpy(static_cast<uint8_t*>(object)+0x10,&os,8);*out=0;
+                                std::memcpy(static_cast<uint8_t*>(object)+0x10,&os,8);
+                                std::memcpy(static_cast<uint8_t*>(object)+0x68,&frontendSfc,8);*out=0;
                             };
                             int32_t status=77;
+                            auto staleCreator=frontendCreatorView;staleCreator.os+=8;
+                            assert(frame.initializeChildFromCreator(0,staleCreator,baseBinding,lifetime,
+                                nullptr,nullptr,nullptr,status,frontendRead,qualifyMhw,executableMhw,
+                                constructFrontend)==TglOwnedBaseConstruction::NotCalled && status==77);
+                            putNative(nativeCreator,0x60,0);
+                            assert(frame.initializeChildFromCreator(0,frontendCreatorView,baseBinding,lifetime,
+                                nullptr,nullptr,nullptr,status,frontendRead,qualifyMhw,executableMhw,
+                                constructFrontend)==TglOwnedBaseConstruction::NotCalled && status==77);
+                            putNative(nativeCreator,0x60,frontendSfc);
+                            const auto frontendSfcConstructs=pairInvoke.constructs;
                             for(size_t child=0;child<2;++child)
-                                assert(frame.initializeQualifiedChild(child,baseBinding,lifetime,mhw,reinterpret_cast<void*>(os),
-                                    reinterpret_cast<void*>(0x3000),nullptr,nullptr,nullptr,status,frameMhwRead,qualifyMhw,constructFrontend)
+                                assert(frame.initializeChildFromCreator(child,frontendCreatorView,baseBinding,lifetime,
+                                    nullptr,nullptr,nullptr,status,frontendRead,qualifyMhw,executableMhw,constructFrontend)
                                     ==TglOwnedBaseConstruction::ConstructedSuccess);
+                            assert(pairInvoke.constructs==frontendSfcConstructs);
                             TglNativeOuterSurfaceRoles roles;roles.sourceCount=1;roles.targetCount=1;
                             roles.sources[0]=reinterpret_cast<uintptr_t>(&source);roles.targets[0]=reinterpret_cast<uintptr_t>(&target);
                             const auto noVp=frame.withPrivateVpCommandFrame(0,roles,0,0,

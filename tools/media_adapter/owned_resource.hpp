@@ -19796,6 +19796,7 @@ template<class Api,class SourceOwner,class TargetOwner,class CfApi,class DnBacke
     class MhwInvoke=TglNativeVeboxMhwAllocationInvoker,
     class MhwDependency=typename TglNativeVeboxMhwOwner<MhwInvoke>::DependencyLease>
 class TglNativeVeboxFrontendRendererFrameStorage {
+    std::atomic_flag sharedSfcGate_=ATOMIC_FLAG_INIT;
     // Retain parent/OS through ALL backing, frontend and child destruction.
     MhwDependency mhwLease_;
     TglNativeVeboxVpFrameBacking<Api,Cpu> backing_;
@@ -19872,6 +19873,27 @@ public:
         auto& child=index?children_.second():children_.first();
         return child.initializeQualified(binding,lifetime,sfc,os,*mhw,renderHal,history,
             performance,cache,status,read,qualify,construct);
+    }
+    template<class Read,class Qualify,class Executable,class Construct=TglNativeVeboxConstructorInvoker>
+    TglOwnedBaseConstruction initializeChildFromCreator(size_t index,const TglNativeVphalMhwView& view,
+        const TglVeboxLifetimeBinding& binding,const TglSfcLifetimeBinding& lifetime,
+        void* history,void* performance,const void* cache,int32_t& status,
+        Read read,Qualify qualify,Executable executable,Construct construct={}) {
+        const auto* retained=mhwLease_.binding();
+        TglVeboxHardwareBinding hardware;
+        TglSfcMhwBinding sfc;
+        uintptr_t object=0;
+        if(index>1 || !retained || retained->interface!=view.hardware.interface ||
+            backing_.retention()() ||
+            !tglValidateRendererCreatorEnvironment(backing_,view,read,qualify,executable,hardware) ||
+            !read(view.parent+0x60,&object,8) || !object || object==hardware.interface ||
+            !sfc.resolve(view.renderer.image,read,qualify,executable) ||
+            !sfc.validateConstructedObject(object,view.os,read))
+            return TglOwnedBaseConstruction::NotCalled;
+        auto& child=index?children_.second():children_.first();
+        return child.initializeQualified(binding,lifetime,sfc,reinterpret_cast<void*>(view.os),hardware,
+            reinterpret_cast<void*>(view.renderHal),history,performance,cache,status,read,qualify,
+            construct,object,&sharedSfcGate_);
     }
     // Scalar-only request (no nested request38 payload). Publish through the
     // existing native-release slot only after this exact tracked allocation
