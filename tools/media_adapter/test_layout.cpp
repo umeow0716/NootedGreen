@@ -14138,7 +14138,35 @@ int main() {
                     auto remove=[&]() noexcept {return tglPrepareOwnedContextRemoval(lifetime,children,
                         reinterpret_cast<void*>(0x30000),7,readObject,orderedWrite,admitObject,0);};
                     assert(remove()==5 && !children.detached && writes==1);
-                    children.allow=true;assert(remove()==0 && writes==2 && vptr==lifetime.source());
+                    TglOwnedVphalDestructionState destruction;
+                    unsigned nativeDestructors=0;
+                    auto invokeDestructor=[&](uintptr_t entry,uintptr_t object) noexcept {
+                        assert(entry==lifetime.nativeDeletingDestroy() && object==creatorAddress);
+                        assert(children.destroyed && vptr==lifetime.source() && writes==2);
+                        assert(destruction.phase()==TglOwnedVphalDestructionState::Phase::Invoking);
+                        ++nativeDestructors;
+                        assert(!destruction.request(lifetime,object,TglOwnedVphalDestructionState::Kind::Destroy,
+                            []() noexcept {return 0;},[](uintptr_t,uintptr_t) noexcept {}));
+                    };
+                    assert(!destruction.request(lifetime,creatorAddress+8,
+                        TglOwnedVphalDestructionState::Kind::DeletingDestroy,remove,invokeDestructor));
+                    assert(destruction.phase()==TglOwnedVphalDestructionState::Phase::Idle);
+                    assert(!destruction.request(lifetime,creatorAddress,
+                        TglOwnedVphalDestructionState::Kind::DeletingDestroy,remove,invokeDestructor));
+                    assert(destruction.phase()==TglOwnedVphalDestructionState::Phase::Quarantined &&
+                        destruction.requiresRetention() && !nativeDestructors && writes==1);
+                    children.allow=true;
+                    assert(!destruction.request(lifetime,creatorAddress,
+                        TglOwnedVphalDestructionState::Kind::Destroy,remove,invokeDestructor));
+                    assert(!destruction.recover(lifetime,[](uintptr_t) noexcept {return false;},remove,invokeDestructor));
+                    assert(!nativeDestructors && !children.detached && writes==1);
+                    assert(destruction.recover(lifetime,[&](uintptr_t object) noexcept {
+                        assert(object==creatorAddress);return true;
+                    },remove,invokeDestructor));
+                    assert(nativeDestructors==1 && !destruction.requiresRetention() &&
+                        destruction.phase()==TglOwnedVphalDestructionState::Phase::Complete);
+                    assert(!destruction.recover(lifetime,[](uintptr_t) noexcept {return true;},remove,invokeDestructor));
+                    assert(writes==2 && vptr==lifetime.source());
                     assert(!lifetime.requiresRetention() && !lifetime.canDetach(readObject,admitObject));
                     assert(!lifetime.publish(creatorAddress,readObject,writeObject,admitObject));
                     // A write that mutates memory but reports failure cannot
@@ -14152,6 +14180,24 @@ int main() {
                     assert(ambiguous.requiresRetention() &&
                         ambiguous.publication()==TglOwnedVphalLifetimeTable::Publication::Ambiguous);
                     assert(!ambiguous.canDetach(readObject,admitObject));
+                    TglOwnedVphalLifetimeTable ordinary;
+                    assert(ordinary.build(image,0xf000,0xf100,readLifetime,qualify,execLifetime,ownedLifetime));
+                    vptr=ordinary.source(); // independent simulated native object
+                    assert(ordinary.publish(creatorAddress,readObject,writeObject,admitObject));
+                    TglOwnedVphalDestructionState ordinaryState;unsigned ordinaryCalls=0;
+                    auto ordinaryNative=[&](uintptr_t entry,uintptr_t object) noexcept {
+                        assert(entry==ordinary.nativeDestroy() && object==creatorAddress &&
+                            vptr==ordinary.source());++ordinaryCalls;
+                    };
+                    assert(!ordinaryState.request(ordinary,creatorAddress,
+                        static_cast<TglOwnedVphalDestructionState::Kind>(99),
+                        []() noexcept {return 0;},ordinaryNative));
+                    // A success status alone is not proof of vptr restoration.
+                    assert(!ordinaryState.request(ordinary,creatorAddress,TglOwnedVphalDestructionState::Kind::Destroy,
+                        []() noexcept {return 0;},ordinaryNative) && !ordinaryCalls);
+                    assert(ordinaryState.recover(ordinary,[](uintptr_t) noexcept {return true;},
+                        [&]() noexcept {return ordinary.detach(readObject,writeObject,admitObject)?0:5;},ordinaryNative));
+                    assert(ordinaryCalls==1 && !ordinaryState.requiresRetention());
                 }
                 TglOwnedCreatorCallTable callTable;
                 auto callExecutable=[&](uintptr_t address,size_t size) noexcept {

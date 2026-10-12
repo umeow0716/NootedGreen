@@ -1790,6 +1790,7 @@ public:
     uintptr_t source() const noexcept {return source_;}
     uintptr_t nativeDestroy() const noexcept {return source_?source_-0x75bb58+0x1c8e80:0;}
     uintptr_t nativeDeletingDestroy() const noexcept {return source_?source_-0x75bb58+0x1c8ea0:0;}
+    uintptr_t object() const noexcept {return object_;}
     Publication publication() const noexcept {return publication_;}
     bool requiresRetention() const noexcept {
         return publication_==Publication::Published || publication_==Publication::Ambiguous;
@@ -1824,6 +1825,56 @@ public:
         uintptr_t current=0;
         if(!write(object_,source_) || !read(object_,&current,sizeof(current)) || current!=source_) return false;
         publication_=Publication::Detached;return true;
+    }
+};
+
+// Per-owner state retained by the registry, never stack storage belonging to a
+// callback that native failure teardown can outlive. Registry/exclusive scope
+// must protect access. The native deleting request has ALREADY consumed the
+//235e80 accounting: invoke the saved destructor directly, not counted delete.
+class TglOwnedVphalDestructionState {
+public:
+    enum class Phase { Idle,Preparing,Quarantined,Invoking,Complete };
+    enum class Kind { Destroy,DeletingDestroy };
+private:
+    Phase phase_=Phase::Idle;
+    Kind kind_=Kind::Destroy;
+    uintptr_t object_=0;
+    template<class Prepare,class Native>
+    bool finish(TglOwnedVphalLifetimeTable& table,Prepare prepare,Native native) noexcept {
+        static_assert(noexcept(prepare()) && noexcept(native(uintptr_t{},uintptr_t{})));
+        phase_=Phase::Preparing;
+        if(prepare()!=0 || table.publication()!=TglOwnedVphalLifetimeTable::Publication::Detached) {
+            phase_=Phase::Quarantined;return false;
+        }
+        phase_=Phase::Invoking;
+        native(kind_==Kind::Destroy?table.nativeDestroy():table.nativeDeletingDestroy(),object_);
+        phase_=Phase::Complete;return true;
+    }
+public:
+    TglOwnedVphalDestructionState()=default;
+    TglOwnedVphalDestructionState(const TglOwnedVphalDestructionState&)=delete;
+    TglOwnedVphalDestructionState& operator=(const TglOwnedVphalDestructionState&)=delete;
+    Phase phase() const noexcept {return phase_;}
+    bool requiresRetention() const noexcept {return phase_!=Phase::Complete;}
+    template<class Prepare,class Native>
+    bool request(TglOwnedVphalLifetimeTable& table,uintptr_t object,Kind kind,
+        Prepare prepare,Native native) noexcept {
+        if(phase_!=Phase::Idle || (kind!=Kind::Destroy && kind!=Kind::DeletingDestroy) ||
+            !object || object!=table.object() ||
+            table.publication()!=TglOwnedVphalLifetimeTable::Publication::Published) return false;
+        object_=object;kind_=kind;return finish(table,prepare,native);
+    }
+    // Not another native destructor request. Explicit recovery must attest
+    // retirement and reconcile any partially detached children/table first.
+    // A different delete kind or repeated native accounting is never accepted.
+    template<class Recover,class Prepare,class Native>
+    bool recover(TglOwnedVphalLifetimeTable& table,Recover recover,Prepare prepare,Native native) noexcept {
+        static_assert(noexcept(recover(uintptr_t{})));
+        if(phase_!=Phase::Quarantined || table.object()!=object_) return false;
+        phase_=Phase::Preparing;
+        if(!recover(object_)) {phase_=Phase::Quarantined;return false;}
+        return finish(table,prepare,native);
     }
 };
 
