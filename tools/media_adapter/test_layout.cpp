@@ -19728,18 +19728,49 @@ int main() {
                         assert(!vpCpu.live && !vpAvsCpu.live);
                         // Only the simulated original native owner cleans MHW,
                         // after borrowed frame/children and parent pin are gone.
+                        TglOwnedVphalDestructionState parentDestruction;
+                        unsigned nativeParentDeletes=0;
                         {
                             auto exclusiveParent=parents.pinExclusive(base,0x8000,1,parentAddress);
                             assert(exclusiveParent.get() && !parentDeaths);
                             DeleteKind recorded=DeleteKind::Destroy;
                             assert(parentPending.pending(parentAddress,recorded) && recorded==DeleteKind::DeletingDestroy);
                             assert(removeParent()==5 && !parentDeaths);
-                            assert(retireFrameMhw()==0 && frameMhwInvoke.cleanups==2 && frameMhwInvoke.removes==2);
+                            auto prepareParent=[&]() noexcept -> int {
+                                uintptr_t vptr=0,a=1,b=1,native920=0;
+                                assert(borrowedRead(parentAddress,&vptr,8));
+                                assert(borrowedRead(rendererAddress+0x910,&a,8));
+                                assert(borrowedRead(rendererAddress+0x918,&b,8));
+                                assert(borrowedRead(rendererAddress+0x920,&native920,8));
+                                return vptr==parentLifetime.source() && !a && !b && native920==0x9876 &&
+                                    cleaned[0]==1 && cleaned[1]==1 && !frameDn.live &&
+                                    !vpCpu.live && !vpAvsCpu.live && !so.borrowed && !to.borrowed && !ho.borrowed?0:5;
+                            };
+                            auto nativeDelete=[&](uintptr_t entry,uintptr_t object) noexcept {
+                                assert(entry==base+0x1c8ea0 && object==parentAddress);
+                                assert(exclusiveParent.get() && !parentDeaths && !nativeParentDeletes);
+                                ++nativeParentDeletes;
+                                assert(retireFrameMhw()==0 && frameMhwInvoke.cleanups==2 && frameMhwInvoke.removes==2);
+                            };
+                            assert(!parentDestruction.resumeRecorded(parentLifetime,parentAddress,parentPending,
+                                [](uintptr_t,DeleteKind) noexcept {return false;},prepareParent,nativeDelete));
+                            assert(!nativeParentDeletes && frameMhwInvoke.cleanups==1);
+                            auto admitParent=[&](uintptr_t object,DeleteKind kind) noexcept {
+                                return exclusiveParent.get() && exclusiveParent.get()->context()==object &&
+                                    object==parentAddress && kind==DeleteKind::DeletingDestroy;
+                            };
+                            assert(parentDestruction.resumeRecorded(parentLifetime,parentAddress,parentPending,
+                                admitParent,prepareParent,nativeDelete));
+                            assert(nativeParentDeletes==1 && !parentDestruction.requiresRetention());
+                            assert(!parentDestruction.resumeRecorded(parentLifetime,parentAddress,parentPending,
+                                admitParent,prepareParent,nativeDelete));
+                            assert(nativeParentDeletes==1);
                         }
                         assert(parentPending.eraseRetired(parentAddress,DeleteKind::DeletingDestroy,
                             [&](uintptr_t object,DeleteKind kind) noexcept {
                                 return object==parentAddress && kind==DeleteKind::DeletingDestroy &&
-                                    !parentDeaths && cleaned[0]==1 && cleaned[1]==1 && frameMhwInvoke.cleanups==2;
+                                    !parentDeaths && cleaned[0]==1 && cleaned[1]==1 && frameMhwInvoke.cleanups==2 &&
+                                    nativeParentDeletes==1 && !parentDestruction.requiresRetention();
                             })); // CPU-only quiescence/retirement certificate fixture
                         assert(removeParent()==0 && parentDeaths==1);
                     }
