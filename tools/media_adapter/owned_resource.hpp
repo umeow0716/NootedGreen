@@ -19556,6 +19556,27 @@ template<class Api,class Cleanup,class Cpu=TglNativeTrackedCpuInvoker,
 class TglNativeVeboxRendererCpuStorage {
     TglNativeVeboxVpFrameBacking<Api,Cpu> backing_;
     TglNativeVeboxChildPairStorage<Cleanup,Cpu,Sfc,Destroy> children_;
+    template<class Read,class Qualify,class Executable>
+    bool creatorEnvironment(const TglNativeVphalMhwView& view,Read read,Qualify qualify,
+        Executable executable,TglVeboxHardwareBinding& hardware) noexcept {
+        const auto image=view.renderer.image;
+        uintptr_t os=0,rh=0,mhw=0,renderer=0,rendererOs=0,rendererRh=0;
+        if(!view.parent || view.parent!=view.renderer.creator || view.parent>UINTPTR_MAX-0x70 ||
+            !view.renderer.renderer || view.renderer.renderer>UINTPTR_MAX-0x2cd0 ||
+            !read(view.parent+0x40,&os,8) || os!=view.os ||
+            !read(view.parent+0x48,&rh,8) || rh!=view.renderHal ||
+            !read(view.parent+0x50,&mhw,8) || mhw!=view.hardware.interface ||
+            !read(view.parent+0x68,&renderer,8) || renderer!=view.renderer.renderer ||
+            !read(renderer+0x2cc0,&rendererRh,8) || rendererRh!=rh ||
+            !read(renderer+0x2cc8,&rendererOs,8) || rendererOs!=os ||
+            !hardware.resolve(mhw,os,image,read,qualify)) return false;
+        TglNativeVphalResourceEnvironment environment;
+        return environment.resources.resolveFromRenderHal(rh,image,read,qualify,executable) &&
+            environment.resources.context==os &&
+            tglReadNativeResourcePageSize(environment.pageSize,image,read,qualify) &&
+            environment.fill.resolve(os,image,read,qualify,executable) &&
+            backing_.matchesResourceEnvironment(environment);
+    }
 public:
     template<class Read,class Qualify,class Executable,class... Args>
     TglNativeVeboxRendererCpuStorage(uintptr_t image,Read read,Qualify qualify,
@@ -19570,6 +19591,25 @@ public:
     TglNativeVeboxRendererCpuStorage& operator=(const TglNativeVeboxRendererCpuStorage&)=delete;
     auto& backing() noexcept {return backing_;}
     auto& children() noexcept {return children_;}
+    // Source-free creator handoff; enclosing owner holds physical/image and
+    // exclusive VPHAL admission through initialization AND eventual teardown.
+    // Revalidate current native links and exact backing snapshot, never use a
+    // separately supplied OS/RenderHal or require completed codec context12e0.
+    // VP initialization additionally needs the child-owned SFC object, NOT
+    // hardware.interface (VEBOX aggregate). Keep that separate until its
+    // borrow lifetime is joined through VP cleanup and child SFC teardown.
+    template<class Read,class Qualify,class Executable,class Construct=TglNativeVeboxConstructorInvoker>
+    TglOwnedBaseConstruction initializeChildFromCreator(size_t index,const TglNativeVphalMhwView& view,
+        const TglVeboxLifetimeBinding& binding,const TglSfcLifetimeBinding& lifetime,
+        const TglSfcMhwBinding& sfc,void* history,void* performance,const void* cache,
+        int32_t& status,Read read,Qualify qualify,Executable executable,Construct construct={}) {
+        TglVeboxHardwareBinding hardware;
+        if(index>1 || backing_.retention()() || !creatorEnvironment(view,read,qualify,executable,hardware))
+            return TglOwnedBaseConstruction::NotCalled;
+        auto& child=index?children_.second():children_.first();
+        return child.initializeQualified(binding,lifetime,sfc,reinterpret_cast<void*>(view.os),hardware,
+            reinterpret_cast<void*>(view.renderHal),history,performance,cache,status,read,qualify,construct);
+    }
 };
 
 // Integrated CPU ownership order: children may inspect the real frame surfaces
