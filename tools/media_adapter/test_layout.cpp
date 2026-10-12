@@ -15859,6 +15859,25 @@ int main() {
                         assert(resources.ensure(input,tall)==5);
                         assert(resources.withCommandResources(input,tall,
                             [](const auto&,const auto&,const auto*) noexcept -> int {assert(false);return 0;})==5);
+                        const auto previous=commands.state;
+                        auto rawTail=TglOwnedSfcGen12Tail{};rawTail.sfdLineBuffer=1;
+                        const unsigned reads=queries;
+                        assert(tglPrepareOwnedVpLeasedSurfaceState(commands,state,output,avs,ief,sfdResource,
+                            prefix,rawTail,false,false,false,TglOwnedSfcCompressionMode::Disabled,query)==5);
+                        assert(tglPrepareOwnedVpLeasedSurfaceState(commands,state,output,avs,ief,nullptr,
+                            prefix,{},false,false,false,TglOwnedSfcCompressionMode::Disabled,query)==5);
+                        assert(commands.state==previous && queries==reads && !state.hasParametersLease());
+                        assert(tglPrepareOwnedVpLeasedSurfaceState(commands,state,output,avs,ief,sfdResource,
+                            prefix,{},false,false,false,TglOwnedSfcCompressionMode::Disabled,query)==0);
+                        assert(!state.hasParametersLease()); // Later AVS/IEF production is not blocked.
+                        const std::array<uintptr_t,4> expected{reinterpret_cast<uintptr_t>(output.resource.data()),
+                            reinterpret_cast<uintptr_t>(avs.resource.data()),reinterpret_cast<uintptr_t>(ief.resource.data()),
+                            reinterpret_cast<uintptr_t>(sfdResource->data())};
+                        const std::array<size_t,4> offsets{0x90,0x98,0xa0,0xe0};
+                        for(size_t i=0;i<expected.size();++i) {
+                            uintptr_t actual=0;std::memcpy(&actual,commands.state.data()+offsets[i],8);
+                            assert(actual==expected[i]);
+                        }
                         return result;
                     })==result);
                 assert(resources.withCommandResources(input,tall+1,

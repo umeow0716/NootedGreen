@@ -17740,6 +17740,37 @@ int tglWithOwnedSfcPreparedCommands(TglOwnedSfcCommandParameters& parameters,
     });
 }
 
+// State production inside ALREADY held output/AVS/IEF/SFD owner leases.
+// This does not acquire/allocate any resource or extend its GPU lifetime.
+// A raw tail SFD pointer is rejected; only the separately leased descriptor
+// can supply it. Keep those leases through the later command consumer.
+template<class CpuBackend,class Query>
+int tglPrepareOwnedVpLeasedSurfaceState(TglOwnedSfcCommandParameters& parameters,
+    TglOwnedSfcStateParameters<CpuBackend>& state,TglOwnedSurfaceStorage& output,
+    const TglOwnedSurfaceStorage& avs,const TglOwnedSurfaceStorage& ief,
+    const std::array<uint8_t,0x148>* sfd,const std::array<uint8_t,0xb8>& prefix,
+    TglOwnedSfcGen12Tail tail,bool rgbAdaptive,bool eightTapChroma,bool compressionEnabled,
+    TglOwnedSfcCompressionMode compressionMode,Query query) noexcept {
+    if(parameters.filtersInUse || !state.data() || tail.sfdLineBuffer) return 5;
+    uint32_t input=0,scaled=0;
+    std::memcpy(&input,prefix.data()+0x30,4);std::memcpy(&scaled,prefix.data()+0x4c,4);
+    TglOwnedSfcLineBufferSizes sizes;
+    if(!tglOwnedSfcLineBufferSizes(sizes,input,scaled) || bool(sfd)!=bool(sizes.sfd)) return 5;
+    if(sfd) {
+        uint32_t type=0;std::memcpy(&type,sfd->data()+0x14,4);
+        if(type || !tglNativeBackingPresent(*sfd)) return 5;
+        tail.sfdLineBuffer=reinterpret_cast<uintptr_t>(sfd->data());
+    }
+    TglOwnedSfcStateParametersPacket checked{};
+    if(!tglPrepareOwnedSfcGen12Pass(checked,prefix,tail,rgbAdaptive,eightTapChroma,
+        compressionEnabled,compressionMode)) return 5;
+    auto bound=prefix;
+    const int result=tglBindOwnedSfcResources(bound,output,avs.resource,ief.resource,query);
+    if(result) return result;
+    if(!state.prepare(bound,tail,rgbAdaptive,eightTapChroma,compressionEnabled,compressionMode)) return 5;
+    std::memcpy(parameters.state.data(),state.data(),parameters.state.size());
+    return 0;
+}
 // Full VP+58 surfaces feed the same authenticated descriptor fields, without
 // copying tokens into the legacy descriptor-only owner. Both shells stay
 // pinned through query, state preparation and synchronous command emission.
@@ -17760,22 +17791,18 @@ int tglWithOwnedVpSurfaceCommands(TglOwnedSfcCommandParameters& parameters,
     std::memcpy(&input,prefix.data()+0x30,4);std::memcpy(&scaled,prefix.data()+0x4c,4);
     TglOwnedSfcLineBufferSizes sizes;
     if(!tglOwnedSfcLineBufferSizes(sizes,input,scaled) || (sizes.sfd && !sfd)) return 5;
+    const std::array<uint8_t,0x148>* leasedSfd=nullptr;
     auto consume=[&]() noexcept {
       return lines.withDimensions(input,scaled,[&](const auto& avs,const auto& ief) noexcept {
-        TglOwnedSfcStateParametersPacket checked{};
-        if(!tglPrepareOwnedSfcGen12Pass(checked,prefix,tail,rgbAdaptive,eightTapChroma,
-            compressionEnabled,compressionMode)) return 5;
-        auto bound=prefix;
-        const int status=tglBindOwnedSfcResources(bound,output,avs.resource,ief.resource,query);
+        const int status=tglPrepareOwnedVpLeasedSurfaceState(parameters,state,output,avs,ief,
+            leasedSfd,prefix,tail,rgbAdaptive,eightTapChroma,compressionEnabled,compressionMode,query);
         if(status) return status;
-        if(!state.prepare(bound,tail,rgbAdaptive,eightTapChroma,compressionEnabled,compressionMode)) return 5;
-        std::memcpy(parameters.state.data(),state.data(),parameters.state.size());
         return state.withParameters([&](const uint8_t*) noexcept {return generate(parameters);});
       });
     };
     if(!sfd) return consume();
     return sfd->withBuffer(scaled,[&](const auto* descriptor) noexcept {
-        tail.sfdLineBuffer=descriptor ? reinterpret_cast<uintptr_t>(descriptor->data()) : 0;
+        leasedSfd=descriptor;
         return consume();
     });
 }
