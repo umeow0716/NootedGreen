@@ -12121,6 +12121,26 @@ struct TglOwnedVeboxHistoryAdmissionStage {
 // Named installation-time policy type for the SAME already-leased native
 // report used by the frontend frame. Do not recursively acquire execution,
 // snapshot the selected pipe before reset, or adopt caller-supplied pointers.
+// Optional VP reset must be supplied as an authenticated owned stage; this
+// callback does not grant permission to call an arbitrary native vtable slot.
+template<class ChildOwner,class ExecutionOwner,class VpReset>
+struct TglOwnedVeboxAdmissionResetStage {
+    ChildOwner& childOwner;ExecutionOwner& executionOwner;
+    void* child;uintptr_t execution;VpReset vpReset;
+    bool operator()() noexcept {
+        static_assert(noexcept(vpReset()) && std::is_same_v<decltype(vpReset()),bool>);
+        auto linkedReport=[&]() noexcept {
+            if(!child || !childOwner.hasPrivateChildLease(reinterpret_cast<uintptr_t>(child)) ||
+                !executionOwner.hasExecutionLease(execution)) return false;
+            uintptr_t linked=0;std::memcpy(&linked,static_cast<uint8_t*>(child)+0x88,8);
+            return linked==execution;
+        };
+        if(!linkedReport() || executionOwner.initializeLeasedAdmission(execution)!=0 ||
+            !linkedReport()) return false;
+        return vpReset() && linkedReport();
+    }
+};
+
 template<class ChildOwner,class ExecutionOwner,class Params,class Pass,
     class Read,class Reset,class Select,class Setup,class Feature,class Sfc>
 struct TglOwnedVeboxAdmissionViewPlanner {

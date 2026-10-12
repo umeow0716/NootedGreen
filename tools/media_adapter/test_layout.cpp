@@ -808,14 +808,29 @@ static void testTrackedCpuOwner() {
                 input.prefix={true,true,true,true,1,uint64_t{1}<<12,64,16};
                 input.pipe=2;input.params10c=71;input.leasedParamsF0=0x1234;
                 std::array<uint8_t,0x28> pass{};
+                std::array<uint8_t,0x90> resetChild{};
+                struct ResetChildOwner {
+                    void* child;
+                    bool hasPrivateChildLease(uintptr_t p) const noexcept {
+                        return p==reinterpret_cast<uintptr_t>(child);
+                    }
+                } resetChildOwner{resetChild.data()};
+                unsigned vpResets=0;
+                auto resetVp=[&]() noexcept {++vpResets;return true;};
+                TglOwnedVeboxAdmissionResetStage<ResetChildOwner,std::decay_t<decltype(owner)>,
+                    decltype(resetVp)> resetStage{resetChildOwner,owner,resetChild.data(),actual,resetVp};
+                // A mismatched child/report must not initialize either object.
+                assert(!resetStage() && backend.initializes==1 && vpResets==0);
+                std::memcpy(resetChild.data()+0x88,&actual,8);
                 const bool admitted=tglRunVeboxAdmissionStages(input,bytes,pass,
-                    [&]() noexcept {return owner.initializeLeasedAdmission(actual)==0;},[](auto&) noexcept {},
+                    resetStage,[](auto&) noexcept {},
                     []() noexcept {return true;},[](auto& view) noexcept {view[0x18]=0;},
                     [](auto&) noexcept {assert(false);return false;});
                 uintptr_t params=0;std::memcpy(&params,backend.bytes.data()+0x9e8,8);
                 uint32_t field=0;std::memcpy(&field,backend.bytes.data()+0xd28,4);
                 assert(admitted && params==0x1234 && field==71);
-                assert(backend.initializes==2 && owner.initializeLeasedAdmission(actual)==5);
+                assert(backend.initializes==2 && vpResets==1 && !resetStage());
+                assert(backend.initializes==2 && vpResets==1 && owner.initializeLeasedAdmission(actual)==5);
                 return 31;
             });
             const auto before=backend.bytes;
