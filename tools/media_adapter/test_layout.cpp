@@ -21169,6 +21169,12 @@ int main() {
                                                         platformPhases[0]=&qa;platformPhases[1]=&qb;
                                                         catalogues[0]=&ea;catalogues[1]=&eb;
                                                         assert(ea.hasAllEntries() && eb.hasAllEntries());
+                                                        TglOwnedVpFlatDispatchTable tableA,tableB;
+                                                        auto executable=[](uintptr_t p,size_t n) noexcept {return p && n==1;};
+                                                        assert(tableA.build(ea,executable) && tableB.build(eb,executable));
+                                                        const int joined=firstGraph.withReservedFlatDispatch(a,tableA,[&](void*) noexcept -> int {
+                                                        assert(firstGraph.withReservedFlatDispatch(a,tableA,[](void*) noexcept -> int {assert(false);return 0;})==5);
+                                                        return secondGraph.withReservedFlatDispatch(b,tableB,[&](void*) noexcept -> int {
                                                         for(size_t i=0;i<2;++i) {
                                                             void* child=i?b:a;const auto& entries=i?eb:ea;
                                                             entries.sampleMode(child,reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x2000));
@@ -21180,6 +21186,12 @@ int main() {
                                                             if(result) return result;
                                                         }
                                                         return expected;
+                                                        });
+                                                        });
+                                                        uintptr_t restoredA=1,restoredB=1;
+                                                        std::memcpy(&restoredA,a,8);std::memcpy(&restoredB,b,8);
+                                                        assert(!restoredA && !restoredB);
+                                                        return joined;
                                                         });
                                                         });
                                                     });
