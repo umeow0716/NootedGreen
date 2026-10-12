@@ -20758,6 +20758,20 @@ int main() {
                             assert(frame.backing().withVpResources(0,[&](auto& firstGraph,auto& first,auto& firstLines) noexcept {
                                 return frame.backing().withVpResources(1,[&](auto& secondGraph,auto& second,auto& secondLines) noexcept {
                                     for(int expected:{0,-31}) {
+                                        assert(firstGraph.withPairedProducerReservation(secondGraph,
+                                            [&](void* a,void* b) noexcept -> int {
+                                                assert(a==modeObjects[0] && b==modeObjects[1]);
+                                                assert(!firstGraph.tryReset() && !secondGraph.tryReset());
+                                                uintptr_t sa=1,sb=1;
+                                                std::memcpy(&sa,first.bytes.data()+0x938,8);
+                                                std::memcpy(&sb,second.bytes.data()+0x938,8);
+                                                assert(!sa && !sb);
+                                                assert(firstGraph.withPairedProducerReservation(secondGraph,
+                                                    [](void*,void*) noexcept -> int {assert(false);return 0;})==5);
+                                                return expected;
+                                            })==expected);
+                                    }
+                                    for(int expected:{0,-31}) {
                                         assert(firstGraph.withPairedAssemblyView(secondGraph,false,modeRead,
                                             firstLines.resources(),secondLines.resources(),modeRetire,
                                             [&](void* a,const auto& ae,void* b,const auto& be) noexcept -> int {

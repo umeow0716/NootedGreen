@@ -13267,6 +13267,27 @@ public:
             noexcept(emit(nullptr,nullptr,nullptr)),"VP callback producer ABI");
         if(!ready_ || busy_ || !source || !renderData || !target) return 5;
         Guard guard(busy_);
+        return withLeasedPreparedCallbackPass(frame,conditionalSource,settings,target,sourceA8,
+            source,renderData,state,avs,ief,emit,invoke);
+    }
+    // Reserve graph lifetime without prematurely locking state. The producer
+    // itself acquires state/AVS only at the already-audited native stages.
+    template<class Use>
+    int withPairedProducerReservation(TglOwnedVpSfcCpuGraph& other,Use use) noexcept {
+        if(this==&other || !ready_ || busy_ || !other.ready_ || other.busy_ ||
+            retention_!=other.retention_ || (retention_ && (*retention_)())) return 5;
+        Guard first(busy_),second(other.busy_);
+        static_assert(noexcept(use(storage_.bytes.data(),other.storage_.bytes.data())),"paired producer reservation ABI");
+        return use(storage_.bytes.data(),other.storage_.bytes.data());
+    }
+    template<class State,class Avs,class Ief,class Emit,class Invoke>
+    int withLeasedPreparedCallbackPass(const TglOwnedVpFramePreparation& frame,
+        uintptr_t conditionalSource,uintptr_t settings,uintptr_t target,uintptr_t sourceA8,
+        void* source,void* renderData,State state,Avs avs,Ief ief,Emit emit,Invoke invoke) noexcept {
+        static_assert(noexcept(state(nullptr,frame,state_)) && noexcept(avs(nullptr,frame,avs_)) &&
+            noexcept(ief(nullptr,frame)) && noexcept(emit(nullptr,nullptr,nullptr)),"leased producer ABI");
+        if(!ready_ || !busy_ || state_.hasParametersLease() || avs_.hasParametersLease() ||
+            !source || !renderData || !target) return 5;
         return tglWithOwnedVpPreparedFrame(storage_,frame,conditionalSource,
             settings,target,sourceA8,[&](void* child,const auto&) noexcept {
                     auto produceState=[&]() noexcept {return state(child,frame,state_);};
