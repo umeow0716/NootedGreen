@@ -13968,7 +13968,7 @@ int main() {
         std::array<uint8_t,0x58> physical{};
         std::array<uint8_t,0x10> os{};
         std::array<uint8_t,0x50> wrapper{};
-        std::array<uint8_t,0x2cb8> renderer{};
+        std::array<uint8_t,0x2d50> renderer{};
         const auto c=reinterpret_cast<uintptr_t>(context.data());
         const auto p=reinterpret_cast<uintptr_t>(physical.data());
         const auto o=reinterpret_cast<uintptr_t>(os.data());
@@ -14074,6 +14074,50 @@ int main() {
             assert(resolveCreated() && created.renderer==r && created.configuration==r+0x2cb0);
             assert(!created.originalChildren[0] && !created.originalChildren[1] &&
                 created.originalChildren[2]==0x12345678);
+            {
+                alignas(8) std::array<uint8_t,0x70> vphal{};
+                alignas(8) std::array<uint8_t,0x28> mhw{};
+                const uintptr_t parent=reinterpret_cast<uintptr_t>(vphal.data());
+                const uintptr_t nativeMhw=reinterpret_cast<uintptr_t>(mhw.data());
+                constexpr uintptr_t nativeOs=0x8000,nativeRenderHal=0x9000;
+                auto writeWord=[](auto& bytes,size_t offset,uintptr_t value) {
+                    std::memcpy(bytes.data()+offset,&value,8);
+                };
+                writeWord(vphal,0x40,nativeOs);writeWord(vphal,0x48,nativeRenderHal);
+                writeWord(vphal,0x50,nativeMhw);writeWord(vphal,0x68,creatorAddress);
+                writeWord(mhw,0,image+0x759520);writeWord(mhw,8,image+0x3eae0);
+                writeWord(mhw,0x18,nativeOs);writeWord(mhw,0x20,0xa000);
+                put(r,0x2cc0,nativeRenderHal);put(r,0x2cc8,nativeOs);
+                auto borrowedRead=[&](uintptr_t address,void* out,size_t size) noexcept {
+                    for(const auto region: {std::pair<uintptr_t,size_t>{parent,vphal.size()},
+                        {nativeMhw,mhw.size()}}) {
+                        if(address>=region.first && address-region.first<=region.second &&
+                            size<=region.second-(address-region.first)) {
+                            std::memcpy(out,reinterpret_cast<void*>(address),size);return true;
+                        }
+                    }
+                    if(address==nativeOs+0x8c && size==4) {
+                        const uint32_t mode=0;std::memcpy(out,&mode,4);return true;
+                    }
+                    return creatorRead(address,out,size);
+                };
+                auto borrowedAdmit=[&](uintptr_t address,size_t size) noexcept {
+                    return (address==parent && size==vphal.size()) || creatorAdmit(address,size);
+                };
+                TglNativeVphalMhwView borrowed;
+                auto resolveBorrowed=[&] {return borrowed.resolve(image,parent,creatorAddress,
+                    borrowedRead,borrowedAdmit,qualify,creatorExecutable);};
+                assert(resolveBorrowed() && borrowed.hardware.interface==nativeMhw &&
+                    borrowed.hardware.heap==0xa000 && borrowed.os==nativeOs && borrowed.renderHal==nativeRenderHal);
+                writeWord(mhw,0x20,0);assert(!resolveBorrowed() && !borrowed.parent);
+                writeWord(mhw,0x20,0xa000);writeWord(vphal,0x68,creatorAddress+8);
+                assert(!resolveBorrowed());writeWord(vphal,0x68,creatorAddress);
+                put(r,0x2cc8,nativeOs+8);assert(!resolveBorrowed());put(r,0x2cc8,nativeOs);
+                put(r,0x2cc0,nativeRenderHal+8);assert(!resolveBorrowed());put(r,0x2cc0,nativeRenderHal);
+                assert(resolveBorrowed());
+                assert(!borrowed.resolve(image,UINTPTR_MAX-7,creatorAddress,
+                    borrowedRead,borrowedAdmit,qualify,creatorExecutable));
+            }
             creatorAllowed=false;assert(!resolveCreated() && !created.renderer);creatorAllowed=true;
             create++;assert(!resolveCreated());create--;
             put(creatorAddress,0,image+0x75bb60);assert(!resolveCreated());
@@ -14085,7 +14129,7 @@ int main() {
         }
         put(c,0x12e0,0);assert(!rendererView.resolve(c,read,admit) && !rendererView.renderer);
         put(c,0x12e0,UINTPTR_MAX-8);assert(!rendererView.resolve(c,read,admit));
-        put(c,0x12e0,r+8);assert(!rendererView.resolve(c,read,admit));
+        put(c,0x12e0,r+renderer.size()-0x2cb8+8);assert(!rendererView.resolve(c,read,admit));
         put(c,0x12e0,r);
         put(o,8,w);assert(!view.resolve(c,read,admit));
         assert(!rendererView.resolve(c,read,admit) && !rendererView.configuration);

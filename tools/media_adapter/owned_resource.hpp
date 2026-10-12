@@ -3605,6 +3605,38 @@ struct TglNativeVeboxMhwAllocationInvoker {
         reinterpret_cast<Fn>(entry)(&object);
     }
 };
+// Native VPHAL factory2183c0 transfers aggregate30 through218870 into
+// VPHAL50;133930 initializes that SAME MHW heap before creator+18. Borrow
+// this native-owned dependency at creator-return instead of allocating a
+// second MHW. This snapshot conveys NO deletion/heap-retirement authority;
+// caller must retain the native VPHAL/OS/image and serialize the entire use.
+struct TglNativeVphalMhwView {
+    uintptr_t parent=0,os=0,renderHal=0;
+    TglNativeCreatedVeboxRendererView renderer;
+    TglVeboxHardwareBinding hardware;
+    template<class Read,class Admit,class Qualify,class Executable>
+    bool resolve(uintptr_t image,uintptr_t vphal,uintptr_t creator,Read read,
+        Admit admit,Qualify qualify,Executable executable) noexcept {
+        *this={};
+        uintptr_t actualCreator=0,nativeOs=0,nativeRenderHal=0,mhw=0;
+        uintptr_t rendererOs=0,rendererRenderHal=0;
+        TglNativeCreatedVeboxRendererView created;
+        TglVeboxHardwareBinding binding;
+        if(!vphal || (vphal&7) || vphal>UINTPTR_MAX-0x70 || !admit(vphal,0x70) ||
+            !read(vphal+0x68,&actualCreator,8) || actualCreator!=creator ||
+            !read(vphal+0x40,&nativeOs,8) || !nativeOs ||
+            !read(vphal+0x48,&nativeRenderHal,8) || !nativeRenderHal ||
+            !read(vphal+0x50,&mhw,8) ||
+            !created.resolve(image,creator,read,admit,qualify,executable) ||
+            created.renderer>UINTPTR_MAX-0x2cd0 || !admit(created.renderer,0x2cd0) ||
+            !read(created.renderer+0x2cc0,&rendererRenderHal,8) || rendererRenderHal!=nativeRenderHal ||
+            !read(created.renderer+0x2cc8,&rendererOs,8) || rendererOs!=nativeOs ||
+            !binding.resolve(mhw,nativeOs,image,read,qualify)) return false;
+        parent=vphal;os=nativeOs;renderHal=nativeRenderHal;renderer=created;hardware=binding;
+        return true;
+    }
+};
+
 // Retained by the context registry, which must quarantine rather than destroy
 // an owner with a live allocation/lease. No destructor-side native deletion:
 // unproven GPU retirement must never become a free through stack unwinding.
