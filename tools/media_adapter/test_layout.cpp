@@ -9089,6 +9089,20 @@ static void testNativeResourceBoundary() {
                         }
                         return 31;
                     })==31 && consumers==1);
+                assert(input.withSurface([&](const auto& source) noexcept {
+                    unsigned borrowed=0;
+                    assert(tglWithPreparedDescriptorFfdnPair(targets,input,source,
+                        [&](const auto& a,const auto& b) noexcept -> int {
+                            ++borrowed;
+                            assert(!tglNativeBackingPresent(a.resource) && !tglNativeBackingPresent(b.resource));
+                            assert(tglWithPreparedDescriptorFfdnPair(targets,input,source,
+                                [](const auto&,const auto&) noexcept -> int {assert(false);return 0;})==5);
+                            return 31;
+                        })==31 && borrowed==1);
+                    const auto foreign=source;
+                    assert(tglWithPreparedDescriptorFfdnPair(targets,input,foreign,
+                        [](const auto&,const auto&) noexcept -> int {assert(false);return 0;})==5);
+                }));
                 assert(input.surface());
                 for(auto& target:targets) assert(target.withDescriptor([](const auto& view) noexcept {
                     uint32_t width=0,format=0;uintptr_t dn=1;

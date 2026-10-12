@@ -7217,6 +7217,7 @@ class TglOwnedDescriptorOnlySurface {
     bool ready_=false,busy_=false;
     const TglOwnedSurfaceStorage* ffdiSource_=nullptr;
     const TglOwnedSurfaceStorage* ffdiExecution_=nullptr;
+    const TglOwnedSurfaceStorage* ffdnSource_=nullptr;
 public:
     TglOwnedDescriptorOnlySurface()=default;
     TglOwnedDescriptorOnlySurface(const TglOwnedDescriptorOnlySurface&)=delete;
@@ -7233,7 +7234,7 @@ public:
         std::memcpy(storage_.prefix.data()+0x130,&request.key.format,4);
         std::memcpy(storage_.prefix.data()+0xe4,&request.key.tile,4);
         std::memcpy(storage_.prefix.data()+0xe0,&zero,4);
-        ffdiSource_=nullptr;ffdiExecution_=nullptr;
+        ffdiSource_=nullptr;ffdiExecution_=nullptr;ffdnSource_=nullptr;
         ready_=true;changed=true;return true; //4a1af writes1 even on reuse
     }
     // Persist only qualified frame scalars. Borrowed handle1a0 and DN90
@@ -7247,7 +7248,7 @@ public:
         if(!tglPrepareOwnedFfdiFrameMetadata(storage_,input,query)) return false;
         if(execution) tglCopyOwnedFfdiPrimaryScalars(storage_,*execution);
         if(secondary) tglCopyOwnedFfdiSecondaryMetadata(storage_,*secondary);
-        ffdiSource_=&input;ffdiExecution_=execution;
+        ffdiSource_=&input;ffdiExecution_=execution;ffdnSource_=nullptr;
         return true;
     }
     bool matchesPreparedFfdiRoles(const TglOwnedSurfaceStorage& source,
@@ -7256,7 +7257,10 @@ public:
     }
     bool publishFfdnFrame(const TglOwnedSurfaceStorage& input) noexcept {
         if(!ready_ || busy_ || !tglPrepareOwnedFfdnFrameMetadata(storage_,input)) return false;
-        ffdiSource_=nullptr;ffdiExecution_=nullptr;return true;
+        ffdiSource_=nullptr;ffdiExecution_=nullptr;ffdnSource_=&input;return true;
+    }
+    bool matchesPreparedFfdnSource(const TglOwnedSurfaceStorage& source) const noexcept {
+        return ready_ && !busy_ && ffdnSource_==&source;
     }
     // ICL1f7e52 executes outside the +b0 FFDI allocation gate. An existing
     // slot0 can receive execution68's two scalars without another prepare or
@@ -7360,7 +7364,7 @@ public:
         struct Unlock {bool& busy;~Unlock(){busy=false;}} unlock{busy_};
         use(static_cast<const TglOwnedSurfaceStorage&>(storage_));return true;
     }
-    void reset() noexcept {if(!busy_) {storage_={};ready_=false;ffdiSource_=nullptr;ffdiExecution_=nullptr;}}
+    void reset() noexcept {if(!busy_) {storage_={};ready_=false;ffdiSource_=nullptr;ffdiExecution_=nullptr;ffdnSource_=nullptr;}}
 };
 
 // ICL1f7eba..1f7fb1 data policy only, not its virtual-base object ABI.
@@ -8195,6 +8199,25 @@ int tglWithAllocatedOwnedFfdnPair(Owner& input,Owner* previous,Owner* copyDestin
     });
 }
 
+// Reborrow prepared FFDN shells under their original source lease. DN90 and
+// history are NOT supplied by this primitive; their independent owners must
+// be borrowed by the enclosing reader. Never rerun allocation/publication.
+template<class Owner,class Use>
+int tglWithPreparedDescriptorFfdnPair(std::array<TglOwnedDescriptorOnlySurface,2>& targets,
+    Owner& input,const TglOwnedSurfaceStorage& source,Use use) noexcept {
+    if(!input.hasSurfaceLease(source) || !targets[0].matchesPreparedFfdnSource(source) ||
+       !targets[1].matchesPreparedFfdnSource(source)) return 5;
+    int result=5;
+    const bool first=targets[0].withDescriptor([&](const auto& a) noexcept {
+        const bool second=targets[1].withDescriptor([&](const auto& b) noexcept {
+            result=use(a,b);
+            if(!input.hasSurfaceLease(source)) result=5;
+        });
+        if(!second) result=5;
+    });
+    return first && input.hasSurfaceLease(source)?result:5;
+}
+
 // Persistent descriptor-only FFDN targets. Native-backed format3d remains
 // owned by the separate resource path. DN90 is deliberately not retained;
 // this preparation is not asynchronous command admission or retirement.
@@ -8214,16 +8237,12 @@ int tglPrepareOwnedDescriptorFfdnPair(std::array<TglOwnedDescriptorOnlySurface,2
         },copy,[&](size_t index,const auto& source,const auto&) noexcept -> int {
             return targets[index].publishFfdnFrame(source)?0:5;
         },[&](const auto& inputs) noexcept -> int {
-            int result=5;
-            const bool first=targets[0].withDescriptor([&](const auto& a) noexcept {
-                const bool second=targets[1].withDescriptor([&](const auto& b) noexcept {
+            return tglWithPreparedDescriptorFfdnPair(targets,input,*inputs[0],
+                [&](const auto& a,const auto& b) noexcept -> int {
                     static_assert(noexcept(finish(inputs,a,b)) &&
                         std::is_same_v<decltype(finish(inputs,a,b)),int>,"descriptor FFDN frame consumer ABI");
-                    result=finish(inputs,a,b);
+                    return finish(inputs,a,b);
                 });
-                if(!second) result=5;
-            });
-            return first?result:5;
         },captured,report);
 }
 
