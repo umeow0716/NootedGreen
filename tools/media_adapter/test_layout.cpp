@@ -3078,7 +3078,7 @@ static void testLeasedGen12PlatformPolicy() {
     struct SfcFixture {
         static int extent(void* vp,void*,void*,void*) noexcept {++*static_cast<unsigned*>(vp);return 1;}
     };
-    for(unsigned scenario=0;scenario<26;++scenario) {
+    for(unsigned scenario=0;scenario<29;++scenario) {
         TglOwnedSurfaceStorage source{},target{};
         std::array<uint8_t,0x1bc0> child{};
         std::array<uint8_t,0x139> parameters{};
@@ -3101,12 +3101,12 @@ static void testLeasedGen12PlatformPolicy() {
             const uintptr_t invalidAlpha=UINTPTR_MAX-2;
             std::memcpy(parameters.data()+0xf0,&invalidAlpha,8);
         }
-        const TglSurfaceRect rect{0,0,1920,scenario==17 || scenario==18?1084.0f:1080.0f};
+        const TglSurfaceRect rect{0,0,1920,scenario==17 || scenario==18 || scenario==28?1084.0f:1080.0f};
         for(size_t offset : {0x30u,0x40u,0x50u}) std::memcpy(source.prefix.data()+offset,&rect,16);
         std::memcpy(target.prefix.data()+0x40,&rect,16);
         if(scenario==10 || scenario>=16) {const float bottom=1120;std::memcpy(target.prefix.data()+0x4c,&bottom,4);}
-        target.tail[0xa]=scenario==17 || scenario==18?0xc1:0xc0;
-        const uint32_t targetCompressionMode=scenario==23?99:scenario==17 || scenario==18?3:0;
+        target.tail[0xa]=scenario==17 || scenario==18 || scenario==28?0xc1:0xc0;
+        const uint32_t targetCompressionMode=scenario==23?99:scenario==17 || scenario==18 || scenario==28?3:0;
         std::memcpy(target.tail.data()+0xc,&targetCompressionMode,4);
         std::memcpy(source.prefix.data()+0x130,&format,4);std::memcpy(target.prefix.data()+0x130,&targetFormat,4);
         ChildOwner childOwner{childAddress,0x100000};SurfaceOwner sourceOwner{&source},targetOwner{&target};
@@ -3132,12 +3132,14 @@ static void testLeasedGen12PlatformPolicy() {
             assert(s==sourceAddress && t==targetAddress);++queries;needed=scenario==13;
             if(scenario==14) sourceOwner.allow=false;
             if(scenario==16 && queries==2) sourceOwner.allow=false;
+            if(scenario==26 && queries==2) {const uint32_t changed=4;std::memcpy(target.tail.data()+0xc,&changed,4);}
+            if(scenario==27 && queries==2) target.tail[0xa]|=1;
             return scenario!=5;
         };
         auto fill=[&](auto& active) noexcept {
             ++fills;bool compressed=true;auto mode=TglOwnedSfcCompressionMode::Render;
             const bool acquired=active.readTargetCompressionState(compressed,mode);
-            if(scenario>=23) {
+            if(scenario>=23 && scenario<=25) {
                 assert(!acquired && compressed && mode==TglOwnedSfcCompressionMode::Render);
                 return false;
             }
@@ -3149,17 +3151,19 @@ static void testLeasedGen12PlatformPolicy() {
             auto decompress=[&]() noexcept {
                 ++decompressions;
                 if(scenario==18) sourceOwner.allow=false;
-                return scenario==17?31:0;
+                if(scenario==28) {const uint32_t changed=4;std::memcpy(target.tail.data()+0xc,&changed,4);}
+                return scenario==17 || scenario==28?31:0;
             };
             const bool result=active.runFastFillTransaction(scenario==19?source:target,
                 compressed,mode,compressionFormat,status,decompress);
-            assert(decompressions==(scenario==17 || scenario==18?1u:0u));
+            assert(decompressions==(scenario==17 || scenario==18 || scenario==28?1u:0u));
             if(scenario==17) assert(result && status==31 && compressed && compressionFormat==7);
             if(scenario==18) assert(!result && status==0 && !compressed && compressionFormat==0);
             uint32_t afterMode=0;std::memcpy(&afterMode,target.tail.data()+0xc,4);
             if(scenario==17) assert(target.tail[0xa]==0xc1 && afterMode==3);
             if(scenario==18) assert(target.tail[0xa]==0xc0 && afterMode==0);
-            if(scenario>=20) assert(!result && status==-1);
+            if(scenario>=20 && scenario!=28) assert(!result && status==-1);
+            if(scenario==28) assert(!result && status==31 && compressed && afterMode==4);
             return result;
         };
         uint8_t comp=0xa4;uint32_t output=0xdeadbeef;

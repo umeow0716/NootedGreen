@@ -5724,7 +5724,15 @@ public:
             compressed,mode,compressionFormat,decompressionStatus,
             [&]() noexcept {
                 std::memcpy(writableTarget.prefix.data()+0x4c,&targetRect.bottom,4);
-                return direct();
+                if(!direct()) return false;
+                // Native CSC runs during direct recheck. A still-live lease
+                // does not imply unchanged resource compression metadata.
+                bool currentCompressed=false;auto currentMode=TglOwnedSfcCompressionMode::Disabled;
+                if(!readTargetCompressionState(currentCompressed,currentMode)) return false;
+                if(currentCompressed!=compressed || currentMode!=mode) {
+                    frame_.fail();return false;
+                }
+                return true;
             },[&]() noexcept {return decompress();},[&]() noexcept {return healthy();});
         // Successful decompression is irreversible even if another lease was
         // lost during the call. Preserve that fact in the actual target while
@@ -5736,6 +5744,9 @@ public:
             std::memcpy(writableTarget.tail.data()+0xc,&disabled,4);
         }
         if(!success || !healthy()) return false;
+        bool finalCompressed=false;auto finalMode=TglOwnedSfcCompressionMode::Disabled;
+        if(!readTargetCompressionState(finalCompressed,finalMode)) return false;
+        if(finalCompressed!=compressed || finalMode!=mode) {frame_.fail();return false;}
         // Native donor1fb140 writes target85 only after successful recheck.
         writableTarget.prefix[0x85]=1;return selected;
     }
