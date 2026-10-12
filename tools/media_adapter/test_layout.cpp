@@ -23603,6 +23603,83 @@ int main() {
                                             [&](void*,void*) noexcept -> int {return reset()?0:5;});
                                     },consumePrepared);
                                 assert(prepared.status==-92 && preparations==2 && consumptions==1);
+                                std::array<uint8_t,8> savedDimensions{};
+                                std::memcpy(savedDimensions.data(),source.prefix.data()+0xd8,8);
+                                uint32_t admissionWidth=64,admissionHeight=16;
+                                std::memcpy(source.prefix.data()+0xd8,&admissionWidth,4);
+                                std::memcpy(source.prefix.data()+0xdc,&admissionHeight,4);
+                                unsigned admissionResets=0,admissionConsumes=0;
+                                bool fixtureDependencies=false;
+                                auto admitFrame=[&](auto& owner,void* child,auto&,auto&,auto&,auto& packets,
+                                    auto& backing,auto enterResources) noexcept -> bool {
+                                    std::array<uint8_t,0x139> params{};params[0x138]=1;
+                                    std::array<uint8_t,0x18> pass{};
+                                    const uintptr_t root=reinterpret_cast<uintptr_t>(&packets.source);
+                                    const uintptr_t peer=reinterpret_cast<uintptr_t>(packets.target);
+                                    std::memcpy(pass.data()+0x10,&root,8);std::memcpy(params.data()+0x98,&peer,8);
+                                    TglVeboxAdmissionBorrowedInterfaces interfaces;
+                                    auto* bytes=static_cast<uint8_t*>(child);
+                                    std::array<uint8_t,16> savedDependencies{};
+                                    std::memcpy(savedDependencies.data(),bytes+0x18,savedDependencies.size());
+                                    interfaces.renderHal=0x2200;interfaces.sku=0x3300;
+                                    if(fixtureDependencies) {
+                                        std::memcpy(bytes+0x18,&interfaces.renderHal,8);
+                                        std::memcpy(bytes+0x20,&interfaces.sku,8);
+                                    }
+                                    std::memcpy(&interfaces.os,bytes+0x10,8);
+                                    auto readInput=[&](uintptr_t address,void* output,size_t size) noexcept {
+                                        for(const auto region:{std::pair<uintptr_t,size_t>{
+                                            reinterpret_cast<uintptr_t>(params.data()),params.size()},
+                                            {reinterpret_cast<uintptr_t>(pass.data()),pass.size()}}) {
+                                            if(address>=region.first && address-region.first<=region.second &&
+                                                size<=region.second-(address-region.first)) {
+                                                std::memcpy(output,reinterpret_cast<const void*>(address),size);return true;
+                                            }
+                                        }
+                                        if(address==interfaces.sku && size==8) {
+                                            const uint64_t sku=uint64_t{1}<<12;std::memcpy(output,&sku,8);return true;
+                                        }
+                                        return false;
+                                    };
+                                    auto resetVp=[&]() noexcept -> bool {
+                                        ++admissionResets;void* vp=nullptr;
+                                        if(backing.withVpResources(0,[&](auto&,auto& storage,auto&) noexcept {
+                                            vp=storage.bytes.data();return 0;
+                                        })) return false;
+                                        auto retire=[]() noexcept -> int {return 0;}; // no submitted work in fixture
+                                        TglOwnedVeboxPersistentVpAdmissionReset<std::decay_t<decltype(owner)>,
+                                            std::decay_t<decltype(backing)>,decltype(retire)> reset{
+                                            owner,backing,0,child,vp,retire};
+                                        return owner.withLeasedBorrowedVpCpuView(child,vp,
+                                            [&](void*,void*) noexcept -> int {return reset()?0:5;})==0;
+                                    };
+                                    TglOwnedVeboxAdmissionResetStage<std::decay_t<decltype(owner)>,
+                                        std::decay_t<decltype(executionLease)>,decltype(resetVp)> reset{
+                                        owner,executionLease,child,packets.execution,resetVp};
+                                    const int status=executionLease.withLeasedAdmissionBytes(packets.execution,[&](auto& reportBytes) noexcept {
+                                        return tglRunCapturedSelectedVeboxAdmissionStages(owner,executionLease,child,
+                                            params,pass,packets.source,*packets.target,interfaces,reportBytes,readInput,reset,
+                                            [](uint8_t&) noexcept -> uint32_t {return 1;},[](auto&) noexcept {},
+                                            [](auto&) noexcept {},[](auto&) noexcept {return true;},enterResources)?0:5;
+                                    });
+                                    std::memcpy(bytes+0x18,savedDependencies.data(),savedDependencies.size());
+                                    return status==0;
+                                };
+                                auto consumeAdmitted=[&](auto&,void*,void*,auto&,auto&,auto&,auto&,auto&,auto&) noexcept {
+                                    ++admissionConsumes;TglOwnedVeboxCommandTransactionResult result;result.status=-93;return result;
+                                };
+                                const auto missingDependencies=frame.withNativeOwnedVpAdmissionCommandFrame(0,roles,0,0,
+                                    executionLease,0x2200,0x3300,readReportHelper,admitFrame,consumeAdmitted);
+                                assert(missingDependencies.status==5 && !admissionResets && !admissionConsumes);
+                                fixtureDependencies=true;
+                                const auto admitted=frame.withNativeOwnedVpAdmissionCommandFrame(0,roles,0,0,
+                                    executionLease,0x2200,0x3300,readReportHelper,admitFrame,consumeAdmitted);
+                                assert(admitted.status==-93 && admissionResets==1 && admissionConsumes==1);
+                                admissionWidth=63;std::memcpy(source.prefix.data()+0xd8,&admissionWidth,4);
+                                const auto denied=frame.withNativeOwnedVpAdmissionCommandFrame(0,roles,0,0,
+                                    executionLease,0x2200,0x3300,readReportHelper,admitFrame,consumeAdmitted);
+                                assert(denied.status==5 && admissionResets==1 && admissionConsumes==1);
+                                std::memcpy(source.prefix.data()+0xd8,savedDimensions.data(),8);
                             }
                             unsigned creatorRoleCaptures=0;
                             auto captureCreator=[&](auto& owner,void* child,void* vp,auto& graph,auto& lines,

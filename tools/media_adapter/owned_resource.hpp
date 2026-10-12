@@ -22739,6 +22739,57 @@ public:
                 return withLeasedVpCommandResources(childIndex,owner,child,source,target,parameters,packets,consume);
             });
     }
+    // Admission starts outside VP resource borrowing. Its checked post-reset
+    // scope enters resources, finishes admission once, then consumes the SAME
+    // frame before those scopes unwind. Preserve command retention on failure.
+    template<class ExecutionOwner,class Read,class Admit,class Consume>
+    TglOwnedVeboxCommandTransactionResult withNativeOwnedVpAdmissionCommandFrame(size_t childIndex,
+        const TglNativeOuterSurfaceRoles& roles,size_t sourceIndex,size_t targetIndex,
+        ExecutionOwner& executionOwner,uintptr_t renderHal,uintptr_t sku,Read read,
+        Admit admit,Consume consume) noexcept {
+        if(!backing_.vpBound(childIndex)) return {};
+        return withNativeOwnedChildCommandFrame(childIndex,roles,sourceIndex,targetIndex,
+            executionOwner,renderHal,sku,read,
+            [&](auto& owner,void* child,auto& source,auto& target,auto& parameters,auto& packets) noexcept {
+                TglOwnedVeboxCommandTransactionResult command;
+                bool entered=false,repeated=false,accepted=false;
+                const uintptr_t expectedExecution=packets.execution;
+                const auto* expectedTarget=packets.target;
+                auto identities=[&]() noexcept {
+                    return packets.child==reinterpret_cast<uintptr_t>(child) &&
+                        packets.execution==expectedExecution && packets.target==expectedTarget && expectedTarget &&
+                        owner.hasPrivateChildLease(reinterpret_cast<uintptr_t>(child)) &&
+                        executionOwner.hasExecutionLease(expectedExecution) &&
+                        source.hasSurfaceLease(packets.source) && target.hasSurfaceLease(*expectedTarget);
+                };
+                auto enterResources=[&](auto runAdmission) noexcept -> bool {
+                    static_assert(noexcept(runAdmission()) &&
+                        std::is_same_v<decltype(runAdmission()),bool>);
+                    if(entered) {repeated=true;return false;}
+                    entered=true;
+                    if(!identities()) return false;
+                    command=withLeasedVpCommandResources(childIndex,owner,child,source,target,parameters,packets,
+                        [&](auto& actualOwner,void* actualChild,void* vp,auto& graph,auto& lines,
+                            auto& actualSource,auto& actualTarget,auto& dn,auto& actualPackets) noexcept {
+                            if(!runAdmission() || !identities()) return TglOwnedVeboxCommandTransactionResult{};
+                            accepted=true;
+                            static_assert(noexcept(consume(actualOwner,actualChild,vp,graph,lines,
+                                actualSource,actualTarget,dn,actualPackets)) &&
+                                std::is_same_v<decltype(consume(actualOwner,actualChild,vp,graph,lines,
+                                    actualSource,actualTarget,dn,actualPackets)),TglOwnedVeboxCommandTransactionResult>);
+                            return consume(actualOwner,actualChild,vp,graph,lines,
+                                actualSource,actualTarget,dn,actualPackets);
+                        });
+                    return accepted;
+                };
+                static_assert(noexcept(admit(owner,child,source,target,parameters,packets,backing_,enterResources)) &&
+                    std::is_same_v<decltype(admit(owner,child,source,target,parameters,packets,backing_,enterResources)),bool>);
+                const bool admitted=admit(owner,child,source,target,parameters,packets,backing_,enterResources);
+                if((!admitted || !entered || repeated || !accepted) && !command.status) command.status=5;
+                return command;
+            });
+    }
+
     // Build a deferred packet reader over this aggregate's retained VP/DN/
     // surface backing. Factory only borrows these owners/resource views; input
     // capture happens at producer use, AFTER Render's native preparation. No
