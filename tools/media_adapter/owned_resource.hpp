@@ -12452,6 +12452,17 @@ public:
     ~TglOwnedVpSfcCpuGraph(){reset();}
     bool ownsStorage(const void* child) const noexcept {return ready_ && child==storage_.bytes.data();}
     uint64_t generation() const noexcept {return generation_;}
+    // Bind only between frame borrowers, never during initialization or
+    // outstanding GPU retention. A ResourceOwnerLease may pin this storage;
+    // it is not a busy callback or evidence of GPU submission. Admit establishes
+    // this graph's current caller and successful native virtual118 boundary.
+    template<class Read,class Admit>
+    bool bindNativeCallerFields(uintptr_t caller,Read read,Admit admit) {
+        if(!ready_ || busy_ || constructionScope_ ||
+           (retention_ && (*retention_)())) return false;
+        Guard guard(busy_);
+        return tglBindVpNativeCallerFields(storage_,caller,read,admit);
+    }
     template<class Binding,class Read>
     bool initialize(uintptr_t os,uintptr_t renderHal,uintptr_t mhw,
         const Binding& binding,Read read,uint32_t channel,uintptr_t performance) {

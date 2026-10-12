@@ -10368,6 +10368,32 @@ static void testSfcLineBufferOwnership() {
             }
             TglOwnedVpSfcCpuGraph<Cpu,Cpu> graph(stateCpu,avsCpu);
             assert(graph.initialize(0x1000,0x2000,0x3000,binding,noRead,1,0));
+            std::array<uint8_t,0x1bb0> nativeCaller{};
+            const uintptr_t nativeCallerAddress=reinterpret_cast<uintptr_t>(nativeCaller.data());
+            uint32_t nativeMode=1,nativeChannel=9;
+            std::memcpy(nativeCaller.data()+0xa0c,&nativeMode,4);
+            std::memcpy(nativeCaller.data()+0x1bac,&nativeChannel,4);
+            auto callerRead=[&](uintptr_t p,void* out,size_t n) {
+                if(p<nativeCallerAddress || p-nativeCallerAddress>nativeCaller.size() ||
+                   n>nativeCaller.size()-(p-nativeCallerAddress))return false;
+                std::memcpy(out,nativeCaller.data()+(p-nativeCallerAddress),n);return true;
+            };
+            unsigned callerAdmissions=0;
+            auto callerAdmit=[&](uintptr_t p,const auto& s) {
+                ++callerAdmissions;
+                assert(graph.ownsStorage(s.bytes.data()));
+                assert(!graph.bindNativeCallerFields(p,callerRead,
+                    [](uintptr_t,const auto&){assert(false);return true;}));
+                return p==nativeCallerAddress;
+            };
+            assert(graph.bindNativeCallerFields(nativeCallerAddress,callerRead,callerAdmit));
+            assert(callerAdmissions==1);
+            assert(graph.withView(false,[&](void* child) noexcept {
+                uint32_t value=0;std::memcpy(&value,static_cast<uint8_t*>(child)+0x918,4);
+                assert(value==9);
+                assert(!graph.bindNativeCallerFields(nativeCallerAddress,callerRead,callerAdmit));
+                return 0;
+            })==0 && callerAdmissions==1);
             stateCpu.lineLive=avsCpu.lineLive=&backend.live;
             unsigned retired=0;int admission=31;
             void(*lifecycleReenter)(void*) noexcept=nullptr;void* lifecycleChild=nullptr;
