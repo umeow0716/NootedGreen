@@ -23529,16 +23529,22 @@ int main() {
                                 auto historyWritable=[&](uintptr_t address,size_t size) noexcept {
                                     return historyAllowed && address==historyAddress+4 && size==5;
                                 };
+                                TglOwnedVeboxHistoryAdmissionStage<std::decay_t<decltype(owner)>,
+                                    std::decay_t<decltype(executionLease)>,std::decay_t<decltype(sourceOwner)>,
+                                    decltype(historyReadable),decltype(historyWritable)> historyStage{
+                                    owner,executionLease,sourceOwner,child,live.leases.execution,
+                                    live.leases.source,historyReadable,historyWritable};
+                                auto foreignReport=executionBackend.bytes;
+                                assert(!historyStage(foreignReport));
+                                const uint32_t initialHistoryMode=1;
+                                std::memcpy(admissionHistory.data()+4,&initialHistoryMode,4);
                                 auto runCheckedFeature=[&]() noexcept {
                                     return tglRunSelectedVeboxAdmissionStages(checkedInput,executionBackend.bytes,checkedPass,
                                         []() noexcept {return true;},
                                         [](uint8_t&) noexcept -> uint32_t {return 1;},
-                                        [&](auto&) noexcept {
+                                        [&](auto& report) noexcept {
                                             ++checkedHistory;
-                                            return tglUpdateBorrowedVeboxHistory(owner,child,live.leases.source,
-                                                sourceOwner.linkedStorage(live.leases.source,0xc0),
-                                                sourceOwner.linkedStorage(live.leases.source,0xc8),
-                                                1,historyReadable,historyWritable);
+                                            return historyStage(report);
                                         },
                                         []() noexcept {return true;},
                                         [&](auto&) noexcept {return prepareFeature()==0;},

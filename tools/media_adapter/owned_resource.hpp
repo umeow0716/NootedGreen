@@ -12094,6 +12094,30 @@ bool tglUpdateBorrowedVeboxHistory(Owner& owner,void* child,
     return tglUpdateOwnedVeboxHistory(owner,child,history,source,c0,c8,pipe);
 }
 
+// Installation-time history stage for the same report and source graph as
+// admission. Read the freshly published pipe, not a captured pre-reset value.
+template<class ChildOwner,class ExecutionOwner,class SourceGraph,class Readable,class Writable>
+struct TglOwnedVeboxHistoryAdmissionStage {
+    ChildOwner& childOwner;ExecutionOwner& executionOwner;SourceGraph& sourceGraph;
+    void* child;uintptr_t execution;const TglOwnedSurfaceStorage& source;
+    Readable readable;Writable writable;
+    template<class Execution> bool operator()(Execution& report) noexcept {
+        static_assert(TglAdmissionExecutionExtent<Execution>::value>=0xa10);
+        if(!child || reinterpret_cast<uintptr_t>(report.data())!=execution ||
+            !childOwner.hasPrivateChildLease(reinterpret_cast<uintptr_t>(child)) ||
+            !executionOwner.hasExecutionLease(execution) || !sourceGraph.hasSurfaceLease(source)) return false;
+        uintptr_t linked=0;std::memcpy(&linked,static_cast<uint8_t*>(child)+0x88,8);
+        if(linked!=execution) return false;
+        uint32_t pipe=UINT32_MAX;std::memcpy(&pipe,report.data()+0xa0c,4);
+        if(pipe>2) return false;
+        const bool updated=tglUpdateBorrowedVeboxHistory(childOwner,child,source,
+            sourceGraph.linkedStorage(source,0xc0),sourceGraph.linkedStorage(source,0xc8),
+            pipe,readable,writable);
+        return updated && sourceGraph.hasSurfaceLease(source) &&
+            executionOwner.hasExecutionLease(execution);
+    }
+};
+
 // Named installation-time policy type for the SAME already-leased native
 // report used by the frontend frame. Do not recursively acquire execution,
 // snapshot the selected pipe before reset, or adopt caller-supplied pointers.
