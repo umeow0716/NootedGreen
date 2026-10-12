@@ -1340,6 +1340,9 @@ static void testTrackedCpuOwner() {
                 return tableReady && installed==hooks;
             }
             bool hasPrivateChildLease(uintptr_t p) const noexcept {return leased && p==address;}
+            bool hasPrivateChildImageLease(uintptr_t p,uintptr_t image) const noexcept {
+                return hasPrivateChildLease(p) && image==0x100000000;
+            }
             bool publishCsc(const TglCscCoefficients& value) noexcept {
                 if(!leased) return false; ++writes;saved=value;return true;
             }
@@ -1524,6 +1527,31 @@ static void testTrackedCpuOwner() {
                     return &value==source;
                 }
             } sourceLease{&source};
+            SourceLease targetLease{&target};
+            TglOwnedVeboxFrameRetention renderRetention;
+            unsigned renderCalls=0;
+            const auto rejectedRender=tglWithOwnedVeboxFrameNativeRender<AuxiliaryResolve,
+                AuxiliaryScope,AuxiliaryScope,AuxiliaryScope,FormatRead>(sourceLease,source,
+                targetLease,target,frame,child,execution,0,noRead,noPackets,produce,
+                TglVeboxRenderBinding{},nullptr,renderRetention,
+                [&](uintptr_t,void*,void*,void*) noexcept -> int {++renderCalls;return 0;});
+            assert(rejectedRender.status==5 && !rejectedRender.nativeEntered &&
+                !renderRetention() && renderCalls==0);
+            TglVeboxRenderBinding renderBinding;
+            renderBinding.image=0x100000000;renderBinding.entry=renderBinding.image+0x12c9d0;
+            const auto enteredRender=tglWithOwnedVeboxFrameNativeRender<AuxiliaryResolve,
+                AuxiliaryScope,AuxiliaryScope,AuxiliaryScope,FormatRead>(sourceLease,source,
+                targetLease,target,frame,child,execution,0,noRead,noPackets,produce,
+                renderBinding,nullptr,renderRetention,
+                [&](uintptr_t entry,void* object,void* argument,void* pair) noexcept -> int {
+                    ++renderCalls;assert(entry==renderBinding.entry && object==nativeChild &&
+                        !argument && pair);
+                    auto* producer=Producers::Resolve::get(object);assert(producer);
+                    assert(producer->pass.record(31));
+                    return producer->pass.gate([]() noexcept {assert(false);return 0;});
+                });
+            assert(enteredRender.status==31 && enteredRender.nativeEntered &&
+                !enteredRender.acquired && !enteredRender.writtenBack && renderRetention() && renderCalls==1);
             TglOwnedVeboxCommandTransactionResult transaction;
             unsigned setups=0,builders=0,writebacks=0;
             bool allowWriteback=true;

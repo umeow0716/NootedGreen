@@ -21857,6 +21857,38 @@ int tglWithOwnedVeboxFrameHookBindings(Frame& frame,ChildOwner& child,ExecutionO
         });
 }
 
+// Whole native Render, including preparation and any internal submission,
+// under the SAME producer pass and complete installed hook scopes. Original
+// surface owners must remain alive until qualified retirement, not just until
+// this synchronous return. Native success is not a completion certificate.
+template<class LifetimeResolve,class AdmissionResolve,class AllocationResolve,
+    class ModeResolve,class FormatRead,class SourceOwner,class TargetOwner,
+    class Frame,class ChildOwner,class ExecutionOwner,class Read,class PacketAdmit,
+    class ProduceCsc,class Invoke=TglNativeVeboxStageInvoker>
+TglOwnedVeboxCommandTransactionResult tglWithOwnedVeboxFrameNativeRender(
+    SourceOwner& sourceOwner,const TglOwnedSurfaceStorage& source,
+    TargetOwner& targetOwner,const TglOwnedSurfaceStorage& target,
+    Frame& frame,ChildOwner& child,ExecutionOwner& execution,uintptr_t dnParams,
+    Read read,PacketAdmit admitPackets,ProduceCsc produceCsc,
+    const TglVeboxRenderBinding& binding,void* argument1,
+    TglOwnedVeboxFrameRetention& retention,Invoke invoke={}) noexcept {
+    TglOwnedVeboxCommandTransactionResult result;
+    if(retention()) return result;
+    result.status=tglWithOwnedVeboxFrameHookBindings<LifetimeResolve,AdmissionResolve,
+        AllocationResolve,ModeResolve,FormatRead>(frame,child,execution,dnParams,read,
+        admitPackets,produceCsc,[&](void* object,const auto&,auto& producer) noexcept -> int {
+            return producer.pass.withBuilder([&]() noexcept -> int {
+                result=tglRunLeasedVeboxSurfaceRender(binding,child,object,argument1,
+                    sourceOwner,source,targetOwner,target,invoke);
+                // Keep conservative entry ownership even if the pass or native
+                // consumer rejects later; observe before any scope unwinds.
+                retention.observe(result);
+                return result.status;
+            });
+        });
+    return result;
+}
+
 // Complete synchronous command entry under the caller's allocation/admission/
 // mode/lifecycle and retained-frame scopes. Native setup/build must receive the
 // SAME producer that owns the installed hooks, not the underlying packet-only
