@@ -19765,7 +19765,7 @@ public:
     // separately constructed fixture dependency or the VEBOX aggregate50.
     template<class Read,class Qualify,class Executable>
     int initializeVpFromCreator(const TglNativeVphalMhwView& view,
-        uint32_t channel,uintptr_t performance,Read read,Qualify qualify,Executable executable) {
+        Read read,Qualify qualify,Executable executable) {
         TglVeboxHardwareBinding hardware;
         TglSfcMhwBinding sfc;
         uintptr_t object=0;
@@ -19773,7 +19773,9 @@ public:
             !read(view.parent+0x60,&object,8) || !object || object==hardware.interface ||
             !sfc.resolve(view.renderer.image,read,qualify,executable) ||
             !sfc.validateConstructedObject(object,view.os,read)) return 5;
-        return backing_.initializeVp(sfc,view.os,view.renderHal,object,read,channel,performance);
+        // Donor1dd150 initializes VP918/9c8 to zero. Native TGL12c010
+        // supplies dispatch values later; creator has no authenticated frame.
+        return backing_.initializeVp(sfc,view.os,view.renderHal,object,read,0,0);
     }
     // Source-free creator handoff; enclosing owner holds physical/image and
     // exclusive VPHAL admission through initialization AND eventual teardown.
@@ -20041,8 +20043,8 @@ public:
             construct,object,&sharedSfcGate_);
     }
     template<class Read,class Qualify,class Executable>
-    int initializeVpFromCreator(const TglNativeVphalMhwView& view,uint32_t channel,
-        uintptr_t performance,Read read,Qualify qualify,Executable executable) {
+    int initializeVpFromCreator(const TglNativeVphalMhwView& view,
+        Read read,Qualify qualify,Executable executable) {
         const auto* retained=mhwLease_.binding();
         TglVeboxHardwareBinding hardware;
         TglSfcMhwBinding sfc;
@@ -20052,7 +20054,7 @@ public:
             !read(view.parent+0x60,&object,8) || !object || object==hardware.interface ||
             !sfc.resolve(view.renderer.image,read,qualify,executable) ||
             !sfc.validateConstructedObject(object,view.os,read)) return 5;
-        return backing_.initializeVp(sfc,view.os,view.renderHal,object,read,channel,performance);
+        return backing_.initializeVp(sfc,view.os,view.renderHal,object,read,0,0);
     }
     // Scalar-only request (no nested request38 payload). Publish through the
     // existing native-release slot only after this exact tracked allocation

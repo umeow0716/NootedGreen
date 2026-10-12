@@ -20077,17 +20077,17 @@ int main() {
                                 }
                                 return resourceRead(address,output,bytes);
                             };
-                            assert(storage.initializeVpFromCreator(*creatorView,0,0,parentSfcRead,qualifyMhw,executableMhw)==5);
+                            assert(storage.initializeVpFromCreator(*creatorView,parentSfcRead,qualifyMhw,executableMhw)==5);
                             putNative(nativeCreator,0x60,creatorView->hardware.interface);
-                            assert(storage.initializeVpFromCreator(*creatorView,0,0,parentSfcRead,qualifyMhw,executableMhw)==5);
+                            assert(storage.initializeVpFromCreator(*creatorView,parentSfcRead,qualifyMhw,executableMhw)==5);
                             putNative(nativeCreator,0x60,parentSfcAddress);admitSfcTable=false;
-                            assert(storage.initializeVpFromCreator(*creatorView,0,0,parentSfcRead,qualifyMhw,executableMhw)==5);
+                            assert(storage.initializeVpFromCreator(*creatorView,parentSfcRead,qualifyMhw,executableMhw)==5);
                             admitSfcTable=true;parentSfc[0x40]=0;
-                            assert(storage.initializeVpFromCreator(*creatorView,0,0,parentSfcRead,qualifyMhw,executableMhw)==5);
+                            assert(storage.initializeVpFromCreator(*creatorView,parentSfcRead,qualifyMhw,executableMhw)==5);
                             parentSfc[0x40]=1;
-                            assert(storage.initializeVpFromCreator(foreign,0,0,parentSfcRead,qualifyMhw,executableMhw)==5);
+                            assert(storage.initializeVpFromCreator(foreign,parentSfcRead,qualifyMhw,executableMhw)==5);
                             assert(!vpCpu.live && !vpAvsCpu.live);
-                            assert(storage.initializeVpFromCreator(*creatorView,0,0,parentSfcRead,qualifyMhw,executableMhw)==0);
+                            assert(storage.initializeVpFromCreator(*creatorView,parentSfcRead,qualifyMhw,executableMhw)==0);
                             assert(storage.backing().vpBound() && vpCpu.live && vpAvsCpu.live);
                             assert(storage.backing().withVpResources([&](auto&,auto& vp,auto&) noexcept -> int {
                                 uintptr_t linkedOs=0,linkedRh=0,linkedSfc=0;
@@ -20362,13 +20362,13 @@ int main() {
                                 [&](uintptr_t address,uint64_t generation,uintptr_t) noexcept {
                                     return address==rendererAddress && generation==1;
                                 },[](void*,uint64_t,uintptr_t,uintptr_t) noexcept {return true;}));
-                            assert(frame.initializeVpFromCreator(staleCreator,1,0,
+                            assert(frame.initializeVpFromCreator(staleCreator,
                                 frontendRead,qualifyMhw,executableMhw)==5 && !vpCpu.live);
                             putNative(nativeCreator,0x60,0);
-                            assert(frame.initializeVpFromCreator(frontendCreatorView,1,0,
+                            assert(frame.initializeVpFromCreator(frontendCreatorView,
                                 frontendRead,qualifyMhw,executableMhw)==5 && !vpCpu.live);
                             putNative(nativeCreator,0x60,frontendSfc);
-                            assert(frame.initializeVpFromCreator(frontendCreatorView,1,0,
+                            assert(frame.initializeVpFromCreator(frontendCreatorView,
                                 frontendRead,qualifyMhw,executableMhw)==0);
                             assert(frame.backing().withVpResources([&](auto&,auto& storage,auto&) noexcept {
                                 uintptr_t vpOs=0,vpRh=0,vpSfc=0;
@@ -20376,6 +20376,10 @@ int main() {
                                 std::memcpy(&vpRh,storage.bytes.data()+0x18,8);
                                 std::memcpy(&vpSfc,storage.bytes.data()+0x20,8);
                                 assert(vpOs==os && vpRh==frontendCreatorView.renderHal && vpSfc==frontendSfc);
+                                uint32_t initialChannel=99;uintptr_t initialPerformance=99;
+                                std::memcpy(&initialChannel,storage.bytes.data()+0x918,4);
+                                std::memcpy(&initialPerformance,storage.bytes.data()+0x9c8,8);
+                                assert(initialChannel==0 && initialPerformance==0);
                                 return 0;
                             })==0);
                             const uintptr_t foreignDn=0xdead;
