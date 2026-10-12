@@ -12687,6 +12687,38 @@ template<class Produce,class Consume> struct TglOwnedVpPreparedSetupContext {
     }
 };
 
+// Both dispatch domains remain live for the whole native consumer call.
+// Contexts borrow the caller's producers; this does not acquire state leases
+// prematurely or supply missing platform/resource entries.
+template<class Producer,class Setup,class Use>
+int tglWithOwnedVpPairedPreparedEntries(Producer& firstProducer,Setup& firstSetup,
+    Producer& secondProducer,Setup& secondSetup,
+    const std::array<TglOwnedVpEntrySet,2>& base,Use use) noexcept {
+    void* first=firstProducer.child;void* second=secondProducer.child;
+    if(!first || !second || first==second || firstSetup.child!=first ||
+        secondSetup.child!=second) return 5;
+    typename TglOwnedVpSfcScopedContext<Producer>::Pair producers(
+        first,firstProducer,second,secondProducer);
+    if(!producers.bound()) return 5;
+    typename TglOwnedVpSfcScopedContext<Setup>::Pair setups(
+        first,firstSetup,second,secondSetup);
+    if(!setups.bound()) return 5;
+    auto entries=base;
+    using ProducerResolve=TglOwnedVpSfcResolve<Producer>;
+    using SetupResolve=TglOwnedVpSfcResolve<Setup>;
+    if(!tglBindOwnedVpProducerEntries<ProducerResolve>(first,entries[0]) ||
+        !tglBindOwnedVpProducerEntries<ProducerResolve>(second,entries[1]) ||
+        !tglBindOwnedVpSetupSendEntries<SetupResolve>(first,entries[0]) ||
+        !tglBindOwnedVpSetupSendEntries<SetupResolve>(second,entries[1])) return 5;
+    static_assert(noexcept(use(first,entries[0],second,entries[1])),"paired prepared consumer ABI");
+    const int result=use(first,entries[0],second,entries[1]);
+    if(result) return result;
+    if(firstProducer.error) return firstProducer.error;
+    if(secondProducer.error) return secondProducer.error;
+    if(firstSetup.error) return firstSetup.error;
+    return secondSetup.error;
+}
+
 template<class StateBackend,class AvsBackend> class TglOwnedVpSfcCpuGraph {
     TglOwnedVpSfcCallerStorage storage_;
     TglOwnedSfcStateParameters<StateBackend> state_;

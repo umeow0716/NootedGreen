@@ -13709,6 +13709,45 @@ static void testRetainedVeboxFrames() {
 
 int main() {
     {
+        int children[2]{},data[2]{},source[2]{},target[2]{},command=0;
+        unsigned states=0,filters=0,produced=0,consumed=0;
+        auto state=[&]() noexcept -> int {++states;return 0;};
+        auto filter=[&]() noexcept {++filters;};
+        auto produce=[&]() noexcept -> int {++produced;return 0;};
+        auto consume=[&](void*,void*) noexcept -> int {++consumed;return 0;};
+        using P=TglOwnedVpPreparedProducerContext<decltype(state),decltype(filter)>;
+        using S=TglOwnedVpPreparedSetupContext<decltype(produce),decltype(consume)>;
+        P p0{children,data,source,target,state,filter};
+        P p1{children+1,data+1,source+1,target+1,state,filter};
+        S s0{children,source,target,data,produce,consume};
+        S s1{children+1,source+1,target+1,data+1,produce,consume};
+        std::array<TglOwnedVpEntrySet,2> base{};
+        decltype(base) saved{};
+        assert(tglWithOwnedVpPairedPreparedEntries(p0,s0,p1,s1,base,
+            [&](void* a,const auto& ea,void* b,const auto& eb) noexcept -> int {
+                saved={ea,eb};
+                assert(ea.state(a,data,source,target)==5); // phase not admitted
+                p0.active=p1.active=true;
+                assert(eb.state(b,data+1,source+1,target+1)==0);
+                assert(ea.state(a,data,source,target)==0);
+                p0.leasedState=reinterpret_cast<const uint8_t*>(data);
+                p1.leasedState=reinterpret_cast<const uint8_t*>(data+1);
+                eb.filters(b,nullptr,data+1,source+1);
+                ea.filters(a,nullptr,data,source);
+                assert(eb.setup(b,source+1,target+1,data+1)==0);
+                assert(ea.setup(a,source,target,data)==0);
+                assert(ea.send(a,data,&command)==0);
+                assert(eb.send(b,data+1,&command)==0);
+                assert(ea.state(nullptr,data,source,target)==5);
+                return 0;
+            })==0);
+        assert(states==2 && filters==2 && produced==2 && consumed==2);
+        assert(saved[0].setup(children,source,target,data)==5);
+        assert(saved[1].send(children+1,data+1,&command)==5);
+        assert(tglWithOwnedVpPairedPreparedEntries(p0,s0,p1,s0,base,
+            [](void*,const auto&,void*,const auto&) noexcept -> int {assert(false);return 0;})==5);
+    }
+    {
         TglOwnedVpSfcCallerStorage first,second;
         TestPairedVpResourceLines a{&first},b{&second};
         TestPairedVpResourceState sa,sb;unsigned admissions=0;
