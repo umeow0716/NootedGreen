@@ -13709,6 +13709,23 @@ static void testRetainedVeboxFrames() {
 
 int main() {
     {
+        int children[2]{};
+        std::array<uint8_t,0xf8> state{};
+        std::array<uint8_t,64> ief{};
+        TglOwnedVpCscProducerContext<0xf8> context(children,ief,state.data(),nullptr);
+        TglOwnedVpCscDispatchContext phase(children);
+        assert(phase.withContext(context,[&]() noexcept -> int {
+            assert(phase.withContext(context,[]() noexcept -> int {assert(false);return 0;})==5);
+            phase.csc(state.data(),ief.data());return 0;
+        })==0);
+        phase.csc(state.data(),ief.data());assert(phase.status()==5);
+        const std::array<TglOwnedVpEntrySet,2> base{};
+        assert(tglWithOwnedVpPairedCscDispatchEntries(children,children+1,base,
+            [&](void* a,const auto& ea,auto&,void*,const auto&,auto&) noexcept -> int {
+                ea.csc(a,state.data(),ief.data());return 0;
+            })==5);
+    }
+    {
         int objects[2]{};
         std::array<uint8_t,0xf8> state0{},state1{};
         std::array<uint8_t,64> ief0{},ief1{};
@@ -21082,6 +21099,10 @@ int main() {
                                         auto releaseCpu=[](void*) noexcept {assert(false);};
                                         for(int expected:{0,-31}) {
                                             unsigned states=0,emissions=0;
+                                            std::array<TglOwnedVpCscCache,2> cscCaches;
+                                            std::array<std::array<uint8_t,64>,2> iefPackets{};
+                                            TglOwnedVpCscDispatchContext* phases[2]{};
+                                            const TglOwnedVpEntrySet* catalogues[2]{};
                                             assert(firstGraph.withPairedProducerReservation(secondGraph,[&](void*,void*) noexcept -> int {
                                                 return tglWithOwnedVpPairedAcquiredFrameCore(firstGraph,first,firstLines.resources(),
                                                     secondGraph,second,secondLines.resources(),args,read,modeRetire,releaseCpu,
@@ -21090,9 +21111,25 @@ int main() {
                                                         ++states;return 0;
                                                     },[](void*,const auto&,auto&) noexcept -> int {return 0;},
                                                     [](void*,const auto&) noexcept {},
-                                                    [&](void*,void*,void*) noexcept -> int {++emissions;return 0;},
-                                                    [&](void* a,const auto& ea,void* b,const auto& eb) noexcept -> int {
-                                                        constexpr uint32_t remaining=(1U<<20)|(1U<<21)|(1U<<24)|(1U<<25)|(1U<<26);
+                                                    [&](void* child,void*,void*) noexcept -> int {
+                                                        const size_t index=child==first.bytes.data()?0:1;
+                                                        auto& graph=index?secondGraph:firstGraph;
+                                                        return graph.withCscContext(child,iefPackets[index],cscCaches[index],3,5,0,
+                                                            [](uintptr_t,void*,size_t) noexcept {assert(false);return false;},
+                                                            [](TglCscCoefficients&,uint32_t,uint32_t) noexcept {return true;},
+                                                            [&](auto& context,uint8_t* packet) noexcept -> int {
+                                                                return phases[index]->withContext(context,[&]() noexcept -> int {
+                                                                    catalogues[index]->csc(child,packet,iefPackets[index].data());
+                                                                    ++emissions;return 0;
+                                                                });
+                                                            });
+                                                    },
+                                                    [&](void* a,const auto& baseA,void* b,const auto& baseB) noexcept -> int {
+                                                        const std::array<TglOwnedVpEntrySet,2> base{baseA,baseB};
+                                                        return tglWithOwnedVpPairedCscDispatchEntries(a,b,base,
+                                                            [&](void*,const auto& ea,auto& pa,void*,const auto& eb,auto& pb) noexcept -> int {
+                                                        phases[0]=&pa;phases[1]=&pb;catalogues[0]=&ea;catalogues[1]=&eb;
+                                                        constexpr uint32_t remaining=(1U<<21)|(1U<<24)|(1U<<25)|(1U<<26);
                                                         assert(ea.missingMask()==remaining && eb.missingMask()==remaining);
                                                         for(size_t i=0;i<2;++i) {
                                                             void* child=i?b:a;const auto& entries=i?eb:ea;
@@ -21105,6 +21142,7 @@ int main() {
                                                             if(result) return result;
                                                         }
                                                         return expected;
+                                                        });
                                                     });
                                             })==expected);
                                             assert(states==2 && emissions==2);

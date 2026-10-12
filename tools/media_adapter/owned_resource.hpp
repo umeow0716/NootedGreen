@@ -10035,6 +10035,44 @@ bool tglBindOwnedVpCscEntry(void* child,TglOwnedVpEntrySet& target) noexcept {
     candidate.csc=&TglOwnedVpCscCallback<Resolve>::csc;
     target=candidate;return true;
 }
+class TglOwnedVpCscDispatchContext {
+    void* child_;void* active_=nullptr;
+    void(*forward_)(void*,void*,void*) noexcept=nullptr;
+    int error_=0;
+public:
+    explicit TglOwnedVpCscDispatchContext(void* child) noexcept :child_(child){}
+    TglOwnedVpCscDispatchContext(const TglOwnedVpCscDispatchContext&)=delete;
+    bool owns(void* child) const noexcept {return child && child==child_;}
+    int status() const noexcept {return error_;}
+    void csc(void* state,void* ief) noexcept {
+        if(!active_ || !forward_) {error_=5;return;}
+        forward_(active_,state,ief);
+    }
+    template<class Context,class Use> int withContext(Context& context,Use use) noexcept {
+        if(error_ || active_ || !context.owns(child_)) return 5;
+        active_=&context;
+        forward_=+[](void* c,void* s,void* i) noexcept {static_cast<Context*>(c)->csc(s,i);};
+        static_assert(noexcept(use()) && noexcept(context.status()),"phase CSC consumer ABI");
+        const int result=use();
+        active_=nullptr;forward_=nullptr;
+        return result?result:(error_?error_:context.status());
+    }
+};
+template<class Use>
+int tglWithOwnedVpPairedCscDispatchEntries(void* first,void* second,
+    const std::array<TglOwnedVpEntrySet,2>& base,Use use) noexcept {
+    using Context=TglOwnedVpCscDispatchContext;
+    Context a(first),b(second);
+    typename TglOwnedVpSfcScopedContext<Context>::Pair scope(first,a,second,b);
+    if(!scope.bound()) return 5;
+    auto entries=base;using Resolve=TglOwnedVpSfcResolve<Context>;
+    if(!tglBindOwnedVpCscEntry<Resolve>(first,entries[0]) ||
+        !tglBindOwnedVpCscEntry<Resolve>(second,entries[1])) return 5;
+    static_assert(noexcept(use(first,entries[0],a,second,entries[1],b)),"paired phase CSC ABI");
+    const int result=use(first,entries[0],a,second,entries[1],b);
+    return result?result:(a.status()?a.status():b.status());
+}
+
 template<size_t StateSize> class TglOwnedVpCscProducerContext {
     static_assert(StateSize==0xb8 || StateSize==0xf8,"VP CSC state extent");
     void* child_;std::array<uint8_t,64>& ief_;uint8_t* state_;
