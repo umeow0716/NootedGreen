@@ -3308,6 +3308,7 @@ static void testLeasedGen12PlatformPolicy() {
     struct ChildOwner {
         uintptr_t child,image;bool allow=true;
         bool hasPrivateChildImageLease(uintptr_t p,uintptr_t i) noexcept {return allow && p==child && i==image;}
+        bool hasPrivateChildLease(uintptr_t p) noexcept {return allow && p==child;}
     };
     struct SurfaceOwner {
         const TglOwnedSurfaceStorage* surface;bool allow=true;
@@ -3420,6 +3421,11 @@ static void testLeasedGen12PlatformPolicy() {
         admissionInput.prefix={true,true,true,true,1,uint64_t{1}<<12,64,16};
         admissionInput.params10c=0x1357;admissionInput.mmc=1;
         std::array<uint8_t,0xd48> report{};
+        std::array<uint8_t,11> policyHistory{};policyHistory[0]=1;
+        const uint32_t originalHistoryMode=2;
+        std::memcpy(policyHistory.data()+4,&originalHistoryMode,4);
+        const uintptr_t policyHistoryAddress=reinterpret_cast<uintptr_t>(policyHistory.data());
+        std::memcpy(child.data()+0x90,&policyHistoryAddress,8);
         TglVeboxAdmissionPassByte pass(comp);
         unsigned resets=0,historyStages=0,featureStages=0,sfcStages=0;
         bool ok=false;
@@ -3436,6 +3442,14 @@ static void testLeasedGen12PlatformPolicy() {
                 std::memcpy(&mode,bytes.data()+0xa0c,4);
                 std::memcpy(&priorParams,bytes.data()+0xd28,4);
                 assert(mode==output && priorParams==0 && bytes[0xd2c]==1);
+                // Compose the actual history transition with every selected
+                // platform-policy branch, not a success-only stage recorder.
+                // This matrix owns both shells; their temporal links are NULL.
+                assert(tglUpdateOwnedVeboxHistory(childOwner,child.data(),policyHistory,
+                    source,nullptr,nullptr,mode));
+                uint32_t selectedHistoryMode=99;
+                std::memcpy(&selectedHistoryMode,policyHistory.data()+4,4);
+                assert(selectedHistoryMode==0);
             },
             []() noexcept {return true;},
             [&](auto&) noexcept {++featureStages;assert(historyStages==1);},
