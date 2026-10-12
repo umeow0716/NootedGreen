@@ -21204,8 +21204,10 @@ public:
                 return result;
             });
     }
-    // Runtime owner entry. Keep the original execution lease through private
-    // child, surface, DN and VP callbacks; no report copy or implicit ensure.
+    // Explicit-owner composition entry, not native report construction.
+    // Native child88 is owned by the child and must instead be borrowed via
+    // owner.withNativeOwnedExecution; never overwrite it with this owner's
+    // independently allocated report. No report copy or implicit ensure here.
     // The durable frame still retains executionOwner/backing until admitted
     // retirement; this synchronous lease is not asynchronous fence ownership.
     template<class ExecutionOwner,class Consume,
