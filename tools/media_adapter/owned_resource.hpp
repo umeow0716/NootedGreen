@@ -13239,12 +13239,27 @@ public:
     int withCscProducerEntries(void* child,std::array<uint8_t,64>& ief,
         TglOwnedVpCscCache& cache,uint32_t from,uint32_t to,uintptr_t sourceA8,
         Read read,Produce produce,Use use) noexcept {
+        return withCscContext(child,ief,cache,from,to,sourceA8,read,produce,
+            [&](auto& context,uint8_t* state) noexcept -> int {
+                using Context=std::remove_reference_t<decltype(context)>;
+                TglOwnedVpSfcScopedContext<Context> scope(child,context);
+                if(!scope.bound()) return 5;
+                TglOwnedVpEntrySet entries;
+                if(!tglBindOwnedVpCscEntry<TglOwnedVpSfcResolve<Context>>(child,entries)) return 5;
+                static_assert(noexcept(use(child,entries.csc,state)),"VP CSC graph consumer ABI");
+                return use(child,entries.csc,state);
+            });
+    }
+    template<class Read,class Produce,class Use>
+    int withCscContext(void* child,std::array<uint8_t,64>& ief,
+        TglOwnedVpCscCache& cache,uint32_t from,uint32_t to,uintptr_t sourceA8,
+        Read read,Produce produce,Use use) noexcept {
         if(!ready_ || !busy_ || child!=storage_.bytes.data()) return 5;
         return state_.withPublishedVpParameters(storage_,[&](const uint8_t* state) noexcept {
-            return tglWithOwnedVpCscProducerSpan<0xf8>(storage_,ief,const_cast<uint8_t*>(state),cache,
-                from,to,sourceA8,read,produce,[&](void* admitted,auto csc) noexcept {
-                    static_assert(noexcept(use(admitted,csc,const_cast<uint8_t*>(state))),"VP CSC graph consumer ABI");
-                    return use(admitted,csc,const_cast<uint8_t*>(state));
+            return tglWithOwnedVpCscContextSpan<0xf8>(storage_,ief,const_cast<uint8_t*>(state),cache,
+                from,to,sourceA8,read,produce,[&](auto& context) noexcept {
+                    static_assert(noexcept(use(context,const_cast<uint8_t*>(state))),"VP CSC graph context ABI");
+                    return use(context,const_cast<uint8_t*>(state));
                 });
         });
     }

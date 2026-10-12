@@ -20958,6 +20958,33 @@ int main() {
                                                 std::memcpy(&firstState,first.bytes.data()+0x938,8);
                                                 std::memcpy(&secondState,second.bytes.data()+0x938,8);
                                                 assert(firstState && secondState && firstState!=secondState);
+                                                std::array<uint8_t,64> firstIef{},secondIef{};
+                                                TglOwnedVpCscCache firstCache,secondCache;
+                                                auto noSourceRead=[](uintptr_t,void*,size_t) noexcept {
+                                                    assert(false);return false;
+                                                };
+                                                auto coefficients=[](TglCscCoefficients&,uint32_t,uint32_t) noexcept {
+                                                    return true;
+                                                };
+                                                assert(firstGraph.withCscContext(a,firstIef,firstCache,3,5,0,
+                                                    noSourceRead,coefficients,[&](auto& ca,uint8_t* sa) noexcept -> int {
+                                                        assert(reinterpret_cast<uintptr_t>(sa)==firstState);
+                                                        return secondGraph.withCscContext(b,secondIef,secondCache,3,5,0,
+                                                            noSourceRead,coefficients,[&](auto& cb,uint8_t* sb) noexcept -> int {
+                                                                assert(reinterpret_cast<uintptr_t>(sb)==secondState);
+                                                                const std::array<TglOwnedVpEntrySet,2> bases{ae,be};
+                                                                return tglWithOwnedVpPairedCscEntries(a,ca,b,cb,bases,
+                                                                    [&](void* x,const auto& xe,void* y,const auto& ye) noexcept -> int {
+                                                                        assert(x==a && y==b && xe.allocate==ae.allocate &&
+                                                                            ye.inputFormat==be.inputFormat);
+                                                                        ye.csc(y,sb,secondIef.data());
+                                                                        xe.csc(x,sa,firstIef.data());
+                                                                        return 0;
+                                                                    });
+                                                            });
+                                                    })==0);
+                                                assert((firstIef==std::array<uint8_t,64>{} &&
+                                                    secondIef==std::array<uint8_t,64>{}));
                                                 assert(!firstGraph.tryReset() && !secondGraph.tryReset());
                                                 assert(ae.allocate && be.allocate && ae.freeResources && be.freeResources);
                                                 std::array<TglOwnedVpEntrySet,2> baseEntries{ae,be};
