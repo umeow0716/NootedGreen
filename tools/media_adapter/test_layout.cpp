@@ -22182,8 +22182,10 @@ int main() {
                                         });
                                     })==0);
                                     uint64_t passGeneration=0;
-                                    assert(paired.withVpResources(1,[&](auto& graph,auto&,auto&) noexcept {
+                                    void* resetVp=nullptr;
+                                    assert(paired.withVpResources(1,[&](auto& graph,auto& storage,auto&) noexcept {
                                         passGeneration=graph.generation();
+                                        resetVp=storage.bytes.data();
                                         assert(paired.reinitializeVpPass(1,[]() noexcept -> int {
                                             assert(false);return 0;
                                         })==5);
@@ -22196,14 +22198,33 @@ int main() {
                                     assert(paired.withVpResources(1,[&](auto& graph,auto&,auto&) noexcept {
                                         assert(graph.generation()==passGeneration);return 0;
                                     })==0);
-                                    assert(paired.reinitializeVpPass(1,[&]() noexcept -> int {
+                                    auto retirePass=[&]() noexcept -> int {
                                         ++retireCalls;
                                         assert(!paired.vpBound(1));
                                         assert(paired.reinitializeVpPass(1,[]() noexcept -> int {
                                             assert(false);return 0;
                                         })==5);
                                         return 0;
-                                    })==0 && retireCalls==2 && paired.vpBound(1));
+                                    };
+                                    std::array<uint8_t,0x88> resetBase{};
+                                    struct ResetBaseOwner {
+                                        void* child;bool live=true;
+                                        bool hasPrivateChildLease(uintptr_t p) const noexcept {
+                                            return live && p==reinterpret_cast<uintptr_t>(child);
+                                        }
+                                    } resetOwner{resetBase.data()};
+                                    TglOwnedVeboxPersistentVpAdmissionReset<ResetBaseOwner,
+                                        std::decay_t<decltype(paired)>,decltype(retirePass)> resetPass{
+                                        resetOwner,paired,1,resetBase.data(),resetVp,retirePass};
+                                    assert(!resetPass() && retireCalls==1);
+                                    std::memcpy(resetBase.data()+0x80,&resetVp,8);
+                                    resetPass.index=0;assert(!resetPass() && retireCalls==1);
+                                    resetPass.index=1;resetOwner.live=false;
+                                    assert(!resetPass() && retireCalls==1);resetOwner.live=true;
+                                    assert(paired.withVpResources(1,[&](auto&,auto&,auto&) noexcept {
+                                        assert(!resetPass() && retireCalls==1);return 0;
+                                    })==0);
+                                    assert(resetPass() && retireCalls==2 && paired.vpBound(1));
                                     assert(paired.withVpResources(1,[&](auto& graph,auto&,auto&) noexcept {
                                         assert(graph.generation()==passGeneration+1);return 0;
                                     })==0);

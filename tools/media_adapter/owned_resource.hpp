@@ -12143,6 +12143,35 @@ struct TglOwnedVeboxVpAdmissionReset {
     }
 };
 
+template<class ChildOwner,class Backing,class Retire>
+struct TglOwnedVeboxPersistentVpAdmissionReset {
+    ChildOwner& childOwner;Backing& backing;size_t index;
+    void* child;void* expectedVp;Retire retire;
+    bool operator()() noexcept {
+        static_assert(noexcept(retire()) && std::is_same_v<decltype(retire()),int>);
+        auto linkedVp=[&]() noexcept {
+            if(index>1 || !child ||
+                !childOwner.hasPrivateChildLease(reinterpret_cast<uintptr_t>(child))) return false;
+            uintptr_t linked=0;std::memcpy(&linked,static_cast<uint8_t*>(child)+0x80,8);
+            return linked==reinterpret_cast<uintptr_t>(expectedVp);
+        };
+        if(!linkedVp()) return false;
+        if(!expectedVp) return true;
+        auto verify=[&]() noexcept -> bool {
+            return backing.withVpResources(index,[&](auto& graph,auto& storage,auto&) noexcept -> int {
+                return linkedVp() && storage.bytes.data()==expectedVp && graph.ownsStorage(expectedVp)?0:5;
+            })==0;
+        };
+        if(!verify()) return false;
+        const int status=backing.reinitializeVpPass(index,[&]() noexcept -> int {
+            if(!linkedVp()) return 5;
+            const int result=retire();
+            return result?result:(linkedVp()?0:5);
+        });
+        return !status && verify();
+    }
+};
+
 template<class ChildOwner,class ExecutionOwner,class VpReset>
 struct TglOwnedVeboxAdmissionResetStage {
     ChildOwner& childOwner;ExecutionOwner& executionOwner;
@@ -18204,6 +18233,7 @@ public:
     // A latched native submission remains blocked until completion ownership
     // is implemented; never use this path to clear the retention latch.
     template<class Retire> int reinitializePass(Retire retire) noexcept {
+        static_assert(noexcept(retire()) && std::is_same_v<decltype(retire()),int>);
         if(!bound() || retention_()) return 5;
         preparing_=true;
         struct EndPreparation {bool& active;~EndPreparation(){active=false;}} end{preparing_};
