@@ -9044,14 +9044,33 @@ static void testNativeResourceBoundary() {
                                                 }
                                                 assert(nativeFixture.allocations && nativeFixture.releases==nativeFixture.allocations);
                                             }
-                                            assert(tglRunNativeVeboxAllocationFrame(ownedFrame,linkedInput,
+                                            unsigned capturedAllocationCalls=0;
+                                            auto capturedAllocation=[&](void* active) noexcept -> int {
+                                                ++capturedAllocationCalls;assert(active==actualChild);
+                                                return tglRunNativeVeboxAllocationFrame(ownedFrame,linkedInput,
                                                 static_cast<decltype(&linkedInput)>(nullptr),
                                                 static_cast<decltype(&linkedInput)>(nullptr),&previous,
                                                 childOwner,reportOwner,actualChild,report,current,read,
                                                 noSfc,noSfc,noParameter,[](uint32_t) noexcept {return true;},
                                                 deniedStage,false,false,
                                                 [](uintptr_t,uint32_t) noexcept {assert(false);return false;},
-                                                deniedStage,[](void*,uintptr_t,const auto&) noexcept {assert(false);})==5);
+                                                deniedStage,[](void*,uintptr_t,const auto&) noexcept {assert(false);});
+                                            };
+                                            // Exercise the actual surface allocator through the native
+                                            // +0x58 hook, not only a direct planner call. This case rejects
+                                            // invalid inputs; it does not prove successful Render assembly.
+                                            using CapturedAllocation=TglOwnedVeboxAllocationContext<
+                                                std::decay_t<decltype(childOwner)>,decltype(capturedAllocation)>;
+                                            CapturedAllocation allocationContext(childOwner,capturedAllocation,actualChild);
+                                            using AllocationScope=TglOwnedVeboxScopedContext<CapturedAllocation>;
+                                            {
+                                                AllocationScope allocationScope(actualChild,allocationContext);
+                                                assert(allocationScope.bound());
+                                                const auto allocationHooks=tglBindOwnedVeboxAllocationHook<AllocationScope>(
+                                                    std::array<uintptr_t,20>{});
+                                                auto allocateEntry=reinterpret_cast<int(*)(void*)>(allocationHooks[3]);
+                                                assert(allocateEntry(actualChild)==5 && capturedAllocationCalls==1);
+                                            }
                                             assert(tglRunNativeVeboxSurfaceFrame(ownedFrame,linkedInput,
                                                 static_cast<decltype(&linkedInput)>(nullptr),
                                                 static_cast<decltype(&linkedInput)>(nullptr),&previous,
