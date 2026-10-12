@@ -20511,6 +20511,9 @@ int main() {
                                                     void* created=reinterpret_cast<void*(*)(void*) noexcept>(entry)(parent);
                                                     assert(created==(index?secondVp:firstVp));
                                                     std::memcpy(static_cast<uint8_t*>(parent)+0x80,&created,8);
+                                                    // Exact native126cb0(created,flag) writes
+                                                    // only VP+8, not its leased vptr.
+                                                    static_cast<uint8_t*>(created)[8]=1;
                                                 }
                                                 return nativeStatus;
                                             });
@@ -20518,6 +20521,12 @@ int main() {
                                 })==nativeStatus);
                                 assert(frame.children().first().owner().matchesPrivateVtableHooks(pairHooks[0]) &&
                                     frame.children().second().owner().matchesPrivateVtableHooks(pairHooks[1]));
+                                assert(graph0.prepare([](auto& storage,auto&,auto&) noexcept -> int {
+                                    assert(storage.bytes[8]==1);return 0;
+                                })==0);
+                                assert(graph1.prepare([](auto& storage,auto&,auto&) noexcept -> int {
+                                    assert(storage.bytes[8]==1);return 0;
+                                })==0);
                                 for(size_t index=0;index<2;++index) {
                                     auto& owner=index?frame.children().second().owner():frame.children().first().owner();
                                     uintptr_t link=1;
