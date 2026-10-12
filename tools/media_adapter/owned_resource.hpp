@@ -7215,6 +7215,8 @@ inline bool tglPrepareOwnedFfdiAllocationRequest(const TglOwnedSurfaceStorage& s
 class TglOwnedDescriptorOnlySurface {
     TglOwnedSurfaceStorage storage_{};
     bool ready_=false,busy_=false;
+    const TglOwnedSurfaceStorage* ffdiSource_=nullptr;
+    const TglOwnedSurfaceStorage* ffdiExecution_=nullptr;
 public:
     TglOwnedDescriptorOnlySurface()=default;
     TglOwnedDescriptorOnlySurface(const TglOwnedDescriptorOnlySurface&)=delete;
@@ -7231,6 +7233,7 @@ public:
         std::memcpy(storage_.prefix.data()+0x130,&request.key.format,4);
         std::memcpy(storage_.prefix.data()+0xe4,&request.key.tile,4);
         std::memcpy(storage_.prefix.data()+0xe0,&zero,4);
+        ffdiSource_=nullptr;ffdiExecution_=nullptr;
         ready_=true;changed=true;return true; //4a1af writes1 even on reuse
     }
     // Persist only qualified frame scalars. Borrowed handle1a0 and DN90
@@ -7244,10 +7247,16 @@ public:
         if(!tglPrepareOwnedFfdiFrameMetadata(storage_,input,query)) return false;
         if(execution) tglCopyOwnedFfdiPrimaryScalars(storage_,*execution);
         if(secondary) tglCopyOwnedFfdiSecondaryMetadata(storage_,*secondary);
+        ffdiSource_=&input;ffdiExecution_=execution;
         return true;
     }
+    bool matchesPreparedFfdiRoles(const TglOwnedSurfaceStorage& source,
+        const TglOwnedSurfaceStorage* execution) const noexcept {
+        return ready_ && !busy_ && ffdiSource_==&source && ffdiExecution_==execution;
+    }
     bool publishFfdnFrame(const TglOwnedSurfaceStorage& input) noexcept {
-        return ready_ && !busy_ && tglPrepareOwnedFfdnFrameMetadata(storage_,input);
+        if(!ready_ || busy_ || !tglPrepareOwnedFfdnFrameMetadata(storage_,input)) return false;
+        ffdiSource_=nullptr;ffdiExecution_=nullptr;return true;
     }
     // ICL1f7e52 executes outside the +b0 FFDI allocation gate. An existing
     // slot0 can receive execution68's two scalars without another prepare or
@@ -7351,7 +7360,7 @@ public:
         struct Unlock {bool& busy;~Unlock(){busy=false;}} unlock{busy_};
         use(static_cast<const TglOwnedSurfaceStorage&>(storage_));return true;
     }
-    void reset() noexcept {if(!busy_) {storage_={};ready_=false;}}
+    void reset() noexcept {if(!busy_) {storage_={};ready_=false;ffdiSource_=nullptr;ffdiExecution_=nullptr;}}
 };
 
 // ICL1f7eba..1f7fb1 data policy only, not its virtual-base object ABI.
@@ -7901,6 +7910,8 @@ int tglWithPreparedDescriptorFfdiViews(std::array<TglOwnedDescriptorOnlySurface,
     if(!count || count>Count) return 5;
     return tglWithCapturedOwnedSurfaceRoles(std::array<Owner*,3>{&input,execution,secondary},captured,
         [&](const auto& inputs) noexcept -> int {
+            for(size_t i=0;i<count;++i)
+                if(!targets[i].matchesPreparedFfdiRoles(*inputs[0],inputs[1])) return 5;
             Outputs outputs{};
             const auto enter=[&](auto&& self,size_t index) noexcept -> int {
                 if(index==count) return use(inputs,static_cast<const Outputs&>(outputs),count);

@@ -8801,6 +8801,10 @@ static void testNativeResourceBoundary() {
                     forbiddenReborrow)==5);
                 assert(tglWithPreparedDescriptorFfdiViews(targets,owner,&owner,&destination,5,
                     forbiddenReborrow)==5);
+                assert(tglWithPreparedDescriptorFfdiViews(targets,destination,&owner,&destination,2,
+                    forbiddenReborrow)==5);
+                assert(tglWithPreparedDescriptorFfdiViews(targets,owner,&destination,&destination,2,
+                    forbiddenReborrow)==5);
                 assert(tglWithPreparedDescriptorFfdiViews(targets,owner,&owner,&destination,2,
                     [&](const auto& inputs,const auto& outputs,size_t count) noexcept -> int {
                         ++reborrowed;
