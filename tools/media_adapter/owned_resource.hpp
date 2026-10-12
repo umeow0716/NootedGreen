@@ -3712,11 +3712,14 @@ TglOwnedBaseConstruction tglConstructOwnedVeboxBaseWithSfcAndMhw(
        mhw.os!=reinterpret_cast<uintptr_t>(os)) return TglOwnedBaseConstruction::NotCalled;
     // The same enclosing owner must pin MHW storage/heap across this call.
     // A NULL/fixture MHW is not a complete native child dependency.
-    const auto interface=mhw.interface,heap=mhw.heap;
+    const auto interface=mhw.interface,heap=mhw.heap,image=binding.image;
+    const auto ownerOs=reinterpret_cast<uintptr_t>(os);
     TglVeboxHardwareBinding admitted;
     auto sameMhw=[&] {
-        return mhw.interface==interface && mhw.heap==heap &&
-            admitted.resolve(interface,reinterpret_cast<uintptr_t>(os),binding.image,read,qualify) &&
+        return binding.image==image && binding.construct==image+0x12d4e0 &&
+            binding.destroy==image+0x12de30 && mhw.os==ownerOs &&
+            mhw.interface==interface && mhw.heap==heap &&
+            admitted.resolve(interface,ownerOs,image,read,qualify) &&
             admitted.heap==heap;
     };
     if(!sameMhw()) return TglOwnedBaseConstruction::NotCalled;
