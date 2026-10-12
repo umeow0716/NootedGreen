@@ -1703,7 +1703,7 @@ struct TglNativeCreatedVeboxRendererView {
            !read(result,&rendererTable,8) || rendererTable!=base+0x75bba0 ||
            !read(rendererTable+0x20,&init,8) || init!=base+0x132510 || !executable(init,1) ||
            !read(rendererTable+0x28,&frame,8) || frame!=base+0x131fa0 || !executable(frame,1) ||
-           !read(result+0x910,children.data(),sizeof(children))) return false;
+           !read(result+0x910,children.data(),sizeof(children)) || !children[2]) return false;
         image=base;creator=object;renderer=result;configuration=result+0x2cb0;
         originalChildren=children;return true;
     }
@@ -4262,6 +4262,21 @@ public:
     }
     template<class Admit> bool publish(void* renderer,size_t extent,uint64_t generation,Admit admit) noexcept {
         return bound() && publication_.publish(renderer,extent,generation,admit);
+    }
+    // Called only at successful creator-return, before native renderer+20.
+    // Native creator owns920; missing920 cannot be repaired by VEBOX children.
+    // Complete private hooks/constructed bases and matching configuration are
+    // still enforced by the existing owners/publication, not inferred here.
+    template<class Read,class Admit,class Qualify,class Executable,class ConfigurationAdmit,class PublishAdmit>
+    bool publishFromCreator(uintptr_t image,uintptr_t creator,uint64_t generation,
+        Read read,Admit admit,Qualify qualify,Executable executable,
+        ConfigurationAdmit configurationAdmit,PublishAdmit publishAdmit) noexcept {
+        TglNativeCreatedVeboxRendererView view;
+        if(!generation || !bound() || !view.resolve(image,creator,read,admit,qualify,executable) ||
+           view.originalChildren[0] || view.originalChildren[1]) return false;
+        if(!first_.owner().bindRendererConfiguration(view.renderer,generation,configurationAdmit) ||
+           !second_.owner().bindRendererConfiguration(view.renderer,generation,configurationAdmit)) return false;
+        return publish(reinterpret_cast<void*>(view.renderer),0x2cb8,generation,publishAdmit);
     }
     template<class Admit> bool detach(void* renderer,uint64_t generation,Admit admit) noexcept {
         return publication_.detach(renderer,generation,admit);

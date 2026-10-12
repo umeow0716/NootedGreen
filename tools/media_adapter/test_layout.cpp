@@ -13636,7 +13636,7 @@ int main() {
             put(creatorAddress,0x68,0);assert(!resolveCreated());put(creatorAddress,0x68,r);
             put(r,0,image+0x758158);assert(!resolveCreated());put(r,0,image+0x75bba0);
             assert(resolveCreated());
-            put(r,0x920,0); // Snapshot never modifies native child slots.
+            put(r,0x920,0);assert(!resolveCreated() && !created.renderer);
         }
         put(c,0x12e0,0);assert(!rendererView.resolve(c,read,admit) && !rendererView.renderer);
         put(c,0x12e0,UINTPTR_MAX-8);assert(!rendererView.resolve(c,read,admit));
@@ -18234,6 +18234,7 @@ int main() {
                         assert(pairCpu[0].live && pairCpu[1].live==!failSecond);
                         std::array<uint8_t,0x2cb8> renderer{};
                         const uintptr_t native920=0x9876;std::memcpy(renderer.data()+0x920,&native920,8);
+                        const uintptr_t rendererVptr=base+0x75bba0;std::memcpy(renderer.data(),&rendererVptr,8);
                         const auto original=renderer;
                         // Constructed bases are NOT publishable without complete private tables.
                         assert(!pair.publish(renderer.data(),renderer.size(),1,
@@ -18274,7 +18275,36 @@ int main() {
                             assert(pair.first().owner().bindRendererConfiguration(rendererAddress,1,admitConfiguration));
                             assert(pair.second().owner().bindRendererConfiguration(rendererAddress,1,admitConfiguration));
                             auto admit=[](void*,uint64_t,uintptr_t,uintptr_t) noexcept {return true;};
-                            assert(pair.publish(renderer.data(),renderer.size(),1,admit));
+                            alignas(8) std::array<uintptr_t,14> creator{};
+                            creator[0]=base+0x75bb58;creator[13]=rendererAddress;
+                            const auto creatorAddress=reinterpret_cast<uintptr_t>(creator.data());
+                            uintptr_t createEntry=base+0x1e6610;
+                            auto creatorRead=[&](uintptr_t address,void* dst,size_t bytes) noexcept {
+                                uintptr_t value=0;
+                                if(bytes==8 && address==base+0x75bb70) value=createEntry;
+                                else if(bytes==8 && address==base+0x75bbc0) value=base+0x132510;
+                                else if(bytes==8 && address==base+0x75bbc8) value=base+0x131fa0;
+                                else {
+                                    for(auto range:{std::pair{creatorAddress,sizeof(creator)},std::pair{rendererAddress,renderer.size()}})
+                                        if(address>=range.first && address-range.first<=range.second && bytes<=range.second-(address-range.first)) {
+                                            std::memcpy(dst,reinterpret_cast<const void*>(address),bytes);return true;
+                                        }
+                                    return false;
+                                }
+                                std::memcpy(dst,&value,8);return true;
+                            };
+                            auto creatorAdmit=[&](uintptr_t address,size_t bytes) noexcept {
+                                return (address==creatorAddress && bytes==sizeof(creator)) ||
+                                    (address==rendererAddress && bytes==renderer.size());
+                            };
+                            auto publishCreated=[&]() noexcept {
+                                return pair.publishFromCreator(base,creatorAddress,1,creatorRead,creatorAdmit,
+                                    qualify,executable,admitConfiguration,admit);
+                            };
+                            createEntry++;assert(!publishCreated() && renderer==original);createEntry--;
+                            const uintptr_t zero=0;std::memcpy(renderer.data()+0x920,&zero,8);
+                            assert(!publishCreated());std::memcpy(renderer.data()+0x920,&native920,8);
+                            assert(publishCreated());
                             const auto published=renderer;
                             assert(pair.canDetach(renderer.data(),1,admit) && renderer==published);
                             assert(!pair.canDetach(renderer.data(),2,admit) && renderer==published);
