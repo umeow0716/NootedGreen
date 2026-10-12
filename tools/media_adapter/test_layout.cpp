@@ -21349,6 +21349,12 @@ int main() {
                         int32_t pairStatus=77;
                         TglNativeVeboxMhwOwner emptyMhw(frameMhwInvoke);
                         assert(!assembly.retainedMhw() && !assembly.retainMhw(emptyMhw));
+                        auto neverDiServices=[](const TglNativeDiIecpServices&) noexcept -> int {
+                            assert(false);return -87;
+                        };
+                        assert(assembly.withCreatorDiIecpServices(TglNativeVphalMhwView{},
+                            allocatorRead,[](uintptr_t){assert(false);return false;},
+                            [](uintptr_t,size_t){assert(false);return false;},neverDiServices)==5);
                         assert(assembly.initializeChildFromCreator(0,TglNativeVphalMhwView{},
                             baseBinding,lifetime,pairStatus,allocatorRead,
                             [](uintptr_t image){return image==base;},
@@ -21362,6 +21368,9 @@ int main() {
                             TglOwnedBaseConstruction::NotCalled && pairStatus==77);
                         assert(assembly.retainMhw(frameMhwOwner) && !assembly.retainMhw(frameMhwOwner));
                         assert(assembly.retainedMhw() && retireFrameMhw()==5 && !frameMhwInvoke.cleanups);
+                        assert(assembly.withCreatorDiIecpServices(TglNativeVphalMhwView{},
+                            allocatorRead,[](uintptr_t){assert(false);return false;},
+                            [](uintptr_t,size_t){assert(false);return false;},neverDiServices)==5);
                         auto init=[&](size_t child) {
                             return assembly.initializeQualifiedChild(child,baseBinding,lifetime,mhw,reinterpret_cast<void*>(os),
                                 reinterpret_cast<void*>(0x3000),nullptr,nullptr,nullptr,pairStatus,frameMhwRead,qualifyMhw,pairConstruct);

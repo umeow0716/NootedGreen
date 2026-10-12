@@ -21880,6 +21880,25 @@ public:
         return mhwLease_.acquire(owner);
     }
     const TglVeboxHardwareBinding* retainedMhw() const noexcept {return mhwLease_.binding();}
+    // Services borrow the same creator environment and MHW dependency used
+    // by child construction. Keep their bindings stack-local through use;
+    // this admits neither compression policy nor resource ownership.
+    template<class Read,class Qualify,class Executable,class Use>
+    int withCreatorDiIecpServices(const TglNativeVphalMhwView& view,
+        Read read,Qualify qualify,Executable executable,Use use) noexcept {
+        static_assert(noexcept(use(std::declval<const TglNativeDiIecpServices&>())) &&
+            std::is_same_v<decltype(use(std::declval<const TglNativeDiIecpServices&>())),int>);
+        const auto* retained=mhwLease_.binding();
+        TglVeboxHardwareBinding hardware;
+        if(!retained || backing_.retention()() ||
+            retained->interface!=view.hardware.interface || retained->os!=view.os ||
+            !tglValidateRendererCreatorEnvironment(backing_,view,read,qualify,executable,hardware))
+            return 5;
+        TglNativeDiIecpServices services;
+        if(!services.resolve(view.os,hardware.interface,view.renderer.image,
+            read,qualify,executable)) return 5;
+        return use(static_cast<const TglNativeDiIecpServices&>(services));
+    }
     template<class Read,class Qualify,class Executable,class Construct=TglNativeVeboxConstructorInvoker,
         class Query=TglNativeRendererCacheInvoker>
     TglOwnedBaseConstruction initializeChildFromCreator(size_t index,const TglNativeVphalMhwView& view,
@@ -22251,6 +22270,30 @@ public:
                         TglOwnedVeboxCommandTransactionResult>);
                 return consume(owner,child,vp,graph,lines,source,target,dn,frame);
             });
+    }
+    // Resolve native resource services while the original creator/MHW owner
+    // is retained, then borrow them for the entire synchronous live frame.
+    // Policy remains an explicit, qualified caller input, not a default.
+    template<class ExecutionOwner,class NativeRead,class Qualify,class Executable,
+        class CaptureFactory,class Read,class SurfaceAdmit,class DiAdmit,class Policy,class Consume>
+    TglOwnedVeboxCommandTransactionResult withNativeOwnedVpCreatorLivePacketFrame(
+        size_t childIndex,const TglNativeOuterSurfaceRoles& roles,size_t sourceIndex,size_t targetIndex,
+        ExecutionOwner& executionOwner,const TglNativeVphalMhwView& view,uintptr_t sku,
+        NativeRead nativeRead,Qualify qualify,Executable executable,CaptureFactory makeCapture,
+        bool disableTemporalDenoise,Read read,SurfaceAdmit admitSurface,DiAdmit admitDi,
+        Policy policy,Consume consume) noexcept {
+        TglOwnedVeboxCommandTransactionResult result;
+        const int status=withCreatorDiIecpServices(view,nativeRead,qualify,executable,
+            [&](const TglNativeDiIecpServices& services) noexcept -> int {
+                TglNativeDiIecpRegistration registration{services};
+                TglNativeDiIecpControl<Policy> control{services,policy};
+                result=withNativeOwnedVpLivePacketFrame(childIndex,roles,sourceIndex,targetIndex,
+                    executionOwner,view.renderHal,sku,nativeRead,makeCapture,disableTemporalDenoise,
+                    read,admitSurface,admitDi,registration,control,consume);
+                return result.status;
+            });
+        result.status=status;
+        return result;
     }
     // Whole retained native Render entry, not a separate builder or submit.
     // Caller must already provide complete native/owned producer dispatch
