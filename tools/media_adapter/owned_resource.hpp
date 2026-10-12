@@ -17014,6 +17014,29 @@ int tglWithOwnedVpPairedResourceEntries(TglOwnedVpSfcCallerStorage& first,Lines&
     return result?result:(firstContext.releaseResult()?firstContext.releaseResult():secondContext.releaseResult());
 }
 
+// Both independent resource owners and admission contexts remain live through
+// Use. Resulting subsets are deliberately incomplete until other producers
+// and lifecycle entries are composed by the enclosing graph owner.
+template<class Read,class Lines,class State,class Retire,class Use>
+int tglWithOwnedVpPairedAssemblyEntries(TglOwnedVpSfcCallerStorage& first,Lines& firstLines,State& firstState,
+    TglOwnedVpSfcCallerStorage& second,Lines& secondLines,State& secondState,
+    Read& read,Retire& retire,Use use,const TglOwnedVeboxFrameRetention* retention=nullptr) noexcept {
+    return tglWithOwnedVpPairedResourceEntries(first,firstLines,firstState,second,secondLines,secondState,retire,
+        [&](void* a,void* b,auto allocate,auto release) noexcept -> int {
+            return tglWithOwnedVpPairedAdmissionEntries(first,second,read,
+                [&](void* admittedA,const auto& firstAdmission,void* admittedB,const auto& secondAdmission) noexcept -> int {
+                    if(a!=admittedA || b!=admittedB) return 5;
+                    std::array<TglOwnedVpEntrySet,2> entries{};
+                    if(!tglBindOwnedVpAdmissionEntries(entries[0],firstAdmission) ||
+                       !tglBindOwnedVpAdmissionEntries(entries[1],secondAdmission) ||
+                       !tglBindOwnedVpResourceEntries(entries[0],allocate,release) ||
+                       !tglBindOwnedVpResourceEntries(entries[1],allocate,release)) return 5;
+                    static_assert(noexcept(use(a,entries[0],b,entries[1])),"paired VP assembly consumer ABI");
+                    return use(a,entries[0],b,entries[1]);
+                });
+        },retention);
+}
+
 // One owned child, with both admission and allocation/free entries alive only
 // during the consumer. This is not a published vtable or GPU retirement proof.
 template<class Read,class Lines,class State,class Retire,class Use>

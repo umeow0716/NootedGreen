@@ -13722,6 +13722,32 @@ int main() {
                 release(x);return 0;
             })==0);
         assert(a.releases==1 && b.releases==1 && admissions==2);
+        b.status=0;
+        auto read=[](uintptr_t address,void* out,size_t size) noexcept {
+            if(!((size==4 && (address==0x1000 || address==0x2000 || address==0x1130)) ||
+                 (size==2 && address==0x3012))) return false;
+            std::memset(out,0,size);return true;
+        };
+        for(int expected:{0,-31}) {
+            assert(tglWithOwnedVpPairedAssemblyEntries(first,a,sa,second,b,sb,read,retire,
+                [&](void* x,const auto& xe,void* y,const auto& ye) noexcept -> int {
+                    std::array<TglOwnedVpEntrySet,2> base{xe,ye};
+                    return tglWithOwnedVpPairedModeAssembly(first,second,
+                        {0x1000,0x1000},{0x2000,0x2000},{0x3000,0x3000},read,base,
+                        [&](void* mx,const auto& me,void* my,const auto& ne) noexcept -> int {
+                            assert(mx==x && my==y && !me.hasAllEntries() && !ne.hasAllEntries());
+                            assert(me.allocate(mx)==0 && ne.allocate(my)==0);
+                            assert(me.compressionFormat(mx,13)==tglOwnedVpCompressionFormat(13));
+                            assert(ne.compressionFormat(my,13)==tglOwnedVpCompressionFormat(13));
+                            me.sampleMode(mx,reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x2000));
+                            ne.sampleMode(my,reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x2000));
+                            me.formatMode(mx,reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x3000));
+                            ne.formatMode(my,reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x3000));
+                            return expected;
+                        });
+                })==expected);
+        }
+        assert(a.allocations==3 && b.allocations==3 && admissions==2);
         assert(tglWithOwnedVpPairedResourceEntries(first,a,sa,second,a,sb,retire,
             [](void*,void*,auto,auto) noexcept -> int {assert(false);return 0;})==5);
     }
