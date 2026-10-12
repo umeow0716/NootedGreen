@@ -20870,6 +20870,15 @@ int main() {
                             std::array<NativeCpu,2>{NativeCpu{pairCpu[0]},NativeCpu{pairCpu[1]}},
                             std::array<TrackedSfc,2>{TrackedSfc{pairInvoke,pairEvents,pairEventCount},TrackedSfc{pairInvoke,pairEvents,pairEventCount}},
                             std::array<decltype(pairDestroy),2>{pairDestroy,pairDestroy});
+                        // Borrowed native report backing outlives pending frame retirement,
+                        // not merely the synchronous command callback below.
+                        struct BorrowedExecutionBackend {
+                            std::array<uint8_t,0xa10> bytes{};
+                            bool validate(uintptr_t object) const noexcept {
+                                return object==reinterpret_cast<uintptr_t>(bytes.data());
+                            }
+                            void destroy(uintptr_t) noexcept {assert(false);}
+                        } executionBackend;
                         const auto r=frames.run(ticket,[&](auto& frame) noexcept {
                             TglNativeResourceBinding borrowedResources;
                             assert(!frame.resolveBorrowedResources(borrowedResources,resourceRead,qualifyMhw,executableMhw));
@@ -21843,8 +21852,13 @@ int main() {
                             uintptr_t restoredVp=1;
                             std::memcpy(&restoredVp,pairCpu[0].bytes.data()+0x80,8);
                             assert(restoredVp==0 && vpCpu.live && vpAvsCpu.live);
-                            return frame.withPrivateVpCommandFrame(0,roles,0,0,
-                                0x1100,0x2200,0x3300,[&](auto& leasedOwner,void* child,
+                            TglExecutionOwner<BorrowedExecutionBackend> executionLease(executionBackend);
+                            TglOwnedVeboxCommandTransactionResult executionResult;
+                            const uintptr_t report=reinterpret_cast<uintptr_t>(executionBackend.bytes.data());
+                            const int executionStatus=executionLease.withBorrowedExecution(report,
+                                [&](uintptr_t execution) noexcept -> int {
+                            executionResult=frame.withPrivateVpCommandFrame(0,roles,0,0,
+                                execution,0x2200,0x3300,[&](auto& leasedOwner,void* child,
                                     void* vp,auto& graph,auto& lines,
                                     auto& sourceLease,auto& targetLease,auto& dn,auto& packets) noexcept {
                                     assert(graph.ownsStorage(vp));(void)lines;
@@ -21874,10 +21888,12 @@ int main() {
                                     // CPU command-acquisition fixture, but use the actual
                                     // aggregate's captured child/source and transaction gates
                                     // rather than inventing ownership flags in the consumer.
-                                    struct ExecutionLease {
-                                        uintptr_t report;
-                                        bool hasExecutionLease(uintptr_t value) const noexcept {return value==report;}
-                                    } executionLease{packets.execution};
+                                    assert(packets.execution==report && executionLease.hasExecutionLease(report));
+                                    executionLease.reset();
+                                    assert(executionLease.hasExecutionLease(report));
+                                    assert(executionLease.withExecution([](uintptr_t) noexcept -> int {
+                                        assert(false);return 0;
+                                    })==5);
                                     const uintptr_t input=reinterpret_cast<uintptr_t>(&packets.source);
                                     std::memcpy(static_cast<uint8_t*>(child)+0x88,&packets.execution,8);
                                     std::memcpy(static_cast<uint8_t*>(child)+0x1b0,&input,8);
@@ -21893,6 +21909,11 @@ int main() {
                                         transaction.builderStatus==31 && transaction.acquired && !transaction.writtenBack);
                                     return transaction;
                                 });
+                            return executionResult.status;
+                            });
+                            assert(!executionLease.hasExecutionLease(report));
+                            executionResult.status=executionStatus;
+                            return executionResult;
                         });
                         assert(r.acquired && frameDn.live==1 && refs[1]==3);
                         uintptr_t detachedDn=1;
