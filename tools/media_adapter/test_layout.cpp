@@ -19508,6 +19508,23 @@ int main() {
                             std::array<TrackedSfc,2>{TrackedSfc{pairInvoke,pairEvents,pairEventCount},TrackedSfc{pairInvoke,pairEvents,pairEventCount}},
                             std::array<decltype(pairDestroy),2>{pairDestroy,pairDestroy});
                         const auto r=frames.run(ticket,[&](auto& frame) noexcept {
+                            auto resourceRead=[&](uintptr_t address,void* out,size_t bytes) noexcept {
+                                if(bytes==8 && (address==os+0x1f8 || address==os+0x200 || address==0x3000)) {
+                                    const uintptr_t value=address==0x3000?os:
+                                        base+(address==os+0x1f8?0x63720:0x63c00);
+                                    std::memcpy(out,&value,8);return true;
+                                }
+                                if(bytes==16 && (address==base+0x63720 || address==base+0x63c00)) {
+                                    const std::array<uint8_t,16> allocate{0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x70,
+                                        0x48,0x89,0x7d,0xf0,0x48,0x89,0x75,0xe8};
+                                    const std::array<uint8_t,16> release{0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x20,
+                                        0x31,0xc0,0x89,0xc1,0x48,0x89,0x7d,0xf8};
+                                    std::memcpy(out,(address==base+0x63720?allocate:release).data(),16);return true;
+                                }
+                                return borrowedRead(address,out,bytes);
+                            };
+                            TglNativeResourceBinding borrowedResources;
+                            assert(!frame.resolveBorrowedResources(borrowedResources,resourceRead,qualifyMhw,executableMhw));
                             auto parentPin=parents.pin(base,0x8000,1,parentAddress);
                             assert(!frame.retainedMhw() && frame.retainBorrowedMhwOwned(std::move(parentPin),
                                 base,parentAddress,creatorAddress,parentLifetime,borrowedRead,borrowedAdmit,qualifyMhw,executableMhw,
@@ -19515,6 +19532,14 @@ int main() {
                                     return owner.context()==view.parent && view.os==os && view.hardware.interface==0x6000;
                                 }));
                             assert(!parentPin.get() && frame.retainedMhw()->interface==0x6000 && removeParent()==5);
+                            assert(frame.resolveBorrowedResources(borrowedResources,resourceRead,qualifyMhw,executableMhw));
+                            assert(borrowedResources.context==os && borrowedResources.allocate==base+0x63720 &&
+                                borrowedResources.release==base+0x63c00);
+                            putNative(nativeCreator,0x40,os+8);
+                            assert(!frame.resolveBorrowedResources(borrowedResources,resourceRead,qualifyMhw,executableMhw) &&
+                                !borrowedResources.context && !borrowedResources.allocate && !borrowedResources.release);
+                            putNative(nativeCreator,0x40,os);
+                            assert(frame.resolveBorrowedResources(borrowedResources,resourceRead,qualifyMhw,executableMhw));
                             TglNativeDnScalarRequest dnRequest;
                             dnRequest.mode=0;dnRequest.word24=1;
                             dnRequest.word28=11;dnRequest.word2c=13;

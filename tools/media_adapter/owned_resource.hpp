@@ -4045,6 +4045,9 @@ public:
     const TglVeboxHardwareBinding* binding() const noexcept {
         return parent_.get()?&view_.hardware:nullptr;
     }
+    const TglNativeVphalMhwView* view() const noexcept {
+        return parent_.get()?&view_:nullptr;
+    }
     // Default destruction releases ONLY the parent pin. The original native
     // VPHAL remains sole MHW owner; no heap cleanup/delete is performed here.
 };
@@ -5999,6 +6002,26 @@ struct TglNativeBufferFillBinding {
 
 struct TglNativeResourceBinding {
     uintptr_t context = 0, allocate = 0, release = 0;
+    // Creator handoff precedes successful context12e0 publication. Resolve
+    // resource callbacks through the SAME retained VPHAL parent lease instead
+    // of requiring an already-created codec context or fixture OS pointer.
+    // The enclosing frame must keep this lease through final resource release.
+    template<class ParentLease,class Read,class Qualify,class Executable>
+    bool resolveFromBorrowedVphal(const TglNativeBorrowedVphalMhwLease<ParentLease>& lease,
+        Read read,Qualify qualify,Executable executable) {
+        *this={};const auto* view=lease.view();
+        if(!view || !view->parent || !view->os || !view->renderHal || !view->renderer.image) return false;
+        uintptr_t os=0,renderHal=0,mhw=0,rendererOs=0,rendererRenderHal=0;
+        if(!read(view->parent+0x40,&os,8) || os!=view->os ||
+           !read(view->parent+0x48,&renderHal,8) || renderHal!=view->renderHal ||
+           !read(view->parent+0x50,&mhw,8) || mhw!=view->hardware.interface ||
+           !read(view->renderer.renderer+0x2cc0,&rendererRenderHal,8) || rendererRenderHal!=renderHal ||
+           !read(view->renderer.renderer+0x2cc8,&rendererOs,8) || rendererOs!=os) return false;
+        TglNativeResourceBinding candidate;
+        if(!candidate.resolveFromRenderHal(renderHal,view->renderer.image,read,qualify,executable) ||
+           candidate.context!=os) return false;
+        *this=candidate;return true;
+    }
     // Complete native-context -> physical -> embedded OS wrapper admission,
     // composed with the existing exact resource callbacks. A valid RenderHal
     // from another context is not sufficient. All borrowed generation leases
@@ -19300,6 +19323,11 @@ public:
     auto& backing() noexcept {return backing_;}
     auto& children() noexcept {return children_;}
     bool surfacesReady() const noexcept {return source_.storage() && target_.storage();}
+    template<class Read,class Qualify,class Executable>
+    bool resolveBorrowedResources(TglNativeResourceBinding& binding,Read read,
+        Qualify qualify,Executable executable) const {
+        return binding.resolveFromBorrowedVphal(mhwLease_,read,qualify,executable);
+    }
     bool retainMhw(TglNativeVeboxMhwOwner<MhwInvoke>& owner) noexcept {
         if(backing_.retention()() || children_.first().owner().constructedBase() ||
             children_.second().owner().constructedBase()) return false;
