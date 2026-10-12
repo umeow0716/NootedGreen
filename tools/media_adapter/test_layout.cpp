@@ -23980,23 +23980,42 @@ int main() {
                         const int status=admissionExecution.withExecution([&](uintptr_t execution) noexcept {
                             uintptr_t linked=0;std::memcpy(&linked,static_cast<uint8_t*>(child)+0x88,8);
                             if(linked!=execution) return 5;
-                            return admissionExecution.withLeasedAdmissionBytes(execution,[&](auto& bytes) noexcept {
-                                admitted=tglRunCapturedSelectedVeboxAdmissionStages(owner,admissionExecution,
-                                    child,admissionParams,admissionPass,source,target,interfaces,bytes,read,
-                                    [&]() noexcept {return !admissionExecution.initializeLeasedAdmission(execution);},
-                                    [&](uint8_t& flag) noexcept -> uint32_t {
+                            auto reset=[&]() noexcept {return !admissionExecution.initializeLeasedAdmission(execution);};
+                            auto select=[&](uint8_t& flag) noexcept -> uint32_t {
                                         ++admissionSelections;
                                         assert(&flag==admissionPass.data()+8 && admissionBackend.initializes==2);
                                         flag=0x80;return 1;
-                                    },
-                                    [](auto&) noexcept {},
-                                    [](auto&) noexcept {assert(false);},
-                                    [&](auto& data) noexcept {
+                                    };
+                            auto setup=[](auto&) noexcept {};
+                            auto feature=[](auto&) noexcept {assert(false);};
+                            auto sfc=[&](auto& data) noexcept {
                                         uint32_t type=0;std::memcpy(&type,source.prefix.data(),4);
                                         tglPublishVeboxSfcAdmissionFlags(data,0,type);return true;
-                                    });
-                                return 0;
-                            });
+                                    };
+                            using Plan=TglOwnedVeboxAdmissionFramePlanner<std::decay_t<decltype(owner)>,
+                                decltype(admissionExecution),std::tuple_size_v<decltype(admissionParams)>,
+                                std::tuple_size_v<decltype(admissionPass)>,decltype(read),decltype(reset),
+                                decltype(select),decltype(setup),decltype(feature),decltype(sfc)>;
+                            Plan plan{owner,admissionExecution,child,execution,admissionParams,admissionPass,
+                                source,target,interfaces,read,reset,select,setup,feature,sfc};
+                            const auto selectionsBefore=admissionSelections;
+                            const auto initializesBefore=admissionBackend.initializes;
+                            assert(!plan(nullptr,&admissionParams,&admissionPass));
+                            assert(!plan(child,nullptr,&admissionPass));
+                            assert(!plan(child,&admissionParams,nullptr));
+                            plan.execution=execution+8;
+                            assert(!plan(child,&admissionParams,&admissionPass));
+                            plan.execution=execution;
+                            assert(admissionSelections==selectionsBefore && admissionBackend.initializes==initializesBefore);
+                            using PlannedAdmission=TglOwnedVeboxAdmissionContext<std::decay_t<decltype(owner)>,Plan>;
+                            using PlannedScope=TglOwnedVeboxScopedContext<PlannedAdmission>;
+                            PlannedAdmission planned(owner,child,&admissionParams,&admissionPass,plan);
+                            PlannedScope plannedScope(child,planned);assert(plannedScope.bound());
+                            std::array<uintptr_t,20> plannedHooks{};
+                            plannedHooks=tglBindOwnedVeboxAdmissionHook<PlannedScope>(plannedHooks);
+                            admitted=reinterpret_cast<bool(*)(void*,void*,void*) noexcept>(plannedHooks[2])(
+                                child,&admissionParams,&admissionPass);
+                            return 0;
                         });
                         return !status && admitted;
                     }

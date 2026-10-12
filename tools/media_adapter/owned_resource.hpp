@@ -11986,6 +11986,32 @@ bool tglRunCapturedVeboxAdmissionStages(ChildOwner& childOwner,ExecutionOwner& e
         [&](uint8_t&) noexcept -> uint32_t {return pipe;},setup,feature,sfc);
 }
 
+// Named installation-time policy type for the SAME already-leased native
+// report used by the frontend frame. Do not recursively acquire execution,
+// snapshot the selected pipe before reset, or adopt caller-supplied pointers.
+template<class ChildOwner,class ExecutionOwner,size_t ParamsN,size_t PassN,
+    class Read,class Reset,class Select,class Setup,class Feature,class Sfc>
+struct TglOwnedVeboxAdmissionFramePlanner {
+    ChildOwner& childOwner;ExecutionOwner& executionOwner;
+    void* child;uintptr_t execution;
+    std::array<uint8_t,ParamsN>& params;std::array<uint8_t,PassN>& pass;
+    const TglOwnedSurfaceStorage& source;const TglOwnedSurfaceStorage& target;
+    const TglVeboxAdmissionBorrowedInterfaces& interfaces;
+    Read read;Reset reset;Select select;Setup setup;Feature feature;Sfc sfc;
+    bool operator()(void* actual,void* actualParams,void* actualPass) noexcept {
+        if(!actual || actual!=child || actualParams!=&params || actualPass!=&pass ||
+           !childOwner.hasPrivateChildLease(reinterpret_cast<uintptr_t>(child)) ||
+           !executionOwner.hasExecutionLease(execution)) return false;
+        bool admitted=false;
+        const int status=executionOwner.withLeasedAdmissionBytes(execution,[&](auto& bytes) noexcept -> int {
+            admitted=tglRunCapturedSelectedVeboxAdmissionStages(childOwner,executionOwner,
+                child,params,pass,source,target,interfaces,bytes,read,reset,select,setup,feature,sfc);
+            return 0;
+        });
+        return !status && admitted;
+    }
+};
+
 template<class Owner,class Policy> class TglOwnedVeboxAdmissionContext {
     Owner& owner_;
     void* child_;
