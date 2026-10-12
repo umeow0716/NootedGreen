@@ -5216,6 +5216,21 @@ public:
     bool bound() const noexcept {return first_.bound() && second_.bound();}
     auto& first() noexcept {return first_;}
     auto& second() noexcept {return second_;}
+    // Install both concrete catalogues before renderer publication. A later
+    // install failure may leave the FIRST private table owned by this storage;
+    // it does not publish either child or grant native teardown permission.
+    // The retained owner must use its existing qualified destruction path.
+    template<class Read,class Qualify,class Executable>
+    bool installPrivateVtables(const std::array<std::array<uintptr_t,20>,2>& hooks,
+        Read read,Qualify qualify,Executable executable) noexcept {
+        if(!bound()) return false;
+        const auto csc=reinterpret_cast<uintptr_t>(&tglOwnedVeboxGen12CscSupported);
+        if(hooks[0][15]!=csc || hooks[1][15]!=csc) return false;
+        if(!first_.owner().installPrivateVtable(hooks[0],read,qualify,executable) ||
+           !second_.owner().installPrivateVtable(hooks[1],read,qualify,executable)) return false;
+        return first_.owner().matchesPrivateVtableHooks(hooks[0]) &&
+            second_.owner().matchesPrivateVtableHooks(hooks[1]);
+    }
     template<class Admit> bool canDetach(void* renderer,uint64_t generation,Admit admit) noexcept {
         return publication_.canDetach(renderer,generation,admit);
     }

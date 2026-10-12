@@ -20413,10 +20413,14 @@ int main() {
                             std::array<uintptr_t,20> hooks{};
                             for(size_t i=0;i<hooks.size();++i) hooks[i]=0x3000+i*16;
                             hooks[15]=reinterpret_cast<uintptr_t>(&tglOwnedVeboxGen12CscSupported);
-                            assert(frame.children().first().owner().installPrivateVtable(hooks,tableRead,
+                            std::array<std::array<uintptr_t,20>,2> pairHooks{hooks,hooks};
+                            pairHooks[1][15]=0;
+                            assert(!frame.children().installPrivateVtables(pairHooks,tableRead,
                                 [](uintptr_t image) noexcept {return image==base;},
                                 [](uintptr_t,size_t) noexcept {return true;}));
-                            assert(frame.children().second().owner().installPrivateVtable(hooks,tableRead,
+                            assert(!frame.children().first().owner().matchesPrivateVtableHooks(hooks));
+                            pairHooks[1]=hooks;
+                            assert(frame.children().installPrivateVtables(pairHooks,tableRead,
                                 [](uintptr_t image) noexcept {return image==base;},
                                 [](uintptr_t,size_t) noexcept {return true;}));
                             assert(frame.children().publishFromCreatorOwned(base,creatorAddress,1,parentLifetime,
