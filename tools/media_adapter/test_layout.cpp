@@ -14286,6 +14286,29 @@ int main() {
                     assert(ordinaryState.recover(ordinary,[](uintptr_t) noexcept {return true;},
                         [&]() noexcept {return ordinary.detach(readObject,writeObject,admitObject)?0:5;},ordinaryNative));
                     assert(ordinaryCalls==1 && !ordinaryState.requiresRetention());
+                    TglOwnedVphalLifetimeTable recordedTable;
+                    assert(recordedTable.build(image,0xf000,0xf100,readLifetime,qualify,execLifetime,ownedLifetime));
+                    vptr=recordedTable.source();
+                    assert(recordedTable.publish(creatorAddress,readObject,writeObject,admitObject));
+                    TglOwnedVphalPendingDestruction<1> pending;
+                    assert(pending.record(creatorAddress,TglOwnedVphalDestructionState::Kind::DeletingDestroy));
+                    // Model pre-parent-exclusive frame retirement: the table
+                    // is restored before parent-pin release/destructor dispatch.
+                    assert(recordedTable.detach(readObject,writeObject,admitObject));
+                    TglOwnedVphalDestructionState recordedState;unsigned recordedCalls=0;
+                    auto recordedPrepare=[&]() noexcept {return vptr==recordedTable.source()?0:5;};
+                    auto recordedNative=[&](uintptr_t entry,uintptr_t object) noexcept {
+                        assert(entry==recordedTable.nativeDeletingDestroy() && object==creatorAddress);
+                        ++recordedCalls;
+                    };
+                    assert(!recordedState.resumeRecorded(recordedTable,creatorAddress,pending,
+                        [](uintptr_t,auto) noexcept {return false;},recordedPrepare,recordedNative));
+                    assert(!recordedCalls && recordedState.phase()==TglOwnedVphalDestructionState::Phase::Idle);
+                    assert(recordedState.resumeRecorded(recordedTable,creatorAddress,pending,
+                        [](uintptr_t,auto) noexcept {return true;},recordedPrepare,recordedNative));
+                    assert(recordedCalls==1 && !recordedState.requiresRetention());
+                    assert(!recordedState.resumeRecorded(recordedTable,creatorAddress,pending,
+                        [](uintptr_t,auto) noexcept {return true;},recordedPrepare,recordedNative));
                 }
                 TglOwnedCreatorCallTable callTable;
                 auto callExecutable=[&](uintptr_t address,size_t size) noexcept {
@@ -19564,16 +19587,34 @@ int main() {
                         assert(ho.borrowed && refs[1]==3);
                         assert(vpCpu.live && vpAvsCpu.live);
                         assert(removeParent()==5 && !parentDeaths && frameMhwInvoke.cleanups==1);
+                        TglOwnedVphalPendingDestruction<1> parentPending;
+                        using DeleteKind=TglOwnedVphalDestructionState::Kind;
+                        assert(parentPending.record(parentAddress,DeleteKind::DeletingDestroy));
+                        // Actual borrowed frame retains the parent: do NOT
+                        // demand exclusive parent access before retiring it.
+                        assert(!parents.pinExclusive(base,0x8000,1,parentAddress).get());
                         assert(frames.retire(ticket,[&](const auto&,bool pending,const auto&) noexcept {
                             assert(pending);retirementQualified=true;return 0;
                         })==0); // CPU certificate fixture only
                         assert(!so.borrowed && !to.borrowed && !ho.borrowed && !frameDn.live && !refs[1] && !refs[5]);
                         assert(cleaned[0]==1 && cleaned[1]==1 && destroyed==cleaned);
                         assert(!vpCpu.live && !vpAvsCpu.live);
-                        assert(removeParent()==0 && parentDeaths==1 && frameMhwInvoke.cleanups==1 && frameMhwInvoke.removes==1);
                         // Only the simulated original native owner cleans MHW,
                         // after borrowed frame/children and parent pin are gone.
-                        assert(retireFrameMhw()==0 && frameMhwInvoke.cleanups==2 && frameMhwInvoke.removes==2);
+                        {
+                            auto exclusiveParent=parents.pinExclusive(base,0x8000,1,parentAddress);
+                            assert(exclusiveParent.get() && !parentDeaths);
+                            DeleteKind recorded=DeleteKind::Destroy;
+                            assert(parentPending.pending(parentAddress,recorded) && recorded==DeleteKind::DeletingDestroy);
+                            assert(removeParent()==5 && !parentDeaths);
+                            assert(retireFrameMhw()==0 && frameMhwInvoke.cleanups==2 && frameMhwInvoke.removes==2);
+                        }
+                        assert(parentPending.eraseRetired(parentAddress,DeleteKind::DeletingDestroy,
+                            [&](uintptr_t object,DeleteKind kind) noexcept {
+                                return object==parentAddress && kind==DeleteKind::DeletingDestroy &&
+                                    !parentDeaths && cleaned[0]==1 && cleaned[1]==1 && frameMhwInvoke.cleanups==2;
+                            })); // CPU-only quiescence/retirement certificate fixture
+                        assert(removeParent()==0 && parentDeaths==1);
                     }
                 }
                 ChildStorage childStorage(base,allocatorRead,

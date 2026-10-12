@@ -1865,6 +1865,23 @@ public:
             table.publication()!=TglOwnedVphalLifetimeTable::Publication::Published) return false;
         object_=object;kind_=kind;return finish(table,prepare,native);
     }
+    // A frame may have held the parent pin when the ABI callback recorded its
+    // request. After frame retirement, its children/table can already be
+    // detached before an exclusive parent lease becomes available. Authenticate
+    // the saved request rather than inventing another native delete invocation.
+    template<class Pending,class Admit,class Prepare,class Native>
+    bool resumeRecorded(TglOwnedVphalLifetimeTable& table,uintptr_t object,Pending& pending,
+        Admit admit,Prepare prepare,Native native) noexcept {
+        Kind recorded=Kind::Destroy;
+        static_assert(noexcept(pending.faulted()) && noexcept(pending.pending(object,recorded)) &&
+            noexcept(admit(object,recorded)));
+        const auto publication=table.publication();
+        if(phase_!=Phase::Idle || !object || object!=table.object() || pending.faulted() ||
+            (publication!=TglOwnedVphalLifetimeTable::Publication::Published &&
+             publication!=TglOwnedVphalLifetimeTable::Publication::Detached) ||
+            !pending.pending(object,recorded) || !admit(object,recorded)) return false;
+        object_=object;kind_=recorded;return finish(table,prepare,native);
+    }
     // Not another native destructor request. Explicit recovery must attest
     // retirement and reconcile any partially detached children/table first.
     // A different delete kind or repeated native accounting is never accepted.
