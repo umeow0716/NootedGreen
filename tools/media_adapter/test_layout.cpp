@@ -9618,6 +9618,19 @@ static void testNativeResourceBoundary() {
                             return -17;
                         })==-17);
                     assert(!publications && uses==1);
+                    const auto preparedAllocations=backend.allocations;
+                    assert(tglWithPreparedBackedFfdiViews(targets,input,&input,&input,2,
+                        [&](const auto& views,const auto& outputs,size_t count) noexcept -> int {
+                            assert(count==2 && views[0]==views[1] && views[1]==views[2]);
+                            assert(first.hasSurfaceLease(*outputs[0]) && second.hasSurfaceLease(*outputs[1]));
+                            assert(tglWithPreparedBackedFfdiViews(targets,input,&input,&input,2,
+                                [](const auto&,const auto&,size_t) noexcept -> int {assert(false);return 0;},views)==5);
+                            return -74;
+                        })==-74);
+                    assert(backend.allocations==preparedAllocations && !publications);
+                    assert(tglWithPreparedBackedFfdiViews(targets,input,&input,
+                        static_cast<decltype(&input)>(nullptr),2,
+                        [](const auto&,const auto&,size_t) noexcept -> int {assert(false);return 0;})==5);
                     first.reset();second.reset();
                     assert(tglWithOwnedBackedFfdiBatch(targets,input,&input,&input,2,ffdi,{8,3},0,0,
                         [](uint8_t,uint8_t) noexcept {return 91;},
