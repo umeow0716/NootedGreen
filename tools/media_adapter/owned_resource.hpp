@@ -19665,6 +19665,27 @@ bool tglValidateRendererCreatorEnvironment(Backing& backing,const TglNativeVphal
         environment.fill.resolve(os,image,read,qualify,executable) &&
         backing.matchesResourceEnvironment(environment);
 }
+struct TglNativeRendererChildParameters {
+    uintptr_t history=0,performance=0;
+    TglNativeRendererCacheSettings cache;
+};
+// Enclosing creatorEnvironment admission pins the same renderer/OS/image.
+template<class Read,class Qualify,class Executable,class Query>
+bool tglProduceRendererChildParameters(TglNativeRendererChildParameters& output,size_t index,
+    const TglNativeVphalMhwView& view,Read read,Qualify qualify,Executable executable,Query query) {
+    if(index>1 || !view.renderer.renderer || view.renderer.renderer>UINTPTR_MAX-0x2cf0) return false;
+    uintptr_t capabilities=0;uint32_t flags=0;
+    TglNativeRendererCacheBinding binding;
+    TglNativeRendererChildParameters candidate;
+    if(!read(view.renderer.renderer+0x2cd0,&capabilities,8) || !capabilities ||
+        capabilities>UINTPTR_MAX-0x68 || !read(capabilities+0x64,&flags,4) ||
+        !binding.resolve(view.renderer.image,view.os,read,qualify,executable) ||
+        !tglProduceNativeRendererCacheSettings(candidate.cache,true,true,(flags&(1u<<22))!=0,
+            [&](uint32_t policy,uint32_t& value){return binding.query(policy,value,read,query);})) return false;
+    candidate.history=view.renderer.renderer+(index?0x904:0x8f8);
+    candidate.performance=view.renderer.renderer+0x2ce8;
+    output=candidate;return true;
+}
 template<class Api,class Cleanup,class Cpu=TglNativeTrackedCpuInvoker,
     class Sfc=TglNativeSfcLifetimeInvoker,class Destroy=TglNativeVeboxDestructorInvoker>
 class TglNativeVeboxRendererCpuStorage {
@@ -19723,22 +19744,27 @@ public:
     // SAME parent60 SFC through VP/children teardown before joining VP;
     // this child-base68 is NOT VPHAL renderer68. Do not substitute an aggregate
     // or assume a child-owned SFC solely because the C++ validator accepts it.
-    template<class Read,class Qualify,class Executable,class Construct=TglNativeVeboxConstructorInvoker>
+    template<class Read,class Qualify,class Executable,class Construct=TglNativeVeboxConstructorInvoker,
+        class Query=TglNativeRendererCacheInvoker>
     TglOwnedBaseConstruction initializeChildFromCreator(size_t index,const TglNativeVphalMhwView& view,
         const TglVeboxLifetimeBinding& binding,const TglSfcLifetimeBinding& lifetime,
-        const TglSfcMhwBinding& sfc,void* history,void* performance,const void* cache,
-        int32_t& status,Read read,Qualify qualify,Executable executable,Construct construct={}) {
+        int32_t& status,Read read,Qualify qualify,Executable executable,Construct construct={},Query query={}) {
         TglVeboxHardwareBinding hardware;
         TglSfcMhwBinding parentSfc;
         uintptr_t object=0;
         if(index>1 || backing_.retention()() || !creatorEnvironment(view,read,qualify,executable,hardware) ||
-            sfc.image!=view.renderer.image || !read(view.parent+0x60,&object,8) || !object ||
+            !read(view.parent+0x60,&object,8) || !object ||
             object==hardware.interface || !parentSfc.resolve(view.renderer.image,read,qualify,executable) ||
             !parentSfc.validateConstructedObject(object,view.os,read))
             return TglOwnedBaseConstruction::NotCalled;
+        TglNativeRendererChildParameters parameters;
+        if(!tglProduceRendererChildParameters(parameters,index,view,read,qualify,executable,query))
+            return TglOwnedBaseConstruction::NotCalled;
         auto& child=index?children_.second():children_.first();
         return child.initializeQualified(binding,lifetime,parentSfc,reinterpret_cast<void*>(view.os),hardware,
-            reinterpret_cast<void*>(view.renderHal),history,performance,cache,status,read,qualify,construct,object,&sharedSfcGate_);
+            reinterpret_cast<void*>(view.renderHal),reinterpret_cast<void*>(parameters.history),
+            reinterpret_cast<void*>(parameters.performance),parameters.cache.bytes.data()+4,
+            status,read,qualify,construct,object,&sharedSfcGate_);
     }
 };
 
@@ -19957,22 +19983,14 @@ public:
         // history (8f8/904) and performance slot2ce8, not their nullable values.
         // Exact TGL132d70 initializes the same fields; child12d4e0 stores
         // history at90 and passes the performance address to base126480.
-        if(view.renderer.renderer>UINTPTR_MAX-0x2cf0) return TglOwnedBaseConstruction::NotCalled;
-        auto* history=reinterpret_cast<void*>(view.renderer.renderer+(index?0x904:0x8f8));
-        auto* performance=reinterpret_cast<void*>(view.renderer.renderer+0x2ce8);
-        uintptr_t capabilities=0;uint32_t flags=0;
-        TglNativeRendererCacheBinding cacheBinding;
-        TglNativeRendererCacheSettings settings;
-        if(!read(view.renderer.renderer+0x2cd0,&capabilities,8) || !capabilities ||
-            capabilities>UINTPTR_MAX-0x68 || !read(capabilities+0x64,&flags,4) ||
-            !cacheBinding.resolve(view.renderer.image,view.os,read,qualify,executable) ||
-            !tglProduceNativeRendererCacheSettings(settings,true,true,(flags&(1u<<22))!=0,
-                [&](uint32_t policy,uint32_t& value){return cacheBinding.query(policy,value,read,query);}))
+        TglNativeRendererChildParameters parameters;
+        if(!tglProduceRendererChildParameters(parameters,index,view,read,qualify,executable,query))
             return TglOwnedBaseConstruction::NotCalled;
         // Exact12d4e0 synchronously memcpy's 0x34 bytes from this argument
         // into child111c; no pointer to this local setup packet is retained.
         return child.initializeQualified(binding,lifetime,sfc,reinterpret_cast<void*>(view.os),hardware,
-            reinterpret_cast<void*>(view.renderHal),history,performance,settings.bytes.data()+4,status,read,qualify,
+            reinterpret_cast<void*>(view.renderHal),reinterpret_cast<void*>(parameters.history),
+            reinterpret_cast<void*>(parameters.performance),parameters.cache.bytes.data()+4,status,read,qualify,
             construct,object,&sharedSfcGate_);
     }
     template<class Read,class Qualify,class Executable>

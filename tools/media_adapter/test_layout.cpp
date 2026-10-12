@@ -19960,6 +19960,18 @@ int main() {
                             std::memcpy(parentSfc.data()+0x1a,&heightAlignment,2);parentSfc[0x40]=1;
                             bool admitSfcTable=true;
                             auto parentSfcRead=[&](uintptr_t address,void* output,size_t bytes) noexcept {
+                                if(bytes==8 && (address==rendererAddress+0x2cd0 || address==os+0xd8)){
+                                    const uintptr_t value=address==os+0xd8?base+0x65d70:0x90000;
+                                    std::memcpy(output,&value,8);return true;
+                                }
+                                if(address==0x90064 && bytes==4){
+                                    const uint32_t flags=0;std::memcpy(output,&flags,4);return true;
+                                }
+                                if(address==base+0x65d70 && bytes==18){
+                                    const std::array<uint8_t,18> anchor{0x55,0x48,0x89,0xe5,0x48,0x81,0xec,
+                                        0x20,0x02,0x00,0x00,0x48,0x8d,0x05,0x3e,0x09,0x6d,0x00};
+                                    std::memcpy(output,anchor.data(),bytes);return true;
+                                }
                                 if(address==parentSfcAddress && bytes==0x41) {
                                     std::memcpy(output,parentSfc.data(),bytes);return true;
                                 }
@@ -20000,38 +20012,48 @@ int main() {
                             })==0);
                             int32_t childStatus=77;
                             auto neverConstruct=[](auto...) noexcept {assert(false);};
-                            assert(storage.initializeChildFromCreator(2,*creatorView,baseBinding,lifetime,mhw,
-                                nullptr,nullptr,nullptr,childStatus,resourceRead,qualifyMhw,executableMhw,neverConstruct)
+                            assert(storage.initializeChildFromCreator(2,*creatorView,baseBinding,lifetime,
+                                childStatus,resourceRead,qualifyMhw,executableMhw,neverConstruct)
                                 ==TglOwnedBaseConstruction::NotCalled);
-                            assert(storage.initializeChildFromCreator(0,foreign,baseBinding,lifetime,mhw,
-                                nullptr,nullptr,nullptr,childStatus,resourceRead,qualifyMhw,executableMhw,neverConstruct)
+                            assert(storage.initializeChildFromCreator(0,foreign,baseBinding,lifetime,
+                                childStatus,resourceRead,qualifyMhw,executableMhw,neverConstruct)
                                 ==TglOwnedBaseConstruction::NotCalled && childStatus==77);
                             allowPageImport=false;
-                            assert(storage.initializeChildFromCreator(0,*creatorView,baseBinding,lifetime,mhw,
-                                nullptr,nullptr,nullptr,childStatus,resourceRead,qualifyMhw,executableMhw,neverConstruct)
+                            assert(storage.initializeChildFromCreator(0,*creatorView,baseBinding,lifetime,
+                                childStatus,resourceRead,qualifyMhw,executableMhw,neverConstruct)
                                 ==TglOwnedBaseConstruction::NotCalled && childStatus==77);
                             allowPageImport=true;
                             bool failSourceFreeConstructor=true;
                             auto constructSourceFree=[&](uintptr_t entry,void* object,void* nativeOs,void* nativeMhw,void* nativeSfc,
-                                void*,void*,void*,const void*,int32_t* out) noexcept {
+                                void*,void* history,void* performance,const void* cache,int32_t* out) noexcept {
                                 assert(entry==base+0x12d4e0 && nativeOs==reinterpret_cast<void*>(os));
                                 assert(nativeMhw==reinterpret_cast<void*>(creatorView->hardware.interface));
                                 assert(nativeSfc==reinterpret_cast<void*>(parentSfcAddress));
+                                const auto historyOffset=object==pairCpu[0].bytes.data()?0x8f8:0x904;
+                                assert(history==reinterpret_cast<void*>(rendererAddress+historyOffset));
+                                assert(performance==reinterpret_cast<void*>(rendererAddress+0x2ce8));
+                                assert(cache && static_cast<const uint8_t*>(cache)[0]==1);
+                                uint32_t policy=0;std::memcpy(&policy,static_cast<const uint8_t*>(cache)+4,4);
+                                assert(policy==0xe2);
                                 const uintptr_t table=base+0x757c98,configuration=0;
                                 std::memcpy(object,&table,8);std::memcpy(static_cast<uint8_t*>(object)+8,&configuration,8);
                                 std::memcpy(static_cast<uint8_t*>(object)+0x10,&os,8);
                                 std::memcpy(static_cast<uint8_t*>(object)+0x68,&parentSfcAddress,8);
                                 *out=failSourceFreeConstructor?31:0;
                             };
-                            assert(storage.initializeChildFromCreator(0,*creatorView,baseBinding,lifetime,mhw,
-                                nullptr,nullptr,nullptr,childStatus,parentSfcRead,qualifyMhw,executableMhw,constructSourceFree)
+                            auto sourceFreeQuery=[&](uintptr_t entry,uint32_t policy,uint32_t& value){
+                                assert(entry==base+0x65d70 && (policy==0x70 || policy==0x71));
+                                value=policy<<1;return true;
+                            };
+                            assert(storage.initializeChildFromCreator(0,*creatorView,baseBinding,lifetime,
+                                childStatus,parentSfcRead,qualifyMhw,executableMhw,constructSourceFree,sourceFreeQuery)
                                 ==TglOwnedBaseConstruction::ConstructedFailure && childStatus==31);
                             assert(sourceFreeCleanups==1 && sourceFreeDestroys==1 && !pairCpu[0].live &&
                                 parentSfc[0x40]==1 && pairInvoke.destroys==sfcDestroysBefore);
                             failSourceFreeConstructor=false;
                             for(size_t child=0;child<2;++child)
-                                assert(storage.initializeChildFromCreator(child,*creatorView,baseBinding,lifetime,mhw,
-                                    nullptr,nullptr,nullptr,childStatus,parentSfcRead,qualifyMhw,executableMhw,constructSourceFree)
+                                assert(storage.initializeChildFromCreator(child,*creatorView,baseBinding,lifetime,
+                                    childStatus,parentSfcRead,qualifyMhw,executableMhw,constructSourceFree,sourceFreeQuery)
                                     ==TglOwnedBaseConstruction::ConstructedSuccess && childStatus==0);
                             }
                             assert(sourceFreeCleanups==3 && sourceFreeDestroys==3);
