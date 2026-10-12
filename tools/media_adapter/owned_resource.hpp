@@ -19597,8 +19597,11 @@ public:
     // separately supplied OS/RenderHal or require completed codec context12e0.
     // VP provenance is not established by its current SFC binding type.
     // Exact ICL wrapper1fc720 passes adjusted-parent fields10/18/68 through
-    // factory1fc790 and ctor1fcaa0 to base1dd150. Resolve the field68 producer
-    // and borrowing lifetime before joining VP; do not substitute an aggregate
+    // factory1fc790 and ctor1fcaa0 to base1dd150. Native renderer1fcf10 passes
+    // its SAME third argument to both children910/918 via factory1fd250;
+    // ctor1fc900->base1e7290 stores that value at child-base68 (1e7335).
+    // Resolve that renderer argument and borrowing lifetime before joining VP;
+    // this child-base68 is NOT VPHAL renderer68. Do not substitute an aggregate
     // or assume a child-owned SFC solely because the C++ validator accepts it.
     template<class Read,class Qualify,class Executable,class Construct=TglNativeVeboxConstructorInvoker>
     TglOwnedBaseConstruction initializeChildFromCreator(size_t index,const TglNativeVphalMhwView& view,
