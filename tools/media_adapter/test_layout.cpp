@@ -14367,8 +14367,9 @@ int main() {
                         creatorAdmit,qualify,creatorExecutable));
                     struct VphalChildren {
                         bool allow=false,detached=false,destroyed=false;
+                        uint64_t expectedGeneration=7;
                         bool canDetach(void* object,uint64_t generation,int) noexcept {
-                            assert(object==reinterpret_cast<void*>(0x30000) && generation==7);return allow;
+                            assert(object==reinterpret_cast<void*>(0x30000) && generation==expectedGeneration);return allow;
                         }
                         bool detach(void*,uint64_t,int) noexcept {detached=true;return true;}
                         bool destroyDetached(void*,uint64_t) noexcept {assert(detached);destroyed=true;return true;}
@@ -14424,6 +14425,68 @@ int main() {
                     assert(!publishedView.resolveOwned(image,creatorAddress,lifetime,publishedRead,
                         creatorAdmit,qualify,creatorExecutable));
                     assert(!lifetime.publish(creatorAddress,readObject,writeObject,admitObject));
+                    {
+                        // Actual counted physical lease + stable owner composition;
+                        // child/backing/native invocations remain CPU fixtures.
+                        struct EmptyPhysicalFrame {};
+                        using PhysicalRegistry=TglOwnedVeboxPhysicalFrameRegistry<EmptyPhysicalFrame>;
+                        PhysicalRegistry physicalOwners;
+                        const auto ticket=physicalOwners.reserve(image);
+                        assert(physicalOwners.publish(ticket,image,0x90000));
+                        auto dependency=physicalOwners.pinDependency(ticket,image,0x90000);
+                        children={};children.expectedGeneration=ticket.generation;backingReleased=false;
+                        auto* ownedStorage=new RendererStorage{children,backingReleased};
+                        unsigned ownedNativeCalls=0;
+                        uintptr_t actualRenderer=0x30000;bool rendererReadable=true;
+                        auto ownerRead=[&](uintptr_t address,void* bytes,size_t size) noexcept {
+                            if(address==creatorAddress+0x68 && size==8) {
+                                if(!rendererReadable) return false;
+                                std::memcpy(bytes,&actualRenderer,8);return true;
+                            }
+                            return readObject(address,bytes,size);
+                        };
+                        auto ownerWrite=[&](uintptr_t address,uintptr_t value) noexcept {
+                            // Publication precedes cleanup; restoring native vptr follows children.
+                            if(value==lifetime.source()) assert(children.destroyed);
+                            return writeObject(address,value);
+                        };
+                        auto ownedNative=[&](uintptr_t entry,uintptr_t object) noexcept {
+                            assert(entry==original[3] && object==creatorAddress);
+                            assert(backingReleased && vptr==lifetime.source());
+                            assert(physicalOwners.destroy(ticket,image,0x90000,
+                                [](uintptr_t) noexcept -> int {assert(false);return 0;})==5);
+                            ++ownedNativeCalls;
+                        };
+                        using Owner=TglOwnedVphalRendererOwner<RendererStorage,
+                            PhysicalRegistry::DependencyLease,decltype(ownerRead),decltype(ownerWrite),
+                            decltype(admitObject),int,decltype(ownedNative)>;
+                        assert(!Owner::create(image,0x90000,ticket.generation+1,creatorAddress,0x30000,
+                            dependency,ownedStorage,ownerRead,ownerWrite,admitObject,0,ownedNative));
+                        assert(dependency.live() && ownedStorage);
+                        auto* owner=Owner::create(image,0x90000,ticket.generation,creatorAddress,0x30000,
+                            dependency,ownedStorage,ownerRead,ownerWrite,admitObject,0,ownedNative);
+                        assert(owner && !ownedStorage && !dependency.live());
+                        assert(owner->context()==creatorAddress && !owner->nativeDestructionComplete());
+                        actualRenderer+=8;
+                        assert(!owner->publishLifetime(0xf000,0xf100,readLifetime,qualify,execLifetime,ownedLifetime));
+                        actualRenderer-=8;rendererReadable=false;
+                        assert(!owner->publishLifetime(0xf000,0xf100,readLifetime,qualify,execLifetime,ownedLifetime));
+                        rendererReadable=true;
+                        assert(owner->publishLifetime(0xf000,0xf100,readLifetime,qualify,execLifetime,ownedLifetime));
+                        assert(!owner->requestDestruction(TglOwnedVphalDestructionState::Kind::DeletingDestroy));
+                        assert(!backingReleased && !ownedNativeCalls);
+                        children.allow=true;
+                        assert(!owner->recoverDestruction([](uintptr_t) noexcept {return false;}));
+                        assert(owner->recoverDestruction([&](uintptr_t object) noexcept {return object==creatorAddress;}));
+                        assert(owner->nativeDestructionComplete() && backingReleased && ownedNativeCalls==1);
+                        assert(!owner->requestDestruction(TglOwnedVphalDestructionState::Kind::DeletingDestroy));
+                        // Native VPHAL completed, but physical dependency persists until owner retirement.
+                        assert(physicalOwners.destroy(ticket,image,0x90000,
+                            [](uintptr_t) noexcept -> int {assert(false);return 0;})==5);
+                        delete owner;
+                        assert(physicalOwners.destroy(ticket,image,0x90000,
+                            [](uintptr_t object) noexcept -> int {assert(object==0x90000);return 0;})==0);
+                    }
                     // A write that mutates memory but reports failure cannot
                     // authorize native destruction or release of table storage.
                     TglOwnedVphalLifetimeTable ambiguous;

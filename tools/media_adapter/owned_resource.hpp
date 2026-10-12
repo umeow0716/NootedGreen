@@ -18214,6 +18214,91 @@ int tglPrepareOwnedVphalStorageRemoval(TglOwnedVphalLifetimeTable& table,Storage
     return 0;
 }
 
+// Stable source-free VPHAL owner, adopted BEFORE renderer initialization.
+// Original native image remains process-retained by the qualified adapter.
+// Physical and image identity are NOT inferred from a factory Entry. Concrete
+// retirement admission must cover every outstanding frame/resource dependency.
+template<class Storage,class PhysicalLease,class Read,class Write,
+    class TableAdmit,class ChildAdmit,class Native>
+class TglOwnedVphalRendererOwner {
+    struct State {
+        PhysicalLease physicalLease; // LAST dependency released on State deletion
+        uintptr_t image,physical,object,renderer;uint64_t generation;
+        Read read;Write write;TableAdmit tableAdmit;ChildAdmit childAdmit;Native native;
+        TglOwnedVphalLifetimeTable table;TglOwnedVphalDestructionState destruction;
+        Storage* storage=nullptr;
+        State(uintptr_t i,uintptr_t p,uint64_t g,uintptr_t o,uintptr_t r,
+            Read rd,Write wr,TableAdmit ta,ChildAdmit ca,Native n) noexcept
+            :image(i),physical(p),object(o),renderer(r),generation(g),
+             read(rd),write(wr),tableAdmit(ta),childAdmit(ca),native(n) {}
+        bool boundRenderer() noexcept {
+            uintptr_t actual=0;
+            return object<=UINTPTR_MAX-0x70 && read(object+0x68,&actual,sizeof(actual)) && actual==renderer;
+        }
+        int prepare() noexcept {
+            if(!physicalLease.matches(image,physical,generation) || !boundRenderer()) return 5;
+            return tglPrepareOwnedVphalStorageRemoval(table,storage,reinterpret_cast<void*>(renderer),
+                generation,read,write,tableAdmit,childAdmit);
+        }
+    };
+    State* state_=nullptr;
+    explicit TglOwnedVphalRendererOwner(State* state) noexcept:state_(state) {}
+public:
+    using Kind=TglOwnedVphalDestructionState::Kind;
+    TglOwnedVphalRendererOwner(const TglOwnedVphalRendererOwner&)=delete;
+    TglOwnedVphalRendererOwner& operator=(const TglOwnedVphalRendererOwner&)=delete;
+    // Ownership transfers ONLY after both allocations and exact lease check.
+    // Caller keeps responsibility for unpublished storage on failure.
+    static TglOwnedVphalRendererOwner* create(uintptr_t image,uintptr_t physical,uint64_t generation,
+        uintptr_t object,uintptr_t renderer,PhysicalLease& dependency,Storage*& storage,
+        Read read,Write write,TableAdmit tableAdmit,ChildAdmit childAdmit,Native native) noexcept {
+        static_assert(std::is_nothrow_copy_constructible_v<Read> &&
+            std::is_nothrow_copy_constructible_v<Write> && std::is_nothrow_copy_constructible_v<TableAdmit> &&
+            std::is_nothrow_copy_constructible_v<ChildAdmit> && std::is_nothrow_copy_constructible_v<Native>);
+        if(!image || !physical || !generation || !object || !renderer || !storage ||
+            !dependency.matches(image,physical,generation)) return nullptr;
+        auto* state=new(std::nothrow) State(image,physical,generation,object,renderer,
+            read,write,tableAdmit,childAdmit,native);
+        if(!state) return nullptr;
+        auto* owner=new(std::nothrow) TglOwnedVphalRendererOwner(state);
+        if(!owner) {delete state;return nullptr;}
+        state->physicalLease=std::move(dependency);state->storage=storage;storage=nullptr;
+        return owner;
+    }
+    ~TglOwnedVphalRendererOwner() noexcept {
+        // Never implicitly destroy published/quarantined state or drop its
+        // physical pin. Registry reconciliation is required for normal cleanup.
+        if(state_ && state_->destruction.phase()==TglOwnedVphalDestructionState::Phase::Complete &&
+            !state_->storage) delete state_;
+    }
+    uintptr_t context() const noexcept {return state_?state_->object:0;}
+    const TglOwnedVphalLifetimeTable& lifetime() const noexcept {return state_->table;}
+    template<class ImageRead,class Qualify,class Executable,class OwnedExecutable>
+    bool publishLifetime(uintptr_t destroy,uintptr_t deletingDestroy,ImageRead imageRead,
+        Qualify qualify,Executable executable,OwnedExecutable ownedExecutable) noexcept {
+        if(!state_ || !state_->storage || !state_->boundRenderer() ||
+            !state_->physicalLease.matches(state_->image,state_->physical,state_->generation) ||
+            state_->destruction.phase()!=TglOwnedVphalDestructionState::Phase::Idle) return false;
+        return state_->table.build(state_->image,destroy,deletingDestroy,imageRead,qualify,
+            executable,ownedExecutable) && state_->table.publish(state_->object,
+                state_->read,state_->write,state_->tableAdmit);
+    }
+    bool requestDestruction(Kind kind) noexcept {
+        if(!state_) return false;
+        return state_->destruction.request(state_->table,state_->object,kind,
+            [&]() noexcept {return state_->prepare();},state_->native);
+    }
+    template<class Recover> bool recoverDestruction(Recover recover) noexcept {
+        if(!state_) return false;
+        return state_->destruction.recover(state_->table,recover,
+            [&]() noexcept {return state_->prepare();},state_->native);
+    }
+    bool nativeDestructionComplete() const noexcept {
+        return state_ && !state_->storage &&
+            state_->destruction.phase()==TglOwnedVphalDestructionState::Phase::Complete;
+    }
+};
+
 // Single composition used by a registry-resolved VPHAL destructor callback.
 // Caller holds an exclusive owner lease (not the registry mutation lock), and
 // supplies the concrete frame/fence retirement admission to both detach gates.
