@@ -19602,7 +19602,9 @@ public:
     // ctor1fc900->base1e7290 stores that value at child-base68 (1e7335).
     // TGL creator1e6610 supplies VPHAL50/60 to renderer slot18; native
     // VPHAL135020 destroys renderer68 before counted helper1352c0 frees60.
-    // Resolve the VPHAL60 producer and borrowing lifetime before joining VP;
+    // Platform factory2183c0 transfers wrapper20 through218890->VPHAL60;
+    // wrapper30 separately goes through218870->VPHAL50. Authenticate the
+    // SAME parent60 SFC through VP/children teardown before joining VP;
     // this child-base68 is NOT VPHAL renderer68. Do not substitute an aggregate
     // or assume a child-owned SFC solely because the C++ validator accepts it.
     template<class Read,class Qualify,class Executable,class Construct=TglNativeVeboxConstructorInvoker>
