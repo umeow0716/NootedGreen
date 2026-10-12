@@ -19591,6 +19591,22 @@ public:
     TglNativeVeboxRendererCpuStorage& operator=(const TglNativeVeboxRendererCpuStorage&)=delete;
     auto& backing() noexcept {return backing_;}
     auto& children() noexcept {return children_;}
+    // Enclosing exclusive VPHAL owner retains parent60 until THIS storage
+    // (including VP resources) is destroyed, before native135020 can free it.
+    // Authenticate the native shared SFC, never substitute either child's
+    // separately constructed fixture dependency or the VEBOX aggregate50.
+    template<class Read,class Qualify,class Executable>
+    int initializeVpFromCreator(const TglNativeVphalMhwView& view,
+        uint32_t channel,uintptr_t performance,Read read,Qualify qualify,Executable executable) {
+        TglVeboxHardwareBinding hardware;
+        TglSfcMhwBinding sfc;
+        uintptr_t object=0;
+        if(backing_.retention()() || !creatorEnvironment(view,read,qualify,executable,hardware) ||
+            !read(view.parent+0x60,&object,8) || !object || object==hardware.interface ||
+            !sfc.resolve(view.renderer.image,read,qualify,executable) ||
+            !sfc.validateConstructedObject(object,view.os,read)) return 5;
+        return backing_.initializeVp(sfc,view.os,view.renderHal,object,read,channel,performance);
+    }
     // Source-free creator handoff; enclosing owner holds physical/image and
     // exclusive VPHAL admission through initialization AND eventual teardown.
     // Revalidate current native links and exact backing snapshot, never use a

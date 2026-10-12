@@ -19855,6 +19855,7 @@ int main() {
                             };
                             using SourceFree=TglNativeVeboxRendererCpuStorage<UnusedFrameApi,decltype(sourceFreeCleanup),
                                 NativeCpu,TrackedSfc,decltype(sourceFreeDestroy)>;
+                            alignas(8) std::array<uint8_t,0x48> parentSfc{};
                             {
                             SourceFree storage(base,allocatorRead,qualifyMhw,executableMhw,environment.resources,
                                 environment.pageSize,environment.fill,NativeCpu{vpCpu,&vpAvsCpu},
@@ -19864,6 +19865,52 @@ int main() {
                                 std::array<decltype(sourceFreeDestroy),2>{sourceFreeDestroy,sourceFreeDestroy});
                             const auto* creatorView=preparedMhw.view();assert(creatorView);
                             auto foreign=*creatorView;foreign.os+=8;
+                            const uintptr_t parentSfcAddress=reinterpret_cast<uintptr_t>(parentSfc.data());
+                            putNative(parentSfc,0,base+0x759420);putNative(parentSfc,8,base+0x3eae0);
+                            putNative(parentSfc,0x10,os);
+                            const uint16_t widthAlignment=16,heightAlignment=4;
+                            std::memcpy(parentSfc.data()+0x18,&widthAlignment,2);
+                            std::memcpy(parentSfc.data()+0x1a,&heightAlignment,2);parentSfc[0x40]=1;
+                            bool admitSfcTable=true;
+                            auto parentSfcRead=[&](uintptr_t address,void* output,size_t bytes) noexcept {
+                                if(address==parentSfcAddress && bytes==0x41) {
+                                    std::memcpy(output,parentSfc.data(),bytes);return true;
+                                }
+                                if(address==base+0x759410 && bytes==16) {
+                                    if(!admitSfcTable) return false;
+                                    const std::array<uintptr_t,2> metadata{0,base+0x759490};
+                                    std::memcpy(output,metadata.data(),bytes);return true;
+                                }
+                                if(address==base+0x759420 && bytes==88) {
+                                    const std::array<uintptr_t,11> offsets{0x16bed0,0x16bef0,0x1681e0,0x168390,
+                                        0x16a580,0x16a770,0x16a8a0,0x16b190,0x16b390,0x16b590,0xfe6c0};
+                                    std::array<uintptr_t,11> entries{};
+                                    for(size_t i=0;i<entries.size();++i) entries[i]=base+offsets[i];
+                                    std::memcpy(output,entries.data(),bytes);return true;
+                                }
+                                return resourceRead(address,output,bytes);
+                            };
+                            assert(storage.initializeVpFromCreator(*creatorView,0,0,parentSfcRead,qualifyMhw,executableMhw)==5);
+                            putNative(nativeCreator,0x60,creatorView->hardware.interface);
+                            assert(storage.initializeVpFromCreator(*creatorView,0,0,parentSfcRead,qualifyMhw,executableMhw)==5);
+                            putNative(nativeCreator,0x60,parentSfcAddress);admitSfcTable=false;
+                            assert(storage.initializeVpFromCreator(*creatorView,0,0,parentSfcRead,qualifyMhw,executableMhw)==5);
+                            admitSfcTable=true;parentSfc[0x40]=0;
+                            assert(storage.initializeVpFromCreator(*creatorView,0,0,parentSfcRead,qualifyMhw,executableMhw)==5);
+                            parentSfc[0x40]=1;
+                            assert(storage.initializeVpFromCreator(foreign,0,0,parentSfcRead,qualifyMhw,executableMhw)==5);
+                            assert(!vpCpu.live && !vpAvsCpu.live);
+                            assert(storage.initializeVpFromCreator(*creatorView,0,0,parentSfcRead,qualifyMhw,executableMhw)==0);
+                            assert(storage.backing().vpBound() && vpCpu.live && vpAvsCpu.live);
+                            assert(storage.backing().withVpResources([&](auto&,auto& vp,auto&) noexcept -> int {
+                                uintptr_t linkedOs=0,linkedRh=0,linkedSfc=0;
+                                std::memcpy(&linkedOs,vp.bytes.data()+0x10,8);
+                                std::memcpy(&linkedRh,vp.bytes.data()+0x18,8);
+                                std::memcpy(&linkedSfc,vp.bytes.data()+0x20,8);
+                                assert(linkedOs==creatorView->os && linkedRh==creatorView->renderHal &&
+                                    linkedSfc==parentSfcAddress && linkedSfc!=creatorView->hardware.interface);
+                                return 0;
+                            })==0);
                             int32_t childStatus=77;
                             auto neverConstruct=[](auto...) noexcept {assert(false);};
                             assert(storage.initializeChildFromCreator(2,*creatorView,baseBinding,lifetime,mhw,
@@ -19891,6 +19938,8 @@ int main() {
                                     ==TglOwnedBaseConstruction::ConstructedSuccess && childStatus==0);
                             }
                             assert(sourceFreeCleanups==2 && sourceFreeDestroys==2);
+                            assert(!vpCpu.live && !vpAvsCpu.live && parentSfc[0x40]==1);
+                            putNative(nativeCreator,0x60,0);
                         }
                         assert(!pairCpu[0].live && !pairCpu[1].live && pairInvoke.constructs==sfcConstructsBefore+2 &&
                             pairInvoke.destroys==sfcDestroysBefore+2);
