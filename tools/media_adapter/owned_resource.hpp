@@ -11789,7 +11789,33 @@ struct TglOwnedVeboxCommandTransactionResult {
     int builderStatus=5;
     bool acquired=false;
     bool writtenBack=false;
+    // Whole native Render can enter command work before exposing either flag.
+    // This is conservative retention, NOT evidence of acquisition/submission.
+    bool nativeEntered=false;
+    bool requiresRetention() const noexcept {return acquired || writtenBack || nativeEntered;}
 };
+
+// Whole native Render under the original surface and private child/image
+// leases. Existing callback/producer scopes must enclose this call. Never
+// treat native status0 as completion; a qualified retirement must clear the
+// enclosing retained frame even when command acquisition was not observed.
+template<class ChildOwner,class SourceOwner,class TargetOwner,
+    class Invoke=TglNativeVeboxStageInvoker>
+TglOwnedVeboxCommandTransactionResult tglRunLeasedVeboxSurfaceRender(
+    const TglVeboxRenderBinding& binding,ChildOwner& childOwner,void* child,void* argument1,
+    SourceOwner& sourceOwner,const TglOwnedSurfaceStorage& source,
+    TargetOwner& targetOwner,const TglOwnedSurfaceStorage& target,Invoke invoke={}) noexcept {
+    static_assert(noexcept(invoke(uintptr_t{},nullptr,nullptr,nullptr)) &&
+        std::is_same_v<decltype(invoke(uintptr_t{},nullptr,nullptr,nullptr)),int>);
+    TglOwnedVeboxCommandTransactionResult result;
+    result.status=tglInvokeLeasedVeboxSurfaceRender(binding,childOwner,child,argument1,
+        sourceOwner,source,targetOwner,target,
+        [&](uintptr_t entry,void* actual,void* argument,void* pair) noexcept -> int {
+            result.nativeEntered=true;
+            return invoke(entry,actual,argument,pair);
+        });
+    return result;
+}
 
 class TglOwnedVeboxFrameRetention {
     bool pending_=false;
@@ -11798,7 +11824,12 @@ public:
     TglOwnedVeboxFrameRetention(const TglOwnedVeboxFrameRetention&)=delete;
     TglOwnedVeboxFrameRetention& operator=(const TglOwnedVeboxFrameRetention&)=delete;
     bool operator()() const noexcept {return pending_;}
+    void observe(const TglOwnedVeboxCommandTransactionResult& result) noexcept {
+        pending_=pending_ || result.requiresRetention();
+    }
     template<class Result> void observe(const Result& result) noexcept {
+        // Legacy CPU producer results expose only acquisition/writeback.
+        // Canonical whole-frame results always use the overload above.
         pending_=pending_ || result.acquired || result.writtenBack;
     }
 };
@@ -18847,7 +18878,7 @@ public:
         // Retain it conservatively and expose the protocol failure unchanged
         // from the original builder result.
         if(slot.result.writtenBack && !slot.result.acquired) slot.result.status=5;
-        slot.pending=slot.result.acquired || slot.result.writtenBack;
+        slot.pending=slot.result.requiresRetention();
         return slot.result;
     }
     // Bind only to the exact retained frame ticket, under its physical scope.
@@ -21338,6 +21369,7 @@ private:
                         std::is_same_v<decltype(consume(owner,parent,vp,graph,lines,source,target,parameters,packets)),
                             TglOwnedVeboxCommandTransactionResult>);
                     result=consume(owner,parent,vp,graph,lines,source,target,parameters,packets);
+                    backing_.retention().observe(result); // before VP/resource lease unwind
                     return result.status;
                 });
         });
@@ -21420,6 +21452,25 @@ public:
             executionOwner,renderHal,sku,read,
             [&](auto& owner,void* child,auto& source,auto& target,auto& parameters,auto& packets) noexcept {
                 return withLeasedVpCommandResources(childIndex,owner,child,source,target,parameters,packets,consume);
+            });
+    }
+    // Whole retained native Render entry, not a separate builder or submit.
+    // Caller must already provide complete native/owned producer dispatch
+    // scopes and qualified argument1/context. The frame pins original
+    // surfaces, DN, child-owned report and VP throughout the native call.
+    template<class ExecutionOwner,class Read,class Invoke=TglNativeVeboxStageInvoker>
+    TglOwnedVeboxCommandTransactionResult renderNativeOwnedVpFrame(
+        const TglVeboxRenderBinding& binding,const TglNativeOuterSurfaceRoles& roles,
+        size_t childIndex,size_t sourceIndex,size_t targetIndex,ExecutionOwner& executionOwner,
+        void* argument1,uintptr_t renderHal,uintptr_t sku,Read read,Invoke invoke={}) noexcept {
+        if(!argument1) return {};
+        return withNativeOwnedVpCommandFrame(childIndex,roles,sourceIndex,targetIndex,
+            executionOwner,renderHal,sku,read,
+            [&](auto& owner,void* child,void*,auto&,auto&,auto& sourceOwner,auto& targetOwner,
+                auto&,auto& packets) noexcept -> TglOwnedVeboxCommandTransactionResult {
+                if(!packets.target) return {};
+                return tglRunLeasedVeboxSurfaceRender(binding,owner,child,argument1,
+                    sourceOwner,packets.source,targetOwner,*packets.target,invoke);
             });
     }
     template<class Consume>

@@ -8932,6 +8932,28 @@ static void testNativeResourceBoundary() {
                     };
                     assert(pair.render(renderBinding,childLease,&childLease.child,nullptr,nativeRender)==5 && !renderCalls);
                     assert(pair.render(renderBinding,childLease,&childLease.child,&argument,nativeRender)==-17 && renderCalls==1);
+                    assert(pair.withSurfaces([&](const auto& source,const auto& target) noexcept -> int {
+                        unsigned wholeCalls=0;
+                        for(int status:{0,31}) {
+                            auto wholeNative=[&](uintptr_t entry,void* child,void* arg,void* descriptor) noexcept -> int {
+                                assert(entry==renderBinding.entry && child==&childLease.child && arg==&argument);
+                                uintptr_t s=0,t=0;
+                                std::memcpy(&s,static_cast<uint8_t*>(descriptor)+0x10,8);
+                                std::memcpy(&t,static_cast<uint8_t*>(descriptor)+0x18,8);
+                                assert(s==reinterpret_cast<uintptr_t>(&source) && t==reinterpret_cast<uintptr_t>(&target));
+                                ++wholeCalls;return status;
+                            };
+                            const auto denied=tglRunLeasedVeboxSurfaceRender(renderBinding,childLease,
+                                &childLease.child,nullptr,input,source,first,target,wholeNative);
+                            assert(denied.status==5 && !denied.requiresRetention());
+                            const auto result=tglRunLeasedVeboxSurfaceRender(renderBinding,childLease,
+                                &childLease.child,&argument,input,source,first,target,wholeNative);
+                            assert(result.status==status && result.nativeEntered &&
+                                !result.acquired && !result.writtenBack && result.requiresRetention());
+                            TglOwnedVeboxFrameRetention pending;pending.observe(result);assert(pending());
+                        }
+                        assert(wholeCalls==2);return 0;
+                    })==0);
                     struct DnBackend {
                         unsigned releases=0;
                         uintptr_t allocate(size_t n) noexcept {return reinterpret_cast<uintptr_t>(std::calloc(1,n));}
@@ -12942,6 +12964,20 @@ static void testRetainedVeboxFrames() {
         ~Frame() noexcept {++destroyed;}
     };
     using Pool=TglOwnedVeboxRetainedFrames<Frame>;
+    {
+        Pool wholeNative;unsigned allocations=0,releases=0,deaths=0;
+        const auto ticket=wholeNative.create(allocations,releases,deaths);
+        const auto result=wholeNative.run(ticket,[](Frame&) noexcept {
+            return TglOwnedVeboxCommandTransactionResult{31,5,false,false,true};
+        });
+        assert(result.nativeEntered && !result.acquired && !result.writtenBack);
+        assert(wholeNative.retire(ticket,[](const Frame&,bool pending,const auto& captured) noexcept {
+            assert(pending && captured.nativeEntered);return 31;
+        })==31 && deaths==0);
+        assert(wholeNative.retire(ticket,[](const Frame&,bool pending,const auto& captured) noexcept {
+            assert(pending && captured.nativeEntered);return 0;
+        })==0 && deaths==1); // CPU retirement admission fixture, not a fence
+    }
     auto& pool=Pool::processLifetime();
     unsigned allocated=0,released=0,destroyed=0,calls=0;
     const auto first=pool.create(allocated,released,destroyed);
@@ -22080,6 +22116,11 @@ int main() {
                                     void* vp,auto& graph,auto& lines,
                                     auto& sourceLease,auto& targetLease,auto& dn,auto& packets) noexcept {
                                     assert(graph.ownsStorage(vp));(void)lines;
+                                    const TglVeboxRenderBinding renderBinding{base,base+0x12c9d0};
+                                    const auto nestedRender=frame.renderNativeOwnedVpFrame(renderBinding,roles,0,0,0,
+                                        executionLease,reinterpret_cast<void*>(0x1000),0x2200,0x3300,readReportHelper,
+                                        [](uintptr_t,void*,void*,void*) noexcept -> int {assert(false);return 0;});
+                                    assert(nestedRender.status==5 && !nestedRender.requiresRetention());
                                     assert(dn.size()==sizeof(TglOwnedDnParameterStorage));
                                     uintptr_t borrowedDn=0;
                                     std::memcpy(&borrowedDn,packets.source.prefix.data()+0x90,8);
