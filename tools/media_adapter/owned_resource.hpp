@@ -2275,7 +2275,8 @@ struct TglCscCoefficients {
     std::array<float,9> matrix{};
     std::array<float,3> inputOffsets{},outputOffsets{};
 };
-// Qualified VP+a0 1e09c7..1e0b1d override branch. +9c0 is a leased
+// Qualified ICL donor VP+a0 1e09c7..1e0b1d override branch. These are ICL
+// image-relative offsets, NOT callable TGL entries. +9c0 is a leased
 // flag/matrix/input-offset object, not an executable callback. Equal color
 // spaces or a disabled flag fall back to the native coefficient producer.
 // This only snapshots owned data; it neither publishes pointer fields nor
