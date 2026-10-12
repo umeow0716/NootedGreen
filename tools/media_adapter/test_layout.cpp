@@ -1704,6 +1704,8 @@ static void testTrackedCpuOwner() {
             bool fullPackets=false;
             bool requestKernel=false;
             bool foreignCommandPackets=false;
+            bool wholeRender=false;
+            unsigned wholeRenderCalls=0;
             TglOwnedVeboxStateStorage foreignCommandState{};
             auto makeActualConsumer=[&](TglOwnedVeboxFrameRetention& retained) noexcept {
                 return [&,retainedPtr=&retained](auto& packetFrame) noexcept {
@@ -1724,6 +1726,15 @@ static void testTrackedCpuOwner() {
                             foreign?*foreign:packets.state,packets.diIecp};
                     }
                 } command{scratch,*retainedPtr,leases,foreignCommandPackets?&foreignCommandState:nullptr};
+                if(wholeRender) return tglRunImageBoundVeboxRenderPacketFrame<AuxiliaryResolve,
+                    AuxiliaryScope,AuxiliaryScope,AuxiliaryScope,FormatRead>(packetFrame,sourceLease,
+                    targetLease,child,execution,command,0,noRead,noPackets,renderBinding,nullptr,
+                    qualify,executable,cscInvoke,
+                    [&](uintptr_t entry,void* object,void* argument,void*) noexcept -> int {
+                        ++wholeRenderCalls;assert(entry==renderBinding.entry && !argument);
+                        auto* producer=ActualProducers::Resolve::get(object);assert(producer);
+                        return producer->pass.gate([]() noexcept {return 0;});
+                    });
                 return tglRunImageBoundVeboxPacketFrame<AuxiliaryResolve,
                 AuxiliaryScope,AuxiliaryScope,AuxiliaryScope,FormatRead>(packetFrame,sourceLease,
                 child,execution,command,0,noRead,noPackets,nativeSetup,nativeBuilder,
@@ -1819,6 +1830,21 @@ static void testTrackedCpuOwner() {
                 di.resources[7]==&statistics.resource);
             assert(nativeSetups==3 && nativeBuilds==3 && nativeWritebacks==3);
             assert(!ActualProducers::Resolve::get(nativeChild));
+            wholeRender=true;
+            TglOwnedVeboxFrameRetention wholeRetention;
+            auto wholeConsumer=makeActualConsumer(wholeRetention);
+            foreignCommandPackets=true;
+            const auto foreignWhole=wholeConsumer(consistentFrame);
+            assert(foreignWhole.status==5 && !foreignWhole.nativeEntered &&
+                !wholeRetention() && wholeRenderCalls==0);
+            foreignCommandPackets=false;
+            const auto whole=wholeConsumer(consistentFrame);
+            assert(whole.status==0 && whole.nativeEntered && !whole.acquired &&
+                !whole.writtenBack && wholeRetention() && wholeRenderCalls==1);
+            const auto pendingWhole=wholeConsumer(consistentFrame);
+            assert(pendingWhole.status==5 && !pendingWhole.nativeEntered && wholeRenderCalls==1);
+            assert(!ActualProducers::Resolve::get(nativeChild));
+            wholeRender=false;
             // State backing is not this producer's property: even a partial
             // descriptor must stop the same command before DI registration.
             state.resource[0]=0x71;

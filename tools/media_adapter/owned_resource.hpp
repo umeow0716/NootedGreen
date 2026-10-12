@@ -22008,6 +22008,36 @@ TglOwnedVeboxCommandTransactionResult tglRunImageBoundVeboxPacketFrame(
     return consumer(frame);
 }
 
+// Whole Render consumer for the retained packet-frame entry. Use the command's
+// own packet backing and monotonic retention latch; native Render may submit
+// internally, so return is never permission to retire this command.
+template<class LifetimeResolve,class AdmissionResolve,class AllocationResolve,
+    class ModeResolve,class FormatRead,class Frame,class SourceOwner,class TargetOwner,
+    class ChildOwner,class ExecutionOwner,class Command,class Read,class PacketAdmit,
+    class Qualify,class Executable,class CscInvoke=TglNativeCscInvoker,
+    class Invoke=TglNativeVeboxStageInvoker>
+TglOwnedVeboxCommandTransactionResult tglRunImageBoundVeboxRenderPacketFrame(
+    Frame& frame,SourceOwner& source,TargetOwner& target,ChildOwner& child,
+    ExecutionOwner& execution,Command& command,uintptr_t dnParams,Read read,
+    PacketAdmit admitPackets,const TglVeboxRenderBinding& binding,void* argument1,
+    Qualify qualify,Executable executable,CscInvoke cscInvoke={},Invoke invoke={}) noexcept {
+    const auto& leases=frame.leases;
+    if(!leases.target) return {};
+    auto same=command.packetLeases(leases.child,leases.execution,leases.renderHal,
+        leases.sku,leases.source,leases.target);
+    if(same.child!=leases.child || same.execution!=leases.execution ||
+       same.renderHal!=leases.renderHal || same.sku!=leases.sku ||
+       &same.source!=&leases.source || same.target!=leases.target ||
+       &same.surfaces!=&leases.surfaces || &same.state!=&leases.state ||
+       &same.diIecp!=&leases.diIecp) return {};
+    TglOwnedCscProducer<Read,Qualify,Executable,CscInvoke> csc(
+        binding.image,read,qualify,executable,cscInvoke);
+    return tglWithOwnedVeboxFrameNativeRender<LifetimeResolve,AdmissionResolve,
+        AllocationResolve,ModeResolve,FormatRead>(source,leases.source,target,*leases.target,
+        frame,child,execution,dnParams,read,admitPackets,csc,binding,argument1,
+        command.backing().auxiliary().retention(),invoke);
+}
+
 // One borrowed-OS resource lifetime. The renderer must close every such scope
 // before retiring RenderHal/OS. Member order guarantees resource destruction
 // while its backend still exists; close is terminal and idempotent.
