@@ -18145,6 +18145,7 @@ template<class Invoker=TglNativeTrackedCpuInvoker> class TglNativeVpBackingStora
     using Resources=TglNativeVpLineResourceOwner<Graph>;
     alignas(Resources) std::array<uint8_t,sizeof(Resources)> bytes_{};
     Resources* resources_=nullptr;
+    bool preparing_=false;
 public:
     template<class Read,class Qualify,class Executable>
     TglNativeVpBackingStorage(uintptr_t image,Read read,Qualify qualify,Executable executable,
@@ -18157,10 +18158,25 @@ public:
     int initialize(const Binding& binding,const TglNativeResourceBinding& resourceBinding,
         uint64_t pageSize,uintptr_t os,uintptr_t renderHal,uintptr_t mhw,Read read,
         uint32_t channel,uintptr_t performance) {
-        if(resources_ || retention_() || !cpu_.bound() || !resourceBinding.context ||
+        return initializePrepared(binding,resourceBinding,pageSize,os,renderHal,mhw,read,
+            channel,performance,[](auto&) noexcept -> int {return 0;});
+    }
+    // Complete checked pass preparation before the persistent resource owner
+    // pins graph state. Never reset a published frame or bypass its lease.
+    template<class Binding,class Read,class Prepare>
+    int initializePrepared(const Binding& binding,const TglNativeResourceBinding& resourceBinding,
+        uint64_t pageSize,uintptr_t os,uintptr_t renderHal,uintptr_t mhw,Read read,
+        uint32_t channel,uintptr_t performance,Prepare prepare) {
+        static_assert(noexcept(prepare(cpu_.graph())) &&
+            std::is_same_v<decltype(prepare(cpu_.graph())),int>);
+        if(preparing_ || resources_ || retention_() || !cpu_.bound() || !resourceBinding.context ||
            !resourceBinding.allocate || !resourceBinding.release ||
            !pageSize || (pageSize&(pageSize-1))) return 5;
+        preparing_=true;
+        struct EndPreparation {bool& active;~EndPreparation(){active=false;}} end{preparing_};
         if(!cpu_.graph().initialize(os,renderHal,mhw,binding,read,channel,performance)) return 5;
+        const int prepared=prepare(cpu_.graph());
+        if(prepared) {(void)cpu_.graph().tryReset();return prepared;}
         resources_=::new(static_cast<void*>(bytes_.data())) Resources(cpu_.graph(),resourceBinding,pageSize);
         if(resources_->bound()) return 0;
         resources_->~Resources();resources_=nullptr;
@@ -21918,6 +21934,14 @@ public:
         auto* vp=selectVp(index);
         if(!vp || !os || os!=resources_.context) return 5;
         return vp->initialize(binding,resources_,pageSize_,os,renderHal,mhw,read,channel,performance);
+    }
+    template<class Binding,class Read,class Prepare>
+    int initializeVpPrepared(size_t index,const Binding& binding,uintptr_t os,uintptr_t renderHal,
+        uintptr_t mhw,Read read,uint32_t channel,uintptr_t performance,Prepare prepare) {
+        auto* vp=selectVp(index);
+        if(!vp || !os || os!=resources_.context) return 5;
+        return vp->initializePrepared(binding,resources_,pageSize_,os,renderHal,mhw,read,
+            channel,performance,prepare);
     }
     bool vpBound() const noexcept {return vp_.bound();}
     bool vpBound(size_t index) const noexcept {

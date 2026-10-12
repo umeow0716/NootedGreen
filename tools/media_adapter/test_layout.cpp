@@ -22143,8 +22143,34 @@ int main() {
                                                 state0.live && avs0.live && !state1.live && !avs1.live);
                                             avs1.fail=false;
                                         }
-                                        assert(pairedStorage.initializeVpFromCreator(index,*creatorView,
-                                            parentSfcRead,qualifyMhw,executableMhw)==0 && paired.vpBound(index));
+                                        if(index==0) {
+                                            assert(pairedStorage.initializeVpFromCreator(index,*creatorView,
+                                                parentSfcRead,qualifyMhw,executableMhw)==0);
+                                        } else {
+                                            unsigned prepared=0;
+                                            assert(paired.initializeVpPrepared(index,nativeSfc,os,creatorView->renderHal,
+                                                parentSfcAddress,parentSfcRead,0,0,[&](auto&) noexcept -> int {
+                                                    ++prepared;return 31;
+                                                })==31);
+                                            assert(prepared==1 && !paired.vpBound(index) && !state1.live && !avs1.live);
+                                            prepared=0;
+                                            assert(paired.initializeVpPrepared(index,nativeSfc,os,creatorView->renderHal,
+                                                parentSfcAddress,parentSfcRead,0,0,[&](auto& graph) noexcept -> int {
+                                                    ++prepared;
+                                                    assert(!paired.vpBound(index));
+                                                    assert(paired.initializeVpPrepared(index,nativeSfc,os,
+                                                        creatorView->renderHal,parentSfcAddress,parentSfcRead,0,0,
+                                                        [](auto&) noexcept -> int {assert(false);return 0;})==5);
+                                                    return graph.withPassInitializationEntry([](void* child,auto entry) noexcept {
+                                                        entry(child);return 0;
+                                                    });
+                                                })==0);
+                                            assert(prepared==1);
+                                            assert(paired.initializeVpPrepared(index,nativeSfc,os,creatorView->renderHal,
+                                                parentSfcAddress,parentSfcRead,0,0,
+                                                [](auto&) noexcept -> int {assert(false);return 0;})==5);
+                                        }
+                                        assert(paired.vpBound(index));
                                     }
                                     assert(state0.live && state1.live && avs0.live && avs1.live);
                                     assert(paired.withVpResources(0,[&](auto&,auto& first,auto&) noexcept {
