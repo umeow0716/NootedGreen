@@ -22790,14 +22790,22 @@ public:
                     command=withLeasedVpCommandResources(childIndex,owner,child,source,target,parameters,packets,
                         [&](auto& actualOwner,void* actualChild,void* vp,auto& graph,auto& lines,
                             auto& actualSource,auto& actualTarget,auto& dn,auto& actualPackets) noexcept {
-                            if(!runAdmission() || !identities()) return TglOwnedVeboxCommandTransactionResult{};
-                            accepted=true;
-                            static_assert(noexcept(consume(actualOwner,actualChild,vp,graph,lines,
-                                actualSource,actualTarget,dn,actualPackets)) &&
-                                std::is_same_v<decltype(consume(actualOwner,actualChild,vp,graph,lines,
-                                    actualSource,actualTarget,dn,actualPackets)),TglOwnedVeboxCommandTransactionResult>);
-                            return consume(actualOwner,actualChild,vp,graph,lines,
-                                actualSource,actualTarget,dn,actualPackets);
+                            TglOwnedVeboxCommandTransactionResult consumed;
+                            const int status=executionOwner.withLeasedFeatureReport(expectedExecution,expectedTarget,
+                                [&]() noexcept -> int {
+                                    if(!runAdmission() || !identities()) return 5;
+                                    accepted=true;
+                                    static_assert(noexcept(consume(actualOwner,actualChild,vp,graph,lines,
+                                        actualSource,actualTarget,dn,actualPackets)) &&
+                                        std::is_same_v<decltype(consume(actualOwner,actualChild,vp,graph,lines,
+                                            actualSource,actualTarget,dn,actualPackets)),TglOwnedVeboxCommandTransactionResult>);
+                                    consumed=consume(actualOwner,actualChild,vp,graph,lines,
+                                        actualSource,actualTarget,dn,actualPackets);
+                                    // Preserve asynchronous retention before report60 detaches.
+                                    backing_.retention().observe(consumed);
+                                    return consumed.status;
+                                });
+                            consumed.status=status;return consumed;
                         });
                     return accepted;
                 };

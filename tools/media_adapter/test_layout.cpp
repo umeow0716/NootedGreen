@@ -23605,12 +23605,16 @@ int main() {
                                 assert(prepared.status==-92 && preparations==2 && consumptions==1);
                                 std::array<uint8_t,8> savedDimensions{};
                                 std::memcpy(savedDimensions.data(),source.prefix.data()+0xd8,8);
+                                uint32_t savedFormat=0;
+                                std::memcpy(&savedFormat,source.prefix.data()+0x130,4);
+                                const uint32_t featureFormat=0x19;
+                                std::memcpy(source.prefix.data()+0x130,&featureFormat,4);
                                 uint32_t admissionWidth=64,admissionHeight=16;
                                 std::memcpy(source.prefix.data()+0xd8,&admissionWidth,4);
                                 std::memcpy(source.prefix.data()+0xdc,&admissionHeight,4);
-                                unsigned admissionResets=0,admissionConsumes=0;
-                                bool fixtureDependencies=false;
-                                auto admitFrame=[&](auto& owner,void* child,auto& sourceOwner,auto&,auto&,auto& packets,
+                                unsigned admissionResets=0,admissionConsumes=0,admissionFeatures=0;
+                                bool fixtureDependencies=false,admissionFeatureCode=true;
+                                auto admitFrame=[&](auto& owner,void* child,auto& sourceOwner,auto& targetOwner,auto& parameters,auto& packets,
                                     auto& backing,auto enterResources) noexcept -> bool {
                                     std::array<uint8_t,0x139> params{};params[0x138]=1;
                                     std::array<uint8_t,0x18> pass{};
@@ -23674,17 +23678,48 @@ int main() {
                                         decltype(historyReadable),decltype(historyWritable)> historyStage{
                                         owner,executionLease,sourceOwner,child,packets.execution,
                                         packets.source,historyReadable,historyWritable};
+                                    auto featureRead=[&](uintptr_t address,void* output,size_t size) noexcept {
+                                        constexpr std::array<uint8_t,16> anchor{
+                                            0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x50,
+                                            0x48,0x89,0x7d,0xf8,0x48,0x89,0x75,0xf0};
+                                        if(address==base+0x12aba0 && size==anchor.size() && admissionFeatureCode) {
+                                            std::memcpy(output,anchor.data(),size);return true;
+                                        }
+                                        if(address==base+0x757c98+0x170 && size==8) {
+                                            const uintptr_t entry=base+0x12aba0;std::memcpy(output,&entry,8);return true;
+                                        }
+                                        return false;
+                                    };
+                                    auto featureExecutable=[](uintptr_t address,size_t size) noexcept {
+                                        return address==base+0x12aba0 && size==16;
+                                    };
+                                    TglVeboxFeatureBinding feature;
+                                    // Resolution failure is also checked by the stage, before native invocation.
+                                    feature.resolve(base,featureRead,qualifyMhw,featureExecutable);
+                                    auto invokeFeature=[&](uintptr_t address,void* actual,const auto& input,const auto& output) noexcept {
+                                        ++admissionFeatures;
+                                        assert(address==base+0x12aba0 && actual==child && &input==&packets.source &&
+                                            &output==packets.target && executionLease.hasLeasedFeatureReport(packets.execution,packets.target));
+                                    };
+                                    TglOwnedVeboxFeatureAdmissionStage<std::decay_t<decltype(sourceOwner)>,
+                                        std::decay_t<decltype(targetOwner)>,std::decay_t<decltype(owner)>,
+                                        std::decay_t<decltype(executionLease)>,std::decay_t<decltype(parameters)>,
+                                        decltype(featureRead),decltype(qualifyMhw),decltype(featureExecutable),decltype(invokeFeature)>
+                                        featureStage{feature,sourceOwner,targetOwner,owner,executionLease,parameters,
+                                            child,packets.execution,packets.source,*packets.target,
+                                            featureRead,qualifyMhw,featureExecutable,invokeFeature};
                                     const int status=executionLease.withLeasedAdmissionBytes(packets.execution,[&](auto& reportBytes) noexcept {
                                         return tglRunCapturedSelectedVeboxAdmissionStages(owner,executionLease,child,
                                             params,pass,packets.source,*packets.target,interfaces,reportBytes,readInput,reset,
                                             [](uint8_t&) noexcept -> uint32_t {return 1;},historyStage,
-                                            [](auto&) noexcept {},[](auto&) noexcept {return true;},enterResources)?0:5;
+                                            featureStage,[](auto&) noexcept {return true;},enterResources)?0:5;
                                     });
                                     std::memcpy(bytes+0x90,&savedHistory,8);
                                     std::memcpy(bytes+0x18,savedDependencies.data(),savedDependencies.size());
                                     return status==0;
                                 };
-                                auto consumeAdmitted=[&](auto&,void*,void*,auto&,auto&,auto&,auto&,auto&,auto&) noexcept {
+                                auto consumeAdmitted=[&](auto&,void*,void*,auto&,auto&,auto&,auto&,auto&,auto& packets) noexcept {
+                                    assert(executionLease.hasLeasedFeatureReport(packets.execution,packets.target));
                                     ++admissionConsumes;TglOwnedVeboxCommandTransactionResult result;result.status=-93;return result;
                                 };
                                 const auto missingDependencies=frame.withNativeOwnedVpAdmissionCommandFrame(0,roles,0,0,
@@ -23693,12 +23728,25 @@ int main() {
                                 fixtureDependencies=true;
                                 const auto admitted=frame.withNativeOwnedVpAdmissionCommandFrame(0,roles,0,0,
                                     executionLease,0x2200,0x3300,readReportHelper,admitFrame,consumeAdmitted);
-                                assert(admitted.status==-93 && admissionResets==1 && admissionConsumes==1);
+                                assert(admitted.status==-93 && admissionResets==1 && admissionConsumes==1 && admissionFeatures==1);
+                                assert(!executionLease.hasLeasedFeatureReport(
+                                    reinterpret_cast<uintptr_t>(executionBackend.bytes.data()),&source));
+                                uintptr_t detachedTarget=1;
+                                std::memcpy(&detachedTarget,executionBackend.bytes.data()+0x60,8);
+                                assert(!detachedTarget);
+                                admissionFeatureCode=false;
+                                const auto deniedFeature=frame.withNativeOwnedVpAdmissionCommandFrame(0,roles,0,0,
+                                    executionLease,0x2200,0x3300,readReportHelper,admitFrame,consumeAdmitted);
+                                assert(deniedFeature.status==5 && admissionResets==2 && admissionConsumes==1 && admissionFeatures==1);
+                                std::memcpy(&detachedTarget,executionBackend.bytes.data()+0x60,8);
+                                assert(!detachedTarget);
+                                admissionFeatureCode=true;
                                 admissionWidth=63;std::memcpy(source.prefix.data()+0xd8,&admissionWidth,4);
                                 const auto denied=frame.withNativeOwnedVpAdmissionCommandFrame(0,roles,0,0,
                                     executionLease,0x2200,0x3300,readReportHelper,admitFrame,consumeAdmitted);
-                                assert(denied.status==5 && admissionResets==1 && admissionConsumes==1);
+                                assert(denied.status==5 && admissionResets==2 && admissionConsumes==1 && admissionFeatures==1);
                                 std::memcpy(source.prefix.data()+0xd8,savedDimensions.data(),8);
+                                std::memcpy(source.prefix.data()+0x130,&savedFormat,4);
                             }
                             unsigned creatorRoleCaptures=0;
                             auto captureCreator=[&](auto& owner,void* child,void* vp,auto& graph,auto& lines,
