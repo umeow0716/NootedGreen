@@ -552,13 +552,14 @@ template<class Invoker> class TglOwnedSfcMhw {
     Invoker &invoke;
     TglSfcLifetimeBinding lifetime{};
     uintptr_t borrowedOs=0;
+    uintptr_t borrowedObject=0;
     uint64_t generation_=0;
     bool constructed=false,ready=false,busy=false,reserved=false;
     void clear() noexcept {
         if(generation_!=UINT64_MAX) ++generation_;
         ready=false;
         if(constructed){constructed=false;invoke.destroy(lifetime.destroy,storage.data());}
-        lifetime={};borrowedOs=0;storage.fill(0);
+        lifetime={};borrowedOs=0;borrowedObject=0;storage.fill(0);
     }
 public:
     explicit TglOwnedSfcMhw(Invoker &invoker):invoke(invoker){}
@@ -595,7 +596,24 @@ public:
         if(!mhw.validateConstructedObject(object,os,objectRead)){clear();return false;}
         borrowedOs=os;ready=true;return true;
     }
-    void *get() noexcept {return ready?storage.data():nullptr;}
+    // Parent VPHAL owns this object and serializes all users, including the
+    // other child and VP. This handle never invokes its constructor/destructor.
+    // Parent/image/OS lease must enclose this handle, not merely this call.
+    template<class Read>
+    bool initializeBorrowed(const TglSfcLifetimeBinding& binding,const TglSfcMhwBinding& mhw,
+        uintptr_t object,uintptr_t os,Read read) {
+        const auto own=reinterpret_cast<uintptr_t>(storage.data());
+        if(busy || reserved || generation_==UINT64_MAX ||
+            (object>=own && object-own<storage.size())) return false;
+        reset();
+        struct Guard {bool& flag;explicit Guard(bool& value):flag(value){flag=true;}
+            ~Guard(){flag=false;}} guard(busy);
+        if(generation_==UINT64_MAX || !binding.image || binding.image!=mhw.image ||
+            binding.construct!=binding.image+0x16bdd0 || binding.destroy!=binding.image+0x16bed0 ||
+            !mhw.validateConstructedObject(object,os,read)) return false;
+        lifetime=binding;borrowedOs=os;borrowedObject=object;ready=true;return true;
+    }
+    void *get() noexcept {return ready?(borrowedObject?reinterpret_cast<void*>(borrowedObject):storage.data()):nullptr;}
     uintptr_t image() const noexcept {return ready?lifetime.image:0;}
     uintptr_t os() const noexcept {return ready?borrowedOs:0;}
     uint64_t generation() const noexcept {return generation_;}
@@ -616,7 +634,7 @@ public:
             explicit Guard(bool& flag) noexcept:value(flag){value=true;}
             ~Guard(){value=false;}
         } guard(busy);
-        return use(storage.data());
+        return use(get());
     }
     void reset() noexcept {
         if(busy || reserved) return;
@@ -4544,11 +4562,12 @@ private:
     template<class Read,class Build>
     TglOwnedBaseConstruction initializeDependencies(const TglVeboxLifetimeBinding& binding,
         const TglSfcLifetimeBinding& sfcLifetime,const TglSfcMhwBinding& sfcBinding,
-        void* os,Read read,Build build) {
+        void* os,Read read,Build build,uintptr_t borrowedSfc=0) {
         if(busy_ || publishedRenderer_ || allocationGeneration_==UINT64_MAX) return TglOwnedBaseConstruction::NotCalled;
         reset();busy_=true;
-        if(binding.image!=sfcLifetime.image ||
-           !sfc_.initialize(sfcLifetime,sfcBinding,reinterpret_cast<uintptr_t>(os),read)) {
+        if(binding.image!=sfcLifetime.image || !(borrowedSfc?
+           sfc_.initializeBorrowed(sfcLifetime,sfcBinding,borrowedSfc,reinterpret_cast<uintptr_t>(os),read):
+           sfc_.initialize(sfcLifetime,sfcBinding,reinterpret_cast<uintptr_t>(os),read))) {
             busy_=false;reset();return TglOwnedBaseConstruction::NotCalled;
         }
         if(!storage_.allocate(0x1bc0)){busy_=false;reset();return TglOwnedBaseConstruction::NotCalled;}
@@ -4581,14 +4600,15 @@ public:
     TglOwnedBaseConstruction initializeQualified(const TglVeboxLifetimeBinding& binding,
         const TglSfcLifetimeBinding& sfcLifetime,const TglSfcMhwBinding& sfcBinding,
         void* os,const TglVeboxHardwareBinding& mhw,void* renderHal,void* history,
-        void* performance,const void* cache,int32_t& status,Read read,Qualify qualify,Construct construct) {
+        void* performance,const void* cache,int32_t& status,Read read,Qualify qualify,Construct construct,
+        uintptr_t borrowedSfc=0) {
         static_assert(noexcept(construct(uintptr_t{},nullptr,nullptr,nullptr,nullptr,
             nullptr,nullptr,nullptr,nullptr,&status)),"constructor reports native status");
         return initializeDependencies(binding,sfcLifetime,sfcBinding,os,read,
             [&](void* storage,size_t size,auto& sfc) {
                 return tglConstructOwnedVeboxBaseWithSfcAndMhw(binding,storage,size,sfc,os,mhw,
                     renderHal,history,performance,cache,status,read,qualify,construct);
-            });
+            },borrowedSfc);
     }
     void* constructedBase() const noexcept {
         return ready_ ? reinterpret_cast<void*>(storage_.get()) : nullptr;
@@ -5118,10 +5138,11 @@ public:
     TglOwnedBaseConstruction initializeQualified(const TglVeboxLifetimeBinding& binding,
         const TglSfcLifetimeBinding& lifetime,const TglSfcMhwBinding& sfc,
         void* os,const TglVeboxHardwareBinding& mhw,void* renderHal,void* history,
-        void* performance,const void* cache,int32_t& status,Read read,Qualify qualify,Construct construct={}) {
+        void* performance,const void* cache,int32_t& status,Read read,Qualify qualify,Construct construct={},
+        uintptr_t borrowedSfc=0) {
         if(!bound() || binding.image!=image_) return TglOwnedBaseConstruction::NotCalled;
         return owner_.initializeQualified(binding,lifetime,sfc,os,mhw,renderHal,history,
-            performance,cache,status,read,qualify,construct);
+            performance,cache,status,read,qualify,construct,borrowedSfc);
     }
 };
 
@@ -19629,11 +19650,16 @@ public:
         const TglSfcMhwBinding& sfc,void* history,void* performance,const void* cache,
         int32_t& status,Read read,Qualify qualify,Executable executable,Construct construct={}) {
         TglVeboxHardwareBinding hardware;
-        if(index>1 || backing_.retention()() || !creatorEnvironment(view,read,qualify,executable,hardware))
+        TglSfcMhwBinding parentSfc;
+        uintptr_t object=0;
+        if(index>1 || backing_.retention()() || !creatorEnvironment(view,read,qualify,executable,hardware) ||
+            sfc.image!=view.renderer.image || !read(view.parent+0x60,&object,8) || !object ||
+            object==hardware.interface || !parentSfc.resolve(view.renderer.image,read,qualify,executable) ||
+            !parentSfc.validateConstructedObject(object,view.os,read))
             return TglOwnedBaseConstruction::NotCalled;
         auto& child=index?children_.second():children_.first();
-        return child.initializeQualified(binding,lifetime,sfc,reinterpret_cast<void*>(view.os),hardware,
-            reinterpret_cast<void*>(view.renderHal),history,performance,cache,status,read,qualify,construct);
+        return child.initializeQualified(binding,lifetime,parentSfc,reinterpret_cast<void*>(view.os),hardware,
+            reinterpret_cast<void*>(view.renderHal),history,performance,cache,status,read,qualify,construct,object);
     }
 };
 

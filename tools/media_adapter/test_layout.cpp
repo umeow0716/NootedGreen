@@ -19924,25 +19924,35 @@ int main() {
                                 nullptr,nullptr,nullptr,childStatus,resourceRead,qualifyMhw,executableMhw,neverConstruct)
                                 ==TglOwnedBaseConstruction::NotCalled && childStatus==77);
                             allowPageImport=true;
-                            auto constructSourceFree=[&](uintptr_t entry,void* object,void* nativeOs,void* nativeMhw,void*,
+                            bool failSourceFreeConstructor=true;
+                            auto constructSourceFree=[&](uintptr_t entry,void* object,void* nativeOs,void* nativeMhw,void* nativeSfc,
                                 void*,void*,void*,const void*,int32_t* out) noexcept {
                                 assert(entry==base+0x12d4e0 && nativeOs==reinterpret_cast<void*>(os));
                                 assert(nativeMhw==reinterpret_cast<void*>(creatorView->hardware.interface));
+                                assert(nativeSfc==reinterpret_cast<void*>(parentSfcAddress));
                                 const uintptr_t table=base+0x757c98,configuration=0;
                                 std::memcpy(object,&table,8);std::memcpy(static_cast<uint8_t*>(object)+8,&configuration,8);
-                                std::memcpy(static_cast<uint8_t*>(object)+0x10,&os,8);*out=0;
+                                std::memcpy(static_cast<uint8_t*>(object)+0x10,&os,8);
+                                std::memcpy(static_cast<uint8_t*>(object)+0x68,&parentSfcAddress,8);
+                                *out=failSourceFreeConstructor?31:0;
                             };
+                            assert(storage.initializeChildFromCreator(0,*creatorView,baseBinding,lifetime,mhw,
+                                nullptr,nullptr,nullptr,childStatus,parentSfcRead,qualifyMhw,executableMhw,constructSourceFree)
+                                ==TglOwnedBaseConstruction::ConstructedFailure && childStatus==31);
+                            assert(sourceFreeCleanups==1 && sourceFreeDestroys==1 && !pairCpu[0].live &&
+                                parentSfc[0x40]==1 && pairInvoke.destroys==sfcDestroysBefore);
+                            failSourceFreeConstructor=false;
                             for(size_t child=0;child<2;++child)
                                 assert(storage.initializeChildFromCreator(child,*creatorView,baseBinding,lifetime,mhw,
-                                    nullptr,nullptr,nullptr,childStatus,resourceRead,qualifyMhw,executableMhw,constructSourceFree)
+                                    nullptr,nullptr,nullptr,childStatus,parentSfcRead,qualifyMhw,executableMhw,constructSourceFree)
                                     ==TglOwnedBaseConstruction::ConstructedSuccess && childStatus==0);
                             }
-                            assert(sourceFreeCleanups==2 && sourceFreeDestroys==2);
+                            assert(sourceFreeCleanups==3 && sourceFreeDestroys==3);
                             assert(!vpCpu.live && !vpAvsCpu.live && parentSfc[0x40]==1);
                             putNative(nativeCreator,0x60,0);
                         }
-                        assert(!pairCpu[0].live && !pairCpu[1].live && pairInvoke.constructs==sfcConstructsBefore+2 &&
-                            pairInvoke.destroys==sfcDestroysBefore+2);
+                        assert(!pairCpu[0].live && !pairCpu[1].live && pairInvoke.constructs==sfcConstructsBefore &&
+                            pairInvoke.destroys==sfcDestroysBefore);
                         pairInvoke.constructs=sfcConstructsBefore;pairInvoke.destroys=sfcDestroysBefore;
                         assert(!vpCpu.live && !vpAvsCpu.live);pairEventCount=0;
                         const auto ticket=frames.create(reinterpret_cast<uintptr_t>(&source),
