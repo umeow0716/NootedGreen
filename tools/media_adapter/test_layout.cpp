@@ -20140,12 +20140,40 @@ int main() {
                             assert(sourceFreeCleanups==1 && sourceFreeDestroys==1 && !pairCpu[0].live &&
                                 parentSfc[0x40]==1 && pairInvoke.destroys==sfcDestroysBefore);
                             failSourceFreeConstructor=false;
+                            {
+                                using Standalone=TglNativeVeboxRendererFrameStorage<UnusedFrameApi,
+                                    FrameSurfaceBackend,FrameDnBackend,decltype(sourceFreeCleanup),
+                                    NativeCpu,TrackedSfc,decltype(sourceFreeDestroy),FrameMhwInvoke,BorrowedMhw>;
+                                Standalone standalone(frameSurfaces,frameDn,base,allocatorRead,
+                                    qualifyMhw,executableMhw,environment.resources,environment.pageSize,
+                                    environment.fill,NativeCpu{vpCpu,&vpAvsCpu},
+                                    std::array<decltype(sourceFreeCleanup),2>{sourceFreeCleanup,sourceFreeCleanup},
+                                    std::array<NativeCpu,2>{NativeCpu{pairCpu[0]},NativeCpu{pairCpu[1]}},
+                                    std::array<TrackedSfc,2>{TrackedSfc{pairInvoke,pairEvents,pairEventCount},
+                                        TrackedSfc{pairInvoke,pairEvents,pairEventCount}},
+                                    std::array<decltype(sourceFreeDestroy),2>{sourceFreeDestroy,sourceFreeDestroy});
+                                auto standaloneParent=parents.pin(base,0x8000,1,parentAddress);
+                                assert(standalone.retainBorrowedMhwOwned(std::move(standaloneParent),
+                                    base,parentAddress,creatorAddress,parentLifetime,borrowedRead,borrowedAdmit,
+                                    qualifyMhw,executableMhw,
+                                    [&](const auto& owner,const auto& view) noexcept {
+                                        return owner.context()==view.parent && view.os==os &&
+                                            view.hardware.interface==creatorView->hardware.interface;
+                                    }));
+                                for(size_t child=0;child<2;++child)
+                                    assert(standalone.initializeChildFromCreator(child,*creatorView,
+                                        baseBinding,lifetime,childStatus,parentSfcRead,qualifyMhw,executableMhw,
+                                        constructSourceFree,sourceFreeQuery)==TglOwnedBaseConstruction::ConstructedSuccess
+                                        && childStatus==0);
+                            }
+                            assert(sourceFreeCleanups==3 && sourceFreeDestroys==3 &&
+                                !pairCpu[0].live && !pairCpu[1].live && parentSfc[0x40]==1);
                             for(size_t child=0;child<2;++child)
                                 assert(storage.initializeChildFromCreator(child,*creatorView,baseBinding,lifetime,
                                     childStatus,parentSfcRead,qualifyMhw,executableMhw,constructSourceFree,sourceFreeQuery)
                                     ==TglOwnedBaseConstruction::ConstructedSuccess && childStatus==0);
                             }
-                            assert(sourceFreeCleanups==3 && sourceFreeDestroys==3);
+                            assert(sourceFreeCleanups==5 && sourceFreeDestroys==5);
                             assert(!vpCpu.live && !vpAvsCpu.live && parentSfc[0x40]==1);
                             putNative(nativeCreator,0x60,0);
                         }
