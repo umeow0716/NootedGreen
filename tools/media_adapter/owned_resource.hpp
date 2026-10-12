@@ -17025,6 +17025,16 @@ template<class Lines,class Sfd> class TglOwnedVpLineResourceSet {
 public:
     TglOwnedVpLineResourceSet(Lines& lines,Sfd& sfd) noexcept:lines_(lines),sfd_(sfd){}
     bool boundToVp(const TglOwnedVpSfcCallerStorage& vp) const noexcept {return lines_.boundToVp(vp);}
+    // Borrow all three existing owners together for state binding/emission.
+    // No allocation, query, resource registration or retirement is implied.
+    template<class Use> int withCommandResources(uint32_t input,uint32_t scaled,Use use) noexcept {
+        return lines_.withDimensions(input,scaled,[&](const auto& avs,const auto& ief) noexcept -> int {
+            return sfd_.withBuffer(scaled,[&](const auto* sfd) noexcept -> int {
+                static_assert(noexcept(use(avs,ief,sfd)),"VP command resource lease ABI");
+                return use(avs,ief,sfd);
+            });
+        });
+    }
     int ensure(uint32_t input,uint32_t scaled) noexcept {
         TglOwnedSfcLineBufferSizes sizes;
         if(!tglOwnedSfcLineBufferSizes(sizes,input,scaled)) return 5;

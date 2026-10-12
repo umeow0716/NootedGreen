@@ -15851,6 +15851,18 @@ int main() {
                 sfdBackend.status=0;assert(sfd.ensure(tall)==0);
                 for(int result:{0,31,-7}) assert(run(result)==result);
                 assert(queries==7 && emitted==6);
+                for(int result:{0,-31}) assert(resources.withCommandResources(input,tall,
+                    [&](const auto& avs,const auto& ief,const auto* sfdResource) noexcept -> int {
+                        assert(tglNativeBackingPresent(avs.resource) && tglNativeBackingPresent(ief.resource));
+                        assert(sfdResource && tglNativeBackingPresent(*sfdResource));
+                        assert(!lines.tryReset() && !sfd.tryReset());
+                        assert(resources.ensure(input,tall)==5);
+                        assert(resources.withCommandResources(input,tall,
+                            [](const auto&,const auto&,const auto*) noexcept -> int {assert(false);return 0;})==5);
+                        return result;
+                    })==result);
+                assert(resources.withCommandResources(input,tall+1,
+                    [](const auto&,const auto&,const auto*) noexcept -> int {assert(false);return 0;})==5);
                 unsigned admissions=0;
                 assert(sfd.withBuffer(tall,[&](const auto*) noexcept {
                     const auto allocated=backends[0].allocations;
