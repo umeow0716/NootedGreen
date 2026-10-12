@@ -20769,6 +20769,27 @@ int main() {
                                                 assert(!firstGraph.tryReset() && !secondGraph.tryReset());
                                                 assert(ae.allocate && be.allocate && ae.freeResources && be.freeResources);
                                                 std::array<TglOwnedVpEntrySet,2> baseEntries{ae,be};
+                                                auto releaseVp=[](void*) noexcept {assert(false);};
+                                                using Graph=std::remove_reference_t<decltype(firstGraph)>;
+                                                using Lines=std::remove_reference_t<decltype(firstLines.resources())>;
+                                                using Lifetime=TglOwnedVpLifetimeContext<Graph,Lines,decltype(modeRetire),decltype(releaseVp)>;
+                                                Lifetime firstLifetime(a,firstGraph,firstLines.resources(),modeRetire,releaseVp);
+                                                Lifetime secondLifetime(b,secondGraph,secondLines.resources(),modeRetire,releaseVp);
+                                                assert(tglWithOwnedVpPairedLifetimeAssemblyEntries(a,firstLifetime,b,secondLifetime,baseEntries,
+                                                    [&](void* x,const auto& xe,void* y,const auto& ye) noexcept -> int {
+                                                        assert(x==a && y==b && xe.destroy && ye.destroy &&
+                                                            xe.deletingDestroy && ye.deletingDestroy);
+                                                        return expected;
+                                                    })==expected);
+                                                for(size_t index=0;index<2;++index) {
+                                                    assert(tglWithOwnedVpPairedLifetimeAssemblyEntries(a,firstLifetime,b,secondLifetime,baseEntries,
+                                                        [&](void* x,const auto& xe,void* y,const auto& ye) noexcept -> int {
+                                                            if(index) ye.deletingDestroy(y);else xe.destroy(x);
+                                                            return 0;
+                                                        })==5);
+                                                }
+                                                assert(firstLifetime.attempts()==1 && secondLifetime.attempts()==1 &&
+                                                    !firstLifetime.destroyed() && !secondLifetime.deleted());
                                                 assert(firstGraph.withLeasedPairedInitializedAssemblyEntries(secondGraph,baseEntries,
                                                     [&](void* x,const auto& xe,void* y,const auto& ye) noexcept -> int {
                                                         assert(x==a && y==b && xe.initialize && ye.initialize);

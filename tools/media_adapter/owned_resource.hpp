@@ -16945,6 +16945,26 @@ int tglWithOwnedVpLifetimeAssemblyEntries(void* child,Lifetime& lifetime,
 }
 
 // CPU construction-to-lifetime transition. Construct must invoke the owned
+template<class Lifetime,class Use>
+int tglWithOwnedVpPairedLifetimeAssemblyEntries(void* first,Lifetime& firstLifetime,
+    void* second,Lifetime& secondLifetime,const std::array<TglOwnedVpEntrySet,2>& base,Use use) noexcept {
+    if(!first || !second || first==second || !firstLifetime.owns(first) || !secondLifetime.owns(second) ||
+        base[0].destroy || base[0].deletingDestroy || base[1].destroy || base[1].deletingDestroy) return 5;
+    const auto firstAttempts=firstLifetime.attempts(),secondAttempts=secondLifetime.attempts();
+    if(firstAttempts==UINT64_MAX || secondAttempts==UINT64_MAX) return 5;
+    typename TglOwnedVpSfcScopedContext<Lifetime>::Pair scope(first,firstLifetime,second,secondLifetime);
+    if(!scope.bound()) return 5;
+    auto entries=base;using Resolve=TglOwnedVpSfcResolve<Lifetime>;
+    if(!tglBindOwnedVpLifetimeEntries<Resolve>(first,entries[0]) ||
+        !tglBindOwnedVpLifetimeEntries<Resolve>(second,entries[1])) return 5;
+    static_assert(noexcept(use(first,entries[0],second,entries[1])),"paired lifetime consumer ABI");
+    const int result=use(first,entries[0],second,entries[1]);
+    if(result) return result;
+    if(firstLifetime.attempts()!=firstAttempts && firstLifetime.status()) return firstLifetime.status();
+    return secondLifetime.attempts()!=secondAttempts?secondLifetime.status():0;
+}
+
+// CPU construction-to-lifetime transition. Construct must invoke the owned
 // initialization entry exactly once. Only after its lease ends do we capture
 // the new generation for destructor ownership. No GPU retirement is inferred.
 template<class Graph,class Lines,class Retire,class Release,class Construct,class Use>
