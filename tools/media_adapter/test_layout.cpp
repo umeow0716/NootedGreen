@@ -8699,7 +8699,9 @@ static void testNativeResourceBoundary() {
                                                     auto& registrations=serviceTrace.registrations;
                                                     auto admitResource=[](const TglOwnedSurfaceStorage&) noexcept -> int {return 0;};
                                                     TglNativeDiIecpRegistration registerResource{nativeServices};
-                                                    const TglDiIecpControlPolicy compressionPolicy{true,7,&linkedStorage};
+                                                    const auto oldMmc=child[0x1ba9];child[0x1ba9]=1;
+                                                    TglOwnedDiIecpControlPolicyReader<decltype(fullRead)> compressionPolicy{
+                                                        renderLeases.child,renderLeases.execution,&linkedStorage,fullRead};
                                                     TglNativeDiIecpControl<decltype(compressionPolicy)> resourceControl{nativeServices,compressionPolicy};
                                                     using FullTypes=TglRetainedVeboxLiveFrameTypes<FrameStmmApi,decltype(linkedInput),
                                                         std::decay_t<decltype(childOwner)>,std::decay_t<decltype(reportOwner)>,decltype(fullRead),
@@ -8734,6 +8736,11 @@ static void testNativeResourceBoundary() {
                                                     const auto fullPass=runFullPass();
                                                     assert(fullPass.status==0 && registrations>=2 && serviceTrace.controls && !fullRetention());
                                                     assert(!FullProducers::Resolve::get(actualChild));
+                                                    const auto compressedControls=serviceTrace.controls;
+                                                    child[0x1ba9]=0;
+                                                    const auto noCompressionPass=runFullPass();
+                                                    assert(noCompressionPass.status==0 && serviceTrace.controls==compressedControls && !fullRetention());
+                                                    child[0x1ba9]=1;
                                                     const auto savedDi=diPacket;
                                                     const auto registrationsBeforeMissing=registrations;
                                                     const auto controlsBeforeMissing=serviceTrace.controls;
@@ -8754,6 +8761,7 @@ static void testNativeResourceBoundary() {
                                                     assert(!FullProducers::Resolve::get(actualChild));
                                                     std::memcpy(halBytes.data()+0x78,&sku,8);
                                                     std::memcpy(child.data()+0x18,oldParents.data(),16);
+                                                    child[0x1ba9]=oldMmc;
                                                     assert(borrowFixture.allocations==packetAllocations && borrowFixture.fills==packetFills);
                                                     assert(!EntryProducers::Resolve::get(actualChild));
                                                     childOwner.renderImage=0;childOwner.renderHooks.fill(0);
@@ -26738,11 +26746,11 @@ int main() {
             TglDiIecpControlPolicy policy;
             TglOwnedDiIecpControlPolicyReader<decltype(readPolicy)> deferred{0x1000,0x4000,&storage[1],readPolicy};
             bool enabled=false;
-            assert(deferred(storage[0],0,false,enabled)==0 && enabled && modeReads==1);
+            assert(deferred(storage[0],0,false,enabled)==0 && enabled && modeReads==0);
             mmc=2;
-            assert(deferred(storage[0],0,false,enabled)==0 && !enabled && modeReads==1);
+            assert(deferred(storage[0],0,false,enabled)==0 && !enabled && modeReads==0);
             target+=8;enabled=true;
-            assert(deferred(storage[0],0,false,enabled)==5 && !enabled && modeReads==1);
+            assert(deferred(storage[1],5,true,enabled)==5 && !enabled && modeReads==0);
             target-=8;mmc=3;modeReads=0;
             assert(tglReadOwnedDiIecpControlPolicy(policy,0x1000,0x4000,&storage[1],readPolicy) &&
                 policy.mmcEnabled && policy.executionMode==7 && policy.target==&storage[1] && modeReads==1);

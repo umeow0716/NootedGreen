@@ -15440,15 +15440,18 @@ struct TglDiIecpControlPolicy {
 // foreign virtual-base adjustment or callback is imported here.
 template<class Read>
 bool tglReadOwnedDiIecpControlPolicy(TglDiIecpControlPolicy& output,
-    uintptr_t child,uintptr_t execution,const TglOwnedSurfaceStorage* target,Read read) noexcept {
+    uintptr_t child,uintptr_t execution,const TglOwnedSurfaceStorage* target,Read read,
+    bool directTarget=true) noexcept {
     static_assert(noexcept(read(uintptr_t{},static_cast<void*>(nullptr),size_t{})));
     if(!child || child>UINTPTR_MAX-0x1ba9 || !execution || execution>UINTPTR_MAX-0xd2b) return false;
     uintptr_t report=0,actualTarget=0;uint8_t mmc=0;
-    if(!read(child+0x88,&report,8) || report!=execution ||
-        !read(execution+0x60,&actualTarget,8) || actualTarget!=reinterpret_cast<uintptr_t>(target) ||
-        !read(child+0x1ba9,&mmc,1)) return false;
+    if(!read(child+0x88,&report,8) || report!=execution || !read(child+0x1ba9,&mmc,1)) return false;
+    // Only the direct-output predicate1f88d0 consumes report60/d28.
+    // Processed outputs may publish an intermediate FFDI at report60.
+    if(directTarget && (!read(execution+0x60,&actualTarget,8) ||
+        actualTarget!=reinterpret_cast<uintptr_t>(target))) return false;
     TglDiIecpControlPolicy candidate{bool(mmc&1),0,target};
-    if(candidate.mmcEnabled && target) {
+    if(directTarget && candidate.mmcEnabled && target) {
         uint32_t format=0;
         std::memcpy(&format,target->prefix.data()+0x130,4);
         if(tglOwnedMmcFormatSupported(format) && !read(execution+0xd28,&candidate.executionMode,4))
@@ -15466,7 +15469,7 @@ template<class Read> struct TglOwnedDiIecpControlPolicyReader {
         bool directTarget,bool& enabled) noexcept {
         enabled=false;
         TglDiIecpControlPolicy policy;
-        if(!tglReadOwnedDiIecpControlPolicy(policy,child,execution,target,read)) return 5;
+        if(!tglReadOwnedDiIecpControlPolicy(policy,child,execution,target,read,directTarget)) return 5;
         return policy(surface,slot,directTarget,enabled);
     }
 };
