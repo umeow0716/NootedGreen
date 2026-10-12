@@ -22210,10 +22210,32 @@ int main() {
                                 if(!reportHelper || address!=reportHelper+0x10 || size!=8) return false;
                                 std::memcpy(output,&report,8);return true;
                             };
-                            executionResult=frame.withNativeOwnedVpCommandFrame(0,roles,0,0,
-                                executionLease,0x2200,0x3300,readReportHelper,[&](auto& leasedOwner,void* child,
+                            unsigned packetGathers=0;
+                            auto gatherPacket=[&](auto&,void*,void* vp,auto& graph,auto&,
+                                auto& source,auto& target,auto&,auto& packets,TglDiIecpInputs& input) noexcept {
+                                ++packetGathers;
+                                assert(graph.ownsStorage(vp) && source.hasSurfaceLease(packets.source) &&
+                                    packets.target && target.hasSurfaceLease(*packets.target));
+                                input.current=&packets.source;input.target=packets.target;return true;
+                            };
+                            auto rejectPacket=[](auto&&...) noexcept {return false;};
+                            const auto missingPair=frame.withNativeOwnedVpPacketFrame(0,roles,0,0,
+                                executionLease,0x2200,0x3300,readReportHelper,
+                                [](auto&&...) noexcept {return true;},false,
+                                readReportHelper,rejectPacket,rejectPacket,rejectPacket,rejectPacket,
+                                [](auto&&...) noexcept -> TglOwnedVeboxCommandTransactionResult {
+                                    assert(false);return {};
+                                });
+                            assert(missingPair.status==5 && !missingPair.requiresRetention());
+                            executionResult=frame.withNativeOwnedVpPacketFrame(0,roles,0,0,
+                                executionLease,0x2200,0x3300,readReportHelper,gatherPacket,false,
+                                readReportHelper,rejectPacket,rejectPacket,rejectPacket,rejectPacket,
+                                [&](auto& leasedOwner,void* child,
                                     void* vp,auto& graph,auto& lines,
-                                    auto& sourceLease,auto& targetLease,auto& dn,auto& packets) noexcept {
+                                    auto& sourceLease,auto& targetLease,auto& dn,auto& packetFrame) noexcept {
+                                    auto& packets=packetFrame.leases;
+                                    assert(packetGathers==1 && packetFrame.input.current==&packets.source &&
+                                        packetFrame.input.target==packets.target);
                                     assert(graph.ownsStorage(vp));(void)lines;
                                     const TglVeboxRenderBinding renderBinding{base,base+0x12c9d0};
                                     const auto nestedRender=frame.renderNativeOwnedVpFrame(renderBinding,roles,0,0,0,
