@@ -21128,8 +21128,12 @@ int main() {
                                             assert(firstGraph.withPairedProducerReservation(secondGraph,[&](void*,void*) noexcept -> int {
                                                 return tglWithOwnedVpPairedAcquiredFrameCore(firstGraph,first,firstLines.resources(),
                                                     secondGraph,second,secondLines.resources(),args,read,modeRetire,releaseCpu,
-                                                    [&](void*,const auto& snapshot,auto& packet) noexcept -> int {
+                                                    [&](void*,const auto& snapshot,const auto& geometry,auto& packet) noexcept -> int {
                                                         assert(snapshot.regions.scale.scaling && !packet.hasParametersLease());
+                                                        TglOwnedVpChromaStatePrefix prefix;
+                                                        if(!tglPrepareOwnedVpStatePrefix(snapshot,geometry,false,false,prefix) ||
+                                                           !packet.prepare(prefix.packet,{},false,false,false,
+                                                               TglOwnedSfcCompressionMode::Disabled)) return 5;
                                                         ++states;return 0;
                                                     },[](void*,const auto&,auto&) noexcept -> int {return 0;},
                                                     [](void*,const auto&) noexcept {},

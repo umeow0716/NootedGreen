@@ -17373,10 +17373,10 @@ int tglWithOwnedVpPairedAcquiredFrameCore(Graph& firstGraph,TglOwnedVpSfcCallerS
     Read& read,Retire& retire,Release& release,State state,Avs avs,Ief ief,Emit emit,Use use) noexcept {
     return tglWithOwnedVpFrameAcquisitionContext(first,args[0].source,args[0].target,args[0].mhw,
         args[0].settings,args[0].conditionalSource,args[0].parameters,args[0].original,read,
-        [&](auto& ca,const auto& fa,const auto&,uintptr_t ra) noexcept -> int {
+        [&](auto& ca,const auto& fa,const auto& ga,uintptr_t ra) noexcept -> int {
             return tglWithOwnedVpFrameAcquisitionContext(second,args[1].source,args[1].target,args[1].mhw,
                 args[1].settings,args[1].conditionalSource,args[1].parameters,args[1].original,read,
-                [&](auto& cb,const auto& fb,const auto&,uintptr_t rb) noexcept -> int {
+                [&](auto& cb,const auto& fb,const auto& gb,uintptr_t rb) noexcept -> int {
                     const std::array<TglOwnedVpEntrySet,2> empty{};
                     return tglWithOwnedVpPairedFrameEntries(ca,cb,empty,
                         [&](void* a,const auto& ea,void* b,const auto& eb) noexcept -> int {
@@ -17392,8 +17392,16 @@ int tglWithOwnedVpPairedAcquiredFrameCore(Graph& firstGraph,TglOwnedVpSfcCallerS
                                     args[0].conditionalSource,ra,args[0].renderData},
                                 {fb,args[1].source,args[1].target,args[1].settings,args[1].parameters,
                                     args[1].conditionalSource,rb,args[1].renderData}}};
+                            // Borrow the SAME acquired geometry through synchronous setup;
+                            // do not re-read descriptors or run field adjustment twice.
+                            // Legacy three-argument producers remain supported.
+                            auto acquiredState=[&](void* child,const auto& frame,auto& packet) noexcept -> int {
+                                if constexpr(std::is_invocable_r_v<int,State,void*,decltype(frame),decltype(ga),decltype(packet)>) {
+                                    return state(child,frame,child==a?ga:gb,packet);
+                                } else return state(child,frame,packet);
+                            };
                             return tglWithOwnedVpPairedPreparedFrameCore(firstGraph,first,firstLines,
-                                secondGraph,second,secondLines,prepared,read,retire,release,state,avs,ief,emit,
+                                secondGraph,second,secondLines,prepared,read,retire,release,acquiredState,avs,ief,emit,
                                 [&](void* x,const auto& xe,void* y,const auto& ye) noexcept -> int {
                                     auto firstEntries=xe,secondEntries=ye;
                                     if(!firstEntries.appendDisjoint(ea) || !secondEntries.appendDisjoint(eb)) return 5;
