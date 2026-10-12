@@ -9789,6 +9789,46 @@ int tglWithOwnedVpAdmissionEntries(TglOwnedVpSfcCallerStorage& vp,Read& read,Use
     return use(child,entries);
 }
 
+template<class Read,class Use>
+int tglWithOwnedVpPairedAdmissionEntries(TglOwnedVpSfcCallerStorage& first,
+    TglOwnedVpSfcCallerStorage& second,Read& read,Use use) noexcept {
+    if(&first==&second) return 5;
+    using Context=TglOwnedVpAdmissionContext<Read>;
+    using Resolve=TglOwnedVpSfcResolve<Context>;
+    using Admission=TglOwnedVpAdmissionCallbacks<Resolve>;
+    using Compression=TglOwnedVpCompressionFormatCallback<Resolve>;
+    using Alignment=TglOwnedVpAlignmentCallbacks<Resolve>;
+    void* a=first.bytes.data();void* b=second.bytes.data();
+    Context firstContext(first,read),secondContext(second,read);
+    typename TglOwnedVpSfcScopedContext<Context>::Pair admissionScope(a,firstContext,b,secondContext);
+    if(!admissionScope.bound()) return 5;
+    auto makeEligible=[](void* child) noexcept {
+        return [child](uintptr_t settings,uintptr_t source,uintptr_t target) noexcept {
+            return Admission::eligible(child,reinterpret_cast<void*>(settings),
+                reinterpret_cast<void*>(source),reinterpret_cast<void*>(target));
+        };
+    };
+    auto makeDimensions=[](void* child) noexcept {
+        return [child](uintptr_t source,uint32_t& width,uint32_t& height) noexcept {
+            width=height=0;Admission::dimensions(child,reinterpret_cast<void*>(source),&width,&height);
+            return width!=0 && height!=0;
+        };
+    };
+    auto firstEligible=makeEligible(a),secondEligible=makeEligible(b);
+    auto firstDimensions=makeDimensions(a),secondDimensions=makeDimensions(b);
+    using ExtentContext=TglOwnedVpExtentContext<Read,decltype(firstEligible),decltype(firstDimensions)>;
+    using Extent=TglOwnedVpExtentCallback<TglOwnedVpSfcResolve<ExtentContext>>;
+    ExtentContext firstExtent(first,read,firstEligible,firstDimensions);
+    ExtentContext secondExtent(second,read,secondEligible,secondDimensions);
+    typename TglOwnedVpSfcScopedContext<ExtentContext>::Pair extentScope(a,firstExtent,b,secondExtent);
+    if(!extentScope.bound()) return 5;
+    const TglOwnedVpAdmissionEntries entries{&Extent::admit,&Admission::eligible,&Admission::pair,
+        &Admission::input,&Admission::output,&Admission::dimensions,&Admission::finalAdmission,
+        &Compression::supported,&Alignment::input,&Alignment::output};
+    static_assert(noexcept(use(a,entries,b,entries)),"paired VP admission consumer ABI");
+    return use(a,entries,b,entries);
+}
+
 // ICL primary794210+68=1fb140, caller1fb55e: child80 VP18 receives
 // (source, renderParams98 target, renderParams). Only the SFC branch invokes
 // it; direct/composition/fast-fill remain the enclosing Gen12 policy's job.

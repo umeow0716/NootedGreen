@@ -15196,6 +15196,25 @@ int main() {
         reenter=nullptr;reads=0;
         TglOwnedVpAdmissionEntries escaped;
         TglOwnedVpEntrySet boundAdmission;
+        TglOwnedVpSfcCallerStorage pairedVp;
+        TglOwnedVpAdmissionEntries expiredPair;
+        assert(tglWithOwnedVpPairedAdmissionEntries(vp,pairedVp,read,
+            [&](void* first,const auto& firstEntries,void* second,const auto& secondEntries) noexcept -> int {
+                assert(first!=second);expiredPair=secondEntries;
+                assert(firstEntries.input(first,reinterpret_cast<void*>(0x1000)));
+                assert(secondEntries.input(second,reinterpret_cast<void*>(0x1000)));
+                for(uint32_t format=0;format<256;++format) {
+                    assert(firstEntries.compressionFormat(first,format)==tglOwnedVpCompressionFormat(format));
+                    assert(secondEntries.compressionFormat(second,format)==tglOwnedVpCompressionFormat(format));
+                }
+                assert(!secondEntries.compressionFormat(nullptr,13));
+                assert(tglWithOwnedVpPairedAdmissionEntries(vp,pairedVp,read,
+                    [](void*,const auto&,void*,const auto&) noexcept -> int {assert(false);return 0;})==5);
+                return -31;
+            })==-31);
+        assert(!expiredPair.compressionFormat(pairedVp.bytes.data(),13));
+        assert(tglWithOwnedVpPairedAdmissionEntries(vp,vp,read,
+            [](void*,const auto&,void*,const auto&) noexcept -> int {assert(false);return 0;})==5);
         assert(tglWithOwnedVpAdmissionEntries(vp,read,[&](void* child,const auto& entries) noexcept {
             escaped=entries;
             auto incomplete=entries;incomplete.outputAlignment=nullptr;
