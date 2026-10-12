@@ -18989,7 +18989,52 @@ int main() {
                             bool retain(uintptr_t h) noexcept {assert(h==1 || h==5);++refs[h];return true;}
                             void release(uintptr_t h) noexcept {assert(refs[h]);--refs[h];}
                         };
+                        alignas(8) std::array<uint8_t,0x70> nativeParent{},nativeCreator{};
+                        alignas(8) std::array<uint8_t,0x2d50> nativeRenderer{};
+                        const uintptr_t parentAddress=reinterpret_cast<uintptr_t>(nativeParent.data());
+                        const uintptr_t creatorAddress=reinterpret_cast<uintptr_t>(nativeCreator.data());
+                        const uintptr_t rendererAddress=reinterpret_cast<uintptr_t>(nativeRenderer.data());
+                        auto putNative=[](auto& bytes,size_t offset,uintptr_t value) {
+                            std::memcpy(bytes.data()+offset,&value,8);
+                        };
+                        putNative(nativeParent,0x40,os);putNative(nativeParent,0x48,0x3000);
+                        putNative(nativeParent,0x50,0x6000);putNative(nativeParent,0x68,creatorAddress);
+                        putNative(nativeCreator,0,base+0x75bb58);putNative(nativeCreator,0x68,rendererAddress);
+                        putNative(nativeRenderer,0,base+0x75bba0);putNative(nativeRenderer,0x920,0x9876);
+                        putNative(nativeRenderer,0x2cc0,0x3000);putNative(nativeRenderer,0x2cc8,os);
+                        auto borrowedRead=[&](uintptr_t address,void* out,size_t bytes) noexcept {
+                            for(const auto region:{std::pair<uintptr_t,size_t>{parentAddress,nativeParent.size()},
+                                {creatorAddress,nativeCreator.size()},{rendererAddress,nativeRenderer.size()}}) {
+                                if(address>=region.first && address-region.first<=region.second &&
+                                    bytes<=region.second-(address-region.first)) {
+                                    std::memcpy(out,reinterpret_cast<void*>(address),bytes);return true;
+                                }
+                            }
+                            if(bytes==8 && (address==base+0x75bb70 || address==base+0x75bbc0 || address==base+0x75bbc8)) {
+                                const uintptr_t entry=base+(address==base+0x75bb70?0x1e6610:
+                                    address==base+0x75bbc0?0x132510:0x131fa0);
+                                std::memcpy(out,&entry,8);return true;
+                            }
+                            return frameMhwRead(address,out,bytes);
+                        };
+                        auto borrowedAdmit=[&](uintptr_t address,size_t bytes) noexcept {
+                            return (address==parentAddress && bytes==nativeParent.size()) ||
+                                (address==creatorAddress && bytes==nativeCreator.size()) ||
+                                (address==rendererAddress && bytes<=nativeRenderer.size());
+                        };
+                        struct NativeParentOwner {
+                            uintptr_t value;unsigned& deaths;
+                            uintptr_t context() const noexcept {return value;}
+                            ~NativeParentOwner() noexcept {++deaths;}
+                        };
+                        unsigned parentDeaths=0;
+                        TglOwnedContextOwnerRegistry<NativeParentOwner,1> parents;
+                        assert(parents.adopt(base,0x8000,1,new NativeParentOwner{parentAddress,parentDeaths}));
+                        TglNativeRemovedContextBatch<1> removedParent;
+                        removedParent.valid=true;removedParent.count=1;removedParent.contexts[0]=parentAddress;
+                        auto removeParent=[&] {return parents.reconcileSuccessfulRemoval(base,0x8000,1,removedParent);};
                         auto frontendCleanup=[&](void* object) noexcept {
+                            assert(!parentDeaths && frameMhwInvoke.cleanups==1);
                             assert(retirementQualified && so.borrowed && to.borrowed && ho.borrowed);
                             assert(frameDn.live==1 && refs[1]==3 && refs[5]==3);
                             uintptr_t restoredVp=1;
@@ -18999,7 +19044,8 @@ int main() {
                         };
                         using FrontendAssembly=TglNativeVeboxFrontendRendererFrameStorage<UnusedFrameApi,
                             TestFrontendOriginalOwner,TestFrontendOriginalOwner,Cf,FrameDnBackend,
-                            decltype(frontendCleanup),NativeCpu,TrackedSfc,decltype(pairDestroy),FrameMhwInvoke>;
+                            decltype(frontendCleanup),NativeCpu,TrackedSfc,decltype(pairDestroy),FrameMhwInvoke,
+                            TglNativeBorrowedVphalMhwLease<decltype(parents)::ContextLease>>;
                         TglOwnedVeboxRetainedFrames<FrontendAssembly,1> frames;
                         const auto ticket=frames.create(reinterpret_cast<uintptr_t>(&source),
                             [&](uintptr_t address) noexcept -> TestFrontendOriginalOwner* {
@@ -19014,8 +19060,13 @@ int main() {
                             std::array<TrackedSfc,2>{TrackedSfc{pairInvoke,pairEvents,pairEventCount},TrackedSfc{pairInvoke,pairEvents,pairEventCount}},
                             std::array<decltype(pairDestroy),2>{pairDestroy,pairDestroy});
                         const auto r=frames.run(ticket,[&](auto& frame) noexcept {
-                            assert(!frame.retainedMhw() && frame.retainMhw(frameMhwOwner));
-                            assert(!frame.retainMhw(frameMhwOwner) && retireFrameMhw()==5);
+                            auto parentPin=parents.pin(base,0x8000,1,parentAddress);
+                            assert(!frame.retainedMhw() && frame.retainBorrowedMhw(std::move(parentPin),
+                                base,parentAddress,creatorAddress,borrowedRead,borrowedAdmit,qualifyMhw,executableMhw,
+                                [&](const auto& owner,const auto& view) noexcept {
+                                    return owner.context()==view.parent && view.os==os && view.hardware.interface==0x6000;
+                                }));
+                            assert(!parentPin.get() && frame.retainedMhw()->interface==0x6000 && removeParent()==5);
                             TglNativeDnScalarRequest dnRequest;
                             dnRequest.mode=0;dnRequest.word24=1;
                             dnRequest.word28=11;dnRequest.word2c=13;
@@ -19187,13 +19238,16 @@ int main() {
                         assert(frames.retire(ticket,[](const auto&,bool,const auto&) noexcept {return 31;})==31);
                         assert(ho.borrowed && refs[1]==3);
                         assert(vpCpu.live && vpAvsCpu.live);
-                        assert(retireFrameMhw()==5 && frameMhwInvoke.cleanups==1);
+                        assert(removeParent()==5 && !parentDeaths && frameMhwInvoke.cleanups==1);
                         assert(frames.retire(ticket,[&](const auto&,bool pending,const auto&) noexcept {
                             assert(pending);retirementQualified=true;return 0;
                         })==0); // CPU certificate fixture only
                         assert(!so.borrowed && !to.borrowed && !ho.borrowed && !frameDn.live && !refs[1] && !refs[5]);
                         assert(cleaned[0]==1 && cleaned[1]==1 && destroyed==cleaned);
                         assert(!vpCpu.live && !vpAvsCpu.live);
+                        assert(removeParent()==0 && parentDeaths==1 && frameMhwInvoke.cleanups==1 && frameMhwInvoke.removes==1);
+                        // Only the simulated original native owner cleans MHW,
+                        // after borrowed frame/children and parent pin are gone.
                         assert(retireFrameMhw()==0 && frameMhwInvoke.cleanups==2 && frameMhwInvoke.removes==2);
                     }
                 }
