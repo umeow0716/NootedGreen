@@ -20409,17 +20409,33 @@ int main() {
                                 }
                                 return false;
                             };
-                            // Hook addresses are nonexecuted CPU fixtures, not a runtime renderer.
+                            // Lifecycle hooks below use the actual retained child owners;
+                            // remaining producer addresses are still nonexecuted fixtures.
                             std::array<uintptr_t,20> hooks{};
                             for(size_t i=0;i<hooks.size();++i) hooks[i]=0x3000+i*16;
                             hooks[15]=reinterpret_cast<uintptr_t>(&tglOwnedVeboxGen12CscSupported);
                             std::array<std::array<uintptr_t,20>,2> pairHooks{hooks,hooks};
+                            using ChildOwner=std::remove_reference_t<decltype(frame.children().first().owner())>;
+                            using ChildLifetime=TglOwnedVeboxLifetimeContext<ChildOwner>;
+                            using ChildLifetimeScope=TglOwnedVeboxScopedContext<ChildLifetime>;
+                            using ChildLifetimeResolve=TglOwnedVeboxScopedLifetimeResolve<ChildLifetime>;
+                            ChildLifetime firstLifetime(frame.children().first().owner());
+                            ChildLifetime secondLifetime(frame.children().second().owner());
+                            for(size_t index=0;index<2;++index) {
+                                auto& child=index?frame.children().second().owner():frame.children().first().owner();
+                                auto& lifetimeContext=index?secondLifetime:firstLifetime;
+                                ChildLifetimeScope scope(child.constructedBase(),lifetimeContext);
+                                assert(scope.bound());
+                                pairHooks[index][0]=pairHooks[index][1]=0;
+                                assert(tglBindOwnedVeboxLifetimeHooks<ChildLifetimeResolve>(child.constructedBase(),pairHooks[index]));
+                            }
+                            const auto completeSecond=pairHooks[1];
                             pairHooks[1][15]=0;
                             assert(!frame.children().installPrivateVtables(pairHooks,tableRead,
                                 [](uintptr_t image) noexcept {return image==base;},
                                 [](uintptr_t,size_t) noexcept {return true;}));
                             assert(!frame.children().first().owner().matchesPrivateVtableHooks(hooks));
-                            pairHooks[1]=hooks;
+                            pairHooks[1]=completeSecond;
                             assert(frame.children().installPrivateVtables(pairHooks,tableRead,
                                 [](uintptr_t image) noexcept {return image==base;},
                                 [](uintptr_t,size_t) noexcept {return true;}));
@@ -20428,6 +20444,16 @@ int main() {
                                 [&](uintptr_t address,uint64_t generation,uintptr_t) noexcept {
                                     return address==rendererAddress && generation==1;
                                 },[](void*,uint64_t,uintptr_t,uintptr_t) noexcept {return true;}));
+                            // Published ownership must block even a resolved owned
+                            // deleting callback; native must not free these children.
+                            for(size_t index=0;index<2;++index) {
+                                auto& child=index?frame.children().second().owner():frame.children().first().owner();
+                                auto& lifetimeContext=index?secondLifetime:firstLifetime;
+                                void* object=child.constructedBase();
+                                ChildLifetimeScope scope(object,lifetimeContext);assert(scope.bound());
+                                reinterpret_cast<void(*)(void*) noexcept>(pairHooks[index][1])(object);
+                                assert(lifetimeContext.status()==5 && child.constructedBase()==object);
+                            }
                             assert(frame.initializeVpFromCreator(staleCreator,
                                 frontendRead,qualifyMhw,executableMhw)==5 && !vpCpu.live);
                             putNative(nativeCreator,0x60,0);
