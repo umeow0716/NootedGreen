@@ -14128,6 +14128,11 @@ int main() {
                         assert(scope.prepare(image,creatorRead,qualify,callExecutable,admitOwned));
                         Scope nested(nativeCall,handoff,admitCreator);
                         assert(!nested.prepare(image,creatorRead,qualify,callExecutable,admitOwned) && !nested.table().addressPoint());
+                        auto otherAdmit=[](void*) noexcept -> bool {return false;};
+                        using OtherScope=TglOwnedCreatorCallScope<decltype(nativeCall),decltype(handoff),decltype(otherAdmit)>;
+                        OtherScope other(nativeCall,handoff,otherAdmit);
+                        assert(!other.prepare(image,creatorRead,qualify,callExecutable,
+                            [](uintptr_t,size_t) noexcept {return true;}) && !other.table().addressPoint());
                         assert(callback(nullptr)==5 && !nativeCalls);
                         uintptr_t selected=scope.table().source();
                         assert(scope.table().selectCallArgument(selected,creatorAddress));
@@ -14149,21 +14154,20 @@ int main() {
             assert(!created.originalChildren[0] && !created.originalChildren[1] &&
                 created.originalChildren[2]==0x12345678);
             {
-                alignas(8) std::array<uint8_t,0x70> vphal{};
                 alignas(8) std::array<uint8_t,0x28> mhw{};
-                const uintptr_t parent=reinterpret_cast<uintptr_t>(vphal.data());
+                const uintptr_t parent=creatorAddress;
                 const uintptr_t nativeMhw=reinterpret_cast<uintptr_t>(mhw.data());
                 constexpr uintptr_t nativeOs=0x8000,nativeRenderHal=0x9000;
                 auto writeWord=[](auto& bytes,size_t offset,uintptr_t value) {
                     std::memcpy(bytes.data()+offset,&value,8);
                 };
-                writeWord(vphal,0x40,nativeOs);writeWord(vphal,0x48,nativeRenderHal);
-                writeWord(vphal,0x50,nativeMhw);writeWord(vphal,0x68,creatorAddress);
+                writeWord(creator,0x40,nativeOs);writeWord(creator,0x48,nativeRenderHal);
+                writeWord(creator,0x50,nativeMhw);
                 writeWord(mhw,0,image+0x759520);writeWord(mhw,8,image+0x3eae0);
                 writeWord(mhw,0x18,nativeOs);writeWord(mhw,0x20,0xa000);
                 put(r,0x2cc0,nativeRenderHal);put(r,0x2cc8,nativeOs);
                 auto borrowedRead=[&](uintptr_t address,void* out,size_t size) noexcept {
-                    for(const auto region: {std::pair<uintptr_t,size_t>{parent,vphal.size()},
+                    for(const auto region: {std::pair<uintptr_t,size_t>{parent,creator.size()},
                         {nativeMhw,mhw.size()}}) {
                         if(address>=region.first && address-region.first<=region.second &&
                             size<=region.second-(address-region.first)) {
@@ -14176,7 +14180,7 @@ int main() {
                     return creatorRead(address,out,size);
                 };
                 auto borrowedAdmit=[&](uintptr_t address,size_t size) noexcept {
-                    return (address==parent && size==vphal.size()) || creatorAdmit(address,size);
+                    return (address==parent && size==creator.size()) || creatorAdmit(address,size);
                 };
                 TglNativeVphalMhwView borrowed;
                 auto resolveBorrowed=[&] {return borrowed.resolve(image,parent,creatorAddress,
@@ -14184,8 +14188,10 @@ int main() {
                 assert(resolveBorrowed() && borrowed.hardware.interface==nativeMhw &&
                     borrowed.hardware.heap==0xa000 && borrowed.os==nativeOs && borrowed.renderHal==nativeRenderHal);
                 writeWord(mhw,0x20,0);assert(!resolveBorrowed() && !borrowed.parent);
-                writeWord(mhw,0x20,0xa000);writeWord(vphal,0x68,creatorAddress+8);
-                assert(!resolveBorrowed());writeWord(vphal,0x68,creatorAddress);
+                writeWord(mhw,0x20,0xa000);writeWord(creator,0x68,r+8);
+                assert(!resolveBorrowed());writeWord(creator,0x68,r);
+                assert(!borrowed.resolve(image,parent+8,creatorAddress,
+                    borrowedRead,borrowedAdmit,qualify,creatorExecutable));
                 put(r,0x2cc8,nativeOs+8);assert(!resolveBorrowed());put(r,0x2cc8,nativeOs);
                 put(r,0x2cc0,nativeRenderHal+8);assert(!resolveBorrowed());put(r,0x2cc0,nativeRenderHal);
                 assert(resolveBorrowed());
@@ -18947,12 +18953,21 @@ int main() {
                             };
                             assert(pair.first().owner().bindRendererConfiguration(rendererAddress,1,admitConfiguration));
                             assert(pair.second().owner().bindRendererConfiguration(rendererAddress,1,admitConfiguration));
-                            auto admit=[](void*,uint64_t,uintptr_t,uintptr_t) noexcept {return true;};
+                            bool publicationAllowed=true;
+                            auto admit=[&](void*,uint64_t,uintptr_t,uintptr_t) noexcept {return publicationAllowed;};
                             alignas(8) std::array<uintptr_t,14> creator{};
                             creator[0]=base+0x75bb58;creator[13]=rendererAddress;
                             const auto creatorAddress=reinterpret_cast<uintptr_t>(creator.data());
                             uintptr_t createEntry=base+0x1e6610;
                             auto creatorRead=[&](uintptr_t address,void* dst,size_t bytes) noexcept {
+                                if(address==base+0x75bb58 && bytes==32) {
+                                    const std::array<uintptr_t,4> table{11,22,33,createEntry};
+                                    std::memcpy(dst,table.data(),bytes);return true;
+                                }
+                                if(address==base+0x133c0f && bytes==3) {
+                                    constexpr uint8_t anchor[]{0xff,0x51,0x18};
+                                    std::memcpy(dst,anchor,bytes);return true;
+                                }
                                 uintptr_t value=0;
                                 if(bytes==8 && address==base+0x75bb70) value=createEntry;
                                 else if(bytes==8 && address==base+0x75bbc0) value=base+0x132510;
@@ -18977,7 +18992,33 @@ int main() {
                             createEntry++;assert(!publishCreated() && renderer==original);createEntry--;
                             const uintptr_t zero=0;std::memcpy(renderer.data()+0x920,&zero,8);
                             assert(!publishCreated());std::memcpy(renderer.data()+0x920,&native920,8);
-                            assert(publishCreated());
+                            for(const auto outcome:{std::pair<int,bool>{31,true},{0,false},{0,true}}) {
+                                unsigned nativeCalls=0,handoffCalls=0;
+                                publicationAllowed=outcome.second;
+                                auto nativeCreate=[&](uintptr_t entry,void* object) noexcept -> int {
+                                    assert(entry==createEntry && reinterpret_cast<uintptr_t>(object)==creatorAddress);
+                                    assert(renderer==original && !nativeCalls && !handoffCalls);
+                                    ++nativeCalls;return outcome.first;
+                                };
+                                auto handoff=[&](void* object) noexcept -> int {
+                                    assert(reinterpret_cast<uintptr_t>(object)==creatorAddress && nativeCalls==1);
+                                    ++handoffCalls;return publishCreated()?0:5;
+                                };
+                                auto admitCreator=[&](void* object) noexcept -> bool {
+                                    return reinterpret_cast<uintptr_t>(object)==creatorAddress;
+                                };
+                                using Scope=TglOwnedCreatorCallScope<decltype(nativeCreate),decltype(handoff),decltype(admitCreator)>;
+                                Scope scope(nativeCreate,handoff,admitCreator);
+                                assert(scope.prepare(base,creatorRead,qualify,executable,
+                                    [](uintptr_t entry,size_t size) noexcept {return entry==Scope::callbackAddress() && size==1;}));
+                                uintptr_t table=scope.table().source(),entry=0;
+                                assert(scope.table().selectCallArgument(table,creatorAddress));
+                                std::memcpy(&entry,reinterpret_cast<void*>(table+0x18),8);
+                                const int expected=outcome.first?outcome.first:publicationAllowed?0:5;
+                                assert(reinterpret_cast<int(*)(void*)>(entry)(reinterpret_cast<void*>(creatorAddress))==expected);
+                                assert(nativeCalls==1 && handoffCalls==unsigned(outcome.first==0));
+                                if(expected) assert(renderer==original);
+                            }
                             const auto published=renderer;
                             assert(!pair.destroyDetached(renderer.data(),1) && renderer==published);
                             assert(pair.canDetach(renderer.data(),1,admit) && renderer==published);
@@ -19063,22 +19104,22 @@ int main() {
                             bool retain(uintptr_t h) noexcept {assert(h==1 || h==5);++refs[h];return true;}
                             void release(uintptr_t h) noexcept {assert(refs[h]);--refs[h];}
                         };
-                        alignas(8) std::array<uint8_t,0x70> nativeParent{},nativeCreator{};
+                        alignas(8) std::array<uint8_t,0x70> nativeCreator{};
                         alignas(8) std::array<uint8_t,0x2d50> nativeRenderer{};
-                        const uintptr_t parentAddress=reinterpret_cast<uintptr_t>(nativeParent.data());
                         const uintptr_t creatorAddress=reinterpret_cast<uintptr_t>(nativeCreator.data());
+                        const uintptr_t parentAddress=creatorAddress;
                         const uintptr_t rendererAddress=reinterpret_cast<uintptr_t>(nativeRenderer.data());
                         auto putNative=[](auto& bytes,size_t offset,uintptr_t value) {
                             std::memcpy(bytes.data()+offset,&value,8);
                         };
-                        putNative(nativeParent,0x40,os);putNative(nativeParent,0x48,0x3000);
-                        putNative(nativeParent,0x50,0x6000);putNative(nativeParent,0x68,creatorAddress);
+                        putNative(nativeCreator,0x40,os);putNative(nativeCreator,0x48,0x3000);
+                        putNative(nativeCreator,0x50,0x6000);
                         putNative(nativeCreator,0,base+0x75bb58);putNative(nativeCreator,0x68,rendererAddress);
                         putNative(nativeRenderer,0,base+0x75bba0);putNative(nativeRenderer,0x920,0x9876);
                         putNative(nativeRenderer,0x2cc0,0x3000);putNative(nativeRenderer,0x2cc8,os);
                         auto borrowedRead=[&](uintptr_t address,void* out,size_t bytes) noexcept {
-                            for(const auto region:{std::pair<uintptr_t,size_t>{parentAddress,nativeParent.size()},
-                                {creatorAddress,nativeCreator.size()},{rendererAddress,nativeRenderer.size()}}) {
+                            for(const auto region:{std::pair<uintptr_t,size_t>{creatorAddress,nativeCreator.size()},
+                                {rendererAddress,nativeRenderer.size()}}) {
                                 if(address>=region.first && address-region.first<=region.second &&
                                     bytes<=region.second-(address-region.first)) {
                                     std::memcpy(out,reinterpret_cast<void*>(address),bytes);return true;
@@ -19092,8 +19133,7 @@ int main() {
                             return frameMhwRead(address,out,bytes);
                         };
                         auto borrowedAdmit=[&](uintptr_t address,size_t bytes) noexcept {
-                            return (address==parentAddress && bytes==nativeParent.size()) ||
-                                (address==creatorAddress && bytes==nativeCreator.size()) ||
+                            return (address==creatorAddress && bytes==nativeCreator.size()) ||
                                 (address==rendererAddress && bytes<=nativeRenderer.size());
                         };
                         struct NativeParentOwner {

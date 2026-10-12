@@ -1756,6 +1756,7 @@ struct TglNativeCreatorCallInvoker {
         using Fn=int(*)(void*);return reinterpret_cast<Fn>(entry)(creator);
     }
 };
+inline thread_local const void* tglOwnedCreatorCallScopeActive=nullptr;
 // Normal-stack dispatch only; signal handling may select table(), never call
 // dispatch itself. Scope/native image/parent resources must outlive the call.
 // Handoff failure must leave no published owned children: the native caller
@@ -1767,7 +1768,7 @@ template<class Native,class Handoff,class AdmitCreator> class TglOwnedCreatorCal
     bool consumed_=false,busy_=false;
     static int dispatch(void* creator) noexcept {
         auto* self=active_;
-        if(!self || self->consumed_ || self->busy_ || !self->admit_(creator)) return 5;
+        if(!self || tglOwnedCreatorCallScopeActive!=self || self->consumed_ || self->busy_ || !self->admit_(creator)) return 5;
         self->consumed_=true;self->busy_=true;
         struct Exit {bool& busy;~Exit(){busy=false;}} exit{self->busy_};
         const int result=self->native_(self->table_.nativeCreate(),creator);
@@ -1784,11 +1785,15 @@ public:
     }
     TglOwnedCreatorCallScope(const TglOwnedCreatorCallScope&)=delete;
     TglOwnedCreatorCallScope& operator=(const TglOwnedCreatorCallScope&)=delete;
-    ~TglOwnedCreatorCallScope() noexcept {if(active_==this) active_=nullptr;}
+    ~TglOwnedCreatorCallScope() noexcept {
+        if(active_==this) active_=nullptr;
+        if(tglOwnedCreatorCallScopeActive==this) tglOwnedCreatorCallScopeActive=nullptr;
+    }
     template<class Read,class Qualify,class Executable,class OwnedAdmit>
     bool prepare(uintptr_t image,Read read,Qualify qualify,Executable executable,OwnedAdmit ownedAdmit) noexcept {
-        if(active_ || !table_.build(image,callbackAddress(),read,qualify,executable,ownedAdmit)) return false;
-        active_=this;return true;
+        if(tglOwnedCreatorCallScopeActive || active_ ||
+            !table_.build(image,callbackAddress(),read,qualify,executable,ownedAdmit)) return false;
+        active_=this;tglOwnedCreatorCallScopeActive=this;return true;
     }
     static uintptr_t callbackAddress() noexcept {return reinterpret_cast<uintptr_t>(&dispatch);}
     const TglOwnedCreatorCallTable& table() const noexcept {return table_;}
@@ -3699,12 +3704,13 @@ struct TglNativeVphalMhwView {
     bool resolve(uintptr_t image,uintptr_t vphal,uintptr_t creator,Read read,
         Admit admit,Qualify qualify,Executable executable) noexcept {
         *this={};
-        uintptr_t actualCreator=0,nativeOs=0,nativeRenderHal=0,mhw=0;
+        uintptr_t nativeOs=0,nativeRenderHal=0,mhw=0;
         uintptr_t rendererOs=0,rendererRenderHal=0;
         TglNativeCreatedVeboxRendererView created;
         TglVeboxHardwareBinding binding;
-        if(!vphal || (vphal&7) || vphal>UINTPTR_MAX-0x70 || !admit(vphal,0x70) ||
-            !read(vphal+0x68,&actualCreator,8) || actualCreator!=creator ||
+        //133930 invokes VPHAL's OWN vptr+18 (1e6610), then reads VPHAL68
+        // as renderer. VPHAL and creator are the SAME object, not two roots.
+        if(!vphal || vphal!=creator || (vphal&7) || vphal>UINTPTR_MAX-0x70 || !admit(vphal,0x70) ||
             !read(vphal+0x40,&nativeOs,8) || !nativeOs ||
             !read(vphal+0x48,&nativeRenderHal,8) || !nativeRenderHal ||
             !read(vphal+0x50,&mhw,8) ||
