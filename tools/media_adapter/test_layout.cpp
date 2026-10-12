@@ -12147,28 +12147,30 @@ static void testRetainedVeboxFrames() {
         assert(!privateTable.detach(read,writeVptr,[](uintptr_t,size_t) noexcept {return false;}) && vptrWrites==1);
         struct ChildDetachFixture {
             unsigned checks=0,detaches=0;bool allowed=false,detachOk=false;
+            unsigned cleanupCalls=0;bool cleanupAllowed=false;
             bool canDetach(void* renderer,uint64_t generation,int) noexcept {
                 ++checks;assert(renderer==reinterpret_cast<void*>(0x30000) && generation==7);return allowed;
             }
             bool detach(void*,uint64_t,int) noexcept {++detaches;return detachOk;}
+            bool destroyDetached(void* renderer,uint64_t generation) noexcept {
+                assert(renderer==reinterpret_cast<void*>(0x30000) && generation==7);
+                assert(detaches==cleanupCalls+2);++cleanupCalls;return cleanupAllowed;
+            }
         } children;
-        unsigned cleanupCalls=0;
-        auto cleanupChildren=[&](void* renderer,uint64_t generation) noexcept {
-            assert(renderer==reinterpret_cast<void*>(0x30000) && generation==7);
-            assert(children.detaches==2 && vptrWrites==1 && privateTable.requiresRetention());
-            ++cleanupCalls;return true;
-        };
         auto prepare=[&](auto write) noexcept {
             return tglPrepareOwnedContextRemoval(privateTable,children,reinterpret_cast<void*>(0x30000),7,
-                read,write,admitVptr,0,cleanupChildren);
+                read,write,admitVptr,0);
         };
         assert(prepare(writeVptr)==5 && children.checks==1 && !children.detaches && vptrWrites==1);
         children.allowed=true;
         assert(prepare(writeVptr)==5 && children.detaches==1 && vptrWrites==1 && privateTable.requiresRetention());
         // Fixture-only reset after simulated failure; production quarantines.
         children.detachOk=true;
+        assert(prepare(writeVptr)==5 && children.cleanupCalls==1 && vptrWrites==1 && privateTable.requiresRetention());
+        // Fixture reset only: production retains/quarantines after failure.
+        children.cleanupAllowed=true;
         auto orderedWrite=[&](uintptr_t address,uintptr_t value) noexcept {
-            assert(children.detaches==2 && cleanupCalls==1);return writeVptr(address,value);
+            assert(children.detaches==3 && children.cleanupCalls==2);return writeVptr(address,value);
         };
         assert(prepare(orderedWrite)==0 && vptrWrites==2 && !privateTable.requiresRetention());
         assert(vptr==base+0x75d018 && dispatch()==5 && !privateTable.publish(read,writeVptr,admitVptr));
@@ -18216,6 +18218,9 @@ int main() {
                         NativeCpu,TrackedSfc,decltype(pairDestroy)>;
                     {
                         TglOwnedVeboxRetainedFrames<Assembly,1> frames;
+                        using Pair=std::remove_reference_t<decltype(std::declval<Assembly&>().children())>;
+                        Pair* cleanupPair=nullptr;
+                        std::array<uint8_t,0x2cb8> renderer{};
                         const auto ticket=frames.create(frameSurfaces,frameDn,base,allocatorRead,[](uintptr_t image) noexcept {return image==base;},
                             [](uintptr_t,size_t) noexcept {return true;},
                             TglNativeResourceBinding{},4096,TglNativeBufferFillBinding{},NativeCpu{vpCpu},
@@ -18225,6 +18230,7 @@ int main() {
                             std::array<decltype(pairDestroy),2>{pairDestroy,pairDestroy});
                         const auto submitted=frames.run(ticket,[&](Assembly& assembly) noexcept {
                         auto& pair=assembly.children();
+                        cleanupPair=&pair;
                         backingRetention=&assembly.backing().retention();
                         const TglResourceKey frameKey{8,3,0x3d,1,0,false};
                         assert(assembly.surfaces().initialize(frameKey,frameKey,64,
@@ -18247,7 +18253,6 @@ int main() {
                         assert(init(pair.second())==(failSecond?TglOwnedBaseConstruction::ConstructedFailure:
                             TglOwnedBaseConstruction::ConstructedSuccess));
                         assert(pairCpu[0].live && pairCpu[1].live==!failSecond);
-                        std::array<uint8_t,0x2cb8> renderer{};
                         const uintptr_t native920=0x9876;std::memcpy(renderer.data()+0x920,&native920,8);
                         const uintptr_t rendererVptr=base+0x75bba0;std::memcpy(renderer.data(),&rendererVptr,8);
                         const auto original=renderer;
@@ -18321,9 +18326,11 @@ int main() {
                             assert(!publishCreated());std::memcpy(renderer.data()+0x920,&native920,8);
                             assert(publishCreated());
                             const auto published=renderer;
+                            assert(!pair.destroyDetached(renderer.data(),1) && renderer==published);
                             assert(pair.canDetach(renderer.data(),1,admit) && renderer==published);
                             assert(!pair.canDetach(renderer.data(),2,admit) && renderer==published);
                             assert(pair.detach(renderer.data(),1,admit) && renderer==original);
+                            assert(!pair.destroyDetached(renderer.data(),2));
                         }
                         // Ownership fixture only: no native submit is called.
                         const auto result=assembly.withNativeCommandFrame(
@@ -18356,7 +18363,15 @@ int main() {
                         })==31);
                         assert(frameSurfaces.live==2 && frameDn.live==1);
                         assert(frames.retire(ticket,[&](const Assembly&,bool pending,const auto&) noexcept -> int {
-                            assert(pending);retirementQualified=true;return 0;
+                            assert(pending);retirementQualified=true;
+                            if(!failSecond) {
+                                assert(cleanupPair && !cleanupPair->destroyDetached(renderer.data(),2));
+                                assert(cleanupPair->destroyDetached(renderer.data(),1));
+                                assert(cleaned[0]==1 && cleaned[1]==1 && destroyed==cleaned);
+                                assert(pairCpu[0].live && pairCpu[1].live);
+                                assert(!cleanupPair->destroyDetached(renderer.data(),1));
+                            }
+                            return 0;
                         })==0);
                     }
                     assert(!frameSurfaces.live && frameSurfaces.releases==2 && !frameDn.live);
