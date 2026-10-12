@@ -10373,6 +10373,10 @@ static void testSfcLineBufferOwnership() {
             uint32_t nativeMode=1,nativeChannel=9;
             std::memcpy(nativeCaller.data()+0xa0c,&nativeMode,4);
             std::memcpy(nativeCaller.data()+0x1bac,&nativeChannel,4);
+            assert(graph.withView(false,[&](void* child) noexcept {
+                const auto vpAddress=reinterpret_cast<uintptr_t>(child);
+                std::memcpy(nativeCaller.data()+0x80,&vpAddress,8);return 0;
+            })==0);
             auto callerRead=[&](uintptr_t p,void* out,size_t n) {
                 if(p<nativeCallerAddress || p-nativeCallerAddress>nativeCaller.size() ||
                    n>nativeCaller.size()-(p-nativeCallerAddress))return false;
@@ -13688,6 +13692,8 @@ int main() {
         uint32_t mode=1,channel=7;
         std::memcpy(state.data()+0xa0c,&mode,4);
         std::memcpy(caller.data()+0x1bac,&channel,4);
+        const auto vpAddress=reinterpret_cast<uintptr_t>(vp.bytes.data());
+        std::memcpy(caller.data()+0x80,&vpAddress,8);
         std::memcpy(caller.data()+8,&slot,8);
         bool deny=false,failSlot=false;
         auto admit=[&](uintptr_t p,uintptr_t q,const auto& s){return !deny && p==address && q==stateAddress && &s==&vp;};
@@ -13708,6 +13714,10 @@ int main() {
         deny=false;mode=0;
         assert(!tglBindVpNativeCallerFields(vp,address,stateAddress,read,admit) && vp.bytes==before);
         mode=1;
+        uintptr_t foreignVp=vpAddress+8;
+        std::memcpy(caller.data()+0x80,&foreignVp,8);
+        assert(!tglBindVpNativeCallerFields(vp,address,stateAddress,read,admit) && vp.bytes==before);
+        std::memcpy(caller.data()+0x80,&vpAddress,8);
         assert(!tglBindVpNativeCallerFields(vp,address,address,read,admit) && vp.bytes==before);
         uintptr_t missing=0;std::memcpy(caller.data()+8,&missing,8);
         assert(tglBindVpNativeCallerFields(vp,address,stateAddress,read,admit) && field()==performance);
