@@ -19221,6 +19221,39 @@ int main() {
             std::memcpy(dst,flags.data(),size);return true;
         };
         {
+            TglOwnedSfcMhw<Invoke> parent(invoke),first(invoke),second(invoke);
+            assert(parent.initialize(lifetime,mhw,os,read));
+            auto object=reinterpret_cast<uintptr_t>(parent.get());
+            auto borrowedRead=[&](uintptr_t address,void* dst,size_t size){
+                if(address==object && size==0x41){
+                    std::memcpy(dst,parent.get(),size);return true;
+                }
+                return read(address,dst,size);
+            };
+            std::atomic_flag gate=ATOMIC_FLAG_INIT;
+            assert(!first.initializeBorrowed(lifetime,mhw,object,os,borrowedRead,nullptr));
+            assert(first.initializeBorrowed(lifetime,mhw,object,os,borrowedRead,&gate));
+            assert(second.initializeBorrowed(lifetime,mhw,object,os,borrowedRead,&gate));
+            unsigned calls=0;
+            auto call=[&](void* value){assert(value==parent.get());++calls;return 0;};
+            assert(first.withCommandReservation([&]{
+                assert(first.withObject(call)==0);
+                assert(second.withObject(call)==5);
+                assert(second.withCommandReservation([]{return 0;})==5);
+                return 31;
+            })==31);
+            assert(second.withObject(call)==0 && calls==2);
+            assert(first.withObject([&](void*){
+                assert(second.withObject(call)==5);return 11;
+            })==11);
+            assert(second.withCommandReservation([&]{return second.withObject(call);})==0);
+            unsigned destroys=invoke.destroys;
+            first.reset();second.reset();
+            assert(invoke.destroys==destroys && parent.get());
+        }
+        // Keep the existing fixture counters independent of this borrowed-handle test.
+        invoke.constructs=0;invoke.destroys=0;
+        {
             std::array<unsigned,16> events{};size_t eventCount=0;
             struct TrackedSfc {
                 Invoke& native;std::array<unsigned,16>& events;size_t& count;
