@@ -21857,7 +21857,7 @@ int main() {
                             uintptr_t restoredVp=1;
                             std::memcpy(&restoredVp,pairCpu[0].bytes.data()+0x80,8);
                             assert(restoredVp==0 && vpCpu.live && vpAvsCpu.live);
-                            {
+                            for(bool mutateReport:{false,true}) {
                                 TglExecutionOwner<RecordingExecutionBackend> nativeBorrow(executionBackend);
                                 uintptr_t oldReport=0,helper=0;
                                 std::memcpy(&oldReport,pairCpu[0].bytes.data()+0x88,8);
@@ -21882,12 +21882,16 @@ int main() {
                                             nativeBorrow.hasExecutionLease(report) &&
                                             childOwner.hasPrivateChildLease(reinterpret_cast<uintptr_t>(child)) &&
                                             originalSource.hasSurfaceLease(source) && originalTarget.hasSurfaceLease(target));
+                                        if(mutateReport) {
+                                            const uintptr_t zero=0;
+                                            std::memcpy(static_cast<uint8_t*>(child)+0x88,&zero,8);
+                                        }
                                         return TglOwnedVeboxCommandTransactionResult{-17,-17,false,false};
                                     });
-                                assert(nativeFrame.status==-17 && !nativeFrame.acquired && uses==1 &&
+                                assert(nativeFrame.status==(mutateReport?5:-17) && !nativeFrame.acquired && uses==1 &&
                                     !nativeBorrow.hasExecutionLease(report) && !executionBackend.destroyed);
                                 uintptr_t unchanged=0;std::memcpy(&unchanged,pairCpu[0].bytes.data()+0x88,8);
-                                assert(unchanged==report);
+                                assert(unchanged==(mutateReport?0:report));
                                 std::memcpy(pairCpu[0].bytes.data()+0x88,&oldReport,8);
                             }
                             TglOwnedVeboxCommandTransactionResult executionResult;
