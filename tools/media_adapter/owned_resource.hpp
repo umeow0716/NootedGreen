@@ -1751,6 +1751,49 @@ public:
     }
 };
 
+struct TglNativeCreatorCallInvoker {
+    int operator()(uintptr_t entry,void* creator) const noexcept {
+        using Fn=int(*)(void*);return reinterpret_cast<Fn>(entry)(creator);
+    }
+};
+// Normal-stack dispatch only; signal handling may select table(), never call
+// dispatch itself. Scope/native image/parent resources must outlive the call.
+// Handoff failure must leave no published owned children: the native caller
+// will execute its own failure teardown. This wrapper invents no cleanup.
+template<class Native,class Handoff,class AdmitCreator> class TglOwnedCreatorCallScope {
+    inline static thread_local TglOwnedCreatorCallScope* active_=nullptr;
+    Native& native_;Handoff& handoff_;AdmitCreator& admit_;
+    TglOwnedCreatorCallTable table_;
+    bool consumed_=false,busy_=false;
+    static int dispatch(void* creator) noexcept {
+        auto* self=active_;
+        if(!self || self->consumed_ || self->busy_ || !self->admit_(creator)) return 5;
+        self->consumed_=true;self->busy_=true;
+        struct Exit {bool& busy;~Exit(){busy=false;}} exit{self->busy_};
+        const int result=self->native_(self->table_.nativeCreate(),creator);
+        return result?result:self->handoff_(creator);
+    }
+public:
+    TglOwnedCreatorCallScope(Native& native,Handoff& handoff,AdmitCreator& admit) noexcept
+        :native_(native),handoff_(handoff),admit_(admit) {
+        static_assert(noexcept(native(uintptr_t{},static_cast<void*>(nullptr))) &&
+            noexcept(handoff(static_cast<void*>(nullptr))) && noexcept(admit(static_cast<void*>(nullptr))) &&
+            std::is_same_v<decltype(native(uintptr_t{},static_cast<void*>(nullptr))),int> &&
+            std::is_same_v<decltype(handoff(static_cast<void*>(nullptr))),int> &&
+            std::is_same_v<decltype(admit(static_cast<void*>(nullptr))),bool>);
+    }
+    TglOwnedCreatorCallScope(const TglOwnedCreatorCallScope&)=delete;
+    TglOwnedCreatorCallScope& operator=(const TglOwnedCreatorCallScope&)=delete;
+    ~TglOwnedCreatorCallScope() noexcept {if(active_==this) active_=nullptr;}
+    template<class Read,class Qualify,class Executable,class OwnedAdmit>
+    bool prepare(uintptr_t image,Read read,Qualify qualify,Executable executable,OwnedAdmit ownedAdmit) noexcept {
+        if(active_ || !table_.build(image,callbackAddress(),read,qualify,executable,ownedAdmit)) return false;
+        active_=this;return true;
+    }
+    static uintptr_t callbackAddress() noexcept {return reinterpret_cast<uintptr_t>(&dispatch);}
+    const TglOwnedCreatorCallTable& table() const noexcept {return table_;}
+};
+
 struct TglOwnedSurfaceStorage;
 // Outer131fa0 copies0x139 bytes at1320e2: source count0 <=17, targets90 <=8.
 // Sources begin8; targets begin98 (NOT the source!). Native13076c..13083c

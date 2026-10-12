@@ -14102,6 +14102,44 @@ int main() {
                 const auto address=callTable.addressPoint();
                 assert(!buildCall(0xf000) && callTable.addressPoint()==address);
                 assert(creatorTable==image+0x75bb58 && create==image+0x1e6610);
+                for(const auto outcomes:{std::pair<int,int>{31,0},{0,31},{0,0}}) {
+                    unsigned nativeCalls=0,handoffs=0;
+                    int (*callback)(void*)=nullptr;
+                    auto nativeCall=[&](uintptr_t entry,void* object) noexcept -> int {
+                        assert(entry==create && reinterpret_cast<uintptr_t>(object)==creatorAddress);
+                        assert(!nativeCalls && !handoffs);++nativeCalls;return outcomes.first;
+                    };
+                    auto handoff=[&](void* object) noexcept -> int {
+                        assert(nativeCalls==1 && !handoffs);++handoffs;
+                        assert(callback && callback(object)==5 && nativeCalls==1);
+                        return outcomes.second;
+                    };
+                    auto admitCreator=[&](void* object) noexcept -> bool {
+                        return reinterpret_cast<uintptr_t>(object)==creatorAddress;
+                    };
+                    using Scope=TglOwnedCreatorCallScope<decltype(nativeCall),decltype(handoff),decltype(admitCreator)>;
+                    callback=reinterpret_cast<int(*)(void*)>(Scope::callbackAddress());
+                    assert(callback(reinterpret_cast<void*>(creatorAddress))==5 && !nativeCalls);
+                    {
+                        Scope scope(nativeCall,handoff,admitCreator);
+                        auto admitOwned=[](uintptr_t entry,size_t size) noexcept {
+                            return entry==Scope::callbackAddress() && size==1;
+                        };
+                        assert(scope.prepare(image,creatorRead,qualify,callExecutable,admitOwned));
+                        Scope nested(nativeCall,handoff,admitCreator);
+                        assert(!nested.prepare(image,creatorRead,qualify,callExecutable,admitOwned) && !nested.table().addressPoint());
+                        assert(callback(nullptr)==5 && !nativeCalls);
+                        uintptr_t selected=scope.table().source();
+                        assert(scope.table().selectCallArgument(selected,creatorAddress));
+                        uintptr_t entry=0;std::memcpy(&entry,reinterpret_cast<void*>(selected+0x18),8);
+                        assert(entry==Scope::callbackAddress());
+                        const int expected=outcomes.first?outcomes.first:outcomes.second;
+                        assert(reinterpret_cast<int(*)(void*)>(entry)(reinterpret_cast<void*>(creatorAddress))==expected);
+                        assert(nativeCalls==1 && handoffs==unsigned(outcomes.first==0));
+                        assert(callback(reinterpret_cast<void*>(creatorAddress))==5 && nativeCalls==1);
+                    }
+                    assert(callback(reinterpret_cast<void*>(creatorAddress))==5 && nativeCalls==1);
+                }
             }
             TglNativeCreatedVeboxRendererView created;
             auto resolveCreated=[&]() noexcept {
