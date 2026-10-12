@@ -20146,9 +20146,11 @@ int main() {
                                 ==TglOwnedBaseConstruction::NotCalled && childStatus==77);
                             allowPageImport=true;
                             bool failSourceFreeConstructor=true;
+                            unsigned sourceFreeConstructorCalls=0;
                             auto constructSourceFree=[&](uintptr_t entry,void* object,void* nativeOs,void* nativeMhw,void* nativeSfc,
                                 void*,void* history,void* performance,const void* cache,int32_t* out) noexcept {
                                 assert(entry==base+0x12d4e0 && nativeOs==reinterpret_cast<void*>(os));
+                                ++sourceFreeConstructorCalls;
                                 assert(nativeMhw==reinterpret_cast<void*>(creatorView->hardware.interface));
                                 assert(nativeSfc==reinterpret_cast<void*>(parentSfcAddress));
                                 const auto historyOffset=object==pairCpu[0].bytes.data()?0x8f8:0x904;
@@ -20167,9 +20169,10 @@ int main() {
                                 assert(entry==base+0x65d70 && (policy==0x70 || policy==0x71));
                                 value=policy<<1;return true;
                             };
-                            assert(storage.initializeChildFromCreator(0,*creatorView,baseBinding,lifetime,
-                                childStatus,parentSfcRead,qualifyMhw,executableMhw,constructSourceFree,sourceFreeQuery)
-                                ==TglOwnedBaseConstruction::ConstructedFailure && childStatus==31);
+                            assert(tglInitializeRendererChildrenFromCreator(storage,*creatorView,
+                                baseBinding,lifetime,parentSfcRead,qualifyMhw,executableMhw,
+                                constructSourceFree,sourceFreeQuery)==31);
+                            assert(sourceFreeConstructorCalls==1 && !pairCpu[1].live);
                             assert(sourceFreeCleanups==1 && sourceFreeDestroys==1 && !pairCpu[0].live &&
                                 parentSfc[0x40]==1 && pairInvoke.destroys==sfcDestroysBefore);
                             failSourceFreeConstructor=false;
@@ -20193,18 +20196,15 @@ int main() {
                                         return owner.context()==view.parent && view.os==os &&
                                             view.hardware.interface==creatorView->hardware.interface;
                                     }));
-                                for(size_t child=0;child<2;++child)
-                                    assert(standalone.initializeChildFromCreator(child,*creatorView,
-                                        baseBinding,lifetime,childStatus,parentSfcRead,qualifyMhw,executableMhw,
-                                        constructSourceFree,sourceFreeQuery)==TglOwnedBaseConstruction::ConstructedSuccess
-                                        && childStatus==0);
+                                assert(tglInitializeRendererChildrenFromCreator(standalone,*creatorView,
+                                    baseBinding,lifetime,parentSfcRead,qualifyMhw,executableMhw,
+                                    constructSourceFree,sourceFreeQuery)==0);
                             }
                             assert(sourceFreeCleanups==3 && sourceFreeDestroys==3 &&
                                 !pairCpu[0].live && !pairCpu[1].live && parentSfc[0x40]==1);
-                            for(size_t child=0;child<2;++child)
-                                assert(storage.initializeChildFromCreator(child,*creatorView,baseBinding,lifetime,
-                                    childStatus,parentSfcRead,qualifyMhw,executableMhw,constructSourceFree,sourceFreeQuery)
-                                    ==TglOwnedBaseConstruction::ConstructedSuccess && childStatus==0);
+                            assert(tglInitializeRendererChildrenFromCreator(storage,*creatorView,
+                                baseBinding,lifetime,parentSfcRead,qualifyMhw,executableMhw,
+                                constructSourceFree,sourceFreeQuery)==0);
                             }
                             assert(sourceFreeCleanups==5 && sourceFreeDestroys==5);
                             assert(!vpCpu.live && !vpAvsCpu.live && parentSfc[0x40]==1);

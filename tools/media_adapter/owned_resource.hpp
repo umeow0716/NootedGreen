@@ -19733,6 +19733,24 @@ bool tglProduceRendererChildParameters(TglNativeRendererChildParameters& output,
     candidate.performance=view.renderer.renderer+0x2ce8;
     output=candidate;return true;
 }
+// Creator-only assembly, inside the retained owner's initialization reservation.
+// Never publish a partially constructed pair. On failure the SAME storage owner
+// retains any completed child until its existing qualified teardown; do not retry
+// without that teardown or invoke native context destruction first.
+template<class Storage,class Read,class Qualify,class Executable,
+    class Construct=TglNativeVeboxConstructorInvoker,class Query=TglNativeRendererCacheInvoker>
+int tglInitializeRendererChildrenFromCreator(Storage& storage,const TglNativeVphalMhwView& view,
+    const TglVeboxLifetimeBinding& binding,const TglSfcLifetimeBinding& lifetime,
+    Read read,Qualify qualify,Executable executable,Construct construct={},Query query={}) {
+    for(size_t index=0;index<2;++index) {
+        int32_t status=5;
+        const auto result=storage.initializeChildFromCreator(index,view,binding,lifetime,status,
+            read,qualify,executable,construct,query);
+        if(result==TglOwnedBaseConstruction::NotCalled) return 5;
+        if(result!=TglOwnedBaseConstruction::ConstructedSuccess || status) return status?status:5;
+    }
+    return 0;
+}
 template<class Api,class Cleanup,class Cpu=TglNativeTrackedCpuInvoker,
     class Sfc=TglNativeSfcLifetimeInvoker,class Destroy=TglNativeVeboxDestructorInvoker>
 class TglNativeVeboxRendererCpuStorage {
