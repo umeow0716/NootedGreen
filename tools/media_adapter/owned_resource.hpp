@@ -17639,9 +17639,20 @@ public:
     // completion, including any attempted submit. No result/status implies it.
     // Rejection retains the SAME complete object at the SAME address.
     template<class Admit> int retire(Ticket ticket,Admit admit) noexcept {
+        // Only for destructor-complete frames with no published native links.
+        // Product renderer owners use retirePrepared to detach those links
+        // while borrowed MHW/metadata/surface leases are still alive.
+        return retirePrepared(ticket,admit,[](Frame&,bool,
+            const TglOwnedVeboxCommandTransactionResult&) noexcept -> int {return 0;});
+    }
+    template<class Admit,class Prepare> int retirePrepared(Ticket ticket,Admit admit,Prepare prepare) noexcept {
         static_assert(noexcept(admit(std::declval<const Frame&>(),bool{},
             std::declval<const TglOwnedVeboxCommandTransactionResult&>())) &&
             std::is_same_v<decltype(admit(std::declval<const Frame&>(),bool{},
+                std::declval<const TglOwnedVeboxCommandTransactionResult&>())),int>);
+        static_assert(noexcept(prepare(std::declval<Frame&>(),bool{},
+            std::declval<const TglOwnedVeboxCommandTransactionResult&>())) &&
+            std::is_same_v<decltype(prepare(std::declval<Frame&>(),bool{},
                 std::declval<const TglOwnedVeboxCommandTransactionResult&>())),int>);
         if(gate_.test_and_set(std::memory_order_acquire)) return 5;
         Unlock unlock{gate_};
@@ -17650,6 +17661,8 @@ public:
         if(!slot.frame || !ticket.generation || slot.generation!=ticket.generation) return 5;
         const int status=admit(static_cast<const Frame&>(*slot.frame),slot.pending,slot.result);
         if(status) return status;
+        const int prepared=prepare(*slot.frame,slot.pending,slot.result);
+        if(prepared) return prepared; // retain same frame, dependencies and request receipt
         auto* frame=slot.frame;slot={};delete frame;return 0;
     }
 };

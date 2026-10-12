@@ -19665,9 +19665,29 @@ int main() {
                         // Actual borrowed frame retains the parent: do NOT
                         // demand exclusive parent access before retiring it.
                         assert(!parents.pinExclusive(base,0x8000,1,parentAddress).get());
-                        assert(frames.retire(ticket,[&](const auto&,bool pending,const auto&) noexcept {
+                        unsigned prepareCalls=0;
+                        assert(frames.retirePrepared(ticket,
+                            [](const auto&,bool pending,const auto&) noexcept {
+                                assert(pending);return 0;
+                            },[&](auto&,bool pending,const auto& result) noexcept {
+                                ++prepareCalls;
+                                assert(pending && result.acquired && !result.writtenBack);
+                                assert(ho.borrowed && frameDn.live==1 && refs[1]==3);
+                                assert(!cleaned[0] && !cleaned[1] && vpCpu.live && vpAvsCpu.live);
+                                assert(!parents.pinExclusive(base,0x8000,1,parentAddress).get());
+                                return 31;
+                            })==31);
+                        assert(prepareCalls==1 && ho.borrowed && !parentDeaths);
+                        assert(frames.retirePrepared(ticket,[&](const auto&,bool pending,const auto&) noexcept {
                             assert(pending);retirementQualified=true;return 0;
+                        },[&](auto&,bool pending,const auto& result) noexcept {
+                            ++prepareCalls;
+                            assert(pending && result.acquired && !result.writtenBack);
+                            assert(ho.borrowed && frameDn.live==1 && refs[1]==3);
+                            assert(!cleaned[0] && !cleaned[1] && vpCpu.live && vpAvsCpu.live);
+                            return 0; // This fixture has no published child links.
                         })==0); // CPU certificate fixture only
+                        assert(prepareCalls==2);
                         assert(!so.borrowed && !to.borrowed && !ho.borrowed && !frameDn.live && !refs[1] && !refs[5]);
                         assert(cleaned[0]==1 && cleaned[1]==1 && destroyed==cleaned);
                         assert(!vpCpu.live && !vpAvsCpu.live);
