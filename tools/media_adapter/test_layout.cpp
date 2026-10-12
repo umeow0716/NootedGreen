@@ -8764,6 +8764,32 @@ static void testNativeResourceBoundary() {
                                                     // Complete native-Render entry with a CPU recording
                                                     // invoker: no Apple entry/GPU commands execute here.
                                                     unsigned recordedRenders=0;
+                                                    unsigned joinedAllocations=0;
+                                                    auto allocationFailure=[&](void* object) noexcept -> int {
+                                                        assert(object==actualChild);++joinedAllocations;return 31;
+                                                    };
+                                                    TglOwnedVeboxFrameRetention allocationEntryRetention;
+                                                    using JoinedAllocation=TglOwnedVeboxRenderAllocationContext<
+                                                        std::decay_t<decltype(childOwner)>,decltype(allocationFailure)>;
+                                                    using JoinedAllocationScope=TglOwnedVeboxScopedContext<JoinedAllocation>;
+                                                    const auto savedAllocationHooks=childOwner.renderHooks;
+                                                    childOwner.renderHooks=tglBindOwnedVeboxAllocationHook<JoinedAllocationScope>(
+                                                        savedAllocationHooks);
+                                                    const auto allocationEntry=tglWithAllocatedRetainedVeboxFrameNativeRender<
+                                                        RetainedResolve,RetainedScope,RetainedScope,RetainedFormatRead>(
+                                                        retained,heldInput,heldInput,static_cast<TglHeldOwnedSurfaceRole*>(nullptr),
+                                                        static_cast<TglHeldOwnedSurfaceRole*>(nullptr),childOwner,reportOwner,
+                                                        fullLeases,false,false,{},0,fullRead,liveSurfaceAdmission,admitResource,
+                                                        registerResource,resourceControl,rejectPackets,rejectCsc,allocationFailure,
+                                                        entryBinding,nullptr,allocationEntryRetention,
+                                                        static_cast<TglOwnedFfdnNoDenoiseBorrow*>(nullptr),
+                                                        [&](uintptr_t,void* object,void*,void*) noexcept -> int {
+                                                            return reinterpret_cast<int(*)(void*)>(childOwner.renderHooks[3])(object);
+                                                        });
+                                                    assert(allocationEntry.status==31 && joinedAllocations==1 &&
+                                                        allocationEntryRetention() && !fullRetention());
+                                                    childOwner.renderHooks=savedAllocationHooks;
+                                                    // Entry ownership is conservative, not a GPU completion.
                                                     const auto wholeRender=tglWithRetainedVeboxFrameNativeRender<
                                                         RetainedResolve,RetainedScope,RetainedScope,RetainedScope,RetainedFormatRead>(
                                                         retained,heldInput,heldInput,static_cast<TglHeldOwnedSurfaceRole*>(nullptr),

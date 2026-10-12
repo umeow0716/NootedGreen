@@ -22846,6 +22846,47 @@ TglOwnedVeboxCommandTransactionResult tglWithRetainedVeboxFrameNativeRender(
         },parameters);
 }
 
+// Compose the captured allocation planner with the SAME retained native Render.
+// Allocate must perform the captured planner's own unwind; do not run a second
+// cleanup here. Native +118/+148 remain inherited, and preparation selection is
+// read only when their producers run, after native +58 has returned.
+struct TglOwnedVeboxAllocationRenderRetention {
+    TglOwnedVeboxFrameRetention& render;
+    TglOwnedVeboxFrameRetention& backing;
+    bool operator()() const noexcept {return render() || backing();}
+};
+template<class ChildOwner,class Allocate>
+using TglOwnedVeboxRenderAllocationContext=TglOwnedVeboxAllocationContext<ChildOwner,Allocate,
+    TglOwnedVeboxNoAllocationUnwind,TglOwnedVeboxAllocationRenderRetention>;
+
+template<class LifetimeResolve,class AdmissionResolve,class ModeResolve,class FormatRead,
+    class Api,class Owner,class ChildOwner,class ExecutionOwner,class Allocate,class Read,
+    class SurfaceAdmit,class DiAdmit,class Register,class Control,class PacketAdmit,class ProduceCsc,
+    class Parameters=TglOwnedFfdnNoDenoiseBorrow,class Invoke=TglNativeVeboxStageInvoker>
+TglOwnedVeboxCommandTransactionResult tglWithAllocatedRetainedVeboxFrameNativeRender(
+    TglNativeVeboxSurfaceFrameStorage<Api>& storage,Owner& sourceOwner,Owner& targetOwner,
+    Owner* secondaryOwner,Owner* previousOwner,ChildOwner& child,ExecutionOwner& execution,
+    TglOwnedVeboxPacketLeases leases,bool disableTemporalDenoise,bool alignDi64,
+    const std::array<uint32_t,11>& controls,uintptr_t dnParams,Read read,
+    SurfaceAdmit admitSurface,DiAdmit admitDi,Register registerResource,Control control,
+    PacketAdmit admitPackets,ProduceCsc produceCsc,Allocate& allocate,
+    const TglVeboxRenderBinding& binding,void* argument1,TglOwnedVeboxFrameRetention& retention,
+    Parameters* parameters=nullptr,Invoke invoke={}) noexcept {
+    TglOwnedVeboxAllocationRenderRetention keep{retention,storage.auxiliary().retention()};
+    if(keep()) return TglOwnedVeboxCommandTransactionResult{};
+    using Allocation=TglOwnedVeboxRenderAllocationContext<ChildOwner,Allocate>;
+    void* object=reinterpret_cast<void*>(leases.child);
+    Allocation allocation(child,allocate,object,{},keep);
+    using Scope=TglOwnedVeboxScopedContext<Allocation>;
+    Scope scope(object,allocation);
+    if(!scope.bound() || !allocation.owns(object)) return TglOwnedVeboxCommandTransactionResult{};
+    return tglWithRetainedVeboxFrameNativeRender<LifetimeResolve,AdmissionResolve,
+        Scope,ModeResolve,FormatRead>(storage,sourceOwner,targetOwner,secondaryOwner,previousOwner,
+        child,execution,leases,disableTemporalDenoise,alignDi64,controls,dnParams,read,
+        admitSurface,admitDi,registerResource,control,admitPackets,produceCsc,binding,argument1,
+        retention,parameters,invoke);
+}
+
 // Complete synchronous command entry under the caller's allocation/admission/
 // mode/lifecycle and retained-frame scopes. Native setup/build must receive the
 // SAME producer that owns the installed hooks, not the underlying packet-only
