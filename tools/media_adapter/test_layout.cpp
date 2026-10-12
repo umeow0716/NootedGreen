@@ -12974,14 +12974,21 @@ static void testRetainedVeboxFrames() {
             assert(!registry.pinDependency(stale,image,physical).live());
             auto dependency=registry.pinDependency(physicalTicket,image,physical);
             assert(dependency.live());
+            assert(dependency.matches(image,physical,physicalTicket.generation));
+            assert(!dependency.matches(image+1,physical,physicalTicket.generation));
+            assert(!dependency.matches(image,physical+1,physicalTicket.generation));
+            assert(!dependency.matches(image,physical,physicalTicket.generation+1));
             auto moved=std::move(dependency);
             assert(moved.live() && !dependency.live());
+            assert(moved.matches(image,physical,physicalTicket.generation));
+            assert(!dependency.matches(image,physical,physicalTicket.generation));
             auto noTeardown=[](uintptr_t) noexcept -> int {assert(false);return 0;};
             assert(registry.destroy(physicalTicket,image,physical,noTeardown)==5);
             Registry::DependencyLease scoped;
             assert(registry.withScope(physicalTicket,image,physical,[&](auto& scope) noexcept -> int {
                 scoped=scope.retainPhysicalDependency();return scoped.live()?0:5;
             })==0);
+            assert(scoped.matches(image,physical,physicalTicket.generation));
             moved.reset();
             assert(registry.destroy(physicalTicket,image,physical,noTeardown)==5);
             scoped.reset(); // final physical dependency; later native teardown may proceed

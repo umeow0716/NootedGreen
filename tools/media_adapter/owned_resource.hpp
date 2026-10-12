@@ -17747,38 +17747,51 @@ public:
     class DependencyLease {
         friend class TglOwnedVeboxPhysicalFrameRegistry;
         std::atomic<size_t>* count_=nullptr;
-        explicit DependencyLease(std::atomic<size_t>& count) noexcept:count_(&count) {}
+        uintptr_t image_=0,physical_=0;uint64_t generation_=0;
+        explicit DependencyLease(Entry& entry) noexcept:count_(&entry.dependencies),
+            image_(entry.image),physical_(entry.physical),generation_(entry.generation) {}
     public:
         DependencyLease()=default;
         DependencyLease(const DependencyLease&)=delete;
         DependencyLease& operator=(const DependencyLease&)=delete;
-        DependencyLease(DependencyLease&& other) noexcept:count_(other.count_) {other.count_=nullptr;}
+        DependencyLease(DependencyLease&& other) noexcept:count_(other.count_),image_(other.image_),
+            physical_(other.physical_),generation_(other.generation_) {other.clear();}
         DependencyLease& operator=(DependencyLease&& other) noexcept {
-            if(this!=&other) {reset();count_=other.count_;other.count_=nullptr;}return *this;
+            if(this!=&other) {
+                reset();count_=other.count_;image_=other.image_;physical_=other.physical_;
+                generation_=other.generation_;other.clear();
+            }return *this;
         }
         ~DependencyLease() noexcept {reset();}
         bool live() const noexcept {return count_!=nullptr;}
-        void reset() noexcept {
-            if(count_) {count_->fetch_sub(1,std::memory_order_release);count_=nullptr;}
+        bool matches(uintptr_t image,uintptr_t physical,uint64_t generation) const noexcept {
+            return live() && image_==image && physical_==physical && generation_==generation;
         }
+        void reset() noexcept {
+            if(count_) count_->fetch_sub(1,std::memory_order_release);
+            clear();
+        }
+    private:
+        void clear() noexcept {count_=nullptr;image_=physical_=0;generation_=0;}
     };
 private:
-    static DependencyLease retainDependency(std::atomic<size_t>& count) noexcept {
+    static DependencyLease retainDependency(Entry& entry) noexcept {
+        auto& count=entry.dependencies;
         auto value=count.load(std::memory_order_relaxed);
         do {if(value==SIZE_MAX) return {};}
         while(!count.compare_exchange_weak(value,value+1,std::memory_order_acquire,std::memory_order_relaxed));
-        return DependencyLease(count);
+        return DependencyLease(entry);
     }
 public:
     class Scope {
         friend class TglOwnedVeboxPhysicalFrameRegistry;
-        Pool& frames_;uintptr_t physical_,context_=0;std::atomic<size_t>& dependencies_;
-        explicit Scope(Pool& frames,uintptr_t physical,std::atomic<size_t>& dependencies) noexcept
-            :frames_(frames),physical_(physical),dependencies_(dependencies) {}
+        Pool& frames_;uintptr_t physical_,context_=0;Entry& entry_;
+        explicit Scope(Entry& entry) noexcept
+            :frames_(entry.frames),physical_(entry.physical),entry_(entry) {}
     public:
         Scope(const Scope&)=delete;Scope& operator=(const Scope&)=delete;
         // Called while the enclosing physical gate is held; no recursive lookup.
-        DependencyLease retainPhysicalDependency() noexcept {return retainDependency(dependencies_);}
+        DependencyLease retainPhysicalDependency() noexcept {return retainDependency(entry_);}
         // Pass this exact scope through synchronous owned renderer dispatch;
         // never reenter the enclosing registry gate or retain Scope references.
         template<class Invoke> int withNativeRequestItem(uintptr_t context,Invoke invoke) noexcept {
@@ -17869,7 +17882,7 @@ public:
         if(gate_.test_and_set(std::memory_order_acquire)) return {};
         Unlock unlock{gate_};auto* entry=resolve(ticket);
         if(!entry || entry->state!=State::Live || entry->image!=image || entry->physical!=physical) return {};
-        return retainDependency(entry->dependencies);
+        return retainDependency(*entry);
     }
     template<class Use> int withLive(Ticket ticket,uintptr_t image,uintptr_t physical,Use use) noexcept {
         static_assert(noexcept(use(std::declval<Pool&>())) &&
@@ -17882,8 +17895,8 @@ public:
     template<class Use> int withScope(Ticket ticket,uintptr_t image,uintptr_t physical,Use use) noexcept {
         static_assert(noexcept(use(std::declval<Scope&>())) &&
             std::is_same_v<decltype(use(std::declval<Scope&>())),int>);
-        return withLive(ticket,image,physical,[&](Pool& frames) noexcept -> int {
-            Scope scope(frames,physical,resolve(ticket)->dependencies);return use(scope);
+        return withLive(ticket,image,physical,[&](Pool&) noexcept -> int {
+            Scope scope(*resolve(ticket));return use(scope);
         });
     }
     // Guard BEFORE native slot11 changes input shells. Unlike terminal
