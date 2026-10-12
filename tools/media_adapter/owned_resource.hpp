@@ -7782,6 +7782,22 @@ public:
     bool matchesPreparedFfdnSource(const TglOwnedSurfaceStorage& source) noexcept {
         return ready_ && !busy_ && ffdnSource_==&source && capture_.backed(surface_.resource);
     }
+    // Both native-backed output shells borrow one DN parameter owner. This
+    // scope is non-consuming, not native160 or asynchronous GPU retention.
+    template<class SourceOwner,class Parameters,class Use>
+    bool withBorrowedFfdnDenoisePair(TglOwnedAllocatedSurface& peer,
+        SourceOwner& owner,const TglOwnedSurfaceStorage& source,Parameters& parameters,Use use) noexcept {
+        if(&peer==this || &source==&surface_ || &source==&peer.surface_ ||
+           !owner.hasSurfaceLease(source) || !matchesPreparedFfdnSource(source) ||
+           !peer.matchesPreparedFfdnSource(source)) return false;
+        busy_=true;peer.busy_=true;
+        struct Unlock {bool& first;bool& second;~Unlock(){first=false;second=false;}}
+            unlock{busy_,peer.busy_};
+        const bool consumed=owner.withBorrowedDenoiseMetadataGroup(source,parameters,
+            std::array<TglOwnedSurfaceStorage*,2>{&surface_,&peer.surface_},use);
+        return consumed && owner.hasSurfaceLease(source) &&
+            capture_.backed(surface_.resource) && peer.capture_.backed(peer.surface_.resource);
+    }
     // ICL1f839b..1f83d8: after the FFDN pair, pipe2 alone copies the
     // source's two rectangle qwords into execution60. No resource adoption.
     template<class SourceOwner>

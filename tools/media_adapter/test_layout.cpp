@@ -8114,6 +8114,41 @@ static void testNativeResourceBoundary() {
                                                 })==5);
                                         }));
                                         assert(backingBackend.allocations==beforeBackedBorrow);
+                                        {
+                                            struct NativeDnBackend {
+                                                std::array<uint8_t,8> bytes{};unsigned live=0;
+                                                uintptr_t allocate(size_t n) noexcept {
+                                                    assert(n==bytes.size() && !live);live=1;
+                                                    return reinterpret_cast<uintptr_t>(bytes.data());
+                                                }
+                                                void release(uintptr_t p) noexcept {
+                                                    assert(p==reinterpret_cast<uintptr_t>(bytes.data()) && live);live=0;
+                                                }
+                                            } nativeDnBackend;
+                                            TglTrackedCpuOwner nativeDn(nativeDnBackend);
+                                            assert(nativeDn.allocate(8));unsigned dnCalls=0;
+                                            assert(linkedInput.withSurface([&](const auto& current) noexcept {
+                                                assert(targetA.withBorrowedFfdnDenoisePair(targetB,linkedInput,current,nativeDn,
+                                                    [&](const auto& sourceView,const auto& views) noexcept {
+                                                        ++dnCalls;
+                                                        for(auto* view:std::array{&sourceView,views[0],views[1]}) {
+                                                            uintptr_t pointer=0;
+                                                            std::memcpy(&pointer,view->prefix.data()+0x90,8);
+                                                            assert(pointer==nativeDn.get());
+                                                        }
+                                                        assert(targetA.hasSurfaceLease(*views[0]) && targetB.hasSurfaceLease(*views[1]));
+                                                        nativeDn.reset();targetA.reset();targetB.reset();
+                                                        assert(!targetA.withBorrowedFfdnDenoisePair(targetB,
+                                                            linkedInput,current,nativeDn,[](const auto&,const auto&) noexcept {assert(false);}));
+                                                    }));
+                                                uintptr_t pointer=1;std::memcpy(&pointer,current.prefix.data()+0x90,8);assert(!pointer);
+                                            }));
+                                            assert(dnCalls==1 && nativeDnBackend.live==1);
+                                            for(auto* target:std::array{&targetA,&targetB})
+                                                assert(target->withSurface([](const auto& view) noexcept {
+                                                    uintptr_t pointer=1;std::memcpy(&pointer,view.prefix.data()+0x90,8);assert(!pointer);
+                                                }));
+                                        }
                                         assert(historyShell.withDescriptor([&](const auto& view) noexcept {
                                             assert(std::memcmp(&view,&savedShell,sizeof(view))==0);
                                         }));
