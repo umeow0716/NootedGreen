@@ -7890,6 +7890,33 @@ int tglWithAllocatedOwnedFfdiBatch(Owner& input,Owner* execution,Owner* secondar
     });
 }
 
+// Reborrow already prepared descriptor outputs after allocation has returned.
+// This never prepares, publishes, allocates or resets a descriptor. Borrowed
+// execution handles are installed only while all original roles remain pinned.
+template<size_t Count,class Owner,class Use>
+int tglWithPreparedDescriptorFfdiViews(std::array<TglOwnedDescriptorOnlySurface,Count>& targets,
+    Owner& input,Owner* execution,Owner* secondary,size_t count,Use use,
+    std::array<const TglOwnedSurfaceStorage*,3> captured={}) noexcept {
+    using Outputs=std::array<const TglOwnedSurfaceStorage*,Count>;
+    if(!count || count>Count) return 5;
+    return tglWithCapturedOwnedSurfaceRoles(std::array<Owner*,3>{&input,execution,secondary},captured,
+        [&](const auto& inputs) noexcept -> int {
+            Outputs outputs{};
+            const auto enter=[&](auto&& self,size_t index) noexcept -> int {
+                if(index==count) return use(inputs,static_cast<const Outputs&>(outputs),count);
+                int result=5;
+                const auto consume=[&](const auto& descriptor) noexcept {
+                    outputs[index]=&descriptor;result=self(self,index+1);outputs[index]=nullptr;
+                };
+                const bool leased=inputs[1]
+                    ?targets[index].withBorrowedExecutionHandle(*execution,*inputs[1],consume)
+                    :targets[index].withDescriptor(consume);
+                return leased?result:5;
+            };
+            return enter(enter,0);
+        });
+}
+
 // Concrete descriptor-only FFDI target assembly. Keep every output descriptor
 // leased through the final consumer, alongside the existing input role leases.
 // A nonnull execution role must be a leased type1 source; its handle1a0 is

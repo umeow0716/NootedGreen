@@ -8790,6 +8790,15 @@ static void testNativeResourceBoundary() {
                         if(!index) assert(!targets[1].withDescriptor([](const auto&) noexcept {assert(false);}));
                         return 0;
                     })==31 && consumers==1 && reportPublications==2);
+                unsigned reborrowed=0;
+                assert(tglWithPreparedDescriptorFfdiViews(targets,owner,&owner,&destination,2,
+                    [&](const auto& inputs,const auto& outputs,size_t count) noexcept -> int {
+                        ++reborrowed;
+                        assert(inputs[0]==surface && inputs[1]==surface && inputs[2]==destinationSurface);
+                        assert(count==2 && outputs[0] && outputs[1] && !outputs[2]);
+                        for(size_t i=0;i<count;++i) assert(tglNativeBackingPresent(outputs[i]->resource));
+                        return 31;
+                    })==31 && reborrowed==1 && reportPublications==2);
                 assert(targets[0].withDescriptor([](const auto& view) noexcept {
                     assert(!tglNativeBackingPresent(view.resource));
                 }));
