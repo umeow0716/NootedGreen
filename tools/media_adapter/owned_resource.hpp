@@ -12435,6 +12435,22 @@ int tglWithOwnedSfcFilterCommands(TglOwnedSfcCommandParameters& parameters,
     parameters.filtersInUse=false;
     return result;
 }
+// Marshal live state/filter data only for a synchronous command consumer.
+// The caller holds both native state and CSC leases. Restore borrowed pointer
+// fields before either lease ends; preserve the earlier AVS command snapshot.
+template<class Use>
+int tglWithOwnedSfcLiveCommandInputs(TglOwnedSfcCommandParameters& parameters,
+    const uint8_t* state,size_t stateSize,const std::array<uint8_t,64>& ief,Use use) noexcept {
+    static_assert(noexcept(use(static_cast<const TglOwnedSfcCommandParameters&>(parameters))),"live command consumer ABI");
+    if(parameters.filtersInUse || !state || stateSize!=parameters.state.size()) return 5;
+    const auto previousState=parameters.state;
+    const auto previousIef=parameters.ief;
+    parameters.filtersInUse=true;
+    std::memcpy(parameters.state.data(),state,stateSize);parameters.ief=ief;
+    const int result=use(static_cast<const TglOwnedSfcCommandParameters&>(parameters));
+    parameters.state=previousState;parameters.ief=previousIef;parameters.filtersInUse=false;
+    return result;
+}
 // Compose the prepared CPU arguments with the typed native backend. Resource
 // usage registration must already be complete; shell/owners must remain live.
 // On any failure the caller must discard the partial command buffer, never

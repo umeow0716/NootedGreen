@@ -21224,8 +21224,20 @@ int main() {
                                                                                 catalogues[index]->platformPacket(child,nullptr,packet);
                                                                                 const int result=catalogues[index]->compression(child,
                                                                                     reinterpret_cast<void*>(0x4000),target.data(),packet);
-                                                                                if(!result) ++emissions;
-                                                                                return result;
+                                                                                if(result) return result;
+                                                                                auto& inputs=commandInputs[index];
+                                                                                const auto savedState=inputs.state;
+                                                                                const auto savedIef=inputs.ief;
+                                                                                const int consumed=tglWithOwnedSfcLiveCommandInputs(inputs,packet,
+                                                                                    inputs.state.size(),iefPackets[index],[&](const auto& ready) noexcept -> int {
+                                                                                        assert(std::memcmp(ready.state.data(),packet,ready.state.size())==0 && ready.ief==iefPackets[index]);
+                                                                                        assert(ready.y.coefficients==avsTables[index].packedY && ready.uv.coefficients==avsTables[index].packedUv);
+                                                                                        assert(tglWithOwnedSfcLiveCommandInputs(inputs,packet,inputs.state.size(),iefPackets[index],
+                                                                                            [](const auto&) noexcept -> int {assert(false);return 0;})==5);
+                                                                                        ++emissions;return 0;
+                                                                                    });
+                                                                                assert(inputs.state==savedState && inputs.ief==savedIef && !inputs.filtersInUse);
+                                                                                return consumed;
                                                                             });
                                                                         });
                                                                 });
