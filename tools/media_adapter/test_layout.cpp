@@ -13822,6 +13822,24 @@ int main() {
             assert(!tglReadOwnedVpNativeParticipation(selected,c,r,v,read,admit) && selected);
             std::memcpy(caller.data()+0x88,&r,8);std::memcpy(caller.data()+0x80,&zero,8);
             assert(!tglReadOwnedVpNativeParticipation(selected,c,r,v,read,admit) && selected);
+            std::memcpy(caller.data()+0x80,&v,8);
+            unsigned decisionReads=0;
+            auto liveDecision=[&](bool& value) noexcept -> bool {
+                ++decisionReads;
+                return tglReadOwnedVpNativeParticipation(value,c,r,v,read,admit);
+            };
+            S live{children,source,target,data,produce,consume};
+            admitted=false;live.bindParticipation(liveDecision);
+            assert(!decisionReads); // binding precedes native preparation
+            const uint32_t pipeOne=1,pipeZero=0;
+            admitted=true;std::memcpy(report.data()+0xa0c,&pipeOne,4);
+            assert(live.setup(source,target,data)==0 && decisionReads==1);
+            assert(live.send(data,&command)==0 && decisionReads==2);
+            assert(live.completionStatus()==0 && decisionReads==3);
+            std::memcpy(report.data()+0xa0c,&pipeZero,4);
+            assert(live.completionStatus()==5); // do not trust the earlier decision
+            admitted=false;assert(live.completionStatus()==5);
+            produced=consumed=0;
         }
         {
             S selected{children,source,target,data,produce,consume};
@@ -13848,7 +13866,8 @@ int main() {
         std::array<TglOwnedVpEntrySet,2> base{};
         decltype(base) saved{};
         assert(tglWithOwnedVpPairedPreparedEntries(p0,s0,p1,s1,base,
-            [&](void* a,const auto& ea,void* b,const auto& eb) noexcept -> int {
+            [&](void* a,const auto& ea,void* b,const auto& eb,auto& setupA,auto& setupB) noexcept -> int {
+                assert(&setupA==&s0 && &setupB==&s1);
                 saved={ea,eb};
                 assert(tglWithOwnedVpPairedPreparedEntries(p0,s0,p1,s1,base,
                     [](void*,const auto&,void*,const auto&) noexcept -> int {

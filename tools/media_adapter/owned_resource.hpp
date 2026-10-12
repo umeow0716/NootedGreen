@@ -12927,16 +12927,35 @@ template<class Produce,class Consume> struct TglOwnedVpPreparedSetupContext {
     // Explicit caller admission, not inferred from absent callbacks. Default
     // remains a complete setup/send pass; inactive objects reject both calls.
     bool participates=true;
+    void* participationContext=nullptr;
+    bool(*participationRead)(void*,bool&) noexcept=nullptr;
+    // Borrow only within the enclosing synchronous callback scope. Binding
+    // does not read a pre-preparation snapshot; native admission runs at use.
+    template<class Reader> void bindParticipation(Reader& reader) noexcept {
+        static_assert(std::is_nothrow_invocable_r_v<bool,Reader&,bool&>);
+        participationContext=&reader;
+        participationRead=[](void* context,bool& selected) noexcept -> bool {
+            return (*static_cast<Reader*>(context))(selected);
+        };
+    }
+    bool currentParticipation(bool& selected) const noexcept {
+        if(participationRead) return participationRead(participationContext,selected);
+        selected=participates;return true;
+    }
     int completionStatus() const noexcept {
         if(error) return error;
         if(busy) return 5;
-        return participates ? (setupSeen && sendSeen ? 0 : 5) :
+        bool selected=false;
+        if(!currentParticipation(selected)) return 5;
+        return selected ? (setupSeen && sendSeen ? 0 : 5) :
             (!setupSeen && !sendSeen ? 0 : 5);
     }
     bool owns(void* candidate) const noexcept {return candidate==child;}
     int setup(void* s,void* t,void* d) noexcept {
         if(error) return error;
-        if(!participates || setupSeen || busy || s!=source || t!=target || d!=data) return error=5;
+        if(setupSeen || busy || s!=source || t!=target || d!=data) return error=5;
+        bool selected=false;
+        if(!currentParticipation(selected) || !selected) return error=5;
         setupSeen=true;busy=true;
         const int result=produce();busy=false;
         if(!error) error=result;
@@ -12944,7 +12963,9 @@ template<class Produce,class Consume> struct TglOwnedVpPreparedSetupContext {
     }
     int send(void* d,void* command) noexcept {
         if(error) return error;
-        if(!participates || !setupSeen || sendSeen || busy || d!=data || !command) return error=5;
+        if(!setupSeen || sendSeen || busy || d!=data || !command) return error=5;
+        bool selected=false;
+        if(!currentParticipation(selected) || !selected) return error=5;
         sendSeen=true;busy=true;
         const int result=consume(d,command);busy=false;
         if(!error) error=result;
@@ -13008,8 +13029,15 @@ int tglWithOwnedVpPairedPreparedEntries(Producer& firstProducer,Setup& firstSetu
         !tglBindOwnedVpProducerEntries<ProducerResolve>(second,entries[1]) ||
         !tglBindOwnedVpSetupSendEntries<SetupResolve>(first,entries[0]) ||
         !tglBindOwnedVpSetupSendEntries<SetupResolve>(second,entries[1])) return 5;
-    static_assert(noexcept(use(first,entries[0],second,entries[1])),"paired prepared consumer ABI");
-    const int result=use(first,entries[0],second,entries[1]);
+    const int result=[&]() noexcept -> int {
+        if constexpr(std::is_nothrow_invocable_r_v<int,Use,void*,TglOwnedVpEntrySet&,
+            void*,TglOwnedVpEntrySet&,Setup&,OtherSetup&>)
+            return use(first,entries[0],second,entries[1],firstSetup,secondSetup);
+        else {
+            static_assert(noexcept(use(first,entries[0],second,entries[1])),"paired prepared consumer ABI");
+            return use(first,entries[0],second,entries[1]);
+        }
+    }();
     if(result) return result;
     if(firstProducer.error) return firstProducer.error;
     if(secondProducer.error) return secondProducer.error;
