@@ -20674,6 +20674,28 @@ int main() {
                                     })==0);
                             }
                             assert(modeObjects[0] && modeObjects[1] && modeObjects[0]!=modeObjects[1]);
+                            assert(frame.backing().withVpResources(0,[&](auto&,auto& first,auto&) noexcept {
+                                return frame.backing().withVpResources(1,[&](auto&,auto& second,auto&) noexcept {
+                                    std::array<TglOwnedVpEntrySet,2> baseEntries{};
+                                    for(int expected:{0,-31}) {
+                                        const int status=tglWithOwnedVpPairedModeAssembly(first,second,
+                                            {0x1000,0x1000},{0x2000,0x2000},{0x3000,0x3000},modeRead,baseEntries,
+                                            [&](void* a,const auto& ae,void* b,const auto& be) noexcept -> int {
+                                                assert(a==modeObjects[0] && b==modeObjects[1]);
+                                                ae.sampleMode(a,reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x2000));
+                                                be.sampleMode(b,reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x2000));
+                                                be.formatMode(b,reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x3000));
+                                                ae.formatMode(a,reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x3000));
+                                                return expected;
+                                            });
+                                        assert(status==expected);
+                                    }
+                                    assert(tglWithOwnedVpPairedModeAssembly(first,first,
+                                        {0x1000,0x1000},{0x2000,0x2000},{0x3000,0x3000},modeRead,baseEntries,
+                                        [](void*,const auto&,void*,const auto&) noexcept -> int {assert(false);return 0;})==5);
+                                    return 0;
+                                });
+                            })==0);
                             TglOwnedVpFlatDispatchTable persistentTable0,persistentTable1;
                             assert(persistentTable0.build(testVpPresenceEntries(),[](uintptr_t,size_t) noexcept {return true;}));
                             assert(persistentTable1.build(testVpPresenceEntries(),[](uintptr_t,size_t) noexcept {return true;}));

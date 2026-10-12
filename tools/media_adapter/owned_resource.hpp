@@ -9687,6 +9687,28 @@ int tglWithOwnedVpModeAssembly(TglOwnedVpSfcCallerStorage& storage,
     const int result=use(child,entries);
     return result ? result : context.status();
 }
+// Both backing/graph leases remain caller-owned. These are typed mode
+// subsets, not complete private tables or authority to invoke the renderer.
+template<class Read,class Use>
+int tglWithOwnedVpPairedModeAssembly(TglOwnedVpSfcCallerStorage& first,
+    TglOwnedVpSfcCallerStorage& second,const std::array<uintptr_t,2>& sources,
+    const std::array<uintptr_t,2>& targets,const std::array<uintptr_t,2>& settings,
+    Read& read,const std::array<TglOwnedVpEntrySet,2>& base,Use use) noexcept {
+    if(&first==&second) return 5;
+    using Context=TglOwnedVpModeContext<Read>;
+    using Resolve=TglOwnedVpSfcResolve<Context>;
+    Context firstContext(first,sources[0],targets[0],settings[0],read);
+    Context secondContext(second,sources[1],targets[1],settings[1],read);
+    void* firstObject=first.bytes.data();void* secondObject=second.bytes.data();
+    typename TglOwnedVpSfcScopedContext<Context>::Pair scope(firstObject,firstContext,secondObject,secondContext);
+    if(!scope.bound()) return 5;
+    auto entries=base;
+    if(!tglBindOwnedVpModeEntries<Resolve>(firstObject,entries[0]) ||
+       !tglBindOwnedVpModeEntries<Resolve>(secondObject,entries[1])) return 5;
+    static_assert(noexcept(use(firstObject,entries[0],secondObject,entries[1])),"paired VP mode consumer ABI");
+    const int result=use(firstObject,entries[0],secondObject,entries[1]);
+    return result ? result : (firstContext.status()?firstContext.status():secondContext.status());
+}
 template<class Resolve> struct TglOwnedVpLifetimeCallbacks;
 template<class Resolve>
 bool tglBindOwnedVpLifetimeEntries(void* child,TglOwnedVpEntrySet& target) noexcept {
