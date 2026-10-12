@@ -119,10 +119,11 @@ inline bool tglPrepareOwnedVpExtentAdmission(const TglOwnedVpExtentAdmission& in
 template<class Context,class Domain> class TglOwnedScopedContext {
     struct Binding {void* child=nullptr;Context* context=nullptr;};
     inline static thread_local Binding current_{};
+    inline static thread_local Binding paired_{};
     bool bound_=false;
 public:
     TglOwnedScopedContext(void* child,Context& context) noexcept {
-        if(child && !current_.child && !current_.context) {
+        if(child && !current_.child && !current_.context && !paired_.child && !paired_.context) {
             current_={child,&context};bound_=true;
         }
     }
@@ -130,8 +131,25 @@ public:
     TglOwnedScopedContext(const TglOwnedScopedContext&)=delete;
     TglOwnedScopedContext& operator=(const TglOwnedScopedContext&)=delete;
     bool bound() const noexcept {return bound_;}
+    // Explicit fixed pair only. Ordinary single scopes remain non-nestable;
+    // both contexts and object leases must outlive this synchronous scope.
+    class Pair {
+        bool bound_=false;
+    public:
+        Pair(void* first,Context& firstContext,void* second,Context& secondContext) noexcept {
+            if(!first || !second || first==second || &firstContext==&secondContext ||
+                current_.child || current_.context || paired_.child || paired_.context) return;
+            current_={first,&firstContext};paired_={second,&secondContext};bound_=true;
+        }
+        ~Pair() noexcept {if(bound_) {paired_={};current_={};}}
+        Pair(const Pair&)=delete;
+        Pair& operator=(const Pair&)=delete;
+        bool bound() const noexcept {return bound_;}
+    };
     static Context* get(void* child) noexcept {
-        return child && child==current_.child ? current_.context : nullptr;
+        if(!child) return nullptr;
+        return child==current_.child ? current_.context :
+            child==paired_.child ? paired_.context : nullptr;
     }
 };
 struct TglOwnedVpSfcContextDomain {};

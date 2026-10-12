@@ -13690,6 +13690,32 @@ static void testRetainedVeboxFrames() {
 
 int main() {
     {
+        struct Context {unsigned value;};struct Domain {};
+        using Scope=TglOwnedScopedContext<Context,Domain>;
+        Context first{1},second{2};unsigned a=0,b=0,c=0;
+        assert(!Scope::get(&a) && !Scope::get(nullptr));
+        {
+            Scope::Pair pair(&a,first,&b,second);assert(pair.bound());
+            assert(Scope::get(&a)==&first && Scope::get(&b)==&second && !Scope::get(&c));
+            Scope single(&c,first);assert(!single.bound());
+            Scope::Pair nested(&b,second,&c,first);assert(!nested.bound());
+            assert(Scope::get(&a)->value==1 && Scope::get(&b)->value==2);
+        }
+        assert(!Scope::get(&a) && !Scope::get(&b));
+        {
+            Scope single(&a,first);assert(single.bound());
+            Scope::Pair pair(&b,second,&c,first);assert(!pair.bound());
+            assert(Scope::get(&a)==&first && !Scope::get(&b));
+        }
+        {
+            Scope::Pair sameObject(&a,first,&a,second);assert(!sameObject.bound());
+            Scope::Pair sameContext(&a,first,&b,first);assert(!sameContext.bound());
+            Scope::Pair missing(nullptr,first,&b,second);assert(!missing.bound());
+            assert(!Scope::get(&a) && !Scope::get(&b));
+        }
+        Scope recovered(&a,first);assert(recovered.bound());
+    }
+    {
         int parent0=0,parent1=0,vp0=0,vp1=0,foreign=0;
         const std::array<void*,2> parents{&parent0,&parent1},vps{&vp0,&vp1};
         bool allow=true,reenter=false;unsigned admissions=0;
