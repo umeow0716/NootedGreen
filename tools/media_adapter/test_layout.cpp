@@ -23271,8 +23271,10 @@ int main() {
                                 bool matrix(uintptr_t,uint32_t,uint32_t,float*) const noexcept {assert(false);return false;}
                             };
                             auto useCreatorFrame=[&](auto& owner,void* child,void* vp,auto& graph,auto&,
-                                auto& sourceOwner,auto& targetOwner,auto&,auto& live,auto& csc) noexcept {
+                                auto& sourceOwner,auto& targetOwner,auto&,auto& live,auto& csc,auto& admitDndi) noexcept {
                                 ++creatorFrameUses;
+                                static_assert(std::is_same_v<std::decay_t<decltype(admitDndi)>,TglNativeDndiStackAdmission>);
+                                assert(!admitDndi(0,0x30,0,0x24));
                                 // This service fixture supplies no CSC anchors: the real
                                 // producer must reject before calling any native entry.
                                 TglCscCoefficients coefficients{};
@@ -23350,7 +23352,8 @@ int main() {
                             const auto qualifiedCscFrame=frame.withNativeOwnedVpCreatorLivePacketFrame(0,roles,0,0,
                                 executionLease,frontendCreatorView,0x3300,qualifiedCreatorRead,qualifyMhw,executableMhw,
                                 capturePacket,false,creatorFrameRead,rejectPacket,rejectPacket,
-                                [&](auto& owner,void* child,void*,auto&,auto&,auto&,auto&,auto&,auto&,auto& csc) noexcept {
+                                [&](auto& owner,void* child,void*,auto&,auto&,auto&,auto&,auto&,auto&,auto& csc,auto& admitDndi) noexcept {
+                                    assert(!admitDndi(0,0x30,0,0x24));
                                     std::array<uint8_t,0x3c> saved{};
                                     std::memcpy(saved.data(),static_cast<uint8_t*>(child)+0xa0,saved.size());
                                     std::array<uint8_t,0x90> savedSearch{};

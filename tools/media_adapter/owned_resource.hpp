@@ -16157,9 +16157,9 @@ bool tglAdmitDndiStackPackets(uintptr_t top,size_t stackSize,uintptr_t luma,size
     };
     return writable(luma,ln) && writable(chroma,cn);
 }
-#if defined(__APPLE__)
 struct TglNativeDndiStackAdmission {
     bool operator()(uintptr_t luma,size_t ln,uintptr_t chroma,size_t cn) const noexcept {
+#if defined(__APPLE__)
         const auto thread=pthread_self();
         const uintptr_t top=reinterpret_cast<uintptr_t>(pthread_get_stackaddr_np(thread));
         const size_t size=pthread_get_stacksize_np(thread);
@@ -16179,9 +16179,13 @@ struct TglNativeDndiStackAdmission {
             return false;
         };
         return tglAdmitDndiStackPackets(top,size,luma,ln,chroma,cn,region);
+#else
+        // Offline builds cannot establish a Darwin current-thread stack lease.
+        (void)luma;(void)ln;(void)chroma;(void)cn;
+        return false;
+#endif
     }
 };
-#endif
 
 // Wrap the real packet context without copying its pass or resource leases.
 // CSC accepts only this frame's owned surfaces and retained execution. Produce
@@ -22408,6 +22412,7 @@ public:
                 // unqualified external CSC callback or copied image lifetime.
                 TglOwnedCscProducer<NativeRead,Qualify,Executable,CscInvoke> csc{
                     view.renderer.image,nativeRead,qualify,executable,cscInvoke};
+                TglNativeDndiStackAdmission admitDndi;
                 result=withNativeOwnedVpCommandFrame(childIndex,roles,sourceIndex,targetIndex,
                     executionOwner,view.renderHal,sku,nativeRead,
                     [&](auto& owner,void* child,void* vp,auto& graph,auto& lines,
@@ -22419,7 +22424,7 @@ public:
                         TglOwnedVeboxLivePacketContext<decltype(capture),Read,SurfaceAdmit,DiAdmit,
                             decltype(registration),decltype(control)> live{
                             {},packets,disableTemporalDenoise,capture,read,admitSurface,admitDi,registration,control};
-                        return consume(owner,child,vp,graph,lines,source,target,dn,live,csc);
+                        return consume(owner,child,vp,graph,lines,source,target,dn,live,csc,admitDndi);
                     });
                 return result.status;
             });
