@@ -348,6 +348,42 @@ static void testTrackedCpuOwner() {
             bool hasSurfaceLease(const TglOwnedSurfaceStorage& s) noexcept {return allow && leased==&s;}
         };
         TglOwnedSurfaceStorage source{},target{},foreign{};
+        {
+            Owner owner{&source};std::array<uint8_t,0x70> metadata{};
+            const uintptr_t address=reinterpret_cast<uintptr_t>(metadata.data());
+            std::memcpy(source.prefix.data()+0xa8,&address,8);
+            bool readable=true,expire=false;unsigned reads=0;
+            auto read=[&](uintptr_t at,void* out,size_t size) noexcept {
+                ++reads;
+                if(!readable || at<address || at-address>metadata.size() ||
+                    size>metadata.size()-(at-address)) return false;
+                std::memcpy(out,metadata.data()+at-address,size);
+                if(expire) owner.allow=false;
+                return true;
+            };
+            for(uint32_t mode : {0u,1u,2u}) {
+                const uintptr_t nested=0x123400;
+                std::memcpy(metadata.data()+0x64,&mode,4);
+                std::memcpy(metadata.data()+0x68,&nested,8);
+                Presence result=Presence::Unknown;
+                assert(tglReadLeasedConversion3dLutPresence(owner,source,address,read,result));
+                assert(result==(mode==2?Presence::Present:Presence::Absent));
+            }
+            const uint32_t cube=2;const uintptr_t zero=0;
+            std::memcpy(metadata.data()+0x64,&cube,4);std::memcpy(metadata.data()+0x68,&zero,8);
+            Presence result=Presence::Unknown;
+            assert(!tglReadLeasedConversion3dLutPresence(owner,source,address,read,result) && result==Presence::Unknown);
+            const unsigned before=reads;
+            assert(!tglReadLeasedConversion3dLutPresence(owner,source,address+8,read,result) && reads==before);
+            const uint32_t invalid=3;std::memcpy(metadata.data()+0x64,&invalid,4);
+            assert(!tglReadLeasedConversion3dLutPresence(owner,source,address,read,result) && result==Presence::Unknown);
+            const uint32_t disabled=0;std::memcpy(metadata.data()+0x64,&disabled,4);
+            readable=false;
+            assert(!tglReadLeasedConversion3dLutPresence(owner,source,address,read,result) && result==Presence::Unknown);
+            readable=true;expire=true;
+            assert(!tglReadLeasedConversion3dLutPresence(owner,source,address,read,result) && result==Presence::Unknown);
+            std::memcpy(source.prefix.data()+0xa8,&zero,8);
+        }
         for(uint32_t format : {0x19u,0x52u,0x53u})
         for(bool lut : {false,true}) for(bool sourceHdr : {false,true}) for(bool targetHdr : {false,true}) {
             TglVeboxPipeAcquisition frame;

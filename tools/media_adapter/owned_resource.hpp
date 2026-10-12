@@ -6662,6 +6662,30 @@ static_assert(sizeof(TglOwnedSurfaceStorage) == 0x2a8);
 // request producer must supply these records under the same frame leases;
 // constructing a record alone does not authenticate native request contents.
 enum class TglOwnedFeaturePresence : uint8_t { Unknown, Absent, Present };
+// Conversion lane ONLY: 2343d0 control10 uploads N^3 entries to an N by N^2
+// surface and sets context204=2; control08 builds the distinct 32x8 table
+// with mode1. 237730 publishes the effective mode at sourceA8+64 (or zero
+// for its non-conversion branch). Request flags alone cannot prove absence:
+// configuration mode persists when neither control bit is supplied.
+// Caller pins the ORIGINAL metadata allocation through Read; matching a raw
+// pointer does not adopt it or retain the nested GPU surface. HDR is untouched.
+template<class SourceOwner,class Read>
+bool tglReadLeasedConversion3dLutPresence(SourceOwner& owner,
+    const TglOwnedSurfaceStorage& source,uintptr_t expectedMetadata,
+    Read read,TglOwnedFeaturePresence& output) noexcept {
+    static_assert(noexcept(read(uintptr_t{},nullptr,size_t{})) &&
+        std::is_same_v<decltype(read(uintptr_t{},nullptr,size_t{})),bool>);
+    if(!owner.hasSurfaceLease(source) || !expectedMetadata || expectedMetadata>UINTPTR_MAX-0x70) return false;
+    uintptr_t linked=0;std::memcpy(&linked,source.prefix.data()+0xa8,8);
+    if(linked!=expectedMetadata) return false;
+    uint32_t mode=UINT32_MAX;uintptr_t nested=0;
+    if(!read(linked+0x64,&mode,4) || mode>2 ||
+       (mode && (!read(linked+0x68,&nested,8) || !nested))) return false;
+    uintptr_t after=0;std::memcpy(&after,source.prefix.data()+0xa8,8);
+    if(after!=linked || !owner.hasSurfaceLease(source)) return false;
+    output=mode==2?TglOwnedFeaturePresence::Present:TglOwnedFeaturePresence::Absent;
+    return true;
+}
 struct TglOwnedGen12SurfaceFeatures {
     const TglOwnedSurfaceStorage* surface=nullptr;
     const TglVeboxPipeAcquisition* frame=nullptr;
