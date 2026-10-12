@@ -5686,6 +5686,16 @@ public:
         if(!gate_(parameters_+0xe0,&actualFill,8)) return false;
         if(actualFill!=colorFill_) {frame_.fail();return false;}
         if(!actualFill) return false;
+        // Same native fields consumed by tglSurfaceControlParams/52bf0.
+        // Sidecar state is not authority to contradict the leased surface.
+        uint8_t nativeCompressed=0;uint32_t nativeMode=0;
+        if(!gate_(reinterpret_cast<uintptr_t>(&target_)+0x29a,&nativeCompressed,1) ||
+           !gate_(reinterpret_cast<uintptr_t>(&target_)+0x29c,&nativeMode,4)) return false;
+        if((mode!=TglOwnedSfcCompressionMode::Disabled && mode!=TglOwnedSfcCompressionMode::Media &&
+            mode!=TglOwnedSfcCompressionMode::Render) ||
+           bool(nativeCompressed&1)!=compressed || nativeMode!=static_cast<uint32_t>(mode)) {
+            frame_.fail();return false;
+        }
         TglSurfaceRect sourceRect{},targetRect{};
         if(!gate_(reinterpret_cast<uintptr_t>(&source_)+0x40,&sourceRect,sizeof(sourceRect)) ||
            !gate_(reinterpret_cast<uintptr_t>(&target_)+0x40,&targetRect,sizeof(targetRect))) return false;
@@ -5702,6 +5712,15 @@ public:
                 std::memcpy(writableTarget.prefix.data()+0x4c,&targetRect.bottom,4);
                 return direct();
             },[&]() noexcept {return decompress();},[&]() noexcept {return healthy();});
+        // Successful decompression is irreversible even if another lease was
+        // lost during the call. Preserve that fact in the actual target while
+        // its own lease remains valid; never publish a pipe on frame failure.
+        if((nativeCompressed&1) && !compressed && mode==TglOwnedSfcCompressionMode::Disabled) {
+            if(!targetOwner_.hasSurfaceLease(target_)) {frame_.fail();return false;}
+            writableTarget.tail[0xa]&=uint8_t{0xfe};
+            const uint32_t disabled=0;
+            std::memcpy(writableTarget.tail.data()+0xc,&disabled,4);
+        }
         if(!success || !healthy()) return false;
         // Native donor1fb140 writes target85 only after successful recheck.
         writableTarget.prefix[0x85]=1;return selected;

@@ -3078,7 +3078,7 @@ static void testLeasedGen12PlatformPolicy() {
     struct SfcFixture {
         static int extent(void* vp,void*,void*,void*) noexcept {++*static_cast<unsigned*>(vp);return 1;}
     };
-    for(unsigned scenario=0;scenario<20;++scenario) {
+    for(unsigned scenario=0;scenario<23;++scenario) {
         TglOwnedSurfaceStorage source{},target{};
         std::array<uint8_t,0x1bc0> child{};
         std::array<uint8_t,0x139> parameters{};
@@ -3131,7 +3131,13 @@ static void testLeasedGen12PlatformPolicy() {
         auto fill=[&](auto& active) noexcept {
             ++fills;bool compressed=scenario==17 || scenario==18;
             auto mode=compressed?TglOwnedSfcCompressionMode::Media:TglOwnedSfcCompressionMode::Disabled;
+            if(scenario==22) mode=static_cast<TglOwnedSfcCompressionMode>(99);
             uint32_t compressionFormat=compressed?7:0;int status=-1;unsigned decompressions=0;
+            target.tail[0xa]=compressed?0xc1:0xc0;
+            const uint32_t nativeMode=static_cast<uint32_t>(mode);
+            std::memcpy(target.tail.data()+0xc,&nativeMode,4);
+            if(scenario==20) target.tail[0xa]|=1;
+            if(scenario==21) {const uint32_t wrongMode=3;std::memcpy(target.tail.data()+0xc,&wrongMode,4);}
             auto decompress=[&]() noexcept {
                 ++decompressions;
                 if(scenario==18) sourceOwner.allow=false;
@@ -3142,6 +3148,10 @@ static void testLeasedGen12PlatformPolicy() {
             assert(decompressions==(scenario==17 || scenario==18?1u:0u));
             if(scenario==17) assert(result && status==31 && compressed && compressionFormat==7);
             if(scenario==18) assert(!result && status==0 && !compressed && compressionFormat==0);
+            uint32_t afterMode=0;std::memcpy(&afterMode,target.tail.data()+0xc,4);
+            if(scenario==17) assert(target.tail[0xa]==0xc1 && afterMode==3);
+            if(scenario==18) assert(target.tail[0xa]==0xc0 && afterMode==0);
+            if(scenario>=20) assert(!result && status==-1);
             return result;
         };
         uint8_t comp=0xa4;uint32_t output=0xdeadbeef;
