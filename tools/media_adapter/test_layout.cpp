@@ -20630,6 +20630,24 @@ int main() {
                                         assert(false);return 0;
                                     })==5);
                             }
+                            auto modeRead=[](uintptr_t address,void* out,size_t size) noexcept {
+                                if(!((size==4 && (address==0x1000 || address==0x2000 || address==0x1130)) ||
+                                     (size==2 && address==0x3012))) return false;
+                                std::memset(out,0,size);return true;
+                            };
+                            std::array<void*,2> modeObjects{};
+                            for(size_t index=0;index<2;++index) {
+                                assert(frame.backing().withVpModeAssemblyView(index,false,modeRead,modeRetire,
+                                    0x1000,0x2000,0x3000,[&](void* vp,const TglOwnedVpEntrySet& entries) noexcept -> int {
+                                        modeObjects[index]=vp;
+                                        assert(entries.sampleMode && entries.formatMode && entries.allocate &&
+                                            !entries.hasAllEntries());
+                                        entries.sampleMode(vp,reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x2000));
+                                        entries.formatMode(vp,reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x3000));
+                                        return 0;
+                                    })==0);
+                            }
+                            assert(modeObjects[0] && modeObjects[1] && modeObjects[0]!=modeObjects[1]);
                             TglOwnedVpFlatDispatchTable persistentTable0,persistentTable1;
                             assert(persistentTable0.build(testVpPresenceEntries(),[](uintptr_t,size_t) noexcept {return true;}));
                             assert(persistentTable1.build(testVpPresenceEntries(),[](uintptr_t,size_t) noexcept {return true;}));
