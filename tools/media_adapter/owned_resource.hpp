@@ -17669,7 +17669,7 @@ template<class Owner,size_t Capacity=16> class TglOwnedContextOwnerRegistry {
     static_assert(Capacity>0 && Capacity<=128,"owned context work budget");
     static_assert(std::is_nothrow_destructible_v<Owner>);
     struct Entry {uintptr_t image=0,physical=0,context=0;uint64_t generation=0;
-        Owner* owner=nullptr;bool quarantined=false;};
+        Owner* owner=nullptr;bool quarantined=false,dependencyReleaseFailed=false;};
     std::array<Entry,Capacity> entries_{};
     std::array<std::atomic<size_t>,Capacity> contextPins_{};
     std::atomic_flag gate_=ATOMIC_FLAG_INIT;
@@ -17777,8 +17777,15 @@ public:
     // ONLY called by successful-native-removal reconciliation, after all native
     // deleting destructors return and with no retained frames. No native object
     // is read here. Validate the ENTIRE snapshot before releasing any owner.
-    template<size_t N> int reconcileSuccessfulRemoval(uintptr_t image,uintptr_t physical,
-        uint64_t generation,const TglNativeRemovedContextBatch<N>& batch) noexcept {
+    // Release retained dependencies AFTER native context removal, BEFORE owner
+    // deletion. A failing release retains/quarantines the entire batch, including
+    // already-released owners; release must be idempotent for an explicit retry.
+    // Successful native removal alone is NOT GPU completion: release must apply
+    // the concrete owner's separate fence/error-retirement authority.
+    template<size_t N,class Release> int reconcileSuccessfulRemoval(uintptr_t image,uintptr_t physical,
+        uint64_t generation,const TglNativeRemovedContextBatch<N>& batch,Release release) noexcept {
+        static_assert(noexcept(release(std::declval<Owner&>())) &&
+            std::is_same_v<decltype(release(std::declval<Owner&>())),int>);
         if(!image || !physical || !generation || !batch.valid || batch.count>N ||
             gate_.test_and_set(std::memory_order_acquire)) return 5;
         Unlock unlock{gate_};std::array<Entry*,N> selected{};
@@ -17791,9 +17798,28 @@ public:
             if(contextPins_[size_t(selected[i]-entries_.data())].load(std::memory_order_acquire)) return 5;
         }
         for(uint32_t i=0;i<batch.count;++i) {
+            const int status=release(*selected[i]->owner);
+            if(status) {
+                for(uint32_t j=0;j<batch.count;++j) {
+                    selected[j]->quarantined=true;selected[j]->dependencyReleaseFailed=true;
+                }
+                return status;
+            }
+        }
+        for(uint32_t i=0;i<batch.count;++i) {
             auto* owner=selected[i]->owner;*selected[i]={};delete owner;
         }
         return 0;
+    }
+    // Owners with destructor-complete CPU dependencies need no explicit release.
+    // Native MHW owners must use the overload above, never this convenience path.
+    template<size_t N> int reconcileSuccessfulRemoval(uintptr_t image,uintptr_t physical,
+        uint64_t generation,const TglNativeRemovedContextBatch<N>& batch) noexcept {
+        return reconcileSuccessfulRemoval(image,physical,generation,batch,
+            [&](Owner& owner) noexcept -> int {
+                for(const auto& e:entries_) if(e.owner==&owner && e.dependencyReleaseFailed) return 5;
+                return 0;
+            });
     }
 };
 // Context lease encloses the actual retained frame and its surface leases.

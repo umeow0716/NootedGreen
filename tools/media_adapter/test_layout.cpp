@@ -12299,7 +12299,22 @@ static void testRetainedVeboxFrames() {
         // Explicit CPU fixture authority: native removal already succeeded.
         removed.contexts={0x4000,0x5000};
         assert(owners.reconcileSuccessfulRemoval(0x1000,0x2000,8,removed)==5 && deaths==1);
-        assert(owners.reconcileSuccessfulRemoval(0x1000,0x2000,7,removed)==0 && deaths==3);
+        unsigned dependencyReleases=0;bool releaseFailure=true;
+        auto releaseDependencies=[&](ContextOwner& owner) noexcept -> int {
+            ++dependencyReleases;assert(deaths==1);
+            assert(&owner==first || &owner==second);
+            // Reentrant reconciliation cannot delete the currently releasing owner.
+            assert(owners.reconcileSuccessfulRemoval(0x1000,0x2000,7,removed)==5);
+            return &owner==second && releaseFailure?31:0;
+        };
+        assert(owners.reconcileSuccessfulRemoval(0x1000,0x2000,8,removed,releaseDependencies)==5 && !dependencyReleases);
+        assert(owners.reconcileSuccessfulRemoval(0x1000,0x2000,7,removed,releaseDependencies)==31 &&
+            dependencyReleases==2 && deaths==1);
+        assert(!owners.pin(0x1000,0x2000,7,0x4000).get());
+        assert(owners.reconcileSuccessfulRemoval(0x1000,0x2000,7,removed)==5 && deaths==1);
+        releaseFailure=false;
+        assert(owners.reconcileSuccessfulRemoval(0x1000,0x2000,7,removed,releaseDependencies)==0 &&
+            dependencyReleases==4 && deaths==3);
         assert(owners.reconcileSuccessfulRemoval(0x1000,0x2000,7,removed)==5 && deaths==3);
     }
     {
