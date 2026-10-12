@@ -9033,26 +9033,29 @@ static void testNativeResourceBoundary() {
                                                 unsigned finalUses=0,unwinds=0;
                                                 const auto result=[&]() noexcept -> TglOwnedVeboxCommandTransactionResult {
                                                     if(commandStatus==-89) {
-                                                        auto prepare=[&](void* active) noexcept -> int {
-                                                            assert(active==actualChild);
-                                                            return tglRunNativeVeboxAllocationFrame(nativeFrame,linkedInput,
-                                                                static_cast<decltype(&linkedInput)>(nullptr),
-                                                                static_cast<decltype(&linkedInput)>(nullptr),&previous,
-                                                                childOwner,reportOwner,active,report,current,read,
-                                                                noSfc,noSfc,noParameter,[](uint32_t) noexcept {return true;},
-                                                                deniedStage,false,false,
-                                                                [](uintptr_t address,uint32_t bytes) noexcept {return address==0x4000 && bytes>0;},
-                                                                [&](auto&&...) noexcept -> int {++finalUses;return 0;},
-                                                                [&](void*,uintptr_t,const auto&) noexcept {++unwinds;});
-                                                        };
-                                                        using Prepare=TglOwnedVeboxAllocationContext<
+                                                        auto supports=[](uint32_t) noexcept {return true;};
+                                                        auto writable=[](uintptr_t address,uint32_t bytes) noexcept {return address==0x4000 && bytes>0;};
+                                                        auto unwind=[&](void*,uintptr_t,const auto&) noexcept {++unwinds;};
+                                                        using Planner=TglOwnedVeboxAllocationFramePlanner<FrameStmmApi,
+                                                            std::decay_t<decltype(linkedInput)>,std::decay_t<decltype(childOwner)>,
+                                                            std::decay_t<decltype(reportOwner)>,decltype(read),decltype(noSfc),
+                                                            decltype(noSfc),decltype(noParameter),decltype(supports),
+                                                            decltype(deniedStage),decltype(writable),decltype(unwind)>;
+                                                        Planner prepare{nativeFrame,linkedInput,nullptr,nullptr,&previous,
+                                                            childOwner,reportOwner,actualChild,report,current,read,
+                                                            noSfc,noSfc,noParameter,supports,deniedStage,false,false,writable,unwind};
+                                                        assert(prepare(nullptr)==5 && !nativeFixture.allocations);
+                                                        using Prepare=TglOwnedVeboxRenderAllocationContext<
                                                             std::decay_t<decltype(childOwner)>,decltype(prepare)>;
-                                                        Prepare context(childOwner,prepare,actualChild);
+                                                        TglOwnedVeboxFrameRetention prepareRetention;
+                                                        Prepare context(childOwner,prepare,actualChild,{},
+                                                            {prepareRetention,nativeFrame.auxiliary().retention()});
                                                         using Scope=TglOwnedVeboxScopedContext<Prepare>;
                                                         Scope scope(actualChild,context);assert(scope.bound());
                                                         const auto hooks=tglBindOwnedVeboxAllocationHook<Scope>(std::array<uintptr_t,20>{});
                                                         const int status=reinterpret_cast<int(*)(void*)>(hooks[3])(actualChild);
                                                         assert(status==0 && !nativeFrame.auxiliary().retention()());
+                                                        ++finalUses; // successful allocation receipt, not command acquisition
                                                         assert(nativeFrame.withPreparedSelection(linkedInput,current,
                                                             [](size_t count,auto,bool,bool) noexcept -> int {assert(count==2);return 0;})==0);
                                                         return {status,status,false,false}; // allocation only; no submission

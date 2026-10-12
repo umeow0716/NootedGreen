@@ -19281,6 +19281,43 @@ int tglRunNativeVeboxAllocationFrame(TglNativeVeboxSurfaceFrameStorage<Api>& sto
         supports,rectangle,stmm,statistics,unwind);
 }
 
+// Native +58 allocation-only plan. Its type is available before installing the
+// private vtable; all referenced owners must remain alive and already leased
+// when invoked. Returning0 publishes prepared storage, NOT command acquisition.
+// Later +118/+148 producers reborrow that SAME storage and selection.
+template<class Api,class Owner,class ChildOwner,class ExecutionOwner,class Read,
+    class SfcFormat,class SfcColor,class ParameterKind,class Supports,
+    class Rectangle,class Writable,class Unwind>
+struct TglOwnedVeboxAllocationFramePlanner {
+    TglNativeVeboxSurfaceFrameStorage<Api>& storage;
+    Owner& input;
+    Owner* target;
+    Owner* secondary;
+    Owner* previous;
+    ChildOwner& childOwner;
+    ExecutionOwner& executionOwner;
+    void* child;
+    uintptr_t execution;
+    const TglOwnedSurfaceStorage& source;
+    Read read;
+    SfcFormat sfcFormat;
+    SfcColor sfcColor;
+    ParameterKind parameterKind;
+    Supports supports;
+    Rectangle rectangle;
+    bool reinitializeStmm;
+    bool alignDi64;
+    Writable writable;
+    Unwind unwind;
+    int operator()(void* actual) noexcept {
+        if(!actual || actual!=child) return 5;
+        return tglRunNativeVeboxAllocationFrame(storage,input,target,secondary,previous,
+            childOwner,executionOwner,actual,execution,source,read,sfcFormat,sfcColor,
+            parameterKind,supports,rectangle,reinitializeStmm,alignDi64,writable,
+            [](auto&&...) noexcept -> int {return 0;},unwind);
+    }
+};
+
 // Bind command inputs to the already-held frame views. No new owner/handle is
 // created here; native registration and command emission remain downstream.
 // Call only from the scoped statistics-shell consumer: these borrowed groups
