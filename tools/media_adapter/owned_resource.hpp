@@ -3165,6 +3165,30 @@ struct TglVeboxHardwareBinding {
         if(result) return result; // ff290 performs its own failure unwind
         return resolve(mhw,expectedOs,image,read,qualify)?0:5;
     }
+    // Retirement authority belongs to the enclosing generation/context owner.
+    // It must certify this exact interface/OS/heap under the same serialization;
+    // this method neither waits nor manufactures that certificate. No destructor
+    // auto-cleanup: unproven in-flight heaps must remain owned/quarantined.
+    template<class Read,class Qualify,class Executable,class Retired,class Invoke>
+    uint32_t releaseRetiredHeap(uintptr_t image,Read read,Qualify qualify,
+                                Executable executable,Retired retired,Invoke invoke) {
+        TglVeboxHardwareBinding fresh;
+        if(!fresh.resolve(interface,os,image,read,qualify) || fresh.heap!=heap) return 5;
+        constexpr std::array<uint8_t,16> anchor{
+            0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x20,
+            0x48,0x89,0x7d,0xf8,0x48,0x8b,0x45,0xf8};
+        auto bytes=anchor;
+        if(!executable(image+0xff550,bytes.size()) ||
+           !read(image+0xff550,bytes.data(),bytes.size()) || bytes!=anchor ||
+           !retired(interface,os,heap) ||
+           !fresh.resolve(interface,os,image,read,qualify) || fresh.heap!=heap) return 5;
+        const uint32_t result=invoke(image+0xff550,interface);
+        if(result) return result;
+        uintptr_t remaining=0;
+        if(!read(interface+0x20,&remaining,8) || remaining) return 5;
+        *this={};
+        return 0;
+    }
     // Native129ca0 passes argument6 to MHW+18 (171240), with ECX=0.
     // Caller must have completed state/resource validation and heap assignment,
     // and owns command capacity/discard on failure. No implicit submit/retry.

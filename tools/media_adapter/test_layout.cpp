@@ -3472,6 +3472,30 @@ static void testVeboxHardwareBinding() {
         anchor[0]=0;assert(init()==5 && initialized==0);anchor[0]=0x55;
         result=31;assert(init()==31 && initialized==1 && !heap && !b.interface);
         result=0;assert(init()==0 && initialized==2 && b.heap==heap);
+        std::array<uint8_t,16> cleanupAnchor{0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x20,
+            0x48,0x89,0x7d,0xf8,0x48,0x8b,0x45,0xf8};
+        unsigned releases=0;bool retired=false,mutate=false;
+        auto cleanupRead=[&](uintptr_t p,void* out,size_t n) {
+            if(p==image+0xff550 && n==cleanupAnchor.size()) {
+                std::memcpy(out,cleanupAnchor.data(),n);return true;}
+            return read(p,out,n);
+        };
+        auto release=[&] {return b.releaseRetiredHeap(image,cleanupRead,qualify,
+            [&](uintptr_t,size_t){return executable;},
+            [&](uintptr_t object,uintptr_t ownerOs,uintptr_t ownerHeap) {
+                assert(object==mhw && ownerOs==os && ownerHeap==0x4000);
+                if(mutate) ++heap;return retired;
+            },[&](uintptr_t entry,uintptr_t object) {
+                assert(entry==image+0xff550 && object==mhw);++releases;
+                if(!result) heap=0;return result;
+            });};
+        assert(release()==5 && releases==0);retired=true;
+        mutate=true;assert(release()==5 && releases==0);mutate=false;heap=0x4000;
+        cleanupAnchor[0]=0;assert(release()==5 && releases==0);cleanupAnchor[0]=0x55;
+        result=31;assert(release()==31 && releases==1 && b.heap==heap);
+        result=0;assert(release()==0 && releases==2 && !b.interface && !heap);
+        assert(release()==5 && releases==2);
+        heap=0x4000;assert(resolve());
     }
     auto empty = [&] { assert(!b.interface && !b.os && !b.heap); };
     ++relocation;assert(!resolve());empty();--relocation;
