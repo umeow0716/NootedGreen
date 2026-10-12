@@ -6412,8 +6412,8 @@ public:
         // Exact TGL OS+218 (63d80) is also a constant-success no-op, not a
         // surface metadata query. Neither allocation nor that callback proves
         // pitch/plane offsets ready for the output-state consumer.
-        // Exact63720 type1 allocation maps formats0d/10/19/3d to yuv2/syuv/
-        // v420/8 respectively; only19 requests two planes. Other formats use
+        // Exact63720 type1 allocation maps formats0d/10/19/3d to 2vuy/yuvs/
+        // 420v/8 respectively; only19 requests two planes. Other formats use
         // single-plane L008, NOT their SFC state-format encoding. State support
         // alone must never qualify an allocation as matching its pixel layout.
         const int status=allocate_(context_, params.data(), storage.data());
@@ -16304,8 +16304,22 @@ TglOwnedNv12LayoutRead tglReadRetainedOwnedNv12Layout(
     if(result.ready()) output=candidate;
     return result;
 }
+template<class Owner,class Api,class Quarantine>
+TglOwnedNv12LayoutRead tglReadLeasedOwnedNv12Layout(Owner& owner,
+    const TglOwnedSurfaceStorage& surface,Api& api,Quarantine& quarantine,
+    TglOwnedNv12Layout& output) noexcept {
+    if(!owner.hasSurfaceLease(surface)) return {};
+    const auto original=surface.resource;
+    TglOwnedNv12Layout candidate;
+    auto result=tglReadRetainedOwnedNv12Layout(original,api,quarantine,candidate);
+    if(!owner.hasSurfaceLease(surface) || surface.resource!=original) {
+        result.captured=false;return result;
+    }
+    if(result.ready()) output=candidate;
+    return result;
+}
 #if defined(__APPLE__)
-// Native63720 format19 creates exact 'v420', two plane dictionaries. Do not
+// Native63720 format19 creates exact '420v', two plane dictionaries. Do not
 // reinterpret any other pixel format or native lock's plane0 as a UV query.
 inline bool tglReadLockedDarwinNv12Layout(IOSurfaceRef surface,
     TglOwnedNv12Layout& output) noexcept {

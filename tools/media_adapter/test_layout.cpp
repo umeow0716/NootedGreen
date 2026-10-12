@@ -13750,12 +13750,14 @@ static void testActualNv12LayoutSnapshot() {
     }
     struct Api {
         unsigned mode=0,locks=0,unlocks=0,retains=0,releases=0;
+        bool* lease=nullptr;
         uintptr_t surface(uintptr_t h) noexcept {return h;}
         bool retain(uintptr_t) noexcept {++retains;return mode!=4;}
         void release(uintptr_t) noexcept {++releases;}
         int lock(uintptr_t) noexcept {++locks;return mode==1?31:0;}
         int unlock(uintptr_t) noexcept {++unlocks;return mode==3?17:0;}
         bool readLayout(uintptr_t,TglOwnedNv12Layout& out) noexcept {
+            if(lease) *lease=false;
             if(mode==2) return false;
             out.width=960;return true;
         }
@@ -13781,6 +13783,23 @@ static void testActualNv12LayoutSnapshot() {
         assert(api.locks==((mode==4 || mode==5)?0u:1u));
         assert(api.unlocks==((mode==1 || mode==4 || mode==5)?0u:1u));
     }
+    TglOwnedSurfaceStorage surface;surface.resource=resource;
+    struct Owner {
+        const TglOwnedSurfaceStorage* original;bool leased=true;
+        bool hasSurfaceLease(const TglOwnedSurfaceStorage& s) noexcept {
+            return leased && &s==original;
+        }
+    } owner{&surface};
+    Api api;Sink sink;TglOwnedNv12Layout out;out.width=77;
+    TglOwnedSurfaceStorage foreign=surface;
+    assert(!tglReadLeasedOwnedNv12Layout(owner,foreign,api,sink,out).ready());
+    assert(!api.locks && out.width==77);
+    api.lease=&owner.leased;
+    assert(!tglReadLeasedOwnedNv12Layout(owner,surface,api,sink,out).ready());
+    assert(api.unlocks==1 && api.releases==1 && out.width==77);
+    owner.leased=true;api.lease=nullptr;
+    assert(tglReadLeasedOwnedNv12Layout(owner,surface,api,sink,out).ready());
+    assert(out.width==960);
 }
 int main() {
     testActualNv12LayoutSnapshot();
