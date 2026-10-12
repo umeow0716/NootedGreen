@@ -21127,6 +21127,30 @@ public:
         return tglDecodeNativeDnScalarRequest(decoded,request,extent,mode3NativeDefault,read) &&
             initializeScalarParameters(decoded);
     }
+private:
+    template<class ChildOwner,class Consume>
+    TglOwnedVeboxCommandTransactionResult withLeasedChildCommandFrame(
+        ChildOwner& owner,void* child,const TglNativeOuterSurfaceRoles& roles,
+        size_t sourceIndex,size_t targetIndex,uintptr_t execution,
+        uintptr_t renderHal,uintptr_t sku,Consume consume) noexcept {
+        if(!owner.hasPrivateChildLease(reinterpret_cast<uintptr_t>(child))) return {};
+        return withNativeCommandFrame(roles,sourceIndex,targetIndex,
+            reinterpret_cast<uintptr_t>(child),execution,renderHal,sku,
+            [&](auto& source,auto& target,auto& parameters,auto& packets) noexcept {
+                static_assert(noexcept(consume(owner,child,source,target,parameters,packets)) &&
+                    std::is_same_v<decltype(consume(owner,child,source,target,parameters,packets)),
+                        TglOwnedVeboxCommandTransactionResult>);
+                TglOwnedVeboxCommandTransactionResult command;
+                const bool reconciled=source.withNativeDenoiseParameters(packets.source,
+                    parameters,[&]() noexcept {
+                        command=consume(owner,child,source,target,parameters,packets);
+                        backing_.retention().observe(command); // before DN slot unwind
+                    });
+                if(!reconciled) command.status=5;
+                return command;
+            });
+    }
+public:
     // Runtime-facing frame entry: select an owned child, then keep its private
     // table/SFC owner leased through frontend borrowing and retention capture.
     // Consumer receives that SAME owner for the reserved native sender.
@@ -21138,28 +21162,30 @@ public:
         if(childIndex>1 || !surfacesReady() || backing_.retention()()) return result;
         auto& owner=childIndex?children_.second().owner():children_.first().owner();
         const int status=owner.withPrivateChild([&](void* child) noexcept {
-            result=withNativeCommandFrame(roles,sourceIndex,targetIndex,
-                reinterpret_cast<uintptr_t>(child),execution,renderHal,sku,
-                [&](auto& source,auto& target,auto& parameters,auto& packets) noexcept {
-                    static_assert(noexcept(consume(owner,child,source,target,parameters,packets)) &&
-                        std::is_same_v<decltype(consume(owner,child,source,target,parameters,packets)),
-                            TglOwnedVeboxCommandTransactionResult>);
-                    TglOwnedVeboxCommandTransactionResult command;
-                    // Bind the tracked allocation to the ORIGINAL frontend
-                    // shell while both source and child leases are held. This
-                    // also covers VP consumers delegated through this entry.
-                    const bool reconciled=source.withNativeDenoiseParameters(packets.source,
-                        parameters,[&]() noexcept {
-                            command=consume(owner,child,source,target,parameters,packets);
-                            backing_.retention().observe(command); // before DN slot unwind
-                        });
-                    if(!reconciled) command.status=5;
-                    return command;
-                });
+            result=withLeasedChildCommandFrame(owner,child,roles,sourceIndex,targetIndex,
+                execution,renderHal,sku,consume);
             return result.status;
         });
         result.status=status;
         return result;
+    }
+    // Borrow the report already owned by the selected native child. Its
+    // existing borrow entry pins the child and validates helper/report links.
+    template<class ExecutionOwner,class Read,class Consume>
+    TglOwnedVeboxCommandTransactionResult withNativeOwnedChildCommandFrame(
+        size_t childIndex,const TglNativeOuterSurfaceRoles& roles,size_t sourceIndex,size_t targetIndex,
+        ExecutionOwner& executionOwner,uintptr_t renderHal,uintptr_t sku,Read read,Consume consume) noexcept {
+        TglOwnedVeboxCommandTransactionResult result;
+        if(childIndex>1 || !surfacesReady() || backing_.retention()()) return result;
+        auto& owner=childIndex?children_.second().owner():children_.first().owner();
+        const int status=owner.withNativeOwnedExecution(executionOwner,read,
+            [&](void* child,uintptr_t execution) noexcept -> int {
+                if(!executionOwner.hasExecutionLease(execution)) return 5;
+                result=withLeasedChildCommandFrame(owner,child,roles,sourceIndex,targetIndex,
+                    execution,renderHal,sku,consume);
+                return result.status;
+            });
+        result.status=status;return result;
     }
     // Use this frame's persistent VP backing, never an external VP allocation.
     // Parent80 is borrowed only while frontend, child and VP resource owners

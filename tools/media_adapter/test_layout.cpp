@@ -21858,6 +21858,34 @@ int main() {
                             uintptr_t restoredVp=1;
                             std::memcpy(&restoredVp,pairCpu[0].bytes.data()+0x80,8);
                             assert(restoredVp==0 && vpCpu.live && vpAvsCpu.live);
+                            {
+                                TglExecutionOwner<RecordingExecutionBackend> nativeBorrow(executionBackend);
+                                uintptr_t oldReport=0,helper=0;
+                                std::memcpy(&oldReport,pairCpu[0].bytes.data()+0x88,8);
+                                std::memcpy(&helper,pairCpu[0].bytes.data()+0x1bb8,8);
+                                std::memcpy(pairCpu[0].bytes.data()+0x88,&report,8);
+                                auto reportRead=[&](uintptr_t address,void* output,size_t size) noexcept {
+                                    if(!helper || address!=helper+0x10 || size!=8) return false;
+                                    std::memcpy(output,&report,8);return true;
+                                };
+                                unsigned uses=0;
+                                const auto nativeFrame=frame.withNativeOwnedChildCommandFrame(0,roles,0,0,
+                                    nativeBorrow,0x2200,0x3300,reportRead,
+                                    [&](auto& childOwner,void* child,auto& originalSource,auto& originalTarget,
+                                        auto&,auto& packets) noexcept {
+                                        ++uses;
+                                        assert(child==pairCpu[0].bytes.data() && packets.execution==report &&
+                                            nativeBorrow.hasExecutionLease(report) &&
+                                            childOwner.hasPrivateChildLease(reinterpret_cast<uintptr_t>(child)) &&
+                                            originalSource.hasSurfaceLease(source) && originalTarget.hasSurfaceLease(target));
+                                        return TglOwnedVeboxCommandTransactionResult{-17,-17,false,false};
+                                    });
+                                assert(nativeFrame.status==-17 && !nativeFrame.acquired && uses==1 &&
+                                    !nativeBorrow.hasExecutionLease(report) && !executionBackend.destroyed);
+                                uintptr_t unchanged=0;std::memcpy(&unchanged,pairCpu[0].bytes.data()+0x88,8);
+                                assert(unchanged==report);
+                                std::memcpy(pairCpu[0].bytes.data()+0x88,&oldReport,8);
+                            }
                             TglOwnedVeboxCommandTransactionResult executionResult;
                             executionResult=frame.withPrivateVpCommandFrame(0,roles,0,0,
                                 executionLease,0x2200,0x3300,[&](auto& leasedOwner,void* child,
