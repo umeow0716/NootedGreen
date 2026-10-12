@@ -3970,27 +3970,41 @@ struct TglNativeVphalMhwView {
     uintptr_t parent=0,os=0,renderHal=0;
     TglNativeCreatedVeboxRendererView renderer;
     TglVeboxHardwareBinding hardware;
-    template<class Read,class Admit,class Qualify,class Executable>
-    bool resolve(uintptr_t image,uintptr_t vphal,uintptr_t creator,Read read,
-        Admit admit,Qualify qualify,Executable executable) noexcept {
+private:
+    template<class Read,class Admit,class Qualify>
+    bool resolveCreated(uintptr_t image,uintptr_t vphal,uintptr_t creator,
+        const TglNativeCreatedVeboxRendererView& created,Read read,Admit admit,Qualify qualify) noexcept {
         *this={};
         uintptr_t nativeOs=0,nativeRenderHal=0,mhw=0;
         uintptr_t rendererOs=0,rendererRenderHal=0;
-        TglNativeCreatedVeboxRendererView created;
         TglVeboxHardwareBinding binding;
         //133930 invokes VPHAL's OWN vptr+18 (1e6610), then reads VPHAL68
         // as renderer. VPHAL and creator are the SAME object, not two roots.
         if(!vphal || vphal!=creator || (vphal&7) || vphal>UINTPTR_MAX-0x70 || !admit(vphal,0x70) ||
             !read(vphal+0x40,&nativeOs,8) || !nativeOs ||
             !read(vphal+0x48,&nativeRenderHal,8) || !nativeRenderHal ||
-            !read(vphal+0x50,&mhw,8) ||
-            !created.resolve(image,creator,read,admit,qualify,executable) ||
+            !read(vphal+0x50,&mhw,8) || created.creator!=creator || created.image!=image ||
             created.renderer>UINTPTR_MAX-0x2cd0 || !admit(created.renderer,0x2cd0) ||
             !read(created.renderer+0x2cc0,&rendererRenderHal,8) || rendererRenderHal!=nativeRenderHal ||
             !read(created.renderer+0x2cc8,&rendererOs,8) || rendererOs!=nativeOs ||
             !binding.resolve(mhw,nativeOs,image,read,qualify)) return false;
         parent=vphal;os=nativeOs;renderHal=nativeRenderHal;renderer=created;hardware=binding;
         return true;
+    }
+public:
+    template<class Read,class Admit,class Qualify,class Executable>
+    bool resolve(uintptr_t image,uintptr_t vphal,uintptr_t creator,Read read,
+        Admit admit,Qualify qualify,Executable executable) noexcept {
+        *this={};TglNativeCreatedVeboxRendererView created;
+        return created.resolve(image,creator,read,admit,qualify,executable) &&
+            resolveCreated(image,vphal,creator,created,read,admit,qualify);
+    }
+    template<class Lifetime,class Read,class Admit,class Qualify,class Executable>
+    bool resolveOwned(uintptr_t image,uintptr_t vphal,uintptr_t creator,const Lifetime& lifetime,
+        Read read,Admit admit,Qualify qualify,Executable executable) noexcept {
+        *this={};TglNativeCreatedVeboxRendererView created;
+        return created.resolveOwned(image,creator,lifetime,read,admit,qualify,executable) &&
+            resolveCreated(image,vphal,creator,created,read,admit,qualify);
     }
 };
 
@@ -4011,6 +4025,16 @@ public:
         if(parent_.get() || !parent.get()) return false;
         TglNativeVphalMhwView candidate;
         if(!candidate.resolve(image,vphal,creator,read,admit,qualify,executable) ||
+            !parentAdmit(*parent.get(),candidate)) return false;
+        parent_=std::move(parent);view_=candidate;return true;
+    }
+    template<class Lifetime,class Read,class Admit,class Qualify,class Executable,class ParentAdmit>
+    bool acquireOwned(ParentLease&& parent,uintptr_t image,uintptr_t vphal,uintptr_t creator,
+        const Lifetime& lifetime,Read read,Admit admit,Qualify qualify,Executable executable,ParentAdmit parentAdmit) noexcept {
+        static_assert(std::is_nothrow_move_assignable_v<ParentLease>);
+        if(parent_.get() || !parent.get()) return false;
+        TglNativeVphalMhwView candidate;
+        if(!candidate.resolveOwned(image,vphal,creator,lifetime,read,admit,qualify,executable) ||
             !parentAdmit(*parent.get(),candidate)) return false;
         parent_=std::move(parent);view_=candidate;return true;
     }
@@ -5126,12 +5150,27 @@ public:
         Read read,Admit admit,Qualify qualify,Executable executable,
         ConfigurationAdmit configurationAdmit,PublishAdmit publishAdmit) noexcept {
         TglNativeCreatedVeboxRendererView view;
-        if(!generation || !bound() || !view.resolve(image,creator,read,admit,qualify,executable) ||
-           view.originalChildren[0] || view.originalChildren[1]) return false;
+        if(!generation || !bound() || !view.resolve(image,creator,read,admit,qualify,executable)) return false;
+        return publishView(view,generation,configurationAdmit,publishAdmit);
+    }
+    template<class Lifetime,class Read,class Admit,class Qualify,class Executable,class ConfigurationAdmit,class PublishAdmit>
+    bool publishFromCreatorOwned(uintptr_t image,uintptr_t creator,uint64_t generation,const Lifetime& lifetime,
+        Read read,Admit admit,Qualify qualify,Executable executable,
+        ConfigurationAdmit configurationAdmit,PublishAdmit publishAdmit) noexcept {
+        TglNativeCreatedVeboxRendererView view;
+        if(!generation || !bound() || !view.resolveOwned(image,creator,lifetime,read,admit,qualify,executable)) return false;
+        return publishView(view,generation,configurationAdmit,publishAdmit);
+    }
+private:
+    template<class ConfigurationAdmit,class PublishAdmit>
+    bool publishView(const TglNativeCreatedVeboxRendererView& view,uint64_t generation,
+        ConfigurationAdmit configurationAdmit,PublishAdmit publishAdmit) noexcept {
+        if(view.originalChildren[0] || view.originalChildren[1]) return false;
         if(!first_.owner().bindRendererConfiguration(view.renderer,generation,configurationAdmit) ||
            !second_.owner().bindRendererConfiguration(view.renderer,generation,configurationAdmit)) return false;
         return publish(reinterpret_cast<void*>(view.renderer),0x2cb8,generation,publishAdmit);
     }
+public:
     template<class Admit> bool detach(void* renderer,uint64_t generation,Admit admit) noexcept {
         return publication_.detach(renderer,generation,admit);
     }
@@ -19169,6 +19208,12 @@ public:
             children_.second().owner().constructedBase()) return false;
         return mhwLease_.acquire(std::forward<ParentLease>(parent),std::forward<Args>(args)...);
     }
+    template<class ParentLease,class... Args>
+    bool retainBorrowedMhwOwned(ParentLease&& parent,Args&&... args) noexcept {
+        if(backing_.retention()() || children_.first().owner().constructedBase() ||
+            children_.second().owner().constructedBase()) return false;
+        return mhwLease_.acquireOwned(std::forward<ParentLease>(parent),std::forward<Args>(args)...);
+    }
     template<class Read,class Qualify,class Construct=TglNativeVeboxConstructorInvoker>
     TglOwnedBaseConstruction initializeQualifiedChild(size_t index,
         const TglVeboxLifetimeBinding& binding,const TglSfcLifetimeBinding& lifetime,
@@ -19249,6 +19294,12 @@ public:
         if(backing_.retention()() || children_.first().owner().constructedBase() ||
             children_.second().owner().constructedBase()) return false;
         return mhwLease_.acquire(std::forward<ParentLease>(parent),std::forward<Args>(args)...);
+    }
+    template<class ParentLease,class... Args>
+    bool retainBorrowedMhwOwned(ParentLease&& parent,Args&&... args) noexcept {
+        if(backing_.retention()() || children_.first().owner().constructedBase() ||
+            children_.second().owner().constructedBase()) return false;
+        return mhwLease_.acquireOwned(std::forward<ParentLease>(parent),std::forward<Args>(args)...);
     }
     template<class Read,class Qualify,class Construct=TglNativeVeboxConstructorInvoker>
     TglOwnedBaseConstruction initializeQualifiedChild(size_t index,

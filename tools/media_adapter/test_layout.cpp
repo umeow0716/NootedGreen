@@ -6,6 +6,7 @@
 #include "tgl_capability_adapter.hpp"
 #include "descriptor_bridge.hpp"
 #include "owned_resource.hpp"
+#include <memory>
 
 // Presence-test functions only; never used as renderer producers or published.
 template<class Signature> struct TestVpPresenceStub;
@@ -14473,12 +14474,41 @@ int main() {
                     assert(!lease.acquire(std::move(pin),image,parent,creatorAddress,borrowedRead,
                         borrowedAdmit,qualify,creatorExecutable,parentAdmit));
                     assert(pin.get() && !lease.binding());writeWord(mhw,0x20,0xa000);
-                    assert(lease.acquire(std::move(pin),image,parent,creatorAddress,borrowedRead,
-                        borrowedAdmit,qualify,creatorExecutable,parentAdmit));
+                    TglOwnedVphalLifetimeTable lifetime;
+                    auto ownedRead=[&](uintptr_t address,void* bytes,size_t size) noexcept {
+                        if(address==image+0x75bb48 && size==48) {
+                            const std::array<uintptr_t,6> table{0,image+0x75bb78,image+0x1c8e80,
+                                image+0x1c8ea0,image+0x133cb0,image+0x1e6610};
+                            std::memcpy(bytes,table.data(),size);return true;
+                        }
+                        const auto point=lifetime.addressPoint();
+                        if(point && address>=point-16 && address-(point-16)<=48 && size<=48-(address-(point-16))) {
+                            std::memcpy(bytes,reinterpret_cast<const void*>(address),size);return true;
+                        }
+                        return borrowedRead(address,bytes,size);
+                    };
+                    auto ownedExec=[&](uintptr_t address,size_t size) noexcept {
+                        return (size==1 && (address==image+0x1c8e80 || address==image+0x1c8ea0 ||
+                            address==image+0x133cb0)) || creatorExecutable(address,size);
+                    };
+                    assert(lifetime.build(image,0xf000,0xf100,ownedRead,qualify,ownedExec,
+                        [](uintptr_t address,size_t size) noexcept {return size==1 && (address==0xf000 || address==0xf100);}));
+                    auto writeCreator=[&](uintptr_t address,uintptr_t value) noexcept {
+                        assert(address==creatorAddress);put(address,0,value);return true;
+                    };
+                    assert(lifetime.publish(creatorAddress,ownedRead,writeCreator,borrowedAdmit));
+                    assert(!lease.acquire(std::move(pin),image,parent,creatorAddress,ownedRead,
+                        borrowedAdmit,qualify,ownedExec,parentAdmit) && pin.get());
+                    assert(!lease.acquireOwned(std::move(pin),image,parent,creatorAddress,lifetime,ownedRead,
+                        borrowedAdmit,qualify,ownedExec,
+                        [](const auto&,const auto&) noexcept {return false;}) && pin.get());
+                    assert(lease.acquireOwned(std::move(pin),image,parent,creatorAddress,lifetime,ownedRead,
+                        borrowedAdmit,qualify,ownedExec,parentAdmit));
                     assert(!pin.get() && lease.binding()->interface==nativeMhw);
                     assert(!lease.acquire(std::move(pin),image,parent,creatorAddress,borrowedRead,
                         borrowedAdmit,qualify,creatorExecutable,parentAdmit));
                     assert(parents.reconcileSuccessfulRemoval(image,0xb000,1,removed)==5 && !parentDeaths);
+                    assert(lifetime.detach(ownedRead,writeCreator,borrowedAdmit));
                 }
                 assert(mhw==originalMhw && parents.reconcileSuccessfulRemoval(image,0xb000,1,removed)==0 && parentDeaths==1);
                 assert(!borrowed.resolve(image,UINTPTR_MAX-7,creatorAddress,
@@ -19210,9 +19240,19 @@ int main() {
                             creator[0]=base+0x75bb58;creator[13]=rendererAddress;
                             const auto creatorAddress=reinterpret_cast<uintptr_t>(creator.data());
                             uintptr_t createEntry=base+0x1e6610;
+                            std::unique_ptr<TglOwnedVphalLifetimeTable> creatorLifetime;
                             auto creatorRead=[&](uintptr_t address,void* dst,size_t bytes) noexcept {
+                                if(address==base+0x75bb48 && bytes==48) {
+                                    const std::array<uintptr_t,6> table{0,base+0x75bb78,base+0x1c8e80,
+                                        base+0x1c8ea0,base+0x133cb0,createEntry};
+                                    std::memcpy(dst,table.data(),bytes);return true;
+                                }
+                                const auto point=creatorLifetime?creatorLifetime->addressPoint():0;
+                                if(point && address>=point-16 && address-(point-16)<=48 && bytes<=48-(address-(point-16))) {
+                                    std::memcpy(dst,reinterpret_cast<const void*>(address),bytes);return true;
+                                }
                                 if(address==base+0x75bb58 && bytes==32) {
-                                    const std::array<uintptr_t,4> table{11,22,33,createEntry};
+                                    const std::array<uintptr_t,4> table{base+0x1c8e80,base+0x1c8ea0,base+0x133cb0,createEntry};
                                     std::memcpy(dst,table.data(),bytes);return true;
                                 }
                                 if(address==base+0x133c0f && bytes==3) {
@@ -19236,6 +19276,9 @@ int main() {
                                 return (address==creatorAddress && bytes==sizeof(creator)) ||
                                     (address==rendererAddress && bytes==renderer.size());
                             };
+                            auto writeCreator=[&](uintptr_t address,uintptr_t value) noexcept {
+                                assert(address==creatorAddress);creator[0]=value;return true;
+                            };
                             auto publishCreated=[&]() noexcept {
                                 return pair.publishFromCreator(base,creatorAddress,1,creatorRead,creatorAdmit,
                                     qualify,executable,admitConfiguration,admit);
@@ -19253,7 +19296,15 @@ int main() {
                                 };
                                 auto handoff=[&](void* object) noexcept -> int {
                                     assert(reinterpret_cast<uintptr_t>(object)==creatorAddress && nativeCalls==1);
-                                    ++handoffCalls;return publishCreated()?0:5;
+                                    ++handoffCalls;
+                                    creatorLifetime=std::make_unique<TglOwnedVphalLifetimeTable>();
+                                    assert(creatorLifetime->build(base,0xf000,0xf100,creatorRead,qualify,executable,
+                                        [](uintptr_t address,size_t size) noexcept {return size==1 && (address==0xf000 || address==0xf100);}));
+                                    assert(creatorLifetime->publish(creatorAddress,creatorRead,writeCreator,creatorAdmit));
+                                    assert(!publishCreated()); // native-only path must still refuse
+                                    if(pair.publishFromCreatorOwned(base,creatorAddress,1,*creatorLifetime,
+                                        creatorRead,creatorAdmit,qualify,executable,admitConfiguration,admit)) return 0;
+                                    assert(creatorLifetime->detach(creatorRead,writeCreator,creatorAdmit));return 5;
                                 };
                                 auto admitCreator=[&](void* object) noexcept -> bool {
                                     return reinterpret_cast<uintptr_t>(object)==creatorAddress;
@@ -19275,6 +19326,10 @@ int main() {
                             assert(pair.canDetach(renderer.data(),1,admit) && renderer==published);
                             assert(!pair.canDetach(renderer.data(),2,admit) && renderer==published);
                             assert(pair.detach(renderer.data(),1,admit) && renderer==original);
+                            // Publication fixture only: no native deletion is
+                            // invoked; the enclosing assembly still pins MHW
+                            // until its later qualified child/frame retirement.
+                            assert(creatorLifetime && creatorLifetime->detach(creatorRead,writeCreator,creatorAdmit));
                             assert(!pair.destroyDetached(renderer.data(),2));
                         }
                         // Ownership fixture only: no native submit is called.
