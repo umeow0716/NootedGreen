@@ -14615,6 +14615,39 @@ int main() {
                             assert(owner->withCreatorStorage(empty,creatorAdmit,qualify,ownerExecutable,producer)==5);
                         }
                         assert(producerCalls==1);
+                        // Successful native creator return hands off through the
+                        // SAME router reservation used by destruction/retirement.
+                        // A producer error is not converted into creator success.
+                        unsigned creatorNativeCalls=0,creatorHandoffs=0;
+                        auto creatorNative=[&](uintptr_t,void* object) noexcept -> int {
+                            assert(reinterpret_cast<uintptr_t>(object)==creatorAddress);
+                            ++creatorNativeCalls;return 0;
+                        };
+                        auto creatorHandoff=[&](void* object) noexcept -> int {
+                            ++creatorHandoffs;
+                            auto reservation=OwnerRouter::pinForInitialization(reinterpret_cast<uintptr_t>(object));
+                            assert(reservation.get()==owner && reservation.exclusive());
+                            return owner->withCreatorStorage(reservation,creatorAdmit,qualify,ownerExecutable,producer);
+                        };
+                        auto creatorAdmission=[&](void* object) noexcept -> bool {
+                            return reinterpret_cast<uintptr_t>(object)==creatorAddress;
+                        };
+                        using CreatorScope=TglOwnedCreatorCallScope<decltype(creatorNative),
+                            decltype(creatorHandoff),decltype(creatorAdmission)>;
+                        auto creatorCallExecutable=[&](uintptr_t address,size_t size) noexcept {
+                            return (address==image+0x133c0f && size==3) || ownerExecutable(address,size);
+                        };
+                        {
+                            CreatorScope scope(creatorNative,creatorHandoff,creatorAdmission);
+                            assert(scope.prepare(image,creatorRead,qualify,creatorCallExecutable,
+                                [](uintptr_t entry,size_t size) noexcept {
+                                    return entry==CreatorScope::callbackAddress() && size==1;
+                                }));
+                            auto callback=reinterpret_cast<int(*)(void*)>(CreatorScope::callbackAddress());
+                            assert(callback(reinterpret_cast<void*>(creatorAddress))==31);
+                            assert(callback(reinterpret_cast<void*>(creatorAddress))==5);
+                        }
+                        assert(creatorNativeCalls==1 && creatorHandoffs==1 && producerCalls==2);
                         {
                             auto framePin=OwnerRouter::pinFrame(image,0x90000,ticket.generation,creatorAddress);
                             assert(framePin.get()==owner);
