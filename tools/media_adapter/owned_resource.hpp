@@ -18303,9 +18303,17 @@ public:
         return state_->destruction.recover(state_->table,recover,
             [&]() noexcept {return state_->prepare();},state_->native);
     }
+    template<class Pending,class Admit> bool resumeRecordedDestruction(Pending& pending,Admit admit) noexcept {
+        if(!state_) return false;
+        return state_->destruction.resumeRecorded(state_->table,state_->object,pending,admit,
+            [&]() noexcept {return state_->prepare();},state_->native);
+    }
     bool nativeDestructionComplete() const noexcept {
         return state_ && !state_->storage &&
             state_->destruction.phase()==TglOwnedVphalDestructionState::Phase::Complete;
+    }
+    bool destructionQuarantined() const noexcept {
+        return state_ && state_->destruction.phase()==TglOwnedVphalDestructionState::Phase::Quarantined;
     }
 };
 
@@ -18662,6 +18670,29 @@ public:
         Policy::retained(*lease.get(),kind,quarantined);
     }
     static bool pending(uintptr_t object,Kind& kind) noexcept {return pending_.pending(object,kind);}
+    // Resume the journaled ABI request after the last frame pin retires. Do
+    // NOT call the native counted deletion helper again or invent a new kind.
+    template<class Admit> static bool resumePending(uintptr_t object,Admit admit) noexcept {
+        Kind kind=Kind::Destroy;
+        if(faulted() || !pending_.pending(object,kind)) return false;
+        auto lease=pin(object);
+        if(!lease.get()) {unresolved(object,kind);return false;}
+        struct JournalView {
+            bool faulted() const noexcept {return TglOwnedVphalProcessRouter::faulted();}
+            bool pending(uintptr_t address,Kind& value) const noexcept {
+                return TglOwnedVphalProcessRouter::pending(address,value);
+            }
+        } journal;
+        if(!lease.get()->resumeRecordedDestruction(journal,admit)) {
+            // Ordinary retirement refusal leaves Idle and may be retried
+            // after new completion evidence. Only partial preparation freezes
+            // the owner; do not turn a pre-admission wait into failed teardown.
+            if(lease.get()->destructionQuarantined()) retained(lease,kind);
+            else unresolved(object,kind);
+            return false;
+        }
+        return true; // keep journal until explicit complete/exclusive reconciliation
+    }
     // Explicit external certificate only, never callback success or submit acceptance.
     template<class Admit> static bool eraseRetired(uintptr_t object,Kind kind,Admit admit) noexcept {
         if(gate_.test_and_set(std::memory_order_acquire)) return false;

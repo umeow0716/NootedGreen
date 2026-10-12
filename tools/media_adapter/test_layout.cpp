@@ -14489,8 +14489,37 @@ int main() {
                         assert(!owner->publishLifetime(0xf000,0xf100,readLifetime,qualify,ownerExecutable,ownedLifetime,creatorAdmit));
                         nativeInit--;
                         assert(owner->publishLifetime(0xf000,0xf100,readLifetime,qualify,ownerExecutable,ownedLifetime,creatorAdmit));
-                        assert(!owner->requestDestruction(TglOwnedVphalDestructionState::Kind::DeletingDestroy));
+                        struct OwnerRoutingPolicy {
+                            static std::array<uintptr_t,4>& identity() noexcept {
+                                static std::array<uintptr_t,4> value{};return value;
+                            }
+                            static bool admit(uintptr_t image,uintptr_t physical,uint64_t generation,uintptr_t object) noexcept {
+                                return identity()==std::array<uintptr_t,4>{image,physical,uintptr_t(generation),object};
+                            }
+                            static void unresolved(uintptr_t,TglOwnedVphalDestructionState::Kind,bool faulted) noexcept {
+                                assert(!faulted);
+                            }
+                            static void retained(Owner&,TglOwnedVphalDestructionState::Kind,bool quarantined) noexcept {
+                                assert(quarantined);
+                            }
+                        };
+                        using OwnerRouter=TglOwnedVphalProcessRouter<Owner,OwnerRoutingPolicy,1>;
+                        OwnerRoutingPolicy::identity()={image,0x90000,uintptr_t(ticket.generation),creatorAddress};
+                        assert(OwnerRouter::adopt(image,0x90000,ticket.generation,owner));
+                        {
+                            auto framePin=OwnerRouter::pinFrame(image,0x90000,ticket.generation,creatorAddress);
+                            assert(framePin.get()==owner);
+                            OwnerRouter::Callbacks::deletingDestroy(reinterpret_cast<void*>(creatorAddress));
+                            assert(!OwnerRouter::resumePending(creatorAddress,[](uintptr_t,auto) noexcept {return true;}));
+                            assert(!backingReleased && !ownedNativeCalls);
+                        }
+                        // Last frame pin released: resume original request; child retirement still denies it.
+                        assert(!OwnerRouter::resumePending(creatorAddress,[](uintptr_t,auto) noexcept {return false;}));
+                        assert(!owner->destructionQuarantined());
+                        {auto reservation=OwnerRouter::pin(creatorAddress);assert(reservation.get()==owner);}
+                        assert(!OwnerRouter::resumePending(creatorAddress,[](uintptr_t,auto) noexcept {return true;}));
                         assert(!backingReleased && !ownedNativeCalls);
+                        assert(!OwnerRouter::pinFrame(image,0x90000,ticket.generation,creatorAddress).get());
                         children.allow=true;
                         assert(!owner->recoverDestruction([](uintptr_t) noexcept {return false;}));
                         assert(owner->recoverDestruction([&](uintptr_t object) noexcept {return object==creatorAddress;}));
@@ -14499,7 +14528,17 @@ int main() {
                         // Native VPHAL completed, but physical dependency persists until owner retirement.
                         assert(physicalOwners.destroy(ticket,image,0x90000,
                             [](uintptr_t) noexcept -> int {assert(false);return 0;})==5);
-                        delete owner;
+                        TglNativeRemovedContextBatch<1> removedOwner;
+                        removedOwner.valid=true;removedOwner.count=1;removedOwner.contexts[0]=creatorAddress;
+                        assert(OwnerRouter::reconcileSuccessfulRemoval(image,0x90000,ticket.generation,removedOwner,
+                            [](Owner&) noexcept -> int {assert(false);return 0;})==5);
+                        assert(OwnerRouter::eraseRetired(creatorAddress,TglOwnedVphalDestructionState::Kind::DeletingDestroy,
+                            [&](uintptr_t object,auto kind) noexcept {
+                                return object==creatorAddress && kind==TglOwnedVphalDestructionState::Kind::DeletingDestroy &&
+                                    owner->nativeDestructionComplete();
+                            })); // explicit single-thread CPU retirement certificate
+                        assert(OwnerRouter::reconcileSuccessfulRemoval(image,0x90000,ticket.generation,removedOwner,
+                            [](Owner& candidate) noexcept -> int {return candidate.nativeDestructionComplete()?0:5;})==0);
                         assert(physicalOwners.destroy(ticket,image,0x90000,
                             [](uintptr_t object) noexcept -> int {assert(object==0x90000);return 0;})==0);
                     }
