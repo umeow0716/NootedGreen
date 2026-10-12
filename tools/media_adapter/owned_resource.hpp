@@ -15642,6 +15642,51 @@ struct TglOwnedVeboxPacketContext {
     }
 };
 
+// Deferred packet input capture for whole Render. Capture is a synchronous
+// read-only continuation over already-retained resources (for example the
+// captured DI/IECP input reader), never an allocation/preparation operation.
+// No input or borrowed resource view escapes the producer invocation. The
+// enclosing producer callbacks use THIS pass; the temporary packet view only
+// reuses existing validation/publication, not its unused local pass.
+template<class Capture,class Read,class SurfaceAdmit,class DiAdmit,class Register,class Control>
+struct TglOwnedVeboxLivePacketContext {
+    TglOwnedVeboxProducerPass pass;
+    TglOwnedVeboxPacketLeases leases;
+    bool disableTemporalDenoise;
+    Capture capture;
+    Read read;
+    SurfaceAdmit admitSurface;
+    DiAdmit admitDi;
+    Register registerResource;
+    Control control;
+    template<class Use> int withInput(Use use) noexcept {
+        bool entered=false,duplicate=false;int result=5;
+        const int status=capture([&](const TglDiIecpInputs& input) noexcept -> int {
+            if(entered) {duplicate=true;return 5;}
+            entered=true;
+            if(input.current!=&leases.source || input.target!=leases.target) return result;
+            TglOwnedVeboxPacketContext<Read,SurfaceAdmit,DiAdmit,Register,Control> view{
+                {},leases,input,disableTemporalDenoise,read,admitSurface,admitDi,registerResource,control};
+            result=use(view);return result;
+        });
+        if(duplicate) return 5;
+        if(status) return status;
+        return entered ? result : 5;
+    }
+    int surfaces(bool di,void* packet) noexcept {
+        if(packet!=&leases.surfaces) return 5;
+        return withInput([&](auto& view) noexcept {return view.surfaces(di,packet);});
+    }
+    int state(bool di,void* packet) noexcept {
+        if(packet!=&leases.state) return 5;
+        return withInput([&](auto& view) noexcept {return view.state(di,packet);});
+    }
+    int diIecp(bool di,void* packet) noexcept {
+        if(packet!=&leases.diIecp) return 5;
+        return withInput([&](auto& view) noexcept {return view.diIecp(di,packet);});
+    }
+};
+
 template<class Region>
 bool tglAdmitDndiStackPackets(uintptr_t top,size_t stackSize,uintptr_t luma,size_t ln,
     uintptr_t chroma,size_t cn,Region region) noexcept {

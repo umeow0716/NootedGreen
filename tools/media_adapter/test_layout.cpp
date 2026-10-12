@@ -1836,6 +1836,52 @@ static void testTrackedCpuOwner() {
             std::array<uint8_t,0x188> expectedStateBytes{};
             assert(tglPrepareOwnedStatePacket(expectedStateBytes,expectedState));
             assert(std::memcmp(state.data(),expectedStateBytes.data(),expectedStateBytes.size())==0);
+            unsigned liveCaptures=0;
+            bool liveReady=false;
+            auto liveInput=consistentInput;
+            auto captureLive=[&](auto use) noexcept -> int {
+                ++liveCaptures;
+                if(!liveReady) return 31;
+                return use(static_cast<const TglDiIecpInputs&>(liveInput));
+            };
+            TglOwnedVeboxLivePacketContext<decltype(captureLive),decltype(noRead),
+                decltype(admitSurface),decltype(admitDi),decltype(registerResource),decltype(control)>
+                livePacket{{},leases,false,captureLive,noRead,admitSurface,admitDi,registerResource,control};
+            assert(liveCaptures==0); // Construction must not read pre-preparation state.
+            assert(livePacket.state(false,&foreignCommandState)==5 && liveCaptures==0);
+            assert(livePacket.state(false,&state)==31 && liveCaptures==1);
+            liveReady=true;
+            assert(livePacket.state(false,&state)==0 && liveCaptures==2);
+            liveInput.pipe=1; // A stale/different snapshot must not match native report.
+            assert(livePacket.state(false,&state)==5 && liveCaptures==3);
+            liveInput=consistentInput;
+            assert(livePacket.state(false,&state)==0 && liveCaptures==4);
+            assert(std::memcmp(state.data(),expectedStateBytes.data(),expectedStateBytes.size())==0);
+            using LiveProducers=TglOwnedVeboxFrameProducerTypes<decltype(livePacket),Child,Execution,
+                decltype(noRead),decltype(noPackets),ImageCsc>;
+            const auto priorHooks=child.installed;
+            assert((tglBuildOwnedVeboxCompleteHooks<AuxiliaryResolve,AuxiliaryScope,
+                AuxiliaryScope,typename LiveProducers::Resolve,AuxiliaryScope,FormatRead>(
+                    nativeChild,child.installed)));
+            ImageCsc liveCsc(nativeImage,noRead,qualify,executable,cscInvoke);
+            TglOwnedVeboxFrameRetention liveRetention;
+            liveReady=false;
+            const auto liveRender=tglWithOwnedVeboxFrameNativeRender<AuxiliaryResolve,
+                AuxiliaryScope,AuxiliaryScope,AuxiliaryScope,FormatRead>(sourceLease,source,
+                targetLease,target,livePacket,child,execution,0,noRead,noPackets,liveCsc,
+                renderBinding,nullptr,liveRetention,
+                [&](uintptr_t,void* object,void*,void*) noexcept -> int {
+                    assert(liveCaptures==4 && !liveReady);
+                    liveReady=true; // Recording native preparation before first packet callback.
+                    using State=int(*)(void*,bool,void*) noexcept;
+                    assert(reinterpret_cast<State>(child.installed[18])(object,false,&state)==0);
+                    auto* producer=LiveProducers::Resolve::get(object);assert(producer);
+                    assert(&producer->pass==&livePacket.pass && liveCaptures==5);
+                    return producer->pass.gate([]() noexcept {return 0;});
+                });
+            assert(liveRender.status==0 && liveRender.nativeEntered && liveRetention() &&
+                !LiveProducers::Resolve::get(nativeChild));
+            child.installed=priorHooks;
             assert(di.resources[0]==&source.resource && di.resources[5]==&target.resource &&
                 di.resources[7]==&statistics.resource);
             assert(nativeSetups==3 && nativeBuilds==3 && nativeWritebacks==3);
