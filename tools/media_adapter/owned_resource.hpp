@@ -18274,6 +18274,33 @@ public:
         }
         return {};
     }
+    // Native destructor ABI supplies ONLY object, not its physical epoch.
+    // Recover the unique registry scope while reserving the owner, then ask
+    // the process-lived physical policy to authenticate it OUTSIDE gate_.
+    // Address reuse remains forbidden until pending deletion is reconciled.
+    // Owner/policy must retain the physical/image obligations throughout the
+    // returned lease; attestation alone does not create a native physical pin.
+    template<class Admit> ExclusiveOwnerLease pinExclusiveObject(uintptr_t context,Admit admit) noexcept {
+        static_assert(noexcept(admit(uintptr_t{},uintptr_t{},uint64_t{},uintptr_t{})) &&
+            std::is_same_v<decltype(admit(uintptr_t{},uintptr_t{},uint64_t{},uintptr_t{})),bool>);
+        if(!context) return {};
+        ExclusiveOwnerLease lease;
+        uintptr_t image=0,physical=0;uint64_t generation=0;
+        {
+            if(gate_.test_and_set(std::memory_order_acquire)) return {};
+            Unlock unlock{gate_};
+            for(size_t i=0;i<Capacity;++i) {
+                auto& e=entries_[i];
+                if(!e.owner || e.context!=context || e.quarantined ||
+                    contextPins_[i].load(std::memory_order_acquire)) continue;
+                contextPins_[i].store(SIZE_MAX,std::memory_order_release);
+                lease=ExclusiveOwnerLease(e.owner,contextPins_[i]);
+                image=e.image;physical=e.physical;generation=e.generation;break;
+            }
+        }
+        if(!lease.get() || !admit(image,physical,generation,context)) return {};
+        return lease;
+    }
     TglOwnedContextOwnerRegistry() noexcept {
         for(auto& pins:contextPins_) pins.store(0,std::memory_order_relaxed);
     }

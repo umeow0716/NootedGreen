@@ -12320,7 +12320,17 @@ static void testRetainedVeboxFrames() {
                     return pending().record(object,kind);
                 }
                 static Registry::ExclusiveOwnerLease pin(uintptr_t object) noexcept {
-                    return registry()?registry()->pinExclusive(0x1000,0x2000,7,object):Registry::ExclusiveOwnerLease{};
+                    return registry()?registry()->pinExclusiveObject(object,
+                        [](uintptr_t image,uintptr_t physical,uint64_t generation,uintptr_t context) noexcept {
+                            assert(image==0x1000 && physical==0x2000 && generation==7);
+                            // Prove attestation runs after the registry gate is
+                            // released, while this exact owner stays reserved.
+                            const auto other=context==0x4000?0x5000:0x4000;
+                            auto unrelated=registry()->pin(image,physical,generation,other);
+                            assert(unrelated.get());
+                            assert(!registry()->pin(image,physical,generation,context).get());
+                            return true;
+                        }):Registry::ExclusiveOwnerLease{};
                 }
                 static void unresolved(uintptr_t,TglOwnedVphalDestructionState::Kind) noexcept {++misses();}
                 static void retained(ContextOwner& owner,TglOwnedVphalDestructionState::Kind kind) noexcept {
@@ -12331,6 +12341,13 @@ static void testRetainedVeboxFrames() {
             };
             using Hooks=TglOwnedVphalDestructorCallbacks<Routing>;
             Routing::registry()=&owners;
+            unsigned deniedScope=0;
+            assert(!owners.pinExclusiveObject(0x4000,
+                [&](uintptr_t image,uintptr_t physical,uint64_t generation,uintptr_t object) noexcept {
+                    assert(image==0x1000 && physical==0x2000 && generation==7 && object==0x4000);
+                    ++deniedScope;return false;
+                }).get());
+            assert(deniedScope==1 && owners.pin(0x1000,0x2000,7,0x4000).get());
             using Destructor=void(*)(void*);
             const auto call=[&](uintptr_t entry,uintptr_t object) {
                 reinterpret_cast<Destructor>(entry)(reinterpret_cast<void*>(object));
