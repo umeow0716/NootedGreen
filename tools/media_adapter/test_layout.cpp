@@ -20295,6 +20295,9 @@ int main() {
                             pairInvoke.destroys==sfcDestroysBefore);
                         pairInvoke.constructs=sfcConstructsBefore;pairInvoke.destroys=sfcDestroysBefore;
                         assert(!vpCpu.live && !vpAvsCpu.live);pairEventCount=0;
+                        std::array<unsigned,16> frontendVp1Events{};size_t frontendVp1EventCount=0;
+                        Cpu frontendVp1{{},frontendVp1Events,frontendVp1EventCount};
+                        Cpu frontendAvs1{{},frontendVp1Events,frontendVp1EventCount};
                         const auto ticket=frames.create(reinterpret_cast<uintptr_t>(&source),
                             [&](uintptr_t address) noexcept -> TestFrontendOriginalOwner* {
                                 if(address==reinterpret_cast<uintptr_t>(&source)) return &so;
@@ -20304,7 +20307,8 @@ int main() {
                             }},uintptr_t{11},uintptr_t{12},frameDn,base,allocatorRead,
                             [](uintptr_t image) noexcept {return image==base;},
                             [](uintptr_t,size_t) noexcept {return true;},environment.resources,
-                            environment.pageSize,environment.fill,NativeCpu{vpCpu,&vpAvsCpu},
+                            environment.pageSize,environment.fill,
+                            std::array<NativeCpu,2>{NativeCpu{vpCpu,&vpAvsCpu},NativeCpu{frontendVp1,&frontendAvs1}},
                             std::array<decltype(frontendCleanup),2>{frontendCleanup,frontendCleanup},
                             std::array<NativeCpu,2>{NativeCpu{pairCpu[0]},NativeCpu{pairCpu[1]}},
                             std::array<TrackedSfc,2>{TrackedSfc{pairInvoke,pairEvents,pairEventCount},TrackedSfc{pairInvoke,pairEvents,pairEventCount}},
@@ -20606,8 +20610,6 @@ int main() {
                             putNative(nativeCreator,0x60,frontendSfc);
                             assert(frame.initializeVpFromCreator(frontendCreatorView,
                                 frontendRead,qualifyMhw,executableMhw)==0);
-                            assert(frame.initializeVpFromCreator(1,frontendCreatorView,
-                                frontendRead,qualifyMhw,executableMhw)==5);
                             assert(frame.initializeVpFromCreator(2,frontendCreatorView,
                                 frontendRead,qualifyMhw,executableMhw)==5);
                             for(size_t missingIndex: {size_t{1},size_t{2}}) {
@@ -20618,6 +20620,16 @@ int main() {
                                     });
                                 assert(absent.status==5 && !absent.acquired && !frame.backing().retention()());
                             }
+                            assert(frame.initializeVpFromCreator(1,frontendCreatorView,
+                                frontendRead,qualifyMhw,executableMhw)==0);
+                            assert(frontendVp1.live && frontendAvs1.live && vpCpu.live && vpAvsCpu.live);
+                            void* firstVpAddress=nullptr;void* secondVpAddress=nullptr;
+                            assert(frame.backing().withVpResources(0,[&](auto&,auto& first,auto&) noexcept {
+                                return frame.backing().withVpResources(1,[&](auto&,auto& second,auto&) noexcept {
+                                    firstVpAddress=first.bytes.data();secondVpAddress=second.bytes.data();
+                                    assert(firstVpAddress!=secondVpAddress);return 0;
+                                });
+                            })==0);
                             assert(frame.backing().withVpResources([&](auto&,auto& storage,auto&) noexcept {
                                 uintptr_t vpOs=0,vpRh=0,vpSfc=0;
                                 std::memcpy(&vpOs,storage.bytes.data()+0x10,8);
@@ -20643,6 +20655,19 @@ int main() {
                                 !frame.backing().retention()());
                             const uintptr_t noDn=0;
                             std::memcpy(source.prefix.data()+0x90,&noDn,8);
+                            unsigned secondPasses=0;
+                            const auto secondPass=frame.withPrivateVpCommandFrame(1,roles,0,0,
+                                0x1100,0x2200,0x3300,[&](auto&,void* child,void* vp,auto& graph,auto&,
+                                    auto&,auto&,auto&,auto&) noexcept {
+                                    ++secondPasses;
+                                    assert(child==pairCpu[1].bytes.data() && graph.ownsStorage(vp));
+                                    assert(vp==secondVpAddress && vp!=firstVpAddress);
+                                    return TglOwnedVeboxCommandTransactionResult{-19,-19,false,false};
+                                });
+                            uintptr_t secondRestoredVp=1;
+                            std::memcpy(&secondRestoredVp,pairCpu[1].bytes.data()+0x80,8);
+                            assert(secondPasses==1 && secondPass.status==-19 && !secondPass.acquired &&
+                                !secondRestoredVp && !frame.backing().retention()());
                             const auto deniedPass=frame.withPrivateVpCommandFrame(0,roles,0,0,
                                 0x1100,0x2200,0x3300,[](auto&,void*,void*,auto&,auto&,
                                     auto&,auto&,auto&,auto&) noexcept {
@@ -20745,6 +20770,7 @@ int main() {
                             return 0;
                         })==0); // CPU certificate fixture only
                         assert(prepareCalls==2);
+                        assert(!frontendVp1.live && !frontendAvs1.live);
                         assert(pinnedReleases>0);
                         assert(!so.borrowed && !to.borrowed && !ho.borrowed && !frameDn.live && !refs[1] && !refs[5]);
                         assert(cleaned[0]==1 && cleaned[1]==1 && destroyed==cleaned);
