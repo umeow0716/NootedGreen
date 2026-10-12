@@ -2883,6 +2883,7 @@ static void testOwnedVeboxVtable() {
     for (size_t offset : TglOwnedVeboxVtable::missing) original[offset/8] = 0;
     original[0] = image+0x12e240; original[1] = image+0x12e250;
     original[0x10/8] = image+0x126740;
+    original[0x20/8]=image+0x12c9d0;original[0x198/8]=image+0x12c010;
     original[0x40/8]=image+0x12e9c0;original[0x48/8]=image+0x12ea30;
     original[0xe8/8]=image+0x1296e0;original[0x110/8]=image+0x1295b0;
     original[0x118/8]=image+0x12b5f0;original[0x120/8]=image+0x1296d0;original[0x148/8]=image+0x12a230;
@@ -3002,7 +3003,7 @@ static void testOwnedVeboxVtable() {
         const auto native=original[offset/8];original[offset/8]=image+0x2048;
         assert(!build() && !table.addressPoint());original[offset/8]=native;
     }
-    for(size_t slot:{size_t(0x40/8),size_t(0x48/8),size_t(0xd0/8),size_t(0x150/8),size_t(0x158/8),size_t(0x160/8),size_t(0x168/8),size_t(0x170/8),size_t(0x180/8)}) {
+    for(size_t slot:{size_t(0x20/8),size_t(0x198/8),size_t(0x40/8),size_t(0x48/8),size_t(0xd0/8),size_t(0x150/8),size_t(0x158/8),size_t(0x160/8),size_t(0x168/8),size_t(0x170/8),size_t(0x180/8)}) {
         const auto native=original[slot];
         original[slot]=image+0x2048;assert(!build() && !table.addressPoint());
         original[slot]=native;
@@ -20404,6 +20405,7 @@ int main() {
                             nativeTable[0x40/8]=base+0x12e9c0;nativeTable[0x48/8]=base+0x12ea30;
                             nativeTable[0xe8/8]=base+0x1296e0;nativeTable[0x110/8]=base+0x1295b0;
                             nativeTable[0x118/8]=base+0x12b5f0;nativeTable[0x120/8]=base+0x1296d0;nativeTable[0x148/8]=base+0x12a230;
+                            nativeTable[0x20/8]=base+0x12c9d0;nativeTable[0x198/8]=base+0x12c010;
                             nativeTable[0x170/8]=base+0x12aba0;nativeTable[0x180/8]=base+0x12b1d0;
                             nativeTable[0x160/8]=base+0x12a740;nativeTable[0x168/8]=base+0x12ab10;
                             nativeTable[0x150/8]=base+0x12a730;nativeTable[0x158/8]=base+0x8f380;
@@ -21164,6 +21166,7 @@ int main() {
                             nativeTable[0x170/8]=base+0x12aba0;nativeTable[0x180/8]=base+0x12b1d0;
                             nativeTable[0xe8/8]=base+0x1296e0;nativeTable[0x110/8]=base+0x1295b0;
                             nativeTable[0x118/8]=base+0x12b5f0;nativeTable[0x120/8]=base+0x1296d0;nativeTable[0x148/8]=base+0x12a230;
+                            nativeTable[0x20/8]=base+0x12c9d0;nativeTable[0x198/8]=base+0x12c010;
                             nativeTable[0x160/8]=base+0x12a740;nativeTable[0x168/8]=base+0x12ab10;
                             nativeTable[0x150/8]=base+0x12a730;nativeTable[0x158/8]=base+0x8f380;
                             nativeTable[0xd0/8]=nativeTable[0x1b8/8]=base+0x71e80;
@@ -22381,6 +22384,7 @@ int main() {
                 nativeTable[0x40/8]=base+0x12e9c0;nativeTable[0x48/8]=base+0x12ea30;
                 nativeTable[0xe8/8]=base+0x1296e0;nativeTable[0x110/8]=base+0x1295b0;
                 nativeTable[0x118/8]=base+0x12b5f0;nativeTable[0x120/8]=base+0x1296d0;nativeTable[0x148/8]=base+0x12a230;
+                nativeTable[0x20/8]=base+0x12c9d0;nativeTable[0x198/8]=base+0x12c010;
                 nativeTable[0x170/8]=base+0x12aba0;nativeTable[0x180/8]=base+0x12b1d0;
                 nativeTable[0x160/8]=base+0x12a740;nativeTable[0x168/8]=base+0x12ab10;
                 nativeTable[0x150/8]=base+0x12a730;nativeTable[0x158/8]=base+0x8f380;

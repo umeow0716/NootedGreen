@@ -2689,6 +2689,11 @@ struct TglOwnedVeboxVtable {
             // owned VP factory+1e0 (SKU64 bit17). Its consumer MUST enclose the
             // qualified VP factory scope; frame slot58 is a different phase.
             candidate[0x10/8] != image+0x126740 ||
+            // Retained Render+20 dispatches mode0 through +198. Only this
+            // exact chain establishes native118 success before conditional
+            // VP40; an arbitrary in-image callback is not that admission.
+            candidate[0x20/8] != image+0x12c9d0 ||
+            candidate[0x198/8] != image+0x12c010 ||
             candidate[0x40/8] != image+0x12e9c0 || candidate[0x48/8] != image+0x12ea30 ||
             // Native12c010 -> +118 performs +e8, +110, +120 before VP40.
             // E8 assigns the MHW heap and consumes native helper1bb8;
