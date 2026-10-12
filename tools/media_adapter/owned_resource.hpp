@@ -18443,6 +18443,77 @@ public:
             });
     }
 };
+// Process-lived ABI router. Policy/owners must retain the original physical
+// and image obligations; this coordinator grants no GPU completion authority.
+// A single gate serializes journal admission with new owner/frame admission.
+template<class Owner,class Policy,size_t Capacity=16> class TglOwnedVphalProcessRouter {
+    using Registry=TglOwnedContextOwnerRegistry<Owner,Capacity>;
+    inline static Registry owners_;
+    inline static TglOwnedVphalPendingDestruction<Capacity> pending_;
+    inline static std::atomic_flag gate_=ATOMIC_FLAG_INIT;
+    inline static std::atomic<bool> closed_{false};
+    struct Unlock {~Unlock() noexcept {gate_.clear(std::memory_order_release);}};
+    static bool queued(uintptr_t object) noexcept {
+        auto kind=TglOwnedVphalDestructionState::Kind::Destroy;
+        return pending_.pending(object,kind);
+    }
+public:
+    using Kind=TglOwnedVphalDestructionState::Kind;
+    using Callbacks=TglOwnedVphalDestructorCallbacks<TglOwnedVphalProcessRouter>;
+    static bool faulted() noexcept {return closed_.load(std::memory_order_acquire)||pending_.faulted();}
+    static bool adopt(uintptr_t image,uintptr_t physical,uint64_t generation,Owner* owner) noexcept {
+        if(!owner || gate_.test_and_set(std::memory_order_acquire)) return false;
+        Unlock unlock;
+        return !faulted() && !queued(owner->context()) && owners_.adopt(image,physical,generation,owner);
+    }
+    static typename Registry::ContextLease pinFrame(uintptr_t image,uintptr_t physical,
+        uint64_t generation,uintptr_t object) noexcept {
+        if(gate_.test_and_set(std::memory_order_acquire)) return {};
+        Unlock unlock;
+        if(faulted() || queued(object)) return {};
+        return owners_.pin(image,physical,generation,object);
+    }
+    static bool record(uintptr_t object,Kind kind) noexcept {
+        if(gate_.test_and_set(std::memory_order_acquire)) {
+            closed_.store(true,std::memory_order_release);return false;
+        }
+        Unlock unlock;
+        if(faulted() || !pending_.record(object,kind)) {
+            closed_.store(true,std::memory_order_release);return false;
+        }
+        return true;
+    }
+    static typename Registry::ExclusiveOwnerLease pin(uintptr_t object) noexcept {
+        if(faulted()) return {};
+        return owners_.pinExclusiveObject(object,Policy::admit);
+    }
+    static void unresolved(uintptr_t object,Kind kind) noexcept {
+        static_assert(noexcept(Policy::unresolved(object,kind,false)));
+        Policy::unresolved(object,kind,faulted());
+    }
+    static void retained(typename Registry::ExclusiveOwnerLease& lease,Kind kind) noexcept {
+        static_assert(noexcept(Policy::retained(std::declval<Owner&>(),kind,false)));
+        const bool quarantined=owners_.quarantineExclusive(lease);
+        if(!quarantined) closed_.store(true,std::memory_order_release);
+        Policy::retained(*lease.get(),kind,quarantined);
+    }
+    static bool pending(uintptr_t object,Kind& kind) noexcept {return pending_.pending(object,kind);}
+    // Explicit external certificate only, never callback success or submit acceptance.
+    template<class Admit> static bool eraseRetired(uintptr_t object,Kind kind,Admit admit) noexcept {
+        if(gate_.test_and_set(std::memory_order_acquire)) return false;
+        Unlock unlock;
+        return !faulted() && pending_.eraseRetired(object,kind,admit);
+    }
+    template<size_t N,class Release> static int reconcileSuccessfulRemoval(uintptr_t image,
+        uintptr_t physical,uint64_t generation,const TglNativeRemovedContextBatch<N>& batch,
+        Release release) noexcept {
+        if(gate_.test_and_set(std::memory_order_acquire)) return 5;
+        Unlock unlock;
+        if(faulted() || !batch.valid || batch.count>N) return 5;
+        for(uint32_t i=0;i<batch.count;++i) if(queued(batch.contexts[i])) return 5;
+        return owners_.reconcileSuccessfulRemoval(image,physical,generation,batch,release);
+    }
+};
 // Context lease encloses the actual retained frame and its surface leases.
 // Destruction is inner frame FIRST, context pin LAST. Native/context/image
 // ownership remains in the concrete registry owner, not in copied roots.

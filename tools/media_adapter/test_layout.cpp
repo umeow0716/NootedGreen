@@ -12308,6 +12308,41 @@ static void testRetainedVeboxFrames() {
         assert(!owners.adopt(0x1000,0x2000,7,duplicate));delete duplicate;
         assert(deaths==1);
         {
+            struct ProcessPolicy {
+                static bool admit(uintptr_t image,uintptr_t physical,uint64_t generation,uintptr_t object) noexcept {
+                    return image==0x1000 && physical==0x2000 && generation==9 && object==0x8000;
+                }
+                static void unresolved(uintptr_t,TglOwnedVphalDestructionState::Kind,bool faulted) noexcept {
+                    assert(!faulted);
+                }
+                static void retained(ContextOwner&,TglOwnedVphalDestructionState::Kind,bool quarantined) noexcept {
+                    assert(quarantined);
+                }
+            };
+            using Router=TglOwnedVphalProcessRouter<ContextOwner,ProcessPolicy,2>;
+            unsigned processDeaths=0;
+            auto* processOwner=new ContextOwner{0x8000,processDeaths};
+            processOwner->allowDestructor=false;
+            assert(Router::adopt(0x1000,0x2000,9,processOwner));
+            {
+                auto frame=Router::pinFrame(0x1000,0x2000,9,0x8000);
+                assert(frame.get()==processOwner);
+                Router::Callbacks::deletingDestroy(reinterpret_cast<void*>(0x8000));
+                assert(!processOwner->destructorRequests);
+                assert(!Router::pinFrame(0x1000,0x2000,9,0x8000).get());
+            }
+            Router::Callbacks::deletingDestroy(reinterpret_cast<void*>(0x8000));
+            assert(processOwner->destructorRequests==1);
+            Router::Callbacks::deletingDestroy(reinterpret_cast<void*>(0x8000));
+            assert(processOwner->destructorRequests==1 && !Router::faulted());
+            TglNativeRemovedContextBatch<1> processRemoved;
+            processRemoved.valid=true;processRemoved.count=1;processRemoved.contexts[0]=0x8000;
+            assert(Router::reconcileSuccessfulRemoval(0x1000,0x2000,9,processRemoved,
+                [](ContextOwner&) noexcept {assert(false);return 0;})==5);
+            assert(Router::eraseRetired(0x8000,TglOwnedVphalDestructionState::Kind::DeletingDestroy,
+                [](uintptr_t,auto) noexcept {return true;})); // CPU fixture certificate only
+            assert(Router::reconcileSuccessfulRemoval(0x1000,0x2000,9,processRemoved,
+                [](ContextOwner&) noexcept {return 0;})==0 && processDeaths==1);
             using Registry=TglOwnedContextOwnerRegistry<ContextOwner,2>;
             struct Routing {
                 static Registry*& registry() noexcept {static Registry* value=nullptr;return value;}
