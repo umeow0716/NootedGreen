@@ -21088,6 +21088,7 @@ int main() {
                                         std::array<uint8_t,0x2a8> target{};
                                         std::array<uint8_t,0x1c> mhw{};
                                         std::array<uint8_t,0x68> settings{};
+                                        std::array<uint8_t,16> iefInput{};
                                         auto put=[](auto& bytes,size_t offset,auto value) noexcept {
                                             std::memcpy(bytes.data()+offset,&value,sizeof(value));
                                         };
@@ -21102,6 +21103,8 @@ int main() {
                                         put(target,0xd8,uint32_t(960));put(target,0xdc,uint32_t(540));
                                         put(target,0x130,uint32_t(0x15));
                                         put(mhw,0x18,uint16_t(16));put(mhw,0x1a,uint16_t(8));
+                                        put(source,0x78,uintptr_t(0x5000));
+                                        put(iefInput,0,uint8_t(1));put(iefInput,4,1.0f);
                                         auto read=[&](uintptr_t address,void* out,size_t size) noexcept {
                                             auto span=[&](uintptr_t base,const auto& bytes) noexcept {
                                                 if(address<base || address-base>bytes.size() ||
@@ -21110,7 +21113,7 @@ int main() {
                                             };
                                             return span(0x1000,source) || span(0x2000,target) ||
                                                 span(reinterpret_cast<uintptr_t>(target.data()),target) ||
-                                                span(0x3000,mhw) || span(0x4000,settings);
+                                                span(0x3000,mhw) || span(0x4000,settings) || span(0x5000,iefInput);
                                         };
                                         int data[2]{},command=0;
                                         const std::array<TglOwnedVpFrameAcquisitionArguments,2> args{{
@@ -21118,7 +21121,7 @@ int main() {
                                             {0x1000,0x2000,0x3000,0x4000,0,0x8000,{},data+1}}};
                                         auto releaseCpu=[](void*) noexcept {assert(false);};
                                         for(int expected:{0,-31}) {
-                                            unsigned states=0,emissions=0,avsProduced=0;
+                                            unsigned states=0,emissions=0,avsProduced=0,iefProduced=0;
                                             std::array<TglOwnedVpChromaStatePrefix,2> statePrefixes{};
                                             std::array<TglOwnedSfcAvsTables,2> avsTables{};
                                             std::array<TglOwnedVpCscCache,2> cscCaches;
@@ -21152,7 +21155,16 @@ int main() {
                                                                 ++avsProduced;return 0;
                                                             });
                                                     },
-                                                    [](void*,const auto&) noexcept {},
+                                                    [&](void* child,const auto& snapshot,uint8_t* statePacket) noexcept {
+                                                        assert(statePacket);
+                                                        const size_t index=child==first.bytes.data()?0:1;
+                                                        TglOwnedSfcCommandParameters parameters;
+                                                        std::memcpy(parameters.state.data(),statePacket,parameters.state.size());
+                                                        assert(tglPrepareOwnedVpIefCommandParameters(parameters,snapshot,TglOwnedIefTables{}));
+                                                        std::memcpy(statePacket,parameters.state.data(),parameters.state.size());
+                                                        iefPackets[index]=parameters.ief;
+                                                        ++iefProduced;
+                                                    },
                                                     [&](void* child,void*,void*) noexcept -> int {
                                                         const size_t index=child==first.bytes.data()?0:1;
                                                         auto& graph=index?secondGraph:firstGraph;
@@ -21230,7 +21242,7 @@ int main() {
                                                         });
                                                     });
                                             })==expected);
-                                            assert(states==2 && emissions==2 && avsProduced==2);
+                                            assert(states==2 && emissions==2 && avsProduced==2 && iefProduced==2);
                                         }
                                     }
                                     for(int expected:{0,-31}) {

@@ -13681,14 +13681,26 @@ public:
     int withLeasedPreparedContexts(const TglOwnedVpFramePreparation& frame,
         uintptr_t conditionalSource,uintptr_t settings,uintptr_t target,uintptr_t sourceA8,
         void* source,void* renderData,State state,Avs avs,Ief ief,Emit emit,Use use) noexcept {
+        auto invokeIef=[&](void* child,uint8_t* packet) noexcept {
+            if constexpr(std::is_invocable_v<Ief,void*,decltype(frame),uint8_t*>) {
+                static_assert(std::is_nothrow_invocable_v<Ief,void*,decltype(frame),uint8_t*>,"leased IEF packet ABI");
+                ief(child,frame,packet);
+            } else {
+                static_assert(noexcept(ief(child,frame)),"legacy IEF producer ABI");
+                ief(child,frame);
+            }
+        };
         static_assert(noexcept(state(nullptr,frame,state_)) && noexcept(avs(nullptr,frame,avs_)) &&
-            noexcept(ief(nullptr,frame)) && noexcept(emit(nullptr,nullptr,nullptr)),"leased producer ABI");
+            noexcept(emit(nullptr,nullptr,nullptr)),"leased producer ABI");
         if(!ready_ || !busy_ || state_.hasParametersLease() || avs_.hasParametersLease() ||
             !source || !renderData || !target) return 5;
         return tglWithOwnedVpPreparedFrame(storage_,frame,conditionalSource,
             settings,target,sourceA8,[&](void* child,const auto&) noexcept {
                     auto produceState=[&]() noexcept {return state(child,frame,state_);};
-                    auto produceFilters=[&]() noexcept {ief(child,frame);};
+                    uint8_t* leasedFilterPacket=nullptr;
+                    auto produceFilters=[&]() noexcept {
+                        invokeIef(child,leasedFilterPacket);
+                    };
                     using ProducerContext=TglOwnedVpPreparedProducerContext<
                         decltype(produceState),decltype(produceFilters)>;
                     ProducerContext producer{child,renderData,source,reinterpret_cast<void*>(target),
@@ -13703,7 +13715,9 @@ public:
                         [&]() noexcept {
                             const int filterResult=state_.withVpParameterPublication(storage_,[&](const uint8_t* packet) noexcept {
                                 producer.leasedState=packet;
+                                leasedFilterPacket=const_cast<uint8_t*>(packet);
                                 producer.filters(const_cast<uint8_t*>(packet),source);
+                                leasedFilterPacket=nullptr;
                                 producer.leasedState=nullptr;
                                 return producer.error;
                             });
