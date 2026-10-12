@@ -18658,7 +18658,8 @@ public:
     auto& surfaces() noexcept {return surfaces_;}
     auto& children() noexcept {return children_;}
     bool retainMhw(TglNativeVeboxMhwOwner<MhwInvoke>& owner) noexcept {
-        if(children_.first().owner().constructedBase() || children_.second().owner().constructedBase()) return false;
+        if(backing_.retention()() || children_.first().owner().constructedBase() ||
+            children_.second().owner().constructedBase()) return false;
         return mhwLease_.acquire(owner);
     }
     const TglVeboxHardwareBinding* retainedMhw() const noexcept {return mhwLease_.binding();}
@@ -18668,7 +18669,7 @@ public:
         const TglSfcMhwBinding& sfc,void* os,void* renderHal,void* history,void* performance,
         const void* cache,int32_t& status,Read read,Qualify qualify,Construct construct={}) {
         const auto* mhw=mhwLease_.binding();
-        if(index>1 || !mhw) return TglOwnedBaseConstruction::NotCalled;
+        if(index>1 || !mhw || backing_.retention()()) return TglOwnedBaseConstruction::NotCalled;
         auto& child=index?children_.second():children_.first();
         return child.initializeQualified(binding,lifetime,sfc,os,*mhw,renderHal,history,
             performance,cache,status,read,qualify,construct);
@@ -18731,7 +18732,8 @@ public:
     auto& children() noexcept {return children_;}
     bool surfacesReady() const noexcept {return source_.storage() && target_.storage();}
     bool retainMhw(TglNativeVeboxMhwOwner<MhwInvoke>& owner) noexcept {
-        if(children_.first().owner().constructedBase() || children_.second().owner().constructedBase()) return false;
+        if(backing_.retention()() || children_.first().owner().constructedBase() ||
+            children_.second().owner().constructedBase()) return false;
         return mhwLease_.acquire(owner);
     }
     const TglVeboxHardwareBinding* retainedMhw() const noexcept {return mhwLease_.binding();}
@@ -18741,7 +18743,7 @@ public:
         const TglSfcMhwBinding& sfc,void* os,void* renderHal,void* history,void* performance,
         const void* cache,int32_t& status,Read read,Qualify qualify,Construct construct={}) {
         const auto* mhw=mhwLease_.binding();
-        if(index>1 || !mhw) return TglOwnedBaseConstruction::NotCalled;
+        if(index>1 || !mhw || backing_.retention()()) return TglOwnedBaseConstruction::NotCalled;
         auto& child=index?children_.second():children_.first();
         return child.initializeQualified(binding,lifetime,sfc,os,*mhw,renderHal,history,
             performance,cache,status,read,qualify,construct);

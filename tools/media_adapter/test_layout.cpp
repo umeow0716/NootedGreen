@@ -18650,6 +18650,7 @@ int main() {
                         TglOwnedVeboxRetainedFrames<Assembly,1> frames;
                         using Pair=std::remove_reference_t<decltype(std::declval<Assembly&>().children())>;
                         Pair* cleanupPair=nullptr;
+                        Assembly* retainedAssembly=nullptr;
                         std::array<uint8_t,0x2cb8> renderer{};
                         const auto ticket=frames.create(frameSurfaces,frameDn,base,allocatorRead,[](uintptr_t image) noexcept {return image==base;},
                             [](uintptr_t,size_t) noexcept {return true;},
@@ -18660,6 +18661,7 @@ int main() {
                             std::array<decltype(pairDestroy),2>{pairDestroy,pairDestroy});
                         const auto submitted=frames.run(ticket,[&](Assembly& assembly) noexcept {
                         auto& pair=assembly.children();
+                        retainedAssembly=&assembly;
                         cleanupPair=&pair;
                         backingRetention=&assembly.backing().retention();
                         const TglResourceKey frameKey{8,3,0x3d,1,0,false};
@@ -18795,6 +18797,13 @@ int main() {
                         return result;
                         });
                         assert(submitted.status==31 && submitted.acquired && !submitted.writtenBack);
+                        int32_t retainedStatus=77;
+                        assert(retainedAssembly && retainedAssembly->initializeQualifiedChild(1,
+                            baseBinding,lifetime,mhw,reinterpret_cast<void*>(os),reinterpret_cast<void*>(0x3000),
+                            nullptr,nullptr,nullptr,retainedStatus,frameMhwRead,qualifyMhw,
+                            [](uintptr_t,void*,void*,void*,void*,void*,void*,void*,const void*,int32_t*) noexcept {
+                                assert(false);
+                            })==TglOwnedBaseConstruction::NotCalled && retainedStatus==77);
                         assert(frameSurfaces.live==2 && frameDn.live==1);
                         assert(frames.run(ticket,[](Assembly&) noexcept -> TglOwnedVeboxCommandTransactionResult {assert(false);return {};}).status==5);
                         assert(frames.withQuiescentFrames([]() noexcept -> int {assert(false);return 0;})==5);
