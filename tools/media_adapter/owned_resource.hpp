@@ -18808,6 +18808,44 @@ public:
         return std::array<Surface*,4>{&ffdi_[0],&ffdi_[1],&ffdi_[2],&ffdi_[3]};
     }
     auto ffdnBacked() noexcept {return std::array<Surface*,2>{&ffdn_[0],&ffdn_[1]};}
+    // Kind/count must come from the admitted native FFDi selection; source
+    // format alone cannot identify an SFC-selected output allocation kind.
+    template<class Owner,class Use>
+    int withPreparedFfdiViews(Owner& input,Owner* execution,Owner* secondary,
+        size_t count,TglOwnedFfdiAllocationKind kind,Use use,
+        std::array<const TglOwnedSurfaceStorage*,3> captured={}) noexcept {
+        if(auxiliary_.retention()()) return 5;
+        if(kind==TglOwnedFfdiAllocationKind::NativeBacking)
+            return tglWithPreparedBackedFfdiViews(ffdiBacked(),input,execution,secondary,count,use,captured);
+        if(kind!=TglOwnedFfdiAllocationKind::DescriptorOnly) return 5;
+        return tglWithPreparedDescriptorFfdiViews(ffdiDescriptors_,input,execution,secondary,count,use,captured);
+    }
+    // Active-FFDi producer graph. Selection/count/flags are supplied by the
+    // admitted post-preparation reader; bypass/secondary-only is separate.
+    template<class Owner,class Use,class Parameters=TglOwnedFfdnNoDenoiseBorrow>
+    int withPreparedSurfaceViews(Owner& input,Owner* execution,Owner* secondary,Owner* previous,
+        size_t count,TglOwnedFfdiAllocationKind kind,bool useFfdn,bool referenceValid,bool useStmm,
+        Use use,Parameters* parameters=nullptr,
+        std::array<const TglOwnedSurfaceStorage*,4> captured={}) noexcept {
+        if(auxiliary_.retention()() || !count || count>4) return 5;
+        return tglWithCapturedOwnedSurfaceRoles(std::array<Owner*,4>{&input,execution,secondary,previous},captured,
+            [&](const auto& roles) noexcept -> int {
+                return withPreparedFfdiViews(input,execution,secondary,count,kind,
+                    [&](const auto& inputs,const auto& outputs,size_t active) noexcept -> int {
+                        TglOwnedFfdiTailViews ffdi;ffdi.inputs=inputs;ffdi.outputs=outputs;ffdi.count=active;
+                        auto tail=[&](const TglOwnedFfdnTailViews& ffdn) noexcept -> int {
+                            return auxiliary_.withPreparedViews(useStmm,
+                                [&](const auto& stmm,const auto& statistics) noexcept -> int {
+                                    static_assert(noexcept(use(ffdi,ffdn,stmm,statistics)) &&
+                                        std::is_same_v<decltype(use(ffdi,ffdn,stmm,statistics)),int>);
+                                    return use(ffdi,ffdn,stmm,statistics);
+                                });
+                        };
+                        if(!useFfdn) return tail({});
+                        return withPreparedFfdnViews(input,*roles[0],previous,roles[3],referenceValid,tail,parameters);
+                    },{roles[0],roles[1],roles[2]});
+            });
+    }
     // Producer-time access to retained outputs. Never reuse a pending frame;
     // reference validity comes from admitted report, not snapshot existence.
     template<class Owner,class Use,class Parameters=TglOwnedFfdnNoDenoiseBorrow>

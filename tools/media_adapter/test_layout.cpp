@@ -8357,6 +8357,22 @@ static void testNativeResourceBoundary() {
                                                     reinterpret_cast<uintptr_t>(FrameStatisticsFixture::allocate),
                                                     reinterpret_cast<uintptr_t>(FrameStatisticsFixture::release)};
                                                 TglNativeVeboxSurfaceFrameStorage<FrameStmmApi> retained(binding,4096,TglNativeBufferFillBinding{});
+                                                TglOwnedFfdiAllocationRequest ffdiRequest;
+                                                assert(tglPrepareOwnedFfdiAllocationRequest(current,0x3d,1,{},ffdiRequest));
+                                                assert(tglWithOwnedBackedFfdiBatch(retained.ffdiBacked(),linkedInput,
+                                                    static_cast<decltype(&linkedInput)>(nullptr),static_cast<decltype(&linkedInput)>(nullptr),
+                                                    2,ffdiRequest,{8,3},0,0,[](uint8_t,uint8_t) noexcept -> int {return 0;},
+                                                    [](const auto&,const auto&,size_t,uint8_t,uint8_t) noexcept -> int {return 0;},
+                                                    {&current,nullptr,nullptr})==0);
+                                                const auto ffdiAllocations=borrowFixture.allocations;
+                                                assert(retained.withPreparedFfdiViews(linkedInput,
+                                                    static_cast<decltype(&linkedInput)>(nullptr),static_cast<decltype(&linkedInput)>(nullptr),
+                                                    2,TglOwnedFfdiAllocationKind::NativeBacking,
+                                                    [&](const auto& inputs,const auto& outputs,size_t count) noexcept -> int {
+                                                        assert(inputs[0]==&current && count==2 && outputs[0] && outputs[1]);
+                                                        assert(retained.ffdiBacked()[0]->hasSurfaceLease(*outputs[0]));return -75;
+                                                    },{&current,nullptr,nullptr})==-75);
+                                                assert(borrowFixture.allocations==ffdiAllocations);
                                                 bool reference=false;uint8_t flag=0,mode=0;
                                                 assert(tglPrepareOwnedBackedFfdnPair(retained.ffdnBacked(),linkedInput,
                                                     static_cast<decltype(&linkedInput)>(nullptr),static_cast<decltype(&linkedInput)>(nullptr),
@@ -8372,6 +8388,25 @@ static void testNativeResourceBoundary() {
                                                         return 31;
                                                     })==31);
                                                 assert(borrowFixture.allocations==allocations);
+                                                TglNativeBufferFillBinding fill{reinterpret_cast<uintptr_t>(&borrowFixture),
+                                                    reinterpret_cast<uintptr_t>(FrameStatisticsFixture::fill)};
+                                                assert(retained.auxiliary().statistics().ensureNative(33,17,fill,
+                                                    [](uintptr_t,uint32_t) noexcept {return true;},
+                                                    [](const auto&,const auto&) noexcept -> int {return 0;})==0);
+                                                const auto graphAllocations=borrowFixture.allocations;
+                                                assert(retained.withPreparedSurfaceViews(linkedInput,
+                                                    static_cast<decltype(&linkedInput)>(nullptr),static_cast<decltype(&linkedInput)>(nullptr),
+                                                    static_cast<decltype(&linkedInput)>(nullptr),2,TglOwnedFfdiAllocationKind::NativeBacking,
+                                                    true,false,false,[&](const auto& ffdi,const auto& ffdn,const auto& stmm,const auto& statistics) noexcept -> int {
+                                                        assert(ffdi.count==2 && ffdi.outputs[0] && ffdi.outputs[1]);
+                                                        assert(ffdn.outputs[0] && ffdn.outputs[1] && !ffdn.history);
+                                                        assert(!stmm.surfaces[0] && statistics.resource[0x48]==1);
+                                                        assert(retained.ffdiBacked()[0]->hasSurfaceLease(*ffdi.outputs[0]));
+                                                        assert(retained.ffdnBacked()[0]->hasSurfaceLease(*ffdn.outputs[0]));
+                                                        return -76;
+                                                    },static_cast<TglOwnedFfdnNoDenoiseBorrow*>(nullptr),
+                                                    {&current,nullptr,nullptr,nullptr})==-76);
+                                                assert(borrowFixture.allocations==graphAllocations && borrowFixture.fills==1);
                                                 retained.auxiliary().retention().observe(
                                                     TglOwnedVeboxCommandTransactionResult{31,31,true,false});
                                                 assert(retained.withPreparedFfdnViews(linkedInput,current,
