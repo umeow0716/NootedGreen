@@ -2,6 +2,7 @@
 #include <cassert>
 #include <cstdint>
 #include <cstring>
+#include <cstdio>
 #include <type_traits>
 #include "tgl_capability_adapter.hpp"
 #include "descriptor_bridge.hpp"
@@ -13775,6 +13776,7 @@ static void testActualNv12LayoutSnapshot() {
     uint32_t type=1,format=0x19;uintptr_t handle=1;
     std::memcpy(resource.data()+0x14,&type,4);std::memcpy(resource.data()+0x18,&format,4);
     std::memcpy(resource.data()+0x58,&handle,8);
+    const uint32_t planeCount=2;std::memcpy(resource.data()+0x60,&planeCount,4);
     for(unsigned mode=0;mode<6;++mode) {
         Api api;api.mode=mode;Sink sink;sink.deny=mode==5;
         TglOwnedNv12Layout out;out.width=77;
@@ -20595,6 +20597,14 @@ int main() {
                             std::memcpy(s->resource.data()+0x68,&plane,8);
                             std::memcpy(s->resource.data()+0x58,&surface,8);
                         }
+                        const uint32_t nv12=0x19,planes=2,outWidth=960,outHeight=540;
+                        const uintptr_t secondPlane=1;
+                        std::memcpy(target.resource.data()+0x18,&nv12,4);
+                        std::memcpy(target.resource.data()+0x60,&planes,4);
+                        std::memcpy(target.resource.data()+0xa0,&secondPlane,8);
+                        std::memcpy(target.prefix.data()+0x130,&nv12,4);
+                        std::memcpy(target.prefix.data()+0xd8,&outWidth,4);
+                        std::memcpy(target.prefix.data()+0xdc,&outHeight,4);
                         const uint32_t historyCount=1;const auto hp=reinterpret_cast<uintptr_t>(&history);
                         std::memcpy(source.prefix.data()+0xb8,&historyCount,4);
                         std::memcpy(source.prefix.data()+0xc8,&hp,8);
@@ -20677,7 +20687,7 @@ int main() {
                         auto frontendCleanup=[&](void* object) noexcept {
                             assert(!parentDeaths && frameMhwInvoke.cleanups==1);
                             assert(retirementQualified && so.borrowed && to.borrowed && ho.borrowed);
-                            assert(frameDn.live==1 && refs[1]==3 && refs[5]==3);
+                            assert(frameDn.live==1 && refs[1]==4 && refs[5]==3);
                             uintptr_t restoredVp=1;
                             std::memcpy(&restoredVp,static_cast<uint8_t*>(object)+0x80,8);
                             assert(restoredVp==0 && vpCpu.live && vpAvsCpu.live);
@@ -21405,7 +21415,9 @@ int main() {
                                         std::array<uint8_t,0x298> source{};
                                         std::array<uint8_t,0x2a8> target{};
                                         std::array<uint8_t,0x1c> mhw{};
-                                        std::array<uint8_t,0x68> settings{};
+                                        // NV12 compression callback reads execution mode+d28;
+                                        // zero explicitly records native compression disabled.
+                                        std::array<uint8_t,0xd30> settings{};
                                         std::array<uint8_t,16> iefInput{};
                                         auto put=[](auto& bytes,size_t offset,auto value) noexcept {
                                             std::memcpy(bytes.data()+offset,&value,sizeof(value));
@@ -21419,7 +21431,7 @@ int main() {
                                         put(source,0x58,1920.0f);put(source,0x5c,1080.0f);
                                         put(source,0x130,uint32_t(0x19));put(source,0x120,uint32_t(0x31));
                                         put(target,0xd8,uint32_t(960));put(target,0xdc,uint32_t(540));
-                                        put(target,0x130,uint32_t(0x15));
+                                        put(target,0x130,uint32_t(0x19));
                                         put(mhw,0x18,uint16_t(16));put(mhw,0x1a,uint16_t(8));
                                         put(source,0x78,uintptr_t(0x5000));
                                         put(iefInput,0,uint8_t(1));put(iefInput,4,1.0f);
@@ -21487,6 +21499,34 @@ int main() {
                                             const TglOwnedVpEntrySet* catalogues[2]{};
                                             void* commandParents[2]{};
                                             std::array<TglOwnedSurfaceStorage*,2> leasedOutputs{};
+                                            struct OutputOwner {
+                                                void* context=nullptr;
+                                                bool (*check)(void*,const TglOwnedSurfaceStorage&) noexcept=nullptr;
+                                                bool hasSurfaceLease(const TglOwnedSurfaceStorage& s) noexcept {
+                                                    return context && check && check(context,s);
+                                                }
+                                            };
+                                            std::array<OutputOwner,2> outputOwners{};
+                                            struct LayoutApi {
+                                                unsigned locks=0,unlocks=0,references=0,reads=0;
+                                                uintptr_t surface(uintptr_t h) noexcept {return h;}
+                                                bool retain(uintptr_t h) noexcept {assert(h==5);++references;return true;}
+                                                void release(uintptr_t) noexcept {assert(references);--references;}
+                                                int lock(uintptr_t) noexcept {++locks;return 0;}
+                                                int unlock(uintptr_t) noexcept {++unlocks;return 0;}
+                                                bool readLayout(uintptr_t,TglOwnedNv12Layout& out) noexcept {
+                                                    ++reads;
+                                                    // Recording IOSurface API, not Mach-O/native execution.
+                                                    // Actual UV placement includes36 padding rows.
+                                                    return tglCaptureOwnedNv12Layout(out,0x1000000,0x100000,
+                                                        {0x1000080,0x1000080+960*576},960,540,{960,960},{540,270});
+                                                }
+                                            } layoutApi;
+                                            struct LayoutSink {
+                                                bool reserve(uintptr_t) noexcept {return true;}
+                                                void cancel() noexcept {}
+                                                void commit(uintptr_t) noexcept {assert(false);}
+                                            } layoutSink;
                                             std::array<const void*,2> acquiredGeometry{};
                                             TglSfcMhwBinding commandBinding;
                                             assert(commandBinding.resolve(base,frontendRead,qualifyMhw,executableMhw));
@@ -21525,7 +21565,7 @@ int main() {
                                                     assert(mode==1);return parameters(entry,object,command,&mode);
                                                 }
                                             } commandInvoke{frontendSfc,&command,scenario>0?unsigned(scenario):0};
-                                            assert(firstGraph.withPairedProducerReservation(secondGraph,[&](void*,void*) noexcept -> int {
+                                            const int coreResult=firstGraph.withPairedProducerReservation(secondGraph,[&](void*,void*) noexcept -> int {
                                                 return tglWithOwnedVpPairedAcquiredFrameCore(firstGraph,first,firstLines.resources(),
                                                     secondGraph,second,secondLines.resources(),args,read,modeRetire,releaseCpu,
                                                     [&](void* child,const auto& snapshot,const auto& geometry,auto& packet) noexcept -> int {
@@ -21539,13 +21579,13 @@ int main() {
                                                         const int bound=tglPrepareOwnedVpLeasedSurfaceState(commandInputs[index],packet,
                                                             *leasedOutputs[index],*leasedAvs[index],*leasedIef[index],leasedSfd[index],
                                                             prefix.packet,{},false,false,false,TglOwnedSfcCompressionMode::Disabled,
-                                                            [](auto& output) noexcept {
-                                                                // Explicit recording metadata, not a native producer.
-                                                                const uint32_t pitch=960,format=0x15,uv=960*540;
-                                                                std::memcpy(output.prefix.data()+0xe0,&pitch,4);
-                                                                std::memcpy(output.prefix.data()+0x130,&format,4);
-                                                                std::memcpy(output.prefix.data()+0x100,&uv,4);return 0;
+                                                            [&](auto& output) noexcept {
+                                                                const auto result=tglPrepareLeasedOwnedNv12Metadata(
+                                                                    outputOwners[index],output,layoutApi,layoutSink);
+                                                                assert(result.ready());
+                                                                return result.ready()?0:5;
                                                             });
+                                                        assert(bound==0);
                                                         if(bound) return bound;
                                                         ++states;return 0;
                                                     },[&](void* child,const auto& snapshot,auto& owner) noexcept -> int {
@@ -21715,6 +21755,11 @@ int main() {
                                                                     assert(leases.target && sourceOwner.hasSurfaceLease(leases.source) &&
                                                                         targetOwner.hasSurfaceLease(*leases.target) && !leasedOutputs[i]);
                                                                     leasedOutputs[i]=leases.target;
+                                                                    outputOwners[i]={&targetOwner,
+                                                                        +[](void* context,const TglOwnedSurfaceStorage& s) noexcept {
+                                                                            using Owner=std::remove_reference_t<decltype(targetOwner)>;
+                                                                            return static_cast<Owner*>(context)->hasSurfaceLease(s);
+                                                                        }};
                                                                     auto& lines=i?recordedSecond:recordedFirst;
                                                                     uint32_t input=0,scaled=0;
                                                                     std::memcpy(&input,statePrefixes[i].packet.data()+0x30,4);
@@ -21726,14 +21771,17 @@ int main() {
                                                                             assert(!lines.lines().tryReset() && !lines.sfd().tryReset());
                                                                             int result=entries.setup(child,reinterpret_cast<void*>(0x1000),
                                                                                 reinterpret_cast<void*>(0x2000),data+i);
+                                                                            if(result) std::fprintf(stderr,"NV12 setup status=%d child=%zu states=%u\n",result,i,states);
                                                                             if(!result) result=entries.send(child,data+i,&command);
                                                                             leasedAvs[i]=nullptr;leasedIef[i]=nullptr;leasedSfd[i]=nullptr;
                                                                             return result;
                                                                         });
                                                                     leasedOutputs[i]=nullptr;
+                                                                    outputOwners[i]={};
                                                                     return TglOwnedVeboxCommandTransactionResult{status,0,false,false};
                                                                 });
                                                             assert(!transaction.acquired && !transaction.writtenBack && !leasedOutputs[i]);
+                                                            if(transaction.status) std::fprintf(stderr,"NV12 transaction status=%d child=%zu states=%u\n",transaction.status,i,states);
                                                             if(transaction.status) return transaction.status;
                                                         }
                                                         return expected;
@@ -21750,9 +21798,14 @@ int main() {
                                                         });
                                                         });
                                                     });
-                                            })==expected);
+                                            });
+                                            if(coreResult!=expected) std::fprintf(stderr,"NV12 core status=%d expected=%d states=%u prefixes=%u reads=%u\n",coreResult,expected,states,unsigned(prefixesPrepared),layoutApi.reads);
+                                            assert(coreResult==expected);
                                             const unsigned preparedCount=scenario>0?1:2;
                                             assert(states==preparedCount && avsProduced==preparedCount && iefProduced==preparedCount);
+                                            assert(layoutApi.reads==preparedCount &&
+                                                layoutApi.locks==preparedCount && layoutApi.unlocks==preparedCount &&
+                                                layoutApi.references==0);
                                             assert(emissions==(scenario>0?0U:2U));
                                             assert(commandInvoke.calls==(scenario>0?unsigned(scenario):14U));
                                             assert(usageCalls==preparedCount);
@@ -22063,12 +22116,14 @@ int main() {
                             assert(executionBackend.destroyed==0);
                             return executionResult;
                         });
-                        assert(r.acquired && frameDn.live==1 && refs[1]==3);
+                        // Source/history each retain one token; NV12 target
+                        // retains both plane tokens, even when handles alias.
+                        assert(r.acquired && frameDn.live==1 && refs[1]==4);
                         uintptr_t detachedDn=1;
                         std::memcpy(&detachedDn,source.prefix.data()+0x90,8);
                         assert(detachedDn==0);
                         assert(frames.retire(ticket,[](const auto&,bool,const auto&) noexcept {return 31;})==31);
-                        assert(ho.borrowed && refs[1]==3);
+                        assert(ho.borrowed && refs[1]==4);
                         assert(vpCpu.live && vpAvsCpu.live);
                         assert(removeParent()==5 && !parentDeaths && frameMhwInvoke.cleanups==1);
                         TglOwnedVphalPendingDestruction<1> parentPending;
@@ -22084,7 +22139,7 @@ int main() {
                             },[&](auto&,bool pending,const auto& result) noexcept {
                                 ++prepareCalls;
                                 assert(pending && result.acquired && !result.writtenBack);
-                                assert(ho.borrowed && frameDn.live==1 && refs[1]==3);
+                                assert(ho.borrowed && frameDn.live==1 && refs[1]==4);
                                 assert(!cleaned[0] && !cleaned[1] && vpCpu.live && vpAvsCpu.live);
                                 assert(!parents.pinExclusive(base,0x8000,1,parentAddress).get());
                                 return 31;
@@ -22095,7 +22150,7 @@ int main() {
                         },[&](auto& frame,bool pending,const auto& result) noexcept {
                             ++prepareCalls;
                             assert(pending && result.acquired && !result.writtenBack);
-                            assert(ho.borrowed && frameDn.live==1 && refs[1]==3);
+                            assert(ho.borrowed && frameDn.live==1 && refs[1]==4);
                             assert(!cleaned[0] && !cleaned[1] && vpCpu.live && vpAvsCpu.live);
                             auto admitDetach=[](void*,uint64_t,uintptr_t,uintptr_t) noexcept {return true;};
                             assert(frame.children().detach(nativeRenderer.data(),1,admitDetach));

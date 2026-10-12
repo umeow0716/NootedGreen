@@ -16280,12 +16280,13 @@ template<class Api,class Quarantine>
 TglOwnedNv12LayoutRead tglReadRetainedOwnedNv12Layout(
     const std::array<uint8_t,0x148>& resource,Api& api,Quarantine& quarantine,
     TglOwnedNv12Layout& output) noexcept {
-    uint32_t type=0,format=0;uintptr_t handle=0;
+    uint32_t type=0,format=0,planeCount=0;uintptr_t handle=0;
     std::memcpy(&type,resource.data()+0x14,4);
     std::memcpy(&format,resource.data()+0x18,4);
     std::memcpy(&handle,resource.data()+0x58,8);
+    std::memcpy(&planeCount,resource.data()+0x60,4);
     TglOwnedNv12LayoutRead result;
-    if(type!=1 || format!=0x19 || !handle) return result;
+    if(type!=1 || format!=0x19 || planeCount!=2 || !handle) return result;
     const auto surface=api.surface(handle);
     static_assert(noexcept(api.retain(surface)) && noexcept(api.release(surface)) &&
         noexcept(api.lock(surface)) && noexcept(api.unlock(surface)) &&
