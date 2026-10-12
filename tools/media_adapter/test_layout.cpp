@@ -21244,6 +21244,7 @@ int main() {
                                             const int expected=scenario>0?-17:scenario;
                                             unsigned states=0,emissions=0,avsProduced=0,iefProduced=0;
                                             std::array<TglOwnedVpChromaStatePrefix,2> statePrefixes{};
+                                            bool prefixesPrepared=false;
                                             std::array<TglOwnedSfcAvsTables,2> avsTables{};
                                             std::array<TglOwnedSfcCommandParameters,2> commandInputs;
                                             TglNativeSineBinding sineBinding;
@@ -21292,11 +21293,10 @@ int main() {
                                                         assert(snapshot.regions.scale.scaling && !packet.hasParametersLease());
                                                         assert(leasedOutputs[child==first.bytes.data()?0:1]);
                                                         assert(acquiredGeometry[child==first.bytes.data()?0:1]==&geometry);
-                                                        TglOwnedVpChromaStatePrefix prefix;
-                                                        if(!tglPrepareOwnedVpStatePrefix(snapshot,geometry,false,false,prefix) ||
-                                                           !packet.prepare(prefix.packet,{},false,false,false,
+                                                        assert(prefixesPrepared);
+                                                        const auto& prefix=statePrefixes[child==first.bytes.data()?0:1];
+                                                        if(!packet.prepare(prefix.packet,{},false,false,false,
                                                                TglOwnedSfcCompressionMode::Disabled)) return 5;
-                                                        statePrefixes[child==first.bytes.data()?0:1]=prefix;
                                                         ++states;return 0;
                                                     },[&](void* child,const auto& snapshot,auto& owner) noexcept -> int {
                                                         const size_t index=child==first.bytes.data()?0:1;
@@ -21404,6 +21404,10 @@ int main() {
                                                         assert(!states && acquired[0].source==args[0].source &&
                                                             acquired[1].target==args[1].target);
                                                         acquiredGeometry={&geometryA,&geometryB};
+                                                        assert(!prefixesPrepared);
+                                                        if(!tglPrepareOwnedVpStatePrefix(acquired[0].frame,geometryA,false,false,statePrefixes[0]) ||
+                                                           !tglPrepareOwnedVpStatePrefix(acquired[1].frame,geometryB,false,false,statePrefixes[1])) return 5;
+                                                        prefixesPrepared=true;
                                                         const std::array<TglOwnedVpEntrySet,2> base{baseA,baseB};
                                                         return tglWithOwnedVpPairedCscDispatchEntries(a,b,base,
                                                             [&](void*,const auto& cscA,auto& pa,void*,const auto& cscB,auto& pb) noexcept -> int {
