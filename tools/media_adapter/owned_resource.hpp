@@ -17230,6 +17230,34 @@ int tglWithOwnedVpPairedFrameCore(Graph& firstGraph,TglOwnedVpSfcCallerStorage& 
         });
 }
 
+struct TglOwnedVpPreparedFrameArguments {
+    const TglOwnedVpFramePreparation& frame;
+    uintptr_t source,target,settings,conditionalSource,sourceA8;
+    void* renderData;
+};
+template<class Graph,class Lines,class Read,class Retire,class Release,
+    class State,class Avs,class Ief,class Emit,class Use>
+int tglWithOwnedVpPairedPreparedFrameCore(Graph& firstGraph,TglOwnedVpSfcCallerStorage& first,Lines& firstLines,
+    Graph& secondGraph,TglOwnedVpSfcCallerStorage& second,Lines& secondLines,
+    const std::array<TglOwnedVpPreparedFrameArguments,2>& args,
+    Read& read,Retire& retire,Release& release,State state,Avs avs,Ief ief,Emit emit,Use use) noexcept {
+    return tglWithOwnedVpPairedFrameCore(firstGraph,first,firstLines,secondGraph,second,secondLines,
+        {args[0].source,args[1].source},{args[0].target,args[1].target},
+        {args[0].settings,args[1].settings},read,retire,release,
+        [&](void*,const auto& firstEntries,void*,const auto& secondEntries) noexcept -> int {
+            return firstGraph.withLeasedPreparedContexts(args[0].frame,args[0].conditionalSource,
+                args[0].settings,args[0].target,args[0].sourceA8,reinterpret_cast<void*>(args[0].source),
+                args[0].renderData,state,avs,ief,emit,[&](auto& p0,auto& s0) noexcept -> int {
+                    return secondGraph.withLeasedPreparedContexts(args[1].frame,args[1].conditionalSource,
+                        args[1].settings,args[1].target,args[1].sourceA8,reinterpret_cast<void*>(args[1].source),
+                        args[1].renderData,state,avs,ief,emit,[&](auto& p1,auto& s1) noexcept -> int {
+                            const std::array<TglOwnedVpEntrySet,2> base{firstEntries,secondEntries};
+                            return tglWithOwnedVpPairedPreparedEntries(p0,s0,p1,s1,base,use);
+                        });
+                });
+        });
+}
+
 // CPU construction-to-lifetime transition. Construct must invoke the owned
 template<class Lifetime,class Use>
 int tglWithOwnedVpPairedLifetimeAssemblyEntries(void* first,Lifetime& firstLifetime,

@@ -21003,6 +21003,49 @@ int main() {
                                             })==expected);
                                     }
                                     for(int expected:{0,-31}) {
+                                        TglOwnedVpFramePreparation snapshots[2];
+                                        snapshots[0].regions.scale.scaling=true;
+                                        snapshots[1].regions.scale.scaling=true;
+                                        snapshots[0].at922=true;snapshots[1].at922=true;
+                                        int renderData[2]{},command=0;
+                                        const std::array<TglOwnedVpPreparedFrameArguments,2> args{{
+                                            {snapshots[0],0x1000,0x2000,0x3000,0,0,renderData},
+                                            {snapshots[1],0x1000,0x2000,0x3000,0,0,renderData+1}}};
+                                        unsigned stateCount=0,avsCount=0,filterCount=0,emitCount=0;
+                                        auto releaseCpu=[](void*) noexcept {assert(false);};
+                                        assert(firstGraph.withPairedProducerReservation(secondGraph,[&](void*,void*) noexcept -> int {
+                                            return tglWithOwnedVpPairedPreparedFrameCore(firstGraph,first,firstLines.resources(),
+                                                secondGraph,second,secondLines.resources(),args,modeRead,modeRetire,releaseCpu,
+                                                [&](void*,const auto&,auto& packet) noexcept -> int {
+                                                    assert(!packet.hasParametersLease());++stateCount;return 0;
+                                                },[&](void*,const auto&,auto&) noexcept -> int {++avsCount;return 0;},
+                                                [&](void*,const auto&) noexcept {++filterCount;},
+                                                [&](void*,void*,void*) noexcept -> int {++emitCount;return 0;},
+                                                [&](void* a,const auto& ea,void* b,const auto& eb) noexcept -> int {
+                                                    assert(ea.initialize && eb.destroy && ea.allocate && eb.inputFormat &&
+                                                        ea.state && eb.filters && ea.setup && eb.send);
+                                                    constexpr uint32_t remaining=(1U<<5)|(1U<<20)|(1U<<21)|
+                                                        (1U<<24)|(1U<<25)|(1U<<26);
+                                                    assert(ea.missingMask()==remaining && eb.missingMask()==remaining);
+                                                    ea.sampleMode(a,reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x2000));
+                                                    ea.formatMode(a,reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x3000));
+                                                    eb.sampleMode(b,reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x2000));
+                                                    eb.formatMode(b,reinterpret_cast<void*>(0x1000),reinterpret_cast<void*>(0x3000));
+                                                    int result=eb.setup(b,reinterpret_cast<void*>(0x1000),
+                                                        reinterpret_cast<void*>(0x2000),renderData+1);
+                                                    if(result) return result;
+                                                    result=ea.setup(a,reinterpret_cast<void*>(0x1000),
+                                                        reinterpret_cast<void*>(0x2000),renderData);
+                                                    if(result) return result;
+                                                    result=ea.send(a,renderData,&command);
+                                                    if(result) return result;
+                                                    result=eb.send(b,renderData+1,&command);
+                                                    return result?result:expected;
+                                                });
+                                        })==expected);
+                                        assert(stateCount==2 && avsCount==2 && filterCount==2 && emitCount==2);
+                                    }
+                                    for(int expected:{0,-31}) {
                                         assert(firstGraph.withPairedAssemblyView(secondGraph,false,modeRead,
                                             firstLines.resources(),secondLines.resources(),modeRetire,
                                             [&](void* a,const auto& ae,void* b,const auto& be) noexcept -> int {
