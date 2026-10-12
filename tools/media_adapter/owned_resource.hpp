@@ -12078,6 +12078,22 @@ public:
 template<size_t Extent,size_t WriteOffset=Extent>
 using TglBorrowedVeboxAdmissionPacketView=TglBorrowedVeboxByteView<Extent,WriteOffset>;
 
+// Resolve the original child-owned history on each admission, under the same
+// child lease. Caller's region validators must also hold its allocation live;
+// readable/writable permission alone is not an ownership grant.
+template<class Owner,class Readable,class Writable>
+bool tglUpdateBorrowedVeboxHistory(Owner& owner,void* child,
+    const TglOwnedSurfaceStorage& source,const TglOwnedSurfaceStorage* c0,
+    const TglOwnedSurfaceStorage* c8,uint32_t pipe,
+    Readable readable,Writable writable) noexcept {
+    if(!child || !owner.hasPrivateChildLease(reinterpret_cast<uintptr_t>(child))) return false;
+    uintptr_t address=0;
+    std::memcpy(&address,static_cast<uint8_t*>(child)+0x90,8);
+    TglBorrowedVeboxByteView<11,4,5> history;
+    if(!history.bind(address,11,readable,writable)) return false;
+    return tglUpdateOwnedVeboxHistory(owner,child,history,source,c0,c8,pipe);
+}
+
 // Named installation-time policy type for the SAME already-leased native
 // report used by the frontend frame. Do not recursively acquire execution,
 // snapshot the selected pipe before reset, or adopt caller-supplied pointers.
@@ -16881,6 +16897,18 @@ public:
     }
     bool hasSurfaceLease(const TglOwnedSurfaceStorage& shell) const noexcept {
         return storage()==&shell && slots_[0].lease->hasSurfaceLease(shell);
+    }
+    const TglOwnedSurfaceStorage* linkedStorage(const TglOwnedSurfaceStorage& root,
+        size_t offset) const noexcept {
+        if(!hasSurfaceLease(root) || (offset!=0xc0 && offset!=0xc8)) return nullptr;
+        uintptr_t address=0;std::memcpy(&address,root.prefix.data()+offset,8);
+        if(!address) return nullptr;
+        for(size_t i=0;i<count_;++i) {
+            const auto* shell=slots_[i].lease->storage();
+            if(reinterpret_cast<uintptr_t>(shell)==address &&
+                slots_[i].lease->hasSurfaceLease(*shell)) return shell;
+        }
+        return nullptr;
     }
     template<class Use> int withMutableSurface(Use use) noexcept {
         if(busy_ || !valid()) return 5;

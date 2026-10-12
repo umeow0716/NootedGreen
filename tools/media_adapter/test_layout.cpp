@@ -23518,11 +23518,28 @@ int main() {
                                 uint8_t composition=0;TglVeboxAdmissionPassByte checkedPass(composition);
                                 unsigned checkedSfc=0,checkedHistory=0;
                                 bool historyAllowed=true;
+                                std::array<uint8_t,11> admissionHistory{};admissionHistory[0]=1;
+                                uintptr_t savedHistory=0;
+                                std::memcpy(&savedHistory,childBytes+0x90,8);
+                                const uintptr_t historyAddress=reinterpret_cast<uintptr_t>(admissionHistory.data());
+                                std::memcpy(childBytes+0x90,&historyAddress,8);
+                                auto historyReadable=[&](uintptr_t address,size_t size) noexcept {
+                                    return address==historyAddress && size==admissionHistory.size();
+                                };
+                                auto historyWritable=[&](uintptr_t address,size_t size) noexcept {
+                                    return historyAllowed && address==historyAddress+4 && size==5;
+                                };
                                 auto runCheckedFeature=[&]() noexcept {
                                     return tglRunSelectedVeboxAdmissionStages(checkedInput,executionBackend.bytes,checkedPass,
                                         []() noexcept {return true;},
                                         [](uint8_t&) noexcept -> uint32_t {return 1;},
-                                        [&](auto&) noexcept {++checkedHistory;return historyAllowed;},
+                                        [&](auto&) noexcept {
+                                            ++checkedHistory;
+                                            return tglUpdateBorrowedVeboxHistory(owner,child,live.leases.source,
+                                                sourceOwner.linkedStorage(live.leases.source,0xc0),
+                                                sourceOwner.linkedStorage(live.leases.source,0xc8),
+                                                1,historyReadable,historyWritable);
+                                        },
                                         []() noexcept {return true;},
                                         [&](auto&) noexcept {return prepareFeature()==0;},
                                         [&](auto&) noexcept {++checkedSfc;return true;});
@@ -23540,6 +23557,10 @@ int main() {
                                 assert(runCheckedFeature() && featureInvocations==2 && checkedSfc==1 && checkedHistory==3);
                                 std::memcpy(&afterParams,executionBackend.bytes.data()+0xd28,4);
                                 assert(afterParams==checkedInput.params10c);
+                                uint32_t historyMode=1;
+                                std::memcpy(&historyMode,admissionHistory.data()+4,4);
+                                assert(historyMode==0);
+                                std::memcpy(childBytes+0x90,&savedHistory,8);
                                 executionBackend.bytes=savedFeatureReport;
                                 bool enabled=true;childBytes[0x1ba9]=2;
                                 assert(live.control.policy(live.leases.source,0,false,enabled)==0 && !enabled);
