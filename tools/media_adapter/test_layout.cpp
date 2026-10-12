@@ -20623,6 +20623,30 @@ int main() {
                             assert(frame.initializeVpFromCreator(1,frontendCreatorView,
                                 frontendRead,qualifyMhw,executableMhw)==0);
                             assert(frontendVp1.live && frontendAvs1.live && vpCpu.live && vpAvsCpu.live);
+                            TglOwnedVpFlatDispatchTable persistentTable0,persistentTable1;
+                            assert(persistentTable0.build(testVpPresenceEntries(),[](uintptr_t,size_t) noexcept {return true;}));
+                            assert(persistentTable1.build(testVpPresenceEntries(),[](uintptr_t,size_t) noexcept {return true;}));
+                            for(int nativeStatus:{-31,0}) {
+                                unsigned nativeCalls=0;
+                                assert(frame.withPersistentPairedVpFactories(persistentTable0,persistentTable1,
+                                    [&](void* firstParent,void* secondParent) noexcept -> int {
+                                        ++nativeCalls;void* previous=nullptr;
+                                        for(void* parent:{firstParent,secondParent}) {
+                                            uintptr_t table=0,entry=0;
+                                            std::memcpy(&table,parent,8);
+                                            std::memcpy(&entry,reinterpret_cast<void*>(table+0x1e0),8);
+                                            void* created=reinterpret_cast<void*(*)(void*) noexcept>(entry)(parent);
+                                            assert(created && created!=previous);previous=created;
+                                            std::memcpy(static_cast<uint8_t*>(parent)+0x80,&created,8);
+                                        }
+                                        return nativeStatus;
+                                    })==nativeStatus);
+                                assert(nativeCalls==1);
+                                for(auto& cpu:pairCpu) {
+                                    uintptr_t borrowed=1;std::memcpy(&borrowed,cpu.bytes.data()+0x80,8);
+                                    assert(!borrowed);
+                                }
+                            }
                             void* firstVpAddress=nullptr;void* secondVpAddress=nullptr;
                             assert(frame.backing().withVpResources(0,[&](auto&,auto& first,auto&) noexcept {
                                 return frame.backing().withVpResources(1,[&](auto&,auto& second,auto&) noexcept {

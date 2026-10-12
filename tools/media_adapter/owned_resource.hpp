@@ -20325,6 +20325,22 @@ public:
     // Parent80 is borrowed only while frontend, child and VP resource owners
     // are all live. Consumer may run the prepared full-table pass without
     // recursively acquiring a graph view; it must not let any callback escape.
+    template<class FirstTable,class SecondTable,class Use>
+    int withPersistentPairedVpFactories(const FirstTable& firstTable,
+        const SecondTable& secondTable,Use use) noexcept {
+        if(backing_.retention()() || !backing_.vpBound(0) || !backing_.vpBound(1)) return 5;
+        return backing_.withVpResources(0,[&](auto& firstGraph,auto& firstStorage,auto&) noexcept {
+            return backing_.withVpResources(1,[&](auto& secondGraph,auto& secondStorage,auto&) noexcept {
+                return firstGraph.withView(false,[&](void* first) noexcept {
+                    return secondGraph.withView(false,[&](void* second) noexcept {
+                        if(first!=firstStorage.bytes.data() || second!=secondStorage.bytes.data()) return 5;
+                        return children_.withPairedVpFactories(firstGraph,first,firstTable,
+                            secondGraph,second,secondTable,use);
+                    });
+                });
+            });
+        });
+    }
     template<class Consume>
     TglOwnedVeboxCommandTransactionResult withPrivateVpCommandFrame(
         size_t childIndex,const TglNativeOuterSurfaceRoles& roles,size_t sourceIndex,size_t targetIndex,
