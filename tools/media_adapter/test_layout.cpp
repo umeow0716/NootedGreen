@@ -23136,6 +23136,37 @@ int main() {
                                     return result;
                                 });
                             assert(missingPair.status==5 && !missingPair.requiresRetention());
+                            auto creatorFrameRead=[&](uintptr_t address,void* output,size_t size) noexcept {
+                                return readReportHelper(address,output,size) || diServiceRead(address,output,size);
+                            };
+                            unsigned creatorFrameUses=0;
+                            auto useCreatorFrame=[&](auto& owner,void* child,void* vp,auto& graph,auto&,
+                                auto&,auto&,auto&,auto& live) noexcept {
+                                ++creatorFrameUses;
+                                assert(owner.hasPrivateChildLease(reinterpret_cast<uintptr_t>(child)) &&
+                                    graph.ownsStorage(vp) && removeParent()==5 && !parentDeaths);
+                                assert(&live.registerResource.services==&live.control.services &&
+                                    tglNativeDiIecpServicesReady(live.registerResource.services));
+                                assert(live.registerResource.services.registration.context==os &&
+                                    live.control.services.control.context==0x6000);
+                                TglOwnedVeboxCommandTransactionResult result;
+                                result.status=live.withInput([](auto&) noexcept -> int {return -87;});
+                                return result;
+                            };
+                            const auto creatorFrame=frame.withNativeOwnedVpCreatorLivePacketFrame(0,roles,0,0,
+                                executionLease,frontendCreatorView,0x3300,creatorFrameRead,qualifyMhw,executableMhw,
+                                capturePacket,false,readReportHelper,rejectPacket,rejectPacket,
+                                TglDiIecpControlPolicy{},useCreatorFrame);
+                            assert(creatorFrame.status==-87 && !creatorFrame.requiresRetention() &&
+                                creatorFrameUses==1 && packetGathers==1);
+                            admitDiControl=false;
+                            const auto rejectedCreatorFrame=frame.withNativeOwnedVpCreatorLivePacketFrame(0,roles,0,0,
+                                executionLease,frontendCreatorView,0x3300,creatorFrameRead,qualifyMhw,executableMhw,
+                                capturePacket,false,readReportHelper,rejectPacket,rejectPacket,
+                                TglDiIecpControlPolicy{},useCreatorFrame);
+                            assert(rejectedCreatorFrame.status==5 && !rejectedCreatorFrame.requiresRetention() &&
+                                creatorFrameUses==1 && packetGathers==1);
+                            admitDiControl=true;packetGathers=0;
                             executionResult=frame.withNativeOwnedVpLivePacketFrame(0,roles,0,0,
                                 executionLease,0x2200,0x3300,readReportHelper,capturePacket,false,
                                 readReportHelper,rejectPacket,rejectPacket,rejectPacket,rejectPacket,
