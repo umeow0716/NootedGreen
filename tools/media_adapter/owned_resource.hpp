@@ -16318,6 +16318,47 @@ TglOwnedNv12LayoutRead tglReadLeasedOwnedNv12Layout(Owner& owner,
     if(result.ready()) output=candidate;
     return result;
 }
+// Full-plane owned NV12 producer, not a copy of an unavailable native query.
+// TGL7166e type82 uses the selected plane's parent metadata offset before
+// returning its GPU address (7177f..717de).7164a getIOSurfacePlaneOffset
+// reads that same table250/stride28/+4. Hence plane0 token origin is
+// already included: publish Y=0 and UV relative to plane0, not allocation base.
+template<class Owner,class Api,class Quarantine>
+TglOwnedNv12LayoutRead tglPrepareLeasedOwnedNv12Metadata(Owner& owner,
+    TglOwnedSurfaceStorage& surface,Api& api,Quarantine& quarantine) noexcept {
+    uint32_t format=0,width=0,height=0;
+    std::memcpy(&format,surface.prefix.data()+0x130,4);
+    std::memcpy(&width,surface.prefix.data()+0xd8,4);
+    std::memcpy(&height,surface.prefix.data()+0xdc,4);
+    if(format!=0x19 || !width || !height) return {};
+    const auto originalPrefix=surface.prefix;
+    TglOwnedNv12Layout layout;
+    auto result=tglReadLeasedOwnedNv12Layout(owner,surface,api,quarantine,layout);
+    if(!result.ready()) return result;
+    // Native output has one pitch and a16-bit UV row displacement. Unequal
+    // plane pitches or a fractional row need a different command producer.
+    if(layout.width!=width || layout.height!=height || !layout.pitch[0] ||
+       layout.pitch[0]!=layout.pitch[1] || layout.offset[1]<layout.offset[0] ||
+       !tglNativeSfcOutputPitchFits(layout.pitch[0])) {
+        result.captured=false;return result;
+    }
+    const uint32_t uv=layout.offset[1]-layout.offset[0];
+    if(uv%layout.pitch[0] || uv/layout.pitch[0]>0xffff) {
+        result.captured=false;return result;
+    }
+    auto candidate=surface.prefix;
+    const auto put=[&](size_t at,uint32_t value) noexcept {
+        std::memcpy(candidate.data()+at,&value,4);
+    };
+    put(0xe0,layout.pitch[0]);
+    put(0xf0,0);put(0xf4,0);put(0xf8,0);
+    put(0x100,uv);put(0x104,0);put(0x108,0);
+    put(0x110,uv);put(0x114,0);put(0x118,0);
+    if(!owner.hasSurfaceLease(surface) || surface.prefix!=originalPrefix) {
+        result.captured=false;return result;
+    }
+    surface.prefix=candidate;return result;
+}
 #if defined(__APPLE__)
 // Native63720 format19 creates exact '420v', two plane dictionaries. Do not
 // reinterpret any other pixel format or native lock's plane0 as a UV query.

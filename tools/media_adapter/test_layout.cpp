@@ -13751,6 +13751,7 @@ static void testActualNv12LayoutSnapshot() {
     struct Api {
         unsigned mode=0,locks=0,unlocks=0,retains=0,releases=0;
         bool* lease=nullptr;
+        bool complete=false,unequalPitch=false;
         uintptr_t surface(uintptr_t h) noexcept {return h;}
         bool retain(uintptr_t) noexcept {++retains;return mode!=4;}
         void release(uintptr_t) noexcept {++releases;}
@@ -13759,6 +13760,8 @@ static void testActualNv12LayoutSnapshot() {
         bool readLayout(uintptr_t,TglOwnedNv12Layout& out) noexcept {
             if(lease) *lease=false;
             if(mode==2) return false;
+            if(complete) return tglCaptureOwnedNv12Layout(out,0x10000,8192,
+                {0x10080,0x10880},64,32,{64,unequalPitch?128u:64u},{32,16});
             out.width=960;return true;
         }
     };
@@ -13800,6 +13803,25 @@ static void testActualNv12LayoutSnapshot() {
     owner.leased=true;api.lease=nullptr;
     assert(tglReadLeasedOwnedNv12Layout(owner,surface,api,sink,out).ready());
     assert(out.width==960);
+    uint32_t shellFormat=0x19,width=64,height=32;
+    std::memcpy(surface.prefix.data()+0x130,&shellFormat,4);
+    std::memcpy(surface.prefix.data()+0xd8,&width,4);
+    std::memcpy(surface.prefix.data()+0xdc,&height,4);
+    const auto originalResource=surface.resource;
+    const auto originalPrefix=surface.prefix;
+    api.complete=true;api.unequalPitch=true;
+    assert(!tglPrepareLeasedOwnedNv12Metadata(owner,surface,api,sink).ready());
+    assert(surface.prefix==originalPrefix && surface.resource==originalResource);
+    api.unequalPitch=false;
+    assert(tglPrepareLeasedOwnedNv12Metadata(owner,surface,api,sink).ready());
+    uint32_t pitch=0,y=1,uv=0;
+    std::memcpy(&pitch,surface.prefix.data()+0xe0,4);
+    std::memcpy(&y,surface.prefix.data()+0xf0,4);
+    std::memcpy(&uv,surface.prefix.data()+0x100,4);
+    assert(pitch==64 && y==0 && uv==2048 && surface.resource==originalResource);
+    const auto descriptor=tglOwnedSfcOutputDescriptor(surface);
+    uint32_t uvRow=0;std::memcpy(&uvRow,descriptor.data()+0x24,4);
+    assert(uvRow==32);
 }
 int main() {
     testActualNv12LayoutSnapshot();
