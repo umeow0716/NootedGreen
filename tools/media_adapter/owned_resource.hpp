@@ -13976,8 +13976,10 @@ struct TglOwnedVeboxAllocationPolicy {
     bool ffdi=false,ffdn=false,stmm=false;
     uint32_t pipe=0;
 };
-// Native129ca0 selects VP+48 only for outputPipe==1. Read the original
-// leased child/report/VP links; never derive participation from missing calls.
+// Native12c010 calls VP+40 only for outputPipe==1 AFTER child+118 succeeds;
+// native129ca0 uses the same predicate for VP+48. Admit must establish that
+// native preparation phase and exclusive child/report/VP leases. Read the
+// original links at that phase, never before preparation or from missing calls.
 template<class Read,class Admit>
 bool tglReadOwnedVpNativeParticipation(bool& output,uintptr_t child,
     uintptr_t execution,uintptr_t vp,Read read,Admit admit) noexcept {
