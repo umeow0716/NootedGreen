@@ -13709,6 +13709,32 @@ static void testRetainedVeboxFrames() {
 
 int main() {
     {
+        int objects[2]{};
+        std::array<uint8_t,0xf8> state0{},state1{};
+        std::array<uint8_t,64> ief0{},ief1{};
+        TglCscCoefficients coefficients;
+        TglOwnedVpEntrySet escaped;
+        const std::array<TglOwnedVpEntrySet,2> base{};
+        {
+            TglOwnedVpCscProducerContext<0xf8> c0(objects,ief0,state0.data(),&coefficients);
+            TglOwnedVpCscProducerContext<0xf8> c1(objects+1,ief1,state1.data(),&coefficients);
+            assert(tglWithOwnedVpPairedCscEntries(objects,c0,objects+1,c1,base,
+                [&](void* a,const auto& ea,void* b,const auto& eb) noexcept -> int {
+                    eb.csc(b,state1.data(),ief1.data());
+                    assert(state1[0x88]==1 && !state0[0x88]);
+                    ea.csc(a,state0.data(),ief0.data());
+                    assert(state0[0x88]==1 && ief0[0x20]==1 && ief1[0x20]==1);
+                    escaped=ea;return 0;
+                })==0);
+            TglOwnedVpCscProducerContext<0xf8> alias(objects+1,ief1,state0.data(),nullptr);
+            assert(tglWithOwnedVpPairedCscEntries(objects,c0,objects+1,alias,base,
+                [](void*,const auto&,void*,const auto&) noexcept -> int {assert(false);return 0;})==5);
+        }
+        assert(!state0[0x88] && !state1[0x88] && !ief0[0x20] && !ief1[0x20]);
+        escaped.csc(objects,state0.data(),ief0.data());
+        assert(!state0[0x88]);
+    }
+    {
         int children[2]{},data[2]{},source[2]{},target[2]{},command=0;
         unsigned states=0,filters=0,produced=0,consumed=0;
         auto state=[&]() noexcept -> int {++states;return 0;};

@@ -10059,6 +10059,18 @@ public:
     }
     bool valid() const noexcept {return valid_;}
     bool owns(void* child) const noexcept {return valid_ && child && child==child_;}
+    bool disjointBacking(const TglOwnedVpCscProducerContext& other) const noexcept {
+        const std::array<uintptr_t,4> starts{reinterpret_cast<uintptr_t>(state_),
+            reinterpret_cast<uintptr_t>(ief_.data()),reinterpret_cast<uintptr_t>(other.state_),
+            reinterpret_cast<uintptr_t>(other.ief_.data())};
+        const std::array<size_t,4> sizes{StateSize,64,StateSize,64};
+        for(size_t i=0;i<4;++i) {
+            if(!starts[i] || starts[i]>UINTPTR_MAX-sizes[i]) return false;
+            for(size_t j=0;j<i;++j)
+                if(starts[i]<starts[j]+sizes[j] && starts[j]<starts[i]+sizes[i]) return false;
+        }
+        return true;
+    }
     void csc(void* state,void* ief) noexcept {
         if(state!=state_ || ief!=ief_.data()) {invalid_=true;return;}
         called_=true;
@@ -10076,21 +10088,16 @@ public:
 // pointers remain borrowed until Use returns, then restoration precedes
 // release of the cache lease. No native object or GPU lifetime is implied.
 template<size_t StateSize,class Read,class Produce,class Use>
-int tglWithOwnedVpCscProducerSpan(TglOwnedVpSfcCallerStorage& vp,std::array<uint8_t,64>& ief,
+int tglWithOwnedVpCscContextSpan(TglOwnedVpSfcCallerStorage& vp,std::array<uint8_t,64>& ief,
     uint8_t* state,TglOwnedVpCscCache& cache,uint32_t from,uint32_t to,
     uintptr_t sourceA8,Read read,Produce produce,Use use) noexcept {
     if(!state || reinterpret_cast<uintptr_t>(state)>UINTPTR_MAX-StateSize) return 5;
     auto invoke=[&](const TglCscCoefficients* coefficients) noexcept {
         using Context=TglOwnedVpCscProducerContext<StateSize>;
-        using Resolve=TglOwnedVpSfcResolve<Context>;
         Context context(vp.bytes.data(),ief,state,coefficients);
         if(!context.valid()) return 5;
-        TglOwnedVpSfcScopedContext<Context> scope(vp.bytes.data(),context);
-        if(!scope.bound()) return 5;
-        TglOwnedVpEntrySet entries;
-        if(!tglBindOwnedVpCscEntry<Resolve>(vp.bytes.data(),entries)) return 5;
-        static_assert(noexcept(use(vp.bytes.data(),entries.csc)),"VP CSC entry consumer ABI");
-        const int result=use(vp.bytes.data(),entries.csc);
+        static_assert(noexcept(use(context)),"VP CSC context consumer ABI");
+        const int result=use(context);
         return result?result:context.status();
     };
     if(!(vp.bytes[0x923]&1)) return invoke(nullptr);
@@ -10098,6 +10105,40 @@ int tglWithOwnedVpCscProducerSpan(TglOwnedVpSfcCallerStorage& vp,std::array<uint
     return cache.withCoefficients([&](const TglCscCoefficients& coefficients) noexcept {
         return invoke(&coefficients);
     });
+}
+template<size_t StateSize,class Read,class Produce,class Use>
+int tglWithOwnedVpCscProducerSpan(TglOwnedVpSfcCallerStorage& vp,std::array<uint8_t,64>& ief,
+    uint8_t* state,TglOwnedVpCscCache& cache,uint32_t from,uint32_t to,
+    uintptr_t sourceA8,Read read,Produce produce,Use use) noexcept {
+    return tglWithOwnedVpCscContextSpan<StateSize>(vp,ief,state,cache,from,to,sourceA8,read,produce,
+        [&](auto& context) noexcept -> int {
+            using Context=std::remove_reference_t<decltype(context)>;
+            TglOwnedVpSfcScopedContext<Context> scope(vp.bytes.data(),context);
+            if(!scope.bound()) return 5;
+            TglOwnedVpEntrySet entries;
+            if(!tglBindOwnedVpCscEntry<TglOwnedVpSfcResolve<Context>>(vp.bytes.data(),entries)) return 5;
+            static_assert(noexcept(use(vp.bytes.data(),entries.csc)),"VP CSC entry consumer ABI");
+            return use(vp.bytes.data(),entries.csc);
+        });
+}
+template<size_t StateSize,class Use>
+int tglWithOwnedVpPairedCscEntries(void* first,TglOwnedVpCscProducerContext<StateSize>& firstContext,
+    void* second,TglOwnedVpCscProducerContext<StateSize>& secondContext,
+    const std::array<TglOwnedVpEntrySet,2>& base,Use use) noexcept {
+    using Context=TglOwnedVpCscProducerContext<StateSize>;
+    if(!firstContext.owns(first) || !secondContext.owns(second) ||
+        !firstContext.disjointBacking(secondContext)) return 5;
+    typename TglOwnedVpSfcScopedContext<Context>::Pair scope(first,firstContext,second,secondContext);
+    if(!scope.bound()) return 5;
+    auto entries=base;
+    using Resolve=TglOwnedVpSfcResolve<Context>;
+    if(!tglBindOwnedVpCscEntry<Resolve>(first,entries[0]) ||
+        !tglBindOwnedVpCscEntry<Resolve>(second,entries[1])) return 5;
+    static_assert(noexcept(use(first,entries[0],second,entries[1])),"paired CSC consumer ABI");
+    const int result=use(first,entries[0],second,entries[1]);
+    if(result) return result;
+    const int firstStatus=firstContext.status();
+    return firstStatus?firstStatus:secondContext.status();
 }
 template<size_t StateSize,class Read,class Produce,class Use>
 int tglWithOwnedVpCscProducer(TglOwnedVpSfcCallerStorage& vp,std::array<uint8_t,64>& ief,
