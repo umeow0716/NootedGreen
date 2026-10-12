@@ -1758,7 +1758,11 @@ public:
 // owner; a hook must never repeat the accounting already consumed by235e80.
 class TglOwnedVphalLifetimeTable {
     std::array<uintptr_t,6> entries_{};
-    uintptr_t source_=0;
+    uintptr_t source_=0,object_=0;
+public:
+    enum class Publication { Unpublished,Published,Detached,Ambiguous };
+private:
+    Publication publication_=Publication::Unpublished;
 public:
     TglOwnedVphalLifetimeTable()=default;
     TglOwnedVphalLifetimeTable(const TglOwnedVphalLifetimeTable&)=delete;
@@ -1786,6 +1790,41 @@ public:
     uintptr_t source() const noexcept {return source_;}
     uintptr_t nativeDestroy() const noexcept {return source_?source_-0x75bb58+0x1c8e80:0;}
     uintptr_t nativeDeletingDestroy() const noexcept {return source_?source_-0x75bb58+0x1c8ea0:0;}
+    Publication publication() const noexcept {return publication_;}
+    bool requiresRetention() const noexcept {
+        return publication_==Publication::Published || publication_==Publication::Ambiguous;
+    }
+    // Admit authenticates the VPHAL/image/generation association, exclusive
+    // access and pinned table/code owners, not just writable pointer storage.
+    template<class Read,class Write,class Admit>
+    bool publish(uintptr_t object,Read read,Write write,Admit admit) noexcept {
+        static_assert(noexcept(read(uintptr_t{},static_cast<void*>(nullptr),size_t{})) &&
+            noexcept(write(uintptr_t{},uintptr_t{})) && noexcept(admit(uintptr_t{},size_t{})));
+        uintptr_t current=0;
+        if(!source_ || publication_!=Publication::Unpublished || !object || (object&7) ||
+            object>UINTPTR_MAX-0x70 || !admit(object,0x70) ||
+            !read(object,&current,sizeof(current)) || current!=source_) return false;
+        object_=object;publication_=Publication::Ambiguous;
+        if(!write(object_,addressPoint()) || !read(object_,&current,sizeof(current)) ||
+            current!=addressPoint()) return false;
+        publication_=Publication::Published;return true;
+    }
+    template<class Read,class Admit>
+    bool canDetach(Read read,Admit admit) const noexcept {
+        uintptr_t current=0;
+        return publication_==Publication::Published && admit(object_,0x70) &&
+            read(object_,&current,sizeof(current)) && current==addressPoint();
+    }
+    template<class Read,class Write,class Admit>
+    bool detach(Read read,Write write,Admit admit) noexcept {
+        static_assert(noexcept(read(uintptr_t{},static_cast<void*>(nullptr),size_t{})) &&
+            noexcept(write(uintptr_t{},uintptr_t{})) && noexcept(admit(uintptr_t{},size_t{})));
+        if(!canDetach(read,admit)) return false;
+        publication_=Publication::Ambiguous;
+        uintptr_t current=0;
+        if(!write(object_,source_) || !read(object_,&current,sizeof(current)) || current!=source_) return false;
+        publication_=Publication::Detached;return true;
+    }
 };
 
 struct TglNativeCreatorCallInvoker {
@@ -17787,8 +17826,8 @@ public:
 // context-owner gates. Neither validation nor success certifies GPU retirement.
 // Caller quarantines the composite owner on ANY failure, retaining its images,
 // table and children; never invoke native deletion after a partial detach.
-template<class Children,class Read,class Write,class TableAdmit,class ChildAdmit>
-int tglPrepareOwnedContextRemoval(TglOwnedContextFrameVtable& table,Children& children,
+template<class Table,class Children,class Read,class Write,class TableAdmit,class ChildAdmit>
+int tglPrepareOwnedContextRemoval(Table& table,Children& children,
     void* renderer,uint64_t generation,Read read,Write write,
     TableAdmit tableAdmit,ChildAdmit childAdmit) noexcept {
     static_assert(noexcept(children.canDetach(renderer,generation,childAdmit)) &&

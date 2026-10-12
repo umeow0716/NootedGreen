@@ -14108,6 +14108,50 @@ int main() {
                         lifetime.nativeDeletingDestroy()==image+0x1c8ea0);
                     const auto stable=lifetime.addressPoint();
                     assert(!buildLifetime(0xf000,0xf100) && lifetime.addressPoint()==stable);
+                    uintptr_t vptr=lifetime.source();bool allowed=false;unsigned writes=0;
+                    auto readObject=[&](uintptr_t address,void* bytes,size_t size) noexcept {
+                        if(address!=creatorAddress || size!=8) return false;
+                        std::memcpy(bytes,&vptr,8);return true;
+                    };
+                    auto admitObject=[&](uintptr_t address,size_t size) noexcept {
+                        return allowed && address==creatorAddress && size==0x70;
+                    };
+                    auto writeObject=[&](uintptr_t address,uintptr_t value) noexcept {
+                        assert(address==creatorAddress);++writes;vptr=value;return true;
+                    };
+                    assert(!lifetime.publish(creatorAddress,readObject,writeObject,admitObject) && !writes);
+                    allowed=true;vptr++;
+                    assert(!lifetime.publish(creatorAddress,readObject,writeObject,admitObject));vptr--;
+                    assert(lifetime.publish(creatorAddress,readObject,writeObject,admitObject));
+                    assert(vptr==stable && writes==1 && lifetime.requiresRetention());
+                    struct VphalChildren {
+                        bool allow=false,detached=false,destroyed=false;
+                        bool canDetach(void* object,uint64_t generation,int) noexcept {
+                            assert(object==reinterpret_cast<void*>(0x30000) && generation==7);return allow;
+                        }
+                        bool detach(void*,uint64_t,int) noexcept {detached=true;return true;}
+                        bool destroyDetached(void*,uint64_t) noexcept {assert(detached);destroyed=true;return true;}
+                    } children;
+                    auto orderedWrite=[&](uintptr_t address,uintptr_t value) noexcept {
+                        assert(children.detached && children.destroyed);return writeObject(address,value);
+                    };
+                    auto remove=[&]() noexcept {return tglPrepareOwnedContextRemoval(lifetime,children,
+                        reinterpret_cast<void*>(0x30000),7,readObject,orderedWrite,admitObject,0);};
+                    assert(remove()==5 && !children.detached && writes==1);
+                    children.allow=true;assert(remove()==0 && writes==2 && vptr==lifetime.source());
+                    assert(!lifetime.requiresRetention() && !lifetime.canDetach(readObject,admitObject));
+                    assert(!lifetime.publish(creatorAddress,readObject,writeObject,admitObject));
+                    // A write that mutates memory but reports failure cannot
+                    // authorize native destruction or release of table storage.
+                    TglOwnedVphalLifetimeTable ambiguous;
+                    assert(ambiguous.build(image,0xf000,0xf100,readLifetime,qualify,execLifetime,ownedLifetime));
+                    auto failedWrite=[&](uintptr_t address,uintptr_t value) noexcept {
+                        writeObject(address,value);return false;
+                    };
+                    assert(!ambiguous.publish(creatorAddress,readObject,failedWrite,admitObject));
+                    assert(ambiguous.requiresRetention() &&
+                        ambiguous.publication()==TglOwnedVphalLifetimeTable::Publication::Ambiguous);
+                    assert(!ambiguous.canDetach(readObject,admitObject));
                 }
                 TglOwnedCreatorCallTable callTable;
                 auto callExecutable=[&](uintptr_t address,size_t size) noexcept {
