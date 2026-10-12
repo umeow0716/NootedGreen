@@ -2280,6 +2280,11 @@ struct TglCscCoefficients {
 // spaces or a disabled flag fall back to the native coefficient producer.
 // This only snapshots owned data; it neither publishes pointer fields nor
 // substitutes the VEBOX base's unrelated a0/c4/d0 object offsets.
+// Native237730 also stores a conversion mode at sourceA8+64 and a nested
+// surface at +68. Neither belongs to this CSC-prefix snapshot: a successful
+// read here is NOT proof that LUT/HDR or the nested surface was acquired.
+// In particular useOverride=false means only "use native CSC coefficients",
+// never "all optional surface features absent". Their leases remain separate.
 template<class Read>
 bool tglReadOwnedVpCscOverride(uint32_t from,uint32_t to,uintptr_t sourceA8,
     Read read,bool& useOverride,TglCscCoefficients& output) noexcept {
