@@ -10122,7 +10122,13 @@ static void testSfcLineBufferOwnership() {
                     using Lease=decltype(retainedGraph)::ResourceOwnerLease;
                     Lease frameLease(retainedGraph);
                     assert(frameLease.storage() && retainedGraph.ownsStorage(frameLease.storage()->bytes.data()));
+                    assert(frameLease.generation()==generation);
+                    assert(frameLease.ownsStorage(frameLease.storage()->bytes.data(),generation));
+                    assert(!frameLease.ownsStorage(frameLease.storage()->bytes.data(),generation+1));
+                    assert(!frameLease.ownsStorage(frameLease.storage()->bytes.data(),0));
+                    assert(!frameLease.ownsStorage(&nativeBacking,generation));
                     Lease duplicate(retainedGraph);assert(!duplicate.storage());
+                    assert(!duplicate.generation() && !duplicate.ownsStorage(frameLease.storage(),generation));
                     assert(!retainedGraph.tryReset());
                     assert(!retainedGraph.initialize(0x1000,0x2000,0x3000,binding,noRead,1,0));
                     assert(retainedGraph.withResourceOwnerStorage([](auto&) noexcept {

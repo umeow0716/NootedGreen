@@ -11687,17 +11687,28 @@ public:
     // must outlive GPU use; a lease is not a fence or a physical retain.
     class ResourceOwnerLease {
         TglOwnedVpSfcCpuGraph* graph_=nullptr;
+        uint64_t generation_=0;
     public:
         explicit ResourceOwnerLease(TglOwnedVpSfcCpuGraph& graph) noexcept {
             if(!graph.ready_ || graph.busy_ || graph.resourcesBound_ ||
                (graph.retention_ && (*graph.retention_)())) return;
-            graph.resourcesBound_=true;graph_=&graph;
+            graph.resourcesBound_=true;graph_=&graph;generation_=graph.generation_;
         }
         ResourceOwnerLease(const ResourceOwnerLease&)=delete;
         ResourceOwnerLease& operator=(const ResourceOwnerLease&)=delete;
         ~ResourceOwnerLease(){if(graph_) graph_->resourcesBound_=false;}
+        // A retained renderer association must authenticate this allocation,
+        // not merely a reused VP address. This does not publish a callable
+        // table/state view or certify completion; those scopes remain explicit.
+        bool ownsStorage(const void* child,uint64_t generation) const noexcept {
+            return graph_ && graph_->resourcesBound_ && graph_->ready_ &&
+                generation && generation==generation_ && graph_->generation_==generation_ &&
+                child==graph_->storage_.bytes.data();
+        }
+        uint64_t generation() const noexcept {return graph_?generation_:0;}
         TglOwnedVpSfcCallerStorage* storage() const noexcept {
-            return graph_ ? &graph_->storage_:nullptr;
+            return graph_ && ownsStorage(graph_->storage_.bytes.data(),generation_) ?
+                &graph_->storage_:nullptr;
         }
     };
     // Construct resource owners inside this callback and destroy them before
