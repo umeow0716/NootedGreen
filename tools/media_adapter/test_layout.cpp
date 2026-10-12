@@ -12288,7 +12288,12 @@ static void testRetainedVeboxFrames() {
     {
         struct ContextOwner {
             uintptr_t identity;unsigned& deaths;
+            unsigned destructorRequests=0;bool allowDestructor=true;
+            TglOwnedVphalDestructionState::Kind lastKind=TglOwnedVphalDestructionState::Kind::Destroy;
             uintptr_t context() const noexcept {return identity;}
+            bool requestDestruction(TglOwnedVphalDestructionState::Kind kind) noexcept {
+                ++destructorRequests;lastKind=kind;return allowDestructor;
+            }
             ~ContextOwner() noexcept {++deaths;}
         };
         unsigned deaths=0,uses=0;
@@ -12301,6 +12306,43 @@ static void testRetainedVeboxFrames() {
         auto* duplicate=new ContextOwner{0x4000,deaths};
         assert(!owners.adopt(0x1000,0x2000,7,duplicate));delete duplicate;
         assert(deaths==1);
+        {
+            using Registry=TglOwnedContextOwnerRegistry<ContextOwner,2>;
+            struct Routing {
+                static Registry*& registry() noexcept {static Registry* value=nullptr;return value;}
+                static unsigned& misses() noexcept {static unsigned value=0;return value;}
+                static unsigned& retentions() noexcept {static unsigned value=0;return value;}
+                static Registry::ExclusiveOwnerLease pin(uintptr_t object) noexcept {
+                    return registry()?registry()->pinExclusive(0x1000,0x2000,7,object):Registry::ExclusiveOwnerLease{};
+                }
+                static void unresolved(uintptr_t,TglOwnedVphalDestructionState::Kind) noexcept {++misses();}
+                static void retained(ContextOwner& owner,TglOwnedVphalDestructionState::Kind kind) noexcept {
+                    assert(owner.lastKind==kind);++retentions();
+                    // The route still holds the exclusive lease while reporting.
+                    assert(!registry()->pin(0x1000,0x2000,7,owner.context()).get());
+                }
+            };
+            using Hooks=TglOwnedVphalDestructorCallbacks<Routing>;
+            Routing::registry()=&owners;
+            using Destructor=void(*)(void*);
+            const auto call=[&](uintptr_t entry,uintptr_t object) {
+                reinterpret_cast<Destructor>(entry)(reinterpret_cast<void*>(object));
+            };
+            call(Hooks::destroyEntry(),0x4000);
+            assert(first->destructorRequests==1 && first->lastKind==TglOwnedVphalDestructionState::Kind::Destroy);
+            first->allowDestructor=false;
+            call(Hooks::deletingDestroyEntry(),0x4000);
+            assert(first->destructorRequests==2 && Routing::retentions()==1 &&
+                first->lastKind==TglOwnedVphalDestructionState::Kind::DeletingDestroy);
+            call(Hooks::deletingDestroyEntry(),0x6000);assert(Routing::misses()==1);
+            {
+                auto pinned=owners.pin(0x1000,0x2000,7,0x4000);
+                call(Hooks::destroyEntry(),0x4000);
+                assert(pinned.get()==first && Routing::misses()==2 && first->destructorRequests==2);
+            }
+            assert(owners.pinExclusive(0x1000,0x2000,7,0x4000).get()==first);
+            first->allowDestructor=true;Routing::registry()=nullptr;
+        }
         auto use=[&](ContextOwner& owner) noexcept -> int {
             ++uses;assert(&owner==first);
             assert(owners.withOwner(0x1000,0x2000,7,0x4000,

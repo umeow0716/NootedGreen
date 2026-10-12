@@ -1878,6 +1878,38 @@ public:
     }
 };
 
+// Resolve is process-lived routing policy, not a TLS creator scope: native
+// destruction can occur on a later callback/thread. pin() returns the exact
+// registry's exclusive owner lease. Before production enable, unresolved MUST
+// persist the pending object/delete-kind request (including consumed native
+// accounting) when pins prevent admission; diagnostics alone are insufficient.
+// retained quarantines the associated owner. Neither path may fall back to
+// counted deletion. Routing-policy lifetime must cover all published tables.
+template<class Resolve> struct TglOwnedVphalDestructorCallbacks {
+private:
+    static void dispatch(void* object,TglOwnedVphalDestructionState::Kind kind) noexcept {
+        static_assert(noexcept(Resolve::pin(uintptr_t{})) &&
+            noexcept(Resolve::unresolved(uintptr_t{},kind)));
+        const auto address=reinterpret_cast<uintptr_t>(object);
+        auto lease=Resolve::pin(address);
+        auto* owner=lease.get();
+        if(!owner) {Resolve::unresolved(address,kind);return;}
+        static_assert(noexcept(owner->requestDestruction(kind)) &&
+            noexcept(Resolve::retained(*owner,kind)) &&
+            std::is_same_v<decltype(owner->requestDestruction(kind)),bool>);
+        if(!owner->requestDestruction(kind)) Resolve::retained(*owner,kind);
+    }
+public:
+    static void destroy(void* object) noexcept {
+        dispatch(object,TglOwnedVphalDestructionState::Kind::Destroy);
+    }
+    static void deletingDestroy(void* object) noexcept {
+        dispatch(object,TglOwnedVphalDestructionState::Kind::DeletingDestroy);
+    }
+    static uintptr_t destroyEntry() noexcept {return reinterpret_cast<uintptr_t>(&destroy);}
+    static uintptr_t deletingDestroyEntry() noexcept {return reinterpret_cast<uintptr_t>(&deletingDestroy);}
+};
+
 struct TglNativeCreatorCallInvoker {
     int operator()(uintptr_t entry,void* creator) const noexcept {
         using Fn=int(*)(void*);return reinterpret_cast<Fn>(entry)(creator);
