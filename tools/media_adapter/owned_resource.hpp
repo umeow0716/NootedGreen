@@ -210,8 +210,9 @@ bool tglBindVpNativeCallerFields(TglOwnedVpSfcCallerStorage& storage,
     uintptr_t caller,uintptr_t state,Read read,Admit admit) {
     if(!caller || caller>UINTPTR_MAX-0x1bb0 || !state ||
        state>UINTPTR_MAX-0xa10 || !admit(caller,state,storage)) return false;
-    uint32_t mode=0,channel=0;uintptr_t performanceSlot=0,performance=0,vp=0;
+    uint32_t mode=0,channel=0;uintptr_t performanceSlot=0,performance=0,vp=0,report=0;
     if(!read(caller+0x80,&vp,8) || vp!=reinterpret_cast<uintptr_t>(storage.bytes.data()) ||
+       !read(caller+0x88,&report,8) || report!=state ||
        !read(state+0xa0c,&mode,4) || mode!=1 ||
        !read(caller+0x1bac,&channel,4) ||
        !read(caller+8,&performanceSlot,8)) return false;

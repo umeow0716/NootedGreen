@@ -10370,6 +10370,7 @@ static void testSfcLineBufferOwnership() {
             assert(graph.initialize(0x1000,0x2000,0x3000,binding,noRead,1,0));
             std::array<uint8_t,0x1bb0> nativeCaller{};
             const uintptr_t nativeCallerAddress=reinterpret_cast<uintptr_t>(nativeCaller.data());
+            std::memcpy(nativeCaller.data()+0x88,&nativeCallerAddress,8);
             uint32_t nativeMode=1,nativeChannel=9;
             std::memcpy(nativeCaller.data()+0xa0c,&nativeMode,4);
             std::memcpy(nativeCaller.data()+0x1bac,&nativeChannel,4);
@@ -13688,6 +13689,7 @@ int main() {
         uintptr_t performance=0x1234;
         const auto address=reinterpret_cast<uintptr_t>(caller.data());
         const auto stateAddress=reinterpret_cast<uintptr_t>(state.data());
+        std::memcpy(caller.data()+0x88,&stateAddress,8);
         uintptr_t slot=reinterpret_cast<uintptr_t>(&performance);
         uint32_t mode=1,channel=7;
         std::memcpy(state.data()+0xa0c,&mode,4);
@@ -13718,6 +13720,10 @@ int main() {
         std::memcpy(caller.data()+0x80,&foreignVp,8);
         assert(!tglBindVpNativeCallerFields(vp,address,stateAddress,read,admit) && vp.bytes==before);
         std::memcpy(caller.data()+0x80,&vpAddress,8);
+        uintptr_t foreignState=stateAddress+8;
+        std::memcpy(caller.data()+0x88,&foreignState,8);
+        assert(!tglBindVpNativeCallerFields(vp,address,stateAddress,read,admit) && vp.bytes==before);
+        std::memcpy(caller.data()+0x88,&stateAddress,8);
         assert(!tglBindVpNativeCallerFields(vp,address,address,read,admit) && vp.bytes==before);
         uintptr_t missing=0;std::memcpy(caller.data()+8,&missing,8);
         assert(tglBindVpNativeCallerFields(vp,address,stateAddress,read,admit) && field()==performance);
