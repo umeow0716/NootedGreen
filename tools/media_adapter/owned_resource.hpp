@@ -191,7 +191,7 @@ struct alignas(8) TglOwnedVpSfcCallerStorage {
     }
     void setCallerFields(uint32_t channel,uintptr_t performance) noexcept {
         // Native TGL12c2b7/12c2e1 call these setters during the conditional
-        // VP dispatch (caller+a0c==1), after caller virtual118 succeeds.
+        // VP dispatch (virtual48 state+a0c==1), after caller virtual118 succeeds.
         // Channel comes from that caller+1bac; performance is *(caller+8),
         // if caller+8 is nonnull. This is NOT the renderer+2ce8 slot ADDRESS
         // passed to VEBOX constructors. Creator admission alone cannot
@@ -202,14 +202,16 @@ struct alignas(8) TglOwnedVpSfcCallerStorage {
 };
 static_assert(sizeof(TglOwnedVpSfcCallerStorage)==0x9d0);
 // Exact TGL12c291..12c2e6 dispatch setters. Admission must hold the current
-// caller/VP exclusive frame lease and establish native virtual118 success;
+// caller/state/VP exclusive frame lease, authenticate caller+80 as this VP
+// and virtual48's state, and establish native virtual118 success;
 // readable memory alone is not admission. Read everything before publication.
 template<class Read,class Admit>
 bool tglBindVpNativeCallerFields(TglOwnedVpSfcCallerStorage& storage,
-    uintptr_t caller,Read read,Admit admit) {
-    if(!caller || caller>UINTPTR_MAX-0x1bb0 || !admit(caller,storage)) return false;
+    uintptr_t caller,uintptr_t state,Read read,Admit admit) {
+    if(!caller || caller>UINTPTR_MAX-0x1bb0 || !state ||
+       state>UINTPTR_MAX-0xa10 || !admit(caller,state,storage)) return false;
     uint32_t mode=0,channel=0;uintptr_t performanceSlot=0,performance=0;
-    if(!read(caller+0xa0c,&mode,4) || mode!=1 ||
+    if(!read(state+0xa0c,&mode,4) || mode!=1 ||
        !read(caller+0x1bac,&channel,4) ||
        !read(caller+8,&performanceSlot,8)) return false;
     if(performanceSlot && (performanceSlot>UINTPTR_MAX-8 ||
@@ -12457,11 +12459,11 @@ public:
     // it is not a busy callback or evidence of GPU submission. Admit establishes
     // this graph's current caller and successful native virtual118 boundary.
     template<class Read,class Admit>
-    bool bindNativeCallerFields(uintptr_t caller,Read read,Admit admit) {
+    bool bindNativeCallerFields(uintptr_t caller,uintptr_t state,Read read,Admit admit) {
         if(!ready_ || busy_ || constructionScope_ ||
            (retention_ && (*retention_)())) return false;
         Guard guard(busy_);
-        return tglBindVpNativeCallerFields(storage_,caller,read,admit);
+        return tglBindVpNativeCallerFields(storage_,caller,state,read,admit);
     }
     template<class Binding,class Read>
     bool initialize(uintptr_t os,uintptr_t renderHal,uintptr_t mhw,

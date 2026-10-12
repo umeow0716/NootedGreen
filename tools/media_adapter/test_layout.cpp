@@ -10379,19 +10379,19 @@ static void testSfcLineBufferOwnership() {
                 std::memcpy(out,nativeCaller.data()+(p-nativeCallerAddress),n);return true;
             };
             unsigned callerAdmissions=0;
-            auto callerAdmit=[&](uintptr_t p,const auto& s) {
+            auto callerAdmit=[&](uintptr_t p,uintptr_t state,const auto& s) {
                 ++callerAdmissions;
                 assert(graph.ownsStorage(s.bytes.data()));
-                assert(!graph.bindNativeCallerFields(p,callerRead,
-                    [](uintptr_t,const auto&){assert(false);return true;}));
+                assert(!graph.bindNativeCallerFields(p,state,callerRead,
+                    [](uintptr_t,uintptr_t,const auto&){assert(false);return true;}));
                 return p==nativeCallerAddress;
             };
-            assert(graph.bindNativeCallerFields(nativeCallerAddress,callerRead,callerAdmit));
+            assert(graph.bindNativeCallerFields(nativeCallerAddress,nativeCallerAddress,callerRead,callerAdmit));
             assert(callerAdmissions==1);
             assert(graph.withView(false,[&](void* child) noexcept {
                 uint32_t value=0;std::memcpy(&value,static_cast<uint8_t*>(child)+0x918,4);
                 assert(value==9);
-                assert(!graph.bindNativeCallerFields(nativeCallerAddress,callerRead,callerAdmit));
+                assert(!graph.bindNativeCallerFields(nativeCallerAddress,nativeCallerAddress,callerRead,callerAdmit));
                 return 0;
             })==0 && callerAdmissions==1);
             stateCpu.lineLive=avsCpu.lineLive=&backend.live;
@@ -13680,36 +13680,40 @@ int main() {
     {
         TglOwnedVpSfcCallerStorage vp;
         std::array<uint8_t,0x1bb0> caller{};
+        std::array<uint8_t,0xa10> state{};
         uintptr_t performance=0x1234;
         const auto address=reinterpret_cast<uintptr_t>(caller.data());
+        const auto stateAddress=reinterpret_cast<uintptr_t>(state.data());
         uintptr_t slot=reinterpret_cast<uintptr_t>(&performance);
         uint32_t mode=1,channel=7;
-        std::memcpy(caller.data()+0xa0c,&mode,4);
+        std::memcpy(state.data()+0xa0c,&mode,4);
         std::memcpy(caller.data()+0x1bac,&channel,4);
         std::memcpy(caller.data()+8,&slot,8);
         bool deny=false,failSlot=false;
-        auto admit=[&](uintptr_t p,const auto& s){return !deny && p==address && &s==&vp;};
+        auto admit=[&](uintptr_t p,uintptr_t q,const auto& s){return !deny && p==address && q==stateAddress && &s==&vp;};
         auto read=[&](uintptr_t p,void* out,size_t n){
+            if(p==stateAddress+0xa0c && n==4){std::memcpy(out,&mode,4);return true;}
             if(p==slot && n==8) {if(failSlot)return false;std::memcpy(out,&performance,8);return true;}
             if(p<address || p-address>caller.size() || n>caller.size()-(p-address))return false;
             std::memcpy(out,caller.data()+(p-address),n);return true;
         };
         auto field=[&](){uintptr_t value=0;std::memcpy(&value,vp.bytes.data()+0x9c8,8);return value;};
-        assert(tglBindVpNativeCallerFields(vp,address,read,admit));
+        assert(tglBindVpNativeCallerFields(vp,address,stateAddress,read,admit));
         assert(field()==performance);
         uint32_t actual=0;std::memcpy(&actual,vp.bytes.data()+0x918,4);assert(actual==7);
         const auto before=vp.bytes;failSlot=true;
-        assert(!tglBindVpNativeCallerFields(vp,address,read,admit) && vp.bytes==before);
+        assert(!tglBindVpNativeCallerFields(vp,address,stateAddress,read,admit) && vp.bytes==before);
         failSlot=false;deny=true;
-        assert(!tglBindVpNativeCallerFields(vp,address,read,admit) && vp.bytes==before);
-        deny=false;mode=0;std::memcpy(caller.data()+0xa0c,&mode,4);
-        assert(!tglBindVpNativeCallerFields(vp,address,read,admit) && vp.bytes==before);
-        mode=1;std::memcpy(caller.data()+0xa0c,&mode,4);
+        assert(!tglBindVpNativeCallerFields(vp,address,stateAddress,read,admit) && vp.bytes==before);
+        deny=false;mode=0;
+        assert(!tglBindVpNativeCallerFields(vp,address,stateAddress,read,admit) && vp.bytes==before);
+        mode=1;
+        assert(!tglBindVpNativeCallerFields(vp,address,address,read,admit) && vp.bytes==before);
         uintptr_t missing=0;std::memcpy(caller.data()+8,&missing,8);
-        assert(tglBindVpNativeCallerFields(vp,address,read,admit) && field()==performance);
+        assert(tglBindVpNativeCallerFields(vp,address,stateAddress,read,admit) && field()==performance);
         std::memcpy(caller.data()+8,&slot,8);performance=0;
-        assert(tglBindVpNativeCallerFields(vp,address,read,admit) && field()==0);
-        assert(!tglBindVpNativeCallerFields(vp,UINTPTR_MAX-4,read,admit));
+        assert(tglBindVpNativeCallerFields(vp,address,stateAddress,read,admit) && field()==0);
+        assert(!tglBindVpNativeCallerFields(vp,UINTPTR_MAX-4,stateAddress,read,admit));
     }
     {
         struct EmptyDnBackend {
